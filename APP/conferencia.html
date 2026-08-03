@@ -1,0 +1,2603 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Noromak - Conferência em Rede</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/js-sha256/0.9.0/sha256.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qz-tray@2.2.6/qz-tray.js"></script>
+
+<style>
+  :root {
+    --primary: #2B4E75;      /* Azul da Marca */
+    --secondary: #F28C18;    /* Laranja da Marca */
+    --bg-light: #F4F7F9;     /* Fundo Geral */
+  }
+
+  * { box-sizing: border-box; }
+  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: var(--bg-light); margin: 0; color: #333; }
+
+  #telaLogin {
+    position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+    background: linear-gradient(135deg, var(--primary) 0%, #15263a 100%);
+    display: flex; justify-content: center; align-items: center; z-index: 9999;
+  }
+  .box-card {
+    background: white; padding: 35px 30px; border-radius: 12px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.3); width: 380px; text-align: center;
+    border-top: 5px solid var(--secondary);
+  }
+
+  .logo-box {
+    width: 210px; height: 60px; margin: 0 auto 20px auto;
+    display: flex; justify-content: center; align-items: center;
+  }
+  .logo-box img { max-width: 100%; max-height: 100%; object-fit: contain; }
+
+  .box-card h2 { margin-top: 0; color: var(--primary); font-size: 18px; margin-bottom: 15px; font-weight: 600; }
+
+  .box-upload-rede {
+    background: #eef3f7; border: 1px dashed var(--secondary); padding: 12px; border-radius: 6px; margin-bottom: 15px; text-align: left;
+  }
+  .box-upload-rede label { font-size: 11px; font-weight: bold; color: var(--primary); display: block; margin-bottom: 6px; }
+
+  .box-card input[type="text"], .box-card input[type="password"] {
+    width: 100%; padding: 12px; margin-bottom: 12px;
+    border: 1px solid #ccc; border-radius: 6px; font-size: 14px;
+    transition: border-color 0.3s;
+  }
+  .box-card input:focus { border-color: var(--secondary); outline: none; }
+  
+  .box-card button.btn-entrar {
+    width: 100%; padding: 12px; background: var(--secondary); color: white;
+    border: none; border-radius: 6px; cursor: pointer; font-size: 15px; font-weight: bold;
+    transition: background 0.3s;
+  }
+  .box-card button.btn-entrar:hover { background: #d97712; }
+
+  .status-sistema { font-size: 11px; margin-top: 6px; font-weight: bold; }
+  .erro-msg { color: var(--secondary); font-size: 13px; margin-top: 10px; font-weight: bold; }
+
+  header { background: var(--primary); color: white; padding: 12px 25px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 8px rgba(0,0,0,0.1); border-bottom: 3px solid var(--secondary); }
+  
+  .logo-mini-box { width: 130px; height: 38px; display: flex; align-items: center; }
+  .logo-mini-box img { max-width: 100%; max-height: 100%; object-fit: contain; }
+
+  .usuario-area { display: flex; align-items: center; gap: 15px; font-size: 14px; }
+  .btn-logoff {
+    background: var(--secondary); color: white; border: none; padding: 8px 14px;
+    border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 13px; transition: opacity 0.3s;
+  }
+  .btn-logoff:hover { opacity: 0.9; }
+
+  .container { display: flex; height: calc(100vh - 63px); }
+  .menu { width: 320px; background: white; overflow-y: auto; border-right: 1px solid #ddd; padding: 15px; }
+  .conteudo { flex: 1; padding: 25px; overflow-y: auto; }
+
+  #painelAdmin {
+    background: #eef3f7; border: 1px solid #b0c4de; border-radius: 6px; padding: 12px; margin-bottom: 15px; display: none; border-left: 4px solid var(--secondary);
+  }
+
+  .busca-container { margin-bottom: 15px; }
+  .busca-input { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 13px; background: #f9f9f9; }
+
+  table { width: 100%; border-collapse: collapse; margin-top: 15px; background: white; border-radius: 6px; overflow: hidden; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+  th { background: var(--primary); color: white; padding: 12px 10px; font-size: 13px; }
+  td { padding: 10px; border-bottom: 1px solid #eee; text-align: center; font-size: 13px; }
+
+  .ok { background: #E8F5E9; }
+  .pendente { background: #FFF8E1; }
+
+  #barra { width: 100%; background: #ddd; height: 18px; border-radius: 6px; overflow: hidden; box-shadow: inset 0 1px 3px rgba(0,0,0,0.1); }
+  #progresso { height: 100%; width: 0%; background: #2e7d32; transition: .3s; }
+
+  .pedido-item { padding: 12px; cursor: pointer; border-bottom: 1px solid #eee; font-weight: bold; color: var(--primary); border-radius: 4px; transition: background 0.2s; }
+  .pedido-item:hover { background: #eef3f7; }
+  .pedido-cliente { font-size: 12px; color: #666; font-weight: normal; margin-top: 3px; }
+
+  .status { font-size: 18px; font-weight: bold; margin-top: 20px; }
+  .img-produto { width: 65px; height: 65px; object-fit: contain; border-radius: 4px; border: 1px solid #ccc; background: #fff; }
+  .sku-texto { font-weight: bold; font-size: 13px; color: var(--primary); }
+
+  .qz-status { font-size: 11px; padding: 4px 8px; border-radius: 4px; display: inline-block; margin-top: 3px; font-weight: bold; }
+  .qz-conectado { background: #c8e6c9; color: #2e7d32; }
+  .qz-desconectado { background: #ffcdd2; color: #c62828; }
+  .etiqueta-status { display: inline-block; font-size: 12px; font-weight: 700; padding: 6px 10px; border-radius: 6px; margin-bottom: 14px; }
+  .etiqueta-ok { background: #e8f5e9; color: #2e7d32; border: 1px solid #a5d6a7; }
+  .etiqueta-erro { background: #ffebee; color: #c62828; border: 1px solid #ef9a9a; }
+
+  /* Modal de Multiplos Pedidos */
+  #modalMultiplos {
+    display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+    background: rgba(0,0,0,0.5); justify-content: center; align-items: center; z-index: 8888;
+  }
+  .modal-card { background: white; padding: 25px; border-radius: 8px; width: 450px; text-align: center; box-shadow: 0 5px 20px rgba(0,0,0,0.2); }
+  .btn-opcao-pedido { width: 100%; padding: 10px; margin-top: 8px; background: var(--primary); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; }
+  .btn-opcao-pedido:hover { background: #1f3a58; }
+
+  /* Modal da Nota Simplificada */
+  #modalNotaSimplificada {
+    display: none; position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
+    background: rgba(0,0,0,0.6); justify-content: center; align-items: center; z-index: 9990;
+  }
+  .modal-nota-card { background: white; padding: 30px; border-radius: 8px; width: 650px; text-align: left; box-shadow: 0 5px 25px rgba(0,0,0,0.3); max-height: 90vh; overflow-y: auto; }
+
+
+  /* Histórico, mensagens detalhadas e salvamento automático */
+  .btn-header {
+    background: rgba(255,255,255,0.14); color: white; border: 1px solid rgba(255,255,255,0.35);
+    padding: 8px 12px; border-radius: 6px; cursor: pointer; font-weight: 700; font-size: 12px;
+  }
+  .btn-header:hover { background: rgba(255,255,255,0.24); }
+  .autosave-status { display:block; font-size:10px; opacity:.9; margin-top:3px; }
+
+  .mensagem-detalhada { display:none; margin-top:14px; padding:14px 16px; border-radius:8px; border-left:5px solid; box-shadow:0 2px 7px rgba(0,0,0,.06); }
+  .mensagem-detalhada.mostrar { display:block; }
+  .mensagem-detalhada.erro { background:#ffebee; border-color:#c62828; color:#7f1d1d; }
+  .mensagem-detalhada.aviso { background:#fff8e1; border-color:#f9a825; color:#7a4b00; }
+  .mensagem-detalhada.info { background:#eaf2fb; border-color:var(--primary); color:#1f3a58; }
+  .mensagem-detalhada.sucesso { background:#e8f5e9; border-color:#2e7d32; color:#1b5e20; }
+  .mensagem-titulo { font-size:15px; font-weight:800; margin-bottom:5px; }
+  .mensagem-detalhe { font-size:13px; line-height:1.45; white-space:pre-line; }
+  .mensagem-orientacao { font-size:12px; margin-top:7px; font-weight:600; }
+  .mensagem-acoes { display:flex; flex-wrap:wrap; gap:8px; margin-top:11px; }
+  .mensagem-acoes button { border:0; border-radius:6px; padding:8px 12px; cursor:pointer; font-weight:700; }
+  .btn-acao-principal { background:var(--primary); color:white; }
+  .btn-acao-secundaria { background:#fff; color:#444; border:1px solid #bbb !important; }
+
+  .pedido-status-mini { display:inline-block; margin-top:5px; padding:3px 7px; border-radius:10px; font-size:10px; font-weight:700; }
+  .pedido-status-impressao { background:#fff3cd; color:#856404; }
+  .pedido-status-andamento { background:#e3f2fd; color:#1565c0; }
+
+  .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.58); justify-content:center; align-items:center; z-index:9995; padding:20px; }
+  .modal-historico-card { background:white; border-radius:10px; width:min(1100px, 96vw); max-height:92vh; overflow:auto; box-shadow:0 10px 35px rgba(0,0,0,.3); padding:24px; }
+  .historico-topo { display:flex; justify-content:space-between; align-items:center; gap:15px; border-bottom:2px solid var(--secondary); padding-bottom:10px; }
+  .historico-filtros { display:flex; gap:10px; flex-wrap:wrap; margin:15px 0; }
+  .historico-filtros input { flex:1; min-width:250px; padding:10px; border:1px solid #ccc; border-radius:6px; }
+  .historico-resumo { font-size:12px; color:#555; margin-bottom:8px; }
+  .historico-tabela th, .historico-tabela td { font-size:12px; }
+  .btn-reimprimir { background:var(--secondary); color:#fff; border:0; padding:7px 10px; border-radius:5px; font-weight:700; cursor:pointer; }
+  .btn-reimprimir:disabled { background:#bbb; cursor:not-allowed; }
+  .badge-reimpressoes { display:inline-block; background:#eef3f7; color:var(--primary); padding:3px 7px; border-radius:10px; font-weight:700; }
+  .modal-reimpressao-card { background:white; border-radius:10px; width:min(520px, 95vw); padding:25px; box-shadow:0 10px 35px rgba(0,0,0,.3); }
+  .modal-reimpressao-card label { display:block; font-weight:700; color:var(--primary); margin:12px 0 5px; font-size:13px; }
+  .modal-reimpressao-card select, .modal-reimpressao-card textarea { width:100%; padding:10px; border:1px solid #ccc; border-radius:6px; }
+  .reprint-alerta { background:#fff8e1; border-left:4px solid #f9a825; padding:10px; font-size:12px; margin-top:12px; }
+
+
+  /* Modo de conferência sem mouse */
+  .atalhos-box {
+    margin: 12px 0; border: 1px solid #c9d5e2; border-left: 4px solid var(--secondary);
+    border-radius: 8px; background: #f7fafc; overflow: hidden;
+  }
+  .atalhos-titulo {
+    width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 8px;
+    padding: 10px 11px; border: 0; background: #eef3f7; color: var(--primary);
+    font-size: 12px; font-weight: 800; cursor: pointer; text-align: left;
+  }
+  .atalhos-conteudo { padding: 9px 10px 10px; display: grid; grid-template-columns: 1fr; gap: 6px; }
+  .atalhos-conteudo.oculto { display: none; }
+  .atalho-linha { display: flex; align-items: center; gap: 7px; font-size: 11px; color: #3f4d5a; line-height: 1.25; }
+  .atalho-linha kbd {
+    min-width: 37px; display: inline-block; text-align: center; padding: 3px 6px;
+    border: 1px solid #aeb8c2; border-bottom-width: 2px; border-radius: 4px;
+    background: white; color: #263746; font-family: 'Segoe UI', sans-serif; font-size: 10px; font-weight: 800;
+    box-shadow: 0 1px 1px rgba(0,0,0,.08);
+  }
+  .atalhos-rodape { margin-top: 3px; padding-top: 7px; border-top: 1px solid #dce4eb; font-size: 10px; color: #657483; }
+  .pedido-item.pedido-teclado-selecionado {
+    background: #e6f0fa; outline: 3px solid rgba(43,78,117,.28); outline-offset: -3px;
+  }
+  .pedido-item:focus { outline: 3px solid rgba(242,140,24,.45); outline-offset: -3px; background: #fff6e9; }
+  .filtro-marketplace-box { margin-bottom: 12px; padding: 10px; background: #f5f8fb; border: 1px solid #d7e1ea; border-radius: 7px; }
+  .filtro-marketplace-box label { display:block; margin-bottom:6px; color:var(--primary); font-size:11px; font-weight:800; }
+  .filtro-marketplace-select { width:100%; padding:9px 10px; border:1px solid #b8c5d1; border-radius:6px; background:white; color:#263746; font-size:12px; font-weight:700; }
+  .filtro-marketplace-resumo { margin-top:6px; color:#667786; font-size:10px; line-height:1.35; }
+  .aviso-etiquetas-disponiveis { margin:0 0 12px; padding:9px 10px; border-radius:7px; background:#e8f5e9; border:1px solid #a5d6a7; color:#256029; font-size:10px; font-weight:700; line-height:1.35; }
+  .pedido-topo-linha { display:flex; align-items:center; justify-content:space-between; gap:6px; }
+  .pedido-marketplace-badge { display:inline-block; flex:0 0 auto; padding:3px 6px; border-radius:10px; font-size:9px; font-weight:900; letter-spacing:.2px; }
+  .pedido-marketplace-badge.mercado_livre { background:#fff3bf; color:#735c00; border:1px solid #e4c94c; }
+  .pedido-marketplace-badge.shopee { background:#ffe2d8; color:#9c2d0e; border:1px solid #f0a184; }
+  .pedido-marketplace-badge.magalu { background:#ddecff; color:#174b83; border:1px solid #91b9e6; }
+  .pedido-marketplace-badge.desconhecido { background:#eee; color:#666; border:1px solid #ccc; }
+  .atalho-pulso { animation: atalhoPulso .7s ease; }
+  @keyframes atalhoPulso {
+    0%,100% { box-shadow: none; }
+    50% { box-shadow: 0 0 0 5px rgba(242,140,24,.25); }
+  }
+
+</style>
+<script src="/shared-storage.js"></script>
+</head>
+
+<body>
+
+<div id="telaLogin">
+  <div class="box-card">
+    <div class="logo-box">
+      <img src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 450 120'><text x='20' y='80' font-size='60' font-family='Arial, sans-serif' font-weight='bold' fill='%232B4E75'>NOROMAK</text></svg>" alt="Noromak">
+    </div>
+    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão compartilhada 6.9 — correção definitiva do certificado QZ Tray</div>
+
+    <div class="box-upload-rede" style="border-style:solid;">
+      <label>🗄 PEDIDOS COMPARTILHADOS NA REDE:</label>
+      <div id="statusCargaLogin" class="status-sistema">Verificando a pasta compartilhada de pedidos...</div>
+    </div>
+
+    <input type="text" id="usuarioInput" placeholder="Usuário / Login" onkeydown="if(event.key==='Enter') fazerLogin()">
+    <input type="password" id="senhaInput" placeholder="Senha" onkeydown="if(event.key==='Enter') fazerLogin()">
+    <button class="btn-entrar" onclick="fazerLogin()">ENTRAR</button>
+    <button type="button" class="btn-solicitar-acesso" onclick="abrirSolicitacaoUsuario()">SOLICITAR NOVO USUÁRIO</button><div style="font-size:10px;color:#6b7b89;margin-top:7px;line-height:1.35;">Escolha Admin ou Operador. O login só será liberado após aprovação.</div>
+    <div id="erroLogin" class="erro-msg"></div>
+  </div>
+</div>
+
+<div id="modalMultiplos">
+  <div class="modal-card">
+    <h3 style="color:var(--primary); margin-top:0;">Este produto está em múltiplos pedidos!</h3>
+    <p style="font-size:13px; color:#555;">Selecione para qual cliente/pedido deseja destinar este item:</p>
+    <div id="listaOpcoesMultiplos" style="max-height: 250px; overflow-y: auto; margin-top: 15px;"></div>
+    <button onclick="fecharModalMultiplos()" style="margin-top:15px; padding:8px 15px; background:#ccc; border:none; border-radius:4px; cursor:pointer; font-weight:bold;">Cancelar</button>
+  </div>
+</div>
+
+<div id="modalNotaSimplificada">
+  <div class="modal-nota-card">
+    <h3 style="color:var(--primary); margin-top:0; border-bottom: 2px solid var(--secondary); padding-bottom: 8px;">📄 Nota Fiscal Simplificada</h3>
+    <pre id="conteudoNotaTexto" style="background: #f8f9fa; padding: 15px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px; font-family: monospace; white-space: pre-wrap; word-wrap: break-word; max-height: 350px; overflow-y: auto;"></pre>
+    <div style="display: flex; gap: 10px; margin-top: 15px;">
+      <button onclick="baixarArquivoTxtNota()" style="flex:1; padding: 10px; background: #2e7d32; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">💾 Baixar TXT da Nota</button>
+      <button onclick="fecharModalNota()" style="padding: 10px 20px; background: #ccc; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">Fechar</button>
+    </div>
+  </div>
+
+</div>
+
+<div id="modalHistorico" class="modal-overlay">
+  <div class="modal-historico-card">
+    <div class="historico-topo">
+      <div>
+        <h2 style="margin:0; color:var(--primary);">🕘 Histórico de conferência</h2>
+        <div style="font-size:12px; color:#666; margin-top:3px;">Conferências, impressões e reimpressões compartilhadas no dados compartilhados.</div>
+      </div>
+      <button onclick="fecharHistorico()" class="btn-acao-secundaria" style="padding:8px 13px; border-radius:6px; cursor:pointer;">Fechar</button>
+    </div>
+    <div class="historico-filtros">
+      <input id="filtroHistorico" type="text" placeholder="Buscar pedido, cliente, operador ou marketplace..." oninput="renderizarHistorico()">
+      <button onclick="exportarHistoricoExcel()" class="btn-acao-principal" style="border:0; border-radius:6px; padding:9px 13px; cursor:pointer; font-weight:700;">📊 Exportar Excel</button>
+    </div>
+    <div id="resumoHistorico" class="historico-resumo"></div>
+    <div style="overflow:auto;">
+      <table class="historico-tabela">
+        <thead><tr><th>Data/Hora</th><th>Pedido</th><th>Marketplace</th><th>Cliente</th><th>Operador</th><th>Unidades</th><th>Reimpressões</th><th>Ação</th></tr></thead>
+        <tbody id="corpoHistorico"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<div id="modalReimpressao" class="modal-overlay">
+  <div class="modal-reimpressao-card">
+    <h3 style="margin-top:0; color:var(--primary); border-bottom:2px solid var(--secondary); padding-bottom:8px;">🖨️ Reimpressão controlada</h3>
+    <div id="resumoReimpressao" style="font-size:13px; line-height:1.5;"></div>
+    <label for="motivoReimpressao">Motivo obrigatório</label>
+    <select id="motivoReimpressao">
+      <option value="">Selecione...</option>
+      <option>Etiqueta danificada</option>
+      <option>Falha na impressão anterior</option>
+      <option>Etiqueta perdida</option>
+      <option>Impressão ilegível</option>
+      <option>Teste autorizado</option>
+      <option>Outro</option>
+    </select>
+    <label for="observacaoReimpressao">Observação</label>
+    <textarea id="observacaoReimpressao" rows="3" placeholder="Informe detalhes quando necessário."></textarea>
+    <div class="reprint-alerta">A reimpressão ficará registrada com operador, data, horário e motivo. Confira o pedido antes de confirmar.</div>
+    <label style="display:flex; gap:8px; align-items:flex-start; color:#333; font-weight:600;">
+      <input id="confirmacaoReimpressao" type="checkbox" style="margin-top:3px;"> Confirmo que revisei o número do pedido e que esta reimpressão é necessária.
+    </label>
+    <div style="display:flex; gap:10px; margin-top:18px;">
+      <button id="btnConfirmarReimpressao" onclick="confirmarReimpressao()" style="flex:1; background:var(--secondary); color:white; border:0; border-radius:6px; padding:11px; font-weight:800; cursor:pointer;">REIMPRIMIR</button>
+      <button onclick="fecharModalReimpressao()" style="padding:11px 18px; border:1px solid #bbb; background:white; border-radius:6px; cursor:pointer; font-weight:700;">Cancelar</button>
+    </div>
+  </div>
+</div>
+
+<header>
+  <div class="logo-mini-box">
+    <img src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 450 120'><text x='20' y='80' font-size='60' font-family='Arial, sans-serif' font-weight='bold' fill='%23FFFFFF'>NOROMAK</text></svg>" alt="Noromak">
+  </div>
+  <div class="usuario-area">
+    <div style="text-align: right;">
+      <span id="infoUsuario"></span><br>
+      <span id="qzStatusBadge" class="qz-status qz-desconectado">QZ Tray Desconectado</span>
+      <span id="autosaveStatus" class="autosave-status">Salvamento automático ativo</span>
+    </div>
+    <button class="btn-header" onclick="alternarPainelAtalhos()">⌨ ATALHOS</button>
+    <button class="btn-header" onclick="abrirHistorico()">🕘 HISTÓRICO</button>
+    <button class="btn-logoff" onclick="fazerLogoff()">SAIR / LOGOFF</button>
+  </div>
+</header>
+
+<div class="container">
+  <div class="menu">
+    <div id="painelAdmin">
+      <h4 style="margin-top:0; color:var(--primary);">⚙ Painel Administrador</h4>
+      <p style="font-size:11px; color:#555; margin-bottom:10px;">Pedidos, produtos, usuários e etiquetas são administrados no dados compartilhados:</p>
+      <button onclick="abrirPainelAdministrativoBanco()" style="width:100%; padding:8px; background:var(--secondary); color:white; border:none; border-radius:6px; cursor:pointer; font-weight:bold; font-size:11px; margin-bottom:6px;">
+        🗄 ABRIR BANCO ADMINISTRATIVO
+      </button>
+      <button onclick="vincularPastaFotos()" style="width:100%; padding:8px; background:var(--primary); color:white; border:none; border-radius:6px; cursor:pointer; font-weight:bold; font-size:11px; margin-bottom:5px;">
+        📂 VINCULAR PASTA DE FOTOS NESTE COMPUTADOR
+      </button>
+
+      <div style="margin-top:10px; text-align:left;">
+        <label style="font-size:11px; font-weight:bold; color:var(--primary);">🖨️ CAMINHO DA IMPRESSORA DE REDE:</label>
+        <input type="text" id="inputNomeImpressora" placeholder="Ex: ZDesigner ZD220-203dpi ZPL" value="" style="width:100%; padding:6px; font-size:11px; margin-top:3px; border:1px solid #ccc; border-radius:6px;" onchange="salvarNomeImpressora(this)">
+        <button onclick="testarImpressaoRede()" style="width:100%; padding:6px; background:#2e7d32; color:white; border:none; border-radius:6px; cursor:pointer; font-weight:bold; font-size:11px; margin-top:5px;">
+          🖨️ TESTAR CONEXÃO COM IMPRESSORA
+        </button>
+        <div style="font-size:10px;line-height:1.35;color:#6b7280;margin-top:6px;"><b>QZ Tray assinado:</b> antes do primeiro uso neste computador, execute <b>CONFIGURAR_QZ_TRAY_NESTE_COMPUTADOR.bat</b> na pasta do sistema. Depois disso, as solicitações aparecem como <b>Sistema de Conferência Noromak</b>, com assinatura válida, e a impressão segue sem pedir Allow.</div>
+      </div>
+
+      <div id="msgAdmin" class="erro-msg" style="font-size:11px; margin-top:5px;"></div>
+    </div>
+
+    <h3 style="color: var(--primary); font-size: 16px;">Pedidos Pendentes</h3>
+    <div class="busca-container">
+      <input type="text" id="campoBusca" class="busca-input" placeholder="🔍 Buscar cliente ou pedido..." oninput="renderizarListaPedidos()">
+    </div>
+
+    <div class="filtro-marketplace-box">
+      <label for="filtroMarketplacePedidos">🛒 FILTRAR POR MARKETPLACE</label>
+      <select id="filtroMarketplacePedidos" class="filtro-marketplace-select" onchange="alterarFiltroMarketplacePedidos(this.value)">
+        <option value="todos">Todos os marketplaces</option>
+        <option value="mercado_livre">Mercado Livre</option>
+        <option value="shopee">Shopee</option>
+        <option value="magalu">Magalu</option>
+      </select>
+      <div id="resumoFiltroMarketplace" class="filtro-marketplace-resumo">Carregando quantidades...</div>
+    </div>
+    <div class="aviso-etiquetas-disponiveis">🏷️ A lista mostra somente pedidos que já possuem etiqueta vinculada e pronta para impressão.</div>
+
+    <div id="painelAtalhos" class="atalhos-box" aria-label="Atalhos do modo sem mouse">
+      <button class="atalhos-titulo" type="button" onclick="alternarPainelAtalhos()" aria-controls="conteudoAtalhos">
+        <span>⌨ Modo de conferência sem mouse</span><span>F1</span>
+      </button>
+      <div id="conteudoAtalhos" class="atalhos-conteudo">
+        <div class="atalho-linha"><kbd>F2</kbd><span>Buscar pedido ou cliente</span></div>
+        <div class="atalho-linha"><kbd>F3</kbd><span>Voltar ao leitor de código</span></div>
+        <div class="atalho-linha"><kbd>F4</kbd><span>Abrir Histórico e reimpressão</span></div>
+        <div class="atalho-linha"><kbd>F6</kbd><span>Selecionar pedidos pendentes</span></div>
+        <div class="atalho-linha"><kbd>F7</kbd><span>Filtrar por marketplace</span></div>
+        <div class="atalho-linha"><kbd>F8</kbd><span>Verificar e imprimir o pedido</span></div>
+        <div class="atalho-linha"><kbd>↑ ↓</kbd><span>Navegar entre os pedidos</span></div>
+        <div class="atalho-linha"><kbd>Enter</kbd><span>Abrir pedido ou confirmar leitura</span></div>
+        <div class="atalho-linha"><kbd>Esc</kbd><span>Limpar leitura ou fechar janela</span></div>
+        <div class="atalho-linha"><kbd>Tab</kbd><span>Navegar pelos campos e botões</span></div>
+        <div class="atalhos-rodape">O leitor pode ser usado normalmente. Quando ele envia Enter, o sistema confirma o código completo imediatamente.</div>
+      </div>
+    </div>
+    <hr style="border:0; border-top:1px solid #eee; margin: 10px 0;">
+    <div id="listaPedidos"></div>
+  </div>
+
+  <div class="conteudo">
+    <h2 id="titulo" style="color: var(--primary);">Nenhum pedido selecionado</h2>
+    <div id="cliente" style="font-size: 14px; margin-bottom: 4px;"></div>
+    <div id="marketplace" style="font-size: 14px; margin-bottom: 8px;"></div>
+    <div id="etiquetaPedidoStatus" class="etiqueta-status etiqueta-erro">Etiqueta não verificada</div>
+
+    <div id="barra">
+      <div id="progresso"></div>
+    </div>
+    <br>
+
+    <input type="text" id="codigo" placeholder="Bipe o código de barras de qualquer produto para iniciar..." oninput="agendarLeituraCodigo(this)" onkeydown="confirmarLeituraCodigo(event, this)" autocomplete="off" inputmode="none" style="width: 100%; padding: 12px; font-size: 15px; border: 1px solid #ccc; border-radius: 6px;">
+
+    <table>
+      <thead>
+        <tr>
+          <th>Foto</th>
+          <th>SKU</th>
+          <th>Produto</th>
+          <th>Qtd</th>
+          <th>Lido</th>
+          <th>Localização</th>
+        </tr>
+      </thead>
+      <tbody id="corpoTabela"></tbody>
+    </table>
+
+    <div class="status" id="statusMsg"></div>
+    <div id="painelMensagemDetalhada" class="mensagem-detalhada"></div>
+  </div>
+</div>
+
+<script>
+let usuariosCadastrados = [];
+let dadosPedidos = [];
+let pedidoAtual = [];
+let idPedidoAtual = null;
+let listaPedidosPendentes = [];
+let mapaFotos = {};
+let mapaEtiquetas = {};
+let usuarioLogado = null;
+let nomeImpressoraConfigurada = appStorage.getItem("conf_impressora_qz") || "ZDesigner ZD220-203dpi ZPL";
+let textoNotaGeradoCache = "";
+let numeroPedidoCache = "";
+let impressaoEmAndamento = false;
+let historicoConferencias = [];
+let idHistoricoReimpressao = null;
+let reimpressaoEmAndamento = false;
+const CHAVE_HISTORICO = "conf_historico_conferencias_v2";
+const CHAVE_ULTIMO_PEDIDO = "conf_ultimo_pedido_em_andamento";
+const LIMITE_HISTORICO = 200;
+let uidPedidoSelecionadoTeclado = null;
+let filtroMarketplacePedidosAtual = "todos";
+let indicePedidoSelecionadoTeclado = -1;
+let pedidoBloqueadoRede = "";
+let timerBloqueioRede = null;
+
+function nomeOperadorBloqueio() {
+  if (!usuarioLogado) return "Operador não identificado";
+  return usuarioLogado.Nome || usuarioLogado.Login || "Operador";
+}
+
+function pararRenovacaoBloqueioRede() {
+  if (timerBloqueioRede) clearInterval(timerBloqueioRede);
+  timerBloqueioRede = null;
+}
+
+function liberarBloqueioPedidoAtualRede() {
+  pararRenovacaoBloqueioRede();
+  if (!pedidoBloqueadoRede) return;
+  try { appStorage.liberarBloqueioPedido(pedidoBloqueadoRede); } catch (_) {}
+  pedidoBloqueadoRede = "";
+}
+
+function iniciarRenovacaoBloqueioRede(pedido) {
+  pararRenovacaoBloqueioRede();
+  timerBloqueioRede = setInterval(() => {
+    if (!pedidoBloqueadoRede || pedidoBloqueadoRede !== pedido) return;
+    try {
+      const resposta = appStorage.renovarBloqueioPedido(pedido);
+      if (!resposta.ok) {
+        pararRenovacaoBloqueioRede();
+        mostrarMensagemDetalhada(
+          "erro",
+          "O bloqueio deste pedido foi perdido",
+          `Pedido: ${pedido}`,
+          "Pare a conferência e abra o pedido novamente. Outra máquina pode ter assumido o pedido após uma desconexão."
+        );
+        const campo = document.getElementById("codigo");
+        if (campo) campo.disabled = true;
+      }
+    } catch (_) {}
+  }, 30000);
+}
+
+function adquirirBloqueioPedidoRede(pedido) {
+  if (!pedido) return false;
+  if (pedidoBloqueadoRede && pedidoBloqueadoRede !== pedido) liberarBloqueioPedidoAtualRede();
+  try {
+    const resposta = appStorage.adquirirBloqueioPedido(pedido, nomeOperadorBloqueio());
+    if (!resposta.ok) {
+      const bloqueio = resposta.lock || {};
+      mostrarMensagemDetalhada(
+        "aviso",
+        "Pedido em conferência em outra máquina",
+        `Pedido: ${pedido}\nOperador: ${bloqueio.operador || "Não informado"}\nComputador: ${bloqueio.computador || "Não informado"}\nDesde: ${bloqueio.iniciado ? new Date(bloqueio.iniciado).toLocaleString("pt-BR") : "Não informado"}`,
+        "Aguarde a outra conferência terminar. O bloqueio é liberado automaticamente ao concluir, sair do pedido ou após alguns minutos sem comunicação."
+      );
+      return false;
+    }
+    pedidoBloqueadoRede = pedido;
+    iniciarRenovacaoBloqueioRede(pedido);
+    return true;
+  } catch (erro) {
+    mostrarMensagemDetalhada(
+      "erro",
+      "Não foi possível reservar o pedido",
+      `Pedido: ${pedido}\nDetalhes: ${erro.message || erro}`,
+      "Confirme se a unidade de rede está conectada e tente novamente."
+    );
+    return false;
+  }
+}
+
+window.addEventListener("beforeunload", liberarBloqueioPedidoAtualRede);
+
+function escaparHtml(valor) {
+  return String(valor ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
+function lerJsonSeguro(chave, padrao) {
+  try {
+    const valor = appStorage.getItem(chave);
+    return valor ? JSON.parse(valor) : padrao;
+  } catch (erro) {
+    console.warn("Não foi possível ler", chave, erro);
+    return padrao;
+  }
+}
+
+function atualizarIndicadorAutosave(texto, erro = false) {
+  const el = document.getElementById("autosaveStatus");
+  if (!el) return;
+  el.textContent = texto;
+  el.style.color = erro ? "#ffcdd2" : "#d9f7df";
+}
+
+function cancelarSalvamentoProgressoPendente(){if(temporizadorSalvarProgressoBipe){clearTimeout(temporizadorSalvarProgressoBipe);temporizadorSalvarProgressoBipe=null;}}
+function agendarSalvamentoProgressoBipe(){
+  cancelarSalvamentoProgressoPendente();
+  temporizadorSalvarProgressoBipe=setTimeout(()=>{temporizadorSalvarProgressoBipe=null;salvarProgressoAutomatico("Progresso salvo");},600);
+}
+function agendarRenderizacaoListaPedidos(){
+  if(temporizadorRenderListaBipe)clearTimeout(temporizadorRenderListaBipe);
+  temporizadorRenderListaBipe=setTimeout(()=>{temporizadorRenderListaBipe=null;renderizarListaPedidos();},180);
+}
+function salvarProgressoAutomatico(motivo = "Progresso salvo") {
+  cancelarSalvamentoProgressoPendente();
+  try {
+    appStorage.setItem("conf_pedidos", JSON.stringify(dadosPedidos));
+    if (pedidoAtual && pedidoAtual.length) {
+      const pedido = extrairCampo(pedidoAtual[0], "Pedido");
+      if (pedido) appStorage.setItem(CHAVE_ULTIMO_PEDIDO, normalizarIdentificadorExato(pedido));
+    }
+    const hora = new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    atualizarIndicadorAutosave(`${motivo} às ${hora}`);
+    return true;
+  } catch (erro) {
+    atualizarIndicadorAutosave("Falha ao salvar automaticamente", true);
+    mostrarMensagemDetalhada("erro", "Falha no salvamento automático", String(erro), "Não feche a página. Libere espaço no navegador e tente novamente.");
+    return false;
+  }
+}
+
+function mostrarMensagemDetalhada(tipo, titulo, detalhe, orientacao = "", acoes = []) {
+  const painel = document.getElementById("painelMensagemDetalhada");
+  if (!painel) return;
+  const botoes = acoes.map((acao, indice) =>
+    `<button class="${indice === 0 ? 'btn-acao-principal' : 'btn-acao-secundaria'}" onclick="${acao.onclick}">${escaparHtml(acao.rotulo)}</button>`
+  ).join("");
+  painel.className = `mensagem-detalhada mostrar ${tipo}`;
+  painel.innerHTML = `
+    <div class="mensagem-titulo">${escaparHtml(titulo)}</div>
+    <div class="mensagem-detalhe">${escaparHtml(detalhe)}</div>
+    ${orientacao ? `<div class="mensagem-orientacao">Como resolver: ${escaparHtml(orientacao)}</div>` : ""}
+    ${botoes ? `<div class="mensagem-acoes">${botoes}</div>` : ""}
+  `;
+}
+
+function limparMensagemDetalhada() {
+  const painel = document.getElementById("painelMensagemDetalhada");
+  if (!painel) return;
+  painel.className = "mensagem-detalhada";
+  painel.innerHTML = "";
+}
+
+function detalharErroImpressao(erro) {
+  const msg = String(erro && (erro.message || erro) || "Erro desconhecido");
+  const base = msg.toLowerCase();
+  if (base.includes("certificate") || base.includes("certificado") || base.includes("anonymous")) {
+    return { titulo: "Certificado do QZ Tray não configurado", detalhe: msg, orientacao: "Feche o sistema e execute CONFIGURAR_QZ_TRAY_NESTE_COMPUTADOR.bat na pasta principal. Depois reabra o sistema e teste a impressão." };
+  }
+  if (base.includes("qz tray") || base.includes("websocket")) {
+    return { titulo: "QZ Tray desconectado", detalhe: msg, orientacao: "Abra o QZ Tray. Se os campos Signature ou Validity estiverem vermelhos, execute CONFIGURAR_QZ_TRAY_NESTE_COMPUTADOR.bat e reabra o sistema." };
+  }
+  if (base.includes("impressora") || base.includes("printer")) {
+    return { titulo: "Impressora não localizada", detalhe: msg, orientacao: "Confira o nome da impressora no Painel Administrador e faça uma impressão de teste." };
+  }
+  if (base.includes("danfe")) {
+    return { titulo: "Dados da etiqueta indisponíveis", detalhe: msg, orientacao: "Republique o arquivo do Mercado Livre no painel administrativo e confirme se ele contém a etiqueta de envio." };
+  }
+  if (base.includes("marketplace")) {
+    return { titulo: "Marketplace não reconhecido", detalhe: msg, orientacao: "Confira o formato do pedido e o marketplace reconhecido no dados compartilhados." };
+  }
+  return { titulo: "Falha ao enviar a impressão", detalhe: msg, orientacao: "Verifique o QZ Tray, a impressora e o papel. O pedido permaneceu salvo e pode ser impresso novamente." };
+}
+
+window.addEventListener("beforeunload", () => {
+  cancelarSalvamentoProgressoPendente();
+  if (pedidoAtual && pedidoAtual.length) salvarProgressoAutomatico("Progresso salvo");
+});
+
+// Aguarda apenas o intervalo necessário para leitores que não enviam Enter.
+// Leitores configurados com Enter são processados imediatamente.
+const ATRASO_LEITURA_CODIGO_MS = 90;
+let temporizadorLeituraCodigo = null;
+let temporizadorSalvarProgressoBipe = null;
+let temporizadorRenderListaBipe = null;
+let cacheUidsPedidosDisponiveis = null;
+let cacheIndiceCodigosPedidos = null;
+let cacheDiaPedidosDisponiveis = "";
+
+function cancelarLeituraPendente() {
+  if (temporizadorLeituraCodigo) {
+    clearTimeout(temporizadorLeituraCodigo);
+    temporizadorLeituraCodigo = null;
+  }
+}
+
+function agendarLeituraCodigo(input) {
+  cancelarLeituraPendente();
+
+  if (!input || !input.value.trim() || input.disabled) return;
+
+  temporizadorLeituraCodigo = setTimeout(() => {
+    temporizadorLeituraCodigo = null;
+    verificarLeituraAutomatica(input);
+  }, ATRASO_LEITURA_CODIGO_MS);
+}
+
+function confirmarLeituraCodigo(event, input) {
+  if (event.key !== "Enter") return;
+
+  event.preventDefault();
+  cancelarLeituraPendente();
+
+  if (input && input.value.trim() && !input.disabled) {
+    verificarLeituraAutomatica(input);
+  }
+}
+
+window.onload = function() {
+  carregarDadosMemoria();
+  carregarHistoricoConferencias();
+  
+  if (document.getElementById("inputNomeImpressora")) {
+    document.getElementById("inputNomeImpressora").value = nomeImpressoraConfigurada;
+  }
+
+  conectarQzTray().catch(() => { /* operador pode autorizar mais tarde, ao imprimir */ });
+
+  const sessaoSalva = appStorage.getItem("conf_sessao_ativa");
+  if (sessaoSalva) {
+    usuarioLogado = JSON.parse(sessaoSalva);
+    iniciarSessao();
+  } else {
+    verificarStatusPlanilhaLogin();
+  }
+
+  window.addEventListener("storage", function(e) {
+    if (e.key === "conf_pedidos" || e.key === "conf_usuarios" || e.key === "conf_etiquetas") {
+      carregarDadosMemoria();
+      renderizarListaPedidos();
+      if (idPedidoAtual) {
+        let itemRefBase = dadosPedidos.find(x => String(x.__uidPedido) === String(idPedidoAtual));
+        if (itemRefBase && pedidoEhDoDiaAtual(itemRefBase) && pedidoPossuiEtiquetaDisponivel(itemRefBase)) {
+          let numPedReal = extrairCampo(itemRefBase, "Pedido");
+          pedidoAtual = dadosPedidos.filter(x => extrairCampo(x, "Pedido") === numPedReal);
+          desenharTabela();
+        } else {
+          limparPainel();
+          mostrarMensagemDetalhada(
+            "aviso",
+            "Pedido removido da lista",
+            itemRefBase ? (pedidoEhDoDiaAtual(itemRefBase) ? "A etiqueta deste pedido não está mais disponível." : "Este pedido não pertence à data de hoje.") : "O pedido não está mais pendente.",
+            itemRefBase ? (pedidoEhDoDiaAtual(itemRefBase) ? "Peça ao administrador para republicar ou vincular a etiqueta." : "Altere a data do pedido no painel administrativo.") : "Selecione outro pedido disponível."
+          );
+        }
+      }
+    }
+    if (e.key === CHAVE_HISTORICO || e.key === "conf_logs") {
+      carregarHistoricoConferencias();
+      if (document.getElementById("modalHistorico").style.display === "flex") renderizarHistorico();
+    }
+  });
+};
+
+let qzConexaoPromise = null;
+let qzSegurancaConfigurada = false;
+
+function configurarSegurancaQz() {
+  if (qzSegurancaConfigurada) return true;
+  if (typeof qz === "undefined" || !qz.security) return false;
+
+  qz.security.setCertificatePromise(function(resolve, reject) {
+    fetch("/api/qz/certificate", { cache: "no-store" })
+      .then(function(resp) {
+        if (!resp.ok) throw new Error("Certificado QZ indisponível: HTTP " + resp.status);
+        return resp.text();
+      })
+      .then(resolve)
+      .catch(reject);
+  });
+
+  qz.security.setSignatureAlgorithm("SHA512");
+  qz.security.setSignaturePromise(function(toSign) {
+    return function(resolve, reject) {
+      fetch("/api/qz/sign", {
+        method: "POST",
+        cache: "no-store",
+        headers: { "Content-Type": "text/plain; charset=utf-8" },
+        body: toSign
+      })
+        .then(function(resp) {
+          if (!resp.ok) throw new Error("Falha na assinatura QZ: HTTP " + resp.status);
+          return resp.text();
+        })
+        .then(resolve)
+        .catch(reject);
+    };
+  });
+
+  qzSegurancaConfigurada = true;
+  return true;
+}
+
+function atualizarBadgeQz(conectado, texto) {
+  const badge = document.getElementById("qzStatusBadge");
+  if (!badge) return;
+  badge.className = conectado ? "qz-status qz-conectado" : "qz-status qz-desconectado";
+  badge.innerText = texto || (conectado ? "QZ Tray Conectado" : "QZ Tray Desconectado");
+}
+
+async function conectarQzTray() {
+  configurarSegurancaQz();
+  if (typeof qz === "undefined" || !qz.websocket) {
+    atualizarBadgeQz(false, "Biblioteca QZ indisponível");
+    throw new Error("A biblioteca do QZ Tray não foi carregada. Verifique a conexão com a internet e reabra o sistema.");
+  }
+
+  if (qz.websocket.isActive()) {
+    atualizarBadgeQz(true, "QZ Tray Conectado");
+    return true;
+  }
+
+  // Reaproveita a mesma tentativa enquanto a janela de autorização estiver aberta.
+  // Isso evita que a conclusão do pedido falhe antes de o operador clicar em Allow.
+  if (qzConexaoPromise) return qzConexaoPromise;
+
+  atualizarBadgeQz(false, "Conectando ao QZ Tray assinado...");
+  qzConexaoPromise = qz.websocket.connect()
+    .then(() => {
+      atualizarBadgeQz(true, "QZ Tray Conectado");
+      return true;
+    })
+    .catch(err => {
+      atualizarBadgeQz(false, "QZ Tray Desconectado");
+      throw err;
+    })
+    .finally(() => {
+      qzConexaoPromise = null;
+    });
+
+  return qzConexaoPromise;
+}
+
+function salvarNomeImpressora(input) {
+  nomeImpressoraConfigurada = input.value.trim();
+  appStorage.setItem("conf_impressora_qz", nomeImpressoraConfigurada);
+  let msg = document.getElementById("msgAdmin");
+  msg.style.color = "green";
+  msg.innerText = "Impressora salva com sucesso!";
+}
+
+async function testarImpressaoRede() {
+  const impressoraAlvo = document.getElementById("inputNomeImpressora").value.trim() || nomeImpressoraConfigurada;
+  if (!impressoraAlvo) {
+    alert("Informe e salve o nome da impressora antes do teste.");
+    return;
+  }
+
+  try {
+    await conectarQzTray();
+    const config = await obterConfiguracaoImpressora();
+    const data = ["^XA^FO50,50^A0N,30,30^FDTESTE DE IMPRESSAO OK^FS^XZ"];
+    await qz.print(config, data);
+    alert("✅ Impressão de teste enviada com sucesso para: " + impressoraAlvo);
+  } catch (err) {
+    alert("❌ Não foi possível concluir a impressão de teste.\n\nExecute CONFIGURAR_QZ_TRAY_NESTE_COMPUTADOR.bat na pasta principal do sistema e reabra o QZ Tray.\n\nDetalhes: " + (err && (err.message || err)));
+  }
+}
+
+function extrairCampo(item, campoBuscado) {
+  if (!item) return "";
+  for (let key in item) {
+    if (key.trim().toLowerCase() === campoBuscado.toLowerCase()) {
+      let val = item[key];
+      return (val !== null && val !== undefined) ? String(val).trim() : "";
+    }
+  }
+  return "";
+}
+
+function normalizarBase(valor) {
+  return String(valor || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
+}
+
+function normalizarMarketplace(valor) {
+  const texto = normalizarBase(valor).replace(/[^a-z0-9]+/g, " ");
+  if (texto.includes("mercado livre") || texto.includes("mercadolivre") || texto === "ml") return "mercado_livre";
+  if (texto.includes("magalu") || texto.includes("magazine luiza")) return "magalu";
+  if (texto.includes("shopee")) return "shopee";
+  return "desconhecido";
+}
+
+function inferirMarketplacePeloPedido(valorPedido) {
+  const pedido = normalizarIdentificadorExato(valorPedido);
+  if (/^20000\d{11}$/.test(pedido) || /^\d{11}$/.test(pedido)) return "mercado_livre";
+  if (/^26[A-Z0-9]{12}$/.test(pedido) && /[A-Z]/.test(pedido)) return "shopee";
+  if (/^\d{16}$/.test(pedido)) return "magalu";
+  return "desconhecido";
+}
+
+function obterMarketplaceItem(item) {
+  const informado = normalizarMarketplace(extrairCampo(item, "Marketplace"));
+  if (informado !== "desconhecido") return informado;
+  const pedido = extrairCampo(item, "Pedido") || extrairCampo(item, "Venda") || extrairCampo(item, "Número do Pedido");
+  return inferirMarketplacePeloPedido(pedido);
+}
+
+function nomeMarketplacePlanilha(marketplace) {
+  if (marketplace === "mercado_livre") return "MERCADO LIVRE";
+  if (marketplace === "magalu") return "MAGALU";
+  if (marketplace === "shopee") return "SHOPEE";
+  return "";
+}
+
+function nomeMarketplace(marketplace) {
+  if (marketplace === "mercado_livre") return "Mercado Livre";
+  if (marketplace === "magalu") return "Magalu";
+  if (marketplace === "shopee") return "Shopee";
+  return "Marketplace não reconhecido";
+}
+
+function gerarVariantesChave(valor) {
+  const base = normalizarBase(valor);
+  if (!base) return [];
+  const compacta = base.replace(/\s+/g, "");
+  const alfanumerica = base.replace(/[^a-z0-9]/g, "");
+  const digitos = base.replace(/\D/g, "");
+  const variantes=[base,compacta,alfanumerica,digitos];
+  variantesPedidoMercadoLivre(valor).forEach(v=>variantes.push(String(v).toLowerCase()));
+  return [...new Set(variantes.filter(v => v && v.length >= 3))];
+}
+
+function normalizarIdentificadorExato(valor) {
+  return String(valor || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase().replace(/[^A-Z0-9]/g, "");
+}
+
+const PREFIXO_PEDIDO_ML = "20000";
+function pedidoMercadoLivreCompleto(valor){const p=normalizarIdentificadorExato(valor);if(/^\d{11}$/.test(p))return PREFIXO_PEDIDO_ML+p;return p;}
+function pedidoMercadoLivreReduzido(valor){const p=normalizarIdentificadorExato(valor);return /^20000\d{11}$/.test(p)?p.slice(PREFIXO_PEDIDO_ML.length):p;}
+function pedidoParaArmazenamento(valor,marketplaceHint=""){
+  const p=normalizarIdentificadorExato(valor);
+  const m=normalizarMarketplace(marketplaceHint)!=="desconhecido"?normalizarMarketplace(marketplaceHint):inferirMarketplacePeloPedido(p);
+  return (m==="mercado_livre"||/^\d{11}$/.test(p)||/^20000\d{11}$/.test(p))?pedidoMercadoLivreCompleto(p):p;
+}
+function pedidoParaExibicao(valor,marketplaceHint=""){
+  const p=normalizarIdentificadorExato(valor);
+  const m=normalizarMarketplace(marketplaceHint)!=="desconhecido"?normalizarMarketplace(marketplaceHint):inferirMarketplacePeloPedido(p);
+  return m==="mercado_livre"?pedidoMercadoLivreReduzido(p):p;
+}
+function variantesPedidoMercadoLivre(valor){const p=normalizarIdentificadorExato(valor);const s=new Set([p]);if(/^\d{11}$/.test(p))s.add(PREFIXO_PEDIDO_ML+p);if(/^20000\d{11}$/.test(p))s.add(p.slice(PREFIXO_PEDIDO_ML.length));return [...s].filter(Boolean);}
+function pedidosEquivalentes(a,b,marketplaceHint=""){
+  const m=normalizarMarketplace(marketplaceHint);
+  const va=m==="mercado_livre"?variantesPedidoMercadoLivre(a):[normalizarIdentificadorExato(a)];
+  const vb=m==="mercado_livre"?variantesPedidoMercadoLivre(b):[normalizarIdentificadorExato(b)];
+  const set=new Set(va.filter(Boolean));return vb.filter(Boolean).some(v=>set.has(v));
+}
+
+function obterChavesDoItem(item) {
+  return [
+    extrairCampo(item, "Pedido"),
+    extrairCampo(item, "Venda"),
+    extrairCampo(item, "Código de Rastreio"),
+    extrairCampo(item, "Codigo de Rastreio"),
+    extrairCampo(item, "Rastreio"),
+    extrairCampo(item, "Tracking"),
+    extrairCampo(item, "NF"),
+    extrairCampo(item, "Nota Fiscal"),
+    extrairCampo(item, "Chave de Acesso"),
+    extrairCampo(item, "Chave NF-e"),
+    extrairCampo(item, "ID Logístico"),
+    extrairCampo(item, "ID Logistico")
+  ].filter(Boolean);
+}
+
+function pontuarRegistroEtiqueta(registro, item) {
+  const conjunto = new Set(registro.chaves || []);
+  const pesos = [
+    [extrairCampo(item, "Pedido") || extrairCampo(item, "Venda"), 100],
+    [extrairCampo(item, "Código de Rastreio") || extrairCampo(item, "Codigo de Rastreio") || extrairCampo(item, "Rastreio"), 90],
+    [extrairCampo(item, "Chave de Acesso") || extrairCampo(item, "Chave NF-e"), 80],
+    [extrairCampo(item, "NF") || extrairCampo(item, "Nota Fiscal"), 60],
+    [extrairCampo(item, "ID Logístico") || extrairCampo(item, "ID Logistico"), 70]
+  ];
+  return pesos.reduce((total, [valor, peso]) => total + (gerarVariantesChave(valor).some(chave => conjunto.has(chave)) ? peso : 0), 0);
+}
+
+function resolverEtiquetaPedido(item) {
+  const marketplace = obterMarketplaceItem(item);
+  const pedidoPlanilha = extrairCampo(item, "Pedido") || extrairCampo(item, "Venda") || extrairCampo(item, "Número do Pedido");
+
+  if (mapaEtiquetas && Number(mapaEtiquetas.version) >= 4 && mapaEtiquetas.registros) {
+    const pedidoNormalizado = normalizarIdentificadorExato(pedidoPlanilha);
+    if (!pedidoNormalizado) {
+      return { ok: false, marketplace, erro: "O pedido do dados compartilhados está vazio." };
+    }
+
+    // Segurança máxima: só imprime registros que o painel administrativo já
+    // vinculou explicitamente ao pedido da planilha. Não usa chaves parciais,
+    // nome do cliente, SKU, posição do arquivo ou coincidência apenas numérica.
+    const candidatos = Object.values(mapaEtiquetas.registros).filter(registro => {
+      if (!registro || !registro.pedido) return false;
+      if (marketplace !== "desconhecido" && registro.marketplace !== marketplace) return false;
+      return pedidosEquivalentes(registro.pedido, pedidoNormalizado, registro.marketplace || marketplace);
+    });
+
+    if (candidatos.length > 1) {
+      return { ok: false, marketplace, erro: `Há ${candidatos.length} etiquetas vinculadas ao mesmo pedido. Republique os arquivos no painel administrativo.` };
+    }
+    if (candidatos.length === 1) {
+      const registro = candidatos[0];
+      if (!registro.envio) return { ok: false, marketplace, erro: "A etiqueta vinculada não contém o ZPL de envio." };
+      return { ok: true, marketplace: registro.marketplace || marketplace, registro };
+    }
+    return { ok: false, marketplace, erro: "Nenhuma etiqueta foi vinculada exatamente a este pedido no painel administrativo." };
+  }
+
+  // Compatibilidade com bancos antigos (versões 2 e 3). Recomenda-se republicar
+  // pelo painel novo para ativar o vínculo explícito e a proteção contra colisões.
+  if (mapaEtiquetas && Number(mapaEtiquetas.version) >= 2 && mapaEtiquetas.registros && mapaEtiquetas.porChave) {
+    const ids = new Set();
+    obterChavesDoItem(item).flatMap(gerarVariantesChave).forEach(chave => {
+      (mapaEtiquetas.porChave[chave] || []).forEach(id => ids.add(id));
+    });
+
+    let candidatos = Array.from(ids)
+      .map(id => mapaEtiquetas.registros[id])
+      .filter(registro => registro && (marketplace === "desconhecido" || registro.marketplace === marketplace));
+
+    if (candidatos.length > 1) {
+      candidatos = candidatos.map(registro => ({ registro, pontos: pontuarRegistroEtiqueta(registro, item) }))
+        .sort((a, b) => b.pontos - a.pontos);
+      if (candidatos[0].pontos > 0 && candidatos[0].pontos > candidatos[1].pontos) {
+        candidatos = [candidatos[0].registro];
+      } else {
+        return { ok: false, marketplace, erro: `Foram encontradas ${candidatos.length} etiquetas possíveis para este pedido.` };
+      }
+    }
+
+    if (candidatos.length === 1) {
+      const registro = candidatos[0].registro || candidatos[0];
+      if (!registro.envio) return { ok: false, marketplace, erro: "A etiqueta vinculada não contém o ZPL de envio." };
+      return { ok: true, marketplace: registro.marketplace || marketplace, registro };
+    }
+    return { ok: false, marketplace, erro: "Nenhuma etiqueta vinculada foi encontrada." };
+  }
+
+  return { ok: false, marketplace, erro: "O banco de etiquetas está desatualizado. Atualize o pedido e republique as etiquetas pelo painel administrativo." };
+}
+
+function hojeLocalConferencia(){
+  const agora=new Date();const y=agora.getFullYear(),m=String(agora.getMonth()+1).padStart(2,"0"),d=String(agora.getDate()).padStart(2,"0");return `${y}-${m}-${d}`;
+}
+function normalizarDataPedidoConferencia(valor){
+  let s=String(valor??"").trim();if(!s)return "";let m=s.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/);if(m)return `${m[1]}-${m[2].padStart(2,"0")}-${m[3].padStart(2,"0")}`;m=s.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{2,4})$/);if(m){let ano=m[3];if(ano.length===2)ano=`20${ano}`;return `${ano}-${m[2].padStart(2,"0")}-${m[1].padStart(2,"0")}`;}const dt=new Date(s);if(!Number.isNaN(dt.getTime()))return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}-${String(dt.getDate()).padStart(2,"0")}`;return "";
+}
+function dataPedidoItem(item){return normalizarDataPedidoConferencia(extrairCampo(item,"Data do Pedido")||extrairCampo(item,"Data")||item?.DataPedido);}
+function pedidoEhDoDiaAtual(item){const data=dataPedidoItem(item);return !data||data===hojeLocalConferencia();}
+function invalidarCachesPedidosDisponiveis(){cacheUidsPedidosDisponiveis=null;cacheIndiceCodigosPedidos=null;cacheDiaPedidosDisponiveis="";}
+
+function pedidoPossuiEtiquetaDisponivel(item) {
+  if (!item) return false;
+  try {
+    return Boolean(resolverEtiquetaPedido(item).ok);
+  } catch (erro) {
+    console.warn("Falha ao verificar disponibilidade da etiqueta", erro);
+    return false;
+  }
+}
+
+function obterUidsPedidosComEtiquetaDisponivel() {
+  const hoje=hojeLocalConferencia();
+  if(cacheUidsPedidosDisponiveis&&cacheDiaPedidosDisponiveis===hoje)return cacheUidsPedidosDisponiveis;
+  cacheDiaPedidosDisponiveis=hoje;
+  cacheUidsPedidosDisponiveis=listaPedidosPendentes.filter(uid => {
+    const item = dadosPedidos.find(x => String(x.__uidPedido) === String(uid));
+    return pedidoEhDoDiaAtual(item)&&pedidoPossuiEtiquetaDisponivel(item);
+  });
+  cacheIndiceCodigosPedidos=null;
+  return cacheUidsPedidosDisponiveis;
+}
+function obterIndiceCodigosPedidos(){
+  if(cacheIndiceCodigosPedidos)return cacheIndiceCodigosPedidos;
+  const indice=new Map();
+  obterUidsPedidosComEtiquetaDisponivel().forEach(uid=>{
+    const ref=dadosPedidos.find(x=>String(x.__uidPedido)===String(uid));if(!ref)return;const pedido=extrairCampo(ref,"Pedido");
+    dadosPedidos.filter(x=>extrairCampo(x,"Pedido")===pedido).forEach(item=>{const codigo=String(extrairCampo(item,"Código de Barras")||"").trim();if(!codigo)return;if(!indice.has(codigo))indice.set(codigo,[]);indice.get(codigo).push({uidPedido:uid,numPedido:pedido,item});});
+  });
+  cacheIndiceCodigosPedidos=indice;return indice;
+}
+
+function atualizarStatusEtiquetaPedido(item) {
+  const elemento = document.getElementById("etiquetaPedidoStatus");
+  if (!elemento || !item) return;
+  const resultado = resolverEtiquetaPedido(item);
+  if (!resultado.ok) {
+    elemento.className = "etiqueta-status etiqueta-erro";
+    elemento.textContent = "Etiqueta pendente: " + resultado.erro;
+    return resultado;
+  }
+  elemento.className = "etiqueta-status etiqueta-ok";
+  const complemento = resultado.marketplace === "mercado_livre"
+    ? " — envio + cliente + produtos na mesma etiqueta 10x15"
+    : "";
+  elemento.textContent = `Etiqueta pronta: ${nomeMarketplace(resultado.marketplace)} — 1 impressão${complemento}`;
+  return resultado;
+}
+
+function carregarDadosMemoria() {
+  invalidarCachesPedidosDisponiveis();
+  const users = appStorage.getItem("conf_usuarios");
+  const peds = appStorage.getItem("conf_pedidos");
+  const fotos = appStorage.getItem("conf_fotos");
+  const etiqs = appStorage.getItem("conf_etiquetas");
+
+  if (users) usuariosCadastrados = JSON.parse(users);
+  if (peds) {
+    let rawPeds = JSON.parse(peds);
+    dadosPedidos = rawPeds.map((item, index) => {
+      const marketplaceInicial = obterMarketplaceItem(item);
+      if (!dataPedidoItem(item)) item["Data do Pedido"] = hojeLocalConferencia();
+      if (extrairCampo(item,"Pedido")) item.Pedido = pedidoParaArmazenamento(extrairCampo(item,"Pedido"),marketplaceInicial);
+      if (!item.__uidPedido) {
+        let numPed = extrairCampo(item, "Pedido") || "S/N";
+        item.__uidPedido = numPed + "_" + index;
+      }
+      const marketplace = obterMarketplaceItem(item);
+      if (marketplace !== "desconhecido") item.Marketplace = nomeMarketplacePlanilha(marketplace);
+      return item;
+    });
+
+    let pedidosUnicosMap = new Map();
+    dadosPedidos.forEach(item => {
+      let numPed = extrairCampo(item, "Pedido") || "S/N";
+      if (!pedidosUnicosMap.has(numPed)) {
+        pedidosUnicosMap.set(numPed, item.__uidPedido);
+      }
+    });
+    listaPedidosPendentes = Array.from(pedidosUnicosMap.values());
+  }
+  if (fotos) mapaFotos = JSON.parse(fotos);
+  if (etiqs) mapaEtiquetas = JSON.parse(etiqs);
+}
+
+function verificarStatusPlanilhaLogin() {
+  const statusDiv = document.getElementById("statusCargaLogin");
+  if (usuariosCadastrados.length > 0) {
+    statusDiv.style.color = "#2e7d32";
+    statusDiv.innerHTML = "✔ Sistema pronto e conectado (" + usuariosCadastrados.length + " usuários carregados).";
+  } else {
+    statusDiv.style.color = "#c62828";
+    statusDiv.innerHTML = "⚠ Carregue a planilha Excel para iniciar.";
+  }
+}
+
+function carregarPlanilhaGeral(input) {
+  const file = input.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      const data = new Uint8Array(e.target.result);
+      const workbook = XLSX.read(data, {type: 'array'});
+
+      const sheetUsers = workbook.Sheets["USUÁRIOS"] || workbook.Sheets["USUARIOS"] || workbook.Sheets[workbook.SheetNames[1]];
+      if (sheetUsers) {
+        usuariosCadastrados = XLSX.utils.sheet_to_json(sheetUsers);
+        appStorage.setItem("conf_usuarios", JSON.stringify(usuariosCadastrados));
+      }
+
+      const abaPedidos = workbook.Sheets["PEDIDOS"] || workbook.Sheets["CONFERÊNCIA"] || workbook.Sheets[workbook.SheetNames[0]];
+      if (abaPedidos) {
+        let rawPeds = XLSX.utils.sheet_to_json(abaPedidos);
+        dadosPedidos = rawPeds.map((item, index) => {
+          let numPed = extrairCampo(item, "Pedido") || "S/N";
+          item.__uidPedido = numPed + "_" + index;
+          return item;
+        });
+        appStorage.setItem("conf_pedidos", JSON.stringify(dadosPedidos));
+        appStorage.removeItem(CHAVE_ULTIMO_PEDIDO);
+        
+        let pedidosUnicosMap = new Map();
+        dadosPedidos.forEach(item => {
+          let numPed = extrairCampo(item, "Pedido") || "S/N";
+          if (!pedidosUnicosMap.has(numPed)) {
+            pedidosUnicosMap.set(numPed, item.__uidPedido);
+          }
+        });
+        listaPedidosPendentes = Array.from(pedidosUnicosMap.values());
+      }
+
+      carregarDadosMemoria();
+      renderizarListaPedidos();
+      verificarStatusPlanilhaLogin();
+
+      document.getElementById("msgAdmin").style.color = "green";
+      document.getElementById("msgAdmin").innerText = "✔ Planilha sincronizada!";
+      
+    } catch (err) {
+      mostrarMensagemDetalhada("erro", "Não foi possível ler a planilha", String(err), "Confirme se o arquivo é XLSX e se possui a aba PEDIDOS.");
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+async function vincularPastaFotos() {
+  try {
+    const pastaHandle = await window.showDirectoryPicker();
+    mapaFotos = {};
+
+    for await (const entry of pastaHandle.values()) {
+      if (entry.kind === 'file' && /\.(jpg|jpeg|png|webp)$/i.test(entry.name)) {
+        let fileFoto = await entry.getFile();
+        let nomeSemExt = entry.name.substring(0, entry.name.lastIndexOf('.')).trim().toLowerCase();
+        mapaFotos[nomeSemExt] = URL.createObjectURL(fileFoto);
+      }
+    }
+    document.getElementById("msgAdmin").style.color = "green";
+    document.getElementById("msgAdmin").innerText = "✔ Pasta de fotos vinculada!";
+    if (idPedidoAtual) desenharTabela();
+  } catch (err) {
+    document.getElementById("msgAdmin").style.color = "red";
+    document.getElementById("msgAdmin").innerText = "Acesso à pasta cancelado.";
+  }
+}
+
+function fazerLogin() {
+  const loginDigitado = document.getElementById("usuarioInput").value.trim().toLowerCase();
+  const senhaDigitada = document.getElementById("senhaInput").value.trim();
+  const erroDiv = document.getElementById("erroLogin");
+
+  // Recarrega no momento do login para reconhecer imediatamente usuários criados em outra máquina.
+  try { usuariosCadastrados = JSON.parse(appStorage.getItem("conf_usuarios") || "[]"); } catch (_) { usuariosCadastrados = []; }
+
+  if (!loginDigitado || !senhaDigitada) {
+    erroDiv.innerText = "Preencha o usuário e a senha!";
+    return;
+  }
+
+  if (loginDigitado === "admin" && senhaDigitada === "01101998") {
+    usuarioLogado = { Nome: "Administrador", Login: "admin", Perfil: "Admin" };
+    appStorage.setItem("conf_sessao_ativa", JSON.stringify(usuarioLogado));
+    iniciarSessao();
+    return;
+  }
+
+  if (usuariosCadastrados.length === 0) {
+    erroDiv.innerText = "Nenhum usuário foi cadastrado no banco administrativo. Entre como admin e cadastre um operador.";
+    return;
+  }
+
+  const user = usuariosCadastrados.find(u => {
+    let userSheet = (extrairCampo(u, "Login") || extrairCampo(u, "Nome") || extrairCampo(u, "Usuário")).toLowerCase();
+    let passSheet = extrairCampo(u, "Senha");
+    return userSheet === loginDigitado && passSheet === senhaDigitada;
+  });
+
+  if (user) {
+    usuarioLogado = {
+      Nome: extrairCampo(user, "Nome") || extrairCampo(user, "Login") || extrairCampo(user, "Usuário"),
+      Login: extrairCampo(user, "Login") || extrairCampo(user, "Usuário"),
+      Perfil: extrairCampo(user, "Perfil") || "Operador"
+    };
+    appStorage.setItem("conf_sessao_ativa", JSON.stringify(usuarioLogado));
+    iniciarSessao();
+  } else {
+    erroDiv.innerText = "Login ou Senha incorretos!";
+  }
+}
+
+function iniciarSessao() {
+  document.getElementById("telaLogin").style.display = "none";
+  document.getElementById("infoUsuario").innerHTML = `Operador: <b>${usuarioLogado.Nome || usuarioLogado.Login}</b>`;
+  document.getElementById("usuarioInput").value = "";
+  document.getElementById("senhaInput").value = "";
+  document.getElementById("erroLogin").innerText = "";
+
+  const perfil = String(usuarioLogado.Perfil || "").toLowerCase();
+  if (perfil.includes("admin") || usuarioLogado.Login === "admin") {
+    document.getElementById("painelAdmin").style.display = "block";
+  } else {
+    document.getElementById("painelAdmin").style.display = "none";
+  }
+
+  restaurarFiltroMarketplacePedidos();
+  renderizarListaPedidos();
+  setTimeout(restaurarUltimoPedidoEmAndamento, 80);
+}
+
+function fazerLogoff() {
+  usuarioLogado = null;
+  appStorage.removeItem("conf_sessao_ativa");
+  limparPainel();
+  verificarStatusPlanilhaLogin();
+  document.getElementById("telaLogin").style.display = "flex";
+}
+
+function restaurarFiltroMarketplacePedidos() {
+  const select = document.getElementById("filtroMarketplacePedidos");
+  let salvo = appStorage.getItem("conf_filtro_marketplace_pedidos") || "todos";
+  if (!["todos","mercado_livre","shopee","magalu"].includes(salvo)) salvo = "todos";
+  filtroMarketplacePedidosAtual = salvo;
+  if (select) select.value = salvo;
+}
+
+function alterarFiltroMarketplacePedidos(valor) {
+  filtroMarketplacePedidosAtual = ["todos","mercado_livre","shopee","magalu"].includes(valor) ? valor : "todos";
+  appStorage.setItem("conf_filtro_marketplace_pedidos", filtroMarketplacePedidosAtual);
+  uidPedidoSelecionadoTeclado = null;
+  indicePedidoSelecionadoTeclado = -1;
+  renderizarListaPedidos();
+}
+
+function focarFiltroMarketplacePedidos() {
+  const select = document.getElementById("filtroMarketplacePedidos");
+  if (!select) return;
+  select.focus();
+  select.classList.add("atalho-pulso");
+  setTimeout(() => select.classList.remove("atalho-pulso"), 750);
+}
+
+function obterContagemMarketplacePedidos() {
+  const contagens = { todos:0, mercado_livre:0, shopee:0, magalu:0, desconhecido:0 };
+  obterUidsPedidosComEtiquetaDisponivel().forEach(uid => {
+    const item = dadosPedidos.find(x => String(x.__uidPedido) === String(uid));
+    if (!item) return;
+    const mp = obterMarketplaceItem(item);
+    contagens.todos++;
+    contagens[mp] = (contagens[mp] || 0) + 1;
+  });
+  return contagens;
+}
+
+function atualizarResumoFiltroMarketplace(contagens) {
+  const resumo = document.getElementById("resumoFiltroMarketplace");
+  const select = document.getElementById("filtroMarketplacePedidos");
+  if (resumo) resumo.textContent = `Todos: ${contagens.todos} • Mercado Livre: ${contagens.mercado_livre} • Shopee: ${contagens.shopee} • Magalu: ${contagens.magalu}`;
+  if (select) {
+    const rotulos = {
+      todos:`Todos os marketplaces (${contagens.todos})`,
+      mercado_livre:`Mercado Livre (${contagens.mercado_livre})`,
+      shopee:`Shopee (${contagens.shopee})`,
+      magalu:`Magalu (${contagens.magalu})`
+    };
+    Array.from(select.options).forEach(opt => { if (rotulos[opt.value]) opt.textContent = rotulos[opt.value]; });
+  }
+}
+
+function renderizarListaPedidos() {
+  const termo = document.getElementById("campoBusca") ? document.getElementById("campoBusca").value.trim().toLowerCase() : "";
+  const filtroMarketplace = filtroMarketplacePedidosAtual || document.getElementById("filtroMarketplacePedidos")?.value || "todos";
+  const contagensMarketplace = obterContagemMarketplacePedidos();
+  atualizarResumoFiltroMarketplace(contagensMarketplace);
+  let html = "";
+
+  obterUidsPedidosComEtiquetaDisponivel().forEach(uid => {
+    let itemPedido = dadosPedidos.find(x => String(x.__uidPedido) === String(uid));
+    if (!itemPedido) return;
+
+    let numPedidoReal = extrairCampo(itemPedido, "Pedido");
+    let nomeCliente = extrairCampo(itemPedido, "Cliente");
+    const marketplacePedido = obterMarketplaceItem(itemPedido);
+    if (filtroMarketplace !== "todos" && marketplacePedido !== filtroMarketplace) return;
+    const linhas = dadosPedidos.filter(x => extrairCampo(x, "Pedido") === numPedidoReal);
+    const total = linhas.reduce((s, x) => s + Number(extrairCampo(x, "Quantidade") || 0), 0);
+    const lidos = linhas.reduce((s, x) => s + Number(x.Lido || 0), 0);
+    const completo = total > 0 && lidos >= total;
+    const iniciado = lidos > 0 && !completo;
+
+    const numPedidoExibicao = pedidoParaExibicao(numPedidoReal, marketplacePedido);
+    if (termo === "" || String(numPedidoReal).toLowerCase().includes(termo) || String(numPedidoExibicao).toLowerCase().includes(termo) || String(nomeCliente || "").toLowerCase().includes(termo)) {
+      const selecionadoTeclado = String(uidPedidoSelecionadoTeclado || "") === String(uid);
+      html += `
+        <div class="pedido-item ${selecionadoTeclado ? 'pedido-teclado-selecionado' : ''}"
+             data-pedido-uid="${escaparHtml(uid)}" tabindex="${selecionadoTeclado ? '0' : '-1'}"
+             role="button" aria-label="Abrir pedido ${escaparHtml(numPedidoExibicao)}"
+             onclick="selecionarPedidoPorClique('${uid}')">
+          <div class="pedido-topo-linha"><span>Pedido ${escaparHtml(numPedidoExibicao)}</span><span class="pedido-marketplace-badge ${marketplacePedido}">${escaparHtml(nomeMarketplace(marketplacePedido))}</span></div>
+          ${nomeCliente ? `<div class="pedido-cliente">👤 ${escaparHtml(nomeCliente)}</div>` : ''}
+          <div class="pedido-cliente">📅 Hoje · ${escaparHtml(dataPedidoItem(itemPedido)||hojeLocalConferencia())}</div>
+          ${completo ? `<span class="pedido-status-mini pedido-status-impressao">Conferido — aguardando impressão</span>` : ''}
+          ${iniciado ? `<span class="pedido-status-mini pedido-status-andamento">Em andamento: ${lidos}/${total}</span>` : ''}
+        </div>
+      `;
+    }
+  });
+
+  if (html === "") {
+    const nomeFiltro = filtroMarketplace === "todos" ? "" : ` de ${nomeMarketplace(filtroMarketplace)}`;
+    const totalPedidosHoje = listaPedidosPendentes.filter(uid=>{const item=dadosPedidos.find(x=>String(x.__uidPedido)===String(uid));return item&&pedidoEhDoDiaAtual(item);}).length;
+    const totalSemEtiqueta = Math.max(0, totalPedidosHoje - obterUidsPedidosComEtiquetaDisponivel().length);
+    const detalheSemEtiqueta = totalSemEtiqueta > 0 ? `<br><span style="font-size:11px;">${totalSemEtiqueta} pedido(s) de hoje aguardando etiqueta no painel administrativo.</span>` : "";
+    html = `<div style="padding:10px; color:#888; font-size:13px; text-align:center;">Nenhum pedido de hoje com etiqueta disponível${nomeFiltro}${detalheSemEtiqueta}</div>`;
+  }
+
+  document.getElementById("listaPedidos").innerHTML = html;
+  sincronizarSelecaoPedidosTeclado();
+}
+
+function selecionarPedidoPorClique(uid) {
+  uidPedidoSelecionadoTeclado = String(uid);
+  abrirPedido(uid);
+  renderizarListaPedidos();
+}
+
+function abrirPedido(uid) {
+  cancelarLeituraPendente();
+  let itemBase = dadosPedidos.find(x => String(x.__uidPedido) === String(uid));
+  if (!itemBase) return;
+  if (!pedidoEhDoDiaAtual(itemBase)) {
+    mostrarMensagemDetalhada("aviso","Pedido fora da data de hoje",`Pedido: ${pedidoParaExibicao(extrairCampo(itemBase,"Pedido"),obterMarketplaceItem(itemBase))}\nData: ${dataPedidoItem(itemBase)||"não informada"}`,"Altere a data no painel administrativo para que ele apareça na conferência do dia.");
+    renderizarListaPedidos();
+    return;
+  }
+
+  const etiquetaDisponivel = resolverEtiquetaPedido(itemBase);
+  if (!etiquetaDisponivel.ok) {
+    const pedidoBloqueado = pedidoParaExibicao(extrairCampo(itemBase, "Pedido"), obterMarketplaceItem(itemBase));
+    mostrarMensagemDetalhada(
+      "aviso",
+      "Pedido aguardando etiqueta",
+      `Pedido: ${pedidoBloqueado}\nMotivo: ${etiquetaDisponivel.erro}`,
+      "O administrador deve carregar ou vincular a etiqueta correta. Assim que ela estiver disponível, o pedido aparecerá automaticamente na lista."
+    );
+    renderizarListaPedidos();
+    return;
+  }
+
+  let numPedidoReal = extrairCampo(itemBase, "Pedido");
+  if (!adquirirBloqueioPedidoRede(numPedidoReal)) return;
+  idPedidoAtual = uid;
+  pedidoAtual = dadosPedidos.filter(x => extrairCampo(x, "Pedido") === numPedidoReal);
+  pedidoAtual.forEach(x => { if (x.Lido === undefined) x.Lido = 0; });
+  appStorage.setItem(CHAVE_ULTIMO_PEDIDO, normalizarIdentificadorExato(numPedidoReal));
+
+  const numPedidoExibicao = pedidoParaExibicao(numPedidoReal, obterMarketplaceItem(itemBase));
+  document.getElementById("titulo").innerHTML = "Pedido " + escaparHtml(numPedidoExibicao);
+  document.getElementById("cliente").innerHTML = "<b>Cliente:</b> " + escaparHtml(extrairCampo(pedidoAtual[0], "Cliente"));
+  document.getElementById("marketplace").innerHTML = "<b>Marketplace:</b> " + escaparHtml(nomeMarketplace(obterMarketplaceItem(pedidoAtual[0])));
+  document.getElementById("statusMsg").innerHTML = "";
+  limparMensagemDetalhada();
+  atualizarStatusEtiquetaPedido(pedidoAtual[0]);
+  desenharTabela();
+
+  const input = document.getElementById("codigo");
+  const completo = pedidoAtualFinalizado();
+  input.value = "";
+  input.disabled = completo;
+  if (completo) {
+    mostrarMensagemDetalhada(
+      "aviso",
+      "Conferência recuperada e aguardando impressão",
+      `Todas as unidades do pedido ${numPedidoExibicao} já foram conferidas e salvas automaticamente.`,
+      "Confira a etiqueta vinculada e clique em Tentar imprimir.",
+      [{ rotulo: "Tentar imprimir", onclick: "tentarImprimirPedidoAtual()" }]
+    );
+  } else {
+    input.focus();
+  }
+}
+
+function restaurarUltimoPedidoEmAndamento() {
+  if (!usuarioLogado || idPedidoAtual || !dadosPedidos.length) return;
+  const pedidoSalvo = appStorage.getItem(CHAVE_ULTIMO_PEDIDO);
+  if (!pedidoSalvo) return;
+  const item = dadosPedidos.find(x => normalizarIdentificadorExato(extrairCampo(x, "Pedido")) === pedidoSalvo);
+  if (item && pedidoEhDoDiaAtual(item) && pedidoPossuiEtiquetaDisponivel(item)) abrirPedido(item.__uidPedido);
+  else appStorage.removeItem(CHAVE_ULTIMO_PEDIDO);
+}
+
+function pedidoAtualFinalizado() {
+  return pedidoAtual.length > 0 && pedidoAtual.every(i => Number(i.Lido || 0) >= Number(extrairCampo(i, "Quantidade") || 0));
+}
+
+function desenharTabela() {
+  let html = "";
+  pedidoAtual.forEach(i => {
+    let classe = (i.Lido >= Number(extrairCampo(i, "Quantidade") || 0)) ? "ok" : "pendente";
+    let valSKU = extrairCampo(i, "SKU");
+    let keySKU = valSKU.toLowerCase();
+    let valFoto = extrairCampo(i, "Foto").toLowerCase();
+    let urlImg = mapaFotos[valFoto] || mapaFotos[keySKU];
+
+    let tagImg = urlImg ? `<img src="${urlImg}" class="img-produto">` : `<span style="color:#999; font-size:11px;">Sem Foto</span>`;
+
+    html += `
+      <tr class="${classe}">
+        <td>${tagImg}</td>
+        <td><span class="sku-texto">${valSKU || '---'}</span></td>
+        <td style="text-align:left;">${extrairCampo(i, "Descrição")}${String(extrairCampo(i,"Kit")||"").toUpperCase()==="SIM"||extrairCampo(i,"Nome do Kit")?`<div style="margin-top:4px"><span class="pedido-status-mini" style="background:#f3e8ff;color:#6b21a8">🎁 ${escaparHtml(extrairCampo(i,"Nome do Kit")||"Kit")}</span></div>`:""}</td>
+        <td>${extrairCampo(i, "Quantidade") || 0}</td>
+        <td>${i.Lido || 0}</td>
+        <td>${extrairCampo(i, "Rua")} ${extrairCampo(i, "Módulo")} ${extrairCampo(i, "Prateleira")} ${extrairCampo(i, "Nível")} ${extrairCampo(i, "Posição")}</td>
+      </tr>
+    `;
+  });
+  document.getElementById("corpoTabela").innerHTML = html;
+
+  let total = 0, lidos = 0;
+  pedidoAtual.forEach(i => {
+    total += Number(extrairCampo(i, "Quantidade") || 0);
+    lidos += Number(i.Lido || 0);
+  });
+  let perc = total > 0 ? (lidos / total) * 100 : 0;
+  document.getElementById("progresso").style.width = perc + "%";
+}
+
+// ---- CONFERÊNCIA REVERSA ----
+function verificarLeituraAutomatica(input) {
+  let cod = input.value.trim();
+  if (!cod) return;
+
+  if (idPedidoAtual) {
+    processarBipeNoPedidoAtual(input, cod);
+    return;
+  }
+
+  const itensEncontrados = obterIndiceCodigosPedidos().get(cod) || [];
+
+  if (itensEncontrados.length === 0) {
+    if (cod.length < 5) return;
+    document.getElementById("statusMsg").innerHTML = "";
+    mostrarMensagemDetalhada("erro", "Código não localizado", `Código lido: ${cod}`, "Confirme se o produto está no dados compartilhados, se o código de barras está completo e se o pedido ainda está pendente.");
+    input.value = "";
+    return;
+  }
+
+  if (itensEncontrados.length === 1) {
+    let match = itensEncontrados[0];
+    abrirPedido(match.uidPedido);
+    input.value = cod;
+    processarBipeNoPedidoAtual(input, cod);
+  } else {
+    input.value = "";
+    mostrarModalMultiplosPedidos(itensEncontrados, cod);
+  }
+}
+
+function mostrarModalMultiplosPedidos(lista, codBarras) {
+  let html = "";
+  let unicosMap = new Map();
+  lista.forEach(m => unicosMap.set(m.numPedido, m));
+
+  unicosMap.forEach(match => {
+    let itemBase = dadosPedidos.find(x => extrairCampo(x, "Pedido") === match.numPedido);
+    let cliente = extrairCampo(itemBase, "Cliente");
+    html += `
+      <button class="btn-opcao-pedido" onclick="selecionarPedidoMultiplo('${match.uidPedido}', '${codBarras}')">
+        Pedido ${pedidoParaExibicao(match.numPedido,obterMarketplaceItem(itemBase))} - Cliente: ${cliente || 'Não informado'}
+      </button>
+    `;
+  });
+
+  document.getElementById("listaOpcoesMultiplos").innerHTML = html;
+  document.getElementById("modalMultiplos").style.display = "flex";
+}
+
+function selecionarPedidoMultiplo(uid, codBarras) {
+  fecharModalMultiplos();
+  abrirPedido(uid);
+  let input = document.getElementById("codigo");
+  input.value = codBarras;
+  processarBipeNoPedidoAtual(input, codBarras);
+}
+
+function fecharModalMultiplos() {
+  document.getElementById("modalMultiplos").style.display = "none";
+  document.getElementById("codigo").focus();
+}
+
+async function processarBipeNoPedidoAtual(input, cod) {
+  if (impressaoEmAndamento) return;
+
+  let item = pedidoAtual.find(x => extrairCampo(x, "Código de Barras") == cod);
+
+  if (!item) {
+    document.getElementById("statusMsg").innerHTML = "";
+    mostrarMensagemDetalhada(
+      "erro",
+      "Produto não pertence a este pedido",
+      `Código lido: ${cod}
+Pedido aberto: ${pedidoParaExibicao(extrairCampo(pedidoAtual[0], "Pedido"),obterMarketplaceItem(pedidoAtual[0]))}`,
+      "Separe o produto e confirme o pedido selecionado. O sistema não alterou nenhuma quantidade."
+    );
+    input.value = "";
+    input.focus();
+    return;
+  }
+
+  let qtdTotal = Number(extrairCampo(item, "Quantidade") || 0);
+  if (Number(item.Lido || 0) >= qtdTotal) {
+    document.getElementById("statusMsg").innerHTML = "";
+    mostrarMensagemDetalhada(
+      "aviso",
+      "Quantidade já atingida",
+      `Produto: ${extrairCampo(item, "Descrição")}
+SKU: ${extrairCampo(item, "SKU")}
+Quantidade solicitada: ${qtdTotal}`,
+      "Não coloque outra unidade deste produto no pedido."
+    );
+    input.value = "";
+    input.focus();
+    return;
+  }
+
+  if (item.Lido === undefined) item.Lido = 0;
+  item.Lido++;
+  document.getElementById("statusMsg").innerHTML = `✔ ${escaparHtml(extrairCampo(item, "Descrição") || "Produto")} — ${item.Lido}/${qtdTotal}`;
+  document.getElementById("statusMsg").style.color = "green";
+  limparMensagemDetalhada();
+  input.value = "";
+  desenharTabela();
+  agendarSalvamentoProgressoBipe();
+  agendarRenderizacaoListaPedidos();
+
+  if (!pedidoAtualFinalizado()) {
+    input.focus();
+    return;
+  }
+
+  cancelarSalvamentoProgressoPendente();
+  salvarProgressoAutomatico("Conferência salva");
+  input.disabled = true;
+  await finalizarPedidoAtualComImpressao();
+}
+
+async function tentarImprimirPedidoAtual() {
+  if (!pedidoAtual || !pedidoAtual.length) return;
+  if (!pedidoAtualFinalizado()) {
+    mostrarMensagemDetalhada("aviso", "Conferência incompleta", "Ainda existem produtos pendentes neste pedido.", "Bipe todas as unidades antes de imprimir.");
+    return;
+  }
+  await finalizarPedidoAtualComImpressao();
+}
+
+function criarSnapshotItensPedido() {
+  return pedidoAtual.map(item => ({
+    SKU: extrairCampo(item, "SKU"),
+    Descricao: extrairCampo(item, "Descrição") || extrairCampo(item, "Descricao"),
+    CodigoBarras: extrairCampo(item, "Código de Barras"),
+    Quantidade: Number(extrairCampo(item, "Quantidade") || 0),
+    Lido: Number(item.Lido || 0),
+    DataPedido: dataPedidoItem(item),
+    Kit: extrairCampo(item,"Kit"),
+    NomeKit: extrairCampo(item,"Nome do Kit")
+  }));
+}
+
+async function finalizarPedidoAtualComImpressao() {
+  if (impressaoEmAndamento || !pedidoAtualFinalizado()) return;
+  const input = document.getElementById("codigo");
+  const numPedAtual = extrairCampo(pedidoAtual[0], "Pedido");
+  const numPedExibicao = pedidoParaExibicao(numPedAtual, obterMarketplaceItem(pedidoAtual[0]));
+  const resultadoEtiqueta = resolverEtiquetaPedido(pedidoAtual[0]);
+
+  if (!resultadoEtiqueta.ok) {
+    input.disabled = true;
+    salvarProgressoAutomatico("Conferência salva");
+    mostrarMensagemDetalhada(
+      "erro",
+      "Pedido conferido, mas sem etiqueta segura",
+      `Pedido: ${numPedExibicao}
+Marketplace: ${nomeMarketplace(resultadoEtiqueta.marketplace)}
+Motivo: ${resultadoEtiqueta.erro}`,
+      "Atualize o pedido e republique o arquivo correto no painel administrativo. Depois clique em Verificar e imprimir.",
+      [{ rotulo: "Verificar e imprimir", onclick: "tentarImprimirPedidoAtual()" }]
+    );
+    atualizarStatusEtiquetaPedido(pedidoAtual[0]);
+    return;
+  }
+
+  impressaoEmAndamento = true;
+  input.disabled = true;
+  document.getElementById("statusMsg").innerHTML = "🖨 Enviando 1 etiqueta 10x15 para a impressora...";
+  document.getElementById("statusMsg").style.color = "#2B4E75";
+  mostrarMensagemDetalhada("info", "Impressão em andamento", `Pedido ${numPedExibicao}`, "Aguarde a confirmação antes de retirar a etiqueta.");
+
+  try {
+    const resultadoImpressao = await imprimirPedidoMarketplace(resultadoEtiqueta);
+    const qtdUnidades = pedidoAtual.reduce((s, item) => s + Number(extrairCampo(item, "Quantidade") || 0), 0);
+    gravarLogConferencia({
+      pedido: numPedAtual,
+      operador: usuarioLogado.Nome || usuarioLogado.Login,
+      cliente: extrairCampo(pedidoAtual[0], "Cliente"),
+      marketplace: nomeMarketplace(resultadoEtiqueta.marketplace),
+      marketplaceCodigo: resultadoEtiqueta.marketplace,
+      qtdItens: pedidoAtual.length,
+      qtdUnidades,
+      itens: criarSnapshotItensPedido(),
+      dadosImpressao: resultadoImpressao.dados,
+      quantidadeDocumentos: resultadoImpressao.quantidade
+    });
+
+    removerProgressoPedidoConcluido(numPedAtual);
+    liberarBloqueioPedidoAtualRede();
+    dadosPedidos = dadosPedidos.filter(x => extrairCampo(x, "Pedido") !== numPedAtual);
+    if (typeof appStorage.concluirPedido === "function") appStorage.concluirPedido(numPedAtual);
+    else appStorage.setItem("conf_pedidos", JSON.stringify(dadosPedidos));
+    appStorage.removeItem(CHAVE_ULTIMO_PEDIDO);
+
+    document.getElementById("statusMsg").innerHTML = "🎉 Pedido conferido e impressão enviada!";
+    mostrarMensagemDetalhada("sucesso", "Pedido concluído", `Pedido ${numPedExibicao} finalizado com sucesso.`, "O registro já está disponível no Histórico.");
+    carregarDadosMemoria();
+    renderizarListaPedidos();
+    setTimeout(limparPainel, 900);
+  } catch (erro) {
+    console.error("Erro ao imprimir:", erro);
+    salvarProgressoAutomatico("Conferência salva");
+    const detalhe = detalharErroImpressao(erro);
+    document.getElementById("statusMsg").innerHTML = "";
+    mostrarMensagemDetalhada(
+      "erro",
+      detalhe.titulo,
+      `Pedido: ${numPedExibicao}
+Detalhes técnicos: ${detalhe.detalhe}`,
+      detalhe.orientacao,
+      [{ rotulo: "Tentar imprimir novamente", onclick: "tentarImprimirPedidoAtual()" }]
+    );
+    input.disabled = true;
+  } finally {
+    impressaoEmAndamento = false;
+  }
+}
+
+function removerProgressoPedidoConcluido(pedido) {
+  if (normalizarIdentificadorExato(appStorage.getItem(CHAVE_ULTIMO_PEDIDO)) === normalizarIdentificadorExato(pedido)) {
+    appStorage.removeItem(CHAVE_ULTIMO_PEDIDO);
+  }
+}
+
+// ---- ITENS DA PLANILHA NA DANFE SIMPLIFICADA ----
+function escaparTextoZplFH(valor) {
+  const texto = String(valor ?? "").replace(/\s+/g, " ").trim();
+  const bytes = new TextEncoder().encode(texto);
+  let saida = "";
+
+  bytes.forEach(byte => {
+    // Mantém caracteres ASCII seguros; os demais são enviados em hexadecimal
+    // com ^FH para preservar acentos e evitar comandos ZPL acidentais.
+    const seguro = byte >= 32 && byte <= 126 &&
+      byte !== 94 &&  // ^
+      byte !== 126 && // ~
+      byte !== 95;    // _ (indicador hexadecimal do ^FH)
+
+    saida += seguro
+      ? String.fromCharCode(byte)
+      : "_" + byte.toString(16).toUpperCase().padStart(2, "0");
+  });
+
+  return saida;
+}
+
+function obterItensDanfeDaPlanilha() {
+  const agrupados = new Map();
+
+  (pedidoAtual || []).forEach(prod => {
+    const codigo =
+      extrairCampo(prod, "SKU") ||
+      extrairCampo(prod, "Código do Produto") ||
+      extrairCampo(prod, "Codigo do Produto") ||
+      extrairCampo(prod, "Código de Barras") ||
+      extrairCampo(prod, "Codigo de Barras") ||
+      "SEM CÓDIGO";
+
+    const descricao =
+      extrairCampo(prod, "Descrição") ||
+      extrairCampo(prod, "Descricao") ||
+      extrairCampo(prod, "Produto") ||
+      "PRODUTO SEM DESCRIÇÃO";
+
+    const quantidadeBruta = extrairCampo(prod, "Quantidade") || prod.Lido || 1;
+    const quantidade = Number(String(quantidadeBruta).replace(",", ".")) || 1;
+    const chave = `${codigo}||${descricao}`;
+
+    if (agrupados.has(chave)) {
+      agrupados.get(chave).quantidade += quantidade;
+    } else {
+      agrupados.set(chave, { codigo, descricao, quantidade });
+    }
+  });
+
+  return Array.from(agrupados.values());
+}
+
+function montarCampoItensDanfeZPL() {
+  const itens = obterItensDanfeDaPlanilha();
+  if (itens.length === 0) return "";
+
+  // Ajusta o tamanho para aproveitar a área inferior da DANFE sem cortar os itens.
+  const fonte = itens.length <= 2 ? 18 : (itens.length <= 4 ? 16 : 14);
+  const limiteDescricao = itens.length <= 2 ? 105 : (itens.length <= 4 ? 72 : 48);
+  const maxItens = 7;
+
+  const linhas = itens.slice(0, maxItens).map((item, indice) => {
+    let descricao = String(item.descricao || "").replace(/\s+/g, " ").trim();
+    if (descricao.length > limiteDescricao) {
+      descricao = descricao.slice(0, Math.max(0, limiteDescricao - 3)).trimEnd() + "...";
+    }
+
+    const qtd = Number.isInteger(item.quantidade)
+      ? item.quantidade
+      : String(item.quantidade).replace(".", ",");
+
+    return escaparTextoZplFH(
+      `${indice + 1}. COD: ${item.codigo} | QTD: ${qtd} | ${descricao}`
+    );
+  });
+
+  if (itens.length > maxItens) {
+    linhas.push(escaparTextoZplFH(`+ ${itens.length - maxItens} item(ns) adicional(is) no pedido`));
+  }
+
+  // \& força uma nova linha dentro de ^FB.
+  const conteudo = linhas.join("\\&");
+  return `^FO40,1050^A0N,${fonte},${fonte}^FB740,8,2,L^FH^FD${conteudo}^FS`;
+}
+
+function incluirItensDaPlanilhaNaDanfe(danfeOriginal) {
+  if (!danfeOriginal) return danfeOriginal;
+
+  const campoItens = montarCampoItensDanfeZPL();
+  if (!campoItens) return danfeOriginal;
+
+  let danfe = String(danfeOriginal);
+
+  // Substitui o campo reservado de "DADOS ADICIONAIS" presente na DANFE do ML.
+  const padraoCampoReservado =
+    /\^FO40,1050\^A0N,\d+,\d+\^FB740,\d+,\d+,L\^FH\^FD[\s\S]*?\^FS/;
+
+  if (padraoCampoReservado.test(danfe)) {
+    return danfe.replace(padraoCampoReservado, campoItens);
+  }
+
+  // Caso o marketplace altere levemente o template, insere após o título.
+  const tituloDados = "^FO40,1020^A0N,25,25^FDDADOS ADICIONAIS^FS";
+  if (danfe.includes(tituloDados)) {
+    return danfe.replace(tituloDados, `${tituloDados}\n${campoItens}`);
+  }
+
+  // Última contingência: cria a seção antes do fechamento da etiqueta.
+  const secaoCompleta =
+    `^FO0,1000^GB800,1,3^FS\n` +
+    `^FO40,1020^A0N,25,25^FDDADOS ADICIONAIS^FS\n` +
+    `${campoItens}\n`;
+
+  const posicaoFechamento = danfe.lastIndexOf("^XZ");
+  if (posicaoFechamento >= 0) {
+    return danfe.slice(0, posicaoFechamento) + secaoCompleta + danfe.slice(posicaoFechamento);
+  }
+
+  return danfe + "\n" + secaoCompleta + "^XZ";
+}
+
+// ---- GERAÇÃO DA NOTA SIMPLIFICADA COM DADOS ADICIONAIS DOS PRODUTOS ----
+
+// ---- DADOS DO CLIENTE E DOS PRODUTOS NA ETIQUETA DE ENVIO 10x15 ----
+function montarBlocoPedidoEtiquetaEnvioZPL() {
+  const itens = obterItensDanfeDaPlanilha();
+  const primeiroItem = (pedidoAtual || [])[0] || {};
+  let cliente =
+    extrairCampo(primeiroItem, "Cliente") ||
+    extrairCampo(primeiroItem, "Comprador") ||
+    extrairCampo(primeiroItem, "Destinatário") ||
+    "CLIENTE NÃO INFORMADO";
+
+  cliente = String(cliente).replace(/\s+/g, " ").trim();
+  if (cliente.length > 68) cliente = cliente.slice(0, 65).trimEnd() + "...";
+
+  const maxItens = 4;
+  const limiteDescricao = itens.length <= 2 ? 72 : 40;
+  const linhas = itens.slice(0, maxItens).map(item => {
+    let descricao = String(item.descricao || "PRODUTO SEM DESCRIÇÃO").replace(/\s+/g, " ").trim();
+    if (descricao.length > limiteDescricao) {
+      descricao = descricao.slice(0, Math.max(0, limiteDescricao - 3)).trimEnd() + "...";
+    }
+    const qtd = Number.isInteger(item.quantidade)
+      ? item.quantidade
+      : String(item.quantidade).replace(".", ",");
+    return escaparTextoZplFH(`COD: ${item.codigo} | QTD: ${qtd} | ${descricao}`);
+  });
+
+  if (itens.length > maxItens) {
+    linhas.push(escaparTextoZplFH(`+ ${itens.length - maxItens} item(ns) adicional(is)`));
+  }
+  if (!linhas.length) linhas.push(escaparTextoZplFH("PRODUTO NÃO INFORMADO"));
+
+  const conteudoItens = linhas.join("\\&");
+  return `^FX INICIO_DADOS_PEDIDO_SISTEMA ^FS
+^FO20,425^GB780,130,2^FS
+^FO30,433^A0N,18,18^FB740,1,0,L^FH^FDCLIENTE: ${escaparTextoZplFH(cliente)}^FS
+^FO30,459^A0N,16,16^FB740,5,2,L^FH^FD${conteudoItens}^FS
+^FX FIM_DADOS_PEDIDO_SISTEMA ^FS`;
+}
+
+function incluirDadosPedidoNaEtiquetaEnvio(envioOriginal) {
+  if (!envioOriginal) return envioOriginal;
+  let envio = String(envioOriginal);
+  const bloco = montarBlocoPedidoEtiquetaEnvioZPL();
+
+  // Evita duplicar o bloco caso uma etiqueta já transformada seja processada novamente.
+  envio = envio.replace(
+    /\^FX INICIO_DADOS_PEDIDO_SISTEMA \^FS[\s\S]*?\^FX FIM_DADOS_PEDIDO_SISTEMA \^FS\s*/g,
+    ""
+  );
+
+  const marcadores = ["^FX SIN CAJA ^FS", "^FX INICIO CANALIZACION FINAL ^FS", "^FO20,570"];
+  for (const marcador of marcadores) {
+    const posicao = envio.indexOf(marcador);
+    if (posicao >= 0) {
+      return envio.slice(0, posicao) + bloco + "\n" + envio.slice(posicao);
+    }
+  }
+
+  const fechamento = envio.lastIndexOf("^XZ");
+  if (fechamento >= 0) return envio.slice(0, fechamento) + bloco + "\n" + envio.slice(fechamento);
+  return envio + "\n" + bloco + "\n^XZ";
+}
+
+function gerarNotaSimplificadaZPL() {
+  if (!pedidoAtual || pedidoAtual.length === 0) return;
+
+  let itemRef = pedidoAtual[0];
+  numeroPedidoCache = extrairCampo(itemRef, "Pedido");
+  let numNF = extrairCampo(itemRef, "NF") || "00000";
+  let chaveAcesso = extrairCampo(itemRef, "Chave") || "35260714346930000106550010000" + numNF + "1007739501";
+  let protocolo = extrairCampo(itemRef, "Protocolo") || "135263050252567 29/07/2026 16:25:04";
+  let dataEmissao = extrairCampo(itemRef, "DataEmissao") || "29/07/2026";
+  let remetente = extrairCampo(itemRef, "Remetente") || "NOROMAK CAMINHOES E ONIBUS LTDA";
+  let cnpjRemetente = extrairCampo(itemRef, "CNPJRemetente") || "14346930000106";
+  let ieRemetente = extrairCampo(itemRef, "IERemetente") || "177166605115";
+  let ufRemetente = extrairCampo(itemRef, "UFRemetente") || "SP";
+  let nomeCliente = extrairCampo(itemRef, "Cliente") || "CLIENTE DIVERSO";
+  let ufCliente = extrairCampo(itemRef, "UFCliente") || "MG";
+
+  // Monta a string dos dados adicionais com SKU, Descrição e Quantidade
+  let linhasDadosAdicionais = [];
+  pedidoAtual.forEach((prod, idx) => {
+    let sku = extrairCampo(prod, "SKU");
+    let desc = extrairCampo(prod, "Descrição");
+    let qtd = extrairCampo(prod, "Quantidade") || prod.Lido || 1;
+    linhasDadosAdicionais.push(`Item ${idx+1}: SKU ${sku} - ${desc} (Qtd: ${qtd})`);
+  });
+  let textoDadosAdicionaisFormatado = linhasDadosAdicionais.join(" | ");
+
+  // Template limpo ZPL da Nota Fiscal Simplificada
+  textoNotaGeradoCache = `^XA
+^MCY
+^CI28
+^FO30,20^GB265,130,3^FS
+^FO40,40^A0N,20,20^FD1 - Saida^FS
+^FO40,70^A0N,20,20^FH^FDN_c3_bamero  ${numNF}/Serie 1^FS
+^FO40,100^A0N,20,20^FH^FDEmiss_C3_A3o ${dataEmissao}^FS
+^FO440,40^A0N,30,30^FDChave de acesso^FS
+^FO320,70^A0N,20,20^FD${chaveAcesso}^FS
+^FO340,100^A0N,30,30^FH^FDProtocolo de Autoriza_C3_A7_C3_A3o de uso^FS
+^FO395,130^A0N,20,20^FD${protocolo}^FS
+^FO135,190^BY2,,0^BCN,150,Y,N,N^FD>;${chaveAcesso}^FS
+^FO0,355^A0N,25,25^FB675,1,0,R^FD^FS
+^FO0,380^GB800,1,3^FS
+^FO40,400^A0N,20,20^FH^FDREMETENTE: ${remetente}^FS
+^FO40,430^A0N,20,20^FDCNPJ: ${cnpjRemetente}^FS
+^FO310,430^A0N,20,20^FH^FDINSCRI_C3_87_C3_83O ESTADUAL: ${ieRemetente}^FS
+^FO690,430^A0N,20,20^FDUF: ${ufRemetente}^FS
+^FO40,500^A0N,20,20^FH^FDDESTINATARIO: ${nomeCliente}^FS
+^FO690,530^A0N,20,20^FDUF: ${ufCliente}^FS
+^FO40,560^A0N,20,20^FDDANFE SIMPLIFICADO^FS
+^FO0,600^GB800,1,3^FS
+^FO0,1000^GB800,1,3^FS
+^FO40,1020^A0N,25,25^FDDADOS ADICIONAIS^FS
+^FO40,1050^A0N,18,18^FB740,6,3,L^FH^FD${textoDadosAdicionaisFormatado}^FS
+^XZ`;
+}
+
+function fecharModalNota() {
+  document.getElementById("modalNotaSimplificada").style.display = "none";
+}
+
+function baixarArquivoTxtNota() {
+  if (!textoNotaGeradoCache) return;
+  let blob = new Blob([textoNotaGeradoCache], { type: "text/plain;charset=utf-8" });
+  let link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = `Nota_Simplificada_Pedido_${pedidoParaExibicao(numeroPedidoCache,"mercado_livre") || '000'}.txt`;
+  link.click();
+}
+
+// ---- IMPRESSÃO AUTOMÁTICA POR MARKETPLACE VIA QZ TRAY ----
+async function obterConfiguracaoImpressora() {
+  if (!qz.websocket.isActive()) {
+    const status = document.getElementById("statusMsg");
+    if (status) {
+      status.innerHTML = "🔐 Conectando ao QZ Tray com assinatura do Sistema de Conferência...";
+      status.style.color = "#9a6700";
+    }
+    // Aguarda o clique em Allow e continua a mesma conclusão, sem obrigar o operador a tentar novamente.
+    await conectarQzTray();
+  }
+
+  if (!qz.websocket.isActive()) {
+    throw new Error("A conexão com o QZ Tray não foi autorizada.");
+  }
+
+  const campo = document.getElementById("inputNomeImpressora");
+  const impressoraAlvo = (campo ? campo.value.trim() : "") || nomeImpressoraConfigurada;
+  if (!impressoraAlvo) throw new Error("Nenhuma impressora foi configurada.");
+
+  try {
+    const encontrada = await qz.printers.find(impressoraAlvo);
+    return qz.configs.create(encontrada);
+  } catch (_) {
+    return qz.configs.create(impressoraAlvo);
+  }
+}
+
+async function imprimirPedidoMarketplace(resultadoEtiqueta) {
+  const registro = resultadoEtiqueta.registro;
+  const marketplace = resultadoEtiqueta.marketplace;
+  const config = await obterConfiguracaoImpressora();
+  let data = [];
+
+  if (marketplace === "mercado_livre") {
+    // Imprime somente uma etiqueta 10x15. Os dados do cliente já existentes
+    // são preservados e o sistema inclui SKU/código, descrição e quantidade
+    // na área livre entre o código de barras e a roteirização.
+    const envioComDados = incluirDadosPedidoNaEtiquetaEnvio(registro.envio);
+    if (!envioComDados) throw new Error("A etiqueta de envio do Mercado Livre não está disponível.");
+    textoNotaGeradoCache = "";
+    data = [envioComDados];
+  } else if (marketplace === "magalu" || marketplace === "shopee") {
+    data = [registro.envio];
+  } else {
+    throw new Error("Marketplace não reconhecido para impressão automática.");
+  }
+
+  await qz.print(config, data);
+  console.log(`${nomeMarketplace(marketplace)}: ${data.length} impressão(ões) enviada(s) com sucesso.`);
+  return { quantidade: data.length, dados: data.slice() };
+}
+
+function carregarHistoricoConferencias() {
+  const novo = lerJsonSeguro(CHAVE_HISTORICO, null);
+  if (Array.isArray(novo)) {
+    historicoConferencias = novo;
+    return;
+  }
+
+  // Migração dos registros simples já existentes no sistema anterior.
+  const antigos = lerJsonSeguro("conf_logs", []);
+  historicoConferencias = Array.isArray(antigos) ? antigos.map((log, indice) => ({
+    id: `legado_${indice}_${Date.now()}`,
+    pedido: log.Pedido || "",
+    operador: log.Operador || "",
+    dataHoraTexto: log.DataHora || "",
+    dataHoraISO: "",
+    qtdItens: Number(log.QtdItens || 0),
+    qtdUnidades: Number(log.QtdItens || 0),
+    cliente: "",
+    marketplace: "",
+    reimpressoes: [],
+    dadosImpressao: null,
+    legado: true
+  })) : [];
+  salvarHistoricoConferencias();
+}
+
+function salvarHistoricoConferencias() {
+  historicoConferencias = historicoConferencias.slice(0, LIMITE_HISTORICO);
+  try {
+    appStorage.setItem(CHAVE_HISTORICO, JSON.stringify(historicoConferencias));
+  } catch (erro) {
+    // Em falta de espaço, conserva todos os metadados e remove ZPL dos registros mais antigos.
+    historicoConferencias.slice(30).forEach(log => { log.dadosImpressao = null; });
+    appStorage.setItem(CHAVE_HISTORICO, JSON.stringify(historicoConferencias));
+  }
+}
+
+function gravarLogConferencia(info) {
+  carregarHistoricoConferencias();
+  const agora = new Date();
+  const log = {
+    id: `conf_${agora.getTime()}_${Math.random().toString(36).slice(2, 8)}`,
+    pedido: info.pedido,
+    operador: info.operador,
+    cliente: info.cliente || "",
+    marketplace: info.marketplace || "",
+    marketplaceCodigo: info.marketplaceCodigo || "",
+    dataHoraISO: agora.toISOString(),
+    dataHoraTexto: agora.toLocaleDateString("pt-BR") + " " + agora.toLocaleTimeString("pt-BR"),
+    qtdItens: Number(info.qtdItens || 0),
+    qtdUnidades: Number(info.qtdUnidades || 0),
+    quantidadeDocumentos: Number(info.quantidadeDocumentos || 0),
+    itens: info.itens || [],
+    dadosImpressao: Array.isArray(info.dadosImpressao) ? info.dadosImpressao : null,
+    reimpressoes: []
+  };
+  historicoConferencias.unshift(log);
+  salvarHistoricoConferencias();
+
+  // Mantém compatibilidade com o relatório do painel administrativo anterior.
+  const logsSimples = lerJsonSeguro("conf_logs", []);
+  logsSimples.unshift({
+    Pedido: log.pedido,
+    Operador: log.operador,
+    DataHora: log.dataHoraTexto,
+    QtdItens: log.qtdItens,
+    QtdUnidades: log.qtdUnidades,
+    Marketplace: log.marketplace,
+    Reimpressoes: 0
+  });
+  appStorage.setItem("conf_logs", JSON.stringify(logsSimples.slice(0, LIMITE_HISTORICO)));
+  return log;
+}
+
+function abrirHistorico() {
+  carregarHistoricoConferencias();
+  document.getElementById("modalHistorico").style.display = "flex";
+  document.getElementById("filtroHistorico").value = "";
+  renderizarHistorico();
+  setTimeout(() => document.getElementById("filtroHistorico")?.focus(), 0);
+}
+
+function fecharHistorico() {
+  document.getElementById("modalHistorico").style.display = "none";
+  if (document.getElementById("codigo") && !document.getElementById("codigo").disabled) document.getElementById("codigo").focus();
+}
+
+function renderizarHistorico() {
+  const corpo = document.getElementById("corpoHistorico");
+  const termo = String(document.getElementById("filtroHistorico")?.value || "").trim().toLowerCase();
+  const filtrados = historicoConferencias.filter(log =>
+    [log.pedido, pedidoParaExibicao(log.pedido,log.marketplaceCodigo||log.marketplace), log.operador, log.cliente, log.marketplace, log.dataHoraTexto]
+      .some(valor => String(valor || "").toLowerCase().includes(termo))
+  );
+
+  document.getElementById("resumoHistorico").textContent = `${filtrados.length} registro(s) exibido(s) de ${historicoConferencias.length}.`;
+  if (!filtrados.length) {
+    corpo.innerHTML = `<tr><td colspan="8" style="padding:18px; color:#777;">Nenhum registro encontrado.</td></tr>`;
+    return;
+  }
+
+  corpo.innerHTML = filtrados.map(log => {
+    const qtdReimp = Array.isArray(log.reimpressoes) ? log.reimpressoes.length : 0;
+    const disponivel = Array.isArray(log.dadosImpressao) && log.dadosImpressao.length > 0;
+    return `<tr>
+      <td>${escaparHtml(log.dataHoraTexto || "-")}</td>
+      <td><b>${escaparHtml(pedidoParaExibicao(log.pedido,log.marketplaceCodigo||log.marketplace) || "-")}</b></td>
+      <td>${escaparHtml(log.marketplace || "-")}</td>
+      <td>${escaparHtml(log.cliente || "-")}</td>
+      <td>${escaparHtml(log.operador || "-")}</td>
+      <td>${Number(log.qtdUnidades || log.qtdItens || 0)}</td>
+      <td><span class="badge-reimpressoes">${qtdReimp}</span></td>
+      <td><button class="btn-reimprimir" ${disponivel ? `onclick="abrirModalReimpressao('${log.id}')"` : "disabled title='Registro antigo sem dados de impressão'"}>Reimprimir</button></td>
+    </tr>`;
+  }).join("");
+}
+
+function abrirModalReimpressao(id) {
+  const log = historicoConferencias.find(x => x.id === id);
+  if (!log || !Array.isArray(log.dadosImpressao) || !log.dadosImpressao.length) return;
+  idHistoricoReimpressao = id;
+  const total = Array.isArray(log.reimpressoes) ? log.reimpressoes.length : 0;
+  document.getElementById("resumoReimpressao").innerHTML = `
+    <b>Pedido:</b> ${escaparHtml(pedidoParaExibicao(log.pedido,log.marketplaceCodigo||log.marketplace))}<br>
+    <b>Marketplace:</b> ${escaparHtml(log.marketplace || "-")}<br>
+    <b>Cliente:</b> ${escaparHtml(log.cliente || "-")}<br>
+    <b>Documentos:</b> ${log.dadosImpressao.length}<br>
+    <b>Reimpressões anteriores:</b> ${total}
+  `;
+  document.getElementById("motivoReimpressao").value = "";
+  document.getElementById("observacaoReimpressao").value = "";
+  document.getElementById("confirmacaoReimpressao").checked = false;
+  document.getElementById("modalReimpressao").style.display = "flex";
+}
+
+function fecharModalReimpressao() {
+  if (reimpressaoEmAndamento) return;
+  idHistoricoReimpressao = null;
+  document.getElementById("modalReimpressao").style.display = "none";
+}
+
+async function confirmarReimpressao() {
+  if (reimpressaoEmAndamento) return;
+  const log = historicoConferencias.find(x => x.id === idHistoricoReimpressao);
+  const motivo = document.getElementById("motivoReimpressao").value.trim();
+  const observacao = document.getElementById("observacaoReimpressao").value.trim();
+  const confirmado = document.getElementById("confirmacaoReimpressao").checked;
+
+  if (!log) return;
+  if (!motivo) {
+    alert("Selecione o motivo da reimpressão.");
+    return;
+  }
+  if (!confirmado) {
+    alert("Marque a confirmação antes de reimprimir.");
+    return;
+  }
+
+  reimpressaoEmAndamento = true;
+  const botao = document.getElementById("btnConfirmarReimpressao");
+  botao.disabled = true;
+  botao.textContent = "ENVIANDO...";
+
+  try {
+    const config = await obterConfiguracaoImpressora();
+    await qz.print(config, log.dadosImpressao);
+    const agora = new Date();
+    if (!Array.isArray(log.reimpressoes)) log.reimpressoes = [];
+    log.reimpressoes.push({
+      operador: usuarioLogado?.Nome || usuarioLogado?.Login || "Não identificado",
+      dataHoraISO: agora.toISOString(),
+      dataHoraTexto: agora.toLocaleDateString("pt-BR") + " " + agora.toLocaleTimeString("pt-BR"),
+      motivo,
+      observacao
+    });
+    salvarHistoricoConferencias();
+
+    const logsSimples = lerJsonSeguro("conf_logs", []);
+    const correspondente = logsSimples.find(x => String(x.Pedido) === String(log.pedido));
+    if (correspondente) correspondente.Reimpressoes = log.reimpressoes.length;
+    appStorage.setItem("conf_logs", JSON.stringify(logsSimples));
+
+    document.getElementById("modalReimpressao").style.display = "none";
+    idHistoricoReimpressao = null;
+    renderizarHistorico();
+    mostrarMensagemDetalhada("sucesso", "Reimpressão registrada", `Pedido ${pedidoParaExibicao(log.pedido,log.marketplaceCodigo||log.marketplace)} enviado novamente.
+Motivo: ${motivo}`, "A operação foi gravada no histórico.");
+  } catch (erro) {
+    const detalhe = detalharErroImpressao(erro);
+    alert(`${detalhe.titulo}
+
+${detalhe.detalhe}
+
+${detalhe.orientacao}`);
+  } finally {
+    reimpressaoEmAndamento = false;
+    botao.disabled = false;
+    botao.textContent = "REIMPRIMIR";
+  }
+}
+
+function exportarHistoricoExcel() {
+  const linhas = [];
+  historicoConferencias.forEach(log => {
+    linhas.push({
+      DataHora: log.dataHoraTexto,
+      Pedido: pedidoParaExibicao(log.pedido,log.marketplaceCodigo||log.marketplace),
+      Marketplace: log.marketplace,
+      Cliente: log.cliente,
+      OperadorConferencia: log.operador,
+      QuantidadeItens: log.qtdItens,
+      QuantidadeUnidades: log.qtdUnidades,
+      DocumentosImpressos: log.quantidadeDocumentos,
+      Reimpressoes: Array.isArray(log.reimpressoes) ? log.reimpressoes.length : 0
+    });
+    (log.reimpressoes || []).forEach((rep, indice) => linhas.push({
+      DataHora: rep.dataHoraTexto,
+      Pedido: pedidoParaExibicao(log.pedido,log.marketplaceCodigo||log.marketplace),
+      Marketplace: log.marketplace,
+      Cliente: log.cliente,
+      OperadorConferencia: rep.operador,
+      QuantidadeItens: "",
+      QuantidadeUnidades: "",
+      DocumentosImpressos: `Reimpressão ${indice + 1}`,
+      Reimpressoes: rep.motivo + (rep.observacao ? ` — ${rep.observacao}` : "")
+    }));
+  });
+  if (!linhas.length) {
+    alert("Não há registros para exportar.");
+    return;
+  }
+  const ws = XLSX.utils.json_to_sheet(linhas);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Histórico");
+  XLSX.writeFile(wb, `Historico_Conferencia_${new Date().toISOString().slice(0,10)}.xlsx`);
+}
+
+
+// ---- MODO DE CONFERÊNCIA SEM MOUSE ----
+function painelEstaVisivel(id) {
+  const el = document.getElementById(id);
+  return !!el && getComputedStyle(el).display !== "none";
+}
+
+function alternarPainelAtalhos() {
+  const conteudo = document.getElementById("conteudoAtalhos");
+  const caixa = document.getElementById("painelAtalhos");
+  if (!conteudo) return;
+  conteudo.classList.toggle("oculto");
+  if (caixa) {
+    caixa.classList.remove("atalho-pulso");
+    void caixa.offsetWidth;
+    caixa.classList.add("atalho-pulso");
+  }
+}
+
+function focarBuscaPedidos() {
+  const busca = document.getElementById("campoBusca");
+  if (!busca) return;
+  busca.focus();
+  busca.select();
+}
+
+function focarLeitorCodigo() {
+  const input = document.getElementById("codigo");
+  if (!input) return;
+  if (input.disabled) {
+    mostrarMensagemDetalhada(
+      "aviso",
+      "Leitor temporariamente bloqueado",
+      idPedidoAtual ? "O pedido atual já está completamente conferido." : "O leitor não está disponível neste momento.",
+      idPedidoAtual ? "Pressione F8 para verificar e imprimir, ou selecione outro pedido." : "Selecione um pedido pendente."
+    );
+    return;
+  }
+  input.focus();
+  input.select();
+}
+
+function obterCartoesPedidosVisiveis() {
+  return Array.from(document.querySelectorAll("#listaPedidos .pedido-item"));
+}
+
+function sincronizarSelecaoPedidosTeclado() {
+  const itens = obterCartoesPedidosVisiveis();
+  if (!itens.length) {
+    indicePedidoSelecionadoTeclado = -1;
+    uidPedidoSelecionadoTeclado = null;
+    return;
+  }
+
+  let indice = itens.findIndex(el => String(el.dataset.pedidoUid) === String(uidPedidoSelecionadoTeclado));
+  if (indice < 0) indice = Math.min(Math.max(indicePedidoSelecionadoTeclado, 0), itens.length - 1);
+  if (indicePedidoSelecionadoTeclado < 0 && !uidPedidoSelecionadoTeclado) return;
+
+  indicePedidoSelecionadoTeclado = indice;
+  uidPedidoSelecionadoTeclado = itens[indice].dataset.pedidoUid;
+  itens.forEach((el, i) => {
+    el.classList.toggle("pedido-teclado-selecionado", i === indice);
+    el.tabIndex = i === indice ? 0 : -1;
+  });
+}
+
+function selecionarPedidoTeclado(deslocamento = 0, selecionarPrimeiro = false) {
+  const itens = obterCartoesPedidosVisiveis();
+  if (!itens.length) {
+    mostrarMensagemDetalhada("info", "Nenhum pedido pendente", "Não existem pedidos com etiqueta disponível na lista atual.", "Limpe a busca com Esc ou peça ao administrador para carregar as etiquetas pendentes.");
+    return;
+  }
+
+  let indiceAtual = itens.findIndex(el => el.classList.contains("pedido-teclado-selecionado"));
+  if (selecionarPrimeiro || indiceAtual < 0) indiceAtual = deslocamento < 0 ? itens.length - 1 : 0;
+  else indiceAtual = (indiceAtual + deslocamento + itens.length) % itens.length;
+
+  indicePedidoSelecionadoTeclado = indiceAtual;
+  uidPedidoSelecionadoTeclado = itens[indiceAtual].dataset.pedidoUid;
+  itens.forEach((el, i) => {
+    el.classList.toggle("pedido-teclado-selecionado", i === indiceAtual);
+    el.tabIndex = i === indiceAtual ? 0 : -1;
+  });
+  itens[indiceAtual].focus({ preventScroll: true });
+  itens[indiceAtual].scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+function abrirPedidoSelecionadoTeclado() {
+  const itens = obterCartoesPedidosVisiveis();
+  let selecionado = itens.find(el => el.classList.contains("pedido-teclado-selecionado"));
+  if (!selecionado && document.activeElement?.classList?.contains("pedido-item")) selecionado = document.activeElement;
+  if (!selecionado) {
+    selecionarPedidoTeclado(0, true);
+    return;
+  }
+  const uid = selecionado.dataset.pedidoUid;
+  if (uid) selecionarPedidoPorClique(uid);
+}
+
+function acionarVerificacaoImpressaoTeclado() {
+  if (!pedidoAtual || !pedidoAtual.length) {
+    mostrarMensagemDetalhada("aviso", "Nenhum pedido selecionado", "Não há pedido aberto para impressão.", "Pressione F6, escolha um pedido com as setas e pressione Enter.");
+    return;
+  }
+  if (!pedidoAtualFinalizado()) {
+    const total = pedidoAtual.reduce((s, item) => s + Number(extrairCampo(item, "Quantidade") || 0), 0);
+    const lidos = pedidoAtual.reduce((s, item) => s + Number(item.Lido || 0), 0);
+    mostrarMensagemDetalhada("aviso", "Conferência incompleta", `Foram conferidas ${lidos} de ${total} unidade(s).`, "Pressione F3 e continue bipando os produtos.");
+    focarLeitorCodigo();
+    return;
+  }
+  tentarImprimirPedidoAtual();
+}
+
+function fecharJanelaOuLimparLeitura() {
+  if (painelEstaVisivel("modalReimpressao")) {
+    fecharModalReimpressao();
+    return;
+  }
+  if (painelEstaVisivel("modalHistorico")) {
+    fecharHistorico();
+    return;
+  }
+  if (painelEstaVisivel("modalNotaSimplificada")) {
+    fecharModalNota();
+    return;
+  }
+  if (painelEstaVisivel("modalMultiplos")) {
+    fecharModalMultiplos();
+    return;
+  }
+
+  const ativo = document.activeElement;
+  const busca = document.getElementById("campoBusca");
+  const leitor = document.getElementById("codigo");
+  const filtroMarketplace = document.getElementById("filtroMarketplacePedidos");
+
+  if (ativo === filtroMarketplace && filtroMarketplace?.value !== "todos") {
+    filtroMarketplace.value = "todos";
+    alterarFiltroMarketplacePedidos("todos");
+    filtroMarketplace.focus();
+    return;
+  }
+
+  if (ativo === busca && busca?.value) {
+    busca.value = "";
+    uidPedidoSelecionadoTeclado = null;
+    indicePedidoSelecionadoTeclado = -1;
+    renderizarListaPedidos();
+    busca.focus();
+    return;
+  }
+
+  cancelarLeituraPendente();
+  if (leitor) leitor.value = "";
+  limparMensagemDetalhada();
+  if (leitor && !leitor.disabled) leitor.focus();
+}
+
+function usuarioEstaLogadoNaTela() {
+  const login = document.getElementById("telaLogin");
+  return usuarioLogado && login && getComputedStyle(login).display === "none";
+}
+
+window.addEventListener("keydown", function(event) {
+  if (!usuarioEstaLogadoNaTela()) return;
+
+  const tecla = event.key;
+  const alvo = event.target;
+  const emCampoTexto = alvo && ["INPUT", "TEXTAREA", "SELECT"].includes(alvo.tagName);
+  const leitor = document.getElementById("codigo");
+  const busca = document.getElementById("campoBusca");
+
+  if (tecla === "F1") {
+    event.preventDefault();
+    alternarPainelAtalhos();
+    return;
+  }
+  if (tecla === "F2") {
+    event.preventDefault();
+    focarBuscaPedidos();
+    return;
+  }
+  if (tecla === "F3") {
+    event.preventDefault();
+    focarLeitorCodigo();
+    return;
+  }
+  if (tecla === "F4") {
+    event.preventDefault();
+    if (painelEstaVisivel("modalHistorico")) document.getElementById("filtroHistorico")?.focus();
+    else abrirHistorico();
+    return;
+  }
+  if (tecla === "F6") {
+    event.preventDefault();
+    selecionarPedidoTeclado(0, true);
+    return;
+  }
+  if (tecla === "F7") {
+    event.preventDefault();
+    focarFiltroMarketplacePedidos();
+    return;
+  }
+  if (tecla === "F8") {
+    event.preventDefault();
+    if (!painelEstaVisivel("modalHistorico") && !painelEstaVisivel("modalReimpressao")) acionarVerificacaoImpressaoTeclado();
+    return;
+  }
+  if (tecla === "Escape") {
+    event.preventDefault();
+    fecharJanelaOuLimparLeitura();
+    return;
+  }
+
+  const navegacaoPedidosAtiva = alvo === busca || alvo?.classList?.contains("pedido-item") || alvo === document.body;
+  if ((tecla === "ArrowDown" || tecla === "ArrowUp") && navegacaoPedidosAtiva) {
+    event.preventDefault();
+    selecionarPedidoTeclado(tecla === "ArrowDown" ? 1 : -1, false);
+    return;
+  }
+
+  if (tecla === "Enter" && alvo?.classList?.contains("pedido-item")) {
+    event.preventDefault();
+    abrirPedidoSelecionadoTeclado();
+    return;
+  }
+
+  // Na busca, Enter abre o pedido destacado. No leitor, a função específica já confirma o código completo.
+  if (tecla === "Enter" && alvo === busca) {
+    event.preventDefault();
+    abrirPedidoSelecionadoTeclado();
+    return;
+  }
+
+  // Evita que atalhos alfanuméricos interfiram no leitor ou em formulários.
+  if (emCampoTexto || alvo === leitor) return;
+});
+
+function limparPainel() {
+  cancelarLeituraPendente();
+  liberarBloqueioPedidoAtualRede();
+  pedidoAtual = [];
+  idPedidoAtual = null;
+  document.getElementById("titulo").innerHTML = "Nenhum pedido selecionado";
+  document.getElementById("cliente").innerHTML = "";
+  document.getElementById("marketplace").innerHTML = "";
+  const etiquetaStatus = document.getElementById("etiquetaPedidoStatus");
+  if (etiquetaStatus) {
+    etiquetaStatus.className = "etiqueta-status etiqueta-erro";
+    etiquetaStatus.textContent = "Etiqueta não verificada";
+  }
+  document.getElementById("corpoTabela").innerHTML = "";
+  document.getElementById("progresso").style.width = "0%";
+  document.getElementById("statusMsg").innerHTML = "";
+  limparMensagemDetalhada();
+  let campoCod = document.getElementById("codigo");
+  campoCod.value = "";
+  campoCod.placeholder = "Bipe o código de barras de qualquer produto para iniciar...";
+  campoCod.disabled = false;
+  campoCod.focus();
+}
+
+
+// ===== INTEGRAÇÃO COM PASTA COMPARTILHADA =====
+function abrirPainelAdministrativoBanco(){
+  window.open("/admin.html","_blank");
+}
+function verificarStatusPlanilhaLogin(){
+  const statusDiv=document.getElementById("statusCargaLogin"); if(!statusDiv)return;
+  const pedidos=JSON.parse(appStorage.getItem("conf_pedidos")||"[]");
+  const usuarios=JSON.parse(appStorage.getItem("conf_usuarios")||"[]");
+  const unicos=new Set(pedidos.map(x=>normalizarIdentificadorExato(extrairCampo(x,"Pedido"))).filter(Boolean)).size;
+  if(usuarios.length>0){statusDiv.style.color="#2e7d32";statusDiv.innerHTML=`✔ Dados compartilhados conectados: ${unicos} pedido(s) pendente(s) e ${usuarios.length} usuário(s).`;}
+  else{statusDiv.style.color="#c62828";statusDiv.innerHTML="⚠ Pasta compartilhada sem usuários. Entre como admin e abra o Banco Administrativo.";}
+}
+function enriquecerPedidosComBancoProdutos(){
+  let produtos=[];try{produtos=JSON.parse(appStorage.getItem("conf_produtos")||"[]");}catch(_){return;}
+  const mapa=new Map();produtos.forEach(p=>{const sku=normalizarIdentificadorExato(extrairCampo(p,"SKU"));const ean=normalizarIdentificadorExato(extrairCampo(p,"Código de Barras"));if(sku)mapa.set(sku,p);if(ean)mapa.set(ean,p);});
+  dadosPedidos.forEach(item=>{const p=mapa.get(normalizarIdentificadorExato(extrairCampo(item,"SKU")))||mapa.get(normalizarIdentificadorExato(extrairCampo(item,"Código de Barras")));if(!p)return;["SKU","Código de Barras","Descrição","Rua","Módulo","Prateleira","Nível","Posição","Foto"].forEach(c=>{if(!extrairCampo(item,c)&&extrairCampo(p,c))item[c]=extrairCampo(p,c);});});
+}
+const carregarDadosMemoriaOriginalBanco=carregarDadosMemoria;
+carregarDadosMemoria=function(){carregarDadosMemoriaOriginalBanco();enriquecerPedidosComBancoProdutos();verificarStatusPlanilhaLogin();};
+window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_em"||event.key==="conf_produtos"){carregarDadosMemoria();renderizarListaPedidos();}});
+
+</script>
+<style>
+  .btn-solicitar-acesso{width:100%;padding:11px;margin-top:9px;background:#fff;color:#2B4E75;border:1px solid #2B4E75;border-radius:6px;cursor:pointer;font-size:13px;font-weight:800}
+  .btn-solicitar-acesso:hover{background:#eef4fa}
+  .solicitacao-overlay{display:none;position:fixed;inset:0;background:rgba(15,27,39,.68);z-index:12000;align-items:center;justify-content:center;padding:18px}
+  .solicitacao-overlay.ativo{display:flex}
+  .solicitacao-card{width:min(470px,96vw);background:#fff;border-radius:12px;box-shadow:0 20px 55px rgba(0,0,0,.32);overflow:hidden;text-align:left}
+  .solicitacao-topo{background:#2B4E75;color:#fff;padding:17px 20px;border-bottom:4px solid #F28C18}
+  .solicitacao-topo h3{margin:0;font-size:18px}
+  .solicitacao-corpo{padding:20px}
+  .solicitacao-corpo .field{margin-bottom:13px}
+  .solicitacao-corpo label{display:block;margin-bottom:5px;font-size:12px;color:#2B4E75;font-weight:800}
+  .solicitacao-corpo input,.solicitacao-corpo select{width:100%;padding:11px;border:1px solid #b9c4ce;border-radius:6px;font-size:14px}
+  .solicitacao-acoes{display:flex;gap:10px;justify-content:flex-end;padding:0 20px 20px}
+  .solicitacao-acoes button{padding:10px 15px;border:0;border-radius:6px;font-weight:800;cursor:pointer}
+  .solicitacao-erro{min-height:18px;color:#b71c1c;font-size:12px;font-weight:700;margin-top:8px}
+</style>
+
+<div id="modalSolicitacaoUsuario" class="solicitacao-overlay" role="dialog" aria-modal="true" aria-labelledby="tituloSolicitacaoUsuario">
+  <div class="solicitacao-card">
+    <div class="solicitacao-topo"><h3 id="tituloSolicitacaoUsuario">Solicitar novo usuário</h3></div>
+    <div class="solicitacao-corpo">
+      <div style="font-size:12px;color:#5d6d7a;line-height:1.45;margin-bottom:14px;">O cadastro ficará <b>pendente</b> até um administrador aprová-lo. Você pode solicitar perfil de Operador ou Admin.</div>
+      <div class="field"><label>Nome completo</label><input id="solicitacaoNome" type="text" autocomplete="off"></div>
+      <div class="field"><label>Login</label><input id="solicitacaoLogin" type="text" autocomplete="off" placeholder="Sem espaços"></div>
+      <div class="field"><label>Senha</label><input id="solicitacaoSenha" type="password" autocomplete="new-password"></div>
+      <div class="field"><label>Confirmar senha</label><input id="solicitacaoConfirmarSenha" type="password" autocomplete="new-password"></div>
+      <div class="field"><label>Perfil solicitado</label><select id="solicitacaoPerfil"><option value="Operador">Operador</option><option value="Admin">Admin</option></select></div>
+      <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#526475;font-weight:700;"><input id="solicitacaoMostrarSenha" type="checkbox" style="width:auto;" onchange="alternarSenhaSolicitacaoUsuario()"> Mostrar senha</label>
+      <div id="erroSolicitacaoUsuario" class="solicitacao-erro"></div>
+    </div>
+    <div class="solicitacao-acoes">
+      <button type="button" style="background:#e3e8ed;color:#334;" onclick="fecharSolicitacaoUsuario()">Cancelar</button>
+      <button type="button" id="btnEnviarSolicitacaoUsuario" style="background:#2e7d32;color:#fff;" onclick="enviarSolicitacaoUsuario()">Enviar para aprovação</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  "use strict";
+  const CHAVE_SOLICITACOES_USUARIOS = "conf_solicitacoes_usuarios";
+  const txt=v=>String(v??"").trim();
+  const loginNormalizado=v=>txt(v).toLowerCase();
+  const jsonLista=chave=>{try{const v=JSON.parse(appStorage.getItem(chave)||"[]");return Array.isArray(v)?v:[];}catch(_){return[];}};
+  const valorFalso=v=>v===false||["false","nao","não","0","inativo","rejeitado"].includes(txt(v).toLowerCase());
+  const usuarioAtivoAprovado=u=>!valorFalso(u?.Ativo)&&!valorFalso(u?.Aprovado)&&txt(u?.Status).toLowerCase()!=="rejeitado";
+  const agoraISO=()=>new Date().toISOString();
+  const idSolicitacao=()=>"SOL-"+Date.now().toString(36).toUpperCase()+"-"+Math.random().toString(36).slice(2,8).toUpperCase();
+  function lerSolicitacoes(){return jsonLista(CHAVE_SOLICITACOES_USUARIOS);}
+  function salvarSolicitacoes(lista){appStorage.setItem(CHAVE_SOLICITACOES_USUARIOS,JSON.stringify(lista));appStorage.setItem("conf_banco_atualizado_em",agoraISO());}
+  function ultimaSolicitacao(login){const k=loginNormalizado(login);return lerSolicitacoes().filter(s=>loginNormalizado(s.Login)===k).sort((a,b)=>txt(b.CriadoEm).localeCompare(txt(a.CriadoEm)))[0]||null;}
+
+  window.abrirSolicitacaoUsuario=function(){
+    ["solicitacaoNome","solicitacaoLogin","solicitacaoSenha","solicitacaoConfirmarSenha"].forEach(id=>{const el=document.getElementById(id);if(el)el.value="";});
+    const perfil=document.getElementById("solicitacaoPerfil");if(perfil)perfil.value="Operador";
+    const mostrar=document.getElementById("solicitacaoMostrarSenha");if(mostrar)mostrar.checked=false;
+    ["solicitacaoSenha","solicitacaoConfirmarSenha"].forEach(id=>{const el=document.getElementById(id);if(el)el.type="password";});
+    const erro=document.getElementById("erroSolicitacaoUsuario");if(erro)erro.textContent="";
+    document.getElementById("modalSolicitacaoUsuario")?.classList.add("ativo");setTimeout(()=>document.getElementById("solicitacaoNome")?.focus(),40);
+  };
+  window.fecharSolicitacaoUsuario=function(){document.getElementById("modalSolicitacaoUsuario")?.classList.remove("ativo");};
+  window.alternarSenhaSolicitacaoUsuario=function(){const tipo=document.getElementById("solicitacaoMostrarSenha")?.checked?"text":"password";["solicitacaoSenha","solicitacaoConfirmarSenha"].forEach(id=>{const el=document.getElementById(id);if(el)el.type=tipo;});};
+  window.enviarSolicitacaoUsuario=function(){
+    const erro=document.getElementById("erroSolicitacaoUsuario");const botao=document.getElementById("btnEnviarSolicitacaoUsuario");
+    const Nome=txt(document.getElementById("solicitacaoNome")?.value),Login=txt(document.getElementById("solicitacaoLogin")?.value),Senha=txt(document.getElementById("solicitacaoSenha")?.value),confirmar=txt(document.getElementById("solicitacaoConfirmarSenha")?.value),PerfilSolicitado=txt(document.getElementById("solicitacaoPerfil")?.value)||"Operador";
+    if(erro)erro.textContent="";
+    if(!Nome||!Login||!Senha||!confirmar){if(erro)erro.textContent="Preencha todos os campos.";return;}
+    if(/\s/.test(Login)){if(erro)erro.textContent="O login não pode conter espaços.";return;}
+    if(Senha.length<4){if(erro)erro.textContent="A senha deve ter pelo menos 4 caracteres.";return;}
+    if(Senha!==confirmar){if(erro)erro.textContent="As senhas não conferem.";return;}
+    try{
+      if(botao){botao.disabled=true;botao.textContent="Enviando...";}
+      const chave=loginNormalizado(Login);const usuarios=jsonLista("conf_usuarios");
+      if(usuarios.some(u=>loginNormalizado(u.Login??u.Usuario??u["Usuário"])===chave))throw new Error("Este login já pertence a um usuário cadastrado.");
+      const solicitacoes=lerSolicitacoes();
+      if(solicitacoes.some(s=>loginNormalizado(s.Login)===chave&&txt(s.Status||"Pendente").toLowerCase()==="pendente"))throw new Error("Já existe uma solicitação pendente para este login.");
+      const nova={id:idSolicitacao(),Nome,Login,Senha,PerfilSolicitado,Status:"Pendente",CriadoEm:agoraISO(),Origem:"conferencia"};solicitacoes.push(nova);salvarSolicitacoes(solicitacoes);
+      if(!lerSolicitacoes().some(s=>s.id===nova.id))throw new Error("A solicitação não foi confirmada na pasta compartilhada.");
+      fecharSolicitacaoUsuario();alert("Solicitação enviada. Aguarde a aprovação de um administrador para entrar.");
+    }catch(e){if(erro)erro.textContent=e.message||String(e);}finally{if(botao){botao.disabled=false;botao.textContent="Enviar para aprovação";}}
+  };
+
+  window.fazerLogin=function(){
+    const login=loginNormalizado(document.getElementById("usuarioInput")?.value),senha=txt(document.getElementById("senhaInput")?.value),erro=document.getElementById("erroLogin");
+    if(!login||!senha){if(erro)erro.textContent="Preencha o usuário e a senha!";return;}
+    if(login==="admin"&&senha==="01101998"){
+      usuarioLogado={Nome:"Administrador",Login:"admin",Perfil:"Admin"};appStorage.setItem("conf_sessao_ativa",JSON.stringify(usuarioLogado));iniciarSessao();return;
+    }
+    try{usuariosCadastrados=jsonLista("conf_usuarios");}catch(_){usuariosCadastrados=[];}
+    const user=usuariosCadastrados.find(u=>loginNormalizado(u.Login??u.Usuario??u["Usuário"]??u.Nome)===login&&txt(u.Senha)===senha);
+    if(user){
+      if(!usuarioAtivoAprovado(user)){if(erro)erro.textContent="Este usuário ainda não foi aprovado ou está inativo.";return;}
+      usuarioLogado={Nome:txt(user.Nome||user.Login),Login:txt(user.Login??user.Usuario??user["Usuário"]),Perfil:txt(user.Perfil)||"Operador"};appStorage.setItem("conf_sessao_ativa",JSON.stringify(usuarioLogado));iniciarSessao();return;
+    }
+    const req=ultimaSolicitacao(login);
+    if(req&&txt(req.Status||"Pendente").toLowerCase()==="pendente"){if(erro)erro.textContent="Seu cadastro está aguardando aprovação do administrador.";return;}
+    if(req&&txt(req.Status).toLowerCase()==="rejeitado"){if(erro)erro.textContent="Seu cadastro foi rejeitado. Procure um administrador.";return;}
+    if(erro)erro.textContent="Login ou senha incorretos!";
+  };
+
+  document.addEventListener("keydown",e=>{if(document.getElementById("modalSolicitacaoUsuario")?.classList.contains("ativo")&&e.key==="Escape"){e.preventDefault();fecharSolicitacaoUsuario();}});
+})();
+</script>
+
+</body>
+</html>
