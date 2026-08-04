@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Sistema de Conferência Noromak — edição Web/Linux 7.3.
+"""Sistema de Conferência Noromak — edição Web/Linux 7.4.
 
 Sem dependências externas: usa apenas a biblioteca padrão do Python.
 - Escuta em 127.0.0.1:8100.
 - Considera o prefixo /expedicao (o nginx não remove o prefixo).
-- Usa a sessão existente do NoromakWeb via /api/v1/auth/me.
+- O nginx mantém o login do NoromakWeb e o app exige um segundo login próprio do estoque.
 - Persiste em SQLite fora da pasta do código.
 """
 
@@ -12,9 +12,11 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
 import json
 import mimetypes
 import os
+import secrets
 import shutil
 import sqlite3
 import subprocess
@@ -24,12 +26,13 @@ import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
+from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-APP_VERSION = "7.3"
+APP_VERSION = "7.4"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -46,10 +49,17 @@ MIGRATION_DIR = Path(os.getenv("EXP_MIGRATION_DIR", str(ROOT_DIR / "MIGRACAO_INI
 MAX_BODY = 100 * 1024 * 1024
 LOCK_STALE_SECONDS = 5 * 60
 AUTH_CACHE_SECONDS = 180
+SESSION_COOKIE = "expedicao_estoque"
+SESSION_TTL_SECONDS = int(os.getenv("EXP_SESSION_TTL_SECONDS", str(12 * 60 * 60)))
+PASSWORD_ITERATIONS = int(os.getenv("EXP_PASSWORD_ITERATIONS", "240000"))
+PASSWORD_MASK = "********"
+INITIAL_ADMIN_PASSWORD = os.getenv("EXP_ADMIN_SENHA", "01101998")
+INITIAL_OPERATOR_PASSWORD = os.getenv("EXP_USUARIO_SENHA_INICIAL", "123")
 
 DB_LOCK = threading.RLock()
 AUTH_LOCK = threading.Lock()
 AUTH_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+LOGIN_ATTEMPTS: dict[str, list[float]] = {}
 
 KNOWN_KEYS = [
     "conf_pedidos",
@@ -139,6 +149,28 @@ def init_db() -> None:
                 updated_at TEXT NOT NULL,
                 updated_by TEXT NOT NULL DEFAULT ''
             );
+            CREATE TABLE IF NOT EXISTS app_users (
+                username TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL DEFAULT '',
+                password_hash TEXT NOT NULL,
+                password_salt TEXT NOT NULL,
+                password_iterations INTEGER NOT NULL,
+                role TEXT NOT NULL CHECK(role IN ('admin','operador')),
+                active INTEGER NOT NULL DEFAULT 1,
+                updated_at TEXT NOT NULL,
+                updated_by TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS app_sessions (
+                token_hash TEXT PRIMARY KEY,
+                username TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                last_seen TEXT NOT NULL,
+                expires_at INTEGER NOT NULL,
+                ip TEXT NOT NULL DEFAULT '',
+                user_agent TEXT NOT NULL DEFAULT '',
+                FOREIGN KEY(username) REFERENCES app_users(username) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_app_sessions_expires ON app_sessions(expires_at);
             CREATE TABLE IF NOT EXISTS audit_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 created_at TEXT NOT NULL,
@@ -158,7 +190,9 @@ def init_db() -> None:
         DB.commit()
     migrate_legacy_if_empty()
     ensure_storage_defaults()
-    sync_legacy_users_storage()
+    migrate_app_users()
+    sync_app_users_storage()
+    purge_expired_sessions()
 
 
 def legacy_key_from_filename(name: str) -> str | None:
@@ -201,7 +235,7 @@ def sanitize_legacy_users(value: str) -> tuple[str, list[dict[str, Any]]]:
             {
                 "Nome": str(raw.get("Nome") or login).strip(),
                 "Login": login,
-                "Senha": "",
+                "Senha": str(raw.get("Senha") or "").strip(),
                 "Perfil": "Admin" if role == "admin" else "Operador",
                 "Ativo": active,
                 "Aprovado": active,
@@ -312,23 +346,145 @@ def ensure_storage_defaults() -> None:
         DB.commit()
 
 
-def sync_legacy_users_storage() -> None:
+def password_digest(password: str, salt: bytes | None = None, iterations: int = PASSWORD_ITERATIONS) -> tuple[str, str, int]:
+    if salt is None:
+        salt = secrets.token_bytes(16)
+    derived = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+    return base64.b64encode(derived).decode("ascii"), base64.b64encode(salt).decode("ascii"), iterations
+
+
+def password_matches(password: str, row: sqlite3.Row | dict[str, Any]) -> bool:
+    try:
+        salt = base64.b64decode(row["password_salt"])
+        iterations = int(row["password_iterations"])
+        expected = base64.b64decode(row["password_hash"])
+        actual = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+        return hmac.compare_digest(actual, expected)
+    except Exception:
+        return False
+
+
+def upsert_app_user(
+    username: str,
+    display_name: str,
+    role: str,
+    active: bool,
+    password: str | None,
+    updated_by: str,
+    only_if_missing: bool = False,
+) -> None:
+    username = username.strip().lower()
+    if not username:
+        return
+    role = "admin" if str(role).lower().startswith("admin") else "operador"
+    existing = DB.execute("SELECT * FROM app_users WHERE username=?", (username,)).fetchone()
+    if existing and only_if_missing:
+        return
+    if password:
+        pwd_hash, pwd_salt, iterations = password_digest(password)
+    elif existing:
+        pwd_hash, pwd_salt, iterations = existing["password_hash"], existing["password_salt"], existing["password_iterations"]
+    else:
+        fallback = INITIAL_ADMIN_PASSWORD if role == "admin" else INITIAL_OPERATOR_PASSWORD
+        pwd_hash, pwd_salt, iterations = password_digest(fallback)
+    DB.execute(
+        """INSERT INTO app_users(username,display_name,password_hash,password_salt,password_iterations,role,active,updated_at,updated_by)
+           VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(username) DO UPDATE SET
+           display_name=excluded.display_name,password_hash=excluded.password_hash,password_salt=excluded.password_salt,
+           password_iterations=excluded.password_iterations,role=excluded.role,active=excluded.active,
+           updated_at=excluded.updated_at,updated_by=excluded.updated_by""",
+        (username, display_name.strip() or username, pwd_hash, pwd_salt, iterations, role, 1 if active else 0, now_iso(), updated_by),
+    )
+
+
+def legacy_users_from_migration() -> list[dict[str, Any]]:
+    banco_dir = MIGRATION_DIR / "BANCO"
+    if not banco_dir.exists():
+        return []
+    for path in banco_dir.glob("*.json"):
+        if legacy_key_from_filename(path.name) != "conf_usuarios":
+            continue
+        try:
+            doc = json.loads(path.read_text(encoding="utf-8-sig"))
+            value = doc.get("value", doc.get("Value", "[]"))
+            rows = json.loads(value) if isinstance(value, str) else value
+            return [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+        except Exception:
+            return []
+    return []
+
+
+def migrate_app_users() -> None:
     with DB_LOCK:
-        rows = DB.execute(
-            "SELECT username,display_name,role,active FROM user_roles ORDER BY display_name,username"
-        ).fetchall()
-        users = [
-            {
-                "Nome": row["display_name"] or row["username"],
-                "Login": row["username"],
-                "Senha": "",
-                "Perfil": "Admin" if row["role"] == "admin" else "Operador",
-                "Ativo": bool(row["active"]),
-                "Aprovado": bool(row["active"]),
-            }
-            for row in rows
-        ]
-        value = json_dumps(users)
+        DB.execute("BEGIN IMMEDIATE")
+        try:
+            # Compatibilidade com o administrador principal da versão portátil.
+            upsert_app_user("admin", "Administrador principal", "admin", True, INITIAL_ADMIN_PASSWORD, "migração 7.4", only_if_missing=True)
+            if ADMIN_USERNAME:
+                upsert_app_user(ADMIN_USERNAME, ADMIN_USERNAME.title(), "admin", True, INITIAL_ADMIN_PASSWORD, "EXP_ADMIN_USUARIO", only_if_missing=True)
+
+            for raw in legacy_users_from_migration():
+                username = str(raw.get("Login") or raw.get("Usuario") or raw.get("Usuário") or "").strip().lower()
+                if not username:
+                    continue
+                role = "admin" if "admin" in str(raw.get("Perfil") or "").lower() else "operador"
+                active = raw.get("Ativo", True) not in (False, "false", "0", 0, "inativo")
+                password = str(raw.get("Senha") or "").strip() or None
+                upsert_app_user(username, str(raw.get("Nome") or username), role, active, password, "migração portátil", only_if_missing=True)
+
+            current = DB.execute("SELECT value FROM storage WHERE key='conf_usuarios'").fetchone()
+            if current:
+                try:
+                    rows = json.loads(current["value"] or "[]")
+                except Exception:
+                    rows = []
+                if isinstance(rows, list):
+                    for raw in rows:
+                        if not isinstance(raw, dict):
+                            continue
+                        username = str(raw.get("Login") or raw.get("Usuario") or raw.get("Usuário") or "").strip().lower()
+                        if not username:
+                            continue
+                        role = "admin" if "admin" in str(raw.get("Perfil") or "").lower() else "operador"
+                        active = raw.get("Ativo", raw.get("Aprovado", True)) not in (False, "false", "0", 0, "inativo")
+                        password = str(raw.get("Senha") or "").strip()
+                        if password in ("", PASSWORD_MASK):
+                            password = None
+                        upsert_app_user(username, str(raw.get("Nome") or username), role, active, password, "migração banco", only_if_missing=True)
+
+            # Perfis criados na versão 7.3 recebem senha inicial para poderem entrar no novo login interno.
+            for row in DB.execute("SELECT username,display_name,role,active FROM user_roles").fetchall():
+                initial = INITIAL_ADMIN_PASSWORD if row["role"] == "admin" else INITIAL_OPERATOR_PASSWORD
+                upsert_app_user(row["username"], row["display_name"] or row["username"], row["role"], bool(row["active"]), initial, "migração 7.3", only_if_missing=True)
+            DB.commit()
+        except Exception:
+            DB.rollback()
+            raise
+
+
+def app_users_payload() -> list[dict[str, Any]]:
+    rows = DB.execute(
+        "SELECT username,display_name,role,active,updated_at,updated_by FROM app_users ORDER BY display_name,username"
+    ).fetchall()
+    return [
+        {
+            "__uidUsuario": "WEB_" + hashlib.sha1(row["username"].encode("utf-8")).hexdigest()[:12],
+            "Nome": row["display_name"] or row["username"],
+            "Login": row["username"],
+            "Senha": PASSWORD_MASK,
+            "Perfil": "Admin" if row["role"] == "admin" else "Operador",
+            "Ativo": bool(row["active"]),
+            "Aprovado": bool(row["active"]),
+            "AtualizadoEm": row["updated_at"],
+            "AtualizadoPor": row["updated_by"],
+        }
+        for row in rows
+    ]
+
+
+def sync_app_users_storage() -> None:
+    with DB_LOCK:
+        value = json_dumps(app_users_payload())
         current = DB.execute("SELECT version,value FROM storage WHERE key='conf_usuarios'").fetchone()
         if current and current["value"] == value:
             return
@@ -338,6 +494,71 @@ def sync_legacy_users_storage() -> None:
                ON CONFLICT(key) DO UPDATE SET value=excluded.value,version=excluded.version,updated_at=excluded.updated_at""",
             (value, version, now_iso()),
         )
+        DB.commit()
+
+
+def apply_app_users_payload(value: str, actor: str) -> str:
+    try:
+        rows = json.loads(value)
+    except Exception as exc:
+        raise ValueError("Lista de usuários inválida.") from exc
+    if not isinstance(rows, list):
+        raise ValueError("Lista de usuários inválida.")
+
+    prepared: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    with DB_LOCK:
+        existing = {row["username"]: row for row in DB.execute("SELECT * FROM app_users").fetchall()}
+        for raw in rows:
+            if not isinstance(raw, dict):
+                continue
+            username = str(raw.get("Login") or raw.get("Usuario") or raw.get("Usuário") or "").strip().lower()
+            if not username:
+                continue
+            if any(ch.isspace() for ch in username):
+                raise ValueError(f"O login '{username}' não pode conter espaços.")
+            if username in seen:
+                raise ValueError(f"O login '{username}' está duplicado.")
+            seen.add(username)
+            display_name = str(raw.get("Nome") or username).strip() or username
+            role = "admin" if "admin" in str(raw.get("Perfil") or "").lower() else "operador"
+            active = raw.get("Ativo", raw.get("Aprovado", True)) not in (False, "false", "0", 0, "inativo")
+            password = str(raw.get("Senha") or "").strip()
+            if password == PASSWORD_MASK:
+                password = ""
+            if username not in existing and len(password) < 4:
+                raise ValueError(f"Informe uma senha com pelo menos 4 caracteres para o novo usuário '{username}'.")
+            if password and len(password) < 4:
+                raise ValueError(f"A senha de '{username}' deve ter pelo menos 4 caracteres.")
+            prepared.append({"username": username, "display_name": display_name, "role": role, "active": active, "password": password or None})
+
+        actor_row = existing.get(actor)
+        actor_new = next((row for row in prepared if row["username"] == actor), None)
+        if actor_row and actor_row["role"] == "admin" and actor_row["active"]:
+            if not actor_new or actor_new["role"] != "admin" or not actor_new["active"]:
+                raise ValueError("Você não pode remover ou rebaixar o administrador que está usando esta sessão.")
+        if not any(row["role"] == "admin" and row["active"] for row in prepared):
+            raise ValueError("É necessário manter pelo menos um administrador ativo.")
+
+        DB.execute("BEGIN IMMEDIATE")
+        try:
+            for row in prepared:
+                upsert_app_user(
+                    row["username"], row["display_name"], row["role"], row["active"], row["password"], actor
+                )
+            for username in set(existing) - seen:
+                DB.execute("DELETE FROM app_users WHERE username=?", (username,))
+            DB.execute("DELETE FROM app_sessions WHERE username NOT IN (SELECT username FROM app_users) OR username IN (SELECT username FROM app_users WHERE active=0)")
+            DB.commit()
+        except Exception:
+            DB.rollback()
+            raise
+    return json_dumps(app_users_payload())
+
+
+def purge_expired_sessions() -> None:
+    with DB_LOCK:
+        DB.execute("DELETE FROM app_sessions WHERE expires_at <= ?", (int(time.time()),))
         DB.commit()
 
 
@@ -493,59 +714,47 @@ def audit(username: str, action: str, detail: str = "") -> None:
         DB.commit()
 
 
-def fetch_crm_user(cookie: str, debug_user: str | None = None) -> dict[str, Any]:
-    if os.getenv("EXP_AUTH_BYPASS", "0") == "1":
-        username = (debug_user or os.getenv("EXP_AUTH_BYPASS_USER", ADMIN_USERNAME or "luis")).strip()
-        return {"id": 0, "email": username + "@local", "username": username, "nome": username.title(), "role": "debug"}
-    if not cookie:
-        raise PermissionError("Sessão do NoromakWeb não encontrada.")
-    cache_key = hashlib.sha256(cookie.encode("utf-8")).hexdigest()
-    with AUTH_LOCK:
-        cached = AUTH_CACHE.get(cache_key)
-        if cached and cached[0] > time.time():
-            return dict(cached[1])
-    req = urllib.request.Request(
-        AUTH_ME_URL,
-        method="GET",
-        headers={"Cookie": cookie, "Accept": "application/json", "User-Agent": "Noromak-Expedicao/7.3"},
-    )
+def cookie_token(handler: BaseHTTPRequestHandler) -> str:
+    raw = handler.headers.get("Cookie", "")
+    if not raw:
+        return ""
+    cookie = SimpleCookie()
     try:
-        with urllib.request.urlopen(req, timeout=5) as response:
-            if response.status != 200:
-                raise PermissionError(f"NoromakWeb respondeu HTTP {response.status}")
-            data = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        if exc.code in (401, 403):
-            raise PermissionError("Sessão do NoromakWeb expirada.") from exc
-        raise ConnectionError(f"Falha ao consultar o NoromakWeb: HTTP {exc.code}") from exc
-    except Exception as exc:
-        raise ConnectionError(f"Falha ao consultar o NoromakWeb: {exc}") from exc
-    if not isinstance(data, dict) or not str(data.get("username") or "").strip():
-        raise PermissionError("Resposta de autenticação inválida.")
-    with AUTH_LOCK:
-        AUTH_CACHE[cache_key] = (time.time() + AUTH_CACHE_SECONDS, dict(data))
-    return data
+        cookie.load(raw)
+    except Exception:
+        return ""
+    morsel = cookie.get(SESSION_COOKIE)
+    return morsel.value if morsel else ""
 
 
-def role_for(username: str) -> dict[str, Any] | None:
-    row = DB.execute(
-        "SELECT username,display_name,role,active FROM user_roles WHERE username=?",
-        (username.strip().lower(),),
-    ).fetchone()
-    return dict(row) if row else None
-
-
-def user_context(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
-    crm = fetch_crm_user(handler.headers.get("Cookie", ""), handler.headers.get("X-Debug-User"))
-    username = str(crm.get("username") or "").strip().lower()
-    role = role_for(username)
-    result = dict(crm)
-    result["username"] = username
-    result["app_role"] = role["role"] if role and role["active"] else None
-    result["app_active"] = bool(role and role["active"])
-    if role and role.get("display_name"):
-        result["nome_expedicao"] = role["display_name"]
-    return result
+def session_context(handler: BaseHTTPRequestHandler) -> dict[str, Any] | None:
+    token = cookie_token(handler)
+    if not token:
+        return None
+    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    now_epoch = int(time.time())
+    with DB_LOCK:
+        row = DB.execute(
+            """SELECT s.token_hash,s.username,s.expires_at,u.display_name,u.role,u.active
+               FROM app_sessions s JOIN app_users u ON u.username=s.username
+               WHERE s.token_hash=?""",
+            (token_hash,),
+        ).fetchone()
+        if not row or not row["active"] or int(row["expires_at"]) <= now_epoch:
+            DB.execute("DELETE FROM app_sessions WHERE token_hash=?", (token_hash,))
+            DB.commit()
+            return None
+        DB.execute(
+            "UPDATE app_sessions SET last_seen=?,expires_at=? WHERE token_hash=?",
+            (now_iso(), now_epoch + SESSION_TTL_SECONDS, token_hash),
+        )
+        DB.commit()
+    return {
+        "username": row["username"],
+        "nome": row["display_name"] or row["username"],
+        "app_role": row["role"],
+        "app_active": True,
+    }
 
 
 def client_computer(handler: BaseHTTPRequestHandler) -> str:
@@ -553,30 +762,58 @@ def client_computer(handler: BaseHTTPRequestHandler) -> str:
     return forwarded or handler.client_address[0]
 
 
+def login_rate_key(handler: BaseHTTPRequestHandler, username: str) -> str:
+    return f"{client_computer(handler)}:{username.strip().lower()}"
+
+
+def login_rate_limited(handler: BaseHTTPRequestHandler, username: str) -> bool:
+    now = time.time()
+    key = login_rate_key(handler, username)
+    with AUTH_LOCK:
+        attempts = [stamp for stamp in LOGIN_ATTEMPTS.get(key, []) if stamp > now - 300]
+        LOGIN_ATTEMPTS[key] = attempts
+        return len(attempts) >= 8
+
+
+def register_login_failure(handler: BaseHTTPRequestHandler, username: str) -> None:
+    key = login_rate_key(handler, username)
+    with AUTH_LOCK:
+        LOGIN_ATTEMPTS.setdefault(key, []).append(time.time())
+
+
+def clear_login_failures(handler: BaseHTTPRequestHandler, username: str) -> None:
+    with AUTH_LOCK:
+        LOGIN_ATTEMPTS.pop(login_rate_key(handler, username), None)
+
+
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/7.3"
+    server_version = "NoromakExpedicao/7.4"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
 
-    def send_json(self, data: Any, status: int = 200) -> None:
+    def send_json(self, data: Any, status: int = 200, headers: dict[str, str] | None = None) -> None:
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Noromak-Version", APP_VERSION)
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
 
-    def send_text(self, text: str, status: int = 200, content_type: str = "text/plain; charset=utf-8") -> None:
+    def send_text(self, text: str, status: int = 200, content_type: str = "text/plain; charset=utf-8", headers: dict[str, str] | None = None) -> None:
         body = text.encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Noromak-Version", APP_VERSION)
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
@@ -599,22 +836,25 @@ class AppHandler(BaseHTTPRequestHandler):
             raise ValueError("Corpo JSON inválido")
         return data
 
-    def auth(self, allow_unregistered: bool = False, admin_only: bool = False) -> dict[str, Any] | None:
-        try:
-            ctx = user_context(self)
-        except PermissionError as exc:
-            self.send_json({"error": str(exc), "login_required": True}, 401)
-            return None
-        except ConnectionError as exc:
-            self.send_json({"error": str(exc)}, 502)
-            return None
-        if not allow_unregistered and not ctx.get("app_role"):
-            self.send_json({"error": "Usuário sem permissão na Expedição.", "username": ctx.get("username")}, 403)
+    def auth(self, admin_only: bool = False) -> dict[str, Any] | None:
+        ctx = session_context(self)
+        if ctx is None:
+            self.send_json({"error": "Faça login com um usuário do estoque.", "login_required": True}, 401)
             return None
         if admin_only and ctx.get("app_role") != "admin":
             self.send_json({"error": "Acesso exclusivo de administrador."}, 403)
             return None
         return ctx
+
+    def session_cookie_header(self, token: str, expire: bool = False) -> str:
+        parts = [f"{SESSION_COOKIE}={token}", f"Path={BASE_PATH}", "HttpOnly", "SameSite=Lax"]
+        forwarded_proto = self.headers.get("X-Forwarded-Proto", "").lower()
+        if forwarded_proto == "https" or self.headers.get("Host", "").startswith("noromakweb.com.br"):
+            parts.append("Secure")
+        if expire:
+            parts.extend(["Max-Age=0", "Expires=Thu, 01 Jan 1970 00:00:00 GMT"])
+        return "; ".join(parts)
+
 
     def route_path(self) -> str:
         path = unquote(urlparse(self.path).path)
@@ -642,10 +882,9 @@ class AppHandler(BaseHTTPRequestHandler):
                 }
             )
             return
-        if path == "/api/me":
-            ctx = self.auth(allow_unregistered=True)
-            if ctx is not None:
-                self.send_json(ctx)
+        if path in ("/api/auth/session", "/api/me"):
+            ctx = session_context(self)
+            self.send_json({"authenticated": bool(ctx), "user": ctx} if ctx else {"authenticated": False})
             return
         if path == "/api/storage":
             ctx = self.auth()
@@ -667,25 +906,19 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_text(QZ_CERT_PATH.read_text(encoding="utf-8"))
             return
 
-        # As páginas também são protegidas no servidor. O HTML antigo não pode
-        # mais liberar acesso por sessão local ou pela senha fixa da versão portátil.
-        admin_pages = {"/admin", "/admin/", "/admin.html", "/administracao", "/administracao/"}
-        conference_pages = {"/conferencia", "/conferencia/", "/conferencia.html", "/pedidos", "/pedidos/"}
-        access_pages = {"", "/", "/acesso", "/acesso/", "/acesso.html"}
-        if path in admin_pages:
-            if self.auth(admin_only=True) is None:
-                return
-        elif path in conference_pages:
-            if self.auth() is None:
-                return
-        elif path in access_pages:
-            if self.auth(allow_unregistered=True) is None:
-                return
-
+        # O nginx já exige o login do NoromakWeb. Estas páginas ficam públicas
+        # dentro de /expedicao para conseguirem mostrar o segundo login, próprio do estoque.
         self.serve_static(path)
+
 
     def do_POST(self) -> None:
         path = self.route_path()
+        if path == "/api/auth/login":
+            self.handle_auth_login()
+            return
+        if path == "/api/auth/logout":
+            self.handle_auth_logout()
+            return
         if path == "/api/storage":
             ctx = self.auth()
             if ctx is not None:
@@ -713,6 +946,7 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         self.send_json({"error": "Rota não encontrada."}, 404)
 
+
     def do_DELETE(self) -> None:
         path = self.route_path()
         query = parse_qs(urlparse(self.path).query)
@@ -734,6 +968,68 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.handle_roles_delete(ctx, query)
             return
         self.send_json({"error": "Rota não encontrada."}, 404)
+
+    def handle_auth_login(self) -> None:
+        try:
+            req = self.read_json()
+            username = str(req.get("username") or "").strip().lower()
+            password = str(req.get("password") or "")
+            area = str(req.get("area") or "conferencia").strip().lower()
+            if not username or not password:
+                raise ValueError("Informe usuário e senha.")
+            if login_rate_limited(self, username):
+                self.send_json({"error": "Muitas tentativas. Aguarde alguns minutos e tente novamente."}, 429)
+                return
+            with DB_LOCK:
+                row = DB.execute("SELECT * FROM app_users WHERE username=?", (username,)).fetchone()
+            if not row or not row["active"] or not password_matches(password, row):
+                register_login_failure(self, username)
+                audit(username or "desconhecido", "auth.failed", client_computer(self))
+                self.send_json({"error": "Usuário ou senha incorretos."}, 401)
+                return
+            if area == "admin" and row["role"] != "admin":
+                register_login_failure(self, username)
+                self.send_json({"error": "Este usuário não possui perfil de Administrador."}, 403)
+                return
+            clear_login_failures(self, username)
+            old = cookie_token(self)
+            token = secrets.token_urlsafe(32)
+            token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+            now_epoch = int(time.time())
+            with DB_LOCK:
+                if old:
+                    DB.execute("DELETE FROM app_sessions WHERE token_hash=?", (hashlib.sha256(old.encode("utf-8")).hexdigest(),))
+                DB.execute(
+                    """INSERT INTO app_sessions(token_hash,username,created_at,last_seen,expires_at,ip,user_agent)
+                       VALUES(?,?,?,?,?,?,?)""",
+                    (token_hash, username, now_iso(), now_iso(), now_epoch + SESSION_TTL_SECONDS,
+                     client_computer(self), self.headers.get("User-Agent", "")[:500]),
+                )
+                DB.commit()
+            user = {"username": username, "nome": row["display_name"] or username, "app_role": row["role"], "app_active": True}
+            audit(username, "auth.login", f"{area}:{client_computer(self)}")
+            self.send_json(
+                {"ok": True, "user": user},
+                headers={"Set-Cookie": self.session_cookie_header(token)},
+            )
+        except (ValueError, json.JSONDecodeError) as exc:
+            self.send_json({"error": str(exc)}, 400)
+        except Exception as exc:
+            self.send_json({"error": f"Não foi possível entrar: {exc}"}, 500)
+
+    def handle_auth_logout(self) -> None:
+        ctx = session_context(self)
+        token = cookie_token(self)
+        if token:
+            with DB_LOCK:
+                DB.execute("DELETE FROM app_sessions WHERE token_hash=?", (hashlib.sha256(token.encode("utf-8")).hexdigest(),))
+                DB.commit()
+        if ctx:
+            audit(ctx["username"], "auth.logout", client_computer(self))
+        self.send_json(
+            {"ok": True},
+            headers={"Set-Cookie": self.session_cookie_header("", expire=True)},
+        )
 
     def handle_storage_get(self, query: dict[str, list[str]]) -> None:
         with DB_LOCK:
@@ -769,7 +1065,15 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             new_value = str(req.get("newValue"))
             old_value = None if "oldValue" not in req or req.get("oldValue") is None else str(req.get("oldValue"))
-            value, version, updated = save_storage(key, old_value, new_value, bool(req.get("force")))
+            force = bool(req.get("force"))
+            if key == "conf_usuarios":
+                if ctx["app_role"] != "admin":
+                    self.send_json({"error": "Somente administradores podem alterar usuários."}, 403)
+                    return
+                new_value = apply_app_users_payload(new_value, ctx["username"])
+                old_value = None
+                force = True
+            value, version, updated = save_storage(key, old_value, new_value, force)
             audit(ctx["username"], "storage.save", key)
             self.send_json({"ok": True, "value": value, "version": version, "updated_at": updated})
         except (ValueError, json.JSONDecodeError) as exc:
@@ -901,9 +1205,9 @@ class AppHandler(BaseHTTPRequestHandler):
     def handle_roles_get(self) -> None:
         with DB_LOCK:
             rows = DB.execute(
-                "SELECT username,display_name,role,active,updated_at,updated_by FROM user_roles ORDER BY display_name,username"
+                "SELECT username,display_name,role,active,updated_at,updated_by FROM app_users ORDER BY display_name,username"
             ).fetchall()
-        self.send_json({"users": [dict(row) for row in rows], "seed_admin": ADMIN_USERNAME})
+        self.send_json({"users": [dict(row) for row in rows], "seed_admin": ADMIN_USERNAME, "login_interno": True})
 
     def handle_roles_post(self, ctx: dict[str, Any]) -> None:
         try:
@@ -911,29 +1215,33 @@ class AppHandler(BaseHTTPRequestHandler):
             username = str(req.get("username") or "").strip().lower()
             display_name = str(req.get("display_name") or username).strip()
             role = str(req.get("role") or "operador").strip().lower()
-            active = 1 if req.get("active", True) not in (False, 0, "0", "false") else 0
+            active = req.get("active", True) not in (False, 0, "0", "false")
+            password = str(req.get("password") or "").strip() or None
             if not username or any(ch.isspace() for ch in username):
-                raise ValueError("Informe o username do NoromakWeb sem espaços.")
+                raise ValueError("Informe o login do estoque sem espaços.")
             if role not in ("admin", "operador"):
                 raise ValueError("Perfil inválido.")
+            current = DB.execute("SELECT * FROM app_users WHERE username=?", (username,)).fetchone()
+            if not current and not password:
+                raise ValueError("Informe uma senha para o novo usuário.")
             if username == ctx["username"] and (role != "admin" or not active):
                 raise ValueError("Você não pode retirar sua própria permissão de administrador.")
             with DB_LOCK:
-                DB.execute(
-                    """INSERT INTO user_roles(username,display_name,role,active,updated_at,updated_by)
-                       VALUES(?,?,?,?,?,?) ON CONFLICT(username) DO UPDATE SET
-                       display_name=excluded.display_name,role=excluded.role,active=excluded.active,
-                       updated_at=excluded.updated_at,updated_by=excluded.updated_by""",
-                    (username, display_name, role, active, now_iso(), ctx["username"]),
-                )
-                DB.commit()
-            sync_legacy_users_storage()
-            audit(ctx["username"], "role.save", f"{username}:{role}:{active}")
+                DB.execute("BEGIN IMMEDIATE")
+                try:
+                    upsert_app_user(username, display_name, role, active, password, ctx["username"])
+                    DB.commit()
+                except Exception:
+                    DB.rollback()
+                    raise
+            sync_app_users_storage()
+            audit(ctx["username"], "user.save", f"{username}:{role}:{int(active)}")
             self.send_json({"ok": True})
         except (ValueError, json.JSONDecodeError) as exc:
             self.send_json({"error": str(exc)}, 400)
         except Exception as exc:
             self.send_json({"error": str(exc)}, 500)
+
 
     def handle_roles_delete(self, ctx: dict[str, Any], query: dict[str, list[str]]) -> None:
         username = (query.get("username") or [""])[0].strip().lower()
@@ -944,15 +1252,15 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_json({"error": "Você não pode remover seu próprio acesso."}, 400)
             return
         with DB_LOCK:
-            target = DB.execute("SELECT role,active FROM user_roles WHERE username=?", (username,)).fetchone()
+            target = DB.execute("SELECT role,active FROM app_users WHERE username=?", (username,)).fetchone()
             if target and target["role"] == "admin" and target["active"]:
-                admins = DB.execute("SELECT COUNT(*) FROM user_roles WHERE role='admin' AND active=1").fetchone()[0]
+                admins = DB.execute("SELECT COUNT(*) FROM app_users WHERE role='admin' AND active=1").fetchone()[0]
                 if admins <= 1:
                     self.send_json({"error": "Não é possível remover o último administrador ativo."}, 400)
                     return
-            DB.execute("DELETE FROM user_roles WHERE username=?", (username,))
+            DB.execute("DELETE FROM app_users WHERE username=?", (username,))
             DB.commit()
-        sync_legacy_users_storage()
+        sync_app_users_storage()
         audit(ctx["username"], "role.delete", username)
         self.send_json({"ok": True})
 

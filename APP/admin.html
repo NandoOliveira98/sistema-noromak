@@ -473,7 +473,7 @@
     <div class="logo-box">
       <img src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 450 120'><text x='20' y='80' font-size='60' font-family='Arial, sans-serif' font-weight='bold' fill='%232B4E75'>NOROMAK</text></svg>" alt="Noromak">
     </div>
-    <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 7.3 — login integrado ao NoromakWeb</div>
+    <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 7.4 — login próprio dos usuários do estoque</div>
     <div style="font-size:12px;color:#667;margin:-8px 0 14px;line-height:1.4;">Use o administrador principal ou qualquer usuário cadastrado com perfil <b>Admin</b>.</div>
     <input type="text" id="usuarioAdmin" placeholder="Usuário Admin">
     <input type="password" id="senhaAdmin" placeholder="Senha">
@@ -556,8 +556,8 @@
 
   <section id="aba-usuarios" class="aba-painel">
     <div class="card-admin">
-      <h2>Usuários e aprovações <span class="usuario-versao">Versão 7.3 — acesso pelo NoromakWeb</span></h2>
-      <div class="aviso-banco"><b>Novo fluxo:</b> qualquer pessoa pode solicitar um usuário escolhendo <b>Admin</b> ou <b>Operador</b>. A conta permanece bloqueada até que um administrador revise o perfil e clique em <b>Aprovar</b>.</div>
+      <h2>Usuários e aprovações <span class="usuario-versao">Versão 7.4 — login individual do estoque</span></h2>
+      <div class="aviso-banco"><b>Login próprio do estoque:</b> cada pessoa deve ter usuário, senha e perfil individual. Senhas já salvas aparecem como <b>********</b>; mantenha assim para não alterar ou digite uma nova senha para trocar.</div>
       <div class="toolbar-grid"><button type="button" id="btnNovoUsuarioAdmin" class="btn-primario" onclick="abrirSolicitacaoUsuario('admin')">＋ Solicitar novo usuário</button><button type="button" class="btn-sucesso" onclick="salvarUsuariosAdmin(true)">💾 Salvar alterações</button></div>
       <div id="contadorUsuariosAdmin" class="usuario-contador"></div>
       <div class="excel-wrap" id="tabelaUsuariosAdminWrap" style="max-height:50vh;"><table class="excel-grid" style="min-width:800px;"><thead><tr><th>Ação</th><th>Nome</th><th>Login</th><th>Senha</th><th>Perfil</th></tr></thead><tbody id="corpoUsuariosAdmin"></tbody></table></div>
@@ -3243,7 +3243,7 @@ document.addEventListener("DOMContentLoaded",()=>{
       usuarios.push(novo);
       appStorage.setItem("conf_usuarios",JSON.stringify(usuarios));
       const confirmados=jsonLista("conf_usuarios");
-      if(!confirmados.some(u=>loginNormalizado(u.Login)===chave && txt(u.Senha)===txt(req.Senha))) throw new Error("Não foi possível confirmar o usuário aprovado na servidor Web.");
+      if(!confirmados.some(u=>loginNormalizado(u.Login)===chave)) throw new Error("Não foi possível confirmar o usuário aprovado no servidor Web.");
       req.Status="Aprovado";req.PerfilAprovado=perfilAprovado;req.AprovadoEm=agoraISO();req.AprovadoPor=novo.AprovadoPor;req.Senha="";
       salvarSolicitacoes(solicitacoes);
       if(typeof usuariosEditorAdmin!=="undefined") usuariosEditorAdmin=confirmados;

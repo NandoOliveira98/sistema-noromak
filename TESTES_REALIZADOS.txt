@@ -1,9 +1,15 @@
-VALIDAÇÃO DA VERSÃO WEB/LINUX 7.3
+VALIDAÇÃO DA VERSÃO WEB/LINUX 7.4
+=================================
 
-- servidor_web.py compilado sem erros.
-- web-auth.js validado pelo Node.js.
-- /expedicao abre o portal de acesso.
-- /expedicao/admin é protegido no servidor e exige perfil Admin.
-- /expedicao/conferencia exige usuário ativo Admin ou Operador.
-- sessões locais e a senha fixa da versão portátil são limpas antes do acesso.
-- health interno corrigido para /expedicao/api/health.
+- servidor_web.py compilado com sucesso.
+- APP/web-auth.js validado com node --check.
+- /expedicao/api/health retornou versão 7.4.
+- Página /expedicao/admin é servida sem sessão para poder mostrar o formulário de login.
+- APIs de dados retornam 401 antes do login interno.
+- Login Admin admin/01101998 validado.
+- Login Operador Felipe/123 validado.
+- Operador bloqueado no Painel Administrativo (HTTP 403).
+- Operador bloqueado para alterações administrativas.
+- Criação de uma segunda administradora e login com a nova senha validados.
+- Logout invalida a sessão no servidor.
+- Senhas aparecem como ******** na tabela e ficam armazenadas com PBKDF2-SHA256.

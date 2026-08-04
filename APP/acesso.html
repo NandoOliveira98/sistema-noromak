@@ -20,6 +20,8 @@
     .access-denied{margin-top:18px;padding:16px;border-radius:12px;background:#fff4e7;border:1px solid #f4c88e;color:#754612;line-height:1.5}
     .back-link{display:block;text-align:center;margin-top:18px;color:var(--blue);font-weight:700;text-decoration:none;font-size:13px}
     .note{padding:17px 34px;background:#f8fafc;border-top:1px solid #e2e8ef;color:#6b7784;font-size:12px;line-height:1.5;text-align:center}
+
+    .stock-login{display:grid;gap:9px;padding:2px 0}.stock-login h2{margin:0 0 2px;color:var(--blue);font-size:21px}.stock-login p{margin:0 0 12px;color:var(--muted);font-size:13px;line-height:1.45}.stock-login label{font-size:12px;font-weight:800;color:#365570}.stock-login input{width:100%;padding:13px 14px;border:1px solid #b9c9da;border-radius:9px;font-size:15px;outline:none}.stock-login input:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(31,87,165,.12)}.stock-login button,.logout-access{border:0;border-radius:9px;padding:13px 16px;background:var(--blue);color:#fff;font-weight:850;cursor:pointer;margin-top:6px}.stock-login button:disabled{opacity:.65;cursor:wait}.stock-error{min-height:20px;color:#b42318;font-size:12px;font-weight:750}.logout-access{width:100%;background:#fff!important;color:var(--blue)!important;border:1px solid #b9c9da!important}
   </style>
   <script src="/expedicao/web-auth.js"></script>
 </head>
@@ -28,10 +30,10 @@
     <section class="head">
       <img src="/nk-logo.svg" alt="Noromak" onerror="this.style.display='none'">
       <h1>Sistema de Expedição</h1>
-      <p>Escolha a área que deseja abrir. A identidade e as permissões vêm da conta já conectada no NoromakWeb.</p>
+      <p>Entre com o usuário do estoque para acessar a Conferência ou o Painel Administrativo.</p>
     </section>
     <section id="webAccessPortal"></section>
-    <div class="note">Cada colaborador deve entrar no NoromakWeb com sua própria conta. O sistema não utiliza a senha local da antiga versão portátil.</div>
+    <div class="note">O NoromakWeb protege o endereço externo. Dentro da Expedição, cada colaborador usa seu próprio login do estoque.</div>
   </main>
 </body>
 </html>
