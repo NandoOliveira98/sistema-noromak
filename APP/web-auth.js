@@ -133,7 +133,14 @@
     const login = document.getElementById("telaLogin");
     if (login) login.style.display = "none";
     window.usuarioLogado = session;
-    if (typeof window.iniciarSessao === "function") window.iniciarSessao();
+    // A tela legada declara `usuarioLogado` com `let`, portanto essa variável
+    // não é a mesma propriedade de window. Use a ponte exposta pela própria
+    // tela para atualizar a variável interna antes de iniciar a sessão.
+    if (typeof window.ativarSessaoWebConferencia === "function") {
+      window.ativarSessaoWebConferencia(session);
+    } else if (typeof window.iniciarSessao === "function") {
+      window.iniciarSessao();
+    }
     addUserPill(user);
     const logoff = document.querySelector(".btn-logoff");
     if (logoff) logoff.textContent = "SAIR DO USUÁRIO";

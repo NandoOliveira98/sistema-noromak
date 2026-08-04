@@ -220,7 +220,7 @@
     <div class="logo-box">
       <img src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 450 120'><text x='20' y='80' font-size='60' font-family='Arial, sans-serif' font-weight='bold' fill='%232B4E75'>NOROMAK</text></svg>" alt="Noromak">
     </div>
-    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 7.4 — login próprio dos usuários do estoque</div>
+    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 7.5 — sessão Web corrigida</div>
 
     <div class="box-upload-rede" style="border-style:solid;">
       <label>🗄 PEDIDOS COMPARTILHADOS NA REDE:</label>
@@ -1205,6 +1205,12 @@ function fazerLogin() {
 }
 
 function iniciarSessao() {
+  if (!usuarioLogado) {
+    document.getElementById("telaLogin").style.display = "flex";
+    const erro = document.getElementById("erroLogin");
+    if (erro) erro.innerText = "A sessão foi criada, mas os dados do usuário não foram carregados. Atualize a página e tente novamente.";
+    return;
+  }
   document.getElementById("telaLogin").style.display = "none";
   document.getElementById("infoUsuario").innerHTML = `Operador: <b>${usuarioLogado.Nome || usuarioLogado.Login}</b>`;
   document.getElementById("usuarioInput").value = "";
@@ -1222,6 +1228,19 @@ function iniciarSessao() {
   renderizarListaPedidos();
   setTimeout(restaurarUltimoPedidoEmAndamento, 80);
 }
+
+// Ponte usada pelo login Web. `usuarioLogado` foi declarado com `let` nesta
+// página e, por isso, não pode ser atualizado apenas por window.usuarioLogado.
+window.ativarSessaoWebConferencia = function(sessao) {
+  if (!sessao || typeof sessao !== "object") return false;
+  usuarioLogado = {
+    Nome: String(sessao.Nome || sessao.nome || sessao.Login || sessao.username || "Usuário"),
+    Login: String(sessao.Login || sessao.username || ""),
+    Perfil: String(sessao.Perfil || sessao.app_role || "Operador")
+  };
+  iniciarSessao();
+  return true;
+};
 
 function fazerLogoff() {
   usuarioLogado = null;

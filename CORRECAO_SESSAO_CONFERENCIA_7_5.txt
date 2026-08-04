@@ -1,0 +1,14 @@
+CORREÇÃO 7.5 — LOGIN DA CONFERÊNCIA
+
+Problema corrigido:
+- O servidor autenticava o usuário e criava o cookie corretamente.
+- A tela conferencia.html mantinha `usuarioLogado` em uma variável `let` interna.
+- web-auth.js atualizava window.usuarioLogado, que é outra variável.
+- Ao executar iniciarSessao(), a variável interna permanecia null e gerava:
+  Cannot read properties of null (reading 'Nome').
+
+Correção:
+- Foi criada a ponte window.ativarSessaoWebConferencia(sessao).
+- A ponte atualiza a variável interna antes de chamar iniciarSessao().
+- iniciarSessao() agora também possui proteção contra sessão nula.
+- O cookie e a sessão do servidor continuam sendo a fonte oficial de autenticação.

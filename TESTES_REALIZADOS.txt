@@ -1,9 +1,9 @@
-VALIDAÇÃO DA VERSÃO WEB/LINUX 7.4
+VALIDAÇÃO DA VERSÃO WEB/LINUX 7.5
 =================================
 
 - servidor_web.py compilado com sucesso.
 - APP/web-auth.js validado com node --check.
-- /expedicao/api/health retornou versão 7.4.
+- /expedicao/api/health retornou versão 7.5.
 - Página /expedicao/admin é servida sem sessão para poder mostrar o formulário de login.
 - APIs de dados retornam 401 antes do login interno.
 - Login Admin admin/01101998 validado.
@@ -13,3 +13,13 @@ VALIDAÇÃO DA VERSÃO WEB/LINUX 7.4
 - Criação de uma segunda administradora e login com a nova senha validados.
 - Logout invalida a sessão no servidor.
 - Senhas aparecem como ******** na tabela e ficam armazenadas com PBKDF2-SHA256.
+
+TESTES 7.5
+- servidor_web.py compilado com py_compile: OK
+- APP/web-auth.js validado com node --check: OK
+- API /expedicao/api/health: HTTP 200, versão 7.5
+- Login interno luis/admin: sessão criada com sucesso
+- Cookie expedicao_estoque com Path=/expedicao: OK
+- API /expedicao/api/auth/session com cookie: authenticated=true
+- Ponte ativarSessaoWebConferencia criada para atualizar a variável interna usuarioLogado antes de iniciarSessao.
+- Proteção adicional contra usuarioLogado nulo adicionada.

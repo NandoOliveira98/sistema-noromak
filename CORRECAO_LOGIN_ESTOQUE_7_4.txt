@@ -1,4 +1,4 @@
-VERSÃO 7.4 — LOGIN PRÓPRIO DOS USUÁRIOS DO ESTOQUE
+VERSÃO 7.5 — LOGIN PRÓPRIO DOS USUÁRIOS DO ESTOQUE
 ====================================================
 
 - /expedicao mostra usuário e senha do estoque antes de abrir qualquer área.
