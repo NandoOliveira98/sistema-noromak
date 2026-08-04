@@ -1,14 +1,14 @@
-SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 7.1
+SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 7.2
 ================================================
 
 O QUE FOI TRANSFORMADO
 ----------------------
 - A versão portátil Windows foi convertida em aplicação Web para Linux.
-- O servidor escuta em 127.1.0.1:8100.
+- O servidor escuta em 127.2.0.1:8100.
 - Todas as telas e APIs funcionam sob o prefixo /expedicao.
 - Não existe uma segunda tela de login: o sistema usa a sessão do NoromakWeb.
 - Para identificar a pessoa, o servidor consulta somente:
-  http://127.1.0.1:8000/api/v1/auth/me
+  http://127.2.0.1:8000/api/v1/auth/me
 - Os perfis Admin/Operador são próprios da Expedição e ficam no SQLite.
 - O banco permanente fica em /home/expedicao/dados/expedicao.db.
 - O banco não é apagado nas publicações.
@@ -81,7 +81,7 @@ Execute CONFIGURAR_QZ_TRAY_WEB.bat como administrador uma única vez em cada PC
 que imprime. Depois, mantenha o QZ Tray aberto. A configuração não precisa ser
 repetida diariamente.
 
-IMPORTANTE: a versão Web 7.1 usa um novo certificado. Mesmo computadores que já
+IMPORTANTE: a versão Web 7.2 usa um novo certificado. Mesmo computadores que já
 foram configurados para a versão portátil 6.9 precisam executar o novo arquivo.
 
 MIGRAÇÃO DOS DADOS DA VERSÃO 6.9
@@ -101,7 +101,7 @@ COMO SABER SE O DEPLOY FUNCIONOU
 --------------------------------
 O publicar.sh testa diretamente:
 
-  http://127.1.0.1:8100/api/health
+  http://127.2.0.1:8100/api/health
 
 Essa é a confirmação real do aplicativo. O código 200 do endereço público sozinho
 não basta, porque ele pode ser a página de login do NoromakWeb.

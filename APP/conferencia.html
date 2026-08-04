@@ -220,7 +220,7 @@
     <div class="logo-box">
       <img src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 450 120'><text x='20' y='80' font-size='60' font-family='Arial, sans-serif' font-weight='bold' fill='%232B4E75'>NOROMAK</text></svg>" alt="Noromak">
     </div>
-    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 7.1 — login integrado ao NoromakWeb</div>
+    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 7.2 — login integrado ao NoromakWeb</div>
 
     <div class="box-upload-rede" style="border-style:solid;">
       <label>🗄 PEDIDOS COMPARTILHADOS NA REDE:</label>
@@ -2476,7 +2476,10 @@ function limparPainel() {
 
 // ===== INTEGRAÇÃO COM PASTA COMPARTILHADA =====
 function abrirPainelAdministrativoBanco(){
-  window.open("/admin.html","_blank");
+  const base = window.location.pathname.startsWith("/expedicao") ? "/expedicao" : "";
+  const destino = `${base}/admin`;
+  const janela = window.open(destino, "_blank");
+  if (!janela) window.location.href = destino;
 }
 function verificarStatusPlanilhaLogin(){
   const statusDiv=document.getElementById("statusCargaLogin"); if(!statusDiv)return;

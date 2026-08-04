@@ -1,11 +1,11 @@
-VALIDAÇÃO DA VERSÃO WEB/LINUX 7.1
+VALIDAÇÃO DA VERSÃO WEB/LINUX 7.2
 ================================
 
 - servidor_web.py compilado pelo verificador de sintaxe do Python.
 - shared-storage.js e web-auth.js validados pelo verificador de sintaxe do Node.js.
 - Todos os scripts JavaScript embutidos em admin.html e conferencia.html validados.
 - Servidor iniciado localmente em porta de teste.
-- /api/health respondeu com marker noromak_expedicao_web e versão 7.1.
+- /api/health respondeu com marker noromak_expedicao_web e versão 7.2.
 - Login integrado simulado para Admin e Operador.
 - Permissões testadas: Operador não altera produtos nem perfis.
 - Migração inicial dos produtos e usuários da versão 6.9 executada.

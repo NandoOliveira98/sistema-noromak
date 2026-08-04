@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sistema de Conferência Noromak — edição Web/Linux 7.1.
+"""Sistema de Conferência Noromak — edição Web/Linux 7.2.
 
 Sem dependências externas: usa apenas a biblioteca padrão do Python.
 - Escuta em 127.0.0.1:8100.
@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-APP_VERSION = "7.1"
+APP_VERSION = "7.2"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -507,7 +507,7 @@ def fetch_crm_user(cookie: str, debug_user: str | None = None) -> dict[str, Any]
     req = urllib.request.Request(
         AUTH_ME_URL,
         method="GET",
-        headers={"Cookie": cookie, "Accept": "application/json", "User-Agent": "Noromak-Expedicao/7.1"},
+        headers={"Cookie": cookie, "Accept": "application/json", "User-Agent": "Noromak-Expedicao/7.2"},
     )
     try:
         with urllib.request.urlopen(req, timeout=5) as response:
@@ -554,7 +554,7 @@ def client_computer(handler: BaseHTTPRequestHandler) -> str:
 
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/7.1"
+    server_version = "NoromakExpedicao/7.2"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))

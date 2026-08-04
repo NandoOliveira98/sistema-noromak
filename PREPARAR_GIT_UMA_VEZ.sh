@@ -55,7 +55,7 @@ git add .
 if git diff --cached --quiet; then
   echo ">> nenhum arquivo novo para salvar. O projeto Git ja estava preparado."
 else
-  git commit -m "versao web linux 7.1"
+  git commit -m "versao web linux 7.2"
 fi
 
 echo
