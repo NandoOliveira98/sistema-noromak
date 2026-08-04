@@ -76,10 +76,6 @@
   .menu { width: 320px; background: white; overflow-y: auto; border-right: 1px solid #ddd; padding: 15px; }
   .conteudo { flex: 1; padding: 25px; overflow-y: auto; }
 
-  #painelAdmin {
-    background: #eef3f7; border: 1px solid #b0c4de; border-radius: 6px; padding: 12px; margin-bottom: 15px; display: none; border-left: 4px solid var(--secondary);
-  }
-
   .busca-container { margin-bottom: 15px; }
   .busca-input { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 13px; background: #f9f9f9; }
 
@@ -220,7 +216,7 @@
     <div class="logo-box">
       <img src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 450 120'><text x='20' y='80' font-size='60' font-family='Arial, sans-serif' font-weight='bold' fill='%232B4E75'>NOROMAK</text></svg>" alt="Noromak">
     </div>
-    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 7.6 — senhas administráveis com segurança</div>
+    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 7.7 — impressão silenciosa e tela simplificada</div>
 
     <div class="box-upload-rede" style="border-style:solid;">
       <label>🗄 PEDIDOS COMPARTILHADOS NA REDE:</label>
@@ -313,7 +309,7 @@
   <div class="usuario-area">
     <div style="text-align: right;">
       <span id="infoUsuario"></span><br>
-      <span id="qzStatusBadge" class="qz-status qz-desconectado">QZ Tray Desconectado</span>
+      <span id="qzStatusBadge" class="qz-status qz-desconectado">QZ Tray conecta ao imprimir</span>
       <span id="autosaveStatus" class="autosave-status">Salvamento automático ativo</span>
     </div>
     <button class="btn-header" onclick="alternarPainelAtalhos()">⌨ ATALHOS</button>
@@ -324,27 +320,6 @@
 
 <div class="container">
   <div class="menu">
-    <div id="painelAdmin">
-      <h4 style="margin-top:0; color:var(--primary);">⚙ Painel Administrador</h4>
-      <p style="font-size:11px; color:#555; margin-bottom:10px;">Pedidos, produtos, usuários e etiquetas são administrados no servidor Web:</p>
-      <button onclick="abrirPainelAdministrativoBanco()" style="width:100%; padding:8px; background:var(--secondary); color:white; border:none; border-radius:6px; cursor:pointer; font-weight:bold; font-size:11px; margin-bottom:6px;">
-        🗄 ABRIR BANCO ADMINISTRATIVO
-      </button>
-      <button onclick="vincularPastaFotos()" style="width:100%; padding:8px; background:var(--primary); color:white; border:none; border-radius:6px; cursor:pointer; font-weight:bold; font-size:11px; margin-bottom:5px;">
-        📂 VINCULAR PASTA DE FOTOS NESTE COMPUTADOR
-      </button>
-
-      <div style="margin-top:10px; text-align:left;">
-        <label style="font-size:11px; font-weight:bold; color:var(--primary);">🖨️ CAMINHO DA IMPRESSORA DE REDE:</label>
-        <input type="text" id="inputNomeImpressora" placeholder="Ex: ZDesigner ZD220-203dpi ZPL" value="" style="width:100%; padding:6px; font-size:11px; margin-top:3px; border:1px solid #ccc; border-radius:6px;" onchange="salvarNomeImpressora(this)">
-        <button onclick="testarImpressaoRede()" style="width:100%; padding:6px; background:#2e7d32; color:white; border:none; border-radius:6px; cursor:pointer; font-weight:bold; font-size:11px; margin-top:5px;">
-          🖨️ TESTAR CONEXÃO COM IMPRESSORA
-        </button>
-        <div style="font-size:10px;line-height:1.35;color:#6b7280;margin-top:6px;"><b>QZ Tray assinado:</b> antes do primeiro uso neste computador, execute <b>CONFIGURAR_QZ_TRAY_NESTE_COMPUTADOR.bat</b> na pasta do sistema. Depois disso, as solicitações aparecem como <b>Sistema de Conferência Noromak</b>, com assinatura válida, e a impressão segue sem pedir Allow.</div>
-      </div>
-
-      <div id="msgAdmin" class="erro-msg" style="font-size:11px; margin-top:5px;"></div>
-    </div>
 
     <h3 style="color: var(--primary); font-size: 16px;">Pedidos Pendentes</h3>
     <div class="busca-container">
@@ -364,10 +339,10 @@
     <div class="aviso-etiquetas-disponiveis">🏷️ A lista mostra somente pedidos que já possuem etiqueta vinculada e pronta para impressão.</div>
 
     <div id="painelAtalhos" class="atalhos-box" aria-label="Atalhos do modo sem mouse">
-      <button class="atalhos-titulo" type="button" onclick="alternarPainelAtalhos()" aria-controls="conteudoAtalhos">
-        <span>⌨ Modo de conferência sem mouse</span><span>F1</span>
+      <button id="btnAlternarAtalhos" class="atalhos-titulo" type="button" onclick="alternarPainelAtalhos()" aria-controls="conteudoAtalhos" aria-expanded="false">
+        <span>⌨ Modo de conferência sem mouse</span><span id="estadoAtalhos">Abrir · F1</span>
       </button>
-      <div id="conteudoAtalhos" class="atalhos-conteudo">
+      <div id="conteudoAtalhos" class="atalhos-conteudo oculto">
         <div class="atalho-linha"><kbd>F2</kbd><span>Buscar pedido ou cliente</span></div>
         <div class="atalho-linha"><kbd>F3</kbd><span>Voltar ao leitor de código</span></div>
         <div class="atalho-linha"><kbd>F4</kbd><span>Abrir Histórico e reimpressão</span></div>
@@ -590,13 +565,13 @@ function detalharErroImpressao(erro) {
   const msg = String(erro && (erro.message || erro) || "Erro desconhecido");
   const base = msg.toLowerCase();
   if (base.includes("certificate") || base.includes("certificado") || base.includes("anonymous")) {
-    return { titulo: "Certificado do QZ Tray não configurado", detalhe: msg, orientacao: "Feche o sistema e execute CONFIGURAR_QZ_TRAY_NESTE_COMPUTADOR.bat na pasta principal. Depois reabra o sistema e teste a impressão." };
+    return { titulo: "Certificado do QZ Tray não configurado", detalhe: msg, orientacao: "Execute CONFIGURAR_QZ_TRAY_WEB.bat uma única vez neste usuário do Windows. Depois reabra o QZ Tray e tente novamente." };
   }
   if (base.includes("qz tray") || base.includes("websocket")) {
-    return { titulo: "QZ Tray desconectado", detalhe: msg, orientacao: "Abra o QZ Tray. Se os campos Signature ou Validity estiverem vermelhos, execute CONFIGURAR_QZ_TRAY_NESTE_COMPUTADOR.bat e reabra o sistema." };
+    return { titulo: "QZ Tray desconectado", detalhe: msg, orientacao: "Abra o QZ Tray. Se ainda aparecer uma autorização, execute CONFIGURAR_QZ_TRAY_WEB.bat uma única vez neste usuário do Windows." };
   }
   if (base.includes("impressora") || base.includes("printer")) {
-    return { titulo: "Impressora não localizada", detalhe: msg, orientacao: "Confira o nome da impressora no Painel Administrador e faça uma impressão de teste." };
+    return { titulo: "Impressora não localizada", detalhe: msg, orientacao: "Confira se a impressora ZDesigner está instalada com o mesmo nome configurado no computador." };
   }
   if (base.includes("danfe")) {
     return { titulo: "Dados da etiqueta indisponíveis", detalhe: msg, orientacao: "Republique o arquivo do Mercado Livre no painel administrativo e confirme se ele contém a etiqueta de envio." };
@@ -659,7 +634,7 @@ window.onload = function() {
     document.getElementById("inputNomeImpressora").value = nomeImpressoraConfigurada;
   }
 
-  conectarQzTray().catch(() => { /* operador pode autorizar mais tarde, ao imprimir */ });
+  atualizarBadgeQz(false, "QZ Tray conecta somente ao imprimir");
 
   const sessaoSalva = appStorage.getItem("conf_sessao_ativa");
   if (sessaoSalva) {
@@ -759,7 +734,7 @@ async function conectarQzTray() {
   // Isso evita que a conclusão do pedido falhe antes de o operador clicar em Allow.
   if (qzConexaoPromise) return qzConexaoPromise;
 
-  atualizarBadgeQz(false, "Conectando ao QZ Tray assinado...");
+  atualizarBadgeQz(false, "Conectando ao QZ Tray...");
   qzConexaoPromise = qz.websocket.connect()
     .then(() => {
       atualizarBadgeQz(true, "QZ Tray Conectado");
@@ -798,7 +773,7 @@ async function testarImpressaoRede() {
     await qz.print(config, data);
     alert("✅ Impressão de teste enviada com sucesso para: " + impressoraAlvo);
   } catch (err) {
-    alert("❌ Não foi possível concluir a impressão de teste.\n\nExecute CONFIGURAR_QZ_TRAY_NESTE_COMPUTADOR.bat na pasta principal do sistema e reabra o QZ Tray.\n\nDetalhes: " + (err && (err.message || err)));
+    alert("❌ Não foi possível concluir a impressão de teste.\n\nExecute CONFIGURAR_QZ_TRAY_WEB.bat uma única vez neste usuário do Windows e reabra o QZ Tray.\n\nDetalhes: " + (err && (err.message || err)));
   }
 }
 
@@ -1217,12 +1192,12 @@ function iniciarSessao() {
   document.getElementById("senhaInput").value = "";
   document.getElementById("erroLogin").innerText = "";
 
-  const perfil = String(usuarioLogado.Perfil || "").toLowerCase();
-  if (perfil.includes("admin") || usuarioLogado.Login === "admin") {
-    document.getElementById("painelAdmin").style.display = "block";
-  } else {
-    document.getElementById("painelAdmin").style.display = "none";
-  }
+  const atalhosConteudo = document.getElementById("conteudoAtalhos");
+  const atalhosBotao = document.getElementById("btnAlternarAtalhos");
+  const atalhosEstado = document.getElementById("estadoAtalhos");
+  if (atalhosConteudo) atalhosConteudo.classList.add("oculto");
+  if (atalhosBotao) atalhosBotao.setAttribute("aria-expanded", "false");
+  if (atalhosEstado) atalhosEstado.textContent = "Abrir · F1";
 
   restaurarFiltroMarketplacePedidos();
   renderizarListaPedidos();
@@ -1944,7 +1919,7 @@ async function obterConfiguracaoImpressora() {
   if (!qz.websocket.isActive()) {
     const status = document.getElementById("statusMsg");
     if (status) {
-      status.innerHTML = "🔐 Conectando ao QZ Tray com assinatura do Sistema de Conferência...";
+      status.innerHTML = "🔐 Conectando à impressora...";
       status.style.color = "#9a6700";
     }
     // Aguarda o clique em Allow e continua a mesma conclusão, sem obrigar o operador a tentar novamente.
@@ -2239,8 +2214,12 @@ function painelEstaVisivel(id) {
 function alternarPainelAtalhos() {
   const conteudo = document.getElementById("conteudoAtalhos");
   const caixa = document.getElementById("painelAtalhos");
+  const botao = document.getElementById("btnAlternarAtalhos");
+  const estado = document.getElementById("estadoAtalhos");
   if (!conteudo) return;
-  conteudo.classList.toggle("oculto");
+  const ficouOculto = conteudo.classList.toggle("oculto");
+  if (botao) botao.setAttribute("aria-expanded", ficouOculto ? "false" : "true");
+  if (estado) estado.textContent = ficouOculto ? "Abrir · F1" : "Fechar · F1";
   if (caixa) {
     caixa.classList.remove("atalho-pulso");
     void caixa.offsetWidth;

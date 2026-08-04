@@ -32,3 +32,13 @@ VERSÃO 7.6
 - Login de Operador com a nova senha validado.
 - conf_usuarios continua retornando apenas ********, sem expor a senha.
 - JavaScript do módulo de redefinição validado com node --check.
+
+VERSÃO 7.7
+- servidor_web.py compilado com sucesso.
+- /expedicao/api/health responde versão 7.7.
+- Cartão Painel Administrador removido da tela de conferência.
+- Não existem referências obrigatórias ao elemento painelAdmin durante o login.
+- Quadro de atalhos inicia com classe oculto e aria-expanded=false.
+- A conexão QZ deixou de ser executada no window.onload.
+- O QZ continua sendo conectado sob demanda antes da impressão.
+- Configurador QZ separado em etapa elevada de sistema e etapa não elevada do usuário.

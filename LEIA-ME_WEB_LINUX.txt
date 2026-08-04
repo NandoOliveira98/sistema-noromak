@@ -92,3 +92,12 @@ VERSÃO 7.6 — SENHAS DOS USUÁRIOS
 - Na aba Usuários, cada linha possui o botão Alterar senha.
 - O Admin digita e confirma a nova senha e pode marcar Mostrar a nova senha enquanto digita.
 - A senha nova entra em vigor imediatamente e a anterior deixa de funcionar.
+
+VERSÃO 7.7 — TELA DE CONFERÊNCIA SIMPLIFICADA E QZ SILENCIOSO
+-------------------------------------------------------------
+- O cartão de acesso ao Painel Administrador foi removido da Conferência.
+- O quadro Modo de conferência sem mouse inicia minimizado e abre apenas por clique ou F1.
+- A página não conecta ao QZ Tray ao carregar; conecta somente quando precisa imprimir.
+- CONFIGURAR_QZ_TRAY_WEB.bat foi corrigido para autorizar o certificado no perfil do
+  usuário normal do Windows, evitando a janela Allow após a configuração.
+- Execute o configurador uma única vez para cada usuário do Windows que imprime.
