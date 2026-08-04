@@ -7,7 +7,6 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/js-sha256/0.9.0/sha256.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/qz-tray@2.2.6/qz-tray.js"></script>
 
 <style>
   :root {
@@ -97,9 +96,9 @@
   .img-produto { width: 65px; height: 65px; object-fit: contain; border-radius: 4px; border: 1px solid #ccc; background: #fff; }
   .sku-texto { font-weight: bold; font-size: 13px; color: var(--primary); }
 
-  .qz-status { font-size: 11px; padding: 4px 8px; border-radius: 4px; display: inline-block; margin-top: 3px; font-weight: bold; }
-  .qz-conectado { background: #c8e6c9; color: #2e7d32; }
-  .qz-desconectado { background: #ffcdd2; color: #c62828; }
+  .print-agent-status { font-size: 11px; padding: 4px 8px; border-radius: 4px; display: inline-block; margin-top: 3px; font-weight: bold; }
+  .print-agent-conectado { background: #c8e6c9; color: #2e7d32; }
+  .print-agent-desconectado { background: #ffcdd2; color: #c62828; }
   .etiqueta-status { display: inline-block; font-size: 12px; font-weight: 700; padding: 6px 10px; border-radius: 6px; margin-bottom: 14px; }
   .etiqueta-ok { background: #e8f5e9; color: #2e7d32; border: 1px solid #a5d6a7; }
   .etiqueta-erro { background: #ffebee; color: #c62828; border: 1px solid #ef9a9a; }
@@ -216,7 +215,7 @@
     <div class="logo-box">
       <img src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 450 120'><text x='20' y='80' font-size='60' font-family='Arial, sans-serif' font-weight='bold' fill='%232B4E75'>NOROMAK</text></svg>" alt="Noromak">
     </div>
-    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 7.7 — impressão silenciosa e tela simplificada</div>
+    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 8.0 — impressão silenciosa e tela simplificada</div>
 
     <div class="box-upload-rede" style="border-style:solid;">
       <label>🗄 PEDIDOS COMPARTILHADOS NA REDE:</label>
@@ -309,7 +308,7 @@
   <div class="usuario-area">
     <div style="text-align: right;">
       <span id="infoUsuario"></span><br>
-      <span id="qzStatusBadge" class="qz-status qz-desconectado">QZ Tray conecta ao imprimir</span>
+      <span id="printAgentStatusBadge" class="print-agent-status print-agent-desconectado">Agente Zebra conecta ao imprimir</span>
       <span id="autosaveStatus" class="autosave-status">Salvamento automático ativo</span>
     </div>
     <button class="btn-header" onclick="alternarPainelAtalhos()">⌨ ATALHOS</button>
@@ -401,7 +400,7 @@ let listaPedidosPendentes = [];
 let mapaFotos = {};
 let mapaEtiquetas = {};
 let usuarioLogado = null;
-let nomeImpressoraConfigurada = appStorage.getItem("conf_impressora_qz") || "ZDesigner ZD220-203dpi ZPL";
+let nomeImpressoraConfigurada = appStorage.getItem("conf_impressora_zebra") || "ZDesigner ZD220-203dpi ZPL";
 let textoNotaGeradoCache = "";
 let numeroPedidoCache = "";
 let impressaoEmAndamento = false;
@@ -564,14 +563,11 @@ function limparMensagemDetalhada() {
 function detalharErroImpressao(erro) {
   const msg = String(erro && (erro.message || erro) || "Erro desconhecido");
   const base = msg.toLowerCase();
-  if (base.includes("certificate") || base.includes("certificado") || base.includes("anonymous")) {
-    return { titulo: "Certificado do QZ Tray não configurado", detalhe: msg, orientacao: "Execute CONFIGURAR_QZ_TRAY_WEB.bat uma única vez neste usuário do Windows. Depois reabra o QZ Tray e tente novamente." };
+  if (base.includes("agente") || base.includes("fila") || base.includes("tempo limite")) {
+    return { titulo: "Agente de impressão indisponível", detalhe: msg, orientacao: "Abra o Noromak Print Agent no computador ligado à Zebra. Confira também a internet e o arquivo de configuração do agente." };
   }
-  if (base.includes("qz tray") || base.includes("websocket")) {
-    return { titulo: "QZ Tray desconectado", detalhe: msg, orientacao: "Abra o QZ Tray. Se ainda aparecer uma autorização, execute CONFIGURAR_QZ_TRAY_WEB.bat uma única vez neste usuário do Windows." };
-  }
-  if (base.includes("impressora") || base.includes("printer")) {
-    return { titulo: "Impressora não localizada", detalhe: msg, orientacao: "Confira se a impressora ZDesigner está instalada com o mesmo nome configurado no computador." };
+  if (base.includes("impressora") || base.includes("printer") || base.includes("spool")) {
+    return { titulo: "Impressora Zebra não localizada", detalhe: msg, orientacao: "Confira se a ZDesigner está instalada e se o nome da impressora no agente está correto." };
   }
   if (base.includes("danfe")) {
     return { titulo: "Dados da etiqueta indisponíveis", detalhe: msg, orientacao: "Republique o arquivo do Mercado Livre no painel administrativo e confirme se ele contém a etiqueta de envio." };
@@ -579,7 +575,7 @@ function detalharErroImpressao(erro) {
   if (base.includes("marketplace")) {
     return { titulo: "Marketplace não reconhecido", detalhe: msg, orientacao: "Confira o formato do pedido e o marketplace reconhecido no servidor Web." };
   }
-  return { titulo: "Falha ao enviar a impressão", detalhe: msg, orientacao: "Verifique o QZ Tray, a impressora e o papel. O pedido permaneceu salvo e pode ser impresso novamente." };
+  return { titulo: "Falha ao enviar a impressão", detalhe: msg, orientacao: "Verifique o Noromak Print Agent, a impressora e o papel. O pedido permaneceu salvo e pode ser impresso novamente." };
 }
 
 window.addEventListener("beforeunload", () => {
@@ -634,7 +630,7 @@ window.onload = function() {
     document.getElementById("inputNomeImpressora").value = nomeImpressoraConfigurada;
   }
 
-  atualizarBadgeQz(false, "QZ Tray conecta somente ao imprimir");
+  atualizarBadgeAgente(false, "Agente Zebra conecta ao imprimir");
 
   const sessaoSalva = appStorage.getItem("conf_sessao_ativa");
   if (sessaoSalva) {
@@ -672,108 +668,101 @@ window.onload = function() {
   });
 };
 
-let qzConexaoPromise = null;
-let qzSegurancaConfigurada = false;
+const PRINT_API = "/expedicao/api/print/jobs";
 
-function configurarSegurancaQz() {
-  if (qzSegurancaConfigurada) return true;
-  if (typeof qz === "undefined" || !qz.security) return false;
-
-  qz.security.setCertificatePromise(function(resolve, reject) {
-    fetch("/expedicao/api/qz/certificate", { cache: "no-store" })
-      .then(function(resp) {
-        if (!resp.ok) throw new Error("Certificado QZ indisponível: HTTP " + resp.status);
-        return resp.text();
-      })
-      .then(resolve)
-      .catch(reject);
-  });
-
-  qz.security.setSignatureAlgorithm("SHA512");
-  qz.security.setSignaturePromise(function(toSign) {
-    return function(resolve, reject) {
-      fetch("/expedicao/api/qz/sign", {
-        method: "POST",
-        cache: "no-store",
-        headers: { "Content-Type": "text/plain; charset=utf-8" },
-        body: toSign
-      })
-        .then(function(resp) {
-          if (!resp.ok) throw new Error("Falha na assinatura QZ: HTTP " + resp.status);
-          return resp.text();
-        })
-        .then(resolve)
-        .catch(reject);
-    };
-  });
-
-  qzSegurancaConfigurada = true;
-  return true;
-}
-
-function atualizarBadgeQz(conectado, texto) {
-  const badge = document.getElementById("qzStatusBadge");
+function atualizarBadgeAgente(conectado, texto) {
+  const badge = document.getElementById("printAgentStatusBadge");
   if (!badge) return;
-  badge.className = conectado ? "qz-status qz-conectado" : "qz-status qz-desconectado";
-  badge.innerText = texto || (conectado ? "QZ Tray Conectado" : "QZ Tray Desconectado");
+  badge.className = conectado ? "print-agent-status print-agent-conectado" : "print-agent-status print-agent-desconectado";
+  badge.innerText = texto || (conectado ? "Agente Zebra conectado" : "Agente Zebra aguardando");
 }
 
-async function conectarQzTray() {
-  configurarSegurancaQz();
-  if (typeof qz === "undefined" || !qz.websocket) {
-    atualizarBadgeQz(false, "Biblioteca QZ indisponível");
-    throw new Error("A biblioteca do QZ Tray não foi carregada. Verifique a conexão com a internet e reabra o sistema.");
+async function requisicaoJsonImpressao(url, opcoes = {}) {
+  const resposta = await fetch(url, {
+    cache: "no-store",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json; charset=utf-8", ...(opcoes.headers || {}) },
+    ...opcoes
+  });
+  let dados = {};
+  try { dados = await resposta.json(); } catch (_) {}
+  if (!resposta.ok) throw new Error(dados.error || `Falha HTTP ${resposta.status} na impressão.`);
+  return dados;
+}
+
+function esperar(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
+async function aguardarTrabalhoImpressao(jobId, tempoLimiteMs = 45000) {
+  const inicio = Date.now();
+  let ultimoStatus = "pending";
+  while (Date.now() - inicio < tempoLimiteMs) {
+    const resposta = await requisicaoJsonImpressao(`${PRINT_API}?id=${encodeURIComponent(jobId)}`, { method: "GET", headers: {} });
+    const job = resposta.job || {};
+    ultimoStatus = job.status || ultimoStatus;
+    if (job.status === "printed") {
+      atualizarBadgeAgente(true, "Agente Zebra conectado");
+      return job;
+    }
+    if (job.status === "failed" || job.status === "cancelled") {
+      atualizarBadgeAgente(false, "Falha no agente Zebra");
+      throw new Error(job.error || "O agente não conseguiu imprimir.");
+    }
+    if (job.status === "leased") atualizarBadgeAgente(true, "Imprimindo na Zebra...");
+    else atualizarBadgeAgente(false, "Aguardando agente Zebra...");
+    await esperar(500);
   }
+  throw new Error(`Tempo limite aguardando o agente de impressão. Status atual: ${ultimoStatus}.`);
+}
 
-  if (qz.websocket.isActive()) {
-    atualizarBadgeQz(true, "QZ Tray Conectado");
-    return true;
+async function enviarImpressaoParaAgente(documentos, opcoes = {}) {
+  if (!Array.isArray(documentos) || !documentos.length) throw new Error("Nenhum documento foi informado para impressão.");
+  const impressoraAlvo = String(opcoes.printerName || nomeImpressoraConfigurada || "").trim();
+  atualizarBadgeAgente(false, "Enviando para a fila...");
+  const resposta = await requisicaoJsonImpressao(PRINT_API, {
+    method: "POST",
+    body: JSON.stringify({
+      order_id: String(opcoes.orderId || ""),
+      kind: String(opcoes.kind || "initial"),
+      printer_name: impressoraAlvo,
+      documents: documentos
+    })
+  });
+  const job = resposta.job || {};
+  if (!job.id) throw new Error("O servidor não retornou o identificador da impressão.");
+  if (job.status === "printed") {
+    atualizarBadgeAgente(true, "Agente Zebra conectado");
+    return job;
   }
-
-  // Reaproveita a mesma tentativa enquanto a janela de autorização estiver aberta.
-  // Isso evita que a conclusão do pedido falhe antes de o operador clicar em Allow.
-  if (qzConexaoPromise) return qzConexaoPromise;
-
-  atualizarBadgeQz(false, "Conectando ao QZ Tray...");
-  qzConexaoPromise = qz.websocket.connect()
-    .then(() => {
-      atualizarBadgeQz(true, "QZ Tray Conectado");
-      return true;
-    })
-    .catch(err => {
-      atualizarBadgeQz(false, "QZ Tray Desconectado");
-      throw err;
-    })
-    .finally(() => {
-      qzConexaoPromise = null;
-    });
-
-  return qzConexaoPromise;
+  return await aguardarTrabalhoImpressao(job.id, Number(opcoes.timeoutMs || 45000));
 }
 
 function salvarNomeImpressora(input) {
   nomeImpressoraConfigurada = input.value.trim();
-  appStorage.setItem("conf_impressora_qz", nomeImpressoraConfigurada);
+  appStorage.setItem("conf_impressora_zebra", nomeImpressoraConfigurada);
   let msg = document.getElementById("msgAdmin");
-  msg.style.color = "green";
-  msg.innerText = "Impressora salva com sucesso!";
+  if (msg) {
+    msg.style.color = "green";
+    msg.innerText = "Impressora salva com sucesso!";
+  }
 }
 
 async function testarImpressaoRede() {
-  const impressoraAlvo = document.getElementById("inputNomeImpressora").value.trim() || nomeImpressoraConfigurada;
+  const campo = document.getElementById("inputNomeImpressora");
+  const impressoraAlvo = (campo ? campo.value.trim() : "") || nomeImpressoraConfigurada;
   if (!impressoraAlvo) {
     alert("Informe e salve o nome da impressora antes do teste.");
     return;
   }
-
   try {
-    await conectarQzTray();
-    const config = await obterConfiguracaoImpressora();
-    const data = ["^XA^FO50,50^A0N,30,30^FDTESTE DE IMPRESSAO OK^FS^XZ"];
-    await qz.print(config, data);
+    await enviarImpressaoParaAgente(["^XA^FO50,50^A0N,30,30^FDTESTE DE IMPRESSAO NOROMAK OK^FS^XZ"], {
+      orderId: "TESTE",
+      kind: "test",
+      printerName: impressoraAlvo,
+      timeoutMs: 30000
+    });
     alert("✅ Impressão de teste enviada com sucesso para: " + impressoraAlvo);
   } catch (err) {
-    alert("❌ Não foi possível concluir a impressão de teste.\n\nExecute CONFIGURAR_QZ_TRAY_WEB.bat uma única vez neste usuário do Windows e reabra o QZ Tray.\n\nDetalhes: " + (err && (err.message || err)));
+    alert("❌ Não foi possível concluir a impressão de teste.\n\nAbra o Noromak Print Agent no computador conectado à Zebra.\n\nDetalhes: " + (err && (err.message || err)));
   }
 }
 
@@ -1914,44 +1903,13 @@ function baixarArquivoTxtNota() {
   link.click();
 }
 
-// ---- IMPRESSÃO AUTOMÁTICA POR MARKETPLACE VIA QZ TRAY ----
-async function obterConfiguracaoImpressora() {
-  if (!qz.websocket.isActive()) {
-    const status = document.getElementById("statusMsg");
-    if (status) {
-      status.innerHTML = "🔐 Conectando à impressora...";
-      status.style.color = "#9a6700";
-    }
-    // Aguarda o clique em Allow e continua a mesma conclusão, sem obrigar o operador a tentar novamente.
-    await conectarQzTray();
-  }
-
-  if (!qz.websocket.isActive()) {
-    throw new Error("A conexão com o QZ Tray não foi autorizada.");
-  }
-
-  const campo = document.getElementById("inputNomeImpressora");
-  const impressoraAlvo = (campo ? campo.value.trim() : "") || nomeImpressoraConfigurada;
-  if (!impressoraAlvo) throw new Error("Nenhuma impressora foi configurada.");
-
-  try {
-    const encontrada = await qz.printers.find(impressoraAlvo);
-    return qz.configs.create(encontrada);
-  } catch (_) {
-    return qz.configs.create(impressoraAlvo);
-  }
-}
-
+// ---- IMPRESSÃO AUTOMÁTICA POR MARKETPLACE VIA Agente Zebra TRAY ----
 async function imprimirPedidoMarketplace(resultadoEtiqueta) {
   const registro = resultadoEtiqueta.registro;
   const marketplace = resultadoEtiqueta.marketplace;
-  const config = await obterConfiguracaoImpressora();
   let data = [];
 
   if (marketplace === "mercado_livre") {
-    // Imprime somente uma etiqueta 10x15. Os dados do cliente já existentes
-    // são preservados e o sistema inclui SKU/código, descrição e quantidade
-    // na área livre entre o código de barras e a roteirização.
     const envioComDados = incluirDadosPedidoNaEtiquetaEnvio(registro.envio);
     if (!envioComDados) throw new Error("A etiqueta de envio do Mercado Livre não está disponível.");
     textoNotaGeradoCache = "";
@@ -1962,8 +1920,14 @@ async function imprimirPedidoMarketplace(resultadoEtiqueta) {
     throw new Error("Marketplace não reconhecido para impressão automática.");
   }
 
-  await qz.print(config, data);
-  console.log(`${nomeMarketplace(marketplace)}: ${data.length} impressão(ões) enviada(s) com sucesso.`);
+  const pedido = pedidoAtual && pedidoAtual.length ? extrairCampo(pedidoAtual[0], "Pedido") : "";
+  await enviarImpressaoParaAgente(data, {
+    orderId: pedido,
+    kind: "initial",
+    printerName: nomeImpressoraConfigurada,
+    timeoutMs: 45000
+  });
+  console.log(`${nomeMarketplace(marketplace)}: ${data.length} impressão(ões) enviada(s) com sucesso pelo agente Zebra.`);
   return { quantidade: data.length, dados: data.slice() };
 }
 
@@ -2131,8 +2095,12 @@ async function confirmarReimpressao() {
   botao.textContent = "ENVIANDO...";
 
   try {
-    const config = await obterConfiguracaoImpressora();
-    await qz.print(config, log.dadosImpressao);
+    await enviarImpressaoParaAgente(log.dadosImpressao, {
+      orderId: log.pedido,
+      kind: "reprint",
+      printerName: nomeImpressoraConfigurada,
+      timeoutMs: 45000
+    });
     const agora = new Date();
     if (!Array.isArray(log.reimpressoes)) log.reimpressoes = [];
     log.reimpressoes.push({

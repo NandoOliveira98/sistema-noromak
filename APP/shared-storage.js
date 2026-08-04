@@ -9,6 +9,7 @@
     "conf_admin_logado",
     "conf_sessao_ativa",
     "conf_impressora_qz",
+    "conf_impressora_zebra",
     "conf_ultimo_pedido_em_andamento",
     "conf_atalhos_visiveis",
     "conf_filtro_marketplace_pedidos",

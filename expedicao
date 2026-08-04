@@ -15,6 +15,5 @@ export EXP_HOST="${EXP_HOST:-127.0.0.1}"
 export EXP_PORT="${EXP_PORT:-8100}"
 export EXP_DB_PATH="${EXP_DB_PATH:-/home/expedicao/dados/expedicao.db}"
 export EXP_BACKUP_DIR="${EXP_BACKUP_DIR:-/home/expedicao/backups}"
-export QZ_PRIVATE_KEY_PATH="${QZ_PRIVATE_KEY_PATH:-/home/expedicao/qz/qz-private-key.pem}"
 
 exec python3 "$(pwd)/servidor_web.py"

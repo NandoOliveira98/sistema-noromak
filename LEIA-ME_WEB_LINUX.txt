@@ -1,103 +1,38 @@
-SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 7.5
+SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 8.0
 ================================================
 
-NOVIDADE PRINCIPAL — LOGIN DOS USUÁRIOS DO ESTOQUE
---------------------------------------------------
-O NoromakWeb continua protegendo o endereço https://noromakweb.com.br/expedicao,
-mas a Expedição agora possui um segundo login, próprio do estoque.
+Esta versão roda no servidor Linux em 127.0.0.1:8100, no caminho /expedicao.
+A infraestrutura systemd/nginx já é administrada pelo responsável do servidor.
 
-- /expedicao sempre mostra usuário e senha do estoque quando não existe sessão interna.
-- /expedicao/admin também mostra login e aceita somente perfil Admin.
-- /expedicao/conferencia aceita Admin ou Operador.
-- A pessoa conectada no NoromakWeb não entra automaticamente como Luís.
-- Vários administradores podem ser cadastrados.
-- Cada baixa, bloqueio e ação é atribuída ao usuário do estoque que realmente entrou.
-- As senhas são gravadas no SQLite com PBKDF2-SHA256; nunca são devolvidas para a tela.
-  Na aba Usuários, uma senha já salva aparece como ********. Mantenha assim para
-  preservar a senha ou digite uma nova para alterá-la.
+PUBLICAÇÃO
+----------
+Na pasta do projeto que contém a pasta oculta .git:
 
-CONTAS INICIAIS / MIGRAÇÃO
---------------------------
-- O administrador principal compatível com a versão portátil é:
-  usuário: admin
-  senha inicial: 01101998
-- O usuário definido em EXP_ADMIN_USUARIO (normalmente luis) também é migrado
-  como Admin, com a senha inicial definida em EXP_ADMIN_SENHA.
-- Usuários já existentes na versão portátil são importados com suas senhas.
-- Perfis que existiam apenas na versão Web 7.3 recebem senha inicial:
-  Admin: valor de EXP_ADMIN_SENHA (padrão 01101998)
-  Operador: valor de EXP_USUARIO_SENHA_INICIAL (padrão 123)
+git add -A
+git commit -m "versao 8.0 com agente de impressao Zebra"
+./publicar.sh
 
-Após entrar como Admin, abra a aba Usuários, cadastre os demais administradores e
-operadores e troque as senhas iniciais.
+Não execute instalar_servidor_uma_vez.sh e não altere /etc/systemd.
 
-INFRAESTRUTURA
---------------
-- Servidor em 127.0.0.1:8100.
-- Prefixo obrigatório /expedicao.
-- Banco permanente em /home/expedicao/dados/expedicao.db.
-- Backups em /home/expedicao/backups.
-- QZ em /home/expedicao/qz.
-- O nginx continua exigindo a sessão do NoromakWeb antes de permitir acesso ao endereço.
-- Não execute instalar_servidor_uma_vez.sh quando o Guilherme já tiver preparado a infraestrutura.
-- Não altere /etc/systemd.
+IMPRESSÃO ZEBRA SEM QZ TRAY
+---------------------------
+A impressão é realizada pelo Noromak Print Agent instalado no computador ligado à Zebra.
+O navegador envia o ZPL ao servidor. O agente busca o trabalho por HTTPS e o entrega diretamente
+à fila RAW da impressora do Windows.
 
-ARQUIVOS PRINCIPAIS
--------------------
-servidor_web.py              Servidor Web/Linux e autenticação interna.
-expedicao                    Inicializador usado pelo systemd.
-APP/acesso.html              Login inicial e seleção da área.
-APP/admin.html               Painel administrativo.
-APP/conferencia.html         Tela dos conferentes.
-APP/shared-storage.js        Comunicação com o SQLite pela API.
-APP/web-auth.js              Login, logout e sessão dos usuários do estoque.
-publicar.sh                  Push, restart e teste real da porta 8100.
-MIGRACAO_INICIAL/            Dados importados somente quando necessário.
+Instalação no computador da Zebra:
+1. Entre no sistema como Admin.
+2. Abra a aba "Agente Zebra".
+3. Copie o token e baixe o programa completo.
+4. Extraia o ZIP e execute CONFIGURAR_AGENTE_IMPRESSAO.bat.
+5. Informe o token e o nome exato da impressora instalada.
+6. Faça uma impressão de teste.
 
-PUBLICAR
---------
-Na pasta do projeto já preparada com Git:
+O agente fica em %LOCALAPPDATA%\NoromakPrintAgent e inicia com o Windows.
+Não é necessário instalar Python, QZ Tray ou certificados.
 
-  git add -A
-  git commit -m "login dos usuarios do estoque"
-  ./publicar.sh
-
-Ou execute manualmente:
-
-  git push producao master
-  ssh expedicao "sudo systemctl restart expedicao"
-
-Depois use Ctrl+F5 no navegador.
-
-QZ TRAY
--------
-Execute CONFIGURAR_QZ_TRAY_WEB.bat uma única vez em cada computador que imprime.
-Não é necessário repetir todos os dias.
-
-BACKUPS E PEDIDOS CONCLUÍDOS
-----------------------------
-- O servidor mantém os 15 backups diários mais recentes.
-- Pedidos concluídos desaparecem dos pendentes no Admin e na Conferência.
-- Uma tela antiga não consegue recolocar um pedido já concluído.
-
-DIAGNÓSTICO
------------
-  ./verificar_servidor.sh
-
-O health correto é:
-  http://127.0.0.1:8100/expedicao/api/health
-
-VERSÃO 7.6 — SENHAS DOS USUÁRIOS
-- O sistema não exibe senhas antigas: elas são armazenadas somente como hash PBKDF2-SHA256.
-- Na aba Usuários, cada linha possui o botão Alterar senha.
-- O Admin digita e confirma a nova senha e pode marcar Mostrar a nova senha enquanto digita.
-- A senha nova entra em vigor imediatamente e a anterior deixa de funcionar.
-
-VERSÃO 7.7 — TELA DE CONFERÊNCIA SIMPLIFICADA E QZ SILENCIOSO
--------------------------------------------------------------
-- O cartão de acesso ao Painel Administrador foi removido da Conferência.
-- O quadro Modo de conferência sem mouse inicia minimizado e abre apenas por clique ou F1.
-- A página não conecta ao QZ Tray ao carregar; conecta somente quando precisa imprimir.
-- CONFIGURAR_QZ_TRAY_WEB.bat foi corrigido para autorizar o certificado no perfil do
-  usuário normal do Windows, evitando a janela Allow após a configuração.
-- Execute o configurador uma única vez para cada usuário do Windows que imprime.
+DADOS PERMANENTES
+-----------------
+Banco: /home/expedicao/dados/expedicao.db
+Backups: /home/expedicao/backups
+A publicação não substitui o banco.

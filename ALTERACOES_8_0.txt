@@ -1,0 +1,26 @@
+SISTEMA DE CONFERÊNCIA WEB/LINUX 8.0
+====================================
+
+IMPRESSÃO DIRETA NA ZEBRA, SEM QZ TRAY
+- Novo Noromak Print Agent para Windows.
+- Envio de ZPL diretamente à fila RAW da impressora instalada no Windows.
+- Não usa QZ Tray, certificado QZ ou janela Allow.
+- Fila de impressão persistente no servidor SQLite.
+- Trabalho só é confirmado pelo navegador após o agente informar que enviou o ZPL à fila do Windows.
+- Proteção contra duplicidade acidental durante tentativas repetidas.
+- Reimpressão controlada também usa o agente.
+- O agente inicia automaticamente com o Windows e grava log local.
+
+PAINEL ADMINISTRATIVO
+- Nova aba Agente Zebra.
+- Exibe token de pareamento, agentes online/offline, impressora, versão, últimas falhas e fila.
+- Permite gerar novo token quando necessário.
+- Disponibiliza o ZIP do agente para download.
+
+INSTALAÇÃO DO AGENTE
+1. Publique a versão 8.0 no servidor.
+2. No Admin, abra Agente Zebra e copie o token.
+3. Baixe AGENTE_IMPRESSAO_ZEBRA_V1_0.zip.
+4. Extraia e execute CONFIGURAR_AGENTE_IMPRESSAO.bat no computador da Zebra.
+5. Informe o token e o nome exato da impressora.
+6. Faça o teste de impressão pela tela de conferência.
