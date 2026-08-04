@@ -1,0 +1,8 @@
+VERSÃO 7.6 — ADMINISTRAÇÃO SEGURA DE SENHAS
+
+- Senhas existentes continuam protegidas por PBKDF2-SHA256 e não podem ser recuperadas em texto aberto.
+- A coluna de senha passa a mostrar "Senha protegida" em vez de asteriscos editáveis.
+- Cada usuário possui o botão "Alterar senha".
+- O administrador digita e confirma uma nova senha, podendo exibi-la enquanto digita.
+- A alteração é enviada diretamente à API autenticada e entra em vigor imediatamente.
+- Nome, login e perfil continuam editáveis pelo botão Salvar alterações.

@@ -23,3 +23,12 @@ TESTES 7.5
 - API /expedicao/api/auth/session com cookie: authenticated=true
 - Ponte ativarSessaoWebConferencia criada para atualizar a variável interna usuarioLogado antes de iniciarSessao.
 - Proteção adicional contra usuarioLogado nulo adicionada.
+
+VERSÃO 7.6
+- servidor_web.py compilado com sucesso.
+- /expedicao/api/health respondeu marker noromak_expedicao_web e versão 7.6.
+- Login de Administrador validado.
+- Redefinição de senha pelo endpoint autenticado /expedicao/api/roles validada.
+- Login de Operador com a nova senha validado.
+- conf_usuarios continua retornando apenas ********, sem expor a senha.
+- JavaScript do módulo de redefinição validado com node --check.

@@ -86,3 +86,9 @@ DIAGNÓSTICO
 
 O health correto é:
   http://127.0.0.1:8100/expedicao/api/health
+
+VERSÃO 7.6 — SENHAS DOS USUÁRIOS
+- O sistema não exibe senhas antigas: elas são armazenadas somente como hash PBKDF2-SHA256.
+- Na aba Usuários, cada linha possui o botão Alterar senha.
+- O Admin digita e confirma a nova senha e pode marcar Mostrar a nova senha enquanto digita.
+- A senha nova entra em vigor imediatamente e a anterior deixa de funcionar.

@@ -473,7 +473,7 @@
     <div class="logo-box">
       <img src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 450 120'><text x='20' y='80' font-size='60' font-family='Arial, sans-serif' font-weight='bold' fill='%232B4E75'>NOROMAK</text></svg>" alt="Noromak">
     </div>
-    <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 7.4 — login próprio dos usuários do estoque</div>
+    <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 7.6 — redefinição segura de senhas</div>
     <div style="font-size:12px;color:#667;margin:-8px 0 14px;line-height:1.4;">Use o administrador principal ou qualquer usuário cadastrado com perfil <b>Admin</b>.</div>
     <input type="text" id="usuarioAdmin" placeholder="Usuário Admin">
     <input type="password" id="senhaAdmin" placeholder="Senha">
@@ -556,11 +556,11 @@
 
   <section id="aba-usuarios" class="aba-painel">
     <div class="card-admin">
-      <h2>Usuários e aprovações <span class="usuario-versao">Versão 7.4 — login individual do estoque</span></h2>
-      <div class="aviso-banco"><b>Login próprio do estoque:</b> cada pessoa deve ter usuário, senha e perfil individual. Senhas já salvas aparecem como <b>********</b>; mantenha assim para não alterar ou digite uma nova senha para trocar.</div>
+      <h2>Usuários e aprovações <span class="usuario-versao">Versão 7.6 — senhas protegidas e redefinição pelo Admin</span></h2>
+      <div class="aviso-banco"><b>Login próprio do estoque:</b> cada pessoa deve ter usuário, senha e perfil individual. Por segurança, a senha atual <b>não pode ser visualizada</b>, pois fica armazenada de forma criptográfica. Para trocar, use o botão <b>Alterar senha</b>; o Admin poderá visualizar somente a nova senha enquanto a digita.</div>
       <div class="toolbar-grid"><button type="button" id="btnNovoUsuarioAdmin" class="btn-primario" onclick="abrirSolicitacaoUsuario('admin')">＋ Solicitar novo usuário</button><button type="button" class="btn-sucesso" onclick="salvarUsuariosAdmin(true)">💾 Salvar alterações</button></div>
       <div id="contadorUsuariosAdmin" class="usuario-contador"></div>
-      <div class="excel-wrap" id="tabelaUsuariosAdminWrap" style="max-height:50vh;"><table class="excel-grid" style="min-width:800px;"><thead><tr><th>Ação</th><th>Nome</th><th>Login</th><th>Senha</th><th>Perfil</th></tr></thead><tbody id="corpoUsuariosAdmin"></tbody></table></div>
+      <div class="excel-wrap" id="tabelaUsuariosAdminWrap" style="max-height:50vh;"><table class="excel-grid" style="min-width:800px;"><thead><tr><th>Ação</th><th>Nome</th><th>Login</th><th>Senha / acesso</th><th>Perfil</th></tr></thead><tbody id="corpoUsuariosAdmin"></tbody></table></div>
     </div>
   </section>
 
@@ -607,6 +607,31 @@
     <div class="usuario-modal-acoes">
       <button type="button" class="btn-secundario" onclick="fecharModalNovoUsuarioAdmin()">Cancelar</button>
       <button type="button" class="btn-sucesso" id="btnConfirmarNovoUsuario" onclick="confirmarNovoUsuarioAdmin()">Salvar usuário</button>
+    </div>
+  </div>
+</div>
+
+
+<div id="modalAlterarSenhaAdmin" class="usuario-modal-overlay" role="dialog" aria-modal="true" aria-labelledby="tituloModalAlterarSenha">
+  <div class="usuario-modal-card">
+    <div class="usuario-modal-topo">
+      <h3 id="tituloModalAlterarSenha">Alterar senha do usuário</h3>
+    </div>
+    <div class="usuario-modal-corpo">
+      <div class="senha-usuario-identidade">
+        <span>Usuário</span>
+        <strong id="alterarSenhaUsuarioNome">—</strong>
+        <small id="alterarSenhaUsuarioLogin">—</small>
+      </div>
+      <div class="field"><label>Nova senha</label><input id="alterarSenhaNova" type="password" autocomplete="new-password" placeholder="Digite a nova senha"></div>
+      <div class="field"><label>Confirmar nova senha</label><input id="alterarSenhaConfirmacao" type="password" autocomplete="new-password" placeholder="Digite novamente"></div>
+      <label class="senha-mostrar-linha"><input id="mostrarNovaSenhaAdmin" type="checkbox" onchange="alternarVisibilidadeNovaSenhaAdmin()"> Mostrar a nova senha</label>
+      <div class="senha-regra">A senha deve ter pelo menos 4 caracteres. A senha anterior não será exibida.</div>
+      <div id="erroAlterarSenhaAdmin" class="usuario-modal-erro"></div>
+    </div>
+    <div class="usuario-modal-acoes">
+      <button type="button" class="btn-secundario" onclick="fecharModalAlterarSenhaAdmin()">Cancelar</button>
+      <button type="button" class="btn-sucesso" id="btnSalvarNovaSenhaAdmin" onclick="salvarNovaSenhaAdmin()">Salvar nova senha</button>
     </div>
   </div>
 </div>
@@ -3305,6 +3330,133 @@ document.addEventListener("DOMContentLoaded",()=>{
   if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",prepararTela);else prepararTela();
   window.addEventListener("storage",e=>{if(!e.key||e.key===CHAVE_SOLICITACOES_USUARIOS||e.key==="conf_usuarios")setTimeout(renderizarSolicitacoesAdmin,50);});
   document.addEventListener("keydown",e=>{if(document.getElementById("modalSolicitacaoUsuario")?.classList.contains("ativo")&&e.key==="Escape"){e.preventDefault();fecharSolicitacaoUsuario();}});
+})();
+</script>
+
+
+<style>
+.senha-acesso-celula{display:flex;align-items:center;gap:10px;min-width:255px}.senha-protegida-status{display:flex;flex-direction:column;line-height:1.2;min-width:105px}.senha-protegida-status strong{font-size:12px;color:#2b4e75}.senha-protegida-status small{font-size:10px;color:#718096}.btn-alterar-senha{border:0;border-radius:6px;background:#f7941d;color:white;font-weight:800;padding:8px 12px;cursor:pointer;white-space:nowrap}.btn-alterar-senha:hover{filter:brightness(.95)}.senha-usuario-identidade{background:#edf5fc;border:1px solid #bdd0e2;border-radius:8px;padding:10px 12px;margin-bottom:12px;display:flex;flex-direction:column}.senha-usuario-identidade span{font-size:10px;text-transform:uppercase;color:#6b7b89;font-weight:800}.senha-usuario-identidade strong{font-size:15px;color:#244d76}.senha-usuario-identidade small{color:#617487}.senha-mostrar-linha{display:flex;align-items:center;gap:8px;font-weight:700;color:#526475}.senha-mostrar-linha input{width:auto}.senha-regra{margin-top:10px;padding:9px 10px;background:#fff8e8;border-left:3px solid #f7941d;color:#5f5140;font-size:11px}.senha-salva-flash{animation:senhaFlash 1.2s ease}@keyframes senhaFlash{0%{background:#dff5e3}100%{background:transparent}}
+</style>
+<script>
+/* ADMINISTRAÇÃO SEGURA DE SENHAS — VERSÃO 7.6 */
+(function(){
+  "use strict";
+  const BASE = location.pathname.startsWith("/expedicao") ? "/expedicao" : "";
+  const MASK = "********";
+  const txt = v => String(v == null ? "" : v).trim();
+  const esc = v => String(v == null ? "" : v).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));
+  let usuarioSenhaUid = "";
+
+  function listaUsuarios(){
+    return typeof usuariosEditorAdmin !== "undefined" && Array.isArray(usuariosEditorAdmin) ? usuariosEditorAdmin : [];
+  }
+  function usuarioPorUid(uid){ return listaUsuarios().find(u => String(u.__uidUsuario) === String(uid)); }
+  function perfilNormalizado(v){ return txt(v).toLowerCase().includes("admin") ? "Admin" : "Operador"; }
+
+  window.renderizarUsuariosAdmin = function(){
+    const corpo=document.getElementById("corpoUsuariosAdmin");
+    if(!corpo)return;
+    const usuarios=listaUsuarios();
+    corpo.innerHTML=usuarios.map(u=>{
+      u.__uidUsuario=u.__uidUsuario||("USR-"+Date.now().toString(36)+Math.random().toString(36).slice(2,7));
+      const uid=esc(u.__uidUsuario);
+      const input=(campo)=>`<input type="text" data-uidusuario="${uid}" data-campo="${campo}" value="${esc(u[campo]||"")}" oninput="atualizarCampoUsuarioAdmin(this)">`;
+      return `<tr data-linha-usuario="${uid}">
+        <td><div class="linha-acoes"><button style="background:#ffebee;color:#c62828" onclick="excluirUsuarioAdmin('${uid}')" title="Excluir usuário">🗑</button></div></td>
+        <td>${input("Nome")}</td>
+        <td>${input("Login")}</td>
+        <td><div class="senha-acesso-celula"><div class="senha-protegida-status"><strong>🔒 Senha protegida</strong><small>Não é possível visualizar a atual</small></div><button type="button" class="btn-alterar-senha" onclick="abrirModalAlterarSenhaAdmin('${uid}')">Alterar senha</button></div></td>
+        <td><select data-uidusuario="${uid}" data-campo="Perfil" onchange="atualizarCampoUsuarioAdmin(this)"><option ${perfilNormalizado(u.Perfil)==="Admin"?"selected":""}>Admin</option><option ${perfilNormalizado(u.Perfil)==="Operador"?"selected":""}>Operador</option></select></td>
+      </tr>`;
+    }).join("")||'<tr><td colspan="5" style="padding:20px;text-align:center;">Nenhum usuário cadastrado.</td></tr>';
+    const contador=document.getElementById("contadorUsuariosAdmin");
+    if(contador)contador.textContent=usuarios.length+(usuarios.length===1?" usuário cadastrado":" usuários cadastrados")+" no servidor Web.";
+  };
+
+  window.atualizarCampoUsuarioAdmin = function(el){
+    const u=usuarioPorUid(el.dataset.uidusuario); if(!u)return;
+    u[el.dataset.campo]=el.value;
+    if(typeof setStatusBanco==="function")setStatusBanco("Alterações pendentes — clique em Salvar alterações","salvando");
+  };
+
+  window.salvarUsuariosAdmin = function(mostrar=false){
+    try{
+      const preparados=listaUsuarios().map(u=>({
+        ...u,
+        Nome:txt(u.Nome), Login:txt(u.Login), Senha:txt(u.Senha)||MASK,
+        Perfil:perfilNormalizado(u.Perfil), Ativo:u.Ativo!==false, Aprovado:u.Aprovado!==false
+      })).filter(u=>u.Login||u.Nome);
+      const incompleto=preparados.find(u=>!u.Login||!u.Nome);
+      if(incompleto)throw new Error("Preencha o nome e o login de todos os usuários.");
+      const vistos=new Set();
+      for(const u of preparados){const k=u.Login.toLowerCase();if(/\s/.test(k))throw new Error("O login '"+u.Login+"' não pode conter espaços.");if(vistos.has(k))throw new Error("O login '"+u.Login+"' está duplicado.");vistos.add(k);}
+      const consolidado=appStorage.setItem("conf_usuarios",JSON.stringify(preparados));
+      usuariosEditorAdmin=JSON.parse(consolidado||"[]");
+      if(typeof usuariosCadastrados!=="undefined")usuariosCadastrados=usuariosEditorAdmin;
+      appStorage.setItem("conf_banco_atualizado_em",new Date().toISOString());
+      renderizarUsuariosAdmin();
+      if(typeof setStatusBanco==="function")setStatusBanco("● Alterações de usuários salvas","ok");
+      if(mostrar)alert("Alterações salvas. Para trocar uma senha, use o botão Alterar senha na linha do usuário.");
+      return true;
+    }catch(e){
+      if(typeof setStatusBanco==="function")setStatusBanco("Erro ao salvar usuários","erro");
+      if(mostrar)alert("Não foi possível salvar os usuários: "+(e.message||e));
+      return false;
+    }
+  };
+
+  window.abrirModalAlterarSenhaAdmin = function(uid){
+    const u=usuarioPorUid(uid); if(!u){alert("Usuário não encontrado.");return;}
+    usuarioSenhaUid=uid;
+    document.getElementById("alterarSenhaUsuarioNome").textContent=txt(u.Nome)||txt(u.Login);
+    document.getElementById("alterarSenhaUsuarioLogin").textContent="Login: "+txt(u.Login);
+    for(const id of ["alterarSenhaNova","alterarSenhaConfirmacao"]){const el=document.getElementById(id);if(el){el.value="";el.type="password";}}
+    const mostrar=document.getElementById("mostrarNovaSenhaAdmin");if(mostrar)mostrar.checked=false;
+    const erro=document.getElementById("erroAlterarSenhaAdmin");if(erro)erro.textContent="";
+    document.getElementById("modalAlterarSenhaAdmin")?.classList.add("ativo");
+    setTimeout(()=>document.getElementById("alterarSenhaNova")?.focus(),50);
+  };
+  window.fecharModalAlterarSenhaAdmin = function(){
+    usuarioSenhaUid="";
+    document.getElementById("modalAlterarSenhaAdmin")?.classList.remove("ativo");
+  };
+  window.alternarVisibilidadeNovaSenhaAdmin = function(){
+    const tipo=document.getElementById("mostrarNovaSenhaAdmin")?.checked?"text":"password";
+    for(const id of ["alterarSenhaNova","alterarSenhaConfirmacao"]){const el=document.getElementById(id);if(el)el.type=tipo;}
+  };
+  window.salvarNovaSenhaAdmin = async function(){
+    const u=usuarioPorUid(usuarioSenhaUid);
+    const nova=String(document.getElementById("alterarSenhaNova")?.value||"");
+    const confirmacao=String(document.getElementById("alterarSenhaConfirmacao")?.value||"");
+    const erro=document.getElementById("erroAlterarSenhaAdmin");
+    const botao=document.getElementById("btnSalvarNovaSenhaAdmin");
+    if(erro)erro.textContent="";
+    if(!u){if(erro)erro.textContent="Usuário não encontrado.";return;}
+    if(nova.length<4){if(erro)erro.textContent="A nova senha deve ter pelo menos 4 caracteres.";return;}
+    if(nova!==confirmacao){if(erro)erro.textContent="As duas senhas não conferem.";return;}
+    const antigo=botao?.textContent;
+    try{
+      if(botao){botao.disabled=true;botao.textContent="SALVANDO...";}
+      const resposta=await fetch(BASE+"/api/roles",{method:"POST",credentials:"same-origin",cache:"no-store",headers:{"Accept":"application/json","Content-Type":"application/json; charset=utf-8"},body:JSON.stringify({username:txt(u.Login).toLowerCase(),display_name:txt(u.Nome)||txt(u.Login),role:perfilNormalizado(u.Perfil).toLowerCase(),active:u.Ativo!==false,password:nova})});
+      let dados={};try{dados=await resposta.json();}catch(_){ }
+      if(!resposta.ok)throw new Error(dados.error||("HTTP "+resposta.status));
+      const atual=appStorage.getItem("conf_usuarios");
+      usuariosEditorAdmin=JSON.parse(atual||"[]");
+      if(typeof usuariosCadastrados!=="undefined")usuariosCadastrados=usuariosEditorAdmin;
+      renderizarUsuariosAdmin();
+      fecharModalAlterarSenhaAdmin();
+      if(typeof setStatusBanco==="function")setStatusBanco("● Senha de "+txt(u.Login)+" alterada com sucesso","ok");
+      const linha=document.querySelector('[data-linha-usuario="'+CSS.escape(String(u.__uidUsuario))+'"]');if(linha)linha.classList.add("senha-salva-flash");
+      alert("A senha do usuário '"+txt(u.Login)+"' foi alterada. A senha anterior deixou de funcionar imediatamente.");
+    }catch(e){if(erro)erro.textContent="Não foi possível alterar a senha: "+(e.message||e);}
+    finally{if(botao){botao.disabled=false;botao.textContent=antigo||"Salvar nova senha";}}
+  };
+
+  document.addEventListener("keydown",ev=>{
+    if(!document.getElementById("modalAlterarSenhaAdmin")?.classList.contains("ativo"))return;
+    if(ev.key==="Escape"){ev.preventDefault();fecharModalAlterarSenhaAdmin();}
+    if(ev.key==="Enter"){ev.preventDefault();salvarNovaSenhaAdmin();}
+  });
 })();
 </script>
 
