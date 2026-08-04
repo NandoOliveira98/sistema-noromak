@@ -2,7 +2,7 @@
 """Sistema de Conferência Noromak — edição Web/Linux 7.1.
 
 Sem dependências externas: usa apenas a biblioteca padrão do Python.
-- Escuta em 127.1.0.1:8100.
+- Escuta em 127.0.0.1:8100.
 - Considera o prefixo /expedicao (o nginx não remove o prefixo).
 - Usa a sessão existente do NoromakWeb via /api/v1/auth/me.
 - Persiste em SQLite fora da pasta do código.
@@ -32,13 +32,13 @@ from urllib.parse import parse_qs, unquote, urlparse
 APP_VERSION = "7.1"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
-HOST = os.getenv("EXP_HOST", "127.1.0.1")
+HOST = os.getenv("EXP_HOST", "127.0.0.1")
 PORT = int(os.getenv("EXP_PORT", "8100"))
 ROOT_DIR = Path(__file__).resolve().parent
 APP_DIR = ROOT_DIR / "APP"
 DB_PATH = Path(os.getenv("EXP_DB_PATH", "/home/expedicao/dados/expedicao.db"))
 BACKUP_DIR = Path(os.getenv("EXP_BACKUP_DIR", "/home/expedicao/backups"))
-AUTH_ME_URL = os.getenv("EXP_AUTH_ME_URL", "http://127.1.0.1:8000/api/v1/auth/me")
+AUTH_ME_URL = os.getenv("EXP_AUTH_ME_URL", "http://127.0.0.1:8000/api/v1/auth/me")
 ADMIN_USERNAME = os.getenv("EXP_ADMIN_USUARIO", "luis").strip().lower()
 QZ_CERT_PATH = Path(os.getenv("QZ_CERT_PATH", str(ROOT_DIR / "QZ_CERTIFICADO_WEB" / "digital-certificate.txt")))
 QZ_PRIVATE_KEY_PATH = Path(os.getenv("QZ_PRIVATE_KEY_PATH", "/home/expedicao/qz/qz-private-key.pem"))
