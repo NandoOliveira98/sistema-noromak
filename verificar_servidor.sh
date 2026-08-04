@@ -16,4 +16,4 @@ ssh expedicao "sudo -n journalctl -u expedicao -n 80 --no-pager" || \
 
 echo
 echo "=== HEALTH INTERNO ==="
-ssh expedicao "curl -i http://127.0.0.1:8100/api/health" || true
+ssh expedicao "curl -i http://127.0.0.1:8100/expedicao/api/health" || true

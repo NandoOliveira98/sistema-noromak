@@ -1,0 +1,8 @@
+VERSÃO 7.3 — ACESSO INDIVIDUAL
+
+1. A raiz /expedicao agora abre um portal de escolha.
+2. Admin e Conferência mostram uma confirmação da conta NoromakWeb antes de entrar.
+3. A rota Admin é bloqueada no servidor para operadores.
+4. A antiga senha fixa admin e os logins locais da versão portátil não autorizam mais nenhuma tela.
+5. Cada colaborador deve usar sua própria conta no NoromakWeb e estar cadastrado como Admin ou Operador na Expedição.
+6. O teste do publicar.sh foi corrigido para /expedicao/api/health.

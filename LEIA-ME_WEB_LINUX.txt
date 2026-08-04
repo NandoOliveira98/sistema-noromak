@@ -1,14 +1,14 @@
-SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 7.2
+SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 7.3
 ================================================
 
 O QUE FOI TRANSFORMADO
 ----------------------
 - A versão portátil Windows foi convertida em aplicação Web para Linux.
-- O servidor escuta em 127.2.0.1:8100.
+- O servidor escuta em 127.0.0.1:8100.
 - Todas as telas e APIs funcionam sob o prefixo /expedicao.
-- Não existe uma segunda tela de login: o sistema usa a sessão do NoromakWeb.
+- O sistema usa a sessão do NoromakWeb e exibe uma tela de confirmação da conta antes de abrir Admin ou Conferência.
 - Para identificar a pessoa, o servidor consulta somente:
-  http://127.2.0.1:8000/api/v1/auth/me
+  http://127.0.0.1:8000/api/v1/auth/me
 - Os perfis Admin/Operador são próprios da Expedição e ficam no SQLite.
 - O banco permanente fica em /home/expedicao/dados/expedicao.db.
 - O banco não é apagado nas publicações.
@@ -22,7 +22,8 @@ expedicao                    Inicializador usado pelo systemd.
 APP/admin.html               Painel administrativo.
 APP/conferencia.html         Tela dos conferentes.
 APP/shared-storage.js        Comunicação com o SQLite pela API.
-APP/web-auth.js              Login integrado e gestão Admin/Operador.
+APP/web-auth.js              Confirmação de acesso, login integrado e gestão Admin/Operador.
+APP/acesso.html                Portal inicial para escolher Admin ou Conferência.
 publicar.sh                  Publicação e verificação real da porta 8100.
 MIGRACAO_INICIAL/            Dados da versão 6.9 importados somente se o SQLite estiver vazio.
 
@@ -37,12 +38,7 @@ PRIMEIRA INSTALAÇÃO
    O script conecta esta pasta ao histórico que já existe no servidor e cria
    automaticamente o commit da versão Web/Linux.
 
-3. Instale a chave de assinatura QZ no servidor uma única vez:
-
-   ./instalar_servidor_uma_vez.sh
-
-   A consulta do serviço não usa sudo e, portanto, não pede senha. Se sua conta
-   não puder visualizar o serviço, a chave ainda assim permanecerá instalada.
+3. Não execute instalar_servidor_uma_vez.sh quando a infraestrutura já tiver sido preparada pelo responsável do servidor.
 
 4. Publique:
 
@@ -81,7 +77,7 @@ Execute CONFIGURAR_QZ_TRAY_WEB.bat como administrador uma única vez em cada PC
 que imprime. Depois, mantenha o QZ Tray aberto. A configuração não precisa ser
 repetida diariamente.
 
-IMPORTANTE: a versão Web 7.2 usa um novo certificado. Mesmo computadores que já
+IMPORTANTE: a versão Web 7.3 usa o certificado Web. Mesmo computadores que já
 foram configurados para a versão portátil 6.9 precisam executar o novo arquivo.
 
 MIGRAÇÃO DOS DADOS DA VERSÃO 6.9
@@ -101,7 +97,7 @@ COMO SABER SE O DEPLOY FUNCIONOU
 --------------------------------
 O publicar.sh testa diretamente:
 
-  http://127.2.0.1:8100/api/health
+  http://127.0.0.1:8100/expedicao/api/health
 
 Essa é a confirmação real do aplicativo. O código 200 do endereço público sozinho
 não basta, porque ele pode ser a página de login do NoromakWeb.
@@ -120,3 +116,13 @@ SEGURANÇA
 - A chave privada QZ fica em /home/expedicao/qz com permissão 600.
 - Toda API valida a sessão do NoromakWeb e o perfil próprio da Expedição.
 - Operadores não podem alterar produtos, etiquetas, usuários nem configurações administrativas.
+
+
+ACESSO E LOGIN NA VERSÃO 7.3
+----------------------------
+- /expedicao abre um portal e não entra direto em nenhuma tela.
+- /expedicao/admin exige perfil Admin no servidor.
+- /expedicao/conferencia exige perfil Admin ou Operador.
+- Antes de abrir a tela, aparece a conta NoromakWeb identificada e o usuário precisa confirmar o acesso.
+- Sessões e senhas locais da versão portátil são ignoradas.
+- Para trocar de pessoa, saia do NoromakWeb e entre com a conta individual do colaborador.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sistema de Conferência Noromak — edição Web/Linux 7.2.
+"""Sistema de Conferência Noromak — edição Web/Linux 7.3.
 
 Sem dependências externas: usa apenas a biblioteca padrão do Python.
 - Escuta em 127.0.0.1:8100.
@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-APP_VERSION = "7.2"
+APP_VERSION = "7.3"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -507,7 +507,7 @@ def fetch_crm_user(cookie: str, debug_user: str | None = None) -> dict[str, Any]
     req = urllib.request.Request(
         AUTH_ME_URL,
         method="GET",
-        headers={"Cookie": cookie, "Accept": "application/json", "User-Agent": "Noromak-Expedicao/7.2"},
+        headers={"Cookie": cookie, "Accept": "application/json", "User-Agent": "Noromak-Expedicao/7.3"},
     )
     try:
         with urllib.request.urlopen(req, timeout=5) as response:
@@ -554,7 +554,7 @@ def client_computer(handler: BaseHTTPRequestHandler) -> str:
 
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/7.2"
+    server_version = "NoromakExpedicao/7.3"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
@@ -666,6 +666,22 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             self.send_text(QZ_CERT_PATH.read_text(encoding="utf-8"))
             return
+
+        # As páginas também são protegidas no servidor. O HTML antigo não pode
+        # mais liberar acesso por sessão local ou pela senha fixa da versão portátil.
+        admin_pages = {"/admin", "/admin/", "/admin.html", "/administracao", "/administracao/"}
+        conference_pages = {"/conferencia", "/conferencia/", "/conferencia.html", "/pedidos", "/pedidos/"}
+        access_pages = {"", "/", "/acesso", "/acesso/", "/acesso.html"}
+        if path in admin_pages:
+            if self.auth(admin_only=True) is None:
+                return
+        elif path in conference_pages:
+            if self.auth() is None:
+                return
+        elif path in access_pages:
+            if self.auth(allow_unregistered=True) is None:
+                return
+
         self.serve_static(path)
 
     def do_POST(self) -> None:
@@ -968,8 +984,11 @@ class AppHandler(BaseHTTPRequestHandler):
 
     def serve_static(self, path: str) -> None:
         routes = {
-            "": "conferencia.html",
-            "/": "conferencia.html",
+            "": "acesso.html",
+            "/": "acesso.html",
+            "/acesso": "acesso.html",
+            "/acesso/": "acesso.html",
+            "/acesso.html": "acesso.html",
             "/conferencia": "conferencia.html",
             "/conferencia/": "conferencia.html",
             "/conferencia.html": "conferencia.html",
@@ -990,11 +1009,8 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         full = APP_DIR / safe
         if not full.is_file():
-            if not safe.suffix:
-                full = APP_DIR / "conferencia.html"
-            if not full.is_file():
-                self.send_json({"error": "Arquivo não encontrado."}, 404)
-                return
+            self.send_json({"error": "Arquivo não encontrado."}, 404)
+            return
         body = full.read_bytes()
         content_type = mimetypes.guess_type(full.name)[0] or "application/octet-stream"
         if content_type.startswith("text/") or full.suffix in (".js", ".json"):

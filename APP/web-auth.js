@@ -1,12 +1,30 @@
 (() => {
   "use strict";
 
+  // Na edição Web, a identidade vem exclusivamente do NoromakWeb.
+  // As senhas e sessões locais da versão portátil nunca autorizam acesso.
+  window.EXPEDICAO_WEB_AUTH = true;
+
   const BASE = location.pathname.startsWith("/expedicao") ? "/expedicao" : "";
   const API_ME = `${BASE}/api/me`;
   const API_ROLES = `${BASE}/api/roles`;
 
   const txt = value => String(value ?? "").trim();
   const profileLabel = role => role === "admin" ? "Admin" : "Operador";
+
+  function clearLegacySession() {
+    for (const key of ["conf_sessao_ativa", "conf_admin_logado", "conf_admin_sessao"]) {
+      try { window.localStorage.removeItem(key); } catch (_) {}
+      try { window.sessionStorage.removeItem(key); } catch (_) {}
+    }
+  }
+
+  function pageKind() {
+    const path = location.pathname.replace(/\/+$/, "");
+    if (/\/(admin|administracao)(\.html)?$/i.test(path)) return "admin";
+    if (/\/(conferencia|pedidos)(\.html)?$/i.test(path)) return "conference";
+    return "access";
+  }
 
   async function jsonFetch(url, options = {}) {
     const response = await fetch(url, {
@@ -37,6 +55,53 @@
     overlay.appendChild(card);
     document.body.appendChild(overlay);
     return overlay;
+  }
+
+  function accessConfirmation(user, target) {
+    return new Promise(resolve => {
+      const overlay = document.createElement("div");
+      overlay.id = "webAccessConfirmation";
+      overlay.style.cssText = "position:fixed;inset:0;z-index:21000;background:linear-gradient(135deg,#1F57A5,#17395f);display:flex;align-items:center;justify-content:center;padding:24px;font-family:'Plus Jakarta Sans',Segoe UI,Arial";
+      const name = user.nome_expedicao || user.nome || user.username;
+      const isAdmin = user.app_role === "admin";
+      const title = target === "admin" ? "Acesso administrativo" : "Acesso à conferência";
+      const action = target === "admin" ? "ENTRAR NO PAINEL ADMINISTRATIVO" : "ENTRAR NA CONFERÊNCIA";
+      overlay.innerHTML = `
+        <div style="width:min(560px,100%);background:#fff;border-radius:18px;padding:30px;box-shadow:0 22px 65px rgba(0,0,0,.32);border-top:7px solid #F7941D;text-align:center">
+          <img src="/nk-logo.svg" alt="Noromak" style="max-width:210px;max-height:64px;object-fit:contain" onerror="this.style.display='none'">
+          <h2 style="margin:12px 0 8px;color:#1F57A5">${title}</h2>
+          <p style="margin:0;color:#607080;line-height:1.55">Confirme a conta do NoromakWeb que será usada nesta sessão.</p>
+          <div style="margin:22px 0;padding:16px;border-radius:12px;background:#eef5fd;border:1px solid #c8dcf2;text-align:left">
+            <div style="font-size:12px;color:#66788a">Usuário conectado</div>
+            <div style="font-size:20px;font-weight:800;color:#17395f;margin-top:3px">${escapeHtml(name)}</div>
+            <div style="font-size:13px;color:#51677d;margin-top:4px">Username: <b>${escapeHtml(user.username)}</b> · Perfil: <b>${isAdmin ? "Admin" : "Operador"}</b></div>
+          </div>
+          <button id="webConfirmAccess" type="button" style="width:100%;border:0;border-radius:9px;padding:13px 16px;background:#1F57A5;color:#fff;font-weight:800;cursor:pointer">${action}</button>
+          <button id="webCancelAccess" type="button" style="width:100%;border:1px solid #cbd7e3;border-radius:9px;padding:12px 16px;background:#fff;color:#284b70;font-weight:750;cursor:pointer;margin-top:9px">VOLTAR AO NOROMAKWEB / TROCAR USUÁRIO</button>
+          <p style="font-size:11px;color:#7a8793;line-height:1.45;margin:16px 0 0">A senha não é repetida aqui: o login é protegido pelo NoromakWeb. Para usar outra conta, saia do NoromakWeb e entre com o usuário correto.</p>
+        </div>`;
+      document.body.appendChild(overlay);
+      overlay.querySelector("#webConfirmAccess")?.addEventListener("click", () => { overlay.remove(); resolve(true); });
+      overlay.querySelector("#webCancelAccess")?.addEventListener("click", () => { window.location.href = "/"; });
+    });
+  }
+
+  function renderAccessPortal(user) {
+    const host = document.getElementById("webAccessPortal");
+    if (!host) return;
+    const name = user.nome_expedicao || user.nome || user.username;
+    const role = user.app_role;
+    host.innerHTML = `
+      <div class="access-user">
+        <span>Conta NoromakWeb identificada</span>
+        <strong>${escapeHtml(name)}</strong>
+        <small>Username: ${escapeHtml(user.username)}${role ? ` · Perfil: ${role === "admin" ? "Admin" : "Operador"}` : " · Sem acesso à Expedição"}</small>
+      </div>
+      ${role ? `<div class="access-actions">
+        <a class="primary" href="${BASE}/conferencia">Abrir Conferência</a>
+        ${role === "admin" ? `<a class="secondary" href="${BASE}/admin">Abrir Painel Administrativo</a>` : ""}
+      </div>` : `<div class="access-denied">Seu usuário ainda não foi cadastrado na Expedição. Solicite a um administrador que libere o username <b>${escapeHtml(user.username)}</b>.</div>`}
+      <a class="back-link" href="/">Voltar ao NoromakWeb para sair ou trocar de usuário</a>`;
   }
 
   function addUserPill(user) {
@@ -78,6 +143,7 @@
 
   function activateConference(user) {
     const session = setLocalSession(user);
+    window.fazerLogin = function() { alert("O acesso é feito pela conta do NoromakWeb."); };
     window.usuarioLogado = session;
     const login = document.getElementById("telaLogin");
     if (login) login.style.display = "none";
@@ -96,6 +162,7 @@
 
   function activateAdmin(user) {
     setLocalSession(user);
+    window.autenticarAdmin = function() { alert("O acesso administrativo é feito pela conta do NoromakWeb."); };
     if (user.app_role !== "admin") {
       window.location.replace(`${BASE}/conferencia`);
       return;
@@ -216,10 +283,20 @@
   }
 
   async function initialize() {
+    // Esta limpeza acontece antes do window.onload legado, impedindo que uma
+    // sessão antiga ou a senha fixa "admin" abra qualquer tela.
+    clearLegacySession();
+    const kind = pageKind();
     const loading = showFullScreen("Conectando ao NoromakWeb…", "Validando sua sessão e suas permissões na Expedição.", "loading");
     try {
       const user = await jsonFetch(API_ME);
       loading.remove();
+
+      if (kind === "access") {
+        renderAccessPortal(user);
+        return;
+      }
+
       if (!user.app_role) {
         showFullScreen(
           "Acesso à Expedição ainda não liberado",
@@ -227,8 +304,14 @@
         );
         return;
       }
-      const adminPage = /\/(admin|administracao)(\.html)?\/?$/i.test(location.pathname);
-      if (adminPage) activateAdmin(user);
+
+      if (kind === "admin" && user.app_role !== "admin") {
+        showFullScreen("Acesso negado", `O usuário ${user.username} possui perfil Operador e não pode abrir o painel administrativo.`);
+        return;
+      }
+
+      await accessConfirmation(user, kind);
+      if (kind === "admin") activateAdmin(user);
       else activateConference(user);
     } catch (error) {
       loading.remove();

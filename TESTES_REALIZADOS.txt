@@ -1,15 +1,9 @@
-VALIDAÇÃO DA VERSÃO WEB/LINUX 7.2
-================================
+VALIDAÇÃO DA VERSÃO WEB/LINUX 7.3
 
-- servidor_web.py compilado pelo verificador de sintaxe do Python.
-- shared-storage.js e web-auth.js validados pelo verificador de sintaxe do Node.js.
-- Todos os scripts JavaScript embutidos em admin.html e conferencia.html validados.
-- Servidor iniciado localmente em porta de teste.
-- /api/health respondeu com marker noromak_expedicao_web e versão 7.2.
-- Login integrado simulado para Admin e Operador.
-- Permissões testadas: Operador não altera produtos nem perfis.
-- Migração inicial dos produtos e usuários da versão 6.9 executada.
-- Pedido salvo, concluído e removido de conf_pedidos.
-- Tentativa de uma tela desatualizada recolocar pedido concluído foi bloqueada.
-- Assinatura QZ SHA-512/RSA gerada pelo servidor e validada com a chave pública.
-- Uso de memória observado durante os testes abaixo do limite de 250 MB.
+- servidor_web.py compilado sem erros.
+- web-auth.js validado pelo Node.js.
+- /expedicao abre o portal de acesso.
+- /expedicao/admin é protegido no servidor e exige perfil Admin.
+- /expedicao/conferencia exige usuário ativo Admin ou Operador.
+- sessões locais e a senha fixa da versão portátil são limpas antes do acesso.
+- health interno corrigido para /expedicao/api/health.

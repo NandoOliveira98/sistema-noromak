@@ -2,7 +2,7 @@ $ErrorActionPreference = "Stop"
 $Base = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ResultPath = Join-Path $Base "CONFIGURACAO_QZ_RESULTADO.txt"
 $Lines = New-Object System.Collections.Generic.List[string]
-$Lines.Add("CONFIGURACAO QZ TRAY - EXPEDICAO WEB 7.2")
+$Lines.Add("CONFIGURACAO QZ TRAY - EXPEDICAO WEB 7.3")
 $Lines.Add("Data: " + (Get-Date -Format "dd/MM/yyyy HH:mm:ss"))
 
 try {

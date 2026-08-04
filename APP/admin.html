@@ -25,7 +25,7 @@
   #loginAdmin {
     position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
     background: linear-gradient(135deg, var(--primary) 0%, #15263a 100%);
-    display: flex; justify-content: center; align-items: center; z-index: 9999;
+    display: none; justify-content: center; align-items: center; z-index: 9999;
   }
   .box-login {
     background: white; padding: 35px 30px; border-radius: 12px;
@@ -473,7 +473,7 @@
     <div class="logo-box">
       <img src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 450 120'><text x='20' y='80' font-size='60' font-family='Arial, sans-serif' font-weight='bold' fill='%232B4E75'>NOROMAK</text></svg>" alt="Noromak">
     </div>
-    <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 7.2 — login integrado ao NoromakWeb</div>
+    <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 7.3 — login integrado ao NoromakWeb</div>
     <div style="font-size:12px;color:#667;margin:-8px 0 14px;line-height:1.4;">Use o administrador principal ou qualquer usuário cadastrado com perfil <b>Admin</b>.</div>
     <input type="text" id="usuarioAdmin" placeholder="Usuário Admin">
     <input type="password" id="senhaAdmin" placeholder="Senha">
@@ -556,7 +556,7 @@
 
   <section id="aba-usuarios" class="aba-painel">
     <div class="card-admin">
-      <h2>Usuários e aprovações <span class="usuario-versao">Versão 7.2 — aprovação obrigatória</span></h2>
+      <h2>Usuários e aprovações <span class="usuario-versao">Versão 7.3 — acesso pelo NoromakWeb</span></h2>
       <div class="aviso-banco"><b>Novo fluxo:</b> qualquer pessoa pode solicitar um usuário escolhendo <b>Admin</b> ou <b>Operador</b>. A conta permanece bloqueada até que um administrador revise o perfil e clique em <b>Aprovar</b>.</div>
       <div class="toolbar-grid"><button type="button" id="btnNovoUsuarioAdmin" class="btn-primario" onclick="abrirSolicitacaoUsuario('admin')">＋ Solicitar novo usuário</button><button type="button" class="btn-sucesso" onclick="salvarUsuariosAdmin(true)">💾 Salvar alterações</button></div>
       <div id="contadorUsuariosAdmin" class="usuario-contador"></div>

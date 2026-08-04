@@ -36,7 +36,7 @@ fi
 sleep 3
 
 echo ">> conferindo diretamente a porta 8100..."
-if ! ssh expedicao "curl -fsS http://127.0.0.1:8100/api/health"; then
+if ! ssh expedicao "curl -fsS http://127.0.0.1:8100/expedicao/api/health"; then
   echo
   echo "ERRO: os arquivos foram enviados, mas o aplicativo nao respondeu na porta 8100."
   echo "Execute: ./verificar_servidor.sh"
