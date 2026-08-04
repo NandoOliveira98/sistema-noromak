@@ -1,0 +1,19 @@
+[Unit]
+Description=Sistema de Conferencia e Expedicao Noromak
+After=network.target
+
+[Service]
+Type=simple
+User=expedicao
+Group=expedicao
+WorkingDirectory=/home/expedicao/app
+EnvironmentFile=-/home/expedicao/.env
+ExecStart=/home/expedicao/app/expedicao
+Restart=on-failure
+RestartSec=3
+MemoryMax=250M
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

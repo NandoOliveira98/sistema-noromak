@@ -1,0 +1,28 @@
+{
+  "pedido": "2000017731888372",
+  "order_index": 0,
+  "updated_at": "2026-08-03T16:00:20-03:00",
+  "items": [
+    {
+      "Cliente": "Pamella Elisa Crochela Della Fonseca",
+      "CriadoEm": "2026-08-03T18:59:56.076Z",
+      "Código de Barras": "816.0006-0",
+      "Data do Pedido": "2026-08-03",
+      "Descrição": "Compressor Ar Mercedes Benz 1935 1938 1941 2225 Motor Om447",
+      "Foto": "",
+      "Kit": "",
+      "Marketplace": "MERCADO LIVRE",
+      "Módulo": "",
+      "Nível": "",
+      "OrigemCadastro": "PRINT",
+      "Pedido": "2000017731888372",
+      "Posição": "",
+      "Prateleira": "",
+      "Quantidade": "11",
+      "Rua": "",
+      "SKU": "816.0006-0",
+      "__rascunho": false,
+      "__uidLinha": "PED_msdlg1f0_fn2xxfo"
+    }
+  ]
+}

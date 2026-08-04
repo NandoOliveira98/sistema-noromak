@@ -1,4 +1,18 @@
-node_modules/
-dados/
-*.db
+# Segredos nunca entram no Git
+SEGREDOS_SERVIDOR/
 .env
+*.pem
+
+# Dados permanentes ficam fora da pasta do código
+DADOS/
+dados/
+BACKUPS/
+backups/
+*.db
+*.db-wal
+*.db-shm
+
+# Temporários
+__pycache__/
+*.pyc
+CONFIGURACAO_QZ_RESULTADO.txt

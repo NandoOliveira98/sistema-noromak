@@ -1,9 +1,10 @@
 (() => {
   "use strict";
 
-  const API = "/api/storage";
-  const API_LOCK = "/api/order-lock";
-  const API_COMPLETE = "/api/order-complete";
+  const BASE = location.pathname.startsWith("/expedicao") ? "/expedicao" : "";
+  const API = BASE + "/api/storage";
+  const API_LOCK = BASE + "/api/order-lock";
+  const API_COMPLETE = BASE + "/api/order-complete";
   const CHAVES_LOCAIS = new Set([
     "conf_admin_logado",
     "conf_sessao_ativa",
@@ -58,7 +59,7 @@
       conectado = false;
       ultimoErro = erro.message || String(erro);
       atualizarIndicadorRede();
-      throw new Error("O aplicativo local não está respondendo. Feche esta aba e abra novamente pelo atalho do sistema.");
+      throw new Error("O servidor da Expedição não está respondendo. Atualize a página ou avise o administrador.");
     }
     let resposta = {};
     try { resposta = xhr.responseText ? JSON.parse(xhr.responseText) : {}; } catch (_) { resposta = { error: xhr.responseText || "Falha desconhecida" }; }
@@ -142,7 +143,7 @@
 
     testarConexao() {
       try {
-        infoServidor = xhrJson("GET", "/api/health");
+        infoServidor = xhrJson("GET", BASE + "/api/health");
         return true;
       } catch (_) {
         return false;
@@ -150,7 +151,7 @@
     },
 
     obterInfoRede() {
-      try { infoServidor = xhrJson("GET", "/api/health"); } catch (_) {}
+      try { infoServidor = xhrJson("GET", BASE + "/api/health"); } catch (_) {}
       return infoServidor;
     },
 
@@ -276,24 +277,24 @@
       box = document.createElement("div");
       box.id = "indicadorRedeCentral";
       box.style.cssText = "position:fixed;right:12px;bottom:12px;z-index:10050;padding:8px 12px;border-radius:8px;font:600 12px Segoe UI,Arial;box-shadow:0 2px 10px rgba(0,0,0,.18);cursor:pointer;max-width:390px";
-      box.title = "Clique para testar o acesso à pasta compartilhada.";
+      box.title = "Clique para testar o acesso ao servidor Web.";
       box.addEventListener("click", () => {
         const ok = appStorage.testarConexao();
         const info = appStorage.obterInfoRede();
         alert(ok
-          ? `Pasta compartilhada conectada.\n\nComputador: ${info?.computer || "---"}\nDados: ${info?.shared_data_path || "---"}`
-          : `Não foi possível acessar os dados compartilhados. ${ultimoErro}`);
+          ? `Servidor Web conectado.\n\nVersão: ${info?.version || "---"}\nBanco: ${info?.database || "---"}`
+          : `Não foi possível acessar o servidor da Expedição. ${ultimoErro}`);
       });
       document.body.appendChild(box);
     }
     if (!box) return;
     if (conectado) {
-      box.textContent = "● Dados compartilhados conectados";
+      box.textContent = "● Servidor Web conectado";
       box.style.background = "#dff5e2";
       box.style.color = "#1b5e20";
       box.style.border = "1px solid #81c784";
     } else {
-      box.textContent = "● Pasta compartilhada indisponível";
+      box.textContent = "● Servidor Web indisponível";
       box.style.background = "#ffebee";
       box.style.color = "#b71c1c";
       box.style.border = "1px solid #ef9a9a";

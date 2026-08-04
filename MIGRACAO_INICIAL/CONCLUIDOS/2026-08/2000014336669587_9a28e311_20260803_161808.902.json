@@ -1,0 +1,30 @@
+{
+  "pedido": "2000014336669587",
+  "order_index": 0,
+  "updated_at": "2026-08-03T16:18:07-03:00",
+  "items": [
+    {
+      "Cliente": "Adan Alberto Liemich",
+      "CriadoEm": "2026-08-03T19:16:04.093Z",
+      "Código de Barras": "4056807480633",
+      "Data do Pedido": "2026-08-03",
+      "Descrição": "Silicone Neutro De Alta Temperatura Preto W-max 280g - Wurth",
+      "Foto": "",
+      "Kit": "",
+      "Lido": 2,
+      "Marketplace": "MERCADO LIVRE",
+      "Módulo": "",
+      "Nível": "",
+      "OrigemCadastro": "PRINT",
+      "Pedido": "2000014336669587",
+      "Posição": "",
+      "Prateleira": "",
+      "Quantidade": "2",
+      "Rua": "",
+      "SKU": "0893321600",
+      "__rascunho": false,
+      "__uidLinha": "PED_msdm0scd_v93107e",
+      "__uidPedido": "2000014336669587_0"
+    }
+  ]
+}

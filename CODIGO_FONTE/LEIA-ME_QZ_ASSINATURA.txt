@@ -1,9 +1,0 @@
-ASSINATURA QZ TRAY — VERSÃO 6.9
-
-O arquivo qz_integration.go contém a lógica pública de integração, instalação
-da raiz de confiança e assinatura SHA-512.
-
-Por segurança, os valores qzPrivateKeyPEM, qzCertificatePEM e
-qzRootCACertPEM são injetados somente durante a compilação. A chave privada
-não acompanha a pasta CODIGO_FONTE nem a pasta QZ_CERTIFICADO; ela permanece
-incorporada apenas no executável.

@@ -209,7 +209,8 @@
   }
 
 </style>
-<script src="/shared-storage.js"></script>
+<script src="/expedicao/shared-storage.js"></script>
+<script src="/expedicao/web-auth.js"></script>
 </head>
 
 <body>
@@ -219,11 +220,11 @@
     <div class="logo-box">
       <img src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 450 120'><text x='20' y='80' font-size='60' font-family='Arial, sans-serif' font-weight='bold' fill='%232B4E75'>NOROMAK</text></svg>" alt="Noromak">
     </div>
-    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão compartilhada 6.9 — correção definitiva do certificado QZ Tray</div>
+    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 7.1 — login integrado ao NoromakWeb</div>
 
     <div class="box-upload-rede" style="border-style:solid;">
       <label>🗄 PEDIDOS COMPARTILHADOS NA REDE:</label>
-      <div id="statusCargaLogin" class="status-sistema">Verificando a pasta compartilhada de pedidos...</div>
+      <div id="statusCargaLogin" class="status-sistema">Verificando a servidor Web de pedidos...</div>
     </div>
 
     <input type="text" id="usuarioInput" placeholder="Usuário / Login" onkeydown="if(event.key==='Enter') fazerLogin()">
@@ -260,7 +261,7 @@
     <div class="historico-topo">
       <div>
         <h2 style="margin:0; color:var(--primary);">🕘 Histórico de conferência</h2>
-        <div style="font-size:12px; color:#666; margin-top:3px;">Conferências, impressões e reimpressões compartilhadas no dados compartilhados.</div>
+        <div style="font-size:12px; color:#666; margin-top:3px;">Conferências, impressões e reimpressões compartilhadas no servidor Web.</div>
       </div>
       <button onclick="fecharHistorico()" class="btn-acao-secundaria" style="padding:8px 13px; border-radius:6px; cursor:pointer;">Fechar</button>
     </div>
@@ -325,7 +326,7 @@
   <div class="menu">
     <div id="painelAdmin">
       <h4 style="margin-top:0; color:var(--primary);">⚙ Painel Administrador</h4>
-      <p style="font-size:11px; color:#555; margin-bottom:10px;">Pedidos, produtos, usuários e etiquetas são administrados no dados compartilhados:</p>
+      <p style="font-size:11px; color:#555; margin-bottom:10px;">Pedidos, produtos, usuários e etiquetas são administrados no servidor Web:</p>
       <button onclick="abrirPainelAdministrativoBanco()" style="width:100%; padding:8px; background:var(--secondary); color:white; border:none; border-radius:6px; cursor:pointer; font-weight:bold; font-size:11px; margin-bottom:6px;">
         🗄 ABRIR BANCO ADMINISTRATIVO
       </button>
@@ -601,7 +602,7 @@ function detalharErroImpressao(erro) {
     return { titulo: "Dados da etiqueta indisponíveis", detalhe: msg, orientacao: "Republique o arquivo do Mercado Livre no painel administrativo e confirme se ele contém a etiqueta de envio." };
   }
   if (base.includes("marketplace")) {
-    return { titulo: "Marketplace não reconhecido", detalhe: msg, orientacao: "Confira o formato do pedido e o marketplace reconhecido no dados compartilhados." };
+    return { titulo: "Marketplace não reconhecido", detalhe: msg, orientacao: "Confira o formato do pedido e o marketplace reconhecido no servidor Web." };
   }
   return { titulo: "Falha ao enviar a impressão", detalhe: msg, orientacao: "Verifique o QZ Tray, a impressora e o papel. O pedido permaneceu salvo e pode ser impresso novamente." };
 }
@@ -704,7 +705,7 @@ function configurarSegurancaQz() {
   if (typeof qz === "undefined" || !qz.security) return false;
 
   qz.security.setCertificatePromise(function(resolve, reject) {
-    fetch("/api/qz/certificate", { cache: "no-store" })
+    fetch("/expedicao/api/qz/certificate", { cache: "no-store" })
       .then(function(resp) {
         if (!resp.ok) throw new Error("Certificado QZ indisponível: HTTP " + resp.status);
         return resp.text();
@@ -716,7 +717,7 @@ function configurarSegurancaQz() {
   qz.security.setSignatureAlgorithm("SHA512");
   qz.security.setSignaturePromise(function(toSign) {
     return function(resolve, reject) {
-      fetch("/api/qz/sign", {
+      fetch("/expedicao/api/qz/sign", {
         method: "POST",
         cache: "no-store",
         headers: { "Content-Type": "text/plain; charset=utf-8" },
@@ -926,7 +927,7 @@ function resolverEtiquetaPedido(item) {
   if (mapaEtiquetas && Number(mapaEtiquetas.version) >= 4 && mapaEtiquetas.registros) {
     const pedidoNormalizado = normalizarIdentificadorExato(pedidoPlanilha);
     if (!pedidoNormalizado) {
-      return { ok: false, marketplace, erro: "O pedido do dados compartilhados está vazio." };
+      return { ok: false, marketplace, erro: "O pedido do servidor Web está vazio." };
     }
 
     // Segurança máxima: só imprime registros que o painel administrativo já
@@ -1455,7 +1456,7 @@ function verificarLeituraAutomatica(input) {
   if (itensEncontrados.length === 0) {
     if (cod.length < 5) return;
     document.getElementById("statusMsg").innerHTML = "";
-    mostrarMensagemDetalhada("erro", "Código não localizado", `Código lido: ${cod}`, "Confirme se o produto está no dados compartilhados, se o código de barras está completo e se o pedido ainda está pendente.");
+    mostrarMensagemDetalhada("erro", "Código não localizado", `Código lido: ${cod}`, "Confirme se o produto está no servidor Web, se o código de barras está completo e se o pedido ainda está pendente.");
     input.value = "";
     return;
   }
@@ -2482,8 +2483,8 @@ function verificarStatusPlanilhaLogin(){
   const pedidos=JSON.parse(appStorage.getItem("conf_pedidos")||"[]");
   const usuarios=JSON.parse(appStorage.getItem("conf_usuarios")||"[]");
   const unicos=new Set(pedidos.map(x=>normalizarIdentificadorExato(extrairCampo(x,"Pedido"))).filter(Boolean)).size;
-  if(usuarios.length>0){statusDiv.style.color="#2e7d32";statusDiv.innerHTML=`✔ Dados compartilhados conectados: ${unicos} pedido(s) pendente(s) e ${usuarios.length} usuário(s).`;}
-  else{statusDiv.style.color="#c62828";statusDiv.innerHTML="⚠ Pasta compartilhada sem usuários. Entre como admin e abra o Banco Administrativo.";}
+  if(usuarios.length>0){statusDiv.style.color="#2e7d32";statusDiv.innerHTML=`✔ Dados do servidor conectados: ${unicos} pedido(s) pendente(s) e ${usuarios.length} usuário(s).`;}
+  else{statusDiv.style.color="#c62828";statusDiv.innerHTML="⚠ Servidor Web sem usuários. Entre como admin e abra o Banco Administrativo.";}
 }
 function enriquecerPedidosComBancoProdutos(){
   let produtos=[];try{produtos=JSON.parse(appStorage.getItem("conf_produtos")||"[]");}catch(_){return;}
@@ -2572,7 +2573,7 @@ window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_
       const solicitacoes=lerSolicitacoes();
       if(solicitacoes.some(s=>loginNormalizado(s.Login)===chave&&txt(s.Status||"Pendente").toLowerCase()==="pendente"))throw new Error("Já existe uma solicitação pendente para este login.");
       const nova={id:idSolicitacao(),Nome,Login,Senha,PerfilSolicitado,Status:"Pendente",CriadoEm:agoraISO(),Origem:"conferencia"};solicitacoes.push(nova);salvarSolicitacoes(solicitacoes);
-      if(!lerSolicitacoes().some(s=>s.id===nova.id))throw new Error("A solicitação não foi confirmada na pasta compartilhada.");
+      if(!lerSolicitacoes().some(s=>s.id===nova.id))throw new Error("A solicitação não foi confirmada na servidor Web.");
       fecharSolicitacaoUsuario();alert("Solicitação enviada. Aguarde a aprovação de um administrador para entrar.");
     }catch(e){if(erro)erro.textContent=e.message||String(e);}finally{if(botao){botao.disabled=false;botao.textContent="Enviar para aprovação";}}
   };
