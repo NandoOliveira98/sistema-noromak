@@ -1,4 +1,4 @@
-VALIDAÇÃO DA VERSÃO WEB/LINUX 7.5
+VALIDAÇÃO DA VERSÃO WEB/LINUX 8.1
 =================================
 
 - servidor_web.py compilado com sucesso.

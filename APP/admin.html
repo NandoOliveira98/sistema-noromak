@@ -7,6 +7,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/js-sha256/0.9.0/sha256.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/qz-tray@2.2.4/qz-tray.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
@@ -472,7 +473,7 @@
     <div class="logo-box">
       <img src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 450 120'><text x='20' y='80' font-size='60' font-family='Arial, sans-serif' font-weight='bold' fill='%232B4E75'>NOROMAK</text></svg>" alt="Noromak">
     </div>
-    <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 8.0 — impressão direta com Noromak Print Agent</div>
+    <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 8.1 — impressão restaurada pelo QZ Tray</div>
     <div style="font-size:12px;color:#667;margin:-8px 0 14px;line-height:1.4;">Use o administrador principal ou qualquer usuário cadastrado com perfil <b>Admin</b>.</div>
     <input type="text" id="usuarioAdmin" placeholder="Usuário Admin">
     <input type="password" id="senhaAdmin" placeholder="Senha">
@@ -504,7 +505,6 @@
     <button class="aba-btn" data-aba="produtos" onclick="abrirAbaAdmin('produtos')">📦 Banco de produtos</button>
     <button class="aba-btn" data-aba="usuarios" onclick="abrirAbaAdmin('usuarios')">👥 Usuários</button>
     <button class="aba-btn" data-aba="etiquetas" onclick="abrirAbaAdmin('etiquetas')">🏷 Etiquetas</button>
-    <button class="aba-btn" data-aba="impressao" onclick="abrirAbaAdmin('impressao')">🖨 Agente Zebra</button>
     <button class="aba-btn" data-aba="historico" onclick="abrirAbaAdmin('historico')">🕘 Histórico</button>
   </div>
 
@@ -556,7 +556,7 @@
 
   <section id="aba-usuarios" class="aba-painel">
     <div class="card-admin">
-      <h2>Usuários e aprovações <span class="usuario-versao">Versão 8.0 — senhas protegidas e redefinição pelo Admin</span></h2>
+      <h2>Usuários e aprovações <span class="usuario-versao">Versão 8.1 — senhas protegidas e redefinição pelo Admin</span></h2>
       <div class="aviso-banco"><b>Login próprio do estoque:</b> cada pessoa deve ter usuário, senha e perfil individual. Por segurança, a senha atual <b>não pode ser visualizada</b>, pois fica armazenada de forma criptográfica. Para trocar, use o botão <b>Alterar senha</b>; o Admin poderá visualizar somente a nova senha enquanto a digita.</div>
       <div class="toolbar-grid"><button type="button" id="btnNovoUsuarioAdmin" class="btn-primario" onclick="abrirSolicitacaoUsuario('admin')">＋ Solicitar novo usuário</button><button type="button" class="btn-sucesso" onclick="salvarUsuariosAdmin(true)">💾 Salvar alterações</button></div>
       <div id="contadorUsuariosAdmin" class="usuario-contador"></div>
@@ -579,37 +579,6 @@
       <div class="field"><label>Pasta de fotos dos produtos (opcional):</label><input type="file" id="fotosInput" webkitdirectory directory multiple></div>
       <button class="btn-salvar" onclick="salvarEEnviarDados()">PROCESSAR E VINCULAR ETIQUETAS AOS PEDIDOS</button>
       <div id="status"></div>
-    </div>
-  </section>
-
-  <section id="aba-impressao" class="aba-painel">
-    <div class="card-admin">
-      <h2>Agente de impressão Zebra</h2>
-      <div class="aviso-banco"><b>Impressão direta sem QZ Tray:</b> o programa <b>Noromak Print Agent</b> fica instalado no computador conectado à Zebra. O site envia a etiqueta para a fila do servidor e o agente entrega o ZPL diretamente à impressora do Windows, sem janela de autorização.</div>
-      <div class="field">
-        <label>Token de conexão do agente</label>
-        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
-          <input id="tokenAgenteImpressao" type="password" readonly style="flex:1;min-width:300px;font-family:monospace;" placeholder="Carregando token...">
-          <button type="button" class="btn-primario" onclick="alternarVisibilidadeTokenAgente()">👁 Mostrar</button>
-          <button type="button" class="btn-secundario" onclick="copiarTokenAgente()">📋 Copiar token</button>
-          <button type="button" class="btn-limpar" onclick="regenerarTokenAgente()">🔄 Gerar novo token</button>
-        </div>
-        <small style="display:block;margin-top:7px;color:#64748b;">Use este token apenas no configurador do computador da impressora. Gerar um novo token desconecta os agentes já configurados.</small>
-      </div>
-      <div style="display:flex;gap:10px;flex-wrap:wrap;margin:15px 0;">
-        <button type="button" class="btn-primario" onclick="carregarConfiguracaoAgente()">🔄 Atualizar status</button>
-        <a href="/expedicao/AGENTE_IMPRESSAO_ZEBRA_V1_0.zip" download style="text-decoration:none;"><button type="button" class="btn-sucesso">⬇ Baixar programa completo</button></a>
-      </div>
-      <div id="resumoFilaImpressao" class="aviso-banco">Carregando fila de impressão...</div>
-      <div style="overflow:auto;max-height:45vh;">
-        <table>
-          <thead><tr><th>Computador</th><th>Impressora</th><th>Modo</th><th>Versão</th><th>Status</th><th>Último contato</th><th>Impressões</th><th>Último erro</th></tr></thead>
-          <tbody id="corpoAgentesImpressao"><tr><td colspan="8" style="text-align:center;">Nenhum agente identificado.</td></tr></tbody>
-        </table>
-      </div>
-      <div style="margin-top:16px;font-size:12px;line-height:1.55;color:#526475;">
-        <b>Instalação:</b> baixe o programa e o configurador para o computador da Zebra, execute o configurador, informe o token acima e mantenha o agente iniciado. Ele é configurado para abrir automaticamente com o Windows.
-      </div>
     </div>
   </section>
 
@@ -1852,7 +1821,6 @@ function abrirAbaAdmin(nome){
   document.querySelectorAll(".aba-btn").forEach(b=>b.classList.toggle("ativa",b.dataset.aba===nome));
   document.querySelectorAll(".aba-painel").forEach(p=>p.classList.toggle("ativa",p.id==="aba-"+nome));
   if(nome==="historico") carregarLogs();
-  if(nome==="impressao") carregarConfiguracaoAgente();
 }
 function autenticarAdmin() {
   const campoUsuario = document.getElementById("usuarioAdmin");
@@ -3490,41 +3458,6 @@ document.addEventListener("DOMContentLoaded",()=>{
     if(ev.key==="Enter"){ev.preventDefault();salvarNovaSenhaAdmin();}
   });
 })();
-</script>
-
-
-<script>
-async function apiAgenteAdmin(url, opcoes={}){
-  const resp=await fetch(url,{cache:"no-store",credentials:"same-origin",headers:{"Content-Type":"application/json; charset=utf-8",...(opcoes.headers||{})},...opcoes});
-  let dados={}; try{dados=await resp.json();}catch(_){}
-  if(!resp.ok) throw new Error(dados.error||`HTTP ${resp.status}`);
-  return dados;
-}
-function escapeAgente(valor){return String(valor??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");}
-async function carregarConfiguracaoAgente(){
-  const corpo=document.getElementById("corpoAgentesImpressao");
-  const resumo=document.getElementById("resumoFilaImpressao");
-  try{
-    const dados=await apiAgenteAdmin("/expedicao/api/print/agent/config");
-    const token=document.getElementById("tokenAgenteImpressao"); if(token)token.value=dados.token||"";
-    const fila=dados.queue||{};
-    if(resumo)resumo.innerHTML=`<b>Fila:</b> ${Number(fila.pending||0)} aguardando · ${Number(fila.leased||0)} imprimindo · ${Number(fila.printed||0)} concluídas · ${Number(fila.failed||0)} com falha.`;
-    const agentes=Array.isArray(dados.agents)?dados.agents:[];
-    if(corpo)corpo.innerHTML=agentes.length?agentes.map(a=>`<tr>
-      <td>${escapeAgente(a.computer||a.agent_id)}</td><td>${escapeAgente(a.printer_name||"-")}</td><td>${escapeAgente(a.mode||"-")}</td>
-      <td>${escapeAgente(a.version||"-")}</td><td><b style="color:${a.online?'#2e7d32':'#c62828'}">${a.online?'ONLINE':'OFFLINE'}</b></td>
-      <td>${a.last_seen?new Date(a.last_seen).toLocaleString('pt-BR'):'-'}</td><td>${Number(a.jobs_printed||0)}</td><td>${escapeAgente(a.last_error||'-')}</td>
-    </tr>`).join(""):'<tr><td colspan="8" style="text-align:center;">Nenhum agente identificado. Instale e inicie o programa no computador da Zebra.</td></tr>';
-  }catch(e){
-    if(resumo)resumo.textContent="Erro ao carregar o agente: "+(e.message||e);
-  }
-}
-function alternarVisibilidadeTokenAgente(){const el=document.getElementById("tokenAgenteImpressao");if(el)el.type=el.type==="password"?"text":"password";}
-async function copiarTokenAgente(){const el=document.getElementById("tokenAgenteImpressao");if(!el||!el.value)return;await navigator.clipboard.writeText(el.value);alert("Token copiado.");}
-async function regenerarTokenAgente(){
-  if(!confirm("Gerar um novo token? Os agentes já instalados pararão de imprimir até serem configurados novamente."))return;
-  try{const d=await apiAgenteAdmin("/expedicao/api/print/agent/config",{method:"POST",body:JSON.stringify({action:"regenerate_token"})});document.getElementById("tokenAgenteImpressao").value=d.token||"";alert("Novo token gerado. Reconfigure o agente da Zebra.");}catch(e){alert("Não foi possível gerar o token: "+(e.message||e));}
-}
 </script>
 
 </body>

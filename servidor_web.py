@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sistema de Conferência Noromak — edição Web/Linux 8.0.
+"""Sistema de Conferência Noromak — edição Web/Linux 8.1.
 
 Sem dependências externas: usa apenas a biblioteca padrão do Python.
 - Escuta em 127.0.0.1:8100.
@@ -19,6 +19,7 @@ import os
 import secrets
 import shutil
 import sqlite3
+import subprocess
 import sys
 import threading
 import time
@@ -31,7 +32,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-APP_VERSION = "8.0"
+APP_VERSION = "8.1"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -42,6 +43,8 @@ DB_PATH = Path(os.getenv("EXP_DB_PATH", "/home/expedicao/dados/expedicao.db"))
 BACKUP_DIR = Path(os.getenv("EXP_BACKUP_DIR", "/home/expedicao/backups"))
 AUTH_ME_URL = os.getenv("EXP_AUTH_ME_URL", "http://127.0.0.1:8000/api/v1/auth/me")
 ADMIN_USERNAME = os.getenv("EXP_ADMIN_USUARIO", "luis").strip().lower()
+QZ_CERT_PATH = Path(os.getenv("QZ_CERT_PATH", str(ROOT_DIR / "QZ_CERTIFICADO_WEB" / "digital-certificate.txt")))
+QZ_PRIVATE_KEY_PATH = Path(os.getenv("QZ_PRIVATE_KEY_PATH", "/home/expedicao/qz/qz-private-key.pem"))
 MIGRATION_DIR = Path(os.getenv("EXP_MIGRATION_DIR", str(ROOT_DIR / "MIGRACAO_INICIAL")))
 MAX_BODY = 100 * 1024 * 1024
 LOCK_STALE_SECONDS = 5 * 60
@@ -52,9 +55,6 @@ PASSWORD_ITERATIONS = int(os.getenv("EXP_PASSWORD_ITERATIONS", "240000"))
 PASSWORD_MASK = "********"
 INITIAL_ADMIN_PASSWORD = os.getenv("EXP_ADMIN_SENHA", "01101998")
 INITIAL_OPERATOR_PASSWORD = os.getenv("EXP_USUARIO_SENHA_INICIAL", "123")
-PRINT_JOB_LEASE_SECONDS = int(os.getenv("EXP_PRINT_JOB_LEASE_SECONDS", "90"))
-PRINT_JOB_RETENTION_DAYS = int(os.getenv("EXP_PRINT_JOB_RETENTION_DAYS", "30"))
-PRINT_AGENT_TOKEN_ENV = os.getenv("EXP_PRINT_AGENT_TOKEN", "").strip()
 
 DB_LOCK = threading.RLock()
 AUTH_LOCK = threading.Lock()
@@ -178,44 +178,6 @@ def init_db() -> None:
                 action TEXT NOT NULL,
                 detail TEXT NOT NULL DEFAULT ''
             );
-            CREATE TABLE IF NOT EXISTS app_settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS print_jobs (
-                id TEXT PRIMARY KEY,
-                order_id TEXT NOT NULL DEFAULT '',
-                order_key TEXT NOT NULL DEFAULT '',
-                kind TEXT NOT NULL DEFAULT 'initial',
-                printer_name TEXT NOT NULL DEFAULT '',
-                documents TEXT NOT NULL,
-                document_hash TEXT NOT NULL,
-                status TEXT NOT NULL DEFAULT 'pending',
-                created_at TEXT NOT NULL,
-                created_epoch INTEGER NOT NULL,
-                created_by TEXT NOT NULL,
-                leased_at TEXT NOT NULL DEFAULT '',
-                leased_by TEXT NOT NULL DEFAULT '',
-                lease_until INTEGER NOT NULL DEFAULT 0,
-                completed_at TEXT NOT NULL DEFAULT '',
-                error TEXT NOT NULL DEFAULT '',
-                attempts INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE INDEX IF NOT EXISTS idx_print_jobs_queue ON print_jobs(status, created_epoch);
-            CREATE INDEX IF NOT EXISTS idx_print_jobs_order ON print_jobs(order_key, kind, created_epoch);
-            CREATE TABLE IF NOT EXISTS print_agents (
-                agent_id TEXT PRIMARY KEY,
-                computer TEXT NOT NULL DEFAULT '',
-                printer_name TEXT NOT NULL DEFAULT '',
-                mode TEXT NOT NULL DEFAULT '',
-                version TEXT NOT NULL DEFAULT '',
-                last_seen TEXT NOT NULL,
-                last_seen_epoch INTEGER NOT NULL,
-                ip TEXT NOT NULL DEFAULT '',
-                last_error TEXT NOT NULL DEFAULT '',
-                jobs_printed INTEGER NOT NULL DEFAULT 0
-            );
             """
         )
         if ADMIN_USERNAME:
@@ -231,8 +193,6 @@ def init_db() -> None:
     migrate_app_users()
     sync_app_users_storage()
     purge_expired_sessions()
-    ensure_print_agent_token()
-    cleanup_print_jobs()
 
 
 def legacy_key_from_filename(name: str) -> str | None:
@@ -826,66 +786,8 @@ def clear_login_failures(handler: BaseHTTPRequestHandler, username: str) -> None
         LOGIN_ATTEMPTS.pop(login_rate_key(handler, username), None)
 
 
-def get_setting(key: str) -> str | None:
-    with DB_LOCK:
-        row = DB.execute("SELECT value FROM app_settings WHERE key=?", (key,)).fetchone()
-    return str(row["value"]) if row else None
-
-
-def set_setting(key: str, value: str) -> None:
-    with DB_LOCK:
-        DB.execute(
-            """INSERT INTO app_settings(key,value,updated_at) VALUES(?,?,?)
-               ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at""",
-            (key, value, now_iso()),
-        )
-        DB.commit()
-
-
-def ensure_print_agent_token() -> str:
-    if PRINT_AGENT_TOKEN_ENV:
-        set_setting("print_agent_token", PRINT_AGENT_TOKEN_ENV)
-        return PRINT_AGENT_TOKEN_ENV
-    token = get_setting("print_agent_token")
-    if not token:
-        token = secrets.token_urlsafe(32)
-        set_setting("print_agent_token", token)
-    return token
-
-
-def cleanup_print_jobs() -> None:
-    cutoff = int(time.time()) - max(1, PRINT_JOB_RETENTION_DAYS) * 86400
-    with DB_LOCK:
-        DB.execute("DELETE FROM print_jobs WHERE created_epoch < ? AND status IN ('printed','failed','cancelled')", (cutoff,))
-        DB.execute(
-            "UPDATE print_jobs SET status='pending', leased_at='', leased_by='', lease_until=0 "
-            "WHERE status='leased' AND lease_until > 0 AND lease_until < ?",
-            (int(time.time()),),
-        )
-        DB.commit()
-
-
-def hash_documents(documents: list[str]) -> str:
-    joined = "\n--NOROMAK-DOC--\n".join(documents).encode("utf-8")
-    return hashlib.sha256(joined).hexdigest()
-
-
-def agent_bearer_token(handler: BaseHTTPRequestHandler) -> str:
-    auth_header = handler.headers.get("Authorization", "").strip()
-    if auth_header.lower().startswith("bearer "):
-        return auth_header[7:].strip()
-    parsed = parse_qs(urlparse(handler.path).query)
-    return str((parsed.get("token") or [""])[0]).strip()
-
-
-def agent_token_valid(handler: BaseHTTPRequestHandler) -> bool:
-    supplied = agent_bearer_token(handler)
-    expected = ensure_print_agent_token()
-    return bool(supplied and expected and hmac.compare_digest(supplied, expected))
-
-
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/8.0"
+    server_version = "NoromakExpedicao/8.1"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
@@ -994,25 +896,16 @@ class AppHandler(BaseHTTPRequestHandler):
             if ctx is not None:
                 self.handle_roles_get()
             return
-        if path == "/api/print/jobs":
+        if path == "/api/qz/certificate":
             ctx = self.auth()
-            if ctx is not None:
-                self.handle_print_job_get(query)
+            if ctx is None:
+                return
+            if not QZ_CERT_PATH.exists():
+                self.send_json({"error": f"Certificado QZ não encontrado em {QZ_CERT_PATH}"}, 503)
+                return
+            self.send_text(QZ_CERT_PATH.read_text(encoding="utf-8"))
             return
-        if path == "/api/print/agent/config":
-            ctx = self.auth(admin_only=True)
-            if ctx is not None:
-                self.handle_print_agent_config_get()
-            return
-        if path == "/api/print/agent/ping":
-            if not agent_token_valid(self):
-                self.send_json({"error": "Token do agente de impressão inválido."}, 401)
-            else:
-                self.send_json({"ok": True, "version": APP_VERSION, "server_time": now_iso()})
-            return
-        if path == "/api/print/agent/next":
-            self.handle_print_agent_next(query)
-            return
+
         # O nginx já exige o login do NoromakWeb. Estas páginas ficam públicas
         # dentro de /expedicao para conseguirem mostrar o segundo login, próprio do estoque.
         self.serve_static(path)
@@ -1046,18 +939,10 @@ class AppHandler(BaseHTTPRequestHandler):
             if ctx is not None:
                 self.handle_roles_post(ctx)
             return
-        if path == "/api/print/jobs":
+        if path == "/api/qz/sign":
             ctx = self.auth()
             if ctx is not None:
-                self.handle_print_job_post(ctx)
-            return
-        if path == "/api/print/agent/config":
-            ctx = self.auth(admin_only=True)
-            if ctx is not None:
-                self.handle_print_agent_config_post(ctx)
-            return
-        if path == "/api/print/agent/result":
-            self.handle_print_agent_result()
+                self.handle_qz_sign()
             return
         self.send_json({"error": "Rota não encontrada."}, 404)
 
@@ -1379,243 +1264,31 @@ class AppHandler(BaseHTTPRequestHandler):
         audit(ctx["username"], "role.delete", username)
         self.send_json({"ok": True})
 
-    def handle_print_job_post(self, ctx: dict[str, Any]) -> None:
+    def handle_qz_sign(self) -> None:
         try:
-            req = self.read_json()
-            documents = req.get("documents") or []
-            if not isinstance(documents, list) or not documents:
-                raise ValueError("Nenhum documento ZPL foi informado.")
-            documents = [str(doc) for doc in documents if str(doc).strip()]
-            if not documents:
-                raise ValueError("Os documentos ZPL estão vazios.")
-            if sum(len(doc.encode("utf-8")) for doc in documents) > MAX_BODY:
-                raise ValueError("O conteúdo da impressão excede o limite permitido.")
-            for doc in documents:
-                if "^XA" not in doc or "^XZ" not in doc:
-                    raise ValueError("Um dos documentos não possui a estrutura ZPL esperada (^XA ... ^XZ).")
-
-            order_id = str(req.get("order_id") or "").strip()
-            order_key = normalize(order_id)
-            kind = str(req.get("kind") or "initial").strip().lower()
-            if kind not in ("initial", "reprint", "test"):
-                kind = "initial"
-            printer_name = str(req.get("printer_name") or "").strip()
-            doc_hash = hash_documents(documents)
-            now_epoch = int(time.time())
-
-            with DB_LOCK:
-                # Para impressão inicial, uma repetição do navegador reaproveita o mesmo trabalho
-                # ainda pendente/locado ou já impresso, impedindo duplicidade acidental.
-                existing = None
-                if kind == "initial" and order_key:
-                    existing = DB.execute(
-                        """SELECT * FROM print_jobs
-                           WHERE order_key=? AND kind='initial' AND document_hash=?
-                             AND status IN ('pending','leased','printed')
-                             AND created_epoch>?
-                           ORDER BY created_epoch DESC LIMIT 1""",
-                        (order_key, doc_hash, now_epoch - 600),
-                    ).fetchone()
-                if existing:
-                    self.send_json({"ok": True, "job": self.print_job_payload(existing), "reused": True})
-                    return
-
-                job_id = secrets.token_hex(16)
-                DB.execute(
-                    """INSERT INTO print_jobs(
-                         id,order_id,order_key,kind,printer_name,documents,document_hash,status,
-                         created_at,created_epoch,created_by
-                       ) VALUES(?,?,?,?,?,?,?,'pending',?,?,?)""",
-                    (
-                        job_id, order_id, order_key, kind, printer_name,
-                        json_dumps(documents), doc_hash, now_iso(), now_epoch, ctx["username"],
-                    ),
-                )
-                DB.commit()
-                row = DB.execute("SELECT * FROM print_jobs WHERE id=?", (job_id,)).fetchone()
-            audit(ctx["username"], "print.enqueue", f"{job_id}:{order_id}:{kind}:{len(documents)}")
-            self.send_json({"ok": True, "job": self.print_job_payload(row), "reused": False}, 201)
-        except (ValueError, json.JSONDecodeError) as exc:
+            payload = self.read_body()
+            if not payload:
+                raise ValueError("Solicitação de assinatura vazia.")
+            if not QZ_PRIVATE_KEY_PATH.exists():
+                self.send_json({"error": f"Chave privada QZ não instalada em {QZ_PRIVATE_KEY_PATH}. Execute instalar_servidor_uma_vez.sh."}, 503)
+                return
+            proc = subprocess.run(
+                ["openssl", "dgst", "-sha512", "-sign", str(QZ_PRIVATE_KEY_PATH)],
+                input=payload,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10,
+                check=False,
+            )
+            if proc.returncode != 0:
+                raise RuntimeError(proc.stderr.decode("utf-8", errors="replace").strip() or "Falha no OpenSSL")
+            self.send_text(base64.b64encode(proc.stdout).decode("ascii"))
+        except ValueError as exc:
             self.send_json({"error": str(exc)}, 400)
+        except FileNotFoundError:
+            self.send_json({"error": "OpenSSL não está instalado no servidor."}, 503)
         except Exception as exc:
-            self.send_json({"error": f"Falha ao criar trabalho de impressão: {exc}"}, 500)
-
-    def handle_print_job_get(self, query: dict[str, list[str]]) -> None:
-        job_id = str((query.get("id") or [""])[0]).strip()
-        if not job_id:
-            self.send_json({"error": "ID do trabalho não informado."}, 400)
-            return
-        with DB_LOCK:
-            row = DB.execute("SELECT * FROM print_jobs WHERE id=?", (job_id,)).fetchone()
-        if not row:
-            self.send_json({"error": "Trabalho de impressão não encontrado."}, 404)
-            return
-        self.send_json({"ok": True, "job": self.print_job_payload(row)})
-
-    @staticmethod
-    def print_job_payload(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
-        data = dict(row)
-        documents = []
-        try:
-            documents = json.loads(data.get("documents") or "[]")
-        except Exception:
-            documents = []
-        return {
-            "id": data.get("id"),
-            "order_id": data.get("order_id") or "",
-            "kind": data.get("kind") or "initial",
-            "printer_name": data.get("printer_name") or "",
-            "documents": documents,
-            "status": data.get("status") or "pending",
-            "created_at": data.get("created_at") or "",
-            "created_by": data.get("created_by") or "",
-            "leased_by": data.get("leased_by") or "",
-            "completed_at": data.get("completed_at") or "",
-            "error": data.get("error") or "",
-            "attempts": int(data.get("attempts") or 0),
-        }
-
-    def handle_print_agent_config_get(self) -> None:
-        now_epoch = int(time.time())
-        with DB_LOCK:
-            agents = DB.execute(
-                """SELECT agent_id,computer,printer_name,mode,version,last_seen,last_seen_epoch,ip,last_error,jobs_printed
-                   FROM print_agents ORDER BY last_seen_epoch DESC"""
-            ).fetchall()
-            counts = {
-                row["status"]: row["qtd"]
-                for row in DB.execute("SELECT status,COUNT(*) AS qtd FROM print_jobs GROUP BY status").fetchall()
-            }
-        agent_rows = []
-        for row in agents:
-            item = dict(row)
-            item["online"] = int(item.get("last_seen_epoch") or 0) >= now_epoch - 30
-            agent_rows.append(item)
-        self.send_json({
-            "ok": True,
-            "token": ensure_print_agent_token(),
-            "agents": agent_rows,
-            "queue": counts,
-            "download_name": "NoromakPrintAgent.exe",
-        })
-
-    def handle_print_agent_config_post(self, ctx: dict[str, Any]) -> None:
-        try:
-            req = self.read_json()
-            action = str(req.get("action") or "").strip().lower()
-            if action != "regenerate_token":
-                raise ValueError("Ação inválida.")
-            token = secrets.token_urlsafe(32)
-            set_setting("print_agent_token", token)
-            audit(ctx["username"], "print.agent.token.regenerate", "")
-            self.send_json({"ok": True, "token": token})
-        except (ValueError, json.JSONDecodeError) as exc:
-            self.send_json({"error": str(exc)}, 400)
-        except Exception as exc:
-            self.send_json({"error": str(exc)}, 500)
-
-    def handle_print_agent_next(self, query: dict[str, list[str]]) -> None:
-        if not agent_token_valid(self):
-            self.send_json({"error": "Token do agente de impressão inválido."}, 401)
-            return
-        agent_id = str((query.get("agent_id") or [""])[0]).strip()[:120]
-        if not agent_id:
-            self.send_json({"error": "agent_id não informado."}, 400)
-            return
-        computer = str((query.get("computer") or [""])[0]).strip()[:160]
-        printer = str((query.get("printer") or [""])[0]).strip()[:240]
-        mode = str((query.get("mode") or [""])[0]).strip()[:30]
-        version = str((query.get("version") or [""])[0]).strip()[:40]
-        now_epoch = int(time.time())
-        now = now_iso()
-        lease_until = now_epoch + PRINT_JOB_LEASE_SECONDS
-        row = None
-        with DB_LOCK:
-            DB.execute("BEGIN IMMEDIATE")
-            try:
-                DB.execute(
-                    "UPDATE print_jobs SET status='pending',leased_at='',leased_by='',lease_until=0 "
-                    "WHERE status='leased' AND lease_until>0 AND lease_until<?",
-                    (now_epoch,),
-                )
-                DB.execute(
-                    """INSERT INTO print_agents(agent_id,computer,printer_name,mode,version,last_seen,last_seen_epoch,ip)
-                       VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(agent_id) DO UPDATE SET
-                       computer=excluded.computer,printer_name=excluded.printer_name,mode=excluded.mode,
-                       version=excluded.version,last_seen=excluded.last_seen,last_seen_epoch=excluded.last_seen_epoch,ip=excluded.ip""",
-                    (agent_id, computer, printer, mode, version, now, now_epoch, client_computer(self)),
-                )
-                row = DB.execute(
-                    "SELECT * FROM print_jobs WHERE status='pending' ORDER BY created_epoch,id LIMIT 1"
-                ).fetchone()
-                if row:
-                    DB.execute(
-                        """UPDATE print_jobs SET status='leased',leased_at=?,leased_by=?,lease_until=?,attempts=attempts+1,error=''
-                           WHERE id=?""",
-                        (now, agent_id, lease_until, row["id"]),
-                    )
-                    row = DB.execute("SELECT * FROM print_jobs WHERE id=?", (row["id"],)).fetchone()
-                DB.commit()
-            except Exception:
-                DB.rollback()
-                raise
-        self.send_json({"ok": True, "job": self.print_job_payload(row) if row else None})
-
-    def handle_print_agent_result(self) -> None:
-        if not agent_token_valid(self):
-            self.send_json({"error": "Token do agente de impressão inválido."}, 401)
-            return
-        try:
-            req = self.read_json()
-            job_id = str(req.get("job_id") or "").strip()
-            agent_id = str(req.get("agent_id") or "").strip()[:120]
-            success = req.get("success") is True
-            error_text = str(req.get("error") or "").strip()[:4000]
-            computer = str(req.get("computer") or "").strip()[:160]
-            printer = str(req.get("printer_name") or "").strip()[:240]
-            version = str(req.get("version") or "").strip()[:40]
-            if not job_id or not agent_id:
-                raise ValueError("job_id e agent_id são obrigatórios.")
-            now_epoch = int(time.time())
-            now = now_iso()
-            with DB_LOCK:
-                DB.execute("BEGIN IMMEDIATE")
-                try:
-                    row = DB.execute("SELECT * FROM print_jobs WHERE id=?", (job_id,)).fetchone()
-                    if not row:
-                        raise ValueError("Trabalho de impressão não encontrado.")
-                    # Só o agente que recebeu a locação pode concluir, exceto se o trabalho já estiver impresso.
-                    if row["status"] == "printed":
-                        DB.commit()
-                        self.send_json({"ok": True, "already_completed": True})
-                        return
-                    if row["leased_by"] and row["leased_by"] != agent_id:
-                        raise ValueError("Este trabalho pertence a outro agente de impressão.")
-                    new_status = "printed" if success else "failed"
-                    DB.execute(
-                        """UPDATE print_jobs SET status=?,completed_at=?,error=?,lease_until=0 WHERE id=?""",
-                        (new_status, now, "" if success else error_text or "Falha não detalhada pelo agente.", job_id),
-                    )
-                    DB.execute(
-                        """INSERT INTO print_agents(agent_id,computer,printer_name,mode,version,last_seen,last_seen_epoch,ip,last_error,jobs_printed)
-                           VALUES(?,?,?,'',?,?,?,?,?,?) ON CONFLICT(agent_id) DO UPDATE SET
-                           computer=excluded.computer,printer_name=excluded.printer_name,version=excluded.version,
-                           last_seen=excluded.last_seen,last_seen_epoch=excluded.last_seen_epoch,ip=excluded.ip,
-                           last_error=excluded.last_error,jobs_printed=print_agents.jobs_printed+?""",
-                        (
-                            agent_id, computer, printer, version, now, now_epoch, client_computer(self),
-                            "" if success else error_text, 1 if success else 0, 1 if success else 0,
-                        ),
-                    )
-                    DB.commit()
-                except Exception:
-                    DB.rollback()
-                    raise
-            self.send_json({"ok": True, "status": "printed" if success else "failed"})
-        except (ValueError, json.JSONDecodeError) as exc:
-            self.send_json({"error": str(exc)}, 400)
-        except Exception as exc:
-            self.send_json({"error": str(exc)}, 500)
+            self.send_json({"error": f"Falha ao assinar solicitação QZ: {exc}"}, 500)
 
     def serve_static(self, path: str) -> None:
         routes = {

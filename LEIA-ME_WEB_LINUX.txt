@@ -1,38 +1,36 @@
-SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 8.0
+SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 8.1
 ================================================
 
-Esta versão roda no servidor Linux em 127.0.0.1:8100, no caminho /expedicao.
-A infraestrutura systemd/nginx já é administrada pelo responsável do servidor.
+Esta versão retorna à impressão pelo QZ Tray e remove o uso do Noromak Print Agent.
 
-PUBLICAÇÃO
-----------
-Na pasta do projeto que contém a pasta oculta .git:
+PUBLICAR
+--------
+Copie estes arquivos para a pasta atual do projeto, preservando a pasta oculta .git.
+Depois execute:
 
-git add -A
-git commit -m "versao 8.0 com agente de impressao Zebra"
-./publicar.sh
+  git add -A
+  git commit -m "retorna impressao para o QZ Tray"
+  ./publicar.sh
 
-Não execute instalar_servidor_uma_vez.sh e não altere /etc/systemd.
+Não execute instalar_servidor_uma_vez.sh e não altere /etc/systemd quando a infraestrutura já estiver pronta.
 
-IMPRESSÃO ZEBRA SEM QZ TRAY
----------------------------
-A impressão é realizada pelo Noromak Print Agent instalado no computador ligado à Zebra.
-O navegador envia o ZPL ao servidor. O agente busca o trabalho por HTTPS e o entrega diretamente
-à fila RAW da impressora do Windows.
+COMPUTADOR DA IMPRESSORA
+------------------------
+1. Execute DESINSTALAR_AGENTE_ZEBRA_ANTIGO.bat se o agente da versão 8.0 tiver sido instalado.
+2. Instale/abra o QZ Tray.
+3. Execute CONFIGURAR_QZ_TRAY_WEB.bat uma única vez no usuário do Windows que imprime.
+4. Feche e abra novamente o navegador.
+5. Na Conferência, informe o nome exato da impressora, normalmente:
+   ZDesigner ZD220-203dpi ZPL
 
-Instalação no computador da Zebra:
-1. Entre no sistema como Admin.
-2. Abra a aba "Agente Zebra".
-3. Copie o token e baixe o programa completo.
-4. Extraia o ZIP e execute CONFIGURAR_AGENTE_IMPRESSAO.bat.
-5. Informe o token e o nome exato da impressora instalada.
-6. Faça uma impressão de teste.
+A Conferência não abre conexão com o QZ Tray durante o login. A conexão ocorre somente ao testar ou imprimir.
 
-O agente fica em %LOCALAPPDATA%\NoromakPrintAgent e inicia com o Windows.
-Não é necessário instalar Python, QZ Tray ou certificados.
-
-DADOS PERMANENTES
------------------
+SERVIDOR
+--------
+Aplicação: 127.0.0.1:8100
+Caminho: /expedicao
 Banco: /home/expedicao/dados/expedicao.db
 Backups: /home/expedicao/backups
-A publicação não substitui o banco.
+Chave privada QZ: /home/expedicao/qz/qz-private-key.pem
+
+A publicação não substitui o banco permanente.

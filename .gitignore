@@ -15,4 +15,4 @@ backups/
 # Temporários
 __pycache__/
 *.pyc
-CONFIGURACAO_AGENTE_RESULTADO.txt
+CONFIGURACAO_QZ_RESULTADO.txt
