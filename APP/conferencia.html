@@ -7,16 +7,17 @@
 <meta name="application-name" content="Noromak Conferência">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="manifest" href="/expedicao/manifest-conferencia.webmanifest?v=8.9" crossorigin="use-credentials">
-<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/conferencia-180.png?v=8.9">
-<link rel="icon" href="/favicon.ico?v=8.9" sizes="any">
-<link rel="shortcut icon" href="/favicon.ico?v=8.9">
-<link rel="stylesheet" href="/expedicao/pwa-install.css?v=8.9">
+<link rel="manifest" href="/expedicao/manifest-conferencia.webmanifest?v=9.0" crossorigin="use-credentials">
+<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/conferencia-180.png?v=9.0">
+<link rel="icon" href="/favicon.ico?v=9.0" sizes="any">
+<link rel="shortcut icon" href="/favicon.ico?v=9.0">
+<link rel="stylesheet" href="/expedicao/pwa-install.css?v=9.0">
 <title>Noromak - Conferência em Rede</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/js-sha256/0.9.0/sha256.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/qz-tray@2.2.6/qz-tray.js"></script>
+<script src="https://unpkg.com/@zxing/browser@0.1.5/umd/zxing-browser.min.js"></script>
 
 <style>
   :root {
@@ -213,10 +214,83 @@
     50% { box-shadow: 0 0 0 5px rgba(242,140,24,.25); }
   }
 
+
+  /* Aplicativo móvel em retrato */
+  .leitor-codigo-linha { display:flex; gap:10px; align-items:stretch; }
+  .leitor-codigo-linha #codigo { flex:1; min-width:0; }
+  .btn-camera-codigo {
+    flex:0 0 auto; min-width:150px; padding:11px 14px; border:0; border-radius:7px;
+    background:var(--secondary); color:#fff; font-size:14px; font-weight:800; cursor:pointer;
+    box-shadow:0 2px 5px rgba(0,0,0,.12);
+  }
+  .btn-camera-codigo:hover { filter:brightness(.95); }
+  .btn-camera-codigo:disabled { background:#aeb8c2; cursor:not-allowed; box-shadow:none; }
+
+  .scanner-camera-overlay {
+    display:none; position:fixed; inset:0; z-index:14000; background:rgba(7,17,29,.94);
+    align-items:center; justify-content:center; padding:14px;
+  }
+  .scanner-camera-overlay.ativo { display:flex; }
+  .scanner-camera-card {
+    width:min(520px,100%); max-height:calc(100dvh - 28px); overflow:auto; background:#0f1f30;
+    border-radius:14px; border:1px solid rgba(255,255,255,.18); color:#fff;
+    box-shadow:0 20px 60px rgba(0,0,0,.5);
+  }
+  .scanner-camera-topo { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:14px 15px; border-bottom:1px solid rgba(255,255,255,.14); }
+  .scanner-camera-topo h3 { margin:0; font-size:17px; }
+  .scanner-camera-fechar { border:0; background:rgba(255,255,255,.12); color:#fff; width:38px; height:38px; border-radius:50%; font-size:20px; cursor:pointer; }
+  .scanner-camera-preview { position:relative; margin:14px; border-radius:12px; overflow:hidden; background:#000; min-height:300px; }
+  .scanner-camera-preview video { display:block; width:100%; height:min(62dvh,520px); min-height:300px; object-fit:cover; background:#000; }
+  .scanner-mira { position:absolute; left:8%; right:8%; top:36%; height:28%; border:3px solid #F28C18; border-radius:12px; box-shadow:0 0 0 9999px rgba(0,0,0,.28); pointer-events:none; }
+  .scanner-linha { position:absolute; left:10%; right:10%; top:50%; height:2px; background:#fff; box-shadow:0 0 9px #fff; animation:scannerLinha 1.7s ease-in-out infinite; pointer-events:none; }
+  @keyframes scannerLinha { 0%,100%{transform:translateY(-45px);opacity:.45} 50%{transform:translateY(45px);opacity:1} }
+  .scanner-camera-status { padding:0 16px 12px; text-align:center; min-height:42px; font-size:13px; line-height:1.4; color:#dce8f3; }
+  .scanner-camera-acoes { display:flex; gap:9px; padding:0 14px 15px; }
+  .scanner-camera-acoes button { flex:1; padding:11px 10px; border:0; border-radius:7px; font-weight:800; cursor:pointer; }
+  .scanner-btn-secundario { background:#e8eef5; color:#203a55; }
+  .scanner-btn-principal { background:#F28C18; color:#fff; }
+  .scanner-ajuda { padding:0 16px 15px; color:#aebdca; font-size:11px; line-height:1.45; text-align:center; }
+
+  @media (max-width: 780px) {
+    html, body { width:100%; max-width:100%; overflow-x:hidden; }
+    body { min-height:100dvh; }
+    header { min-height:0; height:auto !important; padding:10px 12px !important; flex-wrap:wrap; gap:8px; }
+    header h1 { font-size:16px !important; line-height:1.2; }
+    .usuario-area { width:100%; display:flex; flex-wrap:wrap; justify-content:flex-start !important; align-items:center; gap:6px !important; }
+    .usuario-area > div { width:100%; text-align:left !important; }
+    .usuario-area .btn-header, .usuario-area .btn-logoff, .usuario-area .pwa-install-btn { flex:1 1 auto; min-height:40px; }
+    .container { display:block; height:auto; min-height:calc(100dvh - 120px); }
+    .menu { width:100%; max-height:none; overflow:visible; border-right:0; border-bottom:1px solid #d8e0e7; padding:12px; }
+    .conteudo { width:100%; padding:14px 12px 28px; overflow:visible; }
+    .conteudo h2 { font-size:20px; margin-top:4px; }
+    .aviso-etiquetas-disponiveis { font-size:11px; }
+    .leitor-codigo-linha {
+      flex-direction:column; gap:8px; position:sticky; bottom:8px; z-index:60;
+      background:rgba(244,247,249,.97); padding:8px; margin:0 -4px; border:1px solid #d6e0e8; border-radius:10px;
+      box-shadow:0 5px 18px rgba(20,42,64,.15);
+    }
+    .btn-camera-codigo { width:100%; min-width:0; min-height:48px; font-size:15px; }
+    #codigo { min-height:48px; font-size:16px !important; inputmode:numeric; }
+    table { display:block; width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch; white-space:nowrap; }
+    th, td { padding:9px 8px; font-size:12px; }
+    .img-produto { width:52px; height:52px; }
+    .modal-card, .modal-nota-card, .modal-reimpressao-card { width:96vw !important; max-width:96vw; padding:18px; }
+    .box-card { width:calc(100vw - 24px); padding:28px 20px; }
+    #telaLogin { align-items:flex-start; overflow-y:auto; padding:18px 0; }
+    .scanner-camera-overlay { padding:0; align-items:stretch; }
+    .scanner-camera-card { width:100%; max-height:100dvh; min-height:100dvh; border-radius:0; display:flex; flex-direction:column; }
+    .scanner-camera-preview { flex:1; min-height:0; margin:10px 12px; }
+    .scanner-camera-preview video { height:100%; min-height:360px; max-height:none; }
+  }
+
+  @media (orientation: landscape) and (max-width: 920px) {
+    .scanner-camera-preview video { height:58dvh; min-height:230px; }
+  }
+
 </style>
 <script src="/expedicao/shared-storage.js"></script>
 <script src="/expedicao/web-auth.js"></script>
-<script defer src="/expedicao/pwa-install.js?v=8.9"></script>
+<script defer src="/expedicao/pwa-install.js?v=9.0"></script>
 </head>
 
 <body>
@@ -224,9 +298,9 @@
 <div id="telaLogin">
   <div class="box-card">
     <div class="logo-box">
-      <img src="/nk-logo.svg?v=8.9" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=8.9';">
+      <img src="/nk-logo.svg?v=9.0" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=9.0';">
     </div>
-    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 8.9 — identidade visual oficial do servidor</div>
+    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 9.0 — identidade visual oficial do servidor</div>
 
     <div class="box-upload-rede" style="border-style:solid;">
       <label>🗄 PEDIDOS COMPARTILHADOS NA REDE:</label>
@@ -316,7 +390,7 @@
 
 <header>
   <div class="logo-mini-box">
-    <img src="/grupo-noromak.png?v=8.9" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=8.9';">
+    <img src="/grupo-noromak.png?v=9.0" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=9.0';">
   </div>
   <div class="usuario-area">
     <div style="text-align: right;">
@@ -384,7 +458,10 @@
     </div>
     <br>
 
-    <input type="text" id="codigo" placeholder="Bipe o código de barras de qualquer produto para iniciar..." oninput="agendarLeituraCodigo(this)" onkeydown="confirmarLeituraCodigo(event, this)" autocomplete="off" inputmode="none" style="width: 100%; padding: 12px; font-size: 15px; border: 1px solid #ccc; border-radius: 6px;">
+    <div class="leitor-codigo-linha">
+      <input type="text" id="codigo" placeholder="Bipe, digite ou escaneie o código de barras..." oninput="agendarLeituraCodigo(this)" onkeydown="confirmarLeituraCodigo(event, this)" autocomplete="off" inputmode="numeric" enterkeyhint="done" aria-label="Código de barras" style="width: 100%; padding: 12px; font-size: 15px; border: 1px solid #ccc; border-radius: 6px;">
+      <button type="button" id="btnAbrirCameraCodigo" class="btn-camera-codigo" onclick="abrirScannerCamera()">📷 ESCANEAR CÓDIGO</button>
+    </div>
 
     <table>
       <thead>
@@ -402,6 +479,26 @@
 
     <div class="status" id="statusMsg"></div>
     <div id="painelMensagemDetalhada" class="mensagem-detalhada"></div>
+  </div>
+</div>
+
+<div id="scannerCameraOverlay" class="scanner-camera-overlay" role="dialog" aria-modal="true" aria-labelledby="scannerCameraTitulo">
+  <div class="scanner-camera-card">
+    <div class="scanner-camera-topo">
+      <h3 id="scannerCameraTitulo">📷 Ler código de barras</h3>
+      <button type="button" class="scanner-camera-fechar" onclick="fecharScannerCamera()" aria-label="Fechar câmera">×</button>
+    </div>
+    <div class="scanner-camera-preview">
+      <video id="scannerCameraVideo" playsinline muted></video>
+      <div class="scanner-mira"></div>
+      <div class="scanner-linha"></div>
+    </div>
+    <div id="scannerCameraStatus" class="scanner-camera-status">Aponte a câmera traseira para o código de barras.</div>
+    <div class="scanner-camera-acoes">
+      <button type="button" class="scanner-btn-secundario" onclick="trocarCameraScanner()">🔄 Trocar câmera</button>
+      <button type="button" class="scanner-btn-principal" onclick="fecharScannerCamera()">Fechar</button>
+    </div>
+    <div class="scanner-ajuda">Centralize o código dentro do retângulo e mantenha o celular parado. A leitura é confirmada automaticamente.</div>
   </div>
 </div>
 
@@ -639,7 +736,159 @@ function confirmarLeituraCodigo(event, input) {
   }
 }
 
+
+let scannerCameraControles = null;
+let scannerCameraLeitor = null;
+let scannerCameraAtivo = false;
+let scannerCameraFrontal = false;
+let scannerCameraUltimoCodigo = "";
+let scannerCameraUltimaLeituraEm = 0;
+
+function atualizarStatusScannerCamera(texto, erro = false) {
+  const el = document.getElementById("scannerCameraStatus");
+  if (!el) return;
+  el.textContent = texto;
+  el.style.color = erro ? "#ffb4ab" : "#dce8f3";
+}
+
+function navegadorEhDispositivoMovel() {
+  return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent || "") || window.matchMedia("(max-width: 780px)").matches;
+}
+
+function focarCampoCodigoAposAcao(input = document.getElementById("codigo")) {
+  if (!input || input.disabled) return;
+  if (navegadorEhDispositivoMovel()) {
+    document.getElementById("btnAbrirCameraCodigo")?.scrollIntoView({ behavior: "smooth", block: "center" });
+    return;
+  }
+  input.focus();
+  input.select?.();
+}
+
+async function forcarOrientacaoRetrato() {
+  try {
+    const instalado = window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+    if (instalado && screen.orientation && typeof screen.orientation.lock === "function") {
+      await screen.orientation.lock("portrait-primary");
+    }
+  } catch (_) {
+    // Alguns navegadores aplicam a orientação apenas pelo manifesto da PWA.
+  }
+}
+
+async function abrirScannerCamera() {
+  const input = document.getElementById("codigo");
+  if (!input || input.disabled) {
+    mostrarMensagemDetalhada("aviso", "Leitor indisponível", idPedidoAtual ? "O pedido atual já foi finalizado." : "O leitor não está disponível neste momento.", "Selecione um pedido pendente ou aguarde a conclusão da impressão.");
+    return;
+  }
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    mostrarMensagemDetalhada("erro", "Câmera não disponível", "Este navegador não liberou acesso à câmera.", "Abra o sistema pelo Chrome ou Edge atualizado e confirme a permissão da câmera.");
+    return;
+  }
+
+  const overlay = document.getElementById("scannerCameraOverlay");
+  overlay?.classList.add("ativo");
+  document.body.style.overflow = "hidden";
+  scannerCameraAtivo = true;
+  scannerCameraUltimoCodigo = "";
+  atualizarStatusScannerCamera("Solicitando permissão para usar a câmera...");
+
+  try {
+    await iniciarLeituraScannerCamera();
+  } catch (erro) {
+    console.error("Falha ao iniciar scanner:", erro);
+    atualizarStatusScannerCamera("Não foi possível abrir a câmera. Verifique a permissão no navegador.", true);
+  }
+}
+
+async function iniciarLeituraScannerCamera() {
+  await pararLeituraScannerCamera(false);
+  const video = document.getElementById("scannerCameraVideo");
+  if (!video) throw new Error("Prévia da câmera não encontrada.");
+  const constraints = {
+    audio: false,
+    video: {
+      facingMode: scannerCameraFrontal ? "user" : { ideal: "environment" },
+      width: { ideal: 1280 },
+      height: { ideal: 720 }
+    }
+  };
+
+  if (!window.ZXingBrowser || !ZXingBrowser.BrowserMultiFormatReader) {
+    throw new Error("Biblioteca de leitura de códigos não foi carregada.");
+  }
+
+  scannerCameraLeitor = new ZXingBrowser.BrowserMultiFormatReader(undefined, {
+    delayBetweenScanAttempts: 120,
+    delayBetweenScanSuccess: 900
+  });
+  atualizarStatusScannerCamera("Aponte a câmera para o código de barras.");
+  scannerCameraControles = await scannerCameraLeitor.decodeFromConstraints(constraints, video, (resultado, erro) => {
+    if (!scannerCameraAtivo || !resultado) return;
+    const codigo = String(typeof resultado.getText === "function" ? resultado.getText() : resultado.text || "").trim();
+    if (!codigo) return;
+    const agora = Date.now();
+    if (codigo === scannerCameraUltimoCodigo && agora - scannerCameraUltimaLeituraEm < 1800) return;
+    scannerCameraUltimoCodigo = codigo;
+    scannerCameraUltimaLeituraEm = agora;
+    confirmarCodigoScannerCamera(codigo);
+  });
+}
+
+async function confirmarCodigoScannerCamera(codigo) {
+  if (!scannerCameraAtivo) return;
+  scannerCameraAtivo = false;
+  atualizarStatusScannerCamera(`Código reconhecido: ${codigo}`);
+  if (navigator.vibrate) navigator.vibrate([80, 40, 80]);
+  await pararLeituraScannerCamera(false);
+  const overlay = document.getElementById("scannerCameraOverlay");
+  overlay?.classList.remove("ativo");
+  document.body.style.overflow = "";
+
+  const input = document.getElementById("codigo");
+  if (!input || input.disabled) return;
+  cancelarLeituraPendente();
+  input.value = codigo;
+  verificarLeituraAutomatica(input);
+}
+
+async function pararLeituraScannerCamera(limparEstado = true) {
+  try { scannerCameraControles?.stop?.(); } catch (_) {}
+  scannerCameraControles = null;
+  try { scannerCameraLeitor?.reset?.(); } catch (_) {}
+  scannerCameraLeitor = null;
+  const video = document.getElementById("scannerCameraVideo");
+  const stream = video?.srcObject;
+  if (stream && typeof stream.getTracks === "function") stream.getTracks().forEach(track => track.stop());
+  if (video) video.srcObject = null;
+  if (limparEstado) scannerCameraAtivo = false;
+}
+
+async function fecharScannerCamera() {
+  scannerCameraAtivo = false;
+  await pararLeituraScannerCamera();
+  document.getElementById("scannerCameraOverlay")?.classList.remove("ativo");
+  document.body.style.overflow = "";
+  const input = document.getElementById("codigo");
+  if (input && !input.disabled && !navegadorEhDispositivoMovel()) input.focus();
+}
+
+async function trocarCameraScanner() {
+  if (!document.getElementById("scannerCameraOverlay")?.classList.contains("ativo")) return;
+  scannerCameraFrontal = !scannerCameraFrontal;
+  atualizarStatusScannerCamera(scannerCameraFrontal ? "Abrindo câmera frontal..." : "Abrindo câmera traseira...");
+  try { await iniciarLeituraScannerCamera(); }
+  catch (erro) { atualizarStatusScannerCamera("Não foi possível trocar a câmera.", true); }
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden && scannerCameraAtivo) fecharScannerCamera();
+});
+window.addEventListener("pagehide", () => pararLeituraScannerCamera());
+
 window.onload = function() {
+  forcarOrientacaoRetrato();
   carregarDadosMemoria();
   carregarHistoricoConferencias();
   
@@ -1403,7 +1652,7 @@ function abrirPedido(uid) {
       [{ rotulo: "Tentar imprimir", onclick: "tentarImprimirPedidoAtual()" }]
     );
   } else {
-    input.focus();
+    focarCampoCodigoAposAcao(input);
   }
 }
 
@@ -1513,7 +1762,7 @@ function selecionarPedidoMultiplo(uid, codBarras) {
 
 function fecharModalMultiplos() {
   document.getElementById("modalMultiplos").style.display = "none";
-  document.getElementById("codigo").focus();
+  focarCampoCodigoAposAcao();
 }
 
 async function processarBipeNoPedidoAtual(input, cod) {
@@ -1531,7 +1780,7 @@ Pedido aberto: ${pedidoParaExibicao(extrairCampo(pedidoAtual[0], "Pedido"),obter
       "Separe o produto e confirme o pedido selecionado. O sistema não alterou nenhuma quantidade."
     );
     input.value = "";
-    input.focus();
+    focarCampoCodigoAposAcao(input);
     return;
   }
 
@@ -1547,7 +1796,7 @@ Quantidade solicitada: ${qtdTotal}`,
       "Não coloque outra unidade deste produto no pedido."
     );
     input.value = "";
-    input.focus();
+    focarCampoCodigoAposAcao(input);
     return;
   }
 
@@ -1562,7 +1811,7 @@ Quantidade solicitada: ${qtdTotal}`,
   agendarRenderizacaoListaPedidos();
 
   if (!pedidoAtualFinalizado()) {
-    input.focus();
+    focarCampoCodigoAposAcao(input);
     return;
   }
 
@@ -2161,7 +2410,7 @@ function abrirHistorico() {
 
 function fecharHistorico() {
   document.getElementById("modalHistorico").style.display = "none";
-  if (document.getElementById("codigo") && !document.getElementById("codigo").disabled) document.getElementById("codigo").focus();
+  focarCampoCodigoAposAcao();
 }
 
 function renderizarHistorico() {
@@ -2364,6 +2613,10 @@ function focarLeitorCodigo() {
     );
     return;
   }
+  if (navegadorEhDispositivoMovel()) {
+    abrirScannerCamera();
+    return;
+  }
   input.focus();
   input.select();
 }
@@ -2482,7 +2735,7 @@ function fecharJanelaOuLimparLeitura() {
   cancelarLeituraPendente();
   if (leitor) leitor.value = "";
   limparMensagemDetalhada();
-  if (leitor && !leitor.disabled) leitor.focus();
+  if (leitor && !leitor.disabled) focarCampoCodigoAposAcao(leitor);
 }
 
 function usuarioEstaLogadoNaTela() {
@@ -2537,7 +2790,8 @@ window.addEventListener("keydown", function(event) {
   }
   if (tecla === "Escape") {
     event.preventDefault();
-    fecharJanelaOuLimparLeitura();
+    if (document.getElementById("scannerCameraOverlay")?.classList.contains("ativo")) fecharScannerCamera();
+    else fecharJanelaOuLimparLeitura();
     return;
   }
 
@@ -2586,7 +2840,7 @@ function limparPainel() {
   campoCod.value = "";
   campoCod.placeholder = "Bipe o código de barras de qualquer produto para iniciar...";
   campoCod.disabled = false;
-  campoCod.focus();
+  focarCampoCodigoAposAcao(campoCod);
 }
 
 

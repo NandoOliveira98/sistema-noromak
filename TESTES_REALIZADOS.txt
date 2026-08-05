@@ -59,3 +59,13 @@ TESTES DA VERSÃO 8.4
 - Parser Shopee com ID do Pedido, Endereço de entrega, SKU da Variação, quantidade e descrição: OK.
 - Parser Magalu com número LU, Comprador > Nome, SKU, quantidade e descrição: OK.
 - Teste Shopee com dois SKUs e quantidades diferentes: OK.
+
+
+VERSAO 9.0 — TESTES ADICIONAIS
+- servidor_web.py compilado sem erros.
+- Scripts inline de conferencia.html validados com node --check.
+- Manifesto conferencia validado como JSON e orientation=portrait-primary.
+- Rota /expedicao/api/health respondeu versao 9.0.
+- Rota do manifesto respondeu com orientacao retrato.
+- HTML servido confirmou botao da camera, modal e biblioteca ZXing Browser.
+- Impressao fisica e leitura real pela camera precisam ser validadas no celular da operacao.

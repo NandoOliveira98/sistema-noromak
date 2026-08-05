@@ -1,0 +1,15 @@
+COMO USAR A CAMERA NA CONFERENCIA — VERSAO 9.0
+================================================
+
+1. Publique a versao 9.0 e atualize a pagina com Ctrl+F5.
+2. No celular, abra /expedicao/conferencia ou o aplicativo Conferencia instalado.
+3. A tela foi configurada para abrir em orientacao vertical.
+4. Selecione o pedido pendente.
+5. Toque no botao laranja "ESCANEAR CODIGO".
+6. Na primeira vez, permita o acesso a camera.
+7. Centralize o codigo dentro do retangulo laranja.
+8. Quando o codigo for reconhecido, a camera fecha e a unidade e conferida automaticamente.
+9. Para trocar de camera, use o botao "Trocar camera".
+10. O campo continua aceitando digitacao manual pelo teclado numerico do celular.
+
+Se o aplicativo ja estava instalado em modo horizontal, remova o aplicativo antigo, atualize a pagina e instale novamente para o novo manifesto de orientacao retrato ser aplicado imediatamente.

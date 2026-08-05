@@ -1,4 +1,4 @@
-SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 8.9
+SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 9.0
 ================================================
 
 Esta versão mantém:
@@ -7,7 +7,7 @@ Esta versão mantém:
 - QZ Tray no computador conectado à Zebra
 - Importação dos marketplaces
 
-E adiciona impressão iniciada pelo celular:
+E mantém a impressão iniciada pelo celular:
 
   CELULAR -> SERVIDOR WEB -> ESTAÇÃO DE IMPRESSÃO -> QZ TRAY -> ZEBRA USB
 
@@ -17,7 +17,7 @@ Copie estes arquivos para a pasta atual do projeto, preservando a pasta oculta .
 Depois execute:
 
   git add -A
-  git commit -m "adiciona impressao pelo celular"
+  git commit -m "adiciona modo vertical e camera no celular"
   ./publicar.sh
 
 Não execute instalar_servidor_uma_vez.sh e não altere /etc/systemd quando a infraestrutura já estiver pronta.
@@ -42,10 +42,13 @@ CONFERÊNCIA PELO CELULAR
 1. Abra:
    https://noromakweb.com.br/expedicao/conferencia
 2. Entre com o usuário do operador.
-3. Faça a conferência normalmente.
-4. Ao finalizar, a etiqueta entra na fila do servidor.
-5. A Estação imprime na Zebra e confirma o resultado ao celular.
-6. O pedido só sai dos pendentes após a confirmação da impressão.
+3. Selecione o pedido e toque em "ESCANEAR CÓDIGO".
+4. Autorize a câmera na primeira utilização.
+5. Aponte a câmera traseira para o código de barras; a leitura entra no mesmo fluxo da bipagem.
+6. Também é possível digitar o código manualmente no campo numérico.
+7. Ao finalizar, a etiqueta entra na fila do servidor.
+8. A Estação imprime na Zebra e confirma o resultado ao celular.
+9. O pedido só sai dos pendentes após a confirmação da impressão.
 
 Se o computador estiver desligado ou a Estação estiver parada, o pedido permanece conferido e aguardando impressão. Depois de iniciar a Estação, use "Verificar impressão" no celular.
 

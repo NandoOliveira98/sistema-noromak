@@ -1,0 +1,11 @@
+SISTEMA DE CONFERENCIA WEB/LINUX 9.0
+
+- Aplicativo Conferencia configurado para orientacao retrato (portrait-primary).
+- Layout responsivo para celular em tela vertical.
+- Botao "Escanear codigo" abre a camera traseira.
+- Leitura de EAN, Code 128, Code 39, QR e outros formatos via ZXing Browser.
+- Codigo reconhecido entra no mesmo fluxo da bipagem fisica.
+- Permite trocar entre camera traseira e frontal.
+- Campo de codigo permite digitacao manual no celular com teclado numerico.
+- Camera e encerrada ao fechar a janela, trocar de aba ou concluir a leitura.
+- Mantida impressao pelo celular usando a Estacao Zebra da versao 8.9.

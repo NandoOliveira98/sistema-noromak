@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sistema de Conferência Noromak — edição Web/Linux 8.9.
+"""Sistema de Conferência Noromak — edição Web/Linux 9.0.
 
 Sem dependências externas: usa apenas a biblioteca padrão do Python.
 - Escuta em 127.0.0.1:8100.
@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-APP_VERSION = "8.9"
+APP_VERSION = "9.0"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -817,7 +817,7 @@ def clear_login_failures(handler: BaseHTTPRequestHandler, username: str) -> None
 
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/8.9"
+    server_version = "NoromakExpedicao/9.0"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
