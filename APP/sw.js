@@ -1,4 +1,4 @@
-const CACHE = "noromak-expedicao-pwa-9.0";
+const CACHE = "noromak-expedicao-pwa-9.1";
 const SHELL = [
   "/expedicao/",
   "/expedicao/acesso",
@@ -7,8 +7,8 @@ const SHELL = [
   "/expedicao/estacao-impressao",
   "/expedicao/shared-storage.js",
   "/expedicao/web-auth.js",
-  "/expedicao/pwa-install.js?v=9.0",
-  "/expedicao/pwa-install.css?v=9.0"
+  "/expedicao/pwa-install.js?v=9.1",
+  "/expedicao/pwa-install.css?v=9.1"
 ];
 self.addEventListener("install", event => {
   event.waitUntil(caches.open(CACHE).then(cache => Promise.allSettled(SHELL.map(url => cache.add(url)))).then(()=>self.skipWaiting()));

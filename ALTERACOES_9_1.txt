@@ -1,0 +1,12 @@
+SISTEMA DE CONFERENCIA WEB/LINUX 9.1
+
+CORRECAO DA FILA DE IMPRESSAO NO CELULAR
+
+- Corrige o erro SQLite: table print_jobs has no column named marketplace.
+- Detecta automaticamente a estrutura antiga da fila criada pela versao 8.0.
+- Cria uma copia da tabela antiga antes da conversao.
+- Migra trabalhos antigos para a estrutura atual sempre que possivel.
+- Preserva pedidos, usuarios, etiquetas, produtos e historico.
+- A migracao acontece automaticamente ao reiniciar o servico.
+- Melhora a mensagem de erro para nao confundir falha de banco com marketplace desconhecido.
+- Mantem modo vertical, camera no celular e Estacao Zebra da versao 9.0.

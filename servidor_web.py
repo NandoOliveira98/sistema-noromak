@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sistema de Conferência Noromak — edição Web/Linux 9.0.
+"""Sistema de Conferência Noromak — edição Web/Linux 9.1.
 
 Sem dependências externas: usa apenas a biblioteca padrão do Python.
 - Escuta em 127.0.0.1:8100.
@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-APP_VERSION = "9.0"
+APP_VERSION = "9.1"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -115,6 +115,182 @@ def connect_db() -> sqlite3.Connection:
 
 
 DB = connect_db()
+
+
+PRINT_JOB_REQUIRED_COLUMNS = {
+    "id", "order_key", "order_id", "marketplace", "payload", "document_count",
+    "status", "created_at", "created_by", "updated_at", "claimed_by",
+    "claimed_at_epoch", "printed_at", "error", "attempts",
+}
+
+PRINT_JOB_CREATE_SQL = """
+CREATE TABLE print_jobs (
+    id TEXT PRIMARY KEY,
+    order_key TEXT NOT NULL,
+    order_id TEXT NOT NULL,
+    marketplace TEXT NOT NULL DEFAULT '',
+    payload TEXT NOT NULL,
+    document_count INTEGER NOT NULL DEFAULT 1,
+    status TEXT NOT NULL CHECK(status IN ('queued','claimed','printed','failed','cancelled')),
+    created_at TEXT NOT NULL,
+    created_by TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    claimed_by TEXT NOT NULL DEFAULT '',
+    claimed_at_epoch INTEGER NOT NULL DEFAULT 0,
+    printed_at TEXT NOT NULL DEFAULT '',
+    error TEXT NOT NULL DEFAULT '',
+    attempts INTEGER NOT NULL DEFAULT 0
+)
+"""
+
+
+def infer_marketplace_code(order_id: Any) -> str:
+    token = normalize(order_id)
+    if (token.isdigit() and len(token) == 11) or (token.startswith("20000") and token.isdigit() and len(token) == 16):
+        return "mercado_livre"
+    if token.startswith("LU") and len(token) >= 10:
+        return "magalu"
+    if token.isdigit() and len(token) == 16:
+        return "magalu"
+    if token.startswith("26") and any(char.isalpha() for char in token):
+        return "shopee"
+    return ""
+
+
+def parse_legacy_print_payload(raw: Any) -> list[str]:
+    if raw is None:
+        return []
+    value = raw
+    if isinstance(raw, str):
+        try:
+            value = json.loads(raw)
+        except Exception:
+            value = [raw] if raw.strip() else []
+    if isinstance(value, dict):
+        value = value.get("documents") or value.get("payload") or []
+    if not isinstance(value, list):
+        value = [value]
+    return [str(item) for item in value if isinstance(item, (str, int, float)) and str(item).strip()]
+
+
+def normalize_legacy_print_status(value: Any) -> str:
+    status = str(value or "").strip().lower()
+    mapping = {
+        "pending": "queued",
+        "queued": "queued",
+        "leased": "queued",
+        "printing": "queued",
+        "claimed": "queued",
+        "completed": "printed",
+        "complete": "printed",
+        "done": "printed",
+        "success": "printed",
+        "printed": "printed",
+        "failed": "failed",
+        "error": "failed",
+        "cancelled": "cancelled",
+        "canceled": "cancelled",
+    }
+    return mapping.get(status, "failed")
+
+
+def ensure_print_queue_schema() -> None:
+    """Atualiza bancos antigos da fila de impressão sem apagar pedidos ou histórico.
+
+    A versão 8.0 usava outra estrutura em ``print_jobs`` (documents, kind,
+    created_epoch etc.). O SQLite não adiciona colunas quando usamos
+    ``CREATE TABLE IF NOT EXISTS``. Por isso, ao atualizar um banco existente,
+    a fila móvel podia falhar com ``no column named marketplace``.
+    """
+    with DB_LOCK:
+        info = DB.execute("PRAGMA table_info(print_jobs)").fetchall()
+        if not info:
+            DB.execute(PRINT_JOB_CREATE_SQL)
+            DB.execute("CREATE INDEX IF NOT EXISTS idx_print_jobs_status_created ON print_jobs(status, created_at)")
+            DB.execute("CREATE INDEX IF NOT EXISTS idx_print_jobs_order ON print_jobs(order_key, created_at)")
+            DB.commit()
+            return
+
+        columns = {str(row["name"]) for row in info}
+        if PRINT_JOB_REQUIRED_COLUMNS.issubset(columns):
+            # Remove apenas o índice legado da versão do agente local, se ainda existir.
+            DB.execute("DROP INDEX IF EXISTS idx_print_jobs_queue")
+            DB.execute("CREATE INDEX IF NOT EXISTS idx_print_jobs_status_created ON print_jobs(status, created_at)")
+            DB.execute("CREATE INDEX IF NOT EXISTS idx_print_jobs_order ON print_jobs(order_key, created_at)")
+            DB.commit()
+            return
+
+        old_rows = [dict(row) for row in DB.execute("SELECT * FROM print_jobs").fetchall()]
+        is_legacy_agent_schema = "documents" in columns and "payload" not in columns
+        legacy_name = f"print_jobs_legacy_{int(time.time())}"
+        suffix = 1
+        while DB.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (legacy_name,)).fetchone():
+            suffix += 1
+            legacy_name = f"print_jobs_legacy_{int(time.time())}_{suffix}"
+
+        indexes = [
+            row["name"]
+            for row in DB.execute(
+                "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='print_jobs' AND sql IS NOT NULL"
+            ).fetchall()
+        ]
+
+        DB.execute("BEGIN IMMEDIATE")
+        try:
+            for index_name in indexes:
+                safe_index = str(index_name).replace('"', '""')
+                DB.execute(f'DROP INDEX IF EXISTS "{safe_index}"')
+            DB.execute(f'ALTER TABLE print_jobs RENAME TO "{legacy_name}"')
+            DB.execute(PRINT_JOB_CREATE_SQL)
+            DB.execute("CREATE INDEX idx_print_jobs_status_created ON print_jobs(status, created_at)")
+            DB.execute("CREATE INDEX idx_print_jobs_order ON print_jobs(order_key, created_at)")
+
+            for old in old_rows:
+                payload = parse_legacy_print_payload(old.get("payload", old.get("documents")))
+                order_id = str(old.get("order_id") or old.get("pedido") or "").strip()
+                order_key = str(old.get("order_key") or normalize(order_id)).strip()
+                created_at = str(old.get("created_at") or now_iso())
+                raw_status = str(old.get("status") or "").strip().lower()
+                status = normalize_legacy_print_status(raw_status)
+                migration_error = str(old.get("error") or "")
+                # Trabalhos ainda pendentes do agente abandonado da versão 8.0
+                # não voltam para a fila, evitando impressão duplicada de etiquetas antigas.
+                if is_legacy_agent_schema and raw_status in {"pending", "leased", "printing", "claimed", "queued"}:
+                    status = "cancelled"
+                    migration_error = (migration_error + " | " if migration_error else "") + "Fila antiga arquivada na atualização 9.1"
+                printed_at = str(old.get("printed_at") or old.get("completed_at") or "") if status == "printed" else ""
+                updated_at = str(old.get("updated_at") or printed_at or created_at)
+                marketplace = str(old.get("marketplace") or infer_marketplace_code(order_id)).strip()
+                claimed_by = str(old.get("claimed_by") or old.get("leased_by") or "") if status == "claimed" else ""
+                claimed_at_epoch = int(old.get("claimed_at_epoch") or 0) if status == "claimed" else 0
+                DB.execute(
+                    """INSERT OR IGNORE INTO print_jobs(
+                           id,order_key,order_id,marketplace,payload,document_count,status,
+                           created_at,created_by,updated_at,claimed_by,claimed_at_epoch,
+                           printed_at,error,attempts
+                       ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (
+                        str(old.get("id") or ("PRN-MIG-" + secrets.token_urlsafe(12))),
+                        order_key,
+                        order_id,
+                        marketplace,
+                        json_dumps(payload),
+                        len(payload),
+                        status,
+                        created_at,
+                        str(old.get("created_by") or "migracao"),
+                        updated_at,
+                        claimed_by,
+                        claimed_at_epoch,
+                        printed_at,
+                        migration_error,
+                        int(old.get("attempts") or 0),
+                    ),
+                )
+            DB.commit()
+        except Exception:
+            DB.rollback()
+            raise
 
 
 def init_db() -> None:
@@ -218,6 +394,7 @@ def init_db() -> None:
                 (ADMIN_USERNAME, ADMIN_USERNAME, now_iso()),
             )
         DB.commit()
+    ensure_print_queue_schema()
     migrate_legacy_if_empty()
     ensure_storage_defaults()
     migrate_app_users()
@@ -817,7 +994,7 @@ def clear_login_failures(handler: BaseHTTPRequestHandler, username: str) -> None
 
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/9.0"
+    server_version = "NoromakExpedicao/9.1"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))

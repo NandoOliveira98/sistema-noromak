@@ -5,10 +5,10 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#1F57A5">
 <meta name="application-name" content="Noromak Estação de Impressão">
-<link rel="manifest" href="/expedicao/manifest-estacao.webmanifest?v=9.0" crossorigin="use-credentials">
-<link rel="icon" href="/favicon.ico?v=9.0" sizes="any">
-<link rel="stylesheet" href="/expedicao/pwa-install.css?v=9.0">
-<link rel="shortcut icon" href="/favicon.ico?v=9.0">
+<link rel="manifest" href="/expedicao/manifest-estacao.webmanifest?v=9.1" crossorigin="use-credentials">
+<link rel="icon" href="/favicon.ico?v=9.1" sizes="any">
+<link rel="stylesheet" href="/expedicao/pwa-install.css?v=9.1">
+<link rel="shortcut icon" href="/favicon.ico?v=9.1">
 <title>Noromak — Estação de Impressão</title>
 <script src="https://cdn.jsdelivr.net/npm/qz-tray@2.2.6/qz-tray.js"></script>
 <style>
@@ -19,7 +19,7 @@
 <body>
 <div id="loginLayer" class="login-layer">
   <form id="loginForm" class="login">
-    <img src="/nk-logo.svg?v=9.0" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=9.0'">
+    <img src="/nk-logo.svg?v=9.1" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=9.1'">
     <h2>Estação de Impressão</h2>
     <p>Entre com um usuário do estoque neste computador conectado à Zebra.</p>
     <input id="loginUser" autocomplete="username" placeholder="Usuário / Login" required>
@@ -29,7 +29,7 @@
   </form>
 </div>
 <header class="topo">
-  <img src="/grupo-noromak.png?v=9.0" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=9.0'">
+  <img src="/grupo-noromak.png?v=9.1" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=9.1'">
   <div style="display:flex;align-items:center;gap:12px"><button type="button" class="pwa-install-btn pwa-header" data-pwa-install>⬇ INSTALAR ESTAÇÃO</button><div style="text-align:right"><h1>Estação de Impressão Zebra</h1><small>Recebe etiquetas conferidas pelo celular</small></div></div>
 </header>
 <main class="wrap">
@@ -91,5 +91,5 @@ async function initializePanel(){await refreshSummary().catch(()=>{});if(el("aut
 loadSession().then(ok=>{if(ok)initializePanel()}).catch(e=>{el("loginError").textContent=e.message||e;el("loginLayer").classList.remove("hidden")});
 })();
 </script>
-<script src="/expedicao/pwa-install.js?v=9.0"></script>
+<script src="/expedicao/pwa-install.js?v=9.1"></script>
 </body></html>
