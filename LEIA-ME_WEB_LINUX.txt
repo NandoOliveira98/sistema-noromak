@@ -1,15 +1,19 @@
-SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 9.0
+SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 9.4
 ================================================
 
 Esta versão mantém:
 - Noromak Admin instalável
 - Noromak Conferência instalável
-- QZ Tray no computador conectado à Zebra
-- Importação dos marketplaces
+- Conferência vertical no celular e leitura por câmera
+- Importação direta de Mercado Livre, Shopee e Magalu pela extensão
+- Fila de impressão e histórico
 
-E mantém a impressão iniciada pelo celular:
+E substitui o QZ Tray pelo Noromak Print Service:
 
-  CELULAR -> SERVIDOR WEB -> ESTAÇÃO DE IMPRESSÃO -> QZ TRAY -> ZEBRA USB
+  CELULAR/COMPUTADOR -> SERVIDOR WEB -> ESTAÇÃO DE IMPRESSÃO
+  -> NOROMAK PRINT SERVICE -> FILA RAW DO WINDOWS -> ZEBRA USB
+
+Não existe janela Allow e nenhuma confirmação é exigida por etiqueta.
 
 PUBLICAR
 --------
@@ -17,44 +21,41 @@ Copie estes arquivos para a pasta atual do projeto, preservando a pasta oculta .
 Depois execute:
 
   git add -A
-  git commit -m "adiciona modo vertical e camera no celular"
+  git commit -m "adiciona Noromak Print Service"
   ./publicar.sh
 
 Não execute instalar_servidor_uma_vez.sh e não altere /etc/systemd quando a infraestrutura já estiver pronta.
-A atualização cria automaticamente as tabelas da fila no mesmo SQLite permanente.
+O banco permanente é preservado.
 
 COMPUTADOR CONECTADO À ZEBRA
 ----------------------------
-1. Deixe a Zebra conectada por USB e o QZ Tray aberto.
-2. Abra:
+1. Abra a pasta:
+   FERRAMENTAS_WINDOWS/NOROMAK_PRINT_SERVICE_ZEBRA_V2_0
+2. Execute CONFIGURAR_NOROMAK_PRINT_SERVICE.bat.
+3. Selecione a Zebra na lista de impressoras.
+4. Confirme a impressão de teste.
+5. Acesse:
    https://noromakweb.com.br/expedicao/estacao-impressao
-3. Entre com um usuário do estoque.
-4. Confirme o nome da impressora, normalmente:
-   ZDesigner ZD220-203dpi ZPL
-5. Clique em "Testar Zebra".
-6. Clique em "Iniciar estação".
-7. Deixe a Estação de Impressão aberta durante as conferências pelo celular.
+6. Entre uma vez com um usuário do estoque.
+7. Deixe a Estação Zebra aberta.
 
-A Estação pode ser instalada como aplicativo separado pelo botão "Instalar Estação".
+O programa local inicia automaticamente com o Windows.
+A página da estação também é aberta automaticamente no login do Windows.
 
 CONFERÊNCIA PELO CELULAR
 ------------------------
-1. Abra:
-   https://noromakweb.com.br/expedicao/conferencia
+1. Abra https://noromakweb.com.br/expedicao/conferencia.
 2. Entre com o usuário do operador.
-3. Selecione o pedido e toque em "ESCANEAR CÓDIGO".
-4. Autorize a câmera na primeira utilização.
-5. Aponte a câmera traseira para o código de barras; a leitura entra no mesmo fluxo da bipagem.
-6. Também é possível digitar o código manualmente no campo numérico.
-7. Ao finalizar, a etiqueta entra na fila do servidor.
-8. A Estação imprime na Zebra e confirma o resultado ao celular.
-9. O pedido só sai dos pendentes após a confirmação da impressão.
+3. Selecione o pedido e use o botão ESCANEAR CÓDIGO.
+4. Ao finalizar, a etiqueta entra na fila.
+5. A Estação Zebra entrega o ZPL ao programa local.
+6. O pedido só sai dos pendentes depois que o envio RAW à Zebra for confirmado.
 
-Se o computador estiver desligado ou a Estação estiver parada, o pedido permanece conferido e aguardando impressão. Depois de iniciar a Estação, use "Verificar impressão" no celular.
-
-IMPRESSÃO NO COMPUTADOR
------------------------
-A Conferência aberta no próprio computador da Zebra continua tentando imprimir diretamente pelo QZ Tray. Se o QZ local não estiver disponível, ela usa automaticamente a Estação de Impressão.
+DIAGNÓSTICO DO COMPUTADOR DA ZEBRA
+----------------------------------
+Status local: http://127.0.0.1:18181/
+Log: %LOCALAPPDATA%\NoromakPrintService\service.log
+Configuração: %LOCALAPPDATA%\NoromakPrintService\config.json
 
 SERVIDOR
 --------
@@ -62,12 +63,7 @@ Aplicação: 127.0.0.1:8100
 Caminho: /expedicao
 Banco: /home/expedicao/dados/expedicao.db
 Backups: /home/expedicao/backups
-Chave privada QZ: /home/expedicao/qz/qz-private-key.pem
 
-A publicação não substitui o banco permanente.
-
-IMPRESSAO AUTOMATICA PELO CELULAR (9.3)
----------------------------------------
-No computador conectado a Zebra, execute uma unica vez:
-CONFIGURAR_ESTACAO_IMPRESSAO_AUTOMATICA.bat
-A Estacao Zebra e o QZ Tray passarao a abrir automaticamente com o Windows.
+O Noromak Print Service não acessa o servidor diretamente. A página autenticada
+/expedicao/estacao-impressao faz a ponte com o serviço local em 127.0.0.1.
+Por isso não é necessário liberar uma rota sem login no nginx.

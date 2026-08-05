@@ -1,0 +1,12 @@
+VERSÃO 9.4 — NOROMAK PRINT SERVICE
+==================================
+
+- Remove o QZ Tray do fluxo operacional de impressão.
+- Toda impressão da Conferência passa pela fila Web e pela Estação Zebra.
+- A Estação Zebra envia o ZPL ao Noromak Print Service instalado no Windows.
+- O programa local imprime diretamente na fila RAW da Zebra, sem janela Allow.
+- Não é necessário liberar rotas públicas do nginx: a página autenticada da estação faz a ponte com o serviço local em 127.0.0.1.
+- Proteção contra duplicidade por ID do trabalho no servidor e também no computador.
+- Serviço local inicia automaticamente com o Windows.
+- Diagnóstico local em http://127.0.0.1:18181/.
+- Mantidos: impressão pelo celular, câmera para bipagem, fila, histórico, PWA Admin/Conferência e importação por extensão.

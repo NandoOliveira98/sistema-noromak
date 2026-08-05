@@ -1,10 +1,17 @@
-IMPRESSAO PELO CELULAR — VERSAO 9.3
+IMPRESSAO PELO CELULAR — VERSAO 9.4
 ====================================
 
-Fluxo:
-Celular -> fila Web -> Estacao Zebra -> QZ Tray headless -> impressora USB.
+NO COMPUTADOR DA ZEBRA
+1. Instale FERRAMENTAS_WINDOWS/NOROMAK_PRINT_SERVICE_ZEBRA_V2_0.
+2. Abra https://noromakweb.com.br/expedicao/estacao-impressao.
+3. Entre uma vez com um usuario do estoque.
+4. Confirme que os dois indicadores estao verdes.
+5. Deixe a pagina aberta.
 
-No uso diario nao e necessario clicar em Allow, Iniciar ou Imprimir no computador.
-O computador da Zebra precisa estar ligado, com o Windows conectado e com a Estacao aberta.
+NO CELULAR
+- Abra /expedicao/conferencia.
+- Confira o pedido e finalize normalmente.
+- A etiqueta passa pela fila do servidor e e impressa automaticamente na Zebra.
 
-Se o QZ silencioso estiver indisponivel, o pedido nao sera removido da fila.
+NAO E UTILIZADO QZ TRAY.
+NAO EXISTE JANELA ALLOW.

@@ -1,0 +1,12 @@
+NOROMAK PRINT SERVICE — IMPRESSAO SEM QZ TRAY
+==============================================
+
+1. Publique a versao 9.4 normalmente.
+2. No computador conectado a Zebra, abra a pasta:
+   FERRAMENTAS_WINDOWS/NOROMAK_PRINT_SERVICE_ZEBRA_V2_0
+3. Execute CONFIGURAR_NOROMAK_PRINT_SERVICE.bat.
+4. Selecione a Zebra correta e imprima o teste.
+5. Entre uma vez na pagina /expedicao/estacao-impressao.
+6. Deixe a pagina aberta. A partir disso, o celular pode concluir e imprimir sem confirmacao.
+
+O QZ Tray nao e utilizado no fluxo da versao 9.4.

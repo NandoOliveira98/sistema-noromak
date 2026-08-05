@@ -7,16 +7,15 @@
 <meta name="application-name" content="Noromak Conferência">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="manifest" href="/expedicao/manifest-conferencia.webmanifest?v=9.3" crossorigin="use-credentials">
-<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/conferencia-180.png?v=9.3">
-<link rel="icon" href="/favicon.ico?v=9.3" sizes="any">
-<link rel="shortcut icon" href="/favicon.ico?v=9.3">
-<link rel="stylesheet" href="/expedicao/pwa-install.css?v=9.3">
+<link rel="manifest" href="/expedicao/manifest-conferencia.webmanifest?v=9.4" crossorigin="use-credentials">
+<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/conferencia-180.png?v=9.4">
+<link rel="icon" href="/favicon.ico?v=9.4" sizes="any">
+<link rel="shortcut icon" href="/favicon.ico?v=9.4">
+<link rel="stylesheet" href="/expedicao/pwa-install.css?v=9.4">
 <title>Noromak - Conferência em Rede</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/js-sha256/0.9.0/sha256.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/qz-tray@2.2.6/qz-tray.js"></script>
 <script src="https://unpkg.com/@zxing/browser@0.1.5/umd/zxing-browser.min.js"></script>
 
 <style>
@@ -290,7 +289,7 @@
 </style>
 <script src="/expedicao/shared-storage.js"></script>
 <script src="/expedicao/web-auth.js"></script>
-<script defer src="/expedicao/pwa-install.js?v=9.3"></script>
+<script defer src="/expedicao/pwa-install.js?v=9.4"></script>
 </head>
 
 <body>
@@ -298,9 +297,9 @@
 <div id="telaLogin">
   <div class="box-card">
     <div class="logo-box">
-      <img src="/nk-logo.svg?v=9.3" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=9.3';">
+      <img src="/nk-logo.svg?v=9.4" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=9.4';">
     </div>
-    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 9.3 — identidade visual oficial do servidor</div>
+    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 9.4 — identidade visual oficial do servidor</div>
 
     <div class="box-upload-rede" style="border-style:solid;">
       <label>🗄 PEDIDOS COMPARTILHADOS NA REDE:</label>
@@ -390,12 +389,12 @@
 
 <header>
   <div class="logo-mini-box">
-    <img src="/grupo-noromak.png?v=9.3" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=9.3';">
+    <img src="/grupo-noromak.png?v=9.4" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=9.4';">
   </div>
   <div class="usuario-area">
     <div style="text-align: right;">
       <span id="infoUsuario"></span><br>
-      <span id="qzStatusBadge" class="qz-status qz-desconectado">Impressão local ou pela estação Zebra</span>
+      <span id="qzStatusBadge" class="qz-status qz-desconectado">Impressão pela Estação Zebra</span>
       <span id="autosaveStatus" class="autosave-status">Salvamento automático ativo</span>
     </div>
     <button type="button" class="pwa-install-btn pwa-header" data-pwa-install>⬇ INSTALAR</button>
@@ -2245,10 +2244,9 @@ function prepararDadosImpressaoMarketplace(resultadoEtiqueta) {
 }
 
 function dispositivoSemQzLocal() {
-  const ua = navigator.userAgent || "";
-  const movel = /Android|iPhone|iPad|iPod|Mobile/i.test(ua) ||
-    (window.matchMedia && window.matchMedia("(pointer: coarse)").matches && window.innerWidth < 1100);
-  return movel || typeof qz === "undefined" || !qz.websocket;
+  // A partir da versão 9.4, toda impressão passa pela fila e pela Estação Zebra.
+  // Isso elimina QZ Tray e janelas de autorização tanto no computador quanto no celular.
+  return true;
 }
 
 async function atualizarBadgeEstacaoRemota() {
@@ -2299,27 +2297,26 @@ async function aguardarImpressaoRemota(jobId, limiteMs = 90000) {
 }
 
 async function imprimirDadosComFallback(pedido, marketplace, data, reprint = false) {
-  if (!dispositivoSemQzLocal()) {
-    try {
-      const config = await obterConfiguracaoImpressora();
-      await qz.print(config, data);
-      console.log(`${nomeMarketplace(marketplace)}: ${data.length} impressão(ões) local(is) enviada(s).`);
-      return { quantidade: data.length, dados: data.slice(), modo: "local", pendente: false };
-    } catch (erroLocal) {
-      console.warn("Impressão local indisponível; usando estação remota.", erroLocal);
-    }
-  }
-
   const badge = document.getElementById("qzStatusBadge");
-  if (badge) { badge.textContent = "Enviando para a estação Zebra"; badge.className = "qz-status qz-conectado"; }
+  if (badge) {
+    badge.textContent = "Enviando para a Estação Zebra";
+    badge.className = "qz-status qz-conectado";
+  }
   const job = await enfileirarImpressaoRemota(pedido, marketplace, data, reprint);
   document.getElementById("statusMsg").innerHTML = "📱 Etiqueta enviada para o computador da Zebra. Aguardando impressão...";
-  mostrarMensagemDetalhada("info", "Aguardando a estação de impressão", `Pedido ${pedidoParaExibicao(pedido, marketplace)}`, "Mantenha a Estação de Impressão aberta no computador conectado à Zebra.");
+  mostrarMensagemDetalhada(
+    "info",
+    "Aguardando a estação de impressão",
+    `Pedido ${pedidoParaExibicao(pedido, marketplace)}`,
+    "Mantenha a Estação Zebra aberta no computador conectado à impressora. O Noromak Print Service fará a impressão sem confirmação."
+  );
   const final = await aguardarImpressaoRemota(job.id);
   if (final.status === "printed") {
     return { quantidade: data.length, dados: data.slice(), modo: "fila", jobId: job.id, pendente: false };
   }
-  if (final.status === "failed") throw new Error(`A estação Zebra não conseguiu imprimir: ${final.error || "falha não informada"}`);
+  if (final.status === "failed") {
+    throw new Error(`A Estação Zebra não conseguiu imprimir: ${final.error || "falha não informada"}`);
+  }
   return { quantidade: data.length, dados: data.slice(), modo: "fila", jobId: job.id, pendente: true, status: final.status };
 }
 
