@@ -1,0 +1,8 @@
+VERSÃO 8.8 — IDENTIDADE VISUAL OFICIAL DO SERVIDOR
+
+- O favicon das telas Acesso, Administração e Conferência agora usa /favicon.ico.
+- As telas de login usam a logo vetorial oficial /nk-logo.svg, com fallback para /nk-logo.png.
+- Os cabeçalhos usam a assinatura oficial /grupo-noromak.png, com fallback para /nk-logo.svg.
+- A tela inicial de acesso exibe também a assinatura Grupo Noromak.
+- Os ícones próprios dos dois aplicativos instaláveis foram mantidos para que Admin e Conferência continuem separados no Windows.
+- Cache e referências de versão atualizados para 8.8.

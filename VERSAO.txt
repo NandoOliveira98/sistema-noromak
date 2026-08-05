@@ -1,2 +1,2 @@
-SISTEMA DE CONFERÊNCIA WEB/LINUX — VERSÃO 8.7
-PWA corrigida para páginas autenticadas, instalação separada e favicons restaurados.
+SISTEMA DE CONFERÊNCIA WEB/LINUX — VERSÃO 8.8
+Identidade oficial do NoromakWeb aplicada: favicon do servidor e logos oficiais NK/Grupo Noromak.
