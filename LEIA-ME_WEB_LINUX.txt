@@ -1,4 +1,4 @@
-SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 8.6
+SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 8.7
 ================================================
 
 Esta versão mantém o QZ Tray e adiciona dois aplicativos PWA instaláveis e separados:

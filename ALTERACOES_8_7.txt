@@ -1,0 +1,9 @@
+VERSÃO 8.7 — CORREÇÃO DOS APLICATIVOS INSTALÁVEIS
+
+- Corrigido o manifesto protegido por login com crossorigin="use-credentials".
+- Administração e Conferência mantêm identidades e escopos separados.
+- O botão agora informa quando o Chrome ainda está preparando a instalação e é ativado somente quando o navegador libera o prompt.
+- Cache do service worker atualizado, sem servir manifesto ou ícones antigos.
+- Favicons 16, 32 e 48 px restaurados nas três telas.
+- Ícones maskable próprios adicionados.
+- Mantidas todas as funções da versão 8.6.

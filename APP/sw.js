@@ -1,4 +1,4 @@
-const CACHE = "noromak-expedicao-pwa-8.6";
+const CACHE = "noromak-expedicao-pwa-8.7";
 const SHELL = [
   "/expedicao/",
   "/expedicao/acesso",
@@ -6,14 +6,8 @@ const SHELL = [
   "/expedicao/conferencia",
   "/expedicao/shared-storage.js",
   "/expedicao/web-auth.js",
-  "/expedicao/pwa-install.js",
-  "/expedicao/pwa-install.css",
-  "/expedicao/manifest-admin.webmanifest",
-  "/expedicao/manifest-conferencia.webmanifest",
-  "/expedicao/icons/admin-192.png",
-  "/expedicao/icons/admin-512.png",
-  "/expedicao/icons/conferencia-192.png",
-  "/expedicao/icons/conferencia-512.png"
+  "/expedicao/pwa-install.js?v=8.7",
+  "/expedicao/pwa-install.css?v=8.7"
 ];
 self.addEventListener("install", event => {
   event.waitUntil(caches.open(CACHE).then(cache => Promise.allSettled(SHELL.map(url => cache.add(url)))).then(()=>self.skipWaiting()));
@@ -26,6 +20,11 @@ self.addEventListener("fetch", event => {
   const url = new URL(req.url);
   if (req.method !== "GET" || url.origin !== self.location.origin || !url.pathname.startsWith("/expedicao/")) return;
   if (url.pathname.includes("/api/") || url.pathname.endsWith("/sw.js")) return;
+  const alwaysFresh = url.pathname.endsWith(".webmanifest") || url.pathname.includes("/icons/") || url.pathname.endsWith("/pwa-install.js") || url.pathname.endsWith("/pwa-install.css");
+  if (alwaysFresh) {
+    event.respondWith(fetch(req, {cache:"no-store"}));
+    return;
+  }
   if (req.mode === "navigate") {
     event.respondWith(fetch(req).then(res => { const copy=res.clone(); caches.open(CACHE).then(c=>c.put(req,copy)); return res; }).catch(async()=> (await caches.match(req)) || (url.pathname.includes("admin") ? caches.match("/expedicao/admin") : url.pathname.includes("conferencia") ? caches.match("/expedicao/conferencia") : caches.match("/expedicao/"))));
     return;

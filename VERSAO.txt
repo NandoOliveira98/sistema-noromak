@@ -1,2 +1,2 @@
-SISTEMA DE CONFERÊNCIA WEB/LINUX — VERSÃO 8.6
-Aplicativos PWA separados: Administração e Conferência.
+SISTEMA DE CONFERÊNCIA WEB/LINUX — VERSÃO 8.7
+PWA corrigida para páginas autenticadas, instalação separada e favicons restaurados.

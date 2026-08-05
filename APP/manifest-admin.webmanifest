@@ -5,32 +5,35 @@
   "description": "Painel administrativo de pedidos, produtos, usuários e etiquetas da Expedição Noromak.",
   "lang": "pt-BR",
   "dir": "ltr",
-  "start_url": "/expedicao/admin?origem=pwa",
-  "scope": "/expedicao/",
+  "start_url": "/expedicao/admin?source=pwa",
+  "scope": "/expedicao/admin",
   "display": "standalone",
-  "display_override": [
-    "window-controls-overlay",
-    "standalone"
-  ],
   "orientation": "any",
   "background_color": "#F4F7F9",
   "theme_color": "#1F57A5",
+  "prefer_related_applications": false,
   "categories": [
     "business",
     "productivity"
   ],
   "icons": [
     {
-      "src": "/expedicao/icons/admin-192.png",
+      "src": "/expedicao/icons/admin-192.png?v=8.7",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/expedicao/icons/admin-512.png",
+      "src": "/expedicao/icons/admin-512.png?v=8.7",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
+    },
+    {
+      "src": "/expedicao/icons/admin-maskable-512.png?v=8.7",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ],
   "shortcuts": [
@@ -40,7 +43,7 @@
       "url": "/expedicao/admin?aba=pedidos",
       "icons": [
         {
-          "src": "/expedicao/icons/admin-192.png",
+          "src": "/expedicao/icons/admin-192.png?v=8.7",
           "sizes": "192x192",
           "type": "image/png"
         }
@@ -52,7 +55,7 @@
       "url": "/expedicao/admin?aba=usuarios",
       "icons": [
         {
-          "src": "/expedicao/icons/admin-192.png",
+          "src": "/expedicao/icons/admin-192.png?v=8.7",
           "sizes": "192x192",
           "type": "image/png"
         }
