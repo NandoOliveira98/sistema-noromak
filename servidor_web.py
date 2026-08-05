@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sistema de Conferência Noromak — edição Web/Linux 9.1.
+"""Sistema de Conferência Noromak — edição Web/Linux 9.2.
 
 Sem dependências externas: usa apenas a biblioteca padrão do Python.
 - Escuta em 127.0.0.1:8100.
@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-APP_VERSION = "9.1"
+APP_VERSION = "9.2"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -53,6 +53,7 @@ PRINT_STATION_ONLINE_SECONDS = int(os.getenv("EXP_PRINT_STATION_ONLINE_SECONDS",
 AUTH_CACHE_SECONDS = 180
 SESSION_COOKIE = "expedicao_estoque"
 SESSION_TTL_SECONDS = int(os.getenv("EXP_SESSION_TTL_SECONDS", str(12 * 60 * 60)))
+STATION_SESSION_TTL_SECONDS = int(os.getenv("EXP_STATION_SESSION_TTL_SECONDS", str(180 * 24 * 60 * 60)))
 PASSWORD_ITERATIONS = int(os.getenv("EXP_PASSWORD_ITERATIONS", "240000"))
 PASSWORD_MASK = "********"
 INITIAL_ADMIN_PASSWORD = os.getenv("EXP_ADMIN_SENHA", "01101998")
@@ -293,6 +294,26 @@ def ensure_print_queue_schema() -> None:
             raise
 
 
+
+def ensure_app_sessions_schema() -> None:
+    """Adiciona a área da sessão em bancos anteriores à versão 9.2.
+
+    A Estação Zebra usa uma sessão persistente própria, para que o computador
+    possa reiniciar e voltar a imprimir sem pedir o login do estoque todos os dias.
+    """
+    with DB_LOCK:
+        info = DB.execute("PRAGMA table_info(app_sessions)").fetchall()
+        if not info:
+            return
+        columns = {str(row["name"]) for row in info}
+        if "area" not in columns:
+            DB.execute("ALTER TABLE app_sessions ADD COLUMN area TEXT NOT NULL DEFAULT 'conferencia'")
+            DB.commit()
+
+
+def session_ttl_for_area(area: str) -> int:
+    return STATION_SESSION_TTL_SECONDS if str(area or "").lower() in {"estacao", "station", "impressao"} else SESSION_TTL_SECONDS
+
 def init_db() -> None:
     with DB_LOCK:
         DB.executescript(
@@ -341,6 +362,7 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS app_sessions (
                 token_hash TEXT PRIMARY KEY,
                 username TEXT NOT NULL,
+                area TEXT NOT NULL DEFAULT 'conferencia',
                 created_at TEXT NOT NULL,
                 last_seen TEXT NOT NULL,
                 expires_at INTEGER NOT NULL,
@@ -395,6 +417,7 @@ def init_db() -> None:
             )
         DB.commit()
     ensure_print_queue_schema()
+    ensure_app_sessions_schema()
     migrate_legacy_if_empty()
     ensure_storage_defaults()
     migrate_app_users()
@@ -942,7 +965,7 @@ def session_context(handler: BaseHTTPRequestHandler) -> dict[str, Any] | None:
     now_epoch = int(time.time())
     with DB_LOCK:
         row = DB.execute(
-            """SELECT s.token_hash,s.username,s.expires_at,u.display_name,u.role,u.active
+            """SELECT s.token_hash,s.username,s.area,s.expires_at,u.display_name,u.role,u.active
                FROM app_sessions s JOIN app_users u ON u.username=s.username
                WHERE s.token_hash=?""",
             (token_hash,),
@@ -951,9 +974,10 @@ def session_context(handler: BaseHTTPRequestHandler) -> dict[str, Any] | None:
             DB.execute("DELETE FROM app_sessions WHERE token_hash=?", (token_hash,))
             DB.commit()
             return None
+        area = str(row["area"] or "conferencia")
         DB.execute(
             "UPDATE app_sessions SET last_seen=?,expires_at=? WHERE token_hash=?",
-            (now_iso(), now_epoch + SESSION_TTL_SECONDS, token_hash),
+            (now_iso(), now_epoch + session_ttl_for_area(area), token_hash),
         )
         DB.commit()
     return {
@@ -961,6 +985,7 @@ def session_context(handler: BaseHTTPRequestHandler) -> dict[str, Any] | None:
         "nome": row["display_name"] or row["username"],
         "app_role": row["role"],
         "app_active": True,
+        "area": str(row["area"] or "conferencia"),
     }
 
 
@@ -994,7 +1019,7 @@ def clear_login_failures(handler: BaseHTTPRequestHandler, username: str) -> None
 
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/9.1"
+    server_version = "NoromakExpedicao/9.2"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
@@ -1053,13 +1078,15 @@ class AppHandler(BaseHTTPRequestHandler):
             return None
         return ctx
 
-    def session_cookie_header(self, token: str, expire: bool = False) -> str:
+    def session_cookie_header(self, token: str, expire: bool = False, max_age: int | None = None) -> str:
         parts = [f"{SESSION_COOKIE}={token}", f"Path={BASE_PATH}", "HttpOnly", "SameSite=Lax"]
         forwarded_proto = self.headers.get("X-Forwarded-Proto", "").lower()
         if forwarded_proto == "https" or self.headers.get("Host", "").startswith("noromakweb.com.br"):
             parts.append("Secure")
         if expire:
             parts.extend(["Max-Age=0", "Expires=Thu, 01 Jan 1970 00:00:00 GMT"])
+        elif max_age is not None and max_age > 0:
+            parts.append(f"Max-Age={int(max_age)}")
         return "; ".join(parts)
 
 
@@ -1212,6 +1239,8 @@ class AppHandler(BaseHTTPRequestHandler):
             username = str(req.get("username") or "").strip().lower()
             password = str(req.get("password") or "")
             area = str(req.get("area") or "conferencia").strip().lower()
+            if area in {"station", "impressao"}:
+                area = "estacao"
             if not username or not password:
                 raise ValueError("Informe usuário e senha.")
             if login_rate_limited(self, username):
@@ -1237,9 +1266,9 @@ class AppHandler(BaseHTTPRequestHandler):
                 if old:
                     DB.execute("DELETE FROM app_sessions WHERE token_hash=?", (hashlib.sha256(old.encode("utf-8")).hexdigest(),))
                 DB.execute(
-                    """INSERT INTO app_sessions(token_hash,username,created_at,last_seen,expires_at,ip,user_agent)
-                       VALUES(?,?,?,?,?,?,?)""",
-                    (token_hash, username, now_iso(), now_iso(), now_epoch + SESSION_TTL_SECONDS,
+                    """INSERT INTO app_sessions(token_hash,username,area,created_at,last_seen,expires_at,ip,user_agent)
+                       VALUES(?,?,?,?,?,?,?,?)""",
+                    (token_hash, username, area, now_iso(), now_iso(), now_epoch + session_ttl_for_area(area),
                      client_computer(self), self.headers.get("User-Agent", "")[:500]),
                 )
                 DB.commit()
@@ -1247,7 +1276,7 @@ class AppHandler(BaseHTTPRequestHandler):
             audit(username, "auth.login", f"{area}:{client_computer(self)}")
             self.send_json(
                 {"ok": True, "user": user},
-                headers={"Set-Cookie": self.session_cookie_header(token)},
+                headers={"Set-Cookie": self.session_cookie_header(token, max_age=session_ttl_for_area(area))},
             )
         except (ValueError, json.JSONDecodeError) as exc:
             self.send_json({"error": str(exc)}, 400)
@@ -1570,35 +1599,47 @@ class AppHandler(BaseHTTPRequestHandler):
         station_id = (query.get("station_id") or [""])[0].strip()
         station_name = (query.get("station_name") or ["Estação Zebra"])[0].strip()
         printer_name = (query.get("printer_name") or [""])[0].strip()
+        try:
+            wait_seconds = max(0, min(25, int((query.get("wait") or ["0"])[0] or 0)))
+        except ValueError:
+            wait_seconds = 0
         if not station_id:
             self.send_json({"error": "Identificação da estação não informada."}, 400)
             return
-        self.touch_print_station(ctx, station_id, station_name, printer_name)
-        now_epoch = int(time.time())
-        stale_before = now_epoch - PRINT_CLAIM_STALE_SECONDS
-        with DB_LOCK:
-            DB.execute("BEGIN IMMEDIATE")
-            try:
-                DB.execute(
-                    """UPDATE print_jobs SET status='queued',claimed_by='',claimed_at_epoch=0,updated_at=?,
-                       error=CASE WHEN error='' THEN 'Trabalho devolvido à fila após perda de comunicação com a estação.' ELSE error END
-                       WHERE status='claimed' AND claimed_at_epoch>0 AND claimed_at_epoch<?""",
-                    (now_iso(), stale_before),
-                )
-                row = DB.execute(
-                    "SELECT * FROM print_jobs WHERE status='queued' ORDER BY created_at ASC LIMIT 1"
-                ).fetchone()
-                if row:
+
+        deadline = time.monotonic() + wait_seconds
+        row = None
+        while True:
+            self.touch_print_station(ctx, station_id, station_name, printer_name)
+            now_epoch = int(time.time())
+            stale_before = now_epoch - PRINT_CLAIM_STALE_SECONDS
+            with DB_LOCK:
+                DB.execute("BEGIN IMMEDIATE")
+                try:
                     DB.execute(
-                        """UPDATE print_jobs SET status='claimed',claimed_by=?,claimed_at_epoch=?,updated_at=?,attempts=attempts+1,error=''
-                           WHERE id=? AND status='queued'""",
-                        (station_id, now_epoch, now_iso(), row["id"]),
+                        """UPDATE print_jobs SET status='queued',claimed_by='',claimed_at_epoch=0,updated_at=?,
+                           error=CASE WHEN error='' THEN 'Trabalho devolvido à fila após perda de comunicação com a estação.' ELSE error END
+                           WHERE status='claimed' AND claimed_at_epoch>0 AND claimed_at_epoch<?""",
+                        (now_iso(), stale_before),
                     )
-                    row = DB.execute("SELECT * FROM print_jobs WHERE id=?", (row["id"],)).fetchone()
-                DB.commit()
-            except Exception:
-                DB.rollback()
-                raise
+                    row = DB.execute(
+                        "SELECT * FROM print_jobs WHERE status='queued' ORDER BY created_at ASC LIMIT 1"
+                    ).fetchone()
+                    if row:
+                        DB.execute(
+                            """UPDATE print_jobs SET status='claimed',claimed_by=?,claimed_at_epoch=?,updated_at=?,attempts=attempts+1,error=''
+                               WHERE id=? AND status='queued'""",
+                            (station_id, now_epoch, now_iso(), row["id"]),
+                        )
+                        row = DB.execute("SELECT * FROM print_jobs WHERE id=?", (row["id"],)).fetchone()
+                    DB.commit()
+                except Exception:
+                    DB.rollback()
+                    raise
+            if row or time.monotonic() >= deadline:
+                break
+            time.sleep(0.8)
+
         self.send_json({"ok": True, "job": self.print_job_payload(row), "server_time": now_iso()})
 
     def handle_print_queue_result(self, ctx: dict[str, Any]) -> None:

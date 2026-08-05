@@ -1,0 +1,37 @@
+COMO ATIVAR A IMPRESSAO AUTOMATICA PELO CELULAR
+================================================
+
+Esta configuracao e feita UMA UNICA VEZ no computador conectado por USB a Zebra.
+
+1. Publique a versao 9.2 no servidor.
+2. No computador da Zebra, mantenha o QZ Tray 2.2 ou superior instalado.
+3. Copie a pasta completa da versao 9.2 para esse computador.
+4. Execute:
+
+   CONFIGURAR_ESTACAO_IMPRESSAO_AUTOMATICA.bat
+
+5. Clique em Sim quando o Windows pedir permissao de administrador.
+6. A Estacao Zebra sera aberta automaticamente.
+7. Entre UMA VEZ com um usuario do estoque.
+8. Confira se aparecem os dois estados verdes:
+
+   - Pronta para impressao automatica
+   - QZ Tray conectado e autorizado
+
+9. Use o botao Imprimir teste uma unica vez para validar a Zebra.
+
+Depois disso:
+- a Estacao abre automaticamente com o Windows;
+- o QZ Tray abre automaticamente;
+- etiquetas finalizadas no celular sao impressas sem Allow e sem cliques;
+- a sessao da Estacao fica salva por ate 180 dias e e renovada enquanto ativa.
+
+Observacao:
+O computador precisa estar ligado e com o usuario do Windows conectado. Se o
+NoromakWeb encerrar a sessao externa do navegador, sera necessario entrar de
+novo no NoromakWeb nesse computador; isso depende da politica de login do site.
+
+DIAGNOSTICO
+Se nao funcionar, envie estes arquivos da pasta:
+- CONFIGURACAO_QZ_RESULTADO.txt
+- CONFIGURACAO_ESTACAO_RESULTADO.txt

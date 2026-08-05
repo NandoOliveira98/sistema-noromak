@@ -1,14 +1,14 @@
 @echo off
 setlocal EnableExtensions
 cd /d "%~dp0"
-title Configurar QZ Tray - Expedicao Web 7.8
+title Configurar QZ Tray - Expedicao Web 9.2
 
 echo ==============================================================
-echo  CONFIGURAR QZ TRAY - SISTEMA DE CONFERENCIA WEB 7.8
+echo  CONFIGURAR QZ TRAY - SISTEMA DE CONFERENCIA WEB 9.2
 echo ==============================================================
 echo.
-echo Esta configuracao e feita apenas UMA VEZ em cada computador/usuario.
-echo Ela corrige a autorizacao silenciosa e verifica se o QZ ficou ativo.
+echo Esta configuracao e feita apenas UMA VEZ no computador da Zebra.
+echo Ela autoriza a impressao silenciosa para todos os usuarios e verifica se o QZ ficou ativo.
 echo.
 echo Quando o Windows pedir permissao de administrador, clique em SIM.
 echo.

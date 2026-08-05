@@ -65,3 +65,9 @@ Backups: /home/expedicao/backups
 Chave privada QZ: /home/expedicao/qz/qz-private-key.pem
 
 A publicação não substitui o banco permanente.
+
+IMPRESSAO AUTOMATICA PELO CELULAR (9.2)
+---------------------------------------
+No computador conectado a Zebra, execute uma unica vez:
+CONFIGURAR_ESTACAO_IMPRESSAO_AUTOMATICA.bat
+A Estacao Zebra e o QZ Tray passarao a abrir automaticamente com o Windows.

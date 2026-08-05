@@ -6,6 +6,7 @@ param(
 $ErrorActionPreference = "Stop"
 $Base = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ResultPath = Join-Path $Base "CONFIGURACAO_QZ_RESULTADO.txt"
+$CommonName = "Sistema de Conferencia Noromak Web"
 
 function Add-Result([string]$Text) {
     Add-Content -Path $ResultPath -Encoding UTF8 -Value $Text
@@ -80,7 +81,7 @@ try {
 
     if ($Modo -eq "Sistema") {
         @(
-            "CONFIGURACAO QZ TRAY - EXPEDICAO WEB 8.1",
+            "CONFIGURACAO QZ TRAY - EXPEDICAO WEB 9.2",
             "Data: " + (Get-Date -Format "dd/MM/yyyy HH:mm:ss"),
             "Etapa 1/2: confianca do computador",
             "QZ Tray encontrado em: $QzDir"
@@ -106,7 +107,45 @@ try {
         Copy-Item -Force $RootSource $Override
         $Properties = Join-Path $QzDir "qz-tray.properties"
         Upsert-Property $Properties "authcert.override" "override.crt"
-        Add-Result "CA propria instalada e authcert.override=override.crt configurado."
+        Upsert-Property $Properties "tray.notifications" "false"
+        Upsert-Property $Properties "websocket.steal" "true"
+        Upsert-Property $Properties "tray.idle.printers" "true"
+        Add-Result "CA propria instalada; notificacoes desativadas e reconexao automatica configurada."
+
+        if (!(Test-Path $Console)) {
+            throw "qz-tray-console.exe nao foi encontrado em $QzDir. Atualize o QZ Tray para a versao 2.2 ou superior."
+        }
+
+        # Autoriza o certificado em escopo global. O QZ consulta ProgramData\qz\allowed.dat
+        # quando precisa operar sem janelas para qualquer usuario do computador.
+        $globalAllowOutput = (& $Console --allow $CertSource 2>&1 | Out-String).Trim()
+        Add-Result "Saida da autorizacao global:"
+        Add-Result $globalAllowOutput
+        $sourceAllowed = Join-Path $env:APPDATA "qz\allowed.dat"
+        if (!(Test-Path $sourceAllowed)) {
+            throw "O QZ Tray nao criou allowed.dat durante a autorizacao global."
+        }
+        $programDataQz = Join-Path $env:ProgramData "qz"
+        New-Item -ItemType Directory -Force -Path $programDataQz | Out-Null
+        Copy-Item -Force $sourceAllowed (Join-Path $programDataQz "allowed.dat")
+        Add-Result "Certificado autorizado globalmente em: $programDataQz\allowed.dat"
+
+        $systemProfileQz = Join-Path $env:WINDIR "System32\config\systemprofile\AppData\Roaming\qz"
+        New-Item -ItemType Directory -Force -Path $systemProfileQz | Out-Null
+        Copy-Item -Force $sourceAllowed (Join-Path $systemProfileQz "allowed.dat")
+        Add-Result "Certificado autorizado tambem para o perfil SYSTEM."
+
+        foreach ($blocked in @((Join-Path $programDataQz "blocked.dat"), (Join-Path $env:APPDATA "qz\blocked.dat"))) {
+            if (Test-Path $blocked) {
+                $lines = @(Get-Content $blocked -ErrorAction SilentlyContinue)
+                $filtered = @($lines | Where-Object { $_ -notmatch [regex]::Escape($CommonName) })
+                if ($filtered.Count -ne $lines.Count) {
+                    Copy-Item -Force $blocked "$blocked.backup_$(Get-Date -Format 'yyyyMMdd_HHmmss')"
+                    $filtered | Set-Content -Path $blocked -Encoding UTF8
+                    Add-Result "Bloqueio antigo removido de: $blocked"
+                }
+            }
+        }
 
         try {
             Import-Certificate -FilePath $RootSource -CertStoreLocation "Cert:\LocalMachine\Root" | Out-Null
@@ -156,8 +195,6 @@ try {
     $QzUserDir = Join-Path $env:APPDATA "qz"
     New-Item -ItemType Directory -Force -Path $QzUserDir | Out-Null
     $BlockedPath = Join-Path $QzUserDir "blocked.dat"
-    $CommonName = "Sistema de Conferencia Noromak Web"
-
     # Remove somente uma decisao de bloqueio referente a este sistema.
     if (Test-Path $BlockedPath) {
         $blockedLines = @(Get-Content $BlockedPath -ErrorAction SilentlyContinue)
@@ -194,6 +231,14 @@ try {
     }
     Add-Result "Autorizacao confirmada em: $AllowedPath"
 
+    # Garante que o QZ Tray abra automaticamente junto com o usuario do Windows.
+    if (Test-Path $Tray) {
+        $runKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Run"
+        New-Item -Path $runKey -Force | Out-Null
+        New-ItemProperty -Path $runKey -Name "NoromakQZTray" -Value ('"' + $Tray + '" --honorautostart') -PropertyType String -Force | Out-Null
+        Add-Result "Inicializacao automatica do QZ Tray configurada para o usuario."
+    }
+
     Stop-Qz
     if (Test-Path $Tray) {
         Start-Process -FilePath $Tray -WorkingDirectory $QzDir
@@ -222,7 +267,7 @@ try {
 }
 catch {
     if (!(Test-Path $ResultPath)) {
-        "CONFIGURACAO QZ TRAY - EXPEDICAO WEB 8.1" | Set-Content -Path $ResultPath -Encoding UTF8
+        "CONFIGURACAO QZ TRAY - EXPEDICAO WEB 9.2" | Set-Content -Path $ResultPath -Encoding UTF8
     }
     Add-Result ""
     Add-Result ("ERRO: " + $_.Exception.Message)

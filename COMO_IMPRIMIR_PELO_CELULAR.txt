@@ -1,22 +1,31 @@
-COMO IMPRIMIR PELO CELULAR — VERSAO 8.9
+IMPRESSAO AUTOMATICA PELO CELULAR — VERSAO 9.2
+================================================
 
-NO COMPUTADOR CONECTADO A ZEBRA (uma vez por turno):
-1. Abra https://noromakweb.com.br/expedicao/estacao-impressao
-2. Entre com um usuario do estoque.
-3. Confirme o nome: ZDesigner ZD220-203dpi ZPL
-4. Clique em Testar Zebra.
-5. Clique em Iniciar estacao.
-6. Deixe a pagina aberta. Pode minimizar a janela.
+FLUXO
+Celular -> Sistema Web -> Fila no servidor -> Estacao Zebra -> QZ Tray -> Zebra USB
 
-NO CELULAR:
-1. Abra https://noromakweb.com.br/expedicao/conferencia
-2. Entre com o usuario do operador.
-3. Confira o pedido normalmente.
-4. Ao finalizar, a etiqueta vai para a Estacao Zebra.
-5. O pedido sai dos pendentes somente depois de a Estacao confirmar a impressao.
+O computador da Zebra nao precisa ser tocado durante as conferencias.
+A configuracao inicial e feita uma unica vez com o arquivo:
 
-REQUISITOS:
-- O computador da Zebra deve estar ligado.
-- QZ Tray deve estar aberto e configurado nesse computador.
-- A pagina Estacao de Impressao deve estar ativa.
-- O celular precisa ter acesso ao site; nao precisa instalar QZ Tray.
+CONFIGURAR_ESTACAO_IMPRESSAO_AUTOMATICA.bat
+
+PRIMEIRA CONFIGURACAO
+1. Publique a versao 9.2.
+2. Execute o configurador no computador conectado a Zebra.
+3. Entre uma unica vez na Estacao com um usuario do estoque.
+4. Confira os dois indicadores verdes.
+5. Imprima uma etiqueta de teste.
+
+USO DIARIO
+- Ligue o computador e entre normalmente no usuario do Windows.
+- O QZ Tray e a Estacao Zebra abrem automaticamente.
+- Faça a conferencia pelo celular.
+- Ao concluir, a etiqueta e impressa sem Allow e sem cliques no computador.
+
+REQUISITOS
+- Computador ligado e usuario do Windows conectado.
+- Zebra conectada e instalada no Windows.
+- QZ Tray 2.2 ou superior instalado.
+- Internet disponivel no computador e no celular.
+
+Se o computador for reiniciado, a estacao volta sozinha no proximo login do Windows.
