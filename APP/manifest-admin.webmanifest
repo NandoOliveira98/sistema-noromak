@@ -18,19 +18,19 @@
   ],
   "icons": [
     {
-      "src": "/expedicao/icons/admin-192.png?v=9.2",
+      "src": "/expedicao/icons/admin-192.png?v=9.3",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/expedicao/icons/admin-512.png?v=9.2",
+      "src": "/expedicao/icons/admin-512.png?v=9.3",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/expedicao/icons/admin-maskable-512.png?v=9.2",
+      "src": "/expedicao/icons/admin-maskable-512.png?v=9.3",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "maskable"
@@ -43,7 +43,7 @@
       "url": "/expedicao/admin?aba=pedidos",
       "icons": [
         {
-          "src": "/expedicao/icons/admin-192.png?v=9.2",
+          "src": "/expedicao/icons/admin-192.png?v=9.3",
           "sizes": "192x192",
           "type": "image/png"
         }
@@ -55,7 +55,7 @@
       "url": "/expedicao/admin?aba=usuarios",
       "icons": [
         {
-          "src": "/expedicao/icons/admin-192.png?v=9.2",
+          "src": "/expedicao/icons/admin-192.png?v=9.3",
           "sizes": "192x192",
           "type": "image/png"
         }

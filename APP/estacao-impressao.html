@@ -5,10 +5,10 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#1F57A5">
 <meta name="application-name" content="Noromak Estação de Impressão">
-<link rel="manifest" href="/expedicao/manifest-estacao.webmanifest?v=9.2" crossorigin="use-credentials">
-<link rel="icon" href="/favicon.ico?v=9.2" sizes="any">
-<link rel="shortcut icon" href="/favicon.ico?v=9.2">
-<link rel="stylesheet" href="/expedicao/pwa-install.css?v=9.2">
+<link rel="manifest" href="/expedicao/manifest-estacao.webmanifest?v=9.3" crossorigin="use-credentials">
+<link rel="icon" href="/favicon.ico?v=9.3" sizes="any">
+<link rel="shortcut icon" href="/favicon.ico?v=9.3">
+<link rel="stylesheet" href="/expedicao/pwa-install.css?v=9.3">
 <title>Noromak — Estação de Impressão Automática</title>
 <script src="https://cdn.jsdelivr.net/npm/qz-tray@2.2.6/qz-tray.js"></script>
 <style>
@@ -19,7 +19,7 @@
 <body>
 <div id="loginLayer" class="login-layer">
   <form id="loginForm" class="login">
-    <img src="/nk-logo.svg?v=9.2" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=9.2'">
+    <img src="/nk-logo.svg?v=9.3" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=9.3'">
     <h2>Ativar Estação Automática</h2>
     <p>Este login é necessário somente na primeira configuração. A sessão desta estação ficará salva por até 180 dias.</p>
     <input id="loginUser" autocomplete="username" placeholder="Usuário / Login" required>
@@ -29,17 +29,17 @@
   </form>
 </div>
 <header class="topo">
-  <img src="/grupo-noromak.png?v=9.2" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=9.2'">
+  <img src="/grupo-noromak.png?v=9.3" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=9.3'">
   <div style="display:flex;align-items:center;gap:12px"><button type="button" class="pwa-install-btn pwa-header" data-pwa-install>⬇ INSTALAR ESTAÇÃO</button><div style="text-align:right"><h1>Estação Zebra Automática</h1><small>Imprime as etiquetas enviadas pelo celular</small></div></div>
 </header>
 <main class="wrap">
   <section class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
-      <div><span id="userPill" class="pill">Não autenticado</span><h2 style="margin:9px 0 2px;color:var(--azul)">Impressão sem confirmação</h2><div class="rodape">Após a configuração inicial, esta estação abre com o Windows e recebe as etiquetas automaticamente.</div></div>
+      <div><span id="userPill" class="pill">Não autenticado</span><h2 style="margin:9px 0 2px;color:var(--azul)">Impressão silenciosa pelo QZ Tray</h2><div class="rodape">O QZ Tray é iniciado em modo headless, sem interface de autorização, e a estação recebe as etiquetas automaticamente.</div></div>
       <button id="logoutButton" class="btn btn-danger">Desativar esta estação</button>
     </div>
   </section>
-  <section class="card automatico">✓ Modo automático ativado: não é necessário clicar em Allow, Iniciar ou Imprimir no computador durante as conferências pelo celular.</section>
+  <section class="card automatico">✓ Modo silencioso: o QZ Tray fica em segundo plano e não exibe a janela Allow. Se a autorização estiver incorreta, a estação fica vermelha e não retira o pedido da fila.</section>
   <div class="grid">
     <section class="card">
       <h3 style="margin-top:0;color:var(--azul)">Impressora deste computador</h3>
@@ -51,7 +51,7 @@
       <h3 style="margin-top:0;color:var(--azul)">Estado da estação</h3>
       <div id="stationStatus" class="status wait"><span class="dot"></span><span>Iniciando estação automática...</span></div>
       <div id="qzStatus" class="status wait" style="margin-top:10px"><span class="dot"></span><span>Conectando ao QZ Tray...</span></div>
-      <div class="rodape" style="margin-top:12px">Quando os dois indicadores estiverem verdes, o celular poderá concluir e imprimir sem qualquer ação neste computador.</div>
+      <div class="rodape" style="margin-top:12px">Quando os dois indicadores estiverem verdes, o celular poderá concluir e imprimir sem qualquer ação neste computador. O QZ Tray não abrirá janelas no modo headless.</div>
     </section>
   </div>
   <section class="card">
@@ -64,7 +64,7 @@
 "use strict";
 const BASE="/expedicao";
 const el=id=>document.getElementById(id);
-let user=null,running=false,busy=false,qzConfigured=false,wakeLock=null,heartbeatTimer=null,summaryTimer=null,reconnectPromise=null;
+let user=null,running=false,busy=false,qzConfigured=false,qzServerChecked=false,wakeLock=null,heartbeatTimer=null,summaryTimer=null,reconnectPromise=null;
 const stationId=(()=>{let x=localStorage.getItem("conf_print_station_id");if(!x){x="EST-"+Date.now().toString(36).toUpperCase()+"-"+Math.random().toString(36).slice(2,9).toUpperCase();localStorage.setItem("conf_print_station_id",x)}return x})();
 const stationName=()=>"Zebra "+(navigator.platform||"Windows");
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
@@ -76,8 +76,9 @@ async function loadSession(){const d=await api("/api/auth/session");if(!d.authen
 async function logout(){stop();try{await api("/api/auth/logout",{method:"POST",body:"{}"})}catch{}location.reload()}
 function printer(){return el("printerName").value.trim()||"ZDesigner ZD220-203dpi ZPL"}
 function savePrinter(){localStorage.setItem("conf_print_station_printer",printer())}
-async function setupQz(){if(qzConfigured)return;qz.security.setCertificatePromise((resolve,reject)=>fetch(BASE+"/api/qz/certificate",{credentials:"same-origin",cache:"no-store"}).then(r=>r.ok?r.text():Promise.reject(new Error("Certificado QZ indisponível"))).then(resolve,reject));qz.security.setSignatureAlgorithm("SHA512");qz.security.setSignaturePromise(toSign=>(resolve,reject)=>fetch(BASE+"/api/qz/sign",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"text/plain"},body:toSign}).then(r=>r.ok?r.text():Promise.reject(new Error("Falha na assinatura QZ"))).then(resolve,reject));qzConfigured=true}
-async function connectQz(){if(qz.websocket.isActive()){setStatus("qzStatus","on","QZ Tray conectado e autorizado");return true}if(reconnectPromise)return reconnectPromise;reconnectPromise=(async()=>{setupQz();setStatus("qzStatus","wait","Conectando ao QZ Tray...");let lastError=null;for(let attempt=1;attempt<=12;attempt++){try{if(!qz.websocket.isActive())await qz.websocket.connect();const found=await qz.printers.find(printer());if(!found)throw new Error("Impressora não encontrada: "+printer());setStatus("qzStatus","on","QZ Tray conectado e autorizado");return true}catch(e){lastError=e;setStatus("qzStatus","wait",`Aguardando QZ Tray (${attempt}/12)...`);await sleep(Math.min(10000,1000*attempt))}}setStatus("qzStatus","off","QZ Tray ou impressora indisponível");throw lastError||new Error("QZ Tray indisponível")})().finally(()=>{reconnectPromise=null});return reconnectPromise}
+async function verifyQzServer(){if(qzServerChecked)return true;const d=await api("/api/qz/status");if(!d.ok||!d.qz||!d.qz.key_match)throw new Error((d.qz&&d.qz.error)||"Certificado QZ e chave privada do servidor não correspondem.");qzServerChecked=true;log(`Assinatura QZ validada no servidor · ${d.qz.fingerprint_sha256||"sem fingerprint"}`,"ok");return true}
+async function setupQz(){if(qzConfigured)return;await verifyQzServer();qz.security.setCertificatePromise((resolve,reject)=>fetch(BASE+"/api/qz/certificate",{credentials:"same-origin",cache:"no-store"}).then(r=>r.ok?r.text():Promise.reject(new Error("Certificado QZ indisponível"))).then(resolve,reject));qz.security.setSignatureAlgorithm("SHA512");qz.security.setSignaturePromise(toSign=>(resolve,reject)=>fetch(BASE+"/api/qz/sign",{method:"POST",credentials:"same-origin",cache:"no-store",headers:{"Content-Type":"text/plain; charset=utf-8"},body:toSign}).then(r=>r.ok?r.text():r.json().then(d=>Promise.reject(new Error(d.error||"Falha na assinatura QZ")))).then(resolve,reject));qzConfigured=true}
+async function connectQz(){if(qz.websocket.isActive()){setStatus("qzStatus","on","QZ Tray silencioso conectado");return true}if(reconnectPromise)return reconnectPromise;reconnectPromise=(async()=>{await setupQz();setStatus("qzStatus","wait","Conectando ao QZ Tray headless...");let lastError=null;for(let attempt=1;attempt<=12;attempt++){try{if(!qz.websocket.isActive())await qz.websocket.connect();const found=await qz.printers.find(printer());if(!found)throw new Error("Impressora não encontrada: "+printer());setStatus("qzStatus","on","QZ Tray silencioso conectado");return true}catch(e){lastError=e;setStatus("qzStatus","wait",`Aguardando QZ Tray silencioso (${attempt}/12)...`);await sleep(Math.min(10000,1000*attempt))}}setStatus("qzStatus","off","QZ silencioso não autorizado ou impressora indisponível");throw lastError||new Error("QZ Tray silencioso indisponível")})().finally(()=>{reconnectPromise=null});return reconnectPromise}
 async function configPrinter(){await connectQz();const found=await qz.printers.find(printer());return qz.configs.create(found)}
 async function testPrinter(){try{el("testButton").disabled=true;const cfg=await configPrinter();await qz.print(cfg,["^XA^PW800^LL400^FO50,45^A0N,42,42^FDEstacao Noromak automatica^FS^FO50,110^A0N,28,28^FDImpressao pelo celular pronta^FS^FO50,165^A0N,24,24^FD"+new Date().toLocaleString("pt-BR")+"^FS^XZ"]);log("Etiqueta de teste enviada para "+printer(),"ok")}catch(e){setStatus("qzStatus","off","Falha no QZ Tray");log(e.message||e,"erro")}finally{el("testButton").disabled=false}}
 async function heartbeat(error=""){if(!user)return;await api("/api/print/queue/heartbeat",{method:"POST",body:JSON.stringify({station_id:stationId,station_name:stationName(),printer_name:printer(),error})})}
@@ -96,5 +97,5 @@ document.addEventListener("visibilitychange",()=>{if(document.visibilityState===
 loadSession().then(ok=>{if(ok)initializePanel()}).catch(e=>{el("loginError").textContent=e.message||e;el("loginLayer").classList.remove("hidden")});
 })();
 </script>
-<script src="/expedicao/pwa-install.js?v=9.2"></script>
+<script src="/expedicao/pwa-install.js?v=9.3"></script>
 </body></html>

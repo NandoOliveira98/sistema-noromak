@@ -1,31 +1,10 @@
-IMPRESSAO AUTOMATICA PELO CELULAR — VERSAO 9.2
-================================================
+IMPRESSAO PELO CELULAR — VERSAO 9.3
+====================================
 
-FLUXO
-Celular -> Sistema Web -> Fila no servidor -> Estacao Zebra -> QZ Tray -> Zebra USB
+Fluxo:
+Celular -> fila Web -> Estacao Zebra -> QZ Tray headless -> impressora USB.
 
-O computador da Zebra nao precisa ser tocado durante as conferencias.
-A configuracao inicial e feita uma unica vez com o arquivo:
+No uso diario nao e necessario clicar em Allow, Iniciar ou Imprimir no computador.
+O computador da Zebra precisa estar ligado, com o Windows conectado e com a Estacao aberta.
 
-CONFIGURAR_ESTACAO_IMPRESSAO_AUTOMATICA.bat
-
-PRIMEIRA CONFIGURACAO
-1. Publique a versao 9.2.
-2. Execute o configurador no computador conectado a Zebra.
-3. Entre uma unica vez na Estacao com um usuario do estoque.
-4. Confira os dois indicadores verdes.
-5. Imprima uma etiqueta de teste.
-
-USO DIARIO
-- Ligue o computador e entre normalmente no usuario do Windows.
-- O QZ Tray e a Estacao Zebra abrem automaticamente.
-- Faça a conferencia pelo celular.
-- Ao concluir, a etiqueta e impressa sem Allow e sem cliques no computador.
-
-REQUISITOS
-- Computador ligado e usuario do Windows conectado.
-- Zebra conectada e instalada no Windows.
-- QZ Tray 2.2 ou superior instalado.
-- Internet disponivel no computador e no celular.
-
-Se o computador for reiniciado, a estacao volta sozinha no proximo login do Windows.
+Se o QZ silencioso estiver indisponivel, o pedido nao sera removido da fila.

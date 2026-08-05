@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sistema de Conferência Noromak — edição Web/Linux 9.2.
+"""Sistema de Conferência Noromak — edição Web/Linux 9.3.
 
 Sem dependências externas: usa apenas a biblioteca padrão do Python.
 - Escuta em 127.0.0.1:8100.
@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-APP_VERSION = "9.2"
+APP_VERSION = "9.3"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -43,7 +43,8 @@ DB_PATH = Path(os.getenv("EXP_DB_PATH", "/home/expedicao/dados/expedicao.db"))
 BACKUP_DIR = Path(os.getenv("EXP_BACKUP_DIR", "/home/expedicao/backups"))
 AUTH_ME_URL = os.getenv("EXP_AUTH_ME_URL", "http://127.0.0.1:8000/api/v1/auth/me")
 ADMIN_USERNAME = os.getenv("EXP_ADMIN_USUARIO", "luis").strip().lower()
-QZ_CERT_PATH = Path(os.getenv("QZ_CERT_PATH", str(ROOT_DIR / "QZ_CERTIFICADO_WEB" / "digital-certificate.txt")))
+QZ_BUNDLED_CERT_PATH = ROOT_DIR / "QZ_CERTIFICADO_WEB" / "digital-certificate.txt"
+QZ_CONFIGURED_CERT_PATH = Path(os.getenv("QZ_CERT_PATH", str(QZ_BUNDLED_CERT_PATH)))
 QZ_PRIVATE_KEY_PATH = Path(os.getenv("QZ_PRIVATE_KEY_PATH", "/home/expedicao/qz/qz-private-key.pem"))
 MIGRATION_DIR = Path(os.getenv("EXP_MIGRATION_DIR", str(ROOT_DIR / "MIGRACAO_INICIAL")))
 MAX_BODY = 100 * 1024 * 1024
@@ -83,6 +84,80 @@ OPERATOR_WRITE_KEYS = {
     "conf_logs",
     "conf_banco_atualizado_em",
 }
+
+
+def _openssl_output(args: list[str], *, stdin: bytes | None = None) -> bytes:
+    proc = subprocess.run(
+        ["openssl", *args],
+        input=stdin,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=10,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(proc.stderr.decode("utf-8", errors="replace").strip() or "Falha no OpenSSL")
+    return proc.stdout
+
+
+def _qz_cert_public_key(path: Path) -> bytes:
+    return b"".join(_openssl_output(["x509", "-in", str(path), "-pubkey", "-noout"]).split())
+
+
+def _qz_private_public_key(path: Path) -> bytes:
+    return b"".join(_openssl_output(["pkey", "-in", str(path), "-pubout"]).split())
+
+
+def _qz_cert_fingerprint(path: Path) -> str:
+    output = _openssl_output(["x509", "-in", str(path), "-outform", "DER"])
+    digest = hashlib.sha256(output).hexdigest().upper()
+    return ":".join(digest[i:i + 2] for i in range(0, len(digest), 2))
+
+
+def _qz_cert_text(path: Path, field: str) -> str:
+    value = _openssl_output(["x509", "-in", str(path), "-noout", f"-{field}"]).decode("utf-8", errors="replace").strip()
+    return value.split("=", 1)[-1].strip() if "=" in value else value
+
+
+def select_qz_cert_path() -> Path:
+    # O instalador Windows autoriza exatamente o certificado incluído no pacote.
+    # Para impedir divergências entre o certificado autorizado e o certificado
+    # apresentado ao QZ Tray, o servidor usa sempre o arquivo empacotado.
+    if QZ_BUNDLED_CERT_PATH.exists():
+        return QZ_BUNDLED_CERT_PATH
+    return QZ_CONFIGURED_CERT_PATH
+
+
+def qz_material_status() -> dict[str, Any]:
+    cert_path = select_qz_cert_path()
+    result: dict[str, Any] = {
+        "certificate_path": str(cert_path),
+        "private_key_path": str(QZ_PRIVATE_KEY_PATH),
+        "certificate_exists": cert_path.exists(),
+        "private_key_exists": QZ_PRIVATE_KEY_PATH.exists(),
+        "key_match": False,
+        "fingerprint_sha256": "",
+        "subject": "",
+        "issuer": "",
+        "error": "",
+    }
+    try:
+        if not cert_path.exists():
+            raise FileNotFoundError(f"Certificado QZ não encontrado em {cert_path}")
+        result["fingerprint_sha256"] = _qz_cert_fingerprint(cert_path)
+        result["subject"] = _qz_cert_text(cert_path, "subject")
+        result["issuer"] = _qz_cert_text(cert_path, "issuer")
+        if not QZ_PRIVATE_KEY_PATH.exists():
+            raise FileNotFoundError(f"Chave privada QZ não encontrada em {QZ_PRIVATE_KEY_PATH}")
+        result["key_match"] = hmac.compare_digest(
+            _qz_cert_public_key(cert_path),
+            _qz_private_public_key(QZ_PRIVATE_KEY_PATH),
+        )
+        if not result["key_match"]:
+            result["error"] = "A chave privada do servidor não corresponde ao certificado QZ publicado."
+    except Exception as exc:
+        result["error"] = str(exc)
+    return result
 
 
 def now_iso() -> str:
@@ -296,7 +371,7 @@ def ensure_print_queue_schema() -> None:
 
 
 def ensure_app_sessions_schema() -> None:
-    """Adiciona a área da sessão em bancos anteriores à versão 9.2.
+    """Adiciona a área da sessão em bancos anteriores à versão 9.3.
 
     A Estação Zebra usa uma sessão persistente própria, para que o computador
     possa reiniciar e voltar a imprimir sem pedir o login do estoque todos os dias.
@@ -1019,7 +1094,7 @@ def clear_login_failures(handler: BaseHTTPRequestHandler, username: str) -> None
 
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/9.2"
+    server_version = "NoromakExpedicao/9.3"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
@@ -1149,10 +1224,18 @@ class AppHandler(BaseHTTPRequestHandler):
             ctx = self.auth()
             if ctx is None:
                 return
-            if not QZ_CERT_PATH.exists():
-                self.send_json({"error": f"Certificado QZ não encontrado em {QZ_CERT_PATH}"}, 503)
+            status = qz_material_status()
+            cert_path = Path(status["certificate_path"])
+            if not status["certificate_exists"]:
+                self.send_json({"error": status["error"] or f"Certificado QZ não encontrado em {cert_path}"}, 503)
                 return
-            self.send_text(QZ_CERT_PATH.read_text(encoding="utf-8"))
+            self.send_text(cert_path.read_text(encoding="utf-8"))
+            return
+        if path == "/api/qz/status":
+            ctx = self.auth()
+            if ctx is not None:
+                status = qz_material_status()
+                self.send_json({"ok": bool(status["key_match"]), "qz": status, "version": APP_VERSION})
             return
 
         # O nginx já exige o login do NoromakWeb. Estas páginas ficam públicas
@@ -1754,8 +1837,12 @@ class AppHandler(BaseHTTPRequestHandler):
             payload = self.read_body()
             if not payload:
                 raise ValueError("Solicitação de assinatura vazia.")
-            if not QZ_PRIVATE_KEY_PATH.exists():
-                self.send_json({"error": f"Chave privada QZ não instalada em {QZ_PRIVATE_KEY_PATH}. Execute instalar_servidor_uma_vez.sh."}, 503)
+            status = qz_material_status()
+            if not status["private_key_exists"]:
+                self.send_json({"error": f"Chave privada QZ não instalada em {QZ_PRIVATE_KEY_PATH}."}, 503)
+                return
+            if not status["key_match"]:
+                self.send_json({"error": status["error"] or "Certificado e chave privada QZ não correspondem."}, 503)
                 return
             proc = subprocess.run(
                 ["openssl", "dgst", "-sha512", "-sign", str(QZ_PRIVATE_KEY_PATH)],
