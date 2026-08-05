@@ -473,7 +473,7 @@
     <div class="logo-box">
       <img src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 450 120'><text x='20' y='80' font-size='60' font-family='Arial, sans-serif' font-weight='bold' fill='%232B4E75'>NOROMAK</text></svg>" alt="Noromak">
     </div>
-    <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 8.1 — impressão restaurada pelo QZ Tray</div>
+    <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 8.2 — QZ Tray + extensão Mercado Livre</div>
     <div style="font-size:12px;color:#667;margin:-8px 0 14px;line-height:1.4;">Use o administrador principal ou qualquer usuário cadastrado com perfil <b>Admin</b>.</div>
     <input type="text" id="usuarioAdmin" placeholder="Usuário Admin">
     <input type="password" id="senhaAdmin" placeholder="Senha">
@@ -556,7 +556,7 @@
 
   <section id="aba-usuarios" class="aba-painel">
     <div class="card-admin">
-      <h2>Usuários e aprovações <span class="usuario-versao">Versão 8.1 — senhas protegidas e redefinição pelo Admin</span></h2>
+      <h2>Usuários e aprovações <span class="usuario-versao">Versão 8.2 — senhas protegidas e importação integrada</span></h2>
       <div class="aviso-banco"><b>Login próprio do estoque:</b> cada pessoa deve ter usuário, senha e perfil individual. Por segurança, a senha atual <b>não pode ser visualizada</b>, pois fica armazenada de forma criptográfica. Para trocar, use o botão <b>Alterar senha</b>; o Admin poderá visualizar somente a nova senha enquanto a digita.</div>
       <div class="toolbar-grid"><button type="button" id="btnNovoUsuarioAdmin" class="btn-primario" onclick="abrirSolicitacaoUsuario('admin')">＋ Solicitar novo usuário</button><button type="button" class="btn-sucesso" onclick="salvarUsuariosAdmin(true)">💾 Salvar alterações</button></div>
       <div id="contadorUsuariosAdmin" class="usuario-contador"></div>
@@ -3457,6 +3457,77 @@ document.addEventListener("DOMContentLoaded",()=>{
     if(ev.key==="Escape"){ev.preventDefault();fecharModalAlterarSenhaAdmin();}
     if(ev.key==="Enter"){ev.preventDefault();salvarNovaSenhaAdmin();}
   });
+})();
+</script>
+
+
+
+<script>
+/* PONTE DA EXTENSÃO MERCADO LIVRE — VERSÃO 8.2 */
+(function(){
+  "use strict";
+  const ORIGEM_EXTENSAO = "noromak-importador-mercado-livre";
+  let recebendoCapturaExtensao = false;
+
+  function responderExtensao(requestId, ok, error=""){
+    window.postMessage({
+      source: "noromak-painel-admin",
+      type: "NOROMAK_CAPTURE_ACK",
+      requestId,
+      ok: !!ok,
+      error: String(error || "")
+    }, location.origin);
+  }
+
+  async function aguardarImagemExtensao(timeoutMs=7000){
+    const inicio=Date.now();
+    while(Date.now()-inicio<timeoutMs){
+      if(typeof imagemImportacaoPrint!=="undefined" && imagemImportacaoPrint && imagemImportacaoPrint.complete && imagemImportacaoPrint.naturalWidth>0) return true;
+      await new Promise(resolve=>setTimeout(resolve,70));
+    }
+    return false;
+  }
+
+  async function receberCapturaMercadoLivre(event){
+    if(event.source!==window || event.origin!==location.origin) return;
+    const msg=event.data;
+    if(!msg || msg.source!==ORIGEM_EXTENSAO || msg.type!=="NOROMAK_IMPORT_CAPTURE") return;
+    const requestId=String(msg.requestId||"");
+    if(recebendoCapturaExtensao || (typeof ocrPrintEmAndamento!=="undefined" && ocrPrintEmAndamento) || (typeof modalPrintAberto==="function" && modalPrintAberto())){
+      responderExtensao(requestId,false,"A importação por print já está ocupada. Finalize ou feche a leitura atual.");
+      return;
+    }
+    const dataUrl=String(msg.imageData||"");
+    if(!/^data:image\/(jpeg|png|webp);base64,/i.test(dataUrl) || dataUrl.length>8_000_000){
+      responderExtensao(requestId,false,"A imagem recebida é inválida ou muito grande.");
+      return;
+    }
+    recebendoCapturaExtensao=true;
+    try{
+      if(document.getElementById("painelConteudo")?.style.display!=="block") throw new Error("Abra e autentique o Painel Administrativo antes de importar.");
+      abrirImportacaoPorPrint();
+      const seletor=document.getElementById("printMarketplace");
+      if(seletor) seletor.value="mercado_livre";
+      marketplaceDetectadoPrint="mercado_livre";
+      carregarDataUrlImagemPrint(dataUrl,"captura do Mercado Livre");
+      const carregou=await aguardarImagemExtensao();
+      if(!carregou) throw new Error("A imagem não terminou de carregar no painel.");
+      statusImportacaoPrint("info",`📦 Captura recebida da extensão.<br><small>${String(msg.pageTitle||"Mercado Livre").replace(/[<>]/g,"")}</small>`,5);
+      responderExtensao(requestId,true,"");
+      setTimeout(()=>{
+        try{ if(typeof lerImportacaoPorPrint==="function" && imagemImportacaoPrint && !ocrPrintEmAndamento) lerImportacaoPorPrint(); }
+        catch(erro){ console.error("Falha ao iniciar OCR da extensão",erro); }
+      },180);
+    }catch(erro){
+      console.error("Falha ao receber captura da extensão",erro);
+      responderExtensao(requestId,false,erro.message||String(erro));
+    }finally{
+      recebendoCapturaExtensao=false;
+    }
+  }
+
+  window.addEventListener("message",receberCapturaMercadoLivre);
+  window.NOROMAK_EXTENSAO_ML_PRONTA=true;
 })();
 </script>
 

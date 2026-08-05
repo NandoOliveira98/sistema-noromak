@@ -1,4 +1,4 @@
-SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 8.1
+SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 8.2
 ================================================
 
 Esta versão retorna à impressão pelo QZ Tray e remove o uso do Noromak Print Agent.
@@ -34,3 +34,8 @@ Backups: /home/expedicao/backups
 Chave privada QZ: /home/expedicao/qz/qz-private-key.pem
 
 A publicação não substitui o banco permanente.
+
+
+EXTENSÃO MERCADO LIVRE
+-----------------------
+A versão 8.2 aceita capturas enviadas pela extensão própria Noromak. A extensão é instalada separadamente no Chrome do computador do Admin. Mantenha o Painel Admin aberto e autenticado.

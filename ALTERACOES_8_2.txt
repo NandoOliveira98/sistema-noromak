@@ -1,0 +1,10 @@
+SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 8.2
+================================================
+
+- Integração com a extensão própria "Noromak - Importador Mercado Livre".
+- O botão flutuante aparece dentro do Mercado Livre somente quando existe uma aba do Painel Administrativo aberta e autenticada com perfil Admin.
+- Ao clicar, a extensão captura somente a área visível da aba do Mercado Livre.
+- A captura é enviada diretamente para a aba do Admin no mesmo Chrome, sem armazenar a imagem no servidor.
+- O modal "Importar por print" abre automaticamente, seleciona Mercado Livre e inicia o OCR.
+- Usuários Operadores não ativam o botão da extensão.
+- Mantida a impressão pelo QZ Tray e todas as funcionalidades da versão 8.1.

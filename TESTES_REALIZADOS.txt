@@ -1,4 +1,4 @@
-VALIDAÇÃO DA VERSÃO WEB/LINUX 8.1
+VALIDAÇÃO DA VERSÃO WEB/LINUX 8.2
 =================================
 
 - servidor_web.py compilado com sucesso.
@@ -42,3 +42,10 @@ VERSÃO 7.7
 - A conexão QZ deixou de ser executada no window.onload.
 - O QZ continua sendo conectado sob demanda antes da impressão.
 - Configurador QZ separado em etapa elevada de sistema e etapa não elevada do usuário.
+
+VERSÃO 8.2 — EXTENSÃO MERCADO LIVRE
+- servidor_web.py compilado com Python sem erros.
+- manifest.json validado como JSON.
+- background.js, mercadolivre.js e painel-admin.js validados com node --check.
+- ponte JavaScript adicionada ao admin.html validada com node --check.
+- Fluxo projetado sem rota pública adicional: a captura passa diretamente entre a aba do Mercado Livre e a aba Admin aberta no mesmo navegador.
