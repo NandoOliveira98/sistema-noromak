@@ -49,3 +49,13 @@ VERSÃO 8.3 — EXTENSÃO MERCADO LIVRE
 - background.js, mercadolivre.js e painel-admin.js validados com node --check.
 - ponte JavaScript adicionada ao admin.html validada com node --check.
 - Fluxo projetado sem rota pública adicional: a captura passa diretamente entre a aba do Mercado Livre e a aba Admin aberta no mesmo navegador.
+
+TESTES DA VERSÃO 8.4
+- Compilação do servidor_web.py: OK.
+- Health check real em porta temporária: versão 8.4, marker noromak_expedicao_web: OK.
+- Validação de sintaxe de todos os scripts inline do Admin: OK.
+- Validação de manifest.json e empacotamento da extensão pelo Chromium: OK.
+- Parser Mercado Livre com venda, Dados do comprador, SKU, quantidade e descrição: OK.
+- Parser Shopee com ID do Pedido, Endereço de entrega, SKU da Variação, quantidade e descrição: OK.
+- Parser Magalu com número LU, Comprador > Nome, SKU, quantidade e descrição: OK.
+- Teste Shopee com dois SKUs e quantidades diferentes: OK.

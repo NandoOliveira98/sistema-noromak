@@ -1,0 +1,10 @@
+SISTEMA DE CONFERÊNCIA WEB/LINUX 8.4
+
+- Extensão atualizada para Mercado Livre, Shopee e Magalu.
+- Shopee: lê ID do Pedido, cliente de Endereço de entrega, SKU da Variação, quantidade e descrição.
+- Magalu: lê número LU, cliente de Comprador > Nome, SKU, quantidade e descrição.
+- Mercado Livre mantém leitura de Dados do comprador.
+- A importação é feita diretamente do DOM da página, sem captura da tela e sem OCR.
+- O Painel Admin recebe o marketplace correto e abre Importar por print já preenchido para revisão.
+- Pedidos com mais de um SKU geram aviso para revisão como kit.
+- Impressão continua pelo QZ Tray.

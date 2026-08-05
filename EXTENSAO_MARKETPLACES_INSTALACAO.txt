@@ -1,0 +1,20 @@
+EXTENSÃO NOROMAK — IMPORTADOR DE MARKETPLACES 1.3
+
+A extensão lê diretamente os dados exibidos nas páginas de pedidos do Mercado Livre, Shopee e Magalu. Ela não captura a tela inteira e não usa OCR para esses três marketplaces.
+
+CAMPOS LIDOS
+- Mercado Livre: Venda, Dados do comprador, SKU, quantidade e descrição.
+- Shopee: ID do Pedido, cliente em Endereço de entrega, SKU da Variação, quantidade e descrição.
+- Magalu: número LU, cliente em Comprador > Nome, SKU, quantidade e descrição.
+
+INSTALAÇÃO
+1. Publique primeiro o Sistema Web/Linux 8.4.
+2. Extraia o ZIP da extensão em uma pasta permanente.
+3. Abra chrome://extensions.
+4. Ative Modo do desenvolvedor.
+5. Remova a extensão antiga do Mercado Livre.
+6. Clique em Carregar sem compactação e selecione a pasta em que manifest.json está visível.
+7. Mantenha o Painel Admin aberto e autenticado como Admin.
+8. Atualize com Ctrl+F5 o Admin e a página do marketplace.
+
+O botão Importar para Expedição aparece somente quando existe uma aba Admin autenticada.
