@@ -1,4 +1,4 @@
-SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 8.2
+SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 8.3
 ================================================
 
 Esta versão retorna à impressão pelo QZ Tray e remove o uso do Noromak Print Agent.
@@ -38,4 +38,8 @@ A publicação não substitui o banco permanente.
 
 EXTENSÃO MERCADO LIVRE
 -----------------------
-A versão 8.2 aceita capturas enviadas pela extensão própria Noromak. A extensão é instalada separadamente no Chrome do computador do Admin. Mantenha o Painel Admin aberto e autenticado.
+A versão 8.3 aceita capturas enviadas pela extensão própria Noromak. A extensão é instalada separadamente no Chrome do computador do Admin. Mantenha o Painel Admin aberto e autenticado.
+
+IMPORTAÇÃO DIRETA DO MERCADO LIVRE — 8.3
+A extensão 1.2 não envia print e não executa OCR. Ela lê diretamente da página a venda,
+o bloco Dados do comprador, o SKU, a quantidade e a descrição e preenche o formulário Admin.

@@ -1,4 +1,4 @@
-VALIDAÇÃO DA VERSÃO WEB/LINUX 8.2
+VALIDAÇÃO DA VERSÃO WEB/LINUX 8.3
 =================================
 
 - servidor_web.py compilado com sucesso.
@@ -43,7 +43,7 @@ VERSÃO 7.7
 - O QZ continua sendo conectado sob demanda antes da impressão.
 - Configurador QZ separado em etapa elevada de sistema e etapa não elevada do usuário.
 
-VERSÃO 8.2 — EXTENSÃO MERCADO LIVRE
+VERSÃO 8.3 — EXTENSÃO MERCADO LIVRE
 - servidor_web.py compilado com Python sem erros.
 - manifest.json validado como JSON.
 - background.js, mercadolivre.js e painel-admin.js validados com node --check.

@@ -1,25 +1,17 @@
-EXTENSÃO NOROMAK — IMPORTADOR MERCADO LIVRE 1.0
-================================================
+EXTENSÃO MERCADO LIVRE — IMPORTAÇÃO DIRETA 1.2
 
-Esta é uma extensão própria da Noromak. Não é necessário baixar uma extensão de terceiros na Chrome Web Store.
+A extensão agora lê os dados diretamente da página do Mercado Livre e não captura mais a tela inteira.
+Campos lidos:
+- número da venda;
+- cliente exclusivamente do bloco Dados do comprador;
+- SKU;
+- quantidade;
+- descrição.
 
-INSTALAÇÃO NO GOOGLE CHROME
-1. Extraia este ZIP para uma pasta permanente do computador. Não apague nem mova a pasta depois.
-2. Abra o Chrome e digite: chrome://extensions
-3. Ative "Modo do desenvolvedor" no canto superior direito.
-4. Clique em "Carregar sem compactação".
-5. Selecione a pasta que contém o arquivo manifest.json.
-6. Deixe aberta uma aba do Painel Admin: https://noromakweb.com.br/expedicao/admin
-7. Entre no Painel com um usuário de perfil Admin.
-8. Atualize a aba do Admin e a aba do Mercado Livre com Ctrl + F5.
-
-USO
-- O botão "Importar para Expedição" aparece no canto inferior direito do Mercado Livre somente quando existe uma aba do Painel Administrativo aberta e autenticada como Admin.
-- Clique no botão. A extensão captura apenas a área visível da aba atual.
-- A imagem é enviada diretamente entre as duas abas do navegador; não é armazenada pela extensão.
-- O modal "Importar por print" abre no Admin e a leitura OCR começa automaticamente.
-
-OBSERVAÇÕES
-- A aba do Admin precisa permanecer aberta.
-- Se o botão não aparecer, confirme que o Admin está logado e atualize as duas abas.
-- O Chrome mostrará uma permissão ampla de captura de páginas. O código injeta o botão somente em mercadolivre.com.br e valida a sessão Admin antes de capturar.
+Instalação/atualização:
+1. Abra chrome://extensions.
+2. Ative o Modo do desenvolvedor.
+3. Remova a versão antiga ou use Recarregar após apontar para a pasta nova.
+4. Clique em Carregar sem compactação.
+5. Selecione a pasta da extensão que contém manifest.json.
+6. Atualize o Painel Admin e o Mercado Livre com Ctrl+F5.
