@@ -1,9 +1,15 @@
-SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 8.7
+SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 8.9
 ================================================
 
-Esta versão mantém o QZ Tray e adiciona dois aplicativos PWA instaláveis e separados:
-- Noromak Admin
-- Noromak Conferência
+Esta versão mantém:
+- Noromak Admin instalável
+- Noromak Conferência instalável
+- QZ Tray no computador conectado à Zebra
+- Importação dos marketplaces
+
+E adiciona impressão iniciada pelo celular:
+
+  CELULAR -> SERVIDOR WEB -> ESTAÇÃO DE IMPRESSÃO -> QZ TRAY -> ZEBRA USB
 
 PUBLICAR
 --------
@@ -11,31 +17,41 @@ Copie estes arquivos para a pasta atual do projeto, preservando a pasta oculta .
 Depois execute:
 
   git add -A
-  git commit -m "adiciona aplicativos instalaveis admin e conferencia"
+  git commit -m "adiciona impressao pelo celular"
   ./publicar.sh
 
 Não execute instalar_servidor_uma_vez.sh e não altere /etc/systemd quando a infraestrutura já estiver pronta.
+A atualização cria automaticamente as tabelas da fila no mesmo SQLite permanente.
 
-INSTALAR OS APLICATIVOS
------------------------
-Administração:
-  https://noromakweb.com.br/expedicao/admin
-  Clique em "Instalar Admin".
-
-Conferência:
-  https://noromakweb.com.br/expedicao/conferencia
-  Clique em "Instalar Conferência".
-
-Cada aplicativo recebe nome, ícone e janela próprios no Windows. Eles continuam usando o mesmo servidor, banco de dados e usuários do estoque.
-
-COMPUTADOR DA IMPRESSORA
-------------------------
-1. Instale/abra o QZ Tray.
-2. Execute CONFIGURAR_QZ_TRAY_WEB.bat uma única vez no usuário do Windows que imprime.
-3. Na Conferência, use a impressora normalmente configurada, por exemplo:
+COMPUTADOR CONECTADO À ZEBRA
+----------------------------
+1. Deixe a Zebra conectada por USB e o QZ Tray aberto.
+2. Abra:
+   https://noromakweb.com.br/expedicao/estacao-impressao
+3. Entre com um usuário do estoque.
+4. Confirme o nome da impressora, normalmente:
    ZDesigner ZD220-203dpi ZPL
+5. Clique em "Testar Zebra".
+6. Clique em "Iniciar estação".
+7. Deixe a Estação de Impressão aberta durante as conferências pelo celular.
 
-A Conferência conecta ao QZ Tray somente ao testar ou imprimir.
+A Estação pode ser instalada como aplicativo separado pelo botão "Instalar Estação".
+
+CONFERÊNCIA PELO CELULAR
+------------------------
+1. Abra:
+   https://noromakweb.com.br/expedicao/conferencia
+2. Entre com o usuário do operador.
+3. Faça a conferência normalmente.
+4. Ao finalizar, a etiqueta entra na fila do servidor.
+5. A Estação imprime na Zebra e confirma o resultado ao celular.
+6. O pedido só sai dos pendentes após a confirmação da impressão.
+
+Se o computador estiver desligado ou a Estação estiver parada, o pedido permanece conferido e aguardando impressão. Depois de iniciar a Estação, use "Verificar impressão" no celular.
+
+IMPRESSÃO NO COMPUTADOR
+-----------------------
+A Conferência aberta no próprio computador da Zebra continua tentando imprimir diretamente pelo QZ Tray. Se o QZ local não estiver disponível, ela usa automaticamente a Estação de Impressão.
 
 SERVIDOR
 --------
@@ -46,7 +62,3 @@ Backups: /home/expedicao/backups
 Chave privada QZ: /home/expedicao/qz/qz-private-key.pem
 
 A publicação não substitui o banco permanente.
-
-EXTENSÃO DE MARKETPLACES
-------------------------
-A extensão Noromak Importador de Marketplaces continua separada e pode ler pedidos do Mercado Livre, Shopee e Magalu no computador do Admin.

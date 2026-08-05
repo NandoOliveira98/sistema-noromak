@@ -1,0 +1,22 @@
+COMO IMPRIMIR PELO CELULAR — VERSAO 8.9
+
+NO COMPUTADOR CONECTADO A ZEBRA (uma vez por turno):
+1. Abra https://noromakweb.com.br/expedicao/estacao-impressao
+2. Entre com um usuario do estoque.
+3. Confirme o nome: ZDesigner ZD220-203dpi ZPL
+4. Clique em Testar Zebra.
+5. Clique em Iniciar estacao.
+6. Deixe a pagina aberta. Pode minimizar a janela.
+
+NO CELULAR:
+1. Abra https://noromakweb.com.br/expedicao/conferencia
+2. Entre com o usuario do operador.
+3. Confira o pedido normalmente.
+4. Ao finalizar, a etiqueta vai para a Estacao Zebra.
+5. O pedido sai dos pendentes somente depois de a Estacao confirmar a impressao.
+
+REQUISITOS:
+- O computador da Zebra deve estar ligado.
+- QZ Tray deve estar aberto e configurado nesse computador.
+- A pagina Estacao de Impressao deve estar ativa.
+- O celular precisa ter acesso ao site; nao precisa instalar QZ Tray.

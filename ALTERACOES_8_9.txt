@@ -1,0 +1,13 @@
+SISTEMA DE CONFERENCIA WEB/LINUX 8.9 — IMPRESSAO PELO CELULAR
+
+- Adicionada fila de impressao persistente no SQLite.
+- A Conferencia detecta celular/tablet e envia a etiqueta ao servidor.
+- Criada a pagina /expedicao/estacao-impressao para o computador conectado por USB a Zebra.
+- A Estacao usa o QZ Tray local, imprime o ZPL e confirma o resultado ao celular.
+- O pedido somente e concluido depois da confirmacao de impressao.
+- Se a Estacao estiver offline, o pedido permanece conferido e aguardando impressao.
+- Protecao contra duplicidade: novas verificacoes reutilizam o mesmo trabalho ja enfileirado ou impresso.
+- Reimpressoes pelo celular tambem podem seguir pela Estacao Zebra.
+- Adicionado acesso rapido a Estacao no Painel Admin e no portal.
+
+Infraestrutura do servidor permanece a mesma. Nao altera systemd, nginx ou pastas permanentes.

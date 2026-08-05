@@ -10,9 +10,12 @@
     window.navigator.standalone === true;
   const buttons = () => [...document.querySelectorAll("[data-pwa-install]")];
   const notes = () => [...document.querySelectorAll(".pwa-installed-note")];
-  const appType = () => document.documentElement.dataset.pwaApp === "admin" ? "admin" : "conferencia";
-  const appLabel = () => appType() === "admin" ? "Administração" : "Conferência";
-  const readyLabel = () => appType() === "admin" ? "⬇ INSTALAR ADMIN" : "⬇ INSTALAR CONFERÊNCIA";
+  const appType = () => {
+    const value = document.documentElement.dataset.pwaApp;
+    return value === "admin" || value === "estacao" ? value : "conferencia";
+  };
+  const appLabel = () => appType() === "admin" ? "Administração" : appType() === "estacao" ? "Estação Zebra" : "Conferência";
+  const readyLabel = () => appType() === "admin" ? "⬇ INSTALAR ADMIN" : appType() === "estacao" ? "⬇ INSTALAR ESTAÇÃO" : "⬇ INSTALAR CONFERÊNCIA";
 
   function setButtonState(state) {
     const installed = standalone();
@@ -117,7 +120,7 @@
     buttons().forEach(btn => btn.addEventListener("click", installFromClick));
     setButtonState("idle");
     if ("serviceWorker" in navigator && location.protocol === "https:") {
-      navigator.serviceWorker.register(`${BASE}/sw.js?v=8.7`, {scope:`${BASE}/`, updateViaCache:"none"})
+      navigator.serviceWorker.register(`${BASE}/sw.js?v=8.9`, {scope:`${BASE}/`, updateViaCache:"none"})
         .then(reg => reg.update().catch(() => {}))
         .catch(err => console.warn("PWA: service worker não registrado", err));
     }

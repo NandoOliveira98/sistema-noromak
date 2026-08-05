@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sistema de Conferência Noromak — edição Web/Linux 8.8.
+"""Sistema de Conferência Noromak — edição Web/Linux 8.9.
 
 Sem dependências externas: usa apenas a biblioteca padrão do Python.
 - Escuta em 127.0.0.1:8100.
@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-APP_VERSION = "8.8"
+APP_VERSION = "8.9"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -48,6 +48,8 @@ QZ_PRIVATE_KEY_PATH = Path(os.getenv("QZ_PRIVATE_KEY_PATH", "/home/expedicao/qz/
 MIGRATION_DIR = Path(os.getenv("EXP_MIGRATION_DIR", str(ROOT_DIR / "MIGRACAO_INICIAL")))
 MAX_BODY = 100 * 1024 * 1024
 LOCK_STALE_SECONDS = 5 * 60
+PRINT_CLAIM_STALE_SECONDS = int(os.getenv("EXP_PRINT_CLAIM_STALE_SECONDS", "120"))
+PRINT_STATION_ONLINE_SECONDS = int(os.getenv("EXP_PRINT_STATION_ONLINE_SECONDS", "20"))
 AUTH_CACHE_SECONDS = 180
 SESSION_COOKIE = "expedicao_estoque"
 SESSION_TTL_SECONDS = int(os.getenv("EXP_SESSION_TTL_SECONDS", str(12 * 60 * 60)))
@@ -177,6 +179,34 @@ def init_db() -> None:
                 username TEXT NOT NULL,
                 action TEXT NOT NULL,
                 detail TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS print_jobs (
+                id TEXT PRIMARY KEY,
+                order_key TEXT NOT NULL,
+                order_id TEXT NOT NULL,
+                marketplace TEXT NOT NULL DEFAULT '',
+                payload TEXT NOT NULL,
+                document_count INTEGER NOT NULL DEFAULT 1,
+                status TEXT NOT NULL CHECK(status IN ('queued','claimed','printed','failed','cancelled')),
+                created_at TEXT NOT NULL,
+                created_by TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                claimed_by TEXT NOT NULL DEFAULT '',
+                claimed_at_epoch INTEGER NOT NULL DEFAULT 0,
+                printed_at TEXT NOT NULL DEFAULT '',
+                error TEXT NOT NULL DEFAULT '',
+                attempts INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_print_jobs_status_created ON print_jobs(status, created_at);
+            CREATE INDEX IF NOT EXISTS idx_print_jobs_order ON print_jobs(order_key, created_at);
+            CREATE TABLE IF NOT EXISTS print_stations (
+                station_id TEXT PRIMARY KEY,
+                station_name TEXT NOT NULL DEFAULT '',
+                printer_name TEXT NOT NULL DEFAULT '',
+                username TEXT NOT NULL DEFAULT '',
+                last_seen_epoch INTEGER NOT NULL DEFAULT 0,
+                last_seen_at TEXT NOT NULL DEFAULT '',
+                last_error TEXT NOT NULL DEFAULT ''
             );
             """
         )
@@ -787,7 +817,7 @@ def clear_login_failures(handler: BaseHTTPRequestHandler, username: str) -> None
 
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/8.8"
+    server_version = "NoromakExpedicao/8.9"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
@@ -896,6 +926,21 @@ class AppHandler(BaseHTTPRequestHandler):
             if ctx is not None:
                 self.handle_roles_get()
             return
+        if path == "/api/print/queue/status":
+            ctx = self.auth()
+            if ctx is not None:
+                self.handle_print_queue_status(query)
+            return
+        if path == "/api/print/queue/next":
+            ctx = self.auth()
+            if ctx is not None:
+                self.handle_print_queue_next(ctx, query)
+            return
+        if path == "/api/print/queue/summary":
+            ctx = self.auth()
+            if ctx is not None:
+                self.handle_print_queue_summary()
+            return
         if path == "/api/qz/certificate":
             ctx = self.auth()
             if ctx is None:
@@ -938,6 +983,21 @@ class AppHandler(BaseHTTPRequestHandler):
             ctx = self.auth(admin_only=True)
             if ctx is not None:
                 self.handle_roles_post(ctx)
+            return
+        if path == "/api/print/queue/enqueue":
+            ctx = self.auth()
+            if ctx is not None:
+                self.handle_print_queue_enqueue(ctx)
+            return
+        if path == "/api/print/queue/result":
+            ctx = self.auth()
+            if ctx is not None:
+                self.handle_print_queue_result(ctx)
+            return
+        if path == "/api/print/queue/heartbeat":
+            ctx = self.auth()
+            if ctx is not None:
+                self.handle_print_queue_heartbeat(ctx)
             return
         if path == "/api/qz/sign":
             ctx = self.auth()
@@ -1202,6 +1262,213 @@ class AppHandler(BaseHTTPRequestHandler):
             "Iniciado": row["started_at"],
         }
 
+    @staticmethod
+    def print_job_payload(row: sqlite3.Row | dict[str, Any] | None) -> dict[str, Any] | None:
+        if not row:
+            return None
+        item = dict(row)
+        try:
+            payload = json.loads(item.pop("payload", "[]"))
+        except Exception:
+            payload = []
+        item["payload"] = payload if isinstance(payload, list) else []
+        item["pending"] = item.get("status") in ("queued", "claimed")
+        return item
+
+    def handle_print_queue_enqueue(self, ctx: dict[str, Any]) -> None:
+        try:
+            req = self.read_json()
+            pedido = str(req.get("pedido") or "").strip()
+            marketplace = str(req.get("marketplace") or "").strip()
+            payload = req.get("payload")
+            reprint = bool(req.get("reprint"))
+            if not pedido:
+                raise ValueError("Pedido não informado para impressão.")
+            if not isinstance(payload, list) or not payload or not all(isinstance(x, str) and x.strip() for x in payload):
+                raise ValueError("Dados ZPL inválidos ou vazios.")
+            if sum(len(x.encode("utf-8")) for x in payload) > 20 * 1024 * 1024:
+                raise ValueError("A etiqueta excede 20 MB.")
+            order_key = normalize(pedido)
+            now = now_iso()
+            with DB_LOCK:
+                DB.execute("BEGIN IMMEDIATE")
+                try:
+                    current = DB.execute(
+                        """SELECT * FROM print_jobs WHERE order_key=? AND status IN ('queued','claimed')
+                           ORDER BY created_at DESC LIMIT 1""",
+                        (order_key,),
+                    ).fetchone()
+                    if current:
+                        DB.commit()
+                        self.send_json({"ok": True, "existing": True, "job": self.print_job_payload(current)})
+                        return
+                    if not reprint:
+                        printed = DB.execute(
+                            "SELECT * FROM print_jobs WHERE order_key=? AND status='printed' ORDER BY created_at DESC LIMIT 1",
+                            (order_key,),
+                        ).fetchone()
+                        if printed:
+                            DB.commit()
+                            self.send_json({"ok": True, "existing": True, "already_printed": True, "job": self.print_job_payload(printed)})
+                            return
+                    job_id = "PRN-" + secrets.token_urlsafe(18)
+                    DB.execute(
+                        """INSERT INTO print_jobs(
+                               id,order_key,order_id,marketplace,payload,document_count,status,
+                               created_at,created_by,updated_at
+                           ) VALUES(?,?,?,?,?,?, 'queued',?,?,?)""",
+                        (job_id, order_key, pedido, marketplace, json_dumps(payload), len(payload), now, ctx["username"], now),
+                    )
+                    row = DB.execute("SELECT * FROM print_jobs WHERE id=?", (job_id,)).fetchone()
+                    DB.commit()
+                except Exception:
+                    DB.rollback()
+                    raise
+            audit(ctx["username"], "print.enqueue", f"{pedido}:{job_id}")
+            self.send_json({"ok": True, "existing": False, "job": self.print_job_payload(row)}, 201)
+        except (ValueError, json.JSONDecodeError) as exc:
+            self.send_json({"error": str(exc)}, 400)
+        except Exception as exc:
+            self.send_json({"error": f"Não foi possível colocar a etiqueta na fila: {exc}"}, 500)
+
+    def handle_print_queue_status(self, query: dict[str, list[str]]) -> None:
+        job_id = (query.get("id") or [""])[0].strip()
+        pedido = (query.get("pedido") or [""])[0].strip()
+        with DB_LOCK:
+            if job_id:
+                row = DB.execute("SELECT * FROM print_jobs WHERE id=?", (job_id,)).fetchone()
+            elif pedido:
+                row = DB.execute(
+                    "SELECT * FROM print_jobs WHERE order_key=? ORDER BY created_at DESC LIMIT 1",
+                    (normalize(pedido),),
+                ).fetchone()
+            else:
+                self.send_json({"error": "Informe o ID da impressão ou o pedido."}, 400)
+                return
+        if not row:
+            self.send_json({"error": "Impressão não encontrada."}, 404)
+            return
+        payload = self.print_job_payload(row)
+        if payload:
+            payload.pop("payload", None)
+        self.send_json({"ok": True, "job": payload, "station_online": self.any_print_station_online()})
+
+    def touch_print_station(self, ctx: dict[str, Any], station_id: str, station_name: str, printer_name: str, error: str = "") -> None:
+        if not station_id:
+            return
+        now_epoch = int(time.time())
+        with DB_LOCK:
+            DB.execute(
+                """INSERT INTO print_stations(station_id,station_name,printer_name,username,last_seen_epoch,last_seen_at,last_error)
+                   VALUES(?,?,?,?,?,?,?) ON CONFLICT(station_id) DO UPDATE SET
+                   station_name=excluded.station_name,printer_name=excluded.printer_name,username=excluded.username,
+                   last_seen_epoch=excluded.last_seen_epoch,last_seen_at=excluded.last_seen_at,last_error=excluded.last_error""",
+                (station_id, station_name, printer_name, ctx["username"], now_epoch, now_iso(), error[:1000]),
+            )
+            DB.commit()
+
+    def any_print_station_online(self) -> bool:
+        cutoff = int(time.time()) - PRINT_STATION_ONLINE_SECONDS
+        with DB_LOCK:
+            return bool(DB.execute("SELECT 1 FROM print_stations WHERE last_seen_epoch>=? LIMIT 1", (cutoff,)).fetchone())
+
+    def handle_print_queue_heartbeat(self, ctx: dict[str, Any]) -> None:
+        try:
+            req = self.read_json()
+            station_id = str(req.get("station_id") or "").strip()
+            if not station_id:
+                raise ValueError("Identificação da estação não informada.")
+            self.touch_print_station(
+                ctx,
+                station_id,
+                str(req.get("station_name") or "Estação Zebra").strip(),
+                str(req.get("printer_name") or "").strip(),
+                str(req.get("error") or "").strip(),
+            )
+            self.send_json({"ok": True, "server_time": now_iso()})
+        except (ValueError, json.JSONDecodeError) as exc:
+            self.send_json({"error": str(exc)}, 400)
+
+    def handle_print_queue_next(self, ctx: dict[str, Any], query: dict[str, list[str]]) -> None:
+        station_id = (query.get("station_id") or [""])[0].strip()
+        station_name = (query.get("station_name") or ["Estação Zebra"])[0].strip()
+        printer_name = (query.get("printer_name") or [""])[0].strip()
+        if not station_id:
+            self.send_json({"error": "Identificação da estação não informada."}, 400)
+            return
+        self.touch_print_station(ctx, station_id, station_name, printer_name)
+        now_epoch = int(time.time())
+        stale_before = now_epoch - PRINT_CLAIM_STALE_SECONDS
+        with DB_LOCK:
+            DB.execute("BEGIN IMMEDIATE")
+            try:
+                DB.execute(
+                    """UPDATE print_jobs SET status='queued',claimed_by='',claimed_at_epoch=0,updated_at=?,
+                       error=CASE WHEN error='' THEN 'Trabalho devolvido à fila após perda de comunicação com a estação.' ELSE error END
+                       WHERE status='claimed' AND claimed_at_epoch>0 AND claimed_at_epoch<?""",
+                    (now_iso(), stale_before),
+                )
+                row = DB.execute(
+                    "SELECT * FROM print_jobs WHERE status='queued' ORDER BY created_at ASC LIMIT 1"
+                ).fetchone()
+                if row:
+                    DB.execute(
+                        """UPDATE print_jobs SET status='claimed',claimed_by=?,claimed_at_epoch=?,updated_at=?,attempts=attempts+1,error=''
+                           WHERE id=? AND status='queued'""",
+                        (station_id, now_epoch, now_iso(), row["id"]),
+                    )
+                    row = DB.execute("SELECT * FROM print_jobs WHERE id=?", (row["id"],)).fetchone()
+                DB.commit()
+            except Exception:
+                DB.rollback()
+                raise
+        self.send_json({"ok": True, "job": self.print_job_payload(row), "server_time": now_iso()})
+
+    def handle_print_queue_result(self, ctx: dict[str, Any]) -> None:
+        try:
+            req = self.read_json()
+            job_id = str(req.get("id") or "").strip()
+            station_id = str(req.get("station_id") or "").strip()
+            success = bool(req.get("success"))
+            error = str(req.get("error") or "").strip()
+            printer_name = str(req.get("printer_name") or "").strip()
+            if not job_id or not station_id:
+                raise ValueError("Impressão ou estação não informada.")
+            self.touch_print_station(ctx, station_id, str(req.get("station_name") or "Estação Zebra"), printer_name, "" if success else error)
+            status = "printed" if success else "failed"
+            now = now_iso()
+            with DB_LOCK:
+                row = DB.execute("SELECT * FROM print_jobs WHERE id=?", (job_id,)).fetchone()
+                if not row:
+                    self.send_json({"error": "Impressão não encontrada."}, 404)
+                    return
+                if row["status"] == "printed":
+                    self.send_json({"ok": True, "already_printed": True, "job": self.print_job_payload(row)})
+                    return
+                DB.execute(
+                    """UPDATE print_jobs SET status=?,updated_at=?,printed_at=?,error=?,claimed_by=?,claimed_at_epoch=? WHERE id=?""",
+                    (status, now, now if success else "", error[:2000], station_id, int(time.time()), job_id),
+                )
+                row = DB.execute("SELECT * FROM print_jobs WHERE id=?", (job_id,)).fetchone()
+                DB.commit()
+            audit(ctx["username"], "print.result", f"{job_id}:{status}:{station_id}")
+            self.send_json({"ok": True, "job": self.print_job_payload(row)})
+        except (ValueError, json.JSONDecodeError) as exc:
+            self.send_json({"error": str(exc)}, 400)
+        except Exception as exc:
+            self.send_json({"error": f"Não foi possível confirmar a impressão: {exc}"}, 500)
+
+    def handle_print_queue_summary(self) -> None:
+        cutoff = int(time.time()) - PRINT_STATION_ONLINE_SECONDS
+        with DB_LOCK:
+            counts = {row["status"]: row["qtd"] for row in DB.execute("SELECT status,COUNT(*) qtd FROM print_jobs GROUP BY status")}
+            stations = [dict(row) for row in DB.execute(
+                "SELECT station_id,station_name,printer_name,username,last_seen_epoch,last_seen_at,last_error FROM print_stations ORDER BY last_seen_epoch DESC LIMIT 10"
+            )]
+        for station in stations:
+            station["online"] = int(station.get("last_seen_epoch") or 0) >= cutoff
+        self.send_json({"ok": True, "counts": counts, "stations": stations, "server_time": now_iso()})
+
     def handle_roles_get(self) -> None:
         with DB_LOCK:
             rows = DB.execute(
@@ -1307,6 +1574,11 @@ class AppHandler(BaseHTTPRequestHandler):
             "/admin.html": "admin.html",
             "/administracao": "admin.html",
             "/administracao/": "admin.html",
+            "/estacao-impressao": "estacao-impressao.html",
+            "/estacao-impressao/": "estacao-impressao.html",
+            "/estacao-impressao.html": "estacao-impressao.html",
+            "/print-station": "estacao-impressao.html",
+            "/print-station/": "estacao-impressao.html",
             "/shared-storage.js": "shared-storage.js",
             "/web-auth.js": "web-auth.js",
         }

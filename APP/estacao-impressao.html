@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="pt-BR" data-pwa-app="estacao">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#1F57A5">
+<meta name="application-name" content="Noromak Estação de Impressão">
+<link rel="manifest" href="/expedicao/manifest-estacao.webmanifest?v=8.9" crossorigin="use-credentials">
+<link rel="icon" href="/favicon.ico?v=8.9" sizes="any">
+<link rel="stylesheet" href="/expedicao/pwa-install.css?v=8.9">
+<link rel="shortcut icon" href="/favicon.ico?v=8.9">
+<title>Noromak — Estação de Impressão</title>
+<script src="https://cdn.jsdelivr.net/npm/qz-tray@2.2.6/qz-tray.js"></script>
+<style>
+:root{--azul:#1F57A5;--azul2:#173e70;--laranja:#F7941D;--verde:#238636;--vermelho:#c62828;--fundo:#f3f6f9}
+*{box-sizing:border-box}body{margin:0;background:var(--fundo);font-family:"Segoe UI",Arial,sans-serif;color:#23364d}.topo{background:var(--azul);border-bottom:4px solid var(--laranja);padding:14px 22px;display:flex;align-items:center;justify-content:space-between;color:#fff}.topo img{max-width:180px;max-height:42px}.topo h1{font-size:19px;margin:0}.topo small{opacity:.85}.wrap{max-width:950px;margin:24px auto;padding:0 16px}.card{background:#fff;border-radius:14px;box-shadow:0 5px 22px #1f3d5a20;padding:22px;margin-bottom:18px;border:1px solid #dce6ef}.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}.status{display:flex;align-items:center;gap:10px;padding:13px 15px;border-radius:10px;font-weight:700}.dot{width:12px;height:12px;border-radius:50%;background:#999}.off{background:#fff0f0;color:#8c1e1e}.off .dot{background:#d32f2f}.on{background:#e8f5e9;color:#185c26}.on .dot{background:#2e7d32}.wait{background:#fff8e1;color:#725000}.wait .dot{background:#f9a825}.linha{display:flex;gap:10px;align-items:end;flex-wrap:wrap}.campo{flex:1;min-width:240px}.campo label{display:block;font-size:12px;font-weight:800;color:var(--azul);margin-bottom:6px}.campo input{width:100%;padding:11px;border:1px solid #bac8d6;border-radius:8px;font-size:14px}.btn{border:0;border-radius:8px;padding:11px 16px;font-weight:800;cursor:pointer}.btn-primary{background:var(--azul);color:#fff}.btn-success{background:var(--verde);color:#fff}.btn-danger{background:var(--vermelho);color:#fff}.btn-orange{background:var(--laranja);color:#fff}.btn:disabled{opacity:.55;cursor:not-allowed}.metricas{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.metrica{border:1px solid #dbe5ee;border-radius:10px;padding:14px;text-align:center}.metrica strong{font-size:24px;color:var(--azul);display:block}.metrica span{font-size:11px;color:#657789}.log{height:230px;overflow:auto;background:#111b26;color:#dbe7f3;border-radius:9px;padding:12px;font:12px/1.45 Consolas,monospace;white-space:pre-wrap}.login-layer{position:fixed;inset:0;background:linear-gradient(135deg,#1F57A5,#102944);z-index:99;display:flex;align-items:center;justify-content:center;padding:18px}.login{width:min(390px,100%);background:#fff;border-radius:14px;padding:28px;border-top:5px solid var(--laranja);box-shadow:0 18px 60px #0006}.login img{display:block;max-width:190px;max-height:58px;margin:0 auto 18px}.login h2{text-align:center;color:var(--azul);margin:0 0 5px}.login p{text-align:center;color:#647587;font-size:13px;margin:0 0 18px}.login input{width:100%;padding:12px;margin-bottom:11px;border:1px solid #c4ced8;border-radius:8px}.erro{color:#b71c1c;font-weight:700;font-size:12px;min-height:20px}.rodape{font-size:12px;color:#68798a}.pill{display:inline-flex;padding:6px 10px;border-radius:999px;background:#e6eef8;color:var(--azul);font-weight:800;font-size:11px}.hidden{display:none!important}@media(max-width:700px){.grid,.metricas{grid-template-columns:1fr}.topo{align-items:flex-start}.topo img{max-width:130px}.wrap{margin-top:14px}}
+</style>
+</head>
+<body>
+<div id="loginLayer" class="login-layer">
+  <form id="loginForm" class="login">
+    <img src="/nk-logo.svg?v=8.9" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=8.9'">
+    <h2>Estação de Impressão</h2>
+    <p>Entre com um usuário do estoque neste computador conectado à Zebra.</p>
+    <input id="loginUser" autocomplete="username" placeholder="Usuário / Login" required>
+    <input id="loginPassword" type="password" autocomplete="current-password" placeholder="Senha" required>
+    <div id="loginError" class="erro"></div>
+    <button id="loginButton" class="btn btn-orange" style="width:100%" type="submit">ENTRAR</button>
+  </form>
+</div>
+<header class="topo">
+  <img src="/grupo-noromak.png?v=8.9" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=8.9'">
+  <div style="display:flex;align-items:center;gap:12px"><button type="button" class="pwa-install-btn pwa-header" data-pwa-install>⬇ INSTALAR ESTAÇÃO</button><div style="text-align:right"><h1>Estação de Impressão Zebra</h1><small>Recebe etiquetas conferidas pelo celular</small></div></div>
+</header>
+<main class="wrap">
+  <section class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+      <div><span id="userPill" class="pill">Não autenticado</span><h2 style="margin:9px 0 2px;color:var(--azul)">Impressão remota</h2><div class="rodape">Mantenha esta tela aberta no computador em que a Zebra está conectada por USB.</div></div>
+      <button id="logoutButton" class="btn btn-danger">Sair do usuário</button>
+    </div>
+  </section>
+  <div class="grid">
+    <section class="card">
+      <h3 style="margin-top:0;color:var(--azul)">1. Impressora deste computador</h3>
+      <div class="campo"><label>Nome exato da impressora no Windows</label><input id="printerName" value="ZDesigner ZD220-203dpi ZPL"></div>
+      <div class="linha" style="margin-top:12px"><button id="testButton" class="btn btn-primary">Testar Zebra</button><button id="startButton" class="btn btn-success">Iniciar estação</button><button id="stopButton" class="btn btn-danger" disabled>Pausar</button></div>
+      <label style="display:flex;gap:8px;align-items:center;margin-top:13px;font-size:13px"><input id="autoStart" type="checkbox"> Iniciar automaticamente quando esta página abrir</label>
+    </section>
+    <section class="card">
+      <h3 style="margin-top:0;color:var(--azul)">2. Estado da estação</h3>
+      <div id="stationStatus" class="status off"><span class="dot"></span><span>Estação parada</span></div>
+      <div id="qzStatus" class="status off" style="margin-top:10px"><span class="dot"></span><span>QZ Tray desconectado</span></div>
+      <div class="rodape" style="margin-top:12px">O celular envia a etiqueta ao servidor. Esta estação busca o trabalho, imprime na Zebra e devolve a confirmação ao celular.</div>
+    </section>
+  </div>
+  <section class="card">
+    <div class="metricas"><div class="metrica"><strong id="mQueued">0</strong><span>AGUARDANDO</span></div><div class="metrica"><strong id="mClaimed">0</strong><span>EM IMPRESSÃO</span></div><div class="metrica"><strong id="mPrinted">0</strong><span>IMPRESSAS</span></div><div class="metrica"><strong id="mFailed">0</strong><span>FALHAS</span></div></div>
+  </section>
+  <section class="card"><h3 style="margin-top:0;color:var(--azul)">Atividade</h3><div id="activityLog" class="log"></div></section>
+</main>
+<script>
+(() => {
+"use strict";
+const BASE="/expedicao";
+const el=id=>document.getElementById(id);
+let user=null,running=false,busy=false,timer=null,summaryTimer=null,qzConfigured=false,wakeLock=null;
+const stationId=(()=>{let x=localStorage.getItem("conf_print_station_id");if(!x){x="EST-"+Date.now().toString(36).toUpperCase()+"-"+Math.random().toString(36).slice(2,9).toUpperCase();localStorage.setItem("conf_print_station_id",x)}return x})();
+const stationName=()=>"Zebra "+(navigator.platform||"Windows");
+function log(msg,type="info"){const d=new Date().toLocaleTimeString("pt-BR");el("activityLog").textContent+=`[${d}] ${type.toUpperCase()} — ${msg}\n`;el("activityLog").scrollTop=el("activityLog").scrollHeight}
+async function api(url,opts={}){const r=await fetch(BASE+url,{credentials:"same-origin",cache:"no-store",...opts,headers:{Accept:"application/json",...(opts.body?{"Content-Type":"application/json"}:{}),...(opts.headers||{})}});let d={};try{d=await r.json()}catch{}if(!r.ok)throw new Error(d.error||`HTTP ${r.status}`);return d}
+function setStatus(id,state,text){const box=el(id);box.className="status "+state;box.querySelector("span:last-child").textContent=text}
+async function login(username,password){return api("/api/auth/login",{method:"POST",body:JSON.stringify({username,password,area:"conferencia"})})}
+async function loadSession(){const d=await api("/api/auth/session");if(!d.authenticated){el("loginLayer").classList.remove("hidden");return false}user=d.user;el("loginLayer").classList.add("hidden");el("userPill").textContent=`${user.nome||user.username} · ${user.app_role==="admin"?"Admin":"Operador"}`;return true}
+async function logout(){try{await api("/api/auth/logout",{method:"POST",body:"{}"})}catch{}location.reload()}
+function printer(){return el("printerName").value.trim()||"ZDesigner ZD220-203dpi ZPL"}
+async function setupQz(){if(qzConfigured)return;qz.security.setCertificatePromise((resolve,reject)=>fetch(BASE+"/api/qz/certificate",{credentials:"same-origin",cache:"no-store"}).then(r=>r.ok?r.text():Promise.reject(new Error("Certificado QZ indisponível"))).then(resolve,reject));qz.security.setSignatureAlgorithm("SHA512");qz.security.setSignaturePromise(toSign=>(resolve,reject)=>fetch(BASE+"/api/qz/sign",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"text/plain"},body:toSign}).then(r=>r.ok?r.text():Promise.reject(new Error("Falha na assinatura QZ"))).then(resolve,reject));qzConfigured=true}
+async function connectQz(){setupQz();if(!qz.websocket.isActive())await qz.websocket.connect();setStatus("qzStatus","on","QZ Tray conectado");return true}
+async function configPrinter(){await connectQz();const name=printer();const found=await qz.printers.find(name).catch(()=>name);return qz.configs.create(found)}
+async function testPrinter(){try{el("testButton").disabled=true;const cfg=await configPrinter();await qz.print(cfg,["^XA^PW800^LL400^FO50,45^A0N,42,42^FDEstacao Noromak conectada^FS^FO50,110^A0N,28,28^FDImpressao pelo celular pronta^FS^FO50,165^A0N,24,24^FD"+new Date().toLocaleString("pt-BR")+"^FS^XZ"]);log("Etiqueta de teste enviada para "+printer(),"ok");alert("Impressão de teste enviada para a Zebra.")}catch(e){setStatus("qzStatus","off","Falha no QZ Tray");log(e.message||e,"erro");alert("Não foi possível testar a impressora: "+(e.message||e))}finally{el("testButton").disabled=false}}
+async function heartbeat(error=""){if(!user)return;await api("/api/print/queue/heartbeat",{method:"POST",body:JSON.stringify({station_id:stationId,station_name:stationName(),printer_name:printer(),error})})}
+async function report(job,success,error=""){return api("/api/print/queue/result",{method:"POST",body:JSON.stringify({id:job.id,station_id:stationId,station_name:stationName(),printer_name:printer(),success,error})})}
+async function processNext(){if(!running||busy)return;busy=true;try{const q=new URLSearchParams({station_id:stationId,station_name:stationName(),printer_name:printer()});const d=await api("/api/print/queue/next?"+q);const job=d.job;if(!job)return;setStatus("stationStatus","wait",`Imprimindo pedido ${job.order_id}...`);log(`Recebido pedido ${job.order_id} (${job.marketplace||"marketplace"})`);try{const cfg=await configPrinter();await qz.print(cfg,job.payload);await report(job,true);log(`Pedido ${job.order_id} enviado à Zebra`,"ok");setStatus("stationStatus","on","Estação ativa — aguardando etiquetas")}catch(e){await report(job,false,e.message||String(e)).catch(()=>{});log(`Falha no pedido ${job.order_id}: ${e.message||e}`,"erro");setStatus("stationStatus","off","Falha na última impressão")}}catch(e){log(e.message||e,"erro");setStatus("stationStatus","off","Servidor ou sessão indisponível");if(String(e.message).includes("login")){stop();el("loginLayer").classList.remove("hidden")}}finally{busy=false;refreshSummary().catch(()=>{})}}
+async function refreshSummary(){const d=await api("/api/print/queue/summary");const c=d.counts||{};el("mQueued").textContent=c.queued||0;el("mClaimed").textContent=c.claimed||0;el("mPrinted").textContent=c.printed||0;el("mFailed").textContent=c.failed||0}
+async function keepAwake(){try{if("wakeLock" in navigator)wakeLock=await navigator.wakeLock.request("screen")}catch{}}
+async function start(){if(running)return;try{el("startButton").disabled=true;localStorage.setItem("conf_print_station_printer",printer());localStorage.setItem("conf_print_station_auto",el("autoStart").checked?"1":"0");await connectQz();await qz.printers.find(printer()).catch(()=>printer());running=true;el("stopButton").disabled=false;setStatus("stationStatus","on","Estação ativa — aguardando etiquetas");log("Estação iniciada com "+printer(),"ok");await heartbeat();await keepAwake();timer=setInterval(processNext,1800);summaryTimer=setInterval(()=>{heartbeat().catch(()=>{});refreshSummary().catch(()=>{})},7000);processNext()}catch(e){setStatus("stationStatus","off","Não foi possível iniciar");log(e.message||e,"erro");alert("Falha ao iniciar a estação: "+(e.message||e));el("startButton").disabled=false}}
+function stop(){running=false;clearInterval(timer);clearInterval(summaryTimer);timer=summaryTimer=null;el("startButton").disabled=false;el("stopButton").disabled=true;setStatus("stationStatus","off","Estação parada");if(wakeLock){wakeLock.release().catch(()=>{});wakeLock=null}log("Estação pausada")}
+el("loginForm").addEventListener("submit",async e=>{e.preventDefault();el("loginError").textContent="";el("loginButton").disabled=true;try{await login(el("loginUser").value,el("loginPassword").value);await loadSession();await initializePanel()}catch(err){el("loginError").textContent=err.message||err}finally{el("loginButton").disabled=false}});
+el("logoutButton").onclick=logout;el("testButton").onclick=testPrinter;el("startButton").onclick=start;el("stopButton").onclick=stop;
+el("printerName").value=localStorage.getItem("conf_print_station_printer")||"ZDesigner ZD220-203dpi ZPL";el("autoStart").checked=localStorage.getItem("conf_print_station_auto")==="1";
+async function initializePanel(){await refreshSummary().catch(()=>{});if(el("autoStart").checked)setTimeout(start,500)}
+loadSession().then(ok=>{if(ok)initializePanel()}).catch(e=>{el("loginError").textContent=e.message||e;el("loginLayer").classList.remove("hidden")});
+})();
+</script>
+<script src="/expedicao/pwa-install.js?v=8.9"></script>
+</body></html>

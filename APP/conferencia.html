@@ -7,11 +7,11 @@
 <meta name="application-name" content="Noromak Conferência">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="manifest" href="/expedicao/manifest-conferencia.webmanifest?v=8.8" crossorigin="use-credentials">
-<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/conferencia-180.png?v=8.8">
-<link rel="icon" href="/favicon.ico?v=8.8" sizes="any">
-<link rel="shortcut icon" href="/favicon.ico?v=8.8">
-<link rel="stylesheet" href="/expedicao/pwa-install.css?v=8.8">
+<link rel="manifest" href="/expedicao/manifest-conferencia.webmanifest?v=8.9" crossorigin="use-credentials">
+<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/conferencia-180.png?v=8.9">
+<link rel="icon" href="/favicon.ico?v=8.9" sizes="any">
+<link rel="shortcut icon" href="/favicon.ico?v=8.9">
+<link rel="stylesheet" href="/expedicao/pwa-install.css?v=8.9">
 <title>Noromak - Conferência em Rede</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
@@ -216,7 +216,7 @@
 </style>
 <script src="/expedicao/shared-storage.js"></script>
 <script src="/expedicao/web-auth.js"></script>
-<script defer src="/expedicao/pwa-install.js?v=8.8"></script>
+<script defer src="/expedicao/pwa-install.js?v=8.9"></script>
 </head>
 
 <body>
@@ -224,9 +224,9 @@
 <div id="telaLogin">
   <div class="box-card">
     <div class="logo-box">
-      <img src="/nk-logo.svg?v=8.8" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=8.8';">
+      <img src="/nk-logo.svg?v=8.9" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=8.9';">
     </div>
-    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 8.8 — identidade visual oficial do servidor</div>
+    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 8.9 — identidade visual oficial do servidor</div>
 
     <div class="box-upload-rede" style="border-style:solid;">
       <label>🗄 PEDIDOS COMPARTILHADOS NA REDE:</label>
@@ -316,12 +316,12 @@
 
 <header>
   <div class="logo-mini-box">
-    <img src="/grupo-noromak.png?v=8.8" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=8.8';">
+    <img src="/grupo-noromak.png?v=8.9" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=8.9';">
   </div>
   <div class="usuario-area">
     <div style="text-align: right;">
       <span id="infoUsuario"></span><br>
-      <span id="qzStatusBadge" class="qz-status qz-desconectado">QZ Tray conecta ao imprimir</span>
+      <span id="qzStatusBadge" class="qz-status qz-desconectado">Impressão local ou pela estação Zebra</span>
       <span id="autosaveStatus" class="autosave-status">Salvamento automático ativo</span>
     </div>
     <button type="button" class="pwa-install-btn pwa-header" data-pwa-install>⬇ INSTALAR</button>
@@ -647,7 +647,12 @@ window.onload = function() {
     document.getElementById("inputNomeImpressora").value = nomeImpressoraConfigurada;
   }
 
-  atualizarBadgeQz(false, "QZ Tray conecta somente ao imprimir");
+  if (dispositivoSemQzLocal()) {
+    atualizarBadgeEstacaoRemota();
+    setInterval(atualizarBadgeEstacaoRemota, 8000);
+  } else {
+    atualizarBadgeQz(false, "QZ Tray conecta somente ao imprimir");
+  }
 
   const sessaoSalva = appStorage.getItem("conf_sessao_ativa");
   if (sessaoSalva) {
@@ -1620,6 +1625,19 @@ Motivo: ${resultadoEtiqueta.erro}`,
 
   try {
     const resultadoImpressao = await imprimirPedidoMarketplace(resultadoEtiqueta);
+    if (resultadoImpressao.pendente) {
+      salvarProgressoAutomatico("Pedido conferido — aguardando impressão");
+      document.getElementById("statusMsg").innerHTML = "⏳ Pedido conferido e aguardando a Estação Zebra imprimir.";
+      mostrarMensagemDetalhada(
+        "info",
+        "Etiqueta na fila de impressão",
+        `Pedido: ${numPedExibicao}
+Código da impressão: ${resultadoImpressao.jobId || "---"}`,
+        "Deixe a Estação de Impressão aberta no computador da Zebra. Quando ela imprimir, toque em Verificar impressão.",
+        [{ rotulo: "Verificar impressão", onclick: "tentarImprimirPedidoAtual()" }]
+      );
+      return;
+    }
     const qtdUnidades = pedidoAtual.reduce((s, item) => s + Number(extrairCampo(item, "Quantidade") || 0), 0);
     gravarLogConferencia({
       pedido: numPedAtual,
@@ -1955,29 +1973,108 @@ async function obterConfiguracaoImpressora() {
   }
 }
 
-async function imprimirPedidoMarketplace(resultadoEtiqueta) {
+function prepararDadosImpressaoMarketplace(resultadoEtiqueta) {
   const registro = resultadoEtiqueta.registro;
   const marketplace = resultadoEtiqueta.marketplace;
-  const config = await obterConfiguracaoImpressora();
   let data = [];
 
   if (marketplace === "mercado_livre") {
-    // Imprime somente uma etiqueta 10x15. Os dados do cliente já existentes
-    // são preservados e o sistema inclui SKU/código, descrição e quantidade
-    // na área livre entre o código de barras e a roteirização.
     const envioComDados = incluirDadosPedidoNaEtiquetaEnvio(registro.envio);
     if (!envioComDados) throw new Error("A etiqueta de envio do Mercado Livre não está disponível.");
     textoNotaGeradoCache = "";
     data = [envioComDados];
   } else if (marketplace === "magalu" || marketplace === "shopee") {
+    if (!registro.envio) throw new Error("A etiqueta de envio não está disponível.");
     data = [registro.envio];
   } else {
     throw new Error("Marketplace não reconhecido para impressão automática.");
   }
+  return { marketplace, data };
+}
 
-  await qz.print(config, data);
-  console.log(`${nomeMarketplace(marketplace)}: ${data.length} impressão(ões) enviada(s) com sucesso.`);
-  return { quantidade: data.length, dados: data.slice() };
+function dispositivoSemQzLocal() {
+  const ua = navigator.userAgent || "";
+  const movel = /Android|iPhone|iPad|iPod|Mobile/i.test(ua) ||
+    (window.matchMedia && window.matchMedia("(pointer: coarse)").matches && window.innerWidth < 1100);
+  return movel || typeof qz === "undefined" || !qz.websocket;
+}
+
+async function atualizarBadgeEstacaoRemota() {
+  const badge = document.getElementById("qzStatusBadge");
+  if (!badge || !dispositivoSemQzLocal()) return;
+  try {
+    const resumo = await apiFilaImpressao("summary");
+    const online = (resumo.stations || []).some(estacao => estacao.online);
+    badge.textContent = online ? "Estação Zebra online" : "Estação Zebra offline";
+    badge.className = online ? "qz-status qz-conectado" : "qz-status qz-desconectado";
+  } catch (_) {
+    badge.textContent = "Estação Zebra indisponível";
+    badge.className = "qz-status qz-desconectado";
+  }
+}
+
+async function apiFilaImpressao(caminho, opcoes = {}) {
+  const resposta = await fetch(`/expedicao/api/print/queue/${caminho}`, {
+    cache: "no-store", credentials: "same-origin", ...opcoes,
+    headers: { Accept: "application/json", ...(opcoes.body ? { "Content-Type": "application/json; charset=utf-8" } : {}), ...(opcoes.headers || {}) }
+  });
+  let dados = {};
+  try { dados = await resposta.json(); } catch (_) {}
+  if (!resposta.ok) throw new Error(dados.error || `Falha HTTP ${resposta.status} na fila de impressão.`);
+  return dados;
+}
+
+async function enfileirarImpressaoRemota(pedido, marketplace, data, reprint = false) {
+  const resposta = await apiFilaImpressao("enqueue", {
+    method: "POST",
+    body: JSON.stringify({ pedido, marketplace, payload: data, reprint })
+  });
+  return resposta.job;
+}
+
+async function consultarImpressaoRemota(jobId) {
+  return (await apiFilaImpressao(`status?id=${encodeURIComponent(jobId)}`)).job;
+}
+
+async function aguardarImpressaoRemota(jobId, limiteMs = 90000) {
+  const inicio = Date.now();
+  while (Date.now() - inicio < limiteMs) {
+    const job = await consultarImpressaoRemota(jobId);
+    if (job.status === "printed" || job.status === "failed" || job.status === "cancelled") return job;
+    await new Promise(resolve => setTimeout(resolve, 1800));
+  }
+  return consultarImpressaoRemota(jobId);
+}
+
+async function imprimirDadosComFallback(pedido, marketplace, data, reprint = false) {
+  if (!dispositivoSemQzLocal()) {
+    try {
+      const config = await obterConfiguracaoImpressora();
+      await qz.print(config, data);
+      console.log(`${nomeMarketplace(marketplace)}: ${data.length} impressão(ões) local(is) enviada(s).`);
+      return { quantidade: data.length, dados: data.slice(), modo: "local", pendente: false };
+    } catch (erroLocal) {
+      console.warn("Impressão local indisponível; usando estação remota.", erroLocal);
+    }
+  }
+
+  const badge = document.getElementById("qzStatusBadge");
+  if (badge) { badge.textContent = "Enviando para a estação Zebra"; badge.className = "qz-status qz-conectado"; }
+  const job = await enfileirarImpressaoRemota(pedido, marketplace, data, reprint);
+  document.getElementById("statusMsg").innerHTML = "📱 Etiqueta enviada para o computador da Zebra. Aguardando impressão...";
+  mostrarMensagemDetalhada("info", "Aguardando a estação de impressão", `Pedido ${pedidoParaExibicao(pedido, marketplace)}`, "Mantenha a Estação de Impressão aberta no computador conectado à Zebra.");
+  const final = await aguardarImpressaoRemota(job.id);
+  if (final.status === "printed") {
+    return { quantidade: data.length, dados: data.slice(), modo: "fila", jobId: job.id, pendente: false };
+  }
+  if (final.status === "failed") throw new Error(`A estação Zebra não conseguiu imprimir: ${final.error || "falha não informada"}`);
+  return { quantidade: data.length, dados: data.slice(), modo: "fila", jobId: job.id, pendente: true, status: final.status };
+}
+
+async function imprimirPedidoMarketplace(resultadoEtiqueta) {
+  const preparado = prepararDadosImpressaoMarketplace(resultadoEtiqueta);
+  const pedido = extrairCampo(pedidoAtual?.[0] || {}, "Pedido");
+  return imprimirDadosComFallback(pedido, preparado.marketplace, preparado.data);
 }
 
 function carregarHistoricoConferencias() {
@@ -2144,8 +2241,16 @@ async function confirmarReimpressao() {
   botao.textContent = "ENVIANDO...";
 
   try {
-    const config = await obterConfiguracaoImpressora();
-    await qz.print(config, log.dadosImpressao);
+    const resultadoReimpressao = await imprimirDadosComFallback(
+      log.pedido,
+      log.marketplaceCodigo || normalizarMarketplace(log.marketplace),
+      log.dadosImpressao,
+      true
+    );
+    if (resultadoReimpressao.pendente) {
+      alert("A reimpressão foi enviada para a Estação Zebra e ainda está aguardando o computador imprimir.");
+      return;
+    }
     const agora = new Date();
     if (!Array.isArray(log.reimpressoes)) log.reimpressoes = [];
     log.reimpressoes.push({
