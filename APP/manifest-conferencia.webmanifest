@@ -1,0 +1,50 @@
+{
+  "id": "/expedicao/conferencia-app",
+  "name": "Noromak — Conferência de Pedidos",
+  "short_name": "Conferência",
+  "description": "Aplicativo de conferência, baixa e impressão de pedidos da Expedição Noromak.",
+  "lang": "pt-BR",
+  "dir": "ltr",
+  "start_url": "/expedicao/conferencia?origem=pwa",
+  "scope": "/expedicao/",
+  "display": "standalone",
+  "display_override": [
+    "window-controls-overlay",
+    "standalone"
+  ],
+  "orientation": "landscape",
+  "background_color": "#F4F7F9",
+  "theme_color": "#1F57A5",
+  "categories": [
+    "business",
+    "productivity"
+  ],
+  "icons": [
+    {
+      "src": "/expedicao/icons/conferencia-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/expedicao/icons/conferencia-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Abrir conferência",
+      "short_name": "Conferir",
+      "url": "/expedicao/conferencia",
+      "icons": [
+        {
+          "src": "/expedicao/icons/conferencia-192.png",
+          "sizes": "192x192",
+          "type": "image/png"
+        }
+      ]
+    }
+  ]
+}

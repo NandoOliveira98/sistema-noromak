@@ -1,0 +1,24 @@
+COMO INSTALAR OS DOIS APLICATIVOS
+==================================
+
+Depois de publicar a versão 8.6:
+
+1) ADMINISTRAÇÃO
+- Abra https://noromakweb.com.br/expedicao/admin no Chrome ou Edge.
+- Clique em "INSTALAR ADMIN NO COMPUTADOR" na tela de login, ou "Instalar Admin" no cabeçalho.
+- Confirme a instalação.
+- Será criado o aplicativo "Noromak Admin" com ícone próprio.
+
+2) CONFERÊNCIA
+- Abra https://noromakweb.com.br/expedicao/conferencia no Chrome ou Edge.
+- Clique em "INSTALAR CONFERÊNCIA NO COMPUTADOR" na tela de login, ou "INSTALAR" no cabeçalho.
+- Confirme a instalação.
+- Será criado o aplicativo "Conferência" com outro ícone.
+
+IMPORTANTE
+- Instale cada aplicativo a partir da sua própria página.
+- O Admin aceita somente usuários com perfil Admin.
+- A Conferência aceita Admin e Operador.
+- Os dois aplicativos usam o mesmo servidor e banco de dados.
+- O QZ Tray continua instalado somente no computador que imprime.
+- Se o botão não aparecer, use o menu do Chrome/Edge > Instalar aplicativo.

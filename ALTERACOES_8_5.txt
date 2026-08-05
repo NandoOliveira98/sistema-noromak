@@ -1,0 +1,7 @@
+SISTEMA DE CONFERÊNCIA WEB/LINUX 8.5
+
+- Corrige leitura da descrição na Shopee quando o código do SKU também aparece no título do produto.
+- Corrige leitura da descrição na Magalu quando título, quantidade e SKU estão em elementos separados.
+- Adiciona busca de contingência no texto visível da página ao redor do SKU.
+- A importação não é mais bloqueada somente pela ausência da descrição: o Admin tenta completar pelo banco de produtos e permite revisão manual.
+- Mantém os campos exatos: pedido, comprador, SKU, quantidade e descrição.

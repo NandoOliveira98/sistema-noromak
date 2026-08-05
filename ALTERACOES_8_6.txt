@@ -1,0 +1,8 @@
+VERSÃO 8.6 — APLICATIVOS INSTALÁVEIS SEPARADOS
+
+- PWA Administração: /expedicao/admin, nome e ícone próprios.
+- PWA Conferência: /expedicao/conferencia, nome e ícone próprios.
+- Cada tela possui botão de instalação no login e no cabeçalho.
+- Os aplicativos abrem em janelas independentes do navegador.
+- Mantidos o login dos usuários do estoque, QZ Tray e todas as funções da versão 8.5.
+- Service worker não armazena APIs nem dados dos pedidos; faz cache apenas da estrutura visual para abertura rápida.

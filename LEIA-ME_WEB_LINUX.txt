@@ -1,7 +1,9 @@
-SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 8.3
+SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 8.6
 ================================================
 
-Esta versão retorna à impressão pelo QZ Tray e remove o uso do Noromak Print Agent.
+Esta versão mantém o QZ Tray e adiciona dois aplicativos PWA instaláveis e separados:
+- Noromak Admin
+- Noromak Conferência
 
 PUBLICAR
 --------
@@ -9,21 +11,31 @@ Copie estes arquivos para a pasta atual do projeto, preservando a pasta oculta .
 Depois execute:
 
   git add -A
-  git commit -m "retorna impressao para o QZ Tray"
+  git commit -m "adiciona aplicativos instalaveis admin e conferencia"
   ./publicar.sh
 
 Não execute instalar_servidor_uma_vez.sh e não altere /etc/systemd quando a infraestrutura já estiver pronta.
 
+INSTALAR OS APLICATIVOS
+-----------------------
+Administração:
+  https://noromakweb.com.br/expedicao/admin
+  Clique em "Instalar Admin".
+
+Conferência:
+  https://noromakweb.com.br/expedicao/conferencia
+  Clique em "Instalar Conferência".
+
+Cada aplicativo recebe nome, ícone e janela próprios no Windows. Eles continuam usando o mesmo servidor, banco de dados e usuários do estoque.
+
 COMPUTADOR DA IMPRESSORA
 ------------------------
-1. Execute DESINSTALAR_AGENTE_ZEBRA_ANTIGO.bat se o agente da versão 8.0 tiver sido instalado.
-2. Instale/abra o QZ Tray.
-3. Execute CONFIGURAR_QZ_TRAY_WEB.bat uma única vez no usuário do Windows que imprime.
-4. Feche e abra novamente o navegador.
-5. Na Conferência, informe o nome exato da impressora, normalmente:
+1. Instale/abra o QZ Tray.
+2. Execute CONFIGURAR_QZ_TRAY_WEB.bat uma única vez no usuário do Windows que imprime.
+3. Na Conferência, use a impressora normalmente configurada, por exemplo:
    ZDesigner ZD220-203dpi ZPL
 
-A Conferência não abre conexão com o QZ Tray durante o login. A conexão ocorre somente ao testar ou imprimir.
+A Conferência conecta ao QZ Tray somente ao testar ou imprimir.
 
 SERVIDOR
 --------
@@ -35,15 +47,6 @@ Chave privada QZ: /home/expedicao/qz/qz-private-key.pem
 
 A publicação não substitui o banco permanente.
 
-
-EXTENSÃO MERCADO LIVRE
------------------------
-A versão 8.3 aceita capturas enviadas pela extensão própria Noromak. A extensão é instalada separadamente no Chrome do computador do Admin. Mantenha o Painel Admin aberto e autenticado.
-
-IMPORTAÇÃO DIRETA DO MERCADO LIVRE — 8.3
-A extensão 1.2 não envia print e não executa OCR. Ela lê diretamente da página a venda,
-o bloco Dados do comprador, o SKU, a quantidade e a descrição e preenche o formulário Admin.
-
-
 EXTENSÃO DE MARKETPLACES
-Use a extensão Noromak Importador de Marketplaces 1.3 para leitura direta de pedidos do Mercado Livre, Shopee e Magalu. Consulte EXTENSAO_MARKETPLACES_INSTALACAO.txt.
+------------------------
+A extensão Noromak Importador de Marketplaces continua separada e pode ler pedidos do Mercado Livre, Shopee e Magalu no computador do Admin.

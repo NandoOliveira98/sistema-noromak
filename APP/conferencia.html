@@ -1,8 +1,16 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="pt-BR" data-pwa-app="conferencia">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="theme-color" content="#1F57A5">
+<meta name="application-name" content="Noromak Conferência">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="/expedicao/manifest-conferencia.webmanifest">
+<link rel="apple-touch-icon" href="/expedicao/icons/conferencia-180.png">
+<link rel="icon" type="image/png" sizes="192x192" href="/expedicao/icons/conferencia-192.png">
+<link rel="stylesheet" href="/expedicao/pwa-install.css">
 <title>Noromak - Conferência em Rede</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
@@ -207,6 +215,7 @@
 </style>
 <script src="/expedicao/shared-storage.js"></script>
 <script src="/expedicao/web-auth.js"></script>
+<script defer src="/expedicao/pwa-install.js"></script>
 </head>
 
 <body>
@@ -216,7 +225,7 @@
     <div class="logo-box">
       <img src="data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 450 120'><text x='20' y='80' font-size='60' font-family='Arial, sans-serif' font-weight='bold' fill='%232B4E75'>NOROMAK</text></svg>" alt="Noromak">
     </div>
-    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 8.4 — QZ Tray + importação direta de Mercado Livre, Shopee e Magalu</div>
+    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 8.6 — aplicativo instalável da Conferência</div>
 
     <div class="box-upload-rede" style="border-style:solid;">
       <label>🗄 PEDIDOS COMPARTILHADOS NA REDE:</label>
@@ -226,7 +235,9 @@
     <input type="text" id="usuarioInput" placeholder="Usuário / Login" onkeydown="if(event.key==='Enter') fazerLogin()">
     <input type="password" id="senhaInput" placeholder="Senha" onkeydown="if(event.key==='Enter') fazerLogin()">
     <button class="btn-entrar" onclick="fazerLogin()">ENTRAR</button>
-    <button type="button" class="btn-solicitar-acesso" onclick="abrirSolicitacaoUsuario()">SOLICITAR NOVO USUÁRIO</button><div style="font-size:10px;color:#6b7b89;margin-top:7px;line-height:1.35;">Escolha Admin ou Operador. O login só será liberado após aprovação.</div>
+    <button type="button" class="btn-solicitar-acesso" onclick="abrirSolicitacaoUsuario()">SOLICITAR NOVO USUÁRIO</button>
+    <button type="button" class="pwa-install-btn pwa-login" data-pwa-install>⬇ INSTALAR CONFERÊNCIA NO COMPUTADOR</button>
+    <div class="pwa-installed-note">Abre em janela própria e cria um ícone separado no Windows.</div><div style="font-size:10px;color:#6b7b89;margin-top:7px;line-height:1.35;">Escolha Admin ou Operador. O login só será liberado após aprovação.</div>
     <div id="erroLogin" class="erro-msg"></div>
   </div>
 </div>
@@ -312,6 +323,7 @@
       <span id="qzStatusBadge" class="qz-status qz-desconectado">QZ Tray conecta ao imprimir</span>
       <span id="autosaveStatus" class="autosave-status">Salvamento automático ativo</span>
     </div>
+    <button type="button" class="pwa-install-btn pwa-header" data-pwa-install>⬇ INSTALAR</button>
     <button class="btn-header" onclick="alternarPainelAtalhos()">⌨ ATALHOS</button>
     <button class="btn-header" onclick="abrirHistorico()">🕘 HISTÓRICO</button>
     <button class="btn-logoff" onclick="fazerLogoff()">SAIR / LOGOFF</button>

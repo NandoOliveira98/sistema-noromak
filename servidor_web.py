@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sistema de Conferência Noromak — edição Web/Linux 8.4.
+"""Sistema de Conferência Noromak — edição Web/Linux 8.6.
 
 Sem dependências externas: usa apenas a biblioteca padrão do Python.
 - Escuta em 127.0.0.1:8100.
@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-APP_VERSION = "8.4"
+APP_VERSION = "8.6"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -787,7 +787,7 @@ def clear_login_failures(handler: BaseHTTPRequestHandler, username: str) -> None
 
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/8.4"
+    server_version = "NoromakExpedicao/8.6"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
@@ -1320,14 +1320,19 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_json({"error": "Arquivo não encontrado."}, 404)
             return
         body = full.read_bytes()
-        content_type = mimetypes.guess_type(full.name)[0] or "application/octet-stream"
-        if content_type.startswith("text/") or full.suffix in (".js", ".json"):
-            content_type += "; charset=utf-8"
+        if full.suffix == ".webmanifest":
+            content_type = "application/manifest+json; charset=utf-8"
+        else:
+            content_type = mimetypes.guess_type(full.name)[0] or "application/octet-stream"
+            if content_type.startswith("text/") or full.suffix in (".js", ".json"):
+                content_type += "; charset=utf-8"
         self.send_response(200)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
         self.send_header("Pragma", "no-cache")
+        if full.name == "sw.js":
+            self.send_header("Service-Worker-Allowed", BASE_PATH + "/")
         self.send_header("X-Noromak-Version", APP_VERSION)
         self.end_headers()
         if self.command != "HEAD":
