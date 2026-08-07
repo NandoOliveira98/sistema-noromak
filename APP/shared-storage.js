@@ -240,7 +240,8 @@
   }
 
   async function consultarAlteracoes() {
-    if (pollEmAndamento || document.hidden) return;
+    const conferenciaEmSegundoPlano = document.documentElement?.dataset?.pwaApp === "conferencia";
+    if (pollEmAndamento || (document.hidden && !conferenciaEmSegundoPlano)) return;
     pollEmAndamento = true;
     try {
       const resposta = await fetch(`${API}?keys=${encodeURIComponent(CHAVES_MONITORADAS.join(","))}`, { cache: "no-store" });

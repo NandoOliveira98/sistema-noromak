@@ -1,0 +1,9 @@
+VERSÃO 9.5 — ALERTA SONORO DE NOVO PEDIDO
+
+- A tela de Conferência monitora os pedidos de hoje que passam a ter etiqueta disponível.
+- Quando surge um novo pedido pronto, toca um sinal sonoro de dois toques ascendentes e exibe aviso visual.
+- O som não dispara para pedidos que já estavam disponíveis no momento do login; apenas para novas disponibilidades.
+- Botões SOM ATIVO/DESATIVADO e Testar som, com preferência salva por aparelho.
+- Em celular compatível, também vibra brevemente.
+- A Conferência continua consultando alterações mesmo quando a aba está em segundo plano (sujeito às políticas de economia de energia do navegador).
+- A primeira interação/login libera o Web Audio conforme exigência dos navegadores.

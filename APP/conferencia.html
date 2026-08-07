@@ -7,11 +7,11 @@
 <meta name="application-name" content="Noromak Conferência">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="manifest" href="/expedicao/manifest-conferencia.webmanifest?v=9.4" crossorigin="use-credentials">
-<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/conferencia-180.png?v=9.4">
-<link rel="icon" href="/favicon.ico?v=9.4" sizes="any">
-<link rel="shortcut icon" href="/favicon.ico?v=9.4">
-<link rel="stylesheet" href="/expedicao/pwa-install.css?v=9.4">
+<link rel="manifest" href="/expedicao/manifest-conferencia.webmanifest?v=9.5" crossorigin="use-credentials">
+<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/conferencia-180.png?v=9.5">
+<link rel="icon" href="/favicon.ico?v=9.5" sizes="any">
+<link rel="shortcut icon" href="/favicon.ico?v=9.5">
+<link rel="stylesheet" href="/expedicao/pwa-install.css?v=9.5">
 <title>Noromak - Conferência em Rede</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
@@ -289,7 +289,7 @@
 </style>
 <script src="/expedicao/shared-storage.js"></script>
 <script src="/expedicao/web-auth.js"></script>
-<script defer src="/expedicao/pwa-install.js?v=9.4"></script>
+<script defer src="/expedicao/pwa-install.js?v=9.5"></script>
 </head>
 
 <body>
@@ -297,9 +297,9 @@
 <div id="telaLogin">
   <div class="box-card">
     <div class="logo-box">
-      <img src="/nk-logo.svg?v=9.4" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=9.4';">
+      <img src="/nk-logo.svg?v=9.5" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=9.5';">
     </div>
-    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 9.4 — identidade visual oficial do servidor</div>
+    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 9.5 — identidade visual oficial do servidor</div>
 
     <div class="box-upload-rede" style="border-style:solid;">
       <label>🗄 PEDIDOS COMPARTILHADOS NA REDE:</label>
@@ -389,7 +389,7 @@
 
 <header>
   <div class="logo-mini-box">
-    <img src="/grupo-noromak.png?v=9.4" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=9.4';">
+    <img src="/grupo-noromak.png?v=9.5" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=9.5';">
   </div>
   <div class="usuario-area">
     <div style="text-align: right;">
@@ -2244,7 +2244,7 @@ function prepararDadosImpressaoMarketplace(resultadoEtiqueta) {
 }
 
 function dispositivoSemQzLocal() {
-  // A partir da versão 9.4, toda impressão passa pela fila e pela Estação Zebra.
+  // A partir da versão 9.5, toda impressão passa pela fila e pela Estação Zebra.
   // Isso elimina QZ Tray e janelas de autorização tanto no computador quanto no celular.
   return true;
 }
@@ -2970,6 +2970,217 @@ window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_
   };
 
   document.addEventListener("keydown",e=>{if(document.getElementById("modalSolicitacaoUsuario")?.classList.contains("ativo")&&e.key==="Escape"){e.preventDefault();fecharSolicitacaoUsuario();}});
+})();
+</script>
+
+
+<style id="estiloAlertaNovosPedidos">
+  .alerta-novos-pedidos-box{margin:0 0 12px;padding:10px 11px;border:1px solid #b8c8d8;border-left:4px solid #F28C18;border-radius:8px;background:#f7fafc;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
+  .alerta-novos-pedidos-info{min-width:180px;flex:1}
+  .alerta-novos-pedidos-titulo{font-size:12px;font-weight:900;color:#2B4E75;line-height:1.25}
+  .alerta-novos-pedidos-status{font-size:10px;color:#66788a;margin-top:3px;line-height:1.3}
+  .alerta-novos-pedidos-acoes{display:flex;gap:6px;flex-wrap:wrap}
+  .alerta-novos-pedidos-acoes button{border:0;border-radius:6px;padding:7px 10px;cursor:pointer;font-size:10px;font-weight:900}
+  .btn-alerta-som-ativo{background:#2e7d32;color:#fff}
+  .btn-alerta-som-inativo{background:#e5e9ed;color:#48545f}
+  .btn-alerta-teste{background:#2B4E75;color:#fff}
+  .toast-novo-pedido{position:fixed;right:18px;bottom:18px;z-index:16000;width:min(390px,calc(100vw - 36px));background:#17395c;color:#fff;border-left:5px solid #F28C18;border-radius:10px;box-shadow:0 16px 40px rgba(0,0,0,.28);padding:14px 16px;opacity:0;transform:translateY(18px);pointer-events:none;transition:opacity .2s ease,transform .2s ease}
+  .toast-novo-pedido.ativo{opacity:1;transform:translateY(0)}
+  .toast-novo-pedido strong{display:block;font-size:14px;margin-bottom:3px}
+  .toast-novo-pedido span{display:block;font-size:11px;line-height:1.4;color:#e8f0f7}
+  @media(max-width:720px){.alerta-novos-pedidos-box{align-items:stretch}.alerta-novos-pedidos-acoes{width:100%}.alerta-novos-pedidos-acoes button{flex:1;min-height:38px}.toast-novo-pedido{right:10px;bottom:78px;width:calc(100vw - 20px)}}
+</style>
+<script>
+(() => {
+  "use strict";
+  const CHAVE_ALERTA = "noromak_conf_alerta_sonoro";
+  let alertaAtivo = localStorage.getItem(CHAVE_ALERTA) !== "0";
+  let contextoAudio = null;
+  let audioLiberado = false;
+  let pedidosDisponiveisAnteriores = null;
+  let toastTimer = null;
+  let monitorTimer = null;
+
+  function sessaoConferenciaAtiva(){
+    const login = document.getElementById("telaLogin");
+    return !!usuarioLogado && !!login && getComputedStyle(login).display === "none";
+  }
+
+  function criarInterfaceAlerta(){
+    if (document.getElementById("alertaNovosPedidosBox")) return;
+    const avisoEtiquetas = document.querySelector(".aviso-etiquetas-disponiveis");
+    const lista = document.getElementById("listaPedidos");
+    const ancora = avisoEtiquetas || lista;
+    if (!ancora?.parentNode) return;
+    const box = document.createElement("div");
+    box.id = "alertaNovosPedidosBox";
+    box.className = "alerta-novos-pedidos-box";
+    box.innerHTML = `
+      <div class="alerta-novos-pedidos-info">
+        <div class="alerta-novos-pedidos-titulo">🔔 Aviso de novo pedido pronto</div>
+        <div id="alertaNovosPedidosStatus" class="alerta-novos-pedidos-status">O sinal toca quando um pedido de hoje passa a ter etiqueta disponível.</div>
+      </div>
+      <div class="alerta-novos-pedidos-acoes">
+        <button id="btnAlternarAlertaPedidos" type="button" onclick="window.alternarAlertaSonoroPedidos()"></button>
+        <button class="btn-alerta-teste" type="button" onclick="window.testarAlertaSonoroPedidos()">▶ Testar som</button>
+      </div>`;
+    ancora.parentNode.insertBefore(box, ancora.nextSibling);
+
+    const toast = document.createElement("div");
+    toast.id = "toastNovoPedido";
+    toast.className = "toast-novo-pedido";
+    toast.innerHTML = `<strong>🔔 Novo pedido pronto</strong><span id="toastNovoPedidoTexto"></span>`;
+    document.body.appendChild(toast);
+    atualizarInterfaceAlerta();
+  }
+
+  function atualizarInterfaceAlerta(extra=""){
+    const btn = document.getElementById("btnAlternarAlertaPedidos");
+    const status = document.getElementById("alertaNovosPedidosStatus");
+    if (btn) {
+      btn.className = alertaAtivo ? "btn-alerta-som-ativo" : "btn-alerta-som-inativo";
+      btn.textContent = alertaAtivo ? "🔊 SOM ATIVO" : "🔇 SOM DESATIVADO";
+    }
+    if (status) {
+      if (!alertaAtivo) status.textContent = "Aviso sonoro desativado neste aparelho.";
+      else if (!audioLiberado) status.textContent = "Som ativo. Toque/clique uma vez na tela para liberar o áudio deste aparelho.";
+      else status.textContent = extra || "Pronto: tocará quando surgir um novo pedido de hoje com etiqueta disponível.";
+    }
+  }
+
+  async function liberarAudio(){
+    if (!alertaAtivo) return false;
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return false;
+      if (!contextoAudio) contextoAudio = new AudioCtx();
+      if (contextoAudio.state === "suspended") await contextoAudio.resume();
+      audioLiberado = contextoAudio.state === "running";
+      atualizarInterfaceAlerta();
+      return audioLiberado;
+    } catch (_) {
+      audioLiberado = false;
+      atualizarInterfaceAlerta();
+      return false;
+    }
+  }
+
+  function emitirTom(freq, inicio, duracao, ganho=0.16){
+    if (!contextoAudio || contextoAudio.state !== "running") return;
+    const osc = contextoAudio.createOscillator();
+    const amp = contextoAudio.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(freq, inicio);
+    amp.gain.setValueAtTime(0.0001, inicio);
+    amp.gain.exponentialRampToValueAtTime(ganho, inicio + 0.025);
+    amp.gain.exponentialRampToValueAtTime(0.0001, inicio + duracao);
+    osc.connect(amp); amp.connect(contextoAudio.destination);
+    osc.start(inicio); osc.stop(inicio + duracao + 0.03);
+  }
+
+  async function tocarAlerta(){
+    if (!alertaAtivo) return false;
+    if (!audioLiberado) await liberarAudio();
+    if (!audioLiberado || !contextoAudio) {
+      atualizarInterfaceAlerta("Novo pedido detectado, mas o navegador ainda não liberou o áudio. Toque na tela e use Testar som.");
+      return false;
+    }
+    const t = contextoAudio.currentTime + 0.03;
+    // Dois toques ascendentes, audíveis sem serem agressivos no ambiente do estoque.
+    emitirTom(784, t, 0.16, 0.15);
+    emitirTom(1047, t + 0.19, 0.18, 0.17);
+    emitirTom(784, t + 0.48, 0.16, 0.15);
+    emitirTom(1175, t + 0.67, 0.22, 0.18);
+    try { if (navigator.vibrate) navigator.vibrate([100,60,100]); } catch (_) {}
+    return true;
+  }
+
+  function mapaPedidosDisponiveis(){
+    const mapa = new Map();
+    try {
+      obterUidsPedidosComEtiquetaDisponivel().forEach(uid => {
+        const item = dadosPedidos.find(x => String(x.__uidPedido) === String(uid));
+        if (!item) return;
+        const pedido = normalizarIdentificadorExato(extrairCampo(item,"Pedido"));
+        if (!pedido) return;
+        const mp = obterMarketplaceItem(item);
+        const chave = `${mp}|${pedido}`;
+        mapa.set(chave, {
+          pedido: pedidoParaExibicao(pedido, mp),
+          cliente: String(extrairCampo(item,"Cliente") || "").trim(),
+          marketplace: nomeMarketplace(mp)
+        });
+      });
+    } catch (erro) { console.warn("Falha ao montar alerta de pedidos", erro); }
+    return mapa;
+  }
+
+  function mostrarToast(novos){
+    const toast = document.getElementById("toastNovoPedido");
+    const texto = document.getElementById("toastNovoPedidoTexto");
+    if (!toast || !texto || !novos.length) return;
+    const primeiro = novos[0];
+    if (novos.length === 1) texto.textContent = `${primeiro.marketplace} · Pedido ${primeiro.pedido}${primeiro.cliente ? " · " + primeiro.cliente : ""}`;
+    else texto.textContent = `${novos.length} novos pedidos com etiqueta disponível para conferência.`;
+    toast.classList.add("ativo");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toast.classList.remove("ativo"), 6500);
+  }
+
+  async function verificarNovosPedidos(){
+    criarInterfaceAlerta();
+    if (!sessaoConferenciaAtiva()) {
+      pedidosDisponiveisAnteriores = null;
+      return;
+    }
+    const atual = mapaPedidosDisponiveis();
+    if (pedidosDisponiveisAnteriores === null) {
+      // A primeira leitura vira referência: pedidos que já estavam disponíveis ao entrar não disparam alarme.
+      pedidosDisponiveisAnteriores = new Set(atual.keys());
+      return;
+    }
+    const novos = [];
+    atual.forEach((info, chave) => { if (!pedidosDisponiveisAnteriores.has(chave)) novos.push(info); });
+    pedidosDisponiveisAnteriores = new Set(atual.keys());
+    if (!novos.length) return;
+    mostrarToast(novos);
+    await tocarAlerta();
+    atualizarInterfaceAlerta(novos.length === 1 ? `Último aviso: pedido ${novos[0].pedido} ficou pronto para conferência.` : `Último aviso: ${novos.length} pedidos ficaram prontos para conferência.`);
+  }
+
+  window.alternarAlertaSonoroPedidos = async function(){
+    alertaAtivo = !alertaAtivo;
+    localStorage.setItem(CHAVE_ALERTA, alertaAtivo ? "1" : "0");
+    if (alertaAtivo) await liberarAudio();
+    atualizarInterfaceAlerta();
+  };
+
+  window.testarAlertaSonoroPedidos = async function(){
+    if (!alertaAtivo) {
+      alertaAtivo = true;
+      localStorage.setItem(CHAVE_ALERTA, "1");
+    }
+    await liberarAudio();
+    const ok = await tocarAlerta();
+    atualizarInterfaceAlerta(ok ? "Teste realizado. O alerta sonoro está pronto neste aparelho." : "O navegador bloqueou o áudio. Toque/clique na página e tente novamente.");
+  };
+
+  // O clique de login ou qualquer interação do preparador libera o Web Audio conforme a política do navegador.
+  const desbloquear = () => { if (alertaAtivo && !audioLiberado) liberarAudio(); };
+  document.addEventListener("pointerdown", desbloquear, {capture:true, passive:true});
+  document.addEventListener("keydown", desbloquear, {capture:true});
+
+  window.addEventListener("storage", e => {
+    if (!e.key || ["conf_pedidos","conf_etiquetas","conf_banco_atualizado_em"].includes(e.key)) {
+      setTimeout(verificarNovosPedidos, 120);
+    }
+  });
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) setTimeout(verificarNovosPedidos, 120); });
+  document.addEventListener("DOMContentLoaded", () => {
+    criarInterfaceAlerta();
+    setTimeout(verificarNovosPedidos, 700);
+    monitorTimer = setInterval(verificarNovosPedidos, 1800);
+  });
 })();
 </script>
 
