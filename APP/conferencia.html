@@ -7,11 +7,11 @@
 <meta name="application-name" content="Noromak Conferência">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="manifest" href="/expedicao/manifest-conferencia.webmanifest?v=9.5" crossorigin="use-credentials">
-<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/conferencia-180.png?v=9.5">
-<link rel="icon" href="/favicon.ico?v=9.5" sizes="any">
-<link rel="shortcut icon" href="/favicon.ico?v=9.5">
-<link rel="stylesheet" href="/expedicao/pwa-install.css?v=9.5">
+<link rel="manifest" href="/expedicao/manifest-conferencia.webmanifest?v=9.6" crossorigin="use-credentials">
+<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/conferencia-180.png?v=9.6">
+<link rel="icon" href="/favicon.ico?v=9.6" sizes="any">
+<link rel="shortcut icon" href="/favicon.ico?v=9.6">
+<link rel="stylesheet" href="/expedicao/pwa-install.css?v=9.6">
 <title>Noromak - Conferência em Rede</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
@@ -289,7 +289,7 @@
 </style>
 <script src="/expedicao/shared-storage.js"></script>
 <script src="/expedicao/web-auth.js"></script>
-<script defer src="/expedicao/pwa-install.js?v=9.5"></script>
+<script defer src="/expedicao/pwa-install.js?v=9.6"></script>
 </head>
 
 <body>
@@ -297,9 +297,9 @@
 <div id="telaLogin">
   <div class="box-card">
     <div class="logo-box">
-      <img src="/nk-logo.svg?v=9.5" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=9.5';">
+      <img src="/nk-logo.svg?v=9.6" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=9.6';">
     </div>
-    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 9.5 — identidade visual oficial do servidor</div>
+    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 9.6 — alerta sonoro reforçado</div>
 
     <div class="box-upload-rede" style="border-style:solid;">
       <label>🗄 PEDIDOS COMPARTILHADOS NA REDE:</label>
@@ -389,7 +389,7 @@
 
 <header>
   <div class="logo-mini-box">
-    <img src="/grupo-noromak.png?v=9.5" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=9.5';">
+    <img src="/grupo-noromak.png?v=9.6" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=9.6';">
   </div>
   <div class="usuario-area">
     <div style="text-align: right;">
@@ -2994,7 +2994,9 @@ window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_
 (() => {
   "use strict";
   const CHAVE_ALERTA = "noromak_conf_alerta_sonoro";
+  const CHAVE_VOLUME_ALERTA = "noromak_conf_alerta_volume";
   let alertaAtivo = localStorage.getItem(CHAVE_ALERTA) !== "0";
+  let volumeMaximo = localStorage.getItem(CHAVE_VOLUME_ALERTA) !== "normal";
   let contextoAudio = null;
   let audioLiberado = false;
   let pedidosDisponiveisAnteriores = null;
@@ -3022,6 +3024,7 @@ window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_
       </div>
       <div class="alerta-novos-pedidos-acoes">
         <button id="btnAlternarAlertaPedidos" type="button" onclick="window.alternarAlertaSonoroPedidos()"></button>
+        <button id="btnVolumeAlertaPedidos" class="btn-alerta-teste" type="button" onclick="window.alternarVolumeAlertaPedidos()">🔊 VOLUME MÁXIMO</button>
         <button class="btn-alerta-teste" type="button" onclick="window.testarAlertaSonoroPedidos()">▶ Testar som</button>
       </div>`;
     ancora.parentNode.insertBefore(box, ancora.nextSibling);
@@ -3036,10 +3039,15 @@ window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_
 
   function atualizarInterfaceAlerta(extra=""){
     const btn = document.getElementById("btnAlternarAlertaPedidos");
+    const btnVolume = document.getElementById("btnVolumeAlertaPedidos");
     const status = document.getElementById("alertaNovosPedidosStatus");
     if (btn) {
       btn.className = alertaAtivo ? "btn-alerta-som-ativo" : "btn-alerta-som-inativo";
       btn.textContent = alertaAtivo ? "🔊 SOM ATIVO" : "🔇 SOM DESATIVADO";
+    }
+    if (btnVolume) {
+      btnVolume.textContent = volumeMaximo ? "🔊 VOLUME MÁXIMO" : "🔉 VOLUME NORMAL";
+      btnVolume.title = volumeMaximo ? "Alarme reforçado para ambiente de estoque" : "Alarme em volume normal";
     }
     if (status) {
       if (!alertaAtivo) status.textContent = "Aviso sonoro desativado neste aparelho.";
@@ -3065,14 +3073,15 @@ window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_
     }
   }
 
-  function emitirTom(freq, inicio, duracao, ganho=0.16){
+  function emitirTom(freq, inicio, duracao, ganho=0.16, tipo="sine"){
     if (!contextoAudio || contextoAudio.state !== "running") return;
     const osc = contextoAudio.createOscillator();
     const amp = contextoAudio.createGain();
-    osc.type = "sine";
+    osc.type = tipo;
     osc.frequency.setValueAtTime(freq, inicio);
     amp.gain.setValueAtTime(0.0001, inicio);
-    amp.gain.exponentialRampToValueAtTime(ganho, inicio + 0.025);
+    amp.gain.exponentialRampToValueAtTime(Math.max(0.001, ganho), inicio + 0.018);
+    amp.gain.setValueAtTime(Math.max(0.001, ganho), Math.max(inicio + 0.02, inicio + duracao - 0.035));
     amp.gain.exponentialRampToValueAtTime(0.0001, inicio + duracao);
     osc.connect(amp); amp.connect(contextoAudio.destination);
     osc.start(inicio); osc.stop(inicio + duracao + 0.03);
@@ -3086,12 +3095,25 @@ window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_
       return false;
     }
     const t = contextoAudio.currentTime + 0.03;
-    // Dois toques ascendentes, audíveis sem serem agressivos no ambiente do estoque.
-    emitirTom(784, t, 0.16, 0.15);
-    emitirTom(1047, t + 0.19, 0.18, 0.17);
-    emitirTom(784, t + 0.48, 0.16, 0.15);
-    emitirTom(1175, t + 0.67, 0.22, 0.18);
-    try { if (navigator.vibrate) navigator.vibrate([100,60,100]); } catch (_) {}
+    if (volumeMaximo) {
+      // Alarme forte: onda quadrada + harmônico, três rajadas longas para atravessar ruído de estoque.
+      const rajadas = [0, 0.42, 0.84];
+      rajadas.forEach((offset, i) => {
+        const base = i % 2 === 0 ? 880 : 1047;
+        emitirTom(base, t + offset, 0.30, 0.52, "square");
+        emitirTom(base * 1.5, t + offset, 0.30, 0.22, "triangle");
+      });
+      // Fechamento mais agudo para diferenciar de outros bipes do estoque.
+      emitirTom(1319, t + 1.25, 0.42, 0.58, "square");
+      emitirTom(1760, t + 1.25, 0.42, 0.20, "triangle");
+      try { if (navigator.vibrate) navigator.vibrate([180,90,180,90,260]); } catch (_) {}
+    } else {
+      emitirTom(784, t, 0.18, 0.20, "sine");
+      emitirTom(1047, t + 0.22, 0.20, 0.23, "sine");
+      emitirTom(784, t + 0.52, 0.18, 0.20, "sine");
+      emitirTom(1175, t + 0.74, 0.24, 0.25, "sine");
+      try { if (navigator.vibrate) navigator.vibrate([100,60,100]); } catch (_) {}
+    }
     return true;
   }
 
@@ -3153,6 +3175,14 @@ window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_
     localStorage.setItem(CHAVE_ALERTA, alertaAtivo ? "1" : "0");
     if (alertaAtivo) await liberarAudio();
     atualizarInterfaceAlerta();
+  };
+
+  window.alternarVolumeAlertaPedidos = async function(){
+    volumeMaximo = !volumeMaximo;
+    localStorage.setItem(CHAVE_VOLUME_ALERTA, volumeMaximo ? "maximo" : "normal");
+    await liberarAudio();
+    atualizarInterfaceAlerta(volumeMaximo ? "Volume máximo ativado neste aparelho." : "Volume normal ativado neste aparelho.");
+    await tocarAlerta();
   };
 
   window.testarAlertaSonoroPedidos = async function(){
