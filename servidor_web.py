@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-APP_VERSION = "10.1"
+APP_VERSION = "10.2"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -406,6 +406,17 @@ def init_db() -> None:
                 completed_by TEXT NOT NULL,
                 payload TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS order_completion_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                order_key TEXT NOT NULL,
+                order_id TEXT NOT NULL,
+                completed_at TEXT NOT NULL,
+                completed_by TEXT NOT NULL,
+                payload TEXT NOT NULL DEFAULT '',
+                UNIQUE(order_key, completed_at, completed_by)
+            );
+            CREATE INDEX IF NOT EXISTS idx_order_completion_history_key
+              ON order_completion_history(order_key, id DESC);
             CREATE TABLE IF NOT EXISTS order_locks (
                 order_key TEXT PRIMARY KEY,
                 order_id TEXT NOT NULL,
@@ -495,6 +506,7 @@ def init_db() -> None:
     ensure_app_sessions_schema()
     migrate_legacy_if_empty()
     ensure_storage_defaults()
+    migrate_completion_history()
     migrate_app_users()
     sync_app_users_storage()
     purge_expired_sessions()
@@ -893,6 +905,12 @@ def get_storage(key: str) -> tuple[str | None, int, str | None]:
     value = row["value"]
     if key in ("conf_pedidos", "conf_pedidos_rascunhos"):
         value = filter_completed_orders(value)
+        try:
+            parsed = json.loads(value or "[]")
+            if isinstance(parsed, list):
+                value = json_dumps(_enrich_rows_with_completion_history(parsed))
+        except Exception:
+            pass
     return value, int(row["version"]), row["updated_at"]
 
 
@@ -1031,6 +1049,99 @@ def merge_value(key: str, current: str | None, old: str | None, newer: str, forc
     return newer
 
 
+def migrate_completion_history() -> None:
+    """Mantém um histórico permanente, inclusive depois que um pedido é reaberto.
+
+    A versão 10.0 removia o registro de ``completed_orders`` ao reimportar, pois essa
+    tabela também bloqueia pedidos já finalizados. Com isso, o status visual podia
+    depender apenas dos metadados embutidos em ``conf_pedidos``. Aqui preservamos uma
+    segunda tabela somente de histórico e também reconstruímos registros antigos pelo
+    log de auditoria quando possível.
+    """
+    with DB_LOCK:
+        DB.execute(
+            """INSERT OR IGNORE INTO order_completion_history
+               (order_key,order_id,completed_at,completed_by,payload)
+               SELECT order_key,order_id,completed_at,completed_by,payload
+               FROM completed_orders"""
+        )
+        # Recupera conclusões antigas que já tenham sido reabertas e, por isso,
+        # deixaram de existir em completed_orders. O audit_log é permanente.
+        for row in DB.execute(
+            "SELECT created_at,username,detail FROM audit_log WHERE action='order.complete' ORDER BY id"
+        ).fetchall():
+            pedido = str(row["detail"] or "").strip()
+            key = normalize(pedido)
+            if not key:
+                continue
+            DB.execute(
+                """INSERT OR IGNORE INTO order_completion_history
+                   (order_key,order_id,completed_at,completed_by,payload)
+                   VALUES(?,?,?,?,?)""",
+                (key, pedido, str(row["created_at"] or ""), str(row["username"] or ""), "[]"),
+            )
+        DB.commit()
+
+
+def latest_completion_history(order_key: str) -> sqlite3.Row | None:
+    key = normalize(order_key)
+    if not key:
+        return None
+    return DB.execute(
+        """SELECT order_key,order_id,completed_at,completed_by,payload
+           FROM order_completion_history
+           WHERE order_key=? ORDER BY id DESC LIMIT 1""",
+        (key,),
+    ).fetchone()
+
+
+def _enrich_rows_with_completion_history(rows: list[Any]) -> list[Any]:
+    """Reaplica a tag de histórico diretamente do SQLite.
+
+    Assim a indicação JÁ FEITO não desaparece se outro navegador salvar a linha,
+    se o cache for limpo ou se os metadados internos forem perdidos no front-end.
+    """
+    if not isinstance(rows, list):
+        return rows
+    keys = []
+    seen = set()
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        key = normalize(order_number(item))
+        if key and key not in seen:
+            seen.add(key)
+            keys.append(key)
+    if not keys:
+        return rows
+    history: dict[str, sqlite3.Row] = {}
+    # Evita ultrapassar o limite de parâmetros do SQLite em listas muito grandes.
+    for start in range(0, len(keys), 400):
+        chunk = keys[start:start + 400]
+        placeholders = ",".join("?" for _ in chunk)
+        query = f"""SELECT h.order_key,h.order_id,h.completed_at,h.completed_by,h.payload
+                    FROM order_completion_history h
+                    JOIN (
+                      SELECT order_key,MAX(id) AS max_id
+                      FROM order_completion_history
+                      WHERE order_key IN ({placeholders})
+                      GROUP BY order_key
+                    ) x ON x.max_id=h.id"""
+        for row in DB.execute(query, chunk).fetchall():
+            history[str(row["order_key"])] = row
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        key = normalize(order_number(item))
+        previous = history.get(key)
+        if not previous:
+            continue
+        item["__jaConcluidoAnteriormente"] = True
+        item["__concluidoAnteriorEm"] = str(previous["completed_at"] or "")
+        item["__concluidoAnteriorPor"] = str(previous["completed_by"] or "")
+    return _propagate_previous_completion_metadata(rows)
+
+
 def completed_keys() -> set[str]:
     return {row[0] for row in DB.execute("SELECT order_key FROM completed_orders")}
 
@@ -1121,11 +1232,19 @@ def reactivate_completed_orders_from_delta(old_value: str | None, new_value: str
     reactivated: list[dict[str, str]] = []
     for key in candidates:
         previous = DB.execute(
-            "SELECT order_id,completed_at,completed_by FROM completed_orders WHERE order_key=?",
+            "SELECT order_key,order_id,completed_at,completed_by,payload FROM completed_orders WHERE order_key=?",
             (key,),
         ).fetchone()
         if not previous:
+            previous = latest_completion_history(key)
+        if not previous:
             continue
+        DB.execute(
+            """INSERT OR IGNORE INTO order_completion_history
+               (order_key,order_id,completed_at,completed_by,payload) VALUES(?,?,?,?,?)""",
+            (key, str(previous["order_id"] or ""), str(previous["completed_at"] or ""),
+             str(previous["completed_by"] or ""), str(previous["payload"] or "[]")),
+        )
         reimported_at = now_iso()
         meta = {
             "__jaConcluidoAnteriormente": True,
@@ -1149,7 +1268,7 @@ def reactivate_completed_orders_from_delta(old_value: str | None, new_value: str
             "concluido_por": str(previous["completed_by"] or ""),
         })
 
-    rows = _propagate_previous_completion_metadata(rows)
+    rows = _enrich_rows_with_completion_history(rows)
     return json_dumps(rows), reactivated
 
 
@@ -1179,6 +1298,12 @@ def save_storage(
                 except Exception:
                     pass
                 merged = filter_completed_orders(merged)
+                try:
+                    enriched_rows = json.loads(merged or "[]")
+                    if isinstance(enriched_rows, list):
+                        merged = json_dumps(_enrich_rows_with_completion_history(enriched_rows))
+                except Exception:
+                    pass
             version += 1
             updated = now_iso()
             DB.execute(
@@ -1284,7 +1409,7 @@ def clear_login_failures(handler: BaseHTTPRequestHandler, username: str) -> None
 
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/10.1"
+    server_version = "NoromakExpedicao/10.2"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
@@ -1638,11 +1763,18 @@ class AppHandler(BaseHTTPRequestHandler):
                     rows = json.loads(current or "[]")
                     matching = [x for x in rows if isinstance(x, dict) and normalize(order_number(x)) == key]
                     remaining = [x for x in rows if not (isinstance(x, dict) and normalize(order_number(x)) == key)]
+                    completed_at = now_iso()
+                    completed_payload = json_dumps(matching)
                     DB.execute(
                         """INSERT INTO completed_orders(order_key,order_id,completed_at,completed_by,payload)
                            VALUES(?,?,?,?,?) ON CONFLICT(order_key) DO UPDATE SET
                            completed_at=excluded.completed_at,completed_by=excluded.completed_by,payload=excluded.payload""",
-                        (key, pedido, now_iso(), ctx["username"], json_dumps(matching)),
+                        (key, pedido, completed_at, ctx["username"], completed_payload),
+                    )
+                    DB.execute(
+                        """INSERT OR IGNORE INTO order_completion_history
+                           (order_key,order_id,completed_at,completed_by,payload) VALUES(?,?,?,?,?)""",
+                        (key, pedido, completed_at, ctx["username"], completed_payload),
                     )
                     DB.execute(
                         "UPDATE storage SET value=?,version=?,updated_at=? WHERE key='conf_pedidos'",

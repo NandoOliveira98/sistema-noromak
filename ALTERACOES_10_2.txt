@@ -1,0 +1,12 @@
+SISTEMA DE CONFERÊNCIA NOROMAK — VERSÃO 10.2
+
+CORREÇÃO DA TAG DE PEDIDO JÁ REALIZADO
+
+- Corrige a perda da tag de histórico após reimportação/salvamento.
+- Cria histórico permanente de conclusões no SQLite.
+- Reconstrói histórico antigo a partir de completed_orders e audit_log.
+- A coluna Pedido mostra uma tag vermelha e chamativa acima do número.
+- A tag também continua na coluna Status, como na versão anterior.
+- Exibe data e horário da conclusão anterior.
+- O histórico não depende mais somente de campos internos do navegador.
+- Nenhum banco existente é apagado ou substituído.
