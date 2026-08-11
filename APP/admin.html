@@ -7,11 +7,11 @@
 <meta name="application-name" content="Noromak Admin">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="manifest" href="/expedicao/manifest-admin.webmanifest?v=9.6" crossorigin="use-credentials">
-<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=9.6">
-<link rel="icon" href="/favicon.ico?v=9.6" sizes="any">
-<link rel="shortcut icon" href="/favicon.ico?v=9.6">
-<link rel="stylesheet" href="/expedicao/pwa-install.css?v=9.6">
+<link rel="manifest" href="/expedicao/manifest-admin.webmanifest?v=9.7" crossorigin="use-credentials">
+<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=9.7">
+<link rel="icon" href="/favicon.ico?v=9.7" sizes="any">
+<link rel="shortcut icon" href="/favicon.ico?v=9.7">
+<link rel="stylesheet" href="/expedicao/pwa-install.css?v=9.7">
 <title>Noromak - Administração dos Pedidos Compartilhados</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
@@ -350,7 +350,31 @@
 </style>
 <script src="/expedicao/shared-storage.js"></script>
 <script src="/expedicao/web-auth.js"></script>
-<script defer src="/expedicao/pwa-install.js?v=9.6"></script>
+<script defer src="/expedicao/pwa-install.js?v=9.7"></script>
+
+<style id="estiloEtiquetasPersistentesV97">
+  .etiquetas-persistentes-box{margin:14px 0 18px;border:1px solid #c7d4e1;border-radius:9px;background:#f8fbfe;padding:13px}
+  .etiquetas-persistentes-topo{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+  .etiquetas-persistentes-topo h3{margin:0;color:var(--primary);font-size:14px}
+  .etiquetas-persistentes-topo p{margin:4px 0 0;color:#607284;font-size:11px;line-height:1.4}
+  .etiquetas-persistentes-resumo{font-size:11px;font-weight:800;color:#31516f;background:#eaf1f7;border-radius:999px;padding:6px 10px;white-space:nowrap}
+  .etiquetas-persistentes-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+  .etiquetas-persistentes-coluna{background:#fff;border:1px solid #d8e1ea;border-radius:8px;overflow:hidden;min-width:0}
+  .etiquetas-persistentes-cabecalho{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:9px 10px;background:#eef4f9;color:var(--primary);font-size:12px;font-weight:900;border-bottom:1px solid #d8e1ea}
+  .etiquetas-persistentes-lista{max-height:250px;overflow:auto;padding:7px}
+  .etiqueta-persistente-item{display:grid;grid-template-columns:minmax(0,1fr) 28px;gap:7px;align-items:center;padding:8px 7px;border-bottom:1px solid #edf1f5}
+  .etiqueta-persistente-item:last-child{border-bottom:0}
+  .etiqueta-persistente-principal{font-size:11px;color:#263e55;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .etiqueta-persistente-detalhe{font-size:9.5px;color:#708193;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .etiqueta-persistente-status{display:inline-block;margin-top:4px;padding:2px 6px;border-radius:999px;background:#e7f5ea;color:#277233;font-size:9px;font-weight:900}
+  .etiqueta-persistente-status.sem-vinculo{background:#fff4d6;color:#936500}
+  .etiqueta-remover-x{width:27px;height:27px;border:0;border-radius:50%;background:#fff0f0;color:#c62828;font-size:17px;font-weight:900;line-height:27px;cursor:pointer;padding:0;transition:.15s}
+  .etiqueta-remover-x:hover{background:#c62828;color:#fff;transform:scale(1.05)}
+  .etiquetas-vazio{padding:16px 8px;text-align:center;color:#8a99a8;font-size:10px}
+  .etiquetas-persistentes-aviso{margin-top:9px;font-size:10px;color:#607284;line-height:1.45}
+  @media(max-width:900px){.etiquetas-persistentes-grid{grid-template-columns:1fr}}
+</style>
+
 </head>
 <body>
 
@@ -481,9 +505,9 @@
 <div id="loginAdmin">
   <div class="box-login">
     <div class="logo-box">
-      <img src="/nk-logo.svg?v=9.6" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=9.6';">
+      <img src="/nk-logo.svg?v=9.7" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=9.7';">
     </div>
-    <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 9.6 — identidade visual oficial do servidor</div>
+    <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 9.7 — etiquetas persistentes no servidor</div>
     <div style="font-size:12px;color:#667;margin:-8px 0 14px;line-height:1.4;">Use o administrador principal ou qualquer usuário cadastrado com perfil <b>Admin</b>.</div>
     <input type="text" id="usuarioAdmin" placeholder="Usuário Admin">
     <input type="password" id="senhaAdmin" placeholder="Senha">
@@ -499,7 +523,7 @@
 <div id="painelConteudo" class="container-admin">
   <div class="header-topo">
     <div class="header-identidade">
-      <div class="logo-mini-box"><img src="/grupo-noromak.png?v=9.6" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=9.6';"></div>
+      <div class="logo-mini-box"><img src="/grupo-noromak.png?v=9.7" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=9.7';"></div>
       <div class="header-titulos"><h1>Administração dos pedidos compartilhados</h1><small>Dados centralizados no servidor Web em tempo real</small></div>
     </div>
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end;"><a href="/expedicao/estacao-impressao" target="_blank" style="text-decoration:none;background:#1F57A5;color:white;padding:8px 13px;border-radius:6px;font-size:12px;font-weight:800;">🖨 ESTAÇÃO ZEBRA</a><button type="button" class="pwa-install-btn pwa-header" data-pwa-install>⬇ Instalar Admin</button><span id="statusBancoAdmin" class="save-pill">● Banco Web ativo</span><button class="btn-sair" onclick="sairAdmin()">Sair do Painel</button></div>
@@ -568,7 +592,7 @@
 
   <section id="aba-usuarios" class="aba-painel">
     <div class="card-admin">
-      <h2>Usuários e aprovações <span class="usuario-versao">Versão 9.6 — alerta sonoro reforçado</span></h2>
+      <h2>Usuários e aprovações <span class="usuario-versao">Versão 9.7 — etiquetas persistentes</span></h2>
       <div class="aviso-banco"><b>Login próprio do estoque:</b> cada pessoa deve ter usuário, senha e perfil individual. Por segurança, a senha atual <b>não pode ser visualizada</b>, pois fica armazenada de forma criptográfica. Para trocar, use o botão <b>Alterar senha</b>; o Admin poderá visualizar somente a nova senha enquanto a digita.</div>
       <div class="toolbar-grid"><button type="button" id="btnNovoUsuarioAdmin" class="btn-primario" onclick="abrirSolicitacaoUsuario('admin')">＋ Solicitar novo usuário</button><button type="button" class="btn-sucesso" onclick="salvarUsuariosAdmin(true)">💾 Salvar alterações</button></div>
       <div id="contadorUsuariosAdmin" class="usuario-contador"></div>
@@ -587,6 +611,14 @@
           <div class="market-upload"><strong>Shopee</strong><small>Etiqueta gráfica de envio com confirmação visual quando necessária.</small><input type="file" id="etiquetasShopeeInput" accept=".txt,.zpl" multiple></div>
         </div>
         <div class="regra-impressao"><b>Vínculo:</b> Marketplace + Pedido. Todos imprimem 1 etiqueta; no Mercado Livre, os dados dos produtos são inseridos na própria etiqueta 10x15.</div>
+      </div>
+      <div class="etiquetas-persistentes-box">
+        <div class="etiquetas-persistentes-topo">
+          <div><h3>📌 Etiquetas armazenadas no servidor</h3><p>Depois de processadas, permanecem salvas mesmo ao atualizar a página ou abrir o sistema em outro computador.</p></div>
+          <div id="resumoEtiquetasPersistentes" class="etiquetas-persistentes-resumo">0 etiquetas armazenadas</div>
+        </div>
+        <div id="listaEtiquetasPersistentes" class="etiquetas-persistentes-grid"></div>
+        <div class="etiquetas-persistentes-aviso"><b>Remoção manual:</b> clique no <b>×</b> ao lado de uma etiqueta para apagá-la. Se ela estiver vinculada a um pedido pendente, esse pedido deixará de ficar disponível para conferência até receber outra etiqueta.</div>
       </div>
       <div class="field"><label>Pasta de fotos dos produtos (opcional):</label><input type="file" id="fotosInput" webkitdirectory directory multiple></div>
       <button class="btn-salvar" onclick="salvarEEnviarDados()">PROCESSAR E VINCULAR ETIQUETAS AOS PEDIDOS</button>
@@ -3559,6 +3591,205 @@ document.addEventListener("DOMContentLoaded",()=>{
 
   window.addEventListener("message",receberDadosMarketplace);
   window.NOROMAK_EXTENSAO_MARKETPLACES_PRONTA=true;
+})();
+</script>
+
+
+<script id="etiquetasPersistentesV97">
+(() => {
+  "use strict";
+  const VERSAO_ETIQUETAS_PERSISTENTES = 7;
+  let ultimaAssinaturaEtiquetasPersistentes = null;
+
+  function escEtq(valor){
+    return String(valor == null ? "" : valor).replace(/[&<>\"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'\"':"&quot;","'":"&#39;"}[c]));
+  }
+  function nomeMpEtq(mp){
+    return mp === "mercado_livre" ? "Mercado Livre" : mp === "magalu" ? "Magalu" : mp === "shopee" ? "Shopee" : "Outro";
+  }
+  function bancoEtqVazio(){
+    const b = typeof criarBancoEtiquetasV2 === "function" ? criarBancoEtiquetasV2() : {porChave:{},registros:{},ordem:[],avisos:[],auditoria:[],resumo:{},vinculados:{}};
+    b.version = VERSAO_ETIQUETAS_PERSISTENTES;
+    return b;
+  }
+  function lerBancoEtqPersistente(){
+    try{
+      const raw = appStorage.getItem("conf_etiquetas");
+      if(!raw) return bancoEtqVazio();
+      const obj = JSON.parse(raw);
+      if(!obj || typeof obj !== "object" || !obj.registros) return bancoEtqVazio();
+      return reconstruirBancoEtq(obj);
+    }catch(e){ console.error("Falha ao ler etiquetas persistentes", e); return bancoEtqVazio(); }
+  }
+  function reconstruirBancoEtq(origem){
+    const b = origem && typeof origem === "object" ? origem : bancoEtqVazio();
+    b.version = Math.max(Number(b.version)||0, VERSAO_ETIQUETAS_PERSISTENTES);
+    b.registros = b.registros && typeof b.registros === "object" ? b.registros : {};
+    b.ordem = Array.isArray(b.ordem) ? b.ordem.filter(id => b.registros[id]) : Object.keys(b.registros);
+    Object.keys(b.registros).forEach(id => { if(!b.ordem.includes(id)) b.ordem.push(id); });
+    b.porChave = {};
+    b.resumo = {mercado_livre:0,magalu:0,shopee:0,desconhecido:0};
+    b.vinculados = {mercado_livre:0,magalu:0,shopee:0};
+    b.avisos = Array.isArray(b.avisos) ? b.avisos : [];
+    b.auditoria = Array.isArray(b.auditoria) ? b.auditoria : [];
+    b.ordem.forEach(id => {
+      const r = b.registros[id]; if(!r) return;
+      r.id = id;
+      r.marketplace = r.marketplace || "desconhecido";
+      r.chaves = Array.isArray(r.chaves) ? r.chaves : [];
+      r.vinculadoA = Array.isArray(r.vinculadoA) ? r.vinculadoA : (r.pedido ? [r.pedido] : []);
+      b.resumo[r.marketplace] = (b.resumo[r.marketplace]||0)+1;
+      if(r.pedido && Object.prototype.hasOwnProperty.call(b.vinculados,r.marketplace)) b.vinculados[r.marketplace]++;
+      r.chaves.forEach(chave => {
+        const variantes = typeof gerarVariantesChave === "function" ? gerarVariantesChave(chave) : [String(chave||"")];
+        variantes.filter(Boolean).forEach(v => { if(!b.porChave[v]) b.porChave[v]=[]; if(!b.porChave[v].includes(id)) b.porChave[v].push(id); });
+      });
+    });
+    return b;
+  }
+  function registroDuplicadoEtq(destino, novo){
+    const regs = Object.values(destino.registros||{});
+    return regs.some(atual => {
+      if(!atual || atual.marketplace !== novo.marketplace) return false;
+      if(atual.pedido && novo.pedido){
+        try{ if(typeof pedidosEquivalentes === "function" && pedidosEquivalentes(atual.pedido, novo.pedido, novo.marketplace)) return true; }catch(_){}
+        if(String(atual.pedido) === String(novo.pedido)) return true;
+      }
+      return !!atual.envio && !!novo.envio && String(atual.envio) === String(novo.envio);
+    });
+  }
+  function proximoIdEtq(destino){
+    let id;
+    do{id = "etq_"+Date.now().toString(36)+"_"+Math.random().toString(36).slice(2,8);}while(destino.registros[id]);
+    return id;
+  }
+  function mesclarBancosEtq(existente, novos){
+    const destino = reconstruirBancoEtq(existente);
+    const agora = new Date().toISOString();
+    let usuario = "";
+    try{ const s=JSON.parse(appStorage.getItem("conf_admin_sessao")||"{}"); usuario=String(s.Nome||s.Login||""); }catch(_){}
+    let adicionadas=0, duplicadas=0;
+    (novos.ordem||[]).forEach(idOriginal => {
+      const original = novos.registros?.[idOriginal]; if(!original) return;
+      const r = JSON.parse(JSON.stringify(original));
+      if(registroDuplicadoEtq(destino,r)){ duplicadas++; return; }
+      // IDs persistentes são sempre novos para evitar colisão entre duas máquinas
+      // que processem etiquetas ao mesmo tempo.
+      const id = proximoIdEtq(destino);
+      r.id=id; r.adicionadaEm=r.adicionadaEm||agora; r.adicionadaPor=r.adicionadaPor||usuario;
+      destino.registros[id]=r; destino.ordem.push(id); adicionadas++;
+    });
+    destino.avisos = [...(novos.avisos||[])];
+    if(duplicadas) destino.avisos.push(`${duplicadas} etiqueta(s) já estavam armazenadas e não foram duplicadas.`);
+    destino.auditoria = [...(destino.auditoria||[]),...(novos.auditoria||[])].slice(-250);
+    destino.atualizadoEm = agora;
+    return {banco:reconstruirBancoEtq(destino),adicionadas,duplicadas};
+  }
+  function descricaoRegistroEtq(r){
+    const meta=r?.metadados||{};
+    const candidato=r?.pedido||meta.pedido||meta.rastreio||meta.nf||"";
+    if(candidato){
+      try{return r?.pedido && typeof pedidoParaExibicao === "function" ? "Pedido "+pedidoParaExibicao(candidato,r.marketplace) : "Pedido "+candidato;}catch(_){return "Pedido "+candidato;}
+    }
+    return "Etiqueta sem vínculo";
+  }
+  function renderizarEtiquetasPersistentes(){
+    const alvo=document.getElementById("listaEtiquetasPersistentes");
+    const resumo=document.getElementById("resumoEtiquetasPersistentes");
+    if(!alvo||!resumo) return;
+    const banco=lerBancoEtqPersistente();
+    const total=(banco.ordem||[]).length;
+    resumo.textContent=`${total} etiqueta${total===1?"":"s"} armazenada${total===1?"":"s"}`;
+    const mps=["mercado_livre","magalu","shopee"];
+    alvo.innerHTML=mps.map(mp=>{
+      const itens=(banco.ordem||[]).map(id=>banco.registros[id]).filter(r=>r&&r.marketplace===mp);
+      const cards=itens.length?itens.map(r=>{
+        const principal=descricaoRegistroEtq(r);
+        const arquivo=r.arquivo||"Arquivo de etiqueta";
+        let data="";
+        if(r.adicionadaEm){try{data=new Date(r.adicionadaEm).toLocaleString("pt-BR");}catch(_){data="";}}
+        const status=r.pedido?`<span class="etiqueta-persistente-status">Vinculada</span>`:`<span class="etiqueta-persistente-status sem-vinculo">Sem vínculo</span>`;
+        return `<div class="etiqueta-persistente-item" title="${escEtq(arquivo)}"><div><div class="etiqueta-persistente-principal">${escEtq(principal)}</div><div class="etiqueta-persistente-detalhe">${escEtq(arquivo)}${data?" · "+escEtq(data):""}</div>${status}</div><button type="button" class="etiqueta-remover-x" title="Remover esta etiqueta" aria-label="Remover esta etiqueta" data-etiqueta-id="${escEtq(r.id)}">×</button></div>`;
+      }).join(""):`<div class="etiquetas-vazio">Nenhuma etiqueta armazenada.</div>`;
+      return `<div class="etiquetas-persistentes-coluna"><div class="etiquetas-persistentes-cabecalho"><span>${nomeMpEtq(mp)}</span><span>${itens.length}</span></div><div class="etiquetas-persistentes-lista">${cards}</div></div>`;
+    }).join("");
+    alvo.querySelectorAll(".etiqueta-remover-x").forEach(btn=>btn.addEventListener("click",()=>removerEtiquetaPersistente(btn.dataset.etiquetaId)));
+    try{ultimaAssinaturaEtiquetasPersistentes=JSON.stringify({ordem:banco.ordem,atualizadoEm:banco.atualizadoEm||""});}catch(_){}
+  }
+  function removerEtiquetaPersistente(id){
+    const banco=lerBancoEtqPersistente();
+    const r=banco.registros?.[id]; if(!r){renderizarEtiquetasPersistentes();return;}
+    const desc=descricaoRegistroEtq(r);
+    const aviso=r.pedido?"\n\nEsse pedido deixará de ter esta etiqueta disponível na Conferência.":"";
+    if(!confirm(`Remover ${desc}?${aviso}\n\nA remoção será aplicada para todas as máquinas.`)) return;
+    delete banco.registros[id];
+    banco.ordem=(banco.ordem||[]).filter(x=>x!==id);
+    banco.auditoria=(banco.auditoria||[]).filter(a=>a?.etiqueta!==id);
+    banco.atualizadoEm=new Date().toISOString();
+    const final=reconstruirBancoEtq(banco);
+    appStorage.setItem("conf_etiquetas",JSON.stringify(final));
+    mapaEtiquetas=final; bancoEtiquetas=final;
+    renderizarEtiquetasPersistentes();
+    const status=document.getElementById("status");
+    if(status){status.style.color="#2e7d32";status.innerHTML=`✔ ${escEtq(desc)} removida do servidor.`;}
+  }
+  window.removerEtiquetaPersistente=removerEtiquetaPersistente;
+  window.renderizarEtiquetasPersistentes=renderizarEtiquetasPersistentes;
+
+  // Substitui o processamento da versão anterior: novas etiquetas são ACRESCENTADAS,
+  // e as já armazenadas só desaparecem pelo botão ×.
+  window.salvarEEnviarDados = async function(){
+    if(typeof salvarPedidosAdmin === "function") salvarPedidosAdmin(false);
+    dadosPedidos = typeof obterPedidosValidosBanco === "function" ? obterPedidosValidosBanco() : dadosPedidos;
+    usuariosCadastrados = typeof usuariosEditorAdmin !== "undefined" ? usuariosEditorAdmin : usuariosCadastrados;
+    const filesFotos=document.getElementById("fotosInput")?.files||[];
+    const gruposEtiquetas=[
+      {marketplace:"mercado_livre",files:Array.from(document.getElementById("etiquetasMercadoLivreInput")?.files||[])},
+      {marketplace:"magalu",files:Array.from(document.getElementById("etiquetasMagaluInput")?.files||[])},
+      {marketplace:"shopee",files:Array.from(document.getElementById("etiquetasShopeeInput")?.files||[])}
+    ];
+    const statusDiv=document.getElementById("status");
+    if(!dadosPedidos.length){alert("Cadastre ao menos um pedido completo na aba Pedidos pendentes antes de processar as etiquetas.");return;}
+    if(!gruposEtiquetas.some(g=>g.files.length)){alert("Selecione ao menos um arquivo de etiquetas.");return;}
+    statusDiv.style.color="var(--primary)"; statusDiv.innerHTML="Lendo as novas etiquetas e acrescentando ao banco permanente do servidor...";
+    try{
+      const bancoAnterior=lerBancoEtqPersistente();
+      bancoEtiquetas=bancoEtqVazio(); sequenciaEtiqueta=0;
+      for(const grupo of gruposEtiquetas){
+        for(const file of grupo.files){
+          const conteudo=await new Promise((resolve,reject)=>{const rd=new FileReader();rd.onload=e=>resolve(String(e.target.result||""));rd.onerror=()=>reject(new Error("Não foi possível ler "+file.name));rd.readAsText(file,"UTF-8");});
+          await processarArquivoEtiqueta(conteudo,file.name,grupo.marketplace);
+        }
+      }
+      await vincularEtiquetasAosPedidos();
+      const loteNovo=bancoEtiquetas;
+      const resultado=mesclarBancosEtq(bancoAnterior,loteNovo);
+      mapaEtiquetas=resultado.banco; bancoEtiquetas=resultado.banco;
+
+      if(filesFotos.length){
+        mapaFotos={}; const tarefas=[];
+        for(const file of filesFotos){if(/\.(jpg|jpeg|png|webp)$/i.test(file.name)){tarefas.push(new Promise(resolve=>{const rd=new FileReader();rd.onload=e=>{const nome=file.name.substring(0,file.name.lastIndexOf(".")).trim().toLowerCase();mapaFotos[nome]=e.target.result;resolve();};rd.readAsDataURL(file);}));}}
+        await Promise.all(tarefas);
+      }
+      appStorage.setItem("conf_usuarios",JSON.stringify(usuariosCadastrados));
+      appStorage.setItem("conf_pedidos",JSON.stringify(dadosPedidos));
+      appStorage.setItem("conf_etiquetas",JSON.stringify(mapaEtiquetas));
+      if(Object.keys(mapaFotos||{}).length){try{appStorage.setItem("conf_fotos",JSON.stringify(mapaFotos));}catch(e){console.warn("Fotos não salvas",e);}}
+      appStorage.setItem("conf_banco_atualizado_em",new Date().toISOString());
+
+      ["etiquetasMercadoLivreInput","etiquetasMagaluInput","etiquetasShopeeInput"].forEach(id=>{const el=document.getElementById(id);if(el)el.value="";});
+      renderizarEtiquetasPersistentes();
+      const total=(mapaEtiquetas.ordem||[]).length;
+      statusDiv.style.color="#2e7d32";
+      statusDiv.innerHTML=`✔ Etiquetas salvas permanentemente no servidor.<br><b>${resultado.adicionadas}</b> nova(s) adicionada(s)${resultado.duplicadas?` · <b>${resultado.duplicadas}</b> já existente(s) ignorada(s)`:""} · <b>${total}</b> armazenada(s) no total.`;
+    }catch(err){console.error(err);statusDiv.style.color="var(--secondary)";statusDiv.innerHTML="❌ Erro ao processar as etiquetas: "+escEtq(err.message||err);}
+  };
+
+  const abrirAnterior=window.abrirAbaAdmin;
+  if(typeof abrirAnterior === "function") window.abrirAbaAdmin=function(nome){const r=abrirAnterior.apply(this,arguments);if(nome==="etiquetas")setTimeout(renderizarEtiquetasPersistentes,0);return r;};
+
+  window.addEventListener("storage",event=>{if(event.key==="conf_etiquetas")setTimeout(renderizarEtiquetasPersistentes,0);});
+  document.addEventListener("DOMContentLoaded",()=>setTimeout(renderizarEtiquetasPersistentes,350));
 })();
 </script>
 

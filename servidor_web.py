@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sistema de Conferência Noromak — edição Web/Linux 9.5.
+"""Sistema de Conferência Noromak — edição Web/Linux 9.7.
 
 Sem dependências externas: usa apenas a biblioteca padrão do Python.
 - Escuta em 127.0.0.1:8100.
@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-APP_VERSION = "9.5"
+APP_VERSION = "9.7"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -945,15 +945,87 @@ def merge_arrays(key: str, current: list[Any], old: list[Any], newer: list[Any])
     return result
 
 
+def rebuild_label_bank(bank: dict[str, Any]) -> dict[str, Any]:
+    records = bank.get("registros") if isinstance(bank.get("registros"), dict) else {}
+    order = bank.get("ordem") if isinstance(bank.get("ordem"), list) else list(records)
+    order = [str(ident) for ident in order if str(ident) in records]
+    for ident in records:
+        if ident not in order:
+            order.append(ident)
+    index: dict[str, list[str]] = {}
+    resumo = {"mercado_livre": 0, "magalu": 0, "shopee": 0, "desconhecido": 0}
+    vinculados = {"mercado_livre": 0, "magalu": 0, "shopee": 0}
+    for ident in order:
+        reg = records.get(ident)
+        if not isinstance(reg, dict):
+            continue
+        reg["id"] = ident
+        marketplace = str(reg.get("marketplace") or "desconhecido")
+        resumo[marketplace] = resumo.get(marketplace, 0) + 1
+        if reg.get("pedido") and marketplace in vinculados:
+            vinculados[marketplace] += 1
+        chaves = reg.get("chaves") if isinstance(reg.get("chaves"), list) else []
+        for raw in chaves:
+            chave = str(raw or "").strip()
+            if not chave:
+                continue
+            index.setdefault(chave, [])
+            if ident not in index[chave]:
+                index[chave].append(ident)
+    bank["version"] = max(int(bank.get("version") or 0), 7)
+    bank["registros"] = records
+    bank["ordem"] = order
+    bank["porChave"] = index
+    bank["resumo"] = resumo
+    bank["vinculados"] = vinculados
+    bank["avisos"] = bank.get("avisos") if isinstance(bank.get("avisos"), list) else []
+    bank["auditoria"] = bank.get("auditoria") if isinstance(bank.get("auditoria"), list) else []
+    return bank
+
+
+def merge_label_banks(current: dict[str, Any], old: dict[str, Any], newer: dict[str, Any]) -> dict[str, Any]:
+    result = dict(current)
+    current_records = dict(current.get("registros") or {}) if isinstance(current.get("registros"), dict) else {}
+    old_records = dict(old.get("registros") or {}) if isinstance(old.get("registros"), dict) else {}
+    new_records = dict(newer.get("registros") or {}) if isinstance(newer.get("registros"), dict) else {}
+
+    # Remoções feitas pelo botão ×: só remove IDs que existiam no snapshot do cliente
+    # e desapareceram da nova versão. Etiquetas adicionadas por outra máquina são preservadas.
+    for ident in old_records:
+        if ident not in new_records:
+            current_records.pop(ident, None)
+
+    changed: list[str] = []
+    for ident, record in new_records.items():
+        if ident not in old_records or old_records.get(ident) != record:
+            current_records[ident] = record
+            changed.append(ident)
+
+    current_order = current.get("ordem") if isinstance(current.get("ordem"), list) else list(current_records)
+    new_order = newer.get("ordem") if isinstance(newer.get("ordem"), list) else list(new_records)
+    order: list[str] = []
+    for ident in [*current_order, *new_order, *changed, *current_records.keys()]:
+        ident = str(ident)
+        if ident in current_records and ident not in order:
+            order.append(ident)
+
+    result.update({k: v for k, v in newer.items() if k not in {"registros", "ordem", "porChave", "resumo", "vinculados"}})
+    result["registros"] = current_records
+    result["ordem"] = order
+    return rebuild_label_bank(result)
+
+
 def merge_value(key: str, current: str | None, old: str | None, newer: str, force: bool) -> str:
     if force or current is None or current == old:
         return newer
     try:
-        current_arr = json.loads(current)
-        old_arr = json.loads(old or "")
-        new_arr = json.loads(newer)
-        if all(isinstance(x, list) for x in (current_arr, old_arr, new_arr)):
-            return json_dumps(merge_arrays(key, current_arr, old_arr, new_arr))
+        current_obj = json.loads(current)
+        old_obj = json.loads(old or "")
+        new_obj = json.loads(newer)
+        if all(isinstance(x, list) for x in (current_obj, old_obj, new_obj)):
+            return json_dumps(merge_arrays(key, current_obj, old_obj, new_obj))
+        if key == "conf_etiquetas" and all(isinstance(x, dict) for x in (current_obj, old_obj, new_obj)):
+            return json_dumps(merge_label_banks(current_obj, old_obj, new_obj))
     except Exception:
         pass
     return newer
@@ -1094,7 +1166,7 @@ def clear_login_failures(handler: BaseHTTPRequestHandler, username: str) -> None
 
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/9.5"
+    server_version = "NoromakExpedicao/9.7"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
