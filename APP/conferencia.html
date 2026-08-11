@@ -7,11 +7,11 @@
 <meta name="application-name" content="Noromak Conferência">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="manifest" href="/expedicao/manifest-conferencia.webmanifest?v=9.9" crossorigin="use-credentials">
-<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/conferencia-180.png?v=9.9">
-<link rel="icon" href="/favicon.ico?v=9.9" sizes="any">
-<link rel="shortcut icon" href="/favicon.ico?v=9.9">
-<link rel="stylesheet" href="/expedicao/pwa-install.css?v=9.9">
+<link rel="manifest" href="/expedicao/manifest-conferencia.webmanifest?v=10.0" crossorigin="use-credentials">
+<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/conferencia-180.png?v=10.0">
+<link rel="icon" href="/favicon.ico?v=10.0" sizes="any">
+<link rel="shortcut icon" href="/favicon.ico?v=10.0">
+<link rel="stylesheet" href="/expedicao/pwa-install.css?v=10.0">
 <title>Noromak - Conferência em Rede</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
@@ -155,6 +155,8 @@
   .pedido-status-mini { display:inline-block; margin-top:5px; padding:3px 7px; border-radius:10px; font-size:10px; font-weight:700; }
   .pedido-status-impressao { background:#fff3cd; color:#856404; }
   .pedido-status-andamento { background:#e3f2fd; color:#1565c0; }
+  .pedido-status-ja-feito { background:#fff3cd; color:#7a5200; border:1px solid #e5bd57; }
+  .pedido-historico-anterior { display:none; margin:0 0 10px; padding:8px 10px; border-radius:7px; background:#fff8e1; border:1px solid #edc85d; color:#755000; font-size:12px; font-weight:800; }
 
   .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.58); justify-content:center; align-items:center; z-index:9995; padding:20px; }
   .modal-historico-card { background:white; border-radius:10px; width:min(1100px, 96vw); max-height:92vh; overflow:auto; box-shadow:0 10px 35px rgba(0,0,0,.3); padding:24px; }
@@ -289,7 +291,7 @@
 </style>
 <script src="/expedicao/shared-storage.js"></script>
 <script src="/expedicao/web-auth.js"></script>
-<script defer src="/expedicao/pwa-install.js?v=9.9"></script>
+<script defer src="/expedicao/pwa-install.js?v=10.0"></script>
 </head>
 
 <body>
@@ -297,9 +299,9 @@
 <div id="telaLogin">
   <div class="box-card">
     <div class="logo-box">
-      <img src="/nk-logo.svg?v=9.9" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=9.9';">
+      <img src="/nk-logo.svg?v=10.0" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=10.0';">
     </div>
-    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 9.9 — Shopee com produtos na etiqueta</div>
+    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 10.0 — reimportação com histórico</div>
 
     <div class="box-upload-rede" style="border-style:solid;">
       <label>🗄 PEDIDOS COMPARTILHADOS NA REDE:</label>
@@ -389,7 +391,7 @@
 
 <header>
   <div class="logo-mini-box">
-    <img src="/grupo-noromak.png?v=9.9" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=9.9';">
+    <img src="/grupo-noromak.png?v=10.0" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=10.0';">
   </div>
   <div class="usuario-area">
     <div style="text-align: right;">
@@ -450,6 +452,7 @@
     <h2 id="titulo" style="color: var(--primary);">Nenhum pedido selecionado</h2>
     <div id="cliente" style="font-size: 14px; margin-bottom: 4px;"></div>
     <div id="marketplace" style="font-size: 14px; margin-bottom: 8px;"></div>
+    <div id="pedidoHistoricoAnterior" class="pedido-historico-anterior"></div>
     <div id="etiquetaPedidoStatus" class="etiqueta-status etiqueta-erro">Etiqueta não verificada</div>
 
     <div id="barra">
@@ -1545,6 +1548,26 @@ function atualizarResumoFiltroMarketplace(contagens) {
   }
 }
 
+function formatarConclusaoAnteriorConferencia(item){
+  const valor=String(item?.__concluidoAnteriorEm||"").trim();
+  if(!valor)return "";
+  const data=new Date(valor);
+  if(Number.isNaN(data.getTime()))return valor;
+  return data.toLocaleString("pt-BR",{day:"2-digit",month:"2-digit",year:"numeric",hour:"2-digit",minute:"2-digit"});
+}
+function resumoConclusaoAnteriorConferencia(item){
+  if(!(item?.__jaConcluidoAnteriormente||item?.__concluidoAnteriorEm))return null;
+  return {data:formatarConclusaoAnteriorConferencia(item),por:String(item?.__concluidoAnteriorPor||"").trim()};
+}
+function atualizarAvisoConclusaoAnteriorPedido(item){
+  const el=document.getElementById("pedidoHistoricoAnterior");
+  if(!el)return;
+  const info=resumoConclusaoAnteriorConferencia(item);
+  if(!info){el.style.display="none";el.innerHTML="";return;}
+  el.style.display="block";
+  el.innerHTML=`↻ <b>JÁ FOI FEITO ANTERIORMENTE</b>${info.data?` · ${escaparHtml(info.data)}`:""}${info.por?` · ${escaparHtml(info.por)}`:""}`;
+}
+
 function renderizarListaPedidos() {
   const termo = document.getElementById("campoBusca") ? document.getElementById("campoBusca").value.trim().toLowerCase() : "";
   const filtroMarketplace = filtroMarketplacePedidosAtual || document.getElementById("filtroMarketplacePedidos")?.value || "todos";
@@ -1577,6 +1600,7 @@ function renderizarListaPedidos() {
           <div class="pedido-topo-linha"><span>Pedido ${escaparHtml(numPedidoExibicao)}</span><span class="pedido-marketplace-badge ${marketplacePedido}">${escaparHtml(nomeMarketplace(marketplacePedido))}</span></div>
           ${nomeCliente ? `<div class="pedido-cliente">👤 ${escaparHtml(nomeCliente)}</div>` : ''}
           <div class="pedido-cliente">📅 Hoje · ${escaparHtml(dataPedidoItem(itemPedido)||hojeLocalConferencia())}</div>
+          ${resumoConclusaoAnteriorConferencia(itemPedido) ? `<span class="pedido-status-mini pedido-status-ja-feito">↻ JÁ FOI FEITO · ${escaparHtml(resumoConclusaoAnteriorConferencia(itemPedido).data||"data anterior")}</span>` : ''}
           ${completo ? `<span class="pedido-status-mini pedido-status-impressao">Conferido — aguardando impressão</span>` : ''}
           ${iniciado ? `<span class="pedido-status-mini pedido-status-andamento">Em andamento: ${lidos}/${total}</span>` : ''}
         </div>
@@ -1636,6 +1660,7 @@ function abrirPedido(uid) {
   document.getElementById("titulo").innerHTML = "Pedido " + escaparHtml(numPedidoExibicao);
   document.getElementById("cliente").innerHTML = "<b>Cliente:</b> " + escaparHtml(extrairCampo(pedidoAtual[0], "Cliente"));
   document.getElementById("marketplace").innerHTML = "<b>Marketplace:</b> " + escaparHtml(nomeMarketplace(obterMarketplaceItem(pedidoAtual[0])));
+  atualizarAvisoConclusaoAnteriorPedido(pedidoAtual[0]);
   document.getElementById("statusMsg").innerHTML = "";
   limparMensagemDetalhada();
   atualizarStatusEtiquetaPedido(pedidoAtual[0]);
@@ -2937,6 +2962,7 @@ function limparPainel() {
   document.getElementById("titulo").innerHTML = "Nenhum pedido selecionado";
   document.getElementById("cliente").innerHTML = "";
   document.getElementById("marketplace").innerHTML = "";
+  atualizarAvisoConclusaoAnteriorPedido(null);
   const etiquetaStatus = document.getElementById("etiquetaPedidoStatus");
   if (etiquetaStatus) {
     etiquetaStatus.className = "etiqueta-status etiqueta-erro";

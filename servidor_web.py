@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-APP_VERSION = "9.9"
+APP_VERSION = "10.0"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -1051,15 +1051,133 @@ def filter_completed_orders(value: str) -> str:
     return json_dumps(filtered)
 
 
-def save_storage(key: str, old_value: str | None, new_value: str, force: bool) -> tuple[str, int, str]:
+def _order_keys_from_json(value: str | None) -> set[str]:
+    if not value:
+        return set()
+    try:
+        rows = json.loads(value)
+    except Exception:
+        return set()
+    if not isinstance(rows, list):
+        return set()
+    return {
+        normalize(order_number(item))
+        for item in rows
+        if isinstance(item, dict) and order_number(item)
+    }
+
+
+def _propagate_previous_completion_metadata(rows: list[Any]) -> list[Any]:
+    metadata_by_order: dict[str, dict[str, Any]] = {}
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        key = normalize(order_number(item))
+        if not key:
+            continue
+        if item.get("__jaConcluidoAnteriormente") or item.get("__concluidoAnteriorEm"):
+            metadata_by_order[key] = {
+                "__jaConcluidoAnteriormente": True,
+                "__concluidoAnteriorEm": str(item.get("__concluidoAnteriorEm") or ""),
+                "__concluidoAnteriorPor": str(item.get("__concluidoAnteriorPor") or ""),
+                "__reimportadoEm": str(item.get("__reimportadoEm") or ""),
+            }
+    if not metadata_by_order:
+        return rows
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        meta = metadata_by_order.get(normalize(order_number(item)))
+        if meta:
+            item.update(meta)
+    return rows
+
+
+def reactivate_completed_orders_from_delta(old_value: str | None, new_value: str, actor: str) -> tuple[str, list[dict[str, str]]]:
+    """Permite reimportar um pedido já concluído sem reabrir pedidos por salvamento antigo.
+
+    Só considera pedidos que aparecem em ``new_value`` e não existiam no snapshot
+    ``old_value`` enviado pelo navegador. Assim, uma tela antiga não ressuscita pedidos
+    já concluídos por outra máquina, mas uma nova importação explícita do Admin consegue
+    cadastrá-los novamente. A data/operador da conclusão anterior é copiada para a linha.
+    """
+    old_keys = _order_keys_from_json(old_value)
+    try:
+        rows = json.loads(new_value)
+    except Exception:
+        return new_value, []
+    if not isinstance(rows, list):
+        return new_value, []
+
+    new_keys = {
+        normalize(order_number(item))
+        for item in rows
+        if isinstance(item, dict) and order_number(item)
+    }
+    candidates = sorted(key for key in (new_keys - old_keys) if key)
+    if not candidates:
+        return json_dumps(_propagate_previous_completion_metadata(rows)), []
+
+    reactivated: list[dict[str, str]] = []
+    for key in candidates:
+        previous = DB.execute(
+            "SELECT order_id,completed_at,completed_by FROM completed_orders WHERE order_key=?",
+            (key,),
+        ).fetchone()
+        if not previous:
+            continue
+        reimported_at = now_iso()
+        meta = {
+            "__jaConcluidoAnteriormente": True,
+            "__concluidoAnteriorEm": str(previous["completed_at"] or ""),
+            "__concluidoAnteriorPor": str(previous["completed_by"] or ""),
+            "__reimportadoEm": reimported_at,
+        }
+        for item in rows:
+            if isinstance(item, dict) and normalize(order_number(item)) == key:
+                item.update(meta)
+                # Uma reimportação deve iniciar uma nova conferência do zero.
+                item["Lido"] = 0
+        DB.execute("DELETE FROM completed_orders WHERE order_key=?", (key,))
+        DB.execute(
+            "INSERT INTO audit_log(created_at,username,action,detail) VALUES(?,?,?,?)",
+            (reimported_at, actor, "order.reimport", f"{previous['order_id']}|anterior={previous['completed_at']}|por={previous['completed_by']}"[:4000]),
+        )
+        reactivated.append({
+            "pedido": str(previous["order_id"] or ""),
+            "concluido_em": str(previous["completed_at"] or ""),
+            "concluido_por": str(previous["completed_by"] or ""),
+        })
+
+    rows = _propagate_previous_completion_metadata(rows)
+    return json_dumps(rows), reactivated
+
+
+def save_storage(
+    key: str,
+    old_value: str | None,
+    new_value: str,
+    force: bool,
+    *,
+    actor: str = "",
+    allow_completed_reimport: bool = False,
+) -> tuple[str, int, str]:
     if len(new_value.encode("utf-8")) > MAX_BODY:
         raise ValueError("Conteúdo excede 100 MB")
     with DB_LOCK:
         DB.execute("BEGIN IMMEDIATE")
         try:
+            if key == "conf_pedidos" and allow_completed_reimport and not force and old_value is not None:
+                new_value, _ = reactivate_completed_orders_from_delta(old_value, new_value, actor or "admin")
             current, version, _ = get_storage(key)
             merged = merge_value(key, current, old_value, new_value, force)
             if key in ("conf_pedidos", "conf_pedidos_rascunhos"):
+                try:
+                    merged_rows = json.loads(merged)
+                    if isinstance(merged_rows, list):
+                        merged = json_dumps(_propagate_previous_completion_metadata(merged_rows))
+                except Exception:
+                    pass
                 merged = filter_completed_orders(merged)
             version += 1
             updated = now_iso()
@@ -1166,7 +1284,7 @@ def clear_login_failures(handler: BaseHTTPRequestHandler, username: str) -> None
 
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/9.9"
+    server_version = "NoromakExpedicao/10.0"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
@@ -1494,7 +1612,11 @@ class AppHandler(BaseHTTPRequestHandler):
                 new_value = apply_app_users_payload(new_value, ctx["username"])
                 old_value = None
                 force = True
-            value, version, updated = save_storage(key, old_value, new_value, force)
+            value, version, updated = save_storage(
+                key, old_value, new_value, force,
+                actor=ctx["username"],
+                allow_completed_reimport=(ctx["app_role"] == "admin"),
+            )
             audit(ctx["username"], "storage.save", key)
             self.send_json({"ok": True, "value": value, "version": version, "updated_at": updated})
         except (ValueError, json.JSONDecodeError) as exc:
