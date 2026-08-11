@@ -1,0 +1,14 @@
+SISTEMA DE CONFERÊNCIA NOROMAK — VERSÃO 9.8
+
+ALTERAÇÃO PRINCIPAL
+- Mantido todo o funcionamento da versão 9.7.
+- Adicionado botão "Remover em massa" na área "Etiquetas armazenadas no servidor".
+- Ao ativar, são exibidas caixas de seleção ao lado das etiquetas.
+- É possível selecionar todas, limpar a seleção, cancelar ou remover as selecionadas em uma única operação.
+- A remoção em massa exige confirmação e informa quantas etiquetas selecionadas estão vinculadas a pedidos pendentes.
+- O botão X individual continua funcionando exatamente como antes.
+- A remoção é gravada no servidor e refletida nas demais máquinas.
+
+OBSERVAÇÃO SOBRE SHOPEE
+- Nenhuma alteração foi feita no desenho/arquivo da etiqueta Shopee nesta versão.
+- Para inserir SKU, descrição e quantidade na própria etiqueta Shopee sem cobrir QR Codes, códigos de barras ou dados fiscais, é necessário validar um arquivo .TXT/.ZPL original da Shopee e definir uma área segura do layout gráfico.

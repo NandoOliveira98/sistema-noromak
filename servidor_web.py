@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sistema de Conferência Noromak — edição Web/Linux 9.7.
+"""Sistema de Conferência Noromak — edição Web/Linux 9.8.
 
 Sem dependências externas: usa apenas a biblioteca padrão do Python.
 - Escuta em 127.0.0.1:8100.
@@ -32,7 +32,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-APP_VERSION = "9.7"
+APP_VERSION = "9.8"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -972,7 +972,7 @@ def rebuild_label_bank(bank: dict[str, Any]) -> dict[str, Any]:
             index.setdefault(chave, [])
             if ident not in index[chave]:
                 index[chave].append(ident)
-    bank["version"] = max(int(bank.get("version") or 0), 7)
+    bank["version"] = max(int(bank.get("version") or 0), 8)
     bank["registros"] = records
     bank["ordem"] = order
     bank["porChave"] = index
@@ -989,7 +989,7 @@ def merge_label_banks(current: dict[str, Any], old: dict[str, Any], newer: dict[
     old_records = dict(old.get("registros") or {}) if isinstance(old.get("registros"), dict) else {}
     new_records = dict(newer.get("registros") or {}) if isinstance(newer.get("registros"), dict) else {}
 
-    # Remoções feitas pelo botão ×: só remove IDs que existiam no snapshot do cliente
+    # Remoções individuais ou em massa: só remove IDs que existiam no snapshot do cliente
     # e desapareceram da nova versão. Etiquetas adicionadas por outra máquina são preservadas.
     for ident in old_records:
         if ident not in new_records:
@@ -1166,7 +1166,7 @@ def clear_login_failures(handler: BaseHTTPRequestHandler, username: str) -> None
 
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/9.7"
+    server_version = "NoromakExpedicao/9.8"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
