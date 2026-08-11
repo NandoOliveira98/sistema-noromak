@@ -7,11 +7,11 @@
 <meta name="application-name" content="Noromak Conferência">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="manifest" href="/expedicao/manifest-conferencia.webmanifest?v=9.8" crossorigin="use-credentials">
-<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/conferencia-180.png?v=9.8">
-<link rel="icon" href="/favicon.ico?v=9.8" sizes="any">
-<link rel="shortcut icon" href="/favicon.ico?v=9.8">
-<link rel="stylesheet" href="/expedicao/pwa-install.css?v=9.8">
+<link rel="manifest" href="/expedicao/manifest-conferencia.webmanifest?v=9.9" crossorigin="use-credentials">
+<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/conferencia-180.png?v=9.9">
+<link rel="icon" href="/favicon.ico?v=9.9" sizes="any">
+<link rel="shortcut icon" href="/favicon.ico?v=9.9">
+<link rel="stylesheet" href="/expedicao/pwa-install.css?v=9.9">
 <title>Noromak - Conferência em Rede</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
@@ -289,7 +289,7 @@
 </style>
 <script src="/expedicao/shared-storage.js"></script>
 <script src="/expedicao/web-auth.js"></script>
-<script defer src="/expedicao/pwa-install.js?v=9.8"></script>
+<script defer src="/expedicao/pwa-install.js?v=9.9"></script>
 </head>
 
 <body>
@@ -297,9 +297,9 @@
 <div id="telaLogin">
   <div class="box-card">
     <div class="logo-box">
-      <img src="/nk-logo.svg?v=9.8" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=9.8';">
+      <img src="/nk-logo.svg?v=9.9" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=9.9';">
     </div>
-    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 9.8 — alerta sonoro reforçado</div>
+    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 9.9 — Shopee com produtos na etiqueta</div>
 
     <div class="box-upload-rede" style="border-style:solid;">
       <label>🗄 PEDIDOS COMPARTILHADOS NA REDE:</label>
@@ -389,7 +389,7 @@
 
 <header>
   <div class="logo-mini-box">
-    <img src="/grupo-noromak.png?v=9.8" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=9.8';">
+    <img src="/grupo-noromak.png?v=9.9" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=9.9';">
   </div>
   <div class="usuario-area">
     <div style="text-align: right;">
@@ -2128,6 +2128,112 @@ function incluirDadosPedidoNaEtiquetaEnvio(envioOriginal) {
   return envio + "\n" + bloco + "\n^XZ";
 }
 
+// ---- DADOS DOS PRODUTOS NA PRÓPRIA ETIQUETA SHOPEE 10x15 ----
+// A Shopee envia a etiqueta como um único gráfico Z64 (DGR). O arquivo analisado
+// mede 816 x 1218 dots em 203 dpi e possui uma faixa branca segura entre
+// aproximadamente Y=580 e Y=677. Em vez de alterar a imagem fiscal original,
+// o sistema sobrepõe somente texto ZPL nessa faixa livre na hora da impressão.
+function obterDimensoesGraficoShopeeZPL(envioOriginal) {
+  const m = String(envioOriginal || "").match(/~DGR:[^,]+,(\d+),(\d+),:Z64:/i);
+  if (!m) return null;
+  const totalBytes = Number(m[1]);
+  const bytesPorLinha = Number(m[2]);
+  if (!totalBytes || !bytesPorLinha) return null;
+  return {
+    largura: bytesPorLinha * 8,
+    altura: Math.floor(totalBytes / bytesPorLinha)
+  };
+}
+
+function montarBlocoProdutosShopeeZPL(envioOriginal) {
+  const itens = obterItensDanfeDaPlanilha();
+  if (!itens.length) return "";
+
+  const dimensoes = obterDimensoesGraficoShopeeZPL(envioOriginal) || { largura: 816, altura: 1218 };
+
+  // O template recebido da Shopee é 816x1218 em 203 dpi. Os fatores abaixo
+  // preservam a posição relativa caso a Shopee envie a mesma arte em outra resolução.
+  const escalaX = Math.max(0.75, Math.min(1.6, dimensoes.largura / 816));
+  const escalaY = Math.max(0.75, Math.min(1.6, dimensoes.altura / 1218));
+  const escalaFonte = Math.min(escalaX, escalaY);
+  const sx = valor => Math.max(1, Math.round(valor * escalaX));
+  const sy = valor => Math.max(1, Math.round(valor * escalaY));
+  const sf = valor => Math.max(10, Math.round(valor * escalaFonte));
+
+  // Mantém no máximo três linhas para nunca invadir o código de barras da agência.
+  // Quando há mais de três produtos, mostra dois e uma linha de resumo.
+  let itensVisiveis = itens;
+  let linhaExtra = "";
+  if (itens.length > 3) {
+    itensVisiveis = itens.slice(0, 2);
+    linhaExtra = `+ ${itens.length - 2} item(ns) adicional(is) no pedido`;
+  }
+
+  const limiteDescricao = itens.length <= 1 ? 64 : 46;
+  const linhas = itensVisiveis.map(item => {
+    let descricao = String(item.descricao || "PRODUTO SEM DESCRIÇÃO").replace(/\s+/g, " ").trim();
+    if (descricao.length > limiteDescricao) {
+      descricao = descricao.slice(0, Math.max(0, limiteDescricao - 3)).trimEnd() + "...";
+    }
+    const qtd = Number.isInteger(item.quantidade)
+      ? item.quantidade
+      : String(item.quantidade).replace(".", ",");
+    return escaparTextoZplFH(`SKU ${item.codigo} | QTD ${qtd} | ${descricao}`);
+  });
+
+  if (linhaExtra) linhas.push(escaparTextoZplFH(linhaExtra));
+
+  const x = sx(20);
+  const y = sy(584);
+  const largura = sx(776);
+  const altura = sy(86);
+  const margemX = sx(12);
+  const tituloY = sy(590);
+  const itensY = sy(612);
+  const fonteTitulo = sf(17);
+  const fonteItens = sf(15);
+  const larguraTexto = sx(748);
+  const espacamento = sy(2);
+
+  return `^FX INICIO_DADOS_PRODUTOS_SHOPEE ^FS
+^CI28
+^FO${x},${y}^GB${largura},${altura},2^FS
+^FO${x + margemX},${tituloY}^A0N,${fonteTitulo},${fonteTitulo}^FDPRODUTOS DO PEDIDO^FS
+^FO${x + margemX},${itensY}^A0N,${fonteItens},${fonteItens}^FB${larguraTexto},3,${espacamento},L^FH^FD${linhas.join("\\&")}^FS
+^FX FIM_DADOS_PRODUTOS_SHOPEE ^FS`;
+}
+
+function incluirDadosPedidoNaEtiquetaShopee(envioOriginal) {
+  if (!envioOriginal) return envioOriginal;
+  let envio = String(envioOriginal);
+
+  // Caso um ZPL já tenha sido transformado anteriormente, remove o bloco antigo.
+  envio = envio.replace(
+    /\^FX INICIO_DADOS_PRODUTOS_SHOPEE \^FS[\s\S]*?\^FX FIM_DADOS_PRODUTOS_SHOPEE \^FS\s*/g,
+    ""
+  );
+
+  const bloco = montarBlocoProdutosShopeeZPL(envio);
+  if (!bloco) return envio;
+
+  // O ZPL da Shopee baixa um gráfico com ~DGR, abre um ^XA, imprime com ^XG
+  // e depois apaga o gráfico com ^ID. Inserimos os dados somente no ^XA que imprime.
+  const posicaoXg = envio.indexOf("^XGR:");
+  if (posicaoXg < 0) return envio;
+
+  const posicaoPq = envio.indexOf("^PQ", posicaoXg);
+  if (posicaoPq >= 0) {
+    return envio.slice(0, posicaoPq) + bloco + "\n" + envio.slice(posicaoPq);
+  }
+
+  const fechamento = envio.indexOf("^XZ", posicaoXg);
+  if (fechamento >= 0) {
+    return envio.slice(0, fechamento) + bloco + "\n" + envio.slice(fechamento);
+  }
+
+  return envio;
+}
+
 function gerarNotaSimplificadaZPL() {
   if (!pedidoAtual || pedidoAtual.length === 0) return;
 
@@ -2234,7 +2340,11 @@ function prepararDadosImpressaoMarketplace(resultadoEtiqueta) {
     if (!envioComDados) throw new Error("A etiqueta de envio do Mercado Livre não está disponível.");
     textoNotaGeradoCache = "";
     data = [envioComDados];
-  } else if (marketplace === "magalu" || marketplace === "shopee") {
+  } else if (marketplace === "shopee") {
+    if (!registro.envio) throw new Error("A etiqueta de envio da Shopee não está disponível.");
+    const shopeeComProdutos = incluirDadosPedidoNaEtiquetaShopee(registro.envio);
+    data = [shopeeComProdutos];
+  } else if (marketplace === "magalu") {
     if (!registro.envio) throw new Error("A etiqueta de envio não está disponível.");
     data = [registro.envio];
   } else {

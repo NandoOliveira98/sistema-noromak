@@ -1,4 +1,4 @@
-SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 9.7
+SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 9.9
 ================================================
 
 Esta versão mantém:
