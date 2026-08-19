@@ -1,0 +1,13 @@
+SISTEMA DE CONFERÊNCIA WEB/LINUX — VERSÃO 10.7
+
+CONFERÊNCIA DE KIT IMPORTADO POR PLANILHA
+- Removida a janela simples de apenas marcar “Conferido”.
+- Pedidos importados cujo SKU contém a palavra KIT agora abrem a MESMA tela/formulário da Importação por print.
+- Os dados chegam preenchidos: marketplace, pedido, cliente, data, SKU, EAN, descrição e quantidade.
+- SKU e quantidade podem ser alterados antes de salvar.
+- A opção “Este pedido é um kit” abre marcada e a tabela de componentes fica disponível para incluir, remover ou trocar os SKUs e quantidades por kit.
+- É possível desmarcar “Este pedido é um kit” caso a revisão conclua que a linha é apenas um produto normal.
+- Ao salvar, a linha original com SKU KIT importada pela planilha é substituída pela correção, sem criar duplicidade.
+- Se houver vários SKUs KIT no arquivo, o sistema abre um por vez e avança automaticamente após salvar.
+- A importação por print normal continua igual.
+- Mantido o alerta de pedido já pendente da versão 10.6 e todas as demais funções anteriores.
