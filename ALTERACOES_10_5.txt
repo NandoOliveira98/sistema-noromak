@@ -1,0 +1,19 @@
+SISTEMA DE CONFERÊNCIA WEB/LINUX — VERSÃO 10.5
+
+1. REORGANIZAÇÃO DOS BOTÕES DE IMPORTAÇÃO
+- Área de importação reorganizada em quatro botões alinhados e responsivos.
+- Excel interno, relatório Mercado Livre, relatório Shopee e importação por print ficam no mesmo bloco visual.
+
+2. CONFERÊNCIA AUTOMÁTICA DE SKU KIT
+- Toda importação que contenha a sequência KIT no SKU (sem diferenciar maiúsculas/minúsculas) abre automaticamente uma tela exclusiva de revisão.
+- A tela mostra somente os pedidos/SKUs KIT detectados, agrupados por pedido.
+- Exibe pedido, marketplace, cliente, data, SKU, quantidade e descrição.
+- Cada SKU precisa ser marcado como Conferido antes de concluir a revisão.
+- Há opção Marcar todos e Revisar depois.
+- A importação continua normal para os demais pedidos.
+- Funciona para Excel interno, relatório Mercado Livre, relatório Shopee e importação por print/plugin do Chrome.
+- O SKU original importado é preservado para a detecção mesmo quando o banco interno normaliza o SKU.
+
+3. PRESERVAÇÃO
+- Nenhuma função existente foi removida.
+- Banco, pedidos, histórico, etiquetas persistentes, impressão e demais rotinas continuam compatíveis.

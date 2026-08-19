@@ -1,4 +1,4 @@
-SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 10.4
+SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 10.5
 ================================================
 
 Esta versão mantém:
@@ -69,6 +69,6 @@ O Noromak Print Service não acessa o servidor diretamente. A página autenticad
 Por isso não é necessário liberar uma rota sem login no nginx.
 
 
-VERSÃO 10.4
+VERSÃO 10.5
 - Importação direta do relatório A Enviar da Shopee (.xlsx).
 - Cruzamento automático com o banco de produtos e detecção de kits por SKUs separados por barra.
