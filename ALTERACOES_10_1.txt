@@ -1,4 +1,4 @@
-SISTEMA DE CONFERÊNCIA NOROMAK — VERSÃO 10.2
+SISTEMA DE CONFERÊNCIA NOROMAK — VERSÃO 10.3
 
 ALTERAÇÃO
 - Mantida toda a funcionalidade da versão 10.0.
