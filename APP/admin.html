@@ -7,11 +7,11 @@
 <meta name="application-name" content="Noromak Admin">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="manifest" href="/expedicao/manifest-admin.webmanifest?v=10.5" crossorigin="use-credentials">
-<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=10.5">
-<link rel="icon" href="/favicon.ico?v=10.5" sizes="any">
-<link rel="shortcut icon" href="/favicon.ico?v=10.5">
-<link rel="stylesheet" href="/expedicao/pwa-install.css?v=10.5">
+<link rel="manifest" href="/expedicao/manifest-admin.webmanifest?v=10.6" crossorigin="use-credentials">
+<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=10.6">
+<link rel="icon" href="/favicon.ico?v=10.6" sizes="any">
+<link rel="shortcut icon" href="/favicon.ico?v=10.6">
+<link rel="stylesheet" href="/expedicao/pwa-install.css?v=10.6">
 <title>Noromak - Administração dos Pedidos Compartilhados</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
@@ -258,6 +258,25 @@
   .kit-review-acoes-direita { display:flex; gap:9px; flex-wrap:wrap; }
   .kit-review-contador { color:#64748b; font-size:12px; font-weight:750; align-self:center; }
   @media(max-width:760px){ .kit-review-item{grid-template-columns:1fr 80px;} .kit-review-desc{grid-column:1/-1;} .kit-review-check{justify-content:flex-start;} }
+
+  /* ALERTA DE PEDIDO JÁ PENDENTE — V10.6 */
+  .dup-planilha-overlay { display:none; position:fixed; inset:0; z-index:14600; background:rgba(15,23,42,.80); align-items:center; justify-content:center; padding:18px; }
+  .dup-planilha-overlay.ativo { display:flex; }
+  .dup-planilha-card { width:min(900px,97vw); max-height:92vh; overflow:auto; background:#fff; border-radius:14px; box-shadow:0 24px 70px rgba(0,0,0,.42); border-top:6px solid #dc2626; }
+  .dup-planilha-topo { padding:20px 22px 14px; border-bottom:1px solid #e5e7eb; }
+  .dup-planilha-topo h2 { margin:0; color:#b91c1c; }
+  .dup-planilha-topo p { margin:7px 0 0; color:#475569; font-size:12px; line-height:1.5; }
+  .dup-planilha-alerta { margin:16px 22px 0; padding:12px 14px; border-radius:9px; background:#fef2f2; color:#991b1b; border:1px solid #fca5a5; font-size:12px; font-weight:800; line-height:1.45; }
+  .dup-planilha-lista { padding:14px 22px 4px; display:grid; gap:9px; }
+  .dup-planilha-item { display:grid; grid-template-columns:minmax(150px,.75fr) minmax(130px,.7fr) minmax(220px,1.4fr) auto; gap:10px; align-items:center; border:1px solid #fecaca; border-left:5px solid #dc2626; background:#fffafa; border-radius:9px; padding:11px 12px; }
+  .dup-planilha-pedido { font-weight:950; color:#991b1b; font-size:14px; }
+  .dup-planilha-market { display:inline-block; width:max-content; max-width:100%; background:#315b86; color:#fff; border-radius:12px; padding:4px 7px; font-size:10px; font-weight:900; }
+  .dup-planilha-cliente { color:#334155; font-size:12px; line-height:1.35; }
+  .dup-planilha-data { color:#64748b; font-size:11px; font-weight:750; white-space:nowrap; }
+  .dup-planilha-acoes { display:flex; justify-content:flex-end; gap:9px; flex-wrap:wrap; padding:16px 22px 20px; border-top:1px solid #e5e7eb; margin-top:12px; }
+  .btn-duplicado-cancelar { background:#64748b !important; }
+  .btn-duplicado-continuar { background:#dc2626 !important; }
+  @media(max-width:720px){ .dup-planilha-item{grid-template-columns:1fr 1fr;} .dup-planilha-cliente{grid-column:1/-1;} .dup-planilha-data{text-align:right;} }
   .importacao-status { display:none; margin:0 0 12px; border-radius:7px; padding:10px 12px; font-size:12px; line-height:1.5; }
   .importacao-status.info { display:block; background:#eef3f7; color:#334155; border:1px solid #cbd5e1; }
   .importacao-status.sucesso { display:block; background:#e8f5e9; color:#1b5e20; border:1px solid #a5d6a7; }
@@ -389,7 +408,7 @@
 </style>
 <script src="/expedicao/shared-storage.js"></script>
 <script src="/expedicao/web-auth.js"></script>
-<script defer src="/expedicao/pwa-install.js?v=10.5"></script>
+<script defer src="/expedicao/pwa-install.js?v=10.6"></script>
 
 <style id="estiloEtiquetasPersistentesV98">
   .etiquetas-persistentes-box{margin:14px 0 18px;border:1px solid #c7d4e1;border-radius:9px;background:#f8fbfe;padding:13px}
@@ -554,6 +573,21 @@
   </div>
 </div>
 
+<div id="modalPedidosDuplicadosPlanilha" class="dup-planilha-overlay" aria-hidden="true">
+  <div class="dup-planilha-card" role="dialog" aria-modal="true" aria-labelledby="tituloPedidosDuplicadosPlanilha">
+    <div class="dup-planilha-topo">
+      <h2 id="tituloPedidosDuplicadosPlanilha">⚠ Pedido já importado</h2>
+      <p id="subtituloPedidosDuplicadosPlanilha">Um ou mais pedidos desta planilha já estão na tela de Pedidos pendentes.</p>
+    </div>
+    <div class="dup-planilha-alerta">Esses pedidos já existem nos <b>Pedidos pendentes</b>. O sistema não vai seguir silenciosamente: escolha se deseja cancelar ou continuar. Ao continuar, os dados existentes serão mantidos/atualizados sem criar uma segunda cópia do mesmo pedido e SKU.</div>
+    <div id="listaPedidosDuplicadosPlanilha" class="dup-planilha-lista"></div>
+    <div class="dup-planilha-acoes">
+      <button type="button" class="btn-secundario btn-duplicado-cancelar" onclick="resolverAlertaPedidosDuplicadosPlanilha(false)">Cancelar importação</button>
+      <button type="button" class="btn-primario btn-duplicado-continuar" onclick="resolverAlertaPedidosDuplicadosPlanilha(true)">Continuar mesmo assim</button>
+    </div>
+  </div>
+</div>
+
 <div id="modalConferenciaSkuKit" class="kit-review-overlay" aria-hidden="true">
   <div class="kit-review-card" role="dialog" aria-modal="true" aria-labelledby="tituloConferenciaSkuKit">
     <div class="kit-review-topo">
@@ -578,9 +612,9 @@
 <div id="loginAdmin">
   <div class="box-login">
     <div class="logo-box">
-      <img src="/nk-logo.svg?v=10.5" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=10.5';">
+      <img src="/nk-logo.svg?v=10.6" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=10.6';">
     </div>
-    <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 10.5 — conferência automática de SKU KIT</div>
+    <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 10.6 — alerta de pedido já pendente</div>
     <div style="font-size:12px;color:#667;margin:-8px 0 14px;line-height:1.4;">Use o administrador principal ou qualquer usuário cadastrado com perfil <b>Admin</b>.</div>
     <input type="text" id="usuarioAdmin" placeholder="Usuário Admin">
     <input type="password" id="senhaAdmin" placeholder="Senha">
@@ -596,7 +630,7 @@
 <div id="painelConteudo" class="container-admin">
   <div class="header-topo">
     <div class="header-identidade">
-      <div class="logo-mini-box"><img src="/grupo-noromak.png?v=10.5" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=10.5';"></div>
+      <div class="logo-mini-box"><img src="/grupo-noromak.png?v=10.6" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=10.6';"></div>
       <div class="header-titulos"><h1>Administração dos pedidos compartilhados</h1><small>Dados centralizados no servidor Web em tempo real</small></div>
     </div>
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end;"><a href="/expedicao/estacao-impressao" target="_blank" style="text-decoration:none;background:#1F57A5;color:white;padding:8px 13px;border-radius:6px;font-size:12px;font-weight:800;">🖨 ESTAÇÃO ZEBRA</a><button type="button" class="pwa-install-btn pwa-header" data-pwa-install>⬇ Instalar Admin</button><span id="statusBancoAdmin" class="save-pill">● Banco Web ativo</span><button class="btn-sair" onclick="sairAdmin()">Sair do Painel</button></div>
@@ -673,7 +707,7 @@
 
   <section id="aba-usuarios" class="aba-painel">
     <div class="card-admin">
-      <h2>Usuários e aprovações <span class="usuario-versao">Versão 10.5 — conferência automática de SKU KIT</span></h2>
+      <h2>Usuários e aprovações <span class="usuario-versao">Versão 10.6 — alerta de pedido já pendente</span></h2>
       <div class="aviso-banco"><b>Login próprio do estoque:</b> cada pessoa deve ter usuário, senha e perfil individual. Por segurança, a senha atual <b>não pode ser visualizada</b>, pois fica armazenada de forma criptográfica. Para trocar, use o botão <b>Alterar senha</b>; o Admin poderá visualizar somente a nova senha enquanto a digita.</div>
       <div class="toolbar-grid"><button type="button" id="btnNovoUsuarioAdmin" class="btn-primario" onclick="abrirSolicitacaoUsuario('admin')">＋ Solicitar novo usuário</button><button type="button" class="btn-sucesso" onclick="salvarUsuariosAdmin(true)">💾 Salvar alterações</button></div>
       <div id="contadorUsuariosAdmin" class="usuario-contador"></div>
@@ -2372,7 +2406,88 @@ function mesclarPedidosImportados(linhas, avisos){
 }
 
 
-/* CONFERÊNCIA AUTOMÁTICA DE SKU KIT — V10.5 */
+/* ALERTA DE PEDIDO JÁ PENDENTE EM IMPORTAÇÃO POR PLANILHA — V10.6 */
+let resolverAlertaDuplicidadePlanilhaAtual=null;
+
+function marketplaceCanonicoDuplicidadePlanilha(item){
+  const bruto=normalizarBuscaBanco(item?.Marketplace||marketplaceExibicaoBanco(item?.Pedido)||"");
+  if(bruto.includes("mercado"))return "mercado_livre";
+  if(bruto.includes("shopee"))return "shopee";
+  if(bruto.includes("magalu"))return "magalu";
+  return bruto||"outro";
+}
+
+function chavePedidoDuplicidadePlanilha(item){
+  const pedido=normalizarCodigoBanco(item?.Pedido);
+  if(!pedido)return "";
+  return `${marketplaceCanonicoDuplicidadePlanilha(item)}|${pedido}`;
+}
+
+function localizarPedidosJaPendentesPlanilha(linhas){
+  const pendentes=new Map();
+  (Array.isArray(pedidosEditorAdmin)?pedidosEditorAdmin:[]).forEach(item=>{
+    const chave=chavePedidoDuplicidadePlanilha(item);
+    if(!chave)return;
+    if(!pendentes.has(chave))pendentes.set(chave,{base:item,linhas:[]});
+    pendentes.get(chave).linhas.push(item);
+  });
+
+  const encontrados=new Map();
+  (Array.isArray(linhas)?linhas:[]).forEach(item=>{
+    const chave=chavePedidoDuplicidadePlanilha(item);
+    if(!chave||!pendentes.has(chave))return;
+    if(!encontrados.has(chave)){
+      const existente=pendentes.get(chave);
+      encontrados.set(chave,{chave,base:existente.base,existentes:existente.linhas,importadas:[]});
+    }
+    encontrados.get(chave).importadas.push(item);
+  });
+  return [...encontrados.values()];
+}
+
+function dataExibicaoDuplicidadePlanilha(valor){
+  const iso=normalizarDataPedidoBanco(valor,true);
+  if(!iso)return "Data não informada";
+  const partes=String(iso).split("-");
+  return partes.length===3?`${partes[2]}/${partes[1]}/${partes[0]}`:String(valor||"");
+}
+
+function confirmarPedidosJaPendentesPlanilha(duplicados,origem="Planilha"){
+  if(!Array.isArray(duplicados)||!duplicados.length)return Promise.resolve(true);
+  const modal=document.getElementById("modalPedidosDuplicadosPlanilha");
+  const lista=document.getElementById("listaPedidosDuplicadosPlanilha");
+  const subtitulo=document.getElementById("subtituloPedidosDuplicadosPlanilha");
+  if(subtitulo)subtitulo.innerHTML=`<b>${htmlSeguroBanco(origem)}</b>: <b>${duplicados.length} pedido(s)</b> desta planilha já estão nos Pedidos pendentes.`;
+  if(lista)lista.innerHTML=duplicados.map(reg=>{
+    const base=reg.base||reg.importadas?.[0]||{};
+    const market=base.Marketplace||marketplaceExibicaoBanco(base.Pedido);
+    const pedido=pedidoExibicaoBanco(base.Pedido,market);
+    const cliente=campoBanco(base,"Cliente")||campoBanco(reg.importadas?.[0]||{},"Cliente")||"Cliente não informado";
+    const data=dataExibicaoDuplicidadePlanilha(campoBanco(base,"Data do Pedido")||campoBanco(reg.importadas?.[0]||{},"Data do Pedido"));
+    const qtdExistente=reg.existentes?.length||1;
+    return `<div class="dup-planilha-item">
+      <div><div class="dup-planilha-pedido">⚠ ${htmlSeguroBanco(pedido)}</div><div style="font-size:10px;color:#991b1b;font-weight:800;margin-top:3px">JÁ ESTÁ PENDENTE · ${qtdExistente} linha(s)</div></div>
+      <div><span class="dup-planilha-market">${htmlSeguroBanco(market)}</span></div>
+      <div class="dup-planilha-cliente">${htmlSeguroBanco(cliente)}</div>
+      <div class="dup-planilha-data">${htmlSeguroBanco(data)}</div>
+    </div>`;
+  }).join("");
+  modal?.classList.add("ativo");
+  modal?.setAttribute("aria-hidden","false");
+  return new Promise(resolve=>{ resolverAlertaDuplicidadePlanilhaAtual=resolve; });
+}
+
+function resolverAlertaPedidosDuplicadosPlanilha(continuar){
+  const modal=document.getElementById("modalPedidosDuplicadosPlanilha");
+  modal?.classList.remove("ativo");
+  modal?.setAttribute("aria-hidden","true");
+  const resolver=resolverAlertaDuplicidadePlanilhaAtual;
+  resolverAlertaDuplicidadePlanilhaAtual=null;
+  if(resolver)resolver(!!continuar);
+}
+
+
+/* CONFERÊNCIA AUTOMÁTICA DE SKU KIT — V10.6 */
 let itensConferenciaSkuKitAtual=[];
 let origemConferenciaSkuKitAtual="";
 
@@ -2646,6 +2761,16 @@ async function importarRelatorioMercadoLivreAdmin(event){
     const montado=montarLinhasRelatorioMercadoLivre(estrutura,avisos);
     if(!montado.linhas.length)throw new Error("Nenhuma venda com número de pedido e SKU foi encontrada no relatório.");
     const consolidadas=consolidarLinhasImportadas(montado.linhas,avisos);
+    const duplicadosPendentes=localizarPedidosJaPendentesPlanilha(consolidadas);
+    if(duplicadosPendentes.length){
+      const continuar=await confirmarPedidosJaPendentesPlanilha(duplicadosPendentes,"Relatório Mercado Livre");
+      if(!continuar){
+        mostrarStatusImportacaoPedidos("aviso",`⚠ Importação cancelada: <b>${duplicadosPendentes.length} pedido(s)</b> já estavam nos Pedidos pendentes.`);
+        setStatusBanco("● Importação ML cancelada — pedido já pendente","ok");
+        return;
+      }
+      avisos.push(`${duplicadosPendentes.length} pedido(s) já estavam nos Pedidos pendentes e foram mantidos/atualizados após confirmação.`);
+    }
     const resultado=mesclarPedidosImportados(consolidadas,avisos);
     salvarPedidosAdmin(false);
     renderizarPedidosAdmin();
@@ -2821,6 +2946,16 @@ async function importarRelatorioShopeeAdmin(event){
     const montado=montarLinhasRelatorioShopee(estrutura,avisos);
     if(!montado.linhas.length)throw new Error("Nenhum pedido com número e SKU foi encontrado no relatório da Shopee.");
     const consolidadas=consolidarLinhasImportadas(montado.linhas,avisos);
+    const duplicadosPendentes=localizarPedidosJaPendentesPlanilha(consolidadas);
+    if(duplicadosPendentes.length){
+      const continuar=await confirmarPedidosJaPendentesPlanilha(duplicadosPendentes,"Relatório Shopee");
+      if(!continuar){
+        mostrarStatusImportacaoPedidos("aviso",`⚠ Importação cancelada: <b>${duplicadosPendentes.length} pedido(s)</b> já estavam nos Pedidos pendentes.`);
+        setStatusBanco("● Importação Shopee cancelada — pedido já pendente","ok");
+        return;
+      }
+      avisos.push(`${duplicadosPendentes.length} pedido(s) já estavam nos Pedidos pendentes e foram mantidos/atualizados após confirmação.`);
+    }
     const resultado=mesclarPedidosImportados(consolidadas,avisos);
     salvarPedidosAdmin(false);
     renderizarPedidosAdmin();
@@ -2878,6 +3013,16 @@ async function importarPedidosExcelAdmin(event){
       return resultado.item;
     }).filter(item=>item.Pedido||item.SKU||item["Código de Barras"]||item.Cliente);
     const consolidadas=consolidarLinhasImportadas(linhasMontadas,avisos);
+    const duplicadosPendentes=localizarPedidosJaPendentesPlanilha(consolidadas);
+    if(duplicadosPendentes.length){
+      const continuar=await confirmarPedidosJaPendentesPlanilha(duplicadosPendentes,"Excel interno");
+      if(!continuar){
+        mostrarStatusImportacaoPedidos("aviso",`⚠ Importação cancelada: <b>${duplicadosPendentes.length} pedido(s)</b> já estavam nos Pedidos pendentes.`);
+        setStatusBanco("● Importação Excel cancelada — pedido já pendente","ok");
+        return;
+      }
+      avisos.push(`${duplicadosPendentes.length} pedido(s) já estavam nos Pedidos pendentes e foram mantidos/atualizados após confirmação.`);
+    }
     const resultado=mesclarPedidosImportados(consolidadas,avisos);
     salvarPedidosAdmin(false);
     renderizarPedidosAdmin();

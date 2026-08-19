@@ -69,3 +69,10 @@ VERSAO 9.0 — TESTES ADICIONAIS
 - Rota do manifesto respondeu com orientacao retrato.
 - HTML servido confirmou botao da camera, modal e biblioteca ZXing Browser.
 - Impressao fisica e leitura real pela camera precisam ser validadas no celular da operacao.
+
+
+V10.6 — ALERTA DE PEDIDO JÁ PENDENTE
+- Funções de detecção adicionadas antes das três mesclagens por planilha: OK.
+- Fluxo Cancelar retorna antes de salvar: OK.
+- Fluxo Continuar preserva mesclagem existente: OK.
+- Modal responsivo e identificação de marketplace+pedido: OK.

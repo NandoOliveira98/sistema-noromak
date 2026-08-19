@@ -1,4 +1,4 @@
-SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 10.5
+SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 10.6
 ================================================
 
 Esta versão mantém:
@@ -72,3 +72,11 @@ Por isso não é necessário liberar uma rota sem login no nginx.
 VERSÃO 10.5
 - Importação direta do relatório A Enviar da Shopee (.xlsx).
 - Cruzamento automático com o banco de produtos e detecção de kits por SKUs separados por barra.
+
+
+VERSÃO 10.6
+- Alerta obrigatório ao importar por planilha um pedido que já esteja em Pedidos pendentes.
+- Abrange Excel interno, relatório Mercado Livre e relatório Shopee.
+- Mostra pedido, marketplace, cliente e data antes de alterar o cadastro.
+- Permite cancelar a importação ou continuar conscientemente.
+- Mantém todo o comportamento da versão 10.5.
