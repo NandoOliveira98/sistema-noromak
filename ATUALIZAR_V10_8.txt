@@ -1,0 +1,14 @@
+ATUALIZAÇÃO 10.8 — PACOTE LEVE
+===============================
+
+1. Copie o conteúdo desta pasta sobre a pasta atual do projeto.
+2. NÃO apague a pasta oculta .git da sua pasta atual.
+3. No Git Bash, dentro da pasta do projeto:
+
+   git status
+   git add -A
+   git commit -m "otimiza desempenho e fixa data atual nas planilhas"
+   ./publicar.sh
+
+Este pacote não inclui .git, instaladores antigos do Windows nem arquivos históricos de atualização que não são necessários para o site funcionar.
+O banco de produção permanece no servidor e não é substituído.

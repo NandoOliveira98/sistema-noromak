@@ -1,0 +1,20 @@
+SISTEMA DE CONFERÊNCIA WEB/LINUX — VERSÃO 10.8
+
+DESEMPENHO
+- Sincronização entre máquinas passa a consultar somente versões das informações a cada ciclo; pedidos, produtos, etiquetas, fotos e históricos completos só são baixados quando realmente mudam.
+- Removida uma segunda consulta repetitiva dos Pedidos pendentes no Admin.
+- Respostas JSON e arquivos HTML/JS/CSS passam a usar compactação gzip quando suportada pelo navegador.
+- Pedidos pendentes passam a ser renderizados em páginas de 60 linhas, reduzindo bastante a quantidade de campos HTML simultâneos.
+- Busca dos Pedidos pendentes ganhou pequeno debounce para evitar reconstruir a tabela a cada tecla instantaneamente.
+- Sincronização continua rápida para não prejudicar alertas de novos pedidos.
+- Leituras já carregadas passam a usar cache em memória, evitando várias chamadas bloqueantes ao servidor na mesma atualização.
+- Bibliotecas externas são carregadas com defer, permitindo que a interface seja montada sem bloquear o navegador durante o download.
+
+DATA DAS PLANILHAS
+- Excel interno, relatório Mercado Livre e relatório Shopee ignoram a data existente no arquivo para o campo Data do pedido.
+- A Data do pedido é sempre preenchida com o dia atual do computador no momento da importação.
+- Importação por print/plugin continua com seu comportamento normal.
+
+PRESERVADO
+- Conferência de SKU KIT igual à tela de importação por print.
+- Alerta de pedido já pendente, etiquetas persistentes, histórico, impressão e demais recursos existentes.

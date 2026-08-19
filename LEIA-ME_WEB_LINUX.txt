@@ -1,4 +1,4 @@
-SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 10.7
+SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 10.8
 ================================================
 
 Esta versão mantém:
@@ -74,7 +74,7 @@ VERSÃO 10.5
 - Cruzamento automático com o banco de produtos e detecção de kits por SKUs separados por barra.
 
 
-VERSÃO 10.7
+VERSÃO 10.8
 - Alerta obrigatório ao importar por planilha um pedido que já esteja em Pedidos pendentes.
 - Abrange Excel interno, relatório Mercado Livre e relatório Shopee.
 - Mostra pedido, marketplace, cliente e data antes de alterar o cadastro.

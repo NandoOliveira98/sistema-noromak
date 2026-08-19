@@ -7,19 +7,19 @@
 <meta name="application-name" content="Noromak Admin">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="manifest" href="/expedicao/manifest-admin.webmanifest?v=10.7" crossorigin="use-credentials">
-<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=10.7">
-<link rel="icon" href="/favicon.ico?v=10.7" sizes="any">
-<link rel="shortcut icon" href="/favicon.ico?v=10.7">
-<link rel="stylesheet" href="/expedicao/pwa-install.css?v=10.7">
+<link rel="manifest" href="/expedicao/manifest-admin.webmanifest?v=10.8" crossorigin="use-credentials">
+<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=10.8">
+<link rel="icon" href="/favicon.ico?v=10.8" sizes="any">
+<link rel="shortcut icon" href="/favicon.ico?v=10.8">
+<link rel="stylesheet" href="/expedicao/pwa-install.css?v=10.8">
 <title>Noromak - Administração dos Pedidos Compartilhados</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/js-sha256/0.9.0/sha256.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/qz-tray@2.2.4/qz-tray.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/js-sha256/0.9.0/sha256.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/qz-tray@2.2.4/qz-tray.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
 <style>
   :root {
     --primary: #2B4E75;      /* Azul da Marca */
@@ -417,7 +417,7 @@
 </style>
 <script src="/expedicao/shared-storage.js"></script>
 <script src="/expedicao/web-auth.js"></script>
-<script defer src="/expedicao/pwa-install.js?v=10.7"></script>
+<script defer src="/expedicao/pwa-install.js?v=10.8"></script>
 
 <style id="estiloEtiquetasPersistentesV98">
   .etiquetas-persistentes-box{margin:14px 0 18px;border:1px solid #c7d4e1;border-radius:9px;background:#f8fbfe;padding:13px}
@@ -601,9 +601,9 @@
 <div id="loginAdmin">
   <div class="box-login">
     <div class="logo-box">
-      <img src="/nk-logo.svg?v=10.7" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=10.7';">
+      <img src="/nk-logo.svg?v=10.8" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=10.8';">
     </div>
-    <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 10.7 — alerta de pedido já pendente</div>
+    <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 10.8 — alerta de pedido já pendente</div>
     <div style="font-size:12px;color:#667;margin:-8px 0 14px;line-height:1.4;">Use o administrador principal ou qualquer usuário cadastrado com perfil <b>Admin</b>.</div>
     <input type="text" id="usuarioAdmin" placeholder="Usuário Admin">
     <input type="password" id="senhaAdmin" placeholder="Senha">
@@ -619,7 +619,7 @@
 <div id="painelConteudo" class="container-admin">
   <div class="header-topo">
     <div class="header-identidade">
-      <div class="logo-mini-box"><img src="/grupo-noromak.png?v=10.7" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=10.7';"></div>
+      <div class="logo-mini-box"><img src="/grupo-noromak.png?v=10.8" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=10.8';"></div>
       <div class="header-titulos"><h1>Administração dos pedidos compartilhados</h1><small>Dados centralizados no servidor Web em tempo real</small></div>
     </div>
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end;"><a href="/expedicao/estacao-impressao" target="_blank" style="text-decoration:none;background:#1F57A5;color:white;padding:8px 13px;border-radius:6px;font-size:12px;font-weight:800;">🖨 ESTAÇÃO ZEBRA</a><button type="button" class="pwa-install-btn pwa-header" data-pwa-install>⬇ Instalar Admin</button><span id="statusBancoAdmin" class="save-pill">● Banco Web ativo</span><button class="btn-sair" onclick="sairAdmin()">Sair do Painel</button></div>
@@ -647,7 +647,7 @@
       <div class="importacao-excel-box">
         <div class="importacao-excel-topo">
           <div class="importacao-excel-titulo">📥 Importar pedidos</div>
-          <small>Escolha a origem. O sistema cruza pedido, data, cliente, SKU, quantidade e produto com o banco interno para completar EAN, descrição e localização. Se algum SKU importado contiver a palavra <b>KIT</b>, uma conferência exclusiva desses pedidos será aberta automaticamente.</small>
+          <small>Escolha a origem. O sistema cruza pedido, cliente, SKU, quantidade e produto com o banco interno para completar EAN, descrição e localização. <b>Nas importações por planilha, a Data do pedido será sempre a data atual da importação.</b> Se algum SKU importado contiver a palavra <b>KIT</b>, uma conferência exclusiva desses pedidos será aberta automaticamente.</small>
         </div>
         <input id="importarPedidosExcelInput" type="file" accept=".xlsx,.xls" hidden onchange="importarPedidosExcelAdmin(event)">
         <input id="importarRelatorioMercadoLivreInput" type="file" accept=".xlsx,.xls" hidden onchange="importarRelatorioMercadoLivreAdmin(event)">
@@ -661,7 +661,7 @@
       </div>
       <div id="statusImportacaoPedidos" class="importacao-status"></div>
       <div class="toolbar-grid">
-        <input id="buscaPedidosAdmin" type="text" placeholder="Buscar pedido, cliente, SKU, EAN ou descrição..." oninput="renderizarPedidosAdmin()">
+        <input id="buscaPedidosAdmin" type="text" placeholder="Buscar pedido, cliente, SKU, EAN ou descrição..." oninput="paginaPedidosAdmin=1;agendarRenderPedidosAdmin()">
         <button class="btn-primario" onclick="adicionarLinhaPedidoAdmin()">＋ Nova linha</button>
         <button class="btn-sucesso" onclick="salvarPedidosAdmin(true)">💾 Salvar agora</button>
         <button class="btn-secundario" onclick="exportarBancoExcel()">⬇ Backup em Excel</button>
@@ -671,7 +671,7 @@
           <th>Ações</th><th>Pedido</th><th>Marketplace</th><th>Data do pedido</th><th>Kit</th><th>Cliente</th><th>SKU</th><th>Quantidade</th><th>Código de Barras / EAN</th><th>Descrição</th><th>Rua</th><th>Módulo</th><th>Prateleira</th><th>Nível</th><th>Posição</th><th>Foto</th><th>Status</th>
         </tr></thead><tbody id="corpoPedidosAdmin"></tbody></table>
       </div>
-      <div class="grid-rodape"><span id="resumoPedidosAdmin"></span><span>Rascunhos incompletos não aparecem para o conferente.</span></div>
+      <div class="grid-rodape"><span id="resumoPedidosAdmin"></span><div class="paginacao"><button type="button" onclick="mudarPaginaPedidos(-1)">◀</button><span id="paginaPedidosTexto"></span><button type="button" onclick="mudarPaginaPedidos(1)">▶</button></div><span>Rascunhos incompletos não aparecem para o conferente.</span></div>
     </div>
   </section>
 
@@ -696,7 +696,7 @@
 
   <section id="aba-usuarios" class="aba-painel">
     <div class="card-admin">
-      <h2>Usuários e aprovações <span class="usuario-versao">Versão 10.7 — alerta de pedido já pendente</span></h2>
+      <h2>Usuários e aprovações <span class="usuario-versao">Versão 10.8 — desempenho otimizado</span></h2>
       <div class="aviso-banco"><b>Login próprio do estoque:</b> cada pessoa deve ter usuário, senha e perfil individual. Por segurança, a senha atual <b>não pode ser visualizada</b>, pois fica armazenada de forma criptográfica. Para trocar, use o botão <b>Alterar senha</b>; o Admin poderá visualizar somente a nova senha enquanto a digita.</div>
       <div class="toolbar-grid"><button type="button" id="btnNovoUsuarioAdmin" class="btn-primario" onclick="abrirSolicitacaoUsuario('admin')">＋ Solicitar novo usuário</button><button type="button" class="btn-sucesso" onclick="salvarUsuariosAdmin(true)">💾 Salvar alterações</button></div>
       <div id="contadorUsuariosAdmin" class="usuario-contador"></div>
@@ -1890,6 +1890,9 @@ let pedidosEditorAdmin = [];
 let usuariosEditorAdmin = [];
 let paginaProdutosAdmin = 1;
 const ITENS_POR_PAGINA_PRODUTOS = 45;
+let paginaPedidosAdmin = 1;
+const ITENS_POR_PAGINA_PEDIDOS = 60;
+let timerRenderPedidosAdmin = null;
 let timerSalvarPedidosAdmin = null;
 let timerSalvarProdutosAdmin = null;
 let timerSalvarUsuariosAdmin = null;
@@ -1952,17 +1955,18 @@ function inicializarBancoInternoAdmin(){
 }
 function carregarBancoInternoAdmin(){
   try{
-    produtosBancoAdmin=JSON.parse(appStorage.getItem("conf_produtos")||"[]");
-    usuariosEditorAdmin=JSON.parse(appStorage.getItem("conf_usuarios")||"[]");
-    const validos=JSON.parse(appStorage.getItem("conf_pedidos")||"[]");
-    const rascunhos=JSON.parse(appStorage.getItem("conf_pedidos_rascunhos")||"[]");
+    const ler=(chave)=>typeof appStorage.getCachedItem==="function"?appStorage.getCachedItem(chave):appStorage.getItem(chave);
+    produtosBancoAdmin=JSON.parse(ler("conf_produtos")||"[]");
+    usuariosEditorAdmin=JSON.parse(ler("conf_usuarios")||"[]");
+    const validos=JSON.parse(ler("conf_pedidos")||"[]");
+    const rascunhos=JSON.parse(ler("conf_pedidos_rascunhos")||"[]");
     pedidosEditorAdmin=[...validos,...rascunhos].map((x,i)=>{
       const marketplace=x.Marketplace||marketplaceExibicaoBanco(x.Pedido);
       return {...x,Pedido:pedidoArmazenamentoBanco(x.Pedido,marketplace),Marketplace:marketplaceExibicaoBanco(x.Pedido),"Data do Pedido":normalizarDataPedidoBanco(x["Data do Pedido"]||x.Data||x.DataPedido,true),Kit:normalizarBuscaBanco(x.Kit)==="sim"?"SIM":(x["Nome do Kit"]?"SIM":""),__uidLinha:x.__uidLinha||x.__uidPedido||uidBanco("PED")};
     });
     dadosPedidos=pedidosEditorAdmin.filter(linhaPedidoValidaBanco).map(x=>({...x,__rascunho:false}));
     usuariosCadastrados=usuariosEditorAdmin;
-    ultimaAssinaturaPedidosAdmin=appStorage.getItem("conf_pedidos")||"[]";
+    ultimaAssinaturaPedidosAdmin=ler("conf_pedidos")||"[]";
     atualizarTudoAdmin();
     setStatusBanco("● Banco salvo", "ok");
   }catch(e){console.error(e);setStatusBanco("Erro ao carregar banco", "erro");}
@@ -2125,12 +2129,26 @@ function tagConclusaoAnteriorPedidoBanco(item){
   return `<span class="pedido-ja-feito-destaque" title="${htmlSeguroBanco(titulo)}">⚠ JÁ FOI FEITO${data?`<span class="pedido-ja-feito-data">${htmlSeguroBanco(data)}</span>`:""}</span>`;
 }
 
+function agendarRenderPedidosAdmin(){
+  clearTimeout(timerRenderPedidosAdmin);
+  timerRenderPedidosAdmin=setTimeout(()=>{timerRenderPedidosAdmin=null;renderizarPedidosAdmin();},120);
+}
+function mudarPaginaPedidos(delta){
+  paginaPedidosAdmin+=Number(delta||0);
+  renderizarPedidosAdmin();
+  document.querySelector('#aba-pedidos .excel-wrap')?.scrollTo({top:0,behavior:'instant'});
+}
 function renderizarPedidosAdmin(){
   const corpo=document.getElementById("corpoPedidosAdmin"); if(!corpo)return;
   const termo=normalizarBuscaBanco(document.getElementById("buscaPedidosAdmin")?.value||"");
   const filtrados=pedidosEditorAdmin.filter(x=>!termo||CAMPOS_PEDIDOS_BANCO.some(c=>normalizarBuscaBanco(x[c]).includes(termo))||normalizarBuscaBanco(pedidoExibicaoBanco(x.Pedido,x.Marketplace)).includes(termo));
-  if(!filtrados.length){corpo.innerHTML='<tr><td colspan="17" style="padding:25px;text-align:center;color:#64748b;">Nenhuma linha. Clique em “Nova linha” ou use “Importar por print” para cadastrar um pedido ou kit.</td></tr>';}
-  else corpo.innerHTML=filtrados.map(item=>{
+  const paginas=Math.max(1,Math.ceil(filtrados.length/ITENS_POR_PAGINA_PEDIDOS));
+  paginaPedidosAdmin=Math.max(1,Math.min(paginaPedidosAdmin,paginas));
+  const inicio=(paginaPedidosAdmin-1)*ITENS_POR_PAGINA_PEDIDOS;
+  const visiveis=filtrados.slice(inicio,inicio+ITENS_POR_PAGINA_PEDIDOS);
+  if(!visiveis.length){
+    corpo.innerHTML='<tr><td colspan="17" style="padding:25px;text-align:center;color:#64748b;">Nenhuma linha. Clique em “Nova linha” ou use “Importar por print” para cadastrar um pedido ou kit.</td></tr>';
+  } else corpo.innerHTML=visiveis.map(item=>{
     item.Marketplace=marketplaceExibicaoBanco(item.Pedido);
     const valida=linhaPedidoValidaBanco(item);
     const inp=(campo,cls="")=>{const valor=campo==="Pedido"?pedidoExibicaoBanco(item.Pedido,item.Marketplace):campoBanco(item,campo);return `<input class="${cls}" data-uidlinha="${htmlSeguroBanco(item.__uidLinha)}" data-campo="${htmlSeguroBanco(campo)}" value="${htmlSeguroBanco(valor)}" onchange="atualizarCampoPedidoAdmin(this)" onkeydown="navegarGridAdmin(event,this)">`;};
@@ -2138,7 +2156,11 @@ function renderizarPedidosAdmin(){
     return `<tr class="${valida?'linha-valida':'linha-rascunho'}${jaFeito?' linha-ja-feito':''}"><td><div class="linha-acoes"><button title="Adicionar outro item neste pedido" onclick="adicionarItemMesmoPedido('${htmlSeguroBanco(item.__uidLinha)}')">＋</button><button title="Excluir linha" style="background:#ffebee;color:#c62828" onclick="excluirLinhaPedidoAdmin('${htmlSeguroBanco(item.__uidLinha)}')">🗑</button></div></td>`+
       `<td><div class="pedido-cell-wrap">${tagConclusaoAnteriorPedidoBanco(item)}${inp('Pedido','campo-pedido')}</div></td><td><input class="market-auto" readonly value="${htmlSeguroBanco(item.Marketplace)}"></td><td><input type="date" data-uidlinha="${htmlSeguroBanco(item.__uidLinha)}" data-campo="Data do Pedido" value="${htmlSeguroBanco(normalizarDataPedidoBanco(item['Data do Pedido'],true))}" onchange="atualizarCampoPedidoAdmin(this)" onkeydown="navegarGridAdmin(event,this)"></td><td><div class="kit-celula-resumo">${textoKitBanco(item)?`<span class="kit-badge">KIT</span><br>${htmlSeguroBanco(textoKitBanco(item))}`:'—'}</div></td><td>${inp('Cliente','campo-cliente')}</td><td>${inp('SKU')}</td><td><input type="number" min="1" data-uidlinha="${htmlSeguroBanco(item.__uidLinha)}" data-campo="Quantidade" value="${htmlSeguroBanco(item.Quantidade||'1')}" onchange="atualizarCampoPedidoAdmin(this)" onkeydown="navegarGridAdmin(event,this)"></td><td>${inp('Código de Barras')}</td><td>${inp('Descrição','campo-descricao')}</td><td>${inp('Rua')}</td><td>${inp('Módulo')}</td><td>${inp('Prateleira')}</td><td>${inp('Nível')}</td><td>${inp('Posição')}</td><td>${inp('Foto','campo-foto')}</td><td><span class="status-celula ${valida?'status-pendente':'status-rascunho'}">${valida?'PENDENTE':'RASCUNHO'}</span>${tagConclusaoAnteriorBanco(item)}</td></tr>`;
   }).join("");
-  document.getElementById("resumoPedidosAdmin").textContent=`${filtrados.length} linha(s) exibida(s) · ${obterPedidosValidosBanco().length} válida(s) · ${obterRascunhosBanco().length} rascunho(s)`;
+  const totalValidos=pedidosEditorAdmin.reduce((n,x)=>n+(linhaPedidoValidaBanco(x)?1:0),0);
+  const totalRascunhos=pedidosEditorAdmin.length-totalValidos;
+  const fim=Math.min(inicio+visiveis.length,filtrados.length);
+  document.getElementById("resumoPedidosAdmin").textContent=filtrados.length?`${inicio+1}-${fim} de ${filtrados.length} linha(s) · ${totalValidos} válida(s) · ${totalRascunhos} rascunho(s)`:`0 linha(s) · ${totalValidos} válida(s) · ${totalRascunhos} rascunho(s)`;
+  const pag=document.getElementById("paginaPedidosTexto");if(pag)pag.textContent=`Página ${paginaPedidosAdmin} de ${paginas}`;
 }
 function navegarGridAdmin(event,el){
   if(event.key!=="Enter"&&event.key!=="ArrowDown"&&event.key!=="ArrowUp")return;
@@ -2316,7 +2338,7 @@ function montarLinhaPedidoImportada(linha, numeroLinha, avisos){
   };
   const item={};
   Object.entries(aliases).forEach(([campo,nomes])=>item[campo]=limparValorImportado(campo,valorImportadoPorAlias(i,nomes)));
-  item["Data do Pedido"]=normalizarDataPedidoBanco(item["Data do Pedido"],true);
+  item["Data do Pedido"]=hojeLocalBanco();
   const quantidadeBase=numeroQuantidadeImportada(valorImportadoPorAlias(i,aliases.Quantidade));
   const qtdKits=numeroQuantidadeImportada(valorImportadoPorAlias(i,aliases["Quantidade de Kits"]));
   const qtdPorKit=numeroQuantidadeImportada(valorImportadoPorAlias(i,aliases["Quantidade por Kit"]));
@@ -2748,7 +2770,7 @@ function montarLinhasRelatorioMercadoLivre(estrutura,avisos){
       packAtual={
         pedido:pedidoBruto,
         cliente:limparValorImportado("Cliente",linha[idx.cliente]),
-        data:normalizarDataRelatorioMercadoLivre(linha[idx.data]),
+        data:hojeLocalBanco(),
         restantes:Math.max(1,Number(pacoteMatch[1]||1))
       };
       packsAgrupados++;
@@ -2760,7 +2782,7 @@ function montarLinhasRelatorioMercadoLivre(estrutura,avisos){
     const pedidoEfetivo=pertencePack?packAtual.pedido:pedidoBruto;
     const clienteLinha=limparValorImportado("Cliente",linha[idx.cliente]);
     const clienteEfetivo=clienteLinha||(pertencePack?packAtual.cliente:"");
-    const dataEfetiva=pertencePack?(packAtual.data||normalizarDataRelatorioMercadoLivre(linha[idx.data])):normalizarDataRelatorioMercadoLivre(linha[idx.data]);
+    const dataEfetiva=hojeLocalBanco();
     const qtd=numeroQuantidadeImportada(linha[idx.quantidade]);
     const item={
       Pedido:pedidoArmazenamentoBanco(pedidoEfetivo,"MERCADO LIVRE"),
@@ -2845,7 +2867,7 @@ async function importarRelatorioMercadoLivreAdmin(event){
       (montado.packsAgrupados?`<br>📦 ${montado.packsAgrupados} pacote(s) de múltiplas vendas foram agrupados pelo Pack ID para vincular corretamente à etiqueta.`:"")+
       (montado.ignoradas?`<br>⚠ ${montado.ignoradas} linha(s) sem SKU foram ignoradas.`:"")+
       (semBanco?`<br>⚠ ${semBanco} linha(s) não foram localizadas no banco de produtos e permaneceram com o SKU/título do Mercado Livre.`:"")+
-      `<br><small>Campos usados: Nº da venda → Pedido; Data da venda → Data; Comprador → Cliente; SKU → Produto; Unidades → Quantidade; Título do anúncio → Descrição. EAN e localização são preenchidos pelo banco de produtos.</small>${detalhesAvisos}`
+      `<br><small>Campos usados: Nº da venda → Pedido; Data do pedido → data atual da importação; Comprador → Cliente; SKU → Produto; Unidades → Quantidade; Título do anúncio → Descrição. EAN e localização são preenchidos pelo banco de produtos.</small>${detalhesAvisos}`
     );
     setStatusBanco("● Relatório Mercado Livre importado","ok");
     abrirConferenciaSkuKit(consolidadas,"Relatório Mercado Livre");
@@ -2938,7 +2960,7 @@ function montarLinhasRelatorioShopee(estrutura,avisos){
     const clienteDest=idx.cliente>=0?limparValorImportado("Cliente",linha[idx.cliente]):"";
     const clienteUsuario=idx.usuarioComprador>=0?limparValorImportado("Cliente",linha[idx.usuarioComprador]):"";
     const cliente=clienteDest||clienteUsuario;
-    const dataPedido=normalizarDataPedidoBanco(linha[idx.data],true);
+    const dataPedido=hojeLocalBanco();
     const componentes=separarComponentesSkuShopee(skuBruto);
     const ehKit=componentes.length>1;
     if(ehKit)kitsDetectados++;
@@ -3030,7 +3052,7 @@ async function importarRelatorioShopeeAdmin(event){
       (montado.kitsDetectados?`<br>🎁 ${montado.kitsDetectados} kit(s) foram identificados automaticamente pelo campo Número de referência SKU e desmembrados em ${montado.componentesKit} componente(s).`:"")+
       (montado.ignoradas?`<br>⚠ ${montado.ignoradas} linha(s) foram ignoradas por status ou ausência de SKU.`:"")+
       (semBanco?`<br>⚠ ${semBanco} linha(s) não foram localizadas no banco de produtos e permaneceram com o SKU/nome informado pela Shopee.`:"")+
-      `<br><small>Campos usados: ID do pedido → Pedido; Data de criação → Data; Nome do destinatário → Cliente; Número de referência SKU → SKU; Quantidade → Quantidade; Nome do Produto/variação → descrição. EAN e localização são preenchidos pelo banco de produtos.</small>${detalhesAvisos}`
+      `<br><small>Campos usados: ID do pedido → Pedido; Data do pedido → data atual da importação; Nome do destinatário → Cliente; Número de referência SKU → SKU; Quantidade → Quantidade; Nome do Produto/variação → descrição. EAN e localização são preenchidos pelo banco de produtos.</small>${detalhesAvisos}`
     );
     setStatusBanco("● Relatório Shopee importado","ok");
     abrirConferenciaSkuKit(consolidadas,"Relatório Shopee");
@@ -3790,16 +3812,11 @@ window.addEventListener("storage",event=>{
   if(event.key==="conf_pedidos"){
     clearTimeout(timerSalvarPedidosAdmin);
     timerSalvarPedidosAdmin=null;
-    const assinatura=appStorage.getItem("conf_pedidos")||"[]";
-    if(assinatura!==ultimaAssinaturaPedidosAdmin){carregarBancoInternoAdmin();setStatusBanco("● Pedido concluído: lista atualizada","ok");}
+    const assinatura=typeof event.newValue==="string"?event.newValue:(appStorage.getItem("conf_pedidos")||"[]");
+    if(assinatura!==ultimaAssinaturaPedidosAdmin){carregarBancoInternoAdmin();setStatusBanco("● Lista de pedidos atualizada","ok");}
   }
   if(event.key==="conf_historico_conferencias_v2"||event.key==="conf_logs")carregarLogs();
 });
-setInterval(()=>{
-  if(document.getElementById("painelConteudo")?.style.display!=="block")return;
-  const assinatura=appStorage.getItem("conf_pedidos")||"[]";
-  if(assinatura!==ultimaAssinaturaPedidosAdmin){carregarBancoInternoAdmin();}
-},1600);
 
 document.addEventListener("DOMContentLoaded",()=>{
   if(appStorage.getItem("conf_admin_logado")==="true"){

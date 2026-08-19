@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sistema de Conferência Noromak — edição Web/Linux 9.8.
+"""Sistema de Conferência Noromak — edição Web/Linux 10.8.
 
 Sem dependências externas: usa apenas a biblioteca padrão do Python.
 - Escuta em 127.0.0.1:8100.
@@ -11,6 +11,7 @@ Sem dependências externas: usa apenas a biblioteca padrão do Python.
 from __future__ import annotations
 
 import base64
+import gzip
 import hashlib
 import hmac
 import json
@@ -32,7 +33,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-APP_VERSION = "10.7"
+APP_VERSION = "10.8"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -1409,15 +1410,21 @@ def clear_login_failures(handler: BaseHTTPRequestHandler, username: str) -> None
 
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/10.7"
+    server_version = "NoromakExpedicao/10.8"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
 
     def send_json(self, data: Any, status: int = 200, headers: dict[str, str] | None = None) -> None:
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        comprimido = len(body) >= 1024 and "gzip" in self.headers.get("Accept-Encoding", "").lower()
+        if comprimido:
+            body = gzip.compress(body, compresslevel=5)
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
+        if comprimido:
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Vary", "Accept-Encoding")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Noromak-Version", APP_VERSION)
@@ -1700,6 +1707,16 @@ class AppHandler(BaseHTTPRequestHandler):
             if (query.get("list") or [""])[0] == "1":
                 keys = [row[0] for row in DB.execute("SELECT key FROM storage ORDER BY key")]
                 self.send_json({"keys": keys})
+                return
+            versions_arg = (query.get("versions") or [""])[0]
+            if versions_arg:
+                solicitadas = [key for key in versions_arg.split(",") if key]
+                versions: dict[str, int] = {key: 0 for key in solicitadas}
+                if solicitadas:
+                    placeholders = ",".join("?" for _ in solicitadas)
+                    for row in DB.execute(f"SELECT key,version FROM storage WHERE key IN ({placeholders})", solicitadas):
+                        versions[str(row["key"])] = int(row["version"] or 0)
+                self.send_json({"versions": versions})
                 return
             keys_arg = (query.get("keys") or [""])[0]
             if keys_arg:
@@ -2229,8 +2246,15 @@ class AppHandler(BaseHTTPRequestHandler):
             content_type = mimetypes.guess_type(full.name)[0] or "application/octet-stream"
             if content_type.startswith("text/") or full.suffix in (".js", ".json"):
                 content_type += "; charset=utf-8"
+        comprimivel = full.suffix.lower() in {".html", ".js", ".css", ".json", ".webmanifest", ".svg", ".txt"}
+        comprimido = comprimivel and len(body) >= 1024 and "gzip" in self.headers.get("Accept-Encoding", "").lower()
+        if comprimido:
+            body = gzip.compress(body, compresslevel=5)
         self.send_response(200)
         self.send_header("Content-Type", content_type)
+        if comprimido:
+            self.send_header("Content-Encoding", "gzip")
+            self.send_header("Vary", "Accept-Encoding")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
         self.send_header("Pragma", "no-cache")
