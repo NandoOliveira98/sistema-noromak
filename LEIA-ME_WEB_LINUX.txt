@@ -1,4 +1,4 @@
-SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 10.3
+SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 10.4
 ================================================
 
 Esta versão mantém:
@@ -67,3 +67,8 @@ Backups: /home/expedicao/backups
 O Noromak Print Service não acessa o servidor diretamente. A página autenticada
 /expedicao/estacao-impressao faz a ponte com o serviço local em 127.0.0.1.
 Por isso não é necessário liberar uma rota sem login no nginx.
+
+
+VERSÃO 10.4
+- Importação direta do relatório A Enviar da Shopee (.xlsx).
+- Cruzamento automático com o banco de produtos e detecção de kits por SKUs separados por barra.
