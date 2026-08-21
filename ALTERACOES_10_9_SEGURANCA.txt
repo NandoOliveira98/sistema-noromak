@@ -1,0 +1,35 @@
+VERSÃO 10.9 — CORREÇÕES DA REVISÃO DE SEGURANÇA
+================================================
+
+1. Senhas iniciais fixas
+- Removidos todos os valores de senha padrão do código e do .env.example.
+- Novos usuários de bootstrap sem senha configurada recebem senha aleatória individual.
+- Credenciais geradas são gravadas fora do repositório em /home/expedicao/dados/CREDENCIAIS_INICIAIS.txt, modo 600.
+- A conta genérica admin deixa de ser criada por padrão (EXP_SEED_GENERIC_ADMIN=1 reabilita se realmente necessário).
+- Usuários existentes que ainda usam uma das antigas senhas padrão são destacados no Admin com TROCAR SENHA INICIAL; nenhuma senha existente é trocada automaticamente.
+
+2. IP do cliente
+- Rate-limit, sessão e auditoria passam a usar X-Real-IP, sobrescrito pelo nginx, em vez do primeiro X-Forwarded-For forjável.
+
+3. /api/health
+- A rota pública retorna apenas ok, version e server_time; não expõe caminho do banco, base_path ou marker.
+
+4. Cabeçalhos
+- X-Content-Type-Options: nosniff
+- X-Frame-Options: DENY
+- Referrer-Policy: same-origin
+- Permissions-Policy restritiva
+- Content-Security-Policy nas páginas HTML, permitindo somente os CDNs já usados, recursos do próprio sistema, câmera/OCR e conexões locais de impressão/QZ.
+
+5. Cookie Secure
+- A regra usa X-Forwarded-Proto=https e reconhece noromakweb.com.br e subdomínios *.noromakweb.com.br.
+
+6. CRM
+- Removida a constante AUTH_ME_URL que não era utilizada.
+- O código não lê teil_token; o login interno continua usando apenas expedicao_estoque.
+
+Ações manuais após publicar
+- Admin > Usuários: alterar imediatamente qualquer usuário com a tag TROCAR SENHA INICIAL.
+- Se a conta genérica admin não for usada, desativá-la/removê-la pelo Admin.
+- A infraestrutura pode passar a filtrar o cookie teil_token no nginx.
+- Revogar a chave SSH do PC antigo é uma ação da infraestrutura, não deste pacote.

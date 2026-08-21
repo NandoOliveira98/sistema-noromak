@@ -7,11 +7,11 @@
 <meta name="application-name" content="Noromak Admin">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="manifest" href="/expedicao/manifest-admin.webmanifest?v=10.8" crossorigin="use-credentials">
-<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=10.8">
-<link rel="icon" href="/favicon.ico?v=10.8" sizes="any">
-<link rel="shortcut icon" href="/favicon.ico?v=10.8">
-<link rel="stylesheet" href="/expedicao/pwa-install.css?v=10.8">
+<link rel="manifest" href="/expedicao/manifest-admin.webmanifest?v=10.9" crossorigin="use-credentials">
+<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=10.9">
+<link rel="icon" href="/favicon.ico?v=10.9" sizes="any">
+<link rel="shortcut icon" href="/favicon.ico?v=10.9">
+<link rel="stylesheet" href="/expedicao/pwa-install.css?v=10.9">
 <title>Noromak - Administração dos Pedidos Compartilhados</title>
 <script defer src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script defer src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
@@ -417,7 +417,7 @@
 </style>
 <script src="/expedicao/shared-storage.js"></script>
 <script src="/expedicao/web-auth.js"></script>
-<script defer src="/expedicao/pwa-install.js?v=10.8"></script>
+<script defer src="/expedicao/pwa-install.js?v=10.9"></script>
 
 <style id="estiloEtiquetasPersistentesV98">
   .etiquetas-persistentes-box{margin:14px 0 18px;border:1px solid #c7d4e1;border-radius:9px;background:#f8fbfe;padding:13px}
@@ -601,9 +601,9 @@
 <div id="loginAdmin">
   <div class="box-login">
     <div class="logo-box">
-      <img src="/nk-logo.svg?v=10.8" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=10.8';">
+      <img src="/nk-logo.svg?v=10.9" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=10.9';">
     </div>
-    <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 10.8 — alerta de pedido já pendente</div>
+    <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 10.9 — alerta de pedido já pendente</div>
     <div style="font-size:12px;color:#667;margin:-8px 0 14px;line-height:1.4;">Use o administrador principal ou qualquer usuário cadastrado com perfil <b>Admin</b>.</div>
     <input type="text" id="usuarioAdmin" placeholder="Usuário Admin">
     <input type="password" id="senhaAdmin" placeholder="Senha">
@@ -619,7 +619,7 @@
 <div id="painelConteudo" class="container-admin">
   <div class="header-topo">
     <div class="header-identidade">
-      <div class="logo-mini-box"><img src="/grupo-noromak.png?v=10.8" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=10.8';"></div>
+      <div class="logo-mini-box"><img src="/grupo-noromak.png?v=10.9" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=10.9';"></div>
       <div class="header-titulos"><h1>Administração dos pedidos compartilhados</h1><small>Dados centralizados no servidor Web em tempo real</small></div>
     </div>
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end;"><a href="/expedicao/estacao-impressao" target="_blank" style="text-decoration:none;background:#1F57A5;color:white;padding:8px 13px;border-radius:6px;font-size:12px;font-weight:800;">🖨 ESTAÇÃO ZEBRA</a><button type="button" class="pwa-install-btn pwa-header" data-pwa-install>⬇ Instalar Admin</button><span id="statusBancoAdmin" class="save-pill">● Banco Web ativo</span><button class="btn-sair" onclick="sairAdmin()">Sair do Painel</button></div>
@@ -827,7 +827,7 @@ function autenticarAdmin() {
   }
 
   let usuarioAutorizado = null;
-  if (loginDigitado === "admin" && senhaDigitada === "01101998") {
+  if (false /* autenticação legada removida; o login válido é conferido pelo servidor */) {
     usuarioAutorizado = { Nome: "Administrador principal", Login: "admin", Perfil: "Admin" };
   } else {
     let usuarios = [];
@@ -1997,7 +1997,7 @@ function autenticarAdmin() {
   }
 
   let usuarioAutorizado = null;
-  if (loginDigitado === "admin" && senhaDigitada === "01101998") {
+  if (false /* autenticação legada removida; o login válido é conferido pelo servidor */) {
     usuarioAutorizado = { Nome: "Administrador principal", Login: "admin", Perfil: "Admin" };
   } else {
     let usuarios = [];
@@ -4201,7 +4201,7 @@ document.addEventListener("DOMContentLoaded",()=>{
     const senha=txt(document.getElementById("senhaAdmin")?.value);
     const erro=document.getElementById("erroLoginAdmin");
     if(!login||!senha){if(erro)erro.textContent="Preencha o usuário e a senha.";return;}
-    if(login==="admin"&&senha==="01101998"){
+    if(false /* autenticação legada removida; o login válido é conferido pelo servidor */){
       appStorage.setItem("conf_admin_logado","true");
       appStorage.setItem("conf_admin_sessao",JSON.stringify({Nome:"Administrador principal",Login:"admin",Perfil:"Admin"}));
       document.getElementById("loginAdmin").style.display="none";document.getElementById("painelConteudo").style.display="block";if(erro)erro.textContent="";
@@ -4239,7 +4239,7 @@ document.addEventListener("DOMContentLoaded",()=>{
 
 
 <style>
-.senha-acesso-celula{display:flex;align-items:center;gap:10px;min-width:255px}.senha-protegida-status{display:flex;flex-direction:column;line-height:1.2;min-width:105px}.senha-protegida-status strong{font-size:12px;color:#2b4e75}.senha-protegida-status small{font-size:10px;color:#718096}.btn-alterar-senha{border:0;border-radius:6px;background:#f7941d;color:white;font-weight:800;padding:8px 12px;cursor:pointer;white-space:nowrap}.btn-alterar-senha:hover{filter:brightness(.95)}.senha-usuario-identidade{background:#edf5fc;border:1px solid #bdd0e2;border-radius:8px;padding:10px 12px;margin-bottom:12px;display:flex;flex-direction:column}.senha-usuario-identidade span{font-size:10px;text-transform:uppercase;color:#6b7b89;font-weight:800}.senha-usuario-identidade strong{font-size:15px;color:#244d76}.senha-usuario-identidade small{color:#617487}.senha-mostrar-linha{display:flex;align-items:center;gap:8px;font-weight:700;color:#526475}.senha-mostrar-linha input{width:auto}.senha-regra{margin-top:10px;padding:9px 10px;background:#fff8e8;border-left:3px solid #f7941d;color:#5f5140;font-size:11px}.senha-salva-flash{animation:senhaFlash 1.2s ease}@keyframes senhaFlash{0%{background:#dff5e3}100%{background:transparent}}
+.senha-acesso-celula{display:flex;align-items:center;gap:10px;min-width:255px}.senha-protegida-status{display:flex;flex-direction:column;line-height:1.2;min-width:105px}.senha-protegida-status strong{font-size:12px;color:#2b4e75}.senha-protegida-status small{font-size:10px;color:#718096}.btn-alterar-senha{border:0;border-radius:6px;background:#f7941d;color:white;font-weight:800;padding:8px 12px;cursor:pointer;white-space:nowrap}.btn-alterar-senha:hover{filter:brightness(.95)}.senha-usuario-identidade{background:#edf5fc;border:1px solid #bdd0e2;border-radius:8px;padding:10px 12px;margin-bottom:12px;display:flex;flex-direction:column}.senha-usuario-identidade span{font-size:10px;text-transform:uppercase;color:#6b7b89;font-weight:800}.senha-usuario-identidade strong{font-size:15px;color:#244d76}.senha-usuario-identidade small{color:#617487}.senha-mostrar-linha{display:flex;align-items:center;gap:8px;font-weight:700;color:#526475}.senha-mostrar-linha input{width:auto}.senha-regra{margin-top:10px;padding:9px 10px;background:#fff8e8;border-left:3px solid #f7941d;color:#5f5140;font-size:11px}.senha-salva-flash{animation:senhaFlash 1.2s ease}@keyframes senhaFlash{0%{background:#dff5e3}100%{background:transparent}}.senha-insegura-badge{display:inline-flex;margin-top:5px;padding:4px 7px;border-radius:5px;background:#b91c1c;color:#fff;font-size:10px;font-weight:900;line-height:1.2}.senha-insegura-linha{background:#fff7ed!important}
 </style>
 <script>
 /* ADMINISTRAÇÃO SEGURA DE SENHAS — VERSÃO 7.6 */
@@ -4265,11 +4265,12 @@ document.addEventListener("DOMContentLoaded",()=>{
       u.__uidUsuario=u.__uidUsuario||("USR-"+Date.now().toString(36)+Math.random().toString(36).slice(2,7));
       const uid=esc(u.__uidUsuario);
       const input=(campo)=>`<input type="text" data-uidusuario="${uid}" data-campo="${campo}" value="${esc(u[campo]||"")}" oninput="atualizarCampoUsuarioAdmin(this)">`;
-      return `<tr data-linha-usuario="${uid}">
+      const insegura=u.RequerTrocaSenha===true;
+      return `<tr data-linha-usuario="${uid}" class="${insegura?'senha-insegura-linha':''}">
         <td><div class="linha-acoes"><button style="background:#ffebee;color:#c62828" onclick="excluirUsuarioAdmin('${uid}')" title="Excluir usuário">🗑</button></div></td>
         <td>${input("Nome")}</td>
-        <td>${input("Login")}</td>
-        <td><div class="senha-acesso-celula"><div class="senha-protegida-status"><strong>🔒 Senha protegida</strong><small>Não é possível visualizar a atual</small></div><button type="button" class="btn-alterar-senha" onclick="abrirModalAlterarSenhaAdmin('${uid}')">Alterar senha</button></div></td>
+        <td>${input("Login")}${insegura?'<span class="senha-insegura-badge">⚠ TROCAR SENHA INICIAL</span>':''}</td>
+        <td><div class="senha-acesso-celula"><div class="senha-protegida-status"><strong>🔒 Senha protegida</strong><small>${insegura?'Senha inicial conhecida — altere agora':'Não é possível visualizar a atual'}</small></div><button type="button" class="btn-alterar-senha" onclick="abrirModalAlterarSenhaAdmin('${uid}')">Alterar senha</button></div></td>
         <td><select data-uidusuario="${uid}" data-campo="Perfil" onchange="atualizarCampoUsuarioAdmin(this)"><option ${perfilNormalizado(u.Perfil)==="Admin"?"selected":""}>Admin</option><option ${perfilNormalizado(u.Perfil)==="Operador"?"selected":""}>Operador</option></select></td>
       </tr>`;
     }).join("")||'<tr><td colspan="5" style="padding:20px;text-align:center;">Nenhum usuário cadastrado.</td></tr>';

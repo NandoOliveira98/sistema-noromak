@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sistema de Conferência Noromak — edição Web/Linux 10.8.
+"""Sistema de Conferência Noromak — edição Web/Linux 10.9.
 
 Sem dependências externas: usa apenas a biblioteca padrão do Python.
 - Escuta em 127.0.0.1:8100.
@@ -24,8 +24,6 @@ import subprocess
 import sys
 import threading
 import time
-import urllib.error
-import urllib.request
 from datetime import datetime, timezone
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -33,7 +31,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-APP_VERSION = "10.8"
+APP_VERSION = "10.9"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -42,7 +40,6 @@ ROOT_DIR = Path(__file__).resolve().parent
 APP_DIR = ROOT_DIR / "APP"
 DB_PATH = Path(os.getenv("EXP_DB_PATH", "/home/expedicao/dados/expedicao.db"))
 BACKUP_DIR = Path(os.getenv("EXP_BACKUP_DIR", "/home/expedicao/backups"))
-AUTH_ME_URL = os.getenv("EXP_AUTH_ME_URL", "http://127.0.0.1:8000/api/v1/auth/me")
 ADMIN_USERNAME = os.getenv("EXP_ADMIN_USUARIO", "luis").strip().lower()
 QZ_BUNDLED_CERT_PATH = ROOT_DIR / "QZ_CERTIFICADO_WEB" / "digital-certificate.txt"
 QZ_CONFIGURED_CERT_PATH = Path(os.getenv("QZ_CERT_PATH", str(QZ_BUNDLED_CERT_PATH)))
@@ -58,8 +55,12 @@ SESSION_TTL_SECONDS = int(os.getenv("EXP_SESSION_TTL_SECONDS", str(12 * 60 * 60)
 STATION_SESSION_TTL_SECONDS = int(os.getenv("EXP_STATION_SESSION_TTL_SECONDS", str(180 * 24 * 60 * 60)))
 PASSWORD_ITERATIONS = int(os.getenv("EXP_PASSWORD_ITERATIONS", "240000"))
 PASSWORD_MASK = "********"
-INITIAL_ADMIN_PASSWORD = os.getenv("EXP_ADMIN_SENHA", "01101998")
-INITIAL_OPERATOR_PASSWORD = os.getenv("EXP_USUARIO_SENHA_INICIAL", "123")
+INITIAL_ADMIN_PASSWORD = (os.getenv("EXP_ADMIN_SENHA") or "").strip() or None
+INITIAL_OPERATOR_PASSWORD = (os.getenv("EXP_USUARIO_SENHA_INICIAL") or "").strip() or None
+SEED_GENERIC_ADMIN = os.getenv("EXP_SEED_GENERIC_ADMIN", "0").strip().lower() in {"1", "true", "yes", "sim"}
+INITIAL_CREDENTIALS_PATH = Path(
+    os.getenv("EXP_INITIAL_CREDENTIALS_PATH", str(DB_PATH.parent / "CREDENCIAIS_INICIAIS.txt"))
+)
 
 DB_LOCK = threading.RLock()
 AUTH_LOCK = threading.Lock()
@@ -664,6 +665,33 @@ def ensure_storage_defaults() -> None:
         DB.commit()
 
 
+def _write_generated_initial_credentials(credentials: list[tuple[str, str, str]]) -> None:
+    """Grava credenciais aleatórias de bootstrap fora do repositório, com modo 600."""
+    if not credentials:
+        return
+    INITIAL_CREDENTIALS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "# Credenciais iniciais geradas automaticamente pelo Sistema de Expedição",
+        f"# Gerado em: {now_iso()}",
+        "# Troque estas senhas no primeiro acesso e apague este arquivo depois.",
+        "",
+    ]
+    for username, role, password in credentials:
+        lines.append(f"{username} ({role}): {password}")
+    lines.append("")
+    fd = os.open(INITIAL_CREDENTIALS_PATH, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+    try:
+        os.chmod(INITIAL_CREDENTIALS_PATH, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as handle:
+            handle.write("\n".join(lines))
+    except Exception:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        raise
+
+
 def password_digest(password: str, salt: bytes | None = None, iterations: int = PASSWORD_ITERATIONS) -> tuple[str, str, int]:
     if salt is None:
         salt = secrets.token_bytes(16)
@@ -690,21 +718,25 @@ def upsert_app_user(
     password: str | None,
     updated_by: str,
     only_if_missing: bool = False,
-) -> None:
+) -> str | None:
     username = username.strip().lower()
     if not username:
-        return
+        return None
     role = "admin" if str(role).lower().startswith("admin") else "operador"
     existing = DB.execute("SELECT * FROM app_users WHERE username=?", (username,)).fetchone()
     if existing and only_if_missing:
-        return
+        return None
+    generated_random: str | None = None
     if password:
         pwd_hash, pwd_salt, iterations = password_digest(password)
     elif existing:
         pwd_hash, pwd_salt, iterations = existing["password_hash"], existing["password_salt"], existing["password_iterations"]
     else:
-        fallback = INITIAL_ADMIN_PASSWORD if role == "admin" else INITIAL_OPERATOR_PASSWORD
-        pwd_hash, pwd_salt, iterations = password_digest(fallback)
+        configured = INITIAL_ADMIN_PASSWORD if role == "admin" else INITIAL_OPERATOR_PASSWORD
+        effective_password = configured or secrets.token_urlsafe(18)
+        if not configured:
+            generated_random = effective_password
+        pwd_hash, pwd_salt, iterations = password_digest(effective_password)
     DB.execute(
         """INSERT INTO app_users(username,display_name,password_hash,password_salt,password_iterations,role,active,updated_at,updated_by)
            VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(username) DO UPDATE SET
@@ -713,6 +745,7 @@ def upsert_app_user(
            updated_at=excluded.updated_at,updated_by=excluded.updated_by""",
         (username, display_name.strip() or username, pwd_hash, pwd_salt, iterations, role, 1 if active else 0, now_iso(), updated_by),
     )
+    return generated_random
 
 
 def legacy_users_from_migration() -> list[dict[str, Any]]:
@@ -733,13 +766,21 @@ def legacy_users_from_migration() -> list[dict[str, Any]]:
 
 
 def migrate_app_users() -> None:
+    generated_credentials: list[tuple[str, str, str]] = []
+
+    def seed_user(username: str, display_name: str, role: str, active: bool, password: str | None, updated_by: str) -> None:
+        generated = upsert_app_user(username, display_name, role, active, password, updated_by, only_if_missing=True)
+        if generated:
+            generated_credentials.append((username.strip().lower(), role, generated))
+
     with DB_LOCK:
         DB.execute("BEGIN IMMEDIATE")
         try:
-            # Compatibilidade com o administrador principal da versão portátil.
-            upsert_app_user("admin", "Administrador principal", "admin", True, INITIAL_ADMIN_PASSWORD, "migração 7.5", only_if_missing=True)
+            # A conta genérica 'admin' não é mais criada por padrão.
+            if SEED_GENERIC_ADMIN:
+                seed_user("admin", "Administrador principal", "admin", True, INITIAL_ADMIN_PASSWORD, "bootstrap")
             if ADMIN_USERNAME:
-                upsert_app_user(ADMIN_USERNAME, ADMIN_USERNAME.title(), "admin", True, INITIAL_ADMIN_PASSWORD, "EXP_ADMIN_USUARIO", only_if_missing=True)
+                seed_user(ADMIN_USERNAME, ADMIN_USERNAME.title(), "admin", True, INITIAL_ADMIN_PASSWORD, "EXP_ADMIN_USUARIO")
 
             for raw in legacy_users_from_migration():
                 username = str(raw.get("Login") or raw.get("Usuario") or raw.get("Usuário") or "").strip().lower()
@@ -748,7 +789,7 @@ def migrate_app_users() -> None:
                 role = "admin" if "admin" in str(raw.get("Perfil") or "").lower() else "operador"
                 active = raw.get("Ativo", True) not in (False, "false", "0", 0, "inativo")
                 password = str(raw.get("Senha") or "").strip() or None
-                upsert_app_user(username, str(raw.get("Nome") or username), role, active, password, "migração portátil", only_if_missing=True)
+                seed_user(username, str(raw.get("Nome") or username), role, active, password, "migração portátil")
 
             current = DB.execute("SELECT value FROM storage WHERE key='conf_usuarios'").fetchone()
             if current:
@@ -768,22 +809,28 @@ def migrate_app_users() -> None:
                         password = str(raw.get("Senha") or "").strip()
                         if password in ("", PASSWORD_MASK):
                             password = None
-                        upsert_app_user(username, str(raw.get("Nome") or username), role, active, password, "migração banco", only_if_missing=True)
+                        seed_user(username, str(raw.get("Nome") or username), role, active, password, "migração banco")
 
-            # Perfis criados na versão 7.3 recebem senha inicial para poderem entrar no novo login interno.
+            # Perfis legados sem senha explícita recebem uma senha aleatória individual.
             for row in DB.execute("SELECT username,display_name,role,active FROM user_roles").fetchall():
-                initial = INITIAL_ADMIN_PASSWORD if row["role"] == "admin" else INITIAL_OPERATOR_PASSWORD
-                upsert_app_user(row["username"], row["display_name"] or row["username"], row["role"], bool(row["active"]), initial, "migração 7.3", only_if_missing=True)
+                configured = INITIAL_ADMIN_PASSWORD if row["role"] == "admin" else INITIAL_OPERATOR_PASSWORD
+                seed_user(row["username"], row["display_name"] or row["username"], row["role"], bool(row["active"]), configured, "migração 7.3")
             DB.commit()
         except Exception:
             DB.rollback()
             raise
+    _write_generated_initial_credentials(generated_credentials)
+
+
+def password_needs_security_review(row: sqlite3.Row | dict[str, Any]) -> bool:
+    # Contas ainda marcadas como criadas por bootstrap/migração devem ter a senha
+    # revisada pelo Admin. Assim não mantemos nenhum segredo legado no código.
+    updated_by = str(row["updated_by"] or "").strip().lower()
+    return updated_by == "exp_admin_usuario" or updated_by == "bootstrap" or updated_by.startswith("migra")
 
 
 def app_users_payload() -> list[dict[str, Any]]:
-    rows = DB.execute(
-        "SELECT username,display_name,role,active,updated_at,updated_by FROM app_users ORDER BY display_name,username"
-    ).fetchall()
+    rows = DB.execute("SELECT * FROM app_users ORDER BY display_name,username").fetchall()
     return [
         {
             "__uidUsuario": "WEB_" + hashlib.sha1(row["username"].encode("utf-8")).hexdigest()[:12],
@@ -795,6 +842,7 @@ def app_users_payload() -> list[dict[str, Any]]:
             "Aprovado": bool(row["active"]),
             "AtualizadoEm": row["updated_at"],
             "AtualizadoPor": row["updated_by"],
+            "RequerTrocaSenha": password_needs_security_review(row),
         }
         for row in rows
     ]
@@ -1381,8 +1429,10 @@ def session_context(handler: BaseHTTPRequestHandler) -> dict[str, Any] | None:
 
 
 def client_computer(handler: BaseHTTPRequestHandler) -> str:
-    forwarded = handler.headers.get("X-Forwarded-For", "").split(",")[0].strip()
-    return forwarded or handler.client_address[0]
+    # O nginx sobrescreve X-Real-IP. Não confiamos no primeiro X-Forwarded-For,
+    # que pode ser informado pelo próprio navegador/cliente.
+    real = handler.headers.get("X-Real-IP", "").strip()
+    return real or handler.client_address[0]
 
 
 def login_rate_key(handler: BaseHTTPRequestHandler, username: str) -> str:
@@ -1410,10 +1460,30 @@ def clear_login_failures(handler: BaseHTTPRequestHandler, username: str) -> None
 
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/10.8"
+    server_version = "NoromakExpedicao/10.9"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
+
+    def send_security_headers(self, *, html: bool = False) -> None:
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "same-origin")
+        self.send_header("Permissions-Policy", "camera=(self), microphone=(), geolocation=()")
+        if html:
+            self.send_header(
+                "Content-Security-Policy",
+                "default-src 'self'; "
+                "base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; "
+                "img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; "
+                "style-src 'self' 'unsafe-inline'; "
+                "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com; "
+                "worker-src 'self' blob: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com; "
+                "child-src 'self' blob:; "
+                "connect-src 'self' blob: http://127.0.0.1:18181 http://localhost:* https://localhost:* "
+                "ws://localhost:* wss://localhost:* ws://127.0.0.1:* wss://127.0.0.1:* "
+                "https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com https://tessdata.projectnaptha.com"
+            )
 
     def send_json(self, data: Any, status: int = 200, headers: dict[str, str] | None = None) -> None:
         body = json.dumps(data, ensure_ascii=False).encode("utf-8")
@@ -1428,6 +1498,7 @@ class AppHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Noromak-Version", APP_VERSION)
+        self.send_security_headers()
         for name, value in (headers or {}).items():
             self.send_header(name, value)
         self.end_headers()
@@ -1441,6 +1512,7 @@ class AppHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Noromak-Version", APP_VERSION)
+        self.send_security_headers()
         for name, value in (headers or {}).items():
             self.send_header(name, value)
         self.end_headers()
@@ -1477,8 +1549,9 @@ class AppHandler(BaseHTTPRequestHandler):
 
     def session_cookie_header(self, token: str, expire: bool = False, max_age: int | None = None) -> str:
         parts = [f"{SESSION_COOKIE}={token}", f"Path={BASE_PATH}", "HttpOnly", "SameSite=Lax"]
-        forwarded_proto = self.headers.get("X-Forwarded-Proto", "").lower()
-        if forwarded_proto == "https" or self.headers.get("Host", "").startswith("noromakweb.com.br"):
+        forwarded_proto = self.headers.get("X-Forwarded-Proto", "").split(",", 1)[0].strip().lower()
+        host = self.headers.get("Host", "").split(":", 1)[0].strip().lower()
+        if forwarded_proto == "https" or host == "noromakweb.com.br" or host.endswith(".noromakweb.com.br"):
             parts.append("Secure")
         if expire:
             parts.extend(["Max-Age=0", "Expires=Thu, 01 Jan 1970 00:00:00 GMT"])
@@ -1502,16 +1575,7 @@ class AppHandler(BaseHTTPRequestHandler):
         path = self.route_path()
         query = parse_qs(urlparse(self.path).query)
         if path == "/api/health":
-            self.send_json(
-                {
-                    "ok": True,
-                    "marker": APP_MARKER,
-                    "version": APP_VERSION,
-                    "base_path": BASE_PATH,
-                    "database": str(DB_PATH),
-                    "server_time": now_iso(),
-                }
-            )
+            self.send_json({"ok": True, "version": APP_VERSION, "server_time": now_iso()})
             return
         if path in ("/api/auth/session", "/api/me"):
             ctx = session_context(self)
@@ -2261,6 +2325,7 @@ class AppHandler(BaseHTTPRequestHandler):
         if full.name == "sw.js":
             self.send_header("Service-Worker-Allowed", BASE_PATH + "/")
         self.send_header("X-Noromak-Version", APP_VERSION)
+        self.send_security_headers(html=full.suffix.lower() == ".html")
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
