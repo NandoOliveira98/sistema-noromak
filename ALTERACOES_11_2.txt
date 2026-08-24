@@ -1,0 +1,25 @@
+SISTEMA DE CONFERÊNCIA NOROMAK — VERSÃO 11.2
+
+EAN MINIMIZADO NO CABEÇALHO
+
+- O formulário de EAN não ocupa mais espaço fixo na área de conferência.
+- No cabeçalho superior existe o botão compacto “＋ ADICIONAR EAN”.
+- O formulário abre somente ao clicar no botão e inicia sempre minimizado.
+- Ao abrir, o foco vai para o SKU ou diretamente para o EAN quando o SKU do pedido já foi sugerido.
+- Enter no SKU avança para o EAN; Enter no EAN salva no Banco de Produtos.
+- Depois de salvar, o painel fecha, o botão confirma “✓ EAN SALVO” e o foco retorna ao leitor principal.
+- O painel também fecha pelo botão ×, por Esc ou ao clicar fora.
+- O comportamento é adaptado para computador e celular.
+
+PERSISTÊNCIA E SEGURANÇA
+
+- Mantido o salvamento no servidor e a disponibilidade do EAN em todas as máquinas.
+- Mantida a atualização transacional da linha pendente do pedido quando ela ainda está sem EAN.
+- Mantida a confirmação antes de substituir um EAN já cadastrado.
+- Mantidos bloqueio de SKU desconhecido, auditoria e permissão específica para operadores.
+
+COMPATIBILIDADE
+
+- Mantidos importação por planilha, print/plugin, kits, histórico, etiquetas persistentes e conferência.
+- Mantido o botão compacto AVISOS, sem o painel grande de notificações na lateral.
+

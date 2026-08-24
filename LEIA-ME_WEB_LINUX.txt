@@ -1,4 +1,4 @@
-SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 11.1
+SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 11.2
 ================================================
 
 Esta versão mantém:
@@ -21,7 +21,7 @@ Copie estes arquivos para a pasta atual do projeto, preservando a pasta oculta .
 Depois execute:
 
   git add -A
-  git commit -m "adiciona edicao persistente de EAN nos pedidos"
+  git commit -m "minimiza cadastro de EAN no cabecalho"
   ./publicar.sh
 
 Não execute instalar_servidor_uma_vez.sh e não altere /etc/systemd quando a infraestrutura já estiver pronta.
@@ -92,7 +92,7 @@ VERSÃO 11.0
 - Mantidas as correções de desempenho e segurança documentadas nas versões 10.8 e 10.9.
 
 
-VERSÃO 11.1
+VERSÃO 11.2
 - Cadastro rápido de EAN na própria tela de Conferência, com campos SKU e Código de Barras / EAN.
 - Enter no SKU avança para o EAN; Enter no EAN salva no Banco de Produtos.
 - Operadores podem executar apenas esta operação específica, sem permissão geral para editar produtos.

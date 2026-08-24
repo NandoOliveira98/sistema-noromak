@@ -112,3 +112,16 @@ V11.1 — EAN DIRETO NA CONFERÊNCIA E AVISO COMPACTO
 - Aviso sonoro removido da lateral e exibido como botão compacto AVISOS no topo: OK.
 - Painel de avisos abre sob demanda, contém som/volume/teste e fecha com Esc: OK.
 - Console do navegador após login e fluxo final: sem erros ou avisos.
+
+
+V11.2 — CADASTRO DE EAN MINIMIZADO NO CABEÇALHO
+- Formulário removido da área fixa da conferência e exibido somente pelo botão “＋ ADICIONAR EAN”: OK.
+- Painel inicia fechado e abre com foco automático no SKU ou no EAN sugerido: OK.
+- Enter no SKU avança ao EAN; Enter no EAN salva no servidor: OK.
+- Após salvar, painel fecha, botão exibe “✓ EAN SALVO” e foco retorna ao leitor principal: OK.
+- Fechamento pelo botão ×, por Esc e por clique fora: OK.
+- Layout validado em computador e em viewport de celular: OK.
+- Regressão de EAN por linha/global, kits, rascunho, histórico, etiquetas, conclusão, gzip, CSP e X-Real-IP: OK.
+- Endpoint específico de EAN, restrição de operador, criação por SKU, transação e auditoria: OK.
+- Python, JavaScript inline/externo e manifestos: OK.
+- Console do navegador no fluxo final e em tela pequena: sem erros ou avisos.

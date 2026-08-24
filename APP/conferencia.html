@@ -7,11 +7,11 @@
 <meta name="application-name" content="Noromak Conferência">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="manifest" href="/expedicao/manifest-conferencia.webmanifest?v=11.1" crossorigin="use-credentials">
-<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/conferencia-180.png?v=11.1">
-<link rel="icon" href="/favicon.ico?v=11.1" sizes="any">
-<link rel="shortcut icon" href="/favicon.ico?v=11.1">
-<link rel="stylesheet" href="/expedicao/pwa-install.css?v=11.1">
+<link rel="manifest" href="/expedicao/manifest-conferencia.webmanifest?v=11.2" crossorigin="use-credentials">
+<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/conferencia-180.png?v=11.2">
+<link rel="icon" href="/favicon.ico?v=11.2" sizes="any">
+<link rel="shortcut icon" href="/favicon.ico?v=11.2">
+<link rel="stylesheet" href="/expedicao/pwa-install.css?v=11.2">
 <title>Noromak - Conferência em Rede</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
@@ -138,10 +138,18 @@
   .btn-header:hover { background: rgba(255,255,255,0.24); }
   .autosave-status { display:block; font-size:10px; opacity:.9; margin-top:3px; }
 
-  .ean-rapido-card { margin:12px 0 14px; padding:11px 12px; border:1px solid #b9cce0; border-left:5px solid var(--secondary); border-radius:8px; background:#f7fafc; box-shadow:0 2px 7px rgba(31,74,118,.06); }
+  .ean-rapido-topo { position:relative; display:inline-flex; align-items:center; }
+  .btn-ean-rapido-resumo { background:#2e7d32; border-color:rgba(255,255,255,.38); white-space:nowrap; }
+  .btn-ean-rapido-resumo:hover, .ean-rapido-topo.aberto .btn-ean-rapido-resumo { background:#256829; }
+  .btn-ean-rapido-resumo.salvo { background:#176d34; box-shadow:0 0 0 3px rgba(102,207,114,.2); }
+  .ean-rapido-card { display:none; position:fixed; top:70px; right:16px; z-index:17100; width:min(900px,calc(100vw - 32px)); margin:0; padding:13px 14px; border:1px solid #b9cce0; border-top:5px solid var(--secondary); border-radius:9px; background:#f7fafc; color:#263b50; box-shadow:0 18px 45px rgba(0,0,0,.28); }
+  .ean-rapido-topo.aberto .ean-rapido-card { display:block; }
   .ean-rapido-cabecalho { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px; }
+  .ean-rapido-cabecalho-texto { min-width:0; }
   .ean-rapido-titulo { color:var(--primary); font-size:13px; font-weight:900; }
   .ean-rapido-subtitulo { color:#627487; font-size:10px; line-height:1.35; }
+  .ean-rapido-fechar { flex:0 0 auto; width:30px; height:30px; border:0; border-radius:50%; background:#e2e9f0; color:#294763; cursor:pointer; font-size:18px; line-height:1; }
+  .ean-rapido-fechar:hover { background:#d3dde6; }
   .ean-rapido-campos { display:grid; grid-template-columns:minmax(150px,.8fr) minmax(220px,1fr) auto; gap:8px; align-items:end; }
   .ean-rapido-campo { display:flex; flex-direction:column; gap:4px; color:#344e68; font-size:10px; font-weight:900; text-transform:uppercase; }
   .ean-rapido-campo input { min-width:0; width:100%; padding:10px 11px; border:1px solid #b6c4d2; border-radius:6px; background:#fff; color:#1e2d3d; font-family:Consolas,monospace; font-size:14px; font-weight:750; text-transform:none; }
@@ -290,7 +298,10 @@
     th, td { padding:9px 8px; font-size:12px; }
     .img-produto { width:52px; height:52px; }
     .modal-card, .modal-nota-card, .modal-reimpressao-card { width:96vw !important; max-width:96vw; padding:18px; }
-    .ean-rapido-cabecalho { align-items:flex-start; flex-direction:column; gap:3px; }
+    .ean-rapido-topo { position:static; flex:1 1 auto; }
+    .btn-ean-rapido-resumo { width:100%; min-height:40px; }
+    .ean-rapido-card { top:12px; right:12px; left:12px; width:auto; max-height:calc(100dvh - 24px); overflow:auto; }
+    .ean-rapido-cabecalho { align-items:flex-start; gap:8px; }
     .ean-rapido-campos { grid-template-columns:1fr; }
     .btn-salvar-ean-rapido { width:100%; min-height:44px; }
     .box-card { width:calc(100vw - 24px); padding:28px 20px; }
@@ -308,7 +319,7 @@
 </style>
 <script src="/expedicao/shared-storage.js"></script>
 <script src="/expedicao/web-auth.js"></script>
-<script defer src="/expedicao/pwa-install.js?v=11.1"></script>
+<script defer src="/expedicao/pwa-install.js?v=11.2"></script>
 </head>
 
 <body>
@@ -316,9 +327,9 @@
 <div id="telaLogin">
   <div class="box-card">
     <div class="logo-box">
-      <img src="/nk-logo.svg?v=11.1" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=11.1';">
+      <img src="/nk-logo.svg?v=11.2" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=11.2';">
     </div>
-    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 11.1 — EAN direto na conferência</div>
+    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 11.2 — EAN direto na conferência</div>
 
     <div class="box-upload-rede" style="border-style:solid;">
       <label>🗄 PEDIDOS COMPARTILHADOS NA REDE:</label>
@@ -408,7 +419,7 @@
 
 <header>
   <div class="logo-mini-box">
-    <img src="/grupo-noromak.png?v=11.1" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=11.1';">
+    <img src="/grupo-noromak.png?v=11.2" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=11.2';">
   </div>
   <div class="usuario-area">
     <div style="text-align: right;">
@@ -417,6 +428,28 @@
       <span id="autosaveStatus" class="autosave-status">Salvamento automático ativo</span>
     </div>
     <button type="button" class="pwa-install-btn pwa-header" data-pwa-install>⬇ INSTALAR</button>
+    <div id="eanRapidoTopo" class="ean-rapido-topo">
+      <button id="btnAbrirEanRapido" class="btn-header btn-ean-rapido-resumo" type="button" onclick="alternarPainelEanRapido()" aria-controls="painelEanRapido" aria-expanded="false">＋ ADICIONAR EAN</button>
+      <section id="painelEanRapido" class="ean-rapido-card" aria-labelledby="eanRapidoTitulo">
+        <div class="ean-rapido-cabecalho">
+          <div class="ean-rapido-cabecalho-texto">
+            <div id="eanRapidoTitulo" class="ean-rapido-titulo">＋ ADICIONAR EAN AO BANCO DE PRODUTOS</div>
+            <div class="ean-rapido-subtitulo">Informe o SKU e bipe o EAN. Ao salvar, o cadastro fica disponível para todas as máquinas.</div>
+          </div>
+          <button class="ean-rapido-fechar" type="button" onclick="fecharPainelEanRapido()" aria-label="Fechar cadastro de EAN">×</button>
+        </div>
+        <div class="ean-rapido-campos">
+          <label class="ean-rapido-campo">SKU DO PRODUTO
+            <input id="eanRapidoSku" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Digite o SKU" oninput="this.dataset.sugerido='0';atualizarPreviaEanRapido()" onkeydown="atalhoEanRapido(event,'sku')">
+          </label>
+          <label class="ean-rapido-campo">CÓDIGO DE BARRAS / EAN
+            <input id="eanRapidoCodigo" type="text" inputmode="numeric" enterkeyhint="done" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Bipe ou digite o EAN" onkeydown="atalhoEanRapido(event,'ean')">
+          </label>
+          <button id="btnSalvarEanRapido" class="btn-salvar-ean-rapido" type="button" onclick="salvarEanRapidoConferencia()">💾 SALVAR NO BANCO</button>
+        </div>
+        <div id="eanRapidoStatus" class="ean-rapido-status" role="status">Use esta função quando o produto do pedido estiver sem EAN.</div>
+      </section>
+    </div>
     <div id="alertaNovosPedidosTopo" class="alerta-novos-pedidos-topo"></div>
     <button class="btn-header" onclick="alternarPainelAtalhos()">⌨ ATALHOS</button>
     <button class="btn-header" onclick="abrirHistorico()">🕘 HISTÓRICO</button>
@@ -470,22 +503,6 @@
     <h2 id="titulo" style="color: var(--primary);">Nenhum pedido selecionado</h2>
     <div id="cliente" style="font-size: 14px; margin-bottom: 4px;"></div>
     <div id="marketplace" style="font-size: 14px; margin-bottom: 8px;"></div>
-    <section class="ean-rapido-card" aria-labelledby="eanRapidoTitulo">
-      <div class="ean-rapido-cabecalho">
-        <div id="eanRapidoTitulo" class="ean-rapido-titulo">＋ ADICIONAR EAN AO BANCO DE PRODUTOS</div>
-        <div class="ean-rapido-subtitulo">Informe o SKU e bipe o EAN. Ao salvar, o cadastro fica disponível para todas as máquinas.</div>
-      </div>
-      <div class="ean-rapido-campos">
-        <label class="ean-rapido-campo">SKU DO PRODUTO
-          <input id="eanRapidoSku" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Digite o SKU" oninput="this.dataset.sugerido='0';atualizarPreviaEanRapido()" onkeydown="atalhoEanRapido(event,'sku')">
-        </label>
-        <label class="ean-rapido-campo">CÓDIGO DE BARRAS / EAN
-          <input id="eanRapidoCodigo" type="text" inputmode="numeric" enterkeyhint="done" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Bipe ou digite o EAN" onkeydown="atalhoEanRapido(event,'ean')">
-        </label>
-        <button id="btnSalvarEanRapido" class="btn-salvar-ean-rapido" type="button" onclick="salvarEanRapidoConferencia()">💾 SALVAR NO BANCO</button>
-      </div>
-      <div id="eanRapidoStatus" class="ean-rapido-status" role="status">Use esta função quando o produto do pedido estiver sem EAN.</div>
-    </section>
     <div id="pedidoHistoricoAnterior" class="pedido-historico-anterior"></div>
     <div id="etiquetaPedidoStatus" class="etiqueta-status etiqueta-erro">Etiqueta não verificada</div>
 
@@ -1378,6 +1395,52 @@ function definirStatusEanRapido(texto, tipo = "") {
   status.textContent = texto;
 }
 
+function fecharPainelEanRapido() {
+  const box = document.getElementById("eanRapidoTopo");
+  const botao = document.getElementById("btnAbrirEanRapido");
+  if (!box || !botao) return;
+  box.classList.remove("aberto");
+  botao.setAttribute("aria-expanded", "false");
+}
+
+function alternarPainelEanRapido(forcar) {
+  const box = document.getElementById("eanRapidoTopo");
+  const botao = document.getElementById("btnAbrirEanRapido");
+  if (!box || !botao) return;
+  const abrir = typeof forcar === "boolean" ? forcar : !box.classList.contains("aberto");
+  box.classList.toggle("aberto", abrir);
+  botao.setAttribute("aria-expanded", abrir ? "true" : "false");
+  if (!abrir) return;
+  window.alternarPainelAlertaPedidos?.(false);
+  sugerirSkuSemEanPedidoAtual();
+  setTimeout(() => {
+    const campoSku = document.getElementById("eanRapidoSku");
+    const campoEan = document.getElementById("eanRapidoCodigo");
+    const alvo = String(campoSku?.value || "").trim() ? campoEan : campoSku;
+    alvo?.focus();
+    alvo?.select?.();
+  }, 0);
+}
+
+function sinalizarEanSalvoNoTopo() {
+  const botao = document.getElementById("btnAbrirEanRapido");
+  if (!botao) return;
+  clearTimeout(Number(botao.dataset.timerConfirmacao || 0));
+  botao.classList.add("salvo");
+  botao.textContent = "✓ EAN SALVO";
+  const timer = setTimeout(() => {
+    botao.classList.remove("salvo");
+    botao.textContent = "＋ ADICIONAR EAN";
+    botao.dataset.timerConfirmacao = "";
+  }, 2800);
+  botao.dataset.timerConfirmacao = String(timer);
+}
+
+document.addEventListener("pointerdown", event => {
+  const box = document.getElementById("eanRapidoTopo");
+  if (box?.classList.contains("aberto") && !box.contains(event.target)) fecharPainelEanRapido();
+});
+
 function atualizarPreviaEanRapido() {
   const sku = String(document.getElementById("eanRapidoSku")?.value || "").trim();
   if (!sku) {
@@ -1475,6 +1538,8 @@ function salvarEanRapidoConferencia() {
     definirStatusEanRapido(`${criado}: SKU ${sku} → EAN ${ean}.${pedidoAtualizado}`, "ok");
     if (campoSku) { campoSku.value = ""; campoSku.dataset.sugerido = "0"; }
     if (campoEan) campoEan.value = "";
+    fecharPainelEanRapido();
+    sinalizarEanSalvoNoTopo();
     const leitor = document.getElementById("codigo");
     if (leitor && !leitor.disabled) {
       leitor.focus();
@@ -3091,7 +3156,8 @@ window.addEventListener("keydown", function(event) {
   }
   if (tecla === "Escape") {
     event.preventDefault();
-    if (document.getElementById("scannerCameraOverlay")?.classList.contains("ativo")) fecharScannerCamera();
+    if (document.getElementById("eanRapidoTopo")?.classList.contains("aberto")) fecharPainelEanRapido();
+    else if (document.getElementById("scannerCameraOverlay")?.classList.contains("ativo")) fecharScannerCamera();
     else fecharJanelaOuLimparLeitura();
     return;
   }

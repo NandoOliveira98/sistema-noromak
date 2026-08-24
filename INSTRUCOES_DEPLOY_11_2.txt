@@ -1,0 +1,39 @@
+ATUALIZAÇÃO NOROMAK EXPEDIÇÃO 11.2 — DEPLOY
+============================================
+
+O ZIP é uma atualização por sobreposição. Ele não contém banco SQLite, .env,
+backups, segredos do QZ, arquivos de migração nem a pasta .git.
+
+1. Na máquina usada para publicar, confirme o estado do projeto:
+
+   git status
+
+2. Extraia o conteúdo do ZIP dentro da pasta atual do projeto, preservando a
+   pasta .git e o arquivo .env da instalação.
+
+3. Confira e publique:
+
+   git status --short
+   git --no-pager diff --stat
+   git add -A
+   git commit -m "minimiza cadastro de EAN no cabecalho"
+   ./publicar.sh
+
+4. Verifique a aplicação:
+
+   ssh expedicao "curl -fsS http://127.0.0.1:8100/expedicao/api/health"
+   ./verificar_servidor.sh
+
+   A API deve responder com version 11.2.
+
+5. Faça Ctrl+F5 em https://noromakweb.com.br/expedicao/conferencia.
+
+   Confirme:
+   - o formulário grande não aparece mais no conteúdo da conferência;
+   - existe o botão “＋ ADICIONAR EAN” no cabeçalho superior;
+   - ao clicar, aparecem os campos SKU e Código de Barras / EAN;
+   - Enter salva, fecha o painel e devolve o foco ao leitor principal;
+   - o botão AVISOS continua compacto no cabeçalho.
+
+Não execute instalar_servidor_uma_vez.sh em uma VPS já configurada.
+
