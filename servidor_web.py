@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sistema de Conferência Noromak — edição Web/Linux 10.9.
+"""Sistema de Conferência Noromak — edição Web/Linux 9.8.
 
 Sem dependências externas: usa apenas a biblioteca padrão do Python.
 - Escuta em 127.0.0.1:8100.
@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-APP_VERSION = "10.9"
+APP_VERSION = "11.0"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -49,23 +49,21 @@ MAX_BODY = 100 * 1024 * 1024
 LOCK_STALE_SECONDS = 5 * 60
 PRINT_CLAIM_STALE_SECONDS = int(os.getenv("EXP_PRINT_CLAIM_STALE_SECONDS", "120"))
 PRINT_STATION_ONLINE_SECONDS = int(os.getenv("EXP_PRINT_STATION_ONLINE_SECONDS", "20"))
-AUTH_CACHE_SECONDS = 180
 SESSION_COOKIE = "expedicao_estoque"
 SESSION_TTL_SECONDS = int(os.getenv("EXP_SESSION_TTL_SECONDS", str(12 * 60 * 60)))
 STATION_SESSION_TTL_SECONDS = int(os.getenv("EXP_STATION_SESSION_TTL_SECONDS", str(180 * 24 * 60 * 60)))
 PASSWORD_ITERATIONS = int(os.getenv("EXP_PASSWORD_ITERATIONS", "240000"))
 PASSWORD_MASK = "********"
-INITIAL_ADMIN_PASSWORD = (os.getenv("EXP_ADMIN_SENHA") or "").strip() or None
-INITIAL_OPERATOR_PASSWORD = (os.getenv("EXP_USUARIO_SENHA_INICIAL") or "").strip() or None
-SEED_GENERIC_ADMIN = os.getenv("EXP_SEED_GENERIC_ADMIN", "0").strip().lower() in {"1", "true", "yes", "sim"}
+INITIAL_ADMIN_PASSWORD = os.getenv("EXP_ADMIN_SENHA", "").strip()
+INITIAL_OPERATOR_PASSWORD = os.getenv("EXP_USUARIO_SENHA_INICIAL", "").strip()
 INITIAL_CREDENTIALS_PATH = Path(
-    os.getenv("EXP_INITIAL_CREDENTIALS_PATH", str(DB_PATH.parent / "CREDENCIAIS_INICIAIS.txt"))
+    os.getenv("EXP_CREDENCIAIS_INICIAIS_PATH", str(DB_PATH.parent / "CREDENCIAIS_INICIAIS.txt"))
 )
 
 DB_LOCK = threading.RLock()
 AUTH_LOCK = threading.Lock()
-AUTH_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 LOGIN_ATTEMPTS: dict[str, list[float]] = {}
+GENERATED_INITIAL_CREDENTIALS: dict[str, str] = {}
 
 KNOWN_KEYS = [
     "conf_pedidos",
@@ -665,33 +663,6 @@ def ensure_storage_defaults() -> None:
         DB.commit()
 
 
-def _write_generated_initial_credentials(credentials: list[tuple[str, str, str]]) -> None:
-    """Grava credenciais aleatórias de bootstrap fora do repositório, com modo 600."""
-    if not credentials:
-        return
-    INITIAL_CREDENTIALS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    lines = [
-        "# Credenciais iniciais geradas automaticamente pelo Sistema de Expedição",
-        f"# Gerado em: {now_iso()}",
-        "# Troque estas senhas no primeiro acesso e apague este arquivo depois.",
-        "",
-    ]
-    for username, role, password in credentials:
-        lines.append(f"{username} ({role}): {password}")
-    lines.append("")
-    fd = os.open(INITIAL_CREDENTIALS_PATH, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-    try:
-        os.chmod(INITIAL_CREDENTIALS_PATH, 0o600)
-        with os.fdopen(fd, "a", encoding="utf-8") as handle:
-            handle.write("\n".join(lines))
-    except Exception:
-        try:
-            os.close(fd)
-        except OSError:
-            pass
-        raise
-
-
 def password_digest(password: str, salt: bytes | None = None, iterations: int = PASSWORD_ITERATIONS) -> tuple[str, str, int]:
     if salt is None:
         salt = secrets.token_bytes(16)
@@ -710,6 +681,38 @@ def password_matches(password: str, row: sqlite3.Row | dict[str, Any]) -> bool:
         return False
 
 
+def persist_generated_credentials() -> None:
+    """Grava credenciais de bootstrap fora do código, acessíveis só ao dono."""
+    if not GENERATED_INITIAL_CREDENTIALS:
+        return
+    INITIAL_CREDENTIALS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "CREDENCIAIS INICIAIS — SISTEMA DE EXPEDIÇÃO",
+        "Troque estas senhas no primeiro acesso e depois remova este arquivo.",
+        "",
+    ]
+    for username, password in sorted(GENERATED_INITIAL_CREDENTIALS.items()):
+        lines.extend([f"Usuário: {username}", f"Senha: {password}", ""])
+    INITIAL_CREDENTIALS_PATH.write_text("\n".join(lines), encoding="utf-8")
+    try:
+        os.chmod(INITIAL_CREDENTIALS_PATH, 0o600)
+    except OSError:
+        pass
+
+
+def initial_password_for(username: str, role: str) -> str:
+    configured = INITIAL_ADMIN_PASSWORD if role == "admin" else INITIAL_OPERATOR_PASSWORD
+    if configured:
+        return configured
+    username = username.strip().lower()
+    password = GENERATED_INITIAL_CREDENTIALS.get(username)
+    if not password:
+        password = secrets.token_urlsafe(18)
+        GENERATED_INITIAL_CREDENTIALS[username] = password
+        persist_generated_credentials()
+    return password
+
+
 def upsert_app_user(
     username: str,
     display_name: str,
@@ -718,25 +721,21 @@ def upsert_app_user(
     password: str | None,
     updated_by: str,
     only_if_missing: bool = False,
-) -> str | None:
+) -> None:
     username = username.strip().lower()
     if not username:
-        return None
+        return
     role = "admin" if str(role).lower().startswith("admin") else "operador"
     existing = DB.execute("SELECT * FROM app_users WHERE username=?", (username,)).fetchone()
     if existing and only_if_missing:
-        return None
-    generated_random: str | None = None
+        return
     if password:
         pwd_hash, pwd_salt, iterations = password_digest(password)
     elif existing:
         pwd_hash, pwd_salt, iterations = existing["password_hash"], existing["password_salt"], existing["password_iterations"]
     else:
-        configured = INITIAL_ADMIN_PASSWORD if role == "admin" else INITIAL_OPERATOR_PASSWORD
-        effective_password = configured or secrets.token_urlsafe(18)
-        if not configured:
-            generated_random = effective_password
-        pwd_hash, pwd_salt, iterations = password_digest(effective_password)
+        fallback = initial_password_for(username, role)
+        pwd_hash, pwd_salt, iterations = password_digest(fallback)
     DB.execute(
         """INSERT INTO app_users(username,display_name,password_hash,password_salt,password_iterations,role,active,updated_at,updated_by)
            VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(username) DO UPDATE SET
@@ -745,7 +744,6 @@ def upsert_app_user(
            updated_at=excluded.updated_at,updated_by=excluded.updated_by""",
         (username, display_name.strip() or username, pwd_hash, pwd_salt, iterations, role, 1 if active else 0, now_iso(), updated_by),
     )
-    return generated_random
 
 
 def legacy_users_from_migration() -> list[dict[str, Any]]:
@@ -766,22 +764,9 @@ def legacy_users_from_migration() -> list[dict[str, Any]]:
 
 
 def migrate_app_users() -> None:
-    generated_credentials: list[tuple[str, str, str]] = []
-
-    def seed_user(username: str, display_name: str, role: str, active: bool, password: str | None, updated_by: str) -> None:
-        generated = upsert_app_user(username, display_name, role, active, password, updated_by, only_if_missing=True)
-        if generated:
-            generated_credentials.append((username.strip().lower(), role, generated))
-
     with DB_LOCK:
         DB.execute("BEGIN IMMEDIATE")
         try:
-            # A conta genérica 'admin' não é mais criada por padrão.
-            if SEED_GENERIC_ADMIN:
-                seed_user("admin", "Administrador principal", "admin", True, INITIAL_ADMIN_PASSWORD, "bootstrap")
-            if ADMIN_USERNAME:
-                seed_user(ADMIN_USERNAME, ADMIN_USERNAME.title(), "admin", True, INITIAL_ADMIN_PASSWORD, "EXP_ADMIN_USUARIO")
-
             for raw in legacy_users_from_migration():
                 username = str(raw.get("Login") or raw.get("Usuario") or raw.get("Usuário") or "").strip().lower()
                 if not username:
@@ -789,7 +774,7 @@ def migrate_app_users() -> None:
                 role = "admin" if "admin" in str(raw.get("Perfil") or "").lower() else "operador"
                 active = raw.get("Ativo", True) not in (False, "false", "0", 0, "inativo")
                 password = str(raw.get("Senha") or "").strip() or None
-                seed_user(username, str(raw.get("Nome") or username), role, active, password, "migração portátil")
+                upsert_app_user(username, str(raw.get("Nome") or username), role, active, password, "migração portátil", only_if_missing=True)
 
             current = DB.execute("SELECT value FROM storage WHERE key='conf_usuarios'").fetchone()
             if current:
@@ -809,28 +794,29 @@ def migrate_app_users() -> None:
                         password = str(raw.get("Senha") or "").strip()
                         if password in ("", PASSWORD_MASK):
                             password = None
-                        seed_user(username, str(raw.get("Nome") or username), role, active, password, "migração banco")
+                        upsert_app_user(username, str(raw.get("Nome") or username), role, active, password, "migração banco", only_if_missing=True)
 
-            # Perfis legados sem senha explícita recebem uma senha aleatória individual.
+            # Perfis criados na versão 7.3 recebem senha inicial para poderem entrar no novo login interno.
             for row in DB.execute("SELECT username,display_name,role,active FROM user_roles").fetchall():
-                configured = INITIAL_ADMIN_PASSWORD if row["role"] == "admin" else INITIAL_OPERATOR_PASSWORD
-                seed_user(row["username"], row["display_name"] or row["username"], row["role"], bool(row["active"]), configured, "migração 7.3")
+                initial = initial_password_for(row["username"], row["role"])
+                upsert_app_user(row["username"], row["display_name"] or row["username"], row["role"], bool(row["active"]), initial, "migração 7.3", only_if_missing=True)
+
+            # Instalação realmente nova: cria somente o administrador configurado.
+            # A antiga conta genérica ``admin`` não é mais criada automaticamente.
+            if not DB.execute("SELECT 1 FROM app_users LIMIT 1").fetchone():
+                username = ADMIN_USERNAME or "luis"
+                initial = initial_password_for(username, "admin")
+                upsert_app_user(username, username.title(), "admin", True, initial, "bootstrap seguro 10.9", only_if_missing=True)
             DB.commit()
         except Exception:
             DB.rollback()
             raise
-    _write_generated_initial_credentials(generated_credentials)
-
-
-def password_needs_security_review(row: sqlite3.Row | dict[str, Any]) -> bool:
-    # Contas ainda marcadas como criadas por bootstrap/migração devem ter a senha
-    # revisada pelo Admin. Assim não mantemos nenhum segredo legado no código.
-    updated_by = str(row["updated_by"] or "").strip().lower()
-    return updated_by == "exp_admin_usuario" or updated_by == "bootstrap" or updated_by.startswith("migra")
 
 
 def app_users_payload() -> list[dict[str, Any]]:
-    rows = DB.execute("SELECT * FROM app_users ORDER BY display_name,username").fetchall()
+    rows = DB.execute(
+        "SELECT username,display_name,role,active,updated_at,updated_by FROM app_users ORDER BY display_name,username"
+    ).fetchall()
     return [
         {
             "__uidUsuario": "WEB_" + hashlib.sha1(row["username"].encode("utf-8")).hexdigest()[:12],
@@ -842,7 +828,7 @@ def app_users_payload() -> list[dict[str, Any]]:
             "Aprovado": bool(row["active"]),
             "AtualizadoEm": row["updated_at"],
             "AtualizadoPor": row["updated_by"],
-            "RequerTrocaSenha": password_needs_security_review(row),
+            "SenhaInicialPendente": str(row["updated_by"] or "").lower().startswith(("migração", "bootstrap")),
         }
         for row in rows
     ]
@@ -1429,8 +1415,8 @@ def session_context(handler: BaseHTTPRequestHandler) -> dict[str, Any] | None:
 
 
 def client_computer(handler: BaseHTTPRequestHandler) -> str:
-    # O nginx sobrescreve X-Real-IP. Não confiamos no primeiro X-Forwarded-For,
-    # que pode ser informado pelo próprio navegador/cliente.
+    # O nginx sobrescreve X-Real-IP com o CF-Connecting-IP validado. O primeiro
+    # X-Forwarded-For pode ser fornecido pelo próprio cliente e não é confiável.
     real = handler.headers.get("X-Real-IP", "").strip()
     return real or handler.client_address[0]
 
@@ -1460,45 +1446,53 @@ def clear_login_failures(handler: BaseHTTPRequestHandler, username: str) -> None
 
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/10.9"
+    server_version = "NoromakExpedicao/11.0"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
 
-    def send_security_headers(self, *, html: bool = False) -> None:
+    def send_security_headers(self) -> None:
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "same-origin")
         self.send_header("Permissions-Policy", "camera=(self), microphone=(), geolocation=()")
-        if html:
-            self.send_header(
-                "Content-Security-Policy",
-                "default-src 'self'; "
-                "base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; "
-                "img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; "
-                "style-src 'self' 'unsafe-inline'; "
-                "script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com; "
-                "worker-src 'self' blob: https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com; "
-                "child-src 'self' blob:; "
-                "connect-src 'self' blob: http://127.0.0.1:18181 http://localhost:* https://localhost:* "
-                "ws://localhost:* wss://localhost:* ws://127.0.0.1:* wss://127.0.0.1:* "
-                "https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com https://tessdata.projectnaptha.com"
-            )
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'self'; "
+            "script-src 'self' 'unsafe-inline' https://cdnjs.cloudflare.com https://cdn.jsdelivr.net https://unpkg.com; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: blob:; font-src 'self' data:; "
+            "connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:* wss://127.0.0.1:* "
+            "http://localhost:* ws://localhost:* wss://localhost:* https://cdn.jsdelivr.net https://unpkg.com; "
+            "worker-src 'self' blob: https://cdn.jsdelivr.net https://unpkg.com; "
+            "object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'",
+        )
+
+    def encoded_body(self, body: bytes, content_type: str) -> tuple[bytes, bool]:
+        accepts_gzip = "gzip" in self.headers.get("Accept-Encoding", "").lower()
+        compressible = (
+            content_type.startswith("text/")
+            or "json" in content_type
+            or "javascript" in content_type
+            or "manifest" in content_type
+            or "svg" in content_type
+        )
+        if accepts_gzip and compressible and len(body) >= 1024:
+            return gzip.compress(body, compresslevel=6), True
+        return body, False
 
     def send_json(self, data: Any, status: int = 200, headers: dict[str, str] | None = None) -> None:
-        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
-        comprimido = len(body) >= 1024 and "gzip" in self.headers.get("Accept-Encoding", "").lower()
-        if comprimido:
-            body = gzip.compress(body, compresslevel=5)
+        content_type = "application/json; charset=utf-8"
+        body, compressed = self.encoded_body(json.dumps(data, ensure_ascii=False).encode("utf-8"), content_type)
         self.send_response(status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        if comprimido:
-            self.send_header("Content-Encoding", "gzip")
-            self.send_header("Vary", "Accept-Encoding")
+        self.send_security_headers()
+        self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Vary", "Accept-Encoding")
+        if compressed:
+            self.send_header("Content-Encoding", "gzip")
         self.send_header("X-Noromak-Version", APP_VERSION)
-        self.send_security_headers()
         for name, value in (headers or {}).items():
             self.send_header(name, value)
         self.end_headers()
@@ -1506,13 +1500,16 @@ class AppHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def send_text(self, text: str, status: int = 200, content_type: str = "text/plain; charset=utf-8", headers: dict[str, str] | None = None) -> None:
-        body = text.encode("utf-8")
+        body, compressed = self.encoded_body(text.encode("utf-8"), content_type)
         self.send_response(status)
+        self.send_security_headers()
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
+        self.send_header("Vary", "Accept-Encoding")
+        if compressed:
+            self.send_header("Content-Encoding", "gzip")
         self.send_header("X-Noromak-Version", APP_VERSION)
-        self.send_security_headers()
         for name, value in (headers or {}).items():
             self.send_header(name, value)
         self.end_headers()
@@ -1575,7 +1572,13 @@ class AppHandler(BaseHTTPRequestHandler):
         path = self.route_path()
         query = parse_qs(urlparse(self.path).query)
         if path == "/api/health":
-            self.send_json({"ok": True, "version": APP_VERSION, "server_time": now_iso()})
+            self.send_json(
+                {
+                    "ok": True,
+                    "version": APP_VERSION,
+                    "server_time": now_iso(),
+                }
+            )
             return
         if path in ("/api/auth/session", "/api/me"):
             ctx = session_context(self)
@@ -1641,6 +1644,11 @@ class AppHandler(BaseHTTPRequestHandler):
             ctx = self.auth()
             if ctx is not None:
                 self.handle_storage_post(ctx)
+            return
+        if path == "/api/order-ean":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                self.handle_order_ean(ctx)
             return
         if path == "/api/order-lock":
             ctx = self.auth()
@@ -1774,13 +1782,15 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             versions_arg = (query.get("versions") or [""])[0]
             if versions_arg:
-                solicitadas = [key for key in versions_arg.split(",") if key]
-                versions: dict[str, int] = {key: 0 for key in solicitadas}
-                if solicitadas:
-                    placeholders = ",".join("?" for _ in solicitadas)
-                    for row in DB.execute(f"SELECT key,version FROM storage WHERE key IN ({placeholders})", solicitadas):
-                        versions[str(row["key"])] = int(row["version"] or 0)
-                self.send_json({"versions": versions})
+                requested = [key.strip() for key in versions_arg.split(",") if key.strip()]
+                rows = {
+                    row["key"]: int(row["version"])
+                    for row in DB.execute(
+                        f"SELECT key,version FROM storage WHERE key IN ({','.join('?' for _ in requested)})",
+                        requested,
+                    ).fetchall()
+                } if requested else {}
+                self.send_json({"versions": {key: rows.get(key, 0) for key in requested}})
                 return
             keys_arg = (query.get("keys") or [""])[0]
             if keys_arg:
@@ -1825,6 +1835,149 @@ class AppHandler(BaseHTTPRequestHandler):
             )
             audit(ctx["username"], "storage.save", key)
             self.send_json({"ok": True, "value": value, "version": version, "updated_at": updated})
+        except (ValueError, json.JSONDecodeError) as exc:
+            self.send_json({"error": str(exc)}, 400)
+        except Exception as exc:
+            self.send_json({"error": str(exc)}, 409)
+
+    def handle_order_ean(self, ctx: dict[str, Any]) -> None:
+        """Atualiza uma linha pendente e, opcionalmente, o produto em uma transação."""
+        try:
+            req = self.read_json()
+            uid = str(req.get("uid") or "").strip()
+            ean = str(req.get("ean") or "").strip()
+            ref_order = str(req.get("pedido") or "").strip()
+            ref_sku = str(req.get("sku") or "").strip()
+            old_ean = str(req.get("oldEan") or "").strip()
+            ref_description = str(req.get("descricao") or "").strip()
+            update_product = bool(req.get("updateProduct"))
+            if not uid:
+                raise ValueError("Identificação da linha não informada.")
+            if len(ean) > 128 or any(ord(char) < 32 for char in ean):
+                raise ValueError("Código de barras inválido ou muito longo.")
+
+            def parse_rows(key: str) -> tuple[list[dict[str, Any]], int]:
+                value, version, _ = get_storage(key)
+                try:
+                    rows = json.loads(value or "[]")
+                except Exception as exc:
+                    raise ValueError(f"Os dados de {key} estão inválidos.") from exc
+                if not isinstance(rows, list):
+                    raise ValueError(f"Os dados de {key} não são uma lista.")
+                return [row for row in rows if isinstance(row, dict)], version
+
+            def valid_order_row(row: dict[str, Any]) -> bool:
+                try:
+                    quantity = float(str(row.get("Quantidade") or "0").replace(",", "."))
+                except ValueError:
+                    quantity = 0
+                return bool(
+                    normalize(order_number(row))
+                    and (normalize(row.get("SKU")) or normalize(row.get("Código de Barras")))
+                    and quantity > 0
+                )
+
+            def write_rows(key: str, rows: list[dict[str, Any]], version: int, timestamp: str) -> int:
+                next_version = version + 1
+                DB.execute(
+                    """INSERT INTO storage(key,value,version,updated_at) VALUES(?,?,?,?)
+                       ON CONFLICT(key) DO UPDATE SET value=excluded.value,version=excluded.version,updated_at=excluded.updated_at""",
+                    (key, json_dumps(rows), next_version, timestamp),
+                )
+                return next_version
+
+            with DB_LOCK:
+                DB.execute("BEGIN IMMEDIATE")
+                try:
+                    pending, pending_version = parse_rows("conf_pedidos")
+                    drafts, draft_version = parse_rows("conf_pedidos_rascunhos")
+                    locations: list[tuple[str, int, dict[str, Any]]] = []
+                    for key, rows in (("conf_pedidos", pending), ("conf_pedidos_rascunhos", drafts)):
+                        for index, row in enumerate(rows):
+                            if str(row.get("__uidLinha") or row.get("__uidPedido") or "").strip() == uid:
+                                locations.append((key, index, row))
+                    if not locations and ref_order:
+                        candidates: list[tuple[str, int, dict[str, Any]]] = []
+                        for key, rows in (("conf_pedidos", pending), ("conf_pedidos_rascunhos", drafts)):
+                            for index, row in enumerate(rows):
+                                if normalize(order_number(row)) != normalize(ref_order):
+                                    continue
+                                if ref_sku and normalize(row.get("SKU")) != normalize(ref_sku):
+                                    continue
+                                if normalize(row.get("Código de Barras")) != normalize(old_ean):
+                                    continue
+                                candidates.append((key, index, row))
+                        if len(candidates) > 1 and ref_description:
+                            candidates = [item for item in candidates if normalize(item[2].get("Descrição")) == normalize(ref_description)]
+                        locations = candidates
+                    if len(locations) != 1:
+                        if not locations:
+                            raise ValueError("A linha não está mais nos pedidos pendentes. Atualize a página.")
+                        raise ValueError("Há mais de uma linha compatível. Atualize a página antes de salvar.")
+
+                    source_key, source_index, row = locations[0]
+                    row["__uidLinha"] = uid
+                    row["Código de Barras"] = ean
+                    source_rows = pending if source_key == "conf_pedidos" else drafts
+                    source_rows[source_index] = row
+                    destination_key = "conf_pedidos" if valid_order_row(row) else "conf_pedidos_rascunhos"
+                    if destination_key != source_key:
+                        source_rows.pop(source_index)
+                        (pending if destination_key == "conf_pedidos" else drafts).append(row)
+
+                    product_count = 0
+                    products: list[dict[str, Any]] = []
+                    product_version = 0
+                    sku = str(row.get("SKU") or "").strip()
+                    if update_product:
+                        if not sku:
+                            raise ValueError("A linha não possui SKU; o Banco de Produtos não foi alterado.")
+                        products, product_version = parse_rows("conf_produtos")
+                        matched = [product for product in products if normalize(product.get("SKU")) == normalize(sku)]
+                        if not matched:
+                            raise ValueError(f"O SKU {sku} não foi localizado no Banco de Produtos.")
+                        for product in matched:
+                            product["Código de Barras"] = ean
+                        product_count = len(matched)
+
+                    timestamp = now_iso()
+                    versions = {
+                        "conf_pedidos": write_rows("conf_pedidos", pending, pending_version, timestamp),
+                        "conf_pedidos_rascunhos": write_rows("conf_pedidos_rascunhos", drafts, draft_version, timestamp),
+                    }
+                    updated_keys = ["conf_pedidos", "conf_pedidos_rascunhos"]
+                    if update_product:
+                        versions["conf_produtos"] = write_rows("conf_produtos", products, product_version, timestamp)
+                        updated_keys.append("conf_produtos")
+                    marker, marker_version, _ = get_storage("conf_banco_atualizado_em")
+                    versions["conf_banco_atualizado_em"] = marker_version + 1
+                    DB.execute(
+                        """INSERT INTO storage(key,value,version,updated_at) VALUES('conf_banco_atualizado_em',?,?,?)
+                           ON CONFLICT(key) DO UPDATE SET value=excluded.value,version=excluded.version,updated_at=excluded.updated_at""",
+                        (timestamp, marker_version + 1, timestamp),
+                    )
+                    updated_keys.append("conf_banco_atualizado_em")
+                    DB.commit()
+                except Exception:
+                    DB.rollback()
+                    raise
+            audit(
+                ctx["username"],
+                "order.ean.update_product" if update_product else "order.ean.update",
+                f"{order_number(row)}|{sku}|{old_ean}->{ean}|produtos={product_count}"[:4000],
+            )
+            backup_daily()
+            self.send_json({
+                "ok": True,
+                "uid": uid,
+                "pedido": order_number(row),
+                "sku": sku,
+                "ean": ean,
+                "updated_keys": updated_keys,
+                "versions": versions,
+                "product_count": product_count,
+                "destination": destination_key,
+            })
         except (ValueError, json.JSONDecodeError) as exc:
             self.send_json({"error": str(exc)}, 400)
         except Exception as exc:
@@ -2310,22 +2463,19 @@ class AppHandler(BaseHTTPRequestHandler):
             content_type = mimetypes.guess_type(full.name)[0] or "application/octet-stream"
             if content_type.startswith("text/") or full.suffix in (".js", ".json"):
                 content_type += "; charset=utf-8"
-        comprimivel = full.suffix.lower() in {".html", ".js", ".css", ".json", ".webmanifest", ".svg", ".txt"}
-        comprimido = comprimivel and len(body) >= 1024 and "gzip" in self.headers.get("Accept-Encoding", "").lower()
-        if comprimido:
-            body = gzip.compress(body, compresslevel=5)
+        body, compressed = self.encoded_body(body, content_type)
         self.send_response(200)
+        self.send_security_headers()
         self.send_header("Content-Type", content_type)
-        if comprimido:
-            self.send_header("Content-Encoding", "gzip")
-            self.send_header("Vary", "Accept-Encoding")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
         self.send_header("Pragma", "no-cache")
+        self.send_header("Vary", "Accept-Encoding")
+        if compressed:
+            self.send_header("Content-Encoding", "gzip")
         if full.name == "sw.js":
             self.send_header("Service-Worker-Allowed", BASE_PATH + "/")
         self.send_header("X-Noromak-Version", APP_VERSION)
-        self.send_security_headers(html=full.suffix.lower() == ".html")
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)

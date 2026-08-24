@@ -1,0 +1,32 @@
+SISTEMA DE CONFERÊNCIA NOROMAK — VERSÃO 11.0
+
+EDIÇÃO PERSISTENTE DE CÓDIGO DE BARRAS / EAN
+
+- Admin > Pedidos pendentes agora possui um editor de EAN próprio em cada linha.
+- O leitor pode preencher o campo e enviar Enter para salvar e avançar ao próximo EAN.
+- O botão Salvar altera somente o pedido pendente.
+- O botão Banco também altera o Banco de Produtos do SKU, após confirmação clara.
+- Se houver cadastros duplicados do mesmo SKU, a confirmação informa a quantidade e todos recebem o mesmo EAN.
+- Pedido e produto são alterados na mesma transação SQLite para evitar gravações parciais.
+- A API localiza a linha pelo identificador persistente e possui fallback seguro para linhas antigas.
+- A gravação não recria pedidos concluídos e registra auditoria order.ean.update.
+
+COMPATIBILIDADE PRESERVADA
+
+- Importação por Excel interno, Mercado Livre e Shopee.
+- Importação por print/plugin e edição de kits.
+- Histórico de pedidos concluídos e aviso “já foi feito”.
+- Etiquetas persistentes, fila de impressão e Noromak Print Service.
+- Conferência por código de barras em outras máquinas.
+- Rascunhos incompletos e paginação de 60 linhas.
+
+BASE 10.8 / 10.9 REAPLICADA
+
+- Polling consulta versões pequenas e baixa dados apenas quando mudam.
+- Respostas grandes e arquivos de texto usam gzip quando aceito pelo navegador.
+- Planilhas gravam a data local atual no campo Data do pedido.
+- Credenciais fixas foram removidas; instalações novas podem gerar credencial aleatória com permissão 600.
+- Rate-limit e auditoria usam X-Real-IP validado pelo nginx.
+- /api/health não expõe caminho do banco.
+- Cabeçalhos CSP, nosniff, X-Frame-Options, Referrer-Policy e Permissions-Policy.
+- Cookie Secure reconhece HTTPS encaminhado e subdomínios de noromakweb.com.br.

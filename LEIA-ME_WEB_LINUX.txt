@@ -1,4 +1,4 @@
-SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 10.8
+SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 11.0
 ================================================
 
 Esta versão mantém:
@@ -21,7 +21,7 @@ Copie estes arquivos para a pasta atual do projeto, preservando a pasta oculta .
 Depois execute:
 
   git add -A
-  git commit -m "adiciona Noromak Print Service"
+  git commit -m "adiciona edicao persistente de EAN nos pedidos"
   ./publicar.sh
 
 Não execute instalar_servidor_uma_vez.sh e não altere /etc/systemd quando a infraestrutura já estiver pronta.
@@ -74,9 +74,19 @@ VERSÃO 10.5
 - Cruzamento automático com o banco de produtos e detecção de kits por SKUs separados por barra.
 
 
-VERSÃO 10.8
+VERSÃO 10.6
 - Alerta obrigatório ao importar por planilha um pedido que já esteja em Pedidos pendentes.
 - Abrange Excel interno, relatório Mercado Livre e relatório Shopee.
 - Mostra pedido, marketplace, cliente e data antes de alterar o cadastro.
 - Permite cancelar a importação ou continuar conscientemente.
 - Mantém todo o comportamento da versão 10.5.
+
+
+VERSÃO 11.0
+- Campo Código de Barras / EAN otimizado para leitor na tela Admin > Pedidos pendentes.
+- Enter ou botão Salvar grava somente a linha do pedido no servidor.
+- Botão Banco oferece atualização global por SKU após confirmação explícita.
+- A atualização de pedido e produto é atômica e auditada no SQLite.
+- Pedidos, rascunhos e produtos permanecem sincronizados entre máquinas.
+- Importações por planilha continuam usando a data atual; print/plugin mantém a data informada.
+- Mantidas as correções de desempenho e segurança documentadas nas versões 10.8 e 10.9.

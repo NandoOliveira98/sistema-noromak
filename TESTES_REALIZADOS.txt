@@ -6,8 +6,6 @@ VALIDAÇÃO DA VERSÃO WEB/LINUX 8.3
 - /expedicao/api/health retornou versão 7.5.
 - Página /expedicao/admin é servida sem sessão para poder mostrar o formulário de login.
 - APIs de dados retornam 401 antes do login interno.
-- Login Admin admin/01101998 validado.
-- Login Operador Felipe/123 validado.
 - Operador bloqueado no Painel Administrativo (HTTP 403).
 - Operador bloqueado para alterações administrativas.
 - Criação de uma segunda administradora e login com a nova senha validados.
@@ -76,3 +74,23 @@ V10.6 — ALERTA DE PEDIDO JÁ PENDENTE
 - Fluxo Cancelar retorna antes de salvar: OK.
 - Fluxo Continuar preserva mesclagem existente: OK.
 - Modal responsivo e identificação de marketplace+pedido: OK.
+
+
+V11.0 — EDIÇÃO PERSISTENTE DE EAN EM PEDIDOS PENDENTES
+- servidor_web.py compilado com py_compile: OK.
+- shared-storage.js, web-auth.js, pwa-install.js e sw.js validados com node --check: OK.
+- Scripts inline de admin.html, conferencia.html, estacao-impressao.html e acesso.html: OK.
+- Login Admin e autorização exclusiva do endpoint /api/order-ean: OK.
+- Alteração apenas na linha do pedido, persistente no SQLite e após recarregar a tela: OK.
+- Alteração opcional do Banco de Produtos por SKU, inclusive dois cadastros duplicados: OK.
+- Transação atômica: falha ao localizar o SKU não altera nem o pedido nem o banco global: OK.
+- Linha rascunho promovida para pedido válido após receber EAN: OK.
+- Pedido já concluído não é recriado por uma edição atrasada de EAN: OK.
+- Kits e progresso Lido preservados durante a alteração: OK.
+- Histórico, etiquetas persistentes e fila/conclusão de conferência preservados: OK.
+- Importações Excel interno, Mercado Livre e Shopee usam a data local do dia; print/plugin preserva a data informada: OK.
+- Resposta comprimida com gzip, cabeçalhos de segurança, Cookie Secure e X-Real-IP: OK.
+- Instalação nova sem senha fixa gera credencial aleatória em arquivo separado e permite o primeiro login: OK.
+- Navegador real: campo EAN visível, Enter salva e foca a próxima linha, valor persiste após recarga: OK.
+- Navegador real: botão Banco abre confirmação antes de alterar o cadastro global: OK.
+- Console do navegador após o fluxo completo: sem erros ou avisos.

@@ -7,16 +7,16 @@
 <meta name="application-name" content="Noromak Conferência">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="manifest" href="/expedicao/manifest-conferencia.webmanifest?v=10.9" crossorigin="use-credentials">
-<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/conferencia-180.png?v=10.9">
-<link rel="icon" href="/favicon.ico?v=10.9" sizes="any">
-<link rel="shortcut icon" href="/favicon.ico?v=10.9">
-<link rel="stylesheet" href="/expedicao/pwa-install.css?v=10.9">
+<link rel="manifest" href="/expedicao/manifest-conferencia.webmanifest?v=11.0" crossorigin="use-credentials">
+<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/conferencia-180.png?v=11.0">
+<link rel="icon" href="/favicon.ico?v=11.0" sizes="any">
+<link rel="shortcut icon" href="/favicon.ico?v=11.0">
+<link rel="stylesheet" href="/expedicao/pwa-install.css?v=11.0">
 <title>Noromak - Conferência em Rede</title>
-<script defer src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script defer src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
-<script defer src="https://cdnjs.cloudflare.com/ajax/libs/js-sha256/0.9.0/sha256.min.js"></script>
-<script defer src="https://unpkg.com/@zxing/browser@0.1.5/umd/zxing-browser.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/js-sha256/0.9.0/sha256.min.js"></script>
+<script src="https://unpkg.com/@zxing/browser@0.1.5/umd/zxing-browser.min.js"></script>
 
 <style>
   :root {
@@ -291,7 +291,7 @@
 </style>
 <script src="/expedicao/shared-storage.js"></script>
 <script src="/expedicao/web-auth.js"></script>
-<script defer src="/expedicao/pwa-install.js?v=10.9"></script>
+<script defer src="/expedicao/pwa-install.js?v=11.0"></script>
 </head>
 
 <body>
@@ -299,9 +299,9 @@
 <div id="telaLogin">
   <div class="box-card">
     <div class="logo-box">
-      <img src="/nk-logo.svg?v=10.9" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=10.9';">
+      <img src="/nk-logo.svg?v=11.0" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=11.0';">
     </div>
-    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 10.9 — alerta de pedido já pendente</div>
+    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 11.0 — edição rápida de EAN</div>
 
     <div class="box-upload-rede" style="border-style:solid;">
       <label>🗄 PEDIDOS COMPARTILHADOS NA REDE:</label>
@@ -391,7 +391,7 @@
 
 <header>
   <div class="logo-mini-box">
-    <img src="/grupo-noromak.png?v=10.9" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=10.9';">
+    <img src="/grupo-noromak.png?v=11.0" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=11.0';">
   </div>
   <div class="usuario-area">
     <div style="text-align: right;">
@@ -1290,11 +1290,10 @@ function atualizarStatusEtiquetaPedido(item) {
 
 function carregarDadosMemoria() {
   invalidarCachesPedidosDisponiveis();
-  const ler = chave => typeof appStorage.getCachedItem === "function" ? appStorage.getCachedItem(chave) : appStorage.getItem(chave);
-  const users = ler("conf_usuarios");
-  const peds = ler("conf_pedidos");
-  const fotos = ler("conf_fotos");
-  const etiqs = ler("conf_etiquetas");
+  const users = appStorage.getItem("conf_usuarios");
+  const peds = appStorage.getItem("conf_pedidos");
+  const fotos = appStorage.getItem("conf_fotos");
+  const etiqs = appStorage.getItem("conf_etiquetas");
 
   if (users) usuariosCadastrados = JSON.parse(users);
   if (peds) {
@@ -1418,13 +1417,6 @@ function fazerLogin() {
 
   if (!loginDigitado || !senhaDigitada) {
     erroDiv.innerText = "Preencha o usuário e a senha!";
-    return;
-  }
-
-  if (false /* autenticação legada removida; o login válido é conferido pelo servidor */) {
-    usuarioLogado = { Nome: "Administrador", Login: "admin", Perfil: "Admin" };
-    appStorage.setItem("conf_sessao_ativa", JSON.stringify(usuarioLogado));
-    iniciarSessao();
     return;
   }
 
@@ -3091,9 +3083,6 @@ window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_
   window.fazerLogin=function(){
     const login=loginNormalizado(document.getElementById("usuarioInput")?.value),senha=txt(document.getElementById("senhaInput")?.value),erro=document.getElementById("erroLogin");
     if(!login||!senha){if(erro)erro.textContent="Preencha o usuário e a senha!";return;}
-    if(false /* autenticação legada removida; o login válido é conferido pelo servidor */){
-      usuarioLogado={Nome:"Administrador",Login:"admin",Perfil:"Admin"};appStorage.setItem("conf_sessao_ativa",JSON.stringify(usuarioLogado));iniciarSessao();return;
-    }
     try{usuariosCadastrados=jsonLista("conf_usuarios");}catch(_){usuariosCadastrados=[];}
     const user=usuariosCadastrados.find(u=>loginNormalizado(u.Login??u.Usuario??u["Usuário"]??u.Nome)===login&&txt(u.Senha)===senha);
     if(user){

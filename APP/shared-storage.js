@@ -79,13 +79,6 @@
   }
 
   const appStorage = {
-    getCachedItem(chave) {
-      chave = String(chave);
-      if (ehLocal(chave)) return window.localStorage.getItem(chave);
-      if (cache.has(chave)) return cache.get(chave);
-      return this.getItem(chave);
-    },
-
     getItem(chave) {
       chave = String(chave);
       if (ehLocal(chave)) return window.localStorage.getItem(chave);
@@ -93,7 +86,7 @@
         const resposta = xhrJson("GET", `${API}?key=${encodeURIComponent(chave)}`);
         const valor = resposta.exists ? String(resposta.value ?? "") : null;
         cache.set(chave, valor);
-        if (Number.isFinite(Number(resposta.version))) versoes.set(chave, Number(resposta.version));
+        versoes.set(chave, Number(resposta.version || 0));
         try {
           if (valor === null) window.sessionStorage.removeItem("rede_cache_" + chave);
           else window.sessionStorage.setItem("rede_cache_" + chave, valor);
@@ -118,7 +111,7 @@
       const resposta = xhrJson("POST", API, { key: chave, oldValue: anterior, newValue: valor });
       const consolidado = resposta.value === null || resposta.value === undefined ? valor : String(resposta.value);
       cache.set(chave, consolidado);
-      if (Number.isFinite(Number(resposta.version))) versoes.set(chave, Number(resposta.version));
+      versoes.set(chave, Number(resposta.version || 0));
       try { window.sessionStorage.setItem("rede_cache_" + chave, consolidado); } catch (_) {}
       dispararStorage(chave, anterior, consolidado);
       return consolidado;
@@ -209,10 +202,26 @@
       const respostaAtual = xhrJson("GET", `${API}?key=${encodeURIComponent("conf_pedidos")}`);
       const novo = respostaAtual.exists ? String(respostaAtual.value ?? "[]") : "[]";
       cache.set("conf_pedidos", novo);
-      if (Number.isFinite(Number(respostaAtual.version))) versoes.set("conf_pedidos", Number(respostaAtual.version));
       try { window.sessionStorage.setItem("rede_cache_conf_pedidos", novo); } catch (_) {}
       dispararStorage("conf_pedidos", anterior, novo);
       return resultado;
+    },
+
+    atualizarEanPedido(referencia) {
+      const resposta = xhrJson("POST", BASE + "/api/order-ean", referencia || {});
+      for (const chave of resposta.updated_keys || []) {
+        const anterior = cache.has(chave) ? cache.get(chave) : null;
+        const atual = xhrJson("GET", `${API}?key=${encodeURIComponent(chave)}`);
+        const novo = atual.exists ? String(atual.value ?? "") : null;
+        cache.set(chave, novo);
+        versoes.set(chave, Number(atual.version || resposta.versions?.[chave] || 0));
+        try {
+          if (novo === null) window.sessionStorage.removeItem("rede_cache_" + chave);
+          else window.sessionStorage.setItem("rede_cache_" + chave, novo);
+        } catch (_) {}
+        if (anterior !== novo) dispararStorage(chave, anterior, novo);
+      }
+      return resposta;
     },
 
     migrarDoNavegador() {
@@ -229,7 +238,6 @@
           const atual = this.getItem(chave);
           const resposta = xhrJson("POST", API, { key: chave, oldValue: atual, newValue: valor, force: true });
           cache.set(chave, resposta.value ?? valor);
-          if (Number.isFinite(Number(resposta.version))) versoes.set(chave, Number(resposta.version));
           migradas++;
         }
       }
@@ -257,31 +265,26 @@
     if (pollEmAndamento || (document.hidden && !conferenciaEmSegundoPlano)) return;
     pollEmAndamento = true;
     try {
-      // Consulta somente números de versão (resposta muito pequena). O conteúdo completo
-      // de pedidos/produtos/etiquetas só é baixado quando aquela chave realmente mudou.
       const resposta = await fetch(`${API}?versions=${encodeURIComponent(CHAVES_MONITORADAS.join(","))}`, { cache: "no-store" });
       if (!resposta.ok) throw new Error(`HTTP ${resposta.status}`);
       const dados = await resposta.json();
       conectado = true;
       ultimoErro = "";
-      const alteradas = [];
       for (const chave of CHAVES_MONITORADAS) {
-        const novaVersao = Number((dados.versions || {})[chave] || 0);
+        const versaoNova = Number(dados.versions?.[chave] || 0);
         const versaoAntiga = versoes.get(chave);
         if (versaoAntiga === undefined) {
-          versoes.set(chave, novaVersao);
+          versoes.set(chave, versaoNova);
           continue;
         }
-        if (novaVersao !== versaoAntiga) alteradas.push([chave, novaVersao]);
-      }
-      for (const [chave, novaVersao] of alteradas) {
-        const detalhe = await fetch(`${API}?key=${encodeURIComponent(chave)}`, { cache: "no-store" });
-        if (!detalhe.ok) throw new Error(`HTTP ${detalhe.status}`);
-        const registro = await detalhe.json();
-        const novo = registro.exists ? String(registro.value ?? "") : null;
+        if (versaoAntiga === versaoNova) continue;
         const antigo = cache.has(chave) ? cache.get(chave) : undefined;
+        const atual = await fetch(`${API}?key=${encodeURIComponent(chave)}`, { cache: "no-store" });
+        if (!atual.ok) throw new Error(`HTTP ${atual.status}`);
+        const detalhe = await atual.json();
+        const novo = detalhe.exists ? String(detalhe.value ?? "") : null;
         cache.set(chave, novo);
-        versoes.set(chave, Number(registro.version ?? novaVersao));
+        versoes.set(chave, Number(detalhe.version || versaoNova));
         try {
           if (novo === null) window.sessionStorage.removeItem("rede_cache_" + chave);
           else window.sessionStorage.setItem("rede_cache_" + chave, novo);
