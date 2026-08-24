@@ -94,3 +94,21 @@ V11.0 — EDIÇÃO PERSISTENTE DE EAN EM PEDIDOS PENDENTES
 - Navegador real: campo EAN visível, Enter salva e foca a próxima linha, valor persiste após recarga: OK.
 - Navegador real: botão Banco abre confirmação antes de alterar o cadastro global: OK.
 - Console do navegador após o fluxo completo: sem erros ou avisos.
+
+
+V11.1 — EAN DIRETO NA CONFERÊNCIA E AVISO COMPACTO
+- Regressão completa da versão 11.0 executada novamente: OK.
+- Operador comum autorizado no endpoint específico /api/product-ean: OK.
+- Operador continua bloqueado para alteração genérica de conf_produtos: HTTP 403, OK.
+- SKU existente sem EAN atualiza todos os cadastros duplicados do Banco de Produtos: OK.
+- Linha sem EAN do pedido aberto é completada na mesma transação: OK.
+- Outro pedido com o mesmo SKU não é sobrescrito diretamente: OK.
+- SKU presente no pedido e ausente do Banco de Produtos cria cadastro com descrição e localização: OK.
+- SKU inexistente no banco e nos pedidos é rejeitado sem gravação parcial: OK.
+- Correção de EAN existente retorna o valor anterior e mantém auditoria product.ean.quick_update: OK.
+- Navegador real: Enter no SKU avança ao campo EAN: OK.
+- Navegador real: Enter no EAN salva e devolve o foco ao leitor principal: OK.
+- Persistência confirmada após recarregar a página: OK.
+- Aviso sonoro removido da lateral e exibido como botão compacto AVISOS no topo: OK.
+- Painel de avisos abre sob demanda, contém som/volume/teste e fecha com Esc: OK.
+- Console do navegador após login e fluxo final: sem erros ou avisos.

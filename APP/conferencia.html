@@ -7,11 +7,11 @@
 <meta name="application-name" content="Noromak Conferência">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="manifest" href="/expedicao/manifest-conferencia.webmanifest?v=11.0" crossorigin="use-credentials">
-<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/conferencia-180.png?v=11.0">
-<link rel="icon" href="/favicon.ico?v=11.0" sizes="any">
-<link rel="shortcut icon" href="/favicon.ico?v=11.0">
-<link rel="stylesheet" href="/expedicao/pwa-install.css?v=11.0">
+<link rel="manifest" href="/expedicao/manifest-conferencia.webmanifest?v=11.1" crossorigin="use-credentials">
+<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/conferencia-180.png?v=11.1">
+<link rel="icon" href="/favicon.ico?v=11.1" sizes="any">
+<link rel="shortcut icon" href="/favicon.ico?v=11.1">
+<link rel="stylesheet" href="/expedicao/pwa-install.css?v=11.1">
 <title>Noromak - Conferência em Rede</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
@@ -137,6 +137,20 @@
   }
   .btn-header:hover { background: rgba(255,255,255,0.24); }
   .autosave-status { display:block; font-size:10px; opacity:.9; margin-top:3px; }
+
+  .ean-rapido-card { margin:12px 0 14px; padding:11px 12px; border:1px solid #b9cce0; border-left:5px solid var(--secondary); border-radius:8px; background:#f7fafc; box-shadow:0 2px 7px rgba(31,74,118,.06); }
+  .ean-rapido-cabecalho { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px; }
+  .ean-rapido-titulo { color:var(--primary); font-size:13px; font-weight:900; }
+  .ean-rapido-subtitulo { color:#627487; font-size:10px; line-height:1.35; }
+  .ean-rapido-campos { display:grid; grid-template-columns:minmax(150px,.8fr) minmax(220px,1fr) auto; gap:8px; align-items:end; }
+  .ean-rapido-campo { display:flex; flex-direction:column; gap:4px; color:#344e68; font-size:10px; font-weight:900; text-transform:uppercase; }
+  .ean-rapido-campo input { min-width:0; width:100%; padding:10px 11px; border:1px solid #b6c4d2; border-radius:6px; background:#fff; color:#1e2d3d; font-family:Consolas,monospace; font-size:14px; font-weight:750; text-transform:none; }
+  .ean-rapido-campo input:focus { border-color:var(--secondary); box-shadow:0 0 0 3px rgba(242,140,24,.16); outline:0; }
+  .btn-salvar-ean-rapido { min-height:40px; padding:10px 15px; border:0; border-radius:6px; background:#2e7d32; color:#fff; cursor:pointer; font-size:11px; font-weight:900; white-space:nowrap; }
+  .btn-salvar-ean-rapido:disabled { opacity:.58; cursor:wait; }
+  .ean-rapido-status { min-height:15px; margin-top:6px; color:#607387; font-size:10px; line-height:1.35; }
+  .ean-rapido-status.ok { color:#25702a; font-weight:800; }
+  .ean-rapido-status.erro { color:#c62828; font-weight:800; }
 
   .mensagem-detalhada { display:none; margin-top:14px; padding:14px 16px; border-radius:8px; border-left:5px solid; box-shadow:0 2px 7px rgba(0,0,0,.06); }
   .mensagem-detalhada.mostrar { display:block; }
@@ -276,6 +290,9 @@
     th, td { padding:9px 8px; font-size:12px; }
     .img-produto { width:52px; height:52px; }
     .modal-card, .modal-nota-card, .modal-reimpressao-card { width:96vw !important; max-width:96vw; padding:18px; }
+    .ean-rapido-cabecalho { align-items:flex-start; flex-direction:column; gap:3px; }
+    .ean-rapido-campos { grid-template-columns:1fr; }
+    .btn-salvar-ean-rapido { width:100%; min-height:44px; }
     .box-card { width:calc(100vw - 24px); padding:28px 20px; }
     #telaLogin { align-items:flex-start; overflow-y:auto; padding:18px 0; }
     .scanner-camera-overlay { padding:0; align-items:stretch; }
@@ -291,7 +308,7 @@
 </style>
 <script src="/expedicao/shared-storage.js"></script>
 <script src="/expedicao/web-auth.js"></script>
-<script defer src="/expedicao/pwa-install.js?v=11.0"></script>
+<script defer src="/expedicao/pwa-install.js?v=11.1"></script>
 </head>
 
 <body>
@@ -299,9 +316,9 @@
 <div id="telaLogin">
   <div class="box-card">
     <div class="logo-box">
-      <img src="/nk-logo.svg?v=11.0" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=11.0';">
+      <img src="/nk-logo.svg?v=11.1" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=11.1';">
     </div>
-    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 11.0 — edição rápida de EAN</div>
+    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 11.1 — EAN direto na conferência</div>
 
     <div class="box-upload-rede" style="border-style:solid;">
       <label>🗄 PEDIDOS COMPARTILHADOS NA REDE:</label>
@@ -391,7 +408,7 @@
 
 <header>
   <div class="logo-mini-box">
-    <img src="/grupo-noromak.png?v=11.0" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=11.0';">
+    <img src="/grupo-noromak.png?v=11.1" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=11.1';">
   </div>
   <div class="usuario-area">
     <div style="text-align: right;">
@@ -400,6 +417,7 @@
       <span id="autosaveStatus" class="autosave-status">Salvamento automático ativo</span>
     </div>
     <button type="button" class="pwa-install-btn pwa-header" data-pwa-install>⬇ INSTALAR</button>
+    <div id="alertaNovosPedidosTopo" class="alerta-novos-pedidos-topo"></div>
     <button class="btn-header" onclick="alternarPainelAtalhos()">⌨ ATALHOS</button>
     <button class="btn-header" onclick="abrirHistorico()">🕘 HISTÓRICO</button>
     <button class="btn-logoff" onclick="fazerLogoff()">SAIR / LOGOFF</button>
@@ -452,6 +470,22 @@
     <h2 id="titulo" style="color: var(--primary);">Nenhum pedido selecionado</h2>
     <div id="cliente" style="font-size: 14px; margin-bottom: 4px;"></div>
     <div id="marketplace" style="font-size: 14px; margin-bottom: 8px;"></div>
+    <section class="ean-rapido-card" aria-labelledby="eanRapidoTitulo">
+      <div class="ean-rapido-cabecalho">
+        <div id="eanRapidoTitulo" class="ean-rapido-titulo">＋ ADICIONAR EAN AO BANCO DE PRODUTOS</div>
+        <div class="ean-rapido-subtitulo">Informe o SKU e bipe o EAN. Ao salvar, o cadastro fica disponível para todas as máquinas.</div>
+      </div>
+      <div class="ean-rapido-campos">
+        <label class="ean-rapido-campo">SKU DO PRODUTO
+          <input id="eanRapidoSku" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Digite o SKU" oninput="this.dataset.sugerido='0';atualizarPreviaEanRapido()" onkeydown="atalhoEanRapido(event,'sku')">
+        </label>
+        <label class="ean-rapido-campo">CÓDIGO DE BARRAS / EAN
+          <input id="eanRapidoCodigo" type="text" inputmode="numeric" enterkeyhint="done" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Bipe ou digite o EAN" onkeydown="atalhoEanRapido(event,'ean')">
+        </label>
+        <button id="btnSalvarEanRapido" class="btn-salvar-ean-rapido" type="button" onclick="salvarEanRapidoConferencia()">💾 SALVAR NO BANCO</button>
+      </div>
+      <div id="eanRapidoStatus" class="ean-rapido-status" role="status">Use esta função quando o produto do pedido estiver sem EAN.</div>
+    </section>
     <div id="pedidoHistoricoAnterior" class="pedido-historico-anterior"></div>
     <div id="etiquetaPedidoStatus" class="etiqueta-status etiqueta-erro">Etiqueta não verificada</div>
 
@@ -895,7 +929,6 @@ window.addEventListener("pagehide", () => pararLeituraScannerCamera());
 window.onload = function() {
   forcarOrientacaoRetrato();
   carregarDadosMemoria();
-  carregarHistoricoConferencias();
   
   if (document.getElementById("inputNomeImpressora")) {
     document.getElementById("inputNomeImpressora").value = nomeImpressoraConfigurada;
@@ -917,7 +950,7 @@ window.onload = function() {
   }
 
   window.addEventListener("storage", function(e) {
-    if (e.key === "conf_pedidos" || e.key === "conf_usuarios" || e.key === "conf_etiquetas") {
+    if (e.key === "conf_pedidos" || e.key === "conf_produtos" || e.key === "conf_usuarios" || e.key === "conf_etiquetas") {
       carregarDadosMemoria();
       renderizarListaPedidos();
       if (idPedidoAtual) {
@@ -1324,6 +1357,144 @@ function carregarDadosMemoria() {
   if (etiqs) mapaEtiquetas = JSON.parse(etiqs);
 }
 
+function produtosBancoEanRapido() {
+  try {
+    const produtos = JSON.parse(appStorage.getItem("conf_produtos") || "[]");
+    return Array.isArray(produtos) ? produtos : [];
+  } catch (_) {
+    return [];
+  }
+}
+
+function linhasPedidoPorSkuEanRapido(sku) {
+  const chave = normalizarIdentificadorExato(sku);
+  return dadosPedidos.filter(item => normalizarIdentificadorExato(extrairCampo(item, "SKU")) === chave);
+}
+
+function definirStatusEanRapido(texto, tipo = "") {
+  const status = document.getElementById("eanRapidoStatus");
+  if (!status) return;
+  status.className = "ean-rapido-status" + (tipo ? " " + tipo : "");
+  status.textContent = texto;
+}
+
+function atualizarPreviaEanRapido() {
+  const sku = String(document.getElementById("eanRapidoSku")?.value || "").trim();
+  if (!sku) {
+    definirStatusEanRapido("Use esta função quando o produto do pedido estiver sem EAN.");
+    return;
+  }
+  const chave = normalizarIdentificadorExato(sku);
+  const produtos = produtosBancoEanRapido().filter(item => normalizarIdentificadorExato(extrairCampo(item, "SKU")) === chave);
+  const pedidos = linhasPedidoPorSkuEanRapido(sku);
+  if (produtos.length) {
+    const descricao = extrairCampo(produtos[0], "Descrição") || extrairCampo(pedidos[0] || {}, "Descrição") || "Produto sem descrição";
+    const eans = [...new Set(produtos.map(item => String(extrairCampo(item, "Código de Barras") || "").trim()).filter(Boolean))];
+    definirStatusEanRapido(`${produtos.length} cadastro(s) localizado(s): ${descricao}${eans.length ? " · EAN atual: " + eans.join(", ") : " · ainda sem EAN"}.`);
+    return;
+  }
+  if (pedidos.length) {
+    const descricao = extrairCampo(pedidos[0], "Descrição") || "Produto do pedido";
+    definirStatusEanRapido(`SKU localizado nos pedidos: ${descricao}. Um cadastro será criado no Banco de Produtos ao salvar.`);
+    return;
+  }
+  definirStatusEanRapido(`SKU ${sku} não localizado no banco nem nos pedidos pendentes. Confira a digitação.`, "erro");
+}
+
+function sugerirSkuSemEanPedidoAtual() {
+  const campo = document.getElementById("eanRapidoSku");
+  if (!campo || String(campo.value || "").trim()) return;
+  const semEan = pedidoAtual.filter(item => extrairCampo(item, "SKU") && !String(extrairCampo(item, "Código de Barras") || "").trim());
+  if (semEan.length === 1) {
+    campo.value = extrairCampo(semEan[0], "SKU");
+    campo.dataset.sugerido = "1";
+    atualizarPreviaEanRapido();
+  } else if (semEan.length > 1) {
+    definirStatusEanRapido(`Este pedido possui ${semEan.length} produtos sem EAN. Informe o SKU do produto que está em mãos.`);
+  }
+}
+
+function atalhoEanRapido(event, etapa) {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  event.stopPropagation();
+  if (etapa === "sku") {
+    document.getElementById("eanRapidoCodigo")?.focus();
+    document.getElementById("eanRapidoCodigo")?.select?.();
+    return;
+  }
+  salvarEanRapidoConferencia();
+}
+
+function salvarEanRapidoConferencia() {
+  const campoSku = document.getElementById("eanRapidoSku");
+  const campoEan = document.getElementById("eanRapidoCodigo");
+  const botao = document.getElementById("btnSalvarEanRapido");
+  const sku = String(campoSku?.value || "").trim();
+  const ean = String(campoEan?.value || "").trim();
+  if (!sku) {
+    definirStatusEanRapido("Informe o SKU do produto antes de salvar.", "erro");
+    campoSku?.focus();
+    return false;
+  }
+  if (!ean) {
+    definirStatusEanRapido("Bipe ou digite o Código de Barras / EAN.", "erro");
+    campoEan?.focus();
+    return false;
+  }
+
+  const chave = normalizarIdentificadorExato(sku);
+  const produtos = produtosBancoEanRapido().filter(item => normalizarIdentificadorExato(extrairCampo(item, "SKU")) === chave);
+  const eansDiferentes = [...new Set(produtos.map(item => String(extrairCampo(item, "Código de Barras") || "").trim()).filter(valor => valor && valor !== ean))];
+  if (eansDiferentes.length && !confirm(`SUBSTITUIR O EAN DO PRODUTO?\n\nSKU: ${sku}\nEAN atual: ${eansDiferentes.join(", ")}\nNovo EAN: ${ean}\n\nEsta alteração será usada em todas as máquinas.`)) {
+    campoEan?.focus();
+    campoEan?.select?.();
+    return false;
+  }
+
+  if (botao) {
+    botao.disabled = true;
+    botao.textContent = "SALVANDO...";
+  }
+  definirStatusEanRapido("Salvando no servidor...", "");
+  try {
+    const pedido = pedidoAtual.length ? extrairCampo(pedidoAtual[0], "Pedido") : "";
+    const resposta = appStorage.atualizarEanProduto({ sku, ean, pedido });
+    carregarDadosMemoria();
+    renderizarListaPedidos();
+    if (idPedidoAtual) {
+      const referencia = dadosPedidos.find(item => String(item.__uidPedido) === String(idPedidoAtual));
+      if (referencia) {
+        const numero = extrairCampo(referencia, "Pedido");
+        pedidoAtual = dadosPedidos.filter(item => extrairCampo(item, "Pedido") === numero);
+        desenharTabela();
+      }
+    }
+    const criado = resposta.created ? "Novo produto criado" : "Produto atualizado";
+    const pedidoAtualizado = resposta.order_count ? ` ${resposta.order_count} linha(s) do pedido aberto também recebeu(ram) o EAN.` : "";
+    definirStatusEanRapido(`${criado}: SKU ${sku} → EAN ${ean}.${pedidoAtualizado}`, "ok");
+    if (campoSku) { campoSku.value = ""; campoSku.dataset.sugerido = "0"; }
+    if (campoEan) campoEan.value = "";
+    const leitor = document.getElementById("codigo");
+    if (leitor && !leitor.disabled) {
+      leitor.focus();
+      leitor.select?.();
+    }
+    return true;
+  } catch (erro) {
+    console.error("Falha ao cadastrar EAN", erro);
+    definirStatusEanRapido(erro.message || String(erro), "erro");
+    campoEan?.focus();
+    campoEan?.select?.();
+    return false;
+  } finally {
+    if (botao) {
+      botao.disabled = false;
+      botao.textContent = "💾 SALVAR NO BANCO";
+    }
+  }
+}
+
 function verificarStatusPlanilhaLogin() {
   const statusDiv = document.getElementById("statusCargaLogin");
   if (usuariosCadastrados.length > 0) {
@@ -1464,6 +1635,7 @@ function iniciarSessao() {
   if (atalhosBotao) atalhosBotao.setAttribute("aria-expanded", "false");
   if (atalhosEstado) atalhosEstado.textContent = "Abrir · F1";
 
+  carregarHistoricoConferencias();
   restaurarFiltroMarketplacePedidos();
   renderizarListaPedidos();
   setTimeout(restaurarUltimoPedidoEmAndamento, 80);
@@ -1658,6 +1830,7 @@ function abrirPedido(uid) {
   limparMensagemDetalhada();
   atualizarStatusEtiquetaPedido(pedidoAtual[0]);
   desenharTabela();
+  sugerirSkuSemEanPedidoAtual();
 
   const input = document.getElementById("codigo");
   const completo = pedidoAtualFinalizado();
@@ -2952,6 +3125,12 @@ function limparPainel() {
   liberarBloqueioPedidoAtualRede();
   pedidoAtual = [];
   idPedidoAtual = null;
+  const skuRapido = document.getElementById("eanRapidoSku");
+  if (skuRapido?.dataset.sugerido === "1") {
+    skuRapido.value = "";
+    skuRapido.dataset.sugerido = "0";
+    atualizarPreviaEanRapido();
+  }
   document.getElementById("titulo").innerHTML = "Nenhum pedido selecionado";
   document.getElementById("cliente").innerHTML = "";
   document.getElementById("marketplace").innerHTML = "";
@@ -3101,12 +3280,19 @@ window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_
 
 
 <style id="estiloAlertaNovosPedidos">
-  .alerta-novos-pedidos-box{margin:0 0 12px;padding:10px 11px;border:1px solid #b8c8d8;border-left:4px solid #F28C18;border-radius:8px;background:#f7fafc;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
-  .alerta-novos-pedidos-info{min-width:180px;flex:1}
+  header{position:relative;z-index:100}
+  .alerta-novos-pedidos-topo{position:relative;display:inline-flex;align-items:center}
+  .btn-alerta-resumo{display:flex;align-items:center;gap:6px;min-height:34px;background:rgba(255,255,255,.14);color:#fff;border:1px solid rgba(255,255,255,.35);border-radius:6px;padding:7px 10px;cursor:pointer;font-size:11px;font-weight:900;white-space:nowrap}
+  .btn-alerta-resumo:hover,.alerta-novos-pedidos-topo.aberto .btn-alerta-resumo{background:rgba(255,255,255,.24)}
+  .alerta-topo-ponto{width:8px;height:8px;border-radius:50%;background:#66cf72;box-shadow:0 0 0 3px rgba(102,207,114,.16)}
+  .alerta-topo-ponto.inativo{background:#aab4bf;box-shadow:none}
+  .alerta-novos-pedidos-painel{display:none;position:absolute;top:calc(100% + 9px);right:0;width:min(330px,calc(100vw - 24px));padding:12px;border:1px solid #b8c8d8;border-top:4px solid #F28C18;border-radius:8px;background:#fff;color:#253c55;box-shadow:0 16px 40px rgba(0,0,0,.25);z-index:17000}
+  .alerta-novos-pedidos-topo.aberto .alerta-novos-pedidos-painel{display:block}
+  .alerta-novos-pedidos-info{margin-bottom:9px}
   .alerta-novos-pedidos-titulo{font-size:12px;font-weight:900;color:#2B4E75;line-height:1.25}
-  .alerta-novos-pedidos-status{font-size:10px;color:#66788a;margin-top:3px;line-height:1.3}
+  .alerta-novos-pedidos-status{font-size:10px;color:#66788a;margin-top:4px;line-height:1.35}
   .alerta-novos-pedidos-acoes{display:flex;gap:6px;flex-wrap:wrap}
-  .alerta-novos-pedidos-acoes button{border:0;border-radius:6px;padding:7px 10px;cursor:pointer;font-size:10px;font-weight:900}
+  .alerta-novos-pedidos-acoes button{flex:1;border:0;border-radius:6px;padding:8px 9px;cursor:pointer;font-size:9px;font-weight:900;white-space:nowrap}
   .btn-alerta-som-ativo{background:#2e7d32;color:#fff}
   .btn-alerta-som-inativo{background:#e5e9ed;color:#48545f}
   .btn-alerta-teste{background:#2B4E75;color:#fff}
@@ -3114,7 +3300,7 @@ window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_
   .toast-novo-pedido.ativo{opacity:1;transform:translateY(0)}
   .toast-novo-pedido strong{display:block;font-size:14px;margin-bottom:3px}
   .toast-novo-pedido span{display:block;font-size:11px;line-height:1.4;color:#e8f0f7}
-  @media(max-width:720px){.alerta-novos-pedidos-box{align-items:stretch}.alerta-novos-pedidos-acoes{width:100%}.alerta-novos-pedidos-acoes button{flex:1;min-height:38px}.toast-novo-pedido{right:10px;bottom:78px;width:calc(100vw - 20px)}}
+  @media(max-width:780px){.alerta-novos-pedidos-topo{flex:1 1 auto}.btn-alerta-resumo{width:100%;justify-content:center;min-height:40px}.alerta-novos-pedidos-painel{right:auto;left:0}.alerta-novos-pedidos-acoes button{min-height:38px}.toast-novo-pedido{right:10px;bottom:78px;width:calc(100vw - 20px)}}
 </style>
 <script>
 (() => {
@@ -3135,25 +3321,23 @@ window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_
   }
 
   function criarInterfaceAlerta(){
-    if (document.getElementById("alertaNovosPedidosBox")) return;
-    const avisoEtiquetas = document.querySelector(".aviso-etiquetas-disponiveis");
-    const lista = document.getElementById("listaPedidos");
-    const ancora = avisoEtiquetas || lista;
-    if (!ancora?.parentNode) return;
-    const box = document.createElement("div");
-    box.id = "alertaNovosPedidosBox";
-    box.className = "alerta-novos-pedidos-box";
+    const box = document.getElementById("alertaNovosPedidosTopo");
+    if (!box || document.getElementById("btnResumoAlertaPedidos")) return;
     box.innerHTML = `
-      <div class="alerta-novos-pedidos-info">
-        <div class="alerta-novos-pedidos-titulo">🔔 Aviso de novo pedido pronto</div>
-        <div id="alertaNovosPedidosStatus" class="alerta-novos-pedidos-status">O sinal toca quando um pedido de hoje passa a ter etiqueta disponível.</div>
-      </div>
-      <div class="alerta-novos-pedidos-acoes">
-        <button id="btnAlternarAlertaPedidos" type="button" onclick="window.alternarAlertaSonoroPedidos()"></button>
-        <button id="btnVolumeAlertaPedidos" class="btn-alerta-teste" type="button" onclick="window.alternarVolumeAlertaPedidos()">🔊 VOLUME MÁXIMO</button>
-        <button class="btn-alerta-teste" type="button" onclick="window.testarAlertaSonoroPedidos()">▶ Testar som</button>
+      <button id="btnResumoAlertaPedidos" class="btn-alerta-resumo" type="button" onclick="window.alternarPainelAlertaPedidos()" aria-controls="painelAlertaNovosPedidos" aria-expanded="false">
+        <span id="alertaTopoPonto" class="alerta-topo-ponto"></span><span id="alertaTopoTexto">🔔 AVISOS</span>
+      </button>
+      <div id="painelAlertaNovosPedidos" class="alerta-novos-pedidos-painel">
+        <div class="alerta-novos-pedidos-info">
+          <div class="alerta-novos-pedidos-titulo">🔔 Aviso de novo pedido pronto</div>
+          <div id="alertaNovosPedidosStatus" class="alerta-novos-pedidos-status">O sinal toca quando um pedido de hoje passa a ter etiqueta disponível.</div>
+        </div>
+        <div class="alerta-novos-pedidos-acoes">
+          <button id="btnAlternarAlertaPedidos" type="button" onclick="window.alternarAlertaSonoroPedidos()"></button>
+          <button id="btnVolumeAlertaPedidos" class="btn-alerta-teste" type="button" onclick="window.alternarVolumeAlertaPedidos()">🔊 VOLUME MÁXIMO</button>
+          <button class="btn-alerta-teste" type="button" onclick="window.testarAlertaSonoroPedidos()">▶ TESTAR</button>
+        </div>
       </div>`;
-    ancora.parentNode.insertBefore(box, ancora.nextSibling);
 
     const toast = document.createElement("div");
     toast.id = "toastNovoPedido";
@@ -3167,6 +3351,8 @@ window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_
     const btn = document.getElementById("btnAlternarAlertaPedidos");
     const btnVolume = document.getElementById("btnVolumeAlertaPedidos");
     const status = document.getElementById("alertaNovosPedidosStatus");
+    const ponto = document.getElementById("alertaTopoPonto");
+    const resumo = document.getElementById("alertaTopoTexto");
     if (btn) {
       btn.className = alertaAtivo ? "btn-alerta-som-ativo" : "btn-alerta-som-inativo";
       btn.textContent = alertaAtivo ? "🔊 SOM ATIVO" : "🔇 SOM DESATIVADO";
@@ -3175,6 +3361,8 @@ window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_
       btnVolume.textContent = volumeMaximo ? "🔊 VOLUME MÁXIMO" : "🔉 VOLUME NORMAL";
       btnVolume.title = volumeMaximo ? "Alarme reforçado para ambiente de estoque" : "Alarme em volume normal";
     }
+    if (ponto) ponto.classList.toggle("inativo", !alertaAtivo);
+    if (resumo) resumo.textContent = alertaAtivo ? "🔔 AVISOS" : "🔕 AVISOS";
     if (status) {
       if (!alertaAtivo) status.textContent = "Aviso sonoro desativado neste aparelho.";
       else if (!audioLiberado) status.textContent = "Som ativo. Toque/clique uma vez na tela para liberar o áudio deste aparelho.";
@@ -3303,6 +3491,15 @@ window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_
     atualizarInterfaceAlerta();
   };
 
+  window.alternarPainelAlertaPedidos = function(forcar){
+    const box = document.getElementById("alertaNovosPedidosTopo");
+    const botao = document.getElementById("btnResumoAlertaPedidos");
+    if (!box || !botao) return;
+    const abrir = typeof forcar === "boolean" ? forcar : !box.classList.contains("aberto");
+    box.classList.toggle("aberto", abrir);
+    botao.setAttribute("aria-expanded", abrir ? "true" : "false");
+  };
+
   window.alternarVolumeAlertaPedidos = async function(){
     volumeMaximo = !volumeMaximo;
     localStorage.setItem(CHAVE_VOLUME_ALERTA, volumeMaximo ? "maximo" : "normal");
@@ -3325,6 +3522,13 @@ window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_
   const desbloquear = () => { if (alertaAtivo && !audioLiberado) liberarAudio(); };
   document.addEventListener("pointerdown", desbloquear, {capture:true, passive:true});
   document.addEventListener("keydown", desbloquear, {capture:true});
+  document.addEventListener("pointerdown", event => {
+    const box = document.getElementById("alertaNovosPedidosTopo");
+    if (box?.classList.contains("aberto") && !box.contains(event.target)) window.alternarPainelAlertaPedidos(false);
+  });
+  document.addEventListener("keydown", event => {
+    if (event.key === "Escape") window.alternarPainelAlertaPedidos(false);
+  });
 
   window.addEventListener("storage", e => {
     if (!e.key || ["conf_pedidos","conf_etiquetas","conf_banco_atualizado_em"].includes(e.key)) {

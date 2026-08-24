@@ -1,4 +1,4 @@
-SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 11.0
+SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 11.1
 ================================================
 
 Esta versão mantém:
@@ -90,3 +90,13 @@ VERSÃO 11.0
 - Pedidos, rascunhos e produtos permanecem sincronizados entre máquinas.
 - Importações por planilha continuam usando a data atual; print/plugin mantém a data informada.
 - Mantidas as correções de desempenho e segurança documentadas nas versões 10.8 e 10.9.
+
+
+VERSÃO 11.1
+- Cadastro rápido de EAN na própria tela de Conferência, com campos SKU e Código de Barras / EAN.
+- Enter no SKU avança para o EAN; Enter no EAN salva no Banco de Produtos.
+- Operadores podem executar apenas esta operação específica, sem permissão geral para editar produtos.
+- Se o SKU existir no pedido aberto e estiver sem EAN, a linha pendente também é completada na mesma transação.
+- Se o SKU ainda não existir no banco, mas existir em um pedido pendente, o cadastro é criado com os dados do pedido.
+- Substituição de um EAN existente exige confirmação clara na tela.
+- O aviso sonoro de novos pedidos saiu da lateral e agora fica minimizado no topo.

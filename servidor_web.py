@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-APP_VERSION = "11.0"
+APP_VERSION = "11.1"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -1446,7 +1446,7 @@ def clear_login_failures(handler: BaseHTTPRequestHandler, username: str) -> None
 
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/11.0"
+    server_version = "NoromakExpedicao/11.1"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
@@ -1650,6 +1650,11 @@ class AppHandler(BaseHTTPRequestHandler):
             if ctx is not None:
                 self.handle_order_ean(ctx)
             return
+        if path == "/api/product-ean":
+            ctx = self.auth()
+            if ctx is not None:
+                self.handle_product_ean(ctx)
+            return
         if path == "/api/order-lock":
             ctx = self.auth()
             if ctx is not None:
@@ -1835,6 +1840,153 @@ class AppHandler(BaseHTTPRequestHandler):
             )
             audit(ctx["username"], "storage.save", key)
             self.send_json({"ok": True, "value": value, "version": version, "updated_at": updated})
+        except (ValueError, json.JSONDecodeError) as exc:
+            self.send_json({"error": str(exc)}, 400)
+        except Exception as exc:
+            self.send_json({"error": str(exc)}, 409)
+
+    def handle_product_ean(self, ctx: dict[str, Any]) -> None:
+        """Cadastro rápido e restrito de EAN pelo SKU na tela de conferência."""
+        try:
+            req = self.read_json()
+            sku = str(req.get("sku") or "").strip()
+            ean = str(req.get("ean") or "").strip()
+            ref_order = str(req.get("pedido") or "").strip()
+            if not sku:
+                raise ValueError("Informe o SKU do produto.")
+            if not ean:
+                raise ValueError("Informe o Código de Barras / EAN.")
+            if len(sku) > 160 or any(ord(char) < 32 for char in sku):
+                raise ValueError("SKU inválido ou muito longo.")
+            if len(ean) > 128 or any(ord(char) < 32 for char in ean):
+                raise ValueError("Código de barras inválido ou muito longo.")
+
+            def parse_rows(key: str) -> tuple[list[dict[str, Any]], int]:
+                value, version, _ = get_storage(key)
+                try:
+                    rows = json.loads(value or "[]")
+                except Exception as exc:
+                    raise ValueError(f"Os dados de {key} estão inválidos.") from exc
+                if not isinstance(rows, list):
+                    raise ValueError(f"Os dados de {key} não são uma lista.")
+                return [row for row in rows if isinstance(row, dict)], version
+
+            def write_rows(key: str, rows: list[dict[str, Any]], version: int, timestamp: str) -> int:
+                next_version = version + 1
+                DB.execute(
+                    """INSERT INTO storage(key,value,version,updated_at) VALUES(?,?,?,?)
+                       ON CONFLICT(key) DO UPDATE SET value=excluded.value,version=excluded.version,updated_at=excluded.updated_at""",
+                    (key, json_dumps(rows), next_version, timestamp),
+                )
+                return next_version
+
+            with DB_LOCK:
+                DB.execute("BEGIN IMMEDIATE")
+                try:
+                    products, product_version = parse_rows("conf_produtos")
+                    pending, pending_version = parse_rows("conf_pedidos")
+                    drafts, draft_version = parse_rows("conf_pedidos_rascunhos")
+                    sku_key = normalize(sku)
+                    product_matches = [product for product in products if normalize(product.get("SKU")) == sku_key]
+                    order_matches = [
+                        row for row in [*pending, *drafts]
+                        if normalize(row.get("SKU")) == sku_key
+                    ]
+                    if not product_matches and not order_matches:
+                        raise ValueError(f"O SKU {sku} não foi localizado no Banco de Produtos nem nos pedidos pendentes.")
+
+                    selected_matches = [
+                        row for row in order_matches
+                        if ref_order and normalize(order_number(row)) == normalize(ref_order)
+                    ]
+                    template = (selected_matches or order_matches or product_matches)[0]
+                    created = False
+                    previous_eans = sorted({
+                        str(product.get("Código de Barras") or "").strip()
+                        for product in product_matches
+                        if str(product.get("Código de Barras") or "").strip()
+                    })
+                    if not product_matches:
+                        product = {
+                            "__uidProduto": "PROD-" + secrets.token_urlsafe(12),
+                            "SKU": sku,
+                            "Código de Barras": ean,
+                        }
+                        for field in (
+                            "Descrição", "Marca", "Fabricante", "Aplicação", "Categoria", "Rua", "Módulo",
+                            "Prateleira", "Nível", "Posição", "Foto", "Peso", "Unidade", "Ativo",
+                        ):
+                            product[field] = str(template.get(field) or "")
+                        products.append(product)
+                        product_matches = [product]
+                        created = True
+                    else:
+                        for product in product_matches:
+                            product["Código de Barras"] = ean
+
+                    pending_count = 0
+                    draft_count = 0
+                    if ref_order:
+                        for row in pending:
+                            if (
+                                normalize(order_number(row)) == normalize(ref_order)
+                                and normalize(row.get("SKU")) == sku_key
+                                and not str(row.get("Código de Barras") or "").strip()
+                            ):
+                                row["Código de Barras"] = ean
+                                pending_count += 1
+                        for row in drafts:
+                            if (
+                                normalize(order_number(row)) == normalize(ref_order)
+                                and normalize(row.get("SKU")) == sku_key
+                                and not str(row.get("Código de Barras") or "").strip()
+                            ):
+                                row["Código de Barras"] = ean
+                                draft_count += 1
+
+                    timestamp = now_iso()
+                    versions = {
+                        "conf_produtos": write_rows("conf_produtos", products, product_version, timestamp),
+                    }
+                    updated_keys = ["conf_produtos"]
+                    if pending_count:
+                        versions["conf_pedidos"] = write_rows("conf_pedidos", pending, pending_version, timestamp)
+                        updated_keys.append("conf_pedidos")
+                    if draft_count:
+                        versions["conf_pedidos_rascunhos"] = write_rows(
+                            "conf_pedidos_rascunhos", drafts, draft_version, timestamp
+                        )
+                        updated_keys.append("conf_pedidos_rascunhos")
+                    _, marker_version, _ = get_storage("conf_banco_atualizado_em")
+                    versions["conf_banco_atualizado_em"] = marker_version + 1
+                    DB.execute(
+                        """INSERT INTO storage(key,value,version,updated_at) VALUES('conf_banco_atualizado_em',?,?,?)
+                           ON CONFLICT(key) DO UPDATE SET value=excluded.value,version=excluded.version,updated_at=excluded.updated_at""",
+                        (timestamp, marker_version + 1, timestamp),
+                    )
+                    updated_keys.append("conf_banco_atualizado_em")
+                    DB.commit()
+                except Exception:
+                    DB.rollback()
+                    raise
+            audit(
+                ctx["username"],
+                "product.ean.quick_update",
+                f"{sku}|{','.join(previous_eans) or '(vazio)'}->{ean}|produtos={len(product_matches)}|pedido={ref_order or '-'}"[:4000],
+            )
+            backup_daily()
+            self.send_json({
+                "ok": True,
+                "sku": sku,
+                "ean": ean,
+                "created": created,
+                "product_count": len(product_matches),
+                "order_count": pending_count + draft_count,
+                "description": str(template.get("Descrição") or ""),
+                "previous_eans": previous_eans,
+                "updated_keys": updated_keys,
+                "versions": versions,
+            })
         except (ValueError, json.JSONDecodeError) as exc:
             self.send_json({"error": str(exc)}, 400)
         except Exception as exc:

@@ -224,6 +224,23 @@
       return resposta;
     },
 
+    atualizarEanProduto(referencia) {
+      const resposta = xhrJson("POST", BASE + "/api/product-ean", referencia || {});
+      for (const chave of resposta.updated_keys || []) {
+        const anterior = cache.has(chave) ? cache.get(chave) : null;
+        const atual = xhrJson("GET", `${API}?key=${encodeURIComponent(chave)}`);
+        const novo = atual.exists ? String(atual.value ?? "") : null;
+        cache.set(chave, novo);
+        versoes.set(chave, Number(atual.version || resposta.versions?.[chave] || 0));
+        try {
+          if (novo === null) window.sessionStorage.removeItem("rede_cache_" + chave);
+          else window.sessionStorage.setItem("rede_cache_" + chave, novo);
+        } catch (_) {}
+        if (anterior !== novo) dispararStorage(chave, anterior, novo);
+      }
+      return resposta;
+    },
+
     migrarDoNavegador() {
       const chaves = CHAVES_MONITORADAS.filter(k => window.localStorage.getItem(k) !== null);
       if (!chaves.length) {
