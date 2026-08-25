@@ -7,11 +7,11 @@
 <meta name="application-name" content="Noromak Admin">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="manifest" href="/expedicao/manifest-admin.webmanifest?v=11.5" crossorigin="use-credentials">
-<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=11.5">
-<link rel="icon" href="/favicon.ico?v=11.5" sizes="any">
-<link rel="shortcut icon" href="/favicon.ico?v=11.5">
-<link rel="stylesheet" href="/expedicao/pwa-install.css?v=11.5">
+<link rel="manifest" href="/expedicao/manifest-admin.webmanifest?v=11.6" crossorigin="use-credentials">
+<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=11.6">
+<link rel="icon" href="/favicon.ico?v=11.6" sizes="any">
+<link rel="shortcut icon" href="/favicon.ico?v=11.6">
+<link rel="stylesheet" href="/expedicao/pwa-install.css?v=11.6">
 <title>Noromak - Administração dos Pedidos Compartilhados</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
@@ -418,7 +418,7 @@
 </style>
 <script src="/expedicao/shared-storage.js"></script>
 <script src="/expedicao/web-auth.js"></script>
-<script defer src="/expedicao/pwa-install.js?v=11.5"></script>
+<script defer src="/expedicao/pwa-install.js?v=11.6"></script>
 
 <style id="estiloEtiquetasPersistentesV98">
   .etiquetas-persistentes-box{margin:14px 0 18px;border:1px solid #c7d4e1;border-radius:9px;background:#f8fbfe;padding:13px}
@@ -622,9 +622,9 @@
 <div id="loginAdmin">
   <div class="box-login">
     <div class="logo-box">
-      <img src="/nk-logo.svg?v=11.5" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=11.5';">
+      <img src="/nk-logo.svg?v=11.6" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=11.6';">
     </div>
-    <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 11.5 — print cancelável e nova linha</div>
+    <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 11.6 — EAN em todos os pedidos do SKU</div>
     <div style="font-size:12px;color:#667;margin:-8px 0 14px;line-height:1.4;">Use o administrador principal ou qualquer usuário cadastrado com perfil <b>Admin</b>.</div>
     <input type="text" id="usuarioAdmin" placeholder="Usuário Admin">
     <input type="password" id="senhaAdmin" placeholder="Senha">
@@ -640,7 +640,7 @@
 <div id="painelConteudo" class="container-admin">
   <div class="header-topo">
     <div class="header-identidade">
-      <div class="logo-mini-box"><img src="/grupo-noromak.png?v=11.5" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=11.5';"></div>
+      <div class="logo-mini-box"><img src="/grupo-noromak.png?v=11.6" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=11.6';"></div>
       <div class="header-titulos"><h1>Administração dos pedidos compartilhados</h1><small>Dados centralizados no servidor Web em tempo real</small></div>
     </div>
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end;"><a href="/expedicao/estacao-impressao" target="_blank" style="text-decoration:none;background:#1F57A5;color:white;padding:8px 13px;border-radius:6px;font-size:12px;font-weight:800;">🖨 ESTAÇÃO ZEBRA</a><button type="button" class="pwa-install-btn pwa-header" data-pwa-install>⬇ Instalar Admin</button><span id="statusBancoAdmin" class="save-pill">● Banco Web ativo</span><button class="btn-sair" onclick="sairAdmin()">Sair do Painel</button></div>
@@ -717,7 +717,7 @@
 
   <section id="aba-usuarios" class="aba-painel">
     <div class="card-admin">
-      <h2>Usuários e aprovações <span class="usuario-versao">Versão 11.5 — print cancelável e nova linha</span></h2>
+      <h2>Usuários e aprovações <span class="usuario-versao">Versão 11.6 — EAN em todos os pedidos do SKU</span></h2>
       <div class="aviso-banco"><b>Login próprio do estoque:</b> cada pessoa deve ter usuário, senha e perfil individual. Por segurança, a senha atual <b>não pode ser visualizada</b>, pois fica armazenada de forma criptográfica. Para trocar, use o botão <b>Alterar senha</b>; o Admin poderá visualizar somente a nova senha enquanto a digita.</div>
       <div class="toolbar-grid"><button type="button" id="btnNovoUsuarioAdmin" class="btn-primario" onclick="abrirSolicitacaoUsuario('admin')">＋ Solicitar novo usuário</button><button type="button" class="btn-sucesso" onclick="salvarUsuariosAdmin(true)">💾 Salvar alterações</button></div>
       <div id="contadorUsuariosAdmin" class="usuario-contador"></div>
@@ -2374,7 +2374,7 @@ function salvarEanPedidoAdmin(uid,atualizarProduto=false,elemento=null){
     const correspondentes=produtosBancoAdmin.filter(p=>normalizarCodigoBanco(p.SKU)===normalizarCodigoBanco(sku));
     if(!correspondentes.length){alert(`O SKU ${sku} não foi localizado no Banco de Produtos. O cadastro global não será alterado.`);return false;}
     const detalheDuplicado=correspondentes.length>1?`\n\nExistem ${correspondentes.length} cadastros com este mesmo SKU; todos receberão o novo EAN.`:"";
-    if(!confirm(`ATUALIZAR O BANCO DE PRODUTOS?\n\nSKU: ${sku}\nNovo EAN: ${ean||"(vazio — remover EAN)"}\n\nEsta alteração é global e será usada para preencher pedidos futuros em todas as máquinas.${detalheDuplicado}\n\nConfirmar atualização?`))return false;
+    if(!confirm(`ATUALIZAR O BANCO DE PRODUTOS?\n\nSKU: ${sku}\nNovo EAN: ${ean||"(vazio — remover EAN)"}\n\nEsta alteração é global: atualizará o Banco de Produtos, os pedidos futuros e TODOS os pedidos pendentes deste SKU em todas as máquinas.${detalheDuplicado}\n\nConfirmar atualização?`))return false;
   }else if(ean===eanAnterior){
     eanMensagemPorUid.set(uid,{tipo:"ok",texto:"EAN já está salvo no pedido."});
     renderizarPedidosAdmin();
@@ -2389,8 +2389,11 @@ function salvarEanPedidoAdmin(uid,atualizarProduto=false,elemento=null){
     });
     eanSalvoPorUid.set(uid,ean);
     item["Código de Barras"]=ean;
-    if(atualizarProduto)produtosBancoAdmin.filter(p=>normalizarCodigoBanco(p.SKU)===normalizarCodigoBanco(sku)).forEach(p=>p["Código de Barras"]=ean);
-    const texto=atualizarProduto?`EAN salvo no pedido e em ${resposta.product_count||1} cadastro(s) do SKU.`:"EAN salvo no pedido pendente.";
+    if(atualizarProduto){
+      produtosBancoAdmin.filter(p=>normalizarCodigoBanco(p.SKU)===normalizarCodigoBanco(sku)).forEach(p=>p["Código de Barras"]=ean);
+      pedidosEditorAdmin.filter(p=>normalizarCodigoBanco(p.SKU)===normalizarCodigoBanco(sku)).forEach(p=>{p["Código de Barras"]=ean;eanSalvoPorUid.set(p.__uidLinha,ean);});
+    }
+    const texto=atualizarProduto?`EAN salvo no Banco de Produtos e aplicado a ${resposta.order_count||1} linha(s) pendente(s) deste SKU.`:"EAN salvo no pedido pendente.";
     eanMensagemPorUid.set(uid,{tipo:"ok",texto});
     setStatusBanco(atualizarProduto?"● EAN salvo no pedido e no Banco de Produtos":"● EAN salvo no pedido","ok");
     renderizarPedidosAdmin();

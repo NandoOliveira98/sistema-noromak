@@ -165,3 +165,18 @@ V11.5 — IMPORTAÇÃO POR PRINT E NOVA LINHA MANUAL
 - OCR real alcançou “loading tesseract core” e o botão Cancelar fechou o modal em aproximadamente 0,4 segundo: OK.
 - Modal de importação por print reabriu normalmente depois do cancelamento: OK.
 - Timeout de 15 segundos e contingência de preenchimento manual presentes e validados por inspeção estática: OK.
+
+
+V11.6 — EAN EM TODOS OS PEDIDOS PENDENTES DO SKU
+- Cadastro rápido por operador atualizou todos os cadastros duplicados no Banco de Produtos: OK.
+- Um único cadastro atualizou três pedidos pendentes diferentes do mesmo SKU: OK.
+- Linha que já possuía EAN incorreto foi corrigida: OK.
+- Correção posterior do EAN foi propagada novamente a todos os pedidos do SKU: OK.
+- Componente de kit recebeu o EAN sem perder Kit, nome ou quantidades: OK.
+- Ação global “Banco” do Admin propagou o EAN para outro pedido do mesmo SKU: OK.
+- Alteração somente na linha, sem ação “Banco”, continuou restrita ao pedido selecionado: OK.
+- Falha ao localizar o SKU no Banco de Produtos manteve rollback integral: OK.
+- Operador continuou bloqueado para edição genérica do Banco de Produtos: HTTP 403, OK.
+- Histórico e etiquetas permaneceram idênticos após a propagação: OK.
+- Scripts Python, JavaScript inline/externo e manifestos PWA: OK.
+- Regressão de OCR cancelável, nova linha, planilhas, Shopee, rascunhos, conclusão, gzip, CSP e X-Real-IP: OK.

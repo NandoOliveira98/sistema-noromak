@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-APP_VERSION = "11.5"
+APP_VERSION = "11.6"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -1446,7 +1446,7 @@ def clear_login_failures(handler: BaseHTTPRequestHandler, username: str) -> None
 
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/11.5"
+    server_version = "NoromakExpedicao/11.6"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
@@ -1924,25 +1924,32 @@ class AppHandler(BaseHTTPRequestHandler):
                         for product in product_matches:
                             product["Código de Barras"] = ean
 
+                    # O cadastro rápido é global por SKU: além do Banco de Produtos,
+                    # corrige todas as linhas ainda pendentes, mesmo que alguma delas
+                    # já possua um EAN antigo. Pedidos concluídos ficam fora porque não
+                    # pertencem mais a conf_pedidos/conf_pedidos_rascunhos.
                     pending_count = 0
                     draft_count = 0
-                    if ref_order:
-                        for row in pending:
-                            if (
-                                normalize(order_number(row)) == normalize(ref_order)
-                                and normalize(row.get("SKU")) == sku_key
-                                and not str(row.get("Código de Barras") or "").strip()
-                            ):
-                                row["Código de Barras"] = ean
-                                pending_count += 1
-                        for row in drafts:
-                            if (
-                                normalize(order_number(row)) == normalize(ref_order)
-                                and normalize(row.get("SKU")) == sku_key
-                                and not str(row.get("Código de Barras") or "").strip()
-                            ):
-                                row["Código de Barras"] = ean
-                                draft_count += 1
+                    pending_orders: set[str] = set()
+                    matched_pending_count = 0
+                    for row in pending:
+                        if normalize(row.get("SKU")) != sku_key:
+                            continue
+                        matched_pending_count += 1
+                        if str(row.get("Código de Barras") or "").strip() == ean:
+                            continue
+                        row["Código de Barras"] = ean
+                        pending_count += 1
+                        number = normalize(order_number(row))
+                        if number:
+                            pending_orders.add(number)
+                    for row in drafts:
+                        if normalize(row.get("SKU")) != sku_key:
+                            continue
+                        if str(row.get("Código de Barras") or "").strip() == ean:
+                            continue
+                        row["Código de Barras"] = ean
+                        draft_count += 1
 
                     timestamp = now_iso()
                     versions = {
@@ -1972,7 +1979,12 @@ class AppHandler(BaseHTTPRequestHandler):
             audit(
                 ctx["username"],
                 "product.ean.quick_update",
-                f"{sku}|{','.join(previous_eans) or '(vazio)'}->{ean}|produtos={len(product_matches)}|pedido={ref_order or '-'}"[:4000],
+                (
+                    f"{sku}|{','.join(previous_eans) or '(vazio)'}->{ean}"
+                    f"|produtos={len(product_matches)}|linhas_pendentes={pending_count}"
+                    f"|pedidos_pendentes={len(pending_orders)}|rascunhos={draft_count}"
+                    f"|pedido_referencia={ref_order or '-'}"
+                )[:4000],
             )
             backup_daily()
             self.send_json({
@@ -1982,6 +1994,10 @@ class AppHandler(BaseHTTPRequestHandler):
                 "created": created,
                 "product_count": len(product_matches),
                 "order_count": pending_count + draft_count,
+                "pending_line_count": pending_count,
+                "pending_order_count": len(pending_orders),
+                "draft_line_count": draft_count,
+                "matched_pending_line_count": matched_pending_count,
                 "description": str(template.get("Descrição") or ""),
                 "previous_eans": previous_eans,
                 "updated_keys": updated_keys,
@@ -2078,6 +2094,10 @@ class AppHandler(BaseHTTPRequestHandler):
                         (pending if destination_key == "conf_pedidos" else drafts).append(row)
 
                     product_count = 0
+                    matched_order_line_count = 1
+                    propagated_order_count = 0
+                    pending_order_count = 0
+                    matched_draft_line_count = 0
                     products: list[dict[str, Any]] = []
                     product_version = 0
                     sku = str(row.get("SKU") or "").strip()
@@ -2091,6 +2111,32 @@ class AppHandler(BaseHTTPRequestHandler):
                         for product in matched:
                             product["Código de Barras"] = ean
                         product_count = len(matched)
+
+                        # A ação "Banco" também é um cadastro global do SKU.
+                        # Mantém todas as linhas pendentes alinhadas ao mesmo EAN.
+                        sku_key = normalize(sku)
+                        matched_order_line_count = 0
+                        pending_orders: set[str] = set()
+                        matched_draft_line_count = 0
+                        for pending_row in pending:
+                            if normalize(pending_row.get("SKU")) != sku_key:
+                                continue
+                            matched_order_line_count += 1
+                            number = normalize(order_number(pending_row))
+                            if number:
+                                pending_orders.add(number)
+                            if str(pending_row.get("Código de Barras") or "").strip() != ean:
+                                pending_row["Código de Barras"] = ean
+                                propagated_order_count += 1
+                        for draft_row in drafts:
+                            if normalize(draft_row.get("SKU")) != sku_key:
+                                continue
+                            matched_order_line_count += 1
+                            matched_draft_line_count += 1
+                            if str(draft_row.get("Código de Barras") or "").strip() != ean:
+                                draft_row["Código de Barras"] = ean
+                                propagated_order_count += 1
+                        pending_order_count = len(pending_orders)
 
                     timestamp = now_iso()
                     versions = {
@@ -2116,7 +2162,11 @@ class AppHandler(BaseHTTPRequestHandler):
             audit(
                 ctx["username"],
                 "order.ean.update_product" if update_product else "order.ean.update",
-                f"{order_number(row)}|{sku}|{old_ean}->{ean}|produtos={product_count}"[:4000],
+                (
+                    f"{order_number(row)}|{sku}|{old_ean}->{ean}|produtos={product_count}"
+                    f"|linhas_sku={matched_order_line_count}|propagadas={propagated_order_count}"
+                    f"|pedidos_pendentes={pending_order_count}|rascunhos={matched_draft_line_count}"
+                )[:4000],
             )
             backup_daily()
             self.send_json({
@@ -2128,6 +2178,10 @@ class AppHandler(BaseHTTPRequestHandler):
                 "updated_keys": updated_keys,
                 "versions": versions,
                 "product_count": product_count,
+                "order_count": matched_order_line_count,
+                "propagated_order_count": propagated_order_count,
+                "pending_order_count": pending_order_count,
+                "draft_line_count": matched_draft_line_count,
                 "destination": destination_key,
             })
         except (ValueError, json.JSONDecodeError) as exc:

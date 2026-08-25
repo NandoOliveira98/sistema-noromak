@@ -1,0 +1,19 @@
+SISTEMA DE CONFERÊNCIA NOROMAK — VERSÃO 11.6
+
+EAN PROPAGADO PARA TODOS OS PEDIDOS PENDENTES DO SKU
+
+- Ao cadastrar um EAN no botão “＋ ADICIONAR EAN” da Conferência, o servidor atualiza o Banco de Produtos e todas as linhas ainda pendentes que possuem o mesmo SKU.
+- A regra funciona tanto para o primeiro cadastro quanto para a correção de um EAN existente.
+- Se outro pedido estiver com EAN vazio ou incorreto, ele recebe imediatamente o novo valor.
+- Componentes de kits são atualizados normalmente sem alterar quantidade, nome do kit ou progresso de conferência.
+- A ação global “Banco” do Admin também propaga o EAN após a confirmação explícita.
+- A gravação é transacional: Banco de Produtos e pedidos são alterados juntos, com rollback integral em caso de erro.
+- A auditoria registra SKU, EAN anterior/novo, produtos, linhas e pedidos afetados.
+
+SEGURANÇA E COMPATIBILIDADE
+
+- Pedidos concluídos não são reabertos nem alterados.
+- Histórico, etiquetas persistentes e fila de impressão não são modificados.
+- SKUs diferentes não são afetados.
+- Mantidas as importações por Excel, Mercado Livre, Shopee, print/plugin e kits explícitos.
+- Mantidas as correções da versão 11.5 para OCR cancelável e nova linha manual.

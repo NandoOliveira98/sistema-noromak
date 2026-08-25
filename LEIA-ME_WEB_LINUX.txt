@@ -1,4 +1,4 @@
-SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 11.5
+SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 11.6
 ================================================
 
 Esta versão mantém:
@@ -21,7 +21,7 @@ Copie estes arquivos para a pasta atual do projeto, preservando a pasta oculta .
 Depois execute:
 
   git add -A
-  git commit -m "corrige importacao por print e nova linha manual"
+  git commit -m "propaga ean para todos os pedidos pendentes do sku"
   ./publicar.sh
 
 Não execute instalar_servidor_uma_vez.sh e não altere /etc/systemd quando a infraestrutura já estiver pronta.
@@ -125,3 +125,11 @@ VERSÃO 11.5
 - A inicialização do OCR tem limite de 15 segundos e orienta o preenchimento manual quando indisponível.
 - Nova linha manual é criada no topo, com busca limpa, primeira página e foco no número do pedido.
 - A linha vazia permanece visível e passa a ser salva como rascunho assim que o primeiro campo é preenchido.
+
+
+VERSÃO 11.6
+- O cadastro rápido de EAN por SKU atualiza o Banco de Produtos e todas as linhas pendentes desse SKU.
+- Um EAN corrigido substitui também valores antigos nos demais pedidos pendentes do mesmo SKU.
+- A ação global “Banco” do Admin segue a mesma regra após a confirmação explícita.
+- Pedidos concluídos, histórico, etiquetas e SKUs diferentes não são alterados.
+- A resposta informa quantas linhas e quantos pedidos pendentes receberam o EAN.

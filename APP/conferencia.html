@@ -7,11 +7,11 @@
 <meta name="application-name" content="Noromak Conferência">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="manifest" href="/expedicao/manifest-conferencia.webmanifest?v=11.5" crossorigin="use-credentials">
-<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/conferencia-180.png?v=11.5">
-<link rel="icon" href="/favicon.ico?v=11.5" sizes="any">
-<link rel="shortcut icon" href="/favicon.ico?v=11.5">
-<link rel="stylesheet" href="/expedicao/pwa-install.css?v=11.5">
+<link rel="manifest" href="/expedicao/manifest-conferencia.webmanifest?v=11.6" crossorigin="use-credentials">
+<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/conferencia-180.png?v=11.6">
+<link rel="icon" href="/favicon.ico?v=11.6" sizes="any">
+<link rel="shortcut icon" href="/favicon.ico?v=11.6">
+<link rel="stylesheet" href="/expedicao/pwa-install.css?v=11.6">
 <title>Noromak - Conferência em Rede</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
@@ -319,7 +319,7 @@
 </style>
 <script src="/expedicao/shared-storage.js"></script>
 <script src="/expedicao/web-auth.js"></script>
-<script defer src="/expedicao/pwa-install.js?v=11.5"></script>
+<script defer src="/expedicao/pwa-install.js?v=11.6"></script>
 </head>
 
 <body>
@@ -327,9 +327,9 @@
 <div id="telaLogin">
   <div class="box-card">
     <div class="logo-box">
-      <img src="/nk-logo.svg?v=11.5" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=11.5';">
+      <img src="/nk-logo.svg?v=11.6" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=11.6';">
     </div>
-    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 11.5 — correções no painel Admin</div>
+    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 11.6 — EAN em todos os pedidos do SKU</div>
 
     <div class="box-upload-rede" style="border-style:solid;">
       <label>🗄 PEDIDOS COMPARTILHADOS NA REDE:</label>
@@ -419,7 +419,7 @@
 
 <header>
   <div class="logo-mini-box">
-    <img src="/grupo-noromak.png?v=11.5" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=11.5';">
+    <img src="/grupo-noromak.png?v=11.6" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=11.6';">
   </div>
   <div class="usuario-area">
     <div style="text-align: right;">
@@ -434,7 +434,7 @@
         <div class="ean-rapido-cabecalho">
           <div class="ean-rapido-cabecalho-texto">
             <div id="eanRapidoTitulo" class="ean-rapido-titulo">＋ ADICIONAR EAN AO BANCO DE PRODUTOS</div>
-            <div class="ean-rapido-subtitulo">Informe o SKU e bipe o EAN. Ao salvar, o cadastro fica disponível para todas as máquinas.</div>
+            <div class="ean-rapido-subtitulo">Informe o SKU e bipe o EAN. Ao salvar, o Banco de Produtos e todos os pedidos pendentes deste SKU são atualizados em todas as máquinas.</div>
           </div>
           <button class="ean-rapido-fechar" type="button" onclick="fecharPainelEanRapido()" aria-label="Fechar cadastro de EAN">×</button>
         </div>
@@ -1509,7 +1509,7 @@ function salvarEanRapidoConferencia() {
   const chave = normalizarIdentificadorExato(sku);
   const produtos = produtosBancoEanRapido().filter(item => normalizarIdentificadorExato(extrairCampo(item, "SKU")) === chave);
   const eansDiferentes = [...new Set(produtos.map(item => String(extrairCampo(item, "Código de Barras") || "").trim()).filter(valor => valor && valor !== ean))];
-  if (eansDiferentes.length && !confirm(`SUBSTITUIR O EAN DO PRODUTO?\n\nSKU: ${sku}\nEAN atual: ${eansDiferentes.join(", ")}\nNovo EAN: ${ean}\n\nEsta alteração será usada em todas as máquinas.`)) {
+  if (eansDiferentes.length && !confirm(`SUBSTITUIR O EAN DO PRODUTO?\n\nSKU: ${sku}\nEAN atual: ${eansDiferentes.join(", ")}\nNovo EAN: ${ean}\n\nO Banco de Produtos e TODOS os pedidos pendentes deste SKU serão atualizados em todas as máquinas.`)) {
     campoEan?.focus();
     campoEan?.select?.();
     return false;
@@ -1534,8 +1534,17 @@ function salvarEanRapidoConferencia() {
       }
     }
     const criado = resposta.created ? "Novo produto criado" : "Produto atualizado";
-    const pedidoAtualizado = resposta.order_count ? ` ${resposta.order_count} linha(s) do pedido aberto também recebeu(ram) o EAN.` : "";
-    definirStatusEanRapido(`${criado}: SKU ${sku} → EAN ${ean}.${pedidoAtualizado}`, "ok");
+    const linhasPendentes = Number(resposta.pending_line_count || 0);
+    const pedidosPendentes = Number(resposta.pending_order_count || 0);
+    const linhasEncontradas = Number(resposta.matched_pending_line_count || 0);
+    const rascunhosAtualizados = Number(resposta.draft_line_count || 0);
+    const pedidosAtualizados = linhasPendentes
+      ? ` ${linhasPendentes} linha(s) de ${pedidosPendentes} pedido(s) pendente(s) também recebeu(ram) o EAN.`
+      : linhasEncontradas
+        ? " Todos os pedidos pendentes deste SKU já estavam com esse EAN."
+        : " Nenhum pedido pendente usa este SKU neste momento.";
+    const rascunhos = rascunhosAtualizados ? ` ${rascunhosAtualizados} rascunho(s) também foi(ram) atualizado(s).` : "";
+    definirStatusEanRapido(`${criado}: SKU ${sku} → EAN ${ean}.${pedidosAtualizados}${rascunhos}`, "ok");
     if (campoSku) { campoSku.value = ""; campoSku.dataset.sugerido = "0"; }
     if (campoEan) campoEan.value = "";
     fecharPainelEanRapido();
