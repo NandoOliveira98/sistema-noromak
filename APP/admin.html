@@ -7,11 +7,11 @@
 <meta name="application-name" content="Noromak Admin">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="manifest" href="/expedicao/manifest-admin.webmanifest?v=11.4" crossorigin="use-credentials">
-<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=11.4">
-<link rel="icon" href="/favicon.ico?v=11.4" sizes="any">
-<link rel="shortcut icon" href="/favicon.ico?v=11.4">
-<link rel="stylesheet" href="/expedicao/pwa-install.css?v=11.4">
+<link rel="manifest" href="/expedicao/manifest-admin.webmanifest?v=11.5" crossorigin="use-credentials">
+<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=11.5">
+<link rel="icon" href="/favicon.ico?v=11.5" sizes="any">
+<link rel="shortcut icon" href="/favicon.ico?v=11.5">
+<link rel="stylesheet" href="/expedicao/pwa-install.css?v=11.5">
 <title>Noromak - Administração dos Pedidos Compartilhados</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
@@ -418,7 +418,7 @@
 </style>
 <script src="/expedicao/shared-storage.js"></script>
 <script src="/expedicao/web-auth.js"></script>
-<script defer src="/expedicao/pwa-install.js?v=11.4"></script>
+<script defer src="/expedicao/pwa-install.js?v=11.5"></script>
 
 <style id="estiloEtiquetasPersistentesV98">
   .etiquetas-persistentes-box{margin:14px 0 18px;border:1px solid #c7d4e1;border-radius:9px;background:#f8fbfe;padding:13px}
@@ -622,9 +622,9 @@
 <div id="loginAdmin">
   <div class="box-login">
     <div class="logo-box">
-      <img src="/nk-logo.svg?v=11.4" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=11.4';">
+      <img src="/nk-logo.svg?v=11.5" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=11.5';">
     </div>
-    <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 11.4 — etiqueta Shopee por QR</div>
+    <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 11.5 — print cancelável e nova linha</div>
     <div style="font-size:12px;color:#667;margin:-8px 0 14px;line-height:1.4;">Use o administrador principal ou qualquer usuário cadastrado com perfil <b>Admin</b>.</div>
     <input type="text" id="usuarioAdmin" placeholder="Usuário Admin">
     <input type="password" id="senhaAdmin" placeholder="Senha">
@@ -640,7 +640,7 @@
 <div id="painelConteudo" class="container-admin">
   <div class="header-topo">
     <div class="header-identidade">
-      <div class="logo-mini-box"><img src="/grupo-noromak.png?v=11.4" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=11.4';"></div>
+      <div class="logo-mini-box"><img src="/grupo-noromak.png?v=11.5" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=11.5';"></div>
       <div class="header-titulos"><h1>Administração dos pedidos compartilhados</h1><small>Dados centralizados no servidor Web em tempo real</small></div>
     </div>
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end;"><a href="/expedicao/estacao-impressao" target="_blank" style="text-decoration:none;background:#1F57A5;color:white;padding:8px 13px;border-radius:6px;font-size:12px;font-weight:800;">🖨 ESTAÇÃO ZEBRA</a><button type="button" class="pwa-install-btn pwa-header" data-pwa-install>⬇ Instalar Admin</button><span id="statusBancoAdmin" class="save-pill">● Banco Web ativo</span><button class="btn-sair" onclick="sairAdmin()">Sair do Painel</button></div>
@@ -717,7 +717,7 @@
 
   <section id="aba-usuarios" class="aba-painel">
     <div class="card-admin">
-      <h2>Usuários e aprovações <span class="usuario-versao">Versão 11.4 — etiqueta Shopee por QR</span></h2>
+      <h2>Usuários e aprovações <span class="usuario-versao">Versão 11.5 — print cancelável e nova linha</span></h2>
       <div class="aviso-banco"><b>Login próprio do estoque:</b> cada pessoa deve ter usuário, senha e perfil individual. Por segurança, a senha atual <b>não pode ser visualizada</b>, pois fica armazenada de forma criptográfica. Para trocar, use o botão <b>Alterar senha</b>; o Admin poderá visualizar somente a nova senha enquanto a digita.</div>
       <div class="toolbar-grid"><button type="button" id="btnNovoUsuarioAdmin" class="btn-primario" onclick="abrirSolicitacaoUsuario('admin')">＋ Solicitar novo usuário</button><button type="button" class="btn-sucesso" onclick="salvarUsuariosAdmin(true)">💾 Salvar alterações</button></div>
       <div id="contadorUsuariosAdmin" class="usuario-contador"></div>
@@ -2266,6 +2266,14 @@ function agendarSalvarPedidosAdmin(){
 function salvarPedidosAdmin(mostrarMensagem=false){
   timerSalvarPedidosAdmin=null;
   try{
+    const elementoFocado=document.activeElement;
+    const focoPedido=elementoFocado?.closest?.("#corpoPedidosAdmin")?{
+      uid:elementoFocado.dataset?.uidlinha||"",
+      campo:elementoFocado.dataset?.campo||"",
+      inicio:Number.isInteger(elementoFocado.selectionStart)?elementoFocado.selectionStart:null,
+      fim:Number.isInteger(elementoFocado.selectionEnd)?elementoFocado.selectionEnd:null
+    }:null;
+    const ordemAntesDeSalvar=new Map(pedidosEditorAdmin.map((item,indice)=>[item.__uidLinha,indice]));
     pedidosEditorAdmin.forEach(item=>{
       item.Marketplace=marketplaceExibicaoBanco(item.Pedido);
       item.Pedido=pedidoArmazenamentoBanco(item.Pedido,item.Marketplace);
@@ -2285,7 +2293,7 @@ function salvarPedidosAdmin(mostrarMensagem=false){
     pedidosEditorAdmin=[...validosConfirmados,...rascunhosConfirmados].map(x=>{
       const marketplace=x.Marketplace||marketplaceExibicaoBanco(x.Pedido);
       return {...x,Pedido:pedidoArmazenamentoBanco(x.Pedido,marketplace),Marketplace:marketplaceExibicaoBanco(x.Pedido),"Data do Pedido":normalizarDataPedidoBanco(x["Data do Pedido"]||x.Data||x.DataPedido,true),Kit:normalizarBuscaBanco(x.Kit)==="sim"?"SIM":(x["Nome do Kit"]?"SIM":""),__uidLinha:x.__uidLinha||x.__uidPedido||uidBanco("PED")};
-    });
+    }).sort((a,b)=>(ordemAntesDeSalvar.get(a.__uidLinha)??Number.MAX_SAFE_INTEGER)-(ordemAntesDeSalvar.get(b.__uidLinha)??Number.MAX_SAFE_INTEGER));
     eanSalvoPorUid.clear();
     pedidosEditorAdmin.forEach(item=>eanSalvoPorUid.set(item.__uidLinha,campoBanco(item,"Código de Barras")));
 
@@ -2293,6 +2301,12 @@ function salvarPedidosAdmin(mostrarMensagem=false){
     dadosPedidos=validosConfirmados;
     ultimaAssinaturaPedidosAdmin=JSON.stringify(validosConfirmados);
     renderizarPedidosAdmin();
+    if(focoPedido?.uid&&focoPedido?.campo)setTimeout(()=>{
+      const novoFoco=document.querySelector(`[data-uidlinha="${focoPedido.uid}"][data-campo="${focoPedido.campo}"]`);
+      if(!novoFoco)return;
+      novoFoco.focus({preventScroll:true});
+      if(focoPedido.inicio!==null&&typeof novoFoco.setSelectionRange==="function")novoFoco.setSelectionRange(focoPedido.inicio,focoPedido.fim);
+    },0);
     setStatusBanco("● Salvo automaticamente","ok");
     atualizarKpisAdmin();
     if(mostrarMensagem) alert(`Banco salvo. ${new Set(validosConfirmados.map(x=>normalizarCodigoBanco(x.Pedido))).size} pedido(s) disponível(is) para conferência.`);
@@ -2300,7 +2314,25 @@ function salvarPedidosAdmin(mostrarMensagem=false){
 }
 function adicionarLinhaPedidoAdmin(base=null){
   const item={Pedido:base?.Pedido||"",Marketplace:base?.Marketplace||"","Data do Pedido":normalizarDataPedidoBanco(base?.["Data do Pedido"],true),Kit:base?.Kit||"","Nome do Kit":base?.["Nome do Kit"]||"","Quantidade de Kits":base?.["Quantidade de Kits"]||"","Quantidade por Kit":"",Cliente:base?.Cliente||"",SKU:"",Quantidade:"1","Código de Barras":"","Descrição":"",Rua:"",Módulo:"",Prateleira:"",Nível:"",Posição:"",Foto:"",__uidLinha:uidBanco("PED")};
-  pedidosEditorAdmin.push(item);renderizarPedidosAdmin();agendarSalvarPedidosAdmin();setTimeout(()=>document.querySelector(`[data-uidlinha="${item.__uidLinha}"][data-campo="${base?'SKU':'Pedido'}"]`)?.focus(),30);
+  const busca=document.getElementById("buscaPedidosAdmin");if(busca)busca.value="";
+  if(base){
+    let indice=pedidosEditorAdmin.findIndex(x=>x.__uidLinha===base.__uidLinha)+1;
+    const pedidoBase=normalizarCodigoBanco(base.Pedido);
+    while(indice<pedidosEditorAdmin.length&&normalizarCodigoBanco(pedidosEditorAdmin[indice].Pedido)===pedidoBase)indice++;
+    pedidosEditorAdmin.splice(Math.max(0,indice),0,item);
+    paginaPedidosAdmin=Math.floor(Math.max(0,indice)/ITENS_POR_PAGINA_PEDIDOS)+1;
+  }else{
+    pedidosEditorAdmin.unshift(item);
+    paginaPedidosAdmin=1;
+  }
+  renderizarPedidosAdmin();
+  if(base)agendarSalvarPedidosAdmin();else setStatusBanco("● Nova linha aguardando preenchimento","ok");
+  mostrarStatusImportacaoPedidos("sucesso",base?"➕ Novo item criado junto ao pedido. Preencha o SKU e os demais dados.":"➕ Nova linha manual criada no topo. Comece pelo número do pedido; ao preencher o primeiro campo, ela será salva como rascunho automaticamente.");
+  setTimeout(()=>{
+    const campo=document.querySelector(`[data-uidlinha="${item.__uidLinha}"][data-campo="${base?'SKU':'Pedido'}"]`);
+    campo?.scrollIntoView({block:"center",inline:"nearest",behavior:"smooth"});
+    campo?.focus({preventScroll:true});campo?.select?.();
+  },40);
 }
 function adicionarItemMesmoPedido(uid){const base=pedidosEditorAdmin.find(x=>x.__uidLinha===uid);adicionarLinhaPedidoAdmin(base);}
 function excluirLinhaPedidoAdmin(uid){
@@ -3342,11 +3374,14 @@ async function importarPedidosExcelAdmin(event){
 let imagemImportacaoPrint = null;
 let dataUrlImportacaoPrint = "";
 let workerOcrImportacaoPrint = null;
+let promessaWorkerOcrImportacaoPrint = null;
 let ocrPrintEmAndamento = false;
+let tokenOcrImportacaoPrint = 0;
 let marketplaceDetectadoPrint = "";
 let produtoResolvidoPrint = null;
 let etapaOcrImportacaoPrint = "Preparando leitura";
 let componentesKitPrint = [];
+const TEMPO_MAX_INICIALIZACAO_OCR_PRINT = 15000;
 
 const CONFIG_OCR_PRINT = {
   mercado_livre: {
@@ -3386,7 +3421,7 @@ function abrirImportacaoPorPrint(){
 }
 
 function fecharImportacaoPorPrint(){
-  if(ocrPrintEmAndamento){alert("Aguarde a leitura do print terminar antes de fechar.");return;}
+  cancelarOcrImportacaoPrint();
   const modal=document.getElementById("modalImportacaoPrint");
   modal?.classList.remove("ativo");modal?.setAttribute("aria-hidden","true");
 }
@@ -3422,6 +3457,7 @@ function carregarDataUrlImagemPrint(dataUrl,nome="print"){
 }
 
 function limparImportacaoPorPrint(){
+  cancelarOcrImportacaoPrint();
   imagemImportacaoPrint=null;dataUrlImportacaoPrint="";marketplaceDetectadoPrint="";produtoResolvidoPrint=null;
   const preview=document.getElementById("previewImportacaoPrint");if(preview){preview.removeAttribute("src");preview.alt="Prévia do print selecionado";}
   document.getElementById("zonaColagemPrint")?.classList.remove("tem-imagem","arrastando");
@@ -3450,15 +3486,48 @@ function statusImportacaoPrint(tipo,html,progresso){
   if(progresso!==undefined){const barra=document.getElementById("barraOcrPrint");if(barra)barra.style.width=Math.max(0,Math.min(100,progresso))+"%";}
 }
 
-async function obterWorkerOcrImportacaoPrint(){
+function erroCancelamentoOcrPrint(){const erro=new Error("Leitura do print cancelada.");erro.name="OcrPrintCancelado";return erro;}
+function confirmarOcrPrintAtivo(token){if(token!==tokenOcrImportacaoPrint||!ocrPrintEmAndamento||!modalPrintAberto())throw erroCancelamentoOcrPrint();}
+function encerrarWorkerOcrImportacaoPrint(){
+  const worker=workerOcrImportacaoPrint;workerOcrImportacaoPrint=null;
+  const promessa=promessaWorkerOcrImportacaoPrint;promessaWorkerOcrImportacaoPrint=null;
+  const terminar=instancia=>{try{Promise.resolve(instancia?.terminate?.()).catch(()=>{});}catch(_){}}
+  if(worker)terminar(worker);
+  if(promessa)Promise.resolve(promessa).then(instancia=>{if(instancia!==worker)terminar(instancia);}).catch(()=>{});
+}
+function cancelarOcrImportacaoPrint(){
+  const precisaEncerrar=ocrPrintEmAndamento||!!promessaWorkerOcrImportacaoPrint;
+  tokenOcrImportacaoPrint++;
+  ocrPrintEmAndamento=false;
+  if(precisaEncerrar)encerrarWorkerOcrImportacaoPrint();
+  const ler=document.getElementById("btnLerImportacaoPrint");if(ler)ler.disabled=!imagemImportacaoPrint;
+  validarCamposImportacaoPrint();
+}
+
+async function obterWorkerOcrImportacaoPrint(token){
+  confirmarOcrPrintAtivo(token);
   if(!window.Tesseract)throw new Error("O componente OCR não foi carregado. Verifique a conexão com a internet desta máquina e reabra o sistema.");
-  if(!workerOcrImportacaoPrint){
-    workerOcrImportacaoPrint=await Tesseract.createWorker("eng",1,{logger:m=>{
-      if(m.status==="recognizing text")statusImportacaoPrint("info",`${etapaOcrImportacaoPrint}... ${Math.round((m.progress||0)*100)}%`,Math.max(4,Math.round((m.progress||0)*88)));
-      else if(m.status)statusImportacaoPrint("info",`${etapaOcrImportacaoPrint}: ${String(m.status).replaceAll("_"," ")}`,4);
-    }});
+  if(workerOcrImportacaoPrint)return workerOcrImportacaoPrint;
+  const criada=Tesseract.createWorker("eng",1,{logger:m=>{
+    if(token!==tokenOcrImportacaoPrint||!ocrPrintEmAndamento||!modalPrintAberto())return;
+    if(m.status==="recognizing text")statusImportacaoPrint("info",`${etapaOcrImportacaoPrint}... ${Math.round((m.progress||0)*100)}%`,Math.max(4,Math.round((m.progress||0)*88)));
+    else if(m.status)statusImportacaoPrint("info",`${etapaOcrImportacaoPrint}: ${String(m.status).replaceAll("_"," ")}`,4);
+  }});
+  promessaWorkerOcrImportacaoPrint=criada;
+  let timerInicializacao=null;
+  try{
+    const limite=new Promise((_,rejeitar)=>{timerInicializacao=setTimeout(()=>{const erro=new Error("O OCR não iniciou em 15 segundos. Você pode preencher os campos manualmente ou tentar novamente.");erro.name="OcrPrintTimeout";rejeitar(erro);},TEMPO_MAX_INICIALIZACAO_OCR_PRINT);});
+    const worker=await Promise.race([criada,limite]);
+    confirmarOcrPrintAtivo(token);
+    workerOcrImportacaoPrint=worker;
+    return workerOcrImportacaoPrint;
+  }catch(erro){
+    criada.then(instancia=>{if(instancia!==workerOcrImportacaoPrint){try{Promise.resolve(instancia?.terminate?.()).catch(()=>{});}catch(_){}}}).catch(()=>{});
+    throw erro;
+  }finally{
+    if(timerInicializacao)clearTimeout(timerInicializacao);
+    if(promessaWorkerOcrImportacaoPrint===criada)promessaWorkerOcrImportacaoPrint=null;
   }
-  return workerOcrImportacaoPrint;
 }
 
 function canvasRecorteImportacaoPrint(imagem,regiao,escala=3,binarizar=false){
@@ -3478,8 +3547,10 @@ function canvasRecorteImportacaoPrint(imagem,regiao,escala=3,binarizar=false){
   ctx.putImageData(dados,0,0);return canvas;
 }
 
-async function reconhecerRegiaoPrint(regiao,opcoes={}){
-  const worker=await obterWorkerOcrImportacaoPrint();
+async function reconhecerRegiaoPrint(regiao,opcoes={},token=tokenOcrImportacaoPrint){
+  confirmarOcrPrintAtivo(token);
+  const worker=await obterWorkerOcrImportacaoPrint(token);
+  confirmarOcrPrintAtivo(token);
   const whitelist=opcoes.whitelist||"";
   await worker.setParameters({
     tessedit_pageseg_mode:String(opcoes.psm||6),
@@ -3487,15 +3558,17 @@ async function reconhecerRegiaoPrint(regiao,opcoes={}){
     preserve_interword_spaces:"1",
     user_defined_dpi:"300"
   });
+  confirmarOcrPrintAtivo(token);
   const canvas=canvasRecorteImportacaoPrint(imagemImportacaoPrint,regiao,opcoes.escala||3,!!opcoes.binarizar);
   const resultado=await worker.recognize(canvas);
+  confirmarOcrPrintAtivo(token);
   return {texto:String(resultado?.data?.text||"").trim(),confianca:Number(resultado?.data?.confidence||0)};
 }
 
-async function reconhecerMelhorRegiaoPrint(regioes,opcoes={}){
+async function reconhecerMelhorRegiaoPrint(regioes,opcoes={},token=tokenOcrImportacaoPrint){
   let melhor={texto:"",confianca:0};
   for(const regiao of regioes||[]){
-    const atual=await reconhecerRegiaoPrint(regiao,opcoes);
+    const atual=await reconhecerRegiaoPrint(regiao,opcoes,token);
     if(atual.texto.length>melhor.texto.length||atual.confianca>melhor.confianca+8)melhor=atual;
     if(opcoes.validar?.(atual.texto))return atual;
   }
@@ -3688,14 +3761,16 @@ function marketplacePrintAlterado(){if(imagemImportacaoPrint&&!ocrPrintEmAndamen
 
 async function lerImportacaoPorPrint(){
   if(!imagemImportacaoPrint||ocrPrintEmAndamento)return;
+  const token=++tokenOcrImportacaoPrint;
   ocrPrintEmAndamento=true;produtoResolvidoPrint=null;
   ["btnLerImportacaoPrint","btnSalvarImportacaoPrint","btnSalvarOutroPrint"].forEach(id=>{const el=document.getElementById(id);if(el)el.disabled=true;});
   try{
     etapaOcrImportacaoPrint="Reconhecendo a tela";statusImportacaoPrint("info","Preparando a leitura da imagem...",2);
-    const worker=await obterWorkerOcrImportacaoPrint();
+    const worker=await obterWorkerOcrImportacaoPrint(token);
     await worker.setParameters({tessedit_pageseg_mode:String((Tesseract.PSM&&Tesseract.PSM.SPARSE_TEXT)||11),tessedit_char_whitelist:"",preserve_interword_spaces:"1",user_defined_dpi:"300"});
+    confirmarOcrPrintAtivo(token);
     const fullCanvas=canvasRecorteImportacaoPrint(imagemImportacaoPrint,{x:0,y:0,w:1,h:1},Math.min(2.4,Math.max(1.4,1500/(imagemImportacaoPrint.naturalWidth||1000))),false);
-    const fullResult=await worker.recognize(fullCanvas);const textoGeral=String(fullResult?.data?.text||"");
+    const fullResult=await worker.recognize(fullCanvas);confirmarOcrPrintAtivo(token);const textoGeral=String(fullResult?.data?.text||"");
     let marketplace=document.getElementById("printMarketplace").value;
     if(marketplace==="auto")marketplace=detectarMarketplaceTextoPrint(textoGeral);
     if(!marketplace||!CONFIG_OCR_PRINT[marketplace])throw new Error("Não foi possível identificar o marketplace. Selecione Mercado Livre, Shopee ou Magalu e clique novamente em Ler print.");
@@ -3703,28 +3778,28 @@ async function lerImportacaoPorPrint(){
     const cfg=CONFIG_OCR_PRINT[marketplace];
 
     etapaOcrImportacaoPrint="Lendo número do pedido";
-    const pedidoOcr=await reconhecerMelhorRegiaoPrint(cfg.pedido,{psm:6,escala:6,whitelist:"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#-",validar:t=>!!extrairPedidoPrint(marketplace,t)});
+    const pedidoOcr=await reconhecerMelhorRegiaoPrint(cfg.pedido,{psm:6,escala:6,whitelist:"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789#-",validar:t=>!!extrairPedidoPrint(marketplace,t)},token);
     let pedido=extrairPedidoPrint(marketplace,pedidoOcr.texto,textoGeral);
     let pedidoAlternativo="";
     if(marketplace==="mercado_livre"){
-      const pedidoBin=await reconhecerMelhorRegiaoPrint(cfg.pedido,{psm:7,escala:8,whitelist:"0123456789",binarizar:true,validar:t=>!!extrairPedidoPrint(marketplace,t)});
+      const pedidoBin=await reconhecerMelhorRegiaoPrint(cfg.pedido,{psm:7,escala:8,whitelist:"0123456789",binarizar:true,validar:t=>!!extrairPedidoPrint(marketplace,t)},token);
       pedidoAlternativo=extrairPedidoPrint(marketplace,pedidoBin.texto);
       if(pedidoAlternativo)pedido=pedidoAlternativo;
     }
     const pedidoComDivergencia=!!(pedidoAlternativo&&extrairPedidoPrint(marketplace,pedidoOcr.texto)&&pedidoAlternativo!==extrairPedidoPrint(marketplace,pedidoOcr.texto));
 
     etapaOcrImportacaoPrint="Lendo nome do cliente";
-    const clienteOcr=await reconhecerMelhorRegiaoPrint(cfg.cliente,{psm:6,escala:3});
+    const clienteOcr=await reconhecerMelhorRegiaoPrint(cfg.cliente,{psm:6,escala:3},token);
     const cliente=extrairClientePrint(marketplace,clienteOcr.texto,textoGeral);
 
     etapaOcrImportacaoPrint="Lendo produto e SKU";
-    const produtoOcr=await reconhecerMelhorRegiaoPrint(cfg.produto,{psm:6,escala:3});
-    const skuOcr=await reconhecerMelhorRegiaoPrint(cfg.sku,{psm:6,escala:5,whitelist:"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:-_ ",binarizar:false});
+    const produtoOcr=await reconhecerMelhorRegiaoPrint(cfg.produto,{psm:6,escala:3},token);
+    const skuOcr=await reconhecerMelhorRegiaoPrint(cfg.sku,{psm:6,escala:5,whitelist:"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789:-_ ",binarizar:false},token);
     const candidatosSku=[...candidatosSkuPrint(skuOcr.texto),...candidatosSkuPrint(produtoOcr.texto),...candidatosSkuPrint(textoGeral)];
     const resolvido=resolverProdutoPrint(candidatosSku);produtoResolvidoPrint=resolvido.produto;
 
     etapaOcrImportacaoPrint="Lendo quantidade";
-    const qtdOcr=await reconhecerMelhorRegiaoPrint(cfg.quantidade,{psm:10,escala:14,whitelist:marketplace==="magalu"?"":"0123456789",binarizar:false,validar:t=>quantidadeTextoReconhecivelPrint(marketplace,t)});
+    const qtdOcr=await reconhecerMelhorRegiaoPrint(cfg.quantidade,{psm:10,escala:14,whitelist:marketplace==="magalu"?"":"0123456789",binarizar:false,validar:t=>quantidadeTextoReconhecivelPrint(marketplace,t)},token);
     const quantidade=extrairQuantidadePrint(marketplace,qtdOcr.texto,produtoOcr.texto,textoGeral);
 
     const descricao=produtoResolvidoPrint?campoBanco(produtoResolvidoPrint,"Descrição"):extrairDescricaoPrint(produtoOcr.texto);
@@ -3740,8 +3815,11 @@ async function lerImportacaoPorPrint(){
     const faltando=[];if(!pedido)faltando.push("pedido");if(!cliente)faltando.push("cliente");if(!document.getElementById("printSku").value&&!document.getElementById("printEan").value)faltando.push("SKU/EAN");
     const alertaPedido=pedidoComDivergencia?"<br>⚠ O OCR encontrou duas leituras diferentes para o pedido. Confira cuidadosamente todos os dígitos antes de salvar.":"<br><small>Confira principalmente o número do pedido e a quantidade antes de salvar.</small>";
     statusImportacaoPrint(faltando.length?"":"sucesso",faltando.length?`Leitura concluída, mas revise os campos em amarelo: <b>${faltando.join(", ")}</b>.${alertaPedido}`:`✅ Leitura concluída como <b>${cfg.nome}</b>. Revise os dados e clique em Salvar pedido.${alertaPedido}`,100);
-  }catch(e){console.error(e);statusImportacaoPrint("erro","❌ "+htmlSeguroBanco(e.message||e),0);}
-  finally{ocrPrintEmAndamento=false;const ler=document.getElementById("btnLerImportacaoPrint");if(ler)ler.disabled=!imagemImportacaoPrint;validarCamposImportacaoPrint();}
+  }catch(e){
+    if(e?.name!=="OcrPrintCancelado"&&token===tokenOcrImportacaoPrint){console.error(e);statusImportacaoPrint("erro","❌ "+htmlSeguroBanco(e.message||e)+"<br><small>Os campos continuam disponíveis para preenchimento manual, e você pode cancelar esta tela a qualquer momento.</small>",0);}
+  }finally{
+    if(token===tokenOcrImportacaoPrint){ocrPrintEmAndamento=false;const ler=document.getElementById("btnLerImportacaoPrint");if(ler)ler.disabled=!imagemImportacaoPrint;validarCamposImportacaoPrint();}
+  }
 }
 
 function atualizarProdutoImportacaoPrint(preservarDescricao=false){

@@ -150,3 +150,18 @@ V11.4 — ETIQUETA SHOPEE GRÁFICA E VÍNCULO POR RASTREIO
 - Coluna Código de Rastreio preservada no banco de pedidos e na mesclagem das importações: OK.
 - Aliases de cabeçalho Número/Nº/Código de rastreamento, Código de rastreio e Tracking Number: OK.
 - Console do navegador nos dois fluxos: sem erros ou avisos.
+
+
+V11.5 — IMPORTAÇÃO POR PRINT E NOVA LINHA MANUAL
+- servidor_web.py compilado com py_compile: OK.
+- Scripts inline dos quatro HTMLs e JavaScript externo validados com Node: OK.
+- Três manifestos PWA validados como JSON e cache atualizado para 11.5: OK.
+- Regressão completa de EAN por pedido/global, rollback e restrição de operador: OK.
+- Regressão de kits explícitos, Shopee ZPL, rascunhos, histórico, etiquetas, conclusão, gzip, CSP e X-Real-IP: OK.
+- Navegador real: busca ativa foi limpa ao clicar em “＋ Nova linha”: OK.
+- Navegador real: rascunho apareceu no topo da primeira página e permaneceu visível: OK.
+- Navegador real: foco ficou no campo Pedido da nova linha: OK.
+- Posição da linha e foco preservados pelo salvamento/re-renderização: OK.
+- OCR real alcançou “loading tesseract core” e o botão Cancelar fechou o modal em aproximadamente 0,4 segundo: OK.
+- Modal de importação por print reabriu normalmente depois do cancelamento: OK.
+- Timeout de 15 segundos e contingência de preenchimento manual presentes e validados por inspeção estática: OK.

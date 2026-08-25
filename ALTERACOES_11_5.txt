@@ -1,0 +1,23 @@
+SISTEMA DE CONFERÊNCIA NOROMAK — VERSÃO 11.5
+
+IMPORTAÇÃO POR PRINT CANCELÁVEL
+
+- O botão Cancelar agora fecha a importação imediatamente, inclusive enquanto o Tesseract está inicializando ou reconhecendo a imagem.
+- O worker de OCR é encerrado no cancelamento para evitar processamento preso em segundo plano.
+- A inicialização do OCR tem limite de 15 segundos. Se o componente não responder, a tela informa o erro e mantém os campos disponíveis para preenchimento manual.
+- A tela pode ser reaberta e usada novamente depois de cancelar ou depois de uma falha do OCR.
+- O atalho Esc usa o mesmo cancelamento seguro.
+
+NOVA LINHA MANUAL VISÍVEL
+
+- O botão “＋ Nova linha” insere o rascunho no topo da primeira página, em vez de colocá-lo no final da lista.
+- Uma busca ativa é limpa para garantir que a nova linha apareça.
+- O sistema rola até a linha, coloca o foco no número do pedido e seleciona o campo para digitação imediata.
+- A linha totalmente vazia permanece estável na tela; ao preencher o primeiro campo, o salvamento automático grava o rascunho, preserva sua posição e devolve o foco ao campo em edição.
+- O botão ＋ de uma linha existente continua criando outro item do mesmo pedido, agora junto ao grupo correspondente.
+
+COMPATIBILIDADE
+
+- Mantidas as importações por Excel, Mercado Livre e Shopee.
+- Mantidos kits explícitos, conferência, histórico, EAN por pedido, Banco de Produtos, etiquetas persistentes e impressão Zebra.
+- Nenhum banco, pedido ou arquivo de produção é incluído no pacote de atualização.
