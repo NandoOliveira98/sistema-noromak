@@ -138,3 +138,15 @@ V11.3 — ETIQUETAS SHOPEE E IMPORTAÇÃO DE KITS
 - Nenhuma tela automática de kit foi aberta após importação Shopee ou Excel interno: OK.
 - Kit explícito do Excel interno preservou 3 kits, 2 unidades por kit e total 6: OK.
 - Regressão de EAN, rascunho, histórico, etiquetas, conclusão, gzip, CSP e X-Real-IP: OK.
+
+
+V11.4 — ETIQUETA SHOPEE GRÁFICA E VÍNCULO POR RASTREIO
+- TXT térmico real enviado pela operação: uma imagem ~DGR/Z64 de 816 × 1218 pixels, OK.
+- Imagem descompactada e prévia do pedido renderizada corretamente: OK.
+- QR da etiqueta lido e número de rastreamento extraído: OK.
+- Pedido sem rastreio: prévia e seleção manual abertas em aproximadamente 1 segundo, sem OCR externo: OK.
+- Confirmação visual vinculou e persistiu a etiqueta no pedido correto: OK.
+- Pedido com rastreio: vínculo totalmente automático, sem abrir modal: OK.
+- Coluna Código de Rastreio preservada no banco de pedidos e na mesclagem das importações: OK.
+- Aliases de cabeçalho Número/Nº/Código de rastreamento, Código de rastreio e Tracking Number: OK.
+- Console do navegador nos dois fluxos: sem erros ou avisos.

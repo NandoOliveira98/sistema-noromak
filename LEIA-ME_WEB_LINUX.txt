@@ -1,4 +1,4 @@
-SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 11.3
+SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 11.4
 ================================================
 
 Esta versão mantém:
@@ -21,7 +21,7 @@ Copie estes arquivos para a pasta atual do projeto, preservando a pasta oculta .
 Depois execute:
 
   git add -A
-  git commit -m "corrige etiquetas Shopee e importacao de kits"
+  git commit -m "corrige etiqueta termica Shopee por QR"
   ./publicar.sh
 
 Não execute instalar_servidor_uma_vez.sh e não altere /etc/systemd quando a infraestrutura já estiver pronta.
@@ -109,3 +109,11 @@ VERSÃO 11.3
 - SKU da Shopee permanece exatamente como exportado, mesmo contendo KIT, /, ; ou |.
 - A importação não abre mais uma tela automática apenas porque o SKU contém KIT.
 - Kits explícitos do Excel interno e da importação manual por print continuam preservados.
+
+
+VERSÃO 11.4
+- Etiqueta térmica Shopee formada por uma única imagem Z64 não fica mais presa no OCR.
+- QR da etiqueta fornece o rastreio e permite vínculo automático quando esse dado existe no pedido.
+- Relatório Shopee passa a importar e preservar a coluna Número de rastreamento.
+- Pedidos antigos sem rastreio abrem imediatamente uma prévia para confirmação visual.
+- Com uma etiqueta e um pedido pendente, o pedido fica pré-selecionado para confirmação em um clique.

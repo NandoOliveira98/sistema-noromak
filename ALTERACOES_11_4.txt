@@ -1,0 +1,19 @@
+SISTEMA DE CONFERÊNCIA NOROMAK — VERSÃO 11.4
+
+ETIQUETA TÉRMICA SHOPEE TOTALMENTE GRÁFICA
+
+- Corrigido o travamento em “Lendo etiqueta Shopee 1 de 1...” no arquivo térmico real enviado pela operação.
+- Esse modelo de TXT é uma imagem Z64 única e não possui campos ^FD com o número do pedido.
+- Os QR codes são lidos para obter o número de rastreamento da Shopee.
+- Quando o rastreio já está salvo no pedido, o vínculo ocorre automaticamente.
+- A importação do relatório Shopee passa a guardar a coluna de rastreamento, aceitando os nomes mais comuns em português e inglês.
+- Quando um pedido antigo não possui rastreio, o sistema não aguarda mais OCR externo: abre imediatamente uma prévia da etiqueta para confirmação visual.
+- Com somente uma etiqueta e um pedido pendente, o pedido já aparece pré-selecionado; basta clicar em Confirmar vínculos.
+- O aviso da tela informa claramente que a etiqueta já foi lida e aguarda apenas a confirmação.
+
+COMPATIBILIDADE
+
+- Mantida a leitura dos formatos Shopee ^GF, ~DG/Z64, B64 e ASCII.
+- Mantidos SKUs de kits sem desmembramento automático.
+- Mantidos EAN, Banco de Produtos, importações, conferência, histórico, etiquetas persistentes e impressão Zebra.
+
