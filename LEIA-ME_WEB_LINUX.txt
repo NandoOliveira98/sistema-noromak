@@ -1,4 +1,4 @@
-SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 11.2
+SISTEMA DE CONFERÊNCIA NOROMAK — WEB/LINUX 11.3
 ================================================
 
 Esta versão mantém:
@@ -21,7 +21,7 @@ Copie estes arquivos para a pasta atual do projeto, preservando a pasta oculta .
 Depois execute:
 
   git add -A
-  git commit -m "minimiza cadastro de EAN no cabecalho"
+  git commit -m "corrige etiquetas Shopee e importacao de kits"
   ./publicar.sh
 
 Não execute instalar_servidor_uma_vez.sh e não altere /etc/systemd quando a infraestrutura já estiver pronta.
@@ -100,3 +100,12 @@ VERSÃO 11.2
 - Se o SKU ainda não existir no banco, mas existir em um pedido pendente, o cadastro é criado com os dados do pedido.
 - Substituição de um EAN existente exige confirmação clara na tela.
 - O aviso sonoro de novos pedidos saiu da lateral e agora fica minimizado no topo.
+
+
+VERSÃO 11.3
+- Leitura das etiquetas Shopee ampliada para ZPL antigo e atual: ~DG, ^GF, Z64, B64 e ASCII.
+- Seleção de arquivos Shopee .txt, .zpl e .prn; PDF orienta a exportação para Zebra/ZPL.
+- Pedido e rastreio escritos no ZPL são usados antes do OCR, com confirmação visual como contingência.
+- SKU da Shopee permanece exatamente como exportado, mesmo contendo KIT, /, ; ou |.
+- A importação não abre mais uma tela automática apenas porque o SKU contém KIT.
+- Kits explícitos do Excel interno e da importação manual por print continuam preservados.

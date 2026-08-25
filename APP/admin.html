@@ -7,11 +7,11 @@
 <meta name="application-name" content="Noromak Admin">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="manifest" href="/expedicao/manifest-admin.webmanifest?v=11.2" crossorigin="use-credentials">
-<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=11.2">
-<link rel="icon" href="/favicon.ico?v=11.2" sizes="any">
-<link rel="shortcut icon" href="/favicon.ico?v=11.2">
-<link rel="stylesheet" href="/expedicao/pwa-install.css?v=11.2">
+<link rel="manifest" href="/expedicao/manifest-admin.webmanifest?v=11.3" crossorigin="use-credentials">
+<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=11.3">
+<link rel="icon" href="/favicon.ico?v=11.3" sizes="any">
+<link rel="shortcut icon" href="/favicon.ico?v=11.3">
+<link rel="stylesheet" href="/expedicao/pwa-install.css?v=11.3">
 <title>Noromak - Administração dos Pedidos Compartilhados</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
@@ -418,7 +418,7 @@
 </style>
 <script src="/expedicao/shared-storage.js"></script>
 <script src="/expedicao/web-auth.js"></script>
-<script defer src="/expedicao/pwa-install.js?v=11.2"></script>
+<script defer src="/expedicao/pwa-install.js?v=11.3"></script>
 
 <style id="estiloEtiquetasPersistentesV98">
   .etiquetas-persistentes-box{margin:14px 0 18px;border:1px solid #c7d4e1;border-radius:9px;background:#f8fbfe;padding:13px}
@@ -622,9 +622,9 @@
 <div id="loginAdmin">
   <div class="box-login">
     <div class="logo-box">
-      <img src="/nk-logo.svg?v=11.2" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=11.2';">
+      <img src="/nk-logo.svg?v=11.3" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=11.3';">
     </div>
-    <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 11.2 — EAN direto na conferência</div>
+    <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 11.3 — etiquetas Shopee e kits</div>
     <div style="font-size:12px;color:#667;margin:-8px 0 14px;line-height:1.4;">Use o administrador principal ou qualquer usuário cadastrado com perfil <b>Admin</b>.</div>
     <input type="text" id="usuarioAdmin" placeholder="Usuário Admin">
     <input type="password" id="senhaAdmin" placeholder="Senha">
@@ -640,7 +640,7 @@
 <div id="painelConteudo" class="container-admin">
   <div class="header-topo">
     <div class="header-identidade">
-      <div class="logo-mini-box"><img src="/grupo-noromak.png?v=11.2" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=11.2';"></div>
+      <div class="logo-mini-box"><img src="/grupo-noromak.png?v=11.3" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=11.3';"></div>
       <div class="header-titulos"><h1>Administração dos pedidos compartilhados</h1><small>Dados centralizados no servidor Web em tempo real</small></div>
     </div>
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end;"><a href="/expedicao/estacao-impressao" target="_blank" style="text-decoration:none;background:#1F57A5;color:white;padding:8px 13px;border-radius:6px;font-size:12px;font-weight:800;">🖨 ESTAÇÃO ZEBRA</a><button type="button" class="pwa-install-btn pwa-header" data-pwa-install>⬇ Instalar Admin</button><span id="statusBancoAdmin" class="save-pill">● Banco Web ativo</span><button class="btn-sair" onclick="sairAdmin()">Sair do Painel</button></div>
@@ -668,7 +668,7 @@
       <div class="importacao-excel-box">
         <div class="importacao-excel-topo">
           <div class="importacao-excel-titulo">📥 Importar pedidos</div>
-          <small>Escolha a origem. O sistema cruza pedido, data, cliente, SKU, quantidade e produto com o banco interno para completar EAN, descrição e localização. Se algum SKU importado contiver a palavra <b>KIT</b>, uma conferência exclusiva desses pedidos será aberta automaticamente.</small>
+          <small>Escolha a origem. O sistema cruza pedido, data, cliente, SKU, quantidade e produto com o banco interno para completar EAN, descrição e localização. Um SKU que contenha a palavra <b>KIT</b> é preservado como veio; a composição só é aplicada quando o arquivo ou a importação manual informar o kit explicitamente.</small>
         </div>
         <input id="importarPedidosExcelInput" type="file" accept=".xlsx,.xls" hidden onchange="importarPedidosExcelAdmin(event)">
         <input id="importarRelatorioMercadoLivreInput" type="file" accept=".xlsx,.xls" hidden onchange="importarRelatorioMercadoLivreAdmin(event)">
@@ -717,7 +717,7 @@
 
   <section id="aba-usuarios" class="aba-painel">
     <div class="card-admin">
-      <h2>Usuários e aprovações <span class="usuario-versao">Versão 11.2 — EAN direto na conferência</span></h2>
+      <h2>Usuários e aprovações <span class="usuario-versao">Versão 11.3 — etiquetas Shopee e kits</span></h2>
       <div class="aviso-banco"><b>Login próprio do estoque:</b> cada pessoa deve ter usuário, senha e perfil individual. Por segurança, a senha atual <b>não pode ser visualizada</b>, pois fica armazenada de forma criptográfica. Para trocar, use o botão <b>Alterar senha</b>; o Admin poderá visualizar somente a nova senha enquanto a digita.</div>
       <div class="toolbar-grid"><button type="button" id="btnNovoUsuarioAdmin" class="btn-primario" onclick="abrirSolicitacaoUsuario('admin')">＋ Solicitar novo usuário</button><button type="button" class="btn-sucesso" onclick="salvarUsuariosAdmin(true)">💾 Salvar alterações</button></div>
       <div id="contadorUsuariosAdmin" class="usuario-contador"></div>
@@ -729,11 +729,11 @@
     <div class="card-admin">
       <h2>Etiquetas e publicação</h2>
       <p style="font-size:13px;color:#555;">Os pedidos já vêm da servidor Web. Aqui você envia apenas os arquivos de etiquetas para vinculá-los aos pedidos pendentes.</p>
-      <div class="field"><label>Etiquetas por marketplace (.txt / .zpl):</label>
+      <div class="field"><label>Etiquetas por marketplace (.txt / .zpl / .prn):</label>
         <div class="market-grid">
           <div class="market-upload"><strong>Mercado Livre</strong><small>Impressão única 10x15: envio + cliente + SKU, descrição e quantidade.</small><input type="file" id="etiquetasMercadoLivreInput" accept=".txt,.zpl" multiple></div>
           <div class="market-upload"><strong>Magalu</strong><small>Somente etiqueta de envio.</small><input type="file" id="etiquetasMagaluInput" accept=".txt,.zpl" multiple></div>
-          <div class="market-upload"><strong>Shopee</strong><small>Etiqueta gráfica de envio com confirmação visual quando necessária.</small><input type="file" id="etiquetasShopeeInput" accept=".txt,.zpl" multiple></div>
+          <div class="market-upload"><strong>Shopee</strong><small>Etiqueta Zebra/ZPL de envio, nos formatos antigo ou atual, com confirmação visual quando necessária.</small><input type="file" id="etiquetasShopeeInput" accept=".txt,.zpl,.prn" multiple></div>
         </div>
         <div class="regra-impressao"><b>Vínculo:</b> Marketplace + Pedido. Todos imprimem 1 etiqueta; no Mercado Livre, os dados dos produtos são inseridos na própria etiqueta 10x15.</div>
       </div>
@@ -1113,14 +1113,120 @@ function base64ParaBytes(base64) {
   return bytes;
 }
 
-function renderizarDgrZ64EmCanvas(bloco) {
-  const m = bloco.match(/~DGR:[^,]+,(\d+),(\d+),:Z64:([^:]+):[0-9A-F]+/i);
-  if (!m) throw new Error("Imagem Z64 da Shopee não encontrada.");
-  const totalBytes = Number(m[1]);
-  const bytesPorLinha = Number(m[2]);
-  const dados = pako.inflate(base64ParaBytes(m[3]));
-  if (dados.length < totalBytes) throw new Error("Imagem Shopee incompleta após descompactação.");
+function repetirHexShopee(caractere) {
+  const codigo = String(caractere || "").charCodeAt(0);
+  if (codigo >= 71 && codigo <= 89) return codigo - 70; // G..Y = 1..19
+  if (codigo >= 103 && codigo <= 122) return (codigo - 102) * 20; // g..z = 20..400
+  return 0;
+}
 
+function decodificarHexCompactadoShopee(texto, totalBytes, bytesPorLinha) {
+  const hexadecimalDireto = String(texto || "").replace(/\s+/g, "");
+  if (/^[0-9A-F]+$/i.test(hexadecimalDireto) && hexadecimalDireto.length >= totalBytes * 2) {
+    const bytesDiretos = new Uint8Array(totalBytes);
+    for (let i = 0; i < totalBytes; i++) bytesDiretos[i] = parseInt(hexadecimalDireto.slice(i * 2, i * 2 + 2), 16);
+    return bytesDiretos;
+  }
+  const linhas = [];
+  let linhaAtual = "";
+  let linhaAnterior = "";
+  let repeticoes = 0;
+  const finalizarLinha = preenchimento => {
+    if (preenchimento) linhaAtual += preenchimento.repeat(Math.max(0, bytesPorLinha * 2 - linhaAtual.length));
+    linhaAtual = (linhaAtual + "0".repeat(bytesPorLinha * 2)).slice(0, bytesPorLinha * 2);
+    linhas.push(linhaAtual);
+    linhaAnterior = linhaAtual;
+    linhaAtual = "";
+    repeticoes = 0;
+  };
+
+  const dados = String(texto || "").replace(/\r?\n|\s+/g, "");
+  for (let i = 0; i < dados.length && linhas.length * bytesPorLinha < totalBytes; i++) {
+    const caractere = dados[i];
+    const quantidade = repetirHexShopee(caractere);
+    if (quantidade) {
+      repeticoes += quantidade;
+      continue;
+    }
+    if (caractere === ",") {
+      finalizarLinha("0");
+      continue;
+    }
+    if (caractere === "!") {
+      finalizarLinha("F");
+      continue;
+    }
+    if (caractere === ":") {
+      if (linhaAtual) finalizarLinha("0");
+      else if (linhaAnterior) linhas.push(linhaAnterior);
+      repeticoes = 0;
+      continue;
+    }
+    if (/^[0-9A-F]$/i.test(caractere)) {
+      linhaAtual += caractere.repeat(Math.max(1, repeticoes));
+      repeticoes = 0;
+    }
+  }
+  if (linhaAtual && linhas.length * bytesPorLinha < totalBytes) finalizarLinha("0");
+
+  const hex = linhas.join("").slice(0, totalBytes * 2);
+  if (!hex) throw new Error("Os dados gráficos ASCII da etiqueta estão vazios.");
+  const bytes = new Uint8Array(Math.min(totalBytes, Math.floor(hex.length / 2)));
+  for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+  return bytes;
+}
+
+function decodificarGraficoShopee(dadosBrutos, totalBytes, bytesPorLinha, formato = "A") {
+  const dados = String(dadosBrutos || "").trim();
+  let m = dados.match(/^:Z64:([^:]+):(?:[0-9A-F]{4})?/i);
+  if (m) {
+    if (!window.pako) throw new Error("Componente Z64 não carregado.");
+    return pako.inflate(base64ParaBytes(m[1]));
+  }
+  m = dados.match(/^:B64:([^:]+):(?:[0-9A-F]{4})?/i);
+  if (m) return base64ParaBytes(m[1]);
+  if (String(formato || "A").toUpperCase() !== "A") {
+    throw new Error("Formato gráfico binário da etiqueta não é compatível com leitura pelo navegador.");
+  }
+  return decodificarHexCompactadoShopee(dados, totalBytes, bytesPorLinha);
+}
+
+function extrairGraficosShopee(bloco) {
+  const graficos = [];
+  let m;
+  const dg = /~DG(?:[RBEA]:)?[^,]+,(\d+),(\d+),([\s\S]*?)(?=(?:\^XA|~DG(?:[RBEA]:)?|\^XZ|$))/gi;
+  while ((m = dg.exec(bloco)) !== null) {
+    graficos.push({ totalBytes: Number(m[1]), bytesPorLinha: Number(m[2]), dados: m[3], formato: "A" });
+  }
+  const gf = /\^GF([ABC])?,(\d+),(\d+),(\d+),([\s\S]*?)(?=\^FS|\^XZ|\^XA|$)/gi;
+  while ((m = gf.exec(bloco)) !== null) {
+    graficos.push({ totalBytes: Number(m[3] || m[2]), bytesPorLinha: Number(m[4]), dados: m[5], formato: m[1] || "A" });
+  }
+  return graficos.filter(g => g.totalBytes > 0 && g.bytesPorLinha > 0)
+    .sort((a, b) => b.totalBytes - a.totalBytes);
+}
+
+function renderizarGraficoShopeeEmCanvas(bloco) {
+  const graficos = extrairGraficosShopee(bloco);
+  if (!graficos.length) throw new Error("Imagem gráfica ZPL da Shopee não encontrada.");
+  let ultimoErro = null;
+  let grafico = null;
+  let dados = null;
+  for (const candidato of graficos) {
+    try {
+      const bytes = decodificarGraficoShopee(candidato.dados, candidato.totalBytes, candidato.bytesPorLinha, candidato.formato);
+      if (bytes.length < candidato.totalBytes) throw new Error("Imagem Shopee incompleta após descompactação.");
+      grafico = candidato;
+      dados = bytes;
+      break;
+    } catch (erro) {
+      ultimoErro = erro;
+    }
+  }
+  if (!grafico || !dados) throw ultimoErro || new Error("Não foi possível decodificar a imagem Shopee.");
+
+  const totalBytes = grafico.totalBytes;
+  const bytesPorLinha = grafico.bytesPorLinha;
   const largura = bytesPorLinha * 8;
   const altura = Math.floor(totalBytes / bytesPorLinha);
   const canvas = document.createElement("canvas");
@@ -1144,6 +1250,11 @@ function renderizarDgrZ64EmCanvas(bloco) {
   }
   ctx.putImageData(imagem, 0, 0);
   return canvas;
+}
+
+// Nome antigo mantido para compatibilidade com instalações que ainda o chamem.
+function renderizarDgrZ64EmCanvas(bloco) {
+  return renderizarGraficoShopeeEmCanvas(bloco);
 }
 
 async function lerRastreioQrShopee(canvas) {
@@ -1338,10 +1449,38 @@ async function lerPedidoOcrShopee(canvas) {
   };
 }
 
+function extrairMetadadosTextuaisShopee(bloco) {
+  const campos = extrairCamposFD(bloco).map(v => String(v || "").trim()).filter(Boolean);
+  const texto = campos.join("\n");
+  const textoNormalizado = normalizarIdentificador(texto);
+  const pedidosExatos = pedidosShopeeDaPlanilha().filter(item =>
+    item.pedidoNormalizado && textoNormalizado.includes(item.pedidoNormalizado)
+  );
+  let pedido = pedidosExatos.length === 1 ? pedidosExatos[0].pedido : "";
+  if (!pedido) {
+    const rotulado = texto.match(/(?:ID\s+DO\s+PEDIDO|PEDIDO|ORDER\s*ID)\s*[:#\-]?\s*([A-Z0-9-]{10,30})/i);
+    if (rotulado) pedido = rotulado[1];
+  }
+  if (!pedido) {
+    const padraoShopee = texto.match(/\b(26[A-Z0-9]{12,22})\b/i);
+    if (padraoShopee) pedido = padraoShopee[1];
+  }
+  const rastreio = (texto.match(/\b(BR[A-Z0-9]{10,})\b/i) || [])[1] || "";
+  return { pedido, rastreio, texto };
+}
+
 async function extrairMetadadosShopee(bloco) {
-  const canvas = renderizarDgrZ64EmCanvas(bloco);
-  const rastreio = await lerRastreioQrShopee(canvas);
-  const leitura = await lerPedidoOcrShopee(canvas);
+  const textual = extrairMetadadosTextuaisShopee(bloco);
+  let canvas = null;
+  let rastreio = textual.rastreio;
+  let leitura = { pedido: textual.pedido, distanciaOcr: null, textoOcr: textual.texto };
+  try {
+    canvas = renderizarGraficoShopeeEmCanvas(bloco);
+  } catch (erro) {
+    if (!textual.pedido && !textual.rastreio) throw erro;
+  }
+  if (canvas && !rastreio) rastreio = await lerRastreioQrShopee(canvas);
+  if (canvas && !leitura.pedido) leitura = await lerPedidoOcrShopee(canvas);
   return {
     pedido: leitura.pedido,
     rastreio,
@@ -1349,7 +1488,7 @@ async function extrairMetadadosShopee(bloco) {
     chaveAcesso: "",
     idLogistico: [],
     distanciaOcr: leitura.distanciaOcr,
-    textoOcr: leitura.textoOcr
+    textoOcr: String(leitura.textoOcr || textual.texto || "").replace(/\s+/g, " ").trim().slice(0, 240)
   };
 }
 
@@ -1408,7 +1547,7 @@ function detectarMarketplaceArquivo(conteudo, marketplaceForcado) {
   if (marketplaceForcado && marketplaceForcado !== "desconhecido") return marketplaceForcado;
   if (/Shipment_Number_Bar_Code|Logo_Meli|DANFE SIMPLIFICADO/i.test(conteudo)) return "mercado_livre";
   if (/external_grouper_code|MALHA-DIRETA|_50_65_64_69_64_6f/i.test(conteudo)) return "magalu";
-  if (/~DGR:|XGR:DEMO\.GRF/i.test(conteudo)) return "shopee";
+  if (/~DG(?:[RBEA]:)?|\^GF[ABC]?,|XGR:|SHOPEE/i.test(conteudo)) return "shopee";
   return "desconhecido";
 }
 
@@ -1448,12 +1587,28 @@ function processarMagalu(conteudo, nomeArquivo) {
   });
 }
 
-async function processarShopee(conteudo, nomeArquivo) {
+function separarEtiquetasShopeeZpl(conteudo) {
   const partes = [];
   const regex = /(~DGR:[\s\S]*?)(\^XA\^MMT[\s\S]*?\^XZ)(\^XA\^IDR:[\s\S]*?\^XZ)/g;
   let match;
   while ((match = regex.exec(conteudo)) !== null) partes.push(match[0]);
-  if (partes.length === 0) partes.push(...conteudo.split(/(?=~DGR:)/).filter(parte => parte.trim()));
+  if (partes.length) return partes;
+
+  const porGraficoBaixado = conteudo.split(/(?=~DG(?:[RBEA]:)?)/i).filter(parte => parte.trim());
+  if (porGraficoBaixado.length > 1 || (porGraficoBaixado.length === 1 && /~DG(?:[RBEA]:)?/i.test(porGraficoBaixado[0]))) {
+    return porGraficoBaixado;
+  }
+
+  const blocosXa = extrairBlocosXA(conteudo).filter(bloco =>
+    !/^\^XA\s*\^ID[^\^]*\^FS?\s*\^XZ$/i.test(bloco.replace(/\r?\n/g, ""))
+  );
+  if (blocosXa.length) return blocosXa;
+  return String(conteudo || "").trim() ? [conteudo] : [];
+}
+
+async function processarShopee(conteudo, nomeArquivo) {
+  const partes = separarEtiquetasShopeeZpl(conteudo);
+  if (!partes.length) throw new Error("O arquivo Shopee está vazio ou não contém comandos ZPL.");
 
   for (let i = 0; i < partes.length; i++) {
     const status = document.getElementById("status");
@@ -1465,7 +1620,7 @@ async function processarShopee(conteudo, nomeArquivo) {
       bancoEtiquetas.avisos.push(`Shopee: não foi possível ler os identificadores da etiqueta ${i + 1} de ${nomeArquivo}: ${erro.message}`);
     }
     registrarEtiqueta({ marketplace: "shopee", envio: partes[i], danfe: "", arquivo: nomeArquivo,
-      metadados: meta, chaves: chavesDosMetadados(meta) });
+      metadados: meta, chaves: chavesDosMetadados(meta).concat(extrairChavesDoConteudo(partes[i], nomeArquivo)) });
   }
 }
 
@@ -1475,6 +1630,20 @@ async function processarArquivoEtiqueta(conteudo, nomeArquivo, marketplaceForcad
   else if (marketplace === "magalu") processarMagalu(conteudo, nomeArquivo);
   else if (marketplace === "shopee") await processarShopee(conteudo, nomeArquivo);
   else bancoEtiquetas.avisos.push("Não foi possível identificar o marketplace do arquivo " + nomeArquivo + ".");
+}
+
+async function lerArquivoEtiquetaZpl(file) {
+  const conteudo = await new Promise((resolve, reject) => {
+    const leitor = new FileReader();
+    leitor.onload = evento => resolve(String(evento.target.result || ""));
+    leitor.onerror = () => reject(new Error("Não foi possível ler " + file.name));
+    leitor.readAsText(file, "UTF-8");
+  });
+  if (/^%PDF-/i.test(conteudo.trimStart()) || /\.pdf$/i.test(file.name || "")) {
+    throw new Error(`${file.name}: o arquivo é PDF. Baixe/exporte a etiqueta da Shopee no formato Zebra/ZPL (.txt, .zpl ou .prn).`);
+  }
+  if (!conteudo.trim()) throw new Error(`${file.name}: o arquivo de etiqueta está vazio.`);
+  return conteudo;
 }
 
 function obterChavesDoPedido(item) {
@@ -1527,6 +1696,13 @@ function idsCandidatosDoPedido(item, marketplace, usados = new Set()) {
       ? pedidosEquivalentes(r.metadados?.[criterio], valor, marketplace)
       : valoresIguaisExatos(r.metadados?.[criterio], valor));
     if (encontrados.length > 0) return { ids: encontrados.map(r => r.id), criterio };
+  }
+  const chavesPedido = new Set(obterChavesDoPedido(item).flatMap(gerarVariantesChave));
+  const encontradosPorConteudo = registros.filter(r =>
+    (Array.isArray(r.chaves) ? r.chaves : []).some(chave => chavesPedido.has(chave))
+  );
+  if (encontradosPorConteudo.length > 0) {
+    return { ids: encontradosPorConteudo.map(r => r.id), criterio: "conteudo_arquivo" };
   }
   return { ids: [], criterio: "" };
 }
@@ -1608,7 +1784,7 @@ function pedidosShopeeNaoVinculados() {
 
 function gerarPreviewShopee(registro) {
   try {
-    const canvas = renderizarDgrZ64EmCanvas(registro.envio);
+    const canvas = renderizarGraficoShopeeEmCanvas(registro.envio);
     const preview = document.createElement("canvas");
     preview.width = canvas.width;
     preview.height = Math.min(canvas.height, Math.round(canvas.height * 0.31));
@@ -1642,8 +1818,10 @@ function abrirModalVinculosShopee(registros, pedidos) {
       ? `<div style="font-size:11px;color:#64748b;margin-top:8px;">Leitura automática: ${registro.metadados.textoOcr}</div>`
       : "";
 
+    const arquivo = registro.arquivo ? `<div style="font-size:11px;color:#64748b;margin-top:6px;">Arquivo: ${htmlSeguroBanco(registro.arquivo)}</div>` : "";
+
     return `<div class="vinculo-shopee-item">
-      <div>${preview ? `<img src="${preview}" alt="Prévia da etiqueta Shopee ${indice + 1}">` : "Prévia indisponível"}</div>
+      <div>${preview ? `<img src="${preview}" alt="Prévia da etiqueta Shopee ${indice + 1}">` : "Prévia gráfica indisponível — confira pelo arquivo e pelos dados lidos."}${arquivo}</div>
       <div>
         <label>Etiqueta ${indice + 1}: escolha o pedido impresso na imagem</label>
         <select class="select-vinculo-shopee" data-registro="${registro.id}">
@@ -1791,12 +1969,7 @@ async function salvarEEnviarDados() {
       // pode sobrecarregar o OCR e produzir códigos vazios ou trocados.
       for (const grupo of gruposEtiquetas) {
         for (const file of grupo.files) {
-          const conteudo = await new Promise((resolve, reject) => {
-            const txtReader = new FileReader();
-            txtReader.onload = evt => resolve(String(evt.target.result || ""));
-            txtReader.onerror = () => reject(new Error("Não foi possível ler " + file.name));
-            txtReader.readAsText(file, "UTF-8");
-          });
+          const conteudo = await lerArquivoEtiquetaZpl(file);
           await processarArquivoEtiqueta(conteudo, file.name, grupo.marketplace);
         }
       }
@@ -2880,7 +3053,6 @@ async function importarRelatorioMercadoLivreAdmin(event){
       `<br><small>Campos usados: Nº da venda → Pedido; Data da venda → Data; Comprador → Cliente; SKU → Produto; Unidades → Quantidade; Título do anúncio → Descrição. EAN e localização são preenchidos pelo banco de produtos.</small>${detalhesAvisos}`
     );
     setStatusBanco("● Relatório Mercado Livre importado","ok");
-    abrirConferenciaSkuKit(consolidadas,"Relatório Mercado Livre");
   }catch(erro){
     console.error(erro);
     mostrarStatusImportacaoPedidos("erro",`❌ Não foi possível importar o relatório do Mercado Livre: ${htmlSeguroBanco(erro.message||erro)}`);
@@ -2922,10 +3094,11 @@ function localizarEstruturaRelatorioShopee(workbook){
 function separarComponentesSkuShopee(valor){
   const bruto=String(valor??"").trim();
   if(!bruto)return [];
-  // A Shopee pode exportar kits como "SKU1/SKU2" no campo Número de referência SKU.
-  // Só trata como componentes quando houver de fato mais de um token útil.
-  const partes=bruto.split(/[\/;|]+/).map(x=>x.trim()).filter(Boolean);
-  return partes.length>1?[...new Set(partes)]:[bruto];
+  // O relatório da Shopee não informa a composição real do kit. Barras, ponto e
+  // vírgula e pipes podem fazer parte do SKU do anúncio, portanto o valor deve
+  // permanecer exatamente como foi exportado. Kits explícitos da planilha
+  // interna e da importação manual continuam usando seus campos próprios.
+  return [bruto];
 }
 
 function montarLinhasRelatorioShopee(estrutura,avisos){
@@ -3059,13 +3232,11 @@ async function importarRelatorioShopeeAdmin(event){
       `✅ Relatório da Shopee importado: <b>${pedidosUnicos} pedido(s)</b> e <b>${consolidadas.length} produto(s)</b>.<br>`+
       `${resultado.inseridas} linha(s) adicionada(s), ${resultado.atualizadas} atualizada(s) e ${montado.localizadas} produto(s) cruzado(s) com o banco interno.`+
       (montado.skuAjustados?`<br>🔎 ${montado.skuAjustados} SKU(s) da Shopee foram convertidos para o SKU interno correspondente.`:"")+
-      (montado.kitsDetectados?`<br>🎁 ${montado.kitsDetectados} kit(s) foram identificados automaticamente pelo campo Número de referência SKU e desmembrados em ${montado.componentesKit} componente(s).`:"")+
       (montado.ignoradas?`<br>⚠ ${montado.ignoradas} linha(s) foram ignoradas por status ou ausência de SKU.`:"")+
       (semBanco?`<br>⚠ ${semBanco} linha(s) não foram localizadas no banco de produtos e permaneceram com o SKU/nome informado pela Shopee.`:"")+
       `<br><small>Campos usados: ID do pedido → Pedido; Data de criação → Data; Nome do destinatário → Cliente; Número de referência SKU → SKU; Quantidade → Quantidade; Nome do Produto/variação → descrição. EAN e localização são preenchidos pelo banco de produtos.</small>${detalhesAvisos}`
     );
     setStatusBanco("● Relatório Shopee importado","ok");
-    abrirConferenciaSkuKit(consolidadas,"Relatório Shopee");
   }catch(erro){
     console.error(erro);
     mostrarStatusImportacaoPedidos("erro",`❌ Não foi possível importar o relatório da Shopee: ${htmlSeguroBanco(erro.message||erro)}`);
@@ -3130,7 +3301,6 @@ async function importarPedidosExcelAdmin(event){
       `<br><small>A importação adiciona ou atualiza os pedidos; ela não exclui os pedidos pendentes que não estão no arquivo.</small>${detalhesAvisos}`
     );
     setStatusBanco("● Excel importado e salvo","ok");
-    abrirConferenciaSkuKit(consolidadas,"Excel interno");
   }catch(erro){
     console.error(erro);
     mostrarStatusImportacaoPedidos("erro",`❌ Não foi possível importar a planilha: ${htmlSeguroBanco(erro.message||erro)}`);
@@ -3737,9 +3907,7 @@ function salvarPedidoImportadoPorPrint(lerOutro=false){
     const resumo=ehKit?`🎁 Kit <b>${htmlSeguroBanco(nomeKit)}</b> salvo no pedido <b>${htmlSeguroBanco(pedidoExibido)}</b>, com ${linhas.length} componente(s) e ${quantidadeVenda} kit(s).`:`📷 Pedido <b>${htmlSeguroBanco(pedidoExibido)}</b> importado pelo print (${resultado.inseridas?"nova linha":"linha atualizada"}).`;
     mostrarStatusImportacaoPedidos("sucesso",`${resumo}${avisos.length?"<br>⚠ "+avisos.map(htmlSeguroBanco).join("<br>⚠ "):""}`);
     statusImportacaoPrint("sucesso",`✅ ${ehKit?"Kit":"Pedido"} <b>${htmlSeguroBanco(pedidoExibido)}</b> salvo na servidor Web.`,100);
-    const precisaConferirSkuKit=!ehKit&&selecionarItensSkuKit(consolidadas).length>0;
     if(lerOutro){limparImportacaoPorPrint();setTimeout(()=>document.getElementById("zonaColagemPrint")?.focus(),50);}else{setTimeout(fecharImportacaoPorPrint,650);}
-    if(precisaConferirSkuKit)setTimeout(()=>abrirConferenciaSkuKit(consolidadas,"Importação por print / plugin"),720);
   }catch(e){console.error(e);statusImportacaoPrint("erro","❌ Não foi possível salvar: "+htmlSeguroBanco(e.message||e));}
 }
 
@@ -3774,7 +3942,7 @@ async function salvarEEnviarDados(){
   statusDiv.style.color="var(--primary)";statusDiv.innerHTML="Lendo etiquetas e vinculando aos pedidos da servidor Web...";
   try{
     bancoEtiquetas=criarBancoEtiquetasV2();sequenciaEtiqueta=0;
-    for(const grupo of gruposEtiquetas){for(const file of grupo.files){const conteudo=await new Promise((resolve,reject)=>{const r=new FileReader();r.onload=e=>resolve(String(e.target.result||""));r.onerror=()=>reject(new Error("Não foi possível ler "+file.name));r.readAsText(file,"UTF-8");});await processarArquivoEtiqueta(conteudo,file.name,grupo.marketplace);}}
+    for(const grupo of gruposEtiquetas){for(const file of grupo.files){const conteudo=await lerArquivoEtiquetaZpl(file);await processarArquivoEtiqueta(conteudo,file.name,grupo.marketplace);}}
     await vincularEtiquetasAosPedidos();mapaEtiquetas=bancoEtiquetas;
     if(filesFotos.length){mapaFotos={};const tarefas=[];for(const file of filesFotos){if(/\.(jpg|jpeg|png|webp)$/i.test(file.name)){tarefas.push(new Promise(resolve=>{const r=new FileReader();r.onload=e=>{const nome=file.name.substring(0,file.name.lastIndexOf(".")).trim().toLowerCase();mapaFotos[nome]=e.target.result;resolve();};r.readAsDataURL(file);}));}}await Promise.all(tarefas);}
     appStorage.setItem("conf_usuarios",JSON.stringify(usuariosEditorAdmin));appStorage.setItem("conf_pedidos",JSON.stringify(dadosPedidos));appStorage.setItem("conf_etiquetas",JSON.stringify(mapaEtiquetas));
@@ -4651,7 +4819,7 @@ document.addEventListener("DOMContentLoaded",()=>{
       bancoEtiquetas=bancoEtqVazio(); sequenciaEtiqueta=0;
       for(const grupo of gruposEtiquetas){
         for(const file of grupo.files){
-          const conteudo=await new Promise((resolve,reject)=>{const rd=new FileReader();rd.onload=e=>resolve(String(e.target.result||""));rd.onerror=()=>reject(new Error("Não foi possível ler "+file.name));rd.readAsText(file,"UTF-8");});
+          const conteudo=await lerArquivoEtiquetaZpl(file);
           await processarArquivoEtiqueta(conteudo,file.name,grupo.marketplace);
         }
       }

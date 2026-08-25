@@ -125,3 +125,16 @@ V11.2 — CADASTRO DE EAN MINIMIZADO NO CABEÇALHO
 - Endpoint específico de EAN, restrição de operador, criação por SKU, transação e auditoria: OK.
 - Python, JavaScript inline/externo e manifestos: OK.
 - Console do navegador no fluxo final e em tela pequena: sem erros ou avisos.
+
+
+V11.3 — ETIQUETAS SHOPEE E IMPORTAÇÃO DE KITS
+- Scripts inline dos quatro HTMLs validados com Node: OK.
+- Arquivo Shopee .prn com duas etiquetas modernas ^GFA lido no navegador real: OK.
+- Arquivo Shopee antigo ~DGR com imagem Z64 lido e vinculado no navegador real: OK.
+- Número do pedido e rastreio extraídos diretamente dos campos ^FD: OK.
+- Duas etiquetas vinculadas aos dois pedidos corretos e persistidas no servidor: OK.
+- Relatório Shopee .xlsx com SKU contendo KIT e / preservado como uma única linha: OK.
+- SKU contendo | preservado integralmente, sem desmembramento: OK.
+- Nenhuma tela automática de kit foi aberta após importação Shopee ou Excel interno: OK.
+- Kit explícito do Excel interno preservou 3 kits, 2 unidades por kit e total 6: OK.
+- Regressão de EAN, rascunho, histórico, etiquetas, conclusão, gzip, CSP e X-Real-IP: OK.
