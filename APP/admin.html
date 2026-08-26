@@ -7,11 +7,11 @@
 <meta name="application-name" content="Noromak Admin">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="manifest" href="/expedicao/manifest-admin.webmanifest?v=11.7" crossorigin="use-credentials">
-<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=11.7">
-<link rel="icon" href="/favicon.ico?v=11.7" sizes="any">
-<link rel="shortcut icon" href="/favicon.ico?v=11.7">
-<link rel="stylesheet" href="/expedicao/pwa-install.css?v=11.7">
+<link rel="manifest" href="/expedicao/manifest-admin.webmanifest?v=11.8" crossorigin="use-credentials">
+<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=11.8">
+<link rel="icon" href="/favicon.ico?v=11.8" sizes="any">
+<link rel="shortcut icon" href="/favicon.ico?v=11.8">
+<link rel="stylesheet" href="/expedicao/pwa-install.css?v=11.8">
 <title>Noromak - Administração dos Pedidos Compartilhados</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
@@ -415,10 +415,27 @@
   .print-kit-acoes { display:flex; justify-content:flex-start; margin-top:9px; }
   .print-kit-acoes button { width:auto; }
 
+
+  /* Integração Mercado Livre — V11.8 */
+  .integracao-grid{display:grid;grid-template-columns:minmax(320px,1.15fr) minmax(320px,.85fr);gap:14px}
+  .integracao-card{border:1px solid #dbe4ee;border-radius:12px;padding:16px;background:#fff}
+  .integracao-card h3{margin:0 0 8px;color:var(--primary)}
+  .integracao-status{display:inline-flex;align-items:center;gap:7px;padding:7px 10px;border-radius:999px;font-size:11px;font-weight:900;margin:4px 0 12px}
+  .integracao-status.ok{background:#dcfce7;color:#166534}.integracao-status.off{background:#f1f5f9;color:#475569}.integracao-status.erro{background:#fee2e2;color:#991b1b}
+  .integracao-dados{display:grid;grid-template-columns:155px 1fr;gap:7px 10px;font-size:12px;margin:8px 0 14px}
+  .integracao-dados b{color:#334155}.integracao-dados span{color:#475569;word-break:break-word}
+  .integracao-acoes{display:flex;gap:8px;flex-wrap:wrap}
+  .integracao-nota{margin-top:12px;padding:10px 12px;border-radius:8px;background:#eff6ff;border:1px solid #bfdbfe;color:#1e3a8a;font-size:11px;line-height:1.45}
+  .integracao-alerta{margin-top:12px;padding:10px 12px;border-radius:8px;background:#fff7ed;border:1px solid #fdba74;color:#9a3412;font-size:11px;line-height:1.45}
+  .ml-log-wrap{max-height:48vh;overflow:auto;border:1px solid #e2e8f0;border-radius:8px}
+  .ml-log-table{width:100%;border-collapse:collapse;font-size:11px}.ml-log-table th,.ml-log-table td{padding:7px 8px;border-bottom:1px solid #e2e8f0;text-align:left;vertical-align:top}
+  .ml-log-table th{background:#f8fafc;color:#334155;position:sticky;top:0}
+  @media(max-width:900px){.integracao-grid{grid-template-columns:1fr}.integracao-dados{grid-template-columns:1fr}}
+
 </style>
 <script src="/expedicao/shared-storage.js"></script>
 <script src="/expedicao/web-auth.js"></script>
-<script defer src="/expedicao/pwa-install.js?v=11.7"></script>
+<script defer src="/expedicao/pwa-install.js?v=11.8"></script>
 
 <style id="estiloEtiquetasPersistentesV98">
   .etiquetas-persistentes-box{margin:14px 0 18px;border:1px solid #c7d4e1;border-radius:9px;background:#f8fbfe;padding:13px}
@@ -638,9 +655,9 @@
 <div id="loginAdmin">
   <div class="box-login">
     <div class="logo-box">
-      <img src="/nk-logo.svg?v=11.7" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=11.7';">
+      <img src="/nk-logo.svg?v=11.8" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=11.8';">
     </div>
-    <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 11.7 — histórico de alterações de SKU</div>
+    <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 11.8 — histórico de alterações de SKU</div>
     <div style="font-size:12px;color:#667;margin:-8px 0 14px;line-height:1.4;">Use o administrador principal ou qualquer usuário cadastrado com perfil <b>Admin</b>.</div>
     <input type="text" id="usuarioAdmin" placeholder="Usuário Admin">
     <input type="password" id="senhaAdmin" placeholder="Senha">
@@ -656,7 +673,7 @@
 <div id="painelConteudo" class="container-admin">
   <div class="header-topo">
     <div class="header-identidade">
-      <div class="logo-mini-box"><img src="/grupo-noromak.png?v=11.7" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=11.7';"></div>
+      <div class="logo-mini-box"><img src="/grupo-noromak.png?v=11.8" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=11.8';"></div>
       <div class="header-titulos"><h1>Administração dos pedidos compartilhados</h1><small>Dados centralizados no servidor Web em tempo real</small></div>
     </div>
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end;"><a href="/expedicao/estacao-impressao" target="_blank" style="text-decoration:none;background:#1F57A5;color:white;padding:8px 13px;border-radius:6px;font-size:12px;font-weight:800;">🖨 ESTAÇÃO ZEBRA</a><button type="button" class="pwa-install-btn pwa-header" data-pwa-install>⬇ Instalar Admin</button><span id="statusBancoAdmin" class="save-pill">● Banco Web ativo</span><button class="btn-sair" onclick="sairAdmin()">Sair do Painel</button></div>
@@ -676,6 +693,7 @@
     <button class="aba-btn" data-aba="etiquetas" onclick="abrirAbaAdmin('etiquetas')">🏷 Etiquetas</button>
     <button class="aba-btn" data-aba="historico" onclick="abrirAbaAdmin('historico')">🕘 Histórico</button>
     <button class="aba-btn" data-aba="historico-sku" onclick="abrirAbaAdmin('historico-sku')">🔁 Histórico de SKU</button>
+    <button class="aba-btn" data-aba="integracoes" onclick="abrirAbaAdmin('integracoes')">🔌 Integrações</button>
   </div>
 
   <section id="aba-pedidos" class="aba-painel ativa">
@@ -734,7 +752,7 @@
 
   <section id="aba-usuarios" class="aba-painel">
     <div class="card-admin">
-      <h2>Usuários e aprovações <span class="usuario-versao">Versão 11.7 — histórico de alterações de SKU</span></h2>
+      <h2>Usuários e aprovações <span class="usuario-versao">Versão 11.8 — histórico de alterações de SKU</span></h2>
       <div class="aviso-banco"><b>Login próprio do estoque:</b> cada pessoa deve ter usuário, senha e perfil individual. Por segurança, a senha atual <b>não pode ser visualizada</b>, pois fica armazenada de forma criptográfica. Para trocar, use o botão <b>Alterar senha</b>; o Admin poderá visualizar somente a nova senha enquanto a digita.</div>
       <div class="toolbar-grid"><button type="button" id="btnNovoUsuarioAdmin" class="btn-primario" onclick="abrirSolicitacaoUsuario('admin')">＋ Solicitar novo usuário</button><button type="button" class="btn-sucesso" onclick="salvarUsuariosAdmin(true)">💾 Salvar alterações</button></div>
       <div id="contadorUsuariosAdmin" class="usuario-contador"></div>
@@ -775,6 +793,44 @@
       <div class="field"><label>Pasta de fotos dos produtos (opcional):</label><input type="file" id="fotosInput" webkitdirectory directory multiple></div>
       <button class="btn-salvar" onclick="salvarEEnviarDados()">PROCESSAR E VINCULAR ETIQUETAS AOS PEDIDOS</button>
       <div id="status"></div>
+    </div>
+  </section>
+
+
+  <section id="aba-integracoes" class="aba-painel">
+    <div class="card-admin">
+      <h3>🔌 Integrações</h3>
+      <div class="aviso-banco"><b>Mercado Livre API:</b> conecta a conta vendedora diretamente à Expedição. Novas vendas recebidas por <b>Orders_v2</b> e alterações de <b>Shipments</b> entram no servidor sem depender de planilha ou extensão. Planilha, extensão e print continuam disponíveis como contingência.</div>
+      <div class="integracao-grid">
+        <div class="integracao-card">
+          <h3>🟡 Mercado Livre</h3>
+          <div id="mlIntegracaoStatus" class="integracao-status off">⚪ Carregando...</div>
+          <div class="integracao-dados">
+            <b>Conta</b><span id="mlIntegracaoConta">—</span>
+            <b>Seller ID</b><span id="mlIntegracaoSeller">—</span>
+            <b>Última sincronização</b><span id="mlIntegracaoSync">—</span>
+            <b>Callback OAuth</b><span id="mlIntegracaoCallback">—</span>
+            <b>Notificações</b><span id="mlIntegracaoNotificacoes">—</span>
+          </div>
+          <div class="integracao-acoes">
+            <button type="button" id="btnMlConectar" class="btn-primario" onclick="conectarMercadoLivreAdmin()">Conectar Mercado Livre</button>
+            <button type="button" id="btnMlSincronizar" class="btn-sucesso" onclick="sincronizarMercadoLivreAdmin()" disabled>↻ Sincronizar agora</button>
+            <button type="button" id="btnMlDesconectar" class="btn-perigo" onclick="desconectarMercadoLivreAdmin()" disabled>Desconectar</button>
+          </div>
+          <div id="mlIntegracaoMensagem" class="integracao-nota">As credenciais ficam somente no <code>/home/expedicao/.env</code>; o Client Secret nunca é enviado ao navegador.</div>
+          <div class="integracao-alerta"><b>Importante para o nginx:</b> a rota <code>/expedicao/api/integracoes/mercadolivre/notificacoes</code> precisa aceitar chamadas do Mercado Livre sem o login do CRM. Ela não dá acesso aos dados do sistema; apenas recebe o evento e valida o <code>application_id</code>/<code>user_id</code> antes de consultar a API.</div>
+        </div>
+        <div class="integracao-card">
+          <h3>📜 Log da integração</h3>
+          <div class="integracao-acoes" style="margin-bottom:10px"><button type="button" class="btn-secundario" onclick="carregarLogsMercadoLivreAdmin()">Atualizar log</button></div>
+          <div class="ml-log-wrap">
+            <table class="ml-log-table">
+              <thead><tr><th>Data/hora</th><th>Tópico</th><th>Resultado</th><th>Recurso / detalhe</th></tr></thead>
+              <tbody id="mlIntegracaoLogs"><tr><td colspan="4">Nenhum log carregado.</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
     </div>
   </section>
 
@@ -2309,6 +2365,7 @@ function abrirAbaAdmin(nome){
   document.querySelectorAll(".aba-painel").forEach(p=>p.classList.toggle("ativa",p.id==="aba-"+nome));
   if(nome==="historico") carregarLogs();
   if(nome==="historico-sku") carregarHistoricoSkuAdmin();
+  if(nome==="integracoes"){carregarIntegracaoMercadoLivreAdmin();carregarLogsMercadoLivreAdmin();}
 }
 function autenticarAdmin() {
   const campoUsuario = document.getElementById("usuarioAdmin");
@@ -5070,6 +5127,87 @@ document.addEventListener("DOMContentLoaded",()=>{
   window.addEventListener("storage",event=>{if(event.key==="conf_etiquetas")setTimeout(renderizarEtiquetasPersistentes,0);});
   document.addEventListener("DOMContentLoaded",()=>setTimeout(renderizarEtiquetasPersistentes,350));
 })();
+</script>
+
+
+<script>
+/* Mercado Livre API — V11.8 */
+function mlHtmlSeguro(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+function mlDataHora(v){
+  if(!v)return "—";
+  try{return new Date(v).toLocaleString("pt-BR");}catch(_){return String(v);}
+}
+async function mlApiAdmin(url,opts={}){
+  const r=await fetch(url,{credentials:"same-origin",cache:"no-store",...opts,headers:{Accept:"application/json",...(opts.body?{"Content-Type":"application/json"}:{}),...(opts.headers||{})}});
+  let d={};try{d=await r.json();}catch(_){}
+  if(!r.ok)throw new Error(d.error||`HTTP ${r.status}`);
+  return d;
+}
+async function carregarIntegracaoMercadoLivreAdmin(){
+  const badge=document.getElementById("mlIntegracaoStatus");if(!badge)return;
+  try{
+    const d=await mlApiAdmin("/expedicao/api/integracoes/mercadolivre/status");
+    const ml=d.mercadolivre||{};
+    const configurado=ml.configured===true, conectado=ml.connected===true;
+    badge.className="integracao-status "+(conectado?"ok":configurado?"off":"erro");
+    badge.textContent=conectado?"🟢 Conectado":configurado?"⚪ Configurado, aguardando conexão":"🔴 Credenciais ainda não configuradas";
+    document.getElementById("mlIntegracaoConta").textContent=ml.nickname||"—";
+    document.getElementById("mlIntegracaoSeller").textContent=ml.seller_id||"—";
+    document.getElementById("mlIntegracaoSync").textContent=ml.last_sync_at?mlDataHora(ml.last_sync_at):"—";
+    document.getElementById("mlIntegracaoCallback").textContent=ml.redirect_uri||"—";
+    document.getElementById("mlIntegracaoNotificacoes").textContent=ml.notification_url||"—";
+    const conectar=document.getElementById("btnMlConectar"),sync=document.getElementById("btnMlSincronizar"),desconectar=document.getElementById("btnMlDesconectar");
+    if(conectar){conectar.disabled=!configurado;conectar.textContent=conectado?"Reconectar Mercado Livre":"Conectar Mercado Livre";}
+    if(sync)sync.disabled=!conectado;
+    if(desconectar)desconectar.disabled=!conectado;
+    const msg=document.getElementById("mlIntegracaoMensagem");
+    if(msg){
+      if(!configurado)msg.innerHTML='Configure <b>ML_CLIENT_ID</b> e <b>ML_CLIENT_SECRET</b> em <code>/home/expedicao/.env</code> e reinicie o serviço.';
+      else if(ml.last_error)msg.innerHTML='⚠ Último erro: <b>'+mlHtmlSeguro(ml.last_error)+'</b>';
+      else msg.innerHTML=conectado?'✅ Conta conectada. Orders_v2 e Shipments podem importar/atualizar pedidos automaticamente.':'Clique em <b>Conectar Mercado Livre</b> para autorizar a conta vendedora.';
+    }
+  }catch(e){
+    badge.className="integracao-status erro";badge.textContent="🔴 Erro ao consultar integração";
+    const msg=document.getElementById("mlIntegracaoMensagem");if(msg)msg.textContent=e.message;
+  }
+}
+function conectarMercadoLivreAdmin(){
+  window.location.href="/expedicao/api/integracoes/mercadolivre/connect";
+}
+async function sincronizarMercadoLivreAdmin(){
+  const btn=document.getElementById("btnMlSincronizar");if(btn){btn.disabled=true;btn.textContent="Sincronizando...";}
+  try{
+    const d=await mlApiAdmin("/expedicao/api/integracoes/mercadolivre/sync",{method:"POST",body:"{}"});
+    alert(`Sincronização concluída. Pedidos processados: ${d.imported||0}${d.errors?.length?`\\nErros: ${d.errors.length}`:""}`);
+    await carregarIntegracaoMercadoLivreAdmin();await carregarLogsMercadoLivreAdmin();
+    if(typeof appStorage?.sincronizarAgora==="function")await appStorage.sincronizarAgora();
+    if(typeof carregarPedidosAdmin==="function")carregarPedidosAdmin();
+  }catch(e){alert("Erro ao sincronizar Mercado Livre: "+e.message);}
+  finally{if(btn){btn.disabled=false;btn.textContent="↻ Sincronizar agora";}}
+}
+async function desconectarMercadoLivreAdmin(){
+  if(!confirm("Desconectar a conta do Mercado Livre? Os pedidos já importados serão mantidos."))return;
+  try{
+    await mlApiAdmin("/expedicao/api/integracoes/mercadolivre/disconnect",{method:"POST",body:"{}"});
+    await carregarIntegracaoMercadoLivreAdmin();await carregarLogsMercadoLivreAdmin();
+  }catch(e){alert("Erro ao desconectar: "+e.message);}
+}
+async function carregarLogsMercadoLivreAdmin(){
+  const corpo=document.getElementById("mlIntegracaoLogs");if(!corpo)return;
+  try{
+    const d=await mlApiAdmin("/expedicao/api/integracoes/mercadolivre/logs?limit=80");
+    const rows=Array.isArray(d.logs)?d.logs:[];
+    corpo.innerHTML=rows.length?rows.map(x=>`<tr><td>${mlHtmlSeguro(mlDataHora(x.created_at))}</td><td>${mlHtmlSeguro(x.topic)}</td><td><b>${mlHtmlSeguro(x.result)}</b></td><td><div>${mlHtmlSeguro(x.resource)}</div><small>${mlHtmlSeguro(x.detail||"")}</small></td></tr>`).join(""):'<tr><td colspan="4">Nenhum evento recebido ainda.</td></tr>';
+  }catch(e){corpo.innerHTML=`<tr><td colspan="4">Erro: ${mlHtmlSeguro(e.message)}</td></tr>`;}
+}
+document.addEventListener("DOMContentLoaded",()=>{
+  const q=new URLSearchParams(location.search);
+  if(q.get("aba")==="integracoes"||q.has("ml")){
+    setTimeout(()=>{if(typeof abrirAbaAdmin==="function")abrirAbaAdmin("integracoes");},250);
+    if(q.get("ml")==="conectado")setTimeout(()=>alert("Mercado Livre conectado com sucesso."),450);
+    if(q.get("ml")==="erro")setTimeout(()=>alert("Falha ao conectar Mercado Livre: "+(q.get("motivo")||"erro desconhecido")),450);
+  }
+});
 </script>
 
 </body>

@@ -1,0 +1,39 @@
+SISTEMA DE EXPEDIÇÃO — VERSÃO 11.8
+INTEGRAÇÃO AUTOMÁTICA COM MERCADO LIVRE
+
+O que foi adicionado
+--------------------
+1. Nova aba Admin > Integrações.
+2. OAuth do Mercado Livre com PKCE.
+3. Tokens armazenados somente no SQLite do servidor.
+4. Client Secret lido somente de /home/expedicao/.env.
+5. Endpoint de notificações:
+   /expedicao/api/integracoes/mercadolivre/notificacoes
+6. Processamento de Orders_v2 e Shipments.
+7. Consulta automática da venda e do shipment.
+8. Importação/atualização dos pedidos pendentes sem apagar o andamento já conferido.
+9. Pack ID usado como pedido operacional quando existir.
+10. Cruzamento de SKU com Banco de Produtos para preencher EAN, descrição e localização.
+11. Data de despacho tenta usar o prazo retornado pelo shipment; se não existir, usa a data atual.
+12. Código de rastreio armazenado quando estiver disponível.
+13. Log persistente de eventos da integração.
+14. Botão Sincronizar agora para recuperar vendas recentes.
+15. Planilhas, extensão e importação por print continuam disponíveis como contingência.
+
+SEGURANÇA
+---------
+- O Client Secret nunca é enviado ao navegador.
+- A URL pública de notificações não aceita comandos de usuários; recebe apenas eventos e depois consulta a API usando o token do servidor.
+- O application_id e o user_id do evento são comparados com a aplicação/seller configurados.
+- A conexão OAuth usa state + PKCE.
+- A aba de Integrações e sincronização manual são restritas ao Admin.
+
+IMPORTANTE — NGINX
+------------------
+O endpoint abaixo precisa receber chamadas externas do Mercado Livre SEM exigir a sessão do CRM:
+  /expedicao/api/integracoes/mercadolivre/notificacoes
+
+Não remova a autenticação do restante de /expedicao.
+A exceção deve ser somente para esse endpoint exato.
+O callback OAuth pode continuar atrás do acesso normal do NoromakWeb:
+  /expedicao/api/integracoes/mercadolivre/callback

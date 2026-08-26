@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sistema de Conferência Noromak — edição Web/Linux 9.8.
+"""Sistema de Conferência Noromak — edição Web/Linux 11.8.
 
 Sem dependências externas: usa apenas a biblioteca padrão do Python.
 - Escuta em 127.0.0.1:8100.
@@ -17,6 +17,7 @@ import hmac
 import json
 import mimetypes
 import os
+import re
 import secrets
 import shutil
 import sqlite3
@@ -24,14 +25,16 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "11.7"
+APP_VERSION = "11.8"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -59,6 +62,22 @@ INITIAL_OPERATOR_PASSWORD = os.getenv("EXP_USUARIO_SENHA_INICIAL", "").strip()
 INITIAL_CREDENTIALS_PATH = Path(
     os.getenv("EXP_CREDENCIAIS_INICIAIS_PATH", str(DB_PATH.parent / "CREDENCIAIS_INICIAIS.txt"))
 )
+
+# Mercado Livre API / OAuth. O Client Secret fica somente no .env do servidor.
+ML_CLIENT_ID = os.getenv("ML_CLIENT_ID", "").strip()
+ML_CLIENT_SECRET = os.getenv("ML_CLIENT_SECRET", "").strip()
+ML_REDIRECT_URI = os.getenv(
+    "ML_REDIRECT_URI",
+    "https://noromakweb.com.br/expedicao/api/integracoes/mercadolivre/callback",
+).strip()
+ML_NOTIFICATION_URL = os.getenv(
+    "ML_NOTIFICATION_URL",
+    "https://noromakweb.com.br/expedicao/api/integracoes/mercadolivre/notificacoes",
+).strip()
+ML_AUTH_URL = "https://auth.mercadolivre.com.br/authorization"
+ML_API_BASE = "https://api.mercadolibre.com"
+ML_HTTP_TIMEOUT = int(os.getenv("ML_HTTP_TIMEOUT", "20"))
+ML_MANUAL_SYNC_LIMIT = max(1, min(50, int(os.getenv("ML_MANUAL_SYNC_LIMIT", "20"))))
 
 DB_LOCK = threading.RLock()
 AUTH_LOCK = threading.Lock()
@@ -493,6 +512,39 @@ def init_db() -> None:
                 updated_at TEXT NOT NULL,
                 PRIMARY KEY(entity_type, entity_id)
             );
+            CREATE TABLE IF NOT EXISTS ml_integration (
+                id INTEGER PRIMARY KEY CHECK(id=1),
+                seller_id TEXT NOT NULL DEFAULT '',
+                nickname TEXT NOT NULL DEFAULT '',
+                access_token TEXT NOT NULL DEFAULT '',
+                refresh_token TEXT NOT NULL DEFAULT '',
+                token_type TEXT NOT NULL DEFAULT 'Bearer',
+                scope TEXT NOT NULL DEFAULT '',
+                expires_at_epoch INTEGER NOT NULL DEFAULT 0,
+                connected_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT '',
+                last_sync_at TEXT NOT NULL DEFAULT '',
+                last_error TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS ml_oauth_state (
+                state TEXT PRIMARY KEY,
+                code_verifier TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at_epoch INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_ml_oauth_state_expires ON ml_oauth_state(expires_at_epoch);
+            CREATE TABLE IF NOT EXISTS ml_event_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                topic TEXT NOT NULL DEFAULT '',
+                resource TEXT NOT NULL DEFAULT '',
+                user_id TEXT NOT NULL DEFAULT '',
+                application_id TEXT NOT NULL DEFAULT '',
+                result TEXT NOT NULL DEFAULT '',
+                detail TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_ml_event_log_created ON ml_event_log(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_ml_event_log_resource ON ml_event_log(resource, created_at DESC);
             CREATE TABLE IF NOT EXISTS print_jobs (
                 id TEXT PRIMARY KEY,
                 order_key TEXT NOT NULL,
@@ -1631,8 +1683,551 @@ def clear_login_failures(handler: BaseHTTPRequestHandler, username: str) -> None
         LOGIN_ATTEMPTS.pop(login_rate_key(handler, username), None)
 
 
+
+# ---------------------------------------------------------------------------
+# Mercado Livre API / OAuth / Orders
+# ---------------------------------------------------------------------------
+
+def ml_credentials_configured() -> bool:
+    return bool(ML_CLIENT_ID and ML_CLIENT_SECRET and ML_REDIRECT_URI)
+
+
+def ml_log_event(topic: str, resource: str, user_id: Any, application_id: Any, result: str, detail: str = "") -> None:
+    with DB_LOCK:
+        DB.execute(
+            """INSERT INTO ml_event_log(created_at,topic,resource,user_id,application_id,result,detail)
+               VALUES(?,?,?,?,?,?,?)""",
+            (
+                now_iso(),
+                str(topic or "")[:100],
+                str(resource or "")[:500],
+                str(user_id or "")[:80],
+                str(application_id or "")[:80],
+                str(result or "")[:80],
+                str(detail or "")[:2000],
+            ),
+        )
+        DB.commit()
+
+
+def ml_integration_row() -> sqlite3.Row | None:
+    with DB_LOCK:
+        return DB.execute("SELECT * FROM ml_integration WHERE id=1").fetchone()
+
+
+def ml_status_payload() -> dict[str, Any]:
+    row = ml_integration_row()
+    connected = bool(row and row["access_token"] and row["seller_id"])
+    return {
+        "configured": ml_credentials_configured(),
+        "connected": connected,
+        "seller_id": str(row["seller_id"] if row else ""),
+        "nickname": str(row["nickname"] if row else ""),
+        "scope": str(row["scope"] if row else ""),
+        "expires_at_epoch": int(row["expires_at_epoch"] if row else 0),
+        "connected_at": str(row["connected_at"] if row else ""),
+        "updated_at": str(row["updated_at"] if row else ""),
+        "last_sync_at": str(row["last_sync_at"] if row else ""),
+        "last_error": str(row["last_error"] if row else ""),
+        "redirect_uri": ML_REDIRECT_URI,
+        "notification_url": ML_NOTIFICATION_URL,
+        "client_id_suffix": (ML_CLIENT_ID[-6:] if ML_CLIENT_ID else ""),
+    }
+
+
+def ml_http_json(
+    method: str,
+    url: str,
+    *,
+    token: str = "",
+    data: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+) -> dict[str, Any] | list[Any]:
+    body = None
+    final_headers = {"Accept": "application/json", "User-Agent": f"NoromakExpedicao/{APP_VERSION}"}
+    if token:
+        final_headers["Authorization"] = f"Bearer {token}"
+    if data is not None:
+        body = urlencode({k: "" if v is None else str(v) for k, v in data.items()}).encode("utf-8")
+        final_headers["Content-Type"] = "application/x-www-form-urlencoded"
+    final_headers.update(headers or {})
+    req = urllib.request.Request(url, data=body, headers=final_headers, method=method.upper())
+    try:
+        with urllib.request.urlopen(req, timeout=ML_HTTP_TIMEOUT) as resp:
+            raw = resp.read()
+            if not raw:
+                return {}
+            return json.loads(raw.decode("utf-8", errors="replace"))
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        try:
+            detail = json.loads(raw)
+        except Exception:
+            detail = raw
+        raise RuntimeError(f"Mercado Livre HTTP {exc.code}: {detail}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Falha de conexão com Mercado Livre: {exc.reason}") from exc
+
+
+def ml_store_token(payload: dict[str, Any], *, nickname: str = "") -> None:
+    seller_id = str(payload.get("user_id") or "")
+    access_token = str(payload.get("access_token") or "")
+    refresh_token = str(payload.get("refresh_token") or "")
+    token_type = str(payload.get("token_type") or "Bearer")
+    scope = str(payload.get("scope") or "")
+    expires_in = int(payload.get("expires_in") or 0)
+    expires_at = int(time.time()) + max(0, expires_in)
+    if not access_token or not seller_id:
+        raise RuntimeError("Resposta de token do Mercado Livre incompleta.")
+    previous = ml_integration_row()
+    if previous and not refresh_token:
+        refresh_token = str(previous["refresh_token"] or "")
+    connected_at = str(previous["connected_at"] or "") if previous else ""
+    if not connected_at:
+        connected_at = now_iso()
+    with DB_LOCK:
+        DB.execute(
+            """INSERT INTO ml_integration(
+                 id,seller_id,nickname,access_token,refresh_token,token_type,scope,
+                 expires_at_epoch,connected_at,updated_at,last_sync_at,last_error
+               ) VALUES(1,?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET
+                 seller_id=excluded.seller_id,
+                 nickname=CASE WHEN excluded.nickname<>'' THEN excluded.nickname ELSE ml_integration.nickname END,
+                 access_token=excluded.access_token,
+                 refresh_token=CASE WHEN excluded.refresh_token<>'' THEN excluded.refresh_token ELSE ml_integration.refresh_token END,
+                 token_type=excluded.token_type,
+                 scope=excluded.scope,
+                 expires_at_epoch=excluded.expires_at_epoch,
+                 connected_at=CASE WHEN ml_integration.connected_at='' THEN excluded.connected_at ELSE ml_integration.connected_at END,
+                 updated_at=excluded.updated_at,
+                 last_error=''""",
+            (
+                seller_id, nickname, access_token, refresh_token, token_type, scope,
+                expires_at, connected_at, now_iso(),
+                str(previous["last_sync_at"] or "") if previous else "",
+                "",
+            ),
+        )
+        DB.commit()
+
+
+def ml_access_token(*, force_refresh: bool = False) -> tuple[str, str]:
+    row = ml_integration_row()
+    if not row or not row["access_token"]:
+        raise RuntimeError("Mercado Livre ainda não está conectado.")
+    if not ml_credentials_configured():
+        raise RuntimeError("ML_CLIENT_ID / ML_CLIENT_SECRET não estão configurados no servidor.")
+    if not force_refresh and int(row["expires_at_epoch"] or 0) > int(time.time()) + 300:
+        return str(row["access_token"]), str(row["seller_id"])
+    refresh_token = str(row["refresh_token"] or "")
+    if not refresh_token:
+        raise RuntimeError("Refresh token do Mercado Livre não está disponível. Reconecte a conta.")
+    payload = ml_http_json(
+        "POST",
+        f"{ML_API_BASE}/oauth/token",
+        data={
+            "grant_type": "refresh_token",
+            "client_id": ML_CLIENT_ID,
+            "client_secret": ML_CLIENT_SECRET,
+            "refresh_token": refresh_token,
+        },
+    )
+    if not isinstance(payload, dict):
+        raise RuntimeError("Resposta inválida ao renovar o token Mercado Livre.")
+    ml_store_token(payload, nickname=str(row["nickname"] or ""))
+    fresh = ml_integration_row()
+    return str(fresh["access_token"]), str(fresh["seller_id"])
+
+
+def ml_api_get(path_or_url: str, *, headers: dict[str, str] | None = None) -> dict[str, Any] | list[Any]:
+    token, _ = ml_access_token()
+    url = path_or_url if path_or_url.startswith("http") else f"{ML_API_BASE}{path_or_url}"
+    try:
+        return ml_http_json("GET", url, token=token, headers=headers)
+    except RuntimeError as exc:
+        if "HTTP 401" not in str(exc):
+            raise
+    token, _ = ml_access_token(force_refresh=True)
+    return ml_http_json("GET", url, token=token, headers=headers)
+
+
+def ml_oauth_authorization_url() -> str:
+    if not ml_credentials_configured():
+        raise RuntimeError("Configure ML_CLIENT_ID e ML_CLIENT_SECRET no /home/expedicao/.env antes de conectar.")
+    state = secrets.token_urlsafe(32)
+    verifier = secrets.token_urlsafe(64)
+    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode("utf-8")).digest()).decode("ascii").rstrip("=")
+    now_epoch = int(time.time())
+    with DB_LOCK:
+        DB.execute("DELETE FROM ml_oauth_state WHERE expires_at_epoch<?", (now_epoch,))
+        DB.execute(
+            "INSERT INTO ml_oauth_state(state,code_verifier,created_at,expires_at_epoch) VALUES(?,?,?,?)",
+            (state, verifier, now_iso(), now_epoch + 15 * 60),
+        )
+        DB.commit()
+    query = urlencode(
+        {
+            "response_type": "code",
+            "client_id": ML_CLIENT_ID,
+            "redirect_uri": ML_REDIRECT_URI,
+            "state": state,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+        }
+    )
+    return f"{ML_AUTH_URL}?{query}"
+
+
+def ml_exchange_authorization_code(code: str, state: str) -> dict[str, Any]:
+    now_epoch = int(time.time())
+    with DB_LOCK:
+        row = DB.execute("SELECT * FROM ml_oauth_state WHERE state=?", (state,)).fetchone()
+        DB.execute("DELETE FROM ml_oauth_state WHERE expires_at_epoch<?", (now_epoch,))
+        if row:
+            DB.execute("DELETE FROM ml_oauth_state WHERE state=?", (state,))
+        DB.commit()
+    if not row or int(row["expires_at_epoch"] or 0) < now_epoch:
+        raise RuntimeError("Estado OAuth inválido ou expirado. Inicie a conexão novamente.")
+    payload = ml_http_json(
+        "POST",
+        f"{ML_API_BASE}/oauth/token",
+        data={
+            "grant_type": "authorization_code",
+            "client_id": ML_CLIENT_ID,
+            "client_secret": ML_CLIENT_SECRET,
+            "code": code,
+            "redirect_uri": ML_REDIRECT_URI,
+            "code_verifier": str(row["code_verifier"]),
+        },
+    )
+    if not isinstance(payload, dict):
+        raise RuntimeError("Resposta inválida do OAuth Mercado Livre.")
+    ml_store_token(payload)
+    token, _ = ml_access_token()
+    me = ml_http_json("GET", f"{ML_API_BASE}/users/me", token=token)
+    if isinstance(me, dict):
+        nickname = str(me.get("nickname") or me.get("first_name") or "")
+        if nickname:
+            current = ml_integration_row()
+            ml_store_token(
+                {
+                    "user_id": current["seller_id"],
+                    "access_token": current["access_token"],
+                    "refresh_token": current["refresh_token"],
+                    "token_type": current["token_type"],
+                    "scope": current["scope"],
+                    "expires_in": max(0, int(current["expires_at_epoch"]) - int(time.time())),
+                },
+                nickname=nickname,
+            )
+    return ml_status_payload()
+
+
+def _ml_parse_iso_date(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    match = re.match(r"^(\d{4})-(\d{2})-(\d{2})", text)
+    return "-".join(match.groups()) if match else ""
+
+
+def _ml_dispatch_date(shipment: dict[str, Any] | None) -> str:
+    shipment = shipment or {}
+    shipping_option = shipment.get("shipping_option") if isinstance(shipment.get("shipping_option"), dict) else {}
+    candidates = [
+        shipping_option.get("estimated_handling_limit"),
+        shipping_option.get("estimated_delivery_limit"),
+        shipment.get("estimated_handling_limit"),
+        shipment.get("estimated_delivery_limit"),
+    ]
+    for value in candidates:
+        parsed = _ml_parse_iso_date(value)
+        if parsed:
+            return parsed
+    return datetime.now().astimezone().date().isoformat()
+
+
+def _ml_find_product(products: list[dict[str, Any]], sku: str) -> dict[str, Any] | None:
+    key = normalize(sku)
+    if not key:
+        return None
+    for product in products:
+        if normalize(product.get("SKU")) == key:
+            return product
+    return None
+
+
+def _ml_order_item_sku(item_data: dict[str, Any]) -> str:
+    item = item_data.get("item") if isinstance(item_data.get("item"), dict) else {}
+    for value in (
+        item.get("seller_sku"),
+        item.get("seller_custom_field"),
+        item_data.get("seller_sku"),
+    ):
+        if str(value or "").strip():
+            return str(value).strip()
+    for attr in item.get("variation_attributes") or []:
+        if not isinstance(attr, dict):
+            continue
+        if str(attr.get("id") or "").upper() == "SELLER_SKU" and str(attr.get("value_name") or "").strip():
+            return str(attr["value_name"]).strip()
+    return ""
+
+
+def ml_order_shipments(order_id: str) -> tuple[str, dict[str, Any] | None]:
+    shipment_id = ""
+    shipment_detail: dict[str, Any] | None = None
+    try:
+        result = ml_api_get(
+            f"/orders/{quote(str(order_id))}/shipments?list_all=true",
+            headers={"X-New-Domain": "true", "X-Api-Version": "2"},
+        )
+        shipments = result if isinstance(result, list) else ([result] if isinstance(result, dict) and result.get("id") else [])
+        forward = next((x for x in shipments if isinstance(x, dict) and str(x.get("direction") or "forward") == "forward"), None)
+        selected = forward or (shipments[0] if shipments else None)
+        if isinstance(selected, dict):
+            shipment_id = str(selected.get("id") or "")
+    except Exception:
+        shipment_id = ""
+    if shipment_id:
+        try:
+            detail = ml_api_get(
+                f"/shipments/{quote(shipment_id)}",
+                headers={"x-format-new": "true", "X-Api-Version": "2"},
+            )
+            if isinstance(detail, dict):
+                shipment_detail = detail
+        except Exception:
+            shipment_detail = None
+    return shipment_id, shipment_detail
+
+
+def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict[str, Any]:
+    order_id = str(order_id or "").strip()
+    if not order_id:
+        raise RuntimeError("Order ID vazio.")
+    order = ml_api_get(f"/orders/{quote(order_id)}")
+    if not isinstance(order, dict):
+        raise RuntimeError(f"Pedido {order_id}: resposta inválida.")
+    _, seller_id = ml_access_token()
+    seller = order.get("seller") if isinstance(order.get("seller"), dict) else {}
+    order_seller = str(seller.get("id") or "")
+    if order_seller and seller_id and order_seller != seller_id:
+        raise RuntimeError(f"Pedido {order_id} pertence a outro seller.")
+
+    status = str(order.get("status") or "")
+    shipment_id, shipment = ml_order_shipments(order_id)
+    receiver = ""
+    if isinstance(shipment, dict):
+        addr = shipment.get("receiver_address") if isinstance(shipment.get("receiver_address"), dict) else {}
+        receiver = str(addr.get("receiver_name") or addr.get("receiver") or "").strip()
+    buyer = order.get("buyer") if isinstance(order.get("buyer"), dict) else {}
+    client = receiver or str(buyer.get("nickname") or "").strip()
+    if not client:
+        names = [str(buyer.get("first_name") or "").strip(), str(buyer.get("last_name") or "").strip()]
+        client = " ".join(x for x in names if x).strip()
+
+    pack_id = str(order.get("pack_id") or "").strip()
+    operational_order_id = pack_id or order_id
+    date_for_dispatch = _ml_dispatch_date(shipment)
+    tracking = ""
+    if isinstance(shipment, dict):
+        tracking = str(shipment.get("tracking_number") or shipment.get("tracking_id") or "").strip()
+
+    current_raw, _, _ = get_storage("conf_pedidos")
+    products_raw, _, _ = get_storage("conf_produtos")
+    pending = _rows_from_storage_value(current_raw)
+    products = _rows_from_storage_value(products_raw)
+    lines: list[dict[str, Any]] = []
+
+    for item_data in order.get("order_items") or []:
+        if not isinstance(item_data, dict):
+            continue
+        item = item_data.get("item") if isinstance(item_data.get("item"), dict) else {}
+        sku = _ml_order_item_sku(item_data)
+        description = str(item.get("title") or "").strip()
+        quantity = max(1, int(item_data.get("quantity") or 1))
+        row = {
+            "Pedido": operational_order_id,
+            "Marketplace": "MERCADO LIVRE",
+            "Data do Pedido": date_for_dispatch,
+            "Kit": "",
+            "Nome do Kit": "",
+            "Quantidade de Kits": "",
+            "Quantidade por Kit": "",
+            "Cliente": client,
+            "SKU": sku,
+            "Quantidade": str(quantity),
+            "Código de Barras": "",
+            "Descrição": description,
+            "Rua": "",
+            "Módulo": "",
+            "Prateleira": "",
+            "Nível": "",
+            "Posição": "",
+            "Foto": "",
+            "Código de Rastreio": tracking,
+            "__uidLinha": "MLAPI_" + hashlib.sha1(f"{order_id}|{item.get('id')}|{item.get('variation_id')}|{sku}".encode("utf-8")).hexdigest()[:20],
+            "OrigemCadastro": source,
+            "SkuOrigemImportacao": sku,
+            "VendaMercadoLivre": order_id,
+            "PackIdMercadoLivre": pack_id,
+            "ShipmentIdMercadoLivre": shipment_id,
+            "StatusMercadoLivre": status,
+            "MercadoLivreAtualizadoEm": now_iso(),
+        }
+        product = _ml_find_product(products, sku)
+        if product:
+            for field in ("SKU","Código de Barras","Descrição","Rua","Módulo","Prateleira","Nível","Posição","Foto"):
+                value = product.get(field)
+                if str(value or "").strip():
+                    row[field] = value
+        lines.append(row)
+
+    if not lines:
+        raise RuntimeError(f"Pedido {order_id} não trouxe itens.")
+
+    # Atualiza pela combinação Pedido + SKU; quando não existe, cria nova linha.
+    by_key: dict[tuple[str, str], dict[str, Any]] = {}
+    for existing in pending:
+        key = (normalize(order_number(existing)), normalize(existing.get("SKU") or existing.get("Código de Barras")))
+        if key not in by_key:
+            by_key[key] = existing
+    inserted = updated = 0
+    fields = (
+        "Pedido","Marketplace","Data do Pedido","Cliente","SKU","Quantidade","Código de Barras",
+        "Descrição","Rua","Módulo","Prateleira","Nível","Posição","Foto","Código de Rastreio"
+    )
+    for imported in lines:
+        key = (normalize(imported["Pedido"]), normalize(imported.get("SKU") or imported.get("Código de Barras")))
+        existing = by_key.get(key)
+        if existing is None:
+            pending.append(imported)
+            by_key[key] = imported
+            inserted += 1
+            continue
+        lido = int(existing.get("Lido") or 0)
+        for field in fields:
+            value = imported.get(field)
+            if str(value or "").strip():
+                existing[field] = value
+        for field in (
+            "OrigemCadastro","SkuOrigemImportacao","VendaMercadoLivre","PackIdMercadoLivre",
+            "ShipmentIdMercadoLivre","StatusMercadoLivre","MercadoLivreAtualizadoEm"
+        ):
+            existing[field] = imported.get(field, "")
+        existing["Lido"] = lido
+        if int(existing.get("Quantidade") or 0) < lido:
+            existing["Quantidade"] = str(lido)
+        updated += 1
+
+    # Cancelamentos não apagam o pedido; apenas ficam marcados para auditoria/ação manual.
+    new_json = json_dumps(pending)
+    save_storage(
+        "conf_pedidos",
+        current_raw,
+        new_json,
+        False,
+        actor="mercadolivre-api",
+        actor_role="sistema",
+        source_screen="API Mercado Livre",
+        change_method="Notificação / sincronização",
+        client_ip="127.0.0.1",
+        allow_completed_reimport=False,
+    )
+    with DB_LOCK:
+        DB.execute(
+            "UPDATE ml_integration SET last_sync_at=?, updated_at=?, last_error='' WHERE id=1",
+            (now_iso(), now_iso()),
+        )
+        DB.commit()
+    return {
+        "order_id": order_id,
+        "pack_id": pack_id,
+        "shipment_id": shipment_id,
+        "status": status,
+        "inserted": inserted,
+        "updated": updated,
+        "items": len(lines),
+    }
+
+
+def ml_process_notification(payload: dict[str, Any]) -> None:
+    topic = str(payload.get("topic") or "").strip()
+    resource = str(payload.get("resource") or "").strip()
+    user_id = str(payload.get("user_id") or "")
+    app_id = str(payload.get("application_id") or "")
+    if ML_CLIENT_ID and app_id and app_id != ML_CLIENT_ID:
+        ml_log_event(topic, resource, user_id, app_id, "IGNORADO", "application_id diferente do aplicativo configurado")
+        return
+    integration = ml_integration_row()
+    if integration and integration["seller_id"] and user_id and str(integration["seller_id"]) != user_id:
+        ml_log_event(topic, resource, user_id, app_id, "IGNORADO", "user_id diferente do seller conectado")
+        return
+    try:
+        if topic in {"orders_v2", "orders"} and "/orders/" in resource:
+            order_id = resource.rstrip("/").split("/")[-1]
+            result = ml_import_order(order_id, source="API Mercado Livre / orders_v2")
+            ml_log_event(topic, resource, user_id, app_id, "OK", json_dumps(result))
+            return
+        if topic == "shipments" and "/shipments/" in resource:
+            shipment_id = resource.rstrip("/").split("/")[-1]
+            orders = ml_api_get(
+                f"/shipments/{quote(shipment_id)}/orders",
+                headers={"X-New-Domain": "true"},
+            )
+            results = []
+            if isinstance(orders, list):
+                for item in orders:
+                    if isinstance(item, dict) and item.get("order_id"):
+                        results.append(ml_import_order(str(item["order_id"]), source="API Mercado Livre / shipments"))
+            ml_log_event(topic, resource, user_id, app_id, "OK", json_dumps(results))
+            return
+        ml_log_event(topic, resource, user_id, app_id, "IGNORADO", "Tópico/recurso sem ação configurada")
+    except Exception as exc:
+        ml_log_event(topic, resource, user_id, app_id, "ERRO", str(exc))
+        with DB_LOCK:
+            DB.execute("UPDATE ml_integration SET last_error=?,updated_at=? WHERE id=1", (str(exc)[:2000], now_iso()))
+            DB.commit()
+
+
+def ml_manual_sync() -> dict[str, Any]:
+    _, seller_id = ml_access_token()
+    query = urlencode(
+        {
+            "seller": seller_id,
+            "order.status": "paid",
+            "sort": "date_desc",
+            "limit": str(ML_MANUAL_SYNC_LIMIT),
+            "offset": "0",
+        }
+    )
+    result = ml_api_get(f"/orders/search?{query}")
+    orders = result.get("results") if isinstance(result, dict) else []
+    imported = []
+    errors = []
+    for order in orders or []:
+        order_id = str(order.get("id") or "") if isinstance(order, dict) else ""
+        if not order_id:
+            continue
+        try:
+            imported.append(ml_import_order(order_id, source="API Mercado Livre / sincronização manual"))
+        except Exception as exc:
+            errors.append({"order_id": order_id, "error": str(exc)})
+    with DB_LOCK:
+        DB.execute(
+            "UPDATE ml_integration SET last_sync_at=?,updated_at=?,last_error=? WHERE id=1",
+            (now_iso(), now_iso(), (json_dumps(errors[:5]) if errors else "")),
+        )
+        DB.commit()
+    ml_log_event("manual_sync", "/orders/search", seller_id, ML_CLIENT_ID, "OK" if not errors else "PARCIAL", json_dumps({"imported": len(imported), "errors": errors[:10]}))
+    return {"ok": not errors, "imported": len(imported), "errors": errors, "details": imported}
+
+
+
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/11.7"
+    server_version = "NoromakExpedicao/11.8"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
@@ -1666,6 +2261,13 @@ class AppHandler(BaseHTTPRequestHandler):
         if accepts_gzip and compressible and len(body) >= 1024:
             return gzip.compress(body, compresslevel=6), True
         return body, False
+
+    def send_redirect(self, location: str, status: int = 302) -> None:
+        self.send_response(status)
+        self.send_header("Location", location)
+        self.send_header("Cache-Control", "no-store")
+        self.send_security_headers()
+        self.end_headers()
 
     def send_json(self, data: Any, status: int = 200, headers: dict[str, str] | None = None) -> None:
         content_type = "application/json; charset=utf-8"
@@ -1770,6 +2372,32 @@ class AppHandler(BaseHTTPRequestHandler):
             ctx = session_context(self)
             self.send_json({"authenticated": bool(ctx), "user": ctx} if ctx else {"authenticated": False})
             return
+        if path == "/api/integracoes/mercadolivre/callback":
+            self.handle_ml_callback(query)
+            return
+        if path == "/api/integracoes/mercadolivre/status":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                self.send_json({"ok": True, "mercadolivre": ml_status_payload()})
+            return
+        if path == "/api/integracoes/mercadolivre/connect":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                try:
+                    self.send_redirect(ml_oauth_authorization_url())
+                except Exception as exc:
+                    self.send_json({"error": str(exc)}, 503)
+            return
+        if path == "/api/integracoes/mercadolivre/logs":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                limit = max(1, min(200, int((query.get("limit") or ["50"])[0] or 50)))
+                with DB_LOCK:
+                    rows = DB.execute(
+                        "SELECT * FROM ml_event_log ORDER BY id DESC LIMIT ?", (limit,)
+                    ).fetchall()
+                self.send_json({"ok": True, "logs": [dict(row) for row in rows]})
+            return
         if path == "/api/storage":
             ctx = self.auth()
             if ctx is not None:
@@ -1825,6 +2453,27 @@ class AppHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = self.route_path()
+        if path == "/api/integracoes/mercadolivre/notificacoes":
+            self.handle_ml_notification()
+            return
+        if path == "/api/integracoes/mercadolivre/sync":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                try:
+                    self.send_json(ml_manual_sync())
+                except Exception as exc:
+                    self.send_json({"error": str(exc)}, 502)
+            return
+        if path == "/api/integracoes/mercadolivre/disconnect":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                with DB_LOCK:
+                    DB.execute("DELETE FROM ml_integration WHERE id=1")
+                    DB.execute("DELETE FROM ml_oauth_state")
+                    DB.commit()
+                audit(ctx["username"], "ml.disconnect", "Mercado Livre")
+                self.send_json({"ok": True})
+            return
         if path == "/api/auth/login":
             self.handle_auth_login()
             return
@@ -1883,6 +2532,38 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         self.send_json({"error": "Rota não encontrada."}, 404)
 
+
+    def handle_ml_callback(self, query: dict[str, list[str]]) -> None:
+        code = str((query.get("code") or [""])[0] or "").strip()
+        state = str((query.get("state") or [""])[0] or "").strip()
+        error = str((query.get("error") or [""])[0] or "").strip()
+        if error:
+            self.send_redirect(f"{BASE_PATH}/admin?aba=integracoes&ml=erro&motivo={quote(error)}")
+            return
+        if not code or not state:
+            self.send_json({"error": "Callback Mercado Livre sem code/state."}, 400)
+            return
+        try:
+            status = ml_exchange_authorization_code(code, state)
+            ml_log_event("oauth", "/callback", status.get("seller_id"), ML_CLIENT_ID, "CONECTADO", status.get("nickname") or "")
+            self.send_redirect(f"{BASE_PATH}/admin?aba=integracoes&ml=conectado")
+        except Exception as exc:
+            ml_log_event("oauth", "/callback", "", ML_CLIENT_ID, "ERRO", str(exc))
+            self.send_redirect(f"{BASE_PATH}/admin?aba=integracoes&ml=erro&motivo={quote(str(exc)[:300])}")
+
+    def handle_ml_notification(self) -> None:
+        # O Mercado Livre recomenda resposta rápida. Confirmamos o recebimento e
+        # processamos a consulta do recurso em thread separada.
+        try:
+            body = self.read_body()
+            payload = json.loads(body.decode("utf-8", errors="replace") or "{}")
+            if not isinstance(payload, dict):
+                payload = {}
+        except Exception:
+            payload = {}
+        self.send_json({"ok": True})
+        if payload:
+            threading.Thread(target=ml_process_notification, args=(payload,), daemon=True).start()
 
     def do_DELETE(self) -> None:
         path = self.route_path()

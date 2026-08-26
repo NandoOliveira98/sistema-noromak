@@ -1,0 +1,30 @@
+CONFIGURAÇÃO MERCADO LIVRE — V11.8
+
+1. No DevCenter:
+   - Permissões: Usuários = Leitura e escrita
+   - Venda e envios de um produto = Leitura e escrita
+   - Tópicos: Orders_v2 e Shipments
+   - URL de retorno OAuth:
+     https://noromakweb.com.br/expedicao/api/integracoes/mercadolivre/callback
+   - URL de notificações:
+     https://noromakweb.com.br/expedicao/api/integracoes/mercadolivre/notificacoes
+
+2. Depois que o Mercado Livre gerar App ID/Client ID e Client Secret, editar NO SERVIDOR:
+   /home/expedicao/.env
+
+   Adicionar:
+   ML_CLIENT_ID=SEU_APP_ID
+   ML_CLIENT_SECRET=SEU_CLIENT_SECRET
+   ML_REDIRECT_URI=https://noromakweb.com.br/expedicao/api/integracoes/mercadolivre/callback
+   ML_NOTIFICATION_URL=https://noromakweb.com.br/expedicao/api/integracoes/mercadolivre/notificacoes
+
+3. Reiniciar:
+   sudo systemctl restart expedicao
+
+4. No Admin:
+   Integrações > Mercado Livre > Conectar Mercado Livre
+
+5. NGINX:
+   A rota EXATA /expedicao/api/integracoes/mercadolivre/notificacoes precisa ficar sem auth_request do CRM,
+   pois os servidores do Mercado Livre não possuem sessão de usuário.
+   O restante de /expedicao deve continuar protegido normalmente.
