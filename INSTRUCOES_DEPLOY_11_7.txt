@@ -1,0 +1,33 @@
+ATUALIZAÇÃO NOROMAK EXPEDIÇÃO 11.7 — DEPLOY
+============================================
+
+Este ZIP é uma atualização por sobreposição e não contém banco SQLite, .env,
+backups, segredos do QZ, MIGRACAO_INICIAL nem a pasta .git.
+
+1. Na pasta atual do projeto:
+   git status
+
+2. Extraia/copiei os arquivos da versão 11.7 sobre a pasta atual, preservando .git e .env.
+
+3. Confira e publique:
+   git status --short
+   git --no-pager diff --stat
+   git add -A
+   git commit -m "adiciona historico de alteracoes de sku"
+   ./publicar.sh
+
+4. Verifique:
+   ssh expedicao "curl -fsS http://127.0.0.1:8100/expedicao/api/health"
+   ./verificar_servidor.sh
+
+5. Faça Ctrl+F5 no Admin e na Conferência.
+
+6. Teste rápido:
+   - abra Admin > Pedidos pendentes;
+   - altere o SKU de uma linha já existente e aguarde o salvamento;
+   - abra Admin > Histórico de SKU;
+   - confirme data, horário, usuário, Tela=Admin, SKU anterior e SKU novo;
+   - opcionalmente altere um SKU no Banco de Produtos e confira o registro.
+
+A atualização cria automaticamente as novas tabelas no banco existente.
+Não execute instalar_servidor_uma_vez.sh em uma VPS já configurada.

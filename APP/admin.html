@@ -7,11 +7,11 @@
 <meta name="application-name" content="Noromak Admin">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="manifest" href="/expedicao/manifest-admin.webmanifest?v=11.6" crossorigin="use-credentials">
-<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=11.6">
-<link rel="icon" href="/favicon.ico?v=11.6" sizes="any">
-<link rel="shortcut icon" href="/favicon.ico?v=11.6">
-<link rel="stylesheet" href="/expedicao/pwa-install.css?v=11.6">
+<link rel="manifest" href="/expedicao/manifest-admin.webmanifest?v=11.7" crossorigin="use-credentials">
+<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=11.7">
+<link rel="icon" href="/favicon.ico?v=11.7" sizes="any">
+<link rel="shortcut icon" href="/favicon.ico?v=11.7">
+<link rel="stylesheet" href="/expedicao/pwa-install.css?v=11.7">
 <title>Noromak - Administração dos Pedidos Compartilhados</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
@@ -418,7 +418,7 @@
 </style>
 <script src="/expedicao/shared-storage.js"></script>
 <script src="/expedicao/web-auth.js"></script>
-<script defer src="/expedicao/pwa-install.js?v=11.6"></script>
+<script defer src="/expedicao/pwa-install.js?v=11.7"></script>
 
 <style id="estiloEtiquetasPersistentesV98">
   .etiquetas-persistentes-box{margin:14px 0 18px;border:1px solid #c7d4e1;border-radius:9px;background:#f8fbfe;padding:13px}
@@ -456,6 +456,22 @@
   @media(max-width:900px){.etiquetas-persistentes-grid{grid-template-columns:1fr}}
 </style>
 
+
+<style>
+  .sku-hist-filtros{display:grid;grid-template-columns:1.2fr 1fr 1fr .9fr .9fr .9fr auto;gap:9px;align-items:end;margin:12px 0 14px}
+  .sku-hist-filtros label{display:flex;flex-direction:column;gap:4px;font-size:10px;font-weight:850;color:#526475;text-transform:uppercase}
+  .sku-hist-filtros input,.sku-hist-filtros select{width:100%;padding:9px 10px;border:1px solid #c8d2dc;border-radius:6px;background:#fff;font-size:12px}
+  .sku-hist-resumo{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;margin:8px 0;color:#5c6f80;font-size:12px}
+  .sku-hist-table{min-width:1180px}
+  .sku-hist-table td{vertical-align:top}
+  .sku-hist-sku-antigo,.sku-hist-sku-novo{display:inline-block;padding:4px 7px;border-radius:5px;font-weight:900;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
+  .sku-hist-sku-antigo{background:#fee2e2;color:#991b1b}
+  .sku-hist-sku-novo{background:#dcfce7;color:#166534}
+  .sku-hist-tela{display:inline-flex;padding:4px 7px;border-radius:12px;font-size:10px;font-weight:900;background:#e8f1fa;color:#1f57a5}
+  .sku-hist-tela.conf{background:#fff3cd;color:#8a5a00}
+  .sku-hist-vazio{padding:28px;text-align:center;color:#64748b}
+  @media(max-width:1100px){.sku-hist-filtros{grid-template-columns:repeat(2,minmax(0,1fr))}.sku-hist-filtros button{grid-column:1/-1}}
+</style>
 </head>
 <body>
 
@@ -622,9 +638,9 @@
 <div id="loginAdmin">
   <div class="box-login">
     <div class="logo-box">
-      <img src="/nk-logo.svg?v=11.6" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=11.6';">
+      <img src="/nk-logo.svg?v=11.7" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=11.7';">
     </div>
-    <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 11.6 — EAN em todos os pedidos do SKU</div>
+    <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 11.7 — histórico de alterações de SKU</div>
     <div style="font-size:12px;color:#667;margin:-8px 0 14px;line-height:1.4;">Use o administrador principal ou qualquer usuário cadastrado com perfil <b>Admin</b>.</div>
     <input type="text" id="usuarioAdmin" placeholder="Usuário Admin">
     <input type="password" id="senhaAdmin" placeholder="Senha">
@@ -640,7 +656,7 @@
 <div id="painelConteudo" class="container-admin">
   <div class="header-topo">
     <div class="header-identidade">
-      <div class="logo-mini-box"><img src="/grupo-noromak.png?v=11.6" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=11.6';"></div>
+      <div class="logo-mini-box"><img src="/grupo-noromak.png?v=11.7" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=11.7';"></div>
       <div class="header-titulos"><h1>Administração dos pedidos compartilhados</h1><small>Dados centralizados no servidor Web em tempo real</small></div>
     </div>
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end;"><a href="/expedicao/estacao-impressao" target="_blank" style="text-decoration:none;background:#1F57A5;color:white;padding:8px 13px;border-radius:6px;font-size:12px;font-weight:800;">🖨 ESTAÇÃO ZEBRA</a><button type="button" class="pwa-install-btn pwa-header" data-pwa-install>⬇ Instalar Admin</button><span id="statusBancoAdmin" class="save-pill">● Banco Web ativo</span><button class="btn-sair" onclick="sairAdmin()">Sair do Painel</button></div>
@@ -659,6 +675,7 @@
     <button class="aba-btn" data-aba="usuarios" onclick="abrirAbaAdmin('usuarios')">👥 Usuários</button>
     <button class="aba-btn" data-aba="etiquetas" onclick="abrirAbaAdmin('etiquetas')">🏷 Etiquetas</button>
     <button class="aba-btn" data-aba="historico" onclick="abrirAbaAdmin('historico')">🕘 Histórico</button>
+    <button class="aba-btn" data-aba="historico-sku" onclick="abrirAbaAdmin('historico-sku')">🔁 Histórico de SKU</button>
   </div>
 
   <section id="aba-pedidos" class="aba-painel ativa">
@@ -717,7 +734,7 @@
 
   <section id="aba-usuarios" class="aba-painel">
     <div class="card-admin">
-      <h2>Usuários e aprovações <span class="usuario-versao">Versão 11.6 — EAN em todos os pedidos do SKU</span></h2>
+      <h2>Usuários e aprovações <span class="usuario-versao">Versão 11.7 — histórico de alterações de SKU</span></h2>
       <div class="aviso-banco"><b>Login próprio do estoque:</b> cada pessoa deve ter usuário, senha e perfil individual. Por segurança, a senha atual <b>não pode ser visualizada</b>, pois fica armazenada de forma criptográfica. Para trocar, use o botão <b>Alterar senha</b>; o Admin poderá visualizar somente a nova senha enquanto a digita.</div>
       <div class="toolbar-grid"><button type="button" id="btnNovoUsuarioAdmin" class="btn-primario" onclick="abrirSolicitacaoUsuario('admin')">＋ Solicitar novo usuário</button><button type="button" class="btn-sucesso" onclick="salvarUsuariosAdmin(true)">💾 Salvar alterações</button></div>
       <div id="contadorUsuariosAdmin" class="usuario-contador"></div>
@@ -758,6 +775,29 @@
       <div class="field"><label>Pasta de fotos dos produtos (opcional):</label><input type="file" id="fotosInput" webkitdirectory directory multiple></div>
       <button class="btn-salvar" onclick="salvarEEnviarDados()">PROCESSAR E VINCULAR ETIQUETAS AOS PEDIDOS</button>
       <div id="status"></div>
+    </div>
+  </section>
+
+  <section id="aba-historico-sku" class="aba-painel">
+    <div class="card-admin">
+      <h3>🔁 Histórico de alterações de SKU</h3>
+      <div class="aviso-banco"><b>Rastreabilidade:</b> o servidor registra somente quando um SKU realmente muda. O histórico mostra dia, horário, usuário, tela de origem, forma da alteração, pedido, marketplace e o valor anterior/novo. Registros ficam no banco do servidor e são compartilhados entre as máquinas.</div>
+      <div class="sku-hist-filtros">
+        <label>Pedido<input id="filtroHistSkuPedido" type="text" placeholder="Número do pedido"></label>
+        <label>SKU<input id="filtroHistSkuSku" type="text" placeholder="Anterior ou novo"></label>
+        <label>Usuário<input id="filtroHistSkuUsuario" type="text" placeholder="Login"></label>
+        <label>Tela<select id="filtroHistSkuTela"><option value="">Todas</option><option>Admin</option><option>Conferência</option></select></label>
+        <label>De<input id="filtroHistSkuInicio" type="date"></label>
+        <label>Até<input id="filtroHistSkuFim" type="date"></label>
+        <button type="button" class="btn-primario" onclick="carregarHistoricoSkuAdmin()">Filtrar</button>
+      </div>
+      <div class="sku-hist-resumo"><span id="resumoHistoricoSkuAdmin">Carregue o histórico para visualizar.</span><button type="button" class="btn-secundario" onclick="limparFiltrosHistoricoSkuAdmin()">Limpar filtros</button></div>
+      <div class="excel-wrap">
+        <table class="excel-grid sku-hist-table">
+          <thead><tr><th>Dia</th><th>Horário</th><th>Usuário</th><th>Tela</th><th>Forma</th><th>Pedido</th><th>Marketplace</th><th>SKU anterior</th><th>SKU novo</th><th>Descrição</th></tr></thead>
+          <tbody id="corpoHistoricoSkuAdmin"><tr><td colspan="10" class="sku-hist-vazio">Nenhuma consulta realizada.</td></tr></tbody>
+        </table>
+      </div>
     </div>
   </section>
 
@@ -2051,6 +2091,74 @@ function carregarLogs() {
   }
 }
 
+let historicoSkuAdminCache=[];
+
+function escaparHistoricoSku(v){
+  return String(v==null?"":v).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));
+}
+function dataHoraHistoricoSku(valor){
+  const d=new Date(String(valor||""));
+  if(Number.isNaN(d.getTime()))return {dia:String(valor||""),hora:""};
+  return {
+    dia:d.toLocaleDateString("pt-BR"),
+    hora:d.toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit",second:"2-digit"})
+  };
+}
+async function carregarHistoricoSkuAdmin(){
+  const corpo=document.getElementById("corpoHistoricoSkuAdmin");
+  const resumo=document.getElementById("resumoHistoricoSkuAdmin");
+  if(!corpo)return;
+  corpo.innerHTML='<tr><td colspan="10" class="sku-hist-vazio">Carregando histórico...</td></tr>';
+  const BASE=location.pathname.startsWith("/expedicao")?"/expedicao":"";
+  const params=new URLSearchParams({limit:"1000"});
+  const filtros={
+    pedido:document.getElementById("filtroHistSkuPedido")?.value||"",
+    sku:document.getElementById("filtroHistSkuSku")?.value||"",
+    usuario:document.getElementById("filtroHistSkuUsuario")?.value||"",
+    tela:document.getElementById("filtroHistSkuTela")?.value||"",
+    data_inicio:document.getElementById("filtroHistSkuInicio")?.value||"",
+    data_fim:document.getElementById("filtroHistSkuFim")?.value||""
+  };
+  Object.entries(filtros).forEach(([k,v])=>{if(String(v).trim())params.set(k,String(v).trim());});
+  try{
+    const r=await fetch(`${BASE}/api/sku-history?${params.toString()}`,{credentials:"same-origin",cache:"no-store",headers:{Accept:"application/json"}});
+    const dados=await r.json().catch(()=>({}));
+    if(!r.ok)throw new Error(dados.error||`HTTP ${r.status}`);
+    historicoSkuAdminCache=Array.isArray(dados.items)?dados.items:[];
+    if(resumo)resumo.textContent=`${dados.total||0} alteração(ões) encontrada(s)${(dados.total||0)>historicoSkuAdminCache.length?` · exibindo as ${historicoSkuAdminCache.length} mais recentes`:""}.`;
+    if(!historicoSkuAdminCache.length){
+      corpo.innerHTML='<tr><td colspan="10" class="sku-hist-vazio">Nenhuma alteração de SKU encontrada para os filtros informados.</td></tr>';
+      return;
+    }
+    corpo.innerHTML=historicoSkuAdminCache.map(item=>{
+      const dh=dataHoraHistoricoSku(item.changed_at);
+      const tela=String(item.source_screen||"Sistema");
+      const clsTela=tela.toLowerCase().startsWith("confer")?" conf":"";
+      return `<tr>
+        <td>${escaparHistoricoSku(dh.dia)}</td>
+        <td>${escaparHistoricoSku(dh.hora)}</td>
+        <td><b>${escaparHistoricoSku(item.username||"—")}</b></td>
+        <td><span class="sku-hist-tela${clsTela}">${escaparHistoricoSku(tela)}</span></td>
+        <td>${escaparHistoricoSku(item.change_method||"—")}</td>
+        <td>${escaparHistoricoSku(item.order_id||"—")}</td>
+        <td>${escaparHistoricoSku(item.marketplace||"—")}</td>
+        <td><span class="sku-hist-sku-antigo">${escaparHistoricoSku(item.old_sku||"—")}</span></td>
+        <td><span class="sku-hist-sku-novo">${escaparHistoricoSku(item.new_sku||"—")}</span></td>
+        <td>${escaparHistoricoSku(item.description||"—")}</td>
+      </tr>`;
+    }).join("");
+  }catch(e){
+    console.error(e);
+    corpo.innerHTML=`<tr><td colspan="10" class="sku-hist-vazio" style="color:#b91c1c">Erro ao carregar histórico: ${escaparHistoricoSku(e.message||e)}</td></tr>`;
+    if(resumo)resumo.textContent="Não foi possível carregar o histórico.";
+  }
+}
+function limparFiltrosHistoricoSkuAdmin(){
+  ["filtroHistSkuPedido","filtroHistSkuSku","filtroHistSkuUsuario","filtroHistSkuInicio","filtroHistSkuFim"].forEach(id=>{const el=document.getElementById(id);if(el)el.value="";});
+  const tela=document.getElementById("filtroHistSkuTela");if(tela)tela.value="";
+  carregarHistoricoSkuAdmin();
+}
+
 function renderizarTabelaLogs() {
   const corpo = document.getElementById("corpoLogs");
   if (logsConferência.length === 0) {
@@ -2200,6 +2308,7 @@ function abrirAbaAdmin(nome){
   document.querySelectorAll(".aba-btn").forEach(b=>b.classList.toggle("ativa",b.dataset.aba===nome));
   document.querySelectorAll(".aba-painel").forEach(p=>p.classList.toggle("ativa",p.id==="aba-"+nome));
   if(nome==="historico") carregarLogs();
+  if(nome==="historico-sku") carregarHistoricoSkuAdmin();
 }
 function autenticarAdmin() {
   const campoUsuario = document.getElementById("usuarioAdmin");

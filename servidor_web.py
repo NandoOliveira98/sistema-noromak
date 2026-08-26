@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
-APP_VERSION = "11.6"
+APP_VERSION = "11.7"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -464,6 +464,35 @@ def init_db() -> None:
                 action TEXT NOT NULL,
                 detail TEXT NOT NULL DEFAULT ''
             );
+            CREATE TABLE IF NOT EXISTS sku_change_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                changed_at TEXT NOT NULL,
+                username TEXT NOT NULL,
+                user_role TEXT NOT NULL DEFAULT '',
+                source_screen TEXT NOT NULL DEFAULT '',
+                change_method TEXT NOT NULL DEFAULT '',
+                entity_type TEXT NOT NULL DEFAULT '',
+                entity_id TEXT NOT NULL DEFAULT '',
+                order_id TEXT NOT NULL DEFAULT '',
+                marketplace TEXT NOT NULL DEFAULT '',
+                old_sku TEXT NOT NULL DEFAULT '',
+                new_sku TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT '',
+                client_ip TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_sku_history_changed_at ON sku_change_history(changed_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_sku_history_order ON sku_change_history(order_id, changed_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_sku_history_skus ON sku_change_history(old_sku, new_sku);
+            CREATE TABLE IF NOT EXISTS sku_state (
+                entity_type TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                sku TEXT NOT NULL DEFAULT '',
+                order_id TEXT NOT NULL DEFAULT '',
+                marketplace TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(entity_type, entity_id)
+            );
             CREATE TABLE IF NOT EXISTS print_jobs (
                 id TEXT PRIMARY KEY,
                 order_key TEXT NOT NULL,
@@ -506,6 +535,7 @@ def init_db() -> None:
     ensure_app_sessions_schema()
     migrate_legacy_if_empty()
     ensure_storage_defaults()
+    seed_sku_state_from_storage()
     migrate_completion_history()
     migrate_app_users()
     sync_app_users_storage()
@@ -949,6 +979,149 @@ def get_storage(key: str) -> tuple[str | None, int, str | None]:
     return value, int(row["version"]), row["updated_at"]
 
 
+SKU_TRACKED_STORAGE_KEYS = {"conf_pedidos", "conf_pedidos_rascunhos", "conf_produtos"}
+
+
+def _sku_entity_identity(key: str, item: dict[str, Any], index: int) -> tuple[str, str]:
+    if key in ("conf_pedidos", "conf_pedidos_rascunhos"):
+        entity_type = "pedido"
+        explicit = str(item.get("__uidLinha") or item.get("__uidPedido") or "").strip()
+        if explicit:
+            return entity_type, explicit
+        fingerprint = "|".join([
+            normalize(order_number(item)),
+            normalize(item.get("Código de Barras")),
+            normalize(item.get("Descrição")),
+            normalize(item.get("Cliente")),
+            str(index),
+        ])
+        return entity_type, "fallback:" + hashlib.sha1(fingerprint.encode("utf-8")).hexdigest()
+
+    entity_type = "produto"
+    explicit = str(item.get("__uidProduto") or "").strip()
+    if explicit:
+        return entity_type, explicit
+    fingerprint = "|".join([
+        normalize(item.get("Código de Barras")),
+        normalize(item.get("Descrição")),
+        normalize(item.get("Marca")),
+        normalize(item.get("Fabricante")),
+        str(index),
+    ])
+    return entity_type, "fallback:" + hashlib.sha1(fingerprint.encode("utf-8")).hexdigest()
+
+
+def _sku_row_metadata(key: str, item: dict[str, Any], index: int) -> dict[str, str]:
+    entity_type, entity_id = _sku_entity_identity(key, item, index)
+    order_id = order_number(item) if entity_type == "pedido" else ""
+    marketplace = str(item.get("Marketplace") or "").strip()
+    description = str(item.get("Descrição") or item.get("Descricao") or "").strip()
+    return {
+        "entity_type": entity_type,
+        "entity_id": entity_id,
+        "sku": str(item.get("SKU") or "").strip(),
+        "order_id": order_id,
+        "marketplace": marketplace,
+        "description": description,
+    }
+
+
+def _rows_from_storage_value(value: str | None) -> list[dict[str, Any]]:
+    try:
+        parsed = json.loads(value or "[]")
+    except Exception:
+        return []
+    return [row for row in parsed if isinstance(row, dict)] if isinstance(parsed, list) else []
+
+
+def seed_sku_state_from_storage() -> None:
+    """Cria o estado-base sem gerar histórico na primeira execução da versão."""
+    with DB_LOCK:
+        for key in SKU_TRACKED_STORAGE_KEYS:
+            value, _, _ = get_storage(key)
+            for index, item in enumerate(_rows_from_storage_value(value)):
+                meta = _sku_row_metadata(key, item, index)
+                DB.execute(
+                    """INSERT OR IGNORE INTO sku_state(
+                         entity_type,entity_id,sku,order_id,marketplace,description,updated_at
+                       ) VALUES(?,?,?,?,?,?,?)""",
+                    (
+                        meta["entity_type"], meta["entity_id"], meta["sku"], meta["order_id"],
+                        meta["marketplace"], meta["description"], now_iso(),
+                    ),
+                )
+        DB.commit()
+
+
+def _default_sku_change_method(storage_key: str, source_screen: str) -> str:
+    screen = str(source_screen or "").strip().lower()
+    if storage_key == "conf_produtos":
+        return "Banco de produtos"
+    if screen.startswith("confer"):
+        return "Tela de conferência"
+    if screen.startswith("admin"):
+        return "Pedidos pendentes / importação"
+    return "Sincronização do sistema"
+
+
+def track_sku_changes(
+    storage_key: str,
+    merged_value: str,
+    *,
+    username: str,
+    user_role: str,
+    source_screen: str,
+    change_method: str,
+    client_ip: str,
+) -> int:
+    if storage_key not in SKU_TRACKED_STORAGE_KEYS:
+        return 0
+    total = 0
+    stamp = now_iso()
+    method = str(change_method or "").strip() or _default_sku_change_method(storage_key, source_screen)
+    screen = str(source_screen or "").strip() or "Sistema"
+    for index, item in enumerate(_rows_from_storage_value(merged_value)):
+        meta = _sku_row_metadata(storage_key, item, index)
+        previous = DB.execute(
+            "SELECT sku FROM sku_state WHERE entity_type=? AND entity_id=?",
+            (meta["entity_type"], meta["entity_id"]),
+        ).fetchone()
+        if previous is None:
+            DB.execute(
+                """INSERT INTO sku_state(entity_type,entity_id,sku,order_id,marketplace,description,updated_at)
+                   VALUES(?,?,?,?,?,?,?)""",
+                (
+                    meta["entity_type"], meta["entity_id"], meta["sku"], meta["order_id"],
+                    meta["marketplace"], meta["description"], stamp,
+                ),
+            )
+            continue
+
+        old_sku = str(previous["sku"] or "").strip()
+        new_sku = meta["sku"]
+        if old_sku != new_sku:
+            DB.execute(
+                """INSERT INTO sku_change_history(
+                     changed_at,username,user_role,source_screen,change_method,entity_type,entity_id,
+                     order_id,marketplace,old_sku,new_sku,description,client_ip
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    stamp, username, user_role, screen, method, meta["entity_type"], meta["entity_id"],
+                    meta["order_id"], meta["marketplace"], old_sku, new_sku, meta["description"], client_ip,
+                ),
+            )
+            total += 1
+        DB.execute(
+            """UPDATE sku_state SET sku=?,order_id=?,marketplace=?,description=?,updated_at=?
+               WHERE entity_type=? AND entity_id=?""",
+            (
+                meta["sku"], meta["order_id"], meta["marketplace"], meta["description"], stamp,
+                meta["entity_type"], meta["entity_id"],
+            ),
+        )
+    return total
+
+
 def item_id(key: str, item: Any, index: int) -> str:
     if not isinstance(item, dict):
         return "primitive:" + hashlib.sha1(json_dumps(item).encode()).hexdigest()
@@ -1314,6 +1487,10 @@ def save_storage(
     force: bool,
     *,
     actor: str = "",
+    actor_role: str = "",
+    source_screen: str = "",
+    change_method: str = "",
+    client_ip: str = "",
     allow_completed_reimport: bool = False,
 ) -> tuple[str, int, str]:
     if len(new_value.encode("utf-8")) > MAX_BODY:
@@ -1345,6 +1522,15 @@ def save_storage(
                 """INSERT INTO storage(key,value,version,updated_at) VALUES(?,?,?,?)
                    ON CONFLICT(key) DO UPDATE SET value=excluded.value,version=excluded.version,updated_at=excluded.updated_at""",
                 (key, merged, version, updated),
+            )
+            track_sku_changes(
+                key,
+                merged,
+                username=actor or "desconhecido",
+                user_role=actor_role,
+                source_screen=source_screen,
+                change_method=change_method,
+                client_ip=client_ip,
             )
             DB.commit()
         except Exception:
@@ -1446,7 +1632,7 @@ def clear_login_failures(handler: BaseHTTPRequestHandler, username: str) -> None
 
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/11.6"
+    server_version = "NoromakExpedicao/11.7"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
@@ -1593,6 +1779,11 @@ class AppHandler(BaseHTTPRequestHandler):
             ctx = self.auth(admin_only=True)
             if ctx is not None:
                 self.handle_roles_get()
+            return
+        if path == "/api/sku-history":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                self.handle_sku_history_get(query)
             return
         if path == "/api/print/queue/status":
             ctx = self.auth()
@@ -1814,6 +2005,58 @@ class AppHandler(BaseHTTPRequestHandler):
             value, version, updated = get_storage(key)
             self.send_json({"exists": value is not None, "value": value, "version": version, "updated_at": updated})
 
+    def handle_sku_history_get(self, query: dict[str, list[str]]) -> None:
+        def q(name: str) -> str:
+            return str((query.get(name) or [""])[0]).strip()
+
+        clauses: list[str] = []
+        params: list[Any] = []
+        pedido = q("pedido")
+        sku = q("sku")
+        usuario = q("usuario")
+        tela = q("tela")
+        data_inicio = q("data_inicio")
+        data_fim = q("data_fim")
+
+        if pedido:
+            clauses.append("order_id LIKE ?")
+            params.append(f"%{pedido}%")
+        if sku:
+            clauses.append("(old_sku LIKE ? OR new_sku LIKE ?)")
+            params.extend([f"%{sku}%", f"%{sku}%"])
+        if usuario:
+            clauses.append("username LIKE ?")
+            params.append(f"%{usuario}%")
+        if tela:
+            clauses.append("source_screen LIKE ?")
+            params.append(f"%{tela}%")
+        if data_inicio:
+            clauses.append("changed_at >= ?")
+            params.append(data_inicio + ("T00:00:00" if "T" not in data_inicio else ""))
+        if data_fim:
+            clauses.append("changed_at <= ?")
+            params.append(data_fim + ("T23:59:59.999999" if "T" not in data_fim else ""))
+
+        try:
+            limit = max(1, min(2000, int(q("limit") or "500")))
+        except ValueError:
+            limit = 500
+        where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+        with DB_LOCK:
+            count = int(DB.execute("SELECT COUNT(*) FROM sku_change_history" + where, params).fetchone()[0])
+            rows = DB.execute(
+                """SELECT id,changed_at,username,user_role,source_screen,change_method,entity_type,
+                          order_id,marketplace,old_sku,new_sku,description,client_ip
+                   FROM sku_change_history"""
+                + where + " ORDER BY id DESC LIMIT ?",
+                [*params, limit],
+            ).fetchall()
+        self.send_json({
+            "ok": True,
+            "total": count,
+            "items": [dict(row) for row in rows],
+        })
+
     def handle_storage_post(self, ctx: dict[str, Any]) -> None:
         try:
             req = self.read_json()
@@ -1833,9 +2076,15 @@ class AppHandler(BaseHTTPRequestHandler):
                 new_value = apply_app_users_payload(new_value, ctx["username"])
                 old_value = None
                 force = True
+            source_screen = str(self.headers.get("X-Expedicao-Tela") or "").strip()
+            change_method = str(self.headers.get("X-Expedicao-Forma") or "").strip()
             value, version, updated = save_storage(
                 key, old_value, new_value, force,
                 actor=ctx["username"],
+                actor_role=ctx.get("app_role", ""),
+                source_screen=source_screen,
+                change_method=change_method,
+                client_ip=client_computer(self),
                 allow_completed_reimport=(ctx["app_role"] == "admin"),
             )
             audit(ctx["username"], "storage.save", key)

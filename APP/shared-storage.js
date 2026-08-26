@@ -2,6 +2,9 @@
   "use strict";
 
   const BASE = location.pathname.startsWith("/expedicao") ? "/expedicao" : "";
+  const TELA_ATUAL = location.pathname.includes("/admin") ? "Admin" :
+    (location.pathname.includes("/conferencia") ? "Conferência" :
+    (location.pathname.includes("/estacao-impressao") ? "Estação de impressão" : "Sistema"));
   const API = BASE + "/api/storage";
   const API_LOCK = BASE + "/api/order-lock";
   const API_COMPLETE = BASE + "/api/order-complete";
@@ -53,7 +56,10 @@
     const xhr = new XMLHttpRequest();
     xhr.open(metodo, url, false);
     xhr.setRequestHeader("Accept", "application/json");
+    xhr.setRequestHeader("X-Expedicao-Tela", TELA_ATUAL);
     if (corpo !== undefined) xhr.setRequestHeader("Content-Type", "application/json; charset=utf-8");
+    if (corpo && corpo.key === "conf_produtos") xhr.setRequestHeader("X-Expedicao-Forma", TELA_ATUAL === "Admin" ? "Banco de produtos" : "Sincronização de produtos");
+    else if (corpo && (corpo.key === "conf_pedidos" || corpo.key === "conf_pedidos_rascunhos")) xhr.setRequestHeader("X-Expedicao-Forma", TELA_ATUAL === "Admin" ? "Pedidos pendentes / importação" : (TELA_ATUAL === "Conferência" ? "Tela de conferência" : "Sincronização de pedidos"));
     try {
       xhr.send(corpo === undefined ? null : JSON.stringify(corpo));
     } catch (erro) {
