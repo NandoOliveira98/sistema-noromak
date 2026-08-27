@@ -7,11 +7,11 @@
 <meta name="application-name" content="Noromak Admin">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="manifest" href="/expedicao/manifest-admin.webmanifest?v=11.8" crossorigin="use-credentials">
-<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=11.8">
-<link rel="icon" href="/favicon.ico?v=11.8" sizes="any">
-<link rel="shortcut icon" href="/favicon.ico?v=11.8">
-<link rel="stylesheet" href="/expedicao/pwa-install.css?v=11.8">
+<link rel="manifest" href="/expedicao/manifest-admin.webmanifest?v=11.9" crossorigin="use-credentials">
+<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=11.9">
+<link rel="icon" href="/favicon.ico?v=11.9" sizes="any">
+<link rel="shortcut icon" href="/favicon.ico?v=11.9">
+<link rel="stylesheet" href="/expedicao/pwa-install.css?v=11.9">
 <title>Noromak - Administração dos Pedidos Compartilhados</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
@@ -435,7 +435,7 @@
 </style>
 <script src="/expedicao/shared-storage.js"></script>
 <script src="/expedicao/web-auth.js"></script>
-<script defer src="/expedicao/pwa-install.js?v=11.8"></script>
+<script defer src="/expedicao/pwa-install.js?v=11.9"></script>
 
 <style id="estiloEtiquetasPersistentesV98">
   .etiquetas-persistentes-box{margin:14px 0 18px;border:1px solid #c7d4e1;border-radius:9px;background:#f8fbfe;padding:13px}
@@ -446,6 +446,14 @@
   .etiquetas-persistentes-topo-direita{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
   .btn-etiquetas-lote{border:1px solid #d8a0a0;background:#fff;color:#b42318;border-radius:7px;padding:6px 10px;font-size:10px;font-weight:900;cursor:pointer;white-space:nowrap}
   .btn-etiquetas-lote:hover{background:#fff1f1}
+  .btn-etiquetas-reprocessar{border:1px solid #9bbce3;background:#eef6ff;color:#1f57a5;border-radius:7px;padding:6px 10px;font-size:10px;font-weight:900;cursor:pointer;white-space:nowrap}
+  .btn-etiquetas-reprocessar:hover{background:#dcecff}
+  .btn-etiquetas-reprocessar:disabled{opacity:.55;cursor:wait}
+  .etiquetas-reprocessar-status{display:none;margin:0 0 10px;padding:9px 11px;border-radius:8px;font-size:10.5px;font-weight:750;line-height:1.45}
+  .etiquetas-reprocessar-status.mostrar{display:block}
+  .etiquetas-reprocessar-status.processando{background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af}
+  .etiquetas-reprocessar-status.sucesso{background:#ecfdf3;border:1px solid #bbf7d0;color:#166534}
+  .etiquetas-reprocessar-status.aviso{background:#fff7ed;border:1px solid #fed7aa;color:#9a3412}
   .etiquetas-lote-barra{display:none;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 10px;padding:9px 10px;border:1px solid #f0b8b8;border-radius:8px;background:#fff7f7}
   .etiquetas-lote-barra.mostrar{display:flex}
   .etiquetas-lote-barra button{border:1px solid #ccd6df;background:#fff;color:#31516f;border-radius:7px;padding:6px 9px;font-size:10px;font-weight:900;cursor:pointer}
@@ -655,9 +663,9 @@
 <div id="loginAdmin">
   <div class="box-login">
     <div class="logo-box">
-      <img src="/nk-logo.svg?v=11.8" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=11.8';">
+      <img src="/nk-logo.svg?v=11.9" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=11.9';">
     </div>
-    <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 11.8 — histórico de alterações de SKU</div>
+    <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 11.9 — histórico de alterações de SKU</div>
     <div style="font-size:12px;color:#667;margin:-8px 0 14px;line-height:1.4;">Use o administrador principal ou qualquer usuário cadastrado com perfil <b>Admin</b>.</div>
     <input type="text" id="usuarioAdmin" placeholder="Usuário Admin">
     <input type="password" id="senhaAdmin" placeholder="Senha">
@@ -673,7 +681,7 @@
 <div id="painelConteudo" class="container-admin">
   <div class="header-topo">
     <div class="header-identidade">
-      <div class="logo-mini-box"><img src="/grupo-noromak.png?v=11.8" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=11.8';"></div>
+      <div class="logo-mini-box"><img src="/grupo-noromak.png?v=11.9" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=11.9';"></div>
       <div class="header-titulos"><h1>Administração dos pedidos compartilhados</h1><small>Dados centralizados no servidor Web em tempo real</small></div>
     </div>
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end;"><a href="/expedicao/estacao-impressao" target="_blank" style="text-decoration:none;background:#1F57A5;color:white;padding:8px 13px;border-radius:6px;font-size:12px;font-weight:800;">🖨 ESTAÇÃO ZEBRA</a><button type="button" class="pwa-install-btn pwa-header" data-pwa-install>⬇ Instalar Admin</button><span id="statusBancoAdmin" class="save-pill">● Banco Web ativo</span><button class="btn-sair" onclick="sairAdmin()">Sair do Painel</button></div>
@@ -777,6 +785,7 @@
           <div><h3>📌 Etiquetas armazenadas no servidor</h3><p>Depois de processadas, permanecem salvas mesmo ao atualizar a página ou abrir o sistema em outro computador.</p></div>
           <div class="etiquetas-persistentes-topo-direita">
             <div id="resumoEtiquetasPersistentes" class="etiquetas-persistentes-resumo">0 etiquetas armazenadas</div>
+            <button type="button" id="btnReprocessarVinculosEtiquetas" class="btn-etiquetas-reprocessar" onclick="reprocessarVinculosEtiquetasPersistentes()">🔄 Reprocessar vínculos</button>
             <button type="button" id="btnAtivarRemocaoMassa" class="btn-etiquetas-lote" onclick="alternarRemocaoMassaEtiquetas()">☑ Remover em massa</button>
           </div>
         </div>
@@ -787,8 +796,9 @@
           <button type="button" onclick="cancelarRemocaoMassaEtiquetas()">Cancelar</button>
           <span id="contadorSelecaoEtiquetas" class="etiquetas-lote-contador">0 selecionadas</span>
         </div>
+        <div id="statusReprocessamentoEtiquetas" class="etiquetas-reprocessar-status" aria-live="polite"></div>
         <div id="listaEtiquetasPersistentes" class="etiquetas-persistentes-grid"></div>
-        <div class="etiquetas-persistentes-aviso"><b>Remoção manual:</b> clique no <b>×</b> ao lado de uma etiqueta para apagá-la. Para apagar várias de uma vez, use <b>Remover em massa</b>, selecione as etiquetas e confirme. Se uma etiqueta estiver vinculada a um pedido pendente, esse pedido deixará de ficar disponível para conferência até receber outra etiqueta.</div>
+        <div class="etiquetas-persistentes-aviso"><b>Vínculos:</b> se uma etiqueta ficou <b>Sem vínculo</b> porque o pedido ainda não existia, use <b>Reprocessar vínculos</b> depois que o pedido entrar. Não é necessário apagar nem reenviar o arquivo. <b>Remoção manual:</b> clique no <b>×</b> ao lado de uma etiqueta para apagá-la. Para apagar várias de uma vez, use <b>Remover em massa</b>.</div>
       </div>
       <div class="field"><label>Pasta de fotos dos produtos (opcional):</label><input type="file" id="fotosInput" webkitdirectory directory multiple></div>
       <button class="btn-salvar" onclick="salvarEEnviarDados()">PROCESSAR E VINCULAR ETIQUETAS AOS PEDIDOS</button>
@@ -4892,6 +4902,111 @@ document.addEventListener("DOMContentLoaded",()=>{
       return reconstruirBancoEtq(obj);
     }catch(e){ console.error("Falha ao ler etiquetas persistentes", e); return bancoEtqVazio(); }
   }
+  function reprocessarMetadadosRegistroEtq(registro){
+    if(!registro || typeof registro!=="object") return;
+    try{
+      const conteudo=[registro.envio||"",registro.danfe||""].filter(Boolean).join("\n");
+      if(registro.marketplace==="mercado_livre" && typeof extrairMetadadosMercadoLivre==="function" && conteudo){
+        const novo=extrairMetadadosMercadoLivre(conteudo);
+        if(novo && typeof novo==="object") registro.metadados={...(registro.metadados||{}),...novo};
+      }else if(registro.marketplace==="magalu" && typeof extrairMetadadosMagalu==="function" && registro.envio){
+        const novo=extrairMetadadosMagalu(registro.envio);
+        if(novo && typeof novo==="object") registro.metadados={...(registro.metadados||{}),...novo};
+      }
+      const extras=[];
+      if(typeof chavesDosMetadados==="function") extras.push(...chavesDosMetadados(registro.metadados||{}));
+      if(typeof extrairChavesDoConteudo==="function") extras.push(...extrairChavesDoConteudo(conteudo,registro.arquivo||""));
+      registro.chaves=[...new Set([...(Array.isArray(registro.chaves)?registro.chaves:[]),...extras].flatMap(v=>typeof gerarVariantesChave==="function"?gerarVariantesChave(v):[String(v||"")]).filter(Boolean))];
+    }catch(e){console.warn("Não foi possível atualizar metadados da etiqueta",registro?.id,e);}
+  }
+
+  async function reprocessarVinculosEtiquetasPersistentes(){
+    const btn=document.getElementById("btnReprocessarVinculosEtiquetas");
+    const status=document.getElementById("statusReprocessamentoEtiquetas");
+    const mostrar=(tipo,texto)=>{
+      if(!status)return;
+      status.className=`etiquetas-reprocessar-status mostrar ${tipo}`;
+      status.innerHTML=texto;
+    };
+    if(btn){btn.disabled=true;btn.textContent="⏳ Reprocessando...";}
+    mostrar("processando","Analisando as etiquetas já armazenadas e comparando novamente com os pedidos pendentes...");
+    try{
+      let pedidosAtuais=[];
+      try{pedidosAtuais=JSON.parse(appStorage.getItem("conf_pedidos")||"[]");}catch(_){pedidosAtuais=[];}
+      if(!Array.isArray(pedidosAtuais)) pedidosAtuais=[];
+      dadosPedidos=pedidosAtuais;
+
+      const banco=reconstruirBancoEtq(lerBancoEtqPersistente());
+      const total=(banco.ordem||[]).length;
+      const antesVinculadas=(banco.ordem||[]).filter(id=>!!banco.registros?.[id]?.pedido).length;
+      const antesSemVinculo=total-antesVinculadas;
+
+      // Recria metadados/chaves a partir do conteúdo já salvo, sem novo upload.
+      (banco.ordem||[]).forEach(id=>reprocessarMetadadosRegistroEtq(banco.registros?.[id]));
+      bancoEtiquetas=reconstruirBancoEtq(banco);
+      bancoEtiquetas.avisos=[];
+      bancoEtiquetas.auditoria=Array.isArray(bancoEtiquetas.auditoria)?bancoEtiquetas.auditoria:[];
+
+      // Preserva vínculos existentes. Só tenta ocupar etiquetas e pedidos ainda livres.
+      for(const marketplace of ["mercado_livre","magalu","shopee"]){
+        const usados=new Set(
+          (bancoEtiquetas.ordem||[]).filter(id=>{
+            const r=bancoEtiquetas.registros?.[id];
+            return r && r.marketplace===marketplace && !!r.pedido;
+          })
+        );
+        const pedidosJaVinculados=new Set(
+          [...usados].map(id=>normalizarIdentificador(bancoEtiquetas.registros[id]?.pedido||"")).filter(Boolean)
+        );
+        const pedidos=obterPedidosUnicosMarketplace(marketplace).filter(item=>{
+          const pedido=extrairCampoAdmin(item,"Pedido")||extrairCampoAdmin(item,"Venda")||extrairCampoAdmin(item,"NF");
+          const armazenado=pedidoParaArmazenamento(pedido,marketplace);
+          return !pedidosJaVinculados.has(normalizarIdentificador(armazenado));
+        });
+
+        pedidos.forEach(item=>{
+          const resultado=idsCandidatosDoPedido(item,marketplace,usados);
+          if(resultado.ids.length===1){
+            const registro=bancoEtiquetas.registros[resultado.ids[0]];
+            if(registro && !registro.pedido){
+              vincularRegistroAoPedido(registro,item,"reprocessado_"+(resultado.criterio||"conteudo"));
+              usados.add(registro.id);
+            }
+          }
+        });
+      }
+
+      // Na Shopee, quando o identificador automático continuar insuficiente,
+      // mantém o mesmo fluxo visual já existente.
+      if(typeof resolverPendenciasShopeeVisualmente==="function"){
+        await resolverPendenciasShopeeVisualmente();
+      }
+
+      bancoEtiquetas=reconstruirBancoEtq(bancoEtiquetas);
+      bancoEtiquetas.atualizadoEm=new Date().toISOString();
+      mapaEtiquetas=bancoEtiquetas;
+      appStorage.setItem("conf_etiquetas",JSON.stringify(bancoEtiquetas));
+
+      const depoisVinculadas=(bancoEtiquetas.ordem||[]).filter(id=>!!bancoEtiquetas.registros?.[id]?.pedido).length;
+      const novosVinculos=Math.max(0,depoisVinculadas-antesVinculadas);
+      const restantes=Math.max(0,total-depoisVinculadas);
+      renderizarEtiquetasPersistentes();
+
+      const tipo=restantes?"aviso":"sucesso";
+      mostrar(tipo,
+        `<b>Reprocessamento concluído.</b> ${total} etiqueta(s) analisada(s) · `+
+        `<b>${novosVinculos} novo(s) vínculo(s)</b> · ${restantes} continuam sem vínculo.`+
+        (antesSemVinculo===0?" Todas as etiquetas já estavam vinculadas antes do reprocessamento.":"")
+      );
+    }catch(e){
+      console.error("Falha ao reprocessar vínculos de etiquetas",e);
+      mostrar("aviso",`❌ Não foi possível reprocessar os vínculos: ${escEtq(e?.message||e)}`);
+    }finally{
+      if(btn){btn.disabled=false;btn.textContent="🔄 Reprocessar vínculos";}
+    }
+  }
+  window.reprocessarVinculosEtiquetasPersistentes=reprocessarVinculosEtiquetasPersistentes;
+
   function reconstruirBancoEtq(origem){
     const b = origem && typeof origem === "object" ? origem : bancoEtqVazio();
     b.version = Math.max(Number(b.version)||0, VERSAO_ETIQUETAS_PERSISTENTES);

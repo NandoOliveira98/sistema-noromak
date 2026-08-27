@@ -1,0 +1,11 @@
+ATUALIZAÇÃO 11.9
+
+Copie os arquivos desta versão sobre a pasta atual do projeto, preservando .git.
+
+Depois:
+git status
+git add -A
+git commit -m "adiciona reprocessamento de vinculos das etiquetas"
+./publicar.sh
+
+Após o resultado 200, faça Ctrl+F5 no Admin.
