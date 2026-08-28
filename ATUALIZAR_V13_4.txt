@@ -1,0 +1,14 @@
+PUBLICAÇÃO V13.4
+
+No Git Bash do Windows:
+git status
+git add -A
+git commit -m "v13.4 custo automatico precificador"
+./publicar.sh
+
+Depois:
+1. Ctrl+F5.
+2. Abra Precificador.
+3. Digite um SKU e aguarde cerca de 700 ms.
+4. Custo e descrição devem preencher automaticamente.
+5. O pequeno botão ↻ ao lado do custo força uma atualização manual.
