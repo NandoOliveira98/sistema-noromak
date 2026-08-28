@@ -11,6 +11,7 @@ Sem dependências externas: usa apenas a biblioteca padrão do Python.
 from __future__ import annotations
 
 import base64
+import io
 import gzip
 import hashlib
 import hmac
@@ -27,6 +28,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import zipfile
 from datetime import datetime, timezone
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -34,7 +36,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "12.5"
+APP_VERSION = "12.6"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -1966,6 +1968,34 @@ def ml_api_get(path_or_url: str, *, headers: dict[str, str] | None = None) -> di
     return ml_http_json("GET", url, token=token, headers=headers)
 
 
+def ml_http_bytes(url: str, *, token: str = "", headers: dict[str, str] | None = None) -> tuple[bytes, str]:
+    final_headers = {"Accept": "*/*", "User-Agent": f"NoromakExpedicao/{APP_VERSION}"}
+    if token:
+        final_headers["Authorization"] = f"Bearer {token}"
+    final_headers.update(headers or {})
+    req = urllib.request.Request(url, headers=final_headers, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=ML_HTTP_TIMEOUT) as resp:
+            return resp.read(), str(resp.headers.get("Content-Type") or "")
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Mercado Livre HTTP {exc.code}: {raw}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Falha de conexão com Mercado Livre: {exc.reason}") from exc
+
+
+def ml_api_get_bytes(path_or_url: str, *, headers: dict[str, str] | None = None) -> tuple[bytes, str]:
+    token, _ = ml_access_token()
+    url = path_or_url if path_or_url.startswith("http") else f"{ML_API_BASE}{path_or_url}"
+    try:
+        return ml_http_bytes(url, token=token, headers=headers)
+    except RuntimeError as exc:
+        if "HTTP 401" not in str(exc):
+            raise
+    token, _ = ml_access_token(force_refresh=True)
+    return ml_http_bytes(url, token=token, headers=headers)
+
+
 def ml_oauth_authorization_url() -> str:
     if not ml_credentials_configured():
         raise RuntimeError("Configure ML_CLIENT_ID e ML_CLIENT_SECRET no /home/expedicao/.env antes de conectar.")
@@ -2200,6 +2230,155 @@ def ml_order_shipments(order_id: str) -> tuple[str, dict[str, Any] | None]:
     return shipment_id, shipment_detail
 
 
+def _ml_invoice_data(shipment_id: str, site_id: str = "MLB") -> dict[str, Any] | None:
+    if not shipment_id:
+        return None
+    try:
+        payload = ml_api_get(f"/shipments/{quote(str(shipment_id))}/invoice_data?siteId={quote(site_id or 'MLB')}")
+        return payload if isinstance(payload, dict) else None
+    except Exception:
+        return None
+
+
+def _ml_invoice_available(invoice: dict[str, Any] | None) -> bool:
+    if not isinstance(invoice, dict):
+        return False
+    status = str(invoice.get("status") or "").strip().lower()
+    return bool(str(invoice.get("fiscal_key") or "").strip()
+                or str(invoice.get("invoice_number") or "").strip()
+                or status in {"approved", "authorized", "authorized_to_use"})
+
+
+def _ml_extract_zpl_from_label_response(raw: bytes) -> str:
+    if not raw:
+        return ""
+    if raw[:2] == b"PK":
+        try:
+            with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+                names = [n for n in archive.namelist() if n.lower().endswith((".txt",".zpl",".prn"))]
+                chunks = []
+                for name in sorted(names):
+                    text = archive.read(name).decode("utf-8", errors="replace").strip()
+                    if text:
+                        chunks.append(text)
+                return "\n".join(chunks).strip()
+        except zipfile.BadZipFile:
+            return ""
+    text = raw.decode("utf-8", errors="replace").strip()
+    return text if "^XA" in text or "~DG" in text else ""
+
+
+def _ml_fetch_shipping_zpl(shipment_id: str) -> str:
+    query = urlencode({"shipment_ids": str(shipment_id), "response_type": "zpl2"})
+    raw, _ = ml_api_get_bytes(f"/shipment_labels?{query}")
+    return _ml_extract_zpl_from_label_response(raw)
+
+
+def _ml_store_linked_label(*, operational_order_id: str, order_id: str, pack_id: str,
+                           shipment_id: str, tracking: str, zpl: str,
+                           invoice: dict[str, Any] | None) -> bool:
+    if not operational_order_id or not shipment_id or not zpl.strip():
+        return False
+    raw, _, _ = get_storage("conf_etiquetas")
+    try:
+        bank = json.loads(raw) if raw else {}
+    except Exception:
+        bank = {}
+    if not isinstance(bank, dict):
+        bank = {}
+    bank["version"] = max(8, int(bank.get("version") or 0))
+    bank.setdefault("registros", {})
+    bank.setdefault("ordem", [])
+    bank.setdefault("porChave", {})
+    bank.setdefault("avisos", [])
+    bank.setdefault("auditoria", [])
+    bank.setdefault("resumo", {})
+    bank.setdefault("vinculados", {})
+
+    existing_id = ""
+    for rid, rec in bank["registros"].items():
+        if not isinstance(rec, dict) or rec.get("marketplace") != "mercado_livre":
+            continue
+        meta = rec.get("metadados") if isinstance(rec.get("metadados"), dict) else {}
+        if str(meta.get("shipment_id") or "") == str(shipment_id) or (
+            str(rec.get("pedido") or "") == str(operational_order_id)
+            and str(rec.get("origem") or "").startswith("api_mercadolivre")
+        ):
+            existing_id = str(rid)
+            break
+
+    fiscal_key = str((invoice or {}).get("fiscal_key") or "").strip()
+    invoice_number = str((invoice or {}).get("invoice_number") or "").strip()
+    keys = [operational_order_id, order_id, pack_id, shipment_id, tracking, fiscal_key, invoice_number]
+    keys = [str(x).strip() for x in keys if str(x or "").strip()]
+    rid = existing_id or ("etq_ml_api_" + hashlib.sha1(str(shipment_id).encode("utf-8")).hexdigest()[:18])
+
+    record = {
+        "id": rid, "marketplace": "mercado_livre", "envio": zpl, "danfe": "",
+        "arquivo": f"Mercado Livre API · shipment {shipment_id}",
+        "metadados": {"pedido": operational_order_id, "venda": order_id, "pack_id": pack_id,
+                      "shipment_id": shipment_id, "rastreio": tracking,
+                      "nf": invoice_number, "chaveAcesso": fiscal_key},
+        "chaves": keys, "vinculadoA": [operational_order_id], "pedido": operational_order_id,
+        "vinculo": "api_mercadolivre_ready_to_print", "origem": "api_mercadolivre",
+        "adicionadaEm": now_iso(), "adicionadaPor": "mercadolivre-api",
+    }
+    bank["registros"][rid] = record
+    if rid not in bank["ordem"]:
+        bank["ordem"].append(rid)
+    bank["porChave"] = {}
+    for record_id in bank["ordem"]:
+        rec = bank["registros"].get(record_id)
+        if not isinstance(rec, dict):
+            continue
+        for key in rec.get("chaves") or []:
+            key = str(key or "").strip()
+            if not key:
+                continue
+            bank["porChave"].setdefault(key, [])
+            if record_id not in bank["porChave"][key]:
+                bank["porChave"][key].append(record_id)
+    bank["atualizadoEm"] = now_iso()
+    if not any(isinstance(a, dict) and a.get("etiqueta")==rid and a.get("pedido")==operational_order_id
+               for a in bank["auditoria"]):
+        bank["auditoria"].append({"marketplace":"mercado_livre","pedido":operational_order_id,
+                                  "criterio":"api_ready_to_print","etiqueta":rid,"arquivo":record["arquivo"]})
+        bank["auditoria"] = bank["auditoria"][-250:]
+    save_storage("conf_etiquetas", raw, json_dumps(bank), False,
+                 actor="mercadolivre-api", actor_role="sistema",
+                 source_screen="API Mercado Livre", change_method="Etiqueta automática após NF",
+                 client_ip="127.0.0.1")
+    return True
+
+
+def _ml_fiscal_and_label_state(*, order: dict[str, Any], order_id: str, operational_order_id: str,
+                               pack_id: str, shipment_id: str, shipment: dict[str, Any] | None,
+                               tracking: str) -> dict[str, Any]:
+    site_id = str(order.get("site_id") or "MLB").strip().upper() or "MLB"
+    status = str((shipment or {}).get("status") or "").strip().lower()
+    substatus = str((shipment or {}).get("substatus") or "").strip().lower()
+    invoice = _ml_invoice_data(shipment_id, site_id)
+    invoice_available = _ml_invoice_available(invoice)
+    fiscal_ready = invoice_available or (status=="ready_to_ship" and substatus in {"ready_to_print","printed"})
+    label_stored = False
+    label_error = ""
+    if fiscal_ready and status=="ready_to_ship" and substatus in {"ready_to_print","printed"}:
+        try:
+            zpl = _ml_fetch_shipping_zpl(shipment_id)
+            if zpl:
+                label_stored = _ml_store_linked_label(
+                    operational_order_id=operational_order_id, order_id=order_id, pack_id=pack_id,
+                    shipment_id=shipment_id, tracking=tracking, zpl=zpl, invoice=invoice
+                )
+            else:
+                label_error = "Mercado Livre respondeu sem ZPL de etiqueta."
+        except Exception as exc:
+            label_error = str(exc)
+    return {"invoice": invoice or {}, "invoice_available": invoice_available, "fiscal_ready": fiscal_ready,
+            "shipment_status": status, "shipment_substatus": substatus, "label_stored": label_stored,
+            "label_error": label_error, "ready_for_conference": bool(label_stored)}
+
+
 def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict[str, Any]:
     order_id = str(order_id or "").strip()
     if not order_id:
@@ -2283,6 +2462,14 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
     if isinstance(shipment, dict):
         tracking = str(shipment.get("tracking_number") or shipment.get("tracking_id") or "").strip()
 
+    fiscal_state = _ml_fiscal_and_label_state(
+        order=order, order_id=order_id, operational_order_id=operational_order_id,
+        pack_id=pack_id, shipment_id=shipment_id, shipment=shipment, tracking=tracking
+    )
+    invoice = fiscal_state.get("invoice") if isinstance(fiscal_state.get("invoice"), dict) else {}
+    invoice_number = str(invoice.get("invoice_number") or "").strip()
+    fiscal_key = str(invoice.get("fiscal_key") or "").strip()
+
     products_raw, _, _ = get_storage("conf_produtos")
     products = _rows_from_storage_value(products_raw)
     lines: list[dict[str, Any]] = []
@@ -2315,6 +2502,11 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
             "Posição": "",
             "Foto": "",
             "Código de Rastreio": tracking,
+            "NF": invoice_number,
+            "Nota Fiscal": invoice_number,
+            "Chave de Acesso": fiscal_key,
+            "Status NF Mercado Livre": "DISPONÍVEL" if fiscal_state.get("fiscal_ready") else "AGUARDANDO",
+            "Etiqueta API Mercado Livre": "VINCULADA" if fiscal_state.get("label_stored") else "AGUARDANDO",
             "__uidLinha": "MLAPI_" + hashlib.sha1(f"{order_id}|{item.get('id')}|{item.get('variation_id')}|{sku}".encode("utf-8")).hexdigest()[:20],
             "OrigemCadastro": source,
             "SkuOrigemImportacao": sku_raw,
@@ -2354,7 +2546,8 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
     inserted = updated = 0
     fields = (
         "Pedido","Marketplace","Data do Pedido","Cliente","SKU","Quantidade","Código de Barras",
-        "Descrição","Rua","Módulo","Prateleira","Nível","Posição","Foto","Código de Rastreio"
+        "Descrição","Rua","Módulo","Prateleira","Nível","Posição","Foto","Código de Rastreio",
+        "NF","Nota Fiscal","Chave de Acesso","Status NF Mercado Livre","Etiqueta API Mercado Livre"
     )
     for imported in lines:
         key = (normalize(imported["Pedido"]), normalize(imported.get("SKU") or imported.get("Código de Barras")))
@@ -2408,6 +2601,12 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
         "inserted": inserted,
         "updated": updated,
         "items": len(lines),
+        "invoice_available": bool(fiscal_state.get("invoice_available")),
+        "fiscal_ready": bool(fiscal_state.get("fiscal_ready")),
+        "label_stored": bool(fiscal_state.get("label_stored")),
+        "ready_for_conference": bool(fiscal_state.get("ready_for_conference")),
+        "shipment_substatus": str(fiscal_state.get("shipment_substatus") or ""),
+        "label_error": str(fiscal_state.get("label_error") or ""),
     }
 
 
@@ -2427,11 +2626,15 @@ def ml_process_notification(payload: dict[str, Any]) -> None:
         if topic in {"orders_v2", "orders"} and "/orders/" in resource:
             order_id = resource.rstrip("/").split("/")[-1]
             result = ml_import_order(order_id, source="API Mercado Livre / orders_v2")
-            ml_log_event(
-                topic, resource, user_id, app_id,
-                "IGNORADO" if result.get("ignored") else "OK",
-                ("FULL · " if result.get("reason") == "FULL" else "") + json_dumps(result),
-            )
+            if result.get("ignored"):
+                event_result, prefix = "IGNORADO", ("FULL · " if result.get("reason") == "FULL" else "")
+            elif result.get("ready_for_conference"):
+                event_result, prefix = "NF DISPONÍVEL", "Etiqueta vinculada automaticamente · "
+            elif result.get("fiscal_ready"):
+                event_result, prefix = "NF DISPONÍVEL", "NF disponível; etiqueta ainda não vinculada · "
+            else:
+                event_result, prefix = "NF AGUARDANDO", ""
+            ml_log_event(topic, resource, user_id, app_id, event_result, prefix + json_dumps(result))
             return
         if topic == "shipments" and "/shipments/" in resource:
             shipment_id = resource.rstrip("/").split("/")[-1]
@@ -2445,11 +2648,17 @@ def ml_process_notification(payload: dict[str, Any]) -> None:
                     if isinstance(item, dict) and item.get("order_id"):
                         results.append(ml_import_order(str(item["order_id"]), source="API Mercado Livre / shipments"))
             all_ignored = bool(results) and all(bool(item.get("ignored")) for item in results if isinstance(item, dict))
-            ml_log_event(
-                topic, resource, user_id, app_id,
-                "IGNORADO" if all_ignored else "OK",
-                ("FULL · " if all_ignored else "") + json_dumps(results),
-            )
+            any_ready = any(bool(item.get("ready_for_conference")) for item in results if isinstance(item, dict))
+            any_fiscal = any(bool(item.get("fiscal_ready")) for item in results if isinstance(item, dict))
+            if all_ignored:
+                event_result, prefix = "IGNORADO", "FULL · "
+            elif any_ready:
+                event_result, prefix = "NF DISPONÍVEL", "Etiqueta vinculada automaticamente · "
+            elif any_fiscal:
+                event_result, prefix = "NF DISPONÍVEL", "NF disponível; etiqueta ainda não vinculada · "
+            else:
+                event_result, prefix = "NF AGUARDANDO", ""
+            ml_log_event(topic, resource, user_id, app_id, event_result, prefix + json_dumps(results))
             return
         ml_log_event(topic, resource, user_id, app_id, "IGNORADO", "Tópico/recurso sem ação configurada")
     except Exception as exc:
@@ -2503,6 +2712,9 @@ def ml_manual_sync() -> dict[str, Any]:
         "imported": len(imported),
         "ignored_full": len(ignored_full),
         "processed": len(imported) + len(ignored_full),
+        "ready_for_conference": sum(1 for item in imported if item.get("ready_for_conference")),
+        "nf_available": sum(1 for item in imported if item.get("fiscal_ready")),
+        "nf_waiting": sum(1 for item in imported if not item.get("fiscal_ready")),
         "errors": errors,
         "details": imported,
         "ignored_details": ignored_full,
@@ -2511,7 +2723,7 @@ def ml_manual_sync() -> dict[str, Any]:
 
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/12.5"
+    server_version = "NoromakExpedicao/12.6"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))

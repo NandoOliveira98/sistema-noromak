@@ -1,0 +1,12 @@
+ATUALIZAÇÃO 12.6
+
+git status
+git add -A
+git commit -m "automatiza nf e etiqueta mercado livre"
+./publicar.sh
+
+Depois:
+1. Ctrl+F5 no Admin e Conferência.
+2. Integrações > Sincronizar agora.
+3. Confira se pedidos com NF já disponível aparecem com etiqueta vinculada na aba Etiquetas.
+4. Novos pedidos passam a completar o fluxo automaticamente pelas notificações de Shipments.
