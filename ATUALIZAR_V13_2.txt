@@ -1,0 +1,17 @@
+PUBLICAÇÃO V13.2
+
+No Git Bash do Windows, dentro da pasta do projeto:
+
+git status
+git add -A
+git commit -m "v13.2 kits automaticos print extensao"
+./publicar.sh
+
+Depois:
+1. Ctrl+F5 no Painel Administrativo.
+2. Abra Cadastro de kits e confirme que o SKU do kit está ATIVO.
+3. Abra Importar por print ou use a extensão.
+4. Quando o SKU cadastrado for preenchido, a opção "Este pedido é um kit"
+   deverá ser marcada automaticamente e os componentes aparecerão.
+5. Para um kit 5x com quantidade vendida 1, o pedido salvo terá 5 unidades
+   do componente.

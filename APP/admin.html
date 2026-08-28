@@ -7,11 +7,11 @@
 <meta name="application-name" content="Noromak Admin">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="manifest" href="/expedicao/manifest-admin.webmanifest?v=13.1" crossorigin="use-credentials">
-<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=13.1">
-<link rel="icon" href="/favicon.ico?v=13.1" sizes="any">
-<link rel="shortcut icon" href="/favicon.ico?v=13.1">
-<link rel="stylesheet" href="/expedicao/pwa-install.css?v=13.1">
+<link rel="manifest" href="/expedicao/manifest-admin.webmanifest?v=13.2" crossorigin="use-credentials">
+<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=13.2">
+<link rel="icon" href="/favicon.ico?v=13.2" sizes="any">
+<link rel="shortcut icon" href="/favicon.ico?v=13.2">
+<link rel="stylesheet" href="/expedicao/pwa-install.css?v=13.2">
 <title>Noromak - Administração dos Pedidos Compartilhados</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
@@ -443,7 +443,7 @@
 </style>
 <script src="/expedicao/shared-storage.js"></script>
 <script src="/expedicao/web-auth.js"></script>
-<script defer src="/expedicao/pwa-install.js?v=13.1"></script>
+<script defer src="/expedicao/pwa-install.js?v=13.2"></script>
 
 <style id="estiloEtiquetasPersistentesV98">
   .etiquetas-persistentes-box{margin:14px 0 18px;border:1px solid #c7d4e1;border-radius:9px;background:#f8fbfe;padding:13px}
@@ -671,7 +671,7 @@
 <div id="loginAdmin">
   <div class="box-login">
     <div class="logo-box">
-      <img src="/nk-logo.svg?v=13.1" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=13.1';">
+      <img src="/nk-logo.svg?v=13.2" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=13.2';">
     </div>
     <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 12.2 — permissões por módulo</div>
     <div style="font-size:12px;color:#667;margin:-8px 0 14px;line-height:1.4;">Use o administrador principal ou qualquer usuário cadastrado com perfil <b>Admin</b>.</div>
@@ -689,7 +689,7 @@
 <div id="painelConteudo" class="container-admin">
   <div class="header-topo">
     <div class="header-identidade">
-      <div class="logo-mini-box"><img src="/grupo-noromak.png?v=13.1" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=13.1';"></div>
+      <div class="logo-mini-box"><img src="/grupo-noromak.png?v=13.2" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=13.2';"></div>
       <div class="header-titulos"><h1>Administração dos pedidos compartilhados</h1><small>Dados centralizados no servidor Web em tempo real</small></div>
     </div>
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end;"><a href="/expedicao/estacao-impressao" target="_blank" style="text-decoration:none;background:#1F57A5;color:white;padding:8px 13px;border-radius:6px;font-size:12px;font-weight:800;">🖨 ESTAÇÃO ZEBRA</a><button type="button" class="pwa-install-btn pwa-header" data-pwa-install>⬇ Instalar Admin</button><span id="statusBancoAdmin" class="save-pill">● Banco Web ativo</span><button class="btn-sair" onclick="sairAdmin()">Sair do Painel</button></div>
@@ -771,7 +771,7 @@
     <div id="kitsListaAdmin" class="card-admin">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
         <div>
-          <h2 style="margin-bottom:4px">Cadastro de kits <span class="usuario-versao">Versão 13.1</span></h2>
+          <h2 style="margin-bottom:4px">Cadastro de kits <span class="usuario-versao">Versão 13.2</span></h2>
           <div style="color:#64748b">Cadastre os SKUs vendidos como kit e escolha os componentes diretamente do Banco de Produtos.</div>
         </div>
         <button class="btn-sucesso" onclick="novoKitAdmin()">＋ Novo kit</button>
@@ -3977,6 +3977,7 @@ let marketplaceDetectadoPrint = "";
 let produtoResolvidoPrint = null;
 let etapaOcrImportacaoPrint = "Preparando leitura";
 let componentesKitPrint = [];
+let kitCatalogoAplicadoPrintSku = "";
 const TEMPO_MAX_INICIALIZACAO_OCR_PRINT = 15000;
 
 const CONFIG_OCR_PRINT = {
@@ -4065,6 +4066,7 @@ function limparImportacaoPorPrint(){
   const ehKit=document.getElementById("printEhKit");if(ehKit)ehKit.checked=false;
   const nomeKit=document.getElementById("printNomeKit");if(nomeKit)nomeKit.value="";
   componentesKitPrint=[];
+  kitCatalogoAplicadoPrintSku="";
   document.getElementById("printKitCampos")?.setAttribute("hidden","hidden");
   const labelQtd=document.getElementById("labelPrintQuantidade");if(labelQtd)labelQtd.textContent="Quantidade";
   renderizarComponentesKitPrint();
@@ -4418,11 +4420,83 @@ async function lerImportacaoPorPrint(){
   }
 }
 
+
+function obterKitsCadastradosPrint(){
+  if(Array.isArray(kitsBancoAdmin)&&kitsBancoAdmin.length)return kitsBancoAdmin;
+  try{
+    const dados=JSON.parse(appStorage.getItem("conf_kits")||"[]");
+    if(Array.isArray(dados)){
+      kitsBancoAdmin=dados;
+      return dados;
+    }
+  }catch(_){}
+  return [];
+}
+
+function localizarKitCadastradoPrint(sku){
+  const chave=normalizarCodigoBanco(sku);
+  if(!chave)return null;
+  return obterKitsCadastradosPrint().find(kit=>{
+    if(!kit||kit.ativo===false)return false;
+    return normalizarCodigoBanco(kit.sku_kit||kit["SKU Kit"]||kit.sku||"")===chave;
+  })||null;
+}
+
+function aplicarKitCadastradoImportacaoPrint(sku){
+  const chave=normalizarCodigoBanco(sku);
+  const kit=localizarKitCadastradoPrint(sku);
+
+  if(!kit){
+    // Se a composição anterior foi aplicada automaticamente e o SKU mudou,
+    // desfaz somente a aplicação automática. Não mexe em kit marcado manualmente.
+    if(kitCatalogoAplicadoPrintSku && kitCatalogoAplicadoPrintSku!==chave){
+      const check=document.getElementById("printEhKit");
+      if(check)check.checked=false;
+      kitCatalogoAplicadoPrintSku="";
+      componentesKitPrint=[];
+      const nome=document.getElementById("printNomeKit");if(nome)nome.value="";
+      document.getElementById("printKitCampos")?.setAttribute("hidden","hidden");
+      const labelQtd=document.getElementById("labelPrintQuantidade");if(labelQtd)labelQtd.textContent="Quantidade";
+      renderizarComponentesKitPrint();
+    }
+    return false;
+  }
+
+  const componentes=(Array.isArray(kit.componentes)?kit.componentes:[])
+    .map(comp=>{
+      const codigo=String(comp?.sku||comp?.SKU||"").trim();
+      const quantidade=Math.max(1,Math.round(Number(comp?.quantidade||comp?.qtd||comp?.Quantidade||1)));
+      return {
+        id:uidBanco("KITP"),
+        codigo,
+        quantidade,
+        produto:localizarProdutoBanco(codigo)
+      };
+    })
+    .filter(item=>item.codigo);
+
+  if(!componentes.length)return false;
+
+  const check=document.getElementById("printEhKit");
+  if(check)check.checked=true;
+  const painel=document.getElementById("printKitCampos");
+  if(painel)painel.removeAttribute("hidden");
+  const nome=document.getElementById("printNomeKit");
+  if(nome)nome.value=String(kit.nome||kit.Nome||kit.sku_kit||sku||"Kit").trim()||"Kit";
+  const labelQtd=document.getElementById("labelPrintQuantidade");
+  if(labelQtd)labelQtd.textContent="Quantidade de kits vendidos";
+
+  componentesKitPrint=componentes;
+  kitCatalogoAplicadoPrintSku=chave;
+  renderizarComponentesKitPrint();
+  return true;
+}
+
 function atualizarProdutoImportacaoPrint(preservarDescricao=false){
   const sku=document.getElementById("printSku")?.value||"",ean=document.getElementById("printEan")?.value||"";
-  const skuContemKit=String(sku).toLowerCase().includes("kit");
   const resolvido=resolverProdutoPrint([sku,ean]);produtoResolvidoPrint=resolvido.produto;
   const box=document.getElementById("produtoEncontradoPrint");
+
   if(produtoResolvidoPrint){
     document.getElementById("printSku").value=campoBanco(produtoResolvidoPrint,"SKU");
     document.getElementById("printEan").value=campoBanco(produtoResolvidoPrint,"Código de Barras");
@@ -4433,10 +4507,21 @@ function atualizarProdutoImportacaoPrint(preservarDescricao=false){
     box.className="print-produto-encontrado aviso";
     box.innerHTML=(sku||ean)?"⚠ SKU/EAN não localizado no banco. Corrija o código ou complete a descrição manualmente.":"Informe o SKU ou EAN para localizar o produto no banco.";
   }
-  if(skuContemKit){
+
+  const skuEfetivo=document.getElementById("printSku")?.value||sku;
+  const kitAplicado=aplicarKitCadastradoImportacaoPrint(skuEfetivo);
+  if(kitAplicado){
+    const kit=localizarKitCadastradoPrint(skuEfetivo);
+    const resumo=(Array.isArray(kit?.componentes)?kit.componentes:[])
+      .map(c=>`${htmlSeguroBanco(c.sku||c.SKU||"")} × ${Math.max(1,Number(c.quantidade||c.qtd||c.Quantidade||1))}`)
+      .join(" · ");
+    box.className="print-produto-encontrado ok";
+    box.innerHTML+=`<br><b>🎁 KIT CADASTRADO DETECTADO AUTOMATICAMENTE</b><br>${resumo}<br><small>A quantidade informada acima será tratada como quantidade de kits vendidos.</small>`;
+  }else if(String(skuEfetivo).toLowerCase().includes("kit")){
     box.className="print-produto-encontrado aviso";
-    box.innerHTML+=`<br><b>🎁 SKU com KIT detectado:</b> após salvar, será aberta uma conferência exclusiva deste pedido.`;
+    box.innerHTML+=`<br><b>⚠ SKU com KIT detectado, mas não há composição ativa com este SKU no Cadastro de Kits.</b>`;
   }
+
   validarCamposImportacaoPrint();
 }
 
@@ -4445,6 +4530,7 @@ function kitImportacaoPrintAtivo(){return !!document.getElementById("printEhKit"
 
 function alternarKitImportacaoPrint(){
   const ativo=kitImportacaoPrintAtivo();
+  if(!ativo)kitCatalogoAplicadoPrintSku="";
   const painel=document.getElementById("printKitCampos");
   if(painel){if(ativo)painel.removeAttribute("hidden");else painel.setAttribute("hidden","hidden");}
   const labelQtd=document.getElementById("labelPrintQuantidade");
@@ -4573,7 +4659,7 @@ function salvarPedidoImportadoPorPrint(lerOutro=false){
           Descrição:"",
           Rua:"",Módulo:"",Prateleira:"",Nível:"",Posição:"",Foto:"",
           __uidLinha:uidBanco("PED"),
-          OrigemCadastro:"PRINT_KIT",
+          OrigemCadastro:kitCatalogoAplicadoPrintSku?"PRINT_KIT_CADASTRADO":"PRINT_KIT",
           CriadoEm:new Date().toISOString()
         };
         preencherPedidoProdutoBanco(item,componente.produto);
@@ -5246,13 +5332,15 @@ document.addEventListener("DOMContentLoaded",()=>{
     mostrarPreviewDadosDiretos(dados,marketplace);
     atualizarProdutoImportacaoPrint(true);
     validarCamposImportacaoPrint();
+    const kitAuto=kitImportacaoPrintAtivo()&&!!kitCatalogoAplicadoPrintSku;
     const itens=Array.isArray(dados.itens)?dados.itens:[];
     const aviso=itens.length>1?`<br>⚠ Foram encontrados <b>${itens.length} SKUs</b> na página. O primeiro foi preenchido; revise se o pedido deve ser cadastrado como kit.`:"";
     const descricaoFinal=document.getElementById("printDescricao")?.value.trim()||"";
     const avisosExtensao=Array.isArray(dados.avisos)?dados.avisos.filter(Boolean):[];
     const avisoDescricao=!descricaoFinal?`<br>⚠ A descrição não foi localizada na página nem no banco de produtos. Preencha o campo <b>Descrição</b> antes de salvar.`:"";
     const avisoTecnico=avisosExtensao.length?`<br><small>${htmlSeguroBanco(avisosExtensao.join(" "))}</small>`:"";
-    statusImportacaoPrint(descricaoFinal?"sucesso":"aviso",`✅ Pedido, cliente, SKU e quantidade obtidos diretamente da página da <b>${nome}</b>, sem captura da tela e sem OCR.<br><small>O cliente foi lido do campo <b>${htmlSeguroBanco(origemCliente)}</b>.</small>${aviso}${avisoDescricao}${avisoTecnico}`,100);
+    const avisoKitAuto=kitAuto?`<br>🎁 <b>Kit cadastrado aplicado automaticamente.</b> A composição e as quantidades já foram carregadas do Cadastro de Kits.`:"";
+    statusImportacaoPrint(descricaoFinal?"sucesso":"aviso",`✅ Pedido, cliente, SKU e quantidade obtidos diretamente da página da <b>${nome}</b>, sem captura da tela e sem OCR.<br><small>O cliente foi lido do campo <b>${htmlSeguroBanco(origemCliente)}</b>.</small>${avisoKitAuto}${aviso}${avisoDescricao}${avisoTecnico}`,100);
     const bruto=document.getElementById("textoBrutoOcrPrint");
     if(bruto)bruto.textContent=[`ORIGEM: LEITURA DIRETA DA PÁGINA DA ${nome.toUpperCase()}`,`MARKETPLACE: ${marketplace}`,`${marketplace==="mercado_livre"?"VENDA":"PEDIDO"}: ${dados.pedido||""}`,`CLIENTE (${origemCliente.toUpperCase()}): ${dados.cliente||""}`,`SKU: ${dados.sku||""}`,`QUANTIDADE: ${dados.quantidade||1}`,`DESCRIÇÃO: ${dados.descricao||""}`,`ITENS DETECTADOS: ${itens.length||1}`,`URL: ${dados.sourceUrl||""}`].join("\n");
   }
@@ -5747,6 +5835,6 @@ document.addEventListener("DOMContentLoaded",()=>{
 });
 </script>
 
-<script src="/expedicao/user-permissions.js?v=13.1"></script>
+<script src="/expedicao/user-permissions.js?v=13.2"></script>
 </body>
 </html>

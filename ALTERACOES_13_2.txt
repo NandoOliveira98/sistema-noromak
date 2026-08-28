@@ -1,0 +1,28 @@
+VERSÃO 13.2 — KIT AUTOMÁTICO NO PRINT E NA EXTENSÃO
+
+CORREÇÃO
+- O Cadastro de Kits agora também é aplicado nas importações por PRINT.
+- O mesmo vale para pedidos enviados pela EXTENSÃO do Chrome.
+- Ao ler/preencher um SKU, o sistema procura correspondência EXATA no conf_kits.
+- Se encontrar um kit ativo:
+  * marca automaticamente "Este pedido é um kit";
+  * carrega o nome do kit;
+  * carrega todos os componentes;
+  * localiza cada componente no Banco de Produtos;
+  * usa a quantidade do pedido como quantidade de kits vendidos;
+  * multiplica automaticamente quantidade vendida × quantidade de cada componente.
+
+EXEMPLO
+Cadastro:
+KIT27200153
+27200153 | 5
+
+Pedido/print/extensão:
+KIT27200153, quantidade 1
+=> salva 27200153, quantidade 5.
+
+Se quantidade 2:
+=> salva 27200153, quantidade 10.
+
+- Se o SKU contém KIT mas não existe composição ativa, mostra aviso claro.
+- O fluxo da API Mercado Livre e os watchers automáticos da V13.1 foram preservados.
