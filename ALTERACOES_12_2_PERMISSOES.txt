@@ -1,0 +1,29 @@
+VERSÃO 12.2 — PERMISSÕES POR MÓDULO
+
+TELA INICIAL
+- Botões padronizados no mesmo padrão visual Noromak.
+- Todos os módulos usam botão azul, ícone laranja, mesma altura, largura e tipografia.
+- A tela mostra somente os módulos liberados para o usuário.
+
+USUÁRIOS / ADMIN
+- Nova coluna “Acessos aos módulos”.
+- Checkboxes individuais para:
+  • Conferência
+  • Painel Administrativo
+  • Estação de Impressão
+  • Precificador
+- O Perfil Admin/Operador continua existindo como classificação, mas o acesso efetivo é granular.
+- Novos Operadores começam com Conferência.
+- Novos/Admins existentes mantêm todos os acessos por padrão, podendo ser ajustados.
+
+SEGURANÇA / SERVIDOR
+- Permissões persistidas no SQLite.
+- Sessão devolve as permissões do usuário.
+- Rotas de Conferência, Admin, Estação e Precificador são validadas no servidor.
+- Não é possível retirar o próprio acesso administrativo durante uma sessão de administração.
+- É obrigatório manter pelo menos um usuário ativo com acesso ao Painel Administrativo.
+- Migração preserva acesso: admins existentes recebem todos os módulos; operadores existentes mantêm Conferência.
+
+MIGRAÇÃO
+- Colunas são adicionadas automaticamente na primeira inicialização da versão 12.2.
+- Não apaga usuários, senhas, pedidos, etiquetas ou histórico.

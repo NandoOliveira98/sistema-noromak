@@ -7,11 +7,11 @@
 <meta name="application-name" content="Noromak Admin">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="manifest" href="/expedicao/manifest-admin.webmanifest?v=12.1" crossorigin="use-credentials">
-<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=12.1">
-<link rel="icon" href="/favicon.ico?v=12.1" sizes="any">
-<link rel="shortcut icon" href="/favicon.ico?v=12.1">
-<link rel="stylesheet" href="/expedicao/pwa-install.css?v=12.1">
+<link rel="manifest" href="/expedicao/manifest-admin.webmanifest?v=12.2" crossorigin="use-credentials">
+<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=12.2">
+<link rel="icon" href="/favicon.ico?v=12.2" sizes="any">
+<link rel="shortcut icon" href="/favicon.ico?v=12.2">
+<link rel="stylesheet" href="/expedicao/pwa-install.css?v=12.2">
 <title>Noromak - Administração dos Pedidos Compartilhados</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
@@ -432,10 +432,18 @@
   .ml-log-table th{background:#f8fafc;color:#334155;position:sticky;top:0}
   @media(max-width:900px){.integracao-grid{grid-template-columns:1fr}.integracao-dados{grid-template-columns:1fr}}
 
+
+  .usuario-acessos{display:grid;grid-template-columns:repeat(2,minmax(120px,1fr));gap:6px 8px;min-width:290px}
+  .usuario-acesso-item{display:flex;align-items:center;gap:7px;padding:7px 9px;border:1px solid #d6e1ed;border-radius:8px;background:#f8fbfe;color:#294763;font-size:11px;font-weight:800;white-space:nowrap}
+  .usuario-acesso-item input{width:16px!important;height:16px!important;min-height:16px!important;margin:0;accent-color:#1F57A5}
+  .usuario-acesso-item:has(input:checked){background:#eaf2fb;border-color:#a9c3df;color:#173e70}
+  .usuario-acessos-legenda{display:block;margin-top:4px;color:#6c7d8d;font-size:9.5px;line-height:1.25}
+  @media(max-width:900px){.usuario-acessos{grid-template-columns:1fr;min-width:170px}}
+
 </style>
 <script src="/expedicao/shared-storage.js"></script>
 <script src="/expedicao/web-auth.js"></script>
-<script defer src="/expedicao/pwa-install.js?v=12.1"></script>
+<script defer src="/expedicao/pwa-install.js?v=12.2"></script>
 
 <style id="estiloEtiquetasPersistentesV98">
   .etiquetas-persistentes-box{margin:14px 0 18px;border:1px solid #c7d4e1;border-radius:9px;background:#f8fbfe;padding:13px}
@@ -663,9 +671,9 @@
 <div id="loginAdmin">
   <div class="box-login">
     <div class="logo-box">
-      <img src="/nk-logo.svg?v=12.1" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=12.1';">
+      <img src="/nk-logo.svg?v=12.2" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=12.2';">
     </div>
-    <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 12.0 — histórico de alterações de SKU</div>
+    <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 12.2 — permissões por módulo</div>
     <div style="font-size:12px;color:#667;margin:-8px 0 14px;line-height:1.4;">Use o administrador principal ou qualquer usuário cadastrado com perfil <b>Admin</b>.</div>
     <input type="text" id="usuarioAdmin" placeholder="Usuário Admin">
     <input type="password" id="senhaAdmin" placeholder="Senha">
@@ -681,7 +689,7 @@
 <div id="painelConteudo" class="container-admin">
   <div class="header-topo">
     <div class="header-identidade">
-      <div class="logo-mini-box"><img src="/grupo-noromak.png?v=12.1" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=12.1';"></div>
+      <div class="logo-mini-box"><img src="/grupo-noromak.png?v=12.2" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=12.2';"></div>
       <div class="header-titulos"><h1>Administração dos pedidos compartilhados</h1><small>Dados centralizados no servidor Web em tempo real</small></div>
     </div>
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end;"><a href="/expedicao/estacao-impressao" target="_blank" style="text-decoration:none;background:#1F57A5;color:white;padding:8px 13px;border-radius:6px;font-size:12px;font-weight:800;">🖨 ESTAÇÃO ZEBRA</a><button type="button" class="pwa-install-btn pwa-header" data-pwa-install>⬇ Instalar Admin</button><span id="statusBancoAdmin" class="save-pill">● Banco Web ativo</span><button class="btn-sair" onclick="sairAdmin()">Sair do Painel</button></div>
@@ -760,11 +768,11 @@
 
   <section id="aba-usuarios" class="aba-painel">
     <div class="card-admin">
-      <h2>Usuários e aprovações <span class="usuario-versao">Versão 11.8 — histórico de alterações de SKU</span></h2>
-      <div class="aviso-banco"><b>Login próprio do estoque:</b> cada pessoa deve ter usuário, senha e perfil individual. Por segurança, a senha atual <b>não pode ser visualizada</b>, pois fica armazenada de forma criptográfica. Para trocar, use o botão <b>Alterar senha</b>; o Admin poderá visualizar somente a nova senha enquanto a digita.</div>
+      <h2>Usuários e aprovações <span class="usuario-versao">Versão 12.2 — permissões por módulo</span></h2>
+      <div class="aviso-banco"><b>Login próprio do estoque:</b> cada pessoa tem usuário, senha e acessos individuais. Marque quais módulos cada usuário pode abrir: <b>Conferência, Painel Administrativo, Estação de Impressão e Precificador</b>. As permissões são validadas também pelo servidor. Por segurança, a senha atual não pode ser visualizada.</div>
       <div class="toolbar-grid"><button type="button" id="btnNovoUsuarioAdmin" class="btn-primario" onclick="abrirSolicitacaoUsuario('admin')">＋ Solicitar novo usuário</button><button type="button" class="btn-sucesso" onclick="salvarUsuariosAdmin(true)">💾 Salvar alterações</button></div>
       <div id="contadorUsuariosAdmin" class="usuario-contador"></div>
-      <div class="excel-wrap" id="tabelaUsuariosAdminWrap" style="max-height:50vh;"><table class="excel-grid" style="min-width:800px;"><thead><tr><th>Ação</th><th>Nome</th><th>Login</th><th>Senha / acesso</th><th>Perfil</th></tr></thead><tbody id="corpoUsuariosAdmin"></tbody></table></div>
+      <div class="excel-wrap" id="tabelaUsuariosAdminWrap" style="max-height:56vh;"><table class="excel-grid" style="min-width:1120px;"><thead><tr><th>Ação</th><th>Nome</th><th>Login</th><th>Senha / acesso</th><th>Perfil</th><th>Acessos aos módulos</th></tr></thead><tbody id="corpoUsuariosAdmin"></tbody></table></div>
     </div>
   </section>
 
@@ -2673,26 +2681,84 @@ function excluirProdutoAdmin(uid){const p=produtosBancoAdmin.find(x=>x.__uidProd
 function mudarPaginaProdutos(delta){paginaProdutosAdmin+=delta;renderizarProdutosAdmin();}
 
 function agendarSalvarUsuariosAdmin(){clearTimeout(timerSalvarUsuariosAdmin);timerSalvarUsuariosAdmin=setTimeout(()=>salvarUsuariosAdmin(false),300);}
-function renderizarUsuariosAdmin(){const c=document.getElementById("corpoUsuariosAdmin");if(!c)return;c.innerHTML=usuariosEditorAdmin.map((u,i)=>{u.__uidUsuario=u.__uidUsuario||uidBanco("USR");const inp=(campo,tipo="text")=>`<input type="${tipo}" data-uidusuario="${u.__uidUsuario}" data-campo="${campo}" value="${htmlSeguroBanco(campoBanco(u,campo))}" onchange="atualizarCampoUsuarioAdmin(this)">`;return `<tr><td><div class="linha-acoes"><button style="background:#ffebee;color:#c62828" onclick="excluirUsuarioAdmin('${u.__uidUsuario}')">🗑</button></div></td><td>${inp('Nome')}</td><td>${inp('Login')}</td><td>${inp('Senha','text')}</td><td><select data-uidusuario="${u.__uidUsuario}" data-campo="Perfil" onchange="atualizarCampoUsuarioAdmin(this)"><option ${campoBanco(u,'Perfil').toLowerCase().includes('admin')?'selected':''}>Admin</option><option ${!campoBanco(u,'Perfil').toLowerCase().includes('admin')?'selected':''}>Operador</option></select></td></tr>`;}).join("")||'<tr><td colspan="5" style="padding:20px;text-align:center;">Nenhum usuário cadastrado.</td></tr>';}
+function acessoUsuarioAdmin(u,campo){
+  const perfil=String(u.Perfil||"Operador").toLowerCase();
+  const defaults={
+    AcessoConferencia:true,
+    AcessoAdmin:perfil.includes("admin"),
+    AcessoEstacao:perfil.includes("admin"),
+    AcessoPrecificador:perfil.includes("admin")
+  };
+  if(typeof u[campo]==="boolean")return u[campo];
+  if(u.Acessos&&typeof u.Acessos==="object"){
+    const map={AcessoConferencia:"conferencia",AcessoAdmin:"admin",AcessoEstacao:"estacao",AcessoPrecificador:"precificador"};
+    if(Object.prototype.hasOwnProperty.call(u.Acessos,map[campo]))return !!u.Acessos[map[campo]];
+  }
+  return defaults[campo];
+}
+function renderizarUsuariosAdmin(){
+  const c=document.getElementById("corpoUsuariosAdmin");if(!c)return;
+  c.innerHTML=usuariosEditorAdmin.map((u,i)=>{
+    u.__uidUsuario=u.__uidUsuario||uidBanco("USR");
+    const inp=(campo,tipo="text")=>`<input type="${tipo}" data-uidusuario="${u.__uidUsuario}" data-campo="${campo}" value="${htmlSeguroBanco(campoBanco(u,campo))}" onchange="atualizarCampoUsuarioAdmin(this)">`;
+    const check=(campo,label,icone)=>`<label class="usuario-acesso-item"><input type="checkbox" data-uidusuario="${u.__uidUsuario}" data-acesso="${campo}" ${acessoUsuarioAdmin(u,campo)?"checked":""} onchange="atualizarAcessoUsuarioAdmin(this)"><span>${icone} ${label}</span></label>`;
+    return `<tr>
+      <td><div class="linha-acoes"><button style="background:#ffebee;color:#c62828" onclick="excluirUsuarioAdmin('${u.__uidUsuario}')">🗑</button></div></td>
+      <td>${inp('Nome')}</td>
+      <td>${inp('Login')}</td>
+      <td>${inp('Senha','text')}</td>
+      <td><select data-uidusuario="${u.__uidUsuario}" data-campo="Perfil" onchange="atualizarCampoUsuarioAdmin(this)"><option ${campoBanco(u,'Perfil').toLowerCase().includes('admin')?'selected':''}>Admin</option><option ${!campoBanco(u,'Perfil').toLowerCase().includes('admin')?'selected':''}>Operador</option></select></td>
+      <td><div class="usuario-acessos">
+        ${check("AcessoConferencia","Conferência","📦")}
+        ${check("AcessoAdmin","Admin","⚙")}
+        ${check("AcessoEstacao","Estação","🖨")}
+        ${check("AcessoPrecificador","Precificador","💲")}
+      </div><span class="usuario-acessos-legenda">Marque somente os módulos que este usuário poderá abrir.</span></td>
+    </tr>`;
+  }).join("")||'<tr><td colspan="6" style="padding:20px;text-align:center;">Nenhum usuário cadastrado.</td></tr>';
+}
 function atualizarCampoUsuarioAdmin(el){
   const u=usuariosEditorAdmin.find(x=>x.__uidUsuario===el.dataset.uidusuario);
   if(!u)return;
   u[el.dataset.campo]=el.value;
+  // Ao transformar um usuário em Admin, libera os módulos por padrão; depois o administrador pode desmarcar individualmente.
+  if(el.dataset.campo==="Perfil"&&String(el.value).toLowerCase().includes("admin")){
+    ["AcessoConferencia","AcessoAdmin","AcessoEstacao","AcessoPrecificador"].forEach(k=>{
+      if(typeof u[k]!=="boolean")u[k]=true;
+    });
+    renderizarUsuariosAdmin();
+  }
   const login=String(u.Login||"").trim();
   const senha=String(u.Senha||"").trim();
-  if(login&&senha){
-    agendarSalvarUsuariosAdmin();
-  }else{
+  if(login&&senha){agendarSalvarUsuariosAdmin();}
+  else{
     clearTimeout(timerSalvarUsuariosAdmin);
     setStatusBanco("Preencha login e senha e clique em Salvar agora","salvando");
   }
 }
+function atualizarAcessoUsuarioAdmin(el){
+  const u=usuariosEditorAdmin.find(x=>x.__uidUsuario===el.dataset.uidusuario);
+  if(!u)return;
+  u[el.dataset.acesso]=!!el.checked;
+  u.Acessos={
+    conferencia:acessoUsuarioAdmin(u,"AcessoConferencia"),
+    admin:acessoUsuarioAdmin(u,"AcessoAdmin"),
+    estacao:acessoUsuarioAdmin(u,"AcessoEstacao"),
+    precificador:acessoUsuarioAdmin(u,"AcessoPrecificador")
+  };
+  agendarSalvarUsuariosAdmin();
+}
 function adicionarUsuarioAdmin(){
   clearTimeout(timerSalvarUsuariosAdmin);
-  const novo={Nome:"",Login:"",Senha:"",Perfil:"Operador",__uidUsuario:uidBanco("USR")};
+  const novo={
+    Nome:"",Login:"",Senha:"",Perfil:"Operador",
+    AcessoConferencia:true,AcessoAdmin:false,AcessoEstacao:false,AcessoPrecificador:false,
+    Acessos:{conferencia:true,admin:false,estacao:false,precificador:false},
+    __uidUsuario:uidBanco("USR")
+  };
   usuariosEditorAdmin.push(novo);
   renderizarUsuariosAdmin();
-  setStatusBanco("Novo usuário adicionado. Preencha os dados e clique em Salvar agora","salvando");
+  setStatusBanco("Novo usuário adicionado. Preencha os dados e defina os acessos.","salvando");
   setTimeout(()=>{
     const campo=document.querySelector(`[data-uidusuario="${novo.__uidUsuario}"][data-campo="Nome"]`);
     campo?.scrollIntoView?.({behavior:"smooth",block:"center"});
@@ -2709,7 +2775,17 @@ function salvarUsuariosAdmin(mostrar=false){
         Nome:String(u.Nome||"").trim(),
         Login:String(u.Login||"").trim(),
         Senha:String(u.Senha||"").trim(),
-        Perfil:String(u.Perfil||"Operador").trim()||"Operador"
+        Perfil:String(u.Perfil||"Operador").trim()||"Operador",
+        AcessoConferencia:acessoUsuarioAdmin(u,"AcessoConferencia"),
+        AcessoAdmin:acessoUsuarioAdmin(u,"AcessoAdmin"),
+        AcessoEstacao:acessoUsuarioAdmin(u,"AcessoEstacao"),
+        AcessoPrecificador:acessoUsuarioAdmin(u,"AcessoPrecificador"),
+        Acessos:{
+          conferencia:acessoUsuarioAdmin(u,"AcessoConferencia"),
+          admin:acessoUsuarioAdmin(u,"AcessoAdmin"),
+          estacao:acessoUsuarioAdmin(u,"AcessoEstacao"),
+          precificador:acessoUsuarioAdmin(u,"AcessoPrecificador")
+        }
       }))
       .filter(u=>u.Login||u.Nome||u.Senha);
 
@@ -2734,7 +2810,7 @@ function salvarUsuariosAdmin(mostrar=false){
     usuariosCadastrados=usuariosEditorAdmin;
     renderizarUsuariosAdmin();
     setStatusBanco("● Usuários salvos","ok");
-    if(mostrar)alert("Usuários salvos. Perfis Admin já podem entrar no painel administrativo.");
+    if(mostrar)alert("Usuários e permissões salvos. Os acessos passam a valer no próximo carregamento de cada tela.");
     return true;
   }catch(e){
     setStatusBanco("Erro ao salvar usuários","erro");

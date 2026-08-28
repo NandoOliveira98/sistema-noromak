@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "12.1"
+APP_VERSION = "12.2"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -408,6 +408,61 @@ def ensure_app_sessions_schema() -> None:
 def session_ttl_for_area(area: str) -> int:
     return STATION_SESSION_TTL_SECONDS if str(area or "").lower() in {"estacao", "station", "impressao"} else SESSION_TTL_SECONDS
 
+
+def ensure_app_user_permissions_schema() -> None:
+    """Adiciona permissões granulares sem retirar acesso dos usuários existentes."""
+    with DB_LOCK:
+        info = DB.execute("PRAGMA table_info(app_users)").fetchall()
+        if not info:
+            return
+        columns = {str(row["name"]) for row in info}
+        additions = {
+            "can_conferencia": "INTEGER NOT NULL DEFAULT 1",
+            "can_admin": "INTEGER NOT NULL DEFAULT 0",
+            "can_estacao": "INTEGER NOT NULL DEFAULT 0",
+            "can_precificador": "INTEGER NOT NULL DEFAULT 0",
+        }
+        changed = False
+        for name, ddl in additions.items():
+            if name not in columns:
+                DB.execute(f"ALTER TABLE app_users ADD COLUMN {name} {ddl}")
+                changed = True
+        # Migração segura: administradores existentes recebem tudo; operadores, Conferência.
+        DB.execute(
+            """UPDATE app_users SET
+                 can_conferencia=1,
+                 can_admin=CASE WHEN role='admin' THEN 1 ELSE COALESCE(can_admin,0) END,
+                 can_estacao=CASE WHEN role='admin' THEN 1 ELSE COALESCE(can_estacao,0) END,
+                 can_precificador=CASE WHEN role='admin' THEN 1 ELSE COALESCE(can_precificador,0) END
+               WHERE role='admin' OR can_conferencia IS NULL"""
+        )
+        if changed:
+            DB.commit()
+
+
+def user_permissions_from_row(row: sqlite3.Row | dict[str, Any]) -> dict[str, bool]:
+    role = str(row["role"] if "role" in row.keys() else row.get("role", "operador")).lower()
+    def flag(name: str, admin_default: bool = False) -> bool:
+        try:
+            value = row[name]
+            return bool(value)
+        except Exception:
+            return admin_default if role == "admin" else (name == "can_conferencia")
+    return {
+        "conferencia": flag("can_conferencia", True),
+        "admin": flag("can_admin", True),
+        "estacao": flag("can_estacao", True),
+        "precificador": flag("can_precificador", True),
+    }
+
+
+def module_allowed(ctx: dict[str, Any] | None, module: str) -> bool:
+    if not ctx:
+        return False
+    permissions = ctx.get("permissions") or {}
+    return bool(permissions.get(module))
+
+
 def init_db() -> None:
     with DB_LOCK:
         DB.executescript(
@@ -461,6 +516,10 @@ def init_db() -> None:
                 password_iterations INTEGER NOT NULL,
                 role TEXT NOT NULL CHECK(role IN ('admin','operador')),
                 active INTEGER NOT NULL DEFAULT 1,
+                can_conferencia INTEGER NOT NULL DEFAULT 1,
+                can_admin INTEGER NOT NULL DEFAULT 0,
+                can_estacao INTEGER NOT NULL DEFAULT 0,
+                can_precificador INTEGER NOT NULL DEFAULT 0,
                 updated_at TEXT NOT NULL,
                 updated_by TEXT NOT NULL DEFAULT ''
             );
@@ -585,6 +644,7 @@ def init_db() -> None:
         DB.commit()
     ensure_print_queue_schema()
     ensure_app_sessions_schema()
+    ensure_app_user_permissions_schema()
     migrate_legacy_if_empty()
     ensure_storage_defaults()
     seed_sku_state_from_storage()
@@ -803,6 +863,7 @@ def upsert_app_user(
     password: str | None,
     updated_by: str,
     only_if_missing: bool = False,
+    permissions: dict[str, bool] | None = None,
 ) -> None:
     username = username.strip().lower()
     if not username:
@@ -818,13 +879,36 @@ def upsert_app_user(
     else:
         fallback = initial_password_for(username, role)
         pwd_hash, pwd_salt, iterations = password_digest(fallback)
+    if permissions is None:
+        if existing:
+            perms = user_permissions_from_row(existing)
+        elif role == "admin":
+            perms = {"conferencia": True, "admin": True, "estacao": True, "precificador": True}
+        else:
+            perms = {"conferencia": True, "admin": False, "estacao": False, "precificador": False}
+    else:
+        perms = {
+            "conferencia": bool(permissions.get("conferencia")),
+            "admin": bool(permissions.get("admin")),
+            "estacao": bool(permissions.get("estacao")),
+            "precificador": bool(permissions.get("precificador")),
+        }
     DB.execute(
-        """INSERT INTO app_users(username,display_name,password_hash,password_salt,password_iterations,role,active,updated_at,updated_by)
-           VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(username) DO UPDATE SET
+        """INSERT INTO app_users(
+             username,display_name,password_hash,password_salt,password_iterations,role,active,
+             can_conferencia,can_admin,can_estacao,can_precificador,updated_at,updated_by
+           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(username) DO UPDATE SET
            display_name=excluded.display_name,password_hash=excluded.password_hash,password_salt=excluded.password_salt,
            password_iterations=excluded.password_iterations,role=excluded.role,active=excluded.active,
+           can_conferencia=excluded.can_conferencia,can_admin=excluded.can_admin,
+           can_estacao=excluded.can_estacao,can_precificador=excluded.can_precificador,
            updated_at=excluded.updated_at,updated_by=excluded.updated_by""",
-        (username, display_name.strip() or username, pwd_hash, pwd_salt, iterations, role, 1 if active else 0, now_iso(), updated_by),
+        (
+            username, display_name.strip() or username, pwd_hash, pwd_salt, iterations, role, 1 if active else 0,
+            1 if perms["conferencia"] else 0, 1 if perms["admin"] else 0,
+            1 if perms["estacao"] else 0, 1 if perms["precificador"] else 0,
+            now_iso(), updated_by,
+        ),
     )
 
 
@@ -897,7 +981,8 @@ def migrate_app_users() -> None:
 
 def app_users_payload() -> list[dict[str, Any]]:
     rows = DB.execute(
-        "SELECT username,display_name,role,active,updated_at,updated_by FROM app_users ORDER BY display_name,username"
+        """SELECT username,display_name,role,active,can_conferencia,can_admin,can_estacao,can_precificador,
+                  updated_at,updated_by FROM app_users ORDER BY display_name,username"""
     ).fetchall()
     return [
         {
@@ -908,6 +993,16 @@ def app_users_payload() -> list[dict[str, Any]]:
             "Perfil": "Admin" if row["role"] == "admin" else "Operador",
             "Ativo": bool(row["active"]),
             "Aprovado": bool(row["active"]),
+            "AcessoConferencia": bool(row["can_conferencia"]),
+            "AcessoAdmin": bool(row["can_admin"]),
+            "AcessoEstacao": bool(row["can_estacao"]),
+            "AcessoPrecificador": bool(row["can_precificador"]),
+            "Acessos": {
+                "conferencia": bool(row["can_conferencia"]),
+                "admin": bool(row["can_admin"]),
+                "estacao": bool(row["can_estacao"]),
+                "precificador": bool(row["can_precificador"]),
+            },
             "AtualizadoEm": row["updated_at"],
             "AtualizadoPor": row["updated_by"],
             "SenhaInicialPendente": str(row["updated_by"] or "").lower().startswith(("migração", "bootstrap")),
@@ -964,21 +1059,35 @@ def apply_app_users_payload(value: str, actor: str) -> str:
                 raise ValueError(f"Informe uma senha com pelo menos 4 caracteres para o novo usuário '{username}'.")
             if password and len(password) < 4:
                 raise ValueError(f"A senha de '{username}' deve ter pelo menos 4 caracteres.")
-            prepared.append({"username": username, "display_name": display_name, "role": role, "active": active, "password": password or None})
+            raw_access = raw.get("Acessos") if isinstance(raw.get("Acessos"), dict) else {}
+            if role == "admin" and not any(k in raw for k in ("AcessoConferencia","AcessoAdmin","AcessoEstacao","AcessoPrecificador")) and not raw_access:
+                permissions = {"conferencia": True, "admin": True, "estacao": True, "precificador": True}
+            else:
+                permissions = {
+                    "conferencia": bool(raw.get("AcessoConferencia", raw_access.get("conferencia", role != "admin"))),
+                    "admin": bool(raw.get("AcessoAdmin", raw_access.get("admin", role == "admin"))),
+                    "estacao": bool(raw.get("AcessoEstacao", raw_access.get("estacao", role == "admin"))),
+                    "precificador": bool(raw.get("AcessoPrecificador", raw_access.get("precificador", role == "admin"))),
+                }
+            prepared.append({
+                "username": username, "display_name": display_name, "role": role,
+                "active": active, "password": password or None, "permissions": permissions
+            })
 
         actor_row = existing.get(actor)
         actor_new = next((row for row in prepared if row["username"] == actor), None)
-        if actor_row and actor_row["role"] == "admin" and actor_row["active"]:
-            if not actor_new or actor_new["role"] != "admin" or not actor_new["active"]:
-                raise ValueError("Você não pode remover ou rebaixar o administrador que está usando esta sessão.")
-        if not any(row["role"] == "admin" and row["active"] for row in prepared):
-            raise ValueError("É necessário manter pelo menos um administrador ativo.")
+        if actor_row and actor_row["active"]:
+            if not actor_new or not actor_new["active"] or not actor_new["permissions"]["admin"]:
+                raise ValueError("Você não pode retirar o acesso ao Painel Administrativo do usuário que está usando esta sessão.")
+        if not any(row["active"] and row["permissions"]["admin"] for row in prepared):
+            raise ValueError("É necessário manter pelo menos um usuário ativo com acesso ao Painel Administrativo.")
 
         DB.execute("BEGIN IMMEDIATE")
         try:
             for row in prepared:
                 upsert_app_user(
-                    row["username"], row["display_name"], row["role"], row["active"], row["password"], actor
+                    row["username"], row["display_name"], row["role"], row["active"], row["password"], actor,
+                    permissions=row["permissions"]
                 )
             for username in set(existing) - seen:
                 DB.execute("DELETE FROM app_users WHERE username=?", (username,))
@@ -1628,7 +1737,8 @@ def session_context(handler: BaseHTTPRequestHandler) -> dict[str, Any] | None:
     now_epoch = int(time.time())
     with DB_LOCK:
         row = DB.execute(
-            """SELECT s.token_hash,s.username,s.area,s.expires_at,u.display_name,u.role,u.active
+            """SELECT s.token_hash,s.username,s.area,s.expires_at,u.display_name,u.role,u.active,
+                      u.can_conferencia,u.can_admin,u.can_estacao,u.can_precificador
                FROM app_sessions s JOIN app_users u ON u.username=s.username
                WHERE s.token_hash=?""",
             (token_hash,),
@@ -1648,6 +1758,7 @@ def session_context(handler: BaseHTTPRequestHandler) -> dict[str, Any] | None:
         "nome": row["display_name"] or row["username"],
         "app_role": row["role"],
         "app_active": True,
+        "permissions": user_permissions_from_row(row),
         "area": str(row["area"] or "conferencia"),
     }
 
@@ -2227,7 +2338,7 @@ def ml_manual_sync() -> dict[str, Any]:
 
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/12.1"
+    server_version = "NoromakExpedicao/12.2"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
@@ -2327,8 +2438,8 @@ class AppHandler(BaseHTTPRequestHandler):
         if ctx is None:
             self.send_json({"error": "Faça login com um usuário do estoque.", "login_required": True}, 401)
             return None
-        if admin_only and ctx.get("app_role") != "admin":
-            self.send_json({"error": "Acesso exclusivo de administrador."}, 403)
+        if admin_only and not module_allowed(ctx, "admin"):
+            self.send_json({"error": "Este usuário não possui acesso ao Painel Administrativo."}, 403)
             return None
         return ctx
 
@@ -2446,8 +2557,26 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.send_json({"ok": bool(status["key_match"]), "qz": status, "version": APP_VERSION})
             return
 
-        # O nginx já exige o login do NoromakWeb. Estas páginas ficam públicas
-        # dentro de /expedicao para conseguirem mostrar o segundo login, próprio do estoque.
+        # Páginas dos módulos: além do login externo, exigem sessão e permissão granular.
+        page_modules = {
+            "/conferencia": "conferencia", "/conferencia/": "conferencia", "/conferencia.html": "conferencia",
+            "/pedidos": "conferencia", "/pedidos/": "conferencia",
+            "/admin": "admin", "/admin/": "admin", "/admin.html": "admin",
+            "/administracao": "admin", "/administracao/": "admin",
+            "/estacao-impressao": "estacao", "/estacao-impressao/": "estacao", "/estacao-impressao.html": "estacao",
+            "/print-station": "estacao", "/print-station/": "estacao",
+            "/precificador": "precificador", "/precificador/": "precificador", "/precificador.html": "precificador",
+            "/precificacao": "precificador", "/precificacao/": "precificador",
+        }
+        required = page_modules.get(path)
+        if required:
+            ctx = session_context(self)
+            if not ctx:
+                self.send_redirect(f"{BASE_PATH}/")
+                return
+            if not module_allowed(ctx, required):
+                self.send_json({"error": f"Acesso ao módulo {required} não autorizado para este usuário."}, 403)
+                return
         self.serve_static(path)
 
 
@@ -2607,9 +2736,20 @@ class AppHandler(BaseHTTPRequestHandler):
                 audit(username or "desconhecido", "auth.failed", client_computer(self))
                 self.send_json({"error": "Usuário ou senha incorretos."}, 401)
                 return
-            if area == "admin" and row["role"] != "admin":
+            permissions = user_permissions_from_row(row)
+            required_module = {
+                "admin": "admin",
+                "conferencia": "conferencia",
+                "estacao": "estacao",
+                "station": "estacao",
+                "impressao": "estacao",
+                "precificador": "precificador",
+                "portal": None,
+                "acesso": None,
+            }.get(area, "conferencia")
+            if required_module and not permissions.get(required_module):
                 register_login_failure(self, username)
-                self.send_json({"error": "Este usuário não possui perfil de Administrador."}, 403)
+                self.send_json({"error": f"Este usuário não possui acesso ao módulo {required_module}."}, 403)
                 return
             clear_login_failures(self, username)
             old = cookie_token(self)
@@ -2626,7 +2766,10 @@ class AppHandler(BaseHTTPRequestHandler):
                      client_computer(self), self.headers.get("User-Agent", "")[:500]),
                 )
                 DB.commit()
-            user = {"username": username, "nome": row["display_name"] or username, "app_role": row["role"], "app_active": True}
+            user = {
+                "username": username, "nome": row["display_name"] or username,
+                "app_role": row["role"], "app_active": True, "permissions": permissions
+            }
             audit(username, "auth.login", f"{area}:{client_computer(self)}")
             self.send_json(
                 {"ok": True, "user": user},
@@ -3469,7 +3612,8 @@ class AppHandler(BaseHTTPRequestHandler):
     def handle_roles_get(self) -> None:
         with DB_LOCK:
             rows = DB.execute(
-                "SELECT username,display_name,role,active,updated_at,updated_by FROM app_users ORDER BY display_name,username"
+                """SELECT username,display_name,role,active,can_conferencia,can_admin,can_estacao,can_precificador,
+                          updated_at,updated_by FROM app_users ORDER BY display_name,username"""
             ).fetchall()
         self.send_json({"users": [dict(row) for row in rows], "seed_admin": ADMIN_USERNAME, "login_interno": True})
 
@@ -3481,6 +3625,13 @@ class AppHandler(BaseHTTPRequestHandler):
             role = str(req.get("role") or "operador").strip().lower()
             active = req.get("active", True) not in (False, 0, "0", "false")
             password = str(req.get("password") or "").strip() or None
+            raw_permissions = req.get("permissions") if isinstance(req.get("permissions"), dict) else {}
+            permissions = {
+                "conferencia": bool(raw_permissions.get("conferencia", role != "admin")),
+                "admin": bool(raw_permissions.get("admin", role == "admin")),
+                "estacao": bool(raw_permissions.get("estacao", role == "admin")),
+                "precificador": bool(raw_permissions.get("precificador", role == "admin")),
+            }
             if not username or any(ch.isspace() for ch in username):
                 raise ValueError("Informe o login do estoque sem espaços.")
             if role not in ("admin", "operador"):
@@ -3488,12 +3639,12 @@ class AppHandler(BaseHTTPRequestHandler):
             current = DB.execute("SELECT * FROM app_users WHERE username=?", (username,)).fetchone()
             if not current and not password:
                 raise ValueError("Informe uma senha para o novo usuário.")
-            if username == ctx["username"] and (role != "admin" or not active):
-                raise ValueError("Você não pode retirar sua própria permissão de administrador.")
+            if username == ctx["username"] and (not active or not permissions["admin"]):
+                raise ValueError("Você não pode retirar seu próprio acesso ao Painel Administrativo.")
             with DB_LOCK:
                 DB.execute("BEGIN IMMEDIATE")
                 try:
-                    upsert_app_user(username, display_name, role, active, password, ctx["username"])
+                    upsert_app_user(username, display_name, role, active, password, ctx["username"], permissions=permissions)
                     DB.commit()
                 except Exception:
                     DB.rollback()

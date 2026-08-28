@@ -12,6 +12,12 @@
 
   const txt = value => String(value ?? "").trim();
   const profileLabel = role => role === "admin" ? "Admin" : "Operador";
+  const permission = (user, module) => {
+    const p = user?.permissions || {};
+    if (Object.prototype.hasOwnProperty.call(p, module)) return !!p[module];
+    if (user?.app_role === "admin") return true; // compatibilidade durante a migração
+    return module === "conferencia";
+  };
 
   function pageKind() {
     const path = location.pathname.replace(/\/+$/, "");
@@ -73,7 +79,7 @@
     window.usuarioLogado = session;
     try {
       localStorage.setItem("conf_sessao_ativa", JSON.stringify(session));
-      if (user.app_role === "admin") {
+      if (permission(user, "admin")) {
         localStorage.setItem("conf_admin_logado", "true");
         localStorage.setItem("conf_admin_sessao", JSON.stringify(session));
       }
@@ -153,8 +159,8 @@
   }
 
   function activateAdmin(user) {
-    if (user.app_role !== "admin") {
-      showAdminLogin("A sessão atual pertence a um Operador. Entre com um usuário Administrador.");
+    if (!permission(user, "admin")) {
+      showAdminLogin("Este usuário não possui acesso ao Painel Administrativo.");
       return;
     }
     setLocalSession(user);
@@ -233,7 +239,7 @@
       performLogin(
         host.querySelector("#stockAccessUser")?.value,
         host.querySelector("#stockAccessPassword")?.value,
-        "conferencia",
+        "portal",
         "stockAccessError",
         host.querySelector("#stockAccessButton")
       );
@@ -250,8 +256,11 @@
         <small>Login: ${escapeHtml(user.username)} · Perfil: ${profileLabel(user.app_role)}</small>
       </div>
       <div class="access-actions">
-        <a class="primary" href="${BASE}/conferencia">Abrir Conferência</a>
-        ${user.app_role === "admin" ? `<a class="secondary" href="${BASE}/admin">Abrir Painel Administrativo</a><a class="secondary" href="${BASE}/estacao-impressao">Abrir Estação de Impressão</a><a class="primary" href="${BASE}/precificador">Abrir Precificador</a>` : ""}
+        ${permission(user,"conferencia") ? `<a class="module-action" href="${BASE}/conferencia"><span class="module-icon">✓</span><span>Abrir Conferência</span></a>` : ""}
+        ${permission(user,"admin") ? `<a class="module-action" href="${BASE}/admin"><span class="module-icon">⚙</span><span>Abrir Painel Administrativo</span></a>` : ""}
+        ${permission(user,"estacao") ? `<a class="module-action" href="${BASE}/estacao-impressao"><span class="module-icon">▣</span><span>Abrir Estação de Impressão</span></a>` : ""}
+        ${permission(user,"precificador") ? `<a class="module-action" href="${BASE}/precificador"><span class="module-icon">$</span><span>Abrir Precificador</span></a>` : ""}
+        ${!["conferencia","admin","estacao","precificador"].some(m=>permission(user,m)) ? `<div class="access-denied">Este usuário não possui módulos liberados. Peça ao administrador para marcar os acessos necessários.</div>` : ""}
         <button id="stockAccessLogout" type="button" class="logout-access">Sair e trocar usuário</button>
       </div>`;
     host.querySelector("#stockAccessLogout")?.addEventListener("click", () => logout(`${BASE}/`));
