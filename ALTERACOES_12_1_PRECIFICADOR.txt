@@ -1,0 +1,11 @@
+VERSÃO 12.1 — PRECIFICADOR INTEGRADO
+
+- Novo botão "Abrir Precificador" na tela inicial do Sistema de Expedição.
+- Botão exibido para perfil Administrador, junto das demais ferramentas administrativas.
+- Novo endereço interno: /expedicao/precificador
+- O HTML Precificador_Marketplaces_Corrigido foi incorporado ao sistema.
+- Funcionalidades e cálculos originais foram preservados.
+- Visual adaptado ao padrão Noromak: azul #1F57A5, laranja #F7941D, cartões claros e logo.
+- Adicionado botão "Voltar ao Sistema".
+- Mantida a persistência local dos dados do precificador no navegador.
+- Admin, Conferência, Estação Zebra Browser Print, fila e demais módulos permanecem inalterados.

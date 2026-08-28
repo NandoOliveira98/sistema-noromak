@@ -251,7 +251,7 @@
       </div>
       <div class="access-actions">
         <a class="primary" href="${BASE}/conferencia">Abrir Conferência</a>
-        ${user.app_role === "admin" ? `<a class="secondary" href="${BASE}/admin">Abrir Painel Administrativo</a><a class="secondary" href="${BASE}/estacao-impressao">Abrir Estação de Impressão</a>` : ""}
+        ${user.app_role === "admin" ? `<a class="secondary" href="${BASE}/admin">Abrir Painel Administrativo</a><a class="secondary" href="${BASE}/estacao-impressao">Abrir Estação de Impressão</a><a class="primary" href="${BASE}/precificador">Abrir Precificador</a>` : ""}
         <button id="stockAccessLogout" type="button" class="logout-access">Sair e trocar usuário</button>
       </div>`;
     host.querySelector("#stockAccessLogout")?.addEventListener("click", () => logout(`${BASE}/`));

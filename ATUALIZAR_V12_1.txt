@@ -1,0 +1,15 @@
+ATUALIZAÇÃO 12.1
+
+Substitua os arquivos da instalação atual pelos arquivos deste pacote, preservando o .git.
+
+Depois execute:
+git status
+git add -A
+git commit -m "integra precificador ao sistema de expedicao"
+./publicar.sh
+
+Após publicar:
+1. Faça Ctrl+F5 na tela inicial.
+2. Entre como Administrador.
+3. Clique em "Abrir Precificador".
+4. O endereço será /expedicao/precificador.
