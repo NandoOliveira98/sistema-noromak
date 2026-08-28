@@ -1,0 +1,11 @@
+VERSÃO 14.0 — BARRA DE PROGRESSO DA ATUALIZAÇÃO GERAL
+
+CORREÇÃO
+- A barra agora aparece IMEDIATAMENTE após confirmar a atualização.
+- O servidor marca o job como running=true antes de iniciar a thread, eliminando
+  a condição de corrida que podia fazer a tela receber running=false no primeiro retorno.
+- Painel de progresso ficou mais visível, com borda azul e posição sticky.
+- Enquanto a lista de produtos está sendo preparada, a barra mostra 2%.
+- Depois mostra progresso real processados/total.
+- Em erro, o painel permanece visível e exibe a mensagem.
+- Ao concluir, mostra 100% e mantém o resultado na tela por alguns segundos antes de recarregar.
