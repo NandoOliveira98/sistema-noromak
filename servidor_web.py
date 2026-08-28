@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "13.8"
+APP_VERSION = "13.9"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -98,6 +98,14 @@ AUTH_LOCK = threading.Lock()
 ML_NEW_ORDER_WATCH_LOCK = threading.Lock()
 CRM_COST_CACHE_LOCK = threading.Lock()
 CRM_COST_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+PRECIFICADOR_BULK_LOCK = threading.Lock()
+PRECIFICADOR_BULK_STATUS_LOCK = threading.Lock()
+PRECIFICADOR_BULK_STATUS: dict[str, Any] = {
+    "running": False, "total": 0, "processed": 0, "updated": 0,
+    "cost_changes": 0, "descriptions": 0, "curves": 0,
+    "kits": 0, "errors": 0, "current_sku": "",
+    "started_at": "", "finished_at": "", "message": "",
+}
 LOGIN_ATTEMPTS: dict[str, list[float]] = {}
 GENERATED_INITIAL_CREDENTIALS: dict[str, str] = {}
 
@@ -1810,6 +1818,190 @@ def save_storage(
     return merged, version, updated
 
 
+
+def _precificador_bulk_set_status(**changes: Any) -> None:
+    with PRECIFICADOR_BULK_STATUS_LOCK:
+        PRECIFICADOR_BULK_STATUS.update(changes)
+
+
+def precificador_bulk_status() -> dict[str, Any]:
+    with PRECIFICADOR_BULK_STATUS_LOCK:
+        return dict(PRECIFICADOR_BULK_STATUS)
+
+
+def _precificador_recalculate_kits(products: list[dict[str, Any]]) -> int:
+    by_id = {
+        str(p.get("_id")): p for p in products
+        if isinstance(p, dict) and p.get("_id")
+    }
+    by_sku = {
+        str(p.get("sku") or "").strip().upper(): p for p in products
+        if isinstance(p, dict) and str(p.get("sku") or "").strip()
+    }
+
+    def money(value: Any) -> float:
+        try:
+            return round(float(value or 0), 2)
+        except Exception:
+            return 0.0
+
+    def recalc(product: dict[str, Any], visiting: set[str] | None = None) -> float:
+        if not product.get("isKit"):
+            return money(product.get("custo"))
+        visiting = set(visiting or set())
+        pid = str(product.get("_id") or product.get("sku") or "")
+        if pid in visiting:
+            return money(product.get("custo"))
+        visiting.add(pid)
+        total = 0.0
+        for item in product.get("kitItems") or []:
+            if not isinstance(item, dict):
+                continue
+            linked = None
+            product_id = str(item.get("productId") or "")
+            sku = str(item.get("sku") or "").strip().upper()
+            if product_id:
+                linked = by_id.get(product_id)
+            if linked is None and sku:
+                linked = by_sku.get(sku)
+            if linked is not None:
+                unit_cost = recalc(linked, visiting.copy())
+                item["productId"] = linked.get("_id")
+                item["sku"] = linked.get("sku")
+                item["produto"] = linked.get("produto")
+                item["custoUnitario"] = unit_cost
+            else:
+                unit_cost = money(item.get("custoUnitario"))
+            try:
+                qty = max(1.0, float(item.get("quantidade") or 1))
+            except Exception:
+                qty = 1.0
+            total += unit_cost * qty
+        product["custo"] = round(total, 2)
+        return product["custo"]
+
+    count = 0
+    for product in products:
+        if isinstance(product, dict) and product.get("isKit"):
+            recalc(product)
+            count += 1
+    return count
+
+
+def precificador_bulk_update_worker(username: str) -> None:
+    if not PRECIFICADOR_BULK_LOCK.acquire(blocking=False):
+        return
+    try:
+        _precificador_bulk_set_status(
+            running=True, total=0, processed=0, updated=0, cost_changes=0,
+            descriptions=0, curves=0, kits=0, errors=0, current_sku="",
+            started_at=now_iso(), finished_at="", message="Carregando banco do Precificador...",
+        )
+
+        with DB_LOCK:
+            raw, _, _ = get_storage("precificador_online_v1")
+            alert_raw, _, _ = get_storage("precificador_alertas_custo_v1")
+        try:
+            data = json.loads(raw or "{}")
+        except Exception:
+            data = {}
+        products = data.get("products") if isinstance(data, dict) else []
+        if not isinstance(products, list):
+            raise RuntimeError("Banco do Precificador inválido.")
+
+        try:
+            alerts = json.loads(alert_raw or "[]")
+        except Exception:
+            alerts = []
+        if not isinstance(alerts, list):
+            alerts = []
+
+        targets = [
+            p for p in products
+            if isinstance(p, dict)
+            and str(p.get("sku") or "").strip()
+            and not p.get("isKit")
+        ]
+        _precificador_bulk_set_status(total=len(targets), message="Atualizando produtos pelo Apollo...")
+
+        updated = cost_changes = descriptions = curves = errors = 0
+
+        for pos, product in enumerate(targets, 1):
+            sku = str(product.get("sku") or "").strip()
+            _precificador_bulk_set_status(processed=pos - 1, current_sku=sku)
+            try:
+                result = crm_cost_lookup(sku, username or "ATUALIZACAO_GERAL_PRECIFICADOR")
+                old_cost = round(float(product.get("custo") or 0), 2)
+                new_cost = round(float(result.get("custo_medio") or 0), 2)
+                description = str(result.get("descricao") or "").strip()
+                curve = str(result.get("curva") or "").strip().upper()
+
+                product["custo"] = new_cost
+                if description and str(product.get("produto") or "").strip() != description:
+                    product["produto"] = description
+                    descriptions += 1
+                if curve in ("A", "B", "C", "D") and str(product.get("curva") or "").strip().upper() != curve:
+                    product["curva"] = curve
+                    curves += 1
+
+                if abs(new_cost - old_cost) >= 0.01:
+                    diff = round(new_cost - old_cost, 2)
+                    pct = (diff / old_cost) if old_cost else 0.0
+                    alerts.insert(0, {
+                        "id": f"bulk-{int(time.time()*1000)}-{pos}",
+                        "sku": sku,
+                        "productId": str(product.get("_id") or ""),
+                        "produto": description or str(product.get("produto") or ""),
+                        "oldCost": old_cost,
+                        "newCost": new_cost,
+                        "difference": diff,
+                        "percent": pct,
+                        "createdAt": now_iso(),
+                        "read": False,
+                    })
+                    cost_changes += 1
+                updated += 1
+            except Exception:
+                errors += 1
+
+            _precificador_bulk_set_status(
+                processed=pos, updated=updated, cost_changes=cost_changes,
+                descriptions=descriptions, curves=curves, errors=errors,
+            )
+            # API informada pelo Guilherme: máximo 30 consultas/minuto.
+            if pos < len(targets):
+                time.sleep(2.2)
+
+        kits = _precificador_recalculate_kits(products)
+        data["products"] = products
+        data["updatedAt"] = now_iso()
+        data["updatedBy"] = username or "ATUALIZACAO_GERAL_APOLLO"
+
+        save_storage(
+            "precificador_online_v1", None, json_dumps(data), True,
+            actor=username or "sistema", actor_role="operador",
+            source_screen="precificador", change_method="apollo.bulk",
+        )
+        save_storage(
+            "precificador_alertas_custo_v1", None, json_dumps(alerts[:300]), True,
+            actor=username or "sistema", actor_role="operador",
+            source_screen="precificador", change_method="apollo.bulk",
+        )
+        audit(username or "sistema", "precificador.apollo.bulk",
+              f"updated={updated};cost_changes={cost_changes};curves={curves};errors={errors}")
+        _precificador_bulk_set_status(
+            running=False, current_sku="", kits=kits, finished_at=now_iso(),
+            message="Atualização geral concluída.",
+        )
+    except Exception as exc:
+        _precificador_bulk_set_status(
+            running=False, current_sku="", finished_at=now_iso(),
+            message="Erro na atualização geral: " + str(exc)[:500],
+        )
+    finally:
+        PRECIFICADOR_BULK_LOCK.release()
+
+
 def delete_storage(key: str) -> None:
     with DB_LOCK:
         DB.execute("DELETE FROM storage WHERE key=?", (key,))
@@ -3251,7 +3443,7 @@ def ml_manual_sync() -> dict[str, Any]:
 
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/13.8"
+    server_version = "NoromakExpedicao/13.9"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
@@ -3422,6 +3614,15 @@ class AppHandler(BaseHTTPRequestHandler):
                     ).fetchall()
                 self.send_json({"ok": True, "logs": [dict(row) for row in rows]})
             return
+        if path == "/api/precificador/atualizar-tudo/status":
+            ctx = self.auth()
+            if ctx is None:
+                return
+            if not module_allowed(ctx, "precificador"):
+                self.send_json({"ok": False, "error": "Acesso ao Precificador não autorizado."}, 403)
+                return
+            self.send_json({"ok": True, "job": precificador_bulk_status()})
+            return
         if path == "/api/precificador/custo":
             ctx = self.auth()
             if ctx is None:
@@ -3440,6 +3641,26 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": str(exc)}, 400)
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 502)
+            return
+        if path == "/api/precificador/atualizar-tudo":
+            ctx = self.auth()
+            if ctx is None:
+                return
+            if not module_allowed(ctx, "precificador"):
+                self.send_json({"ok": False, "error": "Acesso ao Precificador não autorizado."}, 403)
+                return
+            current = precificador_bulk_status()
+            if current.get("running"):
+                self.send_json({"ok": True, "started": False, "job": current})
+                return
+            thread = threading.Thread(
+                target=precificador_bulk_update_worker,
+                args=(str(ctx.get("username") or ""),),
+                name="precificador-apollo-bulk",
+                daemon=True,
+            )
+            thread.start()
+            self.send_json({"ok": True, "started": True, "job": precificador_bulk_status()})
             return
         if path == "/api/storage":
             ctx = self.auth()

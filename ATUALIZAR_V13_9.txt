@@ -1,0 +1,14 @@
+PUBLICAÇÃO V13.9
+
+No Git Bash do Windows:
+git status
+git add -A
+git commit -m "v13.9 atualizacao geral apollo"
+./publicar.sh
+
+Depois:
+1. Ctrl+F5 no Precificador.
+2. Clique "↻ Atualizar banco pelo Apollo".
+3. Leia a confirmação e clique OK para continuar.
+4. Acompanhe a barra de progresso.
+5. Ao concluir, os dados são recarregados automaticamente.

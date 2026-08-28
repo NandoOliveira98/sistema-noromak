@@ -1,0 +1,25 @@
+VERSÃO 13.9 — ATUALIZAÇÃO GERAL PELO APOLLO
+
+NOVO BOTÃO
+- "↻ Atualizar banco pelo Apollo" no topo do Precificador.
+
+CONFIRMAÇÃO
+- No primeiro clique, o sistema pergunta se realmente deseja atualizar todo o banco.
+- Só inicia após confirmar.
+
+PROCESSAMENTO
+- É executado no servidor em segundo plano.
+- Consulta somente produtos não-kit com SKU.
+- Respeita aproximadamente 2,2 segundos entre consultas para não ultrapassar 30/min.
+- Atualiza custo médio.
+- Atualiza descrição.
+- Atualiza curva A/B/C/D quando o Apollo fornecer.
+- Registra notificações de alterações de custo.
+- Recalcula os kits ao final.
+- Evita expor CHAVE_CRM no navegador.
+
+ACOMPANHAMENTO
+- A tela mostra barra de progresso, SKU atual, quantidade processada, custos alterados,
+  descrições, curvas e erros.
+- Se o navegador for recarregado durante o processo, ele reencontra o job em andamento.
+- Ao finalizar, o Precificador recarrega os dados automaticamente.
