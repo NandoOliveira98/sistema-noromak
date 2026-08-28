@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "12.7"
+APP_VERSION = "12.8"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -80,6 +80,8 @@ ML_AUTH_URL = "https://auth.mercadolivre.com.br/authorization"
 ML_API_BASE = "https://api.mercadolibre.com"
 ML_HTTP_TIMEOUT = int(os.getenv("ML_HTTP_TIMEOUT", "20"))
 ML_MANUAL_SYNC_LIMIT = max(1, min(50, int(os.getenv("ML_MANUAL_SYNC_LIMIT", "20"))))
+ML_PENDING_WATCH_INTERVAL = max(10, min(120, int(os.getenv("ML_PENDING_WATCH_INTERVAL", "15"))))
+ML_PENDING_WATCH_BATCH = max(1, min(30, int(os.getenv("ML_PENDING_WATCH_BATCH", "20"))))
 
 DB_LOCK = threading.RLock()
 AUTH_LOCK = threading.Lock()
@@ -2101,7 +2103,11 @@ def _ml_is_full_shipment(shipment: dict[str, Any] | None) -> bool:
 
 
 def _ml_billing_name(order: dict[str, Any]) -> str:
-    """Obtém o nome/razão social fiscal usando o fluxo atual de Billing Info."""
+    """Obtém nome/razão social fiscal pelo fluxo atual do Mercado Livre.
+
+    /orders/{order_id} -> buyer.billing_info.id
+    /orders/billing-info/{site_id}/{billing_info_id}
+    """
     buyer = order.get("buyer") if isinstance(order.get("buyer"), dict) else {}
     embedded = buyer.get("billing_info") if isinstance(buyer.get("billing_info"), dict) else {}
     billing_id = str(embedded.get("id") or "").strip()
@@ -2110,18 +2116,32 @@ def _ml_billing_name(order: dict[str, Any]) -> str:
         return ""
     try:
         payload = ml_api_get(
-            f"/orders/billing-info/{quote(site_id)}/{quote(billing_id)}"
+            f"/orders/billing-info/{quote(site_id)}/{quote(billing_id)}",
+            headers={"x-version": "2"},
         )
         if not isinstance(payload, dict):
             return ""
+
         fiscal_buyer = payload.get("buyer") if isinstance(payload.get("buyer"), dict) else {}
         info = fiscal_buyer.get("billing_info") if isinstance(fiscal_buyer.get("billing_info"), dict) else {}
+        if not info and isinstance(payload.get("billing_info"), dict):
+            info = payload["billing_info"]
+        if not info:
+            info = payload
+
         first = str(info.get("name") or "").strip()
         last = str(info.get("last_name") or "").strip()
+
+        # Para CNPJ o Mercado Livre usa name como razão social e normalmente não
+        # envia last_name. Para PF, name + last_name formam o nome fiscal completo.
+        identification = info.get("identification") if isinstance(info.get("identification"), dict) else {}
+        doc_type = str(identification.get("type") or "").strip().upper()
+        if doc_type == "CNPJ":
+            return first
         return " ".join(part for part in (first, last) if part).strip()
     except Exception:
-        # Nome fiscal é desejável, mas uma indisponibilidade momentânea não deve
-        # impedir a entrada do pedido; os fallbacks logísticos continuam válidos.
+        # Nome fiscal melhora a operação, mas indisponibilidade momentânea não
+        # impede a entrada do pedido; a próxima notificação/sincronização tenta de novo.
         return ""
 
 
@@ -2499,10 +2519,9 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
     # Primeiro tenta o nome/razão social dos dados fiscais usados para NF,
     # exatamente para evitar nickname quando o nome fiscal está disponível.
     fiscal_name = _ml_billing_name(order)
-    client = fiscal_name or receiver or str(buyer.get("nickname") or "").strip()
-    if not client:
-        names = [str(buyer.get("first_name") or "").strip(), str(buyer.get("last_name") or "").strip()]
-        client = " ".join(x for x in names if x).strip()
+    buyer_names = [str(buyer.get("first_name") or "").strip(), str(buyer.get("last_name") or "").strip()]
+    buyer_full_name = " ".join(x for x in buyer_names if x).strip()
+    client = fiscal_name or receiver or buyer_full_name or str(buyer.get("nickname") or "").strip()
 
     date_for_dispatch = _ml_dispatch_date(shipment_id, shipment)
     tracking = ""
@@ -2656,6 +2675,8 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
         "ready_for_conference": bool(fiscal_state.get("ready_for_conference")),
         "shipment_substatus": str(fiscal_state.get("shipment_substatus") or ""),
         "label_error": str(fiscal_state.get("label_error") or ""),
+        "fiscal_name": fiscal_name,
+        "fiscal_name_updated": bool(fiscal_name),
     }
 
 
@@ -2681,6 +2702,8 @@ def ml_process_notification(payload: dict[str, Any]) -> None:
                 event_result, prefix = "PRONTO PARA CONFERÊNCIA", "Etiqueta vinculada automaticamente · "
             elif result.get("fiscal_status") == "PROCESSANDO":
                 event_result, prefix = "NF LIBERADA / ETIQUETA AGUARDANDO", ""
+            elif result.get("fiscal_name_updated"):
+                event_result, prefix = "NOME FISCAL ATUALIZADO", ""
             else:
                 event_result, prefix = "NF AGUARDANDO", ""
             ml_log_event(topic, resource, user_id, app_id, event_result, prefix + json_dumps(result))
@@ -2715,6 +2738,98 @@ def ml_process_notification(payload: dict[str, Any]) -> None:
         with DB_LOCK:
             DB.execute("UPDATE ml_integration SET last_error=?,updated_at=? WHERE id=1", (str(exc)[:2000], now_iso()))
             DB.commit()
+
+
+def _ml_pending_label_candidates() -> list[tuple[str, str]]:
+    """Retorna pares (order_id, shipment_id) ainda aguardando etiqueta."""
+    raw, _, _ = get_storage("conf_pedidos")
+    rows = _rows_from_storage_value(raw)
+    seen: set[tuple[str, str]] = set()
+    candidates: list[tuple[str, str]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("Marketplace") or "").strip().upper() != "MERCADO LIVRE":
+            continue
+        if str(row.get("Etiqueta API Mercado Livre") or "").strip().upper() == "VINCULADA":
+            continue
+        if str(row.get("LogisticaMercadoLivre") or "").strip().lower() == "fulfillment":
+            continue
+        order_id = str(row.get("VendaMercadoLivre") or "").strip()
+        shipment_id = str(row.get("ShipmentIdMercadoLivre") or "").strip()
+        if not order_id or not shipment_id:
+            continue
+        key = (order_id, shipment_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append(key)
+        if len(candidates) >= ML_PENDING_WATCH_BATCH:
+            break
+    return candidates
+
+
+def ml_pending_label_watch_once() -> dict[str, int]:
+    """Reconsulta somente shipments pendentes; importa o pedido só quando há chance de etiqueta."""
+    checked = triggered = ready = errors = 0
+    for order_id, shipment_id in _ml_pending_label_candidates():
+        checked += 1
+        try:
+            shipment = ml_api_get(
+                f"/shipments/{quote(shipment_id)}?views=destination",
+                headers={"x-format-new": "true", "X-Api-Version": "2"},
+            )
+            if not isinstance(shipment, dict):
+                continue
+            status = str(shipment.get("status") or "").strip().lower()
+            substatus = str(shipment.get("substatus") or "").strip().lower()
+
+            # invoice_pending ainda não tem etiqueta pronta. Evita chamadas caras.
+            if status == "ready_to_ship" and substatus == "invoice_pending":
+                continue
+
+            # Fora do pending, reimporta: a rotina existente tenta a etiqueta ZPL
+            # e só libera conferência se o vínculo for realmente gravado.
+            if status == "ready_to_ship":
+                triggered += 1
+                result = ml_import_order(order_id, source="API Mercado Livre / watcher etiqueta")
+                if result.get("ready_for_conference"):
+                    ready += 1
+                    ml_log_event(
+                        "shipment_watcher", f"/shipments/{shipment_id}",
+                        "", ML_CLIENT_ID, "PRONTO PARA CONFERÊNCIA",
+                        json_dumps({"order_id": order_id, "shipment_id": shipment_id,
+                                    "substatus": substatus, "fiscal_name": result.get("fiscal_name") or ""})
+                    )
+                elif result.get("fiscal_name_updated"):
+                    ml_log_event(
+                        "shipment_watcher", f"/orders/{order_id}",
+                        "", ML_CLIENT_ID, "NOME FISCAL ATUALIZADO",
+                        json_dumps({"order_id": order_id, "shipment_id": shipment_id,
+                                    "nome": result.get("fiscal_name") or ""})
+                    )
+        except Exception as exc:
+            errors += 1
+            ml_log_event(
+                "shipment_watcher", f"/shipments/{shipment_id}",
+                "", ML_CLIENT_ID, "ERRO", str(exc)[:1200]
+            )
+    return {"checked": checked, "triggered": triggered, "ready": ready, "errors": errors}
+
+
+def ml_pending_label_watch_loop(stop_event: threading.Event) -> None:
+    """Watcher interno leve; notificações continuam sendo o caminho principal."""
+    while not stop_event.wait(ML_PENDING_WATCH_INTERVAL):
+        try:
+            row = ml_integration_row()
+            if not row or not str(row["access_token"] or "").strip():
+                continue
+            ml_pending_label_watch_once()
+        except Exception as exc:
+            try:
+                ml_log_event("shipment_watcher", "/pending", "", ML_CLIENT_ID, "ERRO", str(exc)[:1200])
+            except Exception:
+                pass
 
 
 def ml_manual_sync() -> dict[str, Any]:
@@ -4220,15 +4335,26 @@ class AppHandler(BaseHTTPRequestHandler):
 def main() -> None:
     init_db()
     backup_daily()
+    watcher_stop = threading.Event()
+    watcher_thread = threading.Thread(
+        target=ml_pending_label_watch_loop,
+        args=(watcher_stop,),
+        name="ml-pending-label-watcher",
+        daemon=True,
+    )
+    watcher_thread.start()
     server = ThreadingHTTPServer((HOST, PORT), AppHandler)
     server.daemon_threads = True
     print(f"Sistema de Conferência Web {APP_VERSION} em http://{HOST}:{PORT}{BASE_PATH}", flush=True)
     print(f"Banco SQLite: {DB_PATH}", flush=True)
+    print(f"Watcher Mercado Livre: pendências a cada {ML_PENDING_WATCH_INTERVAL}s", flush=True)
     try:
         server.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:
         pass
     finally:
+        watcher_stop.set()
+        watcher_thread.join(timeout=3)
         server.server_close()
         with DB_LOCK:
             DB.close()

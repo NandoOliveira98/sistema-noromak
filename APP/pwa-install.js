@@ -120,7 +120,7 @@
     buttons().forEach(btn => btn.addEventListener("click", installFromClick));
     setButtonState("idle");
     if ("serviceWorker" in navigator && location.protocol === "https:") {
-      navigator.serviceWorker.register(`${BASE}/sw.js?v=12.7`, {scope:`${BASE}/`, updateViaCache:"none"})
+      navigator.serviceWorker.register(`${BASE}/sw.js?v=12.8`, {scope:`${BASE}/`, updateViaCache:"none"})
         .then(reg => reg.update().catch(() => {}))
         .catch(err => console.warn("PWA: service worker não registrado", err));
     }
