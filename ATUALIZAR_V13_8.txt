@@ -1,0 +1,15 @@
+PUBLICAÇÃO V13.8
+
+No Git Bash do Windows:
+git status
+git add -A
+git commit -m "v13.8 curva apollo e salvamento automatico"
+./publicar.sh
+
+Depois:
+1. Ctrl+F5.
+2. Abra o Precificador.
+3. Edite um campo e aguarde cerca de 1 segundo.
+4. A tela deve mostrar "Salvo automaticamente".
+5. Ao consultar um SKU, custo/descrição são preenchidos e a curva também será
+   preenchida se a API do Apollo retornar curva=A/B/C/D.

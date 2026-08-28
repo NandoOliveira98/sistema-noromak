@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "13.7"
+APP_VERSION = "13.8"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -292,6 +292,7 @@ def crm_cost_lookup(codigo: str, operador: str = "") -> dict[str, Any]:
         "descricao": str(data.get("descricao") or ""),
         "unidade": str(data.get("unidade") or ""),
         "custo_medio": round(custo, 4),
+        "curva": str(data.get("curva") or data.get("curva_abc") or data.get("abc") or "").strip().upper(),
         "cache": False,
         "consultado_em": now_iso(),
     }
@@ -3250,7 +3251,7 @@ def ml_manual_sync() -> dict[str, Any]:
 
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/13.7"
+    server_version = "NoromakExpedicao/13.8"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
