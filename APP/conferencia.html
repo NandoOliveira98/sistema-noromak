@@ -7,11 +7,11 @@
 <meta name="application-name" content="Noromak Conferência">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="manifest" href="/expedicao/manifest-conferencia.webmanifest?v=11.9" crossorigin="use-credentials">
-<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/conferencia-180.png?v=11.9">
-<link rel="icon" href="/favicon.ico?v=11.9" sizes="any">
-<link rel="shortcut icon" href="/favicon.ico?v=11.9">
-<link rel="stylesheet" href="/expedicao/pwa-install.css?v=11.9">
+<link rel="manifest" href="/expedicao/manifest-conferencia.webmanifest?v=12.0" crossorigin="use-credentials">
+<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/conferencia-180.png?v=12.0">
+<link rel="icon" href="/favicon.ico?v=12.0" sizes="any">
+<link rel="shortcut icon" href="/favicon.ico?v=12.0">
+<link rel="stylesheet" href="/expedicao/pwa-install.css?v=12.0">
 <title>Noromak - Conferência em Rede</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
@@ -319,7 +319,8 @@
 </style>
 <script src="/expedicao/shared-storage.js"></script>
 <script src="/expedicao/web-auth.js"></script>
-<script defer src="/expedicao/pwa-install.js?v=11.9"></script>
+<script src="/expedicao/zebra-browser-print.js?v=12.0"></script>
+<script defer src="/expedicao/pwa-install.js?v=12.0"></script>
 </head>
 
 <body>
@@ -327,7 +328,7 @@
 <div id="telaLogin">
   <div class="box-card">
     <div class="logo-box">
-      <img src="/nk-logo.svg?v=11.9" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=11.9';">
+      <img src="/nk-logo.svg?v=12.0" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=12.0';">
     </div>
     <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 11.9 — EAN em todos os pedidos do SKU</div>
 
@@ -419,12 +420,12 @@
 
 <header>
   <div class="logo-mini-box">
-    <img src="/grupo-noromak.png?v=11.9" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=11.9';">
+    <img src="/grupo-noromak.png?v=12.0" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=12.0';">
   </div>
   <div class="usuario-area">
     <div style="text-align: right;">
       <span id="infoUsuario"></span><br>
-      <span id="qzStatusBadge" class="qz-status qz-desconectado">Impressão pela Estação Zebra</span>
+      <span id="qzStatusBadge" class="qz-status qz-desconectado">Zebra Browser Print / Estação</span>
       <span id="autosaveStatus" class="autosave-status">Salvamento automático ativo</span>
     </div>
     <button type="button" class="pwa-install-btn pwa-header" data-pwa-install>⬇ INSTALAR</button>
@@ -2619,21 +2620,42 @@ function prepararDadosImpressaoMarketplace(resultadoEtiqueta) {
 }
 
 function dispositivoSemQzLocal() {
-  // A partir da versão 9.5, toda impressão passa pela fila e pela Estação Zebra.
-  // Isso elimina QZ Tray e janelas de autorização tanto no computador quanto no celular.
   return true;
+}
+
+function podeTentarZebraBrowserPrintLocal() {
+  const movel = typeof navegadorEhDispositivoMovel === "function" ? navegadorEhDispositivoMovel() : /Android|iPhone|iPad|Mobile/i.test(navigator.userAgent);
+  return !movel && !!window.NoromakZebraBrowserPrint;
+}
+
+async function tentarZebraBrowserPrintLocal(data) {
+  if (!podeTentarZebraBrowserPrintLocal()) return null;
+  const info = await NoromakZebraBrowserPrint.probe();
+  if (!info.selected) throw new Error("Nenhuma impressora Zebra USB foi encontrada pelo Zebra Browser Print.");
+  await NoromakZebraBrowserPrint.sendMany(info.selected, data);
+  return info.selected;
 }
 
 async function atualizarBadgeEstacaoRemota() {
   const badge = document.getElementById("qzStatusBadge");
-  if (!badge || !dispositivoSemQzLocal()) return;
+  if (!badge) return;
+  if (podeTentarZebraBrowserPrintLocal()) {
+    try {
+      const info = await NoromakZebraBrowserPrint.probe();
+      if (info.selected) {
+        badge.textContent = `Zebra USB conectada · ${info.selected.name || info.selected.uid}`;
+        badge.className = "qz-status qz-conectado";
+        return;
+      }
+    } catch (_) {}
+  }
   try {
     const resumo = await apiFilaImpressao("summary");
     const online = (resumo.stations || []).some(estacao => estacao.online);
-    badge.textContent = online ? "Estação Zebra online" : "Estação Zebra offline";
+    badge.textContent = online ? "Estação Zebra Browser Print online" : "Zebra local / estação offline";
     badge.className = online ? "qz-status qz-conectado" : "qz-status qz-desconectado";
   } catch (_) {
-    badge.textContent = "Estação Zebra indisponível";
+    badge.textContent = "Impressão Zebra indisponível";
     badge.className = "qz-status qz-desconectado";
   }
 }
@@ -2673,6 +2695,28 @@ async function aguardarImpressaoRemota(jobId, limiteMs = 90000) {
 
 async function imprimirDadosComFallback(pedido, marketplace, data, reprint = false) {
   const badge = document.getElementById("qzStatusBadge");
+
+  // No próprio computador da Zebra, imprime diretamente pelo Browser Print.
+  if (podeTentarZebraBrowserPrintLocal()) {
+    try {
+      if (badge) {
+        badge.textContent = "Enviando direto para Zebra USB...";
+        badge.className = "qz-status qz-conectado";
+      }
+      const device = await tentarZebraBrowserPrintLocal(data);
+      if (device) {
+        if (badge) {
+          badge.textContent = `Zebra USB conectada · ${device.name || device.uid}`;
+          badge.className = "qz-status qz-conectado";
+        }
+        return { quantidade: data.length, dados: data.slice(), modo: "browser-print", impressora: device.name || device.uid, pendente: false };
+      }
+    } catch (erroLocal) {
+      console.warn("Browser Print local indisponível; usando fila da estação.", erroLocal);
+    }
+  }
+
+  // Celular ou PC sem Browser Print: envia para a fila consumida pela Estação Zebra.
   if (badge) {
     badge.textContent = "Enviando para a Estação Zebra";
     badge.className = "qz-status qz-conectado";
@@ -2683,16 +2727,16 @@ async function imprimirDadosComFallback(pedido, marketplace, data, reprint = fal
     "info",
     "Aguardando a estação de impressão",
     `Pedido ${pedidoParaExibicao(pedido, marketplace)}`,
-    "Mantenha a Estação Zebra aberta no computador conectado à impressora. O Noromak Print Service fará a impressão sem confirmação."
+    "No computador conectado à Zebra USB, mantenha a Estação Zebra aberta com o Zebra Browser Print em execução. Não é necessário QZ Tray nem Noromak Print Service."
   );
   const final = await aguardarImpressaoRemota(job.id);
   if (final.status === "printed") {
-    return { quantidade: data.length, dados: data.slice(), modo: "fila", jobId: job.id, pendente: false };
+    return { quantidade: data.length, dados: data.slice(), modo: "fila-browser-print", jobId: job.id, pendente: false };
   }
   if (final.status === "failed") {
     throw new Error(`A Estação Zebra não conseguiu imprimir: ${final.error || "falha não informada"}`);
   }
-  return { quantidade: data.length, dados: data.slice(), modo: "fila", jobId: job.id, pendente: true, status: final.status };
+  return { quantidade: data.length, dados: data.slice(), modo: "fila-browser-print", jobId: job.id, pendente: true, status: final.status };
 }
 
 async function imprimirPedidoMarketplace(resultadoEtiqueta) {

@@ -1,0 +1,22 @@
+VERSÃO 12.0 — ZEBRA BROWSER PRINT
+
+Fluxo novo:
+- PC conectado à Zebra USB: Conferência tenta imprimir diretamente pelo Zebra Browser Print.
+- Celular/outro PC: continua enviando para a fila do servidor.
+- A página Estação Zebra no computador da impressora consome a fila e envia o ZPL ao Zebra Browser Print.
+- Noromak Print Service e QZ Tray deixam de ser necessários no fluxo principal.
+- A impressora não é colocada na rede.
+
+Estação Zebra:
+- Detecta o Zebra Browser Print em localhost.
+- Detecta impressora Zebra USB.
+- Permite escolher entre várias impressoras.
+- Salva a seleção neste computador.
+- Botão de impressão de teste.
+- Reconexão automática.
+- Mantém heartbeat, métricas e fila existentes.
+- Mensagem de orientação para autorização/SSL local.
+
+Observação:
+Para receber impressão originada pelo CELULAR, a página Estação Zebra precisa permanecer aberta no PC da Zebra.
+No próprio PC da Zebra, a tela Conferência imprime direto pelo Browser Print e não depende da fila.
