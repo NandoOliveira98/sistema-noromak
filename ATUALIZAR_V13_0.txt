@@ -1,0 +1,18 @@
+PUBLICAÇÃO V13.0
+
+No Git Bash do Windows, dentro da pasta do projeto:
+
+git status
+git add -A
+git commit -m "v13.0 editor visual de kits"
+./publicar.sh
+
+Depois:
+1. Pressione Ctrl+F5 no Painel Administrativo.
+2. Abra Cadastro de kits.
+3. Clique Editar em um kit existente ou + Novo kit.
+4. Em Produto do banco, digite SKU/código/descrição e selecione o produto.
+5. Informe Quantidade no kit e clique + Adicionar ao kit.
+6. Clique Salvar alterações.
+
+A lógica automática de decomposição dos pedidos permanece igual.

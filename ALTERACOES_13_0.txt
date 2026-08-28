@@ -1,0 +1,30 @@
+VERSÃO 13.0 — EDITOR VISUAL DE COMPOSIÇÃO DE KITS
+
+A tela Cadastro de Kits foi redesenhada.
+
+NOVO FLUXO
+- Lista de kits com botão Editar e Novo kit.
+- Tela Editar Kit com:
+  - SKU do kit
+  - Nome do kit
+  - Ativo
+- Composição do kit:
+  - busca/seletor de produto diretamente do Banco de Produtos
+  - busca por SKU, código de barras ou descrição
+  - quantidade no kit
+  - botão Adicionar ao kit
+- Tabela de componentes com:
+  - Produto/SKU
+  - Descrição
+  - Quantidade editável
+  - Remover
+- Botões Voltar, Excluir kit e Salvar alterações.
+
+REGRAS
+- Não aceita produto inexistente no Banco de Produtos.
+- Não aceita quantidade zero/negativa.
+- Se o mesmo produto for adicionado novamente, soma a quantidade.
+- Não permite SKU de kit duplicado.
+- Exige pelo menos um componente.
+- Mantém o formato conf_kits compatível com a decomposição automática da V12.9.
+- Todas as demais funções foram preservadas.
