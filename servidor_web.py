@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "13.0"
+APP_VERSION = "13.1"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -82,9 +82,12 @@ ML_HTTP_TIMEOUT = int(os.getenv("ML_HTTP_TIMEOUT", "20"))
 ML_MANUAL_SYNC_LIMIT = max(1, min(50, int(os.getenv("ML_MANUAL_SYNC_LIMIT", "20"))))
 ML_PENDING_WATCH_INTERVAL = max(10, min(120, int(os.getenv("ML_PENDING_WATCH_INTERVAL", "15"))))
 ML_PENDING_WATCH_BATCH = max(1, min(30, int(os.getenv("ML_PENDING_WATCH_BATCH", "20"))))
+ML_NEW_ORDER_WATCH_INTERVAL = max(15, min(120, int(os.getenv("ML_NEW_ORDER_WATCH_INTERVAL", "20"))))
+ML_NEW_ORDER_WATCH_LIMIT = max(5, min(50, int(os.getenv("ML_NEW_ORDER_WATCH_LIMIT", "20"))))
 
 DB_LOCK = threading.RLock()
 AUTH_LOCK = threading.Lock()
+ML_NEW_ORDER_WATCH_LOCK = threading.Lock()
 LOGIN_ATTEMPTS: dict[str, list[float]] = {}
 GENERATED_INITIAL_CREDENTIALS: dict[str, str] = {}
 
@@ -2987,6 +2990,107 @@ def ml_pending_label_watch_loop(stop_event: threading.Event) -> None:
                 pass
 
 
+def _ml_existing_order_ids() -> set[str]:
+    ids: set[str] = set()
+    raw, _, _ = get_storage("conf_pedidos")
+    for row in _rows_from_storage_value(raw):
+        if isinstance(row, dict):
+            oid = str(row.get("VendaMercadoLivre") or "").strip()
+            if oid:
+                ids.add(oid)
+    # Pedidos já concluídos também não devem voltar para pendentes.
+    with DB_LOCK:
+        try:
+            rows = DB.execute("SELECT payload FROM completed_orders").fetchall()
+        except Exception:
+            rows = []
+    for dbrow in rows:
+        try:
+            payload = json.loads(dbrow["payload"] if hasattr(dbrow, "keys") else dbrow[0])
+        except Exception:
+            continue
+        candidates = payload if isinstance(payload, list) else [payload]
+        for row in candidates:
+            if isinstance(row, dict):
+                oid = str(row.get("VendaMercadoLivre") or "").strip()
+                if oid:
+                    ids.add(oid)
+    return ids
+
+
+def ml_new_order_watch_once() -> dict[str, int]:
+    """Contingência do webhook: busca somente os pedidos pagos mais recentes."""
+    if not ML_NEW_ORDER_WATCH_LOCK.acquire(blocking=False):
+        return {"checked": 0, "imported": 0, "ignored_full": 0, "errors": 0}
+    try:
+        _, seller_id = ml_access_token()
+        query = urlencode({
+            "seller": seller_id,
+            "order.status": "paid",
+            "sort": "date_desc",
+            "limit": str(ML_NEW_ORDER_WATCH_LIMIT),
+            "offset": "0",
+        })
+        result = ml_api_get(f"/orders/search?{query}")
+        orders = result.get("results") if isinstance(result, dict) else []
+        existing = _ml_existing_order_ids()
+        checked = imported = ignored_full = errors = 0
+        for order in orders or []:
+            if not isinstance(order, dict):
+                continue
+            order_id = str(order.get("id") or "").strip()
+            if not order_id:
+                continue
+            checked += 1
+            if order_id in existing:
+                continue
+            try:
+                detail = ml_import_order(order_id, source="API Mercado Livre / entrada automática")
+                if detail.get("ignored") and detail.get("reason") == "FULL":
+                    ignored_full += 1
+                    ml_log_event("new_order_watcher", f"/orders/{order_id}", seller_id, ML_CLIENT_ID,
+                                 "FULL IGNORADO", json_dumps({"order_id": order_id}))
+                else:
+                    imported += 1
+                    existing.add(order_id)
+                    ml_log_event("new_order_watcher", f"/orders/{order_id}", seller_id, ML_CLIENT_ID,
+                                 "PEDIDO NOVO IMPORTADO",
+                                 json_dumps({"order_id": order_id,
+                                             "ready_for_conference": bool(detail.get("ready_for_conference")),
+                                             "fiscal_name": detail.get("fiscal_name") or "",
+                                             "kit_components_applied": detail.get("kit_components_applied") or 0}))
+            except Exception as exc:
+                errors += 1
+                ml_log_event("new_order_watcher", f"/orders/{order_id}", seller_id, ML_CLIENT_ID,
+                             "ERRO", str(exc)[:1200])
+        return {"checked": checked, "imported": imported, "ignored_full": ignored_full, "errors": errors}
+    finally:
+        ML_NEW_ORDER_WATCH_LOCK.release()
+
+
+def ml_new_order_watch_loop(stop_event: threading.Event) -> None:
+    """Busca pedidos novos periodicamente quando webhook orders_v2 atrasar/falhar."""
+    consecutive_errors = 0
+    # Faz uma primeira busca logo após o servidor subir.
+    while not stop_event.is_set():
+        try:
+            row = ml_integration_row()
+            if row and str(row["access_token"] or "").strip():
+                result = ml_new_order_watch_once()
+                consecutive_errors = 0 if not result.get("errors") else min(consecutive_errors + 1, 4)
+            else:
+                consecutive_errors = 0
+        except Exception as exc:
+            consecutive_errors = min(consecutive_errors + 1, 4)
+            try:
+                ml_log_event("new_order_watcher", "/orders/search", "", ML_CLIENT_ID, "ERRO", str(exc)[:1200])
+            except Exception:
+                pass
+        wait_seconds = min(120, ML_NEW_ORDER_WATCH_INTERVAL * (2 ** consecutive_errors))
+        if stop_event.wait(wait_seconds):
+            break
+
+
 def ml_manual_sync() -> dict[str, Any]:
     _, seller_id = ml_access_token()
     query = urlencode(
@@ -3049,7 +3153,7 @@ def ml_manual_sync() -> dict[str, Any]:
 
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/12.7"
+    server_version = "NoromakExpedicao/13.1"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
@@ -4497,12 +4601,20 @@ def main() -> None:
         name="ml-pending-label-watcher",
         daemon=True,
     )
+    new_order_thread = threading.Thread(
+        target=ml_new_order_watch_loop,
+        args=(watcher_stop,),
+        name="ml-new-order-watcher",
+        daemon=True,
+    )
     watcher_thread.start()
+    new_order_thread.start()
     server = ThreadingHTTPServer((HOST, PORT), AppHandler)
     server.daemon_threads = True
     print(f"Sistema de Conferência Web {APP_VERSION} em http://{HOST}:{PORT}{BASE_PATH}", flush=True)
     print(f"Banco SQLite: {DB_PATH}", flush=True)
     print(f"Watcher Mercado Livre: pendências a cada {ML_PENDING_WATCH_INTERVAL}s", flush=True)
+    print(f"Watcher Mercado Livre: pedidos novos a cada {ML_NEW_ORDER_WATCH_INTERVAL}s", flush=True)
     try:
         server.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:
@@ -4510,6 +4622,7 @@ def main() -> None:
     finally:
         watcher_stop.set()
         watcher_thread.join(timeout=3)
+        new_order_thread.join(timeout=3)
         server.server_close()
         with DB_LOCK:
             DB.close()

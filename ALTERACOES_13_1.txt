@@ -1,0 +1,18 @@
+VERSÃO 13.1 — ENTRADA AUTOMÁTICA DE PEDIDOS MERCADO LIVRE
+
+CORREÇÃO PRINCIPAL
+- O webhook orders_v2 continua sendo o caminho imediato.
+- Novo watcher interno consulta os 20 pedidos pagos mais recentes a cada 20 segundos.
+- Se encontrar um order_id que ainda não está em Pedidos Pendentes nem concluídos,
+  importa automaticamente.
+- Não é mais necessário clicar Sincronizar agora no uso normal.
+- O watcher inicia junto com o servidor e faz a primeira consulta imediatamente.
+- Evita ciclos sobrepostos com lock.
+- Em erro aplica backoff progressivo, evitando sobrecarga.
+- Full continua ignorado.
+- Nome fiscal, kits, prazo de despacho e etiqueta automática são aplicados normalmente.
+- Watcher de etiquetas (~15 s) permanece funcionando em paralelo.
+
+VARIÁVEIS OPCIONAIS:
+ML_NEW_ORDER_WATCH_INTERVAL=20
+ML_NEW_ORDER_WATCH_LIMIT=20
