@@ -34,7 +34,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "12.3"
+APP_VERSION = "12.5"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2046,14 +2046,76 @@ def _ml_parse_iso_date(value: Any) -> str:
     return "-".join(match.groups()) if match else ""
 
 
-def _ml_dispatch_date(shipment: dict[str, Any] | None) -> str:
+def _ml_logistic_type(shipment: dict[str, Any] | None) -> str:
+    shipment = shipment or {}
+    logistic = shipment.get("logistic") if isinstance(shipment.get("logistic"), dict) else {}
+    shipping_option = shipment.get("shipping_option") if isinstance(shipment.get("shipping_option"), dict) else {}
+    candidates = [
+        logistic.get("type"),
+        shipment.get("logistic_type"),
+        shipping_option.get("logistic_type"),
+    ]
+    for value in candidates:
+        text = str(value or "").strip().lower()
+        if text:
+            return text
+    return ""
+
+
+def _ml_is_full_shipment(shipment: dict[str, Any] | None) -> bool:
+    logistic_type = _ml_logistic_type(shipment)
+    if logistic_type in {"fulfillment", "full"}:
+        return True
+    tags = shipment.get("tags") if isinstance(shipment, dict) and isinstance(shipment.get("tags"), list) else []
+    return any(str(tag or "").strip().lower() in {"fulfillment", "full"} for tag in tags)
+
+
+def _ml_billing_name(order: dict[str, Any]) -> str:
+    """Obtém o nome/razão social fiscal usando o fluxo atual de Billing Info."""
+    buyer = order.get("buyer") if isinstance(order.get("buyer"), dict) else {}
+    embedded = buyer.get("billing_info") if isinstance(buyer.get("billing_info"), dict) else {}
+    billing_id = str(embedded.get("id") or "").strip()
+    site_id = str(order.get("site_id") or "MLB").strip().upper() or "MLB"
+    if not billing_id:
+        return ""
+    try:
+        payload = ml_api_get(
+            f"/orders/billing-info/{quote(site_id)}/{quote(billing_id)}"
+        )
+        if not isinstance(payload, dict):
+            return ""
+        fiscal_buyer = payload.get("buyer") if isinstance(payload.get("buyer"), dict) else {}
+        info = fiscal_buyer.get("billing_info") if isinstance(fiscal_buyer.get("billing_info"), dict) else {}
+        first = str(info.get("name") or "").strip()
+        last = str(info.get("last_name") or "").strip()
+        return " ".join(part for part in (first, last) if part).strip()
+    except Exception:
+        # Nome fiscal é desejável, mas uma indisponibilidade momentânea não deve
+        # impedir a entrada do pedido; os fallbacks logísticos continuam válidos.
+        return ""
+
+
+def _ml_dispatch_date(shipment_id: str, shipment: dict[str, Any] | None) -> str:
+    """Data limite de despacho prometida pelo Mercado Livre.
+
+    Prioriza /shipments/{id}/sla.expected_date. O campo antigo
+    estimated_handling_limit permanece somente como fallback de compatibilidade.
+    """
+    if shipment_id and not _ml_is_full_shipment(shipment):
+        try:
+            sla = ml_api_get(f"/shipments/{quote(str(shipment_id))}/sla")
+            if isinstance(sla, dict):
+                parsed = _ml_parse_iso_date(sla.get("expected_date"))
+                if parsed:
+                    return parsed
+        except Exception:
+            pass
+
     shipment = shipment or {}
     shipping_option = shipment.get("shipping_option") if isinstance(shipment.get("shipping_option"), dict) else {}
     candidates = [
         shipping_option.get("estimated_handling_limit"),
-        shipping_option.get("estimated_delivery_limit"),
         shipment.get("estimated_handling_limit"),
-        shipment.get("estimated_delivery_limit"),
     ]
     for value in candidates:
         parsed = _ml_parse_iso_date(value)
@@ -2072,7 +2134,24 @@ def _ml_find_product(products: list[dict[str, Any]], sku: str) -> dict[str, Any]
     return None
 
 
-def _ml_order_item_sku(item_data: dict[str, Any]) -> str:
+def _ml_normalize_api_sku(value: Any) -> str:
+    """Normaliza apenas SKU recebido da API do Mercado Livre.
+
+    O Mercado Livre pode devolver um prefixo numérico interno antes do SKU real,
+    por exemplo ``155172-ACP429/9-B``. Quando o trecho anterior ao primeiro hífen
+    contém somente dígitos, removemos apenas esse prefixo e preservamos todos os
+    hífens internos do SKU restante.
+    """
+    raw = str(value or "").strip()
+    if not raw or "-" not in raw:
+        return raw
+    prefix, remainder = raw.split("-", 1)
+    if prefix.isdigit() and remainder.strip():
+        return remainder.strip()
+    return raw
+
+
+def _ml_order_item_sku_raw(item_data: dict[str, Any]) -> str:
     item = item_data.get("item") if isinstance(item_data.get("item"), dict) else {}
     for value in (
         item.get("seller_sku"),
@@ -2087,6 +2166,10 @@ def _ml_order_item_sku(item_data: dict[str, Any]) -> str:
         if str(attr.get("id") or "").upper() == "SELLER_SKU" and str(attr.get("value_name") or "").strip():
             return str(attr["value_name"]).strip()
     return ""
+
+
+def _ml_order_item_sku(item_data: dict[str, Any]) -> str:
+    return _ml_normalize_api_sku(_ml_order_item_sku_raw(item_data))
 
 
 def ml_order_shipments(order_id: str) -> tuple[str, dict[str, Any] | None]:
@@ -2107,7 +2190,7 @@ def ml_order_shipments(order_id: str) -> tuple[str, dict[str, Any] | None]:
     if shipment_id:
         try:
             detail = ml_api_get(
-                f"/shipments/{quote(shipment_id)}",
+                f"/shipments/{quote(shipment_id)}?views=destination",
                 headers={"x-format-new": "true", "X-Api-Version": "2"},
             )
             if isinstance(detail, dict):
@@ -2132,26 +2215,75 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
 
     status = str(order.get("status") or "")
     shipment_id, shipment = ml_order_shipments(order_id)
+    pack_id = str(order.get("pack_id") or "").strip()
+    operational_order_id = pack_id or order_id
+
+    current_raw, _, _ = get_storage("conf_pedidos")
+    pending = _rows_from_storage_value(current_raw)
+
+    # Full/Fulfillment é preparado e expedido pelo próprio Mercado Livre.
+    # Não deve entrar na fila operacional da Expedição Noromak. Se a linha já
+    # tiver sido criada por uma versão anterior da API, removemos somente as
+    # linhas originadas pela própria API ao reencontrar esse pedido.
+    if _ml_is_full_shipment(shipment):
+        before = len(pending)
+        pending = [
+            row for row in pending
+            if not (
+                isinstance(row, dict)
+                and (
+                    str(row.get("VendaMercadoLivre") or "").strip() == order_id
+                    or (pack_id and str(row.get("PackIdMercadoLivre") or "").strip() == pack_id)
+                )
+                and (
+                    str(row.get("VendaMercadoLivre") or "").strip()
+                    or "mercado livre" in str(row.get("OrigemCadastro") or "").lower()
+                )
+            )
+        ]
+        removed = before - len(pending)
+        if removed:
+            save_storage(
+                "conf_pedidos", current_raw, json_dumps(pending), False,
+                actor="mercadolivre-api", actor_role="sistema",
+                source_screen="API Mercado Livre",
+                change_method="Ignorado - Mercado Envios Full",
+                client_ip="127.0.0.1", allow_completed_reimport=False,
+            )
+        return {
+            "order_id": order_id,
+            "pack_id": pack_id,
+            "shipment_id": shipment_id,
+            "status": status,
+            "ignored": True,
+            "reason": "FULL",
+            "logistic_type": _ml_logistic_type(shipment),
+            "removed_existing_api_rows": removed,
+            "inserted": 0,
+            "updated": 0,
+            "items": 0,
+        }
+
     receiver = ""
     if isinstance(shipment, dict):
         addr = shipment.get("receiver_address") if isinstance(shipment.get("receiver_address"), dict) else {}
         receiver = str(addr.get("receiver_name") or addr.get("receiver") or "").strip()
     buyer = order.get("buyer") if isinstance(order.get("buyer"), dict) else {}
-    client = receiver or str(buyer.get("nickname") or "").strip()
+
+    # Primeiro tenta o nome/razão social dos dados fiscais usados para NF,
+    # exatamente para evitar nickname quando o nome fiscal está disponível.
+    fiscal_name = _ml_billing_name(order)
+    client = fiscal_name or receiver or str(buyer.get("nickname") or "").strip()
     if not client:
         names = [str(buyer.get("first_name") or "").strip(), str(buyer.get("last_name") or "").strip()]
         client = " ".join(x for x in names if x).strip()
 
-    pack_id = str(order.get("pack_id") or "").strip()
-    operational_order_id = pack_id or order_id
-    date_for_dispatch = _ml_dispatch_date(shipment)
+    date_for_dispatch = _ml_dispatch_date(shipment_id, shipment)
     tracking = ""
     if isinstance(shipment, dict):
         tracking = str(shipment.get("tracking_number") or shipment.get("tracking_id") or "").strip()
 
-    current_raw, _, _ = get_storage("conf_pedidos")
     products_raw, _, _ = get_storage("conf_produtos")
-    pending = _rows_from_storage_value(current_raw)
     products = _rows_from_storage_value(products_raw)
     lines: list[dict[str, Any]] = []
 
@@ -2159,7 +2291,8 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
         if not isinstance(item_data, dict):
             continue
         item = item_data.get("item") if isinstance(item_data.get("item"), dict) else {}
-        sku = _ml_order_item_sku(item_data)
+        sku_raw = _ml_order_item_sku_raw(item_data)
+        sku = _ml_normalize_api_sku(sku_raw)
         description = str(item.get("title") or "").strip()
         quantity = max(1, int(item_data.get("quantity") or 1))
         row = {
@@ -2184,11 +2317,14 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
             "Código de Rastreio": tracking,
             "__uidLinha": "MLAPI_" + hashlib.sha1(f"{order_id}|{item.get('id')}|{item.get('variation_id')}|{sku}".encode("utf-8")).hexdigest()[:20],
             "OrigemCadastro": source,
-            "SkuOrigemImportacao": sku,
+            "SkuOrigemImportacao": sku_raw,
             "VendaMercadoLivre": order_id,
             "PackIdMercadoLivre": pack_id,
             "ShipmentIdMercadoLivre": shipment_id,
             "StatusMercadoLivre": status,
+            "LogisticaMercadoLivre": _ml_logistic_type(shipment),
+            "NomeFiscalMercadoLivre": fiscal_name,
+            "DataLimiteDespachoMercadoLivre": date_for_dispatch,
             "MercadoLivreAtualizadoEm": now_iso(),
         }
         product = _ml_find_product(products, sku)
@@ -2205,7 +2341,14 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
     # Atualiza pela combinação Pedido + SKU; quando não existe, cria nova linha.
     by_key: dict[tuple[str, str], dict[str, Any]] = {}
     for existing in pending:
-        key = (normalize(order_number(existing)), normalize(existing.get("SKU") or existing.get("Código de Barras")))
+        existing_sku = str(existing.get("SKU") or existing.get("Código de Barras") or "").strip()
+        is_ml_api_row = bool(
+            str(existing.get("VendaMercadoLivre") or "").strip()
+            or "mercado livre" in str(existing.get("OrigemCadastro") or "").lower()
+        )
+        if is_ml_api_row:
+            existing_sku = _ml_normalize_api_sku(existing_sku)
+        key = (normalize(order_number(existing)), normalize(existing_sku))
         if key not in by_key:
             by_key[key] = existing
     inserted = updated = 0
@@ -2228,7 +2371,8 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
                 existing[field] = value
         for field in (
             "OrigemCadastro","SkuOrigemImportacao","VendaMercadoLivre","PackIdMercadoLivre",
-            "ShipmentIdMercadoLivre","StatusMercadoLivre","MercadoLivreAtualizadoEm"
+            "ShipmentIdMercadoLivre","StatusMercadoLivre","LogisticaMercadoLivre",
+            "NomeFiscalMercadoLivre","DataLimiteDespachoMercadoLivre","MercadoLivreAtualizadoEm"
         ):
             existing[field] = imported.get(field, "")
         existing["Lido"] = lido
@@ -2283,7 +2427,11 @@ def ml_process_notification(payload: dict[str, Any]) -> None:
         if topic in {"orders_v2", "orders"} and "/orders/" in resource:
             order_id = resource.rstrip("/").split("/")[-1]
             result = ml_import_order(order_id, source="API Mercado Livre / orders_v2")
-            ml_log_event(topic, resource, user_id, app_id, "OK", json_dumps(result))
+            ml_log_event(
+                topic, resource, user_id, app_id,
+                "IGNORADO" if result.get("ignored") else "OK",
+                ("FULL · " if result.get("reason") == "FULL" else "") + json_dumps(result),
+            )
             return
         if topic == "shipments" and "/shipments/" in resource:
             shipment_id = resource.rstrip("/").split("/")[-1]
@@ -2296,7 +2444,12 @@ def ml_process_notification(payload: dict[str, Any]) -> None:
                 for item in orders:
                     if isinstance(item, dict) and item.get("order_id"):
                         results.append(ml_import_order(str(item["order_id"]), source="API Mercado Livre / shipments"))
-            ml_log_event(topic, resource, user_id, app_id, "OK", json_dumps(results))
+            all_ignored = bool(results) and all(bool(item.get("ignored")) for item in results if isinstance(item, dict))
+            ml_log_event(
+                topic, resource, user_id, app_id,
+                "IGNORADO" if all_ignored else "OK",
+                ("FULL · " if all_ignored else "") + json_dumps(results),
+            )
             return
         ml_log_event(topic, resource, user_id, app_id, "IGNORADO", "Tópico/recurso sem ação configurada")
     except Exception as exc:
@@ -2320,13 +2473,18 @@ def ml_manual_sync() -> dict[str, Any]:
     result = ml_api_get(f"/orders/search?{query}")
     orders = result.get("results") if isinstance(result, dict) else []
     imported = []
+    ignored_full = []
     errors = []
     for order in orders or []:
         order_id = str(order.get("id") or "") if isinstance(order, dict) else ""
         if not order_id:
             continue
         try:
-            imported.append(ml_import_order(order_id, source="API Mercado Livre / sincronização manual"))
+            detail = ml_import_order(order_id, source="API Mercado Livre / sincronização manual")
+            if detail.get("ignored") and detail.get("reason") == "FULL":
+                ignored_full.append(detail)
+            else:
+                imported.append(detail)
         except Exception as exc:
             errors.append({"order_id": order_id, "error": str(exc)})
     with DB_LOCK:
@@ -2335,13 +2493,25 @@ def ml_manual_sync() -> dict[str, Any]:
             (now_iso(), now_iso(), (json_dumps(errors[:5]) if errors else "")),
         )
         DB.commit()
-    ml_log_event("manual_sync", "/orders/search", seller_id, ML_CLIENT_ID, "OK" if not errors else "PARCIAL", json_dumps({"imported": len(imported), "errors": errors[:10]}))
-    return {"ok": not errors, "imported": len(imported), "errors": errors, "details": imported}
+    ml_log_event(
+        "manual_sync", "/orders/search", seller_id, ML_CLIENT_ID,
+        "OK" if not errors else "PARCIAL",
+        json_dumps({"imported": len(imported), "ignored_full": len(ignored_full), "errors": errors[:10]})
+    )
+    return {
+        "ok": not errors,
+        "imported": len(imported),
+        "ignored_full": len(ignored_full),
+        "processed": len(imported) + len(ignored_full),
+        "errors": errors,
+        "details": imported,
+        "ignored_details": ignored_full,
+    }
 
 
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/12.3"
+    server_version = "NoromakExpedicao/12.5"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))

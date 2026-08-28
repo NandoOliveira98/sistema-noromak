@@ -1,0 +1,12 @@
+ATUALIZAÇÃO 12.4
+
+git status
+git add -A
+git commit -m "normaliza sku da api mercado livre"
+./publicar.sh
+
+Depois:
+1. Ctrl+F5 no Admin.
+2. Clique em Integrações > Sincronizar agora uma vez.
+3. Pedidos da API com SKU como 155172-ACP429/9-B serão corrigidos para ACP429/9-B.
+4. Novos pedidos automáticos já entrarão normalizados.

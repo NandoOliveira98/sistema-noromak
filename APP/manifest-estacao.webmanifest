@@ -10,7 +10,7 @@
   "background_color": "#F3F6F9",
   "theme_color": "#1F57A5",
   "icons": [
-    {"src":"/expedicao/icons/estacao-192.png?v=12.3","sizes":"192x192","type":"image/png","purpose":"any"},
-    {"src":"/expedicao/icons/estacao-512.png?v=12.3","sizes":"512x512","type":"image/png","purpose":"any"}
+    {"src":"/expedicao/icons/estacao-192.png?v=12.5","sizes":"192x192","type":"image/png","purpose":"any"},
+    {"src":"/expedicao/icons/estacao-512.png?v=12.5","sizes":"512x512","type":"image/png","purpose":"any"}
   ]
 }
