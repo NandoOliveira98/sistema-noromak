@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "12.6"
+APP_VERSION = "12.7"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2357,26 +2357,73 @@ def _ml_fiscal_and_label_state(*, order: dict[str, Any], order_id: str, operatio
     site_id = str(order.get("site_id") or "MLB").strip().upper() or "MLB"
     status = str((shipment or {}).get("status") or "").strip().lower()
     substatus = str((shipment or {}).get("substatus") or "").strip().lower()
-    invoice = _ml_invoice_data(shipment_id, site_id)
-    invoice_available = _ml_invoice_available(invoice)
-    fiscal_ready = invoice_available or (status=="ready_to_ship" and substatus in {"ready_to_print","printed"})
+
+    invoice: dict[str, Any] = {}
+    invoice_available = False
+    invoice_unavailable_reason = ""
+
+    # Dados fiscais são apenas enriquecimento. Nesta aplicação o Mercado Livre
+    # pode responder HTTP 403 / PolicyAgent; isso não bloqueia o fluxo operacional.
+    if shipment_id:
+        try:
+            payload = ml_api_get(
+                f"/shipments/{quote(str(shipment_id))}/invoice_data?siteId={quote(site_id)}"
+            )
+            if isinstance(payload, dict):
+                invoice = payload
+                invoice_available = _ml_invoice_available(invoice)
+        except Exception as exc:
+            msg = str(exc)
+            if "HTTP 403" in msg or "PA_UNAUTHORIZED_RESULT_FROM_POLICIES" in msg or "PolicyAgent" in msg:
+                invoice_unavailable_reason = "Dados fiscais indisponíveis para esta aplicação (HTTP 403 / PolicyAgent)."
+            else:
+                invoice_unavailable_reason = msg[:500]
+
+    invoice_pending = status == "ready_to_ship" and substatus == "invoice_pending"
+    should_try_label = bool(shipment_id) and status == "ready_to_ship" and not invoice_pending
+
     label_stored = False
     label_error = ""
-    if fiscal_ready and status=="ready_to_ship" and substatus in {"ready_to_print","printed"}:
+    if should_try_label:
         try:
             zpl = _ml_fetch_shipping_zpl(shipment_id)
             if zpl:
                 label_stored = _ml_store_linked_label(
-                    operational_order_id=operational_order_id, order_id=order_id, pack_id=pack_id,
-                    shipment_id=shipment_id, tracking=tracking, zpl=zpl, invoice=invoice
+                    operational_order_id=operational_order_id,
+                    order_id=order_id,
+                    pack_id=pack_id,
+                    shipment_id=shipment_id,
+                    tracking=tracking,
+                    zpl=zpl,
+                    invoice=invoice,
                 )
             else:
                 label_error = "Mercado Livre respondeu sem ZPL de etiqueta."
         except Exception as exc:
-            label_error = str(exc)
-    return {"invoice": invoice or {}, "invoice_available": invoice_available, "fiscal_ready": fiscal_ready,
-            "shipment_status": status, "shipment_substatus": substatus, "label_stored": label_stored,
-            "label_error": label_error, "ready_for_conference": bool(label_stored)}
+            label_error = str(exc)[:1200]
+
+    if invoice_pending:
+        fiscal_status = "AGUARDANDO"
+    elif label_stored:
+        fiscal_status = "DISPONÍVEL"
+    elif status == "ready_to_ship":
+        fiscal_status = "PROCESSANDO"
+    else:
+        fiscal_status = "AGUARDANDO"
+
+    return {
+        "invoice": invoice,
+        "invoice_available": invoice_available,
+        "invoice_unavailable_reason": invoice_unavailable_reason,
+        "invoice_pending": invoice_pending,
+        "fiscal_ready": not invoice_pending,
+        "fiscal_status": fiscal_status,
+        "shipment_status": status,
+        "shipment_substatus": substatus,
+        "label_stored": label_stored,
+        "label_error": label_error,
+        "ready_for_conference": bool(label_stored),
+    }
 
 
 def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict[str, Any]:
@@ -2505,7 +2552,7 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
             "NF": invoice_number,
             "Nota Fiscal": invoice_number,
             "Chave de Acesso": fiscal_key,
-            "Status NF Mercado Livre": "DISPONÍVEL" if fiscal_state.get("fiscal_ready") else "AGUARDANDO",
+            "Status NF Mercado Livre": str(fiscal_state.get("fiscal_status") or "AGUARDANDO"),
             "Etiqueta API Mercado Livre": "VINCULADA" if fiscal_state.get("label_stored") else "AGUARDANDO",
             "__uidLinha": "MLAPI_" + hashlib.sha1(f"{order_id}|{item.get('id')}|{item.get('variation_id')}|{sku}".encode("utf-8")).hexdigest()[:20],
             "OrigemCadastro": source,
@@ -2602,7 +2649,9 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
         "updated": updated,
         "items": len(lines),
         "invoice_available": bool(fiscal_state.get("invoice_available")),
+        "invoice_unavailable_reason": str(fiscal_state.get("invoice_unavailable_reason") or ""),
         "fiscal_ready": bool(fiscal_state.get("fiscal_ready")),
+        "fiscal_status": str(fiscal_state.get("fiscal_status") or ""),
         "label_stored": bool(fiscal_state.get("label_stored")),
         "ready_for_conference": bool(fiscal_state.get("ready_for_conference")),
         "shipment_substatus": str(fiscal_state.get("shipment_substatus") or ""),
@@ -2627,11 +2676,11 @@ def ml_process_notification(payload: dict[str, Any]) -> None:
             order_id = resource.rstrip("/").split("/")[-1]
             result = ml_import_order(order_id, source="API Mercado Livre / orders_v2")
             if result.get("ignored"):
-                event_result, prefix = "IGNORADO", ("FULL · " if result.get("reason") == "FULL" else "")
+                event_result, prefix = "FULL IGNORADO", ""
             elif result.get("ready_for_conference"):
-                event_result, prefix = "NF DISPONÍVEL", "Etiqueta vinculada automaticamente · "
-            elif result.get("fiscal_ready"):
-                event_result, prefix = "NF DISPONÍVEL", "NF disponível; etiqueta ainda não vinculada · "
+                event_result, prefix = "PRONTO PARA CONFERÊNCIA", "Etiqueta vinculada automaticamente · "
+            elif result.get("fiscal_status") == "PROCESSANDO":
+                event_result, prefix = "NF LIBERADA / ETIQUETA AGUARDANDO", ""
             else:
                 event_result, prefix = "NF AGUARDANDO", ""
             ml_log_event(topic, resource, user_id, app_id, event_result, prefix + json_dumps(result))
@@ -2651,11 +2700,11 @@ def ml_process_notification(payload: dict[str, Any]) -> None:
             any_ready = any(bool(item.get("ready_for_conference")) for item in results if isinstance(item, dict))
             any_fiscal = any(bool(item.get("fiscal_ready")) for item in results if isinstance(item, dict))
             if all_ignored:
-                event_result, prefix = "IGNORADO", "FULL · "
+                event_result, prefix = "FULL IGNORADO", ""
             elif any_ready:
-                event_result, prefix = "NF DISPONÍVEL", "Etiqueta vinculada automaticamente · "
+                event_result, prefix = "PRONTO PARA CONFERÊNCIA", "Etiqueta vinculada automaticamente · "
             elif any_fiscal:
-                event_result, prefix = "NF DISPONÍVEL", "NF disponível; etiqueta ainda não vinculada · "
+                event_result, prefix = "NF LIBERADA / ETIQUETA AGUARDANDO", ""
             else:
                 event_result, prefix = "NF AGUARDANDO", ""
             ml_log_event(topic, resource, user_id, app_id, event_result, prefix + json_dumps(results))
@@ -2705,7 +2754,14 @@ def ml_manual_sync() -> dict[str, Any]:
     ml_log_event(
         "manual_sync", "/orders/search", seller_id, ML_CLIENT_ID,
         "OK" if not errors else "PARCIAL",
-        json_dumps({"imported": len(imported), "ignored_full": len(ignored_full), "errors": errors[:10]})
+        json_dumps({
+            "imported": len(imported),
+            "ignored_full": len(ignored_full),
+            "ready_for_conference": sum(1 for item in imported if item.get("ready_for_conference")),
+            "label_waiting": sum(1 for item in imported if item.get("fiscal_status") == "PROCESSANDO" and not item.get("ready_for_conference")),
+            "nf_waiting": sum(1 for item in imported if item.get("fiscal_status") == "AGUARDANDO"),
+            "errors": errors[:10],
+        })
     )
     return {
         "ok": not errors,
@@ -2713,8 +2769,8 @@ def ml_manual_sync() -> dict[str, Any]:
         "ignored_full": len(ignored_full),
         "processed": len(imported) + len(ignored_full),
         "ready_for_conference": sum(1 for item in imported if item.get("ready_for_conference")),
-        "nf_available": sum(1 for item in imported if item.get("fiscal_ready")),
-        "nf_waiting": sum(1 for item in imported if not item.get("fiscal_ready")),
+        "label_waiting": sum(1 for item in imported if item.get("fiscal_status") == "PROCESSANDO" and not item.get("ready_for_conference")),
+        "nf_waiting": sum(1 for item in imported if item.get("fiscal_status") == "AGUARDANDO"),
         "errors": errors,
         "details": imported,
         "ignored_details": ignored_full,
@@ -2723,7 +2779,7 @@ def ml_manual_sync() -> dict[str, Any]:
 
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/12.6"
+    server_version = "NoromakExpedicao/12.7"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))

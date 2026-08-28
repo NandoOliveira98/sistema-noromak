@@ -1,0 +1,10 @@
+VERSÃO 12.7 — FLUXO NF/ETIQUETA MERCADO LIVRE CORRIGIDO
+
+- invoice_data virou apenas enriquecimento opcional; HTTP 403/PolicyAgent não bloqueia mais o fluxo.
+- ready_to_ship + invoice_pending = NF AGUARDANDO.
+- ready_to_ship com qualquer outro substatus tenta baixar a etiqueta ZPL automaticamente.
+- Se o ZPL for baixado e vinculado, o pedido fica PRONTO PARA CONFERÊNCIA.
+- Se a NF já saiu do pending mas a etiqueta ainda não puder ser baixada:
+  Status NF = PROCESSANDO e Etiqueta API = AGUARDANDO.
+- Logs: NF AGUARDANDO, NF LIBERADA / ETIQUETA AGUARDANDO, PRONTO PARA CONFERÊNCIA, FULL IGNORADO.
+- Mantidos: Full ignorado, SKU normalizado, nome fiscal, data de despacho, idempotência de etiqueta e permissões.

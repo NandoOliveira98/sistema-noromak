@@ -1,0 +1,13 @@
+ATUALIZAÇÃO 12.7
+
+git status
+git add -A
+git commit -m "corrige fluxo nf etiqueta mercado livre"
+./publicar.sh
+
+Depois:
+1. Ctrl+F5 no Admin e Conferência.
+2. Integrações > Sincronizar agora.
+3. invoice_pending deve ficar NF AGUARDANDO.
+4. Substatus não-pending em ready_to_ship tentará baixar a etiqueta automaticamente.
+5. Só com etiqueta vinculada o pedido fica pronto para conferência.
