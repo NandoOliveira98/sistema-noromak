@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "13.2"
+APP_VERSION = "13.3"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -84,10 +84,20 @@ ML_PENDING_WATCH_INTERVAL = max(10, min(120, int(os.getenv("ML_PENDING_WATCH_INT
 ML_PENDING_WATCH_BATCH = max(1, min(30, int(os.getenv("ML_PENDING_WATCH_BATCH", "20"))))
 ML_NEW_ORDER_WATCH_INTERVAL = max(15, min(120, int(os.getenv("ML_NEW_ORDER_WATCH_INTERVAL", "20"))))
 ML_NEW_ORDER_WATCH_LIMIT = max(5, min(50, int(os.getenv("ML_NEW_ORDER_WATCH_LIMIT", "20"))))
+CRM_COST_API_URL = os.getenv(
+    "CRM_COST_API_URL",
+    "http://127.0.0.1:8000/api/v1/expedicao/custo",
+).strip()
+CHAVE_CRM = os.getenv("CHAVE_CRM", "").strip()
+CRM_COST_TIMEOUT = max(3, min(30, int(os.getenv("CRM_COST_TIMEOUT", "20"))))
+CRM_COST_CACHE_SECONDS = max(5, min(300, int(os.getenv("CRM_COST_CACHE_SECONDS", "30"))))
+
 
 DB_LOCK = threading.RLock()
 AUTH_LOCK = threading.Lock()
 ML_NEW_ORDER_WATCH_LOCK = threading.Lock()
+CRM_COST_CACHE_LOCK = threading.Lock()
+CRM_COST_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 LOGIN_ATTEMPTS: dict[str, list[float]] = {}
 GENERATED_INITIAL_CREDENTIALS: dict[str, str] = {}
 
@@ -206,6 +216,91 @@ def order_number(item: dict[str, Any]) -> str:
 
 def json_dumps(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
+def crm_cost_lookup(codigo: str, operador: str = "") -> dict[str, Any]:
+    """Consulta custo médio no Apollo através da API local fornecida ao sistema.
+
+    A CHAVE_CRM nunca é enviada ao navegador. A consulta acontece somente
+    servidor->127.0.0.1 dentro da VPS.
+    """
+    codigo = str(codigo or "").strip()
+    operador = str(operador or "").strip()
+    if not codigo:
+        raise ValueError("Informe o SKU/código da peça.")
+    if not CHAVE_CRM:
+        raise RuntimeError("CHAVE_CRM não está configurada no servidor.")
+
+    cache_key = codigo.upper()
+    now_mono = time.monotonic()
+    with CRM_COST_CACHE_LOCK:
+        cached = CRM_COST_CACHE.get(cache_key)
+        if cached and now_mono - cached[0] <= CRM_COST_CACHE_SECONDS:
+            result = dict(cached[1])
+            result["cache"] = True
+            return result
+
+    params = {"codigo": codigo}
+    if operador:
+        params["operador"] = operador
+    separator = "&" if "?" in CRM_COST_API_URL else "?"
+    url = CRM_COST_API_URL + separator + urlencode(params)
+    req = urllib.request.Request(
+        url,
+        headers={
+            "X-Chave-Expedicao": CHAVE_CRM,
+            "Accept": "application/json",
+            "User-Agent": f"NoromakExpedicao/{APP_VERSION}",
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=CRM_COST_TIMEOUT) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+            status = int(getattr(resp, "status", 200) or 200)
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        if exc.code == 429:
+            raise RuntimeError("Limite da consulta de custo atingido. Aguarde um pouco e tente novamente.") from exc
+        if exc.code in (401, 403):
+            raise RuntimeError("A API de custo recusou a chave configurada no servidor.") from exc
+        raise RuntimeError(f"API de custo respondeu HTTP {exc.code}.") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"API de custo indisponível: {exc.reason}") from exc
+
+    try:
+        data = json.loads(raw or "{}")
+    except Exception as exc:
+        raise RuntimeError("API de custo retornou uma resposta inválida.") from exc
+    if not isinstance(data, dict):
+        raise RuntimeError("API de custo retornou uma resposta inválida.")
+    if status >= 400:
+        raise RuntimeError(str(data.get("erro") or data.get("detail") or f"HTTP {status}"))
+    if not data.get("ok"):
+        raise RuntimeError(str(data.get("erro") or "O Apollo não devolveu o custo desta peça."))
+
+    try:
+        custo = float(data.get("custo_medio"))
+    except (TypeError, ValueError):
+        raise RuntimeError("A API respondeu sem um custo médio válido.")
+
+    result = {
+        "ok": True,
+        "codigo": str(data.get("codigo") or codigo),
+        "descricao": str(data.get("descricao") or ""),
+        "unidade": str(data.get("unidade") or ""),
+        "custo_medio": round(custo, 4),
+        "cache": False,
+        "consultado_em": now_iso(),
+    }
+    with CRM_COST_CACHE_LOCK:
+        CRM_COST_CACHE[cache_key] = (time.monotonic(), dict(result))
+        # Evita crescimento indefinido; é um cache curto e pequeno.
+        if len(CRM_COST_CACHE) > 300:
+            oldest = sorted(CRM_COST_CACHE.items(), key=lambda item: item[1][0])[:100]
+            for key, _ in oldest:
+                CRM_COST_CACHE.pop(key, None)
+    return result
 
 
 def connect_db() -> sqlite3.Connection:
@@ -3153,7 +3248,7 @@ def ml_manual_sync() -> dict[str, Any]:
 
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/13.2"
+    server_version = "NoromakExpedicao/13.3"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
@@ -3323,6 +3418,25 @@ class AppHandler(BaseHTTPRequestHandler):
                         "SELECT * FROM ml_event_log ORDER BY id DESC LIMIT ?", (limit,)
                     ).fetchall()
                 self.send_json({"ok": True, "logs": [dict(row) for row in rows]})
+            return
+        if path == "/api/precificador/custo":
+            ctx = self.auth()
+            if ctx is None:
+                return
+            if not module_allowed(ctx, "precificador"):
+                self.send_json({"ok": False, "error": "Acesso ao Precificador não autorizado."}, 403)
+                return
+            codigo = str((query.get("codigo") or [""])[0] or "").strip()
+            if not codigo:
+                self.send_json({"ok": False, "error": "Informe o SKU/código da peça."}, 400)
+                return
+            operador = str(ctx.get("nome") or ctx.get("username") or "").strip()
+            try:
+                self.send_json(crm_cost_lookup(codigo, operador))
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 502)
             return
         if path == "/api/storage":
             ctx = self.auth()
