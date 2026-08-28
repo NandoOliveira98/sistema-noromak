@@ -1,0 +1,14 @@
+PUBLICAÇÃO V13.6
+
+No Git Bash do Windows:
+git status
+git add -A
+git commit -m "v13.6 atualiza produtos antigos do precificador"
+./publicar.sh
+
+Depois:
+1. Ctrl+F5.
+2. Abra o Precificador.
+3. Selecione um produto antigo da lista.
+4. O sistema deve consultar automaticamente o SKU no Apollo.
+5. Custo médio será atualizado e a descrição será preenchida se estiver vazia.

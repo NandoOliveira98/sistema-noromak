@@ -5,10 +5,10 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="theme-color" content="#1F57A5">
 <meta name="application-name" content="Noromak Estação Zebra">
-<link rel="manifest" href="/expedicao/manifest-estacao.webmanifest?v=13.5" crossorigin="use-credentials">
-<link rel="icon" href="/favicon.ico?v=13.5" sizes="any">
-<link rel="shortcut icon" href="/favicon.ico?v=13.5">
-<link rel="stylesheet" href="/expedicao/pwa-install.css?v=13.5">
+<link rel="manifest" href="/expedicao/manifest-estacao.webmanifest?v=13.6" crossorigin="use-credentials">
+<link rel="icon" href="/favicon.ico?v=13.6" sizes="any">
+<link rel="shortcut icon" href="/favicon.ico?v=13.6">
+<link rel="stylesheet" href="/expedicao/pwa-install.css?v=13.6">
 <title>Noromak — Estação Zebra Browser Print</title>
 <style>
 :root{--azul:#1F57A5;--azul2:#173e70;--laranja:#F7941D;--verde:#238636;--vermelho:#c62828;--fundo:#f3f6f9}
@@ -34,7 +34,7 @@
 <body>
 <div id="loginLayer" class="login-layer">
   <form id="loginForm" class="login">
-    <img src="/nk-logo.svg?v=13.5" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=13.5'">
+    <img src="/nk-logo.svg?v=13.6" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=13.6'">
     <h2>Ativar Estação Zebra</h2>
     <p>Entre uma vez com um usuário do estoque. A página consome a fila do sistema e imprime na Zebra USB usando o Zebra Browser Print instalado neste computador.</p>
     <input id="loginUser" autocomplete="username" placeholder="Usuário / Login" required>
@@ -44,7 +44,7 @@
   </form>
 </div>
 <header class="topo">
-  <img src="/grupo-noromak.png?v=13.5" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=13.5'">
+  <img src="/grupo-noromak.png?v=13.6" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=13.6'">
   <div style="display:flex;align-items:center;gap:12px"><button type="button" class="pwa-install-btn pwa-header" data-pwa-install>⬇ INSTALAR ESTAÇÃO</button><div style="text-align:right"><h1>Estação Zebra</h1><small>Zebra Browser Print + USB</small></div></div>
 </header>
 <main class="wrap">
@@ -88,7 +88,7 @@
   <section class="card"><h3 style="margin-top:0;color:var(--azul)">Atividade</h3><div id="activityLog" class="log"></div></section>
 </main>
 
-<script src="/expedicao/zebra-browser-print.js?v=13.5"></script>
+<script src="/expedicao/zebra-browser-print.js?v=13.6"></script>
 <script>
 (() => {
 "use strict";
@@ -200,5 +200,5 @@ window.addEventListener("beforeunload",()=>{running=false});
 loadSession().then(ok=>{if(ok)initializePanel()}).catch(e=>{el("loginError").textContent=e.message||e;el("loginLayer").classList.remove("hidden")});
 })();
 </script>
-<script src="/expedicao/pwa-install.js?v=13.5"></script>
+<script src="/expedicao/pwa-install.js?v=13.6"></script>
 </body></html>
