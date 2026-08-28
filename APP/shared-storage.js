@@ -4,7 +4,8 @@
   const BASE = location.pathname.startsWith("/expedicao") ? "/expedicao" : "";
   const TELA_ATUAL = location.pathname.includes("/admin") ? "Admin" :
     (location.pathname.includes("/conferencia") ? "Conferência" :
-    (location.pathname.includes("/estacao-impressao") ? "Estação de impressão" : "Sistema"));
+    (location.pathname.includes("/estacao-impressao") ? "Estação de impressão" :
+    (location.pathname.includes("/precificador") ? "Precificador" : "Sistema")));
   const API = BASE + "/api/storage";
   const API_LOCK = BASE + "/api/order-lock";
   const API_COMPLETE = BASE + "/api/order-complete";
@@ -28,7 +29,8 @@
     "conf_fotos",
     "conf_historico_conferencias_v2",
     "conf_logs",
-    "conf_banco_atualizado_em"
+    "conf_banco_atualizado_em",
+    "precificador_online_v1"
   ];
 
   const cache = new Map();

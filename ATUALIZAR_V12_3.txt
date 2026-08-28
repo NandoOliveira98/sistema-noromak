@@ -1,0 +1,13 @@
+ATUALIZAÇÃO 12.3
+
+git status
+git add -A
+git commit -m "corrige permissoes e torna precificador online"
+./publicar.sh
+
+Depois:
+1. Ctrl+F5 na tela inicial, Admin e Precificador.
+2. Admin > Usuários: as caixas de acesso devem aparecer na última coluna.
+3. Marque os acessos e clique Salvar alterações.
+4. Usuários devem sair e entrar novamente para renovar a sessão.
+5. Abra o Precificador em dois computadores. Ao salvar em um, o outro atualiza automaticamente em ~1,5 s.
