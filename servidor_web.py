@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "12.8"
+APP_VERSION = "12.9"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -92,6 +92,7 @@ KNOWN_KEYS = [
     "conf_pedidos",
     "conf_pedidos_rascunhos",
     "conf_produtos",
+    "conf_kits",
     "conf_usuarios",
     "conf_solicitacoes_usuarios",
     "conf_etiquetas",
@@ -2174,6 +2175,96 @@ def _ml_dispatch_date(shipment_id: str, shipment: dict[str, Any] | None) -> str:
     return datetime.now().astimezone().date().isoformat()
 
 
+def _load_kit_catalog() -> dict[str, dict[str, Any]]:
+    """Carrega o cadastro compartilhado de kits indexado pelo SKU do kit."""
+    raw, _, _ = get_storage("conf_kits")
+    try:
+        rows = json.loads(raw or "[]")
+    except Exception:
+        rows = []
+    catalog: dict[str, dict[str, Any]] = {}
+    if not isinstance(rows, list):
+        return catalog
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        kit_sku = str(row.get("sku_kit") or row.get("SKU Kit") or row.get("sku") or "").strip()
+        if not kit_sku:
+            continue
+        components_raw = row.get("componentes")
+        if not isinstance(components_raw, list):
+            components_raw = []
+        components: list[dict[str, Any]] = []
+        for comp in components_raw:
+            if not isinstance(comp, dict):
+                continue
+            sku = str(comp.get("sku") or comp.get("SKU") or "").strip()
+            try:
+                qty = int(comp.get("quantidade") or comp.get("qtd") or comp.get("Quantidade") or 0)
+            except (TypeError, ValueError):
+                qty = 0
+            if sku and qty > 0:
+                components.append({"sku": sku, "quantidade": qty})
+        if not components:
+            continue
+        catalog[normalize(kit_sku)] = {
+            "sku_kit": kit_sku,
+            "nome": str(row.get("nome") or row.get("Nome") or kit_sku).strip() or kit_sku,
+            "componentes": components,
+            "ativo": bool(row.get("ativo", True)),
+        }
+    return catalog
+
+
+def _expand_ml_order_item(item_data: dict[str, Any], kit_catalog: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """Expande um item ML cadastrado como kit em seus componentes.
+
+    Retorna uma ou mais linhas lógicas. A quantidade do componente é:
+    quantidade comprada do kit × quantidade cadastrada do componente.
+    """
+    item = item_data.get("item") if isinstance(item_data.get("item"), dict) else {}
+    sku_raw = _ml_order_item_sku_raw(item_data)
+    sku = _ml_normalize_api_sku(sku_raw)
+    try:
+        sold_qty = max(1, int(item_data.get("quantity") or 1))
+    except (TypeError, ValueError):
+        sold_qty = 1
+    title = str(item.get("title") or "").strip()
+
+    kit = kit_catalog.get(normalize(sku))
+    if not kit or not kit.get("ativo", True):
+        return [{
+            "sku": sku,
+            "sku_raw": sku_raw,
+            "quantity": sold_qty,
+            "description": title,
+            "is_kit": False,
+            "kit_sku": "",
+            "kit_name": "",
+            "kits_sold": 0,
+            "qty_per_kit": 0,
+            "kit_unregistered": ("KIT" in normalize(sku) or "KIT" in normalize(title)),
+        }]
+
+    expanded: list[dict[str, Any]] = []
+    for component in kit.get("componentes") or []:
+        component_sku = str(component.get("sku") or "").strip()
+        qty_per_kit = max(1, int(component.get("quantidade") or 1))
+        expanded.append({
+            "sku": component_sku,
+            "sku_raw": sku_raw,
+            "quantity": sold_qty * qty_per_kit,
+            "description": title,
+            "is_kit": True,
+            "kit_sku": str(kit.get("sku_kit") or sku).strip(),
+            "kit_name": str(kit.get("nome") or kit.get("sku_kit") or sku).strip(),
+            "kits_sold": sold_qty,
+            "qty_per_kit": qty_per_kit,
+            "kit_unregistered": False,
+        })
+    return expanded
+
+
 def _ml_find_product(products: list[dict[str, Any]], sku: str) -> dict[str, Any] | None:
     key = normalize(sku)
     if not key:
@@ -2540,61 +2631,121 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
     products = _rows_from_storage_value(products_raw)
     lines: list[dict[str, Any]] = []
 
+    kit_catalog = _load_kit_catalog()
+    kit_applied = 0
+    kit_unregistered = 0
+
     for item_data in order.get("order_items") or []:
         if not isinstance(item_data, dict):
             continue
         item = item_data.get("item") if isinstance(item_data.get("item"), dict) else {}
-        sku_raw = _ml_order_item_sku_raw(item_data)
-        sku = _ml_normalize_api_sku(sku_raw)
-        description = str(item.get("title") or "").strip()
-        quantity = max(1, int(item_data.get("quantity") or 1))
-        row = {
-            "Pedido": operational_order_id,
-            "Marketplace": "MERCADO LIVRE",
-            "Data do Pedido": date_for_dispatch,
-            "Kit": "",
-            "Nome do Kit": "",
-            "Quantidade de Kits": "",
-            "Quantidade por Kit": "",
-            "Cliente": client,
-            "SKU": sku,
-            "Quantidade": str(quantity),
-            "Código de Barras": "",
-            "Descrição": description,
-            "Rua": "",
-            "Módulo": "",
-            "Prateleira": "",
-            "Nível": "",
-            "Posição": "",
-            "Foto": "",
-            "Código de Rastreio": tracking,
-            "NF": invoice_number,
-            "Nota Fiscal": invoice_number,
-            "Chave de Acesso": fiscal_key,
-            "Status NF Mercado Livre": str(fiscal_state.get("fiscal_status") or "AGUARDANDO"),
-            "Etiqueta API Mercado Livre": "VINCULADA" if fiscal_state.get("label_stored") else "AGUARDANDO",
-            "__uidLinha": "MLAPI_" + hashlib.sha1(f"{order_id}|{item.get('id')}|{item.get('variation_id')}|{sku}".encode("utf-8")).hexdigest()[:20],
-            "OrigemCadastro": source,
-            "SkuOrigemImportacao": sku_raw,
-            "VendaMercadoLivre": order_id,
-            "PackIdMercadoLivre": pack_id,
-            "ShipmentIdMercadoLivre": shipment_id,
-            "StatusMercadoLivre": status,
-            "LogisticaMercadoLivre": _ml_logistic_type(shipment),
-            "NomeFiscalMercadoLivre": fiscal_name,
-            "DataLimiteDespachoMercadoLivre": date_for_dispatch,
-            "MercadoLivreAtualizadoEm": now_iso(),
-        }
-        product = _ml_find_product(products, sku)
-        if product:
-            for field in ("SKU","Código de Barras","Descrição","Rua","Módulo","Prateleira","Nível","Posição","Foto"):
-                value = product.get(field)
-                if str(value or "").strip():
-                    row[field] = value
-        lines.append(row)
+
+        for expanded in _expand_ml_order_item(item_data, kit_catalog):
+            sku_raw = str(expanded.get("sku_raw") or "")
+            sku = str(expanded.get("sku") or "").strip()
+            quantity = max(1, int(expanded.get("quantity") or 1))
+            is_kit = bool(expanded.get("is_kit"))
+            if is_kit:
+                kit_applied += 1
+            if expanded.get("kit_unregistered"):
+                kit_unregistered += 1
+
+            description = str(expanded.get("description") or item.get("title") or "").strip()
+            kit_name = str(expanded.get("kit_name") or "").strip()
+            kit_sku = str(expanded.get("kit_sku") or "").strip()
+            warning = ""
+            if expanded.get("kit_unregistered"):
+                warning = "KIT NÃO CADASTRADO — VERIFICAR COMPOSIÇÃO"
+
+            row = {
+                "Pedido": operational_order_id,
+                "Marketplace": "MERCADO LIVRE",
+                "Data do Pedido": date_for_dispatch,
+                "Kit": "SIM" if is_kit else ("VERIFICAR" if warning else ""),
+                "Nome do Kit": kit_name,
+                "Quantidade de Kits": str(expanded.get("kits_sold") or "") if is_kit else "",
+                "Quantidade por Kit": str(expanded.get("qty_per_kit") or "") if is_kit else "",
+                "SkuKitOrigem": kit_sku,
+                "Observação": warning,
+                "Cliente": client,
+                "SKU": sku,
+                "Quantidade": str(quantity),
+                "Código de Barras": "",
+                "Descrição": description,
+                "Rua": "",
+                "Módulo": "",
+                "Prateleira": "",
+                "Nível": "",
+                "Posição": "",
+                "Foto": "",
+                "Código de Rastreio": tracking,
+                "NF": invoice_number,
+                "Nota Fiscal": invoice_number,
+                "Chave de Acesso": fiscal_key,
+                "Status NF Mercado Livre": str(fiscal_state.get("fiscal_status") or "AGUARDANDO"),
+                "Etiqueta API Mercado Livre": "VINCULADA" if fiscal_state.get("label_stored") else "AGUARDANDO",
+                "__uidLinha": "MLAPI_" + hashlib.sha1(
+                    f"{order_id}|{item.get('id')}|{item.get('variation_id')}|{kit_sku}|{sku}".encode("utf-8")
+                ).hexdigest()[:20],
+                "OrigemCadastro": source,
+                "SkuOrigemImportacao": sku_raw,
+                "VendaMercadoLivre": order_id,
+                "PackIdMercadoLivre": pack_id,
+                "ShipmentIdMercadoLivre": shipment_id,
+                "StatusMercadoLivre": status,
+                "LogisticaMercadoLivre": _ml_logistic_type(shipment),
+                "NomeFiscalMercadoLivre": fiscal_name,
+                "DataLimiteDespachoMercadoLivre": date_for_dispatch,
+                "MercadoLivreAtualizadoEm": now_iso(),
+            }
+            product = _ml_find_product(products, sku)
+            if product:
+                for field in ("SKU","Código de Barras","Descrição","Rua","Módulo","Prateleira","Nível","Posição","Foto"):
+                    value = product.get(field)
+                    if str(value or "").strip():
+                        row[field] = value
+            lines.append(row)
+
+    # Consolida componentes repetidos do mesmo pedido/SKU. Isso também permite
+    # somar um item avulso com o mesmo SKU de um componente de kit.
+    consolidated: dict[str, dict[str, Any]] = {}
+    for row in lines:
+        key = normalize(row.get("SKU"))
+        if not key:
+            key = str(row.get("__uidLinha") or "")
+        if key not in consolidated:
+            consolidated[key] = row
+            continue
+        target = consolidated[key]
+        target["Quantidade"] = str(int(target.get("Quantidade") or 0) + int(row.get("Quantidade") or 0))
+        if row.get("Kit") == "SIM":
+            target["Kit"] = "SIM"
+            names = [str(target.get("Nome do Kit") or "").strip(), str(row.get("Nome do Kit") or "").strip()]
+            target["Nome do Kit"] = " + ".join(dict.fromkeys(x for x in names if x))
+        if row.get("Observação"):
+            target["Observação"] = str(row.get("Observação"))
+    lines = list(consolidated.values())
 
     if not lines:
         raise RuntimeError(f"Pedido {order_id} não trouxe itens.")
+
+    # Remove linhas antigas deste pedido que não existem mais na composição atual.
+    # Isso permite cadastrar um kit depois e, na sincronização seguinte, substituir
+    # a antiga linha KITxxxx pelos componentes corretos sem duplicação.
+    desired_keys = {normalize(row.get("SKU")) for row in lines if normalize(row.get("SKU"))}
+    cleaned_pending: list[dict[str, Any]] = []
+    stale_removed = 0
+    for existing in pending:
+        if not isinstance(existing, dict):
+            cleaned_pending.append(existing)
+            continue
+        same_ml_order = str(existing.get("VendaMercadoLivre") or "").strip() == order_id
+        existing_sku = _ml_normalize_api_sku(str(existing.get("SKU") or existing.get("Código de Barras") or "").strip())
+        if same_ml_order and normalize(existing_sku) not in desired_keys:
+            stale_removed += 1
+            continue
+        cleaned_pending.append(existing)
+    pending = cleaned_pending
 
     # Atualiza pela combinação Pedido + SKU; quando não existe, cria nova linha.
     by_key: dict[tuple[str, str], dict[str, Any]] = {}
@@ -2613,7 +2764,8 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
     fields = (
         "Pedido","Marketplace","Data do Pedido","Cliente","SKU","Quantidade","Código de Barras",
         "Descrição","Rua","Módulo","Prateleira","Nível","Posição","Foto","Código de Rastreio",
-        "NF","Nota Fiscal","Chave de Acesso","Status NF Mercado Livre","Etiqueta API Mercado Livre"
+        "NF","Nota Fiscal","Chave de Acesso","Status NF Mercado Livre","Etiqueta API Mercado Livre",
+        "Kit","Nome do Kit","Quantidade de Kits","Quantidade por Kit","SkuKitOrigem","Observação"
     )
     for imported in lines:
         key = (normalize(imported["Pedido"]), normalize(imported.get("SKU") or imported.get("Código de Barras")))
@@ -2677,6 +2829,9 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
         "label_error": str(fiscal_state.get("label_error") or ""),
         "fiscal_name": fiscal_name,
         "fiscal_name_updated": bool(fiscal_name),
+        "kit_components_applied": kit_applied,
+        "kit_unregistered": kit_unregistered,
+        "stale_rows_removed": stale_removed,
     }
 
 

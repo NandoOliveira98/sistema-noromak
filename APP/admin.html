@@ -7,11 +7,11 @@
 <meta name="application-name" content="Noromak Admin">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="manifest" href="/expedicao/manifest-admin.webmanifest?v=12.8" crossorigin="use-credentials">
-<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=12.8">
-<link rel="icon" href="/favicon.ico?v=12.8" sizes="any">
-<link rel="shortcut icon" href="/favicon.ico?v=12.8">
-<link rel="stylesheet" href="/expedicao/pwa-install.css?v=12.8">
+<link rel="manifest" href="/expedicao/manifest-admin.webmanifest?v=12.9" crossorigin="use-credentials">
+<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=12.9">
+<link rel="icon" href="/favicon.ico?v=12.9" sizes="any">
+<link rel="shortcut icon" href="/favicon.ico?v=12.9">
+<link rel="stylesheet" href="/expedicao/pwa-install.css?v=12.9">
 <title>Noromak - Administração dos Pedidos Compartilhados</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
@@ -443,7 +443,7 @@
 </style>
 <script src="/expedicao/shared-storage.js"></script>
 <script src="/expedicao/web-auth.js"></script>
-<script defer src="/expedicao/pwa-install.js?v=12.8"></script>
+<script defer src="/expedicao/pwa-install.js?v=12.9"></script>
 
 <style id="estiloEtiquetasPersistentesV98">
   .etiquetas-persistentes-box{margin:14px 0 18px;border:1px solid #c7d4e1;border-radius:9px;background:#f8fbfe;padding:13px}
@@ -671,7 +671,7 @@
 <div id="loginAdmin">
   <div class="box-login">
     <div class="logo-box">
-      <img src="/nk-logo.svg?v=12.8" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=12.8';">
+      <img src="/nk-logo.svg?v=12.9" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=12.9';">
     </div>
     <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 12.2 — permissões por módulo</div>
     <div style="font-size:12px;color:#667;margin:-8px 0 14px;line-height:1.4;">Use o administrador principal ou qualquer usuário cadastrado com perfil <b>Admin</b>.</div>
@@ -689,7 +689,7 @@
 <div id="painelConteudo" class="container-admin">
   <div class="header-topo">
     <div class="header-identidade">
-      <div class="logo-mini-box"><img src="/grupo-noromak.png?v=12.8" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=12.8';"></div>
+      <div class="logo-mini-box"><img src="/grupo-noromak.png?v=12.9" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=12.9';"></div>
       <div class="header-titulos"><h1>Administração dos pedidos compartilhados</h1><small>Dados centralizados no servidor Web em tempo real</small></div>
     </div>
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end;"><a href="/expedicao/estacao-impressao" target="_blank" style="text-decoration:none;background:#1F57A5;color:white;padding:8px 13px;border-radius:6px;font-size:12px;font-weight:800;">🖨 ESTAÇÃO ZEBRA</a><button type="button" class="pwa-install-btn pwa-header" data-pwa-install>⬇ Instalar Admin</button><span id="statusBancoAdmin" class="save-pill">● Banco Web ativo</span><button class="btn-sair" onclick="sairAdmin()">Sair do Painel</button></div>
@@ -705,6 +705,7 @@
   <div class="abas-admin">
     <button class="aba-btn ativa" data-aba="pedidos" onclick="abrirAbaAdmin('pedidos')">📋 Pedidos pendentes</button>
     <button class="aba-btn" data-aba="produtos" onclick="abrirAbaAdmin('produtos')">📦 Banco de produtos</button>
+    <button class="aba-btn" data-aba="kits" onclick="abrirAbaAdmin('kits')">🎁 Cadastro de kits</button>
     <button class="aba-btn" data-aba="usuarios" onclick="abrirAbaAdmin('usuarios')">👥 Usuários</button>
     <button class="aba-btn" data-aba="etiquetas" onclick="abrirAbaAdmin('etiquetas')">🏷 Etiquetas</button>
     <button class="aba-btn" data-aba="historico" onclick="abrirAbaAdmin('historico')">🕘 Histórico</button>
@@ -719,7 +720,7 @@
       <div class="importacao-excel-box">
         <div class="importacao-excel-topo">
           <div class="importacao-excel-titulo">📥 Importar pedidos</div>
-          <small>Escolha a origem. O sistema cruza pedido, data, cliente, SKU, quantidade e produto com o banco interno para completar EAN, descrição e localização. Um SKU que contenha a palavra <b>KIT</b> é preservado como veio; a composição só é aplicada quando o arquivo ou a importação manual informar o kit explicitamente.</small>
+          <small>Escolha a origem. O sistema cruza pedido, data, cliente, SKU, quantidade e produto com o banco interno para completar EAN, descrição e localização. SKUs cadastrados na aba <b>Cadastro de kits</b> são decompostos automaticamente nos componentes durante a integração do Mercado Livre.</small>
         </div>
         <input id="importarPedidosExcelInput" type="file" accept=".xlsx,.xls" hidden onchange="importarPedidosExcelAdmin(event)">
         <input id="importarRelatorioMercadoLivreInput" type="file" accept=".xlsx,.xls" hidden onchange="importarRelatorioMercadoLivreAdmin(event)">
@@ -763,6 +764,29 @@
         </tr></thead><tbody id="corpoProdutosAdmin"></tbody></table>
       </div>
       <div class="grid-rodape"><span id="resumoProdutosAdmin"></span><div class="paginacao"><button onclick="mudarPaginaProdutos(-1)">◀</button><span id="paginaProdutosTexto"></span><button onclick="mudarPaginaProdutos(1)">▶</button></div></div>
+    </div>
+  </section>
+
+  <section id="aba-kits" class="aba-painel">
+    <div class="card-admin">
+      <h2>Cadastro de kits <span class="usuario-versao">Versão 12.9</span></h2>
+      <div class="aviso-banco">
+        <b>Decomposição automática:</b> cadastre o SKU vendido como kit e seus componentes.
+        Quando um pedido integrado chegar com esse SKU, o sistema troca automaticamente o kit pelos SKUs reais para a conferência.
+        Exemplo: <b>KIT27200154</b> com componente <b>27200154 | 5</b>. Se vender 2 kits, a conferência receberá 10 unidades do SKU 27200154.
+      </div>
+      <div class="toolbar-grid">
+        <input id="buscaKitsAdmin" type="text" placeholder="Buscar SKU do kit, nome ou componente..." oninput="renderizarKitsAdmin()">
+        <button class="btn-primario" onclick="adicionarKitAdmin()">＋ Novo kit</button>
+        <button class="btn-sucesso" onclick="salvarKitsAdmin(true)">💾 Salvar kits</button>
+      </div>
+      <div class="excel-wrap" style="max-height:62vh;">
+        <table class="excel-grid" style="min-width:1050px;">
+          <thead><tr><th>Ação</th><th>SKU do kit</th><th>Nome do kit</th><th>Composição (SKU | quantidade)</th><th>Ativo</th></tr></thead>
+          <tbody id="corpoKitsAdmin"></tbody>
+        </table>
+      </div>
+      <div class="grid-rodape"><span id="resumoKitsAdmin"></span><span>Uma linha por componente. Ex.: <b>27200154 | 5</b></span></div>
     </div>
   </section>
 
@@ -2282,6 +2306,7 @@ const PEDIDOS_INICIAIS_BANCO = [];
 const CAMPOS_PRODUTOS_BANCO = ["SKU","Código de Barras","Descrição","Marca","Fabricante","Aplicação","Categoria","Rua","Módulo","Prateleira","Nível","Posição","Foto","Peso","Unidade","Ativo"];
 const CAMPOS_PEDIDOS_BANCO = ["Pedido","Marketplace","Data do Pedido","Kit","Nome do Kit","Quantidade de Kits","Quantidade por Kit","Cliente","SKU","Quantidade","Código de Barras","Descrição","Rua","Módulo","Prateleira","Nível","Posição","Foto","Código de Rastreio"];
 let produtosBancoAdmin = [];
+let kitsBancoAdmin = [];
 let pedidosEditorAdmin = [];
 let usuariosEditorAdmin = [];
 let paginaProdutosAdmin = 1;
@@ -2345,6 +2370,7 @@ function setStatusBanco(texto,tipo="ok"){
 function inicializarBancoInternoAdmin(){
   try{
     if(appStorage.getItem("conf_produtos")===null) appStorage.setItem("conf_produtos",JSON.stringify(PRODUTOS_INICIAIS_BANCO));
+    if(appStorage.getItem("conf_kits")===null) appStorage.setItem("conf_kits","[]");
     if(appStorage.getItem("conf_usuarios")===null) appStorage.setItem("conf_usuarios",JSON.stringify(USUARIOS_INICIAIS_BANCO));
     if(appStorage.getItem("conf_pedidos")===null) appStorage.setItem("conf_pedidos",JSON.stringify(PEDIDOS_INICIAIS_BANCO));
     if(appStorage.getItem("conf_pedidos_rascunhos")===null) appStorage.setItem("conf_pedidos_rascunhos","[]");
@@ -2354,6 +2380,8 @@ function inicializarBancoInternoAdmin(){
 function carregarBancoInternoAdmin(){
   try{
     produtosBancoAdmin=JSON.parse(appStorage.getItem("conf_produtos")||"[]");
+    kitsBancoAdmin=JSON.parse(appStorage.getItem("conf_kits")||"[]");
+    if(!Array.isArray(kitsBancoAdmin)) kitsBancoAdmin=[];
     usuariosEditorAdmin=JSON.parse(appStorage.getItem("conf_usuarios")||"[]");
     const validos=JSON.parse(appStorage.getItem("conf_pedidos")||"[]");
     const rascunhos=JSON.parse(appStorage.getItem("conf_pedidos_rascunhos")||"[]");
@@ -2370,7 +2398,102 @@ function carregarBancoInternoAdmin(){
     setStatusBanco("● Banco salvo", "ok");
   }catch(e){console.error(e);setStatusBanco("Erro ao carregar banco", "erro");}
 }
-function atualizarTudoAdmin(){renderizarPedidosAdmin();renderizarProdutosAdmin();renderizarUsuariosAdmin();atualizarKpisAdmin();carregarLogs();}
+
+function composicaoKitParaTexto(componentes){
+  return (Array.isArray(componentes)?componentes:[])
+    .map(c=>`${campoBanco(c,"sku")} | ${Number(c.quantidade||c.qtd||0)}`)
+    .filter(x=>x.replace(/[|0\s]/g,"").length>0).join("\n");
+}
+function textoParaComposicaoKit(texto){
+  const partes=String(texto||"").split(/\r?\n|;|,/).map(x=>x.trim()).filter(Boolean);
+  const componentes=[];
+  for(const parte of partes){
+    const m=parte.match(/^(.+?)\s*(?:\||=|:)\s*(\d+)\s*$/);
+    if(!m) throw new Error(`Composição inválida: "${parte}". Use SKU | quantidade.`);
+    const sku=String(m[1]||"").trim();
+    const quantidade=Number(m[2]||0);
+    if(!sku||!Number.isInteger(quantidade)||quantidade<=0) throw new Error(`Componente inválido: "${parte}".`);
+    componentes.push({sku,quantidade});
+  }
+  return componentes;
+}
+function adicionarKitAdmin(){
+  kitsBancoAdmin.push({id:uidBanco("KIT"),sku_kit:"",nome:"",componentes:[{sku:"",quantidade:1}],ativo:true});
+  renderizarKitsAdmin();
+  setTimeout(()=>document.querySelector('#corpoKitsAdmin input[data-campo="sku_kit"]:last-of-type')?.focus(),50);
+}
+function removerKitAdmin(indice){
+  const kit=kitsBancoAdmin[indice];
+  if(!kit) return;
+  if(!confirm(`Excluir o kit ${kit.sku_kit||"(sem SKU)"}?`)) return;
+  kitsBancoAdmin.splice(indice,1);
+  salvarKitsAdmin(false);
+  renderizarKitsAdmin();
+}
+function atualizarKitAdmin(indice,campo,valor){
+  const kit=kitsBancoAdmin[indice];
+  if(!kit) return;
+  if(campo==="ativo") kit.ativo=!!valor;
+  else if(campo==="componentes_texto") kit.__componentes_texto=String(valor||"");
+  else kit[campo]=String(valor||"");
+}
+function renderizarKitsAdmin(){
+  const corpo=document.getElementById("corpoKitsAdmin");
+  if(!corpo) return;
+  const busca=normalizarBuscaBanco(document.getElementById("buscaKitsAdmin")?.value||"");
+  const linhas=[];
+  kitsBancoAdmin.forEach((kit,indice)=>{
+    const composicao=kit.__componentes_texto!==undefined?kit.__componentes_texto:composicaoKitParaTexto(kit.componentes);
+    const textoBusca=normalizarBuscaBanco(`${kit.sku_kit||""} ${kit.nome||""} ${composicao}`);
+    if(busca&&!textoBusca.includes(busca)) return;
+    linhas.push(`
+      <tr>
+        <td><div class="linha-acoes"><button class="btn-perigo" onclick="removerKitAdmin(${indice})">Excluir</button></div></td>
+        <td><input data-campo="sku_kit" value="${htmlSeguroBanco(kit.sku_kit||"")}" oninput="atualizarKitAdmin(${indice},'sku_kit',this.value)" placeholder="KIT27200154"></td>
+        <td><input value="${htmlSeguroBanco(kit.nome||"")}" oninput="atualizarKitAdmin(${indice},'nome',this.value)" placeholder="Kit 5 unidades"></td>
+        <td style="padding:5px;min-width:410px"><textarea style="width:100%;min-height:72px;border:1px solid #cbd5e1;border-radius:5px;padding:7px;font-family:Consolas,monospace" oninput="atualizarKitAdmin(${indice},'componentes_texto',this.value)" placeholder="27200154 | 5">${htmlSeguroBanco(composicao)}</textarea></td>
+        <td style="text-align:center"><input type="checkbox" ${kit.ativo!==false?"checked":""} onchange="atualizarKitAdmin(${indice},'ativo',this.checked)"></td>
+      </tr>`);
+  });
+  corpo.innerHTML=linhas.join("")||'<tr><td colspan="5" style="padding:18px;text-align:center;color:#64748b">Nenhum kit cadastrado.</td></tr>';
+  const resumo=document.getElementById("resumoKitsAdmin");
+  if(resumo) resumo.textContent=`${kitsBancoAdmin.length} kit(s) cadastrado(s)`;
+}
+function salvarKitsAdmin(mostrarMensagem=true){
+  try{
+    const vistos=new Set();
+    const normalizados=kitsBancoAdmin.map((kit,indice)=>{
+      const sku=String(kit.sku_kit||"").trim();
+      if(!sku) throw new Error(`Informe o SKU do kit na linha ${indice+1}.`);
+      const chave=normalizarCodigoBanco(sku);
+      if(vistos.has(chave)) throw new Error(`O SKU de kit ${sku} está duplicado.`);
+      vistos.add(chave);
+      const texto=kit.__componentes_texto!==undefined?kit.__componentes_texto:composicaoKitParaTexto(kit.componentes);
+      const componentes=textoParaComposicaoKit(texto);
+      if(!componentes.length) throw new Error(`Cadastre ao menos um componente para ${sku}.`);
+      return {
+        id:kit.id||uidBanco("KIT"),
+        sku_kit:sku,
+        nome:String(kit.nome||sku).trim()||sku,
+        componentes,
+        ativo:kit.ativo!==false,
+        atualizado_em:new Date().toISOString()
+      };
+    });
+    appStorage.setItem("conf_kits",JSON.stringify(normalizados));
+    kitsBancoAdmin=normalizados;
+    renderizarKitsAdmin();
+    if(mostrarMensagem) setStatusBanco("● Kits salvos — novas integrações usarão a composição automaticamente","ok");
+    return true;
+  }catch(e){
+    console.error(e);
+    alert(e.message||String(e));
+    setStatusBanco("Erro ao salvar cadastro de kits","erro");
+    return false;
+  }
+}
+
+function atualizarTudoAdmin(){renderizarPedidosAdmin();renderizarProdutosAdmin();renderizarKitsAdmin();renderizarUsuariosAdmin();atualizarKpisAdmin();carregarLogs();}
 function atualizarKpisAdmin(){
   const validos=obterPedidosValidosBanco();
   document.getElementById("kpiPedidos").textContent=new Set(validos.map(x=>normalizarCodigoBanco(x.Pedido))).size;
@@ -2383,6 +2506,7 @@ function abrirAbaAdmin(nome){
   document.querySelectorAll(".aba-painel").forEach(p=>p.classList.toggle("ativa",p.id==="aba-"+nome));
   if(nome==="historico") carregarLogs();
   if(nome==="historico-sku") carregarHistoricoSkuAdmin();
+  if(nome==="kits") renderizarKitsAdmin();
   if(nome==="integracoes"){carregarIntegracaoMercadoLivreAdmin();carregarLogsMercadoLivreAdmin();}
 }
 function autenticarAdmin() {
@@ -5406,6 +5530,6 @@ document.addEventListener("DOMContentLoaded",()=>{
 });
 </script>
 
-<script src="/expedicao/user-permissions.js?v=12.8"></script>
+<script src="/expedicao/user-permissions.js?v=12.9"></script>
 </body>
 </html>

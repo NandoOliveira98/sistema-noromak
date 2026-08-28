@@ -23,6 +23,7 @@
     "conf_pedidos",
     "conf_pedidos_rascunhos",
     "conf_produtos",
+    "conf_kits",
     "conf_usuarios",
     "conf_solicitacoes_usuarios",
     "conf_etiquetas",

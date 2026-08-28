@@ -1,0 +1,20 @@
+PUBLICAÇÃO V12.9
+
+No Git Bash do Windows, dentro da pasta do projeto:
+
+git status
+git add -A
+git commit -m "v12.9 cadastro automatico de kits"
+./publicar.sh
+
+DEPOIS:
+1. Ctrl+F5 no Painel Administrativo.
+2. Abra a nova aba "Cadastro de kits".
+3. Cadastre, por exemplo:
+   SKU do kit: KIT27200154
+   Nome: Kit 5 unidades
+   Composição: 27200154 | 5
+4. Clique "Salvar kits".
+5. Para pedidos antigos já importados com o SKU do kit, clique uma vez em
+   Integrações > Sincronizar agora. Eles serão recompostos.
+6. Pedidos novos serão decompostos automaticamente sem clicar em sincronizar.

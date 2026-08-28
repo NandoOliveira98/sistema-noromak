@@ -1,0 +1,40 @@
+VERSÃO 12.9 — CADASTRO E DECOMPOSIÇÃO AUTOMÁTICA DE KITS
+
+NOVA ABA NO PAINEL ADMINISTRATIVO
+- Cadastro de kits.
+- SKU vendido como kit.
+- Nome do kit.
+- Um ou vários componentes.
+- Quantidade de cada componente por kit.
+- Ativar/desativar kit.
+
+EXEMPLO
+SKU do kit: KIT27200154
+Composição:
+27200154 | 5
+
+Pedido de 1 x KIT27200154:
+→ Conferência recebe 5 x 27200154.
+
+Pedido de 2 x KIT27200154:
+→ Conferência recebe 10 x 27200154.
+
+KITS COM VÁRIOS PRODUTOS
+KITCOZINHA01
+ACP100 | 2
+ACP200 | 1
+ACP300 | 4
+
+A integração cria uma linha de conferência para cada componente, multiplicada
+pela quantidade de kits comprada.
+
+SEGURANÇA / SINCRONIZAÇÃO
+- A decomposição é idempotente.
+- Ao sincronizar novamente, linhas antigas do SKU do kit são removidas quando
+  a nova composição passa a valer, evitando duplicidade.
+- O SKU original vendido fica registrado em SkuOrigemImportacao/SkuKitOrigem.
+- A conferência mostra um selo com o nome do kit.
+- SKU/título contendo KIT mas sem cadastro recebe aviso:
+  KIT NÃO CADASTRADO — VERIFICAR COMPOSIÇÃO.
+- Mantidos nome fiscal, Full ignorado, watcher de etiquetas a cada ~15s,
+  etiqueta automática e demais funções da V12.8.
