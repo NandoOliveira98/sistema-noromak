@@ -7,11 +7,11 @@
 <meta name="application-name" content="Noromak Admin">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="manifest" href="/expedicao/manifest-admin.webmanifest?v=14.0" crossorigin="use-credentials">
-<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=14.0">
-<link rel="icon" href="/favicon.ico?v=14.0" sizes="any">
-<link rel="shortcut icon" href="/favicon.ico?v=14.0">
-<link rel="stylesheet" href="/expedicao/pwa-install.css?v=14.0">
+<link rel="manifest" href="/expedicao/manifest-admin.webmanifest?v=14.1" crossorigin="use-credentials">
+<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=14.1">
+<link rel="icon" href="/favicon.ico?v=14.1" sizes="any">
+<link rel="shortcut icon" href="/favicon.ico?v=14.1">
+<link rel="stylesheet" href="/expedicao/pwa-install.css?v=14.1">
 <title>Noromak - Administração dos Pedidos Compartilhados</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
@@ -443,7 +443,7 @@
 </style>
 <script src="/expedicao/shared-storage.js"></script>
 <script src="/expedicao/web-auth.js"></script>
-<script defer src="/expedicao/pwa-install.js?v=14.0"></script>
+<script defer src="/expedicao/pwa-install.js?v=14.1"></script>
 
 <style id="estiloEtiquetasPersistentesV98">
   .etiquetas-persistentes-box{margin:14px 0 18px;border:1px solid #c7d4e1;border-radius:9px;background:#f8fbfe;padding:13px}
@@ -671,7 +671,7 @@
 <div id="loginAdmin">
   <div class="box-login">
     <div class="logo-box">
-      <img src="/nk-logo.svg?v=14.0" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=14.0';">
+      <img src="/nk-logo.svg?v=14.1" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=14.1';">
     </div>
     <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 12.2 — permissões por módulo</div>
     <div style="font-size:12px;color:#667;margin:-8px 0 14px;line-height:1.4;">Use o administrador principal ou qualquer usuário cadastrado com perfil <b>Admin</b>.</div>
@@ -689,7 +689,7 @@
 <div id="painelConteudo" class="container-admin">
   <div class="header-topo">
     <div class="header-identidade">
-      <div class="logo-mini-box"><img src="/grupo-noromak.png?v=14.0" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=14.0';"></div>
+      <div class="logo-mini-box"><img src="/grupo-noromak.png?v=14.1" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=14.1';"></div>
       <div class="header-titulos"><h1>Administração dos pedidos compartilhados</h1><small>Dados centralizados no servidor Web em tempo real</small></div>
     </div>
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end;"><a href="/expedicao/estacao-impressao" target="_blank" style="text-decoration:none;background:#1F57A5;color:white;padding:8px 13px;border-radius:6px;font-size:12px;font-weight:800;">🖨 ESTAÇÃO ZEBRA</a><button type="button" class="pwa-install-btn pwa-header" data-pwa-install>⬇ Instalar Admin</button><span id="statusBancoAdmin" class="save-pill">● Banco Web ativo</span><button class="btn-sair" onclick="sairAdmin()">Sair do Painel</button></div>
@@ -5835,6 +5835,6 @@ document.addEventListener("DOMContentLoaded",()=>{
 });
 </script>
 
-<script src="/expedicao/user-permissions.js?v=14.0"></script>
+<script src="/expedicao/user-permissions.js?v=14.1"></script>
 </body>
 </html>

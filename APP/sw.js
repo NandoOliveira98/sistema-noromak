@@ -7,8 +7,8 @@ const SHELL = [
   "/expedicao/estacao-impressao",
   "/expedicao/shared-storage.js",
   "/expedicao/web-auth.js",
-  "/expedicao/pwa-install.js?v=14.0",
-  "/expedicao/pwa-install.css?v=14.0"
+  "/expedicao/pwa-install.js?v=14.1",
+  "/expedicao/pwa-install.css?v=14.1"
 ];
 self.addEventListener("install", event => {
   event.waitUntil(caches.open(CACHE).then(cache => Promise.allSettled(SHELL.map(url => cache.add(url)))).then(()=>self.skipWaiting()));

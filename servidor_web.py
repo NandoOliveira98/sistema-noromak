@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "14.0"
+APP_VERSION = "14.1"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -3443,7 +3443,7 @@ def ml_manual_sync() -> dict[str, Any]:
 
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/14.0"
+    server_version = "NoromakExpedicao/14.1"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
@@ -3642,35 +3642,6 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 502)
             return
-        if path == "/api/precificador/atualizar-tudo":
-            ctx = self.auth()
-            if ctx is None:
-                return
-            if not module_allowed(ctx, "precificador"):
-                self.send_json({"ok": False, "error": "Acesso ao Precificador não autorizado."}, 403)
-                return
-            current = precificador_bulk_status()
-            if current.get("running"):
-                self.send_json({"ok": True, "started": False, "job": current})
-                return
-
-            # Marca o job como iniciado ANTES de criar a thread para que o frontend
-            # receba running=true imediatamente e exiba a barra sem depender da corrida
-            # de inicialização da thread.
-            _precificador_bulk_set_status(
-                running=True, total=0, processed=0, updated=0, cost_changes=0,
-                descriptions=0, curves=0, kits=0, errors=0, current_sku="",
-                started_at=now_iso(), finished_at="", message="Iniciando atualização geral...",
-            )
-            thread = threading.Thread(
-                target=precificador_bulk_update_worker,
-                args=(str(ctx.get("username") or ""),),
-                name="precificador-apollo-bulk",
-                daemon=True,
-            )
-            thread.start()
-            self.send_json({"ok": True, "started": True, "job": precificador_bulk_status()})
-            return
         if path == "/api/storage":
             ctx = self.auth()
             if ctx is not None:
@@ -3770,6 +3741,32 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/auth/logout":
             self.handle_auth_logout()
+            return
+        if path == "/api/precificador/atualizar-tudo":
+            ctx = self.auth()
+            if ctx is None:
+                return
+            if not module_allowed(ctx, "precificador"):
+                self.send_json({"ok": False, "error": "Acesso ao Precificador não autorizado."}, 403)
+                return
+            current = precificador_bulk_status()
+            if current.get("running"):
+                self.send_json({"ok": True, "started": False, "job": current})
+                return
+
+            _precificador_bulk_set_status(
+                running=True, total=0, processed=0, updated=0, cost_changes=0,
+                descriptions=0, curves=0, kits=0, errors=0, current_sku="",
+                started_at=now_iso(), finished_at="", message="Iniciando atualização geral...",
+            )
+            thread = threading.Thread(
+                target=precificador_bulk_update_worker,
+                args=(str(ctx.get("username") or ""),),
+                name="precificador-apollo-bulk",
+                daemon=True,
+            )
+            thread.start()
+            self.send_json({"ok": True, "started": True, "job": precificador_bulk_status()})
             return
         if path == "/api/storage":
             ctx = self.auth()

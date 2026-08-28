@@ -1,0 +1,9 @@
+VERSÃO 14.1 — CORREÇÃO DA ROTA DE ATUALIZAÇÃO GERAL
+
+CORREÇÃO
+- A rota POST /api/precificador/atualizar-tudo estava por engano dentro do bloco GET.
+- Por isso o botão mostrava "Rota não encontrada".
+- A rota foi movida para do_POST, onde o navegador realmente a chama.
+- O endpoint GET /api/precificador/atualizar-tudo/status permanece no do_GET.
+- Barra de progresso da V14.0 foi mantida.
+- Atualização geral, notificações, curva, custo, descrição e recálculo de kits foram preservados.
