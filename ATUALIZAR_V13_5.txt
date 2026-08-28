@@ -1,0 +1,13 @@
+PUBLICAÇÃO V13.5
+
+No Git Bash do Windows:
+git status
+git add -A
+git commit -m "v13.5 corrige primeira consulta do precificador"
+./publicar.sh
+
+Depois:
+1. Ctrl+F5.
+2. Clique + Novo produto.
+3. Digite um SKU e pare de digitar.
+4. Em ~700 ms, custo e descrição devem preencher juntos, sem clicar ↻.
