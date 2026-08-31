@@ -711,6 +711,7 @@ body{background:var(--v15-bg)!important}
   <button class="v15-nav-item active" data-v15-nav="dashboard" onclick="abrirDashboardV151();v15Nav(this)"><span class="v15-nav-icon">▣</span><span class="v15-nav-label">Dashboard</span></button>
   <div class="v15-nav-section">Expedição</div>
   <button class="v15-nav-item" data-v15-nav="pedidos" onclick="abrirAbaAdmin('pedidos');v15Nav(this)"><span class="v15-nav-icon">📋</span><span class="v15-nav-label">Pedidos pendentes</span></button>
+  <button class="v15-nav-item" data-v15-nav="etiquetas" onclick="abrirAbaAdmin('etiquetas');v15Nav(this)"><span class="v15-nav-icon">🏷</span><span class="v15-nav-label">Etiquetas / Importar TXT</span></button>
   <a class="v15-nav-item" href="/expedicao/conferencia" target="_blank" rel="noopener"><span class="v15-nav-icon">✓</span><span class="v15-nav-label">Conferência</span></a>
   <button class="v15-nav-item" onclick="abrirAbaAdmin('historico');v15Nav(this)"><span class="v15-nav-icon">🕘</span><span class="v15-nav-label">Histórico</span></button>
   <div class="v15-nav-section">Comercial</div>
@@ -803,6 +804,7 @@ body{background:var(--v15-bg)!important}
         <div class="v151-panel-title"><div><h3>Atalhos rápidos</h3><p>Ações mais utilizadas</p></div></div>
         <div class="v151-shortcuts">
           <button onclick="abrirAbaAdmin('pedidos');setTimeout(()=>document.getElementById('buscaPedidosAdmin')?.focus(),100)">📋 Pedidos pendentes</button>
+          <button onclick="abrirAbaAdmin('etiquetas')">🏷 Importar TXT</button>
           <a href="/expedicao/conferencia" target="_blank" rel="noopener">✓ Abrir conferência</a>
           <button onclick="abrirAbaAdmin('integracoes');setTimeout(sincronizarMercadoLivreAdmin,150)">↻ Sincronizar ML</button>
           <a href="/expedicao/precificador" target="_blank" rel="noopener">$ Precificador</a>
