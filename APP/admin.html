@@ -711,15 +711,15 @@ body{background:var(--v15-bg)!important}
   <button class="v15-nav-item active" data-v15-nav="dashboard" onclick="abrirDashboardV151();v15Nav(this)"><span class="v15-nav-icon">▣</span><span class="v15-nav-label">Dashboard</span></button>
   <div class="v15-nav-section">Expedição</div>
   <button class="v15-nav-item" data-v15-nav="pedidos" onclick="abrirAbaAdmin('pedidos');v15Nav(this)"><span class="v15-nav-icon">📋</span><span class="v15-nav-label">Pedidos pendentes</span></button>
-  <a class="v15-nav-item" href="/expedicao/conferencia"><span class="v15-nav-icon">✓</span><span class="v15-nav-label">Conferência</span></a>
+  <a class="v15-nav-item" href="/expedicao/conferencia" target="_blank" rel="noopener"><span class="v15-nav-icon">✓</span><span class="v15-nav-label">Conferência</span></a>
   <button class="v15-nav-item" onclick="abrirAbaAdmin('historico');v15Nav(this)"><span class="v15-nav-icon">🕘</span><span class="v15-nav-label">Histórico</span></button>
   <div class="v15-nav-section">Comercial</div>
-  <a class="v15-nav-item" href="/expedicao/precificador"><span class="v15-nav-icon">$</span><span class="v15-nav-label">Precificador</span></a>
+  <a class="v15-nav-item" href="/expedicao/precificador" target="_blank" rel="noopener"><span class="v15-nav-icon">$</span><span class="v15-nav-label">Precificador</span></a>
   <button class="v15-nav-item" onclick="abrirAbaAdmin('produtos');v15Nav(this)"><span class="v15-nav-icon">📦</span><span class="v15-nav-label">Produtos</span></button>
   <button class="v15-nav-item" onclick="abrirAbaAdmin('kits');v15Nav(this)"><span class="v15-nav-icon">🎁</span><span class="v15-nav-label">Kits</span></button>
   <div class="v15-nav-section">Integrações</div>
   <button class="v15-nav-item" onclick="abrirAbaAdmin('integracoes');v15Nav(this)"><span class="v15-nav-icon">🔌</span><span class="v15-nav-label">Central de integrações</span></button>
-  <a class="v15-nav-item" href="/expedicao/estacao-impressao" target="_blank"><span class="v15-nav-icon">🖨</span><span class="v15-nav-label">Estação Zebra</span></a>
+  <a class="v15-nav-item" href="/expedicao/estacao-impressao" target="_blank" rel="noopener"><span class="v15-nav-icon">🖨</span><span class="v15-nav-label">Estação Zebra</span></a>
   <div class="v15-nav-section">Administração</div>
   <button class="v15-nav-item" onclick="abrirAbaAdmin('usuarios');v15Nav(this)"><span class="v15-nav-icon">👥</span><span class="v15-nav-label">Usuários</span></button>
   <div class="v15-sidebar-footer"><button class="v15-nav-item" onclick="sairAdmin()"><span class="v15-nav-icon">↪</span><span class="v15-nav-label">Sair</span></button></div>
@@ -731,7 +731,7 @@ body{background:var(--v15-bg)!important}
       <div class="logo-mini-box"><img src="/grupo-noromak.png?v=15.1" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=15.1';"></div>
       <div class="header-titulos"><h1>Central Operacional Noromak</h1><small>Expedição, produtos, precificação e integrações</small></div>
     </div>
-    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end;"><a href="/expedicao/estacao-impressao" target="_blank" style="text-decoration:none;background:#1F57A5;color:white;padding:8px 13px;border-radius:6px;font-size:12px;font-weight:800;">🖨 ESTAÇÃO ZEBRA</a><button type="button" class="pwa-install-btn pwa-header" data-pwa-install>⬇ Instalar Admin</button><span id="statusBancoAdmin" class="save-pill">● Banco Web ativo</span><button class="btn-sair" onclick="sairAdmin()">Sair do Painel</button></div>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end;"><a href="/expedicao/estacao-impressao" target="_blank" rel="noopener" style="text-decoration:none;background:#1F57A5;color:white;padding:8px 13px;border-radius:6px;font-size:12px;font-weight:800;">🖨 ESTAÇÃO ZEBRA</a><button type="button" class="pwa-install-btn pwa-header" data-pwa-install>⬇ Instalar Admin</button><span id="statusBancoAdmin" class="save-pill">● Banco Web ativo</span><button class="btn-sair" onclick="sairAdmin()">Sair do Painel</button></div>
   </div>
 
 
@@ -751,7 +751,7 @@ body{background:var(--v15-bg)!important}
 
     <div class="v151-kpis">
       <button class="v151-kpi" onclick="abrirAbaAdmin('pedidos')"><span class="v151-kpi-icon blue">📋</span><span><b id="v151Pendentes">0</b><small>Pedidos pendentes</small></span></button>
-      <a class="v151-kpi" href="/expedicao/conferencia"><span class="v151-kpi-icon orange">✓</span><span><b id="v151Conferencia">0</b><small>Prontos p/ conferência</small></span></a>
+      <a class="v151-kpi" href="/expedicao/conferencia" target="_blank" rel="noopener"><span class="v151-kpi-icon orange">✓</span><span><b id="v151Conferencia">0</b><small>Prontos p/ conferência</small></span></a>
       <button class="v151-kpi" onclick="abrirAbaAdmin('historico')"><span class="v151-kpi-icon green">✓</span><span><b id="v151ConferidosHoje">0</b><small>Conferidos hoje</small></span></button>
       <button class="v151-kpi" onclick="abrirAbaAdmin('integracoes')"><span class="v151-kpi-icon amber">🏷</span><span><b id="v151EtiquetasPendentes">0</b><small>Etiquetas pendentes</small></span></button>
       <button class="v151-kpi danger" onclick="v151AbrirProblemas()"><span class="v151-kpi-icon red">!</span><span><b id="v151Problemas">0</b><small>Problemas</small></span></button>
@@ -803,9 +803,9 @@ body{background:var(--v15-bg)!important}
         <div class="v151-panel-title"><div><h3>Atalhos rápidos</h3><p>Ações mais utilizadas</p></div></div>
         <div class="v151-shortcuts">
           <button onclick="abrirAbaAdmin('pedidos');setTimeout(()=>document.getElementById('buscaPedidosAdmin')?.focus(),100)">📋 Pedidos pendentes</button>
-          <a href="/expedicao/conferencia">✓ Abrir conferência</a>
+          <a href="/expedicao/conferencia" target="_blank" rel="noopener">✓ Abrir conferência</a>
           <button onclick="abrirAbaAdmin('integracoes');setTimeout(sincronizarMercadoLivreAdmin,150)">↻ Sincronizar ML</button>
-          <a href="/expedicao/precificador">$ Precificador</a>
+          <a href="/expedicao/precificador" target="_blank" rel="noopener">$ Precificador</a>
           <button onclick="abrirAbaAdmin('produtos')">📦 Banco de produtos</button>
           <button onclick="abrirAbaAdmin('kits')">🎁 Cadastro de kits</button>
         </div>
