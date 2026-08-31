@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "14.14"
+APP_VERSION = "14.15"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2512,16 +2512,36 @@ def _ml_billing_name(order: dict[str, Any]) -> str:
         if not info:
             info = payload
 
-        first = str(info.get("name") or "").strip()
-        last = str(info.get("last_name") or "").strip()
+        # O billing-info v2 pode devolver os dados diretamente (name/last_name)
+        # ou dentro de additional_info. Aceitamos os dois formatos para que o
+        # nome exibido em Pedidos Pendentes seja o mesmo usado em Dados para NF.
+        additional = info.get("additional_info") if isinstance(info.get("additional_info"), list) else []
+        additional_map: dict[str, str] = {}
+        for entry in additional:
+            if not isinstance(entry, dict):
+                continue
+            kind = str(entry.get("type") or "").strip().upper()
+            value = str(entry.get("value") or "").strip()
+            if kind and value and kind not in additional_map:
+                additional_map[kind] = value
 
-        # Para CNPJ o Mercado Livre usa name como razão social e normalmente não
-        # envia last_name. Para PF, name + last_name formam o nome fiscal completo.
+        first = str(info.get("name") or additional_map.get("FIRST_NAME") or additional_map.get("NAME") or "").strip()
+        last = str(info.get("last_name") or additional_map.get("LAST_NAME") or "").strip()
+        business_name = str(
+            info.get("business_name")
+            or additional_map.get("BUSINESS_NAME")
+            or additional_map.get("COMPANY_NAME")
+            or additional_map.get("CORPORATE_NAME")
+            or ""
+        ).strip()
+
         identification = info.get("identification") if isinstance(info.get("identification"), dict) else {}
-        doc_type = str(identification.get("type") or "").strip().upper()
-        if doc_type == "CNPJ":
-            return first
-        return " ".join(part for part in (first, last) if part).strip()
+        doc_type = str(identification.get("type") or additional_map.get("DOC_TYPE") or "").strip().upper()
+        if doc_type == "CNPJ" and business_name:
+            return business_name
+        if business_name and not (first or last):
+            return business_name
+        return " ".join(part for part in (first, last) if part).strip() or business_name
     except Exception:
         # Nome fiscal melhora a operação, mas indisponibilidade momentânea não
         # impede a entrada do pedido; a próxima notificação/sincronização tenta de novo.

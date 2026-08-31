@@ -2460,14 +2460,88 @@ function inicializarBancoInternoAdmin(){
     carregarBancoInternoAdmin();
   }catch(e){console.error(e);setStatusBanco("Falha ao abrir banco", "erro");}
 }
+function normalizarPendentesFiscalKitsAdmin(linhas){
+  const origem=Array.isArray(linhas)?linhas:[];
+  const kitsPorSku=new Map();
+  (Array.isArray(kitsBancoAdmin)?kitsBancoAdmin:[]).forEach(kit=>{
+    if(kit?.ativo===false)return;
+    const sku=normalizarCodigoBanco(kit?.sku_kit||kit?.["SKU Kit"]||kit?.sku||"");
+    if(sku&&Array.isArray(kit?.componentes)&&kit.componentes.length)kitsPorSku.set(sku,kit);
+  });
+  const gruposProcessados=new Set();
+  const saida=[];
+  const pedidoKey=row=>normalizarCodigoBanco(row?.Pedido||"");
+  const kitOrigemKey=row=>normalizarCodigoBanco(row?.SkuKitOrigem||"");
+  const skuKey=row=>normalizarCodigoBanco(row?.SKU||row?.["Código de Barras"]||"");
+
+  origem.forEach((linha,indice)=>{
+    if(!linha||typeof linha!=="object")return;
+    const linhaBase={...linha};
+    const nomeFiscal=String(linhaBase.NomeFiscalMercadoLivre||"").trim();
+    if(nomeFiscal)linhaBase.Cliente=nomeFiscal;
+
+    const origemKit=kitOrigemKey(linhaBase);
+    const skuAtual=skuKey(linhaBase);
+    const kit=kitsPorSku.get(origemKit)||kitsPorSku.get(skuAtual);
+    if(!kit){saida.push(linhaBase);return;}
+
+    const kitSku=normalizarCodigoBanco(kit.sku_kit||kit["SKU Kit"]||kit.sku||origemKit||skuAtual);
+    const chaveGrupo=`${pedidoKey(linhaBase)}|${kitSku}`;
+    if(gruposProcessados.has(chaveGrupo))return;
+    gruposProcessados.add(chaveGrupo);
+
+    const relacionadas=origem.filter(r=>{
+      if(pedidoKey(r)!==pedidoKey(linhaBase))return false;
+      const ko=kitOrigemKey(r), sk=skuKey(r);
+      return ko===kitSku||(!ko&&sk===kitSku);
+    });
+    const principal={...(relacionadas[0]||linhaBase)};
+    const fiscal=String(relacionadas.map(r=>r?.NomeFiscalMercadoLivre).find(v=>String(v||"").trim())||principal.NomeFiscalMercadoLivre||"").trim();
+    if(fiscal)principal.Cliente=fiscal;
+
+    let qtdKits=Number(relacionadas.map(r=>r?.["Quantidade de Kits"]).find(v=>Number(v)>0)||0);
+    if(!qtdKits){
+      const bruta=relacionadas.find(r=>!kitOrigemKey(r)&&skuKey(r)===kitSku);
+      qtdKits=Math.max(1,Number(bruta?.Quantidade||principal.Quantidade||1)||1);
+    }
+    const anterioresPorSku=new Map(relacionadas.map(r=>[skuKey(r),r]));
+    (kit.componentes||[]).forEach((comp,compIndice)=>{
+      const compSku=String(comp?.sku||comp?.SKU||"").trim();
+      if(!compSku)return;
+      const porKit=Math.max(1,Number(comp?.quantidade||comp?.qtd||comp?.Quantidade||1)||1);
+      const anterior=anterioresPorSku.get(normalizarCodigoBanco(compSku));
+      const nova={...principal,...(anterior||{})};
+      nova.Kit="SIM";
+      nova["Nome do Kit"]=String(kit.nome||kit.Nome||kit.sku_kit||compSku).trim();
+      nova["Quantidade de Kits"]=String(qtdKits);
+      nova["Quantidade por Kit"]=String(porKit);
+      nova.SkuKitOrigem=String(kit.sku_kit||kit["SKU Kit"]||kit.sku||"").trim();
+      nova.SkuOrigemImportacao=nova.SkuOrigemImportacao||nova.SkuKitOrigem;
+      nova.SKU=compSku;
+      nova.Quantidade=String(qtdKits*porKit);
+      nova.Observação="";
+      if(fiscal){nova.NomeFiscalMercadoLivre=fiscal;nova.Cliente=fiscal;}
+      const produto=produtosBancoAdmin.find(p=>normalizarCodigoBanco(p?.SKU)===normalizarCodigoBanco(compSku)||normalizarCodigoBanco(p?.["Código de Barras"])===normalizarCodigoBanco(compSku));
+      if(produto)preencherPedidoProdutoBanco(nova,produto);
+      nova.__uidLinha=anterior?.__uidLinha||`KITDB_${pedidoKey(nova)}_${kitSku}_${normalizarCodigoBanco(compSku)}_${compIndice}`;
+      saida.push(nova);
+    });
+  });
+  return saida;
+}
+
 function carregarBancoInternoAdmin(){
   try{
     produtosBancoAdmin=JSON.parse(appStorage.getItem("conf_produtos")||"[]");
     kitsBancoAdmin=JSON.parse(appStorage.getItem("conf_kits")||"[]");
     if(!Array.isArray(kitsBancoAdmin)) kitsBancoAdmin=[];
     usuariosEditorAdmin=JSON.parse(appStorage.getItem("conf_usuarios")||"[]");
-    const validos=JSON.parse(appStorage.getItem("conf_pedidos")||"[]");
-    const rascunhos=JSON.parse(appStorage.getItem("conf_pedidos_rascunhos")||"[]");
+    const validosOriginais=JSON.parse(appStorage.getItem("conf_pedidos")||"[]");
+    const rascunhosOriginais=JSON.parse(appStorage.getItem("conf_pedidos_rascunhos")||"[]");
+    const validos=normalizarPendentesFiscalKitsAdmin(validosOriginais);
+    const rascunhos=normalizarPendentesFiscalKitsAdmin(rascunhosOriginais);
+    if(JSON.stringify(validos)!==JSON.stringify(validosOriginais))appStorage.setItem("conf_pedidos",JSON.stringify(validos));
+    if(JSON.stringify(rascunhos)!==JSON.stringify(rascunhosOriginais))appStorage.setItem("conf_pedidos_rascunhos",JSON.stringify(rascunhos));
     pedidosEditorAdmin=[...validos,...rascunhos].map((x,i)=>{
       const marketplace=x.Marketplace||marketplaceExibicaoBanco(x.Pedido);
       return {...x,Pedido:pedidoArmazenamentoBanco(x.Pedido,marketplace),Marketplace:marketplaceExibicaoBanco(x.Pedido),"Data do Pedido":normalizarDataPedidoBanco(x["Data do Pedido"]||x.Data||x.DataPedido,true),Kit:normalizarBuscaBanco(x.Kit)==="sim"?"SIM":(x["Nome do Kit"]?"SIM":""),__uidLinha:x.__uidLinha||x.__uidPedido||uidBanco("PED")};
@@ -2534,6 +2608,16 @@ function persistirKitsBancoAdmin(){
   }));
   appStorage.setItem("conf_kits",JSON.stringify(normalizados));
   kitsBancoAdmin=normalizados;
+  // V14.15: a composição cadastrada é a fonte de verdade também para pedidos
+  // que já estavam pendentes. Ao salvar um kit, atualiza as linhas na hora.
+  if(Array.isArray(pedidosEditorAdmin)&&pedidosEditorAdmin.length){
+    const antes=JSON.stringify(pedidosEditorAdmin);
+    pedidosEditorAdmin=normalizarPendentesFiscalKitsAdmin(pedidosEditorAdmin);
+    if(JSON.stringify(pedidosEditorAdmin)!==antes){
+      salvarPedidosAdmin(false);
+      renderizarPedidosAdmin();
+    }
+  }
 }
 function resumoComponentesKitAdmin(componentes){
   const comps=Array.isArray(componentes)?componentes:[];
