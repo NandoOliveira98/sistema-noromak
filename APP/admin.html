@@ -2979,7 +2979,10 @@ async function atualizarVendaMercadoLivreAdmin(uid,botao){
     const itens=Number(det.items||0);
     const inseridos=Number(det.inserted||0);
     const atualizados=Number(det.updated||0);
-    mostrarStatusImportacaoPedidos("sucesso",`↻ Venda ${orderId} atualizada pela API do Mercado Livre. ${itens} item(ns), ${atualizados} atualizado(s), ${inseridos} novo(s).`);
+    const nomeAtual=String(det.client_name||det.fiscal_name||"").trim();
+    const fonteNome=String(det.client_name_source||"").trim();
+    const detalheNome=nomeAtual?` Cliente: ${nomeAtual}${fonteNome?` (${fonteNome.replaceAll("_"," ")})`:""}.`:"";
+    mostrarStatusImportacaoPedidos("sucesso",`↻ Venda ${orderId} atualizada pela API do Mercado Livre. ${itens} item(ns), ${atualizados} atualizado(s), ${inseridos} novo(s).${detalheNome}`);
     setStatusBanco("● Venda atualizada","ok");
   }catch(e){
     console.error(e);

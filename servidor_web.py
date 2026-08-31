@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "14.17"
+APP_VERSION = "14.18"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2558,29 +2558,35 @@ def _ml_billing_name(order: dict[str, Any]) -> str:
 
     # 1) Novo endpoint oficial. Não envia x-version: a documentação atual do
     # billing-info não exige esse header e o payload esperado é buyer.billing_info.
+    # Em algumas contas MLB a resposta fiscal ainda varia entre contratos durante
+    # a migração. Tenta primeiro V2 (que expõe name/last_name completos) e depois
+    # o contrato atual sem header.
     if billing_id:
-        try:
-            payload = ml_api_get(f"/orders/billing-info/{quote(site_id)}/{quote(billing_id)}")
-            name = extract_name(payload)
-            if name:
-                return name
-        except Exception:
-            pass
-
-    # 2) Fallback temporário do endpoint legado durante a migração do ML.
-    # Isso também cobre pedidos em que /orders ainda não trouxe billing_info.id.
-    if order_id:
-        for legacy_path in (
-            f"/orders/{quote(order_id)}/billing_info",
-            f"/orders/{quote(order_id)}/billing-info",
-        ):
+        endpoint = f"/orders/billing-info/{quote(site_id)}/{quote(billing_id)}"
+        for hdrs in ({"x-version": "2"}, None):
             try:
-                payload = ml_api_get(legacy_path)
+                payload = ml_api_get(endpoint, headers=hdrs)
                 name = extract_name(payload)
                 if name:
                     return name
             except Exception:
                 continue
+
+    # 2) Fallback temporário do endpoint legado durante a migração do ML.
+    # Para MLB, x-version:2 é importante em contas que ainda respondem no recurso antigo.
+    if order_id:
+        for legacy_path in (
+            f"/orders/{quote(order_id)}/billing_info",
+            f"/orders/{quote(order_id)}/billing-info",
+        ):
+            for hdrs in ({"x-version": "2"}, None):
+                try:
+                    payload = ml_api_get(legacy_path, headers=hdrs)
+                    name = extract_name(payload)
+                    if name:
+                        return name
+                except Exception:
+                    continue
 
     return ""
 
@@ -3283,7 +3289,14 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
     fiscal_name = _ml_billing_name(order)
     buyer_names = [str(buyer.get("first_name") or "").strip(), str(buyer.get("last_name") or "").strip()]
     buyer_full_name = " ".join(x for x in buyer_names if x).strip()
-    client = fiscal_name or receiver or buyer_full_name or str(buyer.get("nickname") or "").strip()
+    nickname = str(buyer.get("nickname") or "").strip()
+    client = fiscal_name or receiver or buyer_full_name or nickname
+    client_name_source = (
+        "dados_fiscais_nf" if fiscal_name else
+        "destinatario_envio" if receiver else
+        "comprador_order" if buyer_full_name else
+        "nickname" if nickname else ""
+    )
 
     date_for_dispatch = _ml_dispatch_date(shipment_id, shipment)
     tracking = ""
@@ -3462,6 +3475,25 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
             existing["Quantidade"] = str(lido)
         updated += 1
 
+    # V14.18: o nome do cliente pertence ao pedido, não ao SKU.
+    # Força a atualização em TODAS as linhas ligadas à mesma venda ML, mesmo quando
+    # Pedido+SKU mudou (kit, SKU normalizado, linha manual antiga etc.). Isso evita
+    # que uma linha velha preserve nickname/nome incorreto após o refresh.
+    forced_client_rows = 0
+    if client:
+        for existing in pending:
+            if not isinstance(existing, dict):
+                continue
+            same_order = str(existing.get("VendaMercadoLivre") or "").strip() == order_id
+            same_pack = bool(pack_id) and str(existing.get("PackIdMercadoLivre") or "").strip() == pack_id
+            if same_order or same_pack:
+                if str(existing.get("Cliente") or "").strip() != client:
+                    forced_client_rows += 1
+                existing["Cliente"] = client
+                existing["NomeFiscalMercadoLivre"] = fiscal_name
+                existing["FonteNomeClienteMercadoLivre"] = client_name_source
+                existing["MercadoLivreAtualizadoEm"] = now_iso()
+
     # Cancelamentos não apagam o pedido; apenas ficam marcados para auditoria/ação manual.
     new_json = json_dumps(pending)
     save_storage(
@@ -3500,6 +3532,9 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
         "label_error": str(fiscal_state.get("label_error") or ""),
         "fiscal_name": fiscal_name,
         "fiscal_name_updated": bool(fiscal_name),
+        "client_name": client,
+        "client_name_source": client_name_source,
+        "forced_client_rows": forced_client_rows,
         "kit_components_applied": kit_applied,
         "kit_unregistered": kit_unregistered,
         "stale_rows_removed": stale_removed,
