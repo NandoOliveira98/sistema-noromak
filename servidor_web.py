@@ -29,14 +29,14 @@ import time
 import urllib.error
 import urllib.request
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "14.1"
+APP_VERSION = "14.2"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -84,6 +84,10 @@ ML_PENDING_WATCH_INTERVAL = max(10, min(120, int(os.getenv("ML_PENDING_WATCH_INT
 ML_PENDING_WATCH_BATCH = max(1, min(30, int(os.getenv("ML_PENDING_WATCH_BATCH", "20"))))
 ML_NEW_ORDER_WATCH_INTERVAL = max(15, min(120, int(os.getenv("ML_NEW_ORDER_WATCH_INTERVAL", "20"))))
 ML_NEW_ORDER_WATCH_LIMIT = max(5, min(50, int(os.getenv("ML_NEW_ORDER_WATCH_LIMIT", "20"))))
+ML_CATCHUP_FALLBACK_DAYS = max(1, min(30, int(os.getenv("ML_CATCHUP_FALLBACK_DAYS", "7"))))
+ML_CATCHUP_PAGE_SIZE = max(10, min(50, int(os.getenv("ML_CATCHUP_PAGE_SIZE", "50"))))
+ML_CATCHUP_MAX_PAGES = max(2, min(100, int(os.getenv("ML_CATCHUP_MAX_PAGES", "40"))))
+
 CRM_COST_API_URL = os.getenv(
     "CRM_COST_API_URL",
     "http://127.0.0.1:8000/api/v1/expedicao/custo",
@@ -96,6 +100,7 @@ CRM_COST_CACHE_SECONDS = max(5, min(300, int(os.getenv("CRM_COST_CACHE_SECONDS",
 DB_LOCK = threading.RLock()
 AUTH_LOCK = threading.Lock()
 ML_NEW_ORDER_WATCH_LOCK = threading.Lock()
+ML_CATCHUP_LOCK = threading.Lock()
 CRM_COST_CACHE_LOCK = threading.Lock()
 CRM_COST_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 PRECIFICADOR_BULK_LOCK = threading.Lock()
@@ -300,7 +305,15 @@ def crm_cost_lookup(codigo: str, operador: str = "") -> dict[str, Any]:
         "descricao": str(data.get("descricao") or ""),
         "unidade": str(data.get("unidade") or ""),
         "custo_medio": round(custo, 4),
-        "curva": str(data.get("curva") or data.get("curva_abc") or data.get("abc") or "").strip().upper(),
+        "curva": str(
+            data.get("curva")
+            or data.get("curva_abc")
+            or data.get("abc")
+            or data.get("curva_item")
+            or data.get("classificacao_abc")
+            or data.get("classificacao")
+            or ""
+        ).strip().upper(),
         "cache": False,
         "consultado_em": now_iso(),
     }
@@ -2129,10 +2142,14 @@ def ml_integration_row() -> sqlite3.Row | None:
 
 def ml_status_payload() -> dict[str, Any]:
     row = ml_integration_row()
-    connected = bool(row and row["access_token"] and row["seller_id"])
+    has_access = bool(row and row["access_token"] and row["seller_id"])
+    has_refresh = bool(row and str(row["refresh_token"] or "").strip())
+    connected = bool(has_access and has_refresh)
+    needs_reconnect = bool(has_access and not has_refresh)
     return {
         "configured": ml_credentials_configured(),
         "connected": connected,
+        "needs_reconnect": needs_reconnect,
         "seller_id": str(row["seller_id"] if row else ""),
         "nickname": str(row["nickname"] if row else ""),
         "scope": str(row["scope"] if row else ""),
@@ -2320,6 +2337,8 @@ def ml_oauth_authorization_url() -> str:
 
 
 def ml_exchange_authorization_code(code: str, state: str) -> dict[str, Any]:
+    previous_integration = ml_integration_row()
+    recovery_since = str(previous_integration["last_sync_at"] or "") if previous_integration else ""
     now_epoch = int(time.time())
     with DB_LOCK:
         row = DB.execute("SELECT * FROM ml_oauth_state WHERE state=?", (state,)).fetchone()
@@ -2361,7 +2380,9 @@ def ml_exchange_authorization_code(code: str, state: str) -> dict[str, Any]:
                 },
                 nickname=nickname,
             )
-    return ml_status_payload()
+    status = ml_status_payload()
+    status["recovery_since"] = recovery_since
+    return status
 
 
 def _ml_parse_iso_date(value: Any) -> str:
@@ -3308,8 +3329,176 @@ def _ml_existing_order_ids() -> set[str]:
     return ids
 
 
+def _ml_parse_datetime(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        # Mercado Livre e o próprio banco podem usar Z ou offset ISO.
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except Exception:
+        return None
+
+
+def _ml_update_last_sync(marker: str, *, error: str = "") -> None:
+    with DB_LOCK:
+        DB.execute(
+            "UPDATE ml_integration SET last_sync_at=?,updated_at=?,last_error=? WHERE id=1",
+            (str(marker or now_iso()), now_iso(), str(error or "")[:3000]),
+        )
+        DB.commit()
+
+
+def ml_catchup_orders(recovery_since: str = "", *, source: str = "reconexão") -> dict[str, Any]:
+    """Recupera pedidos pagos perdidos desde o último ponto confiável.
+
+    Pagina /orders/search até alcançar recovery_since. O mesmo lock do watcher
+    impede que o poller de 20 s importe em paralelo durante a recuperação.
+    """
+    if not ML_CATCHUP_LOCK.acquire(blocking=False):
+        return {"ok": True, "running": True, "imported": 0, "ignored_full": 0, "errors": []}
+
+    watcher_locked = False
+    scan_started_at = now_iso()
+    try:
+        ML_NEW_ORDER_WATCH_LOCK.acquire()
+        watcher_locked = True
+
+        _, seller_id = ml_access_token()
+        since_dt = _ml_parse_datetime(recovery_since)
+        if since_dt is None:
+            row = ml_integration_row()
+            since_dt = _ml_parse_datetime(row["last_sync_at"] if row else "")
+        if since_dt is None:
+            since_dt = datetime.now(timezone.utc) - timedelta(days=ML_CATCHUP_FALLBACK_DAYS)
+
+        # Pequena sobreposição evita perder pedidos exatamente na borda do marcador.
+        since_dt = since_dt - timedelta(minutes=5)
+        existing = _ml_existing_order_ids()
+
+        imported = 0
+        ignored_full = 0
+        checked = 0
+        errors: list[dict[str, str]] = []
+        reached_marker = False
+        exhausted = False
+
+        for page in range(ML_CATCHUP_MAX_PAGES):
+            offset = page * ML_CATCHUP_PAGE_SIZE
+            query = urlencode({
+                "seller": seller_id,
+                "order.status": "paid",
+                "sort": "date_desc",
+                "limit": str(ML_CATCHUP_PAGE_SIZE),
+                "offset": str(offset),
+            })
+            result = ml_api_get(f"/orders/search?{query}")
+            orders = result.get("results") if isinstance(result, dict) else []
+            if not orders:
+                exhausted = True
+                break
+
+            for order in orders:
+                if not isinstance(order, dict):
+                    continue
+                created_dt = _ml_parse_datetime(order.get("date_created"))
+                if created_dt is not None and created_dt < since_dt:
+                    reached_marker = True
+                    break
+
+                order_id = str(order.get("id") or "").strip()
+                if not order_id:
+                    continue
+                checked += 1
+                if order_id in existing:
+                    continue
+                try:
+                    detail = ml_import_order(order_id, source=f"API Mercado Livre / catch-up {source}")
+                    if detail.get("ignored") and detail.get("reason") == "FULL":
+                        ignored_full += 1
+                        existing.add(order_id)
+                        ml_log_event(
+                            "catchup", f"/orders/{order_id}", seller_id, ML_CLIENT_ID,
+                            "FULL IGNORADO", json_dumps({"order_id": order_id, "source": source})
+                        )
+                    else:
+                        imported += 1
+                        existing.add(order_id)
+                        ml_log_event(
+                            "catchup", f"/orders/{order_id}", seller_id, ML_CLIENT_ID,
+                            "PEDIDO RECUPERADO",
+                            json_dumps({
+                                "order_id": order_id,
+                                "source": source,
+                                "ready_for_conference": bool(detail.get("ready_for_conference")),
+                                "fiscal_name": detail.get("fiscal_name") or "",
+                            })
+                        )
+                except Exception as exc:
+                    errors.append({"order_id": order_id, "error": str(exc)[:700]})
+
+            if reached_marker:
+                break
+            if len(orders) < ML_CATCHUP_PAGE_SIZE:
+                exhausted = True
+                break
+
+        completed_scan = reached_marker or exhausted
+        if completed_scan and not errors:
+            _ml_update_last_sync(scan_started_at)
+        else:
+            # Mantém o marcador antigo para uma futura tentativa não saltar pedidos.
+            with DB_LOCK:
+                DB.execute(
+                    "UPDATE ml_integration SET updated_at=?,last_error=? WHERE id=1",
+                    (
+                        now_iso(),
+                        "" if not errors else json_dumps(errors[:5]),
+                    ),
+                )
+                DB.commit()
+
+        result_payload = {
+            "ok": completed_scan and not errors,
+            "checked": checked,
+            "imported": imported,
+            "ignored_full": ignored_full,
+            "errors": errors,
+            "reached_marker": reached_marker,
+            "exhausted": exhausted,
+            "since": since_dt.isoformat(),
+            "scan_started_at": scan_started_at,
+        }
+        ml_log_event(
+            "catchup", "/orders/search", seller_id, ML_CLIENT_ID,
+            "CATCH-UP CONCLUÍDO" if result_payload["ok"] else "CATCH-UP PARCIAL",
+            json_dumps(result_payload),
+        )
+        return result_payload
+    except Exception as exc:
+        try:
+            ml_log_event("catchup", "/orders/search", "", ML_CLIENT_ID, "ERRO", str(exc)[:1200])
+        except Exception:
+            pass
+        return {"ok": False, "checked": 0, "imported": 0, "ignored_full": 0, "errors": [{"error": str(exc)}]}
+    finally:
+        if watcher_locked:
+            ML_NEW_ORDER_WATCH_LOCK.release()
+        ML_CATCHUP_LOCK.release()
+
+
+def ml_catchup_after_reconnect(recovery_since: str = "") -> None:
+    # Executa fora do callback HTTP para devolver o navegador imediatamente.
+    time.sleep(0.5)
+    ml_catchup_orders(recovery_since, source="reconexão OAuth")
+
+
 def ml_new_order_watch_once() -> dict[str, int]:
     """Contingência do webhook: busca somente os pedidos pagos mais recentes."""
+    poll_started_at = now_iso()
     if not ML_NEW_ORDER_WATCH_LOCK.acquire(blocking=False):
         return {"checked": 0, "imported": 0, "ignored_full": 0, "errors": 0}
     try:
@@ -3353,6 +3542,8 @@ def ml_new_order_watch_once() -> dict[str, int]:
                 errors += 1
                 ml_log_event("new_order_watcher", f"/orders/{order_id}", seller_id, ML_CLIENT_ID,
                              "ERRO", str(exc)[:1200])
+        if errors == 0:
+            _ml_update_last_sync(poll_started_at)
         return {"checked": checked, "imported": imported, "ignored_full": ignored_full, "errors": errors}
     finally:
         ML_NEW_ORDER_WATCH_LOCK.release()
@@ -3443,7 +3634,7 @@ def ml_manual_sync() -> dict[str, Any]:
 
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/14.1"
+    server_version = "NoromakExpedicao/14.2"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
@@ -3834,6 +4025,12 @@ class AppHandler(BaseHTTPRequestHandler):
         try:
             status = ml_exchange_authorization_code(code, state)
             ml_log_event("oauth", "/callback", status.get("seller_id"), ML_CLIENT_ID, "CONECTADO", status.get("nickname") or "")
+            threading.Thread(
+                target=ml_catchup_after_reconnect,
+                args=(str(status.get("recovery_since") or ""),),
+                name="ml-catchup-reconnect",
+                daemon=True,
+            ).start()
             self.send_redirect(f"{BASE_PATH}/admin?aba=integracoes&ml=conectado")
         except Exception as exc:
             ml_log_event("oauth", "/callback", "", ML_CLIENT_ID, "ERRO", str(exc))

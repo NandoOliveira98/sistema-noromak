@@ -7,11 +7,11 @@
 <meta name="application-name" content="Noromak Admin">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="manifest" href="/expedicao/manifest-admin.webmanifest?v=14.1" crossorigin="use-credentials">
-<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=14.1">
-<link rel="icon" href="/favicon.ico?v=14.1" sizes="any">
-<link rel="shortcut icon" href="/favicon.ico?v=14.1">
-<link rel="stylesheet" href="/expedicao/pwa-install.css?v=14.1">
+<link rel="manifest" href="/expedicao/manifest-admin.webmanifest?v=14.2" crossorigin="use-credentials">
+<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=14.2">
+<link rel="icon" href="/favicon.ico?v=14.2" sizes="any">
+<link rel="shortcut icon" href="/favicon.ico?v=14.2">
+<link rel="stylesheet" href="/expedicao/pwa-install.css?v=14.2">
 <title>Noromak - Administração dos Pedidos Compartilhados</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
@@ -443,7 +443,7 @@
 </style>
 <script src="/expedicao/shared-storage.js"></script>
 <script src="/expedicao/web-auth.js"></script>
-<script defer src="/expedicao/pwa-install.js?v=14.1"></script>
+<script defer src="/expedicao/pwa-install.js?v=14.2"></script>
 
 <style id="estiloEtiquetasPersistentesV98">
   .etiquetas-persistentes-box{margin:14px 0 18px;border:1px solid #c7d4e1;border-radius:9px;background:#f8fbfe;padding:13px}
@@ -671,7 +671,7 @@
 <div id="loginAdmin">
   <div class="box-login">
     <div class="logo-box">
-      <img src="/nk-logo.svg?v=14.1" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=14.1';">
+      <img src="/nk-logo.svg?v=14.2" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=14.2';">
     </div>
     <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 12.2 — permissões por módulo</div>
     <div style="font-size:12px;color:#667;margin:-8px 0 14px;line-height:1.4;">Use o administrador principal ou qualquer usuário cadastrado com perfil <b>Admin</b>.</div>
@@ -689,7 +689,7 @@
 <div id="painelConteudo" class="container-admin">
   <div class="header-topo">
     <div class="header-identidade">
-      <div class="logo-mini-box"><img src="/grupo-noromak.png?v=14.1" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=14.1';"></div>
+      <div class="logo-mini-box"><img src="/grupo-noromak.png?v=14.2" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=14.2';"></div>
       <div class="header-titulos"><h1>Administração dos pedidos compartilhados</h1><small>Dados centralizados no servidor Web em tempo real</small></div>
     </div>
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end;"><a href="/expedicao/estacao-impressao" target="_blank" style="text-decoration:none;background:#1F57A5;color:white;padding:8px 13px;border-radius:6px;font-size:12px;font-weight:800;">🖨 ESTAÇÃO ZEBRA</a><button type="button" class="pwa-install-btn pwa-header" data-pwa-install>⬇ Instalar Admin</button><span id="statusBancoAdmin" class="save-pill">● Banco Web ativo</span><button class="btn-sair" onclick="sairAdmin()">Sair do Painel</button></div>
@@ -5768,23 +5768,24 @@ async function carregarIntegracaoMercadoLivreAdmin(){
   try{
     const d=await mlApiAdmin("/expedicao/api/integracoes/mercadolivre/status");
     const ml=d.mercadolivre||{};
-    const configurado=ml.configured===true, conectado=ml.connected===true;
-    badge.className="integracao-status "+(conectado?"ok":configurado?"off":"erro");
-    badge.textContent=conectado?"🟢 Conectado":configurado?"⚪ Configurado, aguardando conexão":"🔴 Credenciais ainda não configuradas";
+    const configurado=ml.configured===true, conectado=ml.connected===true, reconectar=ml.needs_reconnect===true;
+    badge.className="integracao-status "+(conectado?"ok":reconectar?"erro":configurado?"off":"erro");
+    badge.textContent=conectado?"🟢 Conectado":reconectar?"🟠 Reconexão necessária":configurado?"⚪ Configurado, aguardando conexão":"🔴 Credenciais ainda não configuradas";
     document.getElementById("mlIntegracaoConta").textContent=ml.nickname||"—";
     document.getElementById("mlIntegracaoSeller").textContent=ml.seller_id||"—";
     document.getElementById("mlIntegracaoSync").textContent=ml.last_sync_at?mlDataHora(ml.last_sync_at):"—";
     document.getElementById("mlIntegracaoCallback").textContent=ml.redirect_uri||"—";
     document.getElementById("mlIntegracaoNotificacoes").textContent=ml.notification_url||"—";
     const conectar=document.getElementById("btnMlConectar"),sync=document.getElementById("btnMlSincronizar"),desconectar=document.getElementById("btnMlDesconectar");
-    if(conectar){conectar.disabled=!configurado;conectar.textContent=conectado?"Reconectar Mercado Livre":"Conectar Mercado Livre";}
+    if(conectar){conectar.disabled=!configurado;conectar.textContent=(conectado||reconectar)?"Reconectar Mercado Livre":"Conectar Mercado Livre";}
     if(sync)sync.disabled=!conectado;
-    if(desconectar)desconectar.disabled=!conectado;
+    if(desconectar)desconectar.disabled=!(conectado||reconectar);
     const msg=document.getElementById("mlIntegracaoMensagem");
     if(msg){
       if(!configurado)msg.innerHTML='Configure <b>ML_CLIENT_ID</b> e <b>ML_CLIENT_SECRET</b> em <code>/home/expedicao/.env</code> e reinicie o serviço.';
+      else if(reconectar)msg.innerHTML='⚠ <b>Reconexão necessária.</b> O sistema não considera a integração operacional sem refresh token. Ao reconectar, ele recupera automaticamente os pedidos perdidos desde a última sincronização válida.';
       else if(ml.last_error)msg.innerHTML='⚠ Último erro: <b>'+mlHtmlSeguro(ml.last_error)+'</b>';
-      else msg.innerHTML=conectado?'✅ Conta conectada. Orders_v2 e Shipments podem importar/atualizar pedidos automaticamente.':'Clique em <b>Conectar Mercado Livre</b> para autorizar a conta vendedora.';
+      else msg.innerHTML=conectado?'✅ Conta conectada. Webhook + watcher ficam ativos no servidor mesmo sem nenhum computador aberto. Após reconexão, o catch-up recupera automaticamente o intervalo perdido.':'Clique em <b>Conectar Mercado Livre</b> para autorizar a conta vendedora.';
     }
   }catch(e){
     badge.className="integracao-status erro";badge.textContent="🔴 Erro ao consultar integração";
@@ -5835,6 +5836,6 @@ document.addEventListener("DOMContentLoaded",()=>{
 });
 </script>
 
-<script src="/expedicao/user-permissions.js?v=14.1"></script>
+<script src="/expedicao/user-permissions.js?v=14.2"></script>
 </body>
 </html>

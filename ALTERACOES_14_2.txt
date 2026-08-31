@@ -1,0 +1,26 @@
+VERSÃO 14.2 — CATCH-UP MERCADO LIVRE + CURVA APOLLO
+
+MERCADO LIVRE
+- Corrige perda de pedidos durante falha/expiração do token.
+- Antes de substituir o token em uma reconexão, guarda o último last_sync_at confiável.
+- Após o OAuth concluir, inicia automaticamente um CATCH-UP no próprio servidor.
+- O catch-up pagina os pedidos pagos em ordem decrescente até alcançar o último ponto
+  sincronizado, com sobreposição de 5 minutos para segurança.
+- Se não houver marcador válido, recupera por padrão os últimos 7 dias.
+- Limite padrão: 40 páginas de 50 pedidos (até 2.000 resultados por recuperação).
+- Só importa pedidos que ainda não existem em Pendentes nem Concluídos.
+- Full continua ignorado.
+- Nome fiscal, kits, prazo de despacho e etiquetas automáticas continuam aplicados.
+- O watcher de pedidos novos continua ativo e agora atualiza last_sync_at a cada ciclo
+  bem-sucedido; se a API/token falhar, o marcador NÃO avança.
+- O mesmo lock impede watcher e catch-up de rodarem a importação em paralelo.
+- Interface não mostra mais "Conectado" se existir access token mas faltar refresh token;
+  mostra "Reconexão necessária".
+- Tudo roda na VPS, independentemente de navegador ou computador ligado.
+
+APOLLO / PRECIFICADOR
+- A integração já estava preparada desde V13.8 para receber curva.
+- Mantido suporte a curva, curva_abc e abc.
+- V14.2 amplia também para curva_item, classificacao_abc e classificacao.
+- O botão de atualização geral continua atualizando custo, descrição e curva A/B/C/D
+  quando esse campo vier na resposta do Apollo.
