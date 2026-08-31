@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "14.4"
+APP_VERSION = "14.5"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -105,6 +105,16 @@ AUTH_LOCK = threading.Lock()
 ML_NEW_ORDER_WATCH_LOCK = threading.Lock()
 ML_CATCHUP_LOCK = threading.Lock()
 ML_MANUAL_RECONCILE_LOCK = threading.Lock()
+ML_PENDING_LABEL_LOCK = threading.Lock()
+ML_PENDING_WATCH_STATE_LOCK = threading.Lock()
+ML_PENDING_WATCH_CURSOR = 0
+ML_LABEL_VERIFY_STATUS_LOCK = threading.Lock()
+ML_LABEL_VERIFY_STATUS: dict[str, Any] = {
+    "running": False, "phase": "idle", "checked": 0, "total": 0,
+    "triggered": 0, "linked": 0, "remaining": 0, "errors": 0,
+    "manual_found": 0, "manual_matched": 0, "manual_ready": 0,
+    "started_at": "", "finished_at": "", "message": "",
+}
 CRM_COST_CACHE_LOCK = threading.Lock()
 CRM_COST_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 PRECIFICADOR_BULK_LOCK = threading.Lock()
@@ -2148,15 +2158,29 @@ def ml_status_payload() -> dict[str, Any]:
     row = ml_integration_row()
     has_access = bool(row and row["access_token"] and row["seller_id"])
     has_refresh = bool(row and str(row["refresh_token"] or "").strip())
-    connected = bool(has_access and has_refresh)
+    scope_text = str(row["scope"] if row else "")
+    offline_access_granted = "offline_access" in scope_text.split()
+    expires_at = int(row["expires_at_epoch"] if row else 0)
+    seconds_until_expiry = expires_at - int(time.time()) if expires_at else 0
+    # A rotina de API tenta renovar nos 5 minutos finais; sem refresh, portanto,
+    # o token só é considerado operacional enquanto estiver fora dessa janela.
+    access_valid = bool(has_access and seconds_until_expiry > 300)
+    # Com refresh token, um access token vencido é renovado sob demanda. Sem
+    # refresh, a integração continua operacional somente até o token atual vencer.
+    connected = bool(has_access and (has_refresh or access_valid))
     needs_reconnect = bool(has_access and not has_refresh)
     return {
         "configured": ml_credentials_configured(),
         "connected": connected,
+        "operational": connected,
         "needs_reconnect": needs_reconnect,
+        "access_token_valid": access_valid,
+        "renewal_available": has_refresh,
+        "offline_access_granted": offline_access_granted,
+        "seconds_until_expiry": max(0, seconds_until_expiry),
         "seller_id": str(row["seller_id"] if row else ""),
         "nickname": str(row["nickname"] if row else ""),
-        "scope": str(row["scope"] if row else ""),
+        "scope": scope_text,
         "expires_at_epoch": int(row["expires_at_epoch"] if row else 0),
         "connected_at": str(row["connected_at"] if row else ""),
         "updated_at": str(row["updated_at"] if row else ""),
@@ -2203,18 +2227,16 @@ def ml_http_json(
 
 
 def ml_store_token(payload: dict[str, Any], *, nickname: str = "") -> None:
-    seller_id = str(payload.get("user_id") or "")
+    previous = ml_integration_row()
+    seller_id = str(payload.get("user_id") or (previous["seller_id"] if previous else "") or "")
     access_token = str(payload.get("access_token") or "")
-    refresh_token = str(payload.get("refresh_token") or "")
+    refresh_token = str(payload.get("refresh_token") or (previous["refresh_token"] if previous else "") or "")
     token_type = str(payload.get("token_type") or "Bearer")
     scope = str(payload.get("scope") or "")
     expires_in = int(payload.get("expires_in") or 0)
     expires_at = int(time.time()) + max(0, expires_in)
     if not access_token or not seller_id:
         raise RuntimeError("Resposta de token do Mercado Livre incompleta.")
-    previous = ml_integration_row()
-    if previous and not refresh_token:
-        refresh_token = str(previous["refresh_token"] or "")
     connected_at = str(previous["connected_at"] or "") if previous else ""
     if not connected_at:
         connected_at = now_iso()
@@ -2936,10 +2958,10 @@ def _ml_manual_pending_numbers() -> set[str]:
     return result
 
 
-def ml_reconcile_manual_orders_once() -> dict[str, int]:
+def ml_reconcile_manual_orders_once(*, wait_for_lock: bool = False) -> dict[str, int]:
     """Reconcilia pedidos de print/extensão com a API e os coloca no watcher de etiqueta."""
-    if not ML_MANUAL_RECONCILE_LOCK.acquire(blocking=False):
-        return {"manual": 0, "matched": 0, "ready": 0, "errors": 0}
+    if not ML_MANUAL_RECONCILE_LOCK.acquire(blocking=wait_for_lock):
+        return {"manual": 0, "matched": 0, "ready": 0, "errors": 0, "running": True}
     try:
         manual_numbers = _ml_manual_pending_numbers()
         if not manual_numbers:
@@ -3016,17 +3038,23 @@ def ml_reconcile_manual_orders_loop(stop_event: threading.Event) -> None:
     # Primeira tentativa poucos segundos após o servidor iniciar.
     if stop_event.wait(5):
         return
+    consecutive_errors = 0
     while not stop_event.is_set():
         try:
             row = ml_integration_row()
-            if row and str(row["access_token"] or "").strip() and str(row["refresh_token"] or "").strip():
+            # O access token válido já permite reconciliar. A ausência de refresh
+            # token não deve bloquear o fluxo enquanto a sessão atual funciona.
+            if row and str(row["access_token"] or "").strip():
                 ml_reconcile_manual_orders_once()
+            consecutive_errors = 0
         except Exception as exc:
+            consecutive_errors = min(consecutive_errors + 1, 4)
             try:
                 ml_log_event("manual_reconcile", "/orders/search", "", ML_CLIENT_ID, "ERRO", str(exc)[:1200])
             except Exception:
                 pass
-        if stop_event.wait(ML_MANUAL_RECONCILE_INTERVAL):
+        wait_seconds = min(600, ML_MANUAL_RECONCILE_INTERVAL * (2 ** consecutive_errors))
+        if stop_event.wait(wait_seconds):
             break
 
 
@@ -3399,8 +3427,14 @@ def ml_process_notification(payload: dict[str, Any]) -> None:
             DB.commit()
 
 
-def _ml_pending_label_candidates() -> list[tuple[str, str]]:
-    """Retorna pares (order_id, shipment_id) ainda aguardando etiqueta."""
+def _ml_pending_label_candidates(*, limit: int | None = ML_PENDING_WATCH_BATCH,
+                                 rotate: bool = True) -> list[tuple[str, str]]:
+    """Retorna pares (order_id, shipment_id) ainda aguardando etiqueta.
+
+    A rotação evita que os primeiros pedidos sem etiqueta ocupem o lote inteiro
+    para sempre e impeçam pedidos posteriores de serem consultados.
+    """
+    global ML_PENDING_WATCH_CURSOR
     raw, _, _ = get_storage("conf_pedidos")
     rows = _rows_from_storage_value(raw)
     seen: set[tuple[str, str]] = set()
@@ -3423,69 +3457,216 @@ def _ml_pending_label_candidates() -> list[tuple[str, str]]:
             continue
         seen.add(key)
         candidates.append(key)
-        if len(candidates) >= ML_PENDING_WATCH_BATCH:
-            break
-    return candidates
+    if limit is None or limit <= 0 or len(candidates) <= limit:
+        if rotate:
+            with ML_PENDING_WATCH_STATE_LOCK:
+                ML_PENDING_WATCH_CURSOR = 0
+        return candidates
+    if not rotate:
+        return candidates[:limit]
+    with ML_PENDING_WATCH_STATE_LOCK:
+        start = ML_PENDING_WATCH_CURSOR % len(candidates)
+        ordered = candidates[start:] + candidates[:start]
+        batch = ordered[:limit]
+        ML_PENDING_WATCH_CURSOR = (start + len(batch)) % len(candidates)
+    return batch
 
 
-def ml_pending_label_watch_once() -> dict[str, int]:
-    """Reconsulta somente shipments pendentes; importa o pedido só quando há chance de etiqueta."""
+def ml_pending_label_watch_once(*, all_candidates: bool = False,
+                                wait_for_lock: bool = False,
+                                source: str = "API Mercado Livre / watcher etiqueta",
+                                progress_callback: Any = None) -> dict[str, Any]:
+    """Reconsulta shipments pendentes com rotação justa e vínculo pelo ZPL real."""
+    if not ML_PENDING_LABEL_LOCK.acquire(blocking=wait_for_lock):
+        return {"checked": 0, "total": 0, "triggered": 0, "ready": 0,
+                "errors": 0, "running": True}
     checked = triggered = ready = errors = 0
-    for order_id, shipment_id in _ml_pending_label_candidates():
-        checked += 1
-        try:
-            shipment = ml_api_get(
-                f"/shipments/{quote(shipment_id)}?views=destination",
-                headers={"x-format-new": "true", "X-Api-Version": "2"},
-            )
-            if not isinstance(shipment, dict):
-                continue
-            status = str(shipment.get("status") or "").strip().lower()
-            substatus = str(shipment.get("substatus") or "").strip().lower()
+    try:
+        # Valida/renova uma vez antes do lote. Assim um problema de autenticação
+        # gera um único erro, em vez de um erro repetido para cada pedido.
+        ml_access_token()
+        candidates = _ml_pending_label_candidates(
+            limit=None if all_candidates else ML_PENDING_WATCH_BATCH,
+            rotate=not all_candidates,
+        )
+        total = len(candidates)
+        for order_id, shipment_id in candidates:
+            checked += 1
+            try:
+                shipment = ml_api_get(
+                    f"/shipments/{quote(shipment_id)}?views=destination",
+                    headers={"x-format-new": "true", "X-Api-Version": "2"},
+                )
+                if not isinstance(shipment, dict):
+                    continue
+                status = str(shipment.get("status") or "").strip().lower()
+                substatus = str(shipment.get("substatus") or "").strip().lower()
 
-            # O substatus invoice_pending pode ficar defasado. Em todo shipment
-            # ready_to_ship, consulta o ZPL e só libera a conferência se o vínculo
-            # da etiqueta for realmente gravado.
-            if status == "ready_to_ship":
-                triggered += 1
-                result = ml_import_order(order_id, source="API Mercado Livre / watcher etiqueta")
-                if result.get("ready_for_conference"):
-                    ready += 1
-                    ml_log_event(
-                        "shipment_watcher", f"/shipments/{shipment_id}",
-                        "", ML_CLIENT_ID, "PRONTO PARA CONFERÊNCIA",
-                        json_dumps({"order_id": order_id, "shipment_id": shipment_id,
-                                    "substatus": substatus, "fiscal_name": result.get("fiscal_name") or ""})
-                    )
-                elif result.get("fiscal_name_updated"):
-                    ml_log_event(
-                        "shipment_watcher", f"/orders/{order_id}",
-                        "", ML_CLIENT_ID, "NOME FISCAL ATUALIZADO",
-                        json_dumps({"order_id": order_id, "shipment_id": shipment_id,
-                                    "nome": result.get("fiscal_name") or ""})
-                    )
-        except Exception as exc:
-            errors += 1
-            ml_log_event(
-                "shipment_watcher", f"/shipments/{shipment_id}",
-                "", ML_CLIENT_ID, "ERRO", str(exc)[:1200]
-            )
-    return {"checked": checked, "triggered": triggered, "ready": ready, "errors": errors}
+                # O substatus invoice_pending pode ficar defasado. Em todo shipment
+                # ready_to_ship, consulta o ZPL e só libera a conferência se o vínculo
+                # da etiqueta for realmente gravado.
+                if status == "ready_to_ship":
+                    triggered += 1
+                    result = ml_import_order(order_id, source=source)
+                    if result.get("ready_for_conference"):
+                        ready += 1
+                        ml_log_event(
+                            "shipment_watcher", f"/shipments/{shipment_id}",
+                            "", ML_CLIENT_ID, "PRONTO PARA CONFERÊNCIA",
+                            json_dumps({"order_id": order_id, "shipment_id": shipment_id,
+                                        "substatus": substatus, "fiscal_name": result.get("fiscal_name") or ""})
+                        )
+                    elif result.get("fiscal_name_updated"):
+                        ml_log_event(
+                            "shipment_watcher", f"/orders/{order_id}",
+                            "", ML_CLIENT_ID, "NOME FISCAL ATUALIZADO",
+                            json_dumps({"order_id": order_id, "shipment_id": shipment_id,
+                                        "nome": result.get("fiscal_name") or ""})
+                        )
+            except Exception as exc:
+                message = str(exc)
+                systemic = any(marker in message for marker in (
+                    "Refresh token", "HTTP 401", "Falha de conexão com Mercado Livre",
+                    "ML_CLIENT_ID / ML_CLIENT_SECRET",
+                ))
+                if systemic:
+                    raise RuntimeError(message) from exc
+                errors += 1
+                ml_log_event(
+                    "shipment_watcher", f"/shipments/{shipment_id}",
+                    "", ML_CLIENT_ID, "ERRO", message[:1200]
+                )
+            finally:
+                if callable(progress_callback):
+                    try:
+                        progress_callback({"checked": checked, "total": total,
+                                           "triggered": triggered, "ready": ready,
+                                           "errors": errors})
+                    except Exception:
+                        pass
+        return {"checked": checked, "total": total, "triggered": triggered,
+                "ready": ready, "errors": errors, "running": False}
+    finally:
+        ML_PENDING_LABEL_LOCK.release()
 
 
 def ml_pending_label_watch_loop(stop_event: threading.Event) -> None:
     """Watcher interno leve; notificações continuam sendo o caminho principal."""
-    while not stop_event.wait(ML_PENDING_WATCH_INTERVAL):
+    consecutive_errors = 0
+    while not stop_event.is_set():
         try:
             row = ml_integration_row()
             if not row or not str(row["access_token"] or "").strip():
-                continue
-            ml_pending_label_watch_once()
+                consecutive_errors = 0
+            else:
+                result = ml_pending_label_watch_once()
+                all_failed = bool(result.get("checked") and result.get("errors") >= result.get("checked"))
+                consecutive_errors = min(consecutive_errors + 1, 6) if all_failed else 0
         except Exception as exc:
+            consecutive_errors = min(consecutive_errors + 1, 6)
             try:
                 ml_log_event("shipment_watcher", "/pending", "", ML_CLIENT_ID, "ERRO", str(exc)[:1200])
             except Exception:
                 pass
+        wait_seconds = min(600, ML_PENDING_WATCH_INTERVAL * (2 ** consecutive_errors))
+        if stop_event.wait(wait_seconds):
+            break
+
+
+def ml_label_verify_status_payload() -> dict[str, Any]:
+    with ML_LABEL_VERIFY_STATUS_LOCK:
+        return dict(ML_LABEL_VERIFY_STATUS)
+
+
+def _ml_label_verify_update(**changes: Any) -> dict[str, Any]:
+    with ML_LABEL_VERIFY_STATUS_LOCK:
+        ML_LABEL_VERIFY_STATUS.update(changes)
+        return dict(ML_LABEL_VERIFY_STATUS)
+
+
+def ml_verify_available_labels_job(actor: str = "admin") -> None:
+    """Reconcilia pedidos manuais e força uma volta completa nas etiquetas pendentes."""
+    try:
+        ml_access_token()
+        _ml_label_verify_update(phase="reconciling", message="Procurando pedidos manuais na API...")
+        manual = ml_reconcile_manual_orders_once(wait_for_lock=True)
+        manual_found = int(manual.get("manual") or 0)
+        manual_matched = int(manual.get("matched") or 0)
+        manual_ready = int(manual.get("ready") or 0)
+        manual_errors = int(manual.get("errors") or 0)
+        total = len(_ml_pending_label_candidates(limit=None, rotate=False))
+        _ml_label_verify_update(
+            phase="checking", total=total, manual_found=manual_found,
+            manual_matched=manual_matched, manual_ready=manual_ready,
+            errors=manual_errors, message=f"Verificando {total} etiqueta(s) pendente(s)...",
+        )
+
+        def progress(data: dict[str, Any]) -> None:
+            linked = manual_ready + int(data.get("ready") or 0)
+            _ml_label_verify_update(
+                checked=int(data.get("checked") or 0), total=int(data.get("total") or total),
+                triggered=int(data.get("triggered") or 0), linked=linked,
+                errors=manual_errors + int(data.get("errors") or 0),
+                message=f"Verificadas {data.get('checked') or 0} de {data.get('total') or total}; {linked} vinculada(s).",
+            )
+
+        scan = ml_pending_label_watch_once(
+            all_candidates=True, wait_for_lock=True,
+            source="API Mercado Livre / verificação manual de etiquetas",
+            progress_callback=progress,
+        )
+        remaining = len(_ml_pending_label_candidates(limit=None, rotate=False))
+        linked = manual_ready + int(scan.get("ready") or 0)
+        errors = manual_errors + int(scan.get("errors") or 0)
+        message = (
+            f"Verificação concluída: {linked} etiqueta(s) vinculada(s); "
+            f"{remaining} pedido(s) ainda aguardando liberação no Mercado Livre."
+        )
+        final_status = _ml_label_verify_update(
+            running=False, phase="done", checked=int(scan.get("checked") or 0),
+            total=int(scan.get("total") or total), triggered=int(scan.get("triggered") or 0),
+            linked=linked, remaining=remaining, errors=errors,
+            finished_at=now_iso(), message=message,
+        )
+        ml_log_event(
+            "label_manual_scan", "/shipments", actor, ML_CLIENT_ID,
+            "CONCLUÍDO" if not errors else "PARCIAL",
+            json_dumps({k: final_status.get(k) for k in (
+                "checked", "total", "linked", "remaining", "errors",
+                "manual_found", "manual_matched", "manual_ready",
+            )}),
+        )
+    except Exception as exc:
+        message = str(exc)[:1200]
+        current_errors = int(ml_label_verify_status_payload().get("errors") or 0)
+        _ml_label_verify_update(
+            running=False, phase="error", errors=current_errors + 1,
+            finished_at=now_iso(), message=message,
+        )
+        try:
+            ml_log_event("label_manual_scan", "/shipments", actor, ML_CLIENT_ID, "ERRO", message)
+        except Exception:
+            pass
+
+
+def ml_start_available_labels_verification(actor: str = "admin") -> dict[str, Any]:
+    with ML_LABEL_VERIFY_STATUS_LOCK:
+        if ML_LABEL_VERIFY_STATUS.get("running"):
+            return dict(ML_LABEL_VERIFY_STATUS)
+        ML_LABEL_VERIFY_STATUS.clear()
+        ML_LABEL_VERIFY_STATUS.update({
+            "running": True, "phase": "starting", "checked": 0, "total": 0,
+            "triggered": 0, "linked": 0, "remaining": 0, "errors": 0,
+            "manual_found": 0, "manual_matched": 0, "manual_ready": 0,
+            "started_at": now_iso(), "finished_at": "",
+            "message": "Iniciando verificação de etiquetas...",
+        })
+        status = dict(ML_LABEL_VERIFY_STATUS)
+    threading.Thread(
+        target=ml_verify_available_labels_job,
+        args=(actor,), name="ml-manual-label-verifier", daemon=True,
+    ).start()
+    return status
 
 
 def _ml_existing_order_ids() -> set[str]:
@@ -3821,7 +4002,7 @@ def ml_manual_sync() -> dict[str, Any]:
 
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/14.4"
+    server_version = "NoromakExpedicao/14.5"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
@@ -3974,6 +4155,11 @@ class AppHandler(BaseHTTPRequestHandler):
             if ctx is not None:
                 self.send_json({"ok": True, "mercadolivre": ml_status_payload()})
             return
+        if path == "/api/integracoes/mercadolivre/labels/verify/status":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                self.send_json({"ok": True, "status": ml_label_verify_status_payload()})
+            return
         if path == "/api/integracoes/mercadolivre/connect":
             ctx = self.auth(admin_only=True)
             if ctx is not None:
@@ -4103,6 +4289,13 @@ class AppHandler(BaseHTTPRequestHandler):
                     self.send_json(ml_manual_sync())
                 except Exception as exc:
                     self.send_json({"error": str(exc)}, 502)
+            return
+        if path == "/api/integracoes/mercadolivre/labels/verify":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                status = ml_start_available_labels_verification(str(ctx.get("username") or "admin"))
+                audit(ctx["username"], "ml.labels.verify", "Mercado Livre")
+                self.send_json({"ok": True, "status": status}, 202)
             return
         if path == "/api/integracoes/mercadolivre/disconnect":
             ctx = self.auth(admin_only=True)

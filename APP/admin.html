@@ -7,11 +7,11 @@
 <meta name="application-name" content="Noromak Admin">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="manifest" href="/expedicao/manifest-admin.webmanifest?v=14.4" crossorigin="use-credentials">
-<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=14.4">
-<link rel="icon" href="/favicon.ico?v=14.4" sizes="any">
-<link rel="shortcut icon" href="/favicon.ico?v=14.4">
-<link rel="stylesheet" href="/expedicao/pwa-install.css?v=14.4">
+<link rel="manifest" href="/expedicao/manifest-admin.webmanifest?v=14.5" crossorigin="use-credentials">
+<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=14.5">
+<link rel="icon" href="/favicon.ico?v=14.5" sizes="any">
+<link rel="shortcut icon" href="/favicon.ico?v=14.5">
+<link rel="stylesheet" href="/expedicao/pwa-install.css?v=14.5">
 <title>Noromak - Administração dos Pedidos Compartilhados</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
@@ -421,11 +421,12 @@
   .integracao-card{border:1px solid #dbe4ee;border-radius:12px;padding:16px;background:#fff}
   .integracao-card h3{margin:0 0 8px;color:var(--primary)}
   .integracao-status{display:inline-flex;align-items:center;gap:7px;padding:7px 10px;border-radius:999px;font-size:11px;font-weight:900;margin:4px 0 12px}
-  .integracao-status.ok{background:#dcfce7;color:#166534}.integracao-status.off{background:#f1f5f9;color:#475569}.integracao-status.erro{background:#fee2e2;color:#991b1b}
+  .integracao-status.ok{background:#dcfce7;color:#166534}.integracao-status.aviso{background:#fef3c7;color:#92400e}.integracao-status.off{background:#f1f5f9;color:#475569}.integracao-status.erro{background:#fee2e2;color:#991b1b}
   .integracao-dados{display:grid;grid-template-columns:155px 1fr;gap:7px 10px;font-size:12px;margin:8px 0 14px}
   .integracao-dados b{color:#334155}.integracao-dados span{color:#475569;word-break:break-word}
   .integracao-acoes{display:flex;gap:8px;flex-wrap:wrap}
   .integracao-nota{margin-top:12px;padding:10px 12px;border-radius:8px;background:#eff6ff;border:1px solid #bfdbfe;color:#1e3a8a;font-size:11px;line-height:1.45}
+  .integracao-nota.processando{background:#fff7ed;border-color:#fdba74;color:#9a3412}.integracao-nota.sucesso{background:#ecfdf5;border-color:#86efac;color:#166534}.integracao-nota.erro{background:#fef2f2;border-color:#fca5a5;color:#991b1b}
   .integracao-alerta{margin-top:12px;padding:10px 12px;border-radius:8px;background:#fff7ed;border:1px solid #fdba74;color:#9a3412;font-size:11px;line-height:1.45}
   .ml-log-wrap{max-height:48vh;overflow:auto;border:1px solid #e2e8f0;border-radius:8px}
   .ml-log-table{width:100%;border-collapse:collapse;font-size:11px}.ml-log-table th,.ml-log-table td{padding:7px 8px;border-bottom:1px solid #e2e8f0;text-align:left;vertical-align:top}
@@ -443,7 +444,7 @@
 </style>
 <script src="/expedicao/shared-storage.js"></script>
 <script src="/expedicao/web-auth.js"></script>
-<script defer src="/expedicao/pwa-install.js?v=14.4"></script>
+<script defer src="/expedicao/pwa-install.js?v=14.5"></script>
 
 <style id="estiloEtiquetasPersistentesV98">
   .etiquetas-persistentes-box{margin:14px 0 18px;border:1px solid #c7d4e1;border-radius:9px;background:#f8fbfe;padding:13px}
@@ -671,7 +672,7 @@
 <div id="loginAdmin">
   <div class="box-login">
     <div class="logo-box">
-      <img src="/nk-logo.svg?v=14.4" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=14.4';">
+      <img src="/nk-logo.svg?v=14.5" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=14.5';">
     </div>
     <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 12.2 — permissões por módulo</div>
     <div style="font-size:12px;color:#667;margin:-8px 0 14px;line-height:1.4;">Use o administrador principal ou qualquer usuário cadastrado com perfil <b>Admin</b>.</div>
@@ -689,7 +690,7 @@
 <div id="painelConteudo" class="container-admin">
   <div class="header-topo">
     <div class="header-identidade">
-      <div class="logo-mini-box"><img src="/grupo-noromak.png?v=14.4" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=14.4';"></div>
+      <div class="logo-mini-box"><img src="/grupo-noromak.png?v=14.5" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=14.5';"></div>
       <div class="header-titulos"><h1>Administração dos pedidos compartilhados</h1><small>Dados centralizados no servidor Web em tempo real</small></div>
     </div>
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end;"><a href="/expedicao/estacao-impressao" target="_blank" style="text-decoration:none;background:#1F57A5;color:white;padding:8px 13px;border-radius:6px;font-size:12px;font-weight:800;">🖨 ESTAÇÃO ZEBRA</a><button type="button" class="pwa-install-btn pwa-header" data-pwa-install>⬇ Instalar Admin</button><span id="statusBancoAdmin" class="save-pill">● Banco Web ativo</span><button class="btn-sair" onclick="sairAdmin()">Sair do Painel</button></div>
@@ -922,9 +923,11 @@
           <div class="integracao-acoes">
             <button type="button" id="btnMlConectar" class="btn-primario" onclick="conectarMercadoLivreAdmin()">Conectar Mercado Livre</button>
             <button type="button" id="btnMlSincronizar" class="btn-sucesso" onclick="sincronizarMercadoLivreAdmin()" disabled>↻ Sincronizar agora</button>
+            <button type="button" id="btnMlVerificarEtiquetas" class="btn-primario" onclick="verificarEtiquetasDisponiveisMercadoLivreAdmin()" disabled>🏷️ Verificar etiquetas disponíveis e vincular</button>
             <button type="button" id="btnMlDesconectar" class="btn-perigo" onclick="desconectarMercadoLivreAdmin()" disabled>Desconectar</button>
           </div>
           <div id="mlIntegracaoMensagem" class="integracao-nota">As credenciais ficam somente no <code>/home/expedicao/.env</code>; o Client Secret nunca é enviado ao navegador.</div>
+          <div id="mlVerificacaoEtiquetasStatus" class="integracao-nota" style="display:none"></div>
           <div class="integracao-alerta"><b>Importante para o nginx:</b> a rota <code>/expedicao/api/integracoes/mercadolivre/notificacoes</code> precisa aceitar chamadas do Mercado Livre sem o login do CRM. Ela não dá acesso aos dados do sistema; apenas recebe o evento e valida o <code>application_id</code>/<code>user_id</code> antes de consultar a API.</div>
         </div>
         <div class="integracao-card">
@@ -2724,7 +2727,7 @@ function abrirAbaAdmin(nome){
   if(nome==="historico") carregarLogs();
   if(nome==="historico-sku") carregarHistoricoSkuAdmin();
   if(nome==="kits") renderizarKitsAdmin();
-  if(nome==="integracoes"){carregarIntegracaoMercadoLivreAdmin();carregarLogsMercadoLivreAdmin();}
+  if(nome==="integracoes"){carregarIntegracaoMercadoLivreAdmin();carregarLogsMercadoLivreAdmin();carregarStatusVerificacaoEtiquetasAdmin();}
 }
 function autenticarAdmin() {
   const campoUsuario = document.getElementById("usuarioAdmin");
@@ -5757,6 +5760,14 @@ function mlDataHora(v){
   if(!v)return "—";
   try{return new Date(v).toLocaleString("pt-BR");}catch(_){return String(v);}
 }
+function mlDuracaoCurta(segundos){
+  const s=Math.max(0,Number(segundos)||0);
+  if(s<60)return "menos de 1 minuto";
+  if(s<3600)return `${Math.ceil(s/60)} min`;
+  return `${Math.floor(s/3600)}h ${Math.ceil((s%3600)/60)}min`;
+}
+let mlVerificacaoEtiquetasEmAndamento=false;
+let mlIntegracaoOperacional=false;
 async function mlApiAdmin(url,opts={}){
   const r=await fetch(url,{credentials:"same-origin",cache:"no-store",...opts,headers:{Accept:"application/json",...(opts.body?{"Content-Type":"application/json"}:{}),...(opts.headers||{})}});
   let d={};try{d=await r.json();}catch(_){}
@@ -5769,21 +5780,25 @@ async function carregarIntegracaoMercadoLivreAdmin(){
     const d=await mlApiAdmin("/expedicao/api/integracoes/mercadolivre/status");
     const ml=d.mercadolivre||{};
     const configurado=ml.configured===true, conectado=ml.connected===true, reconectar=ml.needs_reconnect===true;
-    badge.className="integracao-status "+(conectado?"ok":reconectar?"erro":configurado?"off":"erro");
-    badge.textContent=conectado?"🟢 Conectado":reconectar?"🟠 Reconexão necessária":configurado?"⚪ Configurado, aguardando conexão":"🔴 Credenciais ainda não configuradas";
+    mlIntegracaoOperacional=conectado;
+    badge.className="integracao-status "+(conectado&&reconectar?"aviso":conectado?"ok":reconectar?"erro":configurado?"off":"erro");
+    badge.textContent=conectado&&reconectar?"🟡 Conectado • renovação pendente":conectado?"🟢 Conectado":reconectar?"🔴 Reconexão necessária":configurado?"⚪ Configurado, aguardando conexão":"🔴 Credenciais ainda não configuradas";
     document.getElementById("mlIntegracaoConta").textContent=ml.nickname||"—";
     document.getElementById("mlIntegracaoSeller").textContent=ml.seller_id||"—";
     document.getElementById("mlIntegracaoSync").textContent=ml.last_sync_at?mlDataHora(ml.last_sync_at):"—";
     document.getElementById("mlIntegracaoCallback").textContent=ml.redirect_uri||"—";
     document.getElementById("mlIntegracaoNotificacoes").textContent=ml.notification_url||"—";
-    const conectar=document.getElementById("btnMlConectar"),sync=document.getElementById("btnMlSincronizar"),desconectar=document.getElementById("btnMlDesconectar");
-    if(conectar){conectar.disabled=!configurado;conectar.textContent=(conectado||reconectar)?"Reconectar Mercado Livre":"Conectar Mercado Livre";}
+    const conectar=document.getElementById("btnMlConectar"),sync=document.getElementById("btnMlSincronizar"),verificar=document.getElementById("btnMlVerificarEtiquetas"),desconectar=document.getElementById("btnMlDesconectar");
+    if(conectar){conectar.disabled=!configurado;conectar.textContent=reconectar?"Renovar conexão Mercado Livre":conectado?"Reconectar Mercado Livre":"Conectar Mercado Livre";}
     if(sync)sync.disabled=!conectado;
+    if(verificar)verificar.disabled=!conectado||mlVerificacaoEtiquetasEmAndamento;
     if(desconectar)desconectar.disabled=!(conectado||reconectar);
     const msg=document.getElementById("mlIntegracaoMensagem");
     if(msg){
+      const motivoRenovacao=ml.offline_access_granted===false?'A aplicação do Mercado Livre está sem a permissão de acesso offline, por isso não recebe renovação automática.':'O Mercado Livre não forneceu o token necessário para renovação automática.';
       if(!configurado)msg.innerHTML='Configure <b>ML_CLIENT_ID</b> e <b>ML_CLIENT_SECRET</b> em <code>/home/expedicao/.env</code> e reinicie o serviço.';
-      else if(reconectar)msg.innerHTML='⚠ <b>Reconexão necessária.</b> O sistema não considera a integração operacional sem refresh token. Ao reconectar, ele recupera automaticamente os pedidos perdidos desde a última sincronização válida.';
+      else if(conectado&&reconectar)msg.innerHTML='🟡 <b>A conta está conectada e operacional agora.</b> '+motivoRenovacao+' O acesso atual permanece válido por aproximadamente <b>'+mlHtmlSeguro(mlDuracaoCurta(ml.seconds_until_expiry))+'</b>; “Renovar conexão” gera um novo período de acesso.';
+      else if(reconectar)msg.innerHTML='⚠ <b>O acesso atual venceu e precisa ser renovado.</b> Ao reconectar, o sistema recupera automaticamente os pedidos perdidos desde a última sincronização válida.';
       else if(ml.last_error)msg.innerHTML='⚠ Último erro: <b>'+mlHtmlSeguro(ml.last_error)+'</b>';
       else msg.innerHTML=conectado?'✅ Conta conectada. Webhook + watcher ficam ativos no servidor mesmo sem nenhum computador aberto. Após reconexão, o catch-up recupera automaticamente o intervalo perdido.':'Clique em <b>Conectar Mercado Livre</b> para autorizar a conta vendedora.';
     }
@@ -5794,6 +5809,63 @@ async function carregarIntegracaoMercadoLivreAdmin(){
 }
 function conectarMercadoLivreAdmin(){
   window.location.href="/expedicao/api/integracoes/mercadolivre/connect";
+}
+function renderizarStatusVerificacaoEtiquetasAdmin(status){
+  const el=document.getElementById("mlVerificacaoEtiquetasStatus"),btn=document.getElementById("btnMlVerificarEtiquetas");
+  if(!el)return;
+  status=status||{};
+  mlVerificacaoEtiquetasEmAndamento=status.running===true;
+  if(btn){
+    btn.disabled=mlVerificacaoEtiquetasEmAndamento||!mlIntegracaoOperacional;
+    btn.textContent=mlVerificacaoEtiquetasEmAndamento?"Verificando etiquetas...":"🏷️ Verificar etiquetas disponíveis e vincular";
+  }
+  if(!status.started_at&&!status.message){el.style.display="none";return;}
+  el.style.display="block";
+  el.className="integracao-nota "+(status.running?"processando":status.phase==="error"?"erro":"sucesso");
+  const progresso=status.total?`<br><b>Progresso:</b> ${Number(status.checked||0)} de ${Number(status.total||0)}`:"";
+  const manuais=status.manual_found?`<br><b>Pedidos manuais encontrados:</b> ${Number(status.manual_found||0)} · reconciliados: ${Number(status.manual_matched||0)}`:"";
+  const erros=status.errors?`<br><b>Falhas:</b> ${Number(status.errors||0)}`:"";
+  el.innerHTML=(status.running?"⏳ ":status.phase==="error"?"❌ ":"✅ ")+mlHtmlSeguro(status.message||"Verificação concluída.")+progresso+manuais+erros;
+}
+async function carregarStatusVerificacaoEtiquetasAdmin(){
+  try{
+    const d=await mlApiAdmin("/expedicao/api/integracoes/mercadolivre/labels/verify/status");
+    renderizarStatusVerificacaoEtiquetasAdmin(d.status||{});
+    return d.status||{};
+  }catch(e){
+    const el=document.getElementById("mlVerificacaoEtiquetasStatus");
+    if(el){el.style.display="block";el.className="integracao-nota erro";el.textContent="Não foi possível consultar a verificação: "+e.message;}
+    return {running:false,phase:"error",message:e.message};
+  }
+}
+async function aguardarVerificacaoEtiquetasAdmin(){
+  for(let tentativa=0;tentativa<600;tentativa++){
+    await new Promise(resolve=>setTimeout(resolve,1200));
+    const status=await carregarStatusVerificacaoEtiquetasAdmin();
+    if(!status.running){
+      await carregarIntegracaoMercadoLivreAdmin();
+      await carregarLogsMercadoLivreAdmin();
+      if(typeof appStorage?.sincronizarAgora==="function")await appStorage.sincronizarAgora();
+      if(typeof carregarPedidosAdmin==="function")carregarPedidosAdmin();
+      if(typeof renderizarEtiquetasPersistentes==="function")renderizarEtiquetasPersistentes();
+      return status;
+    }
+  }
+  throw new Error("A verificação continua no servidor. O resultado aparecerá ao reabrir esta aba.");
+}
+async function verificarEtiquetasDisponiveisMercadoLivreAdmin(){
+  const btn=document.getElementById("btnMlVerificarEtiquetas");
+  if(btn){btn.disabled=true;btn.textContent="Verificando etiquetas...";}
+  try{
+    const d=await mlApiAdmin("/expedicao/api/integracoes/mercadolivre/labels/verify",{method:"POST",body:"{}"});
+    renderizarStatusVerificacaoEtiquetasAdmin(d.status||{});
+    await aguardarVerificacaoEtiquetasAdmin();
+  }catch(e){
+    mlVerificacaoEtiquetasEmAndamento=false;
+    const el=document.getElementById("mlVerificacaoEtiquetasStatus");
+    if(el){el.style.display="block";el.className="integracao-nota erro";el.textContent="Erro ao verificar etiquetas: "+e.message;}
+    await carregarIntegracaoMercadoLivreAdmin();
+  }
 }
 async function sincronizarMercadoLivreAdmin(){
   const btn=document.getElementById("btnMlSincronizar");if(btn){btn.disabled=true;btn.textContent="Sincronizando...";}
@@ -5836,6 +5908,6 @@ document.addEventListener("DOMContentLoaded",()=>{
 });
 </script>
 
-<script src="/expedicao/user-permissions.js?v=14.4"></script>
+<script src="/expedicao/user-permissions.js?v=14.5"></script>
 </body>
 </html>

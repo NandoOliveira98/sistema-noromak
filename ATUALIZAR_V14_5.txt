@@ -1,0 +1,14 @@
+PUBLICAÇÃO V14.5
+
+No Git Bash do Windows:
+git status
+git add -A
+git commit -m "v14.5 melhora verificacao e vinculo de etiquetas"
+./publicar.sh
+
+Depois da publicação:
+1. Abra Admin > Integrações.
+2. Use "Verificar etiquetas disponíveis e vincular" quando quiser forçar uma
+   varredura completa. O resultado aparece no próprio cartão da integração.
+3. "Conectado • renovação pendente" significa que a integração funciona agora,
+   mas o Mercado Livre não forneceu refresh token para renovação automática.

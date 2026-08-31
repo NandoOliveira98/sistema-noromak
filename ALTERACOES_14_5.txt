@@ -1,0 +1,16 @@
+ALTERAÇÕES V14.5
+================
+
+- O monitor de etiquetas usa rotação justa entre todos os pedidos pendentes.
+  Pedidos antigos sem etiqueta não bloqueiam mais os pedidos posteriores do lote.
+- Erros de autenticação são validados uma vez por ciclo e recebem espera progressiva,
+  evitando milhares de tentativas repetidas e crescimento desnecessário do log.
+- Pedidos adicionados por print/extensão continuam sendo reconciliados enquanto o
+  access token estiver válido, mesmo quando o Mercado Livre não enviou refresh token.
+- Novo botão no Admin: "Verificar etiquetas disponíveis e vincular". A tarefa roda
+  no servidor, reconcilia pedidos manuais, verifica todas as pendências e mostra
+  progresso, etiquetas vinculadas, pendências e falhas.
+- O status da integração diferencia "conectada e operacional agora" de "renovação
+  pendente". A sincronização e a verificação continuam liberadas durante a validade
+  do token atual.
+- Identificação interna e cache do PWA atualizados para 14.5.
