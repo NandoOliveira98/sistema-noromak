@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "14.26"
+APP_VERSION = "14.27"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2569,6 +2569,26 @@ def _ml_billing_details(order: dict[str, Any]) -> dict[str, Any]:
 def _ml_billing_name(order: dict[str, Any]) -> str:
     return str(_ml_billing_details(order).get("name") or "").strip()
 
+
+def _ml_real_buyer_name(order: dict[str, Any]) -> str:
+    """Nome real do comprador da order, sem usar nickname.
+
+    Usado apenas enquanto Dados para NF-e ainda não estão disponíveis.
+    Nunca usa destinatário/receiver_name e nunca usa nickname/username.
+    """
+    buyer = order.get("buyer") if isinstance(order.get("buyer"), dict) else {}
+    first = str(buyer.get("first_name") or buyer.get("name") or "").strip()
+    last = str(buyer.get("last_name") or buyer.get("surname") or "").strip()
+    full = " ".join(x for x in (first, last) if x).strip()
+    if full:
+        return full
+
+    # Algumas variantes da API encapsulam os dados pessoais em buyer.user.
+    user = buyer.get("user") if isinstance(buyer.get("user"), dict) else {}
+    first = str(user.get("first_name") or user.get("name") or "").strip()
+    last = str(user.get("last_name") or user.get("surname") or "").strip()
+    return " ".join(x for x in (first, last) if x).strip()
+
 def _ml_dispatch_date(shipment_id: str, shipment: dict[str, Any] | None) -> str:
     """Data limite de despacho prometida pelo Mercado Livre.
 
@@ -3420,12 +3440,16 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
         ).strip()
     buyer = order.get("buyer") if isinstance(order.get("buyer"), dict) else {}
 
-    # V14.21: Cliente é EXCLUSIVAMENTE o comprador fiscal de Dados para NF-e.
-    # Nunca usar nickname, first_name/last_name do order, receiver_name ou "Quem recebe".
+    # V14.27: prioriza sempre Dados para NF-e. Em pedidos recém-criados o
+    # billing-info pode ainda não existir; nesse intervalo usa somente o NOME REAL
+    # do comprador da própria order (first_name + last_name). Nunca usa nickname,
+    # username, receiver_name ou "Quem recebe". Assim Cliente não fica vazio e,
+    # quando o fiscal aparecer, um refresh posterior o substitui automaticamente.
     billing_details = _ml_billing_details(order)
     fiscal_name = str(billing_details.get("name") or "").strip()
-    client = fiscal_name
-    client_name_source = "dados_fiscais_nf" if fiscal_name else ""
+    buyer_real_name = _ml_real_buyer_name(order)
+    client = fiscal_name or buyer_real_name
+    client_name_source = "dados_fiscais_nf" if fiscal_name else ("comprador_order" if buyer_real_name else "")
     billing_info_id = str(billing_details.get("billing_info_id") or "").strip()
     billing_errors = billing_details.get("errors") if isinstance(billing_details.get("errors"), list) else []
 
@@ -3663,6 +3687,7 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
         "label_error": str(fiscal_state.get("label_error") or ""),
         "fiscal_name": fiscal_name,
         "fiscal_name_updated": bool(fiscal_name),
+        "buyer_real_name": buyer_real_name,
         "client_name": client,
         "client_name_source": client_name_source,
         "billing_info_id": billing_info_id,
