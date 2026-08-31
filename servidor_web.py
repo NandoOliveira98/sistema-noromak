@@ -4838,6 +4838,245 @@ def _ml_billing_parse_order_result(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+
+def _ml_billing_order_ids_from_node(node: Any) -> set[str]:
+    """Extrai order/pack IDs de estruturas variáveis do Billing ML."""
+    out: set[str] = set()
+    def walk(v: Any, parent_key: str = "") -> None:
+        if isinstance(v, dict):
+            for k, x in v.items():
+                lk = str(k).lower()
+                if lk in ("order_id", "orderid", "order", "pack_id", "packid"):
+                    if isinstance(x, dict):
+                        candidate = x.get("id") or x.get("order_id") or x.get("pack_id")
+                        if candidate not in (None, ""):
+                            out.add(str(candidate))
+                    elif isinstance(x, (str, int, float)) and str(x).strip():
+                        text = str(x).strip()
+                        if text.replace(".", "", 1).isdigit():
+                            out.add(text.split(".")[0])
+                walk(x, lk)
+        elif isinstance(v, list):
+            for x in v:
+                walk(x, parent_key)
+    walk(node)
+    return out
+
+
+def _ml_billing_period_parse(payload: Any, requested_ids: list[str], document_type: str) -> dict[str, dict[str, Any]]:
+    """Classifica detalhes do Billing por order/pack, aceitando variações do contrato.
+
+    BILL soma débitos. CREDIT_NOTE é tratada como crédito/bonificação e reduz outros custos
+    ou a própria tarifa quando o detalhe identifica explicitamente sale fee.
+    """
+    wanted = {str(x) for x in requested_ids if str(x).strip()}
+    result = {oid: {"fee": 0.0, "other": 0.0, "bonus": 0.0, "fee_bonus": 0.0, "other_bonus": 0.0, "entries": [], "seen": False, "fee_seen": False} for oid in wanted}
+    doc_credit = str(document_type or "").upper() in ("CREDIT_NOTE", "CREDIT", "BONUS")
+    details = _ml_billing_flat_details(payload)
+    # Alguns responses trazem result rows que não atendem ao detector acima. Inclui também
+    # objetos com detail_amount/amount e algum identificador de order.
+    def collect_extra(v: Any, out: list[dict[str, Any]]) -> None:
+        if isinstance(v, dict):
+            keys = {str(k).lower() for k in v}
+            if ("detail_amount" in keys or "amount" in keys or "charge_amount" in keys) and _ml_billing_order_ids_from_node(v):
+                out.append(v)
+            for x in v.values(): collect_extra(x, out)
+        elif isinstance(v, list):
+            for x in v: collect_extra(x, out)
+    extra: list[dict[str, Any]] = []
+    collect_extra(payload, extra)
+    seen_obj: set[int] = set()
+    merged: list[dict[str, Any]] = []
+    for d in details + extra:
+        if id(d) in seen_obj: continue
+        seen_obj.add(id(d)); merged.append(d)
+    for d in merged:
+        ids = _ml_billing_order_ids_from_node(d) & wanted
+        if not ids:
+            # Em lotes unitários, algumas respostas omitem order_id do detalhe.
+            if len(wanted) == 1:
+                ids = set(wanted)
+            else:
+                raw = json.dumps(d, ensure_ascii=False)
+                ids = {oid for oid in wanted if oid in raw}
+        if not ids:
+            continue
+        amount = _ml_billing_detail_amount(d)
+        if amount is None or amount == 0:
+            continue
+        dtype = str(d.get("detail_type") or d.get("type") or "").upper()
+        sub = str(d.get("detail_sub_type") or d.get("detail_sub_types") or "").upper()
+        text = " ".join(str(d.get(k) or "") for k in (
+            "transaction_detail", "transaction_detail_description", "detail_type_description",
+            "detail_sub_type", "detail_sub_type_description", "concept_type", "concept_type_description",
+            "marketplace_type", "description", "charge_type"
+        )).lower()
+        is_shipping = any(t in text for t in ("shipping", "envio", "frete", "mercado envios")) or sub in ("CE", "BE")
+        is_sale_fee = (sub in ("CV", "BV") or any(t in text for t in (
+            "cargo por venta", "tarifa de venda", "tarifa por venda", "sale fee", "selling fee",
+            "comissão", "comissao", "comision", "commission", "tarifa por unidade"
+        )))
+        is_bonus = doc_credit or dtype in ("BONUS", "BONIFICATION", "CREDIT") or any(t in text for t in ("bonif", "rebate", "crédito", "credito"))
+        if is_shipping:
+            # Frete é conciliado por shipment costs para evitar dupla contagem.
+            continue
+        for oid in ids:
+            r = result[oid]; r["seen"] = True; r["entries"].append(d)
+            if is_sale_fee:
+                r["fee_seen"] = True
+                if is_bonus:
+                    r["bonus"] += amount
+                    r["fee_bonus"] += amount
+                else:
+                    r["fee"] += amount
+            else:
+                if is_bonus:
+                    r["bonus"] += amount
+                    r["other_bonus"] += amount
+                else:
+                    r["other"] += amount
+    for oid, r in result.items():
+        r["fee"] = round(max(0.0, r["fee"]), 2)
+        r["other"] = round(max(0.0, r["other"]), 2)
+        r["bonus"] = round(max(0.0, r["bonus"]), 2)
+        r["fee_bonus"] = round(max(0.0, r.get("fee_bonus") or 0.0), 2)
+        r["other_bonus"] = round(max(0.0, r.get("other_bonus") or 0.0), 2)
+    return result
+
+
+def _ml_billing_month_key(date_value: str) -> str:
+    dt = _ml_parse_datetime(date_value)
+    if dt is None:
+        dt = datetime.now(timezone.utc)
+    return f"{dt.year:04d}-{dt.month:02d}-01"
+
+
+def _ml_billing_fetch_period(order_ids: list[str], month_key: str, seller_id: str, document_type: str) -> dict[str, dict[str, Any]]:
+    """Consulta detalhe de faturamento do período por order_ids com paginação defensiva."""
+    ids = [str(x).strip() for x in order_ids if str(x).strip()]
+    if not ids:
+        return {}
+    aggregate = {oid: {"fee": 0.0, "other": 0.0, "bonus": 0.0, "fee_bonus": 0.0, "other_bonus": 0.0, "entries": [], "seen": False, "fee_seen": False} for oid in ids}
+    from_id = ""
+    for _page in range(20):
+        q: dict[str, str] = {
+            "document_type": str(document_type),
+            "order_ids": ",".join(ids),
+            "limit": "100",
+        }
+        if seller_id:
+            q["seller_id"] = str(seller_id)
+        if from_id:
+            q["from_id"] = from_id
+        endpoint = f"/billing/integration/periods/key/{quote(month_key)}/group/ML/details?" + urlencode(q)
+        payload = ml_api_get(endpoint)
+        parsed = _ml_billing_period_parse(payload, ids, document_type)
+        for oid, pr in parsed.items():
+            ar = aggregate[oid]
+            ar["fee"] += float(pr.get("fee") or 0)
+            ar["other"] += float(pr.get("other") or 0)
+            ar["bonus"] += float(pr.get("bonus") or 0)
+            ar["fee_bonus"] += float(pr.get("fee_bonus") or 0)
+            ar["other_bonus"] += float(pr.get("other_bonus") or 0)
+            ar["entries"].extend(pr.get("entries") or [])
+            ar["seen"] = bool(ar["seen"] or pr.get("seen"))
+            ar["fee_seen"] = bool(ar["fee_seen"] or pr.get("fee_seen"))
+        # Contratos observados usam next_id / next_from_id / paging.next. Se nenhum vier,
+        # uma consulta filtrada por até 60 orders normalmente já terminou.
+        next_id = ""
+        if isinstance(payload, dict):
+            for k in ("next_id", "next_from_id", "from_id"):
+                v = payload.get(k)
+                if v not in (None, "", from_id):
+                    next_id = str(v); break
+            paging = payload.get("paging")
+            if not next_id and isinstance(paging, dict):
+                v = paging.get("next") or paging.get("next_id") or paging.get("from_id")
+                if isinstance(v, dict): v = v.get("id") or v.get("from_id")
+                if v not in (None, "", from_id): next_id = str(v)
+        if not next_id:
+            break
+        from_id = next_id
+    for r in aggregate.values():
+        r["fee"] = round(max(0.0, r["fee"]), 2)
+        r["other"] = round(max(0.0, r["other"]), 2)
+        r["bonus"] = round(max(0.0, r["bonus"]), 2)
+        r["fee_bonus"] = round(max(0.0, r.get("fee_bonus") or 0.0), 2)
+        r["other_bonus"] = round(max(0.0, r.get("other_bonus") or 0.0), 2)
+    return aggregate
+
+
+def _ml_billing_fetch_orders_period(records: list[dict[str, Any]], seller_id: str) -> dict[str, dict[str, Any]]:
+    """Concilia por mês de venda: BILL + CREDIT_NOTE, com fallback order/details."""
+    groups: dict[str, list[str]] = {}
+    for rec in records:
+        oid = str(rec.get("order_id") or "").strip()
+        if not oid: continue
+        month = _ml_billing_month_key(str(rec.get("date") or ""))
+        if oid not in groups.setdefault(month, []): groups[month].append(oid)
+    output: dict[str, dict[str, Any]] = {}
+    diagnostics: dict[str, list[str]] = {}
+    for month, ids in groups.items():
+        for start in range(0, len(ids), 60):
+            chunk = ids[start:start+60]
+            bill_map: dict[str, dict[str, Any]] = {}
+            credit_map: dict[str, dict[str, Any]] = {}
+            errors: list[str] = []
+            try:
+                bill_map = _ml_billing_fetch_period(chunk, month, seller_id, "BILL")
+            except Exception as exc:
+                errors.append("Billing período BILL: " + str(exc)[:350])
+            try:
+                credit_map = _ml_billing_fetch_period(chunk, month, seller_id, "CREDIT_NOTE")
+            except Exception as exc:
+                errors.append("Billing período CREDIT_NOTE: " + str(exc)[:350])
+            for oid in chunk:
+                b = bill_map.get(oid) or {}; c = credit_map.get(oid) or {}
+                fee = float(b.get("fee") or 0)
+                other = float(b.get("other") or 0)
+                fee_bonus = float(b.get("fee_bonus") or 0) + float(c.get("fee_bonus") or 0)
+                other_bonus = float(b.get("other_bonus") or 0) + float(c.get("other_bonus") or 0)
+                bonus = fee_bonus + other_bonus
+                seen = bool(b.get("seen") or c.get("seen"))
+                fee_seen = bool(b.get("fee_seen"))
+                output[oid] = {
+                    "order_id": oid, "seller_id": str(seller_id or ""),
+                    "sale_fee": round(max(0.0, fee - fee_bonus), 2) if fee_seen else None,
+                    "other_cost": round(other - other_bonus, 2) if seen else None,
+                    "bonus": round(bonus, 2),
+                    "status": "ok" if fee_seen else ("partial" if seen else "partial"),
+                    "diagnostic": f"Billing período {month}: " + ("tarifa identificada" if fee_seen else "detalhes encontrados, mas tarifa de venda não identificada") + (("; " + "; ".join(errors)) if errors else ""),
+                    "fetched_at": now_iso(), "fetched_at_epoch": int(time.time()),
+                    "raw_json": json.dumps({"bill_entries": b.get("entries") or [], "credit_entries": c.get("entries") or []}, ensure_ascii=False)[:120000],
+                }
+    # Fallback oficial por order para o que não teve sale fee identificada no período.
+    missing = [oid for oid, row in output.items() if _money_number(row.get("sale_fee")) is None]
+    if missing:
+        fallback = _ml_billing_fetch_orders(missing, seller_id, force=True)
+        for oid in missing:
+            fb = fallback.get(oid) or {}
+            if _money_number(fb.get("sale_fee")) is not None:
+                row = dict(fb)
+                row["diagnostic"] = "Fallback billing/order/details: " + str(row.get("diagnostic") or "")
+                output[oid] = row
+            elif oid in output and fb.get("diagnostic"):
+                output[oid]["diagnostic"] += "; fallback: " + str(fb.get("diagnostic"))
+    # Persiste resultado final no cache usado pelo dashboard.
+    now_epoch = int(time.time())
+    for oid, row in output.items():
+        with DB_LOCK:
+            DB.execute("""INSERT INTO ml_profitability_billing_cache
+                (order_id,seller_id,sale_fee,other_cost,bonus,status,diagnostic,fetched_at,fetched_at_epoch,raw_json)
+                VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(order_id) DO UPDATE SET
+                seller_id=excluded.seller_id,sale_fee=excluded.sale_fee,other_cost=excluded.other_cost,bonus=excluded.bonus,
+                status=excluded.status,diagnostic=excluded.diagnostic,fetched_at=excluded.fetched_at,
+                fetched_at_epoch=excluded.fetched_at_epoch,raw_json=excluded.raw_json""",
+                (oid, str(seller_id or ""), row.get("sale_fee"), row.get("other_cost"), row.get("bonus"),
+                 row.get("status") or "partial", row.get("diagnostic") or "", now_iso(), now_epoch, row.get("raw_json") or ""))
+            DB.commit()
+    return output
+
+
 def _ml_billing_cached(order_id: str) -> dict[str, Any] | None:
     with DB_LOCK:
         row = DB.execute("SELECT * FROM ml_profitability_billing_cache WHERE order_id=?", (str(order_id),)).fetchone()
@@ -5171,7 +5410,7 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 1000, days: int
     if refresh and records:
         try:
             _, _seller_billing = ml_access_token()
-            billing_map = _ml_billing_fetch_orders([str(r.get("order_id") or "") for r in records], str(_seller_billing or ""), force=False)
+            billing_map = _ml_billing_fetch_orders_period(records, str(_seller_billing or ""))
         except Exception:
             billing_map = {}
     else:
@@ -5294,7 +5533,7 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 1000, days: int
                     captured_at=excluded.captured_at,raw_summary=excluded.raw_summary""",
                     (oid, sku, unit_cost, cost_source, sale_amount, ml_fee, ship_cost,
                      billing_other if billing_other is not None else _money_number(snap.get("other_ml_cost")), captured,
-                     json.dumps({"billing_status": billing_status, "billing_diagnostic": billing_diag, "billing_source": "billing/order/details" if billing else ""}, ensure_ascii=False)),
+                     json.dumps({"billing_status": billing_status, "billing_diagnostic": billing_diag, "billing_source": "billing/period/details + order/details fallback" if billing else ""}, ensure_ascii=False)),
                 )
                 DB.commit()
                 snap_row = DB.execute(
@@ -5344,7 +5583,7 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 1000, days: int
             "captured_at": snap.get("captured_at") or "",
             "billing_status": billing_status,
             "billing_diagnostic": billing_diag,
-            "fee_source": "Billing ML" if _money_number(billing.get("sale_fee")) is not None else ("Orders ML" if fee is not None and fee > 0 else "Não confirmado"),
+            "fee_source": ("Billing período ML" if _money_number(billing.get("sale_fee")) is not None and "período" in billing_diag.lower() else ("Billing ML" if _money_number(billing.get("sale_fee")) is not None else ("Orders ML" if fee is not None and fee > 0 else "Pendente de conciliação"))),
         })
 
     return {
@@ -5357,7 +5596,7 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 1000, days: int
     }
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/15.11"
+    server_version = "NoromakExpedicao/15.12"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
