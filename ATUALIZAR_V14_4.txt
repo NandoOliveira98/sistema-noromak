@@ -1,14 +1,9 @@
-PUBLICAÇÃO V14.4
+ATUALIZAÇÃO V14.4
 
-No Git Bash do Windows:
-git status
-git add -A
-git commit -m "v14.4 libera etiqueta pronta na conferencia"
-./publicar.sh
+Substitua os arquivos da versão anterior pelos arquivos desta versão e reinicie o servidor Web.
+Arquivos principais alterados:
+- servidor_web.py
+- APP/conferencia.html
+- VERSAO.txt
 
-Depois:
-1. A publicação reinicia o serviço automaticamente.
-2. Pedidos pendentes com etiqueta vinculada aparecem na Conferência mesmo que a
-   data de despacho não seja hoje.
-3. Shipments ready_to_ship passam a consultar o ZPL mesmo se a API ainda retornar
-   invoice_pending.
+A atualização preserva os bancos/dados existentes.

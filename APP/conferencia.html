@@ -762,6 +762,7 @@ let temporizadorSalvarProgressoBipe = null;
 let temporizadorRenderListaBipe = null;
 let cacheUidsPedidosDisponiveis = null;
 let cacheIndiceCodigosPedidos = null;
+let cacheDiaPedidosDisponiveis = "";
 
 function cancelarLeituraPendente() {
   if (temporizadorLeituraCodigo) {
@@ -1287,7 +1288,8 @@ function normalizarDataPedidoConferencia(valor){
   let s=String(valor??"").trim();if(!s)return "";let m=s.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/);if(m)return `${m[1]}-${m[2].padStart(2,"0")}-${m[3].padStart(2,"0")}`;m=s.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{2,4})$/);if(m){let ano=m[3];if(ano.length===2)ano=`20${ano}`;return `${ano}-${m[2].padStart(2,"0")}-${m[1].padStart(2,"0")}`;}const dt=new Date(s);if(!Number.isNaN(dt.getTime()))return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}-${String(dt.getDate()).padStart(2,"0")}`;return "";
 }
 function dataPedidoItem(item){return normalizarDataPedidoConferencia(extrairCampo(item,"Data do Pedido")||extrairCampo(item,"Data")||item?.DataPedido);}
-function invalidarCachesPedidosDisponiveis(){cacheUidsPedidosDisponiveis=null;cacheIndiceCodigosPedidos=null;}
+function pedidoEhDoDiaAtual(item){const data=dataPedidoItem(item);return !data||data===hojeLocalConferencia();}
+function invalidarCachesPedidosDisponiveis(){cacheUidsPedidosDisponiveis=null;cacheIndiceCodigosPedidos=null;cacheDiaPedidosDisponiveis="";}
 
 function pedidoPossuiEtiquetaDisponivel(item) {
   if (!item) return false;
@@ -1300,9 +1302,13 @@ function pedidoPossuiEtiquetaDisponivel(item) {
 }
 
 function obterUidsPedidosComEtiquetaDisponivel() {
-  if(cacheUidsPedidosDisponiveis)return cacheUidsPedidosDisponiveis;
+  const hoje=hojeLocalConferencia();
+  if(cacheUidsPedidosDisponiveis&&cacheDiaPedidosDisponiveis===hoje)return cacheUidsPedidosDisponiveis;
+  cacheDiaPedidosDisponiveis=hoje;
   cacheUidsPedidosDisponiveis=listaPedidosPendentes.filter(uid => {
     const item = dadosPedidos.find(x => String(x.__uidPedido) === String(uid));
+    // V14.4: qualquer pedido pendente com etiqueta vinculada deve aparecer,
+    // independentemente da data limite de despacho informada pelo marketplace.
     return pedidoPossuiEtiquetaDisponivel(item);
   });
   cacheIndiceCodigosPedidos=null;
@@ -1835,7 +1841,7 @@ function renderizarListaPedidos() {
              onclick="selecionarPedidoPorClique('${uid}')">
           <div class="pedido-topo-linha"><span>Pedido ${escaparHtml(numPedidoExibicao)}</span><span class="pedido-marketplace-badge ${marketplacePedido}">${escaparHtml(nomeMarketplace(marketplacePedido))}</span></div>
           ${nomeCliente ? `<div class="pedido-cliente">👤 ${escaparHtml(nomeCliente)}</div>` : ''}
-          <div class="pedido-cliente">📅 Despacho · ${escaparHtml(dataPedidoItem(itemPedido)||"data não informada")}</div>
+          <div class="pedido-cliente">📅 Despacho: ${escaparHtml(dataPedidoItem(itemPedido)||hojeLocalConferencia())}</div>
           ${resumoConclusaoAnteriorConferencia(itemPedido) ? `<span class="pedido-status-mini pedido-status-ja-feito">↻ JÁ FOI FEITO · ${escaparHtml(resumoConclusaoAnteriorConferencia(itemPedido).data||"data anterior")}</span>` : ''}
           ${completo ? `<span class="pedido-status-mini pedido-status-impressao">Conferido — aguardando impressão</span>` : ''}
           ${iniciado ? `<span class="pedido-status-mini pedido-status-andamento">Em andamento: ${lidos}/${total}</span>` : ''}
@@ -1848,8 +1854,8 @@ function renderizarListaPedidos() {
     const nomeFiltro = filtroMarketplace === "todos" ? "" : ` de ${nomeMarketplace(filtroMarketplace)}`;
     const totalPedidosPendentes = listaPedidosPendentes.length;
     const totalSemEtiqueta = Math.max(0, totalPedidosPendentes - obterUidsPedidosComEtiquetaDisponivel().length);
-    const detalheSemEtiqueta = totalSemEtiqueta > 0 ? `<br><span style="font-size:11px;">${totalSemEtiqueta} pedido(s) pendente(s) aguardando etiqueta no painel administrativo.</span>` : "";
-    html = `<div style="padding:10px; color:#888; font-size:13px; text-align:center;">Nenhum pedido pendente com etiqueta disponível${nomeFiltro}${detalheSemEtiqueta}</div>`;
+    const detalheSemEtiqueta = totalSemEtiqueta > 0 ? `<br><span style="font-size:11px;">${totalSemEtiqueta} pedido(s) aguardando etiqueta no painel administrativo.</span>` : "";
+    html = `<div style="padding:10px; color:#888; font-size:13px; text-align:center;">Nenhum pedido com etiqueta disponível${nomeFiltro}${detalheSemEtiqueta}</div>`;
   }
 
   document.getElementById("listaPedidos").innerHTML = html;
@@ -3439,7 +3445,7 @@ window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_
       <div id="painelAlertaNovosPedidos" class="alerta-novos-pedidos-painel">
         <div class="alerta-novos-pedidos-info">
           <div class="alerta-novos-pedidos-titulo">🔔 Aviso de novo pedido pronto</div>
-          <div id="alertaNovosPedidosStatus" class="alerta-novos-pedidos-status">O sinal toca quando um pedido pendente passa a ter etiqueta disponível.</div>
+          <div id="alertaNovosPedidosStatus" class="alerta-novos-pedidos-status">O sinal toca quando um pedido de hoje passa a ter etiqueta disponível.</div>
         </div>
         <div class="alerta-novos-pedidos-acoes">
           <button id="btnAlternarAlertaPedidos" type="button" onclick="window.alternarAlertaSonoroPedidos()"></button>
@@ -3475,7 +3481,7 @@ window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_
     if (status) {
       if (!alertaAtivo) status.textContent = "Aviso sonoro desativado neste aparelho.";
       else if (!audioLiberado) status.textContent = "Som ativo. Toque/clique uma vez na tela para liberar o áudio deste aparelho.";
-      else status.textContent = extra || "Pronto: tocará quando surgir um novo pedido pendente com etiqueta disponível.";
+      else status.textContent = extra || "Pronto: tocará quando surgir um novo pedido de hoje com etiqueta disponível.";
     }
   }
 

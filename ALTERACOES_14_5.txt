@@ -1,16 +1,17 @@
-ALTERAÇÕES V14.5
-================
+SISTEMA DE EXPEDIÇÃO NOROMAK — V14.5
 
-- O monitor de etiquetas usa rotação justa entre todos os pedidos pendentes.
-  Pedidos antigos sem etiqueta não bloqueiam mais os pedidos posteriores do lote.
-- Erros de autenticação são validados uma vez por ciclo e recebem espera progressiva,
-  evitando milhares de tentativas repetidas e crescimento desnecessário do log.
-- Pedidos adicionados por print/extensão continuam sendo reconciliados enquanto o
-  access token estiver válido, mesmo quando o Mercado Livre não enviou refresh token.
-- Novo botão no Admin: "Verificar etiquetas disponíveis e vincular". A tarefa roda
-  no servidor, reconcilia pedidos manuais, verifica todas as pendências e mostra
-  progresso, etiquetas vinculadas, pendências e falhas.
-- O status da integração diferencia "conectada e operacional agora" de "renovação
-  pendente". A sincronização e a verificação continuam liberadas durante a validade
-  do token atual.
-- Identificação interna e cache do PWA atualizados para 14.5.
+1. ZEBRA SEM DEPENDER DO NAVEGADOR
+- Ativadas no backend as rotas esperadas pelo Noromak Print Agent já incluído no sistema.
+- O agente passa a consultar a fila diretamente do servidor usando token Bearer.
+- Heartbeat/status da estação é atualizado pelo próprio agente.
+- A fila antiga via página Estação Zebra foi mantida como contingência.
+- No Admin > Integrações foi incluído o painel Agente Zebra com token, download e renovação.
+- Depois de instalado/configurado uma única vez no PC da Zebra, o agente inicia com o Windows e não precisa de aba aberta.
+
+2. PRECIFICADOR / CURVA ABCD
+- A resposta do Apollo agora prioriza curva_abc (A/B/C/D) antes de curva composta (A3/B3/C2/D1).
+- Formatos compostos continuam aceitos como fallback e são normalizados para A/B/C/D.
+- Quando a curva muda, a margem é reaplicada automaticamente: A=20%, B=20%, C=17%, D=15%.
+- A atualização geral do Apollo também reaplica a margem em ML, Shopee e Magalu quando detectar mudança de curva.
+
+Base: V14.4.

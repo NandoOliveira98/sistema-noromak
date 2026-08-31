@@ -1,4 +1,4 @@
-const CACHE = "noromak-expedicao-pwa-12.0";
+const CACHE = "noromak-expedicao-pwa-14.5";
 const SHELL = [
   "/expedicao/",
   "/expedicao/acesso",

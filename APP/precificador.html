@@ -1022,9 +1022,18 @@ var state = {
             el.produto.value = descricaoApi;
           }
 
-          var curvaApi = String(data.curva || "").trim().toUpperCase();
+          var curvaApi = String(data.curva_abc || data.curva || "").trim().toUpperCase();
+          var curvaAnterior = String(el.curva.value || "").trim().toUpperCase();
           if (["A","B","C","D"].includes(curvaApi)) {
             el.curva.value = curvaApi;
+            if (curvaAnterior !== curvaApi) {
+              var margemCurva = ({ A: 20, B: 20, C: 17, D: 15 })[curvaApi];
+              if (Number.isFinite(margemCurva)) {
+                setValue("ml-margin", margemCurva);
+                setValue("shopee-margin", margemCurva);
+                setValue("magalu-margin", margemCurva);
+              }
+            }
           }
 
           if (sameSavedSku) {

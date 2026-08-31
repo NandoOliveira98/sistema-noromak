@@ -1,11 +1,15 @@
-ALTERAÇÕES V14.4
-================
+SISTEMA DE EXPEDIÇÃO NOROMAK — V14.4
 
-- Pedidos Mercado Livre em ready_to_ship agora consultam a disponibilidade real
-  do ZPL mesmo quando o substatus ainda aparece como invoice_pending.
-- Quando o ZPL já existe, a etiqueta é vinculada e o pedido é liberado para
-  conferência sem depender do atraso do status fiscal da API.
-- O watcher de etiquetas também reprocessa ready_to_ship com invoice_pending.
-- A Conferência deixa de exigir que a data de despacho seja exatamente hoje:
-  pedido pendente com etiqueta vinculada aparece e pode ser conferido.
-- Identificação interna, cache do PWA e recursos estáticos atualizados para 14.4.
+CORREÇÃO: PEDIDOS COM ETIQUETA PRONTA QUE NÃO APARECIAM NA CONFERÊNCIA
+
+1. Mercado Livre / invoice_pending
+- O sistema não bloqueia mais a tentativa de obter a etiqueta apenas porque o shipment ainda informa invoice_pending.
+- Em ready_to_ship, o endpoint real da etiqueta passa a ser a fonte de verdade operacional.
+- O watcher faz uma sondagem direta do ZPL quando invoice_pending ainda está presente e, se a etiqueta já existir, reimporta e vincula o pedido automaticamente.
+
+2. Tela de conferência
+- Pedidos pendentes com etiqueta vinculada agora aparecem na conferência independentemente da data limite de despacho.
+- A data continua visível como informação de despacho, mas não bloqueia a entrada do pedido.
+- Busca/leitura e atualização automática seguem a mesma regra.
+
+Objetivo: se a etiqueta estiver realmente disponível para impressão, o pedido deve entrar na conferência automaticamente.
