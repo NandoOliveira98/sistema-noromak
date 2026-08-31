@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "14.11"
+APP_VERSION = "14.12"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -90,6 +90,12 @@ ML_CATCHUP_PAGE_SIZE = max(10, min(50, int(os.getenv("ML_CATCHUP_PAGE_SIZE", "50
 ML_CATCHUP_MAX_PAGES = max(2, min(100, int(os.getenv("ML_CATCHUP_MAX_PAGES", "40"))))
 ML_MANUAL_RECONCILE_INTERVAL = max(30, min(600, int(os.getenv("ML_MANUAL_RECONCILE_INTERVAL", "60"))))
 ML_MANUAL_RECONCILE_DAYS = max(1, min(90, int(os.getenv("ML_MANUAL_RECONCILE_DAYS", "30"))))
+# V14.12: diagnóstico do código diário usado pelo motorista na coleta.
+# A documentação pública do Mercado Livre não informa um endpoint oficial para
+# esse código no Brasil. O sistema tenta recursos autorizados e permite informar
+# um endpoint adicional por ambiente caso o Mercado Livre/Guilherme confirme um.
+ML_COLLECTION_AUTH_ENDPOINT = os.getenv("ML_COLLECTION_AUTH_ENDPOINT", "").strip()
+ML_COLLECTION_AUTH_CACHE_SECONDS = max(60, min(3600, int(os.getenv("ML_COLLECTION_AUTH_CACHE_SECONDS", "600"))))
 
 
 CRM_COST_API_URL = os.getenv(
@@ -108,6 +114,8 @@ ML_CATCHUP_LOCK = threading.Lock()
 ML_MANUAL_RECONCILE_LOCK = threading.Lock()
 ML_PENDING_WATCH_CURSOR_LOCK = threading.Lock()
 ML_PENDING_WATCH_CURSOR = 0
+ML_COLLECTION_AUTH_LOCK = threading.Lock()
+ML_COLLECTION_AUTH_CACHE: dict[str, Any] = {}
 CRM_COST_CACHE_LOCK = threading.Lock()
 CRM_COST_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 PRECIFICADOR_BULK_LOCK = threading.Lock()
@@ -2377,6 +2385,162 @@ def ml_api_get_bytes(path_or_url: str, *, headers: dict[str, str] | None = None)
     return ml_http_bytes(url, token=token, headers=headers)
 
 
+
+def _ml_find_collection_authorization_code(payload: Any) -> tuple[str, str]:
+    """Procura somente campos semanticamente ligados à autorização de coleta.
+
+    Evita tratar IDs, tokens OAuth e códigos de outras áreas como código da coleta.
+    Retorna (codigo, caminho_json).
+    """
+    direct_keys = {
+        "pickup_authorization_code", "collection_authorization_code",
+        "collection_auth_code", "pickup_auth_code", "authorization_code",
+        "authorization_token", "pickup_code", "collection_code",
+        "access_code", "driver_code",
+    }
+    contextual_terms = ("pickup", "pick_up", "collection", "coleta", "collect", "driver", "carrier")
+    auth_terms = ("authorization", "authorisation", "autoriz", "auth", "code", "codigo", "token")
+
+    def clean_candidate(value: Any) -> str:
+        if value is None or isinstance(value, (dict, list, bool)):
+            return ""
+        text = str(value).strip().upper().replace(" ", "")
+        # O código exibido pelo ML é alfanumérico curto (ex.: 910CA81C).
+        if re.fullmatch(r"[A-Z0-9-]{5,20}", text) and not text.startswith(("APP_USR-", "TG-")):
+            return text
+        return ""
+
+    def walk(value: Any, path: str = "") -> tuple[str, str]:
+        if isinstance(value, dict):
+            for key, child in value.items():
+                k = str(key or "").strip().lower()
+                child_path = f"{path}.{k}" if path else k
+                candidate = clean_candidate(child)
+                normalized = re.sub(r"[^a-z0-9_]", "_", k)
+                context = child_path.lower()
+                if candidate and (
+                    normalized in direct_keys
+                    or (any(t in context for t in contextual_terms) and any(t in context for t in auth_terms))
+                ):
+                    return candidate, child_path
+                found = walk(child, child_path)
+                if found[0]:
+                    return found
+        elif isinstance(value, list):
+            for idx, child in enumerate(value):
+                found = walk(child, f"{path}[{idx}]")
+                if found[0]:
+                    return found
+        return "", ""
+
+    return walk(payload)
+
+
+def ml_collection_authorization_status(*, force: bool = False) -> dict[str, Any]:
+    """Tenta obter o código diário de autorização da coleta usando a API do ML.
+
+    O endpoint específico do código não consta na documentação pública. Por isso
+    esta rotina é deliberadamente conservadora: testa o endpoint adicional que
+    pode ser configurado no servidor e, como diagnóstico, o recurso oficial de
+    preferências de envio do seller. O resultado é cacheado para não sobrecarregar
+    a API. Nenhum access_token é devolvido ao navegador ou gravado em logs.
+    """
+    now = time.time()
+    today = datetime.now().astimezone().date().isoformat()
+    with ML_COLLECTION_AUTH_LOCK:
+        cached = dict(ML_COLLECTION_AUTH_CACHE)
+        if (not force and cached and cached.get("date") == today
+                and now - float(cached.get("cached_at_epoch") or 0) < ML_COLLECTION_AUTH_CACHE_SECONDS):
+            cached["cached"] = True
+            return cached
+
+    result: dict[str, Any] = {
+        "ok": True,
+        "available": False,
+        "code": "",
+        "date": today,
+        "updated_at": now_iso(),
+        "source": "",
+        "message": "Código não disponível pela API.",
+        "tested": [],
+        "cached": False,
+        "cached_at_epoch": now,
+    }
+    try:
+        _, seller_id = ml_access_token()
+        endpoints: list[tuple[str, str]] = []
+        if ML_COLLECTION_AUTH_ENDPOINT:
+            custom = ML_COLLECTION_AUTH_ENDPOINT.replace("{seller_id}", str(seller_id)).replace("{date}", today)
+            endpoints.append(("configurado", custom))
+        # Recurso público oficial: serve também para confirmar que a conta possui coleta/cross_docking.
+        endpoints.append(("shipping_preferences", f"/users/{seller_id}/shipping_preferences"))
+
+        seen: set[str] = set()
+        for name, endpoint in endpoints:
+            if endpoint in seen:
+                continue
+            seen.add(endpoint)
+            try:
+                payload = ml_api_get(endpoint, headers={"x-format-new": "true"})
+                code, json_path = _ml_find_collection_authorization_code(payload)
+                summary: dict[str, Any] = {"source": name, "endpoint": endpoint, "status": "ok"}
+                if name == "shipping_preferences" and isinstance(payload, dict):
+                    summary["picking_type"] = str(payload.get("picking_type") or "")
+                    summary["carrier_pickup"] = bool(payload.get("carrier_pickup"))
+                    logistics = payload.get("logistics")
+                    if isinstance(logistics, list):
+                        summary["has_cross_docking"] = "cross_docking" in json.dumps(logistics, ensure_ascii=False).lower()
+                if code:
+                    summary["code_path"] = json_path
+                    result.update({
+                        "available": True,
+                        "code": code,
+                        "source": name,
+                        "message": "Código de autorização da coleta obtido pela API.",
+                    })
+                    result["tested"].append(summary)
+                    break
+                result["tested"].append(summary)
+            except Exception as exc:
+                # Expõe somente mensagem técnica resumida; nunca headers/tokens.
+                result["tested"].append({
+                    "source": name,
+                    "endpoint": endpoint,
+                    "status": "error",
+                    "error": str(exc)[:350],
+                })
+
+        if not result["available"]:
+            if ML_COLLECTION_AUTH_ENDPOINT:
+                result["message"] = "O código não foi encontrado nos recursos testados da API."
+            else:
+                result["message"] = (
+                    "Código não disponível pela API pública testada. "
+                    "O painel continuará verificando automaticamente; um endpoint específico pode ser configurado no servidor."
+                )
+    except Exception as exc:
+        result.update({"ok": False, "message": str(exc)[:500]})
+
+    with ML_COLLECTION_AUTH_LOCK:
+        ML_COLLECTION_AUTH_CACHE.clear()
+        ML_COLLECTION_AUTH_CACHE.update(result)
+    return dict(result)
+
+
+
+def ml_collection_authorization_loop(stop_event: threading.Event) -> None:
+    """Mantém o cache do código do dia aquecido sem depender de uma aba aberta."""
+    # Aguarda a inicialização completa e evita competir com os watchers ao subir.
+    if stop_event.wait(12):
+        return
+    while not stop_event.is_set():
+        try:
+            ml_collection_authorization_status(force=False)
+        except Exception:
+            pass
+        stop_event.wait(max(300, ML_COLLECTION_AUTH_CACHE_SECONDS))
+
+
 def ml_oauth_authorization_url() -> str:
     if not ml_credentials_configured():
         raise RuntimeError("Configure ML_CLIENT_ID e ML_CLIENT_SECRET no /home/expedicao/.env antes de conectar.")
@@ -4324,6 +4488,19 @@ class AppHandler(BaseHTTPRequestHandler):
             if ctx is not None:
                 self.send_json({"ok": True, "mercadolivre": ml_status_payload()})
             return
+        if path == "/api/integracoes/mercadolivre/codigo-coleta":
+            ctx = self.auth()
+            if ctx is not None:
+                try:
+                    force = str((query.get("force") or [""])[0] or "").strip().lower() in {"1", "true", "sim", "yes"}
+                    payload = ml_collection_authorization_status(force=force)
+                    # Usuários da conferência veem apenas o necessário. Diagnóstico técnico completo fica para admin.
+                    if not module_allowed(ctx, "admin"):
+                        payload = {k: payload.get(k) for k in ("ok", "available", "code", "date", "updated_at", "source", "message", "cached")}
+                    self.send_json(payload)
+                except Exception as exc:
+                    self.send_json({"ok": False, "available": False, "code": "", "message": str(exc)}, 502)
+            return
         if path == "/api/integracoes/mercadolivre/connect":
             ctx = self.auth(admin_only=True)
             if ctx is not None:
@@ -5821,9 +5998,16 @@ def main() -> None:
         name="ml-manual-order-reconciler",
         daemon=True,
     )
+    collection_code_thread = threading.Thread(
+        target=ml_collection_authorization_loop,
+        args=(watcher_stop,),
+        name="ml-collection-authorization",
+        daemon=True,
+    )
     watcher_thread.start()
     new_order_thread.start()
     manual_reconcile_thread.start()
+    collection_code_thread.start()
     server = ThreadingHTTPServer((HOST, PORT), AppHandler)
     server.daemon_threads = True
     print(f"Sistema de Conferência Web {APP_VERSION} em http://{HOST}:{PORT}{BASE_PATH}", flush=True)
@@ -5840,6 +6024,7 @@ def main() -> None:
         watcher_thread.join(timeout=3)
         new_order_thread.join(timeout=3)
         manual_reconcile_thread.join(timeout=3)
+        collection_code_thread.join(timeout=3)
         server.server_close()
         with DB_LOCK:
             DB.close()

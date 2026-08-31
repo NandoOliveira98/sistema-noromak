@@ -1,0 +1,10 @@
+Atualizacao V14.12
+
+1. Substitua servidor_web.py e APP/conferencia.html pelos arquivos desta versao.
+2. Reinicie/publique pelo fluxo normal do sistema.
+3. Entre na tela de Conferencia e observe o novo painel "Codigo de autorizacao da coleta".
+4. Clique em "ATUALIZAR CODIGO" para forcar o teste.
+5. Se aparecer "Codigo nao disponivel pela API", o servidor testou os recursos atuais sem encontrar o codigo. O restante do sistema continua funcionando normalmente.
+
+Opcional, somente se o Mercado Livre/Guilherme fornecer o endpoint oficial:
+ML_COLLECTION_AUTH_ENDPOINT=https://api.mercadolibre.com/SEU_ENDPOINT/{seller_id}
