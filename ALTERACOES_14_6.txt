@@ -1,0 +1,10 @@
+NOROMAK EXPEDIÇÃO — V14.6
+
+Recupera e incorpora as melhorias da V14.4 do Work, preservando a V14.5:
+- watcher de etiquetas usa lote circular e percorre todos os pedidos pendentes; os primeiros 20 não bloqueiam os demais;
+- botão Admin > Integrações > Verificar etiquetas disponíveis e vincular, com andamento e resumo;
+- reconciliação de pedidos de print/extensão continua funcionando sem refresh_token enquanto o access_token atual estiver utilizável;
+- status da integração mostra Conectado • renovação pendente em vez de alerta vermelho incorreto;
+- mantém correção de etiqueta pronta/conferência da V14.4;
+- mantém agente Zebra autônomo da V14.5;
+- mantém correção de curva A/B/C/D do Precificador da V14.5.

@@ -922,6 +922,7 @@
           <div class="integracao-acoes">
             <button type="button" id="btnMlConectar" class="btn-primario" onclick="conectarMercadoLivreAdmin()">Conectar Mercado Livre</button>
             <button type="button" id="btnMlSincronizar" class="btn-sucesso" onclick="sincronizarMercadoLivreAdmin()" disabled>↻ Sincronizar agora</button>
+            <button type="button" id="btnMlVerificarEtiquetas" class="btn-secundario" onclick="verificarEtiquetasMercadoLivreAdmin()" disabled>🏷 Verificar etiquetas disponíveis e vincular</button>
             <button type="button" id="btnMlDesconectar" class="btn-perigo" onclick="desconectarMercadoLivreAdmin()" disabled>Desconectar</button>
           </div>
           <div id="mlIntegracaoMensagem" class="integracao-nota">As credenciais ficam somente no <code>/home/expedicao/.env</code>; o Client Secret nunca é enviado ao navegador.</div>
@@ -5784,21 +5785,22 @@ async function carregarIntegracaoMercadoLivreAdmin(){
     const d=await mlApiAdmin("/expedicao/api/integracoes/mercadolivre/status");
     const ml=d.mercadolivre||{};
     const configurado=ml.configured===true, conectado=ml.connected===true, reconectar=ml.needs_reconnect===true;
-    badge.className="integracao-status "+(conectado?"ok":reconectar?"erro":configurado?"off":"erro");
-    badge.textContent=conectado?"🟢 Conectado":reconectar?"🟠 Reconexão necessária":configurado?"⚪ Configurado, aguardando conexão":"🔴 Credenciais ainda não configuradas";
+    badge.className="integracao-status "+(conectado?"ok":configurado?"off":"erro");
+    badge.textContent=conectado?(reconectar?"🟢 Conectado • renovação pendente":"🟢 Conectado"):configurado?"⚪ Configurado, aguardando conexão":"🔴 Credenciais ainda não configuradas";
     document.getElementById("mlIntegracaoConta").textContent=ml.nickname||"—";
     document.getElementById("mlIntegracaoSeller").textContent=ml.seller_id||"—";
     document.getElementById("mlIntegracaoSync").textContent=ml.last_sync_at?mlDataHora(ml.last_sync_at):"—";
     document.getElementById("mlIntegracaoCallback").textContent=ml.redirect_uri||"—";
     document.getElementById("mlIntegracaoNotificacoes").textContent=ml.notification_url||"—";
-    const conectar=document.getElementById("btnMlConectar"),sync=document.getElementById("btnMlSincronizar"),desconectar=document.getElementById("btnMlDesconectar");
-    if(conectar){conectar.disabled=!configurado;conectar.textContent=(conectado||reconectar)?"Reconectar Mercado Livre":"Conectar Mercado Livre";}
+    const conectar=document.getElementById("btnMlConectar"),sync=document.getElementById("btnMlSincronizar"),verificar=document.getElementById("btnMlVerificarEtiquetas"),desconectar=document.getElementById("btnMlDesconectar");
+    if(conectar){conectar.disabled=!configurado;conectar.textContent=reconectar?"Renovar conexão Mercado Livre":conectado?"Reconectar Mercado Livre":"Conectar Mercado Livre";}
     if(sync)sync.disabled=!conectado;
+    if(verificar)verificar.disabled=!conectado;
     if(desconectar)desconectar.disabled=!(conectado||reconectar);
     const msg=document.getElementById("mlIntegracaoMensagem");
     if(msg){
       if(!configurado)msg.innerHTML='Configure <b>ML_CLIENT_ID</b> e <b>ML_CLIENT_SECRET</b> em <code>/home/expedicao/.env</code> e reinicie o serviço.';
-      else if(reconectar)msg.innerHTML='⚠ <b>Reconexão necessária.</b> O sistema não considera a integração operacional sem refresh token. Ao reconectar, ele recupera automaticamente os pedidos perdidos desde a última sincronização válida.';
+      else if(reconectar)msg.innerHTML='✅ <b>Integração operacional com o acesso atual.</b> A renovação automática está pendente; use “Renovar conexão Mercado Livre” antes do token expirar. Enquanto o acesso estiver válido, pedidos, watcher e reconciliação continuam funcionando.';
       else if(ml.last_error)msg.innerHTML='⚠ Último erro: <b>'+mlHtmlSeguro(ml.last_error)+'</b>';
       else msg.innerHTML=conectado?'✅ Conta conectada. Webhook + watcher ficam ativos no servidor mesmo sem nenhum computador aberto. Após reconexão, o catch-up recupera automaticamente o intervalo perdido.':'Clique em <b>Conectar Mercado Livre</b> para autorizar a conta vendedora.';
     }
@@ -5846,6 +5848,28 @@ Erros: ${d.errors.length}`:""}`);
   }catch(e){alert("Erro ao sincronizar Mercado Livre: "+e.message);}
   finally{if(btn){btn.disabled=false;btn.textContent="↻ Sincronizar agora";}}
 }
+async function verificarEtiquetasMercadoLivreAdmin(){
+  const btn=document.getElementById("btnMlVerificarEtiquetas");
+  const original=btn?.textContent||"🏷 Verificar etiquetas disponíveis e vincular";
+  if(btn){btn.disabled=true;btn.textContent="⏳ Verificando etiquetas...";}
+  const msg=document.getElementById("mlIntegracaoMensagem");
+  if(msg)msg.innerHTML='⏳ Consultando <b>todos os pedidos pendentes</b> e verificando quais etiquetas já estão disponíveis...';
+  try{
+    const d=await mlApiAdmin("/expedicao/api/integracoes/mercadolivre/verificar-etiquetas",{method:"POST",body:"{}"});
+    if(msg)msg.innerHTML=`✅ Verificação concluída: <b>${d.checked||0}</b> pedido(s) consultado(s), <b>${d.available||0}</b> etiqueta(s) disponível(is), <b>${d.linked||0}</b> vinculada(s) e ${d.errors||0} erro(s).`;
+    alert(`Verificação concluída.
+Pedidos consultados: ${d.checked||0}
+Etiquetas disponíveis: ${d.available||0}
+Etiquetas vinculadas: ${d.linked||0}
+Erros: ${d.errors||0}`);
+    await carregarIntegracaoMercadoLivreAdmin();await carregarLogsMercadoLivreAdmin();
+    if(typeof appStorage?.sincronizarAgora==="function")await appStorage.sincronizarAgora();
+    if(typeof carregarPedidosAdmin==="function")carregarPedidosAdmin();
+  }catch(e){
+    if(msg)msg.innerHTML='❌ Erro ao verificar etiquetas: <b>'+mlHtmlSeguro(e.message)+'</b>';
+    alert("Erro ao verificar etiquetas: "+e.message);
+  }finally{if(btn){btn.disabled=false;btn.textContent=original;}}
+}
 async function desconectarMercadoLivreAdmin(){
   if(!confirm("Desconectar a conta do Mercado Livre? Os pedidos já importados serão mantidos."))return;
   try{
@@ -5871,6 +5895,6 @@ document.addEventListener("DOMContentLoaded",()=>{
 });
 </script>
 
-<script src="/expedicao/user-permissions.js?v=14.5"></script>
+<script src="/expedicao/user-permissions.js?v=14.6"></script>
 </body>
 </html>

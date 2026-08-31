@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "14.5"
+APP_VERSION = "14.6"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -105,6 +105,8 @@ AUTH_LOCK = threading.Lock()
 ML_NEW_ORDER_WATCH_LOCK = threading.Lock()
 ML_CATCHUP_LOCK = threading.Lock()
 ML_MANUAL_RECONCILE_LOCK = threading.Lock()
+ML_PENDING_WATCH_CURSOR_LOCK = threading.Lock()
+ML_PENDING_WATCH_CURSOR = 0
 CRM_COST_CACHE_LOCK = threading.Lock()
 CRM_COST_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 PRECIFICADOR_BULK_LOCK = threading.Lock()
@@ -2195,7 +2197,10 @@ def ml_status_payload() -> dict[str, Any]:
     row = ml_integration_row()
     has_access = bool(row and row["access_token"] and row["seller_id"])
     has_refresh = bool(row and str(row["refresh_token"] or "").strip())
-    connected = bool(has_access and has_refresh)
+    # V14.6: enquanto o access_token atual ainda estiver válido, a integração
+    # continua operacional mesmo sem refresh_token. O Admin apenas sinaliza que
+    # a renovação futura está pendente, sem tratar a conta como desconectada.
+    connected = bool(has_access)
     needs_reconnect = bool(has_access and not has_refresh)
     return {
         "configured": ml_credentials_configured(),
@@ -3069,7 +3074,9 @@ def ml_reconcile_manual_orders_loop(stop_event: threading.Event) -> None:
     while not stop_event.is_set():
         try:
             row = ml_integration_row()
-            if row and str(row["access_token"] or "").strip() and str(row["refresh_token"] or "").strip():
+            # V14.6: reconcilia enquanto houver access_token utilizável. A ausência
+            # de refresh_token impede apenas a renovação futura, não o uso do token atual.
+            if row and str(row["access_token"] or "").strip():
                 ml_reconcile_manual_orders_once()
         except Exception as exc:
             try:
@@ -3449,8 +3456,8 @@ def ml_process_notification(payload: dict[str, Any]) -> None:
             DB.commit()
 
 
-def _ml_pending_label_candidates() -> list[tuple[str, str]]:
-    """Retorna pares (order_id, shipment_id) ainda aguardando etiqueta."""
+def _ml_all_pending_label_candidates() -> list[tuple[str, str]]:
+    """Retorna todos os pares únicos ainda aguardando etiqueta."""
     raw, _, _ = get_storage("conf_pedidos")
     rows = _rows_from_storage_value(raw)
     seen: set[tuple[str, str]] = set()
@@ -3473,9 +3480,24 @@ def _ml_pending_label_candidates() -> list[tuple[str, str]]:
             continue
         seen.add(key)
         candidates.append(key)
-        if len(candidates) >= ML_PENDING_WATCH_BATCH:
-            break
     return candidates
+
+
+def _ml_pending_label_candidates() -> list[tuple[str, str]]:
+    """Retorna um lote circular; os primeiros 20 nunca bloqueiam os seguintes."""
+    global ML_PENDING_WATCH_CURSOR
+    all_candidates = _ml_all_pending_label_candidates()
+    total = len(all_candidates)
+    if total <= ML_PENDING_WATCH_BATCH:
+        with ML_PENDING_WATCH_CURSOR_LOCK:
+            ML_PENDING_WATCH_CURSOR = 0
+        return all_candidates
+    with ML_PENDING_WATCH_CURSOR_LOCK:
+        start = ML_PENDING_WATCH_CURSOR % total
+        count = min(ML_PENDING_WATCH_BATCH, total)
+        batch = [all_candidates[(start + i) % total] for i in range(count)]
+        ML_PENDING_WATCH_CURSOR = (start + count) % total
+    return batch
 
 
 def ml_pending_label_watch_once() -> dict[str, int]:
@@ -3531,6 +3553,38 @@ def ml_pending_label_watch_once() -> dict[str, int]:
                 "", ML_CLIENT_ID, "ERRO", str(exc)[:1200]
             )
     return {"checked": checked, "triggered": triggered, "ready": ready, "errors": errors}
+
+
+def ml_check_all_available_labels_once() -> dict[str, int]:
+    """Varredura manual de todos os pedidos pendentes, usada pelo botão do Admin."""
+    checked = triggered = ready = errors = 0
+    for order_id, shipment_id in _ml_all_pending_label_candidates():
+        checked += 1
+        try:
+            shipment = ml_api_get(
+                f"/shipments/{quote(shipment_id)}?views=destination",
+                headers={"x-format-new": "true", "X-Api-Version": "2"},
+            )
+            if not isinstance(shipment, dict):
+                continue
+            status = str(shipment.get("status") or "").strip().lower()
+            if status != "ready_to_ship":
+                continue
+            try:
+                zpl = _ml_fetch_shipping_zpl(shipment_id)
+            except Exception:
+                zpl = ""
+            if not zpl:
+                continue
+            triggered += 1
+            result = ml_import_order(order_id, source="API Mercado Livre / verificação manual etiquetas")
+            if result.get("ready_for_conference"):
+                ready += 1
+        except Exception as exc:
+            errors += 1
+            ml_log_event("manual_label_check", f"/shipments/{shipment_id}", "", ML_CLIENT_ID, "ERRO", str(exc)[:1200])
+    ml_log_event("manual_label_check", "/pending", "", ML_CLIENT_ID, "CONCLUÍDO", json_dumps({"checked": checked, "available": triggered, "linked": ready, "errors": errors}))
+    return {"ok": True, "checked": checked, "available": triggered, "linked": ready, "errors": errors}
 
 
 def ml_pending_label_watch_loop(stop_event: threading.Event) -> None:
@@ -4230,6 +4284,14 @@ class AppHandler(BaseHTTPRequestHandler):
             if ctx is not None:
                 try:
                     self.send_json(ml_manual_sync())
+                except Exception as exc:
+                    self.send_json({"error": str(exc)}, 502)
+            return
+        if path == "/api/integracoes/mercadolivre/verificar-etiquetas":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                try:
+                    self.send_json(ml_check_all_available_labels_once())
                 except Exception as exc:
                     self.send_json({"error": str(exc)}, 502)
             return
