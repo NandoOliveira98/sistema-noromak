@@ -7,11 +7,11 @@
 <meta name="application-name" content="Noromak Conferência">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="manifest" href="/expedicao/manifest-conferencia.webmanifest?v=14.3" crossorigin="use-credentials">
-<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/conferencia-180.png?v=14.3">
-<link rel="icon" href="/favicon.ico?v=14.3" sizes="any">
-<link rel="shortcut icon" href="/favicon.ico?v=14.3">
-<link rel="stylesheet" href="/expedicao/pwa-install.css?v=14.3">
+<link rel="manifest" href="/expedicao/manifest-conferencia.webmanifest?v=14.4" crossorigin="use-credentials">
+<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/conferencia-180.png?v=14.4">
+<link rel="icon" href="/favicon.ico?v=14.4" sizes="any">
+<link rel="shortcut icon" href="/favicon.ico?v=14.4">
+<link rel="stylesheet" href="/expedicao/pwa-install.css?v=14.4">
 <title>Noromak - Conferência em Rede</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/es6-promise/4.2.8/es6-promise.auto.min.js"></script>
@@ -319,8 +319,8 @@
 </style>
 <script src="/expedicao/shared-storage.js"></script>
 <script src="/expedicao/web-auth.js"></script>
-<script src="/expedicao/zebra-browser-print.js?v=14.3"></script>
-<script defer src="/expedicao/pwa-install.js?v=14.3"></script>
+<script src="/expedicao/zebra-browser-print.js?v=14.4"></script>
+<script defer src="/expedicao/pwa-install.js?v=14.4"></script>
 </head>
 
 <body>
@@ -328,7 +328,7 @@
 <div id="telaLogin">
   <div class="box-card">
     <div class="logo-box">
-      <img src="/nk-logo.svg?v=14.3" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=14.3';">
+      <img src="/nk-logo.svg?v=14.4" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=14.4';">
     </div>
     <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 11.9 — EAN em todos os pedidos do SKU</div>
 
@@ -420,7 +420,7 @@
 
 <header>
   <div class="logo-mini-box">
-    <img src="/grupo-noromak.png?v=14.3" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=14.3';">
+    <img src="/grupo-noromak.png?v=14.4" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=14.4';">
   </div>
   <div class="usuario-area">
     <div style="text-align: right;">
@@ -762,7 +762,6 @@ let temporizadorSalvarProgressoBipe = null;
 let temporizadorRenderListaBipe = null;
 let cacheUidsPedidosDisponiveis = null;
 let cacheIndiceCodigosPedidos = null;
-let cacheDiaPedidosDisponiveis = "";
 
 function cancelarLeituraPendente() {
   if (temporizadorLeituraCodigo) {
@@ -973,7 +972,7 @@ window.onload = function() {
       renderizarListaPedidos();
       if (idPedidoAtual) {
         let itemRefBase = dadosPedidos.find(x => String(x.__uidPedido) === String(idPedidoAtual));
-        if (itemRefBase && pedidoEhDoDiaAtual(itemRefBase) && pedidoPossuiEtiquetaDisponivel(itemRefBase)) {
+        if (itemRefBase && pedidoPossuiEtiquetaDisponivel(itemRefBase)) {
           let numPedReal = extrairCampo(itemRefBase, "Pedido");
           pedidoAtual = dadosPedidos.filter(x => extrairCampo(x, "Pedido") === numPedReal);
           desenharTabela();
@@ -982,8 +981,8 @@ window.onload = function() {
           mostrarMensagemDetalhada(
             "aviso",
             "Pedido removido da lista",
-            itemRefBase ? (pedidoEhDoDiaAtual(itemRefBase) ? "A etiqueta deste pedido não está mais disponível." : "Este pedido não pertence à data de hoje.") : "O pedido não está mais pendente.",
-            itemRefBase ? (pedidoEhDoDiaAtual(itemRefBase) ? "Peça ao administrador para republicar ou vincular a etiqueta." : "Altere a data do pedido no painel administrativo.") : "Selecione outro pedido disponível."
+            itemRefBase ? "A etiqueta deste pedido não está mais disponível." : "O pedido não está mais pendente.",
+            itemRefBase ? "Peça ao administrador para republicar ou vincular a etiqueta." : "Selecione outro pedido disponível."
           );
         }
       }
@@ -1288,8 +1287,7 @@ function normalizarDataPedidoConferencia(valor){
   let s=String(valor??"").trim();if(!s)return "";let m=s.match(/^(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/);if(m)return `${m[1]}-${m[2].padStart(2,"0")}-${m[3].padStart(2,"0")}`;m=s.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{2,4})$/);if(m){let ano=m[3];if(ano.length===2)ano=`20${ano}`;return `${ano}-${m[2].padStart(2,"0")}-${m[1].padStart(2,"0")}`;}const dt=new Date(s);if(!Number.isNaN(dt.getTime()))return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}-${String(dt.getDate()).padStart(2,"0")}`;return "";
 }
 function dataPedidoItem(item){return normalizarDataPedidoConferencia(extrairCampo(item,"Data do Pedido")||extrairCampo(item,"Data")||item?.DataPedido);}
-function pedidoEhDoDiaAtual(item){const data=dataPedidoItem(item);return !data||data===hojeLocalConferencia();}
-function invalidarCachesPedidosDisponiveis(){cacheUidsPedidosDisponiveis=null;cacheIndiceCodigosPedidos=null;cacheDiaPedidosDisponiveis="";}
+function invalidarCachesPedidosDisponiveis(){cacheUidsPedidosDisponiveis=null;cacheIndiceCodigosPedidos=null;}
 
 function pedidoPossuiEtiquetaDisponivel(item) {
   if (!item) return false;
@@ -1302,12 +1300,10 @@ function pedidoPossuiEtiquetaDisponivel(item) {
 }
 
 function obterUidsPedidosComEtiquetaDisponivel() {
-  const hoje=hojeLocalConferencia();
-  if(cacheUidsPedidosDisponiveis&&cacheDiaPedidosDisponiveis===hoje)return cacheUidsPedidosDisponiveis;
-  cacheDiaPedidosDisponiveis=hoje;
+  if(cacheUidsPedidosDisponiveis)return cacheUidsPedidosDisponiveis;
   cacheUidsPedidosDisponiveis=listaPedidosPendentes.filter(uid => {
     const item = dadosPedidos.find(x => String(x.__uidPedido) === String(uid));
-    return pedidoEhDoDiaAtual(item)&&pedidoPossuiEtiquetaDisponivel(item);
+    return pedidoPossuiEtiquetaDisponivel(item);
   });
   cacheIndiceCodigosPedidos=null;
   return cacheUidsPedidosDisponiveis;
@@ -1839,7 +1835,7 @@ function renderizarListaPedidos() {
              onclick="selecionarPedidoPorClique('${uid}')">
           <div class="pedido-topo-linha"><span>Pedido ${escaparHtml(numPedidoExibicao)}</span><span class="pedido-marketplace-badge ${marketplacePedido}">${escaparHtml(nomeMarketplace(marketplacePedido))}</span></div>
           ${nomeCliente ? `<div class="pedido-cliente">👤 ${escaparHtml(nomeCliente)}</div>` : ''}
-          <div class="pedido-cliente">📅 Hoje · ${escaparHtml(dataPedidoItem(itemPedido)||hojeLocalConferencia())}</div>
+          <div class="pedido-cliente">📅 Despacho · ${escaparHtml(dataPedidoItem(itemPedido)||"data não informada")}</div>
           ${resumoConclusaoAnteriorConferencia(itemPedido) ? `<span class="pedido-status-mini pedido-status-ja-feito">↻ JÁ FOI FEITO · ${escaparHtml(resumoConclusaoAnteriorConferencia(itemPedido).data||"data anterior")}</span>` : ''}
           ${completo ? `<span class="pedido-status-mini pedido-status-impressao">Conferido — aguardando impressão</span>` : ''}
           ${iniciado ? `<span class="pedido-status-mini pedido-status-andamento">Em andamento: ${lidos}/${total}</span>` : ''}
@@ -1850,10 +1846,10 @@ function renderizarListaPedidos() {
 
   if (html === "") {
     const nomeFiltro = filtroMarketplace === "todos" ? "" : ` de ${nomeMarketplace(filtroMarketplace)}`;
-    const totalPedidosHoje = listaPedidosPendentes.filter(uid=>{const item=dadosPedidos.find(x=>String(x.__uidPedido)===String(uid));return item&&pedidoEhDoDiaAtual(item);}).length;
-    const totalSemEtiqueta = Math.max(0, totalPedidosHoje - obterUidsPedidosComEtiquetaDisponivel().length);
-    const detalheSemEtiqueta = totalSemEtiqueta > 0 ? `<br><span style="font-size:11px;">${totalSemEtiqueta} pedido(s) de hoje aguardando etiqueta no painel administrativo.</span>` : "";
-    html = `<div style="padding:10px; color:#888; font-size:13px; text-align:center;">Nenhum pedido de hoje com etiqueta disponível${nomeFiltro}${detalheSemEtiqueta}</div>`;
+    const totalPedidosPendentes = listaPedidosPendentes.length;
+    const totalSemEtiqueta = Math.max(0, totalPedidosPendentes - obterUidsPedidosComEtiquetaDisponivel().length);
+    const detalheSemEtiqueta = totalSemEtiqueta > 0 ? `<br><span style="font-size:11px;">${totalSemEtiqueta} pedido(s) pendente(s) aguardando etiqueta no painel administrativo.</span>` : "";
+    html = `<div style="padding:10px; color:#888; font-size:13px; text-align:center;">Nenhum pedido pendente com etiqueta disponível${nomeFiltro}${detalheSemEtiqueta}</div>`;
   }
 
   document.getElementById("listaPedidos").innerHTML = html;
@@ -1870,12 +1866,6 @@ function abrirPedido(uid) {
   cancelarLeituraPendente();
   let itemBase = dadosPedidos.find(x => String(x.__uidPedido) === String(uid));
   if (!itemBase) return;
-  if (!pedidoEhDoDiaAtual(itemBase)) {
-    mostrarMensagemDetalhada("aviso","Pedido fora da data de hoje",`Pedido: ${pedidoParaExibicao(extrairCampo(itemBase,"Pedido"),obterMarketplaceItem(itemBase))}\nData: ${dataPedidoItem(itemBase)||"não informada"}`,"Altere a data no painel administrativo para que ele apareça na conferência do dia.");
-    renderizarListaPedidos();
-    return;
-  }
-
   const etiquetaDisponivel = resolverEtiquetaPedido(itemBase);
   if (!etiquetaDisponivel.ok) {
     const pedidoBloqueado = pedidoParaExibicao(extrairCampo(itemBase, "Pedido"), obterMarketplaceItem(itemBase));
@@ -1929,7 +1919,7 @@ function restaurarUltimoPedidoEmAndamento() {
   const pedidoSalvo = appStorage.getItem(CHAVE_ULTIMO_PEDIDO);
   if (!pedidoSalvo) return;
   const item = dadosPedidos.find(x => normalizarIdentificadorExato(extrairCampo(x, "Pedido")) === pedidoSalvo);
-  if (item && pedidoEhDoDiaAtual(item) && pedidoPossuiEtiquetaDisponivel(item)) abrirPedido(item.__uidPedido);
+  if (item && pedidoPossuiEtiquetaDisponivel(item)) abrirPedido(item.__uidPedido);
   else appStorage.removeItem(CHAVE_ULTIMO_PEDIDO);
 }
 
@@ -3449,7 +3439,7 @@ window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_
       <div id="painelAlertaNovosPedidos" class="alerta-novos-pedidos-painel">
         <div class="alerta-novos-pedidos-info">
           <div class="alerta-novos-pedidos-titulo">🔔 Aviso de novo pedido pronto</div>
-          <div id="alertaNovosPedidosStatus" class="alerta-novos-pedidos-status">O sinal toca quando um pedido de hoje passa a ter etiqueta disponível.</div>
+          <div id="alertaNovosPedidosStatus" class="alerta-novos-pedidos-status">O sinal toca quando um pedido pendente passa a ter etiqueta disponível.</div>
         </div>
         <div class="alerta-novos-pedidos-acoes">
           <button id="btnAlternarAlertaPedidos" type="button" onclick="window.alternarAlertaSonoroPedidos()"></button>
@@ -3485,7 +3475,7 @@ window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_
     if (status) {
       if (!alertaAtivo) status.textContent = "Aviso sonoro desativado neste aparelho.";
       else if (!audioLiberado) status.textContent = "Som ativo. Toque/clique uma vez na tela para liberar o áudio deste aparelho.";
-      else status.textContent = extra || "Pronto: tocará quando surgir um novo pedido de hoje com etiqueta disponível.";
+      else status.textContent = extra || "Pronto: tocará quando surgir um novo pedido pendente com etiqueta disponível.";
     }
   }
 

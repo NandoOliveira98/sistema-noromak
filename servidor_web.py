@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "14.3"
+APP_VERSION = "14.4"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2809,7 +2809,9 @@ def _ml_fiscal_and_label_state(*, order: dict[str, Any], order_id: str, operatio
                 invoice_unavailable_reason = msg[:500]
 
     invoice_pending = status == "ready_to_ship" and substatus == "invoice_pending"
-    should_try_label = bool(shipment_id) and status == "ready_to_ship" and not invoice_pending
+    # O substatus fiscal pode ficar atrasado mesmo depois que o Mercado Livre já
+    # liberou a etiqueta. A disponibilidade real do ZPL é a fonte de verdade.
+    should_try_label = bool(shipment_id) and status == "ready_to_ship"
 
     label_stored = False
     label_error = ""
@@ -2831,10 +2833,10 @@ def _ml_fiscal_and_label_state(*, order: dict[str, Any], order_id: str, operatio
         except Exception as exc:
             label_error = str(exc)[:1200]
 
-    if invoice_pending:
-        fiscal_status = "AGUARDANDO"
-    elif label_stored:
+    if label_stored:
         fiscal_status = "DISPONÍVEL"
+    elif invoice_pending:
+        fiscal_status = "AGUARDANDO"
     elif status == "ready_to_ship":
         fiscal_status = "PROCESSANDO"
     else:
@@ -2845,7 +2847,7 @@ def _ml_fiscal_and_label_state(*, order: dict[str, Any], order_id: str, operatio
         "invoice_available": invoice_available,
         "invoice_unavailable_reason": invoice_unavailable_reason,
         "invoice_pending": invoice_pending,
-        "fiscal_ready": not invoice_pending,
+        "fiscal_ready": bool(label_stored) or not invoice_pending,
         "fiscal_status": fiscal_status,
         "shipment_status": status,
         "shipment_substatus": substatus,
@@ -3441,12 +3443,9 @@ def ml_pending_label_watch_once() -> dict[str, int]:
             status = str(shipment.get("status") or "").strip().lower()
             substatus = str(shipment.get("substatus") or "").strip().lower()
 
-            # invoice_pending ainda não tem etiqueta pronta. Evita chamadas caras.
-            if status == "ready_to_ship" and substatus == "invoice_pending":
-                continue
-
-            # Fora do pending, reimporta: a rotina existente tenta a etiqueta ZPL
-            # e só libera conferência se o vínculo for realmente gravado.
+            # O substatus invoice_pending pode ficar defasado. Em todo shipment
+            # ready_to_ship, consulta o ZPL e só libera a conferência se o vínculo
+            # da etiqueta for realmente gravado.
             if status == "ready_to_ship":
                 triggered += 1
                 result = ml_import_order(order_id, source="API Mercado Livre / watcher etiqueta")
@@ -3822,7 +3821,7 @@ def ml_manual_sync() -> dict[str, Any]:
 
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/14.3"
+    server_version = "NoromakExpedicao/14.4"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
