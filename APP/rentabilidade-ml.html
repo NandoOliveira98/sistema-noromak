@@ -20,7 +20,7 @@ async function load(refresh=false){
   const controller=new AbortController();
   const timer=setTimeout(()=>controller.abort(), refresh?180000:45000);
   try{
-    const qs=new URLSearchParams({days:String(selectedDays()),limit:'150'});
+    const qs=new URLSearchParams({days:String(selectedDays()),limit:'1000'});
     if(refresh) qs.set('refresh','1');
     const r=await fetch('/expedicao/api/rentabilidade-ml?'+qs.toString(),{credentials:'same-origin',signal:controller.signal,headers:{'Accept':'application/json'}});
     const text=await r.text();
@@ -43,8 +43,8 @@ async function load(refresh=false){
 function dateOk(r){const d=Number(el.periodo.value);if(!d)return true;const dt=new Date(r.date);if(isNaN(dt))return true;return dt>=new Date(Date.now()-d*86400000)}
 function render(){
   const q=el.busca.value.trim().toLowerCase();
-  const x=rows.filter(r=>dateOk(r)&&(!q||[r.order_id,r.sku,r.product,r.client].join(' ').toLowerCase().includes(q))&&(!el.preju.checked||(r.profit!=null&&Number(r.profit)<0)));
-  el.tb.innerHTML=x.length?x.map(r=>`<tr><td><b>${esc(r.order_id)}</b></td><td>${esc((r.date||'').slice(0,10))}</td><td>${esc(r.sku)}</td><td title="${esc(r.product||'')}">${esc((r.product||'').slice(0,42))}</td><td>${esc(r.qty)}</td><td class="money">${brl(r.sale_amount)}</td><td class="money">${brl(r.unit_cost)}</td><td class="money">${brl(r.product_cost)}</td><td class="money">${brl(r.ml_fee)}</td><td class="money">${brl(r.shipping_cost)}</td><td class="money">${brl(r.other_ml_cost)}</td><td class="money ${r.profit==null?'':Number(r.profit)>=0?'pos':'neg'}">${brl(r.profit)}</td><td class="money ${r.margin==null?'':Number(r.margin)>=0?'pos':'neg'}">${pct(r.margin)}</td><td><span class="pill ${r.cost_complete?'':'warn'}">${r.cost_complete?'completos':'parciais'}</span></td></tr>`).join(''):'<tr><td colspan="14" class="empty">Nenhuma venda encontrada com os filtros atuais.</td></tr>';
+  const x=rows.filter(r=>dateOk(r)&&(!q||[r.order_id,r.pack_id,r.sku,r.product,r.client].join(' ').toLowerCase().includes(q))&&(!el.preju.checked||(r.profit!=null&&Number(r.profit)<0)));
+  el.tb.innerHTML=x.length?x.map(r=>`<tr><td><b>${esc(r.order_id)}</b>${r.pack_id&&String(r.pack_id)!==String(r.order_id)?`<div class="muted" style="font-size:10px">Pack ${esc(r.pack_id)}</div>`:''}</td><td>${esc((r.date||'').slice(0,10))}</td><td>${esc(r.sku)}</td><td title="${esc(r.product||'')}">${esc((r.product||'').slice(0,42))}</td><td>${esc(r.qty)}</td><td class="money">${brl(r.sale_amount)}</td><td class="money">${brl(r.unit_cost)}</td><td class="money">${brl(r.product_cost)}</td><td class="money">${brl(r.ml_fee)}</td><td class="money">${brl(r.shipping_cost)}</td><td class="money">${brl(r.other_ml_cost)}</td><td class="money ${r.profit==null?'':Number(r.profit)>=0?'pos':'neg'}">${brl(r.profit)}</td><td class="money ${r.margin==null?'':Number(r.margin)>=0?'pos':'neg'}">${pct(r.margin)}</td><td><span class="pill ${r.cost_complete?'':'warn'}">${r.cost_complete?'completos':'parciais'}</span></td></tr>`).join(''):'<tr><td colspan="14" class="empty">Nenhuma venda encontrada com os filtros atuais.</td></tr>';
   let sale=0,prod=0,ml=0,profit=0,profitSales=0;
   x.forEach(r=>{if(r.sale_amount!=null)sale+=Number(r.sale_amount);if(r.product_cost!=null)prod+=Number(r.product_cost);ml+=Number(r.ml_fee||0)+Number(r.shipping_cost||0)+Number(r.other_ml_cost||0);if(r.profit!=null){profit+=Number(r.profit);profitSales+=Number(r.sale_amount||0)}});
   el.fat.textContent=brl(sale);el.cp.textContent=brl(prod);el.cml.textContent=brl(ml);el.luc.textContent=brl(profit);el.luc.className=profit>=0?'pos':'neg';el.mar.textContent=profitSales?pct(profit/profitSales*100):'—';

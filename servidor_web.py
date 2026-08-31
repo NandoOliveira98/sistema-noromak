@@ -4642,60 +4642,119 @@ def _money_number(value: Any) -> float | None:
         return None
 
 
-def _ml_fee_from_order(order: dict[str, Any]) -> float | None:
-    """Extrai somente tarifas explicitamente devolvidas pela API; nunca estima comissão."""
-    total = 0.0; found = False
+def _ml_item_fee(oi: dict[str, Any]) -> float | None:
+    """Tarifa da linha exatamente como informada pelo Mercado Livre.
+
+    Em orders, ``sale_fee`` é a tarifa de venda por unidade. Alguns contratos
+    também expõem ``sale_fee_amount`` já totalizado; quando existir, ele tem
+    prioridade para não fazer suposições.
+    """
+    if not isinstance(oi, dict):
+        return None
+    for key in ("sale_fee_amount", "sale_fee_total"):
+        v = _money_number(oi.get(key))
+        if v is not None:
+            return abs(v)
+    v = _money_number(oi.get("sale_fee"))
+    if v is None:
+        return None
+    try:
+        qty = max(1, int(float(oi.get("quantity") or 1)))
+    except Exception:
+        qty = 1
+    return abs(v) * qty
+
+
+def _ml_order_marketplace_fee(order: dict[str, Any]) -> float | None:
+    """Obtém a tarifa total do pedido sem estimar percentuais."""
+    if not isinstance(order, dict):
+        return None
+    # Campo oficial totalizado quando disponível no recurso orders.
+    for key in ("marketplace_fee", "sale_fee_amount"):
+        v = _money_number(order.get(key))
+        if v is not None:
+            return abs(v)
+    # Compatibilidade com respostas antigas/variantes de payments.
+    total = 0.0
+    found = False
     payments = order.get("payments") if isinstance(order.get("payments"), list) else []
     for pay in payments:
-        if not isinstance(pay, dict): continue
+        if not isinstance(pay, dict):
+            continue
         for key in ("marketplace_fee", "fee_amount", "mercadopago_fee"):
-            v=_money_number(pay.get(key))
+            v = _money_number(pay.get(key))
             if v is not None:
-                total += abs(v); found=True; break
-    return total if found else None
+                total += abs(v)
+                found = True
+                break
+    if found:
+        return total
+    # Último fallback: soma das sale_fee declaradas nos itens.
+    vals = []
+    for oi in order.get("order_items") or []:
+        v = _ml_item_fee(oi) if isinstance(oi, dict) else None
+        if v is not None:
+            vals.append(v)
+    return sum(vals) if vals else None
 
 
-def _ml_seller_shipping_cost(shipment_id: str) -> float | None:
-    if not shipment_id: return None
+def _ml_seller_shipping_cost(shipment_id: str, seller_id: str = "") -> float | None:
+    if not shipment_id:
+        return None
     try:
-        data=ml_api_get(f"/shipments/{quote(shipment_id)}/costs")
+        data = ml_api_get(f"/shipments/{quote(shipment_id)}/costs")
     except Exception:
         return None
-    if not isinstance(data, dict): return None
-    # A resposta varia por modalidade. Só aceitamos campos que indiquem custo do remetente/vendedor.
-    for key in ("sender_cost", "seller_cost", "cost"):
-        v=_money_number(data.get(key))
-        if v is not None: return abs(v)
-    senders=data.get("senders")
+    if not isinstance(data, dict):
+        return None
+    # Fonte oficial para conciliação: senders[].cost. Se houver vários senders,
+    # prioriza o seller da conta e só soma quando não for possível identificá-lo.
+    senders = data.get("senders")
     if isinstance(senders, list):
-        vals=[]
+        matched = []
+        all_vals = []
         for x in senders:
-            if isinstance(x, dict):
-                for key in ("cost", "sender_cost"):
-                    v=_money_number(x.get(key))
-                    if v is not None: vals.append(abs(v)); break
-        if vals: return sum(vals)
+            if not isinstance(x, dict):
+                continue
+            v = _money_number(x.get("cost"))
+            if v is None:
+                continue
+            v = abs(v)
+            all_vals.append(v)
+            uid = str(x.get("user_id") or "").strip()
+            if seller_id and uid == str(seller_id):
+                matched.append(v)
+        if matched:
+            return sum(matched)
+        if all_vals:
+            return sum(all_vals)
+    # Compatibilidade com contratos legados, sem usar gross_amount como custo.
+    for key in ("sender_cost", "seller_cost"):
+        v = _money_number(data.get(key))
+        if v is not None:
+            return abs(v)
     return None
 
 
-def _ml_profitability_recent_sales(days: int = 30, limit: int = 150) -> list[dict[str, Any]]:
-    """Busca vendas pagas diretamente no Mercado Livre para o dashboard.
+def _ml_profitability_recent_sales(days: int = 30, limit: int = 1000) -> list[dict[str, Any]]:
+    """Busca todas as vendas fechadas do período, paginando até o corte temporal.
 
-    A V15.7 dependia quase exclusivamente de ``conf_pedidos`` e do histórico local.
-    Pedidos já expedidos podiam não estar mais nessas estruturas, deixando o painel
-    vazio. Aqui a fonte primária passa a ser /orders/search, com fallback local.
+    V15.9 remove o teto prático de 150 linhas da V15.8. O ``limit`` continua
+    existindo apenas como proteção operacional e passa a aceitar até 2.000 linhas.
+    Também inclui ``partially_refunded`` porque continua sendo uma venda com
+    resultado financeiro que precisa aparecer no painel.
     """
     _, seller_id = ml_access_token()
     cutoff = datetime.now(timezone.utc) - timedelta(days=max(1, min(int(days or 30), 365)))
     out: list[dict[str, Any]] = []
     seen: set[tuple[str, str]] = set()
     page_size = 50
-    max_pages = max(1, min(10, (max(1, int(limit)) + page_size - 1) // page_size + 1))
+    max_pages = 50  # até 2.500 orders; o corte temporal normalmente encerra antes
     reached_cutoff = False
     for page in range(max_pages):
         query = urlencode({
             "seller": seller_id,
-            "order.status": "paid",
+            "order.status": "paid,partially_refunded",
             "sort": "date_desc",
             "limit": str(page_size),
             "offset": str(page * page_size),
@@ -4707,30 +4766,38 @@ def _ml_profitability_recent_sales(days: int = 30, limit: int = 150) -> list[dic
         for order in orders:
             if not isinstance(order, dict):
                 continue
-            created = _ml_parse_datetime(order.get("date_created"))
+            created = _ml_parse_datetime(order.get("date_closed") or order.get("date_created"))
             if created is not None and created < cutoff:
                 reached_cutoff = True
                 break
+            status = str(order.get("status") or "").lower()
+            if status and status not in ("paid", "partially_refunded"):
+                continue
             oid = str(order.get("id") or "").strip()
             if not oid:
                 continue
             buyer = _ml_real_buyer_name(order)
             shipment = order.get("shipping") if isinstance(order.get("shipping"), dict) else {}
             shipment_id = str(shipment.get("id") or "").strip()
+            pack_id = str(order.get("pack_id") or "").strip()
             items = order.get("order_items") if isinstance(order.get("order_items"), list) else []
             if not items:
-                # Mantém a venda visível mesmo em respostas resumidas incomuns.
                 key = (oid, "")
                 if key not in seen:
                     seen.add(key)
                     out.append({
-                        "order_id": oid, "sku": "", "product": "", "client": buyer,
-                        "date": str(order.get("date_created") or ""), "shipment_id": shipment_id,
-                        "qty": 1, "sale_amount_api": _money_number(order.get("total_amount")),
+                        "order_id": oid, "pack_id": pack_id, "sku": "", "product": "", "client": buyer,
+                        "date": str(order.get("date_closed") or order.get("date_created") or ""),
+                        "shipment_id": shipment_id, "qty": 1,
+                        "sale_amount_api": _money_number(order.get("total_amount")),
+                        "line_fee_api": _ml_order_marketplace_fee(order),
                         "order_summary": order,
                     })
                 continue
-            for oi in items:
+            order_fee = _ml_order_marketplace_fee(order)
+            line_infos = []
+            order_lines_total = 0.0
+            for idx, oi in enumerate(items):
                 if not isinstance(oi, dict):
                     continue
                 item = oi.get("item") if isinstance(oi.get("item"), dict) else {}
@@ -4742,19 +4809,33 @@ def _ml_profitability_recent_sales(days: int = 30, limit: int = 150) -> list[dic
                     qty = 1
                 unit_price = _money_number(oi.get("unit_price"))
                 line_total = (unit_price * qty) if unit_price is not None else None
-                key = (oid, sku or str(item.get("id") or title))
+                if line_total is not None:
+                    order_lines_total += line_total
+                line_infos.append((idx, oi, item, sku, title, qty, line_total))
+            for idx, oi, item, sku, title, qty, line_total in line_infos:
+                # Identificador interno evita perder duas linhas sem SKU dentro da mesma order.
+                line_identity = sku or str(item.get("id") or "") + ":" + str(item.get("variation_id") or idx)
+                key = (oid, line_identity)
                 if key in seen:
                     continue
                 seen.add(key)
+                item_fee = _ml_item_fee(oi)
+                if item_fee is None and order_fee is not None:
+                    if len(line_infos) == 1:
+                        item_fee = order_fee
+                    elif line_total is not None and order_lines_total > 0:
+                        item_fee = order_fee * (line_total / order_lines_total)
                 out.append({
-                    "order_id": oid, "sku": sku, "product": title, "client": buyer,
-                    "date": str(order.get("date_created") or ""), "shipment_id": shipment_id,
-                    "qty": qty, "sale_amount_api": line_total,
-                    "order_summary": order,
+                    "order_id": oid, "pack_id": pack_id, "sku": sku, "product": title, "client": buyer,
+                    "date": str(order.get("date_closed") or order.get("date_created") or ""),
+                    "shipment_id": shipment_id, "qty": qty, "sale_amount_api": line_total,
+                    "line_fee_api": item_fee, "order_summary": order,
                 })
                 if len(out) >= limit:
                     return out
-        if reached_cutoff or len(orders) < page_size or len(out) >= limit:
+        paging = result.get("paging") if isinstance(result, dict) else {}
+        total = int((paging or {}).get("total") or 0) if isinstance(paging, dict) else 0
+        if reached_cutoff or len(orders) < page_size or (total and (page + 1) * page_size >= total) or len(out) >= limit:
             break
     return out
 
@@ -4786,6 +4867,7 @@ def _ml_profitability_local_sales(limit: int = 300) -> list[dict[str, Any]]:
         if key not in grouped:
             grouped[key] = {
                 "order_id": oid,
+                "pack_id": str(r.get("PackIdMercadoLivre") or r.get("PackId") or ""),
                 "sku": sku,
                 "product": str(r.get("Descrição") or ""),
                 "client": str(r.get("Cliente") or ""),
@@ -4802,7 +4884,7 @@ def _ml_profitability_local_sales(limit: int = 300) -> list[dict[str, Any]]:
     return list(grouped.values())[:max(1, int(limit))]
 
 
-def ml_profitability_payload(refresh: bool = False, limit: int = 150, days: int = 30) -> dict[str, Any]:
+def ml_profitability_payload(refresh: bool = False, limit: int = 1000, days: int = 30) -> dict[str, Any]:
     """Dashboard de lucro ML com vendas buscadas diretamente do marketplace.
 
     O carregamento normal prioriza velocidade: lista as vendas e usa snapshots já
@@ -4830,7 +4912,7 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 150, days: int 
             by_key[key] = dict(rec)
         else:
             dst = by_key[key]
-            for fld in ("product", "client", "date", "shipment_id"):
+            for fld in ("product", "client", "date", "shipment_id", "pack_id"):
                 if not dst.get(fld) and rec.get(fld):
                     dst[fld] = rec.get(fld)
             if not dst.get("qty") and rec.get("qty"):
@@ -4846,6 +4928,17 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 150, days: int 
 
     rows: list[dict[str, Any]] = []
     order_cache: dict[str, dict[str, Any]] = {}
+    shipping_total_cache: dict[str, float | None] = {}
+    shipment_sale_totals: dict[str, float] = {}
+    shipment_line_counts: dict[str, int] = {}
+    for _rec in records:
+        _sid = str(_rec.get("shipment_id") or "").strip()
+        if not _sid:
+            continue
+        shipment_line_counts[_sid] = shipment_line_counts.get(_sid, 0) + 1
+        _v = _money_number(_rec.get("sale_amount_api"))
+        if _v is not None:
+            shipment_sale_totals[_sid] = shipment_sale_totals.get(_sid, 0.0) + max(0.0, _v)
     for rec in records:
         oid, sku = rec["order_id"], rec.get("sku") or ""
         with DB_LOCK:
@@ -4858,6 +4951,8 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 150, days: int 
         # sem fazer chamadas adicionais.
         if snap.get("sale_amount") is None and rec.get("sale_amount_api") is not None:
             snap["sale_amount"] = rec.get("sale_amount_api")
+        if snap.get("ml_fee") is None and rec.get("line_fee_api") is not None:
+            snap["ml_fee"] = rec.get("line_fee_api")
 
         if refresh:
             order = rec.get("order_summary") if isinstance(rec.get("order_summary"), dict) else None
@@ -4881,12 +4976,35 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 150, days: int 
 
             sale_amount = _money_number(rec.get("sale_amount_api"))
             ml_fee = _money_number(snap.get("ml_fee"))
-            ship_cost = _money_number(snap.get("seller_shipping_cost"))
+            # Em refresh o frete é recalculado pelo shipment para corrigir snapshots
+            # antigos que podiam repetir o custo total em cada item da mesma venda.
+            ship_cost = None
             if isinstance(order, dict):
                 if sale_amount is None:
                     sale_amount = _money_number(order.get("total_amount"))
+                # Recalcula a tarifa da linha usando o detalhe oficial da order.
+                detailed_items = order.get("order_items") if isinstance(order.get("order_items"), list) else []
+                matching = []
+                for doi in detailed_items:
+                    if not isinstance(doi, dict):
+                        continue
+                    dsku = str(_ml_order_item_sku(doi) or "").strip()
+                    if sku and dsku == sku:
+                        matching.append(doi)
+                if len(matching) == 1:
+                    detailed_fee = _ml_item_fee(matching[0])
+                    if detailed_fee is not None:
+                        ml_fee = detailed_fee
                 if ml_fee is None:
-                    ml_fee = _ml_fee_from_order(order)
+                    total_fee = _ml_order_marketplace_fee(order)
+                    if total_fee is not None:
+                        # Para order de uma linha a tarifa total pertence integralmente à linha.
+                        if len(detailed_items) <= 1:
+                            ml_fee = total_fee
+                        else:
+                            order_total = sum((_money_number(x.get("unit_price")) or 0) * max(1, int(float(x.get("quantity") or 1))) for x in detailed_items if isinstance(x, dict))
+                            if sale_amount is not None and order_total > 0:
+                                ml_fee = total_fee * (sale_amount / order_total)
                 if not rec.get("date"):
                     rec["date"] = str(order.get("date_created") or "")
                 if not rec.get("client"):
@@ -4894,8 +5012,22 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 150, days: int 
                 if not rec.get("shipment_id"):
                     sh = order.get("shipping") if isinstance(order.get("shipping"), dict) else {}
                     rec["shipment_id"] = str(sh.get("id") or "")
-            if ship_cost is None and rec.get("shipment_id"):
-                ship_cost = _ml_seller_shipping_cost(str(rec.get("shipment_id")))
+            if rec.get("shipment_id"):
+                sid = str(rec.get("shipment_id"))
+                if sid not in shipping_total_cache:
+                    try:
+                        _, seller_id_for_cost = ml_access_token()
+                    except Exception:
+                        seller_id_for_cost = ""
+                    shipping_total_cache[sid] = _ml_seller_shipping_cost(sid, str(seller_id_for_cost or ""))
+                shipping_total = shipping_total_cache.get(sid)
+                if shipping_total is not None:
+                    line_sale = _money_number(sale_amount)
+                    group_sale = shipment_sale_totals.get(sid, 0.0)
+                    if line_sale is not None and group_sale > 0:
+                        ship_cost = shipping_total * max(0.0, line_sale) / group_sale
+                    else:
+                        ship_cost = shipping_total / max(1, shipment_line_counts.get(sid, 1))
 
             captured = now_iso()
             with DB_LOCK:
@@ -4937,6 +5069,7 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 150, days: int 
         margin = (profit / sale * 100) if profit is not None and sale else None
         rows.append({
             "order_id": oid,
+            "pack_id": str(rec.get("pack_id") or ""),
             "sku": sku,
             "product": str(rec.get("product") or ""),
             "client": str(rec.get("client") or ""),
@@ -4965,7 +5098,7 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 150, days: int 
     }
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/15.8"
+    server_version = "NoromakExpedicao/15.9"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
@@ -5165,7 +5298,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 except Exception:
                     days = 30
                 try:
-                    limit = max(1, min(300, int((query.get("limit") or ["150"])[0] or 150)))
+                    limit = max(1, min(2000, int((query.get("limit") or ["1000"])[0] or 1000)))
                 except Exception:
                     limit = 150
                 try:

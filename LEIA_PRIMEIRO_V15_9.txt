@@ -1,0 +1,9 @@
+V15.9 - RENTABILIDADE ML: VENDAS E TAXAS CORRIGIDAS
+
+- Remove o limite prático de 150 linhas; o painel passa a buscar até 1.000 linhas por padrão (máximo 2.000).
+- Paginação percorre todo o período selecionado até o corte temporal.
+- Inclui vendas paid e partially_refunded.
+- Taxa ML passa a usar sale_fee dos itens e marketplace_fee do pedido, sem estimar percentual.
+- Frete do vendedor usa senders[].cost de /shipments/{id}/costs.
+- Mostra Pack ID junto da order quando disponível, facilitando conferir vendas de carrinho.
+- Mantém custo Apollo e snapshots históricos.
