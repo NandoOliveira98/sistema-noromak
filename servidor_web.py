@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "14.16"
+APP_VERSION = "14.17"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2486,25 +2486,26 @@ def _ml_is_full_shipment(shipment: dict[str, Any] | None) -> bool:
 
 
 def _ml_billing_name(order: dict[str, Any]) -> str:
-    """Obtém nome/razão social fiscal pelo fluxo atual do Mercado Livre.
+    """Obtém o nome/razão social usado pelo Mercado Livre em Dados para NF-e.
 
-    /orders/{order_id} -> buyer.billing_info.id
-    /orders/billing-info/{site_id}/{billing_info_id}
+    Fluxo oficial atual:
+      /orders/{order_id} -> buyer.billing_info.id
+      /orders/billing-info/{site_id}/{billing_info_id}
+
+    Durante a migração do Mercado Livre, o endpoint legado por order_id ainda
+    pode responder em algumas contas. Ele é usado somente como fallback quando
+    o pedido não traz billing_info.id ou o novo recurso não devolve o nome.
     """
     buyer = order.get("buyer") if isinstance(order.get("buyer"), dict) else {}
     embedded = buyer.get("billing_info") if isinstance(buyer.get("billing_info"), dict) else {}
-    billing_id = str(embedded.get("id") or "").strip()
+    root_billing = order.get("billing_info") if isinstance(order.get("billing_info"), dict) else {}
+    billing_id = str(embedded.get("id") or root_billing.get("id") or "").strip()
     site_id = str(order.get("site_id") or "MLB").strip().upper() or "MLB"
-    if not billing_id:
-        return ""
-    try:
-        payload = ml_api_get(
-            f"/orders/billing-info/{quote(site_id)}/{quote(billing_id)}",
-            headers={"x-version": "2"},
-        )
+    order_id = str(order.get("id") or "").strip()
+
+    def extract_name(payload: Any) -> str:
         if not isinstance(payload, dict):
             return ""
-
         fiscal_buyer = payload.get("buyer") if isinstance(payload.get("buyer"), dict) else {}
         info = fiscal_buyer.get("billing_info") if isinstance(fiscal_buyer.get("billing_info"), dict) else {}
         if not info and isinstance(payload.get("billing_info"), dict):
@@ -2512,23 +2513,35 @@ def _ml_billing_name(order: dict[str, Any]) -> str:
         if not info:
             info = payload
 
-        # O billing-info v2 pode devolver os dados diretamente (name/last_name)
-        # ou dentro de additional_info. Aceitamos os dois formatos para que o
-        # nome exibido em Pedidos Pendentes seja o mesmo usado em Dados para NF.
         additional = info.get("additional_info") if isinstance(info.get("additional_info"), list) else []
         additional_map: dict[str, str] = {}
         for entry in additional:
             if not isinstance(entry, dict):
                 continue
-            kind = str(entry.get("type") or "").strip().upper()
-            value = str(entry.get("value") or "").strip()
+            kind = str(entry.get("type") or entry.get("key") or "").strip().upper()
+            value = str(entry.get("value") or entry.get("description") or "").strip()
             if kind and value and kind not in additional_map:
                 additional_map[kind] = value
 
-        first = str(info.get("name") or additional_map.get("FIRST_NAME") or additional_map.get("NAME") or "").strip()
-        last = str(info.get("last_name") or additional_map.get("LAST_NAME") or "").strip()
+        # No contrato atual do MLB, pessoa física vem como name + last_name.
+        # Pessoa jurídica normalmente vem apenas em name (razão social).
+        first = str(
+            info.get("name")
+            or info.get("first_name")
+            or additional_map.get("FIRST_NAME")
+            or additional_map.get("NAME")
+            or ""
+        ).strip()
+        last = str(
+            info.get("last_name")
+            or info.get("surname")
+            or additional_map.get("LAST_NAME")
+            or additional_map.get("SURNAME")
+            or ""
+        ).strip()
         business_name = str(
             info.get("business_name")
+            or info.get("corporate_name")
             or additional_map.get("BUSINESS_NAME")
             or additional_map.get("COMPANY_NAME")
             or additional_map.get("CORPORATE_NAME")
@@ -2537,15 +2550,39 @@ def _ml_billing_name(order: dict[str, Any]) -> str:
 
         identification = info.get("identification") if isinstance(info.get("identification"), dict) else {}
         doc_type = str(identification.get("type") or additional_map.get("DOC_TYPE") or "").strip().upper()
-        if doc_type == "CNPJ" and business_name:
-            return business_name
+        if doc_type == "CNPJ" and (business_name or first):
+            return business_name or first
         if business_name and not (first or last):
             return business_name
         return " ".join(part for part in (first, last) if part).strip() or business_name
-    except Exception:
-        # Nome fiscal melhora a operação, mas indisponibilidade momentânea não
-        # impede a entrada do pedido; a próxima notificação/sincronização tenta de novo.
-        return ""
+
+    # 1) Novo endpoint oficial. Não envia x-version: a documentação atual do
+    # billing-info não exige esse header e o payload esperado é buyer.billing_info.
+    if billing_id:
+        try:
+            payload = ml_api_get(f"/orders/billing-info/{quote(site_id)}/{quote(billing_id)}")
+            name = extract_name(payload)
+            if name:
+                return name
+        except Exception:
+            pass
+
+    # 2) Fallback temporário do endpoint legado durante a migração do ML.
+    # Isso também cobre pedidos em que /orders ainda não trouxe billing_info.id.
+    if order_id:
+        for legacy_path in (
+            f"/orders/{quote(order_id)}/billing_info",
+            f"/orders/{quote(order_id)}/billing-info",
+        ):
+            try:
+                payload = ml_api_get(legacy_path)
+                name = extract_name(payload)
+                if name:
+                    return name
+            except Exception:
+                continue
+
+    return ""
 
 
 def _ml_dispatch_date(shipment_id: str, shipment: dict[str, Any] | None) -> str:

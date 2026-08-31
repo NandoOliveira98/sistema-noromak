@@ -1,0 +1,4 @@
+git status
+git add -A
+git commit -m "v14.17 corrige nome fiscal nos pedidos pendentes"
+./publicar.sh
