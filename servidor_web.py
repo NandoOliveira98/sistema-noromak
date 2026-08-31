@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "15.2"
+APP_VERSION = "15.7"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -802,6 +802,20 @@ def init_db() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_ml_event_log_created ON ml_event_log(created_at DESC);
             CREATE INDEX IF NOT EXISTS idx_ml_event_log_resource ON ml_event_log(resource, created_at DESC);
+            CREATE TABLE IF NOT EXISTS ml_profitability_snapshot (
+                order_id TEXT NOT NULL,
+                sku TEXT NOT NULL,
+                unit_cost REAL,
+                cost_source TEXT NOT NULL DEFAULT '',
+                sale_amount REAL,
+                ml_fee REAL,
+                seller_shipping_cost REAL,
+                other_ml_cost REAL,
+                captured_at TEXT NOT NULL,
+                raw_summary TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY(order_id, sku)
+            );
+            CREATE INDEX IF NOT EXISTS idx_ml_profit_snapshot_captured ON ml_profitability_snapshot(captured_at DESC);
             CREATE TABLE IF NOT EXISTS print_jobs (
                 id TEXT PRIMARY KEY,
                 order_key TEXT NOT NULL,
@@ -4619,6 +4633,126 @@ def rotate_print_agent_token() -> str:
     return token
 
 
+
+def _money_number(value: Any) -> float | None:
+    try:
+        if value is None or value == "": return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _ml_fee_from_order(order: dict[str, Any]) -> float | None:
+    """Extrai somente tarifas explicitamente devolvidas pela API; nunca estima comissão."""
+    total = 0.0; found = False
+    payments = order.get("payments") if isinstance(order.get("payments"), list) else []
+    for pay in payments:
+        if not isinstance(pay, dict): continue
+        for key in ("marketplace_fee", "fee_amount", "mercadopago_fee"):
+            v=_money_number(pay.get(key))
+            if v is not None:
+                total += abs(v); found=True; break
+    return total if found else None
+
+
+def _ml_seller_shipping_cost(shipment_id: str) -> float | None:
+    if not shipment_id: return None
+    try:
+        data=ml_api_get(f"/shipments/{quote(shipment_id)}/costs")
+    except Exception:
+        return None
+    if not isinstance(data, dict): return None
+    # A resposta varia por modalidade. Só aceitamos campos que indiquem custo do remetente/vendedor.
+    for key in ("sender_cost", "seller_cost", "cost"):
+        v=_money_number(data.get(key))
+        if v is not None: return abs(v)
+    senders=data.get("senders")
+    if isinstance(senders, list):
+        vals=[]
+        for x in senders:
+            if isinstance(x, dict):
+                for key in ("cost", "sender_cost"):
+                    v=_money_number(x.get(key))
+                    if v is not None: vals.append(abs(v)); break
+        if vals: return sum(vals)
+    return None
+
+
+def ml_profitability_payload(refresh: bool=False, limit: int=120) -> dict[str, Any]:
+    """Dashboard de lucro ML. Custos ausentes permanecem nulos; não há valores inventados."""
+    source_rows=[]
+    raw,_,_=get_storage("conf_pedidos")
+    source_rows.extend(_rows_from_storage_value(raw))
+    with DB_LOCK:
+        hist=DB.execute("SELECT payload,completed_at FROM order_completion_history ORDER BY id DESC LIMIT 600").fetchall()
+    for h in hist:
+        try: payload=json.loads(h["payload"] or "[]")
+        except Exception: continue
+        rows=payload if isinstance(payload,list) else [payload]
+        source_rows.extend([r for r in rows if isinstance(r,dict)])
+    grouped={}
+    for r in source_rows:
+        if str(r.get("Marketplace") or "").upper()!="MERCADO LIVRE" and not r.get("VendaMercadoLivre"): continue
+        oid=str(r.get("VendaMercadoLivre") or "").strip()
+        sku=str(r.get("SKU") or "").strip()
+        if not oid or not sku: continue
+        key=(oid,sku)
+        if key not in grouped:
+            grouped[key]={"order_id":oid,"sku":sku,"product":str(r.get("Descrição") or ""),"client":str(r.get("Cliente") or ""),"date":str(r.get("Data do Pedido") or ""),"shipment_id":str(r.get("ShipmentIdMercadoLivre") or ""),"qty":0}
+        try: grouped[key]["qty"] += max(1,int(float(r.get("Quantidade") or 1)))
+        except Exception: grouped[key]["qty"] += 1
+    rows=[]
+    order_cache={}
+    for rec in list(grouped.values())[:max(1,limit)]:
+        oid,sku=rec["order_id"],rec["sku"]
+        with DB_LOCK:
+            snap=DB.execute("SELECT * FROM ml_profitability_snapshot WHERE order_id=? AND sku=?",(oid,sku)).fetchone()
+        snap=dict(snap) if snap else {}
+        need=refresh or not snap
+        order=None
+        if need:
+            try:
+                order=order_cache.get(oid) or ml_api_get(f"/orders/{quote(oid)}")
+                order_cache[oid]=order
+            except Exception: order=None
+            unit_cost=None; cost_source=""
+            try:
+                c=crm_cost_lookup(sku,"rentabilidade-ml"); unit_cost=_money_number(c.get("custo_medio")); cost_source="Apollo"
+            except Exception: pass
+            sale_amount=None; ml_fee=None; ship_cost=None
+            if isinstance(order,dict):
+                sale_amount=_money_number(order.get("total_amount"))
+                ml_fee=_ml_fee_from_order(order)
+                if not rec["date"]: rec["date"]=str(order.get("date_created") or "")
+                if not rec["client"]: rec["client"]=_ml_real_buyer_name(order)
+                # preço por SKU quando o pedido possui vários itens
+                line_total=0.0; line_found=False
+                for oi in order.get("order_items") or []:
+                    if not isinstance(oi,dict): continue
+                    it=oi.get("item") if isinstance(oi.get("item"),dict) else {}
+                    candidate=_ml_order_item_sku(oi)
+                    if normalize(candidate)==normalize(sku):
+                        q=_money_number(oi.get("quantity")) or 1; up=_money_number(oi.get("unit_price"))
+                        if up is not None: line_total += q*up; line_found=True
+                if line_found: sale_amount=line_total
+            ship_cost=_ml_seller_shipping_cost(rec["shipment_id"]) if rec["shipment_id"] else None
+            captured=now_iso()
+            with DB_LOCK:
+                DB.execute("""INSERT INTO ml_profitability_snapshot(order_id,sku,unit_cost,cost_source,sale_amount,ml_fee,seller_shipping_cost,other_ml_cost,captured_at,raw_summary)
+                VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(order_id,sku) DO UPDATE SET
+                unit_cost=COALESCE(ml_profitability_snapshot.unit_cost,excluded.unit_cost), cost_source=CASE WHEN ml_profitability_snapshot.unit_cost IS NULL THEN excluded.cost_source ELSE ml_profitability_snapshot.cost_source END,
+                sale_amount=COALESCE(excluded.sale_amount,ml_profitability_snapshot.sale_amount), ml_fee=COALESCE(excluded.ml_fee,ml_profitability_snapshot.ml_fee), seller_shipping_cost=COALESCE(excluded.seller_shipping_cost,ml_profitability_snapshot.seller_shipping_cost), captured_at=excluded.captured_at""",
+                (oid,sku,unit_cost,cost_source,sale_amount,ml_fee,ship_cost,None,captured,"")); DB.commit()
+                snap=dict(DB.execute("SELECT * FROM ml_profitability_snapshot WHERE order_id=? AND sku=?",(oid,sku)).fetchone())
+        qty=rec["qty"]; unit=_money_number(snap.get("unit_cost")); product_cost=(unit*qty if unit is not None else None)
+        sale=_money_number(snap.get("sale_amount")); fee=_money_number(snap.get("ml_fee")); shipping=_money_number(snap.get("seller_shipping_cost")); other=_money_number(snap.get("other_ml_cost"))
+        known_costs=sum(v for v in (product_cost,fee,shipping,other) if v is not None)
+        complete=(sale is not None and product_cost is not None and fee is not None and shipping is not None)
+        profit=(sale-known_costs) if sale is not None and product_cost is not None else None
+        margin=(profit/sale*100) if profit is not None and sale else None
+        rows.append({**rec,"unit_cost":unit,"product_cost":product_cost,"sale_amount":sale,"ml_fee":fee,"shipping_cost":shipping,"other_ml_cost":other,"profit":profit,"margin":margin,"cost_complete":complete,"captured_at":snap.get("captured_at") or ""})
+    return {"ok":True,"rows":rows,"count":len(rows),"refreshed":refresh}
+
 class AppHandler(BaseHTTPRequestHandler):
     server_version = "NoromakExpedicao/15.1"
 
@@ -4810,6 +4944,15 @@ class AppHandler(BaseHTTPRequestHandler):
                         "SELECT * FROM ml_event_log ORDER BY id DESC LIMIT ?", (limit,)
                     ).fetchall()
                 self.send_json({"ok": True, "logs": [dict(row) for row in rows]})
+            return
+        if path == "/api/rentabilidade-ml":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                refresh = str((query.get("refresh") or [""])[0]).lower() in ("1","true","sim")
+                try:
+                    self.send_json(ml_profitability_payload(refresh=refresh))
+                except Exception as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 502)
             return
         if path == "/api/precificador/atualizar-tudo/status":
             ctx = self.auth()
@@ -6241,6 +6384,9 @@ class AppHandler(BaseHTTPRequestHandler):
             "/estacao-impressao.html": "estacao-impressao.html",
             "/print-station": "estacao-impressao.html",
             "/print-station/": "estacao-impressao.html",
+            "/rentabilidade-ml": "rentabilidade-ml.html",
+            "/rentabilidade-ml/": "rentabilidade-ml.html",
+            "/rentabilidade-ml.html": "rentabilidade-ml.html",
             "/precificador": "precificador.html",
             "/precificador/": "precificador.html",
             "/precificador.html": "precificador.html",

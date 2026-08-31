@@ -716,6 +716,7 @@ body{background:var(--v15-bg)!important}
   <button class="v15-nav-item" onclick="abrirAbaAdmin('historico');v15Nav(this)"><span class="v15-nav-icon">🕘</span><span class="v15-nav-label">Histórico</span></button>
   <div class="v15-nav-section">Comercial</div>
   <a class="v15-nav-item" href="/expedicao/precificador" target="_blank" rel="noopener"><span class="v15-nav-icon">$</span><span class="v15-nav-label">Precificador</span></a>
+  <a class="v15-nav-item" href="/expedicao/rentabilidade-ml" target="_blank" rel="noopener"><span class="v15-nav-icon">📈</span><span class="v15-nav-label">Rentabilidade ML</span></a>
   <button class="v15-nav-item" onclick="abrirAbaAdmin('produtos');v15Nav(this)"><span class="v15-nav-icon">📦</span><span class="v15-nav-label">Produtos</span></button>
   <button class="v15-nav-item" onclick="abrirAbaAdmin('kits');v15Nav(this)"><span class="v15-nav-icon">🎁</span><span class="v15-nav-label">Kits</span></button>
   <div class="v15-nav-section">Integrações</div>
@@ -1828,10 +1829,25 @@ async function extrairMetadadosShopee(bloco) {
   if (canvas && !rastreio) rastreio = await lerRastreioQrShopee(canvas);
   if (!leitura.pedido && rastreio) leitura.pedido = pedidoShopeePorRastreio(rastreio);
   if (canvas && !leitura.pedido) {
-    // As etiquetas térmicas atuais da Shopee podem ser uma imagem única, sem
-    // nenhum ^FD. Não bloqueia mais a operação aguardando o OCR externo: se o
-    // QR não encontrar um rastreio já importado, abre a confirmação visual.
-    leitura = { pedido: "", distanciaOcr: null, textoOcr: "Confirmação visual necessária — pedido não veio como texto no ZPL." };
+    // V15.6: nas etiquetas térmicas atuais da Shopee o número do pedido pode
+    // existir apenas dentro da imagem Z64/B64. Nesse caso usamos OCR somente
+    // na faixa onde o campo "Pedido" é impresso e comparamos o resultado aos
+    // pedidos Shopee realmente carregados no sistema. O modal manual fica como
+    // contingência, não como fluxo normal.
+    try {
+      const leituraImagem = await lerPedidoOcrShopee(canvas);
+      if (leituraImagem && leituraImagem.pedido) {
+        leitura = leituraImagem;
+      } else {
+        leitura = {
+          pedido: "",
+          distanciaOcr: leituraImagem?.distanciaOcr ?? null,
+          textoOcr: leituraImagem?.textoOcr || "Confirmação visual necessária — pedido não identificado automaticamente na imagem."
+        };
+      }
+    } catch (erroOcr) {
+      leitura = { pedido: "", distanciaOcr: null, textoOcr: `Confirmação visual necessária — OCR indisponível: ${erroOcr.message}` };
+    }
   }
   return {
     pedido: leitura.pedido,
@@ -2071,6 +2087,20 @@ function pontuarRegistroNoPedido(registro, item) {
 function vincularRegistroAoPedido(registro, item, modo) {
   const pedidoOriginal = extrairCampoAdmin(item, "Pedido") || extrairCampoAdmin(item, "Venda") || extrairCampoAdmin(item, "NF");
   const pedido = pedidoParaArmazenamento(pedidoOriginal, registro.marketplace);
+
+  // V15.6: uma etiqueta Shopee por pedido. Impede que uma escolha manual ou
+  // uma segunda tentativa do mesmo lote associe duas etiquetas ao mesmo pedido.
+  if (registro.marketplace === "shopee") {
+    const pedidoNorm = normalizarIdentificador(pedido);
+    const duplicada = bancoEtiquetas.ordem
+      .map(id => bancoEtiquetas.registros[id])
+      .find(r => r && r.id !== registro.id && r.marketplace === "shopee" && r.pedido && normalizarIdentificador(r.pedido) === pedidoNorm);
+    if (duplicada) {
+      bancoEtiquetas.avisos.push(`Shopee: o pedido ${pedidoParaExibicao(pedido,"shopee")} já está vinculado à etiqueta ${duplicada.arquivo || duplicada.id}; o vínculo duplicado foi bloqueado.`);
+      return false;
+    }
+  }
+
   adicionarChavesRegistro(registro.id, obterChavesDoPedido(item).concat(variantesPedidoMercadoLivre(pedido)));
   if (!registro.vinculadoA.includes(pedido)) registro.vinculadoA.push(pedido);
   registro.pedido = pedido;
@@ -2083,6 +2113,7 @@ function vincularRegistroAoPedido(registro, item, modo) {
     etiqueta: registro.id,
     arquivo: registro.arquivo
   });
+  return true;
 }
 
 function vincularPorChaves(marketplace) {
@@ -2154,16 +2185,15 @@ function abrirModalVinculosShopee(registros, pedidos) {
   registrosPendentesShopeeModal = registros;
   pedidosPendentesShopeeModal = pedidos;
   const lista = document.getElementById("listaVinculosShopee");
-  const quantidadesIguais = registros.length === pedidos.length;
 
   lista.innerHTML = registros.map((registro, indice) => {
     const preview = gerarPreviewShopee(registro);
     const opcoes = pedidos.map((item, idx) => {
       const pedido = extrairCampoAdmin(item, "Pedido") || extrairCampoAdmin(item, "Venda") || extrairCampoAdmin(item, "Número do Pedido");
       const cliente = extrairCampoAdmin(item, "Cliente");
-      // Quando as quantidades coincidem, sugere a mesma posição, mas exige confirmação visual.
-      const selecionado = quantidadesIguais && idx === indice ? " selected" : "";
-      return `<option value="${idx}"${selecionado}>${pedidoParaExibicao(pedido,"shopee")}${cliente ? " — " + cliente : ""}</option>`;
+      // V15.6: nunca seleciona por posição. Se o pedido foi reconhecido pela
+      // imagem ele já terá sido vinculado antes de o modal abrir.
+      return `<option value="${idx}">${pedidoParaExibicao(pedido,"shopee")}${cliente ? " — " + cliente : ""}</option>`;
     }).join("");
 
     const textoOcr = registro.metadados?.textoOcr
@@ -2185,6 +2215,11 @@ function abrirModalVinculosShopee(registros, pedidos) {
     </div>`;
   }).join("");
 
+  document.querySelectorAll(".select-vinculo-shopee").forEach(select => {
+    select.addEventListener("change", atualizarOpcoesVinculoShopee);
+  });
+  atualizarOpcoesVinculoShopee();
+
   document.getElementById("erroVinculoShopee").textContent = "";
   const status = document.getElementById("status");
   if (status) {
@@ -2192,6 +2227,22 @@ function abrirModalVinculosShopee(registros, pedidos) {
     status.innerHTML = "⚠ Etiqueta Shopee lida. Confirme o pedido na prévia para concluir o vínculo.";
   }
   document.getElementById("modalVinculoShopee").style.display = "flex";
+}
+
+function atualizarOpcoesVinculoShopee() {
+  const selects = Array.from(document.querySelectorAll(".select-vinculo-shopee"));
+  const escolhidos = new Set(selects.map(s => s.value).filter(Boolean));
+  selects.forEach(select => {
+    const valorAtual = select.value;
+    Array.from(select.options).forEach(option => {
+      if (!option.value) return;
+      // O pedido escolhido em outra etiqueta some imediatamente desta lista.
+      // Mantemos visível somente o valor atualmente selecionado neste select.
+      const indisponivel = escolhidos.has(option.value) && option.value !== valorAtual;
+      option.hidden = indisponivel;
+      option.disabled = indisponivel;
+    });
+  });
 }
 
 function confirmarVinculosShopee() {
@@ -2230,24 +2281,39 @@ function vincularPendenciasShopeeAutomaticamente() {
   const pedidos = pedidosShopeeNaoVinculados();
   if (!registros.length || !pedidos.length) return false;
 
-  // Comportamento operacional antigo da Shopee: quando a quantidade de
-  // etiquetas restantes coincide com a quantidade de pedidos restantes,
-  // o arquivo e a planilha representam a mesma fila. Vincula tudo
-  // automaticamente pela ordem, sem exigir seleção cliente por cliente.
-  // O vínculo manual continua disponível apenas para exceções.
-  if (registros.length !== pedidos.length) return false;
-
-  registros.forEach((registro, indice) => {
-    const item = pedidos[indice];
-    if (registro && item) vincularRegistroAoPedido(registro, item, "ordem_automatica");
+  // V15.6: vínculo automático somente pelo número real do pedido Shopee
+  // reconhecido no ZPL/imagem. Não usamos mais posição/quantidade, pois isso
+  // pode vincular uma etiqueta ao cliente errado quando o arquivo não contém
+  // exatamente a mesma fila da tela.
+  const mapaPedidos = new Map();
+  pedidos.forEach(item => {
+    const pedido = extrairCampoAdmin(item, "Pedido") || extrairCampoAdmin(item, "Venda") || extrairCampoAdmin(item, "Número do Pedido");
+    const chave = normalizarIdentificador(pedido);
+    if (chave && !mapaPedidos.has(chave)) mapaPedidos.set(chave, item);
   });
 
-  const status = document.getElementById("status");
-  if (status) {
-    status.style.color = "#2e7d32";
-    status.innerHTML = `✔ Shopee: ${registros.length} etiqueta(s) vinculada(s) automaticamente aos pedidos.`;
+  let vinculados = 0;
+  registros.forEach(registro => {
+    const lido = normalizarIdentificador(registro.metadados?.pedido);
+    if (!lido) return;
+    const item = mapaPedidos.get(lido);
+    if (!item) return;
+    if (vincularRegistroAoPedido(registro, item, "pedido_imagem_automatico")) {
+      vinculados += 1;
+      mapaPedidos.delete(lido);
+    }
+  });
+
+  if (vinculados > 0) {
+    const status = document.getElementById("status");
+    if (status) {
+      status.style.color = "#2e7d32";
+      status.innerHTML = `✔ Shopee: ${vinculados} etiqueta(s) identificada(s) pelo número do pedido e vinculada(s) automaticamente.`;
+    }
   }
-  return true;
+
+  // Retorna true apenas se não sobrou nenhuma etiqueta para confirmação.
+  return registrosShopeeNaoVinculados().length === 0;
 }
 
 async function resolverPendenciasShopeeVisualmente() {
