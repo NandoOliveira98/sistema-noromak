@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "14.10"
+APP_VERSION = "14.11"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -3610,12 +3610,106 @@ def ml_pending_label_watch_once() -> dict[str, int]:
     return {"checked": checked, "triggered": triggered, "ready": ready, "errors": errors}
 
 
+def _ml_discover_untracked_ready_labels_once() -> dict[str, int]:
+    """V14.11: descobre na própria API pedidos com etiqueta que ainda não existem localmente.
+
+    A V14.10 conseguia recuperar apenas pedidos já presentes em conf_pedidos ou
+    reconciliáveis por número. Aqui percorremos /orders/search dentro da janela
+    configurada e inspecionamos somente pedidos cujo order_id ainda não está na
+    base local/concluída. Se o shipment estiver ready_to_ship e o ZPL existir,
+    importamos o pedido diretamente.
+    """
+    _, seller_id = ml_access_token()
+    cutoff = datetime.now(timezone.utc) - timedelta(days=ML_MANUAL_RECONCILE_DAYS)
+    existing = _ml_existing_order_ids()
+    checked = discovered = available = linked = errors = 0
+    stop_by_date = False
+
+    for page in range(ML_CATCHUP_MAX_PAGES):
+        query = urlencode({
+            "seller": seller_id,
+            "order.status": "paid",
+            "sort": "date_desc",
+            "limit": str(ML_CATCHUP_PAGE_SIZE),
+            "offset": str(page * ML_CATCHUP_PAGE_SIZE),
+        })
+        result = ml_api_get(f"/orders/search?{query}")
+        orders = result.get("results") if isinstance(result, dict) else []
+        if not orders:
+            break
+
+        for order in orders:
+            if not isinstance(order, dict):
+                continue
+            created = _ml_parse_datetime(order.get("date_created"))
+            if created is not None and created < cutoff:
+                stop_by_date = True
+                break
+
+            order_id = str(order.get("id") or "").strip()
+            if not order_id or order_id in existing:
+                continue
+            discovered += 1
+
+            try:
+                shipping = order.get("shipping") if isinstance(order.get("shipping"), dict) else {}
+                shipment_id = str(shipping.get("id") or "").strip()
+                shipment = None
+                if shipment_id:
+                    shipment = ml_api_get(
+                        f"/shipments/{quote(shipment_id)}?views=destination",
+                        headers={"x-format-new": "true", "X-Api-Version": "2"},
+                    )
+                else:
+                    shipment_id, shipment = ml_order_shipments(order_id)
+
+                checked += 1
+                if not shipment_id or not isinstance(shipment, dict):
+                    continue
+                if str(shipment.get("status") or "").strip().lower() != "ready_to_ship":
+                    continue
+
+                try:
+                    zpl = _ml_fetch_shipping_zpl(shipment_id)
+                except Exception:
+                    zpl = ""
+                if not zpl:
+                    continue
+                available += 1
+
+                detail = ml_import_order(order_id, source="API Mercado Livre / descoberta etiqueta não rastreada")
+                existing.add(order_id)
+                if detail.get("ready_for_conference"):
+                    linked += 1
+                    ml_log_event(
+                        "manual_label_discovery", f"/orders/{order_id}", seller_id, ML_CLIENT_ID,
+                        "PEDIDO DESCOBERTO / PRONTO PARA CONFERÊNCIA",
+                        json_dumps({"order_id": order_id, "shipment_id": shipment_id})
+                    )
+            except Exception as exc:
+                errors += 1
+                ml_log_event(
+                    "manual_label_discovery", f"/orders/{order_id}", seller_id, ML_CLIENT_ID,
+                    "ERRO", str(exc)[:1200]
+                )
+
+        if stop_by_date or len(orders) < ML_CATCHUP_PAGE_SIZE:
+            break
+
+    return {
+        "api_discovered": discovered,
+        "api_checked": checked,
+        "api_available": available,
+        "api_linked": linked,
+        "api_errors": errors,
+    }
+
+
 def ml_check_all_available_labels_once() -> dict[str, int]:
     """Varredura manual completa usada pelo botão do Admin.
 
-    V14.10: antes de consultar etiquetas, reconcilia pedidos de print/extensão
-    ainda sem order_id/shipment_id. Isso permite recuperar vendas antigas cuja
-    etiqueta foi liberada dias depois da criação do pedido.
+    V14.11: reconcilia os pedidos locais e também consulta /orders/search para
+    encontrar pedidos pagos com etiqueta pronta que nunca chegaram à base local.
     """
     reconcile = {"manual": 0, "matched": 0, "ready": 0, "errors": 0}
     try:
@@ -3650,14 +3744,23 @@ def ml_check_all_available_labels_once() -> dict[str, int]:
         except Exception as exc:
             errors += 1
             ml_log_event("manual_label_check", f"/shipments/{shipment_id}", "", ML_CLIENT_ID, "ERRO", str(exc)[:1200])
-    total_errors = errors + int(reconcile.get("errors") or 0)
+
+    discovery = {"api_discovered": 0, "api_checked": 0, "api_available": 0, "api_linked": 0, "api_errors": 0}
+    try:
+        discovery = _ml_discover_untracked_ready_labels_once()
+    except Exception as exc:
+        discovery["api_errors"] = 1
+        ml_log_event("manual_label_discovery", "/orders/search", "", ML_CLIENT_ID, "ERRO", str(exc)[:1200])
+
+    total_errors = errors + int(reconcile.get("errors") or 0) + int(discovery.get("api_errors") or 0)
     summary = {
         "reconciled_pending": int(reconcile.get("manual") or 0),
         "reconciled_matched": int(reconcile.get("matched") or 0),
         "reconciled_ready": int(reconcile.get("ready") or 0),
-        "checked": checked,
-        "available": triggered,
-        "linked": ready,
+        "checked": checked + int(discovery.get("api_checked") or 0),
+        "available": triggered + int(discovery.get("api_available") or 0),
+        "linked": ready + int(discovery.get("api_linked") or 0),
+        "api_discovered": int(discovery.get("api_discovered") or 0),
         "errors": total_errors,
     }
     ml_log_event("manual_label_check", "/pending", "", ML_CLIENT_ID, "CONCLUÍDO", json_dumps(summary))

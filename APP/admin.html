@@ -5856,11 +5856,12 @@ async function verificarEtiquetasMercadoLivreAdmin(){
   if(msg)msg.innerHTML='⏳ Consultando <b>todos os pedidos pendentes</b> e verificando quais etiquetas já estão disponíveis...';
   try{
     const d=await mlApiAdmin("/expedicao/api/integracoes/mercadolivre/verificar-etiquetas",{method:"POST",body:"{}"});
-    if(msg)msg.innerHTML=`✅ Verificação concluída: <b>${d.checked||0}</b> pedido(s) consultado(s), <b>${d.available||0}</b> etiqueta(s) disponível(is), <b>${d.linked||0}</b> vinculada(s) e ${d.errors||0} erro(s).`;
+    if(msg)msg.innerHTML=`✅ Verificação concluída: <b>${d.checked||0}</b> pedido(s) consultado(s), <b>${d.available||0}</b> etiqueta(s) disponível(is), <b>${d.linked||0}</b> vinculada(s), <b>${d.api_discovered||0}</b> pedido(s) descoberto(s) diretamente na API e ${d.errors||0} erro(s).`;
     alert(`Verificação concluída.
 Pedidos consultados: ${d.checked||0}
 Etiquetas disponíveis: ${d.available||0}
 Etiquetas vinculadas: ${d.linked||0}
+Pedidos descobertos diretamente na API: ${d.api_discovered||0}
 Erros: ${d.errors||0}`);
     await carregarIntegracaoMercadoLivreAdmin();await carregarLogsMercadoLivreAdmin();
     if(typeof appStorage?.sincronizarAgora==="function")await appStorage.sincronizarAgora();
