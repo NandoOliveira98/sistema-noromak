@@ -1,0 +1,13 @@
+PUBLICAÇÃO V14.3
+
+No Git Bash do Windows:
+git status
+git add -A
+git commit -m "v14.3 reconcilia pedidos manuais mercado livre"
+./publicar.sh
+
+Depois:
+1. Ctrl+F5.
+2. Não é necessário abrir o navegador para o reconciliador funcionar.
+3. Pedidos manuais ML sem shipment serão procurados automaticamente a cada ~60 s.
+4. Após o vínculo, etiqueta pronta deve subir imediatamente ou no próximo watcher (~15 s).

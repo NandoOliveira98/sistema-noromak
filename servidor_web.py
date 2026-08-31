@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "14.2"
+APP_VERSION = "14.3"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -87,6 +87,9 @@ ML_NEW_ORDER_WATCH_LIMIT = max(5, min(50, int(os.getenv("ML_NEW_ORDER_WATCH_LIMI
 ML_CATCHUP_FALLBACK_DAYS = max(1, min(30, int(os.getenv("ML_CATCHUP_FALLBACK_DAYS", "7"))))
 ML_CATCHUP_PAGE_SIZE = max(10, min(50, int(os.getenv("ML_CATCHUP_PAGE_SIZE", "50"))))
 ML_CATCHUP_MAX_PAGES = max(2, min(100, int(os.getenv("ML_CATCHUP_MAX_PAGES", "40"))))
+ML_MANUAL_RECONCILE_INTERVAL = max(30, min(600, int(os.getenv("ML_MANUAL_RECONCILE_INTERVAL", "60"))))
+ML_MANUAL_RECONCILE_DAYS = max(1, min(30, int(os.getenv("ML_MANUAL_RECONCILE_DAYS", "7"))))
+
 
 CRM_COST_API_URL = os.getenv(
     "CRM_COST_API_URL",
@@ -101,6 +104,7 @@ DB_LOCK = threading.RLock()
 AUTH_LOCK = threading.Lock()
 ML_NEW_ORDER_WATCH_LOCK = threading.Lock()
 ML_CATCHUP_LOCK = threading.Lock()
+ML_MANUAL_RECONCILE_LOCK = threading.Lock()
 CRM_COST_CACHE_LOCK = threading.Lock()
 CRM_COST_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 PRECIFICADOR_BULK_LOCK = threading.Lock()
@@ -2851,6 +2855,179 @@ def _ml_fiscal_and_label_state(*, order: dict[str, Any], order_id: str, operatio
     }
 
 
+def _ml_order_aliases(order_id: str, pack_id: str = "") -> set[str]:
+    """Identificadores equivalentes usados pela API e pela tela do Mercado Livre.
+
+    A tela/print pode exibir a venda sem o prefixo técnico 20000 do order_id.
+    """
+    aliases: set[str] = set()
+    for raw in (order_id, pack_id):
+        value = re.sub(r"\D+", "", str(raw or ""))
+        if not value:
+            continue
+        aliases.add(value)
+        if value.startswith("20000") and len(value) > 5:
+            aliases.add(value[5:])
+        # Fallback tolerante para números copiados da interface: últimos 11/12 dígitos.
+        if len(value) > 12:
+            aliases.add(value[-11:])
+            aliases.add(value[-12:])
+    return {normalize(x) for x in aliases if x}
+
+
+def _ml_bind_manual_pending_rows(
+    pending: list[dict[str, Any]],
+    *,
+    order_id: str,
+    pack_id: str,
+    shipment_id: str,
+    shipment: dict[str, Any] | None,
+) -> int:
+    """Vincula linhas de print/extensão ao order/shipment real antes da importação."""
+    aliases = _ml_order_aliases(order_id, pack_id)
+    if not aliases:
+        return 0
+    operational_order_id = pack_id or order_id
+    logistic = _ml_logistic_type(shipment)
+    bound = 0
+    for row in pending:
+        if not isinstance(row, dict):
+            continue
+        marketplace = normalize(row.get("Marketplace"))
+        if "MERCADO LIVRE" not in marketplace and "MERCADOLIVRE" not in marketplace:
+            continue
+        if str(row.get("VendaMercadoLivre") or "").strip():
+            continue
+        manual_number = normalize(order_number(row))
+        if not manual_number or manual_number not in aliases:
+            continue
+
+        row["Pedido"] = operational_order_id
+        row["VendaMercadoLivre"] = order_id
+        row["PackIdMercadoLivre"] = pack_id
+        row["ShipmentIdMercadoLivre"] = shipment_id
+        row["LogisticaMercadoLivre"] = logistic
+        row["MercadoLivreAtualizadoEm"] = now_iso()
+        original_source = str(row.get("OrigemCadastro") or "").strip()
+        if "reconciliado mercado livre" not in original_source.lower():
+            row["OrigemCadastro"] = (original_source + " / " if original_source else "") + "Reconciliado Mercado Livre"
+        bound += 1
+    return bound
+
+
+def _ml_manual_pending_numbers() -> set[str]:
+    raw, _, _ = get_storage("conf_pedidos")
+    result: set[str] = set()
+    for row in _rows_from_storage_value(raw):
+        if not isinstance(row, dict):
+            continue
+        marketplace = normalize(row.get("Marketplace"))
+        if "MERCADO LIVRE" not in marketplace and "MERCADOLIVRE" not in marketplace:
+            continue
+        if str(row.get("Etiqueta API Mercado Livre") or "").strip().upper() == "VINCULADA":
+            continue
+        if str(row.get("VendaMercadoLivre") or "").strip() and str(row.get("ShipmentIdMercadoLivre") or "").strip():
+            continue
+        number = normalize(order_number(row))
+        if number:
+            result.add(number)
+    return result
+
+
+def ml_reconcile_manual_orders_once() -> dict[str, int]:
+    """Reconcilia pedidos de print/extensão com a API e os coloca no watcher de etiqueta."""
+    if not ML_MANUAL_RECONCILE_LOCK.acquire(blocking=False):
+        return {"manual": 0, "matched": 0, "ready": 0, "errors": 0}
+    try:
+        manual_numbers = _ml_manual_pending_numbers()
+        if not manual_numbers:
+            return {"manual": 0, "matched": 0, "ready": 0, "errors": 0}
+
+        _, seller_id = ml_access_token()
+        cutoff = datetime.now(timezone.utc) - timedelta(days=ML_MANUAL_RECONCILE_DAYS)
+        matched = ready = errors = 0
+        remaining = set(manual_numbers)
+
+        for page in range(ML_CATCHUP_MAX_PAGES):
+            query = urlencode({
+                "seller": seller_id,
+                "order.status": "paid",
+                "sort": "date_desc",
+                "limit": str(ML_CATCHUP_PAGE_SIZE),
+                "offset": str(page * ML_CATCHUP_PAGE_SIZE),
+            })
+            result = ml_api_get(f"/orders/search?{query}")
+            orders = result.get("results") if isinstance(result, dict) else []
+            if not orders:
+                break
+
+            stop_by_date = False
+            for order in orders:
+                if not isinstance(order, dict):
+                    continue
+                created = _ml_parse_datetime(order.get("date_created"))
+                if created is not None and created < cutoff:
+                    stop_by_date = True
+                    break
+
+                order_id = str(order.get("id") or "").strip()
+                pack_id = str(order.get("pack_id") or "").strip()
+                aliases = _ml_order_aliases(order_id, pack_id)
+                if not aliases.intersection(remaining):
+                    continue
+
+                try:
+                    detail = ml_import_order(order_id, source="API Mercado Livre / reconciliação pedido manual")
+                    matched += 1
+                    remaining.difference_update(aliases)
+                    if detail.get("ready_for_conference"):
+                        ready += 1
+                    ml_log_event(
+                        "manual_reconcile", f"/orders/{order_id}", seller_id, ML_CLIENT_ID,
+                        "PEDIDO MANUAL VINCULADO",
+                        json_dumps({
+                            "order_id": order_id,
+                            "pack_id": detail.get("pack_id") or "",
+                            "shipment_id": detail.get("shipment_id") or "",
+                            "ready_for_conference": bool(detail.get("ready_for_conference")),
+                        })
+                    )
+                except Exception as exc:
+                    errors += 1
+                    ml_log_event(
+                        "manual_reconcile", f"/orders/{order_id}", seller_id, ML_CLIENT_ID,
+                        "ERRO", str(exc)[:1200]
+                    )
+                if not remaining:
+                    break
+
+            if not remaining or stop_by_date or len(orders) < ML_CATCHUP_PAGE_SIZE:
+                break
+
+        return {"manual": len(manual_numbers), "matched": matched, "ready": ready, "errors": errors}
+    finally:
+        ML_MANUAL_RECONCILE_LOCK.release()
+
+
+def ml_reconcile_manual_orders_loop(stop_event: threading.Event) -> None:
+    """Roda inteiramente na VPS; navegador/PC pode ficar desligado."""
+    # Primeira tentativa poucos segundos após o servidor iniciar.
+    if stop_event.wait(5):
+        return
+    while not stop_event.is_set():
+        try:
+            row = ml_integration_row()
+            if row and str(row["access_token"] or "").strip() and str(row["refresh_token"] or "").strip():
+                ml_reconcile_manual_orders_once()
+        except Exception as exc:
+            try:
+                ml_log_event("manual_reconcile", "/orders/search", "", ML_CLIENT_ID, "ERRO", str(exc)[:1200])
+            except Exception:
+                pass
+        if stop_event.wait(ML_MANUAL_RECONCILE_INTERVAL):
+            break
+
+
 def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict[str, Any]:
     order_id = str(order_id or "").strip()
     if not order_id:
@@ -2871,6 +3048,16 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
 
     current_raw, _, _ = get_storage("conf_pedidos")
     pending = _rows_from_storage_value(current_raw)
+
+    # Antes de criar qualquer linha da API, tenta reconhecer pedidos que entraram
+    # por print/extensão usando o número de venda visível do Mercado Livre.
+    manual_rows_bound = _ml_bind_manual_pending_rows(
+        pending,
+        order_id=order_id,
+        pack_id=pack_id,
+        shipment_id=shipment_id,
+        shipment=shipment,
+    )
 
     # Full/Fulfillment é preparado e expedido pelo próprio Mercado Livre.
     # Não deve entrar na fila operacional da Expedição Noromak. Se a linha já
@@ -3146,6 +3333,7 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
         "kit_components_applied": kit_applied,
         "kit_unregistered": kit_unregistered,
         "stale_rows_removed": stale_removed,
+        "manual_rows_bound": manual_rows_bound,
     }
 
 
@@ -3634,7 +3822,7 @@ def ml_manual_sync() -> dict[str, Any]:
 
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/14.2"
+    server_version = "NoromakExpedicao/14.3"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
@@ -5148,14 +5336,22 @@ def main() -> None:
         name="ml-new-order-watcher",
         daemon=True,
     )
+    manual_reconcile_thread = threading.Thread(
+        target=ml_reconcile_manual_orders_loop,
+        args=(watcher_stop,),
+        name="ml-manual-order-reconciler",
+        daemon=True,
+    )
     watcher_thread.start()
     new_order_thread.start()
+    manual_reconcile_thread.start()
     server = ThreadingHTTPServer((HOST, PORT), AppHandler)
     server.daemon_threads = True
     print(f"Sistema de Conferência Web {APP_VERSION} em http://{HOST}:{PORT}{BASE_PATH}", flush=True)
     print(f"Banco SQLite: {DB_PATH}", flush=True)
     print(f"Watcher Mercado Livre: pendências a cada {ML_PENDING_WATCH_INTERVAL}s", flush=True)
     print(f"Watcher Mercado Livre: pedidos novos a cada {ML_NEW_ORDER_WATCH_INTERVAL}s", flush=True)
+    print(f"Reconciliação ML: pedidos manuais a cada {ML_MANUAL_RECONCILE_INTERVAL}s", flush=True)
     try:
         server.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:
@@ -5164,6 +5360,7 @@ def main() -> None:
         watcher_stop.set()
         watcher_thread.join(timeout=3)
         new_order_thread.join(timeout=3)
+        manual_reconcile_thread.join(timeout=3)
         server.server_close()
         with DB_LOCK:
             DB.close()
