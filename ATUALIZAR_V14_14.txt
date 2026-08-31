@@ -1,0 +1,8 @@
+Atualização V14.14
+
+Substitua os arquivos do pacote de atualização no projeto e publique normalmente:
+
+git status
+git add -A
+git commit -m "v14.14 remove teste codigo coleta"
+./publicar.sh

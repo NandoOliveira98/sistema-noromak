@@ -316,20 +316,6 @@
     .scanner-camera-preview video { height:58dvh; min-height:230px; }
   }
 
-
-  /* V14.13: card compacto no canto superior; não ocupa mais uma faixa da tela. */
-  .codigo-coleta-card { position:fixed; top:70px; right:14px; z-index:75; width:245px; margin:0; padding:0; box-sizing:border-box; }
-  .codigo-coleta-inner { display:flex; align-items:center; gap:7px; padding:6px 7px 6px 9px; background:rgba(255,255,255,.98); border:1px solid #d8e2ec; border-left:3px solid var(--primary); border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,.08); }
-  .codigo-coleta-texto { min-width:0; flex:1; }
-  .codigo-coleta-label { font-size:9px; line-height:1.05; font-weight:900; color:#5e6f80; text-transform:uppercase; letter-spacing:.03em; white-space:nowrap; }
-  .codigo-coleta-valor { margin-top:2px; font-size:13px; line-height:1.05; font-weight:900; letter-spacing:.05em; color:var(--primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .codigo-coleta-valor.indisponivel { font-size:10px; letter-spacing:0; color:#8a5a00; }
-  .codigo-coleta-detalhe { margin-top:2px; font-size:8px; line-height:1.05; color:#748391; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .codigo-coleta-atualizar { width:30px; height:30px; flex:0 0 30px; border:1px solid #b9c9d9; background:#f8fbfe; color:var(--primary); border-radius:7px; padding:0; font-size:16px; font-weight:900; cursor:pointer; }
-  .codigo-coleta-atualizar:disabled { opacity:.55; cursor:wait; }
-  .codigo-coleta-atualizar.consultando { animation:girarCodigoColeta .8s linear infinite; }
-  @keyframes girarCodigoColeta { to { transform:rotate(360deg); } }
-  @media (max-width:800px) { .codigo-coleta-card { top:62px; right:7px; width:205px; } .codigo-coleta-label { font-size:8px; } .codigo-coleta-valor { font-size:11px; } .codigo-coleta-detalhe { display:none; } }
 </style>
 <script src="/expedicao/shared-storage.js"></script>
 <script src="/expedicao/web-auth.js"></script>
@@ -471,17 +457,6 @@
     <button class="btn-logoff" onclick="fazerLogoff()">SAIR / LOGOFF</button>
   </div>
 </header>
-
-<section id="codigoColetaCard" class="codigo-coleta-card" aria-live="polite" title="Código diário de autorização da coleta do Mercado Livre">
-  <div class="codigo-coleta-inner">
-    <div class="codigo-coleta-texto">
-      <div class="codigo-coleta-label">🚚 Coleta ML</div>
-      <div id="codigoColetaValor" class="codigo-coleta-valor indisponivel">Verificando...</div>
-      <div id="codigoColetaDetalhe" class="codigo-coleta-detalhe">aguardando consulta</div>
-    </div>
-    <button id="btnAtualizarCodigoColeta" type="button" class="codigo-coleta-atualizar" onclick="atualizarCodigoColeta(true)" title="Forçar nova consulta agora" aria-label="Atualizar código da coleta">↻</button>
-  </div>
-</section>
 
 <div class="container">
   <div class="menu">
@@ -968,68 +943,6 @@ document.addEventListener("visibilitychange", () => {
   if (document.hidden && scannerCameraAtivo) fecharScannerCamera();
 });
 window.addEventListener("pagehide", () => pararLeituraScannerCamera());
-
-
-let codigoColetaTimer = null;
-let codigoColetaUltimaConsulta = 0;
-
-function formatarHorarioCodigoColeta(valor) {
-  if (!valor) return "";
-  const d = new Date(valor);
-  if (Number.isNaN(d.getTime())) return String(valor);
-  return d.toLocaleTimeString("pt-BR", {hour:"2-digit", minute:"2-digit", second:"2-digit"});
-}
-
-async function atualizarCodigoColeta(forcar = false) {
-  const valor = document.getElementById("codigoColetaValor");
-  const detalhe = document.getElementById("codigoColetaDetalhe");
-  const botao = document.getElementById("btnAtualizarCodigoColeta");
-  if (!valor || !detalhe || !botao) return;
-  if (!usuarioLogado) return;
-  const agora = Date.now();
-  if (!forcar && agora - codigoColetaUltimaConsulta < 60_000) return;
-  codigoColetaUltimaConsulta = agora;
-
-  botao.disabled = true;
-  botao.classList.add("consultando");
-  detalhe.textContent = forcar ? "consultando agora..." : "consultando...";
-  try {
-    // nonce impede cache do navegador/proxy; force=1 faz o backend ignorar o cache interno.
-    const qs = new URLSearchParams();
-    if (forcar) qs.set("force", "1");
-    qs.set("_", String(Date.now()));
-    const resp = await fetch(`/expedicao/api/integracoes/mercadolivre/codigo-coleta?${qs.toString()}`, {
-      cache:"no-store",
-      credentials:"same-origin",
-      headers:{"Cache-Control":"no-cache", "Pragma":"no-cache"}
-    });
-    const dados = await resp.json().catch(() => ({}));
-    if (!resp.ok || dados.ok === false) throw new Error(dados.message || dados.error || `HTTP ${resp.status}`);
-    const quando = formatarHorarioCodigoColeta(dados.updated_at) || formatarHorarioCodigoColeta(new Date().toISOString());
-    if (dados.available && dados.code) {
-      valor.textContent = String(dados.code).trim().toUpperCase();
-      valor.classList.remove("indisponivel");
-      detalhe.textContent = `atualizado ${quando}`;
-      document.getElementById("codigoColetaCard")?.setAttribute("title", `Código de hoje: ${valor.textContent} · atualizado ${quando}`);
-    } else {
-      valor.textContent = "Código indisponível";
-      valor.classList.add("indisponivel");
-      detalhe.textContent = `${forcar ? "tentativa" : "verificado"} ${quando}`;
-      document.getElementById("codigoColetaCard")?.setAttribute("title", `${dados.message || "Código não retornado pela API."} · tentativa ${quando}`);
-    }
-  } catch (erro) {
-    const quando = new Date().toLocaleTimeString("pt-BR", {hour:"2-digit", minute:"2-digit", second:"2-digit"});
-    valor.textContent = "Falha na consulta";
-    valor.classList.add("indisponivel");
-    detalhe.textContent = `falhou ${quando}`;
-    document.getElementById("codigoColetaCard")?.setAttribute("title", String(erro?.message || erro || "Erro ao consultar o código de coleta."));
-  } finally {
-    botao.disabled = false;
-    botao.classList.remove("consultando");
-  }
-}
-
-window.atualizarCodigoColeta = atualizarCodigoColeta;
 
 window.onload = function() {
   forcarOrientacaoRetrato();
@@ -1803,8 +1716,6 @@ function iniciarSessao() {
   restaurarFiltroMarketplacePedidos();
   renderizarListaPedidos();
   setTimeout(restaurarUltimoPedidoEmAndamento, 80);
-  setTimeout(() => atualizarCodigoColeta(false), 250);
-  if (!codigoColetaTimer) codigoColetaTimer = setInterval(() => atualizarCodigoColeta(false), 5 * 60 * 1000);
 }
 
 // Ponte usada pelo login Web. `usuarioLogado` foi declarado com `let` nesta
