@@ -4666,36 +4666,54 @@ def _ml_item_fee(oi: dict[str, Any]) -> float | None:
 
 
 def _ml_order_marketplace_fee(order: dict[str, Any]) -> float | None:
-    """Obtém a tarifa total do pedido sem estimar percentuais."""
+    """Obtém a tarifa real total do pedido sem estimar percentuais.
+
+    Alguns payloads do ML trazem ``marketplace_fee: 0`` mesmo quando cada
+    ``order_item`` possui ``sale_fee``. Por isso zero não encerra a busca: a
+    função procura uma cobrança positiva nas demais fontes oficiais antes de
+    concluir que a tarifa é realmente zero.
+    """
     if not isinstance(order, dict):
         return None
-    # Campo oficial totalizado quando disponível no recurso orders.
+
+    candidates: list[float] = []
     for key in ("marketplace_fee", "sale_fee_amount"):
         v = _money_number(order.get(key))
         if v is not None:
-            return abs(v)
-    # Compatibilidade com respostas antigas/variantes de payments.
-    total = 0.0
-    found = False
+            candidates.append(abs(v))
+
+    payment_total = 0.0
+    payment_found = False
     payments = order.get("payments") if isinstance(order.get("payments"), list) else []
     for pay in payments:
         if not isinstance(pay, dict):
             continue
         for key in ("marketplace_fee", "fee_amount", "mercadopago_fee"):
             v = _money_number(pay.get(key))
-            if v is not None:
-                total += abs(v)
-                found = True
+            if v is not None and abs(v) > 0:
+                payment_total += abs(v)
+                payment_found = True
                 break
-    if found:
-        return total
-    # Último fallback: soma das sale_fee declaradas nos itens.
-    vals = []
+    if payment_found:
+        candidates.append(payment_total)
+
+    item_fees = []
     for oi in order.get("order_items") or []:
         v = _ml_item_fee(oi) if isinstance(oi, dict) else None
         if v is not None:
-            vals.append(v)
-    return sum(vals) if vals else None
+            item_fees.append(abs(v))
+    if item_fees:
+        candidates.append(sum(item_fees))
+
+    # Prioriza o total oficial do pedido quando ele é positivo. Se ele veio 0,
+    # usa a cobrança positiva encontrada em payments/order_items.
+    top = _money_number(order.get("marketplace_fee"))
+    if top is not None and abs(top) > 0:
+        return abs(top)
+    for value in candidates:
+        if value > 0:
+            return value
+    return 0.0 if candidates else None
 
 
 def _ml_seller_shipping_cost(shipment_id: str, seller_id: str = "") -> float | None:
@@ -4739,7 +4757,7 @@ def _ml_seller_shipping_cost(shipment_id: str, seller_id: str = "") -> float | N
 def _ml_profitability_recent_sales(days: int = 30, limit: int = 1000) -> list[dict[str, Any]]:
     """Busca todas as vendas fechadas do período, paginando até o corte temporal.
 
-    V15.9 remove o teto prático de 150 linhas da V15.8. O ``limit`` continua
+    V15.10 mantém paginação ampla e consolida custos reais do ML. O ``limit`` continua
     existindo apenas como proteção operacional e passa a aceitar até 2.000 linhas.
     Também inclui ``partially_refunded`` porque continua sendo uma venda com
     resultado financeiro que precisa aparecer no painel.
@@ -4754,7 +4772,7 @@ def _ml_profitability_recent_sales(days: int = 30, limit: int = 1000) -> list[di
     for page in range(max_pages):
         query = urlencode({
             "seller": seller_id,
-            "order.status": "paid,partially_refunded",
+            "order.status": "paid",
             "sort": "date_desc",
             "limit": str(page_size),
             "offset": str(page * page_size),

@@ -1,0 +1,9 @@
+V15.10 - Rentabilidade Mercado Livre
+
+- Corrige Taxa ML quando marketplace_fee vem zerado mas order_items.sale_fee possui a tarifa real.
+- Prioriza marketplace_fee positivo e usa sale_fee dos itens / fees de payment como fallback real.
+- Mantém frete real do vendedor via shipment costs.
+- Corrige busca de vendas para usar status paid compatível com orders/search.
+- Não estima percentuais nem inventa custos ausentes.
+
+Exemplo validado: venda 51,72; custo Apollo 13,73; taxa ML 6,21; frete 8,45 => lucro 23,33; margem 45,11%.
