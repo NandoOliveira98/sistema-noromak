@@ -28,6 +28,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import unicodedata
 import zipfile
 from datetime import datetime, timezone, timedelta
 from http.cookies import SimpleCookie
@@ -36,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "14.8"
+APP_VERSION = "14.9"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2760,10 +2761,52 @@ def _ml_extract_zpl_from_label_response(raw: bytes) -> str:
     return text if "^XA" in text or "~DG" in text else ""
 
 
+def _ml_only_shipping_label_zpl(zpl: str) -> str:
+    """Remove a DANFE simplificada quando o Mercado Livre devolve mais de um documento ZPL.
+
+    Alguns shipments retornam, no mesmo payload zpl2, uma etiqueta fiscal (DANFE
+    simplificada) seguida da etiqueta logística. A expedição Noromak deve imprimir
+    apenas a etiqueta de envio. Quando não conseguimos identificar com segurança
+    uma DANFE, preservamos o ZPL original para não descartar uma etiqueta válida.
+    """
+    text = str(zpl or "").strip()
+    if not text:
+        return ""
+
+    docs = re.findall(r"\^XA[\s\S]*?\^XZ", text, flags=re.IGNORECASE)
+    if len(docs) <= 1:
+        return text
+
+    fiscal_markers = (
+        "DANFE SIMPLIFICADO",
+        "DANFE SIMPLIFICADA",
+        "PROTOCOLO DE AUTORIZACAO DE USO",
+        "PROTOCOLO DE AUTORIZAÇÃO DE USO",
+    )
+
+    def normalized(doc: str) -> str:
+        return unicodedata.normalize("NFKD", doc).encode("ascii", "ignore").decode("ascii").upper()
+
+    kept = []
+    removed = 0
+    for doc in docs:
+        ndoc = normalized(doc)
+        if any(marker in ndoc for marker in fiscal_markers):
+            removed += 1
+            continue
+        kept.append(doc.strip())
+
+    # Só altera o arquivo quando uma DANFE foi realmente identificada e ainda
+    # resta ao menos um documento de envio.
+    if removed and kept:
+        return "\n".join(kept).strip()
+    return text
+
+
 def _ml_fetch_shipping_zpl(shipment_id: str) -> str:
     query = urlencode({"shipment_ids": str(shipment_id), "response_type": "zpl2"})
     raw, _ = ml_api_get_bytes(f"/shipment_labels?{query}")
-    return _ml_extract_zpl_from_label_response(raw)
+    return _ml_only_shipping_label_zpl(_ml_extract_zpl_from_label_response(raw))
 
 
 def _ml_store_linked_label(*, operational_order_id: str, order_id: str, pack_id: str,
@@ -5161,7 +5204,11 @@ class AppHandler(BaseHTTPRequestHandler):
             payload = json.loads(item.pop("payload", "[]"))
         except Exception:
             payload = []
-        item["payload"] = payload if isinstance(payload, list) else []
+        payload = payload if isinstance(payload, list) else []
+        if str(item.get("marketplace") or "").strip().lower() == "mercado_livre":
+            payload = [_ml_only_shipping_label_zpl(x) for x in payload if isinstance(x, str) and x.strip()]
+            payload = [x for x in payload if x.strip()]
+        item["payload"] = payload
         item["pending"] = item.get("status") in ("queued", "claimed")
         return item
 
@@ -5172,6 +5219,9 @@ class AppHandler(BaseHTTPRequestHandler):
             marketplace = str(req.get("marketplace") or "").strip()
             payload = req.get("payload")
             reprint = bool(req.get("reprint"))
+            if marketplace.lower() == "mercado_livre" and isinstance(payload, list):
+                payload = [_ml_only_shipping_label_zpl(x) for x in payload if isinstance(x, str) and x.strip()]
+                payload = [x for x in payload if x.strip()]
             if not pedido:
                 raise ValueError("Pedido não informado para impressão.")
             if not isinstance(payload, list) or not payload or not all(isinstance(x, str) and x.strip() for x in payload):

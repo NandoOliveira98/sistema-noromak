@@ -2592,13 +2592,44 @@ async function obterConfiguracaoImpressora() {
   }
 }
 
+function somenteEtiquetaEnvioMercadoLivreZPL(zplOriginal) {
+  const texto = String(zplOriginal || "").trim();
+  if (!texto) return texto;
+
+  const documentos = texto.match(/\^XA[\s\S]*?\^XZ/gi) || [];
+  if (documentos.length <= 1) return texto;
+
+  const normalizar = valor => String(valor || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toUpperCase();
+  const marcadoresFiscais = [
+    "DANFE SIMPLIFICADO",
+    "DANFE SIMPLIFICADA",
+    "PROTOCOLO DE AUTORIZACAO DE USO"
+  ];
+
+  let removidos = 0;
+  const mantidos = documentos.filter(doc => {
+    const normalizado = normalizar(doc);
+    const fiscal = marcadoresFiscais.some(marcador => normalizado.includes(marcador));
+    if (fiscal) removidos += 1;
+    return !fiscal;
+  });
+
+  // Só remove algo quando identificou explicitamente uma DANFE e ainda resta
+  // pelo menos uma etiqueta logística. Assim evitamos cortar ZPL desconhecido.
+  return removidos > 0 && mantidos.length ? mantidos.join("\n") : texto;
+}
+
 function prepararDadosImpressaoMarketplace(resultadoEtiqueta) {
   const registro = resultadoEtiqueta.registro;
   const marketplace = resultadoEtiqueta.marketplace;
   let data = [];
 
   if (marketplace === "mercado_livre") {
-    const envioComDados = incluirDadosPedidoNaEtiquetaEnvio(registro.envio);
+    const envioSomenteEtiqueta = somenteEtiquetaEnvioMercadoLivreZPL(registro.envio);
+    const envioComDados = incluirDadosPedidoNaEtiquetaEnvio(envioSomenteEtiqueta);
     if (!envioComDados) throw new Error("A etiqueta de envio do Mercado Livre não está disponível.");
     textoNotaGeradoCache = "";
     data = [envioComDados];
@@ -2691,6 +2722,12 @@ async function aguardarImpressaoRemota(jobId, limiteMs = 90000) {
 
 async function imprimirDadosComFallback(pedido, marketplace, data, reprint = false) {
   const badge = document.getElementById("qzStatusBadge");
+  if (normalizarMarketplace(marketplace) === "mercado_livre") {
+    data = (Array.isArray(data) ? data : [])
+      .map(somenteEtiquetaEnvioMercadoLivreZPL)
+      .filter(zpl => String(zpl || "").trim());
+    if (!data.length) throw new Error("A etiqueta de envio do Mercado Livre não está disponível.");
+  }
 
   // No próprio computador da Zebra, imprime diretamente pelo Browser Print.
   if (podeTentarZebraBrowserPrintLocal()) {
