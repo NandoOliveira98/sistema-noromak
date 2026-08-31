@@ -2225,7 +2225,37 @@ function pularVinculosShopee() {
   if (resolver) resolver(false);
 }
 
+function vincularPendenciasShopeeAutomaticamente() {
+  const registros = registrosShopeeNaoVinculados();
+  const pedidos = pedidosShopeeNaoVinculados();
+  if (!registros.length || !pedidos.length) return false;
+
+  // Comportamento operacional antigo da Shopee: quando a quantidade de
+  // etiquetas restantes coincide com a quantidade de pedidos restantes,
+  // o arquivo e a planilha representam a mesma fila. Vincula tudo
+  // automaticamente pela ordem, sem exigir seleção cliente por cliente.
+  // O vínculo manual continua disponível apenas para exceções.
+  if (registros.length !== pedidos.length) return false;
+
+  registros.forEach((registro, indice) => {
+    const item = pedidos[indice];
+    if (registro && item) vincularRegistroAoPedido(registro, item, "ordem_automatica");
+  });
+
+  const status = document.getElementById("status");
+  if (status) {
+    status.style.color = "#2e7d32";
+    status.innerHTML = `✔ Shopee: ${registros.length} etiqueta(s) vinculada(s) automaticamente aos pedidos.`;
+  }
+  return true;
+}
+
 async function resolverPendenciasShopeeVisualmente() {
+  // Primeiro tenta restaurar o fluxo automático usado na operação.
+  // Só abre a confirmação visual se houver diferença de quantidade ou
+  // alguma situação realmente ambígua.
+  if (vincularPendenciasShopeeAutomaticamente()) return;
+
   const registros = registrosShopeeNaoVinculados();
   const pedidos = pedidosShopeeNaoVinculados();
   if (!registros.length || !pedidos.length) return;
