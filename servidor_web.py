@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "14.20"
+APP_VERSION = "14.21"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2485,24 +2485,17 @@ def _ml_is_full_shipment(shipment: dict[str, Any] | None) -> bool:
     return any(str(tag or "").strip().lower() in {"fulfillment", "full"} for tag in tags)
 
 
-def _ml_billing_name(order: dict[str, Any]) -> str:
-    """Obtém o nome/razão social usado pelo Mercado Livre em Dados para NF-e.
+def _ml_billing_details(order: dict[str, Any]) -> dict[str, Any]:
+    """Retorna exclusivamente o nome/razão social fiscal de Dados para NF-e.
 
-    Fluxo oficial atual:
-      /orders/{order_id} -> buyer.billing_info.id
-      /orders/billing-info/{site_id}/{billing_info_id}
-
-    Durante a migração do Mercado Livre, o endpoint legado por order_id ainda
-    pode responder em algumas contas. Ele é usado somente como fallback quando
-    o pedido não traz billing_info.id ou o novo recurso não devolve o nome.
+    Não usa nickname, first_name/last_name do order nem destinatário do shipment.
+    Fluxo oficial MLB: buyer.billing_info.id -> /orders/billing-info/{site}/{id}.
     """
     buyer = order.get("buyer") if isinstance(order.get("buyer"), dict) else {}
     raw_embedded = buyer.get("billing_info")
     raw_root_billing = order.get("billing_info")
     embedded = raw_embedded if isinstance(raw_embedded, dict) else {}
     root_billing = raw_root_billing if isinstance(raw_root_billing, dict) else {}
-    # Compatibilidade: algumas respostas intermediárias já devolveram apenas o ID
-    # de billing_info como string/número em vez do objeto {"id": ...}.
     billing_id = str(
         embedded.get("id")
         or root_billing.get("id")
@@ -2512,6 +2505,7 @@ def _ml_billing_name(order: dict[str, Any]) -> str:
     ).strip()
     site_id = str(order.get("site_id") or "MLB").strip().upper() or "MLB"
     order_id = str(order.get("id") or "").strip()
+    errors: list[str] = []
 
     def extract_name(payload: Any) -> str:
         if not isinstance(payload, dict):
@@ -2521,85 +2515,53 @@ def _ml_billing_name(order: dict[str, Any]) -> str:
         if not info and isinstance(payload.get("billing_info"), dict):
             info = payload["billing_info"]
         if not info:
-            info = payload
-
-        additional = info.get("additional_info") if isinstance(info.get("additional_info"), list) else []
-        additional_map: dict[str, str] = {}
-        for entry in additional:
-            if not isinstance(entry, dict):
-                continue
-            kind = str(entry.get("type") or entry.get("key") or "").strip().upper()
-            value = str(entry.get("value") or entry.get("description") or "").strip()
-            if kind and value and kind not in additional_map:
-                additional_map[kind] = value
-
-        # No contrato atual do MLB, pessoa física vem como name + last_name.
-        # Pessoa jurídica normalmente vem apenas em name (razão social).
-        first = str(
-            info.get("name")
-            or info.get("first_name")
-            or additional_map.get("FIRST_NAME")
-            or additional_map.get("NAME")
-            or ""
-        ).strip()
-        last = str(
-            info.get("last_name")
-            or info.get("surname")
-            or additional_map.get("LAST_NAME")
-            or additional_map.get("SURNAME")
-            or ""
-        ).strip()
-        business_name = str(
-            info.get("business_name")
-            or info.get("corporate_name")
-            or additional_map.get("BUSINESS_NAME")
-            or additional_map.get("COMPANY_NAME")
-            or additional_map.get("CORPORATE_NAME")
-            or ""
-        ).strip()
-
+            return ""
+        first = str(info.get("name") or info.get("first_name") or "").strip()
+        last = str(info.get("last_name") or info.get("surname") or "").strip()
+        business = str(info.get("business_name") or info.get("corporate_name") or "").strip()
         identification = info.get("identification") if isinstance(info.get("identification"), dict) else {}
-        doc_type = str(identification.get("type") or additional_map.get("DOC_TYPE") or "").strip().upper()
-        if doc_type == "CNPJ" and (business_name or first):
-            return business_name or first
-        if business_name and not (first or last):
-            return business_name
-        return " ".join(part for part in (first, last) if part).strip() or business_name
+        doc_type = str(identification.get("type") or "").strip().upper()
+        # MLB pessoa jurídica: name é a razão social; não concatenar last_name.
+        if doc_type == "CNPJ":
+            return business or first
+        return " ".join(x for x in (first, last) if x).strip() or business
 
-    # 1) Novo endpoint oficial. Não envia x-version: a documentação atual do
-    # billing-info não exige esse header e o payload esperado é buyer.billing_info.
-    # Em algumas contas MLB a resposta fiscal ainda varia entre contratos durante
-    # a migração. Tenta primeiro V2 (que expõe name/last_name completos) e depois
-    # o contrato atual sem header.
+    # Algumas respostas podem já trazer o objeto fiscal completo embutido.
+    embedded_name = extract_name({"buyer": {"billing_info": embedded}}) if embedded else ""
+    if embedded_name and any(k in embedded for k in ("name", "business_name", "corporate_name")):
+        return {"name": embedded_name, "billing_info_id": billing_id, "source": "order_embedded", "errors": []}
+
     if billing_id:
         endpoint = f"/orders/billing-info/{quote(site_id)}/{quote(billing_id)}"
-        for hdrs in ({"x-version": "2"}, None):
+        # O endpoint atual documentado não requer header de versão.
+        try:
+            payload = ml_api_get(endpoint)
+            name = extract_name(payload)
+            if name:
+                return {"name": name, "billing_info_id": billing_id, "source": "billing_info", "errors": errors}
+            errors.append("billing-info respondeu sem name/last_name")
+        except Exception as exc:
+            errors.append(str(exc)[:500])
+    else:
+        errors.append("buyer.billing_info.id ausente em /orders")
+
+    # Endpoint legado apenas como compatibilidade temporária. Continua sendo fonte fiscal,
+    # nunca fonte de nickname/receiver.
+    if order_id:
+        for legacy_path in (f"/orders/{quote(order_id)}/billing_info", f"/orders/{quote(order_id)}/billing-info"):
             try:
-                payload = ml_api_get(endpoint, headers=hdrs)
+                payload = ml_api_get(legacy_path)
                 name = extract_name(payload)
                 if name:
-                    return name
-            except Exception:
-                continue
+                    return {"name": name, "billing_info_id": billing_id, "source": "billing_info_legacy", "errors": errors}
+            except Exception as exc:
+                errors.append(str(exc)[:500])
 
-    # 2) Fallback temporário do endpoint legado durante a migração do ML.
-    # Para MLB, x-version:2 é importante em contas que ainda respondem no recurso antigo.
-    if order_id:
-        for legacy_path in (
-            f"/orders/{quote(order_id)}/billing_info",
-            f"/orders/{quote(order_id)}/billing-info",
-        ):
-            for hdrs in ({"x-version": "2"}, None):
-                try:
-                    payload = ml_api_get(legacy_path, headers=hdrs)
-                    name = extract_name(payload)
-                    if name:
-                        return name
-                except Exception:
-                    continue
+    return {"name": "", "billing_info_id": billing_id, "source": "", "errors": errors[-3:]}
 
-    return ""
 
+def _ml_billing_name(order: dict[str, Any]) -> str:
+    return str(_ml_billing_details(order).get("name") or "").strip()
 
 def _ml_dispatch_date(shipment_id: str, shipment: dict[str, Any] | None) -> str:
     """Data limite de despacho prometida pelo Mercado Livre.
@@ -3329,18 +3291,14 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
         ).strip()
     buyer = order.get("buyer") if isinstance(order.get("buyer"), dict) else {}
 
-    # Cliente é o COMPRADOR FISCAL, nunca "Quem recebe". O destinatário do envio
-    # pode ser outra pessoa e portanto não deve alimentar a coluna Cliente.
-    # Prioridade: Dados para NF-e (billing-info) -> nome/sobrenome do buyer do order.
-    fiscal_name = _ml_billing_name(order)
-    buyer = order.get("buyer") if isinstance(order.get("buyer"), dict) else buyer
-    buyer_names = [str(buyer.get("first_name") or "").strip(), str(buyer.get("last_name") or "").strip()]
-    buyer_full_name = " ".join(x for x in buyer_names if x).strip()
-    client = fiscal_name or buyer_full_name
-    client_name_source = (
-        "dados_fiscais_nf" if fiscal_name else
-        "comprador_order" if buyer_full_name else ""
-    )
+    # V14.21: Cliente é EXCLUSIVAMENTE o comprador fiscal de Dados para NF-e.
+    # Nunca usar nickname, first_name/last_name do order, receiver_name ou "Quem recebe".
+    billing_details = _ml_billing_details(order)
+    fiscal_name = str(billing_details.get("name") or "").strip()
+    client = fiscal_name
+    client_name_source = "dados_fiscais_nf" if fiscal_name else ""
+    billing_info_id = str(billing_details.get("billing_info_id") or "").strip()
+    billing_errors = billing_details.get("errors") if isinstance(billing_details.get("errors"), list) else []
 
     date_for_dispatch = _ml_dispatch_date(shipment_id, shipment)
     tracking = ""
@@ -3578,6 +3536,9 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
         "fiscal_name_updated": bool(fiscal_name),
         "client_name": client,
         "client_name_source": client_name_source,
+        "billing_info_id": billing_info_id,
+        "billing_info_errors": billing_errors,
+        "fiscal_name_available": bool(fiscal_name),
         "forced_client_rows": forced_client_rows,
         "kit_components_applied": kit_applied,
         "kit_unregistered": kit_unregistered,

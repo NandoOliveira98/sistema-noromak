@@ -1,0 +1,8 @@
+ATUALIZAÇÃO V14.21
+
+1. Substitua os arquivos desta versão no sistema.
+2. Publique normalmente:
+   git status
+   git add -A
+   git commit -m "v14.21 cliente somente dados fiscais NF"
+   ./publicar.sh

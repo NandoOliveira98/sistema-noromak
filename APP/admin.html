@@ -2981,8 +2981,12 @@ async function atualizarVendaMercadoLivreAdmin(uid,botao){
     const atualizados=Number(det.updated||0);
     const nomeAtual=String(det.client_name||det.fiscal_name||"").trim();
     const fonteNome=String(det.client_name_source||"").trim();
-    const detalheNome=nomeAtual?` Cliente: ${nomeAtual}${fonteNome?` (${fonteNome.replaceAll("_"," ")})`:""}.`:"";
-    mostrarStatusImportacaoPedidos("sucesso",`↻ Venda ${orderId} atualizada pela API do Mercado Livre. ${itens} item(ns), ${atualizados} atualizado(s), ${inseridos} novo(s).${detalheNome}`);
+    const billingId=String(det.billing_info_id||"").trim();
+    const errosFiscal=Array.isArray(det.billing_info_errors)?det.billing_info_errors.filter(Boolean):[];
+    const detalheNome=nomeAtual
+      ?` Cliente fiscal: ${nomeAtual}${fonteNome?` (${fonteNome.replaceAll("_"," ")})`:""}.`
+      :` Dados fiscais indisponíveis${billingId?` (billing_info_id ${billingId})`:""}; o nome atual foi mantido.${errosFiscal.length?` Diagnóstico: ${errosFiscal[0]}`:""}`;
+    mostrarStatusImportacaoPedidos(nomeAtual?"sucesso":"aviso",`↻ Venda ${orderId} atualizada pela API do Mercado Livre. ${itens} item(ns), ${atualizados} atualizado(s), ${inseridos} novo(s).${detalheNome}`);
     setStatusBanco("● Venda atualizada","ok");
   }catch(e){
     console.error(e);
