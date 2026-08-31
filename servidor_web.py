@@ -816,6 +816,19 @@ def init_db() -> None:
                 PRIMARY KEY(order_id, sku)
             );
             CREATE INDEX IF NOT EXISTS idx_ml_profit_snapshot_captured ON ml_profitability_snapshot(captured_at DESC);
+            CREATE TABLE IF NOT EXISTS ml_profitability_billing_cache (
+                order_id TEXT PRIMARY KEY,
+                seller_id TEXT NOT NULL DEFAULT '',
+                sale_fee REAL,
+                other_cost REAL,
+                bonus REAL,
+                status TEXT NOT NULL DEFAULT '',
+                diagnostic TEXT NOT NULL DEFAULT '',
+                fetched_at TEXT NOT NULL DEFAULT '',
+                fetched_at_epoch INTEGER NOT NULL DEFAULT 0,
+                raw_json TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_ml_profit_billing_fetched ON ml_profitability_billing_cache(fetched_at_epoch DESC);
             CREATE TABLE IF NOT EXISTS print_jobs (
                 id TEXT PRIMARY KEY,
                 order_key TEXT NOT NULL,
@@ -4716,6 +4729,203 @@ def _ml_order_marketplace_fee(order: dict[str, Any]) -> float | None:
     return 0.0 if candidates else None
 
 
+
+def _ml_billing_detail_amount(node: dict[str, Any]) -> float | None:
+    for key in ("detail_amount", "amount", "charge_amount"):
+        v = _money_number(node.get(key))
+        if v is not None:
+            return abs(v)
+    return None
+
+
+def _ml_billing_flat_details(value: Any) -> list[dict[str, Any]]:
+    """Coleta somente objetos que parecem detalhes financeiros do Billing ML."""
+    out: list[dict[str, Any]] = []
+    def walk(v: Any) -> None:
+        if isinstance(v, dict):
+            keys = {str(k).lower() for k in v.keys()}
+            if ("detail_amount" in keys or "charge_amount" in keys) and (
+                "detail_type" in keys or "detail_sub_type" in keys or "transaction_detail" in keys or "concept_type" in keys
+            ):
+                out.append(v)
+            for x in v.values():
+                walk(x)
+        elif isinstance(v, list):
+            for x in v:
+                walk(x)
+    walk(value)
+    return out
+
+
+def _ml_billing_sale_fee_explicit(value: Any) -> float | None:
+    """Procura campos explícitos de sale_fee/marketplace_fee sem somar valores genéricos."""
+    vals: list[float] = []
+    def amount_from(v: Any) -> float | None:
+        if isinstance(v, (int, float, str)):
+            return _money_number(v)
+        if isinstance(v, dict):
+            for k in ("amount", "total", "value", "detail_amount", "sale_fee_amount"):
+                n = _money_number(v.get(k))
+                if n is not None:
+                    return n
+        return None
+    def walk(v: Any) -> None:
+        if isinstance(v, dict):
+            for k, x in v.items():
+                lk = str(k).lower()
+                if lk in ("sale_fee", "sale_fee_amount", "sale_fee_total", "marketplace_fee"):
+                    n = amount_from(x)
+                    if n is not None and abs(n) > 0:
+                        vals.append(abs(n))
+                if isinstance(x, (dict, list)):
+                    walk(x)
+        elif isinstance(v, list):
+            for x in v:
+                walk(x)
+    walk(value)
+    return max(vals) if vals else None
+
+
+def _ml_billing_parse_order_result(result: dict[str, Any]) -> dict[str, Any]:
+    """Consolida Billing por order sem misturar o frete, que vem de /shipments/{id}/costs."""
+    fee = 0.0
+    other = 0.0
+    bonus = 0.0
+    fee_seen = False
+    other_seen = False
+    descriptions: list[str] = []
+    for d in _ml_billing_flat_details(result):
+        amount = _ml_billing_detail_amount(d)
+        if amount is None or amount == 0:
+            continue
+        dtype = str(d.get("detail_type") or "").upper()
+        sub = str(d.get("detail_sub_type") or d.get("detail_sub_types") or "").upper()
+        text = " ".join(str(d.get(k) or "") for k in (
+            "transaction_detail", "transaction_detail_description", "detail_type_description",
+            "detail_sub_type", "detail_sub_type_description", "concept_type", "concept_type_description",
+            "marketplace_type", "description"
+        )).lower()
+        is_bonus = dtype in ("BONUS", "BONIFICATION", "CREDIT") or "bonif" in text or "rebate" in text
+        is_shipping = any(t in text for t in ("shipping", "envio", "frete", "mercado envios")) or sub in ("CE", "BE")
+        is_sale_fee = (
+            sub in ("CV", "BV") or
+            any(t in text for t in ("cargo por venta", "tarifa de venda", "tarifa por venda", "sale fee", "selling fee", "comissão", "comision", "commission"))
+        )
+        label = str(d.get("transaction_detail_description") or d.get("detail_sub_type_description") or d.get("transaction_detail") or sub or dtype)
+        if label and label not in descriptions:
+            descriptions.append(label)
+        if is_shipping:
+            # O custo de envio do vendedor é conciliado separadamente via shipment costs.
+            continue
+        if is_sale_fee:
+            fee_seen = True
+            fee += -amount if is_bonus else amount
+        else:
+            other_seen = True
+            other += -amount if is_bonus else amount
+        if is_bonus:
+            bonus += amount
+    explicit = _ml_billing_sale_fee_explicit(result)
+    if (not fee_seen or fee <= 0) and explicit is not None:
+        fee = explicit
+        fee_seen = True
+    return {
+        "fee": max(0.0, fee) if fee_seen else None,
+        "other": other if other_seen else 0.0,
+        "bonus": bonus,
+        "diagnostic": "; ".join(descriptions[:8]),
+        "has_financial_details": bool(fee_seen or other_seen),
+    }
+
+
+def _ml_billing_cached(order_id: str) -> dict[str, Any] | None:
+    with DB_LOCK:
+        row = DB.execute("SELECT * FROM ml_profitability_billing_cache WHERE order_id=?", (str(order_id),)).fetchone()
+    return dict(row) if row else None
+
+
+def _ml_billing_fetch_orders(order_ids: list[str], seller_id: str, force: bool = False) -> dict[str, dict[str, Any]]:
+    """Consulta Billing em lotes de até 60 e mantém cache local para evitar 429."""
+    now_epoch = int(time.time())
+    output: dict[str, dict[str, Any]] = {}
+    to_fetch: list[str] = []
+    seen: set[str] = set()
+    for oid in order_ids:
+        oid = str(oid or "").strip()
+        if not oid or oid in seen:
+            continue
+        seen.add(oid)
+        cached = _ml_billing_cached(oid)
+        # Resultados confirmados são estáticos; incompletos podem ser reconsultados após 6h.
+        fresh = cached and (str(cached.get("status") or "") == "ok" or now_epoch - int(cached.get("fetched_at_epoch") or 0) < 21600)
+        if cached and fresh and not force:
+            output[oid] = cached
+        else:
+            to_fetch.append(oid)
+    for start in range(0, len(to_fetch), 60):
+        chunk = to_fetch[start:start+60]
+        q = {"order_ids": ",".join(chunk), "sort_by": "ID", "order_by": "ASC"}
+        if seller_id:
+            q["seller_id"] = str(seller_id)
+        endpoint = "/billing/integration/group/ML/order/details?" + urlencode(q)
+        try:
+            payload = ml_api_get(endpoint)
+            results = payload.get("results") if isinstance(payload, dict) and isinstance(payload.get("results"), list) else []
+            by_oid: dict[str, dict[str, Any]] = {}
+            for result in results:
+                if not isinstance(result, dict):
+                    continue
+                oid = str(result.get("order_id") or "").strip()
+                if oid:
+                    by_oid[oid] = result
+            for oid in chunk:
+                result = by_oid.get(oid)
+                if result:
+                    parsed = _ml_billing_parse_order_result(result)
+                    status = "ok" if parsed.get("has_financial_details") and parsed.get("fee") is not None else "partial"
+                    diagnostic = parsed.get("diagnostic") or ("Billing retornou a order, mas sem tarifa de venda identificável." if status == "partial" else "Billing conciliado")
+                    row = {
+                        "order_id": oid, "seller_id": str(seller_id or ""),
+                        "sale_fee": parsed.get("fee"), "other_cost": parsed.get("other"), "bonus": parsed.get("bonus"),
+                        "status": status, "diagnostic": diagnostic, "fetched_at": now_iso(), "fetched_at_epoch": now_epoch,
+                        "raw_json": json.dumps(result, ensure_ascii=False)[:120000],
+                    }
+                else:
+                    row = {
+                        "order_id": oid, "seller_id": str(seller_id or ""), "sale_fee": None, "other_cost": None, "bonus": None,
+                        "status": "partial", "diagnostic": "Billing não retornou esta order/pack nesta consulta.",
+                        "fetched_at": now_iso(), "fetched_at_epoch": now_epoch, "raw_json": "",
+                    }
+                with DB_LOCK:
+                    DB.execute("""INSERT INTO ml_profitability_billing_cache
+                        (order_id,seller_id,sale_fee,other_cost,bonus,status,diagnostic,fetched_at,fetched_at_epoch,raw_json)
+                        VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(order_id) DO UPDATE SET
+                        seller_id=excluded.seller_id,sale_fee=excluded.sale_fee,other_cost=excluded.other_cost,bonus=excluded.bonus,
+                        status=excluded.status,diagnostic=excluded.diagnostic,fetched_at=excluded.fetched_at,
+                        fetched_at_epoch=excluded.fetched_at_epoch,raw_json=excluded.raw_json""",
+                        (row["order_id"],row["seller_id"],row["sale_fee"],row["other_cost"],row["bonus"],row["status"],row["diagnostic"],row["fetched_at"],row["fetched_at_epoch"],row["raw_json"]))
+                    DB.commit()
+                output[oid] = row
+        except Exception as exc:
+            msg = "Billing ML: " + str(exc)
+            for oid in chunk:
+                cached = _ml_billing_cached(oid)
+                if cached:
+                    output[oid] = cached
+                    continue
+                row = {"order_id": oid, "seller_id": str(seller_id or ""), "sale_fee": None, "other_cost": None, "bonus": None,
+                       "status": "error", "diagnostic": msg, "fetched_at": now_iso(), "fetched_at_epoch": now_epoch, "raw_json": ""}
+                with DB_LOCK:
+                    DB.execute("""INSERT INTO ml_profitability_billing_cache
+                        (order_id,seller_id,sale_fee,other_cost,bonus,status,diagnostic,fetched_at,fetched_at_epoch,raw_json)
+                        VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(order_id) DO UPDATE SET status=excluded.status,diagnostic=excluded.diagnostic,
+                        fetched_at=excluded.fetched_at,fetched_at_epoch=excluded.fetched_at_epoch""",
+                        (oid,row["seller_id"],None,None,None,row["status"],row["diagnostic"],row["fetched_at"],row["fetched_at_epoch"],""))
+                    DB.commit()
+                output[oid] = row
+    return output
+
+
 def _ml_seller_shipping_cost(shipment_id: str, seller_id: str = "") -> float | None:
     if not shipment_id:
         return None
@@ -4757,7 +4967,7 @@ def _ml_seller_shipping_cost(shipment_id: str, seller_id: str = "") -> float | N
 def _ml_profitability_recent_sales(days: int = 30, limit: int = 1000) -> list[dict[str, Any]]:
     """Busca todas as vendas fechadas do período, paginando até o corte temporal.
 
-    V15.10 mantém paginação ampla e consolida custos reais do ML. O ``limit`` continua
+    V15.11 mantém paginação ampla e concilia Billing oficial do ML. O ``limit`` continua
     existindo apenas como proteção operacional e passa a aceitar até 2.000 linhas.
     Também inclui ``partially_refunded`` porque continua sendo uma venda com
     resultado financeiro que precisa aparecer no painel.
@@ -4957,6 +5167,20 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 1000, days: int
         _v = _money_number(_rec.get("sale_amount_api"))
         if _v is not None:
             shipment_sale_totals[_sid] = shipment_sale_totals.get(_sid, 0.0) + max(0.0, _v)
+    billing_map: dict[str, dict[str, Any]] = {}
+    if refresh and records:
+        try:
+            _, _seller_billing = ml_access_token()
+            billing_map = _ml_billing_fetch_orders([str(r.get("order_id") or "") for r in records], str(_seller_billing or ""), force=False)
+        except Exception:
+            billing_map = {}
+    else:
+        for _r in records:
+            _oid = str(_r.get("order_id") or "")
+            _cached = _ml_billing_cached(_oid) if _oid else None
+            if _cached:
+                billing_map[_oid] = _cached
+
     for rec in records:
         oid, sku = rec["order_id"], rec.get("sku") or ""
         with DB_LOCK:
@@ -4994,6 +5218,14 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 1000, days: int
 
             sale_amount = _money_number(rec.get("sale_amount_api"))
             ml_fee = _money_number(snap.get("ml_fee"))
+            billing = billing_map.get(str(oid)) or {}
+            billing_fee = _money_number(billing.get("sale_fee"))
+            billing_other = _money_number(billing.get("other_cost"))
+            billing_status = str(billing.get("status") or "")
+            billing_diag = str(billing.get("diagnostic") or "")
+            # Billing é a fonte de conciliação financeira. Orders permanece apenas como fallback.
+            if billing_fee is not None:
+                ml_fee = billing_fee
             # Em refresh o frete é recalculado pelo shipment para corrigir snapshots
             # antigos que podiam repetir o custo total em cada item da mesma venda.
             ship_cost = None
@@ -5009,11 +5241,11 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 1000, days: int
                     dsku = str(_ml_order_item_sku(doi) or "").strip()
                     if sku and dsku == sku:
                         matching.append(doi)
-                if len(matching) == 1:
+                if billing_fee is None and len(matching) == 1:
                     detailed_fee = _ml_item_fee(matching[0])
                     if detailed_fee is not None:
                         ml_fee = detailed_fee
-                if ml_fee is None:
+                if billing_fee is None and ml_fee is None:
                     total_fee = _ml_order_marketplace_fee(order)
                     if total_fee is not None:
                         # Para order de uma linha a tarifa total pertence integralmente à linha.
@@ -5058,9 +5290,11 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 1000, days: int
                     sale_amount=COALESCE(excluded.sale_amount,ml_profitability_snapshot.sale_amount),
                     ml_fee=COALESCE(excluded.ml_fee,ml_profitability_snapshot.ml_fee),
                     seller_shipping_cost=COALESCE(excluded.seller_shipping_cost,ml_profitability_snapshot.seller_shipping_cost),
-                    captured_at=excluded.captured_at""",
+                    other_ml_cost=COALESCE(excluded.other_ml_cost,ml_profitability_snapshot.other_ml_cost),
+                    captured_at=excluded.captured_at,raw_summary=excluded.raw_summary""",
                     (oid, sku, unit_cost, cost_source, sale_amount, ml_fee, ship_cost,
-                     _money_number(snap.get("other_ml_cost")), captured, ""),
+                     billing_other if billing_other is not None else _money_number(snap.get("other_ml_cost")), captured,
+                     json.dumps({"billing_status": billing_status, "billing_diagnostic": billing_diag, "billing_source": "billing/order/details" if billing else ""}, ensure_ascii=False)),
                 )
                 DB.commit()
                 snap_row = DB.execute(
@@ -5082,7 +5316,11 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 1000, days: int
         shipping = _money_number(snap.get("seller_shipping_cost"))
         other = _money_number(snap.get("other_ml_cost"))
         known_costs = sum(v for v in (product_cost, fee, shipping, other) if v is not None)
-        complete = sale is not None and product_cost is not None and fee is not None and shipping is not None
+        billing = billing_map.get(str(oid)) or {}
+        billing_status = str(billing.get("status") or "")
+        billing_diag = str(billing.get("diagnostic") or "")
+        fee_confirmed = billing_status == "ok" or (fee is not None and fee > 0)
+        complete = sale is not None and product_cost is not None and fee_confirmed and shipping is not None
         profit = (sale - known_costs) if sale is not None and product_cost is not None else None
         margin = (profit / sale * 100) if profit is not None and sale else None
         rows.append({
@@ -5104,6 +5342,9 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 1000, days: int
             "margin": margin,
             "cost_complete": complete,
             "captured_at": snap.get("captured_at") or "",
+            "billing_status": billing_status,
+            "billing_diagnostic": billing_diag,
+            "fee_source": "Billing ML" if _money_number(billing.get("sale_fee")) is not None else ("Orders ML" if fee is not None and fee > 0 else "Não confirmado"),
         })
 
     return {
@@ -5116,7 +5357,7 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 1000, days: int
     }
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/15.9"
+    server_version = "NoromakExpedicao/15.11"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
