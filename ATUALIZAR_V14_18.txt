@@ -1,3 +1,0 @@
-Atualização V14.18
-
-Substitua servidor_web.py e APP/admin.html, reinicie/publique o sistema e use o botão de refresh na venda desejada.

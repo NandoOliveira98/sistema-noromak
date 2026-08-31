@@ -1,9 +1,0 @@
-VERSÃO 14.9 — SOMENTE ETIQUETA DE ENVIO
-
-- Corrigida a impressão do Mercado Livre para não imprimir a NF/DANFE simplificada junto com a etiqueta.
-- Quando o ZPL do Mercado Livre contém vários documentos, o sistema identifica e remove somente o documento DANFE simplificado.
-- Mantida apenas a etiqueta logística/de envio.
-- A proteção foi aplicada em três pontos: ao baixar a etiqueta da API, ao enviar para a fila Zebra e na própria tela de conferência.
-- Reimpressões antigas também passam pelo filtro, evitando que históricos com ZPL duplo voltem a imprimir a DANFE.
-- Trabalhos já existentes na fila são filtrados ao serem entregues à estação/agente Zebra.
-- Mantidas todas as melhorias da V14.8, inclusive integração Apollo, curva ABCD, Zebra autônoma e reconciliação Mercado Livre.

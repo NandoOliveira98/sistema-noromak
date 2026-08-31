@@ -1,8 +1,0 @@
-V14.17 — Nome fiscal correto nos Pedidos Pendentes
-
-- O campo Cliente agora prioriza explicitamente o nome/razão social de Dados para NF-e.
-- Usa o fluxo oficial atual do Mercado Livre: buyer.billing_info.id -> /orders/billing-info/{site}/{id}.
-- Removido o header x-version do billing-info, que não faz parte do contrato documentado desse endpoint.
-- Adicionado fallback temporário para o endpoint legado por order_id quando o billing_info.id não vier no pedido ou o novo endpoint não devolver o nome.
-- O botão ↻ de Pedidos Pendentes reaplica o nome fiscal e sobrescreve o nome de perfil/comprador quando os dados fiscais estiverem disponíveis.
-- Mantidas as correções de KIT e todas as melhorias da V14.16.

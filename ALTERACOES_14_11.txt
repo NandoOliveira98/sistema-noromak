@@ -1,7 +1,0 @@
-V14.11 — descoberta direta de etiquetas no Mercado Livre
-
-- O botão "Verificar etiquetas disponíveis e vincular" não depende mais somente dos pedidos já existentes na base local.
-- Após reconciliar e verificar os pendentes locais, o sistema consulta /orders/search dentro da janela configurada.
-- Pedidos pagos ainda ausentes da base são inspecionados; se o shipment estiver ready_to_ship e o ZPL estiver disponível, o pedido é importado e vinculado automaticamente para a conferência.
-- O resumo do botão informa quantos pedidos foram descobertos diretamente na API.
-- Mantidas as correções anteriores, inclusive impressão somente da etiqueta de envio.

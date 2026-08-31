@@ -1,6 +1,0 @@
-V14.21 — Cliente estritamente pelos Dados para NF-e
-
-- Remove qualquer fallback de Cliente para nickname, nome de usuário, first_name/last_name do order ou destinatário.
-- Usa somente buyer.billing_info.id e /orders/billing-info/{site}/{billing_info_id}.
-- Se a consulta fiscal falhar, não sobrescreve o Cliente com nome incorreto.
-- O refresh individual informa billing_info_id e diagnóstico da consulta quando os dados fiscais não estiverem disponíveis.

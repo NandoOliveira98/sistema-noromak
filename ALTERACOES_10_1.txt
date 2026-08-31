@@ -1,9 +1,0 @@
-SISTEMA DE CONFERÊNCIA NOROMAK — VERSÃO 10.3
-
-ALTERAÇÃO
-- Mantida toda a funcionalidade da versão 10.0.
-- Pedidos reimportados que já foram concluídos anteriormente continuam com a tag no Status.
-- A mesma informação agora aparece também logo abaixo do número do Pedido, uma das primeiras colunas da grade do Admin.
-- A nova tag é laranja/vermelha, com texto branco e data/hora da conclusão anterior para ficar visível sem rolar a tabela para a direita.
-- A célula do Pedido recebe um destaque suave quando se trata de pedido já realizado.
-- Nenhum dado do banco existente é apagado ou substituído.

@@ -1,8 +1,0 @@
-V14.10 - RECUPERACAO DE ETIQUETAS ANTIGAS MERCADO LIVRE
-
-- A janela padrão de reconciliação de pedidos manuais/print/extensão passou de 7 para 30 dias.
-- O limite configurável foi ampliado para até 90 dias via ML_MANUAL_RECONCILE_DAYS.
-- O botão Admin > Integrações > Verificar etiquetas disponíveis e vincular agora primeiro reconcilia pedidos pendentes sem order_id/shipment_id e depois verifica as etiquetas.
-- Pedidos antigos cuja etiqueta foi liberada posteriormente podem ser vinculados e enviados para a conferência.
-- A detecção de Marketplace Mercado Livre ficou mais tolerante a variações de escrita.
-- Mantidas as correções da V14.9, incluindo impressão somente da etiqueta de envio.

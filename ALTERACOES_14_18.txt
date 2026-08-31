@@ -1,7 +1,0 @@
-V14.18 - NOME FISCAL FORCADO NO REFRESH
-
-- Refresh individual tenta billing-info com x-version:2 e contrato atual.
-- Endpoint legado também usa x-version:2 como fallback durante a migração do Mercado Livre.
-- Nome do cliente passa a ser atualizado em todas as linhas vinculadas ao mesmo order_id/pack_id, independentemente do SKU.
-- Evita que linhas antigas, kits ou SKU alterado preservem nickname/nome incorreto.
-- Retorno do refresh informa client_name e client_name_source para diagnóstico visual no Admin.

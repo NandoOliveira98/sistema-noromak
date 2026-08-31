@@ -1,8 +1,0 @@
-VERSÃO 9.6 — ALERTA SONORO REFORÇADO
-
-- O alerta de novo pedido ficou significativamente mais alto e mais longo.
-- Novo modo VOLUME MÁXIMO, ativado por padrão, com rajadas em onda quadrada e harmônicos para ambientes de estoque.
-- Botão para alternar entre VOLUME MÁXIMO e VOLUME NORMAL.
-- Ao mudar o volume, o sistema reproduz imediatamente uma amostra do alarme.
-- Vibração reforçada em celulares compatíveis.
-- Mantidas todas as regras da versão 9.5 para detectar apenas novos pedidos de hoje com etiqueta disponível.

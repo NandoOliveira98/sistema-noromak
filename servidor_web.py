@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "14.23"
+APP_VERSION = "14.24"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -3713,7 +3713,7 @@ def ml_pending_label_watch_once() -> dict[str, int]:
     return {"checked": checked, "triggered": triggered, "ready": ready, "errors": errors}
 
 
-def _ml_discover_untracked_ready_labels_once() -> dict[str, int]:
+def _ml_discover_untracked_ready_labels_once(*, days: int | None = None, max_pages: int | None = None) -> dict[str, int]:
     """V14.11: descobre na própria API pedidos com etiqueta que ainda não existem localmente.
 
     A V14.10 conseguia recuperar apenas pedidos já presentes em conf_pedidos ou
@@ -3723,12 +3723,15 @@ def _ml_discover_untracked_ready_labels_once() -> dict[str, int]:
     importamos o pedido diretamente.
     """
     _, seller_id = ml_access_token()
-    cutoff = datetime.now(timezone.utc) - timedelta(days=ML_MANUAL_RECONCILE_DAYS)
-    existing = _ml_existing_order_ids()
+    scan_days = max(1, min(90, int(days or ML_MANUAL_RECONCILE_DAYS)))
+    page_limit = max(1, min(ML_CATCHUP_MAX_PAGES, int(max_pages or ML_CATCHUP_MAX_PAGES)))
+    cutoff = datetime.now(timezone.utc) - timedelta(days=scan_days)
+    completed = _ml_completed_order_ids()
+    linked_local = _ml_linked_order_ids()
     checked = discovered = available = linked = errors = 0
     stop_by_date = False
 
-    for page in range(ML_CATCHUP_MAX_PAGES):
+    for page in range(page_limit):
         query = urlencode({
             "seller": seller_id,
             "order.status": "paid",
@@ -3750,8 +3753,11 @@ def _ml_discover_untracked_ready_labels_once() -> dict[str, int]:
                 break
 
             order_id = str(order.get("id") or "").strip()
-            if not order_id or order_id in existing:
+            if not order_id or order_id in completed or order_id in linked_local:
                 continue
+            # Mesmo que o pedido já exista localmente, ele precisa ser reconsultado
+            # quando ainda não possui etiqueta vinculada. Isso corrige linhas
+            # incompletas que antes eram ignoradas para sempre.
             discovered += 1
 
             try:
@@ -3781,8 +3787,8 @@ def _ml_discover_untracked_ready_labels_once() -> dict[str, int]:
                 available += 1
 
                 detail = ml_import_order(order_id, source="API Mercado Livre / descoberta etiqueta não rastreada")
-                existing.add(order_id)
                 if detail.get("ready_for_conference"):
+                    linked_local.add(order_id)
                     linked += 1
                     ml_log_event(
                         "manual_label_discovery", f"/orders/{order_id}", seller_id, ML_CLIENT_ID,
@@ -3871,18 +3877,74 @@ def ml_check_all_available_labels_once() -> dict[str, int]:
 
 
 def ml_pending_label_watch_loop(stop_event: threading.Event) -> None:
-    """Watcher interno leve; notificações continuam sendo o caminho principal."""
+    """Watcher de etiquetas locais + descoberta periódica direta na API.
+
+    Além de revisar shipments já conhecidos, a cada ~60 s varre pedidos pagos
+    recentes no Mercado Livre. Assim um pedido que entrou localmente incompleto
+    (ou que perdeu webhook) volta a ser sincronizado quando a etiqueta surgir.
+    """
+    cycles = 0
+    discovery_every = max(1, int(round(120 / max(1, ML_PENDING_WATCH_INTERVAL))))
     while not stop_event.wait(ML_PENDING_WATCH_INTERVAL):
         try:
             row = ml_integration_row()
             if not row or not str(row["access_token"] or "").strip():
                 continue
             ml_pending_label_watch_once()
+            cycles += 1
+            if cycles % discovery_every == 0:
+                try:
+                    # Varredura automática curta: até 3 dias / 4 páginas (200 pedidos).
+                    # A verificação manual continua usando a janela completa configurada.
+                    result = _ml_discover_untracked_ready_labels_once(days=3, max_pages=4)
+                    if result.get("api_linked"):
+                        ml_log_event("shipment_watcher", "/orders/search", "", ML_CLIENT_ID,
+                                     "ETIQUETAS RECUPERADAS", json_dumps(result))
+                except Exception as discovery_exc:
+                    ml_log_event("shipment_watcher", "/orders/search", "", ML_CLIENT_ID,
+                                 "ERRO DESCOBERTA", str(discovery_exc)[:1200])
         except Exception as exc:
             try:
                 ml_log_event("shipment_watcher", "/pending", "", ML_CLIENT_ID, "ERRO", str(exc)[:1200])
             except Exception:
                 pass
+
+
+def _ml_linked_order_ids() -> set[str]:
+    """Pedidos locais que já possuem etiqueta ML realmente vinculada."""
+    ids: set[str] = set()
+    raw, _, _ = get_storage("conf_pedidos")
+    for row in _rows_from_storage_value(raw):
+        if not isinstance(row, dict):
+            continue
+        if str(row.get("Etiqueta API Mercado Livre") or "").strip().upper() != "VINCULADA":
+            continue
+        oid = str(row.get("VendaMercadoLivre") or "").strip()
+        if oid:
+            ids.add(oid)
+    return ids
+
+
+def _ml_completed_order_ids() -> set[str]:
+    """Pedidos já concluídos, que não devem voltar para pendentes."""
+    ids: set[str] = set()
+    with DB_LOCK:
+        try:
+            rows = DB.execute("SELECT payload FROM completed_orders").fetchall()
+        except Exception:
+            rows = []
+    for dbrow in rows:
+        try:
+            payload = json.loads(dbrow["payload"] if hasattr(dbrow, "keys") else dbrow[0])
+        except Exception:
+            continue
+        candidates = payload if isinstance(payload, list) else [payload]
+        for row in candidates:
+            if isinstance(row, dict):
+                oid = str(row.get("VendaMercadoLivre") or "").strip()
+                if oid:
+                    ids.add(oid)
+    return ids
 
 
 def _ml_existing_order_ids() -> set[str]:
@@ -4096,8 +4158,10 @@ def ml_new_order_watch_once() -> dict[str, int]:
         })
         result = ml_api_get(f"/orders/search?{query}")
         orders = result.get("results") if isinstance(result, dict) else []
-        existing = _ml_existing_order_ids()
-        checked = imported = ignored_full = errors = 0
+        completed = _ml_completed_order_ids()
+        linked_local = _ml_linked_order_ids()
+        local_or_completed = _ml_existing_order_ids()
+        checked = imported = refreshed_pending = ignored_full = errors = 0
         for order in orders or []:
             if not isinstance(order, dict):
                 continue
@@ -4105,9 +4169,32 @@ def ml_new_order_watch_once() -> dict[str, int]:
             if not order_id:
                 continue
             checked += 1
-            if order_id in existing:
+            if order_id in completed or order_id in linked_local:
                 continue
             try:
+                # Pedido já existe localmente, mas ainda sem etiqueta: não fazemos
+                # uma reimportação pesada a cada 20 s. Só reimportamos quando o
+                # shipment estiver ready_to_ship e o ZPL estiver realmente liberado.
+                if order_id in local_or_completed:
+                    shipping = order.get("shipping") if isinstance(order.get("shipping"), dict) else {}
+                    shipment_id = str(shipping.get("id") or "").strip()
+                    shipment = None
+                    if shipment_id:
+                        shipment = ml_api_get(
+                            f"/shipments/{quote(shipment_id)}?views=destination",
+                            headers={"x-format-new": "true", "X-Api-Version": "2"},
+                        )
+                    else:
+                        shipment_id, shipment = ml_order_shipments(order_id)
+                    if not shipment_id or not isinstance(shipment, dict):
+                        continue
+                    if str(shipment.get("status") or "").strip().lower() != "ready_to_ship":
+                        continue
+                    try:
+                        if not _ml_fetch_shipping_zpl(shipment_id):
+                            continue
+                    except Exception:
+                        continue
                 detail = ml_import_order(order_id, source="API Mercado Livre / entrada automática")
                 if detail.get("ignored") and detail.get("reason") == "FULL":
                     ignored_full += 1
@@ -4115,9 +4202,12 @@ def ml_new_order_watch_once() -> dict[str, int]:
                                  "FULL IGNORADO", json_dumps({"order_id": order_id}))
                 else:
                     imported += 1
-                    existing.add(order_id)
+                    if detail.get("ready_for_conference"):
+                        linked_local.add(order_id)
+                    else:
+                        refreshed_pending += 1
                     ml_log_event("new_order_watcher", f"/orders/{order_id}", seller_id, ML_CLIENT_ID,
-                                 "PEDIDO NOVO IMPORTADO",
+                                 "PEDIDO IMPORTADO/ATUALIZADO",
                                  json_dumps({"order_id": order_id,
                                              "ready_for_conference": bool(detail.get("ready_for_conference")),
                                              "fiscal_name": detail.get("fiscal_name") or "",
@@ -4128,7 +4218,7 @@ def ml_new_order_watch_once() -> dict[str, int]:
                              "ERRO", str(exc)[:1200])
         if errors == 0:
             _ml_update_last_sync(poll_started_at)
-        return {"checked": checked, "imported": imported, "ignored_full": ignored_full, "errors": errors}
+        return {"checked": checked, "imported": imported, "refreshed_pending": refreshed_pending, "ignored_full": ignored_full, "errors": errors}
     finally:
         ML_NEW_ORDER_WATCH_LOCK.release()
 

@@ -1,8 +1,0 @@
-Atualização V14.15
-
-Substitua os arquivos da atualização no projeto e publique normalmente:
-
-git status
-git add -A
-git commit -m "v14.15 corrige cliente fiscal e kits em pedidos pendentes"
-./publicar.sh

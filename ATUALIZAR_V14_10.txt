@@ -1,8 +1,0 @@
-ATUALIZACAO V14.10
-
-Substitua os arquivos desta versão e publique normalmente:
-
-git status
-git add -A
-git commit -m "v14.10 recupera etiquetas antigas mercado livre"
-./publicar.sh

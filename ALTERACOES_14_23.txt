@@ -1,7 +1,0 @@
-V14.23 - CORRECAO DE MARGEM PERCENTUAL
-
-- Corrige margens 17% e 20% que podiam ser gravadas como 17/20 na camada decimal e exibidas como 1700%/2000%.
-- Mantem armazenamento interno em fracao decimal: 0.20, 0.17 e 0.15.
-- Mantem exibicao humana: 20%, 17% e 15%.
-- Normaliza automaticamente dados antigos que tenham sido salvos como 20, 17 ou 15.
-- Regras mantidas: A/B = 20%, C = 17%, D = 15%.

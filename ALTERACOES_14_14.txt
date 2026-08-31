@@ -1,6 +1,0 @@
-V14.14 - remoção do teste de código de autorização de coleta
-
-- Remove o card experimental "Coleta ML" da tela de Conferência.
-- Remove o botão de atualização do código e suas chamadas automáticas.
-- Remove a rota/monitor de backend criados apenas para esse teste.
-- Mantém todas as demais melhorias existentes até a V14.13/V14.11 de produção funcional.

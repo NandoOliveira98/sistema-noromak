@@ -1,9 +1,0 @@
-NOROMAK EXPEDIÇÃO — V14.7
-
-PRECIFICADOR — MARGEM AUTOMÁTICA POR CURVA
-- Ao alterar manualmente a Curva no cadastro do produto, a Margem desejada é atualizada imediatamente.
-- Regra: A = 20%, B = 20%, C = 17%, D = 15%.
-- A regra é aplicada em Mercado Livre, Shopee e Magalu.
-- Os preços são recalculados imediatamente após a troca da curva.
-- O salvamento automático persiste a nova curva e as novas margens.
-- Mantidas todas as melhorias da V14.6: recuperação das mudanças do Work, Zebra autônoma, integração Mercado Livre e curva ABCD via Apollo.

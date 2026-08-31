@@ -1,7 +1,0 @@
-V14.15 — PEDIDOS PENDENTES: CLIENTE FISCAL + KITS
-
-1. Mercado Livre: o nome exibido em Cliente passa a priorizar o mesmo nome/razão social dos Dados para NF (billing-info), incluindo o formato v2 com additional_info.
-2. Pedidos Pendentes: ao abrir o Admin, pedidos com SKU de kit são reconciliados com o cadastro atual de kits.
-3. Se a composição do kit foi alterada no banco, as linhas pendentes são reconstruídas com os componentes e quantidades atuais.
-4. Componentes recebem EAN, descrição e localização do Banco de Produtos quando disponíveis.
-5. Linhas já expandidas de kits também são atualizadas sem duplicar componentes.

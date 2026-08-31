@@ -1,7 +1,0 @@
-ATUALIZACAO V14.13
-
-1. Substitua servidor_web.py, APP/conferencia.html e VERSAO.txt.
-2. Adicione ALTERACOES_14_13.txt.
-3. Publique normalmente com ./publicar.sh.
-4. Na Conferencia, o card "Coleta ML" aparece pequeno no canto superior direito.
-5. Ao clicar em ↻, a hora da tentativa deve mudar imediatamente; se a API não fornecer o código, continuará exibindo "Código indisponível".

@@ -1,9 +1,0 @@
-ATUALIZAÇÃO V14.4
-
-Substitua os arquivos da versão anterior pelos arquivos desta versão e reinicie o servidor Web.
-Arquivos principais alterados:
-- servidor_web.py
-- APP/conferencia.html
-- VERSAO.txt
-
-A atualização preserva os bancos/dados existentes.
