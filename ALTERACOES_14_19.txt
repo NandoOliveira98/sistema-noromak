@@ -1,0 +1,7 @@
+V14.19 — nome real do cliente nos pedidos pendentes
+
+- Corrige leitura do shipment no contrato x-format-new/Hosted: destination.receiver_name.
+- Mantém receiver_address.receiver_name como fallback de compatibilidade.
+- Campo Cliente nunca mais usa buyer.nickname/nome de usuário do Mercado Livre.
+- Prioridade: Dados para NF-e (billing-info) > Quem recebe (shipment) > nome/sobrenome do buyer.
+- Refresh individual força o nome real em todas as linhas ligadas à mesma venda/pack.

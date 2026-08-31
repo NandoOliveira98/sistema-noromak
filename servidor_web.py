@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "14.18"
+APP_VERSION = "14.19"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -3280,22 +3280,32 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
 
     receiver = ""
     if isinstance(shipment, dict):
+        # Contrato Hosted/New Format (2026): o destinatário vem em
+        # destination.receiver_name. Mantém receiver_address como fallback
+        # para compatibilidade com a vista anterior.
+        destination = shipment.get("destination") if isinstance(shipment.get("destination"), dict) else {}
         addr = shipment.get("receiver_address") if isinstance(shipment.get("receiver_address"), dict) else {}
-        receiver = str(addr.get("receiver_name") or addr.get("receiver") or "").strip()
+        receiver = str(
+            destination.get("receiver_name")
+            or addr.get("receiver_name")
+            or addr.get("receiver")
+            or ""
+        ).strip()
     buyer = order.get("buyer") if isinstance(order.get("buyer"), dict) else {}
 
-    # Primeiro tenta o nome/razão social dos dados fiscais usados para NF,
-    # exatamente para evitar nickname quando o nome fiscal está disponível.
+    # Cliente deve representar o nome real usado para expedição/faturamento,
+    # nunca o nickname/nome de usuário do Mercado Livre. Prioriza os Dados
+    # para NF-e e, quando o billing-info não estiver disponível, usa o nome
+    # completo do destinatário do shipment ("Quem recebe"), que é PII oficial
+    # retornada com X-Api-Version: 2.
     fiscal_name = _ml_billing_name(order)
     buyer_names = [str(buyer.get("first_name") or "").strip(), str(buyer.get("last_name") or "").strip()]
     buyer_full_name = " ".join(x for x in buyer_names if x).strip()
-    nickname = str(buyer.get("nickname") or "").strip()
-    client = fiscal_name or receiver or buyer_full_name or nickname
+    client = fiscal_name or receiver or buyer_full_name
     client_name_source = (
         "dados_fiscais_nf" if fiscal_name else
         "destinatario_envio" if receiver else
-        "comprador_order" if buyer_full_name else
-        "nickname" if nickname else ""
+        "comprador_order" if buyer_full_name else ""
     )
 
     date_for_dispatch = _ml_dispatch_date(shipment_id, shipment)
