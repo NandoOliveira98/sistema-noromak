@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "14.21"
+APP_VERSION = "14.22"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -366,6 +366,12 @@ def crm_cost_lookup(codigo: str, operador: str = "") -> dict[str, Any]:
             data.get("classificacao_abc"),
             data.get("curva_item"),
             data.get("classificacao"),
+            # O contrato do Apollo também devolve a classificação combinada
+            # em `curva` (ex.: A3, C2). Se curva_abc vier vazia por alguma
+            # inconsistência temporária, extraímos somente a letra ABCD.
+            data.get("curva"),
+            data.get("curvaABC"),
+            data.get("curva_abcd"),
         )
 
     result = {

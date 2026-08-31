@@ -1034,10 +1034,17 @@ var state = {
           }
 
           var curvaApi = String(data.curva_abc || "").trim().toUpperCase();
+          // Defesa adicional: se o backend/endpoint vier apenas com a curva
+          // composta (A3, B2, C1, D3), usa somente a letra ABCD.
+          if (!["A","B","C","D"].includes(curvaApi)) {
+            var curvaComposta = String(data.curva || "").trim().toUpperCase();
+            var curvaMatch = curvaComposta.match(/^([ABCD])/);
+            curvaApi = curvaMatch ? curvaMatch[1] : "";
+          }
           var curvaAnterior = String(el.curva.value || "").trim().toUpperCase();
           if (["A","B","C","D"].includes(curvaApi)) {
             el.curva.value = curvaApi;
-            if (curvaAnterior !== curvaApi) applyCurveMargin(curvaApi);
+            applyCurveMargin(curvaApi);
           }
 
           if (sameSavedSku) {
@@ -1052,6 +1059,17 @@ var state = {
 
             savedProduct.custo = Core.roundMoney(custo);
             if (!String(savedProduct.produto || "").trim() && descricaoApi) savedProduct.produto = descricaoApi;
+            if (["A","B","C","D"].includes(curvaApi)) {
+              savedProduct.curva = curvaApi;
+              if (!savedProduct.marketplaces || typeof savedProduct.marketplaces !== "object") savedProduct.marketplaces = defaultMarketplaces();
+              var margemCurva = desiredMarginForCurve(curvaApi);
+              if (Number.isFinite(margemCurva)) {
+                ["ml","shopee","magalu"].forEach(function(market) {
+                  if (!savedProduct.marketplaces[market]) savedProduct.marketplaces[market] = {};
+                  savedProduct.marketplaces[market].margem = margemCurva;
+                });
+              }
+            }
             var kitSync = refreshAllKitCosts();
             state.kitCycleIds = kitSync.cycleIds;
             persist();

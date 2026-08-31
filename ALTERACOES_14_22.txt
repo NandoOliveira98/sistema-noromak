@@ -1,0 +1,7 @@
+V14.22 - CURVA APOLLO ROBUSTA
+
+- Precificador prioriza curva_abc oficial (A/B/C/D).
+- Se curva_abc vier vazia, usa a curva composta do Apollo (A3/B3/C2/D1) como fallback e extrai a letra.
+- Consulta individual grava imediatamente a curva no produto salvo.
+- Margem desejada é reaplicada imediatamente: A/B 20%, C 17%, D 15%.
+- Frontend também possui fallback defensivo para curva composta.
