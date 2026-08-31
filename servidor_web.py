@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "14.24"
+APP_VERSION = "14.25"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2737,20 +2737,54 @@ def _ml_order_item_sku(item_data: dict[str, Any]) -> str:
 
 
 def ml_order_shipments(order_id: str) -> tuple[str, dict[str, Any] | None]:
+    """Resolve o shipment *forward* real do pedido, compatível com Hosted View 2026.
+
+    O Mercado Livre migrou /orders/{id}/shipments para um array cujo discriminador
+    principal é ``type`` (forward/return/return_to_buyer). O contrato antigo usava
+    ``direction``. Nunca podemos assumir o primeiro item da lista: uma devolução pode
+    aparecer antes do envio original e faria o sistema consultar a etiqueta errada.
+    """
     shipment_id = ""
     shipment_detail: dict[str, Any] | None = None
+    errors: list[str] = []
+
+    def pick_forward(payload: Any) -> str:
+        shipments = payload if isinstance(payload, list) else ([payload] if isinstance(payload, dict) and payload.get("id") else [])
+        if not shipments:
+            return ""
+        for item in shipments:
+            if not isinstance(item, dict):
+                continue
+            shipment_type = str(item.get("type") or "").strip().lower()
+            direction = str(item.get("direction") or "").strip().lower()
+            if shipment_type == "forward" or direction == "forward":
+                return str(item.get("id") or "").strip()
+        if len(shipments) == 1 and isinstance(shipments[0], dict):
+            shipment_type = str(shipments[0].get("type") or "").strip().lower()
+            direction = str(shipments[0].get("direction") or "").strip().lower()
+            if shipment_type not in {"return", "return_to_buyer"} and direction not in {"return", "reverse"}:
+                return str(shipments[0].get("id") or "").strip()
+        return ""
+
     try:
         result = ml_api_get(
-            f"/orders/{quote(str(order_id))}/shipments?list_all=true",
+            f"/orders/{quote(str(order_id))}/shipments",
             headers={"X-New-Domain": "true", "X-Api-Version": "2"},
         )
-        shipments = result if isinstance(result, list) else ([result] if isinstance(result, dict) and result.get("id") else [])
-        forward = next((x for x in shipments if isinstance(x, dict) and str(x.get("direction") or "forward") == "forward"), None)
-        selected = forward or (shipments[0] if shipments else None)
-        if isinstance(selected, dict):
-            shipment_id = str(selected.get("id") or "")
-    except Exception:
-        shipment_id = ""
+        shipment_id = pick_forward(result)
+    except Exception as exc:
+        errors.append(f"hosted:{exc}")
+
+    if not shipment_id:
+        try:
+            result = ml_api_get(
+                f"/orders/{quote(str(order_id))}/shipments?list_all=true",
+                headers={"X-New-Domain": "true", "X-Api-Version": "2"},
+            )
+            shipment_id = pick_forward(result)
+        except Exception as exc:
+            errors.append(f"legacy:{exc}")
+
     if shipment_id:
         try:
             detail = ml_api_get(
@@ -2759,9 +2793,38 @@ def ml_order_shipments(order_id: str) -> tuple[str, dict[str, Any] | None]:
             )
             if isinstance(detail, dict):
                 shipment_detail = detail
-        except Exception:
+        except Exception as exc:
+            errors.append(f"detail:{exc}")
             shipment_detail = None
+
+    if not shipment_id and errors:
+        try:
+            ml_log_event("shipment_resolver", f"/orders/{order_id}/shipments", "", ML_CLIENT_ID,
+                         "SEM SHIPMENT FORWARD", " | ".join(errors)[:1200])
+        except Exception:
+            pass
     return shipment_id, shipment_detail
+
+
+def _ml_resolve_forward_shipment(order_id: str, order_hint: dict[str, Any] | None = None) -> tuple[str, dict[str, Any] | None]:
+    """Resolve primeiro pela relação oficial order->shipments; usa shipping.id apenas como fallback."""
+    shipment_id, shipment = ml_order_shipments(order_id)
+    if shipment_id and isinstance(shipment, dict):
+        return shipment_id, shipment
+    hint = order_hint if isinstance(order_hint, dict) else {}
+    shipping = hint.get("shipping") if isinstance(hint.get("shipping"), dict) else {}
+    hinted_id = str(shipping.get("id") or "").strip()
+    if hinted_id and hinted_id != shipment_id:
+        try:
+            detail = ml_api_get(
+                f"/shipments/{quote(hinted_id)}?views=destination",
+                headers={"x-format-new": "true", "X-Api-Version": "2"},
+            )
+            if isinstance(detail, dict):
+                return hinted_id, detail
+        except Exception:
+            pass
+    return shipment_id, shipment
 
 
 def _ml_invoice_data(shipment_id: str, site_id: str = "MLB") -> dict[str, Any] | None:
@@ -3761,16 +3824,7 @@ def _ml_discover_untracked_ready_labels_once(*, days: int | None = None, max_pag
             discovered += 1
 
             try:
-                shipping = order.get("shipping") if isinstance(order.get("shipping"), dict) else {}
-                shipment_id = str(shipping.get("id") or "").strip()
-                shipment = None
-                if shipment_id:
-                    shipment = ml_api_get(
-                        f"/shipments/{quote(shipment_id)}?views=destination",
-                        headers={"x-format-new": "true", "X-Api-Version": "2"},
-                    )
-                else:
-                    shipment_id, shipment = ml_order_shipments(order_id)
+                shipment_id, shipment = _ml_resolve_forward_shipment(order_id, order)
 
                 checked += 1
                 if not shipment_id or not isinstance(shipment, dict):
@@ -3911,7 +3965,34 @@ def ml_pending_label_watch_loop(stop_event: threading.Event) -> None:
 
 
 def _ml_linked_order_ids() -> set[str]:
-    """Pedidos locais que já possuem etiqueta ML realmente vinculada."""
+    """Pedidos cuja etiqueta ML realmente existe no banco de etiquetas.
+
+    Não confia apenas no texto VINCULADA da linha: versões antigas podiam deixar
+    esse marcador sem um registro ZPL correspondente, fazendo o watcher ignorar
+    o pedido indefinidamente.
+    """
+    label_raw, _, _ = get_storage("conf_etiquetas")
+    try:
+        label_bank = json.loads(label_raw) if isinstance(label_raw, str) and label_raw.strip() else {}
+    except Exception:
+        label_bank = {}
+    registros = label_bank.get("registros") if isinstance(label_bank, dict) and isinstance(label_bank.get("registros"), dict) else {}
+    valid_orders: set[str] = set()
+    valid_shipments: set[str] = set()
+    for rec in registros.values():
+        if not isinstance(rec, dict):
+            continue
+        if str(rec.get("origem") or "").strip().lower() != "api_mercadolivre":
+            continue
+        envio = rec.get("envio")
+        if not isinstance(envio, str) or not envio.strip():
+            continue
+        meta = rec.get("metadados") if isinstance(rec.get("metadados"), dict) else {}
+        oid = str(meta.get("venda") or "").strip()
+        sid = str(meta.get("shipment_id") or "").strip()
+        if oid: valid_orders.add(oid)
+        if sid: valid_shipments.add(sid)
+
     ids: set[str] = set()
     raw, _, _ = get_storage("conf_pedidos")
     for row in _rows_from_storage_value(raw):
@@ -3920,7 +4001,8 @@ def _ml_linked_order_ids() -> set[str]:
         if str(row.get("Etiqueta API Mercado Livre") or "").strip().upper() != "VINCULADA":
             continue
         oid = str(row.get("VendaMercadoLivre") or "").strip()
-        if oid:
+        sid = str(row.get("ShipmentIdMercadoLivre") or "").strip()
+        if oid and (oid in valid_orders or (sid and sid in valid_shipments)):
             ids.add(oid)
     return ids
 
@@ -4176,16 +4258,7 @@ def ml_new_order_watch_once() -> dict[str, int]:
                 # uma reimportação pesada a cada 20 s. Só reimportamos quando o
                 # shipment estiver ready_to_ship e o ZPL estiver realmente liberado.
                 if order_id in local_or_completed:
-                    shipping = order.get("shipping") if isinstance(order.get("shipping"), dict) else {}
-                    shipment_id = str(shipping.get("id") or "").strip()
-                    shipment = None
-                    if shipment_id:
-                        shipment = ml_api_get(
-                            f"/shipments/{quote(shipment_id)}?views=destination",
-                            headers={"x-format-new": "true", "X-Api-Version": "2"},
-                        )
-                    else:
-                        shipment_id, shipment = ml_order_shipments(order_id)
+                    shipment_id, shipment = _ml_resolve_forward_shipment(order_id, order)
                     if not shipment_id or not isinstance(shipment, dict):
                         continue
                     if str(shipment.get("status") or "").strip().lower() != "ready_to_ship":
