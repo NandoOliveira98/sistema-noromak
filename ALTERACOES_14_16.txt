@@ -1,0 +1,6 @@
+V14.16 — Atualização individual de pedidos pendentes
+
+- Adicionado botão ↻ ao lado de adicionar/excluir em cada linha de Pedidos Pendentes.
+- O botão consulta novamente a venda original no Mercado Livre pelo VendaMercadoLivre/order_id.
+- Reimporta dados fiscais/nome do cliente, shipment, rastreio, NF, SKU e composição de kits usando o cadastro atual.
+- Recarrega o banco compartilhado após a atualização sem excluir o pedido.

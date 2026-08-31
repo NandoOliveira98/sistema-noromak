@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "14.15"
+APP_VERSION = "14.16"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -4492,6 +4492,21 @@ class AppHandler(BaseHTTPRequestHandler):
             if ctx is not None:
                 try:
                     self.send_json(ml_check_all_available_labels_once())
+                except Exception as exc:
+                    self.send_json({"error": str(exc)}, 502)
+            return
+        if path == "/api/integracoes/mercadolivre/atualizar-pedido":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                try:
+                    payload = self.read_json()
+                    order_id = str(payload.get("order_id") or "").strip()
+                    if not order_id:
+                        self.send_json({"error": "Venda Mercado Livre não identificada neste pedido."}, 400)
+                        return
+                    detail = ml_import_order(order_id, source=f"API Mercado Livre / refresh manual por {ctx.get('username') or 'admin'}")
+                    audit(ctx["username"], "ml.order.refresh", order_id)
+                    self.send_json({"ok": True, "detail": detail})
                 except Exception as exc:
                     self.send_json({"error": str(exc)}, 502)
             return

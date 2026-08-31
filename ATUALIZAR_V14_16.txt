@@ -1,0 +1,4 @@
+git status
+git add -A
+git commit -m "v14.16 adiciona refresh individual dos pedidos pendentes"
+./publicar.sh

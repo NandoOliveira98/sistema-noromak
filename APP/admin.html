@@ -2960,6 +2960,35 @@ function adicionarLinhaPedidoAdmin(base=null){
   },40);
 }
 function adicionarItemMesmoPedido(uid){const base=pedidosEditorAdmin.find(x=>x.__uidLinha===uid);adicionarLinhaPedidoAdmin(base);}
+async function atualizarVendaMercadoLivreAdmin(uid,botao){
+  const item=pedidosEditorAdmin.find(x=>x.__uidLinha===uid);
+  if(!item)return;
+  const orderId=String(item.VendaMercadoLivre||"").trim();
+  if(!orderId){
+    alert("Este pedido ainda não possui o ID original da venda do Mercado Livre. Use Integrações > Verificar etiquetas disponíveis e vincular para reconciliá-lo primeiro.");
+    return;
+  }
+  const anterior=botao?.textContent||"↻";
+  try{
+    if(botao){botao.disabled=true;botao.textContent="…";botao.title="Atualizando dados da venda...";}
+    setStatusBanco("● Atualizando venda no Mercado Livre...","salvando");
+    const d=await mlApiAdmin("/expedicao/api/integracoes/mercadolivre/atualizar-pedido",{method:"POST",body:JSON.stringify({order_id:orderId})});
+    if(typeof appStorage?.sincronizarAgora==="function")await appStorage.sincronizarAgora();
+    carregarBancoInternoAdmin();
+    const det=d?.detail||{};
+    const itens=Number(det.items||0);
+    const inseridos=Number(det.inserted||0);
+    const atualizados=Number(det.updated||0);
+    mostrarStatusImportacaoPedidos("sucesso",`↻ Venda ${orderId} atualizada pela API do Mercado Livre. ${itens} item(ns), ${atualizados} atualizado(s), ${inseridos} novo(s).`);
+    setStatusBanco("● Venda atualizada","ok");
+  }catch(e){
+    console.error(e);
+    setStatusBanco("Erro ao atualizar venda","erro");
+    alert("Não foi possível atualizar esta venda: "+e.message);
+  }finally{
+    if(botao){botao.disabled=false;botao.textContent=anterior;botao.title="Atualizar dados desta venda no Mercado Livre";}
+  }
+}
 function excluirLinhaPedidoAdmin(uid){
   const item=pedidosEditorAdmin.find(x=>x.__uidLinha===uid); if(!item)return;
   if((item.Pedido||item.SKU||item["Código de Barras"])&&!confirm("Excluir esta linha do pedido?"))return;
@@ -3093,7 +3122,7 @@ function renderizarPedidosAdmin(){
     const mensagem=eanMensagemPorUid.get(item.__uidLinha)||{tipo:"",texto:"Bipe o código e pressione Enter."};
     const editorEan=`<div class="ean-pedido-editor"><input class="${alterado?'ean-alterado':''}" inputmode="numeric" enterkeyhint="done" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Código de barras do SKU ${htmlSeguroBanco(item.SKU||'sem SKU')}" data-uidlinha="${htmlSeguroBanco(item.__uidLinha)}" data-campo="Código de Barras" value="${htmlSeguroBanco(eanAtual)}" oninput="alterarEanPedidoAdmin(this)" onblur="aoSairEanPedidoAdmin(event,this)" onkeydown="atalhoEanPedidoAdmin(event,this)"><div class="ean-pedido-acoes"><button type="button" class="btn-ean-salvar" title="Salvar EAN somente neste pedido" onclick="salvarEanPedidoAdmin('${htmlSeguroBanco(item.__uidLinha)}',false,this.closest('.ean-pedido-editor').querySelector('input'))">Salvar</button><button type="button" class="btn-ean-banco" title="Salvar também no Banco de Produtos deste SKU" onclick="salvarEanPedidoAdmin('${htmlSeguroBanco(item.__uidLinha)}',true,this.closest('.ean-pedido-editor').querySelector('input'))">Banco</button></div><small id="status-ean-${htmlSeguroBanco(item.__uidLinha)}" class="ean-pedido-status ${htmlSeguroBanco(mensagem.tipo)}">${htmlSeguroBanco(mensagem.texto)}</small></div>`;
     const jaFeito=Boolean(item?.__jaConcluidoAnteriormente||item?.__concluidoAnteriorEm);
-    return `<tr class="${valida?'linha-valida':'linha-rascunho'}${jaFeito?' linha-ja-feito':''}"><td><div class="linha-acoes"><button title="Adicionar outro item neste pedido" onclick="adicionarItemMesmoPedido('${htmlSeguroBanco(item.__uidLinha)}')">＋</button><button title="Excluir linha" style="background:#ffebee;color:#c62828" onclick="excluirLinhaPedidoAdmin('${htmlSeguroBanco(item.__uidLinha)}')">🗑</button></div></td>`+
+    return `<tr class="${valida?'linha-valida':'linha-rascunho'}${jaFeito?' linha-ja-feito':''}"><td><div class="linha-acoes"><button title="Adicionar outro item neste pedido" onclick="adicionarItemMesmoPedido('${htmlSeguroBanco(item.__uidLinha)}')">＋</button><button title="Atualizar dados desta venda no Mercado Livre" style="background:#e3f2fd;color:#1565c0" onclick="atualizarVendaMercadoLivreAdmin('${htmlSeguroBanco(item.__uidLinha)}',this)">↻</button><button title="Excluir linha" style="background:#ffebee;color:#c62828" onclick="excluirLinhaPedidoAdmin('${htmlSeguroBanco(item.__uidLinha)}')">🗑</button></div></td>`+
       `<td><div class="pedido-cell-wrap">${tagConclusaoAnteriorPedidoBanco(item)}${inp('Pedido','campo-pedido')}</div></td><td><input class="market-auto" readonly value="${htmlSeguroBanco(item.Marketplace)}"></td><td><input type="date" data-uidlinha="${htmlSeguroBanco(item.__uidLinha)}" data-campo="Data do Pedido" value="${htmlSeguroBanco(normalizarDataPedidoBanco(item['Data do Pedido'],true))}" onchange="atualizarCampoPedidoAdmin(this)" onkeydown="navegarGridAdmin(event,this)"></td><td><div class="kit-celula-resumo">${textoKitBanco(item)?`<span class="kit-badge">KIT</span><br>${htmlSeguroBanco(textoKitBanco(item))}`:'—'}</div></td><td>${inp('Cliente','campo-cliente')}</td><td>${inp('SKU')}</td><td><input type="number" min="1" data-uidlinha="${htmlSeguroBanco(item.__uidLinha)}" data-campo="Quantidade" value="${htmlSeguroBanco(item.Quantidade||'1')}" onchange="atualizarCampoPedidoAdmin(this)" onkeydown="navegarGridAdmin(event,this)"></td><td>${editorEan}</td><td>${inp('Descrição','campo-descricao')}</td><td>${inp('Rua')}</td><td>${inp('Módulo')}</td><td>${inp('Prateleira')}</td><td>${inp('Nível')}</td><td>${inp('Posição')}</td><td>${inp('Foto','campo-foto')}</td><td><span class="status-celula ${valida?'status-pendente':'status-rascunho'}">${valida?'PENDENTE':'RASCUNHO'}</span>${tagConclusaoAnteriorBanco(item)}</td></tr>`;
   }).join("");
   document.getElementById("resumoPedidosAdmin").textContent=`${filtrados.length} linha(s) encontrada(s) · ${obterPedidosValidosBanco().length} válida(s) · ${obterRascunhosBanco().length} rascunho(s)`;
