@@ -1,1 +1,1 @@
-15.7 - Dashboard Rentabilidade Mercado Livre
+V15.8 - Rentabilidade ML: carregamento direto das vendas e tratamento de erro
