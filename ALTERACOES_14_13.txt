@@ -1,0 +1,8 @@
+V14.13 - CARD COMPACTO E ATUALIZACAO FORCADA DO CODIGO DE COLETA
+
+- Reduz o painel de coleta para um pequeno card fixo no canto superior direito da Conferencia.
+- Remove faixa larga, textos explicativos e badge de teste.
+- Botao de atualizar passa a enviar force=1 com nonce anti-cache.
+- Mostra hora com segundos em toda tentativa, inclusive quando o codigo continua indisponivel.
+- Backend gera attempt_id novo em cada consulta e registra tentativas forcadas no log da integracao.
+- Nao altera os fluxos de conferencia, etiquetas, Zebra ou Precificador.

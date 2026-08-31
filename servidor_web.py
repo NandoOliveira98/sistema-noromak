@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "14.12"
+APP_VERSION = "14.13"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2464,6 +2464,8 @@ def ml_collection_authorization_status(*, force: bool = False) -> dict[str, Any]
         "message": "Código não disponível pela API.",
         "tested": [],
         "cached": False,
+        "forced": bool(force),
+        "attempt_id": secrets.token_hex(4),
         "cached_at_epoch": now,
     }
     try:
@@ -2520,6 +2522,22 @@ def ml_collection_authorization_status(*, force: bool = False) -> dict[str, Any]
                 )
     except Exception as exc:
         result.update({"ok": False, "message": str(exc)[:500]})
+
+    if force:
+        try:
+            tested_summary = ", ".join(
+                f"{x.get('source','?')}:{x.get('status','?')}" for x in (result.get("tested") or []) if isinstance(x, dict)
+            )
+            ml_log_event(
+                "collection_authorization",
+                "/api/integracoes/mercadolivre/codigo-coleta",
+                "",
+                "",
+                "found" if result.get("available") else "not_found",
+                f"attempt={result.get('attempt_id')} tested={tested_summary}"[:500],
+            )
+        except Exception:
+            pass
 
     with ML_COLLECTION_AUTH_LOCK:
         ML_COLLECTION_AUTH_CACHE.clear()
