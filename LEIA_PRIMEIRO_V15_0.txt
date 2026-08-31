@@ -1,0 +1,11 @@
+NOROMAK V15.0 — TESTE DE NOVA INTERFACE
+
+Alteracoes:
+- Nova navegacao lateral no Admin.
+- Dashboard/visao geral e atalhos operacionais.
+- Modulos agrupados em Expedicao, Comercial, Integracoes e Administracao.
+- Abas antigas continuam funcionando internamente para preservar compatibilidade.
+- Links rapidos da Conferencia e Precificador de volta para a Central Noromak.
+- Backend e regras operacionais da V14.27 preservados.
+
+Esta versao e focada em UX e pode ser refinada depois do teste dos usuarios.

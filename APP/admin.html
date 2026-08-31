@@ -505,6 +505,21 @@
   .sku-hist-vazio{padding:28px;text-align:center;color:#64748b}
   @media(max-width:1100px){.sku-hist-filtros{grid-template-columns:repeat(2,minmax(0,1fr))}.sku-hist-filtros button{grid-column:1/-1}}
 </style>
+
+<style id="noromak-v15-shell">
+:root{--v15-nav:#12345b;--v15-nav2:#1d4d7b;--v15-bg:#f4f7fb;--v15-line:#dce5ef;--v15-text:#18324a;--v15-muted:#6b7d90;--v15-orange:#f28b18}
+body{background:var(--v15-bg)!important}
+#painelConteudo.container-admin{max-width:none!important;margin-left:238px!important;padding:22px 26px 40px!important;transition:margin .2s ease}
+.v15-sidebar{position:fixed;left:0;top:0;bottom:0;width:238px;background:linear-gradient(180deg,var(--v15-nav),#0d2947);z-index:1200;color:#fff;padding:18px 14px;box-sizing:border-box;overflow:auto;box-shadow:8px 0 24px rgba(20,48,80,.12)}
+.v15-brand{display:flex;gap:10px;align-items:center;padding:4px 8px 18px;border-bottom:1px solid rgba(255,255,255,.12);margin-bottom:14px}.v15-brand-badge{width:38px;height:38px;border-radius:10px;background:#fff;color:var(--v15-nav);display:grid;place-items:center;font-weight:1000}.v15-brand strong{display:block;font-size:15px}.v15-brand small{display:block;color:#b9cee3;margin-top:2px}
+.v15-nav-section{margin:16px 8px 7px;font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:#8fb0cd;font-weight:900}.v15-nav-item{display:flex;align-items:center;gap:10px;width:100%;border:0;background:transparent;color:#eaf3fb;padding:10px 11px;border-radius:9px;text-align:left;font:inherit;font-size:13px;font-weight:750;cursor:pointer;text-decoration:none;box-sizing:border-box;margin:2px 0}.v15-nav-item:hover,.v15-nav-item.active{background:rgba(255,255,255,.11);color:#fff}.v15-nav-item.active{box-shadow:inset 3px 0 0 var(--v15-orange)}.v15-nav-icon{width:20px;text-align:center}
+.v15-sidebar-footer{margin-top:18px;padding-top:14px;border-top:1px solid rgba(255,255,255,.12)}
+.header-topo{border-left:0!important;border-radius:14px!important;box-shadow:0 5px 22px rgba(26,59,89,.07)!important;margin-bottom:16px!important}.header-titulos h1{font-size:19px!important}.header-titulos small{font-size:12px}.resumo-grid{gap:12px!important}.resumo-card{border:1px solid var(--v15-line);box-shadow:none!important;border-radius:12px!important;background:#fff!important}.resumo-card strong{font-size:28px!important;color:var(--v15-nav)!important}.resumo-card span{color:var(--v15-muted)!important;font-weight:700!important}
+.abas-admin{display:none!important}.card-admin{border-radius:14px!important;border:1px solid var(--v15-line)!important;box-shadow:0 5px 20px rgba(26,59,89,.05)!important}.card-admin h2{color:var(--v15-text)!important}.aviso-banco{border-radius:10px!important;background:#f7faff!important;border-color:#dbe7f2!important;color:#496177!important}.toolbar-grid{gap:8px!important}.excel-wrap{border-radius:10px!important;border-color:#dbe4ee!important}.excel-grid thead th{position:sticky;top:0;background:#edf3f9!important;color:#2b4d6a!important;font-size:11px!important}.btn-primario,.btn-sucesso,.btn-secundario,.btn-perigo{border-radius:8px!important}
+.v15-overview{display:grid;grid-template-columns:2fr 1fr;gap:14px;margin-bottom:16px}.v15-overview-card{background:white;border:1px solid var(--v15-line);border-radius:14px;padding:16px 18px;box-shadow:0 5px 20px rgba(26,59,89,.05)}.v15-overview-card h3{margin:0 0 5px;color:var(--v15-text);font-size:15px}.v15-overview-card p{margin:0;color:var(--v15-muted);font-size:12px;line-height:1.5}.v15-quick{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.v15-quick a,.v15-quick button{border:1px solid #d6e2ee;background:#f7faff;color:#204e79;padding:8px 10px;border-radius:8px;font-size:12px;font-weight:800;text-decoration:none;cursor:pointer}.v15-status-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#22a35a;margin-right:6px}
+@media(max-width:1000px){.v15-sidebar{width:72px;padding:14px 8px}.v15-brand div:last-child,.v15-nav-section,.v15-nav-label,.v15-sidebar-footer .v15-nav-label{display:none}.v15-brand{justify-content:center;padding-left:0;padding-right:0}.v15-nav-item{justify-content:center;padding:11px 6px}.v15-nav-icon{width:auto;font-size:17px}#painelConteudo.container-admin{margin-left:72px!important;padding:15px!important}.v15-overview{grid-template-columns:1fr}}
+</style>
+
 </head>
 <body>
 
@@ -686,13 +701,40 @@
 </div>
 
 
+
+<nav class="v15-sidebar" aria-label="Navegação principal">
+  <div class="v15-brand"><div class="v15-brand-badge">N</div><div><strong>Noromak</strong><small>Sistema de Expedição</small></div></div>
+  <div class="v15-nav-section">Visão geral</div>
+  <button class="v15-nav-item active" data-v15-nav="pedidos" onclick="abrirAbaAdmin('pedidos');v15Nav(this)"><span class="v15-nav-icon">▣</span><span class="v15-nav-label">Dashboard</span></button>
+  <div class="v15-nav-section">Expedição</div>
+  <button class="v15-nav-item" data-v15-nav="pedidos" onclick="abrirAbaAdmin('pedidos');v15Nav(this)"><span class="v15-nav-icon">📋</span><span class="v15-nav-label">Pedidos pendentes</span></button>
+  <a class="v15-nav-item" href="/expedicao/conferencia"><span class="v15-nav-icon">✓</span><span class="v15-nav-label">Conferência</span></a>
+  <button class="v15-nav-item" onclick="abrirAbaAdmin('historico');v15Nav(this)"><span class="v15-nav-icon">🕘</span><span class="v15-nav-label">Histórico</span></button>
+  <div class="v15-nav-section">Comercial</div>
+  <a class="v15-nav-item" href="/expedicao/precificador"><span class="v15-nav-icon">$</span><span class="v15-nav-label">Precificador</span></a>
+  <button class="v15-nav-item" onclick="abrirAbaAdmin('produtos');v15Nav(this)"><span class="v15-nav-icon">📦</span><span class="v15-nav-label">Produtos</span></button>
+  <button class="v15-nav-item" onclick="abrirAbaAdmin('kits');v15Nav(this)"><span class="v15-nav-icon">🎁</span><span class="v15-nav-label">Kits</span></button>
+  <div class="v15-nav-section">Integrações</div>
+  <button class="v15-nav-item" onclick="abrirAbaAdmin('integracoes');v15Nav(this)"><span class="v15-nav-icon">🔌</span><span class="v15-nav-label">Central de integrações</span></button>
+  <a class="v15-nav-item" href="/expedicao/estacao-impressao" target="_blank"><span class="v15-nav-icon">🖨</span><span class="v15-nav-label">Estação Zebra</span></a>
+  <div class="v15-nav-section">Administração</div>
+  <button class="v15-nav-item" onclick="abrirAbaAdmin('usuarios');v15Nav(this)"><span class="v15-nav-icon">👥</span><span class="v15-nav-label">Usuários</span></button>
+  <div class="v15-sidebar-footer"><button class="v15-nav-item" onclick="sairAdmin()"><span class="v15-nav-icon">↪</span><span class="v15-nav-label">Sair</span></button></div>
+</nav>
+
 <div id="painelConteudo" class="container-admin">
   <div class="header-topo">
     <div class="header-identidade">
       <div class="logo-mini-box"><img src="/grupo-noromak.png?v=14.5" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=14.5';"></div>
-      <div class="header-titulos"><h1>Administração dos pedidos compartilhados</h1><small>Dados centralizados no servidor Web em tempo real</small></div>
+      <div class="header-titulos"><h1>Central Operacional Noromak</h1><small>Expedição, produtos, precificação e integrações</small></div>
     </div>
     <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end;"><a href="/expedicao/estacao-impressao" target="_blank" style="text-decoration:none;background:#1F57A5;color:white;padding:8px 13px;border-radius:6px;font-size:12px;font-weight:800;">🖨 ESTAÇÃO ZEBRA</a><button type="button" class="pwa-install-btn pwa-header" data-pwa-install>⬇ Instalar Admin</button><span id="statusBancoAdmin" class="save-pill">● Banco Web ativo</span><button class="btn-sair" onclick="sairAdmin()">Sair do Painel</button></div>
+  </div>
+
+
+  <div class="v15-overview">
+    <div class="v15-overview-card"><h3>Operação de hoje</h3><p>Atalhos operacionais e indicadores principais em um único lugar. As rotinas técnicas ficam centralizadas em Integrações.</p><div class="v15-quick"><button onclick="abrirAbaAdmin('pedidos')">Ver pedidos pendentes</button><a href="/expedicao/conferencia">Abrir conferência</a><a href="/expedicao/precificador">Abrir precificador</a></div></div>
+    <div class="v15-overview-card"><h3><span class="v15-status-dot"></span>Sistema online</h3><p>Banco Web e módulos operacionais disponíveis. Consulte a Central de Integrações para Mercado Livre, Zebra, Apollo e Shopee.</p><div class="v15-quick"><button onclick="abrirAbaAdmin('integracoes')">Ver integrações</button></div></div>
   </div>
 
   <div class="resumo-grid">
@@ -6017,5 +6059,10 @@ document.addEventListener("DOMContentLoaded",()=>{
 </script>
 
 <script src="/expedicao/user-permissions.js?v=14.6"></script>
+
+<script id="noromak-v15-js">
+function v15Nav(el){document.querySelectorAll('.v15-nav-item').forEach(x=>x.classList.remove('active'));if(el)el.classList.add('active');}
+</script>
+
 </body>
 </html>
