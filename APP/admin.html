@@ -754,7 +754,7 @@ body{background:var(--v15-bg)!important}
       <button class="v151-kpi" onclick="abrirAbaAdmin('pedidos')"><span class="v151-kpi-icon blue">📋</span><span><b id="v151Pendentes">0</b><small>Pedidos pendentes</small></span></button>
       <a class="v151-kpi" href="/expedicao/conferencia" target="_blank" rel="noopener"><span class="v151-kpi-icon orange">✓</span><span><b id="v151Conferencia">0</b><small>Prontos p/ conferência</small></span></a>
       <button class="v151-kpi" onclick="abrirAbaAdmin('historico')"><span class="v151-kpi-icon green">✓</span><span><b id="v151ConferidosHoje">0</b><small>Conferidos hoje</small></span></button>
-      <button class="v151-kpi" onclick="abrirAbaAdmin('integracoes')"><span class="v151-kpi-icon amber">🏷</span><span><b id="v151EtiquetasPendentes">0</b><small>Etiquetas pendentes</small></span></button>
+      <button class="v151-kpi" onclick="abrirAbaAdmin('etiquetas')"><span class="v151-kpi-icon amber">🏷</span><span><b id="v151EtiquetasPendentes">0</b><small>Etiquetas pendentes</small></span></button>
       <button class="v151-kpi danger" onclick="v151AbrirProblemas()"><span class="v151-kpi-icon red">!</span><span><b id="v151Problemas">0</b><small>Problemas</small></span></button>
     </div>
 
@@ -3021,11 +3021,11 @@ function v151AtualizarDashboard(){
 function v151RenderAlertas(rows,etqPend,problemas){
   const box=document.getElementById("v151Alerts");if(!box)return;const alerts=[];
   const semEan=rows.filter(r=>!v151Normal(r["Código de Barras"]));const semCliente=rows.filter(r=>!v151Normal(r.Cliente));const semSku=rows.filter(r=>!v151Normal(r.SKU));
-  if(etqPend)alerts.push({c:"red",i:"🏷",t:`${etqPend} pedido(s) ML aguardando etiqueta`,s:"Abra Integrações para sincronizar e verificar etiquetas.",a:"integracoes"});
+  if(etqPend)alerts.push({c:"red",i:"🏷",t:`${etqPend} pedido(s) ML aguardando etiqueta`,s:"Abra Etiquetas para importar TXT, reprocessar vínculos ou verificar etiquetas disponíveis.",a:"etiquetas"});
   if(semEan.length)alerts.push({c:"",i:"▦",t:`${new Set(semEan.map(v151PedidoKey)).size} pedido(s) com item sem EAN`,s:`${semEan.length} linha(s) precisam de código de barras.`,a:"problemas"});
   if(semCliente.length)alerts.push({c:"",i:"👤",t:`${new Set(semCliente.map(v151PedidoKey)).size} pedido(s) sem cliente`,s:"Atualize os dados da venda antes da conferência.",a:"problemas"});
   if(semSku.length)alerts.push({c:"red",i:"!",t:`${new Set(semSku.map(v151PedidoKey)).size} pedido(s) sem SKU`,s:"Esses pedidos não podem ser conferidos corretamente.",a:"problemas"});
-  v151Set("v151AlertCount",alerts.length);box.innerHTML=alerts.length?alerts.map((x,i)=>`<button class="v151-alert ${x.c}" onclick="${x.a==='integracoes'?"abrirAbaAdmin('integracoes')":"v151AbrirProblemas()"}"><span class="ico">${x.i}</span><span><b>${x.t}</b><small>${x.s}</small></span></button>`).join(""):'<div class="v151-empty">✓ Nenhum alerta operacional no momento.</div>';
+  v151Set("v151AlertCount",alerts.length);box.innerHTML=alerts.length?alerts.map((x,i)=>`<button class="v151-alert ${x.c}" onclick="${x.a==='etiquetas'?"abrirAbaAdmin('etiquetas')":x.a==='integracoes'?"abrirAbaAdmin('integracoes')":"v151AbrirProblemas()"}"><span class="ico">${x.i}</span><span><b>${x.t}</b><small>${x.s}</small></span></button>`).join(""):'<div class="v151-empty">✓ Nenhum alerta operacional no momento.</div>';
 }
 function v151RenderChart(hist){
   const box=document.getElementById("v151Chart");if(!box)return;const dados=[];const hoje=new Date();
