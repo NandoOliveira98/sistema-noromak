@@ -806,6 +806,17 @@ var state = {
       function pctInput(id) { return num(id) / 100; }
       function setValue(id, value) { byId(id).value = value === null || value === undefined ? "" : value; }
       function percentForInput(value) { return Math.round((Number(value || 0) * 100 + Number.EPSILON) * 100) / 100; }
+      function desiredMarginForCurve(curve) {
+        return ({ A: 20, B: 20, C: 17, D: 15 })[String(curve || "").trim().toUpperCase()];
+      }
+      function applyCurveMargin(curve) {
+        var margin = desiredMarginForCurve(curve);
+        if (!Number.isFinite(margin)) return false;
+        setValue("ml-margin", margin);
+        setValue("shopee-margin", margin);
+        setValue("magalu-margin", margin);
+        return true;
+      }
       function money(value) { return Number(value || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" }); }
       function percent(value) { return Number(value || 0).toLocaleString("pt-BR", { style: "percent", minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
       function escapeHtml(value) {
@@ -1026,14 +1037,7 @@ var state = {
           var curvaAnterior = String(el.curva.value || "").trim().toUpperCase();
           if (["A","B","C","D"].includes(curvaApi)) {
             el.curva.value = curvaApi;
-            if (curvaAnterior !== curvaApi) {
-              var margemCurva = ({ A: 20, B: 20, C: 17, D: 15 })[curvaApi];
-              if (Number.isFinite(margemCurva)) {
-                setValue("ml-margin", margemCurva);
-                setValue("shopee-margin", margemCurva);
-                setValue("magalu-margin", margemCurva);
-              }
-            }
+            if (curvaAnterior !== curvaApi) applyCurveMargin(curvaApi);
           }
 
           if (sameSavedSku) {
@@ -1824,8 +1828,18 @@ var state = {
       });
       document.querySelectorAll("input, select").forEach(function (input) {
         if (input.id === "search" || input.id === "import-file" || input.id === "is-kit") return;
-        input.addEventListener("input", function () { state.dirty = true; recalculate(); scheduleAutoSave(); });
-        input.addEventListener("change", function () { state.dirty = true; recalculate(); scheduleAutoSave(); });
+        input.addEventListener("input", function () {
+          if (input.id === "curva") applyCurveMargin(input.value);
+          state.dirty = true;
+          recalculate();
+          scheduleAutoSave();
+        });
+        input.addEventListener("change", function () {
+          if (input.id === "curva") applyCurveMargin(input.value);
+          state.dirty = true;
+          recalculate();
+          scheduleAutoSave();
+        });
       });
 
       window.addEventListener("storage", function(event) {
