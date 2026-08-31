@@ -805,7 +805,24 @@ var state = {
       function num(id) { var n = Number(byId(id).value); return Number.isFinite(n) ? n : 0; }
       function pctInput(id) { return num(id) / 100; }
       function setValue(id, value) { byId(id).value = value === null || value === undefined ? "" : value; }
-      function percentForInput(value) { return Math.round((Number(value || 0) * 100 + Number.EPSILON) * 100) / 100; }
+      function normalizePercentFraction(value) {
+        var n = Number(value || 0);
+        if (!Number.isFinite(n)) return 0;
+        return Math.abs(n) > 1 ? n / 100 : n;
+      }
+      function percentForInput(value) {
+        var fraction = normalizePercentFraction(value);
+        return Math.round((fraction * 100 + Number.EPSILON) * 100) / 100;
+      }
+      function normalizeProductMargins(product) {
+        if (!product || !product.marketplaces) return product;
+        ["ml","shopee","magalu"].forEach(function (market) {
+          if (product.marketplaces[market] && product.marketplaces[market].margem !== undefined) {
+            product.marketplaces[market].margem = normalizePercentFraction(product.marketplaces[market].margem);
+          }
+        });
+        return product;
+      }
       function desiredMarginForCurve(curve) {
         return ({ A: 20, B: 20, C: 17, D: 15 })[String(curve || "").trim().toUpperCase()];
       }
@@ -836,6 +853,7 @@ var state = {
       function clone(value) { return JSON.parse(JSON.stringify(value)); }
       function currentProduct() { return state.products.find(function (product) { return String(product._id) === String(state.selectedId); }) || null; }
       function persist() {
+        state.products.forEach(normalizeProductMargins);
         var payload = JSON.stringify({
           products: state.products,
           selectedId: state.selectedId,
@@ -853,7 +871,7 @@ var state = {
         var selectedBefore = state.selectedId;
         state.products = incoming.products.map(function(product,index){
           if (!product._id) product._id = "online-" + index + "-" + String(product.sku || "sem-sku");
-          return product;
+          return normalizeProductMargins(product);
         });
         var exists = state.products.some(function(item){ return String(item._id) === String(selectedBefore); });
         state.selectedId = exists ? selectedBefore : (incoming.selectedId || (state.products[0] ? state.products[0]._id : null));
@@ -1066,7 +1084,7 @@ var state = {
               if (Number.isFinite(margemCurva)) {
                 ["ml","shopee","magalu"].forEach(function(market) {
                   if (!savedProduct.marketplaces[market]) savedProduct.marketplaces[market] = {};
-                  savedProduct.marketplaces[market].margem = margemCurva;
+                  savedProduct.marketplaces[market].margem = margemCurva / 100;
                 });
               }
             }
@@ -1571,9 +1589,9 @@ var state = {
       function calculateAll() {
         var product = readForm();
         var common = { cost: product.custo, tax: product.imposto };
-        var ml = Core.calculateMarketplace({ cost: common.cost, tax: common.tax, freight: product.marketplaces.ml.frete, margin: product.marketplaces.ml.margem, commission: product.marketplaces.ml.comissao, fixed: product.marketplaces.ml.taxaFixa });
-        var shopee = Core.calculateShopee({ cost: common.cost, tax: common.tax, freight: product.marketplaces.shopee.frete, margin: product.marketplaces.shopee.margem });
-        var magalu = Core.calculateMarketplace({ cost: common.cost, tax: common.tax, freight: product.marketplaces.magalu.frete, margin: product.marketplaces.magalu.margem, commission: product.marketplaces.magalu.comissao, fixed: product.marketplaces.magalu.taxaFixa });
+        var ml = Core.calculateMarketplace({ cost: common.cost, tax: common.tax, freight: product.marketplaces.ml.frete, margin: normalizePercentFraction(product.marketplaces.ml.margem), commission: product.marketplaces.ml.comissao, fixed: product.marketplaces.ml.taxaFixa });
+        var shopee = Core.calculateShopee({ cost: common.cost, tax: common.tax, freight: product.marketplaces.shopee.frete, margin: normalizePercentFraction(product.marketplaces.shopee.margem) });
+        var magalu = Core.calculateMarketplace({ cost: common.cost, tax: common.tax, freight: product.marketplaces.magalu.frete, margin: normalizePercentFraction(product.marketplaces.magalu.margem), commission: product.marketplaces.magalu.comissao, fixed: product.marketplaces.magalu.taxaFixa });
         return { ml: ml, shopee: shopee, magalu: magalu };
       }
 
@@ -1707,7 +1725,7 @@ var state = {
             if (!payload || !Array.isArray(payload.products)) throw new Error("Formato inválido");
             state.products = payload.products.map(function (product, index) {
               if (!product._id) product._id = "imported-" + Date.now() + "-" + index;
-              return product;
+              return normalizeProductMargins(product);
             });
             state.selectedId = state.products[0] ? state.products[0]._id : null;
             var synchronization = refreshAllKitCosts();
