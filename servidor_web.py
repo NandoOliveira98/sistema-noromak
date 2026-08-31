@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "14.7"
+APP_VERSION = "14.8"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -348,23 +348,34 @@ def crm_cost_lookup(codigo: str, operador: str = "") -> dict[str, Any]:
     except (TypeError, ValueError):
         raise RuntimeError("A API respondeu sem um custo médio válido.")
 
+    # Contrato oficial da API Apollo/CRM:
+    # - curva_abc: A/B/C/D (fonte oficial para precificação)
+    # - curva_123: 1/2/3
+    # - curva: classificação composta, por exemplo A3 ou D3
+    # Mantemos os três campos separados para não confundir a curva ABC com a composta.
+    curva_abc = normalize_abc_curve_value(data.get("curva_abc"))
+    curva_123 = str(data.get("curva_123") or "").strip()
+    curva_composta = str(data.get("curva") or "").strip().upper()
+
+    # Compatibilidade somente para versões antigas do endpoint que eventualmente
+    # ainda não devolvam curva_abc. A resposta oficial sempre prevalece.
+    if not curva_abc:
+        curva_abc = normalize_abc_curve_value(
+            data.get("abc"),
+            data.get("classificacao_abc"),
+            data.get("curva_item"),
+            data.get("classificacao"),
+        )
+
     result = {
         "ok": True,
         "codigo": str(data.get("codigo") or codigo),
         "descricao": str(data.get("descricao") or ""),
         "unidade": str(data.get("unidade") or ""),
         "custo_medio": round(custo, 4),
-        # Apollo atualmente devolve, em alguns cadastros, os dois campos:
-        # curva="A3/B3/D1" (segmentação composta) e curva_abc="A/B/C/D".
-        # A curva ABC pura deve prevalecer.
-        "curva": normalize_abc_curve_value(
-            data.get("curva_abc"),
-            data.get("abc"),
-            data.get("classificacao_abc"),
-            data.get("curva_item"),
-            data.get("classificacao"),
-            data.get("curva"),
-        ),
+        "curva_abc": curva_abc,
+        "curva_123": curva_123,
+        "curva": curva_composta,
         "cache": False,
         "consultado_em": now_iso(),
     }
@@ -1998,7 +2009,7 @@ def precificador_bulk_update_worker(username: str) -> None:
                 old_cost = round(float(product.get("custo") or 0), 2)
                 new_cost = round(float(result.get("custo_medio") or 0), 2)
                 description = str(result.get("descricao") or "").strip()
-                curve = str(result.get("curva") or "").strip().upper()
+                curve = str(result.get("curva_abc") or "").strip().upper()
 
                 product["custo"] = new_cost
                 if description and str(product.get("produto") or "").strip() != description:

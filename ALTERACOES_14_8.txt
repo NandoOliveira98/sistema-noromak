@@ -1,0 +1,12 @@
+VERSÃO 14.8 — CONTRATO OFICIAL CURVA APOLLO
+
+- Integração alinhada ao documento oficial enviado pelo Guilherme.
+- curva_abc passa a ser a fonte oficial da classificação A/B/C/D.
+- curva_123 é preservada separadamente.
+- curva composta (ex.: A3/D3) é preservada no campo curva e não é mais confundida com curva ABC.
+- Precificador e atualização geral usam curva_abc para atualizar a Curva do produto.
+- Mantidas as margens automáticas: A/B 20%, C 17%, D 15%.
+- CHAVE_CRM continua somente no backend.
+- Mantido tratamento de ok=false, HTTP 429, chave inválida e indisponibilidade da API.
+- Atualização geral continua respeitando o limite de 30 consultas/minuto.
+- Mantidas todas as melhorias da V14.7/V14.6.

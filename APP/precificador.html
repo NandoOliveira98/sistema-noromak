@@ -1033,7 +1033,7 @@ var state = {
             el.produto.value = descricaoApi;
           }
 
-          var curvaApi = String(data.curva_abc || data.curva || "").trim().toUpperCase();
+          var curvaApi = String(data.curva_abc || "").trim().toUpperCase();
           var curvaAnterior = String(el.curva.value || "").trim().toUpperCase();
           if (["A","B","C","D"].includes(curvaApi)) {
             el.curva.value = curvaApi;
