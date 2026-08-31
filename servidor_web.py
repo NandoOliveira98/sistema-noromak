@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "14.9"
+APP_VERSION = "14.10"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -89,7 +89,7 @@ ML_CATCHUP_FALLBACK_DAYS = max(1, min(30, int(os.getenv("ML_CATCHUP_FALLBACK_DAY
 ML_CATCHUP_PAGE_SIZE = max(10, min(50, int(os.getenv("ML_CATCHUP_PAGE_SIZE", "50"))))
 ML_CATCHUP_MAX_PAGES = max(2, min(100, int(os.getenv("ML_CATCHUP_MAX_PAGES", "40"))))
 ML_MANUAL_RECONCILE_INTERVAL = max(30, min(600, int(os.getenv("ML_MANUAL_RECONCILE_INTERVAL", "60"))))
-ML_MANUAL_RECONCILE_DAYS = max(1, min(30, int(os.getenv("ML_MANUAL_RECONCILE_DAYS", "7"))))
+ML_MANUAL_RECONCILE_DAYS = max(1, min(90, int(os.getenv("ML_MANUAL_RECONCILE_DAYS", "30"))))
 
 
 CRM_COST_API_URL = os.getenv(
@@ -3519,7 +3519,8 @@ def _ml_all_pending_label_candidates() -> list[tuple[str, str]]:
     for row in rows:
         if not isinstance(row, dict):
             continue
-        if str(row.get("Marketplace") or "").strip().upper() != "MERCADO LIVRE":
+        marketplace = normalize(row.get("Marketplace"))
+        if "MERCADO LIVRE" not in marketplace and "MERCADOLIVRE" not in marketplace:
             continue
         if str(row.get("Etiqueta API Mercado Livre") or "").strip().upper() == "VINCULADA":
             continue
@@ -3610,7 +3611,19 @@ def ml_pending_label_watch_once() -> dict[str, int]:
 
 
 def ml_check_all_available_labels_once() -> dict[str, int]:
-    """Varredura manual de todos os pedidos pendentes, usada pelo botão do Admin."""
+    """Varredura manual completa usada pelo botão do Admin.
+
+    V14.10: antes de consultar etiquetas, reconcilia pedidos de print/extensão
+    ainda sem order_id/shipment_id. Isso permite recuperar vendas antigas cuja
+    etiqueta foi liberada dias depois da criação do pedido.
+    """
+    reconcile = {"manual": 0, "matched": 0, "ready": 0, "errors": 0}
+    try:
+        reconcile = ml_reconcile_manual_orders_once()
+    except Exception as exc:
+        reconcile = {"manual": 0, "matched": 0, "ready": 0, "errors": 1}
+        ml_log_event("manual_label_check", "/reconcile", "", ML_CLIENT_ID, "ERRO", str(exc)[:1200])
+
     checked = triggered = ready = errors = 0
     for order_id, shipment_id in _ml_all_pending_label_candidates():
         checked += 1
@@ -3637,8 +3650,18 @@ def ml_check_all_available_labels_once() -> dict[str, int]:
         except Exception as exc:
             errors += 1
             ml_log_event("manual_label_check", f"/shipments/{shipment_id}", "", ML_CLIENT_ID, "ERRO", str(exc)[:1200])
-    ml_log_event("manual_label_check", "/pending", "", ML_CLIENT_ID, "CONCLUÍDO", json_dumps({"checked": checked, "available": triggered, "linked": ready, "errors": errors}))
-    return {"ok": True, "checked": checked, "available": triggered, "linked": ready, "errors": errors}
+    total_errors = errors + int(reconcile.get("errors") or 0)
+    summary = {
+        "reconciled_pending": int(reconcile.get("manual") or 0),
+        "reconciled_matched": int(reconcile.get("matched") or 0),
+        "reconciled_ready": int(reconcile.get("ready") or 0),
+        "checked": checked,
+        "available": triggered,
+        "linked": ready,
+        "errors": total_errors,
+    }
+    ml_log_event("manual_label_check", "/pending", "", ML_CLIENT_ID, "CONCLUÍDO", json_dumps(summary))
+    return {"ok": total_errors == 0, **summary}
 
 
 def ml_pending_label_watch_loop(stop_event: threading.Event) -> None:
