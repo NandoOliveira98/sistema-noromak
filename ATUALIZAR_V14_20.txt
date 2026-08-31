@@ -1,0 +1,12 @@
+ATUALIZAÇÃO V14.20
+
+1. Substitua os arquivos desta versão no projeto.
+2. Publique normalmente:
+   git status
+   git add -A
+   git commit -m "v14.20 usa dados fiscais do comprador"
+   ./publicar.sh
+
+Após publicar, use o botão de atualizar (↻) no pedido pendente.
+O campo Cliente deve usar Dados para NF-e / Dados do comprador.
+"Quem recebe" não é mais usado como Cliente.

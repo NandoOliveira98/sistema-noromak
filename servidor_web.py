@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "14.19"
+APP_VERSION = "14.20"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2497,9 +2497,19 @@ def _ml_billing_name(order: dict[str, Any]) -> str:
     o pedido não traz billing_info.id ou o novo recurso não devolve o nome.
     """
     buyer = order.get("buyer") if isinstance(order.get("buyer"), dict) else {}
-    embedded = buyer.get("billing_info") if isinstance(buyer.get("billing_info"), dict) else {}
-    root_billing = order.get("billing_info") if isinstance(order.get("billing_info"), dict) else {}
-    billing_id = str(embedded.get("id") or root_billing.get("id") or "").strip()
+    raw_embedded = buyer.get("billing_info")
+    raw_root_billing = order.get("billing_info")
+    embedded = raw_embedded if isinstance(raw_embedded, dict) else {}
+    root_billing = raw_root_billing if isinstance(raw_root_billing, dict) else {}
+    # Compatibilidade: algumas respostas intermediárias já devolveram apenas o ID
+    # de billing_info como string/número em vez do objeto {"id": ...}.
+    billing_id = str(
+        embedded.get("id")
+        or root_billing.get("id")
+        or (raw_embedded if isinstance(raw_embedded, (str, int)) else "")
+        or (raw_root_billing if isinstance(raw_root_billing, (str, int)) else "")
+        or ""
+    ).strip()
     site_id = str(order.get("site_id") or "MLB").strip().upper() or "MLB"
     order_id = str(order.get("id") or "").strip()
 
@@ -3211,6 +3221,32 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
     order = ml_api_get(f"/orders/{quote(order_id)}")
     if not isinstance(order, dict):
         raise RuntimeError(f"Pedido {order_id}: resposta inválida.")
+
+    # V14.20: em algumas contas MLB o order padrão chega sem buyer.billing_info.id,
+    # embora a tela do Mercado Livre mostre os Dados para NF-e. Nesse caso refaz a
+    # leitura no contrato v2 e incorpora SOMENTE o identificador fiscal do comprador.
+    buyer0 = order.get("buyer") if isinstance(order.get("buyer"), dict) else {}
+    billing0 = buyer0.get("billing_info")
+    billing0_id = (billing0.get("id") if isinstance(billing0, dict) else billing0) or ""
+    if not str(billing0_id).strip():
+        try:
+            order_v2 = ml_api_get(f"/orders/{quote(order_id)}", headers={"x-version": "2"})
+            if isinstance(order_v2, dict):
+                buyer_v2 = order_v2.get("buyer") if isinstance(order_v2.get("buyer"), dict) else {}
+                billing_v2 = buyer_v2.get("billing_info")
+                billing_v2_id = (billing_v2.get("id") if isinstance(billing_v2, dict) else billing_v2) or ""
+                if str(billing_v2_id).strip():
+                    buyer_merged = dict(buyer0)
+                    buyer_merged["billing_info"] = billing_v2
+                    order["buyer"] = buyer_merged
+                # Se o contrato v2 trouxer site_id e o padrão não, aproveita também.
+                if not str(order.get("site_id") or "").strip() and str(order_v2.get("site_id") or "").strip():
+                    order["site_id"] = order_v2.get("site_id")
+        except Exception as exc:
+            try:
+                ml_log_event("billing_info", f"/orders/{order_id}", "", ML_CLIENT_ID, "FALLBACK_V2_ERRO", str(exc)[:1200])
+            except Exception:
+                pass
     _, seller_id = ml_access_token()
     seller = order.get("seller") if isinstance(order.get("seller"), dict) else {}
     order_seller = str(seller.get("id") or "")
@@ -3293,18 +3329,16 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
         ).strip()
     buyer = order.get("buyer") if isinstance(order.get("buyer"), dict) else {}
 
-    # Cliente deve representar o nome real usado para expedição/faturamento,
-    # nunca o nickname/nome de usuário do Mercado Livre. Prioriza os Dados
-    # para NF-e e, quando o billing-info não estiver disponível, usa o nome
-    # completo do destinatário do shipment ("Quem recebe"), que é PII oficial
-    # retornada com X-Api-Version: 2.
+    # Cliente é o COMPRADOR FISCAL, nunca "Quem recebe". O destinatário do envio
+    # pode ser outra pessoa e portanto não deve alimentar a coluna Cliente.
+    # Prioridade: Dados para NF-e (billing-info) -> nome/sobrenome do buyer do order.
     fiscal_name = _ml_billing_name(order)
+    buyer = order.get("buyer") if isinstance(order.get("buyer"), dict) else buyer
     buyer_names = [str(buyer.get("first_name") or "").strip(), str(buyer.get("last_name") or "").strip()]
     buyer_full_name = " ".join(x for x in buyer_names if x).strip()
-    client = fiscal_name or receiver or buyer_full_name
+    client = fiscal_name or buyer_full_name
     client_name_source = (
         "dados_fiscais_nf" if fiscal_name else
-        "destinatario_envio" if receiver else
         "comprador_order" if buyer_full_name else ""
     )
 

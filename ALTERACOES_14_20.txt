@@ -1,0 +1,7 @@
+V14.20 — Cliente sempre pelos Dados para NF-e
+
+- Remove completamente "Quem recebe" como fonte do campo Cliente.
+- Prioriza exclusivamente buyer.billing_info -> /orders/billing-info/MLB/{billing_info_id}.
+- Se /orders/{id} vier sem billing_info.id, refaz a consulta com x-version: 2 para recuperar o identificador fiscal.
+- Aceita billing_info como objeto ou ID escalar para compatibilidade.
+- Fallback final apenas para first_name + last_name do comprador do pedido; nunca receiver_name/nickname.
