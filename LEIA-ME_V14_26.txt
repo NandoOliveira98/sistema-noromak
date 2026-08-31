@@ -1,0 +1,2 @@
+Substitua servidor_web.py pelo arquivo desta atualização e publique/reinicie o sistema.
+A V14.26 recupera pedidos Mercado Livre presos tratando corretamente order_id, pack_id e shipment_id.

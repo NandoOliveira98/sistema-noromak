@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "14.25"
+APP_VERSION = "14.26"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2737,13 +2737,7 @@ def _ml_order_item_sku(item_data: dict[str, Any]) -> str:
 
 
 def ml_order_shipments(order_id: str) -> tuple[str, dict[str, Any] | None]:
-    """Resolve o shipment *forward* real do pedido, compatível com Hosted View 2026.
-
-    O Mercado Livre migrou /orders/{id}/shipments para um array cujo discriminador
-    principal é ``type`` (forward/return/return_to_buyer). O contrato antigo usava
-    ``direction``. Nunca podemos assumir o primeiro item da lista: uma devolução pode
-    aparecer antes do envio original e faria o sistema consultar a etiqueta errada.
-    """
+    """Resolve o shipment real da order aceitando contratos antigos e novos."""
     shipment_id = ""
     shipment_detail: dict[str, Any] | None = None
     errors: list[str] = []
@@ -2755,35 +2749,43 @@ def ml_order_shipments(order_id: str) -> tuple[str, dict[str, Any] | None]:
         for item in shipments:
             if not isinstance(item, dict):
                 continue
-            shipment_type = str(item.get("type") or "").strip().lower()
+            typ = str(item.get("type") or "").strip().lower()
             direction = str(item.get("direction") or "").strip().lower()
-            if shipment_type == "forward" or direction == "forward":
+            if typ == "forward" or direction == "forward":
                 return str(item.get("id") or "").strip()
         if len(shipments) == 1 and isinstance(shipments[0], dict):
-            shipment_type = str(shipments[0].get("type") or "").strip().lower()
+            typ = str(shipments[0].get("type") or "").strip().lower()
             direction = str(shipments[0].get("direction") or "").strip().lower()
-            if shipment_type not in {"return", "return_to_buyer"} and direction not in {"return", "reverse"}:
+            if typ not in {"return", "return_to_buyer", "reverse"} and direction not in {"return", "reverse"}:
                 return str(shipments[0].get("id") or "").strip()
+        for item in shipments:
+            if not isinstance(item, dict):
+                continue
+            marker = " ".join([
+                str(item.get("type") or ""), str(item.get("direction") or ""),
+                str(item.get("status") or ""), str(item.get("substatus") or ""),
+                " ".join(str(x) for x in (item.get("tags") or []) if x is not None),
+            ]).lower()
+            if not any(x in marker for x in ("return", "reverse", "devol")):
+                sid = str(item.get("id") or "").strip()
+                if sid:
+                    return sid
         return ""
 
-    try:
-        result = ml_api_get(
-            f"/orders/{quote(str(order_id))}/shipments",
-            headers={"X-New-Domain": "true", "X-Api-Version": "2"},
-        )
-        shipment_id = pick_forward(result)
-    except Exception as exc:
-        errors.append(f"hosted:{exc}")
-
-    if not shipment_id:
+    attempts = [
+        (f"/orders/{quote(str(order_id))}/shipments", None),
+        (f"/orders/{quote(str(order_id))}/shipments", {"x-format-new": "true"}),
+        (f"/orders/{quote(str(order_id))}/shipments?list_all=true", None),
+        (f"/orders/{quote(str(order_id))}/shipments?list_all=true", {"x-format-new": "true"}),
+    ]
+    for path, headers in attempts:
+        if shipment_id:
+            break
         try:
-            result = ml_api_get(
-                f"/orders/{quote(str(order_id))}/shipments?list_all=true",
-                headers={"X-New-Domain": "true", "X-Api-Version": "2"},
-            )
+            result = ml_api_get(path, headers=headers)
             shipment_id = pick_forward(result)
         except Exception as exc:
-            errors.append(f"legacy:{exc}")
+            errors.append(f"{path}:{exc}")
 
     if shipment_id:
         try:
@@ -2795,37 +2797,96 @@ def ml_order_shipments(order_id: str) -> tuple[str, dict[str, Any] | None]:
                 shipment_detail = detail
         except Exception as exc:
             errors.append(f"detail:{exc}")
-            shipment_detail = None
 
     if not shipment_id and errors:
         try:
             ml_log_event("shipment_resolver", f"/orders/{order_id}/shipments", "", ML_CLIENT_ID,
-                         "SEM SHIPMENT FORWARD", " | ".join(errors)[:1200])
+                         "SEM SHIPMENT", " | ".join(errors)[:1200])
         except Exception:
             pass
     return shipment_id, shipment_detail
 
 
+def _ml_pack_shipment(pack_id: str) -> tuple[str, dict[str, Any] | None, list[str]]:
+    """Resolve shipment e orders pelo pack, que é o número exibido em várias telas do ML."""
+    pack_id = str(pack_id or "").strip()
+    if not pack_id:
+        return "", None, []
+    payload = ml_api_get(f"/packs/{quote(pack_id)}")
+    if not isinstance(payload, dict):
+        return "", None, []
+    shipment_obj = payload.get("shipment") if isinstance(payload.get("shipment"), dict) else {}
+    shipment_id = str(shipment_obj.get("id") or "").strip()
+    order_ids: list[str] = []
+    for item in payload.get("orders") or []:
+        if isinstance(item, dict):
+            oid = str(item.get("id") or "").strip()
+            if oid and oid not in order_ids:
+                order_ids.append(oid)
+    detail = None
+    if shipment_id:
+        try:
+            got = ml_api_get(
+                f"/shipments/{quote(shipment_id)}?views=destination",
+                headers={"x-format-new": "true", "X-Api-Version": "2"},
+            )
+            if isinstance(got, dict):
+                detail = got
+        except Exception:
+            detail = None
+    return shipment_id, detail, order_ids
+
+
+def _ml_orders_for_shipment(shipment_id: str) -> list[str]:
+    shipment_id = str(shipment_id or "").strip()
+    if not shipment_id:
+        return []
+    try:
+        payload = ml_api_get(f"/shipments/{quote(shipment_id)}/orders", headers={"X-New-Domain": "true"})
+    except Exception:
+        return []
+    items = payload if isinstance(payload, list) else ([payload] if isinstance(payload, dict) else [])
+    out: list[str] = []
+    for item in items:
+        if isinstance(item, dict):
+            oid = str(item.get("order_id") or item.get("id") or "").strip()
+            if oid and oid not in out:
+                out.append(oid)
+    return out
+
+
 def _ml_resolve_forward_shipment(order_id: str, order_hint: dict[str, Any] | None = None) -> tuple[str, dict[str, Any] | None]:
-    """Resolve primeiro pela relação oficial order->shipments; usa shipping.id apenas como fallback."""
+    """Order -> shipment; se falhar, usa o pack oficial; por último shipping.id legado."""
     shipment_id, shipment = ml_order_shipments(order_id)
-    if shipment_id and isinstance(shipment, dict):
+    if shipment_id:
         return shipment_id, shipment
-    hint = order_hint if isinstance(order_hint, dict) else {}
-    shipping = hint.get("shipping") if isinstance(hint.get("shipping"), dict) else {}
+
+    order_hint = order_hint if isinstance(order_hint, dict) else {}
+    pack_id = str(order_hint.get("pack_id") or "").strip()
+    if pack_id:
+        try:
+            sid, detail, _ = _ml_pack_shipment(pack_id)
+            if sid:
+                return sid, detail
+        except Exception as exc:
+            try:
+                ml_log_event("shipment_resolver", f"/packs/{pack_id}", "", ML_CLIENT_ID,
+                             "PACK FALLBACK ERRO", str(exc)[:1200])
+            except Exception:
+                pass
+
+    shipping = order_hint.get("shipping") if isinstance(order_hint.get("shipping"), dict) else {}
     hinted_id = str(shipping.get("id") or "").strip()
-    if hinted_id and hinted_id != shipment_id:
+    if hinted_id:
         try:
             detail = ml_api_get(
                 f"/shipments/{quote(hinted_id)}?views=destination",
                 headers={"x-format-new": "true", "X-Api-Version": "2"},
             )
-            if isinstance(detail, dict):
-                return hinted_id, detail
+            return hinted_id, detail if isinstance(detail, dict) else None
         except Exception:
-            pass
-    return shipment_id, shipment
-
+            return hinted_id, None
+    return "", None
 
 def _ml_invoice_data(shipment_id: str, site_id: str = "MLB") -> dict[str, Any] | None:
     if not shipment_id:
@@ -3092,13 +3153,9 @@ def _ml_order_aliases(order_id: str, pack_id: str = "") -> set[str]:
 
 def _ml_bind_manual_pending_rows(
     pending: list[dict[str, Any]],
-    *,
-    order_id: str,
-    pack_id: str,
-    shipment_id: str,
-    shipment: dict[str, Any] | None,
+    *, order_id: str, pack_id: str, shipment_id: str, shipment: dict[str, Any] | None,
 ) -> int:
-    """Vincula linhas de print/extensão ao order/shipment real antes da importação."""
+    """Vincula e também corrige linhas que gravaram PACK no campo VendaMercadoLivre."""
     aliases = _ml_order_aliases(order_id, pack_id)
     if not aliases:
         return 0
@@ -3111,12 +3168,14 @@ def _ml_bind_manual_pending_rows(
         marketplace = normalize(row.get("Marketplace"))
         if "MERCADO LIVRE" not in marketplace and "MERCADOLIVRE" not in marketplace:
             continue
-        if str(row.get("VendaMercadoLivre") or "").strip():
+        row_aliases: set[str] = set()
+        for raw in (order_number(row), row.get("VendaMercadoLivre"), row.get("PackIdMercadoLivre")):
+            digits = re.sub(r"\D+", "", str(raw or ""))
+            if digits:
+                row_aliases.update(_ml_order_aliases(digits, ""))
+        if not row_aliases.intersection(aliases):
             continue
-        manual_number = normalize(order_number(row))
-        if not manual_number or manual_number not in aliases:
-            continue
-
+        old = (str(row.get("VendaMercadoLivre") or ""), str(row.get("PackIdMercadoLivre") or ""), str(row.get("ShipmentIdMercadoLivre") or ""))
         row["Pedido"] = operational_order_id
         row["VendaMercadoLivre"] = order_id
         row["PackIdMercadoLivre"] = pack_id
@@ -3126,12 +3185,14 @@ def _ml_bind_manual_pending_rows(
         original_source = str(row.get("OrigemCadastro") or "").strip()
         if "reconciliado mercado livre" not in original_source.lower():
             row["OrigemCadastro"] = (original_source + " / " if original_source else "") + "Reconciliado Mercado Livre"
-        bound += 1
+        new = (order_id, pack_id, shipment_id)
+        if old != new:
+            bound += 1
     return bound
-
 
 def _ml_manual_pending_numbers() -> set[str]:
     raw, _, _ = get_storage("conf_pedidos")
+    linked = _ml_linked_order_ids()
     result: set[str] = set()
     for row in _rows_from_storage_value(raw):
         if not isinstance(row, dict):
@@ -3139,15 +3200,14 @@ def _ml_manual_pending_numbers() -> set[str]:
         marketplace = normalize(row.get("Marketplace"))
         if "MERCADO LIVRE" not in marketplace and "MERCADOLIVRE" not in marketplace:
             continue
-        if str(row.get("Etiqueta API Mercado Livre") or "").strip().upper() == "VINCULADA":
+        sale_id = str(row.get("VendaMercadoLivre") or "").strip()
+        if sale_id and sale_id in linked:
             continue
-        if str(row.get("VendaMercadoLivre") or "").strip() and str(row.get("ShipmentIdMercadoLivre") or "").strip():
-            continue
-        number = normalize(order_number(row))
-        if number:
-            result.add(number)
+        for raw_id in (order_number(row), sale_id, row.get("PackIdMercadoLivre")):
+            digits = re.sub(r"\D+", "", str(raw_id or ""))
+            if digits:
+                result.add(normalize(digits))
     return result
-
 
 def ml_reconcile_manual_orders_once() -> dict[str, int]:
     """Reconcilia pedidos de print/extensão com a API e os coloca no watcher de etiqueta."""
@@ -3285,7 +3345,7 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
         raise RuntimeError(f"Pedido {order_id} pertence a outro seller.")
 
     status = str(order.get("status") or "")
-    shipment_id, shipment = ml_order_shipments(order_id)
+    shipment_id, shipment = _ml_resolve_forward_shipment(order_id, order)
     pack_id = str(order.get("pack_id") or "").strip()
     operational_order_id = pack_id or order_id
 
@@ -3776,6 +3836,111 @@ def ml_pending_label_watch_once() -> dict[str, int]:
     return {"checked": checked, "triggered": triggered, "ready": ready, "errors": errors}
 
 
+def _ml_recover_one_identifier(identifier: str, *, source: str) -> dict[str, Any]:
+    """Trata o número como order, pack e busca q; importa todas as orders relacionadas."""
+    ident = re.sub(r"\D+", "", str(identifier or ""))
+    out: dict[str, Any] = {"identifier": ident, "orders": [], "imported": 0, "ready": 0, "errors": []}
+    if not ident:
+        return out
+    order_ids: list[str] = []
+    try:
+        order = ml_api_get(f"/orders/{quote(ident)}")
+        if isinstance(order, dict):
+            oid = str(order.get("id") or "").strip()
+            if oid:
+                order_ids.append(oid)
+    except Exception as exc:
+        out["errors"].append(f"order:{str(exc)[:220]}")
+    if not order_ids:
+        try:
+            _, _, pack_orders = _ml_pack_shipment(ident)
+            order_ids.extend(x for x in pack_orders if x not in order_ids)
+        except Exception as exc:
+            out["errors"].append(f"pack:{str(exc)[:220]}")
+    if not order_ids:
+        try:
+            _, seller_id = ml_access_token()
+            query = urlencode({"seller": seller_id, "q": ident, "limit": "50", "offset": "0"})
+            found = ml_api_get(f"/orders/search?{query}")
+            for item in (found.get("results") if isinstance(found, dict) else []) or []:
+                if not isinstance(item, dict):
+                    continue
+                oid = str(item.get("id") or "").strip()
+                pid = str(item.get("pack_id") or "").strip()
+                if ident in {oid, pid} and oid and oid not in order_ids:
+                    order_ids.append(oid)
+        except Exception as exc:
+            out["errors"].append(f"search:{str(exc)[:220]}")
+    out["orders"] = order_ids
+    for oid in order_ids:
+        try:
+            detail = ml_import_order(oid, source=source)
+            out["imported"] += 1
+            if detail.get("ready_for_conference"):
+                out["ready"] += 1
+        except Exception as exc:
+            out["errors"].append(f"import {oid}:{str(exc)[:300]}")
+    return out
+
+
+def _ml_recover_local_pending_identifiers_once(*, max_identifiers: int = 80) -> dict[str, Any]:
+    """Recupera pedidos locais presos por IDs salvos em campos errados ou migração de API."""
+    raw, _, _ = get_storage("conf_pedidos")
+    linked = _ml_linked_order_ids()
+    completed = _ml_completed_order_ids()
+    identifiers: list[str] = []
+    shipment_ids: list[str] = []
+    for row in _rows_from_storage_value(raw):
+        if not isinstance(row, dict):
+            continue
+        marketplace = normalize(row.get("Marketplace"))
+        if "MERCADO LIVRE" not in marketplace and "MERCADOLIVRE" not in marketplace:
+            continue
+        oid = str(row.get("VendaMercadoLivre") or "").strip()
+        if oid and (oid in linked or oid in completed):
+            continue
+        sid = re.sub(r"\D+", "", str(row.get("ShipmentIdMercadoLivre") or ""))
+        if sid and sid not in shipment_ids:
+            shipment_ids.append(sid)
+        for raw_id in (order_number(row), oid, row.get("PackIdMercadoLivre")):
+            ident = re.sub(r"\D+", "", str(raw_id or ""))
+            if ident and ident not in identifiers:
+                identifiers.append(ident)
+
+    imported = ready = errors = resolved_by_shipment = 0
+    details: list[dict[str, Any]] = []
+    for sid in shipment_ids[:max_identifiers]:
+        order_ids = _ml_orders_for_shipment(sid)
+        if order_ids:
+            resolved_by_shipment += 1
+        for oid in order_ids:
+            try:
+                detail = ml_import_order(oid, source="API Mercado Livre / recuperação por shipment")
+                imported += 1
+                if detail.get("ready_for_conference"):
+                    ready += 1
+            except Exception as exc:
+                errors += 1
+                details.append({"shipment_id": sid, "order_id": oid, "error": str(exc)[:300]})
+    for ident in identifiers[:max_identifiers]:
+        result = _ml_recover_one_identifier(ident, source="API Mercado Livre / recuperação identificador local")
+        imported += int(result.get("imported") or 0)
+        ready += int(result.get("ready") or 0)
+        if result.get("errors") and not result.get("orders"):
+            errors += 1
+        if result.get("orders") or result.get("errors"):
+            details.append(result)
+    summary = {"local_identifiers": len(identifiers), "local_shipments": len(shipment_ids),
+               "resolved_by_shipment": resolved_by_shipment, "imported": imported,
+               "ready": ready, "errors": errors, "details": details[:20]}
+    try:
+        ml_log_event("stuck_order_recovery", "/local-pending", "", ML_CLIENT_ID,
+                     "RECUPERAÇÃO CONCLUÍDA", json_dumps(summary))
+    except Exception:
+        pass
+    return summary
+
+
 def _ml_discover_untracked_ready_labels_once(*, days: int | None = None, max_pages: int | None = None) -> dict[str, int]:
     """V14.11: descobre na própria API pedidos com etiqueta que ainda não existem localmente.
 
@@ -3874,6 +4039,13 @@ def ml_check_all_available_labels_once() -> dict[str, int]:
     V14.11: reconcilia os pedidos locais e também consulta /orders/search para
     encontrar pedidos pagos com etiqueta pronta que nunca chegaram à base local.
     """
+    local_recovery: dict[str, Any] = {"imported": 0, "ready": 0, "errors": 0}
+    try:
+        local_recovery = _ml_recover_local_pending_identifiers_once()
+    except Exception as exc:
+        local_recovery = {"imported": 0, "ready": 0, "errors": 1, "details": [{"error": str(exc)[:400]}]}
+        ml_log_event("manual_label_check", "/local-recovery", "", ML_CLIENT_ID, "ERRO", str(exc)[:1200])
+
     reconcile = {"manual": 0, "matched": 0, "ready": 0, "errors": 0}
     try:
         reconcile = ml_reconcile_manual_orders_once()
@@ -3915,7 +4087,7 @@ def ml_check_all_available_labels_once() -> dict[str, int]:
         discovery["api_errors"] = 1
         ml_log_event("manual_label_discovery", "/orders/search", "", ML_CLIENT_ID, "ERRO", str(exc)[:1200])
 
-    total_errors = errors + int(reconcile.get("errors") or 0) + int(discovery.get("api_errors") or 0)
+    total_errors = errors + int(reconcile.get("errors") or 0) + int(discovery.get("api_errors") or 0) + int(local_recovery.get("errors") or 0)
     summary = {
         "reconciled_pending": int(reconcile.get("manual") or 0),
         "reconciled_matched": int(reconcile.get("matched") or 0),
@@ -3924,6 +4096,8 @@ def ml_check_all_available_labels_once() -> dict[str, int]:
         "available": triggered + int(discovery.get("api_available") or 0),
         "linked": ready + int(discovery.get("api_linked") or 0),
         "api_discovered": int(discovery.get("api_discovered") or 0),
+        "local_recovery_imported": int(local_recovery.get("imported") or 0),
+        "local_recovery_ready": int(local_recovery.get("ready") or 0),
         "errors": total_errors,
     }
     ml_log_event("manual_label_check", "/pending", "", ML_CLIENT_ID, "CONCLUÍDO", json_dumps(summary))
@@ -3950,6 +4124,10 @@ def ml_pending_label_watch_loop(stop_event: threading.Event) -> None:
                 try:
                     # Varredura automática curta: até 3 dias / 4 páginas (200 pedidos).
                     # A verificação manual continua usando a janela completa configurada.
+                    recovery = _ml_recover_local_pending_identifiers_once(max_identifiers=30)
+                    if recovery.get("ready"):
+                        ml_log_event("shipment_watcher", "/local-recovery", "", ML_CLIENT_ID,
+                                     "PEDIDOS PRESOS RECUPERADOS", json_dumps(recovery))
                     result = _ml_discover_untracked_ready_labels_once(days=3, max_pages=4)
                     if result.get("api_linked"):
                         ml_log_event("shipment_watcher", "/orders/search", "", ML_CLIENT_ID,
