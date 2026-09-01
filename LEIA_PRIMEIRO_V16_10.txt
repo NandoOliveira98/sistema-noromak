@@ -1,0 +1,10 @@
+V16.10 - RENTABILIDADE MERCADO LIVRE
+
+- Filtro por data inicial e data final.
+- Orders buscadas no ML usando order.date_closed.from/to.
+- Atualizacao de custos em lotes para evitar timeout.
+- Sincronizacao financeira completa do Billing por periodo, paginada por last_id.
+- Tarifa de venda prioriza sales_info.sale_fee.net.
+- Frete do vendedor vem de /shipments/{id}/costs.
+- Outros debitos/creditos do ML sao conciliados pelo Billing e mantidos em cache local.
+- Apollo continua sendo a fonte do custo do produto.
