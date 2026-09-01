@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "16.12"
+APP_VERSION = "16.13"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -6258,7 +6258,89 @@ def _ml_profitability_local_sales(limit: int = 300) -> list[dict[str, Any]]:
     return list(grouped.values())[:max(1, int(limit))]
 
 
-def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int = 30, date_from: str = "", date_to: str = "", refresh_offset: int = 0, refresh_batch: int = 40, tax_percent: float = 12.0, retry_pending: bool = False) -> dict[str, Any]:
+
+def _ml_profitability_resolve_order(rec: dict[str, Any], cache: dict[str, dict[str, Any]]) -> tuple[dict[str, Any] | None, str]:
+    """Resolve a order de rentabilidade por order, pack e busca q.
+
+    Pedidos locais antigos podem carregar IDs migrados/pack em campos diferentes. Esta
+    rotina nunca estima valores: apenas encontra a order oficial correspondente e informa
+    o diagnóstico usado para a conciliação.
+    """
+    oid = str(rec.get("order_id") or "").strip()
+    pid = str(rec.get("pack_id") or "").strip()
+    sku = normalize(str(rec.get("sku") or ""))
+    tried: list[str] = []
+
+    def choose(order: Any) -> dict[str, Any] | None:
+        if not isinstance(order, dict) or not order.get("id"):
+            return None
+        return order
+
+    if oid:
+        if oid in cache:
+            return cache[oid], "order cache"
+        try:
+            tried.append(f"GET /orders/{oid}")
+            order = choose(_ml_profitability_api_get(f"/orders/{quote(oid)}", attempts=4))
+            if order:
+                cache[oid] = order
+                return order, "order direta"
+        except Exception:
+            pass
+
+    # q aceita ID de order. É um fallback útil quando o GET direto sofre falha transitória.
+    if oid:
+        try:
+            _, seller_id = ml_access_token()
+            q = urlencode({"seller": seller_id, "q": oid, "limit": "50", "offset": "0"})
+            tried.append("orders/search q")
+            found = ml_api_get(f"/orders/search?{q}")
+            results = found.get("results") if isinstance(found, dict) else []
+            for item in results or []:
+                order = choose(item)
+                if not order:
+                    continue
+                item_oid = str(order.get("id") or "").strip()
+                if item_oid == oid:
+                    cache[item_oid] = order
+                    return order, "orders/search q"
+        except Exception:
+            pass
+
+    # Quando o identificador local corresponde a um pack, resolve as orders oficiais do pack.
+    pack_candidates = [x for x in (pid, oid) if x]
+    seen_pack: set[str] = set()
+    for pack in pack_candidates:
+        if pack in seen_pack:
+            continue
+        seen_pack.add(pack)
+        try:
+            tried.append(f"GET /packs/{pack}")
+            _, _, order_ids = _ml_pack_shipment(pack)
+        except Exception:
+            order_ids = []
+        chosen_fallback = None
+        for real_oid in order_ids:
+            try:
+                order = cache.get(real_oid) or choose(_ml_profitability_api_get(f"/orders/{quote(real_oid)}", attempts=3))
+            except Exception:
+                order = None
+            if not order:
+                continue
+            cache[real_oid] = order
+            if chosen_fallback is None:
+                chosen_fallback = order
+            items = order.get("order_items") if isinstance(order.get("order_items"), list) else []
+            if sku:
+                for oi in items:
+                    if isinstance(oi, dict) and normalize(str(_ml_order_item_sku(oi) or "")) == sku:
+                        return order, f"pack {pack} → order {real_oid}"
+        if chosen_fallback and len(order_ids) == 1:
+            return chosen_fallback, f"pack {pack} → única order"
+
+    return None, ("; ".join(tried) if tried else "order não localizada")
+
+def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int = 30, date_from: str = "", date_to: str = "", refresh_offset: int = 0, refresh_batch: int = 40, tax_percent: float = 12.0, retry_pending: bool = False, retry_orders: str = "") -> dict[str, Any]:
     """Dashboard de lucro ML com vendas buscadas diretamente do marketplace.
 
     O carregamento normal prioriza velocidade: lista as vendas e usa snapshots já
@@ -6334,7 +6416,10 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
     refresh_offset = max(0, int(refresh_offset or 0))
     refresh_batch = max(10, min(100, int(refresh_batch or 40)))
     refresh_pool = records
-    if refresh and retry_pending:
+    retry_order_set = {x.strip() for x in str(retry_orders or "").split(",") if x.strip()}
+    if refresh and retry_order_set:
+        refresh_pool = [r for r in records if str(r.get("order_id") or "").strip() in retry_order_set]
+    elif refresh and retry_pending:
         pending_pool: list[dict[str, Any]] = []
         for _pr in records:
             _poid = str(_pr.get("order_id") or "")
@@ -6400,13 +6485,9 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
         do_refresh = refresh and (str(oid), str(sku)) in refresh_keys
         if do_refresh:
             order = rec.get("order_summary") if isinstance(rec.get("order_summary"), dict) else None
+            order_resolution = "orders/search" if order is not None else ""
             if order is None:
-                try:
-                    order = order_cache.get(oid) or _ml_profitability_api_get(f"/orders/{quote(oid)}", attempts=3)
-                    if isinstance(order, dict):
-                        order_cache[oid] = order
-                except Exception:
-                    order = None
+                order, order_resolution = _ml_profitability_resolve_order(rec, order_cache)
 
             unit_cost = _money_number(snap.get("unit_cost"))
             cost_source = str(snap.get("cost_source") or "")
@@ -6473,6 +6554,10 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
                     dsku = str(_ml_order_item_sku(doi) or "").strip()
                     if sku and normalize(dsku) == normalize(sku):
                         matching.append(doi)
+                # Pedidos legados podem ter SKU local diferente do SKU retornado pela API;
+                # se a order possui uma única linha, ela é inequivocamente a venda correta.
+                if not matching and len(detailed_items) == 1:
+                    matching = [detailed_items[0]]
                 if sale_amount is None and len(matching) == 1:
                     _up = _money_number(matching[0].get("unit_price"))
                     try:
@@ -6538,7 +6623,7 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
                     captured_at=excluded.captured_at,raw_summary=excluded.raw_summary""",
                     (oid, sku, unit_cost, cost_source, sale_amount, ml_fee, ship_cost,
                      billing_other if billing_other is not None else _money_number(snap.get("other_ml_cost")), captured,
-                     json.dumps({"billing_status": billing_status, "billing_diagnostic": billing_diag, "billing_source": "billing/period/details + order/details fallback" if billing else ""}, ensure_ascii=False)),
+                     json.dumps({"billing_status": billing_status, "billing_diagnostic": billing_diag, "billing_source": "billing/period/details + order/details fallback" if billing else "", "order_resolution": order_resolution, "order_resolved": bool(order)}, ensure_ascii=False)),
                 )
                 DB.commit()
                 snap_row = DB.execute(
@@ -6564,8 +6649,15 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
         billing = billing_map.get(str(oid)) or {}
         billing_status = str(billing.get("status") or "")
         billing_diag = str(billing.get("diagnostic") or "")
-        fee_confirmed = billing_status == "ok" or (fee is not None and fee > 0)
+        # Zero pode ser um valor oficial; ausência deve permanecer None.
+        fee_confirmed = billing_status == "ok" or fee is not None
         complete = sale is not None and product_cost is not None and fee_confirmed and shipping is not None
+        pending_reasons: list[str] = []
+        if sale is None: pending_reasons.append("valor da venda não localizado na Order")
+        if product_cost is None: pending_reasons.append("custo Apollo não localizado")
+        if not fee_confirmed: pending_reasons.append("tarifa ML não conciliada")
+        if shipping is None: pending_reasons.append("frete do vendedor não conciliado")
+        if billing_diag and not complete and "não retornou" in billing_diag.lower(): pending_reasons.append("Billing ainda sem lançamento para a order/pack")
         profit = (sale - known_costs) if sale is not None and product_cost is not None else None
         margin = (profit / sale * 100) if profit is not None and sale else None
         rows.append({
@@ -6597,6 +6689,7 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
             "kit_name": str(rec.get("kit_name") or ""),
             "kit_components": rec.get("kit_components") if isinstance(rec.get("kit_components"), list) else [],
             "cost_source": str(snap.get("cost_source") or ""),
+            "pending_reasons": pending_reasons,
         })
 
     return {
@@ -6615,12 +6708,13 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
         "refresh_done": (not refresh) or (refresh_offset + len(refresh_records) >= len(refresh_pool)),
         "refresh_next_offset": (refresh_offset + len(refresh_records)) if refresh else 0,
         "retry_pending": bool(retry_pending),
+        "retry_orders": sorted(retry_order_set),
         "tax_percent": tax_percent,
         "billing_sync": billing_sync_meta,
     }
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/16.12"
+    server_version = "NoromakExpedicao/16.13"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
@@ -6844,8 +6938,9 @@ class AppHandler(BaseHTTPRequestHandler):
                 except Exception:
                     tax_percent = 12.0
                 retry_pending = str((query.get("retry_pending") or [""])[0]).lower() in ("1", "true", "sim")
+                retry_orders = str((query.get("retry_orders") or [""])[0] or "").strip()[:1200]
                 try:
-                    self.send_json(ml_profitability_payload(refresh=refresh, limit=limit, days=days, date_from=date_from, date_to=date_to, refresh_offset=refresh_offset, refresh_batch=refresh_batch, tax_percent=tax_percent, retry_pending=retry_pending))
+                    self.send_json(ml_profitability_payload(refresh=refresh, limit=limit, days=days, date_from=date_from, date_to=date_to, refresh_offset=refresh_offset, refresh_batch=refresh_batch, tax_percent=tax_percent, retry_pending=retry_pending, retry_orders=retry_orders))
                 except Exception as exc:
                     self.send_json({"ok": False, "error": str(exc)}, 500)
             return

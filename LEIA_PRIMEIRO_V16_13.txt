@@ -1,0 +1,9 @@
+V16.13 - RENTABILIDADE ML COMPACTA E CONCILIACAO REFORCADA
+
+- Tabela compactada para caber melhor na tela.
+- Novo botao Reprocessar pendentes.
+- Reprocessamento por IDs exatos, sem pular linhas quando a lista de pendentes muda.
+- Recuperacao de order por GET direto, orders/search q e pack.
+- Order com uma unica linha pode ser conciliada mesmo se o SKU local divergir do SKU da API.
+- Pedidos parciais mostram o motivo da pendencia no tooltip.
+- Mantem imposto configuravel e kits consolidados da V16.12.
