@@ -1,0 +1,9 @@
+V16.6 - DADOS PARA NF-e MERCADO LIVRE
+
+Correção do nome fiscal em pedidos pendentes:
+- aceita billing-info aninhado e objeto fiscal direto na raiz;
+- consulta o endpoint oficial /orders/billing-info/{site}/{billing_info_id};
+- tenta headers X-Api-Version: 2 e x-version: 2 durante a migração;
+- mantém compatibilidade temporária com endpoints legados;
+- nunca usa username, nickname ou destinatário como Cliente;
+- pedidos pendentes são relidos nas sincronizações do worker.

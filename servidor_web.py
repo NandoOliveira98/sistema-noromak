@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "16.5"
+APP_VERSION = "16.6"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2654,10 +2654,12 @@ def _ml_is_full_shipment(shipment: dict[str, Any] | None) -> bool:
 def _ml_billing_details(order: dict[str, Any]) -> dict[str, Any]:
     """Obtém exclusivamente nome/razão social de Dados para NF-e do Mercado Livre.
 
-    Fluxo atual: /orders/{id} -> buyer.billing_info.id ->
+    Fluxo oficial: /orders/{id} -> buyer.billing_info.id ->
     /orders/billing-info/{site_id}/{billing_info_id}.
-    Mantém o billing_info legado V2 apenas como compatibilidade fiscal temporária.
-    Nunca usa nickname, username, nome do order ou destinatário.
+
+    Durante a migração do ML algumas contas ainda devolvem billing-info em formatos
+    diferentes (objeto fiscal direto na raiz, endpoint legado e headers distintos).
+    Esta função aceita essas variações SEM usar nickname/username/destinatário.
     """
     buyer = order.get("buyer") if isinstance(order.get("buyer"), dict) else {}
     raw_embedded = buyer.get("billing_info")
@@ -2669,76 +2671,126 @@ def _ml_billing_details(order: dict[str, Any]) -> dict[str, Any]:
         or (raw_embedded if isinstance(raw_embedded, (str, int)) else "")
         or (raw_root_billing if isinstance(raw_root_billing, (str, int)) else "") or ""
     ).strip()
-    site_id = str(order.get("site_id") or "MLB").strip().upper() or "MLB"
+    site_id = str(
+        order.get("site_id")
+        or ((order.get("context") or {}).get("site") if isinstance(order.get("context"), dict) else "")
+        or "MLB"
+    ).strip().upper() or "MLB"
     order_id = str(order.get("id") or "").strip()
     errors: list[str] = []
 
     def extract_name(payload: Any) -> str:
         if not isinstance(payload, dict):
             return ""
+
         fiscal_buyer = payload.get("buyer") if isinstance(payload.get("buyer"), dict) else {}
         info = fiscal_buyer.get("billing_info") if isinstance(fiscal_buyer.get("billing_info"), dict) else {}
         if not info and isinstance(payload.get("billing_info"), dict):
             info = payload["billing_info"]
-        if not info:
+
+        # Algumas respostas do endpoint legado/V2 entregam o próprio objeto
+        # billing_info na raiz, por exemplo {"name":..., "last_name":...}.
+        if not info and any(k in payload for k in (
+            "name", "first_name", "last_name", "surname", "business_name",
+            "corporate_name", "company_name", "additional_info", "identification"
+        )):
+            info = payload
+
+        if not isinstance(info, dict) or not info:
             return ""
-        first = str(info.get("name") or info.get("first_name") or "").strip()
-        last = str(info.get("last_name") or info.get("surname") or "").strip()
-        business = str(info.get("business_name") or info.get("corporate_name") or info.get("company_name") or "").strip()
-        identification = info.get("identification") if isinstance(info.get("identification"), dict) else {}
-        doc_type = str(identification.get("type") or "").strip().upper()
-        if doc_type == "CNPJ":
-            return business or first
-        direct = " ".join(x for x in (first, last) if x).strip() or business
-        if direct:
-            return direct
-        # Compatibilidade com respostas antigas/V1 que usam additional_info.
+
         additional = info.get("additional_info") if isinstance(info.get("additional_info"), list) else []
-        vals = {}
+        vals: dict[str, str] = {}
         for item in additional:
-            if isinstance(item, dict):
-                vals[str(item.get("type") or "").strip().upper()] = str(item.get("value") or "").strip()
-        business = vals.get("BUSINESS_NAME") or vals.get("CORPORATE_NAME") or vals.get("COMPANY_NAME") or ""
-        first = vals.get("FIRST_NAME") or vals.get("NAME") or ""
-        last = vals.get("LAST_NAME") or ""
-        doc_type = (vals.get("DOC_TYPE") or "").upper()
+            if not isinstance(item, dict):
+                continue
+            key = str(item.get("type") or item.get("key") or item.get("name") or "").strip().upper()
+            value = str(item.get("value") or item.get("description") or "").strip()
+            if key and value and key not in vals:
+                vals[key] = value
+
+        first = str(
+            info.get("name") or info.get("first_name")
+            or vals.get("FIRST_NAME") or vals.get("NAME") or ""
+        ).strip()
+        last = str(
+            info.get("last_name") or info.get("surname")
+            or vals.get("LAST_NAME") or vals.get("SURNAME") or ""
+        ).strip()
+        business = str(
+            info.get("business_name") or info.get("corporate_name") or info.get("company_name")
+            or vals.get("BUSINESS_NAME") or vals.get("CORPORATE_NAME") or vals.get("COMPANY_NAME") or ""
+        ).strip()
+        identification = info.get("identification") if isinstance(info.get("identification"), dict) else {}
+        doc_type = str(identification.get("type") or vals.get("DOC_TYPE") or "").strip().upper()
+
+        # No MLB pessoa jurídica vem normalmente com name=razão social.
         if doc_type == "CNPJ":
             return business or first
+        if business and not (first or last):
+            return business
         return " ".join(x for x in (first, last) if x).strip() or business
 
+    # Se o próprio /orders já trouxe o objeto fiscal completo, aproveita.
     embedded_name = extract_name({"buyer": {"billing_info": embedded}}) if embedded else ""
-    if embedded_name:
+    if embedded_name and any(k in embedded for k in (
+        "name", "first_name", "business_name", "corporate_name", "identification", "additional_info"
+    )):
         return {"name": embedded_name, "billing_info_id": billing_id, "source": "order_embedded", "errors": []}
 
-    # Endpoint novo/documentado (2026).
+    # Endpoint oficial atual. Testa sem header primeiro e depois as duas grafias
+    # encontradas nos contratos do ML durante a migração.
     if billing_id:
         endpoint = f"/orders/billing-info/{quote(site_id)}/{quote(billing_id)}"
-        try:
-            payload = ml_api_get(endpoint)
-            name = extract_name(payload)
-            if name:
-                return {"name": name, "billing_info_id": billing_id, "source": "billing_info_current", "errors": errors}
-            errors.append("billing-info atual respondeu sem nome fiscal")
-        except Exception as exc:
-            errors.append(f"billing-info atual: {str(exc)[:400]}")
-    else:
-        errors.append("buyer.billing_info.id ausente em /orders")
-
-    # Compatibilidade fiscal: para MLB o contrato V2 do endpoint legado pode
-    # disponibilizar Dados para NF-e mesmo quando o order ainda não trouxe o ID.
-    if order_id:
-        legacy_path = f"/orders/{quote(order_id)}/billing_info"
-        for hdr, label in (({"x-version": "2"}, "billing_info_v2"), (None, "billing_info_v1")):
+        for hdr, label in (
+            (None, "billing_info_current"),
+            ({"X-Api-Version": "2"}, "billing_info_api_v2"),
+            ({"x-version": "2"}, "billing_info_x_v2"),
+        ):
             try:
-                payload = ml_api_get(legacy_path, headers=hdr)
+                payload = ml_api_get(endpoint, headers=hdr)
                 name = extract_name(payload)
                 if name:
                     return {"name": name, "billing_info_id": billing_id, "source": label, "errors": errors}
                 errors.append(f"{label} respondeu sem nome fiscal")
             except Exception as exc:
                 errors.append(f"{label}: {str(exc)[:400]}")
+    else:
+        errors.append("buyer.billing_info.id ausente em /orders")
 
-    return {"name": "", "billing_info_id": billing_id, "source": "", "errors": errors[-4:]}
+    # Compatibilidade temporária enquanto o endpoint legado ainda responde em
+    # determinadas contas. Aceita underscore e hífen e payload fiscal direto.
+    if order_id:
+        legacy_paths = (
+            f"/orders/{quote(order_id)}/billing_info",
+            f"/orders/{quote(order_id)}/billing-info",
+        )
+        header_variants = (
+            ({"X-Api-Version": "2"}, "api_v2"),
+            ({"x-version": "2"}, "x_v2"),
+            (None, "v1"),
+        )
+        for legacy_path in legacy_paths:
+            for hdr, suffix in header_variants:
+                try:
+                    payload = ml_api_get(legacy_path, headers=hdr)
+                    name = extract_name(payload)
+                    if name:
+                        # Tenta também descobrir o id se ele vier somente no fallback.
+                        fallback_buyer = payload.get("buyer") if isinstance(payload, dict) and isinstance(payload.get("buyer"), dict) else {}
+                        fallback_info = fallback_buyer.get("billing_info") if isinstance(fallback_buyer.get("billing_info"), dict) else {}
+                        fallback_id = str(fallback_info.get("id") or (payload.get("id") if isinstance(payload, dict) else "") or "").strip()
+                        return {
+                            "name": name,
+                            "billing_info_id": billing_id or fallback_id,
+                            "source": f"legacy_{suffix}",
+                            "errors": errors,
+                        }
+                    errors.append(f"legacy_{suffix} respondeu sem nome fiscal")
+                except Exception as exc:
+                    errors.append(f"legacy_{suffix}: {str(exc)[:400]}")
+
+    return {"name": "", "billing_info_id": billing_id, "source": "", "errors": errors[-8:]}
 
 def _ml_billing_name(order: dict[str, Any]) -> str:
     return str(_ml_billing_details(order).get("name") or "").strip()
@@ -3515,7 +3567,10 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
     billing0_id = (billing0.get("id") if isinstance(billing0, dict) else billing0) or ""
     if not str(billing0_id).strip():
         try:
-            order_v2 = ml_api_get(f"/orders/{quote(order_id)}", headers={"x-version": "2"})
+            try:
+                order_v2 = ml_api_get(f"/orders/{quote(order_id)}", headers={"X-Api-Version": "2"})
+            except Exception:
+                order_v2 = ml_api_get(f"/orders/{quote(order_id)}", headers={"x-version": "2"})
             if isinstance(order_v2, dict):
                 buyer_v2 = order_v2.get("buyer") if isinstance(order_v2.get("buyer"), dict) else {}
                 billing_v2 = buyer_v2.get("billing_info")
