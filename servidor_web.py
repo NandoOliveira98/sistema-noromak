@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "16.2"
+APP_VERSION = "16.3"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2438,7 +2438,7 @@ def ml_store_token(
     if refresh_expected and not refresh_received:
         token_error = (
             "OAuth concluido, mas a resposta de /oauth/token nao trouxe refresh_token. "
-            "Use 'Reautorizar acesso 24h' para recriar o grant e consulte o diagnostico OAuth no painel."
+            "A renovacao automatica depende de refresh_token; consulte o diagnostico OAuth no painel."
         )
 
     connected_at = str(previous["connected_at"] or "") if previous else ""
@@ -2706,12 +2706,12 @@ def ml_exchange_authorization_code(code: str, state: str) -> dict[str, Any]:
         if grant_diag.get("verified") and not grant_diag.get("offline_access"):
             oauth_error = (
                 "Mercado Livre nao enviou refresh_token e o grant atual foi confirmado sem offline_access "
-                f"(scopes: {scopes_label}). Use 'Reautorizar acesso 24h'; se continuar, revise as permissoes da aplicacao no DevCenter."
+                f"(scopes: {scopes_label}). Revise as permissoes/grant da aplicacao no DevCenter antes de realizar uma nova autorizacao."
             )
         elif grant_diag.get("verified"):
             oauth_error = (
                 "O grant possui offline_access, mas /oauth/token nao devolveu refresh_token. "
-                "Use 'Reautorizar acesso 24h' para revogar o grant antigo e autorizar novamente."
+                "Revise o grant da aplicacao antes de realizar uma nova autorizacao manual."
             )
         else:
             oauth_error = (
