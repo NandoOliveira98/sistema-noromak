@@ -1,0 +1,8 @@
+V16.25 - FATURAMENTO MERCADO LIVRE CORRIGIDO
+
+- Vendas válidas = somente orders com status paid.
+- Reembolso parcial fica em filtro separado e não entra no padrão.
+- Faturamento usa order.total_amount oficial.
+- Em pedidos com vários itens, o total oficial é rateado entre as linhas sem duplicar a order.
+- Valor atual da API prevalece sobre snapshots antigos.
+- Tela mostra quantidade de vendas e unidades para comparação direta com o painel do Mercado Livre.

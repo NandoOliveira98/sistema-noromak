@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "16.24"
+APP_VERSION = "16.25"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -6189,7 +6189,7 @@ def _ml_profitability_recent_sales(days: int = 30, limit: int = 2000, date_from:
     lim = max(1, min(int(limit or 2000), 5000))
     status_filter = str(status_filter or "valid").strip().lower()
     status_map = {
-        "valid": ("paid", "partially_refunded"),
+        "valid": ("paid",),
         "paid": ("paid",),
         "partially_refunded": ("partially_refunded",),
         "cancelled": ("cancelled",),
@@ -6233,6 +6233,9 @@ def _ml_profitability_recent_sales(days: int = 30, limit: int = 2000, date_from:
                         "line_fee_api": _ml_order_marketplace_fee(order), "order_summary": order, "status": status})
                 continue
             order_fee = _ml_order_marketplace_fee(order)
+            # Faturamento deve fechar com o total oficial da order. Somar simplesmente
+            # unit_price * quantity pode divergir quando há desconto/promoção.
+            official_order_total = _money_number(order.get("total_amount"))
             line_infos = []
             order_lines_total = 0.0
             for idx, oi in enumerate(items):
@@ -6244,21 +6247,33 @@ def _ml_profitability_recent_sales(days: int = 30, limit: int = 2000, date_from:
                 try: qty = max(1, int(float(oi.get("quantity") or 1)))
                 except Exception: qty = 1
                 unit_price = _money_number(oi.get("unit_price"))
-                line_total = (unit_price * qty) if unit_price is not None else None
-                if line_total is not None: order_lines_total += line_total
-                line_infos.append((idx, oi, item, sku, title, qty, line_total))
-            for idx, oi, item, sku, title, qty, line_total in line_infos:
+                raw_line_total = (unit_price * qty) if unit_price is not None else None
+                if raw_line_total is not None: order_lines_total += raw_line_total
+                line_infos.append((idx, oi, item, sku, title, qty, raw_line_total))
+            for idx, oi, item, sku, title, qty, raw_line_total in line_infos:
                 line_identity = sku or str(item.get("id") or "") + ":" + str(item.get("variation_id") or idx)
                 key = (oid, line_identity)
                 if key in seen: continue
                 seen.add(key)
+                # Distribui o total oficial da order entre as linhas. Assim a soma das
+                # linhas é exatamente order.total_amount e a order nunca é duplicada.
+                if official_order_total is not None:
+                    if len(line_infos) == 1:
+                        line_total = official_order_total
+                    elif raw_line_total is not None and order_lines_total > 0:
+                        line_total = official_order_total * (raw_line_total / order_lines_total)
+                    else:
+                        line_total = official_order_total / max(1, len(line_infos))
+                else:
+                    line_total = raw_line_total
                 item_fee = _ml_item_fee(oi)
                 if item_fee is None and order_fee is not None:
                     if len(line_infos) == 1: item_fee = order_fee
-                    elif line_total is not None and order_lines_total > 0: item_fee = order_fee * (line_total / order_lines_total)
+                    elif raw_line_total is not None and order_lines_total > 0: item_fee = order_fee * (raw_line_total / order_lines_total)
                 out.append({"order_id": oid, "pack_id": pack_id, "sku": sku, "product": title, "client": buyer,
                     "date": str(order.get("date_created") or ""), "shipment_id": shipment_id,
-                    "qty": qty, "sale_amount_api": line_total, "line_fee_api": item_fee, "order_summary": order, "status": status})
+                    "qty": qty, "sale_amount_api": line_total, "line_fee_api": item_fee, "order_summary": order, "status": status,
+                    "order_total_api": official_order_total})
                 if len(out) >= lim:
                     return
 
@@ -6540,7 +6555,7 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
         filt = str(status_filter or "valid").lower()
         st = str(rec.get("status") or "").lower()
         if filt == "all": return True
-        if filt == "valid": return (not st) or st in ("paid", "partially_refunded", "pago", "aprovado")
+        if filt == "valid": return (not st) or st in ("paid", "pago", "aprovado")
         if not st: return False
         aliases = {"cancelled": ("cancelled","canceled","cancelado"), "paid": ("paid","pago","aprovado"), "partially_refunded": ("partially_refunded","reembolso parcial")}
         return st in aliases.get(filt, (filt,))
@@ -6671,7 +6686,9 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
 
         # Sempre podemos usar o valor da linha devolvido pelo próprio /orders/search
         # sem fazer chamadas adicionais.
-        if snap.get("sale_amount") is None and rec.get("sale_amount_api") is not None:
+        # O valor oficial da order atual sempre prevalece sobre snapshots antigos.
+        # Isso corrige caches gravados antes do ajuste de descontos/total_amount.
+        if rec.get("sale_amount_api") is not None:
             snap["sale_amount"] = rec.get("sale_amount_api")
         if snap.get("ml_fee") is None and rec.get("line_fee_api") is not None:
             snap["ml_fee"] = rec.get("line_fee_api")
@@ -6868,9 +6885,9 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
             qty = 1
         unit = _money_number(snap.get("unit_cost"))
         product_cost = unit * qty if unit is not None else None
-        sale = _money_number(snap.get("sale_amount"))
+        sale = _money_number(rec.get("sale_amount_api"))
         if sale is None:
-            sale = _money_number(rec.get("sale_amount_api"))
+            sale = _money_number(snap.get("sale_amount"))
         fee = _money_number(snap.get("ml_fee"))
         shipping = _money_number(snap.get("seller_shipping_cost"))
         other = _money_number(snap.get("other_ml_cost"))
@@ -6942,6 +6959,9 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
         "retry_orders": sorted(retry_order_set),
         "tax_percent": tax_percent,
         "status_filter": str(status_filter or "valid"),
+        "orders_count": len({str(r.get("order_id") or "") for r in rows if str(r.get("order_id") or "")}),
+        "units_count": sum(int(r.get("qty") or 0) for r in rows),
+        "gross_sales": round(sum((_money_number(r.get("sale_amount")) or 0.0) for r in rows), 2),
         "billing_sync": billing_sync_meta,
     }
 
