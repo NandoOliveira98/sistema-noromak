@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "16.10"
+APP_VERSION = "16.11"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -3759,7 +3759,7 @@ def ml_reconcile_manual_orders_once() -> dict[str, int]:
                 "limit": str(ML_CATCHUP_PAGE_SIZE),
                 "offset": str(page * ML_CATCHUP_PAGE_SIZE),
             })
-            result = ml_api_get(f"/orders/search?{query}")
+            result = _ml_profitability_api_get(f"/orders/search?{query}", attempts=3)
             orders = result.get("results") if isinstance(result, dict) else []
             if not orders:
                 break
@@ -5496,7 +5496,7 @@ def _ml_billing_fetch_period(order_ids: list[str], month_key: str, seller_id: st
         if from_id:
             q["from_id"] = from_id
         endpoint = f"/billing/integration/periods/key/{quote(month_key)}/group/ML/details?" + urlencode(q)
-        payload = ml_api_get(endpoint)
+        payload = _ml_profitability_api_get(endpoint, attempts=3)
         parsed = _ml_billing_period_parse(payload, ids, document_type)
         for oid, pr in parsed.items():
             ar = aggregate[oid]
@@ -5992,11 +5992,33 @@ def _ml_billing_v1513_meta(periods: list[str]) -> dict[str, Any]:
 
 
 
+def _ml_profitability_api_get(path_or_url: str, *, headers: dict[str, str] | None = None, attempts: int = 3) -> dict[str, Any] | list[Any]:
+    """GET resiliente usado somente pela rentabilidade ML.
+
+    Repete falhas transitórias/limites e preserva a renovação normal do token
+    feita por ml_api_get. Não transforma erro em custo zero.
+    """
+    last_exc: Exception | None = None
+    for attempt in range(max(1, int(attempts or 1))):
+        try:
+            return ml_api_get(path_or_url, headers=headers)
+        except Exception as exc:
+            last_exc = exc
+            text = str(exc).lower()
+            retryable = any(x in text for x in ("http 429", "http 500", "http 502", "http 503", "http 504", "timeout", "timed out", "falha de conexão", "tempor"))
+            if attempt >= attempts - 1 or not retryable:
+                raise
+            time.sleep(0.7 + attempt * 1.1)
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("Falha ao consultar Mercado Livre")
+
+
 def _ml_seller_shipping_cost(shipment_id: str, seller_id: str = "") -> float | None:
     if not shipment_id:
         return None
     try:
-        data = ml_api_get(f"/shipments/{quote(shipment_id)}/costs")
+        data = _ml_profitability_api_get(f"/shipments/{quote(shipment_id)}/costs", headers={"x-format-new": "true"}, attempts=3)
     except Exception:
         return None
     if not isinstance(data, dict):
@@ -6191,13 +6213,19 @@ def _ml_profitability_local_sales(limit: int = 300) -> list[dict[str, Any]]:
     return list(grouped.values())[:max(1, int(limit))]
 
 
-def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int = 30, date_from: str = "", date_to: str = "", refresh_offset: int = 0, refresh_batch: int = 40) -> dict[str, Any]:
+def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int = 30, date_from: str = "", date_to: str = "", refresh_offset: int = 0, refresh_batch: int = 40, tax_percent: float = 12.0, retry_pending: bool = False) -> dict[str, Any]:
     """Dashboard de lucro ML com vendas buscadas diretamente do marketplace.
 
     O carregamento normal prioriza velocidade: lista as vendas e usa snapshots já
     existentes. O botão Atualizar custos consulta Apollo e endpoints de custo do ML.
     Valores ausentes permanecem nulos; nunca são estimados.
     """
+    try:
+        tax_percent = max(0.0, min(100.0, float(tax_percent or 0.0)))
+    except Exception:
+        tax_percent = 12.0
+    tax_rate = tax_percent / 100.0
+
     api_error = ""
     try:
         source = _ml_profitability_recent_sales(days=days, limit=limit, date_from=date_from, date_to=date_to)
@@ -6250,7 +6278,25 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
     # processa somente uma fatia, evitando requests gigantes e timeout do proxy/nginx.
     refresh_offset = max(0, int(refresh_offset or 0))
     refresh_batch = max(10, min(100, int(refresh_batch or 40)))
-    refresh_records = records[refresh_offset:refresh_offset + refresh_batch] if refresh else []
+    refresh_pool = records
+    if refresh and retry_pending:
+        pending_pool: list[dict[str, Any]] = []
+        for _pr in records:
+            _poid = str(_pr.get("order_id") or "")
+            _psku = str(_pr.get("sku") or "")
+            with DB_LOCK:
+                _prow = DB.execute("SELECT unit_cost,sale_amount,ml_fee,seller_shipping_cost FROM ml_profitability_snapshot WHERE order_id=? AND sku=?", (_poid, _psku)).fetchone()
+            _pd = dict(_prow) if _prow else {}
+            _sale = _money_number(_pd.get("sale_amount"))
+            if _sale is None:
+                _sale = _money_number(_pr.get("sale_amount_api"))
+            _fee = _money_number(_pd.get("ml_fee"))
+            _ship = _money_number(_pd.get("seller_shipping_cost"))
+            _unit = _money_number(_pd.get("unit_cost"))
+            if _sale is None or _unit is None or _fee is None or _fee <= 0 or _ship is None:
+                pending_pool.append(_pr)
+        refresh_pool = pending_pool
+    refresh_records = refresh_pool[refresh_offset:refresh_offset + refresh_batch] if refresh else []
     refresh_keys = {(str(r.get("order_id") or ""), str(r.get("sku") or "")) for r in refresh_records}
 
     billing_map: dict[str, dict[str, Any]] = {}
@@ -6301,7 +6347,7 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
             order = rec.get("order_summary") if isinstance(rec.get("order_summary"), dict) else None
             if order is None:
                 try:
-                    order = order_cache.get(oid) or ml_api_get(f"/orders/{quote(oid)}")
+                    order = order_cache.get(oid) or _ml_profitability_api_get(f"/orders/{quote(oid)}", attempts=3)
                     if isinstance(order, dict):
                         order_cache[oid] = order
                 except Exception:
@@ -6416,7 +6462,8 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
         fee = _money_number(snap.get("ml_fee"))
         shipping = _money_number(snap.get("seller_shipping_cost"))
         other = _money_number(snap.get("other_ml_cost"))
-        known_costs = sum(v for v in (product_cost, fee, shipping, other) if v is not None)
+        tax_amount = (sale * tax_rate) if sale is not None else None
+        known_costs = sum(v for v in (product_cost, fee, shipping, other, tax_amount) if v is not None)
         billing = billing_map.get(str(oid)) or {}
         billing_status = str(billing.get("status") or "")
         billing_diag = str(billing.get("diagnostic") or "")
@@ -6439,6 +6486,8 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
             "ml_fee": fee,
             "shipping_cost": shipping,
             "other_ml_cost": other,
+            "tax_percent": tax_percent,
+            "tax_amount": tax_amount,
             "profit": profit,
             "margin": margin,
             "cost_complete": complete,
@@ -6460,14 +6509,16 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
         "refresh_offset": refresh_offset,
         "refresh_batch": refresh_batch,
         "refresh_processed": len(refresh_records) if refresh else 0,
-        "refresh_total": len(records),
-        "refresh_done": (not refresh) or (refresh_offset + len(refresh_records) >= len(records)),
+        "refresh_total": len(refresh_pool) if refresh else len(records),
+        "refresh_done": (not refresh) or (refresh_offset + len(refresh_records) >= len(refresh_pool)),
         "refresh_next_offset": (refresh_offset + len(refresh_records)) if refresh else 0,
+        "retry_pending": bool(retry_pending),
+        "tax_percent": tax_percent,
         "billing_sync": billing_sync_meta,
     }
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/16.10"
+    server_version = "NoromakExpedicao/16.11"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
@@ -6687,7 +6738,12 @@ class AppHandler(BaseHTTPRequestHandler):
                 except Exception:
                     refresh_batch = 40
                 try:
-                    self.send_json(ml_profitability_payload(refresh=refresh, limit=limit, days=days, date_from=date_from, date_to=date_to, refresh_offset=refresh_offset, refresh_batch=refresh_batch))
+                    tax_percent = max(0.0, min(100.0, float((query.get("tax_percent") or ["12"])[0] or 12)))
+                except Exception:
+                    tax_percent = 12.0
+                retry_pending = str((query.get("retry_pending") or [""])[0]).lower() in ("1", "true", "sim")
+                try:
+                    self.send_json(ml_profitability_payload(refresh=refresh, limit=limit, days=days, date_from=date_from, date_to=date_to, refresh_offset=refresh_offset, refresh_batch=refresh_batch, tax_percent=tax_percent, retry_pending=retry_pending))
                 except Exception as exc:
                     self.send_json({"ok": False, "error": str(exc)}, 500)
             return

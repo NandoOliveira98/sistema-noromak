@@ -1,0 +1,10 @@
+V16.11 - RENTABILIDADE ML
+
+- Imposto configurável na tela (padrão 12%).
+- Imposto calculado sobre o valor vendido e descontado do lucro/margem.
+- Nova coluna e card de Impostos.
+- Atualização de custos em lotes menores.
+- Segunda rodada automática somente para custos ainda pendentes.
+- Retry em falhas transitórias da API do Mercado Livre.
+- Frete usa /shipments/{id}/costs com x-format-new:true.
+- Dados já conciliados permanecem salvos; ausência de custo não vira zero estimado.
