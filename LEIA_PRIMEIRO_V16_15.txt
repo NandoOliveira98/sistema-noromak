@@ -1,0 +1,6 @@
+V16.15 - CORRECAO HTTP 504 RENTABILIDADE ML
+
+- Buscar periodo consulta somente Orders API e cache/banco local.
+- Remove consulta fiscal/billing-info por pedido durante a listagem.
+- Billing, tarifa, frete e demais custos continuam no botao Atualizar custos, em lotes.
+- Mantem filtros por data, status e imposto de 12%.

@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "16.14"
+APP_VERSION = "16.15"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -6052,6 +6052,22 @@ def _ml_seller_shipping_cost(shipment_id: str, seller_id: str = "") -> float | N
     return None
 
 
+def _ml_profitability_buyer_name_fast(order: dict[str, Any]) -> str:
+    """Nome leve para listagem de rentabilidade, sem chamadas extras à API.
+
+    Buscar período deve consultar apenas /orders/search. Dados fiscais completos
+    continuam sendo tratados pelos fluxos próprios do sistema e não bloqueiam
+    a abertura da Rentabilidade.
+    """
+    buyer = order.get("buyer") if isinstance(order.get("buyer"), dict) else {}
+    first = str(buyer.get("first_name") or "").strip()
+    last = str(buyer.get("last_name") or "").strip()
+    name = " ".join(x for x in (first, last) if x).strip()
+    if name:
+        return name
+    return str(buyer.get("nickname") or buyer.get("id") or "").strip()
+
+
 def _ml_profitability_recent_sales(days: int = 30, limit: int = 2000, date_from: str = "", date_to: str = "", status_filter: str = "valid") -> list[dict[str, Any]]:
     """Busca vendas do ML por intervalo explícito de datas, com paginação completa.
 
@@ -6131,7 +6147,9 @@ def _ml_profitability_recent_sales(days: int = 30, limit: int = 2000, date_from:
             oid = str(order.get("id") or "").strip()
             if not oid:
                 continue
-            buyer = _ml_billing_name(order)
+            # V16.15: nunca consultar billing-info por pedido durante Busca período.
+            # Isso causava HTTP 504 em períodos com muitas vendas.
+            buyer = _ml_profitability_buyer_name_fast(order)
             shipment = order.get("shipping") if isinstance(order.get("shipping"), dict) else {}
             shipment_id = str(shipment.get("id") or "").strip()
             pack_id = str(order.get("pack_id") or "").strip()
