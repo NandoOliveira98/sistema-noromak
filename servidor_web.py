@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "16.1"
+APP_VERSION = "16.2"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2255,6 +2255,93 @@ def ml_integration_row() -> sqlite3.Row | None:
         return DB.execute("SELECT * FROM ml_integration WHERE id=1").fetchone()
 
 
+def ml_latest_oauth_diagnostic() -> dict[str, Any]:
+    """Retorna somente metadados seguros do ultimo OAuth; nunca tokens/segredos."""
+    with DB_LOCK:
+        rows = DB.execute(
+            """SELECT created_at,topic,result,detail FROM ml_event_log
+               WHERE topic IN ('oauth_token','oauth_grant')
+               ORDER BY id DESC LIMIT 8"""
+        ).fetchall()
+    token_diag: dict[str, Any] = {}
+    grant_diag: dict[str, Any] = {}
+    for row in rows:
+        try:
+            detail = json.loads(str(row['detail'] or '{}'))
+            if not isinstance(detail, dict):
+                detail = {}
+        except Exception:
+            detail = {}
+        payload = {
+            'at': str(row['created_at'] or ''),
+            'result': str(row['result'] or ''),
+            **detail,
+        }
+        if row['topic'] == 'oauth_token' and not token_diag:
+            token_diag = payload
+        elif row['topic'] == 'oauth_grant' and not grant_diag:
+            grant_diag = payload
+    return {'token': token_diag, 'grant': grant_diag}
+
+
+def ml_fetch_grant_diagnostic(access_token: str, seller_id: str) -> dict[str, Any]:
+    """Confere no proprio Mercado Livre quais scopes o grant atual possui."""
+    if not access_token or not seller_id or not ML_CLIENT_ID:
+        return {'verified': False, 'scopes': [], 'offline_access': False, 'error': 'Dados insuficientes para consultar o grant.'}
+    try:
+        payload = ml_http_json(
+            'GET',
+            f"{ML_API_BASE}/applications/{quote(str(ML_CLIENT_ID), safe='')}/grants",
+            token=access_token,
+        )
+        grants = payload.get('grants') if isinstance(payload, dict) else []
+        if not isinstance(grants, list):
+            grants = []
+        target = None
+        for grant in grants:
+            if not isinstance(grant, dict):
+                continue
+            if str(grant.get('user_id') or '') == str(seller_id):
+                target = grant
+                break
+        if target is None:
+            return {'verified': True, 'found': False, 'scopes': [], 'offline_access': False, 'error': 'Grant da conta nao encontrado para esta aplicacao.'}
+        scopes_raw = target.get('scopes') or []
+        if isinstance(scopes_raw, str):
+            scopes = [x for x in re.split(r'[\\s,]+', scopes_raw) if x]
+        elif isinstance(scopes_raw, list):
+            scopes = [str(x).strip() for x in scopes_raw if str(x).strip()]
+        else:
+            scopes = []
+        scope_set = {x.lower() for x in scopes}
+        return {
+            'verified': True,
+            'found': True,
+            'scopes': scopes,
+            'offline_access': 'offline_access' in scope_set,
+            'date_created': str(target.get('date_created') or ''),
+            'error': '',
+        }
+    except Exception as exc:
+        return {'verified': False, 'scopes': [], 'offline_access': False, 'error': str(exc)[:500]}
+
+
+def ml_log_grant_diagnostic(access_token: str, seller_id: str) -> dict[str, Any]:
+    diag = ml_fetch_grant_diagnostic(access_token, seller_id)
+    try:
+        ml_log_event(
+            'oauth_grant',
+            f"/applications/{ML_CLIENT_ID}/grants",
+            seller_id,
+            ML_CLIENT_ID,
+            'GRANT_OK' if diag.get('verified') and diag.get('found') else 'GRANT_NAO_CONFIRMADO',
+            json_dumps(diag),
+        )
+    except Exception:
+        pass
+    return diag
+
+
 def ml_status_payload() -> dict[str, Any]:
     row = ml_integration_row()
     has_access = bool(row and row["access_token"] and row["seller_id"])
@@ -2277,6 +2364,7 @@ def ml_status_payload() -> dict[str, Any]:
         "offline_access_granted": offline_access,
         "refresh_token_available": has_refresh,
         "oauth_scope_requested": ML_OAUTH_SCOPE,
+        "oauth_diagnostic": ml_latest_oauth_diagnostic(),
         "expires_at_epoch": int(row["expires_at_epoch"] if row else 0),
         "connected_at": str(row["connected_at"] if row else ""),
         "updated_at": str(row["updated_at"] if row else ""),
@@ -2348,16 +2436,10 @@ def ml_store_token(
     scope_set = {x.strip().lower() for x in re.split(r"[\s,]+", scope) if x.strip()}
     token_error = ""
     if refresh_expected and not refresh_received:
-        if "offline_access" not in scope_set:
-            token_error = (
-                "Mercado Livre retornou access_token sem refresh_token porque o grant não possui "
-                "offline_access. No DevCenter, habilite a aplicação como acesso offline e reconecte."
-            )
-        else:
-            token_error = (
-                "Mercado Livre retornou access_token com offline_access, mas sem refresh_token. "
-                "Reconecte a aplicação; se persistir, revise as permissões/grant no DevCenter."
-            )
+        token_error = (
+            "OAuth concluido, mas a resposta de /oauth/token nao trouxe refresh_token. "
+            "Use 'Reautorizar acesso 24h' para recriar o grant e consulte o diagnostico OAuth no painel."
+        )
 
     connected_at = str(previous["connected_at"] or "") if previous else ""
     if not connected_at:
@@ -2614,9 +2696,72 @@ def ml_exchange_authorization_code(code: str, state: str) -> dict[str, Any]:
                 },
                 nickname=nickname,
             )
+    current_after_oauth = ml_integration_row()
+    grant_diag = ml_log_grant_diagnostic(
+        str(current_after_oauth["access_token"] or "") if current_after_oauth else "",
+        str(current_after_oauth["seller_id"] or "") if current_after_oauth else "",
+    )
+    if current_after_oauth and not str(current_after_oauth["refresh_token"] or "").strip():
+        scopes_label = ", ".join(grant_diag.get("scopes") or []) or "nao confirmado"
+        if grant_diag.get("verified") and not grant_diag.get("offline_access"):
+            oauth_error = (
+                "Mercado Livre nao enviou refresh_token e o grant atual foi confirmado sem offline_access "
+                f"(scopes: {scopes_label}). Use 'Reautorizar acesso 24h'; se continuar, revise as permissoes da aplicacao no DevCenter."
+            )
+        elif grant_diag.get("verified"):
+            oauth_error = (
+                "O grant possui offline_access, mas /oauth/token nao devolveu refresh_token. "
+                "Use 'Reautorizar acesso 24h' para revogar o grant antigo e autorizar novamente."
+            )
+        else:
+            oauth_error = (
+                "Mercado Livre nao enviou refresh_token. Nao foi possivel confirmar o grant automaticamente: "
+                + str(grant_diag.get("error") or "erro desconhecido")
+            )
+        with DB_LOCK:
+            DB.execute("UPDATE ml_integration SET last_error=?, updated_at=? WHERE id=1", (oauth_error, now_iso()))
+            DB.commit()
     status = ml_status_payload()
     status["recovery_since"] = recovery_since
     return status
+
+
+def ml_prepare_clean_reauthorization() -> dict[str, Any]:
+    """Revoga o grant atual (quando possivel) e inicia um OAuth totalmente novo."""
+    row = ml_integration_row()
+    revoked = False
+    revoke_error = ""
+    seller_id = str(row['seller_id'] or '') if row else ''
+    access_token = str(row['access_token'] or '') if row else ''
+    if seller_id and access_token and ML_CLIENT_ID:
+        try:
+            ml_http_json(
+                'DELETE',
+                f"{ML_API_BASE}/users/{quote(seller_id, safe='')}/applications/{quote(str(ML_CLIENT_ID), safe='')}",
+                token=access_token,
+            )
+            revoked = True
+        except Exception as exc:
+            # Mesmo se a revogacao ja tiver ocorrido/expirado, limpamos localmente e permitimos novo OAuth.
+            revoke_error = str(exc)[:500]
+    with DB_LOCK:
+        DB.execute('DELETE FROM ml_integration WHERE id=1')
+        DB.execute('DELETE FROM ml_oauth_state')
+        DB.commit()
+    try:
+        ml_log_event(
+            'oauth_reauthorize', '/grant/revoke', seller_id, ML_CLIENT_ID,
+            'REVOGADO' if revoked else 'LIMPEZA_LOCAL',
+            json_dumps({'revoked': revoked, 'revoke_error': revoke_error}),
+        )
+    except Exception:
+        pass
+    return {
+        'ok': True,
+        'revoked': revoked,
+        'revoke_error': revoke_error,
+        'authorize_url': ml_oauth_authorization_url(),
+    }
 
 
 def _ml_parse_iso_date(value: Any) -> str:
@@ -6133,6 +6278,16 @@ class AppHandler(BaseHTTPRequestHandler):
                     self.send_json({"ok": True, "detail": detail})
                 except Exception as exc:
                     self.send_json({"error": str(exc)}, 502)
+            return
+        if path == "/api/integracoes/mercadolivre/reautorizar":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                try:
+                    result = ml_prepare_clean_reauthorization()
+                    audit(ctx["username"], "ml.reauthorize", "Mercado Livre / grant limpo")
+                    self.send_json(result)
+                except Exception as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 502)
             return
         if path == "/api/integracoes/mercadolivre/disconnect":
             ctx = self.auth(admin_only=True)

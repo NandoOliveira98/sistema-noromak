@@ -1,0 +1,14 @@
+NOROMAK — V16.2 — Diagnóstico OAuth e reautorização 24h Mercado Livre
+
+- O painel não presume mais que a ausência do refresh_token é apenas erro do sistema.
+- Registra metadados seguros da resposta /oauth/token (sem tokens ou segredos).
+- Confere o grant real em /applications/{APP_ID}/grants e mostra os scopes confirmados.
+- Novo botão "Reautorizar acesso 24h": revoga o grant antigo e inicia OAuth do zero.
+- Mantém o worker server-side 24/7 da V16.
+- Nenhum pedido já importado é apagado ao reautorizar.
+
+Após publicar:
+1. Abra Admin > Integrações > Mercado Livre.
+2. Se Refresh token estiver ausente, clique "Reautorizar acesso 24h".
+3. Conclua a autorização usando a conta principal/administradora do vendedor.
+4. Volte ao card e confirme: Refresh token = Disponível e Resposta /oauth/token = access + refresh recebidos.

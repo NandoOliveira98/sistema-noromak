@@ -1033,7 +1033,9 @@ body{background:var(--v15-bg)!important}
             <b>Última sincronização</b><span id="mlIntegracaoSync">—</span>
             <b>Worker 24/7</b><span id="mlIntegracaoWorker">—</span>
             <b>Refresh token</b><span id="mlIntegracaoRefresh">—</span>
-            <b>Permissão offline</b><span id="mlIntegracaoOffline">—</span>
+            <b>Grant Mercado Livre</b><span id="mlIntegracaoOffline">—</span>
+            <b>Último OAuth</b><span id="mlIntegracaoOAuth">—</span>
+            <b>Resposta /oauth/token</b><span id="mlIntegracaoOAuthResp">—</span>
             <b>Último poll servidor</b><span id="mlIntegracaoPoll">—</span>
             <b>Última recuperação</b><span id="mlIntegracaoCatchup">—</span>
             <b>Callback OAuth</b><span id="mlIntegracaoCallback">—</span>
@@ -1041,6 +1043,7 @@ body{background:var(--v15-bg)!important}
           </div>
           <div class="integracao-acoes">
             <button type="button" id="btnMlConectar" class="btn-primario" onclick="conectarMercadoLivreAdmin()">Conectar Mercado Livre</button>
+            <button type="button" id="btnMlReautorizar" class="btn-secundario" onclick="reautorizarMercadoLivreAdmin()" style="display:none">🔐 Reautorizar acesso 24h</button>
             <button type="button" id="btnMlSincronizar" class="btn-sucesso" onclick="sincronizarMercadoLivreAdmin()" disabled>↻ Sincronizar agora</button>
             <button type="button" id="btnMlVerificarEtiquetas" class="btn-secundario" onclick="verificarEtiquetasMercadoLivreAdmin()" disabled>🏷 Verificar etiquetas disponíveis e vincular</button>
             <button type="button" id="btnMlDesconectar" class="btn-perigo" onclick="desconectarMercadoLivreAdmin()" disabled>Desconectar</button>
@@ -6201,13 +6204,25 @@ async function carregarIntegracaoMercadoLivreAdmin(){
     const worker=ml.worker||{};
     const workerEl=document.getElementById("mlIntegracaoWorker");if(workerEl)workerEl.textContent=worker.server_worker?"🟢 Ativo no servidor":"🔴 Inativo";
     const refreshEl=document.getElementById("mlIntegracaoRefresh");if(refreshEl)refreshEl.textContent=worker.has_refresh_token?"🟢 Disponível":"🔴 Ausente — reconecte";
-    const offlineEl=document.getElementById("mlIntegracaoOffline");if(offlineEl)offlineEl.textContent=ml.offline_access_granted?"🟢 offline_access concedido":"🔴 offline_access ausente";
+    const oauthDiag=ml.oauth_diagnostic||{}, tokenDiag=oauthDiag.token||{}, grantDiag=oauthDiag.grant||{};
+    const offlineEl=document.getElementById("mlIntegracaoOffline");
+    if(offlineEl){
+      if(grantDiag.verified===true&&grantDiag.found===true)offlineEl.textContent=grantDiag.offline_access?"🟢 offline_access confirmado":"🔴 sem offline_access";
+      else if(grantDiag.error)offlineEl.textContent="🟡 Não confirmado";
+      else offlineEl.textContent=ml.offline_access_granted?"🟢 offline_access no token":"🟡 Aguardando diagnóstico";
+    }
+    const oauthAt=document.getElementById("mlIntegracaoOAuth");if(oauthAt)oauthAt.textContent=tokenDiag.at?mlDataHora(tokenDiag.at):"—";
+    const oauthResp=document.getElementById("mlIntegracaoOAuthResp");if(oauthResp){
+      if(tokenDiag.at)oauthResp.textContent=tokenDiag.refresh_token_received?"🟢 access + refresh recebidos":"🔴 access recebido; refresh ausente";
+      else oauthResp.textContent="—";
+    }
     const pollEl=document.getElementById("mlIntegracaoPoll");if(pollEl)pollEl.textContent=worker.last_order_poll_at?mlDataHora(worker.last_order_poll_at):"Aguardando primeiro ciclo";
     const catchEl=document.getElementById("mlIntegracaoCatchup");if(catchEl)catchEl.textContent=worker.last_catchup_at?mlDataHora(worker.last_catchup_at):"Aguardando primeira recuperação";
     document.getElementById("mlIntegracaoCallback").textContent=ml.redirect_uri||"—";
     document.getElementById("mlIntegracaoNotificacoes").textContent=ml.notification_url||"—";
-    const conectar=document.getElementById("btnMlConectar"),sync=document.getElementById("btnMlSincronizar"),verificar=document.getElementById("btnMlVerificarEtiquetas"),desconectar=document.getElementById("btnMlDesconectar");
+    const conectar=document.getElementById("btnMlConectar"),reauth=document.getElementById("btnMlReautorizar"),sync=document.getElementById("btnMlSincronizar"),verificar=document.getElementById("btnMlVerificarEtiquetas"),desconectar=document.getElementById("btnMlDesconectar");
     if(conectar){conectar.disabled=!configurado;conectar.textContent=reconectar?"Renovar conexão Mercado Livre":conectado?"Reconectar Mercado Livre":"Conectar Mercado Livre";}
+    if(reauth)reauth.style.display=(conectado&&!worker.has_refresh_token)?"inline-flex":"none";
     if(sync)sync.disabled=!conectado;
     if(verificar)verificar.disabled=!conectado;
     if(desconectar)desconectar.disabled=!(conectado||reconectar);
@@ -6215,8 +6230,10 @@ async function carregarIntegracaoMercadoLivreAdmin(){
     if(msg){
       if(!configurado)msg.innerHTML='Configure <b>ML_CLIENT_ID</b> e <b>ML_CLIENT_SECRET</b> em <code>/home/expedicao/.env</code> e reinicie o serviço.';
       else if(reconectar){
-        if(!ml.offline_access_granted)msg.innerHTML='⚠ <b>O grant do Mercado Livre não possui offline_access.</b> No DevCenter do Mercado Livre, habilite acesso offline para a aplicação e depois clique em “Renovar conexão Mercado Livre”. Sem essa permissão a API não entrega refresh_token.';
-        else msg.innerHTML='⚠ <b>offline_access foi concedido, mas o refresh_token não foi recebido.</b> Clique em “Renovar conexão Mercado Livre”. A V16.1 registra o retorno do OAuth no log sem expor o token e salva o novo refresh_token de forma persistente.';
+        const scopes=Array.isArray(grantDiag.scopes)?grantDiag.scopes.join(", "):"";
+        if(grantDiag.verified===true&&grantDiag.found===true&&!grantDiag.offline_access)msg.innerHTML='⚠ <b>Diagnóstico confirmado pelo Mercado Livre:</b> o grant atual não possui <code>offline_access</code>'+(scopes?' (scopes: '+mlHtmlSeguro(scopes)+')':'')+'. Use <b>Reautorizar acesso 24h</b> para revogar o grant antigo e criar uma autorização nova.';
+        else if(grantDiag.verified===true&&grantDiag.offline_access)msg.innerHTML='⚠ O grant possui <code>offline_access</code>, mas a última resposta de <code>/oauth/token</code> não trouxe <code>refresh_token</code>. Use <b>Reautorizar acesso 24h</b> para recriar o grant do zero.';
+        else msg.innerHTML='⚠ O Mercado Livre entregou <b>access_token</b>, mas não entregou <b>refresh_token</b>. A V16.2 registra a resposta segura do OAuth e oferece <b>Reautorizar acesso 24h</b> para limpar o grant anterior e autorizar novamente.';
       }
       else if(worker.last_error)msg.innerHTML='⚠ Worker 24/7 ativo, mas o último ciclo registrou: <b>'+mlHtmlSeguro(worker.last_error)+'</b>';
       else if(ml.last_error)msg.innerHTML='⚠ Último erro: <b>'+mlHtmlSeguro(ml.last_error)+'</b>';
@@ -6249,6 +6266,15 @@ async function renovarTokenZebraAdmin(){
 }
 function conectarMercadoLivreAdmin(){
   window.location.href="/expedicao/api/integracoes/mercadolivre/connect";
+}
+async function reautorizarMercadoLivreAdmin(){
+  if(!confirm("Isso revoga a autorização atual do Sistema Noromak no Mercado Livre e abre uma autorização nova. Os pedidos já importados não serão apagados. Continuar?"))return;
+  const btn=document.getElementById("btnMlReautorizar");if(btn){btn.disabled=true;btn.textContent="Preparando nova autorização...";}
+  try{
+    const d=await mlApiAdmin("/expedicao/api/integracoes/mercadolivre/reautorizar",{method:"POST",body:"{}"});
+    if(!d.authorize_url)throw new Error("URL de autorização não recebida.");
+    window.location.href=d.authorize_url;
+  }catch(e){alert("Erro ao reautorizar Mercado Livre: "+e.message);if(btn){btn.disabled=false;btn.textContent="🔐 Reautorizar acesso 24h";}}
 }
 async function sincronizarMercadoLivreAdmin(){
   const btn=document.getElementById("btnMlSincronizar");if(btn){btn.disabled=true;btn.textContent="Sincronizando...";}
