@@ -1,0 +1,8 @@
+V16.12 - RENTABILIDADE ML: KITS
+
+- Reagrupa componentes de kit pela VendaMercadoLivre + SkuKitOrigem.
+- Um kit aparece como uma unica venda na Rentabilidade.
+- Custo do kit = soma(custo Apollo do componente x quantidade por kit) x quantidade de kits vendidos.
+- Valor vendido, tarifa ML, frete e imposto sao contabilizados uma unica vez.
+- Evita repetir order.total_amount em cada componente.
+- Mantem pedidos avulsos sem alteracao.

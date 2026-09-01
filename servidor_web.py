@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "16.11"
+APP_VERSION = "16.12"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -6170,6 +6170,12 @@ def _ml_profitability_recent_sales(days: int = 30, limit: int = 2000, date_from:
 
 
 def _ml_profitability_local_sales(limit: int = 300) -> list[dict[str, Any]]:
+    """Monta as vendas locais para a rentabilidade, preservando kits como uma venda única.
+
+    Na conferência, um SKU-kit do Mercado Livre é expandido em componentes para separação.
+    Para rentabilidade isso não pode virar várias vendas: usamos SkuKitOrigem para reagrupar
+    os componentes e somar seus custos Apollo, enquanto venda/tarifa/frete ficam uma vez só.
+    """
     source_rows: list[dict[str, Any]] = []
     raw, _, _ = get_storage("conf_pedidos")
     source_rows.extend(_rows_from_storage_value(raw))
@@ -6184,32 +6190,71 @@ def _ml_profitability_local_sales(limit: int = 300) -> list[dict[str, Any]]:
             continue
         rows = payload if isinstance(payload, list) else [payload]
         source_rows.extend([r for r in rows if isinstance(r, dict)])
+
     grouped: dict[tuple[str, str], dict[str, Any]] = {}
+    seen_component_uid: set[str] = set()
     for r in source_rows:
         if str(r.get("Marketplace") or "").upper() != "MERCADO LIVRE" and not r.get("VendaMercadoLivre"):
             continue
         oid = str(r.get("VendaMercadoLivre") or "").strip()
-        sku = str(r.get("SKU") or "").strip()
         if not oid:
             continue
-        key = (oid, sku)
+        component_sku = str(r.get("SKU") or "").strip()
+        is_kit = str(r.get("Kit") or "").strip().upper() == "SIM" and bool(str(r.get("SkuKitOrigem") or "").strip())
+        kit_sku = str(r.get("SkuKitOrigem") or "").strip() if is_kit else ""
+        logical_sku = kit_sku or component_sku
+        key = (oid, logical_sku)
         if key not in grouped:
             grouped[key] = {
                 "order_id": oid,
                 "pack_id": str(r.get("PackIdMercadoLivre") or r.get("PackId") or ""),
-                "sku": sku,
-                "product": str(r.get("Descrição") or ""),
+                "sku": logical_sku,
+                "product": str((r.get("Nome do Kit") if is_kit else r.get("Descrição")) or r.get("Descrição") or logical_sku),
                 "client": str(r.get("Cliente") or ""),
                 "date": str(r.get("Data do Pedido") or ""),
                 "shipment_id": str(r.get("ShipmentIdMercadoLivre") or ""),
                 "qty": 0,
                 "sale_amount_api": None,
                 "order_summary": None,
+                "is_kit": bool(is_kit),
+                "kit_sku": kit_sku,
+                "kit_name": str(r.get("Nome do Kit") or "") if is_kit else "",
+                "kit_components": [],
             }
-        try:
-            grouped[key]["qty"] += max(1, int(float(r.get("Quantidade") or 1)))
-        except Exception:
-            grouped[key]["qty"] += 1
+        g = grouped[key]
+        if is_kit:
+            g["is_kit"] = True
+            if str(r.get("Nome do Kit") or "").strip():
+                g["kit_name"] = str(r.get("Nome do Kit") or "").strip()
+                g["product"] = g["kit_name"]
+            try:
+                kits_sold = max(1, int(float(r.get("Quantidade de Kits") or 1)))
+            except Exception:
+                kits_sold = 1
+            # Todos os componentes do mesmo kit carregam Quantidade de Kits; não somar.
+            g["qty"] = max(int(g.get("qty") or 0), kits_sold)
+            try:
+                component_total_qty = max(1, int(float(r.get("Quantidade") or 1)))
+            except Exception:
+                component_total_qty = 1
+            try:
+                qty_per_kit = max(1, int(float(r.get("Quantidade por Kit") or 0)))
+            except Exception:
+                qty_per_kit = max(1, round(component_total_qty / max(1, kits_sold)))
+            uid = f"{oid}|{logical_sku}|{normalize(component_sku)}|{qty_per_kit}"
+            if uid not in seen_component_uid:
+                seen_component_uid.add(uid)
+                g["kit_components"].append({
+                    "sku": component_sku,
+                    "qty_per_kit": qty_per_kit,
+                    "total_qty": component_total_qty,
+                    "product": str(r.get("Descrição") or ""),
+                })
+        else:
+            try:
+                g["qty"] += max(1, int(float(r.get("Quantidade") or 1)))
+            except Exception:
+                g["qty"] += 1
     return list(grouped.values())[:max(1, int(limit))]
 
 
@@ -6256,6 +6301,15 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
                 dst["sale_amount_api"] = rec.get("sale_amount_api")
             if not dst.get("order_summary") and rec.get("order_summary"):
                 dst["order_summary"] = rec.get("order_summary")
+            # Metadados locais do kit complementam a linha oficial do /orders/search.
+            if rec.get("is_kit"):
+                dst["is_kit"] = True
+                dst["kit_sku"] = rec.get("kit_sku") or dst.get("kit_sku") or dst.get("sku")
+                dst["kit_name"] = rec.get("kit_name") or dst.get("kit_name") or dst.get("product")
+                if rec.get("kit_components"):
+                    dst["kit_components"] = rec.get("kit_components")
+                if rec.get("qty"):
+                    dst["qty"] = rec.get("qty")
 
     records = list(by_key.values())
     records.sort(key=lambda r: str(r.get("date") or ""), reverse=True)
@@ -6263,6 +6317,7 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
 
     rows: list[dict[str, Any]] = []
     order_cache: dict[str, dict[str, Any]] = {}
+    apollo_cost_cache: dict[str, float | None] = {}
     shipping_total_cache: dict[str, float | None] = {}
     shipment_sale_totals: dict[str, float] = {}
     shipment_line_counts: dict[str, int] = {}
@@ -6355,10 +6410,41 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
 
             unit_cost = _money_number(snap.get("unit_cost"))
             cost_source = str(snap.get("cost_source") or "")
-            if unit_cost is None and sku:
+            kit_cost_missing: list[str] = []
+            if rec.get("is_kit") and rec.get("kit_components"):
+                kit_unit_total = 0.0
+                kit_ok = True
+                for comp in rec.get("kit_components") or []:
+                    csku = str(comp.get("sku") or "").strip()
+                    if not csku:
+                        continue
+                    cache_key = normalize(csku)
+                    if cache_key not in apollo_cost_cache:
+                        try:
+                            cc = crm_cost_lookup(csku, "rentabilidade-ml-kit")
+                            apollo_cost_cache[cache_key] = _money_number(cc.get("custo_medio"))
+                        except Exception:
+                            apollo_cost_cache[cache_key] = None
+                    cunit = apollo_cost_cache.get(cache_key)
+                    if cunit is None:
+                        kit_ok = False
+                        kit_cost_missing.append(csku)
+                        continue
+                    try:
+                        per_kit = max(1, int(float(comp.get("qty_per_kit") or 1)))
+                    except Exception:
+                        per_kit = 1
+                    kit_unit_total += cunit * per_kit
+                if kit_ok and kit_unit_total > 0:
+                    unit_cost = round(kit_unit_total, 4)
+                    cost_source = "Apollo · componentes do kit"
+            elif unit_cost is None and sku:
                 try:
-                    c = crm_cost_lookup(sku, "rentabilidade-ml")
-                    unit_cost = _money_number(c.get("custo_medio"))
+                    cache_key = normalize(sku)
+                    if cache_key not in apollo_cost_cache:
+                        c = crm_cost_lookup(sku, "rentabilidade-ml")
+                        apollo_cost_cache[cache_key] = _money_number(c.get("custo_medio"))
+                    unit_cost = apollo_cost_cache.get(cache_key)
                     cost_source = "Apollo" if unit_cost is not None else cost_source
                 except Exception:
                     pass
@@ -6377,17 +6463,28 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
             # antigos que podiam repetir o custo total em cada item da mesma venda.
             ship_cost = None
             if isinstance(order, dict):
-                if sale_amount is None:
-                    sale_amount = _money_number(order.get("total_amount"))
-                # Recalcula a tarifa da linha usando o detalhe oficial da order.
+                # Recalcula valor e tarifa da linha usando o item oficial da order.
+                # Para kit expandido, sku é SkuKitOrigem e volta a casar com o SKU vendido no ML.
                 detailed_items = order.get("order_items") if isinstance(order.get("order_items"), list) else []
                 matching = []
                 for doi in detailed_items:
                     if not isinstance(doi, dict):
                         continue
                     dsku = str(_ml_order_item_sku(doi) or "").strip()
-                    if sku and dsku == sku:
+                    if sku and normalize(dsku) == normalize(sku):
                         matching.append(doi)
+                if sale_amount is None and len(matching) == 1:
+                    _up = _money_number(matching[0].get("unit_price"))
+                    try:
+                        _mq = max(1, int(float(matching[0].get("quantity") or 1)))
+                    except Exception:
+                        _mq = 1
+                    if _up is not None:
+                        sale_amount = _up * _mq
+                # Só usa total da order quando ela realmente possui uma única linha;
+                # evita repetir o faturamento inteiro em cada item de venda múltipla.
+                if sale_amount is None and len(detailed_items) <= 1:
+                    sale_amount = _money_number(order.get("total_amount"))
                 if billing_fee is None and len(matching) == 1:
                     detailed_fee = _ml_item_fee(matching[0])
                     if detailed_fee is not None:
@@ -6495,6 +6592,11 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
             "billing_status": billing_status,
             "billing_diagnostic": billing_diag,
             "fee_source": (str(billing.get("source") or "") if _money_number(billing.get("sale_fee")) is not None and billing.get("source") else ("Billing período ML" if _money_number(billing.get("sale_fee")) is not None else ("Orders ML" if fee is not None and fee > 0 else "Pendente de conciliação"))),
+            "is_kit": bool(rec.get("is_kit")),
+            "kit_sku": str(rec.get("kit_sku") or ""),
+            "kit_name": str(rec.get("kit_name") or ""),
+            "kit_components": rec.get("kit_components") if isinstance(rec.get("kit_components"), list) else [],
+            "cost_source": str(snap.get("cost_source") or ""),
         })
 
     return {
@@ -6518,7 +6620,7 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
     }
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/16.11"
+    server_version = "NoromakExpedicao/16.12"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
