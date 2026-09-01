@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "16.0"
+APP_VERSION = "16.1"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -79,6 +79,7 @@ ML_NOTIFICATION_URL = os.getenv(
 ).strip()
 ML_AUTH_URL = "https://auth.mercadolivre.com.br/authorization"
 ML_API_BASE = "https://api.mercadolibre.com"
+ML_OAUTH_SCOPE = os.getenv("ML_OAUTH_SCOPE", "offline_access read write").strip()
 ML_HTTP_TIMEOUT = int(os.getenv("ML_HTTP_TIMEOUT", "20"))
 ML_MANUAL_SYNC_LIMIT = max(1, min(50, int(os.getenv("ML_MANUAL_SYNC_LIMIT", "20"))))
 ML_PENDING_WATCH_INTERVAL = max(10, min(120, int(os.getenv("ML_PENDING_WATCH_INTERVAL", "15"))))
@@ -2258,6 +2259,9 @@ def ml_status_payload() -> dict[str, Any]:
     row = ml_integration_row()
     has_access = bool(row and row["access_token"] and row["seller_id"])
     has_refresh = bool(row and str(row["refresh_token"] or "").strip())
+    scope_text = str(row["scope"] if row else "")
+    scope_set = {x.strip().lower() for x in re.split(r"[\s,]+", scope_text) if x.strip()}
+    offline_access = "offline_access" in scope_set
     # V14.6: enquanto o access_token atual ainda estiver válido, a integração
     # continua operacional mesmo sem refresh_token. O Admin apenas sinaliza que
     # a renovação futura está pendente, sem tratar a conta como desconectada.
@@ -2269,7 +2273,10 @@ def ml_status_payload() -> dict[str, Any]:
         "needs_reconnect": needs_reconnect,
         "seller_id": str(row["seller_id"] if row else ""),
         "nickname": str(row["nickname"] if row else ""),
-        "scope": str(row["scope"] if row else ""),
+        "scope": scope_text,
+        "offline_access_granted": offline_access,
+        "refresh_token_available": has_refresh,
+        "oauth_scope_requested": ML_OAUTH_SCOPE,
         "expires_at_epoch": int(row["expires_at_epoch"] if row else 0),
         "connected_at": str(row["connected_at"] if row else ""),
         "updated_at": str(row["updated_at"] if row else ""),
@@ -2316,19 +2323,42 @@ def ml_http_json(
         raise RuntimeError(f"Falha de conexão com Mercado Livre: {exc.reason}") from exc
 
 
-def ml_store_token(payload: dict[str, Any], *, nickname: str = "") -> None:
+def ml_store_token(
+    payload: dict[str, Any],
+    *,
+    nickname: str = "",
+    preserve_refresh_if_missing: bool = True,
+    refresh_expected: bool = False,
+) -> None:
     seller_id = str(payload.get("user_id") or "")
     access_token = str(payload.get("access_token") or "")
-    refresh_token = str(payload.get("refresh_token") or "")
+    refresh_received = str(payload.get("refresh_token") or "").strip()
     token_type = str(payload.get("token_type") or "Bearer")
     scope = str(payload.get("scope") or "")
     expires_in = int(payload.get("expires_in") or 0)
     expires_at = int(time.time()) + max(0, expires_in)
     if not access_token or not seller_id:
         raise RuntimeError("Resposta de token do Mercado Livre incompleta.")
+
     previous = ml_integration_row()
-    if previous and not refresh_token:
-        refresh_token = str(previous["refresh_token"] or "")
+    refresh_token = refresh_received
+    if previous and not refresh_token and preserve_refresh_if_missing:
+        refresh_token = str(previous["refresh_token"] or "").strip()
+
+    scope_set = {x.strip().lower() for x in re.split(r"[\s,]+", scope) if x.strip()}
+    token_error = ""
+    if refresh_expected and not refresh_received:
+        if "offline_access" not in scope_set:
+            token_error = (
+                "Mercado Livre retornou access_token sem refresh_token porque o grant não possui "
+                "offline_access. No DevCenter, habilite a aplicação como acesso offline e reconecte."
+            )
+        else:
+            token_error = (
+                "Mercado Livre retornou access_token com offline_access, mas sem refresh_token. "
+                "Reconecte a aplicação; se persistir, revise as permissões/grant no DevCenter."
+            )
+
     connected_at = str(previous["connected_at"] or "") if previous else ""
     if not connected_at:
         connected_at = now_iso()
@@ -2342,21 +2372,36 @@ def ml_store_token(payload: dict[str, Any], *, nickname: str = "") -> None:
                  seller_id=excluded.seller_id,
                  nickname=CASE WHEN excluded.nickname<>'' THEN excluded.nickname ELSE ml_integration.nickname END,
                  access_token=excluded.access_token,
-                 refresh_token=CASE WHEN excluded.refresh_token<>'' THEN excluded.refresh_token ELSE ml_integration.refresh_token END,
+                 refresh_token=excluded.refresh_token,
                  token_type=excluded.token_type,
                  scope=excluded.scope,
                  expires_at_epoch=excluded.expires_at_epoch,
                  connected_at=CASE WHEN ml_integration.connected_at='' THEN excluded.connected_at ELSE ml_integration.connected_at END,
                  updated_at=excluded.updated_at,
-                 last_error=''""",
+                 last_error=excluded.last_error""",
             (
                 seller_id, nickname, access_token, refresh_token, token_type, scope,
                 expires_at, connected_at, now_iso(),
                 str(previous["last_sync_at"] or "") if previous else "",
-                "",
+                token_error,
             ),
         )
         DB.commit()
+
+    try:
+        ml_log_event(
+            "oauth_token", "/oauth/token", seller_id, ML_CLIENT_ID,
+            "REFRESH_TOKEN_OK" if refresh_received else "REFRESH_TOKEN_AUSENTE",
+            json_dumps({
+                "scope": scope,
+                "offline_access": "offline_access" in scope_set,
+                "refresh_token_received": bool(refresh_received),
+                "expires_in": expires_in,
+                "payload_keys": sorted(str(k) for k in payload.keys()),
+            }),
+        )
+    except Exception:
+        pass
 
 
 def ml_access_token(*, force_refresh: bool = False) -> tuple[str, str]:
@@ -2382,7 +2427,7 @@ def ml_access_token(*, force_refresh: bool = False) -> tuple[str, str]:
     )
     if not isinstance(payload, dict):
         raise RuntimeError("Resposta inválida ao renovar o token Mercado Livre.")
-    ml_store_token(payload, nickname=str(row["nickname"] or ""))
+    ml_store_token(payload, nickname=str(row["nickname"] or ""), preserve_refresh_if_missing=False, refresh_expected=True)
     fresh = ml_integration_row()
     return str(fresh["access_token"]), str(fresh["seller_id"])
 
@@ -2519,6 +2564,7 @@ def ml_oauth_authorization_url() -> str:
             "state": state,
             "code_challenge": challenge,
             "code_challenge_method": "S256",
+            "scope": ML_OAUTH_SCOPE,
         }
     )
     return f"{ML_AUTH_URL}?{query}"
@@ -2550,7 +2596,7 @@ def ml_exchange_authorization_code(code: str, state: str) -> dict[str, Any]:
     )
     if not isinstance(payload, dict):
         raise RuntimeError("Resposta inválida do OAuth Mercado Livre.")
-    ml_store_token(payload)
+    ml_store_token(payload, preserve_refresh_if_missing=False, refresh_expected=True)
     token, _ = ml_access_token()
     me = ml_http_json("GET", f"{ML_API_BASE}/users/me", token=token)
     if isinstance(me, dict):

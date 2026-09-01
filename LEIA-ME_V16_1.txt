@@ -1,0 +1,18 @@
+NOROMAK — V16.1 — OAuth Mercado Livre / refresh token
+
+CORRECOES
+- solicita explicitamente o escopo offline_access no OAuth do Mercado Livre;
+- salva o refresh_token retornado no callback de forma persistente;
+- em cada renovacao, substitui pelo NOVO refresh_token (o ML usa refresh token de uso unico);
+- nao reaproveita silenciosamente um refresh token antigo caso a API deixe de devolver um novo;
+- mostra no Admin se a permissao offline_access foi realmente concedida;
+- registra diagnostico OAuth sem gravar/exibir o valor do token nos logs;
+- worker 24/7 continua independente do navegador.
+
+APOS PUBLICAR
+1. Admin > Integracoes > Mercado Livre.
+2. Clique em Renovar conexao Mercado Livre e conclua a autorizacao.
+3. O esperado e: Refresh token = Disponivel e Permissao offline = offline_access concedido.
+
+SE offline_access APARECER AUSENTE
+A aplicacao do Mercado Livre nao esta concedendo acesso offline. Habilite a permissao de acesso offline no DevCenter/Aplicacao Mercado Livre e reconecte. Sem offline_access a propria API nao fornece refresh_token.

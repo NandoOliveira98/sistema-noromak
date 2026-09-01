@@ -1033,6 +1033,7 @@ body{background:var(--v15-bg)!important}
             <b>Última sincronização</b><span id="mlIntegracaoSync">—</span>
             <b>Worker 24/7</b><span id="mlIntegracaoWorker">—</span>
             <b>Refresh token</b><span id="mlIntegracaoRefresh">—</span>
+            <b>Permissão offline</b><span id="mlIntegracaoOffline">—</span>
             <b>Último poll servidor</b><span id="mlIntegracaoPoll">—</span>
             <b>Última recuperação</b><span id="mlIntegracaoCatchup">—</span>
             <b>Callback OAuth</b><span id="mlIntegracaoCallback">—</span>
@@ -6200,6 +6201,7 @@ async function carregarIntegracaoMercadoLivreAdmin(){
     const worker=ml.worker||{};
     const workerEl=document.getElementById("mlIntegracaoWorker");if(workerEl)workerEl.textContent=worker.server_worker?"🟢 Ativo no servidor":"🔴 Inativo";
     const refreshEl=document.getElementById("mlIntegracaoRefresh");if(refreshEl)refreshEl.textContent=worker.has_refresh_token?"🟢 Disponível":"🔴 Ausente — reconecte";
+    const offlineEl=document.getElementById("mlIntegracaoOffline");if(offlineEl)offlineEl.textContent=ml.offline_access_granted?"🟢 offline_access concedido":"🔴 offline_access ausente";
     const pollEl=document.getElementById("mlIntegracaoPoll");if(pollEl)pollEl.textContent=worker.last_order_poll_at?mlDataHora(worker.last_order_poll_at):"Aguardando primeiro ciclo";
     const catchEl=document.getElementById("mlIntegracaoCatchup");if(catchEl)catchEl.textContent=worker.last_catchup_at?mlDataHora(worker.last_catchup_at):"Aguardando primeira recuperação";
     document.getElementById("mlIntegracaoCallback").textContent=ml.redirect_uri||"—";
@@ -6212,7 +6214,10 @@ async function carregarIntegracaoMercadoLivreAdmin(){
     const msg=document.getElementById("mlIntegracaoMensagem");
     if(msg){
       if(!configurado)msg.innerHTML='Configure <b>ML_CLIENT_ID</b> e <b>ML_CLIENT_SECRET</b> em <code>/home/expedicao/.env</code> e reinicie o serviço.';
-      else if(reconectar)msg.innerHTML='⚠ <b>Refresh token ausente.</b> Reconecte o Mercado Livre uma vez. Depois disso, a V16 renova o acesso automaticamente na VPS, sem precisar deixar o site aberto.';
+      else if(reconectar){
+        if(!ml.offline_access_granted)msg.innerHTML='⚠ <b>O grant do Mercado Livre não possui offline_access.</b> No DevCenter do Mercado Livre, habilite acesso offline para a aplicação e depois clique em “Renovar conexão Mercado Livre”. Sem essa permissão a API não entrega refresh_token.';
+        else msg.innerHTML='⚠ <b>offline_access foi concedido, mas o refresh_token não foi recebido.</b> Clique em “Renovar conexão Mercado Livre”. A V16.1 registra o retorno do OAuth no log sem expor o token e salva o novo refresh_token de forma persistente.';
+      }
       else if(worker.last_error)msg.innerHTML='⚠ Worker 24/7 ativo, mas o último ciclo registrou: <b>'+mlHtmlSeguro(worker.last_error)+'</b>';
       else if(ml.last_error)msg.innerHTML='⚠ Último erro: <b>'+mlHtmlSeguro(ml.last_error)+'</b>';
       else msg.innerHTML=conectado?'✅ <b>Sincronização 24/7 ativa no servidor.</b> Você pode fechar o navegador e desligar os PCs da empresa; pedidos e token ML continuam sendo sincronizados na VPS. A Zebra só precisa estar ligada para imprimir.':'Clique em <b>Conectar Mercado Livre</b> para autorizar a conta vendedora.';
