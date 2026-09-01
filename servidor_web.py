@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "16.22"
+APP_VERSION = "16.23"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -3132,21 +3132,35 @@ def _ml_dispatch_date(shipment_id: str, shipment: dict[str, Any] | None) -> str:
 
 
 def _kit_sku_aliases(value: Any) -> list[str]:
-    """Gera chaves tolerantes para SKU de kit sem perder a chave exata.
+    """Gera aliases robustos para localizar SKU de kit.
 
-    Mercado Livre/Apollo podem devolver o mesmo SKU com espaços, hífens, pontos
-    ou barras em posições diferentes. A chave compacta alfanumérica permite
-    reconhecer o cadastro sem depender dessa formatação visual.
+    Além das formas normal/compacta, aceita prefixos operacionais usados nos
+    anúncios, como KIT-, KIT2-, KIT3-, etc. Ex.: KIT3-KS001 também procura KS001.
     """
     raw = str(value or "").strip().upper()
     if not raw:
         return []
-    exact = normalize(raw)
-    compact = "".join(ch for ch in raw if ch.isalnum())
-    out = []
-    for key in (exact, compact):
-        if key and key not in out:
-            out.append(key)
+
+    candidates = [raw]
+    # Prefixos operacionais comuns do marketplace não fazem parte necessariamente
+    # do SKU-base usado no Cadastro de Kits.
+    stripped = re.sub(r"^KIT\s*\d*\s*[-_./: ]+", "", raw, flags=re.I).strip()
+    if stripped and stripped != raw:
+        candidates.append(stripped)
+
+    # Também cobre KIT3KS001 (sem separador): remove apenas quando há conteúdo
+    # suficiente após o prefixo, evitando transformar SKUs curtos indevidamente.
+    m = re.match(r"^KIT\s*\d+(?=[A-Z0-9])(.+)$", raw, flags=re.I)
+    if m and m.group(1).strip():
+        candidates.append(m.group(1).strip())
+
+    out: list[str] = []
+    for candidate in candidates:
+        exact = normalize(candidate)
+        compact = "".join(ch for ch in candidate if ch.isalnum())
+        for key in (exact, compact):
+            if key and key not in out:
+                out.append(key)
     return out
 
 

@@ -1,0 +1,6 @@
+V16.23 - RECONHECIMENTO KIT3-KS001
+
+- Reforça o casamento de SKU de kits na Rentabilidade.
+- KIT3-KS001 também procura KS001 no Cadastro de Kits.
+- Suporta KIT-, KIT2-, KIT3- etc., com ou sem hífen/espaço.
+- Mantém as regras anteriores de normalização e composição Apollo.
