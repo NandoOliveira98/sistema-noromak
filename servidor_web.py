@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "16.7"
+APP_VERSION = "16.8"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2793,11 +2793,7 @@ def _ml_billing_details(order: dict[str, Any]) -> dict[str, Any]:
     return {"name": "", "billing_info_id": billing_id, "source": "", "errors": errors[-8:]}
 
 def _ml_billing_name(order: dict[str, Any]) -> str:
-    # Prioriza os Dados para NF-e. Se o Mercado Livre ainda não devolver o
-    # billing-info/nome fiscal, volta ao comportamento anterior e usa o nome
-    # real disponível na própria order. Isso evita Cliente em branco/"—".
-    fiscal = str(_ml_billing_details(order).get("name") or "").strip()
-    return fiscal or _ml_real_buyer_name(order)
+    return str(_ml_billing_details(order).get("name") or "").strip()
 
 
 def _ml_real_buyer_name(order: dict[str, Any]) -> str:
@@ -3680,9 +3676,9 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
     # quando o fiscal aparecer, um refresh posterior o substitui automaticamente.
     billing_details = _ml_billing_details(order)
     fiscal_name = str(billing_details.get("name") or "").strip()
-    buyer_real_name = _ml_real_buyer_name(order)
-    client = fiscal_name or buyer_real_name
-    client_name_source = "dados_fiscais_nf" if fiscal_name else ("comprador_order" if buyer_real_name else "")
+    buyer_real_name = _ml_real_buyer_name(order)  # apenas diagnóstico; nunca vira Cliente
+    client = fiscal_name
+    client_name_source = "dados_fiscais_nf" if fiscal_name else "aguardando_dados_fiscais_nf"
     billing_info_id = str(billing_details.get("billing_info_id") or "").strip()
     billing_errors = billing_details.get("errors") if isinstance(billing_details.get("errors"), list) else []
 
@@ -7533,6 +7529,37 @@ class AppHandler(BaseHTTPRequestHandler):
         if self.command != "HEAD":
             self.wfile.write(body)
 
+
+
+def nfe_destinatario_xnome(xml_data):
+    """Extrai dest/xNome de um XML NF-e, inclusive com namespace padrão."""
+    if not xml_data:
+        return ""
+    try:
+        import xml.etree.ElementTree as ET
+        if isinstance(xml_data, str):
+            root = ET.fromstring(xml_data.encode("utf-8", errors="ignore"))
+        else:
+            root = ET.fromstring(xml_data)
+        for elem in root.iter():
+            tag = str(elem.tag).split("}")[-1]
+            if tag != "dest":
+                continue
+            for child in list(elem):
+                if str(child.tag).split("}")[-1] == "xNome":
+                    return " ".join((child.text or "").split()).strip()
+    except Exception:
+        pass
+    return ""
+
+
+def nome_cliente_prioridade_nfe(nome_nfe="", nome_fiscal_ml="", nome_pedido=""):
+    """Prioridade da Conferência: NF-e > fiscal ML > nome provisório do pedido."""
+    for valor in (nome_nfe, nome_fiscal_ml, nome_pedido):
+        valor = " ".join(str(valor or "").split()).strip()
+        if valor and valor not in ("—", "-"):
+            return valor
+    return ""
 
 def main() -> None:
     init_db()

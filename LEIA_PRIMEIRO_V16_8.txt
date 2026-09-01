@@ -1,0 +1,8 @@
+V16.8 - NOME DO CLIENTE PELA NF-e
+
+Prioridade de nome na Conferencia:
+1. destinatario da NF-e (dest/xNome)
+2. nome fiscal do Mercado Livre
+3. nome disponivel no pedido como fallback temporario
+
+Inclui leitor XML compativel com namespace padrao da NF-e.
