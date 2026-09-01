@@ -1,6 +1,9 @@
 [Unit]
 Description=Sistema de Conferencia e Expedicao Noromak
-After=network.target
+Wants=network-online.target
+After=network-online.target
+
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -9,7 +12,7 @@ Group=expedicao
 WorkingDirectory=/home/expedicao/app
 EnvironmentFile=-/home/expedicao/.env
 ExecStart=/home/expedicao/app/expedicao
-Restart=on-failure
+Restart=always
 RestartSec=3
 MemoryMax=250M
 PrivateTmp=true

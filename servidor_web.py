@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "15.8"
+APP_VERSION = "16.0"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -90,6 +90,11 @@ ML_CATCHUP_PAGE_SIZE = max(10, min(50, int(os.getenv("ML_CATCHUP_PAGE_SIZE", "50
 ML_CATCHUP_MAX_PAGES = max(2, min(100, int(os.getenv("ML_CATCHUP_MAX_PAGES", "40"))))
 ML_MANUAL_RECONCILE_INTERVAL = max(30, min(600, int(os.getenv("ML_MANUAL_RECONCILE_INTERVAL", "60"))))
 ML_MANUAL_RECONCILE_DAYS = max(1, min(90, int(os.getenv("ML_MANUAL_RECONCILE_DAYS", "30"))))
+# V16.0: rotinas 100% server-side. Não dependem de navegador, sessão web ou PC da expedição.
+ML_TOKEN_KEEPALIVE_INTERVAL = max(60, min(1800, int(os.getenv("ML_TOKEN_KEEPALIVE_INTERVAL", "300"))))
+ML_TOKEN_REFRESH_AHEAD_SECONDS = max(300, min(7200, int(os.getenv("ML_TOKEN_REFRESH_AHEAD_SECONDS", "1800"))))
+ML_SAFETY_CATCHUP_INTERVAL = max(300, min(7200, int(os.getenv("ML_SAFETY_CATCHUP_INTERVAL", "900"))))
+ML_SAFETY_CATCHUP_HOURS = max(6, min(168, int(os.getenv("ML_SAFETY_CATCHUP_HOURS", "36"))))
 
 
 CRM_COST_API_URL = os.getenv(
@@ -108,6 +113,17 @@ ML_CATCHUP_LOCK = threading.Lock()
 ML_MANUAL_RECONCILE_LOCK = threading.Lock()
 ML_PENDING_WATCH_CURSOR_LOCK = threading.Lock()
 ML_PENDING_WATCH_CURSOR = 0
+ML_WORKER_STATE_LOCK = threading.Lock()
+ML_WORKER_STATE: dict[str, Any] = {
+    "started_at": "",
+    "last_order_poll_at": "",
+    "last_order_poll_result": {},
+    "last_token_check_at": "",
+    "last_token_refresh_at": "",
+    "last_catchup_at": "",
+    "last_catchup_result": {},
+    "last_error": "",
+}
 CRM_COST_CACHE_LOCK = threading.Lock()
 CRM_COST_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 PRECIFICADOR_BULK_LOCK = threading.Lock()
@@ -2262,6 +2278,7 @@ def ml_status_payload() -> dict[str, Any]:
         "redirect_uri": ML_REDIRECT_URI,
         "notification_url": ML_NOTIFICATION_URL,
         "client_id_suffix": (ML_CLIENT_ID[-6:] if ML_CLIENT_ID else ""),
+        "worker": ml_worker_status_payload(),
     }
 
 
@@ -2368,6 +2385,76 @@ def ml_access_token(*, force_refresh: bool = False) -> tuple[str, str]:
     ml_store_token(payload, nickname=str(row["nickname"] or ""))
     fresh = ml_integration_row()
     return str(fresh["access_token"]), str(fresh["seller_id"])
+
+
+
+def _ml_worker_state_update(**values: Any) -> None:
+    with ML_WORKER_STATE_LOCK:
+        ML_WORKER_STATE.update(values)
+
+
+def ml_worker_status_payload() -> dict[str, Any]:
+    with ML_WORKER_STATE_LOCK:
+        state = dict(ML_WORKER_STATE)
+    row = ml_integration_row()
+    expires_at = int(row["expires_at_epoch"] or 0) if row else 0
+    now_ts = int(time.time())
+    state.update({
+        "server_worker": True,
+        "browser_required": False,
+        "server_time": now_iso(),
+        "token_expires_at_epoch": expires_at,
+        "token_seconds_remaining": max(0, expires_at - now_ts) if expires_at else 0,
+        "has_refresh_token": bool(row and str(row["refresh_token"] or "").strip()),
+        "ml_connected": bool(row and str(row["access_token"] or "").strip()),
+        "new_order_interval_seconds": ML_NEW_ORDER_WATCH_INTERVAL,
+        "token_keepalive_interval_seconds": ML_TOKEN_KEEPALIVE_INTERVAL,
+        "safety_catchup_interval_seconds": ML_SAFETY_CATCHUP_INTERVAL,
+        "safety_catchup_hours": ML_SAFETY_CATCHUP_HOURS,
+    })
+    return state
+
+
+def ml_token_keepalive_once() -> dict[str, Any]:
+    """Mantém OAuth renovado no servidor, mesmo sem qualquer navegador aberto."""
+    checked_at = now_iso()
+    row = ml_integration_row()
+    if not row or not str(row["access_token"] or "").strip():
+        result = {"ok": True, "connected": False, "refreshed": False, "reason": "not_connected"}
+        _ml_worker_state_update(last_token_check_at=checked_at, last_error="")
+        return result
+    expires_at = int(row["expires_at_epoch"] or 0)
+    remaining = expires_at - int(time.time())
+    try:
+        # Renovação proativa evita que o watcher encontre um token vencido no meio da noite.
+        force = remaining <= ML_TOKEN_REFRESH_AHEAD_SECONDS
+        ml_access_token(force_refresh=force)
+        result = {"ok": True, "connected": True, "refreshed": bool(force), "seconds_remaining_before": remaining}
+        updates = {"last_token_check_at": checked_at, "last_error": ""}
+        if force:
+            updates["last_token_refresh_at"] = now_iso()
+            ml_log_event("token_keeper", "/oauth/token", str(row["seller_id"] or ""), ML_CLIENT_ID,
+                         "TOKEN RENOVADO NO SERVIDOR", json_dumps(result))
+        _ml_worker_state_update(**updates)
+        return result
+    except Exception as exc:
+        message = str(exc)[:1200]
+        _ml_worker_state_update(last_token_check_at=checked_at, last_error=message)
+        try:
+            ml_log_event("token_keeper", "/oauth/token", str(row["seller_id"] or ""), ML_CLIENT_ID, "ERRO", message)
+        except Exception:
+            pass
+        return {"ok": False, "connected": True, "refreshed": False, "error": message}
+
+
+def ml_token_keepalive_loop(stop_event: threading.Event) -> None:
+    # Verifica poucos segundos após o boot e depois continuamente na VPS.
+    if stop_event.wait(8):
+        return
+    while not stop_event.is_set():
+        ml_token_keepalive_once()
+        if stop_event.wait(ML_TOKEN_KEEPALIVE_INTERVAL):
+            break
 
 
 def ml_api_get(path_or_url: str, *, headers: dict[str, str] | None = None) -> dict[str, Any] | list[Any]:
@@ -4454,6 +4541,43 @@ def ml_catchup_after_reconnect(recovery_since: str = "") -> None:
     ml_catchup_orders(recovery_since, source="reconexão OAuth")
 
 
+
+def ml_safety_catchup_once() -> dict[str, Any]:
+    """Varredura de segurança independente do last_sync.
+
+    Reconsulta uma janela fixa recente para recuperar pedidos que o webhook/poller
+    não tenha importado. Como pedidos já existentes são ignorados, a rotina é
+    idempotente e pode rodar 24/7 no servidor.
+    """
+    since = (datetime.now(timezone.utc) - timedelta(hours=ML_SAFETY_CATCHUP_HOURS)).isoformat()
+    result = ml_catchup_orders(since, source=f"segurança {ML_SAFETY_CATCHUP_HOURS}h")
+    _ml_worker_state_update(
+        last_catchup_at=now_iso(),
+        last_catchup_result=result,
+        last_error="" if result.get("ok") else str((result.get("errors") or [{}])[0].get("error") or "catch-up parcial")[:1200],
+    )
+    return result
+
+
+def ml_safety_catchup_loop(stop_event: threading.Event) -> None:
+    # Após o boot, deixa o poller curto rodar primeiro e então recupera a janela maior.
+    if stop_event.wait(20):
+        return
+    while not stop_event.is_set():
+        try:
+            row = ml_integration_row()
+            if row and str(row["access_token"] or "").strip():
+                ml_safety_catchup_once()
+        except Exception as exc:
+            _ml_worker_state_update(last_catchup_at=now_iso(), last_error=str(exc)[:1200])
+            try:
+                ml_log_event("safety_catchup", "/orders/search", "", ML_CLIENT_ID, "ERRO", str(exc)[:1200])
+            except Exception:
+                pass
+        if stop_event.wait(ML_SAFETY_CATCHUP_INTERVAL):
+            break
+
+
 def ml_new_order_watch_once() -> dict[str, int]:
     """Contingência do webhook: busca somente os pedidos pagos mais recentes."""
     poll_started_at = now_iso()
@@ -4535,11 +4659,17 @@ def ml_new_order_watch_loop(stop_event: threading.Event) -> None:
             row = ml_integration_row()
             if row and str(row["access_token"] or "").strip():
                 result = ml_new_order_watch_once()
+                _ml_worker_state_update(
+                    last_order_poll_at=now_iso(),
+                    last_order_poll_result=result,
+                    last_error="" if not result.get("errors") else f"poller: {result.get('errors')} erro(s)",
+                )
                 consecutive_errors = 0 if not result.get("errors") else min(consecutive_errors + 1, 4)
             else:
                 consecutive_errors = 0
         except Exception as exc:
             consecutive_errors = min(consecutive_errors + 1, 4)
+            _ml_worker_state_update(last_order_poll_at=now_iso(), last_error=str(exc)[:1200])
             try:
                 ml_log_event("new_order_watcher", "/orders/search", "", ML_CLIENT_ID, "ERRO", str(exc)[:1200])
             except Exception:
@@ -5754,6 +5884,12 @@ class AppHandler(BaseHTTPRequestHandler):
                     "ok": True,
                     "version": APP_VERSION,
                     "server_time": now_iso(),
+                    "mercadolivre_worker": {
+                        "server_side": True,
+                        "started_at": ml_worker_status_payload().get("started_at", ""),
+                        "last_order_poll_at": ml_worker_status_payload().get("last_order_poll_at", ""),
+                        "last_catchup_at": ml_worker_status_payload().get("last_catchup_at", ""),
+                    },
                 }
             )
             return
@@ -7301,9 +7437,24 @@ def main() -> None:
         name="ml-manual-order-reconciler",
         daemon=True,
     )
+    token_keeper_thread = threading.Thread(
+        target=ml_token_keepalive_loop,
+        args=(watcher_stop,),
+        name="ml-token-keeper",
+        daemon=True,
+    )
+    safety_catchup_thread = threading.Thread(
+        target=ml_safety_catchup_loop,
+        args=(watcher_stop,),
+        name="ml-safety-catchup",
+        daemon=True,
+    )
+    _ml_worker_state_update(started_at=now_iso(), last_error="")
     watcher_thread.start()
     new_order_thread.start()
     manual_reconcile_thread.start()
+    token_keeper_thread.start()
+    safety_catchup_thread.start()
     server = ThreadingHTTPServer((HOST, PORT), AppHandler)
     server.daemon_threads = True
     print(f"Sistema de Conferência Web {APP_VERSION} em http://{HOST}:{PORT}{BASE_PATH}", flush=True)
@@ -7311,6 +7462,8 @@ def main() -> None:
     print(f"Watcher Mercado Livre: pendências a cada {ML_PENDING_WATCH_INTERVAL}s", flush=True)
     print(f"Watcher Mercado Livre: pedidos novos a cada {ML_NEW_ORDER_WATCH_INTERVAL}s", flush=True)
     print(f"Reconciliação ML: pedidos manuais a cada {ML_MANUAL_RECONCILE_INTERVAL}s", flush=True)
+    print(f"OAuth ML: renovação server-side a cada {ML_TOKEN_KEEPALIVE_INTERVAL}s", flush=True)
+    print(f"Recuperação ML: janela de {ML_SAFETY_CATCHUP_HOURS}h a cada {ML_SAFETY_CATCHUP_INTERVAL}s", flush=True)
     try:
         server.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:
@@ -7320,6 +7473,8 @@ def main() -> None:
         watcher_thread.join(timeout=3)
         new_order_thread.join(timeout=3)
         manual_reconcile_thread.join(timeout=3)
+        token_keeper_thread.join(timeout=3)
+        safety_catchup_thread.join(timeout=3)
         server.server_close()
         with DB_LOCK:
             DB.close()
