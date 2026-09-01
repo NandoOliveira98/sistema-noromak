@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "16.4"
+APP_VERSION = "16.5"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2255,93 +2255,6 @@ def ml_integration_row() -> sqlite3.Row | None:
         return DB.execute("SELECT * FROM ml_integration WHERE id=1").fetchone()
 
 
-def ml_latest_oauth_diagnostic() -> dict[str, Any]:
-    """Retorna somente metadados seguros do ultimo OAuth; nunca tokens/segredos."""
-    with DB_LOCK:
-        rows = DB.execute(
-            """SELECT created_at,topic,result,detail FROM ml_event_log
-               WHERE topic IN ('oauth_token','oauth_grant')
-               ORDER BY id DESC LIMIT 8"""
-        ).fetchall()
-    token_diag: dict[str, Any] = {}
-    grant_diag: dict[str, Any] = {}
-    for row in rows:
-        try:
-            detail = json.loads(str(row['detail'] or '{}'))
-            if not isinstance(detail, dict):
-                detail = {}
-        except Exception:
-            detail = {}
-        payload = {
-            'at': str(row['created_at'] or ''),
-            'result': str(row['result'] or ''),
-            **detail,
-        }
-        if row['topic'] == 'oauth_token' and not token_diag:
-            token_diag = payload
-        elif row['topic'] == 'oauth_grant' and not grant_diag:
-            grant_diag = payload
-    return {'token': token_diag, 'grant': grant_diag}
-
-
-def ml_fetch_grant_diagnostic(access_token: str, seller_id: str) -> dict[str, Any]:
-    """Confere no proprio Mercado Livre quais scopes o grant atual possui."""
-    if not access_token or not seller_id or not ML_CLIENT_ID:
-        return {'verified': False, 'scopes': [], 'offline_access': False, 'error': 'Dados insuficientes para consultar o grant.'}
-    try:
-        payload = ml_http_json(
-            'GET',
-            f"{ML_API_BASE}/applications/{quote(str(ML_CLIENT_ID), safe='')}/grants",
-            token=access_token,
-        )
-        grants = payload.get('grants') if isinstance(payload, dict) else []
-        if not isinstance(grants, list):
-            grants = []
-        target = None
-        for grant in grants:
-            if not isinstance(grant, dict):
-                continue
-            if str(grant.get('user_id') or '') == str(seller_id):
-                target = grant
-                break
-        if target is None:
-            return {'verified': True, 'found': False, 'scopes': [], 'offline_access': False, 'error': 'Grant da conta nao encontrado para esta aplicacao.'}
-        scopes_raw = target.get('scopes') or []
-        if isinstance(scopes_raw, str):
-            scopes = [x for x in re.split(r'[\\s,]+', scopes_raw) if x]
-        elif isinstance(scopes_raw, list):
-            scopes = [str(x).strip() for x in scopes_raw if str(x).strip()]
-        else:
-            scopes = []
-        scope_set = {x.lower() for x in scopes}
-        return {
-            'verified': True,
-            'found': True,
-            'scopes': scopes,
-            'offline_access': 'offline_access' in scope_set,
-            'date_created': str(target.get('date_created') or ''),
-            'error': '',
-        }
-    except Exception as exc:
-        return {'verified': False, 'scopes': [], 'offline_access': False, 'error': str(exc)[:500]}
-
-
-def ml_log_grant_diagnostic(access_token: str, seller_id: str) -> dict[str, Any]:
-    diag = ml_fetch_grant_diagnostic(access_token, seller_id)
-    try:
-        ml_log_event(
-            'oauth_grant',
-            f"/applications/{ML_CLIENT_ID}/grants",
-            seller_id,
-            ML_CLIENT_ID,
-            'GRANT_OK' if diag.get('verified') and diag.get('found') else 'GRANT_NAO_CONFIRMADO',
-            json_dumps(diag),
-        )
-    except Exception:
-        pass
-    return diag
-
-
 def ml_status_payload() -> dict[str, Any]:
     row = ml_integration_row()
     has_access = bool(row and row["access_token"] and row["seller_id"])
@@ -2364,7 +2277,6 @@ def ml_status_payload() -> dict[str, Any]:
         "offline_access_granted": offline_access,
         "refresh_token_available": has_refresh,
         "oauth_scope_requested": ML_OAUTH_SCOPE,
-        "oauth_diagnostic": ml_latest_oauth_diagnostic(),
         "expires_at_epoch": int(row["expires_at_epoch"] if row else 0),
         "connected_at": str(row["connected_at"] if row else ""),
         "updated_at": str(row["updated_at"] if row else ""),
@@ -2436,10 +2348,16 @@ def ml_store_token(
     scope_set = {x.strip().lower() for x in re.split(r"[\s,]+", scope) if x.strip()}
     token_error = ""
     if refresh_expected and not refresh_received:
-        token_error = (
-            "OAuth concluido, mas a resposta de /oauth/token nao trouxe refresh_token. "
-            "A renovacao automatica depende de refresh_token; consulte o diagnostico OAuth no painel."
-        )
+        if "offline_access" not in scope_set:
+            token_error = (
+                "Mercado Livre retornou access_token sem refresh_token porque o grant não possui "
+                "offline_access. No DevCenter, habilite a aplicação como acesso offline e reconecte."
+            )
+        else:
+            token_error = (
+                "Mercado Livre retornou access_token com offline_access, mas sem refresh_token. "
+                "Reconecte a aplicação; se persistir, revise as permissões/grant no DevCenter."
+            )
 
     connected_at = str(previous["connected_at"] or "") if previous else ""
     if not connected_at:
@@ -2696,72 +2614,9 @@ def ml_exchange_authorization_code(code: str, state: str) -> dict[str, Any]:
                 },
                 nickname=nickname,
             )
-    current_after_oauth = ml_integration_row()
-    grant_diag = ml_log_grant_diagnostic(
-        str(current_after_oauth["access_token"] or "") if current_after_oauth else "",
-        str(current_after_oauth["seller_id"] or "") if current_after_oauth else "",
-    )
-    if current_after_oauth and not str(current_after_oauth["refresh_token"] or "").strip():
-        scopes_label = ", ".join(grant_diag.get("scopes") or []) or "nao confirmado"
-        if grant_diag.get("verified") and not grant_diag.get("offline_access"):
-            oauth_error = (
-                "Mercado Livre nao enviou refresh_token e o grant atual foi confirmado sem offline_access "
-                f"(scopes: {scopes_label}). Revise as permissoes/grant da aplicacao no DevCenter antes de realizar uma nova autorizacao."
-            )
-        elif grant_diag.get("verified"):
-            oauth_error = (
-                "O grant possui offline_access, mas /oauth/token nao devolveu refresh_token. "
-                "Revise o grant da aplicacao antes de realizar uma nova autorizacao manual."
-            )
-        else:
-            oauth_error = (
-                "Mercado Livre nao enviou refresh_token. Nao foi possivel confirmar o grant automaticamente: "
-                + str(grant_diag.get("error") or "erro desconhecido")
-            )
-        with DB_LOCK:
-            DB.execute("UPDATE ml_integration SET last_error=?, updated_at=? WHERE id=1", (oauth_error, now_iso()))
-            DB.commit()
     status = ml_status_payload()
     status["recovery_since"] = recovery_since
     return status
-
-
-def ml_prepare_clean_reauthorization() -> dict[str, Any]:
-    """Revoga o grant atual (quando possivel) e inicia um OAuth totalmente novo."""
-    row = ml_integration_row()
-    revoked = False
-    revoke_error = ""
-    seller_id = str(row['seller_id'] or '') if row else ''
-    access_token = str(row['access_token'] or '') if row else ''
-    if seller_id and access_token and ML_CLIENT_ID:
-        try:
-            ml_http_json(
-                'DELETE',
-                f"{ML_API_BASE}/users/{quote(seller_id, safe='')}/applications/{quote(str(ML_CLIENT_ID), safe='')}",
-                token=access_token,
-            )
-            revoked = True
-        except Exception as exc:
-            # Mesmo se a revogacao ja tiver ocorrido/expirado, limpamos localmente e permitimos novo OAuth.
-            revoke_error = str(exc)[:500]
-    with DB_LOCK:
-        DB.execute('DELETE FROM ml_integration WHERE id=1')
-        DB.execute('DELETE FROM ml_oauth_state')
-        DB.commit()
-    try:
-        ml_log_event(
-            'oauth_reauthorize', '/grant/revoke', seller_id, ML_CLIENT_ID,
-            'REVOGADO' if revoked else 'LIMPEZA_LOCAL',
-            json_dumps({'revoked': revoked, 'revoke_error': revoke_error}),
-        )
-    except Exception:
-        pass
-    return {
-        'ok': True,
-        'revoked': revoked,
-        'revoke_error': revoke_error,
-        'authorize_url': ml_oauth_authorization_url(),
-    }
 
 
 def _ml_parse_iso_date(value: Any) -> str:
@@ -2797,10 +2652,12 @@ def _ml_is_full_shipment(shipment: dict[str, Any] | None) -> bool:
 
 
 def _ml_billing_details(order: dict[str, Any]) -> dict[str, Any]:
-    """Obtém exclusivamente o nome/razão social de Dados para NF-e do Mercado Livre.
+    """Obtém exclusivamente nome/razão social de Dados para NF-e do Mercado Livre.
 
-    V16.4: nunca usa username/nickname, nome da order ou destinatário como Cliente.
-    Fluxo principal: buyer.billing_info.id -> /orders/billing-info/{site}/{id}.
+    Fluxo atual: /orders/{id} -> buyer.billing_info.id ->
+    /orders/billing-info/{site_id}/{billing_info_id}.
+    Mantém o billing_info legado V2 apenas como compatibilidade fiscal temporária.
+    Nunca usa nickname, username, nome do order ou destinatário.
     """
     buyer = order.get("buyer") if isinstance(order.get("buyer"), dict) else {}
     raw_embedded = buyer.get("billing_info")
@@ -2823,62 +2680,63 @@ def _ml_billing_details(order: dict[str, Any]) -> dict[str, Any]:
         info = fiscal_buyer.get("billing_info") if isinstance(fiscal_buyer.get("billing_info"), dict) else {}
         if not info and isinstance(payload.get("billing_info"), dict):
             info = payload["billing_info"]
-        # Compatibilidade defensiva caso o recurso devolva diretamente o objeto fiscal.
-        if not info and any(k in payload for k in ("name", "last_name", "business_name", "corporate_name", "additional_info")):
-            info = payload
         if not info:
             return ""
-
-        # Respostas antigas podem representar os dados como additional_info [{type,value}].
-        additional = info.get("additional_info") if isinstance(info.get("additional_info"), list) else []
-        extra = {}
-        for entry in additional:
-            if isinstance(entry, dict):
-                typ = str(entry.get("type") or "").strip().upper()
-                val = str(entry.get("value") or "").strip()
-                if typ and val:
-                    extra[typ] = val
-
-        first = str(info.get("name") or info.get("first_name") or extra.get("FIRST_NAME") or extra.get("NAME") or "").strip()
-        last = str(info.get("last_name") or info.get("surname") or extra.get("LAST_NAME") or "").strip()
-        business = str(info.get("business_name") or info.get("corporate_name") or extra.get("BUSINESS_NAME") or extra.get("CORPORATE_NAME") or "").strip()
+        first = str(info.get("name") or info.get("first_name") or "").strip()
+        last = str(info.get("last_name") or info.get("surname") or "").strip()
+        business = str(info.get("business_name") or info.get("corporate_name") or info.get("company_name") or "").strip()
         identification = info.get("identification") if isinstance(info.get("identification"), dict) else {}
-        doc_type = str(identification.get("type") or extra.get("DOC_TYPE") or "").strip().upper()
-        if doc_type in {"CNPJ", "CUIT", "RUT"}:
-            return business or first or " ".join(x for x in (first, last) if x).strip()
+        doc_type = str(identification.get("type") or "").strip().upper()
+        if doc_type == "CNPJ":
+            return business or first
+        direct = " ".join(x for x in (first, last) if x).strip() or business
+        if direct:
+            return direct
+        # Compatibilidade com respostas antigas/V1 que usam additional_info.
+        additional = info.get("additional_info") if isinstance(info.get("additional_info"), list) else []
+        vals = {}
+        for item in additional:
+            if isinstance(item, dict):
+                vals[str(item.get("type") or "").strip().upper()] = str(item.get("value") or "").strip()
+        business = vals.get("BUSINESS_NAME") or vals.get("CORPORATE_NAME") or vals.get("COMPANY_NAME") or ""
+        first = vals.get("FIRST_NAME") or vals.get("NAME") or ""
+        last = vals.get("LAST_NAME") or ""
+        doc_type = (vals.get("DOC_TYPE") or "").upper()
+        if doc_type == "CNPJ":
+            return business or first
         return " ".join(x for x in (first, last) if x).strip() or business
 
     embedded_name = extract_name({"buyer": {"billing_info": embedded}}) if embedded else ""
-    if embedded_name and any(k in embedded for k in ("name", "last_name", "business_name", "corporate_name", "additional_info")):
+    if embedded_name:
         return {"name": embedded_name, "billing_info_id": billing_id, "source": "order_embedded", "errors": []}
 
+    # Endpoint novo/documentado (2026).
     if billing_id:
         endpoint = f"/orders/billing-info/{quote(site_id)}/{quote(billing_id)}"
-        # Tenta V2 primeiro para obter o contrato fiscal mais completo; mantém chamada
-        # sem versão como compatibilidade com contas ainda em migração.
-        for headers, source in (({"x-version": "2"}, "billing_info_v2"), (None, "billing_info")):
-            try:
-                payload = ml_api_get(endpoint, headers=headers)
-                name = extract_name(payload)
-                if name:
-                    return {"name": name, "billing_info_id": billing_id, "source": source, "errors": errors}
-                errors.append(f"{source} respondeu sem nome fiscal")
-            except Exception as exc:
-                errors.append(f"{source}: {str(exc)[:400]}")
+        try:
+            payload = ml_api_get(endpoint)
+            name = extract_name(payload)
+            if name:
+                return {"name": name, "billing_info_id": billing_id, "source": "billing_info_current", "errors": errors}
+            errors.append("billing-info atual respondeu sem nome fiscal")
+        except Exception as exc:
+            errors.append(f"billing-info atual: {str(exc)[:400]}")
     else:
         errors.append("buyer.billing_info.id ausente em /orders")
 
-    # Compatibilidade temporária com o recurso legado, também priorizando V2.
+    # Compatibilidade fiscal: para MLB o contrato V2 do endpoint legado pode
+    # disponibilizar Dados para NF-e mesmo quando o order ainda não trouxe o ID.
     if order_id:
         legacy_path = f"/orders/{quote(order_id)}/billing_info"
-        for headers, source in (({"x-version": "2"}, "billing_info_legacy_v2"), (None, "billing_info_legacy")):
+        for hdr, label in (({"x-version": "2"}, "billing_info_v2"), (None, "billing_info_v1")):
             try:
-                payload = ml_api_get(legacy_path, headers=headers)
+                payload = ml_api_get(legacy_path, headers=hdr)
                 name = extract_name(payload)
                 if name:
-                    return {"name": name, "billing_info_id": billing_id, "source": source, "errors": errors}
+                    return {"name": name, "billing_info_id": billing_id, "source": label, "errors": errors}
+                errors.append(f"{label} respondeu sem nome fiscal")
             except Exception as exc:
-                errors.append(f"{source}: {str(exc)[:400]}")
+                errors.append(f"{label}: {str(exc)[:400]}")
 
     return {"name": "", "billing_info_id": billing_id, "source": "", "errors": errors[-4:]}
 
@@ -3756,14 +3614,16 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
         ).strip()
     buyer = order.get("buyer") if isinstance(order.get("buyer"), dict) else {}
 
-    # V16.4: para Mercado Livre, Cliente é EXCLUSIVAMENTE o nome/razão social
-    # de Dados para NF-e. Não substitui por username, nickname, buyer.first_name,
-    # destinatário ou "Quem recebe". Se o dado fiscal ainda estiver processando,
-    # a linha fica marcada como aguardando e os workers tentarão novamente.
+    # V14.27: prioriza sempre Dados para NF-e. Em pedidos recém-criados o
+    # billing-info pode ainda não existir; nesse intervalo usa somente o NOME REAL
+    # do comprador da própria order (first_name + last_name). Nunca usa nickname,
+    # username, receiver_name ou "Quem recebe". Assim Cliente não fica vazio e,
+    # quando o fiscal aparecer, um refresh posterior o substitui automaticamente.
     billing_details = _ml_billing_details(order)
     fiscal_name = str(billing_details.get("name") or "").strip()
+    buyer_real_name = _ml_real_buyer_name(order)  # apenas diagnóstico; nunca vira Cliente
     client = fiscal_name
-    client_name_source = "dados_fiscais_nf" if fiscal_name else "dados_fiscais_pendentes"
+    client_name_source = "dados_fiscais_nf" if fiscal_name else "aguardando_dados_fiscais_nf"
     billing_info_id = str(billing_details.get("billing_info_id") or "").strip()
     billing_errors = billing_details.get("errors") if isinstance(billing_details.get("errors"), list) else []
 
@@ -3848,7 +3708,6 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
                 "StatusMercadoLivre": status,
                 "LogisticaMercadoLivre": _ml_logistic_type(shipment),
                 "NomeFiscalMercadoLivre": fiscal_name,
-                "FonteNomeClienteMercadoLivre": client_name_source,
                 "DataLimiteDespachoMercadoLivre": date_for_dispatch,
                 "MercadoLivreAtualizadoEm": now_iso(),
             }
@@ -3937,7 +3796,7 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
         for field in (
             "OrigemCadastro","SkuOrigemImportacao","VendaMercadoLivre","PackIdMercadoLivre",
             "ShipmentIdMercadoLivre","StatusMercadoLivre","LogisticaMercadoLivre",
-            "NomeFiscalMercadoLivre","FonteNomeClienteMercadoLivre","DataLimiteDespachoMercadoLivre","MercadoLivreAtualizadoEm"
+            "NomeFiscalMercadoLivre","DataLimiteDespachoMercadoLivre","MercadoLivreAtualizadoEm"
         ):
             existing[field] = imported.get(field, "")
         existing["Lido"] = lido
@@ -3950,20 +3809,19 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
     # Pedido+SKU mudou (kit, SKU normalizado, linha manual antiga etc.). Isso evita
     # que uma linha velha preserve nickname/nome incorreto após o refresh.
     forced_client_rows = 0
-    for existing in pending:
-        if not isinstance(existing, dict):
-            continue
-        same_order = str(existing.get("VendaMercadoLivre") or "").strip() == order_id
-        same_pack = bool(pack_id) and str(existing.get("PackIdMercadoLivre") or "").strip() == pack_id
-        if same_order or same_pack:
-            # Inclusive quando fiscal_name está vazio: limpa qualquer username/nome
-            # incorreto gravado por versões anteriores, em vez de preservá-lo.
-            if str(existing.get("Cliente") or "").strip() != client:
-                forced_client_rows += 1
-            existing["Cliente"] = client
-            existing["NomeFiscalMercadoLivre"] = fiscal_name
-            existing["FonteNomeClienteMercadoLivre"] = client_name_source
-            existing["MercadoLivreAtualizadoEm"] = now_iso()
+    if client:
+        for existing in pending:
+            if not isinstance(existing, dict):
+                continue
+            same_order = str(existing.get("VendaMercadoLivre") or "").strip() == order_id
+            same_pack = bool(pack_id) and str(existing.get("PackIdMercadoLivre") or "").strip() == pack_id
+            if same_order or same_pack:
+                if str(existing.get("Cliente") or "").strip() != client:
+                    forced_client_rows += 1
+                existing["Cliente"] = client
+                existing["NomeFiscalMercadoLivre"] = fiscal_name
+                existing["FonteNomeClienteMercadoLivre"] = client_name_source
+                existing["MercadoLivreAtualizadoEm"] = now_iso()
 
     # Cancelamentos não apagam o pedido; apenas ficam marcados para auditoria/ação manual.
     new_json = json_dumps(pending)
@@ -5575,7 +5433,7 @@ def _ml_profitability_recent_sales(days: int = 30, limit: int = 1000) -> list[di
             oid = str(order.get("id") or "").strip()
             if not oid:
                 continue
-            buyer = _ml_real_buyer_name(order)
+            buyer = _ml_billing_name(order)
             shipment = order.get("shipping") if isinstance(order.get("shipping"), dict) else {}
             shipment_id = str(shipment.get("id") or "").strip()
             pack_id = str(order.get("pack_id") or "").strip()
@@ -5829,7 +5687,7 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 1000, days: int
                 if not rec.get("date"):
                     rec["date"] = str(order.get("date_created") or "")
                 if not rec.get("client"):
-                    rec["client"] = _ml_real_buyer_name(order)
+                    rec["client"] = _ml_billing_name(order)
                 if not rec.get("shipment_id"):
                     sh = order.get("shipping") if isinstance(order.get("shipping"), dict) else {}
                     rec["shipment_id"] = str(sh.get("id") or "")
@@ -6289,16 +6147,6 @@ class AppHandler(BaseHTTPRequestHandler):
                     self.send_json({"ok": True, "detail": detail})
                 except Exception as exc:
                     self.send_json({"error": str(exc)}, 502)
-            return
-        if path == "/api/integracoes/mercadolivre/reautorizar":
-            ctx = self.auth(admin_only=True)
-            if ctx is not None:
-                try:
-                    result = ml_prepare_clean_reauthorization()
-                    audit(ctx["username"], "ml.reauthorize", "Mercado Livre / grant limpo")
-                    self.send_json(result)
-                except Exception as exc:
-                    self.send_json({"ok": False, "error": str(exc)}, 502)
             return
         if path == "/api/integracoes/mercadolivre/disconnect":
             ctx = self.auth(admin_only=True)
