@@ -1,0 +1,7 @@
+V16.26 - FATURAMENTO ML PELO PAGAMENTO APROVADO
+
+- Data da venda: payments.date_approved; fallback date_closed.
+- Valor da venda: soma de payments.transaction_amount aprovados, abatendo refunded.
+- Nao usa total_paid_amount, pois pode conter frete/juros.
+- Consulta de periodo usa order.date_closed.from/to.
+- Mantem deduplicacao por order.id e rateio em orders com varias linhas.

@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "16.25"
+APP_VERSION = "16.26"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -6147,6 +6147,47 @@ def _ml_profitability_buyer_name_fast(order: dict[str, Any]) -> str:
     return str(buyer.get("nickname") or buyer.get("id") or "").strip()
 
 
+def _ml_order_effective_sale(order: dict[str, Any]) -> tuple[float | None, datetime | None]:
+    """Valor/data efetivos da venda para conciliar com o painel de vendas do ML.
+
+    Para uma venda paga, usa pagamentos aprovados. O valor de mercadoria vem de
+    transaction_amount (não total_paid_amount, que pode incluir frete/juros).
+    A data é date_approved do pagamento; fallback para date_closed da order.
+    Reembolsos aprovados são abatidos via transaction_amount_refunded.
+    """
+    if not isinstance(order, dict):
+        return None, None
+    payments = order.get("payments") if isinstance(order.get("payments"), list) else []
+    total = 0.0
+    found = False
+    approved_dates: list[datetime] = []
+    for pay in payments:
+        if not isinstance(pay, dict):
+            continue
+        pstatus = str(pay.get("status") or "").lower()
+        if pstatus != "approved":
+            continue
+        amount = _money_number(pay.get("transaction_amount"))
+        if amount is None:
+            continue
+        refunded = _money_number(pay.get("transaction_amount_refunded")) or 0.0
+        net = max(0.0, float(amount) - max(0.0, float(refunded)))
+        total += net
+        found = True
+        d = _ml_parse_datetime(pay.get("date_approved") or pay.get("date_created"))
+        if d is not None:
+            approved_dates.append(d)
+    if found:
+        # Em pagamentos fracionados, a venda passa a contar quando o último pagamento
+        # aprovado completa a order.
+        sale_dt = max(approved_dates) if approved_dates else _ml_parse_datetime(order.get("date_closed"))
+        return total, sale_dt
+    # Compatibilidade com orders antigas sem payments completos.
+    if str(order.get("status") or "").lower() in ("paid", "partially_refunded"):
+        return _money_number(order.get("paid_amount") or order.get("total_amount")), _ml_parse_datetime(order.get("date_closed"))
+    return None, None
+
+
 def _ml_profitability_recent_sales(days: int = 30, limit: int = 2000, date_from: str = "", date_to: str = "", status_filter: str = "valid") -> list[dict[str, Any]]:
     """Busca vendas ML do período sem depender de uma única forma de consulta.
 
@@ -6207,13 +6248,13 @@ def _ml_profitability_recent_sales(days: int = 30, limit: int = 2000, date_from:
             status = str(order.get("status") or "").lower()
             if allowed_statuses and status not in allowed_statuses:
                 continue
-            # Data da venda: exclusivamente date_created oficial da order.
-            # Sem uma data oficial válida, a order não pode entrar no faturamento do período.
-            created = _ml_parse_datetime(order.get("date_created"))
-            if created is None:
+            # Data da venda: pagamento aprovado / date_closed. Isso acompanha melhor
+            # o painel "Vendas de hoje" do vendedor do que date_created.
+            effective_total, sale_dt = _ml_order_effective_sale(order)
+            if sale_dt is None:
                 continue
-            created_br = created.astimezone(br_tz)
-            if created_br < dt_from or created_br > dt_to:
+            sale_br = sale_dt.astimezone(br_tz)
+            if sale_br < dt_from or sale_br > dt_to:
                 continue
             oid = str(order.get("id") or "").strip()
             if not oid:
@@ -6228,14 +6269,14 @@ def _ml_profitability_recent_sales(days: int = 30, limit: int = 2000, date_from:
                 if key not in seen:
                     seen.add(key)
                     out.append({"order_id": oid, "pack_id": pack_id, "sku": "", "product": "", "client": buyer,
-                        "date": str(order.get("date_created") or ""), "shipment_id": shipment_id,
-                        "qty": 1, "sale_amount_api": _money_number(order.get("total_amount")),
+                        "date": sale_br.isoformat(), "shipment_id": shipment_id,
+                        "qty": 1, "sale_amount_api": effective_total,
                         "line_fee_api": _ml_order_marketplace_fee(order), "order_summary": order, "status": status})
                 continue
             order_fee = _ml_order_marketplace_fee(order)
             # Faturamento deve fechar com o total oficial da order. Somar simplesmente
             # unit_price * quantity pode divergir quando há desconto/promoção.
-            official_order_total = _money_number(order.get("total_amount"))
+            official_order_total = effective_total
             line_infos = []
             order_lines_total = 0.0
             for idx, oi in enumerate(items):
@@ -6271,7 +6312,7 @@ def _ml_profitability_recent_sales(days: int = 30, limit: int = 2000, date_from:
                     if len(line_infos) == 1: item_fee = order_fee
                     elif raw_line_total is not None and order_lines_total > 0: item_fee = order_fee * (raw_line_total / order_lines_total)
                 out.append({"order_id": oid, "pack_id": pack_id, "sku": sku, "product": title, "client": buyer,
-                    "date": str(order.get("date_created") or ""), "shipment_id": shipment_id,
+                    "date": sale_br.isoformat(), "shipment_id": shipment_id,
                     "qty": qty, "sale_amount_api": line_total, "line_fee_api": item_fee, "order_summary": order, "status": status,
                     "order_total_api": official_order_total})
                 if len(out) >= lim:
@@ -6282,8 +6323,8 @@ def _ml_profitability_recent_sales(days: int = 30, limit: int = 2000, date_from:
         for page in range(120):
             params = {
                 "seller": seller_id,
-                "order.date_created.from": dt_from.isoformat(timespec="milliseconds"),
-                "order.date_created.to": dt_to.isoformat(timespec="milliseconds"),
+                "order.date_closed.from": dt_from.isoformat(timespec="milliseconds"),
+                "order.date_closed.to": dt_to.isoformat(timespec="milliseconds"),
                 "sort": "date_desc", "limit": str(page_size), "offset": str(page * page_size),
             }
             if status_value:
@@ -6330,7 +6371,7 @@ def _ml_profitability_recent_sales(days: int = 30, limit: int = 2000, date_from:
                 for order in orders:
                     if not isinstance(order, dict):
                         continue
-                    odt = _ml_parse_datetime(order.get("date_created"))
+                    _, odt = _ml_order_effective_sale(order)
                     if odt is not None and odt.astimezone(br_tz) < dt_from:
                         reached_before = True
                         break
@@ -6816,7 +6857,7 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
                 # Só usa total da order quando ela realmente possui uma única linha;
                 # evita repetir o faturamento inteiro em cada item de venda múltipla.
                 if sale_amount is None and len(detailed_items) <= 1:
-                    sale_amount = _money_number(order.get("total_amount"))
+                    sale_amount = _ml_order_effective_sale(order)[0]
                 if billing_fee is None and len(matching) == 1:
                     detailed_fee = _ml_item_fee(matching[0])
                     if detailed_fee is not None:
@@ -6832,7 +6873,7 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
                             if sale_amount is not None and order_total > 0:
                                 ml_fee = total_fee * (sale_amount / order_total)
                 if not rec.get("date"):
-                    rec["date"] = str(order.get("date_created") or "")
+                    rec["date"] = (_ml_order_effective_sale(order)[1].isoformat() if _ml_order_effective_sale(order)[1] else str(order.get("date_closed") or ""))
                 if not rec.get("client"):
                     rec["client"] = _ml_billing_name(order)
                 if not rec.get("shipment_id"):
