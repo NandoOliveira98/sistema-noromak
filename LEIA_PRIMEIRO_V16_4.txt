@@ -1,0 +1,7 @@
+V16.4 - Nome fiscal Mercado Livre nos pedidos pendentes
+
+- Cliente de pedido Mercado Livre passa a vir exclusivamente de Dados para NF-e (billing-info).
+- Não usa username, nickname, nome do comprador da order nem destinatário como substituto.
+- Consulta /orders/billing-info/{site}/{billing_info_id}, tentando contrato V2 e compatibilidade padrão.
+- Compatibilidade com respostas billing_info.additional_info.
+- Pedidos antigos são corrigidos na próxima sincronização; nomes incorretos são removidos enquanto o dado fiscal estiver pendente.

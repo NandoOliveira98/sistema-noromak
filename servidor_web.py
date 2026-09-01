@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "16.3"
+APP_VERSION = "16.4"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2797,10 +2797,10 @@ def _ml_is_full_shipment(shipment: dict[str, Any] | None) -> bool:
 
 
 def _ml_billing_details(order: dict[str, Any]) -> dict[str, Any]:
-    """Retorna exclusivamente o nome/razão social fiscal de Dados para NF-e.
+    """Obtém exclusivamente o nome/razão social de Dados para NF-e do Mercado Livre.
 
-    Não usa nickname, first_name/last_name do order nem destinatário do shipment.
-    Fluxo oficial MLB: buyer.billing_info.id -> /orders/billing-info/{site}/{id}.
+    V16.4: nunca usa username/nickname, nome da order ou destinatário como Cliente.
+    Fluxo principal: buyer.billing_info.id -> /orders/billing-info/{site}/{id}.
     """
     buyer = order.get("buyer") if isinstance(order.get("buyer"), dict) else {}
     raw_embedded = buyer.get("billing_info")
@@ -2808,11 +2808,9 @@ def _ml_billing_details(order: dict[str, Any]) -> dict[str, Any]:
     embedded = raw_embedded if isinstance(raw_embedded, dict) else {}
     root_billing = raw_root_billing if isinstance(raw_root_billing, dict) else {}
     billing_id = str(
-        embedded.get("id")
-        or root_billing.get("id")
+        embedded.get("id") or root_billing.get("id")
         or (raw_embedded if isinstance(raw_embedded, (str, int)) else "")
-        or (raw_root_billing if isinstance(raw_root_billing, (str, int)) else "")
-        or ""
+        or (raw_root_billing if isinstance(raw_root_billing, (str, int)) else "") or ""
     ).strip()
     site_id = str(order.get("site_id") or "MLB").strip().upper() or "MLB"
     order_id = str(order.get("id") or "").strip()
@@ -2825,51 +2823,64 @@ def _ml_billing_details(order: dict[str, Any]) -> dict[str, Any]:
         info = fiscal_buyer.get("billing_info") if isinstance(fiscal_buyer.get("billing_info"), dict) else {}
         if not info and isinstance(payload.get("billing_info"), dict):
             info = payload["billing_info"]
+        # Compatibilidade defensiva caso o recurso devolva diretamente o objeto fiscal.
+        if not info and any(k in payload for k in ("name", "last_name", "business_name", "corporate_name", "additional_info")):
+            info = payload
         if not info:
             return ""
-        first = str(info.get("name") or info.get("first_name") or "").strip()
-        last = str(info.get("last_name") or info.get("surname") or "").strip()
-        business = str(info.get("business_name") or info.get("corporate_name") or "").strip()
+
+        # Respostas antigas podem representar os dados como additional_info [{type,value}].
+        additional = info.get("additional_info") if isinstance(info.get("additional_info"), list) else []
+        extra = {}
+        for entry in additional:
+            if isinstance(entry, dict):
+                typ = str(entry.get("type") or "").strip().upper()
+                val = str(entry.get("value") or "").strip()
+                if typ and val:
+                    extra[typ] = val
+
+        first = str(info.get("name") or info.get("first_name") or extra.get("FIRST_NAME") or extra.get("NAME") or "").strip()
+        last = str(info.get("last_name") or info.get("surname") or extra.get("LAST_NAME") or "").strip()
+        business = str(info.get("business_name") or info.get("corporate_name") or extra.get("BUSINESS_NAME") or extra.get("CORPORATE_NAME") or "").strip()
         identification = info.get("identification") if isinstance(info.get("identification"), dict) else {}
-        doc_type = str(identification.get("type") or "").strip().upper()
-        # MLB pessoa jurídica: name é a razão social; não concatenar last_name.
-        if doc_type == "CNPJ":
-            return business or first
+        doc_type = str(identification.get("type") or extra.get("DOC_TYPE") or "").strip().upper()
+        if doc_type in {"CNPJ", "CUIT", "RUT"}:
+            return business or first or " ".join(x for x in (first, last) if x).strip()
         return " ".join(x for x in (first, last) if x).strip() or business
 
-    # Algumas respostas podem já trazer o objeto fiscal completo embutido.
     embedded_name = extract_name({"buyer": {"billing_info": embedded}}) if embedded else ""
-    if embedded_name and any(k in embedded for k in ("name", "business_name", "corporate_name")):
+    if embedded_name and any(k in embedded for k in ("name", "last_name", "business_name", "corporate_name", "additional_info")):
         return {"name": embedded_name, "billing_info_id": billing_id, "source": "order_embedded", "errors": []}
 
     if billing_id:
         endpoint = f"/orders/billing-info/{quote(site_id)}/{quote(billing_id)}"
-        # O endpoint atual documentado não requer header de versão.
-        try:
-            payload = ml_api_get(endpoint)
-            name = extract_name(payload)
-            if name:
-                return {"name": name, "billing_info_id": billing_id, "source": "billing_info", "errors": errors}
-            errors.append("billing-info respondeu sem name/last_name")
-        except Exception as exc:
-            errors.append(str(exc)[:500])
+        # Tenta V2 primeiro para obter o contrato fiscal mais completo; mantém chamada
+        # sem versão como compatibilidade com contas ainda em migração.
+        for headers, source in (({"x-version": "2"}, "billing_info_v2"), (None, "billing_info")):
+            try:
+                payload = ml_api_get(endpoint, headers=headers)
+                name = extract_name(payload)
+                if name:
+                    return {"name": name, "billing_info_id": billing_id, "source": source, "errors": errors}
+                errors.append(f"{source} respondeu sem nome fiscal")
+            except Exception as exc:
+                errors.append(f"{source}: {str(exc)[:400]}")
     else:
         errors.append("buyer.billing_info.id ausente em /orders")
 
-    # Endpoint legado apenas como compatibilidade temporária. Continua sendo fonte fiscal,
-    # nunca fonte de nickname/receiver.
+    # Compatibilidade temporária com o recurso legado, também priorizando V2.
     if order_id:
-        for legacy_path in (f"/orders/{quote(order_id)}/billing_info", f"/orders/{quote(order_id)}/billing-info"):
+        legacy_path = f"/orders/{quote(order_id)}/billing_info"
+        for headers, source in (({"x-version": "2"}, "billing_info_legacy_v2"), (None, "billing_info_legacy")):
             try:
-                payload = ml_api_get(legacy_path)
+                payload = ml_api_get(legacy_path, headers=headers)
                 name = extract_name(payload)
                 if name:
-                    return {"name": name, "billing_info_id": billing_id, "source": "billing_info_legacy", "errors": errors}
+                    return {"name": name, "billing_info_id": billing_id, "source": source, "errors": errors}
             except Exception as exc:
-                errors.append(str(exc)[:500])
+                errors.append(f"{source}: {str(exc)[:400]}")
 
-    return {"name": "", "billing_info_id": billing_id, "source": "", "errors": errors[-3:]}
-
+    return {"name": "", "billing_info_id": billing_id, "source": "", "errors": errors[-4:]}
 
 def _ml_billing_name(order: dict[str, Any]) -> str:
     return str(_ml_billing_details(order).get("name") or "").strip()
@@ -3745,16 +3756,14 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
         ).strip()
     buyer = order.get("buyer") if isinstance(order.get("buyer"), dict) else {}
 
-    # V14.27: prioriza sempre Dados para NF-e. Em pedidos recém-criados o
-    # billing-info pode ainda não existir; nesse intervalo usa somente o NOME REAL
-    # do comprador da própria order (first_name + last_name). Nunca usa nickname,
-    # username, receiver_name ou "Quem recebe". Assim Cliente não fica vazio e,
-    # quando o fiscal aparecer, um refresh posterior o substitui automaticamente.
+    # V16.4: para Mercado Livre, Cliente é EXCLUSIVAMENTE o nome/razão social
+    # de Dados para NF-e. Não substitui por username, nickname, buyer.first_name,
+    # destinatário ou "Quem recebe". Se o dado fiscal ainda estiver processando,
+    # a linha fica marcada como aguardando e os workers tentarão novamente.
     billing_details = _ml_billing_details(order)
     fiscal_name = str(billing_details.get("name") or "").strip()
-    buyer_real_name = _ml_real_buyer_name(order)
-    client = fiscal_name or buyer_real_name
-    client_name_source = "dados_fiscais_nf" if fiscal_name else ("comprador_order" if buyer_real_name else "")
+    client = fiscal_name
+    client_name_source = "dados_fiscais_nf" if fiscal_name else "dados_fiscais_pendentes"
     billing_info_id = str(billing_details.get("billing_info_id") or "").strip()
     billing_errors = billing_details.get("errors") if isinstance(billing_details.get("errors"), list) else []
 
@@ -3839,6 +3848,7 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
                 "StatusMercadoLivre": status,
                 "LogisticaMercadoLivre": _ml_logistic_type(shipment),
                 "NomeFiscalMercadoLivre": fiscal_name,
+                "FonteNomeClienteMercadoLivre": client_name_source,
                 "DataLimiteDespachoMercadoLivre": date_for_dispatch,
                 "MercadoLivreAtualizadoEm": now_iso(),
             }
@@ -3927,7 +3937,7 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
         for field in (
             "OrigemCadastro","SkuOrigemImportacao","VendaMercadoLivre","PackIdMercadoLivre",
             "ShipmentIdMercadoLivre","StatusMercadoLivre","LogisticaMercadoLivre",
-            "NomeFiscalMercadoLivre","DataLimiteDespachoMercadoLivre","MercadoLivreAtualizadoEm"
+            "NomeFiscalMercadoLivre","FonteNomeClienteMercadoLivre","DataLimiteDespachoMercadoLivre","MercadoLivreAtualizadoEm"
         ):
             existing[field] = imported.get(field, "")
         existing["Lido"] = lido
@@ -3940,19 +3950,20 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
     # Pedido+SKU mudou (kit, SKU normalizado, linha manual antiga etc.). Isso evita
     # que uma linha velha preserve nickname/nome incorreto após o refresh.
     forced_client_rows = 0
-    if client:
-        for existing in pending:
-            if not isinstance(existing, dict):
-                continue
-            same_order = str(existing.get("VendaMercadoLivre") or "").strip() == order_id
-            same_pack = bool(pack_id) and str(existing.get("PackIdMercadoLivre") or "").strip() == pack_id
-            if same_order or same_pack:
-                if str(existing.get("Cliente") or "").strip() != client:
-                    forced_client_rows += 1
-                existing["Cliente"] = client
-                existing["NomeFiscalMercadoLivre"] = fiscal_name
-                existing["FonteNomeClienteMercadoLivre"] = client_name_source
-                existing["MercadoLivreAtualizadoEm"] = now_iso()
+    for existing in pending:
+        if not isinstance(existing, dict):
+            continue
+        same_order = str(existing.get("VendaMercadoLivre") or "").strip() == order_id
+        same_pack = bool(pack_id) and str(existing.get("PackIdMercadoLivre") or "").strip() == pack_id
+        if same_order or same_pack:
+            # Inclusive quando fiscal_name está vazio: limpa qualquer username/nome
+            # incorreto gravado por versões anteriores, em vez de preservá-lo.
+            if str(existing.get("Cliente") or "").strip() != client:
+                forced_client_rows += 1
+            existing["Cliente"] = client
+            existing["NomeFiscalMercadoLivre"] = fiscal_name
+            existing["FonteNomeClienteMercadoLivre"] = client_name_source
+            existing["MercadoLivreAtualizadoEm"] = now_iso()
 
     # Cancelamentos não apagam o pedido; apenas ficam marcados para auditoria/ação manual.
     new_json = json_dumps(pending)
