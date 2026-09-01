@@ -1043,6 +1043,7 @@ body{background:var(--v15-bg)!important}
             <button type="button" id="btnMlConectar" class="btn-primario" onclick="conectarMercadoLivreAdmin()">Conectar Mercado Livre</button>
             <button type="button" id="btnMlSincronizar" class="btn-sucesso" onclick="sincronizarMercadoLivreAdmin()" disabled>↻ Sincronizar agora</button>
             <button type="button" id="btnMlVerificarEtiquetas" class="btn-secundario" onclick="verificarEtiquetasMercadoLivreAdmin()" disabled>🏷 Verificar etiquetas disponíveis e vincular</button>
+            <button type="button" id="btnMlAtualizarNomesNfe" class="btn-secundario" onclick="atualizarNomesNfeMercadoLivreAdmin()">🧾 Atualizar nomes pelas NF-e</button>
             <button type="button" id="btnMlDesconectar" class="btn-perigo" onclick="desconectarMercadoLivreAdmin()" disabled>Desconectar</button>
           </div>
           <div id="mlIntegracaoMensagem" class="integracao-nota">As credenciais ficam somente no <code>/home/expedicao/.env</code>; o Client Secret nunca é enviado ao navegador.</div>
@@ -6287,6 +6288,22 @@ Erros: ${d.errors||0}`);
   }catch(e){
     if(msg)msg.innerHTML='❌ Erro ao verificar etiquetas: <b>'+mlHtmlSeguro(e.message)+'</b>';
     alert("Erro ao verificar etiquetas: "+e.message);
+  }finally{if(btn){btn.disabled=false;btn.textContent=original;}}
+}
+async function atualizarNomesNfeMercadoLivreAdmin(){
+  const btn=document.getElementById("btnMlAtualizarNomesNfe"),original=btn?.textContent||"🧾 Atualizar nomes pelas NF-e";
+  if(btn){btn.disabled=true;btn.textContent="⏳ Lendo NF-e já vinculadas...";}
+  const msg=document.getElementById("mlIntegracaoMensagem");
+  if(msg)msg.innerHTML='⏳ Reprocessando os <b>pedidos pendentes de conferência</b> com base nas NF-e/DANFE que já estão vinculadas no servidor...';
+  try{
+    const d=await mlApiAdmin("/expedicao/api/integracoes/mercadolivre/atualizar-nomes-nfe",{method:"POST",body:"{}"});
+    if(msg)msg.innerHTML=`✅ Nomes pelas NF-e: <b>${d.updated_orders||0}</b> pedido(s) atualizado(s), <b>${d.updated_rows||0}</b> linha(s). ${d.without_linked_invoice_name||0} pedido(s) não tiveram nome encontrado no arquivo fiscal vinculado.`;
+    alert(`Atualização pelas NF-e concluída.\n\nPedidos pendentes: ${d.pending_orders||0}\nPedidos atualizados: ${d.updated_orders||0}\nLinhas atualizadas: ${d.updated_rows||0}\nNF-e/arquivos com nome identificado: ${d.invoice_records_with_name||0}\nPedidos sem nome fiscal localizável: ${d.without_linked_invoice_name||0}`);
+    if(typeof appStorage?.sincronizarAgora==="function")await appStorage.sincronizarAgora();
+    if(typeof carregarPedidosAdmin==="function")carregarPedidosAdmin();
+  }catch(e){
+    if(msg)msg.innerHTML='❌ Erro ao atualizar nomes pelas NF-e: <b>'+mlHtmlSeguro(e.message)+'</b>';
+    alert("Erro ao atualizar nomes pelas NF-e: "+e.message);
   }finally{if(btn){btn.disabled=false;btn.textContent=original;}}
 }
 async function desconectarMercadoLivreAdmin(){

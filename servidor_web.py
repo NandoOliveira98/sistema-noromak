@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "16.7"
+APP_VERSION = "16.9"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2649,6 +2649,248 @@ def _ml_is_full_shipment(shipment: dict[str, Any] | None) -> bool:
         return True
     tags = shipment.get("tags") if isinstance(shipment, dict) and isinstance(shipment.get("tags"), list) else []
     return any(str(tag or "").strip().lower() in {"fulfillment", "full"} for tag in tags)
+
+
+
+def _nfe_xml_dest_name(xml_text: str) -> str:
+    """Extrai dest/xNome quando o arquivo fiscal persistido for XML NF-e."""
+    text = str(xml_text or "").strip()
+    if not text or "<" not in text or "xNome" not in text:
+        return ""
+    try:
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(text.encode("utf-8", errors="ignore"))
+        for dest in root.iter():
+            if str(dest.tag).split("}")[-1].lower() != "dest":
+                continue
+            for child in list(dest):
+                if str(child.tag).split("}")[-1].lower() == "xnome":
+                    return " ".join(str(child.text or "").split()).strip()
+    except Exception:
+        return ""
+    return ""
+
+
+def _zpl_decode_fh_text(value: Any) -> str:
+    """Decodifica sequências ^FH do ZPL, inclusive UTF-8 (_C3_A7 etc.)."""
+    text = str(value or "")
+    def repl(match: re.Match[str]) -> str:
+        seq = match.group(0)
+        try:
+            raw = bytes(int(x, 16) for x in re.findall(r"_([0-9A-Fa-f]{2})", seq))
+            return raw.decode("utf-8", errors="replace")
+        except Exception:
+            return seq
+    text = re.sub(r"(?:_[0-9A-Fa-f]{2})+", repl, text)
+    return " ".join(text.replace("\\&", " ").split()).strip()
+
+
+def _nfe_name_candidate(value: Any) -> str:
+    text = _zpl_decode_fh_text(value)
+    text = re.sub(r"^[\s:;\-–—]+|[\s:;\-–—]+$", "", text).strip()
+    if not (4 <= len(text) <= 120) or not re.search(r"[A-Za-zÀ-ÿ]", text):
+        return ""
+    norm = normalize(text)
+    blocked = (
+        "DESTINATARIO", "DESTINATÁRIO", "REMETENTE", "NOME RAZAO SOCIAL", "NOME RAZÃO SOCIAL",
+        "ENDERECO", "ENDEREÇO", "MUNICIPIO", "MUNICÍPIO", "CEP", "CPF", "CNPJ", "CHAVE DE ACESSO",
+        "DANFE", "NOTA FISCAL", "INSCRICAO", "INSCRIÇÃO", "BAIRRO", "FONE", "UF", "DATA DE EMISSAO",
+        "MERCADO LIVRE", "NOROMAK CAMINHOES E ONIBUS", "NOROMAK CAMINHÕES E ÔNIBUS"
+    )
+    if any(norm == normalize(x) or norm.startswith(normalize(x) + " ") for x in blocked):
+        return ""
+    # Nome/razão social deve ter ao menos duas partes, exceto razão social longa sem espaço incomum.
+    if len(text.split()) < 2:
+        return ""
+    return text
+
+
+def _nfe_name_from_zpl(zpl: str) -> str:
+    text = str(zpl or "")
+    if not text:
+        return ""
+    xml_name = _nfe_xml_dest_name(text)
+    if xml_name:
+        return xml_name
+    fields = [_zpl_decode_fh_text(x) for x in re.findall(r"\^FD([\s\S]*?)\^FS", text, flags=re.IGNORECASE)]
+    fields = [x for x in fields if x]
+    # 1) Nome no mesmo campo do rótulo.
+    for field in fields:
+        m = re.search(r"(?:DESTINAT[ÁA]RIO|NOME\s*/?\s*RAZ[ÃA]O\s+SOCIAL|CLIENTE)\s*[:\-]\s*(.+)$", field, flags=re.I)
+        if m:
+            candidate = _nfe_name_candidate(m.group(1))
+            if candidate:
+                return candidate
+    # 2) Nome logo após NOME/RAZÃO SOCIAL; é o padrão mais seguro em DANFE.
+    label_indexes = []
+    for i, field in enumerate(fields):
+        norm = normalize(field)
+        if ("NOME" in norm and "RAZAO" in norm and "SOCIAL" in norm) or norm in {"DESTINATARIO", "DESTINATÁRIO"}:
+            label_indexes.append(i)
+    for i in label_indexes:
+        for field in fields[i+1:i+7]:
+            candidate = _nfe_name_candidate(field)
+            if candidate:
+                return candidate
+    return ""
+
+
+def _walk_string_values(value: Any):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for child in value.values():
+            yield from _walk_string_values(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _walk_string_values(child)
+
+
+def _nfe_name_from_label_record(record: dict[str, Any]) -> str:
+    """Lê o nome diretamente do arquivo fiscal/etiqueta que já está no banco."""
+    if not isinstance(record, dict):
+        return ""
+    # Campos explícitos, caso uma versão/importador já os tenha extraído.
+    meta = record.get("metadados") if isinstance(record.get("metadados"), dict) else {}
+    for source in (record, meta):
+        for key in ("nomeNFe", "nome_nfe", "destinatario", "destinatário", "cliente", "xNome", "razaoSocial", "razãoSocial"):
+            candidate = _nfe_name_candidate(source.get(key))
+            if candidate:
+                return candidate
+    # Prioriza DANFE/XML; depois procura qualquer string do registro que contenha XML NF-e.
+    for key in ("danfe", "xml", "nfe_xml", "nota_xml", "conteudo_xml"):
+        raw = record.get(key)
+        if isinstance(raw, str) and raw.strip():
+            name = _nfe_xml_dest_name(raw) or _nfe_name_from_zpl(raw)
+            if name:
+                return name
+    for raw in _walk_string_values(record):
+        if "<" in raw and "xNome" in raw:
+            name = _nfe_xml_dest_name(raw)
+            if name:
+                return name
+    return ""
+
+
+def _ml_aliases_from_values(*values: Any) -> set[str]:
+    aliases: set[str] = set()
+    for raw in values:
+        if isinstance(raw, (list, tuple, set)):
+            aliases.update(_ml_aliases_from_values(*raw))
+            continue
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        aliases.add(normalize(text))
+        digits = re.sub(r"\D+", "", text)
+        if digits:
+            aliases.update(_ml_order_aliases(digits, ""))
+    return {normalize(x) for x in aliases if normalize(x)}
+
+
+def ml_update_pending_names_from_uploaded_nfe() -> dict[str, Any]:
+    """Reprocessa pedidos pendentes usando a NF-e/DANFE já vinculada no banco de etiquetas.
+
+    Não depende de OAuth nem de uma nova consulta ao Mercado Livre. Somente altera
+    conf_pedidos (pendentes), nunca histórico/concluídos.
+    """
+    orders_raw, _, _ = get_storage("conf_pedidos")
+    labels_raw, _, _ = get_storage("conf_etiquetas")
+    pending = _rows_from_storage_value(orders_raw)
+    try:
+        bank = json.loads(labels_raw or "{}")
+    except Exception:
+        bank = {}
+    records = bank.get("registros") if isinstance(bank, dict) and isinstance(bank.get("registros"), dict) else {}
+
+    # Indexa cada arquivo fiscal vinculado por todas as chaves conhecidas.
+    nfe_by_alias: dict[str, tuple[str, str]] = {}
+    records_with_name = 0
+    records_examined = 0
+    for rid, rec in records.items():
+        if not isinstance(rec, dict):
+            continue
+        marketplace = normalize(rec.get("marketplace"))
+        if "MERCADO LIVRE" not in marketplace and "MERCADOLIVRE" not in marketplace:
+            continue
+        records_examined += 1
+        name = _nfe_name_from_label_record(rec)
+        if not name:
+            continue
+        records_with_name += 1
+        meta = rec.get("metadados") if isinstance(rec.get("metadados"), dict) else {}
+        aliases = _ml_aliases_from_values(
+            rec.get("pedido"), rec.get("vinculadoA"), rec.get("chaves"),
+            meta.get("pedido"), meta.get("venda"), meta.get("pack_id"), meta.get("shipment_id"),
+            meta.get("nf"), meta.get("chaveAcesso"), meta.get("rastreio"),
+        )
+        for alias in aliases:
+            nfe_by_alias.setdefault(alias, (name, str(rid)))
+
+    pending_order_keys: dict[str, list[dict[str, Any]]] = {}
+    for row in pending:
+        if not isinstance(row, dict):
+            continue
+        marketplace = normalize(row.get("Marketplace"))
+        if "MERCADO LIVRE" not in marketplace and "MERCADOLIVRE" not in marketplace:
+            continue
+        order_key = normalize(order_number(row) or row.get("VendaMercadoLivre") or row.get("PackIdMercadoLivre"))
+        if order_key:
+            pending_order_keys.setdefault(order_key, []).append(row)
+
+    updated_orders = 0
+    updated_rows = 0
+    already_equal = 0
+    no_linked_nfe = 0
+    details = []
+    timestamp = now_iso()
+    for order_key, rows in pending_order_keys.items():
+        aliases: set[str] = set()
+        for row in rows:
+            aliases.update(_ml_aliases_from_values(
+                order_number(row), row.get("VendaMercadoLivre"), row.get("PackIdMercadoLivre"),
+                row.get("ShipmentIdMercadoLivre"), row.get("Código de Rastreio"),
+                row.get("NF"), row.get("Nota Fiscal"), row.get("Chave de Acesso"),
+            ))
+        found = next((nfe_by_alias[a] for a in aliases if a in nfe_by_alias), None)
+        if not found:
+            no_linked_nfe += 1
+            continue
+        name, rid = found
+        changed = 0
+        for row in rows:
+            if str(row.get("Cliente") or "").strip() != name:
+                row["Cliente"] = name
+                changed += 1
+            row["NomeNFeArquivo"] = name
+            row["FonteNomeClienteMercadoLivre"] = "nfe_arquivo_vinculada"
+            row["NomeNFeAtualizadoEm"] = timestamp
+        if changed:
+            updated_orders += 1
+            updated_rows += changed
+        else:
+            already_equal += 1
+        if len(details) < 60:
+            details.append({"pedido": order_number(rows[0]), "nome": name, "etiqueta": rid, "linhas": changed})
+
+    if updated_rows:
+        save_storage(
+            "conf_pedidos", orders_raw, json_dumps(pending), False,
+            actor="sistema", actor_role="sistema", source_screen="Admin / Integrações",
+            change_method="Atualizar nomes pelas NF-e já vinculadas", client_ip="127.0.0.1",
+            allow_completed_reimport=False,
+        )
+    return {
+        "ok": True,
+        "pending_orders": len(pending_order_keys),
+        "invoice_records_examined": records_examined,
+        "invoice_records_with_name": records_with_name,
+        "updated_orders": updated_orders,
+        "updated_rows": updated_rows,
+        "already_equal": already_equal,
+        "without_linked_invoice_name": no_linked_nfe,
+        "details": details,
+    }
 
 
 def _ml_billing_details(order: dict[str, Any]) -> dict[str, Any]:
@@ -6207,6 +6449,16 @@ class AppHandler(BaseHTTPRequestHandler):
                 except Exception as exc:
                     self.send_json({"error": str(exc)}, 502)
             return
+        if path == "/api/integracoes/mercadolivre/atualizar-nomes-nfe":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                try:
+                    result = ml_update_pending_names_from_uploaded_nfe()
+                    audit(ctx["username"], "ml.pending_names.from_nfe", json_dumps({k: v for k, v in result.items() if k != "details"})[:4000])
+                    self.send_json(result)
+                except Exception as exc:
+                    self.send_json({"error": str(exc)}, 500)
+            return
         if path == "/api/integracoes/mercadolivre/disconnect":
             ctx = self.auth(admin_only=True)
             if ctx is not None:
@@ -6575,7 +6827,14 @@ class AppHandler(BaseHTTPRequestHandler):
                 allow_completed_reimport=(ctx["app_role"] == "admin"),
             )
             audit(ctx["username"], "storage.save", key)
-            self.send_json({"ok": True, "value": value, "version": version, "updated_at": updated})
+            nfe_name_update = None
+            if key == "conf_etiquetas":
+                try:
+                    nfe_name_update = ml_update_pending_names_from_uploaded_nfe()
+                except Exception as exc:
+                    nfe_name_update = {"ok": False, "error": str(exc)[:500]}
+            self.send_json({"ok": True, "value": value, "version": version, "updated_at": updated,
+                            "nfe_name_update": nfe_name_update})
         except (ValueError, json.JSONDecodeError) as exc:
             self.send_json({"error": str(exc)}, 400)
         except Exception as exc:

@@ -1,0 +1,9 @@
+V16.9 - ATUALIZAR NOMES PELAS NF-e JÁ VINCULADAS
+
+- Novo botão em Admin > Integrações > Mercado Livre: Atualizar nomes pelas NF-e.
+- Reprocessa SOMENTE pedidos ainda pendentes de conferência.
+- Lê o nome do destinatário diretamente da NF-e/XML ou DANFE/ZPL já vinculada no banco de etiquetas.
+- Suporta dest/xNome em XML com namespace e DANFE ZPL com ^FH UTF-8.
+- Atualiza Cliente em todas as linhas do pedido.
+- Não altera pedidos concluídos/histórico.
+- Exibe no final quantos pedidos/linhas foram corrigidos e quantos não tinham nome fiscal localizável.
