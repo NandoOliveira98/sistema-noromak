@@ -1745,23 +1745,62 @@ function prepararRecorteOcrShopee(canvas, modoAmplo = false) {
 let workerOcrShopee = null;
 let tentativaOcrShopeeAtual = 1;
 
+const TEMPO_MAX_INICIALIZACAO_OCR_SHOPEE = 12000;
+const TEMPO_MAX_LEITURA_OCR_SHOPEE = 12000;
+
+async function executarComTimeoutShopee(promessa, tempoMs, mensagem) {
+  let timer = null;
+  try {
+    return await Promise.race([
+      promessa,
+      new Promise((_, rejeitar) => {
+        timer = setTimeout(() => rejeitar(new Error(mensagem)), tempoMs);
+      })
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function resetarWorkerOcrShopee() {
+  const atual = workerOcrShopee;
+  workerOcrShopee = null;
+  if (atual && typeof atual.terminate === "function") {
+    try { await atual.terminate(); } catch (_) {}
+  }
+}
+
 async function obterWorkerOcrShopee() {
-  if (!window.Tesseract) throw new Error("Biblioteca de leitura de imagem não carregada. Verifique a conexão com a internet.");
+  if (!window.Tesseract) throw new Error("Biblioteca de leitura de imagem não carregada. A etiqueta será salva para vínculo manual.");
   if (!workerOcrShopee) {
-    workerOcrShopee = await Tesseract.createWorker("eng", 1, {
-      logger: m => {
-        if (m.status === "recognizing text") {
-          const status = document.getElementById("status");
-          if (status) status.innerHTML = `Lendo pedido Shopee por imagem (tentativa ${tentativaOcrShopeeAtual})... ${Math.round((m.progress || 0) * 100)}%`;
+    const novoWorker = await executarComTimeoutShopee(
+      Tesseract.createWorker("eng", 1, {
+        logger: m => {
+          if (m.status === "recognizing text") {
+            const status = document.getElementById("status");
+            if (status) status.innerHTML = `Lendo pedido Shopee por imagem (tentativa ${tentativaOcrShopeeAtual})... ${Math.round((m.progress || 0) * 100)}%`;
+          }
         }
-      }
-    });
-    await workerOcrShopee.setParameters({
-      tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789:-",
-      tessedit_pageseg_mode: (Tesseract.PSM && Tesseract.PSM.SINGLE_BLOCK) ? Tesseract.PSM.SINGLE_BLOCK : "6",
-      preserve_interword_spaces: "1",
-      user_defined_dpi: "300"
-    });
+      }),
+      TEMPO_MAX_INICIALIZACAO_OCR_SHOPEE,
+      "O leitor OCR da Shopee não iniciou em 12 segundos."
+    );
+    try {
+      await executarComTimeoutShopee(
+        novoWorker.setParameters({
+          tessedit_char_whitelist: "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789:-",
+          tessedit_pageseg_mode: (Tesseract.PSM && Tesseract.PSM.SINGLE_BLOCK) ? Tesseract.PSM.SINGLE_BLOCK : "6",
+          preserve_interword_spaces: "1",
+          user_defined_dpi: "300"
+        }),
+        5000,
+        "O OCR da Shopee não aceitou a configuração em tempo hábil."
+      );
+      workerOcrShopee = novoWorker;
+    } catch (erro) {
+      try { await novoWorker.terminate(); } catch (_) {}
+      throw erro;
+    }
   }
   return workerOcrShopee;
 }
@@ -1769,13 +1808,24 @@ async function obterWorkerOcrShopee() {
 async function executarOcrShopee(recorte, indiceTentativa) {
   tentativaOcrShopeeAtual = indiceTentativa;
   const worker = await obterWorkerOcrShopee();
-  const resultado = await worker.recognize(recorte);
-  return String(resultado?.data?.text || "").toUpperCase();
+  try {
+    const resultado = await executarComTimeoutShopee(
+      worker.recognize(recorte),
+      TEMPO_MAX_LEITURA_OCR_SHOPEE,
+      "A leitura OCR da etiqueta Shopee excedeu 12 segundos."
+    );
+    return String(resultado?.data?.text || "").toUpperCase();
+  } catch (erro) {
+    await resetarWorkerOcrShopee();
+    throw erro;
+  }
 }
 
 async function lerPedidoOcrShopee(canvas) {
   const textos = [];
-  for (let tentativa = 0; tentativa < 2; tentativa++) {
+  // V16.19: uma tentativa curta. Se falhar, a etiqueta continua sendo salva
+  // e o vínculo visual/manual assume, evitando travar o upload na etapa OCR.
+  for (let tentativa = 0; tentativa < 1; tentativa++) {
     try {
       const texto = await executarOcrShopee(prepararRecorteOcrShopee(canvas, tentativa === 1), tentativa + 1);
       textos.push(texto);
@@ -1788,7 +1838,7 @@ async function lerPedidoOcrShopee(canvas) {
         };
       }
     } catch (erro) {
-      if (tentativa === 1) throw erro;
+      throw erro;
     }
   }
 
@@ -1986,15 +2036,18 @@ async function processarShopee(conteudo, nomeArquivo) {
 
   for (let i = 0; i < partes.length; i++) {
     const status = document.getElementById("status");
-    if (status) status.innerHTML = `Lendo etiqueta Shopee ${i + 1} de ${partes.length}...`;
+    if (status) status.innerHTML = `Processando etiqueta Shopee ${i + 1} de ${partes.length}...`;
     let meta = { pedido: "", rastreio: "", nf: "", chaveAcesso: "", idLogistico: [] };
     try {
       meta = await extrairMetadadosShopee(partes[i]);
     } catch (erro) {
-      bancoEtiquetas.avisos.push(`Shopee: não foi possível ler os identificadores da etiqueta ${i + 1} de ${nomeArquivo}: ${erro.message}`);
+      meta.textoOcr = `OCR ignorado: ${erro.message}`;
+      bancoEtiquetas.avisos.push(`Shopee: a etiqueta ${i + 1} de ${nomeArquivo} foi salva, mas o OCR não concluiu: ${erro.message} Faça o vínculo pela prévia se necessário.`);
     }
     registrarEtiqueta({ marketplace: "shopee", envio: partes[i], danfe: "", arquivo: nomeArquivo,
       metadados: meta, chaves: chavesDosMetadados(meta).concat(extrairChavesDoConteudo(partes[i], nomeArquivo)) });
+    const statusDepois = document.getElementById("status");
+    if (statusDepois) statusDepois.innerHTML = `Etiqueta Shopee ${i + 1} de ${partes.length} salva. Continuando...`;
   }
 }
 
