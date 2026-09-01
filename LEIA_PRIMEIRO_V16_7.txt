@@ -1,0 +1,7 @@
+V16.7 - FALLBACK DE NOME DO CLIENTE RESTAURADO
+
+- Dados para NF-e continuam tendo prioridade.
+- Quando o Mercado Livre não devolver nome fiscal, Cliente usa o nome real disponível em buyer.first_name/last_name da order.
+- Evita pedidos pendentes com Cliente em branco ou "—".
+- Não usa receiver_name como Cliente.
+- Pedidos pendentes antigos em branco são reparados nas próximas sincronizações.
