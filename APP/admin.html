@@ -6193,15 +6193,15 @@ async function carregarIntegracaoMercadoLivreAdmin(){
   try{
     const d=await mlApiAdmin("/expedicao/api/integracoes/mercadolivre/status");
     const ml=d.mercadolivre||{};
-    const configurado=ml.configured===true, conectado=ml.connected===true, reconectar=ml.needs_reconnect===true;
-    badge.className="integracao-status "+(conectado?"ok":configurado?"off":"erro");
-    badge.textContent=conectado?(reconectar?"🟢 Conectado • renovação pendente":"🟢 Conectado"):configurado?"⚪ Configurado, aguardando conexão":"🔴 Credenciais ainda não configuradas";
+    const configurado=ml.configured===true, conectado=ml.connected===true, reconectar=ml.needs_reconnect===true, expirado=ml.token_expired===true;
+    badge.className="integracao-status "+(conectado?"ok":expirado?"erro":configurado?"off":"erro");
+    badge.textContent=expirado?"🔴 Token Mercado Livre expirado":conectado?(reconectar?"🟡 Conectado • renovação automática indisponível":"🟢 Conectado"):configurado?"⚪ Configurado, aguardando conexão":"🔴 Credenciais ainda não configuradas";
     document.getElementById("mlIntegracaoConta").textContent=ml.nickname||"—";
     document.getElementById("mlIntegracaoSeller").textContent=ml.seller_id||"—";
     document.getElementById("mlIntegracaoSync").textContent=ml.last_sync_at?mlDataHora(ml.last_sync_at):"—";
     const worker=ml.worker||{};
     const workerEl=document.getElementById("mlIntegracaoWorker");if(workerEl)workerEl.textContent=worker.server_worker?"🟢 Ativo no servidor":"🔴 Inativo";
-    const refreshEl=document.getElementById("mlIntegracaoRefresh");if(refreshEl)refreshEl.textContent=worker.has_refresh_token?"🟢 Disponível":"🔴 Ausente — reconecte";
+    const refreshEl=document.getElementById("mlIntegracaoRefresh");if(refreshEl)refreshEl.textContent=worker.has_refresh_token?"🟢 Disponível":(expirado?"🔴 Ausente · token já expirou":"🟡 Ausente · funcionará só até o token expirar");
     const offlineEl=document.getElementById("mlIntegracaoOffline");if(offlineEl)offlineEl.textContent=ml.offline_access_granted?"🟢 offline_access concedido":"🔴 offline_access ausente";
     const pollEl=document.getElementById("mlIntegracaoPoll");if(pollEl)pollEl.textContent=worker.last_order_poll_at?mlDataHora(worker.last_order_poll_at):"Aguardando primeiro ciclo";
     const catchEl=document.getElementById("mlIntegracaoCatchup");if(catchEl)catchEl.textContent=worker.last_catchup_at?mlDataHora(worker.last_catchup_at):"Aguardando primeira recuperação";
@@ -6215,9 +6215,11 @@ async function carregarIntegracaoMercadoLivreAdmin(){
     const msg=document.getElementById("mlIntegracaoMensagem");
     if(msg){
       if(!configurado)msg.innerHTML='Configure <b>ML_CLIENT_ID</b> e <b>ML_CLIENT_SECRET</b> em <code>/home/expedicao/.env</code> e reinicie o serviço.';
+      else if(expirado){
+        msg.innerHTML='🔴 <b>O access_token do Mercado Livre expirou e não existe refresh_token salvo.</b> Por isso Orders, etiquetas e custos pararam juntos. Faça uma nova autorização após publicar esta versão. Se o novo OAuth ainda não retornar refresh_token, o problema está no grant/permissões da aplicação no Mercado Livre, não no watcher.';
+      }
       else if(reconectar){
-        if(!ml.offline_access_granted)msg.innerHTML='⚠ <b>O grant do Mercado Livre não possui offline_access.</b> No DevCenter do Mercado Livre, habilite acesso offline para a aplicação e depois clique em “Renovar conexão Mercado Livre”. Sem essa permissão a API não entrega refresh_token.';
-        else msg.innerHTML='⚠ <b>offline_access foi concedido, mas o refresh_token não foi recebido.</b> Clique em “Renovar conexão Mercado Livre”. A V16.1 registra o retorno do OAuth no log sem expor o token e salva o novo refresh_token de forma persistente.';
+        msg.innerHTML='🟡 <b>A integração está funcionando apenas enquanto o access_token atual estiver válido.</b> O Mercado Livre não forneceu refresh_token; sem ele a API para quando o token expira.';
       }
       else if(worker.last_error)msg.innerHTML='⚠ Worker 24/7 ativo, mas o último ciclo registrou: <b>'+mlHtmlSeguro(worker.last_error)+'</b>';
       else if(ml.last_error)msg.innerHTML='⚠ Último erro: <b>'+mlHtmlSeguro(ml.last_error)+'</b>';

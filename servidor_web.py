@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "16.17"
+APP_VERSION = "16.18"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2298,10 +2298,12 @@ def ml_status_payload() -> dict[str, Any]:
     scope_text = str(row["scope"] if row else "")
     scope_set = {x.strip().lower() for x in re.split(r"[\s,]+", scope_text) if x.strip()}
     offline_access = "offline_access" in scope_set
-    # V14.6: enquanto o access_token atual ainda estiver válido, a integração
-    # continua operacional mesmo sem refresh_token. O Admin apenas sinaliza que
-    # a renovação futura está pendente, sem tratar a conta como desconectada.
-    connected = bool(has_access)
+    expires_at = int(row["expires_at_epoch"] or 0) if row else 0
+    now_epoch = int(time.time())
+    token_expired = bool(has_access and expires_at and expires_at <= now_epoch)
+    # Um access_token vencido sem refresh_token NÃO é conexão ativa. Antes isso
+    # aparecia como "conectado" e mascarava a falha de Orders/etiquetas após 6h.
+    connected = bool(has_access and (not token_expired or has_refresh))
     needs_reconnect = bool(has_access and not has_refresh)
     return {
         "configured": ml_credentials_configured(),
@@ -2313,7 +2315,9 @@ def ml_status_payload() -> dict[str, Any]:
         "offline_access_granted": offline_access,
         "refresh_token_available": has_refresh,
         "oauth_scope_requested": ML_OAUTH_SCOPE,
-        "expires_at_epoch": int(row["expires_at_epoch"] if row else 0),
+        "expires_at_epoch": expires_at,
+        "token_expired": token_expired,
+        "token_seconds_remaining": max(0, expires_at - now_epoch) if expires_at else 0,
         "connected_at": str(row["connected_at"] if row else ""),
         "updated_at": str(row["updated_at"] if row else ""),
         "last_sync_at": str(row["last_sync_at"] if row else ""),
@@ -2386,13 +2390,12 @@ def ml_store_token(
     if refresh_expected and not refresh_received:
         if "offline_access" not in scope_set:
             token_error = (
-                "Mercado Livre retornou access_token sem refresh_token porque o grant não possui "
-                "offline_access. No DevCenter, habilite a aplicação como acesso offline e reconecte."
+                "Mercado Livre retornou access_token sem refresh_token/offline_access. "
+                "O token funcionará somente até expirar (normalmente 6 horas)."
             )
         else:
             token_error = (
-                "Mercado Livre retornou access_token com offline_access, mas sem refresh_token. "
-                "Reconecte a aplicação; se persistir, revise as permissões/grant no DevCenter."
+                "Mercado Livre retornou offline_access sem refresh_token; a renovação automática não poderá funcionar."
             )
 
     connected_at = str(previous["connected_at"] or "") if previous else ""
@@ -2450,7 +2453,9 @@ def ml_access_token(*, force_refresh: bool = False) -> tuple[str, str]:
         return str(row["access_token"]), str(row["seller_id"])
     refresh_token = str(row["refresh_token"] or "")
     if not refresh_token:
-        raise RuntimeError("Refresh token do Mercado Livre não está disponível. Reconecte a conta.")
+        if int(row["expires_at_epoch"] or 0) <= int(time.time()):
+            raise RuntimeError("TOKEN_ML_EXPIRADO_SEM_REFRESH: o access_token venceu e o Mercado Livre não forneceu refresh_token. Orders, etiquetas e custos ficam indisponíveis até uma nova autorização que retorne refresh_token.")
+        raise RuntimeError("Refresh token do Mercado Livre não está disponível; o access_token atual ainda está temporariamente válido.")
     payload = ml_http_json(
         "POST",
         f"{ML_API_BASE}/oauth/token",
@@ -2488,6 +2493,7 @@ def ml_worker_status_payload() -> dict[str, Any]:
         "token_seconds_remaining": max(0, expires_at - now_ts) if expires_at else 0,
         "has_refresh_token": bool(row and str(row["refresh_token"] or "").strip()),
         "ml_connected": bool(row and str(row["access_token"] or "").strip()),
+        "token_expired": bool(expires_at and expires_at <= now_ts),
         "new_order_interval_seconds": ML_NEW_ORDER_WATCH_INTERVAL,
         "token_keepalive_interval_seconds": ML_TOKEN_KEEPALIVE_INTERVAL,
         "safety_catchup_interval_seconds": ML_SAFETY_CATCHUP_INTERVAL,
@@ -2600,7 +2606,6 @@ def ml_oauth_authorization_url() -> str:
             "state": state,
             "code_challenge": challenge,
             "code_challenge_method": "S256",
-            "scope": ML_OAUTH_SCOPE,
         }
     )
     return f"{ML_AUTH_URL}?{query}"

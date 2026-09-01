@@ -1,0 +1,10 @@
+V16.18 - TOKEN MERCADO LIVRE / ETIQUETAS E RENTABILIDADE
+
+Correcoes:
+- Detecta access_token expirado corretamente.
+- Nao mostra mais a integracao como conectada quando o token venceu sem refresh_token.
+- Orders, etiquetas e Rentabilidade exibem erro explicito de token em vez de zerar silenciosamente.
+- URL de autorizacao voltou ao formato oficial documentado pelo Mercado Livre; os scopes sao definidos pelo grant da aplicacao.
+- Mantem renovacao automatica 24/7 quando um refresh_token for recebido.
+
+IMPORTANTE: access_token do Mercado Livre expira em cerca de 6 horas. Para funcionamento 24/7, o OAuth precisa devolver refresh_token.
