@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "16.15"
+APP_VERSION = "16.16"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -6069,10 +6069,13 @@ def _ml_profitability_buyer_name_fast(order: dict[str, Any]) -> str:
 
 
 def _ml_profitability_recent_sales(days: int = 30, limit: int = 2000, date_from: str = "", date_to: str = "", status_filter: str = "valid") -> list[dict[str, Any]]:
-    """Busca vendas do ML por intervalo explícito de datas, com paginação completa.
+    """Busca vendas ML do período sem depender de uma única forma de consulta.
 
-    Usa os filtros oficiais order.date_closed.from/to no próprio /orders/search,
-    evitando percorrer centenas de pedidos fora do período e reduzindo timeout.
+    V16.16:
+    1) tenta /orders/search com from/to;
+    2) para filtros com mais de um status, consulta cada status separadamente;
+    3) se o endpoint com datas falhar ou vier vazio, faz varredura paginada por data_desc
+       e filtra o intervalo localmente (sem Billing por pedido, portanto continua leve).
     """
     _, seller_id = ml_access_token()
     br_tz = timezone(timedelta(hours=-3))
@@ -6082,31 +6085,29 @@ def _ml_profitability_recent_sales(days: int = 30, limit: int = 2000, date_from:
         value = str(value or "").strip()
         if not value:
             return None
-        try:
-            d = datetime.strptime(value[:10], "%Y-%m-%d").replace(tzinfo=br_tz)
-            if end:
-                d = d.replace(hour=23, minute=59, second=59, microsecond=999000)
-            return d
-        except Exception:
-            return None
+        for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
+            try:
+                d = datetime.strptime(value[:10], fmt).replace(tzinfo=br_tz)
+                if end:
+                    d = d.replace(hour=23, minute=59, second=59, microsecond=999000)
+                return d
+            except Exception:
+                pass
+        return None
 
     dt_to = parse_day(date_to, True) or now_br.replace(hour=23, minute=59, second=59, microsecond=999000)
     dt_from = parse_day(date_from, False)
     if dt_from is None:
         dt_from = (dt_to - timedelta(days=max(1, min(int(days or 30), 365)) - 1)).replace(hour=0, minute=0, second=0, microsecond=0)
     if dt_from > dt_to:
-        dt_from, dt_to = dt_to.replace(hour=0, minute=0, second=0, microsecond=0), dt_from.replace(hour=23, minute=59, second=59, microsecond=999000)
-    # Orders search guarda histórico de até 12 meses.
+        a, b = dt_from, dt_to
+        dt_from = b.replace(hour=0, minute=0, second=0, microsecond=0)
+        dt_to = a.replace(hour=23, minute=59, second=59, microsecond=999000)
     floor = now_br - timedelta(days=365)
     if dt_from < floor:
         dt_from = floor
 
-    out: list[dict[str, Any]] = []
-    seen: set[tuple[str, str]] = set()
-    page_size = 50
-    max_pages = 120
     lim = max(1, min(int(limit or 2000), 5000))
-    iso = lambda d: d.isoformat(timespec="milliseconds")
     status_filter = str(status_filter or "valid").strip().lower()
     status_map = {
         "valid": ("paid", "partially_refunded"),
@@ -6116,24 +6117,12 @@ def _ml_profitability_recent_sales(days: int = 30, limit: int = 2000, date_from:
         "all": (),
     }
     allowed_statuses = status_map.get(status_filter, status_map["valid"])
+    seen: set[tuple[str, str]] = set()
+    out: list[dict[str, Any]] = []
 
-    for page in range(max_pages):
-        params = {
-            "seller": seller_id,
-            "order.date_closed.from": iso(dt_from),
-            "order.date_closed.to": iso(dt_to),
-            "sort": "date_desc",
-            "limit": str(page_size),
-            "offset": str(page * page_size),
-        }
-        if allowed_statuses:
-            params["order.status"] = ",".join(allowed_statuses)
-        query = urlencode(params)
-        result = ml_api_get(f"/orders/search?{query}")
-        orders = result.get("results") if isinstance(result, dict) else []
-        if not isinstance(orders, list) or not orders:
-            break
-        for order in orders:
+    def add_orders(orders):
+        nonlocal out
+        for order in orders or []:
             if not isinstance(order, dict):
                 continue
             status = str(order.get("status") or "").lower()
@@ -6147,8 +6136,6 @@ def _ml_profitability_recent_sales(days: int = 30, limit: int = 2000, date_from:
             oid = str(order.get("id") or "").strip()
             if not oid:
                 continue
-            # V16.15: nunca consultar billing-info por pedido durante Busca período.
-            # Isso causava HTTP 504 em períodos com muitas vendas.
             buyer = _ml_profitability_buyer_name_fast(order)
             shipment = order.get("shipping") if isinstance(order.get("shipping"), dict) else {}
             shipment_id = str(shipment.get("id") or "").strip()
@@ -6190,13 +6177,73 @@ def _ml_profitability_recent_sales(days: int = 30, limit: int = 2000, date_from:
                 out.append({"order_id": oid, "pack_id": pack_id, "sku": sku, "product": title, "client": buyer,
                     "date": str(order.get("date_closed") or order.get("date_created") or ""), "shipment_id": shipment_id,
                     "qty": qty, "sale_amount_api": line_total, "line_fee_api": item_fee, "order_summary": order, "status": status})
-                if len(out) >= lim: return out
-        paging = result.get("paging") if isinstance(result, dict) else {}
-        total = int((paging or {}).get("total") or 0) if isinstance(paging, dict) else 0
-        if len(orders) < page_size or (total and (page + 1) * page_size >= total) or len(out) >= lim:
-            break
-    return out
+                if len(out) >= lim:
+                    return
 
+    def search_with_dates(status_value: str | None):
+        page_size = 50
+        for page in range(120):
+            params = {
+                "seller": seller_id,
+                "order.date_closed.from": dt_from.isoformat(timespec="milliseconds"),
+                "order.date_closed.to": dt_to.isoformat(timespec="milliseconds"),
+                "sort": "date_desc", "limit": str(page_size), "offset": str(page * page_size),
+            }
+            if status_value:
+                params["order.status"] = status_value
+            result = ml_api_get(f"/orders/search?{urlencode(params)}")
+            orders = result.get("results") if isinstance(result, dict) else []
+            if not isinstance(orders, list) or not orders:
+                break
+            add_orders(orders)
+            if len(out) >= lim:
+                return
+            paging = result.get("paging") if isinstance(result, dict) else {}
+            total = int((paging or {}).get("total") or 0) if isinstance(paging, dict) else 0
+            if len(orders) < page_size or (total and (page + 1) * page_size >= total):
+                break
+
+    first_error = None
+    statuses_to_query = list(allowed_statuses) if allowed_statuses else [None]
+    for st in statuses_to_query:
+        try:
+            search_with_dates(st)
+        except Exception as exc:
+            first_error = first_error or exc
+
+    # Fallback oficial: varredura por data_desc sem from/to. Evita zerar a tela quando
+    # o ML rejeita/instabiliza o filtro de datas, sem voltar às consultas pesadas por pedido.
+    if not out:
+        page_size = 50
+        for st in statuses_to_query:
+            reached_before = False
+            for page in range(60):
+                params = {"seller": seller_id, "sort": "date_desc", "limit": str(page_size), "offset": str(page * page_size)}
+                if st:
+                    params["order.status"] = st
+                try:
+                    result = ml_api_get(f"/orders/search?{urlencode(params)}")
+                except Exception as exc:
+                    first_error = first_error or exc
+                    break
+                orders = result.get("results") if isinstance(result, dict) else []
+                if not isinstance(orders, list) or not orders:
+                    break
+                add_orders(orders)
+                for order in orders:
+                    if not isinstance(order, dict):
+                        continue
+                    odt = _ml_parse_datetime(order.get("date_closed") or order.get("date_created"))
+                    if odt is not None and odt.astimezone(br_tz) < dt_from:
+                        reached_before = True
+                        break
+                if reached_before or len(out) >= lim or len(orders) < page_size:
+                    break
+
+    if not out and first_error is not None:
+        raise first_error
+    out.sort(key=lambda r: str(r.get("date") or ""), reverse=True)
+    return out[:lim]
 
 def _ml_profitability_local_sales(limit: int = 300) -> list[dict[str, Any]]:
     """Monta as vendas locais para a rentabilidade, preservando kits como uma venda única.
@@ -6249,6 +6296,7 @@ def _ml_profitability_local_sales(limit: int = 300) -> list[dict[str, Any]]:
                 "kit_sku": kit_sku,
                 "kit_name": str(r.get("Nome do Kit") or "") if is_kit else "",
                 "kit_components": [],
+                "status": str(r.get("StatusMercadoLivre") or r.get("Status ML") or r.get("Status do Pedido") or r.get("Status") or "").strip().lower(),
             }
         g = grouped[key]
         if is_kit:
@@ -6394,20 +6442,36 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
     # (kits, nome, SKU) ou como fallback quando a API estiver indisponível no filtro padrão.
     local_all = _ml_profitability_local_sales(limit=max(limit, 300))
     source_order_ids = {str(r.get("order_id") or "").strip() for r in source if str(r.get("order_id") or "").strip()}
+    def _local_date_iso(rec: dict[str, Any]) -> str:
+        raw = str(rec.get("date") or "").strip()[:10]
+        if not raw: return ""
+        for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
+            try: return datetime.strptime(raw, fmt).strftime("%Y-%m-%d")
+            except Exception: pass
+        return raw if re.match(r"^\d{4}-\d{2}-\d{2}$", raw) else ""
     def _local_in_period(rec: dict[str, Any]) -> bool:
-        d = str(rec.get("date") or "")[:10]
+        d = _local_date_iso(rec)
         if date_from and d and d < date_from: return False
         if date_to and d and d > date_to: return False
-        return True
+        return bool(d or not (date_from or date_to))
+    def _local_status_ok(rec: dict[str, Any]) -> bool:
+        filt = str(status_filter or "valid").lower()
+        st = str(rec.get("status") or "").lower()
+        if filt == "all": return True
+        if filt == "valid": return (not st) or st in ("paid", "partially_refunded", "pago", "aprovado")
+        if not st: return False
+        aliases = {"cancelled": ("cancelled","canceled","cancelado"), "paid": ("paid","pago","aprovado"), "partially_refunded": ("partially_refunded","reembolso parcial")}
+        return st in aliases.get(filt, (filt,))
     if source:
         local = [r for r in local_all if _local_in_period(r) and str(r.get("order_id") or "").strip() in source_order_ids]
         merge_records = source + local
-    elif api_error and str(status_filter or "valid").lower() == "valid":
-        local = [r for r in local_all if _local_in_period(r)]
-        merge_records = local
     else:
-        local = []
-        merge_records = source
+        # V16.16: se a API estiver indisponível OU vier vazia, não deixar a tela zerada
+        # quando já existem pedidos ML do mesmo período no banco local.
+        local = [r for r in local_all if _local_in_period(r) and _local_status_ok(r)]
+        merge_records = local
+        if local and not api_error:
+            api_error = "Orders API não retornou linhas; exibindo pedidos locais do período."
     by_key: dict[tuple[str, str], dict[str, Any]] = {}
     for rec in merge_records:
         oid = str(rec.get("order_id") or "").strip()
@@ -6761,7 +6825,7 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
     }
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/16.14"
+    server_version = "NoromakExpedicao/16.16"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
