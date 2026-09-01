@@ -1,0 +1,7 @@
+V16.17 - FILTRO DE DATA ESTRITO NA RENTABILIDADE ML
+
+- Data da venda = order.date_created do Mercado Livre.
+- O período selecionado é aplicado de forma estrita no servidor.
+- Data de despacho/conferência local não é usada como data de venda.
+- Pedidos locais nunca entram como novas vendas no faturamento; servem apenas para enriquecer orders confirmadas pela API.
+- Se a API oficial não confirmar vendas no período, o sistema não soma vendas de outro dia.

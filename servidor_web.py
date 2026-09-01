@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "16.16"
+APP_VERSION = "16.17"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -6072,7 +6072,7 @@ def _ml_profitability_recent_sales(days: int = 30, limit: int = 2000, date_from:
     """Busca vendas ML do período sem depender de uma única forma de consulta.
 
     V16.16:
-    1) tenta /orders/search com from/to;
+    1) tenta /orders/search com order.date_created.from/to;
     2) para filtros com mais de um status, consulta cada status separadamente;
     3) se o endpoint com datas falhar ou vier vazio, faz varredura paginada por data_desc
        e filtra o intervalo localmente (sem Billing por pedido, portanto continua leve).
@@ -6128,11 +6128,14 @@ def _ml_profitability_recent_sales(days: int = 30, limit: int = 2000, date_from:
             status = str(order.get("status") or "").lower()
             if allowed_statuses and status not in allowed_statuses:
                 continue
-            created = _ml_parse_datetime(order.get("date_closed") or order.get("date_created"))
-            if created is not None:
-                created_br = created.astimezone(br_tz)
-                if created_br < dt_from or created_br > dt_to:
-                    continue
+            # Data da venda: exclusivamente date_created oficial da order.
+            # Sem uma data oficial válida, a order não pode entrar no faturamento do período.
+            created = _ml_parse_datetime(order.get("date_created"))
+            if created is None:
+                continue
+            created_br = created.astimezone(br_tz)
+            if created_br < dt_from or created_br > dt_to:
+                continue
             oid = str(order.get("id") or "").strip()
             if not oid:
                 continue
@@ -6146,7 +6149,7 @@ def _ml_profitability_recent_sales(days: int = 30, limit: int = 2000, date_from:
                 if key not in seen:
                     seen.add(key)
                     out.append({"order_id": oid, "pack_id": pack_id, "sku": "", "product": "", "client": buyer,
-                        "date": str(order.get("date_closed") or order.get("date_created") or ""), "shipment_id": shipment_id,
+                        "date": str(order.get("date_created") or ""), "shipment_id": shipment_id,
                         "qty": 1, "sale_amount_api": _money_number(order.get("total_amount")),
                         "line_fee_api": _ml_order_marketplace_fee(order), "order_summary": order, "status": status})
                 continue
@@ -6175,7 +6178,7 @@ def _ml_profitability_recent_sales(days: int = 30, limit: int = 2000, date_from:
                     if len(line_infos) == 1: item_fee = order_fee
                     elif line_total is not None and order_lines_total > 0: item_fee = order_fee * (line_total / order_lines_total)
                 out.append({"order_id": oid, "pack_id": pack_id, "sku": sku, "product": title, "client": buyer,
-                    "date": str(order.get("date_closed") or order.get("date_created") or ""), "shipment_id": shipment_id,
+                    "date": str(order.get("date_created") or ""), "shipment_id": shipment_id,
                     "qty": qty, "sale_amount_api": line_total, "line_fee_api": item_fee, "order_summary": order, "status": status})
                 if len(out) >= lim:
                     return
@@ -6185,8 +6188,8 @@ def _ml_profitability_recent_sales(days: int = 30, limit: int = 2000, date_from:
         for page in range(120):
             params = {
                 "seller": seller_id,
-                "order.date_closed.from": dt_from.isoformat(timespec="milliseconds"),
-                "order.date_closed.to": dt_to.isoformat(timespec="milliseconds"),
+                "order.date_created.from": dt_from.isoformat(timespec="milliseconds"),
+                "order.date_created.to": dt_to.isoformat(timespec="milliseconds"),
                 "sort": "date_desc", "limit": str(page_size), "offset": str(page * page_size),
             }
             if status_value:
@@ -6233,7 +6236,7 @@ def _ml_profitability_recent_sales(days: int = 30, limit: int = 2000, date_from:
                 for order in orders:
                     if not isinstance(order, dict):
                         continue
-                    odt = _ml_parse_datetime(order.get("date_closed") or order.get("date_created"))
+                    odt = _ml_parse_datetime(order.get("date_created"))
                     if odt is not None and odt.astimezone(br_tz) < dt_from:
                         reached_before = True
                         break
@@ -6463,15 +6466,17 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
         aliases = {"cancelled": ("cancelled","canceled","cancelado"), "paid": ("paid","pago","aprovado"), "partially_refunded": ("partially_refunded","reembolso parcial")}
         return st in aliases.get(filt, (filt,))
     if source:
-        local = [r for r in local_all if _local_in_period(r) and str(r.get("order_id") or "").strip() in source_order_ids]
+        # Dados locais apenas enriquecem a MESMA linha oficialmente retornada pela API.
+        # Não é permitido criar SKU/linha adicional a partir do CRM/histórico.
+        source_keys = {(str(r.get("order_id") or "").strip(), normalize(str(r.get("sku") or ""))) for r in source}
+        local = [r for r in local_all if (str(r.get("order_id") or "").strip(), normalize(str(r.get("sku") or ""))) in source_keys]
         merge_records = source + local
     else:
-        # V16.16: se a API estiver indisponível OU vier vazia, não deixar a tela zerada
-        # quando já existem pedidos ML do mesmo período no banco local.
-        local = [r for r in local_all if _local_in_period(r) and _local_status_ok(r)]
-        merge_records = local
-        if local and not api_error:
-            api_error = "Orders API não retornou linhas; exibindo pedidos locais do período."
+        # V16.17: não usar conf_pedidos/histórico como fonte de faturamento.
+        # Esses registros podem representar despacho/conferência de outro dia.
+        # Se a API oficial não confirmar venda no período, a tela permanece sem vendas.
+        local = []
+        merge_records = []
     by_key: dict[tuple[str, str], dict[str, Any]] = {}
     for rec in merge_records:
         oid = str(rec.get("order_id") or "").strip()
