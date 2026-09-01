@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "16.23"
+APP_VERSION = "16.24"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -3172,6 +3172,35 @@ def _kit_catalog_lookup(catalog: dict[str, dict[str, Any]], sku: Any) -> dict[st
     return None
 
 
+def _infer_quantity_kit_from_sku(sku: Any) -> dict[str, Any] | None:
+    """Reconhece kits homogêneos codificados como KIT2-SKU, KIT3-SKU etc.
+
+    O Cadastro de Kits explícito continua tendo prioridade. Este fallback só é usado
+    quando não há composição cadastrada e transforma, por exemplo, KIT3-KS001
+    em 3 unidades do componente KS001.
+    """
+    raw = str(sku or "").strip()
+    if not raw:
+        return None
+    m = re.match(r"^KIT\s*(\d+)\s*[-_./: ]*\s*(.+?)\s*$", raw, flags=re.I)
+    if not m:
+        return None
+    try:
+        qty = int(m.group(1))
+    except Exception:
+        return None
+    base = str(m.group(2) or "").strip()
+    if qty < 2 or not base:
+        return None
+    return {
+        "sku_kit": raw,
+        "nome": raw,
+        "ativo": True,
+        "componentes": [{"sku": base, "quantidade": qty}],
+        "inferido_por_prefixo": True,
+    }
+
+
 def _load_kit_catalog() -> dict[str, dict[str, Any]]:
     """Carrega o cadastro compartilhado de kits indexado pelo SKU do kit."""
     raw, _, _ = get_storage("conf_kits")
@@ -3231,6 +3260,8 @@ def _expand_ml_order_item(item_data: dict[str, Any], kit_catalog: dict[str, dict
     title = str(item.get("title") or "").strip()
 
     kit = _kit_catalog_lookup(kit_catalog, sku)
+    if not kit:
+        kit = _infer_quantity_kit_from_sku(sku)
     if not kit or not kit.get("ativo", True):
         return [{
             "sku": sku,
@@ -6657,12 +6688,19 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
             # com espaços/hífens/pontos diferentes do cadastro.
             if not rec.get("kit_components"):
                 kit_hit = _kit_catalog_lookup(kit_catalog_profit, rec.get("kit_sku") or rec.get("sku"))
+                # Alguns anúncios usam o próprio SKU para indicar quantidade do kit
+                # (ex.: KIT3-KS001 = 3 unidades de KS001). Só aplica quando não há
+                # composição explícita no Cadastro de Kits.
+                if not kit_hit:
+                    kit_hit = _infer_quantity_kit_from_sku(rec.get("kit_sku") or rec.get("sku"))
                 if not kit_hit and isinstance(order, dict):
                     for oi in (order.get("order_items") or []):
                         if not isinstance(oi, dict):
                             continue
                         candidate = _ml_order_item_sku(oi)
                         kit_hit = _kit_catalog_lookup(kit_catalog_profit, candidate)
+                        if not kit_hit:
+                            kit_hit = _infer_quantity_kit_from_sku(candidate)
                         if kit_hit:
                             break
                 if kit_hit and kit_hit.get("ativo", True):
