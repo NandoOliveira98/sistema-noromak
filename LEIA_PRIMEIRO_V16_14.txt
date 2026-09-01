@@ -1,0 +1,10 @@
+V16.14 - FILTROS DE STATUS NA RENTABILIDADE ML
+
+Filtros adicionados:
+- Vendas válidas (pago + reembolso parcial) [padrão]
+- Pagos
+- Reembolso parcial
+- Cancelados
+- Todos
+
+Correção adicional: o período/status retornados pela API ML agora são a fonte de verdade. Dados locais só enriquecem orders retornadas pela API, evitando somar pedidos fora do período e melhorar a conferência do faturamento.

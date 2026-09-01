@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "16.13"
+APP_VERSION = "16.14"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -6052,7 +6052,7 @@ def _ml_seller_shipping_cost(shipment_id: str, seller_id: str = "") -> float | N
     return None
 
 
-def _ml_profitability_recent_sales(days: int = 30, limit: int = 2000, date_from: str = "", date_to: str = "") -> list[dict[str, Any]]:
+def _ml_profitability_recent_sales(days: int = 30, limit: int = 2000, date_from: str = "", date_to: str = "", status_filter: str = "valid") -> list[dict[str, Any]]:
     """Busca vendas do ML por intervalo explícito de datas, com paginação completa.
 
     Usa os filtros oficiais order.date_closed.from/to no próprio /orders/search,
@@ -6091,17 +6091,28 @@ def _ml_profitability_recent_sales(days: int = 30, limit: int = 2000, date_from:
     max_pages = 120
     lim = max(1, min(int(limit or 2000), 5000))
     iso = lambda d: d.isoformat(timespec="milliseconds")
+    status_filter = str(status_filter or "valid").strip().lower()
+    status_map = {
+        "valid": ("paid", "partially_refunded"),
+        "paid": ("paid",),
+        "partially_refunded": ("partially_refunded",),
+        "cancelled": ("cancelled",),
+        "all": (),
+    }
+    allowed_statuses = status_map.get(status_filter, status_map["valid"])
 
     for page in range(max_pages):
-        query = urlencode({
+        params = {
             "seller": seller_id,
-            "order.status": "paid,partially_refunded",
             "order.date_closed.from": iso(dt_from),
             "order.date_closed.to": iso(dt_to),
             "sort": "date_desc",
             "limit": str(page_size),
             "offset": str(page * page_size),
-        })
+        }
+        if allowed_statuses:
+            params["order.status"] = ",".join(allowed_statuses)
+        query = urlencode(params)
         result = ml_api_get(f"/orders/search?{query}")
         orders = result.get("results") if isinstance(result, dict) else []
         if not isinstance(orders, list) or not orders:
@@ -6110,7 +6121,7 @@ def _ml_profitability_recent_sales(days: int = 30, limit: int = 2000, date_from:
             if not isinstance(order, dict):
                 continue
             status = str(order.get("status") or "").lower()
-            if status and status not in ("paid", "partially_refunded"):
+            if allowed_statuses and status not in allowed_statuses:
                 continue
             created = _ml_parse_datetime(order.get("date_closed") or order.get("date_created"))
             if created is not None:
@@ -6132,7 +6143,7 @@ def _ml_profitability_recent_sales(days: int = 30, limit: int = 2000, date_from:
                     out.append({"order_id": oid, "pack_id": pack_id, "sku": "", "product": "", "client": buyer,
                         "date": str(order.get("date_closed") or order.get("date_created") or ""), "shipment_id": shipment_id,
                         "qty": 1, "sale_amount_api": _money_number(order.get("total_amount")),
-                        "line_fee_api": _ml_order_marketplace_fee(order), "order_summary": order})
+                        "line_fee_api": _ml_order_marketplace_fee(order), "order_summary": order, "status": status})
                 continue
             order_fee = _ml_order_marketplace_fee(order)
             line_infos = []
@@ -6160,7 +6171,7 @@ def _ml_profitability_recent_sales(days: int = 30, limit: int = 2000, date_from:
                     elif line_total is not None and order_lines_total > 0: item_fee = order_fee * (line_total / order_lines_total)
                 out.append({"order_id": oid, "pack_id": pack_id, "sku": sku, "product": title, "client": buyer,
                     "date": str(order.get("date_closed") or order.get("date_created") or ""), "shipment_id": shipment_id,
-                    "qty": qty, "sale_amount_api": line_total, "line_fee_api": item_fee, "order_summary": order})
+                    "qty": qty, "sale_amount_api": line_total, "line_fee_api": item_fee, "order_summary": order, "status": status})
                 if len(out) >= lim: return out
         paging = result.get("paging") if isinstance(result, dict) else {}
         total = int((paging or {}).get("total") or 0) if isinstance(paging, dict) else 0
@@ -6340,7 +6351,7 @@ def _ml_profitability_resolve_order(rec: dict[str, Any], cache: dict[str, dict[s
 
     return None, ("; ".join(tried) if tried else "order não localizada")
 
-def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int = 30, date_from: str = "", date_to: str = "", refresh_offset: int = 0, refresh_batch: int = 40, tax_percent: float = 12.0, retry_pending: bool = False, retry_orders: str = "") -> dict[str, Any]:
+def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int = 30, date_from: str = "", date_to: str = "", refresh_offset: int = 0, refresh_batch: int = 40, tax_percent: float = 12.0, retry_pending: bool = False, retry_orders: str = "", status_filter: str = "valid") -> dict[str, Any]:
     """Dashboard de lucro ML com vendas buscadas diretamente do marketplace.
 
     O carregamento normal prioriza velocidade: lista as vendas e usa snapshots já
@@ -6355,16 +6366,32 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
 
     api_error = ""
     try:
-        source = _ml_profitability_recent_sales(days=days, limit=limit, date_from=date_from, date_to=date_to)
+        source = _ml_profitability_recent_sales(days=days, limit=limit, date_from=date_from, date_to=date_to, status_filter=status_filter)
     except Exception as exc:
         source = []
         api_error = str(exc)
 
-    # Fallback/mesclagem com pedidos locais para o painel continuar útil durante
-    # uma indisponibilidade temporária do /orders/search.
-    local = _ml_profitability_local_sales(limit=max(limit, 300))
+    # A API do Mercado Livre é a fonte de verdade para período/status.
+    # Dados locais servem apenas para enriquecer orders que a API realmente retornou
+    # (kits, nome, SKU) ou como fallback quando a API estiver indisponível no filtro padrão.
+    local_all = _ml_profitability_local_sales(limit=max(limit, 300))
+    source_order_ids = {str(r.get("order_id") or "").strip() for r in source if str(r.get("order_id") or "").strip()}
+    def _local_in_period(rec: dict[str, Any]) -> bool:
+        d = str(rec.get("date") or "")[:10]
+        if date_from and d and d < date_from: return False
+        if date_to and d and d > date_to: return False
+        return True
+    if source:
+        local = [r for r in local_all if _local_in_period(r) and str(r.get("order_id") or "").strip() in source_order_ids]
+        merge_records = source + local
+    elif api_error and str(status_filter or "valid").lower() == "valid":
+        local = [r for r in local_all if _local_in_period(r)]
+        merge_records = local
+    else:
+        local = []
+        merge_records = source
     by_key: dict[tuple[str, str], dict[str, Any]] = {}
-    for rec in source + local:
+    for rec in merge_records:
         oid = str(rec.get("order_id") or "").strip()
         sku = str(rec.get("sku") or "").strip()
         key = (oid, sku)
@@ -6374,7 +6401,7 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
             by_key[key] = dict(rec)
         else:
             dst = by_key[key]
-            for fld in ("product", "client", "date", "shipment_id", "pack_id"):
+            for fld in ("product", "client", "date", "shipment_id", "pack_id", "status"):
                 if not dst.get(fld) and rec.get(fld):
                     dst[fld] = rec.get(fld)
             if not dst.get("qty") and rec.get("qty"):
@@ -6666,6 +6693,7 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
             "sku": sku,
             "product": str(rec.get("product") or ""),
             "client": str(rec.get("client") or ""),
+            "status": str(rec.get("status") or ""),
             "date": str(rec.get("date") or ""),
             "shipment_id": str(rec.get("shipment_id") or ""),
             "qty": qty,
@@ -6710,11 +6738,12 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
         "retry_pending": bool(retry_pending),
         "retry_orders": sorted(retry_order_set),
         "tax_percent": tax_percent,
+        "status_filter": str(status_filter or "valid"),
         "billing_sync": billing_sync_meta,
     }
 
 class AppHandler(BaseHTTPRequestHandler):
-    server_version = "NoromakExpedicao/16.13"
+    server_version = "NoromakExpedicao/16.14"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
@@ -6939,8 +6968,11 @@ class AppHandler(BaseHTTPRequestHandler):
                     tax_percent = 12.0
                 retry_pending = str((query.get("retry_pending") or [""])[0]).lower() in ("1", "true", "sim")
                 retry_orders = str((query.get("retry_orders") or [""])[0] or "").strip()[:1200]
+                status_filter = str((query.get("status_filter") or ["valid"])[0] or "valid").strip().lower()
+                if status_filter not in ("valid", "paid", "partially_refunded", "cancelled", "all"):
+                    status_filter = "valid"
                 try:
-                    self.send_json(ml_profitability_payload(refresh=refresh, limit=limit, days=days, date_from=date_from, date_to=date_to, refresh_offset=refresh_offset, refresh_batch=refresh_batch, tax_percent=tax_percent, retry_pending=retry_pending, retry_orders=retry_orders))
+                    self.send_json(ml_profitability_payload(refresh=refresh, limit=limit, days=days, date_from=date_from, date_to=date_to, refresh_offset=refresh_offset, refresh_batch=refresh_batch, tax_percent=tax_percent, retry_pending=retry_pending, retry_orders=retry_orders, status_filter=status_filter))
                 except Exception as exc:
                     self.send_json({"ok": False, "error": str(exc)}, 500)
             return
