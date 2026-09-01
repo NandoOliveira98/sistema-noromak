@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "16.21"
+APP_VERSION = "16.22"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -3131,6 +3131,33 @@ def _ml_dispatch_date(shipment_id: str, shipment: dict[str, Any] | None) -> str:
     return datetime.now().astimezone().date().isoformat()
 
 
+def _kit_sku_aliases(value: Any) -> list[str]:
+    """Gera chaves tolerantes para SKU de kit sem perder a chave exata.
+
+    Mercado Livre/Apollo podem devolver o mesmo SKU com espaços, hífens, pontos
+    ou barras em posições diferentes. A chave compacta alfanumérica permite
+    reconhecer o cadastro sem depender dessa formatação visual.
+    """
+    raw = str(value or "").strip().upper()
+    if not raw:
+        return []
+    exact = normalize(raw)
+    compact = "".join(ch for ch in raw if ch.isalnum())
+    out = []
+    for key in (exact, compact):
+        if key and key not in out:
+            out.append(key)
+    return out
+
+
+def _kit_catalog_lookup(catalog: dict[str, dict[str, Any]], sku: Any) -> dict[str, Any] | None:
+    for key in _kit_sku_aliases(sku):
+        hit = catalog.get(key)
+        if hit:
+            return hit
+    return None
+
+
 def _load_kit_catalog() -> dict[str, dict[str, Any]]:
     """Carrega o cadastro compartilhado de kits indexado pelo SKU do kit."""
     raw, _, _ = get_storage("conf_kits")
@@ -3163,12 +3190,14 @@ def _load_kit_catalog() -> dict[str, dict[str, Any]]:
                 components.append({"sku": sku, "quantidade": qty})
         if not components:
             continue
-        catalog[normalize(kit_sku)] = {
+        entry = {
             "sku_kit": kit_sku,
             "nome": str(row.get("nome") or row.get("Nome") or kit_sku).strip() or kit_sku,
             "componentes": components,
             "ativo": bool(row.get("ativo", True)),
         }
+        for alias in _kit_sku_aliases(kit_sku):
+            catalog.setdefault(alias, entry)
     return catalog
 
 
@@ -3187,7 +3216,7 @@ def _expand_ml_order_item(item_data: dict[str, Any], kit_catalog: dict[str, dict
         sold_qty = 1
     title = str(item.get("title") or "").strip()
 
-    kit = kit_catalog.get(normalize(sku))
+    kit = _kit_catalog_lookup(kit_catalog, sku)
     if not kit or not kit.get("ativo", True):
         return [{
             "sku": sku,
@@ -6517,6 +6546,7 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
     records = records[:max(1, int(limit))]
 
     rows: list[dict[str, Any]] = []
+    kit_catalog_profit = _load_kit_catalog()
     order_cache: dict[str, dict[str, Any]] = {}
     apollo_cost_cache: dict[str, float | None] = {}
     shipping_total_cache: dict[str, float | None] = {}
@@ -6607,6 +6637,35 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
             order_resolution = "orders/search" if order is not None else ""
             if order is None:
                 order, order_resolution = _ml_profitability_resolve_order(rec, order_cache)
+
+            # Se a linha oficial chegou sem SkuKitOrigem/expansão local, tenta
+            # reconhecer diretamente pelo Cadastro de Kits. Isso cobre SKUs do ML
+            # com espaços/hífens/pontos diferentes do cadastro.
+            if not rec.get("kit_components"):
+                kit_hit = _kit_catalog_lookup(kit_catalog_profit, rec.get("kit_sku") or rec.get("sku"))
+                if not kit_hit and isinstance(order, dict):
+                    for oi in (order.get("order_items") or []):
+                        if not isinstance(oi, dict):
+                            continue
+                        candidate = _ml_order_item_sku(oi)
+                        kit_hit = _kit_catalog_lookup(kit_catalog_profit, candidate)
+                        if kit_hit:
+                            break
+                if kit_hit and kit_hit.get("ativo", True):
+                    rec["is_kit"] = True
+                    rec["kit_sku"] = str(kit_hit.get("sku_kit") or rec.get("sku") or "").strip()
+                    rec["kit_name"] = str(kit_hit.get("nome") or rec.get("product") or rec.get("kit_sku") or "").strip()
+                    rec["product"] = rec.get("kit_name") or rec.get("product")
+                    rec["kit_components"] = [
+                        {
+                            "sku": str(comp.get("sku") or "").strip(),
+                            "qty_per_kit": max(1, int(comp.get("quantidade") or 1)),
+                            "total_qty": max(1, int(comp.get("quantidade") or 1)) * max(1, int(float(rec.get("qty") or 1))),
+                            "product": "",
+                        }
+                        for comp in (kit_hit.get("componentes") or [])
+                        if str(comp.get("sku") or "").strip()
+                    ]
 
             unit_cost = _money_number(snap.get("unit_cost"))
             cost_source = str(snap.get("cost_source") or "")
@@ -6733,8 +6792,8 @@ def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int
                     """INSERT INTO ml_profitability_snapshot
                     (order_id,sku,unit_cost,cost_source,sale_amount,ml_fee,seller_shipping_cost,other_ml_cost,captured_at,raw_summary)
                     VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(order_id,sku) DO UPDATE SET
-                    unit_cost=COALESCE(ml_profitability_snapshot.unit_cost,excluded.unit_cost),
-                    cost_source=CASE WHEN ml_profitability_snapshot.unit_cost IS NULL THEN excluded.cost_source ELSE ml_profitability_snapshot.cost_source END,
+                    unit_cost=CASE WHEN excluded.unit_cost IS NOT NULL THEN excluded.unit_cost ELSE ml_profitability_snapshot.unit_cost END,
+                    cost_source=CASE WHEN excluded.unit_cost IS NOT NULL THEN excluded.cost_source ELSE ml_profitability_snapshot.cost_source END,
                     sale_amount=COALESCE(excluded.sale_amount,ml_profitability_snapshot.sale_amount),
                     ml_fee=COALESCE(excluded.ml_fee,ml_profitability_snapshot.ml_fee),
                     seller_shipping_cost=COALESCE(excluded.seller_shipping_cost,ml_profitability_snapshot.seller_shipping_cost),
