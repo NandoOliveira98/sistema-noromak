@@ -1,0 +1,10 @@
+V16.21 - RECONHECIMENTO DO TXT RASTERIZADO SHOPEE
+
+- Compatível com o TXT atual da Shopee composto por blocos ~DGR e :Z64:.
+- Separa cada etiqueta do arquivo.
+- Salva o ZPL imediatamente antes de qualquer leitura pesada.
+- Em segundo plano, decodifica a imagem da etiqueta.
+- Primeiro tenta o QR de rastreio BR... e cruza com o pedido Shopee.
+- Se necessário, faz OCR somente na faixa do campo Pedido.
+- Atualiza o vínculo e o banco de etiquetas automaticamente após reconhecer.
+- OCR/QR não bloqueiam mais o upload do TXT.

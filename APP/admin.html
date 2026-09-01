@@ -2034,20 +2034,144 @@ async function processarShopee(conteudo, nomeArquivo) {
   const partes = separarEtiquetasShopeeZpl(conteudo);
   if (!partes.length) throw new Error("O arquivo Shopee está vazio ou não contém comandos ZPL.");
 
+  // V16.20: o upload da Shopee NÃO depende mais de renderização de imagem,
+  // QR Code ou OCR. Essas rotinas podem bloquear a thread principal do navegador
+  // em etiquetas ZPL grandes. Primeiro persistimos o ZPL bruto e usamos somente
+  // metadados textuais leves; qualquer vínculo visual fica para uma etapa posterior.
   for (let i = 0; i < partes.length; i++) {
     const status = document.getElementById("status");
-    if (status) status.innerHTML = `Processando etiqueta Shopee ${i + 1} de ${partes.length}...`;
-    let meta = { pedido: "", rastreio: "", nf: "", chaveAcesso: "", idLogistico: [] };
+    if (status) status.innerHTML = `Salvando etiqueta Shopee ${i + 1} de ${partes.length}...`;
+
+    const textual = extrairMetadadosTextuaisShopee(partes[i]);
+    const meta = {
+      pedido: textual.pedido || "",
+      rastreio: textual.rastreio || "",
+      nf: "",
+      chaveAcesso: "",
+      idLogistico: [],
+      distanciaOcr: null,
+      textoOcr: textual.texto ? String(textual.texto).replace(/\s+/g, " ").trim().slice(0, 240) : "Etiqueta salva sem OCR/QR para evitar travamento."
+    };
+
+    registrarEtiqueta({
+      marketplace: "shopee",
+      envio: partes[i],
+      danfe: "",
+      arquivo: nomeArquivo,
+      metadados: meta,
+      chaves: chavesDosMetadados(meta).concat(extrairChavesDoConteudo(partes[i], nomeArquivo))
+    });
+  }
+}
+
+
+
+// V16.21: reconhece etiquetas Shopee rasterizadas (~DGR/:Z64:) DEPOIS que o
+// arquivo já foi salvo. Assim o upload nunca depende de OCR/QR, mas o sistema
+// ainda consegue cruzar automaticamente o TXT atual da Shopee.
+let reconhecimentoShopeeSegundoPlanoAtivo = false;
+
+async function reconhecerRegistroShopeeRasterizado(registro) {
+  if (!registro || registro.marketplace !== "shopee" || registro.pedido) return false;
+  let canvas = null;
+  try {
+    canvas = renderizarGraficoShopeeEmCanvas(registro.envio || "");
+  } catch (erro) {
+    registro.metadados = registro.metadados || {};
+    registro.metadados.textoOcr = `Imagem ZPL não decodificada: ${erro.message || erro}`;
+    return false;
+  }
+
+  let rastreio = String(registro.metadados?.rastreio || "").trim();
+  let pedido = "";
+
+  // 1) Caminho mais rápido e confiável para o TXT atual da Shopee: o QR da
+  // etiqueta contém o rastreio BR..., que pode ser cruzado com o pedido local.
+  if (!rastreio) {
     try {
-      meta = await extrairMetadadosShopee(partes[i]);
+      rastreio = await executarComTimeoutShopee(
+        lerRastreioQrShopee(canvas),
+        5000,
+        "Leitura do QR Shopee excedeu 5 segundos."
+      );
+    } catch (_) { rastreio = ""; }
+  }
+  if (rastreio) pedido = pedidoShopeePorRastreio(rastreio);
+
+  // 2) Se o rastreio ainda não identificar o pedido, lê somente a pequena
+  // faixa onde aparece "Pedido:", evitando OCR da etiqueta inteira.
+  let textoOcr = "";
+  let distanciaOcr = null;
+  if (!pedido) {
+    try {
+      const leitura = await lerPedidoOcrShopee(canvas);
+      pedido = leitura?.pedido || "";
+      textoOcr = leitura?.textoOcr || "";
+      distanciaOcr = leitura?.distanciaOcr ?? null;
     } catch (erro) {
-      meta.textoOcr = `OCR ignorado: ${erro.message}`;
-      bancoEtiquetas.avisos.push(`Shopee: a etiqueta ${i + 1} de ${nomeArquivo} foi salva, mas o OCR não concluiu: ${erro.message} Faça o vínculo pela prévia se necessário.`);
+      textoOcr = `OCR não concluiu: ${erro.message || erro}`;
+      // Um worker que excedeu timeout não deve contaminar a próxima etiqueta.
+      try { await resetarWorkerOcrShopee(); } catch (_) {}
     }
-    registrarEtiqueta({ marketplace: "shopee", envio: partes[i], danfe: "", arquivo: nomeArquivo,
-      metadados: meta, chaves: chavesDosMetadados(meta).concat(extrairChavesDoConteudo(partes[i], nomeArquivo)) });
-    const statusDepois = document.getElementById("status");
-    if (statusDepois) statusDepois.innerHTML = `Etiqueta Shopee ${i + 1} de ${partes.length} salva. Continuando...`;
+  }
+
+  registro.metadados = registro.metadados || {};
+  if (rastreio) registro.metadados.rastreio = rastreio;
+  if (textoOcr) registro.metadados.textoOcr = String(textoOcr).replace(/\s+/g, " ").trim().slice(0, 240);
+  registro.metadados.distanciaOcr = distanciaOcr;
+
+  if (!pedido) {
+    if (rastreio) adicionarChavesRegistro(registro.id, [rastreio]);
+    return false;
+  }
+
+  registro.metadados.pedido = pedido;
+  adicionarChavesRegistro(registro.id, [pedido, rastreio]);
+  return true;
+}
+
+async function reconhecerEtiquetasShopeeRasterizadasEmSegundoPlano() {
+  if (reconhecimentoShopeeSegundoPlanoAtivo || !bancoEtiquetas) return;
+  const pendentes = bancoEtiquetas.ordem
+    .map(id => bancoEtiquetas.registros[id])
+    .filter(r => r && r.marketplace === "shopee" && !r.pedido);
+  if (!pendentes.length) return;
+
+  reconhecimentoShopeeSegundoPlanoAtivo = true;
+  const status = document.getElementById("status");
+  let reconhecidas = 0;
+  try {
+    for (let i = 0; i < pendentes.length; i++) {
+      // Entrega a thread ao navegador antes de cada imagem grande :Z64:.
+      await new Promise(resolve => setTimeout(resolve, 60));
+      if (status) {
+        status.style.color = "var(--primary)";
+        status.innerHTML = `✔ Etiquetas Shopee já salvas. Reconhecendo pedido ${i + 1} de ${pendentes.length} no TXT rasterizado...`;
+      }
+      if (await reconhecerRegistroShopeeRasterizado(pendentes[i])) reconhecidas++;
+      vincularPendenciasShopeeAutomaticamente();
+      mapaEtiquetas = bancoEtiquetas;
+      try {
+        appStorage.setItem("conf_etiquetas", JSON.stringify(bancoEtiquetas));
+      } catch (_) {}
+    }
+
+    mapaEtiquetas = bancoEtiquetas;
+    try {
+      appStorage.setItem("conf_etiquetas", JSON.stringify(bancoEtiquetas));
+      appStorage.setItem("conf_banco_atualizado_em", new Date().toISOString());
+    } catch (_) {}
+    if (typeof renderizarEtiquetasPersistentes === "function") renderizarEtiquetasPersistentes();
+
+    const restantes = registrosShopeeNaoVinculados().length;
+    if (status) {
+      status.style.color = restantes ? "#b45309" : "#2e7d32";
+      status.innerHTML = restantes
+        ? `✔ TXT Shopee processado: ${reconhecidas} etiqueta(s) vinculada(s). ${restantes} aguardam vínculo manual.`
+        : `✔ TXT Shopee reconhecido: ${reconhecidas} etiqueta(s) vinculada(s) automaticamente.`;
+    }
+  } finally {
+    reconhecimentoShopeeSegundoPlanoAtivo = false;
   }
 }
 
@@ -2408,7 +2532,9 @@ async function vincularEtiquetasAosPedidos() {
     !/^Shopee: (nenhuma etiqueta|vínculo ambíguo|\d+ etiqueta\(s\) do arquivo não pertencem)/i.test(aviso)
   );
 
-  await resolverPendenciasShopeeVisualmente();
+  // V16.20: nunca bloqueia o salvamento esperando OCR/QR ou confirmação modal.
+  // Etiquetas não vinculadas permanecem no banco e podem ser vinculadas depois.
+  vincularPendenciasShopeeAutomaticamente();
 
   const etiquetasRestantes = registrosShopeeNaoVinculados();
   const pedidosRestantes = pedidosShopeeNaoVinculados();
@@ -2417,7 +2543,7 @@ async function vincularEtiquetasAosPedidos() {
     bancoEtiquetas.avisos.push(`Shopee: nenhuma etiqueta confirmada foi encontrada para o pedido ${pedidoParaExibicao(pedido,"shopee")}.`);
   });
   if (etiquetasRestantes.length) {
-    bancoEtiquetas.avisos.push(`Shopee: ${etiquetasRestantes.length} etiqueta(s) permaneceram sem vínculo e não serão impressas.`);
+    bancoEtiquetas.avisos.push(`Shopee: ${etiquetasRestantes.length} etiqueta(s) foram salvas e permanecem aguardando vínculo com o pedido.`);
   }
 
   validarMercadoLivre();
@@ -5213,6 +5339,8 @@ async function salvarEEnviarDados(){
     appStorage.setItem("conf_usuarios",JSON.stringify(usuariosEditorAdmin));appStorage.setItem("conf_pedidos",JSON.stringify(dadosPedidos));appStorage.setItem("conf_etiquetas",JSON.stringify(mapaEtiquetas));
     if(Object.keys(mapaFotos||{}).length){try{appStorage.setItem("conf_fotos",JSON.stringify(mapaFotos));}catch(e){appStorage.removeItem("conf_fotos");}}
     appStorage.setItem("conf_banco_atualizado_em",new Date().toISOString());statusDiv.style.color="#2e7d32";statusDiv.innerHTML=`✔ Etiquetas salvas na servidor Web.<br>${montarResumoEtiquetas()}`;
+    // V16.21: inicia reconhecimento rasterizado somente depois que o TXT já foi persistido.
+    setTimeout(()=>{ reconhecerEtiquetasShopeeRasterizadasEmSegundoPlano().catch(err=>console.error("Reconhecimento Shopee:",err)); },80);
   }catch(err){console.error(err);statusDiv.style.color="var(--secondary)";statusDiv.innerHTML="❌ Erro ao processar as etiquetas: "+err.message;}
 }
 
