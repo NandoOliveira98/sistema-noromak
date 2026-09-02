@@ -311,6 +311,62 @@
       .branch-cost-item small{display:block;margin-top:2px;font-size:.56rem;color:#64748b;line-height:1.25}
       @media(max-width:760px){.branch-cost-grid{grid-template-columns:1fr}.branch-cost-panel{padding:9px}}
 
+    
+      .branch-cost-item{cursor:pointer;transition:.15s ease}
+      .branch-cost-item:hover{transform:translateY(-1px);border-color:#8fb7dc;background:#f7fbff}
+      .branch-cost-item.active{border-color:#0f5e9c !important;background:#eaf4ff !important;box-shadow:0 0 0 2px rgba(15,94,156,.10) inset}
+      .branch-cost-item.active .branch-name::before{content:"✓ ";color:#0f5e9c;font-weight:900}
+      .branch-cost-item[aria-disabled="true"]{opacity:.7}
+
+    
+      /* V16.34 - layout reorganizado do cadastro do produto */
+      .product-data-grid{
+        display:grid;
+        grid-template-columns:minmax(150px,.75fr) minmax(340px,1.6fr) minmax(190px,.85fr) minmax(220px,.95fr) minmax(150px,.65fr);
+        gap:12px;
+        align-items:end;
+      }
+      .product-data-grid .field{min-width:0}
+      .cost-control{display:grid;grid-template-columns:minmax(0,1fr) 40px;gap:7px;align-items:end}
+      .cost-control .btn{height:40px;width:40px;min-width:40px;padding:0;display:grid;place-items:center;font-size:16px}
+      .branch-cost-panel{
+        margin-top:14px !important;
+        padding:12px !important;
+        border-radius:14px !important;
+      }
+      .branch-cost-head{margin-bottom:9px !important}
+      .branch-cost-grid{gap:10px !important}
+      .branch-cost-item{min-height:66px;padding:9px 12px !important;display:flex;flex-direction:column;justify-content:center}
+      .branch-cost-item .branch-name{font-size:.68rem !important}
+      .branch-cost-item .branch-value{font-size:.86rem !important;margin-top:3px !important}
+      .branch-cost-item small{font-size:.58rem !important}
+      .product-meta-row{
+        display:grid;
+        grid-template-columns:minmax(180px,230px) minmax(0,1fr);
+        gap:12px;
+        align-items:end;
+        margin-top:12px;
+      }
+      .product-meta-row .cost-status-row{
+        margin:0 !important;
+        min-height:40px;
+        display:flex;
+        align-items:center;
+        justify-content:space-between;
+        gap:12px;
+      }
+      .kit-choice{margin-top:12px !important}
+      .product-actions{margin-top:12px !important}
+      @media(max-width:1150px){
+        .product-data-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+        .product-data-grid .field-product{grid-column:1/-1}
+      }
+      @media(max-width:720px){
+        .product-data-grid{grid-template-columns:1fr}
+        .product-data-grid .field-product{grid-column:auto}
+        .product-meta-row{grid-template-columns:1fr}
+      }
+
     </style>
 </head>
 <body>
@@ -387,40 +443,62 @@
           <div><div class="eyebrow">Cadastro</div><h2>Dados do produto</h2><p>Altere os campos e veja os preços recalculados imediatamente.</p></div>
           <button class="btn btn-secondary" id="new-btn" type="button">+ Novo produto</button>
         </div>
-        <div class="form-grid">
-          <div class="field"><label for="sku">SKU</label><input id="sku" type="text" autocomplete="off"></div>
-          <div class="field field-wide"><label for="produto">Produto</label><input id="produto" type="text" autocomplete="off"></div>
+        <div class="product-data-grid">
           <div class="field">
-            <label for="custo">Custo do produto (R$)</label>
-            <div style="display:grid;grid-template-columns:minmax(0,1fr) 38px;gap:6px;align-items:center">
+            <label for="sku">SKU</label>
+            <input id="sku" type="text" autocomplete="off">
+          </div>
+
+          <div class="field field-product">
+            <label for="produto">Produto</label>
+            <input id="produto" type="text" autocomplete="off">
+          </div>
+
+          <div class="field">
+            <label for="custo">Custo usado (R$)</label>
+            <div class="cost-control">
               <input id="custo" type="number" min="0" step="0.01" inputmode="decimal">
               <button class="btn btn-secondary" id="cost-api-btn" type="button"
-                      title="Atualizar custo médio pelo SKU" aria-label="Atualizar custo médio pelo SKU"
-                      style="width:38px;height:38px;min-width:38px;padding:0;font-size:16px;display:grid;place-items:center">↻</button>
+                      title="Atualizar custos das filiais pelo SKU" aria-label="Atualizar custos das filiais pelo SKU">↻</button>
             </div>
           </div>
+
           <div class="field">
-            <label for="filial-custo">Filial usada na precificação</label>
+            <label for="filial-custo">Filial do custo</label>
             <select id="filial-custo">
               <option value="1">Araçatuba</option>
               <option value="2">Ribeirão</option>
               <option value="3">Bauru</option>
             </select>
           </div>
-          <div class="field"><label for="imposto">Imposto (%)</label><input id="imposto" type="number" min="0" max="99" step="0.01" inputmode="decimal"></div>
-          <div class="branch-cost-panel" id="branch-cost-panel">
-            <div class="branch-cost-head"><strong>Custos médios por filial</strong><span>O custo da filial selecionada é usado nos cálculos.</span></div>
-            <div class="branch-cost-grid" id="branch-cost-grid">
-              <div class="branch-cost-item"><span class="branch-name">Araçatuba</span><span class="branch-value">—</span></div>
-              <div class="branch-cost-item"><span class="branch-name">Ribeirão</span><span class="branch-value">—</span></div>
-              <div class="branch-cost-item"><span class="branch-name">Bauru</span><span class="branch-value">—</span></div>
-            </div>
+
+          <div class="field">
+            <label for="imposto">Imposto (%)</label>
+            <input id="imposto" type="number" min="0" max="99" step="0.01" inputmode="decimal">
           </div>
-          <div class="field"><label for="curva">Curva</label><select id="curva"><option value="">—</option><option>A</option><option>B</option><option>C</option><option>D</option></select></div>
         </div>
-        <div class="cost-status-row">
-          <small id="cost-api-status">Digite o SKU para consultar automaticamente.</small>
-          <small id="cost-last-change-note"></small>
+
+        <div class="branch-cost-panel" id="branch-cost-panel">
+          <div class="branch-cost-head">
+            <strong>Custos disponíveis por filial</strong>
+            <span>Clique na filial para usar o custo dela na precificação.</span>
+          </div>
+          <div class="branch-cost-grid" id="branch-cost-grid">
+            <div class="branch-cost-item"><span class="branch-name">Araçatuba</span><span class="branch-value">—</span></div>
+            <div class="branch-cost-item"><span class="branch-name">Ribeirão</span><span class="branch-value">—</span></div>
+            <div class="branch-cost-item"><span class="branch-name">Bauru</span><span class="branch-value">—</span></div>
+          </div>
+        </div>
+
+        <div class="product-meta-row">
+          <div class="field">
+            <label for="curva">Curva</label>
+            <select id="curva"><option value="">—</option><option>A</option><option>B</option><option>C</option><option>D</option></select>
+          </div>
+          <div class="cost-status-row">
+            <small id="cost-api-status">Digite o SKU para consultar automaticamente.</small>
+            <small id="cost-last-change-note"></small>
+          </div>
         </div>
         <div class="kit-choice">
           <label class="kit-check" for="is-kit"><input id="is-kit" type="checkbox"> Este produto é um kit</label>
@@ -1052,8 +1130,28 @@ var state = {
               cls+=" error"; value="não consultado"; note=row.erro || "a filial não respondeu";
             }
           }
-          return '<div class="'+cls+'"><span class="branch-name">'+escapeHtml(name)+'</span><span class="branch-value">'+escapeHtml(value)+'</span><small>'+escapeHtml(note)+'</small></div>';
+          return '<div class="'+cls+'" data-revenda="'+id+'" role="button" tabindex="0" aria-pressed="'+(id===selected?'true':'false')+'"><span class="branch-name">'+escapeHtml(name)+'</span><span class="branch-value">'+escapeHtml(value)+'</span><small>'+escapeHtml(note)+(id===selected?' · em uso':' · clique para usar')+'</small></div>';
         }).join("");
+      }
+
+
+      function selectBranchCost(revenda) {
+        var id=Number(revenda||1);
+        if (!id || !el["filial-custo"]) return;
+        el["filial-custo"].value=String(id);
+        applySelectedBranchCost();
+
+        var current=currentProduct();
+        if (current && !state.isNew) {
+          current.filialCusto=id;
+          current.custosFiliais=normalizeBranchCosts(state.branchCosts);
+          var row=branchCostRow(id);
+          if (row && row.tem_cadastro===true && Number.isFinite(Number(row.custo_medio))) {
+            current.custo=Core.roundMoney(Number(row.custo_medio));
+          }
+          state.dirty=true;
+          scheduleAutoSave();
+        }
       }
 
       function applySelectedBranchCost(options) {
@@ -1888,18 +1986,21 @@ var state = {
         }
       });
       el["filial-custo"].addEventListener("change", function () {
-        applySelectedBranchCost();
-        var current=currentProduct();
-        if (current && !state.isNew) {
-          current.filialCusto=Number(el["filial-custo"].value||1);
-          current.custosFiliais=normalizeBranchCosts(state.branchCosts);
-          var row=branchCostRow(current.filialCusto);
-          if (row && row.tem_cadastro===true && Number.isFinite(Number(row.custo_medio))) {
-            current.custo=Core.roundMoney(Number(row.custo_medio));
-          }
-          state.dirty=true;
-          scheduleAutoSave();
-        }
+        selectBranchCost(el["filial-custo"].value);
+      });
+
+      el["branch-cost-grid"].addEventListener("click", function (event) {
+        var card=event.target.closest(".branch-cost-item[data-revenda]");
+        if (!card) return;
+        selectBranchCost(card.dataset.revenda);
+      });
+
+      el["branch-cost-grid"].addEventListener("keydown", function (event) {
+        if (event.key!=="Enter" && event.key!==" ") return;
+        var card=event.target.closest(".branch-cost-item[data-revenda]");
+        if (!card) return;
+        event.preventDefault();
+        selectBranchCost(card.dataset.revenda);
       });
 
       el["cost-api-btn"].addEventListener("click", function () {
