@@ -857,7 +857,7 @@ body{background:var(--v15-bg)!important}
       </div>
       <div class="excel-wrap">
         <table class="excel-grid"><thead><tr>
-          <th>Ações</th><th>Pedido</th><th>Marketplace</th><th>Data do pedido</th><th>Kit</th><th>Cliente</th><th>SKU</th><th>Quantidade</th><th>Código de Barras / EAN</th><th>Descrição</th><th>Rua</th><th>Módulo</th><th>Prateleira</th><th>Nível</th><th>Posição</th><th>Foto</th><th>Status</th>
+          <th>Ações</th><th>Pedido</th><th>Marketplace</th><th>Data do pedido</th><th>Kit</th><th>Cliente</th><th>Nome na conferência</th><th>SKU</th><th>Quantidade</th><th>Código de Barras / EAN</th><th>Descrição</th><th>Rua</th><th>Módulo</th><th>Prateleira</th><th>Nível</th><th>Posição</th><th>Foto</th><th>Status</th>
         </tr></thead><tbody id="corpoPedidosAdmin"></tbody></table>
       </div>
       <div class="grid-rodape"><span id="resumoPedidosAdmin"></span><div class="paginacao"><span>Rascunhos incompletos não aparecem para o conferente.</span><button onclick="mudarPaginaPedidos(-1)">◀</button><span id="paginaPedidosTexto"></span><button onclick="mudarPaginaPedidos(1)">▶</button></div></div>
@@ -2781,7 +2781,7 @@ const PRODUTOS_INICIAIS_BANCO = [{"SKU":"33353953","Código de Barras":"78911652
 const USUARIOS_INICIAIS_BANCO = [];
 const PEDIDOS_INICIAIS_BANCO = [];
 const CAMPOS_PRODUTOS_BANCO = ["SKU","Código de Barras","Descrição","Marca","Fabricante","Aplicação","Categoria","Rua","Módulo","Prateleira","Nível","Posição","Foto","Peso","Unidade","Ativo"];
-const CAMPOS_PEDIDOS_BANCO = ["Pedido","Marketplace","Data do Pedido","Kit","Nome do Kit","Quantidade de Kits","Quantidade por Kit","Cliente","SKU","Quantidade","Código de Barras","Descrição","Rua","Módulo","Prateleira","Nível","Posição","Foto","Código de Rastreio"];
+const CAMPOS_PEDIDOS_BANCO = ["Pedido","Marketplace","Data do Pedido","Kit","Nome do Kit","Quantidade de Kits","Quantidade por Kit","Cliente","Nome Conferência","SKU","Quantidade","Código de Barras","Descrição","Rua","Módulo","Prateleira","Nível","Posição","Foto","Código de Rastreio"];
 let produtosBancoAdmin = [];
 let kitsBancoAdmin = [];
 let kitEditorIndiceAdmin = -1;
@@ -3289,7 +3289,7 @@ function v151AbrirProblemas(){
 }
 function v151BuscaGlobal(q){
   const box=document.getElementById("v151GlobalResults");if(!box)return;const t=String(q||"").trim().toLowerCase();if(t.length<2){box.classList.remove("show");box.innerHTML="";return;}
-  const rows=(obterPedidosValidosBanco()||[]).filter(r=>[r.Pedido,r.Cliente,r.SKU,r["Código de Barras"],r.Descrição].some(v=>String(v||"").toLowerCase().includes(t))).slice(0,6);
+  const rows=(obterPedidosValidosBanco()||[]).filter(r=>[r.Pedido,r.Cliente,r["Nome Conferência"],r.SKU,r["Código de Barras"],r.Descrição].some(v=>String(v||"").toLowerCase().includes(t))).slice(0,6);
   const prods=(produtosBancoAdmin||[]).filter(r=>[r.SKU,r["Código de Barras"],r.Descrição].some(v=>String(v||"").toLowerCase().includes(t))).slice(0,4);
   const itens=[...rows.map(r=>({tipo:"pedido",titulo:`Pedido ${pedidoParaExibicao(r.Pedido,r.Marketplace||"")}`,sub:`${r.Cliente||"Sem cliente"} · ${r.SKU||"Sem SKU"} · ${r.Descrição||""}`,q:String(r.Pedido||"")})),...prods.map(r=>({tipo:"produto",titulo:`Produto ${r.SKU||""}`,sub:`${r["Código de Barras"]||"Sem EAN"} · ${r.Descrição||""}`,q:String(r.SKU||"")}))].slice(0,10);
   box.innerHTML=itens.length?itens.map((x,i)=>`<button class="v151-search-row" onclick="v151AbrirBusca('${String(x.tipo).replace(/'/g,"\'")}','${String(x.q).replace(/'/g,"\'")}')"><b>${mlHtmlSeguro(x.titulo)}</b><small>${mlHtmlSeguro(x.sub)}</small></button>`).join(""):'<div class="v151-empty">Nenhum resultado encontrado.</div>';box.classList.add("show");
@@ -3407,7 +3407,7 @@ function salvarPedidosAdmin(mostrarMensagem=false){
   }catch(e){console.error(e);setStatusBanco("Erro ao salvar pedidos","erro");if(mostrarMensagem)alert("Não foi possível salvar os pedidos: "+e.message);}
 }
 function adicionarLinhaPedidoAdmin(base=null){
-  const item={Pedido:base?.Pedido||"",Marketplace:base?.Marketplace||"","Data do Pedido":normalizarDataPedidoBanco(base?.["Data do Pedido"],true),Kit:base?.Kit||"","Nome do Kit":base?.["Nome do Kit"]||"","Quantidade de Kits":base?.["Quantidade de Kits"]||"","Quantidade por Kit":"",Cliente:base?.Cliente||"",SKU:"",Quantidade:"1","Código de Barras":"","Descrição":"",Rua:"",Módulo:"",Prateleira:"",Nível:"",Posição:"",Foto:"",__uidLinha:uidBanco("PED")};
+  const item={Pedido:base?.Pedido||"",Marketplace:base?.Marketplace||"","Data do Pedido":normalizarDataPedidoBanco(base?.["Data do Pedido"],true),Kit:base?.Kit||"","Nome do Kit":base?.["Nome do Kit"]||"","Quantidade de Kits":base?.["Quantidade de Kits"]||"","Quantidade por Kit":"",Cliente:base?.Cliente||"","Nome Conferência":base?.["Nome Conferência"]||"",SKU:"",Quantidade:"1","Código de Barras":"","Descrição":"",Rua:"",Módulo:"",Prateleira:"",Nível:"",Posição:"",Foto:"",__uidLinha:uidBanco("PED")};
   const busca=document.getElementById("buscaPedidosAdmin");if(busca)busca.value="";
   if(base){
     let indice=pedidosEditorAdmin.findIndex(x=>x.__uidLinha===base.__uidLinha)+1;
@@ -3477,7 +3477,12 @@ function atualizarCampoPedidoAdmin(el){
     item.Marketplace=marketplaceExibicaoBanco(el.value);
     item[campo]=pedidoArmazenamentoBanco(el.value,item.Marketplace);
   }else if(campo==="Data do Pedido") item[campo]=normalizarDataPedidoBanco(el.value,true);
-  else item[campo]=el.value;
+  else if(campo==="Nome Conferência"){
+    const nome=String(el.value||"").trim();
+    item[campo]=nome;
+    const pedidoRef=normalizarCodigoBanco(item.Pedido);
+    if(pedidoRef)pedidosEditorAdmin.forEach(linha=>{if(normalizarCodigoBanco(linha.Pedido)===pedidoRef)linha[campo]=nome;});
+  }else item[campo]=el.value;
   if(campo==="SKU"||campo==="Código de Barras"){
     const p=localizarProdutoBanco(el.value); if(p)preencherPedidoProdutoBanco(item,p);
   }
@@ -3588,18 +3593,18 @@ function renderizarPedidosAdmin(){
   paginaPedidosAdmin=Math.min(Math.max(1,paginaPedidosAdmin),paginas);
   const inicio=(paginaPedidosAdmin-1)*ITENS_POR_PAGINA_PEDIDOS;
   const parte=filtrados.slice(inicio,inicio+ITENS_POR_PAGINA_PEDIDOS);
-  if(!filtrados.length){corpo.innerHTML='<tr><td colspan="17" style="padding:25px;text-align:center;color:#64748b;">Nenhuma linha. Clique em “Nova linha” ou use “Importar por print” para cadastrar um pedido ou kit.</td></tr>';}
+  if(!filtrados.length){corpo.innerHTML='<tr><td colspan="18" style="padding:25px;text-align:center;color:#64748b;">Nenhuma linha. Clique em “Nova linha” ou use “Importar por print” para cadastrar um pedido ou kit.</td></tr>';}
   else corpo.innerHTML=parte.map(item=>{
     item.Marketplace=marketplaceExibicaoBanco(item.Pedido);
     const valida=linhaPedidoValidaBanco(item);
-    const inp=(campo,cls="")=>{const valor=campo==="Pedido"?pedidoExibicaoBanco(item.Pedido,item.Marketplace):campoBanco(item,campo);return `<input class="${cls}" data-uidlinha="${htmlSeguroBanco(item.__uidLinha)}" data-campo="${htmlSeguroBanco(campo)}" value="${htmlSeguroBanco(valor)}" onchange="atualizarCampoPedidoAdmin(this)" onkeydown="navegarGridAdmin(event,this)">`;};
+    const inp=(campo,cls="")=>{const valor=campo==="Pedido"?pedidoExibicaoBanco(item.Pedido,item.Marketplace):campoBanco(item,campo);const extra=campo==="Nome Conferência"?' placeholder="Nome exibido na conferência" title="Se preenchido, este nome aparece no lugar do Cliente somente na tela de conferência"':'';return `<input class="${cls}" data-uidlinha="${htmlSeguroBanco(item.__uidLinha)}" data-campo="${htmlSeguroBanco(campo)}" value="${htmlSeguroBanco(valor)}"${extra} onchange="atualizarCampoPedidoAdmin(this)" onkeydown="navegarGridAdmin(event,this)">`;};
     const eanAtual=campoBanco(item,"Código de Barras");
     const alterado=String(eanSalvoPorUid.get(item.__uidLinha)??eanAtual)!==eanAtual.trim();
     const mensagem=eanMensagemPorUid.get(item.__uidLinha)||{tipo:"",texto:"Bipe o código e pressione Enter."};
     const editorEan=`<div class="ean-pedido-editor"><input class="${alterado?'ean-alterado':''}" inputmode="numeric" enterkeyhint="done" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Código de barras do SKU ${htmlSeguroBanco(item.SKU||'sem SKU')}" data-uidlinha="${htmlSeguroBanco(item.__uidLinha)}" data-campo="Código de Barras" value="${htmlSeguroBanco(eanAtual)}" oninput="alterarEanPedidoAdmin(this)" onblur="aoSairEanPedidoAdmin(event,this)" onkeydown="atalhoEanPedidoAdmin(event,this)"><div class="ean-pedido-acoes"><button type="button" class="btn-ean-salvar" title="Salvar EAN somente neste pedido" onclick="salvarEanPedidoAdmin('${htmlSeguroBanco(item.__uidLinha)}',false,this.closest('.ean-pedido-editor').querySelector('input'))">Salvar</button><button type="button" class="btn-ean-banco" title="Salvar também no Banco de Produtos deste SKU" onclick="salvarEanPedidoAdmin('${htmlSeguroBanco(item.__uidLinha)}',true,this.closest('.ean-pedido-editor').querySelector('input'))">Banco</button></div><small id="status-ean-${htmlSeguroBanco(item.__uidLinha)}" class="ean-pedido-status ${htmlSeguroBanco(mensagem.tipo)}">${htmlSeguroBanco(mensagem.texto)}</small></div>`;
     const jaFeito=Boolean(item?.__jaConcluidoAnteriormente||item?.__concluidoAnteriorEm);
     return `<tr class="${valida?'linha-valida':'linha-rascunho'}${jaFeito?' linha-ja-feito':''}"><td><div class="linha-acoes"><button title="Adicionar outro item neste pedido" onclick="adicionarItemMesmoPedido('${htmlSeguroBanco(item.__uidLinha)}')">＋</button><button title="Atualizar dados desta venda no Mercado Livre" style="background:#e3f2fd;color:#1565c0" onclick="atualizarVendaMercadoLivreAdmin('${htmlSeguroBanco(item.__uidLinha)}',this)">↻</button><button title="Excluir linha" style="background:#ffebee;color:#c62828" onclick="excluirLinhaPedidoAdmin('${htmlSeguroBanco(item.__uidLinha)}')">🗑</button></div></td>`+
-      `<td><div class="pedido-cell-wrap">${tagConclusaoAnteriorPedidoBanco(item)}${inp('Pedido','campo-pedido')}</div></td><td><input class="market-auto" readonly value="${htmlSeguroBanco(item.Marketplace)}"></td><td><input type="date" data-uidlinha="${htmlSeguroBanco(item.__uidLinha)}" data-campo="Data do Pedido" value="${htmlSeguroBanco(normalizarDataPedidoBanco(item['Data do Pedido'],true))}" onchange="atualizarCampoPedidoAdmin(this)" onkeydown="navegarGridAdmin(event,this)"></td><td><div class="kit-celula-resumo">${textoKitBanco(item)?`<span class="kit-badge">KIT</span><br>${htmlSeguroBanco(textoKitBanco(item))}`:'—'}</div></td><td>${inp('Cliente','campo-cliente')}</td><td>${inp('SKU')}</td><td><input type="number" min="1" data-uidlinha="${htmlSeguroBanco(item.__uidLinha)}" data-campo="Quantidade" value="${htmlSeguroBanco(item.Quantidade||'1')}" onchange="atualizarCampoPedidoAdmin(this)" onkeydown="navegarGridAdmin(event,this)"></td><td>${editorEan}</td><td>${inp('Descrição','campo-descricao')}</td><td>${inp('Rua')}</td><td>${inp('Módulo')}</td><td>${inp('Prateleira')}</td><td>${inp('Nível')}</td><td>${inp('Posição')}</td><td>${inp('Foto','campo-foto')}</td><td><span class="status-celula ${valida?'status-pendente':'status-rascunho'}">${valida?'PENDENTE':'RASCUNHO'}</span>${tagConclusaoAnteriorBanco(item)}</td></tr>`;
+      `<td><div class="pedido-cell-wrap">${tagConclusaoAnteriorPedidoBanco(item)}${inp('Pedido','campo-pedido')}</div></td><td><input class="market-auto" readonly value="${htmlSeguroBanco(item.Marketplace)}"></td><td><input type="date" data-uidlinha="${htmlSeguroBanco(item.__uidLinha)}" data-campo="Data do Pedido" value="${htmlSeguroBanco(normalizarDataPedidoBanco(item['Data do Pedido'],true))}" onchange="atualizarCampoPedidoAdmin(this)" onkeydown="navegarGridAdmin(event,this)"></td><td><div class="kit-celula-resumo">${textoKitBanco(item)?`<span class="kit-badge">KIT</span><br>${htmlSeguroBanco(textoKitBanco(item))}`:'—'}</div></td><td>${inp('Cliente','campo-cliente')}</td><td>${inp('Nome Conferência','campo-cliente-conferencia')}</td><td>${inp('SKU')}</td><td><input type="number" min="1" data-uidlinha="${htmlSeguroBanco(item.__uidLinha)}" data-campo="Quantidade" value="${htmlSeguroBanco(item.Quantidade||'1')}" onchange="atualizarCampoPedidoAdmin(this)" onkeydown="navegarGridAdmin(event,this)"></td><td>${editorEan}</td><td>${inp('Descrição','campo-descricao')}</td><td>${inp('Rua')}</td><td>${inp('Módulo')}</td><td>${inp('Prateleira')}</td><td>${inp('Nível')}</td><td>${inp('Posição')}</td><td>${inp('Foto','campo-foto')}</td><td><span class="status-celula ${valida?'status-pendente':'status-rascunho'}">${valida?'PENDENTE':'RASCUNHO'}</span>${tagConclusaoAnteriorBanco(item)}</td></tr>`;
   }).join("");
   document.getElementById("resumoPedidosAdmin").textContent=`${filtrados.length} linha(s) encontrada(s) · ${obterPedidosValidosBanco().length} válida(s) · ${obterRascunhosBanco().length} rascunho(s)`;
   const paginaTexto=document.getElementById("paginaPedidosTexto");if(paginaTexto)paginaTexto.textContent=`Página ${paginaPedidosAdmin} de ${paginas}`;
