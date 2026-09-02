@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "16.31"
+APP_VERSION = "16.32"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -104,7 +104,7 @@ CRM_COST_API_URL = os.getenv(
 ).strip()
 CHAVE_CRM = os.getenv("CHAVE_CRM", "").strip()
 CRM_COST_TIMEOUT = max(3, min(30, int(os.getenv("CRM_COST_TIMEOUT", "20"))))
-CRM_COST_CACHE_SECONDS = max(5, min(300, int(os.getenv("CRM_COST_CACHE_SECONDS", "30"))))
+CRM_COST_CACHE_SECONDS = max(30, min(600, int(os.getenv("CRM_COST_CACHE_SECONDS", "180"))))
 
 
 DB_LOCK = threading.RLock()
@@ -361,10 +361,59 @@ def crm_cost_lookup(codigo: str, operador: str = "") -> dict[str, Any]:
     if not data.get("ok"):
         raise RuntimeError(str(data.get("erro") or "O Apollo não devolveu o custo desta peça."))
 
+    # V16.32 — contrato de 3 casas do CRM.
+    # A lista `custos` é a fonte oficial. O custo_medio do topo existe apenas
+    # por compatibilidade e pode ser null quando a peça só existe em outra filial.
+    casa_nomes = {1: "Araçatuba", 2: "Ribeirão", 3: "Bauru"}
+    custos_raw = data.get("custos")
+    custos_filiais: list[dict[str, Any]] = []
+    if isinstance(custos_raw, list):
+        for row in custos_raw:
+            if not isinstance(row, dict):
+                continue
+            try:
+                revenda = int(row.get("revenda"))
+            except (TypeError, ValueError):
+                continue
+            custo_val = row.get("custo_medio")
+            try:
+                custo_num = round(float(custo_val), 4) if custo_val is not None else None
+            except (TypeError, ValueError):
+                custo_num = None
+            tem_cadastro = row.get("tem_cadastro")
+            if tem_cadastro not in (True, False, None):
+                tem_cadastro = None
+            custos_filiais.append({
+                "revenda": revenda,
+                "casa": casa_nomes.get(revenda, str(revenda)),
+                "custo_medio": custo_num,
+                "tem_cadastro": tem_cadastro,
+                "erro": str(row.get("erro") or "") or None,
+            })
+
+    # Compatibilidade com endpoint antigo: se ainda não houver lista, monta
+    # somente a casa principal com o campo legado.
+    if not custos_filiais:
+        principal = int(data.get("revenda_principal") or 1)
+        legado = data.get("custo_medio")
+        try:
+            legado_num = round(float(legado), 4) if legado is not None else None
+        except (TypeError, ValueError):
+            legado_num = None
+        custos_filiais = [{
+            "revenda": principal,
+            "casa": casa_nomes.get(principal, str(principal)),
+            "custo_medio": legado_num,
+            "tem_cadastro": True if legado_num is not None else False,
+            "erro": None,
+        }]
+
+    # Mantém custo_medio no retorno por compatibilidade, sem exigir que exista.
+    custo_topo = data.get("custo_medio")
     try:
-        custo = float(data.get("custo_medio"))
+        custo = round(float(custo_topo), 4) if custo_topo is not None else None
     except (TypeError, ValueError):
-        raise RuntimeError("A API respondeu sem um custo médio válido.")
+        custo = None
 
     # Contrato oficial da API Apollo/CRM:
     # - curva_abc: A/B/C/D (fonte oficial para precificação)
@@ -396,7 +445,9 @@ def crm_cost_lookup(codigo: str, operador: str = "") -> dict[str, Any]:
         "codigo": str(data.get("codigo") or codigo),
         "descricao": str(data.get("descricao") or ""),
         "unidade": str(data.get("unidade") or ""),
-        "custo_medio": round(custo, 4),
+        "custo_medio": custo,
+        "revenda_principal": int(data.get("revenda_principal") or 1),
+        "custos": custos_filiais,
         "curva_abc": curva_abc,
         "curva_123": curva_123,
         "curva": curva_composta,
@@ -2148,11 +2199,21 @@ def precificador_bulk_update_worker(username: str) -> None:
             try:
                 result = crm_cost_lookup(sku, username or "ATUALIZACAO_GERAL_PRECIFICADOR")
                 old_cost = round(float(product.get("custo") or 0), 2)
-                new_cost = round(float(result.get("custo_medio") or 0), 2)
+                filial_custo = int(product.get("filialCusto") or 1)
+                branch_rows = result.get("custos") if isinstance(result.get("custos"), list) else []
+                product["custosFiliais"] = branch_rows
+                product["filialCusto"] = filial_custo
+                selected_branch = next(
+                    (row for row in branch_rows if isinstance(row, dict) and int(row.get("revenda") or 0) == filial_custo),
+                    None,
+                )
+                selected_cost = selected_branch.get("custo_medio") if isinstance(selected_branch, dict) else None
+                new_cost = round(float(selected_cost), 2) if selected_cost is not None else None
                 description = str(result.get("descricao") or "").strip()
                 curve = str(result.get("curva_abc") or "").strip().upper()
 
-                product["custo"] = new_cost
+                if new_cost is not None:
+                    product["custo"] = new_cost
                 if description and str(product.get("produto") or "").strip() != description:
                     product["produto"] = description
                     descriptions += 1
@@ -2162,7 +2223,7 @@ def precificador_bulk_update_worker(username: str) -> None:
                     apply_curve_margin_to_product(product, curve)
                     curves += 1
 
-                if abs(new_cost - old_cost) >= 0.01:
+                if new_cost is not None and abs(new_cost - old_cost) >= 0.01:
                     diff = round(new_cost - old_cost, 2)
                     pct = (diff / old_cost) if old_cost else 0.0
                     alerts.insert(0, {
@@ -2186,9 +2247,9 @@ def precificador_bulk_update_worker(username: str) -> None:
                 processed=pos, updated=updated, cost_changes=cost_changes,
                 descriptions=descriptions, curves=curves, errors=errors,
             )
-            # API informada pelo Guilherme: máximo 30 consultas/minuto.
+            # Contrato CRM 3 casas: máximo 20 consultas/minuto no sistema inteiro.
             if pos < len(targets):
-                time.sleep(2.2)
+                time.sleep(3.2)
 
         kits = _precificador_recalculate_kits(products)
         data["products"] = products

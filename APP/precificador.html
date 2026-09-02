@@ -296,7 +296,22 @@
       .topbar-actions{width:100%;justify-content:flex-start}
     }
 
-  </style>
+  
+      .branch-cost-panel{grid-column:1/-1;border:1px solid #dbe5f0;background:#f8fbff;border-radius:12px;padding:10px 12px}
+      .branch-cost-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:7px}
+      .branch-cost-head strong{font-size:.72rem;color:#173b61}
+      .branch-cost-head span{font-size:.62rem;color:#64748b}
+      .branch-cost-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}
+      .branch-cost-item{border:1px solid #dbe5f0;background:#fff;border-radius:9px;padding:7px 9px;min-width:0}
+      .branch-cost-item.active{border-color:#1d5d96;box-shadow:0 0 0 1px #1d5d96 inset;background:#eef6ff}
+      .branch-cost-item .branch-name{font-size:.65rem;font-weight:900;color:#24415e;display:block}
+      .branch-cost-item .branch-value{font-size:.75rem;font-weight:900;color:#0f4f83;display:block;margin-top:2px}
+      .branch-cost-item.missing .branch-value{color:#9a6700}
+      .branch-cost-item.error .branch-value{color:#b91c1c}
+      .branch-cost-item small{display:block;margin-top:2px;font-size:.56rem;color:#64748b;line-height:1.25}
+      @media(max-width:760px){.branch-cost-grid{grid-template-columns:1fr}.branch-cost-panel{padding:9px}}
+
+    </style>
 </head>
 <body>
   <header class="topbar">
@@ -384,7 +399,23 @@
                       style="width:38px;height:38px;min-width:38px;padding:0;font-size:16px;display:grid;place-items:center">↻</button>
             </div>
           </div>
+          <div class="field">
+            <label for="filial-custo">Filial usada na precificação</label>
+            <select id="filial-custo">
+              <option value="1">Araçatuba</option>
+              <option value="2">Ribeirão</option>
+              <option value="3">Bauru</option>
+            </select>
+          </div>
           <div class="field"><label for="imposto">Imposto (%)</label><input id="imposto" type="number" min="0" max="99" step="0.01" inputmode="decimal"></div>
+          <div class="branch-cost-panel" id="branch-cost-panel">
+            <div class="branch-cost-head"><strong>Custos médios por filial</strong><span>O custo da filial selecionada é usado nos cálculos.</span></div>
+            <div class="branch-cost-grid" id="branch-cost-grid">
+              <div class="branch-cost-item"><span class="branch-name">Araçatuba</span><span class="branch-value">—</span></div>
+              <div class="branch-cost-item"><span class="branch-name">Ribeirão</span><span class="branch-value">—</span></div>
+              <div class="branch-cost-item"><span class="branch-name">Bauru</span><span class="branch-value">—</span></div>
+            </div>
+          </div>
           <div class="field"><label for="curva">Curva</label><select id="curva"><option value="">—</option><option>A</option><option>B</option><option>C</option><option>D</option></select></div>
         </div>
         <div class="cost-status-row">
@@ -786,12 +817,14 @@ var state = {
         dirty: false,
         isNew: false,
         baseCost: 0,
+        branchCosts: [],
+        branchCostBlocked: false,
         kitDraft: [],
         kitCycleIds: []
       };
 
       var el = {};
-      ["product-count", "search", "product-list", "sku", "produto", "custo", "imposto", "curva",
+      ["product-count", "search", "product-list", "sku", "produto", "custo", "filial-custo", "branch-cost-panel", "branch-cost-grid", "imposto", "curva",
         "save-btn", "delete-btn", "new-btn", "export-btn", "import-btn", "import-file",
         "is-kit", "kit-builder", "kit-items", "kit-total", "kit-alert", "add-kit-item",
         "ml-results", "shopee-results", "magalu-results", "comparison-body", "toast", "cost-api-btn", "cost-api-status",
@@ -907,6 +940,7 @@ var state = {
 
       function productReadyForAutoSave(product) {
         if (!product || !String(product.sku || "").trim()) return false;
+        if (!product.isKit && state.branchCostBlocked) return false;
         if (!product.isKit) return true;
         var issues = getKitIssues();
         if (issues.duplicates.size || issues.missingCosts.size) return false;
@@ -975,6 +1009,88 @@ var state = {
       var costLookupRequestedSku = "";
       var costLookupGeneration = 0;
 
+
+      var BRANCH_NAMES = {1:"Araçatuba",2:"Ribeirão",3:"Bauru"};
+
+      function normalizeBranchCosts(rows) {
+        return Array.isArray(rows) ? rows.map(function(row){
+          var revenda=Number(row && row.revenda);
+          var custo=row && row.custo_medio;
+          custo=(custo===null||custo===undefined||custo==="")?null:Number(custo);
+          return {
+            revenda: revenda,
+            casa: String((row && row.casa) || BRANCH_NAMES[revenda] || revenda || ""),
+            custo_medio: Number.isFinite(custo) ? Core.roundMoney(custo) : null,
+            tem_cadastro: row ? row.tem_cadastro : null,
+            erro: row && row.erro ? String(row.erro) : null
+          };
+        }).filter(function(row){return Number.isFinite(row.revenda)&&row.revenda>0;}) : [];
+      }
+
+      function branchCostRow(revenda) {
+        var id=Number(revenda||1);
+        return (state.branchCosts||[]).find(function(row){return Number(row.revenda)===id;}) || null;
+      }
+
+      function renderBranchCosts() {
+        if (!el["branch-cost-grid"]) return;
+        var selected=Number(el["filial-custo"] && el["filial-custo"].value || 1);
+        var ids=[1,2,3];
+        var extras=(state.branchCosts||[]).map(function(r){return Number(r.revenda);}).filter(function(id){return id&&!ids.includes(id);});
+        ids=ids.concat(extras);
+        el["branch-cost-grid"].innerHTML=ids.map(function(id){
+          var row=branchCostRow(id);
+          var name=BRANCH_NAMES[id] || (row && row.casa) || ("Revenda "+id);
+          var cls="branch-cost-item"+(id===selected?" active":"");
+          var value="—", note="Aguardando consulta";
+          if (row) {
+            if (row.tem_cadastro===true && Number.isFinite(Number(row.custo_medio))) {
+              value=money(Number(row.custo_medio)); note="custo médio";
+            } else if (row.tem_cadastro===false) {
+              cls+=" missing"; value="não cadastrada"; note="peça não existe nesta filial";
+            } else {
+              cls+=" error"; value="não consultado"; note=row.erro || "a filial não respondeu";
+            }
+          }
+          return '<div class="'+cls+'"><span class="branch-name">'+escapeHtml(name)+'</span><span class="branch-value">'+escapeHtml(value)+'</span><small>'+escapeHtml(note)+'</small></div>';
+        }).join("");
+      }
+
+      function applySelectedBranchCost(options) {
+        options=options||{};
+        var selected=Number(el["filial-custo"] && el["filial-custo"].value || 1);
+        var row=branchCostRow(selected);
+        renderBranchCosts();
+        if (row && row.tem_cadastro===true && Number.isFinite(Number(row.custo_medio))) {
+          var cost=Core.roundMoney(Number(row.custo_medio));
+          state.branchCostBlocked=false;
+          state.baseCost=cost;
+          setValue("custo",cost);
+          if (!options.silent) {
+            state.dirty=true;
+            recalculate();
+            scheduleAutoSave();
+          }
+          return true;
+        }
+        if ((state.branchCosts||[]).length) {
+          state.branchCostBlocked=true;
+          state.baseCost=0;
+          setValue("custo","");
+          recalculate();
+          if (!options.silent) {
+            var name=BRANCH_NAMES[selected]||("Revenda "+selected);
+            var msg=row && row.tem_cadastro===false
+              ? name+": peça não cadastrada."
+              : name+": custo não consultado. Tente novamente.";
+            setCostApiStatus(msg,"error");
+          }
+          return false;
+        }
+        state.branchCostBlocked=false;
+        return false;
+      }
+
       function setCostApiStatus(message, kind) {
         if (!el["cost-api-status"]) return;
         el["cost-api-status"].textContent = message;
@@ -1027,10 +1143,8 @@ var state = {
             throw new Error(data.error || "Não foi possível consultar o custo médio.");
           }
 
-          var custo = Number(data.custo_medio);
-          if (!Number.isFinite(custo)) {
-            throw new Error("A API respondeu sem custo médio válido.");
-          }
+          var custosFiliais = normalizeBranchCosts(data.custos);
+          state.branchCosts = custosFiliais;
 
           // Não deixa uma resposta antiga alterar o SKU que o usuário já mudou.
           if (String(el.sku.value || "").trim() !== sku) {
@@ -1044,9 +1158,12 @@ var state = {
           var savedProduct = currentProduct();
           var sameSavedSku = savedProduct && !state.isNew && String(savedProduct.sku || "").trim() === sku;
           var previousSavedCost = sameSavedSku ? Number(savedProduct.custo) : NaN;
-
-          setValue("custo", Math.round((custo + Number.EPSILON) * 100) / 100);
-          state.baseCost = Core.roundMoney(custo);
+          var selectedBranch = Number(el["filial-custo"].value || (sameSavedSku && savedProduct.filialCusto) || 1);
+          if (el["filial-custo"]) el["filial-custo"].value = String(selectedBranch);
+          var selectedRow = custosFiliais.find(function(row){ return Number(row.revenda)===selectedBranch; }) || null;
+          var custo = selectedRow && selectedRow.tem_cadastro===true && Number.isFinite(Number(selectedRow.custo_medio))
+            ? Number(selectedRow.custo_medio) : null;
+          applySelectedBranchCost({silent:true});
 
           if (!descricaoAtual && descricaoApi) {
             el.produto.value = descricaoApi;
@@ -1067,7 +1184,7 @@ var state = {
           }
 
           if (sameSavedSku) {
-            if (Number.isFinite(previousSavedCost) && Math.abs(previousSavedCost - custo) >= 0.01) {
+            if (Number.isFinite(custo) && Number.isFinite(previousSavedCost) && Math.abs(previousSavedCost - custo) >= 0.01) {
               addCostChangeAlert(savedProduct, previousSavedCost, custo, descricaoApi);
               if (el["cost-last-change-note"]) {
                 el["cost-last-change-note"].textContent = "⚠ Custo alterado: " + money(previousSavedCost) + " → " + money(custo);
@@ -1076,7 +1193,9 @@ var state = {
               el["cost-last-change-note"].textContent = "";
             }
 
-            savedProduct.custo = Core.roundMoney(custo);
+            savedProduct.custosFiliais = normalizeBranchCosts(custosFiliais);
+            savedProduct.filialCusto = selectedBranch;
+            if (Number.isFinite(custo)) savedProduct.custo = Core.roundMoney(custo);
             if (!String(savedProduct.produto || "").trim() && descricaoApi) savedProduct.produto = descricaoApi;
             if (["A","B","C","D"].includes(curvaApi)) {
               savedProduct.curva = curvaApi;
@@ -1108,10 +1227,15 @@ var state = {
 
           var extra = descricaoApi ? " · " + descricaoApi : "";
           var unidade = data.unidade ? " · " + String(data.unidade) : "";
-          setCostApiStatus("Custo médio atualizado: " + money(custo) + unidade + extra, "ok");
-          showToast(descricaoApi
-            ? "Custo médio e descrição atualizados pelo Apollo."
-            : "Custo médio atualizado pelo Apollo.");
+          var selectedName = BRANCH_NAMES[selectedBranch] || ("Revenda "+selectedBranch);
+          if (Number.isFinite(custo)) {
+            setCostApiStatus(selectedName + ": " + money(custo) + unidade + extra, "ok");
+            showToast("Custos das 3 filiais atualizados pelo Apollo.");
+          } else {
+            var statusText = selectedRow && selectedRow.tem_cadastro===false ? "não cadastrada" : "não consultado";
+            setCostApiStatus(selectedName + ": " + statusText + ". Escolha outra filial ou tente novamente.", "error");
+            showToast("Consulta concluída. A filial selecionada está sem custo disponível.");
+          }
         } catch (error) {
           // Só mostra erro se o usuário ainda estiver no mesmo SKU.
           if (String(el.sku.value || "").trim() === sku) {
@@ -1524,9 +1648,14 @@ var state = {
         var magalu = markets.magalu || defaultMarketplaces().magalu;
         setValue("sku", product.sku);
         setValue("produto", product.produto);
+        state.branchCosts = normalizeBranchCosts(product.custosFiliais || []);
+        state.branchCostBlocked = false;
+        if (el["filial-custo"]) el["filial-custo"].value = String(Number(product.filialCusto || 1));
         state.baseCost = Core.roundMoney(product.custo);
         state.kitDraft = Array.isArray(product.kitItems) ? product.kitItems.map(normalizeKitItem) : [];
         setValue("custo", state.baseCost);
+        renderBranchCosts();
+        if (!product.isKit && state.branchCosts.length) applySelectedBranchCost({silent:true});
         setValue("imposto", percentForInput(product.imposto));
         setValue("curva", product.curva);
         setValue("ml-fixed", Core.roundMoney(ml.taxaFixa));
@@ -1561,6 +1690,8 @@ var state = {
           sku: el.sku.value.trim(),
           produto: el.produto.value.trim(),
           custo: isKit ? Core.calculateKitCost(kitItems) : num("custo"),
+          filialCusto: Number(el["filial-custo"] && el["filial-custo"].value || 1),
+          custosFiliais: normalizeBranchCosts(state.branchCosts),
           imposto: pctInput("imposto"),
           curva: el.curva.value,
           isKit: isKit,
@@ -1589,6 +1720,10 @@ var state = {
 
       function calculateAll() {
         var product = readForm();
+        if (!product.isKit && state.branchCostBlocked) {
+          var err={error:"A filial selecionada está sem custo disponível. Escolha uma filial com custo ou consulte novamente."};
+          return {ml:err,shopee:err,magalu:err};
+        }
         var common = { cost: product.custo, tax: product.imposto };
         var ml = Core.calculateMarketplace({ cost: common.cost, tax: common.tax, freight: product.marketplaces.ml.frete, margin: normalizePercentFraction(product.marketplaces.ml.margem), commission: product.marketplaces.ml.comissao, fixed: product.marketplaces.ml.taxaFixa });
         var shopee = Core.calculateShopee({ cost: common.cost, tax: common.tax, freight: product.marketplaces.shopee.frete, margin: normalizePercentFraction(product.marketplaces.shopee.margem) });
@@ -1661,7 +1796,7 @@ var state = {
         costLookupGeneration += 1;
         el.search.value = "";
         closeProductSearch();
-        fillForm({ sku: "", produto: "", custo: 0, imposto: 0.12, curva: "", isKit: false, kitItems: [], marketplaces: defaultMarketplaces() });
+        fillForm({ sku: "", produto: "", custo: 0, filialCusto: 1, custosFiliais: [], imposto: 0.12, curva: "", isKit: false, kitItems: [], marketplaces: defaultMarketplaces() });
         if (el["cost-last-change-note"]) el["cost-last-change-note"].textContent = "";
         renderProductList();
         el.sku.focus();
@@ -1752,6 +1887,21 @@ var state = {
           if (first) { event.preventDefault(); selectProduct(first.getAttribute("data-product-id")); }
         }
       });
+      el["filial-custo"].addEventListener("change", function () {
+        applySelectedBranchCost();
+        var current=currentProduct();
+        if (current && !state.isNew) {
+          current.filialCusto=Number(el["filial-custo"].value||1);
+          current.custosFiliais=normalizeBranchCosts(state.branchCosts);
+          var row=branchCostRow(current.filialCusto);
+          if (row && row.tem_cadastro===true && Number.isFinite(Number(row.custo_medio))) {
+            current.custo=Core.roundMoney(Number(row.custo_medio));
+          }
+          state.dirty=true;
+          scheduleAutoSave();
+        }
+      });
+
       el["cost-api-btn"].addEventListener("click", function () {
         if (costLookupTimer) { clearTimeout(costLookupTimer); costLookupTimer = null; }
         lookupAverageCostBySku(true);

@@ -1,0 +1,29 @@
+V16.32 - Nome personalizado na conferência
+
+- Pedidos pendentes ganhou o campo editável “Nome na conferência”.
+- O campo Cliente original permanece intacto.
+- Quando “Nome na conferência” estiver preenchido, esse nome é exibido na tela de conferência; se estiver vazio, o sistema usa Cliente.
+- O nome é propagado automaticamente para todas as linhas do mesmo pedido.
+
+NOROMAK V16.32 - NOME PERSONALIZADO NA CONFERÊNCIA
+
+Correção para HTTP 403 / PA_UNAUTHORIZED_RESULT_FROM_POLICIES.
+
+- Tenta Seller Promotions normalmente.
+- Se o app Mercado Livre bloquear Seller Promotions, tenta fallback por anúncio.
+- Se a listagem privada de anúncios também for bloqueada, NÃO deixa a tela vazia.
+- Entra automaticamente em MODO SIMULAÇÃO LOCAL usando Precificador/Apollo.
+- Novo campo "Desconto simulado (%)".
+- Calcula custo, taxa ML, imposto, lucro, margem, margem-alvo e preço mínimo seguro.
+- Continua 100% somente leitura: não altera nenhuma promoção real.
+
+Quando a autorização do aplicativo Mercado Livre liberar Seller Promotions, a mesma tela volta automaticamente aos dados reais.
+
+- Corrige persistência de Nome na conferência: salva durante digitação, usa retorno consolidado do servidor e protege o campo contra sincronizações automáticas.
+
+- Precificador agora lê a lista `custos` do CRM e mostra Araçatuba, Ribeirão e Bauru separadamente.
+- Cada produto guarda a filial usada para precificação; padrão de compatibilidade: Araçatuba (revenda 1).
+- `tem_cadastro=true` mostra o custo; false mostra "não cadastrada"; null mostra "não consultado" sem virar zero.
+- Se a filial selecionada não tiver custo disponível, os marketplaces não calculam até escolher outra filial/consultar novamente.
+- Atualização geral respeita a filial escolhida de cada produto e foi limitada para o novo teto de 20 consultas/minuto.
+- A chave X-Chave-Expedicao permanece exclusivamente no servidor.
