@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "16.28"
+APP_VERSION = "16.29"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2626,7 +2626,7 @@ def _promo_item_sku(item: dict[str, Any]) -> str:
     return ""
 
 
-def ml_promotions_analysis_payload(max_items: int = 250, tax_percent: float = 12.0) -> dict[str, Any]:
+def ml_promotions_analysis_payload(max_items: int = 250, tax_percent: float = 12.0, simulated_discount: float = 10.0) -> dict[str, Any]:
     """Modo somente leitura: cruza Seller Promotions com Precificador/Apollo.
 
     V16.28: se a rota geral /seller-promotions/users/{seller} for bloqueada por
@@ -2794,6 +2794,11 @@ def ml_promotions_analysis_payload(max_items: int = 250, tax_percent: float = 12
             try:
                 search = ml_api_get(f"/users/{quote(str(seller_id))}/items/search?{q}")
             except Exception as exc:
+                msg = str(exc)
+                if "HTTP 403" in msg or "PA_UNAUTHORIZED_RESULT_FROM_POLICIES" in msg:
+                    source_mode = "local_simulation"
+                    errors.append("A API privada do Mercado Livre está bloqueada pelo PolicyAgent. Exibindo simulação local do Precificador.")
+                    break
                 raise RuntimeError(f"Fallback não conseguiu listar os anúncios ativos: {exc}") from exc
             ids = search.get("results") if isinstance(search, dict) else []
             ids = ids if isinstance(ids, list) else []
@@ -2840,6 +2845,54 @@ def ml_promotions_analysis_payload(max_items: int = 250, tax_percent: float = 12
                 append_offer(offer, pseudo_campaign)
         if blocked_item_promos and not rows:
             errors.insert(0, f"O aplicativo também foi bloqueado em {blocked_item_promos} consulta(s) individuais de promoção. A autorização do app Mercado Livre precisa liberar Seller Promotions.")
+            source_mode = "local_simulation"
+
+    # V16.29: fallback funcional para teste quando o app ML não tem permissão
+    # para Seller Promotions/listagem privada. Usa somente dados locais do Precificador.
+    if source_mode == "local_simulation" and not rows:
+        disc = max(0.0, min(90.0, _promo_float(simulated_discount, 10.0)))
+        for sku, p in list(precifier.items())[:max_items]:
+            if not isinstance(p, dict):
+                continue
+            cost = _promo_float(p.get("custo"), 0)
+            curve = str(p.get("curva") or "").strip().upper()[:1]
+            target = {"A": 20.0, "B": 20.0, "C": 17.0, "D": 15.0}.get(curve, 20.0)
+            mlcfg = (p.get("marketplaces") or {}).get("ml") or {}
+            commission = _promo_float(mlcfg.get("comissao"), 0.12)
+            if commission > 1:
+                commission /= 100.0
+            fixed_fee = _promo_float(mlcfg.get("taxaFixa"), 0)
+            freight = _promo_float(mlcfg.get("frete"), 0)
+            denom = 1 - commission - max(0.0, tax_percent)/100.0 - target/100.0
+            reference = (cost + fixed_fee + freight) / denom if cost > 0 and denom > 0 else 0.0
+            buyer = reference * (1 - disc/100.0) if reference > 0 else 0.0
+            tax = buyer * max(0.0, tax_percent)/100.0
+            fee = buyer * commission + fixed_fee
+            profit = buyer - cost - fee - freight - tax if cost > 0 and buyer > 0 else None
+            margin = profit / buyer * 100.0 if profit is not None and buyer > 0 else None
+            if margin is None:
+                decision = "SEM_CUSTO"
+            elif margin < 0:
+                decision = "PREJUIZO"
+            elif margin + 1e-9 >= target:
+                decision = "RECOMENDADA"
+            else:
+                decision = "ATENCAO"
+            rows.append({
+                "campaign_id":"SIMULACAO", "campaign":f"Simulação {disc:g}% OFF", "promotion_type":"SIMULACAO_LOCAL",
+                "campaign_status":"simulation", "item_status":"candidate", "item_id":"", "sku":sku,
+                "product":str(p.get("produto") or ""), "original_price":round(reference,2), "buyer_price":round(buyer,2),
+                "economic_price":round(buyer,2), "seller_percentage":disc, "meli_percentage":0.0,
+                "boosted_offer":False, "boost_amount":0.0, "cost":round(cost,2) if cost else None, "curve":curve,
+                "commission_percent":round(commission*100,2), "fixed_fee":round(fixed_fee,2), "freight":round(freight,2),
+                "tax_percent":round(tax_percent,2), "tax":round(tax,2), "estimated_fee":round(fee,2),
+                "profit":round(profit,2) if profit is not None else None, "margin":round(margin,2) if margin is not None else None,
+                "target_margin":target, "min_safe_price":round(reference,2) if reference else None,
+                "max_safe_discount":0.0 if reference else None, "decision":decision, "start_date":"", "finish_date":"",
+                "candidate_price_min":None, "candidate_price_max":None, "suggested_price":round(buyer,2) if buyer else None,
+                "simulation":True
+            })
+        errors.append(f"Simulação local ativa: {disc:g}% de desconto sobre o preço de referência calculado pelo Precificador.")
 
     summary = {
         "total": len(rows), "recommended": sum(r["decision"] == "RECOMENDADA" for r in rows),
@@ -7479,7 +7532,8 @@ class AppHandler(BaseHTTPRequestHandler):
                 try:
                     max_items = max(1, min(1000, int((query.get("limit") or ["250"])[0] or 250)))
                     tax_percent = max(0.0, min(100.0, float((query.get("tax_percent") or ["12"])[0] or 12)))
-                    self.send_json(ml_promotions_analysis_payload(max_items=max_items, tax_percent=tax_percent))
+                    simulated_discount = max(0.0, min(90.0, float((query.get("simulated_discount") or ["10"])[0] or 10)))
+                    self.send_json(ml_promotions_analysis_payload(max_items=max_items, tax_percent=tax_percent, simulated_discount=simulated_discount))
                 except Exception as exc:
                     self.send_json({"ok": False, "error": str(exc)}, 500)
             return
