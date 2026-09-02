@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "16.27"
+APP_VERSION = "16.28"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2627,137 +2627,220 @@ def _promo_item_sku(item: dict[str, Any]) -> str:
 
 
 def ml_promotions_analysis_payload(max_items: int = 250, tax_percent: float = 12.0) -> dict[str, Any]:
-    """Modo somente leitura: cruza Seller Promotions com Precificador/Apollo."""
+    """Modo somente leitura: cruza Seller Promotions com Precificador/Apollo.
+
+    V16.28: se a rota geral /seller-promotions/users/{seller} for bloqueada por
+    PolicyAgent, usa fallback oficial por item: lista anúncios ativos do vendedor e
+    consulta /seller-promotions/items/{ITEM_ID}?app_version=v2.
+    """
     _, seller_id = ml_access_token()
-    campaigns_payload = ml_api_get(f"/seller-promotions/users/{quote(str(seller_id))}?app_version=v2")
-    campaigns = campaigns_payload.get("results") if isinstance(campaigns_payload, dict) else []
-    campaigns = campaigns if isinstance(campaigns, list) else []
     precifier = _promo_precifier_index()
     item_cache: dict[str, dict[str, Any]] = {}
     rows: list[dict[str, Any]] = []
     errors: list[str] = []
     max_items = max(1, min(1000, int(max_items or 250)))
+    source_mode = "campaigns"
+    campaigns: list[dict[str, Any]] = []
 
-    for campaign in campaigns:
-        if len(rows) >= max_items or not isinstance(campaign, dict):
-            break
-        promotion_id = str(campaign.get("id") or "").strip()
-        promotion_type = str(campaign.get("type") or "").strip()
-        if not promotion_id or not promotion_type:
-            continue
-        search_after = ""
-        for _page in range(30):
+    def load_item(item_id: str) -> dict[str, Any]:
+        item = item_cache.get(item_id)
+        if item is not None:
+            return item
+        try:
+            fetched = ml_api_get(f"/items/{quote(item_id)}")
+            item = fetched if isinstance(fetched, dict) else {}
+        except Exception as exc:
+            item = {"id": item_id, "title": "", "_error": str(exc)}
+        item_cache[item_id] = item
+        return item
+
+    def append_offer(offer: dict[str, Any], campaign: dict[str, Any]) -> None:
+        if len(rows) >= max_items or not isinstance(offer, dict):
+            return
+        item_id = str(offer.get("id") or offer.get("item_id") or "").strip()
+        if not item_id:
+            return
+        item = load_item(item_id)
+        sku = _promo_item_sku(item)
+        p = precifier.get(sku.upper()) if sku else None
+        cost = None
+        curve = ""
+        description = str(item.get("title") or "")
+        if p:
+            cost = _promo_float(p.get("custo"), 0)
+            curve = str(p.get("curva") or "").strip().upper()[:1]
+            description = str(p.get("produto") or description)
+        if sku and (cost is None or cost <= 0):
+            try:
+                ap = crm_cost_lookup(sku, "promocoes-ml")
+                cost = _promo_float(ap.get("custo_medio"), 0)
+                curve = str(ap.get("curva_abc") or curve).strip().upper()[:1]
+                description = str(ap.get("descricao") or description)
+            except Exception:
+                pass
+        margin_target = {"A": 20.0, "B": 20.0, "C": 17.0, "D": 15.0}.get(curve, 20.0)
+        mlcfg = ((p or {}).get("marketplaces") or {}).get("ml") or {}
+        commission = _promo_float(mlcfg.get("comissao"), 0.12)
+        if commission > 1:
+            commission /= 100.0
+        fixed_fee = _promo_float(mlcfg.get("taxaFixa"), 0)
+        freight = _promo_float(mlcfg.get("frete"), 0)
+        original = _promo_float(offer.get("original_price") or item.get("price"), 0)
+        buyer_price = _promo_float(offer.get("total_price_for_boosted_offer") or offer.get("price"), 0)
+        if buyer_price <= 0:
+            buyer_price = _promo_float(offer.get("suggested_discounted_price") or offer.get("max_discounted_price"), 0)
+        seller_pct = offer.get("seller_percentage")
+        meli_pct = offer.get("meli_percentage")
+        if seller_pct is None:
+            benefits = campaign.get("benefits") or {}
+            seller_pct = benefits.get("seller_percent") if isinstance(benefits, dict) else None
+            meli_pct = benefits.get("meli_percent") if isinstance(benefits, dict) else meli_pct
+        seller_pct_f = _promo_float(seller_pct, 0)
+        meli_pct_f = _promo_float(meli_pct, 0)
+        economic_price = original * (1 - seller_pct_f / 100.0) if original > 0 and seller_pct is not None else buyer_price
+        if economic_price <= 0:
+            economic_price = buyer_price or original
+        tax = economic_price * max(0.0, tax_percent) / 100.0
+        fee = economic_price * commission + fixed_fee
+        profit = None if not cost or economic_price <= 0 else economic_price - cost - fee - freight - tax
+        margin = None if profit is None or economic_price <= 0 else profit / economic_price * 100.0
+        if margin is None:
+            decision = "SEM_CUSTO"
+        elif margin < 0:
+            decision = "PREJUIZO"
+        elif margin + 1e-9 >= margin_target:
+            decision = "RECOMENDADA"
+        else:
+            decision = "ATENCAO"
+        denom = 1 - commission - max(0.0, tax_percent) / 100.0 - margin_target / 100.0
+        min_safe = (cost + fixed_fee + freight) / denom if cost and denom > 0 else None
+        max_discount = max(0.0, (1 - min_safe / original) * 100.0) if min_safe is not None and original > 0 else None
+        status = str(offer.get("status") or campaign.get("status") or "").lower()
+        promotion_id = str(offer.get("promotion_id") or campaign.get("id") or "").strip()
+        promotion_type = str(offer.get("type") or offer.get("promotion_type") or campaign.get("type") or "").strip()
+        campaign_name = str(offer.get("name") or campaign.get("name") or promotion_id or promotion_type)
+        rows.append({
+            "campaign_id": promotion_id, "campaign": campaign_name,
+            "promotion_type": promotion_type, "campaign_status": str(campaign.get("status") or ""),
+            "item_status": status, "item_id": item_id, "sku": sku, "product": description,
+            "original_price": round(original, 2), "buyer_price": round(buyer_price, 2),
+            "economic_price": round(economic_price, 2), "seller_percentage": seller_pct_f,
+            "meli_percentage": meli_pct_f, "boosted_offer": bool(offer.get("boosted_offer")),
+            "boost_amount": round(_promo_float(offer.get("discount_meli_boost_amount"), 0), 2),
+            "cost": round(cost, 2) if cost is not None else None, "curve": curve,
+            "commission_percent": round(commission * 100, 2), "fixed_fee": round(fixed_fee, 2),
+            "freight": round(freight, 2), "tax_percent": round(tax_percent, 2), "tax": round(tax, 2),
+            "estimated_fee": round(fee, 2), "profit": round(profit, 2) if profit is not None else None,
+            "margin": round(margin, 2) if margin is not None else None, "target_margin": margin_target,
+            "min_safe_price": round(min_safe, 2) if min_safe is not None else None,
+            "max_safe_discount": round(max_discount, 2) if max_discount is not None else None,
+            "decision": decision, "start_date": str(offer.get("start_date") or campaign.get("start_date") or ""),
+            "finish_date": str(offer.get("end_date") or campaign.get("finish_date") or ""),
+            "candidate_price_min": offer.get("min_discounted_price"), "candidate_price_max": offer.get("max_discounted_price"),
+            "suggested_price": offer.get("suggested_discounted_price"),
+        })
+
+    # Caminho principal: campanhas do vendedor.
+    try:
+        campaigns_payload = ml_api_get(f"/seller-promotions/users/{quote(str(seller_id))}?app_version=v2")
+        campaigns = campaigns_payload.get("results") if isinstance(campaigns_payload, dict) else []
+        campaigns = campaigns if isinstance(campaigns, list) else []
+    except Exception as exc:
+        msg = str(exc)
+        if "PA_UNAUTHORIZED_RESULT_FROM_POLICIES" not in msg and "HTTP 403" not in msg:
+            raise
+        source_mode = "items_fallback"
+        errors.append("Consulta geral de campanhas bloqueada pelo PolicyAgent; usando consulta individual por anúncio.")
+
+    if source_mode == "campaigns":
+        for campaign in campaigns:
+            if len(rows) >= max_items or not isinstance(campaign, dict):
+                break
+            promotion_id = str(campaign.get("id") or "").strip()
+            promotion_type = str(campaign.get("type") or "").strip()
+            if not promotion_id or not promotion_type:
+                continue
+            search_after = ""
+            for _page in range(30):
+                if len(rows) >= max_items:
+                    break
+                params = {"promotion_type": promotion_type, "app_version": "v2", "limit": "50"}
+                if search_after:
+                    params["search_after"] = search_after
+                try:
+                    page = ml_api_get(f"/seller-promotions/promotions/{quote(promotion_id)}/items?{urlencode(params)}")
+                except Exception as exc:
+                    errors.append(f"{promotion_id}: {str(exc)[:180]}")
+                    break
+                results = page.get("results") if isinstance(page, dict) else []
+                results = results if isinstance(results, list) else []
+                for offer in results:
+                    append_offer(offer, campaign)
+                if not isinstance(page, dict):
+                    break
+                search_after = str(page.get("search_after") or page.get("searchAfter") or "").strip()
+                if not search_after or not results:
+                    break
+    else:
+        # Fallback V16.28: anúncios ativos -> promoções associadas a cada item.
+        # A API de busca do vendedor usa offset/limit. Mantemos limite pequeno para teste.
+        item_ids: list[str] = []
+        offset = 0
+        wanted = min(max_items, 300)
+        for _page in range(10):
+            if len(item_ids) >= wanted:
+                break
+            q = urlencode({"status": "active", "limit": "50", "offset": str(offset)})
+            try:
+                search = ml_api_get(f"/users/{quote(str(seller_id))}/items/search?{q}")
+            except Exception as exc:
+                raise RuntimeError(f"Fallback não conseguiu listar os anúncios ativos: {exc}") from exc
+            ids = search.get("results") if isinstance(search, dict) else []
+            ids = ids if isinstance(ids, list) else []
+            item_ids.extend(str(x).strip() for x in ids if str(x).strip())
+            if len(ids) < 50:
+                break
+            offset += 50
+        item_ids = item_ids[:wanted]
+        blocked_item_promos = 0
+        for item_id in item_ids:
             if len(rows) >= max_items:
                 break
-            params = {"promotion_type": promotion_type, "app_version": "v2", "limit": "50"}
-            if search_after:
-                params["search_after"] = search_after
             try:
-                page = ml_api_get(f"/seller-promotions/promotions/{quote(promotion_id)}/items?{urlencode(params)}")
+                promos = ml_api_get(f"/seller-promotions/items/{quote(item_id)}?app_version=v2")
             except Exception as exc:
-                errors.append(f"{promotion_id}: {str(exc)[:180]}")
-                break
-            results = page.get("results") if isinstance(page, dict) else []
-            results = results if isinstance(results, list) else []
-            for offer in results:
-                if len(rows) >= max_items or not isinstance(offer, dict):
-                    break
-                item_id = str(offer.get("id") or "").strip()
-                if not item_id:
+                msg = str(exc)
+                if "HTTP 403" in msg or "PA_UNAUTHORIZED_RESULT_FROM_POLICIES" in msg:
+                    blocked_item_promos += 1
+                    if blocked_item_promos <= 3:
+                        errors.append(f"{item_id}: Seller Promotions bloqueado pelo PolicyAgent")
                     continue
-                item = item_cache.get(item_id)
-                if item is None:
-                    try:
-                        fetched = ml_api_get(f"/items/{quote(item_id)}")
-                        item = fetched if isinstance(fetched, dict) else {}
-                    except Exception as exc:
-                        item = {"id": item_id, "title": "", "_error": str(exc)}
-                    item_cache[item_id] = item
-                sku = _promo_item_sku(item)
-                p = precifier.get(sku.upper()) if sku else None
-                cost = None
-                curve = ""
-                description = str(item.get("title") or "")
-                if p:
-                    cost = _promo_float(p.get("custo"), 0)
-                    curve = str(p.get("curva") or "").strip().upper()[:1]
-                    description = str(p.get("produto") or description)
-                if sku and (cost is None or cost <= 0):
-                    try:
-                        ap = crm_cost_lookup(sku, "promocoes-ml")
-                        cost = _promo_float(ap.get("custo_medio"), 0)
-                        curve = str(ap.get("curva_abc") or curve).strip().upper()[:1]
-                        description = str(ap.get("descricao") or description)
-                    except Exception:
-                        pass
-                margin_target = {"A": 20.0, "B": 20.0, "C": 17.0, "D": 15.0}.get(curve, 20.0)
-                mlcfg = ((p or {}).get("marketplaces") or {}).get("ml") or {}
-                commission = _promo_float(mlcfg.get("comissao"), 0.12)
-                if commission > 1:
-                    commission /= 100.0
-                fixed_fee = _promo_float(mlcfg.get("taxaFixa"), 0)
-                freight = _promo_float(mlcfg.get("frete"), 0)
-                original = _promo_float(offer.get("original_price") or item.get("price"), 0)
-                buyer_price = _promo_float(offer.get("total_price_for_boosted_offer") or offer.get("price"), 0)
-                if buyer_price <= 0:
-                    buyer_price = _promo_float(offer.get("suggested_discounted_price") or offer.get("max_discounted_price"), 0)
-                seller_pct = offer.get("seller_percentage")
-                meli_pct = offer.get("meli_percentage")
-                if seller_pct is None:
-                    benefits = campaign.get("benefits") or {}
-                    seller_pct = benefits.get("seller_percent") if isinstance(benefits, dict) else None
-                    meli_pct = benefits.get("meli_percent") if isinstance(benefits, dict) else meli_pct
-                seller_pct_f = _promo_float(seller_pct, 0)
-                meli_pct_f = _promo_float(meli_pct, 0)
-                # Quando a API informa coparticipação, o desconto do MELI não reduz a receita econômica do vendedor.
-                economic_price = original * (1 - seller_pct_f / 100.0) if original > 0 and seller_pct is not None else buyer_price
-                if economic_price <= 0:
-                    economic_price = buyer_price or original
-                tax = economic_price * max(0.0, tax_percent) / 100.0
-                fee = economic_price * commission + fixed_fee
-                profit = None if not cost or economic_price <= 0 else economic_price - cost - fee - freight - tax
-                margin = None if profit is None or economic_price <= 0 else profit / economic_price * 100.0
-                if margin is None:
-                    decision = "SEM_CUSTO"
-                elif margin < 0:
-                    decision = "PREJUIZO"
-                elif margin + 1e-9 >= margin_target:
-                    decision = "RECOMENDADA"
-                else:
-                    decision = "ATENCAO"
-                denom = 1 - commission - max(0.0, tax_percent) / 100.0 - margin_target / 100.0
-                min_safe = None
-                if cost and denom > 0:
-                    min_safe = (cost + fixed_fee + freight) / denom
-                max_discount = None
-                if min_safe is not None and original > 0:
-                    max_discount = max(0.0, (1 - min_safe / original) * 100.0)
-                status = str(offer.get("status") or campaign.get("status") or "").lower()
-                rows.append({
-                    "campaign_id": promotion_id, "campaign": str(campaign.get("name") or promotion_id),
-                    "promotion_type": promotion_type, "campaign_status": str(campaign.get("status") or ""),
-                    "item_status": status, "item_id": item_id, "sku": sku, "product": description,
-                    "original_price": round(original,2), "buyer_price": round(buyer_price,2),
-                    "economic_price": round(economic_price,2), "seller_percentage": seller_pct_f,
-                    "meli_percentage": meli_pct_f, "boosted_offer": bool(offer.get("boosted_offer")),
-                    "boost_amount": round(_promo_float(offer.get("discount_meli_boost_amount"),0),2),
-                    "cost": round(cost,2) if cost is not None else None, "curve": curve,
-                    "commission_percent": round(commission*100,2), "fixed_fee": round(fixed_fee,2),
-                    "freight": round(freight,2), "tax_percent": round(tax_percent,2), "tax": round(tax,2),
-                    "estimated_fee": round(fee,2), "profit": round(profit,2) if profit is not None else None,
-                    "margin": round(margin,2) if margin is not None else None, "target_margin": margin_target,
-                    "min_safe_price": round(min_safe,2) if min_safe is not None else None,
-                    "max_safe_discount": round(max_discount,2) if max_discount is not None else None,
-                    "decision": decision, "start_date": str(offer.get("start_date") or campaign.get("start_date") or ""),
-                    "finish_date": str(offer.get("end_date") or campaign.get("finish_date") or ""),
-                    "candidate_price_min": offer.get("min_discounted_price"), "candidate_price_max": offer.get("max_discounted_price"),
-                    "suggested_price": offer.get("suggested_discounted_price"),
-                })
-            if not isinstance(page, dict):
-                break
-            search_after = str(page.get("search_after") or page.get("searchAfter") or "").strip()
-            if not search_after or not results:
-                break
+                errors.append(f"{item_id}: {msg[:160]}")
+                continue
+            if isinstance(promos, dict):
+                promos = promos.get("results") or promos.get("promotions") or []
+            promos = promos if isinstance(promos, list) else []
+            for offer in promos:
+                if not isinstance(offer, dict):
+                    continue
+                offer = dict(offer)
+                offer.setdefault("id", item_id)
+                pseudo_campaign = {
+                    "id": offer.get("id") if str(offer.get("id") or "").startswith(("P-", "C-", "LGH-")) else "",
+                    "type": offer.get("type") or "",
+                    "status": offer.get("status") or "",
+                    "name": offer.get("name") or offer.get("type") or "Promoção do item",
+                    "start_date": offer.get("start_date") or "",
+                    "finish_date": offer.get("end_date") or "",
+                }
+                # Em /seller-promotions/items/{ITEM_ID}, o campo id pode ser o id da promoção.
+                if pseudo_campaign["id"]:
+                    offer["promotion_id"] = pseudo_campaign["id"]
+                offer["id"] = item_id
+                append_offer(offer, pseudo_campaign)
+        if blocked_item_promos and not rows:
+            errors.insert(0, f"O aplicativo também foi bloqueado em {blocked_item_promos} consulta(s) individuais de promoção. A autorização do app Mercado Livre precisa liberar Seller Promotions.")
+
     summary = {
         "total": len(rows), "recommended": sum(r["decision"] == "RECOMENDADA" for r in rows),
         "attention": sum(r["decision"] == "ATENCAO" for r in rows),
@@ -2766,8 +2849,9 @@ def ml_promotions_analysis_payload(max_items: int = 250, tax_percent: float = 12
         "candidate": sum(r["item_status"] == "candidate" for r in rows),
         "active": sum(r["item_status"] in ("started", "active") for r in rows),
     }
-    return {"ok": True, "mode": "read_only", "seller_id": seller_id, "summary": summary,
-            "campaigns_count": len(campaigns), "rows": rows, "errors": errors[:30], "tax_percent": tax_percent}
+    return {"ok": True, "mode": "read_only", "source_mode": source_mode, "seller_id": seller_id,
+            "summary": summary, "campaigns_count": len(campaigns), "rows": rows,
+            "errors": errors[:30], "tax_percent": tax_percent}
 
 def ml_oauth_authorization_url() -> str:
     if not ml_credentials_configured():
