@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "16.30"
+APP_VERSION = "16.31"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -1681,6 +1681,58 @@ def merge_label_banks(current: dict[str, Any], old: dict[str, Any], newer: dict[
     return rebuild_label_bank(result)
 
 
+
+def preserve_conference_names(current_value: str | None, new_value: str) -> str:
+    """Preserva o Nome Conferência em atualizações automáticas/concorrentes.
+
+    Esse campo é manual e não deve ser apagado por sincronizações do Mercado Livre
+    ou por uma tela que ainda esteja usando um snapshot anterior do pedido.
+    """
+    try:
+        current_rows = json.loads(current_value or "[]")
+        new_rows = json.loads(new_value or "[]")
+    except Exception:
+        return new_value
+    if not isinstance(current_rows, list) or not isinstance(new_rows, list):
+        return new_value
+
+    by_uid: dict[str, str] = {}
+    by_key: dict[tuple[str, str], str] = {}
+    by_order: dict[str, str] = {}
+    for row in current_rows:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("Nome Conferência") or "").strip()
+        if not name:
+            continue
+        uid = str(row.get("__uidLinha") or row.get("__uidPedido") or "").strip()
+        if uid:
+            by_uid[uid] = name
+        order = normalize(order_number(row))
+        sku = normalize(row.get("SKU") or row.get("Código de Barras"))
+        if order and sku:
+            by_key[(order, sku)] = name
+        if order and order not in by_order:
+            by_order[order] = name
+
+    changed = False
+    for row in new_rows:
+        if not isinstance(row, dict):
+            continue
+        # Campo explicitamente preenchido/vazio por uma edição manual deve prevalecer
+        # apenas quando a própria requisição realmente o contém.
+        if "Nome Conferência" in row and str(row.get("Nome Conferência") or "").strip():
+            continue
+        uid = str(row.get("__uidLinha") or row.get("__uidPedido") or "").strip()
+        order = normalize(order_number(row))
+        sku = normalize(row.get("SKU") or row.get("Código de Barras"))
+        name = (by_uid.get(uid) if uid else "") or by_key.get((order, sku), "") or by_order.get(order, "")
+        if name:
+            row["Nome Conferência"] = name
+            changed = True
+    return json_dumps(new_rows) if changed else new_value
+
+
 def merge_value(key: str, current: str | None, old: str | None, newer: str, force: bool) -> str:
     if force or current is None or current == old:
         return newer
@@ -1941,6 +1993,8 @@ def save_storage(
             if key == "conf_pedidos" and allow_completed_reimport and not force and old_value is not None:
                 new_value, _ = reactivate_completed_orders_from_delta(old_value, new_value, actor or "admin")
             current, version, _ = get_storage(key)
+            if key in ("conf_pedidos", "conf_pedidos_rascunhos"):
+                new_value = preserve_conference_names(current, new_value)
             merged = merge_value(key, current, old_value, new_value, force)
             if key in ("conf_pedidos", "conf_pedidos_rascunhos"):
                 try:

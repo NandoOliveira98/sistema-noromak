@@ -3357,9 +3357,26 @@ function agendarSalvarPedidosAdmin(){
   setStatusBanco("● Salvando...","salvando");
   timerSalvarPedidosAdmin=setTimeout(()=>{timerSalvarPedidosAdmin=null;salvarPedidosAdmin(false);},280);
 }
+
+function sincronizarCamposPedidosVisiveisAdmin(){
+  document.querySelectorAll("#corpoPedidosAdmin [data-uidlinha][data-campo]").forEach(el=>{
+    const item=pedidosEditorAdmin.find(x=>x.__uidLinha===el.dataset.uidlinha);
+    if(!item)return;
+    const campo=el.dataset.campo;
+    if(campo==="Pedido"){
+      item.Marketplace=marketplaceExibicaoBanco(el.value);
+      item[campo]=pedidoArmazenamentoBanco(el.value,item.Marketplace);
+    }else if(campo==="Data do Pedido"){
+      item[campo]=normalizarDataPedidoBanco(el.value,true);
+    }else{
+      item[campo]=String(el.value??"");
+    }
+  });
+}
 function salvarPedidosAdmin(mostrarMensagem=false){
   timerSalvarPedidosAdmin=null;
   try{
+    sincronizarCamposPedidosVisiveisAdmin();
     const elementoFocado=document.activeElement;
     const focoPedido=elementoFocado?.closest?.("#corpoPedidosAdmin")?{
       uid:elementoFocado.dataset?.uidlinha||"",
@@ -3376,14 +3393,13 @@ function salvarPedidosAdmin(mostrarMensagem=false){
     });
     const validos=obterPedidosValidosBanco();
     const rascunhos=obterRascunhosBanco();
-    appStorage.setItem("conf_pedidos",JSON.stringify(validos));
-    appStorage.setItem("conf_pedidos_rascunhos",JSON.stringify(rascunhos));
+    const retornoValidos=appStorage.setItem("conf_pedidos",JSON.stringify(validos));
+    const retornoRascunhos=appStorage.setItem("conf_pedidos_rascunhos",JSON.stringify(rascunhos));
 
-    // O servidor pode retirar pedidos já concluídos mesmo quando uma tela
-    // administrativa antiga tenta salvá-los novamente. Recarrega a lista
-    // efetivamente aceita para que a linha desapareça imediatamente.
-    const validosConfirmados=JSON.parse(appStorage.getItem("conf_pedidos")||"[]");
-    const rascunhosConfirmados=JSON.parse(appStorage.getItem("conf_pedidos_rascunhos")||"[]");
+    // Usa exatamente a versão consolidada devolvida pelo servidor. Isso evita
+    // uma segunda leitura concorrente apagar um campo recém-editado.
+    const validosConfirmados=JSON.parse(retornoValidos||"[]");
+    const rascunhosConfirmados=JSON.parse(retornoRascunhos||"[]");
     pedidosEditorAdmin=[...validosConfirmados,...rascunhosConfirmados].map(x=>{
       const marketplace=x.Marketplace||marketplaceExibicaoBanco(x.Pedido);
       return {...x,Pedido:pedidoArmazenamentoBanco(x.Pedido,marketplace),Marketplace:marketplaceExibicaoBanco(x.Pedido),"Data do Pedido":normalizarDataPedidoBanco(x["Data do Pedido"]||x.Data||x.DataPedido,true),Kit:normalizarBuscaBanco(x.Kit)==="sim"?"SIM":(x["Nome do Kit"]?"SIM":""),__uidLinha:x.__uidLinha||x.__uidPedido||uidBanco("PED")};
@@ -3470,7 +3486,7 @@ function excluirLinhaPedidoAdmin(uid){
   if((item.Pedido||item.SKU||item["Código de Barras"])&&!confirm("Excluir esta linha do pedido?"))return;
   pedidosEditorAdmin=pedidosEditorAdmin.filter(x=>x.__uidLinha!==uid);renderizarPedidosAdmin();salvarPedidosAdmin(false);
 }
-function atualizarCampoPedidoAdmin(el){
+function atualizarCampoPedidoAdmin(el,semRender=false){
   const item=pedidosEditorAdmin.find(x=>x.__uidLinha===el.dataset.uidlinha); if(!item)return;
   const campo=el.dataset.campo;
   if(campo==="Pedido"){
@@ -3487,7 +3503,8 @@ function atualizarCampoPedidoAdmin(el){
     const p=localizarProdutoBanco(el.value); if(p)preencherPedidoProdutoBanco(item,p);
   }
   if(campo==="Quantidade"&&Number(item.Quantidade)<=0)item.Quantidade="1";
-  renderizarPedidosAdmin();agendarSalvarPedidosAdmin();
+  if(!semRender)renderizarPedidosAdmin();
+  agendarSalvarPedidosAdmin();
 }
 function alterarEanPedidoAdmin(el){
   const item=pedidosEditorAdmin.find(x=>x.__uidLinha===el.dataset.uidlinha);if(!item)return;
@@ -3597,7 +3614,7 @@ function renderizarPedidosAdmin(){
   else corpo.innerHTML=parte.map(item=>{
     item.Marketplace=marketplaceExibicaoBanco(item.Pedido);
     const valida=linhaPedidoValidaBanco(item);
-    const inp=(campo,cls="")=>{const valor=campo==="Pedido"?pedidoExibicaoBanco(item.Pedido,item.Marketplace):campoBanco(item,campo);const extra=campo==="Nome Conferência"?' placeholder="Nome exibido na conferência" title="Se preenchido, este nome aparece no lugar do Cliente somente na tela de conferência"':'';return `<input class="${cls}" data-uidlinha="${htmlSeguroBanco(item.__uidLinha)}" data-campo="${htmlSeguroBanco(campo)}" value="${htmlSeguroBanco(valor)}"${extra} onchange="atualizarCampoPedidoAdmin(this)" onkeydown="navegarGridAdmin(event,this)">`;};
+    const inp=(campo,cls="")=>{const valor=campo==="Pedido"?pedidoExibicaoBanco(item.Pedido,item.Marketplace):campoBanco(item,campo);const extra=campo==="Nome Conferência"?' placeholder="Nome exibido na conferência" title="Se preenchido, este nome aparece no lugar do Cliente somente na tela de conferência"':'';const evento=campo==="Nome Conferência"?'oninput="atualizarCampoPedidoAdmin(this,true)"':'onchange="atualizarCampoPedidoAdmin(this)"';return `<input class="${cls}" data-uidlinha="${htmlSeguroBanco(item.__uidLinha)}" data-campo="${htmlSeguroBanco(campo)}" value="${htmlSeguroBanco(valor)}"${extra} ${evento} onkeydown="navegarGridAdmin(event,this)">`;};
     const eanAtual=campoBanco(item,"Código de Barras");
     const alterado=String(eanSalvoPorUid.get(item.__uidLinha)??eanAtual)!==eanAtual.trim();
     const mensagem=eanMensagemPorUid.get(item.__uidLinha)||{tipo:"",texto:"Bipe o código e pressione Enter."};
