@@ -1,0 +1,24 @@
+NOROMAK WEB V16.35 — FASE 1: SEGURANÇA
+
+Principais mudanças:
+- Nova área Administração > Segurança e auditoria.
+- Auditoria do servidor consultável por usuário/ação.
+- Backup manual com PRAGMA integrity_check.
+- Backup diário com retenção configurável (padrão 30 dias).
+- Status de segredos sem revelar valores.
+- Visualização de usuários/sessões/falhas de login.
+- Botão para encerrar outras sessões do usuário atual.
+- Senhas novas ou alteradas: mínimo 8 caracteres.
+- Mantidas senhas existentes para evitar bloqueio após atualização.
+
+Deploy:
+git status
+git add -A
+git commit -m "V16.35 - fase 1 seguranca auditoria backups"
+./publicar.sh
+
+Após publicar:
+1. Entre em Administração > Segurança e auditoria.
+2. Crie um backup manual e confira se aparece como verificado.
+3. Revise usuários ativos e permissões.
+4. Se EXP_ADMIN_SENHA ainda estiver no /home/expedicao/.env, remova após confirmar que o login administrativo funciona.

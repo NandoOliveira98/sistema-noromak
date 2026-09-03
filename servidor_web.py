@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "16.34"
+APP_VERSION = "16.35"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -46,6 +46,7 @@ ROOT_DIR = Path(__file__).resolve().parent
 APP_DIR = ROOT_DIR / "APP"
 DB_PATH = Path(os.getenv("EXP_DB_PATH", "/home/expedicao/dados/expedicao.db"))
 BACKUP_DIR = Path(os.getenv("EXP_BACKUP_DIR", "/home/expedicao/backups"))
+BACKUP_RETENTION_DAYS = max(7, min(365, int(os.getenv("EXP_BACKUP_RETENTION_DAYS", "30"))))
 ADMIN_USERNAME = os.getenv("EXP_ADMIN_USUARIO", "luis").strip().lower()
 QZ_BUNDLED_CERT_PATH = ROOT_DIR / "QZ_CERTIFICADO_WEB" / "digital-certificate.txt"
 QZ_CONFIGURED_CERT_PATH = Path(os.getenv("QZ_CERT_PATH", str(QZ_BUNDLED_CERT_PATH)))
@@ -1385,10 +1386,10 @@ def apply_app_users_payload(value: str, actor: str) -> str:
             password = str(raw.get("Senha") or "").strip()
             if password == PASSWORD_MASK:
                 password = ""
-            if username not in existing and len(password) < 4:
-                raise ValueError(f"Informe uma senha com pelo menos 4 caracteres para o novo usuário '{username}'.")
-            if password and len(password) < 4:
-                raise ValueError(f"A senha de '{username}' deve ter pelo menos 4 caracteres.")
+            if username not in existing and len(password) < 8:
+                raise ValueError(f"Informe uma senha com pelo menos 8 caracteres para o novo usuário '{username}'.")
+            if password and len(password) < 8:
+                raise ValueError(f"A senha de '{username}' deve ter pelo menos 8 caracteres.")
             raw_access = raw.get("Acessos") if isinstance(raw.get("Acessos"), dict) else {}
             if role == "admin" and not any(k in raw for k in ("AcessoConferencia","AcessoAdmin","AcessoEstacao","AcessoPrecificador")) and not raw_access:
                 permissions = {"conferencia": True, "admin": True, "estacao": True, "precificador": True}
@@ -1435,23 +1436,127 @@ def purge_expired_sessions() -> None:
         DB.commit()
 
 
+def _backup_integrity(path: Path) -> tuple[bool, str]:
+    try:
+        conn = sqlite3.connect(path)
+        try:
+            row = conn.execute("PRAGMA integrity_check").fetchone()
+            result = str(row[0] if row else "").strip()
+            return result.lower() == "ok", result or "sem retorno"
+        finally:
+            conn.close()
+    except Exception as exc:
+        return False, str(exc)
+
+
+def create_backup(label: str = "manual") -> dict[str, Any]:
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    safe_label = re.sub(r"[^a-z0-9_-]+", "-", str(label or "manual").lower()).strip("-") or "manual"
+    target = BACKUP_DIR / f"expedicao_{stamp}_{safe_label}.db"
+    with DB_LOCK:
+        dest = sqlite3.connect(target)
+        try:
+            DB.backup(dest)
+        finally:
+            dest.close()
+    ok, integrity = _backup_integrity(target)
+    if not ok:
+        target.unlink(missing_ok=True)
+        raise RuntimeError(f"Backup criado, mas falhou na verificação de integridade: {integrity}")
+    return {
+        "file": target.name,
+        "path": str(target),
+        "size": target.stat().st_size,
+        "created_at": datetime.fromtimestamp(target.stat().st_mtime).isoformat(timespec="seconds"),
+        "integrity": integrity,
+    }
+
+
+def cleanup_backups() -> None:
+    try:
+        cutoff = time.time() - BACKUP_RETENTION_DAYS * 86400
+        for old in BACKUP_DIR.glob("expedicao_*.db"):
+            try:
+                if old.stat().st_mtime < cutoff:
+                    old.unlink(missing_ok=True)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+
 def backup_daily() -> None:
     try:
         BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-        target = BACKUP_DIR / f"expedicao_{datetime.now().strftime('%Y-%m-%d')}.db"
-        if target.exists():
+        today_prefix = f"expedicao_{datetime.now().strftime('%Y-%m-%d')}"
+        if any(BACKUP_DIR.glob(today_prefix + "*_diario.db")):
+            cleanup_backups()
             return
-        with DB_LOCK:
-            dest = sqlite3.connect(target)
-            try:
-                DB.backup(dest)
-            finally:
-                dest.close()
-        files = sorted(BACKUP_DIR.glob("expedicao_*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
-        for old in files[15:]:
-            old.unlink(missing_ok=True)
+        create_backup("diario")
+        cleanup_backups()
     except Exception as exc:
         print(f"Aviso: backup diário não realizado: {exc}", file=sys.stderr)
+
+
+def backup_status_payload() -> dict[str, Any]:
+    BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+    files = sorted(BACKUP_DIR.glob("expedicao_*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
+    items = []
+    for p in files[:20]:
+        try:
+            items.append({
+                "file": p.name,
+                "size": p.stat().st_size,
+                "created_at": datetime.fromtimestamp(p.stat().st_mtime).isoformat(timespec="seconds"),
+            })
+        except Exception:
+            continue
+    last = items[0] if items else None
+    return {
+        "directory": str(BACKUP_DIR),
+        "retention_days": BACKUP_RETENTION_DAYS,
+        "count": len(files),
+        "last": last,
+        "recent": items,
+    }
+
+
+def security_status_payload() -> dict[str, Any]:
+    with DB_LOCK:
+        users = DB.execute("SELECT COUNT(*) FROM app_users WHERE active=1").fetchone()[0]
+        admins = DB.execute("SELECT COUNT(*) FROM app_users WHERE active=1 AND can_admin=1").fetchone()[0]
+        sessions = DB.execute("SELECT COUNT(*) FROM app_sessions WHERE expires_at>?", (int(time.time()),)).fetchone()[0]
+        failed_24h = DB.execute(
+            "SELECT COUNT(*) FROM audit_log WHERE action='auth.failed' AND created_at>=?",
+            ((datetime.now(timezone.utc)-timedelta(hours=24)).isoformat(timespec="seconds"),)
+        ).fetchone()[0]
+    db_mode = None
+    try:
+        db_mode = oct(DB_PATH.stat().st_mode & 0o777)
+    except Exception:
+        pass
+    return {
+        "version": APP_VERSION,
+        "users_active": int(users),
+        "admins_active": int(admins),
+        "sessions_active": int(sessions),
+        "failed_logins_24h": int(failed_24h),
+        "password_iterations": PASSWORD_ITERATIONS,
+        "session_ttl_hours": round(SESSION_TTL_SECONDS/3600, 1),
+        "secure_secrets": {
+            "ml_client_secret_configured": bool(ML_CLIENT_SECRET),
+            "crm_key_configured": bool(CHAVE_CRM),
+            "qz_private_key_exists": QZ_PRIVATE_KEY_PATH.exists(),
+            "initial_admin_password_env_present": bool(INITIAL_ADMIN_PASSWORD),
+        },
+        "database": {
+            "path": str(DB_PATH),
+            "exists": DB_PATH.exists(),
+            "permissions": db_mode,
+        },
+        "backup": backup_status_payload(),
+    }
 
 
 def get_storage(key: str) -> tuple[str | None, int, str | None]:
@@ -2294,6 +2399,39 @@ def audit(username: str, action: str, detail: str = "") -> None:
             (now_iso(), username, action, detail[:4000]),
         )
         DB.commit()
+
+
+def audit_log_payload(limit: int = 200, username: str = "", action: str = "") -> list[dict[str, Any]]:
+    limit = max(1, min(1000, int(limit or 200)))
+    clauses = []
+    params: list[Any] = []
+    if username:
+        clauses.append("username LIKE ?")
+        params.append(f"%{username}%")
+    if action:
+        clauses.append("action LIKE ?")
+        params.append(f"%{action}%")
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    with DB_LOCK:
+        rows = DB.execute(
+            f"SELECT id,created_at,username,action,detail FROM audit_log{where} ORDER BY id DESC LIMIT ?",
+            (*params, limit),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def revoke_other_sessions(username: str, current_token: str) -> int:
+    current_hash = hashlib.sha256(current_token.encode("utf-8")).hexdigest() if current_token else ""
+    with DB_LOCK:
+        if current_hash:
+            cur = DB.execute(
+                "DELETE FROM app_sessions WHERE username=? AND token_hash<>?",
+                (username, current_hash),
+            )
+        else:
+            cur = DB.execute("DELETE FROM app_sessions WHERE username=?", (username,))
+        DB.commit()
+        return int(cur.rowcount or 0)
 
 
 def cookie_token(handler: BaseHTTPRequestHandler) -> str:
@@ -7721,6 +7859,27 @@ class AppHandler(BaseHTTPRequestHandler):
             if ctx is not None:
                 self.handle_storage_get(query)
             return
+        if path == "/api/security/status":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                self.send_json({"ok": True, "security": security_status_payload()})
+            return
+        if path == "/api/security/audit":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                try:
+                    limit = int((query.get("limit") or ["200"])[0] or 200)
+                except Exception:
+                    limit = 200
+                username = str((query.get("username") or [""])[0] or "").strip()
+                action = str((query.get("action") or [""])[0] or "").strip()
+                self.send_json({"ok": True, "audit": audit_log_payload(limit, username, action)})
+            return
+        if path == "/api/security/backups":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                self.send_json({"ok": True, "backup": backup_status_payload()})
+            return
         if path == "/api/roles":
             ctx = self.auth(admin_only=True)
             if ctx is not None:
@@ -7912,6 +8071,24 @@ class AppHandler(BaseHTTPRequestHandler):
             ctx = self.auth()
             if ctx is not None:
                 self.handle_order_complete(ctx)
+            return
+        if path == "/api/security/backup":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                try:
+                    result = create_backup("manual")
+                    cleanup_backups()
+                    audit(ctx["username"], "security.backup.manual", result["file"])
+                    self.send_json({"ok": True, "backup": result})
+                except Exception as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/security/sessions/revoke-others":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                count = revoke_other_sessions(ctx["username"], cookie_token(self))
+                audit(ctx["username"], "security.sessions.revoke_others", str(count))
+                self.send_json({"ok": True, "revoked": count})
             return
         if path == "/api/roles":
             ctx = self.auth(admin_only=True)
@@ -9043,6 +9220,8 @@ class AppHandler(BaseHTTPRequestHandler):
             current = DB.execute("SELECT * FROM app_users WHERE username=?", (username,)).fetchone()
             if not current and not password:
                 raise ValueError("Informe uma senha para o novo usuário.")
+            if password and len(password) < 8:
+                raise ValueError("A senha deve ter pelo menos 8 caracteres.")
             if username == ctx["username"] and (not active or not permissions["admin"]):
                 raise ValueError("Você não pode retirar seu próprio acesso ao Painel Administrativo.")
             with DB_LOCK:

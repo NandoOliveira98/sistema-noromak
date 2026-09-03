@@ -1,0 +1,5 @@
+VALIDAÇÕES EXECUTADAS
+- python3 -m py_compile servidor_web.py: OK
+- node --check JavaScript inline do admin.html: OK
+- manifest/estrutura do ZIP: OK
+- Nenhuma chave .pem/.key incluída no pacote.
