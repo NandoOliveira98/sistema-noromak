@@ -725,7 +725,6 @@ body{background:var(--v15-bg)!important}
   <a class="v15-nav-item" href="/expedicao/estacao-impressao" target="_blank" rel="noopener"><span class="v15-nav-icon">🖨</span><span class="v15-nav-label">Estação Zebra</span></a>
   <div class="v15-nav-section">Administração</div>
   <button class="v15-nav-item" onclick="abrirAbaAdmin('usuarios');v15Nav(this)"><span class="v15-nav-icon">👥</span><span class="v15-nav-label">Usuários</span></button>
-  <button class="v15-nav-item" data-v15-nav="seguranca" onclick="abrirAbaAdmin('seguranca');v15Nav(this)"><span class="v15-nav-icon">🛡</span><span class="v15-nav-label">Segurança e auditoria</span></button>
   <div class="v15-sidebar-footer"><button class="v15-nav-item" onclick="sairAdmin()"><span class="v15-nav-icon">↪</span><span class="v15-nav-label">Sair</span></button></div>
 </nav>
 
@@ -823,7 +822,6 @@ body{background:var(--v15-bg)!important}
     <button class="aba-btn" data-aba="produtos" onclick="abrirAbaAdmin('produtos')">📦 Banco de produtos</button>
     <button class="aba-btn" data-aba="kits" onclick="abrirAbaAdmin('kits')">🎁 Cadastro de kits</button>
     <button class="aba-btn" data-aba="usuarios" onclick="abrirAbaAdmin('usuarios')">👥 Usuários</button>
-    <button class="aba-btn" data-aba="seguranca" onclick="abrirAbaAdmin('seguranca')">🛡 Segurança</button>
     <button class="aba-btn" data-aba="etiquetas" onclick="abrirAbaAdmin('etiquetas')">🏷 Etiquetas</button>
     <button class="aba-btn" data-aba="historico" onclick="abrirAbaAdmin('historico')">🕘 Histórico</button>
     <button class="aba-btn" data-aba="historico-sku" onclick="abrirAbaAdmin('historico-sku')">🔁 Histórico de SKU</button>
@@ -980,60 +978,6 @@ body{background:var(--v15-bg)!important}
       <div class="toolbar-grid"><button type="button" id="btnNovoUsuarioAdmin" class="btn-primario" onclick="abrirSolicitacaoUsuario('admin')">＋ Solicitar novo usuário</button><button type="button" class="btn-sucesso" onclick="salvarUsuariosAdmin(true)">💾 Salvar alterações</button></div>
       <div id="contadorUsuariosAdmin" class="usuario-contador"></div>
       <div class="excel-wrap" id="tabelaUsuariosAdminWrap" style="max-height:56vh;"><table class="excel-grid" style="min-width:1120px;"><thead><tr><th>Ação</th><th>Nome</th><th>Login</th><th>Senha / acesso</th><th>Perfil</th><th>Acessos aos módulos</th></tr></thead><tbody id="corpoUsuariosAdmin"></tbody></table></div>
-    </div>
-  </section>
-
-
-  <section id="aba-seguranca" class="aba-painel">
-    <div class="card-admin">
-      <div class="sec-head">
-        <div><h2>🛡 Segurança e auditoria</h2><p>Controles de acesso, sessões, backups e rastreabilidade do Sistema Noromak.</p></div>
-        <button class="btn-secundario" onclick="carregarSegurancaAdmin()">↻ Atualizar</button>
-      </div>
-
-      <div class="sec-grid">
-        <div class="sec-card"><span>Usuários ativos</span><b id="secUsers">—</b><small id="secAdmins">— administradores</small></div>
-        <div class="sec-card"><span>Sessões ativas</span><b id="secSessions">—</b><small>Sessões autenticadas no sistema</small></div>
-        <div class="sec-card"><span>Falhas de login 24h</span><b id="secFailed">—</b><small>Proteção de tentativas ativa</small></div>
-        <div class="sec-card"><span>Último backup</span><b id="secBackup">—</b><small id="secBackupMeta">—</small></div>
-      </div>
-
-      <div class="sec-two">
-        <div class="sec-panel">
-          <h3>Proteções ativas</h3>
-          <div id="secChecks" class="sec-checks"></div>
-          <div class="sec-actions">
-            <button class="btn-primario" id="btnBackupManual" onclick="criarBackupSeguranca()">💾 Criar backup agora</button>
-            <button class="btn-secundario" onclick="revogarOutrasSessoes()">🔒 Encerrar minhas outras sessões</button>
-          </div>
-          <div id="secActionStatus" class="sec-status"></div>
-        </div>
-        <div class="sec-panel">
-          <h3>Política de segurança</h3>
-          <div class="sec-policy">
-            <div><b>Senhas novas</b><span>Mínimo de 8 caracteres</span></div>
-            <div><b>Hash</b><span id="secHash">PBKDF2</span></div>
-            <div><b>Sessão Admin</b><span id="secTtl">—</span></div>
-            <div><b>Backups</b><span id="secRetention">—</span></div>
-          </div>
-          <p class="sec-note">Tokens e chaves são verificados no servidor. Esta tela mostra apenas se estão configurados; nunca exibe os valores secretos.</p>
-        </div>
-      </div>
-
-      <div class="sec-audit-head">
-        <div><h3>Auditoria</h3><p>Últimas ações relevantes registradas pelo servidor.</p></div>
-        <div class="sec-filters">
-          <input id="secAuditUser" placeholder="Filtrar usuário">
-          <input id="secAuditAction" placeholder="Filtrar ação">
-          <button class="btn-secundario" onclick="carregarAuditoriaAdmin()">Filtrar</button>
-        </div>
-      </div>
-      <div class="excel-wrap" style="max-height:48vh">
-        <table class="excel-grid sec-audit-table">
-          <thead><tr><th>Data/hora</th><th>Usuário</th><th>Ação</th><th>Detalhes</th></tr></thead>
-          <tbody id="secAuditBody"><tr><td colspan="4">Carregando…</td></tr></tbody>
-        </table>
-      </div>
     </div>
   </section>
 
@@ -3280,7 +3224,6 @@ function abrirAbaAdmin(nome){
   if(nome==="historico-sku") carregarHistoricoSkuAdmin();
   if(nome==="kits") renderizarKitsAdmin();
   if(nome==="integracoes"){carregarIntegracaoMercadoLivreAdmin();carregarLogsMercadoLivreAdmin();carregarAgenteZebraAdmin();}
-  if(nome==="seguranca"){carregarSegurancaAdmin();carregarAuditoriaAdmin();}
 }
 function abrirDashboardV151(){
   document.querySelectorAll(".aba-painel").forEach(p=>p.classList.remove("ativa"));
@@ -5848,24 +5791,6 @@ document.addEventListener("DOMContentLoaded",()=>{
 
 <style>
 .senha-acesso-celula{display:flex;align-items:center;gap:10px;min-width:255px}.senha-protegida-status{display:flex;flex-direction:column;line-height:1.2;min-width:105px}.senha-protegida-status strong{font-size:12px;color:#2b4e75}.senha-protegida-status small{font-size:10px;color:#718096}.senha-inicial-alerta{display:block;margin-top:4px;padding:4px 6px;border-radius:5px;background:#fff3cd;color:#8a5a00;border:1px solid #f4cf72;font-size:9px;font-weight:950}.btn-alterar-senha{border:0;border-radius:6px;background:#f7941d;color:white;font-weight:800;padding:8px 12px;cursor:pointer;white-space:nowrap}.btn-alterar-senha:hover{filter:brightness(.95)}.senha-usuario-identidade{background:#edf5fc;border:1px solid #bdd0e2;border-radius:8px;padding:10px 12px;margin-bottom:12px;display:flex;flex-direction:column}.senha-usuario-identidade span{font-size:10px;text-transform:uppercase;color:#6b7b89;font-weight:800}.senha-usuario-identidade strong{font-size:15px;color:#244d76}.senha-usuario-identidade small{color:#617487}.senha-mostrar-linha{display:flex;align-items:center;gap:8px;font-weight:700;color:#526475}.senha-mostrar-linha input{width:auto}.senha-regra{margin-top:10px;padding:9px 10px;background:#fff8e8;border-left:3px solid #f7941d;color:#5f5140;font-size:11px}.senha-salva-flash{animation:senhaFlash 1.2s ease}@keyframes senhaFlash{0%{background:#dff5e3}100%{background:transparent}}
-
-/* V16.35 — Fase 1: Segurança */
-.sec-head,.sec-audit-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap}
-.sec-head h2,.sec-audit-head h3{margin:0 0 5px}.sec-head p,.sec-audit-head p{margin:0;color:#64748b;font-size:13px}
-.sec-grid{display:grid;grid-template-columns:repeat(4,minmax(150px,1fr));gap:12px;margin:18px 0}
-.sec-card{border:1px solid #e2e8f0;background:#f8fafc;border-radius:12px;padding:16px;display:grid;gap:5px}
-.sec-card span{font-size:12px;color:#64748b;font-weight:700}.sec-card b{font-size:25px;color:#0f172a}.sec-card small{color:#64748b}
-.sec-two{display:grid;grid-template-columns:1.25fr 1fr;gap:14px;margin-bottom:22px}
-.sec-panel{border:1px solid #e2e8f0;border-radius:12px;padding:17px;background:white}.sec-panel h3{margin:0 0 13px}
-.sec-checks{display:grid;gap:8px}.sec-check{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 12px;border-radius:9px;background:#f8fafc;border:1px solid #edf2f7;font-size:13px}
-.sec-check strong.ok{color:#15803d}.sec-check strong.warn{color:#b45309}.sec-check strong.bad{color:#b91c1c}
-.sec-actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:15px}.sec-status{font-size:12px;margin-top:9px;color:#475569}
-.sec-policy{display:grid;gap:8px}.sec-policy div{display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid #eef2f7;font-size:13px}.sec-policy span{color:#475569;text-align:right}
-.sec-note{font-size:12px;color:#64748b;line-height:1.45;margin:13px 0 0}
-.sec-audit-head{margin:10px 0}.sec-filters{display:flex;gap:7px;flex-wrap:wrap}.sec-filters input{height:36px;border:1px solid #cbd5e1;border-radius:7px;padding:0 10px;min-width:150px}
-.sec-audit-table td{font-size:12px;vertical-align:top}.sec-audit-action{font-family:ui-monospace,Consolas,monospace;color:#1e40af;font-weight:700}
-@media(max-width:1000px){.sec-grid{grid-template-columns:repeat(2,1fr)}.sec-two{grid-template-columns:1fr}}
-@media(max-width:620px){.sec-grid{grid-template-columns:1fr}.sec-filters{width:100%}.sec-filters input{flex:1;min-width:120px}}
 </style>
 <script>
 /* ADMINISTRAÇÃO SEGURA DE SENHAS — VERSÃO 7.6 */
@@ -6623,64 +6548,6 @@ function v15Nav(el){document.querySelectorAll('.v15-nav-item').forEach(x=>x.clas
 document.addEventListener("DOMContentLoaded",()=>{setTimeout(()=>{try{abrirDashboardV151();}catch(e){console.warn("Dashboard V15.1",e);}},700);});
 document.addEventListener("click",e=>{if(!e.target.closest(".v151-global-search-wrap"))document.getElementById("v151GlobalResults")?.classList.remove("show");});
 window.addEventListener("storage",e=>{if(["conf_pedidos","conf_logs","conf_historico_conferencias_v2","conf_etiquetas"].includes(e.key))setTimeout(v151AtualizarDashboard,120);});
-
-async function secApi(path,opts={}){
-  const r=await fetch(path,{credentials:"same-origin",...opts,headers:{"Content-Type":"application/json",...(opts.headers||{})}});
-  const data=await r.json().catch(()=>({}));
-  if(!r.ok) throw new Error(data.error||("Erro HTTP "+r.status));
-  return data;
-}
-function secFmtBytes(n){n=Number(n||0);if(n<1024)return n+" B";if(n<1048576)return (n/1024).toFixed(1)+" KB";return (n/1048576).toFixed(1)+" MB";}
-function secFmtDate(v){if(!v)return "—";const d=new Date(v);return Number.isNaN(d.getTime())?String(v):d.toLocaleString("pt-BR");}
-function secCheck(label,ok,detail){
-  return `<div class="sec-check"><span>${escapeHtml(label)}<br><small>${escapeHtml(detail||"")}</small></span><strong class="${ok?"ok":"warn"}">${ok?"✓ OK":"⚠ Atenção"}</strong></div>`;
-}
-async function carregarSegurancaAdmin(){
-  try{
-    const d=await secApi("/expedicao/api/security/status"); const s=d.security||{}, b=s.backup||{}, sec=s.secure_secrets||{};
-    document.getElementById("secUsers").textContent=s.users_active??"—";
-    document.getElementById("secAdmins").textContent=(s.admins_active??"—")+" administrador(es)";
-    document.getElementById("secSessions").textContent=s.sessions_active??"—";
-    document.getElementById("secFailed").textContent=s.failed_logins_24h??"—";
-    document.getElementById("secBackup").textContent=b.last?secFmtDate(b.last.created_at):"Nenhum";
-    document.getElementById("secBackupMeta").textContent=b.last?`${secFmtBytes(b.last.size)} · ${b.last.file}`:"Crie o primeiro backup verificado";
-    document.getElementById("secHash").textContent=`PBKDF2-SHA256 · ${Number(s.password_iterations||0).toLocaleString("pt-BR")} iterações`;
-    document.getElementById("secTtl").textContent=(s.session_ttl_hours??"—")+" horas";
-    document.getElementById("secRetention").textContent=(b.retention_days??"—")+" dias";
-    document.getElementById("secChecks").innerHTML=[
-      secCheck("Client Secret Mercado Livre",!!sec.ml_client_secret_configured,"Configurado somente no servidor"),
-      secCheck("Chave da API de custos",!!sec.crm_key_configured,"Não exposta ao navegador"),
-      secCheck("Chave privada QZ",!!sec.qz_private_key_exists,"Necessária para assinatura de impressão"),
-      secCheck("Senha inicial no .env",!sec.initial_admin_password_env_present,sec.initial_admin_password_env_present?"Recomendado remover após criar os usuários":"Não permanece no ambiente"),
-      secCheck("Banco SQLite",!!s.database?.exists,`Permissões: ${s.database?.permissions||"—"}`)
-    ].join("");
-  }catch(e){
-    document.getElementById("secActionStatus").textContent="Erro ao carregar segurança: "+e.message;
-  }
-}
-async function carregarAuditoriaAdmin(){
-  const body=document.getElementById("secAuditBody"); if(!body)return;
-  body.innerHTML='<tr><td colspan="4">Carregando…</td></tr>';
-  try{
-    const u=document.getElementById("secAuditUser")?.value?.trim()||"";
-    const ac=document.getElementById("secAuditAction")?.value?.trim()||"";
-    const qs=new URLSearchParams({limit:"300"});if(u)qs.set("username",u);if(ac)qs.set("action",ac);
-    const d=await secApi("/expedicao/api/security/audit?"+qs.toString());
-    const rows=Array.isArray(d.audit)?d.audit:[];
-    body.innerHTML=rows.length?rows.map(x=>`<tr><td>${escapeHtml(secFmtDate(x.created_at))}</td><td>${escapeHtml(x.username||"")}</td><td><span class="sec-audit-action">${escapeHtml(x.action||"")}</span></td><td>${escapeHtml(x.detail||"")}</td></tr>`).join(""):'<tr><td colspan="4">Nenhum registro encontrado.</td></tr>';
-  }catch(e){body.innerHTML=`<tr><td colspan="4">Erro: ${escapeHtml(e.message)}</td></tr>`;}
-}
-async function criarBackupSeguranca(){
-  const st=document.getElementById("secActionStatus"),btn=document.getElementById("btnBackupManual");
-  try{btn.disabled=true;st.textContent="Criando e verificando backup…";const d=await secApi("/expedicao/api/security/backup",{method:"POST",body:"{}"});st.textContent=`✓ Backup criado e verificado: ${d.backup?.file||""}`;await carregarSegurancaAdmin();await carregarAuditoriaAdmin();}
-  catch(e){st.textContent="Erro no backup: "+e.message;}finally{btn.disabled=false;}
-}
-async function revogarOutrasSessoes(){
-  if(!confirm("Encerrar todas as outras sessões deste seu usuário? Esta sessão continuará aberta."))return;
-  const st=document.getElementById("secActionStatus");
-  try{const d=await secApi("/expedicao/api/security/sessions/revoke-others",{method:"POST",body:"{}"});st.textContent=`✓ ${d.revoked||0} outra(s) sessão(ões) encerrada(s).`;await carregarSegurancaAdmin();await carregarAuditoriaAdmin();}
-  catch(e){st.textContent="Erro ao encerrar sessões: "+e.message;}
-}
 </script>
 </body>
 </html>
