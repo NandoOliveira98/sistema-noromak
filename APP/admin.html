@@ -6549,5 +6549,62 @@ document.addEventListener("DOMContentLoaded",()=>{setTimeout(()=>{try{abrirDashb
 document.addEventListener("click",e=>{if(!e.target.closest(".v151-global-search-wrap"))document.getElementById("v151GlobalResults")?.classList.remove("show");});
 window.addEventListener("storage",e=>{if(["conf_pedidos","conf_logs","conf_historico_conferencias_v2","conf_etiquetas"].includes(e.key))setTimeout(v151AtualizarDashboard,120);});
 </script>
+
+<script id="noromak-v1636-ml-expiry-alert">
+(function(){
+  let checando=false;
+  function abrirIntegracoesMl(){
+    try{
+      if(typeof abrirAbaAdmin==="function") abrirAbaAdmin("integracoes");
+      const el=document.querySelector('[data-v15-nav="integracoes"]');
+      if(el && typeof v15Nav==="function") v15Nav(el);
+    }catch(_){}
+  }
+  function mostrarPopupMlExpirado(ml){
+    if(document.getElementById("nmMlExpiredOverlay"))return;
+    const exp=String(ml?.expires_at_epoch||"0");
+    const key="noromak_ml_expired_popup_"+exp;
+    if(sessionStorage.getItem(key)==="1")return;
+    sessionStorage.setItem(key,"1");
+
+    const overlay=document.createElement("div");
+    overlay.id="nmMlExpiredOverlay";
+    overlay.style.cssText="position:fixed;inset:0;background:rgba(15,23,42,.48);z-index:999999;display:flex;align-items:center;justify-content:center;padding:18px";
+    overlay.innerHTML=`
+      <div style="width:min(460px,96vw);background:#fff;border-radius:14px;box-shadow:0 24px 70px rgba(0,0,0,.28);padding:22px;font-family:Arial,sans-serif">
+        <div style="display:flex;gap:12px;align-items:flex-start">
+          <div style="font-size:30px">⚠️</div>
+          <div style="flex:1">
+            <h3 style="margin:0 0 7px;font-size:19px;color:#991b1b">Conexão com Mercado Livre expirou</h3>
+            <p style="margin:0;color:#475569;line-height:1.45;font-size:14px">A sincronização de pedidos, etiquetas e custos do Mercado Livre pode estar interrompida. Reconecte a conta para o sistema voltar a atualizar automaticamente.</p>
+            ${ml?.last_error?`<div style="margin-top:10px;padding:9px 10px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;font-size:12px;color:#9a3412">${mlHtmlSeguro(String(ml.last_error).slice(0,500))}</div>`:""}
+          </div>
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px">
+          <button id="nmMlExpiredClose" style="border:1px solid #cbd5e1;background:#fff;border-radius:8px;padding:9px 14px;cursor:pointer">Fechar</button>
+          <button id="nmMlExpiredOpen" style="border:0;background:#2563eb;color:#fff;border-radius:8px;padding:9px 14px;font-weight:700;cursor:pointer">Abrir Integrações</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    document.getElementById("nmMlExpiredClose").onclick=()=>overlay.remove();
+    document.getElementById("nmMlExpiredOpen").onclick=()=>{overlay.remove();abrirIntegracoesMl();};
+  }
+  async function verificarExpiracaoMlGlobal(){
+    if(checando)return; checando=true;
+    try{
+      const r=await fetch("/expedicao/api/integracoes/mercadolivre/status",{credentials:"same-origin",cache:"no-store"});
+      if(!r.ok)return;
+      const d=await r.json().catch(()=>({}));
+      const ml=d?.mercadolivre||{};
+      if(ml.token_expired===true && ml.refresh_token_available!==true) mostrarPopupMlExpirado(ml);
+    }catch(_){}
+    finally{checando=false;}
+  }
+  document.addEventListener("DOMContentLoaded",()=>{
+    setTimeout(verificarExpiracaoMlGlobal,3500);
+    setInterval(verificarExpiracaoMlGlobal,90000);
+  });
+})();
+</script>
 </body>
 </html>

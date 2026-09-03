@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "16.34"
+APP_VERSION = "16.36"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -4349,6 +4349,50 @@ def ml_reconcile_manual_orders_loop(stop_event: threading.Event) -> None:
             break
 
 
+def _ml_remove_cancelled_from_pending(
+    pending: list[dict[str, Any]],
+    *,
+    order_id: str,
+    pack_id: str = "",
+) -> tuple[list[dict[str, Any]], int]:
+    """Remove da fila pendente qualquer linha pertencente a uma venda ML cancelada."""
+    order_id = str(order_id or "").strip()
+    pack_id = str(pack_id or "").strip()
+    removed = 0
+    kept: list[dict[str, Any]] = []
+
+    for row in pending:
+        if not isinstance(row, dict):
+            kept.append(row)
+            continue
+
+        marketplace = normalize(row.get("Marketplace"))
+        is_ml = (
+            "MERCADO LIVRE" in marketplace
+            or "MERCADOLIVRE" in marketplace
+            or bool(str(row.get("VendaMercadoLivre") or "").strip())
+            or "mercado livre" in str(row.get("OrigemCadastro") or "").lower()
+        )
+        if not is_ml:
+            kept.append(row)
+            continue
+
+        identifiers = {
+            str(row.get("VendaMercadoLivre") or "").strip(),
+            str(row.get("PackIdMercadoLivre") or "").strip(),
+            str(order_number(row) or "").strip(),
+        }
+        identifiers.discard("")
+
+        matched = bool(order_id and order_id in identifiers) or bool(pack_id and pack_id in identifiers)
+        if matched:
+            removed += 1
+            continue
+        kept.append(row)
+
+    return kept, removed
+
+
 def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict[str, Any]:
     order_id = str(order_id or "").strip()
     if not order_id:
@@ -4408,6 +4452,38 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
         shipment_id=shipment_id,
         shipment=shipment,
     )
+
+    # V16.36: vendas canceladas não podem continuar aparecendo em Pedidos pendentes.
+    # O Mercado Livre pode enviar "cancelled" ou "canceled" conforme o recurso.
+    if status.strip().lower() in {"cancelled", "canceled"}:
+        pending, removed = _ml_remove_cancelled_from_pending(
+            pending, order_id=order_id, pack_id=pack_id
+        )
+        if removed:
+            save_storage(
+                "conf_pedidos", current_raw, json_dumps(pending), False,
+                actor="mercadolivre-api", actor_role="sistema",
+                source_screen="API Mercado Livre",
+                change_method="Pedido cancelado no Mercado Livre",
+                client_ip="127.0.0.1", allow_completed_reimport=False,
+            )
+        ml_log_event(
+            "order_cancelled", f"/orders/{order_id}", "", ML_CLIENT_ID,
+            "REMOVIDO DOS PENDENTES",
+            json_dumps({"order_id": order_id, "pack_id": pack_id, "removed_rows": removed}),
+        )
+        return {
+            "order_id": order_id,
+            "pack_id": pack_id,
+            "shipment_id": shipment_id,
+            "status": status,
+            "cancelled": True,
+            "removed_pending_rows": removed,
+            "manual_rows_bound": manual_rows_bound,
+            "ready_for_conference": False,
+            "fiscal_ready": False,
+            "label_stored": False,
+        }
 
     # Full/Fulfillment é preparado e expedido pelo próprio Mercado Livre.
     # Não deve entrar na fila operacional da Expedição Noromak. Se a linha já
@@ -4744,7 +4820,9 @@ def ml_process_notification(payload: dict[str, Any]) -> None:
         if topic in {"orders_v2", "orders"} and "/orders/" in resource:
             order_id = resource.rstrip("/").split("/")[-1]
             result = ml_import_order(order_id, source="API Mercado Livre / orders_v2")
-            if result.get("ignored"):
+            if result.get("cancelled"):
+                event_result, prefix = "CANCELADO / REMOVIDO DOS PENDENTES", ""
+            elif result.get("ignored"):
                 event_result, prefix = "FULL IGNORADO", ""
             elif result.get("ready_for_conference"):
                 event_result, prefix = "PRONTO PARA CONFERÊNCIA", "Etiqueta vinculada automaticamente · "
@@ -4847,6 +4925,19 @@ def ml_pending_label_watch_once() -> dict[str, int]:
                 continue
             status = str(shipment.get("status") or "").strip().lower()
             substatus = str(shipment.get("substatus") or "").strip().lower()
+
+            # V16.36: se o shipment foi cancelado, reconsulta a order para retirar
+            # imediatamente a venda da fila de pendentes.
+            if status in {"cancelled", "canceled"}:
+                triggered += 1
+                result = ml_import_order(order_id, source="API Mercado Livre / watcher cancelamento")
+                ml_log_event(
+                    "shipment_watcher", f"/shipments/{shipment_id}",
+                    "", ML_CLIENT_ID, "CANCELAMENTO PROCESSADO",
+                    json_dumps({"order_id": order_id, "shipment_id": shipment_id,
+                                "removed": result.get("removed_pending_rows", 0)})
+                )
+                continue
 
             # V14.4: invoice_pending pode estar atrasado em relação à disponibilidade
             # real da etiqueta. Para não fazer uma reimportação pesada desnecessária,
