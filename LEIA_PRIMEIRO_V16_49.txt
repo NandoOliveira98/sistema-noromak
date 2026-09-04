@@ -1,0 +1,22 @@
+NOROMAK WEB V16.49 — PESQUISA E BOTÕES DE PROMOÇÕES CORRIGIDOS
+
+Causa encontrada:
+- O módulo chamava appStorage.setItem() durante a inicialização sem verificar se
+  o banco online já estava disponível.
+- Quando appStorage ainda não existia, o JavaScript parava exatamente antes de
+  registrar os listeners de Pesquisa, Atualizar estoque, Adicionar, Importar etc.
+- A tela aparecia porque as linhas estavam pré-renderizadas, mas os controles não respondiam.
+
+Correção:
+- promoSave/promoLoad agora verificam window.appStorage e usam localStorage como fallback.
+- Mesmo se o banco online ainda não estiver pronto, o módulo continua inicializando.
+- Pesquisa reage a input, search, change e keyup.
+- Adicionado botão "Buscar" ao lado do campo.
+- Busca por MLB continua global e ignora filtros de vencimento/estoque.
+- Os demais botões da tela também passam a ter seus listeners registrados normalmente.
+
+Publicação:
+git status
+git add -A
+git commit -m "V16.49 - corrige inicializacao pesquisa e botoes de promocoes"
+./publicar.sh

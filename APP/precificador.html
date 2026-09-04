@@ -473,6 +473,10 @@
   .promo-toolbar{grid-template-columns:1fr !important}
   .promo-toolbar-actions{grid-template-columns:1fr !important}
 }
+
+.promo-search-group{display:grid;grid-template-columns:minmax(180px,1fr) auto;gap:6px;align-items:center}
+.promo-search-group input{width:100%;height:38px;box-sizing:border-box}
+.promo-search-group .btn{height:38px;white-space:nowrap}
 </style>
 </head>
 <body>
@@ -569,7 +573,10 @@
         </div>
 
         <div class="promo-toolbar">
-          <input id="promo-search" type="search" placeholder="Buscar MLB, código, SKU ou produto...">
+          <div class="promo-search-group">
+            <input id="promo-search" type="search" placeholder="Buscar MLB, código, SKU ou produto...">
+            <button class="btn btn-secondary" id="promo-search-btn" type="button">Buscar</button>
+          </div>
           <select id="promo-status-filter">
             <option value="expired">Vencidas</option>
             <option value="7">A vencer em 7 dias</option>
@@ -2447,7 +2454,16 @@ var state = {
         return "https://www.mercadolivre.com.br/anuncios/lista/promos?page=1&search="+encodeURIComponent(String(mlb||"").replace(/\D/g,""));
       }
       function promoSave(){
-        appStorage.setItem(PROMO_STORAGE_KEY,JSON.stringify({rows:promoRows,updatedAt:new Date().toISOString()}));
+        const payload=JSON.stringify({rows:promoRows,updatedAt:new Date().toISOString()});
+        try{
+          if(window.appStorage && typeof window.appStorage.setItem==="function"){
+            window.appStorage.setItem(PROMO_STORAGE_KEY,payload);
+          }else{
+            localStorage.setItem(PROMO_STORAGE_KEY,payload);
+          }
+        }catch(_){
+          try{localStorage.setItem(PROMO_STORAGE_KEY,payload);}catch(__){}
+        }
       }
       function promoLoad(){
         var seedRows=[];
@@ -2460,7 +2476,15 @@ var state = {
 
         var savedRows=[];
         try{
-          var raw=appStorage.getItem(PROMO_STORAGE_KEY);
+          var raw="";
+          try{
+            raw=(window.appStorage && typeof window.appStorage.getItem==="function")
+              ? window.appStorage.getItem(PROMO_STORAGE_KEY)
+              : "";
+          }catch(_){}
+          if(!raw){
+            try{raw=localStorage.getItem(PROMO_STORAGE_KEY)||"";}catch(_){}
+          }
           var parsed=raw?JSON.parse(raw):null;
           if(parsed&&Array.isArray(parsed.rows)){
             savedRows=parsed.rows.map(function(x){
@@ -2631,6 +2655,10 @@ var state = {
 
         promoKpis();
         var rows=promoBaseFiltered();
+        try{
+          const q=String(document.getElementById("promo-search")?.value||"").trim();
+          if(q)console.info("[Noromak V16.49] Pesquisa promoções:",q,"=>",rows.length,"resultado(s)");
+        }catch(_){}
         var pages=Math.max(1,Math.ceil(rows.length/promoPageSize));
         promoPage=Math.max(1,Math.min(promoPage,pages));
         var start=(promoPage-1)*promoPageSize;
@@ -2890,16 +2918,40 @@ var state = {
         }catch(e){showToast("Falha ao importar promoções: "+e.message);}
       }
 
-      promoLoad();
-      console.info("[Noromak V16.42] Monitor de Promoções carregado:",promoRows.length,"anúncios; vencidos pré-renderizados: 704.");
+      try{
+        promoLoad();
+      }catch(err){
+        console.error("[Noromak V16.49] Falha ao carregar persistência de promoções:",err);
+        // Mesmo que o banco online ainda não esteja pronto, usa a base embutida
+        // e CONTINUA registrando todos os eventos de pesquisa/botões.
+        try{
+          promoRows=JSON.parse(document.getElementById("promotion-seed-data")?.textContent||"[]")
+            .map(function(x){return {mlb:String(x.mlb||"").replace(/\D/g,""),date:String(x.date||"").slice(0,10),manualZero:false};})
+            .filter(function(x){return x.mlb;});
+        }catch(_){promoRows=[];}
+      }
+      console.info("[Noromak V16.49] Monitor de Promoções carregado:",promoRows.length,"anúncios.");
       var promoBtn=document.getElementById("promotions-monitor-btn");
       if(promoBtn){
         promoBtn.setAttribute("aria-controls","promotions-monitor-panel");
         promoBtn.setAttribute("aria-expanded","false");
       }
       
-      ["promo-search","promo-status-filter","promo-sort"].forEach(function(id){
-        document.getElementById(id)?.addEventListener(id==="promo-search"?"input":"change",function(){
+      const promoSearchEl=document.getElementById("promo-search");
+      if(promoSearchEl){
+        ["input","search","change","keyup"].forEach(function(evt){
+          promoSearchEl.addEventListener(evt,function(){
+            promoPage=1;
+            promoRender();
+          });
+        });
+      }
+      document.getElementById("promo-search-btn")?.addEventListener("click",function(){
+        promoPage=1;
+        promoRender();
+      });
+      ["promo-status-filter","promo-sort"].forEach(function(id){
+        document.getElementById(id)?.addEventListener("change",function(){
           promoPage=1;
           promoRender();
         });
