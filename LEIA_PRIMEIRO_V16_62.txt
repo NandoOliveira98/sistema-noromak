@@ -1,0 +1,25 @@
+NOROMAK WEB V16.62 — SELEÇÃO TRANSACIONAL COM APOLLO
+
+Agora a seleção funciona em uma sequência única:
+1. Seleciona o produto.
+2. Carrega os dados salvos do produto escolhido.
+3. Bloqueia qualquer atualização remota durante a consulta.
+4. Limpa custo/cards de filial.
+5. Consulta o Apollo imediatamente (sem timeout).
+6. Aplica descrição, custo das filiais, custo usado e curva.
+7. Aplica automaticamente a margem da curva:
+   A/B = 20%, C = 17%, D = 15%.
+8. Recalcula os marketplaces.
+9. Salva o produto atualizado no banco online.
+10. Libera novamente a sincronização.
+
+Foi removida a possibilidade de o appStorage/Storage Event repopular o formulário
+com dados antigos enquanto a consulta Apollo ainda estava rodando.
+
+A tela mostra "Cadastro · V16.62" para confirmar a versão.
+
+PUBLICAÇÃO:
+git status
+git add -A
+git commit -m "V16.62 - selecao transacional com atualizacao automatica do Apollo"
+./publicar.sh

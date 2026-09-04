@@ -706,7 +706,7 @@
 
       <section class="panel">
         <div class="section-heading">
-          <div><div class="eyebrow">Cadastro · V16.61</div><h2>Dados do produto</h2><p>Altere os campos e veja os preços recalculados imediatamente.</p></div>
+          <div><div class="eyebrow">Cadastro · V16.62</div><h2>Dados do produto</h2><p>Altere os campos e veja os preços recalculados imediatamente.</p></div>
           <button class="btn btn-secondary" id="new-btn" type="button">+ Novo produto</button>
         </div>
         <div class="product-data-grid">
@@ -1272,6 +1272,10 @@ var state = {
       }
 
       function applyRemoteState(raw) {
+        // V16.62: não deixa sincronização remota trocar o produto/valores
+        // enquanto uma consulta Apollo do SKU selecionado está em andamento.
+        if (costLookupInFlight) return;
+
         var incoming = null;
         try { incoming = JSON.parse(String(raw || "")); } catch (_) { return; }
         if (!incoming || !Array.isArray(incoming.products)) return;
@@ -1292,12 +1296,6 @@ var state = {
         showToast(state.dirty
           ? "Banco atualizado por outro usuário. Sua edição não salva foi mantida."
           : "Precificador atualizado em tempo real.");
-
-        if (true) {
-          showToast(state.dirty
-            ? "Banco atualizado por outro usuário. Sua edição não salva foi mantida."
-            : "Precificador atualizado em tempo real.");
-        }
       }
 
       function showToast(message) {
@@ -1587,7 +1585,7 @@ var state = {
           }
           renderBranchCosts();
 
-          if (!descricaoAtual && descricaoApi) {
+          if (descricaoApi) {
             el.produto.value = descricaoApi;
           }
 
@@ -1630,7 +1628,12 @@ var state = {
           if (["A","B","C","D"].includes(curvaApi)) {
             setValue("curva", curvaApi);
             applyCurveMargin(curvaApi);
-
+            var autoMargin = desiredMarginForCurve(curvaApi);
+            if (Number.isFinite(autoMargin)) {
+              setValue("ml-margin", autoMargin);
+              setValue("shopee-margin", autoMargin);
+              setValue("magalu-margin", autoMargin);
+            }
           }
 
           if (sameSavedSku) {
@@ -1669,23 +1672,22 @@ var state = {
           state.dirty = true;
           recalculate();
 
-          if (sameSavedSku) {
-            // V16.60: copia o formulário já atualizado (custo + curva + margens)
-            // para o registro selecionado antes de publicar no storage.
+          if (String(el.sku.value || "").trim() === sku) {
             var refreshedForm = readForm();
-            refreshedForm._id = savedProduct._id;
+            if (savedProduct && savedProduct._id) refreshedForm._id = savedProduct._id;
+
             var savedIndex = state.products.findIndex(function(item){
-              return String(item._id) === String(savedProduct._id);
+              return String(item._id) === String(state.selectedId);
             });
-            if (savedIndex >= 0) state.products[savedIndex] = refreshedForm;
+            if (savedIndex >= 0) {
+              state.products[savedIndex] = refreshedForm;
+            }
 
             var kitSync = refreshAllKitCosts();
             state.kitCycleIds = kitSync.cycleIds;
             state.dirty = false;
             persist();
-            setAutoSaveStatus("✓ Custo e curva atualizados automaticamente", "ok");
-          } else {
-            scheduleAutoSave();
+            setAutoSaveStatus("✓ Produto atualizado automaticamente pelo Apollo", "ok");
           }
 
           var extra = descricaoApi ? " · " + descricaoApi : "";
@@ -1706,9 +1708,11 @@ var state = {
         } catch (error) {
           if (requestId === costLookupGeneration && String(el.sku.value || "").trim() === sku) {
             state.branchCostBlocked = true;
+            state.dirty = false;
             setValue("custo", "");
             recalculate();
             setCostApiStatus(error && error.message ? error.message : "Falha ao consultar custo médio.", "error");
+            setAutoSaveStatus("Falha ao atualizar pelo Apollo", "error");
           }
           return false;
         } finally {
@@ -2236,7 +2240,7 @@ var state = {
         renderComparison(results);
       }
 
-      function selectProduct(productId) {
+      async function selectProduct(productId) {
         var product = state.products.find(function (item) {
           return String(item._id) === String(productId);
         });
@@ -2252,30 +2256,40 @@ var state = {
         el.search.value = "";
         closeProductSearch();
 
-        // Primeiro exibe o cadastro do produto escolhido.
+        // Mostra imediatamente todos os dados salvos DESTE produto.
         fillForm(clone(product));
         if (el["cost-last-change-note"]) el["cost-last-change-note"].textContent = "";
         renderProductList();
 
-        // V16.61: ao selecionar um produto simples, executa EXATAMENTE
-        // a mesma rotina do botão manual ↻ que já funciona corretamente.
-        // Sem fila paralela, sem bloqueio especial e sem lógica diferente.
         if (!product.isKit && selectedSku) {
+          // Trava lógica contra qualquer repopulação remota até terminar.
+          state.dirty = true;
+
           lastCostLookupSku = "";
           lastCostLookupAt = 0;
           pendingCostLookupSku = "";
           costLookupRequestedSku = selectedSku;
 
-          setCostApiStatus("Atualizando custo e curva automaticamente...", "info");
-          setAutoSaveStatus("Atualizando pelo Apollo...", "info");
+          // Limpa apenas dados que vêm do Apollo, para não deixar informação
+          // do produto anterior visível durante a consulta.
+          state.branchCosts = [];
+          state.branchCostBlocked = true;
+          state.baseCost = 0;
+          setValue("custo", "");
+          renderBranchCosts();
+          setCostApiStatus("Consultando Apollo para " + selectedSku + "...", "info");
+          setAutoSaveStatus("Atualizando custo e curva pelo Apollo...", "info");
+          recalculate();
 
-          // Dá um ciclo ao navegador para concluir o preenchimento do formulário
-          // e então dispara a mesma consulta forçada do botão ↻.
-          setTimeout(function () {
-            if (String(el.sku.value || "").trim() !== selectedSku) return;
-            lookupAverageCostBySku(true, selectedSku);
-          }, 80);
+          // Sem setTimeout: selecionou -> consulta -> aplica -> salva.
+          var ok = await lookupAverageCostBySku(true, selectedSku);
+
+          if (!ok && String(el.sku.value || "").trim() === selectedSku) {
+            state.dirty = false;
+            setAutoSaveStatus("Falha ao atualizar pelo Apollo", "error");
+          }
         } else {
+          state.dirty = false;
           persist();
           setAutoSaveStatus("Salvamento automático ativo", "info");
         }
