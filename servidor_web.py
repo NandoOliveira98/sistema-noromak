@@ -258,20 +258,38 @@ def json_dumps(value: Any) -> str:
 
 
 def normalize_abc_curve_value(*values: Any) -> str:
-    """Normaliza a classificação Apollo para A/B/C/D.
+    """Normaliza a curva ABC do Apollo/CRM para A/B/C/D."""
+    def one(value: Any) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, dict):
+            for key in (
+                "curva_abc", "curvaABC", "abc", "classificacao_abc",
+                "curva_item", "classificacao", "curva", "valor", "value"
+            ):
+                if key in value:
+                    found = one(value.get(key))
+                    if found:
+                        return found
+            return ""
+        if isinstance(value, (list, tuple)):
+            for item in value:
+                found = one(item)
+                if found:
+                    return found
+            return ""
+        text = str(value).strip().upper()
+        if not text:
+            return ""
+        match = re.search(r"(?:^|[^A-Z])([ABCD])(?:\d|$|[^A-Z])", text)
+        if not match:
+            match = re.match(r"^([ABCD])", text)
+        return match.group(1) if match else ""
 
-    Prioriza valores já puros (A/B/C/D). Como contingência, aceita os
-    formatos compostos que o Apollo também usa (A3, B3, C2, D1 etc.).
-    """
     for value in values:
-        raw = str(value or "").strip().upper()
-        if raw in {"A", "B", "C", "D"}:
-            return raw
-    for value in values:
-        raw = str(value or "").strip().upper()
-        match = re.match(r"^\s*([ABCD])(?:\b|[-_/ .0-9])", raw)
-        if match:
-            return match.group(1)
+        found = one(value)
+        if found:
+            return found
     return ""
 
 

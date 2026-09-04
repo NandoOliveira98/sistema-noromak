@@ -1522,7 +1522,7 @@ var state = {
         setCostApiStatus("Consultando custo e curva do SKU " + sku + "...", "info");
 
         try {
-          var response = await fetch("/expedicao/api/precificador/custo?codigo=" + encodeURIComponent(sku), {
+          var response = await fetch("/expedicao/api/precificador/custo?codigo=" + encodeURIComponent(sku) + "&fresh=" + Date.now(), {
             method: "GET",
             credentials: "same-origin",
             headers: { "Accept": "application/json" },
@@ -1588,15 +1588,44 @@ var state = {
             el.produto.value = descricaoApi;
           }
 
-          var curvaApi = String(data.curva_abc || "").trim().toUpperCase();
-          if (!["A","B","C","D"].includes(curvaApi)) {
-            var curvaComposta = String(data.curva || "").trim().toUpperCase();
-            var curvaMatch = curvaComposta.match(/^([ABCD])/);
-            curvaApi = curvaMatch ? curvaMatch[1] : "";
+          // V16.59: aceita todos os formatos de curva que já apareceram
+          // no Apollo/CRM e também objetos/valores compostos como "C2".
+          function curveLetter(value) {
+            if (value === null || value === undefined) return "";
+            if (typeof value === "object") {
+              var candidates = [
+                value.curva_abc, value.curvaABC, value.curva,
+                value.abc, value.classificacao_abc, value.classificacao
+              ];
+              for (var ci=0; ci<candidates.length; ci++) {
+                var found = curveLetter(candidates[ci]);
+                if (found) return found;
+              }
+              return "";
+            }
+            var txt = String(value).trim().toUpperCase();
+            var match = txt.match(/(?:^|[^A-Z])([ABCD])(?:\d|$|[^A-Z])/);
+            if (!match) match = txt.match(/^([ABCD])/);
+            return match ? match[1] : "";
+          }
+
+          var curvaApi =
+            curveLetter(data.curva_abc) ||
+            curveLetter(data.curvaABC) ||
+            curveLetter(data.abc) ||
+            curveLetter(data.classificacao_abc) ||
+            curveLetter(data.curva_item) ||
+            curveLetter(data.classificacao) ||
+            curveLetter(data.curva);
+
+          // Se a consulta de custo não trouxer curva, não apaga a curva já
+          // cadastrada do SKU. Usa a cadastrada e reaplica sua margem.
+          if (!curvaApi && sameSavedSku) {
+            curvaApi = curveLetter(savedProduct.curva);
           }
 
           if (["A","B","C","D"].includes(curvaApi)) {
-            el.curva.value = curvaApi;
+            setValue("curva", curvaApi);
             applyCurveMargin(curvaApi);
           }
 
@@ -2066,10 +2095,13 @@ var state = {
       }
 
       function fillForm(product) {
-        var markets = product.marketplaces || defaultMarketplaces();
-        var ml = markets.ml || defaultMarketplaces().ml;
-        var shopee = markets.shopee || defaultMarketplaces().shopee;
-        var magalu = markets.magalu || defaultMarketplaces().magalu;
+        var defaults = defaultMarketplaces();
+        var markets = product.marketplaces || {};
+        // Mescla defaults campo a campo: um objeto ML existente porém incompleto
+        // não pode apagar comissão/margem padrão.
+        var ml = Object.assign({}, defaults.ml, markets.ml || {});
+        var shopee = Object.assign({}, defaults.shopee, markets.shopee || {});
+        var magalu = Object.assign({}, defaults.magalu, markets.magalu || {});
         setValue("sku", product.sku);
         setValue("produto", product.produto);
         state.branchCosts = normalizeBranchCosts(product.custosFiliais || []);
@@ -2096,6 +2128,16 @@ var state = {
         setValue("magalu-commission", percentForInput(magalu.comissao));
         setValue("magalu-shipping", Core.roundMoney(magalu.frete));
         setValue("magalu-margin", percentForInput(magalu.margem));
+
+        // V16.59: a Curva é a fonte oficial da margem desejada.
+        // Produtos antigos podem ter marketplace.margem vazio/zero; nesse caso
+        // não deixar os campos em branco após selecionar o produto.
+        var curvaForm = String(product.curva || "").trim().toUpperCase();
+        if (["A","B","C","D"].includes(curvaForm)) {
+          setValue("curva", curvaForm);
+          applyCurveMargin(curvaForm);
+        }
+
         setKitMode(!!product.isKit, true);
         state.dirty = false;
         if (!product.isKit) recalculate();

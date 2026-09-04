@@ -1,0 +1,18 @@
+NOROMAK WEB V16.59 — CURVA E MARGENS AUTOMÁTICAS
+
+Correções:
+- Curva do produto volta a ser aplicada automaticamente ao selecionar.
+- Curva A/B = 20%, C = 17%, D = 15%.
+- Produtos antigos com marketplace incompleto não deixam comissão/margem em branco.
+- Parser de curva aceita curva_abc, curvaABC, abc, classificacao_abc,
+  classificacao, curva_item e curva composta (ex.: C2).
+- Se Apollo não devolver curva naquela consulta, mantém a curva cadastrada do SKU
+  e reaplica automaticamente a margem correspondente.
+- A consulta de custo usa parâmetro fresh para evitar resposta HTTP reaproveitada.
+- Custo e curva continuam atualizando sem clicar no botão manual.
+
+PUBLICAÇÃO:
+git status
+git add -A
+git commit -m "V16.59 - corrige curva e margens automaticas no Precificador"
+./publicar.sh
