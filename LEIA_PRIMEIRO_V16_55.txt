@@ -1,0 +1,16 @@
+NOROMAK WEB V16.55 — CORREÇÃO TAXA FIXA / FRETE ML
+
+- Corrige o erro da V16.54.
+- Mercado Livre volta a ter somente o campo Taxa fixa / Frete (R$).
+- O campo separado Frete (R$) foi removido.
+- O cálculo usa taxaFixa uma única vez e frete=0.
+- Se a V16.54 tiver salvado o valor em frete com taxaFixa vazia, o sistema recupera esse valor automaticamente para taxaFixa.
+- Se taxaFixa já estava preenchida, ela é preservada.
+- Comissão, margem, custo, curva e demais informações são preservadas.
+- O frete separado é zerado para impedir duplicidade também na extensão.
+
+PUBLICAÇÃO:
+git status
+git add -A
+git commit -m "V16.55 - corrige taxa fixa ML e remove duplicidade de frete"
+./publicar.sh

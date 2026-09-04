@@ -788,7 +788,7 @@
 
       <section class="panel">
         <div class="section-heading">
-          <div><div class="eyebrow">Cálculo automático</div><h2>Marketplaces</h2><p>Os resultados consideram custo, imposto, comissão, frete e margem desejada.</p></div>
+          <div><div class="eyebrow">Cálculo automático</div><h2>Marketplaces</h2><p>Os resultados consideram custo, imposto, comissão, taxa fixa/frete e margem desejada.</p></div>
         </div>
 
         <div class="market-grid">
@@ -796,9 +796,8 @@
             <div class="market-head ml"><strong>Mercado Livre</strong><span>Configuração por produto</span></div>
             <div class="market-body">
               <div class="mini-grid">
-                
+                <div class="field"><label for="ml-fixed">Taxa fixa / Frete (R$)</label><input id="ml-fixed" data-field="taxaFixa" type="number" min="0" step="0.01"></div>
                 <div class="field"><label for="ml-commission">Comissão (%)</label><input id="ml-commission" data-field="comissao" type="number" min="0" max="99" step="0.01"></div>
-                <div class="field"><label for="ml-shipping">Frete (R$)</label><input id="ml-shipping" data-field="frete" type="number" min="0" step="0.01"></div>
                 <div class="field"><label for="ml-margin">Margem desejada (%)</label><input id="ml-margin" data-field="margem" type="number" min="0" max="99" step="0.01"></div>
               </div>
               <div class="results" id="ml-results"></div>
@@ -1042,10 +1041,39 @@
       }
 
       var initialProducts = stored && Array.isArray(stored.products) ? stored.products : seedProducts;
+      var mlMigrationChanged = false;
       initialProducts = initialProducts.map(function (product, index) {
         if (!product._id) product._id = "imported-" + index + "-" + String(product.sku || "sem-sku");
+
+        product.marketplaces = product.marketplaces || {};
+        product.marketplaces.ml = product.marketplaces.ml || {};
+        var mlCfg = product.marketplaces.ml;
+        var fixedValue = Number(mlCfg.taxaFixa || 0);
+        var freightValue = Number(mlCfg.frete || 0);
+
+        // Se a V16.54 gravou o valor no campo frete, recupera para taxaFixa.
+        if (!(fixedValue > 0) && freightValue > 0) {
+          mlCfg.taxaFixa = Core.roundMoney(freightValue);
+          mlMigrationChanged = true;
+        }
+
+        // Remove duplicidade: ML não guarda frete separado.
+        if (Number(mlCfg.frete || 0) !== 0) {
+          mlCfg.frete = 0;
+          mlMigrationChanged = true;
+        }
+
         return product;
       });
+
+      if (mlMigrationChanged) {
+        try {
+          stored = stored || {};
+          stored.products = initialProducts;
+          if (window.appStorage) appStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
+          localStorage.setItem(LEGACY_STORAGE_KEY, JSON.stringify(stored));
+        } catch (_) {}
+      }
       var initialSelection = stored && stored.selectedId ? String(stored.selectedId) : null;
       if (!initialSelection && stored && stored.selectedSku) {
         var legacyMatch = initialProducts.find(function (product) { return String(product.sku) === String(stored.selectedSku); });
@@ -2024,8 +2052,12 @@ var state = {
         setValue("imposto", percentForInput(product.imposto));
         setValue("curva", product.curva);
         setValue("ml-fixed", Core.roundMoney(ml.taxaFixa));
+        // V16.55: um único valor para Taxa fixa / Frete.
+        var mlFixedValue = finiteNumber(ml.taxaFixa,0);
+        var mlLegacyFreight = finiteNumber(ml.frete,0);
+        if(!(mlFixedValue>0) && mlLegacyFreight>0) mlFixedValue=mlLegacyFreight;
+        setValue("ml-fixed", Core.roundMoney(mlFixedValue));
         setValue("ml-commission", percentForInput(ml.comissao));
-        setValue("ml-shipping", Core.roundMoney(ml.frete));
         setValue("ml-margin", percentForInput(ml.margem));
         setValue("shopee-shipping", Core.roundMoney(shopee.frete));
         setValue("shopee-margin", percentForInput(shopee.margem));
@@ -2062,7 +2094,7 @@ var state = {
           isKit: isKit,
           kitItems: kitItems,
           marketplaces: {
-            ml: { taxaFixa: num("ml-fixed"), comissao: pctInput("ml-commission"), frete: num("ml-shipping"), margem: pctInput("ml-margin") },
+            ml: { taxaFixa: num("ml-fixed"), comissao: pctInput("ml-commission"), frete: 0, margem: pctInput("ml-margin") },
             shopee: { frete: num("shopee-shipping"), margem: pctInput("shopee-margin") },
             magalu: { taxaFixa: num("magalu-fixed"), comissao: pctInput("magalu-commission"), frete: num("magalu-shipping"), margem: pctInput("magalu-margin") }
           }
@@ -2090,7 +2122,7 @@ var state = {
           return {ml:err,shopee:err,magalu:err};
         }
         var common = { cost: product.custo, tax: product.imposto };
-        var ml = Core.calculateMarketplace({ cost: common.cost, tax: common.tax, freight: product.marketplaces.ml.frete, margin: normalizePercentFraction(product.marketplaces.ml.margem), commission: product.marketplaces.ml.comissao, fixed: product.marketplaces.ml.taxaFixa });
+        var ml = Core.calculateMarketplace({ cost: common.cost, tax: common.tax, freight: 0, margin: normalizePercentFraction(product.marketplaces.ml.margem), commission: product.marketplaces.ml.comissao, fixed: product.marketplaces.ml.taxaFixa });
         var shopee = Core.calculateShopee({ cost: common.cost, tax: common.tax, freight: product.marketplaces.shopee.frete, margin: normalizePercentFraction(product.marketplaces.shopee.margem) });
         var magalu = Core.calculateMarketplace({ cost: common.cost, tax: common.tax, freight: product.marketplaces.magalu.frete, margin: normalizePercentFraction(product.marketplaces.magalu.margem), commission: product.marketplaces.magalu.comissao, fixed: product.marketplaces.magalu.taxaFixa });
         return { ml: ml, shopee: shopee, magalu: magalu };
