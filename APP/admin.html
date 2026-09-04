@@ -2947,12 +2947,15 @@ function carregarBancoInternoAdmin(){
     kitsBancoAdmin=JSON.parse(appStorage.getItem("conf_kits")||"[]");
     if(!Array.isArray(kitsBancoAdmin)) kitsBancoAdmin=[];
     usuariosEditorAdmin=JSON.parse(appStorage.getItem("conf_usuarios")||"[]");
+
+    // V16.46: abrir/atualizar o Admin é SOMENTE LEITURA para as filas.
+    // A normalização abaixo serve apenas para exibição no editor e NÃO deve
+    // sobrescrever conf_pedidos/conf_pedidos_rascunhos automaticamente.
     const validosOriginais=JSON.parse(appStorage.getItem("conf_pedidos")||"[]");
     const rascunhosOriginais=JSON.parse(appStorage.getItem("conf_pedidos_rascunhos")||"[]");
     const validos=normalizarPendentesFiscalKitsAdmin(validosOriginais);
     const rascunhos=normalizarPendentesFiscalKitsAdmin(rascunhosOriginais);
-    if(JSON.stringify(validos)!==JSON.stringify(validosOriginais))appStorage.setItem("conf_pedidos",JSON.stringify(validos));
-    if(JSON.stringify(rascunhos)!==JSON.stringify(rascunhosOriginais))appStorage.setItem("conf_pedidos_rascunhos",JSON.stringify(rascunhos));
+
     pedidosEditorAdmin=[...validos,...rascunhos].map((x,i)=>{
       const marketplace=x.Marketplace||marketplaceExibicaoBanco(x.Pedido);
       return {...x,Pedido:pedidoArmazenamentoBanco(x.Pedido,marketplace),Marketplace:marketplaceExibicaoBanco(x.Pedido),"Data do Pedido":normalizarDataPedidoBanco(x["Data do Pedido"]||x.Data||x.DataPedido,true),Kit:normalizarBuscaBanco(x.Kit)==="sim"?"SIM":(x["Nome do Kit"]?"SIM":""),__uidLinha:x.__uidLinha||x.__uidPedido||uidBanco("PED")};
@@ -2961,9 +2964,12 @@ function carregarBancoInternoAdmin(){
     pedidosEditorAdmin.forEach(item=>eanSalvoPorUid.set(item.__uidLinha,campoBanco(item,"Código de Barras")));
     dadosPedidos=pedidosEditorAdmin.filter(linhaPedidoValidaBanco).map(x=>({...x,__rascunho:false}));
     usuariosCadastrados=usuariosEditorAdmin;
-    ultimaAssinaturaPedidosAdmin=appStorage.getItem("conf_pedidos")||"[]";
+
+    // A assinatura deve refletir exatamente o conteúdo persistido no servidor,
+    // e não a versão normalizada apenas em memória.
+    ultimaAssinaturaPedidosAdmin=JSON.stringify(validosOriginais);
     atualizarTudoAdmin();
-    setStatusBanco("● Banco salvo", "ok");
+    setStatusBanco("● Banco carregado", "ok");
   }catch(e){console.error(e);setStatusBanco("Erro ao carregar banco", "erro");}
 }
 
@@ -3389,6 +3395,9 @@ function sincronizarCamposPedidosVisiveisAdmin(){
   });
 }
 function salvarPedidosAdmin(mostrarMensagem=false){
+  // V16.46: gravação permitida somente quando esta rotina for acionada
+  // explicitamente por edição/salvamento/importação do Admin.
+
   timerSalvarPedidosAdmin=null;
   try{
     sincronizarCamposPedidosVisiveisAdmin();
