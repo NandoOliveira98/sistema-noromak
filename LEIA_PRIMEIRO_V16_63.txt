@@ -1,0 +1,24 @@
+NOROMAK WEB V16.63 — APOLLO SEM RETORNO DE DADOS ANTIGOS
+
+Causa corrigida:
+- A consulta automática podia até executar, mas logo depois um snapshot antigo
+  do banco online reaplicava custo/curva/margens anteriores no formulário.
+- Isso fazia parecer que o Apollo não havia sido chamado.
+
+Correção:
+- Durante a consulta e por 8 segundos após o persist, snapshots remotos do mesmo
+  SKU são ignorados.
+- A seleção consulta o Apollo imediatamente, sem timeout.
+- Custo, custos por filial, descrição, curva e margens são aplicados no formulário.
+- O objeto atualizado é salvo no banco.
+- Logo depois, o formulário é preenchido novamente a partir do MESMO objeto
+  recém salvo, sem depender do eco do storage.
+- Margens por curva: A/B 20%, C 17%, D 15%.
+
+A tela mostra "Cadastro · V16.63".
+
+PUBLICAÇÃO:
+git status
+git add -A
+git commit -m "V16.63 - impede retorno de dados antigos apos consulta Apollo"
+./publicar.sh

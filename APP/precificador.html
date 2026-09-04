@@ -706,7 +706,7 @@
 
       <section class="panel">
         <div class="section-heading">
-          <div><div class="eyebrow">Cadastro · V16.62</div><h2>Dados do produto</h2><p>Altere os campos e veja os preços recalculados imediatamente.</p></div>
+          <div><div class="eyebrow">Cadastro · V16.63</div><h2>Dados do produto</h2><p>Altere os campos e veja os preços recalculados imediatamente.</p></div>
           <button class="btn btn-secondary" id="new-btn" type="button">+ Novo produto</button>
         </div>
         <div class="product-data-grid">
@@ -1272,9 +1272,16 @@ var state = {
       }
 
       function applyRemoteState(raw) {
-        // V16.62: não deixa sincronização remota trocar o produto/valores
-        // enquanto uma consulta Apollo do SKU selecionado está em andamento.
+        // V16.63: não deixa sincronização remota trocar o produto/valores
+        // durante a consulta nem nos segundos seguintes ao persist do Apollo.
         if (costLookupInFlight) return;
+
+        var currentSkuNow = String(el && el.sku ? el.sku.value : "").trim();
+        if (Date.now() < suppressRemoteStateUntil &&
+            suppressRemoteStateSku &&
+            currentSkuNow === suppressRemoteStateSku) {
+          return;
+        }
 
         var incoming = null;
         try { incoming = JSON.parse(String(raw || "")); } catch (_) { return; }
@@ -1387,6 +1394,10 @@ var state = {
       var costLookupRequestedSku = "";
       var costLookupGeneration = 0;
 
+      // V16.63: janela de proteção contra um snapshot remoto antigo que pode
+      // chegar logo depois da seleção/consulta e repor custo/curva anteriores.
+      var suppressRemoteStateUntil = 0;
+      var suppressRemoteStateSku = "";
 
       var BRANCH_NAMES = {1:"Araçatuba",2:"Ribeirão",3:"Bauru"};
 
@@ -1586,7 +1597,7 @@ var state = {
           renderBranchCosts();
 
           if (descricaoApi) {
-            el.produto.value = descricaoApi;
+            setValue("produto", descricaoApi);
           }
 
           // V16.59: aceita todos os formatos de curva que já apareceram
@@ -1686,7 +1697,20 @@ var state = {
             var kitSync = refreshAllKitCosts();
             state.kitCycleIds = kitSync.cycleIds;
             state.dirty = false;
+
+            // Bloqueia retorno antigo antes de publicar o estado novo.
+            suppressRemoteStateSku = sku;
+            suppressRemoteStateUntil = Date.now() + 8000;
             persist();
+
+            // Reaplica localmente o MESMO objeto recém salvo. Assim o formulário
+            // não depende de um eco do storage para ficar correto.
+            var justSaved = currentProduct();
+            if (justSaved && String(justSaved.sku || "").trim() === sku) {
+              fillForm(clone(justSaved));
+              state.dirty = false;
+            }
+
             setAutoSaveStatus("✓ Produto atualizado automaticamente pelo Apollo", "ok");
           }
 
@@ -1697,7 +1721,7 @@ var state = {
           if (Number.isFinite(custo)) {
             setCostApiStatus(selectedName + ": " + money(custo) + unidade + extra, "ok");
             setAutoSaveStatus("✓ Custo e curva atualizados automaticamente", "ok");
-            showToast("Custo e curva atualizados automaticamente: " + sku);
+            showToast("Apollo aplicado automaticamente ao SKU " + sku + ".");
             return true;
           }
 
@@ -2256,39 +2280,48 @@ var state = {
         el.search.value = "";
         closeProductSearch();
 
-        // Mostra imediatamente todos os dados salvos DESTE produto.
         fillForm(clone(product));
         if (el["cost-last-change-note"]) el["cost-last-change-note"].textContent = "";
         renderProductList();
 
         if (!product.isKit && selectedSku) {
-          // Trava lógica contra qualquer repopulação remota até terminar.
           state.dirty = true;
+          suppressRemoteStateSku = selectedSku;
+          suppressRemoteStateUntil = Date.now() + 8000;
 
           lastCostLookupSku = "";
           lastCostLookupAt = 0;
           pendingCostLookupSku = "";
           costLookupRequestedSku = selectedSku;
 
-          // Limpa apenas dados que vêm do Apollo, para não deixar informação
-          // do produto anterior visível durante a consulta.
           state.branchCosts = [];
           state.branchCostBlocked = true;
           state.baseCost = 0;
           setValue("custo", "");
           renderBranchCosts();
-          setCostApiStatus("Consultando Apollo para " + selectedSku + "...", "info");
-          setAutoSaveStatus("Atualizando custo e curva pelo Apollo...", "info");
           recalculate();
 
-          // Sem setTimeout: selecionou -> consulta -> aplica -> salva.
+          setCostApiStatus("Consultando Apollo para " + selectedSku + "...", "info");
+          setAutoSaveStatus("Atualizando automaticamente pelo Apollo...", "info");
+
+          // Executa imediatamente a MESMA consulta forçada do botão ↻.
           var ok = await lookupAverageCostBySku(true, selectedSku);
 
-          if (!ok && String(el.sku.value || "").trim() === selectedSku) {
+          if (String(el.sku.value || "").trim() !== selectedSku) return;
+
+          if (ok) {
+            // Protege contra snapshot remoto antigo por mais alguns segundos.
+            suppressRemoteStateUntil = Date.now() + 8000;
             state.dirty = false;
-            setAutoSaveStatus("Falha ao atualizar pelo Apollo", "error");
+            setAutoSaveStatus("✓ Produto atualizado automaticamente pelo Apollo", "ok");
+          } else {
+            suppressRemoteStateUntil = Date.now() + 2500;
+            state.dirty = false;
+            setAutoSaveStatus("Falha ao atualizar automaticamente pelo Apollo", "error");
           }
         } else {
+          suppressRemoteStateSku = "";
+          suppressRemoteStateUntil = 0;
           state.dirty = false;
           persist();
           setAutoSaveStatus("Salvamento automático ativo", "info");
@@ -2296,6 +2329,8 @@ var state = {
       }
 
       function newProduct() {
+        suppressRemoteStateSku = "";
+        suppressRemoteStateUntil = 0;
         try { if (costLookupAbortController) costLookupAbortController.abort(); } catch (_) {}
         costLookupAbortController = null;
         state.selectedId = null;
