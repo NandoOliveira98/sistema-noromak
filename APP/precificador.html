@@ -503,6 +503,29 @@
       .ml-link-mini-btn{padding:5px 7px!important;min-height:28px!important;font-size:.65rem!important}
       .ml-link-sync-status{font-size:.64rem;color:#66798e;font-weight:700}
       @media(max-width:900px){.ml-link-grid{grid-template-columns:1fr}.ml-link-card+.ml-link-card{border-left:0;border-top:1px solid #e5edf5}}
+
+      /* V16.67 - cadastro/anúncios à esquerda e cálculo automático à direita */
+      .prec-two-col{display:grid;grid-template-columns:minmax(0,1.48fr) minmax(430px,.92fr);gap:14px;align-items:start}
+      .prec-left-col,.prec-right-col{display:grid;gap:14px;min-width:0}
+      .prec-two-col .prec-product-panel,.prec-two-col .prec-calc-panel,.prec-two-col .prec-compare-panel,.prec-two-col .ml-link-section{margin:0}
+      .prec-right-col{position:sticky;top:10px}
+      .prec-right-col .market-grid{grid-template-columns:1fr}
+      .prec-right-col .market-card{min-width:0}
+      .prec-right-col .mini-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+      .prec-right-col .market-card[data-market="shopee"] .mini-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+      .prec-right-col .market-card[data-market="magalu"] .mini-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+      .prec-right-col .results{grid-template-columns:repeat(2,minmax(0,1fr))}
+      .prec-right-col .comparison{overflow:auto}
+      .prec-left-col .ml-link-section{margin-top:0}
+      @media(max-width:1180px){
+        .prec-two-col{grid-template-columns:1fr}
+        .prec-right-col{position:static}
+        .prec-right-col .market-grid{grid-template-columns:repeat(3,minmax(0,1fr))}
+      }
+      @media(max-width:900px){
+        .prec-right-col .market-grid{grid-template-columns:1fr}
+        .prec-right-col .mini-grid,.prec-right-col .market-card[data-market="shopee"] .mini-grid,.prec-right-col .market-card[data-market="magalu"] .mini-grid{grid-template-columns:1fr 1fr}
+      }
 </style>
 </head>
 <body>
@@ -730,9 +753,11 @@
         </div>
       </section>
 
-      <section class="panel">
+            <div class="prec-two-col">
+        <div class="prec-left-col">
+<section class="panel prec-product-panel">
         <div class="section-heading">
-          <div><div class="eyebrow">Cadastro · V16.66</div><h2>Dados do produto</h2><p>Altere os campos e veja os preços recalculados imediatamente.</p></div>
+          <div><div class="eyebrow">Cadastro · V16.67</div><h2>Dados do produto</h2><p>Altere os campos e veja os preços recalculados imediatamente.</p></div>
           <button class="btn btn-secondary" id="new-btn" type="button">+ Novo produto</button>
         </div>
         <div class="product-data-grid">
@@ -812,8 +837,7 @@
         </div>
       </section>
 
-
-      <section class="ml-link-section" id="ml-link-section">
+<section class="ml-link-section" id="ml-link-section">
         <div class="ml-link-head">
           <div>
             <h3>Mercado Livre · anúncios e promoções</h3>
@@ -847,8 +871,9 @@
           </div>
         </div>
       </section>
-
-      <section class="panel">
+        </div>
+        <div class="prec-right-col">
+<section class="panel prec-calc-panel">
         <div class="section-heading">
           <div><div class="eyebrow">Cálculo automático</div><h2>Marketplaces</h2><p>Os resultados consideram custo, imposto, comissão, taxa fixa/frete e margem desejada.</p></div>
         </div>
@@ -893,10 +918,12 @@
         </div>
       </section>
 
-      <section class="panel">
+<section class="panel prec-compare-panel">
         <div class="section-heading"><div><div class="eyebrow">Decisão</div><h2>Comparativo</h2><p>O destaque indica o menor preço ideal calculado.</p></div></div>
         <div class="comparison"><table><thead><tr><th>Marketplace</th><th>Preço mínimo</th><th>Preço ideal</th><th>Lucro líquido</th><th>Margem real</th></tr></thead><tbody id="comparison-body"></tbody></table></div>
       </section>
+        </div>
+      </div>
 
     </div>
   </main>
@@ -2977,6 +3004,12 @@ var state = {
       renderCostAlerts();
       updateCostAlertBadge();
       loadMlSkuMlbLinks();
+      if (el["ml-link-sync-status"]) {
+        var totalSeedLinks = Object.keys(mlSkuMlbLinks || {}).reduce(function(total,sku){
+          return total + getLinkedMlbsForSku(sku).length;
+        },0);
+        if (totalSeedLinks) el["ml-link-sync-status"].textContent = totalSeedLinks + " vínculos carregados do banco";
+      }
       renderProductList();
       setTimeout(function(){
         var age = Date.now() - mlLinksLastSyncAt();

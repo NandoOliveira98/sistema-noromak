@@ -1,0 +1,32 @@
+NOROMAK WEB V16.67 — LAYOUT LADO A LADO + RELAÇÃO MLB/SKU IMPORTADA
+
+LAYOUT
+- Dados do produto + anúncios/promoções ficam na coluna esquerda.
+- Cálculo automático + comparativo ficam na coluna direita.
+- Em telas menores o layout volta automaticamente para uma coluna.
+- O cálculo fica visível enquanto o operador trabalha no cadastro.
+
+RELAÇÃO SKU ↔ MLB
+- Planilha importada: codigos_anuncios_e_skus (1).xlsx
+- Linhas lidas: 1602
+- Linhas ignoradas/vazias: 2
+- SKUs normalizados: 1097
+- Vínculos SKU↔MLB: 1599
+- Prefixos numéricos de SKU foram normalizados da mesma forma usada pelo
+  Mercado Livre no sistema. Ex.: 105341-816.0004-0 -> 816.0004-0.
+- Um SKU pode possuir vários MLBs.
+
+BANCO
+- Arquivo seed incluído: DADOS/ml_sku_mlb_links_seed.json
+- Ao iniciar o servidor, ensure_storage_defaults() chama automaticamente
+  seed_ml_sku_mlb_links_from_file().
+- A migração MESCLA os vínculos no storage ml_sku_mlb_links_v1.
+- Vínculos manuais existentes são preservados.
+- O seed é idempotente: reiniciar novamente não duplica MLBs.
+- Portanto, ao publicar/reiniciar a V16.67, esta relação é subida para o banco.
+
+PUBLICAÇÃO
+git status
+git add -A
+git commit -m "V16.67 - layout lado a lado e importa relacao SKU MLB no banco"
+./publicar.sh

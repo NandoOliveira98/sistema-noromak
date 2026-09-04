@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "16.52"
+APP_VERSION = "16.67"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -1253,6 +1253,96 @@ def migrate_legacy_if_empty() -> None:
             raise
 
 
+
+ML_SKU_MLB_LINKS_STORAGE_KEY = "ml_sku_mlb_links_v1"
+ML_SKU_MLB_SEED_PATH = ROOT_DIR / "DADOS" / "ml_sku_mlb_links_seed.json"
+
+
+def seed_ml_sku_mlb_links_from_file() -> dict[str, int]:
+    """Mescla a relação SKU↔MLB empacotada na V16.67 ao banco persistente.
+
+    Preserva vínculos existentes/manuais e adiciona somente MLBs ausentes.
+    """
+    result = {"seed_skus": 0, "seed_links": 0, "added_links": 0}
+    if not ML_SKU_MLB_SEED_PATH.exists():
+        return result
+
+    try:
+        seed = json.loads(ML_SKU_MLB_SEED_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return result
+    if not isinstance(seed, dict):
+        return result
+
+    result["seed_skus"] = len(seed)
+    result["seed_links"] = sum(len(v) for v in seed.values() if isinstance(v, list))
+
+    with DB_LOCK:
+        current_raw, version, _ = get_storage(ML_SKU_MLB_LINKS_STORAGE_KEY)
+        try:
+            current = json.loads(current_raw or "{}")
+        except Exception:
+            current = {}
+        if not isinstance(current, dict):
+            current = {}
+
+        changed = False
+        for raw_sku, seed_rows in seed.items():
+            sku = str(raw_sku or "").strip().upper()
+            if not sku or not isinstance(seed_rows, list):
+                continue
+
+            existing_rows = current.get(sku)
+            if not isinstance(existing_rows, list):
+                existing_rows = []
+
+            normalized_existing: list[dict[str, Any]] = []
+            by_mlb: dict[str, dict[str, Any]] = {}
+            for row in existing_rows:
+                obj = dict(row) if isinstance(row, dict) else {"mlb": row}
+                digits = re.sub(r"\D+", "", str(obj.get("mlb") or ""))
+                if not digits:
+                    continue
+                obj["mlb"] = "MLB" + digits
+                if obj["mlb"] not in by_mlb:
+                    by_mlb[obj["mlb"]] = obj
+                    normalized_existing.append(obj)
+
+            for row in seed_rows:
+                obj = dict(row) if isinstance(row, dict) else {"mlb": row}
+                digits = re.sub(r"\D+", "", str(obj.get("mlb") or ""))
+                if not digits:
+                    continue
+                mlb = "MLB" + digits
+                if mlb in by_mlb:
+                    continue
+                obj["mlb"] = mlb
+                obj.setdefault("source", "planilha_importada")
+                obj.setdefault("importedAt", now_iso())
+                normalized_existing.append(obj)
+                by_mlb[mlb] = obj
+                result["added_links"] += 1
+                changed = True
+
+            if current.get(sku) != normalized_existing:
+                current[sku] = normalized_existing
+                changed = True
+
+        if changed:
+            new_value = json_dumps(current)
+            DB.execute(
+                """INSERT INTO storage(key,value,version,updated_at) VALUES(?,?,?,?)
+                   ON CONFLICT(key) DO UPDATE SET
+                     value=excluded.value,
+                     version=excluded.version,
+                     updated_at=excluded.updated_at""",
+                (ML_SKU_MLB_LINKS_STORAGE_KEY, new_value, int(version or 0) + 1, now_iso()),
+            )
+            DB.commit()
+
+    return result
+
+
 def ensure_storage_defaults() -> None:
     defaults = {
         "conf_pedidos": "[]",
@@ -1261,6 +1351,7 @@ def ensure_storage_defaults() -> None:
         "conf_logs": "[]",
         "conf_historico_conferencias_v2": "[]",
         "precificador_online_v1": "",
+        "ml_sku_mlb_links_v1": "{}",
     }
     with DB_LOCK:
         ts = now_iso()
@@ -1270,6 +1361,8 @@ def ensure_storage_defaults() -> None:
                 (key, value, ts),
             )
         DB.commit()
+    # V16.67: sobe/mescla automaticamente a planilha SKU↔MLB no banco.
+    seed_ml_sku_mlb_links_from_file()
 
 
 def password_digest(password: str, salt: bytes | None = None, iterations: int = PASSWORD_ITERATIONS) -> tuple[str, str, int]:
