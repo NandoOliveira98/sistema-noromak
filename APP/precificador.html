@@ -477,6 +477,33 @@
 .promo-search-group{display:grid;grid-template-columns:minmax(180px,1fr) auto;gap:6px;align-items:center}
 .promo-search-group input{width:100%;height:38px;box-sizing:border-box}
 .promo-search-group .btn{height:38px;white-space:nowrap}
+
+      /* V16.65 - conexão Produto <-> MLB <-> Promoções */
+      .ml-link-section{margin-top:16px;border:1px solid #d9e5f2;border-radius:16px;background:#fff;overflow:hidden}
+      .ml-link-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid #e7eef6;background:#f8fbff}
+      .ml-link-head h3{margin:0;font-size:1rem;color:#0a356a}
+      .ml-link-head p{margin:4px 0 0;color:#65758a;font-size:.78rem}
+      .ml-link-actions{display:flex;gap:8px;flex-wrap:wrap}
+      .ml-link-grid{display:grid;grid-template-columns:1.5fr 1fr;gap:14px;padding:14px}
+      .ml-link-card{border:1px solid #dbe6f1;border-radius:14px;overflow:hidden;background:#fff}
+      .ml-link-card-head{padding:10px 12px;background:#f7faff;border-bottom:1px solid #e7eef6;display:flex;justify-content:space-between;align-items:center}
+      .ml-link-card-head strong{color:#123f75}
+      .ml-link-table{width:100%;border-collapse:collapse;font-size:.78rem}
+      .ml-link-table th,.ml-link-table td{padding:9px 10px;border-bottom:1px solid #edf2f7;text-align:left;vertical-align:middle}
+      .ml-link-table th{font-size:.68rem;text-transform:uppercase;letter-spacing:.04em;color:#607086;background:#fbfdff}
+      .ml-link-table tr:last-child td{border-bottom:0}
+      .ml-link-badge{display:inline-flex;align-items:center;padding:3px 7px;border-radius:999px;font-weight:800;font-size:.67rem}
+      .ml-link-badge.ok{background:#e7f7ec;color:#137333}
+      .ml-link-badge.warn{background:#fff4d6;color:#9a6700}
+      .ml-link-badge.neutral{background:#eef3f8;color:#4b5f73}
+      .ml-link-empty{padding:18px;color:#708090;text-align:center;font-size:.78rem}
+      .ml-link-inline-form{display:flex;gap:8px;padding:10px;border-top:1px solid #edf2f7;background:#fbfdff}
+      .ml-link-inline-form input{flex:1;min-width:0}
+      .ml-link-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:10px}
+      .ml-link-stat{border:1px solid #e1e9f2;border-radius:10px;padding:10px;background:#fbfdff}
+      .ml-link-stat span{display:block;color:#6c7b8d;font-size:.68rem}
+      .ml-link-stat strong{display:block;margin-top:3px;color:#123f75}
+      @media(max-width:900px){.ml-link-grid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -706,7 +733,7 @@
 
       <section class="panel">
         <div class="section-heading">
-          <div><div class="eyebrow">Cadastro · V16.64</div><h2>Dados do produto</h2><p>Altere os campos e veja os preços recalculados imediatamente.</p></div>
+          <div><div class="eyebrow">Cadastro · V16.65</div><h2>Dados do produto</h2><p>Altere os campos e veja os preços recalculados imediatamente.</p></div>
           <button class="btn btn-secondary" id="new-btn" type="button">+ Novo produto</button>
         </div>
         <div class="product-data-grid">
@@ -783,6 +810,41 @@
           <button class="btn btn-primary" id="save-btn" type="button">Salvar agora</button>
           <button class="btn btn-danger" id="delete-btn" type="button">Excluir</button>
           <span id="autosave-status" style="margin-left:auto;color:#64748b;font-size:.7rem;font-weight:800">Salvamento automático ativo</span>
+        </div>
+      </section>
+
+
+      <section class="ml-link-section" id="ml-link-section">
+        <div class="ml-link-head">
+          <div>
+            <h3>Anúncios Mercado Livre vinculados</h3>
+            <p>Conecta o SKU do Precificador aos MLBs e reaproveita esses vínculos na tela de Promoções.</p>
+          </div>
+          <div class="ml-link-actions">
+            <button class="btn btn-secondary" id="ml-link-refresh" type="button">↻ Atualizar vínculos</button>
+          </div>
+        </div>
+
+        <div class="ml-link-grid">
+          <div class="ml-link-card">
+            <div class="ml-link-card-head">
+              <strong>Anúncios do SKU</strong>
+              <span id="ml-link-count" class="ml-link-badge neutral">0 anúncios</span>
+            </div>
+            <div id="ml-link-list" class="ml-link-empty">Selecione um produto para ver os anúncios vinculados.</div>
+            <div class="ml-link-inline-form">
+              <input id="ml-link-input" type="text" placeholder="Adicionar MLB manualmente (ex.: MLB3722039959)">
+              <button class="btn btn-secondary" id="ml-link-add" type="button">+ Vincular</button>
+            </div>
+          </div>
+
+          <div class="ml-link-card">
+            <div class="ml-link-card-head">
+              <strong>Promoções deste produto</strong>
+              <span id="ml-promo-count" class="ml-link-badge neutral">0 promoções</span>
+            </div>
+            <div id="ml-promo-summary" class="ml-link-empty">Nenhum anúncio vinculado.</div>
+          </div>
         </div>
       </section>
 
@@ -1204,7 +1266,7 @@ var state = {
         "cost-alerts-btn", "cost-alert-badge", "cost-alerts-back-btn", "cost-alerts-read-all-btn", "cost-alerts-clear-btn",
         "cost-alerts-list", "cost-alerts-summary", "cost-last-change-note", "autosave-status",
         "bulk-apollo-btn", "bulk-apollo-progress", "bulk-apollo-title", "bulk-apollo-detail",
-        "bulk-apollo-count", "bulk-apollo-bar"].forEach(function (id) {
+        "bulk-apollo-count", "bulk-apollo-bar", "ml-link-list", "ml-link-count", "ml-link-input", "ml-link-add", "ml-link-refresh", "ml-promo-summary", "ml-promo-count"].forEach(function (id) {
         el[id] = document.getElementById(id);
       });
 
@@ -1322,6 +1384,191 @@ var state = {
         showToast.timer = setTimeout(function () { el.toast.classList.remove("show"); }, 2600);
       }
 
+
+
+      // V16.65 - Cadastro central de relacionamento SKU <-> MLB
+      var ML_LINK_STORAGE_KEY = "ml_sku_mlb_links_v1";
+      var mlSkuMlbLinks = {};
+
+      function normalizeMlb(value) {
+        var digits = String(value || "").toUpperCase().replace(/[^0-9]/g, "");
+        return digits ? ("MLB" + digits) : "";
+      }
+
+      function normalizeSkuKey(value) {
+        return String(value || "").trim().toUpperCase();
+      }
+
+      function loadMlSkuMlbLinks() {
+        var raw = "";
+        try {
+          if (window.appStorage && typeof window.appStorage.getItem === "function") {
+            raw = window.appStorage.getItem(ML_LINK_STORAGE_KEY) || "";
+          }
+        } catch (_) {}
+        if (!raw) {
+          try { raw = localStorage.getItem(ML_LINK_STORAGE_KEY) || ""; } catch (_) {}
+        }
+        try {
+          var parsed = JSON.parse(raw || "{}");
+          mlSkuMlbLinks = parsed && typeof parsed === "object" ? parsed : {};
+        } catch (_) {
+          mlSkuMlbLinks = {};
+        }
+      }
+
+      function saveMlSkuMlbLinks() {
+        var raw = JSON.stringify(mlSkuMlbLinks);
+        try { localStorage.setItem(ML_LINK_STORAGE_KEY, raw); } catch (_) {}
+        try {
+          if (window.appStorage && typeof window.appStorage.setItem === "function") {
+            window.appStorage.setItem(ML_LINK_STORAGE_KEY, raw);
+          }
+        } catch (_) {}
+      }
+
+      function getLinkedMlbsForSku(sku) {
+        var key = normalizeSkuKey(sku);
+        var rows = Array.isArray(mlSkuMlbLinks[key]) ? mlSkuMlbLinks[key] : [];
+        var out = [];
+        rows.forEach(function(row){
+          var mlb = normalizeMlb(typeof row === "string" ? row : row.mlb);
+          if (!mlb) return;
+          var obj = typeof row === "object" && row ? Object.assign({}, row) : {mlb:mlb};
+          obj.mlb = mlb;
+          if (!out.some(function(x){ return x.mlb === mlb; })) out.push(obj);
+        });
+        return out;
+      }
+
+      function setLinkedMlbsForSku(sku, rows) {
+        var key = normalizeSkuKey(sku);
+        if (!key) return;
+        mlSkuMlbLinks[key] = (rows || []).map(function(row){
+          var obj = typeof row === "object" && row ? Object.assign({}, row) : {mlb:row};
+          obj.mlb = normalizeMlb(obj.mlb);
+          return obj;
+        }).filter(function(x){ return !!x.mlb; });
+        saveMlSkuMlbLinks();
+      }
+
+      function addMlbLinkToSku(sku, mlb, extra) {
+        var key = normalizeSkuKey(sku);
+        var id = normalizeMlb(mlb);
+        if (!key || !id) return false;
+        var rows = getLinkedMlbsForSku(key);
+        var existing = rows.find(function(x){ return x.mlb === id; });
+        if (existing) {
+          Object.assign(existing, extra || {});
+        } else {
+          rows.push(Object.assign({mlb:id, createdAt:new Date().toISOString()}, extra || {}));
+        }
+        setLinkedMlbsForSku(key, rows);
+        return true;
+      }
+
+      function removeMlbLinkFromSku(sku, mlb) {
+        var id = normalizeMlb(mlb);
+        setLinkedMlbsForSku(sku, getLinkedMlbsForSku(sku).filter(function(x){ return x.mlb !== id; }));
+      }
+
+      function mlAdOpenUrl(mlb) {
+        var digits = String(mlb || "").replace(/\D/g, "");
+        return "https://www.mercadolivre.com.br/anuncios?page=1&sort=DEFAULT&search=" + encodeURIComponent(digits);
+      }
+
+      function promoRowsForLinkedMlbs(mlbs) {
+        var wanted = new Set((mlbs || []).map(function(x){ return String(x).replace(/\D/g,""); }));
+        if (!wanted.size || !Array.isArray(promoRows)) return [];
+        return promoRows.filter(function(row){
+          return wanted.has(String(row.mlb || "").replace(/\D/g,""));
+        });
+      }
+
+      function renderMlConnections() {
+        if (!el["ml-link-list"]) return;
+        var sku = String(el.sku && el.sku.value || "").trim();
+        if (!sku) {
+          el["ml-link-list"].innerHTML = '<div class="ml-link-empty">Selecione um produto para ver os anúncios vinculados.</div>';
+          el["ml-link-count"].textContent = "0 anúncios";
+          el["ml-promo-summary"].innerHTML = '<div class="ml-link-empty">Nenhum anúncio vinculado.</div>';
+          el["ml-promo-count"].textContent = "0 promoções";
+          return;
+        }
+
+        var links = getLinkedMlbsForSku(sku);
+        el["ml-link-count"].textContent = links.length + (links.length === 1 ? " anúncio" : " anúncios");
+
+        if (!links.length) {
+          el["ml-link-list"].innerHTML = '<div class="ml-link-empty">Nenhum MLB vinculado a este SKU ainda.</div>';
+        } else {
+          el["ml-link-list"].innerHTML =
+            '<table class="ml-link-table"><thead><tr><th>MLB</th><th>Título</th><th>Preço</th><th>Status</th><th>Ações</th></tr></thead><tbody>' +
+            links.map(function(link){
+              var title = String(link.title || link.titulo || "Anúncio Mercado Livre");
+              var price = Number(link.price || link.preco || 0);
+              var status = String(link.status || "Vinculado");
+              var statusClass = /ativo/i.test(status) ? "ok" : (/paus|inativ|encerr/i.test(status) ? "warn" : "neutral");
+              return '<tr>' +
+                '<td><strong>'+escapeHtml(link.mlb)+'</strong></td>' +
+                '<td>'+escapeHtml(title)+'</td>' +
+                '<td>'+(price>0 ? money(price) : "—")+'</td>' +
+                '<td><span class="ml-link-badge '+statusClass+'">'+escapeHtml(status)+'</span></td>' +
+                '<td>' +
+                  '<button type="button" class="btn btn-secondary" data-open-mlb="'+escapeHtml(link.mlb)+'">Abrir</button> ' +
+                  '<button type="button" class="btn btn-danger" data-remove-mlb="'+escapeHtml(link.mlb)+'">×</button>' +
+                '</td>' +
+              '</tr>';
+            }).join("") +
+            '</tbody></table>';
+        }
+
+        var linkedIds = links.map(function(x){ return x.mlb; });
+        var promos = promoRowsForLinkedMlbs(linkedIds);
+        el["ml-promo-count"].textContent = promos.length + (promos.length === 1 ? " promoção" : " promoções");
+
+        if (!links.length) {
+          el["ml-promo-summary"].innerHTML = '<div class="ml-link-empty">Nenhum anúncio vinculado.</div>';
+        } else if (!promos.length) {
+          el["ml-promo-summary"].innerHTML =
+            '<div class="ml-link-summary">' +
+              '<div class="ml-link-stat"><span>Anúncios vinculados</span><strong>'+links.length+'</strong></div>' +
+              '<div class="ml-link-stat"><span>Promoções cadastradas</span><strong>0</strong></div>' +
+            '</div><div class="ml-link-empty">Os MLBs já estão conectados, mas não possuem registro na tela de Promoções.</div>';
+        } else {
+          el["ml-promo-summary"].innerHTML =
+            '<table class="ml-link-table"><thead><tr><th>MLB</th><th>Data</th><th>Status</th><th>Ação</th></tr></thead><tbody>' +
+            promos.map(function(row){
+              var st = promoStatus(row);
+              return '<tr>' +
+                '<td><strong>MLB'+escapeHtml(String(row.mlb||"").replace(/\D/g,""))+'</strong></td>' +
+                '<td>'+escapeHtml(row.date || "Sem data")+'</td>' +
+                '<td><span class="ml-link-badge '+(st.key==="expired"?"warn":st.key==="ok"?"ok":"neutral")+'">'+escapeHtml(st.label)+'</span></td>' +
+                '<td><a class="btn btn-secondary" href="'+escapeHtml(promoUrl(row.mlb))+'" target="_blank" rel="noopener">Abrir promoção</a></td>' +
+              '</tr>';
+            }).join("") +
+            '</tbody></table>';
+        }
+      }
+
+      function tryAutoLinkFromPromoMetaForCurrentSku() {
+        var sku = normalizeSkuKey(el.sku && el.sku.value);
+        if (!sku || !promoMeta || typeof promoMeta !== "object") return 0;
+        var added = 0;
+        Object.keys(promoMeta).forEach(function(key){
+          var meta = promoMeta[key] || {};
+          var metaSku = normalizeSkuKey(meta.sku || meta.SKU || "");
+          if (metaSku !== sku) return;
+          var mlb = normalizeMlb(meta.mlb || key);
+          if (!mlb) return;
+          if (addMlbLinkToSku(sku, mlb, {
+            title: meta.title || meta.titulo || "",
+            price: Number(meta.price || meta.preco || 0) || 0,
+            status: meta.status || "Vinculado"
+          })) added++;
+        });
+        return added;
+      }
 
       var autoSaveTimer = null;
       var autoSaveDelayMs = 900;
@@ -2190,6 +2437,7 @@ var state = {
 
         setKitMode(!!product.isKit, true);
         state.dirty = false;
+        renderMlConnections();
         if (!product.isKit) recalculate();
       }
 
@@ -2435,6 +2683,47 @@ var state = {
         reader.readAsText(file);
       }
 
+
+      if (el["ml-link-add"]) {
+        el["ml-link-add"].addEventListener("click", function(){
+          var sku = String(el.sku.value || "").trim();
+          var mlb = normalizeMlb(el["ml-link-input"].value);
+          if (!sku) { showToast("Selecione um produto antes de vincular um MLB."); return; }
+          if (!mlb) { showToast("Informe um MLB válido."); return; }
+          addMlbLinkToSku(sku, mlb, {});
+          el["ml-link-input"].value = "";
+          renderMlConnections();
+          showToast(mlb + " vinculado ao SKU " + sku + ".");
+        });
+      }
+
+      if (el["ml-link-refresh"]) {
+        el["ml-link-refresh"].addEventListener("click", function(){
+          var added = tryAutoLinkFromPromoMetaForCurrentSku();
+          renderMlConnections();
+          showToast(added ? (added + " vínculo(s) atualizado(s).") : "Vínculos revisados.");
+        });
+      }
+
+      if (el["ml-link-list"]) {
+        el["ml-link-list"].addEventListener("click", function(event){
+          var open = event.target.closest("[data-open-mlb]");
+          if (open) {
+            window.open(mlAdOpenUrl(open.getAttribute("data-open-mlb")), "_blank", "noopener");
+            return;
+          }
+          var remove = event.target.closest("[data-remove-mlb]");
+          if (remove) {
+            var sku = String(el.sku.value || "").trim();
+            var mlb = remove.getAttribute("data-remove-mlb");
+            if (window.confirm("Remover vínculo " + mlb + " deste SKU?")) {
+              removeMlbLinkFromSku(sku, mlb);
+              renderMlConnections();
+            }
+          }
+        });
+      }
+
       el["product-list"].addEventListener("click", function (event) {
         var button = event.target.closest("[data-product-id]");
         if (button) selectProduct(button.getAttribute("data-product-id"));
@@ -2602,6 +2891,7 @@ var state = {
       if (initialSynchronization.updatedKitCount) persist();
       renderCostAlerts();
       updateCostAlertBadge();
+      loadMlSkuMlbLinks();
       renderProductList();
       fetch("/expedicao/api/precificador/atualizar-tudo/status", {credentials:"same-origin"})
         .then(function(r){ return r.json(); })
@@ -2624,6 +2914,18 @@ var state = {
       var promoPageSize = 60;
       var promoLoadToken = 0;
       var promoStockFilterReady = false;
+
+
+      function skuForMlb(mlb) {
+        var target = normalizeMlb(mlb);
+        var found = "";
+        Object.keys(mlSkuMlbLinks || {}).some(function(sku){
+          var yes = getLinkedMlbsForSku(sku).some(function(x){ return x.mlb === target; });
+          if (yes) found = sku;
+          return yes;
+        });
+        return found;
+      }
 
       function promoTodayIso(){
         var d=new Date(), y=d.getFullYear(), m=String(d.getMonth()+1).padStart(2,"0"), day=String(d.getDate()).padStart(2,"0");
@@ -2945,6 +3247,7 @@ var state = {
         promoSave();
         promoPage=1;
         promoRender();
+        try { renderMlConnections(); } catch (_) {}
         try{showToast(checked?"Anúncio marcado como Preço OK.":"Anúncio voltou para a fila de promoções.");}catch(_){}
       }
       window.promoSetPriceOk=promoSetPriceOk;

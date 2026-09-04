@@ -1,0 +1,32 @@
+NOROMAK WEB V16.65 — PRECIFICADOR, MLB E PROMOÇÕES CONECTADOS
+
+Novidade principal:
+- Criado cadastro central de relacionamento SKU <-> MLB.
+- Um SKU pode possuir vários anúncios Mercado Livre.
+- O Precificador agora mostra uma seção "Anúncios Mercado Livre vinculados".
+- Cada anúncio possui botão "Abrir" para abrir diretamente a gestão do anúncio.
+- É possível vincular/remover MLB manualmente.
+- A seção "Promoções deste produto" reaproveita os MLBs vinculados e mostra
+  os registros existentes na tela de Promoções.
+- Os vínculos são persistidos no appStorage/localStorage em:
+  ml_sku_mlb_links_v1
+- O botão "Atualizar vínculos" tenta reaproveitar metadata de promoções que já
+  contenha SKU, quando disponível.
+
+Arquitetura:
+PRODUTO (SKU)
+  -> 1 ou vários ANÚNCIOS ML (MLB)
+      -> 0 ou várias informações de PROMOÇÃO já existentes
+
+Custo, curva, imposto, comissão e margens continuam pertencendo ao produto do
+Precificador. Eles não são duplicados na promoção, evitando divergência.
+
+Mantida toda a atualização automática Apollo da V16.64.
+
+A tela mostra "Cadastro · V16.65".
+
+PUBLICAÇÃO:
+git status
+git add -A
+git commit -m "V16.65 - conecta Precificador MLB e Promocoes"
+./publicar.sh
