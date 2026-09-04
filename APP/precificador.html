@@ -384,7 +384,7 @@
     .promo-kpi.warn{background:#fffaf0;border-color:#fed7aa}.promo-kpi.warn strong{color:#b45309}
     .promo-kpi.info{background:#f4f8ff;border-color:#bfdbfe}.promo-kpi.info strong{color:#1d4ed8}
     .promo-kpi.neutral{background:#f8fafc}
-    .promo-toolbar{display:grid;grid-template-columns:minmax(220px,1.6fr) minmax(150px,.8fr) minmax(150px,.8fr) auto auto auto;gap:8px;align-items:center;margin-bottom:10px}
+    .promo-toolbar{display:grid;grid-template-columns:minmax(220px,1.5fr) minmax(150px,.8fr) minmax(150px,.8fr) minmax(150px,.75fr) auto auto auto auto;gap:8px;align-items:center;margin-bottom:10px}
     .promo-stock-toggle{display:flex;align-items:center;gap:7px;font-size:.69rem;font-weight:850;white-space:nowrap;padding:0 5px}
     .promo-stock-toggle input{width:17px;height:17px;min-height:17px;accent-color:var(--brand)}
     .promo-progress{margin:8px 0;padding:8px 10px;border:1px solid #bfdbfe;background:#eff6ff;border-radius:9px;font-size:.68rem;color:#1e40af}
@@ -521,8 +521,14 @@
             <option value="date_desc">Data mais distante</option>
             <option value="mlb_asc">MLB crescente</option>
           </select>
-          <label class="promo-stock-toggle"><input id="promo-hide-no-stock" type="checkbox" checked> Ocultar sem estoque</label>
+          <select id="promo-stock-filter" title="Filtro de estoque">
+            <option value="all">Todos os estoques</option>
+            <option value="positive">Somente com estoque</option>
+            <option value="zero">Somente sem estoque</option>
+          </select>
+          <label class="promo-stock-toggle"><input id="promo-hide-no-stock" type="checkbox"> Ocultar sem estoque</label>
           <button class="btn btn-secondary" id="promo-refresh-stock" type="button">↻ Atualizar estoque</button>
+          <button class="btn btn-secondary" id="promo-show-all" type="button">Ver todos da planilha</button>
           <button class="btn btn-primary" id="promo-import-btn" type="button">Importar planilha</button>
           <input id="promo-import-file" type="file" accept=".xlsx,.xls" hidden>
         </div>
@@ -2352,6 +2358,7 @@ var state = {
         var status=document.getElementById("promo-status-filter")?.value||"expired";
         var search=String(document.getElementById("promo-search")?.value||"").trim().toLowerCase();
         var hideNoStock=!!document.getElementById("promo-hide-no-stock")?.checked;
+        var stockFilter=String(document.getElementById("promo-stock-filter")?.value||"all");
 
         var rows=promoRows.filter(function(r){
           var days=promoDays(r.date);
@@ -2363,18 +2370,24 @@ var state = {
           if(status==="all" && !r.date)return false;
           if(status==="nodate" && r.date)return false;
 
+          var meta=promoMeta[r.mlb]||{};
+
           if(search){
-            var meta=promoMeta[r.mlb]||{};
             var txt=(r.mlb+" "+(meta.sku||"")+" "+(meta.title||"")).toLowerCase();
             if(!txt.includes(search))return false;
           }
 
-          // IMPORTANTE: só esconde quando o Mercado Livre CONFIRMOU estoque = 0.
-          // Falha de consulta / estoque desconhecido permanece visível.
-          if(hideNoStock){
-            var meta=promoMeta[r.mlb]||{};
-            if(meta.stock_known===true && Number(meta.available_quantity)===0)return false;
-          }
+          // Stock is tri-state:
+          // known positive / known zero / unknown.
+          // UNKNOWN must NEVER disappear from the spreadsheet-derived list.
+          var known=meta.stock_known===true;
+          var qty=known?Number(meta.available_quantity||0):null;
+
+          if(stockFilter==="positive" && !(known && qty>0))return false;
+          if(stockFilter==="zero" && !(known && qty===0))return false;
+
+          // Quick checkbox: only hides confirmed zero stock.
+          if(hideNoStock && known && qty===0)return false;
 
           return true;
         });
@@ -2420,19 +2433,20 @@ var state = {
         var body=document.getElementById("promo-table-body");
 
         body.innerHTML=part.map(promoRowHtml).join("") ||
-          '<tr><td colspan="5" style="padding:28px;text-align:center;color:#64748b">Nenhuma promoção encontrada com estes filtros.</td></tr>';
+          '<tr><td colspan="5" style="padding:28px;text-align:center;color:#64748b">Nenhuma promoção encontrada com os filtros atuais. Desative o filtro de estoque para ver todos os registros da planilha.</td></tr>';
 
         document.getElementById("promo-summary").textContent=
-          rows.length+" anúncio(s) · "+(document.getElementById("promo-hide-no-stock")?.checked
-            ?"somente estoque zerado confirmado é ocultado"
-            :"incluindo anúncios sem estoque");
+          rows.length+" anúncio(s) da planilha · "+(document.getElementById("promo-hide-no-stock")?.checked
+            ?"estoque zero confirmado oculto"
+            :"sem filtro de estoque");
 
         document.getElementById("promo-page").textContent="Página "+promoPage+" de "+pages;
         document.getElementById("promo-prev").disabled=promoPage<=1;
         document.getElementById("promo-next").disabled=promoPage>=pages;
 
-        // Consulta apenas a página visível, não as 700+ linhas de uma vez.
-        promoEnsureMeta(part);
+        // Renderiza PRIMEIRO a planilha. Só depois consulta estoque.
+        // A consulta nunca tem permissão para apagar linhas por falha/indisponibilidade.
+        setTimeout(function(){ promoEnsureMeta(part); }, 50);
       }
 
       function promoChangeDate(mlb,value){
@@ -2469,14 +2483,14 @@ var state = {
 
           ids.forEach(function(id){
             var m=items[id]||{};
-            var known=m.stock_known===true && m.available_quantity!==null && m.available_quantity!==undefined;
+            var known=m.stock_known===true && m.available_quantity!==null && m.available_quantity!==undefined && m.available_quantity!=="";
             promoMeta[id]={
               loaded:true,
               loadedAt:Date.now(),
               title:String(m.title||""),
               sku:String(m.sku||""),
               stock_known:known,
-              available_quantity:known?Number(m.available_quantity||0):null,
+              available_quantity:known?Number(m.available_quantity):null,
               status:String(m.status||""),
               price:Number(m.price||0),
               permalink:String(m.permalink||"")
@@ -2494,7 +2508,7 @@ var state = {
           var part=rowsNow.slice(start,start+promoPageSize);
           var body=document.getElementById("promo-table-body");
           body.innerHTML=part.map(promoRowHtml).join("") ||
-            '<tr><td colspan="5" style="padding:28px;text-align:center;color:#64748b">Nenhuma promoção encontrada com estes filtros.</td></tr>';
+            '<tr><td colspan="5" style="padding:28px;text-align:center;color:#64748b">Nenhuma promoção encontrada com os filtros atuais. Desative o filtro de estoque para ver todos os registros da planilha.</td></tr>';
           document.getElementById("promo-summary").textContent=
             rowsNow.length+" anúncio(s) · "+(document.getElementById("promo-hide-no-stock")?.checked
               ?"sem estoque zerado confirmado"
@@ -2590,7 +2604,7 @@ var state = {
         promoBtn.setAttribute("aria-expanded","false");
       }
       
-      ["promo-search","promo-status-filter","promo-sort","promo-hide-no-stock"].forEach(function(id){
+      ["promo-search","promo-status-filter","promo-sort","promo-stock-filter","promo-hide-no-stock"].forEach(function(id){
         document.getElementById(id)?.addEventListener(id==="promo-search"?"input":"change",function(){promoPage=1;promoRender();});
       });
       document.querySelectorAll("[data-promo-quick]").forEach(function(btn){
@@ -2602,6 +2616,16 @@ var state = {
         var rows=promoBaseFiltered();
         var start=(promoPage-1)*promoPageSize;
         promoEnsureMeta(rows.slice(start,start+promoPageSize),true);
+      });
+      document.getElementById("promo-show-all")?.addEventListener("click",function(){
+        var sf=document.getElementById("promo-status-filter");
+        var stock=document.getElementById("promo-stock-filter");
+        var hide=document.getElementById("promo-hide-no-stock");
+        if(sf)sf.value="all";
+        if(stock)stock.value="all";
+        if(hide)hide.checked=false;
+        promoPage=1;
+        promoRender();
       });
       document.getElementById("promo-import-btn")?.addEventListener("click",function(){document.getElementById("promo-import-file")?.click();});
       document.getElementById("promo-import-file")?.addEventListener("change",function(e){var f=e.target.files?.[0];if(f)promoImportFile(f);e.target.value="";});
