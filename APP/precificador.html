@@ -404,6 +404,14 @@
     .promo-footer{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-top:10px;color:#64748b;font-size:.68rem}.promo-footer > div{display:flex;align-items:center;gap:8px}
     @media(max-width:1100px){.promo-kpis{grid-template-columns:repeat(2,1fr)}.promo-toolbar{grid-template-columns:1fr 1fr 1fr}}
     @media(max-width:700px){.promo-kpis{grid-template-columns:1fr}.promo-toolbar{grid-template-columns:1fr}}
+
+    .promo-mlb-link{font-weight:900;color:#0f5fb7;text-decoration:none}
+    .promo-mlb-link:hover{text-decoration:underline}
+    .promo-table th:nth-child(1),.promo-table td:nth-child(1){min-width:180px}
+    .promo-table th:nth-child(2),.promo-table td:nth-child(2){min-width:180px}
+    .promo-table th:nth-child(3),.promo-table td:nth-child(3){min-width:120px}
+    .promo-table th:nth-child(4),.promo-table td:nth-child(4){min-width:120px}
+    .promo-table th:nth-child(5),.promo-table td:nth-child(5){min-width:160px}
 </style>
 </head>
 <body>
@@ -525,14 +533,15 @@
         </div>
 
         <div class="promo-help">
-          <b>Como funciona:</b> a data da planilha é a data final da promoção. O status é recalculado todos os dias.
-          Você pode alterar a data diretamente na tabela após renovar uma promoção. O botão <b>Abrir promoção</b> leva ao MLB específico.
+          <b>Como funciona:</b> esta tela reproduz a base da planilha: código do anúncio, data de vencimento e situação.
+          O status é recalculado diariamente. O código e o botão <b>Abrir promoção</b> levam diretamente à página de promoção do MLB.
+          Marque <b>Ocultar sem estoque</b> para retirar da lista apenas anúncios cujo estoque zerado foi confirmado pelo Mercado Livre.
         </div>
 
         <div class="promo-table-wrap">
           <table class="promo-table">
             <thead><tr>
-              <th>Status</th><th>MLB</th><th>SKU</th><th>Produto</th><th>Data final</th><th>Dias</th><th>Estoque</th><th>Ação</th>
+              <th>Código do anúncio</th><th>Data de vencimento</th><th>Status</th><th>Estoque</th><th>Ação</th>
             </tr></thead>
             <tbody id="promo-table-body"></tbody>
           </table>
@@ -2264,7 +2273,7 @@ var state = {
   
       /* V16.37 - Promoções vencidas e a vencer */
       var PROMO_STORAGE_KEY = "ml_promocoes_datas_v1";
-      var PROMO_META_CACHE_KEY = "ml_promocoes_meta_cache_v1";
+      var PROMO_META_CACHE_KEY = "ml_promocoes_meta_cache_v2";
       var promoRows = [];
       var promoMeta = {};
       var promoPage = 1;
@@ -2343,22 +2352,33 @@ var state = {
         var status=document.getElementById("promo-status-filter")?.value||"expired";
         var search=String(document.getElementById("promo-search")?.value||"").trim().toLowerCase();
         var hideNoStock=!!document.getElementById("promo-hide-no-stock")?.checked;
+
         var rows=promoRows.filter(function(r){
           var days=promoDays(r.date);
+
           if(status==="expired" && !(r.date&&days<0))return false;
           if(status==="7" && !(r.date&&days>=0&&days<=7))return false;
           if(status==="15" && !(r.date&&days>=0&&days<=15))return false;
           if(status==="30" && !(r.date&&days>=0&&days<=30))return false;
           if(status==="all" && !r.date)return false;
           if(status==="nodate" && r.date)return false;
-          var meta=promoMeta[r.mlb]||{};
+
           if(search){
+            var meta=promoMeta[r.mlb]||{};
             var txt=(r.mlb+" "+(meta.sku||"")+" "+(meta.title||"")).toLowerCase();
             if(!txt.includes(search))return false;
           }
-          if(hideNoStock && meta.loaded===true && Number(meta.available_quantity||0)<=0)return false;
+
+          // IMPORTANTE: só esconde quando o Mercado Livre CONFIRMOU estoque = 0.
+          // Falha de consulta / estoque desconhecido permanece visível.
+          if(hideNoStock){
+            var meta=promoMeta[r.mlb]||{};
+            if(meta.stock_known===true && Number(meta.available_quantity)===0)return false;
+          }
+
           return true;
         });
+
         var sort=document.getElementById("promo-sort")?.value||"date_asc";
         rows.sort(function(a,b){
           if(sort==="mlb_asc")return Number(a.mlb)-Number(b.mlb);
@@ -2367,6 +2387,29 @@ var state = {
         });
         return rows;
       }
+
+      function promoRowHtml(r){
+        var meta=promoMeta[r.mlb]||{};
+        var st=promoStatus(r), days=promoDays(r.date);
+        var stockKnown=meta.stock_known===true;
+        var stock=stockKnown?Number(meta.available_quantity||0):null;
+        var stockHtml=!stockKnown
+          ? '<span class="promo-stock loading">A consultar</span>'
+          : '<span class="promo-stock '+(stock>0?"positive":"zero")+'">'+stock+' un.</span>';
+
+        var statusLabel=st.key==="expired"?"Vencido":(st.key==="nodate"?"Sem data":"OK");
+        var statusClass=st.key==="expired"?"expired":(st.key==="nodate"?"nodate":"ok");
+        var url=promoUrl(r.mlb);
+
+        return '<tr data-promo-mlb="'+escapeHtml(r.mlb)+'">'+
+          '<td><a class="promo-mlb-link" href="'+url+'" target="_blank" rel="noopener">MLB'+escapeHtml(r.mlb)+'</a></td>'+
+          '<td><input type="date" value="'+escapeHtml(r.date||"")+'" onchange="promoChangeDate(\''+escapeHtml(r.mlb)+'\',this.value)"></td>'+
+          '<td><span class="promo-status-pill '+statusClass+'">'+statusLabel+'</span></td>'+
+          '<td>'+stockHtml+'</td>'+
+          '<td><a class="btn btn-primary promo-action" href="'+url+'" target="_blank" rel="noopener">Abrir promoção</a></td>'+
+        '</tr>';
+      }
+
       function promoRender(){
         promoKpis();
         var rows=promoBaseFiltered();
@@ -2375,31 +2418,23 @@ var state = {
         var start=(promoPage-1)*promoPageSize;
         var part=rows.slice(start,start+promoPageSize);
         var body=document.getElementById("promo-table-body");
-        body.innerHTML=part.map(function(r){
-          var meta=promoMeta[r.mlb]||{};
-          var st=promoStatus(r), days=promoDays(r.date);
-          var stock=meta.loaded===true?Number(meta.available_quantity||0):null;
-          var stockHtml=stock===null?'<span class="promo-stock loading">Consultando…</span>':('<span class="promo-stock '+(stock>0?"positive":"zero")+'">'+stock+' un.</span>');
-          var title=meta.title||"Carregando dados do anúncio…";
-          var sku=meta.sku||"—";
-          var daysText=days===null?"—":(days<0?Math.abs(days)+"d vencida":days===0?"Hoje":days+"d");
-          return '<tr data-promo-mlb="'+escapeHtml(r.mlb)+'">'+
-            '<td><span class="promo-status-pill '+st.key+'">'+escapeHtml(st.label)+'</span></td>'+
-            '<td><b>MLB'+escapeHtml(r.mlb)+'</b></td>'+
-            '<td><b>'+escapeHtml(sku)+'</b></td>'+
-            '<td><div class="promo-product-title">'+escapeHtml(title)+'</div></td>'+
-            '<td><input type="date" value="'+escapeHtml(r.date||"")+'" onchange="promoChangeDate(\''+escapeHtml(r.mlb)+'\',this.value)"></td>'+
-            '<td>'+escapeHtml(daysText)+'</td>'+
-            '<td>'+stockHtml+'</td>'+
-            '<td><a class="btn btn-primary promo-action" href="'+promoUrl(r.mlb)+'" target="_blank" rel="noopener">Abrir promoção</a></td>'+
-          '</tr>';
-        }).join("") || '<tr><td colspan="8" style="padding:28px;text-align:center;color:#64748b">Nenhuma promoção encontrada com estes filtros.</td></tr>';
-        document.getElementById("promo-summary").textContent=rows.length+" anúncio(s) · "+(document.getElementById("promo-hide-no-stock")?.checked?"sem estoque ocultos quando identificados":"incluindo sem estoque");
+
+        body.innerHTML=part.map(promoRowHtml).join("") ||
+          '<tr><td colspan="5" style="padding:28px;text-align:center;color:#64748b">Nenhuma promoção encontrada com estes filtros.</td></tr>';
+
+        document.getElementById("promo-summary").textContent=
+          rows.length+" anúncio(s) · "+(document.getElementById("promo-hide-no-stock")?.checked
+            ?"somente estoque zerado confirmado é ocultado"
+            :"incluindo anúncios sem estoque");
+
         document.getElementById("promo-page").textContent="Página "+promoPage+" de "+pages;
         document.getElementById("promo-prev").disabled=promoPage<=1;
         document.getElementById("promo-next").disabled=promoPage>=pages;
-        promoEnsureMeta(rows);
+
+        // Consulta apenas a página visível, não as 700+ linhas de uma vez.
+        promoEnsureMeta(part);
       }
+
       function promoChangeDate(mlb,value){
         var row=promoRows.find(function(x){return x.mlb===String(mlb);});
         if(!row)return;
@@ -2421,54 +2456,60 @@ var state = {
         });
         ids=Array.from(new Set(ids));
         if(!ids.length)return;
+
         var token=++promoLoadToken;
         var progress=document.getElementById("promo-progress");
         progress.hidden=false;
-        var done=0,total=ids.length;
+        document.getElementById("promo-progress-text").textContent="Consultando estoque dos anúncios visíveis...";
+        document.getElementById("promo-progress-bar").style.width="5%";
+
         try{
-          for(var i=0;i<ids.length;i+=100){
-            if(token!==promoLoadToken)return;
-            var chunk=ids.slice(i,i+100);
-            var items=await promoFetchBatch(chunk);
-            chunk.forEach(function(id){
-              var m=items[id]||{};
-              promoMeta[id]={
-                loaded:true,loadedAt:Date.now(),title:String(m.title||""),sku:String(m.sku||""),
-                available_quantity:Number(m.available_quantity||0),status:String(m.status||""),price:Number(m.price||0),permalink:String(m.permalink||"")
-              };
-            });
-            done+=chunk.length;
-            document.getElementById("promo-progress-text").textContent="Consultando estoque e anúncios: "+Math.min(done,total)+" / "+total;
-            document.getElementById("promo-progress-bar").style.width=Math.min(100,done/total*100)+"%";
-            promoSaveMeta();
-            promoRenderLight();
-          }
+          var items=await promoFetchBatch(ids);
+          if(token!==promoLoadToken)return;
+
+          ids.forEach(function(id){
+            var m=items[id]||{};
+            var known=m.stock_known===true && m.available_quantity!==null && m.available_quantity!==undefined;
+            promoMeta[id]={
+              loaded:true,
+              loadedAt:Date.now(),
+              title:String(m.title||""),
+              sku:String(m.sku||""),
+              stock_known:known,
+              available_quantity:known?Number(m.available_quantity||0):null,
+              status:String(m.status||""),
+              price:Number(m.price||0),
+              permalink:String(m.permalink||"")
+            };
+          });
+
+          promoSaveMeta();
+          document.getElementById("promo-progress-bar").style.width="100%";
+
+          // Recalcula a tela depois de saber quais desta página têm estoque zero.
+          var rowsNow=promoBaseFiltered();
+          var pages=Math.max(1,Math.ceil(rowsNow.length/promoPageSize));
+          promoPage=Math.max(1,Math.min(promoPage,pages));
+          var start=(promoPage-1)*promoPageSize;
+          var part=rowsNow.slice(start,start+promoPageSize);
+          var body=document.getElementById("promo-table-body");
+          body.innerHTML=part.map(promoRowHtml).join("") ||
+            '<tr><td colspan="5" style="padding:28px;text-align:center;color:#64748b">Nenhuma promoção encontrada com estes filtros.</td></tr>';
+          document.getElementById("promo-summary").textContent=
+            rowsNow.length+" anúncio(s) · "+(document.getElementById("promo-hide-no-stock")?.checked
+              ?"sem estoque zerado confirmado"
+              :"incluindo sem estoque");
+          document.getElementById("promo-page").textContent="Página "+promoPage+" de "+pages;
+          document.getElementById("promo-prev").disabled=promoPage<=1;
+          document.getElementById("promo-next").disabled=promoPage>=pages;
         }catch(e){
-          document.getElementById("promo-progress-text").textContent="Falha ao consultar alguns anúncios: "+e.message;
+          // Falha de consulta NÃO esconde anúncios.
+          document.getElementById("promo-progress-text").textContent="Estoque não pôde ser consultado agora. A lista continua visível.";
         }finally{
-          if(token===promoLoadToken)setTimeout(function(){progress.hidden=true;},700);
+          if(token===promoLoadToken)setTimeout(function(){progress.hidden=true;},900);
         }
       }
-      function promoRenderLight(){
-        // Re-render without launching another metadata request.
-        var original=promoLoadToken;
-        var rows=promoBaseFiltered();
-        var pages=Math.max(1,Math.ceil(rows.length/promoPageSize));
-        promoPage=Math.max(1,Math.min(promoPage,pages));
-        var start=(promoPage-1)*promoPageSize,part=rows.slice(start,start+promoPageSize);
-        var body=document.getElementById("promo-table-body");
-        if(!body)return;
-        body.innerHTML=part.map(function(r){
-          var meta=promoMeta[r.mlb]||{},st=promoStatus(r),days=promoDays(r.date),stock=meta.loaded===true?Number(meta.available_quantity||0):null;
-          var stockHtml=stock===null?'<span class="promo-stock loading">Consultando…</span>':('<span class="promo-stock '+(stock>0?"positive":"zero")+'">'+stock+' un.</span>');
-          var daysText=days===null?"—":(days<0?Math.abs(days)+"d vencida":days===0?"Hoje":days+"d");
-          return '<tr data-promo-mlb="'+escapeHtml(r.mlb)+'"><td><span class="promo-status-pill '+st.key+'">'+escapeHtml(st.label)+'</span></td><td><b>MLB'+escapeHtml(r.mlb)+'</b></td><td><b>'+escapeHtml(meta.sku||"—")+'</b></td><td><div class="promo-product-title">'+escapeHtml(meta.title||"Carregando dados do anúncio…")+'</div></td><td><input type="date" value="'+escapeHtml(r.date||"")+'" onchange="promoChangeDate(\''+escapeHtml(r.mlb)+'\',this.value)"></td><td>'+escapeHtml(daysText)+'</td><td>'+stockHtml+'</td><td><a class="btn btn-primary promo-action" href="'+promoUrl(r.mlb)+'" target="_blank" rel="noopener">Abrir promoção</a></td></tr>';
-        }).join("")||'<tr><td colspan="8" style="padding:28px;text-align:center;color:#64748b">Nenhuma promoção encontrada com estes filtros.</td></tr>';
-        document.getElementById("promo-summary").textContent=rows.length+" anúncio(s) · "+(document.getElementById("promo-hide-no-stock")?.checked?"sem estoque ocultos":"incluindo sem estoque");
-        document.getElementById("promo-page").textContent="Página "+promoPage+" de "+pages;
-        document.getElementById("promo-prev").disabled=promoPage<=1;document.getElementById("promo-next").disabled=promoPage>=pages;
-        promoLoadToken=original;
-      }
+
       function promoOpen(){
         try{
           document.body.classList.remove("show-cost-notifications");
@@ -2557,7 +2598,11 @@ var state = {
       });
       document.getElementById("promo-prev")?.addEventListener("click",function(){promoPage--;promoRender();});
       document.getElementById("promo-next")?.addEventListener("click",function(){promoPage++;promoRender();});
-      document.getElementById("promo-refresh-stock")?.addEventListener("click",function(){promoEnsureMeta(promoBaseFiltered(),true);});
+      document.getElementById("promo-refresh-stock")?.addEventListener("click",function(){
+        var rows=promoBaseFiltered();
+        var start=(promoPage-1)*promoPageSize;
+        promoEnsureMeta(rows.slice(start,start+promoPageSize),true);
+      });
       document.getElementById("promo-import-btn")?.addEventListener("click",function(){document.getElementById("promo-import-file")?.click();});
       document.getElementById("promo-import-file")?.addEventListener("change",function(e){var f=e.target.files?.[0];if(f)promoImportFile(f);e.target.value="";});
 </script>

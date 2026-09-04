@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "16.38"
+APP_VERSION = "16.39"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2469,6 +2469,7 @@ def _ml_item_meta_from_body(body: dict[str, Any]) -> dict[str, Any]:
         "status": str(body.get("status") or "").strip().lower(),
         "price": float(body.get("price") or 0),
         "permalink": str(body.get("permalink") or "").strip(),
+        "stock_known": True,
     }
 
 
@@ -2521,15 +2522,21 @@ def ml_items_meta(ids: list[str]) -> dict[str, dict[str, Any]]:
         # Cache missing/error results too, briefly represented as unknown with zero stock.
         with ML_ITEM_META_CACHE_LOCK:
             for mlb in batch:
-                meta = fetched.get(mlb) or {
-                    "id": mlb,
-                    "title": "",
-                    "sku": "",
-                    "available_quantity": 0,
-                    "status": "unknown",
-                    "price": 0,
-                    "permalink": "",
-                }
+                meta = fetched.get(mlb)
+                if meta:
+                    meta = dict(meta)
+                    meta["stock_known"] = True
+                else:
+                    meta = {
+                        "id": mlb,
+                        "title": "",
+                        "sku": "",
+                        "available_quantity": None,
+                        "status": "unknown",
+                        "price": 0,
+                        "permalink": "",
+                        "stock_known": False,
+                    }
                 ML_ITEM_META_CACHE[mlb] = (time.time(), dict(meta))
                 result[mlb] = dict(meta)
 
