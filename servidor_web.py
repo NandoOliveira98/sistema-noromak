@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "16.36"
+APP_VERSION = "16.37"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2442,6 +2442,98 @@ def ml_status_payload() -> dict[str, Any]:
         "client_id_suffix": (ML_CLIENT_ID[-6:] if ML_CLIENT_ID else ""),
         "worker": ml_worker_status_payload(),
     }
+
+
+
+ML_ITEM_META_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+ML_ITEM_META_CACHE_LOCK = threading.RLock()
+ML_ITEM_META_CACHE_TTL = 20 * 60
+
+
+def _ml_item_meta_from_body(body: dict[str, Any]) -> dict[str, Any]:
+    sku = str(body.get("seller_custom_field") or "").strip()
+    if not sku:
+        attrs = body.get("attributes") if isinstance(body.get("attributes"), list) else []
+        for attr in attrs:
+            if not isinstance(attr, dict):
+                continue
+            if str(attr.get("id") or "").upper() in ("SELLER_SKU", "SKU"):
+                sku = str(attr.get("value_name") or attr.get("value_id") or "").strip()
+                if sku:
+                    break
+    return {
+        "id": str(body.get("id") or "").replace("MLB", ""),
+        "title": str(body.get("title") or "").strip(),
+        "sku": sku,
+        "available_quantity": max(0, int(body.get("available_quantity") or 0)),
+        "status": str(body.get("status") or "").strip().lower(),
+        "price": float(body.get("price") or 0),
+        "permalink": str(body.get("permalink") or "").strip(),
+    }
+
+
+def ml_items_meta(ids: list[str]) -> dict[str, dict[str, Any]]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in ids:
+        raw = re.sub(r"\D+", "", str(value or ""))
+        if not raw or raw in seen:
+            continue
+        seen.add(raw)
+        normalized.append(raw)
+        if len(normalized) >= 100:
+            break
+
+    now = time.time()
+    result: dict[str, dict[str, Any]] = {}
+    missing: list[str] = []
+
+    with ML_ITEM_META_CACHE_LOCK:
+        for mlb in normalized:
+            cached = ML_ITEM_META_CACHE.get(mlb)
+            if cached and now - cached[0] < ML_ITEM_META_CACHE_TTL:
+                result[mlb] = dict(cached[1])
+            else:
+                missing.append(mlb)
+
+    for start in range(0, len(missing), 20):
+        batch = missing[start:start + 20]
+        if not batch:
+            continue
+        ids_param = ",".join("MLB" + item for item in batch)
+        payload = ml_http_json(
+            "GET",
+            "https://api.mercadolibre.com/items?" + urlencode({"ids": ids_param}),
+        )
+        rows = payload if isinstance(payload, list) else []
+        fetched: dict[str, dict[str, Any]] = {}
+
+        for wrapper in rows:
+            if not isinstance(wrapper, dict):
+                continue
+            body = wrapper.get("body") if isinstance(wrapper.get("body"), dict) else {}
+            meta = _ml_item_meta_from_body(body)
+            mlb = str(meta.get("id") or "")
+            if not mlb:
+                continue
+            fetched[mlb] = meta
+
+        # Cache missing/error results too, briefly represented as unknown with zero stock.
+        with ML_ITEM_META_CACHE_LOCK:
+            for mlb in batch:
+                meta = fetched.get(mlb) or {
+                    "id": mlb,
+                    "title": "",
+                    "sku": "",
+                    "available_quantity": 0,
+                    "status": "unknown",
+                    "price": 0,
+                    "permalink": "",
+                }
+                ML_ITEM_META_CACHE[mlb] = (time.time(), dict(meta))
+                result[mlb] = dict(meta)
+
+    return result
 
 
 def ml_http_json(
@@ -7788,6 +7880,25 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             self.send_json({"ok": True, "job": precificador_bulk_status()})
             return
+        if path == "/api/precificador/ml-items":
+            ctx = self.auth()
+            if ctx is None:
+                return
+            if not module_allowed(ctx, "precificador"):
+                self.send_json({"ok": False, "error": "Acesso ao Precificador não autorizado."}, 403)
+                return
+            raw_ids = str((query.get("ids") or [""])[0] or "")
+            ids = [re.sub(r"\D+", "", x) for x in raw_ids.split(",")]
+            ids = [x for x in ids if x][:100]
+            if not ids:
+                self.send_json({"ok": True, "items": {}})
+                return
+            try:
+                self.send_json({"ok": True, "items": ml_items_meta(ids)})
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 502)
+            return
+
         if path == "/api/precificador/custo":
             ctx = self.auth()
             if ctx is None:

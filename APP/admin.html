@@ -850,10 +850,25 @@ body{background:var(--v15-bg)!important}
       </div>
       <div id="statusImportacaoPedidos" class="importacao-status"></div>
       <div class="toolbar-grid">
-        <input id="buscaPedidosAdmin" type="text" placeholder="Buscar pedido, cliente, SKU, EAN ou descrição..." oninput="agendarRenderPedidosAdmin()">
+        <input id="buscaPedidosAdmin" type="text" placeholder="Buscar pedido, cliente, SKU, EAN ou descrição..." oninput="paginaPedidosAdmin=1;agendarRenderPedidosAdmin()">
         <button class="btn-primario" onclick="adicionarLinhaPedidoAdmin()">＋ Nova linha</button>
         <button class="btn-sucesso" onclick="salvarPedidosAdmin(true)">💾 Salvar agora</button>
         <button class="btn-secundario" onclick="exportarBancoExcel()">⬇ Backup em Excel</button>
+      </div>
+      <div class="filtros-data-pedidos">
+        <label>Ordenar por data
+          <select id="ordemDataPedidosAdmin" onchange="paginaPedidosAdmin=1;renderizarPedidosAdmin()">
+            <option value="asc">Mais antigos primeiro</option>
+            <option value="desc">Mais recentes primeiro</option>
+          </select>
+        </label>
+        <label>De
+          <input id="dataInicioPedidosAdmin" type="date" onchange="paginaPedidosAdmin=1;renderizarPedidosAdmin()">
+        </label>
+        <label>Até
+          <input id="dataFimPedidosAdmin" type="date" onchange="paginaPedidosAdmin=1;renderizarPedidosAdmin()">
+        </label>
+        <button class="btn-secundario" type="button" onclick="limparFiltrosDataPedidosAdmin()">Limpar datas</button>
       </div>
       <div class="excel-wrap">
         <table class="excel-grid"><thead><tr>
@@ -3602,10 +3617,31 @@ function tagConclusaoAnteriorPedidoBanco(item){
   return `<span class="pedido-ja-feito-destaque" title="${htmlSeguroBanco(titulo)}">⚠ JÁ FOI FEITO${data?`<span class="pedido-ja-feito-data">${htmlSeguroBanco(data)}</span>`:""}</span>`;
 }
 
+function limparFiltrosDataPedidosAdmin(){
+  const ini=document.getElementById("dataInicioPedidosAdmin"),fim=document.getElementById("dataFimPedidosAdmin");
+  if(ini)ini.value="";if(fim)fim.value="";
+  paginaPedidosAdmin=1;renderizarPedidosAdmin();
+}
 function renderizarPedidosAdmin(){
   const corpo=document.getElementById("corpoPedidosAdmin"); if(!corpo)return;
   const termo=normalizarBuscaBanco(document.getElementById("buscaPedidosAdmin")?.value||"");
-  const filtrados=pedidosEditorAdmin.filter(x=>!termo||CAMPOS_PEDIDOS_BANCO.some(c=>normalizarBuscaBanco(x[c]).includes(termo))||normalizarBuscaBanco(pedidoExibicaoBanco(x.Pedido,x.Marketplace)).includes(termo));
+  const dataInicio=String(document.getElementById("dataInicioPedidosAdmin")?.value||"").trim();
+  const dataFim=String(document.getElementById("dataFimPedidosAdmin")?.value||"").trim();
+  const ordem=String(document.getElementById("ordemDataPedidosAdmin")?.value||"asc");
+  const filtrados=pedidosEditorAdmin.filter(x=>{
+    const bateBusca=!termo||CAMPOS_PEDIDOS_BANCO.some(c=>normalizarBuscaBanco(x[c]).includes(termo))||normalizarBuscaBanco(pedidoExibicaoBanco(x.Pedido,x.Marketplace)).includes(termo);
+    if(!bateBusca)return false;
+    const data=normalizarDataPedidoBanco(x["Data do Pedido"]||x.Data||x.DataPedido,false);
+    if(dataInicio&&(!data||data<dataInicio))return false;
+    if(dataFim&&(!data||data>dataFim))return false;
+    return true;
+  }).sort((x,y)=>{
+    const dx=normalizarDataPedidoBanco(x["Data do Pedido"]||x.Data||x.DataPedido,false)||"9999-12-31";
+    const dy=normalizarDataPedidoBanco(y["Data do Pedido"]||y.Data||y.DataPedido,false)||"9999-12-31";
+    const cmp=dx.localeCompare(dy);
+    if(cmp!==0)return ordem==="desc"?-cmp:cmp;
+    return String(x.Pedido||"").localeCompare(String(y.Pedido||""));
+  });
   const paginas=Math.max(1,Math.ceil(filtrados.length/ITENS_POR_PAGINA_PEDIDOS));
   paginaPedidosAdmin=Math.min(Math.max(1,paginaPedidosAdmin),paginas);
   const inicio=(paginaPedidosAdmin-1)*ITENS_POR_PAGINA_PEDIDOS;
@@ -5791,6 +5827,10 @@ document.addEventListener("DOMContentLoaded",()=>{
 
 <style>
 .senha-acesso-celula{display:flex;align-items:center;gap:10px;min-width:255px}.senha-protegida-status{display:flex;flex-direction:column;line-height:1.2;min-width:105px}.senha-protegida-status strong{font-size:12px;color:#2b4e75}.senha-protegida-status small{font-size:10px;color:#718096}.senha-inicial-alerta{display:block;margin-top:4px;padding:4px 6px;border-radius:5px;background:#fff3cd;color:#8a5a00;border:1px solid #f4cf72;font-size:9px;font-weight:950}.btn-alterar-senha{border:0;border-radius:6px;background:#f7941d;color:white;font-weight:800;padding:8px 12px;cursor:pointer;white-space:nowrap}.btn-alterar-senha:hover{filter:brightness(.95)}.senha-usuario-identidade{background:#edf5fc;border:1px solid #bdd0e2;border-radius:8px;padding:10px 12px;margin-bottom:12px;display:flex;flex-direction:column}.senha-usuario-identidade span{font-size:10px;text-transform:uppercase;color:#6b7b89;font-weight:800}.senha-usuario-identidade strong{font-size:15px;color:#244d76}.senha-usuario-identidade small{color:#617487}.senha-mostrar-linha{display:flex;align-items:center;gap:8px;font-weight:700;color:#526475}.senha-mostrar-linha input{width:auto}.senha-regra{margin-top:10px;padding:9px 10px;background:#fff8e8;border-left:3px solid #f7941d;color:#5f5140;font-size:11px}.senha-salva-flash{animation:senhaFlash 1.2s ease}@keyframes senhaFlash{0%{background:#dff5e3}100%{background:transparent}}
+
+.filtros-data-pedidos{display:flex;align-items:end;gap:9px;flex-wrap:wrap;margin:10px 0 12px;padding:10px 12px;border:1px solid #dbe5f0;background:#f8fbff;border-radius:10px}
+.filtros-data-pedidos label{display:grid;gap:4px;font-size:12px;font-weight:800;color:#475569}
+.filtros-data-pedidos select,.filtros-data-pedidos input{min-width:165px;height:36px;border:1px solid #cbd5e1;border-radius:7px;padding:0 9px;background:#fff}
 </style>
 <script>
 /* ADMINISTRAÇÃO SEGURA DE SENHAS — VERSÃO 7.6 */
