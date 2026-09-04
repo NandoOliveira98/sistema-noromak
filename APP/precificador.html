@@ -371,8 +371,8 @@
     
     /* V16.37 - monitor de promoções ML */
     #promotions-monitor-panel[hidden]{display:none}
-    body.show-promotions-monitor .workspace > section:not(#promotions-monitor-panel){display:none}
-    body.show-promotions-monitor #promotions-monitor-panel{display:block}
+    body.show-promotions-monitor .workspace > section:not(#promotions-monitor-panel){display:none !important}
+    body.show-promotions-monitor #promotions-monitor-panel{display:block !important}
     .promo-kpis{display:grid;grid-template-columns:repeat(4,minmax(150px,1fr));gap:10px;margin-bottom:14px}
     .promo-kpi{border:1px solid var(--line);border-radius:13px;background:#fff;padding:12px 14px;text-align:left;color:var(--ink);display:grid;gap:3px;min-height:92px}
     button.promo-kpi{cursor:pointer}
@@ -419,7 +419,8 @@
         🔔 Notificações
         <span class="notification-badge" id="cost-alert-badge" hidden>0</span>
       </button>
-      <button class="btn btn-secondary notification-button" id="promotions-monitor-btn" type="button">
+      <button class="btn btn-secondary notification-button" id="promotions-monitor-btn" type="button"
+              onclick="if(window.nmAbrirMonitorPromocoes){window.nmAbrirMonitorPromocoes(event)}">
         🗓 Promoções
         <span class="notification-badge" id="promotions-monitor-badge" hidden>0</span>
       </button>
@@ -487,7 +488,7 @@
             <h2>Promoções vencidas e a vencer</h2>
             <p>Controle de renovação baseado na planilha de promoções. Anúncios sem estoque podem ser ocultados automaticamente.</p>
           </div>
-          <button class="btn btn-secondary" id="promotions-monitor-back" type="button">← Voltar ao Precificador</button>
+          <button class="btn btn-secondary" id="promotions-monitor-back" type="button" onclick="if(window.nmFecharMonitorPromocoes){window.nmFecharMonitorPromocoes()}">← Voltar ao Precificador</button>
         </div>
 
         <div class="promo-kpis">
@@ -2469,15 +2470,46 @@ var state = {
         promoLoadToken=original;
       }
       function promoOpen(){
-        closeCostAlerts();
-        document.body.classList.add("show-promotions-monitor");
-        var panel=document.getElementById("promotions-monitor-panel");if(panel)panel.hidden=false;
-        promoPage=1;promoRender();
+        try{
+          document.body.classList.remove("show-cost-notifications");
+          document.body.classList.add("show-promotions-monitor");
+          var panel=document.getElementById("promotions-monitor-panel");
+          if(panel){
+            panel.hidden=false;
+            panel.removeAttribute("hidden");
+            panel.style.display="block";
+          }
+          promoPage=1;
+          promoRender();
+          window.scrollTo({top:0,behavior:"instant"});
+        }catch(err){
+          console.error("Falha ao abrir Monitor de Promoções:",err);
+          try{showToast("Falha ao abrir Promoções: "+(err?.message||err));}catch(_){}
+        }
       }
       function promoClose(){
         document.body.classList.remove("show-promotions-monitor");
+        var panel=document.getElementById("promotions-monitor-panel");
+        if(panel){
+          panel.hidden=true;
+          panel.setAttribute("hidden","");
+          panel.style.removeProperty("display");
+        }
         ++promoLoadToken;
+        window.scrollTo({top:0,behavior:"instant"});
       }
+
+      // V16.38: handlers globais para o botão funcionar mesmo se algum listener
+      // dinâmico do Precificador for recriado pelo navegador.
+      window.nmAbrirMonitorPromocoes=function(ev){
+        try{ev?.preventDefault?.();ev?.stopPropagation?.();}catch(_){}
+        promoOpen();
+        return false;
+      };
+      window.nmFecharMonitorPromocoes=function(){
+        promoClose();
+        return false;
+      };
       async function promoImportFile(file){
         if(!file) return;
         if(!window.XLSX){showToast("Biblioteca de Excel indisponível.");return;}
@@ -2510,9 +2542,13 @@ var state = {
       }
 
       promoLoad();
+      console.info("[Noromak V16.38] Monitor de Promoções carregado:",promoRows.length,"anúncios.");
       var promoBtn=document.getElementById("promotions-monitor-btn");
-      if(promoBtn)promoBtn.addEventListener("click",promoOpen);
-      document.getElementById("promotions-monitor-back")?.addEventListener("click",promoClose);
+      if(promoBtn){
+        promoBtn.setAttribute("aria-controls","promotions-monitor-panel");
+        promoBtn.setAttribute("aria-expanded","false");
+      }
+      
       ["promo-search","promo-status-filter","promo-sort","promo-hide-no-stock"].forEach(function(id){
         document.getElementById(id)?.addEventListener(id==="promo-search"?"input":"change",function(){promoPage=1;promoRender();});
       });

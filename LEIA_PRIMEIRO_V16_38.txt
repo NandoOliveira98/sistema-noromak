@@ -1,0 +1,14 @@
+NOROMAK WEB V16.38 — CORREÇÃO DA TELA DE PROMOÇÕES
+
+Correção:
+- O botão Promoções agora possui chamada direta para um handler global.
+- A tela é forçada a ficar visível com display:block !important ao abrir.
+- O atributo hidden é removido explicitamente.
+- O botão Voltar também possui handler direto.
+- Mantidas as funções da V16.37: promoções vencidas/a vencer, estoque, link direto e filtros por data em Pedidos pendentes.
+
+Publicação:
+git status
+git add -A
+git commit -m "V16.38 - corrige abertura da tela de promocoes"
+./publicar.sh
