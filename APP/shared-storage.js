@@ -31,7 +31,8 @@
     "conf_historico_conferencias_v2",
     "conf_logs",
     "conf_banco_atualizado_em",
-    "precificador_online_v1"
+    "precificador_online_v1",
+    "ml_promocoes_datas_v1"
   ];
 
   const cache = new Map();

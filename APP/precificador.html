@@ -618,7 +618,7 @@
         </div>
 
         <div class="promo-help">
-          <b>Pesquisa:</b> ao digitar um MLB/código completo, a busca procura em toda a base, independentemente do filtro de vencimento ou estoque.<br>
+          <b>Pesquisa:</b> digite o MLB completo ou somente os números. A lista é filtrada imediatamente e a busca ignora temporariamente os filtros de vencimento/estoque quando o código é completo.<br>
           <b>Como funciona:</b> os registros vencidos são carregados diretamente junto com a página, sem depender de API ou estoque. Esta tela reproduz a base da planilha: código do anúncio, data de vencimento e situação.
           O status é recalculado diariamente. Clique diretamente no <b>código do anúncio</b> para abrir a página de promoção daquele MLB.
           Marque <b>Estoque zerado</b> diretamente na linha do anúncio; ele será ocultado imediatamente sem ser excluído da base. O filtro <b>Ocultar estoque zerado</b> vem ativo por padrão. Use <b>Ver todos da planilha</b> para rever anúncios marcados, e <b>Adicionar produto</b> ou <b>Excluir</b> para manter a lista.
@@ -2455,14 +2455,17 @@ var state = {
       }
       function promoSave(){
         const payload=JSON.stringify({rows:promoRows,updatedAt:new Date().toISOString()});
+
+        // Sempre mantém uma cópia local de segurança.
+        try{localStorage.setItem(PROMO_STORAGE_KEY,payload);}catch(_){}
+
+        // Fonte principal: banco compartilhado do sistema.
         try{
           if(window.appStorage && typeof window.appStorage.setItem==="function"){
             window.appStorage.setItem(PROMO_STORAGE_KEY,payload);
-          }else{
-            localStorage.setItem(PROMO_STORAGE_KEY,payload);
           }
-        }catch(_){
-          try{localStorage.setItem(PROMO_STORAGE_KEY,payload);}catch(__){}
+        }catch(err){
+          console.warn("[Noromak V16.50] Não foi possível salvar promoções no banco compartilhado:",err);
         }
       }
       function promoLoad(){
@@ -2470,21 +2473,29 @@ var state = {
         try{
           seedRows=JSON.parse(document.getElementById("promotion-seed-data")?.textContent||"[]")
             .map(function(x){
-              return {mlb:String(x.mlb||"").replace(/\D/g,""),date:String(x.date||"").slice(0,10),manualZero:false};
+              return {
+                mlb:String(x.mlb||"").replace(/\D/g,""),
+                date:String(x.date||"").slice(0,10),
+                manualZero:false
+              };
             }).filter(function(x){return x.mlb;});
         }catch(_){seedRows=[];}
 
-        var savedRows=[];
+        var rawServer="";
+        var rawLocal="";
+        try{rawLocal=localStorage.getItem(PROMO_STORAGE_KEY)||"";}catch(_){}
+
         try{
-          var raw="";
-          try{
-            raw=(window.appStorage && typeof window.appStorage.getItem==="function")
-              ? window.appStorage.getItem(PROMO_STORAGE_KEY)
-              : "";
-          }catch(_){}
-          if(!raw){
-            try{raw=localStorage.getItem(PROMO_STORAGE_KEY)||"";}catch(_){}
+          if(window.appStorage && typeof window.appStorage.getItem==="function"){
+            rawServer=window.appStorage.getItem(PROMO_STORAGE_KEY)||"";
           }
+        }catch(err){
+          console.warn("[Noromak V16.50] Banco compartilhado indisponível; usando cópia local.",err);
+        }
+
+        var savedRows=[];
+        var raw=rawServer||rawLocal;
+        try{
           var parsed=raw?JSON.parse(raw):null;
           if(parsed&&Array.isArray(parsed.rows)){
             savedRows=parsed.rows.map(function(x){
@@ -2497,19 +2508,33 @@ var state = {
           }
         }catch(_){savedRows=[];}
 
+        // Base da planilha + alterações salvas. A alteração salva ganha prioridade.
         var map=new Map();
         seedRows.forEach(function(x){map.set(x.mlb,x);});
         savedRows.forEach(function(x){
           var base=map.get(x.mlb)||{mlb:x.mlb,date:"",manualZero:false};
-          map.set(x.mlb,{mlb:x.mlb,date:x.date||base.date||"",manualZero:x.manualZero===true});
+          map.set(x.mlb,{
+            mlb:x.mlb,
+            date:x.date||base.date||"",
+            manualZero:x.manualZero===true
+          });
         });
+
         promoRows=Array.from(map.values());
-        promoSave();
+
+        // Espelha no local, mas NÃO regrava o servidor apenas por abrir a página.
+        try{
+          localStorage.setItem(PROMO_STORAGE_KEY,JSON.stringify({
+            rows:promoRows,
+            updatedAt:new Date().toISOString()
+          }));
+        }catch(_){}
 
         try{
           var mc=JSON.parse(localStorage.getItem(PROMO_META_CACHE_KEY)||"{}");
           if(mc&&typeof mc==="object")promoMeta=mc;
         }catch(_){promoMeta={};}
+
         promoUpdateBadge();
       }
 
@@ -2621,6 +2646,15 @@ var state = {
         return rows;
       }
 
+      function promoEsc(value){
+        return String(value===null||value===undefined?"":value)
+          .replace(/&/g,"&amp;")
+          .replace(/</g,"&lt;")
+          .replace(/>/g,"&gt;")
+          .replace(/"/g,"&quot;")
+          .replace(/'/g,"&#039;");
+      }
+
       function promoRowHtml(r){
         var meta=promoMeta[r.mlb]||{};
         var st=promoStatus(r), days=promoDays(r.date);
@@ -2682,10 +2716,10 @@ var state = {
         // Assim a lista sempre aparece imediatamente.
 
               }catch(err){
-          console.error("[Noromak V16.42] Falha ao renderizar promoções:",err);
+          console.error("[Noromak V16.50] Falha ao renderizar promoções:",err);
           var summary=document.getElementById("promo-summary");
-          if(summary) summary.textContent="704 anúncio(s) vencido(s) da planilha · modo seguro";
-          // IMPORTANTE: não apaga o HTML pré-renderizado em caso de erro.
+          if(summary) summary.textContent="Erro ao atualizar a lista: "+String(err?.message||err);
+          // Não apaga o HTML pré-renderizado em caso de erro.
         }
       }
 
@@ -2930,7 +2964,8 @@ var state = {
             .filter(function(x){return x.mlb;});
         }catch(_){promoRows=[];}
       }
-      console.info("[Noromak V16.49] Monitor de Promoções carregado:",promoRows.length,"anúncios.");
+      console.info("[Noromak V16.50] Monitor de Promoções carregado:",promoRows.length,"anúncios.");
+      try{promoRender();}catch(err){console.error("[Noromak V16.50] Render inicial:",err);}
       var promoBtn=document.getElementById("promotions-monitor-btn");
       if(promoBtn){
         promoBtn.setAttribute("aria-controls","promotions-monitor-panel");
@@ -3033,6 +3068,17 @@ var state = {
       document.getElementById("promo-add-mlb")?.addEventListener("keydown",function(e){if(e.key==="Enter")promoAdd();});
       document.getElementById("promo-import-btn")?.addEventListener("click",function(){document.getElementById("promo-import-file")?.click();});
       document.getElementById("promo-import-file")?.addEventListener("change",function(e){var f=e.target.files?.[0];if(f)promoImportFile(f);e.target.value="";});
+      window.addEventListener("storage",function(e){
+        if(e && e.key===PROMO_STORAGE_KEY){
+          try{
+            promoLoad();
+            promoPage=1;
+            promoRender();
+          }catch(err){
+            console.error("[Noromak V16.50] Falha ao recarregar promoções compartilhadas:",err);
+          }
+        }
+      });
 </script>
 </body>
 </html>
