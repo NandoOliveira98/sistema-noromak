@@ -1,0 +1,13 @@
+NOROMAK WEB V16.45
+
+- Corrigido definitivamente o checkbox Estoque zerado usando delegação de evento.
+- Ao marcar, a linha some imediatamente e a marcação fica salva.
+- Removido botão azul Abrir promoção.
+- O MLB continua clicável e abre direto a página da promoção.
+- Botão Excluir mantido.
+
+Publicação:
+git status
+git add -A
+git commit -m "V16.45 - corrige estoque zerado e remove botao abrir promocao"
+./publicar.sh
