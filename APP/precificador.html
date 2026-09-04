@@ -1503,7 +1503,6 @@ var state = {
         }
 
         costLookupRequestedSku = sku;
-        var generation = ++costLookupGeneration;
         var now = Date.now();
 
         if (!force && lastCostLookupSku === sku && now - lastCostLookupAt < 30000) {
@@ -1518,6 +1517,7 @@ var state = {
           return;
         }
 
+        var generation = ++costLookupGeneration;
         costLookupInFlight = true;
         costLookupInFlightSku = sku;
         pendingCostLookupSku = "";
@@ -1537,13 +1537,14 @@ var state = {
           }
 
           var custosFiliais = normalizeBranchCosts(data.custos);
-          state.branchCosts = custosFiliais;
 
-          // Não deixa uma resposta antiga alterar o SKU que o usuário já mudou.
-          if (String(el.sku.value || "").trim() !== sku) {
+          // V16.56: resposta de um produto anterior não pode alterar nem o custo,
+          // nem os cards de filial, nem a precificação do produto atual.
+          if (generation !== costLookupGeneration || String(el.sku.value || "").trim() !== sku) {
             return;
           }
 
+          state.branchCosts = custosFiliais;
           var descricaoAtual = String(el.produto.value || "").trim();
           var descricaoApi = String(data.descricao || "").trim();
 
@@ -1645,9 +1646,9 @@ var state = {
           var queuedSku = String(pendingCostLookupSku || "").trim();
           pendingCostLookupSku = "";
           if (currentSku && currentSku !== sku && (!queuedSku || queuedSku === currentSku)) {
-            setTimeout(function () { lookupAverageCostBySku(false); }, 0);
+            setTimeout(function () { lookupAverageCostBySku(true); }, 0);
           } else if (queuedSku && queuedSku === currentSku && queuedSku !== sku) {
-            setTimeout(function () { lookupAverageCostBySku(false); }, 0);
+            setTimeout(function () { lookupAverageCostBySku(true); }, 0);
           }
         }
       }
@@ -2158,25 +2159,41 @@ var state = {
         if (costLookupTimer) { clearTimeout(costLookupTimer); costLookupTimer = null; }
         if (autoSaveTimer) { clearTimeout(autoSaveTimer); autoSaveTimer = null; }
         setAutoSaveStatus("Salvamento automático ativo", "info");
-        costLookupRequestedSku = String(product.sku || "").trim();
-        pendingCostLookupSku = "";
+
+        var selectedSku = String(product.sku || "").trim();
+
+        // V16.56: toda troca de produto invalida imediatamente qualquer consulta anterior.
+        costLookupGeneration += 1;
+        costLookupRequestedSku = selectedSku;
+        pendingCostLookupSku = selectedSku;
         lastCostLookupSku = "";
         lastCostLookupAt = 0;
+
         state.selectedId = String(product._id);
         state.isNew = false;
         el.search.value = "";
         closeProductSearch();
         fillForm(clone(product));
+
         if (el["cost-last-change-note"]) el["cost-last-change-note"].textContent = "";
         renderProductList();
         persist();
 
-        // Produtos antigos já existentes no banco não disparam o evento "input"
-        // do campo SKU. Faz a consulta automaticamente ao selecioná-los.
-        if (!product.isKit && String(product.sku || "").trim()) {
+        // Para produto simples, nunca deixar a precificação rodar com o custo
+        // visual do produto anterior enquanto o Apollo consulta o SKU selecionado.
+        if (!product.isKit && selectedSku) {
+          state.branchCosts = [];
+          state.branchCostBlocked = true;
+          state.baseCost = 0;
+          setValue("custo", "");
+          renderBranchCosts();
+          recalculate();
+          setCostApiStatus("Consultando custo do SKU " + selectedSku + "...", "info");
+
           setTimeout(function () {
-            lookupAverageCostBySku(false);
-          }, 50);
+            // force=true: seleção de produto SEMPRE consulta o custo atual.
+            lookupAverageCostBySku(true);
+          }, 0);
         }
       }
 
