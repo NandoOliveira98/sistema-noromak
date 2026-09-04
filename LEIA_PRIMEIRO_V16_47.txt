@@ -1,0 +1,20 @@
+NOROMAK WEB V16.47
+
+CONFERÊNCIA
+- A lista lateral volta a mostrar TODOS os pedidos pendentes, e não apenas os que possuem etiqueta.
+- Pedidos com etiqueta: "✓ Etiqueta pronta".
+- Pedidos sem etiqueta: "Aguardando etiqueta".
+- O pedido sem etiqueta continua bloqueado para conferência/impressão até a etiqueta ser vinculada.
+- Contadores de marketplaces agora refletem todos os pendentes.
+
+PROMOÇÕES
+- Novo card/filtro rápido "Sem estoque".
+- Conta anúncios marcados manualmente como zero e estoques 0 confirmados pela API.
+- Barra de filtros e botões reorganizada e alinhada.
+- Ações Atualizar estoque / Ver todos / Importar planilha ficam agrupadas.
+
+Publicação:
+git status
+git add -A
+git commit -m "V16.47 - restaura todos pendentes e organiza filtros de promocoes"
+./publicar.sh

@@ -476,7 +476,7 @@
       </select>
       <div id="resumoFiltroMarketplace" class="filtro-marketplace-resumo">Carregando quantidades...</div>
     </div>
-    <div class="aviso-etiquetas-disponiveis">🏷️ A lista mostra somente pedidos que já possuem etiqueta vinculada e pronta para impressão.</div>
+    <div class="aviso-etiquetas-disponiveis">🏷️ A lista mostra todos os pedidos pendentes. Pedidos sem etiqueta ficam sinalizados como “Aguardando etiqueta”.</div>
 
     <div id="painelAtalhos" class="atalhos-box" aria-label="Atalhos do modo sem mouse">
       <button id="btnAlternarAtalhos" class="atalhos-titulo" type="button" onclick="alternarPainelAtalhos()" aria-controls="conteudoAtalhos" aria-expanded="false">
@@ -1765,7 +1765,8 @@ function focarFiltroMarketplacePedidos() {
 
 function obterContagemMarketplacePedidos() {
   const contagens = { todos:0, mercado_livre:0, shopee:0, magalu:0, desconhecido:0 };
-  obterUidsPedidosComEtiquetaDisponivel().forEach(uid => {
+  // V16.47: contagem reflete TODOS os pedidos pendentes.
+  listaPedidosPendentes.forEach(uid => {
     const item = dadosPedidos.find(x => String(x.__uidPedido) === String(uid));
     if (!item) return;
     const mp = obterMarketplaceItem(item);
@@ -1821,9 +1822,11 @@ function renderizarListaPedidos() {
   atualizarResumoFiltroMarketplace(contagensMarketplace);
   let html = "";
 
-  obterUidsPedidosComEtiquetaDisponivel().forEach(uid => {
+  listaPedidosPendentes.forEach(uid => {
     let itemPedido = dadosPedidos.find(x => String(x.__uidPedido) === String(uid));
     if (!itemPedido) return;
+    const etiquetaResultado = resolverEtiquetaPedido(itemPedido);
+    const etiquetaPronta = Boolean(etiquetaResultado && etiquetaResultado.ok);
 
     let numPedidoReal = extrairCampo(itemPedido, "Pedido");
     let nomeCliente = nomeClienteConferencia(itemPedido);
@@ -1847,6 +1850,7 @@ function renderizarListaPedidos() {
           ${nomeCliente ? `<div class="pedido-cliente">👤 ${escaparHtml(nomeCliente)}</div>` : ''}
           <div class="pedido-cliente">📅 Despacho: ${escaparHtml(dataPedidoItem(itemPedido)||hojeLocalConferencia())}</div>
           ${resumoConclusaoAnteriorConferencia(itemPedido) ? `<span class="pedido-status-mini pedido-status-ja-feito">↻ JÁ FOI FEITO · ${escaparHtml(resumoConclusaoAnteriorConferencia(itemPedido).data||"data anterior")}</span>` : ''}
+          ${etiquetaPronta ? `<span class="pedido-status-mini pedido-status-etiqueta-ok">✓ Etiqueta pronta</span>` : `<span class="pedido-status-mini pedido-status-etiqueta-pendente">Aguardando etiqueta</span>`}
           ${completo ? `<span class="pedido-status-mini pedido-status-impressao">Conferido — aguardando impressão</span>` : ''}
           ${iniciado ? `<span class="pedido-status-mini pedido-status-andamento">Em andamento: ${lidos}/${total}</span>` : ''}
         </div>
@@ -1856,10 +1860,7 @@ function renderizarListaPedidos() {
 
   if (html === "") {
     const nomeFiltro = filtroMarketplace === "todos" ? "" : ` de ${nomeMarketplace(filtroMarketplace)}`;
-    const totalPedidosPendentes = listaPedidosPendentes.length;
-    const totalSemEtiqueta = Math.max(0, totalPedidosPendentes - obterUidsPedidosComEtiquetaDisponivel().length);
-    const detalheSemEtiqueta = totalSemEtiqueta > 0 ? `<br><span style="font-size:11px;">${totalSemEtiqueta} pedido(s) aguardando etiqueta no painel administrativo.</span>` : "";
-    html = `<div style="padding:10px; color:#888; font-size:13px; text-align:center;">Nenhum pedido com etiqueta disponível${nomeFiltro}${detalheSemEtiqueta}</div>`;
+    html = `<div style="padding:10px; color:#888; font-size:13px; text-align:center;">Nenhum pedido pendente${nomeFiltro}.</div>`;
   }
 
   document.getElementById("listaPedidos").innerHTML = html;
@@ -3457,6 +3458,9 @@ window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_
   .toast-novo-pedido strong{display:block;font-size:14px;margin-bottom:3px}
   .toast-novo-pedido span{display:block;font-size:11px;line-height:1.4;color:#e8f0f7}
   @media(max-width:780px){.alerta-novos-pedidos-topo{flex:1 1 auto}.btn-alerta-resumo{width:100%;justify-content:center;min-height:40px}.alerta-novos-pedidos-painel{right:auto;left:0}.alerta-novos-pedidos-acoes button{min-height:38px}.toast-novo-pedido{right:10px;bottom:78px;width:calc(100vw - 20px)}}
+
+.pedido-status-etiqueta-ok{background:#dcfce7;color:#166534;border:1px solid #86efac}
+.pedido-status-etiqueta-pendente{background:#fff7ed;color:#9a3412;border:1px solid #fdba74}
 </style>
 <script>
 (() => {

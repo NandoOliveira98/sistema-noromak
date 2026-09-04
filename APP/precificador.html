@@ -453,6 +453,26 @@
       min-height:15px;
       accent-color:#dc2626;
     }
+
+.promo-kpis{grid-template-columns:repeat(5,minmax(145px,1fr)) !important}
+.promo-toolbar{
+  grid-template-columns:minmax(250px,1.45fr) minmax(170px,.75fr) minmax(170px,.75fr) minmax(170px,.75fr) auto minmax(360px,1.25fr) !important;
+  align-items:center !important;
+}
+.promo-toolbar > input,.promo-toolbar > select,.promo-toolbar > label{height:38px;box-sizing:border-box}
+.promo-stock-toggle{justify-content:center;padding:0 10px;border:1px solid #dbe5f0;border-radius:9px;background:#fff}
+.promo-toolbar-actions{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;align-items:center}
+.promo-toolbar-actions .btn{height:38px;white-space:nowrap}
+@media(max-width:1250px){
+  .promo-kpis{grid-template-columns:repeat(3,1fr) !important}
+  .promo-toolbar{grid-template-columns:repeat(3,1fr) !important}
+  .promo-toolbar-actions{grid-column:1/-1}
+}
+@media(max-width:760px){
+  .promo-kpis{grid-template-columns:1fr 1fr !important}
+  .promo-toolbar{grid-template-columns:1fr !important}
+  .promo-toolbar-actions{grid-template-columns:1fr !important}
+}
 </style>
 </head>
 <body>
@@ -544,11 +564,12 @@
           <button type="button" class="promo-kpi danger" data-promo-quick="expired"><span>Vencidas</span><strong id="promo-kpi-expired">0</strong><small>Precisam de revisão</small></button>
           <button type="button" class="promo-kpi warn" data-promo-quick="7"><span>Vencem em 7 dias</span><strong id="promo-kpi-7">0</strong><small>Renovar em breve</small></button>
           <button type="button" class="promo-kpi info" data-promo-quick="15"><span>Vencem em 15 dias</span><strong id="promo-kpi-15">0</strong><small>Planejamento</small></button>
+          <button type="button" class="promo-kpi neutral" data-promo-stock-quick="zero"><span>Sem estoque</span><strong id="promo-kpi-zero">0</strong><small>Marcados ou confirmados em 0</small></button>
           <div class="promo-kpi neutral"><span>Base importada</span><strong id="promo-kpi-total">0</strong><small id="promo-kpi-source">Planilha</small></div>
         </div>
 
         <div class="promo-toolbar">
-          <input id="promo-search" type="search" placeholder="Buscar MLB, SKU ou produto...">
+          <input id="promo-search" type="search" placeholder="Buscar MLB, código, SKU ou produto...">
           <select id="promo-status-filter">
             <option value="expired">Vencidas</option>
             <option value="7">A vencer em 7 dias</option>
@@ -568,9 +589,11 @@
             <option value="zero">Somente sem estoque</option>
           </select>
           <label class="promo-stock-toggle"><input id="promo-hide-no-stock" type="checkbox" checked> Ocultar estoque zerado</label>
-          <button class="btn btn-secondary" id="promo-refresh-stock" type="button">↻ Atualizar estoque</button>
-          <button class="btn btn-secondary" id="promo-show-all" type="button">Ver todos da planilha</button>
-          <button class="btn btn-primary" id="promo-import-btn" type="button">Importar planilha</button>
+          <div class="promo-toolbar-actions">
+            <button class="btn btn-secondary" id="promo-refresh-stock" type="button">↻ Atualizar estoque</button>
+            <button class="btn btn-secondary" id="promo-show-all" type="button">Ver todos</button>
+            <button class="btn btn-primary" id="promo-import-btn" type="button">Importar planilha</button>
+          </div>
           <input id="promo-import-file" type="file" accept=".xlsx,.xls" hidden>
         </div>
 
@@ -588,6 +611,7 @@
         </div>
 
         <div class="promo-help">
+          <b>Pesquisa:</b> ao digitar um MLB/código completo, a busca procura em toda a base, independentemente do filtro de vencimento ou estoque.<br>
           <b>Como funciona:</b> os registros vencidos são carregados diretamente junto com a página, sem depender de API ou estoque. Esta tela reproduz a base da planilha: código do anúncio, data de vencimento e situação.
           O status é recalculado diariamente. Clique diretamente no <b>código do anúncio</b> para abrir a página de promoção daquele MLB.
           Marque <b>Estoque zerado</b> diretamente na linha do anúncio; ele será ocultado imediatamente sem ser excluído da base. O filtro <b>Ocultar estoque zerado</b> vem ativo por padrão. Use <b>Ver todos da planilha</b> para rever anúncios marcados, e <b>Adicionar produto</b> ou <b>Excluir</b> para manter a lista.
@@ -2474,8 +2498,12 @@ var state = {
         if(badge){badge.textContent=String(expired);badge.hidden=expired<=0;}
       }
       function promoKpis(){
-        var expired=0,d7=0,d15=0,dated=0;
+        var expired=0,d7=0,d15=0,dated=0,zero=0;
         promoRows.forEach(function(r){
+          var meta=promoMeta[r.mlb]||{};
+          var manualZero=r.manualZero===true;
+          var apiZero=meta.stock_known===true && Number(meta.available_quantity||0)===0;
+          if(manualZero||apiZero)zero++;
           if(!r.date)return; dated++;
           var d=promoDays(r.date);
           if(d<0)expired++;
@@ -2485,49 +2513,70 @@ var state = {
         document.getElementById("promo-kpi-expired").textContent=expired;
         document.getElementById("promo-kpi-7").textContent=d7;
         document.getElementById("promo-kpi-15").textContent=d15;
+        document.getElementById("promo-kpi-zero").textContent=zero;
         document.getElementById("promo-kpi-total").textContent=promoRows.length;
         document.getElementById("promo-kpi-source").textContent=dated+" com data · "+(promoRows.length-dated)+" sem data";
         promoUpdateBadge();
       }
       function promoBaseFiltered(){
         var status=document.getElementById("promo-status-filter")?.value||"expired";
-        var search=String(document.getElementById("promo-search")?.value||"").trim().toLowerCase();
+        var searchRaw=String(document.getElementById("promo-search")?.value||"").trim();
+        var search=searchRaw.toLowerCase();
+        var searchDigits=searchRaw.replace(/\D/g,"");
+        var searchIsMlb=/^(?:MLB)?\s*\d{6,}$/i.test(searchRaw);
         var hideNoStock=!!document.getElementById("promo-hide-no-stock")?.checked;
         var stockFilter=String(document.getElementById("promo-stock-filter")?.value||"all");
 
         var rows=promoRows.filter(function(r){
-          var days=promoDays(r.date);
-
-          if(status==="expired" && !(r.date&&days<0))return false;
-          if(status==="7" && !(r.date&&days>=0&&days<=7))return false;
-          if(status==="15" && !(r.date&&days>=0&&days<=15))return false;
-          if(status==="30" && !(r.date&&days>=0&&days<=30))return false;
-          if(status==="all" && !r.date)return false;
-          if(status==="nodate" && r.date)return false;
-
           var meta=promoMeta[r.mlb]||{};
 
+          // V16.48:
+          // Quando o usuário digita um MLB/código do anúncio, a busca é GLOBAL
+          // e não fica limitada pelo filtro "Vencidas / 7 dias / 15 dias".
           if(search){
-            var txt=(r.mlb+" "+(meta.sku||"")+" "+(meta.title||"")).toLowerCase();
-            if(!txt.includes(search))return false;
+            var mlb=String(r.mlb||"").replace(/\D/g,"");
+            var sku=String(meta.sku||"").toLowerCase();
+            var title=String(meta.title||"").toLowerCase();
+
+            var matched=false;
+            if(searchIsMlb && searchDigits){
+              matched = mlb.includes(searchDigits) || ("mlb"+mlb).includes(search.toLowerCase().replace(/\s+/g,""));
+            }else{
+              var hay=(mlb+" mlb"+mlb+" "+sku+" "+title).toLowerCase();
+              matched=hay.includes(search);
+            }
+            if(!matched)return false;
           }
 
-          // Stock is tri-state:
-          // known positive / known zero / unknown.
-          // UNKNOWN must NEVER disappear from the spreadsheet-derived list.
+          var days=promoDays(r.date);
+
+          // Busca por MLB ignora filtro de data/status para localizar o anúncio
+          // independentemente de estar vencido, ativo ou sem data.
+          if(!searchIsMlb){
+            if(status==="expired" && !(r.date&&days<0))return false;
+            if(status==="7" && !(r.date&&days>=0&&days<=7))return false;
+            if(status==="15" && !(r.date&&days>=0&&days<=15))return false;
+            if(status==="30" && !(r.date&&days>=0&&days<=30))return false;
+            if(status==="all" && !r.date)return false;
+            if(status==="nodate" && r.date)return false;
+          }
+
           var known=meta.stock_known===true;
           var qty=known?Number(meta.available_quantity||0):null;
           var manualZero=r.manualZero===true;
 
-          // Marcação manual funciona mesmo sem consultar a API.
-          if(stockFilter==="positive" && manualZero)return false;
-          if(stockFilter==="zero" && manualZero)return true;
-          if(hideNoStock && manualZero)return false;
+          // Se for uma busca direta por MLB, mostramos o anúncio mesmo que esteja
+          // marcado como estoque zero, para que o usuário consiga encontrá-lo e revisar.
+          if(!searchIsMlb){
+            if(stockFilter==="positive" && manualZero)return false;
+            if(stockFilter==="zero" && manualZero)return true;
+            if(hideNoStock && manualZero)return false;
 
-          if(promoStockFilterReady){
-            if(stockFilter==="positive" && !(known && qty>0))return false;
-            if(stockFilter==="zero" && !(known && qty===0))return false;
-            if(hideNoStock && known && qty===0)return false;
+            if(promoStockFilterReady){
+              if(stockFilter==="positive" && !(known && qty>0))return false;
+              if(stockFilter==="zero" && !(known && qty===0))return false;
+              if(hideNoStock && known && qty===0)return false;
+            }
           }
 
           return true;
@@ -2535,17 +2584,17 @@ var state = {
 
         var sort=document.getElementById("promo-sort")?.value||"date_asc";
         rows.sort(function(a,b){
+          if(searchIsMlb && searchDigits){
+            var ae=String(a.mlb||"")===searchDigits?0:1;
+            var be=String(b.mlb||"")===searchDigits?0:1;
+            if(ae!==be)return ae-be;
+          }
           if(sort==="mlb_asc")return Number(a.mlb)-Number(b.mlb);
           var ad=a.date||"9999-12-31",bd=b.date||"9999-12-31";
           return sort==="date_desc"?bd.localeCompare(ad):ad.localeCompare(bd);
         });
-        return rows;
-      }
 
-      function promoEsc(value){
-        return String(value===null||value===undefined?"":value)
-          .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
-          .replace(/"/g,"&quot;").replace(/'/g,"&#039;");
+        return rows;
       }
 
       function promoRowHtml(r){
@@ -2589,7 +2638,7 @@ var state = {
         var body=document.getElementById("promo-table-body");
 
         body.innerHTML=part.map(promoRowHtml).join("") ||
-          '<tr><td colspan="5" style="padding:28px;text-align:center;color:#64748b">Nenhuma promoção encontrada com os filtros atuais. Desative o filtro de estoque para ver todos os registros da planilha.</td></tr>';
+          '<tr><td colspan="5" style="padding:28px;text-align:center;color:#64748b">Nenhuma promoção encontrada. Para buscar por anúncio, digite o MLB completo (ex.: MLB2649952166) ou somente os números.</td></tr>';
 
         document.getElementById("promo-summary").textContent=
           rows.length+" anúncio(s) da planilha · base carregada: "+promoRows.length+" · "+(document.getElementById("promo-hide-no-stock")?.checked
@@ -2850,7 +2899,10 @@ var state = {
       }
       
       ["promo-search","promo-status-filter","promo-sort"].forEach(function(id){
-        document.getElementById(id)?.addEventListener(id==="promo-search"?"input":"change",function(){promoPage=1;promoRender();});
+        document.getElementById(id)?.addEventListener(id==="promo-search"?"input":"change",function(){
+          promoPage=1;
+          promoRender();
+        });
       });
       ["promo-stock-filter","promo-hide-no-stock"].forEach(function(id){
         document.getElementById(id)?.addEventListener("change",function(){
@@ -2863,6 +2915,16 @@ var state = {
       });
       document.querySelectorAll("[data-promo-quick]").forEach(function(btn){
         btn.addEventListener("click",function(){document.getElementById("promo-status-filter").value=btn.dataset.promoQuick;promoPage=1;promoRender();});
+      });
+      document.querySelectorAll("[data-promo-stock-quick]").forEach(function(btn){
+        btn.addEventListener("click",function(){
+          var stock=document.getElementById("promo-stock-filter");
+          var hide=document.getElementById("promo-hide-no-stock");
+          if(stock)stock.value=btn.dataset.promoStockQuick||"zero";
+          if(hide)hide.checked=false;
+          promoPage=1;
+          promoRender();
+        });
       });
       document.getElementById("promo-prev")?.addEventListener("click",function(){promoPage--;promoRender();});
       document.getElementById("promo-next")?.addEventListener("click",function(){promoPage++;promoRender();});
