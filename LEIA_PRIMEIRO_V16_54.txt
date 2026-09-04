@@ -1,0 +1,5 @@
+NOROMAK WEB V16.54
+- Precificador Mercado Livre: removido o campo separado Frete (R$).
+- Taxa fixa renomeada para Taxa fixa / Frete (R$).
+- O valor consolidado é considerado uma única vez no cálculo.
+- Mantidas as correções da V16.53 e anteriores.
