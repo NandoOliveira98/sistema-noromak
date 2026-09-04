@@ -1494,47 +1494,39 @@ var state = {
       async function lookupAverageCostBySku(force, explicitSku) {
         if (el["is-kit"] && el["is-kit"].checked) {
           setCostApiStatus("Kit: o custo é calculado pela soma dos componentes.", "info");
-          return;
+          return false;
         }
 
         var sku = String(explicitSku || el.sku.value || "").trim();
         if (!sku) {
           setCostApiStatus("Informe o SKU para consultar o custo médio.", "error");
-          return;
+          return false;
         }
 
         costLookupRequestedSku = sku;
         var now = Date.now();
 
         if (!force && lastCostLookupSku === sku && now - lastCostLookupAt < 30000) {
-          return;
+          return true;
         }
 
-        // Se outra consulta estiver em andamento, guarda o SKU atual.
-        // Assim que a chamada anterior terminar, o SKU mais recente é consultado.
-        if (costLookupInFlight) {
-          pendingCostLookupSku = sku;
-          setCostApiStatus("Aguardando consulta anterior finalizar...", "info");
-          return;
-        }
+        try { if (costLookupAbortController) costLookupAbortController.abort(); } catch (_) {}
+        var controller = new AbortController();
+        costLookupAbortController = controller;
+        var requestId = ++costLookupGeneration;
 
-        var generation = ++costLookupGeneration;
         costLookupInFlight = true;
         costLookupInFlightSku = sku;
         pendingCostLookupSku = "";
-
-        try { if (costLookupAbortController) costLookupAbortController.abort(); } catch (_) {}
-        costLookupAbortController = new AbortController();
-
         if (el["cost-api-btn"]) el["cost-api-btn"].disabled = true;
-        setCostApiStatus("Consultando custo médio no Apollo...", "info");
+        setCostApiStatus("Consultando custo e curva do SKU " + sku + "...", "info");
 
         try {
           var response = await fetch("/expedicao/api/precificador/custo?codigo=" + encodeURIComponent(sku), {
             method: "GET",
             credentials: "same-origin",
             headers: { "Accept": "application/json" },
-            signal: costLookupAbortController ? costLookupAbortController.signal : undefined
+            signal: controller.signal
           });
           var data = await response.json().catch(function () { return {}; });
 
@@ -1542,49 +1534,74 @@ var state = {
             throw new Error(data.error || "Não foi possível consultar o custo médio.");
           }
 
+          if (requestId !== costLookupGeneration || controller.signal.aborted) return false;
+          if (String(el.sku.value || "").trim() !== sku) return false;
+
           var custosFiliais = normalizeBranchCosts(data.custos);
-
-          // V16.56: resposta de um produto anterior não pode alterar nem o custo,
-          // nem os cards de filial, nem a precificação do produto atual.
-          if (generation !== costLookupGeneration || String(el.sku.value || "").trim() !== sku) {
-            return;
-          }
-
           state.branchCosts = custosFiliais;
+
           var descricaoAtual = String(el.produto.value || "").trim();
           var descricaoApi = String(data.descricao || "").trim();
 
-          // Se é um produto já salvo, compara o custo novo com o último custo persistido.
           var savedProduct = currentProduct();
           var sameSavedSku = savedProduct && !state.isNew && String(savedProduct.sku || "").trim() === sku;
           var previousSavedCost = sameSavedSku ? Number(savedProduct.custo) : NaN;
-          var selectedBranch = Number(el["filial-custo"].value || (sameSavedSku && savedProduct.filialCusto) || 1);
+
+          var selectedBranch = Number(
+            (el["filial-custo"] && el["filial-custo"].value) ||
+            (sameSavedSku && savedProduct.filialCusto) ||
+            1
+          );
           if (el["filial-custo"]) el["filial-custo"].value = String(selectedBranch);
-          var selectedRow = custosFiliais.find(function(row){ return Number(row.revenda)===selectedBranch; }) || null;
+
+          var selectedRow = custosFiliais.find(function(row){
+            return Number(row.revenda) === selectedBranch;
+          }) || null;
+
           var custo = selectedRow && selectedRow.tem_cadastro===true && Number.isFinite(Number(selectedRow.custo_medio))
-            ? Number(selectedRow.custo_medio) : null;
-          applySelectedBranchCost({silent:true});
+            ? Number(selectedRow.custo_medio)
+            : null;
+
+          if (!Number.isFinite(custo)) {
+            var firstValid = custosFiliais.find(function(row){
+              return row.tem_cadastro===true && Number.isFinite(Number(row.custo_medio));
+            }) || null;
+            if (firstValid) {
+              selectedBranch = Number(firstValid.revenda);
+              selectedRow = firstValid;
+              custo = Number(firstValid.custo_medio);
+              if (el["filial-custo"]) el["filial-custo"].value = String(selectedBranch);
+            }
+          }
+
+          state.branchCostBlocked = !Number.isFinite(custo);
+          if (Number.isFinite(custo)) {
+            state.baseCost = Core.roundMoney(custo);
+            setValue("custo", state.baseCost);
+          } else {
+            state.baseCost = 0;
+            setValue("custo", "");
+          }
+          renderBranchCosts();
 
           if (!descricaoAtual && descricaoApi) {
             el.produto.value = descricaoApi;
           }
 
           var curvaApi = String(data.curva_abc || "").trim().toUpperCase();
-          // Defesa adicional: se o backend/endpoint vier apenas com a curva
-          // composta (A3, B2, C1, D3), usa somente a letra ABCD.
           if (!["A","B","C","D"].includes(curvaApi)) {
             var curvaComposta = String(data.curva || "").trim().toUpperCase();
             var curvaMatch = curvaComposta.match(/^([ABCD])/);
             curvaApi = curvaMatch ? curvaMatch[1] : "";
           }
-          var curvaAnterior = String(el.curva.value || "").trim().toUpperCase();
+
           if (["A","B","C","D"].includes(curvaApi)) {
             el.curva.value = curvaApi;
             applyCurveMargin(curvaApi);
           }
 
           if (sameSavedSku) {
-            if (Number.isFinite(custo) && Number.isFinite(previousSavedCost) && Math.abs(previousSavedCost - custo) >= 0.01) {
+            if (Number.isFinite(custo) && Number.isFinite(previousSavedCost) && Math.abs(previousSavedCost-custo)>=0.01) {
               addCostChangeAlert(savedProduct, previousSavedCost, custo, descricaoApi);
               if (el["cost-last-change-note"]) {
                 el["cost-last-change-note"].textContent = "⚠ Custo alterado: " + money(previousSavedCost) + " → " + money(custo);
@@ -1597,9 +1614,12 @@ var state = {
             savedProduct.filialCusto = selectedBranch;
             if (Number.isFinite(custo)) savedProduct.custo = Core.roundMoney(custo);
             if (!String(savedProduct.produto || "").trim() && descricaoApi) savedProduct.produto = descricaoApi;
+
             if (["A","B","C","D"].includes(curvaApi)) {
               savedProduct.curva = curvaApi;
-              if (!savedProduct.marketplaces || typeof savedProduct.marketplaces !== "object") savedProduct.marketplaces = defaultMarketplaces();
+              if (!savedProduct.marketplaces || typeof savedProduct.marketplaces !== "object") {
+                savedProduct.marketplaces = defaultMarketplaces();
+              }
               var margemCurva = desiredMarginForCurve(curvaApi);
               if (Number.isFinite(margemCurva)) {
                 ["ml","shopee","magalu"].forEach(function(market) {
@@ -1608,9 +1628,6 @@ var state = {
                 });
               }
             }
-            var kitSync = refreshAllKitCosts();
-            state.kitCycleIds = kitSync.cycleIds;
-            persist();
           }
 
           lastCostLookupSku = sku;
@@ -1618,50 +1635,53 @@ var state = {
 
           state.dirty = true;
           recalculate();
-          scheduleAutoSave();
 
-          // Garante que nenhum recálculo posterior limpou a descrição.
-          if (!String(el.produto.value || "").trim() && descricaoApi) {
-            el.produto.value = descricaoApi;
+          if (sameSavedSku) {
+            var kitSync = refreshAllKitCosts();
+            state.kitCycleIds = kitSync.cycleIds;
+            state.dirty = false;
+            persist();
+            setAutoSaveStatus("✓ Custo e curva atualizados automaticamente", "ok");
+          } else {
+            scheduleAutoSave();
           }
 
           var extra = descricaoApi ? " · " + descricaoApi : "";
           var unidade = data.unidade ? " · " + String(data.unidade) : "";
-          var selectedName = BRANCH_NAMES[selectedBranch] || ("Revenda "+selectedBranch);
+          var selectedName = BRANCH_NAMES[selectedBranch] || ("Revenda " + selectedBranch);
+
           if (Number.isFinite(custo)) {
             setCostApiStatus(selectedName + ": " + money(custo) + unidade + extra, "ok");
-            showToast("Custos das 3 filiais atualizados pelo Apollo.");
-          } else {
-            var statusText = selectedRow && selectedRow.tem_cadastro===false ? "não cadastrada" : "não consultado";
-            setCostApiStatus(selectedName + ": " + statusText + ". Escolha outra filial ou tente novamente.", "error");
-            showToast("Consulta concluída. A filial selecionada está sem custo disponível.");
+            showToast("Custo e curva atualizados automaticamente.");
+            return true;
           }
+
+          var statusText = selectedRow && selectedRow.tem_cadastro===false ? "não cadastrada" : "não consultado";
+          setCostApiStatus(selectedName + ": " + statusText + ". Escolha outra filial ou tente novamente.", "error");
+          return false;
+
         } catch (error) {
-          if (error && error.name === "AbortError") {
-            return;
-          }
-          // Só mostra erro se o usuário ainda estiver no mesmo SKU.
-          if (String(el.sku.value || "").trim() === sku) {
+          if (error && error.name === "AbortError") return false;
+
+          if (requestId === costLookupGeneration && String(el.sku.value || "").trim() === sku) {
+            state.branchCostBlocked = true;
+            setValue("custo", "");
+            recalculate();
             setCostApiStatus(error && error.message ? error.message : "Falha ao consultar custo médio.", "error");
           }
+          return false;
         } finally {
-          costLookupInFlight = false;
-          costLookupInFlightSku = "";
-          costLookupAbortController = null;
-          if (el["cost-api-btn"]) el["cost-api-btn"].disabled = !!(el["is-kit"] && el["is-kit"].checked);
-
-          // Se o usuário digitou outro SKU enquanto a chamada estava ativa,
-          // consulta imediatamente o SKU mais recente sem exigir clique.
-          var currentSku = String(el.sku.value || "").trim();
-          var queuedSku = String(pendingCostLookupSku || "").trim();
-          pendingCostLookupSku = "";
-          if (currentSku && currentSku !== sku && (!queuedSku || queuedSku === currentSku)) {
-            setTimeout(function () { lookupAverageCostBySku(true, currentSku); }, 0);
-          } else if (queuedSku && queuedSku === currentSku && queuedSku !== sku) {
-            setTimeout(function () { lookupAverageCostBySku(true, currentSku); }, 0);
+          if (costLookupAbortController === controller) {
+            costLookupAbortController = null;
+            costLookupInFlight = false;
+            costLookupInFlightSku = "";
+            if (el["cost-api-btn"]) {
+              el["cost-api-btn"].disabled = !!(el["is-kit"] && el["is-kit"].checked);
+            }
           }
         }
       }
+
 
       function scheduleAverageCostLookup() {
         if (costLookupTimer) clearTimeout(costLookupTimer);
@@ -2164,38 +2184,28 @@ var state = {
       }
 
       async function selectProduct(productId) {
-        var product = state.products.find(function (item) { return String(item._id) === String(productId); });
+        var product = state.products.find(function (item) {
+          return String(item._id) === String(productId);
+        });
         if (!product) return;
 
         if (costLookupTimer) { clearTimeout(costLookupTimer); costLookupTimer = null; }
         if (autoSaveTimer) { clearTimeout(autoSaveTimer); autoSaveTimer = null; }
         try { if (costLookupAbortController) costLookupAbortController.abort(); } catch (_) {}
 
-        setAutoSaveStatus("Salvamento automático ativo", "info");
+        setAutoSaveStatus("Carregando produto...", "info");
 
         var selectedSku = String(product.sku || "").trim();
-
-        // V16.57: toda seleção começa uma nova sessão de consulta.
-        costLookupGeneration += 1;
-        costLookupRequestedSku = selectedSku;
-        pendingCostLookupSku = "";
-        lastCostLookupSku = "";
-        lastCostLookupAt = 0;
-        costLookupInFlight = false;
-        costLookupInFlightSku = "";
 
         state.selectedId = String(product._id);
         state.isNew = false;
         el.search.value = "";
         closeProductSearch();
 
-        // Primeiro carrega os dados salvos do PRODUTO SELECIONADO.
         fillForm(clone(product));
         if (el["cost-last-change-note"]) el["cost-last-change-note"].textContent = "";
         renderProductList();
 
-        // Não persiste antes da consulta para evitar que um estado antigo volte
-        // para o formulário através do banco compartilhado.
         if (!product.isKit && selectedSku) {
           state.branchCosts = [];
           state.branchCostBlocked = true;
@@ -2203,17 +2213,12 @@ var state = {
           setValue("custo", "");
           renderBranchCosts();
           recalculate();
-          setCostApiStatus("Consultando dados do SKU " + selectedSku + "...", "info");
+          setCostApiStatus("Consultando custo e curva do SKU " + selectedSku + "...", "info");
 
-          // Aguarda a consulta do Apollo do SKU escolhido.
           await lookupAverageCostBySku(true, selectedSku);
-
-          // Só persiste depois que o produto atual recebeu os dados corretos.
-          if (String(el.sku.value || "").trim() === selectedSku) {
-            try { persist(); } catch (_) {}
-          }
         } else {
           persist();
+          setAutoSaveStatus("Salvamento automático ativo", "info");
         }
       }
 

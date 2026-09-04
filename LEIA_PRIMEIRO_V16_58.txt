@@ -1,0 +1,17 @@
+NOROMAK WEB V16.58 — CUSTO E CURVA AO SELECIONAR PRODUTO
+
+- Corrige corrida entre consultas de custo ao trocar rapidamente de produto.
+- Somente a requisição mais recente pode atualizar custo, curva e filiais.
+- A consulta anterior é cancelada e seu finally não interfere na nova.
+- Ao selecionar produto simples, o custo antigo é limpo e o cálculo bloqueado.
+- Consulta Apollo é feita com o SKU selecionado explicitamente.
+- Custo e curva são aplicados imediatamente no formulário.
+- Se a filial salva não tiver custo mas outra tiver, usa automaticamente a primeira válida.
+- Custo, curva, filial e margens são persistidos imediatamente.
+- Não precisa clicar no botão ↻.
+
+PUBLICAÇÃO:
+git status
+git add -A
+git commit -m "V16.58 - corrige custo e curva ao selecionar produto"
+./publicar.sh
