@@ -478,32 +478,31 @@
 .promo-search-group input{width:100%;height:38px;box-sizing:border-box}
 .promo-search-group .btn{height:38px;white-space:nowrap}
 
-      /* V16.65 - conexão Produto <-> MLB <-> Promoções */
-      .ml-link-section{margin-top:16px;border:1px solid #d9e5f2;border-radius:16px;background:#fff;overflow:hidden}
-      .ml-link-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 16px;border-bottom:1px solid #e7eef6;background:#f8fbff}
-      .ml-link-head h3{margin:0;font-size:1rem;color:#0a356a}
-      .ml-link-head p{margin:4px 0 0;color:#65758a;font-size:.78rem}
-      .ml-link-actions{display:flex;gap:8px;flex-wrap:wrap}
-      .ml-link-grid{display:grid;grid-template-columns:1.5fr 1fr;gap:14px;padding:14px}
-      .ml-link-card{border:1px solid #dbe6f1;border-radius:14px;overflow:hidden;background:#fff}
-      .ml-link-card-head{padding:10px 12px;background:#f7faff;border-bottom:1px solid #e7eef6;display:flex;justify-content:space-between;align-items:center}
-      .ml-link-card-head strong{color:#123f75}
-      .ml-link-table{width:100%;border-collapse:collapse;font-size:.78rem}
-      .ml-link-table th,.ml-link-table td{padding:9px 10px;border-bottom:1px solid #edf2f7;text-align:left;vertical-align:middle}
-      .ml-link-table th{font-size:.68rem;text-transform:uppercase;letter-spacing:.04em;color:#607086;background:#fbfdff}
+      /* V16.66 - vínculos ML compactos, integrados ao visual do Precificador */
+      .ml-link-section{margin-top:10px;border:1px solid #dbe6f1;border-radius:14px;background:#fff;overflow:hidden}
+      .ml-link-head{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;border-bottom:1px solid #e9eff6;background:#fbfdff}
+      .ml-link-head h3{margin:0;font-size:.88rem;color:#0a356a}
+      .ml-link-head p{margin:2px 0 0;color:#69798c;font-size:.68rem}
+      .ml-link-actions{display:flex;align-items:center;gap:7px}
+      .ml-link-grid{display:grid;grid-template-columns:1.35fr .85fr;gap:0}
+      .ml-link-card{min-width:0;background:#fff}
+      .ml-link-card+.ml-link-card{border-left:1px solid #e5edf5}
+      .ml-link-card-head{padding:8px 10px;background:#f8fbff;border-bottom:1px solid #e9eff6;display:flex;justify-content:space-between;align-items:center}
+      .ml-link-card-head strong{font-size:.78rem;color:#123f75}
+      .ml-link-table{width:100%;border-collapse:collapse;font-size:.7rem}
+      .ml-link-table th,.ml-link-table td{padding:6px 7px;border-bottom:1px solid #edf2f7;text-align:left;vertical-align:middle}
+      .ml-link-table th{font-size:.61rem;text-transform:uppercase;letter-spacing:.03em;color:#63758a;background:#fcfdff}
       .ml-link-table tr:last-child td{border-bottom:0}
-      .ml-link-badge{display:inline-flex;align-items:center;padding:3px 7px;border-radius:999px;font-weight:800;font-size:.67rem}
-      .ml-link-badge.ok{background:#e7f7ec;color:#137333}
-      .ml-link-badge.warn{background:#fff4d6;color:#9a6700}
-      .ml-link-badge.neutral{background:#eef3f8;color:#4b5f73}
-      .ml-link-empty{padding:18px;color:#708090;text-align:center;font-size:.78rem}
-      .ml-link-inline-form{display:flex;gap:8px;padding:10px;border-top:1px solid #edf2f7;background:#fbfdff}
-      .ml-link-inline-form input{flex:1;min-width:0}
-      .ml-link-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;padding:10px}
-      .ml-link-stat{border:1px solid #e1e9f2;border-radius:10px;padding:10px;background:#fbfdff}
-      .ml-link-stat span{display:block;color:#6c7b8d;font-size:.68rem}
-      .ml-link-stat strong{display:block;margin-top:3px;color:#123f75}
-      @media(max-width:900px){.ml-link-grid{grid-template-columns:1fr}}
+      .ml-link-badge{display:inline-flex;align-items:center;padding:2px 6px;border-radius:999px;font-weight:800;font-size:.61rem}
+      .ml-link-badge.ok{background:#e8f7ed;color:#137333}.ml-link-badge.warn{background:#fff2d5;color:#946200}.ml-link-badge.neutral{background:#eef3f8;color:#526579}
+      .ml-link-empty{padding:12px;color:#748497;text-align:center;font-size:.69rem}
+      .ml-link-inline-form{display:flex;gap:6px;padding:7px 9px;border-top:1px solid #edf2f7;background:#fbfdff}
+      .ml-link-inline-form input{flex:1;min-width:0;height:32px;font-size:.7rem}
+      .ml-link-summary{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px;padding:8px}
+      .ml-link-stat{border:1px solid #e1e9f2;border-radius:8px;padding:7px;background:#fbfdff}.ml-link-stat span{display:block;color:#6c7b8d;font-size:.61rem}.ml-link-stat strong{display:block;margin-top:2px;color:#123f75;font-size:.78rem}
+      .ml-link-mini-btn{padding:5px 7px!important;min-height:28px!important;font-size:.65rem!important}
+      .ml-link-sync-status{font-size:.64rem;color:#66798e;font-weight:700}
+      @media(max-width:900px){.ml-link-grid{grid-template-columns:1fr}.ml-link-card+.ml-link-card{border-left:0;border-top:1px solid #e5edf5}}
 </style>
 </head>
 <body>
@@ -733,7 +732,7 @@
 
       <section class="panel">
         <div class="section-heading">
-          <div><div class="eyebrow">Cadastro · V16.65</div><h2>Dados do produto</h2><p>Altere os campos e veja os preços recalculados imediatamente.</p></div>
+          <div><div class="eyebrow">Cadastro · V16.66</div><h2>Dados do produto</h2><p>Altere os campos e veja os preços recalculados imediatamente.</p></div>
           <button class="btn btn-secondary" id="new-btn" type="button">+ Novo produto</button>
         </div>
         <div class="product-data-grid">
@@ -817,11 +816,12 @@
       <section class="ml-link-section" id="ml-link-section">
         <div class="ml-link-head">
           <div>
-            <h3>Anúncios Mercado Livre vinculados</h3>
-            <p>Conecta o SKU do Precificador aos MLBs e reaproveita esses vínculos na tela de Promoções.</p>
+            <h3>Mercado Livre · anúncios e promoções</h3>
+            <p>Os MLBs são vinculados automaticamente pelo SKU. Vínculo manual fica apenas para exceções.</p>
           </div>
           <div class="ml-link-actions">
-            <button class="btn btn-secondary" id="ml-link-refresh" type="button">↻ Atualizar vínculos</button>
+            <span id="ml-link-sync-status" class="ml-link-sync-status">Ainda não sincronizado</span>
+            <button class="btn btn-secondary ml-link-mini-btn" id="ml-link-refresh" type="button">↻ Sincronizar anúncios</button>
           </div>
         </div>
 
@@ -833,8 +833,8 @@
             </div>
             <div id="ml-link-list" class="ml-link-empty">Selecione um produto para ver os anúncios vinculados.</div>
             <div class="ml-link-inline-form">
-              <input id="ml-link-input" type="text" placeholder="Adicionar MLB manualmente (ex.: MLB3722039959)">
-              <button class="btn btn-secondary" id="ml-link-add" type="button">+ Vincular</button>
+              <input id="ml-link-input" type="text" placeholder="Vínculo manual somente se o SKU não for identificado">
+              <button class="btn btn-secondary ml-link-mini-btn" id="ml-link-add" type="button">+ Vincular</button>
             </div>
           </div>
 
@@ -1266,7 +1266,7 @@ var state = {
         "cost-alerts-btn", "cost-alert-badge", "cost-alerts-back-btn", "cost-alerts-read-all-btn", "cost-alerts-clear-btn",
         "cost-alerts-list", "cost-alerts-summary", "cost-last-change-note", "autosave-status",
         "bulk-apollo-btn", "bulk-apollo-progress", "bulk-apollo-title", "bulk-apollo-detail",
-        "bulk-apollo-count", "bulk-apollo-bar", "ml-link-list", "ml-link-count", "ml-link-input", "ml-link-add", "ml-link-refresh", "ml-promo-summary", "ml-promo-count"].forEach(function (id) {
+        "bulk-apollo-count", "bulk-apollo-bar", "ml-link-list", "ml-link-count", "ml-link-input", "ml-link-add", "ml-link-refresh", "ml-promo-summary", "ml-promo-count", "ml-link-sync-status"].forEach(function (id) {
         el[id] = document.getElementById(id);
       });
 
@@ -1417,6 +1417,15 @@ var state = {
         }
       }
 
+
+      function mlLinksLastSyncAt() {
+        try { return Number(localStorage.getItem("ml_sku_mlb_links_last_sync") || 0); } catch (_) { return 0; }
+      }
+
+      function markMlLinksSyncedNow() {
+        try { localStorage.setItem("ml_sku_mlb_links_last_sync", String(Date.now())); } catch (_) {}
+      }
+
       function saveMlSkuMlbLinks() {
         var raw = JSON.stringify(mlSkuMlbLinks);
         try { localStorage.setItem(ML_LINK_STORAGE_KEY, raw); } catch (_) {}
@@ -1515,8 +1524,8 @@ var state = {
                 '<td>'+(price>0 ? money(price) : "—")+'</td>' +
                 '<td><span class="ml-link-badge '+statusClass+'">'+escapeHtml(status)+'</span></td>' +
                 '<td>' +
-                  '<button type="button" class="btn btn-secondary" data-open-mlb="'+escapeHtml(link.mlb)+'">Abrir</button> ' +
-                  '<button type="button" class="btn btn-danger" data-remove-mlb="'+escapeHtml(link.mlb)+'">×</button>' +
+                  '<button type="button" class="btn btn-secondary ml-link-mini-btn" data-open-mlb="'+escapeHtml(link.mlb)+'">Abrir</button> ' +
+                  '<button type="button" class="btn btn-danger ml-link-mini-btn" data-remove-mlb="'+escapeHtml(link.mlb)+'">×</button>' +
                 '</td>' +
               '</tr>';
             }).join("") +
@@ -1544,10 +1553,85 @@ var state = {
                 '<td><strong>MLB'+escapeHtml(String(row.mlb||"").replace(/\D/g,""))+'</strong></td>' +
                 '<td>'+escapeHtml(row.date || "Sem data")+'</td>' +
                 '<td><span class="ml-link-badge '+(st.key==="expired"?"warn":st.key==="ok"?"ok":"neutral")+'">'+escapeHtml(st.label)+'</span></td>' +
-                '<td><a class="btn btn-secondary" href="'+escapeHtml(promoUrl(row.mlb))+'" target="_blank" rel="noopener">Abrir promoção</a></td>' +
+                '<td><a class="btn btn-secondary ml-link-mini-btn" href="'+escapeHtml(promoUrl(row.mlb))+'" target="_blank" rel="noopener">Abrir promoção</a></td>' +
               '</tr>';
             }).join("") +
             '</tbody></table>';
+        }
+      }
+
+
+      var mlLinkSyncRunning = false;
+
+      async function syncAllMlLinksFromServer(showFeedback) {
+        if (mlLinkSyncRunning) return false;
+        mlLinkSyncRunning = true;
+        if (el["ml-link-refresh"]) el["ml-link-refresh"].disabled = true;
+        if (el["ml-link-sync-status"]) el["ml-link-sync-status"].textContent = "Sincronizando anúncios do ML...";
+
+        try {
+          var response = await fetch("/expedicao/api/precificador/ml-vinculos?limit=5000&ts=" + Date.now(), {
+            credentials: "same-origin",
+            headers: {"Accept":"application/json"}
+          });
+          var data = await response.json().catch(function(){ return {}; });
+          if (!response.ok || !data.ok) throw new Error(data.error || "Não foi possível listar os anúncios do Mercado Livre.");
+
+          var incoming = data.links && typeof data.links === "object" ? data.links : {};
+          var merged = {};
+
+          // Preserva vínculos manuais existentes e atualiza/adiciona os encontrados automaticamente.
+          Object.keys(mlSkuMlbLinks || {}).forEach(function(sku){
+            merged[normalizeSkuKey(sku)] = getLinkedMlbsForSku(sku).map(function(x){ return Object.assign({},x); });
+          });
+
+          Object.keys(incoming).forEach(function(sku){
+            var key = normalizeSkuKey(sku);
+            if (!key) return;
+            var rows = Array.isArray(merged[key]) ? merged[key] : [];
+            (incoming[sku] || []).forEach(function(item){
+              var mlb = normalizeMlb(item.mlb);
+              if (!mlb) return;
+              var existing = rows.find(function(x){ return normalizeMlb(x.mlb) === mlb; });
+              var normalized = {
+                mlb: mlb,
+                title: item.title || "",
+                price: Number(item.price || 0) || 0,
+                status: item.status || "Vinculado",
+                available_quantity: item.available_quantity,
+                permalink: item.permalink || "",
+                autoLinked: true,
+                updatedAt: item.updatedAt || new Date().toISOString()
+              };
+              if (existing) Object.assign(existing, normalized);
+              else rows.push(normalized);
+            });
+            merged[key] = rows;
+          });
+
+          mlSkuMlbLinks = merged;
+          saveMlSkuMlbLinks();
+          markMlLinksSyncedNow();
+          renderMlConnections();
+
+          var unidentified = Array.isArray(data.unidentified) ? data.unidentified.length : 0;
+          if (el["ml-link-sync-status"]) {
+            el["ml-link-sync-status"].textContent =
+              data.linked_items + " anúncios · " + data.linked_skus + " SKUs" +
+              (unidentified ? " · " + unidentified + " sem SKU" : "");
+          }
+          if (showFeedback) {
+            showToast("Vínculos automáticos: " + data.linked_items + " anúncios em " + data.linked_skus + " SKUs." +
+              (unidentified ? " " + unidentified + " anúncio(s) ficaram para vínculo manual." : ""));
+          }
+          return true;
+        } catch (error) {
+          if (el["ml-link-sync-status"]) el["ml-link-sync-status"].textContent = "Falha ao sincronizar anúncios";
+          if (showFeedback) showToast(error && error.message ? error.message : "Falha ao sincronizar vínculos.");
+          return false;
+        } finally {
+          mlLinkSyncRunning = false;
+          if (el["ml-link-refresh"]) el["ml-link-refresh"].disabled = false;
         }
       }
 
@@ -2438,6 +2522,9 @@ var state = {
         setKitMode(!!product.isKit, true);
         state.dirty = false;
         renderMlConnections();
+        if (product.sku && !getLinkedMlbsForSku(product.sku).length && Date.now() - mlLinksLastSyncAt() > 2 * 60 * 1000) {
+          setTimeout(function(){ syncAllMlLinksFromServer(false); }, 100);
+        }
         if (!product.isKit) recalculate();
       }
 
@@ -2699,9 +2786,7 @@ var state = {
 
       if (el["ml-link-refresh"]) {
         el["ml-link-refresh"].addEventListener("click", function(){
-          var added = tryAutoLinkFromPromoMetaForCurrentSku();
-          renderMlConnections();
-          showToast(added ? (added + " vínculo(s) atualizado(s).") : "Vínculos revisados.");
+          syncAllMlLinksFromServer(true);
         });
       }
 
@@ -2893,6 +2978,14 @@ var state = {
       updateCostAlertBadge();
       loadMlSkuMlbLinks();
       renderProductList();
+      setTimeout(function(){
+        var age = Date.now() - mlLinksLastSyncAt();
+        if (!mlLinksLastSyncAt() || age > 15 * 60 * 1000) {
+          syncAllMlLinksFromServer(false);
+        } else if (el["ml-link-sync-status"]) {
+          el["ml-link-sync-status"].textContent = "Vínculos sincronizados recentemente";
+        }
+      }, 1200);
       fetch("/expedicao/api/precificador/atualizar-tudo/status", {credentials:"same-origin"})
         .then(function(r){ return r.json(); })
         .then(function(d){

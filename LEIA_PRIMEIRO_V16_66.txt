@@ -1,0 +1,34 @@
+NOROMAK WEB V16.66 — VÍNCULOS MLB AUTOMÁTICOS + LAYOUT COMPACTO
+
+Mudanças:
+- A área Mercado Livre foi compactada e integrada ao visual do Precificador.
+- Não é necessário vincular todos os MLBs um por um.
+- O botão "Sincronizar anúncios" consulta os anúncios da conta Mercado Livre,
+  lê o SKU de cada anúncio e cria automaticamente SKU -> MLB.
+- Um SKU pode receber vários MLBs automaticamente.
+- A sincronização ocorre também automaticamente ao abrir o Precificador
+  quando os vínculos estiverem desatualizados há mais de 15 minutos.
+- Ao selecionar um SKU sem vínculo, o sistema tenta nova sincronização se a
+  última tiver mais de 2 minutos.
+- Vínculo manual permanece apenas para anúncios em que o Mercado Livre não
+  forneça SKU.
+- Anúncios sem SKU são contabilizados na mensagem de sincronização.
+- Promoções continuam cruzadas pelos MLBs já vinculados.
+
+Novo endpoint:
+GET /api/precificador/ml-vinculos
+
+Fonte:
+- /users/{seller_id}/items/search (ativos, pausados e encerrados quando disponível)
+- metadados /items para extrair seller_custom_field / SELLER_SKU
+
+Armazenamento compartilhado:
+ml_sku_mlb_links_v1
+
+A tela mostra "Cadastro · V16.66".
+
+PUBLICAÇÃO:
+git status
+git add -A
+git commit -m "V16.66 - vincula MLBs automaticamente e compacta layout"
+./publicar.sh

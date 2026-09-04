@@ -152,6 +152,7 @@ KNOWN_KEYS = [
     "conf_banco_atualizado_em",
     "precificador_online_v1",
     "precificador_alertas_custo_v1",
+    "ml_sku_mlb_links_v1",
 ]
 
 OPERATOR_WRITE_KEYS = {
@@ -161,6 +162,7 @@ OPERATOR_WRITE_KEYS = {
     "conf_banco_atualizado_em",
     "precificador_online_v1",
     "precificador_alertas_custo_v1",
+    "ml_sku_mlb_links_v1",
 }
 
 
@@ -480,6 +482,123 @@ def crm_cost_lookup(codigo: str, operador: str = "") -> dict[str, Any]:
             for key, _ in oldest:
                 CRM_COST_CACHE.pop(key, None)
     return result
+
+
+
+def ml_precificador_links_payload(max_items: int = 5000) -> dict[str, Any]:
+    """Lista anúncios do vendedor e monta automaticamente SKU -> MLB.
+
+    Um SKU pode possuir vários MLBs. O retorno contém também anúncios sem SKU
+    para que somente esses casos precisem de vínculo manual.
+    """
+    _, seller_id = ml_access_token()
+    max_items = max(1, min(10000, int(max_items or 5000)))
+    item_ids: list[str] = []
+    seen_ids: set[str] = set()
+    errors: list[str] = []
+
+    # Busca anúncios ativos e pausados. Se a API aceitar "closed", também coleta
+    # para preservar histórico de vínculos, sem bloquear a operação se falhar.
+    for status in ("active", "paused", "closed"):
+        offset = 0
+        while len(item_ids) < max_items:
+            limit = min(100, max_items - len(item_ids))
+            path = (
+                f"/users/{quote(str(seller_id))}/items/search"
+                f"?status={quote(status)}&offset={offset}&limit={limit}"
+            )
+            try:
+                payload = ml_api_get(path)
+            except Exception as exc:
+                errors.append(f"{status}: {str(exc)[:240]}")
+                break
+
+            results = payload.get("results") if isinstance(payload, dict) else []
+            if not isinstance(results, list) or not results:
+                break
+
+            for raw_id in results:
+                item_id = str(raw_id or "").strip().upper()
+                if not item_id:
+                    continue
+                if not item_id.startswith("MLB"):
+                    item_id = "MLB" + re.sub(r"\D+", "", item_id)
+                if item_id and item_id not in seen_ids:
+                    seen_ids.add(item_id)
+                    item_ids.append(item_id)
+                    if len(item_ids) >= max_items:
+                        break
+
+            paging = payload.get("paging") if isinstance(payload, dict) else {}
+            total = int((paging or {}).get("total") or 0)
+            offset += len(results)
+            if not results or (total and offset >= total):
+                break
+
+    # Metadados em lotes. ml_items_meta já extrai seller_custom_field / SELLER_SKU.
+    digit_ids = [re.sub(r"\D+", "", item_id) for item_id in item_ids]
+    meta_map: dict[str, dict[str, Any]] = {}
+    for start in range(0, len(digit_ids), 100):
+        batch = digit_ids[start:start + 100]
+        try:
+            meta_map.update(ml_items_meta(batch))
+        except Exception as exc:
+            errors.append(f"meta {start}: {str(exc)[:240]}")
+
+    # Índice dos SKUs existentes no Precificador para preferir a grafia cadastrada.
+    precifier = _promo_precifier_index()
+    precifier_by_compact: dict[str, str] = {}
+    for sku in precifier.keys():
+        compact = re.sub(r"[^A-Z0-9]", "", sku.upper())
+        if compact and compact not in precifier_by_compact:
+            precifier_by_compact[compact] = sku
+
+    links: dict[str, list[dict[str, Any]]] = {}
+    unidentified: list[dict[str, Any]] = []
+
+    for item_id in item_ids:
+        digits = re.sub(r"\D+", "", item_id)
+        meta = meta_map.get(digits) or {}
+        raw_sku = str(meta.get("sku") or "").strip()
+        sku = _ml_normalize_api_sku(raw_sku).strip().upper()
+
+        # Alguns anúncios guardam prefixo numérico antes do SKU. Também tenta
+        # equivalência compacta com os SKUs cadastrados no Precificador.
+        if sku and sku not in precifier:
+            compact = re.sub(r"[^A-Z0-9]", "", sku)
+            if compact in precifier_by_compact:
+                sku = precifier_by_compact[compact]
+
+        row = {
+            "mlb": "MLB" + digits,
+            "sku": sku,
+            "title": str(meta.get("title") or ""),
+            "price": float(meta.get("price") or 0),
+            "status": str(meta.get("status") or "unknown"),
+            "available_quantity": meta.get("available_quantity"),
+            "permalink": str(meta.get("permalink") or ""),
+            "updatedAt": now_iso(),
+        }
+
+        if sku:
+            links.setdefault(sku, []).append(row)
+        else:
+            unidentified.append(row)
+
+    for sku, rows in links.items():
+        rows.sort(key=lambda r: (str(r.get("status") or ""), str(r.get("mlb") or "")))
+
+    return {
+        "ok": True,
+        "seller_id": str(seller_id),
+        "total_items": len(item_ids),
+        "linked_items": sum(len(v) for v in links.values()),
+        "linked_skus": len(links),
+        "unidentified": unidentified,
+        "links": links,
+        "errors": errors[:20],
+        "updated_at": now_iso(),
+    }
 
 
 def connect_db() -> sqlite3.Connection:
@@ -7920,6 +8039,20 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             try:
                 self.send_json({"ok": True, "items": ml_items_meta(ids)})
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 502)
+            return
+
+        if path == "/api/precificador/ml-vinculos":
+            ctx = self.auth()
+            if ctx is None:
+                return
+            if not module_allowed(ctx, "precificador"):
+                self.send_json({"ok": False, "error": "Acesso ao Precificador não autorizado."}, 403)
+                return
+            try:
+                limit = max(1, min(10000, int((query.get("limit") or ["5000"])[0] or 5000)))
+                self.send_json(ml_precificador_links_payload(limit))
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 502)
             return
