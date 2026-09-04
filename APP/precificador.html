@@ -1376,6 +1376,7 @@ var state = {
       var costLookupInFlight = false;
       var costLookupInFlightSku = "";
       var pendingCostLookupSku = "";
+      var costLookupAbortController = null;
       var lastCostLookupSku = "";
       var lastCostLookupAt = 0;
       var costLookupTimer = null;
@@ -1490,13 +1491,13 @@ var state = {
         el["cost-api-status"].style.color = kind === "ok" ? "#15803d" : kind === "error" ? "#b91c1c" : "#64748b";
       }
 
-      async function lookupAverageCostBySku(force) {
+      async function lookupAverageCostBySku(force, explicitSku) {
         if (el["is-kit"] && el["is-kit"].checked) {
           setCostApiStatus("Kit: o custo é calculado pela soma dos componentes.", "info");
           return;
         }
 
-        var sku = String(el.sku.value || "").trim();
+        var sku = String(explicitSku || el.sku.value || "").trim();
         if (!sku) {
           setCostApiStatus("Informe o SKU para consultar o custo médio.", "error");
           return;
@@ -1521,6 +1522,10 @@ var state = {
         costLookupInFlight = true;
         costLookupInFlightSku = sku;
         pendingCostLookupSku = "";
+
+        try { if (costLookupAbortController) costLookupAbortController.abort(); } catch (_) {}
+        costLookupAbortController = new AbortController();
+
         if (el["cost-api-btn"]) el["cost-api-btn"].disabled = true;
         setCostApiStatus("Consultando custo médio no Apollo...", "info");
 
@@ -1528,7 +1533,8 @@ var state = {
           var response = await fetch("/expedicao/api/precificador/custo?codigo=" + encodeURIComponent(sku), {
             method: "GET",
             credentials: "same-origin",
-            headers: { "Accept": "application/json" }
+            headers: { "Accept": "application/json" },
+            signal: costLookupAbortController ? costLookupAbortController.signal : undefined
           });
           var data = await response.json().catch(function () { return {}; });
 
@@ -1631,6 +1637,9 @@ var state = {
             showToast("Consulta concluída. A filial selecionada está sem custo disponível.");
           }
         } catch (error) {
+          if (error && error.name === "AbortError") {
+            return;
+          }
           // Só mostra erro se o usuário ainda estiver no mesmo SKU.
           if (String(el.sku.value || "").trim() === sku) {
             setCostApiStatus(error && error.message ? error.message : "Falha ao consultar custo médio.", "error");
@@ -1638,6 +1647,7 @@ var state = {
         } finally {
           costLookupInFlight = false;
           costLookupInFlightSku = "";
+          costLookupAbortController = null;
           if (el["cost-api-btn"]) el["cost-api-btn"].disabled = !!(el["is-kit"] && el["is-kit"].checked);
 
           // Se o usuário digitou outro SKU enquanto a chamada estava ativa,
@@ -1646,9 +1656,9 @@ var state = {
           var queuedSku = String(pendingCostLookupSku || "").trim();
           pendingCostLookupSku = "";
           if (currentSku && currentSku !== sku && (!queuedSku || queuedSku === currentSku)) {
-            setTimeout(function () { lookupAverageCostBySku(true); }, 0);
+            setTimeout(function () { lookupAverageCostBySku(true, currentSku); }, 0);
           } else if (queuedSku && queuedSku === currentSku && queuedSku !== sku) {
-            setTimeout(function () { lookupAverageCostBySku(true); }, 0);
+            setTimeout(function () { lookupAverageCostBySku(true, currentSku); }, 0);
           }
         }
       }
@@ -1673,7 +1683,7 @@ var state = {
         setCostApiStatus("Aguardando término da digitação...", "info");
         costLookupTimer = setTimeout(function () {
           costLookupTimer = null;
-          lookupAverageCostBySku(false);
+          lookupAverageCostBySku(false, sku);
         }, 700);
       }
 
@@ -2153,34 +2163,39 @@ var state = {
         renderComparison(results);
       }
 
-      function selectProduct(productId) {
+      async function selectProduct(productId) {
         var product = state.products.find(function (item) { return String(item._id) === String(productId); });
         if (!product) return;
+
         if (costLookupTimer) { clearTimeout(costLookupTimer); costLookupTimer = null; }
         if (autoSaveTimer) { clearTimeout(autoSaveTimer); autoSaveTimer = null; }
+        try { if (costLookupAbortController) costLookupAbortController.abort(); } catch (_) {}
+
         setAutoSaveStatus("Salvamento automático ativo", "info");
 
         var selectedSku = String(product.sku || "").trim();
 
-        // V16.56: toda troca de produto invalida imediatamente qualquer consulta anterior.
+        // V16.57: toda seleção começa uma nova sessão de consulta.
         costLookupGeneration += 1;
         costLookupRequestedSku = selectedSku;
-        pendingCostLookupSku = selectedSku;
+        pendingCostLookupSku = "";
         lastCostLookupSku = "";
         lastCostLookupAt = 0;
+        costLookupInFlight = false;
+        costLookupInFlightSku = "";
 
         state.selectedId = String(product._id);
         state.isNew = false;
         el.search.value = "";
         closeProductSearch();
-        fillForm(clone(product));
 
+        // Primeiro carrega os dados salvos do PRODUTO SELECIONADO.
+        fillForm(clone(product));
         if (el["cost-last-change-note"]) el["cost-last-change-note"].textContent = "";
         renderProductList();
-        persist();
 
-        // Para produto simples, nunca deixar a precificação rodar com o custo
-        // visual do produto anterior enquanto o Apollo consulta o SKU selecionado.
+        // Não persiste antes da consulta para evitar que um estado antigo volte
+        // para o formulário através do banco compartilhado.
         if (!product.isKit && selectedSku) {
           state.branchCosts = [];
           state.branchCostBlocked = true;
@@ -2188,16 +2203,23 @@ var state = {
           setValue("custo", "");
           renderBranchCosts();
           recalculate();
-          setCostApiStatus("Consultando custo do SKU " + selectedSku + "...", "info");
+          setCostApiStatus("Consultando dados do SKU " + selectedSku + "...", "info");
 
-          setTimeout(function () {
-            // force=true: seleção de produto SEMPRE consulta o custo atual.
-            lookupAverageCostBySku(true);
-          }, 0);
+          // Aguarda a consulta do Apollo do SKU escolhido.
+          await lookupAverageCostBySku(true, selectedSku);
+
+          // Só persiste depois que o produto atual recebeu os dados corretos.
+          if (String(el.sku.value || "").trim() === selectedSku) {
+            try { persist(); } catch (_) {}
+          }
+        } else {
+          persist();
         }
       }
 
       function newProduct() {
+        try { if (costLookupAbortController) costLookupAbortController.abort(); } catch (_) {}
+        costLookupAbortController = null;
         state.selectedId = null;
         state.isNew = true;
         if (costLookupTimer) { clearTimeout(costLookupTimer); costLookupTimer = null; }
