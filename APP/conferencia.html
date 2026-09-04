@@ -476,7 +476,7 @@
       </select>
       <div id="resumoFiltroMarketplace" class="filtro-marketplace-resumo">Carregando quantidades...</div>
     </div>
-    <div class="aviso-etiquetas-disponiveis">🏷️ A lista mostra todos os pedidos pendentes. Pedidos sem etiqueta ficam sinalizados como “Aguardando etiqueta”.</div>
+    <div class="aviso-etiquetas-disponiveis">🏷️ A lista mostra somente pedidos pendentes que já possuem etiqueta pronta/vinculada para conferência.</div>
 
     <div id="painelAtalhos" class="atalhos-box" aria-label="Atalhos do modo sem mouse">
       <button id="btnAlternarAtalhos" class="atalhos-titulo" type="button" onclick="alternarPainelAtalhos()" aria-controls="conteudoAtalhos" aria-expanded="false">
@@ -1765,8 +1765,9 @@ function focarFiltroMarketplacePedidos() {
 
 function obterContagemMarketplacePedidos() {
   const contagens = { todos:0, mercado_livre:0, shopee:0, magalu:0, desconhecido:0 };
-  // V16.47: contagem reflete TODOS os pedidos pendentes.
-  listaPedidosPendentes.forEach(uid => {
+  // V16.53: a lateral e suas contagens refletem somente pedidos
+  // que já possuem etiqueta pronta/vinculada.
+  obterUidsPedidosComEtiquetaDisponivel().forEach(uid => {
     const item = dadosPedidos.find(x => String(x.__uidPedido) === String(uid));
     if (!item) return;
     const mp = obterMarketplaceItem(item);
@@ -1822,11 +1823,15 @@ function renderizarListaPedidos() {
   atualizarResumoFiltroMarketplace(contagensMarketplace);
   let html = "";
 
-  listaPedidosPendentes.forEach(uid => {
+  // V16.53: não exibir na Conferência pedidos que ainda aguardam etiqueta.
+  // Eles continuam no Admin e entram automaticamente aqui quando a etiqueta
+  // puder ser resolvida por resolverEtiquetaPedido().
+  obterUidsPedidosComEtiquetaDisponivel().forEach(uid => {
     let itemPedido = dadosPedidos.find(x => String(x.__uidPedido) === String(uid));
     if (!itemPedido) return;
     const etiquetaResultado = resolverEtiquetaPedido(itemPedido);
     const etiquetaPronta = Boolean(etiquetaResultado && etiquetaResultado.ok);
+    if (!etiquetaPronta) return;
 
     let numPedidoReal = extrairCampo(itemPedido, "Pedido");
     let nomeCliente = nomeClienteConferencia(itemPedido);
@@ -1850,7 +1855,7 @@ function renderizarListaPedidos() {
           ${nomeCliente ? `<div class="pedido-cliente">👤 ${escaparHtml(nomeCliente)}</div>` : ''}
           <div class="pedido-cliente">📅 Despacho: ${escaparHtml(dataPedidoItem(itemPedido)||hojeLocalConferencia())}</div>
           ${resumoConclusaoAnteriorConferencia(itemPedido) ? `<span class="pedido-status-mini pedido-status-ja-feito">↻ JÁ FOI FEITO · ${escaparHtml(resumoConclusaoAnteriorConferencia(itemPedido).data||"data anterior")}</span>` : ''}
-          ${etiquetaPronta ? `<span class="pedido-status-mini pedido-status-etiqueta-ok">✓ Etiqueta pronta</span>` : `<span class="pedido-status-mini pedido-status-etiqueta-pendente">Aguardando etiqueta</span>`}
+          <span class="pedido-status-mini pedido-status-etiqueta-ok">✓ Etiqueta pronta</span>
           ${completo ? `<span class="pedido-status-mini pedido-status-impressao">Conferido — aguardando impressão</span>` : ''}
           ${iniciado ? `<span class="pedido-status-mini pedido-status-andamento">Em andamento: ${lidos}/${total}</span>` : ''}
         </div>

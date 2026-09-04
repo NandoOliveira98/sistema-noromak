@@ -1,0 +1,14 @@
+NOROMAK WEB V16.53 — CONFERÊNCIA SOMENTE COM ETIQUETA
+
+Correção:
+- Pedidos pendentes sem etiqueta não aparecem mais na lateral da Conferência.
+- A contagem por marketplace também considera somente pedidos com etiqueta pronta/vinculada.
+- Os pedidos sem etiqueta continuam preservados no Admin.
+- Assim que a etiqueta puder ser resolvida/vinculada, o pedido entra automaticamente na Conferência.
+- Mantidas as correções da V16.52 e anteriores.
+
+PUBLICAÇÃO:
+git status
+git add -A
+git commit -m "V16.53 - conferencia somente pedidos com etiqueta"
+./publicar.sh
