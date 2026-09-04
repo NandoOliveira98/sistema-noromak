@@ -706,7 +706,7 @@
 
       <section class="panel">
         <div class="section-heading">
-          <div><div class="eyebrow">Cadastro</div><h2>Dados do produto</h2><p>Altere os campos e veja os preços recalculados imediatamente.</p></div>
+          <div><div class="eyebrow">Cadastro · V16.60</div><h2>Dados do produto</h2><p>Altere os campos e veja os preços recalculados imediatamente.</p></div>
           <button class="btn btn-secondary" id="new-btn" type="button">+ Novo produto</button>
         </div>
         <div class="product-data-grid">
@@ -1188,6 +1188,7 @@ var state = {
         products: initialProducts,
         selectedId: initialSelection || (initialProducts[0] ? initialProducts[0]._id : null),
         dirty: false,
+        loadingProductSelection: false,
         isNew: false,
         baseCost: 0,
         branchCosts: [],
@@ -1285,13 +1286,20 @@ var state = {
         var synchronization = refreshAllKitCosts();
         state.kitCycleIds = synchronization.cycleIds;
         renderProductList();
-        if (!state.dirty) {
+
+        // V16.60: durante a seleção/consulta automática de um produto, uma
+        // atualização remota do banco NÃO pode repopular o formulário com
+        // custo/curva salvos antes da resposta do Apollo.
+        if (!state.dirty && !state.loadingProductSelection) {
           var current = currentProduct();
           if (current) fillForm(clone(current)); else newProduct();
         }
-        showToast(state.dirty
-          ? "Banco atualizado por outro usuário. Sua edição não salva foi mantida."
-          : "Precificador atualizado em tempo real.");
+
+        if (!state.loadingProductSelection) {
+          showToast(state.dirty
+            ? "Banco atualizado por outro usuário. Sua edição não salva foi mantida."
+            : "Precificador atualizado em tempo real.");
+        }
       }
 
       function showToast(message) {
@@ -1627,6 +1635,12 @@ var state = {
           if (["A","B","C","D"].includes(curvaApi)) {
             setValue("curva", curvaApi);
             applyCurveMargin(curvaApi);
+
+            // Garante atualização visual imediata dos três marketplaces antes
+            // de qualquer storage event/recalculo.
+            setValue("ml-margin", desiredMarginForCurve(curvaApi));
+            setValue("shopee-margin", desiredMarginForCurve(curvaApi));
+            setValue("magalu-margin", desiredMarginForCurve(curvaApi));
           }
 
           if (sameSavedSku) {
@@ -1666,6 +1680,15 @@ var state = {
           recalculate();
 
           if (sameSavedSku) {
+            // V16.60: copia o formulário já atualizado (custo + curva + margens)
+            // para o registro selecionado antes de publicar no storage.
+            var refreshedForm = readForm();
+            refreshedForm._id = savedProduct._id;
+            var savedIndex = state.products.findIndex(function(item){
+              return String(item._id) === String(savedProduct._id);
+            });
+            if (savedIndex >= 0) state.products[savedIndex] = refreshedForm;
+
             var kitSync = refreshAllKitCosts();
             state.kitCycleIds = kitSync.cycleIds;
             state.dirty = false;
@@ -2235,6 +2258,7 @@ var state = {
         if (autoSaveTimer) { clearTimeout(autoSaveTimer); autoSaveTimer = null; }
         try { if (costLookupAbortController) costLookupAbortController.abort(); } catch (_) {}
 
+        state.loadingProductSelection = true;
         setAutoSaveStatus("Carregando produto...", "info");
 
         var selectedSku = String(product.sku || "").trim();
@@ -2244,11 +2268,14 @@ var state = {
         el.search.value = "";
         closeProductSearch();
 
+        // Carrega somente os dados cadastrais do produto escolhido.
         fillForm(clone(product));
         if (el["cost-last-change-note"]) el["cost-last-change-note"].textContent = "";
         renderProductList();
 
         if (!product.isKit && selectedSku) {
+          // Zera visualmente custo/filiais e impede cálculo com valor salvo enquanto
+          // a consulta automática do SKU selecionado não terminar.
           state.branchCosts = [];
           state.branchCostBlocked = true;
           state.baseCost = 0;
@@ -2257,8 +2284,19 @@ var state = {
           recalculate();
           setCostApiStatus("Consultando custo e curva do SKU " + selectedSku + "...", "info");
 
-          await lookupAverageCostBySku(true, selectedSku);
+          try {
+            await lookupAverageCostBySku(true, selectedSku);
+          } finally {
+            // Só libera o formulário se este SKU ainda for o selecionado.
+            if (String(el.sku.value || "").trim() === selectedSku) {
+              state.loadingProductSelection = false;
+              if (!costLookupInFlight) {
+                setAutoSaveStatus("Salvamento automático ativo", "info");
+              }
+            }
+          }
         } else {
+          state.loadingProductSelection = false;
           persist();
           setAutoSaveStatus("Salvamento automático ativo", "info");
         }
@@ -2267,6 +2305,7 @@ var state = {
       function newProduct() {
         try { if (costLookupAbortController) costLookupAbortController.abort(); } catch (_) {}
         costLookupAbortController = null;
+        state.loadingProductSelection = false;
         state.selectedId = null;
         state.isNew = true;
         if (costLookupTimer) { clearTimeout(costLookupTimer); costLookupTimer = null; }
