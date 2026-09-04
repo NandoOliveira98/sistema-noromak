@@ -706,7 +706,7 @@
 
       <section class="panel">
         <div class="section-heading">
-          <div><div class="eyebrow">Cadastro · V16.63</div><h2>Dados do produto</h2><p>Altere os campos e veja os preços recalculados imediatamente.</p></div>
+          <div><div class="eyebrow">Cadastro · V16.64</div><h2>Dados do produto</h2><p>Altere os campos e veja os preços recalculados imediatamente.</p></div>
           <button class="btn btn-secondary" id="new-btn" type="button">+ Novo produto</button>
         </div>
         <div class="product-data-grid">
@@ -1210,6 +1210,16 @@ var state = {
 
       function byId(id) { return document.getElementById(id); }
       function num(id) { var n = Number(byId(id).value); return Number.isFinite(n) ? n : 0; }
+
+      // V16.64: helper que já era chamado em fillForm(), mas não existia.
+      // A ausência dele interrompia o JavaScript durante a seleção do produto,
+      // por isso o Apollo chegava a retornar os custos das filiais, porém o
+      // preenchimento automático parava com "finiteNumber is not defined".
+      function finiteNumber(value, fallback) {
+        var n = Number(value);
+        return Number.isFinite(n) ? n : (Number.isFinite(Number(fallback)) ? Number(fallback) : 0);
+      }
+
       function pctInput(id) { return num(id) / 100; }
       function setValue(id, value) { byId(id).value = value === null || value === undefined ? "" : value; }
       function normalizePercentFraction(value) {
@@ -1730,6 +1740,7 @@ var state = {
           return false;
 
         } catch (error) {
+          console.error("[Noromak Precificador] Falha na atualização automática do Apollo:", error);
           if (requestId === costLookupGeneration && String(el.sku.value || "").trim() === sku) {
             state.branchCostBlocked = true;
             state.dirty = false;

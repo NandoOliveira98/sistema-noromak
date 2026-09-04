@@ -1,0 +1,24 @@
+NOROMAK WEB V16.64 — CORRIGE ERRO "finiteNumber is not defined"
+
+Causa encontrada no print:
+- O Apollo estava retornando dados (os custos das filiais chegaram a aparecer),
+  mas o JavaScript quebrava logo depois com:
+  finiteNumber is not defined
+- A função fillForm() usava finiteNumber() desde a consolidação do campo
+  "Taxa fixa / Frete", porém o helper não existia no arquivo.
+- Quando o erro acontecia, o restante da atualização automática era interrompido,
+  incluindo custo usado, curva, margens e persistência.
+
+Correção:
+- Criado o helper finiteNumber().
+- Mantida a atualização automática do Apollo ao selecionar produto.
+- Mantida atualização de custo, filiais, curva e margens.
+- Adicionado console.error específico caso exista outro erro na consulta.
+
+A tela mostra "Cadastro · V16.64".
+
+PUBLICAÇÃO:
+git status
+git add -A
+git commit -m "V16.64 - corrige finiteNumber e restaura atualizacao automatica Apollo"
+./publicar.sh
