@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.0-SECURITY-TEST"
+APP_VERSION = "17.10-SECURITY-PHASE2"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -48,6 +48,9 @@ DB_PATH = Path(os.getenv("EXP_DB_PATH", "/home/expedicao/dados/expedicao.db"))
 BACKUP_DIR = Path(os.getenv("EXP_BACKUP_DIR", "/home/expedicao/backups"))
 ADMIN_USERNAME = os.getenv("EXP_ADMIN_USUARIO", "luis").strip().lower()
 OWNER_USERNAME = os.getenv("EXP_OWNER_USUARIO", ADMIN_USERNAME).strip().lower()
+OWNER_TOTP_SECRET = os.getenv("EXP_OWNER_TOTP_SECRET", "").replace(" ", "").strip().upper()
+OWNER_RECOVERY_HASHES = {x.strip().lower() for x in os.getenv("EXP_OWNER_RECOVERY_HASHES", "").split(",") if x.strip()}
+CRITICAL_REAUTH_TTL_SECONDS = int(os.getenv("EXP_CRITICAL_REAUTH_TTL_SECONDS", "300"))
 SECURITY_HEADERS_ENABLED = os.getenv("EXP_SECURITY_HEADERS", "1").strip().lower() not in {"0","false","nao","não"}
 QZ_BUNDLED_CERT_PATH = ROOT_DIR / "QZ_CERTIFICADO_WEB" / "digital-certificate.txt"
 QZ_CONFIGURED_CERT_PATH = Path(os.getenv("QZ_CERT_PATH", str(QZ_BUNDLED_CERT_PATH)))
@@ -1420,6 +1423,35 @@ def is_owner_username(username: str) -> bool:
 def require_owner_context(ctx: dict[str, Any] | None) -> bool:
     return bool(ctx and is_owner_username(str(ctx.get("username") or "")))
 
+
+def _b32decode_nopad(value: str) -> bytes:
+    value = "".join(ch for ch in str(value or "").upper() if ch.isalnum())
+    value += "=" * ((8 - len(value) % 8) % 8)
+    return base64.b32decode(value, casefold=True)
+
+def totp_code(secret: str, when: int | None = None) -> str:
+    if not secret: return ""
+    counter = int((when or int(time.time())) // 30)
+    digest = hmac.new(_b32decode_nopad(secret), struct.pack(">Q", counter), hashlib.sha1).digest()
+    off = digest[-1] & 15
+    return str((struct.unpack(">I", digest[off:off+4])[0] & 0x7fffffff) % 1000000).zfill(6)
+
+def verify_totp(secret: str, code: str) -> bool:
+    code = re.sub(r"\D", "", str(code or ""))
+    now = int(time.time())
+    return len(code) == 6 and bool(secret) and any(hmac.compare_digest(totp_code(secret, now + x*30), code) for x in (-1,0,1))
+
+def recovery_hash(code: str) -> str:
+    return hashlib.sha256(str(code or "").strip().upper().encode()).hexdigest().lower()
+
+def verify_owner_second_factor(code: str) -> tuple[bool, str]:
+    if verify_totp(OWNER_TOTP_SECRET, code): return True, "totp"
+    if recovery_hash(code) in OWNER_RECOVERY_HASHES: return True, "recovery"
+    return False, ""
+
+def verify_user_password(username: str, password: str) -> bool:
+    row = DB.execute("SELECT * FROM app_users WHERE username=?", (str(username or "").strip().lower(),)).fetchone()
+    return bool(row and row["active"] and verify_password(str(password or ""), row["password_hash"]))
 
 def password_digest(password: str, salt: bytes | None = None, iterations: int = PASSWORD_ITERATIONS) -> tuple[str, str, int]:
     if salt is None:
@@ -8212,6 +8244,16 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_header("Cache-Control", "no-store" if self.path.startswith(BASE_PATH + "/api/") else "no-cache")
         super().end_headers()
 
+    def require_owner_reauth(self, ctx: dict[str, Any] | None) -> bool:
+        if not require_owner_context(ctx):
+            self.send_json({"error": "Somente o proprietário pode executar esta ação."}, 403)
+            return False
+        token = str((ctx or {}).get("token") or "")
+        if CRITICAL_REAUTH.get(token, 0) < time.time():
+            self.send_json({"error": "Reautenticação OWNER necessária (senha + 2FA).", "code": "OWNER_REAUTH_REQUIRED"}, 428)
+            return False
+        return True
+
     def do_HEAD(self) -> None:
         self.do_GET()
 
@@ -8505,6 +8547,34 @@ class AppHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = self.route_path()
+        if path == "/api/security/owner/reauth":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                if not require_owner_context(ctx):
+                    self.send_json({"error": "Somente o proprietário."}, 403); return
+                body = self.read_json()
+                if not verify_user_password(ctx["username"], str(body.get("password") or "")):
+                    audit(ctx["username"], "security.owner.reauth_failed", "password")
+                    self.send_json({"error": "Senha inválida."}, 401); return
+                if not OWNER_TOTP_SECRET:
+                    self.send_json({"error": "2FA OWNER não configurado.", "code": "OWNER_2FA_NOT_CONFIGURED"}, 409); return
+                ok2, method = verify_owner_second_factor(str(body.get("code") or ""))
+                if not ok2:
+                    audit(ctx["username"], "security.owner.reauth_failed", "2fa")
+                    self.send_json({"error": "Código 2FA inválido."}, 401); return
+                CRITICAL_REAUTH[str(ctx.get("token") or "")] = time.time() + CRITICAL_REAUTH_TTL_SECONDS
+                audit(ctx["username"], "security.owner.reauth_ok", method)
+                self.send_json({"ok": True, "valid_for_seconds": CRITICAL_REAUTH_TTL_SECONDS, "method": method})
+            return
+        if path == "/api/security/owner/verify-2fa":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                if not require_owner_context(ctx):
+                    self.send_json({"error": "Somente o proprietário."}, 403); return
+                body = self.read_json()
+                ok2, method = verify_owner_second_factor(str(body.get("code") or ""))
+                self.send_json({"ok": ok2, "method": method if ok2 else ""}, 200 if ok2 else 401)
+            return
         if path == "/api/integracoes/shopee/sync":
             ctx = self.auth(admin_only=True)
             if ctx is not None:
@@ -8516,8 +8586,8 @@ class AppHandler(BaseHTTPRequestHandler):
         if path == "/api/integracoes/shopee/disconnect":
             ctx = self.auth(admin_only=True)
             if ctx is not None:
-                if not require_owner_context(ctx):
-                    audit(ctx["username"], "security.denied.owner_only", "shopee.disconnect")
+                if not self.require_owner_reauth(ctx):
+                    audit(ctx["username"], "security.denied.owner_reauth", "shopee.disconnect")
                     self.send_json({"error": "Somente o proprietário pode desconectar integrações."}, 403)
                     return
                 with DB_LOCK:
@@ -8574,8 +8644,8 @@ class AppHandler(BaseHTTPRequestHandler):
         if path == "/api/integracoes/mercadolivre/disconnect":
             ctx = self.auth(admin_only=True)
             if ctx is not None:
-                if not require_owner_context(ctx):
-                    audit(ctx["username"], "security.denied.owner_only", "mercadolivre.disconnect")
+                if not self.require_owner_reauth(ctx):
+                    audit(ctx["username"], "security.denied.owner_reauth", "mercadolivre.disconnect")
                     self.send_json({"error": "Somente o proprietário pode desconectar integrações."}, 403)
                     return
                 with DB_LOCK:
@@ -8654,8 +8724,8 @@ class AppHandler(BaseHTTPRequestHandler):
         if path == "/api/print/agent/rotate-token":
             ctx = self.auth(admin_only=True)
             if ctx is not None:
-                if not require_owner_context(ctx):
-                    audit(ctx["username"], "security.denied.owner_only", "print.agent.rotate_token")
+                if not self.require_owner_reauth(ctx):
+                    audit(ctx["username"], "security.denied.owner_reauth", "print.agent.rotate_token")
                     self.send_json({"error": "Somente o proprietário pode renovar esta credencial."}, 403)
                     return
                 try:
@@ -8930,8 +9000,8 @@ class AppHandler(BaseHTTPRequestHandler):
             old_value = None if "oldValue" not in req or req.get("oldValue") is None else str(req.get("oldValue"))
             force = bool(req.get("force"))
             if key == "conf_usuarios":
-                if not require_owner_context(ctx):
-                    audit(ctx["username"], "security.denied.owner_only", "conf_usuarios")
+                if not self.require_owner_reauth(ctx):
+                    audit(ctx["username"], "security.denied.owner_reauth", "conf_usuarios")
                     self.send_json({"error": "SEGURANÇA V17: somente o proprietário do sistema pode alterar usuários e administradores."}, 403)
                     return
                 new_value = apply_app_users_payload(new_value, ctx["username"])
