@@ -1,0 +1,6 @@
+NOROMAK WEB V16.78
+- Corrigida a causa da lentidão restante: Reprocessar vínculos não chama mais OCR, QR nem fluxo visual.
+- O botão agora somente atualiza os pedidos e compara os IDs já reconhecidos (BR...).
+- Etiquetas que já exibem Pedido BR... são reaproveitadas imediatamente.
+- OCR continua disponível apenas no fluxo de entrada/reconhecimento de etiquetas novas.
+- Mantidas as correções V16.75.1, V16.76 e V16.77.

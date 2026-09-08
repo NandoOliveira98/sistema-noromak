@@ -6722,8 +6722,13 @@ document.addEventListener("DOMContentLoaded",()=>{
       status.innerHTML=texto;
     };
     if(btn){btn.disabled=true;btn.textContent="⏳ Reprocessando...";}
-    mostrar("processando","Analisando as etiquetas já armazenadas e comparando novamente com os pedidos pendentes...");
+    mostrar("processando","Atualizando pedidos e vinculando pelos números já reconhecidos...");
     try{
+      // V16.78: reprocessamento é somente comparação. ZERO OCR/QR.
+      try{
+        if(typeof carregarBancoCompartilhado==="function") await carregarBancoCompartilhado();
+      }catch(e){console.warn("Atualização do banco compartilhado:",e);}
+
       let pedidosAtuais=[];
       try{pedidosAtuais=JSON.parse(appStorage.getItem("conf_pedidos")||"[]");}catch(_){pedidosAtuais=[];}
       if(!Array.isArray(pedidosAtuais)) pedidosAtuais=[];
@@ -6732,22 +6737,25 @@ document.addEventListener("DOMContentLoaded",()=>{
       const banco=reconstruirBancoEtq(lerBancoEtqPersistente());
       const total=(banco.ordem||[]).length;
       const antesVinculadas=(banco.ordem||[]).filter(id=>!!banco.registros?.[id]?.pedido).length;
-      const antesSemVinculo=total-antesVinculadas;
 
-      // Recria metadados/chaves a partir do conteúdo já salvo, sem novo upload.
-      (banco.ordem||[]).forEach(id=>reprocessarMetadadosRegistroEtq(banco.registros?.[id]));
+      // Não reprocessa o TXT rasterizado. Só reaproveita chaves já armazenadas.
       bancoEtiquetas=reconstruirBancoEtq(banco);
       bancoEtiquetas.avisos=[];
       bancoEtiquetas.auditoria=Array.isArray(bancoEtiquetas.auditoria)?bancoEtiquetas.auditoria:[];
 
-      // Preserva vínculos existentes. Só tenta ocupar etiquetas e pedidos ainda livres.
+      (bancoEtiquetas.ordem||[]).forEach(id=>{
+        const r=bancoEtiquetas.registros?.[id];
+        if(!r || r.marketplace!=="shopee" || r.pedido)return;
+        const identificado=String(r.metadados?.pedido||"").trim();
+        const rastreio=String(r.metadados?.rastreio||"").trim();
+        if(identificado || rastreio) adicionarChavesRegistro(id,[identificado,rastreio].filter(Boolean));
+      });
+
       for(const marketplace of ["mercado_livre","magalu","shopee"]){
-        const usados=new Set(
-          (bancoEtiquetas.ordem||[]).filter(id=>{
-            const r=bancoEtiquetas.registros?.[id];
-            return r && r.marketplace===marketplace && !!r.pedido;
-          })
-        );
+        const usados=new Set((bancoEtiquetas.ordem||[]).filter(id=>{
+          const r=bancoEtiquetas.registros?.[id];
+          return r && r.marketplace===marketplace && !!r.pedido;
+        }));
         const pedidosJaVinculados=new Set(
           [...usados].map(id=>normalizarIdentificador(bancoEtiquetas.registros[id]?.pedido||"")).filter(Boolean)
         );
@@ -6756,7 +6764,6 @@ document.addEventListener("DOMContentLoaded",()=>{
           const armazenado=pedidoParaArmazenamento(pedido,marketplace);
           return !pedidosJaVinculados.has(normalizarIdentificador(armazenado));
         });
-
         pedidos.forEach(item=>{
           const resultado=idsCandidatosDoPedido(item,marketplace,usados);
           if(resultado.ids.length===1){
@@ -6769,33 +6776,24 @@ document.addEventListener("DOMContentLoaded",()=>{
         });
       }
 
-      // V16.76: etiquetas Shopee atuais costumam trazer o número do pedido dentro
-      // da imagem rasterizada (~DG/:Z64:). Na V16.75 o botão "Reprocessar vínculos"
-      // comparava as chaves, mas não executava novamente o reconhecimento da imagem.
-      // Agora primeiro tenta QR/rastreio + OCR do campo Pedido e só depois abre
-      // a confirmação visual para o que realmente continuar sem identificação.
-      if(typeof reconhecerEtiquetasShopeeRasterizadasEmSegundoPlano==="function"){
-        await reconhecerEtiquetasShopeeRasterizadasEmSegundoPlano();
-      }
-      if(typeof resolverPendenciasShopeeVisualmente==="function"){
-        await resolverPendenciasShopeeVisualmente();
-      }
-
       bancoEtiquetas=reconstruirBancoEtq(bancoEtiquetas);
       bancoEtiquetas.atualizadoEm=new Date().toISOString();
       mapaEtiquetas=bancoEtiquetas;
       appStorage.setItem("conf_etiquetas",JSON.stringify(bancoEtiquetas));
+      appStorage.setItem("conf_banco_atualizado_em",new Date().toISOString());
 
       const depoisVinculadas=(bancoEtiquetas.ordem||[]).filter(id=>!!bancoEtiquetas.registros?.[id]?.pedido).length;
       const novosVinculos=Math.max(0,depoisVinculadas-antesVinculadas);
       const restantes=Math.max(0,total-depoisVinculadas);
+      const naoIdentificadas=(bancoEtiquetas.ordem||[]).filter(id=>{
+        const r=bancoEtiquetas.registros?.[id];
+        return r && r.marketplace==="shopee" && !r.pedido && !String(r.metadados?.pedido||"").trim();
+      }).length;
       renderizarEtiquetasPersistentes();
-
-      const tipo=restantes?"aviso":"sucesso";
-      mostrar(tipo,
-        `<b>Reprocessamento concluído.</b> ${total} etiqueta(s) analisada(s) · `+
+      mostrar(restantes?"aviso":"sucesso",
+        `<b>Reprocessamento rápido concluído.</b> ${total} etiqueta(s) verificadas · `+
         `<b>${novosVinculos} novo(s) vínculo(s)</b> · ${restantes} continuam sem vínculo.`+
-        (antesSemVinculo===0?" Todas as etiquetas já estavam vinculadas antes do reprocessamento.":"")
+        (naoIdentificadas?` ${naoIdentificadas} ainda não possuem pedido identificado.`:"")
       );
     }catch(e){
       console.error("Falha ao reprocessar vínculos de etiquetas",e);
