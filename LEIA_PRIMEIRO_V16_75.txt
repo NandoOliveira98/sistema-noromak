@@ -1,11 +1,9 @@
-NOROMAK WEB V16.75 — BASE SHOPEE + LIMPEZA
+NOROMAK WEB V16.75.1 — HOTFIX 502
 
-- Adicionada área Shopee em Admin > Integrações.
-- Callback preparado em /expedicao/api/integracoes/shopee/callback.
-- Status, conectar, sincronizar e desconectar preparados.
-- Partner Key/tokens permanecem exclusivamente no servidor.
-- Nenhuma chamada real à Shopee é feita enquanto o Go-Live estiver pendente.
-- Após aprovação, preencher as variáveis SHOPEE_* no .env e ativar o fluxo oficial de produção.
-- Limpeza: removidos históricos LEIA_* antigos, __pycache__, .git do pacote distribuível,
-  TESTES_REALIZADOS e SEGREDOS_SERVIDOR (incluindo chave privada).
-- Arquivos operacionais atuais de instalação/impressão foram mantidos.
+Correção urgente da V16.75:
+- Corrigida inicialização SQL da nova base Shopee.
+- A tabela shopee_integration agora encerra corretamente a instrução SQL.
+- O bloco de tabelas Mercado Livre voltou a usar executescript(), pois contém várias instruções.
+- Isso evita a falha de inicialização que causava Cloudflare 502 / Host Error.
+
+A base da integração Shopee permanece preparada e ainda não executa chamadas de produção enquanto o Go-Live estiver pendente.

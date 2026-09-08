@@ -1001,7 +1001,7 @@ def init_db() -> None:
                 updated_at TEXT NOT NULL DEFAULT '',
                 last_sync_at TEXT NOT NULL DEFAULT '',
                 last_error TEXT NOT NULL DEFAULT ''
-            )
+            );
             """
         )
         DB.execute(
@@ -1016,7 +1016,7 @@ def init_db() -> None:
             )
             """
         )
-        DB.execute(
+        DB.executescript(
             """
             CREATE TABLE IF NOT EXISTS ml_integration (
                 id INTEGER PRIMARY KEY CHECK(id=1),
