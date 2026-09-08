@@ -1,0 +1,20 @@
+NOROMAK WEB V16.81 — LEITOR VISUAL NATIVO PARA ETIQUETA SHOPEE
+
+Diagnóstico feito no arquivo REAL thermal_zpl_shipping_label.txt enviado pelo usuário:
+- O TXT possui 39 etiquetas.
+- Cada etiqueta é uma imagem gráfica ZPL (~DGR ... :Z64:), e não texto ZPL normal.
+- O código BR... é o rastreio.
+- O número do pedido está VISÍVEL dentro da imagem, na linha "Pedido:".
+- Exemplo real da primeira etiqueta: Pedido 2609057F9RPSMV / Rastreio BR264048950769E.
+
+Correção:
+- Não depende de Tesseract, OCR remoto, CDN ou worker.
+- Decodifica o bitmap Z64 já suportado pelo sistema.
+- Recorta a faixa fixa onde a Shopee imprime "Pedido:".
+- Compara visualmente essa faixa com os pedidos existentes no banco.
+- Templates foram calibrados no arquivo real de 39 etiquetas fornecido.
+- Primeiro mantém o cruzamento por rastreio quando disponível; depois usa o leitor visual.
+- Processo é local no navegador e deve concluir as 39 etiquetas em segundos.
+- Resultado reconhecido fica persistido em metadados.pedido e não precisa ser lido novamente.
+
+Mantidas correções anteriores, inclusive layout do Precificador e hotfix 502.

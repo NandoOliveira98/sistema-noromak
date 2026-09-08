@@ -1098,7 +1098,7 @@ body{background:var(--v15-bg)!important}
           <div class="etiquetas-persistentes-topo-direita">
             <div id="resumoEtiquetasPersistentes" class="etiquetas-persistentes-resumo">0 etiquetas armazenadas</div>
             <button type="button" id="btnReprocessarVinculosEtiquetas" class="btn-etiquetas-reprocessar" onclick="reprocessarVinculosEtiquetasPersistentes()">🔄 Reprocessar vínculos</button>
-            <button type="button" id="btnReconhecerPedidosShopee" class="btn-etiquetas-reprocessar" onclick="reconhecerPedidosShopeePersistentes()" title="Cruza o rastreio da etiqueta com o relatório Shopee; não usa OCR">⚡ Reconhecer pedidos Shopee</button>
+            <button type="button" id="btnReconhecerPedidosShopee" class="btn-etiquetas-reprocessar" onclick="reconhecerPedidosShopeePersistentes()" title="Lê visualmente o número do pedido diretamente do ZPL rasterizado; não usa OCR externo">⚡ Reconhecer pedidos Shopee</button>
             <button type="button" id="btnAtivarRemocaoMassa" class="btn-etiquetas-lote" onclick="alternarRemocaoMassaEtiquetas()">☑ Remover em massa</button>
           </div>
         </div>
@@ -6871,6 +6871,154 @@ document.addEventListener("DOMContentLoaded",()=>{
     return worker;
   }
 
+
+  // V16.81 — Leitor visual instantâneo da etiqueta Shopee.
+  // Criado a partir do layout real thermal_zpl_shipping_label.txt.
+  // Não usa Tesseract, CDN, OCR remoto ou worker externo.
+  const SHOPEE_GLYPH_TEMPLATES_V1681 = {"2":{"w":11,"h":24,"data":"AAAA/jjsB4DAGAMAwDAMAwHAcBwHAP///AAAAAAAAAAA"},"6":{"w":11,"h":24,"data":"AAAAfhzmDYAwBgDfnjsB4DwHgNAbBj/D4AAAAAAAAAAA"},"0":{"w":11,"h":24,"data":"AAAA/jjmDYDwHgPAeA8B4DwHgNATBj+D4AAAAAAAAAAA"},"9":{"w":11,"h":24,"data":"AAAA/jjsDYDwHgPAbB3/jzAGAPA2Dn+HwAAAAAAAAAAA"},"5":{"w":11,"h":24,"data":"AA/5/zAGAMAYAwBfjjkBgDAGAPAfBn/D4AAAAAAAAAAA"},"7":{"w":11,"h":24,"data":"AB///4AwDAGAYBgDAMAYAgDAGAIAwBgDAAAAAAAAAAAA"},"F":{"w":12,"h":24,"data":"AA////gAgAgAgAgA////gAgAgAgAgAgAgAgAAAAAAAAAAAAA"},"R":{"w":14,"h":24,"data":"AAP8D/8gDoAaADgA4AKAG//P/CBwgOIBiAcgDoAaADAAAAAAAAAAAAAA"},"P":{"w":13,"h":24,"data":"AAfwP/kA6ANADgBwA4A3/z/xAAgAQAIAEACABAAAAAAAAAAAAAAA"},"S":{"w":14,"h":24,"data":"AAAAAf8eHmAZACYAHAA+AD+AH4AGAA0APADYBj/wfwAAAAAAAAAAAAAA"},"M":{"w":15,"h":24,"data":"AAGADwAfAH4A9gNsBtwNmDMwZjGMYxjmMNhhsMHBg4MDBAAAAAAAAAAAAAAA"},"V":{"w":16,"h":24,"data":"AADAA8AGYAZgDDAMMAwYGBgYGDAMMAxgBmAGYAbAA8ADgAGAAAAAAAAAAAAAAAAA"},"N":{"w":13,"h":24,"data":"AAYA8AfAPwHYDmBxg44cMODHBzgZwG4D8A+APAHAAAAAAAAAAAAA"},"4":{"w":12,"h":24,"data":"AAAYAYA4BoBoDIGIGIMIYIYIwI////AIAIAIAAAAAAAAAAAA"},"8":{"w":11,"h":24,"data":"AAAA/jB8B4DwHgN/w+HDYDwHgPAfB3/D4AAAAAAAAAAA"},"Q":{"w":16,"h":24,"data":"AAAAAA/4PDxwDmAGwAPAA8ABwAHAAcADwANgA2AGOAwf+AfgAMAA4AByAD4AAAAA"},"T":{"w":12,"h":24,"data":"AA////BgBgBgBgBgBgBgBgBgBgBgBgBgBgBgAAAAAAAAAAAA"},"U":{"w":13,"h":24,"data":"AAQA4AcAOAHADgBwA4AcAOAHADgB4A8AzA4/4PwAAAAAAAAAAAAA"},"3":{"w":11,"h":24,"data":"AAAA/jjsDYCAMAYPgeAHADAHgPAfB3/D4AAAAAAAAAAA"},"1":{"w":10,"h":24,"data":"AAMBwfBsAwDAMAwDAMAwDAMAwDD///AAAAAAAAAA"},"C":{"w":15,"h":24,"data":"AAAAAD/B4ecA7AHwAWAAwAGAAwAGAAwADADYA5wOH/gPwAAAAAAAAAAAAAAA"},"E":{"w":14,"h":24,"data":"AAP/7/+gAIACAAgAIAD/+//oACAAgAIACAAgAP////AAAAAAAAAAAAAA"},"G":{"w":16,"h":24,"data":"AAAAAA/4PDxwDmAGwATAAMAAwADAf8B/wANgA2ADOA4f/AfwAAAAAAAAAAAAAAAA"},"W":{"w":22,"h":24,"data":"AAADAMA8AwDYDgNgOA2BoGMGwYwTBjDMMEMQwYhjBmGIGYJgNg2A0DYDwHAHAcAYBwAAAAAAAAAAAAAAAAAAAAAA"},"O":{"w":11,"h":24,"data":"AAAA/jjmDYDwHgPAeA8B4DwHgNATBj+D4AAAAAAAAAAA"},"H":{"w":13,"h":24,"data":"AAQA4AcAOAHADgBwA////+AHADgBwA4AcAOAHADAAAAAAAAAAAAA"},"K":{"w":14,"h":24,"data":"AAIAeAOgGIDCDghwI4CcAvAOYDDAgYIDCA4gHIA6AHAAAAAAAAAAAAAA"},"Y":{"w":14,"h":24,"data":"AAMAdgGYDjAw4YGOAzANgB4AMADAAwAMADAAwAMADAAAAAAAAAAAAAAA"},"D":{"w":14,"h":24,"data":"AAPgD/wgeIAyAGgBoAKADgA4AOADgBoAaAMgHP/j/gAAAAAAAAAAAAAA"},"X":{"w":14,"h":24,"data":"AAMAdgGcDDBwYYDMA+AHgAwAeANwHMBhgwccDGAbAHAAAAAAAAAAAAAA"},"B":{"w":13,"h":24,"data":"AAfgP/EByANAGgDQDP/H/iAdAGgBwA4AcAb/5/4AAAAAAAAAAAAA"},"J":{"w":10,"h":24,"data":"AAPw/AMAwDAMAwDAMAwDAMA8C4Z/D4AAAAAAAAAA"},"A":{"w":15,"h":24,"data":"AAADAA4AHgAsAMgBmAYQDDAQYGBg/8P/hgGYAzADYAeADAAAAAAAAAAAAAAA"},"I":{"w":10,"h":24,"data":"AAPw/AMAwDAMAwDAMAwDAMA8C4Z/D4AAAAAAAAAA"}};
+
+  function bytesBase64Shopee1681(valor){
+    const bin=atob(valor||"");
+    const out=new Uint8Array(bin.length);
+    for(let i=0;i<bin.length;i++)out[i]=bin.charCodeAt(i);
+    return out;
+  }
+
+  const SHOPEE_GLYPH_CACHE_V1681={};
+  function templateGlyphShopee1681(ch){
+    if(SHOPEE_GLYPH_CACHE_V1681[ch])return SHOPEE_GLYPH_CACHE_V1681[ch];
+    const def=SHOPEE_GLYPH_TEMPLATES_V1681[ch];
+    if(!def)return null;
+    const packed=bytesBase64Shopee1681(def.data);
+    const bits=new Uint8Array(def.w*def.h);
+    for(let i=0;i<bits.length;i++){
+      bits[i]=(packed[i>>3]>>(7-(i&7)))&1;
+    }
+    return SHOPEE_GLYPH_CACHE_V1681[ch]={w:def.w,h:def.h,bits};
+  }
+
+  function candidatosPedidosShopeeVisuais1681(){
+    const fontes=[];
+    const add=lista=>{if(Array.isArray(lista))lista.forEach(x=>fontes.push(x));};
+    add(typeof dadosPedidos!=="undefined"?dadosPedidos:[]);
+    add(typeof pedidosEditorAdmin!=="undefined"?pedidosEditorAdmin:[]);
+    try{add(JSON.parse(appStorage.getItem("conf_pedidos")||"[]"));}catch(_){}
+    try{add(JSON.parse(appStorage.getItem("conf_pedidos_rascunhos")||"[]"));}catch(_){}
+    const unicos=new Map();
+    fontes.forEach(item=>{
+      const bruto=
+        extrairCampoAdmin(item,"Pedido") ||
+        extrairCampoAdmin(item,"Venda") ||
+        extrairCampoAdmin(item,"Número do Pedido") ||
+        extrairCampoAdmin(item,"Numero do Pedido") ||
+        extrairCampoAdmin(item,"ID do pedido") ||
+        extrairCampoAdmin(item,"ID Pedido");
+      const pedido=normalizarIdentificador(bruto);
+      // Formato observado no arquivo real da Shopee: começa por 2 dígitos de ano
+      // e segue com letras/números. Não depende do campo Marketplace.
+      if(/^2[0-9][A-Z0-9]{11,16}$/.test(pedido))unicos.set(pedido,String(bruto||pedido).trim());
+    });
+    return [...unicos.entries()].map(([normalizado,original])=>({normalizado,original}));
+  }
+
+  function bandaPedidoShopee1681(registro){
+    const canvas=renderizarGraficoShopeeEmCanvas(registro.envio||"");
+    // Layout real enviado pela Shopee: 816 x 1218.
+    // Usa proporções para tolerar pequenas variações futuras.
+    const sx=canvas.width/816;
+    const sy=canvas.height/1218;
+    const x0=Math.max(0,Math.round(130*sx));
+    const x1=Math.min(canvas.width,Math.round(430*sx));
+    const y0=Math.max(0,Math.round(258*sy));
+    const y1=Math.min(canvas.height,Math.round(282*sy));
+    const ctx=canvas.getContext("2d",{willReadFrequently:true});
+    const img=ctx.getImageData(x0,y0,x1-x0,y1-y0);
+    const w=img.width,h=img.height;
+    const bits=new Uint8Array(w*h);
+    for(let i=0,p=0;i<img.data.length;i+=4,p++){
+      bits[p]=img.data[i]<128?1:0;
+    }
+    return {bits,w,h,x0};
+  }
+
+  function custoPedidoVisualShopee1681(banda,texto){
+    const {bits,w,h}=banda;
+    const get=(x,y)=>x>=0&&x<w&&y>=0&&y<h?bits[y*w+x]:0;
+    // A primeira letra/número do pedido aparece em torno de x=140,
+    // enquanto banda começa em x=130.
+    let estados=new Map();
+    for(let x=6;x<=16;x++)estados.set(x,0);
+
+    for(const ch of texto){
+      const tpl=templateGlyphShopee1681(ch);
+      const proximos=new Map();
+
+      // Fallback de caractere raro ainda não visto nos 39 exemplos:
+      // permite avanço de largura 10..17 com penalidade; os demais caracteres
+      // do pedido continuam decidindo o candidato.
+      if(!tpl){
+        for(const [x,custo] of estados){
+          for(let cw=10;cw<=17;cw++){
+            for(let gap=0;gap<=5;gap++){
+              const nx=x+cw+gap;
+              if(nx>w)continue;
+              const novo=custo+80;
+              if(novo<(proximos.get(nx)??1e9))proximos.set(nx,novo);
+            }
+          }
+        }
+      }else{
+        for(const [x,custo] of estados){
+          if(x+tpl.w>w)continue;
+          let diff=0;
+          for(let yy=0;yy<Math.min(h,tpl.h);yy++){
+            for(let xx=0;xx<tpl.w;xx++){
+              const a=get(x+xx,yy);
+              const b=tpl.bits[yy*tpl.w+xx];
+              if(a!==b)diff++;
+            }
+          }
+          for(let gap=0;gap<=5;gap++){
+            const nx=x+tpl.w+gap;
+            if(nx>w)continue;
+            let gapBlack=0;
+            for(let gx=x+tpl.w;gx<nx;gx++){
+              for(let yy=0;yy<h;yy++)gapBlack+=get(gx,yy);
+            }
+            const novo=custo+diff+gapBlack*2;
+            if(novo<(proximos.get(nx)??1e9))proximos.set(nx,novo);
+          }
+        }
+      }
+
+      // Mantém só os melhores estados para permanecer instantâneo.
+      estados=new Map([...proximos.entries()].sort((a,b)=>a[1]-b[1]).slice(0,50));
+      if(!estados.size)return 1e9;
+    }
+    return Math.min(...estados.values());
+  }
+
+  function reconhecerPedidoVisualShopee1681(registro,candidatos){
+    if(!registro||!candidatos?.length)return null;
+    let banda;
+    try{banda=bandaPedidoShopee1681(registro);}catch(e){
+      console.warn("Leitura visual Shopee",e);
+      return null;
+    }
+    const ranking=candidatos.map(c=>({
+      ...c,
+      custo:custoPedidoVisualShopee1681(banda,c.normalizado)
+    })).sort((a,b)=>a.custo-b.custo);
+    const melhor=ranking[0],segundo=ranking[1];
+    if(!melhor||!Number.isFinite(melhor.custo))return null;
+    const margem=!segundo?9999:(segundo.custo-melhor.custo);
+    // Limites calibrados no arquivo real de 39 etiquetas enviado em 08/09/2026.
+    if(melhor.custo<=500 && margem>=100){
+      return {pedido:melhor.original,custo:melhor.custo,margem};
+    }
+    return null;
+  }
+
   async function reconhecerPedidosShopeePersistentes(){
     const btn=document.getElementById("btnReconhecerPedidosShopee");
     const status=document.getElementById("statusReprocessamentoEtiquetas");
@@ -6879,12 +7027,11 @@ document.addEventListener("DOMContentLoaded",()=>{
       status.className=`etiquetas-reprocessar-status mostrar ${tipo}`;
       status.innerHTML=texto;
     };
-    if(btn){btn.disabled=true;btn.textContent="⏳ Cruzando rastreios...";}
+    if(btn){btn.disabled=true;btn.textContent="⚡ Reconhecendo...";}
     try{
-      // Atualiza o estado local completo antes de comparar.
       try{
         if(typeof carregarBancoInternoAdmin==="function") carregarBancoInternoAdmin();
-      }catch(e){console.warn("Atualização dos pedidos antes do vínculo Shopee",e);}
+      }catch(e){console.warn("Atualização de pedidos Shopee",e);}
 
       bancoEtiquetas=reconstruirBancoEtq(lerBancoEtqPersistente());
       const registros=(bancoEtiquetas.ordem||[])
@@ -6896,33 +7043,49 @@ document.addEventListener("DOMContentLoaded",()=>{
         return;
       }
 
-      let identificados=0;
-      let semCorrespondencia=0;
+      const candidatos=candidatosPedidosShopeeVisuais1681();
+      if(!candidatos.length){
+        mostrar("aviso","Nenhum pedido Shopee foi encontrado no banco para comparar com as etiquetas.");
+        return;
+      }
+
+      let porRastreio=0,porImagem=0,semCorrespondencia=0;
       const exemplosSem=[];
 
-      for(const registro of registros){
+      for(let i=0;i<registros.length;i++){
+        const registro=registros[i];
         registro.metadados=registro.metadados||{};
-        const rastreio=String(registro.metadados.rastreio||"").trim();
+        mostrar("processando",`Reconhecimento instantâneo Shopee: ${i+1} de ${registros.length}...`);
 
-        if(!rastreio){
-          semCorrespondencia++;
+        // 1) Se o relatório tiver rastreio, vínculo exato e gratuito.
+        const rastreio=String(registro.metadados.rastreio||"").trim();
+        let pedido=rastreio?pedidoShopeePorRastreio(rastreio):"";
+
+        if(pedido){
+          registro.metadados.pedido=pedido;
+          adicionarChavesRegistro(registro.id,[pedido,rastreio].filter(Boolean));
+          porRastreio++;
           continue;
         }
 
-        const pedido=pedidoShopeePorRastreio(rastreio);
-        if(pedido){
+        // 2) Arquivo ZPL real é uma imagem rasterizada. Em vez de OCR,
+        // compara visualmente a linha "Pedido:" com os pedidos existentes.
+        const visual=reconhecerPedidoVisualShopee1681(registro,candidatos);
+        if(visual?.pedido){
+          pedido=visual.pedido;
           registro.metadados.pedido=pedido;
-          adicionarChavesRegistro(registro.id,[pedido,rastreio]);
-          identificados++;
+          registro.metadados.reconhecimento="template_visual_v16_81";
+          registro.metadados.custoVisual=visual.custo;
+          registro.metadados.margemVisual=visual.margem;
+          adicionarChavesRegistro(registro.id,[pedido,rastreio].filter(Boolean));
+          porImagem++;
         }else{
           semCorrespondencia++;
-          if(exemplosSem.length<4) exemplosSem.push(rastreio);
+          if(exemplosSem.length<4)exemplosSem.push(rastreio||registro.id);
         }
       }
 
-      // Agora que metadados.pedido foi preenchido, faz o vínculo real.
       vincularPendenciasShopeeAutomaticamente();
-
       mapaEtiquetas=bancoEtiquetas;
       appStorage.setItem("conf_etiquetas",JSON.stringify(bancoEtiquetas));
       appStorage.setItem("conf_banco_atualizado_em",new Date().toISOString());
@@ -6936,17 +7099,17 @@ document.addEventListener("DOMContentLoaded",()=>{
         .filter(r=>r&&r.marketplace==="shopee"&&!r.pedido).length;
 
       if(restantes===0){
-        mostrar("sucesso",`✔ Shopee concluída: ${vinculadas} etiqueta(s) vinculada(s) pelo rastreio.`);
+        mostrar("sucesso",`✔ Shopee concluída: ${vinculadas} etiqueta(s) vinculada(s). ${porImagem} reconhecida(s) diretamente da imagem da etiqueta e ${porRastreio} pelo rastreio.`);
       }else{
         mostrar("aviso",
-          `✔ Cruzamento concluído sem OCR. <b>${identificados}</b> pedido(s) localizado(s) pelo rastreio e <b>${restantes}</b> etiqueta(s) continuam sem vínculo.`+
-          (exemplosSem.length?`<br><small>Rastreios sem correspondência nos pedidos atuais: ${exemplosSem.map(escEtq).join(", ")}${restantes>exemplosSem.length?"...":""}</small>`:"")+
-          `<br><small>Para esses casos, importe/atualize o relatório “A Enviar” da Shopee com a coluna Número de rastreamento e clique novamente. O sistema não ficará mais preso preparando OCR.</small>`
+          `✔ Reconhecimento concluído. <b>${porImagem}</b> pedido(s) lido(s) diretamente da etiqueta · `+
+          `<b>${porRastreio}</b> pelo rastreio · <b>${restantes}</b> continuam sem vínculo.`+
+          (exemplosSem.length?`<br><small>Sem correspondência segura: ${exemplosSem.map(escEtq).join(", ")}</small>`:"")
         );
       }
     }catch(e){
-      console.error("Reconhecimento Shopee",e);
-      mostrar("aviso",`❌ Falha ao cruzar rastreios Shopee: ${escEtq(e?.message||e)}`);
+      console.error("Reconhecimento Shopee V16.81",e);
+      mostrar("aviso",`❌ Falha no reconhecimento Shopee: ${escEtq(e?.message||e)}`);
     }finally{
       if(btn){btn.disabled=false;btn.textContent="⚡ Reconhecer pedidos Shopee";}
     }
