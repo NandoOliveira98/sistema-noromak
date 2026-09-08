@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "16.73"
+APP_VERSION = "16.74"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -4727,6 +4727,25 @@ def _ml_remove_cancelled_from_pending(
     return kept, removed
 
 
+
+def _ml_row_manual_kit_override(row: dict[str, Any] | None) -> bool:
+    if not isinstance(row, dict):
+        return False
+    return normalize(row.get("KitManualOverride")) in {"SIM", "YES", "TRUE", "1"}
+
+
+def _ml_same_pending_sale(row: dict[str, Any], order_id: str, pack_id: str) -> bool:
+    if not isinstance(row, dict):
+        return False
+    row_order = str(row.get("VendaMercadoLivre") or "").strip()
+    row_pack = str(row.get("PackIdMercadoLivre") or "").strip()
+    visible_order = str(order_number(row) or "").strip()
+    return bool(
+        (order_id and order_id in {row_order, visible_order})
+        or (pack_id and pack_id in {row_pack, visible_order})
+    )
+
+
 def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict[str, Any]:
     order_id = str(order_id or "").strip()
     if not order_id:
@@ -4785,6 +4804,14 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
         pack_id=pack_id,
         shipment_id=shipment_id,
         shipment=shipment,
+    )
+
+    # V16.74: se este pedido foi corrigido manualmente no Admin, a composição
+    # e as quantidades locais passam a ser a fonte de verdade. Notificações,
+    # refresh manual e sincronizações do Mercado Livre não podem desfazer isso.
+    manual_kit_override = any(
+        _ml_same_pending_sale(row, order_id, pack_id) and _ml_row_manual_kit_override(row)
+        for row in pending if isinstance(row, dict)
     )
 
     # V16.36: vendas canceladas não podem continuar aparecendo em Pedidos pendentes.
@@ -5005,67 +5032,110 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
     if not lines:
         raise RuntimeError(f"Pedido {order_id} não trouxe itens.")
 
-    # Remove linhas antigas deste pedido que não existem mais na composição atual.
-    # Isso permite cadastrar um kit depois e, na sincronização seguinte, substituir
-    # a antiga linha KITxxxx pelos componentes corretos sem duplicação.
-    desired_keys = {normalize(row.get("SKU")) for row in lines if normalize(row.get("SKU"))}
-    cleaned_pending: list[dict[str, Any]] = []
-    stale_removed = 0
-    for existing in pending:
-        if not isinstance(existing, dict):
-            cleaned_pending.append(existing)
-            continue
-        same_ml_order = str(existing.get("VendaMercadoLivre") or "").strip() == order_id
-        existing_sku = _ml_normalize_api_sku(str(existing.get("SKU") or existing.get("Código de Barras") or "").strip())
-        if same_ml_order and normalize(existing_sku) not in desired_keys:
-            stale_removed += 1
-            continue
-        cleaned_pending.append(existing)
-    pending = cleaned_pending
-
-    # Atualiza pela combinação Pedido + SKU; quando não existe, cria nova linha.
-    by_key: dict[tuple[str, str], dict[str, Any]] = {}
-    for existing in pending:
-        existing_sku = str(existing.get("SKU") or existing.get("Código de Barras") or "").strip()
-        is_ml_api_row = bool(
-            str(existing.get("VendaMercadoLivre") or "").strip()
-            or "mercado livre" in str(existing.get("OrigemCadastro") or "").lower()
+    if manual_kit_override:
+        # Mantém EXATAMENTE SKU, Quantidade e metadados do kit corrigidos manualmente.
+        # Atualiza apenas informações operacionais/fiscais vindas do Mercado Livre.
+        inserted = 0
+        updated = 0
+        safe_fields = (
+            "Marketplace","Data do Pedido","Cliente","Código de Rastreio",
+            "NF","Nota Fiscal","Chave de Acesso","Status NF Mercado Livre",
+            "Etiqueta API Mercado Livre","Observação"
         )
-        if is_ml_api_row:
-            existing_sku = _ml_normalize_api_sku(existing_sku)
-        key = (normalize(order_number(existing)), normalize(existing_sku))
-        if key not in by_key:
-            by_key[key] = existing
-    inserted = updated = 0
-    fields = (
-        "Pedido","Marketplace","Data do Pedido","Cliente","SKU","Quantidade","Código de Barras",
-        "Descrição","Rua","Módulo","Prateleira","Nível","Posição","Foto","Código de Rastreio",
-        "NF","Nota Fiscal","Chave de Acesso","Status NF Mercado Livre","Etiqueta API Mercado Livre",
-        "Kit","Nome do Kit","Quantidade de Kits","Quantidade por Kit","SkuKitOrigem","Observação"
-    )
-    for imported in lines:
-        key = (normalize(imported["Pedido"]), normalize(imported.get("SKU") or imported.get("Código de Barras")))
-        existing = by_key.get(key)
-        if existing is None:
-            pending.append(imported)
-            by_key[key] = imported
-            inserted += 1
-            continue
-        lido = int(existing.get("Lido") or 0)
-        for field in fields:
-            value = imported.get(field)
-            if str(value or "").strip():
-                existing[field] = value
-        for field in (
-            "OrigemCadastro","SkuOrigemImportacao","VendaMercadoLivre","PackIdMercadoLivre",
+        api_fields = (
+            "OrigemCadastro","VendaMercadoLivre","PackIdMercadoLivre",
             "ShipmentIdMercadoLivre","StatusMercadoLivre","LogisticaMercadoLivre",
             "NomeFiscalMercadoLivre","DataLimiteDespachoMercadoLivre","MercadoLivreAtualizadoEm"
-        ):
-            existing[field] = imported.get(field, "")
-        existing["Lido"] = lido
-        if int(existing.get("Quantidade") or 0) < lido:
-            existing["Quantidade"] = str(lido)
-        updated += 1
+        )
+
+        # Dados operacionais são iguais por venda; usa a primeira linha importada
+        # e preserva o cadastro manual de cada componente.
+        reference = lines[0] if lines else {}
+        for existing in pending:
+            if not isinstance(existing, dict) or not _ml_same_pending_sale(existing, order_id, pack_id):
+                continue
+            if not _ml_row_manual_kit_override(existing):
+                continue
+
+            lido = int(existing.get("Lido") or 0)
+            for field in safe_fields:
+                value = reference.get(field)
+                if str(value or "").strip():
+                    existing[field] = value
+            for field in api_fields:
+                existing[field] = reference.get(field, existing.get(field, ""))
+
+            # Reafirma explicitamente os campos protegidos.
+            existing["KitManualOverride"] = "SIM"
+            existing["Lido"] = lido
+            if int(existing.get("Quantidade") or 0) < lido:
+                existing["Quantidade"] = str(lido)
+            updated += 1
+
+        stale_removed = 0
+    else:
+        # Remove linhas antigas deste pedido que não existem mais na composição atual.
+        # Isso permite cadastrar um kit depois e, na sincronização seguinte, substituir
+        # a antiga linha KITxxxx pelos componentes corretos sem duplicação.
+        desired_keys = {normalize(row.get("SKU")) for row in lines if normalize(row.get("SKU"))}
+        cleaned_pending: list[dict[str, Any]] = []
+        stale_removed = 0
+        for existing in pending:
+            if not isinstance(existing, dict):
+                cleaned_pending.append(existing)
+                continue
+            same_ml_order = str(existing.get("VendaMercadoLivre") or "").strip() == order_id
+            existing_sku = _ml_normalize_api_sku(str(existing.get("SKU") or existing.get("Código de Barras") or "").strip())
+            if same_ml_order and normalize(existing_sku) not in desired_keys:
+                stale_removed += 1
+                continue
+            cleaned_pending.append(existing)
+        pending = cleaned_pending
+
+        # Atualiza pela combinação Pedido + SKU; quando não existe, cria nova linha.
+        by_key: dict[tuple[str, str], dict[str, Any]] = {}
+        for existing in pending:
+            existing_sku = str(existing.get("SKU") or existing.get("Código de Barras") or "").strip()
+            is_ml_api_row = bool(
+                str(existing.get("VendaMercadoLivre") or "").strip()
+                or "mercado livre" in str(existing.get("OrigemCadastro") or "").lower()
+            )
+            if is_ml_api_row:
+                existing_sku = _ml_normalize_api_sku(existing_sku)
+            key = (normalize(order_number(existing)), normalize(existing_sku))
+            if key not in by_key:
+                by_key[key] = existing
+
+        inserted = updated = 0
+        fields = (
+            "Pedido","Marketplace","Data do Pedido","Cliente","SKU","Quantidade","Código de Barras",
+            "Descrição","Rua","Módulo","Prateleira","Nível","Posição","Foto","Código de Rastreio",
+            "NF","Nota Fiscal","Chave de Acesso","Status NF Mercado Livre","Etiqueta API Mercado Livre",
+            "Kit","Nome do Kit","Quantidade de Kits","Quantidade por Kit","SkuKitOrigem","Observação"
+        )
+        for imported in lines:
+            key = (normalize(imported["Pedido"]), normalize(imported.get("SKU") or imported.get("Código de Barras")))
+            existing = by_key.get(key)
+            if existing is None:
+                pending.append(imported)
+                by_key[key] = imported
+                inserted += 1
+                continue
+            lido = int(existing.get("Lido") or 0)
+            for field in fields:
+                value = imported.get(field)
+                if str(value or "").strip():
+                    existing[field] = value
+            for field in (
+                "OrigemCadastro","SkuOrigemImportacao","VendaMercadoLivre","PackIdMercadoLivre",
+                "ShipmentIdMercadoLivre","StatusMercadoLivre","LogisticaMercadoLivre",
+                "NomeFiscalMercadoLivre","DataLimiteDespachoMercadoLivre","MercadoLivreAtualizadoEm"
+            ):
+                existing[field] = imported.get(field, "")
+            existing["Lido"] = lido
+            if int(existing.get("Quantidade") or 0) < lido:
+                existing["Quantidade"] = str(lido)
+            updated += 1
 
     # V14.18: o nome do cliente pertence ao pedido, não ao SKU.
     # Força a atualização em TODAS as linhas ligadas à mesma venda ML, mesmo quando
@@ -5135,6 +5205,7 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
         "kit_unregistered": kit_unregistered,
         "stale_rows_removed": stale_removed,
         "manual_rows_bound": manual_rows_bound,
+        "manual_kit_override_preserved": bool(manual_kit_override),
     }
 
 

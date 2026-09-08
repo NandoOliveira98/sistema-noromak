@@ -1,0 +1,29 @@
+NOROMAK WEB V16.74 — KIT MANUAL NÃO VOLTA AO VALOR DO MERCADO LIVRE
+
+Causa confirmada:
+1. No editor de Kit, a V16.73 calculava a quantidade nova corretamente.
+2. Em seguida salvarPedidosAdmin() sincronizava os inputs ainda visíveis na tela.
+3. A grade ainda continha a quantidade antiga, então esse valor antigo era gravado
+   por cima do cálculo novo.
+4. Além disso, uma notificação/refresh da API Mercado Livre podia reconstruir o
+   pedido e recolocar SKU/quantidade/composição originais do anúncio.
+
+Correções:
+- O editor renderiza a nova composição/quantidade ANTES de salvar.
+- A quantidade final é sempre:
+    Quantidade de kits × Quantidade por kit.
+- Correções ficam marcadas KitManualOverride=SIM.
+- O servidor agora respeita esse override.
+- Quando um pedido possui override manual, o Mercado Livre pode atualizar somente:
+  cliente, rastreio, nota fiscal, etiqueta, status e outros dados operacionais.
+- Mercado Livre NÃO pode mais alterar nesse pedido:
+  SKU, Quantidade, Nome do Kit, Quantidade de Kits, Quantidade por Kit,
+  SkuKitOrigem ou composição manual.
+- Notificações automáticas, atualização manual ↻ e sincronizações seguem essa regra.
+- A tela mostra o selo MANUAL nos kits protegidos.
+
+PUBLICAÇÃO:
+git status
+git add -A
+git commit -m "V16.74 - preserva kit e quantidade manual contra sincronizacao ML"
+./publicar.sh
