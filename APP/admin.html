@@ -2199,7 +2199,16 @@ async function processarShopee(conteudo, nomeArquivo) {
 let reconhecimentoShopeeSegundoPlanoAtivo = false;
 
 async function reconhecerRegistroShopeeRasterizado(registro) {
-  if (!registro || registro.marketplace !== "shopee" || registro.pedido) return false;
+  if (!registro || registro.marketplace !== "shopee") return false;
+  if (String(registro.pedido || "").trim()) return true;
+  if (String(registro.metadados?.pedido || "").trim()) {
+    // Já reconhecida anteriormente: reutiliza o resultado imediatamente.
+    adicionarChavesRegistro(registro.id, [
+      registro.metadados.pedido,
+      registro.metadados.rastreio || ""
+    ]);
+    return true;
+  }
   let canvas = null;
   try {
     canvas = renderizarGraficoShopeeEmCanvas(registro.envio || "");
@@ -2259,10 +2268,36 @@ async function reconhecerRegistroShopeeRasterizado(registro) {
 
 async function reconhecerEtiquetasShopeeRasterizadasEmSegundoPlano() {
   if (reconhecimentoShopeeSegundoPlanoAtivo || !bancoEtiquetas) return;
+  // V16.77: OCR só é necessário enquanto nem o vínculo final (r.pedido)
+  // nem o pedido já lido da imagem (metadados.pedido) existirem.
+  // Antes, etiquetas já reconhecidas por OCR eram lidas novamente em todo
+  // "Reprocessar vínculos", o que tornava lotes de 30/40 etiquetas muito lentos.
   const pendentes = bancoEtiquetas.ordem
     .map(id => bancoEtiquetas.registros[id])
-    .filter(r => r && r.marketplace === "shopee" && !r.pedido);
-  if (!pendentes.length) return;
+    .filter(r => r && r.marketplace === "shopee" &&
+      !String(r.pedido || "").trim() &&
+      !String(r.metadados?.pedido || "").trim());
+  if (!pendentes.length) {
+    // Pode haver etiquetas com metadados.pedido já reconhecido, mas ainda sem
+    // pedido correspondente no banco. Reprocessar deve apenas tentar o vínculo,
+    // sem gastar tempo repetindo OCR.
+    vincularPendenciasShopeeAutomaticamente();
+    mapaEtiquetas = bancoEtiquetas;
+    try {
+      appStorage.setItem("conf_etiquetas", JSON.stringify(bancoEtiquetas));
+      appStorage.setItem("conf_banco_atualizado_em", new Date().toISOString());
+    } catch (_) {}
+    if (typeof renderizarEtiquetasPersistentes === "function") renderizarEtiquetasPersistentes();
+    const status = document.getElementById("status");
+    const restantes = registrosShopeeNaoVinculados().length;
+    if (status) {
+      status.style.color = restantes ? "#b45309" : "#2e7d32";
+      status.innerHTML = restantes
+        ? `✔ Reprocessamento rápido concluído. ${restantes} etiqueta(s) Shopee já identificada(s), aguardando o pedido correspondente para vincular.`
+        : "✔ Reprocessamento rápido concluído. Todas as etiquetas Shopee estão vinculadas.";
+    }
+    return;
+  }
 
   reconhecimentoShopeeSegundoPlanoAtivo = true;
   const status = document.getElementById("status");
@@ -6858,7 +6893,12 @@ document.addEventListener("DOMContentLoaded",()=>{
         const arquivo=r.arquivo||"Arquivo de etiqueta";
         let data="";
         if(r.adicionadaEm){try{data=new Date(r.adicionadaEm).toLocaleString("pt-BR");}catch(_){data="";}}
-        const status=r.pedido?`<span class="etiqueta-persistente-status">Vinculada</span>`:`<span class="etiqueta-persistente-status sem-vinculo">Sem vínculo</span>`;
+        const pedidoIdentificado=String(r?.metadados?.pedido||"").trim();
+        const status=r.pedido
+          ? `<span class="etiqueta-persistente-status">Vinculada</span>`
+          : pedidoIdentificado
+            ? `<span class="etiqueta-persistente-status sem-vinculo">Pedido identificado · aguardando vínculo</span>`
+            : `<span class="etiqueta-persistente-status sem-vinculo">Sem vínculo</span>`;
         const marcado=etiquetasSelecionadasPersistentes.has(r.id)?" checked":"";
         return `<div class="etiqueta-persistente-item" title="${escEtq(arquivo)}"><label class="etiqueta-selecao-wrap" title="Selecionar esta etiqueta"><input type="checkbox" class="etiqueta-selecao-lote" data-etiqueta-id="${escEtq(r.id)}"${marcado}></label><div><div class="etiqueta-persistente-principal">${escEtq(principal)}</div><div class="etiqueta-persistente-detalhe">${escEtq(arquivo)}${data?" · "+escEtq(data):""}</div>${status}</div><button type="button" class="etiqueta-remover-x" title="Remover esta etiqueta" aria-label="Remover esta etiqueta" data-etiqueta-id="${escEtq(r.id)}">×</button></div>`;
       }).join(""):`<div class="etiquetas-vazio">Nenhuma etiqueta armazenada.</div>`;
