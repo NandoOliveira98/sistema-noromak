@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "16.74"
+APP_VERSION = "17.0-SECURITY-TEST"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -47,6 +47,8 @@ APP_DIR = ROOT_DIR / "APP"
 DB_PATH = Path(os.getenv("EXP_DB_PATH", "/home/expedicao/dados/expedicao.db"))
 BACKUP_DIR = Path(os.getenv("EXP_BACKUP_DIR", "/home/expedicao/backups"))
 ADMIN_USERNAME = os.getenv("EXP_ADMIN_USUARIO", "luis").strip().lower()
+OWNER_USERNAME = os.getenv("EXP_OWNER_USUARIO", ADMIN_USERNAME).strip().lower()
+SECURITY_HEADERS_ENABLED = os.getenv("EXP_SECURITY_HEADERS", "1").strip().lower() not in {"0","false","nao","não"}
 QZ_BUNDLED_CERT_PATH = ROOT_DIR / "QZ_CERTIFICADO_WEB" / "digital-certificate.txt"
 QZ_CONFIGURED_CERT_PATH = Path(os.getenv("QZ_CERT_PATH", str(QZ_BUNDLED_CERT_PATH)))
 QZ_PRIVATE_KEY_PATH = Path(os.getenv("QZ_PRIVATE_KEY_PATH", "/home/expedicao/qz/qz-private-key.pem"))
@@ -56,9 +58,9 @@ LOCK_STALE_SECONDS = 90  # V16.72: 3 heartbeats perdidos liberam bloqueio órfã
 PRINT_CLAIM_STALE_SECONDS = int(os.getenv("EXP_PRINT_CLAIM_STALE_SECONDS", "120"))
 PRINT_STATION_ONLINE_SECONDS = int(os.getenv("EXP_PRINT_STATION_ONLINE_SECONDS", "20"))
 SESSION_COOKIE = "expedicao_estoque"
-SESSION_TTL_SECONDS = int(os.getenv("EXP_SESSION_TTL_SECONDS", str(12 * 60 * 60)))
+SESSION_TTL_SECONDS = int(os.getenv("EXP_SESSION_TTL_SECONDS", str(4 * 60 * 60)))
 STATION_SESSION_TTL_SECONDS = int(os.getenv("EXP_STATION_SESSION_TTL_SECONDS", str(180 * 24 * 60 * 60)))
-PASSWORD_ITERATIONS = int(os.getenv("EXP_PASSWORD_ITERATIONS", "240000"))
+PASSWORD_ITERATIONS = int(os.getenv("EXP_PASSWORD_ITERATIONS", "600000"))
 PASSWORD_MASK = "********"
 INITIAL_ADMIN_PASSWORD = os.getenv("EXP_ADMIN_SENHA", "").strip()
 INITIAL_OPERATOR_PASSWORD = os.getenv("EXP_USUARIO_SENHA_INICIAL", "").strip()
@@ -1411,6 +1413,14 @@ def ensure_storage_defaults() -> None:
     seed_ml_sku_mlb_links_from_file()
 
 
+def is_owner_username(username: str) -> bool:
+    return bool(OWNER_USERNAME) and str(username or "").strip().lower() == OWNER_USERNAME
+
+
+def require_owner_context(ctx: dict[str, Any] | None) -> bool:
+    return bool(ctx and is_owner_username(str(ctx.get("username") or "")))
+
+
 def password_digest(password: str, salt: bytes | None = None, iterations: int = PASSWORD_ITERATIONS) -> tuple[str, str, int]:
     if salt is None:
         salt = secrets.token_bytes(16)
@@ -1475,6 +1485,11 @@ def upsert_app_user(
     if not username:
         return
     role = "admin" if str(role).lower().startswith("admin") else "operador"
+    owner_account = is_owner_username(username)
+    if owner_account:
+        role = "admin"
+        active = True
+        permissions = {"conferencia": True, "admin": True, "estacao": True, "precificador": True}
     existing = DB.execute("SELECT * FROM app_users WHERE username=?", (username,)).fetchone()
     if existing and only_if_missing:
         return
@@ -1597,6 +1612,7 @@ def app_users_payload() -> list[dict[str, Any]]:
             "Login": row["username"],
             "Senha": PASSWORD_MASK,
             "Perfil": "Admin" if row["role"] == "admin" else "Operador",
+            "Owner": is_owner_username(row["username"]),
             "Ativo": bool(row["active"]),
             "Aprovado": bool(row["active"]),
             "AcessoConferencia": bool(row["can_conferencia"]),
@@ -8186,6 +8202,16 @@ class AppHandler(BaseHTTPRequestHandler):
             return path[len(BASE_PATH):]
         return path
 
+    def end_headers(self) -> None:
+        if SECURITY_HEADERS_ENABLED:
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("X-Frame-Options", "SAMEORIGIN")
+            self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
+            self.send_header("Permissions-Policy", "camera=(self), microphone=(), geolocation=()")
+            self.send_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+            self.send_header("Cache-Control", "no-store" if self.path.startswith(BASE_PATH + "/api/") else "no-cache")
+        super().end_headers()
+
     def do_HEAD(self) -> None:
         self.do_GET()
 
@@ -8438,6 +8464,22 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.send_json({"ok": bool(status["key_match"]), "qz": status, "version": APP_VERSION})
             return
 
+        if path == "/api/security/status":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                self.send_json({
+                    "ok": True, "version": APP_VERSION,
+                    "owner": {"username": OWNER_USERNAME, "current_user_is_owner": require_owner_context(ctx)},
+                    "security": {
+                        "owner_lock": True, "user_management_owner_only": True,
+                        "integration_disconnect_owner_only": True, "print_token_rotation_owner_only": True,
+                        "password_pbkdf2_iterations": PASSWORD_ITERATIONS,
+                        "session_ttl_seconds": SESSION_TTL_SECONDS,
+                        "secrets_server_side": True
+                    }
+                })
+            return
+
         # Páginas dos módulos: além do login externo, exigem sessão e permissão granular.
         page_modules = {
             "/conferencia": "conferencia", "/conferencia/": "conferencia", "/conferencia.html": "conferencia",
@@ -8474,6 +8516,10 @@ class AppHandler(BaseHTTPRequestHandler):
         if path == "/api/integracoes/shopee/disconnect":
             ctx = self.auth(admin_only=True)
             if ctx is not None:
+                if not require_owner_context(ctx):
+                    audit(ctx["username"], "security.denied.owner_only", "shopee.disconnect")
+                    self.send_json({"error": "Somente o proprietário pode desconectar integrações."}, 403)
+                    return
                 with DB_LOCK:
                     DB.execute("DELETE FROM shopee_integration WHERE id=1")
                     DB.commit()
@@ -8528,6 +8574,10 @@ class AppHandler(BaseHTTPRequestHandler):
         if path == "/api/integracoes/mercadolivre/disconnect":
             ctx = self.auth(admin_only=True)
             if ctx is not None:
+                if not require_owner_context(ctx):
+                    audit(ctx["username"], "security.denied.owner_only", "mercadolivre.disconnect")
+                    self.send_json({"error": "Somente o proprietário pode desconectar integrações."}, 403)
+                    return
                 with DB_LOCK:
                     DB.execute("DELETE FROM ml_integration WHERE id=1")
                     DB.execute("DELETE FROM ml_oauth_state")
@@ -8604,6 +8654,10 @@ class AppHandler(BaseHTTPRequestHandler):
         if path == "/api/print/agent/rotate-token":
             ctx = self.auth(admin_only=True)
             if ctx is not None:
+                if not require_owner_context(ctx):
+                    audit(ctx["username"], "security.denied.owner_only", "print.agent.rotate_token")
+                    self.send_json({"error": "Somente o proprietário pode renovar esta credencial."}, 403)
+                    return
                 try:
                     token = rotate_print_agent_token()
                     audit(ctx["username"], "print.agent.rotate_token", "Token renovado")
@@ -8746,7 +8800,8 @@ class AppHandler(BaseHTTPRequestHandler):
                 DB.commit()
             user = {
                 "username": username, "nome": row["display_name"] or username,
-                "app_role": row["role"], "app_active": True, "permissions": permissions
+                "app_role": row["role"], "app_active": True, "is_owner": is_owner_username(username),
+                "permissions": permissions
             }
             audit(username, "auth.login", f"{area}:{client_computer(self)}")
             self.send_json(
@@ -8875,8 +8930,9 @@ class AppHandler(BaseHTTPRequestHandler):
             old_value = None if "oldValue" not in req or req.get("oldValue") is None else str(req.get("oldValue"))
             force = bool(req.get("force"))
             if key == "conf_usuarios":
-                if ctx["app_role"] != "admin":
-                    self.send_json({"error": "Somente administradores podem alterar usuários."}, 403)
+                if not require_owner_context(ctx):
+                    audit(ctx["username"], "security.denied.owner_only", "conf_usuarios")
+                    self.send_json({"error": "SEGURANÇA V17: somente o proprietário do sistema pode alterar usuários e administradores."}, 403)
                     return
                 new_value = apply_app_users_payload(new_value, ctx["username"])
                 old_value = None
