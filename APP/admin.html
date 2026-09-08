@@ -885,7 +885,7 @@ body{background:var(--v15-bg)!important}
     <div class="card-admin">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap">
         <div>
-          <h2 style="margin-bottom:5px">🚚 Coleta do dia</h2>
+          <h2 style="margin-bottom:5px">🚚 Coleta do dia <span class="usuario-versao">V16.69</span></h2>
           <div style="color:#64748b">Edite diariamente o horário da coleta e o código de autorização. As informações ficam salvas no banco central.</div>
         </div>
         <span id="coletaAdminStatus" class="coleta-admin-status">Carregando...</span>
@@ -3267,6 +3267,8 @@ function salvarKitsAdmin(mostrarMensagem=true){
 
 
 const COLETA_DIA_STORAGE_KEY="conf_coleta_dia_v1";
+let coletaAdminEditando=false;
+let coletaAdminCarregada=false;
 
 function coletaHojeIso(){
   const d=new Date();
@@ -3288,15 +3290,18 @@ function obterUsuarioColetaAdmin(){
     return String(sess.Nome||sess.Login||"Administrador").trim()||"Administrador";
   }catch(_){return "Administrador";}
 }
-function renderizarColetaDiaAdmin(dados){
+function renderizarColetaDiaAdmin(dados,forcarCampos=false){
   dados=dados&&typeof dados==="object"?dados:{};
   const horario=String(dados.horario||"").trim();
   const codigo=String(dados.codigo||"").trim().toUpperCase();
 
   const elHorario=document.getElementById("coletaHorarioAdmin");
   const elCodigo=document.getElementById("coletaCodigoAdmin");
-  if(elHorario)elHorario.value=horario;
-  if(elCodigo)elCodigo.value=codigo;
+  // V16.69: não sobrescreve o que o usuário está digitando/colando.
+  if(forcarCampos || !coletaAdminEditando){
+    if(elHorario)elHorario.value=horario;
+    if(elCodigo)elCodigo.value=codigo;
+  }
 
   const pHorario=document.getElementById("coletaPreviewHorario");
   const pCodigo=document.getElementById("coletaPreviewCodigo");
@@ -3319,23 +3324,33 @@ function renderizarColetaDiaAdmin(dados){
     pMeta.textContent=partes.length?partes.join(" · "):"Nenhuma atualização registrada.";
   }
 }
-function carregarColetaDiaAdmin(){
+function carregarColetaDiaAdmin(forcar=false){
   const status=document.getElementById("coletaAdminStatus");
+
+  // Se o operador começou a editar, atualização de tela/rede não apaga os campos.
+  if(coletaAdminEditando && !forcar)return;
+
   try{
     const raw=appStorage.getItem(COLETA_DIA_STORAGE_KEY);
     const dados=raw?JSON.parse(raw):{};
-    renderizarColetaDiaAdmin(dados);
+    renderizarColetaDiaAdmin(dados,true);
+    coletaAdminCarregada=true;
+    coletaAdminEditando=false;
+
     if(status){
       const ehHoje=String(dados.data||"")===coletaHojeIso();
-      status.textContent=dados.horario||dados.codigo?(ehHoje?"● Dados de hoje carregados":"● Dados salvos de outro dia"):"● Aguardando preenchimento";
+      status.textContent=dados.horario||dados.codigo
+        ?(ehHoje?"● Dados de hoje carregados":"● Dados salvos de outro dia")
+        :"● Aguardando preenchimento";
       status.className="coleta-admin-status"+(ehHoje?" ok":"");
     }
   }catch(e){
     console.error("Coleta do dia",e);
-    renderizarColetaDiaAdmin({});
+    if(!coletaAdminEditando)renderizarColetaDiaAdmin({},true);
     if(status){status.textContent="Erro ao carregar";status.className="coleta-admin-status erro";}
   }
 }
+
 function salvarColetaDiaAdmin(){
   const horario=String(document.getElementById("coletaHorarioAdmin")?.value||"").trim();
   const codigo=String(document.getElementById("coletaCodigoAdmin")?.value||"").trim().toUpperCase();
@@ -3359,27 +3374,75 @@ function salvarColetaDiaAdmin(){
     atualizadoEm:new Date().toISOString(),
     atualizadoPor:obterUsuarioColetaAdmin()
   };
+
   try{
+    if(status){
+      status.textContent="Salvando...";
+      status.className="coleta-admin-status";
+    }
+
     appStorage.setItem(COLETA_DIA_STORAGE_KEY,JSON.stringify(dados));
-    renderizarColetaDiaAdmin(dados);
-    if(status){status.textContent="✓ Coleta salva no banco";status.className="coleta-admin-status ok";}
+
+    // Confirma a gravação no banco antes de limpar o estado de edição.
+    const confirmadoRaw=appStorage.getItem(COLETA_DIA_STORAGE_KEY);
+    const confirmado=confirmadoRaw?JSON.parse(confirmadoRaw):{};
+    if(String(confirmado.horario||"").trim()!==horario ||
+       String(confirmado.codigo||"").trim().toUpperCase()!==codigo){
+      throw new Error("O servidor não confirmou os dados gravados.");
+    }
+
+    coletaAdminEditando=false;
+    coletaAdminCarregada=true;
+    renderizarColetaDiaAdmin(confirmado,true);
+
+    if(status){
+      status.textContent="✓ Coleta salva no banco";
+      status.className="coleta-admin-status ok";
+    }
   }catch(e){
     console.error("Salvar coleta",e);
-    if(status){status.textContent="Erro ao salvar";status.className="coleta-admin-status erro";}
+    coletaAdminEditando=true;
+    if(status){
+      status.textContent="Erro ao salvar";
+      status.className="coleta-admin-status erro";
+    }
     alert("Não foi possível salvar a coleta do dia: "+(e.message||e));
   }
 }
+
 function limparColetaDiaAdmin(){
   const h=document.getElementById("coletaHorarioAdmin");
   const c=document.getElementById("coletaCodigoAdmin");
   if(h)h.value="";
   if(c)c.value="";
+  coletaAdminEditando=true;
   const status=document.getElementById("coletaAdminStatus");
-  if(status){status.textContent="Campos limpos — clique em Salvar para gravar";status.className="coleta-admin-status";}
-  renderizarColetaDiaAdmin({horario:"",codigo:""});
+  if(status){
+    status.textContent="Campos limpos — clique em Salvar para gravar";
+    status.className="coleta-admin-status";
+  }
 }
 
-function atualizarTudoAdmin(){renderizarPedidosAdmin();renderizarProdutosAdmin();renderizarKitsAdmin();renderizarUsuariosAdmin();atualizarKpisAdmin();carregarLogs();carregarColetaDiaAdmin();v151AtualizarDashboard();}
+
+
+document.addEventListener("input",function(e){
+  if(e.target && (e.target.id==="coletaHorarioAdmin" || e.target.id==="coletaCodigoAdmin")){
+    coletaAdminEditando=true;
+    const status=document.getElementById("coletaAdminStatus");
+    if(status){
+      status.textContent="Alterações não salvas";
+      status.className="coleta-admin-status";
+    }
+  }
+});
+
+window.addEventListener("storage",function(e){
+  if(e.key!==COLETA_DIA_STORAGE_KEY)return;
+  // Atualiza somente se o operador não estiver no meio da edição.
+  if(!coletaAdminEditando)carregarColetaDiaAdmin(true);
+});
+
+function atualizarTudoAdmin(){renderizarPedidosAdmin();renderizarProdutosAdmin();renderizarKitsAdmin();renderizarUsuariosAdmin();atualizarKpisAdmin();carregarLogs();v151AtualizarDashboard();}
 function atualizarKpisAdmin(){
   const validos=obterPedidosValidosBanco();
   const elPedidos=document.getElementById("kpiPedidos"),elLinhas=document.getElementById("kpiLinhas"),elUnid=document.getElementById("kpiUnidades"),elProd=document.getElementById("kpiProdutos");
@@ -3394,7 +3457,7 @@ function abrirAbaAdmin(nome){
   document.querySelectorAll(".aba-painel").forEach(p=>p.classList.toggle("ativa",p.id==="aba-"+nome));
   document.querySelectorAll(".v15-nav-item[data-v15-nav]").forEach(b=>b.classList.toggle("active",b.dataset.v15Nav===nome));
   if(nome==="historico") carregarLogs();
-  if(nome==="coleta") carregarColetaDiaAdmin();
+  if(nome==="coleta") carregarColetaDiaAdmin(!coletaAdminCarregada);
   if(nome==="historico-sku") carregarHistoricoSkuAdmin();
   if(nome==="kits") renderizarKitsAdmin();
   if(nome==="integracoes"){carregarIntegracaoMercadoLivreAdmin();carregarLogsMercadoLivreAdmin();carregarAgenteZebraAdmin();}
