@@ -1801,10 +1801,12 @@ function sequenciasOcrPossiveis(texto) {
   // "260/303KV4304M". Junta os caracteres novamente e procura sequências
   // iniciadas por 26, formato usado pelos pedidos Shopee.
   const semSeparadores = original.replace(/[^A-Z0-9]/g, "");
-  for (let i = 0; i < semSeparadores.length - 13; i++) {
-    if (semSeparadores.substring(i, i + 2) === "26") {
-      compactos.push(semSeparadores.substring(i, i + 14));
-      compactos.push(semSeparadores.substring(i, Math.min(semSeparadores.length, i + 18)));
+  for (let i = 0; i < semSeparadores.length - 11; i++) {
+    const prefixo = semSeparadores.substring(i, i + 2);
+    if (/^2[0-9]$/.test(prefixo)) {
+      [12,14,16,18,20,22,24].forEach(tam=>{
+        if(i + tam <= semSeparadores.length) compactos.push(semSeparadores.substring(i, i + tam));
+      });
     }
   }
 
@@ -1961,7 +1963,11 @@ async function lerPedidoOcrShopee(canvas) {
 
   const textoFinal = textos.join("\n").toUpperCase().replace(/[^A-Z0-9:\n -]/g, " ");
   let m = textoFinal.match(/(?:PEDIDO|P)\s*[:\-]?\s*([A-Z0-9]{12,25})/i);
-  if (!m) m = textoFinal.match(/\b(26[A-Z0-9]{11,23})\b/);
+  if (!m) {
+    const seqs = textoFinal.match(/\b(2[0-9][A-Z0-9]{10,22})\b/g) || [];
+    const candidato = seqs.find(v => /[A-Z]/.test(v));
+    if (candidato) m = [candidato, candidato];
+  }
   return {
     pedido: m ? m[1] : "",
     distanciaOcr: null,
@@ -1982,8 +1988,12 @@ function extrairMetadadosTextuaisShopee(bloco) {
     if (rotulado) pedido = rotulado[1];
   }
   if (!pedido) {
-    const padraoShopee = texto.match(/\b(26[A-Z0-9]{12,22})\b/i);
-    if (padraoShopee) pedido = padraoShopee[1];
+    // IDs Shopee podem variar de tamanho conforme o fluxo logístico.
+    // Só aceita sequência com prefixo de ano 20..29 e pelo menos uma letra
+    // para evitar confundir NF, CEP, telefone ou código de barras numérico.
+    const sequencias = texto.match(/\b(2[0-9][A-Z0-9]{10,22})\b/gi) || [];
+    const candidato = sequencias.find(v => /[A-Z]/i.test(v));
+    if (candidato) pedido = candidato;
   }
   const rastreio = (texto.match(/\b(BR[A-Z0-9]{10,})\b/i) || [])[1] || "";
   return { pedido, rastreio, texto };
@@ -6724,8 +6734,14 @@ document.addEventListener("DOMContentLoaded",()=>{
         });
       }
 
-      // Na Shopee, quando o identificador automático continuar insuficiente,
-      // mantém o mesmo fluxo visual já existente.
+      // V16.76: etiquetas Shopee atuais costumam trazer o número do pedido dentro
+      // da imagem rasterizada (~DG/:Z64:). Na V16.75 o botão "Reprocessar vínculos"
+      // comparava as chaves, mas não executava novamente o reconhecimento da imagem.
+      // Agora primeiro tenta QR/rastreio + OCR do campo Pedido e só depois abre
+      // a confirmação visual para o que realmente continuar sem identificação.
+      if(typeof reconhecerEtiquetasShopeeRasterizadasEmSegundoPlano==="function"){
+        await reconhecerEtiquetasShopeeRasterizadasEmSegundoPlano();
+      }
       if(typeof resolverPendenciasShopeeVisualmente==="function"){
         await resolverPendenciasShopeeVisualmente();
       }
@@ -6980,7 +6996,17 @@ document.addEventListener("DOMContentLoaded",()=>{
       renderizarEtiquetasPersistentes();
       const total=(mapaEtiquetas.ordem||[]).length;
       statusDiv.style.color="#2e7d32";
-      statusDiv.innerHTML=`✔ Etiquetas salvas permanentemente no servidor.<br><b>${resultado.adicionadas}</b> nova(s) adicionada(s)${resultado.duplicadas?` · <b>${resultado.duplicadas}</b> já existente(s) ignorada(s)`:""} · <b>${total}</b> armazenada(s) no total.`;
+      statusDiv.innerHTML=`✔ Etiquetas salvas permanentemente no servidor.<br><b>${resultado.adicionadas}</b> nova(s) adicionada(s)${resultado.duplicadas?` · <b>${resultado.duplicadas}</b> já existente(s) ignorada(s)`:""} · <b>${total}</b> armazenada(s) no total.<br><span style="color:#1f57a5">Shopee: iniciando reconhecimento automático dos pedidos...</span>`;
+
+      // V16.76: não deixa o lote Shopee parado em "Sem vínculo".
+      // O reconhecimento roda depois que o ZPL já está salvo, portanto uma falha
+      // de OCR nunca perde a etiqueta. Cada vínculo concluído é persistido.
+      if(typeof reconhecerEtiquetasShopeeRasterizadasEmSegundoPlano==="function"){
+        setTimeout(()=>{
+          reconhecerEtiquetasShopeeRasterizadasEmSegundoPlano()
+            .catch(err=>console.error("Reconhecimento Shopee em segundo plano:",err));
+        },120);
+      }
     }catch(err){console.error(err);statusDiv.style.color="var(--secondary)";statusDiv.innerHTML="❌ Erro ao processar as etiquetas: "+escEtq(err.message||err);}
   };
 

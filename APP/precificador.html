@@ -526,6 +526,64 @@
         .prec-right-col .market-grid{grid-template-columns:1fr}
         .prec-right-col .mini-grid,.prec-right-col .market-card[data-market="shopee"] .mini-grid,.prec-right-col .market-card[data-market="magalu"] .mini-grid{grid-template-columns:1fr 1fr}
       }
+
+      /* V16.76 - layout estável do Precificador: nenhuma coluna pode invadir a outra */
+      .prec-two-col{
+        grid-template-columns:minmax(0,1.38fr) minmax(500px,.92fr) !important;
+        gap:18px !important;
+      }
+      .prec-left-col,.prec-right-col,
+      .prec-product-panel,.prec-calc-panel,.prec-compare-panel,.ml-link-section{
+        min-width:0 !important;
+        max-width:100%;
+      }
+      .prec-left-col .product-data-grid{
+        display:grid !important;
+        grid-template-columns:repeat(12,minmax(0,1fr)) !important;
+        gap:10px !important;
+        width:100%;
+      }
+      .prec-left-col .product-data-grid > .field:nth-child(1){grid-column:span 2}
+      .prec-left-col .product-data-grid > .field:nth-child(2){grid-column:span 4}
+      .prec-left-col .product-data-grid > .field:nth-child(3){grid-column:span 2}
+      .prec-left-col .product-data-grid > .field:nth-child(4){grid-column:span 2}
+      .prec-left-col .product-data-grid > .field:nth-child(5){grid-column:span 2}
+      .prec-left-col .product-data-grid input,
+      .prec-left-col .product-data-grid select,
+      .prec-left-col .cost-control{min-width:0;width:100%}
+      .prec-right-col{overflow:visible}
+      .prec-right-col .market-card{min-width:0;overflow:hidden}
+      .prec-right-col .mini-grid{
+        grid-template-columns:repeat(2,minmax(0,1fr)) !important;
+        gap:8px !important;
+      }
+      .prec-right-col .results{
+        grid-template-columns:repeat(2,minmax(0,1fr)) !important;
+      }
+      .prec-right-col .metric{min-width:0}
+      .prec-right-col .metric strong{overflow-wrap:anywhere}
+      .ml-link-grid,.ml-link-card,.ml-link-table{min-width:0;max-width:100%}
+      .ml-link-card{overflow:hidden}
+      .ml-link-table{table-layout:fixed}
+      .ml-link-table th,.ml-link-table td{overflow:hidden;text-overflow:ellipsis}
+
+      @media(max-width:1320px){
+        .prec-two-col{grid-template-columns:1fr !important}
+        .prec-right-col{position:static !important}
+        .prec-right-col .market-grid{grid-template-columns:repeat(2,minmax(0,1fr)) !important}
+      }
+      @media(max-width:900px){
+        .prec-left-col .product-data-grid{grid-template-columns:repeat(2,minmax(0,1fr)) !important}
+        .prec-left-col .product-data-grid > .field{grid-column:auto !important}
+        .prec-left-col .product-data-grid > .field:nth-child(2){grid-column:1/-1 !important}
+        .prec-right-col .market-grid{grid-template-columns:1fr !important}
+      }
+      @media(max-width:620px){
+        .prec-left-col .product-data-grid{grid-template-columns:1fr !important}
+        .prec-left-col .product-data-grid > .field{grid-column:auto !important}
+        .prec-right-col .mini-grid,.prec-right-col .results{grid-template-columns:1fr !important}
+      }
+
 </style>
 </head>
 <body>
@@ -757,7 +815,7 @@
         <div class="prec-left-col">
 <section class="panel prec-product-panel">
         <div class="section-heading">
-          <div><div class="eyebrow">Cadastro · V16.67</div><h2>Dados do produto</h2><p>Altere os campos e veja os preços recalculados imediatamente.</p></div>
+          <div><div class="eyebrow">Cadastro · V16.76</div><h2>Dados do produto</h2><p>Altere os campos e veja os preços recalculados imediatamente.</p></div>
           <button class="btn btn-secondary" id="new-btn" type="button">+ Novo produto</button>
         </div>
         <div class="product-data-grid">
