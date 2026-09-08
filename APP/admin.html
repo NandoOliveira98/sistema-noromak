@@ -2979,8 +2979,62 @@ function normalizarPendentesFiscalKitsAdmin(linhas){
   return saida;
 }
 
+
+const NOMES_CONFERENCIA_STORAGE_KEY="conf_nomes_conferencia_v1";
+let nomesConferenciaAdmin={};
+let timerSalvarNomesConferenciaAdmin=null;
+
+function carregarNomesConferenciaAdmin(){
+  try{
+    const raw=appStorage.getItem(NOMES_CONFERENCIA_STORAGE_KEY);
+    const parsed=raw?JSON.parse(raw):{};
+    nomesConferenciaAdmin=parsed&&typeof parsed==="object"&&!Array.isArray(parsed)?parsed:{};
+  }catch(e){
+    console.warn("Falha ao carregar nomes de conferência",e);
+    nomesConferenciaAdmin={};
+  }
+  return nomesConferenciaAdmin;
+}
+function aplicarNomesConferenciaAdmin(linhas){
+  const mapa=nomesConferenciaAdmin||{};
+  (Array.isArray(linhas)?linhas:[]).forEach(item=>{
+    const pedido=normalizarCodigoBanco(item?.Pedido||"");
+    if(!pedido)return;
+    const salvo=String(mapa[pedido]||"").trim();
+    if(salvo)item["Nome Conferência"]=salvo;
+  });
+  return linhas;
+}
+function salvarNomesConferenciaAdminAgora(){
+  if(timerSalvarNomesConferenciaAdmin){clearTimeout(timerSalvarNomesConferenciaAdmin);timerSalvarNomesConferenciaAdmin=null;}
+  try{
+    appStorage.setItem(NOMES_CONFERENCIA_STORAGE_KEY,JSON.stringify(nomesConferenciaAdmin||{}));
+    return true;
+  }catch(e){
+    console.error("Falha ao salvar nomes de conferência",e);
+    setStatusBanco("Erro ao salvar nome da conferência","erro");
+    return false;
+  }
+}
+function agendarSalvarNomesConferenciaAdmin(){
+  if(timerSalvarNomesConferenciaAdmin)clearTimeout(timerSalvarNomesConferenciaAdmin);
+  timerSalvarNomesConferenciaAdmin=setTimeout(()=>{timerSalvarNomesConferenciaAdmin=null;salvarNomesConferenciaAdminAgora();},250);
+}
+function registrarNomeConferenciaAdmin(item,nome){
+  const pedido=normalizarCodigoBanco(item?.Pedido||"");
+  if(!pedido)return;
+  nome=String(nome||"").trim();
+  if(nome)nomesConferenciaAdmin[pedido]=nome;
+  else delete nomesConferenciaAdmin[pedido];
+  pedidosEditorAdmin.forEach(linha=>{
+    if(normalizarCodigoBanco(linha?.Pedido||"")===pedido)linha["Nome Conferência"]=nome;
+  });
+  agendarSalvarNomesConferenciaAdmin();
+}
+
 function carregarBancoInternoAdmin(){
   try{
+    carregarNomesConferenciaAdmin();
     produtosBancoAdmin=JSON.parse(appStorage.getItem("conf_produtos")||"[]");
     kitsBancoAdmin=JSON.parse(appStorage.getItem("conf_kits")||"[]");
     if(!Array.isArray(kitsBancoAdmin)) kitsBancoAdmin=[];
@@ -2994,7 +3048,7 @@ function carregarBancoInternoAdmin(){
     const validos=normalizarPendentesFiscalKitsAdmin(validosOriginais);
     const rascunhos=normalizarPendentesFiscalKitsAdmin(rascunhosOriginais);
 
-    pedidosEditorAdmin=[...validos,...rascunhos].map((x,i)=>{
+    pedidosEditorAdmin=aplicarNomesConferenciaAdmin([...validos,...rascunhos]).map((x,i)=>{
       const marketplace=x.Marketplace||marketplaceExibicaoBanco(x.Pedido);
       return {...x,Pedido:pedidoArmazenamentoBanco(x.Pedido,marketplace),Marketplace:marketplaceExibicaoBanco(x.Pedido),"Data do Pedido":normalizarDataPedidoBanco(x["Data do Pedido"]||x.Data||x.DataPedido,true),Kit:normalizarBuscaBanco(x.Kit)==="sim"?"SIM":(x["Nome do Kit"]?"SIM":""),__uidLinha:x.__uidLinha||x.__uidPedido||uidBanco("PED")};
     });
@@ -3617,6 +3671,12 @@ function salvarPedidosAdmin(mostrarMensagem=false){
   timerSalvarPedidosAdmin=null;
   try{
     sincronizarCamposPedidosVisiveisAdmin();
+    pedidosEditorAdmin.forEach(item=>{
+      const pedido=normalizarCodigoBanco(item?.Pedido||"");
+      const nome=String(item?.["Nome Conferência"]||"").trim();
+      if(pedido&&nome)nomesConferenciaAdmin[pedido]=nome;
+    });
+    salvarNomesConferenciaAdminAgora();
     const elementoFocado=document.activeElement;
     const focoPedido=elementoFocado?.closest?.("#corpoPedidosAdmin")?{
       uid:elementoFocado.dataset?.uidlinha||"",
@@ -3736,8 +3796,7 @@ function atualizarCampoPedidoAdmin(el,semRender=false){
   else if(campo==="Nome Conferência"){
     const nome=String(el.value||"").trim();
     item[campo]=nome;
-    const pedidoRef=normalizarCodigoBanco(item.Pedido);
-    if(pedidoRef)pedidosEditorAdmin.forEach(linha=>{if(normalizarCodigoBanco(linha.Pedido)===pedidoRef)linha[campo]=nome;});
+    registrarNomeConferenciaAdmin(item,nome);
   }else item[campo]=el.value;
   if(campo==="SKU"||campo==="Código de Barras"){
     const p=localizarProdutoBanco(el.value); if(p)preencherPedidoProdutoBanco(item,p);
@@ -3875,7 +3934,7 @@ function renderizarPedidosAdmin(){
   else corpo.innerHTML=parte.map(item=>{
     item.Marketplace=marketplaceExibicaoBanco(item.Pedido);
     const valida=linhaPedidoValidaBanco(item);
-    const inp=(campo,cls="")=>{const valor=campo==="Pedido"?pedidoExibicaoBanco(item.Pedido,item.Marketplace):campoBanco(item,campo);const extra=campo==="Nome Conferência"?' placeholder="Nome exibido na conferência" title="Se preenchido, este nome aparece no lugar do Cliente somente na tela de conferência"':'';const evento=campo==="Nome Conferência"?'oninput="atualizarCampoPedidoAdmin(this,true)"':'onchange="atualizarCampoPedidoAdmin(this)"';return `<input class="${cls}" data-uidlinha="${htmlSeguroBanco(item.__uidLinha)}" data-campo="${htmlSeguroBanco(campo)}" value="${htmlSeguroBanco(valor)}"${extra} ${evento} onkeydown="navegarGridAdmin(event,this)">`;};
+    const inp=(campo,cls="")=>{const valor=campo==="Pedido"?pedidoExibicaoBanco(item.Pedido,item.Marketplace):campoBanco(item,campo);const extra=campo==="Nome Conferência"?' placeholder="Nome exibido na conferência" title="Se preenchido, este nome aparece no lugar do Cliente somente na tela de conferência"':'';const evento=campo==="Nome Conferência"?'oninput="atualizarCampoPedidoAdmin(this,true)" onchange="atualizarCampoPedidoAdmin(this,true);salvarNomesConferenciaAdminAgora()" onblur="salvarNomesConferenciaAdminAgora()"':'onchange="atualizarCampoPedidoAdmin(this)"';return `<input class="${cls}" data-uidlinha="${htmlSeguroBanco(item.__uidLinha)}" data-campo="${htmlSeguroBanco(campo)}" value="${htmlSeguroBanco(valor)}"${extra} ${evento} onkeydown="navegarGridAdmin(event,this)">`;};
     const eanAtual=campoBanco(item,"Código de Barras");
     const alterado=String(eanSalvoPorUid.get(item.__uidLinha)??eanAtual)!==eanAtual.trim();
     const mensagem=eanMensagemPorUid.get(item.__uidLinha)||{tipo:"",texto:"Bipe o código e pressione Enter."};

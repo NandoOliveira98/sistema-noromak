@@ -442,7 +442,7 @@
   <div class="conf-acoes-header">
     <div class="conf-acoes-grupo conf-acoes-navegacao">
       <a class="btn-header btn-header-compacto" href="/expedicao/admin">← CENTRAL</a>
-      <button type="button" class="pwa-install-btn pwa-header btn-header-compacto" data-pwa-install>⬇ INSTALAR</button>
+      <button type="button" class="pwa-install-btn pwa-header btn-header-compacto btn-icon-only btn-install-conf" data-pwa-install title="Instalar Conferência" aria-label="Instalar Conferência">⬇</button>
     </div>
 
     <div class="conf-acoes-grupo conf-acoes-operacao">
@@ -470,13 +470,24 @@
       </div>
 
       <div id="alertaNovosPedidosTopo" class="alerta-novos-pedidos-topo"></div>
-      <button class="btn-header btn-header-compacto" onclick="abrirAvisosConferencia?.()">🔔 AVISOS</button>
       <button class="btn-header btn-header-compacto" onclick="alternarPainelAtalhos()">⌨ ATALHOS</button>
       <button class="btn-header btn-header-compacto" onclick="abrirHistorico()">🕘 HISTÓRICO</button>
-      <button class="btn-logoff btn-header-compacto" onclick="fazerLogoff()">SAIR</button>
+      <button class="btn-logoff btn-header-compacto btn-icon-only btn-sair-icon" onclick="fazerLogoff()" title="Sair do usuário" aria-label="Sair do usuário">⏻</button>
     </div>
   </div>
 </header>
+<div id="popupColetaConferencia" class="popup-coleta-overlay" aria-hidden="true">
+  <div class="popup-coleta-card" role="dialog" aria-modal="true" aria-labelledby="popupColetaTitulo">
+    <div class="popup-coleta-icone">🚚</div>
+    <div class="popup-coleta-conteudo">
+      <div id="popupColetaTitulo" class="popup-coleta-titulo">Coleta do dia</div>
+      <div id="popupColetaHorario" class="popup-coleta-horario">Coleta | —</div>
+      <div id="popupColetaCodigo" class="popup-coleta-codigo">Autorização | —</div>
+    </div>
+    <button type="button" class="popup-coleta-ok" onclick="fecharPopupColetaConferencia()">OK</button>
+  </div>
+</div>
+
 
 <div class="container">
   <div class="menu">
@@ -1733,7 +1744,8 @@ function iniciarSessao() {
   if (atalhosEstado) atalhosEstado.textContent = "Abrir · F1";
 
   carregarHistoricoConferencias();
-  carregarColetaExpedicao();
+  carregarNomesConferenciaCache();
+  carregarColetaExpedicao(true);
   restaurarFiltroMarketplacePedidos();
   renderizarListaPedidos();
   setTimeout(restaurarUltimoPedidoEmAndamento, 80);
@@ -1756,7 +1768,28 @@ window.ativarSessaoWebConferencia = function(sessao) {
 // V16.70 - coleta diária na Expedição
 const COLETA_DIA_STORAGE_KEY_CONFERENCIA="conf_coleta_dia_v1";
 
-function carregarColetaExpedicao(){
+let popupColetaConferenciaMostrado=false;
+
+function fecharPopupColetaConferencia(){
+  const overlay=document.getElementById("popupColetaConferencia");
+  if(!overlay)return;
+  overlay.classList.remove("mostrar");
+  overlay.setAttribute("aria-hidden","true");
+}
+function mostrarPopupColetaConferencia(horario,codigo){
+  if(popupColetaConferenciaMostrado||!horario||!codigo)return;
+  const overlay=document.getElementById("popupColetaConferencia");
+  const h=document.getElementById("popupColetaHorario");
+  const c=document.getElementById("popupColetaCodigo");
+  if(!overlay||!h||!c)return;
+  h.textContent=`Coleta | ${horario}`;
+  c.textContent=`Autorização | ${codigo}`;
+  popupColetaConferenciaMostrado=true;
+  overlay.classList.add("mostrar");
+  overlay.setAttribute("aria-hidden","false");
+  setTimeout(()=>overlay.querySelector(".popup-coleta-ok")?.focus(),30);
+}
+function carregarColetaExpedicao(mostrarPopup=false){
   const box=document.getElementById("coletaExpedicaoBox");
   const horarioEl=document.getElementById("coletaExpedicaoHorario");
   const codigoEl=document.getElementById("coletaExpedicaoCodigo");
@@ -1773,6 +1806,7 @@ function carregarColetaExpedicao(){
 
     box.classList.toggle("coleta-sem-dados",!(horario&&codigo));
     box.classList.toggle("coleta-com-dados",!!(horario&&codigo));
+    if(mostrarPopup&&horario&&codigo)mostrarPopupColetaConferencia(horario,codigo);
 
     const meta=[];
     if(dados.data)meta.push(`Data: ${dados.data}`);
@@ -1802,13 +1836,22 @@ function abrirAvisosConferencia(){
 }
 
 window.addEventListener("storage",function(e){
-  if(e.key===COLETA_DIA_STORAGE_KEY_CONFERENCIA)carregarColetaExpedicao();
+  if(e.key===COLETA_DIA_STORAGE_KEY_CONFERENCIA)carregarColetaExpedicao(false);
+  if(e.key===NOMES_CONFERENCIA_STORAGE_KEY_CONFERENCIA){
+    carregarNomesConferenciaCache();
+    renderizarListaPedidos();
+  }
 });
 
+document.addEventListener("keydown",function(e){
+  if(e.key==="Escape"&&document.getElementById("popupColetaConferencia")?.classList.contains("mostrar")){
+    fecharPopupColetaConferencia();
+  }
+});
 document.addEventListener("DOMContentLoaded",function(){
-  setTimeout(carregarColetaExpedicao,250);
+  setTimeout(()=>carregarColetaExpedicao(false),250);
   // Atualiza também se o Admin alterar a coleta em outra máquina/aba.
-  setInterval(carregarColetaExpedicao,15000);
+  setInterval(()=>carregarColetaExpedicao(false),15000);
 });
 
 function fazerLogoff() {
@@ -1892,8 +1935,22 @@ function atualizarAvisoConclusaoAnteriorPedido(item){
   el.innerHTML=`↻ <b>JÁ FOI FEITO ANTERIORMENTE</b>${info.data?` · ${escaparHtml(info.data)}`:""}${info.por?` · ${escaparHtml(info.por)}`:""}`;
 }
 
+const NOMES_CONFERENCIA_STORAGE_KEY_CONFERENCIA="conf_nomes_conferencia_v1";
+let nomesConferenciaCache={};
+
+function carregarNomesConferenciaCache(){
+  try{
+    const raw=appStorage.getItem(NOMES_CONFERENCIA_STORAGE_KEY_CONFERENCIA);
+    const parsed=raw?JSON.parse(raw):{};
+    nomesConferenciaCache=parsed&&typeof parsed==="object"&&!Array.isArray(parsed)?parsed:{};
+  }catch(_){nomesConferenciaCache={};}
+}
 function nomeClienteConferencia(item) {
-  return String(extrairCampo(item, "Nome Conferência") || extrairCampo(item, "Cliente") || "").trim();
+  const nomeLinha=String(extrairCampo(item, "Nome Conferência") || "").trim();
+  if(nomeLinha)return nomeLinha;
+  const pedido=normalizarIdentificadorExato(extrairCampo(item,"Pedido"));
+  const nomePermanente=String(nomesConferenciaCache[pedido]||"").trim();
+  return nomePermanente || String(extrairCampo(item, "Cliente") || "").trim();
 }
 
 function renderizarListaPedidos() {
@@ -3649,6 +3706,33 @@ window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_
     .conf-acoes-header .btn-header-compacto{flex:1 1 auto}
     .container{height:auto;min-height:calc(100dvh - 220px)}
   }
+
+  /* V16.71 - ações compactas; bloco da coleta preservado */
+  .conf-header-v1670{grid-template-columns:130px minmax(210px,250px) minmax(360px,450px) 1fr}
+  .conf-acoes-header,.conf-acoes-grupo{gap:5px}
+  .conf-acoes-operacao{padding-left:6px}
+  .btn-header-compacto{min-height:31px!important;padding:5px 8px!important;font-size:10px!important;border-radius:7px!important}
+  .btn-icon-only{width:34px!important;min-width:34px!important;max-width:34px!important;height:32px!important;padding:0!important;font-size:0!important;display:inline-flex!important;align-items:center!important;justify-content:center!important}
+  .btn-icon-only::before{font-size:16px;line-height:1}
+  .btn-install-conf::before{content:"⬇"}
+  .btn-sair-icon::before{content:"⏻"}
+  .btn-alerta-icon-only{width:34px!important;min-width:34px!important;height:32px!important;padding:0!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;border-radius:7px!important}
+  .btn-alerta-icon-only #alertaTopoTexto{font-size:15px}
+  .conf-header-v1670 .alerta-novos-pedidos-topo{max-width:none}
+
+  .popup-coleta-overlay{position:fixed;inset:0;z-index:12000;background:rgba(10,31,53,.48);display:none;align-items:flex-start;justify-content:center;padding-top:90px;backdrop-filter:blur(2px)}
+  .popup-coleta-overlay.mostrar{display:flex}
+  .popup-coleta-card{width:min(520px,calc(100vw - 28px));display:grid;grid-template-columns:56px 1fr auto;align-items:center;gap:14px;padding:18px 20px;border-radius:16px;background:#fff8df;border:2px solid #f2c247;box-shadow:0 22px 70px rgba(0,0,0,.30);color:#17344f}
+  .popup-coleta-icone{font-size:34px;text-align:center}
+  .popup-coleta-titulo{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:#7a5a00;font-weight:900;margin-bottom:4px}
+  .popup-coleta-horario{font-size:20px;font-weight:900}
+  .popup-coleta-codigo{font-size:16px;font-weight:900;color:#08743b;margin-top:4px}
+  .popup-coleta-ok{border:0;border-radius:9px;background:#2b5b8a;color:#fff;font-weight:900;padding:10px 16px;cursor:pointer;font-size:13px}
+  @media(max-width:780px){
+    .popup-coleta-overlay{padding-top:30px}
+    .popup-coleta-card{grid-template-columns:44px 1fr}
+    .popup-coleta-ok{grid-column:1/-1;width:100%}
+  }
 </style>
 <script>
 (() => {
@@ -3672,8 +3756,8 @@ window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_
     const box = document.getElementById("alertaNovosPedidosTopo");
     if (!box || document.getElementById("btnResumoAlertaPedidos")) return;
     box.innerHTML = `
-      <button id="btnResumoAlertaPedidos" class="btn-alerta-resumo" type="button" onclick="window.alternarPainelAlertaPedidos()" aria-controls="painelAlertaNovosPedidos" aria-expanded="false">
-        <span id="alertaTopoPonto" class="alerta-topo-ponto"></span><span id="alertaTopoTexto">🔔 AVISOS</span>
+      <button id="btnResumoAlertaPedidos" class="btn-alerta-resumo btn-alerta-icon-only" type="button" onclick="window.alternarPainelAlertaPedidos()" aria-controls="painelAlertaNovosPedidos" aria-expanded="false" title="Avisos" aria-label="Avisos">
+        <span id="alertaTopoTexto">🔔</span>
       </button>
       <div id="painelAlertaNovosPedidos" class="alerta-novos-pedidos-painel">
         <div class="alerta-novos-pedidos-info">
@@ -3710,7 +3794,7 @@ window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_
       btnVolume.title = volumeMaximo ? "Alarme reforçado para ambiente de estoque" : "Alarme em volume normal";
     }
     if (ponto) ponto.classList.toggle("inativo", !alertaAtivo);
-    if (resumo) resumo.textContent = alertaAtivo ? "🔔 AVISOS" : "🔕 AVISOS";
+    if (resumo) resumo.textContent = alertaAtivo ? "🔔" : "🔕";
     if (status) {
       if (!alertaAtivo) status.textContent = "Aviso sonoro desativado neste aparelho.";
       else if (!audioLiberado) status.textContent = "Som ativo. Toque/clique uma vez na tela para liberar o áudio deste aparelho.";

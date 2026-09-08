@@ -1,0 +1,25 @@
+NOROMAK WEB V16.71
+
+1. CABEÇALHO DA CONFERÊNCIA
+- Mantém o bloco da coleta no mesmo tamanho.
+- Remove o Avisos duplicado.
+- Avisos fica somente com o ícone.
+- Instalar Conferência fica somente com o ícone.
+- Sair fica somente com o ícone.
+- Demais botões ficaram menores.
+
+2. POPUP DA COLETA
+- Ao iniciar a sessão da Conferência, mostra popup com horário e autorização.
+- Aparece uma vez por carregamento da tela.
+
+3. NOME NA CONFERÊNCIA PERMANENTE
+- Novo banco: conf_nomes_conferencia_v1.
+- O nome é salvo por número do pedido.
+- Ao atualizar o Admin, o nome volta automaticamente.
+- A Conferência também consulta esse banco, evitando que sincronizações do pedido apaguem o nome manual.
+
+PUBLICAÇÃO:
+git status
+git add -A
+git commit -m "V16.71 - compacta header popup coleta e nome conferencia permanente"
+./publicar.sh
