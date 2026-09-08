@@ -1098,7 +1098,7 @@ body{background:var(--v15-bg)!important}
           <div class="etiquetas-persistentes-topo-direita">
             <div id="resumoEtiquetasPersistentes" class="etiquetas-persistentes-resumo">0 etiquetas armazenadas</div>
             <button type="button" id="btnReprocessarVinculosEtiquetas" class="btn-etiquetas-reprocessar" onclick="reprocessarVinculosEtiquetasPersistentes()">🔄 Reprocessar vínculos</button>
-            <button type="button" id="btnReconhecerPedidosShopee" class="btn-etiquetas-reprocessar" onclick="reconhecerPedidosShopeePersistentes()">⚡ Reconhecer pedidos Shopee</button>
+            <button type="button" id="btnReconhecerPedidosShopee" class="btn-etiquetas-reprocessar" onclick="reconhecerPedidosShopeePersistentes()" title="Cruza o rastreio da etiqueta com o relatório Shopee; não usa OCR">⚡ Reconhecer pedidos Shopee</button>
             <button type="button" id="btnAtivarRemocaoMassa" class="btn-etiquetas-lote" onclick="alternarRemocaoMassaEtiquetas()">☑ Remover em massa</button>
           </div>
         </div>
@@ -1773,16 +1773,46 @@ function pedidosShopeeDaPlanilha() {
 }
 
 function pedidoShopeePorRastreio(rastreio) {
-  const encontrados = new Map();
-  dadosPedidos.forEach(item => {
-    if (obterMarketplaceItemAdmin(item) !== "shopee") return;
-    const codigo = extrairCampoAdmin(item, "Código de Rastreio") || extrairCampoAdmin(item, "Codigo de Rastreio") ||
-      extrairCampoAdmin(item, "Rastreio") || extrairCampoAdmin(item, "Tracking");
-    if (!codigo || !valoresIguaisExatos(codigo, rastreio)) return;
-    const pedido = extrairCampoAdmin(item, "Pedido") || extrairCampoAdmin(item, "Venda") || extrairCampoAdmin(item, "Número do Pedido");
-    if (pedido) encontrados.set(normalizarIdentificador(pedido), pedido);
+  const alvo=normalizarIdentificador(rastreio);
+  if(!alvo)return "";
+
+  // V16.80: reúne todas as fontes locais disponíveis. O relatório Shopee pode
+  // ter sido importado antes da correção de Marketplace e, nesse caso, o item
+  // pode estar marcado como VERIFICAR. O rastreio exato é a chave confiável.
+  const fontes=[];
+  const adicionarFonte=lista=>{
+    if(!Array.isArray(lista))return;
+    lista.forEach(item=>fontes.push(item));
+  };
+  adicionarFonte(dadosPedidos);
+  adicionarFonte(typeof pedidosEditorAdmin!=="undefined"?pedidosEditorAdmin:[]);
+  try{adicionarFonte(JSON.parse(appStorage.getItem("conf_pedidos")||"[]"));}catch(_){}
+  try{adicionarFonte(JSON.parse(appStorage.getItem("conf_pedidos_rascunhos")||"[]"));}catch(_){}
+
+  const encontrados=new Map();
+  fontes.forEach(item=>{
+    const codigo=
+      extrairCampoAdmin(item,"Código de Rastreio") ||
+      extrairCampoAdmin(item,"Codigo de Rastreio") ||
+      extrairCampoAdmin(item,"Código de Rastreamento") ||
+      extrairCampoAdmin(item,"Codigo de Rastreamento") ||
+      extrairCampoAdmin(item,"Número de rastreamento") ||
+      extrairCampoAdmin(item,"Numero de rastreamento") ||
+      extrairCampoAdmin(item,"Rastreio") ||
+      extrairCampoAdmin(item,"Tracking") ||
+      extrairCampoAdmin(item,"Tracking Number");
+    if(!codigo || normalizarIdentificador(codigo)!==alvo)return;
+
+    const pedido=
+      extrairCampoAdmin(item,"Pedido") ||
+      extrairCampoAdmin(item,"Venda") ||
+      extrairCampoAdmin(item,"Número do Pedido") ||
+      extrairCampoAdmin(item,"Numero do Pedido") ||
+      extrairCampoAdmin(item,"ID do pedido") ||
+      extrairCampoAdmin(item,"ID Pedido");
+    if(pedido) encontrados.set(normalizarIdentificador(pedido),pedido);
   });
-  return encontrados.size === 1 ? Array.from(encontrados.values())[0] : "";
+  return encontrados.size===1?Array.from(encontrados.values())[0]:"";
 }
 
 function sequenciasOcrPossiveis(texto) {
@@ -2986,8 +3016,9 @@ function textoKitBanco(item){
   const nome=campoBanco(item,"Nome do Kit")||"Kit";const kits=Number(item?.["Quantidade de Kits"]||0);const por=Number(item?.["Quantidade por Kit"]||0);
   return `${nome}${kits>0?` · ${kits} kit(s)`:""}${por>0?` · ${por} un./kit`:""}`;
 }
-function marketplaceExibicaoBanco(pedido){
-  const m=inferirMarketplacePeloPedido(pedido);
+function marketplaceExibicaoBanco(pedido, marketplaceInformado=""){
+  const informado=normalizarMarketplace(marketplaceInformado);
+  const m=informado!=="desconhecido"?informado:inferirMarketplacePeloPedido(pedido);
   if(m==="mercado_livre") return "MERCADO LIVRE";
   if(m==="shopee") return "SHOPEE";
   if(m==="magalu") return "MAGALU";
@@ -3166,7 +3197,7 @@ function carregarBancoInternoAdmin(){
 
     pedidosEditorAdmin=aplicarNomesConferenciaAdmin([...validos,...rascunhos]).map((x,i)=>{
       const marketplace=x.Marketplace||marketplaceExibicaoBanco(x.Pedido);
-      return {...x,Pedido:pedidoArmazenamentoBanco(x.Pedido,marketplace),Marketplace:marketplaceExibicaoBanco(x.Pedido),"Data do Pedido":normalizarDataPedidoBanco(x["Data do Pedido"]||x.Data||x.DataPedido,true),Kit:normalizarBuscaBanco(x.Kit)==="sim"?"SIM":(x["Nome do Kit"]?"SIM":""),__uidLinha:x.__uidLinha||x.__uidPedido||uidBanco("PED")};
+      return {...x,Pedido:pedidoArmazenamentoBanco(x.Pedido,marketplace),Marketplace:marketplaceExibicaoBanco(x.Pedido,marketplace),"Data do Pedido":normalizarDataPedidoBanco(x["Data do Pedido"]||x.Data||x.DataPedido,true),Kit:normalizarBuscaBanco(x.Kit)==="sim"?"SIM":(x["Nome do Kit"]?"SIM":""),__uidLinha:x.__uidLinha||x.__uidPedido||uidBanco("PED")};
     });
     eanSalvoPorUid.clear();
     pedidosEditorAdmin.forEach(item=>eanSalvoPorUid.set(item.__uidLinha,campoBanco(item,"Código de Barras")));
@@ -3802,7 +3833,7 @@ function salvarPedidosAdmin(mostrarMensagem=false){
     }:null;
     const ordemAntesDeSalvar=new Map(pedidosEditorAdmin.map((item,indice)=>[item.__uidLinha,indice]));
     pedidosEditorAdmin.forEach(item=>{
-      item.Marketplace=marketplaceExibicaoBanco(item.Pedido);
+      item.Marketplace=marketplaceExibicaoBanco(item.Pedido,item.Marketplace);
       item.Pedido=pedidoArmazenamentoBanco(item.Pedido,item.Marketplace);
       item["Data do Pedido"]=normalizarDataPedidoBanco(item["Data do Pedido"],true);
       if(normalizarBuscaBanco(item.Kit)==="sim"||campoBanco(item,"Nome do Kit"))item.Kit="SIM";
@@ -3818,7 +3849,7 @@ function salvarPedidosAdmin(mostrarMensagem=false){
     const rascunhosConfirmados=JSON.parse(retornoRascunhos||"[]");
     pedidosEditorAdmin=[...validosConfirmados,...rascunhosConfirmados].map(x=>{
       const marketplace=x.Marketplace||marketplaceExibicaoBanco(x.Pedido);
-      return {...x,Pedido:pedidoArmazenamentoBanco(x.Pedido,marketplace),Marketplace:marketplaceExibicaoBanco(x.Pedido),"Data do Pedido":normalizarDataPedidoBanco(x["Data do Pedido"]||x.Data||x.DataPedido,true),Kit:normalizarBuscaBanco(x.Kit)==="sim"?"SIM":(x["Nome do Kit"]?"SIM":""),__uidLinha:x.__uidLinha||x.__uidPedido||uidBanco("PED")};
+      return {...x,Pedido:pedidoArmazenamentoBanco(x.Pedido,marketplace),Marketplace:marketplaceExibicaoBanco(x.Pedido,marketplace),"Data do Pedido":normalizarDataPedidoBanco(x["Data do Pedido"]||x.Data||x.DataPedido,true),Kit:normalizarBuscaBanco(x.Kit)==="sim"?"SIM":(x["Nome do Kit"]?"SIM":""),__uidLinha:x.__uidLinha||x.__uidPedido||uidBanco("PED")};
     }).sort((a,b)=>(ordemAntesDeSalvar.get(a.__uidLinha)??Number.MAX_SAFE_INTEGER)-(ordemAntesDeSalvar.get(b.__uidLinha)??Number.MAX_SAFE_INTEGER));
     eanSalvoPorUid.clear();
     pedidosEditorAdmin.forEach(item=>eanSalvoPorUid.set(item.__uidLinha,campoBanco(item,"Código de Barras")));
@@ -6848,115 +6879,74 @@ document.addEventListener("DOMContentLoaded",()=>{
       status.className=`etiquetas-reprocessar-status mostrar ${tipo}`;
       status.innerHTML=texto;
     };
-    if(btn){btn.disabled=true;btn.textContent="⏳ Reconhecendo...";}
+    if(btn){btn.disabled=true;btn.textContent="⏳ Cruzando rastreios...";}
     try{
+      // Atualiza o estado local completo antes de comparar.
       try{
-        if(typeof carregarBancoCompartilhado==="function") await carregarBancoCompartilhado();
-      }catch(e){console.warn("Atualização de pedidos antes do OCR",e);}
-      try{
-        const p=JSON.parse(appStorage.getItem("conf_pedidos")||"[]");
-        if(Array.isArray(p)) dadosPedidos=p;
-      }catch(_){}
+        if(typeof carregarBancoInternoAdmin==="function") carregarBancoInternoAdmin();
+      }catch(e){console.warn("Atualização dos pedidos antes do vínculo Shopee",e);}
 
       bancoEtiquetas=reconstruirBancoEtq(lerBancoEtqPersistente());
-      const sho=(bancoEtiquetas.ordem||[])
+      const registros=(bancoEtiquetas.ordem||[])
         .map(id=>bancoEtiquetas.registros[id])
         .filter(r=>r&&r.marketplace==="shopee"&&!r.pedido);
 
-      if(!sho.length){
+      if(!registros.length){
         mostrar("sucesso","✔ Todas as etiquetas Shopee já estão vinculadas.");
         return;
       }
 
-      let porRastreio=0;
-      for(const r of sho){
-        const rastreio=String(r.metadados?.rastreio||"").trim();
-        if(!rastreio)continue;
+      let identificados=0;
+      let semCorrespondencia=0;
+      const exemplosSem=[];
+
+      for(const registro of registros){
+        registro.metadados=registro.metadados||{};
+        const rastreio=String(registro.metadados.rastreio||"").trim();
+
+        if(!rastreio){
+          semCorrespondencia++;
+          continue;
+        }
+
         const pedido=pedidoShopeePorRastreio(rastreio);
         if(pedido){
-          r.metadados=r.metadados||{};
-          r.metadados.pedido=pedido;
-          adicionarChavesRegistro(r.id,[pedido,rastreio]);
-          porRastreio++;
+          registro.metadados.pedido=pedido;
+          adicionarChavesRegistro(registro.id,[pedido,rastreio]);
+          identificados++;
+        }else{
+          semCorrespondencia++;
+          if(exemplosSem.length<4) exemplosSem.push(rastreio);
         }
       }
+
+      // Agora que metadados.pedido foi preenchido, faz o vínculo real.
       vincularPendenciasShopeeAutomaticamente();
 
-      let pendentes=(bancoEtiquetas.ordem||[])
-        .map(id=>bancoEtiquetas.registros[id])
-        .filter(r=>r&&r.marketplace==="shopee"&&!r.pedido&&!String(r.metadados?.pedido||"").trim());
-
-      if(!pendentes.length){
-        mapaEtiquetas=bancoEtiquetas;
-        appStorage.setItem("conf_etiquetas",JSON.stringify(bancoEtiquetas));
-        appStorage.setItem("conf_banco_atualizado_em",new Date().toISOString());
-        renderizarEtiquetasPersistentes();
-        mostrar("sucesso",`✔ Reconhecimento concluído. ${porRastreio} pedido(s) identificado(s) pelo rastreio.`);
-        return;
-      }
-
-      mostrar("processando",`Iniciando OCR rápido em ${pendentes.length} etiqueta(s) Shopee...`);
-      const quantidadeWorkers=Math.min(3,pendentes.length);
-      const workers=[];
-      for(let i=0;i<quantidadeWorkers;i++){
-        mostrar("processando",`Preparando leitor ${i+1} de ${quantidadeWorkers}...`);
-        workers.push(await criarWorkerOcrShopeeLote());
-      }
-
-      let concluidas=0, reconhecidas=0;
-      const fila=[...pendentes];
-
-      const executarWorker=async(worker)=>{
-        while(fila.length){
-          const registro=fila.shift();
-          if(!registro)break;
-          try{
-            const canvas=renderizarGraficoShopeeEmCanvas(registro.envio||"");
-            const recorte=prepararRecorteOcrShopeeLote(canvas);
-            const resultado=await executarComTimeoutShopee(
-              worker.recognize(recorte),
-              9000,
-              "OCR Shopee excedeu 9 segundos."
-            );
-            const texto=String(resultado?.data?.text||"").toUpperCase();
-            const candidato=melhorPedidoShopeePorOcr(texto);
-            registro.metadados=registro.metadados||{};
-            registro.metadados.textoOcr=texto.replace(/\s+/g," ").trim().slice(0,240);
-            if(candidato?.pedido){
-              registro.metadados.pedido=candidato.pedido;
-              registro.metadados.distanciaOcr=candidato.distancia;
-              adicionarChavesRegistro(registro.id,[candidato.pedido,registro.metadados.rastreio||""]);
-              reconhecidas++;
-            }
-          }catch(e){
-            registro.metadados=registro.metadados||{};
-            registro.metadados.textoOcr=`OCR não concluiu: ${e.message||e}`;
-          }finally{
-            concluidas++;
-            mostrar("processando",`OCR rápido: ${concluidas} de ${pendentes.length} · ${reconhecidas} pedido(s) identificado(s)...`);
-          }
-        }
-      };
-
-      await Promise.all(workers.map(w=>executarWorker(w)));
-      await Promise.all(workers.map(async w=>{try{await w.terminate();}catch(_){}}));
-
-      vincularPendenciasShopeeAutomaticamente();
       mapaEtiquetas=bancoEtiquetas;
       appStorage.setItem("conf_etiquetas",JSON.stringify(bancoEtiquetas));
       appStorage.setItem("conf_banco_atualizado_em",new Date().toISOString());
       renderizarEtiquetasPersistentes();
 
+      const vinculadas=(bancoEtiquetas.ordem||[])
+        .map(id=>bancoEtiquetas.registros[id])
+        .filter(r=>r&&r.marketplace==="shopee"&&r.pedido).length;
       const restantes=(bancoEtiquetas.ordem||[])
         .map(id=>bancoEtiquetas.registros[id])
         .filter(r=>r&&r.marketplace==="shopee"&&!r.pedido).length;
 
-      mostrar(restantes?"aviso":"sucesso",
-        `✔ Reconhecimento concluído. ${reconhecidas+porRastreio} pedido(s) identificado(s) nesta execução · ${restantes} etiqueta(s) ainda sem vínculo.`
-      );
+      if(restantes===0){
+        mostrar("sucesso",`✔ Shopee concluída: ${vinculadas} etiqueta(s) vinculada(s) pelo rastreio.`);
+      }else{
+        mostrar("aviso",
+          `✔ Cruzamento concluído sem OCR. <b>${identificados}</b> pedido(s) localizado(s) pelo rastreio e <b>${restantes}</b> etiqueta(s) continuam sem vínculo.`+
+          (exemplosSem.length?`<br><small>Rastreios sem correspondência nos pedidos atuais: ${exemplosSem.map(escEtq).join(", ")}${restantes>exemplosSem.length?"...":""}</small>`:"")+
+          `<br><small>Para esses casos, importe/atualize o relatório “A Enviar” da Shopee com a coluna Número de rastreamento e clique novamente. O sistema não ficará mais preso preparando OCR.</small>`
+        );
+      }
     }catch(e){
       console.error("Reconhecimento Shopee",e);
-      mostrar("aviso",`❌ Falha no reconhecimento Shopee: ${escEtq(e?.message||e)}`);
+      mostrar("aviso",`❌ Falha ao cruzar rastreios Shopee: ${escEtq(e?.message||e)}`);
     }finally{
       if(btn){btn.disabled=false;btn.textContent="⚡ Reconhecer pedidos Shopee";}
     }
