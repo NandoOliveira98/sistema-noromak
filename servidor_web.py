@@ -66,6 +66,19 @@ INITIAL_CREDENTIALS_PATH = Path(
     os.getenv("EXP_CREDENCIAIS_INICIAIS_PATH", str(DB_PATH.parent / "CREDENCIAIS_INICIAIS.txt"))
 )
 
+# Shopee Open Platform — base preparada para produção.
+# Partner Key e tokens ficam somente no servidor; nunca são enviados ao navegador.
+SHOPEE_PARTNER_ID = os.getenv("SHOPEE_PARTNER_ID", "").strip()
+SHOPEE_PARTNER_KEY = os.getenv("SHOPEE_PARTNER_KEY", "").strip()
+SHOPEE_REDIRECT_URI = os.getenv(
+    "SHOPEE_REDIRECT_URI",
+    "https://noromakweb.com.br/expedicao/api/integracoes/shopee/callback",
+).strip()
+# A URL de autorização/host de produção será preenchida após a aprovação Go-Live,
+# usando exatamente os dados liberados pela Shopee Open Platform.
+SHOPEE_AUTH_URL = os.getenv("SHOPEE_AUTH_URL", "").strip()
+SHOPEE_API_BASE = os.getenv("SHOPEE_API_BASE", "").strip()
+
 # Mercado Livre API / OAuth. O Client Secret fica somente no .env do servidor.
 ML_CLIENT_ID = os.getenv("ML_CLIENT_ID", "").strip()
 ML_CLIENT_SECRET = os.getenv("ML_CLIENT_SECRET", "").strip()
@@ -977,6 +990,34 @@ def init_db() -> None:
                 updated_at TEXT NOT NULL,
                 PRIMARY KEY(entity_type, entity_id)
             );
+            CREATE TABLE IF NOT EXISTS shopee_integration (
+                id INTEGER PRIMARY KEY CHECK (id=1),
+                shop_id TEXT NOT NULL DEFAULT '',
+                shop_name TEXT NOT NULL DEFAULT '',
+                access_token TEXT NOT NULL DEFAULT '',
+                refresh_token TEXT NOT NULL DEFAULT '',
+                token_expires_at INTEGER NOT NULL DEFAULT 0,
+                connected_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT '',
+                last_sync_at TEXT NOT NULL DEFAULT '',
+                last_error TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        DB.execute(
+            """
+            CREATE TABLE IF NOT EXISTS shopee_event_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                topic TEXT NOT NULL DEFAULT '',
+                resource TEXT NOT NULL DEFAULT '',
+                result TEXT NOT NULL DEFAULT '',
+                detail TEXT NOT NULL DEFAULT ''
+            )
+            """
+        )
+        DB.execute(
+            """
             CREATE TABLE IF NOT EXISTS ml_integration (
                 id INTEGER PRIMARY KEY CHECK(id=1),
                 seller_id TEXT NOT NULL DEFAULT '',
@@ -2611,6 +2652,65 @@ def clear_login_failures(handler: BaseHTTPRequestHandler, username: str) -> None
 
 
 # ---------------------------------------------------------------------------
+
+# Shopee Open Platform — V16.75
+def shopee_integration_row() -> sqlite3.Row | None:
+    with DB_LOCK:
+        return DB.execute("SELECT * FROM shopee_integration WHERE id=1").fetchone()
+
+
+def shopee_log_event(topic: str, resource: str, result: str, detail: str = "") -> None:
+    with DB_LOCK:
+        DB.execute(
+            "INSERT INTO shopee_event_log(created_at,topic,resource,result,detail) VALUES(?,?,?,?,?)",
+            (now_iso(), str(topic or "")[:120], str(resource or "")[:500],
+             str(result or "")[:80], str(detail or "")[:2000]),
+        )
+        DB.commit()
+
+
+def shopee_status_payload() -> dict[str, Any]:
+    row = shopee_integration_row()
+    configured = bool(SHOPEE_PARTNER_ID and SHOPEE_PARTNER_KEY)
+    connected = bool(row and str(row["shop_id"] or "").strip() and str(row["access_token"] or "").strip())
+    return {
+        "configured": configured,
+        "connected": connected,
+        "go_live_pending": not bool(SHOPEE_AUTH_URL and SHOPEE_API_BASE),
+        "partner_id": SHOPEE_PARTNER_ID,
+        "shop_id": str(row["shop_id"] or "") if row else "",
+        "shop_name": str(row["shop_name"] or "") if row else "",
+        "last_sync_at": str(row["last_sync_at"] or "") if row else "",
+        "last_error": str(row["last_error"] or "") if row else "",
+        "redirect_uri": SHOPEE_REDIRECT_URI,
+        "credentials_server_side": True,
+    }
+
+
+def shopee_connect_url() -> str:
+    if not SHOPEE_PARTNER_ID:
+        raise RuntimeError("SHOPEE_PARTNER_ID ainda não foi configurado no servidor.")
+    if not SHOPEE_PARTNER_KEY:
+        raise RuntimeError("SHOPEE_PARTNER_KEY ainda não foi configurado no servidor.")
+    if not SHOPEE_AUTH_URL:
+        raise RuntimeError("Go-Live da Shopee ainda está pendente. Configure SHOPEE_AUTH_URL após a aprovação.")
+    # A assinatura e os parâmetros finais serão ativados somente com o endpoint
+    # de produção confirmado no painel Go-Live. Evita usar URL/assinatura de sandbox em produção.
+    raise RuntimeError("Credenciais de produção recebidas, mas o fluxo de assinatura Shopee ainda precisa ser confirmado no painel Go-Live.")
+
+
+def shopee_manual_sync() -> dict[str, Any]:
+    status = shopee_status_payload()
+    if not status["connected"]:
+        raise RuntimeError("Shopee ainda não está conectada.")
+    if not SHOPEE_API_BASE:
+        raise RuntimeError("SHOPEE_API_BASE ainda não foi configurada após o Go-Live.")
+    # Estrutura propositalmente protegida até a aprovação: não faz chamadas
+    # incompletas nem altera pedidos do Noromak.
+    return {"ok": True, "imported": 0, "message": "Base Shopee pronta; sincronização de produção aguardando ativação dos endpoints aprovados."}
+
+
+
 # Mercado Livre API / OAuth / Orders
 # ---------------------------------------------------------------------------
 
@@ -8111,6 +8211,38 @@ class AppHandler(BaseHTTPRequestHandler):
             ctx = session_context(self)
             self.send_json({"authenticated": bool(ctx), "user": ctx} if ctx else {"authenticated": False})
             return
+        if path == "/api/integracoes/shopee/callback":
+            # A Shopee retorna code + shop_id nesta URL. Enquanto o Go-Live não
+            # estiver aprovado, apenas registra o retorno sem expor segredos.
+            code = str((query.get("code") or [""])[0] or "").strip()
+            shop_id = str((query.get("shop_id") or [""])[0] or "").strip()
+            if not code or not shop_id:
+                self.send_redirect(BASE_PATH + "/admin?aba=integracoes&shopee=erro&motivo=callback_incompleto")
+                return
+            shopee_log_event("oauth_callback", f"shop_id={shop_id}", "RECEBIDO", "Código de autorização recebido; troca por token aguardando configuração de produção.")
+            self.send_redirect(BASE_PATH + "/admin?aba=integracoes&shopee=callback")
+            return
+        if path == "/api/integracoes/shopee/status":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                self.send_json({"ok": True, "shopee": shopee_status_payload()})
+            return
+        if path == "/api/integracoes/shopee/connect":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                try:
+                    self.send_redirect(shopee_connect_url())
+                except Exception as exc:
+                    self.send_json({"error": str(exc)}, 503)
+            return
+        if path == "/api/integracoes/shopee/logs":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                limit = max(1, min(200, int((query.get("limit") or ["50"])[0] or 50)))
+                with DB_LOCK:
+                    rows = DB.execute("SELECT * FROM shopee_event_log ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+                self.send_json({"ok": True, "logs": [dict(row) for row in rows]})
+            return
         if path == "/api/integracoes/mercadolivre/callback":
             self.handle_ml_callback(query)
             return
@@ -8331,6 +8463,24 @@ class AppHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = self.route_path()
+        if path == "/api/integracoes/shopee/sync":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                try:
+                    self.send_json(shopee_manual_sync())
+                except Exception as exc:
+                    self.send_json({"error": str(exc)}, 503)
+            return
+        if path == "/api/integracoes/shopee/disconnect":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                with DB_LOCK:
+                    DB.execute("DELETE FROM shopee_integration WHERE id=1")
+                    DB.commit()
+                shopee_log_event("disconnect", "", "OK", f"Desconectado por {ctx.get('username') or 'admin'}")
+                audit(ctx["username"], "shopee.disconnect", "Shopee")
+                self.send_json({"ok": True})
+            return
         if path == "/api/integracoes/mercadolivre/notificacoes":
             self.handle_ml_notification()
             return

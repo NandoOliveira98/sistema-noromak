@@ -1,0 +1,11 @@
+NOROMAK WEB V16.75 — BASE SHOPEE + LIMPEZA
+
+- Adicionada área Shopee em Admin > Integrações.
+- Callback preparado em /expedicao/api/integracoes/shopee/callback.
+- Status, conectar, sincronizar e desconectar preparados.
+- Partner Key/tokens permanecem exclusivamente no servidor.
+- Nenhuma chamada real à Shopee é feita enquanto o Go-Live estiver pendente.
+- Após aprovação, preencher as variáveis SHOPEE_* no .env e ativar o fluxo oficial de produção.
+- Limpeza: removidos históricos LEIA_* antigos, __pycache__, .git do pacote distribuível,
+  TESTES_REALIZADOS e SEGREDOS_SERVIDOR (incluindo chave privada).
+- Arquivos operacionais atuais de instalação/impressão foram mantidos.

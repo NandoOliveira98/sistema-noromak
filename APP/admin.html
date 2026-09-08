@@ -1150,6 +1150,23 @@ body{background:var(--v15-bg)!important}
           <div class="integracao-alerta"><b>Importante para o nginx:</b> a rota <code>/expedicao/api/integracoes/mercadolivre/notificacoes</code> precisa aceitar chamadas do Mercado Livre sem o login do CRM. Ela não dá acesso aos dados do sistema; apenas recebe o evento e valida o <code>application_id</code>/<code>user_id</code> antes de consultar a API.</div>
         </div>
         <div class="integracao-card">
+          <h3>🟠 Shopee</h3>
+          <div id="shopeeIntegracaoStatus" class="integracao-status off">⚪ Carregando...</div>
+          <div class="integracao-dados">
+            <b>Partner ID</b><span id="shopeePartnerId">—</span>
+            <b>Loja / Shop ID</b><span id="shopeeShopId">—</span>
+            <b>Última sincronização</b><span id="shopeeUltimaSync">—</span>
+            <b>Callback OAuth</b><span id="shopeeCallback">—</span>
+            <b>Credenciais</b><span>Somente no servidor</span>
+          </div>
+          <div class="integracao-acoes">
+            <button type="button" id="btnShopeeConectar" class="btn-primario" onclick="conectarShopeeAdmin()">Conectar Shopee</button>
+            <button type="button" id="btnShopeeSincronizar" class="btn-sucesso" onclick="sincronizarShopeeAdmin()" disabled>↻ Sincronizar agora</button>
+            <button type="button" id="btnShopeeDesconectar" class="btn-perigo" onclick="desconectarShopeeAdmin()" disabled>Desconectar</button>
+          </div>
+          <div id="shopeeIntegracaoMensagem" class="integracao-nota">Estrutura preparada para a Shopee Open Platform. O Go-Live está em análise; Partner Key e tokens nunca são enviados ao navegador.</div>
+        </div>
+        <div class="integracao-card">
           <h3>🖨 Agente Zebra autônomo</h3>
           <div id="zebraAgentStatus" class="integracao-status off">⚪ Carregando...</div>
           <div class="integracao-dados">
@@ -3567,7 +3584,7 @@ function abrirAbaAdmin(nome){
   if(nome==="coleta") carregarColetaDiaAdmin(!coletaAdminCarregada);
   if(nome==="historico-sku") carregarHistoricoSkuAdmin();
   if(nome==="kits") renderizarKitsAdmin();
-  if(nome==="integracoes"){carregarIntegracaoMercadoLivreAdmin();carregarLogsMercadoLivreAdmin();carregarAgenteZebraAdmin();}
+  if(nome==="integracoes"){carregarIntegracaoMercadoLivreAdmin();carregarLogsMercadoLivreAdmin();carregarIntegracaoShopeeAdmin();carregarAgenteZebraAdmin();}
 }
 function abrirDashboardV151(){
   document.querySelectorAll(".aba-painel").forEach(p=>p.classList.remove("ativa"));
@@ -7051,6 +7068,48 @@ async function renovarTokenZebraAdmin(){
   try{await mlApiAdmin("/expedicao/api/print/agent/rotate-token",{method:"POST",body:"{}"});await carregarAgenteZebraAdmin();alert("Token renovado.");}
   catch(e){alert("Erro ao renovar token: "+e.message);}
 }
+
+async function carregarIntegracaoShopeeAdmin(){
+  const badge=document.getElementById("shopeeIntegracaoStatus");if(!badge)return;
+  const msg=document.getElementById("shopeeIntegracaoMensagem");
+  try{
+    const d=await mlApiAdmin("/expedicao/api/integracoes/shopee/status");
+    const sh=d.shopee||{};
+    document.getElementById("shopeePartnerId").textContent=sh.partner_id||"Aguardando configuração";
+    document.getElementById("shopeeShopId").textContent=sh.shop_name?`${sh.shop_name} · ${sh.shop_id||"—"}`:(sh.shop_id||"—");
+    document.getElementById("shopeeUltimaSync").textContent=sh.last_sync_at?mlDataHora(sh.last_sync_at):"—";
+    document.getElementById("shopeeCallback").textContent=sh.redirect_uri||"—";
+    const conectar=document.getElementById("btnShopeeConectar"),sync=document.getElementById("btnShopeeSincronizar"),disc=document.getElementById("btnShopeeDesconectar");
+    if(sh.connected){
+      badge.className="integracao-status ok";badge.textContent="🟢 Shopee conectada";
+      if(conectar)conectar.textContent="Reconectar Shopee";if(sync)sync.disabled=false;if(disc)disc.disabled=false;
+      if(msg)msg.textContent=sh.last_error?`Último erro: ${sh.last_error}`:"Integração Shopee ativa.";
+    }else if(sh.go_live_pending){
+      badge.className="integracao-status off";badge.textContent="🟡 Go-Live em análise";
+      if(conectar)conectar.disabled=true;if(sync)sync.disabled=true;if(disc)disc.disabled=true;
+      if(msg)msg.textContent="Base pronta no Noromak. Aguardando a aprovação Go-Live para inserir as credenciais/URLs de produção e autorizar a loja real.";
+    }else if(!sh.configured){
+      badge.className="integracao-status off";badge.textContent="🟡 Aguardando credenciais de produção";
+      if(conectar)conectar.disabled=true;
+    }else{
+      badge.className="integracao-status off";badge.textContent="⚪ Pronta para conectar";
+      if(conectar)conectar.disabled=false;
+    }
+  }catch(e){badge.className="integracao-status erro";badge.textContent="🔴 Erro ao consultar Shopee";if(msg)msg.textContent=e.message;}
+}
+function conectarShopeeAdmin(){window.location.href="/expedicao/api/integracoes/shopee/connect";}
+async function sincronizarShopeeAdmin(){
+  const btn=document.getElementById("btnShopeeSincronizar");if(btn){btn.disabled=true;btn.textContent="Sincronizando...";}
+  try{const d=await mlApiAdmin("/expedicao/api/integracoes/shopee/sync",{method:"POST",body:"{}"});alert(d.message||`Shopee sincronizada. ${d.imported||0} pedido(s).`);await carregarIntegracaoShopeeAdmin();}
+  catch(e){alert("Shopee: "+e.message);}
+  finally{if(btn){btn.textContent="↻ Sincronizar agora";await carregarIntegracaoShopeeAdmin();}}
+}
+async function desconectarShopeeAdmin(){
+  if(!confirm("Desconectar a Shopee? Os pedidos já importados serão mantidos."))return;
+  try{await mlApiAdmin("/expedicao/api/integracoes/shopee/disconnect",{method:"POST",body:"{}"});await carregarIntegracaoShopeeAdmin();}
+  catch(e){alert("Erro ao desconectar Shopee: "+e.message);}
+}
+
 function conectarMercadoLivreAdmin(){
   window.location.href="/expedicao/api/integracoes/mercadolivre/connect";
 }
@@ -7130,6 +7189,8 @@ document.addEventListener("DOMContentLoaded",()=>{
     setTimeout(()=>{if(typeof abrirAbaAdmin==="function")abrirAbaAdmin("integracoes");},250);
     if(q.get("ml")==="conectado")setTimeout(()=>alert("Mercado Livre conectado com sucesso."),450);
     if(q.get("ml")==="erro")setTimeout(()=>alert("Falha ao conectar Mercado Livre: "+(q.get("motivo")||"erro desconhecido")),450);
+    if(q.get("shopee")==="callback")setTimeout(()=>alert("Shopee retornou a autorização. A troca por token será ativada após a aprovação Go-Live."),450);
+    if(q.get("shopee")==="erro")setTimeout(()=>alert("Falha no retorno da Shopee: "+(q.get("motivo")||"erro desconhecido")),450);
   }
 });
 </script>
