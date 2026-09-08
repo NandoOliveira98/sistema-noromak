@@ -1098,6 +1098,7 @@ body{background:var(--v15-bg)!important}
           <div class="etiquetas-persistentes-topo-direita">
             <div id="resumoEtiquetasPersistentes" class="etiquetas-persistentes-resumo">0 etiquetas armazenadas</div>
             <button type="button" id="btnReprocessarVinculosEtiquetas" class="btn-etiquetas-reprocessar" onclick="reprocessarVinculosEtiquetasPersistentes()">🔄 Reprocessar vínculos</button>
+            <button type="button" id="btnReconhecerPedidosShopee" class="btn-etiquetas-reprocessar" onclick="reconhecerPedidosShopeePersistentes()">⚡ Reconhecer pedidos Shopee</button>
             <button type="button" id="btnAtivarRemocaoMassa" class="btn-etiquetas-lote" onclick="alternarRemocaoMassaEtiquetas()">☑ Remover em massa</button>
           </div>
         </div>
@@ -6804,6 +6805,165 @@ document.addEventListener("DOMContentLoaded",()=>{
   }
   window.reprocessarVinculosEtiquetasPersistentes=reprocessarVinculosEtiquetasPersistentes;
 
+  function prepararRecorteOcrShopeeLote(canvas){
+    const x=0;
+    const y=Math.max(0,Math.round(canvas.height*0.17));
+    const w=Math.min(canvas.width,Math.round(canvas.width*0.60));
+    const h=Math.min(canvas.height-y,Math.round(canvas.height*0.085));
+    const escala=4;
+    const recorte=document.createElement("canvas");
+    recorte.width=Math.max(1,w*escala);
+    recorte.height=Math.max(1,h*escala);
+    const ctx=recorte.getContext("2d",{willReadFrequently:true});
+    ctx.fillStyle="#fff";ctx.fillRect(0,0,recorte.width,recorte.height);
+    ctx.imageSmoothingEnabled=false;
+    ctx.drawImage(canvas,x,y,w,h,0,0,recorte.width,recorte.height);
+    const img=ctx.getImageData(0,0,recorte.width,recorte.height);
+    for(let i=0;i<img.data.length;i+=4){
+      const tom=img.data[i]<185?0:255;
+      img.data[i]=img.data[i+1]=img.data[i+2]=tom;
+      img.data[i+3]=255;
+    }
+    ctx.putImageData(img,0,0);
+    return recorte;
+  }
+
+  async function criarWorkerOcrShopeeLote(){
+    if(!window.Tesseract) throw new Error("Biblioteca OCR não carregada.");
+    const worker=await Tesseract.createWorker("eng",1);
+    await worker.setParameters({
+      tessedit_char_whitelist:"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789:-",
+      tessedit_pageseg_mode:(Tesseract.PSM&&Tesseract.PSM.SINGLE_LINE)?Tesseract.PSM.SINGLE_LINE:"7",
+      preserve_interword_spaces:"0",
+      user_defined_dpi:"300"
+    });
+    return worker;
+  }
+
+  async function reconhecerPedidosShopeePersistentes(){
+    const btn=document.getElementById("btnReconhecerPedidosShopee");
+    const status=document.getElementById("statusReprocessamentoEtiquetas");
+    const mostrar=(tipo,texto)=>{
+      if(!status)return;
+      status.className=`etiquetas-reprocessar-status mostrar ${tipo}`;
+      status.innerHTML=texto;
+    };
+    if(btn){btn.disabled=true;btn.textContent="⏳ Reconhecendo...";}
+    try{
+      try{
+        if(typeof carregarBancoCompartilhado==="function") await carregarBancoCompartilhado();
+      }catch(e){console.warn("Atualização de pedidos antes do OCR",e);}
+      try{
+        const p=JSON.parse(appStorage.getItem("conf_pedidos")||"[]");
+        if(Array.isArray(p)) dadosPedidos=p;
+      }catch(_){}
+
+      bancoEtiquetas=reconstruirBancoEtq(lerBancoEtqPersistente());
+      const sho=(bancoEtiquetas.ordem||[])
+        .map(id=>bancoEtiquetas.registros[id])
+        .filter(r=>r&&r.marketplace==="shopee"&&!r.pedido);
+
+      if(!sho.length){
+        mostrar("sucesso","✔ Todas as etiquetas Shopee já estão vinculadas.");
+        return;
+      }
+
+      let porRastreio=0;
+      for(const r of sho){
+        const rastreio=String(r.metadados?.rastreio||"").trim();
+        if(!rastreio)continue;
+        const pedido=pedidoShopeePorRastreio(rastreio);
+        if(pedido){
+          r.metadados=r.metadados||{};
+          r.metadados.pedido=pedido;
+          adicionarChavesRegistro(r.id,[pedido,rastreio]);
+          porRastreio++;
+        }
+      }
+      vincularPendenciasShopeeAutomaticamente();
+
+      let pendentes=(bancoEtiquetas.ordem||[])
+        .map(id=>bancoEtiquetas.registros[id])
+        .filter(r=>r&&r.marketplace==="shopee"&&!r.pedido&&!String(r.metadados?.pedido||"").trim());
+
+      if(!pendentes.length){
+        mapaEtiquetas=bancoEtiquetas;
+        appStorage.setItem("conf_etiquetas",JSON.stringify(bancoEtiquetas));
+        appStorage.setItem("conf_banco_atualizado_em",new Date().toISOString());
+        renderizarEtiquetasPersistentes();
+        mostrar("sucesso",`✔ Reconhecimento concluído. ${porRastreio} pedido(s) identificado(s) pelo rastreio.`);
+        return;
+      }
+
+      mostrar("processando",`Iniciando OCR rápido em ${pendentes.length} etiqueta(s) Shopee...`);
+      const quantidadeWorkers=Math.min(3,pendentes.length);
+      const workers=[];
+      for(let i=0;i<quantidadeWorkers;i++){
+        mostrar("processando",`Preparando leitor ${i+1} de ${quantidadeWorkers}...`);
+        workers.push(await criarWorkerOcrShopeeLote());
+      }
+
+      let concluidas=0, reconhecidas=0;
+      const fila=[...pendentes];
+
+      const executarWorker=async(worker)=>{
+        while(fila.length){
+          const registro=fila.shift();
+          if(!registro)break;
+          try{
+            const canvas=renderizarGraficoShopeeEmCanvas(registro.envio||"");
+            const recorte=prepararRecorteOcrShopeeLote(canvas);
+            const resultado=await executarComTimeoutShopee(
+              worker.recognize(recorte),
+              9000,
+              "OCR Shopee excedeu 9 segundos."
+            );
+            const texto=String(resultado?.data?.text||"").toUpperCase();
+            const candidato=melhorPedidoShopeePorOcr(texto);
+            registro.metadados=registro.metadados||{};
+            registro.metadados.textoOcr=texto.replace(/\s+/g," ").trim().slice(0,240);
+            if(candidato?.pedido){
+              registro.metadados.pedido=candidato.pedido;
+              registro.metadados.distanciaOcr=candidato.distancia;
+              adicionarChavesRegistro(registro.id,[candidato.pedido,registro.metadados.rastreio||""]);
+              reconhecidas++;
+            }
+          }catch(e){
+            registro.metadados=registro.metadados||{};
+            registro.metadados.textoOcr=`OCR não concluiu: ${e.message||e}`;
+          }finally{
+            concluidas++;
+            mostrar("processando",`OCR rápido: ${concluidas} de ${pendentes.length} · ${reconhecidas} pedido(s) identificado(s)...`);
+          }
+        }
+      };
+
+      await Promise.all(workers.map(w=>executarWorker(w)));
+      await Promise.all(workers.map(async w=>{try{await w.terminate();}catch(_){}}));
+
+      vincularPendenciasShopeeAutomaticamente();
+      mapaEtiquetas=bancoEtiquetas;
+      appStorage.setItem("conf_etiquetas",JSON.stringify(bancoEtiquetas));
+      appStorage.setItem("conf_banco_atualizado_em",new Date().toISOString());
+      renderizarEtiquetasPersistentes();
+
+      const restantes=(bancoEtiquetas.ordem||[])
+        .map(id=>bancoEtiquetas.registros[id])
+        .filter(r=>r&&r.marketplace==="shopee"&&!r.pedido).length;
+
+      mostrar(restantes?"aviso":"sucesso",
+        `✔ Reconhecimento concluído. ${reconhecidas+porRastreio} pedido(s) identificado(s) nesta execução · ${restantes} etiqueta(s) ainda sem vínculo.`
+      );
+    }catch(e){
+      console.error("Reconhecimento Shopee",e);
+      mostrar("aviso",`❌ Falha no reconhecimento Shopee: ${escEtq(e?.message||e)}`);
+    }finally{
+      if(btn){btn.disabled=false;btn.textContent="⚡ Reconhecer pedidos Shopee";}
+    }
+  }
+  window.reconhecerPedidosShopeePersistentes=reconhecerPedidosShopeePersistentes;
+
+
   function reconstruirBancoEtq(origem){
     const b = origem && typeof origem === "object" ? origem : bancoEtqVazio();
     b.version = Math.max(Number(b.version)||0, VERSAO_ETIQUETAS_PERSISTENTES);
@@ -6870,10 +7030,12 @@ document.addEventListener("DOMContentLoaded",()=>{
   }
   function descricaoRegistroEtq(r){
     const meta=r?.metadados||{};
-    const candidato=r?.pedido||meta.pedido||meta.rastreio||meta.nf||"";
-    if(candidato){
-      try{return r?.pedido && typeof pedidoParaExibicao === "function" ? "Pedido "+pedidoParaExibicao(candidato,r.marketplace) : "Pedido "+candidato;}catch(_){return "Pedido "+candidato;}
+    if(r?.pedido){
+      try{return typeof pedidoParaExibicao==="function" ? "Pedido "+pedidoParaExibicao(r.pedido,r.marketplace) : "Pedido "+r.pedido;}catch(_){return "Pedido "+r.pedido;}
     }
+    if(meta.pedido) return "Pedido "+meta.pedido;
+    if(meta.rastreio) return "Rastreio "+meta.rastreio;
+    if(meta.nf) return "NF "+meta.nf;
     return "Etiqueta sem vínculo";
   }
   function renderizarEtiquetasPersistentes(){
@@ -6892,11 +7054,14 @@ document.addEventListener("DOMContentLoaded",()=>{
         let data="";
         if(r.adicionadaEm){try{data=new Date(r.adicionadaEm).toLocaleString("pt-BR");}catch(_){data="";}}
         const pedidoIdentificado=String(r?.metadados?.pedido||"").trim();
+        const rastreioIdentificado=String(r?.metadados?.rastreio||"").trim();
         const status=r.pedido
           ? `<span class="etiqueta-persistente-status">Vinculada</span>`
           : pedidoIdentificado
             ? `<span class="etiqueta-persistente-status sem-vinculo">Pedido identificado · aguardando vínculo</span>`
-            : `<span class="etiqueta-persistente-status sem-vinculo">Sem vínculo</span>`;
+            : rastreioIdentificado
+              ? `<span class="etiqueta-persistente-status sem-vinculo">Rastreio identificado · pedido ainda não lido</span>`
+              : `<span class="etiqueta-persistente-status sem-vinculo">Sem vínculo</span>`;
         const marcado=etiquetasSelecionadasPersistentes.has(r.id)?" checked":"";
         return `<div class="etiqueta-persistente-item" title="${escEtq(arquivo)}"><label class="etiqueta-selecao-wrap" title="Selecionar esta etiqueta"><input type="checkbox" class="etiqueta-selecao-lote" data-etiqueta-id="${escEtq(r.id)}"${marcado}></label><div><div class="etiqueta-persistente-principal">${escEtq(principal)}</div><div class="etiqueta-persistente-detalhe">${escEtq(arquivo)}${data?" · "+escEtq(data):""}</div>${status}</div><button type="button" class="etiqueta-remover-x" title="Remover esta etiqueta" aria-label="Remover esta etiqueta" data-etiqueta-id="${escEtq(r.id)}">×</button></div>`;
       }).join(""):`<div class="etiquetas-vazio">Nenhuma etiqueta armazenada.</div>`;
