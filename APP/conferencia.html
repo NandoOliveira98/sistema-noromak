@@ -418,43 +418,63 @@
   </div>
 </div>
 
-<header>
+<header class="conf-header-v1670">
   <div class="logo-mini-box">
-    <img src="/grupo-noromak.png?v=14.5" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=14.5';">
+    <img src="/grupo-noromak.png?v=16.70" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=16.70';">
   </div>
-  <div class="usuario-area">
-    <div style="text-align: right;">
-      <span id="infoUsuario"></span><br>
+
+  <div class="conf-operador-bloco">
+    <div id="infoUsuario" class="conf-operador-nome">Operador: —</div>
+    <div class="conf-operador-status">
       <span id="qzStatusBadge" class="qz-status qz-desconectado">Zebra Browser Print / Estação</span>
       <span id="autosaveStatus" class="autosave-status">Salvamento automático ativo</span>
     </div>
-    <a class="btn-header" href="/expedicao/admin" style="text-decoration:none;display:inline-flex;align-items:center;">← CENTRAL</a><button type="button" class="pwa-install-btn pwa-header" data-pwa-install>⬇ INSTALAR</button>
-    <div id="eanRapidoTopo" class="ean-rapido-topo">
-      <button id="btnAbrirEanRapido" class="btn-header btn-ean-rapido-resumo" type="button" onclick="alternarPainelEanRapido()" aria-controls="painelEanRapido" aria-expanded="false">＋ ADICIONAR EAN</button>
-      <section id="painelEanRapido" class="ean-rapido-card" aria-labelledby="eanRapidoTitulo">
-        <div class="ean-rapido-cabecalho">
-          <div class="ean-rapido-cabecalho-texto">
-            <div id="eanRapidoTitulo" class="ean-rapido-titulo">＋ ADICIONAR EAN AO BANCO DE PRODUTOS</div>
-            <div class="ean-rapido-subtitulo">Informe o SKU e bipe o EAN. Ao salvar, o Banco de Produtos e todos os pedidos pendentes deste SKU são atualizados em todas as máquinas.</div>
-          </div>
-          <button class="ean-rapido-fechar" type="button" onclick="fecharPainelEanRapido()" aria-label="Fechar cadastro de EAN">×</button>
-        </div>
-        <div class="ean-rapido-campos">
-          <label class="ean-rapido-campo">SKU DO PRODUTO
-            <input id="eanRapidoSku" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Digite o SKU" oninput="this.dataset.sugerido='0';atualizarPreviaEanRapido()" onkeydown="atalhoEanRapido(event,'sku')">
-          </label>
-          <label class="ean-rapido-campo">CÓDIGO DE BARRAS / EAN
-            <input id="eanRapidoCodigo" type="text" inputmode="numeric" enterkeyhint="done" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Bipe ou digite o EAN" onkeydown="atalhoEanRapido(event,'ean')">
-          </label>
-          <button id="btnSalvarEanRapido" class="btn-salvar-ean-rapido" type="button" onclick="salvarEanRapidoConferencia()">💾 SALVAR NO BANCO</button>
-        </div>
-        <div id="eanRapidoStatus" class="ean-rapido-status" role="status">Use esta função quando o produto do pedido estiver sem EAN.</div>
-      </section>
+  </div>
+
+  <div id="coletaExpedicaoBox" class="coleta-expedicao-box coleta-sem-dados" title="Informações editadas no Admin > Coleta do dia">
+    <div class="coleta-expedicao-icone">🚚</div>
+    <div class="coleta-expedicao-dados">
+      <div id="coletaExpedicaoHorario" class="coleta-expedicao-horario">Coleta | não informada</div>
+      <div id="coletaExpedicaoCodigo" class="coleta-expedicao-codigo">Autorização | —</div>
     </div>
-    <div id="alertaNovosPedidosTopo" class="alerta-novos-pedidos-topo"></div>
-    <button class="btn-header" onclick="alternarPainelAtalhos()">⌨ ATALHOS</button>
-    <button class="btn-header" onclick="abrirHistorico()">🕘 HISTÓRICO</button>
-    <button class="btn-logoff" onclick="fazerLogoff()">SAIR / LOGOFF</button>
+  </div>
+
+  <div class="conf-acoes-header">
+    <div class="conf-acoes-grupo conf-acoes-navegacao">
+      <a class="btn-header btn-header-compacto" href="/expedicao/admin">← CENTRAL</a>
+      <button type="button" class="pwa-install-btn pwa-header btn-header-compacto" data-pwa-install>⬇ INSTALAR</button>
+    </div>
+
+    <div class="conf-acoes-grupo conf-acoes-operacao">
+      <div id="eanRapidoTopo" class="ean-rapido-topo">
+        <button id="btnAbrirEanRapido" class="btn-header btn-ean-rapido-resumo btn-header-compacto" type="button" onclick="alternarPainelEanRapido()" aria-controls="painelEanRapido" aria-expanded="false">＋ EAN</button>
+        <section id="painelEanRapido" class="ean-rapido-card" aria-labelledby="eanRapidoTitulo">
+          <div class="ean-rapido-cabecalho">
+            <div class="ean-rapido-cabecalho-texto">
+              <div id="eanRapidoTitulo" class="ean-rapido-titulo">＋ ADICIONAR EAN AO BANCO DE PRODUTOS</div>
+              <div class="ean-rapido-subtitulo">Informe o SKU e bipe o EAN. Ao salvar, o Banco de Produtos e todos os pedidos pendentes deste SKU são atualizados em todas as máquinas.</div>
+            </div>
+            <button class="ean-rapido-fechar" type="button" onclick="fecharPainelEanRapido()" aria-label="Fechar cadastro de EAN">×</button>
+          </div>
+          <div class="ean-rapido-campos">
+            <label class="ean-rapido-campo">SKU DO PRODUTO
+              <input id="eanRapidoSku" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Digite o SKU" oninput="this.dataset.sugerido='0';atualizarPreviaEanRapido()" onkeydown="atalhoEanRapido(event,'sku')">
+            </label>
+            <label class="ean-rapido-campo">CÓDIGO DE BARRAS / EAN
+              <input id="eanRapidoCodigo" type="text" inputmode="numeric" enterkeyhint="done" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Bipe ou digite o EAN" onkeydown="atalhoEanRapido(event,'ean')">
+            </label>
+            <button id="btnSalvarEanRapido" class="btn-salvar-ean-rapido" type="button" onclick="salvarEanRapidoConferencia()">💾 SALVAR NO BANCO</button>
+          </div>
+          <div id="eanRapidoStatus" class="ean-rapido-status" role="status">Use esta função quando o produto do pedido estiver sem EAN.</div>
+        </section>
+      </div>
+
+      <div id="alertaNovosPedidosTopo" class="alerta-novos-pedidos-topo"></div>
+      <button class="btn-header btn-header-compacto" onclick="abrirAvisosConferencia?.()">🔔 AVISOS</button>
+      <button class="btn-header btn-header-compacto" onclick="alternarPainelAtalhos()">⌨ ATALHOS</button>
+      <button class="btn-header btn-header-compacto" onclick="abrirHistorico()">🕘 HISTÓRICO</button>
+      <button class="btn-logoff btn-header-compacto" onclick="fazerLogoff()">SAIR</button>
+    </div>
   </div>
 </header>
 
@@ -1713,6 +1733,7 @@ function iniciarSessao() {
   if (atalhosEstado) atalhosEstado.textContent = "Abrir · F1";
 
   carregarHistoricoConferencias();
+  carregarColetaExpedicao();
   restaurarFiltroMarketplacePedidos();
   renderizarListaPedidos();
   setTimeout(restaurarUltimoPedidoEmAndamento, 80);
@@ -1730,6 +1751,65 @@ window.ativarSessaoWebConferencia = function(sessao) {
   iniciarSessao();
   return true;
 };
+
+
+// V16.70 - coleta diária na Expedição
+const COLETA_DIA_STORAGE_KEY_CONFERENCIA="conf_coleta_dia_v1";
+
+function carregarColetaExpedicao(){
+  const box=document.getElementById("coletaExpedicaoBox");
+  const horarioEl=document.getElementById("coletaExpedicaoHorario");
+  const codigoEl=document.getElementById("coletaExpedicaoCodigo");
+  if(!box||!horarioEl||!codigoEl)return;
+
+  try{
+    const raw=appStorage.getItem(COLETA_DIA_STORAGE_KEY_CONFERENCIA);
+    const dados=raw?JSON.parse(raw):{};
+    const horario=String(dados.horario||"").trim();
+    const codigo=String(dados.codigo||"").trim().toUpperCase();
+
+    horarioEl.textContent=`Coleta | ${horario||"não informada"}`;
+    codigoEl.textContent=`Autorização | ${codigo||"—"}`;
+
+    box.classList.toggle("coleta-sem-dados",!(horario&&codigo));
+    box.classList.toggle("coleta-com-dados",!!(horario&&codigo));
+
+    const meta=[];
+    if(dados.data)meta.push(`Data: ${dados.data}`);
+    if(dados.atualizadoPor)meta.push(`Atualizado por: ${dados.atualizadoPor}`);
+    box.title=meta.length?meta.join(" · "):"Informações editadas no Admin > Coleta do dia";
+  }catch(e){
+    console.warn("Não foi possível carregar a coleta do dia",e);
+    horarioEl.textContent="Coleta | indisponível";
+    codigoEl.textContent="Autorização | —";
+    box.classList.add("coleta-sem-dados");
+    box.classList.remove("coleta-com-dados");
+  }
+}
+
+function abrirAvisosConferencia(){
+  // Mantém compatibilidade com a rotina de avisos já existente no sistema.
+  if(typeof window.abrirPainelAvisos==="function"){window.abrirPainelAvisos();return;}
+  if(typeof window.alternarPainelAvisos==="function"){window.alternarPainelAvisos();return;}
+  if(typeof window.mostrarAvisos==="function"){window.mostrarAvisos();return;}
+  const alerta=document.getElementById("alertaNovosPedidosTopo");
+  if(alerta){
+    alerta.scrollIntoView({behavior:"smooth",block:"nearest"});
+    alerta.classList.remove("atalho-pulso");
+    void alerta.offsetWidth;
+    alerta.classList.add("atalho-pulso");
+  }
+}
+
+window.addEventListener("storage",function(e){
+  if(e.key===COLETA_DIA_STORAGE_KEY_CONFERENCIA)carregarColetaExpedicao();
+});
+
+document.addEventListener("DOMContentLoaded",function(){
+  setTimeout(carregarColetaExpedicao,250);
+  // Atualiza também se o Admin alterar a coleta em outra máquina/aba.
+  setInterval(carregarColetaExpedicao,15000);
+});
 
 function fazerLogoff() {
   usuarioLogado = null;
@@ -3466,6 +3546,109 @@ window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_
 
 .pedido-status-etiqueta-ok{background:#dcfce7;color:#166534;border:1px solid #86efac}
 .pedido-status-etiqueta-pendente{background:#fff7ed;color:#9a3412;border:1px solid #fdba74}
+
+  /* V16.70 - cabeçalho reorganizado + coleta do dia */
+  header.conf-header-v1670{
+    min-height:76px;
+    padding:9px 18px;
+    display:grid;
+    grid-template-columns:130px minmax(210px,255px) minmax(285px,360px) 1fr;
+    gap:14px;
+    align-items:center;
+    background:var(--primary);
+    color:#fff;
+    box-shadow:0 2px 8px rgba(0,0,0,.12);
+    border-bottom:3px solid var(--secondary);
+  }
+  .conf-header-v1670 .logo-mini-box{width:130px;height:42px}
+  .conf-operador-bloco{min-width:0;display:grid;gap:4px}
+  .conf-operador-nome{font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .conf-operador-status{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+  .conf-operador-status .qz-status{margin:0;font-size:10px;padding:3px 7px}
+  .conf-operador-status .autosave-status{font-size:10px;color:#e8f3ff;white-space:nowrap}
+
+  .coleta-expedicao-box{
+    min-width:0;
+    display:flex;
+    align-items:center;
+    gap:10px;
+    padding:8px 12px;
+    border-radius:10px;
+    border:1px solid rgba(255,255,255,.28);
+    background:rgba(255,255,255,.10);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.08);
+  }
+  .coleta-expedicao-box.coleta-com-dados{
+    background:#fff8df;
+    border-color:#f5c84c;
+    color:#17344f;
+  }
+  .coleta-expedicao-box.coleta-sem-dados{
+    color:#eef5fb;
+    opacity:.88;
+  }
+  .coleta-expedicao-icone{font-size:23px;flex:0 0 auto}
+  .coleta-expedicao-dados{min-width:0}
+  .coleta-expedicao-horario{font-size:14px;font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .coleta-expedicao-codigo{margin-top:2px;font-size:12px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .coleta-com-dados .coleta-expedicao-codigo{color:#0b7a3d}
+
+  .conf-acoes-header{min-width:0;display:flex;align-items:center;justify-content:flex-end;gap:8px;flex-wrap:wrap}
+  .conf-acoes-grupo{display:flex;align-items:center;gap:6px;flex-wrap:nowrap}
+  .conf-acoes-operacao{padding-left:8px;border-left:1px solid rgba(255,255,255,.22)}
+  .btn-header-compacto{min-height:34px!important;padding:7px 10px!important;font-size:11px!important;white-space:nowrap!important}
+  .conf-header-v1670 .btn-header{display:inline-flex;align-items:center;justify-content:center;text-decoration:none}
+  .conf-header-v1670 .pwa-header{margin:0}
+  .conf-header-v1670 .ean-rapido-topo{position:relative}
+  .conf-header-v1670 .btn-ean-rapido-resumo{width:auto}
+  .conf-header-v1670 .alerta-novos-pedidos-topo{max-width:180px}
+
+  /* o header ficou mais alto; mantém a área de trabalho inteira visível */
+  .container{height:calc(100vh - 79px)}
+
+  @media(max-width:1380px){
+    header.conf-header-v1670{
+      grid-template-columns:115px minmax(190px,230px) minmax(255px,315px) 1fr;
+      padding-left:12px;padding-right:12px;gap:9px;
+    }
+    .conf-header-v1670 .logo-mini-box{width:115px}
+    .btn-header-compacto{padding:6px 8px!important;font-size:10px!important}
+    .coleta-expedicao-horario{font-size:13px}
+    .coleta-expedicao-codigo{font-size:11px}
+  }
+
+  @media(max-width:1120px){
+    header.conf-header-v1670{
+      grid-template-columns:120px 1fr 1fr;
+      grid-template-areas:
+        "logo operador coleta"
+        "acoes acoes acoes";
+    }
+    .conf-header-v1670 .logo-mini-box{grid-area:logo}
+    .conf-operador-bloco{grid-area:operador}
+    .coleta-expedicao-box{grid-area:coleta}
+    .conf-acoes-header{grid-area:acoes;justify-content:flex-start}
+    .container{height:calc(100vh - 125px)}
+  }
+
+  @media(max-width:780px){
+    header.conf-header-v1670{
+      display:grid!important;
+      grid-template-columns:1fr!important;
+      grid-template-areas:"logo" "operador" "coleta" "acoes"!important;
+      height:auto!important;
+      padding:10px 12px!important;
+      gap:8px!important;
+    }
+    .conf-header-v1670 .logo-mini-box{grid-area:logo;width:120px}
+    .conf-operador-bloco{grid-area:operador}
+    .coleta-expedicao-box{grid-area:coleta;width:100%}
+    .conf-acoes-header{grid-area:acoes;width:100%;justify-content:flex-start}
+    .conf-acoes-grupo{flex-wrap:wrap}
+    .conf-acoes-operacao{padding-left:0;border-left:0}
+    .conf-acoes-header .btn-header-compacto{flex:1 1 auto}
+    .container{height:auto;min-height:calc(100dvh - 220px)}
+  }
 </style>
 <script>
 (() => {

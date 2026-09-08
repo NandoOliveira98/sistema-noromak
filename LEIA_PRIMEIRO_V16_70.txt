@@ -1,0 +1,24 @@
+NOROMAK WEB V16.70 — COLETA NA EXPEDIÇÃO + CABEÇALHO REORGANIZADO
+
+Expedição / Conferência:
+- Exibe no topo as informações salvas no Admin > Coleta do dia:
+  Coleta | 10h45 - 12h45
+  Autorização | B7BE16EA
+- Atualiza ao abrir a sessão.
+- Escuta alterações do banco e também revisa a informação a cada 15 segundos.
+- Não é editável pela Expedição; a edição continua centralizada no Admin.
+
+Cabeçalho reorganizado:
+- Logo
+- Operador + status Zebra/salvamento
+- Bloco destacado de coleta/autorização
+- Grupo de navegação: Central / Instalar
+- Grupo operacional: EAN / Avisos / Atalhos / Histórico / Sair
+- Botões mais compactos e alinhados.
+- Responsivo para telas menores.
+
+PUBLICAÇÃO:
+git status
+git add -A
+git commit -m "V16.70 - mostra coleta na expedicao e reorganiza cabecalho"
+./publicar.sh
