@@ -43,11 +43,18 @@
   let infoServidor = null;
 
   function criarIdCliente() {
-    let id = window.sessionStorage.getItem("conf_cliente_portatil_id");
+    // V16.72: identificação persiste mesmo após fechar/reabrir o navegador.
+    // Isso evita o próprio PC enxergar seu bloqueio anterior como "outra máquina".
+    let id = "";
+    try { id = window.localStorage.getItem("conf_cliente_portatil_id") || ""; } catch (_) {}
+    if (!id) {
+      try { id = window.sessionStorage.getItem("conf_cliente_portatil_id") || ""; } catch (_) {}
+    }
     if (!id) {
       id = "PC-" + Date.now().toString(36).toUpperCase() + "-" + Math.random().toString(36).slice(2, 10).toUpperCase();
-      window.sessionStorage.setItem("conf_cliente_portatil_id", id);
     }
+    try { window.localStorage.setItem("conf_cliente_portatil_id", id); } catch (_) {}
+    try { window.sessionStorage.setItem("conf_cliente_portatil_id", id); } catch (_) {}
     return id;
   }
   const CLIENT_ID = criarIdCliente();
@@ -193,6 +200,16 @@
         action: "release",
         pedido: String(pedido),
         clientId: CLIENT_ID
+      }, [409]);
+    },
+
+    forcarLiberacaoBloqueioPedido(pedido) {
+      if (!pedido) return { ok: true };
+      return xhrJson("POST", API_LOCK, {
+        action: "release",
+        pedido: String(pedido),
+        clientId: CLIENT_ID,
+        force: true
       }, [409]);
     },
 

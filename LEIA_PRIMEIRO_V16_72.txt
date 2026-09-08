@@ -1,0 +1,29 @@
+NOROMAK WEB V16.72 — CORRIGE BLOQUEIO FALSO NA CONFERÊNCIA
+
+Problema identificado:
+- O bloqueio é criado quando um pedido é ABERTO para conferência, não quando imprime.
+- Se navegador/PC fechasse de forma inesperada, o servidor mantinha a reserva por até 5 minutos.
+- Ao reabrir o navegador, o identificador da estação podia mudar e o próprio PC era interpretado como outra máquina.
+- A mensagem também lia campos com nomes incorretos (minúsculos), por isso mostrava Operador/Computador como "Não informado".
+
+Correções:
+1. Identificador da estação agora fica em localStorage e sobrevive a fechar/reabrir o navegador.
+2. Bloqueio órfão expira em 90 segundos (heartbeat continua a cada 30 s).
+3. Dados do bloqueio mostram corretamente Operador, Computador, início e última comunicação.
+4. Quando houver bloqueio, aparecem dois botões:
+   - Tentar novamente
+   - Liberar bloqueio e abrir
+5. "Liberar bloqueio e abrir" exige confirmação e serve para o caso em que
+   ninguém está realmente conferindo o pedido.
+6. Se a reserva for perdida durante a conferência, o sistema não fica em beco sem saída:
+   oferece reservar novamente ou liberar o bloqueio.
+
+IMPORTANTE:
+- A fila/impressão da Zebra é independente deste bloqueio.
+- O bloqueio existe somente para impedir duas conferências simultâneas do mesmo pedido.
+
+PUBLICAÇÃO:
+git status
+git add -A
+git commit -m "V16.72 - corrige bloqueio falso e libera pedido travado"
+./publicar.sh

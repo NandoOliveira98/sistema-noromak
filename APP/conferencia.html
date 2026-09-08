@@ -611,6 +611,8 @@ let filtroMarketplacePedidosAtual = "todos";
 let indicePedidoSelecionadoTeclado = -1;
 let pedidoBloqueadoRede = "";
 let timerBloqueioRede = null;
+let ultimoPedidoBloqueioNegado = "";
+let ultimoUidBloqueioNegado = "";
 
 function nomeOperadorBloqueio() {
   if (!usuarioLogado) return "Operador não identificado";
@@ -637,11 +639,17 @@ function iniciarRenovacaoBloqueioRede(pedido) {
       const resposta = appStorage.renovarBloqueioPedido(pedido);
       if (!resposta.ok) {
         pararRenovacaoBloqueioRede();
+        ultimoPedidoBloqueioNegado = pedido;
+        ultimoUidBloqueioNegado = String(idPedidoAtual || "");
         mostrarMensagemDetalhada(
-          "erro",
-          "O bloqueio deste pedido foi perdido",
+          "aviso",
+          "A reserva deste pedido expirou",
           `Pedido: ${pedido}`,
-          "Pare a conferência e abra o pedido novamente. Outra máquina pode ter assumido o pedido após uma desconexão."
+          "O sistema perdeu a comunicação temporariamente. Tente reservar novamente. Se nenhuma outra máquina estiver usando o pedido, libere o bloqueio.",
+          [
+            { rotulo: "Reservar novamente", onclick: "tentarNovamenteUltimoPedidoBloqueado()" },
+            { rotulo: "Liberar bloqueio e abrir", onclick: "forcarLiberarEAbrirUltimoPedido()" }
+          ]
         );
         const campo = document.getElementById("codigo");
         if (campo) campo.disabled = true;
@@ -650,30 +658,99 @@ function iniciarRenovacaoBloqueioRede(pedido) {
   }, 30000);
 }
 
-function adquirirBloqueioPedidoRede(pedido) {
+
+function valorBloqueio(bloqueio, minusculo, maiusculo) {
+  return bloqueio?.[minusculo] ?? bloqueio?.[maiusculo] ?? "";
+}
+
+function formatarDataBloqueio(valor) {
+  if (!valor) return "Não informado";
+  const data = new Date(valor);
+  return Number.isNaN(data.getTime()) ? String(valor) : data.toLocaleString("pt-BR");
+}
+
+function tentarNovamenteUltimoPedidoBloqueado() {
+  const uid = ultimoUidBloqueioNegado;
+  if (!uid) return;
+  limparMensagemDetalhada();
+  setTimeout(() => abrirPedido(uid), 60);
+}
+
+function forcarLiberarEAbrirUltimoPedido() {
+  const pedido = ultimoPedidoBloqueioNegado;
+  const uid = ultimoUidBloqueioNegado;
+  if (!pedido || !uid) return;
+
+  const confirmar = window.confirm(
+    "Liberar o bloqueio deste pedido e abrir nesta máquina?\n\n" +
+    "Use esta opção quando nenhuma outra máquina estiver realmente conferindo o pedido."
+  );
+  if (!confirmar) return;
+
+  try {
+    const resposta = appStorage.forcarLiberacaoBloqueioPedido(pedido);
+    if (!resposta?.ok) throw new Error("O servidor não confirmou a liberação do bloqueio.");
+
+    pedidoBloqueadoRede = "";
+    ultimoPedidoBloqueioNegado = "";
+    ultimoUidBloqueioNegado = "";
+    limparMensagemDetalhada();
+
+    setTimeout(() => abrirPedido(uid), 80);
+  } catch (erro) {
+    mostrarMensagemDetalhada(
+      "erro",
+      "Não foi possível liberar o bloqueio",
+      `Pedido: ${pedido}\nDetalhes: ${erro?.message || erro}`,
+      "Atualize a página e tente novamente. Se persistir, verifique a conexão com o servidor."
+    );
+  }
+}
+
+function adquirirBloqueioPedidoRede(pedido, uidPedido="") {
   if (!pedido) return false;
   if (pedidoBloqueadoRede && pedidoBloqueadoRede !== pedido) liberarBloqueioPedidoAtualRede();
+
   try {
     const resposta = appStorage.adquirirBloqueioPedido(pedido, nomeOperadorBloqueio());
+
     if (!resposta.ok) {
       const bloqueio = resposta.lock || {};
+
+      ultimoPedidoBloqueioNegado = pedido;
+      ultimoUidBloqueioNegado = String(uidPedido || "");
+
+      const operador = String(valorBloqueio(bloqueio,"operador","Operador") || "Não informado");
+      const computador = String(valorBloqueio(bloqueio,"computador","Computador") || "Não informado");
+      const iniciado = valorBloqueio(bloqueio,"iniciado","Iniciado");
+      const atualizado = valorBloqueio(bloqueio,"atualizado","Atualizado");
+
       mostrarMensagemDetalhada(
         "aviso",
-        "Pedido em conferência em outra máquina",
-        `Pedido: ${pedido}\nOperador: ${bloqueio.operador || "Não informado"}\nComputador: ${bloqueio.computador || "Não informado"}\nDesde: ${bloqueio.iniciado ? new Date(bloqueio.iniciado).toLocaleString("pt-BR") : "Não informado"}`,
-        "Aguarde a outra conferência terminar. O bloqueio é liberado automaticamente ao concluir, sair do pedido ou após alguns minutos sem comunicação."
+        "Pedido bloqueado por outra sessão",
+        `Pedido: ${pedido}\nOperador: ${operador}\nComputador: ${computador}\nDesde: ${formatarDataBloqueio(iniciado)}\nÚltima comunicação: ${formatarDataBloqueio(atualizado)}`,
+        "Se outra máquina estiver realmente conferindo, aguarde. Se ninguém estiver usando este pedido, clique em Liberar bloqueio e abrir.",
+        [
+          { rotulo: "Tentar novamente", onclick: "tentarNovamenteUltimoPedidoBloqueado()" },
+          { rotulo: "Liberar bloqueio e abrir", onclick: "forcarLiberarEAbrirUltimoPedido()" }
+        ]
       );
       return false;
     }
+
+    ultimoPedidoBloqueioNegado = "";
+    ultimoUidBloqueioNegado = "";
     pedidoBloqueadoRede = pedido;
     iniciarRenovacaoBloqueioRede(pedido);
     return true;
+
   } catch (erro) {
     mostrarMensagemDetalhada(
       "erro",
       "Não foi possível reservar o pedido",
       `Pedido: ${pedido}\nDetalhes: ${erro.message || erro}`,
-      "Confirme se a unidade de rede está conectada e tente novamente."
+      "Confirme se o servidor está conectado e tente novamente.",
+      [{ rotulo: "Tentar novamente", onclick: "tentarNovamenteUltimoPedidoBloqueado()" }]
     );
     return false;
   }
@@ -2033,7 +2110,7 @@ function abrirPedido(uid) {
   }
 
   let numPedidoReal = extrairCampo(itemBase, "Pedido");
-  if (!adquirirBloqueioPedidoRede(numPedidoReal)) return;
+  if (!adquirirBloqueioPedidoRede(numPedidoReal, uid)) return;
   idPedidoAtual = uid;
   pedidoAtual = dadosPedidos.filter(x => extrairCampo(x, "Pedido") === numPedidoReal);
   pedidoAtual.forEach(x => { if (x.Lido === undefined) x.Lido = 0; });
