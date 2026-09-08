@@ -711,6 +711,7 @@ body{background:var(--v15-bg)!important}
   <button class="v15-nav-item active" data-v15-nav="dashboard" onclick="abrirDashboardV151();v15Nav(this)"><span class="v15-nav-icon">▣</span><span class="v15-nav-label">Dashboard</span></button>
   <div class="v15-nav-section">Expedição</div>
   <button class="v15-nav-item" data-v15-nav="pedidos" onclick="abrirAbaAdmin('pedidos');v15Nav(this)"><span class="v15-nav-icon">📋</span><span class="v15-nav-label">Pedidos pendentes</span></button>
+  <button class="v15-nav-item" data-v15-nav="coleta" onclick="abrirAbaAdmin('coleta');v15Nav(this)"><span class="v15-nav-icon">🚚</span><span class="v15-nav-label">Coleta do dia</span></button>
   <button class="v15-nav-item" data-v15-nav="etiquetas" onclick="abrirAbaAdmin('etiquetas');v15Nav(this)"><span class="v15-nav-icon">🏷</span><span class="v15-nav-label">Etiquetas / Importar TXT</span></button>
   <a class="v15-nav-item" href="/expedicao/conferencia" target="_blank" rel="noopener"><span class="v15-nav-icon">✓</span><span class="v15-nav-label">Conferência</span></a>
   <button class="v15-nav-item" onclick="abrirAbaAdmin('historico');v15Nav(this)"><span class="v15-nav-icon">🕘</span><span class="v15-nav-label">Histórico</span></button>
@@ -876,6 +877,43 @@ body{background:var(--v15-bg)!important}
         </tr></thead><tbody id="corpoPedidosAdmin"></tbody></table>
       </div>
       <div class="grid-rodape"><span id="resumoPedidosAdmin"></span><div class="paginacao"><span>Rascunhos incompletos não aparecem para o conferente.</span><button onclick="mudarPaginaPedidos(-1)">◀</button><span id="paginaPedidosTexto"></span><button onclick="mudarPaginaPedidos(1)">▶</button></div></div>
+    </div>
+  </section>
+
+
+  <section id="aba-coleta" class="aba-painel">
+    <div class="card-admin">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap">
+        <div>
+          <h2 style="margin-bottom:5px">🚚 Coleta do dia</h2>
+          <div style="color:#64748b">Edite diariamente o horário da coleta e o código de autorização. As informações ficam salvas no banco central.</div>
+        </div>
+        <span id="coletaAdminStatus" class="coleta-admin-status">Carregando...</span>
+      </div>
+
+      <div class="coleta-admin-grid">
+        <div class="coleta-admin-field">
+          <label for="coletaHorarioAdmin">Horário da coleta</label>
+          <input id="coletaHorarioAdmin" type="text" autocomplete="off" placeholder="10h45 - 12h45">
+        </div>
+        <div class="coleta-admin-field">
+          <label for="coletaCodigoAdmin">Código de autorização</label>
+          <input id="coletaCodigoAdmin" type="text" autocomplete="off" maxlength="40" placeholder="B7BE16EA"
+                 style="text-transform:uppercase">
+        </div>
+      </div>
+
+      <div class="coleta-admin-actions">
+        <button class="btn-sucesso" type="button" onclick="salvarColetaDiaAdmin()">💾 Salvar coleta do dia</button>
+        <button class="btn-secundario" type="button" onclick="limparColetaDiaAdmin()">Limpar campos</button>
+      </div>
+
+      <div class="coleta-admin-preview">
+        <div class="coleta-admin-preview-title">Prévia das informações salvas</div>
+        <div id="coletaPreviewHorario" class="coleta-admin-line">Coleta | —</div>
+        <div id="coletaPreviewCodigo" class="coleta-admin-line codigo">Código de autorização | —</div>
+        <div id="coletaPreviewMeta" class="coleta-admin-meta">Nenhuma atualização registrada.</div>
+      </div>
     </div>
   </section>
 
@@ -3227,7 +3265,121 @@ function salvarKitsAdmin(mostrarMensagem=true){
   }
 }
 
-function atualizarTudoAdmin(){renderizarPedidosAdmin();renderizarProdutosAdmin();renderizarKitsAdmin();renderizarUsuariosAdmin();atualizarKpisAdmin();carregarLogs();v151AtualizarDashboard();}
+
+const COLETA_DIA_STORAGE_KEY="conf_coleta_dia_v1";
+
+function coletaHojeIso(){
+  const d=new Date();
+  const y=d.getFullYear();
+  const m=String(d.getMonth()+1).padStart(2,"0");
+  const dia=String(d.getDate()).padStart(2,"0");
+  return `${y}-${m}-${dia}`;
+}
+function coletaDataPt(v){
+  const m=String(v||"").match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return m?`${m[3]}/${m[2]}/${m[1]}`:String(v||"");
+}
+function coletaEsc(v){
+  return String(v==null?"":v).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));
+}
+function obterUsuarioColetaAdmin(){
+  try{
+    const sess=JSON.parse(appStorage.getItem("conf_admin_sessao")||"{}");
+    return String(sess.Nome||sess.Login||"Administrador").trim()||"Administrador";
+  }catch(_){return "Administrador";}
+}
+function renderizarColetaDiaAdmin(dados){
+  dados=dados&&typeof dados==="object"?dados:{};
+  const horario=String(dados.horario||"").trim();
+  const codigo=String(dados.codigo||"").trim().toUpperCase();
+
+  const elHorario=document.getElementById("coletaHorarioAdmin");
+  const elCodigo=document.getElementById("coletaCodigoAdmin");
+  if(elHorario)elHorario.value=horario;
+  if(elCodigo)elCodigo.value=codigo;
+
+  const pHorario=document.getElementById("coletaPreviewHorario");
+  const pCodigo=document.getElementById("coletaPreviewCodigo");
+  const pMeta=document.getElementById("coletaPreviewMeta");
+  if(pHorario)pHorario.textContent=`Coleta | ${horario||"—"}`;
+  if(pCodigo)pCodigo.textContent=`Código de autorização | ${codigo||"—"}`;
+
+  if(pMeta){
+    const data=dados.data?coletaDataPt(dados.data):"";
+    let atualizado="";
+    try{
+      if(dados.atualizadoEm){
+        atualizado=new Date(dados.atualizadoEm).toLocaleString("pt-BR",{dateStyle:"short",timeStyle:"short"});
+      }
+    }catch(_){}
+    const partes=[];
+    if(data)partes.push(`Referência: ${data}`);
+    if(atualizado)partes.push(`Atualizado em ${atualizado}`);
+    if(dados.atualizadoPor)partes.push(`por ${dados.atualizadoPor}`);
+    pMeta.textContent=partes.length?partes.join(" · "):"Nenhuma atualização registrada.";
+  }
+}
+function carregarColetaDiaAdmin(){
+  const status=document.getElementById("coletaAdminStatus");
+  try{
+    const raw=appStorage.getItem(COLETA_DIA_STORAGE_KEY);
+    const dados=raw?JSON.parse(raw):{};
+    renderizarColetaDiaAdmin(dados);
+    if(status){
+      const ehHoje=String(dados.data||"")===coletaHojeIso();
+      status.textContent=dados.horario||dados.codigo?(ehHoje?"● Dados de hoje carregados":"● Dados salvos de outro dia"):"● Aguardando preenchimento";
+      status.className="coleta-admin-status"+(ehHoje?" ok":"");
+    }
+  }catch(e){
+    console.error("Coleta do dia",e);
+    renderizarColetaDiaAdmin({});
+    if(status){status.textContent="Erro ao carregar";status.className="coleta-admin-status erro";}
+  }
+}
+function salvarColetaDiaAdmin(){
+  const horario=String(document.getElementById("coletaHorarioAdmin")?.value||"").trim();
+  const codigo=String(document.getElementById("coletaCodigoAdmin")?.value||"").trim().toUpperCase();
+  const status=document.getElementById("coletaAdminStatus");
+
+  if(!horario){
+    alert("Informe o horário da coleta. Exemplo: 10h45 - 12h45");
+    document.getElementById("coletaHorarioAdmin")?.focus();
+    return;
+  }
+  if(!codigo){
+    alert("Informe o código de autorização.");
+    document.getElementById("coletaCodigoAdmin")?.focus();
+    return;
+  }
+
+  const dados={
+    data:coletaHojeIso(),
+    horario,
+    codigo,
+    atualizadoEm:new Date().toISOString(),
+    atualizadoPor:obterUsuarioColetaAdmin()
+  };
+  try{
+    appStorage.setItem(COLETA_DIA_STORAGE_KEY,JSON.stringify(dados));
+    renderizarColetaDiaAdmin(dados);
+    if(status){status.textContent="✓ Coleta salva no banco";status.className="coleta-admin-status ok";}
+  }catch(e){
+    console.error("Salvar coleta",e);
+    if(status){status.textContent="Erro ao salvar";status.className="coleta-admin-status erro";}
+    alert("Não foi possível salvar a coleta do dia: "+(e.message||e));
+  }
+}
+function limparColetaDiaAdmin(){
+  const h=document.getElementById("coletaHorarioAdmin");
+  const c=document.getElementById("coletaCodigoAdmin");
+  if(h)h.value="";
+  if(c)c.value="";
+  const status=document.getElementById("coletaAdminStatus");
+  if(status){status.textContent="Campos limpos — clique em Salvar para gravar";status.className="coleta-admin-status";}
+  renderizarColetaDiaAdmin({horario:"",codigo:""});
+}
+
+function atualizarTudoAdmin(){renderizarPedidosAdmin();renderizarProdutosAdmin();renderizarKitsAdmin();renderizarUsuariosAdmin();atualizarKpisAdmin();carregarLogs();carregarColetaDiaAdmin();v151AtualizarDashboard();}
 function atualizarKpisAdmin(){
   const validos=obterPedidosValidosBanco();
   const elPedidos=document.getElementById("kpiPedidos"),elLinhas=document.getElementById("kpiLinhas"),elUnid=document.getElementById("kpiUnidades"),elProd=document.getElementById("kpiProdutos");
@@ -3242,6 +3394,7 @@ function abrirAbaAdmin(nome){
   document.querySelectorAll(".aba-painel").forEach(p=>p.classList.toggle("ativa",p.id==="aba-"+nome));
   document.querySelectorAll(".v15-nav-item[data-v15-nav]").forEach(b=>b.classList.toggle("active",b.dataset.v15Nav===nome));
   if(nome==="historico") carregarLogs();
+  if(nome==="coleta") carregarColetaDiaAdmin();
   if(nome==="historico-sku") carregarHistoricoSkuAdmin();
   if(nome==="kits") renderizarKitsAdmin();
   if(nome==="integracoes"){carregarIntegracaoMercadoLivreAdmin();carregarLogsMercadoLivreAdmin();carregarAgenteZebraAdmin();}
@@ -5840,6 +5993,22 @@ document.addEventListener("DOMContentLoaded",()=>{
 .filtros-data-pedidos{display:flex;align-items:end;gap:9px;flex-wrap:wrap;margin:10px 0 12px;padding:10px 12px;border:1px solid #dbe5f0;background:#f8fbff;border-radius:10px}
 .filtros-data-pedidos label{display:grid;gap:4px;font-size:12px;font-weight:800;color:#475569}
 .filtros-data-pedidos select,.filtros-data-pedidos input{min-width:165px;height:36px;border:1px solid #cbd5e1;border-radius:7px;padding:0 9px;background:#fff}
+
+/* V16.68 - Coleta diária editável */
+.coleta-admin-grid{display:grid;grid-template-columns:minmax(220px,1fr) minmax(220px,1fr);gap:18px;margin-top:18px}
+.coleta-admin-field{display:grid;gap:7px}
+.coleta-admin-field label{font-weight:800;color:#17344f;font-size:13px}
+.coleta-admin-field input{width:100%;border:1px solid #cbd8e5;border-radius:10px;padding:12px 13px;font-size:16px;background:#fff;color:#17344f;outline:none}
+.coleta-admin-field input:focus{border-color:#2b6cb0;box-shadow:0 0 0 3px rgba(43,108,176,.12)}
+.coleta-admin-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:18px}
+.coleta-admin-preview{margin-top:22px;border:1px solid #dbe6ef;border-radius:14px;background:linear-gradient(180deg,#f8fbff,#fff);padding:16px}
+.coleta-admin-preview-title{font-size:12px;font-weight:900;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px}
+.coleta-admin-line{font-size:18px;font-weight:900;color:#0f3d70;line-height:1.55}
+.coleta-admin-line.codigo{color:#0b7a3d}
+.coleta-admin-meta{margin-top:10px;font-size:12px;color:#64748b}
+.coleta-admin-status{font-size:12px;font-weight:800;color:#64748b}
+.coleta-admin-status.ok{color:#15803d}.coleta-admin-status.erro{color:#b91c1c}
+@media(max-width:760px){.coleta-admin-grid{grid-template-columns:1fr}}
 </style>
 <script>
 /* ADMINISTRAÇÃO SEGURA DE SENHAS — VERSÃO 7.6 */

@@ -1,0 +1,22 @@
+NOROMAK WEB V16.68 — COLETA DIÁRIA EDITÁVEL NO ADMIN
+
+Nova função no Admin:
+- Menu lateral: Expedição > Coleta do dia.
+- Campo "Horário da coleta".
+  Exemplo: 10h45 - 12h45
+- Campo "Código de autorização".
+  Exemplo: B7BE16EA
+- Botão "Salvar coleta do dia".
+- Prévia:
+  Coleta | 10h45 - 12h45
+  Código de autorização | B7BE16EA
+- Registra a data do dia, horário da última alteração e administrador que salvou.
+- Pode ser alterado diariamente sem mexer em código ou arquivo.
+- Dados ficam no banco central no storage:
+  conf_coleta_dia_v1
+
+PUBLICAÇÃO:
+git status
+git add -A
+git commit -m "V16.68 - adiciona coleta diaria editavel no admin"
+./publicar.sh

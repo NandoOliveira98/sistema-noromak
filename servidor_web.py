@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "16.67"
+APP_VERSION = "16.68"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -153,6 +153,7 @@ KNOWN_KEYS = [
     "precificador_online_v1",
     "precificador_alertas_custo_v1",
     "ml_sku_mlb_links_v1",
+    "conf_coleta_dia_v1",
 ]
 
 OPERATOR_WRITE_KEYS = {
@@ -163,6 +164,7 @@ OPERATOR_WRITE_KEYS = {
     "precificador_online_v1",
     "precificador_alertas_custo_v1",
     "ml_sku_mlb_links_v1",
+    "conf_coleta_dia_v1",
 }
 
 
@@ -1352,6 +1354,7 @@ def ensure_storage_defaults() -> None:
         "conf_historico_conferencias_v2": "[]",
         "precificador_online_v1": "",
         "ml_sku_mlb_links_v1": "{}",
+        "conf_coleta_dia_v1": "{}",
     }
     with DB_LOCK:
         ts = now_iso()
