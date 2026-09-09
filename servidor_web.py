@@ -22,6 +22,7 @@ import re
 import secrets
 import shutil
 import sqlite3
+import struct
 import subprocess
 import sys
 import threading
@@ -37,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.11-SECURITY-PHASE2-FINAL"
+APP_VERSION = "17.12-SECURITY-PHASE2-HOTFIX"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -127,6 +128,10 @@ CRM_COST_CACHE_SECONDS = max(30, min(600, int(os.getenv("CRM_COST_CACHE_SECONDS"
 
 DB_LOCK = threading.RLock()
 AUTH_LOCK = threading.Lock()
+# V17.12: estado efêmero de segurança. Nunca é persistido em disco.
+# A liberação crítica desaparece ao reiniciar o serviço, por desenho.
+CRITICAL_REAUTH: dict[str, float] = {}
+OWNER_REAUTH_FAILURES: dict[str, list[float]] = {}
 ML_NEW_ORDER_WATCH_LOCK = threading.Lock()
 ML_CATCHUP_LOCK = threading.Lock()
 ML_MANUAL_RECONCILE_LOCK = threading.Lock()
@@ -1457,7 +1462,14 @@ def owner_reauth_limited(ctx: dict[str, Any] | None) -> bool:
     key = owner_reauth_rate_key(ctx)
     with AUTH_LOCK:
         recent = [x for x in OWNER_REAUTH_FAILURES.get(key, []) if x > now - 300]
-        OWNER_REAUTH_FAILURES[key] = recent
+        if recent:
+            OWNER_REAUTH_FAILURES[key] = recent
+        else:
+            OWNER_REAUTH_FAILURES.pop(key, None)
+        # Também elimina autorizações críticas expiradas.
+        expired = [k for k, until in CRITICAL_REAUTH.items() if until < now]
+        for k in expired:
+            CRITICAL_REAUTH.pop(k, None)
         return len(recent) >= 5
 
 def owner_reauth_failure(ctx: dict[str, Any] | None) -> None:
