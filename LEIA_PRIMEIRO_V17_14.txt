@@ -1,0 +1,5 @@
+V17.14 — PEDIDOS PENDENTES NÃO SOMEM
+Proteção crítica no servidor para conf_pedidos.
+Sincronizações, reloads e snapshots incompletos não podem apagar pedidos já existentes.
+Vale para pedidos manuais, Shopee e Mercado Livre e para todos os computadores.
+A V17.13 foi mantida integralmente.

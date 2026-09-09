@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.13-OPERACIONAL"
+APP_VERSION = "17.14-PENDENTES-PERSISTENTES"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2316,6 +2316,36 @@ def preserve_label_records(current_value: str | None, new_value: str) -> str:
         return json_dumps(newer)
     return new_value
 
+
+
+def _pending_identity_v1714(row: dict[str, Any], index: int = 0) -> str:
+    def pick(*keys):
+        for k in keys:
+            v=row.get(k)
+            if v is not None and str(v).strip(): return str(v).strip()
+        return ""
+    market=pick("Marketplace","marketplace","Origem","origem","Canal","canal").upper()
+    order=pick("OrderID","order_id","Pedido","Nº Pedido","NumeroPedido","Venda","VendaID")
+    pack=pick("PackID","pack_id","Pacote","PacoteID")
+    item=pick("ItemID","item_id","MLB","CodigoAnuncio")
+    sku=pick("SKU","Sku","sku","Código","Codigo")
+    if order or pack: return f"{market}|{order}|{pack}|{item}|{sku}".upper()
+    created=pick("CriadoEm","criadoEm","AdicionadoEm","adicionadoEm","Data","data")
+    return f"MANUAL|{market}|{item}|{sku}|{created}|{index}".upper()
+
+def preserve_pending_records_v1714(current_value: str | None, new_value: str) -> str:
+    try:
+        current=json.loads(current_value or "[]"); newer=json.loads(new_value or "[]")
+    except Exception: return new_value
+    if not isinstance(current,list) or not isinstance(newer,list): return new_value
+    ids={_pending_identity_v1714(r,i) for i,r in enumerate(newer) if isinstance(r,dict)}
+    changed=False
+    for i,row in enumerate(current):
+        if not isinstance(row,dict): continue
+        ident=_pending_identity_v1714(row,i)
+        if ident not in ids:
+            newer.append(row);ids.add(ident);changed=True
+    return json_dumps(newer) if changed else new_value
 
 def merge_value(key: str, current: str | None, old: str | None, newer: str, force: bool) -> str:
     if force or current is None or current == old:
@@ -9286,9 +9316,13 @@ class AppHandler(BaseHTTPRequestHandler):
             old_value = None if "oldValue" not in req or req.get("oldValue") is None else str(req.get("oldValue"))
             force = bool(req.get("force"))
             allow_label_deletes = bool(req.get("allowLabelDeletes"))
+            allow_pending_deletes = bool(req.get("allowPendingDeletes"))
             if key == "conf_etiquetas" and not allow_label_deletes:
                 current_labels, _, _ = get_storage("conf_etiquetas")
                 new_value = preserve_label_records(current_labels, new_value)
+            if key == "conf_pedidos" and not allow_pending_deletes:
+                current_pending, _, _ = get_storage("conf_pedidos")
+                new_value = preserve_pending_records_v1714(current_pending, new_value)
             if key == "conf_usuarios":
                 if not self.require_owner_reauth(ctx):
                     audit(ctx["username"], "security.denied.owner_reauth", "conf_usuarios")

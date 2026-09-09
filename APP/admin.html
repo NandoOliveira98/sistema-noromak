@@ -2911,13 +2911,13 @@ async function salvarEEnviarDados() {
 
       try {
         appStorage.setItem("conf_usuarios", JSON.stringify(usuariosCadastrados));
-        appStorage.setItem("conf_pedidos", JSON.stringify(dadosPedidos));
+        appStorage.setPedidos(JSON.stringify(dadosPedidos),false);
         appStorage.setItem("conf_etiquetas", JSON.stringify(mapaEtiquetas));
         appStorage.setItem("conf_fotos", JSON.stringify(mapaFotos));
       } catch (errQuota) {
         appStorage.removeItem("conf_fotos");
         appStorage.setItem("conf_usuarios", JSON.stringify(usuariosCadastrados));
-        appStorage.setItem("conf_pedidos", JSON.stringify(dadosPedidos));
+        appStorage.setPedidos(JSON.stringify(dadosPedidos),false);
         appStorage.setItem("conf_etiquetas", JSON.stringify(mapaEtiquetas));
         alert("Pedidos e etiquetas foram salvos, mas as fotos foram removidas porque o navegador atingiu o limite de armazenamento.");
       }
@@ -3127,7 +3127,7 @@ function inicializarBancoInternoAdmin(){
     if(appStorage.getItem("conf_produtos")===null) appStorage.setItem("conf_produtos",JSON.stringify(PRODUTOS_INICIAIS_BANCO));
     if(appStorage.getItem("conf_kits")===null) appStorage.setItem("conf_kits","[]");
     if(appStorage.getItem("conf_usuarios")===null) appStorage.setItem("conf_usuarios",JSON.stringify(USUARIOS_INICIAIS_BANCO));
-    if(appStorage.getItem("conf_pedidos")===null) appStorage.setItem("conf_pedidos",JSON.stringify(PEDIDOS_INICIAIS_BANCO));
+    if(appStorage.getItem("conf_pedidos")===null) appStorage.setPedidos(JSON.stringify(PEDIDOS_INICIAIS_BANCO),false);
     if(appStorage.getItem("conf_pedidos_rascunhos")===null) appStorage.setItem("conf_pedidos_rascunhos","[]");
     carregarBancoInternoAdmin();
   }catch(e){console.error(e);setStatusBanco("Falha ao abrir banco", "erro");}
@@ -3924,7 +3924,7 @@ function salvarPedidosAdmin(mostrarMensagem=false){
     });
     const validos=obterPedidosValidosBanco();
     const rascunhos=obterRascunhosBanco();
-    const retornoValidos=appStorage.setItem("conf_pedidos",JSON.stringify(validos));
+    const retornoValidos=appStorage.setPedidos(JSON.stringify(validos),false);
     const retornoRascunhos=appStorage.setItem("conf_pedidos_rascunhos",JSON.stringify(rascunhos));
 
     // Usa exatamente a versão consolidada devolvida pelo servidor. Isso evita
@@ -6103,7 +6103,7 @@ async function salvarEEnviarDados(){
     for(const grupo of gruposEtiquetas){for(const file of grupo.files){const conteudo=await lerArquivoEtiquetaZpl(file);await processarArquivoEtiqueta(conteudo,file.name,grupo.marketplace);}}
     await vincularEtiquetasAosPedidos();mapaEtiquetas=bancoEtiquetas;
     if(filesFotos.length){mapaFotos={};const tarefas=[];for(const file of filesFotos){if(/\.(jpg|jpeg|png|webp)$/i.test(file.name)){tarefas.push(new Promise(resolve=>{const r=new FileReader();r.onload=e=>{const nome=file.name.substring(0,file.name.lastIndexOf(".")).trim().toLowerCase();mapaFotos[nome]=e.target.result;resolve();};r.readAsDataURL(file);}));}}await Promise.all(tarefas);}
-    appStorage.setItem("conf_usuarios",JSON.stringify(usuariosEditorAdmin));appStorage.setItem("conf_pedidos",JSON.stringify(dadosPedidos));appStorage.setItem("conf_etiquetas",JSON.stringify(mapaEtiquetas));
+    appStorage.setItem("conf_usuarios",JSON.stringify(usuariosEditorAdmin));appStorage.setPedidos(JSON.stringify(dadosPedidos),false);appStorage.setItem("conf_etiquetas",JSON.stringify(mapaEtiquetas));
     if(Object.keys(mapaFotos||{}).length){try{appStorage.setItem("conf_fotos",JSON.stringify(mapaFotos));}catch(e){appStorage.removeItem("conf_fotos");}}
     appStorage.setItem("conf_banco_atualizado_em",new Date().toISOString());statusDiv.style.color="#2e7d32";statusDiv.innerHTML=`✔ Etiquetas salvas na servidor Web.<br>${montarResumoEtiquetas()}`;
     // V16.21: inicia reconhecimento rasterizado somente depois que o TXT já foi persistido.
@@ -7439,7 +7439,7 @@ document.addEventListener("DOMContentLoaded",()=>{
         await Promise.all(tarefas);
       }
       appStorage.setItem("conf_usuarios",JSON.stringify(usuariosCadastrados));
-      appStorage.setItem("conf_pedidos",JSON.stringify(dadosPedidos));
+      appStorage.setPedidos(JSON.stringify(dadosPedidos),false);
       appStorage.setItem("conf_etiquetas",JSON.stringify(mapaEtiquetas));
       if(Object.keys(mapaFotos||{}).length){try{appStorage.setItem("conf_fotos",JSON.stringify(mapaFotos));}catch(e){console.warn("Fotos não salvas",e);}}
       appStorage.setItem("conf_banco_atualizado_em",new Date().toISOString());

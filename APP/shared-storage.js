@@ -134,6 +134,17 @@
       return consolidado;
     },
 
+    setPedidos(valor, permitirRemocoes = false) {
+      const chave="conf_pedidos"; valor=String(valor);
+      let anterior=cache.has(chave)?cache.get(chave):null;
+      if(!cache.has(chave)) anterior=this.getItem(chave);
+      const resposta=xhrJson("POST",API,{key:chave,oldValue:anterior,newValue:valor,allowPendingDeletes:!!permitirRemocoes});
+      const consolidado=resposta.value===null||resposta.value===undefined?valor:String(resposta.value);
+      cache.set(chave,consolidado);versoes.set(chave,Number(resposta.version||0));
+      try{window.sessionStorage.setItem("rede_cache_"+chave,consolidado);}catch(_){}
+      dispararStorage(chave,anterior,consolidado);return consolidado;
+    },
+
     setEtiquetas(valor, permitirRemocoes = false) {
       const chave = "conf_etiquetas";
       valor = String(valor);
