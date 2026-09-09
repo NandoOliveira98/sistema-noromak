@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.12-SECURITY-PHASE2-HOTFIX"
+APP_VERSION = "17.13-OPERACIONAL"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -123,6 +123,8 @@ CRM_COST_API_URL = os.getenv(
 ).strip()
 CHAVE_CRM = os.getenv("CHAVE_CRM", "").strip()
 CRM_COST_TIMEOUT = max(3, min(30, int(os.getenv("CRM_COST_TIMEOUT", "20"))))
+CRM_STOCK_API_URL = os.getenv("CRM_STOCK_API_URL", CRM_COST_API_URL).strip() or CRM_COST_API_URL
+CRM_STOCK_TIMEOUT = max(3, min(30, int(os.getenv("CRM_STOCK_TIMEOUT", str(CRM_COST_TIMEOUT)))))
 CRM_COST_CACHE_SECONDS = max(30, min(600, int(os.getenv("CRM_COST_CACHE_SECONDS", "180"))))
 
 
@@ -344,6 +346,142 @@ def apply_curve_margin_to_product(product: dict[str, Any], curve: str) -> None:
             current = dict(base_values)
             marketplaces[market] = current
         current["margem"] = margin
+
+
+
+def _apollo_number(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    text = str(value).strip().replace("R$", "").replace(" ", "")
+    if not text:
+        return None
+    if re.fullmatch(r"-?\d{1,3}(\.\d{3})*,\d+", text):
+        text = text.replace(".", "").replace(",", ".")
+    elif re.fullmatch(r"-?\d+,\d+", text):
+        text = text.replace(",", ".")
+    try:
+        return float(text)
+    except Exception:
+        return None
+
+
+def _apollo_stock_from_row(row: dict[str, Any]) -> float | None:
+    aliases = (
+        "estoque_disponivel", "saldo_disponivel", "quantidade_disponivel",
+        "disponivel", "estoque", "saldo", "quantidade", "qtd_disponivel",
+        "qtd_estoque", "estoque_atual", "saldo_atual", "stock", "available_stock",
+        "available_quantity",
+    )
+    for key in aliases:
+        if key in row:
+            number = _apollo_number(row.get(key))
+            if number is not None:
+                return max(0.0, number)
+    return None
+
+
+def _apollo_stock_payload(data: dict[str, Any]) -> dict[str, Any]:
+    casa_nomes = {1: "Araçatuba", 2: "Ribeirão", 3: "Bauru"}
+    rows: list[dict[str, Any]] = []
+    seen: set[int] = set()
+
+    for list_key in ("estoques", "saldos", "stocks", "filiais", "custos"):
+        raw = data.get(list_key)
+        if not isinstance(raw, list):
+            continue
+        for row in raw:
+            if not isinstance(row, dict):
+                continue
+            try:
+                revenda = int(row.get("revenda") or row.get("filial") or row.get("casa") or 0)
+            except Exception:
+                revenda = 0
+            stock = _apollo_stock_from_row(row)
+            if stock is None:
+                continue
+            if revenda in seen and revenda:
+                continue
+            if revenda:
+                seen.add(revenda)
+            rows.append({
+                "revenda": revenda or None,
+                "casa": casa_nomes.get(revenda, str(row.get("nome") or row.get("casa_nome") or revenda or "Apollo")),
+                "disponivel": round(stock, 4),
+                "conhecido": True,
+            })
+
+    top = _apollo_stock_from_row(data)
+    if not rows and top is not None:
+        rows = [{
+            "revenda": int(data.get("revenda_principal") or 1),
+            "casa": casa_nomes.get(int(data.get("revenda_principal") or 1), "Apollo"),
+            "disponivel": round(top, 4),
+            "conhecido": True,
+        }]
+
+    total = round(sum(float(r["disponivel"]) for r in rows), 4) if rows else None
+    return {
+        "estoque_conhecido": bool(rows),
+        "estoque_total": total,
+        "estoques": rows,
+    }
+
+
+def crm_stock_lookup(codigo: str, operador: str = "") -> dict[str, Any]:
+    """Consulta estoque Apollo sem expor a CHAVE_CRM ao navegador.
+
+    Por padrão utiliza o mesmo endpoint já usado pelo custo. Se o Apollo tiver
+    um endpoint dedicado de estoque, configure CRM_STOCK_API_URL no .env.
+    """
+    codigo = str(codigo or "").strip()
+    if not codigo:
+        raise ValueError("Informe o SKU/código da peça.")
+    if not CHAVE_CRM:
+        raise RuntimeError("CHAVE_CRM não está configurada no servidor.")
+
+    params = {"codigo": codigo}
+    if operador:
+        params["operador"] = operador
+    separator = "&" if "?" in CRM_STOCK_API_URL else "?"
+    url = CRM_STOCK_API_URL + separator + urlencode(params)
+    req = urllib.request.Request(
+        url,
+        headers={
+            "X-Chave-Expedicao": CHAVE_CRM,
+            "Accept": "application/json",
+            "User-Agent": f"NoromakExpedicao/{APP_VERSION}",
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=CRM_STOCK_TIMEOUT) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+            status = int(getattr(resp, "status", 200) or 200)
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Apollo estoque respondeu HTTP {exc.code}.") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Apollo estoque indisponível: {exc.reason}") from exc
+
+    try:
+        data = json.loads(raw or "{}")
+    except Exception as exc:
+        raise RuntimeError("Apollo estoque retornou resposta inválida.") from exc
+    if not isinstance(data, dict):
+        raise RuntimeError("Apollo estoque retornou resposta inválida.")
+    if status >= 400:
+        raise RuntimeError(str(data.get("erro") or data.get("detail") or f"HTTP {status}"))
+
+    stock = _apollo_stock_payload(data)
+    return {
+        "ok": True,
+        "codigo": str(data.get("codigo") or codigo),
+        "descricao": str(data.get("descricao") or ""),
+        **stock,
+        "consultado_em": now_iso(),
+    }
 
 
 def crm_cost_lookup(codigo: str, operador: str = "") -> dict[str, Any]:
@@ -2138,6 +2276,45 @@ def preserve_conference_names(current_value: str | None, new_value: str) -> str:
             row["Nome Conferência"] = name
             changed = True
     return json_dumps(new_rows) if changed else new_value
+
+
+
+def preserve_label_records(current_value: str | None, new_value: str) -> str:
+    """Protege conf_etiquetas contra exclusões acidentais por telas com snapshot antigo.
+
+    Escritas normais podem adicionar/atualizar vínculos, mas não podem apagar
+    registros existentes. Remoção de etiqueta deve ser explícita no endpoint.
+    """
+    try:
+        current = json.loads(current_value or "{}")
+        newer = json.loads(new_value or "{}")
+    except Exception:
+        return new_value
+    if not isinstance(current, dict) or not isinstance(newer, dict):
+        return new_value
+
+    current_records = current.get("registros") if isinstance(current.get("registros"), dict) else {}
+    new_records = newer.get("registros") if isinstance(newer.get("registros"), dict) else {}
+    changed = False
+    for ident, record in current_records.items():
+        if ident not in new_records:
+            new_records[ident] = record
+            changed = True
+
+    if changed:
+        newer["registros"] = new_records
+        current_order = current.get("ordem") if isinstance(current.get("ordem"), list) else list(current_records)
+        new_order = newer.get("ordem") if isinstance(newer.get("ordem"), list) else list(new_records)
+        ordem = []
+        for ident in [*current_order, *new_order, *new_records.keys()]:
+            ident = str(ident)
+            if ident in new_records and ident not in ordem:
+                ordem.append(ident)
+        newer["ordem"] = ordem
+        newer = rebuild_label_bank(newer)
+        newer["atualizadoEm"] = str(newer.get("atualizadoEm") or now_iso())
+        return json_dumps(newer)
+    return new_value
 
 
 def merge_value(key: str, current: str | None, old: str | None, newer: str, force: bool) -> str:
@@ -8575,6 +8752,8 @@ class AppHandler(BaseHTTPRequestHandler):
             "/print-station": "estacao", "/print-station/": "estacao",
             "/precificador": "precificador", "/precificador/": "precificador", "/precificador.html": "precificador",
             "/precificacao": "precificador", "/precificacao/": "precificador",
+            "/analise-full": "precificador", "/analise-full/": "precificador", "/analise-full.html": "precificador",
+            "/full": "precificador", "/full/": "precificador",
         }
         required = page_modules.get(path)
         if required:
@@ -8590,6 +8769,64 @@ class AppHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = self.route_path()
+        if path == "/api/full/apollo-stock":
+            ctx = self.auth()
+            if ctx is not None:
+                if not module_allowed(ctx, "precificador") and ctx.get("app_role") != "admin":
+                    self.send_json({"error": "Acesso ao módulo de análise Full não autorizado."}, 403)
+                    return
+                try:
+                    body = self.read_json()
+                    items = body.get("items") if isinstance(body.get("items"), list) else []
+                    if len(items) > 500:
+                        raise ValueError("Limite de 500 SKUs por consulta.")
+                    filial = int(body.get("filial") or 0)
+                    results = []
+                    for item in items:
+                        if not isinstance(item, dict):
+                            continue
+                        sku = str(item.get("sku") or "").strip()
+                        if not sku:
+                            continue
+                        try:
+                            need = max(0.0, float(item.get("need") or 0))
+                        except Exception:
+                            need = 0.0
+                        try:
+                            stock = crm_stock_lookup(sku, "analise-full")
+                            rows = stock.get("estoques") if isinstance(stock.get("estoques"), list) else []
+                            if filial:
+                                selected = [r for r in rows if int(r.get("revenda") or 0) == filial]
+                                available = sum(float(r.get("disponivel") or 0) for r in selected) if selected else None
+                                known = bool(selected)
+                            else:
+                                available = stock.get("estoque_total")
+                                known = bool(stock.get("estoque_conhecido"))
+                            shortage = max(0.0, need - float(available or 0)) if known else None
+                            results.append({
+                                "sku": sku,
+                                "ok": True,
+                                "stock_known": known,
+                                "available": available,
+                                "need": need,
+                                "shortage": shortage,
+                                "sufficient": bool(known and float(available or 0) >= need),
+                                "branches": rows,
+                            })
+                        except Exception as exc:
+                            results.append({
+                                "sku": sku, "ok": False, "stock_known": False,
+                                "available": None, "need": need, "shortage": None,
+                                "sufficient": False, "branches": [], "error": str(exc)[:300],
+                            })
+                    audit(ctx["username"], "full.apollo.stock", f"{len(results)} SKU(s)")
+                    self.send_json({"ok": True, "results": results, "filial": filial, "version": APP_VERSION})
+                except ValueError as exc:
+                    self.send_json({"error": str(exc)}, 400)
+                except Exception as exc:
+                    self.send_json({"error": str(exc)}, 500)
+            return
+
         if path == "/api/security/owner/reauth":
             ctx = self.auth(admin_only=True)
             if ctx is not None:
@@ -9048,6 +9285,10 @@ class AppHandler(BaseHTTPRequestHandler):
             new_value = str(req.get("newValue"))
             old_value = None if "oldValue" not in req or req.get("oldValue") is None else str(req.get("oldValue"))
             force = bool(req.get("force"))
+            allow_label_deletes = bool(req.get("allowLabelDeletes"))
+            if key == "conf_etiquetas" and not allow_label_deletes:
+                current_labels, _, _ = get_storage("conf_etiquetas")
+                new_value = preserve_label_records(current_labels, new_value)
             if key == "conf_usuarios":
                 if not self.require_owner_reauth(ctx):
                     audit(ctx["username"], "security.denied.owner_reauth", "conf_usuarios")
@@ -10000,6 +10241,11 @@ class AppHandler(BaseHTTPRequestHandler):
             "/precificador.html": "precificador.html",
             "/precificacao": "precificador.html",
             "/precificacao/": "precificador.html",
+            "/analise-full": "analise-full.html",
+            "/analise-full/": "analise-full.html",
+            "/analise-full.html": "analise-full.html",
+            "/full": "analise-full.html",
+            "/full/": "analise-full.html",
             "/shared-storage.js": "shared-storage.js",
             "/web-auth.js": "web-auth.js",
         }

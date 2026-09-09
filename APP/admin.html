@@ -465,6 +465,19 @@
 .security-lock-icon{font-size:26px}
 @media(max-width:900px){.security-grid{grid-template-columns:1fr}.security-owner-banner{align-items:flex-start;flex-direction:column}}
 
+
+/* V17.13 - popup diário de coleta */
+.coleta-popup-v1713{position:fixed;inset:0;z-index:100100;background:rgba(7,20,36,.58);display:none;align-items:center;justify-content:center;padding:18px}
+.coleta-popup-v1713.open{display:flex}
+.coleta-popup-card-v1713{width:min(520px,100%);background:#fff;border-radius:17px;box-shadow:0 28px 90px rgba(0,0,0,.28);overflow:hidden}
+.coleta-popup-head-v1713{background:linear-gradient(135deg,#123b63,#1f57a5);color:#fff;padding:18px 20px}
+.coleta-popup-head-v1713 h3{margin:0;font-size:19px}.coleta-popup-head-v1713 p{margin:5px 0 0;font-size:12px;opacity:.9}
+.coleta-popup-body-v1713{padding:20px}.coleta-popup-grid-v1713{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.coleta-popup-field-v1713 label{display:block;font-weight:800;color:#29465f;margin-bottom:6px;font-size:12px}
+.coleta-popup-field-v1713 input{width:100%;box-sizing:border-box;padding:11px;border:1px solid #c9d7e5;border-radius:9px;font-size:15px}
+.coleta-popup-actions-v1713{display:flex;justify-content:flex-end;gap:9px;margin-top:16px}
+@media(max-width:600px){.coleta-popup-grid-v1713{grid-template-columns:1fr}}
+
 </style>
 <script src="/expedicao/shared-storage.js"></script>
 <script src="/expedicao/web-auth.js"></script>
@@ -742,6 +755,7 @@ body{background:var(--v15-bg)!important}
   <button class="v15-nav-item" onclick="abrirAbaAdmin('historico');v15Nav(this)"><span class="v15-nav-icon">🕘</span><span class="v15-nav-label">Histórico</span></button>
   <div class="v15-nav-section">Comercial</div>
   <a class="v15-nav-item" href="/expedicao/precificador" target="_blank" rel="noopener"><span class="v15-nav-icon">$</span><span class="v15-nav-label">Precificador</span></a>
+  <a class="v15-nav-item" href="/expedicao/analise-full" target="_blank" rel="noopener"><span class="v15-nav-icon">📦</span><span class="v15-nav-label">Demanda Full</span></a>
   <a class="v15-nav-item" href="/expedicao/rentabilidade-ml" target="_blank" rel="noopener"><span class="v15-nav-icon">📈</span><span class="v15-nav-label">Rentabilidade ML</span></a>
   <a class="v15-nav-item" href="/expedicao/promocoes-ml" target="_blank" rel="noopener"><span class="v15-nav-icon">%</span><span class="v15-nav-label">Promoções ML</span></a>
   <button class="v15-nav-item" onclick="abrirAbaAdmin('produtos');v15Nav(this)"><span class="v15-nav-icon">📦</span><span class="v15-nav-label">Produtos</span></button>
@@ -7356,7 +7370,7 @@ document.addEventListener("DOMContentLoaded",()=>{
     banco.auditoria=(banco.auditoria||[]).filter(a=>!remover.has(a?.etiqueta));
     banco.atualizadoEm=new Date().toISOString();
     const final=reconstruirBancoEtq(banco);
-    appStorage.setItem("conf_etiquetas",JSON.stringify(final));
+    appStorage.setEtiquetas(JSON.stringify(final),true);
     mapaEtiquetas=final; bancoEtiquetas=final;
     etiquetasSelecionadasPersistentes.clear();
     modoRemocaoMassaEtiquetas=false;
@@ -7375,7 +7389,7 @@ document.addEventListener("DOMContentLoaded",()=>{
     banco.auditoria=(banco.auditoria||[]).filter(a=>a?.etiqueta!==id);
     banco.atualizadoEm=new Date().toISOString();
     const final=reconstruirBancoEtq(banco);
-    appStorage.setItem("conf_etiquetas",JSON.stringify(final));
+    appStorage.setEtiquetas(JSON.stringify(final),true);
     mapaEtiquetas=final; bancoEtiquetas=final;
     renderizarEtiquetasPersistentes();
     const status=document.getElementById("status");
@@ -7831,6 +7845,67 @@ window.addEventListener("storage",e=>{if(["conf_pedidos","conf_logs","conf_histo
     </form>
   </div>
 </div>
+
+
+<div id="coletaPopupV1713" class="coleta-popup-v1713" aria-hidden="true">
+  <div class="coleta-popup-card-v1713">
+    <div class="coleta-popup-head-v1713">
+      <h3>🚚 Coleta do dia</h3>
+      <p>Primeira abertura do Admin hoje. Informe os dados da coleta para a Expedição.</p>
+    </div>
+    <div class="coleta-popup-body-v1713">
+      <div class="coleta-popup-grid-v1713">
+        <div class="coleta-popup-field-v1713"><label>Horário da coleta</label><input id="coletaPopupHorarioV1713" placeholder="10h45 - 12h45"></div>
+        <div class="coleta-popup-field-v1713"><label>Código de autorização</label><input id="coletaPopupCodigoV1713" placeholder="B7BE16EA" autocomplete="off"></div>
+      </div>
+      <div id="coletaPopupErroV1713" style="display:none;margin-top:12px;padding:9px 10px;border-radius:8px;background:#fff0ee;color:#a61b1b;font-size:12px;font-weight:700"></div>
+      <div class="coleta-popup-actions-v1713">
+        <button type="button" class="btn-secundario" onclick="fecharColetaPopupV1713()">Agora não</button>
+        <button type="button" class="btn-primario" onclick="salvarColetaPopupV1713()">Salvar coleta do dia</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<script>
+/* V17.13 — primeira abertura diária do Admin: coleta */
+(function(){
+  const KEY="conf_coleta_dia_v1";
+  const SHOWN="noromak_coleta_popup_v1713_";
+  function hoje(){const d=new Date();return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;}
+  function ler(){try{return JSON.parse(appStorage.getItem(KEY)||"{}")||{};}catch(_){return {};}}
+  function sessao(){try{return JSON.parse(appStorage.getItem("conf_admin_sessao")||"{}")||{};}catch(_){return {};}}
+  function abrir(){
+    const dia=hoje(),dados=ler();
+    if(String(dados.data||"")===dia && dados.horario && dados.codigo)return;
+    if(sessionStorage.getItem(SHOWN+dia)==="1")return;
+    sessionStorage.setItem(SHOWN+dia,"1");
+    document.getElementById("coletaPopupHorarioV1713").value="";
+    document.getElementById("coletaPopupCodigoV1713").value="";
+    const box=document.getElementById("coletaPopupV1713");
+    box?.classList.add("open");box?.setAttribute("aria-hidden","false");
+    setTimeout(()=>document.getElementById("coletaPopupHorarioV1713")?.focus(),100);
+  }
+  window.fecharColetaPopupV1713=function(){const box=document.getElementById("coletaPopupV1713");box?.classList.remove("open");box?.setAttribute("aria-hidden","true");};
+  window.salvarColetaPopupV1713=function(){
+    const h=String(document.getElementById("coletaPopupHorarioV1713")?.value||"").trim();
+    const c=String(document.getElementById("coletaPopupCodigoV1713")?.value||"").trim().toUpperCase();
+    const erro=document.getElementById("coletaPopupErroV1713");
+    if(!h||!c){erro.style.display="block";erro.textContent="Preencha o horário e o código de autorização.";return;}
+    const u=sessao();
+    const dados={data:hoje(),horario:h,codigo:c,atualizadoEm:new Date().toISOString(),atualizadoPor:String(u.Nome||u.Login||"Administrador")};
+    try{
+      appStorage.setItem(KEY,JSON.stringify(dados));
+      erro.style.display="none";
+      if(typeof renderizarColetaDiaAdmin==="function")renderizarColetaDiaAdmin(dados,true);
+      fecharColetaPopupV1713();
+      if(typeof setStatusBanco==="function")setStatusBanco("● Coleta do dia salva","ok");
+    }catch(e){erro.style.display="block";erro.textContent="Não foi possível salvar: "+(e.message||e);}
+  };
+  document.addEventListener("DOMContentLoaded",()=>setTimeout(abrir,700));
+})();
+</script>
 
 </body>
 </html>

@@ -1,0 +1,31 @@
+NOROMAK V17.13 — MELHORIAS OPERACIONAIS
+
+1. ETIQUETAS ESTÁVEIS
+- Escritas normais de conf_etiquetas passaram a ser aditivas no servidor.
+- Uma tela com snapshot antigo não pode mais apagar etiquetas existentes.
+- Remoção só ocorre pelos botões explícitos de remoção.
+- A Conferência mantém um último snapshot válido em memória de sessão para evitar piscadas causadas por leitura transitória.
+
+2. POPUP COLETA DO DIA
+- Na primeira abertura do Admin no dia, se ainda não houver coleta salva para hoje, aparece popup.
+- Pede Horário + Código de autorização e grava em conf_coleta_dia_v1.
+- Se os dados de hoje já existem, não interrompe.
+
+3. DEMANDA FULL + APOLLO
+- Novo módulo: /expedicao/analise-full
+- Mantém o cálculo do HTML fornecido pelo usuário.
+- Depois de importar a planilha do Mercado Livre, botão 'Verificar estoque Apollo'.
+- Compara necessidade de 15/30 dias com saldo atual Apollo.
+- Pode considerar todas as filiais ou Araçatuba/Ribeirão/Bauru.
+- Mostra estoque disponível, falta e situação.
+- Exportação inclui os campos Apollo.
+- A CHAVE_CRM permanece somente no servidor.
+- Por padrão, CRM_STOCK_API_URL usa o mesmo endpoint do custo.
+- Se o endpoint atual do Apollo não devolver saldo/estoque, configure no /home/expedicao/.env:
+  CRM_STOCK_API_URL=<endpoint de estoque Apollo>
+  CRM_STOCK_TIMEOUT=20
+
+IMPORTANTE:
+O leitor aceita vários nomes de campo de saldo: estoque_disponivel, saldo_disponivel,
+quantidade_disponivel, disponivel, estoque, saldo, quantidade, estoque_atual,
+saldo_atual, stock, available_stock, available_quantity.

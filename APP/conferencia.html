@@ -1482,7 +1482,20 @@ function carregarDadosMemoria() {
     listaPedidosPendentes = Array.from(pedidosUnicosMap.values());
   }
   if (fotos) mapaFotos = JSON.parse(fotos);
-  if (etiqs) mapaEtiquetas = JSON.parse(etiqs);
+  if (etiqs) {
+    try {
+      const novoBancoEtiquetas = JSON.parse(etiqs);
+      if (novoBancoEtiquetas && typeof novoBancoEtiquetas === "object" && novoBancoEtiquetas.registros && Array.isArray(novoBancoEtiquetas.ordem)) {
+        mapaEtiquetas = novoBancoEtiquetas;
+        try { sessionStorage.setItem("conf_etiquetas_ultimo_bom_v1713", etiqs); } catch (_) {}
+      }
+    } catch (_) {}
+  } else if (!mapaEtiquetas || !mapaEtiquetas.registros) {
+    try {
+      const ultimoBom = sessionStorage.getItem("conf_etiquetas_ultimo_bom_v1713");
+      if (ultimoBom) mapaEtiquetas = JSON.parse(ultimoBom);
+    } catch (_) {}
+  }
 }
 
 function produtosBancoEanRapido() {
