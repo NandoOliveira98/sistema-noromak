@@ -440,6 +440,31 @@
   .usuario-acessos-legenda{display:block;margin-top:4px;color:#6c7d8d;font-size:9.5px;line-height:1.25}
   @media(max-width:900px){.usuario-acessos{grid-template-columns:1fr;min-width:170px}}
 
+
+/* V17.11 - Segurança OWNER */
+.security-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.security-card{border:1px solid #d9e3ef;border-radius:14px;background:#fff;padding:16px;box-shadow:0 4px 16px rgba(15,47,87,.06)}
+.security-card h3{margin:0 0 12px;color:#123f73;font-size:16px}
+.security-row{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:9px 0;border-bottom:1px solid #eef3f8}
+.security-row:last-child{border-bottom:0}
+.security-row span:first-child{color:#53677d}
+.security-badge{display:inline-flex;align-items:center;border-radius:999px;padding:5px 9px;font-weight:800;font-size:12px}
+.security-badge.ok{background:#e8f7ed;color:#147a35}.security-badge.warn{background:#fff3d6;color:#9a6200}.security-badge.off{background:#feeaea;color:#a61b1b}
+.security-owner-banner{display:flex;align-items:center;justify-content:space-between;gap:18px;border:1px solid #b9d2ef;background:linear-gradient(135deg,#edf6ff,#fff);border-radius:15px;padding:16px;margin-bottom:14px}
+.security-owner-banner strong{font-size:18px;color:#0d4077}.security-owner-banner small{display:block;color:#64778c;margin-top:3px}
+.security-actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:12px}
+.owner-modal-backdrop{position:fixed;inset:0;background:rgba(4,18,35,.58);z-index:99999;display:none;align-items:center;justify-content:center;padding:18px}
+.owner-modal-backdrop.open{display:flex}
+.owner-modal{width:min(460px,100%);background:#fff;border-radius:18px;box-shadow:0 24px 80px rgba(0,0,0,.28);overflow:hidden}
+.owner-modal-head{background:#0d4d89;color:#fff;padding:17px 20px}.owner-modal-head h3{margin:0;font-size:18px}.owner-modal-head p{margin:5px 0 0;opacity:.88;font-size:12px}
+.owner-modal-body{padding:20px}.owner-modal-field{margin-bottom:14px}.owner-modal-field label{display:block;font-weight:800;color:#29465f;margin-bottom:6px}
+.owner-modal-field input{width:100%;box-sizing:border-box;padding:11px 12px;border:1px solid #cad8e6;border-radius:9px;font-size:16px}
+.owner-modal-note{font-size:12px;color:#687b8f;background:#f4f8fc;border-radius:9px;padding:9px 10px;margin-bottom:14px}
+.owner-modal-error{display:none;color:#b42318;background:#fff0ee;border:1px solid #ffd0ca;border-radius:9px;padding:9px 10px;margin-bottom:12px;font-size:13px}.owner-modal-error.show{display:block}
+.owner-modal-actions{display:flex;justify-content:flex-end;gap:9px}
+.security-lock-icon{font-size:26px}
+@media(max-width:900px){.security-grid{grid-template-columns:1fr}.security-owner-banner{align-items:flex-start;flex-direction:column}}
+
 </style>
 <script src="/expedicao/shared-storage.js"></script>
 <script src="/expedicao/web-auth.js"></script>
@@ -726,6 +751,7 @@ body{background:var(--v15-bg)!important}
   <a class="v15-nav-item" href="/expedicao/estacao-impressao" target="_blank" rel="noopener"><span class="v15-nav-icon">🖨</span><span class="v15-nav-label">Estação Zebra</span></a>
   <div class="v15-nav-section">Administração</div>
   <button class="v15-nav-item" onclick="abrirAbaAdmin('usuarios');v15Nav(this)"><span class="v15-nav-icon">👥</span><span class="v15-nav-label">Usuários</span></button>
+  <button class="v15-nav-item" data-v15-nav="seguranca" onclick="abrirAbaAdmin('seguranca');v15Nav(this)"><span class="v15-nav-icon">🛡️</span><span class="v15-nav-label">Segurança</span></button>
   <div class="v15-sidebar-footer"><button class="v15-nav-item" onclick="sairAdmin()"><span class="v15-nav-icon">↪</span><span class="v15-nav-label">Sair</span></button></div>
 </nav>
 
@@ -827,6 +853,7 @@ body{background:var(--v15-bg)!important}
     <button class="aba-btn" data-aba="historico" onclick="abrirAbaAdmin('historico')">🕘 Histórico</button>
     <button class="aba-btn" data-aba="historico-sku" onclick="abrirAbaAdmin('historico-sku')">🔁 Histórico de SKU</button>
     <button class="aba-btn" data-aba="integracoes" onclick="abrirAbaAdmin('integracoes')">🔌 Integrações</button>
+    <button class="aba-btn" data-aba="seguranca" onclick="abrirAbaAdmin('seguranca')">🛡️ Segurança</button>
   </div>
 
   <section id="aba-pedidos" class="aba-painel ativa">
@@ -1074,7 +1101,7 @@ body{background:var(--v15-bg)!important}
     <div class="card-admin">
       <h2>Usuários e aprovações <span class="usuario-versao">Versão 12.3 — permissões + precificador online</span></h2>
       <div class="aviso-banco"><b>Login próprio do estoque:</b> cada pessoa tem usuário, senha e acessos individuais. Marque quais módulos cada usuário pode abrir: <b>Conferência, Painel Administrativo, Estação de Impressão e Precificador</b>. As permissões são validadas também pelo servidor. Por segurança, a senha atual não pode ser visualizada.</div>
-      <div class="toolbar-grid"><button type="button" id="btnNovoUsuarioAdmin" class="btn-primario" onclick="abrirSolicitacaoUsuario('admin')">＋ Solicitar novo usuário</button><button type="button" class="btn-sucesso" onclick="salvarUsuariosAdmin(true)">💾 Salvar alterações</button></div>
+      <div class="toolbar-grid"><button type="button" id="btnNovoUsuarioAdmin" class="btn-primario" onclick="abrirSolicitacaoUsuario('admin')">＋ Solicitar novo usuário</button><button type="button" class="btn-sucesso" onclick="salvarUsuariosProtegidoAdmin()">💾 Salvar alterações</button></div>
       <div id="contadorUsuariosAdmin" class="usuario-contador"></div>
       <div class="excel-wrap" id="tabelaUsuariosAdminWrap" style="max-height:56vh;"><table class="excel-grid" style="min-width:1120px;"><thead><tr><th>Ação</th><th>Nome</th><th>Login</th><th>Senha / acesso</th><th>Perfil</th><th>Acessos aos módulos</th></tr></thead><tbody id="corpoUsuariosAdmin"></tbody></table></div>
     </div>
@@ -1120,7 +1147,49 @@ body{background:var(--v15-bg)!important}
   </section>
 
 
-  <section id="aba-integracoes" class="aba-painel">
+  
+  <section id="aba-seguranca" class="aba-painel">
+    <div class="card-admin">
+      <h2>🛡️ Segurança do sistema <span class="usuario-versao">V17.11 — OWNER + 2FA</span></h2>
+      <div class="security-owner-banner">
+        <div><strong id="secOwnerName">OWNER</strong><small>Proprietário exclusivo da infraestrutura lógica do Noromak</small></div>
+        <span id="secOwnerStatus" class="security-badge warn">Verificando…</span>
+      </div>
+      <div class="security-grid">
+        <div class="security-card">
+          <h3>🔐 Identidade e autenticação</h3>
+          <div class="security-row"><span>Conta OWNER</span><span id="secOwnerAccount">—</span></div>
+          <div class="security-row"><span>2FA do OWNER</span><span id="sec2fa" class="security-badge warn">Verificando…</span></div>
+          <div class="security-row"><span>Códigos de recuperação</span><span id="secRecovery" class="security-badge warn">Verificando…</span></div>
+          <div class="security-row"><span>PBKDF2</span><strong id="secPbkdf">—</strong></div>
+          <div class="security-row"><span>Sessão web</span><strong id="secSession">—</strong></div>
+        </div>
+        <div class="security-card">
+          <h3>🔒 Operações críticas</h3>
+          <div class="security-row"><span>Alterar usuários/admins</span><span class="security-badge ok">OWNER</span></div>
+          <div class="security-row"><span>Desconectar marketplaces</span><span class="security-badge ok">OWNER</span></div>
+          <div class="security-row"><span>Renovar token Zebra</span><span class="security-badge ok">OWNER</span></div>
+          <div class="security-row"><span>Reautenticação</span><strong id="secReauthWindow">—</strong></div>
+          <div class="security-row"><span>Estado atual</span><span id="secReauthState" class="security-badge off">Bloqueado</span></div>
+          <div class="security-actions"><button type="button" class="btn-primario" onclick="testarReautenticacaoOwnerAdmin()">🔑 Reautenticar OWNER</button><button type="button" class="btn-secundario" onclick="carregarSegurancaAdmin()">↻ Atualizar status</button></div>
+        </div>
+        <div class="security-card">
+          <h3>🌐 Proteções do servidor</h3>
+          <div class="security-row"><span>Segredos no navegador</span><span id="secSecrets" class="security-badge ok">Bloqueados</span></div>
+          <div class="security-row"><span>Headers HTTP de segurança</span><span class="security-badge ok">Ativos</span></div>
+          <div class="security-row"><span>Limite de tentativas OWNER</span><span class="security-badge ok">5 / 5 min</span></div>
+          <div class="security-row"><span>Versão ativa</span><strong id="secVersion">—</strong></div>
+        </div>
+        <div class="security-card">
+          <h3>⚠️ Controle do proprietário</h3>
+          <p style="margin:0;color:#5c7187;line-height:1.5">A conta OWNER não pode ser rebaixada pelo painel. Ações críticas exigem novamente sua senha e o código do Authenticator. A exclusão remota do servidor continua desativada nesta fase.</p>
+          <div class="security-actions"><span class="security-badge ok">✓ Fase 2 protegida</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+<section id="aba-integracoes" class="aba-painel">
     <div class="card-admin">
       <h3>🔌 Integrações</h3>
       <div class="aviso-banco"><b>Mercado Livre API:</b> conecta a conta vendedora diretamente à Expedição. Novas vendas recebidas por <b>Orders_v2</b> e alterações de <b>Shipments</b> entram no servidor sem depender de planilha ou extensão. Planilha, extensão e print continuam disponíveis como contingência.</div>
@@ -3662,6 +3731,7 @@ function abrirAbaAdmin(nome){
   if(nome==="historico-sku") carregarHistoricoSkuAdmin();
   if(nome==="kits") renderizarKitsAdmin();
   if(nome==="integracoes"){carregarIntegracaoMercadoLivreAdmin();carregarLogsMercadoLivreAdmin();carregarIntegracaoShopeeAdmin();carregarAgenteZebraAdmin();}
+  if(nome==="seguranca") carregarSegurancaAdmin().catch(e=>alert("Segurança: "+e.message));
 }
 function abrirDashboardV151(){
   document.querySelectorAll(".aba-painel").forEach(p=>p.classList.remove("ativa"));
@@ -4296,7 +4366,12 @@ function adicionarProdutoAdmin(){const p=Object.fromEntries(CAMPOS_PRODUTOS_BANC
 function excluirProdutoAdmin(uid){const p=produtosBancoAdmin.find(x=>x.__uidProduto===uid);if(!p)return;if(!confirm(`Excluir o produto ${p.SKU||p["Código de Barras"]||"sem código"}?`))return;produtosBancoAdmin=produtosBancoAdmin.filter(x=>x.__uidProduto!==uid);renderizarProdutosAdmin();salvarProdutosAdmin(false);}
 function mudarPaginaProdutos(delta){paginaProdutosAdmin+=delta;renderizarProdutosAdmin();}
 
-function agendarSalvarUsuariosAdmin(){clearTimeout(timerSalvarUsuariosAdmin);timerSalvarUsuariosAdmin=setTimeout(()=>salvarUsuariosAdmin(false),300);}
+function agendarSalvarUsuariosAdmin(){
+  clearTimeout(timerSalvarUsuariosAdmin);
+  timerSalvarUsuariosAdmin=setTimeout(()=>{
+    setStatusBanco("● Alterações de usuários pendentes — clique em Salvar alterações","aviso");
+  },250);
+}
 function acessoUsuarioAdmin(u,campo){
   const perfil=String(u.Perfil||"Operador").toLowerCase();
   const defaults={
@@ -4381,7 +4456,14 @@ function adicionarUsuarioAdmin(){
     campo?.focus?.();
   },60);
 }
-function excluirUsuarioAdmin(uid){if(!confirm("Excluir este usuário?"))return;usuariosEditorAdmin=usuariosEditorAdmin.filter(x=>x.__uidUsuario!==uid);renderizarUsuariosAdmin();salvarUsuariosAdmin(false);}
+function excluirUsuarioAdmin(uid){
+  const alvo=usuariosEditorAdmin.find(x=>x.__uidUsuario===uid);
+  if(String(alvo?.Owner||"").toLowerCase()==="true"||String(alvo?.Login||"").toLowerCase()==="luis"){alert("A conta OWNER não pode ser excluída pelo painel.");return;}
+  if(!confirm("Excluir este usuário? A exclusão só será efetivada após Salvar alterações com confirmação do OWNER."))return;
+  usuariosEditorAdmin=usuariosEditorAdmin.filter(x=>x.__uidUsuario!==uid);
+  renderizarUsuariosAdmin();
+  setStatusBanco("● Exclusão pendente — confirme em Salvar alterações","aviso");
+}
 function salvarUsuariosAdmin(mostrar=false){
   try{
     document.activeElement?.blur?.();
@@ -7376,6 +7458,95 @@ document.addEventListener("DOMContentLoaded",()=>{
 
 
 <script>
+/* V17.11 — Segurança OWNER / Fase 2 */
+let ownerSecurityResolve=null;
+let ownerSecurityReject=null;
+
+async function securityApiAdmin(url,opts={}){
+  const r=await fetch(url,{credentials:"same-origin",cache:"no-store",...opts,headers:{Accept:"application/json",...(opts.body?{"Content-Type":"application/json"}:{}),...(opts.headers||{})}});
+  let d={};try{d=await r.json();}catch(_){}
+  if(!r.ok){const e=new Error(d.error||`HTTP ${r.status}`);e.status=r.status;e.code=d.code||"";throw e;}
+  return d;
+}
+function abrirOwnerSecurityModal(motivo){
+  return new Promise((resolve,reject)=>{
+    ownerSecurityResolve=resolve;ownerSecurityReject=reject;
+    const modal=document.getElementById("ownerSecurityModal");
+    document.getElementById("ownerModalReason").textContent=motivo||"Operação crítica do Noromak";
+    document.getElementById("ownerModalError").classList.remove("show");
+    document.getElementById("ownerModalError").textContent="";
+    document.getElementById("ownerModalPassword").value="";
+    document.getElementById("ownerModalCode").value="";
+    modal.classList.add("open");modal.setAttribute("aria-hidden","false");
+    setTimeout(()=>document.getElementById("ownerModalPassword")?.focus(),80);
+  });
+}
+function fecharOwnerSecurityModal(ok){
+  document.getElementById("ownerSecurityModal")?.classList.remove("open");
+  document.getElementById("ownerSecurityModal")?.setAttribute("aria-hidden","true");
+  const resolve=ownerSecurityResolve,reject=ownerSecurityReject;
+  ownerSecurityResolve=ownerSecurityReject=null;
+  if(ok)resolve?.(true);else reject?.(new Error("Operação cancelada pelo proprietário."));
+}
+async function confirmarOwnerSeguranca(motivo){
+  const status=await securityApiAdmin("/expedicao/api/security/status");
+  if(!status.owner?.current_user_is_owner)throw new Error("Esta sessão não pertence ao OWNER do sistema.");
+  if(!status.security?.owner_2fa_configured)throw new Error("O 2FA do OWNER ainda não está configurado no servidor.");
+  if(status.security?.critical_reauth_active)return true;
+  return abrirOwnerSecurityModal(motivo);
+}
+document.addEventListener("DOMContentLoaded",()=>{
+  const form=document.getElementById("ownerSecurityForm");
+  form?.addEventListener("submit",async e=>{
+    e.preventDefault();
+    const btn=document.getElementById("ownerModalConfirm"),err=document.getElementById("ownerModalError");
+    btn.disabled=true;btn.textContent="Validando...";
+    err.classList.remove("show");
+    try{
+      await securityApiAdmin("/expedicao/api/security/owner/reauth",{method:"POST",body:JSON.stringify({
+        password:document.getElementById("ownerModalPassword").value,
+        code:document.getElementById("ownerModalCode").value
+      })});
+      fecharOwnerSecurityModal(true);
+      carregarSegurancaAdmin().catch(()=>{});
+    }catch(ex){
+      err.textContent=ex.message;err.classList.add("show");
+      document.getElementById("ownerModalCode").value="";
+      document.getElementById("ownerModalCode").focus();
+    }finally{btn.disabled=false;btn.textContent="Confirmar proprietário";}
+  });
+  document.getElementById("ownerSecurityModal")?.addEventListener("click",e=>{if(e.target.id==="ownerSecurityModal")fecharOwnerSecurityModal(false);});
+});
+async function carregarSegurancaAdmin(){
+  const d=await securityApiAdmin("/expedicao/api/security/status");
+  const sec=d.security||{},owner=d.owner||{};
+  const badge=(id,ok,textOk,textOff)=>{const el=document.getElementById(id);if(!el)return;el.className="security-badge "+(ok?"ok":"off");el.textContent=ok?textOk:textOff;};
+  document.getElementById("secOwnerName")&&(document.getElementById("secOwnerName").textContent=`OWNER · ${owner.username||"—"}`);
+  document.getElementById("secOwnerAccount")&&(document.getElementById("secOwnerAccount").textContent=owner.username||"—");
+  badge("secOwnerStatus",owner.current_user_is_owner,"Sessão OWNER","Não é OWNER");
+  badge("sec2fa",sec.owner_2fa_configured,"Ativo","Não configurado");
+  badge("secRecovery",sec.owner_recovery_codes_configured,`${sec.owner_recovery_code_count||0} configurados`,"Não configurados");
+  document.getElementById("secPbkdf")&&(document.getElementById("secPbkdf").textContent=Number(sec.password_pbkdf2_iterations||0).toLocaleString("pt-BR")+" iterações");
+  document.getElementById("secSession")&&(document.getElementById("secSession").textContent=Math.round((sec.session_ttl_seconds||0)/3600)+"h");
+  document.getElementById("secReauthWindow")&&(document.getElementById("secReauthWindow").textContent=Math.round((sec.critical_reauth_ttl_seconds||0)/60)+" min");
+  badge("secReauthState",sec.critical_reauth_active,`Liberado · ${sec.critical_reauth_remaining_seconds||0}s`,"Bloqueado");
+  badge("secSecrets",sec.secrets_server_side,"Somente servidor","Revisar");
+  document.getElementById("secVersion")&&(document.getElementById("secVersion").textContent=d.version||"—");
+}
+async function testarReautenticacaoOwnerAdmin(){
+  try{await confirmarOwnerSeguranca("Teste de segurança do OWNER");alert("OWNER validado. Operações críticas estão liberadas temporariamente nesta sessão.");await carregarSegurancaAdmin();}
+  catch(e){if(!String(e.message).includes("cancelada"))alert(e.message);}
+}
+async function salvarUsuariosProtegidoAdmin(){
+  try{
+    await confirmarOwnerSeguranca("Salvar usuários, administradores e permissões");
+    const ok=salvarUsuariosAdmin(true);
+    if(ok)setTimeout(()=>carregarSegurancaAdmin().catch(()=>{}),300);
+  }catch(e){if(!String(e.message).includes("cancelada"))alert("Segurança OWNER: "+e.message);}
+}
+</script>
+
+<script>
 /* Mercado Livre API — V11.8 */
 function mlHtmlSeguro(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
 function mlDataHora(v){
@@ -7447,7 +7618,7 @@ async function copiarTokenZebraAdmin(){
 }
 async function renovarTokenZebraAdmin(){
   if(!confirm("Renovar o token? O agente instalado precisará ser configurado novamente com o novo token."))return;
-  try{await mlApiAdmin("/expedicao/api/print/agent/rotate-token",{method:"POST",body:"{}"});await carregarAgenteZebraAdmin();alert("Token renovado.");}
+  try{await confirmarOwnerSeguranca("Renovar a credencial do agente Zebra");await mlApiAdmin("/expedicao/api/print/agent/rotate-token",{method:"POST",body:"{}"});await carregarAgenteZebraAdmin();alert("Token renovado.");}
   catch(e){alert("Erro ao renovar token: "+e.message);}
 }
 
@@ -7488,7 +7659,7 @@ async function sincronizarShopeeAdmin(){
 }
 async function desconectarShopeeAdmin(){
   if(!confirm("Desconectar a Shopee? Os pedidos já importados serão mantidos."))return;
-  try{await mlApiAdmin("/expedicao/api/integracoes/shopee/disconnect",{method:"POST",body:"{}"});await carregarIntegracaoShopeeAdmin();}
+  try{await confirmarOwnerSeguranca("Desconectar a integração da Shopee");await mlApiAdmin("/expedicao/api/integracoes/shopee/disconnect",{method:"POST",body:"{}"});await carregarIntegracaoShopeeAdmin();}
   catch(e){alert("Erro ao desconectar Shopee: "+e.message);}
 }
 
@@ -7553,6 +7724,7 @@ async function atualizarNomesNfeMercadoLivreAdmin(){
 async function desconectarMercadoLivreAdmin(){
   if(!confirm("Desconectar a conta do Mercado Livre? Os pedidos já importados serão mantidos."))return;
   try{
+    await confirmarOwnerSeguranca("Desconectar a integração do Mercado Livre");
     await mlApiAdmin("/expedicao/api/integracoes/mercadolivre/disconnect",{method:"POST",body:"{}"});
     await carregarIntegracaoMercadoLivreAdmin();await carregarLogsMercadoLivreAdmin();
   }catch(e){alert("Erro ao desconectar: "+e.message);}
@@ -7646,5 +7818,19 @@ window.addEventListener("storage",e=>{if(["conf_pedidos","conf_logs","conf_histo
   });
 })();
 </script>
+
+<div id="ownerSecurityModal" class="owner-modal-backdrop" aria-hidden="true">
+  <div class="owner-modal" role="dialog" aria-modal="true" aria-labelledby="ownerModalTitle">
+    <div class="owner-modal-head"><h3 id="ownerModalTitle">🛡️ Confirmação do Proprietário</h3><p id="ownerModalReason">Operação crítica do Noromak</p></div>
+    <form id="ownerSecurityForm" class="owner-modal-body">
+      <div class="owner-modal-note">Confirme sua identidade com a <b>senha do OWNER</b> e o código atual do <b>Authenticator</b>. A liberação vale somente nesta sessão por alguns minutos.</div>
+      <div id="ownerModalError" class="owner-modal-error"></div>
+      <div class="owner-modal-field"><label for="ownerModalPassword">Senha do OWNER</label><input id="ownerModalPassword" type="password" autocomplete="current-password" required></div>
+      <div class="owner-modal-field"><label for="ownerModalCode">Código 2FA</label><input id="ownerModalCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="12" placeholder="000000 ou código de recuperação" required></div>
+      <div class="owner-modal-actions"><button type="button" class="btn-secundario" onclick="fecharOwnerSecurityModal(false)">Cancelar</button><button id="ownerModalConfirm" type="submit" class="btn-primario">Confirmar proprietário</button></div>
+    </form>
+  </div>
+</div>
+
 </body>
 </html>

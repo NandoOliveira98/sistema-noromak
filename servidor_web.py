@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.10-SECURITY-PHASE2"
+APP_VERSION = "17.11-SECURITY-PHASE2-FINAL"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -1449,9 +1449,29 @@ def verify_owner_second_factor(code: str) -> tuple[bool, str]:
     if recovery_hash(code) in OWNER_RECOVERY_HASHES: return True, "recovery"
     return False, ""
 
+def owner_reauth_rate_key(ctx: dict[str, Any] | None) -> str:
+    return str((ctx or {}).get("session_key") or (ctx or {}).get("username") or "owner")
+
+def owner_reauth_limited(ctx: dict[str, Any] | None) -> bool:
+    now = time.time()
+    key = owner_reauth_rate_key(ctx)
+    with AUTH_LOCK:
+        recent = [x for x in OWNER_REAUTH_FAILURES.get(key, []) if x > now - 300]
+        OWNER_REAUTH_FAILURES[key] = recent
+        return len(recent) >= 5
+
+def owner_reauth_failure(ctx: dict[str, Any] | None) -> None:
+    with AUTH_LOCK:
+        OWNER_REAUTH_FAILURES.setdefault(owner_reauth_rate_key(ctx), []).append(time.time())
+
+def owner_reauth_clear(ctx: dict[str, Any] | None) -> None:
+    with AUTH_LOCK:
+        OWNER_REAUTH_FAILURES.pop(owner_reauth_rate_key(ctx), None)
+
 def verify_user_password(username: str, password: str) -> bool:
-    row = DB.execute("SELECT * FROM app_users WHERE username=?", (str(username or "").strip().lower(),)).fetchone()
-    return bool(row and row["active"] and verify_password(str(password or ""), row["password_hash"]))
+    with DB_LOCK:
+        row = DB.execute("SELECT * FROM app_users WHERE username=?", (str(username or "").strip().lower(),)).fetchone()
+    return bool(row and row["active"] and password_matches(str(password or ""), row))
 
 def password_digest(password: str, salt: bytes | None = None, iterations: int = PASSWORD_ITERATIONS) -> tuple[str, str, int]:
     if salt is None:
@@ -2664,6 +2684,9 @@ def session_context(handler: BaseHTTPRequestHandler) -> dict[str, Any] | None:
         "app_active": True,
         "permissions": user_permissions_from_row(row),
         "area": str(row["area"] or "conferencia"),
+        # Identificador irreversível da sessão para a janela de reautenticação crítica.
+        "session_key": token_hash,
+        "is_owner": is_owner_username(row["username"]),
     }
 
 
@@ -8248,7 +8271,7 @@ class AppHandler(BaseHTTPRequestHandler):
         if not require_owner_context(ctx):
             self.send_json({"error": "Somente o proprietário pode executar esta ação."}, 403)
             return False
-        token = str((ctx or {}).get("token") or "")
+        token = str((ctx or {}).get("session_key") or "")
         if CRITICAL_REAUTH.get(token, 0) < time.time():
             self.send_json({"error": "Reautenticação OWNER necessária (senha + 2FA).", "code": "OWNER_REAUTH_REQUIRED"}, 428)
             return False
@@ -8513,11 +8536,19 @@ class AppHandler(BaseHTTPRequestHandler):
                     "ok": True, "version": APP_VERSION,
                     "owner": {"username": OWNER_USERNAME, "current_user_is_owner": require_owner_context(ctx)},
                     "security": {
-                        "owner_lock": True, "user_management_owner_only": True,
-                        "integration_disconnect_owner_only": True, "print_token_rotation_owner_only": True,
+                        "owner_lock": True,
+                        "user_management_owner_only": True,
+                        "integration_disconnect_owner_only": True,
+                        "print_token_rotation_owner_only": True,
                         "password_pbkdf2_iterations": PASSWORD_ITERATIONS,
                         "session_ttl_seconds": SESSION_TTL_SECONDS,
-                        "secrets_server_side": True
+                        "secrets_server_side": True,
+                        "owner_2fa_configured": bool(OWNER_TOTP_SECRET),
+                        "owner_recovery_codes_configured": bool(OWNER_RECOVERY_HASHES),
+                        "owner_recovery_code_count": len(OWNER_RECOVERY_HASHES),
+                        "critical_reauth_ttl_seconds": CRITICAL_REAUTH_TTL_SECONDS,
+                        "critical_reauth_active": CRITICAL_REAUTH.get(str(ctx.get("session_key") or ""), 0) >= time.time(),
+                        "critical_reauth_remaining_seconds": max(0, int(CRITICAL_REAUTH.get(str(ctx.get("session_key") or ""), 0) - time.time())),
                     }
                 })
             return
@@ -8552,17 +8583,23 @@ class AppHandler(BaseHTTPRequestHandler):
             if ctx is not None:
                 if not require_owner_context(ctx):
                     self.send_json({"error": "Somente o proprietário."}, 403); return
+                if owner_reauth_limited(ctx):
+                    audit(ctx["username"], "security.owner.reauth_blocked", "rate_limit")
+                    self.send_json({"error": "Muitas tentativas. Aguarde 5 minutos para tentar novamente."}, 429); return
                 body = self.read_json()
                 if not verify_user_password(ctx["username"], str(body.get("password") or "")):
+                    owner_reauth_failure(ctx)
                     audit(ctx["username"], "security.owner.reauth_failed", "password")
                     self.send_json({"error": "Senha inválida."}, 401); return
                 if not OWNER_TOTP_SECRET:
                     self.send_json({"error": "2FA OWNER não configurado.", "code": "OWNER_2FA_NOT_CONFIGURED"}, 409); return
                 ok2, method = verify_owner_second_factor(str(body.get("code") or ""))
                 if not ok2:
+                    owner_reauth_failure(ctx)
                     audit(ctx["username"], "security.owner.reauth_failed", "2fa")
                     self.send_json({"error": "Código 2FA inválido."}, 401); return
-                CRITICAL_REAUTH[str(ctx.get("token") or "")] = time.time() + CRITICAL_REAUTH_TTL_SECONDS
+                CRITICAL_REAUTH[str(ctx.get("session_key") or "")] = time.time() + CRITICAL_REAUTH_TTL_SECONDS
+                owner_reauth_clear(ctx)
                 audit(ctx["username"], "security.owner.reauth_ok", method)
                 self.send_json({"ok": True, "valid_for_seconds": CRITICAL_REAUTH_TTL_SECONDS, "method": method})
             return
