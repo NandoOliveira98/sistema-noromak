@@ -1,0 +1,14 @@
+NOROMAK V17.15 — CORREÇÃO DEMANDA FULL / LEITOR EXCEL
+
+Causa encontrada:
+- O HTML original carregava o SheetJS a partir de um bloco Base64 e executava o código com eval().
+- A Política de Segurança de Conteúdo (CSP) do Noromak bloqueia eval por segurança.
+- Por isso o navegador mostrava: "O leitor de Excel não foi carregado".
+
+Correção:
+- SheetJS foi extraído para APP/xlsx.full.min.js.
+- A página agora carrega /expedicao/xlsx.full.min.js como arquivo local do próprio servidor.
+- Nenhum CDN e nenhum eval são necessários.
+- Compatível com a CSP atual (script-src 'self').
+- Adicionado indicador "Excel: pronto" no topo da página.
+- Mantidas todas as funções da V17.14, incluindo proteção de pedidos pendentes.
