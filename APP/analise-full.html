@@ -400,6 +400,9 @@
         <article class="apollo-card"><small>Estoque não informado</small><strong id="apolloKpiUnknown">0</strong></article>
       </div>
 
+            <div class="message" style="margin:0 0 12px;border-color:#b9d2ef;background:#eef6ff;color:#123b63">
+        <b>SKU Apollo considerado:</b> somente o trecho após o primeiro “-”. Ex.: <b>157507-0893556005 → 0893556005</b> e <b>105341-816.0004-0 → 816.0004-0</b>.
+      </div>
       <div class="toolbar" aria-label="Filtros da análise">
         <label class="visually-hidden" for="searchInput">Buscar produto, SKU ou Código ML</label>
         <input id="searchInput" class="field field--search" type="search" placeholder="Buscar produto, SKU ou Código ML">
@@ -807,7 +810,7 @@
           <tr data-code="${escapeHtml(item.code)}">
             <td class="num">${formatNumber(item.rank)}</td>
             <td class="num">${formatNumber(item.priority)}</td>
-            <td class="code">${escapeHtml(item.sku || "—")}</td>
+            <td class="code">${escapeHtml(item.sku || "—")}<div class="apollo-branches">Apollo: ${escapeHtml(skuApolloNormalizado(item.sku) || "—")}</div></td>
             <td class="code">${escapeHtml(item.code || "—")}</td>
             <td class="product">${escapeHtml(item.product)}</td>
             <td class="num">${formatNumber(item.sales)}</td>
@@ -826,6 +829,16 @@
         `).join("");
       }
 
+
+
+      function skuApolloNormalizado(valor) {
+        const bruto = String(valor || "").trim();
+        if (!bruto) return "";
+        const pos = bruto.indexOf("-");
+        if (pos < 0) return bruto;
+        const sufixo = bruto.slice(pos + 1).trim();
+        return sufixo || bruto;
+      }
 
       function apolloTargetNeed(item) {
         const days = Number(element("targetDays").value || 30);
@@ -855,7 +868,12 @@
           const filial = Number(element("apolloBranch").value || 0);
           const items = state.data
             .filter(item => item.sku)
-            .map(item => ({ sku: item.sku, need: apolloTargetNeed(item) }));
+            .map(item => ({
+              sku: skuApolloNormalizado(item.sku),
+              skuOriginal: item.sku,
+              need: apolloTargetNeed(item)
+            }))
+            .filter(item => item.sku);
 
           const chunkSize = 120;
           const bySku = new Map();
@@ -875,11 +893,12 @@
           }
 
           state.data.forEach(item => {
-            const r = bySku.get(String(item.sku || "").trim().toUpperCase());
+            const skuApollo = skuApolloNormalizado(item.sku);
+            const r = bySku.get(String(skuApollo || "").trim().toUpperCase());
             if (!r) {
               item.apolloAvailable = null; item.apolloShortage = null;
               item.apolloSituation = "NÃO INFORMADO"; item.apolloBranches = [];
-              item.apolloError = item.sku ? "SKU não retornado pelo Apollo." : "Produto sem SKU.";
+              item.apolloError = item.sku ? `SKU Apollo ${skuApolloNormalizado(item.sku)} não retornado.` : "Produto sem SKU.";
               return;
             }
             item.apolloAvailable = r.stock_known ? Number(r.available || 0) : null;
@@ -923,6 +942,7 @@
           "Ranking": item.rank,
           "Prioridade": item.priority,
           "SKU": item.sku,
+          "SKU Apollo": skuApolloNormalizado(item.sku),
           "Código ML": item.code,
           "Código universal": item.universal,
           "Produto": item.product,
