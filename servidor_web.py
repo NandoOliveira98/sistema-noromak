@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.18-SHOPEE-PEDIDOS-LIVE"
+APP_VERSION = "17.19-SHOPEE-NOME-CLIENTE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -3195,7 +3195,7 @@ def shopee_order_details(order_sns: list[str]) -> list[dict[str, Any]]:
     path = "/api/v2/order/get_order_detail"
     details: list[dict[str, Any]] = []
     unique = list(dict.fromkeys(str(x).strip() for x in order_sns if str(x).strip()))
-    optional = "buyer_username,recipient_address,item_list,package_list,shipping_carrier,invoice_data"
+    optional = "buyer_user_id,buyer_username,buyer_name,buyer_phone_number,recipient_address,address,item_list,package_list,shipping_carrier,invoice_data,buyer_cpf_id,buyer_cnpj_id"
     for offset in range(0, len(unique), 50):
         batch = unique[offset:offset + 50]
         data = shopee_api_get(path, {
@@ -3223,7 +3223,27 @@ def _shopee_build_pending_lines(order: dict[str, Any], package_numbers: list[str
     if not order_sn:
         return []
     recipient = order.get("recipient_address") if isinstance(order.get("recipient_address"), dict) else {}
-    client = str(recipient.get("name") or order.get("buyer_username") or "").strip()
+    address = order.get("address") if isinstance(order.get("address"), dict) else {}
+
+    def _shopee_real_text(*values: Any) -> str:
+        # A API pode devolver dados mascarados como ****. Não grava máscara como nome.
+        for value in values:
+            text = str(value or "").strip()
+            if not text:
+                continue
+            visible = re.sub(r"[\s*•xX._-]+", "", text)
+            if visible:
+                return text
+        return ""
+
+    # Para lojas BR a Open Platform pode disponibilizar buyer_name como campo
+    # opcional. Preferimos esse campo e usamos endereço/username apenas como fallback.
+    client = _shopee_real_text(
+        order.get("buyer_name"),
+        recipient.get("name"),
+        address.get("name"),
+        order.get("buyer_username"),
+    )
     status = str(order.get("order_status") or "READY_TO_SHIP").strip()
     packages = order.get("package_list") if isinstance(order.get("package_list"), list) else []
     api_packages = [str(x.get("package_number") or "").strip() for x in packages if isinstance(x, dict) and str(x.get("package_number") or "").strip()]

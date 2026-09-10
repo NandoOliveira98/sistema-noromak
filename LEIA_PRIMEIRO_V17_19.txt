@@ -1,0 +1,9 @@
+V17.19 — SHOPEE NOME DO CLIENTE
+
+- Adiciona buyer_name, buyer_phone_number e address aos campos opcionais do get_order_detail.
+- Prioriza buyer_name para a coluna Cliente.
+- Usa recipient_address.name, address.name e buyer_username como fallback.
+- Ignora valores totalmente mascarados como **** para não gravar máscara como nome do cliente.
+- Mantém toda a sincronização de pedidos da V17.18.
+
+Após publicar, clique novamente em Integrações > Shopee > Sincronizar agora para atualizar os pedidos já importados.
