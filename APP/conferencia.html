@@ -3561,8 +3561,49 @@ function enriquecerPedidosComBancoProdutos(){
   const mapa=new Map();produtos.forEach(p=>{const sku=normalizarIdentificadorExato(extrairCampo(p,"SKU"));const ean=normalizarIdentificadorExato(extrairCampo(p,"Código de Barras"));if(sku)mapa.set(sku,p);if(ean)mapa.set(ean,p);});
   dadosPedidos.forEach(item=>{const p=mapa.get(normalizarIdentificadorExato(extrairCampo(item,"SKU")))||mapa.get(normalizarIdentificadorExato(extrairCampo(item,"Código de Barras")));if(!p)return;["SKU","Código de Barras","Descrição","Rua","Módulo","Prateleira","Nível","Posição","Foto"].forEach(c=>{if(!extrairCampo(item,c)&&extrairCampo(p,c))item[c]=extrairCampo(p,c);});});
 }
+function removerLinhasArtificiaisKitShopee(rows){
+  if(!Array.isArray(rows)||rows.length<2)return Array.isArray(rows)?rows:[];
+  const porPedido=new Map();
+  rows.forEach((row,idx)=>{
+    if(obterMarketplaceItem(row)!=="shopee")return;
+    const pedido=normalizarIdentificadorExato(extrairCampo(row,"Pedido"));
+    if(!pedido)return;
+    if(!porPedido.has(pedido))porPedido.set(pedido,[]);
+    porPedido.get(pedido).push({row,idx});
+  });
+  const remover=new Set();
+  porPedido.forEach(grupo=>{
+    const skusReais=new Set();
+    grupo.forEach(({row})=>{
+      const sku=String(extrairCampo(row,"SKU")||"").trim();
+      if(sku&&!sku.includes("/"))skusReais.add(normalizarIdentificadorExato(sku));
+    });
+    grupo.forEach(({row,idx})=>{
+      const sku=String(extrairCampo(row,"SKU")||"").trim();
+      if(!sku.includes("/"))return;
+      const partes=sku.split("/").map(x=>normalizarIdentificadorExato(x)).filter(Boolean);
+      if(partes.length<2)return;
+      const unicas=[...new Set(partes)];
+      if(unicas.length<2)return;
+      if(unicas.every(parte=>skusReais.has(parte))) remover.add(idx);
+    });
+  });
+  if(!remover.size)return rows;
+  return rows.filter((_,idx)=>!remover.has(idx));
+}
+
 const carregarDadosMemoriaOriginalBanco=carregarDadosMemoria;
-carregarDadosMemoria=function(){carregarDadosMemoriaOriginalBanco();enriquecerPedidosComBancoProdutos();verificarStatusPlanilhaLogin();};
+carregarDadosMemoria=function(){
+  carregarDadosMemoriaOriginalBanco();
+  enriquecerPedidosComBancoProdutos();
+  const antes=dadosPedidos.length;
+  dadosPedidos=removerLinhasArtificiaisKitShopee(dadosPedidos);
+  if(dadosPedidos.length!==antes){
+    try{appStorage.setItem("conf_pedidos",JSON.stringify(dadosPedidos));}catch(_){}
+    invalidarCachesPedidosDisponiveis();
+  }
+  verificarStatusPlanilhaLogin();
+};
 window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_em"||event.key==="conf_produtos"){carregarDadosMemoria();renderizarListaPedidos();}});
 
 </script>
