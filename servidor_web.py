@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.20-SHOPEE-DADOS-FISCAIS"
+APP_VERSION = "17.21-SHOPEE-RECIPIENTE-NOME"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -3195,7 +3195,7 @@ def shopee_order_details(order_sns: list[str]) -> list[dict[str, Any]]:
     path = "/api/v2/order/get_order_detail"
     details: list[dict[str, Any]] = []
     unique = list(dict.fromkeys(str(x).strip() for x in order_sns if str(x).strip()))
-    optional = "buyer_user_id,buyer_username,buyer_name,buyer_phone_number,recipient_address,address,item_list,package_list,shipping_carrier,invoice_data,buyer_cpf_id,buyer_cnpj_id"
+    optional = "recipient_address,item_list,package_list,shipping_carrier,invoice_data,buyer_cpf_id,buyer_cnpj_id,buyer_user_id,buyer_username,buyer_name,buyer_phone_number"
     for offset in range(0, len(unique), 50):
         batch = unique[offset:offset + 50]
         data = shopee_api_get(path, {
@@ -3239,8 +3239,8 @@ def _shopee_build_pending_lines(order: dict[str, Any], package_numbers: list[str
     # Nome usado na expedição/NF-e: somente nome real/fiscal. buyer_username é
     # identificador da conta Shopee e NUNCA deve preencher a coluna Cliente.
     client = _shopee_real_text(
-        order.get("buyer_name"),
         recipient.get("name"),
+        order.get("buyer_name"),
         address.get("name"),
     ) or "NOME NÃO DISPONÍVEL"
     buyer_username = str(order.get("buyer_username") or "").strip()
