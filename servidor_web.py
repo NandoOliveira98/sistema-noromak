@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.23-SHOPEE-ETIQUETAS-LIVE"
+APP_VERSION = "17.24-SHOPEE-ETIQUETAS-FIX"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -3199,14 +3199,105 @@ def _shopee_logistics_order_list(shipments: list[dict[str,str]]) -> list[dict[st
     return [{"order_sn":x["order_sn"], **({"package_number":x["package_number"]} if x.get("package_number") else {})} for x in shipments if x.get("order_sn")]
 
 
+def _shopee_extract_zpl(raw: bytes) -> str:
+    """Extrai ZPL de resposta direta ou ZIP da Shopee, quando disponível."""
+    if not raw:
+        return ""
+    candidates: list[bytes] = [raw]
+    if raw[:4] == b"PK\x03\x04":
+        try:
+            with zipfile.ZipFile(io.BytesIO(raw)) as zf:
+                for name in zf.namelist():
+                    if name.lower().endswith((".zpl", ".txt", ".prn")):
+                        candidates.append(zf.read(name))
+        except Exception:
+            pass
+    for blob in candidates:
+        for enc in ("utf-8", "latin-1"):
+            try:
+                text = blob.decode(enc, errors="ignore")
+            except Exception:
+                continue
+            pos = text.find("^XA")
+            if pos >= 0 and "^XZ" in text[pos:]:
+                return text[pos:].strip()
+    return ""
+
+
+def _shopee_store_linked_label(order_sn: str, package_number: str, zpl: str) -> bool:
+    """Vincula a etiqueta ZPL Shopee ao banco usado pela Expedição/Conferência."""
+    order_sn = str(order_sn or "").strip()
+    package_number = str(package_number or "").strip()
+    if not order_sn or not str(zpl or "").strip():
+        return False
+    raw, _, _ = get_storage("conf_etiquetas")
+    try:
+        bank = json.loads(raw) if raw else {}
+    except Exception:
+        bank = {}
+    if not isinstance(bank, dict):
+        bank = {}
+    bank["version"] = max(8, int(bank.get("version") or 0))
+    bank.setdefault("registros", {})
+    bank.setdefault("ordem", [])
+    bank.setdefault("porChave", {})
+    bank.setdefault("avisos", [])
+    bank.setdefault("auditoria", [])
+    bank.setdefault("resumo", {})
+    bank.setdefault("vinculados", {})
+
+    rid = "etq_shopee_api_" + hashlib.sha1((order_sn + "|" + package_number).encode("utf-8")).hexdigest()[:18]
+    keys = [x for x in (order_sn, package_number) if x]
+    record = {
+        "id": rid,
+        "marketplace": "shopee",
+        "envio": zpl,
+        "danfe": "",
+        "arquivo": f"Shopee API · pedido {order_sn}",
+        "metadados": {"pedido": order_sn, "package_number": package_number, "rastreio": "", "nf": "", "chaveAcesso": ""},
+        "chaves": keys,
+        "vinculadoA": [order_sn],
+        "pedido": order_sn,
+        "vinculo": "api_shopee_ready_to_print",
+        "origem": "api_shopee",
+        "adicionadaEm": now_iso(),
+        "adicionadaPor": "shopee-api",
+    }
+    bank["registros"][rid] = record
+    if rid not in bank["ordem"]:
+        bank["ordem"].append(rid)
+    bank["porChave"] = {}
+    for record_id in bank["ordem"]:
+        rec = bank["registros"].get(record_id)
+        if not isinstance(rec, dict):
+            continue
+        for key in rec.get("chaves") or []:
+            key = str(key or "").strip()
+            if not key:
+                continue
+            bank["porChave"].setdefault(key, [])
+            if record_id not in bank["porChave"][key]:
+                bank["porChave"][key].append(record_id)
+    bank["atualizadoEm"] = now_iso()
+    if not any(isinstance(a, dict) and a.get("etiqueta") == rid for a in bank["auditoria"]):
+        bank["auditoria"].append({"marketplace":"shopee","pedido":order_sn,"criterio":"api_ready_to_print","etiqueta":rid,"arquivo":record["arquivo"]})
+        bank["auditoria"] = bank["auditoria"][-250:]
+    save_storage("conf_etiquetas", raw, json_dumps(bank), False,
+                 actor="shopee-api", actor_role="sistema",
+                 source_screen="API Shopee", change_method="Etiqueta automática Shopee",
+                 client_ip="127.0.0.1")
+    return True
+
+
 def shopee_sync_shipping_documents(shipments: list[dict[str,str]]) -> dict[str,Any]:
     """Cria/consulta/baixa documentos de envio Shopee sem bloquear a sincronização.
     Documentos ainda PROCESSING ficam para a próxima sincronização.
     """
-    summary={"consultados":0,"criados":0,"prontos":0,"baixados":0,"pendentes":0,"erros":0,"data_info_ok":0,"data_info_imagem":0}
+    summary={"consultados":0,"criados":0,"prontos":0,"baixados":0,"vinculados":0,"nao_zpl":0,"pendentes":0,"erros":0,"data_info_ok":0,"data_info_imagem":0}
     orders=_shopee_logistics_order_list(shipments)
     if not orders: return summary
-    labels_dir=DATA_DIR / "shopee_labels"; labels_dir.mkdir(parents=True, exist_ok=True)
+    labels_dir = DB_PATH.parent / "shopee_labels"
+    labels_dir.mkdir(parents=True, exist_ok=True)
     for off in range(0,len(orders),50):
         batch=orders[off:off+50]; summary["consultados"] += len(batch)
         try:
@@ -3241,7 +3332,14 @@ def shopee_sync_shipping_documents(shipments: list[dict[str,str]]) -> dict[str,A
                             ext="pdf" if (raw.startswith(b"%PDF") or "pdf" in ctype.lower()) else "bin"
                             safe=re.sub(r"[^A-Za-z0-9_.-]+","_",order_sn+("_"+pkg if pkg else ""))
                             fp=labels_dir/f"{safe}.{ext}"; fp.write_bytes(raw); summary["baixados"] += 1
-                            shopee_log_event("shipping_document_download",f"order={order_sn}","OK",f"arquivo={fp.name}; bytes={len(raw)}; tipo={ctype[:80]}")
+                            zpl = _shopee_extract_zpl(raw)
+                            if zpl and _shopee_store_linked_label(order_sn, pkg, zpl):
+                                summary["vinculados"] += 1
+                                link_state = "VINCULADA_ZPL"
+                            else:
+                                summary["nao_zpl"] += 1
+                                link_state = "BAIXADA_SEM_ZPL"
+                            shopee_log_event("shipping_document_download",f"order={order_sn}","OK",f"arquivo={fp.name}; bytes={len(raw)}; tipo={ctype[:80]}; estado={link_state}")
                     except Exception as e:
                         summary["erros"] += 1; shopee_log_event("shipping_document_download",f"order={order_sn}","ERRO",str(e)[:500])
                 elif st=="PROCESSING": summary["pendentes"] += 1
@@ -3346,14 +3444,16 @@ def _shopee_build_pending_lines(order: dict[str, Any], package_numbers: list[str
                 return text
         return ""
 
-    # Nome usado na expedição/NF-e: somente nome real/fiscal. buyer_username é
-    # identificador da conta Shopee e NUNCA deve preencher a coluna Cliente.
+    # Nome usado na expedição/NF-e: prioriza nome real. A Shopee BR está
+    # mascarando recipient_address.name nesta conta; por solicitação operacional,
+    # usa buyer_username apenas como fallback visível para permitir conferência
+    # manual até que a API libere o nome fiscal completo.
+    buyer_username = str(order.get("buyer_username") or "").strip()
     client = _shopee_real_text(
         recipient.get("name"),
         order.get("buyer_name"),
         address.get("name"),
-    ) or "NOME NÃO DISPONÍVEL"
-    buyer_username = str(order.get("buyer_username") or "").strip()
+    ) or _shopee_real_text(buyer_username) or "NOME NÃO DISPONÍVEL"
     buyer_cpf = _shopee_real_text(order.get("buyer_cpf_id"))
     buyer_cnpj = _shopee_real_text(order.get("buyer_cnpj_id"))
     buyer_phone = _shopee_real_text(order.get("buyer_phone_number"), recipient.get("phone"), address.get("phone"))
@@ -3546,7 +3646,7 @@ def shopee_manual_sync() -> dict[str, Any]:
             "name_diagnostic": diag_counts,
             "shipping_documents": shipping_docs,
             "sync_started_at": sync_started,
-            "message": f"Shopee sincronizada: {len(order_sns)} pedido(s), {len(api_lines)} item(ns); etiquetas baixadas: {shipping_docs.get('baixados',0)}, pendentes: {shipping_docs.get('pendentes',0)}.",
+            "message": f"Shopee sincronizada: {len(order_sns)} pedido(s), {len(api_lines)} item(ns); etiquetas baixadas: {shipping_docs.get('baixados',0)}, vinculadas: {shipping_docs.get('vinculados',0)}, pendentes: {shipping_docs.get('pendentes',0)}.",
         }
     except Exception as exc:
         with DB_LOCK:

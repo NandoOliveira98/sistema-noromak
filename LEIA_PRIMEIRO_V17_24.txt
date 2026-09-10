@@ -1,0 +1,6 @@
+V17.24 — SHOPEE ETIQUETAS FIX
+
+- Corrige NameError DATA_DIR no fluxo de etiquetas Shopee.
+- Etiquetas passam a ser salvas em /home/expedicao/dados/shopee_labels (ou no diretório pai de EXP_DB_PATH).
+- Mantém prioridade de nome real do destinatário; quando a API Shopee BR mascara o nome, usa buyer_username como fallback operacional para permitir ajuste manual.
+- Preserva OAuth, refresh token, importação de pedidos e diagnóstico seguro.
