@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.19-SHOPEE-NOME-CLIENTE"
+APP_VERSION = "17.20-SHOPEE-DADOS-FISCAIS"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -3236,14 +3236,33 @@ def _shopee_build_pending_lines(order: dict[str, Any], package_numbers: list[str
                 return text
         return ""
 
-    # Para lojas BR a Open Platform pode disponibilizar buyer_name como campo
-    # opcional. Preferimos esse campo e usamos endereço/username apenas como fallback.
+    # Nome usado na expedição/NF-e: somente nome real/fiscal. buyer_username é
+    # identificador da conta Shopee e NUNCA deve preencher a coluna Cliente.
     client = _shopee_real_text(
         order.get("buyer_name"),
         recipient.get("name"),
         address.get("name"),
-        order.get("buyer_username"),
-    )
+    ) or "NOME NÃO DISPONÍVEL"
+    buyer_username = str(order.get("buyer_username") or "").strip()
+    buyer_cpf = _shopee_real_text(order.get("buyer_cpf_id"))
+    buyer_cnpj = _shopee_real_text(order.get("buyer_cnpj_id"))
+    buyer_phone = _shopee_real_text(order.get("buyer_phone_number"), recipient.get("phone"), address.get("phone"))
+
+    # Diagnóstico seguro: registra apenas presença/mascaramento dos campos, sem
+    # gravar tokens e sem colocar CPF/CNPJ no log de integração.
+    def _field_state(value: Any) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return "ausente"
+        return "visivel" if _shopee_real_text(text) else "mascarado"
+    shopee_name_diag = ";".join((
+        f"buyer_name={_field_state(order.get('buyer_name'))}",
+        f"recipient_name={_field_state(recipient.get('name'))}",
+        f"address_name={_field_state(address.get('name'))}",
+        f"buyer_username={_field_state(buyer_username)}",
+        f"buyer_cpf_id={_field_state(order.get('buyer_cpf_id'))}",
+        f"buyer_cnpj_id={_field_state(order.get('buyer_cnpj_id'))}",
+    ))
     status = str(order.get("order_status") or "READY_TO_SHIP").strip()
     packages = order.get("package_list") if isinstance(order.get("package_list"), list) else []
     api_packages = [str(x.get("package_number") or "").strip() for x in packages if isinstance(x, dict) and str(x.get("package_number") or "").strip()]
@@ -3283,6 +3302,12 @@ def _shopee_build_pending_lines(order: dict[str, Any], package_numbers: list[str
             "Quantidade de Kits": "",
             "Quantidade por Kit": "",
             "Cliente": client,
+            "NomeFiscalShopee": client if client != "NOME NÃO DISPONÍVEL" else "",
+            "UsuarioShopee": buyer_username,
+            "CPFShopee": buyer_cpf,
+            "CNPJShopee": buyer_cnpj,
+            "TelefoneShopee": buyer_phone,
+            "DiagnosticoNomeShopee": shopee_name_diag,
             "SKU": sku,
             "Quantidade": str(max(1, quantity)),
             "Código de Barras": "",
