@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.21-SHOPEE-RECIPIENTE-NOME"
+APP_VERSION = "17.22-SHOPEE-RECIPIENTE-DIAGNOSTICO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -3195,7 +3195,7 @@ def shopee_order_details(order_sns: list[str]) -> list[dict[str, Any]]:
     path = "/api/v2/order/get_order_detail"
     details: list[dict[str, Any]] = []
     unique = list(dict.fromkeys(str(x).strip() for x in order_sns if str(x).strip()))
-    optional = "recipient_address,item_list,package_list,shipping_carrier,invoice_data,buyer_cpf_id,buyer_cnpj_id,buyer_user_id,buyer_username,buyer_name,buyer_phone_number"
+    optional = "recipient_address,item_list,package_list,shipping_carrier,invoice_data,buyer_cpf_id,buyer_cnpj_id,buyer_user_id,buyer_username,buyer_name,buyer_phone_number,address"
     for offset in range(0, len(unique), 50):
         batch = unique[offset:offset + 50]
         data = shopee_api_get(path, {
@@ -3408,6 +3408,23 @@ def shopee_manual_sync() -> dict[str, Any]:
             DB.commit()
         shopee_log_event("orders_sync", f"shop_id={status.get('shop_id')}", "OK",
                          f"{len(order_sns)} pedido(s) para expedição; {len(api_lines)} linha(s); {removed} linha(s) API antiga(s) reconciliada(s).")
+        # Resumo seguro para diagnosticar o que a Shopee realmente liberou.
+        diag_counts = {"recipient_visivel": 0, "recipient_mascarado": 0, "recipient_ausente": 0, "buyer_visivel": 0}
+        for order in details:
+            recipient = order.get("recipient_address") if isinstance(order.get("recipient_address"), dict) else {}
+            rn = str(recipient.get("name") or "").strip()
+            bn = str(order.get("buyer_name") or "").strip()
+            def _visible_name(v: str) -> bool:
+                return bool(re.sub(r"[\s*•xX._-]+", "", v or ""))
+            if not rn:
+                diag_counts["recipient_ausente"] += 1
+            elif _visible_name(rn):
+                diag_counts["recipient_visivel"] += 1
+            else:
+                diag_counts["recipient_mascarado"] += 1
+            if _visible_name(bn):
+                diag_counts["buyer_visivel"] += 1
+        shopee_log_event("recipient_diag", f"shop_id={status.get('shop_id')}", "OK", json_dumps(diag_counts))
         return {
             "ok": True,
             "imported": imported_orders,
@@ -3415,6 +3432,7 @@ def shopee_manual_sync() -> dict[str, Any]:
             "lines_imported": len(api_lines),
             "removed_api_lines": removed,
             "detail_missing": max(0, len(order_sns) - len(detail_orders)),
+            "name_diagnostic": diag_counts,
             "sync_started_at": sync_started,
             "message": f"Shopee sincronizada: {len(order_sns)} pedido(s) aguardando expedição, {len(api_lines)} item(ns) importado(s).",
         }
