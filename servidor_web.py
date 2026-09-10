@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.17-SHOPEE-OAUTH-LIVE"
+APP_VERSION = "17.18-SHOPEE-PEDIDOS-LIVE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -3063,11 +3063,322 @@ def shopee_exchange_code(code: str, shop_id: str) -> dict[str, Any]:
     return {"ok": True, "shop_id": str(shop_int), "expire_in": expire_in}
 
 
+def shopee_refresh_access_token(force: bool = False) -> sqlite3.Row:
+    row = shopee_integration_row()
+    if not row or not str(row["shop_id"] or "").strip() or not str(row["refresh_token"] or "").strip():
+        raise RuntimeError("Shopee não possui refresh_token válido. Reconecte a loja.")
+    if not force and str(row["access_token"] or "").strip() and int(row["token_expires_at"] or 0) > int(time.time()) + 300:
+        return row
+
+    shop_id = int(str(row["shop_id"]).strip())
+    refresh_token = str(row["refresh_token"] or "").strip()
+    timestamp = int(time.time())
+    path = SHOPEE_REFRESH_PATH
+    sign = shopee_sign(path, timestamp)
+    url = SHOPEE_API_BASE + path + "?" + urlencode({
+        "partner_id": int(SHOPEE_PARTNER_ID), "timestamp": timestamp, "sign": sign,
+    })
+    payload = json.dumps({
+        "refresh_token": refresh_token,
+        "shop_id": shop_id,
+        "partner_id": int(SHOPEE_PARTNER_ID),
+    }).encode("utf-8")
+    req = urllib.request.Request(url, data=payload,
+        headers={"Content-Type": "application/json", "Accept": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", "replace")
+        raise RuntimeError(f"Shopee refresh HTTP {exc.code}: {body[:500]}")
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Falha de rede ao renovar token Shopee: {exc.reason}")
+    if not isinstance(data, dict) or data.get("error"):
+        raise RuntimeError(f"Shopee recusou a renovação do token: {data.get('error') or 'resposta inválida'} {data.get('message') or ''}".strip())
+    access_token = str(data.get("access_token") or "").strip()
+    new_refresh = str(data.get("refresh_token") or "").strip()
+    if not access_token or not new_refresh:
+        raise RuntimeError("Shopee não retornou novos tokens durante a renovação.")
+    expire_in = int(data.get("expire_in") or 14400)
+    with DB_LOCK:
+        DB.execute(
+            """UPDATE shopee_integration
+               SET access_token=?,refresh_token=?,token_expires_at=?,updated_at=?,last_error=''
+               WHERE id=1""",
+            (access_token, new_refresh, int(time.time()) + max(60, expire_in), now_iso()),
+        )
+        DB.commit()
+    shopee_log_event("oauth_refresh", f"shop_id={shop_id}", "OK", "Access token renovado automaticamente.")
+    row = shopee_integration_row()
+    if not row:
+        raise RuntimeError("Integração Shopee desapareceu após renovar o token.")
+    return row
+
+
+def shopee_api_get(path: str, params: dict[str, Any] | None = None, retry_auth: bool = True) -> dict[str, Any]:
+    row = shopee_refresh_access_token(False)
+    shop_id = str(row["shop_id"] or "").strip()
+    access_token = str(row["access_token"] or "").strip()
+    timestamp = int(time.time())
+    query = {
+        "partner_id": int(SHOPEE_PARTNER_ID),
+        "timestamp": timestamp,
+        "access_token": access_token,
+        "shop_id": int(shop_id),
+        "sign": shopee_sign(path, timestamp, access_token, shop_id),
+    }
+    if params:
+        for key, value in params.items():
+            if value is not None and value != "":
+                query[key] = value
+    url = SHOPEE_API_BASE + path + "?" + urlencode(query)
+    req = urllib.request.Request(url, headers={"Accept": "application/json"}, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=25) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", "replace")
+        if retry_auth and exc.code in (401, 403):
+            shopee_refresh_access_token(True)
+            return shopee_api_get(path, params, False)
+        raise RuntimeError(f"Shopee API HTTP {exc.code}: {body[:700]}")
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Falha de rede na Shopee API: {exc.reason}")
+    if not isinstance(data, dict):
+        raise RuntimeError("Resposta inválida da Shopee API.")
+    error = str(data.get("error") or "").strip()
+    if error:
+        auth_error = error.lower() in {"error_auth", "error_authentication", "invalid_access_token", "error_token"}
+        if retry_auth and auth_error:
+            shopee_refresh_access_token(True)
+            return shopee_api_get(path, params, False)
+        raise RuntimeError(f"Shopee API: {error} {data.get('message') or ''}".strip())
+    return data
+
+
+def shopee_current_shipments() -> list[dict[str, str]]:
+    """Lista o que realmente está aguardando expedição na Shopee.
+
+    get_shipment_list é preferido aqui porque não depende de janela de 15 dias e
+    retorna os pedidos/pacotes em READY_TO_SHIP/RETRY_SHIP.
+    """
+    path = "/api/v2/order/get_shipment_list"
+    cursor = ""
+    found: list[dict[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+    for _ in range(30):
+        params: dict[str, Any] = {"page_size": 100}
+        if cursor:
+            params["cursor"] = cursor
+        data = shopee_api_get(path, params)
+        response = data.get("response") if isinstance(data.get("response"), dict) else {}
+        order_list = response.get("order_list") if isinstance(response.get("order_list"), list) else []
+        for item in order_list:
+            if not isinstance(item, dict):
+                continue
+            order_sn = str(item.get("order_sn") or "").strip()
+            package_number = str(item.get("package_number") or "").strip()
+            key = (order_sn, package_number)
+            if order_sn and key not in seen:
+                found.append({"order_sn": order_sn, "package_number": package_number})
+                seen.add(key)
+        if not bool(response.get("more")):
+            break
+        next_cursor = str(response.get("next_cursor") or "").strip()
+        if not next_cursor or next_cursor == cursor:
+            break
+        cursor = next_cursor
+    return found
+
+
+def shopee_order_details(order_sns: list[str]) -> list[dict[str, Any]]:
+    path = "/api/v2/order/get_order_detail"
+    details: list[dict[str, Any]] = []
+    unique = list(dict.fromkeys(str(x).strip() for x in order_sns if str(x).strip()))
+    optional = "buyer_username,recipient_address,item_list,package_list,shipping_carrier,invoice_data"
+    for offset in range(0, len(unique), 50):
+        batch = unique[offset:offset + 50]
+        data = shopee_api_get(path, {
+            "order_sn_list": ",".join(batch),
+            "response_optional_fields": optional,
+        })
+        response = data.get("response") if isinstance(data.get("response"), dict) else {}
+        rows = response.get("order_list") if isinstance(response.get("order_list"), list) else []
+        details.extend(x for x in rows if isinstance(x, dict))
+    return details
+
+
+def _shopee_date(timestamp: Any) -> str:
+    try:
+        value = int(timestamp or 0)
+        if value > 0:
+            return datetime.fromtimestamp(value, timezone.utc).astimezone().strftime("%d/%m/%Y")
+    except Exception:
+        pass
+    return datetime.now().astimezone().strftime("%d/%m/%Y")
+
+
+def _shopee_build_pending_lines(order: dict[str, Any], package_numbers: list[str], products: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    order_sn = str(order.get("order_sn") or "").strip()
+    if not order_sn:
+        return []
+    recipient = order.get("recipient_address") if isinstance(order.get("recipient_address"), dict) else {}
+    client = str(recipient.get("name") or order.get("buyer_username") or "").strip()
+    status = str(order.get("order_status") or "READY_TO_SHIP").strip()
+    packages = order.get("package_list") if isinstance(order.get("package_list"), list) else []
+    api_packages = [str(x.get("package_number") or "").strip() for x in packages if isinstance(x, dict) and str(x.get("package_number") or "").strip()]
+    all_packages = list(dict.fromkeys([*package_numbers, *api_packages]))
+    invoice = order.get("invoice_data") if isinstance(order.get("invoice_data"), dict) else {}
+    invoice_number = str(invoice.get("number") or "").strip()
+    invoice_key = str(invoice.get("access_key") or "").strip()
+    shipping_carrier = str(order.get("shipping_carrier") or "").strip()
+    lines: list[dict[str, Any]] = []
+    for idx, item in enumerate(order.get("item_list") or []):
+        if not isinstance(item, dict):
+            continue
+        sku = str(item.get("model_sku") or item.get("item_sku") or "").strip()
+        if not sku:
+            continue
+        quantity = item.get("active_qty")
+        try:
+            quantity = int(quantity or 0)
+        except Exception:
+            quantity = 0
+        if quantity <= 0:
+            try:
+                quantity = int(item.get("model_quantity_purchased") or 1)
+            except Exception:
+                quantity = 1
+        description = str(item.get("item_name") or "").strip()
+        model_name = str(item.get("model_name") or "").strip()
+        if model_name and normalize(model_name) not in normalize(description):
+            description = f"{description} - {model_name}".strip(" -")
+        identity = f"{order_sn}|{item.get('item_id')}|{item.get('model_id')}|{item.get('line_item_id')}|{sku}|{idx}"
+        row = {
+            "Pedido": order_sn,
+            "Marketplace": "SHOPEE",
+            "Data do Pedido": _shopee_date(order.get("create_time")),
+            "Kit": "",
+            "Nome do Kit": "",
+            "Quantidade de Kits": "",
+            "Quantidade por Kit": "",
+            "Cliente": client,
+            "SKU": sku,
+            "Quantidade": str(max(1, quantity)),
+            "Código de Barras": "",
+            "Descrição": description,
+            "Rua": "", "Módulo": "", "Prateleira": "", "Nível": "", "Posição": "", "Foto": "",
+            "Código de Rastreio": "",
+            "NF": invoice_number,
+            "Nota Fiscal": invoice_number,
+            "Chave de Acesso": invoice_key,
+            "PacoteShopee": ",".join(all_packages),
+            "TransportadoraShopee": shipping_carrier,
+            "StatusShopee": status,
+            "StatusOrigemShopee": status,
+            "OrigemCadastro": "API_SHOPEE",
+            "ShopIdShopee": str((shopee_integration_row() or {"shop_id": ""})["shop_id"] if shopee_integration_row() else ""),
+            "SkuOrigemImportacao": sku,
+            "SkuPrincipalShopee": str(item.get("item_sku") or "").strip(),
+            "SkuReferenciaShopee": str(item.get("model_sku") or "").strip(),
+            "VariacaoShopee": model_name,
+            "ShopeeAtualizadoEm": now_iso(),
+            "CriadoEm": now_iso(),
+            "__uidLinha": "SHOPEEAPI_" + hashlib.sha1(identity.encode("utf-8")).hexdigest()[:20],
+        }
+        product = _ml_find_product(products, sku)
+        if product:
+            for field in ("SKU", "Código de Barras", "Descrição", "Rua", "Módulo", "Prateleira", "Nível", "Posição", "Foto"):
+                value = product.get(field)
+                if str(value or "").strip():
+                    row[field] = value
+        lines.append(row)
+    return lines
+
+
 def shopee_manual_sync() -> dict[str, Any]:
     status = shopee_status_payload()
     if not status["connected"]:
         raise RuntimeError("Shopee ainda não está conectada.")
-    return {"ok": True, "imported": 0, "message": "Shopee conectada. OAuth Live validado; próxima etapa: sincronização de pedidos e etiquetas."}
+    sync_started = now_iso()
+    try:
+        shipments = shopee_current_shipments()
+        packages_by_order: dict[str, list[str]] = {}
+        for shipment in shipments:
+            order_sn = str(shipment.get("order_sn") or "").strip()
+            package = str(shipment.get("package_number") or "").strip()
+            if order_sn:
+                packages_by_order.setdefault(order_sn, [])
+                if package and package not in packages_by_order[order_sn]:
+                    packages_by_order[order_sn].append(package)
+
+        order_sns = list(packages_by_order)
+        details = shopee_order_details(order_sns) if order_sns else []
+        products_raw, _, _ = get_storage("conf_produtos")
+        products = _rows_from_storage_value(products_raw)
+        api_lines: list[dict[str, Any]] = []
+        detail_orders: set[str] = set()
+        for order in details:
+            order_sn = str(order.get("order_sn") or "").strip()
+            if not order_sn:
+                continue
+            detail_orders.add(order_sn)
+            api_lines.extend(_shopee_build_pending_lines(order, packages_by_order.get(order_sn, []), products))
+
+        current_raw, _, _ = get_storage("conf_pedidos")
+        current = _rows_from_storage_value(current_raw)
+        active_orders = set(order_sns)
+        # Reconciliamos somente linhas criadas pela API Shopee. Pedidos manuais,
+        # relatórios Shopee, Mercado Livre e Magalu são preservados integralmente.
+        preserved = []
+        removed = 0
+        for row in current:
+            is_api_shopee = normalize(row.get("OrigemCadastro")) == "API_SHOPEE"
+            if is_api_shopee and normalize(order_number(row)) not in {normalize(x) for x in active_orders}:
+                removed += 1
+                continue
+            if not is_api_shopee:
+                preserved.append(row)
+
+        # Mantém eventuais linhas API de pedidos cuja consulta de detalhe falhou,
+        # evitando sumiço por falha parcial da Shopee.
+        for row in current:
+            if normalize(row.get("OrigemCadastro")) != "API_SHOPEE":
+                continue
+            oid = order_number(row)
+            if oid in active_orders and oid not in detail_orders:
+                preserved.append(row)
+
+        pending = [*preserved, *api_lines]
+        saved, _, _ = save_storage(
+            "conf_pedidos", current_raw, json_dumps(pending), False,
+            actor="sistema", actor_role="sistema", source_screen="Admin / Integrações / Shopee",
+            change_method="Sincronização API Shopee Live", client_ip="127.0.0.1",
+            allow_completed_reimport=False,
+        )
+        final_rows = _rows_from_storage_value(saved)
+        imported_orders = len({order_number(r) for r in final_rows if normalize(r.get("OrigemCadastro")) == "API_SHOPEE"})
+        with DB_LOCK:
+            DB.execute("UPDATE shopee_integration SET last_sync_at=?,updated_at=?,last_error='' WHERE id=1", (now_iso(), now_iso()))
+            DB.commit()
+        shopee_log_event("orders_sync", f"shop_id={status.get('shop_id')}", "OK",
+                         f"{len(order_sns)} pedido(s) para expedição; {len(api_lines)} linha(s); {removed} linha(s) API antiga(s) reconciliada(s).")
+        return {
+            "ok": True,
+            "imported": imported_orders,
+            "orders_found": len(order_sns),
+            "lines_imported": len(api_lines),
+            "removed_api_lines": removed,
+            "detail_missing": max(0, len(order_sns) - len(detail_orders)),
+            "sync_started_at": sync_started,
+            "message": f"Shopee sincronizada: {len(order_sns)} pedido(s) aguardando expedição, {len(api_lines)} item(ns) importado(s).",
+        }
+    except Exception as exc:
+        with DB_LOCK:
+            DB.execute("UPDATE shopee_integration SET last_error=?,updated_at=? WHERE id=1", (str(exc)[:1000], now_iso()))
+            DB.commit()
+        shopee_log_event("orders_sync", f"shop_id={status.get('shop_id')}", "ERRO", str(exc))
+        raise
 
 
 

@@ -1,0 +1,14 @@
+V17.18 — SHOPEE PEDIDOS LIVE
+
+- OAuth Live mantido da V17.17.
+- Refresh token automático antes de expirar.
+- Botão Sincronizar agora consulta GET /api/v2/order/get_shipment_list.
+- Busca detalhes em GET /api/v2/order/get_order_detail (lotes de até 50).
+- Importa pedidos/itens Shopee aguardando expedição para conf_pedidos.
+- Preenche SKU, quantidade, descrição, cliente, pacote, transportadora e dados fiscais quando disponíveis.
+- Enriquecimento por conf_produtos para EAN/localização/foto.
+- Pedidos manuais e importações por relatório NÃO são removidos.
+- Reconciliação remove apenas linhas antigas cuja OrigemCadastro seja API_SHOPEE.
+- Pedidos já concluídos continuam protegidos pelo histórico do Noromak.
+
+Próxima etapa após validar os pedidos: etiquetas/logística Shopee.

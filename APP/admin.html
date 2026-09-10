@@ -1248,7 +1248,7 @@ body{background:var(--v15-bg)!important}
             <button type="button" id="btnShopeeSincronizar" class="btn-sucesso" onclick="sincronizarShopeeAdmin()" disabled>↻ Sincronizar agora</button>
             <button type="button" id="btnShopeeDesconectar" class="btn-perigo" onclick="desconectarShopeeAdmin()" disabled>Desconectar</button>
           </div>
-          <div id="shopeeIntegracaoMensagem" class="integracao-nota">Shopee Open Platform Live. Partner Key e tokens permanecem somente no servidor.</div>
+          <div id="shopeeIntegracaoMensagem" class="integracao-nota">Shopee Open Platform Live. Sincroniza pedidos aguardando expedição; Partner Key e tokens permanecem somente no servidor.</div>
         </div>
         <div class="integracao-card">
           <h3>🖨 Agente Zebra autônomo</h3>
@@ -7671,8 +7671,19 @@ function feedbackCallbackShopeeAdmin(){
 function conectarShopeeAdmin(){window.location.href="/expedicao/api/integracoes/shopee/connect";}
 async function sincronizarShopeeAdmin(){
   const btn=document.getElementById("btnShopeeSincronizar");if(btn){btn.disabled=true;btn.textContent="Sincronizando...";}
-  try{const d=await mlApiAdmin("/expedicao/api/integracoes/shopee/sync",{method:"POST",body:"{}"});alert(d.message||`Shopee sincronizada. ${d.imported||0} pedido(s).`);await carregarIntegracaoShopeeAdmin();}
-  catch(e){alert("Shopee: "+e.message);}
+  const msg=document.getElementById("shopeeIntegracaoMensagem");
+  if(msg)msg.innerHTML="⏳ Consultando pedidos que aguardam expedição diretamente na Shopee...";
+  try{
+    const d=await mlApiAdmin("/expedicao/api/integracoes/shopee/sync",{method:"POST",body:"{}"});
+    if(msg)msg.innerHTML=`✅ Shopee sincronizada: <b>${d.orders_found||0}</b> pedido(s) aguardando expedição e <b>${d.lines_imported||0}</b> item(ns) importado(s).`;
+    alert(`Sincronização Shopee concluída.
+Pedidos aguardando expedição: ${d.orders_found||0}
+Itens importados: ${d.lines_imported||0}${d.detail_missing?`
+Pedidos sem detalhe: ${d.detail_missing}`:""}`);
+    await carregarIntegracaoShopeeAdmin();
+    if(typeof appStorage?.sincronizarAgora==="function")await appStorage.sincronizarAgora();
+    if(typeof carregarPedidosAdmin==="function")carregarPedidosAdmin();
+  }catch(e){if(msg)msg.textContent="❌ "+e.message;alert("Shopee: "+e.message);}
   finally{if(btn){btn.textContent="↻ Sincronizar agora";await carregarIntegracaoShopeeAdmin();}}
 }
 async function desconectarShopeeAdmin(){
