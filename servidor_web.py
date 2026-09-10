@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.35-PRECIFICADOR-LAYOUT-STATUS-DOT"
+APP_VERSION = "17.36-EXTENSAO-PROMO-APOLLO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -202,6 +202,7 @@ OPERATOR_WRITE_KEYS = {
     "precificador_online_v1",
     "precificador_alertas_custo_v1",
     "ml_sku_mlb_links_v1",
+    "ml_promocoes_datas_v1",
     "conf_coleta_dia_v1",
 }
 
@@ -10572,6 +10573,9 @@ class AppHandler(BaseHTTPRequestHandler):
                 raise ValueError("Chave ou valor inválido.")
             if key == "precificador_online_v1" and not module_allowed(ctx, "precificador"):
                 self.send_json({"error": "Este usuário não possui acesso para alterar o Precificador."}, 403)
+                return
+            if key == "ml_promocoes_datas_v1" and not module_allowed(ctx, "precificador"):
+                self.send_json({"error": "Este usuário não possui acesso para alterar as promoções do Precificador."}, 403)
                 return
             if ctx["app_role"] != "admin" and key not in OPERATOR_WRITE_KEYS:
                 self.send_json({"error": f"Operador não pode alterar {key}."}, 403)
