@@ -1,0 +1,9 @@
+NOROMAK WEB V17.26 — PROTEÇÃO DE EDIÇÕES MANUAIS SHOPEE
+
+- Mantém o fluxo Shopee/etiquetas da V17.25.
+- Protege campos editáveis dos pedidos Shopee contra sobrescrita em novas sincronizações.
+- Usa snapshot automático por linha para distinguir valor vindo da API de edição manual.
+- Continua atualizando status, logística, tracking, metadados e etiquetas.
+- Pedidos manuais, Mercado Livre e Magalu permanecem preservados.
+
+Após publicar, faça uma sincronização antes de começar a editar os pedidos Shopee. A partir daí, alterações manuais nos campos protegidos permanecem nas sincronizações seguintes.

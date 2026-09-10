@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.24-SHOPEE-ETIQUETAS-FIX"
+APP_VERSION = "17.26-SHOPEE-PROTECAO-EDICOES"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -3290,79 +3290,232 @@ def _shopee_store_linked_label(order_sn: str, package_number: str, zpl: str) -> 
 
 
 def shopee_sync_shipping_documents(shipments: list[dict[str,str]]) -> dict[str,Any]:
-    """Cria/consulta/baixa documentos de envio Shopee sem bloquear a sincronização.
-    Documentos ainda PROCESSING ficam para a próxima sincronização.
+    """Gera e baixa etiquetas Shopee com o fluxo correto da Open Platform.
+
+    Pontos importantes:
+    - create_shipping_document normalmente exige tracking_number para canais integrados;
+    - falhas vêm por item em response.result_list, mesmo quando a chamada HTTP teve sucesso;
+    - get_shipping_document_result deve consultar o mesmo shipping_document_type usado na criação;
+    - PROCESSING fica pendente para a próxima sincronização, sem derrubar o lote inteiro.
     """
-    summary={"consultados":0,"criados":0,"prontos":0,"baixados":0,"vinculados":0,"nao_zpl":0,"pendentes":0,"erros":0,"data_info_ok":0,"data_info_imagem":0}
+    summary={
+        "consultados":0,"tracking_ok":0,"tracking_pendente":0,"criados":0,
+        "prontos":0,"baixados":0,"vinculados":0,"nao_zpl":0,
+        "pendentes":0,"erros":0,"data_info_ok":0,"data_info_imagem":0,
+    }
     orders=_shopee_logistics_order_list(shipments)
-    if not orders: return summary
+    if not orders:
+        return summary
+
     labels_dir = DB_PATH.parent / "shopee_labels"
     labels_dir.mkdir(parents=True, exist_ok=True)
+
+    def _key(row: dict[str,Any]) -> tuple[str,str]:
+        return (str(row.get("order_sn") or "").strip(), str(row.get("package_number") or "").strip())
+
+    def _safe_err(exc: Exception) -> str:
+        return str(exc or "")[:700]
+
     for off in range(0,len(orders),50):
-        batch=orders[off:off+50]; summary["consultados"] += len(batch)
+        base_batch=orders[off:off+50]
+        summary["consultados"] += len(base_batch)
         try:
-            par=shopee_api_post("/api/v2/logistics/get_shipping_document_parameter", {"order_list":batch})
-            results=((par.get("response") or {}).get("result_list") or []) if isinstance(par.get("response"),dict) else []
-            create=[]
-            for r in results:
-                if not isinstance(r,dict): continue
-                x={"order_sn":str(r.get("order_sn") or "")}
-                if r.get("package_number"): x["package_number"]=str(r["package_number"])
-                dtype=str(r.get("suggest_shipping_document_type") or "").strip()
-                if dtype: x["shipping_document_type"]=dtype
-                if x["order_sn"]: create.append(x)
-            if create:
+            # 1) Descobre o tipo correto de documento por pedido/pacote.
+            par=shopee_api_post("/api/v2/logistics/get_shipping_document_parameter", {"order_list":base_batch})
+            presp=par.get("response") if isinstance(par.get("response"),dict) else {}
+            presults=presp.get("result_list") if isinstance(presp.get("result_list"),list) else []
+            params_by_key: dict[tuple[str,str],dict[str,Any]] = {}
+            for r in presults:
+                if not isinstance(r,dict):
+                    continue
+                k=_key(r)
+                if not k[0]:
+                    continue
+                params_by_key[k]=r
+                ferr=str(r.get("fail_error") or "").strip()
+                if ferr:
+                    summary["erros"] += 1
+                    shopee_log_event("shipping_document_parameter",f"order={k[0]}","ERRO",f"erro={ferr}; msg={str(r.get('fail_message') or '')[:350]}")
+
+            # 2) Monta a mesma identidade de documento para create/result/download.
+            work: list[dict[str,Any]]=[]
+            for src in base_batch:
+                order_sn,pkg=_key(src)
+                if not order_sn:
+                    continue
+                pr=params_by_key.get((order_sn,pkg)) or params_by_key.get((order_sn,"")) or {}
+                if str(pr.get("fail_error") or "").strip():
+                    continue
+                dtype=str(pr.get("suggest_shipping_document_type") or "").strip()
+                selectable=pr.get("selectable_shipping_document_type")
+                if not dtype and isinstance(selectable,list) and selectable:
+                    dtype=str(selectable[0] or "").strip()
+                row={"order_sn":order_sn}
+                if pkg:
+                    row["package_number"]=pkg
+                if dtype:
+                    row["shipping_document_type"]=dtype
+                work.append(row)
+
+            # 3) Busca tracking_number. A Shopee documenta esse valor como obrigatório
+            #    para criar etiqueta em canais integrados depois do arrange shipment.
+            create_rows: list[dict[str,Any]]=[]
+            result_rows: list[dict[str,Any]]=[]
+            for row in work:
+                order_sn=str(row["order_sn"]); pkg=str(row.get("package_number") or "")
+                q={"order_sn":order_sn}
+                if pkg:
+                    q["package_number"]=pkg
+                tracking=""
                 try:
-                    shopee_api_post("/api/v2/logistics/create_shipping_document", {"order_list":create}); summary["criados"] += len(create)
+                    tr=shopee_api_get("/api/v2/logistics/get_tracking_number", q)
+                    tresp=tr.get("response") if isinstance(tr.get("response"),dict) else {}
+                    tracking=str(tresp.get("tracking_number") or "").strip()
                 except Exception as e:
-                    # tarefa já existente/processing não impede consultar o resultado
-                    shopee_log_event("shipping_document_create","batch","AVISO",str(e)[:500])
-            result=shopee_api_post("/api/v2/logistics/get_shipping_document_result", {"order_list":batch})
-            rlist=((result.get("response") or {}).get("result_list") or []) if isinstance(result.get("response"),dict) else []
-            for r in rlist:
-                if not isinstance(r,dict): continue
-                st=str(r.get("status") or "").upper(); order_sn=str(r.get("order_sn") or ""); pkg=str(r.get("package_number") or "")
-                if st=="READY":
-                    summary["prontos"] += 1
-                    reqrow={"order_sn":order_sn};
-                    if pkg: reqrow["package_number"]=pkg
-                    try:
-                        raw,ctype=shopee_api_post_bytes("/api/v2/logistics/download_shipping_document", {"order_list":[reqrow]})
-                        if raw:
-                            ext="pdf" if (raw.startswith(b"%PDF") or "pdf" in ctype.lower()) else "bin"
-                            safe=re.sub(r"[^A-Za-z0-9_.-]+","_",order_sn+("_"+pkg if pkg else ""))
-                            fp=labels_dir/f"{safe}.{ext}"; fp.write_bytes(raw); summary["baixados"] += 1
-                            zpl = _shopee_extract_zpl(raw)
-                            if zpl and _shopee_store_linked_label(order_sn, pkg, zpl):
-                                summary["vinculados"] += 1
-                                link_state = "VINCULADA_ZPL"
-                            else:
-                                summary["nao_zpl"] += 1
-                                link_state = "BAIXADA_SEM_ZPL"
-                            shopee_log_event("shipping_document_download",f"order={order_sn}","OK",f"arquivo={fp.name}; bytes={len(raw)}; tipo={ctype[:80]}; estado={link_state}")
-                    except Exception as e:
-                        summary["erros"] += 1; shopee_log_event("shipping_document_download",f"order={order_sn}","ERRO",str(e)[:500])
-                elif st=="PROCESSING": summary["pendentes"] += 1
-                elif st: summary["erros"] += 1
-            # Data-info: diagnóstico estrutural somente, sem PII em logs.
+                    # Alguns canais permitem imprimir antes do tracking; seguimos com a
+                    # criação sem tracking e deixamos a Shopee decidir por item.
+                    shopee_log_event("shipping_tracking",f"order={order_sn}","AVISO",_safe_err(e))
+                create_row=dict(row)
+                if tracking:
+                    create_row["tracking_number"]=tracking
+                    summary["tracking_ok"] += 1
+                else:
+                    summary["tracking_pendente"] += 1
+                create_rows.append(create_row)
+                result_rows.append(dict(row))
+
+            # 4) Cria a tarefa. Não considera HTTP 200 como sucesso de todos os itens:
+            #    verifica response.result_list e registra cada fail_error.
+            if create_rows:
+                try:
+                    created=shopee_api_post("/api/v2/logistics/create_shipping_document", {"order_list":create_rows})
+                    cresp=created.get("response") if isinstance(created.get("response"),dict) else {}
+                    crlist=cresp.get("result_list") if isinstance(cresp.get("result_list"),list) else []
+                    failed_keys=set()
+                    for r in crlist:
+                        if not isinstance(r,dict):
+                            continue
+                        k=_key(r)
+                        ferr=str(r.get("fail_error") or "").strip()
+                        if ferr:
+                            failed_keys.add(k)
+                            msg=str(r.get("fail_message") or "")[:400]
+                            # already-created/processing style conditions are not fatal;
+                            # we still query result below. should_print_first, however,
+                            # means create was required and did not complete, so it is logged.
+                            sev="AVISO" if ferr in {"logistics.shipping_document_processing","logistics.shipping_document_already_exist"} else "ERRO"
+                            if sev=="ERRO":
+                                summary["erros"] += 1
+                            shopee_log_event("shipping_document_create",f"order={k[0]}",sev,f"erro={ferr}; msg={msg}")
+                    # ResultList is a failure list in Shopee's schema; anything not failed
+                    # is considered accepted for creation.
+                    accepted=max(0,len(create_rows)-len(failed_keys))
+                    summary["criados"] += accepted
+                except Exception as e:
+                    # Top-level batch errors are logged, but we still query result because
+                    # an earlier task may already exist for part of the batch.
+                    shopee_log_event("shipping_document_create","batch","AVISO",_safe_err(e))
+
+            # 5) Consulta status usando também shipping_document_type.
+            if result_rows:
+                try:
+                    result=shopee_api_post("/api/v2/logistics/get_shipping_document_result", {"order_list":result_rows})
+                    rresp=result.get("response") if isinstance(result.get("response"),dict) else {}
+                    rlist=rresp.get("result_list") if isinstance(rresp.get("result_list"),list) else []
+                except Exception as e:
+                    # Se o lote inteiro falhar, tenta individualmente para não perder as
+                    # etiquetas válidas por causa de um único pedido problemático.
+                    shopee_log_event("shipping_document_result","batch","AVISO",_safe_err(e))
+                    rlist=[]
+                    for rr in result_rows:
+                        try:
+                            one=shopee_api_post("/api/v2/logistics/get_shipping_document_result", {"order_list":[rr]})
+                            ores=one.get("response") if isinstance(one.get("response"),dict) else {}
+                            vals=ores.get("result_list") if isinstance(ores.get("result_list"),list) else []
+                            rlist.extend(x for x in vals if isinstance(x,dict))
+                        except Exception as ie:
+                            summary["erros"] += 1
+                            shopee_log_event("shipping_document_result",f"order={rr.get('order_sn','')}","ERRO",_safe_err(ie))
+
+                for r in rlist:
+                    if not isinstance(r,dict):
+                        continue
+                    st=str(r.get("status") or "").upper().strip()
+                    order_sn=str(r.get("order_sn") or "").strip()
+                    pkg=str(r.get("package_number") or "").strip()
+                    ferr=str(r.get("fail_error") or "").strip()
+                    fmsg=str(r.get("fail_message") or "")[:400]
+                    # Recupera o tipo usado para este pedido.
+                    dtype=""
+                    for rr in result_rows:
+                        if str(rr.get("order_sn") or "")==order_sn and str(rr.get("package_number") or "")==pkg:
+                            dtype=str(rr.get("shipping_document_type") or "")
+                            break
+
+                    if st=="READY":
+                        summary["prontos"] += 1
+                        reqrow={"order_sn":order_sn}
+                        if pkg:
+                            reqrow["package_number"]=pkg
+                        payload={"order_list":[reqrow]}
+                        if dtype:
+                            payload["shipping_document_type"]=dtype
+                        try:
+                            raw,ctype=shopee_api_post_bytes("/api/v2/logistics/download_shipping_document", payload)
+                            if raw:
+                                if raw.startswith(b"%PDF") or "pdf" in ctype.lower():
+                                    ext="pdf"
+                                elif raw[:4]==b"PK\x03\x04":
+                                    ext="zip"
+                                else:
+                                    ext="bin"
+                                safe=re.sub(r"[^A-Za-z0-9_.-]+","_",order_sn+("_"+pkg if pkg else ""))
+                                fp=labels_dir/f"{safe}.{ext}"
+                                fp.write_bytes(raw)
+                                summary["baixados"] += 1
+                                zpl=_shopee_extract_zpl(raw)
+                                if zpl and _shopee_store_linked_label(order_sn,pkg,zpl):
+                                    summary["vinculados"] += 1
+                                    state="VINCULADA_ZPL"
+                                else:
+                                    summary["nao_zpl"] += 1
+                                    state="BAIXADA_SEM_ZPL"
+                                shopee_log_event("shipping_document_download",f"order={order_sn}","OK",f"arquivo={fp.name}; bytes={len(raw)}; tipo={ctype[:80]}; doc={dtype}; estado={state}")
+                        except Exception as e:
+                            summary["erros"] += 1
+                            shopee_log_event("shipping_document_download",f"order={order_sn}","ERRO",_safe_err(e))
+                    elif st=="PROCESSING" or (not st and not ferr):
+                        summary["pendentes"] += 1
+                    elif st=="FAILED" or ferr:
+                        # O código should_print_first significa que a tarefa de criação ainda
+                        # não existe/foi aceita; não tentamos baixar nesse estado.
+                        summary["erros"] += 1
+                        shopee_log_event("shipping_document_result",f"order={order_sn}","ERRO",f"status={st or '-'}; erro={ferr or '-'}; msg={fmsg}")
+                    elif st:
+                        summary["pendentes"] += 1
+
+            # 6) Diagnóstico de data-info sem PII.
             try:
-                info=shopee_api_post("/api/v2/logistics/get_shipping_document_data_info", {"order_list":batch})
+                info=shopee_api_post("/api/v2/logistics/get_shipping_document_data_info", {"order_list":base_batch})
                 resp=info.get("response") if isinstance(info.get("response"),dict) else {}
                 ir=resp.get("result_list") if isinstance(resp.get("result_list"),list) else []
                 summary["data_info_ok"] += len(ir)
                 def has_image(v):
-                    if isinstance(v,dict): return any(("image" in str(k).lower() and bool(x)) or has_image(x) for k,x in v.items())
-                    if isinstance(v,list): return any(has_image(x) for x in v)
+                    if isinstance(v,dict):
+                        return any(("image" in str(k).lower() and bool(x)) or has_image(x) for k,x in v.items())
+                    if isinstance(v,list):
+                        return any(has_image(x) for x in v)
                     return False
-                summary["data_info_imagem"] += sum(1 for x in ir if has_image(x))
+                batch_images=sum(1 for x in ir if has_image(x))
+                summary["data_info_imagem"] += batch_images
                 keys=sorted({str(k) for x in ir if isinstance(x,dict) for k in x.keys()})
-                shopee_log_event("shipping_data_info","batch","OK",f"resultados={len(ir)}; chaves={','.join(keys)[:800]}; com_imagem={summary['data_info_imagem']}")
+                shopee_log_event("shipping_data_info","batch","OK",f"resultados={len(ir)}; chaves={','.join(keys)[:800]}; com_imagem={batch_images}")
             except Exception as e:
-                shopee_log_event("shipping_data_info","batch","AVISO",str(e)[:500])
+                shopee_log_event("shipping_data_info","batch","AVISO",_safe_err(e))
         except Exception as e:
-            summary["erros"] += len(batch); shopee_log_event("shipping_documents","batch","ERRO",str(e)[:700])
+            summary["erros"] += len(base_batch)
+            shopee_log_event("shipping_documents","batch","ERRO",_safe_err(e))
     return summary
-
 
 def shopee_current_shipments() -> list[dict[str, str]]:
     """Lista o que realmente está aguardando expedição na Shopee.
@@ -3551,6 +3704,147 @@ def _shopee_build_pending_lines(order: dict[str, Any], package_numbers: list[str
     return lines
 
 
+
+SHOPEE_MANUAL_EDIT_FIELDS = (
+    "Cliente",
+    "NomeFiscalShopee",
+    "Nome Conferência",
+    "Kit",
+    "Nome do Kit",
+    "Quantidade de Kits",
+    "Quantidade por Kit",
+    "SKU",
+    "Quantidade",
+    "Código de Barras",
+    "Descrição",
+    "Rua",
+    "Módulo",
+    "Prateleira",
+    "Nível",
+    "Posição",
+    "Foto",
+    "NF",
+    "Nota Fiscal",
+    "Chave de Acesso",
+)
+
+
+def _shopee_snapshot_editable(row: dict[str, Any]) -> dict[str, Any]:
+    """Snapshot dos valores fornecidos automaticamente pela Shopee/Noromak.
+
+    Ele permite distinguir, nas sincronizações seguintes, um valor que veio da API
+    de um valor que o operador alterou manualmente na tela.
+    """
+    return {field: row.get(field, "") for field in SHOPEE_MANUAL_EDIT_FIELDS}
+
+
+def _shopee_parse_snapshot(row: dict[str, Any]) -> dict[str, Any]:
+    raw = row.get("ShopeeApiSnapshot")
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, dict):
+                return parsed
+        except Exception:
+            pass
+    return {}
+
+
+def _shopee_line_match_key(row: dict[str, Any]) -> tuple[str, str, str]:
+    """Chave estável para casar a linha já existente com o novo retorno da API."""
+    uid = str(row.get("__uidLinha") or "").strip()
+    if uid:
+        return ("uid", uid, "")
+    order = normalize(order_number(row))
+    source_sku = normalize(row.get("SkuOrigemImportacao") or row.get("SkuReferenciaShopee") or row.get("SKU"))
+    return ("order_sku", order, source_sku)
+
+
+def _shopee_merge_api_line_preserving_manual(old_row: dict[str, Any], api_row: dict[str, Any]) -> dict[str, Any]:
+    """Atualiza dados automáticos sem sobrescrever edição manual do operador.
+
+    Regra: se o valor atual for diferente do último snapshot automático, ele foi
+    editado manualmente e prevalece. Status/logística/metadados da API continuam
+    sendo atualizados normalmente.
+    """
+    previous_snapshot = _shopee_parse_snapshot(old_row)
+    if not previous_snapshot:
+        # Migração V17.25 -> V17.26: o usuário confirmou que ainda não editou os
+        # pedidos Shopee, então o estado existente é uma linha-base segura.
+        previous_snapshot = _shopee_snapshot_editable(old_row)
+
+    merged = dict(old_row)
+    # Primeiro recebe tudo que é novo/operacional da API.
+    merged.update(api_row)
+
+    for field in SHOPEE_MANUAL_EDIT_FIELDS:
+        old_value = old_row.get(field, "")
+        baseline_value = previous_snapshot.get(field, old_value)
+        # Qualquer diferença em relação ao último valor automático significa edição
+        # manual (inclusive apagar um valor). Nesse caso não sobrescrever.
+        if old_value != baseline_value:
+            merged[field] = old_value
+
+    # O snapshot sempre guarda o que a API teria aplicado nesta sincronização,
+    # independentemente de existir uma edição manual preservada.
+    merged["ShopeeApiSnapshot"] = json_dumps(_shopee_snapshot_editable(api_row))
+    merged["ShopeeProtecaoManual"] = "ATIVA"
+    return merged
+
+
+def _shopee_merge_pending_lines(current: list[dict[str, Any]], api_lines: list[dict[str, Any]], active_orders: set[str], detail_orders: set[str]) -> tuple[list[dict[str, Any]], int, int]:
+    """Reconcilia somente linhas API_SHOPEE e preserva campos editados à mão."""
+    current_api: dict[tuple[str, str, str], dict[str, Any]] = {}
+    preserved_non_api: list[dict[str, Any]] = []
+    removed = 0
+    active_norm = {normalize(x) for x in active_orders}
+    detail_norm = {normalize(x) for x in detail_orders}
+
+    for row in current:
+        if not isinstance(row, dict):
+            continue
+        if normalize(row.get("OrigemCadastro")) != "API_SHOPEE":
+            preserved_non_api.append(row)
+            continue
+        oid_norm = normalize(order_number(row))
+        if oid_norm not in active_norm:
+            removed += 1
+            continue
+        current_api[_shopee_line_match_key(row)] = row
+
+    merged_api: list[dict[str, Any]] = []
+    seen_keys: set[tuple[str, str, str]] = set()
+    protected_count = 0
+    for api_row in api_lines:
+        key = _shopee_line_match_key(api_row)
+        old = current_api.get(key)
+        if old:
+            before = {f: old.get(f, "") for f in SHOPEE_MANUAL_EDIT_FIELDS}
+            merged = _shopee_merge_api_line_preserving_manual(old, api_row)
+            after_api = _shopee_snapshot_editable(api_row)
+            if any(before.get(f) != _shopee_parse_snapshot(old).get(f, before.get(f)) for f in SHOPEE_MANUAL_EDIT_FIELDS):
+                protected_count += 1
+            merged_api.append(merged)
+        else:
+            fresh = dict(api_row)
+            fresh["ShopeeApiSnapshot"] = json_dumps(_shopee_snapshot_editable(api_row))
+            fresh["ShopeeProtecaoManual"] = "ATIVA"
+            merged_api.append(fresh)
+        seen_keys.add(key)
+
+    # Se o detalhe de um pedido ativo falhou nesta rodada, mantém as linhas antigas.
+    for key, row in current_api.items():
+        if key in seen_keys:
+            continue
+        oid_norm = normalize(order_number(row))
+        if oid_norm in active_norm and oid_norm not in detail_norm:
+            merged_api.append(row)
+
+    return [*preserved_non_api, *merged_api], removed, protected_count
+
+
 def shopee_manual_sync() -> dict[str, Any]:
     status = shopee_status_payload()
     if not status["connected"]:
@@ -3583,28 +3877,11 @@ def shopee_manual_sync() -> dict[str, Any]:
         current_raw, _, _ = get_storage("conf_pedidos")
         current = _rows_from_storage_value(current_raw)
         active_orders = set(order_sns)
-        # Reconciliamos somente linhas criadas pela API Shopee. Pedidos manuais,
-        # relatórios Shopee, Mercado Livre e Magalu são preservados integralmente.
-        preserved = []
-        removed = 0
-        for row in current:
-            is_api_shopee = normalize(row.get("OrigemCadastro")) == "API_SHOPEE"
-            if is_api_shopee and normalize(order_number(row)) not in {normalize(x) for x in active_orders}:
-                removed += 1
-                continue
-            if not is_api_shopee:
-                preserved.append(row)
-
-        # Mantém eventuais linhas API de pedidos cuja consulta de detalhe falhou,
-        # evitando sumiço por falha parcial da Shopee.
-        for row in current:
-            if normalize(row.get("OrigemCadastro")) != "API_SHOPEE":
-                continue
-            oid = order_number(row)
-            if oid in active_orders and oid not in detail_orders:
-                preserved.append(row)
-
-        pending = [*preserved, *api_lines]
+        # V17.26: reconcilia as linhas Shopee sem sobrescrever campos que o operador
+        # alterou manualmente. Pedidos manuais/ML/Magalu continuam intocados.
+        pending, removed, protected_count = _shopee_merge_pending_lines(
+            current, api_lines, active_orders, detail_orders
+        )
         saved, _, _ = save_storage(
             "conf_pedidos", current_raw, json_dumps(pending), False,
             actor="sistema", actor_role="sistema", source_screen="Admin / Integrações / Shopee",
@@ -3618,7 +3895,7 @@ def shopee_manual_sync() -> dict[str, Any]:
             DB.execute("UPDATE shopee_integration SET last_sync_at=?,updated_at=?,last_error='' WHERE id=1", (now_iso(), now_iso()))
             DB.commit()
         shopee_log_event("orders_sync", f"shop_id={status.get('shop_id')}", "OK",
-                         f"{len(order_sns)} pedido(s) para expedição; {len(api_lines)} linha(s); {removed} linha(s) API antiga(s) reconciliada(s).")
+                         f"{len(order_sns)} pedido(s) para expedição; {len(api_lines)} linha(s); {removed} linha(s) API antiga(s) reconciliada(s); {protected_count} linha(s) com edição manual preservada.")
         # Resumo seguro para diagnosticar o que a Shopee realmente liberou.
         diag_counts = {"recipient_visivel": 0, "recipient_mascarado": 0, "recipient_ausente": 0, "buyer_visivel": 0}
         for order in details:

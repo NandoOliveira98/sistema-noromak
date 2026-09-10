@@ -1,0 +1,9 @@
+NOROMAK V17.25 - SHOPEE ETIQUETAS TRACKING FIX
+
+Correção principal:
+- busca tracking_number antes de create_shipping_document;
+- mantém o mesmo shipping_document_type em create/result/download;
+- interpreta falhas por item do result_list;
+- fallback individual se consulta em lote falhar;
+- PROCESSING fica pendente sem interromper a sincronização;
+- mantém nome real quando disponível e username como fallback manual.
