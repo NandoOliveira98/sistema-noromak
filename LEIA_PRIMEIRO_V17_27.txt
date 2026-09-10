@@ -1,0 +1,13 @@
+NOROMAK V17.27 - SHOPEE SYNC SEM HTTP 504
+
+- A sincronização manual Shopee não espera mais criação/READY/download de etiquetas.
+- Pedidos são importados/atualizados e a requisição termina rapidamente.
+- Um worker daemon no servidor processa as etiquetas em background.
+- O worker acorda imediatamente após "Sincronizar agora" e também revisa pendências a cada 180s por padrão.
+- Mantém a proteção das edições manuais da V17.26.
+- Mantém fallback do cliente para buyer_username quando o nome real vem mascarado.
+- Mantém o fluxo de tracking, criação, status, download e vínculo de etiquetas da V17.25/26.
+- Logs: topic=shipping_worker e demais shipping_document_* em shopee_event_log.
+
+Opcional no .env:
+SHOPEE_LABEL_WORKER_INTERVAL=180

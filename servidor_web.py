@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.26-SHOPEE-PROTECAO-EDICOES"
+APP_VERSION = "17.27-SHOPEE-SYNC-SEM-504"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -155,6 +155,11 @@ ML_WORKER_STATE: dict[str, Any] = {
 CRM_COST_CACHE_LOCK = threading.Lock()
 CRM_COST_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 PRECIFICADOR_BULK_LOCK = threading.Lock()
+# V17.27: etiquetas Shopee rodam fora da requisição HTTP para evitar 504 do Nginx.
+SHOPEE_LABEL_WORKER_LOCK = threading.Lock()
+SHOPEE_LABEL_WAKE_EVENT = threading.Event()
+SHOPEE_LABEL_WORKER_INTERVAL = max(60, min(900, int(os.getenv("SHOPEE_LABEL_WORKER_INTERVAL", "180"))))
+
 PRECIFICADOR_BULK_STATUS_LOCK = threading.Lock()
 PRECIFICADOR_BULK_STATUS: dict[str, Any] = {
     "running": False, "total": 0, "processed": 0, "updated": 0,
@@ -3890,7 +3895,16 @@ def shopee_manual_sync() -> dict[str, Any]:
         )
         final_rows = _rows_from_storage_value(saved)
         imported_orders = len({order_number(r) for r in final_rows if normalize(r.get("OrigemCadastro")) == "API_SHOPEE"})
-        shipping_docs = shopee_sync_shipping_documents(shipments)
+        # V17.27: nunca bloqueia a requisição esperando criação/READY/download de etiqueta.
+        # O worker do servidor acorda imediatamente e continua o fluxo em background.
+        SHOPEE_LABEL_WAKE_EVENT.set()
+        shipping_docs = {
+            "enfileirados": len(shipments),
+            "baixados": 0,
+            "vinculados": 0,
+            "pendentes": len(shipments),
+            "background": True,
+        }
         with DB_LOCK:
             DB.execute("UPDATE shopee_integration SET last_sync_at=?,updated_at=?,last_error='' WHERE id=1", (now_iso(), now_iso()))
             DB.commit()
@@ -3923,7 +3937,7 @@ def shopee_manual_sync() -> dict[str, Any]:
             "name_diagnostic": diag_counts,
             "shipping_documents": shipping_docs,
             "sync_started_at": sync_started,
-            "message": f"Shopee sincronizada: {len(order_sns)} pedido(s), {len(api_lines)} item(ns); etiquetas baixadas: {shipping_docs.get('baixados',0)}, vinculadas: {shipping_docs.get('vinculados',0)}, pendentes: {shipping_docs.get('pendentes',0)}.",
+            "message": f"Shopee sincronizada: {len(order_sns)} pedido(s), {len(api_lines)} item(ns). Etiquetas enviadas ao processamento automático do servidor: {len(shipments)}.",
         }
     except Exception as exc:
         with DB_LOCK:
@@ -3932,6 +3946,46 @@ def shopee_manual_sync() -> dict[str, Any]:
         shopee_log_event("orders_sync", f"shop_id={status.get('shop_id')}", "ERRO", str(exc))
         raise
 
+
+def shopee_label_worker_loop(stop_event: threading.Event) -> None:
+    """Continua geração/consulta/download das etiquetas Shopee em background.
+
+    A requisição de sincronização apenas acorda este worker. Assim, mesmo que a
+    Shopee demore para preparar documentos, o Nginx não recebe uma requisição
+    longa e não retorna HTTP 504.
+    """
+    # Pequeno atraso inicial para deixar HTTP/DB totalmente prontos no boot.
+    stop_event.wait(5)
+    while not stop_event.is_set():
+        # Acorda imediatamente após sincronização manual ou no intervalo de segurança.
+        SHOPEE_LABEL_WAKE_EVENT.wait(SHOPEE_LABEL_WORKER_INTERVAL)
+        SHOPEE_LABEL_WAKE_EVENT.clear()
+        if stop_event.is_set():
+            break
+        if not SHOPEE_LABEL_WORKER_LOCK.acquire(blocking=False):
+            continue
+        try:
+            st = shopee_status_payload()
+            if not st.get("connected"):
+                continue
+            shipments = shopee_current_shipments()
+            if not shipments:
+                continue
+            result = shopee_sync_shipping_documents(shipments)
+            shopee_log_event(
+                "shipping_worker",
+                f"shop_id={st.get('shop_id')}",
+                "OK",
+                "consultados={consultados}; prontos={prontos}; baixados={baixados}; "
+                "vinculados={vinculados}; pendentes={pendentes}; erros={erros}".format(**{
+                    k: int(result.get(k, 0) or 0)
+                    for k in ("consultados","prontos","baixados","vinculados","pendentes","erros")
+                }),
+            )
+        except Exception as exc:
+            shopee_log_event("shipping_worker", "background", "ERRO", str(exc)[:800])
+        finally:
+            SHOPEE_LABEL_WORKER_LOCK.release()
 
 
 # Mercado Livre API / OAuth / Orders
@@ -11288,12 +11342,19 @@ def main() -> None:
         name="ml-safety-catchup",
         daemon=True,
     )
+    shopee_label_thread = threading.Thread(
+        target=shopee_label_worker_loop,
+        args=(watcher_stop,),
+        name="shopee-label-worker",
+        daemon=True,
+    )
     _ml_worker_state_update(started_at=now_iso(), last_error="")
     watcher_thread.start()
     new_order_thread.start()
     manual_reconcile_thread.start()
     token_keeper_thread.start()
     safety_catchup_thread.start()
+    shopee_label_thread.start()
     server = ThreadingHTTPServer((HOST, PORT), AppHandler)
     server.daemon_threads = True
     print(f"Sistema de Conferência Web {APP_VERSION} em http://{HOST}:{PORT}{BASE_PATH}", flush=True)
@@ -11303,6 +11364,7 @@ def main() -> None:
     print(f"Reconciliação ML: pedidos manuais a cada {ML_MANUAL_RECONCILE_INTERVAL}s", flush=True)
     print(f"OAuth ML: renovação server-side a cada {ML_TOKEN_KEEPALIVE_INTERVAL}s", flush=True)
     print(f"Recuperação ML: janela de {ML_SAFETY_CATCHUP_HOURS}h a cada {ML_SAFETY_CATCHUP_INTERVAL}s", flush=True)
+    print(f"Worker Shopee: etiquetas em background a cada {SHOPEE_LABEL_WORKER_INTERVAL}s ou sob demanda", flush=True)
     try:
         server.serve_forever(poll_interval=0.5)
     except KeyboardInterrupt:
@@ -11314,6 +11376,8 @@ def main() -> None:
         manual_reconcile_thread.join(timeout=3)
         token_keeper_thread.join(timeout=3)
         safety_catchup_thread.join(timeout=3)
+        SHOPEE_LABEL_WAKE_EVENT.set()
+        shopee_label_thread.join(timeout=3)
         server.server_close()
         with DB_LOCK:
             DB.close()
