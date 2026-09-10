@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.22-SHOPEE-RECIPIENTE-DIAGNOSTICO"
+APP_VERSION = "17.23-SHOPEE-ETIQUETAS-LIVE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -3156,6 +3156,116 @@ def shopee_api_get(path: str, params: dict[str, Any] | None = None, retry_auth: 
     return data
 
 
+
+def shopee_api_post(path: str, payload: dict[str, Any] | None = None, retry_auth: bool = True) -> dict[str, Any]:
+    row = shopee_refresh_access_token(False)
+    shop_id = str(row["shop_id"] or "").strip()
+    access_token = str(row["access_token"] or "").strip()
+    timestamp = int(time.time())
+    query = {"partner_id": int(SHOPEE_PARTNER_ID), "timestamp": timestamp,
+             "access_token": access_token, "shop_id": int(shop_id),
+             "sign": shopee_sign(path, timestamp, access_token, shop_id)}
+    url = SHOPEE_API_BASE + path + "?" + urlencode(query)
+    body = json.dumps(payload or {}).encode("utf-8")
+    req = urllib.request.Request(url, data=body, headers={"Accept":"application/json","Content-Type":"application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=35) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", "replace")
+        if retry_auth and exc.code in (401,403):
+            shopee_refresh_access_token(True); return shopee_api_post(path, payload, False)
+        raise RuntimeError(f"Shopee API HTTP {exc.code}: {raw[:700]}")
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Falha de rede na Shopee API: {exc.reason}")
+    if not isinstance(data, dict): raise RuntimeError("Resposta inválida da Shopee API.")
+    if data.get("error"):
+        err=str(data.get("error") or "")
+        if retry_auth and err.lower() in {"error_auth","error_authentication","invalid_access_token","error_token"}:
+            shopee_refresh_access_token(True); return shopee_api_post(path, payload, False)
+        raise RuntimeError(f"Shopee API: {err} {data.get('message') or ''}".strip())
+    return data
+
+
+def shopee_api_post_bytes(path: str, payload: dict[str, Any]) -> tuple[bytes, str]:
+    row=shopee_refresh_access_token(False); shop_id=str(row["shop_id"] or "").strip(); token=str(row["access_token"] or "").strip(); ts=int(time.time())
+    q={"partner_id":int(SHOPEE_PARTNER_ID),"timestamp":ts,"access_token":token,"shop_id":int(shop_id),"sign":shopee_sign(path,ts,token,shop_id)}
+    req=urllib.request.Request(SHOPEE_API_BASE+path+"?"+urlencode(q), data=json.dumps(payload).encode(), headers={"Accept":"*/*","Content-Type":"application/json"}, method="POST")
+    with urllib.request.urlopen(req, timeout=45) as resp:
+        return resp.read(), str(resp.headers.get("Content-Type") or "application/octet-stream")
+
+
+def _shopee_logistics_order_list(shipments: list[dict[str,str]]) -> list[dict[str,str]]:
+    return [{"order_sn":x["order_sn"], **({"package_number":x["package_number"]} if x.get("package_number") else {})} for x in shipments if x.get("order_sn")]
+
+
+def shopee_sync_shipping_documents(shipments: list[dict[str,str]]) -> dict[str,Any]:
+    """Cria/consulta/baixa documentos de envio Shopee sem bloquear a sincronização.
+    Documentos ainda PROCESSING ficam para a próxima sincronização.
+    """
+    summary={"consultados":0,"criados":0,"prontos":0,"baixados":0,"pendentes":0,"erros":0,"data_info_ok":0,"data_info_imagem":0}
+    orders=_shopee_logistics_order_list(shipments)
+    if not orders: return summary
+    labels_dir=DATA_DIR / "shopee_labels"; labels_dir.mkdir(parents=True, exist_ok=True)
+    for off in range(0,len(orders),50):
+        batch=orders[off:off+50]; summary["consultados"] += len(batch)
+        try:
+            par=shopee_api_post("/api/v2/logistics/get_shipping_document_parameter", {"order_list":batch})
+            results=((par.get("response") or {}).get("result_list") or []) if isinstance(par.get("response"),dict) else []
+            create=[]
+            for r in results:
+                if not isinstance(r,dict): continue
+                x={"order_sn":str(r.get("order_sn") or "")}
+                if r.get("package_number"): x["package_number"]=str(r["package_number"])
+                dtype=str(r.get("suggest_shipping_document_type") or "").strip()
+                if dtype: x["shipping_document_type"]=dtype
+                if x["order_sn"]: create.append(x)
+            if create:
+                try:
+                    shopee_api_post("/api/v2/logistics/create_shipping_document", {"order_list":create}); summary["criados"] += len(create)
+                except Exception as e:
+                    # tarefa já existente/processing não impede consultar o resultado
+                    shopee_log_event("shipping_document_create","batch","AVISO",str(e)[:500])
+            result=shopee_api_post("/api/v2/logistics/get_shipping_document_result", {"order_list":batch})
+            rlist=((result.get("response") or {}).get("result_list") or []) if isinstance(result.get("response"),dict) else []
+            for r in rlist:
+                if not isinstance(r,dict): continue
+                st=str(r.get("status") or "").upper(); order_sn=str(r.get("order_sn") or ""); pkg=str(r.get("package_number") or "")
+                if st=="READY":
+                    summary["prontos"] += 1
+                    reqrow={"order_sn":order_sn};
+                    if pkg: reqrow["package_number"]=pkg
+                    try:
+                        raw,ctype=shopee_api_post_bytes("/api/v2/logistics/download_shipping_document", {"order_list":[reqrow]})
+                        if raw:
+                            ext="pdf" if (raw.startswith(b"%PDF") or "pdf" in ctype.lower()) else "bin"
+                            safe=re.sub(r"[^A-Za-z0-9_.-]+","_",order_sn+("_"+pkg if pkg else ""))
+                            fp=labels_dir/f"{safe}.{ext}"; fp.write_bytes(raw); summary["baixados"] += 1
+                            shopee_log_event("shipping_document_download",f"order={order_sn}","OK",f"arquivo={fp.name}; bytes={len(raw)}; tipo={ctype[:80]}")
+                    except Exception as e:
+                        summary["erros"] += 1; shopee_log_event("shipping_document_download",f"order={order_sn}","ERRO",str(e)[:500])
+                elif st=="PROCESSING": summary["pendentes"] += 1
+                elif st: summary["erros"] += 1
+            # Data-info: diagnóstico estrutural somente, sem PII em logs.
+            try:
+                info=shopee_api_post("/api/v2/logistics/get_shipping_document_data_info", {"order_list":batch})
+                resp=info.get("response") if isinstance(info.get("response"),dict) else {}
+                ir=resp.get("result_list") if isinstance(resp.get("result_list"),list) else []
+                summary["data_info_ok"] += len(ir)
+                def has_image(v):
+                    if isinstance(v,dict): return any(("image" in str(k).lower() and bool(x)) or has_image(x) for k,x in v.items())
+                    if isinstance(v,list): return any(has_image(x) for x in v)
+                    return False
+                summary["data_info_imagem"] += sum(1 for x in ir if has_image(x))
+                keys=sorted({str(k) for x in ir if isinstance(x,dict) for k in x.keys()})
+                shopee_log_event("shipping_data_info","batch","OK",f"resultados={len(ir)}; chaves={','.join(keys)[:800]}; com_imagem={summary['data_info_imagem']}")
+            except Exception as e:
+                shopee_log_event("shipping_data_info","batch","AVISO",str(e)[:500])
+        except Exception as e:
+            summary["erros"] += len(batch); shopee_log_event("shipping_documents","batch","ERRO",str(e)[:700])
+    return summary
+
+
 def shopee_current_shipments() -> list[dict[str, str]]:
     """Lista o que realmente está aguardando expedição na Shopee.
 
@@ -3403,6 +3513,7 @@ def shopee_manual_sync() -> dict[str, Any]:
         )
         final_rows = _rows_from_storage_value(saved)
         imported_orders = len({order_number(r) for r in final_rows if normalize(r.get("OrigemCadastro")) == "API_SHOPEE"})
+        shipping_docs = shopee_sync_shipping_documents(shipments)
         with DB_LOCK:
             DB.execute("UPDATE shopee_integration SET last_sync_at=?,updated_at=?,last_error='' WHERE id=1", (now_iso(), now_iso()))
             DB.commit()
@@ -3433,8 +3544,9 @@ def shopee_manual_sync() -> dict[str, Any]:
             "removed_api_lines": removed,
             "detail_missing": max(0, len(order_sns) - len(detail_orders)),
             "name_diagnostic": diag_counts,
+            "shipping_documents": shipping_docs,
             "sync_started_at": sync_started,
-            "message": f"Shopee sincronizada: {len(order_sns)} pedido(s) aguardando expedição, {len(api_lines)} item(ns) importado(s).",
+            "message": f"Shopee sincronizada: {len(order_sns)} pedido(s), {len(api_lines)} item(ns); etiquetas baixadas: {shipping_docs.get('baixados',0)}, pendentes: {shipping_docs.get('pendentes',0)}.",
         }
     except Exception as exc:
         with DB_LOCK:

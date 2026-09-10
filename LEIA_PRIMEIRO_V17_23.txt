@@ -1,0 +1,8 @@
+NOROMAK V17.23 - SHOPEE ETIQUETAS LIVE + DATA INFO
+
+- Mantem OAuth Live, refresh token e importacao de pedidos Shopee.
+- Implementa fluxo logistico oficial: get_shipping_document_parameter -> create_shipping_document -> get_shipping_document_result -> download_shipping_document.
+- Documentos READY sao salvos em DADOS/shopee_labels. PROCESSING ficam para a proxima sincronizacao.
+- Consulta get_shipping_document_data_info e registra apenas diagnostico estrutural seguro; nao grava PII no log e nao faz OCR.
+- Nao usa buyer_username como nome do cliente.
+- Preserva pedidos/etiquetas manuais e Mercado Livre.
