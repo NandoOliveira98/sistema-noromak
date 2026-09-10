@@ -1,0 +1,14 @@
+NOROMAK WEB V17.32 — SHOPEE UNSPLIT PACKAGE FIX
+
+Correção principal:
+- Corrige o erro real de produção `logistics.ship_order_not_need_package_number`.
+- Quando a Shopee classifica o pedido como UNSPLIT e rejeita `package_number`, o worker repete `ship_order` uma única vez sem esse campo.
+- O estado UNSPLIT fica em cache junto do arrange para que os próximos ciclos chamem `get_tracking_number` sem `package_number`.
+- Pedidos split continuam usando `package_number` normalmente.
+- O restante do fluxo permanece: shipping_parameter -> ship_order -> tracking -> create document -> result -> download/vínculo.
+- Não há polling síncrono e o endpoint de sincronização continua rápido.
+- Mantidas proteção de edições manuais, OAuth/refresh, fallback buyer_username, pedidos ML/manuais e etiquetas existentes.
+
+Logs esperados nos pedidos atuais:
+ship_order | OK | unsplit=sim; fallback_sem_package=sim
+tracking_number | OK/PENDENTE | ...; unsplit=sim

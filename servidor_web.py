@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.31-SHOPEE-SHIP-ORDER-REAL-FIX"
+APP_VERSION = "17.32-SHOPEE-UNSPLIT-PACKAGE-FIX"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -162,6 +162,7 @@ SHOPEE_LABEL_WORKER_INTERVAL = max(60, min(900, int(os.getenv("SHOPEE_LABEL_WORK
 # V17.31: evita repetir ship_order a cada ciclo depois que a Shopee já confirmou o arrange.
 SHOPEE_SHIP_ORDER_CACHE_LOCK = threading.Lock()
 SHOPEE_SHIP_ORDER_CACHE: dict[tuple[str, str], float] = {}
+SHOPEE_SHIP_ORDER_UNSPLIT_CACHE: set[tuple[str, str]] = set()
 SHOPEE_SHIP_ORDER_CACHE_TTL = max(300, min(21600, int(os.getenv("SHOPEE_SHIP_ORDER_CACHE_TTL", "7200"))))
 
 PRECIFICADOR_BULK_STATUS_LOCK = threading.Lock()
@@ -3433,7 +3434,7 @@ def _shopee_shipping_mode_payload(order_sn: str, package_number: str) -> tuple[d
     return None, "indefinido", f"modalidade não identificada; response_keys={','.join(keys)}"
 
 
-def _shopee_ship_order_cached(order_sn: str, package_number: str) -> bool:
+def _shopee_ship_order_cached(order_sn: str, package_number: str) -> tuple[bool, bool]:
     key = (str(order_sn or "").strip(), str(package_number or "").strip())
     now = time.time()
     with SHOPEE_SHIP_ORDER_CACHE_LOCK:
@@ -3441,20 +3442,36 @@ def _shopee_ship_order_cached(order_sn: str, package_number: str) -> bool:
         stale = [k for k, ts in SHOPEE_SHIP_ORDER_CACHE.items() if now - float(ts or 0) > SHOPEE_SHIP_ORDER_CACHE_TTL]
         for k in stale:
             SHOPEE_SHIP_ORDER_CACHE.pop(k, None)
-        return key in SHOPEE_SHIP_ORDER_CACHE
+            SHOPEE_SHIP_ORDER_UNSPLIT_CACHE.discard(k)
+        return key in SHOPEE_SHIP_ORDER_CACHE, key in SHOPEE_SHIP_ORDER_UNSPLIT_CACHE
 
 
-def _shopee_mark_ship_order_cached(order_sn: str, package_number: str) -> None:
+def _shopee_mark_ship_order_cached(order_sn: str, package_number: str, *, unsplit: bool = False) -> None:
     key = (str(order_sn or "").strip(), str(package_number or "").strip())
     with SHOPEE_SHIP_ORDER_CACHE_LOCK:
         SHOPEE_SHIP_ORDER_CACHE[key] = time.time()
+        if unsplit:
+            SHOPEE_SHIP_ORDER_UNSPLIT_CACHE.add(key)
+        else:
+            SHOPEE_SHIP_ORDER_UNSPLIT_CACHE.discard(key)
+
+
+def _shopee_package_not_needed_error(message: str) -> bool:
+    low = str(message or "").lower()
+    return (
+        "ship_order_not_need_package_number" in low
+        or "not_need_package_number" in low
+        or "don't request with package_number" in low
+        or "do not request with package_number" in low
+    )
 
 
 def shopee_sync_shipping_documents(shipments: list[dict[str,str]]) -> dict[str,Any]:
     """Organiza envio e processa etiquetas Shopee sem bloquear o request HTTP.
 
-    V17.31: get_shipping_parameter -> ship_order -> get_tracking_number ->
+    V17.32: get_shipping_parameter -> ship_order -> get_tracking_number ->
     create_shipping_document -> get_shipping_document_result -> download/vínculo.
+    Para pedidos unsplit, ship_order e tracking omitem package_number.
     O worker chama esta função; não existe polling síncrono no endpoint de sync.
     """
     summary={
@@ -3540,7 +3557,7 @@ def shopee_sync_shipping_documents(shipments: list[dict[str,str]]) -> dict[str,A
 
                 # 1) get_shipping_parameter -> 2) ship_order. Só pula o POST quando
                 # este mesmo processo já recebeu confirmação recente para o pacote.
-                arranged=_shopee_ship_order_cached(order_sn,pkg)
+                arranged,unsplit_order=_shopee_ship_order_cached(order_sn,pkg)
                 if not arranged:
                     try:
                         ship_payload,mode,detail=_shopee_shipping_mode_payload(order_sn,pkg)
@@ -3561,31 +3578,62 @@ def shopee_sync_shipping_documents(shipments: list[dict[str,str]]) -> dict[str,A
                     try:
                         shopee_api_post("/api/v2/logistics/ship_order", ship_payload)
                         arranged=True
-                        _shopee_mark_ship_order_cached(order_sn,pkg)
+                        _shopee_mark_ship_order_cached(order_sn,pkg,unsplit=False)
                         summary["ship_order_ok"] += 1
                         shopee_log_event("ship_order",f"order={order_sn}","OK",f"modo={mode}; pacote={'sim' if pkg else 'nao'}")
                     except Exception as exc:
                         msg=_safe_err(exc)
                         low=msg.lower()
-                        # ship_order é uma transição de estado. Em restart do serviço,
-                        # o pedido pode já estar organizado; esses retornos são idempotentes.
-                        already_tokens=("already", "has been shipped", "already shipped", "already arrange", "already arranged", "logistics_request_created")
-                        if any(tok in low for tok in already_tokens):
-                            arranged=True
-                            _shopee_mark_ship_order_cached(order_sn,pkg)
-                            summary["ship_order_ok"] += 1
-                            shopee_log_event("ship_order",f"order={order_sn}","OK",f"já organizado; pacote={'sim' if pkg else 'nao'}")
+                        # Shopee devolve package_number no parâmetro de documento mesmo
+                        # para pedidos UNSPLIT, mas ship_order rejeita esse campo. Nesse
+                        # caso refazemos UMA vez sem package_number e lembramos o estado
+                        # para que get_tracking_number também seja chamado sem o pacote.
+                        if pkg and _shopee_package_not_needed_error(msg):
+                            retry_payload=dict(ship_payload)
+                            retry_payload.pop("package_number",None)
+                            try:
+                                shopee_api_post("/api/v2/logistics/ship_order", retry_payload)
+                                arranged=True
+                                unsplit_order=True
+                                _shopee_mark_ship_order_cached(order_sn,pkg,unsplit=True)
+                                summary["ship_order_ok"] += 1
+                                shopee_log_event("ship_order",f"order={order_sn}","OK",f"modo={mode}; unsplit=sim; fallback_sem_package=sim")
+                            except Exception as retry_exc:
+                                retry_msg=_safe_err(retry_exc)
+                                retry_low=retry_msg.lower()
+                                already_tokens=("already", "has been shipped", "already shipped", "already arrange", "already arranged", "logistics_request_created")
+                                if any(tok in retry_low for tok in already_tokens):
+                                    arranged=True
+                                    unsplit_order=True
+                                    _shopee_mark_ship_order_cached(order_sn,pkg,unsplit=True)
+                                    summary["ship_order_ok"] += 1
+                                    shopee_log_event("ship_order",f"order={order_sn}","OK",f"já organizado; unsplit=sim; fallback_sem_package=sim")
+                                else:
+                                    summary["erros"] += 1
+                                    summary["pendentes"] += 1
+                                    shopee_log_event("ship_order",f"order={order_sn}","ERRO",f"modo={mode}; fallback_sem_package=sim; {retry_msg}")
+                                    continue
                         else:
-                            summary["erros"] += 1
-                            summary["pendentes"] += 1
-                            shopee_log_event("ship_order",f"order={order_sn}","ERRO",f"modo={mode}; {msg}")
-                            continue
+                            # ship_order é uma transição de estado. Em restart do serviço,
+                            # o pedido pode já estar organizado; esses retornos são idempotentes.
+                            already_tokens=("already", "has been shipped", "already shipped", "already arrange", "already arranged", "logistics_request_created")
+                            if any(tok in low for tok in already_tokens):
+                                arranged=True
+                                _shopee_mark_ship_order_cached(order_sn,pkg,unsplit=unsplit_order)
+                                summary["ship_order_ok"] += 1
+                                shopee_log_event("ship_order",f"order={order_sn}","OK",f"já organizado; pacote={'sim' if pkg else 'nao'}")
+                            else:
+                                summary["erros"] += 1
+                                summary["pendentes"] += 1
+                                shopee_log_event("ship_order",f"order={order_sn}","ERRO",f"modo={mode}; {msg}")
+                                continue
                 else:
-                    shopee_log_event("ship_order",f"order={order_sn}","OK",f"cache=sim; pacote={'sim' if pkg else 'nao'}")
+                    shopee_log_event("ship_order",f"order={order_sn}","OK",f"cache=sim; unsplit={'sim' if unsplit_order else 'nao'}; pacote={'sim' if pkg else 'nao'}")
 
                 # 3) O rastreio só é consultado depois do arrange confirmado.
+                # Pedido UNSPLIT deve omitir package_number também nesta etapa.
                 q={"order_sn":order_sn}
-                if pkg:
+                if pkg and not unsplit_order:
                     q["package_number"]=pkg
                 tracking=""
                 hint=""
@@ -3598,11 +3646,11 @@ def shopee_sync_shipping_documents(shipments: list[dict[str,str]]) -> dict[str,A
                     shopee_log_event("tracking_number",f"order={order_sn}","AVISO",_safe_err(exc))
                 if tracking:
                     summary["tracking_ok"] += 1
-                    shopee_log_event("tracking_number",f"order={order_sn}","OK",f"obtido=sim; pacote={'sim' if pkg else 'nao'}")
+                    shopee_log_event("tracking_number",f"order={order_sn}","OK",f"obtido=sim; pacote={'sim' if pkg and not unsplit_order else 'nao'}; unsplit={'sim' if unsplit_order else 'nao'}")
                 else:
                     summary["tracking_pendente"] += 1
                     summary["pendentes"] += 1
-                    shopee_log_event("tracking_number",f"order={order_sn}","PENDENTE",f"obtido=nao; pacote={'sim' if pkg else 'nao'}; hint={hint[:300] or '-'}")
+                    shopee_log_event("tracking_number",f"order={order_sn}","PENDENTE",f"obtido=nao; pacote={'sim' if pkg and not unsplit_order else 'nao'}; unsplit={'sim' if unsplit_order else 'nao'}; hint={hint[:300] or '-'}")
                     # O tracking pode ser emitido alguns minutos depois do ship_order.
                     # Worker tenta novamente no próximo ciclo; não faz polling aqui.
                     continue
