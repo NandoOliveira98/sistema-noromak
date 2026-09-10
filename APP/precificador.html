@@ -415,7 +415,7 @@
 
     .promo-manage-bar{
       display:grid;
-      grid-template-columns:auto minmax(220px,.8fr) minmax(165px,.45fr) auto 1fr;
+      grid-template-columns:minmax(150px,.45fr) minmax(220px,.8fr) minmax(165px,.45fr) auto minmax(150px,1fr);
       gap:8px;
       align-items:center;
       margin:0 0 10px;
@@ -454,29 +454,42 @@
       accent-color:#dc2626;
     }
 
-.promo-kpis{grid-template-columns:repeat(5,minmax(145px,1fr)) !important}
+.promo-kpis{grid-template-columns:repeat(5,minmax(135px,1fr)) !important}
 .promo-toolbar{
-  grid-template-columns:minmax(250px,1.45fr) minmax(170px,.75fr) minmax(170px,.75fr) minmax(170px,.75fr) auto minmax(360px,1.25fr) !important;
+  display:flex !important;
+  flex-wrap:wrap !important;
+  gap:8px !important;
   align-items:center !important;
 }
-.promo-toolbar > input,.promo-toolbar > select,.promo-toolbar > label{height:38px;box-sizing:border-box}
-.promo-stock-toggle{justify-content:center;padding:0 10px;border:1px solid #dbe5f0;border-radius:9px;background:#fff}
-.promo-toolbar-actions{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;align-items:center}
-.promo-toolbar-actions .btn{height:38px;white-space:nowrap}
-@media(max-width:1250px){
-  .promo-kpis{grid-template-columns:repeat(3,1fr) !important}
-  .promo-toolbar{grid-template-columns:repeat(3,1fr) !important}
-  .promo-toolbar-actions{grid-column:1/-1}
-}
-@media(max-width:760px){
-  .promo-kpis{grid-template-columns:1fr 1fr !important}
-  .promo-toolbar{grid-template-columns:1fr !important}
-  .promo-toolbar-actions{grid-template-columns:1fr !important}
-}
-
-.promo-search-group{display:grid;grid-template-columns:minmax(180px,1fr) auto;gap:6px;align-items:center}
+.promo-search-group{display:grid;grid-template-columns:minmax(210px,1fr) auto;gap:6px;align-items:center;flex:1 1 330px;min-width:280px}
 .promo-search-group input{width:100%;height:38px;box-sizing:border-box}
 .promo-search-group .btn{height:38px;white-space:nowrap}
+.promo-toolbar > select{height:38px;box-sizing:border-box;flex:0 1 175px;min-width:145px}
+.promo-stock-toggle{height:38px;box-sizing:border-box;justify-content:center;padding:0 10px;border:1px solid #dbe5f0;border-radius:9px;background:#fff;flex:0 0 auto}
+.promo-toolbar-actions{display:flex;gap:8px;align-items:center;flex:0 0 auto;margin-left:auto}
+.promo-toolbar-actions .btn{height:38px;white-space:nowrap;padding-left:12px;padding-right:12px}
+#promo-import-btn{min-width:132px}
+.promo-manage-secondary{margin-top:0;background:#fbfcfe;border-style:dashed}
+.promo-manage-title-wrap{display:grid;gap:2px;min-width:150px}
+.promo-manage-title-wrap small{font-size:.58rem;color:#718096;white-space:nowrap}
+.promo-row-flags{display:flex;flex-direction:column;align-items:flex-start;gap:6px;margin-top:6px}
+.promo-row-flags .promo-zero-row{margin-top:0}
+@media(max-width:1350px){
+  .promo-kpis{grid-template-columns:repeat(3,1fr) !important}
+  .promo-toolbar-actions{margin-left:0;flex:1 1 100%;justify-content:flex-end}
+}
+@media(max-width:900px){
+  .promo-kpis{grid-template-columns:repeat(2,1fr) !important}
+  .promo-toolbar > select{flex:1 1 160px}
+  .promo-toolbar-actions{justify-content:stretch}
+  .promo-toolbar-actions .btn{flex:1 1 0}
+}
+@media(max-width:650px){
+  .promo-kpis{grid-template-columns:1fr !important}
+  .promo-search-group{min-width:100%;grid-template-columns:1fr}
+  .promo-toolbar > select,.promo-stock-toggle{flex:1 1 100%}
+  .promo-toolbar-actions{display:grid;grid-template-columns:1fr}
+}
 
       /* V16.66 - vínculos ML compactos, integrados ao visual do Precificador */
       .ml-link-section{margin-top:10px;border:1px solid #dbe6f1;border-radius:14px;background:#fff;overflow:hidden}
@@ -712,14 +725,6 @@
           <input id="promo-import-file" type="file" accept=".xlsx,.xls" hidden>
         </div>
 
-        <div class="promo-manage-bar">
-          <div class="promo-manage-title">Adicionar produto</div>
-          <input id="promo-add-mlb" type="text" inputmode="numeric" placeholder="Código do anúncio / MLB">
-          <input id="promo-add-date" type="date" title="Data de vencimento">
-          <button class="btn btn-primary" id="promo-add-btn" type="button">＋ Adicionar produto</button>
-          <span class="promo-manage-hint">Para excluir, use o botão na linha do anúncio.</span>
-        </div>
-
         <div class="promo-progress" id="promo-progress" hidden>
           <span id="promo-progress-text">Consultando anúncios...</span>
           <div><i id="promo-progress-bar"></i></div>
@@ -730,6 +735,17 @@
           <b>Como funciona:</b> os registros vencidos são carregados diretamente junto com a página, sem depender de API ou estoque. Esta tela reproduz a base da planilha: código do anúncio, data de vencimento e situação.
           O status é recalculado diariamente. Clique diretamente no <b>código do anúncio</b> para abrir a página de promoção daquele MLB.
           Marque <b>Estoque zerado</b> diretamente na linha do anúncio; ele será ocultado imediatamente sem ser excluído da base. O filtro <b>Ocultar estoque zerado</b> vem ativo por padrão. Marque <b>Preço OK</b> quando o preço final já estiver na margem ideal; esses anúncios saem das filas de renovação e ficam disponíveis no filtro <b>Preço OK</b>. Use <b>Ver todos da planilha</b> para rever anúncios marcados, e <b>Adicionar produto</b> ou <b>Excluir</b> para manter a lista.
+        </div>
+
+        <div class="promo-manage-bar promo-manage-secondary">
+          <div class="promo-manage-title-wrap">
+            <div class="promo-manage-title">Cadastro manual</div>
+            <small>Adicionar um anúncio que não veio na planilha</small>
+          </div>
+          <input id="promo-add-mlb" type="text" inputmode="numeric" placeholder="Código do anúncio / MLB">
+          <input id="promo-add-date" type="date" title="Data de vencimento">
+          <button class="btn btn-secondary" id="promo-add-btn" type="button">＋ Adicionar produto</button>
+          <span class="promo-manage-hint">Para excluir, use o botão na linha do anúncio.</span>
         </div>
 
         <div class="promo-table-wrap">
@@ -3364,7 +3380,7 @@ var state = {
               ? '<span class="promo-stock loading">Não consultado</span>'
               : '<span class="promo-stock '+(stock>0?"positive":"zero")+'">'+stock+' un.</span>');
 
-        stockHtml += '<label class="promo-zero-row"><input class="promo-zero-checkbox" data-promo-zero-mlb="'+promoEsc(r.mlb)+'" type="checkbox" '+(manualZero?'checked':'')+'> Estoque zerado</label>';
+        var stockZeroControl = '<label class="promo-zero-row"><input class="promo-zero-checkbox" data-promo-zero-mlb="'+promoEsc(r.mlb)+'" type="checkbox" '+(manualZero?'checked':'')+'> Estoque zerado</label>';
 
         var priceOk=r.priceOk===true;
         var statusLabel=priceOk?"Preço OK":(st.key==="expired"?"Vencido":(st.key==="nodate"?"Sem data":"OK"));
@@ -3375,7 +3391,10 @@ var state = {
           '<td><a class="promo-mlb-link" href="'+url+'" target="_blank" rel="noopener">MLB'+promoEsc(r.mlb)+'</a></td>'+
           '<td><input type="date" value="'+promoEsc(r.date||"")+'" onchange="promoChangeDate(\''+promoEsc(r.mlb)+'\',this.value)"></td>'+
           '<td><span class="promo-status-pill '+statusClass+'">'+statusLabel+'</span>'+
-            '<label class="promo-zero-row" style="margin-top:6px"><input class="promo-price-ok-checkbox" data-promo-price-ok-mlb="'+promoEsc(r.mlb)+'" type="checkbox" '+(priceOk?'checked':'')+'> Preço OK</label></td>'+
+            '<div class="promo-row-flags">'+
+              '<label class="promo-zero-row"><input class="promo-price-ok-checkbox" data-promo-price-ok-mlb="'+promoEsc(r.mlb)+'" type="checkbox" '+(priceOk?'checked':'')+'> Preço OK</label>'+
+              stockZeroControl+
+            '</div></td>'+
           '<td>'+stockHtml+'</td>'+
           '<td><div class="promo-actions">'+
             '<button class="btn promo-delete-btn" type="button" data-promo-delete-mlb="'+promoEsc(r.mlb)+'">Excluir</button>'+

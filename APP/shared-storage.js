@@ -379,7 +379,7 @@
     if (!box && document.body) {
       box = document.createElement("div");
       box.id = "indicadorRedeCentral";
-      box.style.cssText = "position:fixed;right:12px;bottom:12px;z-index:10050;padding:8px 12px;border-radius:8px;font:600 12px Segoe UI,Arial;box-shadow:0 2px 10px rgba(0,0,0,.18);cursor:pointer;max-width:390px";
+      box.style.cssText = "position:fixed;right:14px;bottom:14px;z-index:10050;width:14px;height:14px;padding:0;border-radius:50%;box-sizing:border-box;box-shadow:0 1px 5px rgba(0,0,0,.22);cursor:pointer;font-size:0;line-height:0";
       box.title = "Clique para testar o acesso ao servidor Web.";
       box.addEventListener("click", () => {
         const ok = appStorage.testarConexao();
@@ -392,15 +392,17 @@
     }
     if (!box) return;
     if (conectado) {
-      box.textContent = "● Servidor Web conectado";
-      box.style.background = "#dff5e2";
-      box.style.color = "#1b5e20";
-      box.style.border = "1px solid #81c784";
+      box.textContent = "";
+      box.setAttribute("aria-label", "Servidor Web conectado");
+      box.title = "Servidor Web conectado — clique para detalhes";
+      box.style.background = "#22c55e";
+      box.style.border = "2px solid #dcfce7";
     } else {
-      box.textContent = "● Servidor Web indisponível";
-      box.style.background = "#ffebee";
-      box.style.color = "#b71c1c";
-      box.style.border = "1px solid #ef9a9a";
+      box.textContent = "";
+      box.setAttribute("aria-label", "Servidor Web indisponível");
+      box.title = "Servidor Web indisponível — clique para testar";
+      box.style.background = "#ef4444";
+      box.style.border = "2px solid #fee2e2";
     }
   }
 

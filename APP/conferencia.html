@@ -614,49 +614,6 @@ let timerBloqueioRede = null;
 let ultimoPedidoBloqueioNegado = "";
 let ultimoUidBloqueioNegado = "";
 
-// V17.34 - índices em memória para evitar varreduras O(n²) na tela de conferência.
-let indicePedidoPorUid = new Map();
-let indiceLinhasPorPedido = new Map();
-let indiceEtiquetasPorPedido = new Map();
-let referenciaMapaEtiquetasIndexado = null;
-
-function reconstruirIndicesPedidosConferencia(){
-  indicePedidoPorUid = new Map();
-  indiceLinhasPorPedido = new Map();
-  for (const item of dadosPedidos) {
-    const uid = String(item?.__uidPedido || "");
-    if (uid && !indicePedidoPorUid.has(uid)) indicePedidoPorUid.set(uid, item);
-    const pedido = normalizarIdentificadorExato(extrairCampo(item, "Pedido"));
-    if (!pedido) continue;
-    if (!indiceLinhasPorPedido.has(pedido)) indiceLinhasPorPedido.set(pedido, []);
-    indiceLinhasPorPedido.get(pedido).push(item);
-  }
-}
-
-function reconstruirIndiceEtiquetasConferencia(){
-  indiceEtiquetasPorPedido = new Map();
-  referenciaMapaEtiquetasIndexado = mapaEtiquetas;
-  const regs = mapaEtiquetas && mapaEtiquetas.registros ? Object.values(mapaEtiquetas.registros) : [];
-  for (const registro of regs) {
-    if (!registro || !registro.pedido) continue;
-    const mp = normalizarMarketplace(registro.marketplace || "") || "desconhecido";
-    const variantes = mp === "mercado_livre" ? variantesPedidoMercadoLivre(registro.pedido) : [normalizarIdentificadorExato(registro.pedido)];
-    for (const pedido of variantes) {
-      if (!pedido) continue;
-      const chave = `${mp}|${pedido}`;
-      if (!indiceEtiquetasPorPedido.has(chave)) indiceEtiquetasPorPedido.set(chave, []);
-      indiceEtiquetasPorPedido.get(chave).push(registro);
-    }
-  }
-}
-
-function obterItemPorUidConferencia(uid){
-  return indicePedidoPorUid.get(String(uid)) || null;
-}
-function obterLinhasPedidoConferencia(pedido){
-  return indiceLinhasPorPedido.get(normalizarIdentificadorExato(pedido)) || [];
-}
-
 function nomeOperadorBloqueio() {
   if (!usuarioLogado) return "Operador não identificado";
   return usuarioLogado.Nome || usuarioLogado.Login || "Operador";
@@ -1095,24 +1052,6 @@ document.addEventListener("visibilitychange", () => {
 });
 window.addEventListener("pagehide", () => pararLeituraScannerCamera());
 
-let timerAtualizacaoStorageConferencia = null;
-function agendarAtualizacaoStorageConferencia(){
-  if (timerAtualizacaoStorageConferencia) clearTimeout(timerAtualizacaoStorageConferencia);
-  timerAtualizacaoStorageConferencia = setTimeout(() => {
-    timerAtualizacaoStorageConferencia = null;
-    carregarDadosMemoria();
-    renderizarListaPedidos();
-    if (idPedidoAtual) {
-      const itemRefBase = obterItemPorUidConferencia(idPedidoAtual);
-      if (itemRefBase && pedidoPossuiEtiquetaDisponivel(itemRefBase)) {
-        const numPedReal = extrairCampo(itemRefBase, "Pedido");
-        pedidoAtual = obterLinhasPedidoConferencia(numPedReal);
-        desenharTabela();
-      }
-    }
-  }, 250);
-}
-
 window.onload = function() {
   forcarOrientacaoRetrato();
   carregarDadosMemoria();
@@ -1138,7 +1077,24 @@ window.onload = function() {
 
   window.addEventListener("storage", function(e) {
     if (e.key === "conf_pedidos" || e.key === "conf_produtos" || e.key === "conf_usuarios" || e.key === "conf_etiquetas") {
-      agendarAtualizacaoStorageConferencia();
+      carregarDadosMemoria();
+      renderizarListaPedidos();
+      if (idPedidoAtual) {
+        let itemRefBase = dadosPedidos.find(x => String(x.__uidPedido) === String(idPedidoAtual));
+        if (itemRefBase && pedidoPossuiEtiquetaDisponivel(itemRefBase)) {
+          let numPedReal = extrairCampo(itemRefBase, "Pedido");
+          pedidoAtual = dadosPedidos.filter(x => extrairCampo(x, "Pedido") === numPedReal);
+          desenharTabela();
+        } else {
+          limparPainel();
+          mostrarMensagemDetalhada(
+            "aviso",
+            "Pedido removido da lista",
+            itemRefBase ? "A etiqueta deste pedido não está mais disponível." : "O pedido não está mais pendente.",
+            itemRefBase ? "Peça ao administrador para republicar ou vincular a etiqueta." : "Selecione outro pedido disponível."
+          );
+        }
+      }
     }
     if (e.key === CHAVE_HISTORICO || e.key === "conf_logs") {
       carregarHistoricoConferencias();
@@ -1380,25 +1336,14 @@ function resolverEtiquetaPedido(item) {
       return { ok: false, marketplace, erro: "O pedido do servidor Web está vazio." };
     }
 
-    // V17.34: índice por marketplace+pedido. Evita percorrer todas as etiquetas
-    // para cada pedido a cada atualização/monitoramento da conferência.
-    if (referenciaMapaEtiquetasIndexado !== mapaEtiquetas) reconstruirIndiceEtiquetasConferencia();
-    let candidatos = [];
-    const variantesBusca = marketplace === "mercado_livre" ? variantesPedidoMercadoLivre(pedidoNormalizado) : [pedidoNormalizado];
-    if (marketplace !== "desconhecido") {
-      for (const variante of variantesBusca) {
-        const encontrados = indiceEtiquetasPorPedido.get(`${marketplace}|${variante}`) || [];
-        if (encontrados.length) candidatos.push(...encontrados);
-      }
-    } else {
-      for (const mp of ["mercado_livre","shopee","magalu","desconhecido"]) {
-        for (const variante of variantesBusca) {
-          const encontrados = indiceEtiquetasPorPedido.get(`${mp}|${variante}`) || [];
-          if (encontrados.length) candidatos.push(...encontrados);
-        }
-      }
-    }
-    candidatos = [...new Set(candidatos)];
+    // Segurança máxima: só imprime registros que o painel administrativo já
+    // vinculou explicitamente ao pedido da planilha. Não usa chaves parciais,
+    // nome do cliente, SKU, posição do arquivo ou coincidência apenas numérica.
+    const candidatos = Object.values(mapaEtiquetas.registros).filter(registro => {
+      if (!registro || !registro.pedido) return false;
+      if (marketplace !== "desconhecido" && registro.marketplace !== marketplace) return false;
+      return pedidosEquivalentes(registro.pedido, pedidoNormalizado, registro.marketplace || marketplace);
+    });
 
     if (candidatos.length > 1) {
       return { ok: false, marketplace, erro: `Há ${candidatos.length} etiquetas vinculadas ao mesmo pedido. Republique os arquivos no painel administrativo.` };
@@ -1469,7 +1414,7 @@ function obterUidsPedidosComEtiquetaDisponivel() {
   if(cacheUidsPedidosDisponiveis&&cacheDiaPedidosDisponiveis===hoje)return cacheUidsPedidosDisponiveis;
   cacheDiaPedidosDisponiveis=hoje;
   cacheUidsPedidosDisponiveis=listaPedidosPendentes.filter(uid => {
-    const item = obterItemPorUidConferencia(uid);
+    const item = dadosPedidos.find(x => String(x.__uidPedido) === String(uid));
     // V14.4: qualquer pedido pendente com etiqueta vinculada deve aparecer,
     // independentemente da data limite de despacho informada pelo marketplace.
     return pedidoPossuiEtiquetaDisponivel(item);
@@ -1481,8 +1426,8 @@ function obterIndiceCodigosPedidos(){
   if(cacheIndiceCodigosPedidos)return cacheIndiceCodigosPedidos;
   const indice=new Map();
   obterUidsPedidosComEtiquetaDisponivel().forEach(uid=>{
-    const ref=obterItemPorUidConferencia(uid);if(!ref)return;const pedido=extrairCampo(ref,"Pedido");
-    obterLinhasPedidoConferencia(pedido).forEach(item=>{const codigo=String(extrairCampo(item,"Código de Barras")||"").trim();if(!codigo)return;if(!indice.has(codigo))indice.set(codigo,[]);indice.get(codigo).push({uidPedido:uid,numPedido:pedido,item});});
+    const ref=dadosPedidos.find(x=>String(x.__uidPedido)===String(uid));if(!ref)return;const pedido=extrairCampo(ref,"Pedido");
+    dadosPedidos.filter(x=>extrairCampo(x,"Pedido")===pedido).forEach(item=>{const codigo=String(extrairCampo(item,"Código de Barras")||"").trim();if(!codigo)return;if(!indice.has(codigo))indice.set(codigo,[]);indice.get(codigo).push({uidPedido:uid,numPedido:pedido,item});});
   });
   cacheIndiceCodigosPedidos=indice;return indice;
 }
@@ -1535,7 +1480,6 @@ function carregarDadosMemoria() {
       }
     });
     listaPedidosPendentes = Array.from(pedidosUnicosMap.values());
-    reconstruirIndicesPedidosConferencia();
   }
   if (fotos) mapaFotos = JSON.parse(fotos);
   if (etiqs) {
@@ -1543,7 +1487,6 @@ function carregarDadosMemoria() {
       const novoBancoEtiquetas = JSON.parse(etiqs);
       if (novoBancoEtiquetas && typeof novoBancoEtiquetas === "object" && novoBancoEtiquetas.registros && Array.isArray(novoBancoEtiquetas.ordem)) {
         mapaEtiquetas = novoBancoEtiquetas;
-        referenciaMapaEtiquetasIndexado = null;
         try { sessionStorage.setItem("conf_etiquetas_ultimo_bom_v1713", etiqs); } catch (_) {}
       }
     } catch (_) {}
@@ -2111,13 +2054,17 @@ function renderizarListaPedidos() {
   // Eles continuam no Admin e entram automaticamente aqui quando a etiqueta
   // puder ser resolvida por resolverEtiquetaPedido().
   obterUidsPedidosComEtiquetaDisponivel().forEach(uid => {
-    let itemPedido = obterItemPorUidConferencia(uid);
+    let itemPedido = dadosPedidos.find(x => String(x.__uidPedido) === String(uid));
     if (!itemPedido) return;
+    const etiquetaResultado = resolverEtiquetaPedido(itemPedido);
+    const etiquetaPronta = Boolean(etiquetaResultado && etiquetaResultado.ok);
+    if (!etiquetaPronta) return;
+
     let numPedidoReal = extrairCampo(itemPedido, "Pedido");
     let nomeCliente = nomeClienteConferencia(itemPedido);
     const marketplacePedido = obterMarketplaceItem(itemPedido);
     if (filtroMarketplace !== "todos" && marketplacePedido !== filtroMarketplace) return;
-    const linhas = obterLinhasPedidoConferencia(numPedidoReal);
+    const linhas = dadosPedidos.filter(x => extrairCampo(x, "Pedido") === numPedidoReal);
     const total = linhas.reduce((s, x) => s + Number(extrairCampo(x, "Quantidade") || 0), 0);
     const lidos = linhas.reduce((s, x) => s + Number(x.Lido || 0), 0);
     const completo = total > 0 && lidos >= total;
@@ -2160,7 +2107,7 @@ function selecionarPedidoPorClique(uid) {
 
 function abrirPedido(uid) {
   cancelarLeituraPendente();
-  let itemBase = obterItemPorUidConferencia(uid);
+  let itemBase = dadosPedidos.find(x => String(x.__uidPedido) === String(uid));
   if (!itemBase) return;
   const etiquetaDisponivel = resolverEtiquetaPedido(itemBase);
   if (!etiquetaDisponivel.ok) {
@@ -2178,7 +2125,7 @@ function abrirPedido(uid) {
   let numPedidoReal = extrairCampo(itemBase, "Pedido");
   if (!adquirirBloqueioPedidoRede(numPedidoReal, uid)) return;
   idPedidoAtual = uid;
-  pedidoAtual = obterLinhasPedidoConferencia(numPedidoReal);
+  pedidoAtual = dadosPedidos.filter(x => extrairCampo(x, "Pedido") === numPedidoReal);
   pedidoAtual.forEach(x => { if (x.Lido === undefined) x.Lido = 0; });
   appStorage.setItem(CHAVE_ULTIMO_PEDIDO, normalizarIdentificadorExato(numPedidoReal));
 
@@ -3651,13 +3598,13 @@ carregarDadosMemoria=function(){
   enriquecerPedidosComBancoProdutos();
   const antes=dadosPedidos.length;
   dadosPedidos=removerLinhasArtificiaisKitShopee(dadosPedidos);
-  if(dadosPedidos.length!==antes) invalidarCachesPedidosDisponiveis();
-  // V17.34: a limpeza do KIT é somente de apresentação em memória.
-  // Não regrava conf_pedidos daqui, evitando tempestade de sincronização/storage.
-  reconstruirIndicesPedidosConferencia();
+  if(dadosPedidos.length!==antes){
+    try{appStorage.setItem("conf_pedidos",JSON.stringify(dadosPedidos));}catch(_){}
+    invalidarCachesPedidosDisponiveis();
+  }
   verificarStatusPlanilhaLogin();
 };
-window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_em"||event.key==="conf_produtos")agendarAtualizacaoStorageConferencia();});
+window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_em"||event.key==="conf_produtos"){carregarDadosMemoria();renderizarListaPedidos();}});
 
 </script>
 <style>
@@ -4051,7 +3998,7 @@ window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_
     const mapa = new Map();
     try {
       obterUidsPedidosComEtiquetaDisponivel().forEach(uid => {
-        const item = obterItemPorUidConferencia(uid);
+        const item = dadosPedidos.find(x => String(x.__uidPedido) === String(uid));
         if (!item) return;
         const pedido = normalizarIdentificadorExato(extrairCampo(item,"Pedido"));
         if (!pedido) return;
@@ -4079,17 +4026,13 @@ window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_
     toastTimer = setTimeout(() => toast.classList.remove("ativo"), 6500);
   }
 
-  let verificacaoNovosPedidosEmAndamento = false;
   async function verificarNovosPedidos(){
-    if (verificacaoNovosPedidosEmAndamento || document.hidden) return;
-    verificacaoNovosPedidosEmAndamento = true;
-    try {
-      criarInterfaceAlerta();
-      if (!sessaoConferenciaAtiva()) {
-        pedidosDisponiveisAnteriores = null;
-        return;
-      }
-      const atual = mapaPedidosDisponiveis();
+    criarInterfaceAlerta();
+    if (!sessaoConferenciaAtiva()) {
+      pedidosDisponiveisAnteriores = null;
+      return;
+    }
+    const atual = mapaPedidosDisponiveis();
     if (pedidosDisponiveisAnteriores === null) {
       // A primeira leitura vira referência: pedidos que já estavam disponíveis ao entrar não disparam alarme.
       pedidosDisponiveisAnteriores = new Set(atual.keys());
@@ -4098,13 +4041,10 @@ window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_
     const novos = [];
     atual.forEach((info, chave) => { if (!pedidosDisponiveisAnteriores.has(chave)) novos.push(info); });
     pedidosDisponiveisAnteriores = new Set(atual.keys());
-      if (!novos.length) return;
-      mostrarToast(novos);
-      await tocarAlerta();
-      atualizarInterfaceAlerta(novos.length === 1 ? `Último aviso: pedido ${novos[0].pedido} ficou pronto para conferência.` : `Último aviso: ${novos.length} pedidos ficaram prontos para conferência.`);
-    } finally {
-      verificacaoNovosPedidosEmAndamento = false;
-    }
+    if (!novos.length) return;
+    mostrarToast(novos);
+    await tocarAlerta();
+    atualizarInterfaceAlerta(novos.length === 1 ? `Último aviso: pedido ${novos[0].pedido} ficou pronto para conferência.` : `Último aviso: ${novos.length} pedidos ficaram prontos para conferência.`);
   }
 
   window.alternarAlertaSonoroPedidos = async function(){
@@ -4162,7 +4102,7 @@ window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_
   document.addEventListener("DOMContentLoaded", () => {
     criarInterfaceAlerta();
     setTimeout(verificarNovosPedidos, 700);
-    monitorTimer = setInterval(verificarNovosPedidos, 5000);
+    monitorTimer = setInterval(verificarNovosPedidos, 1800);
   });
 })();
 </script>
