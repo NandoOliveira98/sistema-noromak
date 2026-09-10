@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.16-FULL-SKU-APOLLO"
+APP_VERSION = "17.17-SHOPEE-OAUTH-LIVE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -80,10 +80,12 @@ SHOPEE_REDIRECT_URI = os.getenv(
     "SHOPEE_REDIRECT_URI",
     "https://noromakweb.com.br/expedicao/api/integracoes/shopee/callback",
 ).strip()
-# A URL de autorização/host de produção será preenchida após a aprovação Go-Live,
-# usando exatamente os dados liberados pela Shopee Open Platform.
+# Shopee Open Platform V2 — produção.
+SHOPEE_API_BASE = os.getenv("SHOPEE_API_BASE", "https://partner.shopeemobile.com").strip().rstrip("/")
+SHOPEE_AUTH_PATH = os.getenv("SHOPEE_AUTH_PATH", "/api/v2/shop/auth_partner").strip() or "/api/v2/shop/auth_partner"
+SHOPEE_TOKEN_PATH = os.getenv("SHOPEE_TOKEN_PATH", "/api/v2/auth/token/get").strip() or "/api/v2/auth/token/get"
+SHOPEE_REFRESH_PATH = os.getenv("SHOPEE_REFRESH_PATH", "/api/v2/auth/access_token/get").strip() or "/api/v2/auth/access_token/get"
 SHOPEE_AUTH_URL = os.getenv("SHOPEE_AUTH_URL", "").strip()
-SHOPEE_API_BASE = os.getenv("SHOPEE_API_BASE", "").strip()
 
 # Mercado Livre API / OAuth. O Client Secret fica somente no .env do servidor.
 ML_CLIENT_ID = os.getenv("ML_CLIENT_ID", "").strip()
@@ -2943,7 +2945,7 @@ def clear_login_failures(handler: BaseHTTPRequestHandler, username: str) -> None
 
 # ---------------------------------------------------------------------------
 
-# Shopee Open Platform — V16.75
+# Shopee Open Platform — OAuth Live V17.17
 def shopee_integration_row() -> sqlite3.Row | None:
     with DB_LOCK:
         return DB.execute("SELECT * FROM shopee_integration WHERE id=1").fetchone()
@@ -2959,6 +2961,13 @@ def shopee_log_event(topic: str, resource: str, result: str, detail: str = "") -
         DB.commit()
 
 
+def shopee_sign(path: str, timestamp: int, access_token: str = "", shop_id: str = "") -> str:
+    base = f"{SHOPEE_PARTNER_ID}{path}{timestamp}"
+    if access_token or shop_id:
+        base += f"{access_token}{shop_id}"
+    return hmac.new(SHOPEE_PARTNER_KEY.encode("utf-8"), base.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
 def shopee_status_payload() -> dict[str, Any]:
     row = shopee_integration_row()
     configured = bool(SHOPEE_PARTNER_ID and SHOPEE_PARTNER_KEY)
@@ -2966,38 +2975,99 @@ def shopee_status_payload() -> dict[str, Any]:
     return {
         "configured": configured,
         "connected": connected,
-        "go_live_pending": not bool(SHOPEE_AUTH_URL and SHOPEE_API_BASE),
+        "go_live_pending": False,
         "partner_id": SHOPEE_PARTNER_ID,
         "shop_id": str(row["shop_id"] or "") if row else "",
         "shop_name": str(row["shop_name"] or "") if row else "",
         "last_sync_at": str(row["last_sync_at"] or "") if row else "",
         "last_error": str(row["last_error"] or "") if row else "",
         "redirect_uri": SHOPEE_REDIRECT_URI,
+        "token_expires_at": int(row["token_expires_at"] or 0) if row else 0,
         "credentials_server_side": True,
     }
 
 
 def shopee_connect_url() -> str:
     if not SHOPEE_PARTNER_ID:
-        raise RuntimeError("SHOPEE_PARTNER_ID ainda não foi configurado no servidor.")
+        raise RuntimeError("SHOPEE_PARTNER_ID não foi configurado no servidor.")
     if not SHOPEE_PARTNER_KEY:
-        raise RuntimeError("SHOPEE_PARTNER_KEY ainda não foi configurado no servidor.")
-    if not SHOPEE_AUTH_URL:
-        raise RuntimeError("Go-Live da Shopee ainda está pendente. Configure SHOPEE_AUTH_URL após a aprovação.")
-    # A assinatura e os parâmetros finais serão ativados somente com o endpoint
-    # de produção confirmado no painel Go-Live. Evita usar URL/assinatura de sandbox em produção.
-    raise RuntimeError("Credenciais de produção recebidas, mas o fluxo de assinatura Shopee ainda precisa ser confirmado no painel Go-Live.")
+        raise RuntimeError("SHOPEE_PARTNER_KEY não foi configurado no servidor.")
+    timestamp = int(time.time())
+    path = SHOPEE_AUTH_PATH
+    sign = shopee_sign(path, timestamp)
+    base = SHOPEE_AUTH_URL or (SHOPEE_API_BASE + path)
+    params = {
+        "partner_id": int(SHOPEE_PARTNER_ID),
+        "timestamp": timestamp,
+        "sign": sign,
+        "redirect": SHOPEE_REDIRECT_URI,
+    }
+    return base + ("&" if "?" in base else "?") + urlencode(params)
+
+
+def shopee_exchange_code(code: str, shop_id: str) -> dict[str, Any]:
+    if not SHOPEE_PARTNER_ID or not SHOPEE_PARTNER_KEY:
+        raise RuntimeError("Credenciais Live da Shopee não configuradas.")
+    try:
+        shop_int = int(str(shop_id).strip())
+    except Exception:
+        raise RuntimeError("Shop ID retornado pela Shopee é inválido.")
+    timestamp = int(time.time())
+    path = SHOPEE_TOKEN_PATH
+    sign = shopee_sign(path, timestamp)
+    url = SHOPEE_API_BASE + path + "?" + urlencode({
+        "partner_id": int(SHOPEE_PARTNER_ID),
+        "timestamp": timestamp,
+        "sign": sign,
+    })
+    payload = json.dumps({
+        "code": str(code).strip(),
+        "shop_id": shop_int,
+        "partner_id": int(SHOPEE_PARTNER_ID),
+    }).encode("utf-8")
+    req = urllib.request.Request(url, data=payload,
+        headers={"Content-Type": "application/json", "Accept": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", "replace")
+        raise RuntimeError(f"Shopee token HTTP {exc.code}: {body[:500]}")
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Falha de rede ao obter token Shopee: {exc.reason}")
+    if not isinstance(data, dict):
+        raise RuntimeError("Resposta inválida da Shopee ao obter token.")
+    if data.get("error"):
+        raise RuntimeError(f"Shopee recusou o token: {data.get('error')} {data.get('message') or ''}".strip())
+    access_token = str(data.get("access_token") or "").strip()
+    refresh_token = str(data.get("refresh_token") or "").strip()
+    if not access_token or not refresh_token:
+        raise RuntimeError("Shopee não retornou access_token/refresh_token.")
+    expire_in = int(data.get("expire_in") or 14400)
+    now_ts = int(time.time())
+    with DB_LOCK:
+        DB.execute(
+            """INSERT INTO shopee_integration
+               (id,shop_id,shop_name,access_token,refresh_token,token_expires_at,connected_at,updated_at,last_sync_at,last_error)
+               VALUES(1,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET
+                 shop_id=excluded.shop_id, access_token=excluded.access_token,
+                 refresh_token=excluded.refresh_token, token_expires_at=excluded.token_expires_at,
+                 connected_at=CASE WHEN shopee_integration.connected_at='' THEN excluded.connected_at ELSE shopee_integration.connected_at END,
+                 updated_at=excluded.updated_at, last_error=''""",
+            (str(shop_int), "", access_token, refresh_token, now_ts + max(60, expire_in),
+             now_iso(), now_iso(), "", ""),
+        )
+        DB.commit()
+    shopee_log_event("oauth_token", f"shop_id={shop_int}", "OK", "Loja Live conectada; tokens armazenados somente no servidor.")
+    return {"ok": True, "shop_id": str(shop_int), "expire_in": expire_in}
 
 
 def shopee_manual_sync() -> dict[str, Any]:
     status = shopee_status_payload()
     if not status["connected"]:
         raise RuntimeError("Shopee ainda não está conectada.")
-    if not SHOPEE_API_BASE:
-        raise RuntimeError("SHOPEE_API_BASE ainda não foi configurada após o Go-Live.")
-    # Estrutura propositalmente protegida até a aprovação: não faz chamadas
-    # incompletas nem altera pedidos do Noromak.
-    return {"ok": True, "imported": 0, "message": "Base Shopee pronta; sincronização de produção aguardando ativação dos endpoints aprovados."}
+    return {"ok": True, "imported": 0, "message": "Shopee conectada. OAuth Live validado; próxima etapa: sincronização de pedidos e etiquetas."}
 
 
 
@@ -8522,15 +8592,19 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_json({"authenticated": bool(ctx), "user": ctx} if ctx else {"authenticated": False})
             return
         if path == "/api/integracoes/shopee/callback":
-            # A Shopee retorna code + shop_id nesta URL. Enquanto o Go-Live não
-            # estiver aprovado, apenas registra o retorno sem expor segredos.
             code = str((query.get("code") or [""])[0] or "").strip()
             shop_id = str((query.get("shop_id") or [""])[0] or "").strip()
             if not code or not shop_id:
+                shopee_log_event("oauth_callback", f"shop_id={shop_id}", "ERRO", "Callback sem code ou shop_id.")
                 self.send_redirect(BASE_PATH + "/admin?aba=integracoes&shopee=erro&motivo=callback_incompleto")
                 return
-            shopee_log_event("oauth_callback", f"shop_id={shop_id}", "RECEBIDO", "Código de autorização recebido; troca por token aguardando configuração de produção.")
-            self.send_redirect(BASE_PATH + "/admin?aba=integracoes&shopee=callback")
+            try:
+                shopee_log_event("oauth_callback", f"shop_id={shop_id}", "RECEBIDO", "Autorização Live recebida.")
+                shopee_exchange_code(code, shop_id)
+                self.send_redirect(BASE_PATH + "/admin?aba=integracoes&shopee=conectada")
+            except Exception as exc:
+                shopee_log_event("oauth_callback", f"shop_id={shop_id}", "ERRO", str(exc))
+                self.send_redirect(BASE_PATH + "/admin?aba=integracoes&shopee=erro&motivo=token")
             return
         if path == "/api/integracoes/shopee/status":
             ctx = self.auth(admin_only=True)

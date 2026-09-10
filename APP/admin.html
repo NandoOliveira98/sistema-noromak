@@ -1248,7 +1248,7 @@ body{background:var(--v15-bg)!important}
             <button type="button" id="btnShopeeSincronizar" class="btn-sucesso" onclick="sincronizarShopeeAdmin()" disabled>↻ Sincronizar agora</button>
             <button type="button" id="btnShopeeDesconectar" class="btn-perigo" onclick="desconectarShopeeAdmin()" disabled>Desconectar</button>
           </div>
-          <div id="shopeeIntegracaoMensagem" class="integracao-nota">Estrutura preparada para a Shopee Open Platform. O Go-Live está em análise; Partner Key e tokens nunca são enviados ao navegador.</div>
+          <div id="shopeeIntegracaoMensagem" class="integracao-nota">Shopee Open Platform Live. Partner Key e tokens permanecem somente no servidor.</div>
         </div>
         <div class="integracao-card">
           <h3>🖨 Agente Zebra autônomo</h3>
@@ -7651,10 +7651,6 @@ async function carregarIntegracaoShopeeAdmin(){
       badge.className="integracao-status ok";badge.textContent="🟢 Shopee conectada";
       if(conectar)conectar.textContent="Reconectar Shopee";if(sync)sync.disabled=false;if(disc)disc.disabled=false;
       if(msg)msg.textContent=sh.last_error?`Último erro: ${sh.last_error}`:"Integração Shopee ativa.";
-    }else if(sh.go_live_pending){
-      badge.className="integracao-status off";badge.textContent="🟡 Go-Live em análise";
-      if(conectar)conectar.disabled=true;if(sync)sync.disabled=true;if(disc)disc.disabled=true;
-      if(msg)msg.textContent="Base pronta no Noromak. Aguardando a aprovação Go-Live para inserir as credenciais/URLs de produção e autorizar a loja real.";
     }else if(!sh.configured){
       badge.className="integracao-status off";badge.textContent="🟡 Aguardando credenciais de produção";
       if(conectar)conectar.disabled=true;
@@ -7663,6 +7659,14 @@ async function carregarIntegracaoShopeeAdmin(){
       if(conectar)conectar.disabled=false;
     }
   }catch(e){badge.className="integracao-status erro";badge.textContent="🔴 Erro ao consultar Shopee";if(msg)msg.textContent=e.message;}
+}
+function feedbackCallbackShopeeAdmin(){
+  const p=new URLSearchParams(location.search), estado=p.get("shopee");
+  if(!estado)return;
+  setTimeout(()=>{
+    if(estado==="conectada") alert("Shopee conectada com sucesso ao Noromak.");
+    else if(estado==="erro") alert("Não foi possível concluir a conexão Shopee. Consulte o status/log da integração.");
+  },250);
 }
 function conectarShopeeAdmin(){window.location.href="/expedicao/api/integracoes/shopee/connect";}
 async function sincronizarShopeeAdmin(){
@@ -7907,5 +7911,5 @@ window.addEventListener("storage",e=>{if(["conf_pedidos","conf_logs","conf_histo
 })();
 </script>
 
-</body>
+<script>document.addEventListener("DOMContentLoaded", feedbackCallbackShopeeAdmin);</script>\n</body>
 </html>
