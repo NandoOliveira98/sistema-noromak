@@ -1,0 +1,12 @@
+V17.28 - SHOPEE ETIQUETAS FLUXO POR PEDIDO
+
+Correcoes principais:
+- Corrige o fluxo de etiquetas Shopee após os logs reais da V17.27.
+- Usa package_number e shipping_document_type retornados pela própria Shopee.
+- Criação e consulta de etiqueta passam a ser tratadas por pedido/pacote, evitando que common.batch_api_all_failed esconda o erro real.
+- Corrige get_shipping_document_data_info: envia order_sn individualmente, como exigido pela API.
+- Mantém o worker em background para não causar HTTP 504.
+- Mantém proteção das edições manuais dos pedidos Shopee.
+- Mantém fallback para buyer_username quando o nome real estiver mascarado.
+
+Após publicar, clique em Sincronizar agora e aguarde o worker processar as etiquetas.

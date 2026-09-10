@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.27-SHOPEE-SYNC-SEM-504"
+APP_VERSION = "17.28-SHOPEE-ETIQUETAS-FLUXO-POR-PEDIDO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -3295,13 +3295,17 @@ def _shopee_store_linked_label(order_sn: str, package_number: str, zpl: str) -> 
 
 
 def shopee_sync_shipping_documents(shipments: list[dict[str,str]]) -> dict[str,Any]:
-    """Gera e baixa etiquetas Shopee com o fluxo correto da Open Platform.
+    """Processa etiquetas Shopee de forma resiliente, por pedido/pacote.
 
-    Pontos importantes:
-    - create_shipping_document normalmente exige tracking_number para canais integrados;
-    - falhas vêm por item em response.result_list, mesmo quando a chamada HTTP teve sucesso;
-    - get_shipping_document_result deve consultar o mesmo shipping_document_type usado na criação;
-    - PROCESSING fica pendente para a próxima sincronização, sem derrubar o lote inteiro.
+    V17.28:
+    - usa a resposta de get_shipping_document_parameter como fonte da identidade
+      real do pacote (incluindo package_number retornado pela Shopee);
+    - só tenta criar documento com tracking quando ele existir, exceto canais que
+      explicitamente permitem impressão antes do arrange;
+    - em falha de lote, tenta create/result individualmente e registra o erro real;
+    - corrige get_shipping_document_data_info: a API exige order_sn no corpo, não
+      order_list;
+    - nunca bloqueia a sincronização HTTP; o worker continua as pendências.
     """
     summary={
         "consultados":0,"tracking_ok":0,"tracking_pendente":0,"criados":0,
@@ -3319,42 +3323,49 @@ def shopee_sync_shipping_documents(shipments: list[dict[str,str]]) -> dict[str,A
         return (str(row.get("order_sn") or "").strip(), str(row.get("package_number") or "").strip())
 
     def _safe_err(exc: Exception) -> str:
-        return str(exc or "")[:700]
+        return str(exc or "")[:900]
 
+    def _parse_result_list(data: dict[str,Any]) -> list[dict[str,Any]]:
+        resp=data.get("response") if isinstance(data,dict) and isinstance(data.get("response"),dict) else {}
+        vals=resp.get("result_list") if isinstance(resp.get("result_list"),list) else []
+        return [x for x in vals if isinstance(x,dict)]
+
+    # Processa em blocos pequenos para descobrir package_number/tipo, mas toda ação
+    # mutável (create) é feita individualmente. Isso evita common.batch_api_all_failed
+    # esconder qual pedido realmente falhou.
     for off in range(0,len(orders),50):
         base_batch=orders[off:off+50]
         summary["consultados"] += len(base_batch)
         try:
-            # 1) Descobre o tipo correto de documento por pedido/pacote.
-            par=shopee_api_post("/api/v2/logistics/get_shipping_document_parameter", {"order_list":base_batch})
-            presp=par.get("response") if isinstance(par.get("response"),dict) else {}
-            presults=presp.get("result_list") if isinstance(presp.get("result_list"),list) else []
-            params_by_key: dict[tuple[str,str],dict[str,Any]] = {}
-            for r in presults:
-                if not isinstance(r,dict):
-                    continue
-                k=_key(r)
-                if not k[0]:
-                    continue
-                params_by_key[k]=r
-                ferr=str(r.get("fail_error") or "").strip()
-                if ferr:
-                    summary["erros"] += 1
-                    shopee_log_event("shipping_document_parameter",f"order={k[0]}","ERRO",f"erro={ferr}; msg={str(r.get('fail_message') or '')[:350]}")
+            try:
+                par=shopee_api_post("/api/v2/logistics/get_shipping_document_parameter", {"order_list":base_batch})
+                presults=_parse_result_list(par)
+            except Exception as exc:
+                shopee_log_event("shipping_document_parameter","batch","ERRO",_safe_err(exc))
+                summary["erros"] += len(base_batch)
+                continue
 
-            # 2) Monta a mesma identidade de documento para create/result/download.
+            # Constrói os trabalhos a partir do retorno da Shopee. Se o shipment_list
+            # veio sem package_number, preservamos o package_number retornado aqui.
             work: list[dict[str,Any]]=[]
-            for src in base_batch:
-                order_sn,pkg=_key(src)
+            seen:set[tuple[str,str]]=set()
+            for pr in presults:
+                order_sn,pkg=_key(pr)
                 if not order_sn:
                     continue
-                pr=params_by_key.get((order_sn,pkg)) or params_by_key.get((order_sn,"")) or {}
-                if str(pr.get("fail_error") or "").strip():
+                ferr=str(pr.get("fail_error") or "").strip()
+                if ferr:
+                    summary["erros"] += 1
+                    shopee_log_event("shipping_document_parameter",f"order={order_sn}","ERRO",f"erro={ferr}; msg={str(pr.get('fail_message') or '')[:450]}")
                     continue
                 dtype=str(pr.get("suggest_shipping_document_type") or "").strip()
                 selectable=pr.get("selectable_shipping_document_type")
                 if not dtype and isinstance(selectable,list) and selectable:
                     dtype=str(selectable[0] or "").strip()
+                k=(order_sn,pkg)
+                if k in seen:
+                    continue
+                seen.add(k)
                 row={"order_sn":order_sn}
                 if pkg:
                     row["package_number"]=pkg
@@ -3362,164 +3373,181 @@ def shopee_sync_shipping_documents(shipments: list[dict[str,str]]) -> dict[str,A
                     row["shipping_document_type"]=dtype
                 work.append(row)
 
-            # 3) Busca tracking_number. A Shopee documenta esse valor como obrigatório
-            #    para criar etiqueta em canais integrados depois do arrange shipment.
-            create_rows: list[dict[str,Any]]=[]
-            result_rows: list[dict[str,Any]]=[]
+            # Alguns retornos antigos podem não trazer result_list. Nesse caso usa o
+            # pedido original, mas sem inventar package_number/tipo.
+            if not work:
+                for src in base_batch:
+                    order_sn,pkg=_key(src)
+                    if not order_sn:
+                        continue
+                    row={"order_sn":order_sn}
+                    if pkg:
+                        row["package_number"]=pkg
+                    work.append(row)
+
             for row in work:
-                order_sn=str(row["order_sn"]); pkg=str(row.get("package_number") or "")
+                order_sn=str(row.get("order_sn") or "").strip()
+                pkg=str(row.get("package_number") or "").strip()
+                dtype=str(row.get("shipping_document_type") or "").strip()
+                if not order_sn:
+                    continue
+
                 q={"order_sn":order_sn}
                 if pkg:
                     q["package_number"]=pkg
+
                 tracking=""
                 try:
                     tr=shopee_api_get("/api/v2/logistics/get_tracking_number", q)
                     tresp=tr.get("response") if isinstance(tr.get("response"),dict) else {}
                     tracking=str(tresp.get("tracking_number") or "").strip()
-                except Exception as e:
-                    # Alguns canais permitem imprimir antes do tracking; seguimos com a
-                    # criação sem tracking e deixamos a Shopee decidir por item.
-                    shopee_log_event("shipping_tracking",f"order={order_sn}","AVISO",_safe_err(e))
-                create_row=dict(row)
+                except Exception as exc:
+                    shopee_log_event("shipping_tracking",f"order={order_sn}","AVISO",_safe_err(exc))
+
                 if tracking:
-                    create_row["tracking_number"]=tracking
                     summary["tracking_ok"] += 1
                 else:
                     summary["tracking_pendente"] += 1
-                create_rows.append(create_row)
-                result_rows.append(dict(row))
 
-            # 4) Cria a tarefa. Não considera HTTP 200 como sucesso de todos os itens:
-            #    verifica response.result_list e registra cada fail_error.
-            if create_rows:
+                create_row={"order_sn":order_sn}
+                if pkg:
+                    create_row["package_number"]=pkg
+                if dtype:
+                    create_row["shipping_document_type"]=dtype
+                if tracking:
+                    create_row["tracking_number"]=tracking
+
+                # Tenta criar individualmente para obter o erro específico do pedido.
+                create_ok=False
+                create_soft=False
                 try:
-                    created=shopee_api_post("/api/v2/logistics/create_shipping_document", {"order_list":create_rows})
-                    cresp=created.get("response") if isinstance(created.get("response"),dict) else {}
-                    crlist=cresp.get("result_list") if isinstance(cresp.get("result_list"),list) else []
-                    failed_keys=set()
-                    for r in crlist:
-                        if not isinstance(r,dict):
-                            continue
-                        k=_key(r)
-                        ferr=str(r.get("fail_error") or "").strip()
-                        if ferr:
-                            failed_keys.add(k)
-                            msg=str(r.get("fail_message") or "")[:400]
-                            # already-created/processing style conditions are not fatal;
-                            # we still query result below. should_print_first, however,
-                            # means create was required and did not complete, so it is logged.
-                            sev="AVISO" if ferr in {"logistics.shipping_document_processing","logistics.shipping_document_already_exist"} else "ERRO"
-                            if sev=="ERRO":
-                                summary["erros"] += 1
-                            shopee_log_event("shipping_document_create",f"order={k[0]}",sev,f"erro={ferr}; msg={msg}")
-                    # ResultList is a failure list in Shopee's schema; anything not failed
-                    # is considered accepted for creation.
-                    accepted=max(0,len(create_rows)-len(failed_keys))
-                    summary["criados"] += accepted
-                except Exception as e:
-                    # Top-level batch errors are logged, but we still query result because
-                    # an earlier task may already exist for part of the batch.
-                    shopee_log_event("shipping_document_create","batch","AVISO",_safe_err(e))
+                    created=shopee_api_post("/api/v2/logistics/create_shipping_document", {"order_list":[create_row]})
+                    crlist=_parse_result_list(created)
+                    failures=[x for x in crlist if str(x.get("fail_error") or "").strip()]
+                    if failures:
+                        fr=failures[0]
+                        ferr=str(fr.get("fail_error") or "").strip()
+                        fmsg=str(fr.get("fail_message") or "")[:500]
+                        if ferr in {"logistics.shipping_document_processing","logistics.shipping_document_already_exist","logistics.shipping_document_already_exists"}:
+                            create_soft=True
+                            shopee_log_event("shipping_document_create",f"order={order_sn}","AVISO",f"erro={ferr}; msg={fmsg}")
+                        else:
+                            summary["erros"] += 1
+                            shopee_log_event("shipping_document_create",f"order={order_sn}","ERRO",f"erro={ferr}; msg={fmsg}; tracking={'sim' if tracking else 'nao'}; pacote={'sim' if pkg else 'nao'}; doc={dtype or '-'}")
+                    else:
+                        create_ok=True
+                        summary["criados"] += 1
+                except Exception as exc:
+                    msg=_safe_err(exc)
+                    # batch_api_all_failed em chamada individual significa que a Shopee
+                    # recusou este pedido; registramos contexto seguro e não mascaramos a
+                    # falha com uma nova chamada em lote.
+                    shopee_log_event("shipping_document_create",f"order={order_sn}","ERRO",f"{msg}; tracking={'sim' if tracking else 'nao'}; pacote={'sim' if pkg else 'nao'}; doc={dtype or '-'}")
+                    summary["erros"] += 1
 
-            # 5) Consulta status usando também shipping_document_type.
-            if result_rows:
+                # Mesmo quando create responde already-exists/processing, vale consultar.
+                # Quando create falhou de verdade e não há tracking, deixa para o worker
+                # tentar novamente; não entra em loop de should_print_first.
+                if not (create_ok or create_soft):
+                    summary["pendentes"] += 1
+                    continue
+
+                result_row={"order_sn":order_sn}
+                if pkg:
+                    result_row["package_number"]=pkg
+                if dtype:
+                    result_row["shipping_document_type"]=dtype
                 try:
-                    result=shopee_api_post("/api/v2/logistics/get_shipping_document_result", {"order_list":result_rows})
-                    rresp=result.get("response") if isinstance(result.get("response"),dict) else {}
-                    rlist=rresp.get("result_list") if isinstance(rresp.get("result_list"),list) else []
-                except Exception as e:
-                    # Se o lote inteiro falhar, tenta individualmente para não perder as
-                    # etiquetas válidas por causa de um único pedido problemático.
-                    shopee_log_event("shipping_document_result","batch","AVISO",_safe_err(e))
-                    rlist=[]
-                    for rr in result_rows:
-                        try:
-                            one=shopee_api_post("/api/v2/logistics/get_shipping_document_result", {"order_list":[rr]})
-                            ores=one.get("response") if isinstance(one.get("response"),dict) else {}
-                            vals=ores.get("result_list") if isinstance(ores.get("result_list"),list) else []
-                            rlist.extend(x for x in vals if isinstance(x,dict))
-                        except Exception as ie:
-                            summary["erros"] += 1
-                            shopee_log_event("shipping_document_result",f"order={rr.get('order_sn','')}","ERRO",_safe_err(ie))
-
-                for r in rlist:
-                    if not isinstance(r,dict):
-                        continue
-                    st=str(r.get("status") or "").upper().strip()
-                    order_sn=str(r.get("order_sn") or "").strip()
-                    pkg=str(r.get("package_number") or "").strip()
-                    ferr=str(r.get("fail_error") or "").strip()
-                    fmsg=str(r.get("fail_message") or "")[:400]
-                    # Recupera o tipo usado para este pedido.
-                    dtype=""
-                    for rr in result_rows:
-                        if str(rr.get("order_sn") or "")==order_sn and str(rr.get("package_number") or "")==pkg:
-                            dtype=str(rr.get("shipping_document_type") or "")
-                            break
-
-                    if st=="READY":
-                        summary["prontos"] += 1
-                        reqrow={"order_sn":order_sn}
-                        if pkg:
-                            reqrow["package_number"]=pkg
-                        payload={"order_list":[reqrow]}
-                        if dtype:
-                            payload["shipping_document_type"]=dtype
-                        try:
-                            raw,ctype=shopee_api_post_bytes("/api/v2/logistics/download_shipping_document", payload)
-                            if raw:
-                                if raw.startswith(b"%PDF") or "pdf" in ctype.lower():
-                                    ext="pdf"
-                                elif raw[:4]==b"PK\x03\x04":
-                                    ext="zip"
-                                else:
-                                    ext="bin"
-                                safe=re.sub(r"[^A-Za-z0-9_.-]+","_",order_sn+("_"+pkg if pkg else ""))
-                                fp=labels_dir/f"{safe}.{ext}"
-                                fp.write_bytes(raw)
-                                summary["baixados"] += 1
-                                zpl=_shopee_extract_zpl(raw)
-                                if zpl and _shopee_store_linked_label(order_sn,pkg,zpl):
-                                    summary["vinculados"] += 1
-                                    state="VINCULADA_ZPL"
-                                else:
-                                    summary["nao_zpl"] += 1
-                                    state="BAIXADA_SEM_ZPL"
-                                shopee_log_event("shipping_document_download",f"order={order_sn}","OK",f"arquivo={fp.name}; bytes={len(raw)}; tipo={ctype[:80]}; doc={dtype}; estado={state}")
-                        except Exception as e:
-                            summary["erros"] += 1
-                            shopee_log_event("shipping_document_download",f"order={order_sn}","ERRO",_safe_err(e))
-                    elif st=="PROCESSING" or (not st and not ferr):
+                    result=shopee_api_post("/api/v2/logistics/get_shipping_document_result", {"order_list":[result_row]})
+                    rlist=_parse_result_list(result)
+                except Exception as exc:
+                    msg=_safe_err(exc)
+                    # should_print_first confirma que create ainda não foi aceito. Fica
+                    # pendente para o próximo ciclo, sem transformar isso em polling.
+                    if "shipping_document_should_print_first" in msg:
                         summary["pendentes"] += 1
-                    elif st=="FAILED" or ferr:
-                        # O código should_print_first significa que a tarefa de criação ainda
-                        # não existe/foi aceita; não tentamos baixar nesse estado.
+                        shopee_log_event("shipping_document_result",f"order={order_sn}","AVISO",msg)
+                    else:
+                        summary["erros"] += 1
+                        shopee_log_event("shipping_document_result",f"order={order_sn}","ERRO",msg)
+                    continue
+
+                if not rlist:
+                    summary["pendentes"] += 1
+                    continue
+
+                rr=rlist[0]
+                st=str(rr.get("status") or "").upper().strip()
+                ferr=str(rr.get("fail_error") or "").strip()
+                fmsg=str(rr.get("fail_message") or "")[:500]
+                if st=="READY":
+                    summary["prontos"] += 1
+                    reqrow={"order_sn":order_sn}
+                    if pkg:
+                        reqrow["package_number"]=pkg
+                    payload={"order_list":[reqrow]}
+                    if dtype:
+                        payload["shipping_document_type"]=dtype
+                    try:
+                        raw,ctype=shopee_api_post_bytes("/api/v2/logistics/download_shipping_document", payload)
+                        if raw:
+                            if raw.startswith(b"%PDF") or "pdf" in ctype.lower():
+                                ext="pdf"
+                            elif raw[:4]==b"PK\x03\x04":
+                                ext="zip"
+                            else:
+                                ext="bin"
+                            safe=re.sub(r"[^A-Za-z0-9_.-]+","_",order_sn+("_"+pkg if pkg else ""))
+                            fp=labels_dir/f"{safe}.{ext}"
+                            fp.write_bytes(raw)
+                            summary["baixados"] += 1
+                            zpl=_shopee_extract_zpl(raw)
+                            if zpl and _shopee_store_linked_label(order_sn,pkg,zpl):
+                                summary["vinculados"] += 1
+                                state="VINCULADA_ZPL"
+                            else:
+                                summary["nao_zpl"] += 1
+                                state="BAIXADA_SEM_ZPL"
+                            shopee_log_event("shipping_document_download",f"order={order_sn}","OK",f"arquivo={fp.name}; bytes={len(raw)}; tipo={ctype[:80]}; doc={dtype}; estado={state}")
+                    except Exception as exc:
+                        summary["erros"] += 1
+                        shopee_log_event("shipping_document_download",f"order={order_sn}","ERRO",_safe_err(exc))
+                elif st in {"PROCESSING","PENDING",""} and not ferr:
+                    summary["pendentes"] += 1
+                elif ferr or st=="FAILED":
+                    if ferr=="logistics.shipping_document_should_print_first":
+                        summary["pendentes"] += 1
+                        shopee_log_event("shipping_document_result",f"order={order_sn}","AVISO",f"status={st or '-'}; erro={ferr}; msg={fmsg}")
+                    else:
                         summary["erros"] += 1
                         shopee_log_event("shipping_document_result",f"order={order_sn}","ERRO",f"status={st or '-'}; erro={ferr or '-'}; msg={fmsg}")
-                    elif st:
-                        summary["pendentes"] += 1
+                else:
+                    summary["pendentes"] += 1
 
-            # 6) Diagnóstico de data-info sem PII.
-            try:
-                info=shopee_api_post("/api/v2/logistics/get_shipping_document_data_info", {"order_list":base_batch})
-                resp=info.get("response") if isinstance(info.get("response"),dict) else {}
-                ir=resp.get("result_list") if isinstance(resp.get("result_list"),list) else []
-                summary["data_info_ok"] += len(ir)
-                def has_image(v):
-                    if isinstance(v,dict):
-                        return any(("image" in str(k).lower() and bool(x)) or has_image(x) for k,x in v.items())
-                    if isinstance(v,list):
-                        return any(has_image(x) for x in v)
-                    return False
-                batch_images=sum(1 for x in ir if has_image(x))
-                summary["data_info_imagem"] += batch_images
-                keys=sorted({str(k) for x in ir if isinstance(x,dict) for k in x.keys()})
-                shopee_log_event("shipping_data_info","batch","OK",f"resultados={len(ir)}; chaves={','.join(keys)[:800]}; com_imagem={batch_images}")
-            except Exception as e:
-                shopee_log_event("shipping_data_info","batch","AVISO",_safe_err(e))
-        except Exception as e:
+                # Diagnóstico correto de data-info: endpoint é por pedido.
+                try:
+                    dinfo_payload={"order_sn":order_sn}
+                    if pkg:
+                        dinfo_payload["package_number"]=pkg
+                    info=shopee_api_post("/api/v2/logistics/get_shipping_document_data_info", dinfo_payload)
+                    resp=info.get("response") if isinstance(info.get("response"),dict) else {}
+                    if resp:
+                        summary["data_info_ok"] += 1
+                        def has_image(v):
+                            if isinstance(v,dict):
+                                return any(("image" in str(k).lower() and bool(x)) or has_image(x) for k,x in v.items())
+                            if isinstance(v,list):
+                                return any(has_image(x) for x in v)
+                            return False
+                        if has_image(resp):
+                            summary["data_info_imagem"] += 1
+                        keys=sorted(str(k) for k in resp.keys())
+                        shopee_log_event("shipping_data_info",f"order={order_sn}","OK",f"chaves={','.join(keys)[:800]}; com_imagem={1 if has_image(resp) else 0}")
+                except Exception as exc:
+                    shopee_log_event("shipping_data_info",f"order={order_sn}","AVISO",_safe_err(exc))
+        except Exception as exc:
             summary["erros"] += len(base_batch)
-            shopee_log_event("shipping_documents","batch","ERRO",_safe_err(e))
+            shopee_log_event("shipping_documents","batch","ERRO",_safe_err(exc))
     return summary
 
 def shopee_current_shipments() -> list[dict[str, str]]:
