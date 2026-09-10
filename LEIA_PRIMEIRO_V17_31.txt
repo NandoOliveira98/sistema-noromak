@@ -1,0 +1,14 @@
+NOROMAK WEB V17.31 — SHOPEE SHIP_ORDER REAL FIX
+
+Correção principal:
+- O worker de etiquetas agora segue: get_shipping_parameter -> ship_order -> get_tracking_number -> create_shipping_document -> get_shipping_document_result -> download/vínculo.
+- ship_order usa somente os campos exigidos pela Shopee para o pedido/pacote (pickup/dropoff/non-integrated), sem strings vazias.
+- Pickup escolhe endereço válido e horário recomendado quando disponível.
+- Dropoff escolhe branch/slug quando exigido.
+- Campos que exigem dado externo/manual não são inventados: ficam PENDENTE e aparecem no log.
+- get_shipping_document_result só é chamado após create confirmado.
+- Sem polling síncrono; o worker continua em background.
+- Mantidas proteção de edições manuais, OAuth/refresh, fallback buyer_username e pedidos ML/manuais.
+
+Logs úteis:
+shipping_parameter, ship_order, tracking_number, shipping_document_create, shipping_document_result, shipping_document_download.
