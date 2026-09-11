@@ -399,6 +399,13 @@
     .promo-status-pill{display:inline-flex;padding:4px 7px;border-radius:999px;font-size:.62rem;font-weight:900;white-space:nowrap}
     .promo-status-pill.expired{background:#fee2e2;color:#991b1b}.promo-status-pill.soon{background:#ffedd5;color:#9a3412}.promo-status-pill.ok{background:#dcfce7;color:#166534}.promo-status-pill.nodate{background:#e2e8f0;color:#475569}
     .promo-stock{font-weight:900}.promo-stock.zero{color:#94a3b8}.promo-stock.positive{color:#15803d}.promo-stock.loading{color:#64748b}
+    .promo-apollo-box{display:flex;flex-direction:column;gap:3px;line-height:1.2}
+    .promo-apollo-sku{font-size:.66rem;font-weight:800;color:#475569;word-break:break-all}
+    .promo-apollo-stock{font-size:.78rem;font-weight:950}
+    .promo-apollo-stock.positive{color:#15803d}.promo-apollo-stock.zero{color:#b91c1c}.promo-apollo-stock.loading{color:#64748b}.promo-apollo-stock.error{color:#b45309}
+    .promo-apollo-review{display:inline-flex;align-items:center;width:max-content;padding:2px 6px;border-radius:999px;background:#dcfce7;color:#166534;font-size:.62rem;font-weight:950;text-transform:uppercase;letter-spacing:.02em}
+    .promo-apollo-branches{font-size:.62rem;color:#64748b;max-width:270px;white-space:normal}
+
     .promo-product-title{font-weight:850;color:#203b59;max-width:390px}.promo-product-sub{margin-top:2px;color:#64748b;font-size:.62rem}
     .promo-action{white-space:nowrap;text-decoration:none;display:inline-flex;align-items:center;justify-content:center}
     .promo-footer{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-top:10px;color:#64748b;font-size:.68rem}.promo-footer > div{display:flex;align-items:center;gap:8px}
@@ -718,7 +725,7 @@
           </select>
           <label class="promo-stock-toggle"><input id="promo-hide-no-stock" type="checkbox" checked> Ocultar estoque zerado</label>
           <div class="promo-toolbar-actions">
-            <button class="btn btn-secondary" id="promo-refresh-stock" type="button">↻ Atualizar estoque</button>
+            <button class="btn btn-secondary" id="promo-refresh-stock" type="button">↻ Atualizar estoque ML + Apollo</button>
             <button class="btn btn-secondary" id="promo-show-all" type="button">Ver todos</button>
             <button class="btn btn-primary" id="promo-import-btn" type="button">Importar planilha</button>
           </div>
@@ -734,7 +741,7 @@
           <b>Pesquisa:</b> digite o MLB completo ou somente os números. A lista é filtrada imediatamente e a busca ignora temporariamente os filtros de vencimento/estoque quando o código é completo.<br>
           <b>Como funciona:</b> os registros vencidos são carregados diretamente junto com a página, sem depender de API ou estoque. Esta tela reproduz a base da planilha: código do anúncio, data de vencimento e situação.
           O status é recalculado diariamente. Clique diretamente no <b>código do anúncio</b> para abrir a página de promoção daquele MLB.
-          Marque <b>Estoque zerado</b> diretamente na linha do anúncio; ele será ocultado imediatamente sem ser excluído da base. O filtro <b>Ocultar estoque zerado</b> vem ativo por padrão. Marque <b>Preço OK</b> quando o preço final já estiver na margem ideal; esses anúncios saem das filas de renovação e ficam disponíveis no filtro <b>Preço OK</b>. Use <b>Ver todos da planilha</b> para rever anúncios marcados, e <b>Adicionar produto</b> ou <b>Excluir</b> para manter a lista.
+          Marque <b>Estoque zerado</b> diretamente na linha do anúncio; ele será ocultado imediatamente sem ser excluído da base. O filtro <b>Ocultar estoque zerado</b> vem ativo por padrão. Marque <b>Preço OK</b> quando o preço final já estiver na margem ideal; esses anúncios saem das filas de renovação e ficam disponíveis no filtro <b>Preço OK</b>. Use <b>Ver todos da planilha</b> para rever anúncios marcados, e <b>Adicionar produto</b> ou <b>Excluir</b> para manter a lista. Ao clicar em <b>Atualizar estoque ML + Apollo</b>, o sistema consulta o MLB no Mercado Livre, lê o SKU do próprio anúncio e consulta esse SKU exato no Apollo. Itens marcados como zerados que voltaram a ter estoque recebem o aviso <b>REVISAR PROMOÇÃO</b>.
         </div>
 
         <div class="promo-manage-bar promo-manage-secondary">
@@ -3374,11 +3381,44 @@ var state = {
         var stockKnown=meta.stock_known===true;
         var stock=stockKnown?Number(meta.available_quantity||0):null;
         var manualZero=r.manualZero===true;
-        var stockHtml=manualZero
-          ? '<span class="promo-stock zero">0 un. (marcado)</span>'
-          : (!stockKnown
-              ? '<span class="promo-stock loading">Não consultado</span>'
-              : '<span class="promo-stock '+(stock>0?"positive":"zero")+'">'+stock+' un.</span>');
+        var stockHtml="";
+        if(manualZero){
+          var sku=String(meta.sku||"").trim();
+          var apLoaded=meta.apollo_loaded===true;
+          var apKnown=meta.apollo_stock_known===true;
+          var apQty=apKnown?Number(meta.apollo_available||0):null;
+          var apErr=String(meta.apollo_error||"").trim();
+          var branchRows=Array.isArray(meta.apollo_branches)?meta.apollo_branches:[];
+          var branchTxt=branchRows.map(function(b){
+            var name=String(b.nome||b.filial_nome||b.revenda_nome||("Filial "+(b.revenda??""))).trim();
+            var qty=b.disponivel;
+            if(qty===null||qty===undefined||qty==="")return "";
+            return name+": "+Number(qty)+" un.";
+          }).filter(Boolean).join(" · ");
+          var apLine="";
+          if(!meta.loaded){
+            apLine='<span class="promo-apollo-stock loading">Apollo: clique em Atualizar estoque</span>';
+          }else if(!sku){
+            apLine='<span class="promo-apollo-stock error">SKU não encontrado no anúncio ML</span>';
+          }else if(!apLoaded){
+            apLine='<span class="promo-apollo-stock loading">Apollo: não consultado</span>';
+          }else if(apKnown){
+            apLine='<span class="promo-apollo-stock '+(apQty>0?"positive":"zero")+'">Apollo: '+apQty+' un.</span>';
+          }else{
+            apLine='<span class="promo-apollo-stock error">Apollo: '+promoEsc(apErr||"estoque indisponível")+'</span>';
+          }
+          stockHtml='<div class="promo-apollo-box">'+
+            '<span class="promo-stock zero">0 un. (marcado)</span>'+
+            (sku?'<span class="promo-apollo-sku">SKU ML: '+promoEsc(sku)+'</span>':'')+
+            apLine+
+            (apKnown&&apQty>0?'<span class="promo-apollo-review">⚠ Revisar promoção</span>':'')+
+            (branchTxt?'<span class="promo-apollo-branches">'+promoEsc(branchTxt)+'</span>':'')+
+          '</div>';
+        }else{
+          stockHtml=!stockKnown
+            ? '<span class="promo-stock loading">Não consultado</span>'
+            : '<span class="promo-stock '+(stock>0?"positive":"zero")+'">'+stock+' un.</span>';
+        }
 
         var stockZeroControl = '<label class="promo-zero-row"><input class="promo-zero-checkbox" data-promo-zero-mlb="'+promoEsc(r.mlb)+'" type="checkbox" '+(manualZero?'checked':'')+'> Estoque zerado</label>';
 
@@ -3562,6 +3602,23 @@ var state = {
         if(!r.ok||!d.ok)throw new Error(d.error||("HTTP "+r.status));
         return d.items||{};
       }
+      async function promoFetchApolloBySku(items){
+        if(!items.length)return {};
+        var r=await fetch("/expedicao/api/full/apollo-stock",{
+          method:"POST",credentials:"same-origin",cache:"no-store",
+          headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({items:items.map(function(x){return {sku:x.sku,need:1};}),filial:0})
+        });
+        var d=await r.json().catch(function(){return {};});
+        if(!r.ok||!d.ok)throw new Error(d.error||("HTTP "+r.status));
+        var out={};
+        (Array.isArray(d.results)?d.results:[]).forEach(function(x){
+          var sku=String(x.sku||"").trim();
+          if(sku&&!out[sku])out[sku]=x;
+        });
+        return out;
+      }
+
       async function promoEnsureMeta(rows,force){
         var now=Date.now(), ttl=30*60*1000;
         var ids=rows.map(function(r){return r.mlb;}).filter(function(id){
@@ -3574,7 +3631,7 @@ var state = {
         var token=++promoLoadToken;
         var progress=document.getElementById("promo-progress");
         progress.hidden=false;
-        document.getElementById("promo-progress-text").textContent="Consultando estoque da página atual...";
+        document.getElementById("promo-progress-text").textContent="Consultando Mercado Livre e Apollo...";
         document.getElementById("promo-progress-bar").style.width="10%";
 
         try{
@@ -3584,7 +3641,8 @@ var state = {
           ids.forEach(function(id){
             var m=items[id]||{};
             var known=m.stock_known===true && m.available_quantity!==null && m.available_quantity!==undefined && m.available_quantity!=="";
-            promoMeta[id]={
+            var prev=promoMeta[id]||{};
+            promoMeta[id]=Object.assign({},prev,{
               loaded:true,
               loadedAt:Date.now(),
               title:String(m.title||""),
@@ -3594,12 +3652,71 @@ var state = {
               status:String(m.status||""),
               price:Number(m.price||0),
               permalink:String(m.permalink||"")
-            };
+            });
           });
+
+          // V17.40: apenas anúncios marcados como estoque zerado consultam Apollo.
+          // O SKU vem do próprio anúncio no Mercado Livre; não depende de vínculo do Precificador.
+          var apolloTargets=[];
+          var seenSku={};
+          ids.forEach(function(id){
+            var row=promoRows.find(function(x){return x.mlb===id;});
+            if(!row||row.manualZero!==true)return;
+            var sku=String(promoMeta[id]?.sku||"").trim();
+            if(!sku){
+              promoMeta[id].apollo_loaded=true;
+              promoMeta[id].apollo_loaded_at=Date.now();
+              promoMeta[id].apollo_stock_known=false;
+              promoMeta[id].apollo_available=null;
+              promoMeta[id].apollo_branches=[];
+              promoMeta[id].apollo_error="SKU não encontrado no anúncio ML";
+              return;
+            }
+            if(!seenSku[sku]){seenSku[sku]=true;apolloTargets.push({sku:sku});}
+          });
+
+          if(apolloTargets.length){
+            try{
+              var apolloMap=await promoFetchApolloBySku(apolloTargets);
+              ids.forEach(function(id){
+                var row=promoRows.find(function(x){return x.mlb===id;});
+                if(!row||row.manualZero!==true)return;
+                var sku=String(promoMeta[id]?.sku||"").trim();
+                if(!sku)return;
+                var ap=apolloMap[sku];
+                promoMeta[id].apollo_loaded=true;
+                promoMeta[id].apollo_loaded_at=Date.now();
+                if(ap){
+                  promoMeta[id].apollo_stock_known=ap.stock_known===true;
+                  promoMeta[id].apollo_available=ap.stock_known===true?Number(ap.available||0):null;
+                  promoMeta[id].apollo_branches=Array.isArray(ap.branches)?ap.branches:[];
+                  promoMeta[id].apollo_error=String(ap.error||"");
+                }else{
+                  promoMeta[id].apollo_stock_known=false;
+                  promoMeta[id].apollo_available=null;
+                  promoMeta[id].apollo_branches=[];
+                  promoMeta[id].apollo_error="Sem retorno do Apollo";
+                }
+              });
+            }catch(apErr){
+              ids.forEach(function(id){
+                var row=promoRows.find(function(x){return x.mlb===id;});
+                if(!row||row.manualZero!==true)return;
+                var sku=String(promoMeta[id]?.sku||"").trim();
+                if(!sku)return;
+                promoMeta[id].apollo_loaded=true;
+                promoMeta[id].apollo_loaded_at=Date.now();
+                promoMeta[id].apollo_stock_known=false;
+                promoMeta[id].apollo_available=null;
+                promoMeta[id].apollo_branches=[];
+                promoMeta[id].apollo_error=String(apErr?.message||apErr||"Erro Apollo");
+              });
+            }
+          }
 
           promoSaveMeta();
           document.getElementById("promo-progress-bar").style.width="100%";
-          document.getElementById("promo-progress-text").textContent="Estoque atualizado.";
+          document.getElementById("promo-progress-text").textContent="Estoque ML + Apollo atualizado.";
           return true;
         }catch(e){
           document.getElementById("promo-progress-text").textContent="Não foi possível consultar estoque. A lista da planilha continua disponível.";
@@ -3773,7 +3890,7 @@ var state = {
         var ok=true;
         for(var i=0;i<rows.length;i+=60){
           var chunk=rows.slice(i,i+60);
-          if(text)text.textContent="Atualizando estoque: "+Math.min(i+chunk.length,rows.length)+" / "+rows.length;
+          if(text)text.textContent="Atualizando ML + Apollo: "+Math.min(i+chunk.length,rows.length)+" / "+rows.length;
           if(bar)bar.style.width=(Math.min(100,(i+chunk.length)/rows.length*100))+"%";
           try{
             var result=await promoEnsureMeta(chunk,true);
@@ -3785,7 +3902,7 @@ var state = {
         promoRender();
 
         if(ok){
-          try{showToast("Estoque atualizado para "+rows.length+" anúncio(s).");}catch(_){}
+          try{showToast("Estoque ML + Apollo atualizado para "+rows.length+" anúncio(s).");}catch(_){}
         }else{
           try{showToast("Alguns estoques não puderam ser consultados. Estoque desconhecido continua visível.");}catch(_){}
         }
