@@ -871,6 +871,11 @@ let temporizadorRenderListaBipe = null;
 let cacheUidsPedidosDisponiveis = null;
 let cacheIndiceCodigosPedidos = null;
 let cacheDiaPedidosDisponiveis = "";
+// V17.42: índices locais da Conferência. Evitam varrer todos os pedidos
+// centenas de vezes durante renderização/monitoramento sem alterar a lógica.
+let cacheItemPorUidPedido = null;
+let cacheLinhasPorPedido = null;
+let temporizadorAtualizacaoStorageConferencia = null;
 
 function cancelarLeituraPendente() {
   if (temporizadorLeituraCodigo) {
@@ -1077,24 +1082,9 @@ window.onload = function() {
 
   window.addEventListener("storage", function(e) {
     if (e.key === "conf_pedidos" || e.key === "conf_produtos" || e.key === "conf_usuarios" || e.key === "conf_etiquetas") {
-      carregarDadosMemoria();
-      renderizarListaPedidos();
-      if (idPedidoAtual) {
-        let itemRefBase = dadosPedidos.find(x => String(x.__uidPedido) === String(idPedidoAtual));
-        if (itemRefBase && pedidoPossuiEtiquetaDisponivel(itemRefBase)) {
-          let numPedReal = extrairCampo(itemRefBase, "Pedido");
-          pedidoAtual = dadosPedidos.filter(x => extrairCampo(x, "Pedido") === numPedReal);
-          desenharTabela();
-        } else {
-          limparPainel();
-          mostrarMensagemDetalhada(
-            "aviso",
-            "Pedido removido da lista",
-            itemRefBase ? "A etiqueta deste pedido não está mais disponível." : "O pedido não está mais pendente.",
-            itemRefBase ? "Peça ao administrador para republicar ou vincular a etiqueta." : "Selecione outro pedido disponível."
-          );
-        }
-      }
+      // V17.42: vários campos podem ser gravados quase juntos. Consolida tudo em
+      // uma única recarga/renderização para não bloquear a thread principal.
+      agendarAtualizacaoStorageConferencia();
     }
     if (e.key === CHAVE_HISTORICO || e.key === "conf_logs") {
       carregarHistoricoConferencias();
@@ -1397,7 +1387,52 @@ function normalizarDataPedidoConferencia(valor){
 }
 function dataPedidoItem(item){return normalizarDataPedidoConferencia(extrairCampo(item,"Data do Pedido")||extrairCampo(item,"Data")||item?.DataPedido);}
 function pedidoEhDoDiaAtual(item){const data=dataPedidoItem(item);return !data||data===hojeLocalConferencia();}
-function invalidarCachesPedidosDisponiveis(){cacheUidsPedidosDisponiveis=null;cacheIndiceCodigosPedidos=null;cacheDiaPedidosDisponiveis="";}
+function invalidarCachesPedidosDisponiveis(){
+  cacheUidsPedidosDisponiveis=null;
+  cacheIndiceCodigosPedidos=null;
+  cacheDiaPedidosDisponiveis="";
+  cacheItemPorUidPedido=null;
+  cacheLinhasPorPedido=null;
+}
+function garantirIndicesPedidosConferencia(){
+  if(cacheItemPorUidPedido&&cacheLinhasPorPedido)return;
+  cacheItemPorUidPedido=new Map();
+  cacheLinhasPorPedido=new Map();
+  dadosPedidos.forEach(item=>{
+    const uid=String(item?.__uidPedido||"");
+    if(uid&&!cacheItemPorUidPedido.has(uid))cacheItemPorUidPedido.set(uid,item);
+    const pedido=extrairCampo(item,"Pedido");
+    if(!cacheLinhasPorPedido.has(pedido))cacheLinhasPorPedido.set(pedido,[]);
+    cacheLinhasPorPedido.get(pedido).push(item);
+  });
+}
+function obterItemPedidoPorUidConferencia(uid){
+  garantirIndicesPedidosConferencia();
+  return cacheItemPorUidPedido.get(String(uid))||null;
+}
+function obterLinhasPedidoConferencia(pedido){
+  garantirIndicesPedidosConferencia();
+  return cacheLinhasPorPedido.get(String(pedido))||[];
+}
+function agendarAtualizacaoStorageConferencia(){
+  if(temporizadorAtualizacaoStorageConferencia)clearTimeout(temporizadorAtualizacaoStorageConferencia);
+  temporizadorAtualizacaoStorageConferencia=setTimeout(()=>{
+    temporizadorAtualizacaoStorageConferencia=null;
+    carregarDadosMemoria();
+    renderizarListaPedidos();
+    if(idPedidoAtual){
+      const itemRefBase=obterItemPedidoPorUidConferencia(idPedidoAtual);
+      if(itemRefBase&&pedidoPossuiEtiquetaDisponivel(itemRefBase)){
+        const numPedReal=extrairCampo(itemRefBase,"Pedido");
+        pedidoAtual=obterLinhasPedidoConferencia(numPedReal);
+        desenharTabela();
+      }else{
+        limparPainel();
+        mostrarMensagemDetalhada("aviso","Pedido removido da lista",itemRefBase?"A etiqueta deste pedido não está mais disponível.":"O pedido não está mais pendente.",itemRefBase?"Peça ao administrador para republicar ou vincular a etiqueta.":"Selecione outro pedido disponível.");
+      }
+    }
+  },120);
+}
 
 function pedidoPossuiEtiquetaDisponivel(item) {
   if (!item) return false;
@@ -1414,7 +1449,7 @@ function obterUidsPedidosComEtiquetaDisponivel() {
   if(cacheUidsPedidosDisponiveis&&cacheDiaPedidosDisponiveis===hoje)return cacheUidsPedidosDisponiveis;
   cacheDiaPedidosDisponiveis=hoje;
   cacheUidsPedidosDisponiveis=listaPedidosPendentes.filter(uid => {
-    const item = dadosPedidos.find(x => String(x.__uidPedido) === String(uid));
+    const item = obterItemPedidoPorUidConferencia(uid);
     // V14.4: qualquer pedido pendente com etiqueta vinculada deve aparecer,
     // independentemente da data limite de despacho informada pelo marketplace.
     return pedidoPossuiEtiquetaDisponivel(item);
@@ -1426,8 +1461,8 @@ function obterIndiceCodigosPedidos(){
   if(cacheIndiceCodigosPedidos)return cacheIndiceCodigosPedidos;
   const indice=new Map();
   obterUidsPedidosComEtiquetaDisponivel().forEach(uid=>{
-    const ref=dadosPedidos.find(x=>String(x.__uidPedido)===String(uid));if(!ref)return;const pedido=extrairCampo(ref,"Pedido");
-    dadosPedidos.filter(x=>extrairCampo(x,"Pedido")===pedido).forEach(item=>{const codigo=String(extrairCampo(item,"Código de Barras")||"").trim();if(!codigo)return;if(!indice.has(codigo))indice.set(codigo,[]);indice.get(codigo).push({uidPedido:uid,numPedido:pedido,item});});
+    const ref=obterItemPedidoPorUidConferencia(uid);if(!ref)return;const pedido=extrairCampo(ref,"Pedido");
+    obterLinhasPedidoConferencia(pedido).forEach(item=>{const codigo=String(extrairCampo(item,"Código de Barras")||"").trim();if(!codigo)return;if(!indice.has(codigo))indice.set(codigo,[]);indice.get(codigo).push({uidPedido:uid,numPedido:pedido,item});});
   });
   cacheIndiceCodigosPedidos=indice;return indice;
 }
@@ -1981,7 +2016,7 @@ function obterContagemMarketplacePedidos() {
   // V16.53: a lateral e suas contagens refletem somente pedidos
   // que já possuem etiqueta pronta/vinculada.
   obterUidsPedidosComEtiquetaDisponivel().forEach(uid => {
-    const item = dadosPedidos.find(x => String(x.__uidPedido) === String(uid));
+    const item = obterItemPedidoPorUidConferencia(uid);
     if (!item) return;
     const mp = obterMarketplaceItem(item);
     contagens.todos++;
@@ -2054,7 +2089,7 @@ function renderizarListaPedidos() {
   // Eles continuam no Admin e entram automaticamente aqui quando a etiqueta
   // puder ser resolvida por resolverEtiquetaPedido().
   obterUidsPedidosComEtiquetaDisponivel().forEach(uid => {
-    let itemPedido = dadosPedidos.find(x => String(x.__uidPedido) === String(uid));
+    let itemPedido = obterItemPedidoPorUidConferencia(uid);
     if (!itemPedido) return;
     const etiquetaResultado = resolverEtiquetaPedido(itemPedido);
     const etiquetaPronta = Boolean(etiquetaResultado && etiquetaResultado.ok);
@@ -2064,7 +2099,7 @@ function renderizarListaPedidos() {
     let nomeCliente = nomeClienteConferencia(itemPedido);
     const marketplacePedido = obterMarketplaceItem(itemPedido);
     if (filtroMarketplace !== "todos" && marketplacePedido !== filtroMarketplace) return;
-    const linhas = dadosPedidos.filter(x => extrairCampo(x, "Pedido") === numPedidoReal);
+    const linhas = obterLinhasPedidoConferencia(numPedidoReal);
     const total = linhas.reduce((s, x) => s + Number(extrairCampo(x, "Quantidade") || 0), 0);
     const lidos = linhas.reduce((s, x) => s + Number(x.Lido || 0), 0);
     const completo = total > 0 && lidos >= total;
@@ -2107,7 +2142,7 @@ function selecionarPedidoPorClique(uid) {
 
 function abrirPedido(uid) {
   cancelarLeituraPendente();
-  let itemBase = dadosPedidos.find(x => String(x.__uidPedido) === String(uid));
+  let itemBase = obterItemPedidoPorUidConferencia(uid);
   if (!itemBase) return;
   const etiquetaDisponivel = resolverEtiquetaPedido(itemBase);
   if (!etiquetaDisponivel.ok) {
@@ -2125,7 +2160,7 @@ function abrirPedido(uid) {
   let numPedidoReal = extrairCampo(itemBase, "Pedido");
   if (!adquirirBloqueioPedidoRede(numPedidoReal, uid)) return;
   idPedidoAtual = uid;
-  pedidoAtual = dadosPedidos.filter(x => extrairCampo(x, "Pedido") === numPedidoReal);
+  pedidoAtual = obterLinhasPedidoConferencia(numPedidoReal);
   pedidoAtual.forEach(x => { if (x.Lido === undefined) x.Lido = 0; });
   appStorage.setItem(CHAVE_ULTIMO_PEDIDO, normalizarIdentificadorExato(numPedidoReal));
 
@@ -3604,7 +3639,11 @@ carregarDadosMemoria=function(){
   }
   verificarStatusPlanilhaLogin();
 };
-window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_em"||event.key==="conf_produtos"){carregarDadosMemoria();renderizarListaPedidos();}});
+window.addEventListener("storage",event=>{
+  // conf_produtos já é tratado pelo listener principal acima. Aqui fica somente
+  // o sinal genérico do banco, também consolidado pelo mesmo debounce.
+  if(event.key==="conf_banco_atualizado_em")agendarAtualizacaoStorageConferencia();
+});
 
 </script>
 <style>
@@ -3998,7 +4037,7 @@ window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_
     const mapa = new Map();
     try {
       obterUidsPedidosComEtiquetaDisponivel().forEach(uid => {
-        const item = dadosPedidos.find(x => String(x.__uidPedido) === String(uid));
+        const item = obterItemPedidoPorUidConferencia(uid);
         if (!item) return;
         const pedido = normalizarIdentificadorExato(extrairCampo(item,"Pedido"));
         if (!pedido) return;
@@ -4102,7 +4141,9 @@ window.addEventListener("storage",event=>{if(event.key==="conf_banco_atualizado_
   document.addEventListener("DOMContentLoaded", () => {
     criarInterfaceAlerta();
     setTimeout(verificarNovosPedidos, 700);
-    monitorTimer = setInterval(verificarNovosPedidos, 1800);
+    // Storage já dispara atualização imediata. Este intervalo é apenas uma
+    // salvaguarda e não precisa varrer a lista a cada 1,8 s em segundo plano.
+    monitorTimer = setInterval(()=>{ if(!document.hidden) verificarNovosPedidos(); }, 5000);
   });
 })();
 </script>
