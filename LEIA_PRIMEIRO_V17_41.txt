@@ -1,0 +1,8 @@
+V17.41 - CORREÇÃO DA ATUALIZAÇÃO DE ESTOQUE NAS PROMOÇÕES
+
+Correções:
+- O botão Atualizar estoque ML + Apollo agora consulta toda a base de promoções, inclusive itens marcados como Estoque zerado que ficam ocultos pelo filtro padrão.
+- Itens marcados como zerados que voltaram a ter estoque no Apollo reaparecem automaticamente para revisão.
+- A consulta MLB -> SKU passa a usar a API autenticada do Mercado Livre, melhorando a leitura de seller_custom_field / SELLER_SKU.
+- O botão mostra estado Atualizando... durante a consulta e informa quantos itens precisam revisar a promoção.
+- Mantido o restante da V17.40 sem alterações funcionais.

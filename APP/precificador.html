@@ -3337,9 +3337,13 @@ var state = {
           // Se for uma busca direta por MLB, mostramos o anúncio mesmo que esteja
           // marcado como estoque zero, para que o usuário consiga encontrá-lo e revisar.
           if(!searchIsMlb){
-            if(stockFilter==="positive" && manualZero)return false;
-            if(stockFilter==="zero" && manualZero)return true;
-            if(hideNoStock && manualZero)return false;
+            var apolloReturned = manualZero && meta.apollo_stock_known===true && Number(meta.apollo_available||0)>0;
+            if(stockFilter==="positive" && manualZero && !apolloReturned)return false;
+            if(stockFilter==="zero" && manualZero)return !apolloReturned;
+            // V17.41: itens marcados como zerados continuam ocultos por padrão,
+            // EXCETO quando o Apollo informa estoque > 0. Esses precisam reaparecer
+            // na lista para revisão da promoção.
+            if(hideNoStock && manualZero && !apolloReturned)return false;
 
             if(promoStockFilterReady){
               if(stockFilter==="positive" && !(known && qty>0))return false;
@@ -3876,16 +3880,25 @@ var state = {
       document.getElementById("promo-next")?.addEventListener("click",function(){promoPage++;promoRender();});
       document.getElementById("promo-refresh-stock")?.addEventListener("click",async function(){
         promoStockFilterReady=false;
-        var rows=promoBaseFiltered();
+
+        // V17.41: a atualização não pode depender do filtro "Ocultar estoque zerado".
+        // A finalidade deste botão é justamente descobrir quais itens marcados como
+        // zerados voltaram a ter estoque no Apollo. Por isso consultamos toda a base
+        // de promoções carregada (respeitando apenas linhas realmente existentes).
+        var rows=promoRows.filter(function(r){
+          return r && r.mlb && !promoDeleted.has(String(r.mlb));
+        });
         if(!rows.length){
-          try{showToast("Não há anúncios para consultar com o filtro atual.");}catch(_){}
+          try{showToast("Não há anúncios cadastrados para consultar.");}catch(_){}
           return;
         }
 
         var progress=document.getElementById("promo-progress");
         var text=document.getElementById("promo-progress-text");
         var bar=document.getElementById("promo-progress-bar");
+        var refreshBtn=document.getElementById("promo-refresh-stock");
         progress.hidden=false;
+        if(refreshBtn){refreshBtn.disabled=true;refreshBtn.textContent="Atualizando...";}
 
         var ok=true;
         for(var i=0;i<rows.length;i+=60){
@@ -3901,8 +3914,13 @@ var state = {
         promoStockFilterReady=true;
         promoRender();
 
+        if(refreshBtn){refreshBtn.disabled=false;refreshBtn.textContent="↻ Atualizar estoque ML + Apollo";}
         if(ok){
-          try{showToast("Estoque ML + Apollo atualizado para "+rows.length+" anúncio(s).");}catch(_){}
+          var revisao=promoRows.filter(function(r){
+            var m=promoMeta[String(r.mlb)]||{};
+            return r.manualZero===true && m.apollo_stock_known===true && Number(m.apollo_available||0)>0;
+          }).length;
+          try{showToast("Estoque ML + Apollo atualizado para "+rows.length+" anúncio(s). "+revisao+" item(ns) para revisar promoção.");}catch(_){}
         }else{
           try{showToast("Alguns estoques não puderam ser consultados. Estoque desconhecido continua visível.");}catch(_){}
         }

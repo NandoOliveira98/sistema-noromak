@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.40-PROMO-MLB-SKU-APOLLO"
+APP_VERSION = "17.41-PROMO-ESTOQUE-APOLLO-FIX"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -4388,9 +4388,12 @@ def ml_items_meta(ids: list[str]) -> dict[str, dict[str, Any]]:
         if not batch:
             continue
         ids_param = ",".join("MLB" + item for item in batch)
-        payload = ml_http_json(
-            "GET",
-            "https://api.mercadolibre.com/items?" + urlencode({"ids": ids_param}),
+        # V17.41: usa a conexão autenticada do Mercado Livre. Alguns anúncios
+        # não expõem seller_custom_field/SELLER_SKU de forma confiável na
+        # consulta pública, o que fazia a tela ficar eternamente como
+        # "Não consultado"/sem SKU. ml_api_get também renova o token quando possível.
+        payload = ml_api_get(
+            "/items?" + urlencode({"ids": ids_param}),
         )
         rows = payload if isinstance(payload, list) else []
         fetched: dict[str, dict[str, Any]] = {}
