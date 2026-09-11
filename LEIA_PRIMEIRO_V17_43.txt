@@ -1,0 +1,9 @@
+V17.43 - SHOPEE: EXCLUSAO MANUAL PERSISTENTE + KIT DUPLICADO
+
+- Corrige linha artificial Shopee no padrão kit2-SKU quando o SKU real já está no mesmo pedido com a quantidade correspondente.
+- Mantém também a remoção de identificadores compostos A/B quando os componentes reais já existem.
+- Admin: excluir uma linha API_SHOPEE passa a gravar uma proteção por Pedido + SKU/UID e a remoção é efetiva.
+- Conferência: adicionada coluna Ação com botão Excluir por produto.
+- A sincronização Shopee passa a respeitar conf_shopee_exclusoes_v1 e não recria linhas excluídas manualmente.
+- Linhas manuais e demais marketplaces continuam preservados.
+- Nenhuma otimização global foi aplicada.

@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.42-CONFERENCIA-PERFORMANCE-LOCAL"
+APP_VERSION = "17.43-SHOPEE-EXCLUSAO-PERSISTENTE-KIT-FIX"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -192,6 +192,7 @@ KNOWN_KEYS = [
     "ml_sku_mlb_links_v1",
     "conf_coleta_dia_v1",
     "conf_nomes_conferencia_v1",
+    "conf_shopee_exclusoes_v1",
 ]
 
 OPERATOR_WRITE_KEYS = {
@@ -204,6 +205,7 @@ OPERATOR_WRITE_KEYS = {
     "ml_sku_mlb_links_v1",
     "ml_promocoes_datas_v1",
     "conf_coleta_dia_v1",
+    "conf_shopee_exclusoes_v1",
 }
 
 
@@ -3983,6 +3985,70 @@ def _shopee_build_pending_lines(order: dict[str, Any], package_numbers: list[str
 
 
 
+def _shopee_filter_artificial_kit_lines(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Remove linhas artificiais de kit quando os produtos reais já vieram da Shopee.
+
+    Casos cobertos de forma conservadora:
+    - SKU composto por barras (A/B) quando A e B já existem no mesmo pedido;
+    - SKU no padrão kit2-SKU quando o SKU real também existe no mesmo pedido e
+      sua quantidade já contempla a multiplicidade indicada no prefixo.
+    """
+    if not lines:
+        return []
+    by_order: dict[str, list[dict[str, Any]]] = {}
+    for row in lines:
+        by_order.setdefault(normalize(order_number(row)), []).append(row)
+    result: list[dict[str, Any]] = []
+    for _, group in by_order.items():
+        real_qty: dict[str, int] = {}
+        for row in group:
+            sku = str(row.get("SkuOrigemImportacao") or row.get("SkuReferenciaShopee") or row.get("SKU") or "").strip()
+            norm = normalize(sku)
+            if not norm or "/" in sku or re.match(r"^KIT\s*\d*[-_: ]+", sku, re.I):
+                continue
+            try:
+                qty = max(1, int(float(row.get("Quantidade") or 1)))
+            except Exception:
+                qty = 1
+            real_qty[norm] = real_qty.get(norm, 0) + qty
+        for row in group:
+            sku = str(row.get("SkuOrigemImportacao") or row.get("SkuReferenciaShopee") or row.get("SKU") or "").strip()
+            if "/" in sku:
+                parts = [normalize(x) for x in sku.split("/") if normalize(x)]
+                if len(parts) >= 2 and all(part in real_qty for part in set(parts)):
+                    continue
+            m = re.match(r"^KIT\s*(\d+)?[-_: ]+(.+)$", sku, re.I)
+            if m:
+                mult = max(1, int(m.group(1) or 1))
+                base = normalize(m.group(2))
+                if base and real_qty.get(base, 0) >= mult:
+                    continue
+            result.append(row)
+    return result
+
+
+def _shopee_load_manual_deletions() -> list[dict[str, Any]]:
+    raw, _, _ = get_storage("conf_shopee_exclusoes_v1")
+    rows = _rows_from_storage_value(raw)
+    return [x for x in rows if isinstance(x, dict)]
+
+
+def _shopee_is_manually_deleted(row: dict[str, Any], deletions: list[dict[str, Any]]) -> bool:
+    order = normalize(order_number(row))
+    uid = str(row.get("__uidLinha") or "").strip()
+    source_sku = normalize(row.get("SkuOrigemImportacao") or row.get("SkuReferenciaShopee") or row.get("SKU"))
+    for item in deletions:
+        if normalize(item.get("Pedido")) != order:
+            continue
+        deleted_uid = str(item.get("UidLinha") or "").strip()
+        deleted_sku = normalize(item.get("SkuOrigem") or item.get("SKU"))
+        if deleted_uid and uid and deleted_uid == uid:
+            return True
+        if deleted_sku and source_sku and deleted_sku == source_sku:
+            return True
+    return False
+
+
 SHOPEE_MANUAL_EDIT_FIELDS = (
     "Cliente",
     "NomeFiscalShopee",
@@ -4151,6 +4217,13 @@ def shopee_manual_sync() -> dict[str, Any]:
                 continue
             detail_orders.add(order_sn)
             api_lines.extend(_shopee_build_pending_lines(order, packages_by_order.get(order_sn, []), products))
+
+        # V17.43: remove linhas artificiais de kit antes da reconciliação e respeita
+        # exclusões manuais persistentes feitas no Admin/Conferência.
+        api_lines = _shopee_filter_artificial_kit_lines(api_lines)
+        manual_deletions = _shopee_load_manual_deletions()
+        if manual_deletions:
+            api_lines = [row for row in api_lines if not _shopee_is_manually_deleted(row, manual_deletions)]
 
         current_raw, _, _ = get_storage("conf_pedidos")
         current = _rows_from_storage_value(current_raw)

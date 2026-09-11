@@ -3925,7 +3925,8 @@ function salvarPedidosAdmin(mostrarMensagem=false){
     });
     const validos=obterPedidosValidosBanco();
     const rascunhos=obterRascunhosBanco();
-    const retornoValidos=appStorage.setPedidos(JSON.stringify(validos),false);
+    const retornoValidos=appStorage.setPedidos(JSON.stringify(validos),permitirRemocoesPedidosAdminUmaVez);
+    permitirRemocoesPedidosAdminUmaVez=false;
     const retornoRascunhos=appStorage.setItem("conf_pedidos_rascunhos",JSON.stringify(rascunhos));
 
     // Usa exatamente a versão consolidada devolvida pelo servidor. Isso evita
@@ -4013,10 +4014,24 @@ async function atualizarVendaMercadoLivreAdmin(uid,botao){
     if(botao){botao.disabled=false;botao.textContent=anterior;botao.title="Atualizar dados desta venda no Mercado Livre";}
   }
 }
+function registrarExclusaoManualShopeeAdmin(item){
+  if(normalizarBuscaBanco(item?.OrigemCadastro)!=="api_shopee")return;
+  let lista=[];try{lista=JSON.parse(appStorage.getItem("conf_shopee_exclusoes_v1")||"[]");}catch(_){lista=[];}
+  const pedido=String(item.Pedido||"").trim();
+  const skuOrigem=String(item.SkuOrigemImportacao||item.SkuReferenciaShopee||item.SKU||"").trim();
+  const uid=String(item.__uidLinha||"").trim();
+  const chave=[normalizarBuscaBanco(pedido),normalizarBuscaBanco(skuOrigem),uid].join("|");
+  const existe=lista.some(x=>[normalizarBuscaBanco(x?.Pedido),normalizarBuscaBanco(x?.SkuOrigem||x?.SKU),String(x?.UidLinha||"")].join("|")===chave);
+  if(!existe)lista.push({Pedido:pedido,SkuOrigem:skuOrigem,SKU:String(item.SKU||""),UidLinha:uid,ExcluidoEm:new Date().toISOString(),Origem:"MANUAL"});
+  appStorage.setItem("conf_shopee_exclusoes_v1",JSON.stringify(lista));
+}
 function excluirLinhaPedidoAdmin(uid){
   const item=pedidosEditorAdmin.find(x=>x.__uidLinha===uid); if(!item)return;
-  if((item.Pedido||item.SKU||item["Código de Barras"])&&!confirm("Excluir esta linha do pedido?"))return;
-  pedidosEditorAdmin=pedidosEditorAdmin.filter(x=>x.__uidLinha!==uid);renderizarPedidosAdmin();salvarPedidosAdmin(false);
+  if((item.Pedido||item.SKU||item["Código de Barras"])&&!confirm("Excluir esta linha do pedido? Se for Shopee, a exclusão ficará protegida contra novas sincronizações."))return;
+  registrarExclusaoManualShopeeAdmin(item);
+  pedidosEditorAdmin=pedidosEditorAdmin.filter(x=>x.__uidLinha!==uid);
+  permitirRemocoesPedidosAdminUmaVez=true;
+  renderizarPedidosAdmin();salvarPedidosAdmin(false);
 }
 function atualizarCampoPedidoAdmin(el,semRender=false){
   const item=pedidosEditorAdmin.find(x=>x.__uidLinha===el.dataset.uidlinha); if(!item)return;
