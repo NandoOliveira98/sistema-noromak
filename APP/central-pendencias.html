@@ -74,13 +74,13 @@ const low=[];if(links&&typeof links==='object'){Object.entries(links).forEach(([
 low.sort((a,b)=>b.diff-a.diff);state.details.margin=rowsTable([{label:'MLB',render:r=>`<a class="link" href="https://www.mercadolivre.com.br/anuncios/lista?search=${r.mlb.replace(/\D/g,'')}" target="_blank">${esc(r.mlb)}</a>`},{label:'SKU',key:'sku'},{label:'Produto',key:'title'},{label:'Preço',render:r=>money(r.price)},{label:'Margem',render:r=>`<span class="pill bad">${pct(r.margin)}</span>`},{label:'Meta',render:r=>pct(r.target)}],low);addCard({id:'margin',icon:'↘',count:low.length,label:'Anúncios abaixo da margem mínima',desc:'Compara o preço vinculado ao MLB com custo, imposto, comissão, taxa/frete e margem desejada do Precificador.',severity:low.length?'urgent':'ok',source:true,action:actionLink(BASE+'/precificador','Abrir Precificador')});
 // 2. promoções
 const today=ymdLocal();const due=promos.filter(r=>String(r.date||'').slice(0,10)&&String(r.date).slice(0,10)<=today&&!r.priceOk);const expired=due.filter(r=>String(r.date).slice(0,10)<today).length;const todayN=due.length-expired;state.details.promos=rowsTable([{label:'MLB',render:r=>`<span class="link">${esc(normMlb(r.mlb))}</span>`},{label:'Data',key:'date'},{label:'Status',render:r=>String(r.date).slice(0,10)<today?'<span class="pill bad">Vencida</span>':'<span class="pill warn">Vence hoje</span>'},{label:'Estoque',render:r=>r.manualZero?'<span class="pill neutral">Marcado zerado</span>':'—'}],due);addCard({id:'promos',icon:'%',count:due.length,label:'Promoções vencidas ou vencendo hoje',desc:`${expired} vencida(s) e ${todayN} vencendo hoje. Itens marcados Preço OK ficam fora da fila.`,severity:expired?'urgent':todayN?'warn':'ok',source:true,action:actionLink(BASE+'/precificador#promocoes','Abrir promoções')});
-// 3. zero voltou ao Apollo — V17.38: Precificador -> SKU exato -> Apollo
+// 3. zero voltou ao Apollo — V17.39: Precificador -> SKU exato -> estoque atual ML x Apollo
 const zeroRows=promos.filter(r=>r.manualZero===true);
 // O Precificador é a fonte de verdade. Montamos MLB -> SKU apenas com SKUs que existem no cadastro.
 const reverse=new Map();
 if(links&&typeof links==='object'){Object.entries(links).forEach(([sku,arr])=>{const exact=normSku(sku);if(!pidx.has(exact)||!Array.isArray(arr))return;arr.forEach(x=>{const m=normMlb(x?.mlb);if(m&&!reverse.has(m))reverse.set(m,exact);});});}
 const zeroSkus=[],unresolvedZero=[];
-zeroRows.forEach(r=>{const mlb=normMlb(r.mlb),sku=reverse.get(mlb)||'';if(sku){const p=pidx.get(sku);zeroSkus.push({mlb,sku,produto:p?.produto||''});}else unresolvedZero.push({mlb,sku:''});});
+zeroRows.forEach(r=>{const mlb=normMlb(r.mlb),sku=reverse.get(mlb)||'';if(sku){const p=pidx.get(sku);const linkRows=Array.isArray(links?.[sku])?links[sku]:[];const link=linkRows.find(x=>normMlb(x?.mlb)===mlb)||null;const q=link?.available_quantity;const currentStock=(q===null||q===undefined||q==='')?null:n(q);zeroSkus.push({mlb,sku,produto:p?.produto||'',currentStock});}else unresolvedZero.push({mlb,sku:''});});
 let returned=[],apolloErrors=[];
 if(zeroSkus.length){
   try{
@@ -101,11 +101,13 @@ state.details.zero=rowsTable([
  {label:'MLB',key:'mlb'},
  {label:'SKU',key:'sku'},
  {label:'Produto',key:'produto'},
+ {label:'Estoque atual ML',render:r=>r.currentStock===null?'<span class="pill neutral">Não disponível</span>':`<span class="pill neutral">${n(r.currentStock)} un.</span>`},
  {label:'Estoque Apollo',render:r=>`<span class="pill good">${n(r.stock?.available)} un.</span>`},
+ {label:'Diferença',render:r=>r.currentStock===null?'—':(()=>{const d=n(r.stock?.available)-n(r.currentStock);return `<span class="pill ${d>0?'good':d<0?'bad':'neutral'}">${d>0?'+':''}${d} un.</span>`})()},
  {label:'Por filial',render:r=>esc(branchText(r.stock))},
  {label:'Ação',render:r=>`<a class="link" href="${BASE}/precificador#promocoes">Revisar / desmarcar zerado</a>`}
 ],returned)+(unresolvedZero.length?`<div class="empty"><b>${unresolvedZero.length}</b> MLB(s) marcado(s) como zerado ainda não possuem vínculo com um SKU cadastrado no Precificador: ${unresolvedZero.slice(0,20).map(x=>esc(x.mlb)).join(', ')}${unresolvedZero.length>20?'…':''}</div>`:'')+(apolloErrors.length?`<div class="empty">Apollo não confirmou ${apolloErrors.length} consulta(s). Nenhum item com erro foi contado como retorno de estoque.</div>`:'');
-addCard({id:'zero',icon:'↻',count:returned.length,label:'Produtos zerados que voltaram ao Apollo',desc:`${zeroSkus.length} item(ns) marcado(s) como zerado foram resolvidos pelo SKU exato do Precificador e consultados no Apollo. ${unresolvedZero.length?unresolvedZero.length+' sem vínculo exato.':''}`,severity:returned.length?'warn':'ok',source:true,action:actionLink(BASE+'/precificador#promocoes','Revisar zerados')});
+addCard({id:'zero',icon:'↻',count:returned.length,label:'Produtos zerados que voltaram ao Apollo',desc:`${zeroSkus.length} item(ns) marcado(s) como zerado foram resolvidos pelo SKU exato do Precificador. O detalhe compara o estoque atual informado pelo Mercado Livre com o estoque Apollo. ${unresolvedZero.length?unresolvedZero.length+' sem vínculo exato.':''}`,severity:returned.length?'warn':'ok',source:true,action:actionLink(BASE+'/precificador#promocoes','Revisar zerados')});
 // 4. anúncios sem vínculo
 let unidentified=freshMl&&Array.isArray(freshMl.unidentified)?freshMl.unidentified:[],linkErr=mlFreshErr||(freshMl?(freshMl.errors||[]).join(' · '):'');
 state.details.unlinked=unidentified.length?rowsTable([{label:'MLB',key:'mlb'},{label:'Título',key:'title'},{label:'Status',render:r=>`<span class="pill neutral">${esc(r.status||'—')}</span>`}],unidentified):`<div class="empty">${linkErr?esc('Não foi possível atualizar os vínculos: '+linkErr):'Nenhum anúncio sem SKU foi encontrado.'}</div>`;addCard({id:'unlinked',icon:'⛓',count:unidentified.length,label:'Anúncios sem vínculo MLB ↔ SKU',desc:linkErr?'A consulta ao Mercado Livre teve alerta; abra os detalhes.':'Anúncios do vendedor em que o SKU não pôde ser identificado automaticamente.',severity:unidentified.length?'warn':linkErr?'warn':'ok',source:true,action:actionLink(BASE+'/precificador','Abrir vínculos')});
