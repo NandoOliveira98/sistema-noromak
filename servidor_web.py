@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.36-EXTENSAO-PROMO-APOLLO"
+APP_VERSION = "17.37-CENTRAL-PENDENCIAS"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -10043,6 +10043,7 @@ class AppHandler(BaseHTTPRequestHandler):
             "/pedidos": "conferencia", "/pedidos/": "conferencia",
             "/admin": "admin", "/admin/": "admin", "/admin.html": "admin",
             "/administracao": "admin", "/administracao/": "admin",
+            "/pendencias": "admin", "/pendencias/": "admin", "/central-pendencias": "admin", "/central-pendencias/": "admin", "/central-pendencias.html": "admin",
             "/estacao-impressao": "estacao", "/estacao-impressao/": "estacao", "/estacao-impressao.html": "estacao",
             "/print-station": "estacao", "/print-station/": "estacao",
             "/precificador": "precificador", "/precificador/": "precificador", "/precificador.html": "precificador",
@@ -11527,6 +11528,11 @@ class AppHandler(BaseHTTPRequestHandler):
             "/admin.html": "admin.html",
             "/administracao": "admin.html",
             "/administracao/": "admin.html",
+            "/pendencias": "central-pendencias.html",
+            "/pendencias/": "central-pendencias.html",
+            "/central-pendencias": "central-pendencias.html",
+            "/central-pendencias/": "central-pendencias.html",
+            "/central-pendencias.html": "central-pendencias.html",
             "/estacao-impressao": "estacao-impressao.html",
             "/estacao-impressao/": "estacao-impressao.html",
             "/estacao-impressao.html": "estacao-impressao.html",
