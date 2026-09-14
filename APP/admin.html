@@ -4441,70 +4441,65 @@ function renderizarPedidosAdmin(){
   }).sort((x,y)=>{
     const dx=normalizarDataPedidoBanco(x["Data do Pedido"]||x.Data||x.DataPedido,false)||"9999-12-31";
     const dy=normalizarDataPedidoBanco(y["Data do Pedido"]||y.Data||y.DataPedido,false)||"9999-12-31";
-    const cmp=dx.localeCompare(dy);
-    if(cmp!==0)return ordem==="desc"?-cmp:cmp;
+    const cmp=dx.localeCompare(dy); if(cmp!==0)return ordem==="desc"?-cmp:cmp;
     return String(x.Pedido||"").localeCompare(String(y.Pedido||""));
   });
-
-  // V17.56: pagina por VENDA, não por linha. Assim um kit nunca fica quebrado entre páginas.
   const gruposMap=new Map();
-  filtrados.forEach((item,idx)=>{
-    const pedido=String(item?.Pedido||"").trim();
-    const chave=pedido?`PED:${pedido}`:`LINHA:${item?.__uidLinha||idx}`;
-    if(!gruposMap.has(chave))gruposMap.set(chave,{chave,pedido,itens:[]});
-    gruposMap.get(chave).itens.push(item);
-  });
+  filtrados.forEach((item,idx)=>{const pedido=String(item?.Pedido||"").trim();const chave=pedido?`PED:${pedido}`:`LINHA:${item?.__uidLinha||idx}`;if(!gruposMap.has(chave))gruposMap.set(chave,{chave,pedido,itens:[]});gruposMap.get(chave).itens.push(item);});
   const grupos=Array.from(gruposMap.values());
   const paginas=Math.max(1,Math.ceil(grupos.length/ITENS_POR_PAGINA_PEDIDOS));
   paginaPedidosAdmin=Math.min(Math.max(1,paginaPedidosAdmin),paginas);
   const inicio=(paginaPedidosAdmin-1)*ITENS_POR_PAGINA_PEDIDOS;
   const gruposPagina=grupos.slice(inicio,inicio+ITENS_POR_PAGINA_PEDIDOS);
   if(!filtrados.length){
-    corpo.innerHTML='<tr><td colspan="10" style="padding:25px;text-align:center;color:#64748b;">Nenhuma linha. Clique em “Nova linha” ou use “Importar por print” para cadastrar um pedido ou kit.</td></tr>';
+    corpo.innerHTML='<tr><td colspan="10" style="padding:28px;text-align:center;color:#64748b;background:#fff">Nenhum pedido encontrado.</td></tr>';
   }else{
-    const renderLinha=(item,grupo,indice)=>{
-      item.Marketplace=marketplaceExibicaoBanco(item.Pedido);
-      const valida=linhaPedidoValidaBanco(item);
-      const primeira=indice===0;
-      const total=grupo.itens.length;
-      const agrupado=total>1;
+    corpo.innerHTML=gruposPagina.map(grupo=>{
+      const primeiro=grupo.itens[0];
+      primeiro.Marketplace=marketplaceExibicaoBanco(primeiro.Pedido);
+      const pedidoOriginal=String(grupo.pedido||primeiro.Pedido||"");
       const ehKit=pedidoEhKitAgrupavelAdmin(grupo.itens);
-      const pedidoOriginal=String(grupo.pedido||item.Pedido||"");
-      const inp=(campo,cls="")=>{const valor=campo==="Pedido"?pedidoExibicaoBanco(item.Pedido,item.Marketplace):campoBanco(item,campo);const extra=campo==="Nome Conferência"?' placeholder="Nome exibido na conferência" title="Se preenchido, este nome aparece no lugar do Cliente somente na tela de conferência"':'';const evento=campo==="Nome Conferência"?'oninput="atualizarCampoPedidoAdmin(this,true)" onchange="atualizarCampoPedidoAdmin(this,true);salvarNomesConferenciaAdminAgora()" onblur="salvarNomesConferenciaAdminAgora()"':(campo==="SKU"?'oninput="atualizarCampoPedidoAdmin(this,true)" onchange="atualizarCampoPedidoAdmin(this,true)"':'onchange="atualizarCampoPedidoAdmin(this)"');return `<input class="${cls}" data-uidlinha="${htmlSeguroBanco(item.__uidLinha)}" data-campo="${htmlSeguroBanco(campo)}" value="${htmlSeguroBanco(valor)}"${extra} ${evento} onkeydown="navegarGridAdmin(event,this)">`;};
-      const eanAtual=campoBanco(item,"Código de Barras");
-      const alterado=String(eanSalvoPorUid.get(item.__uidLinha)??eanAtual)!==eanAtual.trim();
-      const mensagem=eanMensagemPorUid.get(item.__uidLinha)||{tipo:"",texto:"Bipe o código e pressione Enter."};
-      const editorEan=`<div class="ean-pedido-editor"><input class="${alterado?'ean-alterado':''}" inputmode="numeric" enterkeyhint="done" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Código de barras do SKU ${htmlSeguroBanco(item.SKU||'sem SKU')}" data-uidlinha="${htmlSeguroBanco(item.__uidLinha)}" data-campo="Código de Barras" value="${htmlSeguroBanco(eanAtual)}" oninput="alterarEanPedidoAdmin(this)" onblur="aoSairEanPedidoAdmin(event,this)" onkeydown="atalhoEanPedidoAdmin(event,this)"><div class="ean-pedido-acoes"><button type="button" class="btn-ean-salvar" title="Salvar EAN somente neste pedido" onclick="salvarEanPedidoAdmin('${htmlSeguroBanco(item.__uidLinha)}',false,this.closest('.ean-pedido-editor').querySelector('input'))">Salvar</button><button type="button" class="btn-ean-banco" title="Salvar também no Banco de Produtos deste SKU" onclick="salvarEanPedidoAdmin('${htmlSeguroBanco(item.__uidLinha)}',true,this.closest('.ean-pedido-editor').querySelector('input'))">Banco</button></div><small id="status-ean-${htmlSeguroBanco(item.__uidLinha)}" class="ean-pedido-status ${htmlSeguroBanco(mensagem.tipo)}">${htmlSeguroBanco(mensagem.texto)}</small></div>`;
-      const jaFeito=Boolean(item?.__jaConcluidoAnteriormente||item?.__concluidoAnteriorEm);
-      const skuManual=normalizarBuscaBanco(item.SkuManualOverride)==="sim";
-      const skuEditor=`<div class="sku-pedido-compacto">${inp('SKU')}<button type="button" title="Salvar SKU manual" onclick="salvarSkuManualAdmin('${htmlSeguroBanco(item.__uidLinha)}',this)" class="btn-sku-compacto">Salvar</button>${skuManual?`<button type="button" title="Restaurar SKU da integração" onclick="restaurarSkuIntegracaoAdmin('${htmlSeguroBanco(item.__uidLinha)}')" class="btn-sku-manual">↶</button>`:''}</div>`;
-      const kitResumo=textoKitBanco(item)?`<span class="kit-badge">KIT</span> ${htmlSeguroBanco(textoKitBanco(item))}`:'Item normal';
-      const localizacao=[campoBanco(item,'Rua'),campoBanco(item,'Módulo'),campoBanco(item,'Prateleira'),campoBanco(item,'Nível'),campoBanco(item,'Posição')].filter(v=>String(v||'').trim()).join(' · ');
-      const detalhesSecundarios=`<details class="pedido-detalhes-compactos"><summary>Detalhes</summary><div class="pedido-detalhes-grid"><label>Descrição${inp('Descrição','campo-descricao')}</label><label>Rua${inp('Rua')}</label><label>Módulo${inp('Módulo')}</label><label>Prateleira${inp('Prateleira')}</label><label>Nível${inp('Nível')}</label><label>Posição${inp('Posição')}</label><label>Foto${inp('Foto','campo-foto')}</label><div class="pedido-kit-detalhe"><span>${kitResumo}</span><button type="button" class="btn-kit-pedido-editar" onclick="abrirEditorKitPedidoAdmin('${htmlSeguroBanco(item.__uidLinha)}')">✎ Kit</button></div></div></details>`;
-
-      const classeGrupo=agrupado?` pedido-grupo-${primeira?'inicio':(indice===total-1?'fim':'meio')} ${ehKit?'pedido-grupo-kit':'pedido-grupo-multi'}`:'';
-      let html=`<tr class="${valida?'linha-valida':'linha-rascunho'}${jaFeito?' linha-ja-feito':''}${classeGrupo}">`;
-      html+=`<td><div class="linha-acoes linha-acoes-compacta"><button title="Adicionar item" onclick="adicionarItemMesmoPedido('${htmlSeguroBanco(item.__uidLinha)}')">＋</button><button title="Atualizar venda" class="acao-atualizar" onclick="atualizarVendaMercadoLivreAdmin('${htmlSeguroBanco(item.__uidLinha)}',this)">↻</button><button title="Excluir linha" class="acao-excluir" onclick="excluirLinhaPedidoAdmin('${htmlSeguroBanco(item.__uidLinha)}')">🗑</button></div></td>`;
-      if(primeira){
-        const badge=agrupado?`<div class="pedido-grupo-badge ${ehKit?'kit':'multi'}">${ehKit?'KIT':'VENDA'} · ${total} ${total===1?'item':'itens'}</div>`:'';
-        html+=`<td rowspan="${total}" class="pedido-grupo-celula pedido-coluna-principal"><div class="pedido-cell-wrap">${tagConclusaoAnteriorPedidoBanco(item)}${badge}<input class="campo-pedido pedido-grupo-input" data-grupo-pedido="${htmlSeguroBanco(pedidoOriginal)}" data-campo="Pedido" value="${htmlSeguroBanco(pedidoExibicaoBanco(item.Pedido,item.Marketplace))}" onchange="atualizarCampoGrupoPedidoAdmin(this)" onkeydown="navegarGridAdmin(event,this)"></div></td>`;
-        html+=`<td rowspan="${total}" class="pedido-grupo-celula"><span class="marketplace-pill-admin">${htmlSeguroBanco(item.Marketplace)}</span></td>`;
-        html+=`<td rowspan="${total}" class="pedido-grupo-celula"><input class="data-pedido-compacta" type="date" data-grupo-pedido="${htmlSeguroBanco(pedidoOriginal)}" data-campo="Data do Pedido" value="${htmlSeguroBanco(normalizarDataPedidoBanco(item['Data do Pedido'],true))}" onchange="atualizarCampoGrupoPedidoAdmin(this)"></td>`;
-        html+=`<td rowspan="${total}" class="pedido-grupo-celula"><div class="cliente-conf-compacto"><label>Cliente<input class="campo-cliente" data-grupo-pedido="${htmlSeguroBanco(pedidoOriginal)}" data-campo="Cliente" value="${htmlSeguroBanco(campoBanco(item,'Cliente'))}" onchange="atualizarCampoGrupoPedidoAdmin(this)"></label><label>Conferência<input class="campo-cliente-conferencia" data-grupo-pedido="${htmlSeguroBanco(pedidoOriginal)}" data-campo="Nome Conferência" value="${htmlSeguroBanco(campoBanco(item,'Nome Conferência'))}" onchange="atualizarCampoGrupoPedidoAdmin(this)"></label></div></td>`;
-      }
-      html+=`<td><div class="componente-kit-indice">${agrupado?`<span>${ehKit?'Componente':'Item'} ${indice+1}/${total}</span>`:''}</div>${skuEditor}</td>`;
-      html+=`<td><input class="qtd-pedido-compacta" type="number" min="1" data-uidlinha="${htmlSeguroBanco(item.__uidLinha)}" data-campo="Quantidade" value="${htmlSeguroBanco(item.Quantidade||'1')}" onchange="atualizarCampoPedidoAdmin(this)" onkeydown="navegarGridAdmin(event,this)"></td>`;
-      html+=`<td>${editorEan}</td>`;
-      html+=`<td><div class="produto-local-compacto"><strong title="${htmlSeguroBanco(campoBanco(item,'Descrição'))}">${htmlSeguroBanco(campoBanco(item,'Descrição')||'Sem descrição')}</strong><small>${htmlSeguroBanco(localizacao||'Sem localização')}</small>${detalhesSecundarios}</div></td>`;
-      if(primeira)html+=`<td rowspan="${total}" class="pedido-grupo-celula"><span class="status-celula ${valida?'status-pendente':'status-rascunho'}">${valida?'PENDENTE':'RASCUNHO'}</span>${tagConclusaoAnteriorBanco(item)}</td>`;
-      html+='</tr>';
-      return html;
-    };
-    corpo.innerHTML=gruposPagina.map(grupo=>grupo.itens.map((item,i)=>renderLinha(item,grupo,i)).join('')).join('');
+      const total=grupo.itens.length;
+      const todasValidas=grupo.itens.every(linhaPedidoValidaBanco);
+      const badge=total>1?`<span class="pedido-card-badge ${ehKit?'kit':'multi'}">${ehKit?'KIT':'VENDA'} · ${total} itens</span>`:'';
+      const status=`<span class="status-celula ${todasValidas?'status-pendente':'status-rascunho'}">${todasValidas?'PENDENTE':'RASCUNHO'}</span>`;
+      const header=`<div class="pedido-card-head">
+        <div class="pedido-card-id">${badge}<label>Pedido<input class="campo-pedido" data-grupo-pedido="${htmlSeguroBanco(pedidoOriginal)}" data-campo="Pedido" value="${htmlSeguroBanco(pedidoExibicaoBanco(primeiro.Pedido,primeiro.Marketplace))}" onchange="atualizarCampoGrupoPedidoAdmin(this)"></label></div>
+        <div><small>Marketplace</small><span class="marketplace-pill-admin">${htmlSeguroBanco(primeiro.Marketplace)}</span></div>
+        <label>Data<input class="data-pedido-compacta" type="date" data-grupo-pedido="${htmlSeguroBanco(pedidoOriginal)}" data-campo="Data do Pedido" value="${htmlSeguroBanco(normalizarDataPedidoBanco(primeiro['Data do Pedido'],true))}" onchange="atualizarCampoGrupoPedidoAdmin(this)"></label>
+        <label class="pedido-card-cliente">Cliente<input data-grupo-pedido="${htmlSeguroBanco(pedidoOriginal)}" data-campo="Cliente" value="${htmlSeguroBanco(campoBanco(primeiro,'Cliente'))}" onchange="atualizarCampoGrupoPedidoAdmin(this)"></label>
+        <label class="pedido-card-conferencia">Conferência<input data-grupo-pedido="${htmlSeguroBanco(pedidoOriginal)}" data-campo="Nome Conferência" value="${htmlSeguroBanco(campoBanco(primeiro,'Nome Conferência'))}" onchange="atualizarCampoGrupoPedidoAdmin(this)"></label>
+        <div class="pedido-card-status">${status}</div>
+      </div>`;
+      const itens=grupo.itens.map((item,indice)=>{
+        item.Marketplace=marketplaceExibicaoBanco(item.Pedido);
+        const uid=htmlSeguroBanco(item.__uidLinha);
+        const inp=(campo,cls="")=>`<input class="${cls}" data-uidlinha="${uid}" data-campo="${htmlSeguroBanco(campo)}" value="${htmlSeguroBanco(campoBanco(item,campo))}" onchange="atualizarCampoPedidoAdmin(this)">`;
+        const eanAtual=campoBanco(item,"Código de Barras");
+        const alterado=String(eanSalvoPorUid.get(item.__uidLinha)??eanAtual)!==eanAtual.trim();
+        const mensagem=eanMensagemPorUid.get(item.__uidLinha)||{tipo:"",texto:"Bipe e pressione Enter"};
+        const editorEan=`<div class="ean-pedido-editor"><input class="${alterado?'ean-alterado':''}" inputmode="numeric" autocomplete="off" data-uidlinha="${uid}" data-campo="Código de Barras" value="${htmlSeguroBanco(eanAtual)}" oninput="alterarEanPedidoAdmin(this)" onblur="aoSairEanPedidoAdmin(event,this)" onkeydown="atalhoEanPedidoAdmin(event,this)"><div class="ean-pedido-acoes"><button type="button" class="btn-ean-salvar" onclick="salvarEanPedidoAdmin('${uid}',false,this.closest('.ean-pedido-editor').querySelector('input'))">Salvar</button><button type="button" class="btn-ean-banco" onclick="salvarEanPedidoAdmin('${uid}',true,this.closest('.ean-pedido-editor').querySelector('input'))">Banco</button></div><small class="ean-pedido-status ${htmlSeguroBanco(mensagem.tipo)}">${htmlSeguroBanco(mensagem.texto)}</small></div>`;
+        const skuManual=normalizarBuscaBanco(item.SkuManualOverride)==="sim";
+        const skuEditor=`<div class="sku-pedido-compacto"><input data-uidlinha="${uid}" data-campo="SKU" value="${htmlSeguroBanco(campoBanco(item,'SKU'))}" oninput="atualizarCampoPedidoAdmin(this,true)"><button type="button" class="btn-sku-compacto" onclick="salvarSkuManualAdmin('${uid}',this)">Salvar</button>${skuManual?`<button type="button" class="btn-sku-manual" onclick="restaurarSkuIntegracaoAdmin('${uid}')">↶</button>`:''}</div>`;
+        const localizacao=[campoBanco(item,'Rua'),campoBanco(item,'Módulo'),campoBanco(item,'Prateleira'),campoBanco(item,'Nível'),campoBanco(item,'Posição')].filter(v=>String(v||'').trim()).join(' · ');
+        const kitResumo=textoKitBanco(item)?`<span class="kit-badge">KIT</span> ${htmlSeguroBanco(textoKitBanco(item))}`:'Item normal';
+        const detalhes=`<details class="pedido-detalhes-compactos"><summary>Mais detalhes</summary><div class="pedido-detalhes-grid"><label>Descrição${inp('Descrição','campo-descricao')}</label><label>Rua${inp('Rua')}</label><label>Módulo${inp('Módulo')}</label><label>Prateleira${inp('Prateleira')}</label><label>Nível${inp('Nível')}</label><label>Posição${inp('Posição')}</label><label>Foto${inp('Foto','campo-foto')}</label><div class="pedido-kit-detalhe"><span>${kitResumo}</span><button type="button" class="btn-kit-pedido-editar" onclick="abrirEditorKitPedidoAdmin('${uid}')">✎ Kit</button></div></div></details>`;
+        return `<div class="pedido-item-row">
+          <div class="pedido-item-acoes"><button title="Adicionar item" onclick="adicionarItemMesmoPedido('${uid}')">＋</button><button title="Atualizar" onclick="atualizarVendaMercadoLivreAdmin('${uid}',this)">↻</button><button title="Excluir item" class="acao-excluir" onclick="excluirLinhaPedidoAdmin('${uid}')">🗑</button></div>
+          <div class="pedido-item-num">${total>1?`<b>${ehKit?'Componente':'Item'} ${indice+1}/${total}</b>`:''}</div>
+          <label class="pedido-item-sku"><span>SKU</span>${skuEditor}</label>
+          <label class="pedido-item-qtd"><span>Qtd.</span><input type="number" min="1" data-uidlinha="${uid}" data-campo="Quantidade" value="${htmlSeguroBanco(item.Quantidade||'1')}" onchange="atualizarCampoPedidoAdmin(this)"></label>
+          <label class="pedido-item-ean"><span>EAN</span>${editorEan}</label>
+          <div class="pedido-item-produto"><span>Produto</span><strong title="${htmlSeguroBanco(campoBanco(item,'Descrição'))}">${htmlSeguroBanco(campoBanco(item,'Descrição')||'Sem descrição')}</strong><small>${htmlSeguroBanco(localizacao||'Sem localização')}</small>${detalhes}</div>
+        </div>`;
+      }).join('');
+      return `<tr class="pedido-card-row"><td colspan="10"><section class="pedido-card ${ehKit?'pedido-card-kit':''}">${header}<div class="pedido-card-itens">${itens}</div></section></td></tr>`;
+    }).join('');
   }
-  document.getElementById("resumoPedidosAdmin").textContent=`${grupos.length} venda(s) · ${filtrados.length} linha(s) · ${obterPedidosValidosBanco().length} válida(s) · ${obterRascunhosBanco().length} rascunho(s)`;
+  document.getElementById("resumoPedidosAdmin").textContent=`${grupos.length} venda(s) · ${filtrados.length} item(ns) · ${obterPedidosValidosBanco().length} válida(s) · ${obterRascunhosBanco().length} rascunho(s)`;
   const paginaTexto=document.getElementById("paginaPedidosTexto");if(paginaTexto)paginaTexto.textContent=`Página ${paginaPedidosAdmin} de ${paginas}`;
 }
+
 function navegarGridAdmin(event,el){
   if(event.key!=="Enter"&&event.key!=="ArrowDown"&&event.key!=="ArrowUp")return;
   if(event.key==="Enter"&&event.shiftKey)return; event.preventDefault();
@@ -8140,5 +8135,51 @@ window.addEventListener("storage",e=>{if(["conf_pedidos","conf_logs","conf_histo
 #corpoPedidosAdmin tr.pedido-grupo-meio td:not(.pedido-grupo-celula){border-top-color:#e8eff6!important}
 #corpoPedidosAdmin .pedido-grupo-input{font-weight:800}
 </style>
+
+<style id="v1757-pedidos-cards">
+#aba-pedidos .excel-wrap{overflow:visible;background:transparent;border:0}
+#aba-pedidos .excel-grid{border-collapse:separate;border-spacing:0 10px;background:transparent;min-width:0;width:100%}
+#aba-pedidos .excel-grid>thead{display:none}
+#aba-pedidos .pedido-card-row>td{padding:0;border:0;background:transparent}
+.pedido-card{background:#fff;border:1px solid #d9e4ef;border-radius:12px;overflow:hidden;box-shadow:0 1px 4px rgba(25,54,84,.06)}
+.pedido-card-kit{border-left:4px solid #2f80ed}
+.pedido-card-head{display:grid;grid-template-columns:minmax(190px,1.25fr) 105px 130px minmax(150px,1fr) minmax(170px,1.15fr) 95px;gap:10px;align-items:end;padding:10px 12px;background:#f7fafe;border-bottom:1px solid #e3ebf3}
+.pedido-card-head label,.pedido-item-row label{display:grid;gap:3px;font-size:10px;font-weight:800;color:#60758b;text-transform:none}
+.pedido-card-head input{height:31px;padding:5px 8px;border:1px solid #cbd9e7;border-radius:7px;background:#fff;font-size:12px;min-width:0}
+.pedido-card-id{display:flex;align-items:end;gap:7px}.pedido-card-id label{flex:1}.pedido-card-badge{display:inline-flex;align-items:center;white-space:nowrap;padding:4px 7px;border-radius:999px;background:#eaf2ff;color:#1761a9;font-size:10px;font-weight:900;margin-bottom:4px}.pedido-card-badge.kit{background:#e8f2ff;color:#0b63b6}
+.pedido-card-head small{display:block;font-size:9px;color:#718399;font-weight:800;margin-bottom:5px}.pedido-card-status{align-self:center;justify-self:end}
+.pedido-card-itens{padding:0 12px}.pedido-item-row{display:grid;grid-template-columns:70px 82px minmax(190px,1fr) 58px minmax(230px,1.05fr) minmax(220px,1.25fr);gap:9px;align-items:start;padding:9px 0;border-bottom:1px solid #edf2f7}.pedido-item-row:last-child{border-bottom:0}
+.pedido-item-acoes{display:flex;gap:4px;padding-top:18px}.pedido-item-acoes button{width:25px;height:25px;padding:0;border:0;border-radius:6px;background:#edf4fb;color:#1d568d;font-size:12px;cursor:pointer}.pedido-item-acoes .acao-excluir{background:#fff0f1;color:#c7333c}
+.pedido-item-num{padding-top:19px;font-size:10px;color:#4c6781}.pedido-item-sku .sku-pedido-compacto{display:flex;gap:5px}.pedido-item-sku input,.pedido-item-qtd input,.pedido-item-ean input{height:31px;min-width:0;width:100%;padding:5px 7px;border:1px solid #cbd9e7;border-radius:7px;font-size:11px}.pedido-item-qtd input{text-align:center}.pedido-item-produto>span,.pedido-item-sku>span,.pedido-item-qtd>span,.pedido-item-ean>span{font-size:9px;font-weight:800;color:#60758b}.pedido-item-produto strong{display:block;margin-top:3px;font-size:11px;color:#1d2f40;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.pedido-item-produto small{display:block;margin-top:3px;color:#7b8b9d;font-size:9px}.pedido-detalhes-compactos{margin-top:4px}.pedido-detalhes-compactos summary{font-size:9px;color:#1761a9;font-weight:800;cursor:pointer}.ean-pedido-acoes{display:flex;gap:4px;margin-top:3px}.ean-pedido-acoes button,.btn-sku-compacto,.btn-sku-manual{height:24px;padding:2px 6px;font-size:9px;border-radius:5px}.ean-pedido-status{font-size:8px!important;margin-top:2px!important}.marketplace-pill-admin{display:inline-flex}.cliente-conf-compacto{gap:4px}
+@media(max-width:1250px){.pedido-card-head{grid-template-columns:1.1fr 90px 120px 1fr 1fr 80px}.pedido-item-row{grid-template-columns:62px 70px 1fr 52px 1.05fr 1.1fr}}
+@media(max-width:900px){.pedido-card-head{grid-template-columns:1fr 1fr 1fr}.pedido-item-row{grid-template-columns:54px 1fr 56px 1.2fr}.pedido-item-num{display:none}.pedido-item-produto{grid-column:2/-1}}
+</style>
+<script>
+/* V17.57 — usuários: servidor canônico como única fonte de verdade */
+(function(){
+  "use strict";
+  const BASE=location.pathname.startsWith('/expedicao')?'/expedicao':'';
+  const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));
+  const perfil=v=>{const p=String(v||'').toLowerCase();return p.includes('admin')?'Admin':(p.includes('supervisor')?'Supervisor':'Operador')};
+  function mapServer(u){return {Nome:u.display_name||u.username||'',Login:u.username||'',Senha:'********',Perfil:u.display_profile||perfil(u.role),Ativo:u.active!==false&&u.active!==0,Aprovado:true,AcessoConferencia:!!u.can_conferencia,AcessoAdmin:!!u.can_admin,AcessoEstacao:!!u.can_estacao,AcessoPrecificador:!!u.can_precificador,__uidUsuario:'USR-'+String(u.username||'').toLowerCase(),__serverUsername:String(u.username||'').toLowerCase()};}
+  async function api(path,opt={}){const r=await fetch(BASE+path,{credentials:'same-origin',cache:'no-store',...opt,headers:{'Accept':'application/json',...(opt.body?{'Content-Type':'application/json; charset=utf-8'}:{}),...(opt.headers||{})}});let d={};try{d=await r.json()}catch(_){ }if(!r.ok)throw new Error(d.error||('HTTP '+r.status));return d;}
+  window.carregarUsuariosCanonicosV1757=async function(){
+    try{const d=await api('/api/roles');const lista=(Array.isArray(d.users)?d.users:[]).map(mapServer);usuariosEditorAdmin=lista;if(typeof usuariosCadastrados!=='undefined')usuariosCadastrados=lista;renderizarUsuariosAdmin();const c=document.getElementById('contadorUsuariosAdmin');if(c)c.textContent=lista.length+' usuário(s) cadastrado(s) no servidor.';return lista;}catch(e){console.error('[V17.57 usuarios]',e);if(typeof setStatusBanco==='function')setStatusBanco('Erro ao carregar usuários do servidor','erro');throw e;}
+  };
+  window.renderizarUsuariosAdmin=function(){
+    const corpo=document.getElementById('corpoUsuariosAdmin');if(!corpo)return;const lista=Array.isArray(usuariosEditorAdmin)?usuariosEditorAdmin:[];
+    corpo.innerHTML=lista.map(u=>{const uid=esc(u.__uidUsuario);return `<tr data-linha-usuario="${uid}"><td><button style="background:#ffebee;color:#c62828;border:0;border-radius:6px;padding:7px" onclick="excluirUsuarioAdmin('${uid}')" title="Excluir usuário">🗑</button></td><td><input data-uidusuario="${uid}" data-campo="Nome" value="${esc(u.Nome)}" oninput="atualizarCampoUsuarioAdmin(this)"></td><td><input data-uidusuario="${uid}" data-campo="Login" value="${esc(u.Login)}" readonly title="Para trocar o login, exclua e recrie o usuário"></td><td><div class="senha-acesso-celula"><div class="senha-protegida-status"><strong>🔒 Senha protegida</strong><small>Não é possível visualizar a atual</small></div><button type="button" class="btn-alterar-senha" onclick="abrirModalAlterarSenhaAdmin('${uid}')">Alterar senha</button></div></td><td><select data-uidusuario="${uid}" data-campo="Perfil" onchange="atualizarCampoUsuarioAdmin(this)"><option ${perfil(u.Perfil)==='Admin'?'selected':''}>Admin</option><option ${perfil(u.Perfil)==='Supervisor'?'selected':''}>Supervisor</option><option ${perfil(u.Perfil)==='Operador'?'selected':''}>Operador</option></select></td></tr>`}).join('')||'<tr><td colspan="5" style="padding:20px;text-align:center">Nenhum usuário cadastrado.</td></tr>';
+  };
+  window.atualizarCampoUsuarioAdmin=function(el){const u=(usuariosEditorAdmin||[]).find(x=>String(x.__uidUsuario)===String(el.dataset.uidusuario));if(!u)return;u[el.dataset.campo]=el.value;if(typeof setStatusBanco==='function')setStatusBanco('Alterações pendentes — clique em Salvar alterações','salvando');};
+  window.salvarUsuariosAdmin=async function(mostrar=false){
+    try{for(const u of (usuariosEditorAdmin||[])){const login=String(u.__serverUsername||u.Login||'').trim().toLowerCase();if(!login)continue;await api('/api/roles',{method:'POST',body:JSON.stringify({username:login,display_name:String(u.Nome||login).trim(),role:perfil(u.Perfil).toLowerCase(),active:u.Ativo!==false,permissions:{conferencia:u.AcessoConferencia!==false,admin:u.AcessoAdmin===true,estacao:u.AcessoEstacao===true,precificador:u.AcessoPrecificador===true}})});}await carregarUsuariosCanonicosV1757();if(typeof setStatusBanco==='function')setStatusBanco('● Usuários salvos no servidor','ok');if(mostrar)alert('Alterações de usuários salvas no servidor.');return true;}catch(e){if(typeof setStatusBanco==='function')setStatusBanco('Erro ao salvar usuários','erro');if(mostrar)alert('Não foi possível salvar: '+(e.message||e));return false;}
+  };
+  window.excluirUsuarioAdmin=async function(uid){const u=(usuariosEditorAdmin||[]).find(x=>String(x.__uidUsuario)===String(uid));if(!u)return;if(!confirm(`Excluir o usuário ${u.Login||u.Nome}?`))return;try{await api('/api/roles?username='+encodeURIComponent(u.__serverUsername||u.Login),{method:'DELETE'});await carregarUsuariosCanonicosV1757();if(typeof setStatusBanco==='function')setStatusBanco('● Usuário excluído no servidor','ok');}catch(e){alert('Não foi possível excluir o usuário: '+(e.message||e));}};
+  window.confirmarNovoUsuarioAdmin=async function(){const erro=document.getElementById('erroNovoUsuarioAdmin');const btn=document.getElementById('btnConfirmarNovoUsuario');if(erro)erro.textContent='';const nome=String(document.getElementById('novoUsuarioNome')?.value||'').trim(),login=String(document.getElementById('novoUsuarioLogin')?.value||'').trim().toLowerCase(),senha=String(document.getElementById('novoUsuarioSenha')?.value||''),p=perfil(document.getElementById('novoUsuarioPerfil')?.value);if(!nome||!login||!senha){if(erro)erro.textContent='Preencha Nome, Login e Senha.';return;}try{if(btn){btn.disabled=true;btn.textContent='Salvando...'}await api('/api/roles',{method:'POST',body:JSON.stringify({username:login,display_name:nome,role:p.toLowerCase(),active:true,password:senha})});await carregarUsuariosCanonicosV1757();fecharModalNovoUsuarioAdmin();if(typeof setStatusBanco==='function')setStatusBanco('● Usuário criado no servidor','ok');}catch(e){if(erro)erro.textContent=e.message||String(e);}finally{if(btn){btn.disabled=false;btn.textContent='Salvar usuário'}}};
+  const salvarSenhaAnterior=window.salvarNovaSenhaAdmin;window.salvarNovaSenhaAdmin=async function(){await salvarSenhaAnterior();setTimeout(()=>carregarUsuariosCanonicosV1757().catch(()=>{}),150)};
+  document.addEventListener('DOMContentLoaded',()=>setTimeout(()=>carregarUsuariosCanonicosV1757().catch(()=>{}),300));
+})();
+</script>
+
 </body>
 </html>
