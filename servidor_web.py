@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.46-ML-SKU-REAL-EDICAO-PERSISTENTE-FIX"
+APP_VERSION = "17.47-ML-DEDUP-EDICAO-MANUAL-FIX"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2353,6 +2353,94 @@ def _pending_identity_v1714(row: dict[str, Any], index: int = 0) -> str:
     created=pick("CriadoEm","criadoEm","AdicionadoEm","adicionadoEm","Data","data")
     return f"MANUAL|{market}|{item}|{sku}|{created}|{index}".upper()
 
+def _ml_legacy_sku_pair(a: Any, b: Any) -> bool:
+    """Reconhece somente o caso legado SKU curto x SKU real prefixado.
+
+    Ex.: 0893117732 <-> 158529-0893117732. Não considera SKUs iguais nem
+    equivalências genéricas, para não colapsar dois itens legítimos do pedido.
+    """
+    sa = str(a or "").strip()
+    sb = str(b or "").strip()
+    if not sa or not sb or normalize(sa) == normalize(sb):
+        return False
+    long_s, short_s = (sa, sb) if len(sa) > len(sb) else (sb, sa)
+    if "-" not in long_s:
+        return False
+    prefix, remainder = long_s.split("-", 1)
+    return bool(prefix.strip() and normalize(remainder) == normalize(short_s))
+
+
+def _pending_ml_row(row: dict[str, Any]) -> bool:
+    market = normalize(row.get("Marketplace"))
+    origem = normalize(row.get("OrigemCadastro"))
+    return bool(
+        "MERCADO" in market
+        or str(row.get("VendaMercadoLivre") or "").strip()
+        or "MERCADO LIVRE" in origem
+    )
+
+
+def _same_pending_order(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    va = str(a.get("VendaMercadoLivre") or "").strip()
+    vb = str(b.get("VendaMercadoLivre") or "").strip()
+    if va and vb:
+        return va == vb
+    return normalize(order_number(a)) == normalize(order_number(b)) and bool(normalize(order_number(a)))
+
+
+def _dedupe_ml_legacy_sku_rows(rows: list[Any]) -> list[Any]:
+    """Remove duplicação histórica criada pela mudança SKU curto -> SKU real.
+
+    Mantém a linha manual quando existir; caso contrário prefere o SKU completo
+    prefixado. Quantidade não é somada porque as duas linhas representam a mesma
+    venda/item. Campos vazios da linha escolhida são enriquecidos pela descartada.
+    """
+    result: list[Any] = []
+    for raw in rows:
+        if not isinstance(raw, dict) or not _pending_ml_row(raw):
+            result.append(raw)
+            continue
+        duplicate_index = None
+        for i, existing in enumerate(result):
+            if not isinstance(existing, dict) or not _pending_ml_row(existing):
+                continue
+            if not _same_pending_order(existing, raw):
+                continue
+            if not _ml_legacy_sku_pair(existing.get("SKU"), raw.get("SKU")):
+                continue
+            q1 = str(existing.get("Quantidade") or "1").strip()
+            q2 = str(raw.get("Quantidade") or "1").strip()
+            if q1 != q2:
+                continue
+            duplicate_index = i
+            break
+        if duplicate_index is None:
+            result.append(raw)
+            continue
+
+        existing = result[duplicate_index]
+        ex_manual = normalize(existing.get("SkuManualOverride")) == "SIM"
+        raw_manual = normalize(raw.get("SkuManualOverride")) == "SIM"
+        if ex_manual and raw_manual:
+            # Duas correções manuais distintas nunca são colapsadas automaticamente.
+            result.append(raw)
+            continue
+        if raw_manual and not ex_manual:
+            keep, other = raw, existing
+        elif ex_manual:
+            keep, other = existing, raw
+        else:
+            ex_sku = str(existing.get("SKU") or "")
+            raw_sku = str(raw.get("SKU") or "")
+            keep, other = (raw, existing) if len(raw_sku) > len(ex_sku) else (existing, raw)
+        for k, v in other.items():
+            if k not in keep or not str(keep.get(k) or "").strip():
+                keep[k] = v
+        keep["Lido"] = max(int(keep.get("Lido") or 0), int(other.get("Lido") or 0))
+        result[duplicate_index] = keep
+    return result
+
+
 def preserve_pending_records_v1714(current_value: str | None, new_value: str) -> str:
     try:
         current=json.loads(current_value or "[]"); newer=json.loads(new_value or "[]")
@@ -2364,7 +2452,24 @@ def preserve_pending_records_v1714(current_value: str | None, new_value: str) ->
         if not isinstance(row,dict): continue
         ident=_pending_identity_v1714(row,i)
         if ident not in ids:
+            # V17.47: não ressuscita a cópia antiga de um item ML quando a lista
+            # nova já contém o mesmo pedido com o SKU real completo. Isso é a
+            # migração segura do legado 089... -> 158529-089....
+            if _pending_ml_row(row) and normalize(row.get("SkuManualOverride")) != "SIM":
+                equivalent = any(
+                    isinstance(n,dict)
+                    and _pending_ml_row(n)
+                    and _same_pending_order(row,n)
+                    and _ml_legacy_sku_pair(row.get("SKU"),n.get("SKU"))
+                    and str(row.get("Quantidade") or "1").strip() == str(n.get("Quantidade") or "1").strip()
+                    for n in newer
+                )
+                if equivalent:
+                    continue
             newer.append(row);ids.add(ident);changed=True
+    deduped=_dedupe_ml_legacy_sku_rows(newer)
+    if deduped != newer:
+        newer=deduped;changed=True
     return json_dumps(newer) if changed else new_value
 
 def merge_value(key: str, current: str | None, old: str | None, newer: str, force: bool) -> str:
@@ -2643,6 +2748,8 @@ def save_storage(
                 try:
                     merged_rows = json.loads(merged)
                     if isinstance(merged_rows, list):
+                        if key == "conf_pedidos":
+                            merged_rows = _dedupe_ml_legacy_sku_rows(merged_rows)
                         merged = json_dumps(_propagate_previous_completion_metadata(merged_rows))
                 except Exception:
                     pass
@@ -6695,7 +6802,7 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
             continue
         item = item_data.get("item") if isinstance(item_data.get("item"), dict) else {}
 
-        for expanded in _expand_ml_order_item(item_data, kit_catalog):
+        for expanded_index, expanded in enumerate(_expand_ml_order_item(item_data, kit_catalog)):
             sku_raw = str(expanded.get("sku_raw") or "")
             sku = str(expanded.get("sku") or "").strip()
             quantity = max(1, int(expanded.get("quantity") or 1))
@@ -6739,8 +6846,13 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
                 "Chave de Acesso": fiscal_key,
                 "Status NF Mercado Livre": str(fiscal_state.get("fiscal_status") or "AGUARDANDO"),
                 "Etiqueta API Mercado Livre": "VINCULADA" if fiscal_state.get("label_stored") else "AGUARDANDO",
+                # V17.47: identidade da linha ML independe do SKU. O SKU pode
+                # mudar/corrigir sem criar uma segunda venda no banco.
+                "MercadoLivreLinhaKey": f"{order_id}|{item.get('id')}|{item.get('variation_id')}|{expanded_index}",
+                "MercadoLivreItemId": str(item.get("id") or ""),
+                "MercadoLivreVariationId": str(item.get("variation_id") or ""),
                 "__uidLinha": "MLAPI_" + hashlib.sha1(
-                    f"{order_id}|{item.get('id')}|{item.get('variation_id')}|{kit_sku}|{sku}".encode("utf-8")
+                    f"{order_id}|{item.get('id')}|{item.get('variation_id')}|{expanded_index}".encode("utf-8")
                 ).hexdigest()[:20],
                 "OrigemCadastro": source,
                 "SkuOrigemImportacao": sku_raw,
@@ -6903,7 +7015,8 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
             for field in (
                 "OrigemCadastro","VendaMercadoLivre","PackIdMercadoLivre",
                 "ShipmentIdMercadoLivre","StatusMercadoLivre","LogisticaMercadoLivre",
-                "NomeFiscalMercadoLivre","DataLimiteDespachoMercadoLivre","MercadoLivreAtualizadoEm"
+                "NomeFiscalMercadoLivre","DataLimiteDespachoMercadoLivre","MercadoLivreAtualizadoEm",
+                "MercadoLivreLinhaKey","MercadoLivreItemId","MercadoLivreVariationId"
             ):
                 existing[field] = imported.get(field, "")
             # O SKU original da integração é mantido como referência de reconciliação.
