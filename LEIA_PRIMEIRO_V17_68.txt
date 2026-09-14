@@ -1,0 +1,9 @@
+NOROMAK V17.68 — MLB ↔ SKU COM FALLBACK POLICYAGENT
+
+Correção:
+- A sincronização MLB ↔ SKU da V17.67 podia falhar com HTTP 403 / PolicyAgent no endpoint multi-get /items?ids=...
+- O sistema continua tentando o multi-get autenticado primeiro.
+- Se o Mercado Livre bloquear essa rota por PolicyAgent, usa automaticamente GET /items/{MLB} individual com o mesmo Bearer token.
+- Esse é o mesmo caminho já utilizado pela análise de promoções do próprio sistema.
+- Mantidos progresso, filtro de vínculos e gravação na base canônica.
+- HTTP 401 continua usando o refresh/reconexão normal do token ML.

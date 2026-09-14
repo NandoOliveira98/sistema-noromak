@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.67-MLB-SKU-SYNC-PROMOCOES-TESTE"
+APP_VERSION = "17.68-MLB-SKU-POLICYAGENT-FALLBACK"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -5513,6 +5513,13 @@ def _ml_item_meta_from_body(body: dict[str, Any]) -> dict[str, Any]:
 
 
 def ml_items_meta(ids: list[str]) -> dict[str, dict[str, Any]]:
+    """Lê metadados/SKU de anúncios do Mercado Livre.
+
+    V17.68: tenta primeiro o endpoint multi-get autenticado. Algumas aplicações
+    recebem HTTP 403 / PolicyAgent nessa rota mesmo com Bearer válido. Nesse caso,
+    cai automaticamente para GET /items/{MLB} individual, que é o mesmo caminho
+    autenticado já usado pela análise de promoções do sistema.
+    """
     normalized: list[str] = []
     seen: set[str] = set()
     for value in ids:
@@ -5536,49 +5543,71 @@ def ml_items_meta(ids: list[str]) -> dict[str, dict[str, Any]]:
             else:
                 missing.append(mlb)
 
-    for start in range(0, len(missing), 20):
-        batch = missing[start:start + 20]
+    def unknown_meta(mlb: str, error: str = "") -> dict[str, Any]:
+        return {
+            "id": mlb,
+            "title": "",
+            "sku": "",
+            "available_quantity": None,
+            "status": "unknown",
+            "price": 0,
+            "permalink": "",
+            "stock_known": False,
+            "error": str(error or "")[:500],
+        }
+
+    for start_idx in range(0, len(missing), 20):
+        batch = missing[start_idx:start_idx + 20]
         if not batch:
             continue
-        ids_param = ",".join("MLB" + item for item in batch)
-        # V17.41: usa a conexão autenticada do Mercado Livre. Alguns anúncios
-        # não expõem seller_custom_field/SELLER_SKU de forma confiável na
-        # consulta pública, o que fazia a tela ficar eternamente como
-        # "Não consultado"/sem SKU. ml_api_get também renova o token quando possível.
-        payload = ml_api_get(
-            "/items?" + urlencode({"ids": ids_param}),
-        )
-        rows = payload if isinstance(payload, list) else []
+
         fetched: dict[str, dict[str, Any]] = {}
+        batch_error = ""
+        try:
+            ids_param = ",".join("MLB" + item for item in batch)
+            payload = ml_api_get("/items?" + urlencode({"ids": ids_param}))
+            rows = payload if isinstance(payload, list) else []
+            for wrapper in rows:
+                if not isinstance(wrapper, dict):
+                    continue
+                body = wrapper.get("body") if isinstance(wrapper.get("body"), dict) else {}
+                meta = _ml_item_meta_from_body(body)
+                mlb = str(meta.get("id") or "")
+                if mlb:
+                    fetched[mlb] = meta
+        except Exception as exc:
+            batch_error = str(exc)
+            policy_blocked = (
+                "HTTP 403" in batch_error
+                or "PA_UNAUTHORIZED_RESULT_FROM_POLICIES" in batch_error
+                or "PolicyAgent" in batch_error
+            )
+            if not policy_blocked:
+                raise
 
-        for wrapper in rows:
-            if not isinstance(wrapper, dict):
-                continue
-            body = wrapper.get("body") if isinstance(wrapper.get("body"), dict) else {}
-            meta = _ml_item_meta_from_body(body)
-            mlb = str(meta.get("id") or "")
-            if not mlb:
-                continue
-            fetched[mlb] = meta
+            # Fallback autenticado por item. Esse endpoint já é usado com sucesso
+            # em ml_promotions_analysis_payload.load_item().
+            for mlb in batch:
+                try:
+                    body = ml_api_get(f"/items/{quote('MLB' + mlb)}")
+                    if isinstance(body, dict):
+                        meta = _ml_item_meta_from_body(body)
+                        meta_id = str(meta.get("id") or mlb)
+                        fetched[meta_id] = meta
+                except Exception as item_exc:
+                    fetched[mlb] = unknown_meta(mlb, str(item_exc))
 
-        # Cache missing/error results too, briefly represented as unknown with zero stock.
         with ML_ITEM_META_CACHE_LOCK:
             for mlb in batch:
                 meta = fetched.get(mlb)
-                if meta:
+                if meta and str(meta.get("sku") or "").strip():
                     meta = dict(meta)
                     meta["stock_known"] = True
-                else:
-                    meta = {
-                        "id": mlb,
-                        "title": "",
-                        "sku": "",
-                        "available_quantity": None,
-                        "status": "unknown",
-                        "price": 0,
-                        "permalink": "",
-                        "stock_known": False,
-                    }
+                elif meta and meta.get("stock_known") is not False:
+                    meta = dict(meta)
+                    meta["stock_known"] = True
+                elif not meta:
+                    meta = unknown_meta(mlb, batch_error)
                 ML_ITEM_META_CACHE[mlb] = (time.time(), dict(meta))
                 result[mlb] = dict(meta)
 
