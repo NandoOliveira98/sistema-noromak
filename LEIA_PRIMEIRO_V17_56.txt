@@ -1,0 +1,9 @@
+NOROMAK V17.56 — PEDIDOS/KITS AGRUPADOS
+
+- Pedidos com várias linhas agora aparecem como uma única venda visual.
+- Quando há metadados de kit, o grupo recebe badge KIT e mostra a quantidade de componentes.
+- Pedido, Marketplace, Data, Cliente/Conferência e Status aparecem uma única vez por venda.
+- SKU, Quantidade, EAN, Produto/Localização e ações continuam individualizados por componente.
+- A paginação agora considera vendas/grupos, evitando que um kit seja quebrado entre páginas.
+- Itens normais repetidos no mesmo pedido também ficam visualmente agrupados, porém com badge VENDA, não KIT.
+- Edição dos campos compartilhados do grupo atualiza todas as linhas daquele pedido.
