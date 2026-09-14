@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.65-KIT-EXCLUSAO-FETCH-FIX"
+APP_VERSION = "17.66-ADMIN-EXCLUIR-KIT-INTEIRO-TOMBSTONE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2405,6 +2405,8 @@ def get_storage(key: str) -> tuple[str | None, int, str | None]:
             value = _admin_override_apply(key, value)
         if key == "conf_pedidos" and "_admin_manual_order_vault_apply" in globals():
             value = _admin_manual_order_vault_apply(value)
+        if key in ("conf_pedidos", "conf_pedidos_rascunhos") and "_pending_filter_manual_deleted_orders_value" in globals():
+            value = _pending_filter_manual_deleted_orders_value(value)
     except Exception as exc:
         print(f"Aviso: override manual não aplicado na leitura de {key}: {exc}", file=sys.stderr)
     return value, int(row["version"]), row["updated_at"]
@@ -3515,6 +3517,8 @@ def save_storage(
             merged = _admin_override_apply(key, merged)
             if key == "conf_pedidos":
                 merged = _admin_manual_order_vault_apply(merged)
+            if key in ("conf_pedidos", "conf_pedidos_rascunhos"):
+                merged = _pending_filter_manual_deleted_orders_value(merged)
             version += 1
             updated = now_iso()
             DB.execute(
@@ -4903,6 +4907,47 @@ def _shopee_filter_artificial_kit_lines(lines: list[dict[str, Any]]) -> list[dic
     return result
 
 
+
+PENDING_ORDER_DELETE_KEY_V1766 = "conf_pedidos_exclusoes_v1766"
+
+
+def _pending_order_manual_deletions() -> list[dict[str, Any]]:
+    row = DB.execute("SELECT value FROM storage WHERE key=?", (PENDING_ORDER_DELETE_KEY_V1766,)).fetchone()
+    if not row:
+        return []
+    try:
+        parsed = json.loads(str(row["value"] or "[]"))
+    except Exception:
+        return []
+    return [dict(x) for x in parsed if isinstance(x, dict)] if isinstance(parsed, list) else []
+
+
+def _pending_order_is_manually_deleted(row: dict[str, Any], deletions: list[dict[str, Any]] | None = None) -> bool:
+    order = normalize(order_number(row))
+    if not order:
+        return False
+    for item in (deletions if deletions is not None else _pending_order_manual_deletions()):
+        if normalize(item.get("Pedido")) == order and bool(item.get("Ativo", True)):
+            return True
+    return False
+
+
+def _pending_filter_manual_deleted_orders_value(value: str | None) -> str:
+    try:
+        rows = json.loads(value or "[]")
+    except Exception:
+        return value or "[]"
+    if not isinstance(rows, list):
+        return value or "[]"
+    deletions = _pending_order_manual_deletions()
+    if not deletions:
+        return json_dumps(rows)
+    return json_dumps([
+        row for row in rows
+        if not (isinstance(row, dict) and _pending_order_is_manually_deleted(row, deletions))
+    ])
+
+
 def _shopee_load_manual_deletions() -> list[dict[str, Any]]:
     raw, _, _ = get_storage("conf_shopee_exclusoes_v1")
     rows = _rows_from_storage_value(raw)
@@ -4916,6 +4961,9 @@ def _shopee_is_manually_deleted(row: dict[str, Any], deletions: list[dict[str, A
     for item in deletions:
         if normalize(item.get("Pedido")) != order:
             continue
+        # V17.66: exclusão do KIT/pedido inteiro pelo ADMIN vence qualquer sync Shopee.
+        if bool(item.get("ExcluirPedido")) or normalize(item.get("Tipo")) in {"PEDIDO", "KIT_INTEIRO"}:
+            return True
         deleted_uid = str(item.get("UidLinha") or "").strip()
         deleted_sku = normalize(item.get("SkuOrigem") or item.get("SKU"))
         if deleted_uid and uid and deleted_uid == uid:
@@ -11288,6 +11336,11 @@ class AppHandler(BaseHTTPRequestHandler):
             if ctx is not None:
                 self.handle_admin_order_upsert(ctx)
             return
+        if path == "/api/order-kit-delete":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                self.handle_order_kit_delete(ctx)
+            return
         if path == "/api/order-line-delete":
             ctx = self.auth()
             if ctx is not None:
@@ -11938,6 +11991,143 @@ class AppHandler(BaseHTTPRequestHandler):
         except Exception as exc:
             self.send_json({"ok": False, "error": str(exc)}, 409)
 
+
+    def handle_order_kit_delete(self, ctx: dict[str, Any]) -> None:
+        """V17.66 — exclusão soberana do ADMIN para KIT/pedido inteiro.
+
+        Remove todas as linhas do pedido de pending/drafts, marca o pedido inteiro
+        como excluído e bloqueia qualquer reinserção automática futura. Para Shopee,
+        cria também tombstone por pedido em conf_shopee_exclusoes_v1.
+        """
+        try:
+            req = self.read_json()
+            ref_order = str(req.get("pedido") or "").strip()
+            if not ref_order:
+                raise ValueError("Pedido não informado.")
+            order_norm = normalize(ref_order)
+            marketplace_hint = str(req.get("marketplace") or "").strip()
+            actor = str(ctx.get("username") or "admin")
+            timestamp = now_iso()
+
+            def load_raw(key: str) -> tuple[list[dict[str, Any]], int]:
+                row = DB.execute("SELECT value,version FROM storage WHERE key=?", (key,)).fetchone()
+                raw = str(row["value"] or "[]") if row else "[]"
+                version = int(row["version"] or 0) if row else 0
+                try:
+                    parsed = json.loads(raw)
+                except Exception as exc:
+                    raise ValueError(f"Os dados de {key} estão inválidos.") from exc
+                if not isinstance(parsed, list):
+                    parsed = []
+                return [dict(x) for x in parsed if isinstance(x, dict)], version
+
+            with DB_LOCK:
+                DB.execute("BEGIN IMMEDIATE")
+                try:
+                    removed_rows: list[dict[str, Any]] = []
+                    for key in ("conf_pedidos", "conf_pedidos_rascunhos"):
+                        rows, version = load_raw(key)
+                        kept: list[dict[str, Any]] = []
+                        changed = False
+                        for idx, row in enumerate(rows):
+                            if normalize(order_number(row)) == order_norm:
+                                removed_rows.append(row)
+                                changed = True
+                                entity_id = _admin_override_entity_id(key, row, idx)
+                                _admin_override_upsert(key, entity_id, "__ENTITY__", None, deleted=True, actor=actor)
+                            else:
+                                kept.append(row)
+                        if changed:
+                            DB.execute(
+                                """INSERT INTO storage(key,value,version,updated_at) VALUES(?,?,?,?)
+                                   ON CONFLICT(key) DO UPDATE SET value=excluded.value,version=excluded.version,updated_at=excluded.updated_at""",
+                                (key, json_dumps(kept), version + 1, timestamp),
+                            )
+
+                    # Tombstone no nível do pedido. É a autoridade final para QUALQUER integração.
+                    del_row = DB.execute("SELECT value,version FROM storage WHERE key=?", (PENDING_ORDER_DELETE_KEY_V1766,)).fetchone()
+                    del_raw = str(del_row["value"] or "[]") if del_row else "[]"
+                    del_ver = int(del_row["version"] or 0) if del_row else 0
+                    try:
+                        deletions = json.loads(del_raw)
+                    except Exception:
+                        deletions = []
+                    if not isinstance(deletions, list):
+                        deletions = []
+                    kept_del = [x for x in deletions if not (isinstance(x, dict) and normalize(x.get("Pedido")) == order_norm)]
+                    kept_del.append({
+                        "Pedido": ref_order,
+                        "Marketplace": marketplace_hint or (str(removed_rows[0].get("Marketplace") or "") if removed_rows else ""),
+                        "Tipo": "KIT_INTEIRO",
+                        "Ativo": True,
+                        "ExcluidoEm": timestamp,
+                        "ExcluidoPor": actor,
+                        "Origem": "ADMIN",
+                    })
+                    DB.execute(
+                        """INSERT INTO storage(key,value,version,updated_at) VALUES(?,?,?,?)
+                           ON CONFLICT(key) DO UPDATE SET value=excluded.value,version=excluded.version,updated_at=excluded.updated_at""",
+                        (PENDING_ORDER_DELETE_KEY_V1766, json_dumps(kept_del), del_ver + 1, timestamp),
+                    )
+
+                    # Se alguma linha estava no cofre manual do ADMIN, marca como removida também.
+                    DB.execute(
+                        "UPDATE admin_manual_orders_v1752 SET deleted=1,updated_at=?,updated_by=? WHERE order_key=?",
+                        (timestamp, actor, order_norm),
+                    )
+
+                    # Tombstone de PEDIDO Shopee: o importador descarta qualquer componente futuro desse pedido.
+                    is_shopee = normalize(marketplace_hint) == "SHOPEE" or any(
+                        normalize(str(r.get("Marketplace") or "")) == "SHOPEE"
+                        or "SHOPEE" in normalize(str(r.get("OrigemCadastro") or ""))
+                        or bool(str(r.get("SkuReferenciaShopee") or "").strip())
+                        for r in removed_rows
+                    )
+                    if is_shopee:
+                        ex_row = DB.execute("SELECT value,version FROM storage WHERE key=?", ("conf_shopee_exclusoes_v1",)).fetchone()
+                        ex_raw = str(ex_row["value"] or "[]") if ex_row else "[]"
+                        ex_ver = int(ex_row["version"] or 0) if ex_row else 0
+                        try:
+                            exclusions = json.loads(ex_raw)
+                        except Exception:
+                            exclusions = []
+                        if not isinstance(exclusions, list):
+                            exclusions = []
+                        exclusions = [x for x in exclusions if not (
+                            isinstance(x, dict)
+                            and normalize(x.get("Pedido")) == order_norm
+                            and (bool(x.get("ExcluirPedido")) or normalize(x.get("Tipo")) in {"PEDIDO", "KIT_INTEIRO"})
+                        )]
+                        exclusions.append({
+                            "Pedido": ref_order,
+                            "Tipo": "PEDIDO",
+                            "ExcluirPedido": True,
+                            "ExcluidoEm": timestamp,
+                            "ExcluidoPor": actor,
+                            "Origem": "ADMIN",
+                        })
+                        DB.execute(
+                            """INSERT INTO storage(key,value,version,updated_at) VALUES(?,?,?,?)
+                               ON CONFLICT(key) DO UPDATE SET value=excluded.value,version=excluded.version,updated_at=excluded.updated_at""",
+                            ("conf_shopee_exclusoes_v1", json_dumps(exclusions), ex_ver + 1, timestamp),
+                        )
+
+                    DB.commit()
+                    audit(actor, "order.kit.delete", f"{ref_order}|linhas={len(removed_rows)}|marketplace={marketplace_hint}")
+                    self.send_json({
+                        "ok": True,
+                        "pedido": ref_order,
+                        "removed_rows": len(removed_rows),
+                        "order_tombstone": True,
+                        "shopee_order_tombstone": bool(is_shopee),
+                    })
+                except Exception:
+                    DB.rollback()
+                    raise
+        except (ValueError, json.JSONDecodeError) as exc:
+            self.send_json({"ok": False, "error": str(exc)}, 400)
+        except Exception as exc:
+            self.send_json({"ok": False, "error": str(exc)}, 409)
 
     def handle_order_line_delete(self, ctx: dict[str, Any]) -> None:
         """V17.64 — exclusão canônica de uma linha/componente de pedido.

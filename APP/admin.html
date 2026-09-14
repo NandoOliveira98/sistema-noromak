@@ -561,6 +561,10 @@ body{background:var(--v15-bg)!important}
 @media(max-width:760px){.v151-kpis{grid-template-columns:1fr 1fr}.v151-flow{overflow-x:auto;justify-content:flex-start}.v151-flow>div{min-width:76px}.v151-productivity{grid-template-columns:1fr 1fr}.v151-shortcuts{grid-template-columns:1fr}.v151-dashboard-head h2{font-size:20px}}
 </style>
 
+
+<style id="v1766-kit-delete-style">
+.btn-excluir-kit-inteiro{align-self:end;border:1px solid #ef9a9a;background:#fff5f5;color:#b42318;border-radius:8px;padding:8px 10px;font-weight:800;font-size:12px;cursor:pointer;white-space:nowrap}.btn-excluir-kit-inteiro:hover{background:#ffe4e4;border-color:#e57373}
+</style>
 </head>
 <body>
 
@@ -4025,6 +4029,36 @@ function registrarExclusaoManualShopeeAdmin(item){
   if(!existe)lista.push({Pedido:pedido,SkuOrigem:skuOrigem,SKU:String(item.SKU||""),UidLinha:uid,ExcluidoEm:new Date().toISOString(),Origem:"MANUAL"});
   appStorage.setItem("conf_shopee_exclusoes_v1",JSON.stringify(lista));
 }
+function usuarioAtualEhAdminV1766(){
+  try{return normalizarBuscaBanco(JSON.parse(appStorage.getItem("conf_admin_sessao")||"{}")?.Perfil||"").includes("admin");}catch(_){return false;}
+}
+async function excluirKitInteiroAdmin(pedido,marketplace){
+  if(!pedido)return;
+  if(!usuarioAtualEhAdminV1766()){
+    alert("Somente o ADMIN pode excluir o KIT inteiro de forma definitiva.");
+    return;
+  }
+  if(!confirm(`Excluir o KIT INTEIRO do pedido ${pedido}?\n\nTodos os componentes serão removidos e nenhuma sincronização poderá recriar este pedido automaticamente.`))return;
+  try{
+    setStatusBanco("● Excluindo KIT inteiro e bloqueando reescrita...","salvando");
+    const baseApi=location.pathname.startsWith("/expedicao")?"/expedicao":"";
+    const resposta=await fetch(baseApi+'/api/order-kit-delete',{
+      method:'POST',credentials:'same-origin',cache:'no-store',
+      headers:{'Accept':'application/json','Content-Type':'application/json; charset=utf-8'},
+      body:JSON.stringify({pedido:String(pedido||""),marketplace:String(marketplace||"")})
+    });
+    let retorno={};try{retorno=await resposta.json();}catch(_){retorno={};}
+    if(!resposta.ok||retorno.ok===false)throw new Error(retorno.error||('HTTP '+resposta.status));
+    const pedidoNorm=normalizarBuscaBanco(pedido);
+    pedidosEditorAdmin=pedidosEditorAdmin.filter(x=>normalizarBuscaBanco(x.Pedido)!==pedidoNorm);
+    renderizarPedidosAdmin();
+    setTimeout(()=>{try{carregarBancoInternoAdmin();}catch(_){}},100);
+    setStatusBanco("● KIT inteiro excluído definitivamente pelo ADMIN","ok");
+  }catch(e){
+    console.error(e);setStatusBanco("Erro ao excluir KIT inteiro","erro");
+    alert("Não foi possível excluir o KIT inteiro: "+(e.message||e));
+  }
+}
 async function excluirLinhaPedidoAdmin(uid){
   const item=pedidosEditorAdmin.find(x=>x.__uidLinha===uid); if(!item)return;
   const ehKit=normalizarBuscaBanco(item.Kit)==="sim"||!!String(item.SkuKitOrigem||item["Nome do Kit"]||"").trim();
@@ -4495,6 +4529,7 @@ function renderizarPedidosAdmin(){
         <label>Data<input class="data-pedido-compacta" type="date" data-grupo-pedido="${htmlSeguroBanco(pedidoOriginal)}" data-campo="Data do Pedido" value="${htmlSeguroBanco(normalizarDataPedidoBanco(primeiro['Data do Pedido'],true))}" onchange="atualizarCampoGrupoPedidoAdmin(this)"></label>
         <label class="pedido-card-cliente">Cliente<input data-grupo-pedido="${htmlSeguroBanco(pedidoOriginal)}" data-campo="Cliente" value="${htmlSeguroBanco(campoBanco(primeiro,'Cliente'))}" onchange="atualizarCampoGrupoPedidoAdmin(this)"></label>
         <label class="pedido-card-conferencia">Conferência<input data-grupo-pedido="${htmlSeguroBanco(pedidoOriginal)}" data-campo="Nome Conferência" value="${htmlSeguroBanco(campoBanco(primeiro,'Nome Conferência'))}" onchange="atualizarCampoGrupoPedidoAdmin(this)"></label>
+        ${ehKit&&usuarioAtualEhAdminV1766()?`<button type="button" class="btn-excluir-kit-inteiro" title="Excluir todos os componentes e impedir que a integração recrie o KIT" onclick="excluirKitInteiroAdmin('${htmlSeguroBanco(pedidoOriginal)}','${htmlSeguroBanco(primeiro.Marketplace)}')">🗑 Excluir KIT inteiro</button>`:''}
         <div class="pedido-card-status">${status}</div>
       </div>`;
       const itens=grupo.itens.map((item,indice)=>{
