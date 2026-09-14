@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.66-ADMIN-EXCLUIR-KIT-INTEIRO-TOMBSTONE"
+APP_VERSION = "17.67-MLB-SKU-SYNC-PROMOCOES-TESTE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -853,6 +853,162 @@ def ml_precificador_links_payload(max_items: int = 5000) -> dict[str, Any]:
         "links": links,
         "errors": errors[:20],
         "updated_at": now_iso(),
+    }
+
+
+
+def ml_precificador_sync_promo_links(mlb_values: list[Any], actor: str = "") -> dict[str, Any]:
+    """V17.67 — vincula MLB -> SKU usando somente os MLBs pedidos pela tela de Promoções."""
+    ids: list[str] = []
+    seen: set[str] = set()
+    for value in mlb_values or []:
+        digits = re.sub(r"\D+", "", str(value or ""))
+        if not digits or digits in seen:
+            continue
+        seen.add(digits)
+        ids.append(digits)
+        if len(ids) >= 100:
+            break
+
+    if not ids:
+        return {"ok": True, "processed": 0, "linked": 0, "already_linked": 0,
+                "unresolved": 0, "errors": 0, "results": [], "affected": {}}
+
+    links = _ml_precificador_persisted_links()
+    inverse: dict[str, str] = {}
+    for sku, rows in links.items():
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict):
+                continue
+            mlb = _ml_normalize_link_mlb(row.get("mlb"))
+            if mlb and mlb not in inverse:
+                inverse[mlb] = _ml_normalize_link_sku(sku)
+
+    meta_map = ml_items_meta(ids)
+    precifier = _promo_precifier_index()
+    compact_index: dict[str, str] = {}
+    for sku in precifier.keys():
+        compact = re.sub(r"[^A-Z0-9]", "", _ml_normalize_link_sku(sku))
+        if compact and compact not in compact_index:
+            compact_index[compact] = _ml_normalize_link_sku(sku)
+
+    with DB_LOCK:
+        tombstones = _ml_manual_link_tombstones()
+
+    results: list[dict[str, Any]] = []
+    affected_skus: set[str] = set()
+    linked = 0
+    already_linked = 0
+    unresolved = 0
+    errors = 0
+    changed = False
+
+    for digits in ids:
+        mlb = "MLB" + digits
+
+        existing_sku = inverse.get(mlb, "")
+        if existing_sku:
+            meta = meta_map.get(digits) or {}
+            results.append({
+                "mlb": mlb, "sku": existing_sku, "status": "already_linked",
+                "title": str(meta.get("title") or ""), "price": float(meta.get("price") or 0),
+            })
+            already_linked += 1
+            continue
+
+        meta = meta_map.get(digits) or {}
+        raw_sku = str(meta.get("sku") or "").strip()
+        if not meta or (meta.get("stock_known") is False and not raw_sku):
+            results.append({"mlb": mlb, "sku": "", "status": "api_error",
+                            "reason": "Anúncio não retornado pelo Mercado Livre"})
+            errors += 1
+            continue
+
+        sku = _ml_normalize_api_sku(raw_sku).strip().upper()
+        if not sku:
+            results.append({"mlb": mlb, "sku": "", "status": "no_sku",
+                            "reason": "SKU não informado no anúncio"})
+            unresolved += 1
+            continue
+
+        resolved_sku = sku if sku in precifier else ""
+        if not resolved_sku:
+            compact = re.sub(r"[^A-Z0-9]", "", sku)
+            resolved_sku = compact_index.get(compact, "")
+
+        if not resolved_sku:
+            results.append({
+                "mlb": mlb, "sku": sku, "status": "sku_not_in_precificador",
+                "reason": "SKU encontrado no ML, mas não localizado no Precificador",
+                "title": str(meta.get("title") or ""),
+            })
+            unresolved += 1
+            continue
+
+        if (resolved_sku, mlb) in tombstones:
+            results.append({
+                "mlb": mlb, "sku": resolved_sku, "status": "manual_tombstone",
+                "reason": "Vínculo removido manualmente pelo ADMIN",
+            })
+            unresolved += 1
+            continue
+
+        row = {
+            "mlb": mlb, "sku": resolved_sku,
+            "title": str(meta.get("title") or ""),
+            "price": float(meta.get("price") or 0),
+            "status": str(meta.get("status") or "Vinculado"),
+            "available_quantity": meta.get("available_quantity"),
+            "permalink": str(meta.get("permalink") or ""),
+            "source": "mercado_livre_api_sync_promocoes",
+            "autoLinked": True,
+            "updatedAt": now_iso(),
+            "linkedBy": actor or "usuario",
+        }
+        links.setdefault(resolved_sku, []).append(row)
+        inverse[mlb] = resolved_sku
+        affected_skus.add(resolved_sku)
+        changed = True
+        linked += 1
+        results.append({"mlb": mlb, "sku": resolved_sku, "status": "linked",
+                        "title": row["title"], "price": row["price"]})
+
+    affected: dict[str, list[dict[str, Any]]] = {}
+    if changed:
+        canonical = _ml_merge_seed_links(links)
+        with DB_LOCK:
+            DB.execute("BEGIN IMMEDIATE")
+            try:
+                row = DB.execute("SELECT version FROM storage WHERE key=?",
+                                 (ML_SKU_MLB_LINKS_STORAGE_KEY,)).fetchone()
+                version = int(row["version"] or 0) + 1 if row else 1
+                DB.execute(
+                    """INSERT INTO storage(key,value,version,updated_at) VALUES(?,?,?,?)
+                       ON CONFLICT(key) DO UPDATE SET
+                         value=excluded.value,version=excluded.version,updated_at=excluded.updated_at""",
+                    (ML_SKU_MLB_LINKS_STORAGE_KEY, json_dumps(canonical), version, now_iso()),
+                )
+                for sku in sorted(affected_skus):
+                    rows = canonical.get(sku, [])
+                    affected[sku] = rows
+                    DB.execute(
+                        "DELETE FROM admin_manual_overrides WHERE storage_key=? AND entity_id='__ROOT__' AND field_name=?",
+                        (ML_SKU_MLB_LINKS_STORAGE_KEY, sku),
+                    )
+                    _admin_override_upsert(
+                        ML_SKU_MLB_LINKS_STORAGE_KEY, "__ROOT__", sku, rows,
+                        deleted=False,
+                        actor="SYNC_MLB_SKU_PROMOCOES:" + (actor or "usuario"),
+                    )
+                DB.commit()
+            except Exception:
+                DB.rollback()
+                raise
+
+    return {
+        "ok": True, "processed": len(ids), "linked": linked,
+        "already_linked": already_linked, "unresolved": unresolved, "errors": errors,
+        "results": results, "affected": affected, "updated_at": now_iso(),
     }
 
 
@@ -11321,6 +11477,11 @@ class AppHandler(BaseHTTPRequestHandler):
             thread.start()
             self.send_json({"ok": True, "started": True, "job": precificador_bulk_status()})
             return
+        if path == "/api/precificador/ml-vinculos/sync-promos":
+            ctx = self.auth()
+            if ctx is not None:
+                self.handle_precificador_ml_vinculos_sync_promos(ctx)
+            return
         if path == "/api/precificador/ml-vinculos/manual":
             ctx = self.auth()
             if ctx is not None:
@@ -11643,6 +11804,31 @@ class AppHandler(BaseHTTPRequestHandler):
             "total": count,
             "items": [dict(row) for row in rows],
         })
+
+    def handle_precificador_ml_vinculos_sync_promos(self, ctx: dict[str, Any]) -> None:
+        if not module_allowed(ctx, "precificador"):
+            self.send_json({"ok": False, "error": "Acesso ao Precificador não autorizado."}, 403)
+            return
+        try:
+            req = self.read_json()
+            mlbs = req.get("mlbs") or req.get("ids") or []
+            if isinstance(mlbs, str):
+                mlbs = [x.strip() for x in mlbs.split(",") if x.strip()]
+            if not isinstance(mlbs, list):
+                raise ValueError("Lista de MLBs inválida.")
+            result = ml_precificador_sync_promo_links(
+                mlbs, actor=str(ctx.get("username") or "usuario")
+            )
+            audit(
+                str(ctx.get("username") or "usuario"),
+                "precificador.mlb_sku.sync_promos",
+                f"processados={result.get('processed',0)} vinculados={result.get('linked',0)} pendentes={result.get('unresolved',0)}",
+            )
+            self.send_json(result, 200 if result.get("ok") else 502)
+        except ValueError as exc:
+            self.send_json({"ok": False, "error": str(exc)}, 400)
+        except Exception as exc:
+            self.send_json({"ok": False, "error": str(exc)}, 500)
 
     def handle_precificador_ml_vinculo_manual(self, ctx: dict[str, Any]) -> None:
         if not module_allowed(ctx, "precificador"):

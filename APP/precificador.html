@@ -724,8 +724,14 @@
             <option value="positive">Somente com estoque</option>
             <option value="zero">Somente sem estoque</option>
           </select>
+          <select id="promo-link-filter" title="Filtro de vínculo MLB ↔ SKU">
+            <option value="all">Todos os vínculos</option>
+            <option value="linked">Com SKU vinculado</option>
+            <option value="unlinked">Somente sem vínculo</option>
+          </select>
           <label class="promo-stock-toggle"><input id="promo-hide-no-stock" type="checkbox" checked> Ocultar estoque zerado</label>
           <div class="promo-toolbar-actions">
+            <button class="btn btn-secondary" id="promo-sync-links" type="button">🔗 Sincronizar MLB ↔ SKU</button>
             <button class="btn btn-secondary" id="promo-refresh-stock" type="button">↻ Atualizar estoque ML + Apollo</button>
             <button class="btn btn-secondary" id="promo-show-all" type="button">Ver todos</button>
             <button class="btn btn-primary" id="promo-import-btn" type="button">Importar planilha</button>
@@ -1528,6 +1534,7 @@ var state = {
         } catch (_) {
           mlSkuMlbLinks = {};
         }
+        try{promoRebuildLinkIndex();}catch(_){}
       }
 
 
@@ -1580,6 +1587,7 @@ var state = {
           return obj;
         }).filter(function(x){ return !!x.mlb; });
         saveMlSkuMlbLinks(false);
+        try{promoRebuildLinkIndex();}catch(_){}
       }
 
       function addMlbLinkToSku(sku, mlb, extra) {
@@ -3146,6 +3154,23 @@ var state = {
       var promoRows = [];
       var promoDeleted = new Set();
       var promoMeta = {};
+      var promoLinkByMlb = {};
+
+      function promoRebuildLinkIndex(){
+        promoLinkByMlb = {};
+        try{
+          Object.keys(mlSkuMlbLinks||{}).forEach(function(sku){
+            (Array.isArray(mlSkuMlbLinks[sku])?mlSkuMlbLinks[sku]:[]).forEach(function(row){
+              var mlb=String((row&&row.mlb)||row||"").replace(/\D/g,"");
+              if(mlb&&!promoLinkByMlb[mlb])promoLinkByMlb[mlb]=String(sku||"").trim();
+            });
+          });
+        }catch(_){promoLinkByMlb={};}
+      }
+      function promoLinkedSku(mlb){
+        var id=String(mlb||"").replace(/\D/g,"");
+        return String(promoLinkByMlb[id]||"").trim();
+      }
       var promoPage = 1;
       var promoPageSize = 60;
       var promoLoadToken = 0;
@@ -3325,6 +3350,7 @@ var state = {
         var searchIsMlb=/^(?:MLB)?\s*\d{6,}$/i.test(searchRaw);
         var hideNoStock=!!document.getElementById("promo-hide-no-stock")?.checked;
         var stockFilter=String(document.getElementById("promo-stock-filter")?.value||"all");
+        var linkFilter=String(document.getElementById("promo-link-filter")?.value||"all");
 
         var rows=promoRows.filter(function(r){
           var meta=promoMeta[r.mlb]||{};
@@ -3346,6 +3372,10 @@ var state = {
             }
             if(!matched)return false;
           }
+
+          var linkedSku=promoLinkedSku(r.mlb);
+          if(linkFilter==="linked" && !linkedSku)return false;
+          if(linkFilter==="unlinked" && linkedSku)return false;
 
           var days=promoDays(r.date);
 
@@ -3469,8 +3499,11 @@ var state = {
         var statusClass=priceOk?"ok":(st.key==="expired"?"expired":(st.key==="nodate"?"nodate":"ok"));
         var url=promoUrl(r.mlb);
 
+        var linkedSku=promoLinkedSku(r.mlb);
         return '<tr data-promo-mlb="'+promoEsc(r.mlb)+'">'+
-          '<td><a class="promo-mlb-link" href="'+url+'" target="_blank" rel="noopener">MLB'+promoEsc(r.mlb)+'</a></td>'+
+          '<td><a class="promo-mlb-link" href="'+url+'" target="_blank" rel="noopener">MLB'+promoEsc(r.mlb)+'</a>'+
+            (linkedSku?'<div class="promo-apollo-sku">SKU: '+promoEsc(linkedSku)+'</div>':'<div class="promo-apollo-sku" style="color:#b45309">Sem vínculo</div>')+
+          '</td>'+
           '<td><input type="date" value="'+promoEsc(r.date||"")+'" onchange="promoChangeDate(\''+promoEsc(r.mlb)+'\',this.value)"></td>'+
           '<td><span class="promo-status-pill '+statusClass+'">'+statusLabel+'</span>'+
             '<div class="promo-row-flags">'+
@@ -3768,8 +3801,86 @@ var state = {
         }
       }
 
+
+      var promoLinkSyncRunning=false;
+      async function promoSyncMissingLinks(){
+        if(promoLinkSyncRunning)return;
+        promoLinkSyncRunning=true;
+        var btn=document.getElementById("promo-sync-links");
+        var progress=document.getElementById("promo-progress");
+        var text=document.getElementById("promo-progress-text");
+        var bar=document.getElementById("promo-progress-bar");
+        if(btn)btn.disabled=true;
+        try{
+          try{loadMlSkuMlbLinks();}catch(_){}
+          promoRebuildLinkIndex();
+          var missing=promoRows.map(function(r){return String(r.mlb||"").replace(/\D/g,"");})
+            .filter(function(id){return id&&!promoLinkedSku(id);});
+          missing=Array.from(new Set(missing));
+          if(!missing.length){
+            if(progress)progress.hidden=false;
+            if(text)text.textContent="Nenhum MLB pendente de vínculo.";
+            if(bar)bar.style.width="100%";
+            try{showToast("Todos os MLBs possíveis já possuem vínculo.");}catch(_){}
+            return;
+          }
+          if(progress)progress.hidden=false;
+          var total=missing.length,done=0,linked=0,pending=0,errors=0;
+          if(text)text.textContent="Sincronizando MLB ↔ SKU: 0 / "+total;
+          if(bar)bar.style.width="0%";
+
+          for(var start=0;start<missing.length;start+=100){
+            var batch=missing.slice(start,start+100);
+            var resp=await fetch("/expedicao/api/precificador/ml-vinculos/sync-promos",{
+              method:"POST",credentials:"same-origin",cache:"no-store",
+              headers:{"Content-Type":"application/json","Accept":"application/json"},
+              body:JSON.stringify({mlbs:batch})
+            });
+            var data=await resp.json().catch(function(){return {};});
+            if(!resp.ok||!data.ok)throw new Error(data.error||("HTTP "+resp.status));
+
+            Object.keys(data.affected||{}).forEach(function(sku){
+              setLinkedMlbsForSku(sku,Array.isArray(data.affected[sku])?data.affected[sku]:[]);
+            });
+            (Array.isArray(data.results)?data.results:[]).forEach(function(item){
+              var id=String(item.mlb||"").replace(/\D/g,"");
+              if(id&&item.sku){
+                var prev=promoMeta[id]||{};
+                promoMeta[id]=Object.assign({},prev,{sku:String(item.sku||"")});
+              }
+            });
+
+            linked+=Number(data.linked||0);
+            pending+=Number(data.unresolved||0);
+            errors+=Number(data.errors||0);
+            done+=batch.length;
+            promoRebuildLinkIndex();
+            if(text)text.textContent="Sincronizando MLB ↔ SKU: "+done+" / "+total+
+              " · novos "+linked+" · pendentes "+pending+(errors?" · erros "+errors:"");
+            if(bar)bar.style.width=Math.round((done/total)*100)+"%";
+          }
+
+          promoSaveMeta();
+          promoRebuildLinkIndex();
+          promoRender();
+          try{renderMlConnections();}catch(_){}
+          if(text)text.textContent="Vínculos atualizados: "+linked+" novos · "+pending+" pendentes"+(errors?" · "+errors+" erros":"")+".";
+          if(bar)bar.style.width="100%";
+          try{showToast("Sincronização concluída: "+linked+" novo(s) vínculo(s).");}catch(_){}
+        }catch(e){
+          console.error("[Noromak V17.67] sync MLB/SKU",e);
+          if(text)text.textContent="Falha ao sincronizar MLB ↔ SKU: "+String(e&&e.message||e);
+          try{showToast(e&&e.message?e.message:"Falha ao sincronizar MLB ↔ SKU.");}catch(_){}
+        }finally{
+          promoLinkSyncRunning=false;
+          if(btn)btn.disabled=false;
+          if(progress)setTimeout(function(){progress.hidden=true;},1800);
+        }
+      }
+
       function promoOpen(){
         try{
+          try{loadMlSkuMlbLinks();promoRebuildLinkIndex();}catch(_){}
           document.body.classList.remove("show-cost-notifications");
           document.body.classList.add("show-promotions-monitor");
           var panel=document.getElementById("promotions-monitor-panel");
@@ -3901,6 +4012,8 @@ var state = {
           promoRender();
         });
       });
+      document.getElementById("promo-link-filter")?.addEventListener("change",function(){promoPage=1;promoRender();});
+      document.getElementById("promo-sync-links")?.addEventListener("click",promoSyncMissingLinks);
       document.querySelectorAll("[data-promo-quick]").forEach(function(btn){
         btn.addEventListener("click",function(){document.getElementById("promo-status-filter").value=btn.dataset.promoQuick;promoPage=1;promoRender();});
       });
