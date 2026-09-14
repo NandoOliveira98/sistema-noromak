@@ -915,7 +915,7 @@ body{background:var(--v15-bg)!important}
       </div>
       <div class="excel-wrap">
         <table class="excel-grid"><thead><tr>
-          <th>Ações</th><th>Pedido</th><th>Marketplace</th><th>Data do pedido</th><th>Kit</th><th>Cliente</th><th>Nome na conferência</th><th>SKU</th><th>Quantidade</th><th>Código de Barras / EAN</th><th>Descrição</th><th>Rua</th><th>Módulo</th><th>Prateleira</th><th>Nível</th><th>Posição</th><th>Foto</th><th>Status</th>
+          <th>Ações</th><th>Pedido</th><th>Marketplace</th><th>Data</th><th>Cliente / Conferência</th><th>SKU</th><th>Qtd.</th><th>Código de Barras / EAN</th><th>Produto / Localização</th><th>Status</th>
         </tr></thead><tbody id="corpoPedidosAdmin"></tbody></table>
       </div>
       <div class="grid-rodape"><span id="resumoPedidosAdmin"></span><div class="paginacao"><span>Rascunhos incompletos não aparecem para o conferente.</span><button onclick="mudarPaginaPedidos(-1)">◀</button><span id="paginaPedidosTexto"></span><button onclick="mudarPaginaPedidos(1)">▶</button></div></div>
@@ -1321,7 +1321,7 @@ body{background:var(--v15-bg)!important}
       <div class="field"><label>Nome completo</label><input id="novoUsuarioNome" type="text" autocomplete="off" placeholder="Ex.: Maria Silva"></div>
       <div class="field"><label>Login</label><input id="novoUsuarioLogin" type="text" autocomplete="off" placeholder="Ex.: maria"></div>
       <div class="field"><label>Senha</label><input id="novoUsuarioSenha" type="password" autocomplete="new-password" placeholder="Digite uma senha"></div>
-      <div class="field"><label>Perfil</label><select id="novoUsuarioPerfil"><option value="Operador">Operador</option><option value="Admin">Admin</option></select></div>
+      <div class="field"><label>Perfil</label><select id="novoUsuarioPerfil"><option value="Operador">Operador</option><option value="Supervisor">Supervisor</option><option value="Admin">Admin</option></select></div>
       <label style="display:flex;align-items:center;gap:8px;font-weight:600;color:#526475;"><input id="mostrarSenhaNovoUsuario" type="checkbox" style="width:auto;" onchange="alternarSenhaNovoUsuarioAdmin()"> Mostrar senha</label>
       <div id="erroNovoUsuarioAdmin" class="usuario-modal-erro"></div>
     </div>
@@ -1401,8 +1401,9 @@ function autenticarAdmin() {
 
   if (encontrado) {
     const perfil = String(encontrado.Perfil || "Operador").trim();
-    if (!perfil.toLowerCase().includes("admin")) {
-      erro.innerText = "Este usuário existe, mas não possui permissão de Administrador.";
+    const perfilNorm = perfil.toLowerCase();
+    if (!perfilNorm.includes("admin") && !perfilNorm.includes("supervisor")) {
+      erro.innerText = "Este usuário não possui acesso ao Painel Operacional.";
       return;
     }
     usuarioAutorizado = {
@@ -1413,7 +1414,7 @@ function autenticarAdmin() {
   }
 
   if (!usuarioAutorizado) {
-    erro.innerText = "Usuário ou senha de Administrador incorretos.";
+    erro.innerText = "Usuário ou senha incorretos para o Painel Operacional.";
     return;
   }
 
@@ -3842,8 +3843,9 @@ function autenticarAdmin() {
 
   if (encontrado) {
     const perfil = String(encontrado.Perfil || "Operador").trim();
-    if (!perfil.toLowerCase().includes("admin")) {
-      erro.innerText = "Este usuário existe, mas não possui permissão de Administrador.";
+    const perfilNorm = perfil.toLowerCase();
+    if (!perfilNorm.includes("admin") && !perfilNorm.includes("supervisor")) {
+      erro.innerText = "Este usuário não possui acesso ao Painel Operacional.";
       return;
     }
     usuarioAutorizado = {
@@ -3854,7 +3856,7 @@ function autenticarAdmin() {
   }
 
   if (!usuarioAutorizado) {
-    erro.innerText = "Usuário ou senha de Administrador incorretos.";
+    erro.innerText = "Usuário ou senha incorretos para o Painel Operacional.";
     return;
   }
 
@@ -4423,7 +4425,7 @@ function renderizarPedidosAdmin(){
   paginaPedidosAdmin=Math.min(Math.max(1,paginaPedidosAdmin),paginas);
   const inicio=(paginaPedidosAdmin-1)*ITENS_POR_PAGINA_PEDIDOS;
   const parte=filtrados.slice(inicio,inicio+ITENS_POR_PAGINA_PEDIDOS);
-  if(!filtrados.length){corpo.innerHTML='<tr><td colspan="18" style="padding:25px;text-align:center;color:#64748b;">Nenhuma linha. Clique em “Nova linha” ou use “Importar por print” para cadastrar um pedido ou kit.</td></tr>';}
+  if(!filtrados.length){corpo.innerHTML='<tr><td colspan="10" style="padding:25px;text-align:center;color:#64748b;">Nenhuma linha. Clique em “Nova linha” ou use “Importar por print” para cadastrar um pedido ou kit.</td></tr>';}
   else corpo.innerHTML=parte.map(item=>{
     item.Marketplace=marketplaceExibicaoBanco(item.Pedido);
     const valida=linhaPedidoValidaBanco(item);
@@ -4434,9 +4436,25 @@ function renderizarPedidosAdmin(){
     const editorEan=`<div class="ean-pedido-editor"><input class="${alterado?'ean-alterado':''}" inputmode="numeric" enterkeyhint="done" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Código de barras do SKU ${htmlSeguroBanco(item.SKU||'sem SKU')}" data-uidlinha="${htmlSeguroBanco(item.__uidLinha)}" data-campo="Código de Barras" value="${htmlSeguroBanco(eanAtual)}" oninput="alterarEanPedidoAdmin(this)" onblur="aoSairEanPedidoAdmin(event,this)" onkeydown="atalhoEanPedidoAdmin(event,this)"><div class="ean-pedido-acoes"><button type="button" class="btn-ean-salvar" title="Salvar EAN somente neste pedido" onclick="salvarEanPedidoAdmin('${htmlSeguroBanco(item.__uidLinha)}',false,this.closest('.ean-pedido-editor').querySelector('input'))">Salvar</button><button type="button" class="btn-ean-banco" title="Salvar também no Banco de Produtos deste SKU" onclick="salvarEanPedidoAdmin('${htmlSeguroBanco(item.__uidLinha)}',true,this.closest('.ean-pedido-editor').querySelector('input'))">Banco</button></div><small id="status-ean-${htmlSeguroBanco(item.__uidLinha)}" class="ean-pedido-status ${htmlSeguroBanco(mensagem.tipo)}">${htmlSeguroBanco(mensagem.texto)}</small></div>`;
     const jaFeito=Boolean(item?.__jaConcluidoAnteriormente||item?.__concluidoAnteriorEm);
     const skuManual=normalizarBuscaBanco(item.SkuManualOverride)==="sim";
-    const skuEditor=`<div style="display:flex;align-items:center;gap:5px;min-width:260px">${inp('SKU')}<button type="button" title="Salvar este SKU manualmente e impedir que integrações o sobrescrevam" onclick="salvarSkuManualAdmin('${htmlSeguroBanco(item.__uidLinha)}',this)" style="border:1px solid #2563eb;background:#eff6ff;color:#1d4ed8;border-radius:6px;padding:5px 7px;font-weight:800;white-space:nowrap">Salvar SKU</button>${skuManual?`<button type="button" title="SKU corrigido manualmente. Clique para restaurar o SKU da integração." onclick="restaurarSkuIntegracaoAdmin('${htmlSeguroBanco(item.__uidLinha)}')" style="border:1px solid #f59e0b;background:#fff7ed;color:#9a3412;border-radius:6px;padding:5px 7px;font-weight:800;white-space:nowrap">MANUAL ↶</button>`:''}</div>`;
-    return `<tr class="${valida?'linha-valida':'linha-rascunho'}${jaFeito?' linha-ja-feito':''}"><td><div class="linha-acoes"><button title="Adicionar outro item neste pedido" onclick="adicionarItemMesmoPedido('${htmlSeguroBanco(item.__uidLinha)}')">＋</button><button title="Atualizar dados desta venda no Mercado Livre" style="background:#e3f2fd;color:#1565c0" onclick="atualizarVendaMercadoLivreAdmin('${htmlSeguroBanco(item.__uidLinha)}',this)">↻</button><button title="Excluir linha" style="background:#ffebee;color:#c62828" onclick="excluirLinhaPedidoAdmin('${htmlSeguroBanco(item.__uidLinha)}')">🗑</button></div></td>`+
-      `<td><div class="pedido-cell-wrap">${tagConclusaoAnteriorPedidoBanco(item)}${inp('Pedido','campo-pedido')}</div></td><td><input class="market-auto" readonly value="${htmlSeguroBanco(item.Marketplace)}"></td><td><input type="date" data-uidlinha="${htmlSeguroBanco(item.__uidLinha)}" data-campo="Data do Pedido" value="${htmlSeguroBanco(normalizarDataPedidoBanco(item['Data do Pedido'],true))}" onchange="atualizarCampoPedidoAdmin(this)" onkeydown="navegarGridAdmin(event,this)"></td><td><div class="kit-celula-resumo"><div class="kit-celula-texto">${textoKitBanco(item)?`<span class="kit-badge">KIT</span>${normalizarBuscaBanco(item.KitManualOverride)==="sim"?'<span class="kit-override-badge">MANUAL</span>':''}<br>${htmlSeguroBanco(textoKitBanco(item))}`:'Item normal'}</div><button type="button" class="btn-kit-pedido-editar" title="Corrigir kit somente neste pedido" onclick="abrirEditorKitPedidoAdmin('${htmlSeguroBanco(item.__uidLinha)}')">✎ Kit</button></div></td><td>${inp('Cliente','campo-cliente')}</td><td>${inp('Nome Conferência','campo-cliente-conferencia')}</td><td>${skuEditor}</td><td><input type="number" min="1" data-uidlinha="${htmlSeguroBanco(item.__uidLinha)}" data-campo="Quantidade" value="${htmlSeguroBanco(item.Quantidade||'1')}" onchange="atualizarCampoPedidoAdmin(this)" onkeydown="navegarGridAdmin(event,this)"></td><td>${editorEan}</td><td>${inp('Descrição','campo-descricao')}</td><td>${inp('Rua')}</td><td>${inp('Módulo')}</td><td>${inp('Prateleira')}</td><td>${inp('Nível')}</td><td>${inp('Posição')}</td><td>${inp('Foto','campo-foto')}</td><td><span class="status-celula ${valida?'status-pendente':'status-rascunho'}">${valida?'PENDENTE':'RASCUNHO'}</span>${tagConclusaoAnteriorBanco(item)}</td></tr>`;
+    const skuEditor=`<div class="sku-pedido-compacto">${inp('SKU')}<button type="button" title="Salvar SKU manual" onclick="salvarSkuManualAdmin('${htmlSeguroBanco(item.__uidLinha)}',this)" class="btn-sku-compacto">Salvar</button>${skuManual?`<button type="button" title="Restaurar SKU da integração" onclick="restaurarSkuIntegracaoAdmin('${htmlSeguroBanco(item.__uidLinha)}')" class="btn-sku-manual">↶</button>`:''}</div>`;
+    const kitResumo=textoKitBanco(item)?`<span class="kit-badge">KIT</span> ${htmlSeguroBanco(textoKitBanco(item))}`:'Item normal';
+    const localizacao=[campoBanco(item,'Rua'),campoBanco(item,'Módulo'),campoBanco(item,'Prateleira'),campoBanco(item,'Nível'),campoBanco(item,'Posição')].filter(v=>String(v||'').trim()).join(' · ');
+    const detalhesSecundarios=`<details class="pedido-detalhes-compactos"><summary>Detalhes</summary><div class="pedido-detalhes-grid">
+      <label>Descrição${inp('Descrição','campo-descricao')}</label><label>Rua${inp('Rua')}</label><label>Módulo${inp('Módulo')}</label><label>Prateleira${inp('Prateleira')}</label><label>Nível${inp('Nível')}</label><label>Posição${inp('Posição')}</label><label>Foto${inp('Foto','campo-foto')}</label>
+      <div class="pedido-kit-detalhe"><span>${kitResumo}</span><button type="button" class="btn-kit-pedido-editar" onclick="abrirEditorKitPedidoAdmin('${htmlSeguroBanco(item.__uidLinha)}')">✎ Kit</button></div>
+    </div></details>`;
+    return `<tr class="${valida?'linha-valida':'linha-rascunho'}${jaFeito?' linha-ja-feito':''}">
+      <td><div class="linha-acoes linha-acoes-compacta"><button title="Adicionar item" onclick="adicionarItemMesmoPedido('${htmlSeguroBanco(item.__uidLinha)}')">＋</button><button title="Atualizar venda" class="acao-atualizar" onclick="atualizarVendaMercadoLivreAdmin('${htmlSeguroBanco(item.__uidLinha)}',this)">↻</button><button title="Excluir linha" class="acao-excluir" onclick="excluirLinhaPedidoAdmin('${htmlSeguroBanco(item.__uidLinha)}')">🗑</button></div></td>
+      <td><div class="pedido-cell-wrap">${tagConclusaoAnteriorPedidoBanco(item)}${inp('Pedido','campo-pedido')}</div></td>
+      <td><span class="marketplace-pill-admin">${htmlSeguroBanco(item.Marketplace)}</span></td>
+      <td><input class="data-pedido-compacta" type="date" data-uidlinha="${htmlSeguroBanco(item.__uidLinha)}" data-campo="Data do Pedido" value="${htmlSeguroBanco(normalizarDataPedidoBanco(item['Data do Pedido'],true))}" onchange="atualizarCampoPedidoAdmin(this)" onkeydown="navegarGridAdmin(event,this)"></td>
+      <td><div class="cliente-conf-compacto"><label>Cliente${inp('Cliente','campo-cliente')}</label><label>Conferência${inp('Nome Conferência','campo-cliente-conferencia')}</label></div></td>
+      <td>${skuEditor}</td>
+      <td><input class="qtd-pedido-compacta" type="number" min="1" data-uidlinha="${htmlSeguroBanco(item.__uidLinha)}" data-campo="Quantidade" value="${htmlSeguroBanco(item.Quantidade||'1')}" onchange="atualizarCampoPedidoAdmin(this)" onkeydown="navegarGridAdmin(event,this)"></td>
+      <td>${editorEan}</td>
+      <td><div class="produto-local-compacto"><strong title="${htmlSeguroBanco(campoBanco(item,'Descrição'))}">${htmlSeguroBanco(campoBanco(item,'Descrição')||'Sem descrição')}</strong><small>${htmlSeguroBanco(localizacao||'Sem localização')}</small>${detalhesSecundarios}</div></td>
+      <td><span class="status-celula ${valida?'status-pendente':'status-rascunho'}">${valida?'PENDENTE':'RASCUNHO'}</span>${tagConclusaoAnteriorBanco(item)}</td>
+    </tr>`;
   }).join("");
   document.getElementById("resumoPedidosAdmin").textContent=`${filtrados.length} linha(s) encontrada(s) · ${obterPedidosValidosBanco().length} válida(s) · ${obterRascunhosBanco().length} rascunho(s)`;
   const paginaTexto=document.getElementById("paginaPedidosTexto");if(paginaTexto)paginaTexto.textContent=`Página ${paginaPedidosAdmin} de ${paginas}`;
@@ -4473,9 +4491,9 @@ function acessoUsuarioAdmin(u,campo){
   const perfil=String(u.Perfil||"Operador").toLowerCase();
   const defaults={
     AcessoConferencia:true,
-    AcessoAdmin:perfil.includes("admin"),
-    AcessoEstacao:perfil.includes("admin"),
-    AcessoPrecificador:perfil.includes("admin")
+    AcessoAdmin:perfil.includes("admin")||perfil.includes("supervisor"),
+    AcessoEstacao:perfil.includes("admin")||perfil.includes("supervisor"),
+    AcessoPrecificador:perfil.includes("admin")||perfil.includes("supervisor")
   };
   if(typeof u[campo]==="boolean")return u[campo];
   if(u.Acessos&&typeof u.Acessos==="object"){
@@ -4495,7 +4513,7 @@ function renderizarUsuariosAdmin(){
       <td>${inp('Nome')}</td>
       <td>${inp('Login')}</td>
       <td>${inp('Senha','text')}</td>
-      <td><select data-uidusuario="${u.__uidUsuario}" data-campo="Perfil" onchange="atualizarCampoUsuarioAdmin(this)"><option ${campoBanco(u,'Perfil').toLowerCase().includes('admin')?'selected':''}>Admin</option><option ${!campoBanco(u,'Perfil').toLowerCase().includes('admin')?'selected':''}>Operador</option></select></td>
+      <td><select data-uidusuario="${u.__uidUsuario}" data-campo="Perfil" onchange="atualizarCampoUsuarioAdmin(this)"><option ${campoBanco(u,'Perfil').toLowerCase().includes('admin')?'selected':''}>Admin</option><option ${campoBanco(u,'Perfil').toLowerCase().includes('supervisor')?'selected':''}>Supervisor</option><option ${(!campoBanco(u,'Perfil').toLowerCase().includes('admin')&&!campoBanco(u,'Perfil').toLowerCase().includes('supervisor'))?'selected':''}>Operador</option></select></td>
       <td><div class="usuario-acessos">
         ${check("AcessoConferencia","Conferência","📦")}
         ${check("AcessoAdmin","Admin","⚙")}
@@ -4510,7 +4528,7 @@ function atualizarCampoUsuarioAdmin(el){
   if(!u)return;
   u[el.dataset.campo]=el.value;
   // Ao transformar um usuário em Admin, libera os módulos por padrão; depois o administrador pode desmarcar individualmente.
-  if(el.dataset.campo==="Perfil"&&String(el.value).toLowerCase().includes("admin")){
+  if(el.dataset.campo==="Perfil"&&(/admin|supervisor/.test(String(el.value).toLowerCase()))){
     ["AcessoConferencia","AcessoAdmin","AcessoEstacao","AcessoPrecificador"].forEach(k=>{
       if(typeof u[k]!=="boolean")u[k]=true;
     });
@@ -6694,7 +6712,7 @@ document.addEventListener("DOMContentLoaded",()=>{
     return typeof usuariosEditorAdmin !== "undefined" && Array.isArray(usuariosEditorAdmin) ? usuariosEditorAdmin : [];
   }
   function usuarioPorUid(uid){ return listaUsuarios().find(u => String(u.__uidUsuario) === String(uid)); }
-  function perfilNormalizado(v){ return txt(v).toLowerCase().includes("admin") ? "Admin" : "Operador"; }
+  function perfilNormalizado(v){ const p=txt(v).toLowerCase(); return p.includes("admin") ? "Admin" : (p.includes("supervisor") ? "Supervisor" : "Operador"); }
 
   window.renderizarUsuariosAdmin = function(){
     const corpo=document.getElementById("corpoUsuariosAdmin");
@@ -6709,7 +6727,7 @@ document.addEventListener("DOMContentLoaded",()=>{
         <td>${input("Nome")}</td>
         <td>${input("Login")}</td>
         <td><div class="senha-acesso-celula"><div class="senha-protegida-status"><strong>🔒 Senha protegida</strong><small>Não é possível visualizar a atual</small>${u.SenhaInicialPendente?'<span class="senha-inicial-alerta">⚠ TROCAR SENHA INICIAL</span>':''}</div><button type="button" class="btn-alterar-senha" onclick="abrirModalAlterarSenhaAdmin('${uid}')">Alterar senha</button></div></td>
-        <td><select data-uidusuario="${uid}" data-campo="Perfil" onchange="atualizarCampoUsuarioAdmin(this)"><option ${perfilNormalizado(u.Perfil)==="Admin"?"selected":""}>Admin</option><option ${perfilNormalizado(u.Perfil)==="Operador"?"selected":""}>Operador</option></select></td>
+        <td><select data-uidusuario="${uid}" data-campo="Perfil" onchange="atualizarCampoUsuarioAdmin(this)"><option ${perfilNormalizado(u.Perfil)==="Admin"?"selected":""}>Admin</option><option ${perfilNormalizado(u.Perfil)==="Supervisor"?"selected":""}>Supervisor</option><option ${perfilNormalizado(u.Perfil)==="Operador"?"selected":""}>Operador</option></select></td>
       </tr>`;
     }).join("")||'<tr><td colspan="5" style="padding:20px;text-align:center;">Nenhum usuário cadastrado.</td></tr>';
     const contador=document.getElementById("contadorUsuariosAdmin");
@@ -7882,6 +7900,40 @@ document.addEventListener("DOMContentLoaded",()=>{
 });
 </script>
 
+<style>
+/* V17.55 — Pedidos pendentes compactos */
+#aba-pedidos .excel-wrap{overflow:auto;max-height:64vh;border:1px solid #d9e3ec;border-radius:9px}
+#aba-pedidos .excel-grid{min-width:1180px;width:100%;table-layout:fixed}
+#aba-pedidos .excel-grid th{font-size:10px;padding:8px 6px;white-space:nowrap;position:sticky;top:0;z-index:2}
+#aba-pedidos .excel-grid td{padding:5px 6px;vertical-align:top}
+#aba-pedidos .excel-grid th:nth-child(1){width:82px}#aba-pedidos .excel-grid th:nth-child(2){width:150px}#aba-pedidos .excel-grid th:nth-child(3){width:92px}#aba-pedidos .excel-grid th:nth-child(4){width:112px}#aba-pedidos .excel-grid th:nth-child(5){width:205px}#aba-pedidos .excel-grid th:nth-child(6){width:205px}#aba-pedidos .excel-grid th:nth-child(7){width:58px}#aba-pedidos .excel-grid th:nth-child(8){width:235px}#aba-pedidos .excel-grid th:nth-child(9){width:240px}#aba-pedidos .excel-grid th:nth-child(10){width:92px}
+.linha-acoes-compacta{min-width:0!important;gap:3px!important;padding:0!important}.linha-acoes-compacta button{width:24px;height:24px;padding:0!important;font-size:11px}.linha-acoes-compacta .acao-atualizar{background:#e3f2fd;color:#1565c0}.linha-acoes-compacta .acao-excluir{background:#ffebee;color:#c62828}
+.marketplace-pill-admin{display:inline-block;padding:5px 7px;border-radius:6px;background:#eef4fa;color:#214b75;font-size:10px;font-weight:900;white-space:nowrap}
+.cliente-conf-compacto{display:grid;gap:4px}.cliente-conf-compacto label{font-size:9px;font-weight:800;color:#64748b}.cliente-conf-compacto input{display:block;margin-top:2px;width:100%;min-width:0!important;padding:5px 6px!important;font-size:11px!important}
+.sku-pedido-compacto{display:grid;grid-template-columns:minmax(100px,1fr) auto auto;gap:4px;align-items:center;min-width:0}.sku-pedido-compacto input{min-width:0!important;width:100%;padding:6px!important}.btn-sku-compacto,.btn-sku-manual{border:1px solid #2563eb;background:#eff6ff;color:#1d4ed8;border-radius:5px;padding:5px 6px;font-size:10px;font-weight:850}.btn-sku-manual{border-color:#f59e0b;background:#fff7ed;color:#9a3412}
+.qtd-pedido-compacta{width:48px!important;min-width:48px!important;text-align:center}.data-pedido-compacta{min-width:0!important;width:100%;font-size:10px!important;padding:6px 3px!important}
+#aba-pedidos .ean-pedido-editor{min-width:0!important;grid-template-columns:minmax(100px,1fr) auto;gap:3px;padding:0}#aba-pedidos .ean-pedido-editor input{min-width:0!important;width:100%;font-size:11px;padding:6px}#aba-pedidos .ean-pedido-acoes{display:flex;gap:2px}#aba-pedidos .ean-pedido-acoes button{padding:5px 5px;font-size:9px}#aba-pedidos .ean-pedido-status{grid-column:1/-1;font-size:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.produto-local-compacto{display:grid;gap:3px;min-width:0}.produto-local-compacto>strong{font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.produto-local-compacto>small{font-size:9px;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pedido-detalhes-compactos{margin-top:2px}.pedido-detalhes-compactos summary{cursor:pointer;color:#1d5b96;font-weight:800;font-size:9px}.pedido-detalhes-grid{position:absolute;z-index:20;background:#fff;border:1px solid #cad8e6;box-shadow:0 8px 24px rgba(15,43,73,.15);border-radius:8px;padding:9px;display:grid;grid-template-columns:repeat(2,minmax(120px,1fr));gap:6px;width:430px}.pedido-detalhes-grid label{font-size:9px;font-weight:800;color:#526b83}.pedido-detalhes-grid input{display:block;width:100%;margin-top:2px;min-width:0!important;padding:5px!important;font-size:10px!important}.pedido-kit-detalhe{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:8px;padding-top:4px}
+@media(max-width:1100px){#aba-pedidos .excel-grid{min-width:1050px}.pedido-detalhes-grid{width:360px}}
+</style>
+<script>
+/* V17.55 — Supervisor Operacional */
+(function(){
+  function perfilAtual(){try{return String(JSON.parse(appStorage.getItem('conf_admin_sessao')||'{}')?.Perfil||'').toLowerCase();}catch(_){return '';}}
+  function ehSupervisor(){return perfilAtual().includes('supervisor');}
+  function aplicar(){
+    if(!ehSupervisor())return;
+    document.body.classList.add('perfil-supervisor');
+    document.querySelectorAll('[data-aba="usuarios"],[data-aba="seguranca"],[data-aba="integracoes"],button[onclick*="abrirAbaAdmin(\'usuarios\')"],button[onclick*="abrirAbaAdmin(\'seguranca\')"],button[onclick*="abrirAbaAdmin(\'integracoes\')"]').forEach(el=>el.style.display='none');
+    document.querySelectorAll('.v15-nav-item').forEach(el=>{const t=(el.textContent||'').toLowerCase();if(t.includes('usuários')||t.includes('segurança')||t.includes('central de integrações'))el.style.display='none';});
+    const h=document.querySelector('.header-titulos small');if(h)h.textContent='Supervisor operacional · sessão persistente · sem acesso às configurações críticas';
+  }
+  document.addEventListener('DOMContentLoaded',()=>setTimeout(aplicar,50));
+  const original=window.abrirAbaAdmin;
+  if(typeof original==='function')window.abrirAbaAdmin=function(nome){if(ehSupervisor()&&['usuarios','seguranca','integracoes'].includes(String(nome))){alert('Esta área é exclusiva do Administrador.');return;}return original.apply(this,arguments);};
+})();
+</script>
 <script src="/expedicao/user-permissions.js?v=15.1"></script>
 
 <script id="noromak-v15-js">

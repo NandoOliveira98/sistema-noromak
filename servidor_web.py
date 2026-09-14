@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.54-PROMO-VENCIDAS-REVISADOS-FILTRO"
+APP_VERSION = "17.55-SUPERVISOR-PEDIDOS-COMPACTO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -64,6 +64,7 @@ PRINT_STATION_ONLINE_SECONDS = int(os.getenv("EXP_PRINT_STATION_ONLINE_SECONDS",
 SESSION_COOKIE = "expedicao_estoque"
 SESSION_TTL_SECONDS = int(os.getenv("EXP_SESSION_TTL_SECONDS", str(4 * 60 * 60)))
 STATION_SESSION_TTL_SECONDS = int(os.getenv("EXP_STATION_SESSION_TTL_SECONDS", str(180 * 24 * 60 * 60)))
+SUPERVISOR_SESSION_TTL_SECONDS = int(os.getenv("EXP_SUPERVISOR_SESSION_TTL_SECONDS", str(30 * 24 * 60 * 60)))
 PASSWORD_ITERATIONS = int(os.getenv("EXP_PASSWORD_ITERATIONS", "600000"))
 PASSWORD_MASK = "********"
 INITIAL_ADMIN_PASSWORD = os.getenv("EXP_ADMIN_SENHA", "").strip()
@@ -991,6 +992,23 @@ def session_ttl_for_area(area: str) -> int:
     return STATION_SESSION_TTL_SECONDS if str(area or "").lower() in {"estacao", "station", "impressao"} else SESSION_TTL_SECONDS
 
 
+def is_supervisor_user(row: sqlite3.Row | dict[str, Any]) -> bool:
+    """Supervisor = operador com acesso operacional amplo ao Admin, sem poderes críticos de administrador."""
+    try:
+        role = str(row["role"]).lower()
+        can_admin = bool(row["can_admin"])
+    except Exception:
+        role = str(row.get("role", "operador")).lower()
+        can_admin = bool(row.get("can_admin"))
+    return role != "admin" and can_admin
+
+
+def session_ttl_for_user_area(area: str, row: sqlite3.Row | dict[str, Any]) -> int:
+    if str(area or "").lower() == "admin" and is_supervisor_user(row):
+        return SUPERVISOR_SESSION_TTL_SECONDS
+    return session_ttl_for_area(area)
+
+
 def ensure_app_user_permissions_schema() -> None:
     """Adiciona permissões granulares sem retirar acesso dos usuários existentes."""
     with DB_LOCK:
@@ -1849,7 +1867,7 @@ def app_users_payload() -> list[dict[str, Any]]:
             "Nome": row["display_name"] or row["username"],
             "Login": row["username"],
             "Senha": PASSWORD_MASK,
-            "Perfil": "Admin" if row["role"] == "admin" else "Operador",
+            "Perfil": ("Admin" if row["role"] == "admin" else ("Supervisor" if is_supervisor_user(row) else "Operador")),
             "Owner": is_owner_username(row["username"]),
             "Ativo": bool(row["active"]),
             "Aprovado": bool(row["active"]),
@@ -3384,7 +3402,7 @@ def session_context(handler: BaseHTTPRequestHandler) -> dict[str, Any] | None:
         area = str(row["area"] or "conferencia")
         DB.execute(
             "UPDATE app_sessions SET last_seen=?,expires_at=? WHERE token_hash=?",
-            (now_iso(), now_epoch + session_ttl_for_area(area), token_hash),
+            (now_iso(), now_epoch + session_ttl_for_user_area(area, row), token_hash),
         )
         DB.commit()
     return {
@@ -10290,6 +10308,16 @@ class AppHandler(BaseHTTPRequestHandler):
             return None
         return ctx
 
+    def auth_full_admin(self) -> dict[str, Any] | None:
+        """Ações críticas: exige perfil ADMIN real; Supervisor não é aceito."""
+        ctx = self.auth(admin_only=True)
+        if ctx is None:
+            return None
+        if str(ctx.get("app_role") or "").lower() != "admin":
+            self.send_json({"error": "Esta ação é exclusiva do Administrador."}, 403)
+            return None
+        return ctx
+
     def print_agent_auth(self) -> bool:
         authorization = str(self.headers.get("Authorization") or "").strip()
         supplied = authorization[7:].strip() if authorization.lower().startswith("bearer ") else ""
@@ -10552,7 +10580,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.handle_storage_get(query)
             return
         if path == "/api/roles":
-            ctx = self.auth(admin_only=True)
+            ctx = self.auth_full_admin()
             if ctx is not None:
                 self.handle_roles_get()
             return
@@ -10899,7 +10927,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.handle_order_complete(ctx)
             return
         if path == "/api/roles":
-            ctx = self.auth(admin_only=True)
+            ctx = self.auth_full_admin()
             if ctx is not None:
                 self.handle_roles_post(ctx)
             return
@@ -10998,7 +11026,7 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_json({"ok": True})
             return
         if path == "/api/roles":
-            ctx = self.auth(admin_only=True)
+            ctx = self.auth_full_admin()
             if ctx is not None:
                 self.handle_roles_delete(ctx, query)
             return
@@ -11044,13 +11072,14 @@ class AppHandler(BaseHTTPRequestHandler):
             token = secrets.token_urlsafe(32)
             token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
             now_epoch = int(time.time())
+            login_ttl = session_ttl_for_user_area(area, row)
             with DB_LOCK:
                 if old:
                     DB.execute("DELETE FROM app_sessions WHERE token_hash=?", (hashlib.sha256(old.encode("utf-8")).hexdigest(),))
                 DB.execute(
                     """INSERT INTO app_sessions(token_hash,username,area,created_at,last_seen,expires_at,ip,user_agent)
                        VALUES(?,?,?,?,?,?,?,?)""",
-                    (token_hash, username, area, now_iso(), now_iso(), now_epoch + session_ttl_for_area(area),
+                    (token_hash, username, area, now_iso(), now_iso(), now_epoch + login_ttl,
                      client_computer(self), self.headers.get("User-Agent", "")[:500]),
                 )
                 DB.commit()
@@ -11062,7 +11091,7 @@ class AppHandler(BaseHTTPRequestHandler):
             audit(username, "auth.login", f"{area}:{client_computer(self)}")
             self.send_json(
                 {"ok": True, "user": user},
-                headers={"Set-Cookie": self.session_cookie_header(token, max_age=session_ttl_for_area(area))},
+                headers={"Set-Cookie": self.session_cookie_header(token, max_age=login_ttl)},
             )
         except (ValueError, json.JSONDecodeError) as exc:
             self.send_json({"error": str(exc)}, 400)
@@ -11182,7 +11211,7 @@ class AppHandler(BaseHTTPRequestHandler):
             if key == "ml_promocoes_datas_v1" and not module_allowed(ctx, "precificador"):
                 self.send_json({"error": "Este usuário não possui acesso para alterar as promoções do Precificador."}, 403)
                 return
-            if ctx["app_role"] != "admin" and key not in OPERATOR_WRITE_KEYS:
+            if ctx["app_role"] != "admin" and not module_allowed(ctx, "admin") and key not in OPERATOR_WRITE_KEYS:
                 self.send_json({"error": f"Operador não pode alterar {key}."}, 403)
                 return
             new_value = str(req.get("newValue"))
@@ -12242,23 +12271,33 @@ class AppHandler(BaseHTTPRequestHandler):
                 """SELECT username,display_name,role,active,can_conferencia,can_admin,can_estacao,can_precificador,
                           updated_at,updated_by FROM app_users ORDER BY display_name,username"""
             ).fetchall()
-        self.send_json({"users": [dict(row) for row in rows], "seed_admin": ADMIN_USERNAME, "login_interno": True})
+        users = []
+        for row in rows:
+            item = dict(row)
+            item["display_profile"] = "Admin" if item.get("role") == "admin" else ("Supervisor" if is_supervisor_user(row) else "Operador")
+            users.append(item)
+        self.send_json({"users": users, "seed_admin": ADMIN_USERNAME, "login_interno": True})
 
     def handle_roles_post(self, ctx: dict[str, Any]) -> None:
         try:
             req = self.read_json()
             username = str(req.get("username") or "").strip().lower()
             display_name = str(req.get("display_name") or username).strip()
-            role = str(req.get("role") or "operador").strip().lower()
+            requested_role = str(req.get("role") or "operador").strip().lower()
+            supervisor = requested_role == "supervisor"
+            role = "operador" if supervisor else requested_role
             active = req.get("active", True) not in (False, 0, "0", "false")
             password = str(req.get("password") or "").strip() or None
             raw_permissions = req.get("permissions") if isinstance(req.get("permissions"), dict) else {}
-            permissions = {
-                "conferencia": bool(raw_permissions.get("conferencia", role != "admin")),
-                "admin": bool(raw_permissions.get("admin", role == "admin")),
-                "estacao": bool(raw_permissions.get("estacao", role == "admin")),
-                "precificador": bool(raw_permissions.get("precificador", role == "admin")),
-            }
+            if supervisor:
+                permissions = {"conferencia": True, "admin": True, "estacao": True, "precificador": True}
+            else:
+                permissions = {
+                    "conferencia": bool(raw_permissions.get("conferencia", role != "admin")),
+                    "admin": bool(raw_permissions.get("admin", role == "admin")),
+                    "estacao": bool(raw_permissions.get("estacao", role == "admin")),
+                    "precificador": bool(raw_permissions.get("precificador", role == "admin")),
+                }
             if not username or any(ch.isspace() for ch in username):
                 raise ValueError("Informe o login do estoque sem espaços.")
             if role not in ("admin", "operador"):

@@ -14,8 +14,10 @@
   function accessValue(u, field, key){
     if (typeof u?.[field] === "boolean") return u[field];
     if (u?.Acessos && Object.prototype.hasOwnProperty.call(u.Acessos,key)) return !!u.Acessos[key];
-    const admin = String(u?.Perfil||"").toLowerCase().includes("admin");
-    return field==="AcessoConferencia" ? true : admin;
+    const perfil = String(u?.Perfil||"").toLowerCase();
+    const admin = perfil.includes("admin");
+    const supervisor = perfil.includes("supervisor");
+    return field==="AcessoConferencia" ? true : (admin || supervisor);
   }
   function applyAccess(u, field, key, value){
     u[field]=!!value;
