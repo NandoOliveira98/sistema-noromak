@@ -6083,6 +6083,8 @@ function salvarPedidoImportadoPorPrint(lerOutro=false){
     const cliente=document.getElementById("printCliente").value.trim();
     const dataPedido=normalizarDataPedidoBanco(document.getElementById("printDataPedido").value,true);
     const quantidadeVenda=Math.max(1,Math.round(Number(document.getElementById("printQuantidade").value||1)));
+    const origemExtensaoAdmin=String(window.__NOROMAK_EXTENSAO_MARKETPLACE_ATUAL||"").trim().toLowerCase();
+    const origemManualAdmin=origemExtensaoAdmin?(`EXTENSAO_CHROME_${origemExtensaoAdmin.toUpperCase()}`):"MANUAL_ADMIN";
     const ehKit=kitImportacaoPrintAtivo();
     const linhas=[];
     let nomeKit="";
@@ -6113,7 +6115,10 @@ function salvarPedidoImportadoPorPrint(lerOutro=false){
           Descrição:"",
           Rua:"",Módulo:"",Prateleira:"",Nível:"",Posição:"",Foto:"",
           __uidLinha:uidBanco("PED"),
-          OrigemCadastro:kitCatalogoAplicadoPrintSku?"PRINT_KIT_CADASTRADO":"PRINT_KIT",
+          OrigemCadastro:origemManualAdmin,
+          ManualAdminProtegido:"SIM",
+          ManualAdminOrigem:origemExtensaoAdmin?"EXTENSAO_CHROME":"PAINEL_ADMIN",
+          ManualAdminCriadoEm:new Date().toISOString(),
           CriadoEm:new Date().toISOString()
         };
         preencherPedidoProdutoBanco(item,componente.produto);
@@ -6132,7 +6137,10 @@ function salvarPedidoImportadoPorPrint(lerOutro=false){
         Descrição:document.getElementById("printDescricao").value.trim(),
         Rua:"",Módulo:"",Prateleira:"",Nível:"",Posição:"",Foto:"",
         __uidLinha:uidBanco("PED"),
-        OrigemCadastro:"PRINT",
+        OrigemCadastro:origemManualAdmin,
+        ManualAdminProtegido:"SIM",
+        ManualAdminOrigem:origemExtensaoAdmin?"EXTENSAO_CHROME":"PAINEL_ADMIN",
+        ManualAdminCriadoEm:new Date().toISOString(),
         SkuOrigemImportacao:document.getElementById("printSku").value.trim(),
         CriadoEm:new Date().toISOString()
       };
@@ -6816,6 +6824,9 @@ document.addEventListener("DOMContentLoaded",()=>{
 
   function preencherDadosMarketplace(dados){
     const marketplace=normalizarMarketplace(dados.marketplace);
+    // V17.51: tudo que chega pela extensão e é confirmado pelo ADMIN é tratado
+    // como inclusão manual protegida, inclusive Magalu.
+    window.__NOROMAK_EXTENSAO_MARKETPLACE_ATUAL=marketplace;
     const nome=nomeMarketplaceExtensao(marketplace);
     const origemCliente=origemClienteExtensao(dados,marketplace);
     abrirImportacaoPorPrint();

@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.50-SERVIDOR-CANONICO-OVERRIDE-PERSISTENTE"
+APP_VERSION = "17.51-ADMIN-EXTENSAO-MAGALU-PERSISTENTE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2888,6 +2888,55 @@ def _admin_override_apply(storage_key: str, merged_value: str) -> str:
     return merged_value
 
 
+
+
+def _admin_manual_pending_protected(row: Any) -> bool:
+    if not isinstance(row, dict):
+        return False
+    if normalize(row.get("ManualAdminProtegido")) == "SIM":
+        return True
+    origem = normalize(row.get("OrigemCadastro"))
+    return origem.startswith("EXTENSAO_CHROME_") or origem in {"MANUAL_ADMIN", "ADMIN_MANUAL"}
+
+
+def _preserve_admin_manual_pending(current_value: str | None, requested_value: str) -> str:
+    """V17.51: proteção redundante para inclusões explícitas do ADMIN.
+
+    Mesmo se algum sincronizador legado montar um snapshot sem a linha criada pela
+    extensão/Admin, linhas marcadas como manuais permanecem e seus campos atuais
+    prevalecem. Exclusão explícita pelo próprio admin continua possível porque esta
+    função só é usada em gravações automáticas/não-admin.
+    """
+    try:
+        current = json.loads(current_value or "[]")
+        requested = json.loads(requested_value or "[]")
+    except Exception:
+        return requested_value
+    if not isinstance(current, list) or not isinstance(requested, list):
+        return requested_value
+    out = [dict(x) if isinstance(x, dict) else x for x in requested]
+    pos = {}
+    for i, row in enumerate(out):
+        if isinstance(row, dict):
+            pos[_pending_identity_v1714(row, i)] = i
+    for i, row in enumerate(current):
+        if not _admin_manual_pending_protected(row):
+            continue
+        eid = _pending_identity_v1714(row, i)
+        if eid in pos:
+            # A versão manual/corrigida pelo admin vence campo a campo.
+            merged = dict(out[pos[eid]]) if isinstance(out[pos[eid]], dict) else {}
+            merged.update(row)
+            merged["ManualAdminProtegido"] = "SIM"
+            out[pos[eid]] = merged
+        else:
+            keep = dict(row)
+            keep["ManualAdminProtegido"] = "SIM"
+            out.append(keep)
+            pos[eid] = len(out)-1
+    return json_dumps(out)
+
+
 def save_storage(
     key: str,
     old_value: str | None,
@@ -2923,6 +2972,10 @@ def save_storage(
             # (ex.: botão Excluir do Admin/Conferência). Pedidos concluídos continuam
             # sendo retirados abaixo por filter_completed_orders().
             if key == "conf_pedidos" and not allow_pending_deletes:
+                # V17.51: sincronizações/jobs nunca podem apagar ou reverter linhas
+                # criadas/alteradas explicitamente pelo ADMIN (inclusive extensão Chrome).
+                if normalize(actor_role) != "ADMIN":
+                    new_value = _preserve_admin_manual_pending(current, new_value)
                 new_value = preserve_pending_records_v1714(current, new_value)
             if key in ("conf_pedidos", "conf_pedidos_rascunhos"):
                 new_value = preserve_conference_names(current, new_value)
