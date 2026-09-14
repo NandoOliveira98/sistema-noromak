@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.51-ADMIN-EXTENSAO-MAGALU-PERSISTENTE"
+APP_VERSION = "17.52-MAGALU-PEDIDO-ADMIN-VAULT"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -1135,6 +1135,16 @@ def init_db() -> None:
                 PRIMARY KEY(storage_key,entity_id,field_name)
             );
             CREATE INDEX IF NOT EXISTS idx_admin_overrides_key ON admin_manual_overrides(storage_key);
+            CREATE TABLE IF NOT EXISTS admin_manual_orders_v1752 (
+                entity_id TEXT PRIMARY KEY,
+                order_key TEXT NOT NULL DEFAULT '',
+                marketplace TEXT NOT NULL DEFAULT '',
+                payload TEXT NOT NULL,
+                deleted INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                updated_by TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_admin_manual_orders_order ON admin_manual_orders_v1752(order_key);
             CREATE TABLE IF NOT EXISTS sku_change_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 changed_at TEXT NOT NULL,
@@ -1993,6 +2003,8 @@ def get_storage(key: str) -> tuple[str | None, int, str | None]:
     try:
         if value is not None and "_admin_override_apply" in globals():
             value = _admin_override_apply(key, value)
+        if key == "conf_pedidos" and "_admin_manual_order_vault_apply" in globals():
+            value = _admin_manual_order_vault_apply(value)
     except Exception as exc:
         print(f"Aviso: override manual não aplicado na leitura de {key}: {exc}", file=sys.stderr)
     return value, int(row["version"]), row["updated_at"]
@@ -2890,6 +2902,104 @@ def _admin_override_apply(storage_key: str, merged_value: str) -> str:
 
 
 
+
+def _admin_manual_order_vault_rows() -> list[dict[str, Any]]:
+    rows = DB.execute(
+        "SELECT entity_id,order_key,marketplace,payload,deleted,updated_at,updated_by FROM admin_manual_orders_v1752 WHERE deleted=0"
+    ).fetchall()
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        try:
+            obj = json.loads(str(r["payload"] or "{}"))
+        except Exception:
+            obj = {}
+        if not isinstance(obj, dict):
+            continue
+        obj["ManualAdminProtegido"] = "SIM"
+        obj["__manualAdminVault"] = True
+        out.append(obj)
+    return out
+
+
+def _admin_manual_order_vault_apply(value: str | None) -> str:
+    """V17.52: cofre independente para pedidos que o ADMIN criou/alterou.
+
+    Nenhum job, polling, snapshot ou integração consegue apagar uma linha guardada
+    aqui. O cofre é aplicado por último em toda leitura/gravação de conf_pedidos.
+    """
+    try:
+        rows = json.loads(value or "[]")
+    except Exception:
+        rows = []
+    if not isinstance(rows, list):
+        rows = []
+    out = [dict(x) if isinstance(x, dict) else x for x in rows]
+    pos = {}
+    for i, row in enumerate(out):
+        if isinstance(row, dict):
+            pos[_pending_identity_v1714(row, i)] = i
+    for vault in _admin_manual_order_vault_rows():
+        eid = _pending_identity_v1714(vault, len(out))
+        if eid in pos:
+            merged = dict(out[pos[eid]]) if isinstance(out[pos[eid]], dict) else {}
+            # ADMIN vence campo a campo.
+            merged.update(vault)
+            merged["ManualAdminProtegido"] = "SIM"
+            merged["__manualAdminVault"] = True
+            out[pos[eid]] = merged
+        else:
+            out.append(dict(vault))
+            pos[eid] = len(out) - 1
+    return json_dumps(out)
+
+
+def _admin_manual_order_vault_sync(current_value: str | None, new_value: str, actor: str, allow_deletes: bool) -> int:
+    """Sincroniza o cofre APENAS em gravação explícita de ADMIN.
+
+    - linhas ManualAdminProtegido/EXTENSAO_CHROME/MANUAL_ADMIN são armazenadas;
+    - remoção só marca deleted quando a operação explicitamente permite exclusões;
+    - ausência em snapshots normais nunca apaga o cofre.
+    """
+    try:
+        current = json.loads(current_value or "[]")
+        newer = json.loads(new_value or "[]")
+    except Exception:
+        return 0
+    if not isinstance(current, list) or not isinstance(newer, list):
+        return 0
+    changed = 0
+    cur_map = {_pending_identity_v1714(r, i): r for i, r in enumerate(current) if isinstance(r, dict)}
+    new_map = {_pending_identity_v1714(r, i): r for i, r in enumerate(newer) if isinstance(r, dict)}
+
+    if allow_deletes:
+        for eid, row in cur_map.items():
+            if eid in new_map:
+                continue
+            if _admin_manual_pending_protected(row) or bool(row.get("__manualAdminVault")):
+                DB.execute(
+                    "UPDATE admin_manual_orders_v1752 SET deleted=1,updated_at=?,updated_by=? WHERE entity_id=?",
+                    (now_iso(), actor or "admin", eid),
+                )
+                changed += 1
+
+    for eid, row in new_map.items():
+        if not (_admin_manual_pending_protected(row) or bool(row.get("__manualAdminVault"))):
+            continue
+        payload = dict(row)
+        payload["ManualAdminProtegido"] = "SIM"
+        payload["__manualAdminVault"] = True
+        DB.execute(
+            """INSERT INTO admin_manual_orders_v1752(entity_id,order_key,marketplace,payload,deleted,updated_at,updated_by)
+               VALUES(?,?,?,?,0,?,?)
+               ON CONFLICT(entity_id) DO UPDATE SET
+                 order_key=excluded.order_key,marketplace=excluded.marketplace,payload=excluded.payload,
+                 deleted=0,updated_at=excluded.updated_at,updated_by=excluded.updated_by""",
+            (eid, normalize(order_number(payload)), str(payload.get("Marketplace") or ""), json_dumps(payload), now_iso(), actor or "admin"),
+        )
+        changed += 1
+    return changed
+
+
 def _admin_manual_pending_protected(row: Any) -> bool:
     if not isinstance(row, dict):
         return False
@@ -2959,6 +3069,10 @@ def save_storage(
             if key == "conf_pedidos" and allow_completed_reimport and not force and old_value is not None:
                 new_value, _ = reactivate_completed_orders_from_delta(old_value, new_value, actor or "admin")
             current, version, _ = get_storage(key)
+            # V17.52: o cofre de pedidos manuais é independente do snapshot principal.
+            # Uma inclusão/edição do ADMIN fica registrada antes de qualquer merge.
+            if key == "conf_pedidos" and normalize(actor_role) == "ADMIN":
+                _admin_manual_order_vault_sync(current, new_value, actor or "admin", allow_pending_deletes)
             # V17.48: toda gravação explícita feita por ADMIN registra somente o
             # delta manual antes de qualquer merge. Assim o servidor pode aplicar
             # essas decisões novamente sobre sincronizações futuras.
@@ -2999,6 +3113,8 @@ def save_storage(
             # V17.48: ADMIN sempre prevalece. Aplicado por último para que nenhuma
             # integração/job/importação possa sobrescrever decisão manual salva.
             merged = _admin_override_apply(key, merged)
+            if key == "conf_pedidos":
+                merged = _admin_manual_order_vault_apply(merged)
             version += 1
             updated = now_iso()
             DB.execute(
