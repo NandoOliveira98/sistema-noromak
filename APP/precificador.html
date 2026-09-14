@@ -711,7 +711,8 @@
             <option value="30">A vencer em 30 dias</option>
             <option value="all">Todas com data</option>
             <option value="nodate">Sem data cadastrada</option>
-            <option value="price_ok">Preço OK</option>
+            <option value="reviewed">Revisados (Preço OK / Estoque zerado)</option>
+            <option value="price_ok">Somente Preço OK</option>
           </select>
           <select id="promo-sort">
             <option value="date_asc">Data mais próxima</option>
@@ -741,7 +742,7 @@
           <b>Pesquisa:</b> digite o MLB completo ou somente os números. A lista é filtrada imediatamente e a busca ignora temporariamente os filtros de vencimento/estoque quando o código é completo.<br>
           <b>Como funciona:</b> os registros vencidos são carregados diretamente junto com a página, sem depender de API ou estoque. Esta tela reproduz a base da planilha: código do anúncio, data de vencimento e situação.
           O status é recalculado diariamente. Clique diretamente no <b>código do anúncio</b> para abrir a página de promoção daquele MLB.
-          Marque <b>Estoque zerado</b> diretamente na linha do anúncio; ele será ocultado imediatamente sem ser excluído da base. O filtro <b>Ocultar estoque zerado</b> vem ativo por padrão. Marque <b>Preço OK</b> quando o preço final já estiver na margem ideal; esses anúncios saem das filas de renovação e ficam disponíveis no filtro <b>Preço OK</b>. Use <b>Ver todos da planilha</b> para rever anúncios marcados, e <b>Adicionar produto</b> ou <b>Excluir</b> para manter a lista. Ao clicar em <b>Atualizar estoque ML + Apollo</b>, o sistema consulta o MLB no Mercado Livre, lê o SKU do próprio anúncio e consulta esse SKU exato no Apollo. Itens marcados como zerados que voltaram a ter estoque recebem o aviso <b>REVISAR PROMOÇÃO</b>.
+          Marque <b>Estoque zerado</b> diretamente na linha do anúncio; ele será ocultado imediatamente sem ser excluído da base. O filtro <b>Ocultar estoque zerado</b> vem ativo por padrão. Marque <b>Preço OK</b> quando o preço final já estiver na margem ideal. Anúncios marcados como <b>Preço OK</b> ou <b>Estoque zerado</b> deixam de contar e aparecer em <b>Vencidas</b> e ficam reunidos no filtro <b>Revisados (Preço OK / Estoque zerado)</b>. Use <b>Ver todos da planilha</b> para rever anúncios marcados, e <b>Adicionar produto</b> ou <b>Excluir</b> para manter a lista. Ao clicar em <b>Atualizar estoque ML + Apollo</b>, o sistema consulta o MLB no Mercado Livre, lê o SKU do próprio anúncio e consulta esse SKU exato no Apollo. Itens marcados como zerados que voltaram a ter estoque recebem o aviso <b>REVISAR PROMOÇÃO</b>.
         </div>
 
         <div class="promo-manage-bar promo-manage-secondary">
@@ -3259,8 +3260,11 @@ var state = {
       function promoSaveMeta(){
         try{localStorage.setItem(PROMO_META_CACHE_KEY,JSON.stringify(promoMeta));}catch(_){}
       }
+      function promoIsReviewed(row){
+        return !!(row && (row.priceOk===true || row.manualZero===true));
+      }
       function promoUpdateBadge(){
-        var expired=promoRows.filter(function(r){return r.date&&promoDays(r.date)<0;}).length;
+        var expired=promoRows.filter(function(r){return r.date&&promoDays(r.date)<0&&!promoIsReviewed(r);}).length;
         var badge=document.getElementById("promotions-monitor-badge");
         if(badge){badge.textContent=String(expired);badge.hidden=expired<=0;}
       }
@@ -3273,7 +3277,7 @@ var state = {
           if(manualZero||apiZero)zero++;
           if(!r.date)return; dated++;
           var d=promoDays(r.date);
-          if(d<0)expired++;
+          if(d<0 && !promoIsReviewed(r))expired++;
           else if(d<=7)d7++;
           if(d>=0&&d<=15)d15++;
         });
@@ -3320,14 +3324,16 @@ var state = {
           // Busca por MLB ignora filtro de data/status para localizar o anúncio
           // independentemente de estar vencido, ativo ou sem data.
           if(!searchIsMlb){
-            if(status==="expired" && !(r.date&&days<0))return false;
+            if(status==="expired" && !(r.date&&days<0&&!promoIsReviewed(r)))return false;
             if(status==="7" && !(r.date&&days>=0&&days<=7))return false;
             if(status==="15" && !(r.date&&days>=0&&days<=15))return false;
             if(status==="30" && !(r.date&&days>=0&&days<=30))return false;
             if(status==="all" && !r.date)return false;
             if(status==="nodate" && r.date)return false;
+            if(status==="reviewed" && !promoIsReviewed(r))return false;
             if(status==="price_ok" && r.priceOk!==true)return false;
-            if(status!=="price_ok" && r.priceOk===true)return false;
+            if(status!=="price_ok" && status!=="reviewed" && r.priceOk===true)return false;
+            if(status!=="reviewed" && status!=="price_ok" && r.manualZero===true)return false;
           }
 
           var known=meta.stock_known===true;
@@ -3337,6 +3343,10 @@ var state = {
           // Se for uma busca direta por MLB, mostramos o anúncio mesmo que esteja
           // marcado como estoque zero, para que o usuário consiga encontrá-lo e revisar.
           if(!searchIsMlb){
+            // No filtro Revisados, registros marcados manualmente precisam aparecer mesmo
+            // com "Ocultar estoque zerado" ativo.
+            if(status==="reviewed")return true;
+
             var apolloReturned = manualZero && meta.apollo_stock_known===true && Number(meta.apollo_available||0)>0;
             if(stockFilter==="positive" && manualZero && !apolloReturned)return false;
             if(stockFilter==="zero" && manualZero)return !apolloReturned;
