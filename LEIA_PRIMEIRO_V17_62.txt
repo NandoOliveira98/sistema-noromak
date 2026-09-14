@@ -1,0 +1,16 @@
+NOROMAK V17.62 — MLB/SKU CANÔNICO NA LEITURA
+
+Correção principal:
+- A relação da planilha MLB ↔ SKU passa a ser reaplicada na leitura canônica do Precificador.
+- Um cache parcial do navegador não consegue mais apagar centenas de vínculos importados.
+- A sincronização do Precificador agora SUBSTITUI o cache local pelo mapa retornado pelo servidor; não mistura snapshots antigos.
+- A sincronização automática não regrava mais o mapa completo de MLB/SKU no servidor.
+- Inclusões e remoções manuais usam endpoint específico e persistente.
+- Remoções manuais explícitas criam tombstone e continuam prevalecendo sobre a planilha.
+- A revisão V17.62 reaplica a planilha mesmo em instalações que já executaram V17.60/V17.61.
+
+Validação alvo:
+SKU 036-00172-000
+- MLB1337814882
+- MLB1368040911
+- MLB1337814975

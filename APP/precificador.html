@@ -1508,6 +1508,10 @@ var state = {
         return String(value || "").trim().toUpperCase();
       }
 
+      function compactSkuKey(value) {
+        return normalizeSkuKey(value).replace(/[^A-Z0-9]/g, "");
+      }
+
       function loadMlSkuMlbLinks() {
         var raw = "";
         try {
@@ -1535,9 +1539,12 @@ var state = {
         try { localStorage.setItem("ml_sku_mlb_links_last_sync", String(Date.now())); } catch (_) {}
       }
 
-      function saveMlSkuMlbLinks() {
+      function saveMlSkuMlbLinks(writeServer) {
         var raw = JSON.stringify(mlSkuMlbLinks);
         try { localStorage.setItem(ML_LINK_STORAGE_KEY, raw); } catch (_) {}
+        // V17.62: sincronização automática nunca regrava o mapa inteiro no servidor.
+        // Isso evitava que um cache parcial do navegador apagasse centenas de vínculos.
+        if (writeServer !== true) return;
         try {
           if (window.appStorage && typeof window.appStorage.setItem === "function") {
             window.appStorage.setItem(ML_LINK_STORAGE_KEY, raw);
@@ -1548,6 +1555,11 @@ var state = {
       function getLinkedMlbsForSku(sku) {
         var key = normalizeSkuKey(sku);
         var rows = Array.isArray(mlSkuMlbLinks[key]) ? mlSkuMlbLinks[key] : [];
+        if (!rows.length && key) {
+          var compact = compactSkuKey(key);
+          var candidates = Object.keys(mlSkuMlbLinks || {}).filter(function(k){ return compactSkuKey(k) === compact; });
+          if (candidates.length === 1 && Array.isArray(mlSkuMlbLinks[candidates[0]])) rows = mlSkuMlbLinks[candidates[0]];
+        }
         var out = [];
         rows.forEach(function(row){
           var mlb = normalizeMlb(typeof row === "string" ? row : row.mlb);
@@ -1567,7 +1579,7 @@ var state = {
           obj.mlb = normalizeMlb(obj.mlb);
           return obj;
         }).filter(function(x){ return !!x.mlb; });
-        saveMlSkuMlbLinks();
+        saveMlSkuMlbLinks(false);
       }
 
       function addMlbLinkToSku(sku, mlb, extra) {
@@ -1689,37 +1701,33 @@ var state = {
           var incoming = data.links && typeof data.links === "object" ? data.links : {};
           var merged = {};
 
-          // Preserva vínculos manuais existentes e atualiza/adiciona os encontrados automaticamente.
-          Object.keys(mlSkuMlbLinks || {}).forEach(function(sku){
-            merged[normalizeSkuKey(sku)] = getLinkedMlbsForSku(sku).map(function(x){ return Object.assign({},x); });
-          });
-
+          // V17.62: o servidor é a fonte canônica. Não misturar novamente um cache local
+          // antigo/partial, pois isso foi a causa dos vínculos importados desaparecerem.
           Object.keys(incoming).forEach(function(sku){
             var key = normalizeSkuKey(sku);
             if (!key) return;
-            var rows = Array.isArray(merged[key]) ? merged[key] : [];
+            var rows = [];
             (incoming[sku] || []).forEach(function(item){
               var mlb = normalizeMlb(item.mlb);
               if (!mlb) return;
-              var existing = rows.find(function(x){ return normalizeMlb(x.mlb) === mlb; });
               var normalized = {
                 mlb: mlb,
-                title: item.title || "",
-                price: Number(item.price || 0) || 0,
+                title: item.title || item.titulo || "",
+                price: Number(item.price || item.preco || 0) || 0,
                 status: item.status || "Vinculado",
                 available_quantity: item.available_quantity,
                 permalink: item.permalink || "",
-                autoLinked: true,
-                updatedAt: item.updatedAt || new Date().toISOString()
+                source: item.source || item.sourceLive || "",
+                autoLinked: !!item.autoLinked || !!item.sourceLive,
+                updatedAt: item.updatedAt || item.importedAt || new Date().toISOString()
               };
-              if (existing) Object.assign(existing, normalized);
-              else rows.push(normalized);
+              if (!rows.some(function(x){ return normalizeMlb(x.mlb) === mlb; })) rows.push(normalized);
             });
-            merged[key] = rows;
+            if (rows.length) merged[key] = rows;
           });
 
           mlSkuMlbLinks = merged;
-          saveMlSkuMlbLinks();
+          saveMlSkuMlbLinks(false);
           markMlLinksSyncedNow();
           renderMlConnections();
 
@@ -1742,6 +1750,20 @@ var state = {
           mlLinkSyncRunning = false;
           if (el["ml-link-refresh"]) el["ml-link-refresh"].disabled = false;
         }
+      }
+
+      async function persistManualMlbLink(action, sku, mlb) {
+        var response = await fetch("/expedicao/api/precificador/ml-vinculos/manual", {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {"Content-Type":"application/json", "Accept":"application/json"},
+          body: JSON.stringify({action: action, sku: sku, mlb: mlb})
+        });
+        var data = await response.json().catch(function(){ return {}; });
+        if (!response.ok || !data.ok) throw new Error(data.error || "Não foi possível salvar o vínculo.");
+        setLinkedMlbsForSku(data.sku || sku, Array.isArray(data.rows) ? data.rows : []);
+        renderMlConnections();
+        return data;
       }
 
       function tryAutoLinkFromPromoMetaForCurrentSku() {
@@ -2881,15 +2903,18 @@ var state = {
 
 
       if (el["ml-link-add"]) {
-        el["ml-link-add"].addEventListener("click", function(){
+        el["ml-link-add"].addEventListener("click", async function(){
           var sku = String(el.sku.value || "").trim();
           var mlb = normalizeMlb(el["ml-link-input"].value);
           if (!sku) { showToast("Selecione um produto antes de vincular um MLB."); return; }
           if (!mlb) { showToast("Informe um MLB válido."); return; }
-          addMlbLinkToSku(sku, mlb, {});
-          el["ml-link-input"].value = "";
-          renderMlConnections();
-          showToast(mlb + " vinculado ao SKU " + sku + ".");
+          try {
+            await persistManualMlbLink("add", sku, mlb);
+            el["ml-link-input"].value = "";
+            showToast(mlb + " vinculado ao SKU " + sku + ".");
+          } catch (error) {
+            showToast(error && error.message ? error.message : "Falha ao vincular MLB.");
+          }
         });
       }
 
@@ -2911,8 +2936,11 @@ var state = {
             var sku = String(el.sku.value || "").trim();
             var mlb = remove.getAttribute("data-remove-mlb");
             if (window.confirm("Remover vínculo " + mlb + " deste SKU?")) {
-              removeMlbLinkFromSku(sku, mlb);
-              renderMlConnections();
+              persistManualMlbLink("remove", sku, mlb).then(function(){
+                showToast(mlb + " removido do SKU " + sku + ".");
+              }).catch(function(error){
+                showToast(error && error.message ? error.message : "Falha ao remover vínculo.");
+              });
             }
           }
         });

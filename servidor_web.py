@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.61-MLB-SKU-CANONICO-ETIQUETAS-SEM-REAUTH"
+APP_VERSION = "17.62-MLB-SKU-CANONICO-LEITURA-FIX"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -715,7 +715,7 @@ def _ml_precificador_persisted_links() -> dict[str, list[dict[str, Any]]]:
             rows.append(obj)
         if rows:
             merged[sku] = rows
-    return merged
+    return _ml_merge_seed_links(merged)
 
 def ml_precificador_links_payload(max_items: int = 5000) -> dict[str, Any]:
     """Monta SKU -> MLB pela base canônica e enriquece com a API do ML."""
@@ -1223,6 +1223,14 @@ def init_db() -> None:
                 PRIMARY KEY(storage_key,entity_id,field_name)
             );
             CREATE INDEX IF NOT EXISTS idx_admin_overrides_key ON admin_manual_overrides(storage_key);
+            CREATE TABLE IF NOT EXISTS ml_sku_mlb_manual_tombstones (
+                sku TEXT NOT NULL,
+                mlb TEXT NOT NULL,
+                removed_at TEXT NOT NULL,
+                removed_by TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY(sku,mlb)
+            );
+            CREATE INDEX IF NOT EXISTS idx_ml_sku_mlb_tombstones_sku ON ml_sku_mlb_manual_tombstones(sku);
             CREATE TABLE IF NOT EXISTS admin_manual_orders_v1752 (
                 entity_id TEXT PRIMARY KEY,
                 order_key TEXT NOT NULL DEFAULT '',
@@ -1575,8 +1583,167 @@ ML_SKU_MLB_SEED_PATH = ROOT_DIR / "DADOS" / "ml_sku_mlb_links_seed.json"
 # V17.60: revisão da planilha Código do anúncio ↔ Código OEM/SKU enviada em 14/09/2026.
 # O marcador faz a migração rodar UMA vez por revisão. Assim, se o ADMIN remover
 # um vínculo depois da importação, um simples restart não recria o vínculo apagado.
-ML_SKU_MLB_SEED_REVISION = "2026-09-14-oem-v3-canonical-admin-override"
+ML_SKU_MLB_SEED_REVISION = "2026-09-14-oem-v4-read-repair-manual-tombstones"
 ML_SKU_MLB_SEED_REVISION_KEY = "ml_sku_mlb_seed_revision_v1"
+
+
+
+def _ml_normalize_link_sku(value: Any) -> str:
+    return str(value or "").strip().upper()
+
+
+def _ml_normalize_link_mlb(value: Any) -> str:
+    digits = re.sub(r"\D+", "", str(value or ""))
+    return ("MLB" + digits) if digits else ""
+
+
+def _ml_seed_links_normalized() -> dict[str, list[dict[str, Any]]]:
+    """Lê a planilha/seed empacotada e devolve o mapa canônico SKU -> MLB."""
+    if not ML_SKU_MLB_SEED_PATH.exists():
+        return {}
+    try:
+        raw = json.loads(ML_SKU_MLB_SEED_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, list[dict[str, Any]]] = {}
+    for raw_sku, rows in raw.items():
+        sku = _ml_normalize_link_sku(raw_sku)
+        if not sku or not isinstance(rows, list):
+            continue
+        dest: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for row in rows:
+            obj = dict(row) if isinstance(row, dict) else {"mlb": row}
+            mlb = _ml_normalize_link_mlb(obj.get("mlb"))
+            if not mlb or mlb in seen:
+                continue
+            seen.add(mlb)
+            obj["mlb"] = mlb
+            obj.setdefault("sku", sku)
+            obj.setdefault("source", "planilha_codigos_anuncio_oem_2026-09-14")
+            obj.setdefault("importedAt", "2026-09-14")
+            dest.append(obj)
+        if dest:
+            out[sku] = dest
+    return out
+
+
+def _ml_manual_link_tombstones() -> set[tuple[str, str]]:
+    rows = DB.execute("SELECT sku,mlb FROM ml_sku_mlb_manual_tombstones").fetchall()
+    return {
+        (_ml_normalize_link_sku(r["sku"]), _ml_normalize_link_mlb(r["mlb"]))
+        for r in rows
+        if _ml_normalize_link_sku(r["sku"]) and _ml_normalize_link_mlb(r["mlb"])
+    }
+
+
+def _ml_merge_seed_links(links: dict[str, list[dict[str, Any]]]) -> dict[str, list[dict[str, Any]]]:
+    """Reaplica a planilha em toda leitura, sem ressuscitar remoções manuais explícitas.
+
+    A V17.60/V17.61 podia ser destruída por um navegador com cache parcial que salvava
+    novamente o objeto inteiro. A partir da V17.62, a planilha é uma camada canônica de
+    leitura e só um tombstone explícito pode ocultar um vínculo dela.
+    """
+    seed = _ml_seed_links_normalized()
+    with DB_LOCK:
+        tombstones = _ml_manual_link_tombstones()
+    merged: dict[str, list[dict[str, Any]]] = {}
+    indexes: dict[str, set[str]] = {}
+    for raw_sku, rows in (links or {}).items():
+        sku = _ml_normalize_link_sku(raw_sku)
+        if not sku or not isinstance(rows, list):
+            continue
+        dest = merged.setdefault(sku, [])
+        seen = indexes.setdefault(sku, set())
+        for row in rows:
+            obj = dict(row) if isinstance(row, dict) else {"mlb": row}
+            mlb = _ml_normalize_link_mlb(obj.get("mlb"))
+            if not mlb or (sku, mlb) in tombstones or mlb in seen:
+                continue
+            obj["mlb"] = mlb
+            obj.setdefault("sku", sku)
+            dest.append(obj)
+            seen.add(mlb)
+    for sku, rows in seed.items():
+        dest = merged.setdefault(sku, [])
+        seen = indexes.setdefault(sku, set())
+        for row in rows:
+            mlb = _ml_normalize_link_mlb(row.get("mlb"))
+            if not mlb or (sku, mlb) in tombstones or mlb in seen:
+                continue
+            obj = dict(row)
+            obj["mlb"] = mlb
+            obj.setdefault("sku", sku)
+            dest.append(obj)
+            seen.add(mlb)
+    return {sku: rows for sku, rows in merged.items() if rows}
+
+
+def ml_precificador_manual_link_update(sku_value: Any, mlb_value: Any, action: str, actor: str) -> list[dict[str, Any]]:
+    """Adiciona/remove um vínculo manual sem permitir que snapshots parciais apaguem o mapa inteiro."""
+    sku = _ml_normalize_link_sku(sku_value)
+    mlb = _ml_normalize_link_mlb(mlb_value)
+    action = str(action or "").strip().lower()
+    if not sku:
+        raise ValueError("Informe o SKU.")
+    if not mlb:
+        raise ValueError("Informe um MLB válido.")
+    if action not in {"add", "remove"}:
+        raise ValueError("Ação de vínculo inválida.")
+
+    with DB_LOCK:
+        # Parte do estado efetivo + seed para nunca trabalhar sobre um snapshot parcial.
+        links = _ml_precificador_persisted_links()
+        rows = [dict(x) for x in links.get(sku, []) if isinstance(x, dict)]
+        if action == "remove":
+            DB.execute(
+                """INSERT INTO ml_sku_mlb_manual_tombstones(sku,mlb,removed_at,removed_by)
+                   VALUES(?,?,?,?)
+                   ON CONFLICT(sku,mlb) DO UPDATE SET
+                     removed_at=excluded.removed_at,removed_by=excluded.removed_by""",
+                (sku, mlb, now_iso(), actor or "usuario"),
+            )
+            rows = [x for x in rows if _ml_normalize_link_mlb(x.get("mlb")) != mlb]
+        else:
+            DB.execute("DELETE FROM ml_sku_mlb_manual_tombstones WHERE sku=? AND mlb=?", (sku, mlb))
+            existing = next((x for x in rows if _ml_normalize_link_mlb(x.get("mlb")) == mlb), None)
+            if existing is None:
+                rows.append({
+                    "mlb": mlb,
+                    "sku": sku,
+                    "source": "manual_precificador",
+                    "createdAt": now_iso(),
+                    "createdBy": actor or "usuario",
+                    "status": "Vinculado",
+                })
+
+        # Reconstroi o mapa canônico completo e grava uma versão consistente.
+        current = _ml_precificador_persisted_links()
+        current[sku] = rows
+        if action == "remove" and not rows:
+            current.pop(sku, None)
+        current = _ml_merge_seed_links(current)
+        # O tombstone foi criado antes do merge, então o seed removido não volta.
+        raw = json_dumps(current)
+        row = DB.execute("SELECT version FROM storage WHERE key=?", (ML_SKU_MLB_LINKS_STORAGE_KEY,)).fetchone()
+        version = int(row["version"] or 0) + 1 if row else 1
+        DB.execute(
+            """INSERT INTO storage(key,value,version,updated_at) VALUES(?,?,?,?)
+               ON CONFLICT(key) DO UPDATE SET
+                 value=excluded.value,version=excluded.version,updated_at=excluded.updated_at""",
+            (ML_SKU_MLB_LINKS_STORAGE_KEY, raw, version, now_iso()),
+        )
+        # Remove override raiz legado do SKU. A partir daqui a decisão explícita é o tombstone/manual row.
+        DB.execute(
+            "DELETE FROM admin_manual_overrides WHERE storage_key=? AND entity_id='__ROOT__' AND field_name=?",
+            (ML_SKU_MLB_LINKS_STORAGE_KEY, sku),
+        )
+        DB.commit()
+
+    effective = _ml_precificador_persisted_links()
+    return effective.get(sku, [])
 
 
 def _ml_seed_row_is_previous_import(row: Any) -> bool:
@@ -1589,7 +1756,7 @@ def _ml_seed_row_is_previous_import(row: Any) -> bool:
 def seed_ml_sku_mlb_links_from_file() -> dict[str, int]:
     """Aplica a relação SKU↔MLB da planilha diretamente na base canônica.
 
-    V17.61:
+    V17.62:
     - lê o estado EFETIVO (storage + overrides do ADMIN), para não perder vínculos manuais;
     - reaplica a planilha de 14/09 em uma revisão nova, mesmo que a V17.60 tenha marcado a
       migração anterior como concluída;
@@ -1654,6 +1821,8 @@ def seed_ml_sku_mlb_links_from_file() -> dict[str, int]:
             result["already_applied"] = 1
             return result
 
+        manual_tombstones = _ml_manual_link_tombstones()
+
         current_row = DB.execute(
             "SELECT value,version FROM storage WHERE key=?", (ML_SKU_MLB_LINKS_STORAGE_KEY,)
         ).fetchone()
@@ -1715,6 +1884,8 @@ def seed_ml_sku_mlb_links_from_file() -> dict[str, int]:
             index = by_sku_mlb.setdefault(sku, {})
             for seed_obj in seed_rows:
                 mlb = seed_obj["mlb"]
+                if (sku, mlb) in manual_tombstones:
+                    continue
                 existing = index.get(mlb)
                 if existing is None:
                     obj = dict(seed_obj)
@@ -1759,7 +1930,7 @@ def seed_ml_sku_mlb_links_from_file() -> dict[str, int]:
                     sku,
                     cleaned[sku],
                     deleted=False,
-                    actor="MIGRACAO_V17_61_PLANILHA_14_09",
+                    actor="MIGRACAO_V17_62_PLANILHA_14_09",
                 )
             else:
                 _admin_override_upsert(
@@ -1768,7 +1939,7 @@ def seed_ml_sku_mlb_links_from_file() -> dict[str, int]:
                     sku,
                     None,
                     deleted=True,
-                    actor="MIGRACAO_V17_61_PLANILHA_14_09",
+                    actor="MIGRACAO_V17_62_PLANILHA_14_09",
                 )
             result["override_skus"] += 1
 
@@ -1787,7 +1958,7 @@ def seed_ml_sku_mlb_links_from_file() -> dict[str, int]:
         DB.commit()
 
     print(
-        "V17.61 MLB/SKU: "
+        "V17.62 MLB/SKU: "
         f"{result['seed_links']} vínculos / {result['seed_skus']} SKUs; "
         f"{result['added_links']} adicionados; {result['removed_stale_links']} antigos removidos; "
         f"{result['override_skus']} SKUs consolidados no override canônico.",
@@ -11097,6 +11268,11 @@ class AppHandler(BaseHTTPRequestHandler):
             thread.start()
             self.send_json({"ok": True, "started": True, "job": precificador_bulk_status()})
             return
+        if path == "/api/precificador/ml-vinculos/manual":
+            ctx = self.auth()
+            if ctx is not None:
+                self.handle_precificador_ml_vinculo_manual(ctx)
+            return
         if path == "/api/storage":
             ctx = self.auth()
             if ctx is not None:
@@ -11405,6 +11581,23 @@ class AppHandler(BaseHTTPRequestHandler):
             "items": [dict(row) for row in rows],
         })
 
+    def handle_precificador_ml_vinculo_manual(self, ctx: dict[str, Any]) -> None:
+        if not module_allowed(ctx, "precificador"):
+            self.send_json({"ok": False, "error": "Acesso ao Precificador não autorizado."}, 403)
+            return
+        try:
+            req = self.read_json()
+            sku = str(req.get("sku") or "").strip()
+            mlb = str(req.get("mlb") or "").strip()
+            action = str(req.get("action") or "").strip().lower()
+            rows = ml_precificador_manual_link_update(sku, mlb, action, str(ctx.get("username") or ""))
+            audit(str(ctx.get("username") or "usuario"), f"precificador.mlb_link.{action}", f"{sku}|{mlb}")
+            self.send_json({"ok": True, "sku": _ml_normalize_link_sku(sku), "rows": rows})
+        except ValueError as exc:
+            self.send_json({"ok": False, "error": str(exc)}, 400)
+        except Exception as exc:
+            self.send_json({"ok": False, "error": str(exc)}, 500)
+
     def handle_storage_post(self, ctx: dict[str, Any]) -> None:
         try:
             req = self.read_json()
@@ -11423,6 +11616,34 @@ class AppHandler(BaseHTTPRequestHandler):
             new_value = str(req.get("newValue"))
             old_value = None if "oldValue" not in req or req.get("oldValue") is None else str(req.get("oldValue"))
             force = bool(req.get("force"))
+            # V17.62: snapshots completos do navegador não são mais autoridade para MLB↔SKU.
+            # Um cache parcial não pode apagar centenas de vínculos importados. Inclusão/remoção
+            # explícita usa /api/precificador/ml-vinculos/manual.
+            if key == ML_SKU_MLB_LINKS_STORAGE_KEY:
+                try:
+                    incoming = json.loads(new_value or "{}")
+                except Exception:
+                    incoming = {}
+                canonical = _ml_precificador_persisted_links()
+                if isinstance(incoming, dict):
+                    for raw_sku, raw_rows in incoming.items():
+                        sku = _ml_normalize_link_sku(raw_sku)
+                        if not sku or not isinstance(raw_rows, list):
+                            continue
+                        dest = canonical.setdefault(sku, [])
+                        seen = {_ml_normalize_link_mlb(x.get("mlb")) for x in dest if isinstance(x, dict)}
+                        for raw_link in raw_rows:
+                            obj = dict(raw_link) if isinstance(raw_link, dict) else {"mlb": raw_link}
+                            mlb = _ml_normalize_link_mlb(obj.get("mlb"))
+                            if not mlb or mlb in seen:
+                                continue
+                            obj["mlb"] = mlb
+                            obj.setdefault("sku", sku)
+                            dest.append(obj)
+                            seen.add(mlb)
+                new_value = json_dumps(_ml_merge_seed_links(canonical))
+                old_value = None
+                force = True
             allow_label_deletes = bool(req.get("allowLabelDeletes"))
             allow_pending_deletes = bool(req.get("allowPendingDeletes"))
             if key == "conf_etiquetas" and not allow_label_deletes:
