@@ -4025,13 +4025,34 @@ function registrarExclusaoManualShopeeAdmin(item){
   if(!existe)lista.push({Pedido:pedido,SkuOrigem:skuOrigem,SKU:String(item.SKU||""),UidLinha:uid,ExcluidoEm:new Date().toISOString(),Origem:"MANUAL"});
   appStorage.setItem("conf_shopee_exclusoes_v1",JSON.stringify(lista));
 }
-function excluirLinhaPedidoAdmin(uid){
+async function excluirLinhaPedidoAdmin(uid){
   const item=pedidosEditorAdmin.find(x=>x.__uidLinha===uid); if(!item)return;
-  if((item.Pedido||item.SKU||item["Código de Barras"])&&!confirm("Excluir esta linha do pedido? Se for Shopee, a exclusão ficará protegida contra novas sincronizações."))return;
-  registrarExclusaoManualShopeeAdmin(item);
-  pedidosEditorAdmin=pedidosEditorAdmin.filter(x=>x.__uidLinha!==uid);
-  permitirRemocoesPedidosAdminUmaVez=true;
-  renderizarPedidosAdmin();salvarPedidosAdmin(false);
+  const ehKit=normalizarBuscaBanco(item.Kit)==="sim"||!!String(item.SkuKitOrigem||item["Nome do Kit"]||"").trim();
+  const texto=ehKit
+    ?"Excluir este componente do KIT? A exclusão ficará protegida e ele não voltará nas próximas sincronizações."
+    :"Excluir esta linha do pedido? Se for Shopee, a exclusão ficará protegida contra novas sincronizações.";
+  if((item.Pedido||item.SKU||item["Código de Barras"])&&!confirm(texto))return;
+  try{
+    setStatusBanco("● Excluindo item do pedido...","salvando");
+    await api('/api/order-line-delete',{
+      method:'POST',
+      body:JSON.stringify({
+        uid:String(item.__uidLinha||""),
+        pedido:String(item.Pedido||""),
+        sku:String(item.SKU||"")
+      })
+    });
+    pedidosEditorAdmin=pedidosEditorAdmin.filter(x=>String(x.__uidLinha)!==String(uid));
+    eanSalvoPorUid.delete(uid);
+    renderizarPedidosAdmin();
+    if(typeof appStorage?.sincronizarAgora==="function")await appStorage.sincronizarAgora();
+    setTimeout(()=>{try{carregarBancoInternoAdmin();}catch(_){}},80);
+    setStatusBanco("● Item excluído e protegido contra sincronização","ok");
+  }catch(e){
+    console.error(e);
+    setStatusBanco("Erro ao excluir item","erro");
+    alert("Não foi possível excluir este item: "+(e.message||e));
+  }
 }
 function atualizarCampoPedidoAdmin(el,semRender=false){
   const item=pedidosEditorAdmin.find(x=>x.__uidLinha===el.dataset.uidlinha); if(!item)return;

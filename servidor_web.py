@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.63-ETIQUETAS-SHOPEE-SEM-REAUTENTICACAO"
+APP_VERSION = "17.64-KIT-EXCLUSAO-CANONICA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -11288,6 +11288,11 @@ class AppHandler(BaseHTTPRequestHandler):
             if ctx is not None:
                 self.handle_admin_order_upsert(ctx)
             return
+        if path == "/api/order-line-delete":
+            ctx = self.auth()
+            if ctx is not None:
+                self.handle_order_line_delete(ctx)
+            return
         if path == "/api/order-sku":
             ctx = self.auth(admin_only=True)
             if ctx is not None:
@@ -11928,6 +11933,141 @@ class AppHandler(BaseHTTPRequestHandler):
             audit(str(ctx.get("username") or "admin"), "order.admin_upsert", f"{source}|linhas={len(incoming)}|pedidos={len(order_keys)}")
             self.send_json({"ok": True, "value": saved, "version": version, "updated_at": updated,
                             "inserted_rows": len(incoming), "orders": order_keys})
+        except (ValueError, json.JSONDecodeError) as exc:
+            self.send_json({"ok": False, "error": str(exc)}, 400)
+        except Exception as exc:
+            self.send_json({"ok": False, "error": str(exc)}, 409)
+
+
+    def handle_order_line_delete(self, ctx: dict[str, Any]) -> None:
+        """V17.64 — exclusão canônica de uma linha/componente de pedido.
+
+        Remove a linha diretamente de conf_pedidos/conf_pedidos_rascunhos por UID,
+        cria tombstone persistente de override e, quando a origem é Shopee, registra
+        também a exclusão manual da Shopee. Assim um componente de KIT não volta por
+        F5, polling ou sincronização.
+        """
+        try:
+            req = self.read_json()
+            uid = str(req.get("uid") or "").strip()
+            ref_order = str(req.get("pedido") or "").strip()
+            ref_sku = str(req.get("sku") or "").strip()
+            if not uid:
+                raise ValueError("Identificação da linha não informada.")
+
+            def load_raw(key: str) -> tuple[list[dict[str, Any]], int]:
+                raw_row = DB.execute("SELECT value,version FROM storage WHERE key=?", (key,)).fetchone()
+                raw = str(raw_row["value"] or "[]") if raw_row else "[]"
+                version = int(raw_row["version"] or 0) if raw_row else 0
+                try:
+                    rows = json.loads(raw)
+                except Exception as exc:
+                    raise ValueError(f"Os dados de {key} estão inválidos.") from exc
+                if not isinstance(rows, list):
+                    rows = []
+                return [dict(x) for x in rows if isinstance(x, dict)], version
+
+            with DB_LOCK:
+                DB.execute("BEGIN IMMEDIATE")
+                try:
+                    timestamp = now_iso()
+                    actor = str(ctx.get("username") or "usuario")
+                    removed_rows: list[tuple[str, int, dict[str, Any], str]] = []
+
+                    for key in ("conf_pedidos", "conf_pedidos_rascunhos"):
+                        rows, version = load_raw(key)
+                        kept: list[dict[str, Any]] = []
+                        changed = False
+                        for idx, row in enumerate(rows):
+                            row_uid = str(row.get("__uidLinha") or row.get("__uidPedido") or "").strip()
+                            match = bool(row_uid and row_uid == uid)
+                            if not match and not row_uid and ref_order and ref_sku:
+                                match = (
+                                    normalize(order_number(row)) == normalize(ref_order)
+                                    and normalize(str(row.get("SKU") or "")) == normalize(ref_sku)
+                                )
+                            if match:
+                                entity_id = _admin_override_entity_id(key, row, idx)
+                                removed_rows.append((key, idx, row, entity_id))
+                                changed = True
+                                continue
+                            kept.append(row)
+                        if changed:
+                            DB.execute(
+                                """INSERT INTO storage(key,value,version,updated_at) VALUES(?,?,?,?)
+                                   ON CONFLICT(key) DO UPDATE SET value=excluded.value,version=excluded.version,updated_at=excluded.updated_at""",
+                                (key, json_dumps(kept), version + 1, timestamp),
+                            )
+
+                    if not removed_rows:
+                        DB.rollback()
+                        self.send_json({"ok": True, "already_deleted": True, "uid": uid})
+                        return
+
+                    # Tombstone genérico: protege a exclusão contra qualquer merge legado.
+                    for key, _idx, row, entity_id in removed_rows:
+                        _admin_override_upsert(key, entity_id, "__ENTITY__", None, deleted=True, actor=actor)
+
+                    # Tombstone específico Shopee: protege contra novo pull da API Shopee,
+                    # independente do valor histórico de OrigemCadastro.
+                    shopee_rows = [
+                        row for _key, _idx, row, _eid in removed_rows
+                        if normalize(str(row.get("Marketplace") or "")) == "SHOPEE"
+                        or normalize(str(row.get("OrigemCadastro") or "")).find("SHOPEE") >= 0
+                        or bool(str(row.get("SkuReferenciaShopee") or "").strip())
+                    ]
+                    if shopee_rows:
+                        ex_raw_row = DB.execute("SELECT value,version FROM storage WHERE key=?", ("conf_shopee_exclusoes_v1",)).fetchone()
+                        ex_raw = str(ex_raw_row["value"] or "[]") if ex_raw_row else "[]"
+                        ex_ver = int(ex_raw_row["version"] or 0) if ex_raw_row else 0
+                        try:
+                            exclusions = json.loads(ex_raw)
+                        except Exception:
+                            exclusions = []
+                        if not isinstance(exclusions, list):
+                            exclusions = []
+                        seen = {
+                            (
+                                normalize(x.get("Pedido")),
+                                normalize(x.get("SkuOrigem") or x.get("SKU")),
+                                str(x.get("UidLinha") or "").strip(),
+                            )
+                            for x in exclusions if isinstance(x, dict)
+                        }
+                        for row in shopee_rows:
+                            pedido = str(order_number(row) or row.get("Pedido") or "").strip()
+                            sku_origem = str(row.get("SkuOrigemImportacao") or row.get("SkuReferenciaShopee") or row.get("SKU") or "").strip()
+                            row_uid = str(row.get("__uidLinha") or row.get("__uidPedido") or uid).strip()
+                            sig = (normalize(pedido), normalize(sku_origem), row_uid)
+                            if sig in seen:
+                                continue
+                            exclusions.append({
+                                "Pedido": pedido,
+                                "SkuOrigem": sku_origem,
+                                "SKU": str(row.get("SKU") or ""),
+                                "UidLinha": row_uid,
+                                "ExcluidoEm": timestamp,
+                                "Origem": "MANUAL_ADMIN",
+                                "ExcluidoPor": actor,
+                            })
+                            seen.add(sig)
+                        DB.execute(
+                            """INSERT INTO storage(key,value,version,updated_at) VALUES(?,?,?,?)
+                               ON CONFLICT(key) DO UPDATE SET value=excluded.value,version=excluded.version,updated_at=excluded.updated_at""",
+                            ("conf_shopee_exclusoes_v1", json_dumps(exclusions), ex_ver + 1, timestamp),
+                        )
+
+                    DB.commit()
+                    audit(actor, "order.line.delete", f"{uid}|{ref_order}|{ref_sku}")
+                    self.send_json({
+                        "ok": True,
+                        "uid": uid,
+                        "removed": len(removed_rows),
+                        "shopee_tombstone": bool(shopee_rows),
+                    })
+                except Exception:
+                    DB.rollback()
+                    raise
         except (ValueError, json.JSONDecodeError) as exc:
             self.send_json({"ok": False, "error": str(exc)}, 400)
         except Exception as exc:

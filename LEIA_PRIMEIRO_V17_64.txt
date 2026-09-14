@@ -1,0 +1,10 @@
+NOROMAK V17.64 — EXCLUSÃO DE COMPONENTES DE KIT
+
+Correção:
+- A lixeira de componentes de KIT agora usa exclusão canônica no servidor.
+- Remove por UID diretamente de conf_pedidos e conf_pedidos_rascunhos.
+- Cria tombstone persistente para impedir que merge, F5 ou polling restaurem a linha.
+- Para Shopee, grava também em conf_shopee_exclusoes_v1, mesmo se OrigemCadastro antigo
+  não estiver exatamente como API_SHOPEE.
+- Funciona para componente individual de KIT e para itens normais.
+- Preserva agrupamento visual, SKU/EAN, etiquetas e todas as correções da V17.63.
