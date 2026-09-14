@@ -277,6 +277,18 @@
 
 
 
+    upsertPedidosAdmin(linhas, source = "PAINEL_ADMIN") {
+      const chave = "conf_pedidos";
+      const anterior = cache.has(chave) ? cache.get(chave) : this.getItem(chave);
+      const resposta = xhrJson("POST", BASE + "/api/admin-order-upsert", { rows: Array.isArray(linhas) ? linhas : [], source: String(source || "PAINEL_ADMIN") });
+      const novo = resposta.value === null || resposta.value === undefined ? (anterior || "[]") : String(resposta.value);
+      cache.set(chave, novo);
+      versoes.set(chave, Number(resposta.version || 0));
+      try { window.sessionStorage.setItem("rede_cache_" + chave, novo); } catch (_) {}
+      if (anterior !== novo) dispararStorage(chave, anterior, novo);
+      return novo;
+    },
+
     atualizarSkuPedido(referencia) {
       const resposta = xhrJson("POST", BASE + "/api/order-sku", referencia || {});
       for (const chave of resposta.updated_keys || ["conf_pedidos", "conf_pedidos_rascunhos"]) {

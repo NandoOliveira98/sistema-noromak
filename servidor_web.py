@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.52-MAGALU-PEDIDO-ADMIN-VAULT"
+APP_VERSION = "17.53-MAGALU-ADMIN-UPSERT-CANONICO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -10868,6 +10868,11 @@ class AppHandler(BaseHTTPRequestHandler):
             if ctx is not None:
                 self.handle_storage_post(ctx)
             return
+        if path == "/api/admin-order-upsert":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                self.handle_admin_order_upsert(ctx)
+            return
         if path == "/api/order-sku":
             ctx = self.auth(admin_only=True)
             if ctx is not None:
@@ -11387,6 +11392,85 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_json({"error": str(exc)}, 400)
         except Exception as exc:
             self.send_json({"error": str(exc)}, 409)
+
+    def handle_admin_order_upsert(self, ctx: dict[str, Any]) -> None:
+        """V17.53: inclusão/edição canônica de pedidos feita explicitamente pelo ADMIN.
+
+        Recebe somente as linhas que o administrador confirmou e faz merge aditivo no
+        servidor. O pipeline ``save_storage`` registra o cofre manual, reabre pedidos
+        concluídos quando necessário e reaplica os overrides antes de responder.
+        """
+        try:
+            req = self.read_json()
+            rows = req.get("rows")
+            if not isinstance(rows, list) or not rows:
+                raise ValueError("Nenhuma linha de pedido foi informada.")
+            if len(rows) > 500:
+                raise ValueError("Muitas linhas em uma única inclusão manual.")
+            source = str(req.get("source") or "PAINEL_ADMIN").strip()[:120]
+            now = now_iso()
+            incoming: list[dict[str, Any]] = []
+            for idx, raw in enumerate(rows):
+                if not isinstance(raw, dict):
+                    continue
+                row = dict(raw)
+                order_id = str(order_number(row) or "").strip()
+                sku = str(row.get("SKU") or row.get("Sku") or "").strip()
+                ean = str(row.get("Código de Barras") or row.get("EAN") or "").strip()
+                if not order_id:
+                    raise ValueError(f"Linha {idx+1}: pedido não informado.")
+                if not (sku or ean):
+                    raise ValueError(f"Linha {idx+1}: SKU/EAN não informado.")
+                row["Pedido"] = order_id
+                row["__uidLinha"] = str(row.get("__uidLinha") or row.get("__uidPedido") or ("PED-" + secrets.token_urlsafe(12)))
+                row["OrigemCadastro"] = str(row.get("OrigemCadastro") or source or "MANUAL_ADMIN")
+                row["ManualAdminProtegido"] = "SIM"
+                row["ManualAdminOrigem"] = str(row.get("ManualAdminOrigem") or source or "PAINEL_ADMIN")
+                row["ManualAdminCriadoEm"] = str(row.get("ManualAdminCriadoEm") or now)
+                row["ManualAdminAtualizadoEm"] = now
+                row["__manualAdminVault"] = True
+                incoming.append(row)
+            if not incoming:
+                raise ValueError("Nenhuma linha válida foi recebida.")
+
+            current_raw, _, _ = get_storage("conf_pedidos")
+            current = _rows_from_storage_value(current_raw)
+            merged = [dict(r) if isinstance(r, dict) else r for r in current]
+            positions = {
+                _pending_identity_v1714(r, i): i
+                for i, r in enumerate(merged) if isinstance(r, dict)
+            }
+            for row in incoming:
+                eid = _pending_identity_v1714(row, len(merged))
+                if eid in positions:
+                    old = merged[positions[eid]] if isinstance(merged[positions[eid]], dict) else {}
+                    combined = dict(old)
+                    combined.update(row)
+                    merged[positions[eid]] = combined
+                else:
+                    positions[eid] = len(merged)
+                    merged.append(row)
+
+            # old_value é o snapshot canônico imediatamente anterior. Como o ADMIN
+            # acabou de adicionar as linhas a ``merged``, save_storage reconhece uma
+            # reimportação explícita até mesmo se o mesmo pedido já foi concluído.
+            saved, version, updated = save_storage(
+                "conf_pedidos", current_raw, json_dumps(merged), False,
+                actor=str(ctx.get("username") or "admin"), actor_role="admin",
+                source_screen="Admin / Extensão Marketplace",
+                change_method=f"Upsert manual protegido: {source}",
+                client_ip=client_computer(self),
+                allow_completed_reimport=True,
+                allow_pending_deletes=False,
+            )
+            order_keys = sorted({normalize(order_number(r)) for r in incoming if order_number(r)})
+            audit(str(ctx.get("username") or "admin"), "order.admin_upsert", f"{source}|linhas={len(incoming)}|pedidos={len(order_keys)}")
+            self.send_json({"ok": True, "value": saved, "version": version, "updated_at": updated,
+                            "inserted_rows": len(incoming), "orders": order_keys})
+        except (ValueError, json.JSONDecodeError) as exc:
+            self.send_json({"ok": False, "error": str(exc)}, 400)
+        except Exception as exc:
+            self.send_json({"ok": False, "error": str(exc)}, 409)
 
     def handle_order_sku(self, ctx: dict[str, Any]) -> None:
         """V17.50 — salva SKU manual de forma transacional e canônica.

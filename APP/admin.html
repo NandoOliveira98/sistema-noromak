@@ -6150,8 +6150,18 @@ function salvarPedidoImportadoPorPrint(lerOutro=false){
 
     const avisos=[];
     const consolidadas=consolidarLinhasImportadas(linhas,avisos);
-    const resultado=mesclarPedidosImportados(consolidadas,avisos);
-    salvarPedidosAdmin(false);renderizarPedidosAdmin();atualizarKpisAdmin();
+    let resultado={inseridas:0,atualizadas:0};
+    if(origemExtensaoAdmin && typeof appStorage?.upsertPedidosAdmin==="function"){
+      // V17.53: extensão -> servidor canônico direto. Não depende do snapshot inteiro
+      // do navegador, evitando que polling/merge concorrente faça o pedido Magalu sumir.
+      appStorage.upsertPedidosAdmin(consolidadas,`EXTENSAO_CHROME_${origemExtensaoAdmin.toUpperCase()}`);
+      carregarBancoInternoAdmin();
+      resultado.inseridas=consolidadas.length;
+    }else{
+      resultado=mesclarPedidosImportados(consolidadas,avisos);
+      salvarPedidosAdmin(false);
+    }
+    renderizarPedidosAdmin();atualizarKpisAdmin();
     const pedidoExibido=pedidoParaExibicao(pedido,marketplace);
     const resumo=ehKit?`🎁 Kit <b>${htmlSeguroBanco(nomeKit)}</b> salvo no pedido <b>${htmlSeguroBanco(pedidoExibido)}</b>, com ${linhas.length} componente(s) e ${quantidadeVenda} kit(s).`:`📷 Pedido <b>${htmlSeguroBanco(pedidoExibido)}</b> importado pelo print (${resultado.inseridas?"nova linha":"linha atualizada"}).`;
     mostrarStatusImportacaoPedidos("sucesso",`${resumo}${avisos.length?"<br>⚠ "+avisos.map(htmlSeguroBanco).join("<br>⚠ "):""}`);

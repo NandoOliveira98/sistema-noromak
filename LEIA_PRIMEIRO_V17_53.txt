@@ -1,0 +1,12 @@
+V17.53 - MAGALU ADMIN UPSERT CANÔNICO
+
+Correção focada no pedido Magalu que aparecia e sumia logo após salvar.
+
+- Novo endpoint /api/admin-order-upsert exclusivo para ADMIN.
+- Inclusão da extensão não depende mais de salvar/reconciliar o snapshot inteiro do navegador.
+- Cada linha confirmada é gravada imediatamente no cofre manual e em conf_pedidos.
+- Pedido previamente concluído é explicitamente reaberto quando o ADMIN o inclui novamente.
+- Jobs, polling e snapshots externos não podem removê-lo por ausência.
+- O frontend recarrega o valor canônico devolvido pelo servidor após o upsert.
+
+Base: V17.52.
