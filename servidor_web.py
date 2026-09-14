@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.45-ML-SKU-REAL-EDICAO-MANUAL"
+APP_VERSION = "17.46-ML-SKU-REAL-EDICAO-PERSISTENTE-FIX"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2339,6 +2339,11 @@ def _pending_identity_v1714(row: dict[str, Any], index: int = 0) -> str:
             v=row.get(k)
             if v is not None and str(v).strip(): return str(v).strip()
         return ""
+    # V17.46: a identidade persistente da linha é o UID quando disponível.
+    # O SKU é editável e NÃO pode fazer a mesma linha parecer um pedido novo,
+    # senão preserve_pending_records reaplica a cópia antiga e desfaz a edição.
+    uid=pick("__uidLinha","__uidPedido")
+    if uid: return f"UID|{uid}".upper()
     market=pick("Marketplace","marketplace","Origem","origem","Canal","canal").upper()
     order=pick("OrderID","order_id","Pedido","Nº Pedido","NumeroPedido","Venda","VendaID")
     pack=pick("PackID","pack_id","Pacote","PacoteID")
@@ -5766,16 +5771,14 @@ def _expand_ml_order_item(item_data: dict[str, Any], kit_catalog: dict[str, dict
         sold_qty = 1
     title = str(item.get("title") or "").strip()
 
-    kit = None
-    for candidate in _ml_sku_lookup_candidates(sku):
-        kit = _kit_catalog_lookup(kit_catalog, candidate)
-        if kit:
-            break
+    # V17.46: identificação de KIT usa SOMENTE o SKU real recebido do ML.
+    # Nunca removemos prefixos numéricos (ex.: 150922-0893764272) para procurar
+    # cadastro de kit, pois isso transformava anúncios normais em kits incorretos.
+    # _kit_catalog_lookup continua aceitando apenas aliases próprios de KIT
+    # (KIT2-, KIT3- etc.), sem tratar prefixos numéricos como descartáveis.
+    kit = _kit_catalog_lookup(kit_catalog, sku)
     if not kit:
-        for candidate in _ml_sku_lookup_candidates(sku):
-            kit = _infer_quantity_kit_from_sku(candidate)
-            if kit:
-                break
+        kit = _infer_quantity_kit_from_sku(sku)
     if not kit or not kit.get("ativo", True):
         return [{
             "sku": sku,

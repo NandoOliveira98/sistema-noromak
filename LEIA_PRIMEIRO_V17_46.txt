@@ -1,0 +1,9 @@
+V17.46 - SKU REAL ML + EDICAO MANUAL PERSISTENTE
+
+Correcoes localizadas:
+- SKU de pedido Mercado Livre passa a ser preservado exatamente como recebido.
+- Prefixos numericos separados por hifen (ex.: 150922-0893764272) NAO sao removidos para detectar kit.
+- A deteccao de KIT usa somente o SKU real / prefixos KIT explicitos.
+- Edicao manual do SKU no Admin passa a persistir pela identidade __uidLinha, evitando que o merge cumulativo recoloque a versao antiga da mesma linha.
+- SKU manual continua protegido contra sincronizacoes futuras e pode ser restaurado para o SKU original da integracao.
+- Mantidas as correcoes das V17.42, V17.43, V17.44 e V17.45.

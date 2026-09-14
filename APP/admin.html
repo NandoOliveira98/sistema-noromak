@@ -4071,7 +4071,11 @@ function atualizarCampoPedidoAdmin(el,semRender=false){
     }
   }
   if(!semRender)renderizarPedidosAdmin();
-  agendarSalvarPedidosAdmin();
+  // V17.46: SKU manual é crítico e deve ser persistido imediatamente.
+  // Evita janela de concorrência em que uma sincronização/storage event poderia
+  // restaurar o valor antigo antes do debounce normal do Admin.
+  if(campo==="SKU") salvarPedidosAdmin(false);
+  else agendarSalvarPedidosAdmin();
 }
 function restaurarSkuIntegracaoAdmin(uid){
   const item=pedidosEditorAdmin.find(x=>x.__uidLinha===uid);if(!item)return;
