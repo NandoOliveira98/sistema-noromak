@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.59-PAGINACAO-PEDIDOS-FLUXO-FIX"
+APP_VERSION = "17.60-MLB-SKU-PLANILHA-14-09-VINCULOS"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -1502,14 +1502,39 @@ def migrate_legacy_if_empty() -> None:
 
 ML_SKU_MLB_LINKS_STORAGE_KEY = "ml_sku_mlb_links_v1"
 ML_SKU_MLB_SEED_PATH = ROOT_DIR / "DADOS" / "ml_sku_mlb_links_seed.json"
+# V17.60: revisão da planilha Código do anúncio ↔ Código OEM/SKU enviada em 14/09/2026.
+# O marcador faz a migração rodar UMA vez por revisão. Assim, se o ADMIN remover
+# um vínculo depois da importação, um simples restart não recria o vínculo apagado.
+ML_SKU_MLB_SEED_REVISION = "2026-09-14-oem-v1"
+ML_SKU_MLB_SEED_REVISION_KEY = "ml_sku_mlb_seed_revision_v1"
+
+
+def _ml_seed_row_is_previous_import(row: Any) -> bool:
+    if not isinstance(row, dict):
+        return False
+    source = str(row.get("source") or "").strip().lower()
+    return source.startswith("planilha_") or source in {"planilha_importada", "seed_importado"}
 
 
 def seed_ml_sku_mlb_links_from_file() -> dict[str, int]:
-    """Mescla a relação SKU↔MLB empacotada na V16.67 ao banco persistente.
+    """Aplica uma revisão idempotente da relação SKU↔MLB empacotada.
 
-    Preserva vínculos existentes/manuais e adiciona somente MLBs ausentes.
+    V17.60:
+    - a planilha de 14/09/2026 é a referência atual dos vínculos importados;
+    - preserva vínculos manuais/automáticos que não vieram de seed antigo;
+    - quando um MLB mudou de SKU entre planilhas, remove SOMENTE o vínculo
+      antigo cuja origem também era uma planilha/seed;
+    - grava um marcador de revisão para não ressuscitar vínculo removido pelo
+      ADMIN em reinicializações futuras.
     """
-    result = {"seed_skus": 0, "seed_links": 0, "added_links": 0}
+    result = {
+        "seed_skus": 0,
+        "seed_links": 0,
+        "added_links": 0,
+        "removed_stale_links": 0,
+        "updated_seed_links": 0,
+        "already_applied": 0,
+    }
     if not ML_SKU_MLB_SEED_PATH.exists():
         return result
 
@@ -1520,10 +1545,38 @@ def seed_ml_sku_mlb_links_from_file() -> dict[str, int]:
     if not isinstance(seed, dict):
         return result
 
-    result["seed_skus"] = len(seed)
-    result["seed_links"] = sum(len(v) for v in seed.values() if isinstance(v, list))
+    normalized_seed: dict[str, list[dict[str, Any]]] = {}
+    authoritative_mlb_skus: dict[str, set[str]] = {}
+    for raw_sku, seed_rows in seed.items():
+        sku = str(raw_sku or "").strip().upper()
+        if not sku or not isinstance(seed_rows, list):
+            continue
+        target = normalized_seed.setdefault(sku, [])
+        seen: set[str] = set()
+        for row in seed_rows:
+            obj = dict(row) if isinstance(row, dict) else {"mlb": row}
+            digits = re.sub(r"\D+", "", str(obj.get("mlb") or ""))
+            if not digits:
+                continue
+            mlb = "MLB" + digits
+            if mlb in seen:
+                continue
+            seen.add(mlb)
+            obj["mlb"] = mlb
+            obj.setdefault("source", "planilha_codigos_anuncio_oem_2026-09-14")
+            obj.setdefault("importedAt", "2026-09-14")
+            target.append(obj)
+            authoritative_mlb_skus.setdefault(mlb, set()).add(sku)
+
+    result["seed_skus"] = len(normalized_seed)
+    result["seed_links"] = sum(len(v) for v in normalized_seed.values())
 
     with DB_LOCK:
+        marker_raw, _, _ = get_storage(ML_SKU_MLB_SEED_REVISION_KEY)
+        if str(marker_raw or "").strip() == ML_SKU_MLB_SEED_REVISION:
+            result["already_applied"] = 1
+            return result
+
         current_raw, version, _ = get_storage(ML_SKU_MLB_LINKS_STORAGE_KEY)
         try:
             current = json.loads(current_raw or "{}")
@@ -1532,50 +1585,71 @@ def seed_ml_sku_mlb_links_from_file() -> dict[str, int]:
         if not isinstance(current, dict):
             current = {}
 
+        # Consolida chaves de SKU sem perder metadados atuais.
+        cleaned: dict[str, list[dict[str, Any]]] = {}
+        by_sku_mlb: dict[str, dict[str, dict[str, Any]]] = {}
         changed = False
-        for raw_sku, seed_rows in seed.items():
+
+        for raw_sku, existing_rows in current.items():
             sku = str(raw_sku or "").strip().upper()
-            if not sku or not isinstance(seed_rows, list):
+            if not sku or not isinstance(existing_rows, list):
                 continue
+            dest = cleaned.setdefault(sku, [])
+            index = by_sku_mlb.setdefault(sku, {})
 
-            existing_rows = current.get(sku)
-            if not isinstance(existing_rows, list):
-                existing_rows = []
-
-            normalized_existing: list[dict[str, Any]] = []
-            by_mlb: dict[str, dict[str, Any]] = {}
             for row in existing_rows:
                 obj = dict(row) if isinstance(row, dict) else {"mlb": row}
                 digits = re.sub(r"\D+", "", str(obj.get("mlb") or ""))
                 if not digits:
                     continue
-                obj["mlb"] = "MLB" + digits
-                if obj["mlb"] not in by_mlb:
-                    by_mlb[obj["mlb"]] = obj
-                    normalized_existing.append(obj)
-
-            for row in seed_rows:
-                obj = dict(row) if isinstance(row, dict) else {"mlb": row}
-                digits = re.sub(r"\D+", "", str(obj.get("mlb") or ""))
-                if not digits:
-                    continue
                 mlb = "MLB" + digits
-                if mlb in by_mlb:
-                    continue
                 obj["mlb"] = mlb
-                obj.setdefault("source", "planilha_importada")
-                obj.setdefault("importedAt", now_iso())
-                normalized_existing.append(obj)
-                by_mlb[mlb] = obj
-                result["added_links"] += 1
-                changed = True
 
-            if current.get(sku) != normalized_existing:
-                current[sku] = normalized_existing
-                changed = True
+                # Se a planilha atual aponta este MLB para outro SKU, limpamos
+                # apenas associações originadas de planilhas antigas. Manual/API
+                # permanece intacto, seguindo a regra ADMIN > integrações.
+                wanted_skus = authoritative_mlb_skus.get(mlb)
+                if wanted_skus and sku not in wanted_skus and _ml_seed_row_is_previous_import(obj):
+                    result["removed_stale_links"] += 1
+                    changed = True
+                    continue
 
-        if changed:
-            new_value = json_dumps(current)
+                if mlb in index:
+                    # Duplicata dentro do mesmo SKU: mantém a primeira versão.
+                    changed = True
+                    continue
+                index[mlb] = obj
+                dest.append(obj)
+
+        # Aplica/atualiza a revisão da planilha atual.
+        for sku, seed_rows in normalized_seed.items():
+            dest = cleaned.setdefault(sku, [])
+            index = by_sku_mlb.setdefault(sku, {})
+            for seed_obj in seed_rows:
+                mlb = seed_obj["mlb"]
+                existing = index.get(mlb)
+                if existing is None:
+                    obj = dict(seed_obj)
+                    dest.append(obj)
+                    index[mlb] = obj
+                    result["added_links"] += 1
+                    changed = True
+                    continue
+
+                # Se já existia por uma planilha antiga, atualiza somente a
+                # identificação da fonte/revisão. Metadados manuais são mantidos.
+                if _ml_seed_row_is_previous_import(existing):
+                    new_source = str(seed_obj.get("source") or "planilha_codigos_anuncio_oem_2026-09-14")
+                    new_date = str(seed_obj.get("importedAt") or "2026-09-14")
+                    if existing.get("source") != new_source or existing.get("importedAt") != new_date:
+                        existing["source"] = new_source
+                        existing["importedAt"] = new_date
+                        result["updated_seed_links"] += 1
+                        changed = True
+
+        # Mesmo quando não há mudança de conteúdo, grava a revisão aplicada.
+        if changed or current != cleaned:
+            new_value = json_dumps(cleaned)
             DB.execute(
                 """INSERT INTO storage(key,value,version,updated_at) VALUES(?,?,?,?)
                    ON CONFLICT(key) DO UPDATE SET
@@ -1584,10 +1658,22 @@ def seed_ml_sku_mlb_links_from_file() -> dict[str, int]:
                      updated_at=excluded.updated_at""",
                 (ML_SKU_MLB_LINKS_STORAGE_KEY, new_value, int(version or 0) + 1, now_iso()),
             )
-            DB.commit()
+
+        marker_row = DB.execute(
+            "SELECT version FROM storage WHERE key=?", (ML_SKU_MLB_SEED_REVISION_KEY,)
+        ).fetchone()
+        marker_version = int(marker_row[0] or 0) + 1 if marker_row else 1
+        DB.execute(
+            """INSERT INTO storage(key,value,version,updated_at) VALUES(?,?,?,?)
+               ON CONFLICT(key) DO UPDATE SET
+                 value=excluded.value,
+                 version=excluded.version,
+                 updated_at=excluded.updated_at""",
+            (ML_SKU_MLB_SEED_REVISION_KEY, ML_SKU_MLB_SEED_REVISION, marker_version, now_iso()),
+        )
+        DB.commit()
 
     return result
-
 
 def ensure_storage_defaults() -> None:
     defaults = {
@@ -1609,7 +1695,7 @@ def ensure_storage_defaults() -> None:
                 (key, value, ts),
             )
         DB.commit()
-    # V16.67: sobe/mescla automaticamente a planilha SKU↔MLB no banco.
+    # V17.60: aplica uma vez a revisão atual da planilha SKU↔MLB.
     seed_ml_sku_mlb_links_from_file()
 
 
