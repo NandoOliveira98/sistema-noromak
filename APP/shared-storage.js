@@ -25,7 +25,8 @@
     "conf_produtos",
     "conf_kits",
     "precificador_online_v1",
-    "ml_promocoes_datas_v1"
+    "ml_promocoes_datas_v1",
+    "ml_sku_mlb_links_v1"
   ]);
   const CHAVES_MONITORADAS = [
     "conf_pedidos",
@@ -40,7 +41,8 @@
     "conf_logs",
     "conf_banco_atualizado_em",
     "precificador_online_v1",
-    "ml_promocoes_datas_v1"
+    "ml_promocoes_datas_v1",
+    "ml_sku_mlb_links_v1"
   ];
 
   const cache = new Map();

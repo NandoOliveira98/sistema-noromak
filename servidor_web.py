@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.60-MLB-SKU-PLANILHA-14-09-VINCULOS"
+APP_VERSION = "17.61-MLB-SKU-CANONICO-ETIQUETAS-SEM-REAUTH"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -665,57 +665,117 @@ def crm_cost_lookup(codigo: str, operador: str = "") -> dict[str, Any]:
 
 
 
-def ml_precificador_links_payload(max_items: int = 5000) -> dict[str, Any]:
-    """Lista anúncios do vendedor e monta automaticamente SKU -> MLB.
+def _ml_precificador_persisted_links() -> dict[str, list[dict[str, Any]]]:
+    """Retorna vínculos MLB↔SKU do storage canônico já com overrides do ADMIN.
 
-    Um SKU pode possuir vários MLBs. O retorno contém também anúncios sem SKU
-    para que somente esses casos precisem de vínculo manual.
+    A seed é aplicada pela migração V17.61. O endpoint não injeta a planilha novamente por
+    fora do storage, porque isso poderia ressuscitar um vínculo que o ADMIN removeu depois.
     """
-    _, seller_id = ml_access_token()
+    # Se o servidor foi atualizado mas o processo ainda não aplicou a revisão por algum motivo,
+    # tenta a migração idempotente antes de responder ao Precificador.
+    try:
+        with DB_LOCK:
+            marker = DB.execute(
+                "SELECT value FROM storage WHERE key=?", (ML_SKU_MLB_SEED_REVISION_KEY,)
+            ).fetchone()
+        marker_value = str(marker["value"] or "") if marker else ""
+        if marker_value.strip() != ML_SKU_MLB_SEED_REVISION:
+            seed_ml_sku_mlb_links_from_file()
+    except Exception as exc:
+        print(f"Aviso: revisão MLB/SKU não pôde ser verificada: {exc}", file=sys.stderr)
+
+    try:
+        with DB_LOCK:
+            raw_value, _, _ = get_storage(ML_SKU_MLB_LINKS_STORAGE_KEY)
+        payload = json.loads(raw_value or "{}")
+    except Exception as exc:
+        print(f"Aviso: vínculos MLB/SKU persistidos não puderam ser lidos: {exc}", file=sys.stderr)
+        payload = {}
+
+    merged: dict[str, list[dict[str, Any]]] = {}
+    if not isinstance(payload, dict):
+        return merged
+    for raw_sku, raw_rows in payload.items():
+        sku = str(raw_sku or "").strip().upper()
+        if not sku or not isinstance(raw_rows, list):
+            continue
+        rows: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for raw in raw_rows:
+            obj = dict(raw) if isinstance(raw, dict) else {"mlb": raw}
+            digits = re.sub(r"\D+", "", str(obj.get("mlb") or ""))
+            if not digits:
+                continue
+            mlb = "MLB" + digits
+            if mlb in seen:
+                continue
+            seen.add(mlb)
+            obj["mlb"] = mlb
+            obj.setdefault("sku", sku)
+            rows.append(obj)
+        if rows:
+            merged[sku] = rows
+    return merged
+
+def ml_precificador_links_payload(max_items: int = 5000) -> dict[str, Any]:
+    """Monta SKU -> MLB pela base canônica e enriquece com a API do ML."""
     max_items = max(1, min(10000, int(max_items or 5000)))
+    links = _ml_precificador_persisted_links()
     item_ids: list[str] = []
     seen_ids: set[str] = set()
     errors: list[str] = []
+    seller_id = ""
+    live_available = True
 
-    # Busca anúncios ativos e pausados. Se a API aceitar "closed", também coleta
-    # para preservar histórico de vínculos, sem bloquear a operação se falhar.
-    for status in ("active", "paused", "closed"):
-        offset = 0
-        while len(item_ids) < max_items:
-            limit = min(100, max_items - len(item_ids))
-            path = (
-                f"/users/{quote(str(seller_id))}/items/search"
-                f"?status={quote(status)}&offset={offset}&limit={limit}"
-            )
-            try:
-                payload = ml_api_get(path)
-            except Exception as exc:
-                errors.append(f"{status}: {str(exc)[:240]}")
-                break
+    persisted_by_mlb: dict[str, list[dict[str, Any]]] = {}
+    for sku, rows in links.items():
+        for obj in rows:
+            if not isinstance(obj, dict):
+                continue
+            mlb = str(obj.get("mlb") or "").strip().upper()
+            if mlb:
+                persisted_by_mlb.setdefault(mlb, []).append(obj)
 
-            results = payload.get("results") if isinstance(payload, dict) else []
-            if not isinstance(results, list) or not results:
-                break
+    try:
+        _, seller_id = ml_access_token()
+    except Exception as exc:
+        live_available = False
+        errors.append("Mercado Livre indisponível para enriquecimento: " + str(exc)[:240])
 
-            for raw_id in results:
-                item_id = str(raw_id or "").strip().upper()
-                if not item_id:
-                    continue
-                if not item_id.startswith("MLB"):
-                    item_id = "MLB" + re.sub(r"\D+", "", item_id)
-                if item_id and item_id not in seen_ids:
-                    seen_ids.add(item_id)
-                    item_ids.append(item_id)
-                    if len(item_ids) >= max_items:
-                        break
+    if live_available:
+        for status in ("active", "paused", "closed"):
+            offset = 0
+            while len(item_ids) < max_items:
+                limit = min(100, max_items - len(item_ids))
+                path = (
+                    f"/users/{quote(str(seller_id))}/items/search"
+                    f"?status={quote(status)}&offset={offset}&limit={limit}"
+                )
+                try:
+                    payload = ml_api_get(path)
+                except Exception as exc:
+                    errors.append(f"{status}: {str(exc)[:240]}")
+                    break
+                results = payload.get("results") if isinstance(payload, dict) else []
+                if not isinstance(results, list) or not results:
+                    break
+                for raw_id in results:
+                    item_id = str(raw_id or "").strip().upper()
+                    if not item_id:
+                        continue
+                    if not item_id.startswith("MLB"):
+                        item_id = "MLB" + re.sub(r"\D+", "", item_id)
+                    if item_id and item_id not in seen_ids:
+                        seen_ids.add(item_id)
+                        item_ids.append(item_id)
+                        if len(item_ids) >= max_items:
+                            break
+                paging = payload.get("paging") if isinstance(payload, dict) else {}
+                total = int((paging or {}).get("total") or 0)
+                offset += len(results)
+                if not results or (total and offset >= total):
+                    break
 
-            paging = payload.get("paging") if isinstance(payload, dict) else {}
-            total = int((paging or {}).get("total") or 0)
-            offset += len(results)
-            if not results or (total and offset >= total):
-                break
-
-    # Metadados em lotes. ml_items_meta já extrai seller_custom_field / SELLER_SKU.
     digit_ids = [re.sub(r"\D+", "", item_id) for item_id in item_ids]
     meta_map: dict[str, dict[str, Any]] = {}
     for start in range(0, len(digit_ids), 100):
@@ -725,7 +785,6 @@ def ml_precificador_links_payload(max_items: int = 5000) -> dict[str, Any]:
         except Exception as exc:
             errors.append(f"meta {start}: {str(exc)[:240]}")
 
-    # Índice dos SKUs existentes no Precificador para preferir a grafia cadastrada.
     precifier = _promo_precifier_index()
     precifier_by_compact: dict[str, str] = {}
     for sku in precifier.keys():
@@ -733,24 +792,20 @@ def ml_precificador_links_payload(max_items: int = 5000) -> dict[str, Any]:
         if compact and compact not in precifier_by_compact:
             precifier_by_compact[compact] = sku
 
-    links: dict[str, list[dict[str, Any]]] = {}
     unidentified: list[dict[str, Any]] = []
-
+    live_linked = 0
     for item_id in item_ids:
         digits = re.sub(r"\D+", "", item_id)
+        mlb = "MLB" + digits
         meta = meta_map.get(digits) or {}
         raw_sku = str(meta.get("sku") or "").strip()
         sku = _ml_normalize_api_sku(raw_sku).strip().upper()
-
-        # Alguns anúncios guardam prefixo numérico antes do SKU. Também tenta
-        # equivalência compacta com os SKUs cadastrados no Precificador.
         if sku and sku not in precifier:
             compact = re.sub(r"[^A-Z0-9]", "", sku)
             if compact in precifier_by_compact:
                 sku = precifier_by_compact[compact]
-
         row = {
-            "mlb": "MLB" + digits,
+            "mlb": mlb,
             "sku": sku,
             "title": str(meta.get("title") or ""),
             "price": float(meta.get("price") or 0),
@@ -758,22 +813,37 @@ def ml_precificador_links_payload(max_items: int = 5000) -> dict[str, Any]:
             "available_quantity": meta.get("available_quantity"),
             "permalink": str(meta.get("permalink") or ""),
             "updatedAt": now_iso(),
+            "sourceLive": "mercado_livre_api",
         }
-
+        existing_rows = persisted_by_mlb.get(mlb) or []
+        if existing_rows:
+            for existing in existing_rows:
+                for field in ("title", "price", "status", "available_quantity", "permalink", "updatedAt"):
+                    value = row.get(field)
+                    if value not in (None, "", 0):
+                        existing[field] = value
+            live_linked += 1
+            continue
         if sku:
-            links.setdefault(sku, []).append(row)
+            rows = links.setdefault(sku, [])
+            rows.append(row)
+            persisted_by_mlb.setdefault(mlb, []).append(row)
+            live_linked += 1
         else:
             unidentified.append(row)
 
     for sku, rows in links.items():
         rows.sort(key=lambda r: (str(r.get("status") or ""), str(r.get("mlb") or "")))
 
+    linked_items = sum(len(v) for v in links.values())
     return {
         "ok": True,
         "seller_id": str(seller_id),
         "total_items": len(item_ids),
-        "linked_items": sum(len(v) for v in links.values()),
+        "linked_items": linked_items,
         "linked_skus": len(links),
+        "live_linked_items": live_linked,
+        "canonical_links": linked_items,
         "unidentified": unidentified,
         "links": links,
         "errors": errors[:20],
@@ -1505,7 +1575,7 @@ ML_SKU_MLB_SEED_PATH = ROOT_DIR / "DADOS" / "ml_sku_mlb_links_seed.json"
 # V17.60: revisão da planilha Código do anúncio ↔ Código OEM/SKU enviada em 14/09/2026.
 # O marcador faz a migração rodar UMA vez por revisão. Assim, se o ADMIN remover
 # um vínculo depois da importação, um simples restart não recria o vínculo apagado.
-ML_SKU_MLB_SEED_REVISION = "2026-09-14-oem-v1"
+ML_SKU_MLB_SEED_REVISION = "2026-09-14-oem-v3-canonical-admin-override"
 ML_SKU_MLB_SEED_REVISION_KEY = "ml_sku_mlb_seed_revision_v1"
 
 
@@ -1517,15 +1587,18 @@ def _ml_seed_row_is_previous_import(row: Any) -> bool:
 
 
 def seed_ml_sku_mlb_links_from_file() -> dict[str, int]:
-    """Aplica uma revisão idempotente da relação SKU↔MLB empacotada.
+    """Aplica a relação SKU↔MLB da planilha diretamente na base canônica.
 
-    V17.60:
-    - a planilha de 14/09/2026 é a referência atual dos vínculos importados;
-    - preserva vínculos manuais/automáticos que não vieram de seed antigo;
-    - quando um MLB mudou de SKU entre planilhas, remove SOMENTE o vínculo
-      antigo cuja origem também era uma planilha/seed;
-    - grava um marcador de revisão para não ressuscitar vínculo removido pelo
-      ADMIN em reinicializações futuras.
+    V17.61:
+    - lê o estado EFETIVO (storage + overrides do ADMIN), para não perder vínculos manuais;
+    - reaplica a planilha de 14/09 em uma revisão nova, mesmo que a V17.60 tenha marcado a
+      migração anterior como concluída;
+    - grava o resultado no storage real e também atualiza o override raiz de cada SKU
+      afetado. Isso elimina tombstones/snapshots antigos que faziam o Precificador receber
+      "0 anúncios" apesar da planilha já ter sido importada;
+    - preserva vínculos manuais/automáticos que não são seed antigo;
+    - quando um MLB mudou de SKU entre planilhas, remove apenas o vínculo originado de
+      seed/planilha anterior no SKU incorreto.
     """
     result = {
         "seed_skus": 0,
@@ -1533,6 +1606,7 @@ def seed_ml_sku_mlb_links_from_file() -> dict[str, int]:
         "added_links": 0,
         "removed_stale_links": 0,
         "updated_seed_links": 0,
+        "override_skus": 0,
         "already_applied": 0,
     }
     if not ML_SKU_MLB_SEED_PATH.exists():
@@ -1572,22 +1646,40 @@ def seed_ml_sku_mlb_links_from_file() -> dict[str, int]:
     result["seed_links"] = sum(len(v) for v in normalized_seed.values())
 
     with DB_LOCK:
-        marker_raw, _, _ = get_storage(ML_SKU_MLB_SEED_REVISION_KEY)
-        if str(marker_raw or "").strip() == ML_SKU_MLB_SEED_REVISION:
+        marker_row = DB.execute(
+            "SELECT value FROM storage WHERE key=?", (ML_SKU_MLB_SEED_REVISION_KEY,)
+        ).fetchone()
+        marker_raw = str(marker_row["value"] or "") if marker_row else ""
+        if marker_raw.strip() == ML_SKU_MLB_SEED_REVISION:
             result["already_applied"] = 1
             return result
 
-        current_raw, version, _ = get_storage(ML_SKU_MLB_LINKS_STORAGE_KEY)
+        current_row = DB.execute(
+            "SELECT value,version FROM storage WHERE key=?", (ML_SKU_MLB_LINKS_STORAGE_KEY,)
+        ).fetchone()
+        current_raw = str(current_row["value"] or "{}") if current_row else "{}"
+        version = int(current_row["version"] or 0) if current_row else 0
+
+        # A causa do V17.60 não aparecer na tela podia ser um override/tombstone antigo
+        # do próprio ml_sku_mlb_links_v1. Para preservar edições manuais e, ao mesmo tempo,
+        # cumprir a importação explícita solicitada pelo ADMIN, partimos do valor EFETIVO.
+        effective_raw = current_raw
         try:
-            current = json.loads(current_raw or "{}")
+            if "_admin_override_apply" in globals():
+                effective_raw = _admin_override_apply(ML_SKU_MLB_LINKS_STORAGE_KEY, current_raw)
+        except Exception as exc:
+            print(f"Aviso: override MLB/SKU não pôde ser lido antes da migração: {exc}", file=sys.stderr)
+
+        try:
+            current = json.loads(effective_raw or "{}")
         except Exception:
             current = {}
         if not isinstance(current, dict):
             current = {}
 
-        # Consolida chaves de SKU sem perder metadados atuais.
         cleaned: dict[str, list[dict[str, Any]]] = {}
         by_sku_mlb: dict[str, dict[str, dict[str, Any]]] = {}
+        affected_skus: set[str] = set(normalized_seed.keys())
         changed = False
 
         for raw_sku, existing_rows in current.items():
@@ -1605,23 +1697,19 @@ def seed_ml_sku_mlb_links_from_file() -> dict[str, int]:
                 mlb = "MLB" + digits
                 obj["mlb"] = mlb
 
-                # Se a planilha atual aponta este MLB para outro SKU, limpamos
-                # apenas associações originadas de planilhas antigas. Manual/API
-                # permanece intacto, seguindo a regra ADMIN > integrações.
                 wanted_skus = authoritative_mlb_skus.get(mlb)
                 if wanted_skus and sku not in wanted_skus and _ml_seed_row_is_previous_import(obj):
                     result["removed_stale_links"] += 1
+                    affected_skus.add(sku)
                     changed = True
                     continue
 
                 if mlb in index:
-                    # Duplicata dentro do mesmo SKU: mantém a primeira versão.
                     changed = True
                     continue
                 index[mlb] = obj
                 dest.append(obj)
 
-        # Aplica/atualiza a revisão da planilha atual.
         for sku, seed_rows in normalized_seed.items():
             dest = cleaned.setdefault(sku, [])
             index = by_sku_mlb.setdefault(sku, {})
@@ -1635,9 +1723,6 @@ def seed_ml_sku_mlb_links_from_file() -> dict[str, int]:
                     result["added_links"] += 1
                     changed = True
                     continue
-
-                # Se já existia por uma planilha antiga, atualiza somente a
-                # identificação da fonte/revisão. Metadados manuais são mantidos.
                 if _ml_seed_row_is_previous_import(existing):
                     new_source = str(seed_obj.get("source") or "planilha_codigos_anuncio_oem_2026-09-14")
                     new_date = str(seed_obj.get("importedAt") or "2026-09-14")
@@ -1647,9 +1732,8 @@ def seed_ml_sku_mlb_links_from_file() -> dict[str, int]:
                         result["updated_seed_links"] += 1
                         changed = True
 
-        # Mesmo quando não há mudança de conteúdo, grava a revisão aplicada.
-        if changed or current != cleaned:
-            new_value = json_dumps(cleaned)
+        new_value = json_dumps(cleaned)
+        if changed or current_raw != new_value:
             DB.execute(
                 """INSERT INTO storage(key,value,version,updated_at) VALUES(?,?,?,?)
                    ON CONFLICT(key) DO UPDATE SET
@@ -1658,6 +1742,35 @@ def seed_ml_sku_mlb_links_from_file() -> dict[str, int]:
                      updated_at=excluded.updated_at""",
                 (ML_SKU_MLB_LINKS_STORAGE_KEY, new_value, int(version or 0) + 1, now_iso()),
             )
+
+        # IMPORTANTe: o sistema global "ADMIN sempre prevalece" reaplica overrides em toda
+        # leitura. Por isso não basta alterar a tabela storage. Esta importação foi solicitada
+        # explicitamente pelo ADMIN, então ela também precisa substituir tombstones/snapshots
+        # antigos SOMENTE nos SKUs afetados, preservando as linhas manuais já mescladas acima.
+        for sku in sorted(affected_skus):
+            DB.execute(
+                "DELETE FROM admin_manual_overrides WHERE storage_key=? AND entity_id='__ROOT__' AND field_name=?",
+                (ML_SKU_MLB_LINKS_STORAGE_KEY, sku),
+            )
+            if sku in cleaned:
+                _admin_override_upsert(
+                    ML_SKU_MLB_LINKS_STORAGE_KEY,
+                    "__ROOT__",
+                    sku,
+                    cleaned[sku],
+                    deleted=False,
+                    actor="MIGRACAO_V17_61_PLANILHA_14_09",
+                )
+            else:
+                _admin_override_upsert(
+                    ML_SKU_MLB_LINKS_STORAGE_KEY,
+                    "__ROOT__",
+                    sku,
+                    None,
+                    deleted=True,
+                    actor="MIGRACAO_V17_61_PLANILHA_14_09",
+                )
+            result["override_skus"] += 1
 
         marker_row = DB.execute(
             "SELECT version FROM storage WHERE key=?", (ML_SKU_MLB_SEED_REVISION_KEY,)
@@ -1673,6 +1786,13 @@ def seed_ml_sku_mlb_links_from_file() -> dict[str, int]:
         )
         DB.commit()
 
+    print(
+        "V17.61 MLB/SKU: "
+        f"{result['seed_links']} vínculos / {result['seed_skus']} SKUs; "
+        f"{result['added_links']} adicionados; {result['removed_stale_links']} antigos removidos; "
+        f"{result['override_skus']} SKUs consolidados no override canônico.",
+        file=sys.stderr,
+    )
     return result
 
 def ensure_storage_defaults() -> None:
