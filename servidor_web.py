@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.47-ML-DEDUP-EDICAO-MANUAL-FIX"
+APP_VERSION = "17.48-ADMIN-SEMPRE-PREVALECE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -1124,6 +1124,17 @@ def init_db() -> None:
                 action TEXT NOT NULL,
                 detail TEXT NOT NULL DEFAULT ''
             );
+            CREATE TABLE IF NOT EXISTS admin_manual_overrides (
+                storage_key TEXT NOT NULL,
+                entity_id TEXT NOT NULL,
+                field_name TEXT NOT NULL,
+                value_json TEXT NOT NULL DEFAULT 'null',
+                is_deleted INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL,
+                updated_by TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY(storage_key,entity_id,field_name)
+            );
+            CREATE INDEX IF NOT EXISTS idx_admin_overrides_key ON admin_manual_overrides(storage_key);
             CREATE TABLE IF NOT EXISTS sku_change_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 changed_at TEXT NOT NULL,
@@ -2711,6 +2722,162 @@ def reactivate_completed_orders_from_delta(old_value: str | None, new_value: str
     return json_dumps(rows), reactivated
 
 
+
+# V17.48 — ADMIN SEMPRE PREVALECE
+# Toda ação explícita feita por um administrador através do storage vira uma
+# sobreposição persistente. Jobs, importações e sincronizações podem continuar
+# atualizando dados automáticos, mas jamais sobrescrevem um campo alterado pelo
+# admin, recriam uma entidade removida por ele ou apagam uma entidade adicionada.
+def _admin_override_entity_id(storage_key: str, item: Any, index: int = 0) -> str:
+    if not isinstance(item, dict):
+        return f"IDX:{index}"
+    if storage_key == "conf_pedidos":
+        return _pending_identity_v1714(item, index)
+    candidates = (
+        "__uidLinha", "__uidPedido", "uid", "uuid", "id", "ID", "Id",
+        "productId", "produtoId", "mlb", "MLB", "codigo", "Codigo", "Código",
+        "Pedido", "pedido", "OrderID", "order_id", "sku", "SKU", "Sku",
+        "ean", "EAN", "key", "chave", "nome", "Nome"
+    )
+    for k in candidates:
+        v = item.get(k)
+        if v is not None and str(v).strip():
+            return f"{k}:{str(v).strip()}".upper()
+    # Fallback conservador: posição. Só é usado quando o módulo não fornece
+    # qualquer identificador; ainda preserva a edição sem inventar equivalência.
+    return f"IDX:{index}"
+
+
+def _admin_override_load(storage_key: str) -> list[sqlite3.Row]:
+    return DB.execute(
+        "SELECT entity_id,field_name,value_json,is_deleted,updated_at,updated_by "
+        "FROM admin_manual_overrides WHERE storage_key=? ORDER BY entity_id,field_name",
+        (storage_key,),
+    ).fetchall()
+
+
+def _admin_override_delete_entity(storage_key: str, entity_id: str) -> None:
+    DB.execute("DELETE FROM admin_manual_overrides WHERE storage_key=? AND entity_id=?", (storage_key, entity_id))
+
+
+def _admin_override_upsert(storage_key: str, entity_id: str, field_name: str, value: Any,
+                           *, deleted: bool, actor: str) -> None:
+    DB.execute(
+        """INSERT INTO admin_manual_overrides(storage_key,entity_id,field_name,value_json,is_deleted,updated_at,updated_by)
+           VALUES(?,?,?,?,?,?,?)
+           ON CONFLICT(storage_key,entity_id,field_name) DO UPDATE SET
+             value_json=excluded.value_json,is_deleted=excluded.is_deleted,
+             updated_at=excluded.updated_at,updated_by=excluded.updated_by""",
+        (storage_key, entity_id, field_name, json_dumps(value), 1 if deleted else 0, now_iso(), actor or "admin"),
+    )
+
+
+def _admin_override_record_delta(storage_key: str, current_value: str | None, requested_value: str,
+                                 actor: str) -> int:
+    """Registra somente o delta explícito feito pelo admin.
+
+    Listas de objetos são comparadas por identidade estável; inclusão grava a
+    entidade completa, remoção cria tombstone e edição protege apenas os campos
+    realmente modificados. Objetos-raiz recebem o mesmo tratamento por chave.
+    """
+    try:
+        old = json.loads(current_value) if current_value not in (None, "") else None
+        new = json.loads(requested_value)
+    except Exception:
+        return 0
+    changed = 0
+    if isinstance(old, list) and isinstance(new, list):
+        old_map = {_admin_override_entity_id(storage_key, x, i): x for i, x in enumerate(old) if isinstance(x, dict)}
+        new_map = {_admin_override_entity_id(storage_key, x, i): x for i, x in enumerate(new) if isinstance(x, dict)}
+        # Remoção manual = tombstone persistente.
+        for eid in old_map.keys() - new_map.keys():
+            _admin_override_delete_entity(storage_key, eid)
+            _admin_override_upsert(storage_key, eid, "__ENTITY__", None, deleted=True, actor=actor)
+            changed += 1
+        # Inclusão/edição manual.
+        for eid, obj in new_map.items():
+            prev = old_map.get(eid)
+            if prev is None:
+                _admin_override_delete_entity(storage_key, eid)
+                _admin_override_upsert(storage_key, eid, "__ENTITY__", obj, deleted=False, actor=actor)
+                changed += 1
+                continue
+            # Restaurar SKU da integração: limpa as travas específicas do SKU.
+            restoring_sku = storage_key == "conf_pedidos" and normalize(prev.get("SkuManualOverride")) == "SIM" and normalize(obj.get("SkuManualOverride")) != "SIM"
+            if restoring_sku:
+                for fld in ("SKU", "Sku", "sku", "SkuManualOverride", "SkuOriginalIntegracao"):
+                    DB.execute("DELETE FROM admin_manual_overrides WHERE storage_key=? AND entity_id=? AND field_name=?", (storage_key,eid,fld))
+            for fld in set(prev.keys()) | set(obj.keys()):
+                if restoring_sku and fld in ("SKU", "Sku", "sku", "SkuManualOverride", "SkuOriginalIntegracao"):
+                    continue
+                before = prev.get(fld, None)
+                after_present = fld in obj
+                after = obj.get(fld, None)
+                if (fld in prev) != after_present or before != after:
+                    _admin_override_upsert(storage_key, eid, fld, after, deleted=not after_present, actor=actor)
+                    changed += 1
+    elif isinstance(old, dict) and isinstance(new, dict):
+        eid = "__ROOT__"
+        for fld in set(old.keys()) | set(new.keys()):
+            before = old.get(fld, None); present = fld in new; after = new.get(fld, None)
+            if (fld in old) != present or before != after:
+                _admin_override_upsert(storage_key, eid, fld, after, deleted=not present, actor=actor)
+                changed += 1
+    return changed
+
+
+def _admin_override_apply(storage_key: str, merged_value: str) -> str:
+    rows = _admin_override_load(storage_key)
+    if not rows:
+        return merged_value
+    try:
+        data = json.loads(merged_value)
+    except Exception:
+        return merged_value
+    if isinstance(data, list):
+        items = [x for x in data]
+        index_by_id = {_admin_override_entity_id(storage_key, x, i): i for i, x in enumerate(items) if isinstance(x, dict)}
+        grouped: dict[str, list[sqlite3.Row]] = {}
+        for r in rows: grouped.setdefault(str(r["entity_id"]), []).append(r)
+        # Tombstones primeiro.
+        tombstones = {eid for eid, rs in grouped.items() if any(str(r["field_name"]) == "__ENTITY__" and int(r["is_deleted"] or 0) == 1 for r in rs)}
+        if tombstones:
+            items = [x for i,x in enumerate(items) if _admin_override_entity_id(storage_key,x,i) not in tombstones]
+            index_by_id = {_admin_override_entity_id(storage_key, x, i): i for i, x in enumerate(items) if isinstance(x, dict)}
+        for eid, rs in grouped.items():
+            if eid in tombstones: continue
+            entity_override = next((r for r in rs if str(r["field_name"]) == "__ENTITY__" and int(r["is_deleted"] or 0) == 0), None)
+            if eid not in index_by_id and entity_override is not None:
+                try: obj = json.loads(str(entity_override["value_json"] or "{}"))
+                except Exception: obj = {}
+                if isinstance(obj, dict):
+                    items.append(obj); index_by_id[eid] = len(items)-1
+            pos = index_by_id.get(eid)
+            if pos is None or not isinstance(items[pos], dict): continue
+            obj = dict(items[pos])
+            for r in rs:
+                fld = str(r["field_name"])
+                if fld == "__ENTITY__": continue
+                if int(r["is_deleted"] or 0): obj.pop(fld, None)
+                else:
+                    try: obj[fld] = json.loads(str(r["value_json"]))
+                    except Exception: obj[fld] = str(r["value_json"])
+            obj["__adminOverride"] = True
+            items[pos] = obj
+        return json_dumps(items)
+    if isinstance(data, dict):
+        obj = dict(data)
+        for r in rows:
+            if str(r["entity_id"]) != "__ROOT__": continue
+            fld = str(r["field_name"])
+            if int(r["is_deleted"] or 0): obj.pop(fld, None)
+            else:
+                try: obj[fld] = json.loads(str(r["value_json"]))
+                except Exception: obj[fld] = str(r["value_json"])
+        return json_dumps(obj)
+    return merged_value
+
+
 def save_storage(
     key: str,
     old_value: str | None,
@@ -2733,6 +2900,12 @@ def save_storage(
             if key == "conf_pedidos" and allow_completed_reimport and not force and old_value is not None:
                 new_value, _ = reactivate_completed_orders_from_delta(old_value, new_value, actor or "admin")
             current, version, _ = get_storage(key)
+            # V17.48: toda gravação explícita feita por ADMIN registra somente o
+            # delta manual antes de qualquer merge. Assim o servidor pode aplicar
+            # essas decisões novamente sobre sincronizações futuras.
+            admin_override_count = 0
+            if normalize(actor_role) == "ADMIN":
+                admin_override_count = _admin_override_record_delta(key, current, new_value, actor or "admin")
             # V17.44: conf_pedidos é cumulativo por padrão. Qualquer sincronização
             # automática/importação deve MESCLAR com o banco atual e nunca apagar
             # pedidos que não vieram na resposta/arquivo desta rodada. Remoções só
@@ -2760,6 +2933,9 @@ def save_storage(
                         merged = json_dumps(_enrich_rows_with_completion_history(enriched_rows))
                 except Exception:
                     pass
+            # V17.48: ADMIN sempre prevalece. Aplicado por último para que nenhuma
+            # integração/job/importação possa sobrescrever decisão manual salva.
+            merged = _admin_override_apply(key, merged)
             version += 1
             updated = now_iso()
             DB.execute(
