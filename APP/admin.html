@@ -4071,9 +4071,10 @@ function atualizarCampoPedidoAdmin(el,semRender=false){
     }
   }
   if(!semRender)renderizarPedidosAdmin();
-  // V17.46: SKU manual é crítico e deve ser persistido imediatamente.
-  // Evita janela de concorrência em que uma sincronização/storage event poderia
-  // restaurar o valor antigo antes do debounce normal do Admin.
+  // V17.49: ao editar SKU com semRender=true, apenas atualiza o modelo em memória.
+  // O botão "Salvar SKU" persiste explicitamente a decisão do ADMIN. Isso evita
+  // que o onchange re-renderize a linha antes do click e faça o botão desaparecer.
+  if(campo==="SKU" && semRender) return;
   if(campo==="SKU") salvarPedidosAdmin(false);
   else agendarSalvarPedidosAdmin();
 }
@@ -4417,7 +4418,7 @@ function renderizarPedidosAdmin(){
   else corpo.innerHTML=parte.map(item=>{
     item.Marketplace=marketplaceExibicaoBanco(item.Pedido);
     const valida=linhaPedidoValidaBanco(item);
-    const inp=(campo,cls="")=>{const valor=campo==="Pedido"?pedidoExibicaoBanco(item.Pedido,item.Marketplace):campoBanco(item,campo);const extra=campo==="Nome Conferência"?' placeholder="Nome exibido na conferência" title="Se preenchido, este nome aparece no lugar do Cliente somente na tela de conferência"':'';const evento=campo==="Nome Conferência"?'oninput="atualizarCampoPedidoAdmin(this,true)" onchange="atualizarCampoPedidoAdmin(this,true);salvarNomesConferenciaAdminAgora()" onblur="salvarNomesConferenciaAdminAgora()"':'onchange="atualizarCampoPedidoAdmin(this)"';return `<input class="${cls}" data-uidlinha="${htmlSeguroBanco(item.__uidLinha)}" data-campo="${htmlSeguroBanco(campo)}" value="${htmlSeguroBanco(valor)}"${extra} ${evento} onkeydown="navegarGridAdmin(event,this)">`;};
+    const inp=(campo,cls="")=>{const valor=campo==="Pedido"?pedidoExibicaoBanco(item.Pedido,item.Marketplace):campoBanco(item,campo);const extra=campo==="Nome Conferência"?' placeholder="Nome exibido na conferência" title="Se preenchido, este nome aparece no lugar do Cliente somente na tela de conferência"':'';const evento=campo==="Nome Conferência"?'oninput="atualizarCampoPedidoAdmin(this,true)" onchange="atualizarCampoPedidoAdmin(this,true);salvarNomesConferenciaAdminAgora()" onblur="salvarNomesConferenciaAdminAgora()"':(campo==="SKU"?'oninput="atualizarCampoPedidoAdmin(this,true)" onchange="atualizarCampoPedidoAdmin(this,true)"':'onchange="atualizarCampoPedidoAdmin(this)"');return `<input class="${cls}" data-uidlinha="${htmlSeguroBanco(item.__uidLinha)}" data-campo="${htmlSeguroBanco(campo)}" value="${htmlSeguroBanco(valor)}"${extra} ${evento} onkeydown="navegarGridAdmin(event,this)">`;};
     const eanAtual=campoBanco(item,"Código de Barras");
     const alterado=String(eanSalvoPorUid.get(item.__uidLinha)??eanAtual)!==eanAtual.trim();
     const mensagem=eanMensagemPorUid.get(item.__uidLinha)||{tipo:"",texto:"Bipe o código e pressione Enter."};

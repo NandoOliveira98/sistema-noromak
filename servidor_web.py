@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.48-ADMIN-SEMPRE-PREVALECE"
+APP_VERSION = "17.49-ML-SKU-EFETIVO-EDICAO-MANUAL-FIX"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2402,8 +2402,8 @@ def _same_pending_order(a: dict[str, Any], b: dict[str, Any]) -> bool:
 def _dedupe_ml_legacy_sku_rows(rows: list[Any]) -> list[Any]:
     """Remove duplicação histórica criada pela mudança SKU curto -> SKU real.
 
-    Mantém a linha manual quando existir; caso contrário prefere o SKU completo
-    prefixado. Quantidade não é somada porque as duas linhas representam a mesma
+    Mantém a linha manual quando existir; caso contrário prefere o SKU operacional
+    sem o prefixo numérico do anúncio. Quantidade não é somada porque representam a mesma
     venda/item. Campos vazios da linha escolhida são enriquecidos pela descartada.
     """
     result: list[Any] = []
@@ -2443,7 +2443,9 @@ def _dedupe_ml_legacy_sku_rows(rows: list[Any]) -> list[Any]:
         else:
             ex_sku = str(existing.get("SKU") or "")
             raw_sku = str(raw.get("SKU") or "")
-            keep, other = (raw, existing) if len(raw_sku) > len(ex_sku) else (existing, raw)
+            # V17.49: o SKU operacional é o trecho após o prefixo numérico do ML.
+            # Na migração do legado, portanto, preferimos a forma curta/efetiva.
+            keep, other = (raw, existing) if len(raw_sku) < len(ex_sku) else (existing, raw)
         for k, v in other.items():
             if k not in keep or not str(keep.get(k) or "").strip():
                 keep[k] = v
@@ -2463,9 +2465,9 @@ def preserve_pending_records_v1714(current_value: str | None, new_value: str) ->
         if not isinstance(row,dict): continue
         ident=_pending_identity_v1714(row,i)
         if ident not in ids:
-            # V17.47: não ressuscita a cópia antiga de um item ML quando a lista
-            # nova já contém o mesmo pedido com o SKU real completo. Isso é a
-            # migração segura do legado 089... -> 158529-089....
+            # V17.49: não ressuscita a cópia antiga de um item ML quando a lista
+            # nova já contém o mesmo pedido com o SKU operacional equivalente.
+            # Migração segura do legado 158529-089... -> 089....
             if _pending_ml_row(row) and normalize(row.get("SkuManualOverride")) != "SIM":
                 equivalent = any(
                     isinstance(n,dict)
@@ -6106,26 +6108,26 @@ def _ml_find_product(products: list[dict[str, Any]], sku: str) -> dict[str, Any]
 
 
 def _ml_normalize_api_sku(value: Any) -> str:
-    """Preserva exatamente o SKU informado pelo Mercado Livre.
+    """Retorna o SKU operacional usado pela Noromak.
 
-    V17.45: prefixos numéricos separados por hífen fazem parte do SKU do vendedor
-    (ex.: ``150922-0893764272``) e NÃO podem ser descartados. A normalização aqui
-    limita-se a remover espaços externos.
+    O Mercado Livre pode prefixar o SKU real com um código numérico interno do
+    anúncio, por exemplo ``158529-0893117732``. Para conferência/cadastro o SKU
+    efetivo é ``0893117732``. Prefixos semânticos como KIT2-/KIT3- são mantidos.
+    O valor bruto da integração continua preservado separadamente em
+    ``SkuOrigemImportacao`` para auditoria/restauração.
     """
-    return str(value or "").strip()
+    raw = str(value or "").strip()
+    if "-" in raw:
+        prefix, remainder = raw.split("-", 1)
+        if prefix.strip().isdigit() and remainder.strip():
+            return remainder.strip()
+    return raw
 
 
 def _ml_sku_lookup_candidates(value: Any) -> list[str]:
-    """Candidatos apenas para procurar cadastro/kit sem alterar o SKU real salvo."""
-    raw = str(value or "").strip()
-    if not raw:
-        return []
-    out = [raw]
-    if "-" in raw:
-        prefix, remainder = raw.split("-", 1)
-        if prefix.isdigit() and remainder.strip() and remainder.strip() not in out:
-            out.append(remainder.strip())
-    return out
+    """Candidatos de cadastro a partir do SKU operacional, sem heurística ampla."""
+    effective = _ml_normalize_api_sku(value)
+    return [effective] if effective else []
 
 
 def _ml_order_item_sku_raw(item_data: dict[str, Any]) -> str:
