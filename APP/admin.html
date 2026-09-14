@@ -8190,5 +8190,26 @@ window.addEventListener("storage",e=>{if(["conf_pedidos","conf_logs","conf_histo
 })();
 </script>
 
+
+<style id="v1759-paginacao-fluxo-fix">
+/* V17.59 — rodapé de pedidos sempre depois do último card */
+#aba-pedidos .excel-wrap{
+  max-height:none !important;
+  height:auto !important;
+  overflow:visible !important;
+}
+#aba-pedidos .pedidos-rodape-fixo{
+  position:static !important;
+  z-index:auto !important;
+  clear:both;
+  width:100%;
+  box-sizing:border-box;
+  margin-top:14px !important;
+}
+#aba-pedidos .excel-grid{
+  margin-bottom:0 !important;
+}
+</style>
+
 </body>
 </html>
