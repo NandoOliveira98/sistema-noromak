@@ -1,0 +1,6 @@
+NOROMAK V17.65 — CORREÇÃO DO ERRO API IS NOT DEFINED
+
+- Corrigido o botão de excluir componente de KIT.
+- A tela agora chama /api/order-line-delete com fetch autenticado e base /expedicao quando necessário.
+- Preservado o endpoint canônico, tombstone e proteção Shopee da V17.64.
+- Exclusão continua persistente após F5 e sincronização.
