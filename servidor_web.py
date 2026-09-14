@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.44-PEDIDOS-PERSISTENTES-MERGE-SEGURO"
+APP_VERSION = "17.45-ML-SKU-REAL-EDICAO-MANUAL"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -5766,9 +5766,16 @@ def _expand_ml_order_item(item_data: dict[str, Any], kit_catalog: dict[str, dict
         sold_qty = 1
     title = str(item.get("title") or "").strip()
 
-    kit = _kit_catalog_lookup(kit_catalog, sku)
+    kit = None
+    for candidate in _ml_sku_lookup_candidates(sku):
+        kit = _kit_catalog_lookup(kit_catalog, candidate)
+        if kit:
+            break
     if not kit:
-        kit = _infer_quantity_kit_from_sku(sku)
+        for candidate in _ml_sku_lookup_candidates(sku):
+            kit = _infer_quantity_kit_from_sku(candidate)
+            if kit:
+                break
     if not kit or not kit.get("ativo", True):
         return [{
             "sku": sku,
@@ -5813,20 +5820,26 @@ def _ml_find_product(products: list[dict[str, Any]], sku: str) -> dict[str, Any]
 
 
 def _ml_normalize_api_sku(value: Any) -> str:
-    """Normaliza apenas SKU recebido da API do Mercado Livre.
+    """Preserva exatamente o SKU informado pelo Mercado Livre.
 
-    O Mercado Livre pode devolver um prefixo numérico interno antes do SKU real,
-    por exemplo ``155172-ACP429/9-B``. Quando o trecho anterior ao primeiro hífen
-    contém somente dígitos, removemos apenas esse prefixo e preservamos todos os
-    hífens internos do SKU restante.
+    V17.45: prefixos numéricos separados por hífen fazem parte do SKU do vendedor
+    (ex.: ``150922-0893764272``) e NÃO podem ser descartados. A normalização aqui
+    limita-se a remover espaços externos.
     """
+    return str(value or "").strip()
+
+
+def _ml_sku_lookup_candidates(value: Any) -> list[str]:
+    """Candidatos apenas para procurar cadastro/kit sem alterar o SKU real salvo."""
     raw = str(value or "").strip()
-    if not raw or "-" not in raw:
-        return raw
-    prefix, remainder = raw.split("-", 1)
-    if prefix.isdigit() and remainder.strip():
-        return remainder.strip()
-    return raw
+    if not raw:
+        return []
+    out = [raw]
+    if "-" in raw:
+        prefix, remainder = raw.split("-", 1)
+        if prefix.isdigit() and remainder.strip() and remainder.strip() not in out:
+            out.append(remainder.strip())
+    return out
 
 
 def _ml_order_item_sku_raw(item_data: dict[str, Any]) -> str:
@@ -6737,9 +6750,15 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
                 "DataLimiteDespachoMercadoLivre": date_for_dispatch,
                 "MercadoLivreAtualizadoEm": now_iso(),
             }
-            product = _ml_find_product(products, sku)
+            product = None
+            for candidate in _ml_sku_lookup_candidates(sku):
+                product = _ml_find_product(products, candidate)
+                if product:
+                    break
             if product:
-                for field in ("SKU","Código de Barras","Descrição","Rua","Módulo","Prateleira","Nível","Posição","Foto"):
+                # O cadastro interno pode enriquecer EAN/localização, mas nunca
+                # substituir o SKU real recebido do Mercado Livre.
+                for field in ("Código de Barras","Descrição","Rua","Módulo","Prateleira","Nível","Posição","Foto"):
                     value = product.get(field)
                     if str(value or "").strip():
                         row[field] = value
@@ -6821,8 +6840,10 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
                 cleaned_pending.append(existing)
                 continue
             same_ml_order = str(existing.get("VendaMercadoLivre") or "").strip() == order_id
+            manual_sku = normalize(existing.get("SkuManualOverride")) == "sim"
             existing_sku = _ml_normalize_api_sku(str(existing.get("SKU") or existing.get("Código de Barras") or "").strip())
-            if same_ml_order and normalize(existing_sku) not in desired_keys:
+            source_sku = _ml_normalize_api_sku(str(existing.get("SkuOrigemImportacao") or "").strip())
+            if same_ml_order and not manual_sku and normalize(existing_sku) not in desired_keys and normalize(source_sku) not in desired_keys:
                 stale_removed += 1
                 continue
             cleaned_pending.append(existing)
@@ -6838,9 +6859,19 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
             )
             if is_ml_api_row:
                 existing_sku = _ml_normalize_api_sku(existing_sku)
-            key = (normalize(order_number(existing)), normalize(existing_sku))
-            if key not in by_key:
-                by_key[key] = existing
+            pedido_key = normalize(order_number(existing))
+            keys = [normalize(existing_sku)]
+            # Quando o SKU foi corrigido manualmente, o SKU original da API vira
+            # a chave de reconciliação. Assim a sincronização encontra a mesma linha
+            # sem desfazer a correção do operador.
+            if normalize(existing.get("SkuManualOverride")) == "sim":
+                original = _ml_normalize_api_sku(existing.get("SkuOrigemImportacao"))
+                if normalize(original):
+                    keys.append(normalize(original))
+            for sku_key in keys:
+                key = (pedido_key, sku_key)
+                if sku_key and key not in by_key:
+                    by_key[key] = existing
 
         inserted = updated = 0
         fields = (
@@ -6858,16 +6889,23 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
                 inserted += 1
                 continue
             lido = int(existing.get("Lido") or 0)
+            manual_sku = normalize(existing.get("SkuManualOverride")) == "sim"
+            protected_when_manual = {"SKU","Código de Barras","Descrição","Rua","Módulo","Prateleira","Nível","Posição","Foto"}
             for field in fields:
+                if manual_sku and field in protected_when_manual:
+                    continue
                 value = imported.get(field)
                 if str(value or "").strip():
                     existing[field] = value
             for field in (
-                "OrigemCadastro","SkuOrigemImportacao","VendaMercadoLivre","PackIdMercadoLivre",
+                "OrigemCadastro","VendaMercadoLivre","PackIdMercadoLivre",
                 "ShipmentIdMercadoLivre","StatusMercadoLivre","LogisticaMercadoLivre",
                 "NomeFiscalMercadoLivre","DataLimiteDespachoMercadoLivre","MercadoLivreAtualizadoEm"
             ):
                 existing[field] = imported.get(field, "")
+            # O SKU original da integração é mantido como referência de reconciliação.
+            if not str(existing.get("SkuOrigemImportacao") or "").strip():
+                existing["SkuOrigemImportacao"] = imported.get("SkuOrigemImportacao", "")
             existing["Lido"] = lido
             if int(existing.get("Quantidade") or 0) < lido:
                 existing["Quantidade"] = str(lido)

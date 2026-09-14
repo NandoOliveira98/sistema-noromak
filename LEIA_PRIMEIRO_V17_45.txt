@@ -1,0 +1,15 @@
+V17.45 - SKU REAL DO MERCADO LIVRE + EDIÇÃO MANUAL PERSISTENTE
+
+Correções:
+- O SKU do Mercado Livre é preservado exatamente como a API informa. Ex.: 150922-0893764272 não é mais truncado para 0893764272.
+- Prefixo numérico antes do hífen não é mais removido do SKU salvo/exibido.
+- O cadastro interno ainda pode ser localizado pelo trecho auxiliar após o prefixo para carregar EAN/localização, sem substituir o SKU real do ML.
+- Alterar o SKU manualmente no Admin marca a linha como override manual persistente.
+- Sincronizações futuras do Mercado Livre não sobrescrevem o SKU corrigido manualmente nem os dados de produto associados à correção.
+- A linha manual continua reconciliada com o SKU original da API por SkuOrigemImportacao.
+- Quando há override, aparece o botão MANUAL ↶ para restaurar o SKU original da integração.
+
+Preserva:
+- V17.44: pedidos persistentes/merge seguro.
+- V17.43: exclusão persistente Shopee e correção de KIT.
+- V17.42: otimizações localizadas da Conferência.
