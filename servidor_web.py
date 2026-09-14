@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.43-SHOPEE-EXCLUSAO-PERSISTENTE-KIT-FIX"
+APP_VERSION = "17.44-PEDIDOS-PERSISTENTES-MERGE-SEGURO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2613,6 +2613,7 @@ def save_storage(
     change_method: str = "",
     client_ip: str = "",
     allow_completed_reimport: bool = False,
+    allow_pending_deletes: bool = False,
 ) -> tuple[str, int, str]:
     if len(new_value.encode("utf-8")) > MAX_BODY:
         raise ValueError("Conteúdo excede 100 MB")
@@ -2622,6 +2623,14 @@ def save_storage(
             if key == "conf_pedidos" and allow_completed_reimport and not force and old_value is not None:
                 new_value, _ = reactivate_completed_orders_from_delta(old_value, new_value, actor or "admin")
             current, version, _ = get_storage(key)
+            # V17.44: conf_pedidos é cumulativo por padrão. Qualquer sincronização
+            # automática/importação deve MESCLAR com o banco atual e nunca apagar
+            # pedidos que não vieram na resposta/arquivo desta rodada. Remoções só
+            # são aceitas quando a operação explicitamente autoriza exclusão
+            # (ex.: botão Excluir do Admin/Conferência). Pedidos concluídos continuam
+            # sendo retirados abaixo por filter_completed_orders().
+            if key == "conf_pedidos" and not allow_pending_deletes:
+                new_value = preserve_pending_records_v1714(current, new_value)
             if key in ("conf_pedidos", "conf_pedidos_rascunhos"):
                 new_value = preserve_conference_names(current, new_value)
             merged = merge_value(key, current, old_value, new_value, force)
@@ -10686,6 +10695,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 change_method=change_method,
                 client_ip=client_computer(self),
                 allow_completed_reimport=(ctx["app_role"] == "admin"),
+                allow_pending_deletes=allow_pending_deletes,
             )
             audit(ctx["username"], "storage.save", key)
             nfe_name_update = None

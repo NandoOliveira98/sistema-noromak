@@ -3956,7 +3956,7 @@ function salvarPedidosAdmin(mostrarMensagem=false){
   }catch(e){console.error(e);setStatusBanco("Erro ao salvar pedidos","erro");if(mostrarMensagem)alert("Não foi possível salvar os pedidos: "+e.message);}
 }
 function adicionarLinhaPedidoAdmin(base=null){
-  const item={Pedido:base?.Pedido||"",Marketplace:base?.Marketplace||"","Data do Pedido":normalizarDataPedidoBanco(base?.["Data do Pedido"],true),Kit:base?.Kit||"","Nome do Kit":base?.["Nome do Kit"]||"","Quantidade de Kits":base?.["Quantidade de Kits"]||"","Quantidade por Kit":"",Cliente:base?.Cliente||"","Nome Conferência":base?.["Nome Conferência"]||"",SKU:"",Quantidade:"1","Código de Barras":"","Descrição":"",Rua:"",Módulo:"",Prateleira:"",Nível:"",Posição:"",Foto:"",__uidLinha:uidBanco("PED")};
+  const item={Pedido:base?.Pedido||"",Marketplace:base?.Marketplace||"","Data do Pedido":normalizarDataPedidoBanco(base?.["Data do Pedido"],true),Kit:base?.Kit||"","Nome do Kit":base?.["Nome do Kit"]||"","Quantidade de Kits":base?.["Quantidade de Kits"]||"","Quantidade por Kit":"",Cliente:base?.Cliente||"","Nome Conferência":base?.["Nome Conferência"]||"",SKU:"",Quantidade:"1","Código de Barras":"","Descrição":"",Rua:"",Módulo:"",Prateleira:"",Nível:"",Posição:"",Foto:"",OrigemCadastro:base?.OrigemCadastro||"MANUAL_ADMIN",__uidLinha:uidBanco("PED")};
   const busca=document.getElementById("buscaPedidosAdmin");if(busca)busca.value="";
   if(base){
     let indice=pedidosEditorAdmin.findIndex(x=>x.__uidLinha===base.__uidLinha)+1;
