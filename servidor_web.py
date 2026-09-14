@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.49-ML-SKU-EFETIVO-EDICAO-MANUAL-FIX"
+APP_VERSION = "17.50-SERVIDOR-CANONICO-OVERRIDE-PERSISTENTE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -1987,6 +1987,14 @@ def get_storage(key: str) -> tuple[str | None, int, str | None]:
                 value = json_dumps(_enrich_rows_with_completion_history(parsed))
         except Exception:
             pass
+    # V17.50: o servidor é canônico e o ADMIN prevalece também na LEITURA.
+    # Mesmo que algum job legado grave diretamente em storage, os overrides/tombstones
+    # persistentes são reaplicados antes de qualquer tela receber o banco.
+    try:
+        if value is not None and "_admin_override_apply" in globals():
+            value = _admin_override_apply(key, value)
+    except Exception as exc:
+        print(f"Aviso: override manual não aplicado na leitura de {key}: {exc}", file=sys.stderr)
     return value, int(row["version"]), row["updated_at"]
 
 
@@ -10691,6 +10699,11 @@ class AppHandler(BaseHTTPRequestHandler):
             if ctx is not None:
                 self.handle_storage_post(ctx)
             return
+        if path == "/api/order-sku":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                self.handle_order_sku(ctx)
+            return
         if path == "/api/order-ean":
             ctx = self.auth(admin_only=True)
             if ctx is not None:
@@ -11198,6 +11211,147 @@ class AppHandler(BaseHTTPRequestHandler):
                 "matched_pending_line_count": matched_pending_count,
                 "description": str(template.get("Descrição") or ""),
                 "previous_eans": previous_eans,
+                "updated_keys": updated_keys,
+                "versions": versions,
+            })
+        except (ValueError, json.JSONDecodeError) as exc:
+            self.send_json({"error": str(exc)}, 400)
+        except Exception as exc:
+            self.send_json({"error": str(exc)}, 409)
+
+    def handle_order_sku(self, ctx: dict[str, Any]) -> None:
+        """V17.50 — salva SKU manual de forma transacional e canônica.
+
+        A alteração é gravada diretamente no banco do servidor e também registrada
+        como override persistente por UID. Assim F5, polling e sincronizações externas
+        não conseguem restaurar o valor antigo.
+        """
+        try:
+            req = self.read_json()
+            uid = str(req.get("uid") or "").strip()
+            sku = str(req.get("sku") or "").strip()
+            ref_order = str(req.get("pedido") or "").strip()
+            old_sku = str(req.get("oldSku") or "").strip()
+            ref_description = str(req.get("descricao") or "").strip()
+            if not uid:
+                raise ValueError("Identificação da linha não informada.")
+            if not sku:
+                raise ValueError("Informe o SKU.")
+            if len(sku) > 180 or any(ord(char) < 32 for char in sku):
+                raise ValueError("SKU inválido ou muito longo.")
+
+            def parse_raw_rows(key: str) -> tuple[list[dict[str, Any]], int]:
+                raw_row = DB.execute("SELECT value,version FROM storage WHERE key=?", (key,)).fetchone()
+                raw = str(raw_row["value"] or "[]") if raw_row else "[]"
+                version = int(raw_row["version"] or 0) if raw_row else 0
+                try:
+                    rows = json.loads(raw)
+                except Exception as exc:
+                    raise ValueError(f"Os dados de {key} estão inválidos.") from exc
+                if not isinstance(rows, list):
+                    raise ValueError(f"Os dados de {key} não são uma lista.")
+                return [dict(row) for row in rows if isinstance(row, dict)], version
+
+            with DB_LOCK:
+                DB.execute("BEGIN IMMEDIATE")
+                try:
+                    pending, pending_version = parse_raw_rows("conf_pedidos")
+                    drafts, draft_version = parse_raw_rows("conf_pedidos_rascunhos")
+                    locations: list[tuple[str, int, dict[str, Any]]] = []
+                    for key, rows in (("conf_pedidos", pending), ("conf_pedidos_rascunhos", drafts)):
+                        for idx, row in enumerate(rows):
+                            if str(row.get("__uidLinha") or row.get("__uidPedido") or "").strip() == uid:
+                                locations.append((key, idx, row))
+                    # fallback estrito apenas para migração de linhas antigas sem UID estável
+                    if not locations and ref_order:
+                        for key, rows in (("conf_pedidos", pending), ("conf_pedidos_rascunhos", drafts)):
+                            for idx, row in enumerate(rows):
+                                if normalize(order_number(row)) != normalize(ref_order):
+                                    continue
+                                if old_sku and normalize(str(row.get("SKU") or "")) != normalize(old_sku):
+                                    continue
+                                if ref_description and normalize(str(row.get("Descrição") or "")) != normalize(ref_description):
+                                    continue
+                                locations.append((key, idx, row))
+                    if len(locations) != 1:
+                        if not locations:
+                            raise ValueError("A linha não foi localizada no banco atual do servidor.")
+                        raise ValueError("Há mais de uma linha compatível; atualize a tela e tente novamente.")
+
+                    source_key, source_index, row = locations[0]
+                    previous = str(row.get("SKU") or "").strip()
+                    if not str(row.get("SkuOrigemImportacao") or "").strip():
+                        row["SkuOrigemImportacao"] = str(row.get("SkuOrigemIntegracaoRaw") or previous or old_sku).strip()
+                    row["__uidLinha"] = uid
+                    row["SKU"] = sku
+                    row["SkuManualOverride"] = "SIM"
+                    row["SkuManualAnterior"] = previous
+                    row["SkuManualEditadoEm"] = now_iso()
+                    row["SkuManualEditadoPor"] = str(ctx.get("username") or "admin")
+
+                    rows = pending if source_key == "conf_pedidos" else drafts
+                    rows[source_index] = row
+                    timestamp = now_iso()
+                    version = pending_version if source_key == "conf_pedidos" else draft_version
+                    next_version = version + 1
+                    DB.execute(
+                        """INSERT INTO storage(key,value,version,updated_at) VALUES(?,?,?,?)
+                           ON CONFLICT(key) DO UPDATE SET value=excluded.value,version=excluded.version,updated_at=excluded.updated_at""",
+                        (source_key, json_dumps(rows), next_version, timestamp),
+                    )
+
+                    entity_id = _admin_override_entity_id(source_key, row, source_index)
+                    for fld, val in (
+                        ("SKU", sku),
+                        ("SkuManualOverride", "SIM"),
+                        ("SkuManualAnterior", previous),
+                        ("SkuManualEditadoEm", row["SkuManualEditadoEm"]),
+                        ("SkuManualEditadoPor", row["SkuManualEditadoPor"]),
+                        ("SkuOrigemImportacao", row.get("SkuOrigemImportacao", "")),
+                    ):
+                        _admin_override_upsert(source_key, entity_id, fld, val, deleted=False, actor=str(ctx.get("username") or "admin"))
+
+                    # O mesmo UID não pode existir nas duas bases; se existir em legado, protege também.
+                    other_key = "conf_pedidos_rascunhos" if source_key == "conf_pedidos" else "conf_pedidos"
+                    other_rows = drafts if other_key == "conf_pedidos_rascunhos" else pending
+                    other_version = draft_version if other_key == "conf_pedidos_rascunhos" else pending_version
+                    other_changed = False
+                    for idx, other in enumerate(other_rows):
+                        if str(other.get("__uidLinha") or other.get("__uidPedido") or "").strip() == uid:
+                            other["SKU"] = sku
+                            other["SkuManualOverride"] = "SIM"
+                            other["SkuManualEditadoEm"] = row["SkuManualEditadoEm"]
+                            other["SkuManualEditadoPor"] = row["SkuManualEditadoPor"]
+                            other_rows[idx] = other
+                            other_eid = _admin_override_entity_id(other_key, other, idx)
+                            _admin_override_upsert(other_key, other_eid, "SKU", sku, deleted=False, actor=str(ctx.get("username") or "admin"))
+                            _admin_override_upsert(other_key, other_eid, "SkuManualOverride", "SIM", deleted=False, actor=str(ctx.get("username") or "admin"))
+                            other_changed = True
+                    versions = {source_key: next_version}
+                    updated_keys = [source_key]
+                    if other_changed:
+                        other_next = other_version + 1
+                        DB.execute(
+                            """INSERT INTO storage(key,value,version,updated_at) VALUES(?,?,?,?)
+                               ON CONFLICT(key) DO UPDATE SET value=excluded.value,version=excluded.version,updated_at=excluded.updated_at""",
+                            (other_key, json_dumps(other_rows), other_next, timestamp),
+                        )
+                        versions[other_key] = other_next
+                        updated_keys.append(other_key)
+                    DB.commit()
+                except Exception:
+                    DB.rollback()
+                    raise
+
+            audit(ctx["username"], "order.sku.manual_override", f"{ref_order}|{uid}|{old_sku}->{sku}"[:4000])
+            backup_daily()
+            self.send_json({
+                "ok": True,
+                "uid": uid,
+                "pedido": order_number(row),
+                "sku": sku,
+                "sku_original": str(row.get("SkuOrigemImportacao") or ""),
+                "updated_at": row.get("SkuManualEditadoEm"),
                 "updated_keys": updated_keys,
                 "versions": versions,
             })

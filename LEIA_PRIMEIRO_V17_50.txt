@@ -1,0 +1,8 @@
+V17.50 — SERVIDOR CANÔNICO / ADMIN PERSISTENTE
+
+Correções principais:
+- conf_pedidos e demais bancos canônicos não usam mais snapshot antigo da sessão após F5 quando o servidor falha.
+- overrides/tombstones do ADMIN são reaplicados também na leitura do servidor.
+- novo endpoint transacional /api/order-sku salva SKU manual diretamente no banco e registra override persistente por UID.
+- botão Salvar SKU do Admin usa o endpoint dedicado e recarrega o banco canônico do servidor.
+- sincronizações externas continuam podendo atualizar campos sem override, mas não o SKU manual.

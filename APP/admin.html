@@ -4091,9 +4091,18 @@ function salvarSkuManualAdmin(uid,botao=null){
   item.SkuManualAnterior=anterior;
   try{
     if(botao){botao.disabled=true;botao.textContent="Salvando…";}
-    salvarPedidosAdmin(false);
-    setStatusBanco("● SKU manual salvo e protegido contra sincronizações","ok");
-    mostrarStatusImportacaoPedidos("sucesso",`SKU do pedido salvo manualmente: ${novo}. A integração não substituirá esta correção.`);
+    const resp=appStorage.atualizarSkuPedido({uid:String(item.__uidLinha||""),pedido:String(item.Pedido||""),sku:novo,oldSku:anterior,descricao:String(item["Descrição"]||"")});
+    item.SKU=String(resp?.sku||novo);
+    item.SkuManualOverride="SIM";
+    item.SkuManualEditadoEm=String(resp?.updated_at||new Date().toISOString());
+    if(resp?.sku_original&&!String(item.SkuOrigemImportacao||"").trim())item.SkuOrigemImportacao=String(resp.sku_original);
+    carregarBancoInternoAdmin();
+    setStatusBanco("● SKU manual salvo no servidor e protegido contra sincronizações","ok");
+    mostrarStatusImportacaoPedidos("sucesso",`SKU do pedido salvo manualmente no servidor: ${item.SKU}. A integração não substituirá esta correção.`);
+  }catch(e){
+    console.error(e);
+    setStatusBanco("Erro ao salvar SKU manual","erro");
+    alert("Não foi possível salvar o SKU no servidor: "+e.message);
   }finally{
     if(botao){botao.disabled=false;botao.textContent="Salvar SKU";}
   }

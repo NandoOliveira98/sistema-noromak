@@ -19,6 +19,14 @@
     "conf_admin_sessao",
     "conf_cliente_portatil_id"
   ]);
+  const CHAVES_CANONICAS_SERVIDOR = new Set([
+    "conf_pedidos",
+    "conf_pedidos_rascunhos",
+    "conf_produtos",
+    "conf_kits",
+    "precificador_online_v1",
+    "ml_promocoes_datas_v1"
+  ]);
   const CHAVES_MONITORADAS = [
     "conf_pedidos",
     "conf_pedidos_rascunhos",
@@ -110,6 +118,9 @@
         } catch (_) {}
         return valor;
       } catch (erro) {
+        // V17.50: para bancos canônicos, nunca ressuscitar um snapshot antigo da sessão
+        // após F5. Se o servidor não responder, mantemos apenas o cache desta execução.
+        if (CHAVES_CANONICAS_SERVIDOR.has(chave)) return cache.has(chave) ? cache.get(chave) : null;
         const salvo = window.sessionStorage.getItem("rede_cache_" + chave);
         if (salvo !== null) return salvo;
         return null;
@@ -264,6 +275,25 @@
       return resultado;
     },
 
+
+
+    atualizarSkuPedido(referencia) {
+      const resposta = xhrJson("POST", BASE + "/api/order-sku", referencia || {});
+      for (const chave of resposta.updated_keys || ["conf_pedidos", "conf_pedidos_rascunhos"]) {
+        const anterior = cache.has(chave) ? cache.get(chave) : null;
+        const atual = xhrJson("GET", `${API}?key=${encodeURIComponent(chave)}`);
+        const novo = atual.exists ? String(atual.value ?? "") : null;
+        cache.set(chave, novo);
+        versoes.set(chave, Number(atual.version || resposta.versions?.[chave] || 0));
+        try {
+          if (novo === null) window.sessionStorage.removeItem("rede_cache_" + chave);
+          else window.sessionStorage.setItem("rede_cache_" + chave, novo);
+        } catch (_) {}
+        if (anterior !== novo) dispararStorage(chave, anterior, novo);
+      }
+      return resposta;
+    },
+
     atualizarEanPedido(referencia) {
       const resposta = xhrJson("POST", BASE + "/api/order-ean", referencia || {});
       for (const chave of resposta.updated_keys || []) {
@@ -407,6 +437,7 @@
   }
 
   window.appStorage = appStorage;
+  try { for (const chave of CHAVES_CANONICAS_SERVIDOR) window.sessionStorage.removeItem("rede_cache_" + chave); } catch (_) {}
   document.addEventListener("DOMContentLoaded", () => {
     atualizarIndicadorRede();
     appStorage.testarConexao();
