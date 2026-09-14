@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.62-MLB-SKU-CANONICO-LEITURA-FIX"
+APP_VERSION = "17.63-ETIQUETAS-SHOPEE-SEM-REAUTENTICACAO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -196,8 +196,13 @@ KNOWN_KEYS = [
     "conf_shopee_exclusoes_v1",
 ]
 
+# V17.63: upload/importação de etiquetas é uma função operacional.
+# Qualquer usuário já autenticado pode gravar conf_etiquetas/conf_fotos sem
+# reautenticação OWNER/Admin. A autenticação normal da sessão continua obrigatória.
 OPERATOR_WRITE_KEYS = {
     "conf_pedidos",
+    "conf_etiquetas",
+    "conf_fotos",
     "conf_historico_conferencias_v2",
     "conf_logs",
     "conf_banco_atualizado_em",

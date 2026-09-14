@@ -1,0 +1,15 @@
+NOROMAK V17.63 — ETIQUETAS SHOPEE SEM REAUTENTICAÇÃO
+
+Correção:
+- Upload/importação de etiquetas Shopee deixou de exigir permissão ADMIN/OWNER.
+- Qualquer usuário já autenticado no sistema pode gravar etiquetas.
+- Também permite salvar fotos associadas ao lote de etiquetas.
+- A sessão normal do sistema continua obrigatória.
+- Gestão de usuários, segurança, integrações críticas e OWNER continuam protegidos.
+- Nenhuma permissão crítica foi aberta.
+
+Motivo:
+- conf_etiquetas e conf_fotos não estavam em OPERATOR_WRITE_KEYS.
+- Usuários comuns recebiam bloqueio do backend mesmo estando logados.
+
+Preserva todas as correções da V17.62.
