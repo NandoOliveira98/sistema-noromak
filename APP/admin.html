@@ -3083,7 +3083,15 @@ function htmlSeguroBanco(valor) {
   return String(valor ?? "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#039;");
 }
 function uidBanco(prefix="L") { return prefix + "_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2,9); }
-function campoBanco(obj,nome) { const v=obj?.[nome]; return v===null||v===undefined?"":String(v); }
+function campoBanco(obj,nome) {
+  // V17.74: Nome de Conferência tem uma fonte visual canônica, com leitura
+  // compatível com registros gravados por versões anteriores/extensão Shopee.
+  if(nome==="Nome Conferência"){
+    const v=obj?.["Nome Conferência"] ?? obj?.NomeConferencia ?? obj?.ConferenciaNome;
+    return v===null||v===undefined?"":String(v);
+  }
+  const v=obj?.[nome]; return v===null||v===undefined?"":String(v);
+}
 function normalizarBuscaBanco(v){return String(v||"").normalize("NFD").replace(/[\u0300-\u036f]/g,"").toLowerCase().trim();}
 function normalizarCodigoBanco(v){return String(v||"").trim().toUpperCase().replace(/\s+/g,"");}
 function hojeLocalBanco(){
@@ -3234,8 +3242,11 @@ function aplicarNomesConferenciaAdmin(linhas){
   (Array.isArray(linhas)?linhas:[]).forEach(item=>{
     const pedido=normalizarCodigoBanco(item?.Pedido||"");
     if(!pedido)return;
+    // V17.74: o próprio pedido é a autoridade. O mapa legado é somente fallback.
+    const direto=String(item?.["Nome Conferência"] ?? item?.NomeConferencia ?? item?.ConferenciaNome ?? "").trim();
     const salvo=String(mapa[pedido]||"").trim();
-    if(salvo)item["Nome Conferência"]=salvo;
+    const nome=direto||salvo;
+    if(nome)item["Nome Conferência"]=nome;
   });
   return linhas;
 }
@@ -6336,8 +6347,14 @@ window.addEventListener("storage",event=>{
   if(event.key==="conf_pedidos"){
     clearTimeout(timerSalvarPedidosAdmin);
     timerSalvarPedidosAdmin=null;
+    // V17.74: qualquer nova versão canônica de pedidos recompõe o editor.
+    // Isso inclui Nome Conferência salvo pela extensão Shopee.
     const assinatura=appStorage.getItem("conf_pedidos")||"[]";
-    if(assinatura!==ultimaAssinaturaPedidosAdmin){carregarBancoInternoAdmin();setStatusBanco("● Pedido concluído: lista atualizada","ok");}
+    if(assinatura!==ultimaAssinaturaPedidosAdmin){
+      carregarBancoInternoAdmin();
+      renderizarPedidosAdmin();
+      setStatusBanco("● Pedidos atualizados","ok");
+    }
   }
   if(event.key==="conf_historico_conferencias_v2"||event.key==="conf_logs")carregarLogs();
 });
