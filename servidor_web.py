@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.75-SHOPEE-CONFERENCIA-VERIFICADA"
+APP_VERSION = "17.76-SHOPEE-CONFERENCIA-TODOS-USUARIOS"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -11658,7 +11658,9 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.handle_order_line_delete(ctx)
             return
         if path == "/api/order-conference-name":
-            ctx = self.auth(admin_only=True)
+            # V17.76: ação operacional estreita. Qualquer usuário Noromak
+            # autenticado pode preencher somente o Nome de Conferência.
+            ctx = self.auth()
             if ctx is not None:
                 self.handle_order_conference_name(ctx)
             return
