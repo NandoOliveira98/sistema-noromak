@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.72-CONFERENCIA-CONCLUIDOS-SAEM-DA-FILA"
+APP_VERSION = "17.73-SHOPEE-NOME-CONFERENCIA-CANONICO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -11657,6 +11657,11 @@ class AppHandler(BaseHTTPRequestHandler):
             if ctx is not None:
                 self.handle_order_line_delete(ctx)
             return
+        if path == "/api/order-conference-name":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                self.handle_order_conference_name(ctx)
+            return
         if path == "/api/order-sku":
             ctx = self.auth(admin_only=True)
             if ctx is not None:
@@ -12598,6 +12603,111 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_json({"ok": False, "error": str(exc)}, 400)
         except Exception as exc:
             self.send_json({"ok": False, "error": str(exc)}, 409)
+
+    def handle_order_conference_name(self, ctx: dict[str, Any]) -> None:
+        """V17.73 — grava Nome Conferência diretamente no pedido canônico.
+
+        O vínculo é pelo número exato do pedido. Todas as linhas do mesmo pedido
+        recebem o nome e cada linha ganha override manual, impedindo integrações de
+        restaurarem o valor anterior.
+        """
+        try:
+            req = self.read_json()
+            pedido = str(req.get("pedido") or "").strip()
+            nome = " ".join(str(req.get("nome") or "").strip().split())
+            if not pedido:
+                raise ValueError("Pedido não informado.")
+            if not nome:
+                raise ValueError("Nome de conferência não informado.")
+            if len(nome) > 180 or any(ord(ch) < 32 for ch in nome):
+                raise ValueError("Nome de conferência inválido.")
+            pedido_key = normalize(pedido)
+            actor = str(ctx.get("username") or "admin")
+
+            with DB_LOCK:
+                DB.execute("BEGIN IMMEDIATE")
+                try:
+                    total = 0
+                    updated_keys = []
+                    for storage_key in ("conf_pedidos", "conf_pedidos_rascunhos"):
+                        raw_row = DB.execute(
+                            "SELECT value,version FROM storage WHERE key=?", (storage_key,)
+                        ).fetchone()
+                        raw = str(raw_row["value"] or "[]") if raw_row else "[]"
+                        version = int(raw_row["version"] or 0) if raw_row else 0
+                        rows = json.loads(raw or "[]")
+                        if not isinstance(rows, list):
+                            raise ValueError(f"Dados inválidos em {storage_key}.")
+                        changed = False
+                        for idx, row in enumerate(rows):
+                            if not isinstance(row, dict) or normalize(order_number(row)) != pedido_key:
+                                continue
+                            row["Nome Conferência"] = nome
+                            row["NomeConferencia"] = nome
+                            row["ConferenciaNome"] = nome
+                            entity_id = _admin_override_entity_id(storage_key, row, idx)
+                            for field in ("Nome Conferência", "NomeConferencia", "ConferenciaNome"):
+                                _admin_override_upsert(
+                                    storage_key, entity_id, field, nome,
+                                    deleted=False, actor=actor
+                                )
+                            total += 1
+                            changed = True
+                        if changed:
+                            value = json_dumps(rows)
+                            timestamp = now_iso()
+                            if raw_row:
+                                DB.execute(
+                                    "UPDATE storage SET value=?,version=?,updated_at=? WHERE key=?",
+                                    (value, version + 1, timestamp, storage_key),
+                                )
+                            else:
+                                DB.execute(
+                                    "INSERT INTO storage(key,value,version,updated_at) VALUES(?,?,?,?)",
+                                    (storage_key, value, 1, timestamp),
+                                )
+                            updated_keys.append(storage_key)
+
+                    if total <= 0:
+                        raise ValueError(f"Pedido {pedido} não encontrado em Pedidos Pendentes.")
+
+                    # Mantém também o mapa legado em sincronia para telas antigas.
+                    map_row = DB.execute(
+                        "SELECT value,version FROM storage WHERE key='conf_nomes_conferencia_v1'"
+                    ).fetchone()
+                    try:
+                        mapa = json.loads(str(map_row["value"] or "{}")) if map_row else {}
+                    except Exception:
+                        mapa = {}
+                    if not isinstance(mapa, dict):
+                        mapa = {}
+                    mapa[pedido_key] = nome
+                    map_value = json_dumps(mapa)
+                    if map_row:
+                        DB.execute(
+                            "UPDATE storage SET value=?,version=?,updated_at=? WHERE key='conf_nomes_conferencia_v1'",
+                            (map_value, int(map_row["version"] or 0) + 1, now_iso()),
+                        )
+                    else:
+                        DB.execute(
+                            "INSERT INTO storage(key,value,version,updated_at) VALUES('conf_nomes_conferencia_v1',?,?,?)",
+                            (map_value, 1, now_iso()),
+                        )
+
+                    DB.commit()
+                except Exception:
+                    DB.rollback()
+                    raise
+
+            audit(actor, "order.conference_name", f"{pedido}|{nome}")
+            self.send_json({
+                "ok": True, "pedido": pedido, "nome": nome,
+                "updated": total, "storages": updated_keys,
+            })
+        except (ValueError, json.JSONDecodeError) as exc:
+            self.send_json({"ok": False, "error": str(exc)}, 400)
+        except Exception as exc:
+            self.send_json({"ok": False, "error": str(exc)}, 500)
 
     def handle_order_sku(self, ctx: dict[str, Any]) -> None:
         """V17.50 — salva SKU manual de forma transacional e canônica.

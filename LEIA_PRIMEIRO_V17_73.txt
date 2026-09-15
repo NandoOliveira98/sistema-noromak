@@ -1,0 +1,10 @@
+NOROMAK V17.73 — NOME DE CONFERÊNCIA SHOPEE CANÔNICO
+
+- Novo POST /api/order-conference-name (Admin).
+- Localiza o pedido pelo ID exato e grava o nome em TODAS as linhas correspondentes
+  de conf_pedidos e conf_pedidos_rascunhos.
+- Grava Nome Conferência / NomeConferencia / ConferenciaNome para compatibilidade.
+- Registra override manual por linha/campo: integrações não podem desfazer.
+- Se o pedido não existir em Pendentes, retorna erro; não dá falso sucesso.
+- Mantém mapa legado conf_nomes_conferencia_v1 sincronizado.
+- Preserva V17.72, performance, bipes, etiquetas, Shopee/Magalu/ML e tombstones.
