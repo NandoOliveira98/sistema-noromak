@@ -2462,6 +2462,11 @@ Código da impressão: ${resultadoImpressao.jobId || "---"}`,
     if (typeof appStorage.concluirPedido === "function") appStorage.concluirPedido(numPedAtual);
     else appStorage.setItem("conf_pedidos", JSON.stringify(dadosPedidos));
     appStorage.removeItem(CHAVE_ULTIMO_PEDIDO);
+    // V17.72: tira o concluído da seleção ativa imediatamente. O histórico já foi
+    // gravado acima e o servidor mantém completed_orders/order_completion_history.
+    idPedidoAtual = null;
+    pedidoAtual = [];
+    invalidarCachesPedidosDisponiveis();
 
     document.getElementById("statusMsg").innerHTML = "🎉 Pedido conferido e impressão enviada!";
     mostrarMensagemDetalhada("sucesso", "Pedido concluído", `Pedido ${numPedExibicao} finalizado com sucesso.`, "O registro já está disponível no Histórico.");
@@ -4191,7 +4196,7 @@ window.addEventListener("storage",event=>{
     setTimeout(verificarNovosPedidos, 700);
     // Storage já dispara atualização imediata. Este intervalo é apenas uma
     // salvaguarda e não precisa varrer a lista a cada 1,8 s em segundo plano.
-    monitorTimer = setInterval(()=>{ if(!document.hidden) verificarNovosPedidos(); }, 5000);
+    monitorTimer = setInterval(()=>{ if(!document.hidden) verificarNovosPedidos(); }, 12000);
   });
 })();
 </script>

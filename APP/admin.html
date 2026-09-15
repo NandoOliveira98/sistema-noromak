@@ -8045,7 +8045,12 @@ function v15Nav(el){document.querySelectorAll('.v15-nav-item').forEach(x=>x.clas
 <script id="noromak-v151-dashboard-js">
 document.addEventListener("DOMContentLoaded",()=>{setTimeout(()=>{try{abrirDashboardV151();}catch(e){console.warn("Dashboard V15.1",e);}},700);});
 document.addEventListener("click",e=>{if(!e.target.closest(".v151-global-search-wrap"))document.getElementById("v151GlobalResults")?.classList.remove("show");});
-window.addEventListener("storage",e=>{if(["conf_pedidos","conf_logs","conf_historico_conferencias_v2","conf_etiquetas"].includes(e.key))setTimeout(v151AtualizarDashboard,120);});
+let v1771DashboardTimer=null;
+window.addEventListener("storage",e=>{
+  if(!["conf_pedidos","conf_logs","conf_historico_conferencias_v2","conf_etiquetas"].includes(e.key))return;
+  clearTimeout(v1771DashboardTimer);
+  v1771DashboardTimer=setTimeout(()=>{v1771DashboardTimer=null;v151AtualizarDashboard();},500);
+});
 </script>
 
 <script id="noromak-v1636-ml-expiry-alert">

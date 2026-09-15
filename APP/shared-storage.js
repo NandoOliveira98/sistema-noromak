@@ -26,24 +26,23 @@
     "conf_kits",
     "precificador_online_v1",
     "ml_promocoes_datas_v1",
-    "ml_sku_mlb_links_v1"
+    "ml_sku_mlb_links_v1",
+    "conf_etiquetas"
   ]);
-  const CHAVES_MONITORADAS = [
-    "conf_pedidos",
-    "conf_pedidos_rascunhos",
-    "conf_produtos",
-    "conf_kits",
-    "conf_usuarios",
-    "conf_solicitacoes_usuarios",
-    "conf_etiquetas",
-    "conf_fotos",
-    "conf_historico_conferencias_v2",
-    "conf_logs",
-    "conf_banco_atualizado_em",
-    "precificador_online_v1",
-    "ml_promocoes_datas_v1",
-    "ml_sku_mlb_links_v1"
+  const CHAVES_MONITORADAS_TODAS = [
+    "conf_pedidos","conf_pedidos_rascunhos","conf_produtos","conf_kits",
+    "conf_usuarios","conf_solicitacoes_usuarios","conf_etiquetas","conf_fotos",
+    "conf_historico_conferencias_v2","conf_logs","conf_banco_atualizado_em",
+    "precificador_online_v1","ml_promocoes_datas_v1","ml_sku_mlb_links_v1"
   ];
+  // V17.71: cada tela monitora somente os bancos que realmente utiliza. Admin
+  // continua completo; Conferência deixa de consultar Precificador/Promoções etc.
+  const CHAVES_MONITORADAS = TELA_ATUAL === "Conferência"
+    ? ["conf_pedidos","conf_produtos","conf_kits","conf_usuarios","conf_etiquetas",
+       "conf_historico_conferencias_v2","conf_banco_atualizado_em"]
+    : TELA_ATUAL === "Precificador"
+      ? ["precificador_online_v1","ml_promocoes_datas_v1","ml_sku_mlb_links_v1"]
+      : CHAVES_MONITORADAS_TODAS;
 
   const cache = new Map();
   const versoes = new Map();
@@ -109,6 +108,11 @@
     getItem(chave) {
       chave = String(chave);
       if (ehLocal(chave)) return window.localStorage.getItem(chave);
+      // V17.71: bases compartilhadas grandes são lidas da memória após a primeira
+      // carga. O poller por versão abaixo é a autoridade que invalida/atualiza o
+      // cache quando o servidor muda. Evita baixar e parsear conf_pedidos inteiro
+      // dezenas de vezes durante um único render.
+      if (cache.has(chave)) return cache.get(chave);
       try {
         const resposta = xhrJson("GET", `${API}?key=${encodeURIComponent(chave)}`);
         const valor = resposta.exists ? String(resposta.value ?? "") : null;
@@ -269,11 +273,14 @@
       if (!pedido) throw new Error("Pedido não informado para conclusão.");
       const anterior = cache.has("conf_pedidos") ? cache.get("conf_pedidos") : this.getItem("conf_pedidos");
       const resultado = xhrJson("POST", API_COMPLETE, { pedido, clientId: CLIENT_ID });
-      const respostaAtual = xhrJson("GET", `${API}?key=${encodeURIComponent("conf_pedidos")}`);
-      const novo = respostaAtual.exists ? String(respostaAtual.value ?? "[]") : "[]";
+      // V17.72: /order-complete já devolve o banco canônico após a remoção.
+      // Atualiza cache + versão atomicamente; evita a fila manter snapshot antigo.
+      const novo = resultado.value === null || resultado.value === undefined
+        ? "[]" : String(resultado.value);
       cache.set("conf_pedidos", novo);
+      versoes.set("conf_pedidos", Number(resultado.version || 0));
       try { window.sessionStorage.setItem("rede_cache_conf_pedidos", novo); } catch (_) {}
-      dispararStorage("conf_pedidos", anterior, novo);
+      if (anterior !== novo) dispararStorage("conf_pedidos", anterior, novo);
       return resultado;
     },
 
@@ -343,7 +350,7 @@
     },
 
     migrarDoNavegador() {
-      const chaves = CHAVES_MONITORADAS.filter(k => window.localStorage.getItem(k) !== null);
+      const chaves = CHAVES_MONITORADAS_TODAS.filter(k => window.localStorage.getItem(k) !== null);
       if (!chaves.length) {
         alert("Não foram encontrados dados antigos neste navegador.");
         return;
@@ -456,6 +463,18 @@
     atualizarIndicadorRede();
     appStorage.testarConexao();
     consultarAlteracoes();
-    setInterval(consultarAlteracoes, 1500);
+    // V17.71: polling adaptativo. 1,5 s em todas as telas gerava rajadas de
+    // requests e downloads concorrentes quando havia vários computadores abertos.
+    let proximoPoll=null;
+    const agendarPoll=()=>{
+      clearTimeout(proximoPoll);
+      proximoPoll=setTimeout(async()=>{ await consultarAlteracoes(); agendarPoll(); },
+        document.hidden ? 15000 : 4000);
+    };
+    document.addEventListener("visibilitychange",()=>{
+      if(!document.hidden) consultarAlteracoes();
+      agendarPoll();
+    });
+    agendarPoll();
   });
 })();

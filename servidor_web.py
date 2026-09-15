@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.70-CONFERENCIA-BIPE-PERSISTENTE"
+APP_VERSION = "17.72-CONFERENCIA-CONCLUIDOS-SAEM-DA-FILA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -3088,15 +3088,58 @@ def preserve_conference_progress_v1770(current_value: str | None, new_value: str
     return json_dumps(newer) if changed else new_value
 
 
+
+def filter_completed_orders_v1772(value: str) -> str:
+    """V17.72 — pedido concluído não volta para a fila ativa.
+
+    completed_orders é a autoridade canônica de conclusão. Qualquer importador,
+    polling ou snapshot antigo que tente reintroduzir um pedido já concluído tem
+    essas linhas removidas antes de gravar conf_pedidos.
+    """
+    try:
+        rows = json.loads(value or "[]")
+        if not isinstance(rows, list) or not rows:
+            return value
+        completed = {
+            str(r["order_key"] or "")
+            for r in DB.execute("SELECT order_key FROM completed_orders").fetchall()
+            if str(r["order_key"] or "")
+        }
+        if not completed:
+            return value
+        kept = [
+            row for row in rows
+            if not (
+                isinstance(row, dict)
+                and normalize(order_number(row)) in completed
+            )
+        ]
+        return json_dumps(kept) if len(kept) != len(rows) else value
+    except Exception:
+        return value
+
+
 def preserve_pending_records_v1714(current_value: str | None, new_value: str) -> str:
     try:
         current=json.loads(current_value or "[]"); newer=json.loads(new_value or "[]")
     except Exception: return new_value
     if not isinstance(current,list) or not isinstance(newer,list): return new_value
     ids={_pending_identity_v1714(r,i) for i,r in enumerate(newer) if isinstance(r,dict)}
+    # V17.72: completed_orders é tombstone canônico da fila de Conferência.
+    try:
+        completed_keys={
+            str(r["order_key"] or "")
+            for r in DB.execute("SELECT order_key FROM completed_orders").fetchall()
+            if str(r["order_key"] or "")
+        }
+    except Exception:
+        completed_keys=set()
     changed=False
     for i,row in enumerate(current):
         if not isinstance(row,dict): continue
+        if normalize(order_number(row)) in completed_keys:
+            changed=True
+            continue
         ident=_pending_identity_v1714(row,i)
         if ident not in ids:
             # V17.49: não ressuscita a cópia antiga de um item ML quando a lista
@@ -3709,9 +3752,10 @@ def save_storage(
             # (ex.: botão Excluir do Admin/Conferência). Pedidos concluídos continuam
             # sendo retirados abaixo por filter_completed_orders().
             if key == "conf_pedidos":
-                # V17.70: o bip confirmado pelo operador é monotônico. Antes de
-                # qualquer merge, preserva o maior Lido já persistido no servidor.
-                # Assim polling, importadores e outras máquinas não reescrevem 0.
+                # V17.72: conclusão é canônica. Um pedido que já está em
+                # completed_orders nunca pode ser ressuscitado por import/sync/cache.
+                new_value = filter_completed_orders_v1772(new_value)
+                # V17.70: o bip confirmado pelo operador é monotônico.
                 new_value = preserve_conference_progress_v1770(current, new_value)
             if key == "conf_pedidos" and not allow_pending_deletes:
                 # V17.51: sincronizações/jobs nunca podem apagar ou reverter linhas
@@ -12922,7 +12966,14 @@ class AppHandler(BaseHTTPRequestHandler):
                     raise
             audit(ctx["username"], "order.complete", pedido)
             backup_daily()
-            self.send_json({"ok": True, "pedido": pedido, "removed": bool(matching), "already_removed": not matching})
+            # V17.72: devolve o estado canônico já concluído para o cache da
+            # estação que finalizou, sem depender de uma segunda leitura/race.
+            self.send_json({
+                "ok": True, "pedido": pedido, "removed": bool(matching),
+                "already_removed": not matching,
+                "value": json_dumps(remaining),
+                "version": version + 1,
+            })
         except (ValueError, json.JSONDecodeError) as exc:
             self.send_json({"error": str(exc)}, 400)
         except Exception as exc:
