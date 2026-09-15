@@ -1,0 +1,9 @@
+NOROMAK V17.77 — POLLING OTIMIZADO
+
+- Tela ativa: consulta de versões a cada 10 segundos.
+- Aba oculta: consulta a cada 30 segundos.
+- Ao voltar para a aba: consulta imediata e reinicia ciclo de 10 s.
+- Conferência monitora apenas: conf_pedidos, conf_produtos, conf_kits, conf_etiquetas e conf_banco_atualizado_em.
+- Estação de impressão monitora apenas pedidos, etiquetas e atualização do banco.
+- Bip, conclusão e alterações locais continuam persistindo imediatamente.
+- Nenhuma regra de pedidos, Shopee, etiquetas ou precedência ADMIN foi alterada.

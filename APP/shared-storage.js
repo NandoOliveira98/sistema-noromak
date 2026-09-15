@@ -35,14 +35,16 @@
     "conf_historico_conferencias_v2","conf_logs","conf_banco_atualizado_em",
     "precificador_online_v1","ml_promocoes_datas_v1","ml_sku_mlb_links_v1"
   ];
-  // V17.71: cada tela monitora somente os bancos que realmente utiliza. Admin
-  // continua completo; Conferência deixa de consultar Precificador/Promoções etc.
+  // V17.77: polling enxuto por tela. A Conferência monitora somente bancos
+  // operacionais que podem alterar a fila/tabela durante o trabalho. Usuários,
+  // histórico e logs continuam sendo lidos sob demanda, sem polling contínuo.
   const CHAVES_MONITORADAS = TELA_ATUAL === "Conferência"
-    ? ["conf_pedidos","conf_produtos","conf_kits","conf_usuarios","conf_etiquetas",
-       "conf_historico_conferencias_v2","conf_banco_atualizado_em"]
+    ? ["conf_pedidos","conf_produtos","conf_kits","conf_etiquetas","conf_banco_atualizado_em"]
     : TELA_ATUAL === "Precificador"
       ? ["precificador_online_v1","ml_promocoes_datas_v1","ml_sku_mlb_links_v1"]
-      : CHAVES_MONITORADAS_TODAS;
+      : TELA_ATUAL === "Estação de impressão"
+        ? ["conf_pedidos","conf_etiquetas","conf_banco_atualizado_em"]
+        : CHAVES_MONITORADAS_TODAS;
 
   const cache = new Map();
   const versoes = new Map();
@@ -463,17 +465,27 @@
     atualizarIndicadorRede();
     appStorage.testarConexao();
     consultarAlteracoes();
-    // V17.71: polling adaptativo. 1,5 s em todas as telas gerava rajadas de
-    // requests e downloads concorrentes quando havia vários computadores abertos.
+    // V17.77: polling adaptativo conservador para reduzir carga no servidor.
+    // Ações locais (bip, conclusão, edição) continuam salvando imediatamente;
+    // este timer serve apenas para descobrir mudanças feitas em OUTROS PCs.
+    const POLL_ATIVO_MS = 10000;
+    const POLL_OCULTO_MS = 30000;
     let proximoPoll=null;
     const agendarPoll=()=>{
       clearTimeout(proximoPoll);
-      proximoPoll=setTimeout(async()=>{ await consultarAlteracoes(); agendarPoll(); },
-        document.hidden ? 15000 : 4000);
+      proximoPoll=setTimeout(async()=>{
+        await consultarAlteracoes();
+        agendarPoll();
+      }, document.hidden ? POLL_OCULTO_MS : POLL_ATIVO_MS);
     };
     document.addEventListener("visibilitychange",()=>{
-      if(!document.hidden) consultarAlteracoes();
-      agendarPoll();
+      clearTimeout(proximoPoll);
+      if(!document.hidden){
+        // Uma consulta imediata ao retornar; o lock interno evita duplicidade.
+        consultarAlteracoes().finally(agendarPoll);
+      }else{
+        agendarPoll();
+      }
     });
     agendarPoll();
   });
