@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.69-ML-ETIQUETA-AUTO-PERSISTENCIA-FIX"
+APP_VERSION = "17.70-CONFERENCIA-BIPE-PERSISTENTE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -3032,6 +3032,62 @@ def _dedupe_ml_legacy_sku_rows(rows: list[Any]) -> list[Any]:
     return result
 
 
+
+def preserve_conference_progress_v1770(current_value: str | None, new_value: str) -> str:
+    """V17.70 — progresso de bip é monotônico enquanto o pedido estiver pendente.
+
+    Qualquer sync/import/poll que escreva uma cópia antiga de conf_pedidos não pode
+    reduzir Lido de uma linha já conferida. A identidade prioriza __uidLinha/__uidPedido,
+    a mesma usada pelo merge persistente de pedidos.
+    """
+    try:
+        current = json.loads(current_value or "[]")
+        newer = json.loads(new_value or "[]")
+    except Exception:
+        return new_value
+    if not isinstance(current, list) or not isinstance(newer, list):
+        return new_value
+
+    current_by_id: dict[str, dict[str, Any]] = {}
+    for i, row in enumerate(current):
+        if not isinstance(row, dict):
+            continue
+        current_by_id[_pending_identity_v1714(row, i)] = row
+
+    changed = False
+    for i, row in enumerate(newer):
+        if not isinstance(row, dict):
+            continue
+        prev = current_by_id.get(_pending_identity_v1714(row, i))
+        if not prev:
+            continue
+        try:
+            old_lido = max(0, int(prev.get("Lido") or 0))
+        except Exception:
+            old_lido = 0
+        try:
+            new_lido = max(0, int(row.get("Lido") or 0))
+        except Exception:
+            new_lido = 0
+        if old_lido > new_lido:
+            row["Lido"] = old_lido
+            changed = True
+
+        # Metadados de conferência já confirmados também não podem ser apagados por
+        # snapshots antigos de integrações.
+        for field in (
+            "Conferido", "ConferidoEm", "ConferidoPor",
+            "StatusConferencia", "FinalizadoConferenciaEm"
+        ):
+            prev_value = prev.get(field)
+            cur_value = row.get(field)
+            if prev_value not in (None, "", False) and cur_value in (None, "", False):
+                row[field] = prev_value
+                changed = True
+
+    return json_dumps(newer) if changed else new_value
+
+
 def preserve_pending_records_v1714(current_value: str | None, new_value: str) -> str:
     try:
         current=json.loads(current_value or "[]"); newer=json.loads(new_value or "[]")
@@ -3652,6 +3708,11 @@ def save_storage(
             # são aceitas quando a operação explicitamente autoriza exclusão
             # (ex.: botão Excluir do Admin/Conferência). Pedidos concluídos continuam
             # sendo retirados abaixo por filter_completed_orders().
+            if key == "conf_pedidos":
+                # V17.70: o bip confirmado pelo operador é monotônico. Antes de
+                # qualquer merge, preserva o maior Lido já persistido no servidor.
+                # Assim polling, importadores e outras máquinas não reescrevem 0.
+                new_value = preserve_conference_progress_v1770(current, new_value)
             if key == "conf_pedidos" and not allow_pending_deletes:
                 # V17.51: sincronizações/jobs nunca podem apagar ou reverter linhas
                 # criadas/alteradas explicitamente pelo ADMIN (inclusive extensão Chrome).

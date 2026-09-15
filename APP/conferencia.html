@@ -1418,7 +1418,23 @@ function agendarAtualizacaoStorageConferencia(){
   if(temporizadorAtualizacaoStorageConferencia)clearTimeout(temporizadorAtualizacaoStorageConferencia);
   temporizadorAtualizacaoStorageConferencia=setTimeout(()=>{
     temporizadorAtualizacaoStorageConferencia=null;
+    // V17.70: guarda o progresso visível antes de recarregar o banco compartilhado.
+    const progressoLocal=new Map();
+    (pedidoAtual||[]).forEach((row,idx)=>{
+      const uid=String(row?.__uidLinha||row?.__uidPedido||"");
+      const chave=uid||[normalizarIdentificadorExato(extrairCampo(row,"Pedido")),String(extrairCampo(row,"SKU")||""),idx].join("|");
+      progressoLocal.set(chave,Math.max(0,Number(row?.Lido||0)));
+    });
     carregarDadosMemoria();
+    if(progressoLocal.size){
+      dadosPedidos.forEach((row,idx)=>{
+        const uid=String(row?.__uidLinha||row?.__uidPedido||"");
+        const chave=uid||[normalizarIdentificadorExato(extrairCampo(row,"Pedido")),String(extrairCampo(row,"SKU")||""),idx].join("|");
+        const lidoLocal=progressoLocal.get(chave);
+        if(lidoLocal!==undefined && lidoLocal>Number(row?.Lido||0))row.Lido=lidoLocal;
+      });
+      invalidarCachesPedidosDisponiveis();
+    }
     renderizarListaPedidos();
     if(idPedidoAtual){
       const itemRefBase=obterItemPedidoPorUidConferencia(idPedidoAtual);
@@ -2344,7 +2360,9 @@ Quantidade solicitada: ${qtdTotal}`,
   limparMensagemDetalhada();
   input.value = "";
   desenharTabela();
-  agendarSalvamentoProgressoBipe();
+  // V17.70: persiste o bip imediatamente no servidor. O antigo atraso de 600 ms
+  // abria uma janela em que polling/storage podia recarregar Lido=0 e desfazer o bip.
+  salvarProgressoAutomatico("Bip salvo");
   agendarRenderizacaoListaPedidos();
 
   if (!pedidoAtualFinalizado()) {
