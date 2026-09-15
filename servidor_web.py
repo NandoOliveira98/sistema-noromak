@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.68-MLB-SKU-POLICYAGENT-FALLBACK"
+APP_VERSION = "17.69-ML-ETIQUETA-AUTO-PERSISTENCIA-FIX"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -3360,6 +3360,11 @@ def _admin_override_record_delta(storage_key: str, current_value: str | None, re
     entidade completa, remoção cria tombstone e edição protege apenas os campos
     realmente modificados. Objetos-raiz recebem o mesmo tratamento por chave.
     """
+    # V17.69: conf_etiquetas é uma base agregada alimentada simultaneamente pelas
+    # APIs e por uploads. Override do objeto-raiz congela registros/ordem e pode
+    # esconder etiquetas automáticas adicionadas depois.
+    if storage_key == "conf_etiquetas":
+        return 0
     try:
         old = json.loads(current_value) if current_value not in (None, "") else None
         new = json.loads(requested_value)
@@ -3407,6 +3412,10 @@ def _admin_override_record_delta(storage_key: str, current_value: str | None, re
 
 
 def _admin_override_apply(storage_key: str, merged_value: str) -> str:
+    # V17.69: etiquetas usam proteção própria contra remoção; não reaplicar
+    # snapshots-raiz antigos sobre registros novos vindos das integrações.
+    if storage_key == "conf_etiquetas":
+        return merged_value
     rows = _admin_override_load(storage_key)
     if not rows:
         return merged_value
@@ -7204,6 +7213,13 @@ def _ml_store_linked_label(*, operational_order_id: str, order_id: str, pack_id:
                            invoice: dict[str, Any] | None) -> bool:
     if not operational_order_id or not shipment_id or not zpl.strip():
         return False
+    # Limpa a trava-raiz legada que podia esconder a etiqueta recém-baixada.
+    with DB_LOCK:
+        DB.execute(
+            "DELETE FROM admin_manual_overrides WHERE storage_key=? AND entity_id='__ROOT__'",
+            ("conf_etiquetas",),
+        )
+        DB.commit()
     raw, _, _ = get_storage("conf_etiquetas")
     try:
         bank = json.loads(raw) if raw else {}

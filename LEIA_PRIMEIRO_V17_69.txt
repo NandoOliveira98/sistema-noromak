@@ -1,0 +1,11 @@
+V17.69 — Etiquetas automáticas Mercado Livre
+
+Corrigida regressão de persistência em conf_etiquetas.
+O ZPL continuava sendo baixado, mas um override-raiz legado do ADMIN podia
+reaplicar um snapshot antigo de registros/ordem e esconder as novas etiquetas.
+
+- conf_etiquetas não usa mais override genérico do objeto-raiz.
+- preserva a proteção específica contra exclusão acidental.
+- ao gravar etiqueta ML automática, limpa overrides-raiz legados dessa base.
+- mantém deduplicação por shipment/pedido.
+- não altera os fluxos Shopee/Magalu.
