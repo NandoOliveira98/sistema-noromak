@@ -1,0 +1,5 @@
+NOROMAK V17.75 — CONFERÊNCIA SHOPEE VERIFICADA
+- Grava o nome em Nome Conferência, NomeConferencia, ConferenciaNome e Conferência.
+- Após COMMIT, relê conf_pedidos via get_storage e valida todas as linhas do pedido.
+- Só retorna ok=true com verified=true se o nome realmente estiver persistido.
+- Admin aceita os quatro aliases e pode receber atualização visual imediata da extensão.

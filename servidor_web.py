@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.74-PENDENTES-EXIBE-NOME-CONFERENCIA"
+APP_VERSION = "17.75-SHOPEE-CONFERENCIA-VERIFICADA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -12645,8 +12645,9 @@ class AppHandler(BaseHTTPRequestHandler):
                             row["Nome Conferência"] = nome
                             row["NomeConferencia"] = nome
                             row["ConferenciaNome"] = nome
+                            row["Conferência"] = nome
                             entity_id = _admin_override_entity_id(storage_key, row, idx)
-                            for field in ("Nome Conferência", "NomeConferencia", "ConferenciaNome"):
+                            for field in ("Nome Conferência", "NomeConferencia", "ConferenciaNome", "Conferência"):
                                 _admin_override_upsert(
                                     storage_key, entity_id, field, nome,
                                     deleted=False, actor=actor
@@ -12699,10 +12700,38 @@ class AppHandler(BaseHTTPRequestHandler):
                     DB.rollback()
                     raise
 
+            # V17.75: sucesso somente depois de RELER a fonte canônica e confirmar.
+            persisted, persisted_version, _ = get_storage("conf_pedidos")
+            try:
+                persisted_rows = json.loads(persisted or "[]")
+            except Exception:
+                persisted_rows = []
+            matched = [
+                r for r in persisted_rows
+                if isinstance(r, dict) and normalize(order_number(r)) == pedido_key
+            ]
+            verified = bool(matched) and all(
+                str(
+                    r.get("Nome Conferência")
+                    or r.get("NomeConferencia")
+                    or r.get("ConferenciaNome")
+                    or r.get("Conferência")
+                    or ""
+                ).strip() == nome
+                for r in matched
+            )
+            if not verified:
+                self.send_json({
+                    "ok": False,
+                    "verified": False,
+                    "error": f"O pedido {pedido} foi localizado, mas o Nome de Conferência não permaneceu gravado no banco canônico."
+                }, 409)
+                return
             audit(actor, "order.conference_name", f"{pedido}|{nome}")
             self.send_json({
-                "ok": True, "pedido": pedido, "nome": nome,
-                "updated": total, "storages": updated_keys,
+                "ok": True, "verified": True, "pedido": pedido, "nome": nome,
+                "updated": len(matched), "version": persisted_version,
+                "storages": updated_keys,
             })
         except (ValueError, json.JSONDecodeError) as exc:
             self.send_json({"ok": False, "error": str(exc)}, 400)

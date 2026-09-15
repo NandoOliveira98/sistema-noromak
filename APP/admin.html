@@ -3087,7 +3087,7 @@ function campoBanco(obj,nome) {
   // V17.74: Nome de Conferência tem uma fonte visual canônica, com leitura
   // compatível com registros gravados por versões anteriores/extensão Shopee.
   if(nome==="Nome Conferência"){
-    const v=obj?.["Nome Conferência"] ?? obj?.NomeConferencia ?? obj?.ConferenciaNome;
+    const v=obj?.["Nome Conferência"] ?? obj?.NomeConferencia ?? obj?.ConferenciaNome ?? obj?.["Conferência"];
     return v===null||v===undefined?"":String(v);
   }
   const v=obj?.[nome]; return v===null||v===undefined?"":String(v);
@@ -8270,6 +8270,20 @@ window.addEventListener("storage",e=>{
   const salvarSenhaAnterior=window.salvarNovaSenhaAdmin;window.salvarNovaSenhaAdmin=async function(){await salvarSenhaAnterior();setTimeout(()=>carregarUsuariosCanonicosV1757().catch(()=>{}),150)};
   document.addEventListener('DOMContentLoaded',()=>setTimeout(()=>carregarUsuariosCanonicosV1757().catch(()=>{}),300));
 })();
+
+window.addEventListener("noromak:conference-name-saved",event=>{
+  const pedido=normalizarCodigoBanco(event?.detail?.pedido||"");
+  const nome=String(event?.detail?.nome||"").trim();
+  if(!pedido||!nome)return;
+  let mudou=false;
+  (pedidosEditorAdmin||[]).forEach(item=>{
+    if(normalizarCodigoBanco(item?.Pedido||"")===pedido){
+      item["Nome Conferência"]=nome; item.NomeConferencia=nome;
+      item.ConferenciaNome=nome; item["Conferência"]=nome; mudou=true;
+    }
+  });
+  if(mudou)renderizarPedidosAdmin();
+});
 </script>
 
 
