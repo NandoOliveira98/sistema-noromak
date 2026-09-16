@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.77-POLLING-OTIMIZADO-10S-30S"
+APP_VERSION = "17.78-CORRECAO-OPERACIONAL-PEDIDOS-SHOPEE-QTD"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -3789,6 +3789,11 @@ def save_storage(
                 merged = _admin_manual_order_vault_apply(merged)
             if key in ("conf_pedidos", "conf_pedidos_rascunhos"):
                 merged = _pending_filter_manual_deleted_orders_value(merged)
+                # V17.78: conclusão é a última barreira da fila. Overrides, cofre
+                # manual, merge e sync não podem ressuscitar pedido concluído.
+                # Reimportação ADMIN explícita continua possível porque
+                # allow_completed_reimport remove o tombstone antes deste ponto.
+                merged = filter_completed_orders_v1772(merged)
             version += 1
             updated = now_iso()
             DB.execute(
@@ -5085,7 +5090,7 @@ def _shopee_build_pending_lines(order: dict[str, Any], package_numbers: list[str
         model_name = str(item.get("model_name") or "").strip()
         if model_name and normalize(model_name) not in normalize(description):
             description = f"{description} - {model_name}".strip(" -")
-        identity = f"{order_sn}|{item.get('item_id')}|{item.get('model_id')}|{item.get('line_item_id')}|{sku}|{idx}"
+        identity = f"{order_sn}|{item.get('item_id')}|{item.get('model_id')}|{item.get('line_item_id')}|{sku}"
         row = {
             "Pedido": order_sn,
             "Marketplace": "SHOPEE",
@@ -5120,6 +5125,9 @@ def _shopee_build_pending_lines(order: dict[str, Any], package_numbers: list[str
             "SkuPrincipalShopee": str(item.get("item_sku") or "").strip(),
             "SkuReferenciaShopee": str(item.get("model_sku") or "").strip(),
             "VariacaoShopee": model_name,
+            "ItemIdShopee": str(item.get("item_id") or ""),
+            "ModelIdShopee": str(item.get("model_id") or ""),
+            "LineItemIdShopee": str(item.get("line_item_id") or ""),
             "ShopeeAtualizadoEm": now_iso(),
             "CriadoEm": now_iso(),
             "__uidLinha": "SHOPEEAPI_" + hashlib.sha1(identity.encode("utf-8")).hexdigest()[:20],
@@ -5133,6 +5141,35 @@ def _shopee_build_pending_lines(order: dict[str, Any], package_numbers: list[str
         lines.append(row)
     return lines
 
+
+
+def _shopee_consolidate_api_quantities_v1778(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Consolida linhas repetidas da mesma venda/item Shopee sem inflar quantidade."""
+    result: list[dict[str, Any]]=[]
+    positions: dict[tuple[str,str,str,str,str],int]={}
+    for row in lines:
+        if not isinstance(row,dict):
+            continue
+        key=(
+            normalize(order_number(row)),
+            str(row.get("ItemIdShopee") or ""),
+            str(row.get("ModelIdShopee") or ""),
+            str(row.get("LineItemIdShopee") or ""),
+            normalize(row.get("SkuOrigemImportacao") or row.get("SkuReferenciaShopee") or row.get("SKU")),
+        )
+        # line_item_id presente identifica uma linha real única. Sem ele,
+        # item/model/SKU formam a unidade comercial e duplicatas são somadas.
+        if key not in positions:
+            positions[key]=len(result)
+            result.append(dict(row))
+            continue
+        i=positions[key]
+        try: a=max(1,int(float(result[i].get("Quantidade") or 1)))
+        except Exception: a=1
+        try: b=max(1,int(float(row.get("Quantidade") or 1)))
+        except Exception: b=1
+        result[i]["Quantidade"]=str(a+b)
+    return result
 
 
 def _shopee_filter_artificial_kit_lines(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -5202,6 +5239,44 @@ def _pending_order_is_manually_deleted(row: dict[str, Any], deletions: list[dict
     return False
 
 
+def _pending_admin_restore_orders(order_keys: set[str]) -> None:
+    """V17.78 — inclusão explícita do ADMIN vence exclusão/tombstone anterior."""
+    keys={normalize(x) for x in order_keys if normalize(x)}
+    if not keys:
+        return
+    # Tombstone genérico V17.66.
+    row=DB.execute("SELECT value,version FROM storage WHERE key=?", (PENDING_ORDER_DELETE_KEY_V1766,)).fetchone()
+    if row:
+        try: items=json.loads(str(row["value"] or "[]"))
+        except Exception: items=[]
+        changed=False
+        if isinstance(items,list):
+            for item in items:
+                if isinstance(item,dict) and normalize(item.get("Pedido")) in keys and bool(item.get("Ativo",True)):
+                    item["Ativo"]=False
+                    item["RestauradoPorAdminEm"]=now_iso()
+                    changed=True
+        if changed:
+            DB.execute("UPDATE storage SET value=?,version=?,updated_at=? WHERE key=?",
+                       (json_dumps(items),int(row["version"] or 0)+1,now_iso(),PENDING_ORDER_DELETE_KEY_V1766))
+    # Tombstones Shopee por pedido/linha também não podem bloquear uma reinclusão ADMIN.
+    row=DB.execute("SELECT value,version FROM storage WHERE key='conf_shopee_exclusoes_v1'").fetchone()
+    if row:
+        try: items=json.loads(str(row["value"] or "[]"))
+        except Exception: items=[]
+        changed=False
+        if isinstance(items,list):
+            kept=[]
+            for item in items:
+                if isinstance(item,dict) and normalize(item.get("Pedido")) in keys:
+                    changed=True
+                    continue
+                kept.append(item)
+            if changed:
+                DB.execute("UPDATE storage SET value=?,version=?,updated_at=? WHERE key='conf_shopee_exclusoes_v1'",
+                           (json_dumps(kept),int(row["version"] or 0)+1,now_iso()))
+
+
 def _pending_filter_manual_deleted_orders_value(value: str | None) -> str:
     try:
         rows = json.loads(value or "[]")
@@ -5252,7 +5327,9 @@ SHOPEE_MANUAL_EDIT_FIELDS = (
     "Quantidade de Kits",
     "Quantidade por Kit",
     "SKU",
-    "Quantidade",
+    # V17.78: Quantidade não entra na proteção automática Shopee. A quantidade
+    # real da venda vem da API; alterações explícitas do ADMIN continuam soberanas
+    # pelo admin_manual_overrides aplicado no final do save_storage.
     "Código de Barras",
     "Descrição",
     "Rua",
@@ -5414,6 +5491,7 @@ def shopee_manual_sync() -> dict[str, Any]:
 
         # V17.43: remove linhas artificiais de kit antes da reconciliação e respeita
         # exclusões manuais persistentes feitas no Admin/Conferência.
+        api_lines = _shopee_consolidate_api_quantities_v1778(api_lines)
         api_lines = _shopee_filter_artificial_kit_lines(api_lines)
         manual_deletions = _shopee_load_manual_deletions()
         if manual_deletions:
@@ -12295,6 +12373,9 @@ class AppHandler(BaseHTTPRequestHandler):
             if not incoming:
                 raise ValueError("Nenhuma linha válida foi recebida.")
 
+            # V17.78: ao adicionar manualmente, o ADMIN está explicitamente
+            # restaurando o pedido; tombstones antigos não podem ocultar a inclusão.
+            _pending_admin_restore_orders({str(order_number(r) or "") for r in incoming})
             current_raw, _, _ = get_storage("conf_pedidos")
             current = _rows_from_storage_value(current_raw)
             merged = [dict(r) if isinstance(r, dict) else r for r in current]

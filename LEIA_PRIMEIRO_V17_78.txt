@@ -1,0 +1,6 @@
+NOROMAK V17.78 — CORREÇÃO OPERACIONAL
+1) Pedido manual/Admin: inclusão explícita restaura tombstones anteriores e permanece no cofre canônico.
+2) Pedido concluído: filtro de completed_orders agora é a ÚLTIMA barreira após overrides/vault/merge; sync Shopee não ressuscita.
+3) Quantidade Shopee: quantidade da API volta a ser autoridade operacional; ADMIN override continua prevalecendo.
+4) UID Shopee estabilizado sem índice de posição e IDs da API armazenados; linhas API duplicadas são consolidadas antes da lógica de KIT.
+5) Polling V17.77 preservado: 10 s ativo / 30 s oculto.
