@@ -4137,10 +4137,10 @@ function registrarExclusaoManualShopeeAdmin(item){
 function usuarioAtualEhAdminV1766(){
   try{return normalizarBuscaBanco(JSON.parse(appStorage.getItem("conf_admin_sessao")||"{}")?.Perfil||"").includes("admin");}catch(_){return false;}
 }
-async function excluirKitInteiroAdmin(pedido,marketplace){
+async function excluirPedidoInteiroAdmin(pedido,marketplace){
   if(!pedido)return;
   if(!usuarioAtualEhAdminV1766()){
-    alert("Somente o ADMIN pode excluir o KIT inteiro de forma definitiva.");
+    alert("Somente o ADMIN pode excluir o pedido de forma definitiva.");
     return;
   }
   if(!confirm(`Excluir o KIT INTEIRO do pedido ${pedido}?\n\nTodos os componentes serão removidos e nenhuma sincronização poderá recriar este pedido automaticamente.`))return;
@@ -4164,6 +4164,7 @@ async function excluirKitInteiroAdmin(pedido,marketplace){
     alert("Não foi possível excluir o KIT inteiro: "+(e.message||e));
   }
 }
+async function excluirKitInteiroAdmin(pedido,marketplace){return excluirPedidoInteiroAdmin(pedido,marketplace);}
 async function excluirLinhaPedidoAdmin(uid){
   const item=pedidosEditorAdmin.find(x=>x.__uidLinha===uid); if(!item)return;
   const ehKit=normalizarBuscaBanco(item.Kit)==="sim"||!!String(item.SkuKitOrigem||item["Nome do Kit"]||"").trim();
@@ -4634,7 +4635,7 @@ function renderizarPedidosAdmin(){
         <label>Data<input class="data-pedido-compacta" type="date" data-grupo-pedido="${htmlSeguroBanco(pedidoOriginal)}" data-campo="Data do Pedido" value="${htmlSeguroBanco(normalizarDataPedidoBanco(primeiro['Data do Pedido'],true))}" onchange="atualizarCampoGrupoPedidoAdmin(this)"></label>
         <label class="pedido-card-cliente">Cliente<input data-grupo-pedido="${htmlSeguroBanco(pedidoOriginal)}" data-campo="Cliente" value="${htmlSeguroBanco(campoBanco(primeiro,'Cliente'))}" onchange="atualizarCampoGrupoPedidoAdmin(this)"></label>
         <label class="pedido-card-conferencia">Conferência<input data-grupo-pedido="${htmlSeguroBanco(pedidoOriginal)}" data-campo="Nome Conferência" value="${htmlSeguroBanco(campoBanco(primeiro,'Nome Conferência'))}" onchange="atualizarCampoGrupoPedidoAdmin(this)"></label>
-        ${ehKit&&usuarioAtualEhAdminV1766()?`<button type="button" class="btn-excluir-kit-inteiro" title="Excluir todos os componentes e impedir que a integração recrie o KIT" onclick="excluirKitInteiroAdmin('${htmlSeguroBanco(pedidoOriginal)}','${htmlSeguroBanco(primeiro.Marketplace)}')">🗑 Excluir KIT inteiro</button>`:''}
+        ${usuarioAtualEhAdminV1766()?`<button type="button" class="btn-excluir-kit-inteiro" title="Excluir definitivamente da Conferência e Pedidos Pendentes" onclick="excluirPedidoInteiroAdmin('${htmlSeguroBanco(pedidoOriginal)}','${htmlSeguroBanco(primeiro.Marketplace)}')">🗑 Excluir pedido</button>`:''}
         <div class="pedido-card-status">${status}</div>
       </div>`;
       const itens=grupo.itens.map((item,indice)=>{

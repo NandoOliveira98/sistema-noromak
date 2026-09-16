@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.80-CONCLUSAO-EXCLUSAO-CANONICA"
+APP_VERSION = "17.81-ADMIN-EXCLUSAO-SOBERANA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -12537,13 +12537,21 @@ class AppHandler(BaseHTTPRequestHandler):
                         )
 
                     DB.commit()
-                    audit(actor, "order.kit.delete", f"{ref_order}|linhas={len(removed_rows)}|marketplace={marketplace_hint}")
+                    canonical, canonical_version, _ = get_storage("conf_pedidos")
+                    draft_canonical, _, _ = get_storage("conf_pedidos_rascunhos")
+                    verify_rows=json.loads(canonical or "[]")
+                    verify_drafts=json.loads(draft_canonical or "[]")
+                    if any(isinstance(r,dict) and normalize(order_number(r))==order_norm for r in (verify_rows+verify_drafts)):
+                        self.send_json({"ok":False,"error":f"Falha de segurança: pedido {ref_order} ainda existe após exclusão ADMIN."},409)
+                        return
+                    audit(actor, "order.admin.delete", f"{ref_order}|linhas={len(removed_rows)}|marketplace={marketplace_hint}")
                     self.send_json({
-                        "ok": True,
+                        "ok": True, "verified": True,
                         "pedido": ref_order,
                         "removed_rows": len(removed_rows),
                         "order_tombstone": True,
                         "shopee_order_tombstone": bool(is_shopee),
+                        "value": canonical or "[]", "version": canonical_version,
                     })
                 except Exception:
                     DB.rollback()
