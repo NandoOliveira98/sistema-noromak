@@ -1,0 +1,6 @@
+NOROMAK V17.79
+- Dashboard: conferidos hoje divididos por marketplace, contando pedido único.
+- Nova Central de Pedidos do Dia com filtros, KPIs, dados operacionais e detalhes.
+- Pedidos pendentes + histórico de conferências são consolidados/deduplicados por pedido.
+- Botões Cliente e Romaneio preparados visualmente para Apollo; não executam ação falsa.
+- Preserva todas as correções V17.78 e polling V17.77.

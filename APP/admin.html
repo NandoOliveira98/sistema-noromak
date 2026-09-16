@@ -565,6 +565,21 @@ body{background:var(--v15-bg)!important}
 <style id="v1766-kit-delete-style">
 .btn-excluir-kit-inteiro{align-self:end;border:1px solid #ef9a9a;background:#fff5f5;color:#b42318;border-radius:8px;padding:8px 10px;font-weight:800;font-size:12px;cursor:pointer;white-space:nowrap}.btn-excluir-kit-inteiro:hover{background:#ffe4e4;border-color:#e57373}
 </style>
+
+<style id="v1779-pedidos-dia-css">
+.v1779-marketplaces{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.v1779-marketplaces span{background:#f3f7fb;border:1px solid #dbe7f2;border-radius:9px;padding:7px 11px;font-size:12px;font-weight:700;color:#23415d}
+.v1779-head{display:flex;justify-content:space-between;gap:15px;align-items:flex-start;flex-wrap:wrap}
+.v1779-filters{display:grid;grid-template-columns:150px 170px 170px minmax(260px,1fr);gap:10px;margin:16px 0}
+.v1779-filters input,.v1779-filters select{width:100%;box-sizing:border-box;padding:10px;border:1px solid #cad9e8;border-radius:9px;background:#fff}
+.v1779-kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:14px 0}
+.v1779-kpi{padding:13px;border:1px solid #dbe7f2;border-radius:12px;background:#f8fbfe}.v1779-kpi b{font-size:22px;display:block;color:#0b365b}.v1779-kpi span{font-size:11px;color:#64748b}
+.v1779-table{width:100%;border-collapse:collapse;font-size:12px}.v1779-table th{background:#edf5fc;text-align:left;padding:9px;white-space:nowrap}.v1779-table td{padding:9px;border-bottom:1px solid #e6edf4;vertical-align:top}
+.v1779-badge{display:inline-block;padding:4px 7px;border-radius:999px;background:#eef4fa;font-weight:700;font-size:10px}.v1779-ok{background:#e7f8ed;color:#16723b}.v1779-wait{background:#fff4dd;color:#8b5a00}
+.v1779-actions{display:flex;gap:5px}.v1779-actions button{border:1px solid #cbdbea;background:white;border-radius:7px;padding:6px 8px;cursor:pointer;font-size:11px}.v1779-actions button:hover{background:#eef6fd}
+.v1779-detail{display:none;background:#f8fbfe;padding:10px;margin-top:6px;border-radius:8px;line-height:1.55;min-width:340px}
+@media(max-width:1000px){.v1779-kpis{grid-template-columns:repeat(2,1fr)}.v1779-filters{grid-template-columns:1fr 1fr}}
+</style>
 </head>
 <body>
 
@@ -754,6 +769,7 @@ body{background:var(--v15-bg)!important}
   <button class="v15-nav-item active" data-v15-nav="dashboard" onclick="abrirDashboardV151();v15Nav(this)"><span class="v15-nav-icon">▣</span><span class="v15-nav-label">Dashboard</span></button>
   <div class="v15-nav-section">Expedição</div>
   <button class="v15-nav-item" data-v15-nav="pedidos" onclick="abrirAbaAdmin('pedidos');v15Nav(this)"><span class="v15-nav-icon">📋</span><span class="v15-nav-label">Pedidos pendentes</span></button>
+  <button class="v15-nav-item" data-v15-nav="pedidos-dia" onclick="abrirAbaAdmin('pedidos-dia');v15Nav(this)"><span class="v15-nav-icon">📅</span><span class="v15-nav-label">Pedidos do dia</span></button>
   <button class="v15-nav-item" data-v15-nav="coleta" onclick="abrirAbaAdmin('coleta');v15Nav(this)"><span class="v15-nav-icon">🚚</span><span class="v15-nav-label">Coleta do dia</span></button>
   <button class="v15-nav-item" data-v15-nav="etiquetas" onclick="abrirAbaAdmin('etiquetas');v15Nav(this)"><span class="v15-nav-icon">🏷</span><span class="v15-nav-label">Etiquetas / Importar TXT</span></button>
   <a class="v15-nav-item" href="/expedicao/conferencia" target="_blank" rel="noopener"><span class="v15-nav-icon">✓</span><span class="v15-nav-label">Conferência</span></a>
@@ -841,6 +857,7 @@ body{background:var(--v15-bg)!important}
           <div><b id="v151ProdUnidades">0</b><span>unidades</span></div>
           <div><b id="v151UltimaConf">—</b><span>última conferência</span></div>
         </div>
+        <div id="v1779MarketplaceConf" class="v1779-marketplaces"></div>
       </div>
 
       <div class="v151-panel v151-chart-panel">
@@ -864,7 +881,7 @@ body{background:var(--v15-bg)!important}
   </section>
 
   <div class="abas-admin">
-    <button class="aba-btn ativa" data-aba="pedidos" onclick="abrirAbaAdmin('pedidos')">📋 Pedidos pendentes</button>
+    <button class="aba-btn ativa" data-aba="pedidos" onclick="abrirAbaAdmin('pedidos')">📋 Pedidos pendentes</button><button class="aba-btn" data-aba="pedidos-dia" onclick="abrirAbaAdmin('pedidos-dia')" style="display:none">📅 Pedidos do dia</button>
     <button class="aba-btn" data-aba="produtos" onclick="abrirAbaAdmin('produtos')">📦 Banco de produtos</button>
     <button class="aba-btn" data-aba="kits" onclick="abrirAbaAdmin('kits')">🎁 Cadastro de kits</button>
     <button class="aba-btn" data-aba="usuarios" onclick="abrirAbaAdmin('usuarios')">👥 Usuários</button>
@@ -926,6 +943,28 @@ body{background:var(--v15-bg)!important}
     </div>
   </section>
 
+
+
+  <section id="aba-pedidos-dia" class="aba-painel">
+    <div class="card-admin">
+      <div class="v1779-head"><div><h2>📅 Central de Pedidos do Dia <span class="usuario-versao">V17.79</span></h2><div style="color:#64748b">Controle diário de vendas recebidas, inclusive as já conferidas.</div></div><div style="font-size:12px;color:#64748b">Apollo: estrutura preparada para Cliente e Romaneio</div></div>
+      <div class="v1779-kpis">
+        <div class="v1779-kpi"><b id="pdRecebidos">0</b><span>Recebidos</span></div>
+        <div class="v1779-kpi"><b id="pdAguardando">0</b><span>Aguardando</span></div>
+        <div class="v1779-kpi"><b id="pdSeparacao">0</b><span>Em separação / conferência</span></div>
+        <div class="v1779-kpi"><b id="pdConferidos">0</b><span>Conferidos</span></div>
+        <div class="v1779-kpi"><b id="pdCancelados">0</b><span>Cancelados</span></div>
+      </div>
+      <div class="v1779-filters">
+        <input id="pdData" type="date" onchange="renderPedidosDiaV1779()">
+        <select id="pdMarketplace" onchange="renderPedidosDiaV1779()"><option value="">Todos marketplaces</option><option>Mercado Livre</option><option>SHOPEE</option><option>MAGALU</option></select>
+        <select id="pdStatus" onchange="renderPedidosDiaV1779()"><option value="">Todos status</option><option value="aguardando">Aguardando</option><option value="separacao">Em separação</option><option value="conferido">Conferido</option><option value="cancelado">Cancelado</option></select>
+        <input id="pdBusca" placeholder="Buscar pedido, SKU ou cliente..." oninput="renderPedidosDiaV1779()">
+      </div>
+      <div style="overflow:auto"><table class="v1779-table"><thead><tr><th>Pedido eCommerce</th><th>Contato</th><th>Situação</th><th>Cancelamento</th><th>NF Status</th><th>Cód.Cliente</th><th>Data Pedido</th><th>Data Contato</th><th>Cliente</th><th>Cód.Usu.</th><th>Usuário</th><th>Marketplace</th><th>Itens / Unid.</th><th>Ações</th></tr></thead><tbody id="pdCorpo"></tbody></table></div>
+      <div id="pdResumo" style="padding-top:12px;color:#64748b;font-size:12px"></div>
+    </div>
+  </section>
 
   <section id="aba-coleta" class="aba-painel">
     <div class="card-admin">
@@ -3750,12 +3789,65 @@ function atualizarKpisAdmin(){
   if(elUnid)elUnid.textContent=validos.reduce((s,x)=>s+(Number(x.Quantidade)||0),0);
   if(elProd)elProd.textContent=produtosBancoAdmin.length;
 }
+
+function pdDateKeyV1779(v){
+  if(!v)return "";const d=v instanceof Date?v:v151ParseDataLog(v);if(!d||Number.isNaN(d.getTime()))return "";
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+function pdMarketplaceV1779(v){const n=String(v||"").trim();const x=n.toLowerCase();if(x.includes("mercado")||x==="ml")return"Mercado Livre";if(x.includes("shopee"))return"SHOPEE";if(x.includes("magalu"))return"MAGALU";return n||"OUTROS";}
+function pdDataPedidoV1779(r){return r?.["Data do Pedido"]||r?.DataPedido||r?.Data||r?.CriadoEm||""}
+function pdHistoricoV1779(){return v151HistoricoCompleto()}
+function pdMontarV1779(){
+  let pend=[];try{pend=obterPedidosValidosBanco()||[]}catch(_){}
+  const hist=pdHistoricoV1779(), map=new Map();
+  function ent(p){const k=normalizarCodigoBanco(p);if(!k)return null;if(!map.has(k))map.set(k,{pedido:p,linhas:[],conferido:false,conf:null});return map.get(k)}
+  pend.forEach(r=>{const e=ent(r.Pedido);if(e)e.linhas.push(r)});
+  hist.forEach(h=>{const e=ent(h.pedido);if(e){e.conferido=true;e.conf=h}});
+  return [...map.values()];
+}
+function pdStatusV1779(e){
+  if(e.conferido)return"conferido";const rs=e.linhas||[];
+  if(rs.some(r=>String(r.Cancelamento||r.Status||"").toLowerCase().includes("cancel")))return"cancelado";
+  if(rs.some(r=>Number(r.Lido||0)>0))return"separacao";return"aguardando";
+}
+function pdApolloV1779(acao){alert(`${acao}: integração Apollo em preparação. Nenhuma alteração foi enviada.`)}
+function pdDetalhesV1779(id){
+ const e=document.getElementById(id);if(e)e.style.display=e.style.display==="block"?"none":"block";
+}
+function renderPedidosDiaV1779(){
+ const corpo=document.getElementById("pdCorpo");if(!corpo)return;
+ const dataEl=document.getElementById("pdData");if(dataEl&&!dataEl.value)dataEl.value=pdDateKeyV1779(new Date());
+ const data=dataEl?.value||"",mp=document.getElementById("pdMarketplace")?.value||"",st=document.getElementById("pdStatus")?.value||"",busca=normalizarCodigoBanco(document.getElementById("pdBusca")?.value||"");
+ let all=pdMontarV1779();
+ const stats={recebidos:0,aguardando:0,separacao:0,conferido:0,cancelado:0};
+ let rows=[];
+ all.forEach(e=>{
+   const first=e.linhas[0]||{}, status=pdStatusV1779(e), dp=pdDataPedidoV1779(first), dc=e.conf?.data||first.CriadoEm||dp;
+   // concluídos antigos podem não carregar snapshot completo; data de conclusão é fallback para o controle diário.
+   const key=pdDateKeyV1779(dp)||pdDateKeyV1779(dc); if(data&&key!==data)return;
+   stats.recebidos++;stats[status]=(stats[status]||0)+1;
+   const marketplace=pdMarketplaceV1779(first.Marketplace||e.conf?.marketplace);
+   const text=normalizarCodigoBanco([e.pedido,first.Cliente,...e.linhas.map(x=>x.SKU)].join(" "));
+   if(mp&&marketplace!==mp)return;if(st&&status!==st)return;if(busca&&!text.includes(busca))return;
+   rows.push({e,first,status,dp,dc,marketplace});
+ });
+ v151Set("pdRecebidos",stats.recebidos);v151Set("pdAguardando",stats.aguardando);v151Set("pdSeparacao",stats.separacao);v151Set("pdConferidos",stats.conferido);v151Set("pdCancelados",stats.cancelado);
+ const labels={aguardando:"Aguardando",separacao:"Em separação",conferido:"Conferido",cancelado:"Cancelado"};
+ corpo.innerHTML=rows.map((x,i)=>{
+   const f=x.first, unidades=x.e.linhas.reduce((s,r)=>s+(Number(r.Quantidade)||0),0)||Number(x.e.conf?.qtdUnidades||0), itens=x.e.linhas.length||Number(x.e.conf?.qtdItens||0), id=`pdDet${i}`;
+   const detalhes=x.e.linhas.length?x.e.linhas.map(r=>`${htmlSeguroBanco(r.SKU||"—")} — ${htmlSeguroBanco(r.Descrição||"")} — Qtd. ${Number(r.Quantidade)||0}`).join("<br>"):"Dados dos itens preservados no histórico de conferência.";
+   return `<tr><td><b>${htmlSeguroBanco(x.e.pedido)}</b><div id="${id}" class="v1779-detail">${detalhes}</div></td><td>${htmlSeguroBanco(f.Contato||f.TelefoneShopee||"—")}</td><td><span class="v1779-badge ${x.status==="conferido"?"v1779-ok":"v1779-wait"}">${labels[x.status]}</span></td><td>${x.status==="cancelado"?"SIM":"—"}</td><td>${htmlSeguroBanco(f["NF Status"]||f.NFStatus||(f.NF||f["Nota Fiscal"]?"Com NF":"—"))}</td><td>${htmlSeguroBanco(f["Cód.Cliente"]||f.CodigoCliente||"—")}</td><td>${htmlSeguroBanco(x.dp||"—")}</td><td>${htmlSeguroBanco(x.dc instanceof Date?x.dc.toLocaleString("pt-BR"):x.dc||"—")}</td><td>${htmlSeguroBanco(f.Cliente||"—")}</td><td>${htmlSeguroBanco(f["Cód.Usu."]||f.CodigoUsuario||"—")}</td><td>${htmlSeguroBanco(f.Usuario||f.ConferidoPor||"—")}</td><td>${htmlSeguroBanco(x.marketplace)}</td><td>${itens} / ${unidades}</td><td><div class="v1779-actions"><button onclick="pdApolloV1779('Cliente')">Cliente</button><button onclick="pdApolloV1779('Romaneio')">Romaneio</button><button onclick="pdDetalhesV1779('${id}')">Detalhes</button></div></td></tr>`;
+ }).join("")||'<tr><td colspan="14" style="text-align:center;padding:25px;color:#64748b">Nenhum pedido encontrado para os filtros selecionados.</td></tr>';
+ v151Set("pdResumo",`${rows.length} pedido(s) exibido(s)`);
+}
+
 function abrirAbaAdmin(nome){
   const dash=document.getElementById("v151Dashboard");if(dash)dash.hidden=true;
   document.querySelectorAll(".aba-btn").forEach(b=>b.classList.toggle("ativa",b.dataset.aba===nome));
   document.querySelectorAll(".aba-painel").forEach(p=>p.classList.toggle("ativa",p.id==="aba-"+nome));
   document.querySelectorAll(".v15-nav-item[data-v15-nav]").forEach(b=>b.classList.toggle("active",b.dataset.v15Nav===nome));
   if(nome==="historico") carregarLogs();
+  if(nome==="pedidos-dia") renderPedidosDiaV1779();
   if(nome==="coleta") carregarColetaDiaAdmin(!coletaAdminCarregada);
   if(nome==="historico-sku") carregarHistoricoSkuAdmin();
   if(nome==="kits") renderizarKitsAdmin();
@@ -3803,6 +3895,8 @@ function v151AtualizarDashboard(){
   v151Set("v151Pendentes",pedidos.length);v151Set("v151Conferencia",prontos);v151Set("v151ConferidosHoje",confHoje);v151Set("v151EtiquetasPendentes",etqPend);v151Set("v151Problemas",problemasPedidos.size);
   v151Set("v151Recebidos",pedidos.length+confHoje);v151Set("v151Integrados",integrados+confHoje);v151Set("v151FluxoConferidos",confHoje);v151Set("v151Impressos",confHoje);v151Set("v151Aguardando",pedidos.length);
   v151Set("v151ProdPedidos",confHoje);v151Set("v151ProdItens",itensHoje);v151Set("v151ProdUnidades",unidHoje);
+  const mpBox=document.getElementById("v1779MarketplaceConf");
+  if(mpBox){const por=new Map();const vistos=new Set();hoje.forEach(x=>{const pk=String(x.pedido||"");if(!pk||vistos.has(pk))return;vistos.add(pk);let m=String(x.marketplace||"Outros").trim()||"Outros";const n=m.toLowerCase();if(n.includes("mercado")||n==="ml")m="Mercado Livre";else if(n.includes("shopee"))m="Shopee";else if(n.includes("magalu"))m="Magalu";por.set(m,(por.get(m)||0)+1)});mpBox.innerHTML=[...por.entries()].sort((x,y)=>y[1]-x[1]).map(([m,n])=>`<span>${htmlSeguroBanco(m)}: ${n}</span>`).join("")||"<span>Sem conferências hoje</span>";}
   const ultima=hist.filter(x=>x.data).sort((a,b)=>b.data-a.data)[0];v151Set("v151UltimaConf",ultima?.data?ultima.data.toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"}):"—");
   v151Set("v151Atualizado","atualizado "+new Date().toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"}));
   v151RenderAlertas(rows,etqPend,problemas);v151RenderChart(hist);v151AtualizarStatusIntegracoes();
