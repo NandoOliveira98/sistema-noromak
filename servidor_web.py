@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.83-VENDAS-DO-PERIODO"
+APP_VERSION = "17.84-DOCUMENTO-E-NOME-FISCAL"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -6775,6 +6775,9 @@ def _ml_billing_details(order: dict[str, Any]) -> dict[str, Any]:
     ).strip().upper() or "MLB"
     order_id = str(order.get("id") or "").strip()
     errors: list[str] = []
+    # V17.84: o documento fiscal já vinha no mesmo payload do nome e era descartado.
+    # extract_name() preenche este dicionário ao encontrar identification.
+    documento: dict[str, str] = {}
 
     def extract_name(payload: Any) -> str:
         if not isinstance(payload, dict):
@@ -6821,6 +6824,14 @@ def _ml_billing_details(order: dict[str, Any]) -> dict[str, Any]:
         identification = info.get("identification") if isinstance(info.get("identification"), dict) else {}
         doc_type = str(identification.get("type") or vals.get("DOC_TYPE") or "").strip().upper()
 
+        # V17.84: guarda o CPF/CNPJ do comprador. O Linx DMS localiza o cliente
+        # por documento, então sem isto não há como atualizar cadastro de venda ML.
+        # Só grava a primeira ocorrência: o payload oficial vem antes do legado.
+        numero = re.sub(r"\D", "", str(identification.get("number") or vals.get("DOC_NUMBER") or ""))
+        if numero and not documento.get("number"):
+            documento["number"] = numero
+            documento["type"] = doc_type or ("CNPJ" if len(numero) == 14 else "CPF")
+
         # No MLB pessoa jurídica vem normalmente com name=razão social.
         if doc_type == "CNPJ":
             return business or first
@@ -6833,7 +6844,8 @@ def _ml_billing_details(order: dict[str, Any]) -> dict[str, Any]:
     if embedded_name and any(k in embedded for k in (
         "name", "first_name", "business_name", "corporate_name", "identification", "additional_info"
     )):
-        return {"name": embedded_name, "billing_info_id": billing_id, "source": "order_embedded", "errors": []}
+        return {"name": embedded_name, "billing_info_id": billing_id, "source": "order_embedded",
+                "doc_type": documento.get("type", ""), "doc_number": documento.get("number", ""), "errors": []}
 
     # Endpoint oficial atual. Testa sem header primeiro e depois as duas grafias
     # encontradas nos contratos do ML durante a migração.
@@ -6848,7 +6860,8 @@ def _ml_billing_details(order: dict[str, Any]) -> dict[str, Any]:
                 payload = ml_api_get(endpoint, headers=hdr)
                 name = extract_name(payload)
                 if name:
-                    return {"name": name, "billing_info_id": billing_id, "source": label, "errors": errors}
+                    return {"name": name, "billing_info_id": billing_id, "source": label,
+                            "doc_type": documento.get("type", ""), "doc_number": documento.get("number", ""), "errors": errors}
                 errors.append(f"{label} respondeu sem nome fiscal")
             except Exception as exc:
                 errors.append(f"{label}: {str(exc)[:400]}")
@@ -6881,13 +6894,16 @@ def _ml_billing_details(order: dict[str, Any]) -> dict[str, Any]:
                             "name": name,
                             "billing_info_id": billing_id or fallback_id,
                             "source": f"legacy_{suffix}",
+                            "doc_type": documento.get("type", ""),
+                            "doc_number": documento.get("number", ""),
                             "errors": errors,
                         }
                     errors.append(f"legacy_{suffix} respondeu sem nome fiscal")
                 except Exception as exc:
                     errors.append(f"legacy_{suffix}: {str(exc)[:400]}")
 
-    return {"name": "", "billing_info_id": billing_id, "source": "", "errors": errors[-8:]}
+    return {"name": "", "billing_info_id": billing_id, "source": "",
+            "doc_type": documento.get("type", ""), "doc_number": documento.get("number", ""), "errors": errors[-8:]}
 
 def _ml_billing_name(order: dict[str, Any]) -> str:
     # Prioriza os Dados para NF-e. Se o Mercado Livre ainda não devolver o
@@ -7975,6 +7991,9 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
     buyer_real_name = _ml_real_buyer_name(order)
     client = fiscal_name or buyer_real_name
     client_name_source = "dados_fiscais_nf" if fiscal_name else ("comprador_order" if buyer_real_name else "")
+    # V17.84: CPF/CNPJ do comprador, usado para localizar o cliente no Linx DMS.
+    fiscal_doc_type = str(billing_details.get("doc_type") or "").strip().upper()
+    fiscal_doc_number = re.sub(r"\D", "", str(billing_details.get("doc_number") or ""))
     billing_info_id = str(billing_details.get("billing_info_id") or "").strip()
     billing_errors = billing_details.get("errors") if isinstance(billing_details.get("errors"), list) else []
 
@@ -8064,6 +8083,8 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
                 "StatusMercadoLivre": status,
                 "LogisticaMercadoLivre": _ml_logistic_type(shipment),
                 "NomeFiscalMercadoLivre": fiscal_name,
+                "CPFMercadoLivre": fiscal_doc_number if fiscal_doc_type == "CPF" else "",
+                "CNPJMercadoLivre": fiscal_doc_number if fiscal_doc_type == "CNPJ" else "",
                 "DataLimiteDespachoMercadoLivre": date_for_dispatch,
                 "MercadoLivreAtualizadoEm": now_iso(),
             }
@@ -8117,7 +8138,8 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
         api_fields = (
             "OrigemCadastro","VendaMercadoLivre","PackIdMercadoLivre",
             "ShipmentIdMercadoLivre","StatusMercadoLivre","LogisticaMercadoLivre",
-            "NomeFiscalMercadoLivre","DataLimiteDespachoMercadoLivre","MercadoLivreAtualizadoEm"
+            "NomeFiscalMercadoLivre","CPFMercadoLivre","CNPJMercadoLivre",
+            "DataLimiteDespachoMercadoLivre","MercadoLivreAtualizadoEm"
         )
 
         # Dados operacionais são iguais por venda; usa a primeira linha importada
@@ -8217,7 +8239,8 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
             for field in (
                 "OrigemCadastro","VendaMercadoLivre","PackIdMercadoLivre",
                 "ShipmentIdMercadoLivre","StatusMercadoLivre","LogisticaMercadoLivre",
-                "NomeFiscalMercadoLivre","DataLimiteDespachoMercadoLivre","MercadoLivreAtualizadoEm",
+                "NomeFiscalMercadoLivre","CPFMercadoLivre","CNPJMercadoLivre",
+                "DataLimiteDespachoMercadoLivre","MercadoLivreAtualizadoEm",
                 "MercadoLivreLinhaKey","MercadoLivreItemId","MercadoLivreVariationId"
             ):
                 existing[field] = imported.get(field, "")
@@ -8245,6 +8268,9 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
                     forced_client_rows += 1
                 existing["Cliente"] = client
                 existing["NomeFiscalMercadoLivre"] = fiscal_name
+                if fiscal_doc_number:
+                    existing["CPFMercadoLivre"] = fiscal_doc_number if fiscal_doc_type == "CPF" else ""
+                    existing["CNPJMercadoLivre"] = fiscal_doc_number if fiscal_doc_type == "CNPJ" else ""
                 existing["FonteNomeClienteMercadoLivre"] = client_name_source
                 existing["MercadoLivreAtualizadoEm"] = now_iso()
 
@@ -9250,6 +9276,58 @@ def ml_manual_sync() -> dict[str, Any]:
 # com o custo do Apollo só pode acontecer aqui: a CHAVE_CRM nunca vai ao
 # navegador. Somente leitura: nenhuma rota daqui grava.
 # ---------------------------------------------------------------------------
+
+# V17.84 — documento fiscal do comprador, para localizar o cliente no Linx DMS.
+# Cada marketplace guarda o dado com um nome próprio; quem consome não precisa saber.
+DOCUMENTO_CAMPOS_CPF = ("CPFMercadoLivre", "CPFShopee", "CPF", "Cpf", "cpf")
+DOCUMENTO_CAMPOS_CNPJ = ("CNPJMercadoLivre", "CNPJShopee", "CNPJ", "Cnpj", "cnpj")
+
+
+def documento_do_pedido(row: dict[str, Any]) -> dict[str, str]:
+    """Devolve {"tipo": "CPF"|"CNPJ"|"", "numero": "<só dígitos>"}.
+
+    O Linx DMS localiza o cliente por documento (ProcurarCliente/CnpjCpf), então
+    esta é a chave que liga um pedido de marketplace ao cadastro do ERP.
+    """
+    if not isinstance(row, dict):
+        return {"tipo": "", "numero": ""}
+    for campos, tipo in ((DOCUMENTO_CAMPOS_CNPJ, "CNPJ"), (DOCUMENTO_CAMPOS_CPF, "CPF")):
+        for campo in campos:
+            numero = re.sub(r"\D", "", str(row.get(campo) or ""))
+            if numero:
+                # O comprimento manda: campo trocado é erro comum de integração.
+                if len(numero) == 14:
+                    return {"tipo": "CNPJ", "numero": numero}
+                if len(numero) == 11:
+                    return {"tipo": "CPF", "numero": numero}
+                return {"tipo": tipo, "numero": numero}
+    return {"tipo": "", "numero": ""}
+
+
+# V17.84 — nome fiscal: o que está em "Dados para a NF-e" do marketplace.
+# É o nome que DEVE ir para o cadastro do Linx DMS. Nunca o apelido da conta,
+# nunca o destinatário da entrega — eles divergem com frequência, e o cadastro
+# do ERP precisa bater com a nota.
+NOME_FISCAL_CAMPOS = ("NomeFiscalMercadoLivre", "NomeFiscalShopee", "NomeFiscal")
+
+
+def nome_fiscal_do_pedido(row: dict[str, Any]) -> str:
+    """Nome de Dados para NF-e. Vazio quando o marketplace ainda não devolveu.
+
+    Devolve vazio de propósito em vez de cair para `Cliente`: `Cliente` pode
+    conter o nome do comprador da conta, e gravar isso no ERP produziria uma
+    nota no nome errado. Quem chama decide o que fazer com o vazio.
+    """
+    if not isinstance(row, dict):
+        return ""
+    for campo in NOME_FISCAL_CAMPOS:
+        nome = str(row.get(campo) or "").strip()
+        # normalize() também remove os espaços, então o marcador da Shopee
+        # precisa passar pela mesma função dos dois lados da comparação.
+        if nome and normalize(nome) != normalize("NOME NÃO DISPONÍVEL"):
+            return nome
+    return ""
+
 
 VENDAS_CAMPOS_DATA = ("Data do Pedido", "DataPedido", "DataVenda", "Data", "CriadoEm")
 VENDAS_CAMPOS_DESCRICAO = ("Descrição", "Descricao", "descricao", "Produto", "produto", "Nome")
