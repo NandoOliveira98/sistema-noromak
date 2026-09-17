@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.81-ADMIN-EXCLUSAO-SOBERANA"
+APP_VERSION = "17.82-CONCLUSAO-E-REINCLUSAO-CANONICAS"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -1267,8 +1267,11 @@ def ensure_app_user_permissions_schema() -> None:
                  can_precificador=CASE WHEN role='admin' THEN 1 ELSE COALESCE(can_precificador,0) END
                WHERE role='admin' OR can_conferencia IS NULL"""
         )
-        if changed:
-            DB.commit()
+        # V17.82: o UPDATE acima roda SEMPRE, então o COMMIT também precisa rodar sempre.
+        # Em uma instalação nova as colunas já nascem no executescript (changed=False) e o
+        # UPDATE ficava em transação implícita aberta, fazendo o BEGIN IMMEDIATE de
+        # migrate_legacy_if_empty() falhar e impedir o servidor de subir.
+        DB.commit()
 
 
 def user_permissions_from_row(row: sqlite3.Row | dict[str, Any]) -> dict[str, bool]:
@@ -2563,6 +2566,14 @@ def get_storage(key: str) -> tuple[str | None, int, str | None]:
             value = _admin_manual_order_vault_apply(value)
         if key in ("conf_pedidos", "conf_pedidos_rascunhos") and "_pending_filter_manual_deleted_orders_value" in globals():
             value = _pending_filter_manual_deleted_orders_value(value)
+        # V17.82: conclusão é a ÚLTIMA barreira da fila também na LEITURA, exatamente
+        # como save_storage() já faz na escrita. Sem isto, o override __ENTITY__ e o
+        # cofre manual reinjetavam um pedido já concluído (eles rodam depois do
+        # filter_completed_orders acima), e o pedido voltava para a Conferência.
+        # A reimportação explícita do ADMIN continua possível porque
+        # reactivate_completed_orders_from_delta remove o registro de completed_orders.
+        if key in ("conf_pedidos", "conf_pedidos_rascunhos") and "filter_completed_orders_v1772" in globals():
+            value = filter_completed_orders_v1772(value)
     except Exception as exc:
         print(f"Aviso: override manual não aplicado na leitura de {key}: {exc}", file=sys.stderr)
     return value, int(row["version"]), row["updated_at"]
@@ -5275,6 +5286,10 @@ def _pending_admin_restore_orders(order_keys: set[str]) -> None:
             if changed:
                 DB.execute("UPDATE storage SET value=?,version=?,updated_at=? WHERE key='conf_shopee_exclusoes_v1'",
                            (json_dumps(kept),int(row["version"] or 0)+1,now_iso()))
+    # V17.82: os UPDATEs acima abrem transação implícita. Sem este COMMIT, o
+    # BEGIN IMMEDIATE do save_storage() seguinte falhava e a reinclusão explícita
+    # do ADMIN morria em HTTP 409 — deixando o pedido preso no tombstone.
+    DB.commit()
 
 
 def _pending_filter_manual_deleted_orders_value(value: str | None) -> str:
