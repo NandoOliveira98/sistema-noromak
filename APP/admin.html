@@ -579,6 +579,16 @@ body{background:var(--v15-bg)!important}
 .v1779-actions{display:flex;gap:5px}.v1779-actions button{border:1px solid #cbdbea;background:white;border-radius:7px;padding:6px 8px;cursor:pointer;font-size:11px}.v1779-actions button:hover{background:#eef6fd}
 .v1779-detail{display:none;background:#f8fbfe;padding:10px;margin-top:6px;border-radius:8px;line-height:1.55;min-width:340px}
 @media(max-width:1000px){.v1779-kpis{grid-template-columns:repeat(2,1fr)}.v1779-filters{grid-template-columns:1fr 1fr}}
+/* V17.83 — painel "O que vendeu" */
+.v1783-kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:14px 0}
+.v1783-filters{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:14px 0}
+.v1783-filters input[type=date]{padding:10px;border:1px solid #cad9e8;border-radius:9px;background:#fff}
+.v1783-filters #vdBusca{flex:1;min-width:220px;padding:10px;border:1px solid #cad9e8;border-radius:9px;background:#fff}
+.v1783-lbl{font-size:12px;color:#55677a;font-weight:700}
+.v1783-mono{font-family:Consolas,monospace}
+.v1783-num{text-align:right;font-variant-numeric:tabular-nums;font-weight:700}
+.v1783-mk{display:inline-block;background:#eef4fa;border-radius:999px;padding:2px 8px;font-size:11px;margin-right:4px;color:#23415d}
+@media(max-width:1000px){.v1783-kpis{grid-template-columns:repeat(2,1fr)}}
 </style>
 </head>
 <body>
@@ -963,6 +973,50 @@ body{background:var(--v15-bg)!important}
       </div>
       <div style="overflow:auto"><table class="v1779-table"><thead><tr><th>Pedido eCommerce</th><th>Contato</th><th>Situação</th><th>Cancelamento</th><th>NF Status</th><th>Cód.Cliente</th><th>Data Pedido</th><th>Data Contato</th><th>Cliente</th><th>Cód.Usu.</th><th>Usuário</th><th>Marketplace</th><th>Itens / Unid.</th><th>Ações</th></tr></thead><tbody id="pdCorpo"></tbody></table></div>
       <div id="pdResumo" style="padding-top:12px;color:#64748b;font-size:12px"></div>
+    </div>
+
+    <!-- V17.83: o que saiu no período, item a item. Base para rentabilidade,
+         curva ABC e solicitação de compra. Somente leitura. -->
+    <div class="card-admin" style="margin-top:18px">
+      <div class="v1779-head">
+        <div>
+          <h2>📦 O que vendeu <span class="usuario-versao">V17.83</span></h2>
+          <div style="color:#64748b">Unidades por peça no período, somando pedidos pendentes e já conferidos.</div>
+        </div>
+        <div style="font-size:12px;color:#64748b">Para rentabilidade, curva e compra</div>
+      </div>
+
+      <div class="v1783-kpis">
+        <div class="v1779-kpi"><b id="vdPedidos">0</b><span>Pedidos</span></div>
+        <div class="v1779-kpi"><b id="vdUnidades">0</b><span>Unidades</span></div>
+        <div class="v1779-kpi"><b id="vdSkus">0</b><span>Peças distintas</span></div>
+        <div class="v1779-kpi"><b id="vdConcluidos">0</b><span>Já conferidos</span></div>
+      </div>
+
+      <div class="v1783-filters">
+        <label for="vdInicio" class="v1783-lbl">De</label>
+        <input id="vdInicio" type="date" onchange="carregarVendasV1783()">
+        <label for="vdFim" class="v1783-lbl">até</label>
+        <input id="vdFim" type="date" onchange="carregarVendasV1783()">
+        <button type="button" class="btn-admin" onclick="periodoVendasV1783(0)">Hoje</button>
+        <button type="button" class="btn-admin" onclick="periodoVendasV1783(6)">7 dias</button>
+        <button type="button" class="btn-admin" onclick="periodoVendasV1783(29)">30 dias</button>
+        <input id="vdBusca" placeholder="Filtrar SKU ou descrição..." oninput="renderVendasV1783()">
+      </div>
+
+      <div id="vdCanais" class="v1779-marketplaces"></div>
+
+      <div style="overflow:auto;margin-top:12px">
+        <table class="v1779-table">
+          <thead><tr>
+            <th>#</th><th>SKU</th><th>Descrição</th><th>EAN</th>
+            <th style="text-align:right">Unidades</th><th style="text-align:right">Pedidos</th>
+            <th>Por marketplace</th>
+          </tr></thead>
+          <tbody id="vdCorpo"></tbody>
+        </table>
+      </div>
+      <div id="vdResumo" style="padding-top:12px;color:#64748b;font-size:12px"></div>
     </div>
   </section>
 
@@ -3811,6 +3865,80 @@ function pdStatusV1779(e){
   if(rs.some(r=>Number(r.Lido||0)>0))return"separacao";return"aguardando";
 }
 function pdApolloV1779(acao){alert(`${acao}: integração Apollo em preparação. Nenhuma alteração foi enviada.`)}
+
+/* ===== V17.83 — O que vendeu no período =====
+   A agregação vem pronta do servidor (/api/vendas), que é a única camada capaz
+   de enxergar ao mesmo tempo a fila atual e os pedidos já concluídos. Aqui só
+   filtramos e desenhamos. Nada nesta seção grava. */
+let vendasV1783 = null;
+
+function vdDataISOV1783(d){
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+}
+
+function periodoVendasV1783(diasAtras){
+  const fim=new Date(), inicio=new Date();
+  inicio.setDate(inicio.getDate()-Number(diasAtras||0));
+  const ei=document.getElementById("vdInicio"), ef=document.getElementById("vdFim");
+  if(ei)ei.value=vdDataISOV1783(inicio);
+  if(ef)ef.value=vdDataISOV1783(fim);
+  carregarVendasV1783();
+}
+
+async function carregarVendasV1783(){
+  const corpo=document.getElementById("vdCorpo");if(!corpo)return;
+  const inicio=document.getElementById("vdInicio")?.value||"";
+  const fim=document.getElementById("vdFim")?.value||"";
+  corpo.innerHTML='<tr><td colspan="7" style="text-align:center;padding:22px;color:#64748b">Carregando…</td></tr>';
+  try{
+    const params=new URLSearchParams();
+    if(inicio)params.set("data_inicio",inicio);
+    if(fim)params.set("data_fim",fim);
+    vendasV1783=await mlApiAdmin(`/expedicao/api/vendas?${params.toString()}`);
+    renderVendasV1783();
+  }catch(erro){
+    vendasV1783=null;
+    corpo.innerHTML=`<tr><td colspan="7" style="text-align:center;padding:22px;color:#c62828">Não foi possível carregar: ${htmlSeguroBanco(erro.message||erro)}</td></tr>`;
+    ["vdPedidos","vdUnidades","vdSkus","vdConcluidos"].forEach(id=>v151Set(id,"—"));
+  }
+}
+
+function renderVendasV1783(){
+  const corpo=document.getElementById("vdCorpo");if(!corpo||!vendasV1783)return;
+  const resumo=vendasV1783.resumo||{};
+  v151Set("vdPedidos",resumo.pedidos||0);
+  v151Set("vdUnidades",resumo.unidades||0);
+  v151Set("vdSkus",resumo.skus||0);
+  v151Set("vdConcluidos",resumo.pedidos_concluidos||0);
+
+  const canais=document.getElementById("vdCanais");
+  if(canais){
+    canais.innerHTML=(vendasV1783.marketplaces||[]).map(c=>
+      `<span>${htmlSeguroBanco(c.marketplace)}: <b>${c.unidades}</b> un. · ${c.pedidos} ped.</span>`
+    ).join("")||"";
+  }
+
+  const busca=normalizarCodigoBanco(document.getElementById("vdBusca")?.value||"");
+  const itens=(vendasV1783.itens||[]).filter(i=>
+    !busca||normalizarCodigoBanco(`${i.sku} ${i.descricao} ${i.ean}`).includes(busca));
+
+  corpo.innerHTML=itens.map((i,pos)=>{
+    const mks=Object.entries(i.marketplaces||{})
+      .map(([nome,qtd])=>`<span class="v1783-mk">${htmlSeguroBanco(nome)} ${qtd}</span>`).join("");
+    return `<tr>
+      <td style="color:#64748b">${pos+1}</td>
+      <td class="v1783-mono"><b>${htmlSeguroBanco(i.sku)}</b></td>
+      <td>${htmlSeguroBanco(i.descricao||"—")}</td>
+      <td class="v1783-mono" style="color:#64748b">${htmlSeguroBanco(i.ean||"—")}</td>
+      <td class="v1783-num">${i.unidades}</td>
+      <td class="v1783-num" style="font-weight:400">${i.pedidos}</td>
+      <td>${mks}</td>
+    </tr>`;
+  }).join("")||'<tr><td colspan="7" style="text-align:center;padding:22px;color:#64748b">Nenhuma venda no período selecionado.</td></tr>';
+
+  const total=itens.reduce((s,i)=>s+(Number(i.unidades)||0),0);
+  v151Set("vdResumo",`${itens.length} peça(s) · ${total} unidade(s) na listagem`);
+}
 function pdDetalhesV1779(id){
  const e=document.getElementById(id);if(e)e.style.display=e.style.display==="block"?"none":"block";
 }
@@ -3847,7 +3975,12 @@ function abrirAbaAdmin(nome){
   document.querySelectorAll(".aba-painel").forEach(p=>p.classList.toggle("ativa",p.id==="aba-"+nome));
   document.querySelectorAll(".v15-nav-item[data-v15-nav]").forEach(b=>b.classList.toggle("active",b.dataset.v15Nav===nome));
   if(nome==="historico") carregarLogs();
-  if(nome==="pedidos-dia") renderPedidosDiaV1779();
+  if(nome==="pedidos-dia"){
+    renderPedidosDiaV1779();
+    // V17.83: na primeira abertura, o período começa em "hoje".
+    const ei=document.getElementById("vdInicio");
+    if(ei&&!ei.value) periodoVendasV1783(0); else carregarVendasV1783();
+  }
   if(nome==="coleta") carregarColetaDiaAdmin(!coletaAdminCarregada);
   if(nome==="historico-sku") carregarHistoricoSkuAdmin();
   if(nome==="kits") renderizarKitsAdmin();
@@ -3867,7 +4000,13 @@ function v151EhMl(r){const m=v151Marketplace(r);return m.includes("mercado")||m=
 function v151TemEtiqueta(r){return !v151EhMl(r)||String(r?.["Etiqueta API Mercado Livre"]||"").trim().toUpperCase()==="VINCULADA";}
 function v151DataHoje(d){if(!d)return false;const x=d instanceof Date?d:new Date(d);if(Number.isNaN(x.getTime()))return false;const h=new Date();return x.getFullYear()===h.getFullYear()&&x.getMonth()===h.getMonth()&&x.getDate()===h.getDate();}
 function v151ParseDataLog(v){
-  if(!v)return null;const iso=new Date(v);if(!Number.isNaN(iso.getTime()))return iso;
+  if(!v)return null;
+  // V17.83: data sem hora (AAAA-MM-DD) precisa virar meia-noite LOCAL.
+  // new Date("2026-09-17") é lido como meia-noite UTC; no fuso do Brasil isso
+  // são 21h do dia ANTERIOR, e o pedido desaparecia do filtro de Pedidos do Dia.
+  const soData=String(v).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(soData)return new Date(+soData[1],+soData[2]-1,+soData[3]);
+  const iso=new Date(v);if(!Number.isNaN(iso.getTime()))return iso;
   const m=String(v).match(/(\d{1,2})\/(\d{1,2})\/(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
   if(!m)return null;return new Date(+m[3],+m[2]-1,+m[1],+(m[4]||0),+(m[5]||0),+(m[6]||0));
 }

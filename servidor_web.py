@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.82-CONCLUSAO-E-REINCLUSAO-CANONICAS"
+APP_VERSION = "17.83-VENDAS-DO-PERIODO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -9241,6 +9241,207 @@ def ml_manual_sync() -> dict[str, Any]:
 
 
 
+# ---------------------------------------------------------------------------
+# V17.83 — Vendas do período: o que entrou dos marketplaces, item a item.
+#
+# Serve à Central de Pedidos do Dia. A agregação é feita no SERVIDOR porque ela
+# precisa enxergar duas fontes ao mesmo tempo — a fila atual (conf_pedidos) e o
+# que já foi concluído (completed_orders.payload) — e porque o cruzamento futuro
+# com o custo do Apollo só pode acontecer aqui: a CHAVE_CRM nunca vai ao
+# navegador. Somente leitura: nenhuma rota daqui grava.
+# ---------------------------------------------------------------------------
+
+VENDAS_CAMPOS_DATA = ("Data do Pedido", "DataPedido", "DataVenda", "Data", "CriadoEm")
+VENDAS_CAMPOS_DESCRICAO = ("Descrição", "Descricao", "descricao", "Produto", "produto", "Nome")
+
+
+def _vendas_data_iso(value: Any) -> str:
+    """AAAA-MM-DD a partir dos formatos que circulam no sistema.
+
+    Convivem no banco a data ISO do servidor (2026-09-17T10:07:00-03:00) e a
+    data brasileira que vem das telas e do Apollo (17/09/2026 10:07:00).
+    """
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    iso = re.match(r"^(\d{4})-(\d{2})-(\d{2})", text)
+    if iso:
+        return f"{iso.group(1)}-{iso.group(2)}-{iso.group(3)}"
+    br = re.match(r"^(\d{2})/(\d{2})/(\d{4})", text)
+    if br:
+        return f"{br.group(3)}-{br.group(2)}-{br.group(1)}"
+    return ""
+
+
+def _vendas_data_da_linha(row: dict[str, Any], fallback: Any = "") -> str:
+    for campo in VENDAS_CAMPOS_DATA:
+        achou = _vendas_data_iso(row.get(campo))
+        if achou:
+            return achou
+    return _vendas_data_iso(fallback)
+
+
+def _vendas_marketplace(value: Any) -> str:
+    texto = normalize(value)
+    if "MERCADOLIVRE" in texto or "MERCADO" in texto or texto in {"ML", "MELI"}:
+        return "Mercado Livre"
+    if "SHOPEE" in texto:
+        return "Shopee"
+    if "MAGALU" in texto or "MAGAZINE" in texto:
+        return "Magalu"
+    return str(value or "").strip() or "Outros"
+
+
+def _vendas_descricao(row: dict[str, Any]) -> str:
+    for campo in VENDAS_CAMPOS_DESCRICAO:
+        texto = str(row.get(campo) or "").strip()
+        if texto:
+            return texto
+    return ""
+
+
+def _vendas_quantidade(row: dict[str, Any]) -> int:
+    for campo in ("Quantidade", "quantidade", "Qtd", "qtd"):
+        if campo in row:
+            try:
+                return max(0, int(float(str(row.get(campo) or 0).replace(",", "."))))
+            except Exception:
+                continue
+    return 0
+
+
+def _vendas_linhas_do_periodo(date_from: str, date_to: str) -> list[dict[str, Any]]:
+    """Junta fila atual e concluídos, sem contar o mesmo pedido duas vezes."""
+    coletadas: list[dict[str, Any]] = []
+    vistos: set[str] = set()
+
+    def aceitar(row: Any, *, concluido: bool, fallback_data: Any = "") -> None:
+        if not isinstance(row, dict):
+            return
+        pedido = str(order_number(row) or "").strip()
+        if not pedido:
+            return
+        data = _vendas_data_da_linha(row, fallback_data)
+        if date_from and (not data or data < date_from):
+            return
+        if date_to and (not data or data > date_to):
+            return
+        coletadas.append({
+            "pedido": pedido,
+            "data": data,
+            "sku": str(row.get("SKU") or row.get("Sku") or row.get("sku") or "").strip(),
+            "descricao": _vendas_descricao(row),
+            "ean": str(row.get("EAN") or row.get("Código de Barras") or "").strip(),
+            "quantidade": _vendas_quantidade(row),
+            "marketplace": _vendas_marketplace(row.get("Marketplace") or row.get("Origem")),
+            "cliente": str(row.get("Cliente") or "").strip(),
+            "concluido": concluido,
+        })
+
+    pendentes, _, _ = get_storage("conf_pedidos")
+    for row in _rows_from_storage_value(pendentes):
+        if isinstance(row, dict):
+            chave = normalize(order_number(row))
+            if chave:
+                vistos.add(chave)
+            aceitar(row, concluido=False)
+
+    for db_row in DB.execute("SELECT order_key,completed_at,payload FROM completed_orders").fetchall():
+        chave = normalize(db_row["order_key"])
+        if chave and chave in vistos:
+            continue
+        try:
+            payload = json.loads(str(db_row["payload"] or "[]"))
+        except Exception:
+            continue
+        for row in (payload if isinstance(payload, list) else [payload]):
+            aceitar(row, concluido=True, fallback_data=db_row["completed_at"])
+
+    return coletadas
+
+
+def vendas_payload(date_from: str = "", date_to: str = "") -> dict[str, Any]:
+    """O que vendeu no período, agregado por SKU.
+
+    Base para rentabilidade, curva ABC e solicitação de compra: o que interessa
+    é quantas unidades de cada peça saíram, em quantos pedidos e por qual canal.
+    """
+    linhas = _vendas_linhas_do_periodo(date_from, date_to)
+
+    por_sku: dict[str, dict[str, Any]] = {}
+    por_marketplace: dict[str, dict[str, Any]] = {}
+    pedidos_totais: set[str] = set()
+    pedidos_concluidos: set[str] = set()
+    unidades_totais = 0
+
+    for linha in linhas:
+        pedido = linha["pedido"]
+        pedidos_totais.add(normalize(pedido))
+        if linha["concluido"]:
+            pedidos_concluidos.add(normalize(pedido))
+        unidades_totais += linha["quantidade"]
+
+        chave_sku = normalize(linha["sku"]) or f"SEM-SKU|{normalize(linha['ean'])}"
+        item = por_sku.setdefault(chave_sku, {
+            "sku": linha["sku"] or "(sem SKU)",
+            "descricao": linha["descricao"],
+            "ean": linha["ean"],
+            "unidades": 0,
+            "pedidos": set(),
+            "marketplaces": {},
+        })
+        item["unidades"] += linha["quantidade"]
+        item["pedidos"].add(normalize(pedido))
+        if not item["descricao"] and linha["descricao"]:
+            item["descricao"] = linha["descricao"]
+        if not item["ean"] and linha["ean"]:
+            item["ean"] = linha["ean"]
+        item["marketplaces"][linha["marketplace"]] = item["marketplaces"].get(linha["marketplace"], 0) + linha["quantidade"]
+
+        canal = por_marketplace.setdefault(linha["marketplace"], {
+            "marketplace": linha["marketplace"], "unidades": 0, "pedidos": set(),
+        })
+        canal["unidades"] += linha["quantidade"]
+        canal["pedidos"].add(normalize(pedido))
+
+    itens = sorted(
+        (
+            {
+                "sku": dados["sku"],
+                "descricao": dados["descricao"],
+                "ean": dados["ean"],
+                "unidades": dados["unidades"],
+                "pedidos": len(dados["pedidos"]),
+                "marketplaces": dados["marketplaces"],
+            }
+            for dados in por_sku.values()
+        ),
+        key=lambda x: (-x["unidades"], x["sku"]),
+    )
+    canais = sorted(
+        (
+            {"marketplace": d["marketplace"], "unidades": d["unidades"], "pedidos": len(d["pedidos"])}
+            for d in por_marketplace.values()
+        ),
+        key=lambda x: (-x["unidades"], x["marketplace"]),
+    )
+
+    return {
+        "ok": True,
+        "periodo": {"inicio": date_from, "fim": date_to},
+        "resumo": {
+            "pedidos": len(pedidos_totais),
+            "pedidos_concluidos": len(pedidos_concluidos),
+            "pedidos_pendentes": len(pedidos_totais) - len(pedidos_concluidos),
+            "skus": len(itens),
+            "linhas": len(linhas),
+            "unidades": unidades_totais,
+        },
+        "marketplaces": canais,
+        "itens": itens,
+    }
+
+
 PRINT_AGENT_TOKEN_STORAGE_KEY = "print_agent_token_v1"
 
 
@@ -11417,6 +11618,26 @@ class AppHandler(BaseHTTPRequestHandler):
             ctx = self.auth(admin_only=True)
             if ctx is not None:
                 self.handle_sku_history_get(query)
+            return
+        # V17.83 — o que vendeu no período, agregado por SKU. Somente leitura.
+        if path == "/api/vendas":
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            inicio = str((query.get("data_inicio") or [""])[0] or "").strip()
+            fim = str((query.get("data_fim") or [""])[0] or "").strip()
+            for rotulo, valor in (("data_inicio", inicio), ("data_fim", fim)):
+                if valor and not re.match(r"^\d{4}-\d{2}-\d{2}$", valor):
+                    self.send_json({"ok": False, "error": f"{rotulo} deve estar no formato AAAA-MM-DD."}, 400)
+                    return
+            if inicio and fim and inicio > fim:
+                self.send_json({"ok": False, "error": "A data inicial não pode ser maior que a final."}, 400)
+                return
+            try:
+                with DB_LOCK:
+                    self.send_json(vendas_payload(inicio, fim))
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
             return
         if path == "/api/print/agent/ping":
             if self.print_agent_auth():
