@@ -84,8 +84,17 @@ APP/
 DADOS/                       seed ml_sku_mlb_links_seed.json (fora do Git)
 FERRAMENTAS_WINDOWS/         agente de impressão Zebra, 2FA do owner
 publicar.sh                  publicação em produção
+testar.sh                    validação obrigatória antes de publicar
 verificar_servidor.sh        diagnóstico remoto do serviço
+TESTES/                      suíte de invariantes críticas
+IDEIA_INTEGRACAO_CLAUDE.md   ideia registrada, ainda não decidida
 ```
+
+> **Ideia em aberto:** integrar o sistema com o Claude para apoiar a operação
+> (resumo diário, explicar pedido travado, diagnosticar erro). Nada decidido —
+> ver [IDEIA_INTEGRACAO_CLAUDE.md](IDEIA_INTEGRACAO_CLAUDE.md), que já registra as
+> duas restrições: a regra do ADMIN vale inteira, e o servidor não tem dependência
+> externa.
 
 ---
 
