@@ -1,0 +1,5 @@
+# Scripts de shell rodam no bash (Git Bash aqui, Linux no servidor) e precisam
+# terminar as linhas em LF. Sem isto, com core.autocrlf=true no Windows, um
+# checkout devolve CRLF e o bash falha logo no shebang:
+#   ./testar.sh: /usr/bin/env: bash\r: No such file or directory
+*.sh text eol=lf

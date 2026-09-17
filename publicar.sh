@@ -21,6 +21,15 @@ if [ -n "$(git status --porcelain)" ]; then
   exit 1
 fi
 
+echo ">> validando antes de publicar..."
+if ! ./testar.sh; then
+  echo
+  echo "PUBLICACAO CANCELADA: os testes nao passaram."
+  echo "Nada foi enviado para o servidor e a operacao continua no ar."
+  exit 1
+fi
+echo
+
 echo ">> enviando pro servidor..."
 git push producao HEAD:master
 
