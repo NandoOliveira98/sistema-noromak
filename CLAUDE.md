@@ -5,7 +5,7 @@ Shopee, manuais), expedição, separação, conferência por código de barras, 
 produtos/SKUs/EANs, kits, precificação, promoções, rentabilidade, estoque, Central de
 Pendências e histórico.
 
-Versão de referência deste documento: **V17.81 — ADMIN Exclusão Soberana**.
+Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas**.
 
 ---
 
@@ -121,16 +121,21 @@ Mensagem de commit no padrão `V17.xx - Descricao sem acentos`.
 Tudo passa por `storage` (chave/valor JSON versionado). As chaves canônicas estão em
 `KNOWN_KEYS` (`servidor_web.py:179`).
 
-### Leitura — `get_storage()` (`servidor_web.py:2543`)
+### Leitura — `get_storage()` (`servidor_web.py:2546`)
 
 O servidor reaplica as decisões do ADMIN **na leitura**, mesmo que algum job legado tenha
 escrito direto no banco:
 
 `filter_completed_orders` → `_enrich_rows_with_completion_history` →
 `_admin_override_apply` → `_admin_manual_order_vault_apply` →
-`_pending_filter_manual_deleted_orders_value`
+`_pending_filter_manual_deleted_orders_value` → **`filter_completed_orders_v1772`**
 
-### Escrita — `save_storage()` (`servidor_web.py:3716`)
+A última etapa foi adicionada na V17.82 e **precisa continuar sendo a última**. O override
+`__ENTITY__` e o cofre manual rodam *depois* do `filter_completed_orders` do começo e
+reinjetavam pedidos já concluídos, que voltavam para a Conferência. A escrita já fazia
+nessa ordem; a leitura não fazia. Conclusão é a barreira final nas duas pontas.
+
+### Escrita — `save_storage()` (`servidor_web.py:3727`)
 
 Tudo dentro de `BEGIN IMMEDIATE`, e as barreiras do ADMIN ficam **por último**, depois do
 merge, para que nenhuma integração passe por cima:
@@ -187,7 +192,7 @@ APIs principais: `/api/storage`, `/api/order-complete`, `/api/order-lock`,
 
 Perfis: **Admin**, **Supervisor**, **Operador**. Supervisor é intermediário e **não**
 recebe automaticamente as áreas sensíveis. Módulos por usuário: `conferencia`, `admin`,
-`estacao`, `precificador` (`module_allowed()`, `servidor_web.py:1290`).
+`estacao`, `precificador` (`module_allowed()`, `servidor_web.py:1293`).
 
 `OPERATOR_WRITE_KEYS` (`servidor_web.py:202`) lista o que um usuário autenticado sem perfil
 Admin pode gravar — inclui `conf_etiquetas`, `conf_fotos` e `conf_pedidos`. Isso é
