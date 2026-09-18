@@ -4592,8 +4592,52 @@ def _shopee_extract_zpl(raw: bytes) -> str:
                 continue
             pos = text.find("^XA")
             if pos >= 0 and "^XZ" in text[pos:]:
+                # V17.99: a Shopee manda a etiqueta como uma imagem baixada por ~DG
+                # ANTES do ^XA (o ^XA só imprime a imagem com ^XG). Cortar no ^XA
+                # jogava a imagem fora e a etiqueta saía em branco.
+                grafico = text.find("~DG")
+                if 0 <= grafico < pos:
+                    pos = grafico
                 return text[pos:].strip()
     return ""
+
+
+def shopee_reparar_etiquetas_sem_grafico() -> int:
+    """V17.99: regrava as etiquetas Shopee vindas da API que ficaram sem a imagem
+    (~DG), relendo o arquivo original salvo em shopee_labels. Idempotente: só mexe
+    em etiqueta da API que manda imprimir uma imagem (^XG) que ela não carrega."""
+    raw, _, _ = get_storage("conf_etiquetas")
+    try:
+        bank = json.loads(raw) if raw else {}
+    except Exception:
+        return 0
+    registros = bank.get("registros") if isinstance(bank, dict) else None
+    if not isinstance(registros, dict):
+        return 0
+    labels_dir = DB_PATH.parent / "shopee_labels"
+    reparadas = 0
+    for rec in list(registros.values()):
+        if not isinstance(rec, dict) or rec.get("origem") != "api_shopee":
+            continue
+        envio = str(rec.get("envio") or "")
+        if "~DG" in envio or "^XG" not in envio:
+            continue
+        meta = rec.get("metadados") if isinstance(rec.get("metadados"), dict) else {}
+        order_sn = str(meta.get("pedido") or rec.get("pedido") or "").strip()
+        pkg = str(meta.get("package_number") or "").strip()
+        if not order_sn:
+            continue
+        safe = re.sub(r"[^A-Za-z0-9_.-]+", "_", order_sn + ("_" + pkg if pkg else ""))
+        for ext in ("zip", "bin", "pdf"):
+            arquivo = labels_dir / f"{safe}.{ext}"
+            if not arquivo.exists():
+                continue
+            zpl = _shopee_extract_zpl(arquivo.read_bytes())
+            if "~DG" in zpl and _shopee_store_linked_label(order_sn, pkg, zpl):
+                reparadas += 1
+                shopee_log_event("etiqueta_reparada", f"order={order_sn}", "OK", "imagem ~DG restaurada (V17.99)")
+            break
+    return reparadas
 
 
 def _shopee_store_linked_label(order_sn: str, package_number: str, zpl: str) -> bool:
@@ -5885,6 +5929,16 @@ def shopee_label_worker_loop(stop_event: threading.Event) -> None:
     """
     # Pequeno atraso inicial para deixar HTTP/DB totalmente prontos no boot.
     stop_event.wait(5)
+    # V17.99: etiquetas da API gravadas sem a imagem (saíam em branco) são
+    # regravadas a partir do arquivo original. Só age em quem está quebrado.
+    try:
+        with SHOPEE_LABEL_WORKER_LOCK:
+            shopee_reparar_etiquetas_sem_grafico()
+    except Exception as exc:
+        try:
+            shopee_log_event("etiqueta_reparada", "boot", "ERRO", str(exc)[:500])
+        except Exception:
+            pass
     while not stop_event.is_set():
         # Acorda imediatamente após sincronização manual ou no intervalo de segurança.
         SHOPEE_LABEL_WAKE_EVENT.wait(SHOPEE_LABEL_WORKER_INTERVAL)

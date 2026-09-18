@@ -227,6 +227,9 @@ Fluxo de etiqueta: `get_shipping_parameter` → `ship_order` → `get_tracking_n
 `create_shipping_document` → `get_shipping_document_result` → download/vínculo.
 Para UNSPLIT existe fallback quando a API devolve `ship_order_not_need_package_number`:
 repete `ship_order` sem `package_number`.
+**Etiqueta = uma imagem (V17.99):** o ZPL da Shopee traz `~DGR` (a imagem) **antes** do `^XA`,
+que só imprime a imagem (`^XGR`). Cortar o texto no `^XA` gera etiqueta em branco — foi o
+bug das etiquetas automáticas da V17.89 a V17.98. `shopee_reparar_etiquetas_sem_grafico` roda no boot.
 Quantidade da API é a autoridade automática **exceto** onde houver alteração explícita do
 ADMIN (V17.78). Linhas são identificadas por IDs da API, não por posição. KITs não devem
 gerar SKU artificial concatenado quando os componentes reais já existem.
