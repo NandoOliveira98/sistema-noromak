@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.85-CLIENTE-NO-LINX"
+APP_VERSION = "17.86-NFE-NA-CENTRAL"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -1585,6 +1585,24 @@ def init_db() -> None:
                 last_seen_epoch INTEGER NOT NULL DEFAULT 0,
                 last_seen_at TEXT NOT NULL DEFAULT '',
                 last_error TEXT NOT NULL DEFAULT ''
+            );
+            -- V17.86: CPF/CNPJ e nome de "Dados para a NF-e" lidos pela extensão
+            -- na página da venda, e o código do cliente no Linx depois de
+            -- atualizado. Tabela própria de propósito: a sincronização do ML
+            -- reescreve NomeFiscalMercadoLivre/CPF nas linhas de conf_pedidos a
+            -- cada poucos minutos (com vazio, já que a API bloqueia o billing),
+            -- e apagaria o que fosse guardado ali.
+            CREATE TABLE IF NOT EXISTS cliente_fiscal (
+                order_key TEXT PRIMARY KEY,
+                pedido TEXT NOT NULL DEFAULT '',
+                documento_tipo TEXT NOT NULL DEFAULT '',
+                documento_numero TEXT NOT NULL DEFAULT '',
+                nome_fiscal TEXT NOT NULL DEFAULT '',
+                fonte TEXT NOT NULL DEFAULT '',
+                linx_cliente TEXT NOT NULL DEFAULT '',
+                linx_atualizado_em TEXT NOT NULL DEFAULT '',
+                atualizado_em TEXT NOT NULL DEFAULT '',
+                atualizado_por TEXT NOT NULL DEFAULT ''
             );
             """
         )
@@ -9382,6 +9400,74 @@ def _ml_billing_do_pedido(order_id: str) -> dict[str, Any]:
     return _ml_billing_details(order)
 
 
+def _nome_fiscal_valido(nome: str) -> bool:
+    """Pelo menos duas palavras e quase sem número. Barra texto de tela lido
+    por engano (a extensão já pegou "Observações" uma vez, em 18/09/2026)."""
+    nome = str(nome or "").strip()
+    if not (5 <= len(nome) <= 150) or len(re.findall(r"\d", nome)) > 2:
+        return False
+    palavras = [p for p in nome.split() if re.search(r"[A-Za-zÀ-ÿ]{2,}", p)]
+    return len(palavras) >= 2
+
+
+def salvar_cliente_fiscal(pedido: str, documento: str, nome: str, *, linx_cliente: str = "",
+                          fonte: str = "", usuario: str = "") -> dict[str, Any]:
+    """V17.86 — guarda o que a extensão leu na venda (e o código no Linx)."""
+    pedido = str(pedido or "").strip()
+    numero = re.sub(r"\D", "", str(documento or ""))
+    nome = re.sub(r"\s+", " ", str(nome or "")).strip()
+    linx_cliente = re.sub(r"\D", "", str(linx_cliente or ""))
+    if not pedido:
+        return {"ok": False, "error": "Informe o pedido."}
+    if len(numero) not in (11, 14):
+        return {"ok": False, "error": "CPF precisa ter 11 dígitos e CNPJ, 14."}
+    if not _nome_fiscal_valido(nome):
+        return {"ok": False, "error": "Nome da NF-e inválido: precisa de nome e sobrenome."}
+    with DB_LOCK:
+        if not _linhas_do_pedido(pedido):
+            return {"ok": False, "error": f"Pedido {pedido} não encontrado."}
+        agora = now_iso()
+        DB.execute(
+            """INSERT INTO cliente_fiscal(order_key,pedido,documento_tipo,documento_numero,nome_fiscal,
+                   fonte,linx_cliente,linx_atualizado_em,atualizado_em,atualizado_por)
+               VALUES(?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(order_key) DO UPDATE SET
+                   pedido=excluded.pedido, documento_tipo=excluded.documento_tipo,
+                   documento_numero=excluded.documento_numero, nome_fiscal=excluded.nome_fiscal,
+                   fonte=excluded.fonte,
+                   linx_cliente=CASE WHEN excluded.linx_cliente<>'' THEN excluded.linx_cliente ELSE cliente_fiscal.linx_cliente END,
+                   linx_atualizado_em=CASE WHEN excluded.linx_cliente<>'' THEN excluded.linx_atualizado_em ELSE cliente_fiscal.linx_atualizado_em END,
+                   atualizado_em=excluded.atualizado_em, atualizado_por=excluded.atualizado_por""",
+            (normalize(pedido), pedido, "CNPJ" if len(numero) == 14 else "CPF", numero, nome,
+             str(fonte or "")[:40], linx_cliente, agora if linx_cliente else "", agora, str(usuario or "")[:80]),
+        )
+        DB.commit()
+    return {"ok": True, "pedido": pedido}
+
+
+def _cliente_fiscal_guardado(pedido: str) -> dict[str, Any] | None:
+    with DB_LOCK:
+        row = DB.execute("SELECT * FROM cliente_fiscal WHERE order_key=?", (normalize(pedido),)).fetchone()
+    return dict(row) if row else None
+
+
+def lista_cliente_fiscal(dias: int = 45) -> dict[str, Any]:
+    """Tudo o que já foi lido nos últimos dias, por pedido. Para a Central."""
+    limite = (datetime.now(timezone.utc) - timedelta(days=dias)).isoformat()
+    with DB_LOCK:
+        rows = DB.execute(
+            "SELECT * FROM cliente_fiscal WHERE atualizado_em>=? ORDER BY atualizado_em", (limite,)
+        ).fetchall()
+    return {"ok": True, "clientes": {
+        r["pedido"]: {
+            "documento": {"tipo": r["documento_tipo"], "numero": r["documento_numero"]},
+            "nome_fiscal": r["nome_fiscal"],
+            "linx_cliente": r["linx_cliente"],
+            "linx_atualizado_em": r["linx_atualizado_em"],
+        } for r in rows
+    }}
+
+
 def cliente_fiscal_do_pedido(pedido: str) -> dict[str, Any]:
     """CPF/CNPJ e nome fiscal de um pedido, para atualizar o cliente no Linx.
 
@@ -9405,6 +9491,17 @@ def cliente_fiscal_do_pedido(pedido: str) -> dict[str, Any]:
             nome = nome_fiscal_do_pedido(row)
     fonte = "pedido" if (documento["numero"] and nome) else ""
     aviso = ""
+    linx_cliente = ""
+
+    # V17.86: o que a extensão já leu na página da venda vale mais que o pedido
+    # (que a sincronização do ML reescreve com vazio) e evita outra leitura.
+    guardado = _cliente_fiscal_guardado(pedido)
+    if guardado:
+        linx_cliente = guardado.get("linx_cliente") or ""
+        if guardado.get("documento_numero") and guardado.get("nome_fiscal"):
+            documento = {"tipo": guardado["documento_tipo"], "numero": guardado["documento_numero"]}
+            nome = guardado["nome_fiscal"]
+            fonte = "noromak"
 
     if (not documento["numero"] or not nome) and marketplace == "Mercado Livre":
         order_id = ""
@@ -9446,6 +9543,7 @@ def cliente_fiscal_do_pedido(pedido: str) -> dict[str, Any]:
         "nome_fiscal": nome,
         "fonte": fonte,
         "aviso": aviso,
+        "linx_cliente": linx_cliente,
     }
 
 
@@ -11837,6 +11935,16 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
+        # V17.86 — tudo o que a extensão já leu, para a Central mostrar.
+        if path == "/api/cliente-fiscal/lista":
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            try:
+                self.send_json(lista_cliente_fiscal())
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
         # V17.85 — CPF/CNPJ e nome fiscal para o botão "Cliente". Somente leitura.
         if path == "/api/cliente-fiscal":
             ctx = self.auth(admin_only=True)
@@ -11950,6 +12058,23 @@ class AppHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = self.route_path()
+        # V17.86 — a extensão leu CPF/nome na venda (ou gravou no Linx): guarda.
+        # Tabela própria (cliente_fiscal); não toca em conf_pedidos.
+        if path == "/api/cliente-fiscal":
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            try:
+                body = self.read_json()
+                resultado = salvar_cliente_fiscal(
+                    str(body.get("pedido") or ""), str(body.get("documento") or ""),
+                    str(body.get("nome") or ""), linx_cliente=str(body.get("linx_cliente") or ""),
+                    fonte=str(body.get("fonte") or "extensao"), usuario=str(ctx.get("username") or ""),
+                )
+                self.send_json(resultado, 200 if resultado.get("ok") else 400)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
         if path == "/api/full/apollo-stock":
             ctx = self.auth()
             if ctx is not None:

@@ -573,6 +573,7 @@ body{background:var(--v15-bg)!important}
 .v1779-filters{display:grid;grid-template-columns:150px 170px 170px minmax(260px,1fr);gap:10px;margin:16px 0}
 .v1779-filters input,.v1779-filters select{width:100%;box-sizing:border-box;padding:10px;border:1px solid #cad9e8;border-radius:9px;background:#fff}
 .v1779-kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:14px 0}
+/* V17.86 */.v1786-lote{border:0;border-radius:9px;padding:9px 14px;background:#12345b;color:#fff;font-weight:700;cursor:pointer}.v1786-lote:disabled{opacity:.55;cursor:wait}
 .v1779-kpi{padding:13px;border:1px solid #dbe7f2;border-radius:12px;background:#f8fbfe}.v1779-kpi b{font-size:22px;display:block;color:#0b365b}.v1779-kpi span{font-size:11px;color:#64748b}
 .v1779-table{width:100%;border-collapse:collapse;font-size:12px}.v1779-table th{background:#edf5fc;text-align:left;padding:9px;white-space:nowrap}.v1779-table td{padding:9px;border-bottom:1px solid #e6edf4;vertical-align:top}
 .v1779-badge{display:inline-block;padding:4px 7px;border-radius:999px;background:#eef4fa;font-weight:700;font-size:10px}.v1779-ok{background:#e7f8ed;color:#16723b}.v1779-wait{background:#fff4dd;color:#8b5a00}
@@ -957,7 +958,7 @@ body{background:var(--v15-bg)!important}
 
   <section id="aba-pedidos-dia" class="aba-painel">
     <div class="card-admin">
-      <div class="v1779-head"><div><h2>📅 Central de Pedidos do Dia <span class="usuario-versao">V17.79</span></h2><div style="color:#64748b">Controle diário de vendas recebidas, inclusive as já conferidas.</div></div><div style="font-size:12px;color:#64748b">Apollo: estrutura preparada para Cliente e Romaneio</div></div>
+      <div class="v1779-head"><div><h2>📅 Central de Pedidos do Dia <span class="usuario-versao">V17.86</span></h2><div style="color:#64748b">Controle diário de vendas recebidas, inclusive as já conferidas.</div></div><div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px"><button type="button" id="pdNfeLoteBtn" class="v1786-lote" onclick="pdPuxarNfeLoteV1786()" title="A extensão lê Dados para a NF-e de cada venda do Mercado Livre desta lista">Puxar dados da NF-e (Mercado Livre)</button><span id="pdNfeLoteStatus" style="font-size:12px;color:#64748b">Cliente: nome e CPF da NF-e · Cód.Cliente: código no Linx</span></div></div>
       <div class="v1779-kpis">
         <div class="v1779-kpi"><b id="pdRecebidos">0</b><span>Recebidos</span></div>
         <div class="v1779-kpi"><b id="pdAguardando">0</b><span>Aguardando</span></div>
@@ -3865,6 +3866,63 @@ function pdStatusV1779(e){
   if(rs.some(r=>Number(r.Lido||0)>0))return"separacao";return"aguardando";
 }
 function pdApolloV1779(acao){alert(`${acao}: integração Apollo em preparação. Nenhuma alteração foi enviada.`)}
+/* V17.86 — nome e CPF da NF-e na própria Central.
+   A API do Mercado Livre bloqueia "Dados para a NF-e" para o Noromak (HTTP 403,
+   18/09/2026). A extensão lê da página da venda, com a sessão de quem está
+   logado, e devolve para esta tela, que guarda no servidor (/api/cliente-fiscal,
+   tabela própria — a sincronização do ML não apaga). Depois de gravar no Linx,
+   o código do cliente vai para a coluna Cód.Cliente. */
+let clientesFiscaisV1786={}, pdVisiveisV1786=[];
+function pdFiscalV1786(pedido){return clientesFiscaisV1786[String(pedido||"")]||null}
+function pdCelulaClienteV1786(pedido,f){
+  const cf=pdFiscalV1786(pedido);
+  if(!cf||!cf.nome_fiscal)return htmlSeguroBanco(f.Cliente||"—");
+  const doc=cf.documento&&cf.documento.numero?`${cf.documento.tipo||"CPF"} ${cf.documento.numero}`:"";
+  return `<b>${htmlSeguroBanco(cf.nome_fiscal)}</b>${doc?`<div style="font-size:11px;color:#64748b">${htmlSeguroBanco(doc)}</div>`:""}`;
+}
+function pdCodClienteV1786(pedido,f){
+  const cf=pdFiscalV1786(pedido);
+  if(cf&&cf.linx_cliente)return `<span title="Cadastro atualizado no Linx em ${htmlSeguroBanco(String(cf.linx_atualizado_em||"").slice(0,16).replace("T"," "))}">✓ ${htmlSeguroBanco(cf.linx_cliente)}</span>`;
+  return htmlSeguroBanco(f["Cód.Cliente"]||f.CodigoCliente||"—");
+}
+async function carregarClientesFiscaisV1786(){
+  try{const d=await mlApiAdmin("/expedicao/api/cliente-fiscal/lista");clientesFiscaisV1786=d.clientes||{};renderPedidosDiaV1779();}
+  catch(_){/* sem a lista, a coluna Cliente continua como antes */}
+}
+async function guardarClienteFiscalV1786(m,linxCliente){
+  const pedido=String(m.pedido||"").trim(),documento=String(m.documento||"").replace(/\D/g,""),nome=String(m.nome||"").trim();
+  if(!pedido||!documento||!nome)return;
+  try{
+    await mlApiAdmin("/expedicao/api/cliente-fiscal",{method:"POST",body:JSON.stringify({pedido,documento,nome,linx_cliente:linxCliente||"",fonte:linxCliente?"extensao_linx":"extensao_ml"})});
+    const antigo=clientesFiscaisV1786[pedido]||{};
+    clientesFiscaisV1786[pedido]={documento:{tipo:documento.length===14?"CNPJ":"CPF",numero:documento},nome_fiscal:nome,
+      linx_cliente:linxCliente||antigo.linx_cliente||"",linx_atualizado_em:linxCliente?new Date().toISOString():(antigo.linx_atualizado_em||"")};
+    renderPedidosDiaV1779();
+  }catch(e){console.warn("V17.86: não guardou o cliente do pedido",pedido,e.message)}
+}
+function pdPuxarNfeLoteV1786(){
+  if(!document.documentElement.dataset.noromakLinx){
+    alert('Instale ou atualize a extensão "Noromak - Cadastro de Cliente no Linx" (versão 0.6 ou mais nova) neste Chrome e recarregue a página.');return;
+  }
+  const pedidos=pdVisiveisV1786.filter(x=>x.marketplace==="Mercado Livre"&&!(pdFiscalV1786(x.pedido)||{}).nome_fiscal).map(x=>x.pedido);
+  if(!pedidos.length){v151Set("pdNfeLoteStatus","Todos os pedidos do Mercado Livre desta lista já têm nome e CPF da NF-e.");return;}
+  const b=document.getElementById("pdNfeLoteBtn");if(b)b.disabled=true;
+  v151Set("pdNfeLoteStatus",`Lendo ${pedidos.length} venda(s) no Mercado Livre…`);
+  window.postMessage({tipo:"noromak-linx-ler-lote",pedidos},location.origin);
+}
+// Mensagens da extensão (via content script, na própria janela).
+window.addEventListener("message",ev=>{
+  if(ev.source!==window||ev.origin!==location.origin)return;
+  const m=ev.data||{};
+  if(m.tipo==="noromak-linx-dados-lidos")guardarClienteFiscalV1786(m,"");
+  if(m.tipo==="noromak-linx-gravado")guardarClienteFiscalV1786(m,m.cliente);
+  if(m.tipo==="noromak-linx-lote-progresso")v151Set("pdNfeLoteStatus",`Lendo vendas no Mercado Livre: ${m.feitos}/${m.total}${m.falhas?` · ${m.falhas} sem leitura`:""}`);
+  if(m.tipo==="noromak-linx-lote-fim"){
+    const b=document.getElementById("pdNfeLoteBtn");if(b)b.disabled=false;
+    v151Set("pdNfeLoteStatus",`Concluído: ${m.lidos} de ${m.total} venda(s) com nome e CPF da NF-e.${m.falhas?` ${m.falhas} não deram para ler — use o botão Cliente nelas.`:""}`);
+  }
+});
+
 /* V17.85 — botão Cliente: atualiza o cadastro no Linx DMS.
    O servidor só entrega CPF e nome de "Dados para a NF-e" (/api/cliente-fiscal);
    quem grava no Linx é a extensão "Noromak - Cadastro de Cliente no Linx", que
@@ -3979,12 +4037,13 @@ function renderPedidosDiaV1779(){
    if(mp&&marketplace!==mp)return;if(st&&status!==st)return;if(busca&&!text.includes(busca))return;
    rows.push({e,first,status,dp,dc,marketplace});
  });
+ pdVisiveisV1786=rows.map(x=>({pedido:String(x.e.pedido||""),marketplace:x.marketplace}));
  v151Set("pdRecebidos",stats.recebidos);v151Set("pdAguardando",stats.aguardando);v151Set("pdSeparacao",stats.separacao);v151Set("pdConferidos",stats.conferido);v151Set("pdCancelados",stats.cancelado);
  const labels={aguardando:"Aguardando",separacao:"Em separação",conferido:"Conferido",cancelado:"Cancelado"};
  corpo.innerHTML=rows.map((x,i)=>{
    const f=x.first, unidades=x.e.linhas.reduce((s,r)=>s+(Number(r.Quantidade)||0),0)||Number(x.e.conf?.qtdUnidades||0), itens=x.e.linhas.length||Number(x.e.conf?.qtdItens||0), id=`pdDet${i}`;
    const detalhes=x.e.linhas.length?x.e.linhas.map(r=>`${htmlSeguroBanco(r.SKU||"—")} — ${htmlSeguroBanco(r.Descrição||"")} — Qtd. ${Number(r.Quantidade)||0}`).join("<br>"):"Dados dos itens preservados no histórico de conferência.";
-   return `<tr><td><b>${htmlSeguroBanco(x.e.pedido)}</b><div id="${id}" class="v1779-detail">${detalhes}</div></td><td>${htmlSeguroBanco(f.Contato||f.TelefoneShopee||"—")}</td><td><span class="v1779-badge ${x.status==="conferido"?"v1779-ok":"v1779-wait"}">${labels[x.status]}</span></td><td>${x.status==="cancelado"?"SIM":"—"}</td><td>${htmlSeguroBanco(f["NF Status"]||f.NFStatus||(f.NF||f["Nota Fiscal"]?"Com NF":"—"))}</td><td>${htmlSeguroBanco(f["Cód.Cliente"]||f.CodigoCliente||"—")}</td><td>${htmlSeguroBanco(x.dp||"—")}</td><td>${htmlSeguroBanco(x.dc instanceof Date?x.dc.toLocaleString("pt-BR"):x.dc||"—")}</td><td>${htmlSeguroBanco(f.Cliente||"—")}</td><td>${htmlSeguroBanco(f["Cód.Usu."]||f.CodigoUsuario||"—")}</td><td>${htmlSeguroBanco(f.Usuario||f.ConferidoPor||"—")}</td><td>${htmlSeguroBanco(x.marketplace)}</td><td>${itens} / ${unidades}</td><td><div class="v1779-actions"><button data-pedido="${htmlSeguroBanco(x.e.pedido)}" title="Atualizar o cadastro deste cliente no Linx" onclick="pdClienteLinxV1785(this)">Cliente</button><button onclick="pdApolloV1779('Romaneio')">Romaneio</button><button onclick="pdDetalhesV1779('${id}')">Detalhes</button></div></td></tr>`;
+   return `<tr><td><b>${htmlSeguroBanco(x.e.pedido)}</b><div id="${id}" class="v1779-detail">${detalhes}</div></td><td>${htmlSeguroBanco(f.Contato||f.TelefoneShopee||"—")}</td><td><span class="v1779-badge ${x.status==="conferido"?"v1779-ok":"v1779-wait"}">${labels[x.status]}</span></td><td>${x.status==="cancelado"?"SIM":"—"}</td><td>${htmlSeguroBanco(f["NF Status"]||f.NFStatus||(f.NF||f["Nota Fiscal"]?"Com NF":"—"))}</td><td>${pdCodClienteV1786(x.e.pedido,f)}</td><td>${htmlSeguroBanco(x.dp||"—")}</td><td>${htmlSeguroBanco(x.dc instanceof Date?x.dc.toLocaleString("pt-BR"):x.dc||"—")}</td><td>${pdCelulaClienteV1786(x.e.pedido,f)}</td><td>${htmlSeguroBanco(f["Cód.Usu."]||f.CodigoUsuario||"—")}</td><td>${htmlSeguroBanco(f.Usuario||f.ConferidoPor||"—")}</td><td>${htmlSeguroBanco(x.marketplace)}</td><td>${itens} / ${unidades}</td><td><div class="v1779-actions"><button data-pedido="${htmlSeguroBanco(x.e.pedido)}" title="Atualizar o cadastro deste cliente no Linx" onclick="pdClienteLinxV1785(this)">Cliente</button><button onclick="pdApolloV1779('Romaneio')">Romaneio</button><button onclick="pdDetalhesV1779('${id}')">Detalhes</button></div></td></tr>`;
  }).join("")||'<tr><td colspan="14" style="text-align:center;padding:25px;color:#64748b">Nenhum pedido encontrado para os filtros selecionados.</td></tr>';
  v151Set("pdResumo",`${rows.length} pedido(s) exibido(s)`);
 }
@@ -3997,6 +4056,7 @@ function abrirAbaAdmin(nome){
   if(nome==="historico") carregarLogs();
   if(nome==="pedidos-dia"){
     renderPedidosDiaV1779();
+    carregarClientesFiscaisV1786();
     // V17.83: na primeira abertura, o período começa em "hoje".
     const ei=document.getElementById("vdInicio");
     if(ei&&!ei.value) periodoVendasV1783(0); else carregarVendasV1783();

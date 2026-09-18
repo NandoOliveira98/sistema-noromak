@@ -241,6 +241,13 @@ para pedidos anteriores à V17.84). Quem grava no Linx é a extensão
 `NOROMAK_LINX_CLIENTE` (terceira extensão, fora do repo), que recebe
 `window.postMessage({tipo:"noromak-linx-atualizar-cliente",...})` e abre o painel com
 confirmação. Regras e formato em `INTEGRACAO_LINX_CLIENTE.md`.
+**Nome/CPF da NF-e na Central (V17.86):** a API do ML **bloqueia** o billing-info para o
+app do Noromak (HTTP 403 PolicyAgent) — `NomeFiscalMercadoLivre`/`CPFMercadoLivre` ficam
+vazios e a sincronização reescreve esses campos a cada poucos minutos. A extensão lê
+"Dados para a NF-e" na página da venda (janela minimizada, sessão do usuário) e o Noromak
+guarda na tabela **`cliente_fiscal`** (fora de `conf_pedidos`, de propósito): `POST
+/api/cliente-fiscal`, `GET /api/cliente-fiscal/lista`. Depois de gravar no Linx, guarda
+também o código do cliente (coluna Cód.Cliente).
 O botão **Romaneio** continua só visual — não deve executar operação falsa.
 
 ### Vínculo MLB ↔ SKU

@@ -207,3 +207,15 @@ Extensão v0.2 → v0.4. Clientes 81528, 81263 e 81282.
 - **Nome** vai em maiúsculo, como o Linx guarda; acento no nome fica.
 - **CNPJ** está bloqueado: ainda não há captura da tela gravando pessoa jurídica.
 - Depois de gravar, a extensão relê o cadastro e confere campo a campo.
+
+## Mercado Livre não entrega os Dados para a NF-e (18/09/2026)
+
+`/orders/billing-info/MLB/{id}` e `/orders/{id}/billing_info` respondem **HTTP 403
+PolicyAgent** ("At least one policy returned UNAUTHORIZED") para o app do Noromak, com
+qualquer header. Resultado: 0 de 55 pedidos ML tinham nome/CPF da nota; a captura da
+V17.84 nunca funcionou. Correção de raiz: permissão do app no DevCenter do ML.
+
+Contorno (V17.86 + extensão 0.6): a extensão abre `/vendas/{id}/detalhe` numa janela
+minimizada, com a sessão do usuário, lê o texto e devolve ao Noromak, que guarda em
+`cliente_fiscal`. Travas: só aceita a página cujo endereço é o da venda pedida; nome
+precisa de duas palavras e não pode ser texto de tela; o servidor recusa nome inválido.
