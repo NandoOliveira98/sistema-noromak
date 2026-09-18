@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.95-DEMANDA-FULL-ARACATUBA"
+APP_VERSION = "17.96-FULL-KITS-SEPARACAO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -7352,6 +7352,42 @@ def _load_kit_catalog() -> dict[str, dict[str, Any]]:
     return catalog
 
 
+def full_kit_compositions(skus: list[Any]) -> dict[str, dict[str, Any]]:
+    """V17.96: composição dos kits presentes na planilha da Demanda Full.
+
+    Mesma regra dos pedidos ML: Cadastro de Kits primeiro, depois o prefixo
+    KIT2-/KIT3-. SKU comum fica de fora. Como o cadastro também é indexado pelo
+    SKU sem o prefixo KIT, um SKU comum só vira kit quando é exatamente o SKU
+    cadastrado — senão "X" herdaria a composição de "KIT2-X".
+    """
+    catalog = _load_kit_catalog()
+    out: dict[str, dict[str, Any]] = {}
+    for value in skus:
+        sku = str(value or "").strip()
+        if not sku or sku in out:
+            continue
+        entry = _kit_catalog_lookup(catalog, sku)
+        fonte = "cadastro"
+        if entry and (not entry.get("ativo", True) or (
+            not re.match(r"^KIT", sku, flags=re.I) and normalize(entry.get("sku_kit")) != normalize(sku)
+        )):
+            entry = None
+        if not entry:
+            entry = _infer_quantity_kit_from_sku(sku)
+            fonte = "prefixo"
+        if not entry:
+            continue
+        comps = [
+            {"sku": str(c.get("sku") or "").strip(), "quantidade": int(c.get("quantidade") or 0)}
+            for c in entry.get("componentes") or []
+            if str(c.get("sku") or "").strip() and int(c.get("quantidade") or 0) > 0
+        ]
+        if not comps or (len(comps) == 1 and comps[0]["quantidade"] == 1 and normalize(comps[0]["sku"]) == normalize(sku)):
+            continue
+        out[sku] = {"componentes": comps, "fonte": fonte, "nome": str(entry.get("nome") or sku)}
+    return out
+
+
 def _expand_ml_order_item(item_data: dict[str, Any], kit_catalog: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     """Expande um item ML cadastrado como kit em seus componentes.
 
@@ -12459,6 +12495,25 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.send_json(resultado, 200 if resultado.get("ok") else 400)
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/full/kits":
+            # V17.96: composição dos kits para a Demanda Full (somente leitura).
+            # Um anúncio "kit2-X" vende 2 unidades de X por venda.
+            ctx = self.auth()
+            if ctx is not None:
+                if not module_allowed(ctx, "precificador") and ctx.get("app_role") != "admin":
+                    self.send_json({"error": "Acesso ao módulo de análise Full não autorizado."}, 403)
+                    return
+                try:
+                    body = self.read_json()
+                    skus = body.get("skus") if isinstance(body.get("skus"), list) else []
+                    if len(skus) > 5000:
+                        raise ValueError("Limite de 5000 SKUs por consulta.")
+                    self.send_json({"ok": True, "kits": full_kit_compositions(skus)})
+                except ValueError as exc:
+                    self.send_json({"error": str(exc)}, 400)
+                except Exception as exc:
+                    self.send_json({"error": str(exc)}, 500)
             return
         if path == "/api/full/apollo-stock":
             ctx = self.auth()

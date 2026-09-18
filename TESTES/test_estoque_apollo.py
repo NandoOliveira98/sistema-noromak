@@ -138,5 +138,41 @@ class EstoqueApollo(TesteNoromak):
         self.assertEqual(ApolloFalso.chamadas, ["4045"], "passou do limite e chamou o Apollo mesmo assim")
 
 
+class KitsDemandaFull(TesteNoromak):
+    """V17.96: kit2-X vende 2 unidades de X — a Demanda Full precisa saber disso."""
+
+    def gravar_kits(self, kits):
+        atual, _, _ = S.get_storage("conf_kits")
+        S.save_storage(
+            "conf_kits", atual, json.dumps(kits), False,
+            actor="admin_teste", actor_role="admin", source_screen="Admin / Kits",
+            change_method="Teste automatizado", client_ip="127.0.0.1",
+        )
+
+    def kits(self, skus):
+        status, corpo = self.cliente.pedir("POST", "/api/full/kits", {"skus": skus})
+        self.assertEqual(status, 200, corpo)
+        return corpo["kits"]
+
+    def test_prefixo_kit2_vira_duas_unidades(self):
+        kits = self.kits(["kit2-0892332041", "157507-0893556005"])
+        self.assertEqual(kits["kit2-0892332041"]["componentes"], [{"sku": "0892332041", "quantidade": 2}])
+        self.assertNotIn("157507-0893556005", kits, "SKU comum virou kit")
+
+    def test_cadastro_de_kits_tem_prioridade(self):
+        self.gravar_kits([{"sku_kit": "KIT-LIMPEZA", "nome": "Kit limpeza", "ativo": True, "componentes": [
+            {"sku": "150922-0893764272", "quantidade": 1}, {"sku": "157507-0893556005", "quantidade": 2}]}])
+        kits = self.kits(["KIT-LIMPEZA"])
+        self.assertEqual(len(kits["KIT-LIMPEZA"]["componentes"]), 2)
+        self.assertEqual(kits["KIT-LIMPEZA"]["fonte"], "cadastro")
+
+    def test_sku_comum_nao_herda_composicao_do_kit_com_prefixo(self):
+        self.gravar_kits([{"sku_kit": "KIT3-0893270202", "ativo": True,
+                           "componentes": [{"sku": "0893270202", "quantidade": 3}]}])
+        kits = self.kits(["0893270202", "KIT3-0893270202"])
+        self.assertNotIn("0893270202", kits)
+        self.assertEqual(kits["KIT3-0893270202"]["componentes"][0]["quantidade"], 3)
+
+
 if __name__ == "__main__":
     unittest.main()

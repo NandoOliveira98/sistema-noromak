@@ -347,6 +347,32 @@
     .apollo-status{display:inline-flex;padding:4px 8px;border-radius:999px;font-weight:800;font-size:.72rem;white-space:nowrap}
     .apollo-status.ok{background:#eaf8f0;color:#16764a}.apollo-status.partial{background:#fff6e5;color:#9a5b00}.apollo-status.short{background:#fff0ee;color:#b42318}.apollo-status.unknown{background:#eef3f8;color:#637488}
     .apollo-cell{min-width:125px}.apollo-msg{min-width:230px;white-space:normal}.apollo-msg .apollo-branches{font-size:.78rem;color:#23384f}.apollo-branches{font-size:.72rem;color:#637488;margin-top:3px;white-space:normal;line-height:1.35}
+    .button--accent{border-color:var(--orange);background:var(--orange);color:#172536}
+    .button:disabled{opacity:.5;cursor:not-allowed}
+    .kit-tag{display:inline-block;padding:0 5px;border-radius:4px;background:#e8f0f7;color:var(--navy);font-weight:800;font-size:.68rem}
+    .transfer-hint{margin-top:4px;padding:3px 6px;border-radius:6px;background:#eef6ff;color:#123b63;font-size:.76rem;line-height:1.35}
+    .pick-modal{position:fixed;inset:0;z-index:50;display:flex;align-items:flex-start;justify-content:center;padding:24px 16px;background:rgba(18,37,54,.45);overflow:auto}
+    .pick-dialog{width:min(1100px,100%);padding:22px;border-radius:14px;background:#fff;box-shadow:var(--shadow)}
+    .pick-head{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start;justify-content:space-between;margin-bottom:6px}
+    .pick-head h2{margin:0;color:var(--navy);font-size:1.3rem}
+    .pick-meta{margin:4px 0 0;color:var(--muted);font-size:.85rem}
+    .pick-actions{display:flex;flex-wrap:wrap;gap:8px}
+    .pick-dialog h3{margin:18px 0 8px;color:var(--navy);font-size:1rem}
+    .pick-dialog h3 small{color:var(--muted);font-weight:600;font-size:.8rem}
+    .pick-table{min-width:0;width:100%;border:1px solid var(--line);border-radius:10px}
+    .pick-table th{position:static;padding:8px;font-size:.76rem}
+    .pick-table td{font-size:.82rem}
+    .pick-ads{color:var(--muted);font-size:.75rem !important}
+    .pick-check{width:34px;border-left:1px solid var(--line-soft)}
+    @media print{
+      body.printing-pick > *:not(#pickModal){display:none !important}
+      body.printing-pick{background:#fff}
+      .pick-modal{position:static;padding:0;background:none;overflow:visible}
+      .pick-dialog{width:100%;padding:0;box-shadow:none}
+      .pick-actions{display:none}
+      .pick-table th{background:#fff;color:#000;border-bottom:1px solid #000}
+      .pick-table tr{break-inside:avoid}
+    }
     @media(max-width:900px){.apollo-panel{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
 </style>
@@ -411,6 +437,7 @@
         </select>
         <button id="apolloCheck" class="button button--primary" type="button">↻ Verificar estoque Araçatuba</button>
 
+        <button id="pickListButton" class="button button--accent" type="button" disabled>☰ Lista de separação</button>
         <button id="onlyNeed" class="button" type="button" aria-pressed="false">Somente com reposição</button>
         <button id="clearFilters" class="button" type="button">Limpar filtros</button>
         <button id="exportButton" class="button" type="button">Exportar análise</button>
@@ -439,10 +466,43 @@
       </div>
 
       <p class="method">
-        Regras do modelo: venda diária = vendas em 30 dias ÷ 30; necessidade = máximo entre venda diária × prazo menos unidades que ocupam espaço no Full e zero; cobertura = unidades no Full ÷ venda diária. Cobertura abaixo de 7 dias é URGENTE, de 7 a menos de 15 dias é ATENÇÃO e a partir de 15 dias é OK. Quando não há vendas, o modelo usa cobertura zero e classifica como URGENTE. Estoque considerado: somente Apollo Araçatuba (de onde sai o FULL), já descontado o que está no FULL. SKU Apollo = trecho após o primeiro “-” (157507-0893556005 → 0893556005). Só são consultados os SKUs com algo a enviar; o Apollo aceita 20 consultas por minuto.
+        Regras do modelo: venda diária = vendas em 30 dias ÷ 30; necessidade = máximo entre venda diária × prazo menos unidades que ocupam espaço no Full e zero; cobertura = unidades no Full ÷ venda diária. Cobertura abaixo de 7 dias é URGENTE, de 7 a menos de 15 dias é ATENÇÃO e a partir de 15 dias é OK. Quando não há vendas, o modelo usa cobertura zero e classifica como URGENTE. Estoque considerado: somente Apollo Araçatuba (de onde sai o FULL), já descontado o que está no FULL. SKU Apollo = trecho após o primeiro “-” (157507-0893556005 → 0893556005). Só são consultados os SKUs com algo a enviar; o Apollo aceita 20 consultas por minuto. Kits (Cadastro de Kits ou SKU KIT2-, KIT3-…) consomem a quantidade de cada componente. Anúncios que usam o mesmo código dividem o estoque: o mais urgente pega primeiro.
       </p>
     </section>
   </main>
+
+  <div id="pickModal" class="pick-modal hidden" role="dialog" aria-modal="true" aria-labelledby="pickTitle">
+    <div class="pick-dialog">
+      <div class="pick-head">
+        <div>
+          <h2 id="pickTitle">Lista de separação — FULL</h2>
+          <p id="pickMeta" class="pick-meta"></p>
+        </div>
+        <div class="pick-actions">
+          <button id="pickPrint" class="button button--primary" type="button">Imprimir</button>
+          <button id="pickExport" class="button" type="button">Baixar Excel</button>
+          <button id="pickClose" class="button" type="button">Fechar</button>
+        </div>
+      </div>
+      <h3>1. Separar em Araçatuba <small>por prateleira</small></h3>
+      <table class="pick-table">
+        <thead><tr><th>Localização</th><th>Código Apollo</th><th>Descrição</th><th class="num">Qtd.</th><th>Anúncios (qtd.)</th><th>✓</th></tr></thead>
+        <tbody id="pickBody"></tbody>
+      </table>
+      <h3>2. Envio no Mercado Livre <small>quantidade por anúncio</small></h3>
+      <table class="pick-table">
+        <thead><tr><th>Código ML</th><th>SKU</th><th>Produto</th><th class="num">Enviar</th></tr></thead>
+        <tbody id="adsBody"></tbody>
+      </table>
+      <div id="transferSection">
+        <h3>3. Falta em Araçatuba, mas tem em outra casa <small>avaliar transferência</small></h3>
+        <table class="pick-table">
+          <thead><tr><th>Código ML</th><th>SKU</th><th>Produto</th><th>Situação</th></tr></thead>
+          <tbody id="transferBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
 
   <script>
     (() => {
@@ -721,6 +781,7 @@
         renderSummary();
         applyFilters();
         renderApolloSummary();
+        loadKits();
       }
 
       function renderSummary() {
@@ -787,15 +848,15 @@
         emptyState.classList.add("hidden");
         body.innerHTML = state.filtered.map((item) => `
           <tr data-code="${escapeHtml(item.code)}">
-            <td class="code">${escapeHtml(item.sku || "—")}<span class="sub">Apollo: ${escapeHtml(skuApolloNormalizado(item.sku) || "—")}</span></td>
+            <td class="code">${escapeHtml(item.sku || "—")}<span class="sub">${isKit(item) ? `<span class="kit-tag">KIT</span> ${escapeHtml(kitLabel(item))}` : `Apollo: ${escapeHtml(skuApolloNormalizado(item.sku) || "—")}`}</span></td>
             <td class="product">${escapeHtml(item.product)}<span class="sub">${escapeHtml(item.code || "")}</span></td>
             <td class="num">${formatNumber(item.sales)}</td>
             <td class="num">${formatNumber(item.occupied)}</td>
             <td class="cover">${statusBadge(item.status)}${formatNumber(item.coverage, 1)} dias</td>
             <td class="num selected-need">${formatNumber(item.needTarget)}</td>
-            <td class="num">${item.apolloAvailable===null?"—":formatNumber(item.apolloAvailable)}</td>
+            <td class="num">${item.apolloAvailable===null?"—":formatNumber(item.apolloAvailable)}${isKit(item)&&item.apolloParts.length?`<span class="sub">${item.apolloParts.map(p=>`${formatNumber(p.avail)} un.`).join(" + ")}</span>`:""}</td>
             <td class="num"><strong>${item.apolloCanSend===null?"—":formatNumber(item.apolloCanSend)}</strong></td>
-            <td class="apollo-msg">${apolloBadge(item)}${item.apolloMessage?`<div class="apollo-branches">${escapeHtml(item.apolloMessage)}</div>`:""}${item.apolloError?`<div class="apollo-branches">${escapeHtml(item.apolloError)}</div>`:""}</td>
+            <td class="apollo-msg">${apolloBadge(item)}${item.apolloMessage?`<div class="apollo-branches">${escapeHtml(item.apolloMessage)}</div>`:""}${item.apolloError?`<div class="apollo-branches">${escapeHtml(item.apolloError)}</div>`:""}${item.apolloTransfer?`<div class="transfer-hint">↔ ${escapeHtml(item.apolloTransfer)}</div>`:""}</td>
           </tr>
         `).join("");
       }
@@ -817,8 +878,8 @@
       }
 
       // V17.94: o resultado do Apollo fica guardado por código (sempre com as 3
-      // casas). Trocar prazo ou filial só recalcula — não gasta consulta, que o
-      // Apollo limita a 20 por minuto.
+      // casas). Trocar prazo só recalcula — não gasta consulta, que o Apollo
+      // limita a 20 por minuto.
       const apolloStore = new Map();
       const apolloKey = (item) => String(skuApolloNormalizado(item.sku) || "").trim().toUpperCase();
       let apolloRunning = false;
@@ -826,70 +887,133 @@
 
       // V17.95: o FULL sai de Araçatuba — só o estoque dessa casa conta.
       const APOLLO_FILIAL_FULL = 1;
+      const CASAS = { 1: "Araçatuba", 2: "Ribeirão", 3: "Bauru" };
+
+      // V17.96: kits. "kit2-X" vende 2 unidades de X por venda; kit cadastrado
+      // pode ter vários componentes. A composição vem do servidor (mesma regra
+      // dos pedidos ML: Cadastro de Kits, depois prefixo KITn-).
+      const kitStore = new Map();
+      let kitsPromise = Promise.resolve();
+
+      function loadKits() {
+        kitStore.clear();
+        const skus = [...new Set(state.data.map(item => item.sku).filter(Boolean))];
+        kitsPromise = fetch("/expedicao/api/full/kits", {
+          method: "POST", credentials: "same-origin", cache: "no-store",
+          headers: { "Content-Type": "application/json", "Accept": "application/json" },
+          body: JSON.stringify({ skus })
+        })
+          .then(r => r.json().then(d => { if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`); return d; }))
+          .then(d => {
+            Object.entries(d.kits || {}).forEach(([sku, kit]) => {
+              const comps = (kit.componentes || [])
+                .map(c => ({ key: String(skuApolloNormalizado(c.sku) || "").trim().toUpperCase(), qty: Number(c.quantidade) || 0 }))
+                .filter(c => c.key && c.qty > 0);
+              if (comps.length) kitStore.set(sku, comps);
+            });
+            if (state.data.length) { applyFilters(); renderApolloSummary(); }
+          })
+          .catch(error => showMessage(`Não consegui ler o cadastro de kits (${error.message}). Kits serão tratados como 1 unidade.`, "error"));
+        return kitsPromise;
+      }
+
+      function itemComponents(item) {
+        const kit = kitStore.get(item.sku);
+        if (kit) return kit;
+        const key = apolloKey(item);
+        return key ? [{ key, qty: 1 }] : [];
+      }
+
+      const isKit = (item) => kitStore.has(item.sku);
+      const kitLabel = (item) => itemComponents(item).map(c => `${c.qty} × ${c.key}`).join(" + ");
+
+      function branchStock(r, revenda) {
+        const row = (Array.isArray(r.branches) ? r.branches : []).find(b => Number(b.revenda) === revenda);
+        if (!row || (r.missing_branches || []).map(Number).includes(revenda)) return null;
+        if (row.disponivel === null || row.disponivel === undefined) return null;
+        return { disp: Math.floor(Number(row.disponivel) || 0), loc: String(row.localizacao || "").trim() };
+      }
 
       function apolloDerive() {
-        const needByCode = new Map();
-        const rowsByCode = new Map();
+        state.data.forEach(item => { item.needTarget = apolloTargetNeed(item); });
+        // Unidades de cada código Apollo pedidas por todos os anúncios (kits contam em unidades).
+        const unitsNeed = new Map();
+        const rowsUsing = new Map();
         state.data.forEach(item => {
-          const key = apolloKey(item);
-          const need = apolloTargetNeed(item);
-          item.needTarget = need;
-          if (key && need > 0) {
-            needByCode.set(key, (needByCode.get(key) || 0) + need);
-            rowsByCode.set(key, (rowsByCode.get(key) || 0) + 1);
-          }
+          if (item.needTarget <= 0) return;
+          itemComponents(item).forEach(c => {
+            unitsNeed.set(c.key, (unitsNeed.get(c.key) || 0) + item.needTarget * c.qty);
+            rowsUsing.set(c.key, (rowsUsing.get(c.key) || 0) + 1);
+          });
         });
         const toAllocate = [];
         state.data.forEach(item => {
-          const key = apolloKey(item);
           const need = item.needTarget;
-          const r = key ? apolloStore.get(key) : null;
           item.apolloAvailable = null; item.apolloCanSend = null; item.apolloShortage = null;
-          item.apolloError = ""; item.apolloMessage = "";
-          if (!key) { item.apolloSituation = "SEM SKU"; return; }
-          if (!r) { item.apolloSituation = need > 0 ? "NÃO CONSULTADO" : "SEM NECESSIDADE"; return; }
-          if (!r.ok) {
-            item.apolloSituation = r.pending ? "NÃO CONSULTADO" : "NÃO ENCONTRADO";
-            item.apolloError = r.error || "Falha na consulta ao Apollo.";
+          item.apolloError = ""; item.apolloMessage = ""; item.apolloTransfer = ""; item.apolloParts = [];
+          const comps = itemComponents(item);
+          if (!comps.length) { item.apolloSituation = "SEM SKU"; return; }
+          const found = comps.map(c => ({ c, r: apolloStore.get(c.key) }));
+          if (found.some(x => !x.r)) { item.apolloSituation = need > 0 ? "NÃO CONSULTADO" : "SEM NECESSIDADE"; return; }
+          const bad = found.find(x => !x.r.ok);
+          if (bad) {
+            item.apolloSituation = bad.r.pending ? "NÃO CONSULTADO" : "NÃO ENCONTRADO";
+            item.apolloError = `${comps.length > 1 ? bad.c.key + ": " : ""}${bad.r.error || "Falha na consulta ao Apollo."}`;
             return;
           }
-          const row = (Array.isArray(r.branches) ? r.branches : []).find(b => Number(b.revenda) === APOLLO_FILIAL_FULL);
-          const missing = (r.missing_branches || []).map(Number).includes(APOLLO_FILIAL_FULL);
-          if (!row || missing || row.disponivel === null || row.disponivel === undefined) {
+          const parts = found.map(({ c, r }) => {
+            const home = branchStock(r, APOLLO_FILIAL_FULL);
+            const others = [2, 3].map(rev => ({ casa: CASAS[rev], stock: branchStock(r, rev) }))
+              .filter(o => o.stock && o.stock.disp > 0).map(o => ({ casa: o.casa, disp: o.stock.disp }));
+            return { key: c.key, qty: c.qty, avail: home ? home.disp : null, loc: home ? home.loc : "", desc: r.description || "", others };
+          });
+          if (parts.some(p => p.avail === null)) {
             // Casa sem resposta NÃO é zero.
             item.apolloSituation = "NÃO INFORMADO";
             item.apolloError = "Araçatuba não respondeu agora. Consulte de novo.";
             return;
           }
-          item.apolloAvailable = Math.floor(Number(row.disponivel) || 0);
+          item.apolloParts = parts;
+          // Em unidades do anúncio: quantos kits dá para montar com o estoque inteiro.
+          item.apolloAvailable = Math.min(...parts.map(p => Math.floor(p.avail / p.qty)));
           if (need <= 0) { item.apolloSituation = "SEM NECESSIDADE"; return; }
           toAllocate.push(item);
         });
-        // Anúncios com o mesmo código Apollo dividem o mesmo estoque:
+        // Anúncios que usam o mesmo código Apollo dividem o mesmo estoque:
         // o mais urgente (depois o que mais vende) pega primeiro.
         const remaining = new Map();
         toAllocate
           .sort((a, b) => a.priority - b.priority || b.sales - a.sales || a.sourceRow - b.sourceRow)
           .forEach(item => {
-            const key = apolloKey(item);
             const need = item.needTarget;
-            const available = item.apolloAvailable;
-            const left = remaining.has(key) ? remaining.get(key) : available;
-            const canSend = Math.min(need, left);
-            remaining.set(key, left - canSend);
+            const parts = item.apolloParts;
+            const left = (p) => remaining.has(p.key) ? remaining.get(p.key) : p.avail;
+            let canSend = need;
+            parts.forEach(p => { canSend = Math.min(canSend, Math.floor(left(p) / p.qty)); });
+            parts.forEach(p => remaining.set(p.key, left(p) - canSend * p.qty));
             item.apolloCanSend = canSend;
             item.apolloShortage = need - canSend;
-            const shared = (rowsByCode.get(key) || 0) > 1 && (needByCode.get(key) || 0) > available;
+            const un = isKit(item) ? " kits" : "";
+            const shared = parts.some(p => (rowsUsing.get(p.key) || 0) > 1 && (unitsNeed.get(p.key) || 0) > p.avail);
             if (canSend >= need) item.apolloSituation = "OK";
             else if (canSend > 0) {
               item.apolloSituation = "PARCIAL";
-              item.apolloMessage = `Possível enviar apenas ${formatNumber(canSend)} de ${formatNumber(need)}`;
+              item.apolloMessage = `Possível enviar apenas ${formatNumber(canSend)} de ${formatNumber(need)}${un}`;
             } else {
               item.apolloSituation = "SEM ESTOQUE";
-              item.apolloMessage = available > 0 ? "Estoque já reservado para outro anúncio do mesmo código" : "Nada em Araçatuba";
+              item.apolloMessage = parts.some(p => p.avail >= p.qty) ? "Estoque já reservado para outro anúncio do mesmo código" : "Nada em Araçatuba";
             }
-            if (shared) {
-              item.apolloMessage += `${item.apolloMessage ? " · " : ""}Estoque de ${formatNumber(available)} dividido entre ${rowsByCode.get(key)} anúncios do mesmo código`;
+            if (shared) item.apolloMessage += `${item.apolloMessage ? " · " : ""}Estoque dividido com outro anúncio do mesmo código`;
+            // Sugestão de transferência: o que falta, em unidades, e quem tem.
+            if (item.apolloShortage > 0) {
+              const lines = parts
+                .filter(p => p.others.length)
+                .map(p => {
+                  const faltam = item.apolloShortage * p.qty;
+                  const tem = p.others.map(o => `${o.casa} tem ${formatNumber(o.disp)}`).join(", ");
+                  return `${parts.length > 1 || isKit(item) ? p.key + ": " : ""}faltam ${formatNumber(faltam)} un. — ${tem}`;
+                });
+              item.apolloTransfer = lines.join(" · ");
             }
           });
       }
@@ -909,6 +1033,7 @@
         const consulted = apolloStore.size > 0;
         element("apolloKpiShort").textContent = consulted ? formatNumber(count("PARCIAL", "SEM ESTOQUE")) : "—";
         element("apolloKpiCanSend").textContent = consulted ? formatNumber(state.data.reduce((s, x) => s + (Number(x.apolloCanSend) || 0), 0)) : "—";
+        element("pickListButton").disabled = !state.data.some(x => Number(x.apolloCanSend) > 0 || x.apolloTransfer);
       }
 
       function setApolloButtons(running) {
@@ -925,13 +1050,16 @@
           showMessage("Carregue primeiro a planilha do Mercado Livre.", "error");
           return;
         }
+        await kitsPromise;
         // Só consulta quem precisa de reposição no prazo escolhido, mais urgente
-        // primeiro; cada código Apollo uma vez só. Já consultado não repete.
+        // primeiro; cada código Apollo uma vez só (kits: cada componente).
         const order = new Map();
         [...state.data]
-          .filter(item => apolloKey(item) && apolloTargetNeed(item) > 0)
+          .filter(item => apolloTargetNeed(item) > 0)
           .sort((a, b) => a.priority - b.priority || b.sales - a.sales)
-          .forEach(item => { const k = apolloKey(item); if (!order.has(k)) order.set(k, apolloTargetNeed(item)); });
+          .forEach(item => itemComponents(item).forEach(c => {
+            order.set(c.key, (order.get(c.key) || 0) + apolloTargetNeed(item) * c.qty);
+          }));
         let pending = [...order.keys()].filter(k => !(apolloStore.get(k)?.ok));
         if (!pending.length) {
           showMessage(order.size ? "Todos os SKUs com reposição já foram consultados no Apollo." : "Nenhum SKU precisa de reposição neste prazo.", "success");
@@ -943,7 +1071,7 @@
         try {
           while (pending.length && !apolloCancel) {
             const part = pending.slice(0, 40);
-            showMessage(`Consultando estoque Apollo: ${total - pending.length} de ${total} SKU(s)...`, "success");
+            showMessage(`Consultando estoque Apollo: ${total - pending.length} de ${total} código(s)...`, "success");
             const response = await fetch("/expedicao/api/full/apollo-stock", {
               method: "POST",
               credentials: "same-origin",
@@ -963,17 +1091,18 @@
             });
             pending = pending.filter(k => !done.has(k));
             if (!done.size && !retryAfter) throw new Error("O servidor não devolveu resultado para os SKUs enviados.");
-            apolloDerive(); renderApolloSummary(); applyFilters();
+            applyFilters(); renderApolloSummary();
             if (pending.length && retryAfter > 0) {
               for (let s = Math.ceil(retryAfter); s > 0 && !apolloCancel; s -= 1) {
                 const faltam = Math.ceil(pending.length / 18);
-                showMessage(`Apollo: ${total - pending.length} de ${total} SKU(s) consultados. O Apollo aceita 20 consultas por minuto — continuando em ${s} s (faltam ~${faltam} min).`, "success");
+                showMessage(`Apollo: ${total - pending.length} de ${total} código(s) consultados. O Apollo aceita 20 consultas por minuto — continuando em ${s} s (faltam ~${faltam} min).`, "success");
                 await sleep(1000);
               }
             }
           }
           const count = (sit) => state.data.filter(x => x.apolloSituation === sit).length;
-          const resumo = `${count("OK")} com estoque suficiente, ${count("PARCIAL")} com envio parcial, ${count("SEM ESTOQUE")} sem estoque, ${count("NÃO INFORMADO") + count("NÃO ENCONTRADO")} sem informação.`;
+          const transf = state.data.filter(x => x.apolloTransfer).length;
+          const resumo = `${count("OK")} com estoque suficiente, ${count("PARCIAL")} com envio parcial, ${count("SEM ESTOQUE")} sem estoque, ${count("NÃO INFORMADO") + count("NÃO ENCONTRADO")} sem informação${transf ? `, ${transf} com estoque em outra casa` : ""}.`;
           showMessage(apolloCancel ? `Consulta interrompida (${total - pending.length} de ${total}). ${resumo}` : `Apollo concluído: ${resumo}`, count("PARCIAL") + count("SEM ESTOQUE") ? "error" : "success");
         } catch (error) {
           showMessage(error?.message || "Não foi possível consultar o estoque Apollo.", "error");
@@ -981,6 +1110,85 @@
           apolloRunning = false; apolloCancel = false;
           setApolloButtons(false);
         }
+      }
+
+      // V17.96: lista de separação. Três blocos:
+      //  1. Separar em Araçatuba — por código Apollo, em ordem de prateleira;
+      //  2. Envio no ML — quantidade por anúncio (para montar o envio ao FULL);
+      //  3. Transferências — o que falta e está em outra casa.
+      function buildPickList() {
+        const pick = new Map();
+        const ads = [];
+        const transfers = [];
+        state.data.forEach(item => {
+          if (Number(item.apolloCanSend) > 0) {
+            ads.push({ code: item.code, sku: item.sku, product: item.product, qty: item.apolloCanSend, kit: isKit(item) ? kitLabel(item) : "" });
+            item.apolloParts.forEach(p => {
+              const row = pick.get(p.key) || { key: p.key, loc: p.loc, desc: p.desc, units: 0, ads: [] };
+              row.units += item.apolloCanSend * p.qty;
+              row.ads.push(`${item.code || item.sku} (${formatNumber(item.apolloCanSend * p.qty)})`);
+              pick.set(p.key, row);
+            });
+          }
+          if (item.apolloTransfer) transfers.push({ code: item.code, sku: item.sku, product: item.product, text: item.apolloTransfer });
+        });
+        const byLoc = (a, b) => (a.loc || "~").localeCompare(b.loc || "~", "pt-BR", { numeric: true }) || a.key.localeCompare(b.key);
+        return {
+          pick: [...pick.values()].sort(byLoc),
+          ads: ads.sort((a, b) => String(a.code).localeCompare(String(b.code))),
+          transfers
+        };
+      }
+
+      function openPickList() {
+        const list = buildPickList();
+        const days = element("targetDays").value === "15" ? 15 : 30;
+        const totalUnits = list.pick.reduce((s, r) => s + r.units, 0);
+        element("pickMeta").textContent = `Planejamento para ${days} dias · ${list.pick.length} código(s) · ${formatNumber(totalUnits)} unidade(s) a separar em Araçatuba · ${state.fileName}`;
+        element("pickBody").innerHTML = list.pick.map(r => `
+          <tr><td class="code">${escapeHtml(r.loc || "sem localização")}</td><td class="code">${escapeHtml(r.key)}</td>
+          <td>${escapeHtml(r.desc || "")}</td><td class="num"><strong>${formatNumber(r.units)}</strong></td>
+          <td class="pick-ads">${escapeHtml(r.ads.join(" · "))}</td><td class="pick-check"></td></tr>`).join("")
+          || `<tr><td colspan="6" class="empty-state">Nada a separar.</td></tr>`;
+        element("adsBody").innerHTML = list.ads.map(r => `
+          <tr><td class="code">${escapeHtml(r.code || "—")}</td><td class="code">${escapeHtml(r.sku)}</td>
+          <td>${escapeHtml(r.product)}${r.kit ? `<span class="sub">Kit: ${escapeHtml(r.kit)}</span>` : ""}</td>
+          <td class="num"><strong>${formatNumber(r.qty)}</strong></td></tr>`).join("")
+          || `<tr><td colspan="4" class="empty-state">Nenhum anúncio com envio possível.</td></tr>`;
+        element("transferSection").classList.toggle("hidden", !list.transfers.length);
+        element("transferBody").innerHTML = list.transfers.map(r => `
+          <tr><td class="code">${escapeHtml(r.code || "—")}</td><td class="code">${escapeHtml(r.sku)}</td>
+          <td>${escapeHtml(r.product)}</td><td>${escapeHtml(r.text)}</td></tr>`).join("");
+        element("pickModal").classList.remove("hidden");
+        document.body.classList.add("printing-pick");
+      }
+
+      function closePickList() {
+        element("pickModal").classList.add("hidden");
+        document.body.classList.remove("printing-pick");
+      }
+
+      function exportPickList() {
+        const list = buildPickList();
+        const wb = XLSX.utils.book_new();
+        const s1 = XLSX.utils.json_to_sheet(list.pick.map(r => ({
+          "Localização": r.loc, "Código Apollo": r.key, "Descrição": r.desc, "Quantidade": r.units, "Anúncios": r.ads.join(" · ")
+        })));
+        s1["!cols"] = [18, 16, 45, 12, 60].map(wch => ({ wch }));
+        XLSX.utils.book_append_sheet(wb, s1, "Separar Araçatuba");
+        const s2 = XLSX.utils.json_to_sheet(list.ads.map(r => ({
+          "Código ML": r.code, "SKU": r.sku, "Produto": r.product, "Quantidade a enviar": r.qty, "Kit": r.kit
+        })));
+        s2["!cols"] = [14, 24, 55, 18, 24].map(wch => ({ wch }));
+        XLSX.utils.book_append_sheet(wb, s2, "Envio ML por anúncio");
+        if (list.transfers.length) {
+          const s3 = XLSX.utils.json_to_sheet(list.transfers.map(r => ({
+            "Código ML": r.code, "SKU": r.sku, "Produto": r.product, "Transferência sugerida": r.text
+          })));
+          s3["!cols"] = [14, 24, 55, 60].map(wch => ({ wch }));
+          XLSX.utils.book_append_sheet(wb, s3, "Transferências");
+        }
+        XLSX.writeFile(wb, "lista_separacao_full.xlsx", { compression: true });
       }
 
       function updateSortHeaders() {
@@ -1007,6 +1215,7 @@
           "Prioridade": item.priority,
           "SKU": item.sku,
           "SKU Apollo": skuApolloNormalizado(item.sku),
+          "Kit (composição)": isKit(item) ? kitLabel(item) : "",
           "Código ML": item.code,
           "Código universal": item.universal,
           "Produto": item.product,
@@ -1023,7 +1232,8 @@
           "Possível enviar": item.apolloCanSend,
           "Falta no Apollo": item.apolloShortage,
           "Situação Apollo": item.apolloSituation,
-          "Observação Apollo": [item.apolloMessage, item.apolloError].filter(Boolean).join(" ")
+          "Observação Apollo": [item.apolloMessage, item.apolloError].filter(Boolean).join(" "),
+          "Transferência sugerida": item.apolloTransfer || ""
         }));
         const worksheet = XLSX.utils.json_to_sheet(rows);
         worksheet["!cols"] = [10, 10, 22, 14, 18, 55, 16, 30, 14, 20, 20, 18, 14, 20, 20].map((wch) => ({ wch }));
@@ -1077,6 +1287,12 @@
       });
       element("clearFilters").addEventListener("click", () => resetFilters(true));
       element("exportButton").addEventListener("click", exportAnalysis);
+      element("pickListButton").addEventListener("click", openPickList);
+      element("pickClose").addEventListener("click", closePickList);
+      element("pickPrint").addEventListener("click", () => window.print());
+      element("pickExport").addEventListener("click", exportPickList);
+      element("pickModal").addEventListener("click", (event) => { if (event.target === element("pickModal")) closePickList(); });
+      document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !element("pickModal").classList.contains("hidden")) closePickList(); });
       document.querySelectorAll("th[data-key] .sort-button").forEach((button) => {
         button.addEventListener("click", () => {
           const key = button.closest("th").dataset.key;
