@@ -144,3 +144,56 @@ class EtiquetaDePedidoJaOrganizado(__import__("base").TesteNoromak):
         self.assertEqual(r["ship_order_ok"], 0, "falta de NF-e foi contada como envio organizado")
         self.assertEqual(S._shopee_ship_order_cached("260918BHYEGN3E", "P1"), (False, False))
         self.assertTrue(any("aguardando NF-e" in str(e) for e in self.eventos))
+
+
+class SincronizacaoNaoApagaPedidoOrganizado(__import__("base").TesteNoromak):
+    """V17.92 — a importação de pedidos Shopee passa a rodar sozinha (worker).
+    Garante que isso não tira da fila o pedido já organizado."""
+
+    def setUp(self):
+        super().setUp()
+        from base import gravar_como_integracao, linha
+        gravar_como_integracao([
+            linha(p, "SKU-" + p, uid="U-" + p, Marketplace="SHOPEE", OrigemCadastro="API_SHOPEE")
+            for p in ("ORGANIZADO01", "CANCELADO001", "AORGANIZAR01")
+        ])
+        self.originais = (S.shopee_status_payload, S.shopee_current_shipments, S.shopee_order_details,
+                          S._shopee_build_pending_lines, S.shopee_log_event)
+        S.shopee_status_payload = lambda: {"connected": True, "shop_id": "1"}
+        S.shopee_current_shipments = lambda: [{"order_sn": "AORGANIZAR01", "package_number": "P1"}]
+        status = {"ORGANIZADO01": "PROCESSED", "CANCELADO001": "CANCELLED", "AORGANIZAR01": "READY_TO_SHIP"}
+        S.shopee_order_details = lambda sns: [{"order_sn": x, "order_status": status[x]} for x in sns]
+        S._shopee_build_pending_lines = lambda order, pkgs, produtos: [
+            linha(order["order_sn"], "SKU-" + order["order_sn"], uid="U-" + order["order_sn"],
+                  Marketplace="SHOPEE", OrigemCadastro="API_SHOPEE")]
+        S.shopee_log_event = lambda *a, **k: None
+
+    def tearDown(self):
+        (S.shopee_status_payload, S.shopee_current_shipments, S.shopee_order_details,
+         S._shopee_build_pending_lines, S.shopee_log_event) = self.originais
+        super().tearDown()
+
+    def test_pedido_organizado_nao_sai_da_fila(self):
+        """Rodando a cada minuto, a sincronização não pode tirar da fila o
+        pedido organizado (que saiu de get_shipment_list) antes da conferência.
+        Quem garante é preserve_pending_records na gravação da integração."""
+        from base import numeros_de_pedido
+        S.shopee_manual_sync()
+        S.shopee_manual_sync()
+        fila = numeros_de_pedido()
+        self.assertIn("ORGANIZADO01", fila, "REGRESSÃO: pedido organizado sumiu da fila antes da conferência")
+        self.assertIn("AORGANIZAR01", fila)
+
+    def test_worker_automatico_chama_a_sincronizacao(self):
+        import threading
+        chamadas = []
+        original = S.shopee_manual_sync
+        parar = threading.Event()
+        S.shopee_manual_sync = lambda **k: (chamadas.append(k), parar.set())
+        esperar = parar.wait
+        try:
+            parar.wait = lambda t=None: esperar(0.01) if not chamadas else True
+            S.shopee_orders_worker_loop(parar)
+        finally:
+            S.shopee_manual_sync = original
+        self.assertEqual(chamadas, [{"acordar_etiquetas": False}])

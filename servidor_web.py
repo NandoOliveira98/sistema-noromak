@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.91-SHOPEE-ETIQUETA-APOS-ORGANIZAR"
+APP_VERSION = "17.92-PEDIDOS-SHOPEE-AUTOMATICOS"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -5565,7 +5565,16 @@ def _shopee_merge_pending_lines(current: list[dict[str, Any]], api_lines: list[d
     return [*preserved_non_api, *merged_api], removed, protected_count
 
 
-def shopee_manual_sync() -> dict[str, Any]:
+SHOPEE_ORDERS_SYNC_LOCK = threading.Lock()
+
+
+def shopee_manual_sync(*, acordar_etiquetas: bool = True) -> dict[str, Any]:
+    # V17.92: o worker automático e o botão de sincronizar não rodam juntos.
+    with SHOPEE_ORDERS_SYNC_LOCK:
+        return _shopee_manual_sync_sem_trava(acordar_etiquetas)
+
+
+def _shopee_manual_sync_sem_trava(acordar_etiquetas: bool = True) -> dict[str, Any]:
     status = shopee_status_payload()
     if not status["connected"]:
         raise RuntimeError("Shopee ainda não está conectada.")
@@ -5620,7 +5629,10 @@ def shopee_manual_sync() -> dict[str, Any]:
         imported_orders = len({order_number(r) for r in final_rows if normalize(r.get("OrigemCadastro")) == "API_SHOPEE"})
         # V17.27: nunca bloqueia a requisição esperando criação/READY/download de etiqueta.
         # O worker do servidor acorda imediatamente e continua o fluxo em background.
-        SHOPEE_LABEL_WAKE_EVENT.set()
+        # V17.92: a sincronização automática (a cada minuto) não acorda o worker
+        # de etiquetas — ele segue no intervalo próprio, sem multiplicar chamadas.
+        if acordar_etiquetas:
+            SHOPEE_LABEL_WAKE_EVENT.set()
         shipping_docs = {
             "enfileirados": len(shipments),
             "baixados": 0,
@@ -5668,6 +5680,25 @@ def shopee_manual_sync() -> dict[str, Any]:
             DB.commit()
         shopee_log_event("orders_sync", f"shop_id={status.get('shop_id')}", "ERRO", str(exc))
         raise
+
+
+SHOPEE_ORDERS_WORKER_INTERVAL = max(30, min(900, int(os.getenv("SHOPEE_ORDERS_WORKER_INTERVAL", "60"))))
+
+
+def shopee_orders_worker_loop(stop_event: threading.Event) -> None:
+    """V17.92 — importa os pedidos da Shopee sozinho, como o Mercado Livre.
+
+    Até aqui a importação só rodava pelo botão de sincronizar da tela de
+    Integrações. Mesma função do botão (shopee_manual_sync), a cada minuto.
+    """
+    stop_event.wait(20)
+    while not stop_event.is_set():
+        try:
+            if shopee_status_payload().get("connected"):
+                shopee_manual_sync(acordar_etiquetas=False)
+        except Exception as exc:
+            shopee_log_event("orders_worker", "background", "ERRO", str(exc)[:800])
+        stop_event.wait(SHOPEE_ORDERS_WORKER_INTERVAL)
 
 
 def shopee_label_worker_loop(stop_event: threading.Event) -> None:
@@ -14566,6 +14597,13 @@ def main() -> None:
         name="shopee-label-worker",
         daemon=True,
     )
+    # V17.92: pedidos Shopee entram sozinhos, sem o botão de sincronizar.
+    shopee_orders_thread = threading.Thread(
+        target=shopee_orders_worker_loop,
+        args=(watcher_stop,),
+        name="shopee-orders-worker",
+        daemon=True,
+    )
     _ml_worker_state_update(started_at=now_iso(), last_error="")
     watcher_thread.start()
     new_order_thread.start()
@@ -14573,6 +14611,7 @@ def main() -> None:
     token_keeper_thread.start()
     safety_catchup_thread.start()
     shopee_label_thread.start()
+    shopee_orders_thread.start()
     server = ThreadingHTTPServer((HOST, PORT), AppHandler)
     server.daemon_threads = True
     print(f"Sistema de Conferência Web {APP_VERSION} em http://{HOST}:{PORT}{BASE_PATH}", flush=True)
