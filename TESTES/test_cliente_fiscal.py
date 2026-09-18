@@ -309,3 +309,15 @@ class NomeConferenciaPelaNFe(TesteNoromak):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PainelDaExtensaoNoAdmin(TesteNoromak):
+    """V17.89 — o painel da extensão abria em branco no admin: a CSP bloqueava
+    iframes de chrome-extension (default-src 'self' sem frame-src)."""
+
+    def test_csp_libera_o_painel_e_continua_proibindo_embutir_o_noromak(self):
+        import urllib.request
+        with urllib.request.urlopen(self.url_base + "/") as r:
+            csp = r.headers.get("Content-Security-Policy", "")
+        self.assertIn("frame-src 'self' chrome-extension:", csp)
+        self.assertIn("frame-ancestors 'none'", csp, "o Noromak não pode ser embutido por outro site")

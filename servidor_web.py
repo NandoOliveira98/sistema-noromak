@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.88-SHOPEE-SEM-USUARIO-COMO-NOME"
+APP_VERSION = "17.89-ETIQUETA-SHOPEE-E-PAINEL-LINX"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -4644,12 +4644,16 @@ def _shopee_mark_ship_order_cached(order_sn: str, package_number: str, *, unspli
 
 
 def _shopee_package_not_needed_error(message: str) -> bool:
-    low = str(message or "").lower()
+    # V17.89: a mensagem real da Shopee é
+    #   "logistics.ship_order_not_need_pacakge_number Please don’t request with
+    #    package_number for this unsplit order."
+    # — "pacakge" com erro de digitação e apóstrofo tipográfico (’). Nenhuma das
+    # comparações antigas batia, o fallback sem package_number nunca rodava e as
+    # etiquetas Shopee pararam de sair sozinhas em 10/09/2026.
+    low = str(message or "").lower().replace("’", "'").replace("‘", "'")
     return (
-        "ship_order_not_need_package_number" in low
-        or "not_need_package_number" in low
-        or "don't request with package_number" in low
-        or "do not request with package_number" in low
+        bool(re.search(r"not_need_pa[a-z]{2,4}ge_number", low))
+        or "request with package_number" in low
     )
 
 
@@ -11628,6 +11632,11 @@ class AppHandler(BaseHTTPRequestHandler):
             "connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:* wss://127.0.0.1:* "
             "http://localhost:* https://localhost:* ws://localhost:* wss://localhost:* http://127.0.0.1:* https://127.0.0.1:* https://cdn.jsdelivr.net https://unpkg.com; "
             "worker-src 'self' blob: https://cdn.jsdelivr.net https://unpkg.com; "
+            # V17.89: o painel da extensão "Cadastro de Cliente no Linx" é uma
+            # página da própria extensão aberta em iframe sobre o admin. Sem
+            # isto, default-src 'self' bloqueava o conteúdo e o painel ficava
+            # em branco. frame-ancestors continua 'none' (ninguém embute o Noromak).
+            "frame-src 'self' chrome-extension:; "
             "object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'",
         )
 
