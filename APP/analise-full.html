@@ -484,23 +484,11 @@
           <button id="pickClose" class="button" type="button">Fechar</button>
         </div>
       </div>
-      <h3>1. Separar em Araçatuba <small>por prateleira</small></h3>
+      <h3>Separar em Araçatuba <small>por prateleira</small></h3>
       <table class="pick-table">
         <thead><tr><th>Localização</th><th>Código Apollo</th><th>Descrição</th><th class="num">Qtd.</th><th class="pick-check">Separado</th></tr></thead>
         <tbody id="pickBody"></tbody>
       </table>
-      <h3>2. Envio no Mercado Livre <small>quantidade por anúncio</small></h3>
-      <table class="pick-table">
-        <thead><tr><th>Código ML</th><th>SKU</th><th>Produto</th><th class="num">Enviar</th></tr></thead>
-        <tbody id="adsBody"></tbody>
-      </table>
-      <div id="transferSection">
-        <h3>3. Falta em Araçatuba, mas tem em outra casa <small>avaliar transferência</small></h3>
-        <table class="pick-table">
-          <thead><tr><th>Código ML</th><th>SKU</th><th>Produto</th><th>Situação</th></tr></thead>
-          <tbody id="transferBody"></tbody>
-        </table>
-      </div>
     </div>
   </div>
 
@@ -1035,7 +1023,7 @@
         const consulted = apolloStore.size > 0;
         element("apolloKpiShort").textContent = consulted ? formatNumber(count("PARCIAL", "SEM ESTOQUE")) : "—";
         element("apolloKpiCanSend").textContent = consulted ? formatNumber(state.data.reduce((s, x) => s + (Number(x.apolloCanSend) || 0), 0)) : "—";
-        element("pickListButton").disabled = !state.data.some(x => Number(x.apolloCanSend) > 0 || x.apolloTransfer);
+        element("pickListButton").disabled = !state.data.some(x => Number(x.apolloCanSend) > 0);
       }
 
       function setApolloButtons(running) {
@@ -1114,31 +1102,20 @@
         }
       }
 
-      // V17.96: lista de separação. Três blocos:
-      //  1. Separar em Araçatuba — por código Apollo, em ordem de prateleira;
-      //  2. Envio no ML — quantidade por anúncio (para montar o envio ao FULL);
-      //  3. Transferências — o que falta e está em outra casa.
+      // V17.96: lista de separação — só o que Araçatuba tem e vai para o FULL,
+      // por código Apollo (kit conta cada componente), em ordem de prateleira.
       function buildPickList() {
         const pick = new Map();
-        const ads = [];
-        const transfers = [];
         state.data.forEach(item => {
-          if (Number(item.apolloCanSend) > 0) {
-            ads.push({ code: item.code, sku: item.sku, product: item.product, qty: item.apolloCanSend, kit: isKit(item) ? kitLabel(item) : "" });
-            item.apolloParts.forEach(p => {
-              const row = pick.get(p.key) || { key: p.key, loc: p.loc, desc: p.desc, units: 0 };
-              row.units += item.apolloCanSend * p.qty;
-              pick.set(p.key, row);
-            });
-          }
-          if (item.apolloTransfer) transfers.push({ code: item.code, sku: item.sku, product: item.product, text: item.apolloTransfer });
+          if (!(Number(item.apolloCanSend) > 0)) return;
+          item.apolloParts.forEach(p => {
+            const row = pick.get(p.key) || { key: p.key, loc: p.loc, desc: p.desc, units: 0 };
+            row.units += item.apolloCanSend * p.qty;
+            pick.set(p.key, row);
+          });
         });
         const byLoc = (a, b) => (a.loc || "~").localeCompare(b.loc || "~", "pt-BR", { numeric: true }) || a.key.localeCompare(b.key);
-        return {
-          pick: [...pick.values()].sort(byLoc),
-          ads: ads.sort((a, b) => String(a.code).localeCompare(String(b.code))),
-          transfers
-        };
+        return { pick: [...pick.values()].sort(byLoc) };
       }
 
       function openPickList() {
@@ -1151,15 +1128,6 @@
           <td>${escapeHtml(r.desc || "")}</td><td class="num"><strong>${formatNumber(r.units)}</strong></td>
           <td class="pick-check"><span class="pick-box"></span></td></tr>`).join("")
           || `<tr><td colspan="5" class="empty-state">Nada a separar.</td></tr>`;
-        element("adsBody").innerHTML = list.ads.map(r => `
-          <tr><td class="code">${escapeHtml(r.code || "—")}</td><td class="code">${escapeHtml(r.sku)}</td>
-          <td>${escapeHtml(r.product)}${r.kit ? `<span class="sub">Kit: ${escapeHtml(r.kit)}</span>` : ""}</td>
-          <td class="num"><strong>${formatNumber(r.qty)}</strong></td></tr>`).join("")
-          || `<tr><td colspan="4" class="empty-state">Nenhum anúncio com envio possível.</td></tr>`;
-        element("transferSection").classList.toggle("hidden", !list.transfers.length);
-        element("transferBody").innerHTML = list.transfers.map(r => `
-          <tr><td class="code">${escapeHtml(r.code || "—")}</td><td class="code">${escapeHtml(r.sku)}</td>
-          <td>${escapeHtml(r.product)}</td><td>${escapeHtml(r.text)}</td></tr>`).join("");
         element("pickModal").classList.remove("hidden");
         document.body.classList.add("printing-pick");
       }
@@ -1177,18 +1145,6 @@
         })));
         s1["!cols"] = [18, 16, 45, 12, 12].map(wch => ({ wch }));
         XLSX.utils.book_append_sheet(wb, s1, "Separar Araçatuba");
-        const s2 = XLSX.utils.json_to_sheet(list.ads.map(r => ({
-          "Código ML": r.code, "SKU": r.sku, "Produto": r.product, "Quantidade a enviar": r.qty, "Kit": r.kit
-        })));
-        s2["!cols"] = [14, 24, 55, 18, 24].map(wch => ({ wch }));
-        XLSX.utils.book_append_sheet(wb, s2, "Envio ML por anúncio");
-        if (list.transfers.length) {
-          const s3 = XLSX.utils.json_to_sheet(list.transfers.map(r => ({
-            "Código ML": r.code, "SKU": r.sku, "Produto": r.product, "Transferência sugerida": r.text
-          })));
-          s3["!cols"] = [14, 24, 55, 60].map(wch => ({ wch }));
-          XLSX.utils.book_append_sheet(wb, s3, "Transferências");
-        }
         XLSX.writeFile(wb, "lista_separacao_full.xlsx", { compression: true });
       }
 
