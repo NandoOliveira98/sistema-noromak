@@ -931,7 +931,9 @@
         const row = (Array.isArray(r.branches) ? r.branches : []).find(b => Number(b.revenda) === revenda);
         if (!row || (r.missing_branches || []).map(Number).includes(revenda)) return null;
         if (row.disponivel === null || row.disponivel === undefined) return null;
-        return { disp: Math.floor(Number(row.disponivel) || 0), loc: String(row.localizacao || "").trim() };
+        // O Apollo manda "...." quando a casa não cadastrou a prateleira.
+        const loc = String(row.localizacao || "").trim();
+        return { disp: Math.floor(Number(row.disponivel) || 0), loc: /^[.\s]*$/.test(loc) ? "" : loc };
       }
 
       function apolloDerive() {
