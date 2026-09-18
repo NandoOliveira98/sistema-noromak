@@ -232,9 +232,16 @@ gerar SKU artificial concatenado quando os componentes reais já existem.
 
 ### Apollo (ERP)
 Consultas de custo e estoque via `CRM_COST_API_URL` / `CRM_STOCK_API_URL`, cache de 180 s.
-Alimenta Precificador e Central de Pendências. Os botões **Cliente** e **Romaneio** da
-Central de Pedidos do Dia estão preparados visualmente para integração futura — não devem
-executar operação falsa.
+Alimenta Precificador e Central de Pendências.
+
+**Botão Cliente (V17.85):** atualiza o cadastro no **Linx DMS** (ERP em `10.1.15.1`, rede
+do escritório — a VPS não alcança). O servidor só entrega CPF/CNPJ e nome de "Dados para
+a NF-e" em `GET /api/cliente-fiscal?pedido=` (somente leitura; relê o billing-info no ML
+para pedidos anteriores à V17.84). Quem grava no Linx é a extensão
+`NOROMAK_LINX_CLIENTE` (terceira extensão, fora do repo), que recebe
+`window.postMessage({tipo:"noromak-linx-atualizar-cliente",...})` e abre o painel com
+confirmação. Regras e formato em `INTEGRACAO_LINX_CLIENTE.md`.
+O botão **Romaneio** continua só visual — não deve executar operação falsa.
 
 ### Vínculo MLB ↔ SKU
 Banco canônico `ml_sku_mlb_links_v1`, com seed em `DADOS/ml_sku_mlb_links_seed.json`.

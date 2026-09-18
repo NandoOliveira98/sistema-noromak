@@ -184,3 +184,26 @@ Mas o dado **já é buscado**: `_ml_billing_details()` lê
 do pedido — mudança pequena, em código que já funciona.
 
 Sem isso, o `ProcurarCliente` não tem por onde buscar o cliente de venda ML.
+
+> **Resolvido na V17.84:** o ML passou a guardar `CPFMercadoLivre`/`CNPJMercadoLivre`.
+> Pedidos anteriores são relidos na API do ML pela rota `/api/cliente-fiscal` (V17.85).
+
+## O que a primeira gravação real ensinou (18/09/2026)
+
+Extensão v0.2 → v0.4. Clientes 81528, 81263 e 81282.
+
+- **Formato da leitura** (`DetalhesCliente/{id}`): `{DadosCliente, DadosPessoaFisica,
+  DadosPessoaJuridica}`. `DadosCliente` tem 316 campos, com grafia `DddTelefone`.
+  `DadosPessoaFisica.Cpf` vem **numérico** (perde zero à esquerda).
+- **Formato da gravação da tela**: 202 campos no `Registro`, grafia `DDDTelefone`, e 46
+  na `PessoaFisica`, com `Cpf` em texto. `Bairro` = `BairroEntrega`; `Uf`, `Cep`,
+  `Tipovia` e `Complemento` vão nulos. A lista exata está em `linx-formato.js`.
+- **O Linx ESVAZIA todo campo que não vem no `AlteraRegistro`.** A própria tela não envia
+  119 campos. Na primeira gravação, o cliente 81528 perdeu 21 valores (`NumeroEntrega`,
+  `NumeroCobranca`, `TranspAereo`, `ContatoSegunda`, `Cadeirante`...). A partir da v0.3, a
+  extensão manda também todo campo do modelo de `InicializaTelaFatCliente.DadosCliente.
+  Registro` que tem valor no cadastro atual, com esse mesmo valor (exceto `Usuario` e
+  `DtaUltimaAlteracao`).
+- **Nome** vai em maiúsculo, como o Linx guarda; acento no nome fica.
+- **CNPJ** está bloqueado: ainda não há captura da tela gravando pessoa jurídica.
+- Depois de gravar, a extensão relê o cadastro e confere campo a campo.

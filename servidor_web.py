@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.84-DOCUMENTO-E-NOME-FISCAL"
+APP_VERSION = "17.85-CLIENTE-NO-LINX"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -9329,6 +9329,126 @@ def nome_fiscal_do_pedido(row: dict[str, Any]) -> str:
     return ""
 
 
+# V17.85 — botão "Cliente" da Central de Pedidos do Dia.
+# O servidor NÃO fala com o Linx DMS (a VPS não enxerga a rede do escritório).
+# Ele só entrega CPF/CNPJ e nome de "Dados para a NF-e" do pedido; quem grava
+# no Linx é a extensão "Noromak - Cadastro de Cliente no Linx", no Chrome de
+# quem clicou. Somente leitura: nada aqui grava no banco.
+CLIENTE_FISCAL_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+CLIENTE_FISCAL_CACHE_SEGUNDOS = 600
+
+
+def _linhas_do_pedido(pedido: str) -> list[dict[str, Any]]:
+    """Linhas do pedido na fila atual; se já foi concluído, as do snapshot."""
+    alvo = normalize(pedido)
+    if not alvo:
+        return []
+    pendentes, _, _ = get_storage("conf_pedidos")
+    linhas = [
+        row for row in _rows_from_storage_value(pendentes)
+        if isinstance(row, dict) and normalize(order_number(row)) == alvo
+    ]
+    if linhas:
+        return linhas
+    for db_row in DB.execute("SELECT order_key,payload FROM completed_orders").fetchall():
+        if normalize(db_row["order_key"]) != alvo:
+            continue
+        try:
+            payload = json.loads(str(db_row["payload"] or "[]"))
+        except Exception:
+            continue
+        return [r for r in (payload if isinstance(payload, list) else [payload]) if isinstance(r, dict)]
+    return []
+
+
+def _ml_billing_do_pedido(order_id: str) -> dict[str, Any]:
+    """Relê Dados para NF-e direto da API do ML. Mesmo caminho do import
+    (ml_import_order), inclusive o contrato v2 quando o padrão vem sem billing."""
+    order = ml_api_get(f"/orders/{quote(order_id)}")
+    if not isinstance(order, dict):
+        return {}
+    buyer = order.get("buyer") if isinstance(order.get("buyer"), dict) else {}
+    billing = buyer.get("billing_info")
+    billing_id = (billing.get("id") if isinstance(billing, dict) else billing) or ""
+    if not str(billing_id).strip():
+        try:
+            order_v2 = ml_api_get(f"/orders/{quote(order_id)}", headers={"X-Api-Version": "2"})
+            if isinstance(order_v2, dict):
+                buyer_v2 = order_v2.get("buyer") if isinstance(order_v2.get("buyer"), dict) else {}
+                if buyer_v2.get("billing_info"):
+                    order["buyer"] = {**buyer, "billing_info": buyer_v2.get("billing_info")}
+        except Exception:
+            pass
+    return _ml_billing_details(order)
+
+
+def cliente_fiscal_do_pedido(pedido: str) -> dict[str, Any]:
+    """CPF/CNPJ e nome fiscal de um pedido, para atualizar o cliente no Linx.
+
+    1. O que o pedido já guarda (V17.84 em diante).
+    2. Mercado Livre sem o dado guardado (pedidos anteriores à V17.84): relê o
+       billing-info na API do ML. Nunca cai para apelido nem para quem recebe.
+    """
+    pedido = str(pedido or "").strip()
+    with DB_LOCK:
+        linhas = _linhas_do_pedido(pedido)
+    if not linhas:
+        return {"ok": False, "error": f"Pedido {pedido} não encontrado."}
+
+    marketplace = _vendas_marketplace(linhas[0].get("Marketplace") or linhas[0].get("Origem"))
+    documento = {"tipo": "", "numero": ""}
+    nome = ""
+    for row in linhas:
+        if not documento["numero"]:
+            documento = documento_do_pedido(row)
+        if not nome:
+            nome = nome_fiscal_do_pedido(row)
+    fonte = "pedido" if (documento["numero"] and nome) else ""
+    aviso = ""
+
+    if (not documento["numero"] or not nome) and marketplace == "Mercado Livre":
+        order_id = ""
+        for row in linhas:
+            order_id = re.sub(r"\D", "", str(row.get("VendaMercadoLivre") or ""))
+            if order_id:
+                break
+        order_id = order_id or re.sub(r"\D", "", pedido)
+        agora = time.time()
+        guardado = CLIENTE_FISCAL_CACHE.get(order_id)
+        if guardado and agora - guardado[0] < CLIENTE_FISCAL_CACHE_SEGUNDOS:
+            billing = guardado[1]
+        else:
+            try:
+                billing = _ml_billing_do_pedido(order_id) if order_id else {}
+            except Exception as exc:
+                billing = {}
+                aviso = f"Não consegui ler Dados para a NF-e no Mercado Livre: {str(exc)[:200]}"
+            if billing.get("name") or billing.get("doc_number"):
+                CLIENTE_FISCAL_CACHE[order_id] = (agora, billing)
+        numero_api = re.sub(r"\D", "", str(billing.get("doc_number") or ""))
+        if not documento["numero"] and len(numero_api) in (11, 14):
+            documento = {"tipo": "CNPJ" if len(numero_api) == 14 else "CPF", "numero": numero_api}
+        if not nome:
+            nome = str(billing.get("name") or "").strip()
+        if documento["numero"] or nome:
+            fonte = "mercado_livre"
+
+    if not aviso and marketplace == "Shopee" and not documento["numero"]:
+        aviso = "A Shopee não informa o CPF do comprador. Digite o CPF e o nome da nota."
+    elif not aviso and (not documento["numero"] or not nome):
+        aviso = "Faltou dado da NF-e neste pedido. Confira e complete antes de consultar."
+
+    return {
+        "ok": True,
+        "pedido": pedido,
+        "marketplace": marketplace,
+        "documento": documento,
+        "nome_fiscal": nome,
+        "fonte": fonte,
+        "aviso": aviso,
+    }
+
+
 VENDAS_CAMPOS_DATA = ("Data do Pedido", "DataPedido", "DataVenda", "Data", "CriadoEm")
 VENDAS_CAMPOS_DESCRICAO = ("Descrição", "Descricao", "descricao", "Produto", "produto", "Nome")
 
@@ -11714,6 +11834,21 @@ class AppHandler(BaseHTTPRequestHandler):
             try:
                 with DB_LOCK:
                     self.send_json(vendas_payload(inicio, fim))
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        # V17.85 — CPF/CNPJ e nome fiscal para o botão "Cliente". Somente leitura.
+        if path == "/api/cliente-fiscal":
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            pedido = str((query.get("pedido") or [""])[0] or "").strip()
+            if not pedido:
+                self.send_json({"ok": False, "error": "Informe o pedido."}, 400)
+                return
+            try:
+                resultado = cliente_fiscal_do_pedido(pedido)
+                self.send_json(resultado, 200 if resultado.get("ok") else 404)
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
