@@ -365,6 +365,10 @@
     .pick-check{width:90px;text-align:center !important;border-left:1px solid var(--line-soft)}
     .pick-box{display:inline-block;width:18px;height:18px;border:2px solid #637488;border-radius:4px;vertical-align:middle}
     .pick-remove{width:44px;text-align:center !important}
+    .pick-qty{width:110px}
+    .pick-qty-input{width:74px;min-height:32px;padding:4px 6px;border:1px solid var(--line);border-radius:7px;text-align:right;font-weight:800;font-size:.9rem;color:var(--ink)}
+    .pick-qty-input:focus{outline:3px solid rgba(245,155,35,.42);border-color:var(--orange)}
+    .print-only{display:none}
     .pick-x{width:30px;height:30px;border:1px solid var(--line);border-radius:8px;background:#fff;color:#b42318;font-weight:800;cursor:pointer}
     .pick-x:hover{background:#fff0ee;border-color:#efb6b2}
     .pick-removed{margin-top:14px;padding:10px 12px;border:1px dashed #aebdcb;border-radius:10px;background:#f7f9fc;font-size:.84rem;color:var(--ink)}
@@ -377,6 +381,7 @@
       .pick-modal{position:static;padding:0;background:none;overflow:visible}
       .pick-dialog{width:100%;padding:0;box-shadow:none}
       .pick-actions,.no-print{display:none !important}
+      .print-only{display:inline !important}
       .pick-table th{background:#fff;color:#000;border-bottom:1px solid #000}
       .pick-table tr{break-inside:avoid}
     }
@@ -767,6 +772,7 @@
         state.data = data;
         apolloStore.clear();
         pickRemoved.clear();
+        pickQty.clear();
         state.fileName = file.name;
         state.updatedAt = detectUpdatedAt(parsed.rows);
         state.onlyNeed = false;
@@ -1118,6 +1124,9 @@
       // por código Apollo (kit conta cada componente), sempre em ordem de prateleira.
       // V17.97: itens podem ser tirados da lista (e devolvidos) antes de imprimir.
       const pickRemoved = new Set();
+      // V17.98: quantidade editável — só para baixo (a sugestão já é o máximo
+      // que Araçatuba tem e que o FULL precisa). Guardada por código Apollo.
+      const pickQty = new Map();
 
       // Localização do Apollo: ZZ.9.14.A.99 — compara parte a parte, números como números
       // (ZZ.9.9 antes de ZZ.9.14). Sem localização vai para o fim.
@@ -1144,17 +1153,22 @@
           });
         });
         const all = [...pick.values()].sort(compareLocation);
+        all.forEach(r => {
+          const edited = pickQty.get(r.key);
+          r.qty = edited === undefined ? r.units : Math.max(1, Math.min(r.units, edited));
+        });
         return { pick: all.filter(r => !pickRemoved.has(r.key)), removed: all.filter(r => pickRemoved.has(r.key)) };
       }
 
       function renderPickList() {
         const list = buildPickList();
         const days = element("targetDays").value === "15" ? 15 : 30;
-        const totalUnits = list.pick.reduce((s, r) => s + r.units, 0);
+        const totalUnits = list.pick.reduce((s, r) => s + r.qty, 0);
         element("pickMeta").textContent = `Planejamento para ${days} dias · ${list.pick.length} código(s) · ${formatNumber(totalUnits)} unidade(s) a separar em Araçatuba · ${state.fileName}`;
         element("pickBody").innerHTML = list.pick.map(r => `
           <tr><td class="code">${escapeHtml(r.loc || "sem localização")}</td><td class="code">${escapeHtml(r.key)}</td>
-          <td>${escapeHtml(r.desc || "")}</td><td class="num"><strong>${formatNumber(r.units)}</strong></td>
+          <td>${escapeHtml(r.desc || "")}</td>
+          <td class="num pick-qty"><input class="pick-qty-input no-print" type="number" inputmode="numeric" min="1" max="${r.units}" step="1" value="${r.qty}" data-qty="${escapeHtml(r.key)}" aria-label="Quantidade de ${escapeHtml(r.key)}"><strong class="print-only">${formatNumber(r.qty)}</strong>${r.qty < r.units ? `<span class="sub no-print">sugerido ${formatNumber(r.units)}</span>` : ""}</td>
           <td class="pick-check"><span class="pick-box"></span></td>
           <td class="pick-remove no-print"><button class="pick-x" type="button" data-remove="${escapeHtml(r.key)}" title="Tirar da lista">✕</button></td></tr>`).join("")
           || `<tr><td colspan="6" class="empty-state">Nada a separar.</td></tr>`;
@@ -1179,7 +1193,7 @@
         const list = buildPickList();
         const wb = XLSX.utils.book_new();
         const s1 = XLSX.utils.json_to_sheet(list.pick.map(r => ({
-          "Localização": r.loc, "Código Apollo": r.key, "Descrição": r.desc, "Quantidade": r.units, "Separado": ""
+          "Localização": r.loc, "Código Apollo": r.key, "Descrição": r.desc, "Quantidade": r.qty, "Separado": ""
         })));
         s1["!cols"] = [18, 16, 45, 12, 12].map(wch => ({ wch }));
         XLSX.utils.book_append_sheet(wb, s1, "Separar Araçatuba");
@@ -1292,6 +1306,15 @@
         const restore = event.target.closest("[data-restore]");
         if (remove) { pickRemoved.add(remove.dataset.remove); renderPickList(); }
         if (restore) { pickRemoved.delete(restore.dataset.restore); renderPickList(); }
+      });
+      element("pickModal").addEventListener("change", (event) => {
+        const input = event.target.closest("[data-qty]");
+        if (!input) return;
+        const max = Number(input.max) || 1;
+        const value = Math.floor(Number(input.value));
+        if (!Number.isFinite(value) || value >= max) pickQty.delete(input.dataset.qty);
+        else pickQty.set(input.dataset.qty, Math.max(1, value));
+        renderPickList();
       });
       document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !element("pickModal").classList.contains("hidden")) closePickList(); });
       document.querySelectorAll("th[data-key] .sort-button").forEach((button) => {
