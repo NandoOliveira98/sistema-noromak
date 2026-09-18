@@ -1660,27 +1660,27 @@ def init_db() -> None:
                 PRIMARY KEY(order_id, sku)
             );
             CREATE INDEX IF NOT EXISTS idx_ml_profit_snapshot_captured ON ml_profitability_snapshot(captured_at DESC);
-            -- V17.99: vendas do Mercado Livre (valor, quantidade e data real da venda)
-            -- para o Dashboard de vendas. Cópia local de /orders/search; o ML continua
-            -- sendo a fonte — a janela recente é regravada a cada sincronização.
-            CREATE TABLE IF NOT EXISTS vendas_ml_v1799 (
+            -- V17.99: vendas dos marketplaces (ML e Shopee: valor, quantidade e data
+            -- real) para o Dashboard de vendas. Cópia local das APIs; o marketplace
+            -- continua sendo a fonte — a janela recente é regravada a cada sincronização.
+            CREATE TABLE IF NOT EXISTS vendas_v1799 (
+                marketplace TEXT NOT NULL,
                 order_id TEXT NOT NULL,
                 line_key TEXT NOT NULL,
                 pack_id TEXT NOT NULL DEFAULT '',
                 sale_at TEXT NOT NULL,
                 sale_day TEXT NOT NULL,
                 sku TEXT NOT NULL DEFAULT '',
-                mlb TEXT NOT NULL DEFAULT '',
+                anuncio TEXT NOT NULL DEFAULT '',
                 title TEXT NOT NULL DEFAULT '',
                 qty INTEGER NOT NULL DEFAULT 0,
                 amount REAL NOT NULL DEFAULT 0,
-                fee REAL,
                 status TEXT NOT NULL DEFAULT '',
                 updated_at TEXT NOT NULL,
-                PRIMARY KEY(order_id, line_key)
+                PRIMARY KEY(marketplace, order_id, line_key)
             );
-            CREATE INDEX IF NOT EXISTS idx_vendas_ml_v1799_day ON vendas_ml_v1799(sale_day);
-            CREATE TABLE IF NOT EXISTS vendas_ml_meta_v1799 (
+            CREATE INDEX IF NOT EXISTS idx_vendas_v1799_day ON vendas_v1799(sale_day, marketplace);
+            CREATE TABLE IF NOT EXISTS vendas_meta_v1799 (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL DEFAULT ''
             );
@@ -11336,38 +11336,53 @@ def _ml_profitability_recent_sales(days: int = 30, limit: int = 2000, date_from:
     return out[:lim]
 
 # ---------------------------------------------------------------------------
-# V17.99: Dashboard de vendas. As vendas do ML (valor, quantidade e data real)
-# ficam numa tabela local para a tela abrir rápido e o histórico não depender
-# de o ML responder. A janela recente é regravada a cada ciclo, então venda
-# cancelada/reembolsada some sozinha.
+# V17.99: Dashboard de vendas — Mercado Livre e Shopee. As vendas (valor,
+# quantidade e data real) ficam numa tabela local para a tela abrir rápido e o
+# histórico não depender de o marketplace responder. A janela recente é
+# regravada a cada ciclo, então venda cancelada/reembolsada some sozinha.
 # ---------------------------------------------------------------------------
-VENDAS_ML_SYNC_INTERVAL = max(120, min(3600, int(os.getenv("VENDAS_ML_SYNC_INTERVAL", "600"))))
-VENDAS_ML_HISTORY_DAYS = max(30, min(365, int(os.getenv("VENDAS_ML_HISTORY_DAYS", "365"))))
-VENDAS_ML_SYNC_LOCK = threading.Lock()
+VENDAS_SYNC_INTERVAL = max(120, min(3600, int(os.getenv("VENDAS_SYNC_INTERVAL", "600"))))
+VENDAS_HISTORY_DAYS = max(30, min(365, int(os.getenv("VENDAS_HISTORY_DAYS", "365"))))
+VENDAS_SYNC_LOCK = threading.Lock()
 VENDAS_ML_LIMIT = 5000
 BR_TZ = timezone(timedelta(hours=-3))
+VENDAS_MARKETPLACES = {"ml": "Mercado Livre", "shopee": "Shopee"}
+# A Shopee só aceita janelas de até 15 dias em get_order_list.
+VENDAS_JANELA_MAX = {"ml": 30, "shopee": 15}
+# Pedido Shopee que conta como venda: pago e não cancelado/devolvido.
+SHOPEE_STATUS_VENDA = {"READY_TO_SHIP", "PROCESSED", "RETRY_SHIP", "SHIPPED", "TO_CONFIRM_RECEIVE", "COMPLETED"}
 
 
-def _vendas_ml_meta(key: str, value: str | None = None) -> str:
+def _vendas_meta(key: str, value: str | None = None) -> str:
     with DB_LOCK:
         if value is not None:
             DB.execute(
-                "INSERT INTO vendas_ml_meta_v1799(key,value) VALUES(?,?) "
+                "INSERT INTO vendas_meta_v1799(key,value) VALUES(?,?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                 (key, value),
             )
             DB.commit()
             return value
-        row = DB.execute("SELECT value FROM vendas_ml_meta_v1799 WHERE key=?", (key,)).fetchone()
+        row = DB.execute("SELECT value FROM vendas_meta_v1799 WHERE key=?", (key,)).fetchone()
     return str(row["value"]) if row else ""
 
 
-def vendas_ml_sync_window(date_from: str, date_to: str) -> dict[str, Any]:
-    """Regrava as vendas ML de date_from a date_to (AAAA-MM-DD, horário de Brasília).
+def _vendas_gravar(marketplace: str, date_from: str, date_to: str, records: list[tuple[Any, ...]], complete: bool) -> None:
+    """Só apaga a janela quando a busca veio completa; senão apenas acrescenta,
+    para nunca perder venda por uma busca truncada."""
+    with DB_LOCK:
+        if complete:
+            DB.execute("DELETE FROM vendas_v1799 WHERE marketplace=? AND sale_day BETWEEN ? AND ?", (marketplace, date_from, date_to))
+        DB.executemany(
+            "INSERT OR REPLACE INTO vendas_v1799(marketplace,order_id,line_key,pack_id,sale_at,sale_day,sku,anuncio,title,qty,amount,status,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            records,
+        )
+        DB.commit()
 
-    Só apaga a janela quando a busca veio completa (abaixo do limite); senão
-    apenas acrescenta, para nunca perder venda por uma busca truncada.
-    """
+
+def vendas_ml_sync_window(date_from: str, date_to: str) -> dict[str, Any]:
+    """Regrava as vendas ML de date_from a date_to (AAAA-MM-DD, horário de Brasília)."""
     rows: list[dict[str, Any]] = []
     complete = True
     for status in ("valid", "partially_refunded"):
@@ -11383,108 +11398,216 @@ def vendas_ml_sync_window(date_from: str, date_to: str) -> dict[str, Any]:
         if not order_id or len(sale_at) < 10:
             continue
         sku = str(r.get("sku") or "").strip()
-        mlb = ""
+        anuncio = ""
         order = r.get("order_summary") if isinstance(r.get("order_summary"), dict) else {}
         for oi in order.get("order_items") or []:
             if isinstance(oi, dict) and str(_ml_order_item_sku(oi) or "").strip() == sku:
                 item = oi.get("item") if isinstance(oi.get("item"), dict) else {}
-                mlb = str(item.get("id") or "").strip()
+                anuncio = str(item.get("id") or "").strip()
                 break
-        line_key = sku or mlb or "?"
+        line_key = sku or anuncio or "?"
         try:
             qty = int(r.get("qty") or 0)
         except (TypeError, ValueError):
             qty = 0
         amount = _money_number(r.get("sale_amount_api")) or 0.0
-        fee = _money_number(r.get("line_fee_api"))
         records[(order_id, line_key)] = (
-            order_id, line_key, str(r.get("pack_id") or ""), sale_at, sale_at[:10], sku, mlb,
-            str(r.get("product") or "")[:300], qty, round(float(amount), 2),
-            round(float(fee), 2) if fee is not None else None, str(r.get("status") or ""), stamp,
+            "ml", order_id, line_key, str(r.get("pack_id") or ""), sale_at, sale_at[:10], sku, anuncio,
+            str(r.get("product") or "")[:300], qty, round(float(amount), 2), str(r.get("status") or ""), stamp,
         )
-    with DB_LOCK:
-        if complete:
-            DB.execute("DELETE FROM vendas_ml_v1799 WHERE sale_day BETWEEN ? AND ?", (date_from, date_to))
-        DB.executemany(
-            "INSERT OR REPLACE INTO vendas_ml_v1799(order_id,line_key,pack_id,sale_at,sale_day,sku,mlb,title,qty,amount,fee,status,updated_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            list(records.values()),
-        )
-        DB.commit()
-    return {"de": date_from, "ate": date_to, "linhas": len(records), "completa": complete}
+    _vendas_gravar("ml", date_from, date_to, list(records.values()), complete)
+    return {"marketplace": "ml", "de": date_from, "ate": date_to, "linhas": len(records), "completa": complete}
 
 
-def vendas_ml_sync_once() -> dict[str, Any]:
-    """Um ciclo: últimos 3 dias sempre; 30 dias uma vez por dia (reembolsos
-    tardios); e um mês de histórico por ciclo até completar VENDAS_ML_HISTORY_DAYS."""
-    if not VENDAS_ML_SYNC_LOCK.acquire(blocking=False):
+def vendas_shopee_sync_window(date_from: str, date_to: str) -> dict[str, Any]:
+    """Regrava as vendas Shopee de date_from a date_to (no máximo 15 dias).
+
+    get_order_list lista os pedidos criados na janela; get_order_detail traz os
+    itens com preço. Valor da linha = preço com desconto × quantidade (produto,
+    sem frete — mesmo critério do ML).
+    """
+    d1 = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=BR_TZ)
+    d2 = datetime.strptime(date_to, "%Y-%m-%d").replace(tzinfo=BR_TZ) + timedelta(days=1) - timedelta(seconds=1)
+    if (d2 - d1).days >= VENDAS_JANELA_MAX["shopee"]:
+        raise ValueError("A Shopee aceita no máximo 15 dias por consulta.")
+    order_sns: list[str] = []
+    cursor = ""
+    complete = False
+    for _ in range(200):
+        params: dict[str, Any] = {
+            "time_range_field": "create_time", "time_from": int(d1.timestamp()), "time_to": int(d2.timestamp()),
+            "page_size": 100, "response_optional_fields": "order_status",
+        }
+        if cursor:
+            params["cursor"] = cursor
+        data = shopee_api_get("/api/v2/order/get_order_list", params)
+        response = data.get("response") if isinstance(data.get("response"), dict) else {}
+        for o in response.get("order_list") or []:
+            if not isinstance(o, dict):
+                continue
+            sn = str(o.get("order_sn") or "").strip()
+            if sn and str(o.get("order_status") or "").upper() in SHOPEE_STATUS_VENDA:
+                order_sns.append(sn)
+        next_cursor = str(response.get("next_cursor") or "").strip()
+        if not response.get("more") or not next_cursor or next_cursor == cursor:
+            complete = True
+            break
+        cursor = next_cursor
+    stamp = now_iso()
+    records: dict[tuple[str, str], tuple[Any, ...]] = {}
+    for order in shopee_order_details(list(dict.fromkeys(order_sns))) if order_sns else []:
+        sn = str(order.get("order_sn") or "").strip()
+        status = str(order.get("order_status") or "").upper()
+        if not sn or (status and status not in SHOPEE_STATUS_VENDA):
+            continue
+        try:
+            created = datetime.fromtimestamp(int(order.get("create_time") or 0), BR_TZ)
+        except (TypeError, ValueError, OSError):
+            continue
+        if created.year < 2000:
+            continue
+        sale_at = created.isoformat()
+        for idx, it in enumerate(order.get("item_list") or []):
+            if not isinstance(it, dict):
+                continue
+            sku = str(it.get("model_sku") or it.get("item_sku") or "").strip()
+            anuncio = str(it.get("item_id") or "").strip()
+            line_key = f"{anuncio}:{it.get('model_id') or ''}" if anuncio else (sku or str(idx))
+            try:
+                qty = int(it.get("model_quantity_purchased") or 0)
+            except (TypeError, ValueError):
+                qty = 0
+            price = _money_number(it.get("model_discounted_price"))
+            if price is None or price <= 0:
+                price = _money_number(it.get("model_original_price")) or 0.0
+            title = str(it.get("item_name") or "").strip()
+            model = str(it.get("model_name") or "").strip()
+            records[(sn, line_key)] = (
+                "shopee", sn, line_key, "", sale_at, sale_at[:10], sku, anuncio,
+                (f"{title} — {model}" if model else title)[:300], qty, round(float(price) * qty, 2), status, stamp,
+            )
+    _vendas_gravar("shopee", date_from, date_to, list(records.values()), complete)
+    return {"marketplace": "shopee", "de": date_from, "ate": date_to, "linhas": len(records), "completa": complete}
+
+
+VENDAS_SYNC_WINDOW = {"ml": vendas_ml_sync_window, "shopee": vendas_shopee_sync_window}
+
+
+def _vendas_sync_intervalo(marketplace: str, inicio: date, fim: date) -> list[dict[str, Any]]:
+    """Divide o intervalo em janelas que o marketplace aceita."""
+    feito = []
+    passo = VENDAS_JANELA_MAX[marketplace]
+    atual = inicio
+    while atual <= fim:
+        ate = min(fim, atual + timedelta(days=passo - 1))
+        feito.append(VENDAS_SYNC_WINDOW[marketplace](atual.isoformat(), ate.isoformat()))
+        atual = ate + timedelta(days=1)
+    return feito
+
+
+def vendas_marketplaces_conectados() -> list[str]:
+    out = []
+    try:
+        row = ml_integration_row()
+        if row and str(row["access_token"] or "").strip():
+            out.append("ml")
+    except Exception:
+        pass
+    try:
+        if shopee_status_payload().get("connected"):
+            out.append("shopee")
+    except Exception:
+        pass
+    return out
+
+
+def vendas_sync_marketplace(marketplace: str) -> list[dict[str, Any]]:
+    """Um ciclo de um marketplace: últimos 3 dias sempre; 30 dias uma vez por dia
+    (reembolsos/cancelamentos tardios); e uma janela de histórico por ciclo."""
+    hoje = datetime.now(BR_TZ).date()
+    feito = _vendas_sync_intervalo(marketplace, hoje - timedelta(days=2), hoje)
+    if _vendas_meta(f"resync_30d_{marketplace}") != hoje.isoformat():
+        feito += _vendas_sync_intervalo(marketplace, hoje - timedelta(days=30), hoje - timedelta(days=3))
+        _vendas_meta(f"resync_30d_{marketplace}", hoje.isoformat())
+    mais_antigo = hoje - timedelta(days=VENDAS_HISTORY_DAYS - 1)
+    try:
+        carregado_ate = datetime.strptime(_vendas_meta(f"historico_desde_{marketplace}") or "", "%Y-%m-%d").date()
+    except ValueError:
+        carregado_ate = hoje - timedelta(days=2)
+    if carregado_ate > mais_antigo:
+        fim = carregado_ate - timedelta(days=1)
+        inicio = max(mais_antigo, fim - timedelta(days=VENDAS_JANELA_MAX[marketplace] - 1))
+        feito.append(VENDAS_SYNC_WINDOW[marketplace](inicio.isoformat(), fim.isoformat()))
+        _vendas_meta(f"historico_desde_{marketplace}", inicio.isoformat())
+    _vendas_meta(f"ultima_sincronizacao_{marketplace}", now_iso())
+    _vendas_meta(f"ultimo_erro_{marketplace}", "")
+    return feito
+
+
+def vendas_sync_once() -> dict[str, Any]:
+    if not VENDAS_SYNC_LOCK.acquire(blocking=False):
         return {"ok": False, "ocupado": True}
     try:
-        hoje = datetime.now(BR_TZ).date()
-        feito = [vendas_ml_sync_window((hoje - timedelta(days=2)).isoformat(), hoje.isoformat())]
-        if _vendas_ml_meta("resync_30d") != hoje.isoformat():
-            feito.append(vendas_ml_sync_window((hoje - timedelta(days=30)).isoformat(), (hoje - timedelta(days=3)).isoformat()))
-            _vendas_ml_meta("resync_30d", hoje.isoformat())
-        mais_antigo = hoje - timedelta(days=VENDAS_ML_HISTORY_DAYS - 1)
-        try:
-            carregado_ate = datetime.strptime(_vendas_ml_meta("historico_desde") or "", "%Y-%m-%d").date()
-        except ValueError:
-            carregado_ate = hoje - timedelta(days=2)
-        if carregado_ate > mais_antigo:
-            fim = carregado_ate - timedelta(days=1)
-            inicio = max(mais_antigo, fim - timedelta(days=29))
-            feito.append(vendas_ml_sync_window(inicio.isoformat(), fim.isoformat()))
-            _vendas_ml_meta("historico_desde", inicio.isoformat())
-        _vendas_ml_meta("ultima_sincronizacao", now_iso())
-        _vendas_ml_meta("ultimo_erro", "")
-        return {"ok": True, "janelas": feito}
+        resultado: dict[str, Any] = {"ok": True}
+        for marketplace in vendas_marketplaces_conectados():
+            try:
+                resultado[marketplace] = vendas_sync_marketplace(marketplace)
+            except Exception as exc:
+                _vendas_meta(f"ultimo_erro_{marketplace}", f"{now_iso()} {str(exc)[:500]}")
+                resultado[marketplace] = {"erro": str(exc)[:500]}
+        return resultado
     finally:
-        VENDAS_ML_SYNC_LOCK.release()
+        VENDAS_SYNC_LOCK.release()
 
 
-def vendas_ml_historico_completo() -> bool:
+def vendas_historico_completo(marketplace: str) -> bool:
     try:
-        desde = datetime.strptime(_vendas_ml_meta("historico_desde") or "", "%Y-%m-%d").date()
+        desde = datetime.strptime(_vendas_meta(f"historico_desde_{marketplace}") or "", "%Y-%m-%d").date()
     except ValueError:
         return False
-    return desde <= datetime.now(BR_TZ).date() - timedelta(days=VENDAS_ML_HISTORY_DAYS - 1)
+    return desde <= datetime.now(BR_TZ).date() - timedelta(days=VENDAS_HISTORY_DAYS - 1)
 
 
-def vendas_ml_sync_loop(stop_event: threading.Event) -> None:
+def vendas_sync_loop(stop_event: threading.Event) -> None:
     if stop_event.wait(45):
         return
     while not stop_event.is_set():
+        conectados: list[str] = []
         try:
-            row = ml_integration_row()
-            if row and str(row["access_token"] or "").strip():
-                vendas_ml_sync_once()
-        except Exception as exc:
-            try:
-                _vendas_ml_meta("ultimo_erro", f"{now_iso()} {str(exc)[:500]}")
-            except Exception:
-                pass
-        # Enquanto o histórico carrega, um mês por minuto; depois, o intervalo normal.
-        espera = 60 if not vendas_ml_historico_completo() else VENDAS_ML_SYNC_INTERVAL
-        if stop_event.wait(espera):
+            conectados = vendas_marketplaces_conectados()
+            if conectados:
+                vendas_sync_once()
+        except Exception:
+            pass
+        # Enquanto o histórico carrega, uma janela por minuto; depois, o intervalo normal.
+        carregando = any(not vendas_historico_completo(m) for m in conectados)
+        if stop_event.wait(60 if carregando else VENDAS_SYNC_INTERVAL):
             break
 
 
-def vendas_dashboard_payload(date_from: str, date_to: str) -> dict[str, Any]:
-    """Resumo de vendas ML do período + período anterior de mesmo tamanho."""
+def vendas_dashboard_payload(date_from: str, date_to: str, marketplace: str = "") -> dict[str, Any]:
+    """Resumo de vendas do período (todos os marketplaces ou um) + período anterior."""
     d1 = datetime.strptime(date_from, "%Y-%m-%d").date()
     d2 = datetime.strptime(date_to, "%Y-%m-%d").date()
     if d1 > d2:
         d1, d2 = d2, d1
+    marketplace = marketplace if marketplace in VENDAS_MARKETPLACES else ""
     dias = (d2 - d1).days + 1
     p2 = d1 - timedelta(days=1)
     p1 = p2 - timedelta(days=dias - 1)
-    produto = "COALESCE(NULLIF(sku,''), NULLIF(mlb,''), '(sem SKU)')"
+    produto = "COALESCE(NULLIF(sku,''), NULLIF(anuncio,''), '(sem SKU)')"
+    pedido = "marketplace || ':' || order_id"
+    filtro = " AND marketplace=?" if marketplace else ""
+    extra = (marketplace,) if marketplace else ()
+
+    def periodo(a: date, b: date) -> tuple[Any, ...]:
+        return (a.isoformat(), b.isoformat()) + extra
 
     def resumo(a: date, b: date) -> dict[str, Any]:
         row = DB.execute(
-            "SELECT COUNT(DISTINCT order_id) AS pedidos, COALESCE(SUM(qty),0) AS unidades, "
-            "COALESCE(SUM(amount),0) AS faturamento FROM vendas_ml_v1799 WHERE sale_day BETWEEN ? AND ?",
-            (a.isoformat(), b.isoformat()),
+            f"SELECT COUNT(DISTINCT {pedido}) AS pedidos, COALESCE(SUM(qty),0) AS unidades, "
+            f"COALESCE(SUM(amount),0) AS faturamento FROM vendas_v1799 WHERE sale_day BETWEEN ? AND ?{filtro}",
+            periodo(a, b),
         ).fetchone()
         pedidos = int(row["pedidos"] or 0)
         fat = round(float(row["faturamento"] or 0), 2)
@@ -11493,60 +11616,76 @@ def vendas_dashboard_payload(date_from: str, date_to: str) -> dict[str, Any]:
 
     def top(ordem: str) -> list[dict[str, Any]]:
         rows = DB.execute(
-            f"SELECT {produto} AS sku, MAX(title) AS titulo, MAX(mlb) AS mlb, SUM(qty) AS unidades, "
-            f"SUM(amount) AS faturamento, COUNT(DISTINCT order_id) AS pedidos FROM vendas_ml_v1799 "
-            f"WHERE sale_day BETWEEN ? AND ? GROUP BY {produto} ORDER BY {ordem} DESC LIMIT 20",
-            (d1.isoformat(), d2.isoformat()),
+            f"SELECT {produto} AS sku, MAX(title) AS titulo, SUM(qty) AS unidades, SUM(amount) AS faturamento, "
+            f"COUNT(DISTINCT {pedido}) AS pedidos, SUM(CASE WHEN marketplace='ml' THEN qty ELSE 0 END) AS un_ml, "
+            f"SUM(CASE WHEN marketplace='shopee' THEN qty ELSE 0 END) AS un_shopee FROM vendas_v1799 "
+            f"WHERE sale_day BETWEEN ? AND ?{filtro} GROUP BY {produto} ORDER BY {ordem} DESC LIMIT 20",
+            periodo(d1, d2),
         ).fetchall()
-        return [{"sku": r["sku"], "titulo": r["titulo"] or "", "mlb": r["mlb"] or "", "unidades": int(r["unidades"] or 0),
-                 "faturamento": round(float(r["faturamento"] or 0), 2), "pedidos": int(r["pedidos"] or 0)} for r in rows]
+        return [{"sku": r["sku"], "titulo": r["titulo"] or "", "unidades": int(r["unidades"] or 0),
+                 "faturamento": round(float(r["faturamento"] or 0), 2), "pedidos": int(r["pedidos"] or 0),
+                 "por_marketplace": {"ml": int(r["un_ml"] or 0), "shopee": int(r["un_shopee"] or 0)}} for r in rows]
 
     atual = resumo(d1, d2)
     anterior = resumo(p1, p2)
-    por_dia_raw = {
-        r["sale_day"]: r for r in DB.execute(
-            "SELECT sale_day, COUNT(DISTINCT order_id) AS pedidos, SUM(qty) AS unidades, SUM(amount) AS faturamento "
-            "FROM vendas_ml_v1799 WHERE sale_day BETWEEN ? AND ? GROUP BY sale_day",
-            (d1.isoformat(), d2.isoformat()),
-        ).fetchall()
-    }
+    por_dia_raw: dict[str, dict[str, Any]] = {}
+    for r in DB.execute(
+        f"SELECT sale_day, marketplace, COUNT(DISTINCT order_id) AS pedidos, SUM(qty) AS unidades, SUM(amount) AS faturamento "
+        f"FROM vendas_v1799 WHERE sale_day BETWEEN ? AND ?{filtro} GROUP BY sale_day, marketplace",
+        periodo(d1, d2),
+    ).fetchall():
+        dia = por_dia_raw.setdefault(r["sale_day"], {})
+        dia[r["marketplace"]] = {"pedidos": int(r["pedidos"] or 0), "unidades": int(r["unidades"] or 0),
+                                 "faturamento": round(float(r["faturamento"] or 0), 2)}
     por_dia = []
     for i in range(dias):
         dia = (d1 + timedelta(days=i)).isoformat()
-        r = por_dia_raw.get(dia)
-        por_dia.append({"dia": dia, "pedidos": int(r["pedidos"] or 0) if r else 0,
-                        "unidades": int(r["unidades"] or 0) if r else 0,
-                        "faturamento": round(float(r["faturamento"] or 0), 2) if r else 0.0})
+        canais = por_dia_raw.get(dia, {})
+        por_dia.append({
+            "dia": dia,
+            "pedidos": sum(c["pedidos"] for c in canais.values()),
+            "unidades": sum(c["unidades"] for c in canais.values()),
+            "faturamento": round(sum(c["faturamento"] for c in canais.values()), 2),
+            "por_marketplace": {m: canais.get(m, {"pedidos": 0, "unidades": 0, "faturamento": 0.0}) for m in VENDAS_MARKETPLACES},
+        })
+    por_marketplace = []
+    for m, nome in VENDAS_MARKETPLACES.items():
+        if marketplace and m != marketplace:
+            continue
+        row = DB.execute(
+            f"SELECT COUNT(DISTINCT order_id) AS pedidos, COALESCE(SUM(qty),0) AS unidades, COALESCE(SUM(amount),0) AS faturamento "
+            f"FROM vendas_v1799 WHERE sale_day BETWEEN ? AND ? AND marketplace=?",
+            (d1.isoformat(), d2.isoformat(), m),
+        ).fetchone()
+        por_marketplace.append({"marketplace": m, "nome": nome, "pedidos": int(row["pedidos"] or 0),
+                                "unidades": int(row["unidades"] or 0), "faturamento": round(float(row["faturamento"] or 0), 2)})
     skus_vendidos = DB.execute(
-        f"SELECT COUNT(DISTINCT {produto}) AS n FROM vendas_ml_v1799 WHERE sale_day BETWEEN ? AND ?",
-        (d1.isoformat(), d2.isoformat()),
+        f"SELECT COUNT(DISTINCT {produto}) AS n FROM vendas_v1799 WHERE sale_day BETWEEN ? AND ?{filtro}",
+        periodo(d1, d2),
     ).fetchone()["n"]
-    primeiro = DB.execute("SELECT MIN(sale_day) AS d FROM vendas_ml_v1799").fetchone()["d"]
-    # Shopee: o Noromak guarda quantidade, mas não o valor da venda.
-    shopee = {"pedidos": 0, "unidades": 0}
-    try:
-        for canal in vendas_payload(d1.isoformat(), d2.isoformat()).get("marketplaces") or []:
-            if "SHOPEE" in str(canal.get("marketplace") or "").upper():
-                shopee["pedidos"] += int(canal.get("pedidos") or 0)
-                shopee["unidades"] += int(canal.get("unidades") or 0)
-    except Exception:
-        pass
+    conectados = vendas_marketplaces_conectados()
+    sincronizacao = {}
+    for m in VENDAS_MARKETPLACES:
+        primeiro = DB.execute("SELECT MIN(sale_day) AS d FROM vendas_v1799 WHERE marketplace=?", (m,)).fetchone()["d"]
+        sincronizacao[m] = {
+            "conectado": m in conectados,
+            "ultima": _vendas_meta(f"ultima_sincronizacao_{m}"),
+            "erro": _vendas_meta(f"ultimo_erro_{m}"),
+            "historico_desde": primeiro or "",
+            "historico_completo": vendas_historico_completo(m),
+        }
     return {
         "ok": True,
+        "marketplace": marketplace or "todos",
         "periodo": {"inicio": d1.isoformat(), "fim": d2.isoformat(), "dias": dias},
         "periodo_anterior": {"inicio": p1.isoformat(), "fim": p2.isoformat()},
         "resumo": {**atual, "skus": int(skus_vendidos or 0)},
         "anterior": anterior,
+        "por_marketplace": por_marketplace,
         "por_dia": por_dia,
         "top_unidades": top("unidades"),
         "top_faturamento": top("faturamento"),
-        "shopee": shopee,
-        "sincronizacao": {
-            "ultima": _vendas_ml_meta("ultima_sincronizacao"),
-            "erro": _vendas_ml_meta("ultimo_erro"),
-            "historico_desde": primeiro or "",
-            "historico_completo": vendas_ml_historico_completo(),
-        },
+        "sincronizacao": sincronizacao,
     }
 
 
@@ -12567,7 +12706,7 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         # V17.83 — o que vendeu no período, agregado por SKU. Somente leitura.
         if path == "/api/dashboard/vendas":
-            # V17.99: Dashboard de vendas (Mercado Livre, com valor).
+            # V17.99: Dashboard de vendas (Mercado Livre e Shopee, com valor).
             ctx = self.auth(admin_only=True)
             if ctx is None:
                 return
@@ -12577,9 +12716,10 @@ class AppHandler(BaseHTTPRequestHandler):
             if not re.match(r"^\d{4}-\d{2}-\d{2}$", inicio) or not re.match(r"^\d{4}-\d{2}-\d{2}$", fim):
                 self.send_json({"ok": False, "error": "Datas no formato AAAA-MM-DD."}, 400)
                 return
+            canal = str((query.get("marketplace") or [""])[0] or "").strip().lower()
             try:
                 with DB_LOCK:
-                    self.send_json(vendas_dashboard_payload(inicio, fim))
+                    self.send_json(vendas_dashboard_payload(inicio, fim, canal))
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
@@ -12713,7 +12853,9 @@ class AppHandler(BaseHTTPRequestHandler):
             "/pedidos": "conferencia", "/pedidos/": "conferencia",
             "/admin": "admin", "/admin/": "admin", "/admin.html": "admin",
             "/administracao": "admin", "/administracao/": "admin",
+            # V17.99: Central de Pendências e Promoções ML foram removidas; os endereços antigos abrem o Admin.
             "/pendencias": "admin", "/pendencias/": "admin", "/central-pendencias": "admin", "/central-pendencias/": "admin", "/central-pendencias.html": "admin",
+            "/promocoes-ml": "admin", "/promocoes-ml/": "admin", "/promocoes-ml.html": "admin",
             "/estacao-impressao": "estacao", "/estacao-impressao/": "estacao", "/estacao-impressao.html": "estacao",
             "/print-station": "estacao", "/print-station/": "estacao",
             "/precificador": "precificador", "/precificador/": "precificador", "/precificador.html": "precificador",
@@ -12753,13 +12895,13 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
         if path == "/api/dashboard/vendas/sincronizar":
-            # V17.99: sincronização manual das vendas ML (roda em segundo plano).
+            # V17.99: sincronização manual das vendas (roda em segundo plano).
             ctx = self.auth(admin_only=True)
             if ctx is not None:
-                if VENDAS_ML_SYNC_LOCK.locked():
+                if VENDAS_SYNC_LOCK.locked():
                     self.send_json({"ok": True, "em_andamento": True})
                     return
-                threading.Thread(target=vendas_ml_sync_once, name="vendas-ml-sync-manual", daemon=True).start()
+                threading.Thread(target=vendas_sync_once, name="vendas-sync-manual", daemon=True).start()
                 audit(ctx["username"], "dashboard.vendas.sincronizar", "")
                 self.send_json({"ok": True, "iniciada": True})
             return
@@ -15031,19 +15173,19 @@ class AppHandler(BaseHTTPRequestHandler):
             "/admin.html": "admin.html",
             "/administracao": "admin.html",
             "/administracao/": "admin.html",
-            "/pendencias": "central-pendencias.html",
-            "/pendencias/": "central-pendencias.html",
-            "/central-pendencias": "central-pendencias.html",
-            "/central-pendencias/": "central-pendencias.html",
-            "/central-pendencias.html": "central-pendencias.html",
+            "/pendencias": "admin.html",
+            "/pendencias/": "admin.html",
+            "/central-pendencias": "admin.html",
+            "/central-pendencias/": "admin.html",
+            "/central-pendencias.html": "admin.html",
             "/estacao-impressao": "estacao-impressao.html",
             "/estacao-impressao/": "estacao-impressao.html",
             "/estacao-impressao.html": "estacao-impressao.html",
             "/print-station": "estacao-impressao.html",
             "/print-station/": "estacao-impressao.html",
-            "/promocoes-ml": "promocoes-ml.html",
-            "/promocoes-ml/": "promocoes-ml.html",
-            "/promocoes-ml.html": "promocoes-ml.html",
+            "/promocoes-ml": "admin.html",
+            "/promocoes-ml/": "admin.html",
+            "/promocoes-ml.html": "admin.html",
             "/rentabilidade-ml": "rentabilidade-ml.html",
             "/rentabilidade-ml/": "rentabilidade-ml.html",
             "/rentabilidade-ml.html": "rentabilidade-ml.html",
@@ -15141,11 +15283,11 @@ def main() -> None:
         name="shopee-orders-worker",
         daemon=True,
     )
-    # V17.99: vendas do ML para o Dashboard de vendas.
+    # V17.99: vendas do ML e da Shopee para o Dashboard de vendas.
     vendas_ml_thread = threading.Thread(
-        target=vendas_ml_sync_loop,
+        target=vendas_sync_loop,
         args=(watcher_stop,),
-        name="vendas-ml-sync",
+        name="vendas-sync",
         daemon=True,
     )
     _ml_worker_state_update(started_at=now_iso(), last_error="")

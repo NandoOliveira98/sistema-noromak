@@ -76,9 +76,10 @@ APP/
                              usuarios, historico, historico-sku, integracoes, seguranca
   conferencia.html   ~199KB  fila de conferência e bipagem
   precificador.html  ~632KB  custo, margem, preço ideal, curva ABC
-  central-pendencias.html    divergências ML x Apollo
   estacao-impressao.html     estação Zebra / QZ Tray
-  promocoes-ml.html, rentabilidade-ml.html, analise-full.html
+  rentabilidade-ml.html, analise-full.html
+                             (Central de Pendências e Promoções ML removidas na V17.99;
+                             /pendencias e /promocoes-ml abrem o Admin)
   shared-storage.js          cache versionado + polling (CRÍTICO)
   web-auth.js, user-permissions.js, sw.js, pwa-install.js
 DADOS/                       seed ml_sku_mlb_links_seed.json (fora do Git)
@@ -247,10 +248,11 @@ compra em aberto, custo e marca em lote. A chave do Noromak **só** tem `/custo`
 não usar outras rotas do Apollo sem acordo com a equipe dele.
 
 ### Dashboard de vendas (V17.99)
-Worker `vendas_ml_sync_loop` copia `/orders/search` (valor, qtd, data real, inclui Full) para
-`vendas_ml_v1799`: últimos 3 dias a cada 10 min, 30 dias 1x/dia, e 1 mês de histórico por
-minuto até 365 dias. A janela é **regravada** (venda cancelada some). `GET /api/dashboard/vendas`.
-Shopee entra só com quantidade (o Noromak não guarda preço da Shopee).
+Worker `vendas_sync_loop` copia as vendas do **ML** (`/orders/search`: valor, qtd, data real,
+inclui Full) e da **Shopee** (`get_order_list` + `get_order_detail`: preço com desconto × qtd,
+status pagos, janela máx. 15 dias) para `vendas_v1799` (coluna `marketplace`): últimos 3 dias a
+cada 10 min, 30 dias 1x/dia, e uma janela de histórico por minuto até 365 dias. A janela é
+**regravada** (venda cancelada some). `GET /api/dashboard/vendas?marketplace=ml|shopee`.
 
 **Botão Cliente (V17.85):** atualiza o cadastro no **Linx DMS** (ERP em `10.1.15.1`, rede
 do escritório — a VPS não alcança). O servidor só entrega CPF/CNPJ e nome de "Dados para
