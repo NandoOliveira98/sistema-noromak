@@ -242,6 +242,15 @@ A Demanda Full (V17.95) considera **somente Araçatuba** (revenda 1, de onde sai
 divide o estoque entre anúncios do mesmo código Apollo, mais urgente primeiro.
 V17.96: kits consomem cada componente (`POST /api/full/kits`, mesma regra dos pedidos ML),
 sugestão de transferência Ribeirão/Bauru e Lista de separação por prateleira (localização do Apollo).
+**Pedido de rota de demanda (V17.99):** `PEDIDO_ROTA_DEMANDA_APOLLO.md` — vendas por período,
+compra em aberto, custo e marca em lote. A chave do Noromak **só** tem `/custo` e `/estoque`;
+não usar outras rotas do Apollo sem acordo com a equipe dele.
+
+### Dashboard de vendas (V17.99)
+Worker `vendas_ml_sync_loop` copia `/orders/search` (valor, qtd, data real, inclui Full) para
+`vendas_ml_v1799`: últimos 3 dias a cada 10 min, 30 dias 1x/dia, e 1 mês de histórico por
+minuto até 365 dias. A janela é **regravada** (venda cancelada some). `GET /api/dashboard/vendas`.
+Shopee entra só com quantidade (o Noromak não guarda preço da Shopee).
 
 **Botão Cliente (V17.85):** atualiza o cadastro no **Linx DMS** (ERP em `10.1.15.1`, rede
 do escritório — a VPS não alcança). O servidor só entrega CPF/CNPJ e nome de "Dados para
