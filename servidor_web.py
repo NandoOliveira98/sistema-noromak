@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.87-CONFERENCIA-PELA-NFE"
+APP_VERSION = "17.88-SHOPEE-SEM-USUARIO-COMO-NOME"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -5066,11 +5066,15 @@ def _shopee_build_pending_lines(order: dict[str, Any], package_numbers: list[str
     # usa buyer_username apenas como fallback visível para permitir conferência
     # manual até que a API libere o nome fiscal completo.
     buyer_username = str(order.get("buyer_username") or "").strip()
-    client = _shopee_real_text(
+    # V17.88: nome real separado do fallback. O nome de usuário continua
+    # servindo para a coluna Cliente, mas NUNCA como nome fiscal — ele ia para
+    # o cadastro do Linx como se fosse o nome da nota.
+    shopee_nome_real = _shopee_real_text(
         recipient.get("name"),
         order.get("buyer_name"),
         address.get("name"),
-    ) or _shopee_real_text(buyer_username) or "NOME NÃO DISPONÍVEL"
+    )
+    client = shopee_nome_real or _shopee_real_text(buyer_username) or "NOME NÃO DISPONÍVEL"
     buyer_cpf = _shopee_real_text(order.get("buyer_cpf_id"))
     buyer_cnpj = _shopee_real_text(order.get("buyer_cnpj_id"))
     buyer_phone = _shopee_real_text(order.get("buyer_phone_number"), recipient.get("phone"), address.get("phone"))
@@ -5129,7 +5133,7 @@ def _shopee_build_pending_lines(order: dict[str, Any], package_numbers: list[str
             "Quantidade de Kits": "",
             "Quantidade por Kit": "",
             "Cliente": client,
-            "NomeFiscalShopee": client if client != "NOME NÃO DISPONÍVEL" else "",
+            "NomeFiscalShopee": shopee_nome_real,
             "UsuarioShopee": buyer_username,
             "CPFShopee": buyer_cpf,
             "CNPJShopee": buyer_cnpj,
@@ -9338,8 +9342,13 @@ def nome_fiscal_do_pedido(row: dict[str, Any]) -> str:
     """
     if not isinstance(row, dict):
         return ""
+    # V17.88: pedidos Shopee importados antes da correção têm o nome de
+    # usuário gravado em NomeFiscalShopee. Usuário nunca é nome fiscal.
+    usuarios = {normalize(row.get(c)) for c in ("UsuarioShopee", "UsuarioMercadoLivre") if str(row.get(c) or "").strip()}
     for campo in NOME_FISCAL_CAMPOS:
         nome = str(row.get(campo) or "").strip()
+        if nome and normalize(nome) in usuarios:
+            continue
         # normalize() também remove os espaços, então o marcador da Shopee
         # precisa passar pela mesma função dos dois lados da comparação.
         if nome and normalize(nome) != normalize("NOME NÃO DISPONÍVEL"):

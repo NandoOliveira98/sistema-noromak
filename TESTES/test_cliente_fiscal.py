@@ -224,6 +224,33 @@ class ClienteFiscalGuardado(TesteNoromak):
         self.assertIn(status, (401, 403))
 
 
+class ShopeeUsuarioNaoEhNomeFiscal(TesteNoromak):
+    """V17.88 — a API da Shopee mascara o nome; o sistema punha o nome de
+    usuário (ex.: janiosergio578) como nome fiscal, e ele iria para o Linx."""
+
+    def test_usuario_gravado_como_nome_fiscal_e_ignorado(self):
+        row = {"Pedido": "260918BHYEGN3E", "UsuarioShopee": "janiosergio578",
+               "NomeFiscalShopee": "janiosergio578", "CPFShopee": "08677683470"}
+        self.assertEqual(S.nome_fiscal_do_pedido(row), "")
+
+    def test_nome_real_da_shopee_continua_valendo(self):
+        row = {"Pedido": "X", "UsuarioShopee": "janiosergio578",
+               "NomeFiscalShopee": "Janio Sergio Araujo Da Nobrega"}
+        self.assertEqual(S.nome_fiscal_do_pedido(row), "Janio Sergio Araujo Da Nobrega")
+
+    def test_cliente_fiscal_da_shopee_traz_cpf_e_nao_traz_usuario(self):
+        gravar_como_integracao([linha(
+            "260918BHYEGN3E", "0893573150", uid="S1", Marketplace="SHOPEE",
+            Cliente="janiosergio578", UsuarioShopee="janiosergio578",
+            NomeFiscalShopee="janiosergio578", CPFShopee="08677683470",
+        )])
+        status, corpo = self.cliente.pedir("GET", "/api/cliente-fiscal?pedido=260918BHYEGN3E")
+        self.assertEqual(status, 200, corpo)
+        self.assertEqual(corpo["documento"], {"tipo": "CPF", "numero": "08677683470"})
+        self.assertEqual(corpo["nome_fiscal"], "", "o nome de usuário foi entregue como nome fiscal")
+        self.assertTrue(corpo["aviso"])
+
+
 class NomeConferenciaPelaNFe(TesteNoromak):
     """V17.87 — o nome de Dados para a NF-e preenche o campo Conferência."""
 

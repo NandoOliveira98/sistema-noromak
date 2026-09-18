@@ -234,3 +234,17 @@ precisa de duas palavras e não pode ser texto de tela; o servidor recusa nome i
   (`preencher_nome_conferencia_se_vazio`). Marca `NomeConferenciaFonte=nfe_extensao`.
 - **Leitura automática:** com o admin aberto, a cada 5 min a tela pede à extensão a
   leitura dos pedidos ML pendentes sem nome; falha só é tentada de novo em 30 min.
+
+## Shopee: nome do comprador (V17.88 + extensão 0.8)
+
+- A API da Shopee **mascara** `recipient_address.name` e não manda `buyer_name`
+  (`DiagnosticoNomeShopee`). O CPF vem visível (`buyer_cpf_id` → `CPFShopee`).
+- O import gravava o **nome de usuário** em `NomeFiscalShopee`; iria para o Linx como nome.
+  Corrigido: só nome real; leitura ignora valor igual a `UsuarioShopee`.
+- Página do pedido: `https://seller.shopee.com.br/portal/sale/order/{número interno}`. O
+  Noromak só tem o código (260918BHYEGN3E). A lista `/portal/sale/order` traz os dois no
+  mesmo bloco (link + "ID do Pedido XXX"); a extensão relaciona pelo menor bloco com um
+  único pedido (40/40 certos em 18/09/2026). Nome: linha abaixo de "Endereço de entrega",
+  sem o telefone mascarado; CPF: linha abaixo de "CPF". Trava: o código impresso na
+  página tem que ser o do pedido pedido. Limite: só acha pedidos da 1ª página da lista (40
+  mais recentes).

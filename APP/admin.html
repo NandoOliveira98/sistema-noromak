@@ -958,7 +958,7 @@ body{background:var(--v15-bg)!important}
 
   <section id="aba-pedidos-dia" class="aba-painel">
     <div class="card-admin">
-      <div class="v1779-head"><div><h2>📅 Central de Pedidos do Dia <span class="usuario-versao">V17.87</span></h2><div style="color:#64748b">Controle diário de vendas recebidas, inclusive as já conferidas.</div></div><div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px"><button type="button" id="pdNfeLoteBtn" class="v1786-lote" onclick="pdPuxarNfeLoteV1786()" title="A extensão lê Dados para a NF-e de cada venda do Mercado Livre desta lista">Puxar dados da NF-e (Mercado Livre)</button><span id="pdNfeLoteStatus" style="font-size:12px;color:#64748b">Cliente: nome e CPF da NF-e · Cód.Cliente: código no Linx</span></div></div>
+      <div class="v1779-head"><div><h2>📅 Central de Pedidos do Dia <span class="usuario-versao">V17.87</span></h2><div style="color:#64748b">Controle diário de vendas recebidas, inclusive as já conferidas.</div></div><div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px"><button type="button" id="pdNfeLoteBtn" class="v1786-lote" onclick="pdPuxarNfeLoteV1786()" title="A extensão lê nome e CPF de cada venda do Mercado Livre e da Shopee desta lista">Puxar nome e CPF (ML e Shopee)</button><span id="pdNfeLoteStatus" style="font-size:12px;color:#64748b">Cliente: nome e CPF da NF-e · Cód.Cliente: código no Linx</span></div></div>
       <div class="v1779-kpis">
         <div class="v1779-kpi"><b id="pdRecebidos">0</b><span>Recebidos</span></div>
         <div class="v1779-kpi"><b id="pdAguardando">0</b><span>Aguardando</span></div>
@@ -3902,10 +3902,10 @@ async function guardarClienteFiscalV1786(m,linxCliente){
 }
 function pdPuxarNfeLoteV1786(){
   if(!document.documentElement.dataset.noromakLinx){
-    alert('Instale ou atualize a extensão "Noromak - Cadastro de Cliente no Linx" (versão 0.7 ou mais nova) neste Chrome e recarregue a página.');return;
+    alert('Instale ou atualize a extensão "Noromak - Cadastro de Cliente no Linx" (versão 0.8 ou mais nova) neste Chrome e recarregue a página.');return;
   }
-  const pedidos=pdVisiveisV1786.filter(x=>x.marketplace==="Mercado Livre"&&!(pdFiscalV1786(x.pedido)||{}).nome_fiscal).map(x=>x.pedido);
-  if(!pedidos.length){v151Set("pdNfeLoteStatus","Todos os pedidos do Mercado Livre desta lista já têm nome e CPF da NF-e.");return;}
+  const pedidos=pdVisiveisV1786.filter(x=>(x.marketplace==="Mercado Livre"||x.marketplace==="SHOPEE")&&!(pdFiscalV1786(x.pedido)||{}).nome_fiscal).map(x=>x.pedido);
+  if(!pedidos.length){v151Set("pdNfeLoteStatus","Todos os pedidos do Mercado Livre e da Shopee desta lista já têm nome e CPF.");return;}
   pdIniciarLoteV1787(pedidos,false);
 }
 
@@ -3921,7 +3921,7 @@ function pdIniciarLoteV1787(pedidos,automatico){
   pdLoteAtualV1787={pedidos:pedidos.slice(),automatico,lidos:new Set()};
   try{localStorage.setItem("noromak_lote_nfe_v1787",String(Date.now()))}catch(_){}
   const b=document.getElementById("pdNfeLoteBtn");if(b)b.disabled=true;
-  v151Set("pdNfeLoteStatus",`${automatico?"Leitura automática: ":""}lendo ${pedidos.length} venda(s) no Mercado Livre…`);
+  v151Set("pdNfeLoteStatus",`${automatico?"Leitura automática: ":""}lendo ${pedidos.length} venda(s) no Mercado Livre e na Shopee…`);
   window.postMessage({tipo:"noromak-linx-ler-lote",pedidos},location.origin);
   // Extensão antiga ou fechada nunca responde: libera depois do tempo máximo.
   const este=pdLoteAtualV1787;
@@ -3937,7 +3937,8 @@ async function pdLoteAutomaticoV1787(){
   for(const r of pend){
     const pedido=String(r?.Pedido||"").trim();
     if(!pedido||vistos.has(pedido))continue;vistos.add(pedido);
-    if(pdMarketplaceV1779(r.Marketplace)!=="Mercado Livre")continue;
+    // V17.88: Shopee também — a API mascara o nome; a extensão lê na página do pedido.
+    if(!["Mercado Livre","SHOPEE"].includes(pdMarketplaceV1779(r.Marketplace)))continue;
     if((pdFiscalV1786(pedido)||{}).nome_fiscal)continue;
     if(agora-(pdFalhasNfeV1787.get(pedido)||0)<30*60*1000)continue;
     pedidos.push(pedido);
@@ -3952,7 +3953,7 @@ window.addEventListener("message",ev=>{
   const m=ev.data||{};
   if(m.tipo==="noromak-linx-dados-lidos"){if(pdLoteAtualV1787)pdLoteAtualV1787.lidos.add(String(m.pedido||""));guardarClienteFiscalV1786(m,"");}
   if(m.tipo==="noromak-linx-gravado")guardarClienteFiscalV1786(m,m.cliente);
-  if(m.tipo==="noromak-linx-lote-progresso")v151Set("pdNfeLoteStatus",`Lendo vendas no Mercado Livre: ${m.feitos}/${m.total}${m.falhas?` · ${m.falhas} sem leitura`:""}`);
+  if(m.tipo==="noromak-linx-lote-progresso")v151Set("pdNfeLoteStatus",`Lendo vendas: ${m.feitos}/${m.total}${m.falhas?` · ${m.falhas} sem leitura`:""}`);
   if(m.tipo==="noromak-linx-lote-fim"){
     if(pdLoteAtualV1787){pdLoteAtualV1787.pedidos.forEach(p=>{if(!pdLoteAtualV1787.lidos.has(p))pdFalhasNfeV1787.set(p,Date.now())});pdLoteAtualV1787=null;}
     const b=document.getElementById("pdNfeLoteBtn");if(b)b.disabled=false;
@@ -8603,7 +8604,7 @@ window.addEventListener("storage",e=>{
 .pedido-item-acoes .acao-romaneio{background:#f1f4f8;color:#8a99a8;cursor:not-allowed}
 .pedido-card-head input.conferencia-vazia{border-color:#f0c36d;background:#fffaf0}
 @media(max-width:900px){.pedido-item-row{grid-template-columns:62px 1fr 56px 1.2fr}.pedido-item-acoes{flex-wrap:wrap;padding-top:4px}}
-.tag-nfe{font-style:normal;display:inline-block;margin-left:4px;padding:1px 5px;border-radius:5px;background:#e7f8ed;color:#16723b;font-size:9px;font-weight:900}
+.pedido-card-head .pedido-card-conferencia{position:relative}.tag-nfe{font-style:normal;position:absolute;top:-1px;right:0;padding:1px 6px;border-radius:5px;background:#e7f8ed;color:#16723b;font-size:9px;font-weight:900;line-height:1.4}
 #aba-pedidos .pedido-card-head{box-shadow:inset 0 -1px 0 rgba(65,104,145,.08)}
 @media(max-width:900px){#aba-pedidos .pedidos-rodape-fixo{grid-template-columns:1fr;justify-items:start}#aba-pedidos .pedidos-rodape-nota,#aba-pedidos .pedidos-paginacao{justify-self:start}.pedidos-rodape-nota{white-space:normal!important}}
 </style>
