@@ -958,7 +958,7 @@ body{background:var(--v15-bg)!important}
 
   <section id="aba-pedidos-dia" class="aba-painel">
     <div class="card-admin">
-      <div class="v1779-head"><div><h2>📅 Central de Pedidos do Dia <span class="usuario-versao">V17.86</span></h2><div style="color:#64748b">Controle diário de vendas recebidas, inclusive as já conferidas.</div></div><div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px"><button type="button" id="pdNfeLoteBtn" class="v1786-lote" onclick="pdPuxarNfeLoteV1786()" title="A extensão lê Dados para a NF-e de cada venda do Mercado Livre desta lista">Puxar dados da NF-e (Mercado Livre)</button><span id="pdNfeLoteStatus" style="font-size:12px;color:#64748b">Cliente: nome e CPF da NF-e · Cód.Cliente: código no Linx</span></div></div>
+      <div class="v1779-head"><div><h2>📅 Central de Pedidos do Dia <span class="usuario-versao">V17.87</span></h2><div style="color:#64748b">Controle diário de vendas recebidas, inclusive as já conferidas.</div></div><div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px"><button type="button" id="pdNfeLoteBtn" class="v1786-lote" onclick="pdPuxarNfeLoteV1786()" title="A extensão lê Dados para a NF-e de cada venda do Mercado Livre desta lista">Puxar dados da NF-e (Mercado Livre)</button><span id="pdNfeLoteStatus" style="font-size:12px;color:#64748b">Cliente: nome e CPF da NF-e · Cód.Cliente: código no Linx</span></div></div>
       <div class="v1779-kpis">
         <div class="v1779-kpi"><b id="pdRecebidos">0</b><span>Recebidos</span></div>
         <div class="v1779-kpi"><b id="pdAguardando">0</b><span>Aguardando</span></div>
@@ -3902,22 +3902,59 @@ async function guardarClienteFiscalV1786(m,linxCliente){
 }
 function pdPuxarNfeLoteV1786(){
   if(!document.documentElement.dataset.noromakLinx){
-    alert('Instale ou atualize a extensão "Noromak - Cadastro de Cliente no Linx" (versão 0.6 ou mais nova) neste Chrome e recarregue a página.');return;
+    alert('Instale ou atualize a extensão "Noromak - Cadastro de Cliente no Linx" (versão 0.7 ou mais nova) neste Chrome e recarregue a página.');return;
   }
   const pedidos=pdVisiveisV1786.filter(x=>x.marketplace==="Mercado Livre"&&!(pdFiscalV1786(x.pedido)||{}).nome_fiscal).map(x=>x.pedido);
   if(!pedidos.length){v151Set("pdNfeLoteStatus","Todos os pedidos do Mercado Livre desta lista já têm nome e CPF da NF-e.");return;}
-  const b=document.getElementById("pdNfeLoteBtn");if(b)b.disabled=true;
-  v151Set("pdNfeLoteStatus",`Lendo ${pedidos.length} venda(s) no Mercado Livre…`);
-  window.postMessage({tipo:"noromak-linx-ler-lote",pedidos},location.origin);
+  pdIniciarLoteV1787(pedidos,false);
 }
+
+/* V17.87 — leitura automática. Com o admin aberto e a extensão instalada, a
+   cada 5 min lê "Dados para a NF-e" dos pedidos pendentes do Mercado Livre que
+   ainda não têm nome. O servidor guarda e preenche o Nome Conferência (só se
+   estiver vazio). Venda que não deu para ler só é tentada de novo em 30 min.
+   Com várias abas do admin abertas, só uma roda (trava em localStorage). */
+let pdLoteAtualV1787=null;
+const pdFalhasNfeV1787=new Map();
+function pdIniciarLoteV1787(pedidos,automatico){
+  if(pdLoteAtualV1787)return false;
+  pdLoteAtualV1787={pedidos:pedidos.slice(),automatico,lidos:new Set()};
+  try{localStorage.setItem("noromak_lote_nfe_v1787",String(Date.now()))}catch(_){}
+  const b=document.getElementById("pdNfeLoteBtn");if(b)b.disabled=true;
+  v151Set("pdNfeLoteStatus",`${automatico?"Leitura automática: ":""}lendo ${pedidos.length} venda(s) no Mercado Livre…`);
+  window.postMessage({tipo:"noromak-linx-ler-lote",pedidos},location.origin);
+  // Extensão antiga ou fechada nunca responde: libera depois do tempo máximo.
+  const este=pdLoteAtualV1787;
+  setTimeout(()=>{if(pdLoteAtualV1787===este){pdLoteAtualV1787=null;const bt=document.getElementById("pdNfeLoteBtn");if(bt)bt.disabled=false;v151Set("pdNfeLoteStatus","A extensão não respondeu. Confira se ela está na versão 0.7 e recarregue a página.");}},pedidos.length*30000+60000);
+  return true;
+}
+async function pdLoteAutomaticoV1787(){
+  if(!document.documentElement.dataset.noromakLinx||pdLoteAtualV1787)return;
+  try{const t=Number(localStorage.getItem("noromak_lote_nfe_v1787")||0);if(Date.now()-t<4*60*1000)return;}catch(_){}
+  let pend=[];try{pend=obterPedidosValidosBanco()||[]}catch(_){return}
+  try{const d=await mlApiAdmin("/expedicao/api/cliente-fiscal/lista");clientesFiscaisV1786=d.clientes||{};}catch(_){return}
+  const agora=Date.now(),vistos=new Set(),pedidos=[];
+  for(const r of pend){
+    const pedido=String(r?.Pedido||"").trim();
+    if(!pedido||vistos.has(pedido))continue;vistos.add(pedido);
+    if(pdMarketplaceV1779(r.Marketplace)!=="Mercado Livre")continue;
+    if((pdFiscalV1786(pedido)||{}).nome_fiscal)continue;
+    if(agora-(pdFalhasNfeV1787.get(pedido)||0)<30*60*1000)continue;
+    pedidos.push(pedido);
+  }
+  if(pedidos.length)pdIniciarLoteV1787(pedidos.slice(0,40),true);
+}
+setTimeout(pdLoteAutomaticoV1787,20000);
+setInterval(pdLoteAutomaticoV1787,5*60*1000);
 // Mensagens da extensão (via content script, na própria janela).
 window.addEventListener("message",ev=>{
   if(ev.source!==window||ev.origin!==location.origin)return;
   const m=ev.data||{};
-  if(m.tipo==="noromak-linx-dados-lidos")guardarClienteFiscalV1786(m,"");
+  if(m.tipo==="noromak-linx-dados-lidos"){if(pdLoteAtualV1787)pdLoteAtualV1787.lidos.add(String(m.pedido||""));guardarClienteFiscalV1786(m,"");}
   if(m.tipo==="noromak-linx-gravado")guardarClienteFiscalV1786(m,m.cliente);
   if(m.tipo==="noromak-linx-lote-progresso")v151Set("pdNfeLoteStatus",`Lendo vendas no Mercado Livre: ${m.feitos}/${m.total}${m.falhas?` · ${m.falhas} sem leitura`:""}`);
   if(m.tipo==="noromak-linx-lote-fim"){
+    if(pdLoteAtualV1787){pdLoteAtualV1787.pedidos.forEach(p=>{if(!pdLoteAtualV1787.lidos.has(p))pdFalhasNfeV1787.set(p,Date.now())});pdLoteAtualV1787=null;}
     const b=document.getElementById("pdNfeLoteBtn");if(b)b.disabled=false;
     v151Set("pdNfeLoteStatus",`Concluído: ${m.lidos} de ${m.total} venda(s) com nome e CPF da NF-e.${m.falhas?` ${m.falhas} não deram para ler — use o botão Cliente nelas.`:""}`);
   }
@@ -4850,12 +4887,11 @@ function renderizarPedidosAdmin(){
       const status=`<span class="status-celula ${todasValidas?'status-pendente':'status-rascunho'}">${todasValidas?'PENDENTE':'RASCUNHO'}</span>`;
       const header=`<div class="pedido-card-head">
         <div class="pedido-card-id">${badge}<label>Pedido<input class="campo-pedido" data-grupo-pedido="${htmlSeguroBanco(pedidoOriginal)}" data-campo="Pedido" value="${htmlSeguroBanco(pedidoExibicaoBanco(primeiro.Pedido,primeiro.Marketplace))}" onchange="atualizarCampoGrupoPedidoAdmin(this)"></label></div>
-        <div><small>Marketplace</small><span class="marketplace-pill-admin">${htmlSeguroBanco(primeiro.Marketplace)}</span></div>
+        <div><small>Marketplace</small><span class="marketplace-pill-admin ${/mercado/i.test(primeiro.Marketplace)?'mp-ml':/shopee/i.test(primeiro.Marketplace)?'mp-shopee':''}">${htmlSeguroBanco(primeiro.Marketplace)}</span></div>
         <label>Data<input class="data-pedido-compacta" type="date" data-grupo-pedido="${htmlSeguroBanco(pedidoOriginal)}" data-campo="Data do Pedido" value="${htmlSeguroBanco(normalizarDataPedidoBanco(primeiro['Data do Pedido'],true))}" onchange="atualizarCampoGrupoPedidoAdmin(this)"></label>
         <label class="pedido-card-cliente">Cliente<input data-grupo-pedido="${htmlSeguroBanco(pedidoOriginal)}" data-campo="Cliente" value="${htmlSeguroBanco(campoBanco(primeiro,'Cliente'))}" onchange="atualizarCampoGrupoPedidoAdmin(this)"></label>
-        <label class="pedido-card-conferencia">Conferência<input data-grupo-pedido="${htmlSeguroBanco(pedidoOriginal)}" data-campo="Nome Conferência" value="${htmlSeguroBanco(campoBanco(primeiro,'Nome Conferência'))}" onchange="atualizarCampoGrupoPedidoAdmin(this)"></label>
-        ${usuarioAtualEhAdminV1766()?`<button type="button" class="btn-excluir-kit-inteiro" title="Excluir definitivamente da Conferência e Pedidos Pendentes" onclick="excluirPedidoInteiroAdmin('${htmlSeguroBanco(pedidoOriginal)}','${htmlSeguroBanco(primeiro.Marketplace)}')">🗑 Excluir pedido</button>`:''}
-        <div class="pedido-card-status">${status}</div>
+        <label class="pedido-card-conferencia">Conferência${primeiro.NomeConferenciaFonte==="nfe_extensao"?' <em class="tag-nfe" title="Preenchido com o nome de Dados para a NF-e">NF-e</em>':''}<input class="${String(campoBanco(primeiro,'Nome Conferência')).trim()?'':'conferencia-vazia'}" placeholder="Aguardando nome da NF-e" data-grupo-pedido="${htmlSeguroBanco(pedidoOriginal)}" data-campo="Nome Conferência" value="${htmlSeguroBanco(campoBanco(primeiro,'Nome Conferência'))}" onchange="atualizarCampoGrupoPedidoAdmin(this)"></label>
+        <div class="pedido-card-acoes"><div class="pedido-card-status">${status}</div>${usuarioAtualEhAdminV1766()?`<button type="button" class="btn-excluir-kit-inteiro" title="Excluir definitivamente da Conferência e Pedidos Pendentes" onclick="excluirPedidoInteiroAdmin('${htmlSeguroBanco(pedidoOriginal)}','${htmlSeguroBanco(primeiro.Marketplace)}')">🗑 Excluir pedido</button>`:''}</div>
       </div>`;
       const itens=grupo.itens.map((item,indice)=>{
         item.Marketplace=marketplaceExibicaoBanco(item.Pedido);
@@ -4871,7 +4907,7 @@ function renderizarPedidosAdmin(){
         const kitResumo=textoKitBanco(item)?`<span class="kit-badge">KIT</span> ${htmlSeguroBanco(textoKitBanco(item))}`:'Item normal';
         const detalhes=`<details class="pedido-detalhes-compactos"><summary>Mais detalhes</summary><div class="pedido-detalhes-grid"><label>Descrição${inp('Descrição','campo-descricao')}</label><label>Rua${inp('Rua')}</label><label>Módulo${inp('Módulo')}</label><label>Prateleira${inp('Prateleira')}</label><label>Nível${inp('Nível')}</label><label>Posição${inp('Posição')}</label><label>Foto${inp('Foto','campo-foto')}</label><div class="pedido-kit-detalhe"><span>${kitResumo}</span><button type="button" class="btn-kit-pedido-editar" onclick="abrirEditorKitPedidoAdmin('${uid}')">✎ Kit</button></div></div></details>`;
         return `<div class="pedido-item-row">
-          <div class="pedido-item-acoes"><button title="Adicionar item" onclick="adicionarItemMesmoPedido('${uid}')">＋</button><button title="Atualizar" onclick="atualizarVendaMercadoLivreAdmin('${uid}',this)">↻</button><button title="Excluir item" class="acao-excluir" onclick="excluirLinhaPedidoAdmin('${uid}')">🗑</button></div>
+          <div class="pedido-item-acoes"><button title="Adicionar item" onclick="adicionarItemMesmoPedido('${uid}')">＋</button><button title="Atualizar" onclick="atualizarVendaMercadoLivreAdmin('${uid}',this)">↻</button><button title="Excluir item" class="acao-excluir" onclick="excluirLinhaPedidoAdmin('${uid}')">🗑</button>${indice===0?`<button type="button" class="acao-linx" data-pedido="${htmlSeguroBanco(pedidoOriginal)}" title="Atualizar o cadastro deste cliente no Linx" onclick="pdClienteLinxV1785(this)">Linx</button><button type="button" class="acao-romaneio" title="Imprimir romaneio — em desenvolvimento" disabled>🧾</button>`:''}</div>
           <div class="pedido-item-num">${total>1?`<b>${ehKit?'Componente':'Item'} ${indice+1}/${total}</b>`:''}</div>
           <label class="pedido-item-sku"><span>SKU</span>${skuEditor}</label>
           <label class="pedido-item-qtd"><span>Qtd.</span><input type="number" min="1" data-uidlinha="${uid}" data-campo="Quantidade" value="${htmlSeguroBanco(item.Quantidade||'1')}" onchange="atualizarCampoPedidoAdmin(this)"></label>
@@ -8539,15 +8575,15 @@ window.addEventListener("storage",e=>{
 #aba-pedidos .pedido-card-row>td{padding:0;border:0;background:transparent}
 .pedido-card{background:#fff;border:1px solid #d9e4ef;border-radius:12px;overflow:hidden;box-shadow:0 1px 4px rgba(25,54,84,.06)}
 .pedido-card-kit{border-left:4px solid #2f80ed}
-.pedido-card-head{display:grid;grid-template-columns:minmax(190px,1.25fr) 105px 130px minmax(150px,1fr) minmax(170px,1.15fr) 95px;gap:10px;align-items:end;padding:10px 12px;background:#e5effa;border-bottom:1px solid #cbdced}
+.pedido-card-head{display:grid;grid-template-columns:minmax(190px,1.25fr) 105px 130px minmax(150px,1fr) minmax(170px,1.15fr) auto;gap:10px;align-items:end;padding:10px 12px;background:#e5effa;border-bottom:1px solid #cbdced}
 .pedido-card-head label,.pedido-item-row label{display:grid;gap:3px;font-size:10px;font-weight:800;color:#60758b;text-transform:none}
 .pedido-card-head input{height:31px;padding:5px 8px;border:1px solid #cbd9e7;border-radius:7px;background:#fff;font-size:12px;min-width:0}
 .pedido-card-id{display:flex;align-items:end;gap:7px}.pedido-card-id label{flex:1}.pedido-card-badge{display:inline-flex;align-items:center;white-space:nowrap;padding:4px 7px;border-radius:999px;background:#eaf2ff;color:#1761a9;font-size:10px;font-weight:900;margin-bottom:4px}.pedido-card-badge.kit{background:#e8f2ff;color:#0b63b6}
 .pedido-card-head small{display:block;font-size:9px;color:#718399;font-weight:800;margin-bottom:5px}.pedido-card-status{align-self:center;justify-self:end}
-.pedido-card-itens{padding:0 12px}.pedido-item-row{display:grid;grid-template-columns:70px 82px minmax(190px,1fr) 58px minmax(230px,1.05fr) minmax(220px,1.25fr);gap:9px;align-items:start;padding:9px 0;border-bottom:1px solid #edf2f7}.pedido-item-row:last-child{border-bottom:0}
+.pedido-card-itens{padding:0 12px}.pedido-item-row{display:grid;grid-template-columns:150px 82px minmax(190px,1fr) 58px minmax(230px,1.05fr) minmax(220px,1.25fr);gap:9px;align-items:start;padding:9px 0;border-bottom:1px solid #edf2f7}.pedido-item-row:last-child{border-bottom:0}
 .pedido-item-acoes{display:flex;gap:4px;padding-top:18px}.pedido-item-acoes button{width:25px;height:25px;padding:0;border:0;border-radius:6px;background:#edf4fb;color:#1d568d;font-size:12px;cursor:pointer}.pedido-item-acoes .acao-excluir{background:#fff0f1;color:#c7333c}
 .pedido-item-num{padding-top:19px;font-size:10px;color:#4c6781}.pedido-item-sku .sku-pedido-compacto{display:flex;gap:5px}.pedido-item-sku input,.pedido-item-qtd input,.pedido-item-ean input{height:31px;min-width:0;width:100%;padding:5px 7px;border:1px solid #cbd9e7;border-radius:7px;font-size:11px}.pedido-item-qtd input{text-align:center}.pedido-item-produto>span,.pedido-item-sku>span,.pedido-item-qtd>span,.pedido-item-ean>span{font-size:9px;font-weight:800;color:#60758b}.pedido-item-produto strong{display:block;margin-top:3px;font-size:11px;color:#1d2f40;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.pedido-item-produto small{display:block;margin-top:3px;color:#7b8b9d;font-size:9px}.pedido-detalhes-compactos{margin-top:4px}.pedido-detalhes-compactos summary{font-size:9px;color:#1761a9;font-weight:800;cursor:pointer}.ean-pedido-acoes{display:flex;gap:4px;margin-top:3px}.ean-pedido-acoes button,.btn-sku-compacto,.btn-sku-manual{height:24px;padding:2px 6px;font-size:9px;border-radius:5px}.ean-pedido-status{font-size:8px!important;margin-top:2px!important}.marketplace-pill-admin{display:inline-flex}.cliente-conf-compacto{gap:4px}
-@media(max-width:1250px){.pedido-card-head{grid-template-columns:1.1fr 90px 120px 1fr 1fr 80px}.pedido-item-row{grid-template-columns:62px 70px 1fr 52px 1.05fr 1.1fr}}
+@media(max-width:1250px){.pedido-card-head{grid-template-columns:1.1fr 90px 120px 1fr 1fr auto}.pedido-item-row{grid-template-columns:150px 70px 1fr 52px 1.05fr 1.1fr}}
 @media(max-width:900px){.pedido-card-head{grid-template-columns:1fr 1fr 1fr}.pedido-item-row{grid-template-columns:54px 1fr 56px 1.2fr}.pedido-item-num{display:none}.pedido-item-produto{grid-column:2/-1}}
 
 /* V17.58 — separação visual dos cards + paginação fora da lista */
@@ -8555,7 +8591,19 @@ window.addEventListener("storage",e=>{
 #aba-pedidos .pedidos-rodape-fixo{position:relative;z-index:4;display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:14px;margin-top:12px;padding:10px 12px;background:#f8fbff;border:1px solid #d5e2ef;border-radius:10px;min-height:48px}
 #aba-pedidos .pedidos-rodape-nota{justify-self:end;color:#64748b;font-size:11px;white-space:nowrap}
 #aba-pedidos .pedidos-paginacao{justify-self:end;white-space:nowrap;background:#fff;padding:4px 5px;border:1px solid #d8e3ee;border-radius:8px}
-#aba-pedidos .pedido-card{margin-bottom:2px}
+#aba-pedidos .pedido-card{margin-bottom:10px;transition:box-shadow .15s}
+#aba-pedidos .pedido-card:hover{box-shadow:0 4px 14px rgba(25,54,84,.12)}
+/* V17.87 — Pedidos pendentes: ações do pedido, marketplace e Conferência */
+.pedido-card-acoes{display:flex;flex-direction:column;align-items:flex-end;gap:6px;align-self:center}
+.pedido-card-acoes .pedido-card-status{justify-self:auto}
+.marketplace-pill-admin.mp-ml{background:#fff5bf;color:#5c4a00}
+.marketplace-pill-admin.mp-shopee{background:#ffe7dc;color:#b43a0d}
+.pedido-item-acoes .acao-linx{width:auto;padding:0 7px;background:#12345b;color:#fff;font-size:10px;font-weight:800}
+.pedido-item-acoes .acao-linx:hover{background:#1d4d7b}
+.pedido-item-acoes .acao-romaneio{background:#f1f4f8;color:#8a99a8;cursor:not-allowed}
+.pedido-card-head input.conferencia-vazia{border-color:#f0c36d;background:#fffaf0}
+@media(max-width:900px){.pedido-item-row{grid-template-columns:62px 1fr 56px 1.2fr}.pedido-item-acoes{flex-wrap:wrap;padding-top:4px}}
+.tag-nfe{font-style:normal;display:inline-block;margin-left:4px;padding:1px 5px;border-radius:5px;background:#e7f8ed;color:#16723b;font-size:9px;font-weight:900}
 #aba-pedidos .pedido-card-head{box-shadow:inset 0 -1px 0 rgba(65,104,145,.08)}
 @media(max-width:900px){#aba-pedidos .pedidos-rodape-fixo{grid-template-columns:1fr;justify-items:start}#aba-pedidos .pedidos-rodape-nota,#aba-pedidos .pedidos-paginacao{justify-self:start}.pedidos-rodape-nota{white-space:normal!important}}
 </style>

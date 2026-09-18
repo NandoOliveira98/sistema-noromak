@@ -219,3 +219,18 @@ Contorno (V17.86 + extensão 0.6): a extensão abre `/vendas/{id}/detalhe` numa 
 minimizada, com a sessão do usuário, lê o texto e devolve ao Noromak, que guarda em
 `cliente_fiscal`. Travas: só aceita a página cujo endereço é o da venda pedida; nome
 precisa de duas palavras e não pode ser texto de tela; o servidor recusa nome inválido.
+
+## Sessão do Linx e Nome Conferência (V17.87 + extensão 0.7)
+
+- **Sessão:** a tela do Linx renova o token a cada 9,5 min com `PUT
+  Geral/Cadastros/Usuarios/AtualizaValidadeSessaoUsuario` (`{IdSessaoAtiva,
+  AddMinutos: 10, access_token}` → token novo; `IdSessaoAtiva` é claim do JWT). Com a
+  aba congelada pelo Chrome a renovação parava e a sessão caía em 15 min. A extensão
+  faz a mesma renovação a cada 5 min (`chrome.alarms`), lê o token de
+  `localStorage["@linx-dms/token"]` da aba do Linx e grava o novo lá (token +
+  `@linx-dms/token-exp`). Nunca faz login.
+- **Nome Conferência:** ao guardar o nome da NF-e, o servidor preenche Nome Conferência
+  **só se o pedido ainda não tiver um** e **sem** override ADMIN
+  (`preencher_nome_conferencia_se_vazio`). Marca `NomeConferenciaFonte=nfe_extensao`.
+- **Leitura automática:** com o admin aberto, a cada 5 min a tela pede à extensão a
+  leitura dos pedidos ML pendentes sem nome; falha só é tentada de novo em 30 min.

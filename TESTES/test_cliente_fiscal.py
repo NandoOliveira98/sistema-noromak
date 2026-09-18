@@ -201,11 +201,20 @@ class ClienteFiscalGuardado(TesteNoromak):
         status, _ = self.guardar(pedido="NAO-EXISTE")
         self.assertEqual(status, 400)
 
-    def test_nao_toca_nos_pedidos(self):
-        _, versao_antes, _ = S.get_storage("conf_pedidos")
+    def test_so_mexe_nos_pedidos_para_preencher_a_conferencia(self):
+        """V17.87: a 1ª leitura preenche Nome Conferência; as seguintes não mexem."""
+        import json
+        valor_antes, _, _ = S.get_storage("conf_pedidos")
         self.guardar()
-        _, versao_depois, _ = S.get_storage("conf_pedidos")
-        self.assertEqual(versao_antes, versao_depois, "guardar o cliente mexeu em conf_pedidos")
+        valor_1, versao_1, _ = S.get_storage("conf_pedidos")
+        antes = {k: v for k, v in json.loads(valor_antes)[0].items()}
+        depois = {k: v for k, v in json.loads(valor_1)[0].items()}
+        mudou = {k for k in set(antes) | set(depois) if antes.get(k) != depois.get(k)}
+        self.assertEqual(mudou, set(S.CAMPOS_NOME_CONFERENCIA) | {"NomeConferenciaFonte"},
+                         "guardar o cliente mexeu em campo que não é o nome de conferência")
+        self.guardar()
+        _, versao_2, _ = S.get_storage("conf_pedidos")
+        self.assertEqual(versao_1, versao_2, "a segunda leitura gravou de novo em conf_pedidos")
 
     def test_exige_admin(self):
         from base import Cliente
@@ -213,6 +222,62 @@ class ClienteFiscalGuardado(TesteNoromak):
         self.assertIn(status, (401, 403))
         status, _ = Cliente(self.url_base).pedir("GET", "/api/cliente-fiscal/lista")
         self.assertIn(status, (401, 403))
+
+
+class NomeConferenciaPelaNFe(TesteNoromak):
+    """V17.87 — o nome de Dados para a NF-e preenche o campo Conferência."""
+
+    def setUp(self):
+        super().setUp()
+        with S.DB_LOCK:
+            S.DB.execute("DELETE FROM cliente_fiscal")
+            S.DB.commit()
+
+    def nomes_conferencia(self, pedido):
+        valor, _, _ = S.get_storage("conf_pedidos")
+        import json
+        return [r.get("Nome Conferência") for r in json.loads(valor or "[]")
+                if isinstance(r, dict) and S.normalize(S.order_number(r)) == S.normalize(pedido)]
+
+    def guardar(self, pedido, nome="Carlos Eduardo Lima Costa"):
+        return self.cliente.pedir("POST", "/api/cliente-fiscal",
+                                  {"pedido": pedido, "documento": "32244373835", "nome": nome})
+
+    def test_preenche_conferencia_vazia_em_todas_as_linhas(self):
+        gravar_como_integracao([
+            linha("PED-KIT", "SKU-A", uid="L1", Marketplace="MERCADO LIVRE"),
+            linha("PED-KIT", "SKU-B", uid="L2", Marketplace="MERCADO LIVRE"),
+        ], origem="API Mercado Livre")
+        status, corpo = self.guardar("PED-KIT")
+        self.assertEqual(status, 200, corpo)
+        self.assertEqual(corpo["conferencia_preenchida"], 2)
+        self.assertEqual(self.nomes_conferencia("PED-KIT"), ["Carlos Eduardo Lima Costa"] * 2)
+
+    def test_nunca_troca_nome_ja_digitado(self):
+        gravar_como_integracao([linha("PED-1", "SKU-A", uid="L1", Marketplace="MERCADO LIVRE")],
+                               origem="API Mercado Livre")
+        self.cliente.pedir("POST", "/api/order-conference-name", {"pedido": "PED-1", "nome": "Nome da Operadora"})
+        _, corpo = self.guardar("PED-1")
+        self.assertEqual(corpo["conferencia_preenchida"], 0)
+        self.assertEqual(self.nomes_conferencia("PED-1"), ["Nome da Operadora"],
+                         "o preenchimento automático passou por cima de um nome humano")
+
+    def test_sincronizacao_nao_apaga_o_nome_preenchido(self):
+        gravar_como_integracao([linha("PED-2", "SKU-A", uid="L1", Marketplace="MERCADO LIVRE")],
+                               origem="API Mercado Livre")
+        self.guardar("PED-2")
+        gravar_como_integracao([linha("PED-2", "SKU-A", uid="L1", Marketplace="MERCADO LIVRE",
+                                      Cliente="Nome da conta")], origem="API Mercado Livre")
+        self.assertEqual(self.nomes_conferencia("PED-2"), ["Carlos Eduardo Lima Costa"])
+
+    def test_nome_preenchido_pode_ser_corrigido_a_mao(self):
+        """Sem override ADMIN: a correção humana posterior vale."""
+        gravar_como_integracao([linha("PED-3", "SKU-A", uid="L1", Marketplace="MERCADO LIVRE")],
+                               origem="API Mercado Livre")
+        self.guardar("PED-3")
+        status, _ = self.cliente.pedir("POST", "/api/order-conference-name", {"pedido": "PED-3", "nome": "Outro Nome"})
+        self.assertEqual(status, 200)
+        self.assertEqual(self.nomes_conferencia("PED-3"), ["Outro Nome"])
 
 
 if __name__ == "__main__":

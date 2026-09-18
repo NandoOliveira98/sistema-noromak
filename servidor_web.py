@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.86-NFE-NA-CENTRAL"
+APP_VERSION = "17.87-CONFERENCIA-PELA-NFE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -9442,7 +9442,78 @@ def salvar_cliente_fiscal(pedido: str, documento: str, nome: str, *, linx_client
              str(fonte or "")[:40], linx_cliente, agora if linx_cliente else "", agora, str(usuario or "")[:80]),
         )
         DB.commit()
-    return {"ok": True, "pedido": pedido}
+    # V17.87: o nome da NF-e vira o Nome Conferência, se ainda não houver um.
+    conferencia = preencher_nome_conferencia_se_vazio(pedido, nome, actor=str(usuario or "extensao-nfe"))
+    return {"ok": True, "pedido": pedido, "conferencia_preenchida": conferencia}
+
+
+CAMPOS_NOME_CONFERENCIA = ("Nome Conferência", "NomeConferencia", "ConferenciaNome", "Conferência")
+
+
+def preencher_nome_conferencia_se_vazio(pedido: str, nome: str, actor: str = "extensao-nfe") -> int:
+    """V17.87 — Nome Conferência = nome de "Dados para a NF-e", só onde está vazio.
+
+    Diferente de /api/order-conference-name (V17.73), que é ação humana e cria
+    override ADMIN: aqui é preenchimento automático, então NUNCA sobrescreve um
+    nome já existente e NÃO cria override — quem quiser pode corrigir à mão
+    depois. preserve_conference_names() já impede que a sincronização limpe o
+    nome preenchido. Devolve quantas linhas foram preenchidas.
+    """
+    nome = " ".join(str(nome or "").split())
+    pedido_key = normalize(pedido)
+    if not pedido_key or not _nome_fiscal_valido(nome) or len(nome) > 180:
+        return 0
+    preenchidas = 0
+    with DB_LOCK:
+        DB.execute("BEGIN IMMEDIATE")
+        try:
+            for storage_key in ("conf_pedidos", "conf_pedidos_rascunhos"):
+                raw_row = DB.execute("SELECT value,version FROM storage WHERE key=?", (storage_key,)).fetchone()
+                if not raw_row:
+                    continue
+                rows = json.loads(str(raw_row["value"] or "[]"))
+                if not isinstance(rows, list):
+                    continue
+                linhas = [r for r in rows if isinstance(r, dict) and normalize(order_number(r)) == pedido_key]
+                # Se QUALQUER linha do pedido já tem nome, o pedido já tem dono: não mexe.
+                if not linhas or any(str(r.get(c) or "").strip() for r in linhas for c in CAMPOS_NOME_CONFERENCIA):
+                    continue
+                for r in linhas:
+                    for c in CAMPOS_NOME_CONFERENCIA:
+                        r[c] = nome
+                    r["NomeConferenciaFonte"] = "nfe_extensao"
+                    preenchidas += 1
+                DB.execute(
+                    "UPDATE storage SET value=?,version=?,updated_at=? WHERE key=?",
+                    (json_dumps(rows), int(raw_row["version"] or 0) + 1, now_iso(), storage_key),
+                )
+            if preenchidas:
+                map_row = DB.execute(
+                    "SELECT value,version FROM storage WHERE key='conf_nomes_conferencia_v1'"
+                ).fetchone()
+                try:
+                    mapa = json.loads(str(map_row["value"] or "{}")) if map_row else {}
+                except Exception:
+                    mapa = {}
+                if isinstance(mapa, dict) and not str(mapa.get(pedido_key) or "").strip():
+                    mapa[pedido_key] = nome
+                    if map_row:
+                        DB.execute(
+                            "UPDATE storage SET value=?,version=?,updated_at=? WHERE key='conf_nomes_conferencia_v1'",
+                            (json_dumps(mapa), int(map_row["version"] or 0) + 1, now_iso()),
+                        )
+                    else:
+                        DB.execute(
+                            "INSERT INTO storage(key,value,version,updated_at) VALUES('conf_nomes_conferencia_v1',?,?,?)",
+                            (json_dumps(mapa), 1, now_iso()),
+                        )
+            DB.commit()
+        except Exception:
+            DB.rollback()
+            raise
+    if preenchidas:
+        audit(actor, "order.conference_name.auto_nfe", f"{pedido}|{nome}")
+    return preenchidas
 
 
 def _cliente_fiscal_guardado(pedido: str) -> dict[str, Any] | None:
