@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.99-DASHBOARD-VENDAS"
+APP_VERSION = "17.99.1-VENDAS-ML-CORRIGIDO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -11437,13 +11437,12 @@ def _vendas_gravar(marketplace: str, date_from: str, date_to: str, records: list
 
 def vendas_ml_sync_window(date_from: str, date_to: str) -> dict[str, Any]:
     """Regrava as vendas ML de date_from a date_to (AAAA-MM-DD, horário de Brasília)."""
-    rows: list[dict[str, Any]] = []
-    complete = True
-    for status in ("valid", "partially_refunded"):
-        part = _ml_profitability_recent_sales(date_from=date_from, date_to=date_to, status_filter=status, limit=VENDAS_ML_LIMIT)
-        if len(part) >= VENDAS_ML_LIMIT:
-            complete = False
-        rows.extend(part)
+    # O /orders/search do ML recusa order.status=partially_refunded (HTTP 400,
+    # visto em produção). Busca sem filtro de status e fica só com as vendas
+    # pagas — com reembolso parcial o valor já vem líquido do reembolso.
+    todas = _ml_profitability_recent_sales(date_from=date_from, date_to=date_to, status_filter="all", limit=VENDAS_ML_LIMIT)
+    complete = len(todas) < VENDAS_ML_LIMIT
+    rows = [r for r in todas if str(r.get("status") or "").lower() in ("paid", "partially_refunded")]
     stamp = now_iso()
     records: dict[tuple[str, str], tuple[Any, ...]] = {}
     for r in rows:

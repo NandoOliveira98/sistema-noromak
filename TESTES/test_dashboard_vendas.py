@@ -38,7 +38,13 @@ class DashboardVendas(TesteNoromak):
         self.shopee = []
 
         def ml_falso(days=30, limit=2000, date_from="", date_to="", status_filter="valid"):
-            return list(self.ml.get(status_filter, []))
+            # Igual ao ML real: /orders/search recusa order.status=partially_refunded.
+            if status_filter == "partially_refunded":
+                raise RuntimeError("Mercado Livre HTTP 400: Invalid filters: [partially_refunded]")
+            todas = [v for lista in self.ml.values() for v in lista]
+            if status_filter == "all":
+                return todas
+            return [v for v in todas if v["status"] == "paid"]
 
         def lista_falsa(path, params=None, retry_auth=True):
             assert path == "/api/v2/order/get_order_list", path
@@ -72,6 +78,13 @@ class DashboardVendas(TesteNoromak):
         self.ml = {"valid": [venda("1", "4045", 2, 60.0, "2026-09-10")]}
         S.vendas_ml_sync_window("2026-09-10", "2026-09-12")
         self.assertEqual([r["order_id"] for r in self.linhas("ml")], ["1"], "venda cancelada continuou no dashboard")
+
+    def test_ml_nao_usa_filtro_que_o_ml_recusa_e_ignora_cancelada(self):
+        self.ml = {"x": [venda("1", "4045", 1, 30.0, "2026-09-10"),
+                         venda("2", "4045", 1, 25.0, "2026-09-10", status="partially_refunded"),
+                         venda("3", "4045", 9, 270.0, "2026-09-10", status="cancelled")]}
+        S.vendas_ml_sync_window("2026-09-10", "2026-09-10")
+        self.assertEqual([r["order_id"] for r in self.linhas("ml")], ["1", "2"])
 
     def test_venda_fora_da_janela_nao_e_apagada(self):
         self.ml = {"valid": [venda("1", "4045", 1, 30.0, "2026-08-01")]}
@@ -135,6 +148,8 @@ class DashboardVendas(TesteNoromak):
         self.assertEqual(top["por_marketplace"], {"ml": 3, "shopee": 3})
         self.assertEqual(corpo["periodo_anterior"], {"inicio": "2026-09-07", "fim": "2026-09-09"})
         self.assertEqual(corpo["anterior"]["faturamento"], 150.0)
+        # Venda com reembolso parcial conta (valor já líquido do reembolso).
+        self.assertEqual(corpo["por_dia"][1]["por_marketplace"]["ml"]["faturamento"], 20.0)
 
         status, so_shopee = self.cliente.pedir("GET", "/api/dashboard/vendas?data_inicio=2026-09-10&data_fim=2026-09-12&marketplace=shopee")
         self.assertEqual(so_shopee["resumo"]["faturamento"], 90.0)
