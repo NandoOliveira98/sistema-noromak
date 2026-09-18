@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.00-DEMANDA-DE-COMPRA"
+APP_VERSION = "18.01-INTEGRACAO-NAO-EXPIRA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -4443,15 +4443,13 @@ def shopee_exchange_code(code: str, shop_id: str) -> dict[str, Any]:
     return {"ok": True, "shop_id": str(shop_int), "expire_in": expire_in}
 
 
-def shopee_refresh_access_token(force: bool = False) -> sqlite3.Row:
-    row = shopee_integration_row()
-    if not row or not str(row["shop_id"] or "").strip() or not str(row["refresh_token"] or "").strip():
-        raise RuntimeError("Shopee não possui refresh_token válido. Reconecte a loja.")
-    if not force and str(row["access_token"] or "").strip() and int(row["token_expires_at"] or 0) > int(time.time()) + 300:
-        return row
+def _shopee_token_valido(row: sqlite3.Row | None, margem: int = 300) -> bool:
+    return bool(row and str(row["access_token"] or "").strip()
+               and int(row["token_expires_at"] or 0) > int(time.time()) + margem)
 
-    shop_id = int(str(row["shop_id"]).strip())
-    refresh_token = str(row["refresh_token"] or "").strip()
+
+def _shopee_chamar_refresh(shop_id: int, refresh_token: str) -> dict[str, Any]:
+    """Só a chamada de rede à Shopee. Isolada para poder ser testada."""
     timestamp = int(time.time())
     path = SHOPEE_REFRESH_PATH
     sign = shopee_sign(path, timestamp)
@@ -4475,24 +4473,57 @@ def shopee_refresh_access_token(force: bool = False) -> sqlite3.Row:
         raise RuntimeError(f"Falha de rede ao renovar token Shopee: {exc.reason}")
     if not isinstance(data, dict) or data.get("error"):
         raise RuntimeError(f"Shopee recusou a renovação do token: {data.get('error') or 'resposta inválida'} {data.get('message') or ''}".strip())
-    access_token = str(data.get("access_token") or "").strip()
-    new_refresh = str(data.get("refresh_token") or "").strip()
-    if not access_token or not new_refresh:
-        raise RuntimeError("Shopee não retornou novos tokens durante a renovação.")
-    expire_in = int(data.get("expire_in") or 14400)
-    with DB_LOCK:
-        DB.execute(
-            """UPDATE shopee_integration
-               SET access_token=?,refresh_token=?,token_expires_at=?,updated_at=?,last_error=''
-               WHERE id=1""",
-            (access_token, new_refresh, int(time.time()) + max(60, expire_in), now_iso()),
-        )
-        DB.commit()
-    shopee_log_event("oauth_refresh", f"shop_id={shop_id}", "OK", "Access token renovado automaticamente.")
+    return data
+
+
+# V18.01: a chave de refresh da Shopee é de USO ÚNICO. Com os workers de pedidos
+# (60s) e de etiquetas (3min) batendo na Shopee ao mesmo tempo, duas renovações
+# concorrentes gastavam a mesma chave e a integração quebrava até reconectar.
+# Esta trava serializa a renovação: um renova, o outro espera e reaproveita.
+SHOPEE_TOKEN_LOCK = threading.Lock()
+
+
+def shopee_refresh_access_token(force: bool = False) -> sqlite3.Row:
     row = shopee_integration_row()
-    if not row:
-        raise RuntimeError("Integração Shopee desapareceu após renovar o token.")
-    return row
+    if not row or not str(row["shop_id"] or "").strip() or not str(row["refresh_token"] or "").strip():
+        raise RuntimeError("Shopee não possui refresh_token válido. Reconecte a loja.")
+    token_antes = str(row["access_token"] or "").strip()
+    if not force and _shopee_token_valido(row):
+        return row
+
+    with SHOPEE_TOKEN_LOCK:
+        # Relê sob a trava: outro processo pode ter renovado enquanto esperávamos.
+        row = shopee_integration_row()
+        if not row or not str(row["refresh_token"] or "").strip():
+            raise RuntimeError("Shopee não possui refresh_token válido. Reconecte a loja.")
+        # O token mudou (outro renovou) e ainda é utilizável: reaproveita, não
+        # gasta a chave de novo — vale inclusive no modo force (após um 401).
+        if str(row["access_token"] or "").strip() != token_antes and _shopee_token_valido(row, margem=60):
+            return row
+        if not force and _shopee_token_valido(row):
+            return row
+
+        shop_id = int(str(row["shop_id"]).strip())
+        refresh_token = str(row["refresh_token"] or "").strip()
+        data = _shopee_chamar_refresh(shop_id, refresh_token)
+        access_token = str(data.get("access_token") or "").strip()
+        new_refresh = str(data.get("refresh_token") or "").strip()
+        if not access_token or not new_refresh:
+            raise RuntimeError("Shopee não retornou novos tokens durante a renovação.")
+        expire_in = int(data.get("expire_in") or 14400)
+        with DB_LOCK:
+            DB.execute(
+                """UPDATE shopee_integration
+                   SET access_token=?,refresh_token=?,token_expires_at=?,updated_at=?,last_error=''
+                   WHERE id=1""",
+                (access_token, new_refresh, int(time.time()) + max(60, expire_in), now_iso()),
+            )
+            DB.commit()
+        shopee_log_event("oauth_refresh", f"shop_id={shop_id}", "OK", "Access token renovado automaticamente.")
+        row = shopee_integration_row()
+        if not row:
+            raise RuntimeError("Integração Shopee desapareceu após renovar o token.")
+        return row
 
 
 def shopee_api_get(path: str, params: dict[str, Any] | None = None, retry_auth: bool = True) -> dict[str, Any]:
@@ -6324,7 +6355,12 @@ def ml_access_token(*, force_refresh: bool = False) -> tuple[str, str]:
     )
     if not isinstance(payload, dict):
         raise RuntimeError("Resposta inválida ao renovar o token Mercado Livre.")
-    ml_store_token(payload, nickname=str(row["nickname"] or ""), preserve_refresh_if_missing=False, refresh_expected=True)
+    # V18.01: PRESERVE o refresh_token quando o ML responder sem um novo.
+    # Com preserve=False, uma resposta "access_token sem refresh_token" (cenário
+    # que o próprio ml_store_token já prevê) apagava a chave de renovação e a
+    # integração morria até reconectar à mão — derrubando o fim de semana inteiro.
+    # Manter a chave anterior é a única chance de continuar renovando.
+    ml_store_token(payload, nickname=str(row["nickname"] or ""), preserve_refresh_if_missing=True, refresh_expected=True)
     fresh = ml_integration_row()
     return str(fresh["access_token"]), str(fresh["seller_id"])
 
