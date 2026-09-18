@@ -3930,6 +3930,10 @@ function pdIniciarLoteV1787(pedidos,automatico){
 }
 async function pdLoteAutomaticoV1787(){
   if(!document.documentElement.dataset.noromakLinx||pdLoteAtualV1787)return;
+  // V17.93: a extensão 0.10+ lê os nomes sozinha, em segundo plano, sem depender
+  // desta aba. A leitura pela tela fica só para extensões antigas.
+  const v=String(document.documentElement.dataset.noromakLinx).split(".").map(Number);
+  if(v[0]>0||v[1]>=10)return;
   try{const t=Number(localStorage.getItem("noromak_lote_nfe_v1787")||0);if(Date.now()-t<4*60*1000)return;}catch(_){}
   let pend=[];try{pend=obterPedidosValidosBanco()||[]}catch(_){return}
   try{const d=await mlApiAdmin("/expedicao/api/cliente-fiscal/lista");clientesFiscaisV1786=d.clientes||{};}catch(_){return}

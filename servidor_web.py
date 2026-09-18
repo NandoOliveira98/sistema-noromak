@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.92-PEDIDOS-SHOPEE-AUTOMATICOS"
+APP_VERSION = "17.93-NOME-NFE-EM-SEGUNDO-PLANO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -9636,6 +9636,40 @@ def _cliente_fiscal_guardado(pedido: str) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+def pedidos_sem_nome_fiscal(dias: int = 10, limite: int = 40) -> dict[str, Any]:
+    """V17.93 — pedidos pendentes do Mercado Livre e da Shopee que ainda não têm
+    nome/CPF da nota guardados. A extensão lê esta lista em segundo plano, sem
+    depender de uma aba do admin aberta (a leitura pela tela parava em silêncio
+    quando a aba era fechada, congelada ou não recarregada)."""
+    corte = (datetime.now() - timedelta(days=dias)).strftime("%Y-%m-%d")
+    with DB_LOCK:
+        pendentes, _, _ = get_storage("conf_pedidos")
+        feitos = {
+            r["order_key"] for r in DB.execute(
+                "SELECT order_key FROM cliente_fiscal WHERE nome_fiscal<>'' AND documento_numero<>''"
+            ).fetchall()
+        }
+    saida: list[dict[str, str]] = []
+    vistos: set[str] = set()
+    for row in _rows_from_storage_value(pendentes):
+        if not isinstance(row, dict):
+            continue
+        marketplace = _vendas_marketplace(row.get("Marketplace") or row.get("Origem"))
+        if marketplace not in ("Mercado Livre", "Shopee"):
+            continue
+        pedido = str(order_number(row) or "").strip()
+        chave = normalize(pedido)
+        if not pedido or chave in vistos or chave in feitos:
+            continue
+        if _vendas_data_iso(row.get("Data do Pedido")) < corte:
+            continue
+        vistos.add(chave)
+        saida.append({"pedido": pedido, "marketplace": marketplace})
+        if len(saida) >= limite:
+            break
+    return {"ok": True, "pedidos": saida}
+
+
 def lista_cliente_fiscal(dias: int = 45) -> dict[str, Any]:
     """Tudo o que já foi lido nos últimos dias, por pedido. Para a Central."""
     limite = (datetime.now(timezone.utc) - timedelta(days=dias)).isoformat()
@@ -12122,6 +12156,16 @@ class AppHandler(BaseHTTPRequestHandler):
             try:
                 with DB_LOCK:
                     self.send_json(vendas_payload(inicio, fim))
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        # V17.93 — o que a extensão ainda precisa ler (segundo plano).
+        if path == "/api/cliente-fiscal/pendentes":
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            try:
+                self.send_json(pedidos_sem_nome_fiscal())
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return

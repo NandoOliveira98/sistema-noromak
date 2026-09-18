@@ -321,3 +321,39 @@ class PainelDaExtensaoNoAdmin(TesteNoromak):
             csp = r.headers.get("Content-Security-Policy", "")
         self.assertIn("frame-src 'self' chrome-extension:", csp)
         self.assertIn("frame-ancestors 'none'", csp, "o Noromak não pode ser embutido por outro site")
+
+
+class PedidosSemNomeFiscal(TesteNoromak):
+    """V17.93 — a lista que a extensão lê em segundo plano."""
+
+    def setUp(self):
+        super().setUp()
+        import time as _t
+        with S.DB_LOCK:
+            S.DB.execute("DELETE FROM cliente_fiscal")
+            S.DB.commit()
+        hoje = _t.strftime("%Y-%m-%d")
+        gravar_como_integracao([
+            linha("260918CRG96PFK", "A", uid="S1", Marketplace="SHOPEE", **{"Data do Pedido": hoje}),
+            linha("2000018514706508", "B", uid="M1", Marketplace="MERCADO LIVRE", **{"Data do Pedido": hoje}),
+            linha("MANUAL-1", "C", uid="X1", Marketplace="BALCAO", **{"Data do Pedido": hoje}),
+            linha("ANTIGO-1", "D", uid="S2", Marketplace="SHOPEE", **{"Data do Pedido": "2026-01-01"}),
+        ])
+
+    def pendentes(self):
+        status, corpo = self.cliente.pedir("GET", "/api/cliente-fiscal/pendentes")
+        self.assertEqual(status, 200, corpo)
+        return {p["pedido"]: p["marketplace"] for p in corpo["pedidos"]}
+
+    def test_lista_ml_e_shopee_recentes(self):
+        self.assertEqual(self.pendentes(), {"260918CRG96PFK": "Shopee", "2000018514706508": "Mercado Livre"})
+
+    def test_sai_da_lista_depois_de_lido(self):
+        self.cliente.pedir("POST", "/api/cliente-fiscal", {
+            "pedido": "260918CRG96PFK", "documento": "08677683470", "nome": "Janio Sergio Araujo"})
+        self.assertNotIn("260918CRG96PFK", self.pendentes())
+
+    def test_exige_admin(self):
+        from base import Cliente
+        status, _ = Cliente(self.url_base).pedir("GET", "/api/cliente-fiscal/pendentes")
+        self.assertIn(status, (401, 403))
