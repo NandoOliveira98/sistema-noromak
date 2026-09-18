@@ -364,12 +364,19 @@
     .pick-table td{font-size:.82rem}
     .pick-check{width:90px;text-align:center !important;border-left:1px solid var(--line-soft)}
     .pick-box{display:inline-block;width:18px;height:18px;border:2px solid #637488;border-radius:4px;vertical-align:middle}
+    .pick-remove{width:44px;text-align:center !important}
+    .pick-x{width:30px;height:30px;border:1px solid var(--line);border-radius:8px;background:#fff;color:#b42318;font-weight:800;cursor:pointer}
+    .pick-x:hover{background:#fff0ee;border-color:#efb6b2}
+    .pick-removed{margin-top:14px;padding:10px 12px;border:1px dashed #aebdcb;border-radius:10px;background:#f7f9fc;font-size:.84rem;color:var(--ink)}
+    .pick-removed small{color:var(--muted)}
+    .pick-removed-item{display:inline-flex;align-items:center;gap:6px;margin:6px 8px 0 0;padding:4px 6px 4px 10px;border:1px solid var(--line);border-radius:999px;background:#fff}
+    .pick-restore{border:0;background:none;color:var(--navy);font-weight:800;cursor:pointer;text-decoration:underline}
     @media print{
       body.printing-pick > *:not(#pickModal){display:none !important}
       body.printing-pick{background:#fff}
       .pick-modal{position:static;padding:0;background:none;overflow:visible}
       .pick-dialog{width:100%;padding:0;box-shadow:none}
-      .pick-actions{display:none}
+      .pick-actions,.no-print{display:none !important}
       .pick-table th{background:#fff;color:#000;border-bottom:1px solid #000}
       .pick-table tr{break-inside:avoid}
     }
@@ -486,9 +493,13 @@
       </div>
       <h3>Separar em Araçatuba <small>por prateleira</small></h3>
       <table class="pick-table">
-        <thead><tr><th>Localização</th><th>Código Apollo</th><th>Descrição</th><th class="num">Qtd.</th><th class="pick-check">Separado</th></tr></thead>
+        <thead><tr><th>Localização</th><th>Código Apollo</th><th>Descrição</th><th class="num">Qtd.</th><th class="pick-check">Separado</th><th class="pick-remove no-print"></th></tr></thead>
         <tbody id="pickBody"></tbody>
       </table>
+      <div id="pickRemovedBox" class="pick-removed no-print hidden">
+        <strong>Fora da lista</strong> <small>(não serão impressos nem baixados)</small>
+        <div id="pickRemoved"></div>
+      </div>
     </div>
   </div>
 
@@ -755,6 +766,7 @@
 
         state.data = data;
         apolloStore.clear();
+        pickRemoved.clear();
         state.fileName = file.name;
         state.updatedAt = detectUpdatedAt(parsed.rows);
         state.onlyNeed = false;
@@ -1103,7 +1115,24 @@
       }
 
       // V17.96: lista de separação — só o que Araçatuba tem e vai para o FULL,
-      // por código Apollo (kit conta cada componente), em ordem de prateleira.
+      // por código Apollo (kit conta cada componente), sempre em ordem de prateleira.
+      // V17.97: itens podem ser tirados da lista (e devolvidos) antes de imprimir.
+      const pickRemoved = new Set();
+
+      // Localização do Apollo: ZZ.9.14.A.99 — compara parte a parte, números como números
+      // (ZZ.9.9 antes de ZZ.9.14). Sem localização vai para o fim.
+      function compareLocation(a, b) {
+        if (!a.loc || !b.loc) return (a.loc ? 0 : 1) - (b.loc ? 0 : 1) || a.key.localeCompare(b.key, "pt-BR", { numeric: true });
+        const pa = a.loc.toUpperCase().split(/[.\-\s/]+/), pb = b.loc.toUpperCase().split(/[.\-\s/]+/);
+        for (let i = 0; i < Math.max(pa.length, pb.length); i += 1) {
+          const x = pa[i] ?? "", y = pb[i] ?? "";
+          if (x === y) continue;
+          if (/^\d+$/.test(x) && /^\d+$/.test(y)) return Number(x) - Number(y);
+          return x.localeCompare(y, "pt-BR", { numeric: true });
+        }
+        return a.key.localeCompare(b.key, "pt-BR", { numeric: true });
+      }
+
       function buildPickList() {
         const pick = new Map();
         state.data.forEach(item => {
@@ -1114,11 +1143,11 @@
             pick.set(p.key, row);
           });
         });
-        const byLoc = (a, b) => (a.loc || "~").localeCompare(b.loc || "~", "pt-BR", { numeric: true }) || a.key.localeCompare(b.key);
-        return { pick: [...pick.values()].sort(byLoc) };
+        const all = [...pick.values()].sort(compareLocation);
+        return { pick: all.filter(r => !pickRemoved.has(r.key)), removed: all.filter(r => pickRemoved.has(r.key)) };
       }
 
-      function openPickList() {
+      function renderPickList() {
         const list = buildPickList();
         const days = element("targetDays").value === "15" ? 15 : 30;
         const totalUnits = list.pick.reduce((s, r) => s + r.units, 0);
@@ -1126,8 +1155,17 @@
         element("pickBody").innerHTML = list.pick.map(r => `
           <tr><td class="code">${escapeHtml(r.loc || "sem localização")}</td><td class="code">${escapeHtml(r.key)}</td>
           <td>${escapeHtml(r.desc || "")}</td><td class="num"><strong>${formatNumber(r.units)}</strong></td>
-          <td class="pick-check"><span class="pick-box"></span></td></tr>`).join("")
-          || `<tr><td colspan="5" class="empty-state">Nada a separar.</td></tr>`;
+          <td class="pick-check"><span class="pick-box"></span></td>
+          <td class="pick-remove no-print"><button class="pick-x" type="button" data-remove="${escapeHtml(r.key)}" title="Tirar da lista">✕</button></td></tr>`).join("")
+          || `<tr><td colspan="6" class="empty-state">Nada a separar.</td></tr>`;
+        element("pickRemovedBox").classList.toggle("hidden", !list.removed.length);
+        element("pickRemoved").innerHTML = list.removed.map(r => `
+          <span class="pick-removed-item">${escapeHtml(r.loc || "sem localização")} · ${escapeHtml(r.key)} · ${escapeHtml(r.desc || "")} (${formatNumber(r.units)})
+          <button class="pick-restore" type="button" data-restore="${escapeHtml(r.key)}">devolver</button></span>`).join("");
+      }
+
+      function openPickList() {
+        renderPickList();
         element("pickModal").classList.remove("hidden");
         document.body.classList.add("printing-pick");
       }
@@ -1248,7 +1286,13 @@
       element("pickClose").addEventListener("click", closePickList);
       element("pickPrint").addEventListener("click", () => window.print());
       element("pickExport").addEventListener("click", exportPickList);
-      element("pickModal").addEventListener("click", (event) => { if (event.target === element("pickModal")) closePickList(); });
+      element("pickModal").addEventListener("click", (event) => {
+        if (event.target === element("pickModal")) { closePickList(); return; }
+        const remove = event.target.closest("[data-remove]");
+        const restore = event.target.closest("[data-restore]");
+        if (remove) { pickRemoved.add(remove.dataset.remove); renderPickList(); }
+        if (restore) { pickRemoved.delete(restore.dataset.restore); renderPickList(); }
+      });
       document.addEventListener("keydown", (event) => { if (event.key === "Escape" && !element("pickModal").classList.contains("hidden")) closePickList(); });
       document.querySelectorAll("th[data-key] .sort-button").forEach((button) => {
         button.addEventListener("click", () => {
