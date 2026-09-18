@@ -173,7 +173,7 @@
 
     .cards {
       display: grid;
-      grid-template-columns: repeat(8, minmax(135px, 1fr));
+      grid-template-columns: repeat(6, minmax(135px, 1fr));
       gap: 10px;
       margin-bottom: 14px;
     }
@@ -246,7 +246,7 @@
 
     table {
       width: 100%;
-      min-width: 2180px;
+      min-width: 1080px;
       border-collapse: separate;
       border-spacing: 0;
     }
@@ -293,7 +293,10 @@
     tbody tr:last-child td { border-bottom: 0; }
     .num { text-align: right; font-variant-numeric: tabular-nums; }
     .code { white-space: nowrap; }
-    .product { min-width: 320px; max-width: 460px; }
+    .product { min-width: 280px; max-width: 420px; }
+    .sub { display: block; margin-top: 2px; color: var(--muted); font-size: 0.74rem; font-weight: 400; }
+    .cover { white-space: nowrap; }
+    .cover .badge { min-height: 22px; padding: 2px 8px; margin-right: 6px; }
     .selected-need { background: #fff9ed; font-weight: 750; }
 
     .badge {
@@ -325,7 +328,7 @@
     }
 
     @media (max-width: 1320px) {
-      .cards { grid-template-columns: repeat(4, minmax(145px, 1fr)); }
+      .cards { grid-template-columns: repeat(3, minmax(145px, 1fr)); }
     }
 
     @media (max-width: 760px) {
@@ -358,7 +361,6 @@
     <div style="margin-top:12px;display:flex;gap:9px;flex-wrap:wrap">
         <a href="/expedicao/admin" class="button" style="background:#fff;color:#123b63;border-color:#fff">← Central Noromak</a>
         <span id="xlsxRuntimeStatus" style="display:inline-flex;align-items:center;padding:8px 11px;border-radius:9px;background:rgba(255,255,255,.14);font-size:12px;font-weight:700">Excel: verificando…</span>
-        <button id="apolloCheckTop" class="button" type="button" style="background:#f59b23;color:#172536;border-color:#f59b23">↻ Verificar estoque Apollo</button>
       </div>
     </div>
   </header>
@@ -383,27 +385,13 @@
 
       <div class="cards" aria-label="Resumo">
         <article class="card"><div class="card__label">Produtos</div><div id="kpiProducts" class="card__value">0</div></article>
-        <article class="card"><div class="card__label">Vendas em 30 dias</div><div id="kpiSales" class="card__value">0</div></article>
-        <article class="card"><div class="card__label">Unidades no Full</div><div id="kpiOccupied" class="card__value">0</div></article>
-        <article class="card card--urgent"><div class="card__label">Urgente</div><div id="kpiUrgent" class="card__value">0</div></article>
+        <article class="card card--urgent"><div class="card__label">Urgentes</div><div id="kpiUrgent" class="card__value">0</div></article>
         <article class="card card--attention"><div class="card__label">Atenção</div><div id="kpiAttention" class="card__value">0</div></article>
-        <article class="card card--ok"><div class="card__label">OK</div><div id="kpiOk" class="card__value">0</div></article>
-        <article class="card card--need"><div class="card__label">Necessidade 15 dias</div><div id="kpiNeed15" class="card__value">0</div></article>
-        <article class="card card--need"><div class="card__label">Necessidade 30 dias</div><div id="kpiNeed30" class="card__value">0</div></article>
+        <article class="card card--need"><div id="kpiNeedLabel" class="card__label">Unid. a enviar (30 dias)</div><div id="kpiNeed" class="card__value">0</div></article>
+        <article class="card card--ok"><div class="card__label">Possível enviar (Araçatuba)</div><div id="apolloKpiCanSend" class="card__value">—</div></article>
+        <article class="card card--urgent"><div class="card__label">SKUs com falta em Araçatuba</div><div id="apolloKpiShort" class="card__value">—</div></article>
       </div>
 
-      
-      <div class="apollo-panel">
-        <article class="apollo-card"><small>SKUs consultados no Apollo</small><strong id="apolloKpiChecked">0</strong></article>
-        <article class="apollo-card"><small>Estoque suficiente</small><strong id="apolloKpiOk">0</strong></article>
-        <article class="apollo-card"><small>Estoque insuficiente</small><strong id="apolloKpiShort">0</strong></article>
-        <article class="apollo-card"><small>Estoque não informado</small><strong id="apolloKpiUnknown">0</strong></article>
-        <article class="apollo-card"><small>Unid. possíveis de enviar</small><strong id="apolloKpiCanSend">0</strong></article>
-      </div>
-
-            <div class="message" style="margin:0 0 12px;border-color:#b9d2ef;background:#eef6ff;color:#123b63">
-        <b>SKU Apollo considerado:</b> somente o trecho após o primeiro “-”. Ex.: <b>157507-0893556005 → 0893556005</b> e <b>105341-816.0004-0 → 816.0004-0</b>.
-      </div>
       <div class="toolbar" aria-label="Filtros da análise">
         <label class="visually-hidden" for="searchInput">Buscar produto, SKU ou Código ML</label>
         <input id="searchInput" class="field field--search" type="search" placeholder="Buscar produto, SKU ou Código ML">
@@ -421,13 +409,7 @@
           <option value="15">Planejar para 15 dias</option>
           <option value="30" selected>Planejar para 30 dias</option>
         </select>
-        <select id="apolloBranch" class="field field--select" title="Estoque Apollo considerado">
-          <option value="0" selected>Estoque Apollo: todas as filiais</option>
-          <option value="1">Apollo: Araçatuba</option>
-          <option value="2">Apollo: Ribeirão</option>
-          <option value="3">Apollo: Bauru</option>
-        </select>
-        <button id="apolloCheck" class="button button--primary" type="button">↻ Verificar estoque Apollo</button>
+        <button id="apolloCheck" class="button button--primary" type="button">↻ Verificar estoque Araçatuba</button>
 
         <button id="onlyNeed" class="button" type="button" aria-pressed="false">Somente com reposição</button>
         <button id="clearFilters" class="button" type="button">Limpar filtros</button>
@@ -439,24 +421,15 @@
           <table>
             <thead>
               <tr>
-                <th data-key="rank"><button class="sort-button" type="button">Ranking</button></th>
-                <th data-key="priority"><button class="sort-button" type="button">Prioridade</button></th>
                 <th data-key="sku"><button class="sort-button" type="button">SKU</button></th>
-                <th data-key="code"><button class="sort-button" type="button">Código ML</button></th>
                 <th data-key="product"><button class="sort-button" type="button">Produto</button></th>
-                <th data-key="sales" class="num" aria-sort="descending"><button class="sort-button" type="button">Vendas 30 dias</button></th>
-                <th data-key="occupied" class="num"><button class="sort-button" type="button">Unid. no Full</button></th>
-                <th data-key="daily" class="num"><button class="sort-button" type="button">Venda diária</button></th>
-                <th data-key="need15" class="num"><button class="sort-button" type="button">Nec. 15 dias</button></th>
-                <th data-key="need30" class="num"><button class="sort-button" type="button">Nec. 30 dias</button></th>
-                <th data-key="coverage" class="num"><button class="sort-button" type="button">Cobertura</button></th>
-                <th data-key="status"><button class="sort-button" type="button">Status</button></th>
-                <th data-key="mlUrgency"><button class="sort-button" type="button">Urgência ML</button></th>
-                <th data-key="mlSend" class="num"><button class="sort-button" type="button">Estoque a enviar ML</button></th>
-                <th data-key="apolloAvailable" class="num"><button class="sort-button" type="button">Estoque Apollo</button></th>
+                <th data-key="sales" class="num" aria-sort="descending"><button class="sort-button" type="button">Vendas 30d</button></th>
+                <th data-key="occupied" class="num"><button class="sort-button" type="button">No Full</button></th>
+                <th data-key="coverage"><button class="sort-button" type="button">Cobertura</button></th>
+                <th data-key="needTarget" class="num"><button id="needHeader" class="sort-button" type="button">Enviar (30 dias)</button></th>
+                <th data-key="apolloAvailable" class="num"><button class="sort-button" type="button">Araçatuba</button></th>
                 <th data-key="apolloCanSend" class="num"><button class="sort-button" type="button">Possível enviar</button></th>
-                <th data-key="apolloShortage" class="num"><button class="sort-button" type="button">Falta no Apollo</button></th>
-                <th data-key="apolloSituation"><button class="sort-button" type="button">Situação Apollo</button></th>
+                <th data-key="apolloSituation"><button class="sort-button" type="button">Situação</button></th>
               </tr>
             </thead>
             <tbody id="resultsBody"></tbody>
@@ -466,7 +439,7 @@
       </div>
 
       <p class="method">
-        Regras do modelo: venda diária = vendas em 30 dias ÷ 30; necessidade = máximo entre venda diária × prazo menos unidades que ocupam espaço no Full e zero; cobertura = unidades no Full ÷ venda diária. Cobertura abaixo de 7 dias é URGENTE, de 7 a menos de 15 dias é ATENÇÃO e a partir de 15 dias é OK. Quando não há vendas, o modelo usa cobertura zero e classifica como URGENTE.
+        Regras do modelo: venda diária = vendas em 30 dias ÷ 30; necessidade = máximo entre venda diária × prazo menos unidades que ocupam espaço no Full e zero; cobertura = unidades no Full ÷ venda diária. Cobertura abaixo de 7 dias é URGENTE, de 7 a menos de 15 dias é ATENÇÃO e a partir de 15 dias é OK. Quando não há vendas, o modelo usa cobertura zero e classifica como URGENTE. Estoque considerado: somente Apollo Araçatuba (de onde sai o FULL), já descontado o que está no FULL. SKU Apollo = trecho após o primeiro “-” (157507-0893556005 → 0893556005). Só são consultados os SKUs com algo a enviar; o Apollo aceita 20 consultas por minuto.
       </p>
     </section>
   </main>
@@ -760,14 +733,12 @@
           return sum;
         }, { sales: 0, occupied: 0, need15: 0, need30: 0, URGENTE: 0, "ATENÇÃO": 0, OK: 0 });
 
+        const days = element("targetDays").value === "15" ? 15 : 30;
         element("kpiProducts").textContent = formatNumber(state.data.length);
-        element("kpiSales").textContent = formatNumber(totals.sales);
-        element("kpiOccupied").textContent = formatNumber(totals.occupied);
         element("kpiUrgent").textContent = formatNumber(totals.URGENTE);
         element("kpiAttention").textContent = formatNumber(totals["ATENÇÃO"]);
-        element("kpiOk").textContent = formatNumber(totals.OK);
-        element("kpiNeed15").textContent = formatNumber(totals.need15, 1);
-        element("kpiNeed30").textContent = formatNumber(totals.need30, 1);
+        element("kpiNeedLabel").textContent = `Unid. a enviar (${days} dias)`;
+        element("kpiNeed").textContent = formatNumber(state.data.reduce((sum, item) => sum + apolloTargetNeed(item), 0));
       }
 
       function compareValues(left, right, key) {
@@ -782,6 +753,7 @@
         const targetKey = element("targetDays").value === "15" ? "need15" : "need30";
         const multiplier = state.sortDirection === "asc" ? 1 : -1;
         apolloDerive();
+        element("needHeader").textContent = `Enviar (${element("targetDays").value === "15" ? 15 : 30} dias)`;
 
         state.filtered = state.data.filter((item) => {
           if (query && !normalizeText(`${item.product} ${item.sku} ${item.code}`).includes(query)) return false;
@@ -815,23 +787,14 @@
         emptyState.classList.add("hidden");
         body.innerHTML = state.filtered.map((item) => `
           <tr data-code="${escapeHtml(item.code)}">
-            <td class="num">${formatNumber(item.rank)}</td>
-            <td class="num">${formatNumber(item.priority)}</td>
-            <td class="code">${escapeHtml(item.sku || "—")}<div class="apollo-branches">Apollo: ${escapeHtml(skuApolloNormalizado(item.sku) || "—")}</div></td>
-            <td class="code">${escapeHtml(item.code || "—")}</td>
-            <td class="product">${escapeHtml(item.product)}</td>
+            <td class="code">${escapeHtml(item.sku || "—")}<span class="sub">Apollo: ${escapeHtml(skuApolloNormalizado(item.sku) || "—")}</span></td>
+            <td class="product">${escapeHtml(item.product)}<span class="sub">${escapeHtml(item.code || "")}</span></td>
             <td class="num">${formatNumber(item.sales)}</td>
             <td class="num">${formatNumber(item.occupied)}</td>
-            <td class="num">${formatNumber(item.daily, 2)}</td>
-            <td class="num ${targetKey === "need15" ? "selected-need" : ""}">${formatNumber(item.need15, 1)}</td>
-            <td class="num ${targetKey === "need30" ? "selected-need" : ""}">${formatNumber(item.need30, 1)}</td>
-            <td class="num">${formatNumber(item.coverage, 1)} dias</td>
-            <td>${statusBadge(item.status)}</td>
-            <td>${escapeHtml(item.mlUrgency || "—")}</td>
-            <td class="num">${formatNumber(item.mlSend)}</td>
-            <td class="num apollo-cell">${item.apolloAvailable===null?"—":formatNumber(item.apolloAvailable,0)}${item.apolloBranches?.length?`<div class="apollo-branches">${item.apolloBranches.map(b=>`${escapeHtml(b.casa||"Filial")}: ${b.disponivel===null||b.disponivel===undefined?"sem resposta":formatNumber(b.disponivel,0)}`).join(" · ")}</div>`:""}</td>
-            <td class="num"><strong>${item.apolloCanSend===null?"—":formatNumber(item.apolloCanSend,0)}</strong></td>
-            <td class="num">${item.apolloShortage===null?"—":formatNumber(item.apolloShortage,0)}</td>
+            <td class="cover">${statusBadge(item.status)}${formatNumber(item.coverage, 1)} dias</td>
+            <td class="num selected-need">${formatNumber(item.needTarget)}</td>
+            <td class="num">${item.apolloAvailable===null?"—":formatNumber(item.apolloAvailable)}</td>
+            <td class="num"><strong>${item.apolloCanSend===null?"—":formatNumber(item.apolloCanSend)}</strong></td>
             <td class="apollo-msg">${apolloBadge(item)}${item.apolloMessage?`<div class="apollo-branches">${escapeHtml(item.apolloMessage)}</div>`:""}${item.apolloError?`<div class="apollo-branches">${escapeHtml(item.apolloError)}</div>`:""}</td>
           </tr>
         `).join("");
@@ -861,79 +824,74 @@
       let apolloRunning = false;
       let apolloCancel = false;
 
+      // V17.95: o FULL sai de Araçatuba — só o estoque dessa casa conta.
+      const APOLLO_FILIAL_FULL = 1;
+
       function apolloDerive() {
-        const filial = Number(element("apolloBranch").value || 0);
         const needByCode = new Map();
         const rowsByCode = new Map();
         state.data.forEach(item => {
           const key = apolloKey(item);
-          if (!key) return;
           const need = apolloTargetNeed(item);
-          if (need > 0) {
+          item.needTarget = need;
+          if (key && need > 0) {
             needByCode.set(key, (needByCode.get(key) || 0) + need);
             rowsByCode.set(key, (rowsByCode.get(key) || 0) + 1);
           }
         });
+        const toAllocate = [];
         state.data.forEach(item => {
           const key = apolloKey(item);
-          const need = apolloTargetNeed(item);
+          const need = item.needTarget;
           const r = key ? apolloStore.get(key) : null;
           item.apolloAvailable = null; item.apolloCanSend = null; item.apolloShortage = null;
-          item.apolloBranches = []; item.apolloError = ""; item.apolloMessage = "";
-          if (!key) { item.apolloSituation = "SEM SKU"; item.apolloMessage = "Produto sem SKU."; return; }
-          if (!r) {
-            item.apolloSituation = need > 0 ? "NÃO CONSULTADO" : "SEM NECESSIDADE";
-            if (need <= 0) item.apolloMessage = "Nada a enviar neste prazo — não consultado.";
-            return;
-          }
+          item.apolloError = ""; item.apolloMessage = "";
+          if (!key) { item.apolloSituation = "SEM SKU"; return; }
+          if (!r) { item.apolloSituation = need > 0 ? "NÃO CONSULTADO" : "SEM NECESSIDADE"; return; }
           if (!r.ok) {
             item.apolloSituation = r.pending ? "NÃO CONSULTADO" : "NÃO ENCONTRADO";
             item.apolloError = r.error || "Falha na consulta ao Apollo.";
             return;
           }
-          const branches = Array.isArray(r.branches) ? r.branches : [];
-          const missing = new Set((r.missing_branches || []).map(Number));
-          item.apolloBranches = branches;
-          let available = null;
-          let atLeast = false;
-          if (filial) {
-            const row = branches.find(b => Number(b.revenda) === filial);
-            if (row && !missing.has(filial) && row.disponivel !== null && row.disponivel !== undefined) available = Number(row.disponivel);
-          } else if (r.stock_known) {
-            available = Number(r.available || 0);
-            atLeast = missing.size > 0;
-          }
-          if (available === null) {
+          const row = (Array.isArray(r.branches) ? r.branches : []).find(b => Number(b.revenda) === APOLLO_FILIAL_FULL);
+          const missing = (r.missing_branches || []).map(Number).includes(APOLLO_FILIAL_FULL);
+          if (!row || missing || row.disponivel === null || row.disponivel === undefined) {
+            // Casa sem resposta NÃO é zero.
             item.apolloSituation = "NÃO INFORMADO";
-            item.apolloError = filial ? "Esta casa não respondeu ao Apollo agora — não é zero. Consulte de novo." : "Nenhuma casa respondeu — não é zero. Consulte de novo.";
+            item.apolloError = "Araçatuba não respondeu agora. Consulte de novo.";
             return;
           }
-          available = Math.floor(available);
-          item.apolloAvailable = available;
-          const semResposta = [...missing].map(n => ({1:"Araçatuba",2:"Ribeirão",3:"Bauru"})[n] || `Filial ${n}`);
-          const piso = atLeast ? ` (pelo menos: ${semResposta.join(", ")} não respondeu)` : "";
-          if (need <= 0) {
-            item.apolloSituation = "SEM NECESSIDADE";
-            item.apolloMessage = `Nada a enviar neste prazo. Apollo tem ${formatNumber(available)} un.${piso}`;
-            return;
-          }
-          item.apolloCanSend = Math.min(need, available);
-          item.apolloShortage = Math.max(0, need - available);
-          if (available >= need) {
-            item.apolloSituation = "OK";
-            item.apolloMessage = `Pode enviar as ${formatNumber(need)} un. (Apollo tem ${formatNumber(available)})`;
-          } else if (available > 0) {
-            item.apolloSituation = "PARCIAL";
-            item.apolloMessage = `Possível enviar apenas ${formatNumber(available)} de ${formatNumber(need)} — é o disponível no Apollo${piso}`;
-          } else {
-            item.apolloSituation = atLeast ? "NÃO INFORMADO" : "SEM ESTOQUE";
-            item.apolloMessage = atLeast ? `Zero nas casas que responderam${piso}` : `Nada disponível no Apollo para enviar (precisa ${formatNumber(need)})`;
-          }
-          const totalNeed = needByCode.get(key) || 0;
-          if ((rowsByCode.get(key) || 0) > 1 && totalNeed > available) {
-            item.apolloMessage += ` · Mesmo código Apollo em ${rowsByCode.get(key)} anúncios: juntos precisam de ${formatNumber(totalNeed)}.`;
-          }
+          item.apolloAvailable = Math.floor(Number(row.disponivel) || 0);
+          if (need <= 0) { item.apolloSituation = "SEM NECESSIDADE"; return; }
+          toAllocate.push(item);
         });
+        // Anúncios com o mesmo código Apollo dividem o mesmo estoque:
+        // o mais urgente (depois o que mais vende) pega primeiro.
+        const remaining = new Map();
+        toAllocate
+          .sort((a, b) => a.priority - b.priority || b.sales - a.sales || a.sourceRow - b.sourceRow)
+          .forEach(item => {
+            const key = apolloKey(item);
+            const need = item.needTarget;
+            const available = item.apolloAvailable;
+            const left = remaining.has(key) ? remaining.get(key) : available;
+            const canSend = Math.min(need, left);
+            remaining.set(key, left - canSend);
+            item.apolloCanSend = canSend;
+            item.apolloShortage = need - canSend;
+            const shared = (rowsByCode.get(key) || 0) > 1 && (needByCode.get(key) || 0) > available;
+            if (canSend >= need) item.apolloSituation = "OK";
+            else if (canSend > 0) {
+              item.apolloSituation = "PARCIAL";
+              item.apolloMessage = `Possível enviar apenas ${formatNumber(canSend)} de ${formatNumber(need)}`;
+            } else {
+              item.apolloSituation = "SEM ESTOQUE";
+              item.apolloMessage = available > 0 ? "Estoque já reservado para outro anúncio do mesmo código" : "Nada em Araçatuba";
+            }
+            if (shared) {
+              item.apolloMessage += `${item.apolloMessage ? " · " : ""}Estoque de ${formatNumber(available)} dividido entre ${rowsByCode.get(key)} anúncios do mesmo código`;
+            }
+          });
       }
 
       function apolloBadge(item) {
@@ -948,16 +906,14 @@
 
       function renderApolloSummary() {
         const count = (...sits) => state.data.filter(x => sits.includes(x.apolloSituation)).length;
-        element("apolloKpiChecked").textContent = formatNumber(apolloStore.size);
-        element("apolloKpiOk").textContent = formatNumber(count("OK"));
-        element("apolloKpiShort").textContent = formatNumber(count("PARCIAL", "SEM ESTOQUE", "NÃO ENCONTRADO"));
-        element("apolloKpiUnknown").textContent = formatNumber(count("NÃO INFORMADO"));
-        element("apolloKpiCanSend").textContent = formatNumber(state.data.reduce((s, x) => s + (Number(x.apolloCanSend) || 0), 0));
+        const consulted = apolloStore.size > 0;
+        element("apolloKpiShort").textContent = consulted ? formatNumber(count("PARCIAL", "SEM ESTOQUE")) : "—";
+        element("apolloKpiCanSend").textContent = consulted ? formatNumber(state.data.reduce((s, x) => s + (Number(x.apolloCanSend) || 0), 0)) : "—";
       }
 
       function setApolloButtons(running) {
         [element("apolloCheck"), document.getElementById("apolloCheckTop")].filter(Boolean).forEach(b => {
-          b.textContent = running ? "■ Parar consulta Apollo" : "↻ Verificar estoque Apollo";
+          b.textContent = running ? "■ Parar consulta Apollo" : "↻ Verificar estoque Araçatuba";
         });
       }
 
@@ -1063,7 +1019,7 @@
           "Status": item.status,
           "Urgência de envio ML": item.mlUrgency,
           "Estoque a enviar ML": item.mlSend,
-          "Estoque disponível Apollo": item.apolloAvailable,
+          "Estoque Araçatuba (Apollo)": item.apolloAvailable,
           "Possível enviar": item.apolloCanSend,
           "Falta no Apollo": item.apolloShortage,
           "Situação Apollo": item.apolloSituation,
@@ -1106,15 +1062,11 @@
       element("changeFile").addEventListener("click", () => element("fileInput").click());
       element("apolloCheck").addEventListener("click", verificarEstoqueApollo);
       document.getElementById("apolloCheckTop")?.addEventListener("click", verificarEstoqueApollo);
-      element("apolloBranch").addEventListener("change", () => {
-        if (state.data.length) applyFilters();
-        renderApolloSummary();
-      });
-
       element("searchInput").addEventListener("input", applyFilters);
       element("statusFilter").addEventListener("change", applyFilters);
       element("targetDays").addEventListener("change", () => {
         applyFilters();
+        renderSummary();
         renderApolloSummary();
       });
       element("onlyNeed").addEventListener("click", () => {

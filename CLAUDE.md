@@ -238,6 +238,8 @@ Alimenta Precificador e Central de Pendências.
 respondeu — **nunca** tratar como zero. `/custo` e `/estoque` dividem o limite de 20
 chamadas/min: `crm_rate_acquire`; em `/api/full/apollo-stock` com `nao_esperar` o que não
 cabe volta `pending` + `retry_after` e a Demanda Full reenvia sozinha.
+A Demanda Full (V17.95) considera **somente Araçatuba** (revenda 1, de onde sai o FULL) e
+divide o estoque entre anúncios do mesmo código Apollo, mais urgente primeiro.
 
 **Botão Cliente (V17.85):** atualiza o cadastro no **Linx DMS** (ERP em `10.1.15.1`, rede
 do escritório — a VPS não alcança). O servidor só entrega CPF/CNPJ e nome de "Dados para
