@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.99.1-VENDAS-ML-CORRIGIDO"
+APP_VERSION = "18.00-DEMANDA-DE-COMPRA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -1680,6 +1680,14 @@ def init_db() -> None:
                 PRIMARY KEY(marketplace, order_id, line_key)
             );
             CREATE INDEX IF NOT EXISTS idx_vendas_v1799_day ON vendas_v1799(sale_day, marketplace);
+            -- V18.00: fornecedores da Demanda de Compra (pedido mínimo, prazo,
+            -- cobertura e as regras que dizem quais peças são de cada um).
+            CREATE TABLE IF NOT EXISTS compras_fornecedores_v1800 (
+                nome TEXT PRIMARY KEY,
+                config TEXT NOT NULL DEFAULT '{}',
+                updated_at TEXT NOT NULL,
+                updated_by TEXT NOT NULL DEFAULT ''
+            );
             CREATE TABLE IF NOT EXISTS vendas_meta_v1799 (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL DEFAULT ''
@@ -11742,6 +11750,197 @@ def vendas_dashboard_payload(date_from: str, date_to: str, marketplace: str = ""
     }
 
 
+# ---------------------------------------------------------------------------
+# V18.00: Demanda de Compra (versão provisória). Enquanto o Apollo não entrega a
+# rota de vendas por período (PEDIDO_ROTA_DEMANDA_APOLLO.md), a demanda usa:
+#   - vendas do ML e da Shopee (vendas_v1799) — não enxerga balcão/oficina;
+#   - custo e curva da lista do Precificador (código = código Apollo);
+#   - estoque do Apollo pela mesma rota da Demanda Full (no navegador).
+# Marca não existe no cadastro: cada fornecedor é definido por regras.
+# ---------------------------------------------------------------------------
+def _compras_normalizar_lista(valor: Any) -> list[str]:
+    if isinstance(valor, str):
+        valor = re.split(r"[\n,;]+", valor)
+    if not isinstance(valor, list):
+        return []
+    out: list[str] = []
+    for item in valor:
+        texto = str(item or "").strip().upper()
+        if texto and texto not in out:
+            out.append(texto)
+    return out[:2000]
+
+
+def compras_fornecedor_config(body: dict[str, Any]) -> dict[str, Any]:
+    def numero(chave: str, padrao: float, minimo: float, maximo: float) -> float:
+        try:
+            return max(minimo, min(maximo, float(body.get(chave, padrao))))
+        except (TypeError, ValueError):
+            return padrao
+    return {
+        "pedido_minimo": round(numero("pedido_minimo", 0, 0, 10_000_000), 2),
+        "prazo": int(numero("prazo", 7, 0, 365)),
+        "cobertura": int(numero("cobertura", 30, 0, 365)),
+        "prefixos": _compras_normalizar_lista(body.get("prefixos")),
+        "palavras": _compras_normalizar_lista(body.get("palavras")),
+        "codigos": _compras_normalizar_lista(body.get("codigos")),
+    }
+
+
+def compras_fornecedores() -> list[dict[str, Any]]:
+    with DB_LOCK:
+        rows = DB.execute("SELECT nome, config, updated_at, updated_by FROM compras_fornecedores_v1800 ORDER BY nome").fetchall()
+    out = []
+    for r in rows:
+        try:
+            cfg = json.loads(r["config"] or "{}")
+        except Exception:
+            cfg = {}
+        out.append({"nome": r["nome"], **compras_fornecedor_config(cfg), "atualizado_em": r["updated_at"], "atualizado_por": r["updated_by"]})
+    return out
+
+
+def compras_salvar_fornecedor(nome: str, body: dict[str, Any], usuario: str) -> dict[str, Any]:
+    nome = re.sub(r"\s+", " ", str(nome or "").strip().upper())[:80]
+    if not nome:
+        raise ValueError("Informe o nome do fornecedor/marca.")
+    cfg = compras_fornecedor_config(body)
+    if not (cfg["prefixos"] or cfg["palavras"] or cfg["codigos"]):
+        raise ValueError("Informe ao menos uma regra: começo do código, palavra na descrição ou lista de códigos.")
+    with DB_LOCK:
+        DB.execute(
+            "INSERT INTO compras_fornecedores_v1800(nome,config,updated_at,updated_by) VALUES(?,?,?,?) "
+            "ON CONFLICT(nome) DO UPDATE SET config=excluded.config, updated_at=excluded.updated_at, updated_by=excluded.updated_by",
+            (nome, json.dumps(cfg, ensure_ascii=False), now_iso(), usuario),
+        )
+        DB.commit()
+    return {"nome": nome, **cfg}
+
+
+def compras_excluir_fornecedor(nome: str) -> None:
+    with DB_LOCK:
+        DB.execute("DELETE FROM compras_fornecedores_v1800 WHERE nome=?", (str(nome or "").strip().upper(),))
+        DB.commit()
+
+
+def _compras_produtos_precificador() -> dict[str, dict[str, Any]]:
+    """Código Apollo -> {descricao, custo, curva}, a partir da lista do Precificador."""
+    raw, _, _ = get_storage("precificador_online_v1")
+    try:
+        dados = json.loads(raw or "{}")
+    except Exception:
+        dados = {}
+    produtos = dados.get("products") if isinstance(dados, dict) else None
+    out: dict[str, dict[str, Any]] = {}
+    for p in produtos if isinstance(produtos, list) else []:
+        if not isinstance(p, dict) or p.get("isKit"):
+            continue
+        codigo = str(p.get("sku") or "").strip().upper()
+        if not codigo or codigo in out:
+            continue
+        custo = _money_number(p.get("custo"))
+        out[codigo] = {
+            "descricao": str(p.get("produto") or "").strip(),
+            "custo": round(float(custo), 4) if custo is not None and custo > 0 else None,
+            "curva": normalize_abc_curve_value(p.get("curva")) or "",
+        }
+    return out
+
+
+def _compras_codigo(sku: str, conhecidos: dict[str, Any]) -> str:
+    """SKU do anúncio -> código Apollo (o do Precificador). Aceita o código puro
+    e o formato prefixo-código (ex.: 157507-0893556005)."""
+    s = str(sku or "").strip().upper()
+    if not s:
+        return ""
+    if s in conhecidos:
+        return s
+    if "-" in s:
+        antes, depois = s.split("-", 1)
+        for candidato in (depois.strip(), antes.strip()):
+            if candidato in conhecidos:
+                return candidato
+    return ""
+
+
+def compras_vendas_por_codigo(dias: int, conhecidos: dict[str, Any]) -> tuple[dict[str, dict[str, int]], dict[str, int]]:
+    """Unidades vendidas por código Apollo nos últimos `dias` (ML e Shopee).
+    Kit vira as unidades de cada componente; "A/B" (anúncio com duas peças) conta
+    uma de cada."""
+    desde = (datetime.now(BR_TZ).date() - timedelta(days=max(1, dias) - 1)).isoformat()
+    with DB_LOCK:
+        rows = DB.execute(
+            "SELECT sku, marketplace, SUM(qty) AS qtd FROM vendas_v1799 WHERE sale_day >= ? GROUP BY sku, marketplace",
+            (desde,),
+        ).fetchall()
+    kits = full_kit_compositions([r["sku"] for r in rows])
+    vendas: dict[str, dict[str, int]] = {}
+    sem_codigo: dict[str, int] = {}
+    for r in rows:
+        sku = str(r["sku"] or "").strip()
+        qtd = int(r["qtd"] or 0)
+        if not sku or qtd <= 0:
+            continue
+        comps = (kits.get(sku) or {}).get("componentes")
+        if not comps:
+            partes = [x for x in sku.split("/") if x.strip()] if "/" in sku else [sku]
+            comps = [{"sku": x, "quantidade": 1} for x in partes]
+        for c in comps:
+            codigo = _compras_codigo(c["sku"], conhecidos)
+            if not codigo:
+                sem_codigo[sku] = sem_codigo.get(sku, 0) + qtd
+                continue
+            alvo = vendas.setdefault(codigo, {"ml": 0, "shopee": 0})
+            alvo[r["marketplace"]] = alvo.get(r["marketplace"], 0) + qtd * int(c["quantidade"])
+    return vendas, sem_codigo
+
+
+def compras_demanda_payload(fornecedor: str, dias: int) -> dict[str, Any]:
+    nome = str(fornecedor or "").strip().upper()
+    cfg = next((f for f in compras_fornecedores() if f["nome"] == nome), None)
+    if not cfg:
+        raise ValueError("Fornecedor não cadastrado.")
+    dias = max(7, min(365, int(dias or 60)))
+    produtos = _compras_produtos_precificador()
+    # Marca preenchida no cadastro de produtos também conta.
+    raw, _, _ = get_storage("conf_produtos")
+    marca_cadastro: set[str] = set()
+    for p in _rows_from_storage_value(raw):
+        if str(p.get("Marca") or "").strip().upper() == nome:
+            codigo = _compras_codigo(str(p.get("SKU") or ""), produtos)
+            if codigo:
+                marca_cadastro.add(codigo)
+    codigos = set(cfg["codigos"])
+
+    def do_fornecedor(codigo: str, desc: str) -> bool:
+        texto = desc.upper()
+        return (codigo in codigos or codigo in marca_cadastro
+                or any(codigo.startswith(p) for p in cfg["prefixos"])
+                or any(p in texto for p in cfg["palavras"]))
+
+    vendas, sem_codigo = compras_vendas_por_codigo(dias, produtos)
+    itens = []
+    for codigo, p in produtos.items():
+        if not do_fornecedor(codigo, p["descricao"]):
+            continue
+        v = vendas.get(codigo, {})
+        itens.append({"codigo": codigo, "descricao": p["descricao"], "curva": p["curva"], "custo": p["custo"],
+                      "vendido": int(v.get("ml", 0) + v.get("shopee", 0)),
+                      "vendido_ml": int(v.get("ml", 0)), "vendido_shopee": int(v.get("shopee", 0))})
+    itens.sort(key=lambda x: (-x["vendido"], x["codigo"]))
+    with DB_LOCK:
+        primeiro = DB.execute("SELECT MIN(sale_day) AS d FROM vendas_v1799").fetchone()["d"]
+    return {
+        "ok": True,
+        "fornecedor": cfg,
+        "dias": dias,
+        "vendas_desde": primeiro or "",
+        "itens": itens,
+        "sem_custo": sum(1 for x in itens if x["custo"] is None),
+        "anuncios_sem_codigo": len(sem_codigo),
+    }
+
+
 def _ml_profitability_local_sales(limit: int = 300) -> list[dict[str, Any]]:
     """Monta as vendas locais para a rentabilidade, preservando kits como uma venda única.
 
@@ -12758,6 +12957,24 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.handle_sku_history_get(query)
             return
         # V17.83 — o que vendeu no período, agregado por SKU. Somente leitura.
+        if path == "/api/compras/fornecedores":
+            if self.auth(admin_only=True) is None:
+                return
+            self.send_json({"ok": True, "fornecedores": compras_fornecedores()})
+            return
+        if path == "/api/compras/demanda":
+            # V18.00: demanda de compra por fornecedor (versão provisória).
+            if self.auth(admin_only=True) is None:
+                return
+            try:
+                fornecedor = str((query.get("fornecedor") or [""])[0] or "")
+                dias = int(str((query.get("dias") or ["60"])[0] or "60"))
+                self.send_json(compras_demanda_payload(fornecedor, dias))
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
         if path == "/api/dashboard/vendas":
             # V17.99: Dashboard de vendas (Mercado Livre e Shopee, com valor).
             ctx = self.auth(admin_only=True)
@@ -12909,6 +13126,8 @@ class AppHandler(BaseHTTPRequestHandler):
             # V17.99: Central de Pendências e Promoções ML foram removidas; os endereços antigos abrem o Admin.
             "/pendencias": "admin", "/pendencias/": "admin", "/central-pendencias": "admin", "/central-pendencias/": "admin", "/central-pendencias.html": "admin",
             "/promocoes-ml": "admin", "/promocoes-ml/": "admin", "/promocoes-ml.html": "admin",
+            # V18.00: Demanda de Compra.
+            "/compras": "admin", "/compras/": "admin", "/compras.html": "admin",
             "/estacao-impressao": "estacao", "/estacao-impressao/": "estacao", "/estacao-impressao.html": "estacao",
             "/print-station": "estacao", "/print-station/": "estacao",
             "/precificador": "precificador", "/precificador/": "precificador", "/precificador.html": "precificador",
@@ -12946,6 +13165,24 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.send_json(resultado, 200 if resultado.get("ok") else 400)
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/compras/fornecedores":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                try:
+                    body = self.read_json()
+                    if body.get("excluir"):
+                        compras_excluir_fornecedor(str(body.get("nome") or ""))
+                        audit(ctx["username"], "compras.fornecedor.excluir", str(body.get("nome") or "")[:80])
+                        self.send_json({"ok": True, "fornecedores": compras_fornecedores()})
+                        return
+                    salvo = compras_salvar_fornecedor(str(body.get("nome") or ""), body, ctx["username"])
+                    audit(ctx["username"], "compras.fornecedor.salvar", salvo["nome"])
+                    self.send_json({"ok": True, "fornecedor": salvo, "fornecedores": compras_fornecedores()})
+                except ValueError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 400)
+                except Exception as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 500)
             return
         if path == "/api/dashboard/vendas/sincronizar":
             # V17.99: sincronização manual das vendas (roda em segundo plano).
@@ -15237,6 +15474,9 @@ class AppHandler(BaseHTTPRequestHandler):
             "/print-station": "estacao-impressao.html",
             "/print-station/": "estacao-impressao.html",
             "/promocoes-ml": "admin.html",
+            "/compras": "compras.html",
+            "/compras/": "compras.html",
+            "/compras.html": "compras.html",
             "/promocoes-ml/": "admin.html",
             "/promocoes-ml.html": "admin.html",
             "/rentabilidade-ml": "rentabilidade-ml.html",

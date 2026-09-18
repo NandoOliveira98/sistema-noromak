@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Noromak · Demanda de Compra</title>
+<!-- V18.00: Demanda de Compra (versão provisória — vendas ML + Shopee). -->
+<style>
+:root{--navy:#123b63;--navy2:#1c578b;--orange:#f59b23;--ink:#172536;--muted:#637488;--page:#eef3f8;--line:#d4dee9;--soft:#e8eef4;
+--ok:#16764a;--okbg:#eaf8f0;--warn:#8a5a00;--warnbg:#fff6dc;--bad:#b42318;--badbg:#fff0ee;--comp:#6d3fc0;--compbg:#f2ecfd;--nec:#2a78d6;--compl:#8b6fd6}
+*{box-sizing:border-box}body{margin:0;background:var(--page);color:var(--ink);font-family:"Segoe UI",Arial,sans-serif;font-size:14px}
+button,input,select,textarea{font:inherit}
+.top{background:linear-gradient(120deg,var(--navy),var(--navy2));border-bottom:4px solid var(--orange);color:#fff}
+.top>div{width:min(1560px,calc(100% - 32px));margin:0 auto;padding:18px 0;display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap}
+.top h1{margin:0;font-size:22px}.top p{margin:5px 0 0;color:#dce8f4;font-size:13px}
+.top a{color:#123b63;background:#fff;border-radius:10px;padding:9px 13px;text-decoration:none;font-weight:800;font-size:13px}
+main{width:min(1560px,calc(100% - 32px));margin:0 auto;padding:18px 0 40px}
+.aviso{padding:10px 14px;border-radius:10px;background:#fff7e6;border:1px solid #f5d28f;color:#7a4b00;font-size:12.5px;margin-bottom:14px;line-height:1.5}
+.msg{padding:10px 14px;border-radius:10px;margin-bottom:12px;font-size:13px}.msg.ok{background:#edf9f2;border:1px solid #a7d6bd;color:#125d3b}.msg.erro{background:#fff1f0;border:1px solid #efb6b2;color:#8f1d16}
+.hidden{display:none!important}
+.card{background:#fff;border:1px solid var(--line);border-radius:13px;padding:14px;margin-bottom:12px}
+.cfg{display:grid;grid-template-columns:minmax(200px,1.3fr) repeat(4,minmax(110px,1fr)) auto auto;gap:10px;align-items:end}
+label.f{display:flex;flex-direction:column;gap:5px;font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
+label.f select,label.f input,label.f textarea{font-size:14px;font-weight:600;color:var(--ink);text-transform:none;letter-spacing:0;padding:9px 10px;border:1px solid var(--line);border-radius:9px;background:#fff;min-height:40px}
+label.f small{font-weight:600;text-transform:none;letter-spacing:0;color:#8a99a8}
+.btn{font-weight:800;border-radius:10px;padding:10px 15px;min-height:40px;cursor:pointer;border:1px solid var(--line);background:#fff;color:var(--navy);white-space:nowrap}
+.btn.pri{background:var(--navy);border-color:var(--navy);color:#fff}.btn.acc{background:var(--orange);border-color:var(--orange);color:#172536}
+.btn.del{color:var(--bad);border-color:#efb6b2}.btn:disabled{opacity:.55;cursor:not-allowed}
+.editor{display:grid;grid-template-columns:repeat(3,minmax(0,1fr)) repeat(3,minmax(110px,.5fr));gap:10px;align-items:start;margin-top:12px;padding-top:12px;border-top:1px dashed var(--line)}
+.editor textarea{min-height:64px;resize:vertical}
+.editor .acoes{grid-column:1/-1;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
+.kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-bottom:12px}
+.kpi{background:#fff;border:1px solid var(--line);border-radius:13px;padding:13px 15px}
+.kpi small{display:block;font-size:10.5px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.kpi b{display:block;margin-top:5px;font-size:clamp(17px,1.5vw,22px);color:#143957;font-variant-numeric:tabular-nums;white-space:nowrap}
+.kpi span{display:block;margin-top:4px;font-size:11px;color:var(--muted)}
+.meta-top{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap}
+.meta-top strong{font-size:14px;color:var(--navy)}.meta-top em{font-style:normal;font-size:12.5px;font-weight:800}
+.bar{height:12px;border-radius:6px;background:var(--soft);margin-top:9px;overflow:hidden;display:flex;gap:2px}
+.bar i{display:block;height:12px}.bar .n{background:var(--nec)}.bar .c{background:var(--compl)}
+.leg{display:flex;gap:14px;margin-top:7px;font-size:11.5px;color:var(--muted);flex-wrap:wrap}.leg span:before{content:"";display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px;vertical-align:-1px;background:var(--c)}
+.tools{display:flex;gap:9px;align-items:center;flex-wrap:wrap;background:#fff;border:1px solid var(--line);border-bottom:0;border-radius:13px 13px 0 0;padding:11px 12px}
+.tools input[type=search]{flex:1 1 240px;padding:9px 11px;border:1px solid var(--line);border-radius:9px;min-height:40px}
+.tools label{font-size:12.5px;font-weight:700;color:var(--navy);display:flex;gap:6px;align-items:center}
+.panel{background:#fff;border:1px solid var(--line);border-radius:0 0 13px 13px;overflow:auto;max-height:64vh}
+table{width:100%;min-width:1320px;border-collapse:separate;border-spacing:0}
+th{position:sticky;top:0;z-index:2;background:var(--navy);color:#fff;font-size:11px;font-weight:800;text-align:left;padding:10px 8px;white-space:nowrap}
+td{padding:8px;border-bottom:1px solid var(--soft);font-size:12.5px;vertical-align:middle}
+.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+tr.off td{color:#9aa7b4}
+.desc b{display:block;font-weight:700}.desc small{color:#8a99a8;font-size:11px}
+.curva{display:inline-block;min-width:22px;text-align:center;border-radius:6px;font-weight:900;font-size:11px;padding:2px 5px;background:#eef3f8;color:var(--navy)}.curva.A{background:#e3efff;color:#1c4f93}
+.cob{display:inline-flex;align-items:center;gap:5px;font-weight:800;font-size:11px;border-radius:999px;padding:3px 8px;white-space:nowrap}
+.cob.bad{background:var(--badbg);color:var(--bad)}.cob.warn{background:var(--warnbg);color:var(--warn)}.cob.ok{background:var(--okbg);color:var(--ok)}.cob.nd{background:#eef3f8;color:var(--muted)}
+.qty{width:70px;font-weight:800;text-align:right;padding:5px 7px;border:1px solid var(--line);border-radius:7px}
+.cam{width:62px;text-align:right;padding:5px 7px;border:1px dashed #b9c7d6;border-radius:7px}
+.tag{display:inline-block;font-size:10.5px;font-weight:800;border-radius:6px;padding:2px 6px;margin-top:3px}
+.tag.comp{background:var(--compbg);color:var(--comp)}.tag.edit{background:#eef3f8;color:var(--muted)}.tag.semcusto{background:var(--warnbg);color:var(--warn)}
+.foot{margin:10px 2px 0;color:var(--muted);font-size:12px;line-height:1.6}
+.formula{display:inline-block;background:#fff;border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-family:Consolas,monospace;font-size:12px;color:var(--navy)}
+.vazio{padding:28px;text-align:center;color:var(--muted)}
+@media(max-width:1180px){.cfg{grid-template-columns:1fr 1fr}.editor{grid-template-columns:1fr 1fr}.kpis{grid-template-columns:repeat(2,1fr)}}
+</style>
+<script src="/expedicao/xlsx.full.min.js"></script>
+<script defer src="/expedicao/web-auth.js"></script>
+</head>
+<body>
+<header class="top"><div>
+  <div><h1>Demanda de Compra</h1><p>Quanto comprar de cada fornecedor para não zerar o estoque, até o pedido mínimo.</p></div>
+  <a href="/expedicao/admin">← Central Noromak</a>
+</div></header>
+<main>
+  <div class="aviso"><b>Versão provisória.</b> As vendas usadas são só do <b>Mercado Livre e da Shopee</b> — o que sai no balcão e na oficina ainda não entra, então a compra sugerida tende a ficar <b>abaixo</b> do real. O sistema também não sabe o que já foi comprado e está a caminho: preencha a coluna <b>A caminho</b>. Quando o Apollo entregar a rota de vendas por período (pedido já enviado), a tela passa a usar as vendas de todos os canais.</div>
+  <div id="msg" class="msg hidden" role="status" aria-live="polite"></div>
+
+  <section class="card" aria-label="Fornecedor">
+    <div class="cfg">
+      <label class="f">Fornecedor / marca<select id="fornecedor"></select></label>
+      <label class="f">Pedido mínimo<input id="minimo" type="number" min="0" step="100"><small>pelo custo do Precificador</small></label>
+      <label class="f">Prazo de entrega<input id="prazo" type="number" min="0" step="1"><small>dias até chegar</small></label>
+      <label class="f">Cobertura desejada<input id="cobertura" type="number" min="0" step="1"><small>dias de estoque após chegar</small></label>
+      <label class="f">Período de vendas<select id="periodo"><option value="30">30 dias</option><option value="60" selected>60 dias</option><option value="90">90 dias</option><option value="180">180 dias</option></select><small>base da média diária</small></label>
+      <button id="editarBtn" class="btn" type="button">✎ Editar fornecedor</button>
+      <button id="novoBtn" class="btn pri" type="button">＋ Novo fornecedor</button>
+    </div>
+    <div id="editor" class="editor hidden">
+      <label class="f">Nome<input id="edNome" maxlength="80" placeholder="Ex.: SCHULZ"></label>
+      <label class="f">Código começa com<textarea id="edPrefixos" placeholder="Ex.: 089 (um por linha)"></textarea><small>ex.: Wurth = 089</small></label>
+      <label class="f">Palavras na descrição<textarea id="edPalavras" placeholder="Ex.: SCHULZ"></textarea><small>descrição do Precificador</small></label>
+      <label class="f">Pedido mínimo<input id="edMinimo" type="number" min="0" step="100"></label>
+      <label class="f">Prazo (dias)<input id="edPrazo" type="number" min="0" step="1"></label>
+      <label class="f">Cobertura (dias)<input id="edCobertura" type="number" min="0" step="1"></label>
+      <label class="f" style="grid-column:1/-1">Lista de códigos (opcional)<textarea id="edCodigos" placeholder="Códigos Apollo, um por linha ou separados por vírgula"></textarea><small>Peças com a Marca preenchida no cadastro de produtos também entram.</small></label>
+      <div class="acoes">
+        <button id="edExcluir" class="btn del" type="button">Excluir fornecedor</button>
+        <button id="edCancelar" class="btn" type="button">Cancelar</button>
+        <button id="edSalvar" class="btn pri" type="button">Salvar fornecedor</button>
+      </div>
+    </div>
+  </section>
+
+  <div id="conteudo" class="hidden">
+    <section class="kpis">
+      <div class="kpi"><small>Peças do fornecedor</small><b id="kItens">0</b><span id="kItensSub"></span></div>
+      <div class="kpi"><small>Itens a comprar</small><b id="kComprar">0</b><span id="kComprarSub"></span></div>
+      <div class="kpi"><small>Unidades</small><b id="kUn">0</b><span>no pedido</span></div>
+      <div class="kpi"><small>Valor do pedido</small><b id="kValor">R$ 0</b><span id="kValorSub"></span></div>
+      <div class="kpi"><small>Zerando antes de chegar</small><b id="kRisco">0</b><span>cobertura menor que o prazo</span></div>
+    </section>
+
+    <section class="card">
+      <div class="meta-top"><strong id="metaTitulo">Pedido mínimo</strong><em id="metaStatus"></em></div>
+      <div class="bar" id="metaBar"><i class="n"></i><i class="c"></i></div>
+      <div class="leg"><span style="--c:var(--nec)">Necessidade (para não zerar)</span><span style="--c:var(--compl)">Complemento até o mínimo</span></div>
+    </section>
+
+    <div class="tools">
+      <input id="busca" type="search" placeholder="Buscar código ou descrição">
+      <label><input id="soComprar" type="checkbox" checked> Só o que entra no pedido</label>
+      <label><input id="completar" type="checkbox" checked> Completar até o mínimo</label>
+      <button id="estoqueBtn" class="btn" type="button">↻ Atualizar estoque Apollo</button>
+      <button id="exportar" class="btn acc" type="button">⬇ Gerar planilha de compra</button>
+    </div>
+    <div class="panel">
+      <table>
+        <thead><tr>
+          <th></th><th>Código</th><th>Descrição</th><th>Curva</th><th class="n">Vendido</th><th class="n">Média/dia</th>
+          <th class="n">Estoque</th><th class="n">A caminho</th><th>Cobertura hoje</th><th class="n">Necessidade</th>
+          <th class="n">Comprar</th><th class="n">Custo un.</th><th class="n">Total</th>
+        </tr></thead>
+        <tbody id="linhas"></tbody>
+      </table>
+    </div>
+    <p class="foot">
+      <span class="formula">necessidade = média diária × (prazo + cobertura) − estoque − a caminho</span><br>
+      <b>Estoque</b> = disponível no Apollo na rede inteira (já sem o que está no FULL). <b>Vendido</b> = unidades no ML e na Shopee no período (kit conta cada peça).
+      <b>Complemento até o mínimo:</b> se a necessidade não chega ao pedido mínimo, o sistema acrescenta unidades nos itens curva A e B que vão acabar primeiro, uma a uma, sem passar de 2× a cobertura desejada.
+      Quantidade e "A caminho" são editáveis; desmarque para tirar um item do pedido.
+    </p>
+  </div>
+  <div id="semFornecedor" class="card vazio">Cadastre o primeiro fornecedor em <b>＋ Novo fornecedor</b>: informe o pedido mínimo, o prazo e como reconhecer as peças dele (começo do código, palavra na descrição ou lista de códigos).</div>
+</main>
+
+<script>
+(() => {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const brl = (v) => Number(v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  const num = (v, d = 0) => Number(v || 0).toLocaleString("pt-BR", { minimumFractionDigits: d, maximumFractionDigits: d });
+  const esc = (v) => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+  const state = { fornecedores: [], atual: null, dados: null, estoque: new Map(), edits: new Map(), off: new Set(), caminho: new Map(), consultando: false, cancelar: false };
+
+  function msg(texto, tipo = "ok") { const m = $("msg"); m.textContent = texto; m.className = "msg " + tipo; if (!texto) m.className = "msg hidden"; }
+  async function api(url, opts = {}) {
+    const r = await fetch("/expedicao" + url, { credentials: "same-origin", cache: "no-store", headers: { "Content-Type": "application/json", "Accept": "application/json" }, ...opts });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || d.ok === false) throw new Error(d.error || `HTTP ${r.status}`);
+    return d;
+  }
+
+  // ---- "A caminho" fica guardado neste navegador, por fornecedor ----
+  const chaveCaminho = () => "compras_caminho_v1800_" + (state.atual?.nome || "");
+  function carregarCaminho() { state.caminho = new Map(); try { Object.entries(JSON.parse(localStorage.getItem(chaveCaminho()) || "{}")).forEach(([k, v]) => state.caminho.set(k, Number(v) || 0)); } catch (_) {} }
+  function salvarCaminho() { try { localStorage.setItem(chaveCaminho(), JSON.stringify(Object.fromEntries(state.caminho))); } catch (_) {} }
+
+  async function carregarFornecedores(selecionar) {
+    const d = await api("/api/compras/fornecedores");
+    state.fornecedores = d.fornecedores || [];
+    $("fornecedor").innerHTML = state.fornecedores.map(f => `<option>${esc(f.nome)}</option>`).join("");
+    const tem = state.fornecedores.length > 0;
+    $("semFornecedor").classList.toggle("hidden", tem);
+    $("editarBtn").disabled = !tem;
+    if (!tem) { $("conteudo").classList.add("hidden"); return; }
+    const nome = selecionar && state.fornecedores.some(f => f.nome === selecionar) ? selecionar : state.fornecedores[0].nome;
+    $("fornecedor").value = nome;
+    await selecionarFornecedor(nome);
+  }
+
+  async function selecionarFornecedor(nome) {
+    state.atual = state.fornecedores.find(f => f.nome === nome) || null;
+    if (!state.atual) return;
+    $("minimo").value = state.atual.pedido_minimo; $("prazo").value = state.atual.prazo; $("cobertura").value = state.atual.cobertura;
+    state.edits.clear(); state.off.clear(); carregarCaminho();
+    await carregarDemanda();
+  }
+
+  async function carregarDemanda() {
+    if (!state.atual) return;
+    msg("Carregando vendas e peças do fornecedor…");
+    try {
+      state.dados = await api(`/api/compras/demanda?fornecedor=${encodeURIComponent(state.atual.nome)}&dias=${$("periodo").value}`);
+      $("conteudo").classList.remove("hidden");
+      const d = state.dados;
+      const avisos = [];
+      if (!d.itens.length) avisos.push("Nenhuma peça da lista do Precificador bate com as regras deste fornecedor. Revise em ✎ Editar fornecedor.");
+      if (d.sem_custo) avisos.push(`${d.sem_custo} peça(s) sem custo no Precificador: entram na necessidade, mas não somam valor.`);
+      if (d.vendas_desde && d.vendas_desde > isoDiasAtras(Number($("periodo").value))) avisos.push(`O histórico de vendas começa em ${br(d.vendas_desde)}; períodos mais longos ainda estão incompletos.`);
+      msg(avisos.join(" "), avisos.length ? "erro" : "ok");
+      render();
+      consultarEstoque();
+    } catch (e) { msg("Não foi possível carregar a demanda: " + e.message, "erro"); }
+  }
+  const isoDiasAtras = (n) => { const d = new Date(); d.setDate(d.getDate() - (n - 1)); return d.toISOString().slice(0, 10); };
+  const br = (iso) => { const m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]}/${m[2]}/${m[1]}` : ""; };
+
+  // Estoque: mesma rota da Demanda Full; o Apollo aceita 20 consultas/min.
+  async function consultarEstoque(forcar = false) {
+    if (state.consultando) { state.cancelar = true; return; }
+    const alvo = (state.dados?.itens || []).filter(x => x.vendido > 0).map(x => x.codigo).filter(c => forcar || !state.estoque.has(c));
+    if (!alvo.length) { render(); return; }
+    state.consultando = true; state.cancelar = false; $("estoqueBtn").textContent = "■ Parar consulta";
+    let pendentes = alvo.slice(); const total = pendentes.length;
+    try {
+      while (pendentes.length && !state.cancelar) {
+        msg(`Consultando estoque no Apollo: ${total - pendentes.length} de ${total} peça(s)…`);
+        const d = await api("/api/full/apollo-stock", { method: "POST", body: JSON.stringify({ filial: 0, nao_esperar: true, items: pendentes.slice(0, 40).map(sku => ({ sku, need: 1 })) }) });
+        let espera = 0; const feitos = new Set();
+        (d.results || []).forEach(r => { const k = String(r.sku || "").trim().toUpperCase(); if (r.pending) { espera = Math.max(espera, Number(r.retry_after) || 5); return; } state.estoque.set(k, r); feitos.add(k); });
+        pendentes = pendentes.filter(k => !feitos.has(k));
+        render();
+        if (!feitos.size && !espera) break;
+        for (let s = Math.ceil(espera); pendentes.length && s > 0 && !state.cancelar; s--) {
+          msg(`Estoque: ${total - pendentes.length} de ${total} peça(s). O Apollo aceita 20 consultas por minuto — continuando em ${s} s.`);
+          await sleep(1000);
+        }
+      }
+      msg(state.cancelar ? "Consulta de estoque interrompida." : "");
+    } catch (e) { msg("Falha ao consultar o estoque: " + e.message, "erro"); }
+    finally { state.consultando = false; state.cancelar = false; $("estoqueBtn").textContent = "↻ Atualizar estoque Apollo"; }
+  }
+
+  function cfg() { return { minimo: Number($("minimo").value) || 0, prazo: Number($("prazo").value) || 0, cobertura: Number($("cobertura").value) || 0, periodo: Number($("periodo").value) || 60 }; }
+  const qtd = (x) => state.edits.has(x.codigo) ? state.edits.get(x.codigo) : x.necessidade + x.complemento;
+
+  function calcular() {
+    const c = cfg();
+    const itens = (state.dados?.itens || []).map(p => {
+      const r = state.estoque.get(p.codigo);
+      const conhecido = r && r.ok && r.stock_known;
+      const estoque = conhecido ? Math.floor(Number(r.available) || 0) : null;
+      const caminho = state.caminho.get(p.codigo) || 0;
+      const media = p.vendido / c.periodo;
+      const cobHoje = estoque === null ? null : media > 0 ? (estoque + caminho) / media : Infinity;
+      const necessidade = estoque === null ? 0 : Math.max(0, Math.ceil(media * (c.prazo + c.cobertura) - estoque - caminho));
+      const status = p.vendido <= 0 ? "semvenda" : !r ? "consultando" : !r.ok ? "erro" : !conhecido ? "nd" : "ok";
+      return { ...p, estoque, caminho, media, cobHoje, necessidade, complemento: 0, status, erro: r && !r.ok ? r.error : "", parcial: !!(r && r.partial) };
+    });
+    const valor = (x) => state.off.has(x.codigo) || x.custo == null ? 0 : qtd(x) * x.custo;
+    const total = () => itens.reduce((s, x) => s + valor(x), 0);
+    if ($("completar").checked) {
+      for (let guarda = 0; total() < c.minimo && guarda < 20000; guarda++) {
+        const cand = itens.filter(x => x.status === "ok" && x.custo && !state.off.has(x.codigo) && !state.edits.has(x.codigo) && x.media > 0 && (x.curva === "A" || x.curva === "B"))
+          .map(x => ({ x, cob: (x.estoque + x.caminho + x.necessidade + x.complemento) / x.media }))
+          .filter(o => o.cob < c.prazo + c.cobertura * 2)
+          .sort((a, b) => a.cob - b.cob || (a.x.curva < b.x.curva ? -1 : 1));
+        if (!cand.length) break;
+        cand[0].x.complemento += 1;
+      }
+    }
+    const ordemCob = (x) => x.cobHoje === null ? 1e9 : x.cobHoje;
+    itens.sort((a, b) => ordemCob(a) - ordemCob(b) || b.media - a.media);
+    return { c, itens, total: total(), valor };
+  }
+
+  function render() {
+    if (!state.dados) return;
+    const { c, itens, total, valor } = calcular();
+    const noPedido = itens.filter(x => !state.off.has(x.codigo) && qtd(x) > 0);
+    const valorNec = noPedido.reduce((s, x) => s + (x.custo ? Math.min(qtd(x), x.necessidade) * x.custo : 0), 0);
+    const consultados = itens.filter(x => x.status === "ok").length, comVenda = itens.filter(x => x.vendido > 0).length;
+    $("kItens").textContent = num(itens.length); $("kItensSub").textContent = `${num(comVenda)} vendeu nos últimos ${c.periodo} dias`;
+    $("kComprar").textContent = num(noPedido.length);
+    $("kComprarSub").textContent = `${noPedido.filter(x => x.complemento > 0 && !state.edits.has(x.codigo)).length} com complemento · estoque de ${num(consultados)}/${num(comVenda)}`;
+    $("kUn").textContent = num(noPedido.reduce((s, x) => s + qtd(x), 0));
+    $("kValor").textContent = brl(total);
+    $("kValorSub").textContent = total >= c.minimo ? "atinge o pedido mínimo" : `faltam ${brl(c.minimo - total)} para o mínimo`;
+    $("kRisco").textContent = num(itens.filter(x => x.cobHoje !== null && x.cobHoje < c.prazo).length);
+    $("metaTitulo").textContent = `Pedido mínimo ${state.atual.nome}: ${brl(c.minimo)}`;
+    const st = $("metaStatus");
+    st.textContent = total >= c.minimo ? `✓ ${brl(total)} — mínimo atingido` : `⚠ ${brl(total)} — faltam ${brl(c.minimo - total)}`;
+    st.style.color = total >= c.minimo ? "var(--ok)" : "var(--warn)";
+    const escala = Math.max(c.minimo, total) || 1; const [bn, bc] = $("metaBar").children;
+    bn.style.width = (valorNec / escala * 100) + "%"; bc.style.width = (Math.max(0, total - valorNec) / escala * 100) + "%";
+
+    const q = $("busca").value.trim().toLowerCase();
+    const vis = itens.filter(x => (!q || (x.codigo + " " + x.descricao).toLowerCase().includes(q)) && (!$("soComprar").checked || (qtd(x) > 0 && !state.off.has(x.codigo))));
+    $("linhas").innerHTML = vis.map(x => {
+      const off = state.off.has(x.codigo), qt = qtd(x);
+      const cob = x.status === "semvenda" ? '<span class="cob ok">sem venda</span>'
+        : x.status === "consultando" ? '<span class="cob nd">consultando…</span>'
+        : x.status === "erro" ? `<span class="cob nd" title="${esc(x.erro)}">não encontrado</span>`
+        : x.status === "nd" ? '<span class="cob nd">não informado</span>'
+        : x.cobHoje < c.prazo ? `<span class="cob bad">⚠ ${num(x.cobHoje)} dias</span>`
+        : x.cobHoje < c.prazo + c.cobertura ? `<span class="cob warn">${num(x.cobHoje)} dias</span>`
+        : `<span class="cob ok">${x.cobHoje === Infinity ? "sem venda" : num(x.cobHoje) + " dias"}</span>`;
+      const tag = state.edits.has(x.codigo) ? `<span class="tag edit">sugerido ${num(x.necessidade + x.complemento)}</span>`
+        : x.complemento ? `<span class="tag comp">+${num(x.complemento)} complemento</span>` : "";
+      return `<tr class="${off ? "off" : ""}">
+        <td><input type="checkbox" data-inc="${esc(x.codigo)}" ${off ? "" : "checked"} aria-label="Incluir ${esc(x.codigo)}"></td>
+        <td>${esc(x.codigo)}</td>
+        <td class="desc"><b>${esc(x.descricao)}</b>${x.custo == null ? '<span class="tag semcusto">sem custo no Precificador</span>' : ""}</td>
+        <td>${x.curva ? `<span class="curva ${esc(x.curva)}">${esc(x.curva)}</span>` : "—"}</td>
+        <td class="n" title="ML ${x.vendido_ml} · Shopee ${x.vendido_shopee}">${num(x.vendido)}</td><td class="n">${num(x.media, 2)}</td>
+        <td class="n">${x.estoque === null ? "—" : num(x.estoque) + (x.parcial ? "+" : "")}</td>
+        <td class="n"><input class="cam" type="number" min="0" step="1" value="${x.caminho || ""}" placeholder="0" data-cam="${esc(x.codigo)}" aria-label="A caminho ${esc(x.codigo)}"></td>
+        <td>${cob}</td>
+        <td class="n">${x.status === "ok" ? num(x.necessidade) : "—"}</td>
+        <td class="n"><input class="qty" type="number" min="0" step="1" value="${qt}" data-qtd="${esc(x.codigo)}" ${off ? "disabled" : ""}><br>${tag}</td>
+        <td class="n">${x.custo == null ? "—" : brl(x.custo)}</td>
+        <td class="n"><b>${off || x.custo == null ? "—" : brl(valor(x))}</b></td></tr>`;
+    }).join("") || `<tr><td colspan="13" class="vazio">${$("soComprar").checked ? "Nada a comprar deste fornecedor com essa configuração (desmarque “Só o que entra no pedido” para ver todas as peças)." : "Nenhuma peça."}</td></tr>`;
+  }
+
+  // ---- Editor de fornecedor ----
+  function abrirEditor(novo) {
+    const f = novo ? { nome: "", pedido_minimo: 0, prazo: 7, cobertura: 30, prefixos: [], palavras: [], codigos: [] } : state.atual;
+    $("edNome").value = f.nome; $("edNome").disabled = !novo;
+    $("edMinimo").value = f.pedido_minimo; $("edPrazo").value = f.prazo; $("edCobertura").value = f.cobertura;
+    $("edPrefixos").value = (f.prefixos || []).join("\n"); $("edPalavras").value = (f.palavras || []).join("\n"); $("edCodigos").value = (f.codigos || []).join("\n");
+    $("edExcluir").classList.toggle("hidden", novo);
+    $("editor").classList.remove("hidden"); (novo ? $("edNome") : $("edMinimo")).focus();
+  }
+  async function salvarFornecedor() {
+    try {
+      const nome = $("edNome").value.trim();
+      const d = await api("/api/compras/fornecedores", { method: "POST", body: JSON.stringify({
+        nome, pedido_minimo: $("edMinimo").value, prazo: $("edPrazo").value, cobertura: $("edCobertura").value,
+        prefixos: $("edPrefixos").value, palavras: $("edPalavras").value, codigos: $("edCodigos").value }) });
+      $("editor").classList.add("hidden");
+      await carregarFornecedores(d.fornecedor.nome);
+    } catch (e) { msg("Não foi possível salvar: " + e.message, "erro"); }
+  }
+  async function salvarConfigRapida() {
+    if (!state.atual) return;
+    try {
+      const d = await api("/api/compras/fornecedores", { method: "POST", body: JSON.stringify({ ...state.atual, pedido_minimo: $("minimo").value, prazo: $("prazo").value, cobertura: $("cobertura").value }) });
+      const i = state.fornecedores.findIndex(f => f.nome === d.fornecedor.nome); if (i >= 0) state.fornecedores[i] = { ...state.fornecedores[i], ...d.fornecedor }; state.atual = state.fornecedores[i];
+    } catch (e) { msg("Não foi possível salvar a configuração: " + e.message, "erro"); }
+  }
+
+  $("fornecedor").addEventListener("change", e => selecionarFornecedor(e.target.value));
+  $("periodo").addEventListener("change", () => { state.edits.clear(); carregarDemanda(); });
+  ["minimo", "prazo", "cobertura"].forEach(id => { $(id).addEventListener("input", () => { state.edits.clear(); render(); }); $(id).addEventListener("change", salvarConfigRapida); });
+  ["busca", "soComprar", "completar"].forEach(id => $(id).addEventListener("input", render));
+  $("estoqueBtn").addEventListener("click", () => consultarEstoque(true));
+  $("novoBtn").addEventListener("click", () => abrirEditor(true));
+  $("editarBtn").addEventListener("click", () => abrirEditor(false));
+  $("edCancelar").addEventListener("click", () => $("editor").classList.add("hidden"));
+  $("edSalvar").addEventListener("click", salvarFornecedor);
+  $("edExcluir").addEventListener("click", async () => {
+    if (!state.atual || !confirm(`Excluir o fornecedor ${state.atual.nome}? As regras dele serão apagadas.`)) return;
+    try { await api("/api/compras/fornecedores", { method: "POST", body: JSON.stringify({ nome: state.atual.nome, excluir: true }) }); $("editor").classList.add("hidden"); await carregarFornecedores(); }
+    catch (e) { msg("Não foi possível excluir: " + e.message, "erro"); }
+  });
+  $("linhas").addEventListener("change", e => {
+    const inc = e.target.closest("[data-inc]"), q = e.target.closest("[data-qtd]"), cam = e.target.closest("[data-cam]");
+    if (inc) { inc.checked ? state.off.delete(inc.dataset.inc) : state.off.add(inc.dataset.inc); }
+    if (q) state.edits.set(q.dataset.qtd, Math.max(0, Math.floor(Number(q.value) || 0)));
+    if (cam) { const v = Math.max(0, Math.floor(Number(cam.value) || 0)); v ? state.caminho.set(cam.dataset.cam, v) : state.caminho.delete(cam.dataset.cam); salvarCaminho(); state.edits.delete(cam.dataset.cam); }
+    render();
+  });
+  $("exportar").addEventListener("click", () => {
+    if (!state.dados || typeof XLSX === "undefined") return;
+    const { itens } = calcular();
+    const rows = itens.filter(x => !state.off.has(x.codigo) && qtd(x) > 0).map(x => ({
+      "Código": x.codigo, "Descrição": x.descricao, "Curva": x.curva, "Quantidade": qtd(x),
+      "Custo unitário": x.custo, "Total": x.custo == null ? "" : Math.round(qtd(x) * x.custo * 100) / 100,
+      "Estoque": x.estoque, "A caminho": x.caminho, "Vendido ML+Shopee": x.vendido, "Média diária": Number(x.media.toFixed(2)),
+      "Cobertura hoje (dias)": x.cobHoje === null || x.cobHoje === Infinity ? "" : Number(x.cobHoje.toFixed(1)),
+      "Motivo": state.edits.has(x.codigo) ? "quantidade editada" : x.complemento ? `necessidade ${x.necessidade} + complemento ${x.complemento}` : "necessidade"
+    }));
+    const ws = XLSX.utils.json_to_sheet(rows);
+    ws["!cols"] = [14, 44, 7, 11, 13, 12, 9, 10, 16, 12, 18, 34].map(w => ({ wch: w }));
+    const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, ("Pedido " + state.atual.nome).slice(0, 31));
+    XLSX.writeFile(wb, `pedido_compra_${state.atual.nome.toLowerCase().replace(/[^a-z0-9]+/g, "_")}.xlsx`);
+  });
+
+  carregarFornecedores().catch(e => msg("Não foi possível carregar os fornecedores: " + e.message, "erro"));
+})();
+</script>
+</body>
+</html>

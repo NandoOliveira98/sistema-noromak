@@ -77,7 +77,7 @@ APP/
   conferencia.html   ~199KB  fila de conferência e bipagem
   precificador.html  ~632KB  custo, margem, preço ideal, curva ABC
   estacao-impressao.html     estação Zebra / QZ Tray
-  rentabilidade-ml.html, analise-full.html
+  rentabilidade-ml.html, analise-full.html, compras.html (Demanda de Compra)
                              (Central de Pendências e Promoções ML removidas na V17.99;
                              /pendencias e /promocoes-ml abrem o Admin)
   shared-storage.js          cache versionado + polling (CRÍTICO)
@@ -256,6 +256,14 @@ inclui Full) e da **Shopee** (`get_order_list` + `get_order_detail`: preço com 
 status pagos, janela máx. 15 dias) para `vendas_v1799` (coluna `marketplace`): últimos 3 dias a
 cada 10 min, 30 dias 1x/dia, e uma janela de histórico por minuto até 365 dias. A janela é
 **regravada** (venda cancelada some). `GET /api/dashboard/vendas?marketplace=ml|shopee`.
+
+### Demanda de Compra (V18.00, provisória)
+`APP/compras.html` (`/compras`, menu lateral). Vendas = ML + Shopee de `vendas_v1799` (kit vira
+componentes; SKU `prefixo-código` e `A/B` viram código Apollo); custo e curva = lista do
+Precificador (`precificador_online_v1`, cujo SKU é o código Apollo); estoque = `/api/full/apollo-stock`
+no navegador. Marca não existe no cadastro: fornecedor = regras (começo do código, palavra na
+descrição, lista de códigos) em `compras_fornecedores_v1800`. "A caminho" é digitado e fica no
+navegador. Trocar as vendas pela rota do Apollo quando ela existir (PEDIDO_ROTA_DEMANDA_APOLLO.md).
 
 **Botão Cliente (V17.85):** atualiza o cadastro no **Linx DMS** (ERP em `10.1.15.1`, rede
 do escritório — a VPS não alcança). O servidor só entrega CPF/CNPJ e nome de "Dados para
