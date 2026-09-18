@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.90-SHOPEE-AGUARDA-NFE"
+APP_VERSION = "17.91-SHOPEE-ETIQUETA-APOS-ORGANIZAR"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -4665,7 +4665,8 @@ def _shopee_package_not_needed_error(message: str) -> bool:
     )
 
 
-def shopee_sync_shipping_documents(shipments: list[dict[str,str]]) -> dict[str,Any]:
+def shopee_sync_shipping_documents(shipments: list[dict[str,str]],
+                                   ja_organizados: set[str] | frozenset[str] = frozenset()) -> dict[str,Any]:
     """Organiza envio e processa etiquetas Shopee sem bloquear o request HTTP.
 
     V17.32: get_shipping_parameter -> ship_order -> get_tracking_number ->
@@ -4757,6 +4758,10 @@ def shopee_sync_shipping_documents(shipments: list[dict[str,str]]) -> dict[str,A
                 # 1) get_shipping_parameter -> 2) ship_order. Só pula o POST quando
                 # este mesmo processo já recebeu confirmação recente para o pacote.
                 arranged,unsplit_order=_shopee_ship_order_cached(order_sn,pkg)
+                # V17.91: pedido que não está mais na lista "a organizar" da Shopee
+                # (get_shipment_list) já foi organizado — vai direto ao rastreio.
+                if order_sn in ja_organizados:
+                    arranged,unsplit_order=True,True
                 if not arranged:
                     try:
                         ship_payload,mode,detail=_shopee_shipping_mode_payload(order_sn,pkg)
@@ -4783,6 +4788,10 @@ def shopee_sync_shipping_documents(shipments: list[dict[str,str]]) -> dict[str,A
                     except Exception as exc:
                         msg=_safe_err(exc)
                         low=msg.lower()
+                        if "lack_of_invoice" in low:
+                            summary["pendentes"] += 1
+                            shopee_log_event("ship_order",f"order={order_sn}","PENDENTE","aguardando NF-e na Shopee; "+msg[:200])
+                            continue
                         # Shopee devolve package_number no parâmetro de documento mesmo
                         # para pedidos UNSPLIT, mas ship_order rejeita esse campo. Nesse
                         # caso refazemos UMA vez sem package_number e lembramos o estado
@@ -4800,6 +4809,12 @@ def shopee_sync_shipping_documents(shipments: list[dict[str,str]]) -> dict[str,A
                             except Exception as retry_exc:
                                 retry_msg=_safe_err(retry_exc)
                                 retry_low=retry_msg.lower()
+                                # V17.91: "lack_of_invoice_data ... already submitted" contém
+                                # "already" e era lido como "já organizado". É falta de NF-e.
+                                if "lack_of_invoice" in retry_low:
+                                    summary["pendentes"] += 1
+                                    shopee_log_event("ship_order",f"order={order_sn}","PENDENTE","aguardando NF-e na Shopee; "+retry_msg[:200])
+                                    continue
                                 already_tokens=("already", "has been shipped", "already shipped", "already arrange", "already arranged", "logistics_request_created")
                                 if any(tok in retry_low for tok in already_tokens):
                                     arranged=True
@@ -4843,6 +4858,13 @@ def shopee_sync_shipping_documents(shipments: list[dict[str,str]]) -> dict[str,A
                     tresp=tr.get("response") if isinstance(tr.get("response"),dict) else {}
                     tracking=str(tresp.get("tracking_number") or "").strip()
                     hint=str(tresp.get("hint") or "").strip()
+                    # V17.91: pedido que chegou já organizado não sabe se é unsplit;
+                    # sem rastreio consultando sem o pacote, tenta com o pacote.
+                    if not tracking and pkg and "package_number" not in q:
+                        tr=shopee_api_get("/api/v2/logistics/get_tracking_number", {"order_sn":order_sn,"package_number":pkg})
+                        tresp=tr.get("response") if isinstance(tr.get("response"),dict) else {}
+                        tracking=str(tresp.get("tracking_number") or "").strip()
+                        hint=hint or str(tresp.get("hint") or "").strip()
                 except Exception as exc:
                     shopee_log_event("tracking_number",f"order={order_sn}","AVISO",_safe_err(exc))
                 if tracking:
@@ -4854,11 +4876,9 @@ def shopee_sync_shipping_documents(shipments: list[dict[str,str]]) -> dict[str,A
                     shopee_log_event("tracking_number",f"order={order_sn}","PENDENTE",f"obtido=nao; pacote={'sim' if pkg and not unsplit_order else 'nao'}; unsplit={'sim' if unsplit_order else 'nao'}; hint={hint[:300] or '-'}")
                     # O tracking pode ser emitido alguns minutos depois do ship_order.
                     # Worker tenta novamente no próximo ciclo; não faz polling aqui.
-                    # V17.90: sem rastreio, o "organizado" não está confirmado (a Shopee
-                    # bloqueia "Organizar envio" até a NF-e ser enviada). Esquece o
-                    # cache para refazer ship_order no próximo ciclo — senão a etiqueta
-                    # só sairia 2 h (TTL) depois de a NF-e chegar.
-                    _shopee_forget_ship_order(order_sn, pkg)
+                    # V17.91: a falta de NF-e agora é tratada no ship_order (não entra
+                    # mais no cache), e o pedido organizado segue no ciclo seguinte
+                    # pela lista de pendentes sem etiqueta — não precisa esquecer aqui.
                     continue
 
                 # 4) Cria documento somente com tracking disponível.
@@ -4999,6 +5019,35 @@ def shopee_sync_shipping_documents(shipments: list[dict[str,str]]) -> dict[str,A
             summary["erros"] += len(base_batch)
             shopee_log_event("shipping_documents","batch","ERRO",_safe_err(exc))
     return summary
+
+def shopee_pedidos_sem_etiqueta(dias: int = 10, limite: int = 40) -> list[dict[str, str]]:
+    """V17.91 — pedidos Shopee pendentes no Noromak que ainda não têm etiqueta
+    vinculada no banco da Conferência. Só os recentes, para não varrer histórico."""
+    corte = (datetime.now() - timedelta(days=dias)).strftime("%Y-%m-%d")
+    with DB_LOCK:
+        pendentes, _, _ = get_storage("conf_pedidos")
+        etiquetas, _, _ = get_storage("conf_etiquetas")
+    try:
+        banco = json.loads(etiquetas or "{}")
+    except Exception:
+        banco = {}
+    vinculados = set((banco.get("porChave") or {}).keys()) if isinstance(banco, dict) else set()
+    saida: list[dict[str, str]] = []
+    vistos: set[str] = set()
+    for row in _rows_from_storage_value(pendentes):
+        if not isinstance(row, dict) or "SHOPEE" not in str(row.get("Marketplace") or "").upper():
+            continue
+        order_sn = str(row.get("Pedido") or "").strip()
+        if not order_sn or order_sn in vistos or order_sn in vinculados:
+            continue
+        if _vendas_data_iso(row.get("Data do Pedido")) < corte:
+            continue
+        vistos.add(order_sn)
+        saida.append({"order_sn": order_sn, "package_number": str(row.get("PacoteShopee") or "").strip()})
+        if len(saida) >= limite:
+            break
+    return saida
+
 
 def shopee_current_shipments() -> list[dict[str, str]]:
     """Lista o que realmente está aguardando expedição na Shopee.
@@ -5643,9 +5692,15 @@ def shopee_label_worker_loop(stop_event: threading.Event) -> None:
             if not st.get("connected"):
                 continue
             shipments = shopee_current_shipments()
-            if not shipments:
+            # V17.91: organizado, o pedido sai de get_shipment_list — justamente
+            # quando a etiqueta fica disponível. Os pendentes no Noromak sem
+            # etiqueta e fora dessa lista seguem direto para rastreio/etiqueta.
+            na_lista = {x.get("order_sn") for x in shipments}
+            organizados = [x for x in shopee_pedidos_sem_etiqueta() if x["order_sn"] not in na_lista]
+            if not shipments and not organizados:
                 continue
-            result = shopee_sync_shipping_documents(shipments)
+            result = shopee_sync_shipping_documents(
+                shipments + organizados, ja_organizados={x["order_sn"] for x in organizados})
             shopee_log_event(
                 "shipping_worker",
                 f"shop_id={st.get('shop_id')}",
