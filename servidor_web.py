@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.93-NOME-NFE-EM-SEGUNDO-PLANO"
+APP_VERSION = "17.94-ESTOQUE-APOLLO-DISPONIVEL"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -126,9 +126,27 @@ CRM_COST_API_URL = os.getenv(
 ).strip()
 CHAVE_CRM = os.getenv("CHAVE_CRM", "").strip()
 CRM_COST_TIMEOUT = max(3, min(30, int(os.getenv("CRM_COST_TIMEOUT", "20"))))
-CRM_STOCK_API_URL = os.getenv("CRM_STOCK_API_URL", CRM_COST_API_URL).strip() or CRM_COST_API_URL
+def _crm_stock_url_padrao() -> str:
+    """V17.94: a rota de estoque é /api/v1/expedicao/estoque, irmã de /custo.
+
+    Antes o padrão caía na própria rota de custo, que não devolve estoque.
+    Uma CRM_STOCK_API_URL explícita e diferente da de custo continua valendo.
+    """
+    explicita = os.getenv("CRM_STOCK_API_URL", "").strip()
+    if explicita and explicita.rstrip("/") != CRM_COST_API_URL.rstrip("/"):
+        return explicita
+    base = CRM_COST_API_URL.rstrip("/")
+    if base.endswith("/custo"):
+        return base[: -len("/custo")] + "/estoque"
+    return "http://127.0.0.1:8000/api/v1/expedicao/estoque"
+
+
+CRM_STOCK_API_URL = _crm_stock_url_padrao()
 CRM_STOCK_TIMEOUT = max(3, min(30, int(os.getenv("CRM_STOCK_TIMEOUT", str(CRM_COST_TIMEOUT)))))
 CRM_COST_CACHE_SECONDS = max(30, min(600, int(os.getenv("CRM_COST_CACHE_SECONDS", "180"))))
+# V17.94: /custo e /estoque dividem o MESMO limite no Apollo (20 chamadas/min).
+# Ficamos um pouco abaixo para não esbarrar no 429 por diferença de relógio.
+CRM_RATE_LIMIT_PER_MINUTE = max(1, min(20, int(os.getenv("CRM_RATE_LIMIT_PER_MINUTE", "18"))))
 
 
 DB_LOCK = threading.RLock()
@@ -155,6 +173,10 @@ ML_WORKER_STATE: dict[str, Any] = {
 }
 CRM_COST_CACHE_LOCK = threading.Lock()
 CRM_COST_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+CRM_STOCK_CACHE_LOCK = threading.Lock()
+CRM_STOCK_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
+CRM_RATE_LOCK = threading.Lock()
+CRM_RATE_CALLS: list[float] = []
 PRECIFICADOR_BULK_LOCK = threading.Lock()
 # V17.27: etiquetas Shopee rodam fora da requisição HTTP para evitar 504 do Nginx.
 SHOPEE_LABEL_WORKER_LOCK = threading.Lock()
@@ -450,17 +472,121 @@ def _apollo_stock_payload(data: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def crm_stock_lookup(codigo: str, operador: str = "") -> dict[str, Any]:
-    """Consulta estoque Apollo sem expor a CHAVE_CRM ao navegador.
+class CrmLimiteAtingido(RuntimeError):
+    """V17.94: o limite de 20 chamadas/min do Apollo está ocupado agora."""
 
-    Por padrão utiliza o mesmo endpoint já usado pelo custo. Se o Apollo tiver
-    um endpoint dedicado de estoque, configure CRM_STOCK_API_URL no .env.
+    def __init__(self, retry_after: float):
+        self.retry_after = max(1, int(retry_after + 0.999))
+        super().__init__(
+            f"Limite do Apollo (20 consultas/min) atingido. Nova tentativa em {self.retry_after} s."
+        )
+
+
+def crm_rate_acquire(wait_seconds: float = 0.0) -> float:
+    """Reserva uma vaga no limite compartilhado /custo + /estoque.
+
+    Devolve 0 quando conseguiu a vaga; senão, em quantos segundos abre a próxima.
+    Espera no máximo `wait_seconds`.
+    """
+    deadline = time.monotonic() + max(0.0, wait_seconds)
+    while True:
+        with CRM_RATE_LOCK:
+            now = time.monotonic()
+            CRM_RATE_CALLS[:] = [t for t in CRM_RATE_CALLS if now - t < 60.0]
+            if len(CRM_RATE_CALLS) < CRM_RATE_LIMIT_PER_MINUTE:
+                CRM_RATE_CALLS.append(now)
+                return 0.0
+            retry = 60.0 - (now - CRM_RATE_CALLS[0]) + 0.05
+        if retry > deadline - time.monotonic():
+            return retry
+        time.sleep(retry)
+
+
+def crm_rate_note() -> None:
+    """Conta uma chamada a /custo no balde, sem bloquear quem já chamava antes."""
+    with CRM_RATE_LOCK:
+        now = time.monotonic()
+        CRM_RATE_CALLS[:] = [t for t in CRM_RATE_CALLS if now - t < 60.0]
+        CRM_RATE_CALLS.append(now)
+
+
+def _apollo_stock_contrato(data: dict[str, Any]) -> dict[str, Any]:
+    """V17.94: lê o contrato de /api/v1/expedicao/estoque.
+
+    `disponivel: null` / `tem_cadastro: null` é casa que NÃO respondeu — nunca
+    vira zero. `disponivel_total` já vem líquido do FULL; com casa sem resposta
+    ele é um piso ("pelo menos").
+    """
+    casa_nomes = {1: "Araçatuba", 2: "Ribeirão", 3: "Bauru"}
+    sem_resposta: set[int] = set()
+    for item in data.get("casas_sem_resposta") or []:
+        try:
+            sem_resposta.add(int(item))
+        except (TypeError, ValueError):
+            continue
+    rows: list[dict[str, Any]] = []
+    for row in data.get("estoques") or []:
+        if not isinstance(row, dict):
+            continue
+        try:
+            revenda = int(row.get("revenda"))
+        except (TypeError, ValueError):
+            continue
+        tem_cadastro = row.get("tem_cadastro")
+        if tem_cadastro not in (True, False, None):
+            tem_cadastro = None
+        disponivel = _apollo_number(row.get("disponivel"))
+        respondeu = tem_cadastro is not None and disponivel is not None and revenda not in sem_resposta
+        if not respondeu:
+            sem_resposta.add(revenda)
+        rows.append({
+            "revenda": revenda,
+            "casa": casa_nomes.get(revenda, f"Filial {revenda}"),
+            "disponivel": round(max(0.0, disponivel), 4) if respondeu else None,
+            "tem_cadastro": tem_cadastro,
+            "respondeu": respondeu,
+            "conhecido": respondeu,
+            "localizacao": str(row.get("localizacao") or ""),
+            "erro": str(row.get("erro") or "") or None,
+        })
+    respondidas = [r for r in rows if r["respondeu"]]
+    total = _apollo_number(data.get("disponivel_total"))
+    if total is None and respondidas:
+        total = sum(float(r["disponivel"]) for r in respondidas)
+    conhecido = total is not None and (bool(respondidas) or not rows)
+    return {
+        "estoque_conhecido": conhecido,
+        "estoque_total": round(max(0.0, total), 4) if conhecido else None,
+        "estoques": rows,
+        "casas_sem_resposta": sorted(sem_resposta),
+        "parcial": conhecido and bool(sem_resposta),
+    }
+
+
+def crm_stock_lookup(codigo: str, operador: str = "", wait_seconds: float = 0.0) -> dict[str, Any]:
+    """Consulta o estoque disponível no Apollo sem expor a CHAVE_CRM ao navegador.
+
+    V17.94: usa /api/v1/expedicao/estoque (contrato em INTEGRACAO_ESTOQUE_APOLLO.md),
+    com cache curto e o limite de chamadas compartilhado com /custo. Com o
+    limite ocupado levanta CrmLimiteAtingido em vez de chamar e tomar 429.
     """
     codigo = str(codigo or "").strip()
     if not codigo:
         raise ValueError("Informe o SKU/código da peça.")
     if not CHAVE_CRM:
         raise RuntimeError("CHAVE_CRM não está configurada no servidor.")
+
+    cache_key = codigo.upper()
+    with CRM_STOCK_CACHE_LOCK:
+        cached = CRM_STOCK_CACHE.get(cache_key)
+        if cached and time.monotonic() - cached[0] <= CRM_COST_CACHE_SECONDS:
+            result = dict(cached[1])
+            result["cache"] = True
+            return result
+
+    retry = crm_rate_acquire(wait_seconds)
+    if retry > 0:
+        raise CrmLimiteAtingido(retry)
 
     params = {"codigo": codigo}
     if operador:
@@ -479,9 +605,16 @@ def crm_stock_lookup(codigo: str, operador: str = "") -> dict[str, Any]:
     try:
         with urllib.request.urlopen(req, timeout=CRM_STOCK_TIMEOUT) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
-            status = int(getattr(resp, "status", 200) or 200)
     except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="replace")
+        if exc.code == 429:
+            # O Apollo contou chamadas que não passaram por aqui: enche o balde.
+            with CRM_RATE_LOCK:
+                CRM_RATE_CALLS[:] = [time.monotonic()] * CRM_RATE_LIMIT_PER_MINUTE
+            raise CrmLimiteAtingido(60) from exc
+        if exc.code == 401:
+            raise RuntimeError("O Apollo recusou a chave de serviço (HTTP 401).") from exc
+        if exc.code == 404:
+            raise RuntimeError("Rota de estoque do Apollo indisponível (HTTP 404).") from exc
         raise RuntimeError(f"Apollo estoque respondeu HTTP {exc.code}.") from exc
     except urllib.error.URLError as exc:
         raise RuntimeError(f"Apollo estoque indisponível: {exc.reason}") from exc
@@ -492,17 +625,34 @@ def crm_stock_lookup(codigo: str, operador: str = "") -> dict[str, Any]:
         raise RuntimeError("Apollo estoque retornou resposta inválida.") from exc
     if not isinstance(data, dict):
         raise RuntimeError("Apollo estoque retornou resposta inválida.")
-    if status >= 400:
-        raise RuntimeError(str(data.get("erro") or data.get("detail") or f"HTTP {status}"))
+    if data.get("ok") is False:
+        # Peça inexistente em todas as casas, ou o ERP recusou a consulta inteira.
+        raise RuntimeError(str(data.get("erro") or "Peça não encontrada no Apollo."))
 
-    stock = _apollo_stock_payload(data)
-    return {
+    if "disponivel_total" in data or "casas_sem_resposta" in data:
+        stock = _apollo_stock_contrato(data)
+    else:
+        stock = _apollo_stock_payload(data)
+        stock.update({"casas_sem_resposta": [], "parcial": False})
+    result = {
         "ok": True,
         "codigo": str(data.get("codigo") or codigo),
         "descricao": str(data.get("descricao") or ""),
+        "unidade": str(data.get("unidade") or ""),
         **stock,
+        "cache": False,
         "consultado_em": now_iso(),
     }
+    # Total parcial (casa sem resposta) não entra no cache: a próxima consulta
+    # pode trazer a rede inteira.
+    if not result.get("parcial"):
+        with CRM_STOCK_CACHE_LOCK:
+            CRM_STOCK_CACHE[cache_key] = (time.monotonic(), dict(result))
+            if len(CRM_STOCK_CACHE) > 2000:
+                oldest = sorted(CRM_STOCK_CACHE.items(), key=lambda item: item[1][0])[:500]
+                for key, _ in oldest:
+                    CRM_STOCK_CACHE.pop(key, None)
+    return result
 
 
 def crm_cost_lookup(codigo: str, operador: str = "") -> dict[str, Any]:
@@ -532,6 +682,7 @@ def crm_cost_lookup(codigo: str, operador: str = "") -> dict[str, Any]:
         params["operador"] = operador
     separator = "&" if "?" in CRM_COST_API_URL else "?"
     url = CRM_COST_API_URL + separator + urlencode(params)
+    crm_rate_note()  # V17.94: mesmo balde de 20/min da rota de estoque.
     req = urllib.request.Request(
         url,
         headers={
@@ -12321,6 +12472,12 @@ class AppHandler(BaseHTTPRequestHandler):
                     if len(items) > 500:
                         raise ValueError("Limite de 500 SKUs por consulta.")
                     filial = int(body.get("filial") or 0)
+                    # V17.94: o Apollo aceita 20 chamadas/min. Com `nao_esperar`
+                    # o que não coube no limite volta `pending` + `retry_after`
+                    # e o navegador reenvia depois; sem ele (chamadores antigos)
+                    # a requisição espera vaga por até 40 s no total.
+                    nao_esperar = bool(body.get("nao_esperar"))
+                    prazo = time.monotonic() + (0.0 if nao_esperar else 40.0)
                     results = []
                     for item in items:
                         if not isinstance(item, dict):
@@ -12333,12 +12490,16 @@ class AppHandler(BaseHTTPRequestHandler):
                         except Exception:
                             need = 0.0
                         try:
-                            stock = crm_stock_lookup(sku, "analise-full")
+                            stock = crm_stock_lookup(sku, "analise-full", max(0.0, prazo - time.monotonic()))
                             rows = stock.get("estoques") if isinstance(stock.get("estoques"), list) else []
+                            missing = [int(x) for x in stock.get("casas_sem_resposta") or []]
+                            partial = bool(stock.get("parcial"))
                             if filial:
                                 selected = [r for r in rows if int(r.get("revenda") or 0) == filial]
-                                available = sum(float(r.get("disponivel") or 0) for r in selected) if selected else None
-                                known = bool(selected)
+                                # Casa sem resposta NÃO é zero: fica desconhecido.
+                                known = bool(selected) and filial not in missing and all(r.get("disponivel") is not None for r in selected)
+                                available = sum(float(r.get("disponivel") or 0) for r in selected) if known else None
+                                partial = False
                             else:
                                 available = stock.get("estoque_total")
                                 known = bool(stock.get("estoque_conhecido"))
@@ -12350,8 +12511,18 @@ class AppHandler(BaseHTTPRequestHandler):
                                 "available": available,
                                 "need": need,
                                 "shortage": shortage,
+                                "can_send": min(need, float(available or 0)) if known else None,
                                 "sufficient": bool(known and float(available or 0) >= need),
+                                "partial": partial,
+                                "missing_branches": missing,
+                                "description": stock.get("descricao") or "",
                                 "branches": rows,
+                            })
+                        except CrmLimiteAtingido as exc:
+                            results.append({
+                                "sku": sku, "ok": False, "pending": True, "retry_after": exc.retry_after,
+                                "stock_known": False, "available": None, "need": need, "shortage": None,
+                                "sufficient": False, "branches": [], "error": str(exc),
                             })
                         except Exception as exc:
                             results.append({

@@ -246,7 +246,7 @@
 
     table {
       width: 100%;
-      min-width: 1920px;
+      min-width: 2180px;
       border-collapse: separate;
       border-spacing: 0;
     }
@@ -337,13 +337,13 @@
       .field, .toolbar .button { flex: 1 1 100%; width: 100%; }
     }
   
-    .apollo-panel{display:grid;grid-template-columns:repeat(4,minmax(145px,1fr));gap:10px;margin:0 0 14px}
+    .apollo-panel{display:grid;grid-template-columns:repeat(5,minmax(145px,1fr));gap:10px;margin:0 0 14px}
     .apollo-card{padding:14px;border:1px solid var(--line);border-radius:12px;background:#fff;box-shadow:0 4px 14px rgba(24,55,86,.05)}
     .apollo-card small{display:block;color:var(--muted);font-weight:750;text-transform:uppercase;font-size:.72rem}
     .apollo-card strong{display:block;margin-top:3px;color:var(--navy);font-size:1.45rem}
     .apollo-status{display:inline-flex;padding:4px 8px;border-radius:999px;font-weight:800;font-size:.72rem;white-space:nowrap}
-    .apollo-status.ok{background:#eaf8f0;color:#16764a}.apollo-status.short{background:#fff0ee;color:#b42318}.apollo-status.unknown{background:#eef3f8;color:#637488}
-    .apollo-cell{min-width:125px}.apollo-branches{font-size:.72rem;color:#637488;margin-top:3px;white-space:normal;line-height:1.35}
+    .apollo-status.ok{background:#eaf8f0;color:#16764a}.apollo-status.partial{background:#fff6e5;color:#9a5b00}.apollo-status.short{background:#fff0ee;color:#b42318}.apollo-status.unknown{background:#eef3f8;color:#637488}
+    .apollo-cell{min-width:125px}.apollo-msg{min-width:230px;white-space:normal}.apollo-msg .apollo-branches{font-size:.78rem;color:#23384f}.apollo-branches{font-size:.72rem;color:#637488;margin-top:3px;white-space:normal;line-height:1.35}
     @media(max-width:900px){.apollo-panel{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
 </style>
@@ -398,6 +398,7 @@
         <article class="apollo-card"><small>Estoque suficiente</small><strong id="apolloKpiOk">0</strong></article>
         <article class="apollo-card"><small>Estoque insuficiente</small><strong id="apolloKpiShort">0</strong></article>
         <article class="apollo-card"><small>Estoque não informado</small><strong id="apolloKpiUnknown">0</strong></article>
+        <article class="apollo-card"><small>Unid. possíveis de enviar</small><strong id="apolloKpiCanSend">0</strong></article>
       </div>
 
             <div class="message" style="margin:0 0 12px;border-color:#b9d2ef;background:#eef6ff;color:#123b63">
@@ -453,6 +454,7 @@
                 <th data-key="mlUrgency"><button class="sort-button" type="button">Urgência ML</button></th>
                 <th data-key="mlSend" class="num"><button class="sort-button" type="button">Estoque a enviar ML</button></th>
                 <th data-key="apolloAvailable" class="num"><button class="sort-button" type="button">Estoque Apollo</button></th>
+                <th data-key="apolloCanSend" class="num"><button class="sort-button" type="button">Possível enviar</button></th>
                 <th data-key="apolloShortage" class="num"><button class="sort-button" type="button">Falta no Apollo</button></th>
                 <th data-key="apolloSituation"><button class="sort-button" type="button">Situação Apollo</button></th>
               </tr>
@@ -671,9 +673,11 @@
             mlSend: columns.mlSend >= 0 ? parseNumber(row[columns.mlSend]) : 0,
             apolloAvailable: null,
             apolloShortage: null,
+            apolloCanSend: null,
             apolloSituation: "NÃO CONSULTADO",
             apolloBranches: [],
-            apolloError: ""
+            apolloError: "",
+            apolloMessage: ""
           });
         }
 
@@ -729,6 +733,7 @@
         if (!data.length) throw new Error("O relatório foi reconhecido, mas nenhum produto foi encontrado.");
 
         state.data = data;
+        apolloStore.clear();
         state.fileName = file.name;
         state.updatedAt = detectUpdatedAt(parsed.rows);
         state.onlyNeed = false;
@@ -742,6 +747,7 @@
         showMessage(`Planilha validada e processada: ${data.length} produtos analisados.`, "success");
         renderSummary();
         applyFilters();
+        renderApolloSummary();
       }
 
       function renderSummary() {
@@ -765,7 +771,7 @@
       }
 
       function compareValues(left, right, key) {
-        const stringKeys = new Set(["sku", "code", "product", "status", "mlUrgency"]);
+        const stringKeys = new Set(["sku", "code", "product", "status", "mlUrgency", "apolloSituation"]);
         if (stringKeys.has(key)) return String(left[key] ?? "").localeCompare(String(right[key] ?? ""), "pt-BR", { numeric: true });
         return Number(left[key] ?? 0) - Number(right[key] ?? 0);
       }
@@ -775,6 +781,7 @@
         const status = element("statusFilter").value;
         const targetKey = element("targetDays").value === "15" ? "need15" : "need30";
         const multiplier = state.sortDirection === "asc" ? 1 : -1;
+        apolloDerive();
 
         state.filtered = state.data.filter((item) => {
           if (query && !normalizeText(`${item.product} ${item.sku} ${item.code}`).includes(query)) return false;
@@ -822,9 +829,10 @@
             <td>${statusBadge(item.status)}</td>
             <td>${escapeHtml(item.mlUrgency || "—")}</td>
             <td class="num">${formatNumber(item.mlSend)}</td>
-            <td class="num apollo-cell">${item.apolloAvailable===null?"—":formatNumber(item.apolloAvailable,0)}${item.apolloBranches?.length?`<div class="apollo-branches">${item.apolloBranches.map(b=>`${escapeHtml(b.casa||"Filial")}: ${formatNumber(b.disponivel,0)}`).join(" · ")}</div>`:""}</td>
+            <td class="num apollo-cell">${item.apolloAvailable===null?"—":formatNumber(item.apolloAvailable,0)}${item.apolloBranches?.length?`<div class="apollo-branches">${item.apolloBranches.map(b=>`${escapeHtml(b.casa||"Filial")}: ${b.disponivel===null||b.disponivel===undefined?"sem resposta":formatNumber(b.disponivel,0)}`).join(" · ")}</div>`:""}</td>
+            <td class="num"><strong>${item.apolloCanSend===null?"—":formatNumber(item.apolloCanSend,0)}</strong></td>
             <td class="num">${item.apolloShortage===null?"—":formatNumber(item.apolloShortage,0)}</td>
-            <td>${item.apolloSituation==="OK"?'<span class="apollo-status ok">ESTOQUE OK</span>':item.apolloSituation==="FALTA"?'<span class="apollo-status short">FALTA ESTOQUE</span>':item.apolloSituation==="NÃO INFORMADO"?'<span class="apollo-status unknown">NÃO INFORMADO</span>':'<span class="apollo-status unknown">NÃO CONSULTADO</span>'}${item.apolloError?`<div class="apollo-branches">${escapeHtml(item.apolloError)}</div>`:""}</td>
+            <td class="apollo-msg">${apolloBadge(item)}${item.apolloMessage?`<div class="apollo-branches">${escapeHtml(item.apolloMessage)}</div>`:""}${item.apolloError?`<div class="apollo-branches">${escapeHtml(item.apolloError)}</div>`:""}</td>
           </tr>
         `).join("");
       }
@@ -845,77 +853,177 @@
         return Math.ceil(days === 15 ? item.need15 : item.need30);
       }
 
-      function renderApolloSummary() {
-        const checked = state.data.filter(x => x.apolloSituation !== "NÃO CONSULTADO");
-        const ok = checked.filter(x => x.apolloSituation === "OK").length;
-        const short = checked.filter(x => x.apolloSituation === "FALTA").length;
-        const unknown = checked.filter(x => x.apolloSituation === "NÃO INFORMADO").length;
-        element("apolloKpiChecked").textContent = formatNumber(checked.length);
-        element("apolloKpiOk").textContent = formatNumber(ok);
-        element("apolloKpiShort").textContent = formatNumber(short);
-        element("apolloKpiUnknown").textContent = formatNumber(unknown);
+      // V17.94: o resultado do Apollo fica guardado por código (sempre com as 3
+      // casas). Trocar prazo ou filial só recalcula — não gasta consulta, que o
+      // Apollo limita a 20 por minuto.
+      const apolloStore = new Map();
+      const apolloKey = (item) => String(skuApolloNormalizado(item.sku) || "").trim().toUpperCase();
+      let apolloRunning = false;
+      let apolloCancel = false;
+
+      function apolloDerive() {
+        const filial = Number(element("apolloBranch").value || 0);
+        const needByCode = new Map();
+        const rowsByCode = new Map();
+        state.data.forEach(item => {
+          const key = apolloKey(item);
+          if (!key) return;
+          const need = apolloTargetNeed(item);
+          if (need > 0) {
+            needByCode.set(key, (needByCode.get(key) || 0) + need);
+            rowsByCode.set(key, (rowsByCode.get(key) || 0) + 1);
+          }
+        });
+        state.data.forEach(item => {
+          const key = apolloKey(item);
+          const need = apolloTargetNeed(item);
+          const r = key ? apolloStore.get(key) : null;
+          item.apolloAvailable = null; item.apolloCanSend = null; item.apolloShortage = null;
+          item.apolloBranches = []; item.apolloError = ""; item.apolloMessage = "";
+          if (!key) { item.apolloSituation = "SEM SKU"; item.apolloMessage = "Produto sem SKU."; return; }
+          if (!r) {
+            item.apolloSituation = need > 0 ? "NÃO CONSULTADO" : "SEM NECESSIDADE";
+            if (need <= 0) item.apolloMessage = "Nada a enviar neste prazo — não consultado.";
+            return;
+          }
+          if (!r.ok) {
+            item.apolloSituation = r.pending ? "NÃO CONSULTADO" : "NÃO ENCONTRADO";
+            item.apolloError = r.error || "Falha na consulta ao Apollo.";
+            return;
+          }
+          const branches = Array.isArray(r.branches) ? r.branches : [];
+          const missing = new Set((r.missing_branches || []).map(Number));
+          item.apolloBranches = branches;
+          let available = null;
+          let atLeast = false;
+          if (filial) {
+            const row = branches.find(b => Number(b.revenda) === filial);
+            if (row && !missing.has(filial) && row.disponivel !== null && row.disponivel !== undefined) available = Number(row.disponivel);
+          } else if (r.stock_known) {
+            available = Number(r.available || 0);
+            atLeast = missing.size > 0;
+          }
+          if (available === null) {
+            item.apolloSituation = "NÃO INFORMADO";
+            item.apolloError = filial ? "Esta casa não respondeu ao Apollo agora — não é zero. Consulte de novo." : "Nenhuma casa respondeu — não é zero. Consulte de novo.";
+            return;
+          }
+          available = Math.floor(available);
+          item.apolloAvailable = available;
+          const semResposta = [...missing].map(n => ({1:"Araçatuba",2:"Ribeirão",3:"Bauru"})[n] || `Filial ${n}`);
+          const piso = atLeast ? ` (pelo menos: ${semResposta.join(", ")} não respondeu)` : "";
+          if (need <= 0) {
+            item.apolloSituation = "SEM NECESSIDADE";
+            item.apolloMessage = `Nada a enviar neste prazo. Apollo tem ${formatNumber(available)} un.${piso}`;
+            return;
+          }
+          item.apolloCanSend = Math.min(need, available);
+          item.apolloShortage = Math.max(0, need - available);
+          if (available >= need) {
+            item.apolloSituation = "OK";
+            item.apolloMessage = `Pode enviar as ${formatNumber(need)} un. (Apollo tem ${formatNumber(available)})`;
+          } else if (available > 0) {
+            item.apolloSituation = "PARCIAL";
+            item.apolloMessage = `Possível enviar apenas ${formatNumber(available)} de ${formatNumber(need)} — é o disponível no Apollo${piso}`;
+          } else {
+            item.apolloSituation = atLeast ? "NÃO INFORMADO" : "SEM ESTOQUE";
+            item.apolloMessage = atLeast ? `Zero nas casas que responderam${piso}` : `Nada disponível no Apollo para enviar (precisa ${formatNumber(need)})`;
+          }
+          const totalNeed = needByCode.get(key) || 0;
+          if ((rowsByCode.get(key) || 0) > 1 && totalNeed > available) {
+            item.apolloMessage += ` · Mesmo código Apollo em ${rowsByCode.get(key)} anúncios: juntos precisam de ${formatNumber(totalNeed)}.`;
+          }
+        });
       }
 
+      function apolloBadge(item) {
+        const map = {
+          "OK": ["ok", "ESTOQUE OK"], "PARCIAL": ["partial", "ENVIO PARCIAL"], "SEM ESTOQUE": ["short", "SEM ESTOQUE"],
+          "NÃO INFORMADO": ["unknown", "NÃO INFORMADO"], "NÃO ENCONTRADO": ["short", "NÃO ENCONTRADO"],
+          "SEM NECESSIDADE": ["unknown", "SEM NECESSIDADE"], "SEM SKU": ["unknown", "SEM SKU"], "NÃO CONSULTADO": ["unknown", "NÃO CONSULTADO"]
+        };
+        const [cls, label] = map[item.apolloSituation] || ["unknown", item.apolloSituation || "—"];
+        return `<span class="apollo-status ${cls}">${escapeHtml(label)}</span>`;
+      }
+
+      function renderApolloSummary() {
+        const count = (...sits) => state.data.filter(x => sits.includes(x.apolloSituation)).length;
+        element("apolloKpiChecked").textContent = formatNumber(apolloStore.size);
+        element("apolloKpiOk").textContent = formatNumber(count("OK"));
+        element("apolloKpiShort").textContent = formatNumber(count("PARCIAL", "SEM ESTOQUE", "NÃO ENCONTRADO"));
+        element("apolloKpiUnknown").textContent = formatNumber(count("NÃO INFORMADO"));
+        element("apolloKpiCanSend").textContent = formatNumber(state.data.reduce((s, x) => s + (Number(x.apolloCanSend) || 0), 0));
+      }
+
+      function setApolloButtons(running) {
+        [element("apolloCheck"), document.getElementById("apolloCheckTop")].filter(Boolean).forEach(b => {
+          b.textContent = running ? "■ Parar consulta Apollo" : "↻ Verificar estoque Apollo";
+        });
+      }
+
+      const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
       async function verificarEstoqueApollo() {
+        if (apolloRunning) { apolloCancel = true; return; }
         if (!state.data.length) {
           showMessage("Carregue primeiro a planilha do Mercado Livre.", "error");
           return;
         }
-        const buttons = [element("apolloCheck"), document.getElementById("apolloCheckTop")].filter(Boolean);
-        buttons.forEach(b => { b.disabled = true; b.textContent = "Consultando Apollo..."; });
-        hideMessage();
+        // Só consulta quem precisa de reposição no prazo escolhido, mais urgente
+        // primeiro; cada código Apollo uma vez só. Já consultado não repete.
+        const order = new Map();
+        [...state.data]
+          .filter(item => apolloKey(item) && apolloTargetNeed(item) > 0)
+          .sort((a, b) => a.priority - b.priority || b.sales - a.sales)
+          .forEach(item => { const k = apolloKey(item); if (!order.has(k)) order.set(k, apolloTargetNeed(item)); });
+        let pending = [...order.keys()].filter(k => !(apolloStore.get(k)?.ok));
+        if (!pending.length) {
+          showMessage(order.size ? "Todos os SKUs com reposição já foram consultados no Apollo." : "Nenhum SKU precisa de reposição neste prazo.", "success");
+          return;
+        }
+        apolloRunning = true; apolloCancel = false;
+        setApolloButtons(true);
+        const total = pending.length;
         try {
-          const filial = Number(element("apolloBranch").value || 0);
-          const items = state.data
-            .filter(item => item.sku)
-            .map(item => ({
-              sku: skuApolloNormalizado(item.sku),
-              skuOriginal: item.sku,
-              need: apolloTargetNeed(item)
-            }))
-            .filter(item => item.sku);
-
-          const chunkSize = 120;
-          const bySku = new Map();
-          for (let i = 0; i < items.length; i += chunkSize) {
-            const part = items.slice(i, i + chunkSize);
-            showMessage(`Consultando estoque Apollo: ${Math.min(i + part.length, items.length)} de ${items.length} SKU(s)...`, "success");
+          while (pending.length && !apolloCancel) {
+            const part = pending.slice(0, 40);
+            showMessage(`Consultando estoque Apollo: ${total - pending.length} de ${total} SKU(s)...`, "success");
             const response = await fetch("/expedicao/api/full/apollo-stock", {
               method: "POST",
               credentials: "same-origin",
               cache: "no-store",
               headers: { "Content-Type": "application/json", "Accept": "application/json" },
-              body: JSON.stringify({ filial, items: part })
+              body: JSON.stringify({ filial: 0, nao_esperar: true, items: part.map(sku => ({ sku, need: order.get(sku) })) })
             });
             const data = await response.json().catch(() => ({}));
             if (!response.ok) throw new Error(data.error || `Apollo: HTTP ${response.status}`);
-            (data.results || []).forEach(r => bySku.set(String(r.sku || "").trim().toUpperCase(), r));
-          }
-
-          state.data.forEach(item => {
-            const skuApollo = skuApolloNormalizado(item.sku);
-            const r = bySku.get(String(skuApollo || "").trim().toUpperCase());
-            if (!r) {
-              item.apolloAvailable = null; item.apolloShortage = null;
-              item.apolloSituation = "NÃO INFORMADO"; item.apolloBranches = [];
-              item.apolloError = item.sku ? `SKU Apollo ${skuApolloNormalizado(item.sku)} não retornado.` : "Produto sem SKU.";
-              return;
+            let retryAfter = 0;
+            const done = new Set();
+            (data.results || []).forEach(r => {
+              const key = String(r.sku || "").trim().toUpperCase();
+              if (r.pending) { retryAfter = Math.max(retryAfter, Number(r.retry_after) || 5); return; }
+              apolloStore.set(key, r);
+              done.add(key);
+            });
+            pending = pending.filter(k => !done.has(k));
+            if (!done.size && !retryAfter) throw new Error("O servidor não devolveu resultado para os SKUs enviados.");
+            apolloDerive(); renderApolloSummary(); applyFilters();
+            if (pending.length && retryAfter > 0) {
+              for (let s = Math.ceil(retryAfter); s > 0 && !apolloCancel; s -= 1) {
+                const faltam = Math.ceil(pending.length / 18);
+                showMessage(`Apollo: ${total - pending.length} de ${total} SKU(s) consultados. O Apollo aceita 20 consultas por minuto — continuando em ${s} s (faltam ~${faltam} min).`, "success");
+                await sleep(1000);
+              }
             }
-            item.apolloAvailable = r.stock_known ? Number(r.available || 0) : null;
-            item.apolloShortage = r.shortage === null || r.shortage === undefined ? null : Math.ceil(Number(r.shortage || 0));
-            item.apolloBranches = Array.isArray(r.branches) ? r.branches : [];
-            item.apolloError = r.error || "";
-            item.apolloSituation = !r.stock_known ? "NÃO INFORMADO" : (r.sufficient ? "OK" : "FALTA");
-          });
-          renderApolloSummary();
-          applyFilters();
-          const shortages = state.data.filter(x => x.apolloSituation === "FALTA").length;
-          const unknown = state.data.filter(x => x.apolloSituation === "NÃO INFORMADO").length;
-          showMessage(`Apollo concluído: ${shortages} SKU(s) com falta de estoque e ${unknown} sem saldo informado pelo endpoint.`, shortages ? "error" : "success");
+          }
+          const count = (sit) => state.data.filter(x => x.apolloSituation === sit).length;
+          const resumo = `${count("OK")} com estoque suficiente, ${count("PARCIAL")} com envio parcial, ${count("SEM ESTOQUE")} sem estoque, ${count("NÃO INFORMADO") + count("NÃO ENCONTRADO")} sem informação.`;
+          showMessage(apolloCancel ? `Consulta interrompida (${total - pending.length} de ${total}). ${resumo}` : `Apollo concluído: ${resumo}`, count("PARCIAL") + count("SEM ESTOQUE") ? "error" : "success");
         } catch (error) {
           showMessage(error?.message || "Não foi possível consultar o estoque Apollo.", "error");
         } finally {
-          buttons.forEach((b, idx) => { b.disabled = false; b.textContent = idx === 0 ? "↻ Verificar estoque Apollo" : "↻ Verificar estoque Apollo"; });
+          apolloRunning = false; apolloCancel = false;
+          setApolloButtons(false);
         }
       }
 
@@ -956,8 +1064,10 @@
           "Urgência de envio ML": item.mlUrgency,
           "Estoque a enviar ML": item.mlSend,
           "Estoque disponível Apollo": item.apolloAvailable,
+          "Possível enviar": item.apolloCanSend,
           "Falta no Apollo": item.apolloShortage,
-          "Situação Apollo": item.apolloSituation
+          "Situação Apollo": item.apolloSituation,
+          "Observação Apollo": [item.apolloMessage, item.apolloError].filter(Boolean).join(" ")
         }));
         const worksheet = XLSX.utils.json_to_sheet(rows);
         worksheet["!cols"] = [10, 10, 22, 14, 18, 55, 16, 30, 14, 20, 20, 18, 14, 20, 20].map((wch) => ({ wch }));
@@ -997,17 +1107,15 @@
       element("apolloCheck").addEventListener("click", verificarEstoqueApollo);
       document.getElementById("apolloCheckTop")?.addEventListener("click", verificarEstoqueApollo);
       element("apolloBranch").addEventListener("change", () => {
-        state.data.forEach(item => { item.apolloAvailable=null; item.apolloShortage=null; item.apolloSituation="NÃO CONSULTADO"; item.apolloBranches=[]; item.apolloError=""; });
-        renderApolloSummary();
         if (state.data.length) applyFilters();
+        renderApolloSummary();
       });
 
       element("searchInput").addEventListener("input", applyFilters);
       element("statusFilter").addEventListener("change", applyFilters);
       element("targetDays").addEventListener("change", () => {
-        state.data.forEach(item => { item.apolloAvailable=null; item.apolloShortage=null; item.apolloSituation="NÃO CONSULTADO"; item.apolloBranches=[]; item.apolloError=""; });
-        renderApolloSummary();
         applyFilters();
+        renderApolloSummary();
       });
       element("onlyNeed").addEventListener("click", () => {
         state.onlyNeed = !state.onlyNeed;

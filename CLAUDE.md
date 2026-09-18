@@ -233,6 +233,11 @@ gerar SKU artificial concatenado quando os componentes reais já existem.
 ### Apollo (ERP)
 Consultas de custo e estoque via `CRM_COST_API_URL` / `CRM_STOCK_API_URL`, cache de 180 s.
 Alimenta Precificador e Central de Pendências.
+**Estoque disponível (V17.94):** rota `/api/v1/expedicao/estoque` (contrato em
+`INTEGRACAO_ESTOQUE_APOLLO.md`), já líquida do FULL. `disponivel: null` é casa que não
+respondeu — **nunca** tratar como zero. `/custo` e `/estoque` dividem o limite de 20
+chamadas/min: `crm_rate_acquire`; em `/api/full/apollo-stock` com `nao_esperar` o que não
+cabe volta `pending` + `retry_after` e a Demanda Full reenvia sozinha.
 
 **Botão Cliente (V17.85):** atualiza o cadastro no **Linx DMS** (ERP em `10.1.15.1`, rede
 do escritório — a VPS não alcança). O servidor só entrega CPF/CNPJ e nome de "Dados para
