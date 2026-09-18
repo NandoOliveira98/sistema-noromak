@@ -38,5 +38,27 @@ class DetectorPacoteDesnecessario(unittest.TestCase):
             self.assertFalse(S._shopee_package_not_needed_error(outro), outro)
 
 
+
+class CacheDoOrganizarEnvio(unittest.TestCase):
+    """V17.90 — "Organizar envio" só fica em cache quando o rastreio sai.
+
+    Em 18/09/2026 a Shopee recusou o ship_order porque a NF-e ainda não tinha sido
+    enviada, o sistema registrou "já organizado" e guardou isso por 2 h: a
+    etiqueta só sairia 2 h depois de a NF-e chegar.
+    """
+
+    def test_esquecer_libera_nova_tentativa(self):
+        S._shopee_mark_ship_order_cached("260918BHYEGN3E", "OFG1", unsplit=True)
+        self.assertEqual(S._shopee_ship_order_cached("260918BHYEGN3E", "OFG1"), (True, True))
+        S._shopee_forget_ship_order("260918BHYEGN3E", "OFG1")
+        self.assertEqual(S._shopee_ship_order_cached("260918BHYEGN3E", "OFG1"), (False, False))
+
+    def test_esquecer_nao_mexe_em_outro_pedido(self):
+        S._shopee_mark_ship_order_cached("OUTRO", "P2")
+        S._shopee_forget_ship_order("260918BHYEGN3E", "OFG1")
+        self.assertEqual(S._shopee_ship_order_cached("OUTRO", "P2")[0], True)
+        S._shopee_forget_ship_order("OUTRO", "P2")
+
+
 if __name__ == "__main__":
     unittest.main()

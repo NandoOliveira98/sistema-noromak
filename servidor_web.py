@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "17.89-ETIQUETA-SHOPEE-E-PAINEL-LINX"
+APP_VERSION = "17.90-SHOPEE-AGUARDA-NFE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -4633,6 +4633,14 @@ def _shopee_ship_order_cached(order_sn: str, package_number: str) -> tuple[bool,
         return key in SHOPEE_SHIP_ORDER_CACHE, key in SHOPEE_SHIP_ORDER_UNSPLIT_CACHE
 
 
+def _shopee_forget_ship_order(order_sn: str, package_number: str) -> None:
+    """V17.90 — descarta o "organizado" em cache de um pedido ainda sem rastreio."""
+    key = (str(order_sn or "").strip(), str(package_number or "").strip())
+    with SHOPEE_SHIP_ORDER_CACHE_LOCK:
+        SHOPEE_SHIP_ORDER_CACHE.pop(key, None)
+        SHOPEE_SHIP_ORDER_UNSPLIT_CACHE.discard(key)
+
+
 def _shopee_mark_ship_order_cached(order_sn: str, package_number: str, *, unsplit: bool = False) -> None:
     key = (str(order_sn or "").strip(), str(package_number or "").strip())
     with SHOPEE_SHIP_ORDER_CACHE_LOCK:
@@ -4798,7 +4806,9 @@ def shopee_sync_shipping_documents(shipments: list[dict[str,str]]) -> dict[str,A
                                     unsplit_order=True
                                     _shopee_mark_ship_order_cached(order_sn,pkg,unsplit=True)
                                     summary["ship_order_ok"] += 1
-                                    shopee_log_event("ship_order",f"order={order_sn}","OK",f"já organizado; unsplit=sim; fallback_sem_package=sim")
+                                    # V17.90: registra a mensagem real — em 18/09/2026 este "já
+                                    # organizado" escondia a recusa da Shopee por falta de NF-e.
+                                    shopee_log_event("ship_order",f"order={order_sn}","OK",f"já organizado; unsplit=sim; fallback_sem_package=sim; resposta={retry_msg[:240]}")
                                 else:
                                     summary["erros"] += 1
                                     summary["pendentes"] += 1
@@ -4812,7 +4822,7 @@ def shopee_sync_shipping_documents(shipments: list[dict[str,str]]) -> dict[str,A
                                 arranged=True
                                 _shopee_mark_ship_order_cached(order_sn,pkg,unsplit=unsplit_order)
                                 summary["ship_order_ok"] += 1
-                                shopee_log_event("ship_order",f"order={order_sn}","OK",f"já organizado; pacote={'sim' if pkg else 'nao'}")
+                                shopee_log_event("ship_order",f"order={order_sn}","OK",f"já organizado; pacote={'sim' if pkg else 'nao'}; resposta={msg[:240]}")
                             else:
                                 summary["erros"] += 1
                                 summary["pendentes"] += 1
@@ -4844,6 +4854,11 @@ def shopee_sync_shipping_documents(shipments: list[dict[str,str]]) -> dict[str,A
                     shopee_log_event("tracking_number",f"order={order_sn}","PENDENTE",f"obtido=nao; pacote={'sim' if pkg and not unsplit_order else 'nao'}; unsplit={'sim' if unsplit_order else 'nao'}; hint={hint[:300] or '-'}")
                     # O tracking pode ser emitido alguns minutos depois do ship_order.
                     # Worker tenta novamente no próximo ciclo; não faz polling aqui.
+                    # V17.90: sem rastreio, o "organizado" não está confirmado (a Shopee
+                    # bloqueia "Organizar envio" até a NF-e ser enviada). Esquece o
+                    # cache para refazer ship_order no próximo ciclo — senão a etiqueta
+                    # só sairia 2 h (TTL) depois de a NF-e chegar.
+                    _shopee_forget_ship_order(order_sn, pkg)
                     continue
 
                 # 4) Cria documento somente com tracking disponível.
