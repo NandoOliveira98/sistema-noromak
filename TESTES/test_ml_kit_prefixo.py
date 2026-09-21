@@ -58,5 +58,50 @@ class KitPrefixoNaoInflaProdutoSimples(unittest.TestCase):
         self.assertEqual(S.normalize(linhas[0]["sku"]), S.normalize("0893014105"))
 
 
+class LimpaResiduoDeKitPrefixo(unittest.TestCase):
+    """V18.04 — o reparo de boot limpa o selo de kit que sobrou nas vendas de
+    produto simples, sem tocar nos kits de verdade."""
+
+    def _linha_residuo(self):
+        return {
+            "Pedido": "2000018534495590", "Marketplace": "MERCADO LIVRE", "SKU": "0893014105",
+            "Quantidade": "2", "Kit": "SIM", "Nome do Kit": "KIT2-0893014105",
+            "Quantidade de Kits": "1", "Quantidade por Kit": "2",
+            "SkuKitOrigem": "KIT2-0893014105", "SkuOrigemImportacao": "152285-0893014105",
+        }
+
+    def _linha_kit_real(self):
+        return {
+            "Pedido": "9", "Marketplace": "MERCADO LIVRE", "SKU": "KS001", "Quantidade": "6",
+            "Kit": "SIM", "Nome do Kit": "KIT3-KS001", "Quantidade de Kits": "2",
+            "Quantidade por Kit": "3", "SkuKitOrigem": "KIT3-KS001", "SkuOrigemImportacao": "KIT3-KS001",
+        }
+
+    def test_limpa_o_residuo_e_corrige_a_quantidade(self):
+        rows = [self._linha_residuo()]
+        self.assertEqual(S._kits_residuo_prefixo_reparar_rows(rows), 1)
+        r = rows[0]
+        self.assertEqual(r["Quantidade"], "1", "a quantidade tem que voltar para a vendida (1)")
+        self.assertEqual(r["Kit"], "")
+        self.assertEqual(r["Quantidade por Kit"], "")
+        self.assertEqual(r["SkuKitOrigem"], "")
+
+    def test_nao_toca_no_kit_de_verdade(self):
+        rows = [self._linha_kit_real()]
+        self.assertEqual(S._kits_residuo_prefixo_reparar_rows(rows), 0)
+        self.assertEqual(rows[0]["Kit"], "SIM")
+        self.assertEqual(rows[0]["Quantidade"], "6")
+
+    def test_kit_real_com_prefixo_numerico_do_ml_nao_e_residuo(self):
+        r = self._linha_kit_real()
+        r["SkuOrigemImportacao"] = "152285-KIT3-KS001"
+        self.assertEqual(S._kits_residuo_prefixo_reparar_rows([r]), 0)
+
+    def test_idempotente(self):
+        rows = [self._linha_residuo()]
+        self.assertEqual(S._kits_residuo_prefixo_reparar_rows(rows), 1)
+        self.assertEqual(S._kits_residuo_prefixo_reparar_rows(rows), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

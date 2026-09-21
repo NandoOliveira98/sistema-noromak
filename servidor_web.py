@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.03-KIT-PREFIXO-NAO-INFLA"
+APP_VERSION = "18.05-PAINEL-DIA-TOTAL"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -4677,6 +4677,81 @@ def shopee_reparar_etiquetas_sem_grafico() -> int:
                 shopee_log_event("etiqueta_reparada", f"order={order_sn}", "OK", "imagem ~DG restaurada (V17.99)")
             break
     return reparadas
+
+
+def _kit_e_residuo_prefixo(row: dict[str, Any]) -> bool:
+    """V18.04: True se a linha é um produto SIMPLES que foi marcado como kit pelo
+    bug do alias (kit KIT2-X vazando para a venda do X puro).
+
+    Distingue do kit de verdade pelo SKU VENDIDO (SkuOrigemImportacao): num kit
+    real ele é "KIT2-X" (mesmo com prefixo numérico do ML, ex.: 152285-KIT2-X);
+    no resíduo é só o SKU simples (ex.: 152285-0893014105), sem "KIT".
+    """
+    if not isinstance(row, dict):
+        return False
+    sku_kit = str(row.get("SkuKitOrigem") or "").strip()
+    if not re.match(r"^KIT\s*\d", sku_kit, re.I):
+        return False
+    if str(row.get("Kit") or "").upper() != "SIM" and not sku_kit:
+        return False
+    origem = str(row.get("SkuOrigemImportacao") or row.get("SkuReferenciaShopee") or "").strip()
+    if not origem:
+        return False
+    operacional = re.sub(r"^\d+-", "", origem, count=1)  # tira o prefixo numérico do ML
+    if operacional.upper().startswith("KIT"):
+        return False  # kit de verdade
+    return True
+
+
+def _kits_residuo_prefixo_reparar_rows(rows: Any) -> int:
+    """Limpa o selo de kit das linhas de resíduo, in place. Retorna quantas mudaram.
+
+    A quantidade correta é a quantidade vendida (Quantidade de Kits); os campos de
+    kit são zerados para a tela parar de recalcular (Qtd de Kits × Qtd por Kit).
+    """
+    if not isinstance(rows, list):
+        return 0
+    mudou = 0
+    for row in rows:
+        if not _kit_e_residuo_prefixo(row):
+            continue
+        try:
+            vendidas = max(1, int(float(row.get("Quantidade de Kits") or 1)))
+        except Exception:
+            vendidas = 1
+        row["Quantidade"] = str(vendidas)
+        row["Kit"] = ""
+        row["Nome do Kit"] = ""
+        row["Quantidade de Kits"] = ""
+        row["Quantidade por Kit"] = ""
+        row["SkuKitOrigem"] = ""
+        mudou += 1
+    return mudou
+
+
+def reparar_kits_residuo_prefixo_v1803() -> int:
+    """V18.04: reparo de boot para o resíduo do bug do kit-prefixo (V18.03).
+
+    A sincronização do ML já corrige a QUANTIDADE, mas o merge preserva os campos
+    de kit antigos, então a tela continua mostrando o dobro. Aqui grava DIRETO
+    (sem passar pelo merge, que reporia o selo) só nas linhas de resíduo.
+    Idempotente: depois de limpo, não acha mais nada.
+    """
+    row = DB.execute("SELECT value,version FROM storage WHERE key='conf_pedidos'").fetchone()
+    if not row:
+        return 0
+    try:
+        items = json.loads(str(row["value"] or "[]"))
+    except Exception:
+        return 0
+    mudou = _kits_residuo_prefixo_reparar_rows(items)
+    if mudou:
+        DB.execute(
+            "UPDATE storage SET value=?,version=?,updated_at=? WHERE key='conf_pedidos'",
+            (json_dumps(items), int(row["version"] or 0) + 1, now_iso()),
+        )
+        DB.commit()
+    return mudou
 
 
 def _shopee_store_linked_label(order_sn: str, package_number: str, zpl: str) -> bool:
@@ -15575,6 +15650,14 @@ class AppHandler(BaseHTTPRequestHandler):
 
 def main() -> None:
     init_db()
+    # V18.04: limpa, uma vez no boot, o selo de kit que sobrou nas vendas de
+    # produto simples marcadas como kit pelo bug do alias (V18.03). Idempotente.
+    try:
+        _kit_residuo = reparar_kits_residuo_prefixo_v1803()
+        if _kit_residuo:
+            print(f"[boot] V18.04: {_kit_residuo} linha(s) de residuo de kit-prefixo limpa(s).")
+    except Exception as _exc:  # nunca impede o boot
+        print(f"[boot] reparo de kit-residuo falhou: {_exc}")
     backup_daily()
     watcher_stop = threading.Event()
     watcher_thread = threading.Thread(
