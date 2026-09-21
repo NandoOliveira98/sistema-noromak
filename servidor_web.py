@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.05-PAINEL-DIA-TOTAL"
+APP_VERSION = "18.06-GET-STORAGE-LOCK"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2745,39 +2745,47 @@ def backup_daily() -> None:
 
 
 def get_storage(key: str) -> tuple[str | None, int, str | None]:
-    row = DB.execute("SELECT value,version,updated_at FROM storage WHERE key=?", (key,)).fetchone()
-    if not row:
-        return None, 0, None
-    value = row["value"]
-    if key in ("conf_pedidos", "conf_pedidos_rascunhos"):
-        value = filter_completed_orders(value)
+    # V18.06: toda a leitura roda sob DB_LOCK. A conexão SQLite é COMPARTILHADA
+    # entre as threads do ThreadingHTTPServer (check_same_thread=False) e as
+    # escritas já usam o lock; sem ele, get_storage/completed_keys corriam com as
+    # escritas e a conexão devolvia linhas corrompidas (IndexError em row[0]),
+    # derrubando de forma intermitente o import da Shopee e a leitura de etiquetas.
+    # DB_LOCK é RLock (re-entrante), então as chamadas internas que também o pegam
+    # continuam funcionando.
+    with DB_LOCK:
+        row = DB.execute("SELECT value,version,updated_at FROM storage WHERE key=?", (key,)).fetchone()
+        if not row:
+            return None, 0, None
+        value = row["value"]
+        if key in ("conf_pedidos", "conf_pedidos_rascunhos"):
+            value = filter_completed_orders(value)
+            try:
+                parsed = json.loads(value or "[]")
+                if isinstance(parsed, list):
+                    value = json_dumps(_enrich_rows_with_completion_history(parsed))
+            except Exception:
+                pass
+        # V17.50: o servidor é canônico e o ADMIN prevalece também na LEITURA.
+        # Mesmo que algum job legado grave diretamente em storage, os overrides/tombstones
+        # persistentes são reaplicados antes de qualquer tela receber o banco.
         try:
-            parsed = json.loads(value or "[]")
-            if isinstance(parsed, list):
-                value = json_dumps(_enrich_rows_with_completion_history(parsed))
-        except Exception:
-            pass
-    # V17.50: o servidor é canônico e o ADMIN prevalece também na LEITURA.
-    # Mesmo que algum job legado grave diretamente em storage, os overrides/tombstones
-    # persistentes são reaplicados antes de qualquer tela receber o banco.
-    try:
-        if value is not None and "_admin_override_apply" in globals():
-            value = _admin_override_apply(key, value)
-        if key == "conf_pedidos" and "_admin_manual_order_vault_apply" in globals():
-            value = _admin_manual_order_vault_apply(value)
-        if key in ("conf_pedidos", "conf_pedidos_rascunhos") and "_pending_filter_manual_deleted_orders_value" in globals():
-            value = _pending_filter_manual_deleted_orders_value(value)
-        # V17.82: conclusão é a ÚLTIMA barreira da fila também na LEITURA, exatamente
-        # como save_storage() já faz na escrita. Sem isto, o override __ENTITY__ e o
-        # cofre manual reinjetavam um pedido já concluído (eles rodam depois do
-        # filter_completed_orders acima), e o pedido voltava para a Conferência.
-        # A reimportação explícita do ADMIN continua possível porque
-        # reactivate_completed_orders_from_delta remove o registro de completed_orders.
-        if key in ("conf_pedidos", "conf_pedidos_rascunhos") and "filter_completed_orders_v1772" in globals():
-            value = filter_completed_orders_v1772(value)
-    except Exception as exc:
-        print(f"Aviso: override manual não aplicado na leitura de {key}: {exc}", file=sys.stderr)
-    return value, int(row["version"]), row["updated_at"]
+            if value is not None and "_admin_override_apply" in globals():
+                value = _admin_override_apply(key, value)
+            if key == "conf_pedidos" and "_admin_manual_order_vault_apply" in globals():
+                value = _admin_manual_order_vault_apply(value)
+            if key in ("conf_pedidos", "conf_pedidos_rascunhos") and "_pending_filter_manual_deleted_orders_value" in globals():
+                value = _pending_filter_manual_deleted_orders_value(value)
+            # V17.82: conclusão é a ÚLTIMA barreira da fila também na LEITURA, exatamente
+            # como save_storage() já faz na escrita. Sem isto, o override __ENTITY__ e o
+            # cofre manual reinjetavam um pedido já concluído (eles rodam depois do
+            # filter_completed_orders acima), e o pedido voltava para a Conferência.
+            # A reimportação explícita do ADMIN continua possível porque
+            # reactivate_completed_orders_from_delta remove o registro de completed_orders.
+            if key in ("conf_pedidos", "conf_pedidos_rascunhos") and "filter_completed_orders_v1772" in globals():
+                value = filter_completed_orders_v1772(value)
+        except Exception as exc:
+            print(f"Aviso: override manual não aplicado na leitura de {key}: {exc}", file=sys.stderr)
+        return value, int(row["version"]), row["updated_at"]
 
 
 SKU_TRACKED_STORAGE_KEYS = {"conf_pedidos", "conf_pedidos_rascunhos", "conf_produtos"}
@@ -3484,7 +3492,10 @@ def _enrich_rows_with_completion_history(rows: list[Any]) -> list[Any]:
 
 
 def completed_keys() -> set[str]:
-    return {row[0] for row in DB.execute("SELECT order_key FROM completed_orders")}
+    # V18.06: sob DB_LOCK e com fetchall — a conexão SQLite compartilhada corria
+    # com as escritas e o cursor devolvia tuplas vazias (IndexError em row[0]).
+    with DB_LOCK:
+        return {row[0] for row in DB.execute("SELECT order_key FROM completed_orders").fetchall()}
 
 
 def filter_completed_orders(value: str) -> str:
