@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.02-CONFERENCIA-NOVA"
+APP_VERSION = "18.03-KIT-PREFIXO-NAO-INFLA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -7361,28 +7361,34 @@ def _ml_dispatch_date(shipment_id: str, shipment: dict[str, Any] | None) -> str:
     return datetime.now().astimezone().date().isoformat()
 
 
-def _kit_sku_aliases(value: Any) -> list[str]:
+def _kit_sku_aliases(value: Any, strip_kit_prefix: bool = True) -> list[str]:
     """Gera aliases robustos para localizar SKU de kit.
 
     Além das formas normal/compacta, aceita prefixos operacionais usados nos
     anúncios, como KIT-, KIT2-, KIT3-, etc. Ex.: KIT3-KS001 também procura KS001.
+
+    V18.03: `strip_kit_prefix` só pode ser True na BUSCA (um pedido "KIT2-X" acha
+    um cadastro gravado como "X"). Na INDEXAÇÃO do catálogo tem que ser False —
+    senão o kit "KIT2-X" fica indexado também sob "X" e a venda do produto SIMPLES
+    "X" casa com o kit e a quantidade dobra (bug do 152285-0893014105).
     """
     raw = str(value or "").strip().upper()
     if not raw:
         return []
 
     candidates = [raw]
-    # Prefixos operacionais comuns do marketplace não fazem parte necessariamente
-    # do SKU-base usado no Cadastro de Kits.
-    stripped = re.sub(r"^KIT\s*\d*\s*[-_./: ]+", "", raw, flags=re.I).strip()
-    if stripped and stripped != raw:
-        candidates.append(stripped)
+    if strip_kit_prefix:
+        # Prefixos operacionais comuns do marketplace não fazem parte necessariamente
+        # do SKU-base usado no Cadastro de Kits.
+        stripped = re.sub(r"^KIT\s*\d*\s*[-_./: ]+", "", raw, flags=re.I).strip()
+        if stripped and stripped != raw:
+            candidates.append(stripped)
 
-    # Também cobre KIT3KS001 (sem separador): remove apenas quando há conteúdo
-    # suficiente após o prefixo, evitando transformar SKUs curtos indevidamente.
-    m = re.match(r"^KIT\s*\d+(?=[A-Z0-9])(.+)$", raw, flags=re.I)
-    if m and m.group(1).strip():
-        candidates.append(m.group(1).strip())
+        # Também cobre KIT3KS001 (sem separador): remove apenas quando há conteúdo
+        # suficiente após o prefixo, evitando transformar SKUs curtos indevidamente.
+        m = re.match(r"^KIT\s*\d+(?=[A-Z0-9])(.+)$", raw, flags=re.I)
+        if m and m.group(1).strip():
+            candidates.append(m.group(1).strip())
 
     out: list[str] = []
     for candidate in candidates:
@@ -7469,7 +7475,9 @@ def _load_kit_catalog() -> dict[str, dict[str, Any]]:
             "componentes": components,
             "ativo": bool(row.get("ativo", True)),
         }
-        for alias in _kit_sku_aliases(kit_sku):
+        # V18.03: indexa SÓ pelo SKU do próprio kit (sem tirar o prefixo KIT),
+        # para o kit "KIT2-X" nunca vazar para a venda do produto simples "X".
+        for alias in _kit_sku_aliases(kit_sku, strip_kit_prefix=False):
             catalog.setdefault(alias, entry)
     return catalog
 
