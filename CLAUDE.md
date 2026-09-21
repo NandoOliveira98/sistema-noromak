@@ -264,6 +264,11 @@ Precificador (`precificador_online_v1`, cujo SKU é o código Apollo); estoque =
 no navegador. Marca não existe no cadastro: fornecedor = regras (começo do código, palavra na
 descrição, lista de códigos) em `compras_fornecedores_v1800`. "A caminho" é digitado e fica no
 navegador. Trocar as vendas pela rota do Apollo quando ela existir (PEDIDO_ROTA_DEMANDA_APOLLO.md).
+**Custo de reserva (V18.07):** o custo médio do Apollo vai a 0 quando o estoque zera (245 peças em
+21/09). A demanda usa, nesta ordem: custo atual do Apollo > custo **digitado** na tela > o mais
+recente entre o **último custo > 0 visto** (`custos_conhecidos_v1807`, alimentada pelo Precificador
+e por todo `crm_cost_lookup`) e o **custo da venda** do ML (`ml_profitability_snapshot`). Nunca grava
+custo zero. `POST /api/compras/custo`. Definitivo: custo da última venda pela Linx Smart API.
 
 ### Linx Smart API (levantamento 21/09/2026)
 API oficial da Linx para o Linx DMS, na nuvem: gateway `https://auto-gwsmartapi.linx.com.br/<api>`,
