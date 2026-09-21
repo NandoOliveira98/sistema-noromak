@@ -106,9 +106,14 @@
   .img-produto { width: 65px; height: 65px; object-fit: contain; border-radius: 4px; border: 1px solid #ccc; background: #fff; }
   .sku-texto { font-weight: bold; font-size: 13px; color: var(--primary); }
 
-  .qz-status { font-size: 11px; padding: 4px 8px; border-radius: 4px; display: inline-block; margin-top: 3px; font-weight: bold; }
-  .qz-conectado { background: #c8e6c9; color: #2e7d32; }
-  .qz-desconectado { background: #ffcdd2; color: #c62828; }
+  /* V18.02: status da Zebra discreto — bolinha (verde=ON / vermelho=OFF) + "Zebra".
+     O texto real fica escondido (font-size:0); a cor vem das classes qz-conectado/
+     qz-desconectado que as funções já alternam. */
+  .qz-status { display: inline-flex; align-items: center; gap: 5px; font-size: 0; margin-top: 3px; cursor: default; }
+  .qz-status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #9aa7b4; }
+  .qz-status::after { content: "Zebra"; font-size: 11px; font-weight: 600; color: #7b8a9c; }
+  .qz-conectado::before { background: #2e9e5b; box-shadow: 0 0 5px rgba(46,158,91,.55); }
+  .qz-desconectado::before { background: #e06666; }
   .etiqueta-status { display: inline-block; font-size: 12px; font-weight: 700; padding: 6px 10px; border-radius: 6px; margin-bottom: 14px; }
   .etiqueta-ok { background: #e8f5e9; color: #2e7d32; border: 1px solid #a5d6a7; }
   .etiqueta-erro { background: #ffebee; color: #c62828; border: 1px solid #ef9a9a; }
@@ -419,14 +424,14 @@
 </div>
 
 <header class="conf-header-v1670">
-  <div class="logo-mini-box">
-    <img src="/grupo-noromak.png?v=16.70" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=16.70';">
+  <div class="logo-mini-box conf-marca-v1802">
+    <span class="conf-marca-n">N</span>
+    <span class="conf-marca-txt">Conferência</span>
   </div>
 
   <div class="conf-operador-bloco">
-    <div id="infoUsuario" class="conf-operador-nome">Operador: —</div>
+    <div id="infoUsuario" class="conf-operador-nome">Operador —</div>
     <div class="conf-operador-status">
-      <span id="qzStatusBadge" class="qz-status qz-desconectado">Zebra Browser Print / Estação</span>
       <span id="autosaveStatus" class="autosave-status">Salvamento automático ativo</span>
     </div>
   </div>
@@ -441,7 +446,8 @@
 
   <div class="conf-acoes-header">
     <div class="conf-acoes-grupo conf-acoes-navegacao">
-      <a class="btn-header btn-header-compacto" href="/expedicao/admin">← CENTRAL</a>
+      <span id="qzStatusBadge" class="qz-status qz-desconectado">Zebra</span>
+      <a class="btn-header btn-header-compacto btn-icon-only btn-central-v1802" href="/expedicao/admin" title="Central" aria-label="Central">🏠</a>
       <button type="button" class="pwa-install-btn pwa-header btn-header-compacto btn-icon-only btn-install-conf" data-pwa-install title="Instalar Conferência" aria-label="Instalar Conferência">⬇</button>
     </div>
 
@@ -489,6 +495,53 @@
 </div>
 
 
+<!-- V18.02: painel do dia por marketplace (cards clicaveis = filtro) — igual a maquete -->
+<style>
+  .conf-dia-painel{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;padding:14px 18px 2px}
+  .conf-dia-card{text-align:left;background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:12px 15px;cursor:pointer;font:inherit;transition:box-shadow .12s,border-color .12s}
+  .conf-dia-card:hover{border-color:#b3c4d8}
+  .conf-dia-card.ativo{border-color:#12345b;box-shadow:0 0 0 2px rgba(18,52,91,.18)}
+  .conf-dia-nome{display:flex;align-items:center;gap:7px;font-weight:600;font-size:13px;color:#7b8a9c;margin-bottom:9px}
+  .conf-dia-dot{width:9px;height:9px;border-radius:50%;background:#9aa7b4;flex:0 0 auto}
+  .conf-dia-dot.mercado_livre{background:#f5b800}.conf-dia-dot.shopee{background:#ee4d2d}.conf-dia-dot.magalu{background:#0086ff}.conf-dia-dot.todos{background:#12345b}
+  .conf-dia-filtrando{margin-left:auto;font-size:10px;font-weight:700;color:#12345b;opacity:0}
+  .conf-dia-card.ativo .conf-dia-filtrando{opacity:1}
+  .conf-dia-card.todos .conf-dia-filtrando{color:#7b8a9c}
+  .conf-dia-nums{display:flex;align-items:baseline;gap:18px}
+  .conf-dia-num{display:flex;flex-direction:column}
+  .conf-dia-num b{font-size:23px;line-height:1;font-weight:700;color:#1e293b}
+  .conf-dia-num small{font-size:10.5px;color:#7b8a9c;margin-top:3px}
+  .conf-dia-num.falta b{color:#d97706}
+  .conf-dia-num.falta.zero b{color:#16a34a}
+  .conf-dia-barra{height:5px;border-radius:99px;background:#eef2f6;margin-top:11px;overflow:hidden}
+  .conf-dia-barra i{display:block;height:100%;background:#9aa7b4;opacity:.85;width:0}
+  .conf-dia-barra.mercado_livre i{background:#f5b800}.conf-dia-barra.shopee i{background:#ee4d2d}.conf-dia-barra.magalu i{background:#0086ff}.conf-dia-barra.todos i{background:#12345b}
+  .conf-dia-card.todos{background:#fbfcfe}
+  @media(max-width:820px){.conf-dia-painel{grid-template-columns:repeat(2,1fr)}}
+</style>
+<section class="conf-dia-painel" id="confDiaPainel" aria-label="Pedidos do dia por marketplace">
+  <button type="button" class="conf-dia-card" data-mp="mercado_livre" onclick="alterarFiltroMarketplacePedidos('mercado_livre')" title="Ver só Mercado Livre">
+    <div class="conf-dia-nome"><span class="conf-dia-dot mercado_livre"></span> Mercado Livre <span class="conf-dia-filtrando">● filtrando</span></div>
+    <div class="conf-dia-nums"><div class="conf-dia-num"><b data-k="total">0</b><small>Total</small></div><div class="conf-dia-num"><b data-k="conf">0</b><small>Conferidos</small></div><div class="conf-dia-num falta"><b data-k="falta">0</b><small>Faltam</small></div></div>
+    <div class="conf-dia-barra mercado_livre"><i data-k="barra"></i></div>
+  </button>
+  <button type="button" class="conf-dia-card" data-mp="shopee" onclick="alterarFiltroMarketplacePedidos('shopee')" title="Ver só Shopee">
+    <div class="conf-dia-nome"><span class="conf-dia-dot shopee"></span> Shopee <span class="conf-dia-filtrando">● filtrando</span></div>
+    <div class="conf-dia-nums"><div class="conf-dia-num"><b data-k="total">0</b><small>Total</small></div><div class="conf-dia-num"><b data-k="conf">0</b><small>Conferidos</small></div><div class="conf-dia-num falta"><b data-k="falta">0</b><small>Faltam</small></div></div>
+    <div class="conf-dia-barra shopee"><i data-k="barra"></i></div>
+  </button>
+  <button type="button" class="conf-dia-card" data-mp="magalu" onclick="alterarFiltroMarketplacePedidos('magalu')" title="Ver só Magalu">
+    <div class="conf-dia-nome"><span class="conf-dia-dot magalu"></span> Magalu <span class="conf-dia-filtrando">● filtrando</span></div>
+    <div class="conf-dia-nums"><div class="conf-dia-num"><b data-k="total">0</b><small>Total</small></div><div class="conf-dia-num"><b data-k="conf">0</b><small>Conferidos</small></div><div class="conf-dia-num falta"><b data-k="falta">0</b><small>Faltam</small></div></div>
+    <div class="conf-dia-barra magalu"><i data-k="barra"></i></div>
+  </button>
+  <button type="button" class="conf-dia-card todos" data-mp="todos" onclick="alterarFiltroMarketplacePedidos('todos')" title="Ver todos">
+    <div class="conf-dia-nome"><span class="conf-dia-dot todos"></span> Total do dia <span class="conf-dia-filtrando">● todos</span></div>
+    <div class="conf-dia-nums"><div class="conf-dia-num"><b data-k="total">0</b><small>Total</small></div><div class="conf-dia-num"><b data-k="conf">0</b><small>Conferidos</small></div><div class="conf-dia-num falta"><b data-k="falta">0</b><small>Faltam</small></div></div>
+    <div class="conf-dia-barra todos"><i data-k="barra"></i></div>
+  </button>
+</section>
+
 <div class="container">
   <div class="menu">
 
@@ -497,7 +550,7 @@
       <input type="text" id="campoBusca" class="busca-input" placeholder="🔍 Buscar cliente ou pedido..." oninput="renderizarListaPedidos()">
     </div>
 
-    <div class="filtro-marketplace-box">
+    <div class="filtro-marketplace-box" style="display:none">
       <label for="filtroMarketplacePedidos">🛒 FILTRAR POR MARKETPLACE</label>
       <select id="filtroMarketplacePedidos" class="filtro-marketplace-select" onchange="alterarFiltroMarketplacePedidos(this.value)">
         <option value="todos">Todos os marketplaces</option>
@@ -556,7 +609,7 @@
           <th>Produto</th>
           <th>Qtd</th>
           <th>Lido</th>
-          <th>Localização</th><th>Ação</th>
+          <th>Ação</th>
         </tr>
       </thead>
       <tbody id="corpoTabela"></tbody>
@@ -1872,7 +1925,7 @@ function iniciarSessao() {
     return;
   }
   document.getElementById("telaLogin").style.display = "none";
-  document.getElementById("infoUsuario").innerHTML = `Operador: <b>${usuarioLogado.Nome || usuarioLogado.Login}</b>`;
+  document.getElementById("infoUsuario").innerHTML = `Operador <b>${usuarioLogado.Nome || usuarioLogado.Login}</b>`;
   document.getElementById("usuarioInput").value = "";
   document.getElementById("senhaInput").value = "";
   document.getElementById("erroLogin").innerText = "";
@@ -2056,6 +2109,49 @@ function atualizarResumoFiltroMarketplace(contagens) {
   }
 }
 
+// V18.02: painel do dia por marketplace — total/conferidos/faltam.
+// Mesma base da fila (só pedidos com etiqueta pronta); "conferido" = todos os
+// itens lidos (mesmo cálculo de `completo` de renderizarListaPedidos).
+function obterEstatisticasDiaMarketplace() {
+  const st = { mercado_livre:{t:0,c:0}, shopee:{t:0,c:0}, magalu:{t:0,c:0}, desconhecido:{t:0,c:0}, todos:{t:0,c:0} };
+  obterUidsPedidosComEtiquetaDisponivel().forEach(uid => {
+    const item = obterItemPedidoPorUidConferencia(uid);
+    if (!item) return;
+    const er = resolverEtiquetaPedido(item);
+    if (!(er && er.ok)) return;
+    const mp = obterMarketplaceItem(item);
+    const linhas = obterLinhasPedidoConferencia(extrairCampo(item, "Pedido"));
+    const total = linhas.reduce((s, x) => s + Number(extrairCampo(x, "Quantidade") || 0), 0);
+    const lidos = linhas.reduce((s, x) => s + Number(x.Lido || 0), 0);
+    const completo = total > 0 && lidos >= total;
+    const alvo = st[mp] || st.desconhecido;
+    alvo.t++; if (completo) alvo.c++;
+    st.todos.t++; if (completo) st.todos.c++;
+  });
+  return st;
+}
+
+function atualizarPainelDiaMarketplace() {
+  const painel = document.getElementById("confDiaPainel");
+  if (!painel) return;
+  const st = obterEstatisticasDiaMarketplace();
+  const ativo = filtroMarketplacePedidosAtual || "todos";
+  painel.querySelectorAll(".conf-dia-card").forEach(card => {
+    const mp = card.dataset.mp;
+    const e = (mp === "todos") ? st.todos : (st[mp] || { t:0, c:0 });
+    const falta = Math.max(0, e.t - e.c);
+    const bt = card.querySelector('b[data-k="total"]');
+    const bc = card.querySelector('b[data-k="conf"]');
+    const bf = card.querySelector('b[data-k="falta"]');
+    if (bt) bt.textContent = e.t;
+    if (bc) bc.textContent = e.c;
+    if (bf) { bf.textContent = falta; bf.parentElement.classList.toggle("zero", falta === 0); }
+    const barra = card.querySelector('[data-k="barra"]');
+    if (barra) barra.style.width = (e.t > 0 ? Math.round((e.c / e.t) * 100) : 0) + "%";
+    card.classList.toggle("ativo", mp === ativo);
+  });
+}
+
 function formatarConclusaoAnteriorConferencia(item){
   const valor=String(item?.__concluidoAnteriorEm||"").trim();
   if(!valor)return "";
@@ -2148,6 +2244,7 @@ function renderizarListaPedidos() {
 
   document.getElementById("listaPedidos").innerHTML = html;
   sincronizarSelecaoPedidosTeclado();
+  atualizarPainelDiaMarketplace();
 }
 
 function selecionarPedidoPorClique(uid) {
@@ -2239,7 +2336,6 @@ function desenharTabela() {
         <td style="text-align:left;">${extrairCampo(i, "Descrição")}${String(extrairCampo(i,"Kit")||"").toUpperCase()==="SIM"||extrairCampo(i,"Nome do Kit")?`<div style="margin-top:4px"><span class="pedido-status-mini" style="background:#f3e8ff;color:#6b21a8">🎁 ${escaparHtml(extrairCampo(i,"Nome do Kit")||extrairCampo(i,"SkuKitOrigem")||"Kit")}</span></div>`:""}${extrairCampo(i,"Observação")?`<div style="margin-top:4px"><span class="pedido-status-mini" style="background:#fff3cd;color:#8a5a00">⚠ ${escaparHtml(extrairCampo(i,"Observação"))}</span></div>`:""}</td>
         <td>${extrairCampo(i, "Quantidade") || 0}</td>
         <td>${i.Lido || 0}</td>
-        <td>${extrairCampo(i, "Rua")} ${extrairCampo(i, "Módulo")} ${extrairCampo(i, "Prateleira")} ${extrairCampo(i, "Nível")} ${extrairCampo(i, "Posição")}</td>
         <td><button type="button" style="border:0;border-radius:6px;padding:6px 9px;background:#ffebee;color:#c62828;font-weight:800;cursor:pointer" onclick="excluirProdutoPedidoConferencia('${escaparHtml(String(i.__uidLinha||i.__uidPedido||''))}')">🗑 Excluir</button></td>
       </tr>
     `;
@@ -3956,6 +4052,70 @@ window.addEventListener("storage",event=>{
     .popup-coleta-card{grid-template-columns:44px 1fr}
     .popup-coleta-ok{grid-column:1/-1;width:100%}
   }
+</style>
+<style id="skin-conf-v1802">
+  /* V18.02 — pele calma da Conferência (aprovada na maquete). Só visual, sem HTML. */
+  body{background:#f1f4f8}
+  header.conf-header-v1670{background:#12345b;border-bottom:1px solid rgba(255,255,255,.08);box-shadow:0 1px 6px rgba(0,0,0,.10);min-height:64px}
+  .coleta-expedicao-box{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.18)}
+  /* Zebra discreta — vence a especificidade do cabeçalho (2 classes) */
+  .conf-operador-status .qz-status{font-size:0!important;padding:0!important;margin:0!important;gap:5px}
+  .conf-operador-status .qz-status::after{color:#cdd9e4}
+  .conf-header-v1670 .btn-header,.conf-header-v1670 .btn-logoff{background:rgba(255,255,255,.10)!important;color:#fff!important;border:0!important;font-weight:600!important;border-radius:8px!important}
+  .conf-header-v1670 .btn-header:hover{background:rgba(255,255,255,.20)!important}
+  .conf-acoes-operacao{border-left-color:rgba(255,255,255,.14)}
+  .menu{background:#fff;border-right:1px solid #e6ecf3;padding:16px}
+  .menu h3{color:#12345b!important}
+  .conteudo{padding:18px 22px}
+  #listaPedidos .pedido-item{border:1px solid #e2e8f0!important;border-radius:10px!important;padding:11px 13px!important;margin-bottom:8px!important;background:#fff!important;color:#1e293b!important;font-weight:600!important;box-shadow:0 1px 2px rgba(16,42,67,.04)}
+  #listaPedidos .pedido-item:hover{border-color:#b9d4f4!important;background:#f7fafe!important}
+  #listaPedidos .pedido-item.pedido-teclado-selecionado{border-color:#12345b!important;box-shadow:0 0 0 2px rgba(18,52,91,.15)!important}
+  .pedido-cliente{font-weight:500;color:#64748b}
+  table{box-shadow:none!important;border:1px solid #e8edf3!important;margin-top:12px}
+  th{background:#eef3f9!important;color:#55677a!important;font-size:10.5px!important;text-transform:uppercase;letter-spacing:.03em;font-weight:700!important;border-bottom:1px solid #e2e8f0}
+  td{border-bottom:1px solid #f1f5f9}
+  .leitor-codigo-linha #codigo{border:2px solid #12345b!important;border-radius:9px!important}
+  /* Cabeçalho mais slim (feel da maquete) */
+  header.conf-header-v1670{min-height:56px!important;padding:7px 18px!important;gap:12px!important}
+  .conf-header-v1670 .logo-mini-box{width:112px;height:34px}
+  .conf-operador-status .autosave-status{display:none}
+  .coleta-expedicao-box{padding:6px 12px}
+  .coleta-expedicao-icone{font-size:18px}
+  .coleta-expedicao-horario{font-size:12.5px!important;font-weight:700!important}
+  .coleta-expedicao-codigo{font-size:11px!important;font-weight:600!important}
+  /* Colunas como cartões flutuantes sobre o fundo cinza */
+  .container{gap:14px!important;padding:14px 18px!important;background:#f1f4f8;align-items:flex-start}
+  .menu{border:1px solid #e6ecf3!important;border-radius:12px!important;align-self:flex-start;max-height:calc(100vh - 96px)}
+  .conteudo{background:#fff!important;border:1px solid #e6ecf3!important;border-radius:12px!important}
+  /* Limpa a lista como na maquete: sem o aviso verde e sem a caixa de atalhos */
+  .aviso-etiquetas-disponiveis{display:none!important}
+  #painelAtalhos{display:none!important}
+  .menu hr{display:none!important}
+  /* Fila igual a maquete: bolinha colorida a esquerda + pedido + cliente */
+  #listaPedidos .pedido-topo-linha{justify-content:flex-start!important;gap:8px}
+  #listaPedidos .pedido-marketplace-badge{order:-1;font-size:0!important;width:9px!important;height:9px!important;min-width:9px!important;padding:0!important;border-radius:50%!important;border:0!important;line-height:0!important}
+  #listaPedidos .pedido-status-etiqueta-ok{display:none!important}
+  /* ===== Cabeçalho igual a maquete ===== */
+  header.conf-header-v1670{grid-template-columns:auto auto auto 1fr!important;gap:16px!important}
+  .logo-mini-box.conf-marca-v1802{display:flex!important;align-items:center;gap:8px;width:auto!important;height:auto!important}
+  .conf-marca-n{background:#F28C18;color:#12345b;font-weight:800;border-radius:7px;padding:2px 9px;font-size:16px;line-height:1.4}
+  .conf-marca-txt{color:#fff;font-weight:700;font-size:16px;white-space:nowrap}
+  .conf-operador-nome{font-size:13px;color:#cfe0f0}
+  /* coleta como texto inline, sem caixa nem icone */
+  .coleta-expedicao-box{background:transparent!important;border:0!important;box-shadow:none!important;padding:0!important;gap:8px!important;opacity:1!important}
+  .coleta-expedicao-icone{display:none!important}
+  .coleta-expedicao-dados{display:flex!important;gap:12px;align-items:baseline}
+  .coleta-expedicao-horario,.coleta-expedicao-codigo{color:#dbe7f3!important;font-size:12px!important;font-weight:600!important;margin:0!important}
+  /* a maquete nao tem instalar nem sino de alerta */
+  .btn-install-conf,#alertaNovosPedidosTopo,.conf-acoes-navegacao .pwa-install-btn{display:none!important}
+  /* Central laranja (icone) como na maquete */
+  .conf-acoes-navegacao .btn-header{background:#F28C18!important;color:#12345b!important;border:0!important}
+  .conf-acoes-navegacao .btn-header:hover{background:#e07f0d!important}
+  .btn-central-v1802::before{content:"🏠";font-size:16px;line-height:1}
+  /* Zebra online ao lado da Central (direita) */
+  .conf-acoes-navegacao{gap:8px;align-items:center}
+  .conf-acoes-navegacao .qz-status{margin-top:0!important}
+  .conf-acoes-navegacao .qz-status::after{color:#cfe0f0}
 </style>
 <script>
 (() => {
