@@ -265,6 +265,14 @@ no navegador. Marca não existe no cadastro: fornecedor = regras (começo do có
 descrição, lista de códigos) em `compras_fornecedores_v1800`. "A caminho" é digitado e fica no
 navegador. Trocar as vendas pela rota do Apollo quando ela existir (PEDIDO_ROTA_DEMANDA_APOLLO.md).
 
+### Linx Smart API (levantamento 21/09/2026)
+API oficial da Linx para o Linx DMS, na nuvem: gateway `https://auto-gwsmartapi.linx.com.br/<api>`,
+chave em `Ocp-Apim-Subscription-Key` + token de `POST /api-seguranca/token`. Assinadas: Segurança,
+Gerencial Peças, Faturamento, Peças Balcão Premium, Veículos CRM. Tudo em
+`INTEGRACAO_LINX_SMART_API.md` — inclusive quais operações **gravam/movimentam estoque** (nunca testar).
+`OrdemCompra/Historico` (demanda mensal balcão/oficina/telemarketing) e `DetalhesPedidos`
+(compra em aberto) são o caminho para a Demanda de Compra definitiva.
+
 **Botão Cliente (V17.85):** atualiza o cadastro no **Linx DMS** (ERP em `10.1.15.1`, rede
 do escritório — a VPS não alcança). O servidor só entrega CPF/CNPJ e nome de "Dados para
 a NF-e" em `GET /api/cliente-fiscal?pedido=` (somente leitura; relê o billing-info no ML
