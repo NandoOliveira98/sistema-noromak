@@ -57,6 +57,9 @@ tr.off td{color:#9aa7b4}
 .cam{width:62px;text-align:right;padding:5px 7px;border:1px dashed #b9c7d6;border-radius:7px}
 .tag{display:inline-block;font-size:10.5px;font-weight:800;border-radius:6px;padding:2px 6px;margin-top:3px}
 .tag.comp{background:var(--compbg);color:var(--comp)}.tag.edit{background:#eef3f8;color:var(--muted)}.tag.semcusto{background:var(--warnbg);color:var(--warn)}
+.tag.reserva{background:#eef3f8;color:var(--muted);font-weight:700}
+.custo-in{width:92px;text-align:right;padding:5px 7px;border:1px dashed #e0b24d;border-radius:7px;background:#fffaf0}
+.custo-edit{border:0;background:none;color:var(--navy);cursor:pointer;font-size:11px;padding:0 0 0 4px}
 .foot{margin:10px 2px 0;color:var(--muted);font-size:12px;line-height:1.6}
 .formula{display:inline-block;background:#fff;border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-family:Consolas,monospace;font-size:12px;color:var(--navy)}
 .vazio{padding:28px;text-align:center;color:var(--muted)}
@@ -134,7 +137,8 @@ tr.off td{color:#9aa7b4}
     </div>
     <p class="foot">
       <span class="formula">necessidade = média diária × (prazo + cobertura) − estoque − a caminho</span><br>
-      <b>Estoque</b> = disponível no Apollo na rede inteira (já sem o que está no FULL). <b>Vendido</b> = unidades no ML e na Shopee no período (kit conta cada peça).
+      <b>Estoque</b> = disponível no Apollo na rede inteira (já sem o que está no FULL).
+      <b>Custo</b> = custo médio do Apollo; sem estoque ele zera, e aí vale o custo digitado, o último custo visto ou o custo da última venda no ML (com a data). <b>Vendido</b> = unidades no ML e na Shopee no período (kit conta cada peça).
       <b>Complemento até o mínimo:</b> se a necessidade não chega ao pedido mínimo, o sistema acrescenta unidades nos itens curva A e B que vão acabar primeiro, uma a uma, sem passar de 2× a cobertura desejada.
       Quantidade e "A caminho" são editáveis; desmarque para tirar um item do pedido.
     </p>
@@ -195,7 +199,7 @@ tr.off td{color:#9aa7b4}
       const d = state.dados;
       const avisos = [];
       if (!d.itens.length) avisos.push("Nenhuma peça da lista do Precificador bate com as regras deste fornecedor. Revise em ✎ Editar fornecedor.");
-      if (d.sem_custo) avisos.push(`${d.sem_custo} peça(s) sem custo no Precificador: entram na necessidade, mas não somam valor.`);
+      if (d.sem_custo) avisos.push(`${d.sem_custo} peça(s) sem nenhum custo (sem estoque no Apollo e sem histórico): digite o custo na coluna "Custo un." para elas somarem no pedido.`);
       if (d.vendas_desde && d.vendas_desde > isoDiasAtras(Number($("periodo").value))) avisos.push(`O histórico de vendas começa em ${br(d.vendas_desde)}; períodos mais longos ainda estão incompletos.`);
       msg(avisos.join(" "), avisos.length ? "erro" : "ok");
       render();
@@ -264,6 +268,28 @@ tr.off td{color:#9aa7b4}
     return { c, itens, total: total(), valor };
   }
 
+  // V18.07: o custo médio do Apollo zera quando acaba o estoque. Aí vale o digitado,
+  // o último custo visto ou o custo da última venda no ML (com a data).
+  const ORIGEM_CUSTO = { ultimo: "último custo", venda: "custo da venda", manual: "digitado" };
+  function celulaCusto(x) {
+    if (x.custo == null) return `<input class="custo-in" inputmode="decimal" placeholder="R$ custo" data-custo="${esc(x.codigo)}" aria-label="Custo de ${esc(x.codigo)}">`;
+    if (x.custo_origem === "apollo" || !x.custo_origem) return brl(x.custo);
+    const quando = br(x.custo_data) ? " " + br(x.custo_data).slice(0, 5) : "";
+    return `${brl(x.custo)}<button class="custo-edit" type="button" data-editar-custo="${esc(x.codigo)}" title="Digitar outro custo">✎</button><br><span class="tag reserva" title="O Apollo está sem custo (sem estoque)">${ORIGEM_CUSTO[x.custo_origem] || ""}${quando}</span>`;
+  }
+  async function salvarCusto(codigo, texto) {
+    try {
+      const d = await api("/api/compras/custo", { method: "POST", body: JSON.stringify({ codigo, custo: texto }) });
+      const item = state.dados.itens.find(i => i.codigo === codigo);
+      if (item) {
+        if (d.custo_manual) { item.custo = d.custo_manual; item.custo_origem = "manual"; item.custo_data = new Date().toISOString(); }
+        else { await carregarDemanda(); return; }
+      }
+      state.dados.sem_custo = state.dados.itens.filter(i => i.custo == null).length;
+      render();
+    } catch (e) { msg("Não foi possível salvar o custo: " + e.message, "erro"); }
+  }
+
   function render() {
     if (!state.dados) return;
     const { c, itens, total, valor } = calcular();
@@ -300,7 +326,7 @@ tr.off td{color:#9aa7b4}
       return `<tr class="${off ? "off" : ""}">
         <td><input type="checkbox" data-inc="${esc(x.codigo)}" ${off ? "" : "checked"} aria-label="Incluir ${esc(x.codigo)}"></td>
         <td>${esc(x.codigo)}</td>
-        <td class="desc"><b>${esc(x.descricao)}</b>${x.custo == null ? '<span class="tag semcusto">sem custo no Precificador</span>' : ""}</td>
+        <td class="desc"><b>${esc(x.descricao)}</b>${x.custo == null ? '<span class="tag semcusto">sem custo — digite ao lado</span>' : ""}</td>
         <td>${x.curva ? `<span class="curva ${esc(x.curva)}">${esc(x.curva)}</span>` : "—"}</td>
         <td class="n" title="ML ${x.vendido_ml} · Shopee ${x.vendido_shopee}">${num(x.vendido)}</td><td class="n">${num(x.media, 2)}</td>
         <td class="n">${x.estoque === null ? "—" : num(x.estoque) + (x.parcial ? "+" : "")}</td>
@@ -308,7 +334,7 @@ tr.off td{color:#9aa7b4}
         <td>${cob}</td>
         <td class="n">${x.status === "ok" ? num(x.necessidade) : "—"}</td>
         <td class="n"><input class="qty" type="number" min="0" step="1" value="${qt}" data-qtd="${esc(x.codigo)}" ${off ? "disabled" : ""}><br>${tag}</td>
-        <td class="n">${x.custo == null ? "—" : brl(x.custo)}</td>
+        <td class="n">${celulaCusto(x)}</td>
         <td class="n"><b>${off || x.custo == null ? "—" : brl(valor(x))}</b></td></tr>`;
     }).join("") || `<tr><td colspan="13" class="vazio">${$("soComprar").checked ? "Nada a comprar deste fornecedor com essa configuração (desmarque “Só o que entra no pedido” para ver todas as peças)." : "Nenhuma peça."}</td></tr>`;
   }
@@ -354,7 +380,16 @@ tr.off td{color:#9aa7b4}
     try { await api("/api/compras/fornecedores", { method: "POST", body: JSON.stringify({ nome: state.atual.nome, excluir: true }) }); $("editor").classList.add("hidden"); await carregarFornecedores(); }
     catch (e) { msg("Não foi possível excluir: " + e.message, "erro"); }
   });
+  $("linhas").addEventListener("click", e => {
+    const b = e.target.closest("[data-editar-custo]");
+    if (!b) return;
+    const item = state.dados.itens.find(i => i.codigo === b.dataset.editarCusto);
+    const texto = prompt(`Custo unitário de ${b.dataset.editarCusto} (vazio apaga o custo digitado):`, item && item.custo_origem === "manual" ? String(item.custo).replace(".", ",") : "");
+    if (texto !== null) salvarCusto(b.dataset.editarCusto, texto.trim());
+  });
   $("linhas").addEventListener("change", e => {
+    const custo = e.target.closest("[data-custo]");
+    if (custo) { if (custo.value.trim()) salvarCusto(custo.dataset.custo, custo.value.trim()); return; }
     const inc = e.target.closest("[data-inc]"), q = e.target.closest("[data-qtd]"), cam = e.target.closest("[data-cam]");
     if (inc) { inc.checked ? state.off.delete(inc.dataset.inc) : state.off.add(inc.dataset.inc); }
     if (q) state.edits.set(q.dataset.qtd, Math.max(0, Math.floor(Number(q.value) || 0)));
@@ -366,7 +401,8 @@ tr.off td{color:#9aa7b4}
     const { itens } = calcular();
     const rows = itens.filter(x => !state.off.has(x.codigo) && qtd(x) > 0).map(x => ({
       "Código": x.codigo, "Descrição": x.descricao, "Curva": x.curva, "Quantidade": qtd(x),
-      "Custo unitário": x.custo, "Total": x.custo == null ? "" : Math.round(qtd(x) * x.custo * 100) / 100,
+      "Custo unitário": x.custo, "Origem do custo": x.custo == null ? "sem custo" : x.custo_origem === "apollo" ? "Apollo (custo médio)" : `${ORIGEM_CUSTO[x.custo_origem] || ""} ${br(x.custo_data)}`.trim(),
+      "Total": x.custo == null ? "" : Math.round(qtd(x) * x.custo * 100) / 100,
       "Estoque": x.estoque, "A caminho": x.caminho, "Vendido ML+Shopee": x.vendido, "Média diária": Number(x.media.toFixed(2)),
       "Cobertura hoje (dias)": x.cobHoje === null || x.cobHoje === Infinity ? "" : Number(x.cobHoje.toFixed(1)),
       "Motivo": state.edits.has(x.codigo) ? "quantidade editada" : x.complemento ? `necessidade ${x.necessidade} + complemento ${x.complemento}` : "necessidade"

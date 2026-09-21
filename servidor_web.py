@@ -810,6 +810,14 @@ def crm_cost_lookup(codigo: str, operador: str = "") -> dict[str, Any]:
         "cache": False,
         "consultado_em": now_iso(),
     }
+    # V18.07: guarda o último custo > 0 visto (reserva da Demanda de Compra).
+    try:
+        positivo = custo if custo and custo > 0 else next(
+            (c["custo_medio"] for c in custos_filiais if (c.get("custo_medio") or 0) > 0), None)
+        if positivo:
+            custos_registrar_auto([(result["codigo"], positivo)], "Apollo")
+    except Exception:
+        pass
     with CRM_COST_CACHE_LOCK:
         CRM_COST_CACHE[cache_key] = (time.monotonic(), dict(result))
         # Evita crescimento indefinido; é um cache curto e pequeno.
@@ -1682,6 +1690,18 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_vendas_v1799_day ON vendas_v1799(sale_day, marketplace);
             -- V18.00: fornecedores da Demanda de Compra (pedido mínimo, prazo,
             -- cobertura e as regras que dizem quais peças são de cada um).
+            -- V18.07: custo de reserva da Demanda de Compra. O custo médio do Apollo
+            -- vai a 0 quando o estoque zera; aqui fica o último custo > 0 visto
+            -- (automático) e o custo digitado na tela (manual).
+            CREATE TABLE IF NOT EXISTS custos_conhecidos_v1807 (
+                codigo TEXT PRIMARY KEY,
+                custo_auto REAL,
+                origem_auto TEXT NOT NULL DEFAULT '',
+                data_auto TEXT NOT NULL DEFAULT '',
+                custo_manual REAL,
+                data_manual TEXT NOT NULL DEFAULT '',
+                manual_por TEXT NOT NULL DEFAULT ''
+            );
             CREATE TABLE IF NOT EXISTS compras_fornecedores_v1800 (
                 nome TEXT PRIMARY KEY,
                 config TEXT NOT NULL DEFAULT '{}',
@@ -11953,6 +11973,91 @@ def compras_excluir_fornecedor(nome: str) -> None:
         DB.commit()
 
 
+def custos_registrar_auto(itens: list[tuple[str, float]], origem: str) -> None:
+    """V18.07: guarda o último custo > 0 visto de cada código (nunca grava zero)."""
+    linhas = []
+    agora = now_iso()
+    for codigo, custo in itens:
+        codigo = str(codigo or "").strip().upper()
+        try:
+            valor = float(custo)
+        except (TypeError, ValueError):
+            continue
+        if codigo and valor > 0:
+            linhas.append((codigo, round(valor, 4), origem, agora))
+    if not linhas:
+        return
+    with DB_LOCK:
+        DB.executemany(
+            "INSERT INTO custos_conhecidos_v1807(codigo,custo_auto,origem_auto,data_auto) VALUES(?,?,?,?) "
+            "ON CONFLICT(codigo) DO UPDATE SET custo_auto=excluded.custo_auto, origem_auto=excluded.origem_auto, "
+            "data_auto=excluded.data_auto",
+            linhas,
+        )
+        DB.commit()
+
+
+def custo_manual_salvar(codigo: str, custo: Any, usuario: str) -> dict[str, Any]:
+    """V18.07: custo digitado na Demanda de Compra. Vazio/0 apaga."""
+    codigo = str(codigo or "").strip().upper()
+    if not codigo:
+        raise ValueError("Informe o código da peça.")
+    valor = None
+    if str(custo if custo is not None else "").strip():
+        # Aceita "152,52" e "1.234,56", como é digitado no Brasil.
+        valor = float(custo) if isinstance(custo, (int, float)) else _apollo_number(custo)
+        if valor is None or valor < 0 or valor > 10_000_000:
+            raise ValueError("Custo inválido.")
+    valor = round(valor, 4) if valor else None
+    with DB_LOCK:
+        DB.execute(
+            "INSERT INTO custos_conhecidos_v1807(codigo,custo_manual,data_manual,manual_por) VALUES(?,?,?,?) "
+            "ON CONFLICT(codigo) DO UPDATE SET custo_manual=excluded.custo_manual, data_manual=excluded.data_manual, "
+            "manual_por=excluded.manual_por",
+            (codigo, valor, now_iso() if valor else "", usuario if valor else ""),
+        )
+        DB.commit()
+    return {"codigo": codigo, "custo_manual": valor}
+
+
+def _compras_custos_reserva(conhecidos: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Custos de reserva por código: manual, último custo visto e custo gravado na
+    venda do ML (rentabilidade), cada um com a data."""
+    out: dict[str, dict[str, Any]] = {}
+    with DB_LOCK:
+        for r in DB.execute("SELECT * FROM custos_conhecidos_v1807").fetchall():
+            out[r["codigo"]] = {"manual": r["custo_manual"], "data_manual": r["data_manual"], "manual_por": r["manual_por"],
+                                "auto": r["custo_auto"], "origem_auto": r["origem_auto"], "data_auto": r["data_auto"]}
+        vendas = DB.execute(
+            "SELECT sku, unit_cost, captured_at FROM ml_profitability_snapshot WHERE unit_cost > 0 ORDER BY captured_at"
+        ).fetchall()
+    for r in vendas:
+        codigo = _compras_codigo(str(r["sku"] or ""), conhecidos)
+        if codigo:
+            alvo = out.setdefault(codigo, {})
+            alvo["venda"] = r["unit_cost"]
+            alvo["data_venda"] = r["captured_at"]
+    return out
+
+
+def _compras_resolver_custo(atual: float | None, reserva: dict[str, Any]) -> tuple[float | None, str, str]:
+    """(custo, origem, data). O custo médio atual do Apollo manda; sem ele, vale o
+    digitado, depois o último custo visto, depois o custo da última venda no ML."""
+    if atual:
+        return atual, "apollo", ""
+    if reserva.get("manual"):
+        return float(reserva["manual"]), "manual", reserva.get("data_manual") or ""
+    candidatos = []
+    if reserva.get("auto"):
+        candidatos.append((reserva.get("data_auto") or "", float(reserva["auto"]), "ultimo"))
+    if reserva.get("venda"):
+        candidatos.append((reserva.get("data_venda") or "", float(reserva["venda"]), "venda"))
+    if candidatos:
+        data, custo, origem = max(candidatos)
+        return custo, origem, data
+    return None, "", ""
+
+
 def _compras_produtos_precificador() -> dict[str, dict[str, Any]]:
     """Código Apollo -> {descricao, custo, curva}, a partir da lista do Precificador."""
     raw, _, _ = get_storage("precificador_online_v1")
@@ -12049,12 +12154,18 @@ def compras_demanda_payload(fornecedor: str, dias: int) -> dict[str, Any]:
                 or any(p in texto for p in cfg["palavras"]))
 
     vendas, sem_codigo = compras_vendas_por_codigo(dias, produtos)
+    # V18.07: todo custo > 0 do Precificador vira "último custo conhecido", para
+    # continuar valendo quando o estoque zerar e o Apollo devolver custo 0.
+    custos_registrar_auto([(c, p["custo"]) for c, p in produtos.items() if p["custo"]], "Precificador")
+    reservas = _compras_custos_reserva(produtos)
     itens = []
     for codigo, p in produtos.items():
         if not do_fornecedor(codigo, p["descricao"]):
             continue
         v = vendas.get(codigo, {})
-        itens.append({"codigo": codigo, "descricao": p["descricao"], "curva": p["curva"], "custo": p["custo"],
+        custo, origem, data_custo = _compras_resolver_custo(p["custo"], reservas.get(codigo, {}))
+        itens.append({"codigo": codigo, "descricao": p["descricao"], "curva": p["curva"], "custo": custo,
+                      "custo_origem": origem, "custo_data": data_custo,
                       "vendido": int(v.get("ml", 0) + v.get("shopee", 0)),
                       "vendido_ml": int(v.get("ml", 0)), "vendido_shopee": int(v.get("shopee", 0))})
     itens.sort(key=lambda x: (-x["vendido"], x["codigo"]))
@@ -13295,6 +13406,20 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.send_json(resultado, 200 if resultado.get("ok") else 400)
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/compras/custo":
+            # V18.07: custo digitado na Demanda de Compra (reserva quando o Apollo está sem custo).
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                try:
+                    body = self.read_json()
+                    salvo = custo_manual_salvar(str(body.get("codigo") or ""), body.get("custo"), ctx["username"])
+                    audit(ctx["username"], "compras.custo.manual", f"{salvo['codigo']}={salvo['custo_manual']}")
+                    self.send_json({"ok": True, **salvo})
+                except ValueError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 400)
+                except Exception as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 500)
             return
         if path == "/api/compras/fornecedores":
             ctx = self.auth(admin_only=True)
