@@ -14,6 +14,7 @@ import base64
 import io
 import gzip
 import hashlib
+import html as html_module
 import hmac
 import json
 import mimetypes
@@ -38,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.12-BACKUP-BOOT-NAO-BLOQUEIA"
+APP_VERSION = "18.13-RELATORIO-DIARIO-EMAIL"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -12140,6 +12141,213 @@ def dashboard_produto_custos(sku: str, dias: int = 30, max_shopee: int = 8) -> d
 
 
 # ---------------------------------------------------------------------------
+# V18.13: Agente de RELATÓRIO DIÁRIO por e-mail. Todo dia às 00:01 monta o resumo
+# do dia que fechou (tudo que vendeu, de vendas_v1799) e envia por e-mail (smtplib,
+# biblioteca padrão — sem dependência externa). Só leitura; não usa IA nem grava
+# em dados de operação (apenas marca o último dia enviado em vendas_meta_v1799).
+# Configuração toda por .env: SMTP_* e RELATORIO_EMAILS.
+# ---------------------------------------------------------------------------
+_RELATORIO_MP_NOME = {"ml": "Mercado Livre", "shopee": "Shopee", "magalu": "Magalu"}
+
+
+def _brl_srv(v: Any) -> str:
+    try:
+        return "R$ " + ("%0.2f" % float(v or 0)).replace(".", "#").replace(",", ".").replace("#", ",")
+    except Exception:
+        return "R$ 0,00"
+
+
+def _data_br(dia_iso: str) -> str:
+    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})", str(dia_iso or ""))
+    return f"{m.group(3)}/{m.group(2)}/{m.group(1)}" if m else str(dia_iso or "")
+
+
+def relatorio_diario_config() -> dict[str, Any]:
+    def _flag(nome: str, padrao: str) -> bool:
+        return str(os.getenv(nome, padrao)).strip().lower() not in ("0", "", "false", "nao", "não")
+    return {
+        "ativo": _flag("RELATORIO_DIARIO_ATIVO", "1"),
+        "host": os.getenv("SMTP_HOST", "").strip(),
+        "port": int(os.getenv("SMTP_PORT", "587") or "587"),
+        "user": os.getenv("SMTP_USER", "").strip(),
+        "senha": os.getenv("SMTP_SENHA", "").strip(),
+        "remetente": (os.getenv("SMTP_FROM", "").strip() or os.getenv("SMTP_USER", "").strip()),
+        "tls": _flag("SMTP_TLS", "1"),
+        "destinatarios": [e.strip() for e in os.getenv("RELATORIO_EMAILS", "").split(",") if e.strip()],
+    }
+
+
+def relatorio_diario_dados(dia: str) -> dict[str, Any]:
+    """Resumo de tudo que vendeu num dia (vendas_v1799). dia = 'YYYY-MM-DD'."""
+    with DB_LOCK:
+        tot = DB.execute(
+            "SELECT COUNT(DISTINCT marketplace||':'||order_id) AS pedidos, "
+            "COALESCE(SUM(qty),0) AS unidades, COALESCE(SUM(amount),0) AS faturamento "
+            "FROM vendas_v1799 WHERE sale_day=?",
+            (dia,),
+        ).fetchone()
+        por_mp = DB.execute(
+            "SELECT marketplace, COUNT(DISTINCT order_id) AS pedidos, COALESCE(SUM(qty),0) AS unidades, "
+            "COALESCE(SUM(amount),0) AS faturamento FROM vendas_v1799 WHERE sale_day=? "
+            "GROUP BY marketplace ORDER BY faturamento DESC",
+            (dia,),
+        ).fetchall()
+        linhas = DB.execute(
+            "SELECT marketplace, sku, MAX(NULLIF(title,'')) AS titulo, MAX(NULLIF(anuncio,'')) AS anuncio, "
+            "SUM(qty) AS qtd, SUM(amount) AS valor, COUNT(DISTINCT order_id) AS pedidos "
+            "FROM vendas_v1799 WHERE sale_day=? GROUP BY marketplace, sku ORDER BY valor DESC",
+            (dia,),
+        ).fetchall()
+    produtos = [{
+        "marketplace": r["marketplace"], "sku": r["sku"] or "(sem SKU)",
+        "titulo": r["titulo"] or r["anuncio"] or r["sku"] or "(sem título)",
+        "qtd": int(r["qtd"] or 0), "valor": round(float(r["valor"] or 0), 2), "pedidos": int(r["pedidos"] or 0),
+    } for r in linhas]
+    faturamento = round(float(tot["faturamento"] or 0), 2)
+    pedidos = int(tot["pedidos"] or 0)
+    return {
+        "dia": dia, "faturamento": faturamento, "pedidos": pedidos, "unidades": int(tot["unidades"] or 0),
+        "ticket_medio": round(faturamento / pedidos, 2) if pedidos else 0.0,
+        "por_marketplace": [{
+            "marketplace": r["marketplace"], "nome": _RELATORIO_MP_NOME.get(r["marketplace"], r["marketplace"]),
+            "pedidos": int(r["pedidos"] or 0), "unidades": int(r["unidades"] or 0),
+            "faturamento": round(float(r["faturamento"] or 0), 2),
+        } for r in por_mp],
+        "produtos": produtos,
+    }
+
+
+def relatorio_diario_html(d: dict[str, Any]) -> str:
+    def esc(s: Any) -> str:
+        return html_module.escape(str(s if s is not None else ""))
+    cor = {"ml": "#2f6fd0", "shopee": "#ee4d2d", "magalu": "#0086ff"}
+    canais = "".join(
+        f"<tr><td style='padding:6px 10px'><span style='display:inline-block;width:9px;height:9px;border-radius:50%;"
+        f"background:{cor.get(c['marketplace'], '#888')};margin-right:6px'></span>{esc(c['nome'])}</td>"
+        f"<td style='padding:6px 10px;text-align:right'>{c['pedidos']}</td>"
+        f"<td style='padding:6px 10px;text-align:right'>{c['unidades']}</td>"
+        f"<td style='padding:6px 10px;text-align:right;font-weight:700'>{_brl_srv(c['faturamento'])}</td></tr>"
+        for c in d["por_marketplace"]
+    ) or "<tr><td colspan='4' style='padding:10px;color:#888'>Sem vendas.</td></tr>"
+    linhas = "".join(
+        f"<tr style='border-top:1px solid #eef2f7'>"
+        f"<td style='padding:6px 10px'><b>{esc(p['titulo'])}</b><br><span style='color:#748295;font-size:12px'>"
+        f"{esc(p['sku'])} · <span style='color:{cor.get(p['marketplace'], '#888')}'>{esc(_RELATORIO_MP_NOME.get(p['marketplace'], p['marketplace']))}</span></span></td>"
+        f"<td style='padding:6px 10px;text-align:right'>{p['qtd']}</td>"
+        f"<td style='padding:6px 10px;text-align:right;font-weight:700'>{_brl_srv(p['valor'])}</td></tr>"
+        for p in d["produtos"]
+    ) or "<tr><td colspan='3' style='padding:10px;color:#888'>Nenhuma venda neste dia.</td></tr>"
+    return f"""<div style="font-family:'Segoe UI',system-ui,sans-serif;color:#1e293b;max-width:680px;margin:auto">
+<h2 style="color:#123a63;margin:0 0 4px">Noromak — Vendas de {esc(_data_br(d['dia']))}</h2>
+<p style="color:#748295;margin:0 0 16px">Resumo do dia que fechou.</p>
+<table style="width:100%;border-collapse:collapse;margin-bottom:18px">
+  <tr>
+    <td style="background:#f6f9fc;border:1px solid #e2e8f0;border-radius:10px;padding:12px;text-align:center">
+      <div style="font-size:22px;font-weight:800;color:#123a63">{_brl_srv(d['faturamento'])}</div><div style="font-size:12px;color:#748295">Faturamento</div></td>
+    <td style="width:8px"></td>
+    <td style="background:#f6f9fc;border:1px solid #e2e8f0;border-radius:10px;padding:12px;text-align:center">
+      <div style="font-size:22px;font-weight:800">{d['pedidos']}</div><div style="font-size:12px;color:#748295">Pedidos</div></td>
+    <td style="width:8px"></td>
+    <td style="background:#f6f9fc;border:1px solid #e2e8f0;border-radius:10px;padding:12px;text-align:center">
+      <div style="font-size:22px;font-weight:800">{d['unidades']}</div><div style="font-size:12px;color:#748295">Unidades</div></td>
+    <td style="width:8px"></td>
+    <td style="background:#f6f9fc;border:1px solid #e2e8f0;border-radius:10px;padding:12px;text-align:center">
+      <div style="font-size:22px;font-weight:800">{_brl_srv(d['ticket_medio'])}</div><div style="font-size:12px;color:#748295">Ticket médio</div></td>
+  </tr>
+</table>
+<h3 style="color:#123a63;margin:0 0 6px;font-size:15px">Por marketplace</h3>
+<table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:18px">
+  <thead><tr style="background:#123a63;color:#fff;font-size:11px;text-transform:uppercase">
+    <th style="padding:6px 10px;text-align:left">Canal</th><th style="padding:6px 10px;text-align:right">Pedidos</th>
+    <th style="padding:6px 10px;text-align:right">Unid.</th><th style="padding:6px 10px;text-align:right">Faturamento</th></tr></thead>
+  <tbody>{canais}</tbody>
+</table>
+<h3 style="color:#123a63;margin:0 0 6px;font-size:15px">Tudo que vendeu ({len(d['produtos'])} item(ns))</h3>
+<table style="width:100%;border-collapse:collapse;font-size:14px">
+  <thead><tr style="background:#123a63;color:#fff;font-size:11px;text-transform:uppercase">
+    <th style="padding:6px 10px;text-align:left">Produto</th><th style="padding:6px 10px;text-align:right">Qtd</th>
+    <th style="padding:6px 10px;text-align:right">Valor</th></tr></thead>
+  <tbody>{linhas}</tbody>
+</table>
+<p style="color:#94a3b8;font-size:11px;margin-top:18px">Gerado automaticamente pelo Sistema Noromak às 00:01. Dados de Mercado Livre e Shopee.</p>
+</div>"""
+
+
+def relatorio_diario_texto(d: dict[str, Any]) -> str:
+    linhas = [
+        f"Noromak - Vendas de {_data_br(d['dia'])}",
+        f"Faturamento: {_brl_srv(d['faturamento'])} | Pedidos: {d['pedidos']} | Unidades: {d['unidades']} | Ticket: {_brl_srv(d['ticket_medio'])}",
+        "",
+        "Por marketplace:",
+    ]
+    for c in d["por_marketplace"]:
+        linhas.append(f"  - {c['nome']}: {_brl_srv(c['faturamento'])} ({c['pedidos']} ped, {c['unidades']} un)")
+    linhas += ["", f"Tudo que vendeu ({len(d['produtos'])} item(ns)):"]
+    for p in d["produtos"]:
+        linhas.append(f"  - {p['titulo']} [{p['sku']} / {_RELATORIO_MP_NOME.get(p['marketplace'], p['marketplace'])}] x{p['qtd']} = {_brl_srv(p['valor'])}")
+    if not d["produtos"]:
+        linhas.append("  (nenhuma venda neste dia)")
+    return "\n".join(linhas)
+
+
+def relatorio_diario_enviar_email(assunto: str, texto: str, html: str) -> list[str]:
+    import smtplib
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    cfg = relatorio_diario_config()
+    faltando = [k for k in ("host", "user", "senha") if not cfg[k]]
+    if faltando or not cfg["destinatarios"]:
+        raise RuntimeError(
+            "SMTP não configurado. Defina no /home/expedicao/.env: "
+            "SMTP_HOST, SMTP_USER, SMTP_SENHA e RELATORIO_EMAILS."
+        )
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = assunto
+    msg["From"] = cfg["remetente"]
+    msg["To"] = ", ".join(cfg["destinatarios"])
+    msg.attach(MIMEText(texto, "plain", "utf-8"))
+    msg.attach(MIMEText(html, "html", "utf-8"))
+    with smtplib.SMTP(cfg["host"], cfg["port"], timeout=30) as s:
+        if cfg["tls"]:
+            s.starttls()
+        s.login(cfg["user"], cfg["senha"])
+        s.sendmail(cfg["remetente"], cfg["destinatarios"], msg.as_string())
+    return cfg["destinatarios"]
+
+
+def relatorio_diario_enviar(dia: str, forcar: bool = False) -> dict[str, Any]:
+    if not forcar and _vendas_meta("relatorio_diario_ultimo") == dia:
+        return {"ok": True, "pulado": True, "motivo": "já enviado para este dia", "dia": dia}
+    dados = relatorio_diario_dados(dia)
+    assunto = f"Noromak — Vendas de {_data_br(dia)}: {_brl_srv(dados['faturamento'])} em {dados['pedidos']} pedido(s)"
+    destinatarios = relatorio_diario_enviar_email(assunto, relatorio_diario_texto(dados), relatorio_diario_html(dados))
+    _vendas_meta("relatorio_diario_ultimo", dia)
+    return {"ok": True, "dia": dia, "faturamento": dados["faturamento"], "pedidos": dados["pedidos"], "destinatarios": destinatarios}
+
+
+def relatorio_diario_loop(stop: threading.Event) -> None:
+    """Agente: acorda todo dia às 00:01 e envia o relatório do dia que fechou."""
+    while not stop.is_set():
+        agora = datetime.now(BR_TZ)
+        alvo = agora.replace(hour=0, minute=1, second=0, microsecond=0)
+        if agora >= alvo:
+            alvo += timedelta(days=1)
+        if stop.wait((alvo - agora).total_seconds()):
+            return
+        cfg = relatorio_diario_config()
+        # Enquanto o SMTP/destinatários não estiverem no .env, o agente fica ocioso
+        # em silêncio (sem erro diário). Ativa sozinho quando o .env for preenchido.
+        if not cfg["ativo"] or not (cfg["host"] and cfg["user"] and cfg["senha"] and cfg["destinatarios"]):
+            continue
+        try:
+            dia = (datetime.now(BR_TZ).date() - timedelta(days=1)).isoformat()
+            res = relatorio_diario_enviar(dia)
+            print(f"[relatorio-diario] {dia}: {res}", flush=True)
+        except Exception as exc:
+            print(f"[relatorio-diario] falhou: {exc}", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
 # V18.00: Demanda de Compra (versão provisória). Enquanto o Apollo não entrega a
 # rota de vendas por período (PEDIDO_ROTA_DEMANDA_APOLLO.md), a demanda usa:
 #   - vendas do ML e da Shopee (vendas_v1799) — não enxerga balcão/oficina;
@@ -13496,6 +13704,26 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
+        if path == "/api/relatorio-diario/preview":
+            # V18.13: pré-visualiza o relatório diário (HTML) sem enviar e-mail.
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            dia = str((query.get("dia") or [""])[0] or "").strip()
+            if not re.match(r"^\d{4}-\d{2}-\d{2}$", dia):
+                dia = (datetime.now(BR_TZ).date() - timedelta(days=1)).isoformat()
+            try:
+                body = relatorio_diario_html(relatorio_diario_dados(dia)).encode("utf-8")
+                self.send_response(200)
+                self.send_security_headers()
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                if self.command != "HEAD":
+                    self.wfile.write(body)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
         if path == "/api/vendas":
             ctx = self.auth(admin_only=True)
             if ctx is None:
@@ -13711,6 +13939,22 @@ class AppHandler(BaseHTTPRequestHandler):
                 threading.Thread(target=vendas_sync_once, name="vendas-sync-manual", daemon=True).start()
                 audit(ctx["username"], "dashboard.vendas.sincronizar", "")
                 self.send_json({"ok": True, "iniciada": True})
+            return
+        if path == "/api/relatorio-diario/enviar":
+            # V18.13: envia o relatório diário agora (teste manual do ADMIN).
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            try:
+                req = self.read_json()
+                dia = str((req or {}).get("dia") or "").strip()
+                if not re.match(r"^\d{4}-\d{2}-\d{2}$", dia):
+                    dia = (datetime.now(BR_TZ).date() - timedelta(days=1)).isoformat()
+                res = relatorio_diario_enviar(dia, forcar=True)
+                audit(ctx["username"], "relatorio.diario.enviar", dia)
+                self.send_json(res)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
             return
         if path == "/api/full/kits":
             # V17.96: composição dos kits para a Demanda Full (somente leitura).
@@ -16111,6 +16355,13 @@ def main() -> None:
         name="vendas-sync",
         daemon=True,
     )
+    # V18.13: agente de relatório diário por e-mail (00:01).
+    relatorio_thread = threading.Thread(
+        target=relatorio_diario_loop,
+        args=(watcher_stop,),
+        name="relatorio-diario",
+        daemon=True,
+    )
     _ml_worker_state_update(started_at=now_iso(), last_error="")
     watcher_thread.start()
     new_order_thread.start()
@@ -16120,6 +16371,7 @@ def main() -> None:
     shopee_label_thread.start()
     shopee_orders_thread.start()
     vendas_ml_thread.start()
+    relatorio_thread.start()
     server = ThreadingHTTPServer((HOST, PORT), AppHandler)
     server.daemon_threads = True
     print(f"Sistema de Conferência Web {APP_VERSION} em http://{HOST}:{PORT}{BASE_PATH}", flush=True)
