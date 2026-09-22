@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.11-BACKUP-COMPRIMIDO-RETENCAO"
+APP_VERSION = "18.12-BACKUP-BOOT-NAO-BLOQUEIA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -16056,7 +16056,10 @@ def main() -> None:
             print(f"[boot] V18.04: {_kit_residuo} linha(s) de residuo de kit-prefixo limpa(s).")
     except Exception as _exc:  # nunca impede o boot
         print(f"[boot] reparo de kit-residuo falhou: {_exc}")
-    backup_daily()
+    # V18.12: o backup diário comprime ~1 GB e NÃO pode bloquear o boot — senão a
+    # porta 8100 demora a abrir e o deploy parece ter falhado (aconteceu na V18.11).
+    # Roda em segundo plano: a porta abre na hora e o backup comprime depois.
+    threading.Thread(target=backup_daily, name="backup-inicial", daemon=True).start()
     watcher_stop = threading.Event()
     watcher_thread = threading.Thread(
         target=ml_pending_label_watch_loop,

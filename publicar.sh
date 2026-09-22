@@ -95,12 +95,12 @@ if ! ssh expedicao "sudo -n systemctl restart expedicao"; then
   exit 1
 fi
 
-sleep 3
-
-echo ">> conferindo diretamente a porta 8100..."
-if ! ssh expedicao "curl -fsS http://127.0.0.1:8100/expedicao/api/health"; then
+echo ">> aguardando o servico responder na porta 8100 (ate 90s)..."
+# V18.12: espera com paciencia. A VPS e fraca e o boot pode levar alguns segundos;
+# 3s fixos davam falso negativo (a operacao subia logo depois).
+if ! ssh expedicao 'for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8100/expedicao/api/health && exit 0; sleep 3; done; exit 1'; then
   echo
-  echo "ERRO: os arquivos foram enviados, mas o aplicativo nao respondeu na porta 8100."
+  echo "ERRO: os arquivos foram enviados, mas o aplicativo nao respondeu na porta 8100 em 90s."
   echo "Execute: ./verificar_servidor.sh"
   exit 1
 fi
