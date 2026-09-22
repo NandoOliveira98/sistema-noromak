@@ -30,6 +30,59 @@ if ! ./testar.sh; then
 fi
 echo
 
+# V18.11: backup consistente e COMPRIMIDO do banco ANTES de enviar/reiniciar. Se
+# falhar, a publicacao para aqui — nunca subimos sem uma copia de seguranca do
+# estado atual. Comprime (SQLite gzipa ~5x) e mantem os 3 mais recentes, porque o
+# disco e pequeno (45 GB) e cada backup cru tem ~1 GB.
+echo ">> backup de seguranca do banco antes de publicar..."
+if ! ssh expedicao "python3 -" <<'PY'
+import sqlite3, time, os, glob, sys, gzip, shutil
+destino_dir = "/home/expedicao/backups"
+os.makedirs(destino_dir, exist_ok=True)
+base = os.path.join(destino_dir, "expedicao_predeploy_" + time.strftime("%Y%m%d_%H%M%S"))
+tmp_db = base + ".db"
+final = base + ".db.gz"
+origem = sqlite3.connect("/home/expedicao/dados/expedicao.db", timeout=60)
+saida = sqlite3.connect(tmp_db)
+with saida:
+    origem.backup(saida)   # backup online consistente (lida com WAL)
+saida.close(); origem.close()
+# Verifica que o backup abre e tem dados ANTES de comprimir.
+conf = sqlite3.connect(tmp_db)
+try:
+    keys = conf.execute("SELECT COUNT(*) FROM storage").fetchone()[0]
+    peds = conf.execute("SELECT COUNT(*) FROM completed_orders").fetchone()[0]
+finally:
+    conf.close()
+if keys < 1:
+    os.remove(tmp_db)
+    print("   ERRO: o backup ficou sem dados de storage.")
+    sys.exit(1)
+cru = os.path.getsize(tmp_db)
+with open(tmp_db, "rb") as f_in, gzip.open(final, "wb", compresslevel=6) as f_out:
+    shutil.copyfileobj(f_in, f_out, 1024 * 1024)
+os.remove(tmp_db)
+print("   backup OK:", final)
+print("   storage keys:", keys, "| completed_orders:", peds,
+      "| %d MB -> %d MB" % (cru // 1048576, os.path.getsize(final) // 1048576))
+# Retencao por IDADE: apaga backups de deploy com mais de 2 dias (o recem-criado
+# tem data de agora, entao nunca e apagado -> sempre sobra o do deploy atual).
+LIMITE_DIAS = 2
+agora = time.time()
+for velho in glob.glob(os.path.join(destino_dir, "expedicao_predeploy_*.db.gz")):
+    idade_dias = (agora - os.path.getmtime(velho)) / 86400.0
+    if idade_dias > LIMITE_DIAS:
+        os.remove(velho)
+        print("   removido backup antigo (%.1f dias):" % idade_dias, velho)
+PY
+then
+  echo
+  echo "PUBLICACAO CANCELADA: nao consegui fazer o backup do banco."
+  echo "Nada foi enviado e a operacao continua no ar."
+  exit 1
+fi
+echo
+
 echo ">> enviando pro servidor..."
 git push producao HEAD:master
 

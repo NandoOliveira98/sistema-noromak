@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.10-CUSTOS-REAIS-MARKETPLACE"
+APP_VERSION = "18.11-BACKUP-COMPRIMIDO-RETENCAO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2762,21 +2762,52 @@ def purge_expired_sessions() -> None:
         DB.commit()
 
 
+BACKUP_DAILY_KEEP = 3  # V18.11: quantos diários comprimidos manter (decisão do dono)
+
+
 def backup_daily() -> None:
     try:
         BACKUP_DIR.mkdir(parents=True, exist_ok=True)
-        target = BACKUP_DIR / f"expedicao_{datetime.now().strftime('%Y-%m-%d')}.db"
-        if target.exists():
+        dia = datetime.now().strftime("%Y-%m-%d")
+        alvo_gz = BACKUP_DIR / f"expedicao_{dia}.db.gz"
+        if alvo_gz.exists():
             return
+        # V18.11: a cópia consistente roda sob o lock (necessário), mas a COMPRESSÃO
+        # fica fora do lock — antes o backup diário de ~1 GB segurava o DB_LOCK
+        # durante a compressão e congelava a operação. Comprimido, cada diário cai
+        # de ~1 GB para ~75 MB; mantém só os BACKUP_DAILY_KEEP mais recentes.
+        tmp = BACKUP_DIR / f"expedicao_{dia}.db.tmp"
+        for lixo in BACKUP_DIR.glob("expedicao_*.db.tmp"):
+            lixo.unlink(missing_ok=True)
         with DB_LOCK:
-            dest = sqlite3.connect(target)
+            dest = sqlite3.connect(tmp)
             try:
                 DB.backup(dest)
             finally:
                 dest.close()
-        files = sorted(BACKUP_DIR.glob("expedicao_*.db"), key=lambda p: p.stat().st_mtime, reverse=True)
-        for old in files[15:]:
-            old.unlink(missing_ok=True)
+        # Verifica que o backup abre e tem dados ANTES de comprimir.
+        conf = sqlite3.connect(tmp)
+        try:
+            tem_dados = conf.execute("SELECT COUNT(*) FROM storage").fetchone()[0] > 0
+        finally:
+            conf.close()
+        if not tem_dados:
+            tmp.unlink(missing_ok=True)
+            print("Aviso: backup diário sem dados de storage; ignorado.", file=sys.stderr)
+            return
+        with open(tmp, "rb") as f_in, gzip.open(alvo_gz, "wb", compresslevel=6) as f_out:
+            shutil.copyfileobj(f_in, f_out, 1024 * 1024)
+        tmp.unlink(missing_ok=True)
+        # Retenção: mantém os N diários comprimidos mais recentes.
+        comprimidos = sorted(
+            BACKUP_DIR.glob("expedicao_????-??-??.db.gz"),
+            key=lambda p: p.stat().st_mtime, reverse=True,
+        )
+        for antigo in comprimidos[BACKUP_DAILY_KEEP:]:
+            antigo.unlink(missing_ok=True)
+        # Limpa diários antigos NÃO comprimidos (formato anterior, ~1 GB cada).
+        for cru in BACKUP_DIR.glob("expedicao_????-??-??.db"):
+            cru.unlink(missing_ok=True)
     except Exception as exc:
         print(f"Aviso: backup diário não realizado: {exc}", file=sys.stderr)
 
