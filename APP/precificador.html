@@ -436,6 +436,42 @@
     .promo-actions{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
     .promo-delete-btn{border:1px solid #fecaca !important;background:#fff7f7 !important;color:#b91c1c !important}
     .promo-delete-btn:hover{background:#fee2e2 !important}
+    /* V18.20: atalho da promoção para o Precificador */
+    .promo-price-btn{border:1px solid #bfdbfe !important;background:#eff6ff !important;color:#1d4ed8 !important;font-weight:700}
+    .promo-price-btn:hover{background:#dbeafe !important}
+    /* V18.20: régua de Promoções ao lado do Precificador (recolhível).
+       O painel grande continua existindo no botão "Promoções" para importar
+       planilha, paginar e marcar em massa; a régua é o atalho do dia a dia. */
+    .app-shell{display:grid;grid-template-columns:288px minmax(0,1fr);gap:14px;align-items:start}
+    body.promo-rail-collapsed .app-shell{grid-template-columns:40px minmax(0,1fr)}
+    body.show-promotions-monitor .app-shell,body.show-cost-notifications .app-shell{grid-template-columns:minmax(0,1fr)}
+    body.show-promotions-monitor #promo-rail,body.show-cost-notifications #promo-rail{display:none}
+    #promo-rail{position:sticky;top:12px;background:#fff;border:1px solid var(--line);border-radius:13px;overflow:hidden;max-height:calc(100vh - 24px);display:flex;flex-direction:column}
+    #promo-rail .pr-top{display:flex;align-items:center;gap:8px;padding:9px 10px;border-bottom:1px solid var(--line)}
+    #promo-rail .pr-top b{font-size:.78rem;color:var(--brand);white-space:nowrap}
+    #promo-rail-toggle{margin-left:auto;border:1px solid var(--line);background:#fff;border-radius:8px;width:26px;height:26px;cursor:pointer;font-weight:900;color:var(--brand);flex:none;line-height:1}
+    body.promo-rail-collapsed #promo-rail{max-height:none}
+    body.promo-rail-collapsed #promo-rail .pr-body{display:none}
+    body.promo-rail-collapsed #promo-rail .pr-top b{display:none}
+    body.promo-rail-collapsed #promo-rail-toggle{margin:0}
+    #promo-rail .pr-body{display:flex;flex-direction:column;min-height:0;overflow:hidden}
+    #promo-rail .pr-sub{font-size:.63rem;color:var(--muted);padding:7px 10px 6px}
+    #promo-rail .pr-chips{display:flex;gap:5px;padding:0 10px 8px;flex-wrap:wrap}
+    #promo-rail .pr-chip{border:1px solid var(--line);background:#fff;border-radius:7px;padding:4px 7px;font-size:.63rem;font-weight:800;cursor:pointer;color:var(--muted)}
+    #promo-rail .pr-chip.on{background:var(--brand);border-color:var(--brand);color:#fff}
+    #promo-rail-search{margin:0 10px 8px;height:30px;border:1px solid var(--line);border-radius:8px;padding:0 8px;font-size:.72rem}
+    #promo-rail-list{overflow:auto;min-height:0}
+    .pr-item{display:block;width:100%;text-align:left;border:0;border-top:1px solid #eef2ef;border-left:3px solid transparent;background:#fff;padding:7px 10px;cursor:pointer}
+    .pr-item:hover{background:#f6f9f7}
+    .pr-item.venc{border-left-color:#c0392b}.pr-item.d7{border-left-color:#c77700}.pr-item.d15{border-left-color:#1F57A5}
+    .pr-item.ativo{background:#eef5ff}
+    .pr-item .pr-sku{display:block;font-weight:900;font-size:.73rem;color:var(--ink)}
+    .pr-item .pr-sku em{font-weight:700;color:#a08a2f;font-style:normal}
+    .pr-item .pr-mlb{display:block;font-size:.61rem;color:var(--muted)}
+    .pr-item .pr-dias{display:inline-block;margin-top:3px;font-size:.59rem;font-weight:800;border-radius:99px;padding:1px 6px}
+    .pr-dias.venc{background:#fdecea;color:#c0392b}.pr-dias.d7{background:#fff6e0;color:#8a5a00}.pr-dias.d15{background:#eaf2fd;color:#1F57A5}
+    .pr-vazio{padding:14px 10px;font-size:.69rem;color:var(--muted);text-align:center}
+    @media(max-width:1180px){.app-shell,body.promo-rail-collapsed .app-shell{grid-template-columns:minmax(0,1fr)}#promo-rail{display:none}}
     .promo-stock.zero{color:#b91c1c !important;font-weight:900 !important}
     .promo-stock.positive{color:#15803d !important;font-weight:900 !important}
     @media(max-width:900px){
@@ -630,6 +666,23 @@
   </header>
 
   <main class="app-shell">
+    <!-- V18.20: régua de Promoções — clicar abre o SKU daquela promoção aqui do lado. -->
+    <aside id="promo-rail" aria-label="Promoções a renovar">
+      <div class="pr-top">
+        <b>Promoções</b>
+        <button id="promo-rail-toggle" type="button" title="Recolher promoções" aria-expanded="true">‹</button>
+      </div>
+      <div class="pr-body">
+        <div class="pr-sub" id="promo-rail-sub">carregando…</div>
+        <div class="pr-chips">
+          <button class="pr-chip on" type="button" data-pr-filtro="expired">Vencidas</button>
+          <button class="pr-chip" type="button" data-pr-filtro="7">7 dias</button>
+          <button class="pr-chip" type="button" data-pr-filtro="15">15 dias</button>
+        </div>
+        <input id="promo-rail-search" type="search" placeholder="SKU ou MLB…" aria-label="Buscar na régua de promoções">
+        <div id="promo-rail-list"></div>
+      </div>
+    </aside>
     <div class="workspace">
       <section class="search-panel" aria-label="Pesquisa de produtos">
         <div class="search-toolbar">
@@ -2749,6 +2802,74 @@ var state = {
         renderComparison(results);
       }
 
+      // V18.20: o bloco do Monitor de Promoções roda FORA deste escopo (as funções
+      // dele são globais; state/selectProduct/showToast não são). Estas pontes dão
+      // a ele o mínimo necessário: abrir um SKU no cadastro e avisar na tela.
+      window.nmPrecificador = {
+        toast: function (message) { try { showToast(message); } catch (_) {} },
+        // SKU vinculado a um MLB. O bloco de Promoções tem o seu próprio
+        // promoLinkedSku(), mas ele depende de mlSkuMlbLinks, que NÃO existe
+        // naquele escopo — o índice sai sempre vazio e tudo vira "Sem vínculo".
+        skuDoMlb: function (mlb) {
+          try {
+            var alvo = normalizeMlb(mlb);
+            var achado = "";
+            Object.keys(mlSkuMlbLinks || {}).some(function (sku) {
+              var bate = getLinkedMlbsForSku(sku).some(function (x) { return x.mlb === alvo; });
+              if (bate) achado = sku;
+              return bate;
+            });
+            return achado;
+          } catch (err) {
+            console.error("[Noromak V18.20] Falha ao resolver o SKU do MLB:", err);
+            return "";
+          }
+        },
+        // Índice MLB -> SKU montado de uma vez. A régua tem dezenas de linhas e
+        // resolver uma a uma custaria uma varredura completa por linha.
+        indiceMlbSku: function () {
+          var mapa = {};
+          try {
+            Object.keys(mlSkuMlbLinks || {}).forEach(function (sku) {
+              getLinkedMlbsForSku(sku).forEach(function (x) {
+                var id = String((x && x.mlb) || "").replace(/\D/g, "");
+                if (id && !mapa[id]) mapa[id] = sku;
+              });
+            });
+          } catch (err) {
+            console.error("[Noromak V18.20] Falha ao montar o índice MLB→SKU:", err);
+          }
+          return mapa;
+        },
+        // SKU aberto agora no cadastro — a régua destaca a linha correspondente.
+        skuAtual: function () {
+          try {
+            var atual = currentProduct();
+            return atual ? String(atual.sku || "") : "";
+          } catch (_) { return ""; }
+        },
+        // Retorna true quando encontrou o SKU e abriu; false quando não existe.
+        abrirSku: function (sku) {
+          var alvo = String(sku || "").trim().toUpperCase();
+          if (!alvo) return false;
+          var produto = (state.products || []).find(function (item) {
+            return String(item.sku || "").trim().toUpperCase() === alvo;
+          });
+          if (!produto) return false;
+          // selectProduct é async: o erro vem por promessa, não pelo try/catch.
+          // A régua só é redesenhada DEPOIS que o produto entra, senão o destaque
+          // ficaria na linha anterior (skuAtual ainda apontaria para o antigo).
+          Promise.resolve().then(function () {
+            return selectProduct(produto._id);
+          }).then(function () {
+            if (typeof window.promoRailRender === "function") window.promoRailRender();
+          }).catch(function (err) {
+            console.error("[Noromak V18.20] Falha ao abrir o produto da promoção:", err);
+          });
+          return true;
+        }
+      };
+
       async function selectProduct(productId) {
         var product = state.products.find(function (item) {
           return String(item._id) === String(productId);
@@ -3171,6 +3292,16 @@ var state = {
         var id=String(mlb||"").replace(/\D/g,"");
         return String(promoLinkByMlb[id]||"").trim();
       }
+      // V18.20: promoLinkedSku() sozinho nunca resolve — promoRebuildLinkIndex()
+      // monta o índice a partir de mlSkuMlbLinks, que NÃO existe neste escopo, e o
+      // try/catch de lá engole o ReferenceError. Resultado: toda linha aparecia como
+      // "Sem vínculo". A ponte consulta os vínculos de dentro do escopo do
+      // Precificador; o promoLinkedSku fica como reserva.
+      function promoSkuDoMlb(mlb){
+        var viaPonte=(window.nmPrecificador&&window.nmPrecificador.skuDoMlb)
+          ? window.nmPrecificador.skuDoMlb(mlb) : "";
+        return viaPonte||promoLinkedSku(mlb);
+      }
       var promoPage = 1;
       var promoPageSize = 60;
       var promoLoadToken = 0;
@@ -3373,7 +3504,7 @@ var state = {
             if(!matched)return false;
           }
 
-          var linkedSku=promoLinkedSku(r.mlb);
+          var linkedSku=promoSkuDoMlb(r.mlb);
           if(linkFilter==="linked" && !linkedSku)return false;
           if(linkFilter==="unlinked" && linkedSku)return false;
 
@@ -3499,7 +3630,7 @@ var state = {
         var statusClass=priceOk?"ok":(st.key==="expired"?"expired":(st.key==="nodate"?"nodate":"ok"));
         var url=promoUrl(r.mlb);
 
-        var linkedSku=promoLinkedSku(r.mlb);
+        var linkedSku=promoSkuDoMlb(r.mlb);
         return '<tr data-promo-mlb="'+promoEsc(r.mlb)+'">'+
           '<td><a class="promo-mlb-link" href="'+url+'" target="_blank" rel="noopener">MLB'+promoEsc(r.mlb)+'</a>'+
             (linkedSku?'<div class="promo-apollo-sku">SKU: '+promoEsc(linkedSku)+'</div>':'<div class="promo-apollo-sku" style="color:#b45309">Sem vínculo</div>')+
@@ -3512,6 +3643,8 @@ var state = {
             '</div></td>'+
           '<td>'+stockHtml+'</td>'+
           '<td><div class="promo-actions">'+
+            // V18.20: só aparece com vínculo — sem SKU não há o que precificar.
+            (linkedSku?'<button class="btn promo-price-btn" type="button" data-promo-price-mlb="'+promoEsc(r.mlb)+'" title="Abrir '+promoEsc(linkedSku)+' no Precificador">Precificar</button>':'')+
             '<button class="btn promo-delete-btn" type="button" data-promo-delete-mlb="'+promoEsc(r.mlb)+'">Excluir</button>'+
           '</div></td>'+
         '</tr>';
@@ -3547,6 +3680,9 @@ var state = {
         // V16.41: a tabela da planilha NÃO depende mais do Mercado Livre.
         // Estoque só é consultado quando o usuário clicar em "Atualizar estoque".
         // Assim a lista sempre aparece imediatamente.
+
+        // V18.20: marcar Preço OK / estoque zerado some da régua também.
+        try{promoRailRender();}catch(_){}
 
               }catch(err){
           console.error("[Noromak V16.52] Falha ao renderizar promoções:",err);
@@ -3600,6 +3736,110 @@ var state = {
           promoPage=1;
           promoRender();
         },20);
+      }
+
+      // V18.20: atalho "Precificar" da promoção. Renovar promoção é decisão de
+      // preço, e antes era preciso fechar as Promoções e procurar o SKU na mão.
+      // A linha já conhece o SKU pelo vínculo MLB↔SKU, então abrimos o produto
+      // direto no Precificador — mesmo selectProduct() usado pela lista de
+      // produtos, então o formulário e o cálculo ML/Shopee/Magalu vêm juntos.
+      function promoPrecificar(mlb){
+        mlb=String(mlb||"").replace(/\D/g,"");
+        if(!mlb)return;
+
+        var sku=promoSkuDoMlb(mlb);
+        if(!sku){
+          window.nmPrecificador?.toast("MLB"+mlb+" está sem vínculo MLB ↔ SKU. Use \"Sincronizar MLB ↔ SKU\" antes de precificar.");
+          return;
+        }
+
+        // A ponte é exportada pelo escopo do Precificador (window.nmPrecificador).
+        var ponte=window.nmPrecificador;
+        if(!ponte||typeof ponte.abrirSku!=="function"){
+          console.error("[Noromak V18.20] Ponte do Precificador indisponível.");
+          return;
+        }
+
+        // Só devolve o usuário ao painel grande se foi de lá que ele veio.
+        var estavaNoPainel=document.body.classList.contains("show-promotions-monitor");
+        promoClose();
+        if(!ponte.abrirSku(sku)){
+          if(estavaNoPainel) promoOpen();
+          ponte.toast("O SKU "+sku+" não está cadastrado no Precificador.");
+          return;
+        }
+        ponte.toast("Precificando "+sku+" (MLB"+mlb+").");
+      }
+      window.promoPrecificar=promoPrecificar;
+
+      /* V18.20: régua de Promoções ao lado do Precificador.
+         Mostra o que precisa renovar e, no clique, abre aquele SKU no cadastro.
+         Não substitui o painel grande (importar planilha, paginação, marcações):
+         aquele continua no botão "Promoções". */
+      var promoRailFiltro="expired";
+      var PROMO_RAIL_MAX=80;
+      var PROMO_RAIL_KEY="nm_promo_rail_recolhida";
+
+      function promoRailItens(){
+        var ponte=window.nmPrecificador;
+        var indice=(ponte&&ponte.indiceMlbSku)?ponte.indiceMlbSku():{};
+        var busca=String(document.getElementById("promo-rail-search")?.value||"").trim().toLowerCase();
+        var out=[];
+        (promoRows||[]).forEach(function(r){
+          if(!r||!r.mlb||!r.date)return;
+          if(promoDeleted&&promoDeleted.has(String(r.mlb)))return;
+          try{ if(promoIsReviewed(r))return; }catch(_){}
+          var dias=promoDays(r.date);
+          if(dias===null||dias===undefined)return;
+          if(promoRailFiltro==="expired"&&!(dias<0))return;
+          if(promoRailFiltro==="7"&&!(dias>=0&&dias<=7))return;
+          if(promoRailFiltro==="15"&&!(dias>=0&&dias<=15))return;
+          var sku=indice[String(r.mlb).replace(/\D/g,"")]||"";
+          if(busca&&((r.mlb+" "+sku).toLowerCase().indexOf(busca)<0))return;
+          out.push({mlb:String(r.mlb),sku:sku,dias:dias});
+        });
+        // mais urgente primeiro; com vínculo antes (só esses dá para precificar)
+        out.sort(function(a,b){
+          if(!!b.sku!==!!a.sku)return a.sku?-1:1;
+          return a.dias-b.dias;
+        });
+        return {total:out.length,itens:out.slice(0,PROMO_RAIL_MAX)};
+      }
+
+      function promoRailRender(){
+        var lista=document.getElementById("promo-rail-list");
+        if(!lista)return;
+        var dados=promoRailItens();
+        var ponte=window.nmPrecificador;
+        var atual=String((ponte&&ponte.skuAtual)?ponte.skuAtual():"").trim().toUpperCase();
+        lista.innerHTML=dados.itens.map(function(it){
+          var cls=it.dias<0?"venc":(it.dias<=7?"d7":"d15");
+          var txt=it.dias<0?("venceu há "+(-it.dias)+"d"):(it.dias===0?"vence hoje":("vence em "+it.dias+"d"));
+          var ativo=(it.sku&&it.sku.trim().toUpperCase()===atual&&atual)?" ativo":"";
+          return '<button type="button" class="pr-item '+cls+ativo+'" data-pr-mlb="'+promoEsc(it.mlb)+'">'+
+            '<span class="pr-sku">'+(it.sku?promoEsc(it.sku):"<em>sem vínculo</em>")+'</span>'+
+            '<span class="pr-mlb">MLB'+promoEsc(it.mlb)+'</span>'+
+            '<span class="pr-dias '+cls+'">'+txt+'</span>'+
+          '</button>';
+        }).join("")||'<div class="pr-vazio">Nada para renovar neste filtro.</div>';
+        var sub=document.getElementById("promo-rail-sub");
+        if(sub){
+          sub.textContent=dados.total>PROMO_RAIL_MAX
+            ? (PROMO_RAIL_MAX+" de "+dados.total+" — refine na busca")
+            : (dados.total+(dados.total===1?" promoção":" promoções"));
+        }
+      }
+      window.promoRailRender=promoRailRender;
+
+      function promoRailRecolher(recolhida){
+        document.body.classList.toggle("promo-rail-collapsed",!!recolhida);
+        try{localStorage.setItem(PROMO_RAIL_KEY,recolhida?"1":"0");}catch(_){}
+        var b=document.getElementById("promo-rail-toggle");
+        if(b){
+          b.textContent=recolhida?"›":"‹";
+          b.title=recolhida?"Expandir promoções":"Recolher promoções";
+          b.setAttribute("aria-expanded",recolhida?"false":"true");
+        }
       }
 
       function promoDelete(mlb){
@@ -4088,6 +4328,14 @@ var state = {
         promoRender();
       });
       document.addEventListener("click",function(e){
+        // V18.20: atalho da promoção para o Precificador.
+        var precificar=e.target?.closest?.(".promo-price-btn");
+        if(precificar){
+          e.preventDefault();
+          e.stopPropagation();
+          promoPrecificar(precificar.dataset.promoPriceMlb||"");
+          return;
+        }
         var btn=e.target?.closest?.(".promo-delete-btn");
         if(!btn)return;
         e.preventDefault();
@@ -4105,6 +4353,34 @@ var state = {
         if(!cb)return;
         promoSetManualZero(cb.dataset.promoZeroMlb||"",cb.checked);
       });
+      // V18.20: eventos da régua de Promoções.
+      document.addEventListener("click",function(e){
+        var item=e.target?.closest?.(".pr-item");
+        if(item){
+          e.preventDefault();
+          promoPrecificar(item.dataset.prMlb||"");
+          return;
+        }
+        var chip=e.target?.closest?.(".pr-chip");
+        if(chip){
+          e.preventDefault();
+          document.querySelectorAll(".pr-chip").forEach(function(c){c.classList.remove("on");});
+          chip.classList.add("on");
+          promoRailFiltro=chip.dataset.prFiltro||"expired";
+          promoRailRender();
+          return;
+        }
+        if(e.target?.closest?.("#promo-rail-toggle")){
+          e.preventDefault();
+          promoRailRecolher(!document.body.classList.contains("promo-rail-collapsed"));
+        }
+      });
+      document.getElementById("promo-rail-search")?.addEventListener("input",function(){
+        try{promoRailRender();}catch(_){}
+      });
+      try{promoRailRecolher(localStorage.getItem(PROMO_RAIL_KEY)==="1");}catch(_){promoRailRecolher(false);}
+      try{promoRailRender();}catch(err){console.error("[Noromak V18.20] Régua de promoções:",err);}
+
       document.getElementById("promo-add-btn")?.addEventListener("click",promoAdd);
       document.getElementById("promo-add-mlb")?.addEventListener("keydown",function(e){if(e.key==="Enter")promoAdd();});
       document.getElementById("promo-import-btn")?.addEventListener("click",function(){document.getElementById("promo-import-file")?.click();});
