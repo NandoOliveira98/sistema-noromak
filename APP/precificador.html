@@ -461,14 +461,23 @@
     #promo-rail .pr-chip.on{background:var(--brand);border-color:var(--brand);color:#fff}
     #promo-rail-search{margin:0 10px 8px;height:30px;border:1px solid var(--line);border-radius:8px;padding:0 8px;font-size:.72rem}
     #promo-rail-list{overflow:auto;min-height:0}
-    .pr-item{display:block;width:100%;text-align:left;border:0;border-top:1px solid #eef2ef;border-left:3px solid transparent;background:#fff;padding:7px 10px;cursor:pointer}
-    .pr-item:hover{background:#f6f9f7}
+    .pr-item{border-top:1px solid #eef2ef;border-left:3px solid transparent;background:#fff;padding:7px 9px}
+    .pr-item:hover{background:#f9fbfa}
     .pr-item.venc{border-left-color:#c0392b}.pr-item.d7{border-left-color:#c77700}.pr-item.d15{border-left-color:#1F57A5}
     .pr-item.ativo{background:#eef5ff}
-    .pr-item .pr-sku{display:block;font-weight:900;font-size:.73rem;color:var(--ink)}
-    .pr-item .pr-sku em{font-weight:700;color:#a08a2f;font-style:normal}
-    .pr-item .pr-mlb{display:block;font-size:.61rem;color:var(--muted)}
-    .pr-item .pr-dias{display:inline-block;margin-top:3px;font-size:.59rem;font-weight:800;border-radius:99px;padding:1px 6px}
+    .pr-l1{display:flex;align-items:center;gap:6px}
+    .pr-l2{display:flex;align-items:center;gap:4px;margin-top:2px}
+    /* O SKU é o que abre o produto; sem vínculo ele não é clicável. */
+    .pr-sku{flex:1;min-width:0;font-weight:900;font-size:.73rem;color:var(--ink);background:none;border:0;padding:0;text-align:left;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .pr-sku:hover{text-decoration:underline}
+    .pr-sku.sem{color:#a08a2f;font-weight:700;cursor:default}
+    .pr-sku.sem:hover{text-decoration:none}
+    .pr-origem{font-size:.55rem;font-weight:700;color:var(--muted);background:#f0f4f1;border-radius:5px;padding:0 4px;margin-left:4px}
+    /* MLB selecionável para copiar à mão, além do botão de copiar. */
+    .pr-mlb{flex:1;min-width:0;font-size:.61rem;color:var(--muted);user-select:text;-webkit-user-select:text;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .pr-mini{border:1px solid var(--line);background:#fff;border-radius:6px;font-size:.58rem;font-weight:800;padding:2px 5px;cursor:pointer;color:var(--brand);text-decoration:none;line-height:1.5;flex:none}
+    .pr-mini:hover{background:#eef5ff}
+    .pr-dias{flex:none;font-size:.59rem;font-weight:800;border-radius:99px;padding:1px 6px}
     .pr-dias.venc{background:#fdecea;color:#c0392b}.pr-dias.d7{background:#fff6e0;color:#8a5a00}.pr-dias.d15{background:#eaf2fd;color:#1F57A5}
     .pr-vazio{padding:14px 10px;font-size:.69rem;color:var(--muted);text-align:center}
     @media(max-width:1180px){.app-shell,body.promo-rail-collapsed .app-shell{grid-template-columns:minmax(0,1fr)}#promo-rail{display:none}}
@@ -3300,7 +3309,15 @@ var state = {
       function promoSkuDoMlb(mlb){
         var viaPonte=(window.nmPrecificador&&window.nmPrecificador.skuDoMlb)
           ? window.nmPrecificador.skuDoMlb(mlb) : "";
-        return viaPonte||promoLinkedSku(mlb);
+        if(viaPonte)return viaPonte;
+        var reserva=promoLinkedSku(mlb);
+        if(reserva)return reserva;
+        // V18.21: só ~7% das promoções têm vínculo. O SKU lido do próprio anúncio
+        // (gravado por "Atualizar estoque ML + Apollo") cobre o resto sem custo.
+        try{
+          var m=promoMeta&&promoMeta[String(mlb||"").replace(/\D/g,"")];
+          return String((m&&m.sku)||"").trim();
+        }catch(_){return "";}
       }
       var promoPage = 1;
       var promoPageSize = 60;
@@ -3794,9 +3811,20 @@ var state = {
           if(promoRailFiltro==="expired"&&!(dias<0))return;
           if(promoRailFiltro==="7"&&!(dias>=0&&dias<=7))return;
           if(promoRailFiltro==="15"&&!(dias>=0&&dias<=15))return;
-          var sku=indice[String(r.mlb).replace(/\D/g,"")]||"";
+          // Duas fontes de SKU: o vínculo MLB↔SKU e, quando ele não existe, o SKU
+          // lido do próprio anúncio do ML ("Atualizar estoque ML + Apollo" grava
+          // em promoMeta). Só 7% das promoções têm vínculo — sem essa segunda
+          // fonte a régua seria inútil para a maioria.
+          var id=String(r.mlb).replace(/\D/g,"");
+          var sku=indice[id]||"";
+          var origem=sku?"vinculo":"";
+          if(!sku){
+            var m=promoMeta&&promoMeta[id];
+            var skuAnuncio=String((m&&m.sku)||"").trim();
+            if(skuAnuncio){sku=skuAnuncio;origem="anuncio";}
+          }
           if(busca&&((r.mlb+" "+sku).toLowerCase().indexOf(busca)<0))return;
-          out.push({mlb:String(r.mlb),sku:sku,dias:dias});
+          out.push({mlb:String(r.mlb),sku:sku,origem:origem,dias:dias});
         });
         // mais urgente primeiro; com vínculo antes (só esses dá para precificar)
         out.sort(function(a,b){
@@ -3816,11 +3844,18 @@ var state = {
           var cls=it.dias<0?"venc":(it.dias<=7?"d7":"d15");
           var txt=it.dias<0?("venceu há "+(-it.dias)+"d"):(it.dias===0?"vence hoje":("vence em "+it.dias+"d"));
           var ativo=(it.sku&&it.sku.trim().toUpperCase()===atual&&atual)?" ativo":"";
-          return '<button type="button" class="pr-item '+cls+ativo+'" data-pr-mlb="'+promoEsc(it.mlb)+'">'+
-            '<span class="pr-sku">'+(it.sku?promoEsc(it.sku):"<em>sem vínculo</em>")+'</span>'+
-            '<span class="pr-mlb">MLB'+promoEsc(it.mlb)+'</span>'+
-            '<span class="pr-dias '+cls+'">'+txt+'</span>'+
-          '</button>';
+          var sku=it.sku
+            ? '<button type="button" class="pr-sku" data-pr-mlb="'+promoEsc(it.mlb)+'" title="Abrir '+promoEsc(it.sku)+' no Precificador">'+promoEsc(it.sku)+
+              (it.origem==="anuncio"?'<span class="pr-origem">do anúncio</span>':'')+'</button>'
+            : '<span class="pr-sku sem" title="Use Sincronizar MLB ↔ SKU ou Atualizar estoque ML + Apollo">sem vínculo</span>';
+          return '<div class="pr-item '+cls+ativo+'">'+
+            '<div class="pr-l1">'+sku+'<span class="pr-dias '+cls+'">'+txt+'</span></div>'+
+            '<div class="pr-l2">'+
+              '<span class="pr-mlb">MLB'+promoEsc(it.mlb)+'</span>'+
+              '<button type="button" class="pr-mini" data-pr-copiar="'+promoEsc(it.mlb)+'" title="Copiar o código do anúncio">⧉ copiar</button>'+
+              '<a class="pr-mini" href="'+promoUrl(it.mlb)+'" target="_blank" rel="noopener" title="Abrir o anúncio no Mercado Livre">↗ ML</a>'+
+            '</div>'+
+          '</div>';
         }).join("")||'<div class="pr-vazio">Nada para renovar neste filtro.</div>';
         var sub=document.getElementById("promo-rail-sub");
         if(sub){
@@ -4354,8 +4389,43 @@ var state = {
         promoSetManualZero(cb.dataset.promoZeroMlb||"",cb.checked);
       });
       // V18.20: eventos da régua de Promoções.
+      function promoRailCopiar(mlb){
+        var texto="MLB"+String(mlb||"").replace(/\D/g,"");
+        var avisa=function(ok){
+          var t=window.nmPrecificador&&window.nmPrecificador.toast;
+          if(t)t(ok?(texto+" copiado."):("Não foi possível copiar. Selecione o código à mão."));
+        };
+        // Caminho antigo: serve sem HTTPS e quando a API recusa.
+        var plandoB=function(){
+          try{
+            var ta=document.createElement("textarea");
+            ta.value=texto; ta.style.position="fixed"; ta.style.opacity="0";
+            document.body.appendChild(ta); ta.focus(); ta.select();
+            var ok=document.execCommand("copy");
+            document.body.removeChild(ta);
+            return ok;
+          }catch(_){return false;}
+        };
+        if(navigator.clipboard&&navigator.clipboard.writeText){
+          navigator.clipboard.writeText(texto).then(function(){
+            avisa(true);
+          },function(){
+            // A API recusa quando a aba está sem foco — não desistir aqui.
+            avisa(plandoB());
+          });
+          return;
+        }
+        avisa(plandoB());
+      }
+
       document.addEventListener("click",function(e){
-        var item=e.target?.closest?.(".pr-item");
+        var copiar=e.target?.closest?.("[data-pr-copiar]");
+        if(copiar){
+          e.preventDefault();
+          promoRailCopiar(copiar.dataset.prCopiar||"");
+          return;
+        }
+        var item=e.target?.closest?.(".pr-sku[data-pr-mlb]");
         if(item){
           e.preventDefault();
           promoPrecificar(item.dataset.prMlb||"");
