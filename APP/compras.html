@@ -20,7 +20,12 @@ main{width:min(1560px,calc(100% - 32px));margin:0 auto;padding:18px 0 40px}
 .msg{padding:10px 14px;border-radius:10px;margin-bottom:12px;font-size:13px}.msg.ok{background:#edf9f2;border:1px solid #a7d6bd;color:#125d3b}.msg.erro{background:#fff1f0;border:1px solid #efb6b2;color:#8f1d16}
 .hidden{display:none!important}
 .card{background:#fff;border:1px solid var(--line);border-radius:13px;padding:14px;margin-bottom:12px}
-.cfg{display:grid;grid-template-columns:minmax(200px,1.3fr) repeat(4,minmax(110px,1fr)) auto auto;gap:10px;align-items:end}
+.cfg{display:grid;grid-template-columns:minmax(220px,2fr) repeat(4,minmax(120px,1fr));gap:14px;align-items:end}
+.field{display:flex;flex-direction:column;gap:6px}
+.field>span{font-size:10.5px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;height:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.field select,.field input{height:42px;padding:0 12px;border:1px solid var(--line);border-radius:10px;background:#fff;font-size:14px;font-weight:600;color:var(--ink)}
+.field small{height:14px;font-size:11px;color:#93a2b2;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cfg-actions{display:flex;gap:9px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap}
 label.f{display:flex;flex-direction:column;gap:5px;font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
 label.f select,label.f input,label.f textarea{font-size:14px;font-weight:600;color:var(--ink);text-transform:none;letter-spacing:0;padding:9px 10px;border:1px solid var(--line);border-radius:9px;background:#fff;min-height:40px}
 label.f small{font-weight:600;text-transform:none;letter-spacing:0;color:#8a99a8}
@@ -30,11 +35,14 @@ label.f small{font-weight:600;text-transform:none;letter-spacing:0;color:#8a99a8
 .editor{display:grid;grid-template-columns:repeat(3,minmax(0,1fr)) repeat(3,minmax(110px,.5fr));gap:10px;align-items:start;margin-top:12px;padding-top:12px;border-top:1px dashed var(--line)}
 .editor textarea{min-height:64px;resize:vertical}
 .editor .acoes{grid-column:1/-1;display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap}
-.kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;margin-bottom:12px}
-.kpi{background:#fff;border:1px solid var(--line);border-radius:13px;padding:13px 15px}
+.kpis{display:grid;grid-template-columns:repeat(4,1fr) 1.4fr;gap:12px;margin-bottom:12px}
+.kpi{background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px 16px;display:flex;flex-direction:column;justify-content:space-between;min-height:94px}
 .kpi small{display:block;font-size:10.5px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
-.kpi b{display:block;margin-top:5px;font-size:clamp(17px,1.5vw,22px);color:#143957;font-variant-numeric:tabular-nums;white-space:nowrap}
-.kpi span{display:block;margin-top:4px;font-size:11px;color:var(--muted)}
+.kpi b{display:block;margin-top:5px;font-size:clamp(18px,1.6vw,24px);color:#143957;font-variant-numeric:tabular-nums;white-space:nowrap;line-height:1.1}
+.kpi span{display:block;margin-top:5px;font-size:11.5px;color:var(--muted)}
+.kpi.hero{background:linear-gradient(120deg,var(--navy),var(--navy2));border-color:var(--navy)}
+.kpi.hero small{color:#bcd4ea}.kpi.hero b{color:#fff;font-size:clamp(20px,1.8vw,28px)}.kpi.hero span{color:#cfe0f0;font-weight:700}
+.kpi.alert b{color:var(--bad)}
 .meta-top{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap}
 .meta-top strong{font-size:14px;color:var(--navy)}.meta-top em{font-style:normal;font-size:12.5px;font-weight:800}
 .bar{height:12px;border-radius:6px;background:var(--soft);margin-top:9px;overflow:hidden;display:flex;gap:2px}
@@ -43,6 +51,12 @@ label.f small{font-weight:600;text-transform:none;letter-spacing:0;color:#8a99a8
 .tools{display:flex;gap:9px;align-items:center;flex-wrap:wrap;background:#fff;border:1px solid var(--line);border-bottom:0;border-radius:13px 13px 0 0;padding:11px 12px}
 .tools input[type=search]{flex:1 1 240px;padding:9px 11px;border:1px solid var(--line);border-radius:9px;min-height:40px}
 .tools label{font-size:12.5px;font-weight:700;color:var(--navy);display:flex;gap:6px;align-items:center}
+.tools .acts{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-left:auto}
+.send-group{display:flex;align-items:stretch;border:1px solid var(--navy);border-radius:10px;overflow:hidden}
+.send-group input{height:40px;border:0;padding:0 12px;width:220px;font-size:13px;font-weight:600;color:var(--ink)}
+.send-group input::placeholder{color:#9aa7b4;font-weight:500}
+.send-group button{height:40px;border:0;border-left:1px solid var(--navy);background:var(--navy);color:#fff;font-weight:800;padding:0 14px;cursor:pointer;white-space:nowrap}
+.send-group button:disabled{opacity:.55;cursor:not-allowed}
 .panel{background:#fff;border:1px solid var(--line);border-radius:0 0 13px 13px;overflow:auto;max-height:64vh}
 table{width:100%;min-width:1320px;border-collapse:separate;border-spacing:0}
 th{position:sticky;top:0;z-index:2;background:var(--navy);color:#fff;font-size:11px;font-weight:800;text-align:left;padding:10px 8px;white-space:nowrap}
@@ -79,11 +93,13 @@ tr.off td{color:#9aa7b4}
 
   <section class="card" aria-label="Fornecedor">
     <div class="cfg">
-      <label class="f">Fornecedor / marca<select id="fornecedor"></select></label>
-      <label class="f">Pedido mínimo<input id="minimo" type="number" min="0" step="100"><small>pelo custo do Precificador</small></label>
-      <label class="f">Prazo de entrega<input id="prazo" type="number" min="0" step="1"><small>dias até chegar</small></label>
-      <label class="f">Cobertura desejada<input id="cobertura" type="number" min="0" step="1"><small>dias de estoque após chegar</small></label>
-      <label class="f">Período de vendas<select id="periodo"><option value="30">30 dias</option><option value="60" selected>60 dias</option><option value="90">90 dias</option><option value="180">180 dias</option></select><small>base da média diária</small></label>
+      <label class="field"><span>Fornecedor / marca</span><select id="fornecedor"></select><small>reconhecido por regras</small></label>
+      <label class="field"><span>Pedido mínimo</span><input id="minimo" type="number" min="0" step="100"><small>pelo custo do Precificador</small></label>
+      <label class="field"><span>Prazo de entrega</span><input id="prazo" type="number" min="0" step="1"><small>dias até chegar</small></label>
+      <label class="field"><span>Cobertura desejada</span><input id="cobertura" type="number" min="0" step="1"><small>dias após chegar</small></label>
+      <label class="field"><span>Período de vendas</span><select id="periodo"><option value="30">30 dias</option><option value="60" selected>60 dias</option><option value="90">90 dias</option><option value="180">180 dias</option></select><small>base da média diária</small></label>
+    </div>
+    <div class="cfg-actions">
       <button id="editarBtn" class="btn" type="button">✎ Editar fornecedor</button>
       <button id="novoBtn" class="btn pri" type="button">＋ Novo fornecedor</button>
     </div>
@@ -108,8 +124,8 @@ tr.off td{color:#9aa7b4}
       <div class="kpi"><small>Peças do fornecedor</small><b id="kItens">0</b><span id="kItensSub"></span></div>
       <div class="kpi"><small>Itens a comprar</small><b id="kComprar">0</b><span id="kComprarSub"></span></div>
       <div class="kpi"><small>Unidades</small><b id="kUn">0</b><span>no pedido</span></div>
-      <div class="kpi"><small>Valor do pedido</small><b id="kValor">R$ 0</b><span id="kValorSub"></span></div>
-      <div class="kpi"><small>Zerando antes de chegar</small><b id="kRisco">0</b><span>cobertura menor que o prazo</span></div>
+      <div class="kpi alert"><small>Zerando antes de chegar</small><b id="kRisco">0</b><span>cobertura menor que o prazo</span></div>
+      <div class="kpi hero"><small>Valor do pedido</small><b id="kValor">R$ 0</b><span id="kValorSub"></span></div>
     </section>
 
     <section class="card">
@@ -122,8 +138,14 @@ tr.off td{color:#9aa7b4}
       <input id="busca" type="search" placeholder="Buscar código ou descrição">
       <label><input id="soComprar" type="checkbox" checked> Só o que entra no pedido</label>
       <label><input id="completar" type="checkbox" checked> Completar até o mínimo</label>
-      <button id="estoqueBtn" class="btn" type="button">↻ Atualizar estoque Apollo</button>
-      <button id="exportar" class="btn acc" type="button">⬇ Gerar planilha de compra</button>
+      <div class="acts">
+        <button id="estoqueBtn" class="btn" type="button">↻ Atualizar estoque</button>
+        <button id="exportar" class="btn acc" type="button">⬇ Planilha</button>
+        <div class="send-group" title="Enviar o pedido de compra por e-mail">
+          <input id="compradorEmail" type="email" placeholder="e-mail do comprador">
+          <button id="enviarComprador" type="button">✉ Enviar ao comprador</button>
+        </div>
+      </div>
     </div>
     <div class="panel">
       <table>
@@ -154,7 +176,7 @@ tr.off td{color:#9aa7b4}
   const num = (v, d = 0) => Number(v || 0).toLocaleString("pt-BR", { minimumFractionDigits: d, maximumFractionDigits: d });
   const esc = (v) => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-  const state = { fornecedores: [], atual: null, dados: null, estoque: new Map(), edits: new Map(), off: new Set(), caminho: new Map(), consultando: false, cancelar: false };
+  const state = { fornecedores: [], atual: null, dados: null, estoque: new Map(), edits: new Map(), off: new Set(), caminho: new Map(), consultando: false, cancelar: false, comprador: "" };
 
   function msg(texto, tipo = "ok") { const m = $("msg"); m.textContent = texto; m.className = "msg " + tipo; if (!texto) m.className = "msg hidden"; }
   async function api(url, opts = {}) {
@@ -412,6 +434,42 @@ tr.off td{color:#9aa7b4}
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, ("Pedido " + state.atual.nome).slice(0, 31));
     XLSX.writeFile(wb, `pedido_compra_${state.atual.nome.toLowerCase().replace(/[^a-z0-9]+/g, "_")}.xlsx`);
   });
+
+  // V18.14: envia o pedido montado nesta tela para o comprador por e-mail.
+  function montarPedidoCompra() {
+    const { c, itens, total } = calcular();
+    const noPedido = itens.filter(x => !state.off.has(x.codigo) && qtd(x) > 0);
+    return {
+      fornecedor: state.atual ? state.atual.nome : "",
+      minimo: c.minimo, periodo_dias: c.periodo,
+      total: Math.round(total * 100) / 100,
+      atingiu_minimo: total >= c.minimo,
+      itens: noPedido.map(x => ({
+        codigo: x.codigo, descricao: x.descricao, qtd: qtd(x),
+        custo: x.custo, subtotal: x.custo == null ? 0 : Math.round(qtd(x) * x.custo * 100) / 100,
+      })),
+    };
+  }
+  async function enviarAoComprador() {
+    if (!state.dados) return;
+    const pedido = montarPedidoCompra();
+    if (!pedido.itens.length) { msg("Não há itens no pedido para enviar. Ajuste as quantidades.", "erro"); return; }
+    const email = ($("compradorEmail").value || "").trim();
+    if (!email || email.indexOf("@") < 0) { msg("Preencha um e-mail válido do comprador no campo ao lado do botão.", "erro"); $("compradorEmail").focus(); return; }
+    if (!confirm(`Enviar o pedido de ${pedido.fornecedor}\n${pedido.itens.length} item(ns) · ${brl(pedido.total)}\npara ${email}?`)) return;
+    const btn = $("enviarComprador"); btn.disabled = true; msg("Enviando ao comprador…");
+    try {
+      if (email !== state.comprador) {
+        await api("/api/compras/comprador", { method: "POST", body: JSON.stringify({ email }) });
+        state.comprador = email;
+      }
+      const r = await api("/api/compras/enviar-comprador", { method: "POST", body: JSON.stringify(pedido) });
+      msg(`Pedido enviado para ${(r.comprador || [email]).join(", ")} (${r.itens} item(ns)).`, "ok");
+    } catch (e) { msg("Não foi possível enviar: " + e.message, "erro"); }
+    finally { btn.disabled = false; }
+  }
+  $("enviarComprador").addEventListener("click", enviarAoComprador);
+  api("/api/compras/comprador").then(d => { state.comprador = (d && d.email) || ""; if (state.comprador) $("compradorEmail").value = state.comprador; }).catch(() => {});
 
   carregarFornecedores().catch(e => msg("Não foi possível carregar os fornecedores: " + e.message, "erro"));
 })();

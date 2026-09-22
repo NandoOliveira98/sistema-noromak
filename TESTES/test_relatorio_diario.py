@@ -62,12 +62,13 @@ class RelatorioDiario(unittest.TestCase):
         # não pode quebrar ao formatar um dia vazio
         self.assertIn("Nenhuma venda", S.relatorio_diario_html(d))
 
-    def test_envio_sem_smtp_da_erro_claro(self):
+    def test_envio_sem_config_da_erro_claro(self):
         for k in ("SMTP_HOST", "SMTP_USER", "SMTP_SENHA", "RELATORIO_EMAILS"):
             os.environ.pop(k, None)
         with self.assertRaises(RuntimeError) as ctx:
             S.relatorio_diario_enviar_email("assunto", "texto", "<b>html</b>")
-        self.assertIn("SMTP", str(ctx.exception))
+        # Mensagem clara apontando o .env (falta SMTP ou RELATORIO_EMAILS).
+        self.assertIn(".env", str(ctx.exception))
 
 
 if __name__ == "__main__":

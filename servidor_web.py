@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.13-RELATORIO-DIARIO-EMAIL"
+APP_VERSION = "18.15-COMPRAS-LAYOUT-ENVIAR"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -12290,29 +12290,38 @@ def relatorio_diario_texto(d: dict[str, Any]) -> str:
     return "\n".join(linhas)
 
 
-def relatorio_diario_enviar_email(assunto: str, texto: str, html: str) -> list[str]:
+def enviar_email_smtp(assunto: str, texto: str, html: str, destinatarios: list[str]) -> list[str]:
+    """Envio genérico por SMTP (config do .env). Usado pelo relatório diário e pela
+    Demanda de Compra. Não depende de biblioteca externa (smtplib padrão)."""
     import smtplib
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
     cfg = relatorio_diario_config()
     faltando = [k for k in ("host", "user", "senha") if not cfg[k]]
-    if faltando or not cfg["destinatarios"]:
-        raise RuntimeError(
-            "SMTP não configurado. Defina no /home/expedicao/.env: "
-            "SMTP_HOST, SMTP_USER, SMTP_SENHA e RELATORIO_EMAILS."
-        )
+    if faltando:
+        raise RuntimeError("SMTP não configurado. Defina SMTP_HOST, SMTP_USER e SMTP_SENHA no /home/expedicao/.env.")
+    dest = [e.strip() for e in (destinatarios or []) if e and e.strip()]
+    if not dest:
+        raise RuntimeError("Nenhum destinatário informado para o e-mail.")
     msg = MIMEMultipart("alternative")
     msg["Subject"] = assunto
     msg["From"] = cfg["remetente"]
-    msg["To"] = ", ".join(cfg["destinatarios"])
+    msg["To"] = ", ".join(dest)
     msg.attach(MIMEText(texto, "plain", "utf-8"))
     msg.attach(MIMEText(html, "html", "utf-8"))
     with smtplib.SMTP(cfg["host"], cfg["port"], timeout=30) as s:
         if cfg["tls"]:
             s.starttls()
         s.login(cfg["user"], cfg["senha"])
-        s.sendmail(cfg["remetente"], cfg["destinatarios"], msg.as_string())
-    return cfg["destinatarios"]
+        s.sendmail(cfg["remetente"], dest, msg.as_string())
+    return dest
+
+
+def relatorio_diario_enviar_email(assunto: str, texto: str, html: str) -> list[str]:
+    cfg = relatorio_diario_config()
+    if not cfg["destinatarios"]:
+        raise RuntimeError("Defina RELATORIO_EMAILS no /home/expedicao/.env.")
+    return enviar_email_smtp(assunto, texto, html, cfg["destinatarios"])
 
 
 def relatorio_diario_enviar(dia: str, forcar: bool = False) -> dict[str, Any]:
@@ -12345,6 +12354,85 @@ def relatorio_diario_loop(stop: threading.Event) -> None:
             print(f"[relatorio-diario] {dia}: {res}", flush=True)
         except Exception as exc:
             print(f"[relatorio-diario] falhou: {exc}", file=sys.stderr)
+
+
+# ---------------------------------------------------------------------------
+# V18.14: "Enviar ao comprador" da Demanda de Compra. O cálculo de quanto comprar
+# é feito no navegador (junta vendas/custo do servidor com o estoque do Apollo).
+# O botão manda esse pedido montado para o comprador por e-mail (mesmo SMTP do
+# relatório). Um comprador para tudo, guardado em vendas_meta_v1799.
+# ---------------------------------------------------------------------------
+def compras_comprador_email(email: str | None = None) -> str:
+    if email is not None:
+        return _vendas_meta("compras_comprador_email", str(email or "").strip())
+    return _vendas_meta("compras_comprador_email")
+
+
+def compras_pedido_email_html(p: dict[str, Any]) -> str:
+    def esc(s: Any) -> str:
+        return html_module.escape(str(s if s is not None else ""))
+    itens = p.get("itens") or []
+    linhas = "".join(
+        f"<tr style='border-top:1px solid #eef2f7'>"
+        f"<td style='padding:6px 10px'><b>{esc(it.get('descricao') or it.get('codigo'))}</b>"
+        f"<br><span style='color:#748295;font-size:12px'>{esc(it.get('codigo'))}</span></td>"
+        f"<td style='padding:6px 10px;text-align:right'>{esc(it.get('qtd'))}</td>"
+        f"<td style='padding:6px 10px;text-align:right'>{_brl_srv(it.get('custo'))}</td>"
+        f"<td style='padding:6px 10px;text-align:right;font-weight:700'>{_brl_srv(it.get('subtotal'))}</td></tr>"
+        for it in itens
+    ) or "<tr><td colspan='4' style='padding:10px;color:#888'>Sem itens no pedido.</td></tr>"
+    minimo = float(p.get("minimo") or 0)
+    total = float(p.get("total") or 0)
+    status = ("<span style='color:#16a34a;font-weight:700'>atinge o pedido mínimo</span>"
+              if p.get("atingiu_minimo") else
+              f"<span style='color:#d97706;font-weight:700'>faltam {_brl_srv(max(0.0, minimo - total))} para o mínimo</span>")
+    return f"""<div style="font-family:'Segoe UI',system-ui,sans-serif;color:#1e293b;max-width:680px;margin:auto">
+<h2 style="color:#123a63;margin:0 0 4px">Pedido de compra — {esc(p.get('fornecedor'))}</h2>
+<p style="color:#748295;margin:0 0 14px">Sugestão gerada pela Demanda de Compra (base: últimos {esc(p.get('periodo_dias') or 60)} dias de venda).</p>
+<table style="width:100%;border-collapse:collapse;margin-bottom:16px">
+  <tr>
+    <td style="background:#f6f9fc;border:1px solid #e2e8f0;border-radius:10px;padding:12px;text-align:center">
+      <div style="font-size:22px;font-weight:800;color:#123a63">{_brl_srv(total)}</div><div style="font-size:12px;color:#748295">Total do pedido</div></td>
+    <td style="width:8px"></td>
+    <td style="background:#f6f9fc;border:1px solid #e2e8f0;border-radius:10px;padding:12px;text-align:center">
+      <div style="font-size:22px;font-weight:800">{len(itens)}</div><div style="font-size:12px;color:#748295">Itens</div></td>
+    <td style="width:8px"></td>
+    <td style="background:#f6f9fc;border:1px solid #e2e8f0;border-radius:10px;padding:12px;text-align:center">
+      <div style="font-size:14px;margin-top:4px">{status}</div><div style="font-size:12px;color:#748295">Mínimo: {_brl_srv(minimo)}</div></td>
+  </tr>
+</table>
+<table style="width:100%;border-collapse:collapse;font-size:14px">
+  <thead><tr style="background:#123a63;color:#fff;font-size:11px;text-transform:uppercase">
+    <th style="padding:6px 10px;text-align:left">Produto</th><th style="padding:6px 10px;text-align:right">Qtd</th>
+    <th style="padding:6px 10px;text-align:right">Custo un.</th><th style="padding:6px 10px;text-align:right">Subtotal</th></tr></thead>
+  <tbody>{linhas}</tbody>
+</table>
+<p style="color:#94a3b8;font-size:11px;margin-top:18px">Enviado pelo Sistema Noromak (Demanda de Compra). Confira as quantidades antes de fechar o pedido com o fornecedor.</p>
+</div>"""
+
+
+def compras_pedido_email_texto(p: dict[str, Any]) -> str:
+    linhas = [
+        f"Pedido de compra - {p.get('fornecedor')}",
+        f"Total: {_brl_srv(p.get('total'))} | Itens: {len(p.get('itens') or [])} | Minimo: {_brl_srv(p.get('minimo'))}"
+        + ("  (atinge o minimo)" if p.get("atingiu_minimo") else "  (abaixo do minimo)"),
+        "",
+    ]
+    for it in (p.get("itens") or []):
+        linhas.append(f"  - {it.get('descricao') or it.get('codigo')} [{it.get('codigo')}] x{it.get('qtd')} @ {_brl_srv(it.get('custo'))} = {_brl_srv(it.get('subtotal'))}")
+    if not (p.get("itens") or []):
+        linhas.append("  (sem itens)")
+    return "\n".join(linhas)
+
+
+def compras_enviar_comprador(p: dict[str, Any]) -> dict[str, Any]:
+    comprador = compras_comprador_email()
+    if not comprador:
+        raise RuntimeError("E-mail do comprador não configurado. Preencha na tela da Demanda de Compra.")
+    fornecedor = str(p.get("fornecedor") or "").strip() or "Fornecedor"
+    assunto = f"Pedido de compra — {fornecedor}: {_brl_srv(p.get('total'))} ({len(p.get('itens') or [])} itens)"
+    dest = enviar_email_smtp(assunto, compras_pedido_email_texto(p), compras_pedido_email_html(p), [comprador])
+    return {"ok": True, "comprador": dest, "total": p.get("total"), "itens": len(p.get("itens") or [])}
 
 
 # ---------------------------------------------------------------------------
@@ -13673,6 +13761,12 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
+        if path == "/api/compras/comprador":
+            # V18.14: e-mail do comprador (um para tudo).
+            if self.auth(admin_only=True) is None:
+                return
+            self.send_json({"ok": True, "email": compras_comprador_email()})
+            return
         if path == "/api/dashboard/vendas":
             # V17.99: Dashboard de vendas (Mercado Livre e Shopee, com valor).
             ctx = self.auth(admin_only=True)
@@ -13906,6 +14000,39 @@ class AppHandler(BaseHTTPRequestHandler):
                     salvo = custo_manual_salvar(str(body.get("codigo") or ""), body.get("custo"), ctx["username"])
                     audit(ctx["username"], "compras.custo.manual", f"{salvo['codigo']}={salvo['custo_manual']}")
                     self.send_json({"ok": True, **salvo})
+                except ValueError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 400)
+                except Exception as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/compras/comprador":
+            # V18.14: define o e-mail do comprador (um para tudo).
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                try:
+                    body = self.read_json()
+                    email = str((body or {}).get("email") or "").strip()
+                    if email and "@" not in email:
+                        raise ValueError("E-mail inválido.")
+                    compras_comprador_email(email)
+                    audit(ctx["username"], "compras.comprador", email)
+                    self.send_json({"ok": True, "email": email})
+                except ValueError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 400)
+                except Exception as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/compras/enviar-comprador":
+            # V18.14: envia o pedido de compra montado na tela para o comprador.
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                try:
+                    pedido = self.read_json() or {}
+                    if not (pedido.get("itens") or []):
+                        raise ValueError("Nenhum item no pedido para enviar.")
+                    res = compras_enviar_comprador(pedido)
+                    audit(ctx["username"], "compras.enviar_comprador", f"{pedido.get('fornecedor')}|{pedido.get('total')}")
+                    self.send_json(res)
                 except ValueError as exc:
                     self.send_json({"ok": False, "error": str(exc)}, 400)
                 except Exception as exc:
