@@ -20,7 +20,7 @@ main{width:min(1560px,calc(100% - 32px));margin:0 auto;padding:18px 0 40px}
 .msg{padding:10px 14px;border-radius:10px;margin-bottom:12px;font-size:13px}.msg.ok{background:#edf9f2;border:1px solid #a7d6bd;color:#125d3b}.msg.erro{background:#fff1f0;border:1px solid #efb6b2;color:#8f1d16}
 .hidden{display:none!important}
 .card{background:#fff;border:1px solid var(--line);border-radius:13px;padding:14px;margin-bottom:12px}
-.cfg{display:grid;grid-template-columns:minmax(220px,2fr) repeat(4,minmax(120px,1fr));gap:14px;align-items:end}
+.cfg{display:grid;grid-template-columns:minmax(200px,1.7fr) repeat(5,minmax(112px,1fr));gap:12px;align-items:end}
 .field{display:flex;flex-direction:column;gap:6px}
 .field>span{font-size:10.5px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;height:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .field select,.field input{height:42px;padding:0 12px;border:1px solid var(--line);border-radius:10px;background:#fff;font-size:14px;font-weight:600;color:var(--ink)}
@@ -72,6 +72,20 @@ tr.off td{color:#9aa7b4}
 .tag{display:inline-block;font-size:10.5px;font-weight:800;border-radius:6px;padding:2px 6px;margin-top:3px}
 .tag.comp{background:var(--compbg);color:var(--comp)}.tag.edit{background:#eef3f8;color:var(--muted)}.tag.semcusto{background:var(--warnbg);color:var(--warn)}
 .tag.reserva{background:#eef3f8;color:var(--muted);font-weight:700}
+/* V18.17: estoque por casa + transferência */
+td.casaA{background:#f2f8ff;border-left:2px solid #dbe9f7;font-weight:800}
+td.casaA.zero{color:var(--bad)}
+td.casaB{border-right:2px solid #dbe9f7}
+td.outra{color:#9aa7b4}td.outra.tem{color:#1c4f93;font-weight:700}
+.tr-tag{display:inline-block;font-size:10.5px;font-weight:800;color:#6d3fc0;background:#f2ecfd;border-radius:6px;padding:2px 7px;white-space:nowrap;margin:1px 0}
+.tr-no{color:#b6c0cc;font-size:11px}
+.report{margin-top:16px}
+.rel-titulo{font-size:15px;color:var(--navy);margin:0 0 10px}
+.casa-block{background:#fff;border:1px solid var(--line);border-radius:13px;margin-bottom:12px;overflow:hidden}
+.casa-head{background:#f2ecfd;color:#6d3fc0;font-weight:800;padding:11px 15px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;font-size:14px}
+.casa-block table{min-width:0}
+.casa-block th{position:static;background:#eef3f8;color:var(--muted);font-size:10.5px}
+.casa-block td{font-size:12.5px;padding:8px 12px}
 .custo-in{width:92px;text-align:right;padding:5px 7px;border:1px dashed #e0b24d;border-radius:7px;background:#fffaf0}
 .custo-edit{border:0;background:none;color:var(--navy);cursor:pointer;font-size:11px;padding:0 0 0 4px}
 .foot{margin:10px 2px 0;color:var(--muted);font-size:12px;line-height:1.6}
@@ -98,6 +112,7 @@ tr.off td{color:#9aa7b4}
       <label class="field"><span>Prazo de entrega</span><input id="prazo" type="number" min="0" step="1"><small>dias até chegar</small></label>
       <label class="field"><span>Cobertura desejada</span><input id="cobertura" type="number" min="0" step="1"><small>dias após chegar</small></label>
       <label class="field"><span>Período de vendas</span><select id="periodo"><option value="30">30 dias</option><option value="60" selected>60 dias</option><option value="90">90 dias</option><option value="180">180 dias</option></select><small>base da média diária</small></label>
+      <label class="field"><span>Transferir acima de</span><input id="limiteTransf" type="number" min="0" step="10" placeholder="0"><small>R$ — só se compensar o frete</small></label>
     </div>
     <div class="cfg-actions">
       <button id="editarBtn" class="btn" type="button">✎ Editar fornecedor</button>
@@ -151,12 +166,15 @@ tr.off td{color:#9aa7b4}
       <table>
         <thead><tr>
           <th></th><th>Código</th><th>Descrição</th><th>Curva</th><th class="n">Vendido</th><th class="n">Média/dia</th>
-          <th class="n">Estoque</th><th class="n">A caminho</th><th>Cobertura hoje</th><th class="n">Necessidade</th>
-          <th class="n">Comprar</th><th class="n">Custo un.</th><th class="n">Total</th>
+          <th class="n casaA" title="Araçatuba — de onde sai o Full (base da compra)">Estoque Araç.</th>
+          <th class="n" title="Ribeirão">Rib.</th><th class="n casaB" title="Bauru">Bau.</th>
+          <th class="n">A caminho</th><th>Cobertura</th><th class="n">Necessidade</th>
+          <th>Transferir</th><th class="n">Comprar</th><th class="n">Custo un.</th><th class="n">Total</th>
         </tr></thead>
         <tbody id="linhas"></tbody>
       </table>
     </div>
+    <div class="report" id="relTransf"></div>
     <p class="foot">
       <span class="formula">necessidade = média diária × (prazo + cobertura) − estoque − a caminho</span><br>
       <b>Estoque</b> = disponível no Apollo na rede inteira (já sem o que está no FULL).
@@ -241,7 +259,7 @@ tr.off td{color:#9aa7b4}
     try {
       while (pendentes.length && !state.cancelar) {
         msg(`Consultando estoque no Apollo: ${total - pendentes.length} de ${total} peça(s)…`);
-        const d = await api("/api/full/apollo-stock", { method: "POST", body: JSON.stringify({ filial: 0, nao_esperar: true, items: pendentes.slice(0, 40).map(sku => ({ sku, need: 1 })) }) });
+        const d = await api("/api/full/apollo-stock", { method: "POST", body: JSON.stringify({ filial: 1, nao_esperar: true, items: pendentes.slice(0, 40).map(sku => ({ sku, need: 1 })) }) });
         let espera = 0; const feitos = new Set();
         (d.results || []).forEach(r => { const k = String(r.sku || "").trim().toUpperCase(); if (r.pending) { espera = Math.max(espera, Number(r.retry_after) || 5); return; } state.estoque.set(k, r); feitos.add(k); });
         pendentes = pendentes.filter(k => !feitos.has(k));
@@ -258,20 +276,40 @@ tr.off td{color:#9aa7b4}
   }
 
   function cfg() { return { minimo: Number($("minimo").value) || 0, prazo: Number($("prazo").value) || 0, cobertura: Number($("cobertura").value) || 0, periodo: Number($("periodo").value) || 60 }; }
-  const qtd = (x) => state.edits.has(x.codigo) ? state.edits.get(x.codigo) : x.necessidade + x.complemento;
+  function limiteTransf() { return Math.max(0, Number($("limiteTransf").value) || 0); }
+  // Compra = o que Araçatuba precisa (necessidade + complemento) menos o que dá para transferir.
+  const qtd = (x) => state.edits.has(x.codigo) ? state.edits.get(x.codigo) : Math.max(0, x.necessidade + x.complemento - x.transferido);
 
   function calcular() {
     const c = cfg();
+    const limite = limiteTransf();
     const itens = (state.dados?.itens || []).map(p => {
       const r = state.estoque.get(p.codigo);
       const conhecido = r && r.ok && r.stock_known;
-      const estoque = conhecido ? Math.floor(Number(r.available) || 0) : null;
+      const araca = conhecido ? Math.floor(Number(r.available) || 0) : null;  // Araçatuba (filial 1)
+      const branches = (r && r.branches) || [];
+      const casaDisp = (rev) => { const b = branches.find(x => Number(x.revenda) === rev); return b && b.disponivel != null ? Math.max(0, Math.floor(Number(b.disponivel) || 0)) : null; };
+      const rib = casaDisp(2), bau = casaDisp(3);
+      const estoque = araca;  // a demanda usa Araçatuba, de onde sai o Full
       const caminho = state.caminho.get(p.codigo) || 0;
       const media = p.vendido / c.periodo;
       const cobHoje = estoque === null ? null : media > 0 ? (estoque + caminho) / media : Infinity;
       const necessidade = estoque === null ? 0 : Math.max(0, Math.ceil(media * (c.prazo + c.cobertura) - estoque - caminho));
       const status = p.vendido <= 0 ? "semvenda" : !r ? "consultando" : !r.ok ? "erro" : !conhecido ? "nd" : "ok";
-      return { ...p, estoque, caminho, media, cobHoje, necessidade, complemento: 0, status, erro: r && !r.ok ? r.error : "", parcial: !!(r && r.partial) };
+      return { ...p, araca, rib, bau, estoque, caminho, media, cobHoje, necessidade, complemento: 0, transferido: 0, transferList: [], status, erro: r && !r.ok ? r.error : "", parcial: !!(r && r.partial) };
+    });
+    // Transferência: cobre a necessidade de Araçatuba com estoque de outra casa,
+    // só quando o valor a transferir (unidades × custo) compensa o frete (limite).
+    itens.forEach(x => {
+      x.transferido = 0; x.transferList = [];
+      if (x.custo == null || x.necessidade <= 0) return;
+      const outras = [[2, x.rib], [3, x.bau]].filter(o => o[1] != null && o[1] > 0).sort((a, b) => b[1] - a[1]);
+      let restante = x.necessidade;
+      for (const [rev, d] of outras) {
+        if (restante <= 0) break;
+        const pode = Math.min(restante, d);
+        if (pode * x.custo >= limite) { x.transferList.push([rev, pode]); restante -= pode; x.transferido += pode; }
+      }
     });
     const valor = (x) => state.off.has(x.codigo) || x.custo == null ? 0 : qtd(x) * x.custo;
     const total = () => itens.reduce((s, x) => s + valor(x), 0);
@@ -343,22 +381,55 @@ tr.off td{color:#9aa7b4}
         : x.cobHoje < c.prazo ? `<span class="cob bad">⚠ ${num(x.cobHoje)} dias</span>`
         : x.cobHoje < c.prazo + c.cobertura ? `<span class="cob warn">${num(x.cobHoje)} dias</span>`
         : `<span class="cob ok">${x.cobHoje === Infinity ? "sem venda" : num(x.cobHoje) + " dias"}</span>`;
-      const tag = state.edits.has(x.codigo) ? `<span class="tag edit">sugerido ${num(x.necessidade + x.complemento)}</span>`
-        : x.complemento ? `<span class="tag comp">+${num(x.complemento)} complemento</span>` : "";
+      const tag = state.edits.has(x.codigo) ? `<span class="tag edit">editado</span>`
+        : x.complemento ? `<span class="tag comp">+${num(x.complemento)} compl.</span>` : "";
+      const casaN = { 2: "Rib.", 3: "Bau." };
+      const transf = x.transferList.length
+        ? x.transferList.map(([rev, q]) => `<span class="tr-tag">↔ ${num(q)} ${casaN[rev]}</span>`).join(" ")
+        : (((x.rib || 0) + (x.bau || 0) > 0 && x.necessidade > 0) ? `<span class="tr-no">não compensa</span>` : `<span class="tr-no">—</span>`);
       return `<tr class="${off ? "off" : ""}">
         <td><input type="checkbox" data-inc="${esc(x.codigo)}" ${off ? "" : "checked"} aria-label="Incluir ${esc(x.codigo)}"></td>
         <td>${esc(x.codigo)}</td>
         <td class="desc"><b>${esc(x.descricao)}</b>${x.custo == null ? '<span class="tag semcusto">sem custo — digite ao lado</span>' : ""}</td>
         <td>${x.curva ? `<span class="curva ${esc(x.curva)}">${esc(x.curva)}</span>` : "—"}</td>
         <td class="n" title="ML ${x.vendido_ml} · Shopee ${x.vendido_shopee}">${num(x.vendido)}</td><td class="n">${num(x.media, 2)}</td>
-        <td class="n">${x.estoque === null ? "—" : num(x.estoque) + (x.parcial ? "+" : "")}</td>
+        <td class="n casaA ${x.araca === 0 ? "zero" : ""}">${x.araca === null ? "—" : num(x.araca) + (x.parcial ? "+" : "")}</td>
+        <td class="n outra ${x.rib > 0 ? "tem" : ""}">${x.rib === null ? "—" : num(x.rib)}</td>
+        <td class="n casaB outra ${x.bau > 0 ? "tem" : ""}">${x.bau === null ? "—" : num(x.bau)}</td>
         <td class="n"><input class="cam" type="number" min="0" step="1" value="${x.caminho || ""}" placeholder="0" data-cam="${esc(x.codigo)}" aria-label="A caminho ${esc(x.codigo)}"></td>
         <td>${cob}</td>
         <td class="n">${x.status === "ok" ? num(x.necessidade) : "—"}</td>
+        <td>${transf}</td>
         <td class="n"><input class="qty" type="number" min="0" step="1" value="${qt}" data-qtd="${esc(x.codigo)}" ${off ? "disabled" : ""}><br>${tag}</td>
         <td class="n">${celulaCusto(x)}</td>
         <td class="n"><b>${off || x.custo == null ? "—" : brl(valor(x))}</b></td></tr>`;
-    }).join("") || `<tr><td colspan="13" class="vazio">${$("soComprar").checked ? "Nada a comprar deste fornecedor com essa configuração (desmarque “Só o que entra no pedido” para ver todas as peças)." : "Nenhuma peça."}</td></tr>`;
+    }).join("") || `<tr><td colspan="16" class="vazio">${$("soComprar").checked ? "Nada a comprar deste fornecedor com essa configuração (desmarque “Só o que entra no pedido” para ver todas as peças)." : "Nenhuma peça."}</td></tr>`;
+
+    montarRelatorioTransferencia(itens);
+  }
+
+  // V18.17: relatório consolidado — tudo que dá para transferir DE cada casa para Araçatuba.
+  function montarRelatorioTransferencia(itens) {
+    const box = document.getElementById("relTransf");
+    if (!box) return;
+    const nomeCasa = { 2: "Ribeirão", 3: "Bauru" };
+    const porCasa = { 2: [], 3: [] };
+    itens.forEach(x => {
+      if (state.off.has(x.codigo)) return;
+      (x.transferList || []).forEach(([rev, q]) => porCasa[rev].push({ cod: x.codigo, desc: x.descricao, q, valor: q * (x.custo || 0) }));
+    });
+    let html = "", algum = false;
+    for (const rev of [2, 3]) {
+      const its = porCasa[rev];
+      if (!its.length) continue;
+      algum = true;
+      const totQ = its.reduce((s, i) => s + i.q, 0), totV = its.reduce((s, i) => s + i.valor, 0);
+      html += `<div class="casa-block"><div class="casa-head"><span>↔ Transferir de <b>${nomeCasa[rev]}</b> para Araçatuba</span><span><b>${num(totQ)}</b> peça(s) · <b>${brl(totV)}</b></span></div>
+        <table><thead><tr><th>Código</th><th>Descrição</th><th class="n">Qtd</th><th class="n">Valor</th></tr></thead><tbody>${
+          its.map(i => `<tr><td>${esc(i.cod)}</td><td>${esc(i.desc)}</td><td class="n">${num(i.q)}</td><td class="n">${brl(i.valor)}</td></tr>`).join("")
+        }</tbody></table></div>`;
+    }
+    box.innerHTML = algum ? `<h3 class="rel-titulo">↔ Transferências sugeridas para Araçatuba (evitam compra)</h3>${html}` : "";
   }
 
   // ---- Editor de fornecedor ----
@@ -485,7 +556,16 @@ tr.off td{color:#9aa7b4}
     finally { btn.disabled = false; }
   }
   $("enviarComprador").addEventListener("click", enviarAoComprador);
-  api("/api/compras/comprador").then(d => { state.comprador = (d && d.email) || ""; if (state.comprador) $("compradorEmail").value = state.comprador; }).catch(() => {});
+  api("/api/compras/comprador").then(d => {
+    state.comprador = (d && d.email) || "";
+    if (state.comprador) $("compradorEmail").value = state.comprador;
+    if (d && d.limite_transferencia != null) $("limiteTransf").value = d.limite_transferencia || "";
+  }).catch(() => {});
+  // V18.17: mínimo de transferência (global) — recalcula ao digitar, salva ao sair do campo.
+  $("limiteTransf").addEventListener("input", render);
+  $("limiteTransf").addEventListener("change", () => {
+    api("/api/compras/comprador", { method: "POST", body: JSON.stringify({ limite_transferencia: Number($("limiteTransf").value) || 0 }) }).catch(() => {});
+  });
 
   carregarFornecedores().catch(e => msg("Não foi possível carregar os fornecedores: " + e.message, "erro"));
 })();

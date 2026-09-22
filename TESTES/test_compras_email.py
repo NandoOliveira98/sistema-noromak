@@ -51,6 +51,13 @@ class ComprasEmail(unittest.TestCase):
             S.compras_enviar_comprador(self.PEDIDO)
         self.assertIn("SMTP", str(c.exception))
 
+    def test_e_limite_transferencia(self):
+        # V18.17: mínimo global de transferência, guardado e lido, nunca negativo.
+        self.assertEqual(S.compras_limite_transferencia("150,50"), 150.5)
+        self.assertEqual(S.compras_limite_transferencia(), 150.5)
+        self.assertEqual(S.compras_limite_transferencia("-10"), 0.0)
+        self.assertEqual(S.compras_limite_transferencia("abc"), 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()

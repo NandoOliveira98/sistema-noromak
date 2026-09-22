@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.16-COMPRAS-PLANILHA-ANEXO"
+APP_VERSION = "18.17-COMPRAS-TRANSFERENCIA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -12381,6 +12381,22 @@ def compras_comprador_email(email: str | None = None) -> str:
     return _vendas_meta("compras_comprador_email")
 
 
+def compras_limite_transferencia(valor: Any = None) -> float:
+    """V18.17 — valor mínimo (R$) para uma transferência entre casas compensar o
+    frete. Global (um para tudo). Guardado em vendas_meta_v1799."""
+    if valor is not None:
+        try:
+            v = max(0.0, float(str(valor).replace(",", ".")))
+        except Exception:
+            v = 0.0
+        _vendas_meta("compras_limite_transferencia", str(v))
+        return v
+    try:
+        return float(_vendas_meta("compras_limite_transferencia") or 0)
+    except Exception:
+        return 0.0
+
+
 def compras_pedido_email_html(p: dict[str, Any]) -> str:
     def esc(s: Any) -> str:
         return html_module.escape(str(s if s is not None else ""))
@@ -13787,10 +13803,11 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
         if path == "/api/compras/comprador":
-            # V18.14: e-mail do comprador (um para tudo).
+            # V18.14: e-mail do comprador (um para tudo). V18.17: + limite de transferência.
             if self.auth(admin_only=True) is None:
                 return
-            self.send_json({"ok": True, "email": compras_comprador_email()})
+            self.send_json({"ok": True, "email": compras_comprador_email(),
+                            "limite_transferencia": compras_limite_transferencia()})
             return
         if path == "/api/dashboard/vendas":
             # V17.99: Dashboard de vendas (Mercado Livre e Shopee, com valor).
@@ -14031,17 +14048,22 @@ class AppHandler(BaseHTTPRequestHandler):
                     self.send_json({"ok": False, "error": str(exc)}, 500)
             return
         if path == "/api/compras/comprador":
-            # V18.14: define o e-mail do comprador (um para tudo).
+            # V18.14: e-mail do comprador. V18.17: + limite de transferência (global).
             ctx = self.auth(admin_only=True)
             if ctx is not None:
                 try:
-                    body = self.read_json()
-                    email = str((body or {}).get("email") or "").strip()
-                    if email and "@" not in email:
-                        raise ValueError("E-mail inválido.")
-                    compras_comprador_email(email)
-                    audit(ctx["username"], "compras.comprador", email)
-                    self.send_json({"ok": True, "email": email})
+                    body = self.read_json() or {}
+                    if "email" in body:
+                        email = str(body.get("email") or "").strip()
+                        if email and "@" not in email:
+                            raise ValueError("E-mail inválido.")
+                        compras_comprador_email(email)
+                        audit(ctx["username"], "compras.comprador", email)
+                    if "limite_transferencia" in body:
+                        lim = compras_limite_transferencia(body.get("limite_transferencia"))
+                        audit(ctx["username"], "compras.limite_transferencia", str(lim))
+                    self.send_json({"ok": True, "email": compras_comprador_email(),
+                                    "limite_transferencia": compras_limite_transferencia()})
                 except ValueError as exc:
                     self.send_json({"ok": False, "error": str(exc)}, 400)
                 except Exception as exc:
