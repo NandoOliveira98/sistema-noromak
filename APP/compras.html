@@ -194,7 +194,25 @@ td.outra{color:#9aa7b4}td.outra.tem{color:#1c4f93;font-weight:700}
   const num = (v, d = 0) => Number(v || 0).toLocaleString("pt-BR", { minimumFractionDigits: d, maximumFractionDigits: d });
   const esc = (v) => String(v ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-  const state = { fornecedores: [], atual: null, dados: null, estoque: new Map(), edits: new Map(), off: new Set(), caminho: new Map(), consultando: false, cancelar: false, comprador: "" };
+  const state = { fornecedores: [], atual: null, dados: null, estoque: new Map(), estoqueT: new Map(), edits: new Map(), off: new Set(), caminho: new Map(), consultando: false, cancelar: false, comprador: "" };
+
+  // V18.17: cache do estoque no navegador — reabrir a tela mostra na hora, sem
+  // pagar de novo a espera do limite do Apollo (20/min). Vale 30 min; o botão
+  // "Atualizar estoque Apollo" força a reconsulta.
+  const CACHE_ESTOQUE = "compras_estoque_cache_v1817", CACHE_TTL_MS = 30 * 60 * 1000;
+  function lerCacheEstoque() { try { return JSON.parse(localStorage.getItem(CACHE_ESTOQUE) || "{}"); } catch (_) { return {}; } }
+  function restaurarEstoqueCache() {
+    const c = lerCacheEstoque(), agora = Date.now();
+    Object.entries(c).forEach(([sku, o]) => { if (o && o.t && agora - o.t < CACHE_TTL_MS && o.r) { state.estoque.set(sku, o.r); state.estoqueT.set(sku, o.t); } });
+  }
+  function persistirCacheEstoque() {
+    try {
+      const c = {};
+      state.estoque.forEach((r, sku) => { const t = state.estoqueT.get(sku); if (r && r.ok && t) c[sku] = { r, t }; });
+      localStorage.setItem(CACHE_ESTOQUE, JSON.stringify(c));
+    } catch (_) {}
+  }
+  restaurarEstoqueCache();
 
   function msg(texto, tipo = "ok") { const m = $("msg"); m.textContent = texto; m.className = "msg " + tipo; if (!texto) m.className = "msg hidden"; }
   async function api(url, opts = {}) {
@@ -261,8 +279,9 @@ td.outra{color:#9aa7b4}td.outra.tem{color:#1c4f93;font-weight:700}
         msg(`Consultando estoque no Apollo: ${total - pendentes.length} de ${total} peça(s)…`);
         const d = await api("/api/full/apollo-stock", { method: "POST", body: JSON.stringify({ filial: 1, nao_esperar: true, items: pendentes.slice(0, 40).map(sku => ({ sku, need: 1 })) }) });
         let espera = 0; const feitos = new Set();
-        (d.results || []).forEach(r => { const k = String(r.sku || "").trim().toUpperCase(); if (r.pending) { espera = Math.max(espera, Number(r.retry_after) || 5); return; } state.estoque.set(k, r); feitos.add(k); });
+        (d.results || []).forEach(r => { const k = String(r.sku || "").trim().toUpperCase(); if (r.pending) { espera = Math.max(espera, Number(r.retry_after) || 5); return; } state.estoque.set(k, r); state.estoqueT.set(k, Date.now()); feitos.add(k); });
         pendentes = pendentes.filter(k => !feitos.has(k));
+        persistirCacheEstoque();
         render();
         if (!feitos.size && !espera) break;
         for (let s = Math.ceil(espera); pendentes.length && s > 0 && !state.cancelar; s--) {
@@ -512,35 +531,61 @@ td.outra{color:#9aa7b4}td.outra.tem{color:#1c4f93;font-weight:700}
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, ("Pedido " + state.atual.nome).slice(0, 31));
     return { wb, nome: `pedido_compra_${state.atual.nome.toLowerCase().replace(/[^a-z0-9]+/g, "_")}.xlsx` };
   }
-  $("exportar").addEventListener("click", () => {
-    if (!state.dados || typeof XLSX === "undefined") return;
-    const { wb, nome } = construirPlanilha();
-    XLSX.writeFile(wb, nome);
+  // V18.18: baixa a planilha DESENHADA montada no servidor (mesma do e-mail).
+  // Se o servidor falhar, cai no XLSX simples do navegador (SheetJS).
+  $("exportar").addEventListener("click", async () => {
+    if (!state.dados) return;
+    const pedido = montarPedidoCompra();
+    const nome = `pedido_compra_${(state.atual?.nome || "fornecedor").toLowerCase().replace(/[^a-z0-9]+/g, "_")}.xlsx`;
+    try {
+      const r = await fetch("/expedicao/api/compras/planilha", { method: "POST", credentials: "same-origin", cache: "no-store",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify(pedido) });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const blob = await r.blob();
+      const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = nome;
+      document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    } catch (e) {
+      if (typeof XLSX === "undefined") { msg("Não foi possível gerar a planilha: " + e.message, "erro"); return; }
+      const { wb, nome: nb } = construirPlanilha(); XLSX.writeFile(wb, nb);
+    }
   });
 
   // V18.14: envia o pedido montado nesta tela para o comprador por e-mail.
+  // V18.18: leva as mesmas colunas da tela + as transferências por casa, para o
+  // servidor montar a planilha desenhada e o e-mail com as seções de transferência.
   function montarPedidoCompra() {
     const { c, itens, total } = calcular();
     const noPedido = itens.filter(x => !state.off.has(x.codigo) && qtd(x) > 0);
+    const casaN = { 2: "Ribeirão", 3: "Bauru" };
+    const transferencias = { "Ribeirão": [], "Bauru": [] };
+    itens.forEach(x => {
+      if (state.off.has(x.codigo)) return;
+      (x.transferList || []).forEach(([rev, q]) => transferencias[casaN[rev]].push({
+        codigo: x.codigo, descricao: x.descricao, qtd: q,
+        valor: Math.round(q * (x.custo || 0) * 100) / 100,
+      }));
+    });
     return {
       fornecedor: state.atual ? state.atual.nome : "",
       minimo: c.minimo, periodo_dias: c.periodo,
       total: Math.round(total * 100) / 100,
       atingiu_minimo: total >= c.minimo,
       itens: noPedido.map(x => ({
-        codigo: x.codigo, descricao: x.descricao, qtd: qtd(x),
+        codigo: x.codigo, descricao: x.descricao, curva: x.curva || "",
+        vendido: x.vendido, media: Number((x.media || 0).toFixed(2)),
+        araca: x.araca, rib: x.rib, bau: x.bau, caminho: x.caminho,
+        cobertura: x.cobHoje == null ? null : (x.cobHoje === Infinity ? null : Number(x.cobHoje.toFixed(1))),
+        necessidade: x.necessidade, comprar: qtd(x), qtd: qtd(x),
         custo: x.custo, subtotal: x.custo == null ? 0 : Math.round(qtd(x) * x.custo * 100) / 100,
       })),
+      transferencias,
     };
   }
   async function enviarAoComprador() {
     if (!state.dados) return;
     const pedido = montarPedidoCompra();
     if (!pedido.itens.length) { msg("Não há itens no pedido para enviar. Ajuste as quantidades.", "erro"); return; }
-    // Anexa a mesma planilha do botão "Gerar planilha".
-    if (typeof XLSX !== "undefined") {
-      try { const { wb, nome } = construirPlanilha(); pedido.planilha_base64 = XLSX.write(wb, { type: "base64", bookType: "xlsx" }); pedido.planilha_nome = nome; } catch (_) {}
-    }
+    // V18.18: a planilha desenhada (com as transferências) é montada no servidor.
     const email = ($("compradorEmail").value || "").trim();
     if (!email || email.indexOf("@") < 0) { msg("Preencha um e-mail válido do comprador no campo ao lado do botão.", "erro"); $("compradorEmail").focus(); return; }
     if (!confirm(`Enviar o pedido de ${pedido.fornecedor}\n${pedido.itens.length} item(ns) · ${brl(pedido.total)}\npara ${email}?`)) return;

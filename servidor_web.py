@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.17-COMPRAS-TRANSFERENCIA"
+APP_VERSION = "18.18-COMPRAS-PLANILHA-DESENHADA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -12400,12 +12400,14 @@ def compras_limite_transferencia(valor: Any = None) -> float:
 def compras_pedido_email_html(p: dict[str, Any]) -> str:
     def esc(s: Any) -> str:
         return html_module.escape(str(s if s is not None else ""))
+    def _qtd(it: dict) -> Any:  # V18.18: aceita 'qtd' (legado) ou 'comprar'
+        return it.get("qtd") if it.get("qtd") is not None else it.get("comprar")
     itens = p.get("itens") or []
     linhas = "".join(
         f"<tr style='border-top:1px solid #eef2f7'>"
         f"<td style='padding:6px 10px'><b>{esc(it.get('descricao') or it.get('codigo'))}</b>"
         f"<br><span style='color:#748295;font-size:12px'>{esc(it.get('codigo'))}</span></td>"
-        f"<td style='padding:6px 10px;text-align:right'>{esc(it.get('qtd'))}</td>"
+        f"<td style='padding:6px 10px;text-align:right'>{esc(_qtd(it))}</td>"
         f"<td style='padding:6px 10px;text-align:right'>{_brl_srv(it.get('custo'))}</td>"
         f"<td style='padding:6px 10px;text-align:right;font-weight:700'>{_brl_srv(it.get('subtotal'))}</td></tr>"
         for it in itens
@@ -12415,6 +12417,34 @@ def compras_pedido_email_html(p: dict[str, Any]) -> str:
     status = ("<span style='color:#16a34a;font-weight:700'>atinge o pedido mínimo</span>"
               if p.get("atingiu_minimo") else
               f"<span style='color:#d97706;font-weight:700'>faltam {_brl_srv(max(0.0, minimo - total))} para o mínimo</span>")
+    # V18.18: seções de transferência (uma por casa) que evitam compra.
+    transf = p.get("transferencias") or {}
+    blocos_tr = ""
+    for casa in ("Ribeirão", "Bauru"):
+        tr_itens = transf.get(casa) or []
+        if not tr_itens:
+            continue
+        tot_q = sum(int(i.get("qtd") or 0) for i in tr_itens)
+        tot_v = sum(float(i.get("valor") or 0) for i in tr_itens)
+        tr_linhas = "".join(
+            f"<tr style='border-top:1px solid #eef2f7'>"
+            f"<td style='padding:5px 10px'><b>{esc(i.get('descricao') or i.get('codigo'))}</b>"
+            f"<br><span style='color:#748295;font-size:12px'>{esc(i.get('codigo'))}</span></td>"
+            f"<td style='padding:5px 10px;text-align:right'>{esc(i.get('qtd'))}</td>"
+            f"<td style='padding:5px 10px;text-align:right;font-weight:700'>{_brl_srv(i.get('valor'))}</td></tr>"
+            for i in tr_itens
+        )
+        blocos_tr += f"""<div style="border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;margin-bottom:10px">
+  <div style="background:#f2ecfd;color:#6d3fc0;font-weight:800;padding:10px 14px;display:flex;justify-content:space-between">
+    <span>↔ Transferir de {esc(casa)} para Araçatuba</span><span>{tot_q} peça(s) · {_brl_srv(tot_v)}</span></div>
+  <table style="width:100%;border-collapse:collapse;font-size:13px">
+    <thead><tr style="background:#eef3f8;color:#6a7a8c;font-size:11px;text-transform:uppercase">
+      <th style="padding:5px 10px;text-align:left">Produto</th><th style="padding:5px 10px;text-align:right">Qtd</th>
+      <th style="padding:5px 10px;text-align:right">Valor</th></tr></thead>
+    <tbody>{tr_linhas}</tbody></table></div>"""
+    if blocos_tr:
+        blocos_tr = ('<h3 style="color:#6d3fc0;margin:22px 0 10px;font-size:15px">Transferências sugeridas → Araçatuba '
+                     '<span style="color:#94a3b8;font-weight:500;font-size:12px">(evitam compra)</span></h3>' + blocos_tr)
     return f"""<div style="font-family:'Segoe UI',system-ui,sans-serif;color:#1e293b;max-width:680px;margin:auto">
 <h2 style="color:#123a63;margin:0 0 4px">Pedido de compra — {esc(p.get('fornecedor'))}</h2>
 <p style="color:#748295;margin:0 0 14px">Sugestão gerada pela Demanda de Compra (base: últimos {esc(p.get('periodo_dias') or 60)} dias de venda).</p>
@@ -12436,6 +12466,7 @@ def compras_pedido_email_html(p: dict[str, Any]) -> str:
     <th style="padding:6px 10px;text-align:right">Custo un.</th><th style="padding:6px 10px;text-align:right">Subtotal</th></tr></thead>
   <tbody>{linhas}</tbody>
 </table>
+{blocos_tr}
 <p style="color:#94a3b8;font-size:11px;margin-top:18px">📎 A planilha completa do pedido segue em anexo (.xlsx). Enviado pelo Sistema Noromak (Demanda de Compra). Confira as quantidades antes de fechar o pedido com o fornecedor.</p>
 </div>"""
 
@@ -12448,10 +12479,137 @@ def compras_pedido_email_texto(p: dict[str, Any]) -> str:
         "",
     ]
     for it in (p.get("itens") or []):
-        linhas.append(f"  - {it.get('descricao') or it.get('codigo')} [{it.get('codigo')}] x{it.get('qtd')} @ {_brl_srv(it.get('custo'))} = {_brl_srv(it.get('subtotal'))}")
+        _q = it.get("qtd") if it.get("qtd") is not None else it.get("comprar")
+        linhas.append(f"  - {it.get('descricao') or it.get('codigo')} [{it.get('codigo')}] x{_q} @ {_brl_srv(it.get('custo'))} = {_brl_srv(it.get('subtotal'))}")
     if not (p.get("itens") or []):
         linhas.append("  (sem itens)")
+    # V18.18: transferências sugeridas (uma seção por casa).
+    transf = p.get("transferencias") or {}
+    for casa in ("Ribeirão", "Bauru"):
+        tr_itens = transf.get(casa) or []
+        if not tr_itens:
+            continue
+        tot_q = sum(int(i.get("qtd") or 0) for i in tr_itens)
+        tot_v = sum(float(i.get("valor") or 0) for i in tr_itens)
+        linhas.append("")
+        linhas.append(f"Transferir de {casa} para Aracatuba - {tot_q} peca(s) / {_brl_srv(tot_v)}:")
+        for i in tr_itens:
+            linhas.append(f"  - {i.get('descricao') or i.get('codigo')} [{i.get('codigo')}] x{i.get('qtd')} = {_brl_srv(i.get('valor'))}")
     return "\n".join(linhas)
+
+
+def _xlsx_col(n: int) -> str:
+    s = ""; n += 1
+    while n:
+        n, r = divmod(n - 1, 26)
+        s = chr(65 + r) + s
+    return s
+
+
+def compras_pedido_xlsx(p: dict[str, Any]) -> bytes:
+    """V18.18 — planilha DESENHADA do pedido de compra (.xlsx montado à mão, com
+    cabeçalho colorido e seções de transferência), sem depender de biblioteca
+    externa. Estilos: 1=cabeçalho navy, 2=moeda, 3=título de seção, 4=negrito."""
+    import io
+    import zipfile
+    esc = html_module.escape
+
+    linhas: list[list[tuple[Any, int]]] = []
+    fornecedor = str(p.get("fornecedor") or "Fornecedor")
+    linhas.append([(f"Pedido de compra — {fornecedor}", 4)])
+    linhas.append([("Total da compra: %s   |   %s   |   base: %s dias" % (
+        _brl_srv(p.get("total")),
+        "atinge o mínimo" if p.get("atingiu_minimo") else "abaixo do mínimo",
+        p.get("periodo_dias") or 60), 0)])
+    linhas.append([])
+    heads = ["Código", "Descrição", "Curva", "Vendido", "Média/dia", "Araçatuba", "Ribeirão", "Bauru",
+             "A caminho", "Cobertura (dias)", "Necessidade", "Comprar", "Custo un.", "Total"]
+    linhas.append([(h, 1) for h in heads])
+    for it in (p.get("itens") or []):
+        def n(v):
+            return v if isinstance(v, (int, float)) and not isinstance(v, bool) else ("" if v is None else v)
+        linhas.append([
+            (it.get("codigo"), 0), (it.get("descricao"), 0), (it.get("curva"), 0),
+            (n(it.get("vendido")), 0), (n(it.get("media")), 0),
+            (n(it.get("araca")), 0), (n(it.get("rib")), 0), (n(it.get("bau")), 0),
+            (n(it.get("caminho")), 0), (n(it.get("cobertura")), 0),
+            (n(it.get("necessidade")), 0), (n(it.get("comprar")), 4),
+            (n(it.get("custo")), 2), (n(it.get("subtotal")), 2),
+        ])
+    transf = p.get("transferencias") or {}
+    for casa in ("Ribeirão", "Bauru"):
+        itens = transf.get(casa) or []
+        if not itens:
+            continue
+        tot_q = sum(int(i.get("qtd") or 0) for i in itens)
+        tot_v = sum(float(i.get("valor") or 0) for i in itens)
+        linhas.append([])
+        linhas.append([("Transferir de %s para Araçatuba — %s peça(s) · %s" % (casa, tot_q, _brl_srv(tot_v)), 3)])
+        linhas.append([(h, 1) for h in ["Código", "Descrição", "Qtd", "Valor"]])
+        for i in itens:
+            linhas.append([(i.get("codigo"), 0), (i.get("descricao"), 0), (int(i.get("qtd") or 0), 0), (float(i.get("valor") or 0), 2)])
+
+    def cell(ci: int, ri: int, value: Any, style: int) -> str:
+        ref = "%s%d" % (_xlsx_col(ci), ri)
+        s = ' s="%d"' % style if style else ""
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return '<c r="%s"%s><v>%s</v></c>' % (ref, s, value)
+        return '<c r="%s"%s t="inlineStr"><is><t xml:space="preserve">%s</t></is></c>' % (ref, s, esc(str(value if value is not None else "")))
+
+    rows_xml = []
+    for ri, cells in enumerate(linhas, 1):
+        cs = "".join(cell(ci, ri, v, st) for ci, (v, st) in enumerate(cells))
+        rows_xml.append('<row r="%d">%s</row>' % (ri, cs))
+    cols = "".join('<col min="%d" max="%d" width="%d" customWidth="1"/>' % (i + 1, i + 1, w)
+                   for i, w in enumerate([14, 46, 7, 9, 11, 11, 10, 9, 11, 15, 12, 9, 13, 14]))
+    sheet = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+             '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+             '<cols>%s</cols><sheetData>%s</sheetData></worksheet>' % (cols, "".join(rows_xml)))
+    styles = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+              '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+              '<numFmts count="1"><numFmt numFmtId="164" formatCode="&quot;R$&quot;\\ #,##0.00"/></numFmts>'
+              '<fonts count="3"><font><sz val="11"/><name val="Calibri"/></font>'
+              '<font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Calibri"/></font>'
+              '<font><b/><sz val="11"/><name val="Calibri"/></font></fonts>'
+              '<fills count="4"><fill><patternFill patternType="none"/></fill>'
+              '<fill><patternFill patternType="gray125"/></fill>'
+              '<fill><patternFill patternType="solid"><fgColor rgb="FF123B63"/></patternFill></fill>'
+              '<fill><patternFill patternType="solid"><fgColor rgb="FFF2ECFD"/></patternFill></fill></fills>'
+              '<borders count="1"><border/></borders>'
+              '<cellStyleXfs count="1"><xf/></cellStyleXfs>'
+              '<cellXfs count="5"><xf/>'
+              '<xf fontId="1" fillId="2" applyFont="1" applyFill="1"><alignment vertical="center"/></xf>'
+              '<xf numFmtId="164" applyNumberFormat="1"/>'
+              '<xf fontId="2" fillId="3" applyFont="1" applyFill="1"/>'
+              '<xf fontId="2" applyFont="1"/></cellXfs>'
+              '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>')
+    ct = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+          '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+          '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+          '<Default Extension="xml" ContentType="application/xml"/>'
+          '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+          '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+          '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>')
+    rels = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>')
+    wb = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+          '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+          'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+          '<sheets><sheet name="Pedido" sheetId="1" r:id="rId1"/></sheets></workbook>')
+    wbrels = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+              '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+              '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+              '<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>')
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", ct)
+        z.writestr("_rels/.rels", rels)
+        z.writestr("xl/workbook.xml", wb)
+        z.writestr("xl/_rels/workbook.xml.rels", wbrels)
+        z.writestr("xl/styles.xml", styles)
+        z.writestr("xl/worksheets/sheet1.xml", sheet)
+    return buf.getvalue()
 
 
 def compras_enviar_comprador(p: dict[str, Any]) -> dict[str, Any]:
@@ -12460,17 +12618,16 @@ def compras_enviar_comprador(p: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError("E-mail do comprador não configurado. Preencha na tela da Demanda de Compra.")
     fornecedor = str(p.get("fornecedor") or "").strip() or "Fornecedor"
     assunto = f"Pedido de compra — {fornecedor}: {_brl_srv(p.get('total'))} ({len(p.get('itens') or [])} itens)"
-    # Anexa a planilha (XLSX) que o navegador montou, quando enviada.
+    # V18.18: a planilha DESENHADA é montada no servidor (mesmas colunas da tela +
+    # seções de transferência), sem depender do XLSX cru do navegador.
     anexos: list[dict[str, Any]] = []
-    b64 = str(p.get("planilha_base64") or "")
-    if b64:
-        try:
-            conteudo = base64.b64decode(b64)
-            nome = str(p.get("planilha_nome") or "").strip() or f"pedido_compra_{fornecedor}.xlsx"
-            anexos.append({"nome": nome, "conteudo": conteudo,
-                           "subtype": "vnd.openxmlformats-officedocument.spreadsheetml.sheet"})
-        except Exception:
-            pass  # planilha inválida não impede o e-mail do pedido
+    try:
+        conteudo = compras_pedido_xlsx(p)
+        nome_seguro = re.sub(r"[^A-Za-z0-9_-]+", "_", fornecedor).strip("_") or "fornecedor"
+        anexos.append({"nome": f"pedido_compra_{nome_seguro}.xlsx", "conteudo": conteudo,
+                       "subtype": "vnd.openxmlformats-officedocument.spreadsheetml.sheet"})
+    except Exception:
+        pass  # planilha com erro não impede o e-mail do pedido
     dest = enviar_email_smtp(assunto, compras_pedido_email_texto(p), compras_pedido_email_html(p), [comprador], anexos)
     return {"ok": True, "comprador": dest, "total": p.get("total"),
             "itens": len(p.get("itens") or []), "com_planilha": bool(anexos)}
@@ -14082,6 +14239,30 @@ class AppHandler(BaseHTTPRequestHandler):
                     self.send_json(res)
                 except ValueError as exc:
                     self.send_json({"ok": False, "error": str(exc)}, 400)
+                except Exception as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/compras/planilha":
+            # V18.18: baixa a planilha DESENHADA do pedido (mesma do e-mail ao comprador).
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                try:
+                    pedido = self.read_json() or {}
+                    conteudo = compras_pedido_xlsx(pedido)
+                    forn = re.sub(r"[^A-Za-z0-9_-]+", "_", str(pedido.get("fornecedor") or "")).strip("_") or "fornecedor"
+                    body, compressed = self.encoded_body(
+                        conteudo, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                    self.send_response(200)
+                    self.send_security_headers()
+                    self.send_header("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                    self.send_header("Content-Disposition", f'attachment; filename="pedido_compra_{forn}.xlsx"')
+                    self.send_header("Content-Length", str(len(body)))
+                    self.send_header("Cache-Control", "no-store")
+                    if compressed:
+                        self.send_header("Content-Encoding", "gzip")
+                    self.end_headers()
+                    if self.command != "HEAD":
+                        self.wfile.write(body)
                 except Exception as exc:
                     self.send_json({"ok": False, "error": str(exc)}, 500)
             return
