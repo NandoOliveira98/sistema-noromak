@@ -81,3 +81,49 @@ class DemandaCompra(TesteNoromak):
         status, corpo = self.salvar(nome="WURTH", excluir=True)
         self.assertEqual(status, 200)
         self.assertEqual(corpo["fornecedores"], [])
+
+    def test_kit_rotulo_nao_explode_quantidade(self):
+        # V18.19: "KIT" seguido de CÓDIGOS de produto (KIT10291406 - 99090203,
+        # kit27200154) é rótulo de kit, NÃO o formato "KITn-X". A quantidade não
+        # pode ser lida como milhões. Kit homogêneo real (kit10-X) continua valendo.
+        produtos = [
+            {"sku": "99090203", "produto": "CHAVE S 050", "custo": 12.0, "curva": "A"},
+            {"sku": "10396473", "produto": "COMPONENTE DO KIT", "custo": 5.0, "curva": "B"},
+            {"sku": "27200154", "produto": "OUTRA PECA", "custo": 8.0, "curva": "C"},
+        ]
+        atual, _, _ = S.get_storage("precificador_online_v1")
+        S.save_storage("precificador_online_v1", atual, json.dumps({"products": produtos}), False,
+                       actor="teste", actor_role="admin")
+        linhas = [
+            ("ml", "V1", "99090203", 6, hoje(1)),                 # venda direta real
+            ("ml", "V2", "KIT10291406 - 99090203", 4, hoje(1)),   # rótulo: NAO vira 10.291.406 un
+            ("ml", "V3", "kit27200154", 3, hoje(1)),              # rótulo sem separador
+            ("ml", "V4", "kit10-10396473", 2, hoje(1)),           # kit homogeneo legitimo: 10x
+        ]
+        with S.DB_LOCK:
+            S.DB.executemany(
+                "INSERT INTO vendas_v1799(marketplace,order_id,line_key,sale_at,sale_day,sku,qty,amount,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+                [(m, o, sku, d + "T10:00:00-03:00", d, sku, q, 10.0, S.now_iso()) for m, o, sku, q, d in linhas],
+            )
+            S.DB.commit()
+        self.salvar(nome="VOLARE", pedido_minimo=2000, prazo=7, cobertura=30, codigos="99090203\n10396473\n27200154")
+        status, d = self.cliente.pedir("GET", "/api/compras/demanda?fornecedor=VOLARE&dias=30")
+        self.assertEqual(status, 200, d)
+        por = {x["codigo"]: x for x in d["itens"]}
+        # a venda direta (6) + os 4 do rótulo que casam pelo código depois do traço = 10; NUNCA milhões
+        self.assertEqual(por["99090203"]["vendido"], 10, "KIT-rótulo explodiu a quantidade do 99090203")
+        self.assertLess(por["99090203"]["vendido"], 1000)
+        # kit homogêneo legítimo continua contando 10 unidades por venda (2 vendas -> 20)
+        self.assertEqual(por["10396473"]["vendido"], 20, "kit10-X deveria contar 10 unidades por venda")
+        # kit27200154 (rótulo sem separador) não pode virar 2,7 milhões do 27200154
+        self.assertEqual(por["27200154"]["vendido"], 0)
+
+    def test_infer_kit_prefixo_exige_separador(self):
+        # Unidade pura da regra: só "KITn<sep>base" com n pequeno é kit inferido.
+        self.assertIsNone(S._infer_quantity_kit_from_sku("kit27200154"))     # sem separador
+        self.assertIsNone(S._infer_quantity_kit_from_sku("KIT10291406 - 99090203"))  # n gigante
+        self.assertIsNone(S._infer_quantity_kit_from_sku("KIT2X"))           # sem separador
+        k = S._infer_quantity_kit_from_sku("kit2-0893764272")
+        self.assertEqual((k["componentes"][0]["sku"], k["componentes"][0]["quantidade"]), ("0893764272", 2))
+        k = S._infer_quantity_kit_from_sku("KIT10-10396473")
+        self.assertEqual(k["componentes"][0]["quantidade"], 10)

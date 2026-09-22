@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.18-COMPRAS-PLANILHA-DESENHADA"
+APP_VERSION = "18.19-KIT-ROTULO-NAO-EXPLODE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -7614,7 +7614,12 @@ def _infer_quantity_kit_from_sku(sku: Any) -> dict[str, Any] | None:
     raw = str(sku or "").strip()
     if not raw:
         return None
-    m = re.match(r"^KIT\s*(\d+)\s*[-_./: ]*\s*(.+?)\s*$", raw, flags=re.I)
+    # V18.19: o separador entre a quantidade e o SKU-base é OBRIGATÓRIO e a
+    # quantidade tem teto. Sem isso, "KIT" usado como RÓTULO seguido de códigos de
+    # produto (ex.: "kit27200154", "KIT10291406 - 99090203") era lido como
+    # "2.720.015 unidades do 4" / "10.291.406 unidades do 99090203" e explodia a
+    # Demanda de Compra e a Demanda Full. Kit homogêneo real é "KITn-BASE" (n pequeno).
+    m = re.match(r"^KIT\s*(\d+)\s*[-_./: ]+\s*(.+?)\s*$", raw, flags=re.I)
     if not m:
         return None
     try:
@@ -7622,7 +7627,7 @@ def _infer_quantity_kit_from_sku(sku: Any) -> dict[str, Any] | None:
     except Exception:
         return None
     base = str(m.group(2) or "").strip()
-    if qty < 2 or not base:
+    if qty < 2 or qty > 99 or not base:
         return None
     return {
         "sku_kit": raw,
