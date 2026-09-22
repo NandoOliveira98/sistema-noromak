@@ -418,21 +418,33 @@ tr.off td{color:#9aa7b4}
     if (cam) { const v = Math.max(0, Math.floor(Number(cam.value) || 0)); v ? state.caminho.set(cam.dataset.cam, v) : state.caminho.delete(cam.dataset.cam); salvarCaminho(); state.edits.delete(cam.dataset.cam); }
     render();
   });
-  $("exportar").addEventListener("click", () => {
-    if (!state.dados || typeof XLSX === "undefined") return;
+  // Monta a planilha do pedido (mesma do botão e do anexo do e-mail).
+  function construirPlanilha() {
     const { itens } = calcular();
     const rows = itens.filter(x => !state.off.has(x.codigo) && qtd(x) > 0).map(x => ({
-      "Código": x.codigo, "Descrição": x.descricao, "Curva": x.curva, "Quantidade": qtd(x),
-      "Custo unitário": x.custo, "Origem do custo": x.custo == null ? "sem custo" : x.custo_origem === "apollo" ? "Apollo (custo médio)" : `${ORIGEM_CUSTO[x.custo_origem] || ""} ${br(x.custo_data)}`.trim(),
+      "Código": x.codigo,
+      "Descrição": x.descricao,
+      "Curva": x.curva,
+      "Vendido": x.vendido,
+      "Média/dia": Number((x.media || 0).toFixed(2)),
+      "Estoque": x.estoque == null ? "" : x.estoque,
+      "A caminho": x.caminho,
+      "Cobertura hoje (dias)": x.cobHoje == null ? "" : x.cobHoje === Infinity ? "∞" : Number(x.cobHoje.toFixed(1)),
+      "Necessidade": x.necessidade,
+      "Comprar": qtd(x),
+      "Custo un.": x.custo,
       "Total": x.custo == null ? "" : Math.round(qtd(x) * x.custo * 100) / 100,
-      "Estoque": x.estoque, "A caminho": x.caminho, "Vendido ML+Shopee": x.vendido, "Média diária": Number(x.media.toFixed(2)),
-      "Cobertura hoje (dias)": x.cobHoje === null || x.cobHoje === Infinity ? "" : Number(x.cobHoje.toFixed(1)),
-      "Motivo": state.edits.has(x.codigo) ? "quantidade editada" : x.complemento ? `necessidade ${x.necessidade} + complemento ${x.complemento}` : "necessidade"
+      "Origem do custo": x.custo == null ? "sem custo" : x.custo_origem === "apollo" ? "Apollo (custo médio)" : `${ORIGEM_CUSTO[x.custo_origem] || ""} ${br(x.custo_data)}`.trim()
     }));
     const ws = XLSX.utils.json_to_sheet(rows);
-    ws["!cols"] = [14, 44, 7, 11, 13, 12, 9, 10, 16, 12, 18, 34].map(w => ({ wch: w }));
+    ws["!cols"] = [14, 46, 7, 9, 11, 9, 10, 18, 12, 9, 13, 14, 30].map(w => ({ wch: w }));
     const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, ("Pedido " + state.atual.nome).slice(0, 31));
-    XLSX.writeFile(wb, `pedido_compra_${state.atual.nome.toLowerCase().replace(/[^a-z0-9]+/g, "_")}.xlsx`);
+    return { wb, nome: `pedido_compra_${state.atual.nome.toLowerCase().replace(/[^a-z0-9]+/g, "_")}.xlsx` };
+  }
+  $("exportar").addEventListener("click", () => {
+    if (!state.dados || typeof XLSX === "undefined") return;
+    const { wb, nome } = construirPlanilha();
+    XLSX.writeFile(wb, nome);
   });
 
   // V18.14: envia o pedido montado nesta tela para o comprador por e-mail.
@@ -454,6 +466,10 @@ tr.off td{color:#9aa7b4}
     if (!state.dados) return;
     const pedido = montarPedidoCompra();
     if (!pedido.itens.length) { msg("Não há itens no pedido para enviar. Ajuste as quantidades.", "erro"); return; }
+    // Anexa a mesma planilha do botão "Gerar planilha".
+    if (typeof XLSX !== "undefined") {
+      try { const { wb, nome } = construirPlanilha(); pedido.planilha_base64 = XLSX.write(wb, { type: "base64", bookType: "xlsx" }); pedido.planilha_nome = nome; } catch (_) {}
+    }
     const email = ($("compradorEmail").value || "").trim();
     if (!email || email.indexOf("@") < 0) { msg("Preencha um e-mail válido do comprador no campo ao lado do botão.", "erro"); $("compradorEmail").focus(); return; }
     if (!confirm(`Enviar o pedido de ${pedido.fornecedor}\n${pedido.itens.length} item(ns) · ${brl(pedido.total)}\npara ${email}?`)) return;

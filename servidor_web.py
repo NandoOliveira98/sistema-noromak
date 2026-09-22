@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.15-COMPRAS-LAYOUT-ENVIAR"
+APP_VERSION = "18.16-COMPRAS-PLANILHA-ANEXO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -12290,12 +12290,15 @@ def relatorio_diario_texto(d: dict[str, Any]) -> str:
     return "\n".join(linhas)
 
 
-def enviar_email_smtp(assunto: str, texto: str, html: str, destinatarios: list[str]) -> list[str]:
+def enviar_email_smtp(assunto: str, texto: str, html: str, destinatarios: list[str],
+                      anexos: list[dict[str, Any]] | None = None) -> list[str]:
     """Envio genérico por SMTP (config do .env). Usado pelo relatório diário e pela
-    Demanda de Compra. Não depende de biblioteca externa (smtplib padrão)."""
+    Demanda de Compra. Não depende de biblioteca externa (smtplib padrão).
+    `anexos`: lista de {nome, conteudo(bytes), subtype}."""
     import smtplib
     from email.mime.multipart import MIMEMultipart
     from email.mime.text import MIMEText
+    from email.mime.application import MIMEApplication
     cfg = relatorio_diario_config()
     faltando = [k for k in ("host", "user", "senha") if not cfg[k]]
     if faltando:
@@ -12303,12 +12306,22 @@ def enviar_email_smtp(assunto: str, texto: str, html: str, destinatarios: list[s
     dest = [e.strip() for e in (destinatarios or []) if e and e.strip()]
     if not dest:
         raise RuntimeError("Nenhum destinatário informado para o e-mail.")
-    msg = MIMEMultipart("alternative")
+    corpo = MIMEMultipart("alternative")
+    corpo.attach(MIMEText(texto, "plain", "utf-8"))
+    corpo.attach(MIMEText(html, "html", "utf-8"))
+    anexos = anexos or []
+    if anexos:
+        msg: Any = MIMEMultipart("mixed")
+        msg.attach(corpo)
+        for a in anexos:
+            part = MIMEApplication(a["conteudo"], _subtype=a.get("subtype", "octet-stream"))
+            part.add_header("Content-Disposition", "attachment", filename=a.get("nome", "anexo"))
+            msg.attach(part)
+    else:
+        msg = corpo
     msg["Subject"] = assunto
     msg["From"] = cfg["remetente"]
     msg["To"] = ", ".join(dest)
-    msg.attach(MIMEText(texto, "plain", "utf-8"))
-    msg.attach(MIMEText(html, "html", "utf-8"))
     with smtplib.SMTP(cfg["host"], cfg["port"], timeout=30) as s:
         if cfg["tls"]:
             s.starttls()
@@ -12407,7 +12420,7 @@ def compras_pedido_email_html(p: dict[str, Any]) -> str:
     <th style="padding:6px 10px;text-align:right">Custo un.</th><th style="padding:6px 10px;text-align:right">Subtotal</th></tr></thead>
   <tbody>{linhas}</tbody>
 </table>
-<p style="color:#94a3b8;font-size:11px;margin-top:18px">Enviado pelo Sistema Noromak (Demanda de Compra). Confira as quantidades antes de fechar o pedido com o fornecedor.</p>
+<p style="color:#94a3b8;font-size:11px;margin-top:18px">📎 A planilha completa do pedido segue em anexo (.xlsx). Enviado pelo Sistema Noromak (Demanda de Compra). Confira as quantidades antes de fechar o pedido com o fornecedor.</p>
 </div>"""
 
 
@@ -12431,8 +12444,20 @@ def compras_enviar_comprador(p: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError("E-mail do comprador não configurado. Preencha na tela da Demanda de Compra.")
     fornecedor = str(p.get("fornecedor") or "").strip() or "Fornecedor"
     assunto = f"Pedido de compra — {fornecedor}: {_brl_srv(p.get('total'))} ({len(p.get('itens') or [])} itens)"
-    dest = enviar_email_smtp(assunto, compras_pedido_email_texto(p), compras_pedido_email_html(p), [comprador])
-    return {"ok": True, "comprador": dest, "total": p.get("total"), "itens": len(p.get("itens") or [])}
+    # Anexa a planilha (XLSX) que o navegador montou, quando enviada.
+    anexos: list[dict[str, Any]] = []
+    b64 = str(p.get("planilha_base64") or "")
+    if b64:
+        try:
+            conteudo = base64.b64decode(b64)
+            nome = str(p.get("planilha_nome") or "").strip() or f"pedido_compra_{fornecedor}.xlsx"
+            anexos.append({"nome": nome, "conteudo": conteudo,
+                           "subtype": "vnd.openxmlformats-officedocument.spreadsheetml.sheet"})
+        except Exception:
+            pass  # planilha inválida não impede o e-mail do pedido
+    dest = enviar_email_smtp(assunto, compras_pedido_email_texto(p), compras_pedido_email_html(p), [comprador], anexos)
+    return {"ok": True, "comprador": dest, "total": p.get("total"),
+            "itens": len(p.get("itens") or []), "com_planilha": bool(anexos)}
 
 
 # ---------------------------------------------------------------------------
