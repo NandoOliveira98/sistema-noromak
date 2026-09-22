@@ -2046,6 +2046,9 @@ document.addEventListener("DOMContentLoaded",function(){
   setTimeout(()=>carregarColetaExpedicao(false),250);
   // Atualiza também se o Admin alterar a coleta em outra máquina/aba.
   setInterval(()=>carregarColetaExpedicao(false),15000);
+  // V18.08: conferidos do dia vindos do servidor (aparecem em qualquer máquina).
+  setTimeout(carregarConclusoesDiaServidor,400);
+  setInterval(carregarConclusoesDiaServidor,15000);
 });
 
 function fazerLogoff() {
@@ -2122,6 +2125,25 @@ function ehConcluidoHojeConferencia(iso) {
   return d.getFullYear() === hoje.getFullYear() && d.getMonth() === hoje.getMonth() && d.getDate() === hoje.getDate();
 }
 
+// V18.08: os "conferidos" do dia vêm do SERVIDOR (completed_orders), fonte
+// compartilhada entre máquinas. Antes vinham só do historicoConferencias, que é
+// local do navegador — então quem conferia numa máquina não entrava no contador
+// de outra, e o pedido "sumia" da fila sem aparecer como conferido no painel do
+// dono. O histórico local continua sendo somado (imediatismo na própria máquina
+// e reforço se o servidor não responder), deduplicado por pedido+marketplace.
+let conclusoesDiaServidor = [];
+async function carregarConclusoesDiaServidor() {
+  try {
+    const r = await fetch("/expedicao/api/conferencia/conclusoes-dia", { cache: "no-store" });
+    if (!r.ok) return;
+    const j = await r.json();
+    if (j && Array.isArray(j.conclusoes)) {
+      conclusoesDiaServidor = j.conclusoes;
+      atualizarPainelDiaMarketplace();
+    }
+  } catch (_) { /* sem rede: mantém o que tem; o histórico local ainda conta */ }
+}
+
 function obterEstatisticasDiaMarketplace() {
   const st = { mercado_livre:{p:0,c:0}, shopee:{p:0,c:0}, magalu:{p:0,c:0}, desconhecido:{p:0,c:0} };
   // FALTAM: pedidos com etiqueta pronta ainda na fila (não concluídos).
@@ -2133,17 +2155,20 @@ function obterEstatisticasDiaMarketplace() {
     const mp = obterMarketplaceItem(item);
     (st[mp] || st.desconhecido).p++;
   });
-  // CONFERIDOS hoje: do histórico, cada pedido uma vez por marketplace.
+  // CONFERIDOS hoje: servidor (compartilhado) + histórico local, cada pedido uma
+  // vez por marketplace.
   const vistos = new Set();
-  (historicoConferencias || []).forEach(log => {
-    if (!log || !ehConcluidoHojeConferencia(log.dataHoraISO)) return;
-    let mp = normalizarMarketplace(log.marketplaceCodigo || log.marketplace);
-    if (mp === "desconhecido") mp = inferirMarketplacePeloPedido(log.pedido);
-    const chave = mp + "|" + normalizarIdentificadorExato(log.pedido);
+  const contarConcluido = (pedido, mpBruto, iso) => {
+    if (!ehConcluidoHojeConferencia(iso)) return;
+    let mp = normalizarMarketplace(mpBruto);
+    if (mp === "desconhecido") mp = inferirMarketplacePeloPedido(pedido);
+    const chave = mp + "|" + normalizarIdentificadorExato(pedido);
     if (vistos.has(chave)) return;
     vistos.add(chave);
     (st[mp] || st.desconhecido).c++;
-  });
+  };
+  (conclusoesDiaServidor || []).forEach(x => { if (x) contarConcluido(x.pedido, x.marketplace, x.concluidoEm); });
+  (historicoConferencias || []).forEach(log => { if (log) contarConcluido(log.pedido, log.marketplaceCodigo || log.marketplace, log.dataHoraISO); });
   return st;
 }
 

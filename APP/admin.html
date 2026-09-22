@@ -943,6 +943,75 @@ body{background:var(--v15-bg)!important}
     </div>
   </section>
 
+  <!-- V18.08: gaveta de detalhe do produto (estoque, curva, demanda) -->
+  <style>
+    tr.pd8-row{cursor:pointer}
+    tr.pd8-row:hover{background:#f2f7fd}
+    tr.pd8-sel{background:#e9f2fe}
+    .pd8-fundo{position:fixed;inset:0;background:rgba(15,30,50,.35);opacity:0;pointer-events:none;transition:opacity .18s;z-index:6000}
+    .pd8-fundo.aberto{opacity:1;pointer-events:auto}
+    .pd8-gaveta{position:fixed;top:0;right:0;height:100%;width:430px;max-width:94vw;background:#f6f9fc;
+      box-shadow:-12px 0 40px rgba(15,30,50,.25);transform:translateX(100%);transition:transform .2s;
+      display:flex;flex-direction:column;z-index:6001;font-family:inherit;color:#1e293b}
+    .pd8-gaveta.aberto{transform:translateX(0)}
+    .pd8-gh{position:relative;background:linear-gradient(90deg,#123a63,#1d4d7b);color:#fff;padding:16px 40px 16px 18px}
+    .pd8-gh .cod{font-family:Consolas,monospace;font-size:12px;opacity:.85;word-break:break-all}
+    .pd8-gh .nome{font-size:16px;font-weight:700;margin-top:3px;line-height:1.3}
+    .pd8-gh .fechar{position:absolute;top:10px;right:12px;background:transparent;border:0;color:#fff;font-size:22px;cursor:pointer;opacity:.9;line-height:1}
+    .pd8-body{padding:16px 18px;overflow:auto}
+    .pd8-badges{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+    .pd8-badge{font-size:11px;font-weight:800;border-radius:7px;padding:4px 9px}
+    .pd8-cA{background:#e7f8ed;color:#15803d}.pd8-cB{background:#fef3c7;color:#92600e}.pd8-cC{background:#f1f5f9;color:#64748b}
+    .pd8-forn{background:#eef2f9;color:#123a63}
+    .pd8-mp h3{display:flex;align-items:center;gap:7px;color:#1e293b;text-transform:none;letter-spacing:0;font-size:13px}
+    .pd8-dot{width:9px;height:9px;border-radius:50%;display:inline-block}
+    .pd8-dot.ml{background:#2f6fd0}.pd8-dot.shopee{background:#ee4d2d}
+    .pd8-tiles{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:14px}
+    .pd8-tile{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:10px}
+    .pd8-tile .v{font-size:18px;font-weight:800;line-height:1}
+    .pd8-tile .l{font-size:10.5px;color:#748295;margin-top:4px}
+    .pd8-sec{background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:13px 14px;margin-bottom:12px}
+    .pd8-sec h3{margin:0 0 9px;font-size:12px;text-transform:uppercase;letter-spacing:.03em;color:#748295}
+    .pd8-linha{display:flex;justify-content:space-between;align-items:center;font-size:13px;padding:5px 0;border-top:1px solid #f1f5f9}
+    .pd8-linha:first-of-type{border-top:0}
+    .pd8-linha.pd8-tot{border-top:2px solid #e2e8f0;padding-top:8px}
+    .pd8-mut{color:#748295;font-size:11px}
+    .pd8-nota{font-size:11px;color:#748295;margin-top:8px;line-height:1.5}
+    .pd8-filial{display:flex;justify-content:space-between;font-size:13px;padding:6px 0;border-top:1px solid #f1f5f9}
+    .pd8-filial:first-child{border-top:0}
+    .pd8-disp{font-weight:800}
+    .pd8-sem{color:#748295;font-style:italic;font-size:12.5px}
+    .pd8-demanda{border:1px solid #f0d49a;background:#fff4e6;border-radius:11px;padding:14px;margin-bottom:12px}
+    .pd8-demanda.ok{border-color:#b7e4c7;background:#e7f8ed}
+    .pd8-cabd{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
+    .pd8-tit{font-weight:800;font-size:13px}
+    .pd8-compra{font-size:24px;font-weight:800;color:#d97706}
+    .pd8-demanda.ok .pd8-compra{color:#16a34a}
+    .pd8-compra.pd8-nd{color:#748295}
+    .pd8-expl{font-size:12px;color:#5b4a2a;line-height:1.5}
+    .pd8-demanda.ok .pd8-expl{color:#245c39}
+    .pd8-acaminho{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12.5px}
+    .pd8-acaminho input{width:70px;border:1px solid #cdd8e6;border-radius:7px;padding:6px 8px;font:inherit;text-align:center}
+    .pd8-rodape{margin-top:auto;padding:14px 18px;border-top:1px solid #e2e8f0;background:#fff}
+    .pd8-rodape a{display:block;text-align:center;text-decoration:none;border-radius:9px;padding:11px;font-weight:700;background:#123a63;color:#fff}
+  </style>
+  <div class="pd8-fundo" id="pd8Fundo" onclick="pd8Fechar()"></div>
+  <aside class="pd8-gaveta" id="pd8Gaveta" aria-hidden="true">
+    <div class="pd8-gh">
+      <button class="fechar" onclick="pd8Fechar()" aria-label="Fechar">×</button>
+      <div class="cod" id="pd8Cod"></div>
+      <div class="nome" id="pd8Nome"></div>
+    </div>
+    <div class="pd8-body">
+      <div class="pd8-badges" id="pd8Badges"></div>
+      <div class="pd8-tiles" id="pd8Tiles"></div>
+      <div class="pd8-demanda" id="pd8Demanda"></div>
+      <div class="pd8-sec"><h3>Estoque no Apollo (líquido do Full)</h3><div id="pd8Filiais"></div></div>
+      <div id="pd8Custos"></div>
+    </div>
+    <div class="pd8-rodape"><a href="/expedicao/compras">Abrir na Demanda de Compra →</a></div>
+  </aside>
+
   <div class="abas-admin">
     <button class="aba-btn ativa" data-aba="pedidos" onclick="abrirAbaAdmin('pedidos')">📋 Pedidos pendentes</button><button class="aba-btn" data-aba="pedidos-dia" onclick="abrirAbaAdmin('pedidos-dia')" style="display:none">📅 Pedidos do dia</button>
     <button class="aba-btn" data-aba="produtos" onclick="abrirAbaAdmin('produtos')">📦 Banco de produtos</button>
@@ -4234,7 +4303,7 @@ function v151RenderChart(hist){
 // /api/dashboard/vendas, que lê a cópia local das vendas (atualizada pelo
 // servidor a cada 10 min).
 // ---------------------------------------------------------------------------
-const v1799={timer:null,req:0,iniciado:false,canal:""};
+const v1799={timer:null,req:0,iniciado:false,canal:"",dias:30};
 const V1799_CANAIS={ml:"Mercado Livre",shopee:"Shopee"};
 const v1799Brl=v=>Number(v||0).toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
 const v1799Num=v=>Number(v||0).toLocaleString("pt-BR");
@@ -4271,6 +4340,7 @@ async function v1799Carregar(){
 }
 function v1799Render(d){
   const res=d.resumo||{},ant=d.anterior||{},per=d.periodo||{},pa=d.periodo_anterior||{},sync=d.sincronizacao||{};
+  v1799.dias=Number(per.dias)||30; // V18.08: base do cálculo de demanda na gaveta
   const rotuloAnt=`${v1799Curta(pa.inicio)}–${v1799Curta(pa.fim)}`;
   v151Set("v1799Periodo",`${v1799Br(per.inicio)} a ${v1799Br(per.fim)} · ${per.dias} dia(s) · comparado com ${v1799Br(pa.inicio)} a ${v1799Br(pa.fim)}`);
   v151Set("v1799Fat",v1799Brl(res.faturamento));v151Set("v1799Ped",v1799Num(res.pedidos));v151Set("v1799Un",v1799Num(res.unidades));
@@ -4336,13 +4406,213 @@ function v1799Tabela(id,itens,campo,res){
   const box=document.getElementById(id);if(!box)return;
   if(!itens.length){box.innerHTML='<div class="v151-empty">Sem vendas no período.</div>';return;}
   const total=Number(res[campo]||0)||1;
+  pd8Itens[id]=itens; // V18.08: guarda os itens para a gaveta de detalhe
   box.innerHTML=`<table><thead><tr><th>#</th><th>Produto</th><th class="n">Unid.</th><th class="n">Faturamento</th></tr></thead><tbody>${
     itens.map((x,i)=>{const pct=Number(x[campo]||0)/total*100;const pm=x.por_marketplace||{};const un=Number(x.unidades||0)||1;
       const canais=["ml","shopee"].filter(m=>pm[m]).map(m=>`${m==="ml"?"ML":"Shopee"} ${v1799Num(pm[m])}`).join(" · ");
       const barra=["ml","shopee"].map(m=>pm[m]?`<i class="${m}" style="width:${(Math.min(100,pct)*pm[m]/un).toFixed(2)}%"></i>`:"").join("");
-      return `<tr><td class="pos">${i+1}</td>
+      return `<tr class="pd8-row" onclick="pd8Abrir('${id}',${i},this)" tabindex="0" title="Ver estoque, curva e demanda"><td class="pos">${i+1}</td>
       <td class="prod" title="${htmlSeguroBanco(x.titulo)}"><b>${htmlSeguroBanco(x.titulo||x.sku)}</b><small>${htmlSeguroBanco(x.sku)} · ${v1799Num(x.pedidos)} pedido(s)${canais&&!v1799.canal?" ("+canais+" un.)":""} · ${pct.toLocaleString("pt-BR",{maximumFractionDigits:1})}% do ${campo==="unidades"?"total de unidades":"faturamento"}</small><span class="share">${barra}</span></td>
       <td class="n">${v1799Num(x.unidades)}</td><td class="n">${v1799Brl(x.faturamento)}</td></tr>`;}).join("")}</tbody></table>`;
+}
+
+// ===== V18.08: gaveta de detalhe do produto (estoque, curva, demanda) =====
+// Só leitura. Clica no produto do "Mais vendidos"/"Maior faturamento" e abre uma
+// gaveta com curva+custo (Precificador), estoque por filial (Apollo) e a demanda
+// de compra, no mesmo cálculo da tela Demanda de Compra. Não grava nada.
+const pd8Itens={};        // id da tabela -> itens renderizados
+const PD8_COBERTURA=30;   // dias de cobertura considerados na sugestão
+let pd8PrecMap=null, pd8PrecCarregando=null, pd8Aberto=null;
+const pd8Brl=v=>Number(v||0).toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
+function pd8Esc(s){const d=document.createElement("div");d.textContent=String(s==null?"":s);return d.innerHTML;}
+// Código Apollo a partir do SKU da venda: tira o prefixo numérico ("152285-...")
+// e normaliza; kits/compostos são tratados à parte (não têm código único).
+function pd8Codigo(sku){return String(sku||"").trim().replace(/^\d{3,}-/,"").trim().toUpperCase();}
+function pd8ehKit(sku){return /^kit/i.test(String(sku||"").trim())||String(sku||"").includes("/");}
+
+async function pd8CarregarPrec(){
+  if(pd8PrecMap)return pd8PrecMap;
+  if(pd8PrecCarregando)return pd8PrecCarregando;
+  pd8PrecCarregando=(async()=>{
+    const map={};
+    try{
+      const r=await fetch("/expedicao/api/storage?key=precificador_online_v1",{credentials:"same-origin",cache:"no-store"});
+      const d=await r.json().catch(()=>({}));
+      const data=JSON.parse(d.value||"{}");
+      const produtos=(data&&Array.isArray(data.products))?data.products:[];
+      produtos.forEach(p=>{const sku=String(p.sku||"").trim().toUpperCase();if(!sku)return;
+        map[sku]={custo:(p.custo!=null?Number(p.custo):null),curva:String(p.curva||"").trim().toUpperCase(),
+          produto:String(p.produto||"").trim(),fornecedor:String(p.fornecedor||p.marca||"").trim()};});
+    }catch(_){/* sem lista: mostra o que der */}
+    pd8PrecMap=map;return map;
+  })();
+  return pd8PrecCarregando;
+}
+
+async function pd8Abrir(id,i,tr){
+  const x=(pd8Itens[id]||[])[i];if(!x)return;
+  document.querySelectorAll("tr.pd8-sel").forEach(t=>t.classList.remove("pd8-sel"));
+  if(tr)tr.classList.add("pd8-sel");
+  pd8Aberto={id,i};
+  const codigo=pd8Codigo(x.sku);
+  const kit=pd8ehKit(x.sku);
+  const un=Number(x.unidades||0), fat=Number(x.faturamento||0);
+  const precoMedio=un>0?fat/un:0;
+  const dias=Number(v1799.dias)||30;
+
+  // cabeçalho + o que já sabemos na hora
+  document.getElementById("pd8Fundo").classList.add("aberto");
+  document.getElementById("pd8Gaveta").classList.add("aberto");
+  const prec=(await pd8CarregarPrec())[codigo]||{};
+  const nome=prec.produto||x.titulo||x.sku;
+  document.getElementById("pd8Cod").textContent=x.sku+(prec.fornecedor?(" · "+prec.fornecedor):"");
+  document.getElementById("pd8Nome").textContent=nome;
+
+  const curva=(prec.curva||"").replace(/[^ABCD]/g,"");
+  const cl=curva==="A"?"pd8-cA":curva==="B"?"pd8-cB":curva==="C"?"pd8-cC":"pd8-cC";
+  document.getElementById("pd8Badges").innerHTML=
+    (curva?`<span class="pd8-badge ${cl}">Curva ${curva}</span>`:`<span class="pd8-badge pd8-cC">Curva —</span>`)+
+    (prec.fornecedor?`<span class="pd8-badge pd8-forn">Fornecedor: ${pd8Esc(prec.fornecedor)}</span>`:"");
+
+  // tiles iniciais (estoque entra depois da consulta ao Apollo)
+  const media=dias>0?un/dias:0;
+  document.getElementById("pd8Tiles").innerHTML=
+    `<div class="pd8-tile"><div class="v">${v1799Num(un)}</div><div class="l">Vendidos (${dias}d)</div></div>
+     <div class="pd8-tile"><div class="v" id="pd8TileEst">…</div><div class="l">Estoque disponível</div></div>
+     <div class="pd8-tile"><div class="v">${pd8Brl(precoMedio)}</div><div class="l">Preço médio</div></div>`;
+
+  // custos REAIS por marketplace (ML: tarifa+envios; Shopee: comissão+serviço+frete)
+  const custoUnit=(prec.custo!=null&&prec.custo>0)?Number(prec.custo):null;
+  document.getElementById("pd8Custos").innerHTML=`<div class="pd8-sec"><h3>Custos reais por marketplace</h3><div class="pd8-sem">Buscando custos reais de venda…</div></div>`;
+  pd8CarregarCustos(x.sku, dias, custoUnit, id, i);
+
+  // estoque + demanda: consulta o Apollo (a não ser que seja kit/composto)
+  const secEst=document.getElementById("pd8Filiais");
+  const boxDem=document.getElementById("pd8Demanda");
+  if(kit||!codigo){
+    document.getElementById("pd8TileEst").textContent="—";
+    secEst.innerHTML=`<div class="pd8-sem">Produto composto (kit) — o estoque e a demanda de cada componente estão na Demanda de Compra.</div>`;
+    boxDem.className="pd8-demanda";
+    boxDem.innerHTML=`<div class="pd8-sem">Kit: veja a demanda por componente na Demanda de Compra.</div>`;
+    return;
+  }
+  secEst.innerHTML=`<div class="pd8-sem">Consultando o Apollo…</div>`;
+  boxDem.className="pd8-demanda";
+  boxDem.innerHTML=`<div class="pd8-sem">Calculando a demanda…</div>`;
+  let r0={};
+  try{
+    const resp=await fetch("/expedicao/api/full/apollo-stock",{method:"POST",credentials:"same-origin",
+      headers:{"Content-Type":"application/json"},body:JSON.stringify({filial:0,nao_esperar:true,items:[{sku:codigo,need:1}]})});
+    const dd=await resp.json().catch(()=>({}));
+    r0=(dd.results||[])[0]||{};
+  }catch(_){r0={ok:false};}
+  // se ainda está no limite do Apollo, tenta de novo uma vez
+  if(r0.pending){await new Promise(s=>setTimeout(s,Math.min(6,Number(r0.retry_after)||5)*1000));
+    try{const resp=await fetch("/expedicao/api/full/apollo-stock",{method:"POST",credentials:"same-origin",
+      headers:{"Content-Type":"application/json"},body:JSON.stringify({filial:0,nao_esperar:true,items:[{sku:codigo,need:1}]})});
+      const dd=await resp.json().catch(()=>({}));r0=(dd.results||[])[0]||r0;}catch(_){}}
+  if(!pd8Aberto||pd8Aberto.id!==id||pd8Aberto.i!==i)return; // trocou de produto durante a espera
+
+  const conhecido=r0&&r0.ok&&r0.stock_known;
+  const disp=conhecido?Math.floor(Number(r0.available)||0):null;
+  document.getElementById("pd8TileEst").textContent=disp===null?"—":v1799Num(disp);
+
+  // estoque por filial
+  const casas={1:"Araçatuba",2:"Ribeirão",3:"Bauru"};
+  const branches=Array.isArray(r0.branches)?r0.branches:[];
+  if(!branches.length){
+    secEst.innerHTML=disp===null?`<div class="pd8-sem">O Apollo não respondeu para este código.</div>`
+      :`<div class="pd8-filial"><span>Estoque disponível</span><b>${disp} un</b></div>`;
+  }else{
+    secEst.innerHTML=branches.map(b=>{const nome=b.casa||casas[b.revenda]||("Filial "+b.revenda);
+      const v=b.disponivel;
+      return `<div class="pd8-filial"><span>${pd8Esc(nome)}${Number(b.revenda)===1?" · sai o Full":""}</span>`+
+        (v===null||v===undefined?`<span class="pd8-sem">não respondeu</span>`:`<span class="pd8-disp">${Math.floor(Number(v)||0)} un</span>`)+`</div>`;}).join("");
+  }
+
+  // demanda de compra (mesmo cálculo da Demanda de Compra: média × cobertura − estoque − a caminho)
+  const caminho=Number((document.getElementById("pd8Caminho")||{}).value)||0;
+  if(disp===null){
+    boxDem.className="pd8-demanda";
+    boxDem.innerHTML=`<div class="pd8-cabd"><span class="pd8-tit">Demanda de compra</span><span class="pd8-compra pd8-nd">?</span></div>
+      <div class="pd8-expl">Vende <b>~${(media*30).toFixed(1).replace(".",",")} un/mês</b>. O Apollo não devolveu o estoque, então não dá para calcular a compra agora.</div>`;
+  }else{
+    const necessario=Math.max(0,Math.ceil(media*PD8_COBERTURA));
+    const emMaos=disp+caminho;
+    const comprar=Math.max(0,necessario-emMaos);
+    const cobDias=media>0?Math.round(disp/media):"∞";
+    boxDem.className="pd8-demanda"+(comprar===0?" ok":"");
+    boxDem.innerHTML=
+      `<div class="pd8-cabd"><span class="pd8-tit">Demanda de compra</span><span class="pd8-compra">${comprar>0?("+"+comprar+" un"):"OK"}</span></div>
+       <div class="pd8-expl">Vende <b>~${(media*30).toFixed(1).replace(".",",")} un/mês</b>. Estoque cobre <b>~${cobDias} dias</b>.
+       Para ${PD8_COBERTURA} dias seriam <b>${necessario} un</b>; em mãos <b>${emMaos}</b>${caminho?(" ("+disp+" em estoque + "+caminho+" a caminho)"):""}.
+       ${comprar>0?("<b>Sugestão: comprar "+comprar+" un.</b>"):"Estoque suficiente para o período."}</div>
+       <div class="pd8-acaminho">🚚 A caminho: <input type="number" id="pd8Caminho" value="${caminho}" min="0" onchange="pd8Abrir('${id}',${i})"> un</div>`;
+  }
+}
+function pd8Fechar(){
+  pd8Aberto=null;
+  document.getElementById("pd8Fundo").classList.remove("aberto");
+  document.getElementById("pd8Gaveta").classList.remove("aberto");
+  document.querySelectorAll("tr.pd8-sel").forEach(t=>t.classList.remove("pd8-sel"));
+}
+function pd8CorMargem(m){return m==null?"var(--muted)":m<10?"#dc2626":m<20?"#d97706":"#16a34a";}
+function pd8LinhaMargem(renda, unidades, vendas, custoUnit){
+  // Imposto de 12% sobre o preço vendido (ICMS), separado das tarifas do marketplace.
+  const imposto=vendas*0.12;
+  const linhaImposto=`<div class="pd8-linha"><span>Imposto <span class="pd8-mut">· 12%</span></span><b>−${pd8Brl(imposto)}</b></div>`;
+  if(custoUnit==null) return linhaImposto+`<div class="pd8-linha"><span class="pd8-sem">Sem custo no Precificador — margem indisponível.</span></div>`;
+  const custoTotal=custoUnit*unidades, lucro=renda-imposto-custoTotal, margem=vendas>0?(lucro/vendas*100):0;
+  return linhaImposto+
+    `<div class="pd8-linha"><span>Custo (${unidades} × ${pd8Brl(custoUnit)})</span><b>−${pd8Brl(custoTotal)}</b></div>
+    <div class="pd8-linha pd8-tot"><span><b>Lucro</b></span><b>${pd8Brl(lucro)}</b></div>
+    <div class="pd8-linha"><span><b>Margem</b></span><b style="color:${pd8CorMargem(margem)}">${margem.toFixed(1).replace(".",",")}%</b></div>`;
+}
+function pd8SecaoML(m, custoUnit){
+  const falta=m.pedidos-m.com_dado;
+  if(m.com_dado===0){
+    return `<div class="pd8-sec pd8-mp"><h3><span class="pd8-dot ml"></span>Mercado Livre · ${m.unidades} un no período</h3>
+      <div class="pd8-linha"><span>Preço vendido</span><b>${pd8Brl(m.vendas)}</b></div>
+      <div class="pd8-sem" style="margin-top:6px">Custos reais (tarifa/envios) ainda não capturados para estes pedidos.</div></div>`;
+  }
+  return `<div class="pd8-sec pd8-mp"><h3><span class="pd8-dot ml"></span>Mercado Livre · ${m.unidades} un no período</h3>
+    <div class="pd8-linha"><span>Preço vendido</span><b>${pd8Brl(m.vendas)}</b></div>
+    <div class="pd8-linha"><span>Tarifa de venda</span><b>−${pd8Brl(m.tarifa)}</b></div>
+    <div class="pd8-linha"><span>Mercado Envios</span><b>−${pd8Brl(m.envios)}</b></div>
+    <div class="pd8-linha pd8-tot"><span><b>Renda (após ML)</b></span><b>${pd8Brl(m.renda)}</b></div>
+    ${pd8LinhaMargem(m.renda, m.unidades, m.vendas, custoUnit)}
+    ${falta>0?`<div class="pd8-nota">Custos reais de ${m.com_dado} de ${m.pedidos} pedido(s); o restante ainda sem detalhe de tarifa.</div>`:""}</div>`;
+}
+function pd8SecaoShopee(s, custoUnit){
+  const falta=s.pedidos-s.com_dado;
+  if(s.com_dado===0){
+    return `<div class="pd8-sec pd8-mp"><h3><span class="pd8-dot shopee"></span>Shopee · ${s.unidades} un no período</h3>
+      <div class="pd8-linha"><span>Preço vendido</span><b>${pd8Brl(s.vendas)}</b></div>
+      <div class="pd8-sem" style="margin-top:6px">Custos reais da Shopee ainda não carregados (escrow do pedido).</div></div>`;
+  }
+  return `<div class="pd8-sec pd8-mp"><h3><span class="pd8-dot shopee"></span>Shopee · ${s.unidades} un no período</h3>
+    <div class="pd8-linha"><span>Preço vendido</span><b>${pd8Brl(s.vendas)}</b></div>
+    <div class="pd8-linha"><span>Comissão</span><b>−${pd8Brl(s.comissao)}</b></div>
+    <div class="pd8-linha"><span>Taxa de serviço</span><b>−${pd8Brl(s.servico)}</b></div>
+    <div class="pd8-linha"><span>Frete (vendedor)</span><b>−${pd8Brl(s.frete)}</b></div>
+    <div class="pd8-linha pd8-tot"><span><b>Renda líquida (escrow)</b></span><b>${pd8Brl(s.renda)}</b></div>
+    ${pd8LinhaMargem(s.renda, s.unidades, s.vendas, custoUnit)}
+    ${falta>0?`<div class="pd8-nota">Custos reais de ${s.com_dado} de ${s.pedidos} pedido(s).</div>`:""}</div>`;
+}
+async function pd8CarregarCustos(sku, dias, custoUnit, id, i){
+  const box=document.getElementById("pd8Custos");
+  let d={};
+  try{
+    const r=await fetch("/expedicao/api/dashboard/produto-custos?sku="+encodeURIComponent(sku)+"&dias="+encodeURIComponent(dias),{credentials:"same-origin",cache:"no-store"});
+    d=await r.json().catch(()=>({}));
+  }catch(_){d={};}
+  if(!pd8Aberto||pd8Aberto.id!==id||pd8Aberto.i!==i)return; // trocou de produto durante a espera
+  if(!d||!d.ok){box.innerHTML=`<div class="pd8-sec"><h3>Custos reais por marketplace</h3><div class="pd8-sem">Não foi possível carregar os custos reais.</div></div>`;return;}
+  let html="";
+  if(d.ml)html+=pd8SecaoML(d.ml, custoUnit);
+  if(d.shopee)html+=pd8SecaoShopee(d.shopee, custoUnit);
+  if(!html)html=`<div class="pd8-sec"><h3>Custos reais por marketplace</h3><div class="pd8-sem">Sem vendas no período para detalhar.</div></div>`;
+  box.innerHTML=html+`<div class="pd8-nota" style="padding:0 2px 4px">ML: tarifa + Mercado Envios (dados reais do pedido). Shopee: comissão + taxa de serviço + frete, e a renda líquida (escrow) da Shopee. Custo do produto: Apollo/Precificador.</div>`;
 }
 async function v1799Sincronizar(){
   const b=document.getElementById("v1799Sincronizar");b.disabled=true;b.textContent="Atualizando…";

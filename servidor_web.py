@@ -38,7 +38,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.07-CUSTO-RESERVA-DEMANDA"
+APP_VERSION = "18.10-CUSTOS-REAIS-MARKETPLACE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -1688,6 +1688,23 @@ def init_db() -> None:
                 PRIMARY KEY(marketplace, order_id, line_key)
             );
             CREATE INDEX IF NOT EXISTS idx_vendas_v1799_day ON vendas_v1799(sale_day, marketplace);
+            CREATE INDEX IF NOT EXISTS idx_vendas_v1799_sku ON vendas_v1799(sku, sale_day);
+            -- V18.10: custos reais por pedido da Shopee (API get_escrow_detail).
+            -- escrow_amount é a RENDA líquida do vendedor — a autoridade. Cache
+            -- porque o escrow é estável depois de pago e o gasto de chamada é alto.
+            CREATE TABLE IF NOT EXISTS shopee_escrow_v1810 (
+                order_sn TEXT PRIMARY KEY,
+                selling_price REAL,
+                escrow_amount REAL,
+                commission_fee REAL,
+                service_fee REAL,
+                transaction_fee REAL,
+                shipping_net REAL,
+                order_income_json TEXT NOT NULL DEFAULT '',
+                fetched_at TEXT NOT NULL DEFAULT '',
+                fetched_epoch INTEGER NOT NULL DEFAULT 0,
+                erro TEXT NOT NULL DEFAULT ''
+            );
             -- V18.00: fornecedores da Demanda de Compra (pedido mínimo, prazo,
             -- cobertura e as regras que dizem quais peças são de cada um).
             -- V18.07: custo de reserva da Demanda de Compra. O custo médio do Apollo
@@ -3643,6 +3660,47 @@ def reactivate_completed_orders_from_delta(old_value: str | None, new_value: str
     rows = _enrich_rows_with_completion_history(rows)
     return json_dumps(rows), reactivated
 
+
+def _marketplace_de_pedido_concluido(payload_json: str) -> str:
+    """Marketplace de um pedido concluído: lê do payload salvo na conclusão. Se
+    vier vazio, devolve "" e o front infere pelo número do pedido."""
+    try:
+        rows = json.loads(payload_json or "[]")
+        if isinstance(rows, list):
+            for r in rows:
+                if isinstance(r, dict):
+                    mp = str(r.get("Marketplace") or r.get("marketplace") or "").strip()
+                    if mp:
+                        return mp
+    except Exception:
+        pass
+    return ""
+
+
+def conferencia_conclusoes_do_dia(horas: int = 48) -> list[dict[str, str]]:
+    """V18.08 — conclusões recentes lidas do servidor (completed_orders), que é a
+    fonte COMPARTILHADA entre máquinas. O painel do dia da Conferência conta os
+    "conferidos" daqui, para o número aparecer igual em qualquer computador. Antes
+    o painel contava do historicoConferencias, que é local do navegador: quem
+    conferia numa máquina não aparecia no contador de outra. O corte de "hoje"
+    fica no front (fuso do próprio navegador), igual ao lado dos pendentes; aqui
+    devolvemos uma janela ampla (48h) para o front filtrar."""
+    corte = (datetime.now(timezone.utc).astimezone() - timedelta(hours=horas)).isoformat(timespec="milliseconds")
+    with DB_LOCK:
+        rows = DB.execute(
+            "SELECT order_id, completed_at, completed_by, payload FROM completed_orders "
+            "WHERE completed_at >= ? ORDER BY completed_at DESC LIMIT 5000",
+            (corte,),
+        ).fetchall()
+    saida: list[dict[str, str]] = []
+    for r in rows:
+        saida.append({
+            "pedido": str(r["order_id"] or ""),
+            "marketplace": _marketplace_de_pedido_concluido(str(r["payload"] or "")),
+            "concluidoEm": str(r["completed_at"] or ""),
+            "concluidoPor": str(r["completed_by"] or ""),
+        })
+    return saida
 
 
 # V17.48 — ADMIN SEMPRE PREVALECE
@@ -11901,6 +11959,156 @@ def vendas_dashboard_payload(date_from: str, date_to: str, marketplace: str = ""
 
 
 # ---------------------------------------------------------------------------
+# V18.10: custos REAIS de venda por marketplace, para a gaveta de detalhe do
+# Dashboard (mais vendidos / maior faturamento). Cada marketplace cobra diferente:
+#   - Mercado Livre: tarifa de venda + Mercado Envios. Já capturado por pedido em
+#     ml_profitability_snapshot (ml_fee, seller_shipping_cost).
+#   - Shopee: comissão + taxa de serviço + frete. Vem da API get_escrow_detail;
+#     escrow_amount é a RENDA líquida do vendedor (a autoridade). Buscado sob
+#     demanda e cacheado (o escrow é estável depois de pago).
+# O custo do produto (Apollo/Precificador) é o MESMO nos dois e entra no front.
+# ---------------------------------------------------------------------------
+SHOPEE_ESCROW_TTL_SEG = 30 * 24 * 3600
+
+
+def _shopee_escrow_num(oi: dict[str, Any], *keys: str) -> float:
+    for k in keys:
+        v = oi.get(k)
+        if v is not None:
+            try:
+                return float(v)
+            except Exception:
+                pass
+    return 0.0
+
+
+def _shopee_escrow_parse(order_income: dict[str, Any]) -> dict[str, float]:
+    oi = order_income or {}
+    selling = _shopee_escrow_num(oi, "order_selling_price", "original_price", "order_original_price", "buyer_total_amount")
+    escrow = _shopee_escrow_num(oi, "escrow_amount")
+    commission = _shopee_escrow_num(oi, "commission_fee")
+    service = _shopee_escrow_num(oi, "service_fee")
+    transaction = _shopee_escrow_num(oi, "seller_transaction_fee")
+    actual_ship = _shopee_escrow_num(oi, "actual_shipping_fee", "final_shipping_fee")
+    rebate = _shopee_escrow_num(oi, "shopee_shipping_rebate")
+    buyer_ship = _shopee_escrow_num(oi, "buyer_paid_shipping_fee")
+    # Frete líquido que sobra para o vendedor (o comprador/Shopee cobrem parte).
+    shipping_net = max(0.0, round(actual_ship - rebate - buyer_ship, 2))
+    return {"selling_price": round(selling, 2), "escrow_amount": round(escrow, 2),
+            "commission_fee": round(commission, 2), "service_fee": round(service, 2),
+            "transaction_fee": round(transaction, 2), "shipping_net": shipping_net}
+
+
+def shopee_escrow_lookup(order_sn: str, permitir_api: bool = True) -> dict[str, float] | None:
+    """Custos reais de um pedido Shopee (get_escrow_detail), com cache local.
+    Devolve None quando não há dado nem foi possível buscar."""
+    order_sn = str(order_sn or "").strip()
+    if not order_sn:
+        return None
+    campos = ("selling_price", "escrow_amount", "commission_fee", "service_fee", "transaction_fee", "shipping_net")
+    agora = int(time.time())
+    with DB_LOCK:
+        row = DB.execute("SELECT * FROM shopee_escrow_v1810 WHERE order_sn=?", (order_sn,)).fetchone()
+    if row and not row["erro"] and (agora - int(row["fetched_epoch"] or 0) < SHOPEE_ESCROW_TTL_SEG):
+        return {c: (row[c] if row[c] is not None else 0.0) for c in campos}
+    if not permitir_api:
+        return {c: (row[c] if row[c] is not None else 0.0) for c in campos} if row and not row["erro"] else None
+    try:
+        data = shopee_api_get("/api/v2/payment/get_escrow_detail", {"order_sn": order_sn})
+        oi = ((data or {}).get("response") or {}).get("order_income") or {}
+        parsed = _shopee_escrow_parse(oi)
+        with DB_LOCK:
+            DB.execute(
+                """INSERT INTO shopee_escrow_v1810
+                   (order_sn,selling_price,escrow_amount,commission_fee,service_fee,transaction_fee,shipping_net,order_income_json,fetched_at,fetched_epoch,erro)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,'')
+                   ON CONFLICT(order_sn) DO UPDATE SET selling_price=excluded.selling_price,escrow_amount=excluded.escrow_amount,
+                   commission_fee=excluded.commission_fee,service_fee=excluded.service_fee,transaction_fee=excluded.transaction_fee,
+                   shipping_net=excluded.shipping_net,order_income_json=excluded.order_income_json,fetched_at=excluded.fetched_at,
+                   fetched_epoch=excluded.fetched_epoch,erro=''""",
+                (order_sn, parsed["selling_price"], parsed["escrow_amount"], parsed["commission_fee"],
+                 parsed["service_fee"], parsed["transaction_fee"], parsed["shipping_net"],
+                 json_dumps(oi)[:20000], now_iso(), agora),
+            )
+            DB.commit()
+        return parsed
+    except Exception as exc:
+        with DB_LOCK:
+            DB.execute(
+                """INSERT INTO shopee_escrow_v1810(order_sn,order_income_json,fetched_at,fetched_epoch,erro)
+                   VALUES(?,?,?,?,?) ON CONFLICT(order_sn) DO UPDATE SET erro=excluded.erro,
+                   fetched_at=excluded.fetched_at,fetched_epoch=excluded.fetched_epoch""",
+                (order_sn, "", now_iso(), agora, str(exc)[:300]),
+            )
+            DB.commit()
+        return None
+
+
+def dashboard_produto_custos(sku: str, dias: int = 30, max_shopee: int = 8) -> dict[str, Any]:
+    """Custos reais de venda de UM SKU no período, separados por marketplace.
+    ML: tarifa + envios (ml_profitability_snapshot). Shopee: comissão + serviço +
+    frete e a renda líquida (get_escrow_detail). O custo do produto é o mesmo nos
+    dois e entra no front (Precificador)."""
+    sku = str(sku or "").strip()
+    if not sku:
+        return {"ok": False, "error": "SKU não informado."}
+    dias = max(1, min(int(dias or 30), 400))
+    hoje = datetime.now(BR_TZ).date()
+    inicio = (hoje - timedelta(days=dias - 1)).isoformat()
+    fim = hoje.isoformat()
+    with DB_LOCK:
+        rows = DB.execute(
+            "SELECT marketplace, order_id, SUM(qty) AS qty, SUM(amount) AS amount "
+            "FROM vendas_v1799 WHERE sku=? AND sale_day BETWEEN ? AND ? GROUP BY marketplace, order_id",
+            (sku, inicio, fim),
+        ).fetchall()
+
+    ml = {"unidades": 0, "pedidos": 0, "vendas": 0.0, "tarifa": 0.0, "envios": 0.0, "com_dado": 0}
+    shp = {"unidades": 0, "pedidos": 0, "vendas": 0.0, "comissao": 0.0, "servico": 0.0, "frete": 0.0, "renda": 0.0, "com_dado": 0}
+    shopee_orders: list[dict[str, Any]] = []
+    for r in rows:
+        mp = str(r["marketplace"] or "").lower()
+        qty = int(r["qty"] or 0)
+        amount = float(r["amount"] or 0)
+        if mp == "ml":
+            ml["unidades"] += qty
+            ml["pedidos"] += 1
+            ml["vendas"] += amount
+            with DB_LOCK:
+                snap = DB.execute(
+                    "SELECT ml_fee, seller_shipping_cost FROM ml_profitability_snapshot WHERE order_id=? AND sku=?",
+                    (str(r["order_id"]), sku),
+                ).fetchone()
+            if snap and (snap["ml_fee"] is not None or snap["seller_shipping_cost"] is not None):
+                ml["com_dado"] += 1
+                ml["tarifa"] += float(snap["ml_fee"] or 0)
+                ml["envios"] += float(snap["seller_shipping_cost"] or 0)
+        elif mp == "shopee":
+            shp["unidades"] += qty
+            shp["pedidos"] += 1
+            shp["vendas"] += amount
+            shopee_orders.append({"order_sn": str(r["order_id"]), "amount": amount})
+
+    # Shopee: busca o escrow dos pedidos mais recentes (limita o número de chamadas).
+    for o in shopee_orders[:max_shopee]:
+        esc = shopee_escrow_lookup(o["order_sn"])
+        if esc:
+            shp["com_dado"] += 1
+            shp["comissao"] += esc.get("commission_fee", 0.0)
+            shp["servico"] += esc.get("service_fee", 0.0) + esc.get("transaction_fee", 0.0)
+            shp["frete"] += esc.get("shipping_net", 0.0)
+            shp["renda"] += esc.get("escrow_amount", 0.0)
+
+    def arred(d: dict[str, Any]) -> dict[str, Any]:
+        return {k: (round(v, 2) if isinstance(v, float) else v) for k, v in d.items()}
+
+    resultado: dict[str, Any] = {"ok": True, "sku": sku, "dias": dias}
+    resultado["ml"] = arred({**ml, "renda": ml["vendas"] - ml["tarifa"] - ml["envios"]}) if ml["pedidos"] else None
+    resultado["shopee"] = arred(shp) if shp["pedidos"] else None
+    return resultado
+
+
+# ---------------------------------------------------------------------------
 # V18.00: Demanda de Compra (versão provisória). Enquanto o Apollo não entrega a
 # rota de vendas por período (PEDIDO_ROTA_DEMANDA_APOLLO.md), a demanda usa:
 #   - vendas do ML e da Shopee (vendas_v1799) — não enxerga balcão/oficina;
@@ -13012,6 +13220,16 @@ class AppHandler(BaseHTTPRequestHandler):
             ctx = session_context(self)
             self.send_json({"authenticated": bool(ctx), "user": ctx} if ctx else {"authenticated": False})
             return
+        if path == "/api/conferencia/conclusoes-dia":
+            # V18.08: painel do dia lê os "conferidos" do servidor (compartilhado).
+            ctx = self.auth()
+            if ctx is None:
+                return
+            if not (module_allowed(ctx, "conferencia") or module_allowed(ctx, "admin")):
+                self.send_json({"error": "Sem acesso à Conferência."}, 403)
+                return
+            self.send_json({"ok": True, "conclusoes": conferencia_conclusoes_do_dia()})
+            return
         if path == "/api/integracoes/shopee/callback":
             code = str((query.get("code") or [""])[0] or "").strip()
             shop_id = str((query.get("shop_id") or [""])[0] or "").strip()
@@ -13231,6 +13449,19 @@ class AppHandler(BaseHTTPRequestHandler):
             try:
                 with DB_LOCK:
                     self.send_json(vendas_dashboard_payload(inicio, fim, canal))
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/dashboard/produto-custos":
+            # V18.10: custos reais de venda de um SKU, separados por marketplace.
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            sku = str((query.get("sku") or [""])[0] or "").strip()
+            dias_txt = str((query.get("dias") or ["30"])[0] or "30").strip()
+            dias = int(dias_txt) if dias_txt.isdigit() else 30
+            try:
+                self.send_json(dashboard_produto_custos(sku, dias))
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
