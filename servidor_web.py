@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.22-ML-OFFLINE-ACCESS-E-RELATORIO-08H"
+APP_VERSION = "18.23-PROMOCOES-ML-NO-PRECIFICADOR"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -12867,6 +12867,272 @@ def _compras_resolver_custo(atual: float | None, reserva: dict[str, Any]) -> tup
     return None, "", ""
 
 
+# ---------------------------------------------------------------------------
+# V18.23: Promoções do Mercado Livre dentro do Precificador.
+#
+# Levantamento feito na API real em 23/09/2026 (conta 224625106):
+#   GET  /seller-promotions/users/{id}      -> campanhas oferecidas ao vendedor
+#   GET  /seller-promotions/items/{MLB}     -> o que se aplica ao anúncio, com
+#        original_price, suggested_discounted_price e o PISO/TETO do próprio ML
+#        (min_discounted_price / max_discounted_price)
+#   POST /seller-promotions/items/{MLB}     -> aplica (deal_price + datas)
+#   DELETE /seller-promotions/items/{MLB}   -> remove
+#
+# O tipo que a Noromak usa é PRICE_DISCOUNT (desconto próprio): em 23/09 havia
+# 8 promoções ativas, todas de 29-30 dias. A documentação fala em "máximo 14
+# dias", mas a conta real contradiz — mandamos a data que o dono escolher e
+# deixamos o ML recusar se for o caso, em vez de inventar um limite.
+# ---------------------------------------------------------------------------
+ML_PROMO_TIPO = "PRICE_DISCOUNT"
+
+
+def _ml_promo_http(method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
+    """Chamada JSON à API de promoções. A ml_http_json() manda form-urlencoded,
+    que esta API não aceita no POST."""
+    url = ML_API_BASE + path
+
+    def chamar(token: str) -> Any:
+        body = json_dumps(payload).encode("utf-8") if payload is not None else None
+        headers = {
+            "Accept": "application/json",
+            "Authorization": "Bearer " + token,
+            "User-Agent": f"NoromakExpedicao/{APP_VERSION}",
+        }
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+        req = urllib.request.Request(url, data=body, headers=headers, method=method.upper())
+        with urllib.request.urlopen(req, timeout=ML_HTTP_TIMEOUT) as resp:
+            texto = resp.read().decode("utf-8", "replace").strip()
+            return json.loads(texto) if texto else {}
+
+    token, _ = ml_access_token()
+    try:
+        return chamar(token)
+    except urllib.error.HTTPError as exc:
+        if exc.code == 401:
+            token, _ = ml_access_token(force_refresh=True)
+            return chamar(token)
+        detalhe = ""
+        try:
+            detalhe = exc.read().decode("utf-8", "replace")[:400]
+        except Exception:
+            pass
+        raise RuntimeError(f"Mercado Livre respondeu HTTP {exc.code}: {detalhe}") from exc
+
+
+def ml_promocoes_do_item(mlb: str) -> list[dict[str, Any]]:
+    mlb = str(mlb or "").strip().upper()
+    if not mlb.startswith("MLB"):
+        mlb = "MLB" + re.sub(r"\D", "", mlb)
+    try:
+        dados = _ml_promo_http("GET", f"/seller-promotions/items/{mlb}?app_version=v2")
+    except RuntimeError as exc:
+        if "HTTP 404" in str(exc):
+            return []   # anúncio sem promoção disponível
+        raise
+    if isinstance(dados, list):
+        return [x for x in dados if isinstance(x, dict)]
+    resultados = dados.get("results") if isinstance(dados, dict) else None
+    if isinstance(resultados, list):
+        return [x for x in resultados if isinstance(x, dict)]
+    return [dados] if isinstance(dados, dict) and dados else []
+
+
+def _precificador_produtos_ml() -> dict[str, dict[str, Any]]:
+    """SKU -> custo/imposto e as taxas do ML, como o Precificador já calcula."""
+    raw, _, _ = get_storage("precificador_online_v1")
+    try:
+        dados = json.loads(raw or "{}")
+    except Exception:
+        dados = {}
+    out: dict[str, dict[str, Any]] = {}
+    for p in (dados.get("products") if isinstance(dados, dict) else None) or []:
+        if not isinstance(p, dict) or p.get("isKit"):
+            continue
+        sku = str(p.get("sku") or "").strip().upper()
+        if not sku or sku in out:
+            continue
+        ml = (p.get("marketplaces") or {}).get("ml") or {}
+        custo = _money_number(p.get("custo")) or 0.0
+        out[sku] = {
+            "sku": sku,
+            "produto": str(p.get("produto") or "").strip(),
+            "curva": normalize_abc_curve_value(p.get("curva")) or "",
+            "custo": float(custo),
+            "imposto": float(p.get("imposto") or 0),
+            "comissao": float(ml.get("comissao") or 0),
+            "taxa_fixa": float(ml.get("taxaFixa") or 0) + float(ml.get("frete") or 0),
+            "margem_alvo": float(ml.get("margem") or 0.15),
+        }
+    return out
+
+
+def promo_conta(prod: dict[str, Any], preco: float) -> dict[str, Any]:
+    """Mesma conta do Precificador: preço − comissão − taxa − imposto − custo."""
+    preco = float(preco or 0)
+    comissao = preco * prod["comissao"]
+    imposto = preco * prod["imposto"]
+    lucro = preco - comissao - prod["taxa_fixa"] - imposto - prod["custo"]
+    return {
+        "preco": round(preco, 2), "comissao": round(comissao, 2), "imposto": round(imposto, 2),
+        "taxa_fixa": round(prod["taxa_fixa"], 2), "custo": round(prod["custo"], 2),
+        "lucro": round(lucro, 2), "margem": round(lucro / preco, 4) if preco > 0 else 0.0,
+    }
+
+
+def promo_preco_minimo(prod: dict[str, Any]) -> float | None:
+    """Preço em que o lucro é zero. Abaixo disso é vender no prejuízo."""
+    divisor = 1 - prod["comissao"] - prod["imposto"]
+    if divisor <= 0 or prod["custo"] <= 0:
+        return None
+    return round((prod["custo"] + prod["taxa_fixa"]) / divisor, 2)
+
+
+def promo_preco_ideal(prod: dict[str, Any]) -> float | None:
+    divisor = 1 - prod["comissao"] - prod["imposto"] - prod["margem_alvo"]
+    if divisor <= 0 or prod["custo"] <= 0:
+        return None
+    return round((prod["custo"] + prod["taxa_fixa"]) / divisor, 2)
+
+
+PROMO_PAINEL_MAX = 40
+
+
+def _ml_vinculos_mlb_sku() -> dict[str, str]:
+    raw, _, _ = get_storage("ml_sku_mlb_links_v1")
+    try:
+        dados = json.loads(raw or "{}")
+    except Exception:
+        dados = {}
+    out: dict[str, str] = {}
+    if isinstance(dados, dict):
+        for sku, linhas in dados.items():
+            for row in (linhas if isinstance(linhas, list) else []):
+                mlb = row.get("mlb") if isinstance(row, dict) else row
+                mlb = str(mlb or "").strip().upper()
+                if mlb and mlb not in out:
+                    out[mlb] = str(sku or "").strip().upper()
+    return out
+
+
+def promocoes_painel(mlbs: list[str]) -> dict[str, Any]:
+    """Junta o que o ML diz da promoção com a conta do Precificador."""
+    produtos = _precificador_produtos_ml()
+    vinculos = _ml_vinculos_mlb_sku()
+    itens: list[dict[str, Any]] = []
+    erros: list[dict[str, str]] = []
+    for bruto in list(mlbs)[:PROMO_PAINEL_MAX]:
+        mlb = str(bruto or "").strip().upper()
+        if not mlb:
+            continue
+        if not mlb.startswith("MLB"):
+            mlb = "MLB" + re.sub(r"\D", "", mlb)
+        try:
+            promos = ml_promocoes_do_item(mlb)
+        except Exception as exc:
+            erros.append({"mlb": mlb, "erro": str(exc)[:220]})
+            continue
+        proprio = next((x for x in promos if x.get("type") == ML_PROMO_TIPO), None)
+        campanha = next((x for x in promos if x.get("type") == "DEAL"), None)
+        base = proprio or campanha or {}
+        sku = vinculos.get(mlb, "")
+        prod = produtos.get(sku)
+        linha: dict[str, Any] = {
+            "mlb": mlb, "sku": sku,
+            "produto": prod["produto"] if prod else "",
+            "curva": prod["curva"] if prod else "",
+            "preco_cheio": base.get("original_price"),
+            "sugerido_ml": base.get("suggested_discounted_price"),
+            "piso_ml": base.get("min_discounted_price"),
+            "teto_ml": base.get("max_discounted_price"),
+            "status": (proprio or {}).get("status") or "",
+            "preco_promo": (proprio or {}).get("price") or None,
+            "inicio": (proprio or {}).get("start_date"),
+            "fim": (proprio or {}).get("finish_date"),
+            "tem_custo": bool(prod),
+            "campanha": None,
+        }
+        if campanha:
+            linha["campanha"] = {
+                "id": campanha.get("id"), "nome": campanha.get("name"),
+                "inicio": campanha.get("start_date"), "fim": campanha.get("finish_date"),
+                "status": campanha.get("status"),
+            }
+        if prod:
+            linha["minimo"] = promo_preco_minimo(prod)
+            linha["ideal"] = promo_preco_ideal(prod)
+            referencia = linha["preco_promo"] or linha["sugerido_ml"] or 0
+            if referencia:
+                linha["conta"] = promo_conta(prod, float(referencia))
+        itens.append(linha)
+    return {"ok": True, "itens": itens, "erros": erros, "limite": PROMO_PAINEL_MAX}
+
+
+def ml_promocao_aplicar(mlb: str, preco: Any, inicio: str, fim: str, ator: str = "") -> dict[str, Any]:
+    """Sobe um desconto próprio no ML. A trava do preço mínimo mora AQUI, no
+    servidor — a tela também avisa, mas quem decide é este ponto."""
+    mlb = str(mlb or "").strip().upper()
+    if not mlb.startswith("MLB"):
+        mlb = "MLB" + re.sub(r"\D", "", mlb)
+    try:
+        preco = round(float(str(preco).replace(",", ".")), 2)
+    except (TypeError, ValueError):
+        raise ValueError("Preço inválido.")
+    if preco <= 0:
+        raise ValueError("Preço inválido.")
+
+    sku = _ml_vinculos_mlb_sku().get(mlb, "")
+    prod = _precificador_produtos_ml().get(sku)
+    if not prod:
+        raise ValueError(f"{mlb} não tem SKU com custo no Precificador. Sem custo não dá para garantir a margem.")
+    minimo = promo_preco_minimo(prod)
+    if minimo is None:
+        raise ValueError(f"Sem custo válido para {sku}: não dá para calcular o preço mínimo.")
+    if preco < minimo:
+        perda = promo_conta(prod, preco)["lucro"]
+        raise ValueError(
+            f"{_brl_srv(preco)} está abaixo do preço mínimo ({_brl_srv(minimo)}) de {sku}. "
+            f"Nesse preço a venda dá prejuízo de {_brl_srv(abs(perda))}."
+        )
+
+    # Piso e teto que o próprio Mercado Livre impõe para este anúncio.
+    base = next((x for x in ml_promocoes_do_item(mlb) if x.get("type") == ML_PROMO_TIPO), {})
+    piso, teto = base.get("min_discounted_price"), base.get("max_discounted_price")
+    if piso and preco < float(piso):
+        raise ValueError(f"O Mercado Livre não aceita menos de {_brl_srv(float(piso))} neste anúncio.")
+    if teto and preco > float(teto):
+        raise ValueError(f"O Mercado Livre não aceita mais de {_brl_srv(float(teto))} neste anúncio.")
+
+    payload = {
+        "deal_price": preco,
+        "start_date": str(inicio or "").strip(),
+        "finish_date": str(fim or "").strip(),
+        "promotion_type": ML_PROMO_TIPO,
+    }
+    resposta = _ml_promo_http("POST", f"/seller-promotions/items/{mlb}?app_version=v2", payload)
+    try:
+        ml_log_event("promocao", f"/seller-promotions/items/{mlb}", sku, ator or "",
+                     f"PROMOCAO APLICADA {_brl_srv(preco)}", json_dumps(payload))
+    except Exception:
+        pass
+    return {"ok": True, "mlb": mlb, "sku": sku, "preco": preco,
+            "inicio": payload["start_date"], "fim": payload["finish_date"],
+            "margem": promo_conta(prod, preco)["margem"], "resposta": resposta}
+
+
+def ml_promocao_remover(mlb: str, ator: str = "") -> dict[str, Any]:
+    mlb = str(mlb or "").strip().upper()
+    if not mlb.startswith("MLB"):
+        mlb = "MLB" + re.sub(r"\D", "", mlb)
+    resposta = _ml_promo_http(
+        "DELETE", f"/seller-promotions/items/{mlb}?promotion_type={ML_PROMO_TIPO}&app_version=v2")
+    try:
+        ml_log_event("promocao", f"/seller-promotions/items/{mlb}", "", ator or "", "PROMOCAO REMOVIDA", "")
+    except Exception:
+        pass
+    return {"ok": True, "mlb": mlb, "resposta": resposta}
+
+
 def _compras_produtos_precificador() -> dict[str, dict[str, Any]]:
     """Código Apollo -> {descricao, custo, curva}, a partir da lista do Precificador."""
     raw, _, _ = get_storage("precificador_online_v1")
@@ -14231,6 +14497,8 @@ class AppHandler(BaseHTTPRequestHandler):
             "/estacao-impressao": "estacao", "/estacao-impressao/": "estacao", "/estacao-impressao.html": "estacao",
             "/print-station": "estacao", "/print-station/": "estacao",
             "/precificador": "precificador", "/precificador/": "precificador", "/precificador.html": "precificador",
+            # V18.23: Promoções do ML (usa custo/margem do Precificador).
+            "/promocoes": "precificador", "/promocoes/": "precificador", "/promocoes.html": "precificador",
             "/precificacao": "precificador", "/precificacao/": "precificador",
             "/analise-full": "precificador", "/analise-full/": "precificador", "/analise-full.html": "precificador",
             "/full": "precificador", "/full/": "precificador",
@@ -14280,6 +14548,25 @@ class AppHandler(BaseHTTPRequestHandler):
                 except Exception as exc:
                     self.send_json({"ok": False, "error": str(exc)}, 500)
             return
+        if path == "/api/precificador/promocoes":
+            # V18.23: promoções do ML + a conta do Precificador, por anúncio.
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                try:
+                    brutos = (query.get("mlbs", [""])[0] or "").split(",")
+                    mlbs = [x.strip() for x in brutos if x.strip()]
+                    if not mlbs:
+                        # Sem lista explícita: usa os anúncios com vínculo MLB↔SKU,
+                        # que são os únicos com custo para calcular a margem.
+                        mlbs = sorted(_ml_vinculos_mlb_sku().keys())
+                    if not mlbs:
+                        raise ValueError("Nenhum anúncio com vínculo MLB ↔ SKU. Sincronize os vínculos primeiro.")
+                    self.send_json(promocoes_painel(mlbs))
+                except ValueError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 400)
+                except Exception as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
         if path == "/api/compras/comprador":
             # V18.14: e-mail do comprador. V18.17: + limite de transferência (global).
             ctx = self.auth(admin_only=True)
@@ -14297,6 +14584,28 @@ class AppHandler(BaseHTTPRequestHandler):
                         audit(ctx["username"], "compras.limite_transferencia", str(lim))
                     self.send_json({"ok": True, "email": compras_comprador_email(),
                                     "limite_transferencia": compras_limite_transferencia()})
+                except ValueError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 400)
+                except Exception as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/precificador/promocoes/aplicar":
+            # V18.23: sobe o desconto no ML. A trava do preço mínimo é no servidor.
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                try:
+                    body = self.read_json() or {}
+                    if body.get("remover"):
+                        res = ml_promocao_remover(str(body.get("mlb") or ""), ctx["username"])
+                        audit(ctx["username"], "promocao.remover", str(body.get("mlb") or ""))
+                    else:
+                        res = ml_promocao_aplicar(
+                            str(body.get("mlb") or ""), body.get("preco"),
+                            str(body.get("inicio") or ""), str(body.get("fim") or ""),
+                            ctx["username"])
+                        audit(ctx["username"], "promocao.aplicar",
+                              f"{body.get('mlb')}|{body.get('preco')}|{body.get('inicio')}..{body.get('fim')}")
+                    self.send_json(res)
                 except ValueError as exc:
                     self.send_json({"ok": False, "error": str(exc)}, 400)
                 except Exception as exc:
@@ -16674,6 +16983,9 @@ class AppHandler(BaseHTTPRequestHandler):
             "/rentabilidade-ml": "rentabilidade-ml.html",
             "/rentabilidade-ml/": "rentabilidade-ml.html",
             "/rentabilidade-ml.html": "rentabilidade-ml.html",
+            "/promocoes": "promocoes.html",
+            "/promocoes/": "promocoes.html",
+            "/promocoes.html": "promocoes.html",
             "/precificador": "precificador.html",
             "/precificador/": "precificador.html",
             "/precificador.html": "precificador.html",
