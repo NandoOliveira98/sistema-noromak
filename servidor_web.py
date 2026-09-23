@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.27-PROMOCOES-SKU-CORRETO-E-EDITAVEL"
+APP_VERSION = "18.29-PROMOCOES-PRECIFICADOR-EMBUTIDO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -13100,6 +13100,20 @@ def promocoes_painel(mlbs: list[str]) -> dict[str, Any]:
         if prod:
             linha["minimo"] = promo_preco_minimo(prod)
             linha["ideal"] = promo_preco_ideal(prod)
+            # V18.28: os mesmos campos que o Precificador mostra, para decidir a
+            # promoção sem precisar abrir a outra tela.
+            linha["precificador"] = {
+                "custo": round(prod["custo"], 2),
+                "imposto": prod["imposto"],
+                "comissao": prod["comissao"],
+                "taxa_fixa": round(prod["taxa_fixa"], 2),
+                "margem_alvo": prod["margem_alvo"],
+                "curva": prod["curva"],
+            }
+            if linha["ideal"]:
+                no_ideal = promo_conta(prod, linha["ideal"])
+                linha["precificador"]["lucro_ideal"] = no_ideal["lucro"]
+                linha["precificador"]["margem_ideal"] = no_ideal["margem"]
             referencia = linha["preco_promo"] or linha["sugerido_ml"] or 0
             if referencia:
                 linha["conta"] = promo_conta(prod, float(referencia))
@@ -13112,22 +13126,58 @@ def promocoes_painel(mlbs: list[str]) -> dict[str, Any]:
             "skus": catalogo}
 
 
-def ml_itens_do_vendedor(offset: int = 0, limite: int = 50) -> dict[str, Any]:
-    """V18.25: lista os anúncios do vendedor, não só os que já têm vínculo.
-    O gargalo era esse: 117 de 1.598 tinham vínculo, então a tela só via 7%."""
+_ML_ANUNCIOS_CACHE: dict[str, Any] = {"ids": [], "quando": 0.0}
+ML_ANUNCIOS_CACHE_SEGUNDOS = 600
+
+
+def ml_todos_os_anuncios(forcar: bool = False) -> list[str]:
+    """V18.28: TODOS os anúncios do vendedor, em qualquer status.
+
+    Duas armadilhas que faziam a tela mostrar menos do que existe:
+      - `status=active` escondia 380 anúncios pausados (1174 de 1591);
+      - a paginação por offset estoura em ~1000 ("Invalid limit and offset
+        values"), então o resto era inalcançável.
+    O jeito certo é `search_type=scan` com scroll_id. São ~16 chamadas para
+    1591 anúncios (≈4s), por isso o resultado fica em cache.
+    """
+    agora = time.time()
+    if (not forcar and _ML_ANUNCIOS_CACHE["ids"]
+            and agora - float(_ML_ANUNCIOS_CACHE["quando"]) < ML_ANUNCIOS_CACHE_SEGUNDOS):
+        return list(_ML_ANUNCIOS_CACHE["ids"])
     linha = ml_integration_row()
     seller = str((linha["seller_id"] if linha else "") or "").strip()
     if not seller:
         raise RuntimeError("Mercado Livre não está conectado. Conecte em Admin → Integrações.")
+    base = f"/users/{seller}/items/search?search_type=scan&limit=100"
+    ids: list[str] = []
+    scroll = ""
+    for _ in range(60):   # teto de segurança: 6.000 anúncios
+        url = base + ("&scroll_id=" + quote(scroll) if scroll else "")
+        dados = ml_api_get(url)
+        if not isinstance(dados, dict):
+            break
+        resultados = [str(x) for x in (dados.get("results") or []) if x]
+        if not resultados:
+            break
+        ids.extend(resultados)
+        scroll = str(dados.get("scroll_id") or scroll)
+        if not scroll:
+            break
+    vistos: set[str] = set()
+    unicos = [x for x in ids if not (x in vistos or vistos.add(x))]
+    _ML_ANUNCIOS_CACHE["ids"] = unicos
+    _ML_ANUNCIOS_CACHE["quando"] = agora
+    return list(unicos)
+
+
+def ml_itens_do_vendedor(offset: int = 0, limite: int = 50, forcar: bool = False) -> dict[str, Any]:
+    """Uma página da lista completa de anúncios (ver ml_todos_os_anuncios)."""
     limite = max(1, min(50, int(limite or 50)))
     offset = max(0, int(offset or 0))
-    dados = ml_api_get(f"/users/{seller}/items/search?status=active&offset={offset}&limit={limite}")
-    if not isinstance(dados, dict):
-        return {"mlbs": [], "total": 0}
-    paging = dados.get("paging") or {}
+    todos = ml_todos_os_anuncios(forcar)
     return {
-        "mlbs": [str(x) for x in (dados.get("results") or [])],
-        "total": int(paging.get("total") or 0),
+        "mlbs": todos[offset:offset + limite],
+        "total": len(todos),
         "offset": offset, "limite": limite,
     }
 
@@ -14027,7 +14077,10 @@ class AppHandler(BaseHTTPRequestHandler):
 
     def send_security_headers(self) -> None:
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("X-Frame-Options", "DENY")
+        # V18.29: SAMEORIGIN (era DENY) para o sistema poder embutir as PRÓPRIAS
+        # telas — a de Promoções abre o Precificador do produto dentro do painel.
+        # Site externo continua impedido de embutir o Noromak (clickjacking).
+        self.send_header("X-Frame-Options", "SAMEORIGIN")
         self.send_header("Referrer-Policy", "same-origin")
         self.send_header("Permissions-Policy", "camera=(self), microphone=(), geolocation=()")
         self.send_header(
@@ -14042,9 +14095,10 @@ class AppHandler(BaseHTTPRequestHandler):
             # V17.89: o painel da extensão "Cadastro de Cliente no Linx" é uma
             # página da própria extensão aberta em iframe sobre o admin. Sem
             # isto, default-src 'self' bloqueava o conteúdo e o painel ficava
-            # em branco. frame-ancestors continua 'none' (ninguém embute o Noromak).
+            # em branco. V18.29: frame-ancestors passou a 'self' — o Noromak embute
+            # as PRÓPRIAS telas (Promoções abre o Precificador do item); site externo continua barrado.
             "frame-src 'self' chrome-extension:; "
-            "object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'",
+            "object-src 'none'; base-uri 'self'; frame-ancestors 'self'; form-action 'self'",
         )
 
     def encoded_body(self, body: bytes, content_type: str) -> tuple[bytes, bool]:
@@ -14248,7 +14302,8 @@ class AppHandler(BaseHTTPRequestHandler):
                     if not mlbs:
                         # V18.25: sem lista explícita, lista os anúncios ATIVOS do
                         # vendedor (não só os com vínculo — eram 7% da base).
-                        pagina = ml_itens_do_vendedor(offset, PROMO_PAINEL_MAX)
+                        forcar = (query.get("recarregar", [""])[0] or "") == "1"
+                        pagina = ml_itens_do_vendedor(offset, PROMO_PAINEL_MAX, forcar)
                         mlbs = pagina["mlbs"]
                         total = pagina["total"]
                     if not mlbs:

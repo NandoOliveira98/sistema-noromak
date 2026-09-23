@@ -111,6 +111,11 @@ class SemMercadoLivreConectado(unittest.TestCase):
     tela mostrava "Não foi possível carregar: 'seller_id'". Tem de ser um erro
     que explique o que fazer."""
 
+    def setUp(self):
+        # o cache de anúncios é de módulo: sem limpar, outro teste mascara este
+        S._ML_ANUNCIOS_CACHE["ids"] = []
+        S._ML_ANUNCIOS_CACHE["quando"] = 0.0
+
     def test_a_mensagem_clara(self):
         with self.assertRaises(RuntimeError) as c:
             S.ml_itens_do_vendedor(0, 10)
@@ -205,3 +210,86 @@ class SkuDoAnuncioVemDoAtributoCerto(unittest.TestCase):
     def test_f_texto_livre_fica_como_esta(self):
         # "Id Aleph: 46347830" nao tem traco: nao vira codigo, mas aparece
         self.assertEqual(S.ml_sku_do_anuncio("ID ALEPH: 46347830", {}), "ID ALEPH: 46347830")
+
+
+class MargemAlvoEPorProduto(unittest.TestCase):
+    """V18.28: a tela classificava "margem cheia" contra 15% fixo, mas cada
+    produto tem a sua margem desejada no Precificador (o MANIPULO usa 20%).
+    O ideal tem de sair da margem do próprio produto."""
+
+    def test_a_ideal_respeita_a_margem_do_produto(self):
+        prod20 = dict(PROD, margem_alvo=0.20, custo=23.71, taxa_fixa=7.75)
+        ideal = S.promo_preco_ideal(prod20)
+        self.assertAlmostEqual(ideal, 56.18, places=1)          # bate com a tela do Precificador
+        self.assertAlmostEqual(S.promo_conta(prod20, ideal)["margem"], 0.20, places=3)
+        self.assertAlmostEqual(S.promo_conta(prod20, ideal)["lucro"], 11.24, places=1)
+
+    def test_b_minimo_nao_depende_da_margem(self):
+        a = dict(PROD, margem_alvo=0.15, custo=23.71, taxa_fixa=7.75)
+        b = dict(a, margem_alvo=0.30)
+        self.assertEqual(S.promo_preco_minimo(a), S.promo_preco_minimo(b))
+        self.assertAlmostEqual(S.promo_preco_minimo(a), 41.39, places=1)
+
+
+class ListaTodosOsAnuncios(unittest.TestCase):
+    """V18.28: a tela mostrava menos anúncios do que existem. Duas causas:
+    `status=active` escondia 380 pausados (1174 de 1591) e a paginação por
+    offset estoura em ~1000 ("Invalid limit and offset values"). A listagem
+    passou a usar search_type=scan, que não tem esse teto."""
+
+    def setUp(self):
+        S._ML_ANUNCIOS_CACHE["ids"] = []
+        S._ML_ANUNCIOS_CACHE["quando"] = 0.0
+
+    def test_a_usa_scan_e_nao_filtra_por_status(self):
+        chamadas = []
+
+        def falso_get(url, **kw):
+            chamadas.append(url)
+            if "scroll_id" in url:
+                return {"results": [], "scroll_id": ""}
+            return {"results": ["MLB1", "MLB2"], "scroll_id": "abc"}
+
+        original_get, original_row = S.ml_api_get, S.ml_integration_row
+        S.ml_api_get = falso_get
+        S.ml_integration_row = lambda: {"seller_id": "224625106"}
+        try:
+            ids = S.ml_todos_os_anuncios(forcar=True)
+        finally:
+            S.ml_api_get, S.ml_integration_row = original_get, original_row
+        self.assertEqual(ids, ["MLB1", "MLB2"])
+        self.assertTrue(chamadas, "nenhuma chamada foi feita")
+        self.assertIn("search_type=scan", chamadas[0])
+        for url in chamadas:
+            self.assertNotIn("status=", url, "o filtro de status esconde os pausados")
+
+    def test_b_pagina_alem_do_teto_de_offset(self):
+        # com 1.500 anúncios, offset 1.200 tem de funcionar (pelo offset da API
+        # daria HTTP 400)
+        S._ML_ANUNCIOS_CACHE["ids"] = ["MLB%d" % i for i in range(1500)]
+        S._ML_ANUNCIOS_CACHE["quando"] = 9e18   # cache "sempre válido" no teste
+        pag = S.ml_itens_do_vendedor(1200, 40)
+        self.assertEqual(pag["total"], 1500)
+        self.assertEqual(len(pag["mlbs"]), 40)
+        self.assertEqual(pag["mlbs"][0], "MLB1200")
+
+    def test_c_ultima_pagina_nao_estoura(self):
+        S._ML_ANUNCIOS_CACHE["ids"] = ["MLB%d" % i for i in range(1010)]
+        S._ML_ANUNCIOS_CACHE["quando"] = 9e18
+        pag = S.ml_itens_do_vendedor(1000, 40)
+        self.assertEqual(len(pag["mlbs"]), 10)
+
+
+class EmbutirSoDoProprioSistema(unittest.TestCase):
+    """V18.29: para a tela de Promoções abrir o Precificador dentro do painel,
+    o X-Frame-Options saiu de DENY para SAMEORIGIN. Isso NÃO pode virar
+    permissão geral: site externo continua proibido de embutir o Noromak."""
+
+    def test_a_cabecalhos_permitem_so_a_propria_origem(self):
+        import inspect
+        fonte = inspect.getsource(S.AppHandler.send_security_headers)
+        self.assertIn('"X-Frame-Options", "SAMEORIGIN"', fonte)
+        self.assertNotIn('"X-Frame-Options", "DENY"', fonte)
+        # frame-ancestors é o que os navegadores modernos obedecem
+        self.assertIn("frame-ancestors 'self'", fonte)
+        self.assertNotIn("frame-ancestors *", fonte)

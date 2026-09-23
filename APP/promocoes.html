@@ -51,6 +51,9 @@ tbody tr:hover{background:#f7fafd}
 .tagon{font-size:9.5px;font-weight:800;background:var(--roxobg);color:var(--roxo);border-radius:5px;padding:1px 5px;margin-left:5px}
 .semvinc{font-size:9.5px;font-weight:800;background:#fff3d6;color:#8a5a00;border-radius:5px;padding:1px 5px;margin-left:5px}
 .btn.vinc{background:#f3ecff;border-color:#d9c8f7;color:var(--roxo)}
+.irprec{display:inline-block;margin-left:5px;text-decoration:none;color:var(--navy);font-weight:900;
+  background:#eef5ff;border:1px solid #cfe0f0;border-radius:6px;padding:0 5px;font-size:12px;line-height:1.5}
+.irprec:hover{background:#dbeafe}
 .skuin{height:28px;width:130px;border:1px solid var(--line);border-radius:7px;padding:0 7px;font-size:12px;font-weight:700}
 .skuin.ok{border-color:var(--ok);background:#f4fbf7}
 .skuin.ruim{border-color:var(--bad);background:#fff7f6}
@@ -64,7 +67,15 @@ tbody tr:hover{background:#f7fafd}
 .btn:disabled{opacity:.45;cursor:not-allowed}
 .mask{position:fixed;inset:0;background:rgba(15,32,50,.5);display:none;align-items:center;justify-content:center;padding:18px;z-index:9;overflow:auto}
 .mask.on{display:flex}
-.modal{background:#fff;border-radius:15px;max-width:920px;width:100%;overflow:hidden;box-shadow:0 18px 50px rgba(0,0,0,.28)}
+.modal{background:#fff;border-radius:15px;max-width:920px;width:100%;overflow:hidden;box-shadow:0 18px 50px rgba(0,0,0,.28);transition:max-width .18s}
+.modal.largo{max-width:1500px}
+.precwrap{border-top:1px solid var(--soft);background:#f6f8fa;display:none}
+.precwrap.on{display:block}
+.precwrap .cab{display:flex;align-items:center;gap:10px;padding:9px 15px;font-size:12.5px;color:var(--muted);flex-wrap:wrap}
+.precwrap .cab b{color:var(--navy);font-size:13px}
+.precwrap .cab button{margin-left:auto}
+.precwrap iframe{width:100%;height:560px;border:0;background:#fff;display:block}
+.btnprec{height:30px;padding:0 11px;border-radius:8px;border:1px solid #cfe0f0;background:#eef5ff;color:var(--navy);font-weight:800;font-size:12px;cursor:pointer}
 .modal .mh{background:var(--navy);color:#fff;padding:13px 17px;display:flex;justify-content:space-between;align-items:center;gap:10px}
 .modal .mh b{font-size:15px}.modal .mh span{font-size:12px;color:#cfe0f2}
 .corpo{display:grid;grid-template-columns:1.15fr .85fr}
@@ -165,12 +176,24 @@ tbody tr:hover{background:#f7fafd}
         <div class="legs"><span id="lMin"></span><span id="lIdeal"></span></div></div>
       <div class="comp" id="comp"></div>
       <div id="alerta"></div>
+      <p class="tit2" style="margin-top:15px">Dados do Precificador
+        <button class="btnprec" id="abrirPrec" style="margin-left:8px">✎ Editar custo e taxas</button></p>
+      <div class="comp" id="prec"></div>
     </div>
     <div class="col">
       <p class="tit2">Validade</p>
       <div id="opcoes"></div>
       <div style="font-size:11.5px;color:var(--muted);line-height:1.55;margin-top:10px" id="notaData"></div>
     </div>
+  </div>
+  <div class="precwrap" id="precwrap">
+    <div class="cab">
+      <b>Precificador — <span id="precSku"></span></b>
+      <span>custo buscado no Apollo agora; altere taxas e margem aqui e o sistema salva sozinho</span>
+      <button class="btnprec" id="recalcPrec">↻ Aplicar aqui</button>
+      <button class="btnprec" id="fecharPrec">Fechar</button>
+    </div>
+    <iframe id="precFrame" title="Precificador do produto"></iframe>
   </div>
   <div class="mf"><span class="msg" id="mMsg"></span>
     <button class="btn" id="btCancel">Cancelar</button>
@@ -181,7 +204,8 @@ tbody tr:hover{background:#f7fafd}
 const $=id=>document.getElementById(id);
 const brl=v=>v==null?"—":"R$ "+Number(v).toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2});
 const pct=v=>Number(v).toLocaleString("pt-BR",{minimumFractionDigits:1,maximumFractionDigits:1})+"%";
-const MARGEM_ALVO=0.15;
+const MARGEM_PADRAO=0.15;
+const alvoDe=it=>(it && it.precificador && it.precificador.margem_alvo) || MARGEM_PADRAO;
 let ITENS=[], SKUS=new Set(), sel={i:0,preco:0,modo:"propria",fim:null};
 
 async function api(url,opts={}){
@@ -226,11 +250,15 @@ function render(){
     const i=ITENS.indexOf(it), v=veredito(it);
     const p=it.preco_promo||it.sugerido_ml;
     const m=it.conta?it.conta.margem:null;
-    const mCls=m==null?"":(m<0?"neg":(m>=MARGEM_ALVO-0.001?"ok":"baixa"));
+    const alvo=alvoDe(it);
+    const mCls=m==null?"":(m<0?"neg":(m>=alvo-0.001?"ok":"baixa"));
     const ativo=it.status==="started";
     const podeAgir=it.tem_custo&&it.minimo!=null;
     return '<tr class="'+v.k+'">'+
-      '<td class="prod"><b>'+(it.produto||it.sku||it.mlb)+'</b><span>'+(it.sku||"sem SKU")+' · '+it.mlb+
+      '<td class="prod"><b>'+(it.produto||it.sku||it.mlb)+
+        (it.sku?' <a class="irprec" href="/expedicao/precificador?sku='+encodeURIComponent(it.sku)+
+                '" target="_blank" rel="noopener" title="Abrir '+it.sku+' no Precificador">↗</a>':'')+
+        '</b><span>'+(it.sku||"sem SKU")+' · '+it.mlb+
         (ativo?'<span class="tagon">promoção ativa</span>':'')+'</span></td>'+
       '<td class="n">'+brl(it.preco_cheio)+'</td>'+
       '<td class="n"><b>'+brl(p)+'</b></td>'+
@@ -293,6 +321,7 @@ function abrir(i){
   $("opcoes").innerHTML=opcoesHtml(it);
   $("pIn").value=Number(sel.preco).toFixed(2).replace(".",",");
   $("mMsg").textContent="";
+  fecharPrecificador();
   atualizar();
   $("mask").classList.add("on");
 }
@@ -335,6 +364,17 @@ function atualizar(){
     '<div class="faixa" style="left:'+p(ideal)+'%;right:0;background:#bfe7d1"></div>'+
     '<div class="pin" style="left:calc('+p(sel.preco)+'% - 1px)"></div>';
   $("lMin").textContent="mínimo "+brl(min); $("lIdeal").textContent="ideal "+brl(ideal);
+  const P=it.precificador||{};
+  $("prec").innerHTML = P.custo==null ? '<div class="l"><span>Sem custo cadastrado para este SKU.</span></div>' :
+    '<div class="l"><span>Custo do produto <span style="color:#0e7c7c;font-size:11px">(Apollo)</span></span><b>'+brl(P.custo)+'</b></div>'+
+    '<div class="l"><span>Imposto</span><b>'+pct((P.imposto||0)*100)+'</b></div>'+
+    '<div class="l"><span>Comissão do Mercado Livre</span><b>'+pct((P.comissao||0)*100)+'</b></div>'+
+    '<div class="l"><span>Taxa fixa / frete</span><b>'+brl(P.taxa_fixa)+'</b></div>'+
+    '<div class="l"><span>Margem desejada</span><b>'+pct((P.margem_alvo||0)*100)+'</b></div>'+
+    '<div class="l"><span>Curva</span><b>'+(P.curva||"—")+'</b></div>'+
+    '<div class="l"><span>Preço mínimo</span><b style="color:#7a4b00">'+brl(min)+'</b></div>'+
+    '<div class="l"><span>Preço ideal</span><b style="color:var(--navy)">'+brl(ideal)+'</b></div>'+
+    '<div class="l tot"><span>Lucro no ideal</span><b>'+brl(P.lucro_ideal)+' · '+pct((P.margem_ideal||0)*100)+'</b></div>';
   const a=$("alerta"), bt=$("btConf");
   const pisoML=it.piso_ml, tetoML=it.teto_ml;
   if(min!=null&&sel.preco<min){
@@ -349,9 +389,9 @@ function atualizar(){
     a.className="alerta bad";
     a.innerHTML="🔒 O Mercado Livre não aceita mais de <b>"+brl(tetoML)+"</b> neste anúncio.";
     bt.disabled=true;
-  }else if(c.margem<MARGEM_ALVO-0.001){
+  }else if(c.margem<alvoDe(it)-0.001){
     a.className="alerta warn";
-    a.innerHTML="⚠ Margem de "+pct(c.margem*100)+" — abaixo da meta de "+pct(MARGEM_ALVO*100)+". Dá lucro, mas apertado.";
+    a.innerHTML="⚠ Margem de "+pct(c.margem*100)+" — abaixo da meta de "+pct(alvoDe(it)*100)+" deste produto. Dá lucro, mas apertado.";
     bt.disabled=false;
   }else{
     a.className="alerta ok";
@@ -387,7 +427,32 @@ document.querySelectorAll(".precobox .at button").forEach(function(b){
     atualizar();
   };
 });
-$("btCancel").onclick=()=>$("mask").classList.remove("on");
+function fecharPrecificador(){
+  $("precwrap").classList.remove("on");
+  document.querySelector(".modal").classList.remove("largo");
+  $("precFrame").src="about:blank";
+}
+$("abrirPrec").onclick=function(){
+  const it=ITENS[sel.i];
+  if(!it.sku){ aviso("Vincule um SKU antes de editar o custo.","erro"); return; }
+  $("precSku").textContent=it.sku;
+  $("precFrame").src="/expedicao/precificador?embed=1&sku="+encodeURIComponent(it.sku);
+  $("precwrap").classList.add("on");
+  document.querySelector(".modal").classList.add("largo");
+};
+$("fecharPrec").onclick=fecharPrecificador;
+$("recalcPrec").onclick=async function(){
+  // relê do servidor só este anúncio, já com o custo/taxas que acabaram de ser salvos
+  const it=ITENS[sel.i];
+  this.disabled=true; const antes=this.textContent; this.textContent="lendo…";
+  try{
+    const d=await api("/api/precificador/promocoes?mlbs="+encodeURIComponent(it.mlb));
+    const novo=(d.itens||[])[0];
+    if(novo){ ITENS[sel.i]=novo; render(); atualizar(); aviso("Números atualizados com o que você salvou no Precificador.","ok"); }
+  }catch(e){ aviso("Não consegui reler: "+e.message,"erro"); }
+  finally{ this.disabled=false; this.textContent=antes; }
+};
+$("btCancel").onclick=()=>{ fecharPrecificador(); $("mask").classList.remove("on"); };
 $("btConf").onclick=async function(){
   const it=ITENS[sel.i];
   if(!confirm("Subir a promoção de "+(it.produto||it.sku)+"\n\nPreço: "+brl(sel.preco)+

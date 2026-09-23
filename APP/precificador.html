@@ -439,6 +439,14 @@
     /* V18.20: atalho da promoção para o Precificador */
     .promo-price-btn{border:1px solid #bfdbfe !important;background:#eff6ff !important;color:#1d4ed8 !important;font-weight:700}
     .promo-price-btn:hover{background:#dbeafe !important}
+    /* V18.29: modo embutido (?embed=1) — usado pela tela de Promoções dentro do
+       painel de decisão. Esconde o que é navegação e deixa só o que edita o
+       produto: Dados do produto + Cálculo automático dos marketplaces. */
+    body.nm-embed .topbar,
+    body.nm-embed #promo-rail,
+    body.nm-embed .search-panel{display:none !important}
+    body.nm-embed .app-shell{grid-template-columns:minmax(0,1fr) !important;padding:10px 12px 18px;max-width:none}
+    body.nm-embed{background:#fff}
     /* V18.20: régua de Promoções ao lado do Precificador (recolhível).
        O painel grande continua existindo no botão "Promoções" para importar
        planilha, paginar e marcar em massa; a régua é o atalho do dia a dia. */
@@ -4450,6 +4458,25 @@ var state = {
       document.getElementById("promo-rail-search")?.addEventListener("input",function(){
         try{promoRailRender();}catch(_){}
       });
+      // V18.29: modo embutido pedido pela tela de Promoções.
+      try{
+        if(new URLSearchParams(location.search).get("embed")==="1"){
+          document.body.classList.add("nm-embed");
+        }
+      }catch(_){}
+      // V18.28: abrir o Precificador já num SKU (?sku=...), usado pela seta da
+      // tela de Promoções para ir direto ao produto.
+      try{
+        var skuUrl=new URLSearchParams(location.search).get("sku");
+        if(skuUrl){
+          setTimeout(function(){
+            var ponte=window.nmPrecificador;
+            if(ponte && typeof ponte.abrirSku==="function" && !ponte.abrirSku(skuUrl)){
+              ponte.toast("O SKU "+skuUrl+" não está cadastrado no Precificador.");
+            }
+          }, 400);
+        }
+      }catch(_){}
       try{promoRailRecolher(localStorage.getItem(PROMO_RAIL_KEY)==="1");}catch(_){promoRailRecolher(false);}
       try{promoRailRender();}catch(err){console.error("[Noromak V18.20] Régua de promoções:",err);}
 
