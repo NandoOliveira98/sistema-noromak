@@ -313,14 +313,28 @@ if __name__ == "__main__":
 
 class PainelDaExtensaoNoAdmin(TesteNoromak):
     """V17.89 — o painel da extensão abria em branco no admin: a CSP bloqueava
-    iframes de chrome-extension (default-src 'self' sem frame-src)."""
+    iframes de chrome-extension (default-src 'self' sem frame-src).
+
+    V18.29 — frame-ancestors passou de 'none' para 'self' (autorizado pelo dono)
+    porque a tela de Promoções abre o Precificador do item dentro do painel. A
+    INTENÇÃO original continua valendo e é o que este teste guarda: nenhum site
+    externo pode embutir o Noromak. Só a própria origem pode.
+    """
 
     def test_csp_libera_o_painel_e_continua_proibindo_embutir_o_noromak(self):
         import urllib.request
         with urllib.request.urlopen(self.url_base + "/") as r:
             csp = r.headers.get("Content-Security-Policy", "")
+            xfo = r.headers.get("X-Frame-Options", "")
         self.assertIn("frame-src 'self' chrome-extension:", csp)
-        self.assertIn("frame-ancestors 'none'", csp, "o Noromak não pode ser embutido por outro site")
+        # só a própria origem embute
+        self.assertIn("frame-ancestors 'self'", csp, "o próprio sistema precisa poder embutir suas telas")
+        self.assertEqual(xfo, "SAMEORIGIN")
+        # e nada que abra para fora
+        for aberto in ("frame-ancestors *", "frame-ancestors http", "frame-ancestors data"):
+            self.assertNotIn(aberto, csp, "site externo não pode embutir o Noromak")
+        # uma única diretiva: duas seriam ambíguas para o navegador
+        self.assertEqual(csp.count("frame-ancestors"), 1, "CSP com frame-ancestors duplicado")
 
 
 class PedidosSemNomeFiscal(TesteNoromak):
