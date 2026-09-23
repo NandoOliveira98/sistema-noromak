@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.26-PROMOCAO-ATUALIZA-DATA-DO-MONITOR"
+APP_VERSION = "18.27-PROMOCOES-SKU-CORRETO-E-EDITAVEL"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -13015,6 +13015,27 @@ def _ml_vinculos_mlb_sku() -> dict[str, str]:
     return out
 
 
+def ml_sku_do_anuncio(bruto: Any, conhecidos: dict[str, Any] | None = None) -> str:
+    """V18.27: no SKU do anúncio do ML o código é o que vem DEPOIS do traço
+    (ex.: 1304-6008.004.206.00.6 -> 6008.004.206.00.6).
+
+    O prefixo do ML é sempre numérico, e isso importa: há códigos do Apollo que
+    já têm traço (816.6090-0). Cortar sem olhar transformaria esse em "0".
+    Só corta quando o pedaço antes do traço é só dígitos.
+    """
+    texto = str(bruto or "").strip().upper()
+    if not texto:
+        return ""
+    if conhecidos and texto in conhecidos:
+        return texto                      # já é o código do cadastro
+    if "-" in texto:
+        antes, depois = texto.split("-", 1)
+        antes, depois = antes.strip(), depois.strip()
+        if depois and antes.isdigit():
+            return depois
+    return texto
+
+
 def promocoes_painel(mlbs: list[str]) -> dict[str, Any]:
     """Junta o que o ML diz da promoção com a conta do Precificador.
 
@@ -13043,15 +13064,19 @@ def promocoes_painel(mlbs: list[str]) -> dict[str, Any]:
         base = proprio or campanha or {}
         det = detalhes.get(mlb) or {}
         sku_ml = str(det.get("sku_ml") or "").strip().upper()
+        # O anúncio costuma trazer "prefixo-código" (ex.: 1304-6008.004.206.00.6);
+        # o Precificador guarda só o código. _compras_codigo já resolve os dois.
+        sku_ml_codigo = ml_sku_do_anuncio(sku_ml, produtos)
         sku_vinculo = vinculos.get(mlb, "")
         # O vínculo manda; sem ele, usa o SKU que está no próprio anúncio.
-        sku = sku_vinculo or (sku_ml if sku_ml in produtos else "")
+        sku = sku_vinculo or (sku_ml_codigo if sku_ml_codigo in produtos else "")
         prod = produtos.get(sku)
         linha: dict[str, Any] = {
             "mlb": mlb, "sku": sku,
             "vinculado": bool(sku_vinculo),
             "sku_anuncio": sku_ml,
-            "sku_anuncio_existe": bool(sku_ml and sku_ml in produtos),
+            "sku_anuncio_codigo": sku_ml_codigo,
+            "sku_anuncio_existe": bool(sku_ml_codigo and sku_ml_codigo in produtos),
             "titulo_ml": det.get("titulo") or "",
             "produto": prod["produto"] if prod else (det.get("titulo") or ""),
             "curva": prod["curva"] if prod else "",
@@ -13079,7 +13104,12 @@ def promocoes_painel(mlbs: list[str]) -> dict[str, Any]:
             if referencia:
                 linha["conta"] = promo_conta(prod, float(referencia))
         itens.append(linha)
-    return {"ok": True, "itens": itens, "erros": erros, "limite": PROMO_PAINEL_MAX}
+    # V18.27: a tela precisa dos SKUs válidos para autocompletar e validar o
+    # vínculo digitado à mão (o SKU do anúncio no ML nem sempre é o do Apollo —
+    # há anúncios com "ID ALEPH: 46347830" no lugar).
+    catalogo = [{"sku": c, "nome": p["produto"]} for c, p in sorted(produtos.items())]
+    return {"ok": True, "itens": itens, "erros": erros, "limite": PROMO_PAINEL_MAX,
+            "skus": catalogo}
 
 
 def ml_itens_do_vendedor(offset: int = 0, limite: int = 50) -> dict[str, Any]:
@@ -13119,12 +13149,16 @@ def ml_itens_detalhe(mlbs: list[str]) -> dict[str, dict[str, Any]]:
             mlb = str(corpo.get("id") or "").strip().upper()
             if not mlb:
                 continue
-            sku = str(corpo.get("seller_custom_field") or "").strip()
+            # V18.27: o atributo SELLER_SKU é a fonte boa. O seller_custom_field
+            # é campo livre e muitas vezes tem outra coisa (ex.: "Id Aleph:
+            # 46347830"), o que fazia a tela mostrar SKU errado.
+            sku = ""
+            for attr in corpo.get("attributes") or []:
+                if str(attr.get("id") or "").upper() == "SELLER_SKU":
+                    sku = str(attr.get("value_name") or attr.get("value_id") or "").strip()
+                    break
             if not sku:
-                for attr in corpo.get("attributes") or []:
-                    if str(attr.get("id") or "").upper() == "SELLER_SKU":
-                        sku = str(attr.get("value_name") or "").strip()
-                        break
+                sku = str(corpo.get("seller_custom_field") or "").strip()
             out[mlb] = {"titulo": str(corpo.get("title") or "").strip(),
                         "preco": corpo.get("price"), "sku_ml": sku,
                         "status": corpo.get("status")}

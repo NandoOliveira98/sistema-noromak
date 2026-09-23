@@ -51,6 +51,10 @@ tbody tr:hover{background:#f7fafd}
 .tagon{font-size:9.5px;font-weight:800;background:var(--roxobg);color:var(--roxo);border-radius:5px;padding:1px 5px;margin-left:5px}
 .semvinc{font-size:9.5px;font-weight:800;background:#fff3d6;color:#8a5a00;border-radius:5px;padding:1px 5px;margin-left:5px}
 .btn.vinc{background:#f3ecff;border-color:#d9c8f7;color:var(--roxo)}
+.skuin{height:28px;width:130px;border:1px solid var(--line);border-radius:7px;padding:0 7px;font-size:12px;font-weight:700}
+.skuin.ok{border-color:var(--ok);background:#f4fbf7}
+.skuin.ruim{border-color:var(--bad);background:#fff7f6}
+.vincbox{display:flex;gap:4px;align-items:center;margin-top:4px;flex-wrap:wrap}
 .paginacao{display:flex;gap:9px;align-items:center;justify-content:center;padding:13px;background:#fff;border:1px solid var(--line);border-top:0;border-radius:0 0 14px 14px}
 .paginacao button{height:34px;padding:0 14px;border-radius:9px;border:1px solid var(--line);background:#fff;font-weight:800;font-size:12.5px;cursor:pointer}
 .paginacao button:disabled{opacity:.45;cursor:not-allowed}
@@ -143,6 +147,7 @@ tbody tr:hover{background:#f7fafd}
   </div>
 </main>
 
+<datalist id="listaSkus"></datalist>
 <div class="mask" id="mask"><div class="modal">
   <div class="mh"><b id="mhTit"></b><span id="mhSub"></span></div>
   <div class="corpo">
@@ -177,7 +182,7 @@ const $=id=>document.getElementById(id);
 const brl=v=>v==null?"—":"R$ "+Number(v).toLocaleString("pt-BR",{minimumFractionDigits:2,maximumFractionDigits:2});
 const pct=v=>Number(v).toLocaleString("pt-BR",{minimumFractionDigits:1,maximumFractionDigits:1})+"%";
 const MARGEM_ALVO=0.15;
-let ITENS=[], sel={i:0,preco:0,modo:"propria",fim:null};
+let ITENS=[], SKUS=new Set(), sel={i:0,preco:0,modo:"propria",fim:null};
 
 async function api(url,opts={}){
   const r=await fetch("/expedicao"+url,{credentials:"same-origin",cache:"no-store",
@@ -244,25 +249,37 @@ function render(){
 }
 
 function vinculoCelula(it,i){
-  if(it.vinculado) return '<span style="font-size:12px;font-weight:700;color:var(--ok)">✓ '+it.sku+'</span>';
-  if(it.sku_anuncio_existe)
-    return '<span style="font-size:11.5px;color:#8a5a00">'+it.sku_anuncio+'</span><br>'+
-           '<button class="btn vinc" style="margin-top:3px" onclick="vincular('+i+')">🔗 Vincular SKU</button>';
-  if(it.sku_anuncio)
-    return '<span style="font-size:11.5px;color:var(--muted)" title="O anúncio tem este SKU, mas ele não existe no Precificador">'+
-           it.sku_anuncio+' <span class="semvinc">fora do Precificador</span></span>';
-  return '<span class="semvinc">anúncio sem SKU no ML</span>';
+  const campo = '<div class="vincbox">'+
+      '<input class="skuin" list="listaSkus" placeholder="digite o SKU" '+
+        'value="'+(it.sku_anuncio_codigo||"")+'" data-sku-para="'+i+'">'+
+      '<button class="btn vinc" onclick="vincular('+i+')">🔗 Vincular</button></div>';
+  if(it.vinculado)
+    return '<span style="font-size:12px;font-weight:700;color:var(--ok)">✓ '+it.sku+'</span>'+
+           '<div style="font-size:10.5px;color:var(--muted);margin-top:2px">trocar:</div>'+campo;
+  if(it.sku_anuncio && !it.sku_anuncio_existe)
+    return '<span style="font-size:11px;color:var(--muted)" title="Isto está no campo de SKU do anúncio no ML">'+
+           it.sku_anuncio+' <span class="semvinc">fora do Precificador</span></span>'+campo;
+  if(!it.sku_anuncio)
+    return '<span class="semvinc">anúncio sem SKU no ML</span>'+campo;
+  return '<span style="font-size:11.5px;color:#8a5a00">'+(it.sku_anuncio_codigo||it.sku_anuncio)+' <span class="semvinc">do anúncio</span></span>'+campo;
 }
 async function vincular(i){
   const it=ITENS[i];
-  if(!it.sku_anuncio) return;
+  const campo=document.querySelector('[data-sku-para="'+i+'"]');
+  const sku=String((campo&&campo.value)||"").trim().toUpperCase();
+  if(!sku){ aviso("Digite o SKU antes de vincular.","erro"); if(campo)campo.focus(); return; }
+  if(!SKUS.has(sku)){
+    aviso("O SKU <b>"+sku+"</b> não existe no Precificador. Sem custo cadastrado não dá para calcular a margem — cadastre o produto antes.","erro");
+    if(campo){ campo.classList.add("ruim"); campo.focus(); }
+    return;
+  }
   const quebra = String.fromCharCode(10);
-  if(!confirm("Vincular o anúncio "+it.mlb+" ao SKU "+it.sku_anuncio+"?"+quebra+quebra+
+  if(!confirm("Vincular o anúncio "+it.mlb+" ao SKU "+sku+"?"+quebra+quebra+
               "Isso grava o vínculo MLB ↔ SKU usado pelo Precificador.")) return;
   try{
     await api("/api/precificador/ml-vinculos/manual",{method:"POST",
-      body:JSON.stringify({action:"add", sku:it.sku_anuncio, mlb:it.mlb})});
-    aviso("✓ "+it.mlb+" vinculado ao SKU <b>"+it.sku_anuncio+"</b>.","ok");
+      body:JSON.stringify({action:"add", sku:sku, mlb:it.mlb})});
+    aviso("✓ "+it.mlb+" vinculado ao SKU <b>"+sku+"</b>.","ok");
     carregar();
   }catch(e){ aviso("Não foi possível vincular: "+e.message,"erro"); }
 }
@@ -391,6 +408,13 @@ $("btConf").onclick=async function(){
     $("mMsg").textContent=e.message; $("mMsg").style.color="var(--bad)";
   }finally{ this.disabled=false; }
 };
+document.addEventListener("input",function(e){
+  const c=e.target.closest&&e.target.closest("[data-sku-para]");
+  if(!c) return;
+  const v=String(c.value||"").trim().toUpperCase();
+  c.classList.toggle("ok", !!v && SKUS.has(v));
+  c.classList.toggle("ruim", !!v && !SKUS.has(v));
+});
 $("busca").addEventListener("input",render);
 $("soProblema").onclick=function(){ this.dataset.on=this.dataset.on==="1"?"0":"1";
   this.style.background=this.dataset.on==="1"?"var(--navy)":"#fff";
@@ -417,6 +441,11 @@ async function carregar(){
     const d=await api("/api/precificador/promocoes?offset="+OFFSET);
     ITENS=d.itens||[];
     TOTAL=d.total_anuncios||0; OFFSET=d.offset||0;
+    if(d.skus&&d.skus.length){
+      SKUS=new Set(d.skus.map(x=>String(x.sku).toUpperCase()));
+      $("listaSkus").innerHTML=d.skus.map(x=>
+        '<option value="'+x.sku+'">'+(x.nome||"").replace(/"/g,"")+'</option>').join("");
+    }
     if(d.erros&&d.erros.length){
       aviso("Alguns anúncios não responderam: "+d.erros.slice(0,3).map(e=>e.mlb+" ("+e.erro+")").join(" · "),"erro");
     }

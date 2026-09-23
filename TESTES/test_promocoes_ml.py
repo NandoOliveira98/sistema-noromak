@@ -156,3 +156,52 @@ class DataVoltaParaAPlanilha(unittest.TestCase):
         for ruim in ("", "amanhã", "05/11/2026", None):
             self.assertFalse(S.promo_atualizar_data_planilha("MLB1059999471", ruim, "teste"))
         self.assertEqual(self._linhas()["1059999471"]["date"], "2026-09-18")
+
+
+class SkuDoAnuncioVemDoAtributoCerto(unittest.TestCase):
+    """V18.27: o anúncio MLB1061351533 tem seller_custom_field='Id Aleph:
+    46347830' (campo livre, lixo) e o SKU de verdade no atributo SELLER_SKU
+    ('1304-6008.004.206.00.6'). A tela mostrava o Id Aleph. O atributo manda."""
+
+    def _extrai(self, corpo):
+        sku = ""
+        for attr in corpo.get("attributes") or []:
+            if str(attr.get("id") or "").upper() == "SELLER_SKU":
+                sku = str(attr.get("value_name") or attr.get("value_id") or "").strip()
+                break
+        if not sku:
+            sku = str(corpo.get("seller_custom_field") or "").strip()
+        return sku
+
+    def test_a_atributo_tem_prioridade(self):
+        corpo = {"seller_custom_field": "Id Aleph: 46347830",
+                 "attributes": [{"id": "SELLER_SKU", "name": "SKU", "value_name": "1304-6008.004.206.00.6"}]}
+        self.assertEqual(self._extrai(corpo), "1304-6008.004.206.00.6")
+
+    def test_b_sem_atributo_usa_o_campo_livre(self):
+        corpo = {"seller_custom_field": "CAM1019", "attributes": []}
+        self.assertEqual(self._extrai(corpo), "CAM1019")
+
+    def test_c_o_sku_e_o_que_vem_depois_do_traco(self):
+        conhecidos = {"6008.004.206.00.6": {}, "CAM1019": {}, "816.6090-0": {}}
+        # regra do dono: o código é o que vem depois do traço
+        self.assertEqual(S.ml_sku_do_anuncio("1304-6008.004.206.00.6", conhecidos), "6008.004.206.00.6")
+        self.assertEqual(S.ml_sku_do_anuncio("157507-0893556005", conhecidos), "0893556005")
+        # sem traço, é o próprio
+        self.assertEqual(S.ml_sku_do_anuncio("CAM1019", conhecidos), "CAM1019")
+
+    def test_d_codigo_que_ja_tem_traco_nao_pode_ser_cortado(self):
+        # 816.6090-0 é um código do Apollo; cortar cegamente viraria "0"
+        conhecidos = {"816.6090-0": {}}
+        self.assertEqual(S.ml_sku_do_anuncio("816.6090-0", conhecidos), "816.6090-0")
+        self.assertEqual(S.ml_sku_do_anuncio("816.6090-0", {}), "816.6090-0")
+        # com prefixo numérico na frente, corta só o prefixo
+        self.assertEqual(S.ml_sku_do_anuncio("1304-816.6090-0", conhecidos), "816.6090-0")
+
+    def test_e_funciona_sem_o_produto_cadastrado(self):
+        # mesmo fora do Precificador, o dono precisa VER o SKU real para agir
+        self.assertEqual(S.ml_sku_do_anuncio("1304-6008.004.206.00.6", {}), "6008.004.206.00.6")
+
+    def test_f_texto_livre_fica_como_esta(self):
+        # "Id Aleph: 46347830" nao tem traco: nao vira codigo, mas aparece
+        self.assertEqual(S.ml_sku_do_anuncio("ID ALEPH: 46347830", {}), "ID ALEPH: 46347830")
