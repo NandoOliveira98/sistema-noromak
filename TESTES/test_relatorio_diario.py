@@ -73,3 +73,58 @@ class RelatorioDiario(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RelatorioFrescor(unittest.TestCase):
+    """V18.22: em 22/09/2026 o e-mail das 00:01 anunciou R$ 3.775,37 enquanto o
+    dia fechou em R$ 6.814,47 — a sincronização do ML tinha parado às 19h e o
+    relatório publicou o número parcial sem nenhum aviso."""
+
+    DIA = "2026-09-22"
+
+    def setUp(self):
+        with S.DB_LOCK:
+            S.DB.execute("DELETE FROM vendas_v1799")
+            S.DB.commit()
+
+    def _venda(self, marketplace, order_id, valor):
+        with S.DB_LOCK:
+            S.DB.execute(
+                "INSERT INTO vendas_v1799(marketplace,order_id,line_key,sale_at,sale_day,sku,qty,amount,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
+                (marketplace, order_id, order_id, self.DIA + "T10:00:00-03:00", self.DIA,
+                 "SKU1", 1, valor, S.now_iso()),
+            )
+            S.DB.commit()
+
+    def test_a_sincronizacao_velha_gera_aviso(self):
+        self._venda("ml", "P1", 100.0)
+        # última sincronização ANTES do fim do dia = dado possivelmente parcial
+        S._vendas_meta("ultima_sincronizacao_ml", self.DIA + "T19:00:00-03:00")
+        S._vendas_meta("ultimo_erro_ml", "")
+        aviso = S.relatorio_diario_frescor(self.DIA)
+        self.assertIn("Mercado Livre", aviso)
+        self.assertIn("sem sincronizar", aviso)
+
+    def test_b_erro_na_sincronizacao_gera_aviso(self):
+        self._venda("ml", "P2", 50.0)
+        S._vendas_meta("ultima_sincronizacao_ml", "2026-09-23T09:00:00-03:00")
+        S._vendas_meta("ultimo_erro_ml", "token expirado")
+        self.assertIn("falhou", S.relatorio_diario_frescor(self.DIA))
+
+    def test_c_sincronizacao_em_dia_nao_avisa(self):
+        self._venda("ml", "P3", 70.0)
+        S._vendas_meta("ultimo_erro_ml", "")
+        S._vendas_meta("ultima_sincronizacao_ml", "2026-09-23T08:00:00-03:00")
+        self.assertEqual(S.relatorio_diario_frescor(self.DIA), "")
+
+    def test_d_aviso_aparece_no_email(self):
+        dados = S.relatorio_diario_dados(self.DIA)
+        dados["aviso"] = "Mercado Livre: sem sincronizar desde o fim do dia"
+        html = S.relatorio_diario_html(dados)
+        self.assertIn("pode estar incompleto", html)
+        self.assertIn("sem sincronizar", html)
+        self.assertIn("ATENCAO", S.relatorio_diario_texto(dados))
+        # sem aviso, nada de banner
+        dados["aviso"] = ""
+        self.assertNotIn("pode estar incompleto", S.relatorio_diario_html(dados))

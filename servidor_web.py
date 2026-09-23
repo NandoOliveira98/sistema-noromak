@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.21-REGUA-COPIAR-MLB-E-SKU-DO-ANUNCIO"
+APP_VERSION = "18.22-ML-OFFLINE-ACCESS-E-RELATORIO-08H"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -7008,16 +7008,22 @@ def ml_oauth_authorization_url() -> str:
             (state, verifier, now_iso(), now_epoch + 15 * 60),
         )
         DB.commit()
-    query = urlencode(
-        {
-            "response_type": "code",
-            "client_id": ML_CLIENT_ID,
-            "redirect_uri": ML_REDIRECT_URI,
-            "state": state,
-            "code_challenge": challenge,
-            "code_challenge_method": "S256",
-        }
-    )
+    # V18.22: o scope PRECISA ir aqui, na autorização. Sem ele o Mercado Livre
+    # concede só o padrão da aplicação — sem offline_access e, portanto, SEM
+    # refresh_token. Era por isso que a conexão morria a cada ~6h e os pedidos
+    # paravam de cair até alguém reconectar à mão. ML_OAUTH_SCOPE existia, mas
+    # só era exibido no status; nunca era enviado.
+    parametros = {
+        "response_type": "code",
+        "client_id": ML_CLIENT_ID,
+        "redirect_uri": ML_REDIRECT_URI,
+        "state": state,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+    }
+    if ML_OAUTH_SCOPE:
+        parametros["scope"] = ML_OAUTH_SCOPE
+    query = urlencode(parametros)
     return f"{ML_AUTH_URL}?{query}"
 
 
@@ -11885,8 +11891,14 @@ def vendas_sync_loop(stop_event: threading.Event) -> None:
                 vendas_sync_once()
         except Exception:
             pass
-        # Enquanto o histórico carrega, uma janela por minuto; depois, o intervalo normal.
-        carregando = any(not vendas_historico_completo(m) for m in conectados)
+        # V18.22: esta linha ficava FORA do try. Se levantasse, a thread morria
+        # calada e as vendas paravam de sincronizar até alguém reiniciar o serviço
+        # — foi assim que o relatório de 22/09 saiu com o dia congelado às 19h.
+        carregando = False
+        try:
+            carregando = any(not vendas_historico_completo(m) for m in conectados)
+        except Exception:
+            pass
         if stop_event.wait(60 if carregando else VENDAS_SYNC_INTERVAL):
             break
 
@@ -12242,9 +12254,18 @@ def relatorio_diario_html(d: dict[str, Any]) -> str:
         f"<td style='padding:6px 10px;text-align:right;font-weight:700'>{_brl_srv(p['valor'])}</td></tr>"
         for p in d["produtos"]
     ) or "<tr><td colspan='3' style='padding:10px;color:#888'>Nenhuma venda neste dia.</td></tr>"
+    # V18.22: dado possivelmente incompleto avisa na cara, em vez de passar por certo.
+    aviso = str(d.get("aviso") or "")
+    aviso_html = (
+        f"<div style='background:#fff6dc;border:1px solid #f0d98a;border-left:5px solid #d99b00;"
+        f"border-radius:10px;padding:11px 14px;margin:0 0 16px;color:#7a5200;font-size:13px'>"
+        f"<b>⚠ Este número pode estar incompleto.</b><br>{esc(aviso)}<br>"
+        f"<span style='color:#94722a'>Confira o Dashboard de vendas antes de decidir por ele.</span></div>"
+    ) if aviso else ""
     return f"""<div style="font-family:'Segoe UI',system-ui,sans-serif;color:#1e293b;max-width:680px;margin:auto">
 <h2 style="color:#123a63;margin:0 0 4px">Noromak — Vendas de {esc(_data_br(d['dia']))}</h2>
 <p style="color:#748295;margin:0 0 16px">Resumo do dia que fechou.</p>
+{aviso_html}
 <table style="width:100%;border-collapse:collapse;margin-bottom:18px">
   <tr>
     <td style="background:#f6f9fc;border:1px solid #e2e8f0;border-radius:10px;padding:12px;text-align:center">
@@ -12281,6 +12302,10 @@ def relatorio_diario_html(d: dict[str, Any]) -> str:
 def relatorio_diario_texto(d: dict[str, Any]) -> str:
     linhas = [
         f"Noromak - Vendas de {_data_br(d['dia'])}",
+    ]
+    if d.get("aviso"):
+        linhas.append(f"ATENCAO: este numero pode estar incompleto - {d['aviso']}")
+    linhas += [
         f"Faturamento: {_brl_srv(d['faturamento'])} | Pedidos: {d['pedidos']} | Unidades: {d['unidades']} | Ticket: {_brl_srv(d['ticket_medio'])}",
         "",
         "Por marketplace:",
@@ -12342,10 +12367,50 @@ def relatorio_diario_enviar_email(assunto: str, texto: str, html: str) -> list[s
     return enviar_email_smtp(assunto, texto, html, cfg["destinatarios"])
 
 
+def relatorio_diario_frescor(dia: str) -> str:
+    """V18.22: o relatório não pode publicar um dia incompleto em silêncio.
+
+    Em 22/09/2026 o e-mail saiu com R$ 3.775,37 enquanto o dia real fechou em
+    R$ 6.814,47: a sincronização do ML tinha parado às 19h e nada avisou.
+    Devolve o aviso a mostrar no e-mail, ou "" quando o dado é confiável.
+    """
+    try:
+        fim_do_dia = datetime.fromisoformat(dia + "T23:59:59").replace(tzinfo=BR_TZ)
+    except ValueError:
+        return ""
+    # Só cobra o marketplace que realmente vendeu nos últimos dias; um canal que
+    # nunca foi configurado não pode gerar aviso todo dia.
+    desde = (datetime.fromisoformat(dia).date() - timedelta(days=7)).isoformat()
+    with DB_LOCK:
+        ativos = [r["marketplace"] for r in DB.execute(
+            "SELECT DISTINCT marketplace FROM vendas_v1799 WHERE sale_day BETWEEN ? AND ?", (desde, dia))]
+    problemas: list[str] = []
+    for mp in ativos:
+        nome = _RELATORIO_MP_NOME.get(mp, mp)
+        erro = _vendas_meta(f"ultimo_erro_{mp}")
+        if erro:
+            problemas.append(f"{nome}: a última sincronização falhou")
+            continue
+        quando = _vendas_meta(f"ultima_sincronizacao_{mp}")
+        try:
+            if datetime.fromisoformat(quando) < fim_do_dia:
+                problemas.append(f"{nome}: sem sincronizar desde o fim do dia")
+        except (TypeError, ValueError):
+            problemas.append(f"{nome}: sem registro de sincronização")
+    return " · ".join(problemas)
+
+
 def relatorio_diario_enviar(dia: str, forcar: bool = False) -> dict[str, Any]:
     if not forcar and _vendas_meta("relatorio_diario_ultimo") == dia:
         return {"ok": True, "pulado": True, "motivo": "já enviado para este dia", "dia": dia}
+    # V18.22: puxa o que faltar ANTES de publicar o número. Sem isso o relatório
+    # apenas repete o que estiver no banco, mesmo que esteja parado há horas.
+    try:
+        vendas_sync_once()
+    except Exception as exc:
+        print(f"[relatorio-diario] sincronização falhou: {exc}", file=sys.stderr)
     dados = relatorio_diario_dados(dia)
+    dados["aviso"] = relatorio_diario_frescor(dia)
     assunto = f"Noromak — Vendas de {_data_br(dia)}: {_brl_srv(dados['faturamento'])} em {dados['pedidos']} pedido(s)"
     destinatarios = relatorio_diario_enviar_email(assunto, relatorio_diario_texto(dados), relatorio_diario_html(dados))
     _vendas_meta("relatorio_diario_ultimo", dia)
@@ -12353,10 +12418,16 @@ def relatorio_diario_enviar(dia: str, forcar: bool = False) -> dict[str, Any]:
 
 
 def relatorio_diario_loop(stop: threading.Event) -> None:
-    """Agente: acorda todo dia às 00:01 e envia o relatório do dia que fechou."""
+    """Agente: acorda todo dia no horário de RELATORIO_HORA (padrão 08:00) e
+    envia o relatório do dia que fechou. V18.22: era 00:01, mas na virada a
+    sincronização do dia nem sempre terminou — de manhã o número já está firme."""
     while not stop.is_set():
         agora = datetime.now(BR_TZ)
-        alvo = agora.replace(hour=0, minute=1, second=0, microsecond=0)
+        try:
+            hora = max(0, min(23, int(os.getenv("RELATORIO_HORA", "8"))))
+        except ValueError:
+            hora = 8
+        alvo = agora.replace(hour=hora, minute=0, second=0, microsecond=0)
         if agora >= alvo:
             alvo += timedelta(days=1)
         if stop.wait((alvo - agora).total_seconds()):

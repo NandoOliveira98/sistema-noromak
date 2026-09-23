@@ -145,3 +145,32 @@ class ShopeeRefreshSerializado(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MlAutorizacaoPedeOfflineAccess(unittest.TestCase):
+    """V18.22: a conexão do ML caía a cada ~6h e os pedidos paravam de cair até
+    alguém reconectar à mão. Causa: a URL de autorização era montada SEM o
+    parâmetro `scope`, então o ML concedia só o padrão da aplicação — sem
+    offline_access e, portanto, sem refresh_token. ML_OAUTH_SCOPE existia, mas
+    só aparecia no status; nunca era enviado ao ML.
+    """
+
+    def _url(self):
+        from urllib.parse import parse_qs, urlparse
+        S.ML_CLIENT_ID = S.ML_CLIENT_ID or "teste-client"
+        S.ML_CLIENT_SECRET = getattr(S, "ML_CLIENT_SECRET", "") or "teste-secret"
+        S.ML_REDIRECT_URI = S.ML_REDIRECT_URI or "https://exemplo/callback"
+        return parse_qs(urlparse(S.ml_oauth_authorization_url()).query)
+
+    def test_a_scope_vai_na_autorizacao(self):
+        q = self._url()
+        self.assertIn("scope", q, "a URL de autorização foi montada sem scope — o ML não concede offline_access")
+        self.assertIn("offline_access", q["scope"][0])
+
+    def test_b_pkce_e_state_continuam(self):
+        # A correção não pode ter derrubado o resto do fluxo.
+        q = self._url()
+        for chave in ("response_type", "client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method"):
+            self.assertIn(chave, q, f"{chave} sumiu da URL de autorização")
+        self.assertEqual(q["response_type"][0], "code")
+        self.assertEqual(q["code_challenge_method"][0], "S256")
