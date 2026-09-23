@@ -380,8 +380,12 @@ $("btConf").onclick=async function(){
     const r=await api("/api/precificador/promocoes/aplicar",{method:"POST",body:JSON.stringify({
       mlb:it.mlb, preco:sel.preco, inicio:isoDia(hoje())+"T00:00:00", fim:isoDia(sel.fim)+"T00:00:00"})});
     $("mask").classList.remove("on");
+    const dataOk = r.data_planilha_atualizada
+      ? " O vencimento também foi atualizado no monitor de promoções."
+      : " <b>Atenção:</b> não consegui atualizar a data no monitor de promoções — lá pode continuar como vencida.";
     aviso("✓ Promoção de <b>"+(it.produto||it.sku)+"</b> aplicada a <b>"+brl(r.preco)+
-          "</b> até "+sel.fim.toLocaleDateString("pt-BR")+" (margem "+pct((r.margem||0)*100)+").","ok");
+          "</b> até "+sel.fim.toLocaleDateString("pt-BR")+" (margem "+pct((r.margem||0)*100)+")."+dataOk,
+          r.data_planilha_atualizada?"ok":"erro");
     carregar();
   }catch(e){
     $("mMsg").textContent=e.message; $("mMsg").style.color="var(--bad)";

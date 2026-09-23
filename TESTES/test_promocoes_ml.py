@@ -117,3 +117,42 @@ class SemMercadoLivreConectado(unittest.TestCase):
         msg = str(c.exception)
         self.assertIn("não está conectado", msg)
         self.assertNotIn("seller_id", msg)
+
+
+class DataVoltaParaAPlanilha(unittest.TestCase):
+    """V18.26: há DUAS fontes de data — a API do ML e a base da planilha que o
+    monitor de promoções usa. Se aplicar a promoção não atualizar a planilha, o
+    anúncio continua aparecendo como VENCIDO lá, e alguém corrige na mão."""
+
+    def setUp(self):
+        base = {"rows": [
+            {"mlb": "1059999471", "date": "2026-09-18", "manualZero": False, "priceOk": False},
+            {"mlb": "1050401594", "date": "2026-08-30", "manualZero": True, "priceOk": False},
+        ], "deleted": [], "updatedAt": ""}
+        atual, _, _ = S.get_storage(S.PROMO_DATAS_KEY)
+        S.save_storage(S.PROMO_DATAS_KEY, atual, json.dumps(base), False,
+                       actor="teste", actor_role="admin")
+
+    def _linhas(self):
+        raw, _, _ = S.get_storage(S.PROMO_DATAS_KEY)
+        return {str(x.get("mlb")): x for x in json.loads(raw or "{}").get("rows", [])}
+
+    def test_a_atualiza_a_data_do_anuncio(self):
+        # aceita com e sem o prefixo MLB, e com data ISO completa
+        self.assertTrue(S.promo_atualizar_data_planilha("MLB1059999471", "2026-10-23T00:00:00", "teste"))
+        self.assertEqual(self._linhas()["1059999471"]["date"], "2026-10-23")
+
+    def test_b_nao_mexe_nos_outros(self):
+        S.promo_atualizar_data_planilha("1059999471", "2026-10-23", "teste")
+        outro = self._linhas()["1050401594"]
+        self.assertEqual(outro["date"], "2026-08-30")
+        self.assertTrue(outro["manualZero"], "a marcação de estoque zerado foi perdida")
+
+    def test_c_anuncio_novo_entra_na_base(self):
+        self.assertTrue(S.promo_atualizar_data_planilha("MLB777888999", "2026-11-05", "teste"))
+        self.assertEqual(self._linhas()["777888999"]["date"], "2026-11-05")
+
+    def test_d_data_invalida_nao_grava(self):
+        for ruim in ("", "amanhã", "05/11/2026", None):
+            self.assertFalse(S.promo_atualizar_data_planilha("MLB1059999471", ruim, "teste"))
+        self.assertEqual(self._linhas()["1059999471"]["date"], "2026-09-18")

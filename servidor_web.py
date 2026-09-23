@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.25-PROMOCOES-TODOS-ANUNCIOS-E-VINCULAR"
+APP_VERSION = "18.26-PROMOCAO-ATUALIZA-DATA-DO-MONITOR"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -13131,6 +13131,40 @@ def ml_itens_detalhe(mlbs: list[str]) -> dict[str, dict[str, Any]]:
     return out
 
 
+PROMO_DATAS_KEY = "ml_promocoes_datas_v1"
+
+
+def promo_atualizar_data_planilha(mlb: str, fim: str, ator: str = "") -> bool:
+    """V18.26: a base do monitor de promoções (a planilha importada) é a outra
+    fonte de data. Se ela não souber do novo vencimento, o anúncio continua
+    listado como VENCIDO lá mesmo depois de a promoção ser renovada aqui.
+    Guarda o MLB só com dígitos, como o resto da base já faz."""
+    dia = str(fim or "")[:10]
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", dia):
+        return False
+    numero = re.sub(r"\D", "", str(mlb or ""))
+    if not numero:
+        return False
+    atual, _, _ = get_storage(PROMO_DATAS_KEY)
+    try:
+        dados = json.loads(atual or "{}")
+    except Exception:
+        return False
+    if not isinstance(dados, dict) or not isinstance(dados.get("rows"), list):
+        return False
+    achou = False
+    for linha in dados["rows"]:
+        if isinstance(linha, dict) and re.sub(r"\D", "", str(linha.get("mlb") or "")) == numero:
+            linha["date"] = dia
+            achou = True
+    if not achou:
+        dados["rows"].append({"mlb": numero, "date": dia, "manualZero": False, "priceOk": False})
+    dados["updatedAt"] = now_iso()
+    save_storage(PROMO_DATAS_KEY, atual, json_dumps(dados), False,
+                 actor=ator or "promocoes", actor_role="admin", source_screen="promocoes")
+    return True
+
+
 def ml_promocao_aplicar(mlb: str, preco: Any, inicio: str, fim: str, ator: str = "") -> dict[str, Any]:
     """Sobe um desconto próprio no ML. A trava do preço mínimo mora AQUI, no
     servidor — a tela também avisa, mas quem decide é este ponto."""
@@ -13173,6 +13207,13 @@ def ml_promocao_aplicar(mlb: str, preco: Any, inicio: str, fim: str, ator: str =
         "promotion_type": ML_PROMO_TIPO,
     }
     resposta = _ml_promo_http("POST", f"/seller-promotions/items/{mlb}?app_version=v2", payload)
+    # Sem isto o monitor de promoções (base da planilha) continua dizendo que
+    # este anúncio está vencido, e alguém teria de corrigir a data na mão.
+    data_atualizada = False
+    try:
+        data_atualizada = promo_atualizar_data_planilha(mlb, payload["finish_date"], ator)
+    except Exception as exc:
+        print(f"[promocoes] nao foi possivel atualizar a data da planilha de {mlb}: {exc}", file=sys.stderr)
     try:
         ml_log_event("promocao", f"/seller-promotions/items/{mlb}", sku, ator or "",
                      f"PROMOCAO APLICADA {_brl_srv(preco)}", json_dumps(payload))
@@ -13180,6 +13221,7 @@ def ml_promocao_aplicar(mlb: str, preco: Any, inicio: str, fim: str, ator: str =
         pass
     return {"ok": True, "mlb": mlb, "sku": sku, "preco": preco,
             "inicio": payload["start_date"], "fim": payload["finish_date"],
+            "data_planilha_atualizada": data_atualizada,
             "margem": promo_conta(prod, preco)["margem"], "resposta": resposta}
 
 
