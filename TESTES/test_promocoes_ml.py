@@ -9,7 +9,7 @@ testes garantem que nenhum caminho aplica promoção no prejuízo, e que a conta
 import json
 import unittest
 
-from base import S, reiniciar_banco
+from base import S, TesteNoromak, reiniciar_banco
 
 
 def setUpModule():
@@ -84,3 +84,23 @@ class TravaDoPrecoMinimo(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RotasRespondem(TesteNoromak):
+    """V18.23: a rota GET foi parar dentro do do_POST e a tela recebia
+    "Arquivo não encontrado". Um teste de rota pega isso na hora."""
+
+    def test_a_get_promocoes_nao_cai_no_servidor_de_arquivos(self):
+        status, corpo = self.cliente.pedir("GET", "/api/precificador/promocoes")
+        # Sem token do ML o conteúdo falha, mas TEM de ser JSON desta rota —
+        # nunca 404 de arquivo.
+        self.assertNotEqual(status, 404, "a rota GET não está registrada no do_GET")
+        self.assertIsInstance(corpo, dict)
+        self.assertIn("ok", corpo)
+
+    def test_b_post_aplicar_esta_registrada(self):
+        status, corpo = self.cliente.pedir(
+            "POST", "/api/precificador/promocoes/aplicar", {"mlb": "MLB1", "preco": 10})
+        self.assertNotEqual(status, 404, "a rota POST não está registrada no do_POST")
+        self.assertIsInstance(corpo, dict)
+        self.assertIn("ok", corpo)

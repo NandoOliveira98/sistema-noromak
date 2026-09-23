@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.23-PROMOCOES-ML-NO-PRECIFICADOR"
+APP_VERSION = "18.24-PROMOCOES-ROTA-GET-E-ATALHOS"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -14097,6 +14097,25 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             self.send_json({"ok": True, "conclusoes": conferencia_conclusoes_do_dia()})
             return
+        if path == "/api/precificador/promocoes":
+            # V18.23: promoções do ML + a conta do Precificador, por anúncio.
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                try:
+                    brutos = (query.get("mlbs", [""])[0] or "").split(",")
+                    mlbs = [x.strip() for x in brutos if x.strip()]
+                    if not mlbs:
+                        # Sem lista explícita: usa os anúncios com vínculo MLB↔SKU,
+                        # que são os únicos com custo para calcular a margem.
+                        mlbs = sorted(_ml_vinculos_mlb_sku().keys())
+                    if not mlbs:
+                        raise ValueError("Nenhum anúncio com vínculo MLB ↔ SKU. Sincronize os vínculos primeiro.")
+                    self.send_json(promocoes_painel(mlbs))
+                except ValueError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 400)
+                except Exception as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
         if path == "/api/integracoes/shopee/callback":
             code = str((query.get("code") or [""])[0] or "").strip()
             shop_id = str((query.get("shop_id") or [""])[0] or "").strip()
@@ -14543,25 +14562,6 @@ class AppHandler(BaseHTTPRequestHandler):
                     salvo = custo_manual_salvar(str(body.get("codigo") or ""), body.get("custo"), ctx["username"])
                     audit(ctx["username"], "compras.custo.manual", f"{salvo['codigo']}={salvo['custo_manual']}")
                     self.send_json({"ok": True, **salvo})
-                except ValueError as exc:
-                    self.send_json({"ok": False, "error": str(exc)}, 400)
-                except Exception as exc:
-                    self.send_json({"ok": False, "error": str(exc)}, 500)
-            return
-        if path == "/api/precificador/promocoes":
-            # V18.23: promoções do ML + a conta do Precificador, por anúncio.
-            ctx = self.auth(admin_only=True)
-            if ctx is not None:
-                try:
-                    brutos = (query.get("mlbs", [""])[0] or "").split(",")
-                    mlbs = [x.strip() for x in brutos if x.strip()]
-                    if not mlbs:
-                        # Sem lista explícita: usa os anúncios com vínculo MLB↔SKU,
-                        # que são os únicos com custo para calcular a margem.
-                        mlbs = sorted(_ml_vinculos_mlb_sku().keys())
-                    if not mlbs:
-                        raise ValueError("Nenhum anúncio com vínculo MLB ↔ SKU. Sincronize os vínculos primeiro.")
-                    self.send_json(promocoes_painel(mlbs))
                 except ValueError as exc:
                     self.send_json({"ok": False, "error": str(exc)}, 400)
                 except Exception as exc:
