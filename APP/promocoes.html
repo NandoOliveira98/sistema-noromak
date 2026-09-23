@@ -49,6 +49,11 @@ tbody tr:hover{background:#f7fafd}
 .marg{font-size:11px;font-weight:800;border-radius:6px;padding:2px 6px}
 .marg.ok{background:var(--okbg);color:var(--ok)}.marg.baixa{background:var(--warnbg);color:var(--warn)}.marg.neg{background:var(--badbg);color:var(--bad)}
 .tagon{font-size:9.5px;font-weight:800;background:var(--roxobg);color:var(--roxo);border-radius:5px;padding:1px 5px;margin-left:5px}
+.semvinc{font-size:9.5px;font-weight:800;background:#fff3d6;color:#8a5a00;border-radius:5px;padding:1px 5px;margin-left:5px}
+.btn.vinc{background:#f3ecff;border-color:#d9c8f7;color:var(--roxo)}
+.paginacao{display:flex;gap:9px;align-items:center;justify-content:center;padding:13px;background:#fff;border:1px solid var(--line);border-top:0;border-radius:0 0 14px 14px}
+.paginacao button{height:34px;padding:0 14px;border-radius:9px;border:1px solid var(--line);background:#fff;font-weight:800;font-size:12.5px;cursor:pointer}
+.paginacao button:disabled{opacity:.45;cursor:not-allowed}
 .btn{height:32px;padding:0 11px;border-radius:8px;border:1px solid var(--line);background:#fff;font-weight:800;font-size:12px;cursor:pointer;white-space:nowrap}
 .btn.go{background:var(--ok);border-color:var(--ok);color:#fff}
 .btn.aj{background:var(--orange);border-color:var(--orange);color:#3a2600}
@@ -111,7 +116,7 @@ tbody tr:hover{background:#f7fafd}
 <main>
   <div class="aviso" id="aviso"></div>
   <div class="kpis">
-    <div class="kpi tot"><small>Anúncios lidos</small><b id="kTot">—</b><span>com vínculo MLB ↔ SKU</span></div>
+    <div class="kpi tot"><small>Anúncios lidos</small><b id="kTot">—</b><span id="kTotSub">anúncios ativos no ML</span></div>
     <div class="kpi ok"><small>Margem cheia</small><b id="kOk">—</b><span>no ideal ou acima</span></div>
     <div class="kpi aj"><small>Margem apertada</small><b id="kAj">—</b><span>dá lucro, mas abaixo da meta</span></div>
     <div class="kpi no"><small>No prejuízo</small><b id="kNo">—</b><span>abaixo do preço mínimo</span></div>
@@ -126,10 +131,15 @@ tbody tr:hover{background:#f7fafd}
       <thead><tr>
         <th>Anúncio / Produto</th><th class="n">Preço cheio</th><th class="n">Promoção hoje</th>
         <th>Período</th><th class="n">Mínimo</th><th class="n">Ideal</th>
-        <th class="n">Piso ML</th><th>Margem</th><th>Situação</th><th>Ação</th>
+        <th class="n">Piso ML</th><th>Margem</th><th>SKU / vínculo</th><th>Situação</th><th>Ação</th>
       </tr></thead>
-      <tbody id="tb"><tr><td colspan="10" class="vazio">Carregando promoções do Mercado Livre…</td></tr></tbody>
+      <tbody id="tb"><tr><td colspan="11" class="vazio">Carregando promoções do Mercado Livre…</td></tr></tbody>
     </table>
+  </div>
+  <div class="paginacao" id="paginacao" style="display:none">
+    <button id="antes">◀ Anteriores</button>
+    <span id="pagInfo" style="font-size:12.5px;color:var(--muted)"></span>
+    <button id="depois">Próximos ▶</button>
   </div>
 </main>
 
@@ -197,7 +207,9 @@ function render(){
   const so=$("soProblema").dataset.on==="1";
   let ok=0,aj=0,no=0;
   ITENS.forEach(it=>{const v=veredito(it); if(v.k==="renovar")ok++; else if(v.k==="ajustar")aj++; else if(v.k==="nao")no++;});
-  $("kTot").textContent=ITENS.length; $("kOk").textContent=ok; $("kAj").textContent=aj; $("kNo").textContent=no;
+  $("kTot").textContent=ITENS.length;
+  const semv=ITENS.filter(x=>!x.vinculado&&x.sku_anuncio_existe).length;
+  $("kTotSub").textContent = semv ? (semv+" sem vínculo — dá para vincular aqui") : "todos vinculados"; $("kOk").textContent=ok; $("kAj").textContent=aj; $("kNo").textContent=no;
   const vis=ITENS.filter((it,i)=>{
     const v=veredito(it);
     if(so && (v.k==="renovar"||v.k==="semcusto")) return false;
@@ -222,14 +234,38 @@ function render(){
       '<td class="n" style="color:var(--navy);font-weight:700">'+brl(it.ideal)+'</td>'+
       '<td class="n" style="color:var(--muted)">'+brl(it.piso_ml)+'</td>'+
       '<td>'+(m==null?"—":'<span class="marg '+mCls+'">'+pct(m*100)+'</span>')+'</td>'+
+      '<td>'+vinculoCelula(it,i)+'</td>'+
       '<td><span class="vd '+v.k+'">'+v.t+'</span></td>'+
       '<td>'+(podeAgir
         ? '<button class="btn '+(v.k==="renovar"?"go":(v.k==="nao"?"":"aj"))+'" onclick="abrir('+i+')">Definir promoção</button>'
         : '<button class="btn" disabled title="Sem custo no Precificador para este SKU">Sem custo</button>')+'</td>'+
     '</tr>';
-  }).join("") || '<tr><td colspan="10" class="vazio">Nenhum anúncio neste filtro.</td></tr>';
+  }).join("") || '<tr><td colspan="11" class="vazio">Nenhum anúncio neste filtro.</td></tr>';
 }
 
+function vinculoCelula(it,i){
+  if(it.vinculado) return '<span style="font-size:12px;font-weight:700;color:var(--ok)">✓ '+it.sku+'</span>';
+  if(it.sku_anuncio_existe)
+    return '<span style="font-size:11.5px;color:#8a5a00">'+it.sku_anuncio+'</span><br>'+
+           '<button class="btn vinc" style="margin-top:3px" onclick="vincular('+i+')">🔗 Vincular SKU</button>';
+  if(it.sku_anuncio)
+    return '<span style="font-size:11.5px;color:var(--muted)" title="O anúncio tem este SKU, mas ele não existe no Precificador">'+
+           it.sku_anuncio+' <span class="semvinc">fora do Precificador</span></span>';
+  return '<span class="semvinc">anúncio sem SKU no ML</span>';
+}
+async function vincular(i){
+  const it=ITENS[i];
+  if(!it.sku_anuncio) return;
+  const quebra = String.fromCharCode(10);
+  if(!confirm("Vincular o anúncio "+it.mlb+" ao SKU "+it.sku_anuncio+"?"+quebra+quebra+
+              "Isso grava o vínculo MLB ↔ SKU usado pelo Precificador.")) return;
+  try{
+    await api("/api/precificador/ml-vinculos/manual",{method:"POST",
+      body:JSON.stringify({action:"add", sku:it.sku_anuncio, mlb:it.mlb})});
+    aviso("✓ "+it.mlb+" vinculado ao SKU <b>"+it.sku_anuncio+"</b>.","ok");
+    carregar();
+  }catch(e){ aviso("Não foi possível vincular: "+e.message,"erro"); }
+}
 function abrir(i){
   const it=ITENS[i]; sel.i=i;
   sel.preco = it.preco_promo || it.ideal || it.sugerido_ml || it.minimo || 0;
@@ -357,19 +393,34 @@ $("soProblema").onclick=function(){ this.dataset.on=this.dataset.on==="1"?"0":"1
   this.style.color=this.dataset.on==="1"?"#fff":"var(--navy)"; render(); };
 $("recarregar").onclick=()=>carregar();
 
+let OFFSET=0, TOTAL=0;
+function pintarPaginacao(){
+  const box=$("paginacao");
+  if(!TOTAL){ box.style.display="none"; return; }
+  box.style.display="flex";
+  const fim=Math.min(OFFSET+ITENS.length, TOTAL);
+  $("pagInfo").textContent=(OFFSET+1)+"–"+fim+" de "+TOTAL+" anúncios ativos";
+  $("antes").disabled = OFFSET<=0;
+  $("depois").disabled = fim>=TOTAL;
+}
+$("antes").onclick=()=>{ OFFSET=Math.max(0,OFFSET-40); carregar(); };
+$("depois").onclick=()=>{ OFFSET=OFFSET+40; carregar(); };
+
 async function carregar(){
-  $("tb").innerHTML='<tr><td colspan="10" class="vazio">Consultando o Mercado Livre…</td></tr>';
+  $("tb").innerHTML='<tr><td colspan="11" class="vazio">Consultando o Mercado Livre…</td></tr>';
   limparAviso();
   try{
-    const d=await api("/api/precificador/promocoes");
+    const d=await api("/api/precificador/promocoes?offset="+OFFSET);
     ITENS=d.itens||[];
+    TOTAL=d.total_anuncios||0; OFFSET=d.offset||0;
     if(d.erros&&d.erros.length){
       aviso("Alguns anúncios não responderam: "+d.erros.slice(0,3).map(e=>e.mlb+" ("+e.erro+")").join(" · "),"erro");
     }
-    if(!ITENS.length) $("tb").innerHTML='<tr><td colspan="10" class="vazio">Nenhum anúncio com vínculo MLB ↔ SKU.</td></tr>';
-    else render();
+    if(!ITENS.length) $("tb").innerHTML='<tr><td colspan="11" class="vazio">Nenhum anúncio ativo encontrado.</td></tr>';
+    else { render(); }
+    pintarPaginacao();
   }catch(e){
-    $("tb").innerHTML='<tr><td colspan="10" class="vazio">Não foi possível carregar: '+e.message+'</td></tr>';
+    $("tb").innerHTML='<tr><td colspan="11" class="vazio">Não foi possível carregar: '+e.message+'</td></tr>';
   }
 }
 carregar();

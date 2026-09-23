@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.24-PROMOCOES-ROTA-GET-E-ATALHOS"
+APP_VERSION = "18.25-PROMOCOES-TODOS-ANUNCIOS-E-VINCULAR"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -13016,9 +13016,15 @@ def _ml_vinculos_mlb_sku() -> dict[str, str]:
 
 
 def promocoes_painel(mlbs: list[str]) -> dict[str, Any]:
-    """Junta o que o ML diz da promoção com a conta do Precificador."""
+    """Junta o que o ML diz da promoção com a conta do Precificador.
+
+    V18.25: o SKU vem de duas fontes — o vínculo MLB↔SKU (canônico) e, quando
+    ele não existe, o `seller_custom_field` do próprio anúncio. Assim a tela
+    mostra o anúncio mesmo sem vínculo e oferece criar o vínculo ali.
+    """
     produtos = _precificador_produtos_ml()
     vinculos = _ml_vinculos_mlb_sku()
+    detalhes = ml_itens_detalhe(list(mlbs)[:PROMO_PAINEL_MAX])
     itens: list[dict[str, Any]] = []
     erros: list[dict[str, str]] = []
     for bruto in list(mlbs)[:PROMO_PAINEL_MAX]:
@@ -13035,11 +13041,19 @@ def promocoes_painel(mlbs: list[str]) -> dict[str, Any]:
         proprio = next((x for x in promos if x.get("type") == ML_PROMO_TIPO), None)
         campanha = next((x for x in promos if x.get("type") == "DEAL"), None)
         base = proprio or campanha or {}
-        sku = vinculos.get(mlb, "")
+        det = detalhes.get(mlb) or {}
+        sku_ml = str(det.get("sku_ml") or "").strip().upper()
+        sku_vinculo = vinculos.get(mlb, "")
+        # O vínculo manda; sem ele, usa o SKU que está no próprio anúncio.
+        sku = sku_vinculo or (sku_ml if sku_ml in produtos else "")
         prod = produtos.get(sku)
         linha: dict[str, Any] = {
             "mlb": mlb, "sku": sku,
-            "produto": prod["produto"] if prod else "",
+            "vinculado": bool(sku_vinculo),
+            "sku_anuncio": sku_ml,
+            "sku_anuncio_existe": bool(sku_ml and sku_ml in produtos),
+            "titulo_ml": det.get("titulo") or "",
+            "produto": prod["produto"] if prod else (det.get("titulo") or ""),
             "curva": prod["curva"] if prod else "",
             "preco_cheio": base.get("original_price"),
             "sugerido_ml": base.get("suggested_discounted_price"),
@@ -13066,6 +13080,55 @@ def promocoes_painel(mlbs: list[str]) -> dict[str, Any]:
                 linha["conta"] = promo_conta(prod, float(referencia))
         itens.append(linha)
     return {"ok": True, "itens": itens, "erros": erros, "limite": PROMO_PAINEL_MAX}
+
+
+def ml_itens_do_vendedor(offset: int = 0, limite: int = 50) -> dict[str, Any]:
+    """V18.25: lista os anúncios do vendedor, não só os que já têm vínculo.
+    O gargalo era esse: 117 de 1.598 tinham vínculo, então a tela só via 7%."""
+    linha = ml_integration_row()
+    seller = str((linha["seller_id"] if linha else "") or "").strip()
+    if not seller:
+        raise RuntimeError("Mercado Livre não está conectado. Conecte em Admin → Integrações.")
+    limite = max(1, min(50, int(limite or 50)))
+    offset = max(0, int(offset or 0))
+    dados = ml_api_get(f"/users/{seller}/items/search?status=active&offset={offset}&limit={limite}")
+    if not isinstance(dados, dict):
+        return {"mlbs": [], "total": 0}
+    paging = dados.get("paging") or {}
+    return {
+        "mlbs": [str(x) for x in (dados.get("results") or [])],
+        "total": int(paging.get("total") or 0),
+        "offset": offset, "limite": limite,
+    }
+
+
+def ml_itens_detalhe(mlbs: list[str]) -> dict[str, dict[str, Any]]:
+    """Título, preço e o SKU que o vendedor cadastrou no próprio anúncio."""
+    out: dict[str, dict[str, Any]] = {}
+    campos = "id,title,price,status,seller_custom_field,attributes"
+    for i in range(0, len(mlbs), 20):   # a API aceita 20 ids por chamada
+        lote = [x for x in mlbs[i:i + 20] if x]
+        if not lote:
+            continue
+        try:
+            resp = ml_api_get("/items?ids=" + ",".join(lote) + "&attributes=" + campos)
+        except Exception:
+            continue
+        for linha in (resp if isinstance(resp, list) else []):
+            corpo = (linha or {}).get("body") or {}
+            mlb = str(corpo.get("id") or "").strip().upper()
+            if not mlb:
+                continue
+            sku = str(corpo.get("seller_custom_field") or "").strip()
+            if not sku:
+                for attr in corpo.get("attributes") or []:
+                    if str(attr.get("id") or "").upper() == "SELLER_SKU":
+                        sku = str(attr.get("value_name") or "").strip()
+                        break
+            out[mlb] = {"titulo": str(corpo.get("title") or "").strip(),
+                        "preco": corpo.get("price"), "sku_ml": sku,
+                        "status": corpo.get("status")}
+    return out
 
 
 def ml_promocao_aplicar(mlb: str, preco: Any, inicio: str, fim: str, ator: str = "") -> dict[str, Any]:
@@ -14104,13 +14167,20 @@ class AppHandler(BaseHTTPRequestHandler):
                 try:
                     brutos = (query.get("mlbs", [""])[0] or "").split(",")
                     mlbs = [x.strip() for x in brutos if x.strip()]
+                    total = 0
+                    offset = int(query.get("offset", ["0"])[0] or 0)
                     if not mlbs:
-                        # Sem lista explícita: usa os anúncios com vínculo MLB↔SKU,
-                        # que são os únicos com custo para calcular a margem.
-                        mlbs = sorted(_ml_vinculos_mlb_sku().keys())
+                        # V18.25: sem lista explícita, lista os anúncios ATIVOS do
+                        # vendedor (não só os com vínculo — eram 7% da base).
+                        pagina = ml_itens_do_vendedor(offset, PROMO_PAINEL_MAX)
+                        mlbs = pagina["mlbs"]
+                        total = pagina["total"]
                     if not mlbs:
-                        raise ValueError("Nenhum anúncio com vínculo MLB ↔ SKU. Sincronize os vínculos primeiro.")
-                    self.send_json(promocoes_painel(mlbs))
+                        raise ValueError("Nenhum anúncio ativo encontrado no Mercado Livre.")
+                    resposta = promocoes_painel(mlbs)
+                    resposta["total_anuncios"] = total
+                    resposta["offset"] = offset
+                    self.send_json(resposta)
                 except ValueError as exc:
                     self.send_json({"ok": False, "error": str(exc)}, 400)
                 except Exception as exc:

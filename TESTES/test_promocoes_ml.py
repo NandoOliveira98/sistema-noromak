@@ -104,3 +104,16 @@ class RotasRespondem(TesteNoromak):
         self.assertNotEqual(status, 404, "a rota POST não está registrada no do_POST")
         self.assertIsInstance(corpo, dict)
         self.assertIn("ok", corpo)
+
+
+class SemMercadoLivreConectado(unittest.TestCase):
+    """V18.25: sem ML conectado a listagem levantava KeyError('seller_id') e a
+    tela mostrava "Não foi possível carregar: 'seller_id'". Tem de ser um erro
+    que explique o que fazer."""
+
+    def test_a_mensagem_clara(self):
+        with self.assertRaises(RuntimeError) as c:
+            S.ml_itens_do_vendedor(0, 10)
+        msg = str(c.exception)
+        self.assertIn("não está conectado", msg)
+        self.assertNotIn("seller_id", msg)
