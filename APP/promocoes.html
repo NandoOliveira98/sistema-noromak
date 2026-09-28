@@ -258,10 +258,15 @@ function render(){
         (it.sku?' <a class="irprec" href="/expedicao/precificador?sku='+encodeURIComponent(it.sku)+
                 '" target="_blank" rel="noopener" title="Abrir '+it.sku+' no Precificador">↗</a>':'')+
         '</b><span>'+(it.sku||"sem SKU")+' · '+it.mlb+
-        (ativo?'<span class="tagon">promoção ativa</span>':'')+tagsML(it)+'</span></td>'+
+        (ativo?'<span class="tagon" title="'+(it.promo_nome||"").replace(/"/g,"&quot;")+'">'+
+          (it.promo_tipo&&it.promo_tipo!=="PRICE_DISCOUNT"?(it.promo_tipo_nome||it.promo_tipo)+' ativa':'promoção ativa')+
+          '</span>':'')+tagsML(it)+'</span></td>'+
       '<td class="n">'+brl(it.preco_cheio)+'</td>'+
       '<td class="n"><b>'+brl(p)+'</b></td>'+
-      '<td style="font-size:11.5px">'+(it.inicio?dataBr(it.inicio)+" → "+dataBr(it.fim):'<span style="color:var(--muted)">sem promoção</span>')+'</td>'+
+      '<td style="font-size:11.5px">'+(it.inicio?dataBr(it.inicio)+" → "+dataBr(it.fim)
+        :(ativo?'em vigor':'<span style="color:var(--muted)">sem promoção</span>'))+
+        (ativo&&it.promo_tipo&&it.promo_tipo!=="PRICE_DISCOUNT"
+          ?'<div style="font-size:10.5px;color:var(--roxo);font-weight:700">'+(it.promo_tipo_nome||it.promo_tipo)+'</div>':'')+'</td>'+
       '<td class="n" style="color:#7a4b00">'+brl(it.minimo)+'</td>'+
       '<td class="n" style="color:var(--navy);font-weight:700">'+brl(it.ideal)+'</td>'+
       '<td class="n" style="color:var(--muted)">'+brl(it.piso_ml)+'</td>'+
@@ -347,7 +352,14 @@ function opcoesHtml(it){
       '<div class="sub">Desconto do vendedor (PRICE_DISCOUNT), como você já usa.</div>'+
       '<div class="dur">'+[7,15,30].map(d=>'<button data-dur="'+d+'">'+d+'d</button>').join("")+'</div>'+
       '<input type="date" id="dtFim"></div></div>';
-  return camp+prop;
+  // V18.42: avisa quando já há outra promoção valendo (o ML pode recusar a própria)
+  const vig = (it.status==="started" && it.promo_tipo && it.promo_tipo!=="PRICE_DISCOUNT")
+    ? '<div class="opc off" style="border-color:var(--roxo)"><div class="bol"></div><div><div class="tit">Em vigor agora: '+
+      (it.promo_tipo_nome||it.promo_tipo)+(it.promo_nome?' — '+it.promo_nome:'')+'</div>'+
+      '<div class="sub">'+brl(it.preco_promo)+(it.fim?' até <b>'+dataBr(it.fim)+'</b>':'')+
+      '. Enquanto ela valer, o Mercado Livre pode não aceitar o desconto próprio.</div></div></div>'
+    : '';
+  return vig+camp+prop;
 }
 function atualizar(){
   const it=ITENS[sel.i], min=it.minimo, ideal=it.ideal;

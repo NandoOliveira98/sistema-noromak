@@ -396,3 +396,45 @@ class SemEstoqueApareceNaTabela(unittest.TestCase):
         r = S.promocoes_painel(["MLB1"])
         self.assertEqual(r["itens"], [])
         self.assertEqual(r["erros"][0]["mlb"], "MLB1")
+
+
+class PromocaoEmVigorDeQualquerTipo(unittest.TestCase):
+    """V18.42: o MLB1061351533 estava no ML "R$ 78,99 em promoção a R$ 54,22",
+    mas a tela dizia "sem promoção" — ela só olhava o desconto próprio
+    (PRICE_DISCOUNT). A promoção em vigor era de outro tipo."""
+
+    PROMOS = [
+        {"type": "PRICE_DISCOUNT", "status": "candidate", "original_price": 78.99,
+         "suggested_discounted_price": 70.0, "min_discounted_price": 22.36, "max_discounted_price": 75.0},
+        {"type": "SMART", "status": "started", "price": 54.22, "original_price": 78.99,
+         "start_date": "2026-09-20T00:00:00", "finish_date": "2026-10-20T00:00:00", "name": "Campanha ML"},
+        {"type": "BANK", "status": "started", "start_date": "2026-09-01T00:00:00"},
+    ]
+
+    def setUp(self):
+        self.orig = (S.ml_itens_detalhe, S.ml_promocoes_do_item)
+        S.ml_itens_detalhe = lambda mlbs: {m: {"titulo": "Manopla", "preco": 78.99, "sku_ml": "",
+                                               "status": "active", "sub_status": [], "estoque": 1} for m in mlbs}
+        S.ml_promocoes_do_item = lambda mlb: [dict(x) for x in self.PROMOS]
+
+    def tearDown(self):
+        S.ml_itens_detalhe, S.ml_promocoes_do_item = self.orig
+
+    def test_a_escolhe_a_que_esta_valendo(self):
+        v = S.ml_promo_vigente(self.PROMOS)
+        self.assertEqual(v["type"], "SMART", "BANK (Pix) não muda o preço; candidata não está valendo")
+        self.assertIsNone(S.ml_promo_vigente([self.PROMOS[0]]))
+
+    def test_b_propria_tem_preferencia(self):
+        propria = {"type": "PRICE_DISCOUNT", "status": "started", "price": 60.0}
+        self.assertEqual(S.ml_promo_vigente(self.PROMOS + [propria])["type"], "PRICE_DISCOUNT")
+
+    def test_c_a_tela_mostra_a_promocao_em_vigor(self):
+        it = S.promocoes_painel(["MLB1061351533"])["itens"][0]
+        self.assertEqual(it["status"], "started")
+        self.assertEqual(it["preco_promo"], 54.22)
+        self.assertEqual(it["fim"], "2026-10-20T00:00:00")
+        self.assertEqual(it["promo_tipo"], "SMART")
+        self.assertEqual(it["promo_tipo_nome"], "campanha do ML")
+        # piso/teto do ML continuam vindo do desconto próprio (o que o Noromak aplica)
+        self.assertEqual(it["piso_ml"], 22.36)

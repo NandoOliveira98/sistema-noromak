@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.41-PROMOCOES-SEM-RECARREGAR"
+APP_VERSION = "18.42-PROMOCAO-EM-VIGOR"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -14583,6 +14583,40 @@ def ml_sku_do_anuncio(bruto: Any, conhecidos: dict[str, Any] | None = None) -> s
     return texto
 
 
+ML_PROMO_TIPO_NOME = {
+    "PRICE_DISCOUNT": "desconto próprio",
+    "DEAL": "campanha",
+    "SMART": "campanha do ML",
+    "MARKETPLACE_CAMPAIGN": "campanha do ML",
+    "SELLER_CAMPAIGN": "campanha do vendedor",
+    "LIGHTNING": "oferta relâmpago",
+    "DOD": "oferta do dia",
+    "UNHEALTHY_STOCK": "estoque parado",
+    "PRICE_MATCHING": "preço competitivo",
+    "PRICE_MATCHING_MELI_ALL": "preço competitivo",
+    "PRE_NEGOTIATED": "pré-negociada",
+    "VOLUME": "desconto por volume",
+    "BANK": "Pix / banco",
+}
+
+
+def ml_promo_vigente(promos: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """V18.42: a promoção que está valendo AGORA no anúncio, de qualquer tipo.
+    Preferência: o desconto próprio; depois qualquer outra com preço; o BANK
+    (desconto no Pix) só se não houver outra — ele não muda o preço do anúncio."""
+    ativas = [x for x in promos if str(x.get("status") or "").lower() == "started"]
+    if not ativas:
+        return None
+    def peso(x: dict[str, Any]) -> int:
+        tipo = str(x.get("type") or "")
+        if tipo == ML_PROMO_TIPO:
+            return 0
+        if tipo == "BANK":
+            return 3
+        return 1 if x.get("price") else 2
+    return sorted(ativas, key=peso)[0]
+
+
 def promocoes_painel(mlbs: list[str]) -> dict[str, Any]:
     """Junta o que o ML diz da promoção com a conta do Precificador.
 
@@ -14621,6 +14655,7 @@ def promocoes_painel(mlbs: list[str]) -> dict[str, Any]:
         proprio = next((x for x in promos if x.get("type") == ML_PROMO_TIPO), None)
         campanha = next((x for x in promos if x.get("type") == "DEAL"), None)
         base = proprio or campanha or {}
+        vigente = ml_promo_vigente(promos)
         sku_ml = str(det.get("sku_ml") or "").strip().upper()
         # O anúncio costuma trazer "prefixo-código" (ex.: 1304-6008.004.206.00.6);
         # o Precificador guarda só o código. _compras_codigo já resolve os dois.
@@ -14646,10 +14681,17 @@ def promocoes_painel(mlbs: list[str]) -> dict[str, Any]:
             "sugerido_ml": base.get("suggested_discounted_price"),
             "piso_ml": base.get("min_discounted_price"),
             "teto_ml": base.get("max_discounted_price"),
-            "status": (proprio or {}).get("status") or "",
-            "preco_promo": (proprio or {}).get("price") or None,
-            "inicio": (proprio or {}).get("start_date"),
-            "fim": (proprio or {}).get("finish_date"),
+            # V18.42: a promoção EM VIGOR pode ser de qualquer tipo (SMART,
+            # DEAL, relâmpago...), não só o desconto próprio. Olhar só o
+            # PRICE_DISCOUNT fazia anúncio em promoção aparecer "sem promoção".
+            "status": (vigente or proprio or {}).get("status") or "",
+            "preco_promo": (vigente or proprio or {}).get("price") or None,
+            "inicio": (vigente or proprio or {}).get("start_date"),
+            "fim": (vigente or proprio or {}).get("finish_date"),
+            "promo_tipo": (vigente or {}).get("type") or "",
+            "promo_tipo_nome": ML_PROMO_TIPO_NOME.get(str((vigente or {}).get("type") or ""),
+                                                      str((vigente or {}).get("type") or "")),
+            "promo_nome": (vigente or {}).get("name") or "",
             "tem_custo": bool(prod),
             "campanha": None,
         }
