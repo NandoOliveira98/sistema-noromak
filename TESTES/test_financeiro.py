@@ -36,16 +36,17 @@ def _vender(marketplace: str, order_id: str, sku: str, qty: int, valor: float,
 def _lancamento_fatura(order_id: str, valor: float, *, sub_type: str = "", transacao: str = "",
                        sale_fee_net: float | None = None, credito: bool = False,
                        detail_id: str = "", period_key: str = "2026-09-01",
-                       detail_type: str = "") -> None:
+                       detail_type: str = "", detail_date: str = "") -> None:
     with S.DB_LOCK:
         S.DB.execute(
             "INSERT OR REPLACE INTO ml_billing_period_detail(period_key,document_type,detail_id,order_id,pack_id,"
             "shipment_id,detail_amount,detail_type,detail_sub_type,transaction_detail,debited_from_operation,"
-            "sale_fee_net,sale_fee_gross,sale_fee_rebate,sale_fee_discount,is_credit,raw_json,synced_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "sale_fee_net,sale_fee_gross,sale_fee_rebate,sale_fee_discount,is_credit,detail_date,raw_json,synced_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (period_key, "CREDIT_NOTE" if credito else "BILL", detail_id or f"{order_id}-{sub_type}-{valor}",
              order_id, "", "", valor, (detail_type or ("BONUS" if credito else "CHARGE")), sub_type,
-             transacao, "YES", sale_fee_net, None, None, None, 1 if credito else 0, "{}", S.now_iso()),
+             transacao, "YES", sale_fee_net, None, None, None, 1 if credito else 0,
+             detail_date, "{}", S.now_iso()),
         )
         S.DB.commit()
 
@@ -411,7 +412,7 @@ class TesteFaturaDuplicada(TesteNoromak):
                     "INSERT OR REPLACE INTO ml_billing_period_detail(period_key,document_type,detail_id,order_id,"
                     "pack_id,shipment_id,detail_amount,detail_type,detail_sub_type,transaction_detail,"
                     "debited_from_operation,sale_fee_net,sale_fee_gross,sale_fee_rebate,sale_fee_discount,"
-                    "is_credit,raw_json,synced_at) VALUES(?,?,?,?,'','',?,?,?,?,?,?,NULL,NULL,NULL,?,'{}',?)",
+                    "is_credit,detail_date,raw_json,synced_at) VALUES(?,?,?,?,'','',?,?,?,?,?,?,NULL,NULL,NULL,?,'','{}',?)",
                     ("2026-09-01", doc, detail_id, order_id, valor, "CHARGE", sub,
                      "Custo por vender no Mercado Livre", "INAPPLICABLE", None,
                      1 if doc == "CREDIT_NOTE" else 0, S.now_iso()))
@@ -487,6 +488,35 @@ class TesteAdsDaFatura(TesteNoromak):
         d = S.financeiro_payload("2026-09-01", "2026-09-30")
         self.assertEqual(next(x for x in d["por_sku"] if x["sku"] == "AAA")["ads"], 9.0)
         self.assertEqual(next(x for x in d["pedidos"] if x["order_id"] == "ML200")["ads"], 9.0)
+
+    def test_publicidade_sem_pedido_respeita_o_periodo(self) -> None:
+        """V18.37 — o PADS vem sem pedido, mas com data.
+
+        Em produção são 489 lançamentos, todos sem pedido. Sem filtrar pela data,
+        pedir 01 a 15 de setembro trazia a publicidade do mês inteiro.
+        """
+        _custos_precificador({"AAA": 40.0})
+        _vender("ml", "ML500", "AAA", 1, 200.0, dia="2026-09-05")
+        _lancamento_fatura("ML500", 20.0, sub_type="CVVML", detail_id="cv500")
+        for dia, valor in (("2026-09-05", 30.0), ("2026-09-25", 70.0)):
+            _lancamento_fatura("", valor, sub_type="PADS", transacao="Tarifa por campanha de publicidade",
+                               detail_id=f"pads-{dia}", detail_date=dia)
+        mes = S.financeiro_payload("2026-09-01", "2026-09-30")
+        self.assertEqual(mes["totais"]["ads"], 100.0, "no mês inteiro entram os dois lançamentos")
+        quinzena = S.financeiro_payload("2026-09-01", "2026-09-15")
+        self.assertEqual(quinzena["totais"]["ads"], 30.0, "na primeira quinzena, só o do dia 05")
+
+    def test_publicidade_entra_no_dia_certo(self) -> None:
+        _custos_precificador({"AAA": 40.0})
+        _vender("ml", "ML501", "AAA", 1, 200.0, dia="2026-09-05")
+        _lancamento_fatura("ML501", 20.0, sub_type="CVVML", detail_id="cv501")
+        _lancamento_fatura("", 30.0, sub_type="PADS", transacao="Tarifa por campanha de publicidade",
+                           detail_id="pads-dia", detail_date="2026-09-05")
+        d = S.financeiro_payload("2026-09-01", "2026-09-30")
+        dia5 = next(x for x in d["por_dia"] if x["dia"] == "2026-09-05")
+        self.assertEqual(dia5["ads"], 30.0, "o gráfico diário precisa mostrar o gasto no dia em que aconteceu")
+        soma = round(sum(x["ads"] for x in d["por_dia"]), 2)
+        self.assertEqual(soma, d["totais"]["ads"], "a soma dos dias tem que fechar com o total")
 
     def test_api_tem_prioridade_e_nao_soma_com_a_fatura(self) -> None:
         self.cenario()

@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.36-FATURA-SEM-DUPLICIDADE"
+APP_VERSION = "18.37-ADS-POR-DATA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -1400,6 +1400,42 @@ def session_ttl_for_user_area(area: str, row: sqlite3.Row | dict[str, Any]) -> i
     return session_ttl_for_area(area)
 
 
+def ensure_ml_billing_data_schema() -> None:
+    """V18.37: acrescenta detail_date e preenche a partir do raw_json já guardado.
+
+    Sem a data, a publicidade da fatura entrava inteira em qualquer período
+    escolhido — pedir 01 a 15 trazia o mês todo.
+    """
+    with DB_LOCK:
+        info = DB.execute("PRAGMA table_info(ml_billing_period_detail)").fetchall()
+        if not info:
+            return
+        if "detail_date" not in {str(r["name"]) for r in info}:
+            DB.execute("ALTER TABLE ml_billing_period_detail ADD COLUMN detail_date TEXT NOT NULL DEFAULT ''")
+            DB.execute("CREATE INDEX IF NOT EXISTS idx_ml_billing_period_data ON ml_billing_period_detail(detail_date)")
+            DB.commit()
+        pendentes = DB.execute(
+            "SELECT period_key, document_type, detail_id, order_id, raw_json FROM ml_billing_period_detail "
+            "WHERE detail_date='' AND raw_json<>''"
+        ).fetchall()
+    atualizacoes: list[tuple[str, str, str, str, str]] = []
+    for r in pendentes:
+        try:
+            charge = (json.loads(r["raw_json"] or "{}").get("charge_info") or {})
+        except Exception:
+            continue
+        data = str(charge.get("creation_date_time") or charge.get("detail_date") or "")[:10]
+        if data:
+            atualizacoes.append((data, r["period_key"], r["document_type"], r["detail_id"], r["order_id"]))
+    for i in range(0, len(atualizacoes), 2000):
+        with DB_LOCK:
+            DB.executemany(
+                "UPDATE ml_billing_period_detail SET detail_date=? "
+                "WHERE period_key=? AND document_type=? AND detail_id=? AND order_id=?",
+                atualizacoes[i:i + 2000])
+            DB.commit()
+
+
 def ensure_ml_billing_credito_schema() -> None:
     """V18.36: corrige o is_credit das linhas gravadas até a V18.35.
 
@@ -1825,6 +1861,7 @@ def init_db() -> None:
                 sale_fee_rebate REAL,
                 sale_fee_discount REAL,
                 is_credit INTEGER NOT NULL DEFAULT 0,
+                detail_date TEXT NOT NULL DEFAULT '',
                 raw_json TEXT NOT NULL DEFAULT '',
                 synced_at TEXT NOT NULL DEFAULT '',
                 PRIMARY KEY(period_key, document_type, detail_id, order_id)
@@ -1832,6 +1869,7 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_ml_billing_period_order ON ml_billing_period_detail(order_id, period_key);
             CREATE INDEX IF NOT EXISTS idx_ml_billing_period_pack ON ml_billing_period_detail(pack_id, period_key);
             CREATE INDEX IF NOT EXISTS idx_ml_billing_period_subtype ON ml_billing_period_detail(detail_sub_type, period_key);
+            CREATE INDEX IF NOT EXISTS idx_ml_billing_period_data ON ml_billing_period_detail(detail_date);
             -- V18.30: gasto com Publicidade (Product Ads) do Mercado Livre, dia a dia.
             -- A API só devolve 90 dias para trás e consolida o dia às 10:00 GMT-3,
             -- por isso guardamos aqui: o histórico é nosso, a janela recente é
@@ -1978,6 +2016,7 @@ def init_db() -> None:
     ensure_app_user_permissions_schema()
     ensure_shopee_escrow_schema()
     ensure_ml_billing_credito_schema()
+    ensure_ml_billing_data_schema()
     migrate_legacy_if_empty()
     ensure_storage_defaults()
     seed_sku_state_from_storage()
@@ -11359,6 +11398,9 @@ def _ml_billing_v1513_sync_period(period_key: str, document_type: str, seller_id
             sub = str(charge.get("detail_sub_type") or "").upper()
             trans = str(charge.get("transaction_detail") or "")
             debited = str(charge.get("debited_from_operation") or "").upper()
+            # V18.37: a data do lançamento (charge_info.creation_date_time). É o que
+            # permite somar a publicidade DO PERÍODO escolhido, e não da fatura inteira.
+            ddata = str(charge.get("creation_date_time") or charge.get("detail_date") or "")[:10]
             order_ids, pack_id, shipment_id = _ml_billing_v1513_ids(row)
             # Lançamentos sem order continuam úteis para auditoria do período, mas
             # não entram no lucro de uma venda específica.
@@ -11369,8 +11411,8 @@ def _ml_billing_v1513_sync_period(period_key: str, document_type: str, seller_id
                     DB.execute(
                         """INSERT INTO ml_billing_period_detail
                         (period_key,document_type,detail_id,order_id,pack_id,shipment_id,detail_amount,detail_type,detail_sub_type,
-                         transaction_detail,debited_from_operation,sale_fee_net,sale_fee_gross,sale_fee_rebate,sale_fee_discount,is_credit,raw_json,synced_at)
-                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                         transaction_detail,debited_from_operation,sale_fee_net,sale_fee_gross,sale_fee_rebate,sale_fee_discount,is_credit,detail_date,raw_json,synced_at)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                         ON CONFLICT(period_key,document_type,detail_id,order_id) DO UPDATE SET
                         pack_id=excluded.pack_id,shipment_id=excluded.shipment_id,detail_amount=excluded.detail_amount,
                         detail_type=excluded.detail_type,detail_sub_type=excluded.detail_sub_type,
@@ -11379,10 +11421,12 @@ def _ml_billing_v1513_sync_period(period_key: str, document_type: str, seller_id
                         sale_fee_gross=COALESCE(excluded.sale_fee_gross,ml_billing_period_detail.sale_fee_gross),
                         sale_fee_rebate=COALESCE(excluded.sale_fee_rebate,ml_billing_period_detail.sale_fee_rebate),
                         sale_fee_discount=COALESCE(excluded.sale_fee_discount,ml_billing_period_detail.sale_fee_discount),
-                        is_credit=excluded.is_credit,raw_json=excluded.raw_json,synced_at=excluded.synced_at""",
+                        is_credit=excluded.is_credit,detail_date=excluded.detail_date,
+                        raw_json=excluded.raw_json,synced_at=excluded.synced_at""",
                         (period_key, doc, did, oid, pack_id, shipment_id, amount, dtype, sub, trans, debited,
                          sf.get("net"), sf.get("gross"), sf.get("rebate"), sf.get("discount"),
-                         _ml_billing_credito_do_lancamento(dtype, sub), json.dumps(row, ensure_ascii=False)[:120000], now_iso()),
+                         _ml_billing_credito_do_lancamento(dtype, sub), ddata,
+                         json.dumps(row, ensure_ascii=False)[:120000], now_iso()),
                     )
                     DB.commit()
                 saved += 1
@@ -13007,7 +13051,8 @@ def _financeiro_custos_venda_ml(order_ids: list[str]) -> dict[str, dict[str, Any
     return out
 
 
-def _financeiro_billing_ml(period_keys: list[str], order_ids: list[str]) -> dict[str, Any]:
+def _financeiro_billing_ml(period_keys: list[str], order_ids: list[str],
+                           dia_inicio: str = "", dia_fim: str = "") -> dict[str, Any]:
     """Concilia a fatura do ML do período: por pedido e o que não tem pedido.
 
     Usa a MESMA regra do cálculo por venda (_ml_billing_consolidar_lancamentos).
@@ -13015,12 +13060,14 @@ def _financeiro_billing_ml(period_keys: list[str], order_ids: list[str]) -> dict
     uma vez; a classificação por sub_type e por transaction_detail não depende
     dele — ele é só o último fallback para reconhecer envio.
     """
-    vazio = {"por_pedido": {}, "sem_pedido": {"publicidade": 0.0, "outros": 0.0, "credito": 0.0, "itens": []},
+    vazio = {"por_pedido": {},
+             "sem_pedido": {"publicidade": 0.0, "outros": 0.0, "credito": 0.0, "itens": [], "por_dia": {}},
              "periodos": period_keys, "lancamentos": 0}
     if not period_keys:
         return vazio
     colunas = ("detail_id,order_id,detail_amount,detail_type,detail_sub_type,transaction_detail,"
-               "debited_from_operation,sale_fee_net,is_credit,substr(raw_json,1,1200) AS raw_json")
+               "debited_from_operation,sale_fee_net,is_credit,detail_date,"
+               "substr(raw_json,1,1200) AS raw_json")
     ph_periodos = ",".join("?" for _ in period_keys)
     por_pedido_entries: dict[str, list[dict[str, Any]]] = {}
     alvo = {str(o).strip() for o in order_ids if str(o).strip()}
@@ -13043,6 +13090,7 @@ def _financeiro_billing_ml(period_keys: list[str], order_ids: list[str]) -> dict
     outros = 0.0
     credito = 0.0
     itens: dict[str, float] = {}
+    pub_por_dia: dict[str, float] = {}
     with DB_LOCK:
         rows = DB.execute(
             f"SELECT {colunas} FROM ml_billing_period_detail WHERE period_key IN ({ph_periodos}) AND order_id=''",
@@ -13054,6 +13102,11 @@ def _financeiro_billing_ml(period_keys: list[str], order_ids: list[str]) -> dict
         if valor is None or abs(valor) <= 0:
             continue
         valor = abs(valor)
+        # V18.37: fora da janela escolhida, o lançamento é de outro período. Sem
+        # data (fatura antiga, antes do backfill) ele entra, para não sumir.
+        dia_lanc = str(r["detail_date"] or "")
+        if dia_lanc and dia_inicio and dia_fim and not (dia_inicio <= dia_lanc <= dia_fim):
+            continue
         descricao = str(r["transaction_detail"] or r["detail_sub_type"] or r["detail_type"] or "Outros")[:120]
         if _ml_billing_credito_do_lancamento(str(r["detail_type"] or ""), str(r["detail_sub_type"] or "")):
             credito += valor
@@ -13062,13 +13115,16 @@ def _financeiro_billing_ml(period_keys: list[str], order_ids: list[str]) -> dict
             continue
         if _ml_billing_is_publicidade(str(r["detail_sub_type"] or ""), str(r["detail_type"] or ""), str(r["transaction_detail"] or "")):
             pub += valor
+            if dia_lanc:
+                pub_por_dia[dia_lanc] = round(pub_por_dia.get(dia_lanc, 0.0) + valor, 2)
         else:
             outros += valor
         itens[descricao] = round(itens.get(descricao, 0.0) + valor, 2)
     ordenados = sorted(itens.items(), key=lambda kv: -kv[1])[:20]
     return {"por_pedido": por_pedido,
             "sem_pedido": {"publicidade": round(pub, 2), "outros": round(outros, 2), "credito": round(credito, 2),
-                           "itens": [{"descricao": k, "valor": v} for k, v in ordenados]},
+                           "itens": [{"descricao": k, "valor": v} for k, v in ordenados],
+                           "por_dia": pub_por_dia},
             "periodos": period_keys, "lancamentos": total}
 
 
@@ -13159,8 +13215,10 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
     # --- custos por pedido -------------------------------------------------
     pedidos_ml = sorted({str(v["order_id"]) for v in vendas if v["marketplace"] == "ml"})
     pedidos_shopee = sorted({str(v["order_id"]) for v in vendas if v["marketplace"] == "shopee"})
-    billing = _financeiro_billing_ml(_financeiro_periodos_fatura(d1, d2), pedidos_ml) if pedidos_ml else \
-        {"por_pedido": {}, "sem_pedido": {"publicidade": 0.0, "outros": 0.0, "credito": 0.0, "itens": []},
+    billing = _financeiro_billing_ml(_financeiro_periodos_fatura(d1, d2), pedidos_ml,
+                                     d1.isoformat(), d2.isoformat()) if pedidos_ml else \
+        {"por_pedido": {},
+         "sem_pedido": {"publicidade": 0.0, "outros": 0.0, "credito": 0.0, "itens": [], "por_dia": {}},
          "periodos": [], "lancamentos": 0}
     escrow: dict[str, dict[str, Any]] = {}
     for lote in _financeiro_chunks(pedidos_shopee):
@@ -13376,6 +13434,11 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
             totais["ads"] = round(totais["ads"] + ads_sem_alvo, 2)
             if "ml" in por_mp:
                 por_mp["ml"]["ads"] = round(por_mp["ml"]["ads"] + ads_sem_alvo, 2)
+            # V18.37: o PADS vem sem pedido, mas COM data — dá para pôr no dia certo.
+            for dia_pub, valor_pub in ((billing.get("sem_pedido") or {}).get("por_dia") or {}).items():
+                alvo = por_dia.get(dia_pub)
+                if alvo is not None:
+                    alvo["ads"] = round(alvo["ads"] + valor_pub, 2)
     else:
         # Pela API o gasto é do período (por dia), não do pedido.
         totais["ads"] = round(totais["ads"] + ads_api_total, 2)
