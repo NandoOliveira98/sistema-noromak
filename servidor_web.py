@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.39-FINANCEIRO-ACABAMENTO"
+APP_VERSION = "18.39b-FIX-MIGRACAO-BOOT"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -1414,19 +1414,19 @@ def ensure_ml_billing_data_schema() -> None:
             DB.execute("ALTER TABLE ml_billing_period_detail ADD COLUMN detail_date TEXT NOT NULL DEFAULT ''")
             DB.execute("CREATE INDEX IF NOT EXISTS idx_ml_billing_period_data ON ml_billing_period_detail(detail_date)")
             DB.commit()
+        # Só o começo do raw_json: a data mora no início do charge_info e o campo
+        # inteiro tem até 120 KB. Ler tudo de 11 mil linhas derrubaria o boot.
         pendentes = DB.execute(
-            "SELECT period_key, document_type, detail_id, order_id, raw_json FROM ml_billing_period_detail "
-            "WHERE detail_date='' AND raw_json<>''"
+            "SELECT period_key, document_type, detail_id, order_id, substr(raw_json,1,700) AS inicio "
+            "FROM ml_billing_period_detail WHERE detail_date='' AND raw_json<>'' LIMIT 40000"
         ).fetchall()
+    padrao = re.compile(r'"(?:creation_date_time|detail_date)"\s*:\s*"(\d{4}-\d{2}-\d{2})')
     atualizacoes: list[tuple[str, str, str, str, str]] = []
     for r in pendentes:
-        try:
-            charge = (json.loads(r["raw_json"] or "{}").get("charge_info") or {})
-        except Exception:
-            continue
-        data = str(charge.get("creation_date_time") or charge.get("detail_date") or "")[:10]
-        if data:
-            atualizacoes.append((data, r["period_key"], r["document_type"], r["detail_id"], r["order_id"]))
+        achado = padrao.search(str(r["inicio"] or ""))
+        if achado:
+            atualizacoes.append((achado.group(1), r["period_key"], r["document_type"],
+                                 r["detail_id"], r["order_id"]))
     for i in range(0, len(atualizacoes), 2000):
         with DB_LOCK:
             DB.executemany(
@@ -1869,7 +1869,6 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_ml_billing_period_order ON ml_billing_period_detail(order_id, period_key);
             CREATE INDEX IF NOT EXISTS idx_ml_billing_period_pack ON ml_billing_period_detail(pack_id, period_key);
             CREATE INDEX IF NOT EXISTS idx_ml_billing_period_subtype ON ml_billing_period_detail(detail_sub_type, period_key);
-            CREATE INDEX IF NOT EXISTS idx_ml_billing_period_data ON ml_billing_period_detail(detail_date);
             -- V18.30: gasto com Publicidade (Product Ads) do Mercado Livre, dia a dia.
             -- A API só devolve 90 dias para trás e consolida o dia às 10:00 GMT-3,
             -- por isso guardamos aqui: o histórico é nosso, a janela recente é

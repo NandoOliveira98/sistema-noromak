@@ -395,6 +395,62 @@ class TesteFaturaMLReal(TesteNoromak):
         self.assertEqual(t["outros"], 1.5, "armazenagem Full é custo real, fica em outros")
 
 
+class TesteMigracaoBancoAntigo(TesteNoromak):
+    """V18.39b — init_db tem que sobreviver a um banco que ainda não tem as colunas novas.
+
+    A V18.39 derrubou a produção: o CREATE INDEX de detail_date estava dentro do
+    executescript do init_db, e em banco já existente a coluna só aparece depois,
+    na migração. O serviço entrou em loop de restart com
+    "sqlite3.OperationalError: no such column: detail_date".
+    """
+
+    def _banco_antigo(self) -> None:
+        """Recria ml_billing_period_detail no formato anterior à V18.37."""
+        with S.DB_LOCK:
+            S.DB.execute("DROP TABLE IF EXISTS ml_billing_period_detail")
+            S.DB.execute("""CREATE TABLE ml_billing_period_detail (
+                period_key TEXT NOT NULL, document_type TEXT NOT NULL, detail_id TEXT NOT NULL,
+                order_id TEXT NOT NULL DEFAULT '', pack_id TEXT NOT NULL DEFAULT '',
+                shipment_id TEXT NOT NULL DEFAULT '', detail_amount REAL,
+                detail_type TEXT NOT NULL DEFAULT '', detail_sub_type TEXT NOT NULL DEFAULT '',
+                transaction_detail TEXT NOT NULL DEFAULT '', debited_from_operation TEXT NOT NULL DEFAULT '',
+                sale_fee_net REAL, sale_fee_gross REAL, sale_fee_rebate REAL, sale_fee_discount REAL,
+                is_credit INTEGER NOT NULL DEFAULT 0, raw_json TEXT NOT NULL DEFAULT '',
+                synced_at TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY(period_key, document_type, detail_id, order_id))""")
+            S.DB.execute(
+                "INSERT INTO ml_billing_period_detail(period_key,document_type,detail_id,order_id,detail_amount,"
+                "detail_type,detail_sub_type,raw_json) VALUES('2026-09-01','BILL','1','X',30.39,'CHARGE','CVVML',?)",
+                ('{"charge_info": {"legal_document_number": null, '
+                 '"creation_date_time": "2026-09-01T00:14:50", "detail_id": 1}}',))
+            S.DB.commit()
+
+    def test_init_db_nao_quebra_sem_a_coluna_nova(self) -> None:
+        self._banco_antigo()
+        S.init_db()   # era exatamente aqui que a produção morria
+        with S.DB_LOCK:
+            colunas = {r["name"] for r in S.DB.execute("PRAGMA table_info(ml_billing_period_detail)")}
+        self.assertIn("detail_date", colunas, "a migração precisa acrescentar a coluna")
+
+    def test_backfill_le_a_data_do_raw_json(self) -> None:
+        self._banco_antigo()
+        S.init_db()
+        with S.DB_LOCK:
+            r = S.DB.execute("SELECT detail_date FROM ml_billing_period_detail WHERE detail_id='1'").fetchone()
+            idx = S.DB.execute("SELECT name FROM sqlite_master WHERE type='index' "
+                               "AND name='idx_ml_billing_period_data'").fetchone()
+        self.assertEqual(r["detail_date"], "2026-09-01", "a data vem do raw_json já guardado")
+        self.assertIsNotNone(idx, "o índice é criado pela migração, depois da coluna existir")
+
+    def test_init_db_e_idempotente_depois_da_migracao(self) -> None:
+        self._banco_antigo()
+        S.init_db()
+        S.init_db()   # segundo boot não pode falhar nem duplicar
+        with S.DB_LOCK:
+            n = S.DB.execute("SELECT COUNT(*) c FROM ml_billing_period_detail").fetchone()["c"]
+        self.assertEqual(n, 1)
+
+
 class TesteFaturaDuplicada(TesteNoromak):
     """V18.36 — o Billing devolve os MESMOS lançamentos em BILL e em CREDIT_NOTE.
 
