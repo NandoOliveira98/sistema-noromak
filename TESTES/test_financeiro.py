@@ -337,6 +337,50 @@ class TesteFinanceiroCustoNoAtoDaVenda(TesteNoromak):
                          "o custo do vendedor é senders[].cost, nunca o gross_amount")
 
 
+class TesteRentabilidadeRemovida(TesteNoromak):
+    """V18.33 — a Rentabilidade ML saiu; o Financeiro ficou no lugar dela.
+
+    O que NÃO pode quebrar junto: o endereço antigo, os custos da gaveta do
+    Dashboard e o custo de reserva da Demanda de Compra.
+    """
+
+    def test_endereco_antigo_abre_o_financeiro(self) -> None:
+        import urllib.request
+        req = urllib.request.Request(self.url_base + "/rentabilidade-ml")
+        req.add_header("Cookie", self.cliente.cookie)
+        with urllib.request.urlopen(req, timeout=20) as r:
+            corpo = r.read().decode("utf-8", "replace")
+        self.assertEqual(r.status, 200)
+        self.assertIn("Noromak · Financeiro", corpo, "o link antigo tem que abrir a tela nova")
+
+    def test_api_antiga_nao_existe_mais(self) -> None:
+        status, _ = self.cliente.pedir("GET", "/api/rentabilidade-ml?date_from=2026-09-01&date_to=2026-09-30")
+        self.assertEqual(status, 404, "a rota da tela removida não pode continuar respondendo")
+
+    def test_gaveta_do_dashboard_usa_o_custo_do_ato_da_venda(self) -> None:
+        _vender("ml", "ML555", "AAA", 1, 100.0)
+        _custo_da_venda("ML555", "AAA", "AAA", 12.34, shipment_id="E555")
+        _frete_envio("E555", 7.66)
+        d = S.dashboard_produto_custos("AAA", dias=400)
+        self.assertTrue(d["ok"], d)
+        self.assertEqual(d["ml"]["tarifa"], 12.34)
+        self.assertEqual(d["ml"]["envios"], 7.66)
+        self.assertEqual(d["ml"]["com_dado"], 1)
+
+    def test_gaveta_ainda_le_o_historico_antigo(self) -> None:
+        # Pedido antigo, que só existe no snapshot da Rentabilidade removida.
+        _vender("ml", "ML444", "AAA", 1, 80.0)
+        with S.DB_LOCK:
+            S.DB.execute(
+                "INSERT OR REPLACE INTO ml_profitability_snapshot(order_id,sku,unit_cost,cost_source,sale_amount,"
+                "ml_fee,seller_shipping_cost,other_ml_cost,captured_at,raw_summary) VALUES(?,?,?,?,?,?,?,?,?,'')",
+                ("ML444", "AAA", 30.0, "Apollo", 80.0, 9.5, 4.5, 0.0, S.now_iso()))
+            S.DB.commit()
+        d = S.dashboard_produto_custos("AAA", dias=400)
+        self.assertEqual(d["ml"]["tarifa"], 9.5, "o histórico gravado não pode sumir com a remoção da tela")
+        self.assertEqual(d["ml"]["envios"], 4.5)
+
+
 class TesteFinanceiroRota(TesteNoromak):
     """A rota HTTP: só ADMIN, e devolve o mesmo cálculo."""
 

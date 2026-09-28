@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.32-FINANCEIRO-PAINEL-BI"
+APP_VERSION = "18.33-FINANCEIRO-SUBSTITUI-RENTABILIDADE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -12239,6 +12239,49 @@ def shopee_escrow_lookup(order_sn: str, permitir_api: bool = True) -> dict[str, 
         return None
 
 
+def _ml_custo_venda_por_pedido(order_id: str, sku: str = "") -> tuple[float, float, bool]:
+    """(tarifa, frete, tem_dado) de um pedido do ML.
+
+    V18.33: lê o custo capturado no ato da venda (V18.31). Quando o pedido é
+    antigo e só existe no snapshot da antiga Rentabilidade, usa o que está lá —
+    o histórico não se perde com a remoção daquela tela.
+    """
+    oid = str(order_id or "").strip()
+    if not oid:
+        return 0.0, 0.0, False
+    with DB_LOCK:
+        linhas = DB.execute(
+            "SELECT sale_fee, shipment_id FROM ml_venda_custo_v1830 WHERE order_id=?", (oid,)).fetchall()
+    tarifa = 0.0
+    envios: set[str] = set()
+    tem = False
+    for l in linhas:
+        v = _money_number(l["sale_fee"])
+        if v is not None:
+            tarifa += abs(v)
+            tem = True
+        if l["shipment_id"]:
+            envios.add(str(l["shipment_id"]))
+    frete = 0.0
+    for sid in envios:
+        with DB_LOCK:
+            row = DB.execute("SELECT cost FROM ml_frete_envio_v1830 WHERE shipment_id=? AND cost IS NOT NULL",
+                             (sid,)).fetchone()
+        if row is not None:
+            frete += float(row["cost"] or 0)
+            tem = True
+    if tem:
+        return round(tarifa, 2), round(frete, 2), True
+    with DB_LOCK:
+        snap = DB.execute(
+            "SELECT ml_fee, seller_shipping_cost FROM ml_profitability_snapshot WHERE order_id=? AND sku=?",
+            (oid, str(sku or "")),
+        ).fetchone()
+    if snap and (snap["ml_fee"] is not None or snap["seller_shipping_cost"] is not None):
+        return round(float(snap["ml_fee"] or 0), 2), round(float(snap["seller_shipping_cost"] or 0), 2), True
+    return 0.0, 0.0, False
+
+
 def dashboard_produto_custos(sku: str, dias: int = 30, max_shopee: int = 8) -> dict[str, Any]:
     """Custos reais de venda de UM SKU no período, separados por marketplace.
     ML: tarifa + envios (ml_profitability_snapshot). Shopee: comissão + serviço +
@@ -12269,15 +12312,14 @@ def dashboard_produto_custos(sku: str, dias: int = 30, max_shopee: int = 8) -> d
             ml["unidades"] += qty
             ml["pedidos"] += 1
             ml["vendas"] += amount
-            with DB_LOCK:
-                snap = DB.execute(
-                    "SELECT ml_fee, seller_shipping_cost FROM ml_profitability_snapshot WHERE order_id=? AND sku=?",
-                    (str(r["order_id"]), sku),
-                ).fetchone()
-            if snap and (snap["ml_fee"] is not None or snap["seller_shipping_cost"] is not None):
+            # V18.33: a fonte passou a ser o custo capturado no ato da venda
+            # (ml_venda_custo_v1830 + ml_frete_envio_v1830). O snapshot antigo da
+            # Rentabilidade fica como fallback do que já estava gravado.
+            tarifa, envio, tem = _ml_custo_venda_por_pedido(str(r["order_id"]), sku)
+            if tem:
                 ml["com_dado"] += 1
-                ml["tarifa"] += float(snap["ml_fee"] or 0)
-                ml["envios"] += float(snap["seller_shipping_cost"] or 0)
+                ml["tarifa"] += tarifa
+                ml["envios"] += envio
         elif mp == "shopee":
             shp["unidades"] += qty
             shp["pedidos"] += 1
@@ -14708,456 +14750,16 @@ def _ml_profitability_resolve_order(rec: dict[str, Any], cache: dict[str, dict[s
 
     return None, ("; ".join(tried) if tried else "order não localizada")
 
-def ml_profitability_payload(refresh: bool = False, limit: int = 2000, days: int = 30, date_from: str = "", date_to: str = "", refresh_offset: int = 0, refresh_batch: int = 40, tax_percent: float = 12.0, retry_pending: bool = False, retry_orders: str = "", status_filter: str = "valid") -> dict[str, Any]:
-    """Dashboard de lucro ML com vendas buscadas diretamente do marketplace.
+# V18.33: a tela Rentabilidade ML foi substituída pelo Financeiro (/financeiro).
+# ml_profitability_payload() e a rota /api/rentabilidade-ml foram removidas daqui.
+# O que sobrou continua em uso e NÃO pode ser apagado junto:
+#   _ml_profitability_recent_sales      -> sincronização de vendas (vendas_v1799)
+#   _ml_billing_* / _ml_seller_shipping_cost -> fatura e frete do Financeiro
+#   ml_profitability_snapshot (tabela)  -> histórico de custo por venda, ainda lido
+#     pelo custo de reserva da Demanda de Compra (_compras_custos_reserva).
+#     Ninguém mais escreve nela: tarifa e frete agora vêm de ml_venda_custo_v1830 e
+#     ml_frete_envio_v1830, capturados no ato da venda (V18.31).
 
-    O carregamento normal prioriza velocidade: lista as vendas e usa snapshots já
-    existentes. O botão Atualizar custos consulta Apollo e endpoints de custo do ML.
-    Valores ausentes permanecem nulos; nunca são estimados.
-    """
-    try:
-        tax_percent = max(0.0, min(100.0, float(tax_percent or 0.0)))
-    except Exception:
-        tax_percent = 12.0
-    tax_rate = tax_percent / 100.0
-
-    api_error = ""
-    try:
-        source = _ml_profitability_recent_sales(days=days, limit=limit, date_from=date_from, date_to=date_to, status_filter=status_filter)
-    except Exception as exc:
-        source = []
-        api_error = str(exc)
-
-    # A API do Mercado Livre é a fonte de verdade para período/status.
-    # Dados locais servem apenas para enriquecer orders que a API realmente retornou
-    # (kits, nome, SKU) ou como fallback quando a API estiver indisponível no filtro padrão.
-    local_all = _ml_profitability_local_sales(limit=max(limit, 300))
-    source_order_ids = {str(r.get("order_id") or "").strip() for r in source if str(r.get("order_id") or "").strip()}
-    def _local_date_iso(rec: dict[str, Any]) -> str:
-        raw = str(rec.get("date") or "").strip()[:10]
-        if not raw: return ""
-        for fmt in ("%Y-%m-%d", "%d/%m/%Y"):
-            try: return datetime.strptime(raw, fmt).strftime("%Y-%m-%d")
-            except Exception: pass
-        return raw if re.match(r"^\d{4}-\d{2}-\d{2}$", raw) else ""
-    def _local_in_period(rec: dict[str, Any]) -> bool:
-        d = _local_date_iso(rec)
-        if date_from and d and d < date_from: return False
-        if date_to and d and d > date_to: return False
-        return bool(d or not (date_from or date_to))
-    def _local_status_ok(rec: dict[str, Any]) -> bool:
-        filt = str(status_filter or "valid").lower()
-        st = str(rec.get("status") or "").lower()
-        if filt == "all": return True
-        if filt == "valid": return (not st) or st in ("paid", "pago", "aprovado")
-        if not st: return False
-        aliases = {"cancelled": ("cancelled","canceled","cancelado"), "paid": ("paid","pago","aprovado"), "partially_refunded": ("partially_refunded","reembolso parcial")}
-        return st in aliases.get(filt, (filt,))
-    if source:
-        # Dados locais apenas enriquecem a MESMA linha oficialmente retornada pela API.
-        # Não é permitido criar SKU/linha adicional a partir do CRM/histórico.
-        source_keys = {(str(r.get("order_id") or "").strip(), normalize(str(r.get("sku") or ""))) for r in source}
-        local = [r for r in local_all if (str(r.get("order_id") or "").strip(), normalize(str(r.get("sku") or ""))) in source_keys]
-        merge_records = source + local
-    else:
-        # V16.17: não usar conf_pedidos/histórico como fonte de faturamento.
-        # Esses registros podem representar despacho/conferência de outro dia.
-        # Se a API oficial não confirmar venda no período, a tela permanece sem vendas.
-        local = []
-        merge_records = []
-    by_key: dict[tuple[str, str], dict[str, Any]] = {}
-    for rec in merge_records:
-        oid = str(rec.get("order_id") or "").strip()
-        sku = str(rec.get("sku") or "").strip()
-        key = (oid, sku)
-        if not oid:
-            continue
-        if key not in by_key:
-            by_key[key] = dict(rec)
-        else:
-            dst = by_key[key]
-            for fld in ("product", "client", "date", "shipment_id", "pack_id", "status"):
-                if not dst.get(fld) and rec.get(fld):
-                    dst[fld] = rec.get(fld)
-            if not dst.get("qty") and rec.get("qty"):
-                dst["qty"] = rec.get("qty")
-            if dst.get("sale_amount_api") is None and rec.get("sale_amount_api") is not None:
-                dst["sale_amount_api"] = rec.get("sale_amount_api")
-            if not dst.get("order_summary") and rec.get("order_summary"):
-                dst["order_summary"] = rec.get("order_summary")
-            # Metadados locais do kit complementam a linha oficial do /orders/search.
-            if rec.get("is_kit"):
-                dst["is_kit"] = True
-                dst["kit_sku"] = rec.get("kit_sku") or dst.get("kit_sku") or dst.get("sku")
-                dst["kit_name"] = rec.get("kit_name") or dst.get("kit_name") or dst.get("product")
-                if rec.get("kit_components"):
-                    dst["kit_components"] = rec.get("kit_components")
-                if rec.get("qty"):
-                    dst["qty"] = rec.get("qty")
-
-    records = list(by_key.values())
-    records.sort(key=lambda r: str(r.get("date") or ""), reverse=True)
-    records = records[:max(1, int(limit))]
-
-    rows: list[dict[str, Any]] = []
-    kit_catalog_profit = _load_kit_catalog()
-    order_cache: dict[str, dict[str, Any]] = {}
-    apollo_cost_cache: dict[str, float | None] = {}
-    shipping_total_cache: dict[str, float | None] = {}
-    shipment_sale_totals: dict[str, float] = {}
-    shipment_line_counts: dict[str, int] = {}
-    for _rec in records:
-        _sid = str(_rec.get("shipment_id") or "").strip()
-        if not _sid:
-            continue
-        shipment_line_counts[_sid] = shipment_line_counts.get(_sid, 0) + 1
-        _v = _money_number(_rec.get("sale_amount_api"))
-        if _v is not None:
-            shipment_sale_totals[_sid] = shipment_sale_totals.get(_sid, 0.0) + max(0.0, _v)
-    # Atualização em lotes: a tela chama este endpoint repetidamente. Cada chamada
-    # processa somente uma fatia, evitando requests gigantes e timeout do proxy/nginx.
-    refresh_offset = max(0, int(refresh_offset or 0))
-    refresh_batch = max(10, min(100, int(refresh_batch or 40)))
-    refresh_pool = records
-    retry_order_set = {x.strip() for x in str(retry_orders or "").split(",") if x.strip()}
-    if refresh and retry_order_set:
-        refresh_pool = [r for r in records if str(r.get("order_id") or "").strip() in retry_order_set]
-    elif refresh and retry_pending:
-        pending_pool: list[dict[str, Any]] = []
-        for _pr in records:
-            _poid = str(_pr.get("order_id") or "")
-            _psku = str(_pr.get("sku") or "")
-            with DB_LOCK:
-                _prow = DB.execute("SELECT unit_cost,sale_amount,ml_fee,seller_shipping_cost FROM ml_profitability_snapshot WHERE order_id=? AND sku=?", (_poid, _psku)).fetchone()
-            _pd = dict(_prow) if _prow else {}
-            _sale = _money_number(_pd.get("sale_amount"))
-            if _sale is None:
-                _sale = _money_number(_pr.get("sale_amount_api"))
-            _fee = _money_number(_pd.get("ml_fee"))
-            _ship = _money_number(_pd.get("seller_shipping_cost"))
-            _unit = _money_number(_pd.get("unit_cost"))
-            if _sale is None or _unit is None or _fee is None or _fee <= 0 or _ship is None:
-                pending_pool.append(_pr)
-        refresh_pool = pending_pool
-    refresh_records = refresh_pool[refresh_offset:refresh_offset + refresh_batch] if refresh else []
-    refresh_keys = {(str(r.get("order_id") or ""), str(r.get("sku") or "")) for r in refresh_records}
-
-    billing_map: dict[str, dict[str, Any]] = {}
-    # Primeiro usa a conciliação persistida do Billing completo do período.
-    for _r in records:
-        _oid = str(_r.get("order_id") or "").strip()
-        if not _oid: continue
-        _con = _ml_billing_v1513_consolidate(_oid, str(_r.get("pack_id") or ""))
-        if str(_con.get("status") or "") != "missing":
-            billing_map[_oid] = _con
-        else:
-            _cached = _ml_billing_cached(_oid)
-            if _cached: billing_map[_oid] = _cached
-
-    billing_sync_meta: dict[str, Any] = {}
-    if refresh and refresh_records:
-        try:
-            _, _seller_billing = ml_access_token()
-            # O primeiro lote força o mês atual selecionado; lotes seguintes usam TTL
-            # e só baixam períodos ainda não sincronizados.
-            billing_sync_meta = _ml_billing_v1513_sync_for_records(
-                refresh_records, str(_seller_billing or ""), force=(refresh_offset == 0)
-            )
-            for _r in refresh_records:
-                _oid = str(_r.get("order_id") or "").strip()
-                if _oid:
-                    billing_map[_oid] = _ml_billing_v1513_consolidate(_oid, str(_r.get("pack_id") or ""))
-        except Exception as _exc:
-            billing_sync_meta = {"ok": False, "errors": 1, "diagnostic": str(_exc)[:700]}
-
-    for rec in records:
-        oid, sku = rec["order_id"], rec.get("sku") or ""
-        with DB_LOCK:
-            snap_row = DB.execute(
-                "SELECT * FROM ml_profitability_snapshot WHERE order_id=? AND sku=?", (oid, sku)
-            ).fetchone()
-        snap = dict(snap_row) if snap_row else {}
-
-        # Sempre podemos usar o valor da linha devolvido pelo próprio /orders/search
-        # sem fazer chamadas adicionais.
-        # O valor oficial da order atual sempre prevalece sobre snapshots antigos.
-        # Isso corrige caches gravados antes do ajuste de descontos/total_amount.
-        if rec.get("sale_amount_api") is not None:
-            snap["sale_amount"] = rec.get("sale_amount_api")
-        if snap.get("ml_fee") is None and rec.get("line_fee_api") is not None:
-            snap["ml_fee"] = rec.get("line_fee_api")
-
-        do_refresh = refresh and (str(oid), str(sku)) in refresh_keys
-        if do_refresh:
-            order = rec.get("order_summary") if isinstance(rec.get("order_summary"), dict) else None
-            order_resolution = "orders/search" if order is not None else ""
-            if order is None:
-                order, order_resolution = _ml_profitability_resolve_order(rec, order_cache)
-
-            # Se a linha oficial chegou sem SkuKitOrigem/expansão local, tenta
-            # reconhecer diretamente pelo Cadastro de Kits. Isso cobre SKUs do ML
-            # com espaços/hífens/pontos diferentes do cadastro.
-            if not rec.get("kit_components"):
-                kit_hit = _kit_catalog_lookup(kit_catalog_profit, rec.get("kit_sku") or rec.get("sku"))
-                # Alguns anúncios usam o próprio SKU para indicar quantidade do kit
-                # (ex.: KIT3-KS001 = 3 unidades de KS001). Só aplica quando não há
-                # composição explícita no Cadastro de Kits.
-                if not kit_hit:
-                    kit_hit = _infer_quantity_kit_from_sku(rec.get("kit_sku") or rec.get("sku"))
-                if not kit_hit and isinstance(order, dict):
-                    for oi in (order.get("order_items") or []):
-                        if not isinstance(oi, dict):
-                            continue
-                        candidate = _ml_order_item_sku(oi)
-                        kit_hit = _kit_catalog_lookup(kit_catalog_profit, candidate)
-                        if not kit_hit:
-                            kit_hit = _infer_quantity_kit_from_sku(candidate)
-                        if kit_hit:
-                            break
-                if kit_hit and kit_hit.get("ativo", True):
-                    rec["is_kit"] = True
-                    rec["kit_sku"] = str(kit_hit.get("sku_kit") or rec.get("sku") or "").strip()
-                    rec["kit_name"] = str(kit_hit.get("nome") or rec.get("product") or rec.get("kit_sku") or "").strip()
-                    rec["product"] = rec.get("kit_name") or rec.get("product")
-                    rec["kit_components"] = [
-                        {
-                            "sku": str(comp.get("sku") or "").strip(),
-                            "qty_per_kit": max(1, int(comp.get("quantidade") or 1)),
-                            "total_qty": max(1, int(comp.get("quantidade") or 1)) * max(1, int(float(rec.get("qty") or 1))),
-                            "product": "",
-                        }
-                        for comp in (kit_hit.get("componentes") or [])
-                        if str(comp.get("sku") or "").strip()
-                    ]
-
-            unit_cost = _money_number(snap.get("unit_cost"))
-            cost_source = str(snap.get("cost_source") or "")
-            kit_cost_missing: list[str] = []
-            if rec.get("is_kit") and rec.get("kit_components"):
-                kit_unit_total = 0.0
-                kit_ok = True
-                for comp in rec.get("kit_components") or []:
-                    csku = str(comp.get("sku") or "").strip()
-                    if not csku:
-                        continue
-                    cache_key = normalize(csku)
-                    if cache_key not in apollo_cost_cache:
-                        try:
-                            cc = crm_cost_lookup(csku, "rentabilidade-ml-kit")
-                            apollo_cost_cache[cache_key] = _money_number(cc.get("custo_medio"))
-                        except Exception:
-                            apollo_cost_cache[cache_key] = None
-                    cunit = apollo_cost_cache.get(cache_key)
-                    if cunit is None:
-                        kit_ok = False
-                        kit_cost_missing.append(csku)
-                        continue
-                    try:
-                        per_kit = max(1, int(float(comp.get("qty_per_kit") or 1)))
-                    except Exception:
-                        per_kit = 1
-                    kit_unit_total += cunit * per_kit
-                if kit_ok and kit_unit_total > 0:
-                    unit_cost = round(kit_unit_total, 4)
-                    cost_source = "Apollo · componentes do kit"
-            elif unit_cost is None and sku:
-                try:
-                    cache_key = normalize(sku)
-                    if cache_key not in apollo_cost_cache:
-                        c = crm_cost_lookup(sku, "rentabilidade-ml")
-                        apollo_cost_cache[cache_key] = _money_number(c.get("custo_medio"))
-                    unit_cost = apollo_cost_cache.get(cache_key)
-                    cost_source = "Apollo" if unit_cost is not None else cost_source
-                except Exception:
-                    pass
-
-            sale_amount = _money_number(rec.get("sale_amount_api"))
-            ml_fee = _money_number(snap.get("ml_fee"))
-            billing = billing_map.get(str(oid)) or {}
-            billing_fee = _money_number(billing.get("sale_fee"))
-            billing_other = _money_number(billing.get("other_cost"))
-            billing_status = str(billing.get("status") or "")
-            billing_diag = str(billing.get("diagnostic") or "")
-            # Billing é a fonte de conciliação financeira. Orders permanece apenas como fallback.
-            if billing_fee is not None:
-                ml_fee = billing_fee
-            # Em refresh o frete é recalculado pelo shipment para corrigir snapshots
-            # antigos que podiam repetir o custo total em cada item da mesma venda.
-            ship_cost = None
-            if isinstance(order, dict):
-                # Recalcula valor e tarifa da linha usando o item oficial da order.
-                # Para kit expandido, sku é SkuKitOrigem e volta a casar com o SKU vendido no ML.
-                detailed_items = order.get("order_items") if isinstance(order.get("order_items"), list) else []
-                matching = []
-                for doi in detailed_items:
-                    if not isinstance(doi, dict):
-                        continue
-                    dsku = str(_ml_order_item_sku(doi) or "").strip()
-                    if sku and normalize(dsku) == normalize(sku):
-                        matching.append(doi)
-                # Pedidos legados podem ter SKU local diferente do SKU retornado pela API;
-                # se a order possui uma única linha, ela é inequivocamente a venda correta.
-                if not matching and len(detailed_items) == 1:
-                    matching = [detailed_items[0]]
-                if sale_amount is None and len(matching) == 1:
-                    _up = _money_number(matching[0].get("unit_price"))
-                    try:
-                        _mq = max(1, int(float(matching[0].get("quantity") or 1)))
-                    except Exception:
-                        _mq = 1
-                    if _up is not None:
-                        sale_amount = _up * _mq
-                # Só usa total da order quando ela realmente possui uma única linha;
-                # evita repetir o faturamento inteiro em cada item de venda múltipla.
-                if sale_amount is None and len(detailed_items) <= 1:
-                    sale_amount = _ml_order_effective_sale(order)[0]
-                if billing_fee is None and len(matching) == 1:
-                    detailed_fee = _ml_item_fee(matching[0])
-                    if detailed_fee is not None:
-                        ml_fee = detailed_fee
-                if billing_fee is None and ml_fee is None:
-                    total_fee = _ml_order_marketplace_fee(order)
-                    if total_fee is not None:
-                        # Para order de uma linha a tarifa total pertence integralmente à linha.
-                        if len(detailed_items) <= 1:
-                            ml_fee = total_fee
-                        else:
-                            order_total = sum((_money_number(x.get("unit_price")) or 0) * max(1, int(float(x.get("quantity") or 1))) for x in detailed_items if isinstance(x, dict))
-                            if sale_amount is not None and order_total > 0:
-                                ml_fee = total_fee * (sale_amount / order_total)
-                if not rec.get("date"):
-                    rec["date"] = (_ml_order_effective_sale(order)[1].isoformat() if _ml_order_effective_sale(order)[1] else str(order.get("date_closed") or ""))
-                if not rec.get("client"):
-                    rec["client"] = _ml_billing_name(order)
-                if not rec.get("shipment_id"):
-                    sh = order.get("shipping") if isinstance(order.get("shipping"), dict) else {}
-                    rec["shipment_id"] = str(sh.get("id") or "")
-            if rec.get("shipment_id"):
-                sid = str(rec.get("shipment_id"))
-                if sid not in shipping_total_cache:
-                    try:
-                        _, seller_id_for_cost = ml_access_token()
-                    except Exception:
-                        seller_id_for_cost = ""
-                    shipping_total_cache[sid] = _ml_seller_shipping_cost(sid, str(seller_id_for_cost or ""))
-                shipping_total = shipping_total_cache.get(sid)
-                if shipping_total is not None:
-                    line_sale = _money_number(sale_amount)
-                    group_sale = shipment_sale_totals.get(sid, 0.0)
-                    if line_sale is not None and group_sale > 0:
-                        ship_cost = shipping_total * max(0.0, line_sale) / group_sale
-                    else:
-                        ship_cost = shipping_total / max(1, shipment_line_counts.get(sid, 1))
-
-            captured = now_iso()
-            with DB_LOCK:
-                DB.execute(
-                    """INSERT INTO ml_profitability_snapshot
-                    (order_id,sku,unit_cost,cost_source,sale_amount,ml_fee,seller_shipping_cost,other_ml_cost,captured_at,raw_summary)
-                    VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(order_id,sku) DO UPDATE SET
-                    unit_cost=CASE WHEN excluded.unit_cost IS NOT NULL THEN excluded.unit_cost ELSE ml_profitability_snapshot.unit_cost END,
-                    cost_source=CASE WHEN excluded.unit_cost IS NOT NULL THEN excluded.cost_source ELSE ml_profitability_snapshot.cost_source END,
-                    sale_amount=COALESCE(excluded.sale_amount,ml_profitability_snapshot.sale_amount),
-                    ml_fee=COALESCE(excluded.ml_fee,ml_profitability_snapshot.ml_fee),
-                    seller_shipping_cost=COALESCE(excluded.seller_shipping_cost,ml_profitability_snapshot.seller_shipping_cost),
-                    other_ml_cost=COALESCE(excluded.other_ml_cost,ml_profitability_snapshot.other_ml_cost),
-                    captured_at=excluded.captured_at,raw_summary=excluded.raw_summary""",
-                    (oid, sku, unit_cost, cost_source, sale_amount, ml_fee, ship_cost,
-                     billing_other if billing_other is not None else _money_number(snap.get("other_ml_cost")), captured,
-                     json.dumps({"billing_status": billing_status, "billing_diagnostic": billing_diag, "billing_source": "billing/period/details + order/details fallback" if billing else "", "order_resolution": order_resolution, "order_resolved": bool(order)}, ensure_ascii=False)),
-                )
-                DB.commit()
-                snap_row = DB.execute(
-                    "SELECT * FROM ml_profitability_snapshot WHERE order_id=? AND sku=?", (oid, sku)
-                ).fetchone()
-                snap = dict(snap_row) if snap_row else snap
-
-        qty = rec.get("qty") or 1
-        try:
-            qty = max(1, int(float(qty)))
-        except Exception:
-            qty = 1
-        unit = _money_number(snap.get("unit_cost"))
-        product_cost = unit * qty if unit is not None else None
-        sale = _money_number(rec.get("sale_amount_api"))
-        if sale is None:
-            sale = _money_number(snap.get("sale_amount"))
-        fee = _money_number(snap.get("ml_fee"))
-        shipping = _money_number(snap.get("seller_shipping_cost"))
-        other = _money_number(snap.get("other_ml_cost"))
-        tax_amount = (sale * tax_rate) if sale is not None else None
-        known_costs = sum(v for v in (product_cost, fee, shipping, other, tax_amount) if v is not None)
-        billing = billing_map.get(str(oid)) or {}
-        billing_status = str(billing.get("status") or "")
-        billing_diag = str(billing.get("diagnostic") or "")
-        # Zero pode ser um valor oficial; ausência deve permanecer None.
-        fee_confirmed = billing_status == "ok" or fee is not None
-        complete = sale is not None and product_cost is not None and fee_confirmed and shipping is not None
-        pending_reasons: list[str] = []
-        if sale is None: pending_reasons.append("valor da venda não localizado na Order")
-        if product_cost is None: pending_reasons.append("custo Apollo não localizado")
-        if not fee_confirmed: pending_reasons.append("tarifa ML não conciliada")
-        if shipping is None: pending_reasons.append("frete do vendedor não conciliado")
-        if billing_diag and not complete and "não retornou" in billing_diag.lower(): pending_reasons.append("Billing ainda sem lançamento para a order/pack")
-        profit = (sale - known_costs) if sale is not None and product_cost is not None else None
-        margin = (profit / sale * 100) if profit is not None and sale else None
-        rows.append({
-            "order_id": oid,
-            "pack_id": str(rec.get("pack_id") or ""),
-            "sku": sku,
-            "product": str(rec.get("product") or ""),
-            "client": str(rec.get("client") or ""),
-            "status": str(rec.get("status") or ""),
-            "date": str(rec.get("date") or ""),
-            "shipment_id": str(rec.get("shipment_id") or ""),
-            "qty": qty,
-            "unit_cost": unit,
-            "product_cost": product_cost,
-            "sale_amount": sale,
-            "ml_fee": fee,
-            "shipping_cost": shipping,
-            "other_ml_cost": other,
-            "tax_percent": tax_percent,
-            "tax_amount": tax_amount,
-            "profit": profit,
-            "margin": margin,
-            "cost_complete": complete,
-            "captured_at": snap.get("captured_at") or "",
-            "billing_status": billing_status,
-            "billing_diagnostic": billing_diag,
-            "fee_source": (str(billing.get("source") or "") if _money_number(billing.get("sale_fee")) is not None and billing.get("source") else ("Billing período ML" if _money_number(billing.get("sale_fee")) is not None else ("Orders ML" if fee is not None and fee > 0 else "Pendente de conciliação"))),
-            "is_kit": bool(rec.get("is_kit")),
-            "kit_sku": str(rec.get("kit_sku") or ""),
-            "kit_name": str(rec.get("kit_name") or ""),
-            "kit_components": rec.get("kit_components") if isinstance(rec.get("kit_components"), list) else [],
-            "cost_source": str(snap.get("cost_source") or ""),
-            "pending_reasons": pending_reasons,
-        })
-
-    return {
-        "ok": True,
-        "rows": rows,
-        "count": len(rows),
-        "refreshed": refresh,
-        "source": "mercadolivre" if source else "local",
-        "api_warning": api_error,
-        "date_from": date_from,
-        "date_to": date_to,
-        "refresh_offset": refresh_offset,
-        "refresh_batch": refresh_batch,
-        "refresh_processed": len(refresh_records) if refresh else 0,
-        "refresh_total": len(refresh_pool) if refresh else len(records),
-        "refresh_done": (not refresh) or (refresh_offset + len(refresh_records) >= len(refresh_pool)),
-        "refresh_next_offset": (refresh_offset + len(refresh_records)) if refresh else 0,
-        "retry_pending": bool(retry_pending),
-        "retry_orders": sorted(retry_order_set),
-        "tax_percent": tax_percent,
-        "status_filter": str(status_filter or "valid"),
-        "orders_count": len({str(r.get("order_id") or "") for r in rows if str(r.get("order_id") or "")}),
-        "units_count": sum(int(r.get("qty") or 0) for r in rows),
-        "gross_sales": round(sum((_money_number(r.get("sale_amount")) or 0.0) for r in rows), 2),
-        "billing_sync": billing_sync_meta,
-    }
 
 class AppHandler(BaseHTTPRequestHandler):
     server_version = "NoromakExpedicao/16.16"
@@ -15480,42 +15082,6 @@ class AppHandler(BaseHTTPRequestHandler):
                 except Exception as exc:
                     self.send_json({"ok": False, "error": str(exc)}, 500)
             return
-        if path == "/api/rentabilidade-ml":
-            ctx = self.auth(admin_only=True)
-            if ctx is not None:
-                refresh = str((query.get("refresh") or [""])[0]).lower() in ("1", "true", "sim")
-                try:
-                    days = max(1, min(365, int((query.get("days") or ["30"])[0] or 30)))
-                except Exception:
-                    days = 30
-                try:
-                    limit = max(1, min(5000, int((query.get("limit") or ["2000"])[0] or 2000)))
-                except Exception:
-                    limit = 2000
-                date_from = str((query.get("date_from") or [""])[0] or "").strip()[:10]
-                date_to = str((query.get("date_to") or [""])[0] or "").strip()[:10]
-                try:
-                    refresh_offset = max(0, int((query.get("refresh_offset") or ["0"])[0] or 0))
-                except Exception:
-                    refresh_offset = 0
-                try:
-                    refresh_batch = max(10, min(100, int((query.get("refresh_batch") or ["40"])[0] or 40)))
-                except Exception:
-                    refresh_batch = 40
-                try:
-                    tax_percent = max(0.0, min(100.0, float((query.get("tax_percent") or ["12"])[0] or 12)))
-                except Exception:
-                    tax_percent = 12.0
-                retry_pending = str((query.get("retry_pending") or [""])[0]).lower() in ("1", "true", "sim")
-                retry_orders = str((query.get("retry_orders") or [""])[0] or "").strip()[:1200]
-                status_filter = str((query.get("status_filter") or ["valid"])[0] or "valid").strip().lower()
-                if status_filter not in ("valid", "paid", "partially_refunded", "cancelled", "all"):
-                    status_filter = "valid"
-                try:
-                    self.send_json(ml_profitability_payload(refresh=refresh, limit=limit, days=days, date_from=date_from, date_to=date_to, refresh_offset=refresh_offset, refresh_batch=refresh_batch, tax_percent=tax_percent, retry_pending=retry_pending, retry_orders=retry_orders, status_filter=status_filter))
-                except Exception as exc:
-                    self.send_json({"ok": False, "error": str(exc)}, 500)
-            return
         if path == "/api/precificador/atualizar-tudo/status":
             ctx = self.auth()
             if ctx is None:
@@ -15834,6 +15400,8 @@ class AppHandler(BaseHTTPRequestHandler):
             "/compras": "admin", "/compras/": "admin", "/compras.html": "admin",
             # V18.30: Financeiro (faturamento, gastos e lucro).
             "/financeiro": "admin", "/financeiro/": "admin", "/financeiro.html": "admin",
+            # V18.33: a Rentabilidade ML virou o Financeiro; o endereço antigo abre a tela nova.
+            "/rentabilidade-ml": "admin", "/rentabilidade-ml/": "admin", "/rentabilidade-ml.html": "admin",
             "/estacao-impressao": "estacao", "/estacao-impressao/": "estacao", "/estacao-impressao.html": "estacao",
             "/print-station": "estacao", "/print-station/": "estacao",
             "/precificador": "precificador", "/precificador/": "precificador", "/precificador.html": "precificador",
@@ -18322,11 +17890,11 @@ class AppHandler(BaseHTTPRequestHandler):
             "/financeiro": "financeiro.html",
             "/financeiro/": "financeiro.html",
             "/financeiro.html": "financeiro.html",
+            "/rentabilidade-ml": "financeiro.html",
+            "/rentabilidade-ml/": "financeiro.html",
+            "/rentabilidade-ml.html": "financeiro.html",
             "/promocoes-ml/": "admin.html",
             "/promocoes-ml.html": "admin.html",
-            "/rentabilidade-ml": "rentabilidade-ml.html",
-            "/rentabilidade-ml/": "rentabilidade-ml.html",
-            "/rentabilidade-ml.html": "rentabilidade-ml.html",
             "/promocoes": "promocoes.html",
             "/promocoes/": "promocoes.html",
             "/promocoes.html": "promocoes.html",

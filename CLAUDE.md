@@ -77,8 +77,9 @@ APP/
   conferencia.html   ~199KB  fila de conferência e bipagem
   precificador.html  ~632KB  custo, margem, preço ideal, curva ABC
   estacao-impressao.html     estação Zebra / QZ Tray
-  financeiro.html            faturamento, gastos e lucro (V18.30)
-  rentabilidade-ml.html, analise-full.html, compras.html (Demanda de Compra)
+  financeiro.html            faturamento, gastos e lucro (V18.30; substituiu a
+                             Rentabilidade ML na V18.33)
+  analise-full.html, compras.html (Demanda de Compra)
                              (Central de Pendências e Promoções ML removidas na V17.99;
                              /pendencias e /promocoes-ml abrem o Admin)
   shared-storage.js          cache versionado + polling (CRÍTICO)
@@ -252,7 +253,7 @@ sugestão de transferência Ribeirão/Bauru e Lista de separação por prateleir
 compra em aberto, custo e marca em lote. A chave do Noromak **só** tem `/custo` e `/estoque`;
 não usar outras rotas do Apollo sem acordo com a equipe dele.
 
-### Financeiro — faturamento, gastos e lucro (V18.30 a V18.32)
+### Financeiro — faturamento, gastos e lucro (V18.30 a V18.33)
 `APP/financeiro.html` (`/financeiro`, menu Comercial, só **admin**; leitura no padrão Power BI —
 canvas com tiles, slicer de filtros, cards de KPI, waterfall, combo por dia, rosca e abas de página). Junta o que já existia:
 faturamento de `vendas_v1799` (ML + Shopee), custo do produto pela mesma regra da Demanda de
@@ -274,6 +275,11 @@ as duas **nunca somam**, e a diferença entre elas aparece na tela (`cobertura.d
 O que não é conhecido fica **nulo e visível** (`cobertura.faturamento_sem_custo` /
 `sem_taxa`): nada é estimado. `GET /api/financeiro/resumo`, `POST /api/financeiro/sincronizar`
 (fatura + escrow pendente + Ads, em segundo plano).
+**V18.33:** substituiu a **Rentabilidade ML** — `ml_profitability_payload()`, a rota
+`/api/rentabilidade-ml` e `APP/rentabilidade-ml.html` foram removidas, e o endereço antigo
+abre o Financeiro. `ml_profitability_snapshot` **não é mais alimentada**, mas continua sendo
+lida (custo de reserva da Demanda de Compra e histórico da gaveta do Dashboard, via
+`_ml_custo_venda_por_pedido`, que prefere o custo capturado no ato da venda).
 
 ### Publicidade / Mercado Ads (V18.30)
 `GET /advertising/advertisers?product_id=PADS` (`Api-Version: 1`) → `advertiser_id`;
