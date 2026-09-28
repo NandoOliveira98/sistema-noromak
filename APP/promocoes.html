@@ -529,11 +529,16 @@ function pintarPaginacao(){
 $("antes").onclick=()=>{ OFFSET=Math.max(0,OFFSET-40); carregar(); };
 $("depois").onclick=()=>{ OFFSET=OFFSET+40; carregar(); };
 
+// V18.41: se a pessoa busca enquanto a página ainda carrega, a resposta mais
+// antiga chegava depois e apagava o resultado da busca. Só a última vale.
+let SEQ=0;
 async function carregar(){
+  const minha=++SEQ;
   $("tb").innerHTML='<tr><td colspan="11" class="vazio">'+(BUSCA?'Procurando “'+BUSCA.replace(/</g,"&lt;")+'” em todos os anúncios…':'Consultando o Mercado Livre…')+'</td></tr>';
   limparAviso();
   try{
     const d=await api("/api/precificador/promocoes?offset="+OFFSET+(BUSCA?"&q="+encodeURIComponent(BUSCA):""));
+    if(minha!==SEQ) return;   // chegou uma consulta mais nova
     ITENS=d.itens||[];
     TOTAL=d.total_anuncios||0; OFFSET=d.offset||0;
     if(d.skus&&d.skus.length){
@@ -548,6 +553,7 @@ async function carregar(){
     if(!ITENS.length) $("tb").innerHTML='<tr><td colspan="11" class="vazio">'+(BUSCA?'Nenhum anúncio com “'+BUSCA.replace(/</g,"&lt;")+'” (procurei em todos, pelo número do MLB, SKU e título).':'Nenhum anúncio ativo encontrado.')+'</td></tr>';
     pintarPaginacao();
   }catch(e){
+    if(minha!==SEQ) return;
     $("tb").innerHTML='<tr><td colspan="11" class="vazio">Não foi possível carregar: '+e.message+'</td></tr>';
   }
 }
