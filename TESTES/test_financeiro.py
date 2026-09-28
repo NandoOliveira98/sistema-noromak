@@ -337,6 +337,120 @@ class TesteFinanceiroCustoNoAtoDaVenda(TesteNoromak):
                          "o custo do vendedor é senders[].cost, nunca o gross_amount")
 
 
+class TesteFaturaMLReal(TesteNoromak):
+    """V18.34 — os sub_type que a fatura do MLB usa de verdade.
+
+    Levantados na conta 224625106 em 28/09/2026. A regra antiga procurava CV/BV
+    e textos como "cobrança por venda"; a fatura diz "Custo por vender no
+    Mercado Livre" com sub_type CVVML. O efeito em produção foi a tarifa inteira
+    (R$ 11,4 mil no mês) cair em "outros" e a margem aparecer inflada.
+    """
+
+    def cenario(self) -> None:
+        _custos_precificador({"AAA": 40.0})
+        _vender("ml", "ML100", "AAA", 1, 200.0)
+
+    def test_custo_por_vender_e_tarifa(self) -> None:
+        self.cenario()
+        _lancamento_fatura("ML100", 24.0, sub_type="CVVML", transacao="Custo por vender no Mercado Livre", detail_id="a")
+        _lancamento_fatura("ML100", 3.5, sub_type="CVVPRC", transacao="Custo por cobrar no Mercado Pago", detail_id="b")
+        _lancamento_fatura("ML100", 0.5, sub_type="CVVFNU", transacao="Taxa de recebimento", detail_id="c")
+        t = S.financeiro_payload("2026-09-01", "2026-09-30")["totais"]
+        self.assertEqual(t["taxas"], 28.0, "CVVML + CVVPRC + CVVFNU formam a tarifa de venda")
+        self.assertEqual(t["outros"], 0.0, "tarifa não pode ficar escondida em 'outros'")
+
+    def test_cancelamento_abate_a_tarifa(self) -> None:
+        self.cenario()
+        _lancamento_fatura("ML100", 24.0, sub_type="CVVML", transacao="Custo por vender no Mercado Livre", detail_id="a")
+        _lancamento_fatura("ML100", 24.0, sub_type="BVVML", transacao="Cancelamento do Custo por vender",
+                           credito=True, detail_id="b")
+        t = S.financeiro_payload("2026-09-01", "2026-09-30")["totais"]
+        self.assertEqual(t["taxas"], 0.0, "venda cancelada devolve a tarifa")
+
+    def test_envio_extra_e_frete(self) -> None:
+        self.cenario()
+        _lancamento_fatura("ML100", 20.0, sub_type="CVVML", transacao="Custo por vender no Mercado Livre", detail_id="a")
+        _lancamento_fatura("ML100", 12.0, sub_type="CXDE", transacao="Tarifa de envio extra ou intermunicipal", detail_id="b")
+        _lancamento_fatura("ML100", 7.0, sub_type="CFFE", transacao="Tarifa de envio extra ou intermunicipal", detail_id="c")
+        t = S.financeiro_payload("2026-09-01", "2026-09-30")["totais"]
+        self.assertEqual(t["frete"], 19.0)
+        self.assertEqual(t["taxas"], 20.0)
+
+    def test_taxa_de_parcelamento_nao_e_custo(self) -> None:
+        # O comprador paga o acréscimo; o ML mostra os dois somados em R$ 0,00.
+        self.cenario()
+        _lancamento_fatura("ML100", 20.0, sub_type="CVVML", transacao="Custo por vender no Mercado Livre", detail_id="a")
+        _lancamento_fatura("ML100", 15.0, sub_type="CFONPN", transacao="Taxa de parcelamento (equivalente ao acrescimo)", detail_id="b")
+        t = S.financeiro_payload("2026-09-01", "2026-09-30")["totais"]
+        self.assertEqual(t["outros"], 0.0, "parcelamento se anula com o acréscimo do comprador")
+        self.assertEqual(t["taxas"], 20.0)
+
+    def test_armazenagem_full_e_custo(self) -> None:
+        self.cenario()
+        _lancamento_fatura("ML100", 20.0, sub_type="CVVML", transacao="Custo por vender no Mercado Livre", detail_id="a")
+        _lancamento_fatura("ML100", 1.5, sub_type="CFWA", transacao="Tarifa pelo servico de armazenamento Full", detail_id="b")
+        t = S.financeiro_payload("2026-09-01", "2026-09-30")["totais"]
+        self.assertEqual(t["outros"], 1.5, "armazenagem Full é custo real, fica em outros")
+
+
+class TesteAdsDaFatura(TesteNoromak):
+    """V18.34 — PADS: o gasto com Ads está na fatura, pedido a pedido."""
+
+    def cenario(self) -> None:
+        _custos_precificador({"AAA": 40.0})
+        _vender("ml", "ML200", "AAA", 1, 200.0)
+        _lancamento_fatura("ML200", 20.0, sub_type="CVVML", transacao="Custo por vender no Mercado Livre", detail_id="cv")
+        _lancamento_fatura("ML200", 9.0, sub_type="PADS",
+                           transacao="Tarifa por campanha de publicidade de Product Ads", detail_id="ads")
+
+    def test_pads_vira_ads_quando_a_api_nao_responde(self) -> None:
+        self.cenario()
+        d = S.financeiro_payload("2026-09-01", "2026-09-30")
+        self.assertEqual(d["ads"]["fonte"], "fatura")
+        self.assertEqual(d["totais"]["ads"], 9.0)
+        self.assertEqual(d["totais"]["outros"], 0.0, "publicidade não pode ficar dentro de 'outros'")
+        # 200 - 40 (custo) - 20 (tarifa) - 9 (ads) - 24 (imposto)
+        self.assertEqual(d["totais"]["lucro_liquido"], 107.0)
+
+    def test_ads_da_fatura_chega_no_produto_e_no_pedido(self) -> None:
+        self.cenario()
+        d = S.financeiro_payload("2026-09-01", "2026-09-30")
+        self.assertEqual(next(x for x in d["por_sku"] if x["sku"] == "AAA")["ads"], 9.0)
+        self.assertEqual(next(x for x in d["pedidos"] if x["order_id"] == "ML200")["ads"], 9.0)
+
+    def test_api_tem_prioridade_e_nao_soma_com_a_fatura(self) -> None:
+        self.cenario()
+        _ads("2026-09-10", 5.0)          # API de Publicidade respondeu
+        d = S.financeiro_payload("2026-09-01", "2026-09-30")
+        self.assertEqual(d["ads"]["fonte"], "api")
+        self.assertEqual(d["totais"]["ads"], 5.0, "uma fonte OU a outra; somar contaria o Ads duas vezes")
+
+
+class TesteParcialNaoEZero(TesteNoromak):
+    """V18.34 — R$ 0,00 só quando é zero de verdade; senão, pendência visível."""
+
+    def test_frete_desconhecido_aparece_como_pendencia(self) -> None:
+        _custos_precificador({"AAA": 40.0})
+        _vender("ml", "ML300", "AAA", 1, 100.0)
+        _custo_da_venda("ML300", "AAA", "AAA", 12.0)   # tarifa sim, envio nenhum
+        d = S.financeiro_payload("2026-09-01", "2026-09-30")
+        self.assertEqual(d["totais"]["frete"], 0.0)
+        self.assertEqual(d["cobertura"]["faturamento_sem_frete"], 100.0,
+                         "sem frete conciliado o faturamento tem que entrar na pendência")
+        linha = next(x for x in d["por_sku"] if x["sku"] == "AAA")
+        self.assertEqual(linha["sem_frete"], 100.0)
+        self.assertEqual(linha["sem_taxa"], 0.0)
+
+    def test_frete_zero_de_verdade_nao_vira_pendencia(self) -> None:
+        _custos_precificador({"AAA": 40.0})
+        _vender("ml", "ML301", "AAA", 1, 100.0)
+        _custo_da_venda("ML301", "AAA", "AAA", 12.0, shipment_id="E301")
+        _frete_envio("E301", 0.0)      # o ML respondeu: o vendedor não pagou envio
+        d = S.financeiro_payload("2026-09-01", "2026-09-30")
+        self.assertEqual(d["cobertura"]["faturamento_sem_frete"], 0.0,
+                         "envio consultado e sem custo é zero de verdade")
+
+
 class TesteRentabilidadeRemovida(TesteNoromak):
     """V18.33 — a Rentabilidade ML saiu; o Financeiro ficou no lugar dela.
 

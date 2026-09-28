@@ -223,6 +223,13 @@ button,input,select{font:inherit;color:inherit}
   const num = (v) => Number(v || 0).toLocaleString("pt-BR");
   const diaBR = (d) => String(d || "").slice(8, 10) + "/" + String(d || "").slice(5, 7);
   const sinal = (v) => v == null ? "" : (Number(v) >= 0 ? "v-pos" : "v-neg");
+  // Marca quanto da linha ainda não tem custo de venda conhecido. R$ 0,00 sem
+  // aviso seria uma mentira: parece "não teve custo" quando é "não sabemos".
+  const parcial = (semDado, faturamento) => {
+    if (!semDado || !faturamento) return "";
+    const p = Math.round(semDado / faturamento * 100);
+    return `<div style="font-size:10px;color:#8a5a00" title="${esc(brl(semDado))} de venda sem esse custo conciliado">${p}% sem dado</div>`;
+  };
   const curto = (v) => {
     const n = Math.abs(Number(v) || 0);
     if (n >= 1000000) return (v / 1000000).toFixed(1).replace(".", ",") + " mi";
@@ -273,10 +280,12 @@ button,input,select{font:inherit;color:inherit}
     card($("kpiBruto"), "Lucro bruto", brl(t.lucro_bruto), "Margem bruta " + esc(pct(t.margem_bruta)));
     card($("kpiCusto"), "Custo dos produtos", brl(t.cmv), "Apollo · kit = componentes", "custo");
     card($("kpiLiquido"), "Lucro líquido", brl(t.lucro_liquido), "Margem líquida " + esc(pct(t.margem_liquida)), "destaque");
-    card($("kpiTaxas"), "Taxas do marketplace", brl(t.taxas), "Tarifa da venda, conferida na fatura", "custo");
-    card($("kpiFrete"), "Frete do vendedor", brl(t.frete), "Mercado Envios por sua conta + Shopee", "custo");
-    card($("kpiAds"), "Publicidade (Ads)", d.ads.conectado ? brl(t.ads) : "—",
-      d.ads.conectado ? `${num(d.ads.dias_com_dado)} dia(s) com dado` : "Ads não conectado", "custo");
+    card($("kpiTaxas"), "Taxas do marketplace", brl(t.taxas),
+      t.sem_taxa > 0 ? `parcial — ${brl(t.sem_taxa)} de venda sem taxa conhecida` : "Tarifa da venda, conferida na fatura", "custo");
+    card($("kpiFrete"), "Frete do vendedor", brl(t.frete),
+      t.sem_frete > 0 ? `parcial — ${brl(t.sem_frete)} de venda sem frete conciliado` : "Mercado Envios por sua conta + Shopee", "custo");
+    const fonteAds = { api: "API de Publicidade", fatura: "cobrado na fatura do ML" }[d.ads.fonte] || "sem dado de Ads";
+    card($("kpiAds"), "Publicidade (Ads)", d.ads.fonte ? brl(t.ads) : "—", fonteAds, "custo");
     card($("kpiImposto"), "Imposto (" + esc(pct(d.imposto_percent)) + ")", brl(t.imposto), "Sobre o valor da venda", "custo");
     if (t.lucro_liquido < 0) $("kpiLiquido").querySelector(".valor").style.color = "#ffb3b3";
   }
@@ -287,9 +296,11 @@ button,input,select{font:inherit;color:inherit}
     if (c.faturamento_sem_taxa > 0) avisos.push(`<b>${brl(c.faturamento_sem_taxa)}</b> sem taxa conhecida (nem da venda, nem da fatura) — clique em <b>Buscar custos oficiais</b>.`);
     if (c.pedidos_ml > c.pedidos_ml_conciliados) avisos.push(`${num(c.pedidos_ml - c.pedidos_ml_conciliados)} pedido(s) do ML sem a tarifa capturada (de ${num(c.pedidos_ml)}).`);
     if (c.pedidos_shopee > c.pedidos_shopee_conciliados) avisos.push(`${num(c.pedidos_shopee - c.pedidos_shopee_conciliados)} pedido(s) da Shopee sem o escrow consultado (de ${num(c.pedidos_shopee)}).`);
+    if (c.faturamento_sem_frete > 0) avisos.push(`<b>${brl(c.faturamento_sem_frete)}</b> de faturamento sem o frete conciliado — onde aparece R$ 0,00 de frete, leia "ainda não sei", não "frete grátis".`);
     if (c.divergencias > 0) avisos.push(`${num(c.divergencias)} pedido(s) em que a <b>fatura cobrou diferente</b> da venda (diferença de ${brl(c.divergencia_total)}). A fatura prevalece.`);
-    if (!d.ads.conectado) avisos.push(`Publicidade não conectada — o lucro está <b>sem o custo de Ads</b>. ${esc((d.ads.erro || "").slice(0, 160))}`);
-    else if (d.ads.sem_sku > 0) avisos.push(`${brl(d.ads.sem_sku)} de Ads sem anúncio identificado: entra no total, não na linha do produto.`);
+    if (!d.ads.fonte) avisos.push(`Sem gasto de Ads no período — nem pela API de Publicidade, nem na fatura. ${esc((d.ads.erro || "").slice(0, 140))}`);
+    else if (d.ads.fonte === "fatura") avisos.push(`Ads vindo da <b>fatura do ML</b> (lançamento PADS, por pedido). A API de Publicidade segue sem liberação, então não há detalhe por palavra-chave nem por campanha.`);
+    if (d.ads.sem_sku > 0) avisos.push(`${brl(d.ads.sem_sku)} de Ads sem pedido/anúncio identificado: entra no total do período, não na linha do produto.`);
     $("cobertura").className = avisos.length ? "alerta" : "ok-faixa";
     $("cobertura").innerHTML = avisos.length
       ? "<b>Conferir antes de decidir</b><ul>" + avisos.map((a) => "<li>" + a + "</li>").join("") + "</ul>"
@@ -451,11 +462,13 @@ button,input,select{font:inherit;color:inherit}
             <td title="${esc(s.titulo)}">${esc((s.titulo || "").slice(0, 44))}</td>
             <td class="n">${num(s.unidades)}</td>
             <td class="n">${esc(brl(s.faturamento))}<i class="barra-celula" style="width:${(s.faturamento / maxFat * 100).toFixed(0)}%"></i></td>
-            <td class="n">${s.sem_custo ? "—" : esc(brl(s.cmv))}</td><td class="n">${esc(brl(s.taxas))}</td>
-            <td class="n">${esc(brl(s.frete))}</td><td class="n">${s.ads ? esc(brl(s.ads)) : "—"}</td>
+            <td class="n">${s.sem_custo ? "—" : esc(brl(s.cmv))}</td>
+            <td class="n">${esc(brl(s.taxas))}${parcial(s.sem_taxa, s.faturamento)}</td>
+            <td class="n">${esc(brl(s.frete))}${parcial(s.sem_frete, s.faturamento)}</td>
+            <td class="n">${s.ads ? esc(brl(s.ads)) : "—"}</td>
             <td class="n">${esc(brl(s.imposto))}</td>
             <td class="n ${sinal(s.lucro_liquido)}">${s.sem_custo ? "—" : esc(brl(s.lucro_liquido))}</td>
-            <td class="n ${sinal(s.margem_liquida)}">${s.sem_custo ? "—" : esc(pct(s.margem_liquida))}</td></tr>`).join("")
+            <td class="n ${sinal(s.margem_liquida)}">${s.sem_custo || s.sem_taxa > 0 || s.sem_frete > 0 ? '<span class="selo pend" title="custo de venda incompleto nesta linha">parcial</span>' : esc(pct(s.margem_liquida))}</td></tr>`).join("")
         + "</tbody>" : '<tbody><tr><td class="vazio">Nenhum produto encontrado.</td></tr></tbody>';
     } else if (state.aba === "pedidos") {
       $("tituloDetalhe").textContent = "Detalhe por pedido";
@@ -504,9 +517,9 @@ button,input,select{font:inherit;color:inherit}
     const a = d.ads || {};
     $("subtitulo").textContent = `${d.periodo.inicio.split("-").reverse().join("/")} a ${d.periodo.fim.split("-").reverse().join("/")}`
       + ` · ${num(d.cobertura.linhas)} linhas de venda · imposto fixo de ${pct(d.imposto_percent)}`;
-    $("notaFontes").innerHTML = "<b>Fontes:</b> tarifa e frete do ato da venda, conferidos na fatura do ML · escrow da Shopee · custo do Apollo · Ads da API de Publicidade."
-      + `<br><b>Ads:</b> ${a.conectado ? "conectado" : "não conectado"}`
-      + (a.ultima_sincronizacao ? ` (coleta ${esc(a.ultima_sincronizacao.slice(0, 16).replace("T", " "))})` : "");
+    $("notaFontes").innerHTML = "<b>Fontes:</b> tarifa e frete do ato da venda, conferidos na fatura do ML · escrow da Shopee · custo do Apollo."
+      + `<br><b>Ads:</b> ${{ api: "API de Publicidade", fatura: "fatura do ML (PADS)" }[a.fonte] || "sem dado"}`
+      + (a.fonte === "api" && a.ultima_sincronizacao ? ` (coleta ${esc(a.ultima_sincronizacao.slice(0, 16).replace("T", " "))})` : "");
     $("statusBarra").textContent = `${num(d.cobertura.pedidos_ml_na_fatura)} pedido(s) já na fatura · `
       + `${num(d.cobertura.pedidos_ml_taxa_da_venda)} com taxa do ato da venda · ${num(d.cobertura.pedidos_shopee_conciliados)} Shopee com escrow`;
   }

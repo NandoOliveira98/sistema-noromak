@@ -253,7 +253,7 @@ sugestão de transferência Ribeirão/Bauru e Lista de separação por prateleir
 compra em aberto, custo e marca em lote. A chave do Noromak **só** tem `/custo` e `/estoque`;
 não usar outras rotas do Apollo sem acordo com a equipe dele.
 
-### Financeiro — faturamento, gastos e lucro (V18.30 a V18.33)
+### Financeiro — faturamento, gastos e lucro (V18.30 a V18.34)
 `APP/financeiro.html` (`/financeiro`, menu Comercial, só **admin**; leitura no padrão Power BI —
 canvas com tiles, slicer de filtros, cards de KPI, waterfall, combo por dia, rosca e abas de página). Junta o que já existia:
 faturamento de `vendas_v1799` (ML + Shopee), custo do produto pela mesma regra da Demanda de
@@ -275,6 +275,16 @@ as duas **nunca somam**, e a diferença entre elas aparece na tela (`cobertura.d
 O que não é conhecido fica **nulo e visível** (`cobertura.faturamento_sem_custo` /
 `sem_taxa`): nada é estimado. `GET /api/financeiro/resumo`, `POST /api/financeiro/sincronizar`
 (fatura + escrow pendente + Ads, em segundo plano).
+**V18.34 — sub_types REAIS da fatura MLB** (`ML_FATURA_TARIFA/FRETE/ADS/NEUTRO`, levantados na
+conta 224625106): `CVVML` (Custo por vender), `CVVPRC` (Custo por cobrar no MP) e `CVVFNU` (Taxa de
+recebimento) são **tarifa de venda**; `CXDE`/`CFFE` são **frete**; **`PADS` é o gasto com Ads**,
+lançado **por pedido** — quando a API de Publicidade não responde, é ela que alimenta o Ads (uma
+fonte OU a outra, nunca somadas); `CFONPN` (taxa de parcelamento) é **neutra**, porque o acréscimo
+que a cobre é pago pelo comprador e não entra no nosso faturamento. Antes disso o código procurava
+`CV`/`BV` e a tarifa inteira caía em "outros", inflando a margem. O que não é conhecido virou
+pendência explícita por linha (`sem_taxa`, `sem_frete`): **R$ 0,00 só quando é zero de verdade**.
+O sync da fatura ganhou backoff no HTTP 429 e retoma do `last_id`.
+
 **V18.33:** substituiu a **Rentabilidade ML** — `ml_profitability_payload()`, a rota
 `/api/rentabilidade-ml` e `APP/rentabilidade-ml.html` foram removidas, e o endereço antigo
 abre o Financeiro. `ml_profitability_snapshot` **não é mais alimentada**, mas continua sendo

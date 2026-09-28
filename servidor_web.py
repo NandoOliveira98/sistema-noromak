@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.33-FINANCEIRO-SUBSTITUI-RENTABILIDADE"
+APP_VERSION = "18.34-FATURA-ML-SUBTYPES-REAIS"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -11206,10 +11206,17 @@ def _ml_billing_v1513_sync_period(period_key: str, document_type: str, seller_id
         except Exception:
             current_key = period_key
         ttl = 4 * 3600 if period_key == current_key else 24 * 3600
+        # V18.34: período que ficou pela metade (429) não pode dormir 4 h — ele
+        # volta em 10 min e continua de onde parou, senão o mês nunca fecha.
+        if str(state.get("status") or "") == "partial":
+            ttl = 600
         if age >= 0 and age < ttl and str(state.get("status") or "") in ("ok", "partial", "empty"):
             return {"ok": True, "cached": True, **state}
 
+    # Retoma de onde parou quando a página anterior morreu no meio.
     from_id = "0"
+    if state and str(state.get("status") or "") == "partial" and str(state.get("last_id") or "").isdigit():
+        from_id = str(state.get("last_id"))
     pages = 0
     saved = 0
     last_seen = ""
@@ -11224,11 +11231,24 @@ def _ml_billing_v1513_sync_period(period_key: str, document_type: str, seller_id
             "order_by": "ASC",
         }
         endpoint = f"/billing/integration/periods/key/{quote(period_key)}/group/ML/details?" + urlencode(q)
-        try:
-            payload = ml_api_get(endpoint)
-        except Exception as exc:
-            status = "error"
-            diag.append(str(exc)[:500])
+        # V18.34: o Billing devolve HTTP 429 quando a sincronização puxa muitas
+        # páginas seguidas — foi assim que setembro parou no meio, com 854 dos 987
+        # pedidos. Espera e tenta de novo a MESMA página antes de desistir.
+        payload = None
+        ultimo_erro = ""
+        for tentativa in range(4):
+            try:
+                payload = ml_api_get(endpoint)
+                ultimo_erro = ""
+                break
+            except Exception as exc:
+                ultimo_erro = str(exc)[:500]
+                if "429" not in ultimo_erro or tentativa == 3:
+                    break
+                time.sleep(3 * (tentativa + 1))
+        if payload is None:
+            status = "partial" if saved else "error"
+            diag.append(ultimo_erro)
             break
         pages += 1
         results = _ml_billing_v1513_results(payload)
@@ -11305,22 +11325,69 @@ def _ml_billing_v1513_sync_period(period_key: str, document_type: str, seller_id
             "status": status, "pages": pages, "item_count": saved, "last_id": from_id, "diagnostic": "; ".join(diag)}
 
 
+# ---------------------------------------------------------------------------
+# V18.34: sub_types REAIS da fatura do MLB, levantados na conta 224625106 em
+# 28/09/2026 (setembro inteiro, 4.867 lançamentos). Até aqui o código procurava
+# "CV"/"BV" e textos como "cobrança por venda" — nada disso existe na fatura
+# brasileira, e a tarifa de venda inteira (R$ 11,4 mil em setembro) ia parar em
+# "outros" em vez da coluna Taxas.
+#
+#   CVVML  / BVVML   Custo por vender no Mercado Livre     -> tarifa de venda
+#   CVVPRC / BVVPRC  Custo por cobrar no Mercado Pago      -> tarifa de venda
+#   CVVFNU / BVVFNU  Taxa de recebimento                   -> tarifa de venda
+#   CXDE   / BXDE    Tarifa de envio extra/intermunicipal  -> frete
+#   CFFE   / BFFE    Tarifa de envio extra/intermunicipal  -> frete
+#   PADS   / BPADS   Campanha de publicidade Product Ads   -> Ads
+#   CFONPN / BFONPN  Taxa de parcelamento (= ao acréscimo) -> NEUTRO (ver abaixo)
+#   CFWA, CDIFAL e demais                                  -> outros custos
+#
+# O "B" na frente é o cancelamento do "C" correspondente (detail_type BONUS) e
+# entra como crédito, abatendo o custo.
+# ---------------------------------------------------------------------------
+ML_FATURA_TARIFA = {"CV", "BV", "CVVML", "BVVML", "CVVPRC", "BVVPRC", "CVVFNU", "BVVFNU"}
+ML_FATURA_FRETE = {"CXD", "BXD", "CE", "BE", "CFLX", "BFLX", "CXDE", "BXDE", "CFFE", "BFFE"}
+ML_FATURA_ADS = {"PADS", "BPADS"}
+# A taxa de parcelamento é cobrada do vendedor e devolvida pelo acréscimo que o
+# COMPRADOR paga — no detalhe da venda o ML mostra as duas somadas em R$ 0,00.
+# Como o acréscimo não entra no nosso faturamento (usamos o preço do produto),
+# cobrar a taxa aqui puniria o lucro duas vezes. Fica de fora dos dois lados.
+ML_FATURA_NEUTRO = {"CFONPN", "BFONPN"}
+
+
 def _ml_billing_v1513_is_shipping(sub: str, transaction: str, raw_json: str = "") -> bool:
     sub = str(sub or "").upper()
+    if sub in ML_FATURA_FRETE:
+        return True
+    if sub in ML_FATURA_TARIFA or sub in ML_FATURA_ADS or sub in ML_FATURA_NEUTRO:
+        return False
     text = (str(transaction or "") + " " + str(raw_json or "")[:3000]).lower()
-    return sub in ("CXD", "BXD", "CE", "BE", "CFLX", "BFLX") or any(x in text for x in ("mercado envios", "shipping", "frete", "envío", "envio"))
+    return any(x in text for x in ("mercado envios", "shipping", "frete", "envío", "envio"))
 
 
 def _ml_billing_v1513_is_sale_fee(sub: str, transaction: str) -> bool:
     sub = str(sub or "").upper()
+    if sub in ML_FATURA_TARIFA:
+        return True
+    if sub in ML_FATURA_FRETE or sub in ML_FATURA_ADS or sub in ML_FATURA_NEUTRO:
+        return False
     text = str(transaction or "").lower()
-    return sub in ("CV", "BV") or any(x in text for x in ("cobrança por venda", "cobrança por vender", "cargo por venta", "tarifa de venda", "sale fee", "selling fee", "comissão", "comision", "commission"))
+    return any(x in text for x in ("cobrança por venda", "cobrança por vender", "custo por vender",
+                                   "custo por cobrar", "taxa de recebimento", "cargo por venta",
+                                   "tarifa de venda", "sale fee", "selling fee", "comissão",
+                                   "comision", "commission"))
 
 
 def _ml_billing_is_publicidade(sub: str, dtype: str, transaction: str) -> bool:
     """V18.30: lançamento de Publicidade (Product Ads) na fatura do ML."""
+    if str(sub or "").upper() in ML_FATURA_ADS:
+        return True
     texto = (str(transaction or "") + " " + str(dtype or "") + " " + str(sub or "")).lower()
     return any(x in texto for x in ("publicidade", "product ads", "mercado ads", "advertising", "publicidad"))
+
+
+def _ml_billing_is_neutro(sub: str) -> bool:
+    """Lançamento que se anula com o que o comprador pagou (parcelamento)."""
+    return str(sub or "").upper() in ML_FATURA_NEUTRO
 
 
 def _ml_billing_v1513_consolidate(order_id: str, pack_id: str = "") -> dict[str, Any]:
@@ -11376,16 +11443,22 @@ def _ml_billing_consolidar_lancamentos(entries: list[dict[str, Any]]) -> dict[st
         credit = bool(int(e.get("is_credit") or 0)) or dtype in ("BONUS", "BONIFICATION", "CREDIT")
         if trans and trans not in labels:
             labels.append(trans)
+        if _ml_billing_is_neutro(sub):
+            # V18.34: taxa de parcelamento — se anula com o acréscimo do comprador.
+            continue
         if _ml_billing_v1513_is_shipping(sub, trans, str(e.get("raw_json") or "")):
             # V18.30: o frete da fatura passou a ser somado (o cálculo por pedido
             # continua usando o custo do shipment; quem usa este número é o Financeiro).
             if credit: ship_credit += amount
             else: ship_charge += amount
             continue
-        if _ml_billing_is_publicidade(sub, dtype, trans) and not credit:
-            # Informativo: publicidade quase sempre vem sem pedido. O Financeiro
-            # desconta este valor de "outros" para não contar Ads duas vezes.
-            pub_charge += amount
+        if _ml_billing_is_publicidade(sub, dtype, trans):
+            # V18.34: PADS vem lançado POR PEDIDO na fatura do MLB. Sai daqui como
+            # bucket próprio (não entra em "outros") e é a fonte de Ads do
+            # Financeiro enquanto a API de Publicidade não estiver liberada.
+            if credit: pub_charge -= amount
+            else: pub_charge += amount
+            continue
         if _ml_billing_v1513_is_sale_fee(sub, trans):
             if credit: fee_credit += amount
             else: fee_charge += amount
@@ -11419,7 +11492,7 @@ def _ml_billing_consolidar_lancamentos(entries: list[dict[str, Any]]) -> dict[st
             "other_cost": round(other, 2), "bonus": round(bonus, 2), "status": status,
             "diagnostic": diagnostic, "source": fee_source, "entries": len(entries),
             "shipping": round(shipping, 2) if (ship_charge or ship_credit) else None,
-            "publicidade": round(pub_charge, 2)}
+            "publicidade": round(max(0.0, pub_charge), 2)}
 
 
 def _ml_billing_v1513_sync_for_records(records: list[dict[str, Any]], seller_id: str, force: bool = False) -> dict[str, Any]:
@@ -12884,6 +12957,8 @@ def _financeiro_billing_ml(period_keys: list[str], order_ids: list[str]) -> dict
         if bool(int(r["is_credit"] or 0)):
             credito += valor
             continue
+        if _ml_billing_is_neutro(str(r["detail_sub_type"] or "")):
+            continue
         if _ml_billing_is_publicidade(str(r["detail_sub_type"] or ""), str(r["detail_type"] or ""), str(r["transaction_detail"] or "")):
             pub += valor
         else:
@@ -13009,10 +13084,9 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
         taxa = taxa_fatura if taxa_fatura is not None else taxa_venda
         frete = frete_fatura if frete_fatura is not None else frete_venda
         outros = _money_number(b.get("other_cost"))
+        # V18.34: PADS (publicidade) já sai separado do consolidador e nunca entra
+        # em "outros". Vira o Ads do pedido quando a API de Publicidade não responde.
         pub = float(b.get("publicidade") or 0.0)
-        if outros is not None and pub:
-            # Ads entra uma vez só, pela API de Publicidade.
-            outros = round(outros - pub, 2)
         if taxa_fatura is not None:
             origem = str(b.get("source") or "") or "Fatura ML"
         elif taxa_venda is not None:
@@ -13020,7 +13094,7 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
         else:
             origem = "Tarifa ainda não capturada"
         custos_pedido[("ml", oid)] = {
-            "taxa": taxa, "frete": frete, "outros": outros,
+            "taxa": taxa, "frete": frete, "outros": outros, "ads_fatura": pub,
             "bonus": float(b.get("bonus") or 0.0), "origem": origem,
             "conciliado": taxa is not None, "na_fatura": taxa_fatura is not None,
             "taxa_venda": taxa_venda, "taxa_fatura": taxa_fatura,
@@ -13047,10 +13121,24 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
         receita_pedido[chave] = receita_pedido.get(chave, 0.0) + float(v["amount"] or 0)
 
     ads = _financeiro_ads_periodo(d1, d2)
+    # V18.34: o gasto com Ads também está na fatura do ML (sub_type PADS), lançado
+    # POR PEDIDO. Quando a API de Publicidade não responde — hoje é o caso — a
+    # fatura é a fonte, e ainda dá o custo por pedido e por SKU, que a API só
+    # daria com muito mais chamada. Uma fonte OU a outra; nunca as duas somadas.
+    ads_fatura_pedidos = round(sum(float((c or {}).get("ads_fatura") or 0.0) for c in custos_pedido.values()), 2)
+    ads_fatura_sem_pedido = round(float((billing.get("sem_pedido") or {}).get("publicidade") or 0.0), 2)
+    ads_api_total = ads["total"] if (not canal or canal == "ml") else 0.0
+    if ads_api_total > 0:
+        ads_fonte = "api"
+    elif (ads_fatura_pedidos + ads_fatura_sem_pedido) > 0 and (not canal or canal == "ml"):
+        ads_fonte = "fatura"
+    else:
+        ads_fonte = ""
+    usar_ads_da_fatura = ads_fonte == "fatura"
 
     def bloco() -> dict[str, Any]:
         return {"faturamento": 0.0, "unidades": 0, "pedidos": set(), "cmv": 0.0, "taxas": 0.0, "frete": 0.0,
-                "outros": 0.0, "imposto": 0.0, "ads": 0.0, "sem_custo": 0.0, "sem_taxa": 0.0}
+                "outros": 0.0, "imposto": 0.0, "ads": 0.0, "sem_custo": 0.0, "sem_taxa": 0.0, "sem_frete": 0.0}
 
     totais = bloco()
     por_mp: dict[str, dict[str, Any]] = {m: bloco() for m in VENDAS_MARKETPLACES}
@@ -13075,6 +13163,7 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
         frete = round(pc["frete"] * fatia, 2) if pc.get("frete") is not None else None
         outros = round(pc["outros"] * fatia, 2) if pc.get("outros") is not None else None
         imposto = round(receita * imposto_rate, 2)
+        ads_linha = round(float(pc.get("ads_fatura") or 0.0) * fatia, 2) if usar_ads_da_fatura else 0.0
 
         alvos = [totais, por_mp.setdefault(mp, bloco()),
                  por_dia.setdefault(str(v["sale_day"]), {**bloco(), "dia": str(v["sale_day"])})]
@@ -13091,15 +13180,23 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
                 alvo["sem_taxa"] = round(alvo["sem_taxa"] + receita, 2)
             else:
                 alvo["taxas"] = round(alvo["taxas"] + taxa, 2)
-            if frete is not None:
+            # V18.34: frete desconhecido é pendência, não zero. Um pedido pode ter
+            # frete 0 de verdade (frete grátis do comprador) — a diferença tem que
+            # aparecer na tela em vez de virar margem inventada.
+            if frete is None:
+                alvo["sem_frete"] = round(alvo["sem_frete"] + receita, 2)
+            else:
                 alvo["frete"] = round(alvo["frete"] + frete, 2)
             if outros is not None:
                 alvo["outros"] = round(alvo["outros"] + outros, 2)
+            if ads_linha:
+                alvo["ads"] = round(alvo["ads"] + ads_linha, 2)
 
         s = por_sku.setdefault(sku_key, {"sku": sku_key, "titulo": str(v["title"] or ""), "codigo": _compras_codigo(sku, produtos),
                                          "unidades": 0, "faturamento": 0.0, "cmv": 0.0, "taxas": 0.0, "frete": 0.0,
                                          "outros": 0.0, "imposto": 0.0, "ads": 0.0, "custo_unitario": unit,
-                                         "custo_origem": origem_custo, "sem_custo": False, "pedidos": set()})
+                                         "custo_origem": origem_custo, "sem_custo": False, "pedidos": set(),
+                                         "sem_taxa": 0.0, "sem_frete": 0.0})
         s["unidades"] += qty
         s["faturamento"] = round(s["faturamento"] + receita, 2)
         s["imposto"] = round(s["imposto"] + imposto, 2)
@@ -13108,12 +13205,18 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
             s["sem_custo"] = True
         else:
             s["cmv"] = round(s["cmv"] + cmv, 2)
-        if taxa is not None:
+        if taxa is None:
+            s["sem_taxa"] = round(s["sem_taxa"] + receita, 2)
+        else:
             s["taxas"] = round(s["taxas"] + taxa, 2)
-        if frete is not None:
+        if frete is None:
+            s["sem_frete"] = round(s["sem_frete"] + receita, 2)
+        else:
             s["frete"] = round(s["frete"] + frete, 2)
         if outros is not None:
             s["outros"] = round(s["outros"] + outros, 2)
+        if ads_linha:
+            s["ads"] = round(s["ads"] + ads_linha, 2)
         if not s["titulo"] and v["title"]:
             s["titulo"] = str(v["title"])
 
@@ -13121,6 +13224,7 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
             "marketplace": mp, "order_id": oid, "dia": str(v["sale_day"]), "itens": [], "unidades": 0,
             "faturamento": 0.0, "cmv": 0.0, "taxa": pc.get("taxa"), "frete": pc.get("frete"),
             "outros": pc.get("outros"), "imposto": 0.0, "origem_custo_venda": pc.get("origem", ""),
+            "ads": round(float(pc.get("ads_fatura") or 0.0), 2) if usar_ads_da_fatura else 0.0,
             "conciliado": bool(pc.get("conciliado")), "sem_custo": False,
             "na_fatura": bool(pc.get("na_fatura")), "taxa_venda": pc.get("taxa_venda"),
             "taxa_fatura": pc.get("taxa_fatura"), "frete_venda": pc.get("frete_venda"),
@@ -13136,22 +13240,36 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
         else:
             p["cmv"] = round(p["cmv"] + cmv, 2)
 
-    # --- Ads: custo do período, não do pedido ------------------------------
-    ads_total = ads["total"] if (not canal or canal == "ml") else 0.0
-    totais["ads"] = ads_total
-    if "ml" in por_mp:
-        por_mp["ml"]["ads"] = ads_total
-    for dia, valor in ads["por_dia"].items():
+    # --- Ads -----------------------------------------------------------------
+    # Pela API de Publicidade o gasto é do PERÍODO (por dia). Pela fatura ele já
+    # foi somado pedido a pedido no laço acima; aqui só entra o que a fatura
+    # cobrou sem vincular a um pedido.
+    ads_sku_usado = 0.0
+    ads_sem_alvo = 0.0
+    if usar_ads_da_fatura:
+        ads_total = round(ads_fatura_pedidos + ads_fatura_sem_pedido, 2)
+        ads_sem_alvo = ads_fatura_sem_pedido
+        if ads_sem_alvo:
+            totais["ads"] = round(totais["ads"] + ads_sem_alvo, 2)
+            if "ml" in por_mp:
+                por_mp["ml"]["ads"] = round(por_mp["ml"]["ads"] + ads_sem_alvo, 2)
+        ads_sku_usado = round(sum(s["ads"] for s in por_sku.values()), 2)
+    else:
+        ads_total = ads_api_total
+        totais["ads"] = ads_total
+        if "ml" in por_mp:
+            por_mp["ml"]["ads"] = ads_total
         if not canal or canal == "ml":
-            alvo = por_dia.get(dia)
+            for dia, valor in ads["por_dia"].items():
+                alvo = por_dia.get(dia)
+                if alvo is not None:
+                    alvo["ads"] = valor
+        for sku_key, valor in ads["por_sku"].items():
+            alvo = por_sku.get(sku_key)
             if alvo is not None:
                 alvo["ads"] = valor
-    ads_sku_usado = 0.0
-    for sku_key, valor in ads["por_sku"].items():
-        alvo = por_sku.get(sku_key)
-        if alvo is not None:
-            alvo["ads"] = valor
-            ads_sku_usado = round(ads_sku_usado + valor, 2)
+                ads_sku_usado = round(ads_sku_usado + valor, 2)
+        ads_sem_alvo = round(max(0.0, ads_total - ads_sku_usado), 2)
 
     def fechar(b: dict[str, Any]) -> dict[str, Any]:
         pedidos = len(b.pop("pedidos"))
@@ -13178,7 +13296,7 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
     for p in pedidos_detalhe.values():
         bruto = round(p["faturamento"] - p["cmv"], 2)
         p["lucro_bruto"] = bruto
-        conhecidos = sum(v for v in (p["taxa"], p["frete"], p["outros"]) if v is not None)
+        conhecidos = sum(v for v in (p["taxa"], p["frete"], p["outros"]) if v is not None) + float(p.get("ads") or 0.0)
         p["lucro_liquido"] = round(bruto - conhecidos - p["imposto"], 2) if not p["sem_custo"] else None
         p["margem_liquida"] = round(p["lucro_liquido"] / p["faturamento"] * 100, 2) if (p["lucro_liquido"] is not None and p["faturamento"]) else None
         lista_pedidos.append(p)
@@ -13189,7 +13307,10 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
     dia_corrente = d1
     while dia_corrente <= d2:
         chave_dia = dia_corrente.isoformat()
-        b = por_dia.get(chave_dia) or {**bloco(), "dia": chave_dia, "ads": ads["por_dia"].get(chave_dia, 0.0) if (not canal or canal == "ml") else 0.0}
+        vazio_do_dia = {**bloco(), "dia": chave_dia}
+        if not usar_ads_da_fatura and (not canal or canal == "ml"):
+            vazio_do_dia["ads"] = ads["por_dia"].get(chave_dia, 0.0)
+        b = por_dia.get(chave_dia) or vazio_do_dia
         dias_lista.append({"dia": chave_dia, **fechar(b)})
         dia_corrente += timedelta(days=1)
 
@@ -13212,7 +13333,9 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
         "pedidos": lista_pedidos[:limite],
         "pedidos_total": len(lista_pedidos),
         "ads": {"total": ads_total, "por_sku_identificado": ads_sku_usado,
-                "sem_sku": ads["sem_sku"], "dias_com_dado": ads["dias_com_dado"], **ads["status"]},
+                "sem_sku": ads_sem_alvo, "dias_com_dado": ads["dias_com_dado"],
+                "fonte": ads_fonte, "da_fatura": round(ads_fatura_pedidos + ads_fatura_sem_pedido, 2),
+                "da_api": ads_api_total, **ads["status"]},
         "fatura_ml": {"periodos": billing["periodos"], "lancamentos": billing["lancamentos"],
                       "sem_pedido": billing["sem_pedido"]},
         "cobertura": {
@@ -13222,6 +13345,7 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
             "pedidos_shopee": len(pedidos_shopee), "pedidos_shopee_conciliados": shopee_conciliados,
             "faturamento_sem_custo": totais_fechados["sem_custo"],
             "faturamento_sem_taxa": totais_fechados["sem_taxa"],
+            "faturamento_sem_frete": totais_fechados["sem_frete"],
             "divergencias": len(divergentes),
             "divergencia_total": round(sum(d for _o, d in divergentes), 2),
             "linhas": len(vendas),
