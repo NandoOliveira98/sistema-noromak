@@ -434,6 +434,28 @@ class TesteFaturaDuplicada(TesteNoromak):
         t = S.financeiro_payload("2026-09-01", "2026-09-30")["totais"]
         self.assertEqual(t["taxas"], 0.0, "cancelamento com detail_id próprio continua devolvendo a tarifa")
 
+    def test_venda_real_do_cilindro_auxiliar(self) -> None:
+        """Pedido 2000018677905102, 28/09/2026 — o caso que o dono conferiu.
+
+        Mercado Turbo: 255,40 − 118,56 − 30,65 (imposto) − 30,65 (tarifa)
+                       − 24,45 (frete) = 51,09 (20,00%).
+        """
+        _custos_precificador({"816.3234-0": 118.57})
+        _vender("ml", "2000018677905102", "816.3234-0", 1, 255.40, dia="2026-09-28")
+        _custo_da_venda("2000018677905102", "816.3234-0", "816.3234-0", 30.65,
+                        shipment_id="48116989093", dia="2026-09-28")
+        _frete_envio("48116989093", 24.45)
+        # A fatura repete cada lançamento em BILL e em CREDIT_NOTE.
+        self._duplicado("2000018677905102", 30.39, "CVVML", "72187967734")
+        self._duplicado("2000018677905102", 0.26, "CVVPRC", "72187967727")
+        d = S.financeiro_payload("2026-09-01", "2026-09-30")
+        t = d["totais"]
+        self.assertEqual(t["taxas"], 30.65, "30,39 (CVVML) + 0,26 (CVVPRC), sem as cópias")
+        self.assertEqual(t["frete"], 24.45)
+        self.assertEqual(t["imposto"], 30.65)
+        self.assertEqual(t["lucro_liquido"], 51.08)   # 1 centavo do custo: 118,57 x 118,56
+        self.assertEqual(t["margem_liquida"], 20.0)
+
     def test_credito_vem_do_lancamento_e_nao_do_documento(self) -> None:
         self.assertEqual(S._ml_billing_credito_do_lancamento("CHARGE", "CVVML"), 0)
         self.assertEqual(S._ml_billing_credito_do_lancamento("BONUS", "BVVML"), 1)
