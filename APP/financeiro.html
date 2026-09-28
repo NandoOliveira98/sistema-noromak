@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Noromak · Financeiro</title>
+<!-- V18.30: Financeiro — faturamento, gastos e lucro (ML + Shopee).
+     Cada número vem de uma fonte oficial: fatura do ML, escrow da Shopee,
+     custo do Apollo e a API de Publicidade. O que falta aparece como pendência;
+     nada é estimado. -->
+<style>
+:root{--navy:#123b63;--navy2:#1c578b;--orange:#f59b23;--ink:#172536;--muted:#637488;--page:#eef3f8;--line:#d4dee9;--soft:#e8eef4;
+--ok:#16764a;--okbg:#eaf8f0;--warn:#8a5a00;--warnbg:#fff6dc;--bad:#b42318;--badbg:#fff0ee;--ml:#f5c518;--shopee:#ee4d2d}
+*{box-sizing:border-box}body{margin:0;background:var(--page);color:var(--ink);font-family:"Segoe UI",Arial,sans-serif;font-size:14px}
+button,input,select{font:inherit}
+.top{background:linear-gradient(120deg,var(--navy),var(--navy2));border-bottom:4px solid var(--orange);color:#fff}
+.top>div{width:min(1560px,calc(100% - 32px));margin:0 auto;padding:18px 0;display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap}
+.top h1{margin:0;font-size:22px}.top p{margin:5px 0 0;color:#dce8f4;font-size:13px}
+.top a{color:#123b63;background:#fff;border-radius:10px;padding:9px 13px;text-decoration:none;font-weight:800;font-size:13px}
+main{width:min(1560px,calc(100% - 32px));margin:0 auto;padding:18px 0 46px}
+.card{background:#fff;border:1px solid var(--line);border-radius:13px;padding:14px;margin-bottom:12px}
+.hidden{display:none!important}
+.msg{padding:10px 14px;border-radius:10px;margin-bottom:12px;font-size:13px}
+.msg.ok{background:var(--okbg);border:1px solid #a7d6bd;color:#125d3b}.msg.erro{background:var(--badbg);border:1px solid #efb6b2;color:#8f1d16}
+.msg.aviso{background:var(--warnbg);border:1px solid #f5d28f;color:#7a4b00}
+.filtros{display:flex;gap:12px;align-items:end;flex-wrap:wrap}
+label.f{display:flex;flex-direction:column;gap:5px;font-size:10.5px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+label.f input,label.f select{font-size:14px;font-weight:600;color:var(--ink);text-transform:none;letter-spacing:0;padding:0 11px;height:42px;border:1px solid var(--line);border-radius:10px;background:#fff}
+.btn{font-weight:800;border-radius:10px;padding:0 15px;height:42px;cursor:pointer;border:1px solid var(--line);background:#fff;color:var(--navy);white-space:nowrap}
+.btn.pri{background:var(--navy);border-color:var(--navy);color:#fff}.btn.acc{background:var(--orange);border-color:var(--orange);color:#172536}
+.btn:disabled{opacity:.55;cursor:not-allowed}
+.atalhos{display:flex;gap:6px;flex-wrap:wrap}
+.atalhos button{height:32px;padding:0 11px;border-radius:8px;border:1px solid var(--line);background:#fff;color:var(--navy);font-size:12px;font-weight:700;cursor:pointer}
+.atalhos button.on{background:var(--navy);border-color:var(--navy);color:#fff}
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:12px}
+.kpi{background:#fff;border:1px solid var(--line);border-radius:14px;padding:14px 16px;min-height:96px;display:flex;flex-direction:column;justify-content:space-between}
+.kpi small{display:block;font-size:10.5px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.kpi b{display:block;margin-top:6px;font-size:clamp(17px,1.5vw,23px);color:#143957;font-variant-numeric:tabular-nums;white-space:nowrap}
+.kpi span{display:block;margin-top:5px;font-size:11.5px;color:var(--muted)}
+.kpi.hero{background:linear-gradient(120deg,var(--navy),var(--navy2));border-color:var(--navy)}
+.kpi.hero small{color:#bcd4ea}.kpi.hero b{color:#fff;font-size:clamp(20px,1.9vw,29px)}.kpi.hero span{color:#cfe0f0;font-weight:700}
+.kpi.gasto b{color:var(--bad)}.kpi.neg b{color:var(--bad)}
+.secao-titulo{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;margin:0 0 10px}
+.secao-titulo h2{margin:0;font-size:15px;color:var(--navy)}
+.secao-titulo em{font-style:normal;font-size:12px;color:var(--muted)}
+.cascata{display:flex;gap:3px;height:34px;border-radius:9px;overflow:hidden;background:var(--soft)}
+.cascata i{display:block;height:34px;min-width:2px}
+.legenda{display:flex;gap:14px;flex-wrap:wrap;margin-top:9px;font-size:12px;color:var(--muted)}
+.legenda span{display:flex;align-items:center;gap:6px}.legenda i{width:10px;height:10px;border-radius:3px;display:inline-block}
+.grafico{width:100%;height:230px;display:block}
+.tabs{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:10px}
+.tabs button{height:36px;padding:0 14px;border-radius:9px;border:1px solid var(--line);background:#fff;color:var(--navy);font-weight:800;font-size:13px;cursor:pointer}
+.tabs button.on{background:var(--navy);border-color:var(--navy);color:#fff}
+.painel{background:#fff;border:1px solid var(--line);border-radius:13px;overflow:auto;max-height:70vh}
+table{border-collapse:collapse;width:100%;font-size:12.5px}
+th{position:sticky;top:0;background:#f7fafd;color:var(--muted);font-size:10.5px;text-transform:uppercase;letter-spacing:.03em;text-align:left;padding:9px 8px;border-bottom:1px solid var(--line);white-space:nowrap;z-index:1}
+td{padding:8px;border-bottom:1px solid #edf2f7;white-space:nowrap}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+tr:hover td{background:#f8fbfe}
+.pos{color:var(--ok);font-weight:800}.neg{color:var(--bad);font-weight:800}
+.tag{display:inline-block;padding:2px 7px;border-radius:8px;font-size:10.5px;font-weight:800}
+.tag.ml{background:#fff6d4;color:#7a5c00}.tag.shopee{background:#ffeee9;color:#a5361f}
+.tag.pend{background:var(--warnbg);color:var(--warn)}
+.busca{display:flex;gap:9px;align-items:center;flex-wrap:wrap;background:#fff;border:1px solid var(--line);border-bottom:0;border-radius:13px 13px 0 0;padding:10px 12px}
+.busca input{flex:1 1 260px;height:38px;padding:0 11px;border:1px solid var(--line);border-radius:9px}
+.busca .painel{border-radius:0}
+.vazio{padding:38px;text-align:center;color:var(--muted)}
+.mini{font-size:11px;color:var(--muted);font-weight:600}
+@media(max-width:1100px){.kpis{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:620px){.kpis{grid-template-columns:1fr}}
+</style>
+<script defer src="/expedicao/web-auth.js"></script>
+</head>
+<body>
+<header class="top"><div>
+  <div><h1>Financeiro</h1><p>Faturamento, gastos e lucro do Mercado Livre e da Shopee — com a origem de cada número.</p></div>
+  <a href="/expedicao/admin">← Central Noromak</a>
+</div></header>
+
+<main>
+  <div id="msg" class="msg hidden"></div>
+
+  <section class="card">
+    <div class="filtros">
+      <label class="f">Início<input type="date" id="dataIni"></label>
+      <label class="f">Fim<input type="date" id="dataFim"></label>
+      <label class="f">Marketplace<select id="marketplace">
+        <option value="">Todos</option><option value="ml">Mercado Livre</option><option value="shopee">Shopee</option>
+      </select></label>
+      <button class="btn pri" id="atualizar">Atualizar</button>
+      <button class="btn acc" id="sincronizar" title="Busca a fatura do ML, o escrow da Shopee e o gasto de Ads do período">Buscar custos oficiais</button>
+      <div class="atalhos" id="atalhos">
+        <button data-a="hoje">Hoje</button><button data-a="7">7 dias</button><button data-a="30">30 dias</button>
+        <button data-a="mes" class="on">Mês atual</button><button data-a="mespassado">Mês passado</button>
+      </div>
+    </div>
+    <div class="mini" id="rodapeFiltro" style="margin-top:10px"></div>
+  </section>
+
+  <div id="cobertura"></div>
+
+  <section class="kpis" id="kpis"></section>
+
+  <section class="card">
+    <div class="secao-titulo"><h2>Do faturamento ao lucro</h2><em id="cascataInfo"></em></div>
+    <div class="cascata" id="cascata"></div>
+    <div class="legenda" id="cascataLegenda"></div>
+  </section>
+
+  <section class="card">
+    <div class="secao-titulo"><h2>Dia a dia</h2><em>Barras = faturamento · linha = lucro líquido</em></div>
+    <svg class="grafico" id="grafico" viewBox="0 0 1000 230" preserveAspectRatio="none"></svg>
+  </section>
+
+  <section class="card">
+    <div class="secao-titulo"><h2>Por marketplace</h2><em id="mpInfo"></em></div>
+    <div style="overflow:auto"><table id="tabelaMp"></table></div>
+  </section>
+
+  <div class="tabs">
+    <button data-t="sku" class="on">Por produto</button>
+    <button data-t="pedidos">Por pedido</button>
+    <button data-t="fatura">Fatura do ML (sem pedido)</button>
+  </div>
+  <div class="busca"><input type="search" id="filtro" placeholder="Filtrar por SKU, produto ou pedido"><span class="mini" id="contador"></span></div>
+  <div class="painel"><table id="tabela"></table></div>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const brl = (v) => v == null ? "—" : Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  const pct = (v) => v == null ? "—" : Number(v).toFixed(2).replace(".", ",") + "%";
+  const num = (v) => Number(v || 0).toLocaleString("pt-BR");
+  const diaBR = (d) => String(d || "").slice(8, 10) + "/" + String(d || "").slice(5, 7);
+  const sinal = (v) => v == null ? "" : (Number(v) >= 0 ? "pos" : "neg");
+
+  const state = { dados: null, aba: "sku", carregando: false };
+
+  function msg(texto, tipo) {
+    const m = $("msg");
+    if (!texto) { m.className = "msg hidden"; m.textContent = ""; return; }
+    m.className = "msg " + (tipo || "ok");
+    m.textContent = texto;
+  }
+
+  async function api(url, opts) {
+    const r = await fetch("/expedicao" + url, Object.assign({
+      credentials: "same-origin", cache: "no-store",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+    }, opts || {}));
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || d.ok === false) throw new Error(d.error || ("HTTP " + r.status));
+    return d;
+  }
+
+  // ---------------- período ----------------
+  const iso = (d) => new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  function aplicarAtalho(a) {
+    const hoje = new Date();
+    let ini = new Date(hoje), fim = new Date(hoje);
+    if (a === "hoje") { /* já é hoje */ }
+    else if (a === "7" || a === "30") { ini.setDate(hoje.getDate() - (Number(a) - 1)); }
+    else if (a === "mes") { ini = new Date(hoje.getFullYear(), hoje.getMonth(), 1); }
+    else if (a === "mespassado") {
+      ini = new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1);
+      fim = new Date(hoje.getFullYear(), hoje.getMonth(), 0);
+    }
+    $("dataIni").value = iso(ini);
+    $("dataFim").value = iso(fim);
+  }
+
+  // ---------------- render ----------------
+  function renderKpis(d) {
+    const t = d.totais;
+    const cards = [
+      { t: "Faturamento", v: brl(t.faturamento), s: num(t.pedidos) + " pedidos · " + num(t.unidades) + " un · ticket " + brl(t.ticket_medio) },
+      { t: "Custo dos produtos", v: brl(t.cmv), s: "Apollo (kit = componentes)", c: "gasto" },
+      { t: "Lucro bruto", v: brl(t.lucro_bruto), s: "Margem bruta " + pct(t.margem_bruta), c: t.lucro_bruto < 0 ? "neg" : "" },
+      { t: "Taxas do marketplace", v: brl(t.taxas), s: "Fatura ML + escrow Shopee", c: "gasto" },
+      { t: "Frete do vendedor", v: brl(t.frete), s: "O que saiu do seu bolso no envio", c: "gasto" },
+      { t: "Publicidade (Ads)", v: d.ads.conectado ? brl(t.ads) : "—", s: d.ads.conectado ? (num(d.ads.dias_com_dado) + " dia(s) com dado") : "Ads não conectado", c: "gasto" },
+      { t: "Imposto (" + pct(d.imposto_percent) + ")", v: brl(t.imposto), s: "Sobre o valor da venda", c: "gasto" },
+      { t: "Lucro líquido", v: brl(t.lucro_liquido), s: "Margem líquida " + pct(t.margem_liquida), hero: true },
+    ];
+    $("kpis").innerHTML = cards.map((c) =>
+      `<div class="kpi ${c.hero ? "hero" : (c.c || "")}"><small>${esc(c.t)}</small><b>${esc(c.v)}</b><span>${esc(c.s)}</span></div>`).join("");
+  }
+
+  function renderCobertura(d) {
+    const c = d.cobertura, avisos = [];
+    if (c.faturamento_sem_custo > 0) avisos.push("<b>" + brl(c.faturamento_sem_custo) + "</b> de faturamento sem custo de produto conhecido (o lucro desses itens não entra na conta).");
+    if (c.faturamento_sem_taxa > 0) avisos.push("<b>" + brl(c.faturamento_sem_taxa) + "</b> de faturamento sem a taxa conciliada — clique em <b>Buscar custos oficiais</b>.");
+    if (c.pedidos_ml > c.pedidos_ml_conciliados) avisos.push(num(c.pedidos_ml - c.pedidos_ml_conciliados) + " pedido(s) do ML ainda fora da fatura sincronizada (de " + num(c.pedidos_ml) + ").");
+    if (c.pedidos_shopee > c.pedidos_shopee_conciliados) avisos.push(num(c.pedidos_shopee - c.pedidos_shopee_conciliados) + " pedido(s) da Shopee sem o escrow consultado (de " + num(c.pedidos_shopee) + ").");
+    if (!d.ads.conectado) avisos.push("Publicidade não conectada: " + esc(d.ads.erro || "o app precisa da permissão Publicidade no DevCenter e da reconexão do Mercado Livre.") + " O lucro está sem o custo de Ads.");
+    else if (d.ads.sem_sku > 0) avisos.push(brl(d.ads.sem_sku) + " de Ads ainda sem anúncio identificado — entra no total, mas não na linha do produto.");
+    $("cobertura").innerHTML = avisos.length
+      ? '<div class="msg aviso"><b>Conferir antes de decidir:</b><ul style="margin:7px 0 0 18px;padding:0">' + avisos.map((a) => "<li>" + a + "</li>").join("") + "</ul></div>"
+      : '<div class="msg ok">Período conciliado: custo, taxa e frete conhecidos em todas as vendas.</div>';
+  }
+
+  function renderCascata(d) {
+    const t = d.totais;
+    const partes = [
+      { n: "Lucro líquido", v: Math.max(0, t.lucro_liquido), cor: "#16764a" },
+      { n: "Custo dos produtos", v: t.cmv, cor: "#1c578b" },
+      { n: "Taxas", v: t.taxas, cor: "#f59b23" },
+      { n: "Frete", v: t.frete, cor: "#8b6fd6" },
+      { n: "Ads", v: t.ads, cor: "#ee4d2d" },
+      { n: "Imposto", v: t.imposto, cor: "#637488" },
+      { n: "Outros da fatura", v: t.outros, cor: "#b0bdcb" },
+    ].filter((p) => p.v > 0);
+    const soma = partes.reduce((a, p) => a + p.v, 0) || 1;
+    $("cascata").innerHTML = partes.map((p) =>
+      `<i style="width:${(p.v / soma * 100).toFixed(2)}%;background:${p.cor}" title="${esc(p.n)}: ${esc(brl(p.v))}"></i>`).join("");
+    $("cascataLegenda").innerHTML = partes.map((p) =>
+      `<span><i style="background:${p.cor}"></i>${esc(p.n)} · <b>${esc(brl(p.v))}</b> (${(p.v / soma * 100).toFixed(1)}%)</span>`).join("");
+    $("cascataInfo").textContent = t.lucro_liquido < 0
+      ? "Prejuízo de " + brl(Math.abs(t.lucro_liquido)) + " no período"
+      : "De cada R$ 100 vendidos sobraram " + (t.faturamento ? (t.lucro_liquido / t.faturamento * 100).toFixed(2).replace(".", ",") : "0,00") + " reais";
+  }
+
+  function renderGrafico(d) {
+    const dias = d.por_dia || [];
+    const svg = $("grafico");
+    if (!dias.length) { svg.innerHTML = '<text x="500" y="115" text-anchor="middle" fill="#637488" font-size="14">Sem vendas no período</text>'; return; }
+    const W = 1000, H = 230, pad = { t: 14, r: 10, b: 24, l: 10 };
+    const maxFat = Math.max(...dias.map((x) => x.faturamento), 1);
+    const luc = dias.map((x) => x.lucro_liquido);
+    const maxLuc = Math.max(...luc, 0), minLuc = Math.min(...luc, 0);
+    const faixa = (maxLuc - minLuc) || 1;
+    const larg = (W - pad.l - pad.r) / dias.length;
+    const alturaUtil = H - pad.t - pad.b;
+    let barras = "", linha = "", eixo = "";
+    dias.forEach((x, i) => {
+      const h = (x.faturamento / maxFat) * (alturaUtil * 0.78);
+      const xx = pad.l + i * larg;
+      barras += `<rect x="${(xx + larg * 0.16).toFixed(1)}" y="${(H - pad.b - h).toFixed(1)}" width="${(larg * 0.68).toFixed(1)}" height="${h.toFixed(1)}" fill="#c7dcf0" rx="2"><title>${esc(diaBR(x.dia))} · Faturamento ${esc(brl(x.faturamento))} · Lucro ${esc(brl(x.lucro_liquido))}</title></rect>`;
+      const y = H - pad.b - ((x.lucro_liquido - minLuc) / faixa) * (alturaUtil * 0.78);
+      linha += (i ? " L" : "M") + (xx + larg / 2).toFixed(1) + " " + y.toFixed(1);
+      if (dias.length <= 40 || i % Math.ceil(dias.length / 20) === 0) {
+        eixo += `<text x="${(xx + larg / 2).toFixed(1)}" y="${H - 7}" text-anchor="middle" font-size="9" fill="#8697a8">${esc(diaBR(x.dia))}</text>`;
+      }
+    });
+    const zeroY = H - pad.b - ((0 - minLuc) / faixa) * (alturaUtil * 0.78);
+    svg.innerHTML = barras
+      + `<line x1="${pad.l}" x2="${W - pad.r}" y1="${zeroY.toFixed(1)}" y2="${zeroY.toFixed(1)}" stroke="#d4dee9" stroke-dasharray="4 4"/>`
+      + `<path d="${linha}" fill="none" stroke="#16764a" stroke-width="2.2"/>` + eixo;
+  }
+
+  function renderMarketplaces(d) {
+    const nomes = { ml: "Mercado Livre", shopee: "Shopee" };
+    const linhas = Object.entries(d.por_marketplace).filter(([, b]) => b.faturamento > 0 || b.pedidos > 0);
+    $("mpInfo").textContent = linhas.length ? "" : "Sem vendas no período";
+    $("tabelaMp").innerHTML =
+      "<thead><tr><th>Canal</th><th class='num'>Pedidos</th><th class='num'>Faturamento</th><th class='num'>Custo produto</th>"
+      + "<th class='num'>Taxas</th><th class='num'>Frete</th><th class='num'>Ads</th><th class='num'>Imposto</th>"
+      + "<th class='num'>Lucro bruto</th><th class='num'>Lucro líquido</th><th class='num'>Margem</th></tr></thead><tbody>"
+      + linhas.map(([m, b]) => `<tr>
+          <td><span class="tag ${m}">${esc(nomes[m] || m)}</span></td>
+          <td class="num">${num(b.pedidos)}</td><td class="num">${esc(brl(b.faturamento))}</td>
+          <td class="num">${esc(brl(b.cmv))}</td><td class="num">${esc(brl(b.taxas))}</td>
+          <td class="num">${esc(brl(b.frete))}</td><td class="num">${esc(brl(b.ads))}</td>
+          <td class="num">${esc(brl(b.imposto))}</td>
+          <td class="num ${sinal(b.lucro_bruto)}">${esc(brl(b.lucro_bruto))}</td>
+          <td class="num ${sinal(b.lucro_liquido)}">${esc(brl(b.lucro_liquido))}</td>
+          <td class="num ${sinal(b.margem_liquida)}">${esc(pct(b.margem_liquida))}</td></tr>`).join("")
+      + "</tbody>";
+  }
+
+  function renderTabela() {
+    const d = state.dados;
+    if (!d) return;
+    const q = ($("filtro").value || "").trim().toLowerCase();
+    const tabela = $("tabela");
+    if (state.aba === "sku") {
+      const linhas = (d.por_sku || []).filter((s) => !q || (s.sku + " " + s.titulo + " " + s.codigo).toLowerCase().includes(q));
+      $("contador").textContent = linhas.length + " produto(s)";
+      tabela.innerHTML = linhas.length ? "<thead><tr><th>SKU</th><th>Produto</th><th class='num'>Un</th><th class='num'>Faturamento</th>"
+        + "<th class='num'>Custo produto</th><th class='num'>Taxas</th><th class='num'>Frete</th><th class='num'>Ads</th>"
+        + "<th class='num'>Imposto</th><th class='num'>Lucro líquido</th><th class='num'>Margem</th></tr></thead><tbody>"
+        + linhas.map((s) => `<tr>
+            <td><b>${esc(s.sku)}</b>${s.sem_custo ? ' <span class="tag pend">sem custo</span>' : ""}${s.codigo && s.codigo !== s.sku ? `<div class="mini">${esc(s.codigo)}</div>` : ""}</td>
+            <td title="${esc(s.titulo)}">${esc((s.titulo || "").slice(0, 46))}</td>
+            <td class="num">${num(s.unidades)}</td><td class="num">${esc(brl(s.faturamento))}</td>
+            <td class="num">${s.sem_custo ? "—" : esc(brl(s.cmv))}</td><td class="num">${esc(brl(s.taxas))}</td>
+            <td class="num">${esc(brl(s.frete))}</td><td class="num">${s.ads ? esc(brl(s.ads)) : "—"}</td>
+            <td class="num">${esc(brl(s.imposto))}</td>
+            <td class="num ${sinal(s.lucro_liquido)}">${s.sem_custo ? "—" : esc(brl(s.lucro_liquido))}</td>
+            <td class="num ${sinal(s.margem_liquida)}">${s.sem_custo ? "—" : esc(pct(s.margem_liquida))}</td></tr>`).join("")
+        + "</tbody>" : '<tbody><tr><td class="vazio">Nenhum produto encontrado.</td></tr></tbody>';
+    } else if (state.aba === "pedidos") {
+      const linhas = (d.pedidos || []).filter((p) => !q || (p.order_id + " " + p.itens.map((i) => i.sku + " " + i.titulo).join(" ")).toLowerCase().includes(q));
+      $("contador").textContent = linhas.length + " de " + num(d.pedidos_total) + " pedido(s) · os de menor lucro primeiro";
+      tabela.innerHTML = linhas.length ? "<thead><tr><th>Pedido</th><th>Data</th><th>Itens</th><th class='num'>Faturamento</th>"
+        + "<th class='num'>Custo produto</th><th class='num'>Taxa</th><th class='num'>Frete</th><th class='num'>Outros</th>"
+        + "<th class='num'>Imposto</th><th class='num'>Lucro líquido</th><th>Origem do custo de venda</th></tr></thead><tbody>"
+        + linhas.map((p) => `<tr>
+            <td><span class="tag ${p.marketplace}">${p.marketplace === "ml" ? "ML" : "Shopee"}</span> <b>${esc(p.order_id)}</b>${p.conciliado ? "" : ' <span class="tag pend">pendente</span>'}</td>
+            <td>${esc(diaBR(p.dia))}</td>
+            <td title="${esc(p.itens.map((i) => i.qty + "x " + i.sku).join(" · "))}">${esc(p.itens.map((i) => i.qty + "x " + i.sku).join(" · ").slice(0, 40))}</td>
+            <td class="num">${esc(brl(p.faturamento))}</td>
+            <td class="num">${p.sem_custo ? '<span class="tag pend">sem custo</span>' : esc(brl(p.cmv))}</td>
+            <td class="num">${esc(brl(p.taxa))}</td><td class="num">${esc(brl(p.frete))}</td>
+            <td class="num">${esc(brl(p.outros))}</td><td class="num">${esc(brl(p.imposto))}</td>
+            <td class="num ${sinal(p.lucro_liquido)}">${esc(brl(p.lucro_liquido))}</td>
+            <td class="mini" title="${esc(p.origem_custo_venda)}">${esc((p.origem_custo_venda || "").slice(0, 34))}</td></tr>`).join("")
+        + "</tbody>" : '<tbody><tr><td class="vazio">Nenhum pedido encontrado.</td></tr></tbody>';
+    } else {
+      const f = d.fatura_ml || { sem_pedido: { itens: [] } };
+      const itens = (f.sem_pedido.itens || []).filter((i) => !q || i.descricao.toLowerCase().includes(q));
+      $("contador").textContent = num(f.lancamentos) + " lançamento(s) lidos da fatura · períodos " + (f.periodos || []).map((p) => p.slice(0, 7)).join(", ");
+      tabela.innerHTML = "<thead><tr><th>Lançamento da fatura sem pedido</th><th class='num'>Valor</th></tr></thead><tbody>"
+        + `<tr><td><b>Publicidade cobrada na fatura</b><div class="mini">Conferência: o Ads do dashboard vem da API de Publicidade, não deste valor.</div></td><td class="num">${esc(brl(f.sem_pedido.publicidade))}</td></tr>`
+        + `<tr><td><b>Outros débitos do período</b><div class="mini">Não entram no lucro por pedido; são custos do período.</div></td><td class="num">${esc(brl(f.sem_pedido.outros))}</td></tr>`
+        + `<tr><td><b>Créditos e bonificações</b></td><td class="num">${esc(brl(f.sem_pedido.credito))}</td></tr>`
+        + itens.map((i) => `<tr><td class="mini">${esc(i.descricao)}</td><td class="num">${esc(brl(i.valor))}</td></tr>`).join("")
+        + "</tbody>";
+    }
+  }
+
+  function render() {
+    const d = state.dados;
+    if (!d) return;
+    renderKpis(d); renderCobertura(d); renderCascata(d); renderGrafico(d); renderMarketplaces(d); renderTabela();
+    const a = d.ads || {};
+    const coleta = a.ultima_sincronizacao ? " (última coleta " + esc(a.ultima_sincronizacao.slice(0, 16).replace("T", " ")) + ")" : "";
+    $("rodapeFiltro").innerHTML = "Período " + esc(d.periodo.inicio.split("-").reverse().join("/")) + " a "
+      + esc(d.periodo.fim.split("-").reverse().join("/")) + " · " + num(d.cobertura.linhas) + " linha(s) de venda · "
+      + "Ads: " + (a.conectado ? "conectado" + coleta : "não conectado")
+      + " · Imposto fixo de " + esc(pct(d.imposto_percent)) + " sobre a venda";
+  }
+
+  async function carregar() {
+    if (state.carregando) return;
+    state.carregando = true;
+    $("atualizar").disabled = true;
+    msg("Calculando o período…", "ok");
+    try {
+      const q = new URLSearchParams({ data_inicio: $("dataIni").value, data_fim: $("dataFim").value, marketplace: $("marketplace").value });
+      state.dados = await api("/api/financeiro/resumo?" + q.toString());
+      msg("");
+      render();
+    } catch (e) {
+      msg("Não foi possível carregar: " + e.message, "erro");
+    } finally {
+      state.carregando = false;
+      $("atualizar").disabled = false;
+    }
+  }
+
+  async function sincronizar() {
+    $("sincronizar").disabled = true;
+    try {
+      const r = await api("/api/financeiro/sincronizar", {
+        method: "POST",
+        body: JSON.stringify({ data_inicio: $("dataIni").value, data_fim: $("dataFim").value }),
+      });
+      msg(r.em_andamento
+        ? "Já existe uma busca em andamento. Aguarde e clique em Atualizar."
+        : "Busca iniciada: fatura do ML, escrow da Shopee e Ads. Clique em Atualizar daqui a alguns instantes.", "ok");
+    } catch (e) {
+      msg("Não foi possível iniciar a busca: " + e.message, "erro");
+    } finally {
+      setTimeout(() => { $("sincronizar").disabled = false; }, 4000);
+    }
+  }
+
+  $("atualizar").addEventListener("click", carregar);
+  $("sincronizar").addEventListener("click", sincronizar);
+  $("marketplace").addEventListener("change", carregar);
+  $("filtro").addEventListener("input", renderTabela);
+  $("atalhos").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button[data-a]");
+    if (!b) return;
+    $("atalhos").querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
+    aplicarAtalho(b.dataset.a);
+    carregar();
+  });
+  document.querySelector(".tabs").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button[data-t]");
+    if (!b) return;
+    document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("on", x === b));
+    state.aba = b.dataset.t;
+    $("filtro").value = "";
+    renderTabela();
+  });
+
+  aplicarAtalho("mes");
+  carregar();
+})();
+</script>
+</body>
+</html>

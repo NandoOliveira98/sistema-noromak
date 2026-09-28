@@ -1,0 +1,267 @@
+"""V18.30 — invariantes do Financeiro (faturamento, gastos e lucro).
+
+Cada teste aqui trava uma regra de dinheiro. Se um deles cair, o dashboard está
+mentindo sobre o lucro — que é o único motivo da tela existir:
+
+  * imposto é 12% do valor da venda, sempre;
+  * lucro bruto = faturamento − custo do produto;
+  * lucro líquido desconta taxa, frete, Ads e imposto;
+  * venda sem custo conhecido NÃO vira lucro (fica como pendência);
+  * a tarifa é do PEDIDO: um pedido com duas linhas não paga duas tarifas;
+  * pedido sem fatura sincronizada fica pendente em vez de virar taxa zero;
+  * Ads é custo do período e não pode ser contado duas vezes (API + fatura);
+  * Shopee: taxa = comissão + serviço + transação, frete = frete líquido do escrow.
+"""
+
+from __future__ import annotations
+
+import json
+import unittest
+
+from base import S, TesteNoromak
+
+
+def _vender(marketplace: str, order_id: str, sku: str, qty: int, valor: float,
+            dia: str = "2026-09-10", line_key: str = "") -> None:
+    with S.DB_LOCK:
+        S.DB.execute(
+            "INSERT OR REPLACE INTO vendas_v1799(marketplace,order_id,line_key,pack_id,sale_at,sale_day,"
+            "sku,anuncio,title,qty,amount,status,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (marketplace, order_id, line_key or sku, "", dia + "T10:00:00-03:00", dia, sku, "",
+             f"Produto {sku}", qty, valor, "paid", S.now_iso()),
+        )
+        S.DB.commit()
+
+
+def _lancamento_fatura(order_id: str, valor: float, *, sub_type: str = "", transacao: str = "",
+                       sale_fee_net: float | None = None, credito: bool = False,
+                       detail_id: str = "", period_key: str = "2026-09-01",
+                       detail_type: str = "") -> None:
+    with S.DB_LOCK:
+        S.DB.execute(
+            "INSERT OR REPLACE INTO ml_billing_period_detail(period_key,document_type,detail_id,order_id,pack_id,"
+            "shipment_id,detail_amount,detail_type,detail_sub_type,transaction_detail,debited_from_operation,"
+            "sale_fee_net,sale_fee_gross,sale_fee_rebate,sale_fee_discount,is_credit,raw_json,synced_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (period_key, "CREDIT_NOTE" if credito else "BILL", detail_id or f"{order_id}-{sub_type}-{valor}",
+             order_id, "", "", valor, detail_type, sub_type, transacao, "YES",
+             sale_fee_net, None, None, None, 1 if credito else 0, "{}", S.now_iso()),
+        )
+        S.DB.commit()
+
+
+def _escrow(order_sn: str, comissao: float, servico: float, transacao: float, frete: float,
+            escrow_amount: float = 0.0) -> None:
+    with S.DB_LOCK:
+        S.DB.execute(
+            "INSERT OR REPLACE INTO shopee_escrow_v1810(order_sn,selling_price,escrow_amount,commission_fee,"
+            "service_fee,transaction_fee,shipping_net,order_income_json,fetched_at,fetched_epoch,erro) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,'')",
+            (order_sn, 0.0, escrow_amount, comissao, servico, transacao, frete, "{}", S.now_iso(), 9_999_999_999),
+        )
+        S.DB.commit()
+
+
+def _ads(dia: str, custo: float, sku: str = "") -> None:
+    with S.DB_LOCK:
+        S.DB.execute(
+            "INSERT OR REPLACE INTO ml_ads_dia_v1830(dia,cost,clicks,prints,units,total_amount,campanhas,updated_at) "
+            "VALUES(?,?,0,0,0,0,1,?)", (dia, custo, S.now_iso()))
+        if sku:
+            S.DB.execute(
+                "INSERT OR REPLACE INTO ml_ads_item_dia_v1830(dia,ad_group_id,campaign_id,item_id,sku,cost,"
+                "clicks,prints,units,total_amount,updated_at) VALUES(?,?,?,?,?,?,0,0,0,0,?)",
+                (dia, f"g-{sku}", "c1", f"MLB{sku}", sku, custo, S.now_iso()))
+        S.DB.commit()
+
+
+def _custos_precificador(itens: dict[str, float]) -> None:
+    """Lista do Precificador: é ela que dá o custo (código Apollo -> custo)."""
+    dados = {"products": [{"sku": codigo, "produto": f"Produto {codigo}", "custo": custo, "curva": "A"}
+                          for codigo, custo in itens.items()]}
+    atual, _, _ = S.get_storage("precificador_online_v1")
+    S.save_storage("precificador_online_v1", atual, json.dumps(dados), False,
+                   actor="admin_teste", actor_role="admin", source_screen="Teste",
+                   change_method="Teste automatizado", client_ip="127.0.0.1")
+
+
+class TesteFinanceiroCalculo(TesteNoromak):
+    """A conta em si, com uma venda ML de duas linhas e todos os custos conhecidos."""
+
+    def cenario(self) -> dict:
+        _custos_precificador({"AAA": 30.0, "BBB": 20.0})
+        _vender("ml", "ML1", "AAA", 1, 100.0)
+        _vender("ml", "ML1", "BBB", 1, 100.0)
+        _lancamento_fatura("ML1", 22.0, sub_type="CV", transacao="Cobranca por venda", sale_fee_net=22.0)
+        _lancamento_fatura("ML1", 18.0, sub_type="CXD", transacao="Mercado Envios")
+        _ads("2026-09-10", 10.0)
+        return S.financeiro_payload("2026-09-01", "2026-09-30")
+
+    def test_faturamento_e_cmv(self) -> None:
+        t = self.cenario()["totais"]
+        self.assertEqual(t["faturamento"], 200.0)
+        self.assertEqual(t["cmv"], 50.0, "CMV tem que ser a soma dos custos do Apollo das duas linhas")
+        self.assertEqual(t["unidades"], 2)
+        self.assertEqual(t["pedidos"], 1, "duas linhas do MESMO pedido não podem virar dois pedidos")
+
+    def test_imposto_e_sempre_12_por_cento_da_venda(self) -> None:
+        d = self.cenario()
+        self.assertEqual(d["imposto_percent"], 12.0)
+        self.assertEqual(d["totais"]["imposto"], 24.0)
+
+    def test_tarifa_do_pedido_nao_e_cobrada_por_linha(self) -> None:
+        t = self.cenario()["totais"]
+        self.assertEqual(t["taxas"], 22.0, "a tarifa é do pedido: ratear entre as linhas não pode dobrar o valor")
+        self.assertEqual(t["frete"], 18.0, "o frete da fatura também é do pedido")
+
+    def test_lucro_bruto_e_liquido(self) -> None:
+        t = self.cenario()["totais"]
+        self.assertEqual(t["lucro_bruto"], 150.0, "bruto = faturamento - custo do produto")
+        # 150 - 22 (taxa) - 18 (frete) - 10 (ads) - 24 (imposto)
+        self.assertEqual(t["lucro_liquido"], 76.0)
+        self.assertEqual(t["margem_bruta"], 75.0)
+        self.assertEqual(t["margem_liquida"], 38.0)
+
+    def test_soma_dos_dias_bate_com_o_total(self) -> None:
+        d = self.cenario()
+        soma = round(sum(x["lucro_liquido"] for x in d["por_dia"]), 2)
+        self.assertEqual(soma, d["totais"]["lucro_liquido"], "o dia a dia tem que fechar com o total")
+
+    def test_periodo_nao_traz_venda_de_fora(self) -> None:
+        self.cenario()
+        _vender("ml", "ML9", "AAA", 1, 500.0, dia="2026-08-15")
+        d = S.financeiro_payload("2026-09-01", "2026-09-30")
+        self.assertEqual(d["totais"]["faturamento"], 200.0, "venda de agosto não pode entrar no período de setembro")
+
+
+class TesteFinanceiroPendencias(TesteNoromak):
+    """O que o sistema não sabe tem que aparecer como pendência — nunca como lucro."""
+
+    def test_venda_sem_custo_nao_vira_lucro(self) -> None:
+        _custos_precificador({"AAA": 30.0})
+        _vender("ml", "ML1", "AAA", 1, 100.0)
+        _vender("ml", "ML2", "SEM-CADASTRO", 1, 100.0)
+        _lancamento_fatura("ML1", 10.0, sub_type="CV", sale_fee_net=10.0)
+        _lancamento_fatura("ML2", 10.0, sub_type="CV", sale_fee_net=10.0)
+        d = S.financeiro_payload("2026-09-01", "2026-09-30")
+        self.assertEqual(d["totais"]["cmv"], 30.0, "o custo desconhecido não pode ser estimado nem zerado")
+        self.assertEqual(d["cobertura"]["faturamento_sem_custo"], 100.0)
+        linha = next(x for x in d["por_sku"] if x["sku"] == "SEM-CADASTRO")
+        self.assertTrue(linha["sem_custo"])
+        pedido = next(x for x in d["pedidos"] if x["order_id"] == "ML2")
+        self.assertIsNone(pedido["lucro_liquido"], "sem custo não existe lucro do pedido")
+
+    def test_pedido_fora_da_fatura_fica_pendente(self) -> None:
+        _custos_precificador({"AAA": 30.0})
+        _vender("ml", "ML1", "AAA", 1, 100.0)
+        d = S.financeiro_payload("2026-09-01", "2026-09-30")
+        self.assertEqual(d["totais"]["taxas"], 0.0)
+        self.assertEqual(d["cobertura"]["faturamento_sem_taxa"], 100.0,
+                         "taxa não conciliada é pendência; não pode virar taxa zero silenciosa")
+        self.assertEqual(d["cobertura"]["pedidos_ml_conciliados"], 0)
+        pedido = next(x for x in d["pedidos"] if x["order_id"] == "ML1")
+        self.assertFalse(pedido["conciliado"])
+        self.assertIsNone(pedido["taxa"])
+
+
+class TesteFinanceiroAds(TesteNoromak):
+    """Ads é custo do período, vem da API de Publicidade e entra uma vez só."""
+
+    def test_ads_entra_no_lucro_do_periodo(self) -> None:
+        _custos_precificador({"AAA": 30.0})
+        _vender("ml", "ML1", "AAA", 1, 100.0)
+        _lancamento_fatura("ML1", 10.0, sub_type="CV", sale_fee_net=10.0)
+        _ads("2026-09-10", 7.0, sku="AAA")
+        d = S.financeiro_payload("2026-09-01", "2026-09-30")
+        self.assertEqual(d["totais"]["ads"], 7.0)
+        # 100 - 30 (custo) - 10 (taxa) - 7 (ads) - 12 (imposto)
+        self.assertEqual(d["totais"]["lucro_liquido"], 41.0)
+        self.assertEqual(next(x for x in d["por_sku"] if x["sku"] == "AAA")["ads"], 7.0)
+
+    def test_publicidade_na_fatura_nao_dobra_o_ads(self) -> None:
+        _custos_precificador({"AAA": 30.0})
+        _vender("ml", "ML1", "AAA", 1, 100.0)
+        _lancamento_fatura("ML1", 10.0, sub_type="CV", sale_fee_net=10.0)
+        # Mesmo gasto de Ads, agora também lançado na fatura dentro do pedido.
+        _lancamento_fatura("ML1", 7.0, sub_type="PUB", transacao="Publicidade Product Ads", detail_id="pub-1")
+        _ads("2026-09-10", 7.0)
+        d = S.financeiro_payload("2026-09-01", "2026-09-30")
+        self.assertEqual(d["totais"]["ads"], 7.0)
+        self.assertEqual(d["totais"]["outros"], 0.0,
+                         "publicidade da fatura tem que sair de 'outros': o Ads já veio da API")
+        self.assertEqual(d["totais"]["lucro_liquido"], 41.0)
+
+    def test_ads_da_shopee_nao_existe_e_nao_e_inventado(self) -> None:
+        _custos_precificador({"AAA": 30.0})
+        _vender("shopee", "SP1", "AAA", 1, 100.0)
+        _escrow("SP1", 5.0, 2.0, 1.0, 7.0)
+        _ads("2026-09-10", 7.0)
+        d = S.financeiro_payload("2026-09-01", "2026-09-30", "shopee")
+        self.assertEqual(d["totais"]["ads"], 0.0, "o gasto de Ads do ML não pode ser jogado na Shopee")
+
+    def test_status_do_ads_diz_quando_nao_esta_conectado(self) -> None:
+        d = S.financeiro_payload("2026-09-01", "2026-09-30")
+        self.assertFalse(d["ads"]["conectado"], "sem anunciante configurado, a tela precisa avisar")
+
+
+class TesteFinanceiroShopee(TesteNoromak):
+    """Shopee: a autoridade é o escrow (get_escrow_detail)."""
+
+    def test_taxa_e_frete_vem_do_escrow(self) -> None:
+        _custos_precificador({"AAA": 30.0})
+        _vender("shopee", "SP1", "AAA", 1, 100.0)
+        _escrow("SP1", 5.0, 2.0, 1.0, 7.0, escrow_amount=85.0)
+        d = S.financeiro_payload("2026-09-01", "2026-09-30", "shopee")
+        t = d["totais"]
+        self.assertEqual(t["taxas"], 8.0, "comissão + serviço + transação")
+        self.assertEqual(t["frete"], 7.0)
+        # 100 - 30 - 8 - 7 - 12
+        self.assertEqual(t["lucro_liquido"], 43.0)
+
+    def test_pedido_sem_escrow_fica_pendente(self) -> None:
+        _custos_precificador({"AAA": 30.0})
+        _vender("shopee", "SP2", "AAA", 1, 100.0)
+        d = S.financeiro_payload("2026-09-01", "2026-09-30", "shopee")
+        self.assertEqual(d["cobertura"]["pedidos_shopee_conciliados"], 0)
+        self.assertEqual(d["cobertura"]["faturamento_sem_taxa"], 100.0)
+
+    def test_os_dois_marketplaces_somam_no_total(self) -> None:
+        _custos_precificador({"AAA": 30.0})
+        _vender("ml", "ML1", "AAA", 1, 100.0)
+        _vender("shopee", "SP1", "AAA", 1, 100.0)
+        _lancamento_fatura("ML1", 10.0, sub_type="CV", sale_fee_net=10.0)
+        _escrow("SP1", 5.0, 2.0, 1.0, 7.0)
+        d = S.financeiro_payload("2026-09-01", "2026-09-30")
+        self.assertEqual(d["totais"]["faturamento"], 200.0)
+        self.assertEqual(d["totais"]["taxas"], 18.0)
+        self.assertEqual(d["por_marketplace"]["ml"]["faturamento"], 100.0)
+        self.assertEqual(d["por_marketplace"]["shopee"]["faturamento"], 100.0)
+
+
+class TesteFinanceiroRota(TesteNoromak):
+    """A rota HTTP: só ADMIN, e devolve o mesmo cálculo."""
+
+    def test_resumo_exige_admin(self) -> None:
+        from base import Cliente
+        anonimo = Cliente(self.url_base)
+        status, _ = anonimo.pedir("GET", "/api/financeiro/resumo?data_inicio=2026-09-01&data_fim=2026-09-30")
+        self.assertIn(status, (401, 403), "dado financeiro não pode sair sem sessão ADMIN")
+
+    def test_resumo_responde_o_periodo(self) -> None:
+        _custos_precificador({"AAA": 30.0})
+        _vender("ml", "ML1", "AAA", 2, 200.0)
+        _lancamento_fatura("ML1", 20.0, sub_type="CV", sale_fee_net=20.0)
+        status, corpo = self.cliente.pedir("GET", "/api/financeiro/resumo?data_inicio=2026-09-01&data_fim=2026-09-30")
+        self.assertEqual(status, 200, corpo)
+        self.assertTrue(corpo.get("ok"))
+        self.assertEqual(corpo["totais"]["faturamento"], 200.0)
+        self.assertEqual(corpo["totais"]["cmv"], 60.0)
+        self.assertEqual(corpo["totais"]["imposto"], 24.0)
+
+    def test_data_invalida_e_recusada(self) -> None:
+        status, corpo = self.cliente.pedir("GET", "/api/financeiro/resumo?data_inicio=01/09/2026&data_fim=2026-09-30")
+        self.assertEqual(status, 400, corpo)
+
+
+if __name__ == "__main__":
+    unittest.main()

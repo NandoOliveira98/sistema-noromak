@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.29-PROMOCOES-PRECIFICADOR-EMBUTIDO"
+APP_VERSION = "18.30-FINANCEIRO-LUCRO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -1779,6 +1779,64 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_ml_billing_period_order ON ml_billing_period_detail(order_id, period_key);
             CREATE INDEX IF NOT EXISTS idx_ml_billing_period_pack ON ml_billing_period_detail(pack_id, period_key);
             CREATE INDEX IF NOT EXISTS idx_ml_billing_period_subtype ON ml_billing_period_detail(detail_sub_type, period_key);
+            -- V18.30: gasto com Publicidade (Product Ads) do Mercado Livre, dia a dia.
+            -- A API só devolve 90 dias para trás e consolida o dia às 10:00 GMT-3,
+            -- por isso guardamos aqui: o histórico é nosso, a janela recente é
+            -- regravada a cada sincronização (campanha pausada/estornada some).
+            CREATE TABLE IF NOT EXISTS ml_ads_dia_v1830 (
+                dia TEXT PRIMARY KEY,
+                cost REAL NOT NULL DEFAULT 0,
+                clicks INTEGER NOT NULL DEFAULT 0,
+                prints INTEGER NOT NULL DEFAULT 0,
+                units INTEGER NOT NULL DEFAULT 0,
+                total_amount REAL NOT NULL DEFAULT 0,
+                campanhas INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS ml_ads_campanha_dia_v1830 (
+                dia TEXT NOT NULL,
+                campaign_id TEXT NOT NULL,
+                nome TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT '',
+                cost REAL NOT NULL DEFAULT 0,
+                clicks INTEGER NOT NULL DEFAULT 0,
+                prints INTEGER NOT NULL DEFAULT 0,
+                units INTEGER NOT NULL DEFAULT 0,
+                total_amount REAL NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY(dia, campaign_id)
+            );
+            CREATE TABLE IF NOT EXISTS ml_ads_item_dia_v1830 (
+                dia TEXT NOT NULL,
+                ad_group_id TEXT NOT NULL,
+                campaign_id TEXT NOT NULL DEFAULT '',
+                item_id TEXT NOT NULL DEFAULT '',
+                sku TEXT NOT NULL DEFAULT '',
+                cost REAL NOT NULL DEFAULT 0,
+                clicks INTEGER NOT NULL DEFAULT 0,
+                prints INTEGER NOT NULL DEFAULT 0,
+                units INTEGER NOT NULL DEFAULT 0,
+                total_amount REAL NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY(dia, ad_group_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_ml_ads_item_dia ON ml_ads_item_dia_v1830(dia);
+            CREATE INDEX IF NOT EXISTS idx_ml_ads_item_sku ON ml_ads_item_dia_v1830(sku, dia);
+            -- Mapa ad_group -> anúncio/SKU. Resolvido uma vez e reaproveitado:
+            -- o ad_group agrupa as variações do mesmo produto (novo fluxo do ML).
+            CREATE TABLE IF NOT EXISTS ml_ads_grupo_v1830 (
+                ad_group_id TEXT PRIMARY KEY,
+                campaign_id TEXT NOT NULL DEFAULT '',
+                item_id TEXT NOT NULL DEFAULT '',
+                sku TEXT NOT NULL DEFAULT '',
+                titulo TEXT NOT NULL DEFAULT '',
+                tipo TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS ml_ads_meta_v1830 (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL DEFAULT ''
+            );
             CREATE TABLE IF NOT EXISTS print_jobs (
                 id TEXT PRIMARY KEY,
                 order_key TEXT NOT NULL,
@@ -11232,6 +11290,12 @@ def _ml_billing_v1513_is_sale_fee(sub: str, transaction: str) -> bool:
     return sub in ("CV", "BV") or any(x in text for x in ("cobrança por venda", "cobrança por vender", "cargo por venta", "tarifa de venda", "sale fee", "selling fee", "comissão", "comision", "commission"))
 
 
+def _ml_billing_is_publicidade(sub: str, dtype: str, transaction: str) -> bool:
+    """V18.30: lançamento de Publicidade (Product Ads) na fatura do ML."""
+    texto = (str(transaction or "") + " " + str(dtype or "") + " " + str(sub or "")).lower()
+    return any(x in texto for x in ("publicidade", "product ads", "mercado ads", "advertising", "publicidad"))
+
+
 def _ml_billing_v1513_consolidate(order_id: str, pack_id: str = "") -> dict[str, Any]:
     oid = str(order_id or "").strip(); pid = str(pack_id or "").strip()
     if not oid:
@@ -11251,9 +11315,20 @@ def _ml_billing_v1513_consolidate(order_id: str, pack_id: str = "") -> dict[str,
                 (pid,),
             ).fetchall()
         entries = [dict(r) for r in rows]
+    return _ml_billing_consolidar_lancamentos(entries)
 
+
+def _ml_billing_consolidar_lancamentos(entries: list[dict[str, Any]]) -> dict[str, Any]:
+    """Regra única de leitura da fatura do ML para UMA venda.
+
+    V18.30: extraído de _ml_billing_v1513_consolidate para que o Financeiro possa
+    conciliar o período inteiro em lote com exatamente a mesma regra, e passou a
+    devolver também o frete da fatura (shipping) — que o cálculo por pedido
+    continua ignorando, porque lá o frete vem do custo do shipment.
+    """
     if not entries:
-        return {"sale_fee": None, "other_cost": None, "bonus": 0.0, "status": "missing", "diagnostic": "Venda ainda não localizada no Billing sincronizado."}
+        return {"sale_fee": None, "other_cost": None, "bonus": 0.0, "shipping": None, "publicidade": 0.0,
+                "status": "missing", "diagnostic": "Venda ainda não localizada no Billing sincronizado."}
 
     # sale_fee.net é a fonte mais direta para MLB e pode se repetir em vários
     # lançamentos da mesma order. Não somamos: preservamos os valores únicos e
@@ -11261,6 +11336,7 @@ def _ml_billing_v1513_consolidate(order_id: str, pack_id: str = "") -> dict[str,
     net_values = sorted({round(abs(float(v)), 2) for v in (_money_number(e.get("sale_fee_net")) for e in entries) if v is not None and abs(v) > 0})
     fee_charge = 0.0; fee_credit = 0.0
     other_charge = 0.0; other_credit = 0.0; bonus = 0.0
+    ship_charge = 0.0; ship_credit = 0.0; pub_charge = 0.0
     labels: list[str] = []
     for e in entries:
         amount = _money_number(e.get("detail_amount"))
@@ -11274,7 +11350,15 @@ def _ml_billing_v1513_consolidate(order_id: str, pack_id: str = "") -> dict[str,
         if trans and trans not in labels:
             labels.append(trans)
         if _ml_billing_v1513_is_shipping(sub, trans, str(e.get("raw_json") or "")):
+            # V18.30: o frete da fatura passou a ser somado (o cálculo por pedido
+            # continua usando o custo do shipment; quem usa este número é o Financeiro).
+            if credit: ship_credit += amount
+            else: ship_charge += amount
             continue
+        if _ml_billing_is_publicidade(sub, dtype, trans) and not credit:
+            # Informativo: publicidade quase sempre vem sem pedido. O Financeiro
+            # desconta este valor de "outros" para não contar Ads duas vezes.
+            pub_charge += amount
         if _ml_billing_v1513_is_sale_fee(sub, trans):
             if credit: fee_credit += amount
             else: fee_charge += amount
@@ -11303,9 +11387,12 @@ def _ml_billing_v1513_consolidate(order_id: str, pack_id: str = "") -> dict[str,
     diagnostic = f"{fee_source}; {len(entries)} lançamento(s) conciliado(s)."
     if labels:
         diagnostic += " " + "; ".join(labels[:6])
+    shipping = ship_charge - ship_credit
     return {"sale_fee": round(fee, 2) if fee is not None else None,
             "other_cost": round(other, 2), "bonus": round(bonus, 2), "status": status,
-            "diagnostic": diagnostic, "source": fee_source, "entries": len(entries)}
+            "diagnostic": diagnostic, "source": fee_source, "entries": len(entries),
+            "shipping": round(shipping, 2) if (ship_charge or ship_credit) else None,
+            "publicidade": round(pub_charge, 2)}
 
 
 def _ml_billing_v1513_sync_for_records(records: list[dict[str, Any]], seller_id: str, force: bool = False) -> dict[str, Any]:
@@ -12155,6 +12242,799 @@ def dashboard_produto_custos(sku: str, dias: int = 30, max_shopee: int = 8) -> d
     resultado["ml"] = arred({**ml, "renda": ml["vendas"] - ml["tarifa"] - ml["envios"]}) if ml["pedidos"] else None
     resultado["shopee"] = arred(shp) if shp["pedidos"] else None
     return resultado
+
+
+# ---------------------------------------------------------------------------
+# V18.30: PUBLICIDADE (Product Ads) do Mercado Livre.
+#
+# Levantado na documentação oficial em 28/09/2026:
+#   GET /advertising/advertisers?product_id=PADS            (Api-Version: 1)
+#   GET /advertising/{SITE}/advertisers/{ADV}/product_ads/campaigns/search
+#       ?date_from&date_to&metrics=...                      (api-version: 2)
+#   GET /advertising/{SITE}/product_ads/campaigns/{ID}/ad_groups/metrics
+#       ?date_from=dia&date_to=dia&metrics=...              (um dia por chamada)
+#   GET /advertising/{SITE}/product_ads/ad_groups/{ID}      (anúncio do ad group)
+#
+# Três coisas que a API impõe e que definem o desenho daqui:
+#   1. As métricas só voltam 90 dias para trás — por isso o histórico fica no
+#      nosso banco; a API é a fonte, o banco é a memória.
+#   2. O dia só consolida às 10:00 GMT-3; o dia de hoje e o de ontem podem mudar.
+#      A janela recente é REGRAVADA a cada sincronização, nunca somada.
+#   3. Se a conta não tem Publicidade habilitada (ou o app não tem a permissão
+#      Publicidade no DevCenter), o endpoint de anunciantes devolve 403/404
+#      "No permissions found for user_id". Isso não é erro do sistema: fica
+#      registrado e a tela mostra "Ads não conectado" com o gasto em branco —
+#      nunca estimado.
+# ---------------------------------------------------------------------------
+ML_ADS_SITE_ID = os.getenv("ML_ADS_SITE_ID", "MLB").strip().upper() or "MLB"
+ML_ADS_SYNC_INTERVAL = max(600, min(21600, int(os.getenv("ML_ADS_SYNC_INTERVAL", "3600"))))
+# Dias sempre regravados (o ML ainda pode mexer neles).
+ML_ADS_JANELA_RECENTE = max(2, min(15, int(os.getenv("ML_ADS_JANELA_RECENTE", "5"))))
+ML_ADS_HISTORICO_DIAS = max(7, min(90, int(os.getenv("ML_ADS_HISTORICO_DIAS", "90"))))
+# Gasto por anúncio custa uma chamada por campanha por dia: limitado por rodada.
+ML_ADS_ITENS_DIAS = max(0, min(90, int(os.getenv("ML_ADS_ITENS_DIAS", "35"))))
+ML_ADS_CHAMADAS_ITENS = max(0, min(400, int(os.getenv("ML_ADS_CHAMADAS_ITENS", "80"))))
+ML_ADS_SYNC_LOCK = threading.Lock()
+ML_ADS_METRICAS = "clicks,prints,cost,cpc,ctr,acos,units_quantity,total_amount"
+ML_ADS_METRICAS_ITEM = "clicks,prints,cost,units_quantity,total_amount"
+
+
+def _ml_ads_meta(key: str, value: str | None = None) -> str:
+    with DB_LOCK:
+        if value is not None:
+            DB.execute(
+                "INSERT INTO ml_ads_meta_v1830(key,value) VALUES(?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, value),
+            )
+            DB.commit()
+            return value
+        row = DB.execute("SELECT value FROM ml_ads_meta_v1830 WHERE key=?", (key,)).fetchone()
+    return str(row["value"]) if row else ""
+
+
+def _ml_ads_api(path: str, api_version: str = "2") -> Any:
+    return ml_api_get(path, headers={"Api-Version": api_version})
+
+
+def _ml_ads_int(valor: Any) -> int:
+    try:
+        return int(round(float(valor or 0)))
+    except (TypeError, ValueError):
+        return 0
+
+
+def ml_ads_advertiser(force: bool = False) -> dict[str, Any]:
+    """Anunciante de Product Ads da conta, com cache de 6 h.
+
+    Nunca levanta: devolve {"ok": False, "erro": ...} para a tela poder dizer
+    exatamente o que falta (permissão do app x Publicidade da conta).
+    """
+    if not force:
+        try:
+            cache = json.loads(_ml_ads_meta("advertiser") or "{}")
+        except Exception:
+            cache = {}
+        if cache.get("ok") and int(time.time()) - int(cache.get("epoch") or 0) < 6 * 3600:
+            return cache
+    info: dict[str, Any]
+    try:
+        data = _ml_ads_api("/advertising/advertisers?product_id=PADS", "1")
+    except Exception as exc:
+        texto = str(exc)
+        if "No permissions found" in texto or "HTTP 404" in texto or "HTTP 403" in texto:
+            erro = ("A conta não tem Product Ads liberado para este aplicativo. "
+                    "Marque a permissão Publicidade no DevCenter, reconecte o Mercado Livre "
+                    "e confirme Publicidade em Meu perfil no ML.")
+        else:
+            erro = texto[:400]
+        info = {"ok": False, "advertiser_id": "", "site_id": ML_ADS_SITE_ID, "nome": "", "conta": "",
+                "erro": erro, "epoch": int(time.time())}
+        _ml_ads_meta("advertiser", json_dumps(info))
+        return info
+    lista = data.get("advertisers") if isinstance(data, dict) else None
+    lista = [a for a in (lista or []) if isinstance(a, dict)]
+    escolhido = next((a for a in lista if str(a.get("site_id") or "").upper() == ML_ADS_SITE_ID), None)
+    if escolhido is None and lista:
+        escolhido = lista[0]
+    escolhido = escolhido or {}
+    info = {
+        "ok": bool(escolhido.get("advertiser_id")),
+        "advertiser_id": str(escolhido.get("advertiser_id") or ""),
+        "site_id": str(escolhido.get("site_id") or ML_ADS_SITE_ID).upper(),
+        "nome": str(escolhido.get("advertiser_name") or ""),
+        "conta": str(escolhido.get("account_name") or ""),
+        "erro": "" if escolhido.get("advertiser_id") else "A conta não devolveu anunciante de Product Ads.",
+        "epoch": int(time.time()),
+    }
+    _ml_ads_meta("advertiser", json_dumps(info))
+    return info
+
+
+def _ml_ads_grupo_cache(ad_group_id: str) -> dict[str, str] | None:
+    gid = str(ad_group_id or "").strip()
+    if not gid:
+        return None
+    with DB_LOCK:
+        row = DB.execute("SELECT * FROM ml_ads_grupo_v1830 WHERE ad_group_id=?", (gid,)).fetchone()
+    if row and row["item_id"]:
+        return {"item_id": row["item_id"], "sku": row["sku"], "titulo": row["titulo"], "campaign_id": row["campaign_id"]}
+    return None
+
+
+def _ml_ads_grupo_resolver(ad_group_id: str, site_id: str, vinculos: dict[str, str]) -> dict[str, str]:
+    """ad_group -> anúncio (MLB) e SKU. Resolvido uma vez e guardado."""
+    gid = str(ad_group_id or "").strip()
+    if not gid:
+        return {}
+    em_cache = _ml_ads_grupo_cache(gid)
+    if em_cache:
+        return em_cache
+    try:
+        data = _ml_ads_api(f"/advertising/{quote(site_id)}/product_ads/ad_groups/{quote(gid)}")
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    item = str(data.get("ad_group_external_id") or "").strip().upper()
+    dados = {
+        "item_id": item,
+        "sku": vinculos.get(item, ""),
+        "titulo": str(data.get("title") or "")[:200],
+        "campaign_id": str(data.get("campaign_id") or ""),
+        "tipo": str(data.get("ad_group_type") or ""),
+    }
+    with DB_LOCK:
+        DB.execute(
+            "INSERT INTO ml_ads_grupo_v1830(ad_group_id,campaign_id,item_id,sku,titulo,tipo,updated_at) "
+            "VALUES(?,?,?,?,?,?,?) ON CONFLICT(ad_group_id) DO UPDATE SET campaign_id=excluded.campaign_id,"
+            "item_id=excluded.item_id,sku=CASE WHEN excluded.sku<>'' THEN excluded.sku ELSE ml_ads_grupo_v1830.sku END,"
+            "titulo=excluded.titulo,tipo=excluded.tipo,updated_at=excluded.updated_at",
+            (gid, dados["campaign_id"], dados["item_id"], dados["sku"], dados["titulo"], dados["tipo"], now_iso()),
+        )
+        DB.commit()
+    return dados
+
+
+def ml_ads_sync_dia(dia: str, advertiser: dict[str, Any], com_itens: bool = True, orcamento_chamadas: int = 0) -> dict[str, Any]:
+    """Regrava o gasto de UM dia: total, por campanha e (quando couber) por anúncio."""
+    adv = str(advertiser.get("advertiser_id") or "")
+    site = str(advertiser.get("site_id") or ML_ADS_SITE_ID)
+    if not adv:
+        raise RuntimeError("Anunciante de Product Ads não identificado.")
+    campanhas: list[dict[str, Any]] = []
+    offset = 0
+    for _ in range(40):
+        q = urlencode({"limit": "50", "offset": str(offset), "date_from": dia, "date_to": dia,
+                       "metrics": ML_ADS_METRICAS})
+        data = _ml_ads_api(f"/advertising/{quote(site)}/advertisers/{quote(adv)}/product_ads/campaigns/search?{q}")
+        results = [r for r in ((data or {}).get("results") or []) if isinstance(r, dict)] if isinstance(data, dict) else []
+        campanhas.extend(results)
+        total = _ml_ads_int(((data or {}).get("paging") or {}).get("total")) if isinstance(data, dict) else 0
+        offset += len(results)
+        if not results or offset >= total:
+            break
+
+    agora = now_iso()
+    linhas = []
+    for c in campanhas:
+        m = c.get("metrics") if isinstance(c.get("metrics"), dict) else {}
+        linhas.append((
+            dia, str(c.get("id") or ""), str(c.get("name") or "")[:200], str(c.get("status") or ""),
+            round(float(_money_number(m.get("cost")) or 0.0), 2), _ml_ads_int(m.get("clicks")),
+            _ml_ads_int(m.get("prints")), _ml_ads_int(m.get("units_quantity")),
+            round(float(_money_number(m.get("total_amount")) or 0.0), 2), agora,
+        ))
+    with DB_LOCK:
+        # O dia é regravado inteiro: campanha que sumiu da resposta não fica para trás.
+        DB.execute("DELETE FROM ml_ads_campanha_dia_v1830 WHERE dia=?", (dia,))
+        if linhas:
+            DB.executemany(
+                "INSERT INTO ml_ads_campanha_dia_v1830(dia,campaign_id,nome,status,cost,clicks,prints,units,total_amount,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?)", linhas)
+        DB.execute(
+            "INSERT INTO ml_ads_dia_v1830(dia,cost,clicks,prints,units,total_amount,campanhas,updated_at) "
+            "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(dia) DO UPDATE SET cost=excluded.cost,clicks=excluded.clicks,"
+            "prints=excluded.prints,units=excluded.units,total_amount=excluded.total_amount,"
+            "campanhas=excluded.campanhas,updated_at=excluded.updated_at",
+            (dia, round(sum(x[4] for x in linhas), 2), sum(x[5] for x in linhas), sum(x[6] for x in linhas),
+             sum(x[7] for x in linhas), round(sum(x[8] for x in linhas), 2), len(linhas), agora),
+        )
+        DB.commit()
+
+    chamadas = 0
+    itens_gravados = 0
+    if com_itens and orcamento_chamadas > 0:
+        vinculos = _ml_vinculos_mlb_sku()
+        registros: list[tuple[Any, ...]] = []
+        for c in campanhas:
+            if chamadas >= orcamento_chamadas:
+                break
+            m = c.get("metrics") if isinstance(c.get("metrics"), dict) else {}
+            if (_money_number(m.get("cost")) or 0.0) <= 0:
+                continue
+            cid = str(c.get("id") or "")
+            if not cid:
+                continue
+            q = urlencode({"date_from": dia, "date_to": dia, "metrics": ML_ADS_METRICAS_ITEM})
+            try:
+                data = _ml_ads_api(f"/advertising/{quote(site)}/product_ads/campaigns/{quote(cid)}/ad_groups/metrics?{q}")
+            except Exception:
+                chamadas += 1
+                continue
+            chamadas += 1
+            for r in ((data or {}).get("results") or []) if isinstance(data, dict) else []:
+                if not isinstance(r, dict):
+                    continue
+                gid = str(r.get("ad_group_id") or "").strip()
+                mm = r.get("metrics") if isinstance(r.get("metrics"), dict) else {}
+                custo = round(float(_money_number(mm.get("cost")) or 0.0), 2)
+                if not gid or custo <= 0:
+                    continue
+                # Grupo já conhecido não gasta chamada; só o desconhecido custa uma.
+                grupo = _ml_ads_grupo_cache(gid) or {}
+                if not grupo and chamadas < orcamento_chamadas:
+                    grupo = _ml_ads_grupo_resolver(gid, site, vinculos)
+                    chamadas += 1
+                registros.append((dia, gid, cid, grupo.get("item_id", ""), grupo.get("sku", ""), custo,
+                                  _ml_ads_int(mm.get("clicks")), _ml_ads_int(mm.get("prints")),
+                                  _ml_ads_int(mm.get("units_quantity")),
+                                  round(float(_money_number(mm.get("total_amount")) or 0.0), 2), agora))
+        with DB_LOCK:
+            DB.execute("DELETE FROM ml_ads_item_dia_v1830 WHERE dia=?", (dia,))
+            if registros:
+                DB.executemany(
+                    "INSERT INTO ml_ads_item_dia_v1830(dia,ad_group_id,campaign_id,item_id,sku,cost,clicks,prints,units,total_amount,updated_at) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?)", registros)
+            DB.commit()
+        itens_gravados = len(registros)
+
+    return {"dia": dia, "campanhas": len(linhas), "cost": round(sum(x[4] for x in linhas), 2),
+            "itens": itens_gravados, "chamadas_itens": chamadas}
+
+
+def ml_ads_sync_once(dias: int = 0) -> dict[str, Any]:
+    """Sincroniza a janela recente e vai completando o histórico (até 90 dias)."""
+    if not ML_ADS_SYNC_LOCK.acquire(blocking=False):
+        return {"ok": True, "em_andamento": True}
+    try:
+        advertiser = ml_ads_advertiser()
+        if not advertiser.get("ok"):
+            _ml_ads_meta("ultimo_erro", str(advertiser.get("erro") or ""))
+            return {"ok": False, "conectado": False, "erro": advertiser.get("erro") or ""}
+        hoje = datetime.now(BR_TZ).date()
+        recentes = [(hoje - timedelta(days=i)).isoformat() for i in range(max(1, int(dias or ML_ADS_JANELA_RECENTE)))]
+        # Histórico: o dia mais antigo ainda não gravado, um por rodada.
+        with DB_LOCK:
+            ja_temos = {r["dia"] for r in DB.execute(
+                "SELECT dia FROM ml_ads_dia_v1830 WHERE dia >= ?",
+                ((hoje - timedelta(days=ML_ADS_HISTORICO_DIAS)).isoformat(),)).fetchall()}
+        faltando = [(hoje - timedelta(days=i)).isoformat() for i in range(ML_ADS_HISTORICO_DIAS)]
+        faltando = [d for d in faltando if d not in ja_temos and d not in recentes]
+        alvo = recentes + faltando[:3]
+        limite_itens = (hoje - timedelta(days=ML_ADS_ITENS_DIAS)).isoformat()
+        orcamento = ML_ADS_CHAMADAS_ITENS
+        feitos, erros = [], []
+        for dia in alvo:
+            try:
+                r = ml_ads_sync_dia(dia, advertiser, com_itens=dia >= limite_itens, orcamento_chamadas=orcamento)
+                orcamento = max(0, orcamento - int(r.get("chamadas_itens") or 0))
+                feitos.append(r)
+            except Exception as exc:
+                erros.append({"dia": dia, "erro": str(exc)[:300]})
+        _ml_ads_meta("ultima_sincronizacao", now_iso())
+        _ml_ads_meta("ultimo_erro", json_dumps(erros[0]) if erros else "")
+        return {"ok": not erros, "conectado": True, "dias": len(feitos), "erros": erros,
+                "faltando_historico": max(0, len(faltando) - 3)}
+    finally:
+        ML_ADS_SYNC_LOCK.release()
+
+
+def ml_ads_sync_loop(stop_event: threading.Event) -> None:
+    if stop_event.wait(90):
+        return
+    while not stop_event.is_set():
+        try:
+            ml_ads_sync_once()
+        except Exception:
+            pass
+        if stop_event.wait(ML_ADS_SYNC_INTERVAL):
+            break
+
+
+def ml_ads_status() -> dict[str, Any]:
+    """Estado da coleta de Ads, para a tela dizer a verdade sobre o número."""
+    try:
+        advertiser = json.loads(_ml_ads_meta("advertiser") or "{}")
+    except Exception:
+        advertiser = {}
+    with DB_LOCK:
+        row = DB.execute("SELECT MIN(dia) a, MAX(dia) b, COUNT(*) c FROM ml_ads_dia_v1830").fetchone()
+    return {
+        "conectado": bool(advertiser.get("ok")),
+        "advertiser_id": str(advertiser.get("advertiser_id") or ""),
+        "conta": str(advertiser.get("conta") or ""),
+        "erro": str(advertiser.get("erro") or "") or _ml_ads_meta("ultimo_erro"),
+        "ultima_sincronizacao": _ml_ads_meta("ultima_sincronizacao"),
+        "primeiro_dia": (row["a"] or "") if row else "",
+        "ultimo_dia": (row["b"] or "") if row else "",
+        "dias_gravados": int((row["c"] if row else 0) or 0),
+        "limite_api_dias": ML_ADS_HISTORICO_DIAS,
+    }
+
+
+# ---------------------------------------------------------------------------
+# V18.30: FINANCEIRO — faturamento, gastos e lucro (ML + Shopee).
+#
+# A conta, por linha de venda (vendas_v1799 é o faturamento; o marketplace é a
+# fonte e a janela é regravada, então venda cancelada some sozinha):
+#
+#   faturamento    = preço pago pelo comprador pelos itens (sem frete do comprador)
+#   CMV            = custo do produto × quantidade (Apollo; kit vira componentes)
+#   taxa           = tarifa de venda do marketplace
+#                    ML     -> fatura oficial (sale_fee.net / CV-BV) por pedido
+#                    Shopee -> comissão + taxa de serviço + transação (escrow)
+#   frete          = o que o VENDEDOR paga de envio
+#                    ML     -> lançamentos de envio da mesma fatura
+#                    Shopee -> frete líquido do escrow
+#   outros         = demais débitos da fatura atribuídos ao pedido (menos publicidade)
+#   ads            = Product Ads do dia (API de Publicidade), custo do PERÍODO
+#   imposto        = FINANCEIRO_IMPOSTO_PERCENT % sobre a venda (padrão 12%)
+#
+#   lucro bruto    = faturamento − CMV
+#   lucro líquido  = lucro bruto − taxa − frete − outros − ads − imposto
+#
+# Regra de ouro herdada do resto do sistema: o que não é conhecido fica NULO e
+# aparece como pendência. Nada aqui é estimado, arredondado para cima nem
+# preenchido por média — um lucro bonito e errado é pior que um número faltando.
+# ---------------------------------------------------------------------------
+try:
+    FINANCEIRO_IMPOSTO_PERCENT = max(0.0, min(100.0, float(os.getenv("FINANCEIRO_IMPOSTO_PERCENT", "12") or 12)))
+except (TypeError, ValueError):
+    FINANCEIRO_IMPOSTO_PERCENT = 12.0
+FINANCEIRO_SYNC_LOCK = threading.Lock()
+FINANCEIRO_SHOPEE_POR_RODADA = max(10, min(500, int(os.getenv("FINANCEIRO_SHOPEE_POR_RODADA", "150"))))
+
+
+def _financeiro_periodos_fatura(d1: date, d2: date) -> list[str]:
+    """Chaves de período da fatura do ML que podem conter os lançamentos.
+
+    Inclui o mês seguinte ao fim do período: venda do dia 30 costuma ser cobrada
+    na fatura do mês seguinte.
+    """
+    chaves: list[str] = []
+    ano, mes = d1.year, d1.month
+    while (ano, mes) <= (d2.year, d2.month):
+        chaves.append(f"{ano:04d}-{mes:02d}-01")
+        mes += 1
+        if mes > 12:
+            mes, ano = 1, ano + 1
+    chaves.append(f"{ano:04d}-{mes:02d}-01")
+    return chaves
+
+
+def _financeiro_chunks(valores: list[str], tamanho: int = 400):
+    for i in range(0, len(valores), tamanho):
+        yield valores[i:i + tamanho]
+
+
+def _financeiro_billing_ml(period_keys: list[str], order_ids: list[str]) -> dict[str, Any]:
+    """Concilia a fatura do ML do período: por pedido e o que não tem pedido.
+
+    Usa a MESMA regra do cálculo por venda (_ml_billing_consolidar_lancamentos).
+    O raw_json é truncado no SELECT porque aqui são milhares de lançamentos de
+    uma vez; a classificação por sub_type e por transaction_detail não depende
+    dele — ele é só o último fallback para reconhecer envio.
+    """
+    vazio = {"por_pedido": {}, "sem_pedido": {"publicidade": 0.0, "outros": 0.0, "credito": 0.0, "itens": []},
+             "periodos": period_keys, "lancamentos": 0}
+    if not period_keys:
+        return vazio
+    colunas = ("order_id,detail_amount,detail_type,detail_sub_type,transaction_detail,debited_from_operation,"
+               "sale_fee_net,is_credit,substr(raw_json,1,1200) AS raw_json")
+    ph_periodos = ",".join("?" for _ in period_keys)
+    por_pedido_entries: dict[str, list[dict[str, Any]]] = {}
+    alvo = {str(o).strip() for o in order_ids if str(o).strip()}
+    total = 0
+    for lote in _financeiro_chunks(sorted(alvo)):
+        ph_ids = ",".join("?" for _ in lote)
+        with DB_LOCK:
+            rows = DB.execute(
+                f"SELECT {colunas} FROM ml_billing_period_detail "
+                f"WHERE period_key IN ({ph_periodos}) AND order_id IN ({ph_ids})",
+                tuple(period_keys) + tuple(lote),
+            ).fetchall()
+        for r in rows:
+            total += 1
+            por_pedido_entries.setdefault(str(r["order_id"]), []).append(dict(r))
+    por_pedido = {oid: _ml_billing_consolidar_lancamentos(ents) for oid, ents in por_pedido_entries.items()}
+
+    # Lançamentos sem pedido: publicidade, mensalidades, ajustes do período.
+    pub = 0.0
+    outros = 0.0
+    credito = 0.0
+    itens: dict[str, float] = {}
+    with DB_LOCK:
+        rows = DB.execute(
+            f"SELECT {colunas} FROM ml_billing_period_detail WHERE period_key IN ({ph_periodos}) AND order_id=''",
+            tuple(period_keys),
+        ).fetchall()
+    for r in rows:
+        total += 1
+        valor = _money_number(r["detail_amount"])
+        if valor is None or abs(valor) <= 0:
+            continue
+        valor = abs(valor)
+        descricao = str(r["transaction_detail"] or r["detail_sub_type"] or r["detail_type"] or "Outros")[:120]
+        if bool(int(r["is_credit"] or 0)):
+            credito += valor
+            continue
+        if _ml_billing_is_publicidade(str(r["detail_sub_type"] or ""), str(r["detail_type"] or ""), str(r["transaction_detail"] or "")):
+            pub += valor
+        else:
+            outros += valor
+        itens[descricao] = round(itens.get(descricao, 0.0) + valor, 2)
+    ordenados = sorted(itens.items(), key=lambda kv: -kv[1])[:20]
+    return {"por_pedido": por_pedido,
+            "sem_pedido": {"publicidade": round(pub, 2), "outros": round(outros, 2), "credito": round(credito, 2),
+                           "itens": [{"descricao": k, "valor": v} for k, v in ordenados]},
+            "periodos": period_keys, "lancamentos": total}
+
+
+def _financeiro_custo_unitario(sku: str, produtos: dict[str, Any], reservas: dict[str, Any],
+                               kits: dict[str, Any], cache: dict[str, Any]) -> tuple[float | None, str]:
+    """Custo de UMA unidade do que foi vendido nesse anúncio (kit = soma dos
+    componentes). Devolve (custo, origem); custo None = não sabemos, e aí a linha
+    entra como pendência em vez de virar lucro inventado."""
+    chave = str(sku or "").strip().upper()
+    if chave in cache:
+        return cache[chave]
+    if not chave:
+        cache[chave] = (None, "")
+        return cache[chave]
+    comps = (kits.get(str(sku or "").strip()) or {}).get("componentes")
+    if not comps:
+        partes = [x for x in chave.split("/") if x.strip()] if "/" in chave else [chave]
+        comps = [{"sku": x, "quantidade": 1} for x in partes]
+    total = 0.0
+    origens: list[str] = []
+    completo = True
+    for c in comps:
+        codigo = _compras_codigo(str(c.get("sku") or ""), produtos)
+        if not codigo:
+            completo = False
+            continue
+        base = (produtos.get(codigo) or {}).get("custo")
+        custo, origem, _data = _compras_resolver_custo(base, reservas.get(codigo, {}))
+        if custo is None:
+            completo = False
+            continue
+        try:
+            unidades = max(1, int(c.get("quantidade") or 1))
+        except (TypeError, ValueError):
+            unidades = 1
+        total += float(custo) * unidades
+        origens.append(origem)
+    resultado = (round(total, 4), ("kit" if len(comps) > 1 else (origens[0] if origens else ""))) if (completo and total > 0) else (None, "")
+    cache[chave] = resultado
+    return resultado
+
+
+def _financeiro_ads_periodo(d1: date, d2: date) -> dict[str, Any]:
+    """Gasto com Product Ads no período: total, por dia e por SKU."""
+    with DB_LOCK:
+        dias = DB.execute("SELECT dia, cost FROM ml_ads_dia_v1830 WHERE dia BETWEEN ? AND ?",
+                          (d1.isoformat(), d2.isoformat())).fetchall()
+        por_sku = DB.execute(
+            "SELECT UPPER(sku) AS sku, SUM(cost) AS cost FROM ml_ads_item_dia_v1830 "
+            "WHERE dia BETWEEN ? AND ? AND sku<>'' GROUP BY UPPER(sku)",
+            (d1.isoformat(), d2.isoformat())).fetchall()
+        sem_sku = DB.execute(
+            "SELECT COALESCE(SUM(cost),0) AS cost FROM ml_ads_item_dia_v1830 "
+            "WHERE dia BETWEEN ? AND ? AND sku=''", (d1.isoformat(), d2.isoformat())).fetchone()
+    return {
+        "total": round(sum(float(r["cost"] or 0) for r in dias), 2),
+        "por_dia": {str(r["dia"]): round(float(r["cost"] or 0), 2) for r in dias},
+        "por_sku": {str(r["sku"] or ""): round(float(r["cost"] or 0), 2) for r in por_sku},
+        "sem_sku": round(float((sem_sku["cost"] if sem_sku else 0) or 0), 2),
+        "dias_com_dado": len(dias),
+        "status": ml_ads_status(),
+    }
+
+
+def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limite_pedidos: int = 400) -> dict[str, Any]:
+    """Faturamento, gastos e lucro do período, com a origem de cada número."""
+    d1 = datetime.strptime(date_from, "%Y-%m-%d").date()
+    d2 = datetime.strptime(date_to, "%Y-%m-%d").date()
+    if d1 > d2:
+        d1, d2 = d2, d1
+    if (d2 - d1).days > 400:
+        raise ValueError("Período muito longo (máximo 400 dias).")
+    canal = marketplace if marketplace in VENDAS_MARKETPLACES else ""
+    filtro = " AND marketplace=?" if canal else ""
+    args: tuple[Any, ...] = (d1.isoformat(), d2.isoformat()) + ((canal,) if canal else ())
+    with DB_LOCK:
+        vendas = [dict(r) for r in DB.execute(
+            "SELECT marketplace, order_id, line_key, sale_day, sku, anuncio, title, qty, amount "
+            f"FROM vendas_v1799 WHERE sale_day BETWEEN ? AND ?{filtro} ORDER BY sale_day, order_id",
+            args).fetchall()]
+
+    produtos = _compras_produtos_precificador()
+    reservas = _compras_custos_reserva(produtos)
+    kits = full_kit_compositions([v["sku"] for v in vendas])
+    cache_custo: dict[str, Any] = {}
+    imposto_rate = FINANCEIRO_IMPOSTO_PERCENT / 100.0
+
+    # --- custos por pedido -------------------------------------------------
+    pedidos_ml = sorted({str(v["order_id"]) for v in vendas if v["marketplace"] == "ml"})
+    pedidos_shopee = sorted({str(v["order_id"]) for v in vendas if v["marketplace"] == "shopee"})
+    billing = _financeiro_billing_ml(_financeiro_periodos_fatura(d1, d2), pedidos_ml) if pedidos_ml else \
+        {"por_pedido": {}, "sem_pedido": {"publicidade": 0.0, "outros": 0.0, "credito": 0.0, "itens": []},
+         "periodos": [], "lancamentos": 0}
+    escrow: dict[str, dict[str, Any]] = {}
+    for lote in _financeiro_chunks(pedidos_shopee):
+        ph = ",".join("?" for _ in lote)
+        with DB_LOCK:
+            for r in DB.execute(f"SELECT * FROM shopee_escrow_v1810 WHERE order_sn IN ({ph}) AND erro=''", tuple(lote)).fetchall():
+                escrow[str(r["order_sn"])] = dict(r)
+
+    custos_pedido: dict[tuple[str, str], dict[str, Any]] = {}
+    for oid in pedidos_ml:
+        b = billing["por_pedido"].get(oid) or {}
+        taxa = _money_number(b.get("sale_fee"))
+        frete = _money_number(b.get("shipping"))
+        outros = _money_number(b.get("other_cost"))
+        pub = float(b.get("publicidade") or 0.0)
+        if outros is not None and pub:
+            # Ads entra uma vez só, pela API de Publicidade.
+            outros = round(outros - pub, 2)
+        custos_pedido[("ml", oid)] = {"taxa": taxa, "frete": frete, "outros": outros,
+                                      "bonus": float(b.get("bonus") or 0.0),
+                                      "origem": str(b.get("source") or "") or "Fatura ML não sincronizada",
+                                      "conciliado": taxa is not None}
+    for oid in pedidos_shopee:
+        e = escrow.get(oid)
+        if not e:
+            custos_pedido[("shopee", oid)] = {"taxa": None, "frete": None, "outros": None, "bonus": 0.0,
+                                              "origem": "Escrow Shopee ainda não consultado", "conciliado": False}
+            continue
+        taxa = round(float(e["commission_fee"] or 0) + float(e["service_fee"] or 0) + float(e["transaction_fee"] or 0), 2)
+        custos_pedido[("shopee", oid)] = {"taxa": taxa, "frete": round(float(e["shipping_net"] or 0), 2),
+                                          "outros": 0.0, "bonus": 0.0, "origem": "Shopee get_escrow_detail",
+                                          "conciliado": True,
+                                          "renda_liquida": round(float(e["escrow_amount"] or 0), 2)}
+
+    # Receita por pedido para ratear a taxa/frete entre as linhas.
+    receita_pedido: dict[tuple[str, str], float] = {}
+    for v in vendas:
+        chave = (str(v["marketplace"]), str(v["order_id"]))
+        receita_pedido[chave] = receita_pedido.get(chave, 0.0) + float(v["amount"] or 0)
+
+    ads = _financeiro_ads_periodo(d1, d2)
+
+    def bloco() -> dict[str, Any]:
+        return {"faturamento": 0.0, "unidades": 0, "pedidos": set(), "cmv": 0.0, "taxas": 0.0, "frete": 0.0,
+                "outros": 0.0, "imposto": 0.0, "ads": 0.0, "sem_custo": 0.0, "sem_taxa": 0.0}
+
+    totais = bloco()
+    por_mp: dict[str, dict[str, Any]] = {m: bloco() for m in VENDAS_MARKETPLACES}
+    por_dia: dict[str, dict[str, Any]] = {}
+    por_sku: dict[str, dict[str, Any]] = {}
+    pedidos_detalhe: dict[tuple[str, str], dict[str, Any]] = {}
+
+    for v in vendas:
+        mp = str(v["marketplace"])
+        oid = str(v["order_id"])
+        chave = (mp, oid)
+        receita = round(float(v["amount"] or 0), 2)
+        qty = int(v["qty"] or 0)
+        sku = str(v["sku"] or "").strip()
+        sku_key = sku.upper() or "(sem SKU)"
+        unit, origem_custo = _financeiro_custo_unitario(sku, produtos, reservas, kits, cache_custo)
+        cmv = round(unit * qty, 2) if unit is not None else None
+        pc = custos_pedido.get(chave) or {}
+        total_pedido = receita_pedido.get(chave, 0.0)
+        fatia = (receita / total_pedido) if total_pedido > 0 else 1.0
+        taxa = round(pc["taxa"] * fatia, 2) if pc.get("taxa") is not None else None
+        frete = round(pc["frete"] * fatia, 2) if pc.get("frete") is not None else None
+        outros = round(pc["outros"] * fatia, 2) if pc.get("outros") is not None else None
+        imposto = round(receita * imposto_rate, 2)
+
+        alvos = [totais, por_mp.setdefault(mp, bloco()),
+                 por_dia.setdefault(str(v["sale_day"]), {**bloco(), "dia": str(v["sale_day"])})]
+        for alvo in alvos:
+            alvo["faturamento"] = round(alvo["faturamento"] + receita, 2)
+            alvo["unidades"] += qty
+            alvo["pedidos"].add(chave)
+            alvo["imposto"] = round(alvo["imposto"] + imposto, 2)
+            if cmv is None:
+                alvo["sem_custo"] = round(alvo["sem_custo"] + receita, 2)
+            else:
+                alvo["cmv"] = round(alvo["cmv"] + cmv, 2)
+            if taxa is None:
+                alvo["sem_taxa"] = round(alvo["sem_taxa"] + receita, 2)
+            else:
+                alvo["taxas"] = round(alvo["taxas"] + taxa, 2)
+            if frete is not None:
+                alvo["frete"] = round(alvo["frete"] + frete, 2)
+            if outros is not None:
+                alvo["outros"] = round(alvo["outros"] + outros, 2)
+
+        s = por_sku.setdefault(sku_key, {"sku": sku_key, "titulo": str(v["title"] or ""), "codigo": _compras_codigo(sku, produtos),
+                                         "unidades": 0, "faturamento": 0.0, "cmv": 0.0, "taxas": 0.0, "frete": 0.0,
+                                         "outros": 0.0, "imposto": 0.0, "ads": 0.0, "custo_unitario": unit,
+                                         "custo_origem": origem_custo, "sem_custo": False, "pedidos": set()})
+        s["unidades"] += qty
+        s["faturamento"] = round(s["faturamento"] + receita, 2)
+        s["imposto"] = round(s["imposto"] + imposto, 2)
+        s["pedidos"].add(chave)
+        if cmv is None:
+            s["sem_custo"] = True
+        else:
+            s["cmv"] = round(s["cmv"] + cmv, 2)
+        if taxa is not None:
+            s["taxas"] = round(s["taxas"] + taxa, 2)
+        if frete is not None:
+            s["frete"] = round(s["frete"] + frete, 2)
+        if outros is not None:
+            s["outros"] = round(s["outros"] + outros, 2)
+        if not s["titulo"] and v["title"]:
+            s["titulo"] = str(v["title"])
+
+        p = pedidos_detalhe.setdefault(chave, {
+            "marketplace": mp, "order_id": oid, "dia": str(v["sale_day"]), "itens": [], "unidades": 0,
+            "faturamento": 0.0, "cmv": 0.0, "taxa": pc.get("taxa"), "frete": pc.get("frete"),
+            "outros": pc.get("outros"), "imposto": 0.0, "origem_custo_venda": pc.get("origem", ""),
+            "conciliado": bool(pc.get("conciliado")), "sem_custo": False,
+        })
+        p["unidades"] += qty
+        p["faturamento"] = round(p["faturamento"] + receita, 2)
+        p["imposto"] = round(p["imposto"] + imposto, 2)
+        p["itens"].append({"sku": sku, "titulo": str(v["title"] or ""), "qty": qty, "valor": receita,
+                           "custo_unitario": unit, "cmv": cmv})
+        if cmv is None:
+            p["sem_custo"] = True
+        else:
+            p["cmv"] = round(p["cmv"] + cmv, 2)
+
+    # --- Ads: custo do período, não do pedido ------------------------------
+    ads_total = ads["total"] if (not canal or canal == "ml") else 0.0
+    totais["ads"] = ads_total
+    if "ml" in por_mp:
+        por_mp["ml"]["ads"] = ads_total
+    for dia, valor in ads["por_dia"].items():
+        if not canal or canal == "ml":
+            alvo = por_dia.get(dia)
+            if alvo is not None:
+                alvo["ads"] = valor
+    ads_sku_usado = 0.0
+    for sku_key, valor in ads["por_sku"].items():
+        alvo = por_sku.get(sku_key)
+        if alvo is not None:
+            alvo["ads"] = valor
+            ads_sku_usado = round(ads_sku_usado + valor, 2)
+
+    def fechar(b: dict[str, Any]) -> dict[str, Any]:
+        pedidos = len(b.pop("pedidos"))
+        fat = round(b["faturamento"], 2)
+        bruto = round(fat - b["cmv"], 2)
+        liquido = round(bruto - b["taxas"] - b["frete"] - b["outros"] - b["ads"] - b["imposto"], 2)
+        return {**b, "faturamento": fat, "pedidos": pedidos,
+                "ticket_medio": round(fat / pedidos, 2) if pedidos else 0.0,
+                "lucro_bruto": bruto, "lucro_liquido": liquido,
+                "margem_bruta": round(bruto / fat * 100, 2) if fat else None,
+                "margem_liquida": round(liquido / fat * 100, 2) if fat else None}
+
+    lista_sku = []
+    for s in por_sku.values():
+        s["pedidos"] = len(s["pedidos"])
+        bruto = round(s["faturamento"] - s["cmv"], 2)
+        s["lucro_bruto"] = bruto
+        s["lucro_liquido"] = round(bruto - s["taxas"] - s["frete"] - s["outros"] - s["ads"] - s["imposto"], 2)
+        s["margem_liquida"] = round(s["lucro_liquido"] / s["faturamento"] * 100, 2) if s["faturamento"] else None
+        lista_sku.append(s)
+    lista_sku.sort(key=lambda x: -x["faturamento"])
+
+    lista_pedidos = []
+    for p in pedidos_detalhe.values():
+        bruto = round(p["faturamento"] - p["cmv"], 2)
+        p["lucro_bruto"] = bruto
+        conhecidos = sum(v for v in (p["taxa"], p["frete"], p["outros"]) if v is not None)
+        p["lucro_liquido"] = round(bruto - conhecidos - p["imposto"], 2) if not p["sem_custo"] else None
+        p["margem_liquida"] = round(p["lucro_liquido"] / p["faturamento"] * 100, 2) if (p["lucro_liquido"] is not None and p["faturamento"]) else None
+        lista_pedidos.append(p)
+    lista_pedidos.sort(key=lambda x: (x["lucro_liquido"] is None, x["lucro_liquido"] if x["lucro_liquido"] is not None else 0))
+    limite = max(20, min(2000, int(limite_pedidos or 400)))
+
+    dias_lista = []
+    dia_corrente = d1
+    while dia_corrente <= d2:
+        chave_dia = dia_corrente.isoformat()
+        b = por_dia.get(chave_dia) or {**bloco(), "dia": chave_dia, "ads": ads["por_dia"].get(chave_dia, 0.0) if (not canal or canal == "ml") else 0.0}
+        dias_lista.append({"dia": chave_dia, **fechar(b)})
+        dia_corrente += timedelta(days=1)
+
+    ml_conciliados = sum(1 for o in pedidos_ml if (custos_pedido.get(("ml", o)) or {}).get("conciliado"))
+    shopee_conciliados = sum(1 for o in pedidos_shopee if (custos_pedido.get(("shopee", o)) or {}).get("conciliado"))
+    totais_fechados = fechar(totais)
+    return {
+        "ok": True,
+        "periodo": {"inicio": d1.isoformat(), "fim": d2.isoformat(), "dias": (d2 - d1).days + 1},
+        "marketplace": canal or "todos",
+        "imposto_percent": FINANCEIRO_IMPOSTO_PERCENT,
+        "totais": totais_fechados,
+        "por_marketplace": {m: fechar(b) for m, b in por_mp.items()},
+        "por_dia": dias_lista,
+        "por_sku": lista_sku[:300],
+        "pedidos": lista_pedidos[:limite],
+        "pedidos_total": len(lista_pedidos),
+        "ads": {"total": ads_total, "por_sku_identificado": ads_sku_usado,
+                "sem_sku": ads["sem_sku"], "dias_com_dado": ads["dias_com_dado"], **ads["status"]},
+        "fatura_ml": {"periodos": billing["periodos"], "lancamentos": billing["lancamentos"],
+                      "sem_pedido": billing["sem_pedido"]},
+        "cobertura": {
+            "pedidos_ml": len(pedidos_ml), "pedidos_ml_conciliados": ml_conciliados,
+            "pedidos_shopee": len(pedidos_shopee), "pedidos_shopee_conciliados": shopee_conciliados,
+            "faturamento_sem_custo": totais_fechados["sem_custo"],
+            "faturamento_sem_taxa": totais_fechados["sem_taxa"],
+            "linhas": len(vendas),
+        },
+    }
+
+
+def financeiro_sincronizar(date_from: str, date_to: str) -> dict[str, Any]:
+    """Busca o que falta para fechar o período: fatura do ML, escrow da Shopee e Ads.
+
+    Não recalcula nada: só preenche as fontes oficiais. Pode ser chamada de novo
+    — cada rodada avança um pedaço (a Shopee tem limite de chamadas).
+    """
+    if not FINANCEIRO_SYNC_LOCK.acquire(blocking=False):
+        return {"ok": True, "em_andamento": True}
+    try:
+        d1 = datetime.strptime(date_from, "%Y-%m-%d").date()
+        d2 = datetime.strptime(date_to, "%Y-%m-%d").date()
+        if d1 > d2:
+            d1, d2 = d2, d1
+        resultado: dict[str, Any] = {"ok": True, "periodo": {"inicio": d1.isoformat(), "fim": d2.isoformat()}}
+        # 1) Fatura do ML (mês do período + o seguinte).
+        try:
+            _, seller_id = ml_access_token()
+        except Exception as exc:
+            seller_id = ""
+            resultado["ml_token"] = str(exc)[:200]
+        faturas = []
+        mes_atual = _ml_billing_month_key(now_iso())
+        for period_key in _financeiro_periodos_fatura(d1, d2):
+            for doc in ("BILL", "CREDIT_NOTE"):
+                try:
+                    faturas.append(_ml_billing_v1513_sync_period(period_key, doc, str(seller_id or ""),
+                                                                 force=(period_key == mes_atual)))
+                except Exception as exc:
+                    faturas.append({"ok": False, "period_key": period_key, "document_type": doc,
+                                    "status": "error", "diagnostic": str(exc)[:300]})
+        resultado["fatura_ml"] = {"periodos": len(faturas),
+                                  "erros": [f for f in faturas if str(f.get("status") or "") == "error"][:5]}
+        # 2) Escrow da Shopee dos pedidos do período que ainda não temos.
+        with DB_LOCK:
+            pendentes = [str(r["order_id"]) for r in DB.execute(
+                "SELECT DISTINCT v.order_id FROM vendas_v1799 v "
+                "LEFT JOIN shopee_escrow_v1810 e ON e.order_sn = v.order_id AND e.erro='' "
+                "WHERE v.marketplace='shopee' AND v.sale_day BETWEEN ? AND ? AND e.order_sn IS NULL "
+                "ORDER BY v.sale_day DESC", (d1.isoformat(), d2.isoformat())).fetchall()]
+        buscados = 0
+        for sn in pendentes[:FINANCEIRO_SHOPEE_POR_RODADA]:
+            if shopee_escrow_lookup(sn):
+                buscados += 1
+        resultado["shopee"] = {"pendentes": len(pendentes), "buscados": buscados,
+                               "faltam": max(0, len(pendentes) - buscados)}
+        # 3) Publicidade.
+        try:
+            resultado["ads"] = ml_ads_sync_once()
+        except Exception as exc:
+            resultado["ads"] = {"ok": False, "erro": str(exc)[:300]}
+        return resultado
+    finally:
+        FINANCEIRO_SYNC_LOCK.release()
 
 
 # ---------------------------------------------------------------------------
@@ -14546,6 +15426,34 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
+        if path == "/api/financeiro/resumo":
+            # V18.30: faturamento, gastos e lucro do período (ML + Shopee).
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            hoje = datetime.now(BR_TZ).date()
+            inicio = str((query.get("data_inicio") or [""])[0] or "").strip() or hoje.replace(day=1).isoformat()
+            fim = str((query.get("data_fim") or [""])[0] or "").strip() or hoje.isoformat()
+            if not re.match(r"^\d{4}-\d{2}-\d{2}$", inicio) or not re.match(r"^\d{4}-\d{2}-\d{2}$", fim):
+                self.send_json({"ok": False, "error": "Datas no formato AAAA-MM-DD."}, 400)
+                return
+            canal = str((query.get("marketplace") or [""])[0] or "").strip().lower()
+            try:
+                self.send_json(financeiro_payload(inicio, fim, canal))
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/financeiro/ads":
+            # V18.30: estado da coleta de Publicidade (Product Ads).
+            if self.auth(admin_only=True) is None:
+                return
+            try:
+                self.send_json({"ok": True, **ml_ads_status()})
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
         if path == "/api/dashboard/produto-custos":
             # V18.10: custos reais de venda de um SKU, separados por marketplace.
             ctx = self.auth(admin_only=True)
@@ -14714,6 +15622,8 @@ class AppHandler(BaseHTTPRequestHandler):
             "/promocoes-ml": "admin", "/promocoes-ml/": "admin", "/promocoes-ml.html": "admin",
             # V18.00: Demanda de Compra.
             "/compras": "admin", "/compras/": "admin", "/compras.html": "admin",
+            # V18.30: Financeiro (faturamento, gastos e lucro).
+            "/financeiro": "admin", "/financeiro/": "admin", "/financeiro.html": "admin",
             "/estacao-impressao": "estacao", "/estacao-impressao/": "estacao", "/estacao-impressao.html": "estacao",
             "/print-station": "estacao", "/print-station/": "estacao",
             "/precificador": "precificador", "/precificador/": "precificador", "/precificador.html": "precificador",
@@ -14880,6 +15790,26 @@ class AppHandler(BaseHTTPRequestHandler):
                 threading.Thread(target=vendas_sync_once, name="vendas-sync-manual", daemon=True).start()
                 audit(ctx["username"], "dashboard.vendas.sincronizar", "")
                 self.send_json({"ok": True, "iniciada": True})
+            return
+        if path == "/api/financeiro/sincronizar":
+            # V18.30: busca fatura do ML, escrow da Shopee e Ads do período.
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            if FINANCEIRO_SYNC_LOCK.locked():
+                self.send_json({"ok": True, "em_andamento": True})
+                return
+            req = self.read_json() or {}
+            hoje = datetime.now(BR_TZ).date()
+            inicio = str(req.get("data_inicio") or "").strip() or hoje.replace(day=1).isoformat()
+            fim = str(req.get("data_fim") or "").strip() or hoje.isoformat()
+            if not re.match(r"^\d{4}-\d{2}-\d{2}$", inicio) or not re.match(r"^\d{4}-\d{2}-\d{2}$", fim):
+                self.send_json({"ok": False, "error": "Datas no formato AAAA-MM-DD."}, 400)
+                return
+            threading.Thread(target=financeiro_sincronizar, args=(inicio, fim),
+                             name="financeiro-sync", daemon=True).start()
+            audit(ctx["username"], "financeiro.sincronizar", f"{inicio}..{fim}")
+            self.send_json({"ok": True, "iniciada": True})
             return
         if path == "/api/relatorio-diario/enviar":
             # V18.13: envia o relatório diário agora (teste manual do ADMIN).
@@ -17179,6 +18109,9 @@ class AppHandler(BaseHTTPRequestHandler):
             "/compras": "compras.html",
             "/compras/": "compras.html",
             "/compras.html": "compras.html",
+            "/financeiro": "financeiro.html",
+            "/financeiro/": "financeiro.html",
+            "/financeiro.html": "financeiro.html",
             "/promocoes-ml/": "admin.html",
             "/promocoes-ml.html": "admin.html",
             "/rentabilidade-ml": "rentabilidade-ml.html",
@@ -17299,6 +18232,13 @@ def main() -> None:
         name="vendas-sync",
         daemon=True,
     )
+    # V18.30: gasto com Publicidade (Product Ads) para o Financeiro.
+    ads_thread = threading.Thread(
+        target=ml_ads_sync_loop,
+        args=(watcher_stop,),
+        name="ml-ads-sync",
+        daemon=True,
+    )
     # V18.13: agente de relatório diário por e-mail (00:01).
     relatorio_thread = threading.Thread(
         target=relatorio_diario_loop,
@@ -17315,6 +18255,7 @@ def main() -> None:
     shopee_label_thread.start()
     shopee_orders_thread.start()
     vendas_ml_thread.start()
+    ads_thread.start()
     relatorio_thread.start()
     server = ThreadingHTTPServer((HOST, PORT), AppHandler)
     server.daemon_threads = True

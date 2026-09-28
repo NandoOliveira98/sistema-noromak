@@ -77,6 +77,7 @@ APP/
   conferencia.html   ~199KB  fila de conferência e bipagem
   precificador.html  ~632KB  custo, margem, preço ideal, curva ABC
   estacao-impressao.html     estação Zebra / QZ Tray
+  financeiro.html            faturamento, gastos e lucro (V18.30)
   rentabilidade-ml.html, analise-full.html, compras.html (Demanda de Compra)
                              (Central de Pendências e Promoções ML removidas na V17.99;
                              /pendencias e /promocoes-ml abrem o Admin)
@@ -198,7 +199,8 @@ APIs principais: `/api/storage`, `/api/order-complete`, `/api/order-lock`,
 `/api/order-kit-delete`, `/api/order-line-delete`, `/api/order-conference-name`,
 `/api/order-sku`, `/api/order-ean`, `/api/admin-order-upsert`, `/api/roles`,
 `/api/integracoes/{mercadolivre,shopee}/*`, `/api/precificador/*`, `/api/print/*`,
-`/api/qz/*`, `/api/security/owner/*`, `/api/full/apollo-stock`.
+`/api/qz/*`, `/api/security/owner/*`, `/api/full/apollo-stock`,
+`/api/financeiro/{resumo,ads,sincronizar}`.
 
 Perfis: **Admin**, **Supervisor**, **Operador**. Supervisor é intermediário e **não**
 recebe automaticamente as áreas sensíveis. Módulos por usuário: `conferencia`, `admin`,
@@ -249,6 +251,33 @@ sugestão de transferência Ribeirão/Bauru e Lista de separação por prateleir
 **Pedido de rota de demanda (V17.99):** `PEDIDO_ROTA_DEMANDA_APOLLO.md` — vendas por período,
 compra em aberto, custo e marca em lote. A chave do Noromak **só** tem `/custo` e `/estoque`;
 não usar outras rotas do Apollo sem acordo com a equipe dele.
+
+### Financeiro — faturamento, gastos e lucro (V18.30)
+`APP/financeiro.html` (`/financeiro`, menu Comercial, só **admin**). Junta o que já existia:
+faturamento de `vendas_v1799` (ML + Shopee), custo do produto pela mesma regra da Demanda de
+Compra (`_compras_produtos_precificador` + `_compras_resolver_custo`, kit vira componentes),
+tarifa e frete do ML pela **fatura oficial** (`ml_billing_period_detail`, regra única em
+`_ml_billing_consolidar_lancamentos`, que na V18.30 passou a devolver também `shipping` e
+`publicidade`), tarifa e frete da Shopee pelo **escrow** (`shopee_escrow_v1810`) e o gasto de
+Ads pela API de Publicidade. Imposto **fixo de 12%** sobre a venda (`FINANCEIRO_IMPOSTO_PERCENT`).
+`lucro bruto = faturamento − CMV`; `líquido = bruto − taxa − frete − outros − ads − imposto`.
+A tarifa é **do pedido** e rateada entre as linhas pelo valor — nunca somada por linha.
+O que não é conhecido fica **nulo e visível** (`cobertura.faturamento_sem_custo` /
+`sem_taxa`): nada é estimado. `GET /api/financeiro/resumo`, `POST /api/financeiro/sincronizar`
+(fatura + escrow pendente + Ads, em segundo plano).
+
+### Publicidade / Mercado Ads (V18.30)
+`GET /advertising/advertisers?product_id=PADS` (`Api-Version: 1`) → `advertiser_id`;
+campanhas e métricas em `/advertising/{MLB}/advertisers/{id}/product_ads/campaigns/search`
+(`api-version: 2`, `metrics=cost,...`), gasto por anúncio em
+`/product_ads/campaigns/{id}/ad_groups/metrics` + `/product_ads/ad_groups/{id}`.
+Exige a permissão funcional **Publicidade** no DevCenter (e reconexão do ML) **e** Publicidade
+habilitada na conta — sem isso a API responde 404 "No permissions found for user_id" e a tela
+mostra "Ads não conectado" com o gasto **em branco**, nunca estimado.
+As métricas só voltam **90 dias** e consolidam às **10:00 GMT-3**: o worker `ml_ads_sync_loop`
+(1 h) regrava a janela recente em `ml_ads_dia_v1830` / `ml_ads_campanha_dia_v1830` /
+`ml_ads_item_dia_v1830` e completa o histórico de trás para frente. Os endpoints antigos de
+`product_ads/items` e `ads/metrics` foram desativados pelo ML em maio/2026 — só `ad_groups`.
 
 ### Dashboard de vendas (V17.99)
 Worker `vendas_sync_loop` copia as vendas do **ML** (`/orders/search`: valor, qtd, data real,
@@ -350,6 +379,7 @@ Os testes ficam em `TESTES/`:
 |---|---|
 | `test_admin_soberano.py` | exclusão soberana, tombstone, KIT inteiro, reinclusão ADMIN, campos protegidos, pedido manual |
 | `test_conferencia.py` | bip monotônico, metadados de conferência, conclusão canônica, cofre manual |
+| `test_financeiro.py` | imposto de 12%, lucro bruto/líquido, tarifa por pedido (não por linha), venda sem custo não vira lucro, Ads sem duplicidade, escrow Shopee |
 | `test_instalacao.py` | instalação nova, idempotência do `init_db`, versionamento do storage, autenticação |
 | `base.py` | infraestrutura: banco temporário, servidor real em porta livre, cliente HTTP |
 
