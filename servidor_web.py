@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.40-PROMOCOES-BUSCA-TODOS"
+APP_VERSION = "18.41-PROMOCOES-SEM-RECARREGAR"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -14601,15 +14601,26 @@ def promocoes_painel(mlbs: list[str]) -> dict[str, Any]:
             continue
         if not mlb.startswith("MLB"):
             mlb = "MLB" + re.sub(r"\D", "", mlb)
-        try:
-            promos = ml_promocoes_do_item(mlb)
-        except Exception as exc:
-            erros.append({"mlb": mlb, "erro": str(exc)[:220]})
-            continue
+        det = detalhes.get(mlb) or {}
+        status_ml = str(det.get("status") or "")
+        # V18.41: anúncio sem estoque, pausado ou encerrado NÃO some da tabela.
+        # O encerrado nem é consultado (o ML responde 400 "status not allowed");
+        # o pausado que o ML recusar aparece com o motivo, e não só no aviso.
+        promos: list[dict[str, Any]] = []
+        erro_promo = ""
+        if status_ml == "closed":
+            erro_promo = "Anúncio encerrado no Mercado Livre — reative lá para criar promoção."
+        else:
+            try:
+                promos = ml_promocoes_do_item(mlb)
+            except Exception as exc:
+                if status_ml in ("", "active"):
+                    erros.append({"mlb": mlb, "erro": str(exc)[:220]})
+                    continue
+                erro_promo = "O Mercado Livre não aceita promoção neste anúncio agora (" + status_ml + ")."
         proprio = next((x for x in promos if x.get("type") == ML_PROMO_TIPO), None)
         campanha = next((x for x in promos if x.get("type") == "DEAL"), None)
         base = proprio or campanha or {}
-        det = detalhes.get(mlb) or {}
         sku_ml = str(det.get("sku_ml") or "").strip().upper()
         # O anúncio costuma trazer "prefixo-código" (ex.: 1304-6008.004.206.00.6);
         # o Precificador guarda só o código. _compras_codigo já resolve os dois.
@@ -14627,7 +14638,11 @@ def promocoes_painel(mlbs: list[str]) -> dict[str, Any]:
             "titulo_ml": det.get("titulo") or "",
             "produto": prod["produto"] if prod else (det.get("titulo") or ""),
             "curva": prod["curva"] if prod else "",
-            "preco_cheio": base.get("original_price"),
+            "preco_cheio": base.get("original_price") or det.get("preco"),
+            "status_ml": status_ml,
+            "sub_status_ml": det.get("sub_status") or [],
+            "estoque_ml": det.get("estoque"),
+            "erro_promo": erro_promo,
             "sugerido_ml": base.get("suggested_discounted_price"),
             "piso_ml": base.get("min_discounted_price"),
             "teto_ml": base.get("max_discounted_price"),
@@ -14723,8 +14738,8 @@ def ml_itens_do_vendedor(offset: int = 0, limite: int = 50, forcar: bool = False
 
     V18.40: a busca da tela filtrava só os 40 anúncios da página aberta — o
     anúncio que estava na página 20 "não existia". Agora a busca roda aqui,
-    sobre TODOS os anúncios (índice com título/SKU/status), e os encerrados
-    (`closed`, que o ML nem deixa ter promoção) saem da lista.
+    sobre TODOS os anúncios (índice com título/SKU/status).
+    V18.41: encerrados e sem estoque continuam na lista (vão para o fim).
     """
     limite = max(1, min(50, int(limite or 50)))
     offset = max(0, int(offset or 0))
@@ -14733,8 +14748,11 @@ def ml_itens_do_vendedor(offset: int = 0, limite: int = 50, forcar: bool = False
         indice = ml_indice_anuncios(todos, forcar)
     except Exception:
         indice = {}   # sem índice, lista como antes (nunca some anúncio por erro)
-    # sem detalhe = status desconhecido: fica na lista
-    todos = [m for m in todos if (indice.get(m) or {}).get("status") != "closed"]
+    # V18.41: nada sai da lista (estoque zerado/pausado/encerrado também
+    # aparece); só a ORDEM muda: ativos primeiro, encerrados no fim.
+    # Sem detalhe = status desconhecido: fica junto dos ativos.
+    ordem = {"": 0, "active": 0, "paused": 1, "closed": 3}
+    todos = sorted(todos, key=lambda m: ordem.get(str((indice.get(m) or {}).get("status") or ""), 2))
     if str(busca or "").strip():
         todos = ml_anuncios_filtrar(todos, indice, busca)
     return {
@@ -14747,7 +14765,7 @@ def ml_itens_do_vendedor(offset: int = 0, limite: int = 50, forcar: bool = False
 def ml_itens_detalhe(mlbs: list[str]) -> dict[str, dict[str, Any]]:
     """Título, preço e o SKU que o vendedor cadastrou no próprio anúncio."""
     out: dict[str, dict[str, Any]] = {}
-    campos = "id,title,price,status,seller_custom_field,attributes"
+    campos = "id,title,price,status,sub_status,available_quantity,seller_custom_field,attributes"
     for i in range(0, len(mlbs), 20):   # a API aceita 20 ids por chamada
         lote = [x for x in mlbs[i:i + 20] if x]
         if not lote:
@@ -14773,7 +14791,9 @@ def ml_itens_detalhe(mlbs: list[str]) -> dict[str, dict[str, Any]]:
                 sku = str(corpo.get("seller_custom_field") or "").strip()
             out[mlb] = {"titulo": str(corpo.get("title") or "").strip(),
                         "preco": corpo.get("price"), "sku_ml": sku,
-                        "status": corpo.get("status")}
+                        "status": corpo.get("status"),
+                        "sub_status": corpo.get("sub_status") or [],
+                        "estoque": corpo.get("available_quantity")}
     return out
 
 

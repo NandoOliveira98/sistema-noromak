@@ -49,6 +49,7 @@ tbody tr:hover{background:#f7fafd}
 .marg{font-size:11px;font-weight:800;border-radius:6px;padding:2px 6px}
 .marg.ok{background:var(--okbg);color:var(--ok)}.marg.baixa{background:var(--warnbg);color:var(--warn)}.marg.neg{background:var(--badbg);color:var(--bad)}
 .tagon{font-size:9.5px;font-weight:800;background:var(--roxobg);color:var(--roxo);border-radius:5px;padding:1px 5px;margin-left:5px}
+.tagml{font-size:9.5px;font-weight:800;background:#fdecea;color:#b3261e;border-radius:5px;padding:1px 5px;margin-left:5px}
 .semvinc{font-size:9.5px;font-weight:800;background:#fff3d6;color:#8a5a00;border-radius:5px;padding:1px 5px;margin-left:5px}
 .btn.vinc{background:#f3ecff;border-color:#d9c8f7;color:var(--roxo)}
 .irprec{display:inline-block;margin-left:5px;text-decoration:none;color:var(--navy);font-weight:900;
@@ -257,7 +258,7 @@ function render(){
         (it.sku?' <a class="irprec" href="/expedicao/precificador?sku='+encodeURIComponent(it.sku)+
                 '" target="_blank" rel="noopener" title="Abrir '+it.sku+' no Precificador">↗</a>':'')+
         '</b><span>'+(it.sku||"sem SKU")+' · '+it.mlb+
-        (ativo?'<span class="tagon">promoção ativa</span>':'')+'</span></td>'+
+        (ativo?'<span class="tagon">promoção ativa</span>':'')+tagsML(it)+'</span></td>'+
       '<td class="n">'+brl(it.preco_cheio)+'</td>'+
       '<td class="n"><b>'+brl(p)+'</b></td>'+
       '<td style="font-size:11.5px">'+(it.inicio?dataBr(it.inicio)+" → "+dataBr(it.fim):'<span style="color:var(--muted)">sem promoção</span>')+'</td>'+
@@ -267,13 +268,24 @@ function render(){
       '<td>'+(m==null?"—":'<span class="marg '+mCls+'">'+pct(m*100)+'</span>')+'</td>'+
       '<td>'+vinculoCelula(it,i)+'</td>'+
       '<td><span class="vd '+v.k+'">'+v.t+'</span></td>'+
-      '<td>'+(podeAgir
-        ? '<button class="btn '+(v.k==="renovar"?"go":(v.k==="nao"?"":"aj"))+'" onclick="abrir('+i+')">Definir promoção</button>'
+      '<td>'+(it.status_ml==="closed"
+        ? '<button class="btn" disabled title="'+(it.erro_promo||"")+'">Encerrado no ML</button>'
+        : podeAgir
+        ?'<button class="btn '+(v.k==="renovar"?"go":(v.k==="nao"?"":"aj"))+'" onclick="abrir('+i+')">Definir promoção</button>'
         : '<button class="btn" disabled title="Sem custo no Precificador para este SKU">Sem custo</button>')+'</td>'+
     '</tr>';
   }).join("") || '<tr><td colspan="11" class="vazio">Nenhum anúncio neste filtro.</td></tr>';
 }
 
+// V18.41: anúncio sem estoque, pausado ou encerrado aparece na tabela com etiqueta
+function tagsML(it){
+  const t=[], sub=(it.sub_status_ml||[]).join(",");
+  if(it.estoque_ml===0 || sub.includes("out_of_stock")) t.push("sem estoque");
+  if(it.status_ml==="paused") t.push("pausado");
+  if(it.status_ml==="closed") t.push("encerrado");
+  if(!t.length && !it.erro_promo) return "";
+  return ' <span class="tagml" title="'+(it.erro_promo||"").replace(/"/g,"&quot;")+'">'+(t.join(" · ")||"sem promoção no ML")+'</span>';
+}
 function vinculoCelula(it,i){
   const campo = '<div class="vincbox">'+
       '<input class="skuin" list="listaSkus" placeholder="digite o SKU" '+
@@ -306,7 +318,7 @@ async function vincular(i){
     await api("/api/precificador/ml-vinculos/manual",{method:"POST",
       body:JSON.stringify({action:"add", sku:sku, mlb:it.mlb})});
     aviso("✓ "+it.mlb+" vinculado ao SKU <b>"+sku+"</b>.","ok");
-    carregar();
+    atualizarLinha(i);   // V18.41: só a linha, não a página inteira
   }catch(e){ aviso("Não foi possível vincular: "+e.message,"erro"); }
 }
 function abrir(i){
@@ -466,11 +478,21 @@ $("btConf").onclick=async function(){
     aviso("✓ Promoção de <b>"+(it.produto||it.sku)+"</b> aplicada a <b>"+brl(r.preco)+
           "</b> até "+sel.fim.toLocaleDateString("pt-BR")+" (margem "+pct((r.margem||0)*100)+")."+dataOk,
           r.data_planilha_atualizada?"ok":"erro");
-    carregar();
+    // V18.41: recarregar a página inteira (40 anúncios no ML) a cada promoção
+    // demorava demais. Relê só este anúncio; o resto, só no "Atualizar do ML".
+    atualizarLinha(sel.i);
   }catch(e){
     $("mMsg").textContent=e.message; $("mMsg").style.color="var(--bad)";
   }finally{ this.disabled=false; }
 };
+async function atualizarLinha(i){
+  const it=ITENS[i]; if(!it) return;
+  try{
+    const d=await api("/api/precificador/promocoes?mlbs="+encodeURIComponent(it.mlb));
+    const novo=(d.itens||[])[0];
+    if(novo && ITENS[i] && ITENS[i].mlb===novo.mlb){ ITENS[i]=novo; render(); }
+  }catch(e){ /* a promoção já subiu; a linha se acerta no próximo "Atualizar do ML" */ }
+}
 document.addEventListener("input",function(e){
   const c=e.target.closest&&e.target.closest("[data-sku-para]");
   if(!c) return;

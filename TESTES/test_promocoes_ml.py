@@ -326,10 +326,13 @@ class BuscaEmTodosOsAnuncios(unittest.TestCase):
         self.assertEqual(S.ml_itens_do_vendedor(0, 40, busca="0893321600")["mlbs"], ["MLB4490267444"])
         self.assertEqual(S.ml_itens_do_vendedor(0, 40, busca="silicone temperatura")["mlbs"], ["MLB4490267444"])
 
-    def test_c_encerrado_sai_da_lista(self):
+    def test_c_encerrado_fica_na_lista_mas_no_fim(self):
+        # V18.41: estoque zerado/encerrado também tem de aparecer — só vai pro fim
         pag = S.ml_itens_do_vendedor(0, 40)
-        self.assertEqual(pag["total"], 601)
-        self.assertEqual(S.ml_itens_do_vendedor(0, 40, busca="5264557600")["mlbs"], [])
+        self.assertEqual(pag["total"], 602)
+        self.assertNotIn("MLB5264557600", pag["mlbs"])
+        self.assertEqual(S.ml_itens_do_vendedor(600, 40)["mlbs"][-1], "MLB5264557600")
+        self.assertEqual(S.ml_itens_do_vendedor(0, 40, busca="5264557600")["mlbs"], ["MLB5264557600"])
 
     def test_d_sem_indice_nao_some_anuncio(self):
         def quebra(mlbs, forcar=False):
@@ -350,3 +353,46 @@ class BuscaEmTodosOsAnuncios(unittest.TestCase):
         self.assertIn("MLB7000000002", achados)
         self.assertNotIn("MLB8160000003", achados)
         self.assertEqual(S.ml_itens_do_vendedor(0, 40, busca="816.6090")["mlbs"], ["MLB7000000001"])
+
+
+class SemEstoqueApareceNaTabela(unittest.TestCase):
+    """V18.41: anúncio com estoque zerado, pausado ou encerrado sumia da tabela
+    (virava só uma linha no aviso vermelho). Tem de aparecer, com o motivo."""
+
+    def setUp(self):
+        self.orig = (S.ml_itens_detalhe, S.ml_promocoes_do_item)
+        det = {
+            "MLB1": {"titulo": "Ativo", "preco": 50, "sku_ml": "", "status": "active", "sub_status": [], "estoque": 3},
+            "MLB2": {"titulo": "Zerado", "preco": 60, "sku_ml": "", "status": "paused",
+                     "sub_status": ["out_of_stock"], "estoque": 0},
+            "MLB3": {"titulo": "Encerrado", "preco": 70, "sku_ml": "", "status": "closed", "sub_status": [], "estoque": 0},
+        }
+        self.chamados = []
+
+        def promos(mlb):
+            self.chamados.append(mlb)
+            if mlb == "MLB2":
+                raise RuntimeError("Mercado Livre respondeu HTTP 400: item paused")
+            return []
+        S.ml_itens_detalhe = lambda mlbs: {m: det[m] for m in mlbs if m in det}
+        S.ml_promocoes_do_item = promos
+
+    def tearDown(self):
+        S.ml_itens_detalhe, S.ml_promocoes_do_item = self.orig
+
+    def test_a_todos_aparecem_com_o_motivo(self):
+        r = S.promocoes_painel(["MLB1", "MLB2", "MLB3"])
+        por = {x["mlb"]: x for x in r["itens"]}
+        self.assertEqual(sorted(por), ["MLB1", "MLB2", "MLB3"])
+        self.assertEqual(r["erros"], [])
+        self.assertEqual(por["MLB2"]["estoque_ml"], 0)
+        self.assertEqual(por["MLB2"]["preco_cheio"], 60)
+        self.assertTrue(por["MLB2"]["erro_promo"])
+        self.assertEqual(por["MLB3"]["status_ml"], "closed")
+        self.assertNotIn("MLB3", self.chamados, "encerrado nem deve ser consultado (o ML dá 400)")
+
+    def test_b_ativo_com_erro_continua_no_aviso(self):
+        S.ml_promocoes_do_item = lambda mlb: (_ for _ in ()).throw(RuntimeError("HTTP 500"))
+        r = S.promocoes_painel(["MLB1"])
+        self.assertEqual(r["itens"], [])
+        self.assertEqual(r["erros"][0]["mlb"], "MLB1")
