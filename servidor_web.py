@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.39b-FIX-MIGRACAO-BOOT"
+APP_VERSION = "18.40-PROMOCOES-BUSCA-TODOS"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -14717,11 +14717,26 @@ def ml_todos_os_anuncios(forcar: bool = False) -> list[str]:
     return list(unicos)
 
 
-def ml_itens_do_vendedor(offset: int = 0, limite: int = 50, forcar: bool = False) -> dict[str, Any]:
-    """Uma página da lista completa de anúncios (ver ml_todos_os_anuncios)."""
+def ml_itens_do_vendedor(offset: int = 0, limite: int = 50, forcar: bool = False,
+                         busca: str = "") -> dict[str, Any]:
+    """Uma página da lista completa de anúncios (ver ml_todos_os_anuncios).
+
+    V18.40: a busca da tela filtrava só os 40 anúncios da página aberta — o
+    anúncio que estava na página 20 "não existia". Agora a busca roda aqui,
+    sobre TODOS os anúncios (índice com título/SKU/status), e os encerrados
+    (`closed`, que o ML nem deixa ter promoção) saem da lista.
+    """
     limite = max(1, min(50, int(limite or 50)))
     offset = max(0, int(offset or 0))
     todos = ml_todos_os_anuncios(forcar)
+    try:
+        indice = ml_indice_anuncios(todos, forcar)
+    except Exception:
+        indice = {}   # sem índice, lista como antes (nunca some anúncio por erro)
+    # sem detalhe = status desconhecido: fica na lista
+    todos = [m for m in todos if (indice.get(m) or {}).get("status") != "closed"]
+    if str(busca or "").strip():
+        todos = ml_anuncios_filtrar(todos, indice, busca)
     return {
         "mlbs": todos[offset:offset + limite],
         "total": len(todos),
@@ -14760,6 +14775,75 @@ def ml_itens_detalhe(mlbs: list[str]) -> dict[str, dict[str, Any]]:
                         "preco": corpo.get("price"), "sku_ml": sku,
                         "status": corpo.get("status")}
     return out
+
+
+_ML_INDICE_CACHE: dict[str, Any] = {"itens": {}, "quando": 0.0}
+_ML_INDICE_LOCK = threading.Lock()
+ML_INDICE_CACHE_SEGUNDOS = 1800
+
+
+def ml_indice_anuncios(mlbs: list[str], forcar: bool = False) -> dict[str, dict[str, Any]]:
+    """V18.40: título, SKU e status de todos os anúncios, para buscar e filtrar
+    sem depender da página aberta. ~80 chamadas de 20 ids para 1.600 anúncios,
+    em 4 linhas paralelas; fica em cache por 30 min e só busca o que falta."""
+    with _ML_INDICE_LOCK:
+        agora = time.time()
+        if forcar or agora - float(_ML_INDICE_CACHE["quando"]) >= ML_INDICE_CACHE_SEGUNDOS:
+            _ML_INDICE_CACHE["itens"] = {}
+            _ML_INDICE_CACHE["quando"] = agora
+        itens: dict[str, dict[str, Any]] = _ML_INDICE_CACHE["itens"]
+        faltam = [m for m in mlbs if m and m not in itens]
+        if faltam:
+            ml_access_token()   # renova o token antes, e não em 4 linhas ao mesmo tempo
+            lotes = [faltam[i:i + 20] for i in range(0, len(faltam), 20)]
+            fila = list(lotes)
+            trava = threading.Lock()
+
+            def trabalhar() -> None:
+                while True:
+                    with trava:
+                        if not fila:
+                            return
+                        lote = fila.pop()
+                    resultado = ml_itens_detalhe(lote)
+                    with trava:
+                        itens.update(resultado)
+
+            linhas = [threading.Thread(target=trabalhar, daemon=True) for _ in range(min(4, len(lotes)))]
+            for t in linhas:
+                t.start()
+            for t in linhas:
+                t.join(timeout=120)
+        return dict(itens)
+
+
+def _ml_busca_normalizar(texto: Any) -> str:
+    base = unicodedata.normalize("NFKD", str(texto or "")).encode("ascii", "ignore").decode("ascii")
+    return base.lower().strip()
+
+
+def ml_anuncios_filtrar(mlbs: list[str], indice: dict[str, dict[str, Any]], busca: str) -> list[str]:
+    """V18.40: acha o anúncio pelo número do MLB (com ou sem "MLB"), pelo SKU do
+    anúncio, pelo SKU vinculado ou por palavras do título."""
+    q = _ml_busca_normalizar(busca)
+    if not q:
+        return list(mlbs)
+    numero = re.fullmatch(r"(?:mlb)?[\s-]*(\d{4,})", q)
+    palavras = [p for p in q.split() if p]
+    vinculos = _ml_vinculos_mlb_sku()
+    saida: list[str] = []
+    for mlb in mlbs:
+        det = indice.get(mlb) or {}
+        if numero and numero.group(1) in re.sub(r"\D", "", mlb):
+            saida.append(mlb)
+            continue
+        texto = " ".join([mlb, str(det.get("sku_ml") or ""),
+                          ml_sku_do_anuncio(det.get("sku_ml")), vinculos.get(mlb, ""),
+                          str(det.get("titulo") or "")])
+        texto = _ml_busca_normalizar(texto)
+        if all(p in texto for p in palavras):
+            saida.append(mlb)
+    return saida
 
 
 PROMO_DATAS_KEY = "ml_promocoes_datas_v1"
@@ -15410,9 +15494,15 @@ class AppHandler(BaseHTTPRequestHandler):
                         # V18.25: sem lista explícita, lista os anúncios ATIVOS do
                         # vendedor (não só os com vínculo — eram 7% da base).
                         forcar = (query.get("recarregar", [""])[0] or "") == "1"
-                        pagina = ml_itens_do_vendedor(offset, PROMO_PAINEL_MAX, forcar)
+                        busca = (query.get("q", [""])[0] or "").strip()[:80]
+                        pagina = ml_itens_do_vendedor(offset, PROMO_PAINEL_MAX, forcar, busca)
                         mlbs = pagina["mlbs"]
                         total = pagina["total"]
+                        if not mlbs and busca:
+                            # V18.40: busca sem resultado não é erro
+                            self.send_json({"ok": True, "itens": [], "erros": [], "skus": [],
+                                            "total_anuncios": 0, "offset": 0, "busca": busca})
+                            return
                     if not mlbs:
                         raise ValueError("Nenhum anúncio ativo encontrado no Mercado Livre.")
                     resposta = promocoes_painel(mlbs)

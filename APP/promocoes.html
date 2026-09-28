@@ -137,7 +137,7 @@ tbody tr:hover{background:#f7fafd}
     <div class="kpi no"><small>No prejuízo</small><b id="kNo">—</b><span>abaixo do preço mínimo</span></div>
   </div>
   <div class="barra-topo">
-    <input id="busca" placeholder="Filtrar por SKU, MLB ou produto…">
+    <input id="busca" placeholder="Buscar em todos os anúncios: número do MLB, SKU ou nome…">
     <button class="sec" id="soProblema">Só o que precisa de atenção</button>
     <span style="font-size:12px;color:var(--muted)" id="rodape"></span>
   </div>
@@ -232,7 +232,6 @@ function somaDias(d,n){ const x=new Date(d); x.setDate(x.getDate()+n); return x;
 function isoDia(d){ return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
 
 function render(){
-  const q=($("busca").value||"").trim().toLowerCase();
   const so=$("soProblema").dataset.on==="1";
   let ok=0,aj=0,no=0;
   ITENS.forEach(it=>{const v=veredito(it); if(v.k==="renovar")ok++; else if(v.k==="ajustar")aj++; else if(v.k==="nao")no++;});
@@ -241,9 +240,8 @@ function render(){
   $("kTotSub").textContent = semv ? (semv+" sem vínculo — dá para vincular aqui") : "todos vinculados"; $("kOk").textContent=ok; $("kAj").textContent=aj; $("kNo").textContent=no;
   const vis=ITENS.filter((it,i)=>{
     const v=veredito(it);
-    if(so && (v.k==="renovar"||v.k==="semcusto")) return false;
-    if(!q) return true;
-    return ((it.sku||"")+" "+(it.mlb||"")+" "+(it.produto||"")).toLowerCase().includes(q);
+    // V18.40: a busca roda no servidor, sobre todos os anúncios (ver carregar)
+    return !(so && (v.k==="renovar"||v.k==="semcusto"));
   });
   $("rodape").textContent=vis.length+" de "+ITENS.length+" anúncio(s)";
   $("tb").innerHTML = vis.map(it=>{
@@ -480,7 +478,17 @@ document.addEventListener("input",function(e){
   c.classList.toggle("ok", !!v && SKUS.has(v));
   c.classList.toggle("ruim", !!v && !SKUS.has(v));
 });
-$("busca").addEventListener("input",render);
+// V18.40: filtrar só a página aberta escondia o anúncio que estava em outra
+// página. A busca vai ao servidor, que procura em todos os anúncios.
+let BUSCA="", tBusca=null;
+$("busca").addEventListener("input",()=>{
+  clearTimeout(tBusca);
+  tBusca=setTimeout(()=>{
+    const q=($("busca").value||"").trim();
+    if(q===BUSCA) return;
+    BUSCA=q; OFFSET=0; carregar();
+  },450);
+});
 $("soProblema").onclick=function(){ this.dataset.on=this.dataset.on==="1"?"0":"1";
   this.style.background=this.dataset.on==="1"?"var(--navy)":"#fff";
   this.style.color=this.dataset.on==="1"?"#fff":"var(--navy)"; render(); };
@@ -492,7 +500,7 @@ function pintarPaginacao(){
   if(!TOTAL){ box.style.display="none"; return; }
   box.style.display="flex";
   const fim=Math.min(OFFSET+ITENS.length, TOTAL);
-  $("pagInfo").textContent=(OFFSET+1)+"–"+fim+" de "+TOTAL+" anúncios ativos";
+  $("pagInfo").textContent=(OFFSET+1)+"–"+fim+" de "+TOTAL+(BUSCA?" encontrados para “"+BUSCA+"”":" anúncios");
   $("antes").disabled = OFFSET<=0;
   $("depois").disabled = fim>=TOTAL;
 }
@@ -500,10 +508,10 @@ $("antes").onclick=()=>{ OFFSET=Math.max(0,OFFSET-40); carregar(); };
 $("depois").onclick=()=>{ OFFSET=OFFSET+40; carregar(); };
 
 async function carregar(){
-  $("tb").innerHTML='<tr><td colspan="11" class="vazio">Consultando o Mercado Livre…</td></tr>';
+  $("tb").innerHTML='<tr><td colspan="11" class="vazio">'+(BUSCA?'Procurando “'+BUSCA.replace(/</g,"&lt;")+'” em todos os anúncios…':'Consultando o Mercado Livre…')+'</td></tr>';
   limparAviso();
   try{
-    const d=await api("/api/precificador/promocoes?offset="+OFFSET);
+    const d=await api("/api/precificador/promocoes?offset="+OFFSET+(BUSCA?"&q="+encodeURIComponent(BUSCA):""));
     ITENS=d.itens||[];
     TOTAL=d.total_anuncios||0; OFFSET=d.offset||0;
     if(d.skus&&d.skus.length){
@@ -514,8 +522,8 @@ async function carregar(){
     if(d.erros&&d.erros.length){
       aviso("Alguns anúncios não responderam: "+d.erros.slice(0,3).map(e=>e.mlb+" ("+e.erro+")").join(" · "),"erro");
     }
-    if(!ITENS.length) $("tb").innerHTML='<tr><td colspan="11" class="vazio">Nenhum anúncio ativo encontrado.</td></tr>';
-    else { render(); }
+    render();
+    if(!ITENS.length) $("tb").innerHTML='<tr><td colspan="11" class="vazio">'+(BUSCA?'Nenhum anúncio com “'+BUSCA.replace(/</g,"&lt;")+'” (procurei em todos, pelo número do MLB, SKU e título).':'Nenhum anúncio ativo encontrado.')+'</td></tr>';
     pintarPaginacao();
   }catch(e){
     $("tb").innerHTML='<tr><td colspan="11" class="vazio">Não foi possível carregar: '+e.message+'</td></tr>';

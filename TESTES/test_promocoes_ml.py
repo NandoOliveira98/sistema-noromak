@@ -293,3 +293,46 @@ class EmbutirSoDoProprioSistema(unittest.TestCase):
         # frame-ancestors é o que os navegadores modernos obedecem
         self.assertIn("frame-ancestors 'self'", fonte)
         self.assertNotIn("frame-ancestors *", fonte)
+
+
+class BuscaEmTodosOsAnuncios(unittest.TestCase):
+    """V18.40: a busca da tela filtrava só os 40 anúncios da página aberta.
+    O MLB4490267444 existia, mas estava em outra página — "0 de 38". E os
+    anúncios encerrados ocupavam lugar na página e davam erro 400 do ML."""
+
+    def setUp(self):
+        S._ML_ANUNCIOS_CACHE["ids"] = ["MLB%d" % i for i in range(1000, 1600)] + ["MLB4490267444", "MLB5264557600"]
+        S._ML_ANUNCIOS_CACHE["quando"] = 9e18
+        self.original = S.ml_indice_anuncios
+        indice = {m: {"titulo": "Produto %s" % m, "sku_ml": "", "status": "active"}
+                  for m in S._ML_ANUNCIOS_CACHE["ids"]}
+        indice["MLB4490267444"] = {"titulo": "Silicone Neutro De Alta Temperatura",
+                                   "sku_ml": "152188-0893321600", "status": "active"}
+        indice["MLB5264557600"] = {"titulo": "Anúncio encerrado", "sku_ml": "", "status": "closed"}
+        S.ml_indice_anuncios = lambda mlbs, forcar=False: indice
+
+    def tearDown(self):
+        S.ml_indice_anuncios = self.original
+        S._ML_ANUNCIOS_CACHE["ids"] = []
+        S._ML_ANUNCIOS_CACHE["quando"] = 0.0
+
+    def test_a_acha_pelo_numero_fora_da_primeira_pagina(self):
+        for q in ("4490267444", "MLB4490267444", "mlb 4490267444"):
+            pag = S.ml_itens_do_vendedor(0, 40, busca=q)
+            self.assertEqual(pag["mlbs"], ["MLB4490267444"], q)
+            self.assertEqual(pag["total"], 1)
+
+    def test_b_acha_pelo_sku_e_pelo_titulo_sem_acento(self):
+        self.assertEqual(S.ml_itens_do_vendedor(0, 40, busca="0893321600")["mlbs"], ["MLB4490267444"])
+        self.assertEqual(S.ml_itens_do_vendedor(0, 40, busca="silicone temperatura")["mlbs"], ["MLB4490267444"])
+
+    def test_c_encerrado_sai_da_lista(self):
+        pag = S.ml_itens_do_vendedor(0, 40)
+        self.assertEqual(pag["total"], 601)
+        self.assertEqual(S.ml_itens_do_vendedor(0, 40, busca="5264557600")["mlbs"], [])
+
+    def test_d_sem_indice_nao_some_anuncio(self):
+        def quebra(mlbs, forcar=False):
+            raise RuntimeError("ML fora do ar")
+        S.ml_indice_anuncios = quebra
+        self.assertEqual(S.ml_itens_do_vendedor(0, 40)["total"], 602)
