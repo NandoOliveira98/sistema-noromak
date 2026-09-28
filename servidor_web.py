@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.37-ADS-POR-DATA"
+APP_VERSION = "18.38-SHOPEE-ADS-CPC"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -1927,6 +1927,19 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS ml_ads_meta_v1830 (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL DEFAULT ''
+            );
+            -- V18.38: investimento em Shopee Ads (CPC). Não está no escrow do
+            -- pedido — é crédito pré-pago, cobrado fora da venda. Vem de
+            -- /api/v2/ads/get_all_cpc_ads_daily_performance, que é a mesma fonte
+            -- do painel "Desempenho de Anúncios de Produtos" do Seller Centre.
+            CREATE TABLE IF NOT EXISTS shopee_ads_dia_v1838 (
+                dia TEXT PRIMARY KEY,
+                expense REAL NOT NULL DEFAULT 0,
+                clicks INTEGER NOT NULL DEFAULT 0,
+                impressions INTEGER NOT NULL DEFAULT 0,
+                gmv REAL NOT NULL DEFAULT 0,
+                pedidos INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL DEFAULT ''
             );
             -- V18.31: custo da venda NO ATO DA VENDA, como o ML mostra no detalhe do
             -- pedido ("Tarifa de venda total" e "Tarifa do Mercado Envios por sua
@@ -12596,6 +12609,10 @@ ML_ADS_CHAMADAS_ITENS = max(0, min(400, int(os.getenv("ML_ADS_CHAMADAS_ITENS", "
 ML_ADS_SYNC_LOCK = threading.Lock()
 ML_ADS_METRICAS = "clicks,prints,cost,cpc,ctr,acos,units_quantity,total_amount"
 ML_ADS_METRICAS_ITEM = "clicks,prints,cost,units_quantity,total_amount"
+# V18.38: Shopee Ads (CPC). A janela recente é regravada; o histórico entra de
+# trás para frente, uma fatia de 30 dias por rodada.
+SHOPEE_ADS_JANELA_RECENTE = max(2, min(30, int(os.getenv("SHOPEE_ADS_JANELA_RECENTE", "7"))))
+SHOPEE_ADS_HISTORICO_DIAS = max(30, min(365, int(os.getenv("SHOPEE_ADS_HISTORICO_DIAS", "180"))))
 
 
 def _ml_ads_meta(key: str, value: str | None = None) -> str:
@@ -12857,8 +12874,73 @@ def ml_ads_sync_loop(stop_event: threading.Event) -> None:
             ml_ads_sync_once()
         except Exception:
             pass
+        try:
+            shopee_ads_sync_once()
+        except Exception:
+            pass
         if stop_event.wait(ML_ADS_SYNC_INTERVAL):
             break
+
+
+def shopee_ads_sync(dia_inicio: date, dia_fim: date) -> dict[str, Any]:
+    """Investimento diário em Shopee Ads (CPC) da janela pedida.
+
+    V18.38: o escrow do pedido só traz a comissão de afiliados (AMS). O CPC é
+    crédito pré-pago, cobrado fora da venda, e só existe aqui. A janela é
+    regravada: o dia de hoje ainda muda.
+    """
+    if dia_inicio > dia_fim:
+        dia_inicio, dia_fim = dia_fim, dia_inicio
+    gravados = 0
+    atual = dia_inicio
+    while atual <= dia_fim:
+        fim_lote = min(atual + timedelta(days=29), dia_fim)
+        data = shopee_api_get("/api/v2/ads/get_all_cpc_ads_daily_performance", {
+            "start_date": atual.strftime("%d-%m-%Y"),
+            "end_date": fim_lote.strftime("%d-%m-%Y"),
+        })
+        linhas = data.get("response") if isinstance(data, dict) else None
+        agora = now_iso()
+        registros = []
+        for x in linhas if isinstance(linhas, list) else []:
+            if not isinstance(x, dict):
+                continue
+            partes = str(x.get("date") or "").split("-")
+            if len(partes) != 3:
+                continue
+            dia_iso = f"{partes[2]}-{partes[1]}-{partes[0]}"
+            registros.append((dia_iso, round(float(x.get("expense") or 0), 2),
+                              int(x.get("clicks") or 0), int(x.get("impression") or 0),
+                              round(float(x.get("broad_gmv") or 0), 2),
+                              int(x.get("broad_order") or 0), agora))
+        if registros:
+            with DB_LOCK:
+                DB.executemany(
+                    "INSERT INTO shopee_ads_dia_v1838(dia,expense,clicks,impressions,gmv,pedidos,updated_at) "
+                    "VALUES(?,?,?,?,?,?,?) ON CONFLICT(dia) DO UPDATE SET expense=excluded.expense,"
+                    "clicks=excluded.clicks,impressions=excluded.impressions,gmv=excluded.gmv,"
+                    "pedidos=excluded.pedidos,updated_at=excluded.updated_at", registros)
+                DB.commit()
+            gravados += len(registros)
+        atual = fim_lote + timedelta(days=1)
+    return {"ok": True, "dias": gravados}
+
+
+def shopee_ads_sync_once(dias: int = 0) -> dict[str, Any]:
+    """Janela recente + o que faltar do histórico, uma fatia por rodada."""
+    hoje = datetime.now(BR_TZ).date()
+    recente = max(2, min(30, int(dias or SHOPEE_ADS_JANELA_RECENTE)))
+    resultado = shopee_ads_sync(hoje - timedelta(days=recente - 1), hoje)
+    with DB_LOCK:
+        primeiro = DB.execute("SELECT MIN(dia) d FROM shopee_ads_dia_v1838").fetchone()["d"]
+    limite = (hoje - timedelta(days=SHOPEE_ADS_HISTORICO_DIAS)).isoformat()
+    if primeiro and primeiro > limite:
+        fim = date.fromisoformat(primeiro) - timedelta(days=1)
+        inicio = max(date.fromisoformat(limite), fim - timedelta(days=29))
+        if inicio <= fim:
+            hist = shopee_ads_sync(inicio, fim)
+            resultado["historico"] = hist.get("dias", 0)
+    return resultado
 
 
 def ml_ads_status() -> dict[str, Any]:
@@ -13303,14 +13385,23 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
     # e entra sempre, independente da API de Publicidade do ML.
     ads_shopee = round(sum(float((c or {}).get("ads_fatura") or 0.0)
                            for k, c in custos_pedido.items() if k[0] == "shopee"), 2)
+    # V18.38: o CPC do Shopee Ads é custo do PERÍODO (crédito pré-pago, fora do
+    # pedido). Vem por dia e entra no dia em que foi gasto.
+    ads_shopee_cpc_por_dia: dict[str, float] = {}
+    if not canal or canal == "shopee":
+        with DB_LOCK:
+            for r in DB.execute("SELECT dia, expense FROM shopee_ads_dia_v1838 WHERE dia BETWEEN ? AND ?",
+                                (d1.isoformat(), d2.isoformat())).fetchall():
+                ads_shopee_cpc_por_dia[str(r["dia"])] = round(float(r["expense"] or 0), 2)
+    ads_shopee_cpc = round(sum(ads_shopee_cpc_por_dia.values()), 2)
     ads_fatura_sem_pedido = round(float((billing.get("sem_pedido") or {}).get("publicidade") or 0.0), 2)
     ads_api_total = ads["total"] if (not canal or canal == "ml") else 0.0
     if ads_api_total > 0:
         ads_fonte = "api"
     elif (ads_fatura_pedidos + ads_fatura_sem_pedido) > 0 and (not canal or canal == "ml"):
         ads_fonte = "fatura"
-    elif ads_shopee > 0:
-        ads_fonte = "escrow"
+    elif ads_shopee > 0 or ads_shopee_cpc > 0:
+        ads_fonte = "shopee"
     else:
         ads_fonte = ""
     usar_ads_da_fatura = ads_fonte == "fatura"
@@ -13426,6 +13517,15 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
     # foi somado pedido a pedido no laço acima; aqui só entra o que a fatura
     # cobrou sem vincular a um pedido.
     ads_sem_alvo = 0.0
+    if ads_shopee_cpc:
+        totais["ads"] = round(totais["ads"] + ads_shopee_cpc, 2)
+        if "shopee" in por_mp:
+            por_mp["shopee"]["ads"] = round(por_mp["shopee"]["ads"] + ads_shopee_cpc, 2)
+        for dia_cpc, valor_cpc in ads_shopee_cpc_por_dia.items():
+            alvo = por_dia.get(dia_cpc)
+            if alvo is not None:
+                alvo["ads"] = round(alvo["ads"] + valor_cpc, 2)
+        ads_sem_alvo = round(ads_sem_alvo + ads_shopee_cpc, 2)
     if usar_ads_da_fatura:
         # O Ads do ML já foi somado pedido a pedido; falta o que a fatura cobrou
         # sem vincular a nenhuma venda.
@@ -13455,7 +13555,7 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
             if alvo is not None:
                 alvo["ads"] = round(alvo["ads"] + valor, 2)
                 identificado_api = round(identificado_api + valor, 2)
-        ads_sem_alvo = round(max(0.0, ads_api_total - identificado_api), 2)
+        ads_sem_alvo = round(ads_sem_alvo + max(0.0, ads_api_total - identificado_api), 2)
     ads_total = totais["ads"]
     ads_sku_usado = round(sum(s["ads"] for s in por_sku.values()), 2)
 
@@ -13523,7 +13623,7 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
         "ads": {"total": ads_total, "por_sku_identificado": ads_sku_usado,
                 "sem_sku": ads_sem_alvo, "dias_com_dado": ads["dias_com_dado"],
                 "fonte": ads_fonte, "da_fatura": round(ads_fatura_pedidos + ads_fatura_sem_pedido, 2),
-                "da_api": ads_api_total, "shopee_afiliados": ads_shopee, **ads["status"]},
+                "da_api": ads_api_total, "shopee_afiliados": ads_shopee, "shopee_cpc": ads_shopee_cpc, **ads["status"]},
         "fatura_ml": {"periodos": billing["periodos"], "lancamentos": billing["lancamentos"],
                       "sem_pedido": billing["sem_pedido"]},
         "cobertura": {
@@ -13596,6 +13696,10 @@ def financeiro_sincronizar(date_from: str, date_to: str) -> dict[str, Any]:
             resultado["ads"] = ml_ads_sync_once()
         except Exception as exc:
             resultado["ads"] = {"ok": False, "erro": str(exc)[:300]}
+        try:
+            resultado["ads_shopee"] = shopee_ads_sync(d1, d2)
+        except Exception as exc:
+            resultado["ads_shopee"] = {"ok": False, "erro": str(exc)[:300]}
         return resultado
     finally:
         FINANCEIRO_SYNC_LOCK.release()

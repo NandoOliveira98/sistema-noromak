@@ -551,6 +551,56 @@ class TesteParcialNaoEZero(TesteNoromak):
                          "envio consultado e sem custo é zero de verdade")
 
 
+def _shopee_ads_dia(dia: str, gasto: float) -> None:
+    with S.DB_LOCK:
+        S.DB.execute(
+            "INSERT OR REPLACE INTO shopee_ads_dia_v1838(dia,expense,clicks,impressions,gmv,pedidos,updated_at) "
+            "VALUES(?,?,0,0,0,0,?)", (dia, gasto, S.now_iso()))
+        S.DB.commit()
+
+
+class TesteShopeeAdsCPC(TesteNoromak):
+    """V18.38 — o CPC do Shopee Ads é crédito pré-pago, fora do pedido.
+
+    O escrow só traz a comissão de afiliados (AMS). Em setembro o painel da
+    Shopee mostrava R$ 1.183,04 de investimento que não entravam em lugar
+    nenhum da nossa conta.
+    """
+
+    def cenario(self) -> None:
+        _custos_precificador({"AAA": 8.0})
+        _vender("shopee", "SP800", "AAA", 1, 100.0, dia="2026-09-10")
+        _escrow("SP800", comissao=14.0, servico=6.0, transacao=0.0, frete=0.0,
+                escrow_amount=77.0, preco=100.0, ams=3.0)
+        _shopee_ads_dia("2026-09-10", 12.0)
+        _shopee_ads_dia("2026-09-25", 8.0)
+
+    def test_cpc_entra_no_lucro(self) -> None:
+        self.cenario()
+        d = S.financeiro_payload("2026-09-01", "2026-09-30", "shopee")
+        self.assertEqual(d["ads"]["shopee_cpc"], 20.0)
+        self.assertEqual(d["ads"]["shopee_afiliados"], 3.0)
+        self.assertEqual(d["totais"]["ads"], 23.0, "CPC e afiliados somam: são despesas diferentes")
+        # 100 - 8 (custo) - 20 (taxa) - 3 (afiliados) - 20 (cpc) - 12 (imposto)
+        self.assertEqual(d["totais"]["lucro_liquido"], 37.0)
+
+    def test_cpc_respeita_o_periodo(self) -> None:
+        self.cenario()
+        d = S.financeiro_payload("2026-09-01", "2026-09-15", "shopee")
+        self.assertEqual(d["ads"]["shopee_cpc"], 12.0, "só o gasto dentro da janela")
+
+    def test_cpc_vai_para_o_dia_certo(self) -> None:
+        self.cenario()
+        d = S.financeiro_payload("2026-09-01", "2026-09-30", "shopee")
+        dia10 = next(x for x in d["por_dia"] if x["dia"] == "2026-09-10")
+        self.assertEqual(dia10["ads"], 15.0, "12,00 de CPC + 3,00 de afiliados do pedido daquele dia")
+
+    def test_cpc_nao_aparece_no_mercado_livre(self) -> None:
+        self.cenario()
+        d = S.financeiro_payload("2026-09-01", "2026-09-30", "ml")
+        self.assertEqual(d["ads"]["shopee_cpc"], 0.0)
+
+
 class TesteShopeeEscrowAutoridade(TesteNoromak):
     """V18.35 — na Shopee, o escrow_amount é a autoridade.
 

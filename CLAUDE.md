@@ -253,7 +253,7 @@ sugestão de transferência Ribeirão/Bauru e Lista de separação por prateleir
 compra em aberto, custo e marca em lote. A chave do Noromak **só** tem `/custo` e `/estoque`;
 não usar outras rotas do Apollo sem acordo com a equipe dele.
 
-### Financeiro — faturamento, gastos e lucro (V18.30 a V18.37)
+### Financeiro — faturamento, gastos e lucro (V18.30 a V18.38)
 `APP/financeiro.html` (`/financeiro`, menu Comercial, só **admin**; leitura no padrão Power BI —
 canvas com tiles, slicer de filtros, cards de KPI, waterfall, combo por dia, rosca e abas de página). Junta o que já existia:
 faturamento de `vendas_v1799` (ML + Shopee), custo do produto pela mesma regra da Demanda de
