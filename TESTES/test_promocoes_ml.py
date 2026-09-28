@@ -336,3 +336,17 @@ class BuscaEmTodosOsAnuncios(unittest.TestCase):
             raise RuntimeError("ML fora do ar")
         S.ml_indice_anuncios = quebra
         self.assertEqual(S.ml_itens_do_vendedor(0, 40)["total"], 602)
+
+    def test_e_codigo_curto_procura_no_sku_e_nao_no_numero_do_mlb(self):
+        # V18.40: Schulz = códigos que começam com 816. "816" no meio do número
+        # do MLB não é Schulz e não pode aparecer.
+        S._ML_ANUNCIOS_CACHE["ids"] += ["MLB7000000001", "MLB7000000002", "MLB8160000003"]
+        indice = S.ml_indice_anuncios([])
+        indice["MLB7000000001"] = {"titulo": "Filtro compressor", "sku_ml": "1304-816.6090-0", "status": "active"}
+        indice["MLB7000000002"] = {"titulo": "Peça", "sku_ml": "6008.816.206", "status": "active"}
+        indice["MLB8160000003"] = {"titulo": "Outra marca", "sku_ml": "1304-123.456", "status": "active"}
+        achados = S.ml_itens_do_vendedor(0, 40, busca="816")["mlbs"]
+        self.assertEqual(achados[0], "MLB7000000001", "quem começa com 816 vem primeiro")
+        self.assertIn("MLB7000000002", achados)
+        self.assertNotIn("MLB8160000003", achados)
+        self.assertEqual(S.ml_itens_do_vendedor(0, 40, busca="816.6090")["mlbs"], ["MLB7000000001"])

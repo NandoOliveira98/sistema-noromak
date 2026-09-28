@@ -14824,26 +14824,40 @@ def _ml_busca_normalizar(texto: Any) -> str:
 
 def ml_anuncios_filtrar(mlbs: list[str], indice: dict[str, dict[str, Any]], busca: str) -> list[str]:
     """V18.40: acha o anúncio pelo número do MLB (com ou sem "MLB"), pelo SKU do
-    anúncio, pelo SKU vinculado ou por palavras do título."""
+    anúncio, pelo SKU vinculado ou por palavras do título.
+
+    Busca que parece código (só dígitos, ponto e traço — ex.: "816", o começo
+    dos códigos da Schulz) procura nos SKUs e NÃO dentro do número do MLB:
+    "816" aparece no meio de centenas de MLBs e afogaria os produtos. O número
+    do MLB só entra com 6+ dígitos. Quem COMEÇA com o código vem primeiro.
+    """
     q = _ml_busca_normalizar(busca)
     if not q:
         return list(mlbs)
-    numero = re.fullmatch(r"(?:mlb)?[\s-]*(\d{4,})", q)
+    numero = re.fullmatch(r"(?:mlb)?[\s-]*(\d{6,})", q)
+    codigo = bool(re.fullmatch(r"[\d.\-/]+", q))
     palavras = [p for p in q.split() if p]
     vinculos = _ml_vinculos_mlb_sku()
-    saida: list[str] = []
+    comeca: list[str] = []
+    contem: list[str] = []
     for mlb in mlbs:
         det = indice.get(mlb) or {}
-        if numero and numero.group(1) in re.sub(r"\D", "", mlb):
-            saida.append(mlb)
+        skus = [_ml_busca_normalizar(x) for x in (
+            det.get("sku_ml"), ml_sku_do_anuncio(det.get("sku_ml")), vinculos.get(mlb, "")) if x]
+        if codigo and any(x.startswith(q) for x in skus):
+            comeca.append(mlb)
             continue
-        texto = " ".join([mlb, str(det.get("sku_ml") or ""),
-                          ml_sku_do_anuncio(det.get("sku_ml")), vinculos.get(mlb, ""),
-                          str(det.get("titulo") or "")])
-        texto = _ml_busca_normalizar(texto)
+        if numero and numero.group(1) in re.sub(r"\D", "", mlb):
+            comeca.append(mlb)
+            continue
+        if codigo:
+            if any(q in x for x in skus):
+                contem.append(mlb)
+            continue
+        texto = _ml_busca_normalizar(" ".join([mlb, *skus, str(det.get("titulo") or "")]))
         if all(p in texto for p in palavras):
-            saida.append(mlb)
-    return saida
+            contem.append(mlb)
+    return comeca + contem
 
 
 PROMO_DATAS_KEY = "ml_promocoes_datas_v1"
