@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.35-SHOPEE-ESCROW-AUTORIDADE"
+APP_VERSION = "18.36-FATURA-SEM-DUPLICIDADE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -1400,6 +1400,27 @@ def session_ttl_for_user_area(area: str, row: sqlite3.Row | dict[str, Any]) -> i
     return session_ttl_for_area(area)
 
 
+def ensure_ml_billing_credito_schema() -> None:
+    """V18.36: corrige o is_credit das linhas gravadas até a V18.35.
+
+    Elas foram marcadas pelo document_type pedido (BILL x CREDIT_NOTE), e como a
+    API devolve os mesmos lançamentos nos dois, metade virou "crédito" e anulou
+    a cobrança. Aqui o valor passa a vir do próprio lançamento. A leitura já
+    deduplica por detail_id; isto só deixa o banco coerente.
+    """
+    with DB_LOCK:
+        if not DB.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ml_billing_period_detail'").fetchone():
+            return
+        DB.execute(
+            "UPDATE ml_billing_period_detail SET is_credit=1 "
+            "WHERE is_credit=0 AND UPPER(detail_type) IN ('BONUS','BONIFICATION','CREDIT')")
+        DB.execute(
+            "UPDATE ml_billing_period_detail SET is_credit=0 "
+            "WHERE is_credit=1 AND UPPER(detail_type) NOT IN ('BONUS','BONIFICATION','CREDIT') "
+            "AND UPPER(detail_sub_type) NOT LIKE 'B%'")
+        DB.commit()
+
+
 def ensure_shopee_escrow_schema() -> None:
     """V18.35: acrescenta ams_commission (comissão de afiliados/AMS da Shopee).
 
@@ -1956,6 +1977,7 @@ def init_db() -> None:
     ensure_app_sessions_schema()
     ensure_app_user_permissions_schema()
     ensure_shopee_escrow_schema()
+    ensure_ml_billing_credito_schema()
     migrate_legacy_if_empty()
     ensure_storage_defaults()
     seed_sku_state_from_storage()
@@ -11209,6 +11231,42 @@ def _ml_billing_v1513_sale_fee_for_order(row: dict[str, Any], order_id: str) -> 
     return {"net": None, "gross": None, "rebate": None, "discount": None}
 
 
+def _ml_billing_credito_do_lancamento(detail_type: str, sub_type: str) -> int:
+    """V18.36: crédito é o que o DADO diz, não o documento que pedimos.
+
+    O Billing do MLB devolve os mesmos lançamentos para document_type=BILL e
+    para CREDIT_NOTE (os dois sincronismos de setembro voltaram com 5.773 itens
+    idênticos). Marcar crédito pelo parâmetro da requisição fazia cada cobrança
+    ganhar uma cópia "negativa" que anulava a original — a tarifa de venda do
+    mês inteiro virava R$ 0,00. Quem diz que é estorno é detail_type=BONUS
+    (sub_type começando com B: BVVML, BVVPRC, BXDE...).
+    """
+    dt = str(detail_type or "").upper()
+    if dt in ("BONUS", "BONIFICATION", "CREDIT"):
+        return 1
+    sub = str(sub_type or "").upper()
+    if sub.startswith("B") and (sub in ML_FATURA_TARIFA or sub in ML_FATURA_FRETE or sub in ML_FATURA_ADS):
+        return 1
+    return 0
+
+
+def _ml_billing_dedupe(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Um lançamento por detail_id. O mesmo detail_id chega em BILL e em
+    CREDIT_NOTE; somar os dois dobraria (ou zeraria) o custo da venda."""
+    vistos: set[str] = set()
+    saida: list[dict[str, Any]] = []
+    for e in entries:
+        chave = str(e.get("detail_id") or "")
+        if not chave:
+            chave = "|".join(str(e.get(c) or "") for c in
+                             ("order_id", "detail_amount", "detail_sub_type", "transaction_detail"))
+        if chave in vistos:
+            continue
+        vistos.add(chave)
+        saida.append(e)
+    return saida
+
+
 def _ml_billing_v1513_sync_state(period_key: str, document_type: str) -> dict[str, Any] | None:
     with DB_LOCK:
         row = DB.execute(
@@ -11324,7 +11382,7 @@ def _ml_billing_v1513_sync_period(period_key: str, document_type: str, seller_id
                         is_credit=excluded.is_credit,raw_json=excluded.raw_json,synced_at=excluded.synced_at""",
                         (period_key, doc, did, oid, pack_id, shipment_id, amount, dtype, sub, trans, debited,
                          sf.get("net"), sf.get("gross"), sf.get("rebate"), sf.get("discount"),
-                         1 if doc == "CREDIT_NOTE" else 0, json.dumps(row, ensure_ascii=False)[:120000], now_iso()),
+                         _ml_billing_credito_do_lancamento(dtype, sub), json.dumps(row, ensure_ascii=False)[:120000], now_iso()),
                     )
                     DB.commit()
                 saved += 1
@@ -11445,7 +11503,7 @@ def _ml_billing_v1513_consolidate(order_id: str, pack_id: str = "") -> dict[str,
     return _ml_billing_consolidar_lancamentos(entries)
 
 
-def _ml_billing_consolidar_lancamentos(entries: list[dict[str, Any]]) -> dict[str, Any]:
+def _ml_billing_consolidar_lancamentos(entries: list[dict[str, Any]]) -> dict[str, Any]:  # noqa: C901
     """Regra única de leitura da fatura do ML para UMA venda.
 
     V18.30: extraído de _ml_billing_v1513_consolidate para que o Financeiro possa
@@ -11453,6 +11511,7 @@ def _ml_billing_consolidar_lancamentos(entries: list[dict[str, Any]]) -> dict[st
     devolver também o frete da fatura (shipping) — que o cálculo por pedido
     continua ignorando, porque lá o frete vem do custo do shipment.
     """
+    entries = _ml_billing_dedupe(entries)
     if not entries:
         return {"sale_fee": None, "other_cost": None, "bonus": 0.0, "shipping": None, "publicidade": 0.0,
                 "status": "missing", "diagnostic": "Venda ainda não localizada no Billing sincronizado."}
@@ -11473,7 +11532,9 @@ def _ml_billing_consolidar_lancamentos(entries: list[dict[str, Any]]) -> dict[st
         sub = str(e.get("detail_sub_type") or "").upper()
         trans = str(e.get("transaction_detail") or "")
         dtype = str(e.get("detail_type") or "").upper()
-        credit = bool(int(e.get("is_credit") or 0)) or dtype in ("BONUS", "BONIFICATION", "CREDIT")
+        # V18.36: o dado manda. Linhas gravadas antes desta versao tem is_credit
+        # vindo do document_type pedido, que era sempre falso para metade delas.
+        credit = bool(_ml_billing_credito_do_lancamento(dtype, sub))
         if trans and trans not in labels:
             labels.append(trans)
         if _ml_billing_is_neutro(sub):
@@ -12958,8 +13019,8 @@ def _financeiro_billing_ml(period_keys: list[str], order_ids: list[str]) -> dict
              "periodos": period_keys, "lancamentos": 0}
     if not period_keys:
         return vazio
-    colunas = ("order_id,detail_amount,detail_type,detail_sub_type,transaction_detail,debited_from_operation,"
-               "sale_fee_net,is_credit,substr(raw_json,1,1200) AS raw_json")
+    colunas = ("detail_id,order_id,detail_amount,detail_type,detail_sub_type,transaction_detail,"
+               "debited_from_operation,sale_fee_net,is_credit,substr(raw_json,1,1200) AS raw_json")
     ph_periodos = ",".join("?" for _ in period_keys)
     por_pedido_entries: dict[str, list[dict[str, Any]]] = {}
     alvo = {str(o).strip() for o in order_ids if str(o).strip()}
@@ -12987,14 +13048,14 @@ def _financeiro_billing_ml(period_keys: list[str], order_ids: list[str]) -> dict
             f"SELECT {colunas} FROM ml_billing_period_detail WHERE period_key IN ({ph_periodos}) AND order_id=''",
             tuple(period_keys),
         ).fetchall()
-    for r in rows:
+    for r in _ml_billing_dedupe([dict(x) for x in rows]):
         total += 1
         valor = _money_number(r["detail_amount"])
         if valor is None or abs(valor) <= 0:
             continue
         valor = abs(valor)
         descricao = str(r["transaction_detail"] or r["detail_sub_type"] or r["detail_type"] or "Outros")[:120]
-        if bool(int(r["is_credit"] or 0)):
+        if _ml_billing_credito_do_lancamento(str(r["detail_type"] or ""), str(r["detail_sub_type"] or "")):
             credito += valor
             continue
         if _ml_billing_is_neutro(str(r["detail_sub_type"] or "")):

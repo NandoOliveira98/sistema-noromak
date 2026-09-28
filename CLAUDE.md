@@ -253,7 +253,7 @@ sugestão de transferência Ribeirão/Bauru e Lista de separação por prateleir
 compra em aberto, custo e marca em lote. A chave do Noromak **só** tem `/custo` e `/estoque`;
 não usar outras rotas do Apollo sem acordo com a equipe dele.
 
-### Financeiro — faturamento, gastos e lucro (V18.30 a V18.35)
+### Financeiro — faturamento, gastos e lucro (V18.30 a V18.36)
 `APP/financeiro.html` (`/financeiro`, menu Comercial, só **admin**; leitura no padrão Power BI —
 canvas com tiles, slicer de filtros, cards de KPI, waterfall, combo por dia, rosca e abas de página). Junta o que já existia:
 faturamento de `vendas_v1799` (ML + Shopee), custo do produto pela mesma regra da Demanda de
@@ -275,6 +275,16 @@ as duas **nunca somam**, e a diferença entre elas aparece na tela (`cobertura.d
 O que não é conhecido fica **nulo e visível** (`cobertura.faturamento_sem_custo` /
 `sem_taxa`): nada é estimado. `GET /api/financeiro/resumo`, `POST /api/financeiro/sincronizar`
 (fatura + escrow pendente + Ads, em segundo plano).
+**V18.36 — o Billing devolve os MESMOS lançamentos em `BILL` e em `CREDIT_NOTE`.** Os dois
+sincronismos de setembro voltaram com 5.773 itens idênticos. Marcar crédito pelo `document_type`
+**pedido** fazia cada cobrança ganhar uma cópia negativa que a anulava: R$ 132 mil de faturamento
+ML apareciam com **R$ 59,42** de tarifa. Agora crédito vem do **dado**
+(`_ml_billing_credito_do_lancamento`: `detail_type=BONUS` ou sub_type `B*`) e a leitura deduplica
+por `detail_id` (`_ml_billing_dedupe`). `ensure_ml_billing_credito_schema()` conserta as linhas
+antigas. Com isso a tarifa fecha em **11,99% do faturamento** — a "Tarifa de 12%" que o ML mostra
+na venda — em 994 de 994 pedidos. Confere com o Mercado Turbo, que o dono usa:
+`faturamento − custo − imposto − tarifa − frete = margem de contribuição`.
+
 **V18.35 — na Shopee o `escrow_amount` é a autoridade** (o que de fato cai na conta, como a fatura
 é no ML). `order_ams_commission_fee` (comissão de afiliados/AMS) estava fora da conta: 3,5% do preço
 em setembro. Agora entra como **Ads da Shopee** (coluna `ams_commission`, migrada por

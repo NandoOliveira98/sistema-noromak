@@ -44,8 +44,8 @@ def _lancamento_fatura(order_id: str, valor: float, *, sub_type: str = "", trans
             "sale_fee_net,sale_fee_gross,sale_fee_rebate,sale_fee_discount,is_credit,raw_json,synced_at) "
             "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (period_key, "CREDIT_NOTE" if credito else "BILL", detail_id or f"{order_id}-{sub_type}-{valor}",
-             order_id, "", "", valor, detail_type, sub_type, transacao, "YES",
-             sale_fee_net, None, None, None, 1 if credito else 0, "{}", S.now_iso()),
+             order_id, "", "", valor, (detail_type or ("BONUS" if credito else "CHARGE")), sub_type,
+             transacao, "YES", sale_fee_net, None, None, None, 1 if credito else 0, "{}", S.now_iso()),
         )
         S.DB.commit()
 
@@ -392,6 +392,53 @@ class TesteFaturaMLReal(TesteNoromak):
         _lancamento_fatura("ML100", 1.5, sub_type="CFWA", transacao="Tarifa pelo servico de armazenamento Full", detail_id="b")
         t = S.financeiro_payload("2026-09-01", "2026-09-30")["totais"]
         self.assertEqual(t["outros"], 1.5, "armazenagem Full é custo real, fica em outros")
+
+
+class TesteFaturaDuplicada(TesteNoromak):
+    """V18.36 — o Billing devolve os MESMOS lançamentos em BILL e em CREDIT_NOTE.
+
+    Em produção isso zerou a tarifa de venda do mês: cada cobrança ganhava uma
+    cópia marcada como crédito (pelo document_type que nós pedimos) e uma
+    anulava a outra. R$ 132 mil de faturamento ML apareceram com R$ 59,42 de
+    taxa. Crédito agora é o que o lançamento diz, e a leitura deduplica.
+    """
+
+    def _duplicado(self, order_id: str, valor: float, sub: str, detail_id: str) -> None:
+        """Grava o mesmo detail_id nos dois documentos, como a API devolve."""
+        for doc in ("BILL", "CREDIT_NOTE"):
+            with S.DB_LOCK:
+                S.DB.execute(
+                    "INSERT OR REPLACE INTO ml_billing_period_detail(period_key,document_type,detail_id,order_id,"
+                    "pack_id,shipment_id,detail_amount,detail_type,detail_sub_type,transaction_detail,"
+                    "debited_from_operation,sale_fee_net,sale_fee_gross,sale_fee_rebate,sale_fee_discount,"
+                    "is_credit,raw_json,synced_at) VALUES(?,?,?,?,'','',?,?,?,?,?,?,NULL,NULL,NULL,?,'{}',?)",
+                    ("2026-09-01", doc, detail_id, order_id, valor, "CHARGE", sub,
+                     "Custo por vender no Mercado Livre", "INAPPLICABLE", None,
+                     1 if doc == "CREDIT_NOTE" else 0, S.now_iso()))
+                S.DB.commit()
+
+    def test_copia_em_credit_note_nao_zera_a_tarifa(self) -> None:
+        _custos_precificador({"AAA": 40.0})
+        _vender("ml", "ML400", "AAA", 1, 200.0)
+        self._duplicado("ML400", 24.0, "CVVML", "dup-1")
+        t = S.financeiro_payload("2026-09-01", "2026-09-30")["totais"]
+        self.assertEqual(t["taxas"], 24.0, "o mesmo detail_id nos dois documentos é UM lançamento só")
+
+    def test_estorno_de_verdade_continua_abatendo(self) -> None:
+        _custos_precificador({"AAA": 40.0})
+        _vender("ml", "ML401", "AAA", 1, 200.0)
+        self._duplicado("ML401", 24.0, "CVVML", "dup-2")
+        # Estorno real: outro detail_id, detail_type BONUS.
+        _lancamento_fatura("ML401", 24.0, sub_type="BVVML", detail_type="BONUS",
+                           transacao="Cancelamento do Custo por vender", credito=True, detail_id="estorno-1")
+        t = S.financeiro_payload("2026-09-01", "2026-09-30")["totais"]
+        self.assertEqual(t["taxas"], 0.0, "cancelamento com detail_id próprio continua devolvendo a tarifa")
+
+    def test_credito_vem_do_lancamento_e_nao_do_documento(self) -> None:
+        self.assertEqual(S._ml_billing_credito_do_lancamento("CHARGE", "CVVML"), 0)
+        self.assertEqual(S._ml_billing_credito_do_lancamento("BONUS", "BVVML"), 1)
+        self.assertEqual(S._ml_billing_credito_do_lancamento("", "BXDE"), 1)
+        self.assertEqual(S._ml_billing_credito_do_lancamento("CHARGE", "CXDE"), 0)
 
 
 class TesteAdsDaFatura(TesteNoromak):
