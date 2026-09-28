@@ -62,6 +62,7 @@ tr:hover td{background:#f8fbfe}
 .tag{display:inline-block;padding:2px 7px;border-radius:8px;font-size:10.5px;font-weight:800}
 .tag.ml{background:#fff6d4;color:#7a5c00}.tag.shopee{background:#ffeee9;color:#a5361f}
 .tag.pend{background:var(--warnbg);color:var(--warn)}
+.tag.fonte{background:var(--okbg);color:var(--ok)}.tag.venda{background:#eaf1fb;color:var(--navy)}
 .busca{display:flex;gap:9px;align-items:center;flex-wrap:wrap;background:#fff;border:1px solid var(--line);border-bottom:0;border-radius:13px 13px 0 0;padding:10px 12px}
 .busca input{flex:1 1 260px;height:38px;padding:0 11px;border:1px solid var(--line);border-radius:9px}
 .busca .painel{border-radius:0}
@@ -180,8 +181,8 @@ tr:hover td{background:#f8fbfe}
       { t: "Faturamento", v: brl(t.faturamento), s: num(t.pedidos) + " pedidos · " + num(t.unidades) + " un · ticket " + brl(t.ticket_medio) },
       { t: "Custo dos produtos", v: brl(t.cmv), s: "Apollo (kit = componentes)", c: "gasto" },
       { t: "Lucro bruto", v: brl(t.lucro_bruto), s: "Margem bruta " + pct(t.margem_bruta), c: t.lucro_bruto < 0 ? "neg" : "" },
-      { t: "Taxas do marketplace", v: brl(t.taxas), s: "Fatura ML + escrow Shopee", c: "gasto" },
-      { t: "Frete do vendedor", v: brl(t.frete), s: "O que saiu do seu bolso no envio", c: "gasto" },
+      { t: "Taxas do marketplace", v: brl(t.taxas), s: "Tarifa da venda, conferida na fatura", c: "gasto" },
+      { t: "Frete do vendedor", v: brl(t.frete), s: "Mercado Envios por sua conta + Shopee", c: "gasto" },
       { t: "Publicidade (Ads)", v: d.ads.conectado ? brl(t.ads) : "—", s: d.ads.conectado ? (num(d.ads.dias_com_dado) + " dia(s) com dado") : "Ads não conectado", c: "gasto" },
       { t: "Imposto (" + pct(d.imposto_percent) + ")", v: brl(t.imposto), s: "Sobre o valor da venda", c: "gasto" },
       { t: "Lucro líquido", v: brl(t.lucro_liquido), s: "Margem líquida " + pct(t.margem_liquida), hero: true },
@@ -193,8 +194,9 @@ tr:hover td{background:#f8fbfe}
   function renderCobertura(d) {
     const c = d.cobertura, avisos = [];
     if (c.faturamento_sem_custo > 0) avisos.push("<b>" + brl(c.faturamento_sem_custo) + "</b> de faturamento sem custo de produto conhecido (o lucro desses itens não entra na conta).");
-    if (c.faturamento_sem_taxa > 0) avisos.push("<b>" + brl(c.faturamento_sem_taxa) + "</b> de faturamento sem a taxa conciliada — clique em <b>Buscar custos oficiais</b>.");
-    if (c.pedidos_ml > c.pedidos_ml_conciliados) avisos.push(num(c.pedidos_ml - c.pedidos_ml_conciliados) + " pedido(s) do ML ainda fora da fatura sincronizada (de " + num(c.pedidos_ml) + ").");
+    if (c.faturamento_sem_taxa > 0) avisos.push("<b>" + brl(c.faturamento_sem_taxa) + "</b> de faturamento sem taxa conhecida (nem da venda, nem da fatura) — clique em <b>Buscar custos oficiais</b>.");
+    if (c.pedidos_ml > c.pedidos_ml_conciliados) avisos.push(num(c.pedidos_ml - c.pedidos_ml_conciliados) + " pedido(s) do ML ainda sem a tarifa capturada (de " + num(c.pedidos_ml) + ").");
+    if (c.divergencias > 0) avisos.push(num(c.divergencias) + " pedido(s) em que a <b>fatura cobrou diferente</b> do que a venda mostrou (diferença total de " + brl(c.divergencia_total) + "). Vale a pena olhar na aba Por pedido — a fatura é o que prevalece.");
     if (c.pedidos_shopee > c.pedidos_shopee_conciliados) avisos.push(num(c.pedidos_shopee - c.pedidos_shopee_conciliados) + " pedido(s) da Shopee sem o escrow consultado (de " + num(c.pedidos_shopee) + ").");
     if (!d.ads.conectado) avisos.push("Publicidade não conectada: " + esc(d.ads.erro || "o app precisa da permissão Publicidade no DevCenter e da reconexão do Mercado Livre.") + " O lucro está sem o custo de Ads.");
     else if (d.ads.sem_sku > 0) avisos.push(brl(d.ads.sem_sku) + " de Ads ainda sem anúncio identificado — entra no total, mas não na linha do produto.");
@@ -296,19 +298,26 @@ tr:hover td{background:#f8fbfe}
     } else if (state.aba === "pedidos") {
       const linhas = (d.pedidos || []).filter((p) => !q || (p.order_id + " " + p.itens.map((i) => i.sku + " " + i.titulo).join(" ")).toLowerCase().includes(q));
       $("contador").textContent = linhas.length + " de " + num(d.pedidos_total) + " pedido(s) · os de menor lucro primeiro";
+      const origemTag = (p) => {
+        if (p.marketplace !== "ml") return p.conciliado ? '<span class="tag fonte">escrow</span>' : '<span class="tag pend">pendente</span>';
+        if (p.na_fatura) return '<span class="tag fonte">fatura</span>';
+        if (p.taxa != null) return '<span class="tag venda">da venda</span>';
+        return '<span class="tag pend">pendente</span>';
+      };
       tabela.innerHTML = linhas.length ? "<thead><tr><th>Pedido</th><th>Data</th><th>Itens</th><th class='num'>Faturamento</th>"
         + "<th class='num'>Custo produto</th><th class='num'>Taxa</th><th class='num'>Frete</th><th class='num'>Outros</th>"
-        + "<th class='num'>Imposto</th><th class='num'>Lucro líquido</th><th>Origem do custo de venda</th></tr></thead><tbody>"
+        + "<th class='num'>Imposto</th><th class='num'>Lucro líquido</th><th>Fonte da taxa</th></tr></thead><tbody>"
         + linhas.map((p) => `<tr>
             <td><span class="tag ${p.marketplace}">${p.marketplace === "ml" ? "ML" : "Shopee"}</span> <b>${esc(p.order_id)}</b>${p.conciliado ? "" : ' <span class="tag pend">pendente</span>'}</td>
             <td>${esc(diaBR(p.dia))}</td>
             <td title="${esc(p.itens.map((i) => i.qty + "x " + i.sku).join(" · "))}">${esc(p.itens.map((i) => i.qty + "x " + i.sku).join(" · ").slice(0, 40))}</td>
             <td class="num">${esc(brl(p.faturamento))}</td>
             <td class="num">${p.sem_custo ? '<span class="tag pend">sem custo</span>' : esc(brl(p.cmv))}</td>
-            <td class="num">${esc(brl(p.taxa))}</td><td class="num">${esc(brl(p.frete))}</td>
+            <td class="num" title="${esc(p.taxa_venda != null ? "Na venda: " + brl(p.taxa_venda) : "")}${esc(p.taxa_fatura != null ? " · Na fatura: " + brl(p.taxa_fatura) : "")}">${esc(brl(p.taxa))}${p.divergencia_taxa != null && Math.abs(p.divergencia_taxa) >= 0.01 ? `<div class="mini neg">fatura ${p.divergencia_taxa > 0 ? "+" : ""}${esc(brl(p.divergencia_taxa))}</div>` : ""}</td>
+            <td class="num">${esc(brl(p.frete))}</td>
             <td class="num">${esc(brl(p.outros))}</td><td class="num">${esc(brl(p.imposto))}</td>
             <td class="num ${sinal(p.lucro_liquido)}">${esc(brl(p.lucro_liquido))}</td>
-            <td class="mini" title="${esc(p.origem_custo_venda)}">${esc((p.origem_custo_venda || "").slice(0, 34))}</td></tr>`).join("")
+            <td class="mini" title="${esc(p.origem_custo_venda)}">${origemTag(p)}</td></tr>`).join("")
         + "</tbody>" : '<tbody><tr><td class="vazio">Nenhum pedido encontrado.</td></tr></tbody>';
     } else {
       const f = d.fatura_ml || { sem_pedido: { itens: [] } };

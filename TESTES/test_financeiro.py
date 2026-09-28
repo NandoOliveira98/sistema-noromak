@@ -238,6 +238,105 @@ class TesteFinanceiroShopee(TesteNoromak):
         self.assertEqual(d["por_marketplace"]["shopee"]["faturamento"], 100.0)
 
 
+def _custo_da_venda(order_id: str, line_key: str, sku: str, sale_fee: float | None,
+                    shipment_id: str = "", dia: str = "2026-09-10") -> None:
+    """O que o ML já mostra no ato da venda (tarifa da linha + envio)."""
+    with S.DB_LOCK:
+        S.DB.execute(
+            "INSERT OR REPLACE INTO ml_venda_custo_v1830(order_id,line_key,sku,sale_fee,shipment_id,sale_day,captured_at) "
+            "VALUES(?,?,?,?,?,?,?)", (order_id, line_key, sku, sale_fee, shipment_id, dia, S.now_iso()))
+        S.DB.commit()
+
+
+def _frete_envio(shipment_id: str, custo: float) -> None:
+    with S.DB_LOCK:
+        S.DB.execute(
+            "INSERT OR REPLACE INTO ml_frete_envio_v1830(shipment_id,cost,captured_at,captured_epoch,erro) "
+            "VALUES(?,?,?,?,'')", (shipment_id, custo, S.now_iso(), 9_999_999_999))
+        S.DB.commit()
+
+
+class TesteFinanceiroCustoNoAtoDaVenda(TesteNoromak):
+    """V18.31 — a tarifa e o frete aparecem NO ATO DA VENDA; a fatura confere depois.
+
+    O caso é o que o ML mostra no detalhe do pedido:
+        Preço do produto        R$ 156,50
+        Tarifa de venda (12%)  -R$  18,78
+        Mercado Envios          -R$  22,25
+    """
+
+    def cenario_venda(self) -> None:
+        _custos_precificador({"GP-ALAV": 60.0})
+        _vender("ml", "ML7700", "GP-ALAV", 1, 156.50)
+        _custo_da_venda("ML7700", "GP-ALAV", "GP-ALAV", 18.78, shipment_id="E900")
+        _frete_envio("E900", 22.25)
+
+    def test_tarifa_da_venda_e_usada_antes_da_fatura_existir(self) -> None:
+        self.cenario_venda()
+        t = S.financeiro_payload("2026-09-01", "2026-09-30")["totais"]
+        self.assertEqual(t["taxas"], 18.78, "a tarifa do ato da venda tem que valer enquanto a fatura não sai")
+        self.assertEqual(t["frete"], 22.25, "o frete do Mercado Envios por conta do vendedor também")
+        self.assertEqual(t["imposto"], 18.78)          # 12% de 156,50
+        # 156,50 - 60,00 (custo) - 18,78 (tarifa) - 22,25 (frete) - 18,78 (imposto)
+        self.assertEqual(t["lucro_liquido"], 36.69)
+
+    def test_fonte_aparece_como_da_venda(self) -> None:
+        self.cenario_venda()
+        d = S.financeiro_payload("2026-09-01", "2026-09-30")
+        p = next(x for x in d["pedidos"] if x["order_id"] == "ML7700")
+        self.assertTrue(p["conciliado"])
+        self.assertFalse(p["na_fatura"], "ainda não está na fatura: a tela precisa dizer isso")
+        self.assertEqual(p["taxa_venda"], 18.78)
+        self.assertIsNone(p["taxa_fatura"])
+        self.assertEqual(d["cobertura"]["pedidos_ml_taxa_da_venda"], 1)
+        self.assertEqual(d["cobertura"]["faturamento_sem_taxa"], 0.0)
+
+    def test_fatura_prevalece_e_a_diferenca_fica_visivel(self) -> None:
+        self.cenario_venda()
+        # A fatura cobrou 19,10 (0,32 a mais do que o mostrado na venda).
+        _lancamento_fatura("ML7700", 19.10, sub_type="CV", transacao="Cobranca por venda", sale_fee_net=19.10)
+        d = S.financeiro_payload("2026-09-01", "2026-09-30")
+        self.assertEqual(d["totais"]["taxas"], 19.10, "quando existe, vale o que foi COBRADO")
+        p = next(x for x in d["pedidos"] if x["order_id"] == "ML7700")
+        self.assertTrue(p["na_fatura"])
+        self.assertEqual(p["taxa_venda"], 18.78)
+        self.assertEqual(p["taxa_fatura"], 19.10)
+        self.assertEqual(p["divergencia_taxa"], 0.32)
+        self.assertEqual(d["cobertura"]["divergencias"], 1)
+        self.assertEqual(d["cobertura"]["divergencia_total"], 0.32)
+
+    def test_as_duas_fontes_nunca_somam(self) -> None:
+        self.cenario_venda()
+        _lancamento_fatura("ML7700", 18.78, sub_type="CV", sale_fee_net=18.78)
+        _lancamento_fatura("ML7700", 22.25, sub_type="CXD", transacao="Mercado Envios", detail_id="frete-1")
+        t = S.financeiro_payload("2026-09-01", "2026-09-30")["totais"]
+        self.assertEqual(t["taxas"], 18.78, "fatura e venda são a MESMA cobrança; somar dobraria a taxa")
+        self.assertEqual(t["frete"], 22.25)
+        self.assertEqual(t["lucro_liquido"], 36.69)
+
+    def test_frete_de_envio_com_dois_pedidos_nao_conta_duas_vezes(self) -> None:
+        _custos_precificador({"AAA": 10.0})
+        _vender("ml", "ML01", "AAA", 1, 100.0)
+        _vender("ml", "ML02", "AAA", 1, 100.0)
+        _custo_da_venda("ML01", "AAA", "AAA", 5.0, shipment_id="E555")
+        _custo_da_venda("ML02", "AAA", "AAA", 5.0, shipment_id="E555")
+        _frete_envio("E555", 20.0)
+        t = S.financeiro_payload("2026-09-01", "2026-09-30")["totais"]
+        self.assertEqual(t["frete"], 20.0, "o envio é um só: 10,00 para cada pedido, não 20,00 para cada")
+
+    def test_sale_fee_da_order_e_por_unidade(self) -> None:
+        # O ML manda sale_fee POR UNIDADE; a tarifa da linha é sale_fee x quantidade.
+        self.assertEqual(S._ml_item_fee({"sale_fee": 9.39, "quantity": 2}), 18.78)
+        self.assertEqual(S._ml_item_fee({"sale_fee": 18.78, "quantity": 1}), 18.78)
+        self.assertIsNone(S._ml_item_fee({"quantity": 1}), "sem sale_fee não se inventa tarifa")
+
+    def test_frete_do_vendedor_le_senders_cost(self) -> None:
+        payload = {"gross_amount": 41.9, "receiver": {"cost": 19.65},
+                   "senders": [{"user_id": "224625106", "cost": 22.25}]}
+        self.assertEqual(S._ml_shipping_cost_parse(payload, "224625106"), 22.25,
+                         "o custo do vendedor é senders[].cost, nunca o gross_amount")
+
+
 class TesteFinanceiroRota(TesteNoromak):
     """A rota HTTP: só ADMIN, e devolve o mesmo cálculo."""
 

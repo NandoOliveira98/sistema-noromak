@@ -252,16 +252,24 @@ sugestão de transferência Ribeirão/Bauru e Lista de separação por prateleir
 compra em aberto, custo e marca em lote. A chave do Noromak **só** tem `/custo` e `/estoque`;
 não usar outras rotas do Apollo sem acordo com a equipe dele.
 
-### Financeiro — faturamento, gastos e lucro (V18.30)
+### Financeiro — faturamento, gastos e lucro (V18.30/V18.31)
 `APP/financeiro.html` (`/financeiro`, menu Comercial, só **admin**). Junta o que já existia:
 faturamento de `vendas_v1799` (ML + Shopee), custo do produto pela mesma regra da Demanda de
 Compra (`_compras_produtos_precificador` + `_compras_resolver_custo`, kit vira componentes),
-tarifa e frete do ML pela **fatura oficial** (`ml_billing_period_detail`, regra única em
+tarifa e frete do ML **no ato da venda** (V18.31) e pela **fatura oficial** (`ml_billing_period_detail`, regra única em
 `_ml_billing_consolidar_lancamentos`, que na V18.30 passou a devolver também `shipping` e
 `publicidade`), tarifa e frete da Shopee pelo **escrow** (`shopee_escrow_v1810`) e o gasto de
 Ads pela API de Publicidade. Imposto **fixo de 12%** sobre a venda (`FINANCEIRO_IMPOSTO_PERCENT`).
 `lucro bruto = faturamento − CMV`; `líquido = bruto − taxa − frete − outros − ads − imposto`.
 A tarifa é **do pedido** e rateada entre as linhas pelo valor — nunca somada por linha.
+**V18.31 — taxa no ato da venda:** o ML já mostra "Tarifa de venda total" e "Tarifa do Mercado
+Envios (por sua conta)" no detalhe do pedido. A tarifa vem em `order_items[].sale_fee` (por
+unidade × qtd, `_ml_item_fee`) e é gravada em `ml_venda_custo_v1830` **dentro da sincronização
+de vendas, sem chamada extra**; o frete vem de `/shipments/{id}/costs` (`senders[].cost`,
+`_ml_shipping_cost_parse`) num worker próprio (`financeiro_frete_loop`, 5 min) e fica em
+`ml_frete_envio_v1830` — um envio que cobre vários pedidos tem o custo **dividido** entre eles.
+Ordem de autoridade: **fatura quando existe** (é o que foi cobrado), senão a tarifa da venda;
+as duas **nunca somam**, e a diferença entre elas aparece na tela (`cobertura.divergencias`).
 O que não é conhecido fica **nulo e visível** (`cobertura.faturamento_sem_custo` /
 `sem_taxa`): nada é estimado. `GET /api/financeiro/resumo`, `POST /api/financeiro/sincronizar`
 (fatura + escrow pendente + Ads, em segundo plano).

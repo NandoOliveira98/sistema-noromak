@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.30-FINANCEIRO-LUCRO"
+APP_VERSION = "18.31-FINANCEIRO-TAXA-DA-VENDA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -1836,6 +1836,33 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS ml_ads_meta_v1830 (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL DEFAULT ''
+            );
+            -- V18.31: custo da venda NO ATO DA VENDA, como o ML mostra no detalhe do
+            -- pedido ("Tarifa de venda total" e "Tarifa do Mercado Envios por sua
+            -- conta"). Capturado junto com a sincronização de vendas, sem nenhuma
+            -- chamada extra: a tarifa já vem em order_items[].sale_fee.
+            -- A fatura (ml_billing_period_detail) continua sendo a conferência: quando
+            -- o lançamento aparece, ele prevalece e a diferença fica visível.
+            CREATE TABLE IF NOT EXISTS ml_venda_custo_v1830 (
+                order_id TEXT NOT NULL,
+                line_key TEXT NOT NULL,
+                sku TEXT NOT NULL DEFAULT '',
+                sale_fee REAL,
+                shipment_id TEXT NOT NULL DEFAULT '',
+                sale_day TEXT NOT NULL DEFAULT '',
+                captured_at TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY(order_id, line_key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_ml_venda_custo_dia ON ml_venda_custo_v1830(sale_day);
+            CREATE INDEX IF NOT EXISTS idx_ml_venda_custo_envio ON ml_venda_custo_v1830(shipment_id);
+            -- Frete que fica por conta do vendedor, por envio (/shipments/{id}/costs,
+            -- senders[].cost). Uma chamada por envio, guardada para sempre.
+            CREATE TABLE IF NOT EXISTS ml_frete_envio_v1830 (
+                shipment_id TEXT PRIMARY KEY,
+                cost REAL,
+                captured_at TEXT NOT NULL DEFAULT '',
+                captured_epoch INTEGER NOT NULL DEFAULT 0,
+                erro TEXT NOT NULL DEFAULT ''
             );
             CREATE TABLE IF NOT EXISTS print_jobs (
                 id TEXT PRIMARY KEY,
@@ -11452,6 +11479,15 @@ def _ml_seller_shipping_cost(shipment_id: str, seller_id: str = "") -> float | N
         data = _ml_profitability_api_get(f"/shipments/{quote(shipment_id)}/costs", headers={"x-format-new": "true"}, attempts=3)
     except Exception:
         return None
+    return _ml_shipping_cost_parse(data, seller_id)
+
+
+def _ml_shipping_cost_parse(data: Any, seller_id: str = "") -> float | None:
+    """Quanto do envio ficou POR CONTA DO VENDEDOR.
+
+    V18.31: extraído de _ml_seller_shipping_cost para que a captura no ato da
+    venda e a conciliação usem exatamente a mesma leitura do payload.
+    """
     if not isinstance(data, dict):
         return None
     # Fonte oficial para conciliação: senders[].cost. Se houver vários senders,
@@ -11791,6 +11827,7 @@ def vendas_ml_sync_window(date_from: str, date_to: str) -> dict[str, Any]:
     rows = [r for r in todas if str(r.get("status") or "").lower() in ("paid", "partially_refunded")]
     stamp = now_iso()
     records: dict[tuple[str, str], tuple[Any, ...]] = {}
+    custos_venda: dict[tuple[str, str], tuple[Any, ...]] = {}
     for r in rows:
         order_id = str(r.get("order_id") or "").strip()
         sale_at = str(r.get("date") or "")
@@ -11814,7 +11851,29 @@ def vendas_ml_sync_window(date_from: str, date_to: str) -> dict[str, Any]:
             "ml", order_id, line_key, str(r.get("pack_id") or ""), sale_at, sale_at[:10], sku, anuncio,
             str(r.get("product") or "")[:300], qty, round(float(amount), 2), str(r.get("status") or ""), stamp,
         )
+        # V18.31: a tarifa de venda já veio dentro da própria order (sale_fee por
+        # unidade). Guardar aqui é de graça e é o que o ML mostra no ato da venda.
+        custos_venda[(order_id, line_key)] = (
+            order_id, line_key, sku, _money_number(r.get("line_fee_api")),
+            str(r.get("shipment_id") or ""), sale_at[:10], stamp,
+        )
     _vendas_gravar("ml", date_from, date_to, list(records.values()), complete)
+    # Nunca pode derrubar a sincronização de vendas: é só o custo, e ele se
+    # completa sozinho no ciclo seguinte.
+    try:
+        if custos_venda:
+            with DB_LOCK:
+                DB.executemany(
+                    "INSERT INTO ml_venda_custo_v1830(order_id,line_key,sku,sale_fee,shipment_id,sale_day,captured_at) "
+                    "VALUES(?,?,?,?,?,?,?) ON CONFLICT(order_id,line_key) DO UPDATE SET sku=excluded.sku,"
+                    "sale_fee=COALESCE(excluded.sale_fee,ml_venda_custo_v1830.sale_fee),"
+                    "shipment_id=CASE WHEN excluded.shipment_id<>'' THEN excluded.shipment_id ELSE ml_venda_custo_v1830.shipment_id END,"
+                    "sale_day=excluded.sale_day,captured_at=excluded.captured_at",
+                    list(custos_venda.values()),
+                )
+                DB.commit()
+    except Exception:
+        pass
     return {"marketplace": "ml", "de": date_from, "ate": date_to, "linhas": len(records), "completa": complete}
 
 
@@ -12594,6 +12653,8 @@ except (TypeError, ValueError):
     FINANCEIRO_IMPOSTO_PERCENT = 12.0
 FINANCEIRO_SYNC_LOCK = threading.Lock()
 FINANCEIRO_SHOPEE_POR_RODADA = max(10, min(500, int(os.getenv("FINANCEIRO_SHOPEE_POR_RODADA", "150"))))
+FINANCEIRO_FRETE_POR_RODADA = max(5, min(300, int(os.getenv("FINANCEIRO_FRETE_POR_RODADA", "60"))))
+FINANCEIRO_FRETE_INTERVALO = max(60, min(3600, int(os.getenv("FINANCEIRO_FRETE_INTERVALO", "300"))))
 
 
 def _financeiro_periodos_fatura(d1: date, d2: date) -> list[str]:
@@ -12616,6 +12677,118 @@ def _financeiro_periodos_fatura(d1: date, d2: date) -> list[str]:
 def _financeiro_chunks(valores: list[str], tamanho: int = 400):
     for i in range(0, len(valores), tamanho):
         yield valores[i:i + tamanho]
+
+
+def ml_frete_envio_preencher(limite: int = 0) -> dict[str, Any]:
+    """Busca o frete por conta do vendedor dos envios que ainda não têm valor.
+
+    V18.31: uma chamada por ENVIO (/shipments/{id}/costs), guardada para sempre.
+    É o mesmo número que o ML mostra na venda como "Tarifa do Mercado Envios
+    (por sua conta)". Envio que deu erro é tentado de novo depois de 6 h.
+    """
+    limite = max(1, min(300, int(limite or FINANCEIRO_FRETE_POR_RODADA)))
+    agora = int(time.time())
+    with DB_LOCK:
+        pendentes = [str(r["shipment_id"]) for r in DB.execute(
+            "SELECT DISTINCT v.shipment_id FROM ml_venda_custo_v1830 v "
+            "LEFT JOIN ml_frete_envio_v1830 f ON f.shipment_id = v.shipment_id "
+            "WHERE v.shipment_id <> '' AND (f.shipment_id IS NULL OR (f.erro <> '' AND f.captured_epoch < ?)) "
+            "ORDER BY v.sale_day DESC LIMIT ?", (agora - 6 * 3600, limite)).fetchall()]
+    if not pendentes:
+        return {"pendentes": 0, "buscados": 0}
+    try:
+        _, seller_id = ml_access_token()
+    except Exception as exc:
+        return {"pendentes": len(pendentes), "buscados": 0, "erro": str(exc)[:200]}
+    buscados = 0
+    for sid in pendentes:
+        try:
+            data = _ml_profitability_api_get(f"/shipments/{quote(sid)}/costs",
+                                             headers={"x-format-new": "true"}, attempts=2)
+            custo = _ml_shipping_cost_parse(data, str(seller_id or ""))
+            erro = "" if custo is not None else "envio sem custo de remetente no payload"
+        except Exception as exc:
+            custo, erro = None, str(exc)[:200]
+        with DB_LOCK:
+            DB.execute(
+                "INSERT INTO ml_frete_envio_v1830(shipment_id,cost,captured_at,captured_epoch,erro) VALUES(?,?,?,?,?) "
+                "ON CONFLICT(shipment_id) DO UPDATE SET cost=excluded.cost,captured_at=excluded.captured_at,"
+                "captured_epoch=excluded.captured_epoch,erro=excluded.erro",
+                (sid, custo, now_iso(), agora, erro))
+            DB.commit()
+        if custo is not None:
+            buscados += 1
+    return {"pendentes": len(pendentes), "buscados": buscados}
+
+
+def financeiro_frete_loop(stop_event: threading.Event) -> None:
+    """Mantém o frete das vendas recentes preenchido, sem depender de ninguém abrir a tela."""
+    if stop_event.wait(120):
+        return
+    while not stop_event.is_set():
+        try:
+            ml_frete_envio_preencher()
+        except Exception:
+            pass
+        if stop_event.wait(FINANCEIRO_FRETE_INTERVALO):
+            break
+
+
+def _financeiro_custos_venda_ml(order_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """Tarifa e frete como o ML mostrou NO ATO DA VENDA, por pedido.
+
+    Tarifa: soma do sale_fee das linhas do pedido (é o "Tarifa de venda total").
+    Frete: custo do envio; quando o mesmo envio cobre vários pedidos (pack), o
+    custo é dividido entre eles — senão o frete apareceria duplicado.
+    """
+    alvo = [str(o).strip() for o in order_ids if str(o).strip()]
+    if not alvo:
+        return {}
+    linhas: list[dict[str, Any]] = []
+    for lote in _financeiro_chunks(alvo):
+        ph = ",".join("?" for _ in lote)
+        with DB_LOCK:
+            linhas.extend(dict(r) for r in DB.execute(
+                f"SELECT order_id, line_key, sale_fee, shipment_id FROM ml_venda_custo_v1830 WHERE order_id IN ({ph})",
+                tuple(lote)).fetchall())
+    if not linhas:
+        return {}
+    envios = sorted({str(l["shipment_id"] or "") for l in linhas if l["shipment_id"]})
+    custo_envio: dict[str, float] = {}
+    pedidos_por_envio: dict[str, int] = {}
+    for lote in _financeiro_chunks(envios):
+        ph = ",".join("?" for _ in lote)
+        with DB_LOCK:
+            for r in DB.execute(f"SELECT shipment_id, cost FROM ml_frete_envio_v1830 WHERE shipment_id IN ({ph}) AND cost IS NOT NULL",
+                                tuple(lote)).fetchall():
+                custo_envio[str(r["shipment_id"])] = float(r["cost"] or 0)
+            for r in DB.execute(
+                    f"SELECT shipment_id, COUNT(DISTINCT order_id) AS pedidos FROM ml_venda_custo_v1830 "
+                    f"WHERE shipment_id IN ({ph}) GROUP BY shipment_id", tuple(lote)).fetchall():
+                pedidos_por_envio[str(r["shipment_id"])] = max(1, int(r["pedidos"] or 1))
+
+    out: dict[str, dict[str, Any]] = {}
+    envios_do_pedido: dict[str, set[str]] = {}
+    for l in linhas:
+        oid = str(l["order_id"])
+        alvo_pedido = out.setdefault(oid, {"taxa": None, "frete": None, "linhas": 0})
+        alvo_pedido["linhas"] += 1
+        fee = _money_number(l["sale_fee"])
+        if fee is not None:
+            alvo_pedido["taxa"] = round((alvo_pedido["taxa"] or 0.0) + abs(fee), 2)
+        sid = str(l["shipment_id"] or "")
+        if sid:
+            envios_do_pedido.setdefault(oid, set()).add(sid)
+    for oid, sids in envios_do_pedido.items():
+        total = 0.0
+        achou = False
+        for sid in sids:
+            if sid in custo_envio:
+                achou = True
+                total += custo_envio[sid] / pedidos_por_envio.get(sid, 1)
+        if achou:
+            out[oid]["frete"] = round(total, 2)
+    return out
 
 
 def _financeiro_billing_ml(period_keys: list[str], order_ids: list[str]) -> dict[str, Any]:
@@ -12778,20 +12951,41 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
             for r in DB.execute(f"SELECT * FROM shopee_escrow_v1810 WHERE order_sn IN ({ph}) AND erro=''", tuple(lote)).fetchall():
                 escrow[str(r["order_sn"])] = dict(r)
 
+    venda_custos = _financeiro_custos_venda_ml(pedidos_ml) if pedidos_ml else {}
+
     custos_pedido: dict[tuple[str, str], dict[str, Any]] = {}
     for oid in pedidos_ml:
         b = billing["por_pedido"].get(oid) or {}
-        taxa = _money_number(b.get("sale_fee"))
-        frete = _money_number(b.get("shipping"))
+        v = venda_custos.get(oid) or {}
+        # V18.31: a tarifa e o frete já aparecem NO ATO DA VENDA (é o que o ML
+        # mostra no detalhe do pedido). A fatura é a conferência: quando o
+        # lançamento existe, ele manda, porque é o que foi de fato cobrado.
+        taxa_fatura = _money_number(b.get("sale_fee"))
+        frete_fatura = _money_number(b.get("shipping"))
+        taxa_venda = _money_number(v.get("taxa"))
+        frete_venda = _money_number(v.get("frete"))
+        taxa = taxa_fatura if taxa_fatura is not None else taxa_venda
+        frete = frete_fatura if frete_fatura is not None else frete_venda
         outros = _money_number(b.get("other_cost"))
         pub = float(b.get("publicidade") or 0.0)
         if outros is not None and pub:
             # Ads entra uma vez só, pela API de Publicidade.
             outros = round(outros - pub, 2)
-        custos_pedido[("ml", oid)] = {"taxa": taxa, "frete": frete, "outros": outros,
-                                      "bonus": float(b.get("bonus") or 0.0),
-                                      "origem": str(b.get("source") or "") or "Fatura ML não sincronizada",
-                                      "conciliado": taxa is not None}
+        if taxa_fatura is not None:
+            origem = str(b.get("source") or "") or "Fatura ML"
+        elif taxa_venda is not None:
+            origem = "Tarifa da venda (Orders ML)"
+        else:
+            origem = "Tarifa ainda não capturada"
+        custos_pedido[("ml", oid)] = {
+            "taxa": taxa, "frete": frete, "outros": outros,
+            "bonus": float(b.get("bonus") or 0.0), "origem": origem,
+            "conciliado": taxa is not None, "na_fatura": taxa_fatura is not None,
+            "taxa_venda": taxa_venda, "taxa_fatura": taxa_fatura,
+            "frete_venda": frete_venda, "frete_fatura": frete_fatura,
+            "divergencia_taxa": (round(taxa_fatura - taxa_venda, 2)
+                                 if (taxa_fatura is not None and taxa_venda is not None) else None),
+        }
     for oid in pedidos_shopee:
         e = escrow.get(oid)
         if not e:
@@ -12886,6 +13080,9 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
             "faturamento": 0.0, "cmv": 0.0, "taxa": pc.get("taxa"), "frete": pc.get("frete"),
             "outros": pc.get("outros"), "imposto": 0.0, "origem_custo_venda": pc.get("origem", ""),
             "conciliado": bool(pc.get("conciliado")), "sem_custo": False,
+            "na_fatura": bool(pc.get("na_fatura")), "taxa_venda": pc.get("taxa_venda"),
+            "taxa_fatura": pc.get("taxa_fatura"), "frete_venda": pc.get("frete_venda"),
+            "frete_fatura": pc.get("frete_fatura"), "divergencia_taxa": pc.get("divergencia_taxa"),
         })
         p["unidades"] += qty
         p["faturamento"] = round(p["faturamento"] + receita, 2)
@@ -12956,6 +13153,10 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
 
     ml_conciliados = sum(1 for o in pedidos_ml if (custos_pedido.get(("ml", o)) or {}).get("conciliado"))
     shopee_conciliados = sum(1 for o in pedidos_shopee if (custos_pedido.get(("shopee", o)) or {}).get("conciliado"))
+    ml_na_fatura = sum(1 for o in pedidos_ml if (custos_pedido.get(("ml", o)) or {}).get("na_fatura"))
+    # Onde a fatura discordou do que o ML mostrou na venda: é o que precisa de olho.
+    divergentes = [(o, (custos_pedido.get(("ml", o)) or {}).get("divergencia_taxa")) for o in pedidos_ml]
+    divergentes = [(o, d) for o, d in divergentes if d is not None and abs(d) >= 0.01]
     totais_fechados = fechar(totais)
     return {
         "ok": True,
@@ -12974,9 +13175,13 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
                       "sem_pedido": billing["sem_pedido"]},
         "cobertura": {
             "pedidos_ml": len(pedidos_ml), "pedidos_ml_conciliados": ml_conciliados,
+            "pedidos_ml_na_fatura": ml_na_fatura,
+            "pedidos_ml_taxa_da_venda": max(0, ml_conciliados - ml_na_fatura),
             "pedidos_shopee": len(pedidos_shopee), "pedidos_shopee_conciliados": shopee_conciliados,
             "faturamento_sem_custo": totais_fechados["sem_custo"],
             "faturamento_sem_taxa": totais_fechados["sem_taxa"],
+            "divergencias": len(divergentes),
+            "divergencia_total": round(sum(d for _o, d in divergentes), 2),
             "linhas": len(vendas),
         },
     }
@@ -13014,7 +13219,12 @@ def financeiro_sincronizar(date_from: str, date_to: str) -> dict[str, Any]:
                                     "status": "error", "diagnostic": str(exc)[:300]})
         resultado["fatura_ml"] = {"periodos": len(faturas),
                                   "erros": [f for f in faturas if str(f.get("status") or "") == "error"][:5]}
-        # 2) Escrow da Shopee dos pedidos do período que ainda não temos.
+        # 2) Frete por conta do vendedor dos envios ainda sem valor.
+        try:
+            resultado["frete_ml"] = ml_frete_envio_preencher(FINANCEIRO_FRETE_POR_RODADA)
+        except Exception as exc:
+            resultado["frete_ml"] = {"erro": str(exc)[:200]}
+        # 3) Escrow da Shopee dos pedidos do período que ainda não temos.
         with DB_LOCK:
             pendentes = [str(r["order_id"]) for r in DB.execute(
                 "SELECT DISTINCT v.order_id FROM vendas_v1799 v "
@@ -13027,7 +13237,7 @@ def financeiro_sincronizar(date_from: str, date_to: str) -> dict[str, Any]:
                 buscados += 1
         resultado["shopee"] = {"pendentes": len(pendentes), "buscados": buscados,
                                "faltam": max(0, len(pendentes) - buscados)}
-        # 3) Publicidade.
+        # 4) Publicidade.
         try:
             resultado["ads"] = ml_ads_sync_once()
         except Exception as exc:
@@ -18232,6 +18442,13 @@ def main() -> None:
         name="vendas-sync",
         daemon=True,
     )
+    # V18.31: frete por conta do vendedor das vendas recentes (Financeiro).
+    frete_thread = threading.Thread(
+        target=financeiro_frete_loop,
+        args=(watcher_stop,),
+        name="financeiro-frete",
+        daemon=True,
+    )
     # V18.30: gasto com Publicidade (Product Ads) para o Financeiro.
     ads_thread = threading.Thread(
         target=ml_ads_sync_loop,
@@ -18255,6 +18472,7 @@ def main() -> None:
     shopee_label_thread.start()
     shopee_orders_thread.start()
     vendas_ml_thread.start()
+    frete_thread.start()
     ads_thread.start()
     relatorio_thread.start()
     server = ThreadingHTTPServer((HOST, PORT), AppHandler)
