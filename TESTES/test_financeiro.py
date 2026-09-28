@@ -51,13 +51,14 @@ def _lancamento_fatura(order_id: str, valor: float, *, sub_type: str = "", trans
 
 
 def _escrow(order_sn: str, comissao: float, servico: float, transacao: float, frete: float,
-            escrow_amount: float = 0.0) -> None:
+            escrow_amount: float = 0.0, preco: float = 0.0, ams: float = 0.0) -> None:
     with S.DB_LOCK:
         S.DB.execute(
             "INSERT OR REPLACE INTO shopee_escrow_v1810(order_sn,selling_price,escrow_amount,commission_fee,"
-            "service_fee,transaction_fee,shipping_net,order_income_json,fetched_at,fetched_epoch,erro) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,'')",
-            (order_sn, 0.0, escrow_amount, comissao, servico, transacao, frete, "{}", S.now_iso(), 9_999_999_999),
+            "service_fee,transaction_fee,shipping_net,ams_commission,order_income_json,fetched_at,fetched_epoch,erro) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,'')",
+            (order_sn, preco, escrow_amount, comissao, servico, transacao, frete, ams, "{}",
+             S.now_iso(), 9_999_999_999),
         )
         S.DB.commit()
 
@@ -449,6 +450,59 @@ class TesteParcialNaoEZero(TesteNoromak):
         d = S.financeiro_payload("2026-09-01", "2026-09-30")
         self.assertEqual(d["cobertura"]["faturamento_sem_frete"], 0.0,
                          "envio consultado e sem custo é zero de verdade")
+
+
+class TesteShopeeEscrowAutoridade(TesteNoromak):
+    """V18.35 — na Shopee, o escrow_amount é a autoridade.
+
+    Caso real do pedido 2609152YHBQ424 (28/09/2026):
+        preço do produto           R$ 25,90
+        comissão                   R$  4,66
+        taxa de serviço            R$  5,79
+        comissão de afiliados AMS  R$  2,58
+        escrow (o que entra)       R$ 12,87
+    Sem o AMS a conta fechava em R$ 15,45 de renda — R$ 2,58 a mais do que a
+    Shopee paga de verdade. No mês inteiro eram 3,5% do preço somindo.
+    """
+
+    def cenario(self) -> None:
+        _custos_precificador({"AAA": 8.0})
+        _vender("shopee", "SP900", "AAA", 1, 25.90)
+        _escrow("SP900", comissao=4.66, servico=5.79, transacao=0.0, frete=0.0,
+                escrow_amount=12.87, preco=25.90, ams=2.58)
+
+    def test_afiliados_entram_como_ads(self) -> None:
+        self.cenario()
+        d = S.financeiro_payload("2026-09-01", "2026-09-30", "shopee")
+        self.assertEqual(d["totais"]["ads"], 2.58, "a comissão de afiliados da Shopee é custo de marketing")
+        self.assertEqual(d["totais"]["taxas"], 10.45)
+        self.assertEqual(d["ads"]["shopee_afiliados"], 2.58)
+
+    def test_custo_total_bate_com_o_escrow(self) -> None:
+        self.cenario()
+        t = S.financeiro_payload("2026-09-01", "2026-09-30", "shopee")["totais"]
+        retido = round(25.90 - 12.87, 2)
+        somado = round(t["taxas"] + t["frete"] + t["ads"] + t["outros"], 2)
+        self.assertEqual(somado, retido, "o que descontamos tem que ser o que a Shopee reteve")
+        # 25,90 - 8,00 (custo) - 13,03 (retido) - 3,11 (imposto 12%)
+        self.assertEqual(t["lucro_liquido"], 1.76)
+
+    def test_retencao_nao_detalhada_vira_outros(self) -> None:
+        # Escrow menor do que as taxas explicam: a diferença não pode virar lucro.
+        _custos_precificador({"AAA": 8.0})
+        _vender("shopee", "SP901", "AAA", 1, 100.0)
+        _escrow("SP901", comissao=14.0, servico=6.0, transacao=0.0, frete=0.0,
+                escrow_amount=70.0, preco=100.0, ams=0.0)
+        t = S.financeiro_payload("2026-09-01", "2026-09-30", "shopee")["totais"]
+        self.assertEqual(t["outros"], 10.0, "os R$ 10 que a Shopee reteve sem detalhar são custo")
+
+    def test_sem_preco_no_escrow_nao_inventa_outros(self) -> None:
+        _custos_precificador({"AAA": 8.0})
+        _vender("shopee", "SP902", "AAA", 1, 100.0)
+        _escrow("SP902", comissao=14.0, servico=6.0, transacao=0.0, frete=0.0)  # escrow/preço zerados
+        t = S.financeiro_payload("2026-09-01", "2026-09-30", "shopee")["totais"]
+        self.assertEqual(t["outros"], 0.0, "sem escrow confiável não se inventa resíduo")
+        self.assertEqual(t["taxas"], 20.0)
 
 
 class TesteRentabilidadeRemovida(TesteNoromak):

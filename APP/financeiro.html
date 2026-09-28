@@ -284,7 +284,8 @@ button,input,select{font:inherit;color:inherit}
       t.sem_taxa > 0 ? `parcial — ${brl(t.sem_taxa)} de venda sem taxa conhecida` : "Tarifa da venda, conferida na fatura", "custo");
     card($("kpiFrete"), "Frete do vendedor", brl(t.frete),
       t.sem_frete > 0 ? `parcial — ${brl(t.sem_frete)} de venda sem frete conciliado` : "Mercado Envios por sua conta + Shopee", "custo");
-    const fonteAds = { api: "API de Publicidade", fatura: "cobrado na fatura do ML" }[d.ads.fonte] || "sem dado de Ads";
+    const fonteAds = { api: "API de Publicidade", fatura: "cobrado na fatura do ML",
+                       escrow: "afiliados Shopee (escrow)" }[d.ads.fonte] || "sem dado de Ads";
     card($("kpiAds"), "Publicidade (Ads)", d.ads.fonte ? brl(t.ads) : "—", fonteAds, "custo");
     card($("kpiImposto"), "Imposto (" + esc(pct(d.imposto_percent)) + ")", brl(t.imposto), "Sobre o valor da venda", "custo");
     if (t.lucro_liquido < 0) $("kpiLiquido").querySelector(".valor").style.color = "#ffb3b3";
@@ -518,7 +519,8 @@ button,input,select{font:inherit;color:inherit}
     $("subtitulo").textContent = `${d.periodo.inicio.split("-").reverse().join("/")} a ${d.periodo.fim.split("-").reverse().join("/")}`
       + ` · ${num(d.cobertura.linhas)} linhas de venda · imposto fixo de ${pct(d.imposto_percent)}`;
     $("notaFontes").innerHTML = "<b>Fontes:</b> tarifa e frete do ato da venda, conferidos na fatura do ML · escrow da Shopee · custo do Apollo."
-      + `<br><b>Ads:</b> ${{ api: "API de Publicidade", fatura: "fatura do ML (PADS)" }[a.fonte] || "sem dado"}`
+      + `<br><b>Ads:</b> ${{ api: "API de Publicidade", fatura: "fatura do ML (PADS)", escrow: "afiliados Shopee" }[a.fonte] || "sem dado"}`
+      + (a.shopee_afiliados > 0 ? ` · Shopee afiliados ${brl(a.shopee_afiliados)}` : "")
       + (a.fonte === "api" && a.ultima_sincronizacao ? ` (coleta ${esc(a.ultima_sincronizacao.slice(0, 16).replace("T", " "))})` : "");
     $("statusBarra").textContent = `${num(d.cobertura.pedidos_ml_na_fatura)} pedido(s) já na fatura · `
       + `${num(d.cobertura.pedidos_ml_taxa_da_venda)} com taxa do ato da venda · ${num(d.cobertura.pedidos_shopee_conciliados)} Shopee com escrow`;

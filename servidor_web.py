@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.34-FATURA-ML-SUBTYPES-REAIS"
+APP_VERSION = "18.35-SHOPEE-ESCROW-AUTORIDADE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -1400,6 +1400,37 @@ def session_ttl_for_user_area(area: str, row: sqlite3.Row | dict[str, Any]) -> i
     return session_ttl_for_area(area)
 
 
+def ensure_shopee_escrow_schema() -> None:
+    """V18.35: acrescenta ams_commission (comissão de afiliados/AMS da Shopee).
+
+    O valor já vinha no payload e estava guardado em order_income_json — o
+    backfill lê dali, sem refazer uma única chamada à Shopee.
+    """
+    with DB_LOCK:
+        info = DB.execute("PRAGMA table_info(shopee_escrow_v1810)").fetchall()
+        if not info:
+            return
+        if "ams_commission" not in {str(r["name"]) for r in info}:
+            DB.execute("ALTER TABLE shopee_escrow_v1810 ADD COLUMN ams_commission REAL")
+            DB.commit()
+        pendentes = DB.execute(
+            "SELECT order_sn, order_income_json FROM shopee_escrow_v1810 "
+            "WHERE ams_commission IS NULL AND order_income_json<>'' AND erro=''"
+        ).fetchall()
+    atualizacoes: list[tuple[float, str]] = []
+    for r in pendentes:
+        try:
+            oi = json.loads(r["order_income_json"] or "{}")
+        except Exception:
+            continue  # JSON truncado: fica nulo e o cálculo usa o resíduo do escrow
+        atualizacoes.append((round(_shopee_escrow_num(oi, "order_ams_commission_fee", "ams_commission_fee"), 2),
+                             str(r["order_sn"])))
+    if atualizacoes:
+        with DB_LOCK:
+            DB.executemany("UPDATE shopee_escrow_v1810 SET ams_commission=? WHERE order_sn=?", atualizacoes)
+            DB.commit()
+
+
 def ensure_app_user_permissions_schema() -> None:
     """Adiciona permissões granulares sem retirar acesso dos usuários existentes."""
     with DB_LOCK:
@@ -1701,6 +1732,7 @@ def init_db() -> None:
                 service_fee REAL,
                 transaction_fee REAL,
                 shipping_net REAL,
+                ams_commission REAL,
                 order_income_json TEXT NOT NULL DEFAULT '',
                 fetched_at TEXT NOT NULL DEFAULT '',
                 fetched_epoch INTEGER NOT NULL DEFAULT 0,
@@ -1923,6 +1955,7 @@ def init_db() -> None:
     ensure_print_queue_schema()
     ensure_app_sessions_schema()
     ensure_app_user_permissions_schema()
+    ensure_shopee_escrow_schema()
     migrate_legacy_if_empty()
     ensure_storage_defaults()
     seed_sku_state_from_storage()
@@ -12253,7 +12286,8 @@ def _shopee_escrow_num(oi: dict[str, Any], *keys: str) -> float:
 def _shopee_escrow_parse(order_income: dict[str, Any]) -> dict[str, float]:
     oi = order_income or {}
     selling = _shopee_escrow_num(oi, "order_selling_price", "original_price", "order_original_price", "buyer_total_amount")
-    escrow = _shopee_escrow_num(oi, "escrow_amount")
+    # V18.35: quando existe ajuste, é ele que diz o que realmente entrou.
+    escrow = _shopee_escrow_num(oi, "escrow_amount_after_adjustment", "escrow_amount")
     commission = _shopee_escrow_num(oi, "commission_fee")
     service = _shopee_escrow_num(oi, "service_fee")
     transaction = _shopee_escrow_num(oi, "seller_transaction_fee")
@@ -12262,9 +12296,13 @@ def _shopee_escrow_parse(order_income: dict[str, Any]) -> dict[str, float]:
     buyer_ship = _shopee_escrow_num(oi, "buyer_paid_shipping_fee")
     # Frete líquido que sobra para o vendedor (o comprador/Shopee cobrem parte).
     shipping_net = max(0.0, round(actual_ship - rebate - buyer_ship, 2))
+    # V18.35: comissão do programa de afiliados/AMS. É marketing, não tarifa, e
+    # estava fora da conta: sozinha era 3,5% do preço em setembro (R$ 654,29).
+    ams = _shopee_escrow_num(oi, "order_ams_commission_fee", "ams_commission_fee")
     return {"selling_price": round(selling, 2), "escrow_amount": round(escrow, 2),
             "commission_fee": round(commission, 2), "service_fee": round(service, 2),
-            "transaction_fee": round(transaction, 2), "shipping_net": shipping_net}
+            "transaction_fee": round(transaction, 2), "shipping_net": shipping_net,
+            "ams_commission": round(ams, 2)}
 
 
 def shopee_escrow_lookup(order_sn: str, permitir_api: bool = True) -> dict[str, float] | None:
@@ -12273,7 +12311,8 @@ def shopee_escrow_lookup(order_sn: str, permitir_api: bool = True) -> dict[str, 
     order_sn = str(order_sn or "").strip()
     if not order_sn:
         return None
-    campos = ("selling_price", "escrow_amount", "commission_fee", "service_fee", "transaction_fee", "shipping_net")
+    campos = ("selling_price", "escrow_amount", "commission_fee", "service_fee", "transaction_fee",
+              "shipping_net", "ams_commission")
     agora = int(time.time())
     with DB_LOCK:
         row = DB.execute("SELECT * FROM shopee_escrow_v1810 WHERE order_sn=?", (order_sn,)).fetchone()
@@ -12288,15 +12327,16 @@ def shopee_escrow_lookup(order_sn: str, permitir_api: bool = True) -> dict[str, 
         with DB_LOCK:
             DB.execute(
                 """INSERT INTO shopee_escrow_v1810
-                   (order_sn,selling_price,escrow_amount,commission_fee,service_fee,transaction_fee,shipping_net,order_income_json,fetched_at,fetched_epoch,erro)
-                   VALUES(?,?,?,?,?,?,?,?,?,?,'')
+                   (order_sn,selling_price,escrow_amount,commission_fee,service_fee,transaction_fee,shipping_net,ams_commission,order_income_json,fetched_at,fetched_epoch,erro)
+                   VALUES(?,?,?,?,?,?,?,?,?,?,?,'')
                    ON CONFLICT(order_sn) DO UPDATE SET selling_price=excluded.selling_price,escrow_amount=excluded.escrow_amount,
                    commission_fee=excluded.commission_fee,service_fee=excluded.service_fee,transaction_fee=excluded.transaction_fee,
-                   shipping_net=excluded.shipping_net,order_income_json=excluded.order_income_json,fetched_at=excluded.fetched_at,
+                   shipping_net=excluded.shipping_net,ams_commission=excluded.ams_commission,
+                   order_income_json=excluded.order_income_json,fetched_at=excluded.fetched_at,
                    fetched_epoch=excluded.fetched_epoch,erro=''""",
                 (order_sn, parsed["selling_price"], parsed["escrow_amount"], parsed["commission_fee"],
                  parsed["service_fee"], parsed["transaction_fee"], parsed["shipping_net"],
-                 json_dumps(oi)[:20000], now_iso(), agora),
+                 parsed["ams_commission"], json_dumps(oi)[:20000], now_iso(), agora),
             )
             DB.commit()
         return parsed
@@ -13108,11 +13148,24 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
             custos_pedido[("shopee", oid)] = {"taxa": None, "frete": None, "outros": None, "bonus": 0.0,
                                               "origem": "Escrow Shopee ainda não consultado", "conciliado": False}
             continue
+        # V18.35: o escrow_amount é o que REALMENTE entra na conta — ele é a
+        # autoridade, como a fatura é no ML. As colunas explicam a maior parte
+        # do que a Shopee reteve; o que sobrar vira "outros" em vez de virar
+        # margem. Sem isso faltavam 3,5% do preço (a comissão de afiliados/AMS,
+        # R$ 654,29 em setembro, que agora entra como Ads).
         taxa = round(float(e["commission_fee"] or 0) + float(e["service_fee"] or 0) + float(e["transaction_fee"] or 0), 2)
-        custos_pedido[("shopee", oid)] = {"taxa": taxa, "frete": round(float(e["shipping_net"] or 0), 2),
-                                          "outros": 0.0, "bonus": 0.0, "origem": "Shopee get_escrow_detail",
-                                          "conciliado": True,
-                                          "renda_liquida": round(float(e["escrow_amount"] or 0), 2)}
+        frete_shopee = round(float(e["shipping_net"] or 0), 2)
+        ams = round(float((e["ams_commission"] if "ams_commission" in e.keys() else 0) or 0), 2)
+        preco = float(e["selling_price"] or 0)
+        recebido = float(e["escrow_amount"] or 0)
+        retido = round(preco - recebido, 2) if (preco > 0 and recebido > 0) else None
+        outros_shopee = 0.0
+        if retido is not None:
+            outros_shopee = round(max(0.0, retido - taxa - frete_shopee - ams), 2)
+        custos_pedido[("shopee", oid)] = {"taxa": taxa, "frete": frete_shopee,
+                                          "outros": outros_shopee, "ads_fatura": ams, "bonus": 0.0,
+                                          "origem": "Shopee get_escrow_detail", "conciliado": True,
+                                          "renda_liquida": round(recebido, 2), "retido": retido}
 
     # Receita por pedido para ratear a taxa/frete entre as linhas.
     receita_pedido: dict[tuple[str, str], float] = {}
@@ -13125,13 +13178,20 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
     # POR PEDIDO. Quando a API de Publicidade não responde — hoje é o caso — a
     # fatura é a fonte, e ainda dá o custo por pedido e por SKU, que a API só
     # daria com muito mais chamada. Uma fonte OU a outra; nunca as duas somadas.
-    ads_fatura_pedidos = round(sum(float((c or {}).get("ads_fatura") or 0.0) for c in custos_pedido.values()), 2)
+    ads_fatura_pedidos = round(sum(float((c or {}).get("ads_fatura") or 0.0)
+                                   for k, c in custos_pedido.items() if k[0] == "ml"), 2)
+    # A Shopee cobra a comissão de afiliados (AMS) dentro do escrow: é marketing
+    # e entra sempre, independente da API de Publicidade do ML.
+    ads_shopee = round(sum(float((c or {}).get("ads_fatura") or 0.0)
+                           for k, c in custos_pedido.items() if k[0] == "shopee"), 2)
     ads_fatura_sem_pedido = round(float((billing.get("sem_pedido") or {}).get("publicidade") or 0.0), 2)
     ads_api_total = ads["total"] if (not canal or canal == "ml") else 0.0
     if ads_api_total > 0:
         ads_fonte = "api"
     elif (ads_fatura_pedidos + ads_fatura_sem_pedido) > 0 and (not canal or canal == "ml"):
         ads_fonte = "fatura"
+    elif ads_shopee > 0:
+        ads_fonte = "escrow"
     else:
         ads_fonte = ""
     usar_ads_da_fatura = ads_fonte == "fatura"
@@ -13163,7 +13223,9 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
         frete = round(pc["frete"] * fatia, 2) if pc.get("frete") is not None else None
         outros = round(pc["outros"] * fatia, 2) if pc.get("outros") is not None else None
         imposto = round(receita * imposto_rate, 2)
-        ads_linha = round(float(pc.get("ads_fatura") or 0.0) * fatia, 2) if usar_ads_da_fatura else 0.0
+        # Shopee: AMS sempre. ML: só quando a API de Publicidade não respondeu.
+        usa_ads_desta_linha = (mp == "shopee") or usar_ads_da_fatura
+        ads_linha = round(float(pc.get("ads_fatura") or 0.0) * fatia, 2) if usa_ads_desta_linha else 0.0
 
         alvos = [totais, por_mp.setdefault(mp, bloco()),
                  por_dia.setdefault(str(v["sale_day"]), {**bloco(), "dia": str(v["sale_day"])})]
@@ -13224,7 +13286,7 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
             "marketplace": mp, "order_id": oid, "dia": str(v["sale_day"]), "itens": [], "unidades": 0,
             "faturamento": 0.0, "cmv": 0.0, "taxa": pc.get("taxa"), "frete": pc.get("frete"),
             "outros": pc.get("outros"), "imposto": 0.0, "origem_custo_venda": pc.get("origem", ""),
-            "ads": round(float(pc.get("ads_fatura") or 0.0), 2) if usar_ads_da_fatura else 0.0,
+            "ads": round(float(pc.get("ads_fatura") or 0.0), 2) if usa_ads_desta_linha else 0.0,
             "conciliado": bool(pc.get("conciliado")), "sem_custo": False,
             "na_fatura": bool(pc.get("na_fatura")), "taxa_venda": pc.get("taxa_venda"),
             "taxa_fatura": pc.get("taxa_fatura"), "frete_venda": pc.get("frete_venda"),
@@ -13244,32 +13306,34 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
     # Pela API de Publicidade o gasto é do PERÍODO (por dia). Pela fatura ele já
     # foi somado pedido a pedido no laço acima; aqui só entra o que a fatura
     # cobrou sem vincular a um pedido.
-    ads_sku_usado = 0.0
     ads_sem_alvo = 0.0
     if usar_ads_da_fatura:
-        ads_total = round(ads_fatura_pedidos + ads_fatura_sem_pedido, 2)
+        # O Ads do ML já foi somado pedido a pedido; falta o que a fatura cobrou
+        # sem vincular a nenhuma venda.
         ads_sem_alvo = ads_fatura_sem_pedido
         if ads_sem_alvo:
             totais["ads"] = round(totais["ads"] + ads_sem_alvo, 2)
             if "ml" in por_mp:
                 por_mp["ml"]["ads"] = round(por_mp["ml"]["ads"] + ads_sem_alvo, 2)
-        ads_sku_usado = round(sum(s["ads"] for s in por_sku.values()), 2)
     else:
-        ads_total = ads_api_total
-        totais["ads"] = ads_total
+        # Pela API o gasto é do período (por dia), não do pedido.
+        totais["ads"] = round(totais["ads"] + ads_api_total, 2)
         if "ml" in por_mp:
-            por_mp["ml"]["ads"] = ads_total
+            por_mp["ml"]["ads"] = round(por_mp["ml"]["ads"] + ads_api_total, 2)
         if not canal or canal == "ml":
             for dia, valor in ads["por_dia"].items():
                 alvo = por_dia.get(dia)
                 if alvo is not None:
-                    alvo["ads"] = valor
+                    alvo["ads"] = round(alvo["ads"] + valor, 2)
+        identificado_api = 0.0
         for sku_key, valor in ads["por_sku"].items():
             alvo = por_sku.get(sku_key)
             if alvo is not None:
-                alvo["ads"] = valor
-                ads_sku_usado = round(ads_sku_usado + valor, 2)
-        ads_sem_alvo = round(max(0.0, ads_total - ads_sku_usado), 2)
+                alvo["ads"] = round(alvo["ads"] + valor, 2)
+                identificado_api = round(identificado_api + valor, 2)
+        ads_sem_alvo = round(max(0.0, ads_api_total - identificado_api), 2)
+    ads_total = totais["ads"]
+    ads_sku_usado = round(sum(s["ads"] for s in por_sku.values()), 2)
 
     def fechar(b: dict[str, Any]) -> dict[str, Any]:
         pedidos = len(b.pop("pedidos"))
@@ -13335,7 +13399,7 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
         "ads": {"total": ads_total, "por_sku_identificado": ads_sku_usado,
                 "sem_sku": ads_sem_alvo, "dias_com_dado": ads["dias_com_dado"],
                 "fonte": ads_fonte, "da_fatura": round(ads_fatura_pedidos + ads_fatura_sem_pedido, 2),
-                "da_api": ads_api_total, **ads["status"]},
+                "da_api": ads_api_total, "shopee_afiliados": ads_shopee, **ads["status"]},
         "fatura_ml": {"periodos": billing["periodos"], "lancamentos": billing["lancamentos"],
                       "sem_pedido": billing["sem_pedido"]},
         "cobertura": {
