@@ -49,6 +49,8 @@ tbody tr:hover{background:#f7fafd}
 .marg{font-size:11px;font-weight:800;border-radius:6px;padding:2px 6px}
 .marg.ok{background:var(--okbg);color:var(--ok)}.marg.baixa{background:var(--warnbg);color:var(--warn)}.marg.neg{background:var(--badbg);color:var(--bad)}
 .tagon{font-size:9.5px;font-weight:800;background:var(--roxobg);color:var(--roxo);border-radius:5px;padding:1px 5px;margin-left:5px}
+.mlblink{color:inherit;text-decoration:none;border-bottom:1px dotted currentColor}
+.mlblink:hover{color:var(--navy);border-bottom-style:solid}
 .tagml{font-size:9.5px;font-weight:800;background:#fdecea;color:#b3261e;border-radius:5px;padding:1px 5px;margin-left:5px}
 .semvinc{font-size:9.5px;font-weight:800;background:#fff3d6;color:#8a5a00;border-radius:5px;padding:1px 5px;margin-left:5px}
 .btn.vinc{background:#f3ecff;border-color:#d9c8f7;color:var(--roxo)}
@@ -257,7 +259,7 @@ function render(){
       '<td class="prod"><b>'+(it.produto||it.sku||it.mlb)+
         (it.sku?' <a class="irprec" href="/expedicao/precificador?sku='+encodeURIComponent(it.sku)+
                 '" target="_blank" rel="noopener" title="Abrir '+it.sku+' no Precificador">↗</a>':'')+
-        '</b><span>'+(it.sku||"sem SKU")+' · '+it.mlb+
+        '</b><span>'+(it.sku||"sem SKU")+' · '+linkML(it.mlb)+
         (ativo?'<span class="tagon" title="'+(it.promo_nome||"").replace(/"/g,"&quot;")+'">'+
           (it.promo_tipo&&it.promo_tipo!=="PRICE_DISCOUNT"?(it.promo_tipo_nome||it.promo_tipo)+' ativa':'promoção ativa')+
           '</span>':'')+tagsML(it)+'</span></td>'+
@@ -282,6 +284,13 @@ function render(){
   }).join("") || '<tr><td colspan="11" class="vazio">Nenhum anúncio neste filtro.</td></tr>';
 }
 
+// V18.43: o MLB abre o anúncio no Mercado Livre (nova aba)
+function linkML(mlb){
+  const n=String(mlb||"").replace(/\D/g,"");
+  if(!n) return mlb||"";
+  return '<a class="mlblink" href="https://produto.mercadolivre.com.br/MLB-'+n+'" target="_blank" rel="noopener" '+
+         'title="Abrir o anúncio no Mercado Livre">'+mlb+' ↗</a>';
+}
 // V18.41: anúncio sem estoque, pausado ou encerrado aparece na tabela com etiqueta
 function tagsML(it){
   const t=[], sub=(it.sub_status_ml||[]).join(",");
