@@ -9133,5 +9133,141 @@ window.addEventListener("noromak:conference-name-saved",event=>{
 }
 </style>
 
+
+<!-- V18.44 — Admin no celular. Tudo abaixo vale só até 760px: no computador nada muda.
+     Menu vira gaveta (☰), topo empilha, Pedidos pendentes em uma coluna,
+     tabelas da Central de Pedidos do Dia viram cartões e os toques ficam maiores. -->
+<style id="v1844-celular">
+.v1844-menu-btn,.v1844-menu-fundo{display:none}
+@media(max-width:760px){
+  /* Menu: sai da faixa fixa de 72px e vira gaveta com os nomes */
+  .v15-sidebar{width:264px!important;padding:18px 14px!important;transform:translateX(-105%);transition:transform .22s ease;z-index:100050}
+  body.v1844-menu-aberto .v15-sidebar{transform:none}
+  .v15-sidebar .v15-brand div:last-child,.v15-sidebar .v15-nav-section,.v15-sidebar .v15-nav-label{display:block!important}
+  .v15-sidebar .v15-brand{justify-content:flex-start!important;padding:4px 8px 18px!important}
+  .v15-sidebar .v15-nav-item{justify-content:flex-start!important;padding:12px 11px!important;font-size:14px!important;min-height:44px}
+  .v15-sidebar .v15-nav-icon{width:22px!important;font-size:inherit!important}
+  .v1844-menu-btn{display:grid;place-items:center;position:fixed;left:10px;top:10px;z-index:100040;width:44px;height:44px;border:0;border-radius:11px;background:#12345b;color:#fff;font-size:21px;box-shadow:0 4px 14px rgba(13,41,71,.3);cursor:pointer}
+  body.v1844-menu-aberto .v1844-menu-fundo{display:block;position:fixed;inset:0;z-index:100045;background:rgba(7,20,36,.5)}
+  body.v1844-menu-aberto{overflow:hidden}
+  #painelConteudo.container-admin{margin-left:0!important;padding:10px 10px 30px!important}
+
+  /* Topo: título ao lado do ☰, botões em uma linha que quebra */
+  .header-topo{flex-direction:column;align-items:stretch!important;gap:10px;padding:10px 12px 12px 62px!important;min-height:44px}
+  .header-topo .logo-mini-box{display:none}
+  .header-titulos h1{font-size:16px!important;margin:0}
+  .header-titulos small{display:none}
+  .header-topo>div:last-child{justify-content:flex-start!important;gap:6px!important;margin-left:-50px}
+  .header-topo>div:last-child>*{font-size:12px!important;padding:9px 11px!important;min-height:38px;box-sizing:border-box;display:inline-flex;align-items:center}
+  .header-topo .pwa-install-btn{white-space:normal}
+
+  /* Toques maiores e sem zoom automático do iPhone ao focar um campo */
+  .card-admin{padding:14px 12px!important}
+  .card-admin h2{font-size:18px!important}
+  #painelConteudo input:not([type=checkbox]):not([type=radio]),#painelConteudo select,#painelConteudo textarea{font-size:16px!important}
+  #painelConteudo .btn-primario,#painelConteudo .btn-sucesso,#painelConteudo .btn-secundario,#painelConteudo .btn-perigo,#painelConteudo .btn-admin{min-height:42px}
+  .v151-global-search-wrap{width:100%!important}
+
+  /* Pedidos pendentes */
+  #aba-pedidos .aviso-banco{font-size:12px;max-height:4.6em;overflow:hidden;position:relative;cursor:pointer}
+  #aba-pedidos .aviso-banco.v1844-aberto{max-height:none}
+  #aba-pedidos .aviso-banco:not(.v1844-aberto)::after{content:"ver mais ▾";position:absolute;right:0;bottom:0;padding:0 6px 0 30px;background:linear-gradient(90deg,transparent,#f7faff 40%);color:#1d5b96;font-weight:800}
+  .toolbar-grid{display:grid!important;grid-template-columns:1fr 1fr;gap:8px!important}
+  .toolbar-grid input[type=text]{min-width:0!important;grid-column:1/-1}
+  .toolbar-grid button{width:100%}
+  .filtros-data-pedidos{display:grid!important;grid-template-columns:1fr 1fr;gap:8px}
+  .filtros-data-pedidos label{display:grid;gap:3px;min-width:0}
+  .filtros-data-pedidos label:first-child{grid-column:1/-1}
+  .filtros-data-pedidos select,.filtros-data-pedidos input{min-width:0!important;width:100%;height:42px!important;box-sizing:border-box}
+  .filtros-data-pedidos button{grid-column:1/-1}
+  #aba-pedidos .pedido-card-head{grid-template-columns:1fr 1fr!important;gap:8px;padding:10px}
+  #aba-pedidos .pedido-card-head>*:first-child{grid-column:1/-1}
+  #aba-pedidos .pedido-card-acoes{grid-column:1/-1;flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:flex-start}
+  #aba-pedidos .pedido-card-head input,#aba-pedidos .pedido-item-row input{height:40px!important}
+  #aba-pedidos .pedido-card-itens{padding:0 10px}
+  #aba-pedidos .pedido-item-row{grid-template-columns:1fr 72px!important;gap:8px;padding:12px 0}
+  #aba-pedidos .pedido-item-row>*{grid-column:1/-1;min-width:0}
+  #aba-pedidos .pedido-item-row>.pedido-item-sku{grid-column:1/2}
+  #aba-pedidos .pedido-item-row>.pedido-item-qtd{grid-column:2/3}
+  #aba-pedidos .pedido-item-num{display:none}
+  #aba-pedidos .pedido-item-acoes{order:9;flex-wrap:wrap;gap:8px;padding-top:2px}
+  #aba-pedidos .pedido-item-acoes button{width:40px;height:40px;font-size:15px}
+  #aba-pedidos .pedido-item-acoes .acao-linx{width:auto;padding:0 12px;font-size:12px}
+  #aba-pedidos .btn-sku-compacto,#aba-pedidos .btn-sku-manual,#aba-pedidos .ean-pedido-acoes button{min-height:40px;padding:0 10px!important;font-size:12px!important}
+  #aba-pedidos .pedido-item-produto strong,#aba-pedidos .pedido-item-produto small{white-space:normal}
+  .pedido-detalhes-grid{position:static!important;width:auto!important;grid-template-columns:1fr!important;box-shadow:none}
+  #aba-pedidos .pedidos-paginacao button{min-width:44px;min-height:40px}
+
+  /* Central de Pedidos do Dia: filtros empilhados e tabelas em cartões */
+  .v1779-head{flex-direction:column;align-items:stretch!important;gap:10px}
+  .v1779-head>div:last-child{align-items:stretch!important}
+  .v1779-kpis,.v1783-kpis{grid-template-columns:1fr 1fr!important;gap:8px!important}
+  .v1779-filters{grid-template-columns:1fr 1fr!important;gap:8px}
+  .v1779-filters #pdBusca,.v1779-filters #pdData{grid-column:1/-1}
+  .v1779-filters>*,.v1783-filters>input{height:42px;box-sizing:border-box;min-width:0!important;width:100%}
+  .v1783-filters{display:grid!important;grid-template-columns:auto 1fr;gap:8px;align-items:center}
+  .v1783-filters #vdBusca{grid-column:1/-1}
+  table.v1779-table.v1844-cartoes,table.v1779-table.v1844-cartoes tbody{display:block;width:100%}
+  table.v1779-table.v1844-cartoes thead{display:none}
+  table.v1779-table.v1844-cartoes tr{display:block;background:#fff;border:1px solid #d9e4ef;border-radius:12px;margin:0 0 10px;padding:6px 12px;box-shadow:0 1px 4px rgba(25,54,84,.06)}
+  table.v1779-table.v1844-cartoes td{display:grid;grid-template-columns:108px minmax(0,1fr);gap:8px;padding:7px 0;border-bottom:1px solid #eef3f8;overflow-wrap:anywhere}
+  table.v1779-table.v1844-cartoes td:last-child{border-bottom:0}
+  table.v1779-table.v1844-cartoes td::before{content:attr(data-rotulo);font-size:11px;font-weight:800;color:#60758b}
+  table.v1779-table.v1844-cartoes td[colspan]{display:block;text-align:center}
+  table.v1779-table.v1844-cartoes td[colspan]::before{content:none}
+  table.v1779-table.v1844-cartoes td.v1844-vazio{display:none}
+  table.v1779-table.v1844-cartoes td:first-child{font-size:14px}
+  table.v1779-table.v1844-cartoes td button,table.v1779-table.v1844-cartoes td a{min-height:38px}
+  table.v1779-table.v1844-cartoes td:has(.v1779-actions){display:block}
+  table.v1779-table.v1844-cartoes td:has(.v1779-actions)::before{content:none}
+  table.v1779-table.v1844-cartoes .v1779-actions{display:flex!important;flex-wrap:wrap;gap:8px;width:100%}
+  table.v1779-table.v1844-cartoes .v1779-actions button{flex:1 1 0;min-width:0;min-height:42px;white-space:nowrap;padding:0 8px}
+  .v1779-detail{min-width:0!important}
+}
+</style>
+<script>
+/* V18.44 — Admin no celular: gaveta do menu e cartões nas tabelas do Pedidos do Dia.
+   Não altera nenhuma regra de dados; só apresentação. */
+(function(){
+  const CEL=window.matchMedia("(max-width:760px)");
+  function fecharMenu(){document.body.classList.remove("v1844-menu-aberto");}
+  function montarMenu(){
+    if(document.querySelector(".v1844-menu-btn"))return;
+    const btn=document.createElement("button");
+    btn.type="button";btn.className="v1844-menu-btn";btn.setAttribute("aria-label","Abrir menu");btn.textContent="☰";
+    btn.onclick=()=>document.body.classList.toggle("v1844-menu-aberto");
+    const fundo=document.createElement("div");fundo.className="v1844-menu-fundo";fundo.onclick=fecharMenu;
+    document.body.append(btn,fundo);
+    // Escolher um item do menu fecha a gaveta (o onclick original continua rodando).
+    document.querySelector(".v15-sidebar")?.addEventListener("click",e=>{if(CEL.matches&&e.target.closest(".v15-nav-item"))fecharMenu();});
+    document.addEventListener("keydown",e=>{if(e.key==="Escape")fecharMenu();});
+    CEL.addEventListener?.("change",e=>{if(!e.matches)fecharMenu();});
+  }
+  // Rótulo de cada célula = título da coluna, para a tabela virar cartão no celular.
+  function rotular(tabela){
+    const titulos=[...tabela.querySelectorAll("thead th")].map(th=>th.textContent.trim());
+    tabela.querySelectorAll("tbody tr").forEach(tr=>{
+      [...tr.children].forEach((td,i)=>{
+        if(td.hasAttribute("colspan"))return;
+        td.setAttribute("data-rotulo",titulos[i]||"");
+        td.classList.toggle("v1844-vazio",i>0&&/^[—-]?$/.test(td.textContent.trim())&&!td.querySelector("button,a,input,select"));
+      });
+    });
+  }
+  function montarCartoes(){
+    document.querySelectorAll("table.v1779-table").forEach(t=>{
+      if(t.dataset.v1844)return;t.dataset.v1844="1";t.classList.add("v1844-cartoes");
+      const corpo=t.tBodies[0];if(!corpo)return;
+      rotular(t);
+      new MutationObserver(()=>rotular(t)).observe(corpo,{childList:true});
+    });
+  }
+  function abrirAviso(){
+    document.querySelector("#aba-pedidos .aviso-banco")?.addEventListener("click",function(){if(CEL.matches)this.classList.toggle("v1844-aberto");});
+  }
+  function iniciar(){montarMenu();montarCartoes();abrirAviso();}
+  if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",iniciar);else iniciar();
+})();
+</script>
 </body>
 </html>
