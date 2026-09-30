@@ -1534,8 +1534,20 @@ var state = {
         }, costLookupInFlight ? 1000 : espera);
       }
 
+      // V18.51: produtos como estavam na última gravação/leitura do banco. Clicar num
+      // produto chamava persist() mesmo sem mudança (kit na hora; os outros depois do
+      // Apollo), e cada clique regravava ~450 KB, gerava versão nova e fazia TODAS as
+      // telas abertas e as extensões baixarem o banco de novo — o Precificador travava.
+      // Sem mudança nos produtos não há o que gravar (selectedId é só desta tela).
+      var lastPersistedProductsJson = null;
+      function rememberPersistedProducts() {
+        try { lastPersistedProductsJson = JSON.stringify(state.products); } catch (_) { lastPersistedProductsJson = null; }
+      }
+
       function persist() {
         state.products.forEach(normalizeProductMargins);
+        var productsJson = JSON.stringify(state.products);
+        if (lastPersistedProductsJson !== null && productsJson === lastPersistedProductsJson) return;
         var payload = JSON.stringify({
           products: state.products,
           selectedId: state.selectedId,
@@ -1547,11 +1559,14 @@ var state = {
         // que acabou de ser enviado ANTES do setItem, porque o eco da gravação
         // (applyRemoteState) roda dentro dele e pode avançá-la de novo.
         var base = stateBaseRaw;
+        var persistedBefore = lastPersistedProductsJson;
         stateBaseRaw = payload;
+        lastPersistedProductsJson = productsJson;
         try {
           appStorage.setItem(STORAGE_KEY, payload, base === null ? undefined : base);
         } catch (erro) {
           stateBaseRaw = base; // não chegou ao servidor: a próxima gravação leva de novo
+          lastPersistedProductsJson = persistedBefore;
           throw erro;
         }
       }
@@ -1582,6 +1597,7 @@ var state = {
           if (!product._id) product._id = "online-" + index + "-" + String(product.sku || "sem-sku");
           return normalizeProductMargins(product);
         });
+        rememberPersistedProducts(); // V18.51: é o que está no banco agora
         var exists = state.products.some(function(item){ return String(item._id) === String(selectedBefore); });
         state.selectedId = exists ? selectedBefore : (incoming.selectedId || (state.products[0] ? state.products[0]._id : null));
         var synchronization = refreshAllKitCosts();
@@ -3274,6 +3290,9 @@ var state = {
       });
       document.querySelectorAll("input, select").forEach(function (input) {
         if (input.id === "search" || input.id === "import-file" || input.id === "is-kit") return;
+        // V18.51: busca/filtros/datas das Promoções não são campos do produto. Digitar
+        // na busca da régua marcava o produto aberto como editado e regravava o banco.
+        if (/^promo-/.test(input.id || "")) return;
         input.addEventListener("input", function () {
           if (input.id === "curva") applyCurveMargin(input.value);
           state.dirty = true;
@@ -3293,6 +3312,10 @@ var state = {
         if (event && event.newValue) applyRemoteState(event.newValue);
       });
 
+      // V18.51: ponto de partida = produtos como vieram do banco (antes do recálculo
+      // dos kits, para que um kit desatualizado ainda seja gravado abaixo).
+      state.products.forEach(normalizeProductMargins);
+      rememberPersistedProducts();
       var initialSynchronization = refreshAllKitCosts();
       state.kitCycleIds = initialSynchronization.cycleIds;
       if (initialSynchronization.updatedKitCount) persist();
