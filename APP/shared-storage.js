@@ -135,7 +135,7 @@
       }
     },
 
-    setItem(chave, valor) {
+    setItem(chave, valor, base) {
       chave = String(chave);
       valor = String(valor);
       if (ehLocal(chave)) {
@@ -144,6 +144,11 @@
       }
       let anterior = cache.has(chave) ? cache.get(chave) : null;
       if (!cache.has(chave)) anterior = this.getItem(chave);
+      // V18.49: a tela pode informar em qual versão o que ela está gravando se
+      // baseia. O cache acima é a última versão que CHEGOU do servidor, que a tela
+      // pode ainda não ter aplicado; usá-la fazia o merge achar que a tela
+      // "desfez" a alteração de outro usuário. Sem o 3º argumento, nada muda.
+      if (typeof base === "string") anterior = base;
       const resposta = xhrJson("POST", API, { key: chave, oldValue: anterior, newValue: valor });
       const consolidado = resposta.value === null || resposta.value === undefined ? valor : String(resposta.value);
       cache.set(chave, consolidado);

@@ -1323,6 +1323,13 @@
           localStorage.setItem(LEGACY_STORAGE_KEY, JSON.stringify(stored));
         } catch (_) {}
       }
+      // V18.49: versão do banco em que o estado desta tela se baseia (o que ela
+      // carregou, aplicou ou gravou por último). Vai como "valor antigo" em
+      // persist(); assim o servidor aplica só o que esta tela mudou.
+      var stateBaseRaw = (typeof serverRaw === "string" && serverRaw) ? serverRaw : null;
+      if (mlMigrationChanged || !serverRaw) {
+        try { stateBaseRaw = JSON.stringify(stored); } catch (_) {}
+      }
       var initialSelection = stored && stored.selectedId ? String(stored.selectedId) : null;
       if (!initialSelection && stored && stored.selectedSku) {
         var legacyMatch = initialProducts.find(function (product) { return String(product.sku) === String(stored.selectedSku); });
@@ -1518,6 +1525,15 @@ var state = {
 
       function clone(value) { return JSON.parse(JSON.stringify(value)); }
       function currentProduct() { return state.products.find(function (product) { return String(product._id) === String(state.selectedId); }) || null; }
+      // V18.49: atualização remota adiada (chegou durante a consulta de custo ou na
+      // janela de proteção) é aplicada assim que a janela termina.
+      function schedulePendingRemote() {
+        var espera = Math.max(300, suppressRemoteStateUntil - Date.now() + 150);
+        setTimeout(function () {
+          if (pendingRemoteRaw) applyRemoteState(pendingRemoteRaw);
+        }, costLookupInFlight ? 1000 : espera);
+      }
+
       function persist() {
         state.products.forEach(normalizeProductMargins);
         var payload = JSON.stringify({
@@ -1527,24 +1543,40 @@ var state = {
           updatedBy: (window.EXPEDICAO_USER && (window.EXPEDICAO_USER.nome || window.EXPEDICAO_USER.username)) || ""
         });
         if (!window.appStorage) throw new Error("Banco online do Precificador não está disponível.");
-        appStorage.setItem(STORAGE_KEY, payload);
+        // V18.49: manda a base desta tela como "valor antigo". A base passa a ser o
+        // que acabou de ser enviado ANTES do setItem, porque o eco da gravação
+        // (applyRemoteState) roda dentro dele e pode avançá-la de novo.
+        var base = stateBaseRaw;
+        stateBaseRaw = payload;
+        try {
+          appStorage.setItem(STORAGE_KEY, payload, base === null ? undefined : base);
+        } catch (erro) {
+          stateBaseRaw = base; // não chegou ao servidor: a próxima gravação leva de novo
+          throw erro;
+        }
       }
 
       function applyRemoteState(raw) {
         // V16.63: não deixa sincronização remota trocar o produto/valores
         // durante a consulta nem nos segundos seguintes ao persist do Apollo.
-        if (costLookupInFlight) return;
+        if (costLookupInFlight) { pendingRemoteRaw = raw; schedulePendingRemote(); return; }
 
         var currentSkuNow = String(el && el.sku ? el.sku.value : "").trim();
         if (Date.now() < suppressRemoteStateUntil &&
             suppressRemoteStateSku &&
             currentSkuNow === suppressRemoteStateSku) {
+          pendingRemoteRaw = raw;
+          schedulePendingRemote();
           return;
         }
+        pendingRemoteRaw = null;
 
         var incoming = null;
         try { incoming = JSON.parse(String(raw || "")); } catch (_) { return; }
         if (!incoming || !Array.isArray(incoming.products)) return;
+        // Com edição não salva, o formulário continua o de antes: a base também,
+        // para os campos que a pessoa não mexeu não desfazerem a mudança do outro.
+        if (!state.dirty) stateBaseRaw = String(raw);
         var selectedBefore = state.selectedId;
         state.products = incoming.products.map(function(product,index){
           if (!product._id) product._id = "online-" + index + "-" + String(product.sku || "sem-sku");
@@ -1950,6 +1982,11 @@ var state = {
       // chegar logo depois da seleção/consulta e repor custo/curva anteriores.
       var suppressRemoteStateUntil = 0;
       var suppressRemoteStateSku = "";
+      // V18.49: atualização de outro usuário que chegou durante a janela acima.
+      // Antes era descartada; a gravação seguinte desta tela a "desfazia" no
+      // servidor. Agora fica guardada e é aplicada quando a janela termina
+      // (schedulePendingRemote); a gravação usa a base da tela (stateBaseRaw).
+      var pendingRemoteRaw = null;
 
       var BRANCH_NAMES = {1:"Araçatuba",2:"Ribeirão",3:"Bauru"};
 

@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.48-KIT-CADASTRADO-SOME"
+APP_VERSION = "18.49-PRECIFICADOR-SEM-SOBRESCRITA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -3642,6 +3642,88 @@ def preserve_pending_records_v1714(current_value: str | None, new_value: str) ->
         newer=deduped;changed=True
     return json_dumps(newer) if changed else new_value
 
+# V18.49: o banco do Precificador é UM objeto {"products": [...], "selectedId", ...}.
+# O merge abaixo só juntava listas; para objeto ficava com a última gravação
+# INTEIRA. Como o Precificador grava o banco todo até ao clicar num produto (ou no
+# F5), quem abria a tela com uma cópia antiga apagava o que o outro acabara de
+# alterar. Agora cada gravação aplica só o que ELA mudou em relação ao que tinha
+# lido (old): produto por produto (pelo _id) e campo por campo. Mesmo campo
+# alterado pelos dois = vale a última gravação.
+_PRECIFICADOR_SEM_CAMPO = object()
+
+
+def _precificador_produto_id(produto: Any, index: int) -> str:
+    if isinstance(produto, dict):
+        if str(produto.get("_id") or "").strip():
+            return "id:" + str(produto["_id"]).strip()
+        if str(produto.get("sku") or "").strip():
+            return "sku:" + normalize(produto["sku"])
+    return "hash:" + hashlib.sha1(json_dumps(produto).encode()).hexdigest()
+
+
+def _merge_campos_3vias(atual: dict[str, Any], antigo: dict[str, Any], novo: dict[str, Any]) -> dict[str, Any]:
+    resultado = dict(atual)
+    for campo in set(antigo) | set(novo):
+        valor_novo = novo.get(campo, _PRECIFICADOR_SEM_CAMPO)
+        if valor_novo == antigo.get(campo, _PRECIFICADOR_SEM_CAMPO):
+            continue
+        if valor_novo is _PRECIFICADOR_SEM_CAMPO:
+            resultado.pop(campo, None)
+        else:
+            resultado[campo] = valor_novo
+    return resultado
+
+
+def merge_precificador(current: dict[str, Any], old: dict[str, Any], newer: dict[str, Any]) -> dict[str, Any]:
+    # Produto sem _id em algum dos três lados (banco antigo; a tela cria o _id na
+    # primeira gravação): esse SKU é casado pelo SKU nos três, senão o mesmo
+    # produto viraria "excluído + novo" e a gravação passaria por cima do outro.
+    sem_id = {
+        normalize(p.get("sku"))
+        for banco in (current, old, newer)
+        for p in (banco.get("products") if isinstance(banco.get("products"), list) else [])
+        if isinstance(p, dict) and not str(p.get("_id") or "").strip() and str(p.get("sku") or "").strip()
+    }
+
+    def mapa(banco: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
+        lista = banco.get("products") if isinstance(banco.get("products"), list) else []
+        ids = [("sku:" + normalize(p.get("sku"))) if isinstance(p, dict) and normalize(p.get("sku")) in sem_id
+               else _precificador_produto_id(p, i) for i, p in enumerate(lista)]
+        return ids, dict(zip(ids, lista))
+
+    atual_ids, atual = mapa(current)
+    _, antigos = mapa(old)
+    novos_ids, novos = mapa(newer)
+    for ident in antigos:
+        if ident not in novos:
+            atual.pop(ident, None)  # excluído por esta gravação
+    acrescentados: list[str] = []
+    for ident in novos_ids:
+        novo = novos[ident]
+        antigo = antigos.get(ident)
+        if antigo is None or ident not in atual:
+            # Produto novo desta gravação (ou editado aqui depois de excluído por
+            # outra pessoa: a edição explícita prevalece, como em merge_arrays).
+            if antigo is None or antigo != novo:
+                atual[ident] = novo
+                acrescentados.append(ident)
+            continue
+        if antigo != novo:
+            if isinstance(atual[ident], dict) and isinstance(antigo, dict) and isinstance(novo, dict):
+                atual[ident] = _merge_campos_3vias(atual[ident], antigo, novo)
+            else:
+                atual[ident] = novo
+    ordem: list[str] = []
+    for ident in atual_ids + acrescentados:
+        if ident in atual and ident not in ordem:
+            ordem.append(ident)
+    produtos_antigos = {k: v for k, v in current.items() if k != "products"}
+    resultado = _merge_campos_3vias(produtos_antigos, {k: v for k, v in old.items() if k != "products"},
+                                    {k: v for k, v in newer.items() if k != "products"})
+    resultado["products"] = [atual[ident] for ident in ordem]
+    return resultado
+
+
 def merge_value(key: str, current: str | None, old: str | None, newer: str, force: bool) -> str:
     if force or current is None or current == old:
         return newer
@@ -3651,6 +3733,10 @@ def merge_value(key: str, current: str | None, old: str | None, newer: str, forc
         new_obj = json.loads(newer)
         if all(isinstance(x, list) for x in (current_obj, old_obj, new_obj)):
             return json_dumps(merge_arrays(key, current_obj, old_obj, new_obj))
+        if key == "precificador_online_v1" and all(
+            isinstance(x, dict) and isinstance(x.get("products"), list) for x in (current_obj, old_obj, new_obj)
+        ):
+            return json_dumps(merge_precificador(current_obj, old_obj, new_obj))
         if key == "conf_etiquetas" and all(isinstance(x, dict) for x in (current_obj, old_obj, new_obj)):
             return json_dumps(merge_label_banks(current_obj, old_obj, new_obj))
     except Exception:
@@ -3975,6 +4061,15 @@ def _admin_override_upsert(storage_key: str, entity_id: str, field_name: str, va
     )
 
 
+# V18.49: bancos-objeto em que o override de objeto-raiz (__ROOT__) CONGELA tudo.
+# No Precificador ele guardava o campo "products" INTEIRO da última gravação de um
+# Admin e o reaplicava por cima de qualquer gravação posterior (inclusive a
+# atualização geral do Apollo, que era descartada) e de toda leitura. A proteção do
+# Precificador é o merge por produto/campo (merge_precificador). As linhas antigas
+# de admin_manual_overrides dessa chave ficam no banco, só deixam de ser aplicadas.
+ADMIN_OVERRIDE_SEM_ROOT = {"conf_etiquetas", "precificador_online_v1"}
+
+
 def _admin_override_record_delta(storage_key: str, current_value: str | None, requested_value: str,
                                  actor: str) -> int:
     """Registra somente o delta explícito feito pelo admin.
@@ -3986,7 +4081,7 @@ def _admin_override_record_delta(storage_key: str, current_value: str | None, re
     # V17.69: conf_etiquetas é uma base agregada alimentada simultaneamente pelas
     # APIs e por uploads. Override do objeto-raiz congela registros/ordem e pode
     # esconder etiquetas automáticas adicionadas depois.
-    if storage_key == "conf_etiquetas":
+    if storage_key in ADMIN_OVERRIDE_SEM_ROOT:
         return 0
     try:
         old = json.loads(current_value) if current_value not in (None, "") else None
@@ -4037,7 +4132,7 @@ def _admin_override_record_delta(storage_key: str, current_value: str | None, re
 def _admin_override_apply(storage_key: str, merged_value: str) -> str:
     # V17.69: etiquetas usam proteção própria contra remoção; não reaplicar
     # snapshots-raiz antigos sobre registros novos vindos das integrações.
-    if storage_key == "conf_etiquetas":
+    if storage_key in ADMIN_OVERRIDE_SEM_ROOT:
         return merged_value
     rows = _admin_override_load(storage_key)
     if not rows:
@@ -4513,8 +4608,11 @@ def precificador_bulk_update_worker(username: str) -> None:
         data["updatedAt"] = now_iso()
         data["updatedBy"] = username or "ATUALIZACAO_GERAL_APOLLO"
 
+        # V18.49: a atualização leva até ~1 h (20 consultas/min no Apollo). Gravar com
+        # force=True apagava tudo o que as pessoas alteraram nesse tempo; agora o
+        # merge aplica só os campos que a atualização mudou em relação ao que leu.
         save_storage(
-            "precificador_online_v1", None, json_dumps(data), True,
+            "precificador_online_v1", raw, json_dumps(data), False,
             actor=username or "sistema", actor_role="operador",
             source_screen="precificador", change_method="apollo.bulk",
         )
