@@ -313,7 +313,8 @@ th.n,td.n{text-align:right;white-space:nowrap}
     },
     quantidade: {
       lista: (d) => d.quantidade,
-      existe: (x) => (x.ja_existe || []).includes(x.qtd_sugerida),
+      // V18.48: qualquer kit de quantidade já cadastrado tira a sugestão (criou o kit de 2 e a tela sugeria 4 → some igual).
+      existe: (x) => (x.ja_existe || []).length > 0,
       texto: (x) => [x.produto, x.titulo].join(" "),
       explica: "Produtos que o cliente <b>já compra em mais de uma unidade</b>. Um anúncio \"Kit com N\" entrega o que ele já quer "
         + "e dilui tarifa e frete. A quantidade sugerida é a que mais aparece nos pedidos.",

@@ -107,6 +107,34 @@ class TesteKitsAnalise(TesteNoromak):
         self.assertEqual(b["preco_unit"], 10.0)
         self.assertEqual(b["unidades_para_limite"], 8, "8 x R$10 passa de R$79")
 
+    def test_kit_cadastrado_depois_tira_a_sugestao(self) -> None:
+        """V18.48: o dono cria o kit no Admin e, sem nenhuma venda dele ainda,
+        a sugestão já tem que aparecer como 'já existe' (a tela esconde)."""
+        self.cenario()
+        _gravar("conf_kits", [
+            {"sku_kit": "KIT-AC", "nome": "Kit filtro + oleo",
+             "componentes": [{"sku": "AAA", "quantidade": 1}, {"sku": "CCC", "quantidade": 1}]},
+            # componente no formato prefixo-código também vale
+            {"sku_kit": "KIT-AB", "nome": "Kit filtro + vela",
+             "componentes": [{"sku": "157507-AAA", "quantidade": 1}, {"sku": "BBB", "quantidade": 1}]},
+            # kit de 3 quando a tela sugeria 2
+            {"sku_kit": "KIT3-BBB", "nome": "3 velas", "componentes": [{"sku": "BBB", "quantidade": 3}]},
+        ])
+        d = S.kits_analise_payload(30, "", 2, 79.0)
+        par = next(p for p in d["pares"] if (p["a"], p["b"]) == ("AAA", "BBB"))
+        self.assertEqual(par["ja_existe"], "KIT-AB")
+        q = next(x for x in d["quantidade"] if x["produto"] == "BBB")
+        self.assertEqual(q["ja_existe"], [3])
+        b = next(x for x in d["ticket_baixo"] if x["produto"] == "BBB")
+        self.assertEqual(b["ja_existe"], [3])
+
+    def test_kit_inativo_nao_conta(self) -> None:
+        self.cenario()
+        _gravar("conf_kits", [{"sku_kit": "KIT-AB", "nome": "x", "ativo": False,
+                               "componentes": [{"sku": "AAA", "quantidade": 1}, {"sku": "BBB", "quantidade": 1}]}])
+        par = next(p for p in S.kits_analise_payload(30, "", 2, 79.0)["pares"] if (p["a"], p["b"]) == ("AAA", "BBB"))
+        self.assertEqual(par["ja_existe"], "", "kit desativado volta a ser oportunidade")
+
     def test_minimo_de_pedidos_esconde_par_raro(self) -> None:
         self.assertEqual(self.cenario(min_pedidos=3)["pares"], [])
 
