@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.44-ADMIN-CELULAR"
+APP_VERSION = "18.47-OPORTUNIDADES-KIT"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -15153,6 +15153,273 @@ def compras_demanda_payload(fornecedor: str, dias: int) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# V18.47: Oportunidades de Kit — o que os clientes JÁ compram junto (ML + Shopee)
+# e pode virar um anúncio de kit para subir o ticket médio. Somente leitura:
+# lê vendas_v1799, o Cadastro de Kits e o custo do Precificador. Não cria kit,
+# não mexe em anúncio nem em pedido.
+#
+# Pedido = cesta. No ML um carrinho vira vários orders com o mesmo pack_id, então
+# a cesta é o pack_id (ou o order_id quando não há pack). Na Shopee é o order_sn.
+# Kit vendido continua sendo UM produto (não é expandido): senão os componentes
+# de um kit que já existe apareceriam como "comprados juntos".
+# ---------------------------------------------------------------------------
+KITS_ANALISE_MAX_ITENS_CESTA = 12  # cesta maior que isso é atacado/revenda, não sinal de kit
+KITS_ANALISE_FAIXAS_TICKET = [(0, 30), (30, 50), (50, 79), (79, 120), (120, 200), (200, None)]
+
+
+def kits_analise_payload(dias: int = 90, marketplace: str = "", min_pedidos: int = 2,
+                         limite_preco: float = 79.0) -> dict[str, Any]:
+    dias = max(7, min(365, int(dias or 90)))
+    min_pedidos = max(1, min(50, int(min_pedidos or 2)))
+    limite_preco = max(1.0, min(1000.0, float(limite_preco or 79.0)))
+    canal = marketplace if marketplace in VENDAS_MARKETPLACES else ""
+    hoje = datetime.now(BR_TZ).date()
+    d1 = hoje - timedelta(days=dias - 1)
+    filtro = " AND marketplace=?" if canal else ""
+    args: tuple[Any, ...] = (d1.isoformat(), hoje.isoformat()) + ((canal,) if canal else ())
+    with DB_LOCK:
+        vendas = [dict(r) for r in DB.execute(
+            "SELECT marketplace, order_id, line_key, pack_id, sku, anuncio, title, qty, amount "
+            f"FROM vendas_v1799 WHERE sale_day BETWEEN ? AND ?{filtro}", args).fetchall()]
+        tarifas = {(str(r["order_id"]), str(r["line_key"])): float(r["sale_fee"])
+                   for r in DB.execute(
+                       "SELECT order_id, line_key, sale_fee FROM ml_venda_custo_v1830 "
+                       "WHERE sale_day BETWEEN ? AND ? AND sale_fee IS NOT NULL",
+                       (d1.isoformat(), hoje.isoformat())).fetchall()}
+        primeiro = DB.execute("SELECT MIN(sale_day) AS d FROM vendas_v1799").fetchone()["d"]
+
+    produtos = _compras_produtos_precificador()
+    reservas = _compras_custos_reserva(produtos)
+    kits = full_kit_compositions([v["sku"] for v in vendas])
+    cache_custo: dict[str, Any] = {}
+
+    def codigo_de(sku: str) -> str:
+        s = str(sku or "").strip()
+        return _compras_codigo(s, produtos) or s.upper()
+
+    def chave_produto(sku: str, anuncio: str) -> str:
+        s = str(sku or "").strip()
+        if not s:
+            return f"ANÚNCIO {anuncio}" if anuncio else ""
+        if s in kits or "/" in s:
+            return s.upper()  # kit ou anúncio "A/B" já é um produto próprio
+        return codigo_de(s)
+
+    # Combinações que JÁ existem como kit: Cadastro de Kits + anúncios "A/B" + kits vendidos.
+    combos_existentes: dict[frozenset, str] = {}
+    qtd_existentes: dict[str, set[int]] = {}
+
+    def registrar_kit(nome: str, comps: list[dict[str, Any]]) -> None:
+        codigos = {codigo_de(c.get("sku")) for c in comps if str(c.get("sku") or "").strip()}
+        if len(codigos) >= 2:
+            combos_existentes.setdefault(frozenset(codigos), nome)
+        elif len(codigos) == 1 and len(comps) == 1:
+            try:
+                n = int(comps[0].get("quantidade") or 0)
+            except (TypeError, ValueError):
+                n = 0
+            if n >= 2:
+                qtd_existentes.setdefault(next(iter(codigos)), set()).add(n)
+
+    for entry in {id(e): e for e in _load_kit_catalog().values()}.values():
+        if entry.get("ativo", True):
+            registrar_kit(str(entry.get("sku_kit") or ""), entry.get("componentes") or [])
+    for sku_kit, info in kits.items():
+        registrar_kit(sku_kit, info.get("componentes") or [])
+    for v in vendas:
+        s = str(v["sku"] or "").strip()
+        if "/" in s and s not in kits:
+            registrar_kit(s, [{"sku": x, "quantidade": 1} for x in s.split("/") if x.strip()])
+
+    prod: dict[str, dict[str, Any]] = {}
+    cestas: dict[str, dict[str, Any]] = {}
+    linhas_sem_sku = 0
+    for v in vendas:
+        mp = str(v["marketplace"])
+        sku = str(v["sku"] or "").strip()
+        anuncio = str(v["anuncio"] or "").strip()
+        chave = chave_produto(sku, anuncio)
+        qty = max(0, int(v["qty"] or 0))
+        valor = float(v["amount"] or 0)
+        if not sku:
+            linhas_sem_sku += 1
+        cesta_id = f"{mp}:{(str(v['pack_id'] or '').strip() if mp == 'ml' else '') or v['order_id']}"
+        cesta = cestas.setdefault(cesta_id, {"mp": mp, "valor": 0.0, "itens": {}})
+        cesta["valor"] += valor
+        if not chave or qty <= 0:
+            continue
+        cesta["itens"][chave] = cesta["itens"].get(chave, 0) + qty
+        p = prod.setdefault(chave, {
+            "produto": chave, "titulo": "", "sku": sku, "e_kit": sku in kits or "/" in sku,
+            "unidades": 0, "faturamento": 0.0, "un_ml": 0, "un_shopee": 0,
+            "fat_ml_tarifado": 0.0, "tarifa_ml": 0.0,
+        })
+        titulo = str(v["title"] or "").strip()
+        if titulo and len(titulo) > len(p["titulo"]):
+            p["titulo"] = titulo
+        p["unidades"] += qty
+        p["faturamento"] += valor
+        p["un_ml" if mp == "ml" else "un_shopee"] += qty
+        if mp == "ml":
+            fee = tarifas.get((str(v["order_id"]), str(v["line_key"])))
+            if fee is not None and valor > 0:
+                p["fat_ml_tarifado"] += valor
+                p["tarifa_ml"] += fee
+
+    # Por produto: em quantos pedidos entrou e com quantas unidades.
+    for c in cestas.values():
+        for chave, qty in c["itens"].items():
+            p = prod[chave]
+            p.setdefault("qtd_pedidos", []).append(qty)
+
+    def custo_de(p: dict[str, Any]) -> float | None:
+        custo, _origem = _financeiro_custo_unitario(p["sku"] or p["produto"], produtos, reservas, kits, cache_custo)
+        return custo
+
+    for p in prod.values():
+        qs = p.pop("qtd_pedidos", [])
+        p["pedidos"] = len(qs)
+        p["pedidos_multi_un"] = sum(1 for q in qs if q >= 2)
+        p["dist_qtd"] = {"1": sum(1 for q in qs if q == 1), "2": sum(1 for q in qs if q == 2),
+                         "3": sum(1 for q in qs if q == 3), "4+": sum(1 for q in qs if q >= 4)}
+        multi = [q for q in qs if q >= 2]
+        p["qtd_comum"] = max(sorted(set(multi)), key=multi.count) if multi else 0
+        p["preco_unit"] = round(p["faturamento"] / p["unidades"], 2) if p["unidades"] else 0.0
+        p["custo_unit"] = custo_de(p)
+        descr = (produtos.get(p["produto"]) or {}).get("descricao")
+        if descr and not p["titulo"]:
+            p["titulo"] = descr
+        p["margem_bruta"] = (round((p["preco_unit"] - p["custo_unit"]) / p["preco_unit"] * 100, 1)
+                             if p["custo_unit"] is not None and p["preco_unit"] > 0 else None)
+        p["tarifa_ml_pct"] = (round(p["tarifa_ml"] / p["fat_ml_tarifado"] * 100, 1)
+                              if p["fat_ml_tarifado"] > 0 else None)
+        p["faturamento"] = round(p["faturamento"], 2)
+
+    # --- resumo e faixas de ticket ------------------------------------------
+    n_cestas = sum(1 for c in cestas.values() if c["itens"])
+    fat_total = sum(c["valor"] for c in cestas.values() if c["itens"])
+    um_item = [c for c in cestas.values() if len(c["itens"]) == 1 and sum(c["itens"].values()) == 1]
+    varios = [c for c in cestas.values() if c["itens"] and not (len(c["itens"]) == 1 and sum(c["itens"].values()) == 1)]
+    multi_prod = [c for c in cestas.values() if len(c["itens"]) >= 2]
+    multi_un = [c for c in cestas.values() if any(q >= 2 for q in c["itens"].values())]
+    abaixo = [c for c in cestas.values() if c["itens"] and c["valor"] < limite_preco]
+    faixas = []
+    for lo, hi in KITS_ANALISE_FAIXAS_TICKET:
+        dentro = [c for c in cestas.values() if c["itens"] and c["valor"] >= lo and (hi is None or c["valor"] < hi)]
+        faixas.append({"de": lo, "ate": hi, "pedidos": len(dentro),
+                       "faturamento": round(sum(c["valor"] for c in dentro), 2)})
+
+    def media(lista: list[dict[str, Any]]) -> float:
+        return round(sum(c["valor"] for c in lista) / len(lista), 2) if lista else 0.0
+
+    pct = (lambda n: round(n / n_cestas * 100, 1) if n_cestas else 0.0)
+    resumo = {
+        "pedidos": n_cestas, "faturamento": round(fat_total, 2), "ticket_medio": media([c for c in cestas.values() if c["itens"]]),
+        "unidades": sum(sum(c["itens"].values()) for c in cestas.values()),
+        "produtos_por_pedido": round(sum(len(c["itens"]) for c in cestas.values()) / n_cestas, 2) if n_cestas else 0.0,
+        "pedidos_multiproduto": len(multi_prod), "pct_multiproduto": pct(len(multi_prod)),
+        "pedidos_multiunidade": len(multi_un), "pct_multiunidade": pct(len(multi_un)),
+        "pedidos_um_item": len(um_item), "ticket_um_item": media(um_item),
+        "pedidos_varios_itens": len(varios), "ticket_varios_itens": media(varios),
+        "pedidos_abaixo_limite": len(abaixo), "pct_abaixo_limite": pct(len(abaixo)),
+    }
+
+    # --- comprados juntos ----------------------------------------------------
+    pares: dict[tuple[str, str], dict[str, Any]] = {}
+    cestas_grandes = 0
+    for c in cestas.values():
+        itens = sorted(c["itens"])
+        if len(itens) < 2:
+            continue
+        if len(itens) > KITS_ANALISE_MAX_ITENS_CESTA:
+            cestas_grandes += 1
+            continue
+        for i, a in enumerate(itens):
+            for b in itens[i + 1:]:
+                par = pares.setdefault((a, b), {"n": 0, "valor": 0.0, "ml": 0, "shopee": 0})
+                par["n"] += 1
+                par["valor"] += c["valor"]
+                par[c["mp"]] += 1
+    lista_pares = []
+    for (a, b), par in pares.items():
+        if par["n"] < min_pedidos:
+            continue
+        pa, pb = prod[a], prod[b]
+        combo = frozenset({a, b})
+        existente = combos_existentes.get(combo) or next(
+            (nome for k, nome in combos_existentes.items() if combo <= k), "")
+        custo = (pa["custo_unit"] + pb["custo_unit"]) if (pa["custo_unit"] is not None and pb["custo_unit"] is not None) else None
+        preco = round(pa["preco_unit"] + pb["preco_unit"], 2)
+        lista_pares.append({
+            "a": a, "b": b, "titulo_a": pa["titulo"], "titulo_b": pb["titulo"],
+            "kit_a": pa["e_kit"], "kit_b": pb["e_kit"],
+            "pedidos_juntos": par["n"], "ml": par["ml"], "shopee": par["shopee"],
+            "pedidos_a": pa["pedidos"], "pedidos_b": pb["pedidos"],
+            # % de quem compra A que leva B junto (e vice-versa).
+            "conf_a_b": round(par["n"] / pa["pedidos"] * 100, 1) if pa["pedidos"] else 0.0,
+            "conf_b_a": round(par["n"] / pb["pedidos"] * 100, 1) if pb["pedidos"] else 0.0,
+            # lift > 1: saem juntos mais do que o acaso explicaria.
+            "lift": round(par["n"] * n_cestas / (pa["pedidos"] * pb["pedidos"]), 2) if pa["pedidos"] and pb["pedidos"] else 0.0,
+            "ticket_juntos": round(par["valor"] / par["n"], 2),
+            "preco_kit": preco, "custo_kit": round(custo, 2) if custo is not None else None,
+            "margem_bruta": round((preco - custo) / preco * 100, 1) if (custo is not None and preco > 0) else None,
+            "ja_existe": existente,
+        })
+    lista_pares.sort(key=lambda x: (bool(x["ja_existe"]), -x["pedidos_juntos"], -x["lift"]))
+
+    # --- kit de quantidade (o cliente já leva 2, 3...) -----------------------
+    quantidade = []
+    for p in prod.values():
+        if p["e_kit"] or p["pedidos_multi_un"] < min_pedidos:
+            continue
+        n = p["qtd_comum"] or 2
+        quantidade.append({
+            "produto": p["produto"], "titulo": p["titulo"], "pedidos": p["pedidos"],
+            "pedidos_multi_un": p["pedidos_multi_un"],
+            "pct_multi_un": round(p["pedidos_multi_un"] / p["pedidos"] * 100, 1) if p["pedidos"] else 0.0,
+            "dist_qtd": p["dist_qtd"], "qtd_sugerida": n, "preco_unit": p["preco_unit"],
+            "preco_kit": round(p["preco_unit"] * n, 2),
+            "custo_unit": p["custo_unit"], "margem_bruta": p["margem_bruta"], "tarifa_ml_pct": p["tarifa_ml_pct"],
+            "ja_existe": sorted(qtd_existentes.get(p["produto"], set())),
+        })
+    quantidade.sort(key=lambda x: (-x["pedidos_multi_un"], -x["pct_multi_un"]))
+
+    # --- ticket baixo (abaixo do limite de custo fixo do ML) -----------------
+    baixo = []
+    for p in prod.values():
+        if p["e_kit"] or p["preco_unit"] <= 0 or p["preco_unit"] >= limite_preco:
+            continue
+        n = max(2, -(-int(limite_preco * 100) // int(round(p["preco_unit"] * 100))))
+        baixo.append({
+            "produto": p["produto"], "titulo": p["titulo"], "pedidos": p["pedidos"], "unidades": p["unidades"],
+            "un_ml": p["un_ml"], "un_shopee": p["un_shopee"],
+            "preco_unit": p["preco_unit"], "tarifa_ml_pct": p["tarifa_ml_pct"],
+            "custo_unit": p["custo_unit"], "margem_bruta": p["margem_bruta"],
+            "pct_multi_un": round(p["pedidos_multi_un"] / p["pedidos"] * 100, 1) if p["pedidos"] else 0.0,
+            "unidades_para_limite": n, "preco_kit": round(p["preco_unit"] * n, 2),
+            "ja_existe": sorted(qtd_existentes.get(p["produto"], set())),
+        })
+    baixo.sort(key=lambda x: (-x["pedidos"], x["preco_unit"]))
+
+    return {
+        "ok": True,
+        "periodo": {"inicio": d1.isoformat(), "fim": hoje.isoformat(), "dias": dias},
+        "marketplace": canal or "todos",
+        "parametros": {"min_pedidos": min_pedidos, "limite_preco": limite_preco,
+                       "max_itens_cesta": KITS_ANALISE_MAX_ITENS_CESTA},
+        "vendas_desde": primeiro or "",
+        "resumo": resumo,
+        "faixas_ticket": faixas,
+        "pares": lista_pares[:300],
+        "pares_total": len(lista_pares),
+        "quantidade": quantidade[:300],
+        "ticket_baixo": baixo[:300],
+        "avisos": {"linhas_sem_sku": linhas_sem_sku, "cestas_grandes_ignoradas": cestas_grandes,
+                   "kits_cadastrados": len(combos_existentes) + sum(len(x) for x in qtd_existentes.values())},
+    }
+
+
 def _ml_profitability_local_sales(limit: int = 300) -> list[dict[str, Any]]:
     """Monta as vendas locais para a rentabilidade, preservando kits como uma venda única.
 
@@ -15802,6 +16069,22 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
+        if path == "/api/kits-analise":
+            # V18.47: Oportunidades de Kit (o que já sai junto nos pedidos). Somente leitura.
+            if self.auth(admin_only=True) is None:
+                return
+            try:
+                self.send_json(kits_analise_payload(
+                    int(str((query.get("dias") or ["90"])[0] or "90")),
+                    str((query.get("marketplace") or [""])[0] or "").strip().lower(),
+                    int(str((query.get("min_pedidos") or ["2"])[0] or "2")),
+                    float(str((query.get("limite_preco") or ["79"])[0] or "79").replace(",", ".")),
+                ))
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
         if path == "/api/financeiro/ads":
             # V18.30: estado da coleta de Publicidade (Product Ads).
             if self.auth(admin_only=True) is None:
@@ -15981,6 +16264,8 @@ class AppHandler(BaseHTTPRequestHandler):
             "/compras": "admin", "/compras/": "admin", "/compras.html": "admin",
             # V18.30: Financeiro (faturamento, gastos e lucro).
             "/financeiro": "admin", "/financeiro/": "admin", "/financeiro.html": "admin",
+            # V18.47: Oportunidades de Kit.
+            "/kits-analise": "admin", "/kits-analise/": "admin", "/kits-analise.html": "admin",
             # V18.33: a Rentabilidade ML virou o Financeiro; o endereço antigo abre a tela nova.
             "/rentabilidade-ml": "admin", "/rentabilidade-ml/": "admin", "/rentabilidade-ml.html": "admin",
             "/estacao-impressao": "estacao", "/estacao-impressao/": "estacao", "/estacao-impressao.html": "estacao",
@@ -18471,6 +18756,9 @@ class AppHandler(BaseHTTPRequestHandler):
             "/financeiro": "financeiro.html",
             "/financeiro/": "financeiro.html",
             "/financeiro.html": "financeiro.html",
+            "/kits-analise": "kits-analise.html",
+            "/kits-analise/": "kits-analise.html",
+            "/kits-analise.html": "kits-analise.html",
             "/rentabilidade-ml": "financeiro.html",
             "/rentabilidade-ml/": "financeiro.html",
             "/rentabilidade-ml.html": "financeiro.html",

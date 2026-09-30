@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Noromak · Oportunidades de Kit</title>
+<!-- V18.47: Oportunidades de Kit — o que os clientes já compram junto (ML + Shopee)
+     e pode virar anúncio de kit para subir o ticket médio. Somente leitura:
+     GET /api/kits-analise. Mesmo visual do Financeiro. -->
+<style>
+:root{
+  --canvas:#f6f8fa; --tile:#ffffff; --line:#e3e8ef; --line2:#eef2f6;
+  --ink:#0f1e2e; --ink2:#5b6b7f; --ink3:#93a1b1;
+  --navy:#123b63; --navy2:#1c578b; --navy3:#4b87c4; --navy4:#9cc0e4;
+  --orange:#f59b23; --pos:#0f766e; --neg:#b42318; --warn:#8a5a00; --warnbg:#fff8e6; --warnln:#f0d9a0;
+  --r:8px;
+}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--canvas);color:var(--ink);
+  font-family:"Segoe UI",system-ui,-apple-system,Arial,sans-serif;font-size:13.5px;line-height:1.45;
+  font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}
+button,input,select{font:inherit;color:inherit}
+h1,h2,h3{margin:0;font-weight:600}
+
+header.topo{background:var(--tile);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:30}
+.topo-in{max-width:1680px;margin:0 auto;padding:12px 20px;display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+.marca{display:flex;align-items:baseline;gap:10px;min-width:0}
+.marca h1{font-size:18px;letter-spacing:-.01em}
+.marca .periodo{font-size:12.5px;color:var(--ink2);white-space:nowrap}
+.topo-espaco{flex:1 1 auto}
+.filtros{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:var(--r);overflow:hidden;background:var(--tile)}
+.seg button{border:0;background:transparent;padding:0 11px;height:32px;font-size:12.5px;color:var(--ink2);cursor:pointer;white-space:nowrap}
+.seg button+button{border-left:1px solid var(--line)}
+.seg button:hover{background:#f1f5f9}
+.seg button.on{background:var(--navy);color:#fff;font-weight:600}
+select.sel,.campo{height:32px;border:1px solid var(--line);border-radius:var(--r);background:var(--tile);padding:0 8px;font-size:12.5px}
+.campo{display:inline-flex;align-items:center;gap:6px;color:var(--ink2)}
+.campo input{border:0;background:transparent;width:54px;padding:0;font-size:12.5px;color:var(--ink)}
+.btn{height:32px;padding:0 13px;border-radius:var(--r);border:1px solid var(--line);background:var(--tile);
+  font-size:12.5px;font-weight:600;cursor:pointer;white-space:nowrap;display:inline-flex;align-items:center;gap:6px}
+.btn:hover{background:#f1f5f9}
+.btn.pri{background:var(--navy);border-color:var(--navy);color:#fff}
+.btn.pri:hover{background:var(--navy2)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.link-voltar{color:var(--ink2);text-decoration:none;font-size:12.5px}
+.link-voltar:hover{color:var(--navy)}
+
+main{max-width:1680px;margin:0 auto;padding:16px 20px 64px;
+  display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:14px;align-items:start}
+.col3{grid-column:span 3}.col5{grid-column:span 5}.col7{grid-column:span 7}.col12{grid-column:1/-1}
+.bloco{background:var(--tile);border:1px solid var(--line);border-radius:var(--r);box-shadow:0 1px 2px rgba(16,30,54,.04)}
+.bloco-cab{display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:13px 16px 0}
+.bloco-cab h2{font-size:13px;letter-spacing:.01em}
+.bloco-cab em{font-style:normal;font-size:11.5px;color:var(--ink3)}
+.bloco-corpo{padding:12px 16px 16px}
+
+.kpi{padding:16px 18px}
+.kpi .rot{font-size:11px;font-weight:600;color:var(--ink2);text-transform:uppercase;letter-spacing:.06em}
+.kpi .val{font-size:30px;font-weight:600;letter-spacing:-.025em;margin-top:6px;line-height:1.1;white-space:nowrap}
+.kpi .sub{font-size:12px;color:var(--ink3);margin-top:6px}
+.kpi.forte{background:linear-gradient(160deg,var(--navy) 0%,#16456f 100%);border-color:var(--navy)}
+.kpi.forte .rot{color:#9fc0e0}.kpi.forte .val{color:#fff}.kpi.forte .sub{color:#c6dbee}
+
+.faixa{grid-column:1/-1;display:flex;align-items:flex-start;gap:10px;padding:10px 14px;border-radius:var(--r);
+  font-size:12.5px;line-height:1.5;border:1px solid var(--warnln);background:var(--warnbg);color:#6b4a06}
+.faixa[hidden]{display:none}
+.faixa.erro{border-color:#f3c4bf;background:#fdf0ee;color:var(--neg)}
+
+/* comparação 1 item × vários */
+.comp{display:flex;flex-direction:column;gap:14px}
+.comp .lin{display:grid;grid-template-columns:130px 1fr 92px;gap:10px;align-items:center;font-size:12.5px}
+.comp .lin .nm{color:var(--ink2)}
+.comp .lin .nm b{display:block;color:var(--ink);font-weight:600}
+.comp .trilho{height:14px;background:var(--line2);border-radius:3px;overflow:hidden}
+.comp .trilho i{display:block;height:100%;border-radius:3px}
+.comp .lin .v{text-align:right;font-weight:600}
+.comp .conclusao{font-size:12.5px;color:var(--ink2);border-top:1px solid var(--line2);padding-top:12px}
+.comp .conclusao b{color:var(--pos)}
+
+.viz{width:100%;display:block}
+.viz text{font-family:inherit;fill:var(--ink2)}
+
+table{width:100%;border-collapse:collapse;font-size:12.5px}
+thead th{position:sticky;top:0;z-index:1;background:#fbfcfd;color:var(--ink2);font-weight:600;font-size:11px;
+  text-transform:uppercase;letter-spacing:.05em;text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap;
+  cursor:pointer;user-select:none}
+thead th:hover{color:var(--ink)}
+thead th.ord::after{content:" ▾";color:var(--navy)}
+thead th.ord.asc::after{content:" ▴"}
+tbody td{padding:8px 10px;border-bottom:1px solid var(--line2);vertical-align:top}
+tbody tr:last-child td{border-bottom:0}
+tbody tr:hover td{background:#f7fafd}
+th.n,td.n{text-align:right;white-space:nowrap}
+.rolar{overflow:auto;max-height:640px;border-top:1px solid var(--line)}
+.prod{min-width:220px;max-width:380px}
+.prod b{font-weight:600}
+.sub-cel{font-size:11px;color:var(--ink3);margin-top:2px;font-weight:400;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:380px}
+.mais{color:var(--ink3);font-weight:600;padding:0 4px}
+.pos{color:var(--pos);font-weight:600}.neg{color:var(--neg);font-weight:600}
+.tag{display:inline-block;padding:1px 7px;border-radius:20px;font-size:10.5px;font-weight:600;line-height:1.5;border:1px solid transparent;white-space:nowrap}
+.tag.novo{background:#eef8f2;color:var(--pos);border-color:#c8e6d5}
+.tag.existe{background:#f1f3f6;color:var(--ink2);border-color:var(--line)}
+.tag.forte{background:#eef4fb;color:var(--navy2);border-color:#cfe0f2}
+.tag.ml{background:#fff7e0;color:#7a5c00;border-color:#f0e0b0}
+.tag.shopee{background:#fdeeea;color:#9c3a22;border-color:#f3cfc4}
+.barra{display:block;height:3px;border-radius:2px;background:var(--navy4);margin-top:4px}
+.dist{display:inline-flex;gap:2px;align-items:flex-end;height:18px}
+.dist i{display:block;width:9px;background:var(--navy3);border-radius:1px}
+
+.abas{display:flex;gap:2px;padding:0 16px;border-bottom:1px solid var(--line);overflow-x:auto;overflow-y:hidden}
+.abas button{border:0;background:transparent;padding:11px 12px;font-size:12.5px;color:var(--ink2);cursor:pointer;
+  border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap}
+.abas button:hover{color:var(--ink)}
+.abas button.on{color:var(--navy);font-weight:600;border-bottom-color:var(--navy)}
+.abas button span{font-size:11px;color:var(--ink3);margin-left:4px}
+.explica{padding:10px 16px 0;font-size:12.5px;color:var(--ink2);line-height:1.55}
+.busca{display:flex;gap:12px;align-items:center;padding:10px 16px;flex-wrap:wrap}
+.busca input[type=search]{flex:1 1 240px;height:32px;padding:0 10px;border:1px solid var(--line);border-radius:var(--r);font-size:12.5px}
+.busca input[type=search]:focus{outline:2px solid #cfe0f2;outline-offset:-1px;border-color:var(--navy3)}
+.busca label{font-size:12.5px;color:var(--ink2);display:inline-flex;gap:6px;align-items:center;white-space:nowrap}
+.busca .cont{font-size:11.5px;color:var(--ink3);white-space:nowrap}
+.vazio{padding:34px;text-align:center;color:var(--ink3);font-size:12.5px}
+.rodape{grid-column:1/-1;font-size:11.5px;color:var(--ink3);padding-top:2px;line-height:1.6}
+.rodape b{color:var(--ink2);font-weight:600}
+
+@media(max-width:1400px){.col3{grid-column:span 6}}
+@media(max-width:1100px){.col5,.col7{grid-column:1/-1}.viz{max-height:260px}}
+@media(max-width:700px){.col3{grid-column:1/-1}.topo-in{padding:10px 14px}main{padding:12px 14px 48px}
+  .kpi .val{font-size:26px}.comp .lin{grid-template-columns:96px 1fr 80px}}
+</style>
+<script defer src="/expedicao/web-auth.js"></script>
+</head>
+<body>
+
+<header class="topo"><div class="topo-in">
+  <div class="marca">
+    <h1>Oportunidades de Kit</h1>
+    <span class="periodo" id="periodoTopo">—</span>
+  </div>
+  <div class="topo-espaco"></div>
+  <div class="filtros">
+    <div class="seg" id="dias">
+      <button data-d="30">30d</button><button data-d="60">60d</button><button data-d="90" class="on">90d</button>
+      <button data-d="180">180d</button><button data-d="365">1 ano</button>
+    </div>
+    <select class="sel" id="marketplace">
+      <option value="">Todos os canais</option><option value="ml">Mercado Livre</option><option value="shopee">Shopee</option>
+    </select>
+    <select class="sel" id="minPedidos" title="Esconde o que aconteceu poucas vezes">
+      <option value="2">mín. 2 pedidos</option><option value="3">mín. 3 pedidos</option>
+      <option value="5">mín. 5 pedidos</option><option value="10">mín. 10 pedidos</option>
+    </select>
+    <label class="campo" title="Abaixo deste valor o Mercado Livre cobra um custo fixo por unidade vendida">
+      Limite R$ <input type="number" id="limite" value="79" min="1" step="1">
+    </label>
+    <button class="btn pri" id="atualizar">Atualizar</button>
+    <a class="link-voltar" href="/expedicao/admin">Central Noromak</a>
+  </div>
+</div></header>
+
+<main>
+  <div id="aviso" class="faixa" hidden></div>
+
+  <section class="bloco kpi forte col3" id="kpiTicket"></section>
+  <section class="bloco kpi col3" id="kpiMulti"></section>
+  <section class="bloco kpi col3" id="kpiUnid"></section>
+  <section class="bloco kpi col3" id="kpiBaixo"></section>
+
+  <section class="bloco col5">
+    <div class="bloco-cab"><h2>Quanto vale um item a mais</h2><em>ticket médio por tipo de pedido</em></div>
+    <div class="bloco-corpo"><div class="comp" id="comp"></div></div>
+  </section>
+
+  <section class="bloco col7">
+    <div class="bloco-cab"><h2>Pedidos por faixa de valor</h2><em id="faixasInfo"></em></div>
+    <div class="bloco-corpo"><svg class="viz" id="faixas" viewBox="0 0 640 220" preserveAspectRatio="xMidYMid meet"></svg></div>
+  </section>
+
+  <section class="bloco col12">
+    <div class="abas" id="abas">
+      <button data-t="pares" class="on">Comprados juntos<span id="nPares"></span></button>
+      <button data-t="quantidade">Kit de quantidade<span id="nQtd"></span></button>
+      <button data-t="baixo">Ticket baixo<span id="nBaixo"></span></button>
+    </div>
+    <div class="explica" id="explica"></div>
+    <div class="busca">
+      <input type="search" id="filtro" placeholder="Filtrar por código ou descrição">
+      <label><input type="checkbox" id="soNovos" checked> Esconder o que já é kit</label>
+      <span class="cont" id="contador"></span>
+      <button class="btn" id="csv">Exportar CSV</button>
+    </div>
+    <div class="rolar"><table id="tabela"></table></div>
+  </section>
+
+  <div class="rodape" id="rodape"></div>
+</main>
+
+<script>
+(function () {
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const brl = (v) => v == null ? "—" : Number(v).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+  const pct = (v) => v == null ? "—" : Number(v).toLocaleString("pt-BR", { maximumFractionDigits: 1 }) + "%";
+  const num = (v) => Number(v || 0).toLocaleString("pt-BR");
+  const dataBR = (d) => String(d || "").split("-").reverse().join("/");
+  const margemCls = (v) => v == null ? "" : (v >= 30 ? "pos" : (v < 15 ? "neg" : ""));
+
+  const state = { dados: null, aba: "pares", dias: 90, ord: {} };
+
+  async function api(url) {
+    const r = await fetch("/expedicao" + url, { credentials: "same-origin", cache: "no-store",
+      headers: { Accept: "application/json" } });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || d.ok === false) throw new Error(d.error || ("HTTP " + r.status));
+    return d;
+  }
+
+  function kpi(el, rotulo, valor, sub) {
+    el.innerHTML = `<div class="rot">${esc(rotulo)}</div><div class="val">${esc(valor)}</div><div class="sub">${sub}</div>`;
+  }
+
+  function renderKpis(d) {
+    const r = d.resumo, lim = brl(d.parametros.limite_preco);
+    kpi($("kpiTicket"), "Ticket médio", brl(r.ticket_medio),
+      `${num(r.pedidos)} pedidos · ${esc(String(r.produtos_por_pedido).replace(".", ","))} produtos por pedido`);
+    kpi($("kpiMulti"), "Levam mais de 1 produto", pct(r.pct_multiproduto),
+      `${num(r.pedidos_multiproduto)} pedidos com produtos diferentes`);
+    kpi($("kpiUnid"), "Levam 2+ unidades", pct(r.pct_multiunidade),
+      `${num(r.pedidos_multiunidade)} pedidos com o mesmo produto repetido`);
+    kpi($("kpiBaixo"), `Pedidos abaixo de ${lim}`, pct(r.pct_abaixo_limite),
+      `${num(r.pedidos_abaixo_limite)} pedidos · kit leva eles acima do limite`);
+  }
+
+  function renderComp(d) {
+    const r = d.resumo;
+    const max = Math.max(r.ticket_um_item, r.ticket_varios_itens, 1);
+    const lin = (nome, sub, v, cor) => `<div class="lin"><div class="nm"><b>${esc(nome)}</b>${esc(sub)}</div>`
+      + `<div class="trilho"><i style="width:${(v / max * 100).toFixed(1)}%;background:${cor}"></i></div>`
+      + `<div class="v">${brl(v)}</div></div>`;
+    let conclusao = "Ainda não há pedidos suficientes para comparar.";
+    if (r.pedidos_um_item && r.pedidos_varios_itens && r.ticket_um_item > 0) {
+      const ganho = (r.ticket_varios_itens / r.ticket_um_item - 1) * 100;
+      conclusao = `Pedido com mais de um item vale <b>${pct(ganho)} a mais</b> que o pedido de uma unidade só. `
+        + `Hoje ${pct(100 - r.pedidos_um_item / r.pedidos * 100)} dos pedidos já são assim.`;
+    }
+    $("comp").innerHTML =
+      lin("1 unidade", `${num(r.pedidos_um_item)} pedidos`, r.ticket_um_item, "var(--navy4)")
+      + lin("Mais de 1 item", `${num(r.pedidos_varios_itens)} pedidos`, r.ticket_varios_itens, "var(--navy)")
+      + `<div class="conclusao">${conclusao}</div>`;
+  }
+
+  function renderFaixas(d) {
+    const svg = $("faixas"), fx = d.faixas_ticket, lim = d.parametros.limite_preco;
+    const W = 640, H = 220, L = 8, R = 8, T = 22, B = 36;
+    const max = Math.max(1, ...fx.map((f) => f.pedidos));
+    const total = fx.reduce((s, f) => s + f.pedidos, 0) || 1;
+    const bw = (W - L - R) / fx.length;
+    let out = "";
+    fx.forEach((f, i) => {
+      const h = (H - T - B) * f.pedidos / max, x = L + i * bw + 8, w = bw - 16, y = H - B - h;
+      const abaixo = f.ate != null && f.ate <= lim;
+      const rot = f.ate == null ? `R$ ${f.de}+` : `R$ ${f.de}–${f.ate}`;
+      out += `<rect x="${x}" y="${y}" width="${w}" height="${Math.max(h, 1)}" rx="3" fill="${abaixo ? "#f59b23" : "#1c578b"}"><title>${rot}: ${num(f.pedidos)} pedidos · ${brl(f.faturamento)}</title></rect>`
+        + `<text x="${x + w / 2}" y="${y - 6}" text-anchor="middle" font-size="12" font-weight="600" style="fill:var(--ink)">${num(f.pedidos)}</text>`
+        + `<text x="${x + w / 2}" y="${H - B + 16}" text-anchor="middle" font-size="11.5">${rot}</text>`
+        + `<text x="${x + w / 2}" y="${H - B + 30}" text-anchor="middle" font-size="10.5" style="fill:var(--ink3)">${pct(f.pedidos / total * 100)}</text>`;
+    });
+    out += `<line x1="${L}" x2="${W - R}" y1="${H - B}" y2="${H - B}" stroke="#e3e8ef"/>`;
+    svg.innerHTML = out;
+    $("faixasInfo").textContent = `laranja = abaixo de ${brl(lim)}`;
+  }
+
+  // ---------------- tabelas ----------------
+  const desc = (cod, tit) => `<b>${esc(cod)}</b><div class="sub-cel" title="${esc(tit)}">${esc(tit || "")}</div>`;
+  const statusKit = (existe) => existe
+    ? `<span class="tag existe" title="${esc(existe)}">já existe</span>`
+    : `<span class="tag novo">oportunidade</span>`;
+  const qtdExiste = (arr, n) => arr && arr.length
+    ? `<span class="tag existe">já tem kit ${arr.map((x) => x + "un").join(", ")}</span>`
+    : `<span class="tag novo">criar kit ${n}un</span>`;
+  const distMini = (dist) => {
+    const vals = [dist["1"], dist["2"], dist["3"], dist["4+"]], m = Math.max(1, ...vals);
+    return `<span class="dist" title="1 un: ${vals[0]} · 2 un: ${vals[1]} · 3 un: ${vals[2]} · 4+ un: ${vals[3]}">`
+      + vals.map((v, i) => `<i style="height:${Math.max(2, v / m * 18)}px;opacity:${i ? 1 : .35}"></i>`).join("") + "</span>";
+  };
+
+  const ABAS = {
+    pares: {
+      lista: (d) => d.pares,
+      existe: (x) => !!x.ja_existe,
+      texto: (x) => [x.a, x.b, x.titulo_a, x.titulo_b].join(" "),
+      explica: "Produtos diferentes que saíram <b>no mesmo pedido</b> (no ML, o carrinho inteiro). "
+        + "<b>% leva junto</b>: de quem comprou um, quantos levaram o outro. <b>Força</b> acima de 1 = saem juntos mais do que o acaso explicaria. "
+        + "Preço do kit = soma do preço médio de venda de cada um.",
+      padrao: "pedidos_juntos",
+      cols: [
+        { k: "a", t: "Produto A", v: (x) => `<div class="prod">${desc(x.a, x.titulo_a)}</div>` },
+        { k: "b", t: "Produto B", v: (x) => `<div class="prod">${desc(x.b, x.titulo_b)}</div>` },
+        { k: "pedidos_juntos", t: "Pedidos juntos", n: 1, v: (x, m) => `${num(x.pedidos_juntos)}<span class="barra" style="width:${(x.pedidos_juntos / m * 100).toFixed(0)}%"></span>`
+          + `<div class="sub-cel">${x.ml ? "ML " + x.ml : ""}${x.ml && x.shopee ? " · " : ""}${x.shopee ? "Shopee " + x.shopee : ""}</div>` },
+        { k: "conf_a_b", t: "% leva junto", n: 1, v: (x) => `A→B ${pct(x.conf_a_b)}<div class="sub-cel">B→A ${pct(x.conf_b_a)}</div>` },
+        { k: "lift", t: "Força", n: 1, v: (x) => x.lift >= 3 ? `<span class="tag forte">${String(x.lift).replace(".", ",")}×</span>` : String(x.lift).replace(".", ",") + "×" },
+        { k: "preco_kit", t: "Preço do kit", n: 1, v: (x) => `${brl(x.preco_kit)}<div class="sub-cel">pedido médio ${brl(x.ticket_juntos)}</div>` },
+        { k: "custo_kit", t: "Custo", n: 1, v: (x) => brl(x.custo_kit) },
+        { k: "margem_bruta", t: "Margem bruta", n: 1, v: (x) => `<span class="${margemCls(x.margem_bruta)}">${pct(x.margem_bruta)}</span>` },
+        { k: "ja_existe", t: "Situação", v: (x) => statusKit(x.ja_existe) },
+      ],
+      csv: ["a", "titulo_a", "b", "titulo_b", "pedidos_juntos", "ml", "shopee", "conf_a_b", "conf_b_a", "lift", "preco_kit", "custo_kit", "margem_bruta", "ticket_juntos", "ja_existe"],
+    },
+    quantidade: {
+      lista: (d) => d.quantidade,
+      existe: (x) => (x.ja_existe || []).includes(x.qtd_sugerida),
+      texto: (x) => [x.produto, x.titulo].join(" "),
+      explica: "Produtos que o cliente <b>já compra em mais de uma unidade</b>. Um anúncio \"Kit com N\" entrega o que ele já quer "
+        + "e dilui tarifa e frete. A quantidade sugerida é a que mais aparece nos pedidos.",
+      padrao: "pedidos_multi_un",
+      cols: [
+        { k: "produto", t: "Produto", v: (x) => `<div class="prod">${desc(x.produto, x.titulo)}</div>` },
+        { k: "pedidos", t: "Pedidos", n: 1, v: (x) => num(x.pedidos) },
+        { k: "pedidos_multi_un", t: "Com 2+ un.", n: 1, v: (x, m) => `${num(x.pedidos_multi_un)}<span class="barra" style="width:${(x.pedidos_multi_un / m * 100).toFixed(0)}%"></span>` },
+        { k: "pct_multi_un", t: "% com 2+", n: 1, v: (x) => pct(x.pct_multi_un) },
+        { k: "dist", t: "1 · 2 · 3 · 4+", n: 1, s: false, v: (x) => distMini(x.dist_qtd) },
+        { k: "qtd_sugerida", t: "Sugestão", n: 1, v: (x) => `<b>${x.qtd_sugerida} un.</b>` },
+        { k: "preco_kit", t: "Preço do kit", n: 1, v: (x) => `${brl(x.preco_kit)}<div class="sub-cel">${brl(x.preco_unit)} a unidade</div>` },
+        { k: "tarifa_ml_pct", t: "Tarifa ML hoje", n: 1, v: (x) => pct(x.tarifa_ml_pct) },
+        { k: "margem_bruta", t: "Margem bruta", n: 1, v: (x) => `<span class="${margemCls(x.margem_bruta)}">${pct(x.margem_bruta)}</span>` },
+        { k: "ja_existe", t: "Situação", s: false, v: (x) => qtdExiste(x.ja_existe, x.qtd_sugerida) },
+      ],
+      csv: ["produto", "titulo", "pedidos", "pedidos_multi_un", "pct_multi_un", "qtd_sugerida", "preco_unit", "preco_kit", "tarifa_ml_pct", "custo_unit", "margem_bruta"],
+    },
+    baixo: {
+      lista: (d) => d.ticket_baixo,
+      existe: (x) => (x.ja_existe || []).length > 0,
+      texto: (x) => [x.produto, x.titulo].join(" "),
+      explica: "Produtos vendidos <b>abaixo do limite</b> — no Mercado Livre cada unidade abaixo dele paga um custo fixo, "
+        + "que pesa muito no item barato (veja a coluna Tarifa ML hoje). O kit sugerido é o menor que passa do limite.",
+      padrao: "pedidos",
+      cols: [
+        { k: "produto", t: "Produto", v: (x) => `<div class="prod">${desc(x.produto, x.titulo)}</div>` },
+        { k: "pedidos", t: "Pedidos", n: 1, v: (x, m) => `${num(x.pedidos)}<span class="barra" style="width:${(x.pedidos / m * 100).toFixed(0)}%"></span>`
+          + `<div class="sub-cel">${num(x.unidades)} un. · ML ${num(x.un_ml)} · Shopee ${num(x.un_shopee)}</div>` },
+        { k: "preco_unit", t: "Preço médio", n: 1, v: (x) => brl(x.preco_unit) },
+        { k: "tarifa_ml_pct", t: "Tarifa ML hoje", n: 1, v: (x) => `<span class="${x.tarifa_ml_pct >= 25 ? "neg" : ""}">${pct(x.tarifa_ml_pct)}</span>` },
+        { k: "margem_bruta", t: "Margem bruta", n: 1, v: (x) => `<span class="${margemCls(x.margem_bruta)}">${pct(x.margem_bruta)}</span>` },
+        { k: "pct_multi_un", t: "Já levam 2+", n: 1, v: (x) => pct(x.pct_multi_un) },
+        { k: "unidades_para_limite", t: "Kit sugerido", n: 1, v: (x) => `<b>${x.unidades_para_limite} un.</b><div class="sub-cel">${brl(x.preco_kit)}</div>` },
+        { k: "ja_existe", t: "Situação", s: false, v: (x) => qtdExiste(x.ja_existe, x.unidades_para_limite) },
+      ],
+      csv: ["produto", "titulo", "pedidos", "unidades", "un_ml", "un_shopee", "preco_unit", "tarifa_ml_pct", "custo_unit", "margem_bruta", "pct_multi_un", "unidades_para_limite", "preco_kit"],
+    },
+  };
+
+  function linhasVisiveis() {
+    const cfg = ABAS[state.aba], d = state.dados;
+    if (!d) return [];
+    const termo = $("filtro").value.trim().toLowerCase();
+    const soNovos = $("soNovos").checked;
+    let lista = cfg.lista(d).filter((x) => (!soNovos || !cfg.existe(x)) && (!termo || cfg.texto(x).toLowerCase().includes(termo)));
+    const ord = state.ord[state.aba] || { k: cfg.padrao, asc: false };
+    lista = lista.slice().sort((a, b) => {
+      const va = a[ord.k], vb = b[ord.k];
+      const r = (typeof va === "number" || typeof vb === "number")
+        ? ((va ?? -Infinity) - (vb ?? -Infinity)) : String(va || "").localeCompare(String(vb || ""));
+      return ord.asc ? r : -r;
+    });
+    return lista;
+  }
+
+  function renderTabela() {
+    const cfg = ABAS[state.aba];
+    $("explica").innerHTML = cfg.explica;
+    const lista = linhasVisiveis();
+    const ord = state.ord[state.aba] || { k: cfg.padrao, asc: false };
+    const maxBarra = Math.max(1, ...lista.map((x) => Number(x[cfg.padrao]) || 0));
+    $("contador").textContent = `${num(lista.length)} de ${num(cfg.lista(state.dados || { pares: [], quantidade: [], ticket_baixo: [] }).length)}`;
+    if (!lista.length) {
+      $("tabela").innerHTML = `<tbody><tr><td class="vazio">${state.dados ? "Nada encontrado com esses filtros. Tente um período maior ou um mínimo de pedidos menor." : "Carregando…"}</td></tr></tbody>`;
+      return;
+    }
+    const cab = cfg.cols.map((c) => `<th class="${c.n ? "n" : ""}${ord.k === c.k ? " ord" + (ord.asc ? " asc" : "") : ""}" data-k="${c.s === false ? "" : c.k}">${esc(c.t)}</th>`).join("");
+    const corpo = lista.map((x) => "<tr>" + cfg.cols.map((c) => `<td class="${c.n ? "n" : ""}">${c.v(x, maxBarra)}</td>`).join("") + "</tr>").join("");
+    $("tabela").innerHTML = `<thead><tr>${cab}</tr></thead><tbody>${corpo}</tbody>`;
+  }
+
+  function exportarCsv() {
+    const cfg = ABAS[state.aba], lista = linhasVisiveis();
+    const cel = (v) => { const s = v == null ? "" : (typeof v === "number" ? String(v).replace(".", ",") : String(v)); return /[;"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+    const txt = [cfg.csv.join(";")].concat(lista.map((x) => cfg.csv.map((k) => cel(x[k])).join(";"))).join("\r\n");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob(["﻿" + txt], { type: "text/csv;charset=utf-8" }));
+    a.download = `oportunidades-kit-${state.aba}-${state.dias}d.csv`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  }
+
+  function renderRodape(d) {
+    const a = d.avisos;
+    const partes = [
+      `<b>Como ler.</b> Pedido = cesta: no Mercado Livre, o carrinho inteiro (mesmo pack); na Shopee, o pedido. Kit que você já vende conta como um produto só.`,
+      `<b>Margem bruta</b> = preço − custo do Apollo, antes de tarifa, frete e imposto (a conta completa está no Financeiro).`,
+      `Vendas desde ${dataBR(d.vendas_desde) || "—"} · ${num(a.kits_cadastrados)} kits cadastrados reconhecidos`
+        + (a.cestas_grandes_ignoradas ? ` · ${num(a.cestas_grandes_ignoradas)} pedidos com mais de ${d.parametros.max_itens_cesta} produtos ficaram fora dos pares (atacado)` : "")
+        + (a.linhas_sem_sku ? ` · ${num(a.linhas_sem_sku)} linhas sem SKU` : "") + ".",
+    ];
+    $("rodape").innerHTML = partes.join("<br>");
+  }
+
+  async function carregar() {
+    const btn = $("atualizar");
+    btn.disabled = true; btn.textContent = "Carregando…";
+    $("aviso").hidden = true;
+    try {
+      const q = new URLSearchParams({ dias: state.dias, marketplace: $("marketplace").value,
+        min_pedidos: $("minPedidos").value, limite_preco: $("limite").value || "79" });
+      const d = await api("/api/kits-analise?" + q);
+      state.dados = d;
+      $("periodoTopo").textContent = `${dataBR(d.periodo.inicio)} a ${dataBR(d.periodo.fim)} · ${d.marketplace === "todos" ? "ML + Shopee" : (d.marketplace === "ml" ? "Mercado Livre" : "Shopee")}`;
+      $("nPares").textContent = num(d.pares.filter((x) => !x.ja_existe).length);
+      $("nQtd").textContent = num(d.quantidade.length);
+      $("nBaixo").textContent = num(d.ticket_baixo.length);
+      renderKpis(d); renderComp(d); renderFaixas(d); renderTabela(); renderRodape(d);
+      if (!d.resumo.pedidos) {
+        $("aviso").textContent = "Nenhuma venda no período. As vendas vêm da sincronização do Dashboard de vendas (ML e Shopee).";
+        $("aviso").hidden = false;
+      }
+    } catch (e) {
+      $("aviso").className = "faixa erro";
+      $("aviso").textContent = "Não foi possível carregar a análise: " + e.message;
+      $("aviso").hidden = false;
+    } finally {
+      btn.disabled = false; btn.textContent = "Atualizar";
+    }
+  }
+
+  $("dias").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button[data-d]");
+    if (!b) return;
+    state.dias = Number(b.dataset.d);
+    document.querySelectorAll("#dias button").forEach((x) => x.classList.toggle("on", x === b));
+    carregar();
+  });
+  $("abas").addEventListener("click", (ev) => {
+    const b = ev.target.closest("button[data-t]");
+    if (!b) return;
+    state.aba = b.dataset.t;
+    document.querySelectorAll("#abas button").forEach((x) => x.classList.toggle("on", x === b));
+    renderTabela();
+  });
+  $("tabela").addEventListener("click", (ev) => {
+    const th = ev.target.closest("th[data-k]");
+    if (!th || !th.dataset.k) return;
+    const atual = state.ord[state.aba] || { k: ABAS[state.aba].padrao, asc: false };
+    state.ord[state.aba] = { k: th.dataset.k, asc: atual.k === th.dataset.k ? !atual.asc : false };
+    renderTabela();
+  });
+  $("filtro").addEventListener("input", renderTabela);
+  $("soNovos").addEventListener("change", renderTabela);
+  $("atualizar").addEventListener("click", carregar);
+  $("marketplace").addEventListener("change", carregar);
+  $("minPedidos").addEventListener("change", carregar);
+  $("limite").addEventListener("change", carregar);
+  $("csv").addEventListener("click", exportarCsv);
+
+  renderTabela();
+  carregar();
+})();
+</script>
+</body>
+</html>
