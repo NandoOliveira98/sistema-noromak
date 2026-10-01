@@ -76,6 +76,8 @@ h2{font-size:14px;margin:0 0 2px;font-weight:650}
 .tab{border:1px solid var(--line);background:var(--tile);color:var(--ink2);border-radius:999px;padding:5px 11px;font:inherit;font-size:12.5px;cursor:pointer;display:inline-flex;gap:6px;align-items:center}
 .tab.on{background:var(--navy2);border-color:var(--navy2);color:#fff}
 .tab .dot{width:8px;height:8px;border-radius:2px}
+.camp-nome{font-size:11.5px;color:var(--ink2);margin-top:1px}
+.camp-nome b{color:var(--ink);font-weight:600}
 input[type=search]{border:1px solid var(--line);background:var(--tile);color:var(--ink);border-radius:6px;padding:6px 10px;font:inherit;min-width:220px}
 .tw{overflow-x:auto;border:1px solid var(--line);border-radius:6px}
 table.ads{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;min-width:1000px}
@@ -153,7 +155,7 @@ table.ads{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;
     <div class="card span12" id="lista">
       <div class="tbar">
         <div class="tabs" id="tabs"></div>
-        <input type="search" id="q" placeholder="Buscar título, MLB ou SKU…">
+        <input type="search" id="q" placeholder="Buscar título, MLB, SKU ou campanha…">
       </div>
       <div class="tw"><table class="ads" id="ads"></table></div>
       <div class="more"><button class="btn" id="more">Mostrar mais</button></div>
@@ -257,18 +259,29 @@ const dash='<span class="muted">—</span>';
 
 // linha: [mlb,titulo,campanha,status,impr,cliques,invest,receita,vdir,vind]
 // Campanhas criadas para um único anúncio ("MLB123 - 16/01") viram um grupo só na tabela de campanhas.
-const rows = DATA.rows.map(r=>({mlb:r[0],titulo:r[1],camp:/^MLB\d+ - /.test(r[2])?'Campanhas individuais':r[2],status:r[3],impr:r[4],cliques:r[5],inv:r[6],rec:r[7],vd:r[8],vi:r[9]}));
+// campNome = nome exato da campanha no ML (é o que se procura para pausar/remover o anúncio).
+const rows = DATA.rows.map(r=>({mlb:r[0],titulo:r[1],camp:/^MLB\d+ - /.test(r[2])?'Campanhas individuais':r[2],campNome:r[2]||'—',status:r[3],impr:r[4],cliques:r[5],inv:r[6],rec:r[7],vd:r[8],vi:r[9]}));
 $('periodo').textContent = `Período ${DATA.periodo} · importado em ${DATA.criado} · ${num(rows.length)} linhas`;
 
 // Por anúncio (um anúncio "movido" aparece em mais de uma campanha)
 const byMlb = new Map();
 for(const r of rows){
   let a = byMlb.get(r.mlb);
-  if(!a){a={mlb:r.mlb,titulo:r.titulo,camps:new Set(),status:r.status,impr:0,cliques:0,inv:0,rec:0,vendas:0};byMlb.set(r.mlb,a)}
-  a.camps.add(r.camp); if(r.status==='Ativo') a.status='Ativo';
+  if(!a){a={mlb:r.mlb,titulo:r.titulo,camps:[],status:r.status,impr:0,cliques:0,inv:0,rec:0,vendas:0};byMlb.set(r.mlb,a)}
+  // Um anúncio "Movido" tem uma linha por campanha por onde passou: guarda todas.
+  a.camps.push({nome:r.campNome,status:r.status,inv:r.inv}); if(r.status==='Ativo') a.status='Ativo';
   a.impr+=r.impr;a.cliques+=r.cliques;a.inv+=r.inv;a.rec+=r.rec;a.vendas+=r.vd+r.vi;
 }
 const ads=[...byMlb.values()];
+// Campanha atual primeiro (a que não está como "Movido"); as anteriores viram "antes em".
+for(const a of ads){
+  const atuais=a.camps.filter(c=>c.status!=='Movido'), antes=a.camps.filter(c=>c.status==='Movido');
+  a.campAtual=[...new Set((atuais.length?atuais:a.camps).map(c=>c.nome))];
+  a.campAntes=atuais.length?[...new Set(antes.map(c=>c.nome))].filter(n=>!a.campAtual.includes(n)):[];
+  // Todas as linhas "Movido": o relatório não diz para onde foi — só onde estava.
+  a.soMovido=!atuais.length;
+  a.campBusca=a.camps.map(c=>c.nome).join(' ').toLowerCase();
+}
 for(const a of ads){
   a.acos=a.rec>0?a.inv/a.rec:null; a.roas=a.inv>0?a.rec/a.inv:null;
   // Financeiro do anúncio: todas as vendas dele no período (margem nula = algo desconhecido)
@@ -442,7 +455,7 @@ function setTab(k){st.tab=k;[st.sort,st.dir]=DEF_SORT[k];st.lim=50;render()}
 function quebra(a){
   if(a.margem==null) return a.semCusto?'Falta custo, tarifa ou frete de alguma venda':'Venda não localizada no Noromak';
   return `Faturamento ${brl(a.fat)} (${num(a.unid)} un.)\n− custo ${brl(a.cmv)}\n− tarifa ${brl(a.taxa)}\n− frete ${brl(a.frete)}\n− imposto ${brl(a.imp)}`+
-    (a.outros>0.005?`\n− outros ${brl(a.outros)}`:'')+`\n= margem ${brl(a.margem)}\n− Ads ${brl(a.inv)}\n= lucro ${brl(a.lucro)}`;
+    (a.outros>0.005?`\n− outros ${brl(a.outros)}`:'')+`\n= margem ${brl(a.margem)}\n− Ads ${brl(a.inv)}\n= lucro ${brl(a.lucro)}`+(a.fat>0?` (${pct(a.lucro/a.fat)} do faturamento)`:'');
 }
 function render(){
   const cnt=k=>g.filter(a=>match(a,k)).length;
@@ -451,23 +464,26 @@ function render(){
     return `<button class="tab ${st.tab===k?'on':''}" data-k="${k}">${c?`<i class="dot" style="background:${c}"></i>`:''}${ACAO[k]?ACAO[k].t:'Todos com gasto'} <span>${num(cnt(k))}</span></button>`}).join('');
   document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>setTab(b.dataset.k));
   const q=st.q.trim().toLowerCase();
-  let L=g.filter(a=>match(a,st.tab)&&(!q||a.titulo.toLowerCase().includes(q)||a.mlb.toLowerCase().includes(q)||(a.sku||'').toLowerCase().includes(q)));
+  let L=g.filter(a=>match(a,st.tab)&&(!q||a.titulo.toLowerCase().includes(q)||a.mlb.toLowerCase().includes(q)||(a.sku||'').toLowerCase().includes(q)||a.campBusca.includes(q)));
   const key=st.sort; L.sort((a,b)=>{let x=a[key],y=b[key]; if(key==='acao'){x=ORDEM.indexOf(x);y=ORDEM.indexOf(y)} if(x==null)return 1; if(y==null)return -1; return (typeof x==='string'?x.localeCompare(y):x-y)*st.dir});
   const sm=k=>L.reduce((s,a)=>s+(a[k]||0),0);
   const head=`<tr>${COLS.map(([k,t,c])=>`<th class="${c||''} ${st.sort===k?'sorted':''}" data-k="${k}">${t}${st.sort===k?(st.dir<0?' ↓':' ↑'):''}</th>`).join('')}</tr>`;
   const body=L.slice(0,st.lim).map(a=>`<tr>
     <td class="l ttl"><a href="https://produto.mercadolivre.com.br/${a.mlb.replace('MLB','MLB-')}" target="_blank" rel="noopener">${esc(a.titulo)}</a>
-      <div class="mlb">${a.mlb}${a.sku?' · SKU '+esc(a.sku):''} · ${esc(a.status)}</div></td>
+      <div class="mlb">${a.mlb}${a.sku?' · SKU '+esc(a.sku):''} · ${esc(a.status)}</div>
+      <div class="camp-nome">${a.soMovido
+        ?`Estava em: <b>${esc(a.campAtual.join(', '))}</b> <span class="muted">· foi movido; a campanha atual não está no relatório, confira no ML</span>`
+        :`Campanha: <b>${esc(a.campAtual.join(', '))}</b>${a.campAntes.length?` <span class="muted">· antes em ${esc(a.campAntes.join(', '))}</span>`:''}`}</div></td>
     <td class="l"><span class="chip" title="${esc(ACAO[a.acao].n)}"><i style="background:${ACAO[a.acao].c}"></i>${ACAO[a.acao].t}</span>${a.poucas?'<div><span class="tag" title="Menos de '+POUCAS_UNIDADES+' unidades no período: um pedido só pode distorcer o resultado">poucas vendas</span></div>':''}</td>
     <td>${num(a.cliques)}</td><td>${brl(a.inv)}</td><td>${a.rec>0?brl(a.rec):dash}</td><td>${a.acos!=null?pct(a.acos):dash}</td>
     <td>${a.fat>0?brl(a.fat)+`<div class="mlb">${num(a.unid)} un.</div>`:dash}</td>
     <td>${a.margem==null?dash:a.fat>0?`<span class="${a.margem<0?'neg':''}">${brl(a.margem)}</span><div class="mlb">${pct(a.margemPct)}</div>`:dash}</td>
     <td>${a.tacos!=null?pct(a.tacos):dash}</td>
-    <td title="${esc(quebra(a))}" style="cursor:help">${a.lucro==null?'<span class="muted">sem custo</span>':`<b class="${a.lucro<0?'neg':'pos'}">${brl(a.lucro)}</b>`}</td></tr>`).join('')
+    <td title="${esc(quebra(a))}" style="cursor:help">${a.lucro==null?'<span class="muted">sem custo</span>':`<b class="${a.lucro<0?'neg':'pos'}">${brl(a.lucro)}</b>`+(a.fat>0?`<div class="mlb">${pct(a.lucro/a.fat)}</div>`:'')}</td></tr>`).join('')
     || `<tr><td colspan="${COLS.length}" class="l muted" style="padding:20px">Nenhum anúncio nesse filtro.</td></tr>`;
-  const lu=L.filter(a=>a.lucro!=null).reduce((s,a)=>s+a.lucro,0);
+  const comLucro=L.filter(a=>a.lucro!=null), lu=comLucro.reduce((s,a)=>s+a.lucro,0), fatLu=comLucro.reduce((s,a)=>s+a.fat,0);
   const foot=L.length?`<tr><td class="l" colspan="3" style="font-weight:600">${num(L.length)} anúncios</td><td style="font-weight:600">${brl(sm('inv'))}</td><td style="font-weight:600">${brl(sm('rec'))}</td><td></td>
-    <td style="font-weight:600">${brl(sm('fat'))}</td><td></td><td></td><td style="font-weight:650" class="${lu<0?'neg':'pos'}">${brl(lu)}</td></tr>`:'';
+    <td style="font-weight:600">${brl(sm('fat'))}</td><td></td><td></td><td style="font-weight:650" class="${lu<0?'neg':'pos'}">${brl(lu)}${fatLu>0?`<div class="mlb">${pct(lu/fatLu)}</div>`:''}</td></tr>`:'';
   $('ads').innerHTML=head+body+foot;
   document.querySelectorAll('.ads th').forEach(th=>th.onclick=()=>{const k=th.dataset.k;if(st.sort===k)st.dir*=-1;else{st.sort=k;st.dir=(k==='titulo'||k==='acao')?1:-1}render()});
   const more=$('more'); more.style.display=L.length>st.lim?'':'none'; more.textContent=`Mostrar mais (${num(L.length-st.lim)} restantes)`;
