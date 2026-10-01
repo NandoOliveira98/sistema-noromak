@@ -323,6 +323,10 @@ período importado de novo **substitui**. O lucro por anúncio (`ads_analise_pay
 `financeiro_payload` do período (cada item agora traz o `anuncio`): custo, tarifa, frete e imposto
 de **todas** as vendas do anúncio. O Ads vem **só do relatório** — o PADS da fatura não entra,
 senão o mesmo gasto contaria duas vezes. Margem nula quando falta custo, tarifa ou frete.
+Uma recomendação por anúncio ("O que fazer", só no front): **rever preço/frete** (margem < 0 antes
+do Ads), **reduzir verba** (lucro < 0), **pausar** (gastou R$ 5+ ou 20+ cliques sem nenhuma venda),
+**pode escalar** (lucro, Ads < metade da margem, 5+ unidades — confira o estoque), **manter**,
+**conferir custo** e **gasto pequeno sem venda** (ruído). Menos de 5 unidades = "poucas vendas".
 
 ### Publicidade / Mercado Ads (V18.30)
 `GET /advertising/advertisers?product_id=PADS` (`Api-Version: 1`) → `advertiser_id`;

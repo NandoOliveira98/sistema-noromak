@@ -6,7 +6,9 @@
 <link rel="icon" href="data:,">
 <title>Noromak · Análise de ADS</title>
 <!-- V18.54: Análise de ADS — relatório "Anúncios patrocinados" do ML (.xlsx) importado à mão
-     e cruzado com o lucro de cada anúncio (mesmo cálculo do Financeiro).
+     e cruzado com o lucro de cada anúncio (mesmo cálculo do Financeiro). Uma recomendação
+     por anúncio ("O que fazer"), lucro no topo, dispersão margem × Ads, "poucas vendas"
+     marcado e o gasto de centavos separado do que importa.
      GET /api/ads-analise · POST /api/ads-analise/importar. -->
 <style>
 :root{
@@ -25,7 +27,6 @@ h1{font-size:20px;margin:0;font-weight:650}
 .sub{color:var(--ink2);font-size:12.5px}
 .btn{border:1px solid var(--line);background:var(--tile);color:var(--ink);border-radius:6px;padding:7px 12px;font:inherit;cursor:pointer}
 .btn.pri{background:var(--navy2);border-color:var(--navy2);color:#fff}
-.proto{display:inline-block;font-size:11px;font-weight:600;letter-spacing:.03em;color:var(--warn);background:var(--warnbg);border:1px solid var(--warnln);border-radius:4px;padding:1px 6px;margin-left:8px;vertical-align:middle}
 .grid{display:grid;grid-template-columns:repeat(12,1fr);gap:12px}
 .card{background:var(--tile);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px;min-width:0}
 .span3{grid-column:span 3}.span4{grid-column:span 4}.span5{grid-column:span 5}.span6{grid-column:span 6}.span7{grid-column:span 7}.span8{grid-column:span 8}.span12{grid-column:span 12}
@@ -96,7 +97,13 @@ table.ads{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;
 .wft i{position:absolute;top:0;bottom:0;border-radius:3px}
 .wfv{text-align:right;font-variant-numeric:tabular-nums;font-size:12.5px}.wfv span{color:var(--ink3);margin-left:6px;display:inline-block;min-width:30px}
 @media (max-width:560px){.wfr{grid-template-columns:96px 1fr 104px;gap:6px}}
-#res .lg{align-items:center}
+#acoesLista .lg{align-items:center}
+.leg-inline{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:8px;font-size:12px;color:var(--ink2)}
+.leg-inline span{display:inline-flex;align-items:center;gap:5px}
+.leg-inline i{width:9px;height:9px;border-radius:50%;display:inline-block}
+.tag{display:inline-block;margin-top:3px;font-size:11px;font-weight:600;color:var(--warn);background:var(--warnbg);border:1px solid var(--warnln);border-radius:4px;padding:0 5px}
+#disp svg{cursor:pointer}
+.tip{white-space:normal;max-width:320px}
 .acoes{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .acoes a.btn{text-decoration:none;display:inline-flex;align-items:center}
 #aviso{margin-bottom:12px}
@@ -122,13 +129,34 @@ table.ads{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;
   <div class="callout" id="aviso" hidden></div>
 
   <div id="conteudo" hidden>
-  <div class="grid" id="kpis"></div>
-
-  <div class="grid" style="margin-top:12px">
+  <div class="grid">
     <div class="card span12">
       <h2>Lucro dos anúncios com Ads</h2>
       <p class="desc">Todas as vendas desses anúncios no período (com Ads ou não), com o custo do produto, a tarifa e o frete do ML, o imposto de 12% e o investimento em Ads do relatório. Mesmo cálculo da tela Financeiro.</p>
       <div class="grid" id="kpis2" style="gap:0"></div>
+    </div>
+
+    <div class="card span5">
+      <h2>O que fazer</h2>
+      <p class="desc">Uma recomendação por anúncio, pelo lucro depois do Ads. A barra mostra para onde foi o investimento. Clique para ver os anúncios.</p>
+      <div class="stack" id="stack"></div>
+      <div id="acoesLista"></div>
+    </div>
+
+    <div class="card span7">
+      <h2>Margem do produto × quanto vai para o Ads</h2>
+      <p class="desc" id="dispDesc"></p>
+      <div class="chart" id="disp"><div class="tip"></div></div>
+      <div class="leg-inline" id="dispLeg"></div>
+    </div>
+
+    <div class="card span12" id="lista">
+      <div class="tbar">
+        <div class="tabs" id="tabs"></div>
+        <input type="search" id="q" placeholder="Buscar título, MLB ou SKU…">
+      </div>
+      <div class="tw"><table class="ads" id="ads"></table></div>
+      <div class="more"><button class="btn" id="more">Mostrar mais</button></div>
     </div>
 
     <div class="card span7">
@@ -138,27 +166,14 @@ table.ads{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;
     </div>
 
     <div class="card span5">
-      <h2>Resultado por anúncio</h2>
-      <p class="desc">Quanto cada grupo ganhou ou perdeu depois do Ads. Clique para filtrar a lista.</p>
-      <div id="res"></div>
+      <h2>Desempenho do Ads</h2>
+      <p class="desc">Como o Mercado Livre mede: só as vendas que vieram de clique no anúncio patrocinado.</p>
+      <div class="grid" id="kpis" style="gap:14px 0"></div>
     </div>
 
     <div class="card span12">
       <h2>Do anúncio à venda</h2>
       <div class="funnel" id="funnel"></div>
-    </div>
-
-    <div class="card span5">
-      <h2>Para onde foi o investimento</h2>
-      <p class="desc">Cada anúncio classificado pelo resultado no período. Clique para filtrar a lista.</p>
-      <div class="stack" id="stack"></div>
-      <div class="legend" id="legend"></div>
-    </div>
-
-    <div class="card span7">
-      <h2>Concentração da receita</h2>
-      <p class="desc" id="paretoDesc"></p>
-      <div class="chart" id="pareto"><div class="tip"></div></div>
     </div>
 
     <div class="card span12">
@@ -168,15 +183,6 @@ table.ads{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;
     </div>
 
     <div class="card span12 callout" id="notas"></div>
-
-    <div class="card span12">
-      <div class="tbar">
-        <div class="tabs" id="tabs"></div>
-        <input type="search" id="q" placeholder="Buscar título ou MLB…">
-      </div>
-      <div class="tw"><table class="ads" id="ads"></table></div>
-      <div class="more"><button class="btn" id="more">Mostrar mais</button></div>
-    </div>
   </div>
   </div>
 </div>
@@ -221,23 +227,38 @@ $('arq').onchange=async()=>{
   sel.innerHTML=d.relatorios.map(r=>'<option value="'+r.id+'"'+(r.id===d.relatorio.id?' selected':'')+'>'+dataBR(r.periodo_inicio)+' a '+dataBR(r.periodo_fim)+'</option>').join('');
   sel.onchange=()=>{location.search='?relatorio='+sel.value};
   const rel=d.relatorio;
+  $('conteudo').hidden=false;
   montar({periodo:dataBR(rel.periodo_inicio)+' a '+dataBR(rel.periodo_fim),
     criado:dataBR(rel.importado_em)+' por '+(rel.importado_por||'—'),
     rows:d.linhas, fin:d.financeiro, fin_total_ml:d.faturamento_ml, ads_fatura:d.ads_fatura_ml,
     frete_so_fatura:(d.cobertura||{}).pedidos_ml_frete_so_fatura||0});
-  $('conteudo').hidden=false;
 })();
+
+// Regras da recomendação. Abaixo destes limites o gasto sem venda é ruído, e um
+// resultado com poucas unidades vendidas pode ser um pedido só (um frete caro muda tudo).
+const MIN_GASTO = 5, MIN_CLIQUES = 20, POUCAS_UNIDADES = 5;
+const ACAO = {
+  preco:   {t:'Rever preço ou frete', n:'Dá prejuízo mesmo sem o Ads. Pausar o Ads não resolve.', c:'#b42318'},
+  reduzir: {t:'Reduzir a verba',      n:'O produto dá margem, mas o Ads consome mais que ela.', c:'#d08a17'},
+  pausar:  {t:'Pausar o Ads',         n:`Gastou (R$ ${MIN_GASTO}+ ou ${MIN_CLIQUES}+ cliques) e não vendeu nada no período, nem sem Ads.`, c:'#6b4fa0'},
+  escalar: {t:'Pode escalar',         n:`Dá lucro, o Ads usa menos da metade da margem e vendeu ${POUCAS_UNIDADES}+ unidades. Confira o estoque antes.`, c:'#1c578b'},
+  manter:  {t:'Manter',               n:'Dá lucro depois do Ads.', c:'#0f766e'},
+  conferir:{t:'Conferir o custo',     n:'Falta custo, tarifa ou frete de alguma venda, ou a venda não foi localizada.', c:'#9cc0e4'},
+  ruido:   {t:'Gasto pequeno sem venda', n:`Menos de R$ ${MIN_GASTO} e menos de ${MIN_CLIQUES} cliques: ainda é cedo para decidir.`, c:'#c3ccd6'},
+};
+const ORDEM = ['preco','reduzir','pausar','escalar','manter','conferir','ruido'];
 
 function montar(DATA){
 const brl = v => v.toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
 const num = v => v.toLocaleString('pt-BR',{maximumFractionDigits:0});
 const pct = (v,d=1) => (v*100).toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d})+'%';
 const dec = (v,d=2) => v.toLocaleString('pt-BR',{minimumFractionDigits:d,maximumFractionDigits:d});
+const dash='<span class="muted">—</span>';
 
-// linha: [mlb,titulo,campanha,status,impr,cliques,invest,receita,vdir,vind,recdir,recind]
+// linha: [mlb,titulo,campanha,status,impr,cliques,invest,receita,vdir,vind]
 // Campanhas criadas para um único anúncio ("MLB123 - 16/01") viram um grupo só na tabela de campanhas.
 const rows = DATA.rows.map(r=>({mlb:r[0],titulo:r[1],camp:/^MLB\d+ - /.test(r[2])?'Campanhas individuais':r[2],status:r[3],impr:r[4],cliques:r[5],inv:r[6],rec:r[7],vd:r[8],vi:r[9]}));
-document.getElementById('periodo').textContent = `Período ${DATA.periodo} · importado em ${DATA.criado} · ${num(rows.length)} linhas`;
+$('periodo').textContent = `Período ${DATA.periodo} · importado em ${DATA.criado} · ${num(rows.length)} linhas`;
 
 // Por anúncio (um anúncio "movido" aparece em mais de uma campanha)
 const byMlb = new Map();
@@ -248,16 +269,8 @@ for(const r of rows){
   a.impr+=r.impr;a.cliques+=r.cliques;a.inv+=r.inv;a.rec+=r.rec;a.vendas+=r.vd+r.vi;
 }
 const ads=[...byMlb.values()];
-const CLS={
-  escalar:{t:'Pode escalar',n:'ROAS ≥ 20: retorno alto, aguenta mais verba',c:'var(--c-escalar)'},
-  ok:{t:'Saudável',n:'Vendeu com ACOS até 15%',c:'var(--c-ok)'},
-  alto:{t:'ACOS alto',n:'Vendeu, mas o anúncio custou mais de 15% da receita',c:'var(--c-alto)'},
-  sem:{t:'Sem retorno',n:'Gastou e não vendeu nada',c:'var(--c-sem)'},
-  zero:{t:'Sem gasto',n:'Não consumiu verba no período',c:'var(--ink3)'}
-};
 for(const a of ads){
-  a.acos=a.rec>0?a.inv/a.rec:null; a.roas=a.inv>0?a.rec/a.inv:null; a.ctr=a.impr>0?a.cliques/a.impr:null;
-  a.cls = a.inv<=0?'zero': a.rec<=0?'sem': a.acos>0.15?'alto': a.roas>=20?'escalar':'ok';
+  a.acos=a.rec>0?a.inv/a.rec:null; a.roas=a.inv>0?a.rec/a.inv:null;
   // Financeiro do anúncio: todas as vendas dele no período (margem nula = algo desconhecido)
   const f = DATA.fin[a.mlb];
   if(f){
@@ -265,38 +278,26 @@ for(const a of ads){
     a.margem = f.margem;
   } else {
     Object.assign(a,{sku:'',unid:0,fat:0,cmv:0,taxa:0,frete:0,outros:0,imp:0,semCusto:false});
-    // Sem venda nenhuma no sistema: a margem é zero de verdade — a não ser que a planilha diga que vendeu.
+    // Sem venda nenhuma no sistema: a margem é zero de verdade — a não ser que o relatório diga que vendeu.
     a.naoLocalizada = a.vendas>0;
     a.margem = a.naoLocalizada?null:0;
   }
   a.lucro = a.margem==null?null:a.margem-a.inv;
   a.margemPct = a.margem!=null&&a.fat>0?a.margem/a.fat:null;
   a.tacos = a.fat>0?a.inv/a.fat:null;
-  a.res = a.inv<=0?'zero': a.margem==null?'desc': a.fat<=0?'gasto': a.margem<0?'prod': a.lucro<0?'ads':'lucro';
+  a.poucas = a.fat>0 && a.unid<POUCAS_UNIDADES;
+  a.acao = a.inv<=0?'':
+    a.margem==null?'conferir':
+    a.fat<=0?((a.inv>=MIN_GASTO||a.cliques>=MIN_CLIQUES)?'pausar':'ruido'):
+    a.margem<0?'preco':
+    a.lucro<0?'reduzir':
+    (a.rec>0 && a.tacos<=a.margemPct/2 && !a.poucas)?'escalar':'manter';
 }
-const RES={
-  prod:{t:'Produto no prejuízo',n:'Perde dinheiro mesmo sem o Ads (custo, frete ou tarifa)',c:'var(--neg)'},
-  ads:{t:'Ads gera prejuízo',n:'O produto dá margem, mas o Ads consome mais que ela',c:'var(--c-alto)'},
-  gasto:{t:'Gastou sem vender',n:'Nenhuma venda do anúncio no período, nem sem Ads',c:'var(--ink3)'},
-  lucro:{t:'Dá lucro',n:'Sobra dinheiro depois do Ads',c:'var(--pos)'},
-  desc:{t:'Sem custo',n:'Falta custo, tarifa ou frete, ou a venda não foi localizada',c:'var(--navy4)'},
-  zero:{t:'Sem gasto',n:'',c:'var(--ink3)'}
-};
-
-// KPIs
-const T = rows.reduce((t,r)=>{t.impr+=r.impr;t.cl+=r.cliques;t.inv+=r.inv;t.rec+=r.rec;t.vd+=r.vd;t.vi+=r.vi;return t},{impr:0,cl:0,inv:0,rec:0,vd:0,vi:0});
-const sem = ads.filter(a=>a.cls==='sem'); const semInv = sem.reduce((s,a)=>s+a.inv,0);
-const comGasto = ads.filter(a=>a.inv>0).length;
-document.getElementById('kpis').innerHTML = [
-  ['Investimento',brl(T.inv),`em <b>${num(comGasto)}</b> anúncios com gasto`],
-  ['Receita por Ads',brl(T.rec),`<b>${num(T.vd+T.vi)}</b> vendas (${num(T.vd)} diretas, ${num(T.vi)} indiretas)`],
-  ['ACOS',pct(T.inv/T.rec,2),`ROAS <b>${dec(T.rec/T.inv,1)}</b> · R$ ${dec(T.rec/T.inv)} de venda por R$ 1`],
-  ['Gasto sem retorno',`<span class="neg">${brl(semInv)}</span>`,`<b>${pct(semInv/T.inv,0)}</b> do investimento · ${num(sem.length)} anúncios`]
-].map(([l,v,s])=>`<div class="card span3"><div class="k-lbl">${l}</div><div class="k-val">${v}</div><div class="k-sub">${s}</div></div>`).join('');
+const g = ads.filter(a=>a.inv>0);
 
 // --- Lucro -----------------------------------------------------------------
+const T = rows.reduce((t,r)=>{t.impr+=r.impr;t.cl+=r.cliques;t.inv+=r.inv;t.rec+=r.rec;t.vd+=r.vd;t.vi+=r.vi;return t},{impr:0,cl:0,inv:0,rec:0,vd:0,vi:0});
 (function(){
-  const g = ads.filter(a=>a.inv>0);
   const ok = g.filter(a=>a.lucro!=null);
   const S = k => ok.reduce((s,a)=>s+a[k],0);
   const fat=S('fat'),cmv=S('cmv'),taxa=S('taxa'),frete=S('frete'),outros=S('outros'),imp=S('imp'),inv=S('inv');
@@ -305,144 +306,159 @@ document.getElementById('kpis').innerHTML = [
   const desc=g.filter(a=>a.lucro==null);
   const tile=(l,v,s)=>`<div class="span3" style="padding:4px 14px 4px 0">
     <div class="k-lbl">${l}</div><div class="k-val">${v}</div><div class="k-sub">${s}</div></div>`;
-  document.getElementById('kpis2').innerHTML =
-    tile('Faturamento desses anúncios',brl(fat),`<b>${num(ok.filter(a=>a.fat>0).length)}</b> anúncios com venda · ${pct(fat/DATA.fin_total_ml,0)} do ML no período`)+
-    tile('Margem antes do Ads',brl(margem),`<b>${pct(margem/fat)}</b> do faturamento`)+
-    tile('Lucro depois do Ads',`<span class="${lucro>=0?'pos':'neg'}">${brl(lucro)}</span>`,`<b>${pct(lucro/fat)}</b> do faturamento · Ads ${brl(inv)}`)+
+  $('kpis2').innerHTML =
+    tile('Faturamento desses anúncios',brl(fat),`<b>${num(ok.filter(a=>a.fat>0).length)}</b> anúncios com venda · ${DATA.fin_total_ml?pct(fat/DATA.fin_total_ml,0)+' do ML no período':''}`)+
+    tile('Margem antes do Ads',brl(margem),fat?`<b>${pct(margem/fat)}</b> do faturamento`:'')+
+    tile('Lucro depois do Ads',`<span class="${lucro>=0?'pos':'neg'}">${brl(lucro)}</span>`,(fat?`<b>${pct(lucro/fat)}</b> do faturamento · `:'')+`Ads ${brl(inv)}`)+
     tile('Anúncios no prejuízo',`<span class="neg">${brl(perda)}</span>`,`<b>${num(neg.length)}</b> anúncios · ${num(desc.length)} sem custo ficaram de fora`);
 
   // Cascata: cada barra começa onde a anterior terminou
-  const passos=[['Faturamento',fat,'tot'],['Custo do produto',-cmv],['Tarifa ML',-taxa],['Frete',-frete],['Imposto 12%',-imp]];
-  if(outros>0.005) passos.push(['Outros (fatura)',-outros]);
-  passos.push(['Margem antes do Ads',margem,'tot'],['Ads (relatório)',-inv],['Lucro',lucro,'tot']);
-  let nivel=0;
-  document.getElementById('wf').innerHTML = passos.map(([l,v,tipo])=>{
-    let ini,fim;
-    if(tipo==='tot'){ini=0;fim=v;nivel=v} else {ini=nivel+v;fim=nivel;nivel=ini}
-    const x=Math.min(ini,fim)/fat*100, w=Math.abs(fim-ini)/fat*100;
-    const cor= tipo==='tot'?(v>=0?'var(--navy2)':'var(--neg)'):(l.startsWith('Ads')?'var(--c-alto)':'var(--navy4)');
-    return `<div class="wfr" title="${l}: ${brl(v)} (${pct(v/fat)} do faturamento)">
-      <div class="wfl ${tipo==='tot'?'b':''}">${l}</div>
-      <div class="wft"><i style="left:${Math.max(0,x)}%;width:${Math.max(.4,w)}%;background:${cor}"></i></div>
-      <div class="wfv ${tipo==='tot'?'b':''}">${tipo==='tot'?'':'−'}${brl(Math.abs(v))}<span>${pct(Math.abs(v)/fat,0)}</span></div></div>`;
-  }).join('');
-  document.getElementById('wfDesc').innerHTML = `De cada R$ 100 vendidos por esses anúncios, sobram <b>R$ ${dec(lucro/fat*100)}</b> depois de tudo. O frete (${pct(frete/fat,0)}) pesa mais que o Ads (${pct(inv/fat,0)}).`;
-
-  const ordem=['prod','ads','gasto','lucro','desc'];
-  document.getElementById('res').innerHTML = ordem.map(k=>{
-    const L=g.filter(a=>a.res===k); const v=L.reduce((s,a)=>s+(a.lucro||0),0);
-    return `<div class="lg rs" data-k="${k}"><span class="sw" style="background:${RES[k].c}"></span><div style="flex:1">
-      <div class="t">${RES[k].t} <span class="n">· ${num(L.length)} anúncios</span></div>
-      <div class="n">${RES[k].n}</div></div>
-      <div class="m" style="font-weight:650;text-align:right">${k==='desc'?'<span class="muted">—</span>':`<span class="${v>=0?'pos':'neg'}">${brl(v)}</span>`}</div></div>`;
-  }).join('');
-  document.querySelectorAll('.rs').forEach(el=>el.onclick=()=>{setTab('r:'+el.dataset.k);document.getElementById('tabs').scrollIntoView({behavior:'smooth',block:'start'})});
+  if(fat>0){
+    const passos=[['Faturamento',fat,'tot'],['Custo do produto',-cmv],['Tarifa ML',-taxa],['Frete',-frete],['Imposto 12%',-imp]];
+    if(outros>0.005) passos.push(['Outros (fatura)',-outros]);
+    passos.push(['Margem antes do Ads',margem,'tot'],['Ads (relatório)',-inv],['Lucro',lucro,'tot']);
+    let nivel=0;
+    $('wf').innerHTML = passos.map(([l,v,tipo])=>{
+      let ini,fim;
+      if(tipo==='tot'){ini=0;fim=v;nivel=v} else {ini=nivel+v;fim=nivel;nivel=ini}
+      const x=Math.min(ini,fim)/fat*100, w=Math.abs(fim-ini)/fat*100;
+      const cor= tipo==='tot'?(v>=0?'var(--navy2)':'var(--neg)'):(l.startsWith('Ads')?'var(--c-alto)':'var(--navy4)');
+      return `<div class="wfr" title="${l}: ${brl(v)} (${pct(v/fat)} do faturamento)">
+        <div class="wfl ${tipo==='tot'?'b':''}">${l}</div>
+        <div class="wft"><i style="left:${Math.max(0,x)}%;width:${Math.max(.4,w)}%;background:${cor}"></i></div>
+        <div class="wfv ${tipo==='tot'?'b':''}">${tipo==='tot'?'':'−'}${brl(Math.abs(v))}<span>${pct(Math.abs(v)/fat,0)}</span></div></div>`;
+    }).join('');
+    $('wfDesc').innerHTML = `De cada R$ 100 vendidos por esses anúncios, sobram <b>R$ ${dec(lucro/fat*100)}</b> depois de tudo. Frete: ${pct(frete/fat,0)} · Ads: ${pct(inv/fat,0)} do faturamento.`;
+  } else {
+    $('wfDesc').textContent='Nenhuma venda desses anúncios no período.';
+  }
 
   const nl=g.filter(a=>a.naoLocalizada).length, sc=g.filter(a=>a.semCusto).length;
-  document.getElementById('notas').innerHTML = `<b>Como o lucro foi calculado.</b> Faturamento = todas as vendas do anúncio de ${DATA.periodo} no Noromak, com ou sem Ads.
+  $('notas').innerHTML = `<b>Como o lucro foi calculado.</b> Faturamento = todas as vendas do anúncio de ${DATA.periodo} no Noromak, com ou sem Ads.
     Custo, tarifa, frete e imposto saem do mesmo cálculo da tela Financeiro (tarifa e frete do pedido divididos entre as linhas pelo valor).
-    O Ads vem <b>só do relatório</b> (${brl(T.inv)}); o Ads da fatura do ML no mesmo período (${brl(DATA.ads_fatura)}) não entra, para não contar duas vezes.
+    O Ads vem <b>só do relatório</b> (${brl(T.inv)}); o Ads da fatura do ML no mesmo período (${brl(DATA.ads_fatura||0)}) não entra, para não contar duas vezes.
     ${DATA.frete_so_fatura?`<br>${num(DATA.frete_so_fatura)} pedidos ainda estão com o frete só da fatura (pode incluir a parte do comprador até o envio ser consultado).`:''}
     <br><b>Fora da conta, sem estimativa:</b> ${num(sc)} anúncios com venda sem custo, tarifa ou frete conhecido e ${num(nl)} que o relatório diz que venderam,
-    mas cuja venda não aparece no Noromak com esse MLB (anúncio de catálogo ou venda indireta de outro anúncio).`;
+    mas cuja venda não aparece no Noromak com esse MLB (anúncio de catálogo ou venda indireta de outro anúncio).
+    <br><b>Recomendação:</b> "poucas vendas" = menos de ${POUCAS_UNIDADES} unidades no período — confira antes de mexer no preço.`;
 })();
 
-document.getElementById('funnel').innerHTML = [
-  ['Impressões',num(T.impr),''],
-  ['Cliques',num(T.cl),`CTR ${pct(T.cl/T.impr,2)}`],
-  ['Vendas',num(T.vd+T.vi),`CVR ${pct((T.vd+T.vi)/T.cl,1)} dos cliques`],
-  ['Custo por clique',brl(T.inv/T.cl),''],
-  ['Custo por venda',brl(T.inv/(T.vd+T.vi)),''],
-  ['Ticket por venda',brl(T.rec/(T.vd+T.vi)),'']
-].map(([l,v,r])=>`<div class="fstep"><div class="l">${l}</div><div class="v">${v}</div><div class="r">${r||'&nbsp;'}</div></div>`).join('');
-
-// Investimento por classe
-const order=['escalar','ok','alto','sem'];
-const agg=Object.fromEntries(order.map(k=>[k,{n:0,inv:0,rec:0}]));
-for(const a of ads) if(agg[a.cls]){agg[a.cls].n++;agg[a.cls].inv+=a.inv;agg[a.cls].rec+=a.rec}
-document.getElementById('stack').innerHTML = order.map(k=>`<div title="${CLS[k].t}: ${brl(agg[k].inv)} (${pct(agg[k].inv/T.inv,0)})" style="flex:${agg[k].inv};background:${CLS[k].c}"></div>`).join('');
-document.getElementById('legend').innerHTML = order.map(k=>`<div class="lg" data-k="${k}"><span class="sw" style="background:${CLS[k].c}"></span><div>
-  <div class="t">${CLS[k].t} <span class="m">· ${brl(agg[k].inv)}</span> <span class="n">(${pct(agg[k].inv/T.inv,0)})</span></div>
-  <div class="n">${num(agg[k].n)} anúncios · receita ${brl(agg[k].rec)}</div>
-  <div class="n">${CLS[k].n}</div></div></div>`).join('');
-document.querySelectorAll('.lg').forEach(el=>el.onclick=()=>{setTab(el.dataset.k);document.getElementById('tabs').scrollIntoView({behavior:'smooth',block:'start'})});
-
-// Pareto: anúncios com gasto, do maior para o menor em receita
+// --- O que fazer -------------------------------------------------------------
 (function(){
-  const list = ads.filter(a=>a.inv>0).sort((a,b)=>b.rec-a.rec);
-  const n=list.length; let acc=0; const pts=list.map((a,i)=>{acc+=a.rec;return {x:(i+1)/n,y:acc/T.rec,a,i}});
-  const i80 = pts.findIndex(p=>p.y>=0.8); const vendem = list.filter(a=>a.rec>0).length;
-  document.getElementById('paretoDesc').innerHTML = `<b>${num(i80+1)}</b> anúncios (${pct((i80+1)/n,0)} dos que tiveram gasto) trazem 80% da receita de Ads. Só ${num(vendem)} de ${num(n)} venderam alguma coisa.`;
-  const W=640,H=230,m={l:44,r:12,t:10,b:30},iw=W-m.l-m.r,ih=H-m.t-m.b;
-  const X=x=>m.l+x*iw, Y=y=>m.t+(1-y)*ih;
-  let g='';
-  for(const t of [0,.25,.5,.75,1]){g+=`<line x1="${m.l}" x2="${W-m.r}" y1="${Y(t)}" y2="${Y(t)}" stroke="var(--line2)"/><text x="${m.l-8}" y="${Y(t)+4}" text-anchor="end" font-size="11">${t*100}%</text>`}
-  for(const t of [0,.25,.5,.75,1]){g+=`<text x="${X(t)}" y="${H-10}" text-anchor="middle" font-size="11">${t*100}%</text>`}
-  g+=`<text x="${W-m.r}" y="${H-10+0}" text-anchor="end" font-size="11" dy="0" style="display:none"></text>`;
-  const d='M'+X(0)+','+Y(0)+' '+pts.map(p=>`L${X(p.x).toFixed(1)},${Y(p.y).toFixed(1)}`).join(' ');
-  const p80=pts[i80];
-  g+=`<path d="${d} L${X(1)},${Y(0)} Z" fill="var(--navy3)" opacity=".12"/>`;
-  g+=`<path d="${d}" fill="none" stroke="var(--navy2)" stroke-width="2"/>`;
-  g+=`<line x1="${X(p80.x)}" x2="${X(p80.x)}" y1="${Y(0)}" y2="${Y(.8)}" stroke="var(--ink3)" stroke-dasharray="3 3"/><line x1="${m.l}" x2="${X(p80.x)}" y1="${Y(.8)}" y2="${Y(.8)}" stroke="var(--ink3)" stroke-dasharray="3 3"/>`;
-  g+=`<circle cx="${X(p80.x)}" cy="${Y(.8)}" r="4" fill="var(--navy2)" stroke="var(--tile)" stroke-width="2"/><text x="${X(p80.x)+8}" y="${Y(.8)+16}" font-size="11.5" style="fill:var(--ink)">${num(i80+1)} anúncios = 80%</text>`;
-  g+=`<text x="${X(.5)}" y="${H+4}" text-anchor="middle" font-size="11">% dos anúncios com gasto (maior receita primeiro)</text>`;
-  g+=`<line id="hx" y1="${m.t}" y2="${Y(0)}" stroke="var(--ink3)" style="display:none"/><circle id="hd" r="4" fill="var(--navy2)" stroke="var(--tile)" stroke-width="2" style="display:none"/>`;
-  g+=`<rect x="${m.l}" y="${m.t}" width="${iw}" height="${ih}" fill="transparent" id="hit"/>`;
-  const box=document.getElementById('pareto'); box.insertAdjacentHTML('beforeend',`<svg viewBox="0 0 ${W} ${H+8}" role="img" aria-label="Curva de concentração da receita">${g}</svg>`);
-  const svg=box.querySelector('svg'),tip=box.querySelector('.tip'),hx=svg.querySelector('#hx'),hd=svg.querySelector('#hd');
-  svg.querySelector('#hit').addEventListener('mousemove',e=>{
-    const r=svg.getBoundingClientRect(); const sx=(e.clientX-r.left)/r.width*W;
-    const i=Math.max(0,Math.min(n-1,Math.round((sx-m.l)/iw*n)-1)); const p=pts[i];
-    hx.setAttribute('x1',X(p.x));hx.setAttribute('x2',X(p.x));hx.style.display='';hd.setAttribute('cx',X(p.x));hd.setAttribute('cy',Y(p.y));hd.style.display='';
-    tip.innerHTML=`<b>${num(i+1)}</b> anúncios → <b>${pct(p.y,0)}</b> da receita<br><span class="muted">#${i+1}: ${esc(p.a.titulo.slice(0,46))} · ${brl(p.a.rec)}</span>`;
-    tip.style.display='block'; const px=X(p.x)/W*r.width; tip.style.left=Math.min(px+12,r.width-tip.offsetWidth)+'px'; tip.style.top=(Y(p.y)/(H+8)*r.height-50)+'px';
-  });
-  svg.querySelector('#hit').addEventListener('mouseleave',()=>{tip.style.display='none';hx.style.display='none';hd.style.display='none'});
+  const grupos=ORDEM.map(k=>{const L=g.filter(a=>a.acao===k);return {k,L,inv:L.reduce((s,a)=>s+a.inv,0),
+    lucro:L.reduce((s,a)=>s+(a.lucro||0),0),poucas:L.filter(a=>a.poucas).length}}).filter(x=>x.L.length);
+  $('stack').innerHTML = grupos.map(x=>`<div title="${ACAO[x.k].t}: ${brl(x.inv)} de Ads (${pct(x.inv/T.inv,0)})" style="flex:${x.inv};background:${ACAO[x.k].c}"></div>`).join('');
+  $('acoesLista').innerHTML = grupos.map(x=>{
+    const valor = x.k==='conferir'?dash:`<span class="${x.lucro>=0?'pos':'neg'}">${brl(x.lucro)}</span>`;
+    return `<div class="lg ac" data-k="${x.k}"><span class="sw" style="background:${ACAO[x.k].c}"></span><div style="flex:1;min-width:0">
+      <div class="t">${ACAO[x.k].t} <span class="n">· ${num(x.L.length)} anúncios · Ads ${brl(x.inv)}</span></div>
+      <div class="n">${ACAO[x.k].n}${x.poucas&&(x.k==='preco'||x.k==='reduzir')?` <b>${num(x.poucas)} com poucas vendas.</b>`:''}</div></div>
+      <div class="m" style="font-weight:650;text-align:right;white-space:nowrap" title="Lucro depois do Ads do grupo">${valor}</div></div>`;
+  }).join('');
+  document.querySelectorAll('.ac').forEach(el=>el.onclick=()=>{setTab(el.dataset.k);$('lista').scrollIntoView({behavior:'smooth',block:'start'})});
 })();
+
+// --- Dispersão: margem × Ads -----------------------------------------------
+(function(){
+  const P=g.filter(a=>a.fat>0&&a.margemPct!=null&&a.acao);
+  const acima=P.filter(a=>a.tacos>a.margemPct).length;
+  $('dispDesc').innerHTML = `Cada ponto é um anúncio que vendeu. Acima da linha, o Ads consome mais que a margem do produto e o anúncio dá prejuízo (<b>${num(acima)}</b> de ${num(P.length)}). À esquerda do zero, o produto já perde sem Ads. Clique num ponto para ver o anúncio.`;
+  if(!P.length){$('disp').insertAdjacentHTML('beforeend','<p class="muted">Sem anúncios com venda e custo conhecido.</p>');return}
+  const W=640,H=300,m={l:46,r:14,t:10,b:38},iw=W-m.l-m.r,ih=H-m.t-m.b;
+  const X0=-0.4,X1=0.6,Y1=Math.min(0.6,Math.max(0.2,Math.ceil(Math.max(...P.map(a=>a.tacos))*10)/10));
+  const cx=v=>Math.max(X0,Math.min(X1,v)), cy=v=>Math.max(0,Math.min(Y1,v));
+  const X=v=>m.l+(cx(v)-X0)/(X1-X0)*iw, Y=v=>m.t+(1-cy(v)/Y1)*ih;
+  let s='';
+  // área de prejuízo (y > x): acima da diagonal, e tudo à esquerda do zero
+  const t=Math.min(X1,Y1);
+  const poly=[[X0,0],[0,0],[t,t]].concat(X1>Y1?[]:[[X1,Y1]]).concat([[X0,Y1]]);
+  s+=`<polygon points="${poly.map(([a,b])=>X(a)+','+Y(b)).join(' ')}" fill="#b42318" opacity=".06"/>`;
+  for(let v=X0;v<=X1+1e-9;v+=0.2){const x=X(v);s+=`<line x1="${x}" x2="${x}" y1="${m.t}" y2="${m.t+ih}" stroke="var(--line2)"/><text x="${x}" y="${H-m.b+16}" text-anchor="middle" font-size="11">${v<-1e-9?'−':''}${Math.abs(Math.round(v*100))}%</text>`}
+  for(let v=0;v<=Y1+1e-9;v+=0.1){const y=Y(v);s+=`<line x1="${m.l}" x2="${W-m.r}" y1="${y}" y2="${y}" stroke="var(--line2)"/><text x="${m.l-7}" y="${y+4}" text-anchor="end" font-size="11">${Math.round(v*100)}%</text>`}
+  s+=`<line x1="${X(0)}" x2="${X(0)}" y1="${m.t}" y2="${m.t+ih}" stroke="var(--ink3)"/>`;
+  s+=`<line x1="${X(0)}" y1="${Y(0)}" x2="${X(t)}" y2="${Y(t)}" stroke="var(--ink2)" stroke-dasharray="4 3"/>`;
+  s+=`<text x="${X(t)-4}" y="${Y(t)+14}" text-anchor="end" font-size="11" style="fill:var(--ink2)">empata</text>`;
+  s+=`<text x="${X(X0)+6}" y="${m.t+14}" font-size="11" style="fill:#b42318">prejuízo</text>`;
+  s+=`<text x="${m.l+iw/2}" y="${H-4}" text-anchor="middle" font-size="11">Margem antes do Ads (% do faturamento)</text>`;
+  s+=`<text transform="translate(12 ${m.t+ih/2}) rotate(-90)" text-anchor="middle" font-size="11">Ads (% do faturamento)</text>`;
+  // pontos: os maiores em faturamento por baixo
+  const ord=[...P].sort((a,b)=>b.fat-a.fat);
+  s+=ord.map(a=>{const fora=a.margemPct<X0||a.margemPct>X1||a.tacos>Y1;
+    return `<circle data-m="${a.mlb}" cx="${X(a.margemPct).toFixed(1)}" cy="${Y(a.tacos).toFixed(1)}" r="4.5" fill="${ACAO[a.acao].c}" stroke="${fora?'var(--ink)':'#fff'}" stroke-width="${fora?1.5:2}"/>`}).join('');
+  const box=$('disp'); box.insertAdjacentHTML('beforeend',`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Margem do produto contra gasto com Ads por anúncio">${s}</svg>`);
+  const svg=box.querySelector('svg'),tip=box.querySelector('.tip');
+  const porM=new Map(P.map(a=>[a.mlb,a]));
+  const perto=e=>{const r=svg.getBoundingClientRect();let best=null,bd=14*14;
+    for(const c of svg.querySelectorAll('circle[data-m]')){const b=c.getBoundingClientRect();const dx=b.x+b.width/2-e.clientX,dy=b.y+b.height/2-e.clientY,d=dx*dx+dy*dy;if(d<bd){bd=d;best=c}}
+    return best?porM.get(best.dataset.m):null};
+  svg.addEventListener('mousemove',e=>{const a=perto(e);if(!a){tip.style.display='none';return}
+    tip.innerHTML=`<b>${esc(a.titulo.slice(0,52))}</b><br>Margem ${pct(a.margemPct)} · Ads ${pct(a.tacos)} do faturamento<br>Lucro <b class="${a.lucro<0?'neg':'pos'}">${brl(a.lucro)}</b> · ${num(a.unid)} un. · ${ACAO[a.acao].t}`;
+    tip.style.display='block';const r=box.getBoundingClientRect();
+    tip.style.left=Math.min(e.clientX-r.left+12,r.width-tip.offsetWidth-4)+'px';tip.style.top=(e.clientY-r.top+12)+'px'});
+  svg.addEventListener('mouseleave',()=>{tip.style.display='none'});
+  svg.addEventListener('click',e=>{const a=perto(e);if(!a)return;st.q=a.mlb;$('q').value=a.mlb;setTab('todos');$('lista').scrollIntoView({behavior:'smooth',block:'start'})});
+  const usados=ORDEM.filter(k=>P.some(a=>a.acao===k));
+  $('dispLeg').innerHTML=usados.map(k=>`<span><i style="background:${ACAO[k].c}"></i>${ACAO[k].t}</span>`).join('')+'<span class="muted">contorno escuro = valor fora da escala, preso na borda</span>';
+})();
+
+// --- Desempenho do Ads (métrica do ML) --------------------------------------
+const semRet = g.filter(a=>a.rec<=0); const semRetInv = semRet.reduce((s,a)=>s+a.inv,0);
+$('kpis').innerHTML = [
+  ['Investimento',brl(T.inv),`${num(g.length)} anúncios com gasto`],
+  ['Receita pelo Ads',brl(T.rec),`${num(T.vd+T.vi)} vendas (${num(T.vd)} diretas)`],
+  ['ACOS',T.rec?pct(T.inv/T.rec,2):'—',T.inv?`ROAS ${dec(T.rec/T.inv,1)}`:''],
+  ['Ads sem venda atribuída',`<span class="neg">${brl(semRetInv)}</span>`,`${T.inv?pct(semRetInv/T.inv,0):''} · ${num(semRet.length)} anúncios`]
+].map(([l,v,s])=>`<div class="span6" style="padding-right:12px"><div class="k-lbl">${l}</div><div class="k-val" style="font-size:21px">${v}</div><div class="k-sub">${s}</div></div>`).join('');
+
+$('funnel').innerHTML = [
+  ['Impressões',num(T.impr),''],
+  ['Cliques',num(T.cl),T.impr?`CTR ${pct(T.cl/T.impr,2)}`:''],
+  ['Vendas',num(T.vd+T.vi),T.cl?`CVR ${pct((T.vd+T.vi)/T.cl,1)} dos cliques`:''],
+  ['Custo por clique',T.cl?brl(T.inv/T.cl):'—',''],
+  ['Custo por venda',(T.vd+T.vi)?brl(T.inv/(T.vd+T.vi)):'—',''],
+  ['Ticket por venda',(T.vd+T.vi)?brl(T.rec/(T.vd+T.vi)):'—','']
+].map(([l,v,r])=>`<div class="fstep"><div class="l">${l}</div><div class="v">${v}</div><div class="r">${r||'&nbsp;'}</div></div>`).join('');
 
 // Campanhas
 (function(){
   const m=new Map();
   for(const r of rows){let c=m.get(r.camp);if(!c){c={camp:r.camp,anuncios:new Set(),impr:0,cl:0,inv:0,rec:0,v:0};m.set(r.camp,c)}c.anuncios.add(r.mlb);c.impr+=r.impr;c.cl+=r.cliques;c.inv+=r.inv;c.rec+=r.rec;c.v+=r.vd+r.vi}
-  const list=[...m.values()].sort((a,b)=>b.inv-a.inv); const max=list[0].inv;
-  document.getElementById('camp').innerHTML=`<tr><th>Campanha</th><th>Anúncios</th><th class="barcell">Investimento</th><th>Receita</th><th>Vendas</th><th>Cliques</th><th>ACOS</th><th>ROAS</th></tr>`+
-   list.map(c=>`<tr><td>${esc(c.camp)}</td><td>${num(c.anuncios.size)}</td><td class="barcell"><i class="bar" style="width:${Math.max(.5,c.inv/max*75)}%"></i><span>${brl(c.inv)}</span></td><td>${brl(c.rec)}</td><td>${num(c.v)}</td><td>${num(c.cl)}</td><td>${c.rec>0?pct(c.inv/c.rec):'<span class="muted">—</span>'}</td><td>${c.inv>0&&c.rec>0?dec(c.rec/c.inv,1):'<span class="muted">—</span>'}</td></tr>`).join('');
+  const list=[...m.values()].sort((a,b)=>b.inv-a.inv); const max=Math.max(list[0]?list[0].inv:0,0.01);
+  $('camp').innerHTML=`<tr><th>Campanha</th><th>Anúncios</th><th class="barcell">Investimento</th><th>Receita</th><th>Vendas</th><th>Cliques</th><th>ACOS</th><th>ROAS</th></tr>`+
+   list.map(c=>`<tr><td>${esc(c.camp)}</td><td>${num(c.anuncios.size)}</td><td class="barcell"><i class="bar" style="width:${Math.max(.5,c.inv/max*75)}%"></i><span>${brl(c.inv)}</span></td><td>${brl(c.rec)}</td><td>${num(c.v)}</td><td>${num(c.cl)}</td><td>${c.rec>0?pct(c.inv/c.rec):dash}</td><td>${c.inv>0&&c.rec>0?dec(c.rec/c.inv,1):dash}</td></tr>`).join('');
 })();
 
-// Lista de anúncios. Filtros "r:" = resultado com custo; os demais = desempenho do Ads.
-const TABS=[['r:prod','Produto no prejuízo'],['r:ads','Ads gera prejuízo'],['r:gasto','Gastou sem vender'],['r:lucro','Dá lucro'],['r:desc','Sem custo'],['|','Ads:'],
-  ['sem','Sem retorno'],['alto','ACOS alto'],['escalar','Pode escalar'],['ok','Saudável'],['todos','Todos com gasto']];
+// --- Lista de anúncios ------------------------------------------------------
 const COLS=[
-  ['titulo','Anúncio','l'],['res','Resultado','l'],['cliques','Cliques'],['inv','Ads'],['rec','Receita Ads'],['acos','ACOS'],
+  ['titulo','Anúncio','l'],['acao','O que fazer','l'],['cliques','Cliques'],['inv','Ads'],['rec','Receita Ads'],['acos','ACOS'],
   ['fat','Faturamento'],['margem','Margem antes do Ads'],['tacos','Ads / fat.'],['lucro','Lucro final']
 ];
-const st={tab:'r:prod',sort:'lucro',dir:1,q:'',lim:50};
-const DEF_SORT={'r:prod':['lucro',1],'r:ads':['lucro',1],'r:gasto':['inv',-1],'r:lucro':['lucro',-1],'r:desc':['inv',-1],
-  sem:['inv',-1],alto:['inv',-1],escalar:['roas',-1],ok:['rec',-1],todos:['lucro',1]};
-const match=(a,k)=>k==='todos'?a.inv>0:k.startsWith('r:')?(a.inv>0&&a.res===k.slice(2)):a.cls===k;
+const DEF_SORT={preco:['lucro',1],reduzir:['lucro',1],pausar:['inv',-1],escalar:['lucro',-1],manter:['lucro',-1],
+  conferir:['inv',-1],ruido:['inv',-1],todos:['lucro',1]};
+const st={tab:(ORDEM.find(k=>g.some(a=>a.acao===k))||'todos'),sort:'lucro',dir:1,q:'',lim:50};
+[st.sort,st.dir]=DEF_SORT[st.tab];
+const match=(a,k)=>k==='todos'?a.inv>0:a.acao===k;
 function setTab(k){st.tab=k;[st.sort,st.dir]=DEF_SORT[k];st.lim=50;render()}
-const dash='<span class="muted">—</span>';
 function quebra(a){
   if(a.margem==null) return a.semCusto?'Falta custo, tarifa ou frete de alguma venda':'Venda não localizada no Noromak';
-  return `Faturamento ${brl(a.fat)}\n− custo ${brl(a.cmv)}\n− tarifa ${brl(a.taxa)}\n− frete ${brl(a.frete)}\n− imposto ${brl(a.imp)}`+
+  return `Faturamento ${brl(a.fat)} (${num(a.unid)} un.)\n− custo ${brl(a.cmv)}\n− tarifa ${brl(a.taxa)}\n− frete ${brl(a.frete)}\n− imposto ${brl(a.imp)}`+
     (a.outros>0.005?`\n− outros ${brl(a.outros)}`:'')+`\n= margem ${brl(a.margem)}\n− Ads ${brl(a.inv)}\n= lucro ${brl(a.lucro)}`;
 }
 function render(){
-  const cnt=k=>ads.filter(a=>match(a,k)).length;
-  document.getElementById('tabs').innerHTML=TABS.map(([k,t])=>{
-    if(k==='|') return `<span class="sub" style="align-self:center;margin:0 2px 0 8px">${t}</span>`;
-    const c=k.startsWith('r:')?RES[k.slice(2)].c:(CLS[k]||{}).c;
-    return `<button class="tab ${st.tab===k?'on':''}" data-k="${k}">${c?`<i class="dot" style="background:${c}"></i>`:''}${t} <span>${num(cnt(k))}</span></button>`}).join('');
+  const cnt=k=>g.filter(a=>match(a,k)).length;
+  $('tabs').innerHTML=ORDEM.concat(['todos']).filter(k=>k==='todos'||cnt(k)).map(k=>{
+    const c=ACAO[k]?ACAO[k].c:'';
+    return `<button class="tab ${st.tab===k?'on':''}" data-k="${k}">${c?`<i class="dot" style="background:${c}"></i>`:''}${ACAO[k]?ACAO[k].t:'Todos com gasto'} <span>${num(cnt(k))}</span></button>`}).join('');
   document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>setTab(b.dataset.k));
   const q=st.q.trim().toLowerCase();
-  let L=ads.filter(a=>match(a,st.tab)&&(!q||a.titulo.toLowerCase().includes(q)||a.mlb.toLowerCase().includes(q)||(a.sku||'').toLowerCase().includes(q)));
-  const key=st.sort; L.sort((a,b)=>{let x=a[key],y=b[key]; if(x==null)return 1; if(y==null)return -1; return (typeof x==='string'?x.localeCompare(y):x-y)*st.dir});
+  let L=g.filter(a=>match(a,st.tab)&&(!q||a.titulo.toLowerCase().includes(q)||a.mlb.toLowerCase().includes(q)||(a.sku||'').toLowerCase().includes(q)));
+  const key=st.sort; L.sort((a,b)=>{let x=a[key],y=b[key]; if(key==='acao'){x=ORDEM.indexOf(x);y=ORDEM.indexOf(y)} if(x==null)return 1; if(y==null)return -1; return (typeof x==='string'?x.localeCompare(y):x-y)*st.dir});
   const sm=k=>L.reduce((s,a)=>s+(a[k]||0),0);
   const head=`<tr>${COLS.map(([k,t,c])=>`<th class="${c||''} ${st.sort===k?'sorted':''}" data-k="${k}">${t}${st.sort===k?(st.dir<0?' ↓':' ↑'):''}</th>`).join('')}</tr>`;
   const body=L.slice(0,st.lim).map(a=>`<tr>
     <td class="l ttl"><a href="https://produto.mercadolivre.com.br/${a.mlb.replace('MLB','MLB-')}" target="_blank" rel="noopener">${esc(a.titulo)}</a>
-      <div class="mlb">${a.mlb}${a.sku?' · SKU '+esc(a.sku):''} · ${esc(a.status)} · Ads: ${CLS[a.cls].t}</div></td>
-    <td class="l"><span class="chip"><i style="background:${RES[a.res].c}"></i>${RES[a.res].t}</span></td>
+      <div class="mlb">${a.mlb}${a.sku?' · SKU '+esc(a.sku):''} · ${esc(a.status)}</div></td>
+    <td class="l"><span class="chip" title="${esc(ACAO[a.acao].n)}"><i style="background:${ACAO[a.acao].c}"></i>${ACAO[a.acao].t}</span>${a.poucas?'<div><span class="tag" title="Menos de '+POUCAS_UNIDADES+' unidades no período: um pedido só pode distorcer o resultado">poucas vendas</span></div>':''}</td>
     <td>${num(a.cliques)}</td><td>${brl(a.inv)}</td><td>${a.rec>0?brl(a.rec):dash}</td><td>${a.acos!=null?pct(a.acos):dash}</td>
     <td>${a.fat>0?brl(a.fat)+`<div class="mlb">${num(a.unid)} un.</div>`:dash}</td>
     <td>${a.margem==null?dash:a.fat>0?`<span class="${a.margem<0?'neg':''}">${brl(a.margem)}</span><div class="mlb">${pct(a.margemPct)}</div>`:dash}</td>
@@ -452,12 +468,12 @@ function render(){
   const lu=L.filter(a=>a.lucro!=null).reduce((s,a)=>s+a.lucro,0);
   const foot=L.length?`<tr><td class="l" colspan="3" style="font-weight:600">${num(L.length)} anúncios</td><td style="font-weight:600">${brl(sm('inv'))}</td><td style="font-weight:600">${brl(sm('rec'))}</td><td></td>
     <td style="font-weight:600">${brl(sm('fat'))}</td><td></td><td></td><td style="font-weight:650" class="${lu<0?'neg':'pos'}">${brl(lu)}</td></tr>`:'';
-  document.getElementById('ads').innerHTML=head+body+foot;
-  document.querySelectorAll('.ads th').forEach(th=>th.onclick=()=>{const k=th.dataset.k;if(st.sort===k)st.dir*=-1;else{st.sort=k;st.dir=(k==='titulo'||k==='res')?1:-1}render()});
-  const more=document.getElementById('more'); more.style.display=L.length>st.lim?'':'none'; more.textContent=`Mostrar mais (${num(L.length-st.lim)} restantes)`;
+  $('ads').innerHTML=head+body+foot;
+  document.querySelectorAll('.ads th').forEach(th=>th.onclick=()=>{const k=th.dataset.k;if(st.sort===k)st.dir*=-1;else{st.sort=k;st.dir=(k==='titulo'||k==='acao')?1:-1}render()});
+  const more=$('more'); more.style.display=L.length>st.lim?'':'none'; more.textContent=`Mostrar mais (${num(L.length-st.lim)} restantes)`;
 }
-document.getElementById('more').onclick=()=>{st.lim+=100;render()};
-document.getElementById('q').oninput=e=>{st.q=e.target.value;st.lim=50;render()};
+$('more').onclick=()=>{st.lim+=100;render()};
+$('q').oninput=e=>{st.q=e.target.value;st.lim=50;render()};
 render();
 }
 })();
