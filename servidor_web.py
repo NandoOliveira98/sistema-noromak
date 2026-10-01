@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.53-FRETE-SO-DO-VENDEDOR"
+APP_VERSION = "18.54-ANALISE-DE-ADS"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -1944,6 +1944,38 @@ def init_db() -> None:
                 pedidos INTEGER NOT NULL DEFAULT 0,
                 updated_at TEXT NOT NULL DEFAULT ''
             );
+            -- V18.54: Análise de ADS. O relatório "Anúncios patrocinados" que o ML
+            -- deixa baixar em Publicidade > Relatórios (.xlsx), importado à mão.
+            -- Um relatório por período: importar o mesmo período de novo substitui.
+            CREATE TABLE IF NOT EXISTS ads_relatorio_v1854 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                periodo_inicio TEXT NOT NULL,
+                periodo_fim TEXT NOT NULL,
+                arquivo TEXT NOT NULL DEFAULT '',
+                linhas INTEGER NOT NULL DEFAULT 0,
+                anuncios INTEGER NOT NULL DEFAULT 0,
+                investimento REAL NOT NULL DEFAULT 0,
+                receita REAL NOT NULL DEFAULT 0,
+                importado_em TEXT NOT NULL DEFAULT '',
+                importado_por TEXT NOT NULL DEFAULT '',
+                UNIQUE(periodo_inicio, periodo_fim)
+            );
+            CREATE TABLE IF NOT EXISTS ads_relatorio_linha_v1854 (
+                relatorio_id INTEGER NOT NULL,
+                ordem INTEGER NOT NULL,
+                mlb TEXT NOT NULL,
+                titulo TEXT NOT NULL DEFAULT '',
+                campanha TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT '',
+                impressoes INTEGER NOT NULL DEFAULT 0,
+                cliques INTEGER NOT NULL DEFAULT 0,
+                investimento REAL NOT NULL DEFAULT 0,
+                receita REAL NOT NULL DEFAULT 0,
+                vendas_diretas INTEGER NOT NULL DEFAULT 0,
+                vendas_indiretas INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY(relatorio_id, ordem)
+            );
+            CREATE INDEX IF NOT EXISTS idx_ads_relatorio_linha_mlb ON ads_relatorio_linha_v1854(mlb);
             -- V18.31: custo da venda NO ATO DA VENDA, como o ML mostra no detalhe do
             -- pedido ("Tarifa de venda total" e "Tarifa do Mercado Envios por sua
             -- conta"). Capturado junto com a sincronização de vendas, sem nenhuma
@@ -13706,8 +13738,9 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
         p["unidades"] += qty
         p["faturamento"] = round(p["faturamento"] + receita, 2)
         p["imposto"] = round(p["imposto"] + imposto, 2)
+        # V18.54: o anúncio (MLB) da linha — a Análise de ADS soma o lucro por anúncio.
         p["itens"].append({"sku": sku, "titulo": str(v["title"] or ""), "qty": qty, "valor": receita,
-                           "custo_unitario": unit, "cmv": cmv})
+                           "custo_unitario": unit, "cmv": cmv, "anuncio": str(v["anuncio"] or "")})
         if cmv is None:
             p["sem_custo"] = True
         else:
@@ -13790,7 +13823,9 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
         p["margem_liquida"] = round(p["lucro_liquido"] / p["faturamento"] * 100, 2) if (p["lucro_liquido"] is not None and p["faturamento"]) else None
         lista_pedidos.append(p)
     lista_pedidos.sort(key=lambda x: (x["lucro_liquido"] is None, x["lucro_liquido"] if x["lucro_liquido"] is not None else 0))
-    limite = max(20, min(2000, int(limite_pedidos or 400)))
+    # V18.54: limite_pedidos=0 devolve todos (uso interno da Análise de ADS; a rota
+    # /api/financeiro/resumo continua com o padrão de 400).
+    limite = len(lista_pedidos) if limite_pedidos == 0 else max(20, min(2000, int(limite_pedidos or 400)))
 
     dias_lista = []
     dia_corrente = d1
@@ -15360,6 +15395,277 @@ def compras_demanda_payload(fornecedor: str, dias: int) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# V18.54: Análise de ADS — o relatório "Anúncios patrocinados" do ML (.xlsx,
+# Publicidade > Relatórios) cruzado com o lucro de cada anúncio.
+#
+# O relatório é importado à mão e lido só com a biblioteca padrão (zipfile +
+# ElementTree). O lucro vem do MESMO cálculo do Financeiro (financeiro_payload):
+# custo do produto, tarifa, frete e imposto de TODAS as vendas do anúncio no
+# período. O Ads vem SÓ do relatório — o PADS da fatura não entra, senão o
+# mesmo gasto contaria duas vezes. Nada é estimado: venda sem custo fica nula.
+# ---------------------------------------------------------------------------
+ADS_RELATORIO_MAX_BYTES = 20 * 1024 * 1024
+ADS_RELATORIO_MESES = {"jan": 1, "fev": 2, "mar": 3, "abr": 4, "mai": 5, "jun": 6,
+                       "jul": 7, "ago": 8, "set": 9, "out": 10, "nov": 11, "dez": 12}
+# Cabeçalho do relatório (primeira linha de cada coluna, sem acento) -> campo.
+ADS_RELATORIO_COLUNAS = {
+    "desde": "desde", "ate": "ate", "campanha": "campanha",
+    "titulo do anuncio patrocinado": "titulo", "codigo do anuncio": "mlb", "status": "status",
+    "impressoes": "impressoes", "cliques": "cliques", "receita": "receita",
+    "investimento": "investimento", "vendas diretas": "vendas_diretas",
+    "vendas indiretas": "vendas_indiretas",
+}
+
+
+def _ads_norm(texto: Any) -> str:
+    primeira = str(texto or "").strip().split("\n", 1)[0]
+    sem_acento = unicodedata.normalize("NFKD", primeira).encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"\s+", " ", sem_acento).strip().lower()
+
+
+def _ads_numero(valor: Any) -> float:
+    """'2091.0', '0,46' ou '-' (o ML usa '-' para métrica sem valor) -> número."""
+    s = str(valor if valor is not None else "").strip()
+    if not s or s == "-":
+        return 0.0
+    if "," in s:
+        s = s.replace(".", "").replace(",", ".")
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
+
+
+def _ads_data(valor: Any) -> str:
+    """'31-ago-2026' (como o ML escreve) ou '31/08/2026' -> '2026-08-31'."""
+    try:
+        return _ads_data_iso(valor)
+    except ValueError:
+        return ""
+
+
+def _ads_data_iso(valor: Any) -> str:
+    s = str(valor or "").strip().lower()
+    m = re.match(r"^(\d{1,2})[-/ ]([a-zç]{3})[a-zç]*\.?[-/ ](\d{4})$", s)
+    if m and m.group(2)[:3] in ADS_RELATORIO_MESES:
+        return datetime(int(m.group(3)), ADS_RELATORIO_MESES[m.group(2)[:3]], int(m.group(1))).date().isoformat()
+    m = re.match(r"^(\d{1,2})/(\d{1,2})/(\d{4})$", s)
+    if m:
+        return datetime(int(m.group(3)), int(m.group(2)), int(m.group(1))).date().isoformat()
+    return ""
+
+
+def _ads_xlsx_planilhas(conteudo: bytes):
+    """Gera (nome, linhas) de cada planilha; cada linha é uma lista de textos."""
+    import xml.etree.ElementTree as ET
+    ns = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    ns_rel = "{http://schemas.openxmlformats.org/officeDocument/2006/relationships}"
+    try:
+        z = zipfile.ZipFile(io.BytesIO(conteudo))
+    except zipfile.BadZipFile:
+        raise ValueError("O arquivo não é uma planilha .xlsx.")
+    nomes = set(z.namelist())
+    for info in z.infolist():
+        if info.file_size > 80 * 1024 * 1024:
+            raise ValueError("Planilha grande demais para ser um relatório de Ads.")
+    textos: list[str] = []
+    if "xl/sharedStrings.xml" in nomes:
+        for si in ET.fromstring(z.read("xl/sharedStrings.xml")).findall(f"{ns}si"):
+            textos.append("".join(t.text or "" for t in si.iter(f"{ns}t")))
+    if "xl/workbook.xml" not in nomes:
+        raise ValueError("O arquivo não é uma planilha .xlsx.")
+    alvos: dict[str, str] = {}
+    if "xl/_rels/workbook.xml.rels" in nomes:
+        for rel in ET.fromstring(z.read("xl/_rels/workbook.xml.rels")):
+            alvo = str(rel.get("Target") or "").lstrip("/")
+            alvos[str(rel.get("Id") or "")] = alvo if alvo.startswith("xl/") else "xl/" + alvo
+    folhas = ET.fromstring(z.read("xl/workbook.xml")).find(f"{ns}sheets")
+    for i, folha in enumerate(list(folhas) if folhas is not None else [], start=1):
+        caminho = alvos.get(str(folha.get(f"{ns_rel}id") or ""), f"xl/worksheets/sheet{i}.xml")
+        if caminho not in nomes:
+            continue
+        linhas: list[list[str]] = []
+        for row in ET.fromstring(z.read(caminho)).iter(f"{ns}row"):
+            celulas: dict[int, str] = {}
+            for c in row.findall(f"{ns}c"):
+                ref = re.match(r"[A-Z]+", str(c.get("r") or ""))
+                if not ref:
+                    continue
+                col = 0
+                for ch in ref.group(0):
+                    col = col * 26 + ord(ch) - 64
+                v = c.find(f"{ns}v")
+                if c.get("t") == "inlineStr":
+                    texto = "".join(t.text or "" for t in c.iter(f"{ns}t"))
+                elif v is None:
+                    continue
+                elif c.get("t") == "s":
+                    idx = int(v.text or 0)
+                    texto = textos[idx] if 0 <= idx < len(textos) else ""
+                else:
+                    texto = v.text or ""
+                celulas[col - 1] = texto
+            if celulas:
+                linhas.append([celulas.get(k, "") for k in range(max(celulas) + 1)])
+        yield str(folha.get("name") or ""), linhas
+
+
+def ads_relatorio_ler_xlsx(conteudo: bytes) -> dict[str, Any]:
+    """Lê o relatório "Anúncios patrocinados" do ML. Erro claro se não for ele."""
+    if not conteudo:
+        raise ValueError("Arquivo vazio.")
+    if len(conteudo) > ADS_RELATORIO_MAX_BYTES:
+        raise ValueError("Arquivo maior que 20 MB — não parece o relatório de Ads.")
+    for _nome, linhas in _ads_xlsx_planilhas(conteudo):
+        for pos, cab in enumerate(linhas):
+            mapa = {}
+            for idx, titulo in enumerate(cab):
+                campo = ADS_RELATORIO_COLUNAS.get(_ads_norm(titulo))
+                if campo and campo not in mapa:
+                    mapa[campo] = idx
+            if not {"mlb", "investimento", "receita", "desde", "ate"} <= set(mapa):
+                continue
+            saida: list[dict[str, Any]] = []
+            inicios: set[str] = set()
+            fins: set[str] = set()
+            for bruta in linhas[pos + 1:]:
+                get = lambda campo: bruta[mapa[campo]] if (campo in mapa and mapa[campo] < len(bruta)) else ""  # noqa: E731
+                mlb = re.sub(r"[^A-Z0-9]", "", str(get("mlb")).upper())
+                if not re.match(r"^MLB\d+$", mlb):
+                    continue
+                d1, d2 = _ads_data(get("desde")), _ads_data(get("ate"))
+                if d1:
+                    inicios.add(d1)
+                if d2:
+                    fins.add(d2)
+                saida.append({
+                    "mlb": mlb, "titulo": str(get("titulo")).strip(), "campanha": str(get("campanha")).strip(),
+                    "status": str(get("status")).strip(),
+                    "impressoes": int(_ads_numero(get("impressoes"))), "cliques": int(_ads_numero(get("cliques"))),
+                    "investimento": round(_ads_numero(get("investimento")), 2),
+                    "receita": round(_ads_numero(get("receita")), 2),
+                    "vendas_diretas": int(_ads_numero(get("vendas_diretas"))),
+                    "vendas_indiretas": int(_ads_numero(get("vendas_indiretas"))),
+                })
+            if not saida:
+                raise ValueError("O relatório não tem nenhum anúncio (MLB).")
+            if not inicios or not fins:
+                raise ValueError("Não encontrei o período do relatório (colunas Desde/Até).")
+            return {"periodo_inicio": min(inicios), "periodo_fim": max(fins), "linhas": saida}
+    raise ValueError("Esta planilha não é o relatório de Anúncios patrocinados do Mercado Livre "
+                     "(Publicidade > Relatórios > Relatório de anúncios).")
+
+
+def ads_relatorio_importar(conteudo: bytes, arquivo: str = "", usuario: str = "") -> dict[str, Any]:
+    """Grava o relatório. O mesmo período importado de novo substitui o anterior."""
+    lido = ads_relatorio_ler_xlsx(conteudo)
+    linhas = lido["linhas"]
+    investimento = round(sum(x["investimento"] for x in linhas), 2)
+    receita = round(sum(x["receita"] for x in linhas), 2)
+    anuncios = len({x["mlb"] for x in linhas})
+    with DB_LOCK:
+        try:
+            DB.execute("BEGIN IMMEDIATE")
+            antigo = DB.execute("SELECT id FROM ads_relatorio_v1854 WHERE periodo_inicio=? AND periodo_fim=?",
+                                (lido["periodo_inicio"], lido["periodo_fim"])).fetchone()
+            if antigo:
+                DB.execute("DELETE FROM ads_relatorio_linha_v1854 WHERE relatorio_id=?", (antigo["id"],))
+                DB.execute("DELETE FROM ads_relatorio_v1854 WHERE id=?", (antigo["id"],))
+            cur = DB.execute(
+                "INSERT INTO ads_relatorio_v1854(periodo_inicio,periodo_fim,arquivo,linhas,anuncios,investimento,"
+                "receita,importado_em,importado_por) VALUES(?,?,?,?,?,?,?,?,?)",
+                (lido["periodo_inicio"], lido["periodo_fim"], str(arquivo or "")[:200], len(linhas), anuncios,
+                 investimento, receita, now_iso(), str(usuario or "")))
+            rid = int(cur.lastrowid)
+            DB.executemany(
+                "INSERT INTO ads_relatorio_linha_v1854(relatorio_id,ordem,mlb,titulo,campanha,status,impressoes,"
+                "cliques,investimento,receita,vendas_diretas,vendas_indiretas) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                [(rid, i, x["mlb"], x["titulo"], x["campanha"], x["status"], x["impressoes"], x["cliques"],
+                  x["investimento"], x["receita"], x["vendas_diretas"], x["vendas_indiretas"])
+                 for i, x in enumerate(linhas)])
+            DB.commit()
+        except Exception:
+            DB.rollback()
+            raise
+    return {"ok": True, "id": rid, "periodo_inicio": lido["periodo_inicio"], "periodo_fim": lido["periodo_fim"],
+            "linhas": len(linhas), "anuncios": anuncios, "investimento": investimento, "receita": receita,
+            "substituiu": bool(antigo)}
+
+
+def ads_relatorios_lista() -> list[dict[str, Any]]:
+    with DB_LOCK:
+        return [dict(r) for r in DB.execute(
+            "SELECT id, periodo_inicio, periodo_fim, arquivo, linhas, anuncios, investimento, receita, "
+            "importado_em, importado_por FROM ads_relatorio_v1854 ORDER BY periodo_fim DESC, id DESC").fetchall()]
+
+
+def ads_analise_payload(relatorio_id: int | None = None) -> dict[str, Any]:
+    relatorios = ads_relatorios_lista()
+    rel = next((r for r in relatorios if relatorio_id and int(r["id"]) == int(relatorio_id)), None) \
+        or (relatorios[0] if relatorios else None)
+    if rel is None:
+        return {"ok": True, "relatorio": None, "relatorios": []}
+    with DB_LOCK:
+        linhas = [dict(r) for r in DB.execute(
+            "SELECT mlb, titulo, campanha, status, impressoes, cliques, investimento, receita, vendas_diretas, "
+            "vendas_indiretas FROM ads_relatorio_linha_v1854 WHERE relatorio_id=? ORDER BY ordem", (rel["id"],)).fetchall()]
+    mlbs = {x["mlb"] for x in linhas}
+
+    fin = financeiro_payload(rel["periodo_inicio"], rel["periodo_fim"], "ml", limite_pedidos=0)
+    taxa_imposto = FINANCEIRO_IMPOSTO_PERCENT / 100.0
+    por: dict[str, dict[str, Any]] = {}
+    for ped in fin["pedidos"]:
+        fat_pedido = float(ped["faturamento"] or 0)
+        for it in ped["itens"]:
+            mlb = re.sub(r"[^A-Z0-9]", "", str(it.get("anuncio") or "").upper())
+            if mlb not in mlbs:
+                continue
+            a = por.setdefault(mlb, {"sku": it["sku"], "unidades": 0, "pedidos": 0, "faturamento": 0.0, "cmv": 0.0,
+                                     "taxa": 0.0, "frete": 0.0, "outros": 0.0, "imposto": 0.0,
+                                     "sem_custo": 0.0, "sem_taxa": 0.0, "sem_frete": 0.0})
+            valor = float(it["valor"] or 0)
+            # Tarifa e frete são do PEDIDO: divididos entre as linhas pelo valor, como no Financeiro.
+            fatia = (valor / fat_pedido) if fat_pedido else 1.0
+            a["unidades"] += int(it["qty"] or 0)
+            a["pedidos"] += 1
+            a["faturamento"] += valor
+            a["imposto"] += round(valor * taxa_imposto, 2)
+            if it["cmv"] is None:
+                a["sem_custo"] += valor
+            else:
+                a["cmv"] += float(it["cmv"])
+            if ped["taxa"] is None:
+                a["sem_taxa"] += valor
+            else:
+                a["taxa"] += float(ped["taxa"]) * fatia
+            if ped["frete"] is None:
+                a["sem_frete"] += valor
+            else:
+                a["frete"] += float(ped["frete"]) * fatia
+            if ped["outros"] is not None:
+                a["outros"] += float(ped["outros"]) * fatia
+    for a in por.values():
+        for k, v in list(a.items()):
+            if isinstance(v, float):
+                a[k] = round(v, 2)
+        # Margem só quando tudo é conhecido; senão fica nula (pendência visível, nunca estimada).
+        conhecido = a["sem_custo"] == 0 and a["sem_taxa"] == 0 and a["sem_frete"] == 0
+        a["margem"] = round(a["faturamento"] - a["cmv"] - a["taxa"] - a["frete"] - a["outros"] - a["imposto"], 2) \
+            if conhecido else None
+    return {
+        "ok": True, "relatorio": rel, "relatorios": relatorios,
+        "linhas": [[x["mlb"], x["titulo"], x["campanha"], x["status"], x["impressoes"], x["cliques"],
+                    x["investimento"], x["receita"], x["vendas_diretas"], x["vendas_indiretas"]] for x in linhas],
+        "financeiro": por,
+        "imposto_percent": FINANCEIRO_IMPOSTO_PERCENT,
+        "faturamento_ml": fin["totais"]["faturamento"],
+        "ads_fatura_ml": fin["ads"]["da_fatura"],
+        "cobertura": {k: fin["cobertura"].get(k) for k in ("pedidos_ml", "pedidos_ml_frete_so_fatura",
+                                                         "faturamento_sem_custo", "faturamento_sem_frete")},
+    }
+
+
+# ---------------------------------------------------------------------------
 # V18.47: Oportunidades de Kit — o que os clientes JÁ compram junto (ML + Shopee)
 # e pode virar um anúncio de kit para subir o ticket médio. Somente leitura:
 # lê vendas_v1799, o Cadastro de Kits e o custo do Precificador. Não cria kit,
@@ -16275,6 +16581,18 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
+        if path == "/api/ads-analise":
+            # V18.54: Análise de ADS (relatório do ML + lucro por anúncio). Somente leitura.
+            if self.auth(admin_only=True) is None:
+                return
+            try:
+                rid = str((query.get("relatorio") or [""])[0] or "").strip()
+                self.send_json(ads_analise_payload(int(rid) if rid.isdigit() else None))
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
         if path == "/api/kits-analise":
             # V18.47: Oportunidades de Kit (o que já sai junto nos pedidos). Somente leitura.
             if self.auth(admin_only=True) is None:
@@ -16472,6 +16790,8 @@ class AppHandler(BaseHTTPRequestHandler):
             "/financeiro": "admin", "/financeiro/": "admin", "/financeiro.html": "admin",
             # V18.47: Oportunidades de Kit.
             "/kits-analise": "admin", "/kits-analise/": "admin", "/kits-analise.html": "admin",
+            # V18.54: Análise de ADS.
+            "/analise-ads": "admin", "/analise-ads/": "admin", "/analise-ads.html": "admin",
             # V18.33: a Rentabilidade ML virou o Financeiro; o endereço antigo abre a tela nova.
             "/rentabilidade-ml": "admin", "/rentabilidade-ml/": "admin", "/rentabilidade-ml.html": "admin",
             "/estacao-impressao": "estacao", "/estacao-impressao/": "estacao", "/estacao-impressao.html": "estacao",
@@ -16640,6 +16960,24 @@ class AppHandler(BaseHTTPRequestHandler):
                 threading.Thread(target=vendas_sync_once, name="vendas-sync-manual", daemon=True).start()
                 audit(ctx["username"], "dashboard.vendas.sincronizar", "")
                 self.send_json({"ok": True, "iniciada": True})
+            return
+        if path == "/api/ads-analise/importar":
+            # V18.54: importa o relatório de Anúncios patrocinados (.xlsx) do ML.
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            try:
+                corpo = self.read_json()
+                conteudo = base64.b64decode(str(corpo.get("conteudo_base64") or ""), validate=True)
+                arquivo = str(corpo.get("arquivo") or "")
+                r = ads_relatorio_importar(conteudo, arquivo, ctx["username"])
+                audit(ctx["username"], "ads.importar",
+                      f"{r['periodo_inicio']}..{r['periodo_fim']} · {r['linhas']} linhas · {arquivo[:80]}")
+                self.send_json(r)
+            except ValueError as exc:  # binascii.Error (base64 inválido) é um ValueError
+                self.send_json({"ok": False, "error": str(exc) or "Arquivo inválido."}, 400)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
             return
         if path == "/api/financeiro/sincronizar":
             # V18.30: busca fatura do ML, escrow da Shopee e Ads do período.
@@ -18965,6 +19303,9 @@ class AppHandler(BaseHTTPRequestHandler):
             "/kits-analise": "kits-analise.html",
             "/kits-analise/": "kits-analise.html",
             "/kits-analise.html": "kits-analise.html",
+            "/analise-ads": "analise-ads.html",
+            "/analise-ads/": "analise-ads.html",
+            "/analise-ads.html": "analise-ads.html",
             "/rentabilidade-ml": "financeiro.html",
             "/rentabilidade-ml/": "financeiro.html",
             "/rentabilidade-ml.html": "financeiro.html",

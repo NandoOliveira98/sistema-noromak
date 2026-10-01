@@ -79,7 +79,7 @@ APP/
   estacao-impressao.html     estação Zebra / QZ Tray
   financeiro.html            faturamento, gastos e lucro (V18.30; substituiu a
                              Rentabilidade ML na V18.33)
-  analise-full.html, compras.html (Demanda de Compra)
+  analise-full.html, compras.html (Demanda de Compra), analise-ads.html (Análise de ADS, V18.54)
                              (Central de Pendências e Promoções ML removidas na V17.99;
                              /pendencias e /promocoes-ml abrem o Admin)
   shared-storage.js          cache versionado + polling (CRÍTICO)
@@ -201,7 +201,7 @@ APIs principais: `/api/storage`, `/api/order-complete`, `/api/order-lock`,
 `/api/order-sku`, `/api/order-ean`, `/api/admin-order-upsert`, `/api/roles`,
 `/api/integracoes/{mercadolivre,shopee}/*`, `/api/precificador/*`, `/api/print/*`,
 `/api/qz/*`, `/api/security/owner/*`, `/api/full/apollo-stock`,
-`/api/financeiro/{resumo,ads,sincronizar}`.
+`/api/financeiro/{resumo,ads,sincronizar}`, `/api/ads-analise`, `/api/ads-analise/importar`.
 
 Perfis: **Admin**, **Supervisor**, **Operador**. Supervisor é intermediário e **não**
 recebe automaticamente as áreas sensíveis. Módulos por usuário: `conferencia`, `admin`,
@@ -313,6 +313,16 @@ O sync da fatura ganhou backoff no HTTP 429 e retoma do `last_id`.
 abre o Financeiro. `ml_profitability_snapshot` **não é mais alimentada**, mas continua sendo
 lida (custo de reserva da Demanda de Compra e histórico da gaveta do Dashboard, via
 `_ml_custo_venda_por_pedido`, que prefere o custo capturado no ato da venda).
+
+### Análise de ADS (V18.54)
+`APP/analise-ads.html` (`/analise-ads`, menu Comercial, só **admin**). O relatório "Anúncios
+patrocinados" que o ML deixa baixar em Publicidade > Relatórios (.xlsx) é **importado à mão**
+(`POST /api/ads-analise/importar`, base64) e lido só com zipfile + ElementTree
+(`ads_relatorio_ler_xlsx`). Fica em `ads_relatorio_v1854` / `ads_relatorio_linha_v1854`; o mesmo
+período importado de novo **substitui**. O lucro por anúncio (`ads_analise_payload`) vem do
+`financeiro_payload` do período (cada item agora traz o `anuncio`): custo, tarifa, frete e imposto
+de **todas** as vendas do anúncio. O Ads vem **só do relatório** — o PADS da fatura não entra,
+senão o mesmo gasto contaria duas vezes. Margem nula quando falta custo, tarifa ou frete.
 
 ### Publicidade / Mercado Ads (V18.30)
 `GET /advertising/advertisers?product_id=PADS` (`Api-Version: 1`) → `advertiser_id`;
@@ -427,7 +437,8 @@ Os testes ficam em `TESTES/`:
 |---|---|
 | `test_admin_soberano.py` | exclusão soberana, tombstone, KIT inteiro, reinclusão ADMIN, campos protegidos, pedido manual |
 | `test_conferencia.py` | bip monotônico, metadados de conferência, conclusão canônica, cofre manual |
-| `test_financeiro.py` | imposto de 12%, lucro bruto/líquido, tarifa por pedido (não por linha), venda sem custo não vira lucro, Ads sem duplicidade, escrow Shopee |
+| `test_financeiro.py` | imposto de 12%, lucro bruto/líquido, tarifa por pedido (não por linha), venda sem custo não vira lucro, Ads sem duplicidade, escrow Shopee, frete só do vendedor |
+| `test_ads_analise.py` | leitura do .xlsx do ML, planilha errada recusada, mesmo período substitui, lucro por anúncio sem Ads em dobro |
 | `test_instalacao.py` | instalação nova, idempotência do `init_db`, versionamento do storage, autenticação |
 | `base.py` | infraestrutura: banco temporário, servidor real em porta livre, cliente HTTP |
 
