@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.51-PRECIFICADOR-SEM-GRAVACAO-A-TOA"
+APP_VERSION = "18.52-LOGIN-UNICO-E-ML-CANCELADO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -63,6 +63,10 @@ LOCK_STALE_SECONDS = 90  # V16.72: 3 heartbeats perdidos liberam bloqueio órfã
 PRINT_CLAIM_STALE_SECONDS = int(os.getenv("EXP_PRINT_CLAIM_STALE_SECONDS", "120"))
 PRINT_STATION_ONLINE_SECONDS = int(os.getenv("EXP_PRINT_STATION_ONLINE_SECONDS", "20"))
 SESSION_COOKIE = "expedicao_estoque"
+# V18.52: login único com o NoromakWeb (contrato de 23/09/2026). O portão do
+# nginx manda X-NoromakWeb-Usuario + X-NoromakWeb-Segredo. Vazio = desligado.
+NOROMAKWEB_SSO_SECRET = os.getenv("NOROMAKWEB_SSO_SECRET", "").strip()
+NOROMAKWEB_SSO_MIN_SECRET_LEN = 32
 SESSION_TTL_SECONDS = int(os.getenv("EXP_SESSION_TTL_SECONDS", str(4 * 60 * 60)))
 STATION_SESSION_TTL_SECONDS = int(os.getenv("EXP_STATION_SESSION_TTL_SECONDS", str(180 * 24 * 60 * 60)))
 SUPERVISOR_SESSION_TTL_SECONDS = int(os.getenv("EXP_SUPERVISOR_SESSION_TTL_SECONDS", str(30 * 24 * 60 * 60)))
@@ -4332,6 +4336,22 @@ def _preserve_admin_manual_pending(current_value: str | None, requested_value: s
     return json_dumps(out)
 
 
+def _pending_drop_identities_v1852(value: str, identities: set[str]) -> str:
+    try:
+        rows = json.loads(value or "[]")
+    except Exception:
+        return value
+    if not isinstance(rows, list):
+        return value
+    kept = [
+        r for i, r in enumerate(rows)
+        if not (isinstance(r, dict)
+                and not _admin_manual_pending_protected(r)
+                and _pending_identity_v1714(r, i) in identities)
+    ]
+    return json_dumps(kept) if len(kept) != len(rows) else value
+
+
 def save_storage(
     key: str,
     old_value: str | None,
@@ -4345,6 +4365,7 @@ def save_storage(
     client_ip: str = "",
     allow_completed_reimport: bool = False,
     allow_pending_deletes: bool = False,
+    remove_pending_identities: set[str] | None = None,
 ) -> tuple[str, int, str]:
     if len(new_value.encode("utf-8")) > MAX_BODY:
         raise ValueError("Conteúdo excede 100 MB")
@@ -4382,6 +4403,13 @@ def save_storage(
                 if normalize(actor_role) != "ADMIN":
                     new_value = _preserve_admin_manual_pending(current, new_value)
                 new_value = preserve_pending_records_v1714(current, new_value)
+            if key == "conf_pedidos" and remove_pending_identities:
+                # V18.52: remoção automática NOMEADA (venda cancelada ou Full no ML).
+                # Sem isto a preservação acima devolvia a linha no mesmo save e o
+                # watcher "removia" o mesmo pedido a cada ~25 s para sempre. Só sai
+                # a linha citada; ausência em snapshot continua não apagando nada, e
+                # linha protegida pelo ADMIN nunca sai por aqui.
+                new_value = _pending_drop_identities_v1852(new_value, remove_pending_identities)
             if key in ("conf_pedidos", "conf_pedidos_rascunhos"):
                 new_value = preserve_conference_names(current, new_value)
             merged = merge_value(key, current, old_value, new_value, force)
@@ -4664,7 +4692,58 @@ def cookie_token(handler: BaseHTTPRequestHandler) -> str:
     return morsel.value if morsel else ""
 
 
+NOROMAKWEB_SSO_AUDITED: dict[str, float] = {}
+
+
+def noromakweb_sso_context(handler: BaseHTTPRequestHandler) -> dict[str, Any] | None:
+    """V18.52: identidade vinda do portão do NoromakWeb.
+
+    Só vale com o segredo combinado — o 127.0.0.1 sozinho não prova nada, porque
+    qualquer processo da VPS alcança esta porta. O usuário precisa existir e estar
+    ativo AQUI, e as permissões continuam sendo as da Expedição.
+    """
+    secret = NOROMAKWEB_SSO_SECRET
+    if len(secret) < NOROMAKWEB_SSO_MIN_SECRET_LEN:
+        return None
+    supplied = str(handler.headers.get("X-NoromakWeb-Segredo") or "").strip()
+    username = str(handler.headers.get("X-NoromakWeb-Usuario") or "").strip().lower()
+    if not supplied or not username:
+        return None
+    if not hmac.compare_digest(supplied.encode("utf-8"), secret.encode("utf-8")):
+        return None
+    with DB_LOCK:
+        row = DB.execute(
+            """SELECT username,display_name,role,active,
+                      can_conferencia,can_admin,can_estacao,can_precificador
+               FROM app_users WHERE username=?""",
+            (username,),
+        ).fetchone()
+    if not row or not row["active"]:
+        return None
+    now = time.time()
+    if now - NOROMAKWEB_SSO_AUDITED.get(username, 0) > 3600:
+        NOROMAKWEB_SSO_AUDITED[username] = now
+        audit(username, "auth.login.noromakweb", client_computer(handler))
+    return {
+        "username": row["username"],
+        "nome": row["display_name"] or row["username"],
+        "app_role": row["role"],
+        "app_active": True,
+        "permissions": user_permissions_from_row(row),
+        "area": "noromakweb",
+        # Sem cookie próprio: a janela de reautenticação crítica fica por usuário.
+        "session_key": hashlib.sha256(f"noromakweb-sso|{username}".encode("utf-8")).hexdigest(),
+        "is_owner": is_owner_username(row["username"]),
+        "sso": "noromakweb",
+    }
+
+
 def session_context(handler: BaseHTTPRequestHandler) -> dict[str, Any] | None:
+    # V18.52: a sessão do NoromakWeb vence o cookie antigo — quem está logado lá
+    # é quem está usando a tela. Sem cabeçalho válido, segue o login próprio.
+    sso = noromakweb_sso_context(handler)
+    if sso is not None:
+        return sso
     token = cookie_token(handler)
     if not token:
         return None
@@ -8736,13 +8815,24 @@ def _ml_remove_cancelled_from_pending(
         identifiers.discard("")
 
         matched = bool(order_id and order_id in identifiers) or bool(pack_id and pack_id in identifiers)
-        if matched:
+        # V18.52: ADMIN > integração — pedido incluído/protegido pelo ADMIN fica.
+        if matched and not _admin_manual_pending_protected(row):
             removed += 1
             continue
         kept.append(row)
 
     return kept, removed
 
+
+
+def _pending_removed_identities_v1852(before: list[Any], after: list[Any]) -> set[str]:
+    """Identidades das linhas que saíram de `before` para `after` (V18.52)."""
+    kept = {id(r) for r in after}
+    return {
+        _pending_identity_v1714(r, i)
+        for i, r in enumerate(before)
+        if isinstance(r, dict) and id(r) not in kept
+    }
 
 
 def _ml_row_manual_kit_override(row: dict[str, Any] | None) -> bool:
@@ -8834,6 +8924,7 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
     # V16.36: vendas canceladas não podem continuar aparecendo em Pedidos pendentes.
     # O Mercado Livre pode enviar "cancelled" ou "canceled" conforme o recurso.
     if status.strip().lower() in {"cancelled", "canceled"}:
+        before_rows = pending
         pending, removed = _ml_remove_cancelled_from_pending(
             pending, order_id=order_id, pack_id=pack_id
         )
@@ -8844,6 +8935,7 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
                 source_screen="API Mercado Livre",
                 change_method="Pedido cancelado no Mercado Livre",
                 client_ip="127.0.0.1", allow_completed_reimport=False,
+                remove_pending_identities=_pending_removed_identities_v1852(before_rows, pending),
             )
         ml_log_event(
             "order_cancelled", f"/orders/{order_id}", "", ML_CLIENT_ID,
@@ -8868,11 +8960,13 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
     # tiver sido criada por uma versão anterior da API, removemos somente as
     # linhas originadas pela própria API ao reencontrar esse pedido.
     if _ml_is_full_shipment(shipment):
+        before_rows = pending
         before = len(pending)
         pending = [
             row for row in pending
             if not (
                 isinstance(row, dict)
+                and not _admin_manual_pending_protected(row)
                 and (
                     str(row.get("VendaMercadoLivre") or "").strip() == order_id
                     or (pack_id and str(row.get("PackIdMercadoLivre") or "").strip() == pack_id)
@@ -8891,6 +8985,7 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
                 source_screen="API Mercado Livre",
                 change_method="Ignorado - Mercado Envios Full",
                 client_ip="127.0.0.1", allow_completed_reimport=False,
+                remove_pending_identities=_pending_removed_identities_v1852(before_rows, pending),
             )
         return {
             "order_id": order_id,
