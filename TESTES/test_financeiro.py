@@ -339,6 +339,58 @@ class TesteFinanceiroCustoNoAtoDaVenda(TesteNoromak):
                          "o custo do vendedor é senders[].cost, nunca o gross_amount")
 
 
+class TesteFreteDoCompradorV1853(TesteNoromak):
+    """V18.53 — a fatura lança o envio CHEIO; o vendedor só paga a parte dele.
+
+    Venda 2000015151309807 (Água Desmineralizada Zaker 20 L, 2 un.), como o ML
+    mostra no detalhe:
+        Preço dos produtos                                   R$ 157,80
+        Tarifa de venda total                               -R$  18,94
+        Tarifa do Mercado Envios (por conta do comprador)    R$ 105,99
+        Tarifa por envios no ML (sua conta + comprador)     -R$ 128,89
+        Envios                                              -R$  22,90
+    O Financeiro dava preferência à fatura e lançava 128,89 de frete: a parte do
+    comprador (que não está no nosso faturamento) virava custo nosso.
+    """
+
+    def cenario(self) -> None:
+        _custos_precificador({"ZK05": 45.62})
+        _vender("ml", "2000015151309807", "ZK05", 2, 157.80)
+        _custo_da_venda("2000015151309807", "ZK05", "ZK05", 18.94, shipment_id="E-AGUA")
+        _frete_envio("E-AGUA", 22.90)   # senders[].cost: a parte do vendedor
+        _lancamento_fatura("2000015151309807", 18.94, sub_type="CVVML",
+                           transacao="Custo por vender no Mercado Livre", detail_id="agua-tarifa")
+        _lancamento_fatura("2000015151309807", 128.89, sub_type="CXDE",
+                           transacao="Tarifa de envio extra ou intermunicipal", detail_id="agua-frete")
+
+    def test_frete_e_so_a_parte_do_vendedor(self) -> None:
+        self.cenario()
+        t = S.financeiro_payload("2026-09-01", "2026-09-30")["totais"]
+        self.assertEqual(t["frete"], 22.90, "a parte que o comprador pagou não é custo do vendedor")
+        self.assertEqual(t["taxas"], 18.94, "a tarifa continua vindo da fatura")
+        # 157,80 - 91,24 (custo) - 18,94 (tarifa) - 22,90 (frete) - 18,94 (imposto)
+        self.assertEqual(t["lucro_liquido"], 5.78)
+
+    def test_diferenca_da_fatura_fica_visivel(self) -> None:
+        self.cenario()
+        d = S.financeiro_payload("2026-09-01", "2026-09-30")
+        p = next(x for x in d["pedidos"] if x["order_id"] == "2000015151309807")
+        self.assertEqual(p["frete_venda"], 22.90)
+        self.assertEqual(p["frete_fatura"], 128.89)
+        self.assertEqual(p["divergencia_frete"], 105.99, "a diferença é a parte do comprador")
+        self.assertEqual(d["cobertura"]["pedidos_ml_frete_so_fatura"], 0)
+
+    def test_sem_custo_do_envio_a_fatura_continua_valendo(self) -> None:
+        # Envio ainda não consultado: a fatura é o que há, e a tela conta quantos estão assim.
+        _custos_precificador({"AAA": 40.0})
+        _vender("ml", "ML300", "AAA", 1, 200.0)
+        _lancamento_fatura("ML300", 24.0, sub_type="CVVML", transacao="Custo por vender", detail_id="a")
+        _lancamento_fatura("ML300", 30.0, sub_type="CXDE", transacao="Tarifa de envio", detail_id="b")
+        d = S.financeiro_payload("2026-09-01", "2026-09-30")
+        self.assertEqual(d["totais"]["frete"], 30.0)
+        self.assertEqual(d["cobertura"]["pedidos_ml_frete_so_fatura"], 1)
+
+
 class TesteFaturaMLReal(TesteNoromak):
     """V18.34 — os sub_type que a fatura do MLB usa de verdade.
 

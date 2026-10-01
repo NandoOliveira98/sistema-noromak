@@ -273,6 +273,11 @@ de vendas, sem chamada extra**; o frete vem de `/shipments/{id}/costs` (`senders
 `ml_frete_envio_v1830` — um envio que cobre vários pedidos tem o custo **dividido** entre eles.
 Ordem de autoridade: **fatura quando existe** (é o que foi cobrado), senão a tarifa da venda;
 as duas **nunca somam**, e a diferença entre elas aparece na tela (`cobertura.divergencias`).
+**V18.53 — no frete a ordem é a inversa:** a fatura lança o envio **cheio** (parte do comprador +
+parte do vendedor = `gross_amount`), e a parte do comprador não está no nosso faturamento. Venda
+2000015151309807: fatura R$ 128,89, comprador pagou R$ 105,99, vendedor R$ 22,90. Frete = custo do
+envio (`senders[].cost`) quando existe; a fatura só sem ele (`cobertura.pedidos_ml_frete_so_fatura`),
+e a diferença fica em `pedidos[].divergencia_frete`.
 O que não é conhecido fica **nulo e visível** (`cobertura.faturamento_sem_custo` /
 `sem_taxa`): nada é estimado. `GET /api/financeiro/resumo`, `POST /api/financeiro/sincronizar`
 (fatura + escrow pendente + Ads, em segundo plano).

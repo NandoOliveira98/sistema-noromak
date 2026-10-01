@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.52-LOGIN-UNICO-E-ML-CANCELADO"
+APP_VERSION = "18.53-FRETE-SO-DO-VENDEDOR"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -13515,7 +13515,12 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
         taxa_venda = _money_number(v.get("taxa"))
         frete_venda = _money_number(v.get("frete"))
         taxa = taxa_fatura if taxa_fatura is not None else taxa_venda
-        frete = frete_fatura if frete_fatura is not None else frete_venda
+        # V18.53: no FRETE a ordem é a inversa. A fatura lança o envio CHEIO (parte
+        # do comprador + parte do vendedor = gross_amount do /shipments/costs), e a
+        # parte do comprador não está no nosso faturamento. Venda 2000015151309807:
+        # fatura 128,89, comprador pagou 105,99, vendedor 22,90. O custo do envio
+        # (senders[].cost) é a parte do vendedor; a fatura só vale sem ele.
+        frete = frete_venda if frete_venda is not None else frete_fatura
         outros = _money_number(b.get("other_cost"))
         # V18.34: PADS (publicidade) já sai separado do consolidador e nunca entra
         # em "outros". Vira o Ads do pedido quando a API de Publicidade não responde.
@@ -13534,6 +13539,9 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
             "frete_venda": frete_venda, "frete_fatura": frete_fatura,
             "divergencia_taxa": (round(taxa_fatura - taxa_venda, 2)
                                  if (taxa_fatura is not None and taxa_venda is not None) else None),
+            "divergencia_frete": (round(frete_fatura - frete_venda, 2)
+                                  if (frete_fatura is not None and frete_venda is not None) else None),
+            "frete_so_fatura": frete_venda is None and frete_fatura is not None,
         }
     for oid in pedidos_shopee:
         e = escrow.get(oid)
@@ -13693,6 +13701,7 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
             "na_fatura": bool(pc.get("na_fatura")), "taxa_venda": pc.get("taxa_venda"),
             "taxa_fatura": pc.get("taxa_fatura"), "frete_venda": pc.get("frete_venda"),
             "frete_fatura": pc.get("frete_fatura"), "divergencia_taxa": pc.get("divergencia_taxa"),
+            "divergencia_frete": pc.get("divergencia_frete"),
         })
         p["unidades"] += qty
         p["faturamento"] = round(p["faturamento"] + receita, 2)
@@ -13822,6 +13831,10 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
             "pedidos_ml": len(pedidos_ml), "pedidos_ml_conciliados": ml_conciliados,
             "pedidos_ml_na_fatura": ml_na_fatura,
             "pedidos_ml_taxa_da_venda": max(0, ml_conciliados - ml_na_fatura),
+            # V18.53: frete só da fatura = envio ainda não consultado; pode incluir a
+            # parte do comprador até o worker de frete preencher o custo do envio.
+            "pedidos_ml_frete_so_fatura": sum(1 for o in pedidos_ml
+                                              if (custos_pedido.get(("ml", o)) or {}).get("frete_so_fatura")),
             "pedidos_shopee": len(pedidos_shopee), "pedidos_shopee_conciliados": shopee_conciliados,
             "faturamento_sem_custo": totais_fechados["sem_custo"],
             "faturamento_sem_taxa": totais_fechados["sem_taxa"],
