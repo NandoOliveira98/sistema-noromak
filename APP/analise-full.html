@@ -298,6 +298,10 @@
     .cover { white-space: nowrap; }
     .cover .badge { min-height: 22px; padding: 2px 8px; margin-right: 6px; }
     .selected-need { background: #fff9ed; font-weight: 750; }
+    .need-input{width:72px;min-height:30px;padding:3px 6px;border:1px solid var(--line);border-radius:7px;background:#fff;text-align:right;font-weight:800;font-size:.88rem;color:var(--ink)}
+    .need-input:focus{outline:3px solid rgba(245,155,35,.42);border-color:var(--orange)}
+    .need-input--edited{border-color:var(--orange);background:#fff3df}
+    .need-reset{margin-left:4px;padding:0 5px;border:1px solid var(--line);border-radius:5px;background:#fff;color:var(--muted);font-weight:800;cursor:pointer}
 
     .badge {
       display: inline-flex;
@@ -793,6 +797,7 @@
         pickQty.clear();
         state.fileName = file.name;
         state.updatedAt = detectUpdatedAt(parsed.rows);
+        loadNeedEdits();
         state.onlyNeed = false;
         state.sortKey = "sales";
         state.sortDirection = "desc";
@@ -843,7 +848,7 @@
         state.filtered = state.data.filter((item) => {
           if (query && !normalizeText(`${productName(item)} ${item.sku} ${item.code}`).includes(query)) return false;
           if (status && item.status !== status) return false;
-          if (state.onlyNeed && item[targetKey] <= 0) return false;
+          if (state.onlyNeed && item.needTarget <= 0) return false;
           return true;
         }).sort((left, right) => {
           const primary = compareValues(left, right, state.sortKey);
@@ -877,7 +882,7 @@
             <td class="num">${formatNumber(item.sales)}</td>
             <td class="num">${formatNumber(item.occupied)}</td>
             <td class="cover">${item.manual ? statusBadge("NOVO") : `${statusBadge(item.status)}${formatNumber(item.coverage, 1)} dias`}</td>
-            <td class="num selected-need">${formatNumber(item.needTarget)}</td>
+            <td class="num selected-need">${needCell(item)}</td>
             <td class="num">${item.apolloAvailable===null?"—":formatNumber(item.apolloAvailable)}${isKit(item)&&item.apolloParts.length?`<span class="sub">${item.apolloParts.map(p=>`${formatNumber(p.avail)} un.`).join(" + ")}</span>`:""}</td>
             <td class="num"><strong>${item.apolloCanSend===null?"—":formatNumber(item.apolloCanSend)}</strong></td>
             <td class="apollo-msg">${apolloBadge(item)}${item.apolloMessage?`<div class="apollo-branches">${escapeHtml(item.apolloMessage)}</div>`:""}${item.apolloError?`<div class="apollo-branches">${escapeHtml(item.apolloError)}</div>`:""}${item.apolloTransfer?`<div class="transfer-hint">↔ ${escapeHtml(item.apolloTransfer)}</div>`:""}</td>
@@ -897,8 +902,74 @@
       }
 
       function apolloTargetNeed(item) {
+        if (!item.manual && needEdits.has(needKey(item))) return needEdits.get(needKey(item));
+        return calculatedNeed(item);
+      }
+
+      function calculatedNeed(item) {
         const days = Number(element("targetDays").value || 30);
         return Math.ceil(days === 15 ? item.need15 : item.need30);
+      }
+
+      // V18.59: a quantidade a enviar pode ser digitada em qualquer linha — produto
+      // sem venda nos 30 dias tem sugestão 0, mas pode precisar ir para o Full.
+      // Vale para 15 e 30 dias. Fica neste navegador, presa ao relatório carregado
+      // (nome + "Atualizado em"): outro relatório começa sem edição, para que um
+      // número antigo não entre calado no envio novo. Vazio volta ao calculado.
+      const NEED_EDITS_KEY = "nm_full_qtd_enviar_v1";
+      const needEdits = new Map();
+      const needKey = (item) => `${item.code}|${item.sku}`;
+      const needEditsFile = () => `${state.fileName}|${state.updatedAt}`;
+
+      function loadNeedEdits() {
+        needEdits.clear();
+        try {
+          const saved = JSON.parse(localStorage.getItem(NEED_EDITS_KEY) || "null");
+          if (saved && saved.file === needEditsFile() && saved.qty && typeof saved.qty === "object") {
+            Object.entries(saved.qty).forEach(([key, qty]) => {
+              const n = Math.floor(Number(qty));
+              if (Number.isFinite(n) && n >= 0) needEdits.set(key, n);
+            });
+          }
+        } catch (_) { /* sem storage: vale só nesta sessão */ }
+      }
+
+      function saveNeedEdits() {
+        try {
+          localStorage.setItem(NEED_EDITS_KEY, JSON.stringify({ file: needEditsFile(), qty: Object.fromEntries(needEdits) }));
+        } catch (_) { /* sem storage: vale só nesta sessão */ }
+      }
+
+      function needCell(item) {
+        const key = item.manual ? `new:${item.sku}` : needKey(item);
+        const edited = !item.manual && needEdits.has(needKey(item));
+        const calc = item.manual ? null : calculatedNeed(item);
+        return `<input class="need-input${edited ? " need-input--edited" : ""}" type="number" inputmode="numeric" min="${item.manual ? 1 : 0}" step="1" value="${item.needTarget}" data-need="${escapeHtml(key)}" title="${item.manual ? "Quantidade a enviar do produto novo" : "Quantidade a enviar — apague para voltar ao calculado"}" aria-label="Enviar de ${escapeHtml(item.sku || item.code)}">`
+          + (edited ? `<span class="sub">calculado ${formatNumber(calc)}<button class="need-reset" type="button" data-need-reset="${escapeHtml(key)}" title="Voltar ao calculado">↺</button></span>` : "");
+      }
+
+      function setNeedEdit(key, raw) {
+        const text = String(raw ?? "").trim();
+        const value = Math.floor(Number(text));
+        if (key.startsWith("new:")) {
+          const code = key.slice(4);
+          if (!text || !Number.isFinite(value) || value < 1) {
+            showMessage(`Produto novo precisa de 1 ou mais unidades — para tirar ${code}, use o ✕.`, "error");
+          } else {
+            manualProducts = manualProducts.map(p => p.code === code ? { ...p, qty: value } : p);
+            writeManualProducts(manualProducts);
+            mergeManualProducts();
+          }
+        } else if (!text || !Number.isFinite(value) || value < 0) {
+          needEdits.delete(key);
+          saveNeedEdits();
+        } else {
+          needEdits.set(key, value);
+          saveNeedEdits();
+        }
+        renderSummary();
+        applyFilters();
+        renderApolloSummary();
       }
 
       // V17.94: o resultado do Apollo fica guardado por código (sempre com as 3
@@ -1339,7 +1410,9 @@
           "Falta no Apollo": item.apolloShortage,
           "Situação Apollo": item.apolloSituation,
           "Observação Apollo": [item.apolloMessage, item.apolloError].filter(Boolean).join(" "),
-          "Transferência sugerida": item.apolloTransfer || ""
+          "Transferência sugerida": item.apolloTransfer || "",
+          "Enviar": item.needTarget,
+          "Enviar digitado à mão": item.manual || needEdits.has(needKey(item)) ? "Sim" : "Não"
         }));
         const worksheet = XLSX.utils.json_to_sheet(rows);
         worksheet["!cols"] = [10, 10, 22, 14, 18, 55, 16, 30, 14, 20, 20, 18, 14, 20, 20].map((wch) => ({ wch }));
@@ -1395,6 +1468,15 @@
       element("resultsBody").addEventListener("click", (event) => {
         const remove = event.target.closest("[data-new-remove]");
         if (remove) removeManualProduct(remove.dataset.newRemove);
+        const reset = event.target.closest("[data-need-reset]");
+        if (reset) setNeedEdit(reset.dataset.needReset, "");
+      });
+      element("resultsBody").addEventListener("change", (event) => {
+        const input = event.target.closest("[data-need]");
+        if (input) setNeedEdit(input.dataset.need, input.value);
+      });
+      element("resultsBody").addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && event.target.closest("[data-need]")) event.target.blur();
       });
       element("onlyNeed").addEventListener("click", () => {
         state.onlyNeed = !state.onlyNeed;
