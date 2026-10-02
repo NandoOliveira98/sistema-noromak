@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.59-FULL-EDITAR-ENVIO"
+APP_VERSION = "18.60-LINX-SMART-API"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2085,6 +2085,9 @@ def init_db() -> None:
     ensure_shopee_escrow_schema()
     ensure_ml_billing_credito_schema()
     ensure_ml_billing_data_schema()
+    ensure_cliente_fiscal_linx_api_schema()  # V18.60
+    ensure_linx_operacoes_schema()  # V18.60
+    ensure_linx_robo_schema()  # V18.60
     migrate_legacy_if_empty()
     ensure_storage_defaults()
     seed_sku_state_from_storage()
@@ -10737,6 +10740,16 @@ def lista_cliente_fiscal(dias: int = 45) -> dict[str, Any]:
             "nome_fiscal": r["nome_fiscal"],
             "linx_cliente": r["linx_cliente"],
             "linx_atualizado_em": r["linx_atualizado_em"],
+            # V18.60: consulta automática na Linx Smart API (só leitura). Resultado
+            # de outro documento (CPF corrigido depois) não vale: volta a pendente.
+            "linx_api": {
+                "status": r["linx_api_status"] if r["linx_api_documento"] == r["documento_numero"] else "",
+                "cliente": r["linx_api_cliente"],
+                "nome": r["linx_api_nome"],
+                "erro": r["linx_api_erro"],
+                "consultado_em": r["linx_api_consultado_em"],
+                "credito": _json_obj(r["linx_api_credito"]),
+            },
         } for r in rows
     }}
 
@@ -10819,6 +10832,954 @@ def cliente_fiscal_do_pedido(pedido: str) -> dict[str, Any]:
         "aviso": aviso,
         "linx_cliente": linx_cliente,
     }
+
+
+# ---------------------------------------------------------------------------
+# V18.60 — Linx Smart API (a API oficial do Linx DMS, na nuvem da Linx).
+# Etapa 1: conexão + "este cliente já está cadastrado no Linx?".
+#
+# SOMENTE LEITURA. Esta seção só pede token e consulta cliente por CPF/CNPJ
+# (ConsultaClientes, catálogo V01 Veículos CRM). Nenhuma função daqui grava no
+# Linx — cadastro, atendimento e romaneio ficam para etapas com confirmação.
+#
+# Diferente do botão Cliente (V17.85), que fala com o Linx LOCAL (10.1.15.1) pela
+# extensão: o gateway da Smart API é público, então quem chama é o servidor.
+# Chave da assinatura, usuário e senha só no .env; nunca vão ao navegador nem ao log.
+# Contrato: INTEGRACAO_LINX_SMART_API.md.
+# ---------------------------------------------------------------------------
+LINX_API_BASE = os.getenv("LINX_API_BASE", "https://auto-gwsmartapi.linx.com.br").strip().rstrip("/")
+LINX_API_CHAVE = os.getenv("LINX_API_CHAVE", "").strip()
+LINX_API_USUARIO = os.getenv("LINX_API_USUARIO", "").strip()
+LINX_API_SENHA = os.getenv("LINX_API_SENHA", "").strip()
+LINX_API_CNPJ = re.sub(r"\D", "", os.getenv("LINX_API_CNPJ", ""))
+LINX_EMPRESA = int(os.getenv("LINX_EMPRESA", "1") or 1)
+LINX_REVENDA = int(os.getenv("LINX_REVENDA", "1") or 1)
+LINX_USUARIO_CODIGO = int(os.getenv("LINX_USUARIO_CODIGO", "0") or 0)
+LINX_CODIGO_ORIGEM = int(os.getenv("LINX_CODIGO_ORIGEM", "32") or 32)
+LINX_PATH_SEGURANCA = os.getenv("LINX_PATH_SEGURANCA", "/api-seguranca").strip().rstrip("/")
+LINX_PATH_CLIENTES = os.getenv("LINX_PATH_CLIENTES", "/api-veiculos-crm").strip().rstrip("/")
+# O portal não diz como o token vai nas chamadas; "Bearer" é o mais provável.
+LINX_AUTH_ESQUEMA = os.getenv("LINX_AUTH_ESQUEMA", "Bearer").strip()
+LINX_HTTP_TIMEOUT = max(5, min(60, int(os.getenv("LINX_HTTP_TIMEOUT", "25") or 25)))
+LINX_CLIENTES_INTERVALO = max(60, int(os.getenv("LINX_CLIENTES_INTERVALO", "120") or 120))
+LINX_CLIENTES_LOTE = 10
+LINX_CLIENTES_DIAS = 45
+# "Não cadastrado" é consultado de novo: alguém (ou o robô) pode ter cadastrado.
+LINX_RECONSULTA_SEM_CADASTRO = 6 * 3600
+LINX_RECONSULTA_ERRO = 15 * 60
+
+LINX_TOKEN_LOCK = threading.Lock()
+LINX_TOKEN: dict[str, Any] = {"access_token": "", "expira": 0.0}
+LINX_ESTADO: dict[str, str] = {"ultimo_ok": "", "ultimo_erro": "", "ultimo_erro_em": ""}
+
+
+class LinxErro(RuntimeError):
+    def __init__(self, mensagem: str, status: int = 0):
+        self.status = status
+        super().__init__(mensagem)
+
+
+def linx_configuracao_faltando() -> list[str]:
+    """Nomes (nunca valores) das variáveis do .env que faltam."""
+    return [nome for nome, valor in (
+        ("LINX_API_CHAVE", LINX_API_CHAVE),
+        ("LINX_API_USUARIO", LINX_API_USUARIO),
+        ("LINX_API_SENHA", LINX_API_SENHA),
+    ) if not valor]
+
+
+def _linx_registrar(erro: str = "") -> None:
+    if erro:
+        LINX_ESTADO["ultimo_erro"] = erro[:500]
+        LINX_ESTADO["ultimo_erro_em"] = now_iso()
+    else:
+        LINX_ESTADO["ultimo_ok"] = now_iso()
+
+
+def _linx_http(metodo: str, caminho: str, *, corpo: Any = None, form: dict[str, str] | None = None,
+               com_token: bool = True) -> Any:
+    return _linx_http_status(metodo, caminho, corpo=corpo, form=form, com_token=com_token)[1]
+
+
+def _linx_http_status(metodo: str, caminho: str, *, corpo: Any = None, form: dict[str, str] | None = None,
+                      com_token: bool = True) -> tuple[int, Any]:
+    """Devolve (status, json). O status importa: a Linx responde 208 quando quer
+    uma confirmação do usuário (diálogo), e isso NUNCA é respondido sozinho."""
+    headers = {
+        "Ocp-Apim-Subscription-Key": LINX_API_CHAVE,
+        "Accept": "application/json",
+        "User-Agent": f"NoromakExpedicao/{APP_VERSION}",
+    }
+    dados = None
+    if form is not None:
+        # /token pede multipart/form-data (contrato do portal).
+        limite = "----noromak" + secrets.token_hex(12)
+        partes = []
+        for nome, valor in form.items():
+            partes.append(
+                f'--{limite}\r\nContent-Disposition: form-data; name="{nome}"\r\n\r\n{valor}\r\n'
+            )
+        partes.append(f"--{limite}--\r\n")
+        dados = "".join(partes).encode("utf-8")
+        headers["Content-Type"] = f"multipart/form-data; boundary={limite}"
+    elif corpo is not None:
+        dados = json.dumps(corpo).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    if com_token:
+        token = linx_obter_token()
+        headers["Authorization"] = f"{LINX_AUTH_ESQUEMA} {token}".strip()
+    req = urllib.request.Request(LINX_API_BASE + caminho, data=dados, headers=headers, method=metodo)
+    try:
+        with urllib.request.urlopen(req, timeout=LINX_HTTP_TIMEOUT) as resp:
+            bruto = resp.read().decode("utf-8", errors="replace")
+            status = int(getattr(resp, "status", 200) or 200)
+    except urllib.error.HTTPError as exc:
+        texto = ""
+        try:
+            texto = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            pass
+        detalhe = ""
+        try:
+            erro = json.loads(texto or "{}")
+            if isinstance(erro, dict):
+                detalhe = str(erro.get("MensagemDeErro") or erro.get("message") or erro.get("Message")
+                              or erro.get("error_description") or erro.get("error") or "")
+        except Exception:
+            detalhe = texto[:200]
+        raise LinxErro(f"Linx respondeu HTTP {exc.code}" + (f": {detalhe[:300]}" if detalhe else "."), exc.code) from exc
+    except urllib.error.URLError as exc:
+        raise LinxErro(f"Linx Smart API indisponível: {exc.reason}") from exc
+    if not bruto.strip():
+        return status, None
+    try:
+        return status, json.loads(bruto)
+    except Exception as exc:
+        raise LinxErro("Linx Smart API devolveu resposta que não é JSON.") from exc
+
+
+def linx_obter_token(forcar: bool = False) -> str:
+    faltando = linx_configuracao_faltando()
+    if faltando:
+        raise LinxErro("Linx Smart API não configurada no servidor: falta " + ", ".join(faltando) + ".")
+    with LINX_TOKEN_LOCK:
+        if not forcar and LINX_TOKEN["access_token"] and time.time() < LINX_TOKEN["expira"] - 60:
+            return LINX_TOKEN["access_token"]
+        form = {"grant_type": "client_credentials", "username": LINX_API_USUARIO, "password": LINX_API_SENHA}
+        if LINX_API_CNPJ:
+            form["cnpjEmpresa"] = LINX_API_CNPJ
+        resposta = _linx_http("POST", f"{LINX_PATH_SEGURANCA}/token", form=form, com_token=False)
+        dados = resposta if isinstance(resposta, dict) else {}
+        if isinstance(dados.get("Token"), dict):
+            dados = dados["Token"]
+        token = str(dados.get("access_token") or "").strip()
+        if not token:
+            raise LinxErro("A Linx não devolveu o token (confira usuário, senha e chave da assinatura).")
+        try:
+            validade = float(dados.get("expires_in") or 3600)
+        except (TypeError, ValueError):
+            validade = 3600.0
+        LINX_TOKEN["access_token"] = token
+        LINX_TOKEN["expira"] = time.time() + max(120.0, validade)
+        return token
+
+
+def linx_chamar(metodo: str, caminho: str, corpo: Any = None) -> Any:
+    return linx_chamar_status(metodo, caminho, corpo)[1]
+
+
+def linx_chamar_status(metodo: str, caminho: str, corpo: Any = None) -> tuple[int, Any]:
+    """Chamada autenticada. Token recusado (401) → pede outro e tenta uma vez."""
+    try:
+        return _linx_http_status(metodo, caminho, corpo=corpo)
+    except LinxErro as exc:
+        if exc.status != 401:
+            raise
+        linx_obter_token(forcar=True)
+        return _linx_http_status(metodo, caminho, corpo=corpo)
+
+
+def _linx_documento_do_registro(reg: dict[str, Any]) -> str:
+    cgc = re.sub(r"\D", "", str(reg.get("Cgc") or reg.get("CgcCpf") or ""))
+    if cgc and int(cgc or 0):
+        return cgc.zfill(14) if len(cgc) > 11 else cgc.zfill(11)
+    cpf = re.sub(r"\D", "", str(reg.get("Cpf") or ""))
+    if cpf and int(cpf or 0):
+        return cpf.zfill(11)
+    return ""
+
+
+def linx_consultar_cliente(documento: str) -> dict[str, Any]:
+    """Procura o cliente pelo CPF/CNPJ. Só leitura.
+
+    status: "encontrado" (um código só), "varios" (mais de um código para o
+    mesmo documento — nunca escolhe sozinho) ou "nao_cadastrado".
+    """
+    numero = re.sub(r"\D", "", str(documento or ""))
+    if len(numero) not in (11, 14):
+        raise ValueError("CPF precisa ter 11 dígitos e CNPJ, 14.")
+    corpo = {
+        "CgcOuCpf": numero,
+        "PessoaFisica": len(numero) == 11,
+        "Empresa": LINX_EMPRESA,
+        "Revenda": LINX_REVENDA,
+        "Usuario": LINX_USUARIO_CODIGO,
+        "CodigoOrigem": LINX_CODIGO_ORIGEM,
+    }
+    resposta = linx_chamar("POST", f"{LINX_PATH_CLIENTES}/Geral/ConsultaClientes/ConsultaClientes", corpo)
+    if isinstance(resposta, dict):
+        resposta = resposta.get("Registros") or resposta.get("Clientes") or ([resposta] if resposta.get("Cliente") else [])
+    registros = [r for r in (resposta or []) if isinstance(r, dict) and str(r.get("Cliente") or "").strip() not in ("", "0")]
+    com_documento = [r for r in registros if _linx_documento_do_registro(r)]
+    if com_documento:
+        # A busca já filtra pelo documento; a conferência aqui só evita aceitar
+        # um cliente de outro CPF caso a Linx devolva resultado aproximado.
+        registros = [r for r in com_documento if _linx_documento_do_registro(r) == numero]
+    codigos: dict[str, str] = {}
+    creditos: dict[str, dict[str, str]] = {}
+    for r in registros:
+        codigo = str(r.get("Cliente")).strip()
+        codigos.setdefault(codigo, str(r.get("Nome") or "").strip())
+        creditos.setdefault(codigo, _linx_credito_do_registro(r))
+    _linx_registrar()
+    if not codigos:
+        return {"status": "nao_cadastrado", "cliente": "", "nome": "", "credito": {}, "candidatos": []}
+    candidatos = [{"cliente": c, "nome": n} for c, n in codigos.items()]
+    if len(candidatos) == 1:
+        return {"status": "encontrado", "cliente": candidatos[0]["cliente"], "nome": candidatos[0]["nome"],
+                "credito": creditos[candidatos[0]["cliente"]], "candidatos": candidatos}
+    return {"status": "varios", "cliente": "", "nome": "", "credito": {}, "candidatos": candidatos}
+
+
+def _linx_credito_do_registro(reg: dict[str, Any]) -> dict[str, str]:
+    """V18.60: situação de crédito como a Linx devolve (texto cru — o significado de
+    cada código ainda não foi confirmado). A API NÃO altera crédito; só mostra."""
+    return {campo: str(reg.get(origem) or "").strip() for campo, origem in (
+        ("situacao", "SituacaoCredito"), ("bloqueio", "BloqueioCredito"),
+        ("disponibilidade", "DisponibilidadeCredito"), ("conceito", "Conceito"),
+    ) if str(reg.get(origem) or "").strip()}
+
+
+def ensure_cliente_fiscal_linx_api_schema() -> None:
+    """V18.60: resultado da consulta automática ao Linx, separado de linx_cliente.
+
+    linx_cliente continua sendo o que a extensão GRAVOU no Linx (cadastro
+    atualizado com o nome da nota). As colunas linx_api_* só dizem se o
+    cliente já existe lá — a consulta nunca apaga nem troca o que a extensão guardou.
+    """
+    colunas = {
+        "linx_api_documento": "TEXT NOT NULL DEFAULT ''",
+        "linx_api_status": "TEXT NOT NULL DEFAULT ''",
+        "linx_api_cliente": "TEXT NOT NULL DEFAULT ''",
+        "linx_api_nome": "TEXT NOT NULL DEFAULT ''",
+        "linx_api_erro": "TEXT NOT NULL DEFAULT ''",
+        "linx_api_consultado_em": "TEXT NOT NULL DEFAULT ''",
+        "linx_api_consultado_epoch": "INTEGER NOT NULL DEFAULT 0",
+        "linx_api_credito": "TEXT NOT NULL DEFAULT ''",
+    }
+    with DB_LOCK:
+        existentes = {str(r["name"]) for r in DB.execute("PRAGMA table_info(cliente_fiscal)").fetchall()}
+        if not existentes:
+            return
+        for nome, tipo in colunas.items():
+            if nome not in existentes:
+                DB.execute(f"ALTER TABLE cliente_fiscal ADD COLUMN {nome} {tipo}")
+        DB.commit()
+
+
+def linx_clientes_pendentes(limite: int = LINX_CLIENTES_LOTE) -> list[dict[str, str]]:
+    """Pedidos com CPF/CNPJ guardado que ainda não sabem se o cliente existe no Linx."""
+    agora = int(time.time())
+    corte = (datetime.now(timezone.utc) - timedelta(days=LINX_CLIENTES_DIAS)).isoformat()
+    with DB_LOCK:
+        rows = DB.execute(
+            """SELECT order_key, documento_numero FROM cliente_fiscal
+               WHERE documento_numero<>'' AND linx_cliente='' AND atualizado_em>=?
+                 AND (linx_api_documento<>documento_numero OR linx_api_status=''
+                      OR (linx_api_status IN ('nao_cadastrado','varios') AND linx_api_consultado_epoch<?)
+                      OR (linx_api_status='erro' AND linx_api_consultado_epoch<?))
+               ORDER BY linx_api_consultado_epoch, atualizado_em DESC LIMIT ?""",
+            (corte, agora - LINX_RECONSULTA_SEM_CADASTRO, agora - LINX_RECONSULTA_ERRO, int(limite)),
+        ).fetchall()
+    return [{"order_key": r["order_key"], "documento": r["documento_numero"]} for r in rows]
+
+
+def _linx_guardar_consulta(order_key: str, documento: str, resultado: dict[str, Any] | None, erro: str = "") -> None:
+    with DB_LOCK:
+        DB.execute(
+            """UPDATE cliente_fiscal SET linx_api_documento=?, linx_api_status=?, linx_api_cliente=?,
+                   linx_api_nome=?, linx_api_erro=?, linx_api_consultado_em=?, linx_api_consultado_epoch=?,
+                   linx_api_credito=?
+               WHERE order_key=? AND documento_numero=?""",
+            (documento, "erro" if erro else str(resultado.get("status") or ""),
+             "" if erro else str(resultado.get("cliente") or ""),
+             "" if erro else str(resultado.get("nome") or "")[:150],
+             erro[:300], now_iso(), int(time.time()),
+             "" if erro else json_dumps(resultado.get("credito") or {}), order_key, documento),
+        )
+        DB.commit()
+
+
+def linx_clientes_sincronizar(limite: int = LINX_CLIENTES_LOTE) -> dict[str, Any]:
+    """Consulta no Linx os clientes pendentes. Só leitura no Linx."""
+    resumo = {"ok": True, "consultados": 0, "encontrados": 0, "nao_cadastrados": 0, "varios": 0, "erros": 0}
+    faltando = linx_configuracao_faltando()
+    if faltando:
+        return {**resumo, "ok": False, "error": "Linx Smart API não configurada: falta " + ", ".join(faltando) + "."}
+    for item in linx_clientes_pendentes(limite):
+        try:
+            resultado = linx_consultar_cliente(item["documento"])
+        except LinxErro as exc:
+            _linx_registrar(str(exc))
+            _linx_guardar_consulta(item["order_key"], item["documento"], None, str(exc))
+            resumo["erros"] += 1
+            if exc.status in (0, 401, 403, 429) or exc.status >= 500:
+                # Credencial, limite ou Linx fora do ar: parar o lote em vez de insistir.
+                resumo.update(ok=False, error=str(exc))
+                break
+            continue
+        except ValueError as exc:
+            _linx_guardar_consulta(item["order_key"], item["documento"], None, str(exc))
+            resumo["erros"] += 1
+            continue
+        _linx_guardar_consulta(item["order_key"], item["documento"], resultado)
+        resumo["consultados"] += 1
+        chave = {"encontrado": "encontrados", "nao_cadastrado": "nao_cadastrados", "varios": "varios"}.get(resultado["status"])
+        if chave:
+            resumo[chave] += 1
+    return resumo
+
+
+def linx_clientes_loop(stop_event: threading.Event) -> None:
+    """V18.60: consulta sozinha os clientes novos. Sem .env da Linx, não faz nada."""
+    if stop_event.wait(90):
+        return
+    while not stop_event.is_set():
+        if not linx_configuracao_faltando():
+            try:
+                linx_clientes_sincronizar()
+            except Exception as exc:
+                _linx_registrar(str(exc))
+                print(f"[linx-clientes] falhou: {exc}", file=sys.stderr, flush=True)
+        if stop_event.wait(LINX_CLIENTES_INTERVALO):
+            break
+
+
+def linx_status_payload() -> dict[str, Any]:
+    with DB_LOCK:
+        contagem = {
+            r["s"] or "pendente": int(r["n"]) for r in DB.execute(
+                """SELECT CASE WHEN linx_api_documento<>documento_numero THEN '' ELSE linx_api_status END AS s,
+                          COUNT(*) AS n FROM cliente_fiscal
+                   WHERE documento_numero<>'' AND linx_cliente='' GROUP BY s"""
+            ).fetchall()
+        }
+    faltando = linx_configuracao_faltando()
+    return {
+        "ok": True,
+        "configurado": not faltando,
+        "faltando": faltando,
+        "gateway": LINX_API_BASE,
+        "empresa": LINX_EMPRESA,
+        "revenda": LINX_REVENDA,
+        "token_valido": bool(LINX_TOKEN["access_token"]) and time.time() < LINX_TOKEN["expira"],
+        "escrita_ativa": LINX_ESCRITA_ATIVA,
+        "ultimo_ok": LINX_ESTADO["ultimo_ok"],
+        "ultimo_erro": LINX_ESTADO["ultimo_erro"],
+        "ultimo_erro_em": LINX_ESTADO["ultimo_erro_em"],
+        "clientes": contagem,
+    }
+
+
+def linx_testar_conexao(documento: str = "") -> dict[str, Any]:
+    """Pede um token novo e, se vier documento, consulta o cliente. Não grava nada."""
+    try:
+        linx_obter_token(forcar=True)
+        _linx_registrar()
+        saida: dict[str, Any] = {"ok": True, "token": True}
+        if re.sub(r"\D", "", str(documento or "")):
+            saida["consulta"] = linx_consultar_cliente(documento)
+        return saida
+    except (LinxErro, ValueError) as exc:
+        _linx_registrar(str(exc))
+        return {"ok": False, "error": str(exc)}
+
+
+def linx_clientes_sem_cadastro() -> dict[str, Any]:
+    """Fila de cadastro: pedidos cujo cliente a Linx diz que não existe."""
+    corte = (datetime.now(timezone.utc) - timedelta(days=LINX_CLIENTES_DIAS)).isoformat()
+    with DB_LOCK:
+        rows = DB.execute(
+            """SELECT pedido, documento_tipo, documento_numero, nome_fiscal, linx_api_consultado_em
+               FROM cliente_fiscal
+               WHERE linx_cliente='' AND linx_api_status='nao_cadastrado'
+                 AND linx_api_documento=documento_numero AND atualizado_em>=?
+               ORDER BY atualizado_em""",
+            (corte,),
+        ).fetchall()
+    return {"ok": True, "pedidos": [{
+        "pedido": r["pedido"],
+        "documento": {"tipo": r["documento_tipo"], "numero": r["documento_numero"]},
+        "nome_fiscal": r["nome_fiscal"],
+        "consultado_em": r["linx_api_consultado_em"],
+    } for r in rows]}
+
+
+def _json_obj(texto: Any) -> dict[str, Any]:
+    try:
+        valor = json.loads(str(texto or "") or "{}")
+    except Exception:
+        return {}
+    return valor if isinstance(valor, dict) else {}
+
+
+# ---------------------------------------------------------------------------
+# V18.60 — romaneio e cadastro pela Smart API (catálogos P02/P03 e V01).
+#
+# O atendimento (Contato) JÁ EXISTE: a integração do Mercado Livre com o Linx cria
+# sozinha. O Noromak não cria contato nem item; ele só acha o contato do pedido,
+# grava a Observação (marketplace + data do pedido) e confirma o romaneio.
+#
+# ConfirmaRomaneio MOVIMENTA ESTOQUE e imprime no depósito em até ~1 min — não
+# volta atrás. Por isso:
+#   - toda gravação exige LINX_ESCRITA_ATIVA=1 no .env (desligada por padrão,
+#     até a leitura real ser conferida com o dono);
+#   - só roda por clique humano depois de ver atendimento, itens e observação;
+#   - relê a lista na hora (nunca confia na lista que a tela mostrou);
+#   - registra cada operação em linx_operacoes_v1860 e recusa repetir;
+#   - resposta 208 (a Linx perguntando algo) NUNCA é respondida sozinha.
+# NÃO coberto pela API assinada: liberar crédito, trocar condição de pagamento
+# (Shopee 971 / Magalu 983) e achar atendimentos pelo cliente diretamente.
+# ---------------------------------------------------------------------------
+LINX_ESCRITA_ATIVA = os.getenv("LINX_ESCRITA_ATIVA", "0").strip().lower() in {"1", "true", "sim"}
+LINX_PATH_PECAS = os.getenv("LINX_PATH_PECAS", "/api-pecas-balcao-premium").strip().rstrip("/")
+# Usuário dono dos atendimentos que a integração do ML cria (a Agenda é por usuário).
+LINX_USUARIO_ATENDIMENTOS = int(os.getenv("LINX_USUARIO_ATENDIMENTOS", "0") or 0)
+LINX_ROMANEIO_MAX_CONTATOS = 6
+# Regra do dono (17/09/2026) para o cadastro de cliente de marketplace.
+LINX_CADASTRO_EMAIL = "lojavirtual@noromak.com.br"
+LINX_CADASTRO_DDD = 11
+LINX_CADASTRO_TELEFONE = 111111111
+LINX_OBSERVACAO_MARKETPLACE = {"Mercado Livre": "MERCADO LIVRE", "Shopee": "SHOPEE", "Magalu": "MAGALU"}
+
+
+def ensure_linx_operacoes_schema() -> None:
+    with DB_LOCK:
+        DB.execute(
+            """CREATE TABLE IF NOT EXISTS linx_operacoes_v1860 (
+                   id INTEGER PRIMARY KEY AUTOINCREMENT,
+                   order_key TEXT NOT NULL,
+                   pedido TEXT NOT NULL DEFAULT '',
+                   etapa TEXT NOT NULL,
+                   contato TEXT NOT NULL DEFAULT '',
+                   situacao TEXT NOT NULL,
+                   detalhe TEXT NOT NULL DEFAULT '',
+                   em TEXT NOT NULL,
+                   por TEXT NOT NULL DEFAULT ''
+               )"""
+        )
+        DB.execute("CREATE INDEX IF NOT EXISTS idx_linx_operacoes_pedido ON linx_operacoes_v1860(order_key, etapa)")
+        DB.commit()
+
+
+def _linx_operacao_registrar(pedido: str, etapa: str, situacao: str, detalhe: Any = "",
+                             contato: Any = "", por: str = "") -> None:
+    texto = detalhe if isinstance(detalhe, str) else json_dumps(detalhe)
+    with DB_LOCK:
+        DB.execute(
+            "INSERT INTO linx_operacoes_v1860(order_key,pedido,etapa,contato,situacao,detalhe,em,por) VALUES(?,?,?,?,?,?,?,?)",
+            (normalize(pedido), str(pedido), etapa, str(contato or ""), situacao, texto[:4000], now_iso(), str(por or "")[:80]),
+        )
+        DB.commit()
+
+
+def linx_operacoes_do_pedido(pedido: str) -> list[dict[str, Any]]:
+    with DB_LOCK:
+        rows = DB.execute(
+            "SELECT etapa,contato,situacao,detalhe,em,por FROM linx_operacoes_v1860 WHERE order_key=? ORDER BY id",
+            (normalize(pedido),),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _linx_identificacao(contato: int) -> dict[str, Any]:
+    return {"Contato": int(contato), "Empresa": LINX_EMPRESA, "Revenda": LINX_REVENDA,
+            "Usuario": LINX_USUARIO_CODIGO, "CodigoOrigem": LINX_CODIGO_ORIGEM}
+
+
+def _linx_lista_romaneio(contato: int) -> dict[str, Any]:
+    """GeraListaRomaneio: o que falta separar no atendimento. Só leitura."""
+    corpo = {**_linx_identificacao(contato), "CodigoItemEstoque": None, "Ordem": None, "IdentificadorOrigem": ""}
+    resposta = linx_chamar("POST", f"{LINX_PATH_PECAS}/Pecas/ManutencaoRomaneio/PecRomaneio/GeraListaRomaneio", corpo)
+    return resposta if isinstance(resposta, dict) else {}
+
+
+def _linx_itens_resumo(lista: dict[str, Any]) -> list[dict[str, Any]]:
+    itens = []
+    for i in lista.get("ItensRomaneio") or []:
+        if isinstance(i, dict):
+            itens.append({
+                "item": str(i.get("ItemEstoquePub") or "").strip(),
+                "descricao": str(i.get("DescricaoItemEstoque") or "").strip(),
+                "quantidade": i.get("QuantidadeParaImprimir", i.get("QuantidadeSaldo")),
+                "requisitada": i.get("QuantidadeRequisitada"),
+            })
+    return itens
+
+
+def _linx_contatos_do_cliente(cliente: str) -> list[dict[str, Any]]:
+    """Atendimentos do cliente pela Agenda do usuário da integração. A Smart API
+    não tem 'atendimentos do cliente' (ObterAtendimentosDoCliente é só do Linx local)."""
+    usuario = LINX_USUARIO_ATENDIMENTOS or LINX_USUARIO_CODIGO
+    resposta = linx_chamar(
+        "GET", f"{LINX_PATH_PECAS}/VendaExternaPecas/Contatos/Agenda/{LINX_EMPRESA}/{LINX_REVENDA}/{usuario}"
+    )
+    registros = resposta if isinstance(resposta, list) else (
+        (resposta or {}).get("Registros") or (resposta or {}).get("Contatos") or [] if isinstance(resposta, dict) else []
+    )
+    vistos: dict[str, dict[str, Any]] = {}
+    for r in registros:
+        if not isinstance(r, dict) or str(r.get("Cliente") or "").strip() != str(cliente):
+            continue
+        contato = str(r.get("Contato") or "").strip()
+        if contato and contato != "0" and contato not in vistos:
+            vistos[contato] = {
+                "contato": contato,
+                "situacao": str(r.get("DescricaoSituacaoContato") or r.get("SituacaoCon") or "").strip(),
+                "data": str(r.get("DataContato") or "").strip(),
+            }
+    return sorted(vistos.values(), key=lambda c: c["data"], reverse=True)
+
+
+def _linx_codigos_do_pedido(linhas: list[dict[str, Any]]) -> set[str]:
+    """SKUs do pedido nas formas em que o código Apollo pode aparecer
+    (puro, prefixo-código, A/B)."""
+    codigos: set[str] = set()
+    for row in linhas:
+        sku = str(row.get("SKU") or row.get("Sku") or "").upper()
+        for parte in re.split(r"[/\-\s]+", sku):
+            parte = re.sub(r"[^0-9A-Z]", "", parte)
+            if parte:
+                codigos.add(parte)
+    return codigos
+
+
+def _linx_observacao(marketplace: str, linhas: list[dict[str, Any]]) -> str:
+    data = _vendas_data_da_linha(linhas[0]) if linhas else ""
+    nome = LINX_OBSERVACAO_MARKETPLACE.get(marketplace, str(marketplace or "").upper())
+    return f"{nome} {data[8:10]}/{data[5:7]}".strip() if data else nome
+
+
+def _linx_documento_do_pedido(pedido: str, linhas: list[dict[str, Any]]) -> tuple[str, str]:
+    guardado = _cliente_fiscal_guardado(pedido) or {}
+    if guardado.get("documento_numero"):
+        return guardado["documento_numero"], str(guardado.get("nome_fiscal") or "")
+    for row in linhas:
+        doc = documento_do_pedido(row)
+        if doc["numero"]:
+            return doc["numero"], nome_fiscal_do_pedido(row)
+    return "", ""
+
+
+def linx_romaneio_preparar(pedido: str, contatos: list[Any] | None = None) -> dict[str, Any]:
+    """Mostra o que o romaneio faria. Só leitura no Linx.
+
+    `contatos`: atendimentos que a extensão achou no Linx local
+    (ObterAtendimentosDoCliente) — usados no lugar da Agenda quando vierem."""
+    pedido = str(pedido or "").strip()
+    with DB_LOCK:
+        linhas = _linhas_do_pedido(pedido)
+    if not linhas:
+        return {"ok": False, "error": f"Pedido {pedido} não encontrado."}
+    marketplace = _vendas_marketplace(linhas[0].get("Marketplace") or linhas[0].get("Origem"))
+    saida: dict[str, Any] = {
+        "ok": True, "pedido": pedido, "marketplace": marketplace,
+        "observacao": _linx_observacao(marketplace, linhas),
+        "escrita_ativa": LINX_ESCRITA_ATIVA,
+        "precisa_condicao": marketplace in ("Shopee", "Magalu"),
+        "operacoes": linx_operacoes_do_pedido(pedido),
+        "cadastro": _linx_cadastro_situacao(pedido),
+        "robo": linx_robo_fila_do_pedido(pedido),
+        "cliente": None, "candidatos": [], "escolhido": "",
+    }
+    documento, nome = _linx_documento_do_pedido(pedido, linhas)
+    if not documento:
+        return {**saida, "situacao": "sem_documento",
+                "aviso": "Este pedido ainda não tem CPF/CNPJ da nota. Puxe nome e CPF primeiro."}
+    consulta = linx_consultar_cliente(documento)
+    saida["cliente"] = {"documento": documento, "nome_fiscal": nome, **consulta}
+    if consulta["status"] != "encontrado":
+        return {**saida, "situacao": consulta["status"],
+                "aviso": "Cliente não cadastrado no Linx." if consulta["status"] == "nao_cadastrado"
+                else "Mais de um cliente com este CPF/CNPJ no Linx — confira no Linx."}
+    codigos = _linx_codigos_do_pedido(linhas)
+    candidatos = []
+    informados = []
+    for c in contatos or []:
+        numero = re.sub(r"\D", "", str(c or ""))
+        if numero and numero != "0" and numero not in [x["contato"] for x in informados]:
+            informados.append({"contato": numero, "situacao": "informado pelo Linx", "data": ""})
+    saida["fonte_contatos"] = "extensao" if informados else "agenda"
+    lista_contatos = informados or _linx_contatos_do_cliente(consulta["cliente"])
+    for c in lista_contatos[:LINX_ROMANEIO_MAX_CONTATOS]:
+        itens = _linx_itens_resumo(_linx_lista_romaneio(int(c["contato"])))
+        if not itens:
+            continue  # nada a separar: romaneio já feito ou atendimento sem peça
+        bate = sum(1 for i in itens if re.sub(r"[^0-9A-Z]", "", i["item"].upper()) in codigos)
+        candidatos.append({**c, "itens": itens, "itens_do_pedido": bate})
+    saida["candidatos"] = candidatos
+    # Escolhe sozinho só quando não há dúvida: um atendimento com itens, ou um
+    # único cujas peças batem com o pedido. Senão, quem escolhe é a pessoa.
+    if len(candidatos) == 1:
+        saida["escolhido"] = candidatos[0]["contato"]
+    else:
+        batem = [c for c in candidatos if c["itens_do_pedido"]]
+        if len(batem) == 1:
+            saida["escolhido"] = batem[0]["contato"]
+    if not candidatos:
+        return {**saida, "situacao": "sem_atendimento",
+                "aviso": "Nenhum atendimento deste cliente com peças a separar (o romaneio pode já ter sido feito)."}
+    return {**saida, "situacao": "pronto" if saida["escolhido"] else "escolher"}
+
+
+def _linx_escrita_bloqueada() -> str:
+    if linx_configuracao_faltando():
+        return "Linx Smart API não configurada no servidor."
+    if not LINX_ESCRITA_ATIVA:
+        return ("Gravação no Linx desligada (LINX_ESCRITA_ATIVA=0). Ela é ligada depois que a "
+                "consulta real for conferida.")
+    return ""
+
+
+def _linx_dialogo(resposta: Any) -> str:
+    if isinstance(resposta, dict):
+        return str(resposta.get("TextoDeConfirmacao") or resposta.get("MensagemErro") or "").strip()
+    return ""
+
+
+def _linx_cadastro_situacao(pedido: str) -> dict[str, bool]:
+    """V18.60: o cadastro vem ANTES do romaneio (regra do dono, 02/10/2026).
+    feito = o Noromak tem o código do cliente gravado (pela extensão, robô ou API).
+    pela_api = a última atualização foi pela Smart API, que NÃO libera crédito."""
+    guardado = _cliente_fiscal_guardado(pedido) or {}
+    cadastros = [o for o in linx_operacoes_do_pedido(pedido)
+                 if o["etapa"] in ("cadastro", "cadastro_robo") and o["situacao"] == "ok"]
+    ultimo = cadastros[-1] if cadastros else None
+    return {"feito": bool(str(guardado.get("linx_cliente") or "").strip()) or ultimo is not None,
+            "pela_api": bool(ultimo and ultimo["etapa"] == "cadastro")}
+
+
+def linx_romaneio_confirmar(pedido: str, contato: Any, observacao: str, *, condicao_conferida: bool = False,
+                            credito_conferido: bool = False, usuario: str = "") -> dict[str, Any]:
+    """Grava a Observação e confirma o romaneio (IMPRIME e movimenta estoque)."""
+    pedido = str(pedido or "").strip()
+    observacao = re.sub(r"\s+", " ", str(observacao or "")).strip().upper()
+    bloqueio = _linx_escrita_bloqueada()
+    if bloqueio:
+        return {"ok": False, "error": bloqueio}
+    try:
+        contato_num = int(str(contato or "").strip())
+    except ValueError:
+        contato_num = 0
+    if contato_num <= 0:
+        return {"ok": False, "error": "Escolha o atendimento (Contato)."}
+    if not observacao or len(observacao) > 120:
+        return {"ok": False, "error": "Informe a observação do romaneio (ex.: MERCADO LIVRE 21/09)."}
+    with DB_LOCK:
+        linhas = _linhas_do_pedido(pedido)
+    if not linhas:
+        return {"ok": False, "error": f"Pedido {pedido} não encontrado."}
+    marketplace = _vendas_marketplace(linhas[0].get("Marketplace") or linhas[0].get("Origem"))
+    condicao_pela_extensao = any(o["etapa"] == "condicao" and o["situacao"] == "ok"
+                                 for o in linx_operacoes_do_pedido(pedido))
+    if marketplace in ("Shopee", "Magalu") and not (condicao_conferida or condicao_pela_extensao):
+        return {"ok": False, "error": f"Confira no Linx a condição de pagamento do {marketplace} "
+                                      "(Shopee 971, Magalu 983) antes do romaneio. A API não troca a condição."}
+    if any(o["etapa"] == "romaneio" and o["situacao"] == "ok" for o in linx_operacoes_do_pedido(pedido)):
+        return {"ok": False, "error": "O romaneio deste pedido já foi impresso pelo Noromak."}
+    cadastro = _linx_cadastro_situacao(pedido)
+    if not cadastro["feito"]:
+        return {"ok": False, "error": "Atualize o cadastro do cliente no Linx antes do romaneio."}
+    if cadastro["pela_api"] and not credito_conferido:
+        return {"ok": False, "error": "O cadastro foi atualizado pela API, que não libera crédito. Libere no Linx "
+                                      "(Aprovado + Crédito normal) e marque que conferiu."}
+    try:
+        lista = _linx_lista_romaneio(contato_num)
+        itens = _linx_itens_resumo(lista)
+        if not itens:
+            return {"ok": False, "error": "Este atendimento não tem itens a separar — o romaneio pode já ter sido feito."}
+        lista["Observacao"] = observacao
+        atualizada = linx_chamar(
+            "POST", f"{LINX_PATH_PECAS}/Pecas/ManutencaoRomaneio/PecRomaneio/AtualizaListaRomaneio/AtualizaQuantidades",
+            {"Empresa": LINX_EMPRESA, "ListaRomaneio": lista, "ItensParaAjuste": []},
+        )
+        if isinstance(atualizada, dict) and isinstance(atualizada.get("ItensRomaneio"), list):
+            lista = atualizada
+            lista["Observacao"] = observacao
+        status, resposta = linx_chamar_status(
+            "POST", f"{LINX_PATH_PECAS}/Pecas/ManutencaoRomaneio/PecRomaneio/ConfirmaRomaneio",
+            {"IdentificacaoAtendimento": _linx_identificacao(contato_num), "ListaRomaneio": lista},
+        )
+    except LinxErro as exc:
+        _linx_registrar(str(exc))
+        _linx_operacao_registrar(pedido, "romaneio", "erro", str(exc), contato_num, usuario)
+        return {"ok": False, "error": str(exc)}
+    if status == 208:
+        pergunta = _linx_dialogo(resposta) or "A Linx pediu uma confirmação."
+        _linx_operacao_registrar(pedido, "romaneio", "pergunta", resposta, contato_num, usuario)
+        return {"ok": False, "situacao": "pergunta", "error": f"A Linx perguntou: {pergunta} Resolva no Linx; nada foi respondido."}
+    _linx_operacao_registrar(pedido, "romaneio", "ok", {"observacao": observacao, "itens": itens, "resposta": resposta},
+                             contato_num, usuario)
+    audit(usuario, "linx.romaneio", f"{pedido}|{contato_num}|{observacao}")
+    mensagens = [str(m) for m in resposta] if isinstance(resposta, list) else []
+    return {"ok": True, "situacao": "impresso", "pedido": pedido, "contato": contato_num,
+            "observacao": observacao, "itens": itens, "mensagens": mensagens}
+
+
+def linx_cadastro_atualizar(pedido: str, usuario: str = "") -> dict[str, Any]:
+    """Nome da NF-e (maiúsculo), telefones e e-mail pela regra de 17/09/2026, pela
+    rota AtualizarCadastroClienteAAR — só estes campos. Endereço e CRÉDITO não
+    passam por aqui (a API não altera crédito)."""
+    pedido = str(pedido or "").strip()
+    bloqueio = _linx_escrita_bloqueada()
+    if bloqueio:
+        return {"ok": False, "error": bloqueio}
+    with DB_LOCK:
+        linhas = _linhas_do_pedido(pedido)
+    if not linhas:
+        return {"ok": False, "error": f"Pedido {pedido} não encontrado."}
+    documento, nome = _linx_documento_do_pedido(pedido, linhas)
+    if not documento or not _nome_fiscal_valido(nome):
+        return {"ok": False, "error": "Falta CPF/CNPJ ou nome da nota neste pedido. Puxe nome e CPF primeiro."}
+    try:
+        consulta = linx_consultar_cliente(documento)
+        if consulta["status"] != "encontrado":
+            return {"ok": False, "error": "Cliente não cadastrado no Linx (ou mais de um com este CPF). "
+                                          "A API atualiza, mas não inclui sem conferência."}
+        nome_linx = re.sub(r"\s+", " ", nome).strip().upper()
+        corpo = {
+            "Nome": nome_linx, "Email": LINX_CADASTRO_EMAIL, "CPFCNPJ": documento,
+            "DDDTelefone": LINX_CADASTRO_DDD, "Telefone": LINX_CADASTRO_TELEFONE,
+            "DDDCelular": LINX_CADASTRO_DDD, "Celular": LINX_CADASTRO_TELEFONE,
+            "Empresa": LINX_EMPRESA, "Revenda": LINX_REVENDA, "Cliente": int(consulta["cliente"]),
+        }
+        linx_chamar("POST", f"{LINX_PATH_CLIENTES}/Geral/ManutencaoClienteSimplificado/AtualizarCadastroClienteAAR", corpo)
+        # Neste gateway 200 não é confirmação: relê e confere o nome.
+        depois = linx_consultar_cliente(documento)
+    except LinxErro as exc:
+        _linx_registrar(str(exc))
+        _linx_operacao_registrar(pedido, "cadastro", "erro", str(exc), "", usuario)
+        return {"ok": False, "error": str(exc)}
+    conferido = normalize(depois.get("nome")) == normalize(nome_linx)
+    _linx_operacao_registrar(pedido, "cadastro", "ok" if conferido else "nao_conferido",
+                             {"cliente": consulta["cliente"], "nome": nome_linx, "nome_depois": depois.get("nome")},
+                             "", usuario)
+    audit(usuario, "linx.cadastro", f"{pedido}|{consulta['cliente']}|{'ok' if conferido else 'nao_conferido'}")
+    if not conferido:
+        return {"ok": False, "error": f"A Linx aceitou, mas o nome continua \"{depois.get('nome') or '—'}\". Confira no Linx."}
+    salvar_cliente_fiscal(pedido, documento, nome, linx_cliente=str(consulta["cliente"]), fonte="linx_api", usuario=usuario)
+    return {"ok": True, "pedido": pedido, "cliente": consulta["cliente"], "nome": nome_linx,
+            "credito": depois.get("credito") or {}}
+
+
+# ---------------------------------------------------------------------------
+# V18.60 — o que a Smart API não faz, quem faz:
+#
+#   cadastro completo + CRÉDITO  → robô do Apollo desktop (apollo-robo.ps1), no PC
+#                                   do escritório: busca a fila aqui, grava pelo app
+#                                   desktop (o Linx web quebra ao gravar cliente desde
+#                                   02/10/2026) e devolve o resultado;
+#   condição de pagamento        → extensão "Cadastro de Cliente no Linx" (Linx local),
+#   (Shopee 971 / Magalu 983)       chamada pela tela; o resultado é registrado aqui;
+#   envio ao caixa               → extensão, idem.
+#
+# O robô se autentica com um token próprio (mesmo modelo do agente Zebra), só
+# enxerga a fila e só devolve resultado: não tem acesso a mais nada do sistema.
+# Só entra na fila o que um admin mandou, pedido a pedido.
+# ---------------------------------------------------------------------------
+LINX_ROBO_TOKEN_STORAGE_KEY = "linx_robo_token_v1"
+LINX_ROBO_TRAVA_SEGUNDOS = 15 * 60
+LINX_ROBO_MAX_TENTATIVAS = 3
+LINX_OPERACOES_DA_EXTENSAO = {"condicao", "caixa"}
+
+
+def ensure_linx_robo_schema() -> None:
+    with DB_LOCK:
+        DB.execute(
+            """CREATE TABLE IF NOT EXISTS linx_robo_fila_v1860 (
+                   id INTEGER PRIMARY KEY AUTOINCREMENT,
+                   order_key TEXT NOT NULL,
+                   pedido TEXT NOT NULL,
+                   documento TEXT NOT NULL,
+                   nome TEXT NOT NULL,
+                   situacao TEXT NOT NULL DEFAULT 'pendente',
+                   tentativas INTEGER NOT NULL DEFAULT 0,
+                   pego_epoch INTEGER NOT NULL DEFAULT 0,
+                   mensagem TEXT NOT NULL DEFAULT '',
+                   criado_em TEXT NOT NULL,
+                   criado_por TEXT NOT NULL DEFAULT '',
+                   atualizado_em TEXT NOT NULL
+               )"""
+        )
+        DB.execute("CREATE INDEX IF NOT EXISTS idx_linx_robo_situacao ON linx_robo_fila_v1860(situacao, id)")
+        DB.commit()
+
+
+def get_or_create_linx_robo_token() -> str:
+    env_token = os.getenv("LINX_ROBO_TOKEN", "").strip()
+    if env_token:
+        return env_token
+    with DB_LOCK:
+        row = DB.execute("SELECT value FROM storage WHERE key=?", (LINX_ROBO_TOKEN_STORAGE_KEY,)).fetchone()
+        token = str(row["value"] if row else "").strip()
+        if token:
+            return token
+        token = secrets.token_urlsafe(36)
+        DB.execute(
+            "INSERT INTO storage(key,value,version,updated_at) VALUES(?,?,1,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value,version=storage.version+1,updated_at=excluded.updated_at",
+            (LINX_ROBO_TOKEN_STORAGE_KEY, token, now_iso()),
+        )
+        DB.commit()
+        return token
+
+
+def rotate_linx_robo_token() -> str:
+    if os.getenv("LINX_ROBO_TOKEN", "").strip():
+        raise RuntimeError("O token está definido por LINX_ROBO_TOKEN no servidor e não pode ser renovado pelo painel.")
+    token = secrets.token_urlsafe(36)
+    with DB_LOCK:
+        DB.execute(
+            "INSERT INTO storage(key,value,version,updated_at) VALUES(?,?,1,?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value,version=storage.version+1,updated_at=excluded.updated_at",
+            (LINX_ROBO_TOKEN_STORAGE_KEY, token, now_iso()),
+        )
+        DB.commit()
+    return token
+
+
+def linx_robo_fila_do_pedido(pedido: str) -> dict[str, Any] | None:
+    with DB_LOCK:
+        row = DB.execute(
+            "SELECT id,situacao,tentativas,mensagem,criado_em,criado_por,atualizado_em FROM linx_robo_fila_v1860 "
+            "WHERE order_key=? ORDER BY id DESC LIMIT 1", (normalize(pedido),),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def linx_robo_enfileirar(pedido: str, usuario: str = "") -> dict[str, Any]:
+    """Admin manda o cadastro completo (com crédito) deste pedido para o robô."""
+    pedido = str(pedido or "").strip()
+    with DB_LOCK:
+        linhas = _linhas_do_pedido(pedido)
+    if not linhas:
+        return {"ok": False, "error": f"Pedido {pedido} não encontrado."}
+    documento, nome = _linx_documento_do_pedido(pedido, linhas)
+    if len(documento) != 11:
+        # O robô só sabe pessoa física (a extensão também bloqueia CNPJ).
+        return {"ok": False, "error": "O robô cadastra só CPF (pessoa física). Puxe nome e CPF da nota primeiro."
+                if not documento else "O robô cadastra só CPF (pessoa física); CNPJ fica para o Linx."}
+    if not _nome_fiscal_valido(nome):
+        return {"ok": False, "error": "Falta o nome da nota neste pedido. Puxe nome e CPF primeiro."}
+    atual = linx_robo_fila_do_pedido(pedido)
+    if atual and atual["situacao"] in ("pendente", "em_andamento"):
+        return {"ok": True, "ja_na_fila": True, "fila": atual}
+    agora = now_iso()
+    with DB_LOCK:
+        DB.execute(
+            """INSERT INTO linx_robo_fila_v1860(order_key,pedido,documento,nome,situacao,criado_em,criado_por,atualizado_em)
+               VALUES(?,?,?,?,'pendente',?,?,?)""",
+            (normalize(pedido), pedido, documento, re.sub(r"\s+", " ", nome).strip().upper(), agora,
+             str(usuario or "")[:80], agora),
+        )
+        DB.commit()
+    audit(usuario, "linx.robo.enfileirar", pedido)
+    return {"ok": True, "fila": linx_robo_fila_do_pedido(pedido)}
+
+
+def linx_robo_proximo() -> dict[str, Any]:
+    """O robô pega UM cadastro. Item pego e não devolvido em 15 min volta à fila."""
+    agora = int(time.time())
+    with DB_LOCK:
+        DB.execute("BEGIN IMMEDIATE")
+        try:
+            row = DB.execute(
+                """SELECT id,pedido,documento,nome,tentativas FROM linx_robo_fila_v1860
+                   WHERE situacao='pendente' OR (situacao='em_andamento' AND pego_epoch<?)
+                   ORDER BY id LIMIT 1""",
+                (agora - LINX_ROBO_TRAVA_SEGUNDOS,),
+            ).fetchone()
+            if row:
+                DB.execute(
+                    "UPDATE linx_robo_fila_v1860 SET situacao='em_andamento', pego_epoch=?, tentativas=tentativas+1, "
+                    "atualizado_em=? WHERE id=?", (agora, now_iso(), row["id"]),
+                )
+            DB.commit()
+        except Exception:
+            DB.rollback()
+            raise
+    if not row:
+        return {"ok": True, "item": None}
+    return {"ok": True, "item": {"id": row["id"], "pedido": row["pedido"], "cpf": row["documento"], "nome": row["nome"]}}
+
+
+def linx_robo_resultado(item_id: Any, ok: bool, mensagem: str = "", cliente: str = "") -> dict[str, Any]:
+    """O robô devolve o que aconteceu. ok = gravou cadastro E crédito e releu."""
+    try:
+        item_id = int(item_id)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "Item inválido."}
+    with DB_LOCK:
+        row = DB.execute("SELECT * FROM linx_robo_fila_v1860 WHERE id=?", (item_id,)).fetchone()
+    if not row or row["situacao"] != "em_andamento":
+        return {"ok": False, "error": "Item não está com o robô."}
+    mensagem = str(mensagem or "")[:1000]
+    cliente = re.sub(r"\D", "", str(cliente or ""))
+    if ok and not cliente:
+        # O robô não leu o código: tenta pela Smart API (só leitura).
+        try:
+            consulta = linx_consultar_cliente(row["documento"]) if not linx_configuracao_faltando() else {}
+            if consulta.get("status") == "encontrado":
+                cliente = consulta["cliente"]
+        except (LinxErro, ValueError):
+            pass
+    if ok:
+        situacao = "ok"
+    else:
+        situacao = "erro" if int(row["tentativas"] or 0) >= LINX_ROBO_MAX_TENTATIVAS else "pendente"
+    with DB_LOCK:
+        DB.execute("UPDATE linx_robo_fila_v1860 SET situacao=?, mensagem=?, atualizado_em=? WHERE id=?",
+                   (situacao, mensagem, now_iso(), item_id))
+        DB.commit()
+    _linx_operacao_registrar(row["pedido"], "cadastro_robo", "ok" if ok else "erro",
+                             {"mensagem": mensagem, "cliente": cliente}, "", "robo-apollo")
+    if ok:
+        # Mesmo marcador que a extensão usa quando grava: cadastro feito (com crédito).
+        salvar_cliente_fiscal(row["pedido"], row["documento"], row["nome"], linx_cliente=cliente or "robo",
+                              fonte="robo_apollo", usuario="robo-apollo")
+    audit("robo-apollo", "linx.robo.resultado", f"{row['pedido']}|{situacao}|{mensagem[:120]}")
+    return {"ok": True, "situacao": situacao}
+
+
+def linx_registrar_operacao_extensao(pedido: str, etapa: str, situacao: str, detalhe: Any,
+                                     contato: Any = "", usuario: str = "") -> dict[str, Any]:
+    """A tela registra o que a extensão fez no Linx local (condição, caixa)."""
+    pedido = str(pedido or "").strip()
+    if etapa not in LINX_OPERACOES_DA_EXTENSAO:
+        return {"ok": False, "error": "Etapa inválida."}
+    if situacao not in ("ok", "pendente", "erro"):
+        return {"ok": False, "error": "Situação inválida."}
+    with DB_LOCK:
+        if not _linhas_do_pedido(pedido):
+            return {"ok": False, "error": f"Pedido {pedido} não encontrado."}
+    if etapa == "caixa" and situacao == "ok" and not any(
+        o["etapa"] == "romaneio" and o["situacao"] == "ok" for o in linx_operacoes_do_pedido(pedido)
+    ):
+        # Registro só; quem envia é a extensão. Mas a ordem fica visível.
+        detalhe = {"aviso": "enviado ao caixa sem romaneio registrado pelo Noromak", "detalhe": detalhe}
+    _linx_operacao_registrar(pedido, etapa, situacao, detalhe, contato, usuario)
+    audit(usuario, f"linx.{etapa}", f"{pedido}|{situacao}")
+    return {"ok": True}
 
 
 VENDAS_CAMPOS_DATA = ("Data do Pedido", "DataPedido", "DataVenda", "Data", "CriadoEm")
@@ -16370,6 +17331,14 @@ class AppHandler(BaseHTTPRequestHandler):
             return None
         return ctx
 
+    def linx_robo_auth(self) -> bool:
+        authorization = str(self.headers.get("Authorization") or "").strip()
+        supplied = authorization[7:].strip() if authorization.lower().startswith("bearer ") else ""
+        if not supplied or not hmac.compare_digest(supplied, get_or_create_linx_robo_token()):
+            self.send_json({"ok": False, "error": "Token do robô do Linx inválido."}, 401)
+            return False
+        return True
+
     def print_agent_auth(self) -> bool:
         authorization = str(self.headers.get("Authorization") or "").strip()
         supplied = authorization[7:].strip() if authorization.lower().startswith("bearer ") else ""
@@ -16802,6 +17771,30 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
+        # V18.60 — Linx Smart API: status da conexão e fila de quem não tem cadastro.
+        # V18.60 — romaneio: o que seria impresso (só leitura no Linx).
+        if path == "/api/linx/romaneio":
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            try:
+                contatos = [c for c in str((query.get("contatos") or [""])[0] or "").split(",") if c.strip()]
+                resultado = linx_romaneio_preparar(str((query.get("pedido") or [""])[0] or ""), contatos or None)
+                self.send_json(resultado, 200 if resultado.get("ok") else 404)
+            except (LinxErro, ValueError) as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 502)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path in ("/api/linx/status", "/api/linx/clientes/sem-cadastro"):
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            try:
+                self.send_json(linx_status_payload() if path == "/api/linx/status" else linx_clientes_sem_cadastro())
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
         # V17.93 — o que a extensão ainda precisa ler (segundo plano).
         if path == "/api/cliente-fiscal/pendentes":
             ctx = self.auth(admin_only=True)
@@ -16836,6 +17829,19 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.send_json(resultado, 200 if resultado.get("ok") else 404)
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        # V18.60 — robô do Apollo desktop: token próprio, só a fila.
+        if path == "/api/linx/robo/proximo":
+            if self.linx_robo_auth():
+                try:
+                    self.send_json(linx_robo_proximo())
+                except Exception as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/linx/robo/config":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                self.send_json({"ok": True, "token": get_or_create_linx_robo_token()})
             return
         if path == "/api/print/agent/ping":
             if self.print_agent_auth():
@@ -16963,6 +17969,81 @@ class AppHandler(BaseHTTPRequestHandler):
                     fonte=str(body.get("fonte") or "extensao"), usuario=str(ctx.get("username") or ""),
                 )
                 self.send_json(resultado, 200 if resultado.get("ok") else 400)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        # V18.60 — Linx Smart API. Só leitura no Linx: testar pede token (e consulta
+        # um CPF, se vier); sincronizar consulta agora os clientes pendentes.
+        # V18.60 — robô do Apollo desktop devolve o resultado (token próprio).
+        if path == "/api/linx/robo/resultado":
+            if self.linx_robo_auth():
+                try:
+                    body = self.read_json()
+                    resultado = linx_robo_resultado(body.get("id"), body.get("ok") is True,
+                                                    str(body.get("mensagem") or ""), str(body.get("cliente") or ""))
+                    self.send_json(resultado, 200 if resultado.get("ok") else 409)
+                except Exception as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        # V18.60 — fila do robô, token do robô e o que a extensão fez (condição, caixa).
+        if path in ("/api/linx/robo/fila", "/api/linx/robo/renovar", "/api/linx/operacao"):
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            try:
+                body = self.read_json()
+                usuario = str(ctx.get("username") or "")
+                if path == "/api/linx/robo/fila":
+                    resultado = linx_robo_enfileirar(str(body.get("pedido") or ""), usuario)
+                elif path == "/api/linx/robo/renovar":
+                    # Mesma regra do token do agente Zebra: só o proprietário, reautenticado.
+                    if not self.require_owner_reauth(ctx):
+                        audit(usuario, "security.denied.owner_reauth", "linx.robo.rotate_token")
+                        self.send_json({"ok": False, "error": "Somente o proprietário pode renovar esta credencial."}, 403)
+                        return
+                    resultado = {"ok": True, "token": rotate_linx_robo_token()}
+                    audit(usuario, "linx.robo.token_renovado", "")
+                else:
+                    resultado = linx_registrar_operacao_extensao(
+                        str(body.get("pedido") or ""), str(body.get("etapa") or ""), str(body.get("situacao") or ""),
+                        body.get("detalhe"), body.get("contato") or "", usuario)
+                self.send_json(resultado, 200 if resultado.get("ok") else 409)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        # V18.60 — GRAVAM no Linx: só com LINX_ESCRITA_ATIVA=1 e clique de um admin.
+        if path in ("/api/linx/romaneio", "/api/linx/cadastro"):
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            try:
+                body = self.read_json()
+                usuario = str(ctx.get("username") or "")
+                if path == "/api/linx/romaneio":
+                    resultado = linx_romaneio_confirmar(
+                        str(body.get("pedido") or ""), body.get("contato"), str(body.get("observacao") or ""),
+                        condicao_conferida=body.get("condicao_conferida") is True,
+                        credito_conferido=body.get("credito_conferido") is True, usuario=usuario,
+                    )
+                else:
+                    resultado = linx_cadastro_atualizar(str(body.get("pedido") or ""), usuario=usuario)
+                self.send_json(resultado, 200 if resultado.get("ok") else 409)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path in ("/api/linx/testar", "/api/linx/clientes/sincronizar"):
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            try:
+                body = self.read_json()
+                if path == "/api/linx/testar":
+                    resultado = linx_testar_conexao(str(body.get("documento") or ""))
+                else:
+                    resultado = linx_clientes_sincronizar()
+                audit(str(ctx.get("username") or ""), "linx." + path.rsplit("/", 1)[-1],
+                      "ok" if resultado.get("ok") else str(resultado.get("error") or "")[:200])
+                self.send_json(resultado, 200 if resultado.get("ok") else 502)
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
@@ -19646,6 +20727,13 @@ def main() -> None:
         name="manutencao-diaria",
         daemon=True,
     )
+    # V18.60: cliente já cadastrado no Linx? (Smart API, só leitura). Sem .env, ocioso.
+    linx_clientes_thread = threading.Thread(
+        target=_worker_protegido(linx_clientes_loop),
+        args=(watcher_stop,),
+        name="linx-clientes",
+        daemon=True,
+    )
     _ml_worker_state_update(started_at=now_iso(), last_error="")
     manutencao_thread.start()
     watcher_thread.start()
@@ -19659,6 +20747,7 @@ def main() -> None:
     frete_thread.start()
     ads_thread.start()
     relatorio_thread.start()
+    linx_clientes_thread.start()
     server = ThreadingHTTPServer((HOST, PORT), AppHandler)
     server.daemon_threads = True
     print(f"Sistema de Conferência Web {APP_VERSION} em http://{HOST}:{PORT}{BASE_PATH}", flush=True)

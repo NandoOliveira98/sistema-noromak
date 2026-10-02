@@ -154,6 +154,57 @@ estoque** — E!). É o mesmo fluxo que já mapeamos pela extensão do Linx.
 
 ---
 
+## 4b. O que já está implementado (V18.60) — só leitura
+
+- **Conexão** no servidor: token de `POST /api-seguranca/token` guardado em memória e
+  renovado quando a Linx devolve 401 (uma nova tentativa só). `LINX_*` no `.env`
+  (ver `.env.example`); sem as três obrigatórias, nada é chamado.
+- **Cliente já cadastrado no Linx?** O worker `linx_clientes_loop` (2 min) consulta
+  `POST /api-veiculos-crm/Geral/ConsultaClientes/ConsultaClientes` com o CPF/CNPJ que a
+  extensão leu na venda (`cliente_fiscal`). Resultado em `cliente_fiscal.linx_api_*`,
+  **separado** de `linx_cliente` (o que a extensão gravou no Linx, que nunca é trocado).
+  - `encontrado` = um código só (🔎 na coluna Cód.Cliente da Central);
+  - `nao_cadastrado` = fila de cadastro (`GET /api/linx/clientes/sem-cadastro`),
+    consultado de novo a cada 6 h;
+  - `varios` = mais de um código para o mesmo documento — nunca escolhe sozinho;
+  - CPF devolvido pela Linx diferente do pedido não conta; CPF corrigido volta à fila.
+- Rotas (só admin): `GET /api/linx/status`, `POST /api/linx/testar` (token + CPF
+  opcional), `POST /api/linx/clientes/sincronizar`. Cartão em Admin → Integrações.
+- **Romaneio** (botão Romaneio da Central, `GET/POST /api/linx/romaneio`): o atendimento
+  JÁ EXISTE (a integração do ML cria). Acha o cliente pelo CPF, os atendimentos dele pela
+  Agenda do usuário da integração (`GET /VendaExternaPecas/Contatos/Agenda/...`, filtrado pelo
+  Cliente), e só considera os que têm itens em `GeraListaRomaneio`. Escolhe sozinho apenas
+  quando há um só (ou um só cujas peças batem com o SKU do pedido). Observação =
+  marketplace + data do pedido (`MERCADO LIVRE 21/09`). Imprimir = `AtualizaQuantidades`
+  (com a observação) + `ConfirmaRomaneio`, depois de confirmação na tela. Resposta 208 (a Linx
+  perguntando) não é respondida; não repete romaneio já feito (`linx_operacoes_v1860`).
+- **Cadastro** (`POST /api/linx/cadastro`): `AtualizarCadastroClienteAAR` com nome da NF-e
+  em maiúsculo, 11 111111111 e lojavirtual@noromak.com.br; relê e confere o nome.
+- **Gravação desligada por padrão** (`LINX_ESCRITA_ATIVA=0`).
+- **Processo completo no botão Romaneio da Central (4 etapas, nesta ordem):**
+  1. *Cadastro + crédito* → **robô do Apollo desktop**. O admin manda o pedido para a fila
+     (`POST /api/linx/robo/fila`); o `robo-fila.ps1` (pasta `NOROMAK_LINX_CLIENTE/robo-apollo`,
+     no PC do escritório) pega com `GET /api/linx/robo/proximo`, roda `apollo-robo.ps1 -Modo
+     Gravar` só com o PC ocioso e devolve em `POST /api/linx/robo/resultado`. Token próprio
+     (Bearer, como o agente Zebra) — em Admin → Integrações. Item pego e não devolvido em 15 min
+     volta à fila; 3 erros = para. Ok do robô = Cadastro Aprovado + Crédito normal relidos.
+     Alternativa parcial: nome/telefone/e-mail pela API (aí o crédito precisa ser conferido).
+  2. *Condição de pagamento* (Shopee 971 / Magalu 983) → **extensão 0.26** (`condicao-definir`
+     no Linx local); a tela registra em `POST /api/linx/operacao` (etapa `condicao`).
+  3. *Romaneio* → servidor (Smart API). Se a Agenda não listar o atendimento, a extensão busca
+     pelo Linx local (`romaneio-consultar`) e a tela repassa em `?contatos=`.
+  4. *Caixa* → **extensão 0.26** (`caixa-enviar`), registrado na etapa `caixa`.
+  A extensão 0.26 recebe da página `noromak-linx-acao` (só essas três ações) e pede uma
+  segunda confirmação própria antes de gravar.
+- **nginx:** `/expedicao/api/linx/robo/proximo` e `/resultado` são chamados pelo robô sem
+  sessão (como `/api/print/agent/*`): se houver portão de login no nginx, liberar como o do agente.
+- **Fora da API assinada:** liberar crédito (só é exibido), condição de pagamento da
+  Shopee/Magalu (a tela exige marcar que foi conferida no Linx) e envio ao caixa (depende de
+  vendedor/valor total, que a Smart API não devolve — continua pela extensão).
+- **Ainda não confirmado com a Linx real:** se a Agenda lista os atendimentos da integração
+  (e com qual usuário), o significado dos códigos de crédito, se o token vai como `Bearer` (configurável em
+  `LINX_AUTH_ESQUEMA`) e o formato real da resposta da consulta.
+
 ## 5. Plano de teste sugerido (tudo só-leitura)
 
 1. **Acesso da VPS:** da VPS, `POST /api-seguranca/token` com o usuário de integração.

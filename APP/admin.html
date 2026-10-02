@@ -1477,6 +1477,25 @@ body{background:var(--v15-bg)!important}
           <div id="shopeeIntegracaoMensagem" class="integracao-nota">Shopee Open Platform Live. Sincroniza pedidos aguardando expedição; Partner Key e tokens permanecem somente no servidor.</div>
         </div>
         <div class="integracao-card">
+          <h3>🧾 Linx DMS · Smart API</h3>
+          <div id="linxIntegracaoStatus" class="integracao-status off">⚪ Carregando...</div>
+          <div class="integracao-dados">
+            <b>Gateway</b><span id="linxGateway">—</span>
+            <b>Empresa / Revenda</b><span id="linxEmpresa">—</span>
+            <b>Clientes consultados</b><span id="linxContagem">—</span>
+            <b>Última resposta</b><span id="linxUltimoOk">—</span>
+            <b>Credenciais</b><span>Somente no servidor</span>
+            <b>Token do robô do Apollo</b><span><code id="linxRoboToken">—</code></span>
+          </div>
+          <div class="integracao-acoes">
+            <button type="button" class="btn-primario" onclick="testarLinxAdmin()">Testar conexão</button>
+            <button type="button" class="btn-sucesso" onclick="sincronizarLinxAdmin()">↻ Consultar clientes agora</button>
+            <button type="button" class="btn-secundario" onclick="copiarTokenRoboLinxAdmin()">Copiar token do robô</button>
+            <button type="button" class="btn-perigo" onclick="renovarTokenRoboLinxAdmin()">Renovar token do robô</button>
+          </div>
+          <div id="linxIntegracaoMensagem" class="integracao-nota">Somente leitura: o servidor consulta no Linx se o cliente de cada venda já está cadastrado (pelo CPF/CNPJ da nota) e mostra na coluna Cód.Cliente da Central. Nada é gravado no Linx.</div>
+        </div>
+        <div class="integracao-card">
           <h3>🖨 Agente Zebra autônomo</h3>
           <div id="zebraAgentStatus" class="integracao-status off">⚪ Carregando...</div>
           <div class="integracao-dados">
@@ -3993,6 +4012,225 @@ function pdStatusV1779(e){
   if(rs.some(r=>Number(r.Lido||0)>0))return"separacao";return"aguardando";
 }
 function pdApolloV1779(acao){alert(`${acao}: integração Apollo em preparação. Nenhuma alteração foi enviada.`)}
+/* V18.60 — Romaneio pela Linx Smart API. O atendimento já existe (a integração do
+   ML cria). A tela mostra cliente, crédito, atendimento, itens e observação; o
+   romaneio só sai com o clique em "Imprimir romaneio" + confirmação. Imprimir
+   MOVIMENTA ESTOQUE e não volta atrás. */
+let pdRomaneioV1860=null;
+/* Fluxo completo, nesta ordem (dono, 02/10/2026):
+   1. cadastro + crédito  → robô do Apollo desktop (fila) — ou só nome/telefone/e-mail pela API
+   2. condição de pagamento (Shopee 971 / Magalu 983) → extensão, no Linx local
+   3. romaneio do atendimento que a integração do ML criou → servidor (Smart API)
+   4. enviar ao caixa → extensão, no Linx local
+   Cada etapa só libera a seguinte. O servidor também recusa fora de ordem. */
+function pdLinxExtVersaoV1860(){const v=String(document.documentElement.dataset.noromakLinx||"").split(".").map(Number);return v.length>1&&(v[0]>0||v[1]>=26);}
+function pdLinxExtV1860(acao,dados){
+  return new Promise((resolve,reject)=>{
+    if(!pdLinxExtVersaoV1860()){reject(new Error('Instale a extensão "Noromak - Cadastro de Cliente no Linx" 0.26 ou mais nova neste Chrome e recarregue a página.'));return;}
+    const id="v1860-"+Date.now()+"-"+Math.random().toString(36).slice(2);
+    const fim=setTimeout(()=>{window.removeEventListener("message",ouvir);reject(new Error("A extensão não respondeu. O Linx está aberto e logado neste Chrome?"));},180000);
+    function ouvir(ev){
+      if(ev.source!==window||ev.origin!==location.origin)return;
+      const m=ev.data||{};if(m.tipo!=="noromak-linx-acao-resposta"||m.id!==id)return;
+      clearTimeout(fim);window.removeEventListener("message",ouvir);
+      if(m.ok)resolve(m.resultado||{});else reject(new Error(m.erro||"Falha na extensão."));
+    }
+    window.addEventListener("message",ouvir);
+    window.postMessage({tipo:"noromak-linx-acao",id,acao,dados},location.origin);
+  });
+}
+function pdRomaneioFecharV1860(){const m=document.getElementById("pdRomaneioModalV1860");if(m)m.remove();pdRomaneioV1860=null;}
+function pdRomaneioCreditoV1860(c){
+  const cr=(c&&c.credito)||{},partes=[];
+  if(cr.situacao)partes.push(`situação ${cr.situacao}`);if(cr.bloqueio)partes.push(`bloqueio ${cr.bloqueio}`);
+  if(cr.disponibilidade)partes.push(`disponibilidade ${cr.disponibilidade}`);if(cr.conceito)partes.push(`conceito ${cr.conceito}`);
+  return partes.length?htmlSeguroBanco(partes.join(" · ")):"não informado pela Linx";
+}
+function pdRomOpV1860(d,etapa){return [...(d.operacoes||[])].reverse().find(o=>o.etapa===etapa)||null;}
+function pdRomEtapaV1860(n,titulo,estado,corpo){
+  const cor={ok:"#f0fdf4;color:#166534;border-color:#bbf7d0",agora:"#eff6ff;color:#1e3a8a;border-color:#bfdbfe",trava:"#f8fafc;color:#94a3b8;border-color:#e2e8f0",erro:"#fef2f2;color:#991b1b;border-color:#fecaca"}[estado]||"";
+  const icone={ok:"✅",agora:"👉",trava:"🔒",erro:"⚠️"}[estado]||"";
+  return `<div style="border:1px solid;border-radius:10px;padding:10px 12px;margin:8px 0;background:${cor}"><div style="font-weight:700">${icone} ${n}. ${titulo}</div><div style="font-size:13px;margin-top:4px;color:#334155">${corpo}</div></div>`;
+}
+function pdRomaneioRenderV1860(d,msg){
+  pdRomaneioFecharV1860();pdRomaneioV1860=d;
+  const c=d.cliente||{},cands=d.candidatos||[],cad=d.cadastro||{},robo=d.robo||null,ext=pdLinxExtVersaoV1860();
+  const opRom=(d.operacoes||[]).find(o=>o.etapa==="romaneio"&&o.situacao==="ok");
+  const opCond=pdRomOpV1860(d,"condicao"),opCaixa=pdRomOpV1860(d,"caixa");
+  const condOk=!d.precisa_condicao||(opCond&&opCond.situacao==="ok");
+  const caixaOk=opCaixa&&opCaixa.situacao==="ok";
+  const esc=htmlSeguroBanco,b=(txt,fn,primario,des)=>`<button type="button" class="${primario?"btn-primario":"btn-secundario"}" ${des?"disabled":""} onclick="${fn}" style="margin:6px 6px 0 0">${txt}</button>`;
+
+  // 1. cadastro + crédito
+  let e1,c1;
+  if(cad.feito&&!cad.pela_api){e1="ok";c1="Cadastro e crédito feitos no Linx.";}
+  else if(cad.feito&&cad.pela_api){e1="agora";c1=`Nome, telefone e e-mail atualizados pela API. <b>Falta o crédito</b> (Aprovado + Crédito normal): mande para o robô ou libere no Linx e marque abaixo.${d.escrita_ativa?"":""}`;}
+  else if(robo&&(robo.situacao==="pendente"||robo.situacao==="em_andamento")){e1="agora";c1=`Na fila do robô do Apollo desde ${esc(String(robo.criado_em).slice(11,16))} (${robo.situacao==="em_andamento"?"<b>robô trabalhando agora</b>":"aguardando o PC ficar ocioso"}). Clique em Atualizar depois.`;}
+  else if(robo&&robo.situacao==="erro"){e1="erro";c1=`O robô não conseguiu: ${esc(robo.mensagem||"")}. Confira no Apollo ou tente de novo.`;}
+  else{e1="agora";c1="Atualize o cadastro e libere o crédito <b>antes</b> do romaneio.";}
+  if(!(cad.feito&&!cad.pela_api)&&!(robo&&(robo.situacao==="pendente"||robo.situacao==="em_andamento"))&&!opRom){
+    c1+=`<div>${b("Cadastro completo pelo robô (com crédito)","pdRomRoboV1860()",true,!c.cliente&&!c.documento)}${c.cliente&&d.escrita_ativa&&!cad.feito?b("Só nome/telefone/e-mail (API)","pdCadastroLinxV1860()",false):""}</div>`;
+  }
+  if(cad.pela_api&&!opRom)c1+=`<label style="display:block;margin-top:6px"><input type="checkbox" id="pdRomCredV1860"> Conferi no Linx que o crédito está liberado (Aprovado + Crédito normal)</label>`;
+  const passo1=cad.feito;
+
+  // 2. condição de pagamento
+  let e2,c2;
+  if(!d.precisa_condicao){e2=passo1?"ok":"trava";c2="Mercado Livre: a condição 213 já vem automática.";}
+  else if(condOk){e2="ok";c2=`Condição do ${esc(d.marketplace)} definida no Linx.`;}
+  else{
+    e2=passo1?"agora":"trava";
+    c2=`O atendimento precisa estar com a condição do ${esc(d.marketplace)} (Shopee 971 · Magalu 983).${opCond&&opCond.situacao!=="ok"?` <span style="color:#991b1b">Última tentativa: ${esc(opCond.detalhe||"")}</span>`:""}`;
+    if(passo1&&!opRom){
+      const sel=d.escolhido||(cands[0]&&cands[0].contato)||"";
+      c2+=`<div>${ext?b("Definir condição pela extensão","pdRomCondicaoV1860()",true,!sel):""}</div><label style="display:block;margin-top:6px"><input type="checkbox" id="pdRomCondV1860"> Já conferi a condição no Linx</label>`;
+    }
+  }
+
+  // 3. romaneio
+  let e3,c3;
+  if(opRom){e3="ok";c3=`Impresso em ${esc(String(opRom.em).slice(0,16).replace("T"," "))} por ${esc(opRom.por||"—")} (atendimento ${esc(opRom.contato)}).`;}
+  else{
+    e3=passo1?"agora":"trava";
+    const linhaCand=x=>`<label style="display:block;border:1px solid #e2e8f0;border-radius:8px;padding:8px;margin:6px 0;cursor:pointer;background:#fff">
+      <input type="radio" name="pdRomContatoV1860" value="${esc(x.contato)}" ${String(d.escolhido)===String(x.contato)?"checked":""}>
+      <b>Atendimento ${esc(x.contato)}</b> <span style="color:#64748b">${esc(x.situacao||"")} ${esc(String(x.data||"").slice(0,10))}</span>
+      ${x.itens_do_pedido?`<span style="color:#166534"> · ${x.itens_do_pedido} peça(s) batem com o pedido</span>`:`<span style="color:#b45309"> · nenhuma peça bate com o SKU do pedido</span>`}
+      <table style="width:100%;font-size:12px;margin-top:6px"><tr><th style="text-align:left">Peça</th><th style="text-align:left">Descrição</th><th>Qtd</th></tr>
+      ${(x.itens||[]).map(i=>`<tr><td>${esc(i.item)}</td><td>${esc(i.descricao)}</td><td style="text-align:center">${esc(String(i.quantidade??""))}</td></tr>`).join("")}</table></label>`;
+    c3=d.aviso?`<div style="color:#92400e">${esc(d.aviso)}</div>`:"";
+    if(cands.length){
+      c3+=(d.situacao==="escolher"?'<div style="color:#b45309">Mais de um atendimento possível: escolha.</div>':"")+cands.map(linhaCand).join("")+
+        `<div style="margin-top:6px"><b>Observação</b><br><input id="pdRomObsV1860" value="${esc(d.observacao||"")}" maxlength="120" style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:8px;text-transform:uppercase"></div>`+
+        `<div>${b("Imprimir romaneio","pdRomaneioImprimirV1860(this)",true,!(d.escrita_ativa&&passo1))}</div>`;
+    }else if(ext&&d.cliente&&d.cliente.status==="encontrado"){
+      c3+=`<div>${b("Buscar atendimentos no Linx (extensão)","pdRomBuscarContatosV1860()",false)}</div>`;
+    }
+    if(!d.escrita_ativa)c3+=`<div style="color:#64748b;margin-top:4px">Gravação no Linx ainda desligada no servidor: dá para conferir, mas não para imprimir.</div>`;
+  }
+
+  // 4. caixa
+  let e4,c4;
+  if(caixaOk){e4="ok";c4=`Enviado ao caixa em ${esc(String(opCaixa.em).slice(0,16).replace("T"," "))} por ${esc(opCaixa.por||"—")}.`;}
+  else{
+    e4=opRom?"agora":"trava";
+    c4=opCaixa?`<span style="color:#991b1b">Última tentativa: ${esc(opCaixa.detalhe||"")}</span>`:"Finaliza a venda no Linx (frente de caixa).";
+    if(opRom)c4+=`<div>${ext?b("Enviar ao caixa (extensão)","pdRomCaixaV1860()",true):'<span style="color:#b45309">Precisa da extensão 0.26 neste Chrome.</span>'}</div>`;
+  }
+
+  const div=document.createElement("div");div.id="pdRomaneioModalV1860";
+  div.style.cssText="position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px";
+  div.innerHTML=`<div style="background:#fff;border-radius:14px;max-width:660px;width:100%;max-height:92vh;overflow:auto;padding:18px;box-shadow:0 20px 50px rgba(0,0,0,.3)">
+    <div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">🧾 Linx · pedido ${esc(d.pedido)}</h3><button type="button" onclick="pdRomaneioFecharV1860()" style="border:0;background:none;font-size:20px;cursor:pointer">✕</button></div>
+    <div style="margin:8px 0;font-size:13px;line-height:1.6">
+      <b>${esc(d.marketplace)}</b> · Cliente no Linx: ${c.cliente?`${esc(c.cliente)} — ${esc(c.nome||"")}`:"—"} ${c.documento?`<span style="color:#64748b">(${esc(c.documento)})</span>`:""}<br>
+      <b>Crédito (Linx):</b> ${pdRomaneioCreditoV1860(c)}
+    </div>
+    ${pdRomEtapaV1860(1,"Cadastro e crédito",e1,c1)}
+    ${pdRomEtapaV1860(2,"Condição de pagamento",e2,c2)}
+    ${pdRomEtapaV1860(3,"Romaneio",e3,c3)}
+    ${pdRomEtapaV1860(4,"Enviar ao caixa",e4,c4)}
+    <div id="pdRomMsgV1860" style="margin-top:8px;font-size:13px;color:#475569">${esc(msg||"")}</div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
+      <button type="button" class="btn-secundario" onclick="pdRomRecarregarV1860()">↻ Atualizar</button>
+      <button type="button" class="btn-secundario" onclick="pdRomaneioFecharV1860()">Fechar</button>
+    </div></div>`;
+  div.addEventListener("click",e=>{if(e.target===div)pdRomaneioFecharV1860();});
+  document.body.appendChild(div);
+}
+function pdRomMsgV1860(t){const m=document.getElementById("pdRomMsgV1860");if(m)m.textContent=t;}
+async function pdRomRecarregarV1860(msg,contatos){
+  const d=pdRomaneioV1860;if(!d)return;
+  const q=contatos&&contatos.length?"&contatos="+encodeURIComponent(contatos.join(",")):"";
+  try{pdRomaneioRenderV1860(await mlApiAdmin("/expedicao/api/linx/romaneio?pedido="+encodeURIComponent(d.pedido)+q),msg);}
+  catch(e){pdRomMsgV1860("❌ "+e.message);}
+}
+async function pdRomaneioLinxV1860(btn){
+  const pedido=String(btn?.dataset?.pedido||"").trim();if(!pedido)return;
+  const original=btn.textContent;btn.disabled=true;btn.textContent="Consultando…";
+  try{pdRomaneioRenderV1860(await mlApiAdmin("/expedicao/api/linx/romaneio?pedido="+encodeURIComponent(pedido)));}
+  catch(e){alert("Romaneio: "+e.message);}
+  finally{btn.disabled=false;btn.textContent=original;}
+}
+async function pdRomRoboV1860(){
+  const d=pdRomaneioV1860;if(!d)return;
+  if(!confirm(`Mandar o cadastro de ${d.cliente?.nome_fiscal||d.pedido} para o robô do Apollo?\n\nEle grava, quando o PC do escritório estiver ocioso: nome da NF-e, 11 111111111, lojavirtual@noromak.com.br, endereços sem acento, nascimento, Cadastro Aprovado, Crédito normal e validade hoje.`))return;
+  pdRomMsgV1860("Enviando para a fila do robô…");
+  try{const r=await mlApiAdmin("/expedicao/api/linx/robo/fila",{method:"POST",body:JSON.stringify({pedido:d.pedido})});await pdRomRecarregarV1860(r.ja_na_fila?"Já estava na fila do robô.":"✅ Na fila do robô. Ele avisa aqui quando terminar (clique em Atualizar).");}
+  catch(e){pdRomMsgV1860("❌ "+e.message);}
+}
+async function pdRomContatoEscolhidoV1860(){
+  const sel=document.querySelector('input[name="pdRomContatoV1860"]:checked');
+  return sel?sel.value:String(pdRomaneioV1860?.escolhido||"");
+}
+async function pdRomCondicaoV1860(){
+  const d=pdRomaneioV1860;if(!d)return;
+  const contato=await pdRomContatoEscolhidoV1860();
+  if(!contato){pdRomMsgV1860("Escolha o atendimento na etapa 3 primeiro.");return;}
+  pdRomMsgV1860("Trocando a condição de pagamento no Linx…");
+  try{
+    const r=await pdLinxExtV1860("condicao-definir",{contato,marketplace:d.marketplace});
+    const ok=r.situacao==="DEFINIDA"||r.situacao==="JA_CORRETA";
+    await mlApiAdmin("/expedicao/api/linx/operacao",{method:"POST",body:JSON.stringify({pedido:d.pedido,etapa:"condicao",situacao:ok?"ok":"erro",contato,detalhe:ok?`${r.condicao||""} ${r.descricao||""}`.trim():(r.motivo||r.situacao||"")})});
+    await pdRomRecarregarV1860(ok?`✅ Condição ${r.condicao||""} ${r.descricao||""} no atendimento ${contato}.`:`❌ ${r.motivo||r.situacao}`);
+  }catch(e){
+    mlApiAdmin("/expedicao/api/linx/operacao",{method:"POST",body:JSON.stringify({pedido:d.pedido,etapa:"condicao",situacao:"erro",contato,detalhe:e.message})}).catch(()=>{});
+    pdRomMsgV1860("❌ "+e.message);
+  }
+}
+async function pdRomBuscarContatosV1860(){
+  const d=pdRomaneioV1860;if(!d||!d.cliente)return;
+  pdRomMsgV1860("Buscando os atendimentos do cliente no Linx…");
+  try{
+    const r=await pdLinxExtV1860("romaneio-consultar",{documento:d.cliente.documento});
+    const contatos=(r.atendimentos||[]).map(a=>a.Contato).filter(Boolean);
+    if(!contatos.length){pdRomMsgV1860("O Linx não tem atendimento aberto para este cliente.");return;}
+    await pdRomRecarregarV1860(`Atendimentos achados no Linx: ${contatos.join(", ")}.`,contatos);
+  }catch(e){pdRomMsgV1860("❌ "+e.message);}
+}
+async function pdRomaneioImprimirV1860(btn){
+  const d=pdRomaneioV1860;if(!d)return;
+  const sel=document.querySelector('input[name="pdRomContatoV1860"]:checked');
+  const obs=String(document.getElementById("pdRomObsV1860")?.value||"").trim().toUpperCase();
+  const cond=document.getElementById("pdRomCondV1860"),cred=document.getElementById("pdRomCredV1860");
+  if(!sel){pdRomMsgV1860("Escolha o atendimento.");return;}
+  if(!obs){pdRomMsgV1860("Informe a observação.");return;}
+  if(cred&&!cred.checked){pdRomMsgV1860("Confira no Linx que o crédito está liberado e marque a caixa da etapa 1.");return;}
+  if(cond&&!cond.checked){pdRomMsgV1860("Defina a condição de pagamento (etapa 2) ou marque que já conferiu.");return;}
+  const cand=(d.candidatos||[]).find(x=>String(x.contato)===sel.value)||{};
+  const resumo=(cand.itens||[]).map(i=>`${i.item} x${i.quantidade}`).join(", ");
+  if(!confirm(`Imprimir o romaneio no estoque?\n\nPedido ${d.pedido}\nAtendimento ${sel.value}\nObservação: ${obs}\nItens: ${resumo}\n\nIsso movimenta o estoque no Linx e não volta atrás.`))return;
+  btn.disabled=true;pdRomMsgV1860("Enviando ao Linx…");
+  try{
+    const r=await mlApiAdmin("/expedicao/api/linx/romaneio",{method:"POST",body:JSON.stringify({pedido:d.pedido,contato:sel.value,observacao:obs,condicao_conferida:!!(cond&&cond.checked),credito_conferido:!!(cred&&cred.checked)})});
+    await pdRomRecarregarV1860(`✅ Romaneio enviado ao estoque (atendimento ${r.contato}). ${(r.mensagens||[]).join(" ")} Agora envie ao caixa.`);
+  }catch(e){pdRomMsgV1860("❌ "+e.message);btn.disabled=false;}
+}
+async function pdRomCaixaV1860(){
+  const d=pdRomaneioV1860;if(!d)return;
+  const op=(d.operacoes||[]).find(o=>o.etapa==="romaneio"&&o.situacao==="ok");const contato=op?op.contato:"";
+  if(!contato){pdRomMsgV1860("Imprima o romaneio primeiro.");return;}
+  pdRomMsgV1860("Enviando ao caixa no Linx…");
+  try{
+    const r=await pdLinxExtV1860("caixa-enviar",{contato});
+    const sit=r.situacao==="ENVIADO"?"ok":r.situacao==="PENDENTE"?"pendente":"erro";
+    await mlApiAdmin("/expedicao/api/linx/operacao",{method:"POST",body:JSON.stringify({pedido:d.pedido,etapa:"caixa",situacao:sit,contato,detalhe:sit==="ok"?`valor ${r.valorTotal??""} ${r.resposta||""}`.trim():(r.motivo||r.situacao||"")})});
+    await pdRomRecarregarV1860(sit==="ok"?"✅ Enviado ao caixa.":`⚠️ ${r.motivo||r.situacao}`);
+  }catch(e){
+    if(!/Cancelado/.test(e.message))mlApiAdmin("/expedicao/api/linx/operacao",{method:"POST",body:JSON.stringify({pedido:d.pedido,etapa:"caixa",situacao:"erro",contato,detalhe:e.message})}).catch(()=>{});
+    pdRomMsgV1860("❌ "+e.message);
+  }
+}
+async function pdCadastroLinxV1860(){
+  const d=pdRomaneioV1860;if(!d)return;
+  if(!confirm(`Atualizar no Linx o cliente ${d.cliente?.cliente}?\n\nNome: ${String(d.cliente?.nome_fiscal||"").toUpperCase()}\nTelefone e celular: 11 111111111\nE-mail: lojavirtual@noromak.com.br\n\nEndereço, nascimento e CRÉDITO a API NÃO altera — depois mande para o robô ou libere no Linx.`))return;
+  pdRomMsgV1860("Atualizando cadastro…");
+  try{
+    const r=await mlApiAdmin("/expedicao/api/linx/cadastro",{method:"POST",body:JSON.stringify({pedido:d.pedido})});
+    carregarClientesFiscaisV1786();
+    await pdRomRecarregarV1860(`✅ Cadastro ${r.cliente} atualizado e conferido. Falta o crédito.`);
+  }catch(e){pdRomMsgV1860("❌ "+e.message);}
+}
 /* V17.86 — nome e CPF da NF-e na própria Central.
    A API do Mercado Livre bloqueia "Dados para a NF-e" para o Noromak (HTTP 403,
    18/09/2026). A extensão lê da página da venda, com a sessão de quem está
@@ -4010,6 +4248,11 @@ function pdCelulaClienteV1786(pedido,f){
 function pdCodClienteV1786(pedido,f){
   const cf=pdFiscalV1786(pedido);
   if(cf&&cf.linx_cliente)return `<span title="Cadastro atualizado no Linx em ${htmlSeguroBanco(String(cf.linx_atualizado_em||"").slice(0,16).replace("T"," "))}">✓ ${htmlSeguroBanco(cf.linx_cliente)}</span>`;
+  /* V18.60 — consulta automática na Linx Smart API (só leitura): o cliente já existe lá? */
+  const api=(cf&&cf.linx_api)||{},quando=htmlSeguroBanco(String(api.consultado_em||"").slice(0,16).replace("T"," "));
+  if(api.status==="encontrado")return `<span title="Já cadastrado no Linx${api.nome?" como "+htmlSeguroBanco(api.nome):""} (consulta automática em ${quando})">🔎 ${htmlSeguroBanco(api.cliente)}</span>`;
+  if(api.status==="nao_cadastrado")return `<span style="color:#b91c1c;font-weight:600" title="A Linx não achou este CPF/CNPJ (consulta em ${quando}). Precisa cadastrar.">não cadastrado</span>`;
+  if(api.status==="varios")return `<span style="color:#b45309;font-weight:600" title="Mais de um cliente com este CPF/CNPJ no Linx. Confira no Linx qual usar.">vários no Linx</span>`;
   return htmlSeguroBanco(f["Cód.Cliente"]||f.CodigoCliente||"—");
 }
 async function carregarClientesFiscaisV1786(){
@@ -4212,7 +4455,7 @@ function renderPedidosDiaV1779(){
  corpo.innerHTML=rows.map((x,i)=>{
    const f=x.first, unidades=x.e.linhas.reduce((s,r)=>s+(Number(r.Quantidade)||0),0)||Number(x.e.conf?.qtdUnidades||0), itens=x.e.linhas.length||Number(x.e.conf?.qtdItens||0), id=`pdDet${i}`;
    const detalhes=x.e.linhas.length?x.e.linhas.map(r=>`${htmlSeguroBanco(r.SKU||"—")} — ${htmlSeguroBanco(r.Descrição||"")} — Qtd. ${Number(r.Quantidade)||0}`).join("<br>"):"Dados dos itens preservados no histórico de conferência.";
-   return `<tr><td><b>${htmlSeguroBanco(x.e.pedido)}</b><div id="${id}" class="v1779-detail">${detalhes}</div></td><td>${htmlSeguroBanco(f.Contato||f.TelefoneShopee||"—")}</td><td><span class="v1779-badge ${x.status==="conferido"?"v1779-ok":"v1779-wait"}">${labels[x.status]}</span></td><td>${x.status==="cancelado"?"SIM":"—"}</td><td>${htmlSeguroBanco(f["NF Status"]||f.NFStatus||(f.NF||f["Nota Fiscal"]?"Com NF":"—"))}</td><td>${pdCodClienteV1786(x.e.pedido,f)}</td><td>${htmlSeguroBanco(x.dp||"—")}</td><td>${htmlSeguroBanco(x.dc instanceof Date?x.dc.toLocaleString("pt-BR"):x.dc||"—")}</td><td>${pdCelulaClienteV1786(x.e.pedido,f)}</td><td>${htmlSeguroBanco(f["Cód.Usu."]||f.CodigoUsuario||"—")}</td><td>${htmlSeguroBanco(f.Usuario||f.ConferidoPor||"—")}</td><td>${htmlSeguroBanco(x.marketplace)}</td><td>${itens} / ${unidades}</td><td><div class="v1779-actions"><button data-pedido="${htmlSeguroBanco(x.e.pedido)}" title="Atualizar o cadastro deste cliente no Linx" onclick="pdClienteLinxV1785(this)">Cliente</button><button onclick="pdApolloV1779('Romaneio')">Romaneio</button><button onclick="pdDetalhesV1779('${id}')">Detalhes</button></div></td></tr>`;
+   return `<tr><td><b>${htmlSeguroBanco(x.e.pedido)}</b><div id="${id}" class="v1779-detail">${detalhes}</div></td><td>${htmlSeguroBanco(f.Contato||f.TelefoneShopee||"—")}</td><td><span class="v1779-badge ${x.status==="conferido"?"v1779-ok":"v1779-wait"}">${labels[x.status]}</span></td><td>${x.status==="cancelado"?"SIM":"—"}</td><td>${htmlSeguroBanco(f["NF Status"]||f.NFStatus||(f.NF||f["Nota Fiscal"]?"Com NF":"—"))}</td><td>${pdCodClienteV1786(x.e.pedido,f)}</td><td>${htmlSeguroBanco(x.dp||"—")}</td><td>${htmlSeguroBanco(x.dc instanceof Date?x.dc.toLocaleString("pt-BR"):x.dc||"—")}</td><td>${pdCelulaClienteV1786(x.e.pedido,f)}</td><td>${htmlSeguroBanco(f["Cód.Usu."]||f.CodigoUsuario||"—")}</td><td>${htmlSeguroBanco(f.Usuario||f.ConferidoPor||"—")}</td><td>${htmlSeguroBanco(x.marketplace)}</td><td>${itens} / ${unidades}</td><td><div class="v1779-actions"><button data-pedido="${htmlSeguroBanco(x.e.pedido)}" title="Atualizar o cadastro deste cliente no Linx" onclick="pdClienteLinxV1785(this)">Cliente</button><button data-pedido="${htmlSeguroBanco(x.e.pedido)}" title="Conferir e imprimir o romaneio no Linx" onclick="pdRomaneioLinxV1860(this)">Romaneio</button><button onclick="pdDetalhesV1779('${id}')">Detalhes</button></div></td></tr>`;
  }).join("")||'<tr><td colspan="14" style="text-align:center;padding:25px;color:#64748b">Nenhum pedido encontrado para os filtros selecionados.</td></tr>';
  v151Set("pdResumo",`${rows.length} pedido(s) exibido(s)`);
 }
@@ -4233,7 +4476,7 @@ function abrirAbaAdmin(nome){
   if(nome==="coleta") carregarColetaDiaAdmin(!coletaAdminCarregada);
   if(nome==="historico-sku") carregarHistoricoSkuAdmin();
   if(nome==="kits") renderizarKitsAdmin();
-  if(nome==="integracoes"){carregarIntegracaoMercadoLivreAdmin();carregarLogsMercadoLivreAdmin();carregarIntegracaoShopeeAdmin();carregarAgenteZebraAdmin();}
+  if(nome==="integracoes"){carregarIntegracaoMercadoLivreAdmin();carregarLogsMercadoLivreAdmin();carregarIntegracaoShopeeAdmin();carregarAgenteZebraAdmin();carregarIntegracaoLinxAdmin();carregarTokenRoboLinxAdmin();}
   if(nome==="seguranca") carregarSegurancaAdmin().catch(e=>alert("Segurança: "+e.message));
 }
 function abrirDashboardV151(){
@@ -8694,6 +8937,67 @@ async function renovarTokenZebraAdmin(){
   if(!confirm("Renovar o token? O agente instalado precisará ser configurado novamente com o novo token."))return;
   try{await confirmarOwnerSeguranca("Renovar a credencial do agente Zebra");await mlApiAdmin("/expedicao/api/print/agent/rotate-token",{method:"POST",body:"{}"});await carregarAgenteZebraAdmin();alert("Token renovado.");}
   catch(e){alert("Erro ao renovar token: "+e.message);}
+}
+
+/* V18.60 — Linx Smart API (só leitura): status, teste e consulta manual. */
+async function carregarIntegracaoLinxAdmin(){
+  const badge=document.getElementById("linxIntegracaoStatus");if(!badge)return;
+  const msg=document.getElementById("linxIntegracaoMensagem");
+  try{
+    const d=await mlApiAdmin("/expedicao/api/linx/status");
+    const c=d.clientes||{};
+    v151Set("linxGateway",d.gateway||"—");
+    v151Set("linxEmpresa",`${d.empresa??"—"} / ${d.revenda??"—"}`);
+    v151Set("linxContagem",`${c.encontrado||0} cadastrados · ${c.nao_cadastrado||0} sem cadastro · ${c.varios||0} vários · ${c.pendente||0} na fila${c.erro?` · ${c.erro} com erro`:""}`);
+    v151Set("linxUltimoOk",d.ultimo_ok?mlDataHora(d.ultimo_ok):"—");
+    if(!d.configurado){
+      badge.className="integracao-status off";badge.textContent="🟡 Aguardando credenciais no servidor";
+      if(msg)msg.textContent=`Falta no /home/expedicao/.env: ${(d.faltando||[]).join(", ")}. Depois reinicie o serviço.`;
+    }else if(d.ultimo_erro&&(!d.ultimo_ok||String(d.ultimo_erro_em)>String(d.ultimo_ok))){
+      badge.className="integracao-status erro";badge.textContent="🔴 Última chamada falhou";
+      if(msg)msg.textContent=`${d.ultimo_erro_em?mlDataHora(d.ultimo_erro_em)+" — ":""}${d.ultimo_erro}`;
+    }else{
+      badge.className="integracao-status "+(d.ultimo_ok?"ok":"off");
+      badge.textContent=(d.ultimo_ok?"🟢 Conectada":"⚪ Configurada, ainda sem chamada")+(d.escrita_ativa?" · romaneio/cadastro LIGADOS":" · só leitura (gravação desligada)");
+    }
+  }catch(e){badge.className="integracao-status erro";badge.textContent="🔴 "+e.message;}
+}
+/* V18.60 — token do robô do Apollo desktop (robo-fila.ps1 / robo-config.json). */
+let linxRoboTokenV1860="";
+async function carregarTokenRoboLinxAdmin(){
+  try{const d=await mlApiAdmin("/expedicao/api/linx/robo/config");linxRoboTokenV1860=d.token||"";v151Set("linxRoboToken",linxRoboTokenV1860?linxRoboTokenV1860.slice(0,6)+"…"+linxRoboTokenV1860.slice(-4):"—");}
+  catch(_){v151Set("linxRoboToken","—");}
+}
+async function copiarTokenRoboLinxAdmin(){
+  if(!linxRoboTokenV1860)await carregarTokenRoboLinxAdmin();
+  try{await navigator.clipboard.writeText(linxRoboTokenV1860);alert("Token copiado. Cole no robo-config.json do PC do robô.");}
+  catch(_){prompt("Copie o token do robô:",linxRoboTokenV1860);}
+}
+async function renovarTokenRoboLinxAdmin(){
+  if(!confirm("Renovar o token do robô? O robô para de funcionar até você colar o novo token no robo-config.json."))return;
+  try{await confirmarOwnerSeguranca("Renovar a credencial do robô do Apollo");await mlApiAdmin("/expedicao/api/linx/robo/renovar",{method:"POST",body:"{}"});await carregarTokenRoboLinxAdmin();alert("Token renovado.");}
+  catch(e){alert("Erro ao renovar: "+e.message);}
+}
+async function testarLinxAdmin(){
+  const doc=(prompt("Testar a conexão com a Linx.\n\nOpcional: digite um CPF/CNPJ para consultar (só leitura). Deixe vazio para testar só o login.","")??null);
+  if(doc===null)return;
+  const msg=document.getElementById("linxIntegracaoMensagem");
+  if(msg)msg.textContent="Testando…";
+  try{
+    const d=await mlApiAdmin("/expedicao/api/linx/testar",{method:"POST",body:JSON.stringify({documento:doc})});
+    const q=d.consulta;
+    if(msg)msg.textContent="✅ Login na Linx OK."+(q?(q.status==="encontrado"?` Cliente ${q.cliente} — ${q.nome}.`:q.status==="varios"?` ${q.candidatos.length} clientes com este documento: ${q.candidatos.map(x=>x.cliente).join(", ")}.`:" Este documento não está cadastrado no Linx."):"");
+  }catch(e){if(msg)msg.textContent="❌ "+e.message;}
+  carregarIntegracaoLinxAdmin();
+}
+async function sincronizarLinxAdmin(){
+  const msg=document.getElementById("linxIntegracaoMensagem");
+  if(msg)msg.textContent="Consultando…";
+  try{
+    const d=await mlApiAdmin("/expedicao/api/linx/clientes/sincronizar",{method:"POST",body:"{}"});
+    if(msg)msg.textContent=`Consultados ${d.consultados}: ${d.encontrados} cadastrados, ${d.nao_cadastrados} sem cadastro, ${d.varios} com mais de um código.`;
+  }catch(e){if(msg)msg.textContent="❌ "+e.message;}
+  carregarIntegracaoLinxAdmin();
 }
 
 async function carregarIntegracaoShopeeAdmin(){
