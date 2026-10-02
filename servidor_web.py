@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.60-LINX-SMART-API"
+APP_VERSION = "18.61-FULL-MLB"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -8238,6 +8238,38 @@ def full_kit_compositions(skus: list[Any]) -> dict[str, dict[str, Any]]:
         if not comps or (len(comps) == 1 and comps[0]["quantidade"] == 1 and normalize(comps[0]["sku"]) == normalize(sku)):
             continue
         out[sku] = {"componentes": comps, "fonte": fonte, "nome": str(entry.get("nome") or sku)}
+    return out
+
+
+def full_anuncios_vendas(anuncios: list[Any], dias: int = 30) -> dict[str, dict[str, Any]]:
+    """V18.61: vendas ML dos últimos `dias` por anúncio, para a Demanda Full.
+
+    O relatório Full lista os anúncios de cada produto só pelo número
+    ("1079290698 | 3615301139"); a tela precisa saber qual deles vende para
+    montar a remessa. Aceita com ou sem o prefixo MLB. Anúncio sem venda volta
+    com zero. Somente leitura de `vendas_v1799` (não distingue Full de Flex).
+    """
+    ids: list[str] = []
+    for value in anuncios:
+        digitos = re.sub(r"\D", "", str(value or ""))
+        mlb = f"MLB{digitos}" if digitos else ""
+        if mlb and mlb not in ids:
+            ids.append(mlb)
+    out = {mlb: {"unidades": 0, "pedidos": 0, "titulo": ""} for mlb in ids}
+    if not ids:
+        return out
+    inicio = (datetime.now(BR_TZ) - timedelta(days=dias)).strftime("%Y-%m-%d")
+    with DB_LOCK:
+        for i in range(0, len(ids), 500):
+            lote = ids[i:i + 500]
+            marcas = ",".join("?" * len(lote))
+            rows = DB.execute(
+                f"SELECT anuncio, COALESCE(SUM(qty),0) AS unidades, COUNT(DISTINCT order_id) AS pedidos, MAX(title) AS titulo "
+                f"FROM vendas_v1799 WHERE marketplace='ml' AND sale_day >= ? AND anuncio IN ({marcas}) GROUP BY anuncio",
+                (inicio, *lote),
+            ).fetchall()
+            for r in rows:
+                out[r["anuncio"]] = {"unidades": int(r["unidades"] or 0), "pedidos": int(r["pedidos"] or 0), "titulo": str(r["titulo"] or "")}
     return out
 
 
@@ -18242,6 +18274,24 @@ class AppHandler(BaseHTTPRequestHandler):
                     if len(skus) > 5000:
                         raise ValueError("Limite de 5000 SKUs por consulta.")
                     self.send_json({"ok": True, "kits": full_kit_compositions(skus)})
+                except ValueError as exc:
+                    self.send_json({"error": str(exc)}, 400)
+                except Exception as exc:
+                    self.send_json({"error": str(exc)}, 500)
+            return
+        if path == "/api/full/anuncios":
+            # V18.61: MLBs do relatório Full com as vendas de 30 dias (somente leitura).
+            ctx = self.auth()
+            if ctx is not None:
+                if not module_allowed(ctx, "precificador") and ctx.get("app_role") != "admin":
+                    self.send_json({"error": "Acesso ao módulo de análise Full não autorizado."}, 403)
+                    return
+                try:
+                    body = self.read_json()
+                    anuncios = body.get("anuncios") if isinstance(body.get("anuncios"), list) else []
+                    if len(anuncios) > 10000:
+                        raise ValueError("Limite de 10000 anúncios por consulta.")
+                    self.send_json({"ok": True, "dias": 30, "anuncios": full_anuncios_vendas(anuncios)})
                 except ValueError as exc:
                     self.send_json({"error": str(exc)}, 400)
                 except Exception as exc:

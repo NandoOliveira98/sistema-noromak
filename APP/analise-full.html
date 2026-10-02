@@ -353,6 +353,13 @@
     .apollo-cell{min-width:125px}.apollo-msg{min-width:230px;white-space:normal}.apollo-msg .apollo-branches{font-size:.78rem;color:#23384f}.apollo-branches{font-size:.72rem;color:#637488;margin-top:3px;white-space:normal;line-height:1.35}
     .button--accent{border-color:var(--orange);background:var(--orange);color:#172536}
     .button:disabled{opacity:.5;cursor:not-allowed}
+    .ads{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px}
+    .ad-chip{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:6px;background:#f6f9fc;font-size:.72rem;line-height:1.5}
+    .ad-chip--top{border-color:var(--orange);background:#fff3df}
+    .ad-copy{padding:0 6px;border:0;background:none;color:var(--navy);font:inherit;font-weight:700;font-variant-numeric:tabular-nums;cursor:pointer}
+    .ad-copy:hover{text-decoration:underline}
+    .ad-link{padding:0 5px;border-left:1px solid var(--line);color:var(--muted);text-decoration:none}
+    .ad-link:hover{color:var(--navy)}
     .kit-tag{display:inline-block;padding:0 5px;border-radius:4px;background:#e8f0f7;color:var(--navy);font-weight:800;font-size:.68rem}
     .new-panel{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:13px;border:1px solid var(--line);border-bottom:0;background:#f7fbff}
     .new-panel strong{color:var(--navy);flex:1 1 100%}
@@ -440,8 +447,8 @@
       </div>
 
       <div class="toolbar" aria-label="Filtros da análise">
-        <label class="visually-hidden" for="searchInput">Buscar produto, SKU ou Código ML</label>
-        <input id="searchInput" class="field field--search" type="search" placeholder="Buscar produto, SKU ou Código ML">
+        <label class="visually-hidden" for="searchInput">Buscar produto, SKU, Código ML ou MLB</label>
+        <input id="searchInput" class="field field--search" type="search" placeholder="Buscar produto, SKU, Código ML ou MLB">
 
         <label class="visually-hidden" for="statusFilter">Filtrar por status</label>
         <select id="statusFilter" class="field field--select">
@@ -634,6 +641,7 @@
         return {
           code: findExactSegment(headers, ["Código ML"]),
           universal: findExactSegment(headers, ["Código universal"]),
+          ads: findExactSegment(headers, ["Anúncios com este produto"]),
           sku: findExactSegment(headers, ["SKU"]),
           product: findExactSegment(headers, ["Produto"]),
           sales: findByTokens(headers, [
@@ -694,6 +702,11 @@
         return { rows, headerIndex, columns, summaryName };
       }
 
+      // V18.61: "Anúncios com este produto" vem só com o número ("1079290698 | 3615301139").
+      function parseAds(value) {
+        return [...new Set(String(value ?? "").split(/[|,;\s]+/).map(v => v.replace(/\D/g, "")).filter(Boolean).map(v => `MLB${v}`))];
+      }
+
       function calculateRows(rows, headerIndex, columns) {
         const output = [];
         for (let rowIndex = headerIndex + 1; rowIndex < rows.length; rowIndex += 1) {
@@ -716,6 +729,7 @@
             sourceRow: rowIndex + 1,
             code,
             universal: columns.universal >= 0 ? cleanText(row[columns.universal]) : "",
+            ads: columns.ads >= 0 ? parseAds(row[columns.ads]) : [],
             sku,
             product,
             sales,
@@ -811,6 +825,7 @@
         applyFilters();
         renderApolloSummary();
         loadKits();
+        loadAds();
       }
 
       function renderSummary() {
@@ -846,7 +861,7 @@
         element("needHeader").textContent = `Enviar (${element("targetDays").value === "15" ? 15 : 30} dias)`;
 
         state.filtered = state.data.filter((item) => {
-          if (query && !normalizeText(`${productName(item)} ${item.sku} ${item.code}`).includes(query)) return false;
+          if (query && !normalizeText(`${productName(item)} ${item.sku} ${item.code} ${(item.ads || []).join(" ")}`).includes(query)) return false;
           if (status && item.status !== status) return false;
           if (state.onlyNeed && item.needTarget <= 0) return false;
           return true;
@@ -878,7 +893,7 @@
         body.innerHTML = state.filtered.map((item) => `
           <tr data-code="${escapeHtml(item.code)}">
             <td class="code">${escapeHtml(item.sku || "—")}<span class="sub">${item.manual ? `<span class="new-tag">NOVO</span> manual<button class="new-remove" type="button" data-new-remove="${escapeHtml(item.sku)}" title="Remover produto novo">✕</button>` : isKit(item) ? `<span class="kit-tag">KIT</span> ${escapeHtml(kitLabel(item))}` : `Apollo: ${escapeHtml(apolloKey(item) || "—")}`}</span></td>
-            <td class="product">${escapeHtml(productName(item))}<span class="sub">${escapeHtml(item.manual ? "Ainda não está no Full" : item.code || "")}</span></td>
+            <td class="product">${escapeHtml(productName(item))}<span class="sub">${escapeHtml(item.manual ? "Ainda não está no Full" : item.code || "")}</span>${adsCell(item)}</td>
             <td class="num">${formatNumber(item.sales)}</td>
             <td class="num">${formatNumber(item.occupied)}</td>
             <td class="cover">${item.manual ? statusBadge("NOVO") : `${statusBadge(item.status)}${formatNumber(item.coverage, 1)} dias`}</td>
@@ -1067,6 +1082,46 @@
         showMessage(`${code} removido dos produtos novos.`, "success");
       }
       let kitsPromise = Promise.resolve();
+      // V18.61: vendas ML de 30 dias por MLB, para saber qual anúncio usar na remessa.
+      const adStore = new Map();
+
+      function loadAds() {
+        adStore.clear();
+        const anuncios = [...new Set(state.data.flatMap(item => item.ads || []))];
+        if (!anuncios.length) return;
+        fetch("/expedicao/api/full/anuncios", {
+          method: "POST", credentials: "same-origin", cache: "no-store",
+          headers: { "Content-Type": "application/json", "Accept": "application/json" },
+          body: JSON.stringify({ anuncios })
+        })
+          .then(r => r.json().then(d => { if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`); return d; }))
+          .then(d => {
+            Object.entries(d.anuncios || {}).forEach(([mlb, v]) => adStore.set(mlb, v));
+            if (state.data.length) applyFilters();
+          })
+          .catch(error => showMessage(`Não consegui ler as vendas por anúncio (${error.message}). Os MLBs aparecem sem as vendas.`, "error"));
+      }
+
+      function adsCell(item) {
+        const ads = item.ads || [];
+        if (!ads.length) return "";
+        const sold = mlb => adStore.get(mlb)?.unidades ?? null;
+        const best = ads.length > 1 && adStore.size
+          ? ads.reduce((a, b) => (sold(b) ?? -1) > (sold(a) ?? -1) ? b : a) : "";
+        const ordered = [...ads].sort((a, b) => (sold(b) ?? -1) - (sold(a) ?? -1));
+        return `<span class="ads">${ordered.map(mlb => {
+          const qty = sold(mlb);
+          const top = mlb === best && qty > 0;
+          return `<span class="ad-chip${top ? " ad-chip--top" : ""}"><button type="button" class="ad-copy" data-copy-mlb="${escapeHtml(mlb)}" title="Copiar ${escapeHtml(mlb)}">${top ? "★ " : ""}${escapeHtml(mlb)}${qty === null ? "" : ` · ${formatNumber(qty)} un.`}</button><a class="ad-link" href="https://produto.mercadolivre.com.br/${escapeHtml(mlb.replace(/^MLB/, "MLB-"))}" target="_blank" rel="noopener" title="Abrir anúncio">↗</a></span>`;
+        }).join("")}</span>`;
+      }
+
+      function copyMlb(button) {
+        const mlb = button.dataset.copyMlb;
+        const done = () => { const old = button.textContent; button.textContent = "Copiado ✓"; setTimeout(() => { button.textContent = old; }, 1100); };
+        if (navigator.clipboard?.writeText) navigator.clipboard.writeText(mlb).then(done).catch(() => showMessage(`Não consegui copiar. MLB: ${mlb}`, "error"));
+        else showMessage(`MLB: ${mlb}`, "success");
+      }
 
       function loadKits() {
         kitStore.clear();
@@ -1394,6 +1449,7 @@
           "Kit (composição)": isKit(item) ? kitLabel(item) : "",
           "Código ML": item.code,
           "Código universal": item.universal,
+          "Anúncios (MLB)": (item.ads || []).map(mlb => { const v = adStore.get(mlb); return v ? `${mlb} (${v.unidades} un.)` : mlb; }).join(" | "),
           "Produto": productName(item),
           "Origem": item.manual ? "Produto novo (manual)" : "Relatório Full",
           "Vendas 30 dias": item.sales,
@@ -1470,6 +1526,8 @@
         if (remove) removeManualProduct(remove.dataset.newRemove);
         const reset = event.target.closest("[data-need-reset]");
         if (reset) setNeedEdit(reset.dataset.needReset, "");
+        const copy = event.target.closest("[data-copy-mlb]");
+        if (copy) copyMlb(copy);
       });
       element("resultsBody").addEventListener("change", (event) => {
         const input = event.target.closest("[data-need]");

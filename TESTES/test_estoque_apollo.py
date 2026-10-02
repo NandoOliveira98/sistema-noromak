@@ -176,3 +176,39 @@ class KitsDemandaFull(TesteNoromak):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AnunciosDemandaFull(TesteNoromak):
+    """V18.61: o relatório Full lista os anúncios do produto ("1079290698 | 3615301139").
+    A tela mostra o MLB de cada um e qual mais vendeu nos últimos 30 dias, para
+    saber qual anúncio usar na remessa."""
+
+    def gravar_venda(self, order_id, anuncio, qty, dias_atras, marketplace="ml"):
+        dia = (S.datetime.now(S.BR_TZ) - S.timedelta(days=dias_atras)).strftime("%Y-%m-%d")
+        with S.DB_LOCK:
+            S.DB.execute(
+                "INSERT INTO vendas_v1799(marketplace,order_id,line_key,pack_id,sale_at,sale_day,sku,anuncio,title,qty,amount,status,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (marketplace, order_id, anuncio, "", dia + "T10:00:00", dia, "X", anuncio, "Titulo " + anuncio, qty, 10.0, "paid", dia),
+            )
+            S.DB.commit()
+
+    def anuncios(self, lista):
+        status, corpo = self.cliente.pedir("POST", "/api/full/anuncios", {"anuncios": lista})
+        self.assertEqual(status, 200, corpo)
+        return corpo["anuncios"]
+
+    def test_soma_vendas_30_dias_por_mlb_aceitando_numero_sem_prefixo(self):
+        self.gravar_venda("1", "MLB1079290698", 2, 1)
+        self.gravar_venda("2", "MLB1079290698", 3, 10)
+        self.gravar_venda("3", "MLB3615301139", 1, 2)
+        self.gravar_venda("4", "MLB1079290698", 50, 45)  # fora da janela
+        res = self.anuncios(["1079290698", "MLB3615301139", "MLB999"])
+        self.assertEqual(res["MLB1079290698"]["unidades"], 5)
+        self.assertEqual(res["MLB1079290698"]["pedidos"], 2)
+        self.assertEqual(res["MLB3615301139"]["unidades"], 1)
+        self.assertEqual(res["MLB999"]["unidades"], 0, "anúncio sem venda precisa voltar zero, não sumir")
+
+    def test_venda_shopee_nao_conta(self):
+        self.gravar_venda("5", "MLB1079290698", 7, 1, marketplace="shopee")
+        self.assertEqual(self.anuncios(["MLB1079290698"])["MLB1079290698"]["unidades"], 0)
