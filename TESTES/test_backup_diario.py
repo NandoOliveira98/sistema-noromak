@@ -20,6 +20,8 @@ def setUpModule():
 
 class BackupDiarioComprimido(unittest.TestCase):
     def _limpar(self):
+        with S.BACKUP_LOCK:  # V18.56: espera um backup em segundo plano de outro teste
+            pass
         S.BACKUP_DIR.mkdir(parents=True, exist_ok=True)
         for p in S.BACKUP_DIR.glob("expedicao_*"):
             p.unlink(missing_ok=True)

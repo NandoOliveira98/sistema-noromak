@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.55-ADS-LUCRO-E-CAMPANHA"
+APP_VERSION = "18.56-AUDITORIA-INTEGRIDADE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -1066,6 +1066,7 @@ def ml_precificador_sync_promo_links(mlb_values: list[Any], actor: str = "") -> 
     unresolved = 0
     errors = 0
     changed = False
+    novos_vinculos: list[tuple[str, dict[str, Any]]] = []
 
     for digits in ids:
         mlb = "MLB" + digits
@@ -1130,6 +1131,7 @@ def ml_precificador_sync_promo_links(mlb_values: list[Any], actor: str = "") -> 
             "linkedBy": actor or "usuario",
         }
         links.setdefault(resolved_sku, []).append(row)
+        novos_vinculos.append((resolved_sku, row))
         inverse[mlb] = resolved_sku
         affected_skus.add(resolved_sku)
         changed = True
@@ -1139,8 +1141,24 @@ def ml_precificador_sync_promo_links(mlb_values: list[Any], actor: str = "") -> 
 
     affected: dict[str, list[dict[str, Any]]] = {}
     if changed:
-        canonical = _ml_merge_seed_links(links)
         with DB_LOCK:
+            # V18.56: relê os vínculos e os tombstones SOB A TRAVA e só acrescenta os
+            # novos. Antes gravava o retrato lido antes da chamada ao ML (segundos de
+            # rede): um vínculo incluído à mão nessa janela era apagado.
+            links = _ml_precificador_persisted_links()
+            tombstones = _ml_manual_link_tombstones()
+            ja_vinculados = {
+                _ml_normalize_link_mlb(r.get("mlb"))
+                for rows in links.values() for r in (rows if isinstance(rows, list) else [])
+                if isinstance(r, dict)
+            }
+            for sku_novo, row_novo in novos_vinculos:
+                mlb_novo = _ml_normalize_link_mlb(row_novo.get("mlb"))
+                if mlb_novo in ja_vinculados or (sku_novo, mlb_novo) in tombstones:
+                    continue
+                links.setdefault(sku_novo, []).append(row_novo)
+                ja_vinculados.add(mlb_novo)
+            canonical = _ml_merge_seed_links(links)
             DB.execute("BEGIN IMMEDIATE")
             try:
                 row = DB.execute("SELECT version FROM storage WHERE key=?",
@@ -1712,6 +1730,8 @@ def init_db() -> None:
             )
             """
         )
+        # V18.56: a limpeza diária dos logs filtra por data.
+        DB.execute("CREATE INDEX IF NOT EXISTS idx_shopee_event_log_created ON shopee_event_log(created_at)")
         DB.executescript(
             """
             CREATE TABLE IF NOT EXISTS ml_integration (
@@ -2993,26 +3013,64 @@ def purge_expired_sessions() -> None:
 BACKUP_DAILY_KEEP = 3  # V18.11: quantos diários comprimidos manter (decisão do dono)
 
 
+# V18.56: o backup tem trava PRÓPRIA. A thread do boot e o primeiro save do dia
+# chamavam backup_daily() juntos; a segunda execução apagava o .tmp da primeira
+# no meio da cópia.
+BACKUP_LOCK = threading.Lock()
+
+
+def _backup_alvo_hoje() -> Path:
+    return BACKUP_DIR / f"expedicao_{datetime.now().strftime('%Y-%m-%d')}.db.gz"
+
+
+def backup_daily_em_segundo_plano() -> None:
+    """V18.56: chamado pelas requisições. Nunca faz a cópia dentro da requisição do
+    usuário — antes o primeiro save do dia copiava ~1 GB e a bipagem parava."""
+    if BACKUP_LOCK.locked():
+        return
+    try:
+        if _backup_alvo_hoje().exists():
+            return
+    except Exception:
+        return
+    threading.Thread(target=backup_daily, name="backup-diario", daemon=True).start()
+
+
 def backup_daily() -> None:
+    if not BACKUP_LOCK.acquire(blocking=False):
+        return  # outra execução já está fazendo o backup de hoje
+    try:
+        _backup_daily_locked()
+    finally:
+        BACKUP_LOCK.release()
+
+
+def _backup_daily_locked() -> None:
     try:
         BACKUP_DIR.mkdir(parents=True, exist_ok=True)
         dia = datetime.now().strftime("%Y-%m-%d")
         alvo_gz = BACKUP_DIR / f"expedicao_{dia}.db.gz"
         if alvo_gz.exists():
             return
-        # V18.11: a cópia consistente roda sob o lock (necessário), mas a COMPRESSÃO
-        # fica fora do lock — antes o backup diário de ~1 GB segurava o DB_LOCK
-        # durante a compressão e congelava a operação. Comprimido, cada diário cai
-        # de ~1 GB para ~75 MB; mantém só os BACKUP_DAILY_KEEP mais recentes.
+        # V18.11: comprimido, cada diário cai de ~1 GB para ~75 MB; mantém só os
+        # BACKUP_DAILY_KEEP mais recentes.
         tmp = BACKUP_DIR / f"expedicao_{dia}.db.tmp"
-        for lixo in BACKUP_DIR.glob("expedicao_*.db.tmp"):
+        gz_tmp = BACKUP_DIR / f"expedicao_{dia}.db.gz.tmp"
+        for lixo in list(BACKUP_DIR.glob("expedicao_*.db.tmp")) + list(BACKUP_DIR.glob("expedicao_*.db.gz.tmp")):
             lixo.unlink(missing_ok=True)
-        with DB_LOCK:
+        # V18.56: a cópia usa uma conexão de LEITURA própria, sem o DB_LOCK. O banco
+        # está em WAL: o backup lê um retrato consistente do que já foi gravado e as
+        # escritas da operação continuam livres. Antes a cópia de ~1 GB segurava o
+        # DB_LOCK e toda bipagem esperava.
+        src = sqlite3.connect(DB_PATH, timeout=30)
+        try:
             dest = sqlite3.connect(tmp)
             try:
-                DB.backup(dest)
+                src.backup(dest)
             finally:
                 dest.close()
+        finally:
+            src.close()
         # Verifica que o backup abre e tem dados ANTES de comprimir.
         conf = sqlite3.connect(tmp)
         try:
@@ -3023,8 +3081,12 @@ def backup_daily() -> None:
             tmp.unlink(missing_ok=True)
             print("Aviso: backup diário sem dados de storage; ignorado.", file=sys.stderr)
             return
-        with open(tmp, "rb") as f_in, gzip.open(alvo_gz, "wb", compresslevel=6) as f_out:
+        # V18.56: comprime num .gz.tmp e só então troca de nome. Gravando direto no
+        # nome final, uma queda no meio deixava um .gz cortado que "contava" como o
+        # backup do dia — e a retenção podia apagar os bons.
+        with open(tmp, "rb") as f_in, gzip.open(gz_tmp, "wb", compresslevel=6) as f_out:
             shutil.copyfileobj(f_in, f_out, 1024 * 1024)
+        os.replace(gz_tmp, alvo_gz)
         tmp.unlink(missing_ok=True)
         # Retenção: mantém os N diários comprimidos mais recentes.
         comprimidos = sorted(
@@ -3064,23 +3126,29 @@ def get_storage(key: str) -> tuple[str | None, int, str | None]:
         # V17.50: o servidor é canônico e o ADMIN prevalece também na LEITURA.
         # Mesmo que algum job legado grave diretamente em storage, os overrides/tombstones
         # persistentes são reaplicados antes de qualquer tela receber o banco.
-        try:
-            if value is not None and "_admin_override_apply" in globals():
-                value = _admin_override_apply(key, value)
-            if key == "conf_pedidos" and "_admin_manual_order_vault_apply" in globals():
-                value = _admin_manual_order_vault_apply(value)
-            if key in ("conf_pedidos", "conf_pedidos_rascunhos") and "_pending_filter_manual_deleted_orders_value" in globals():
-                value = _pending_filter_manual_deleted_orders_value(value)
-            # V17.82: conclusão é a ÚLTIMA barreira da fila também na LEITURA, exatamente
-            # como save_storage() já faz na escrita. Sem isto, o override __ENTITY__ e o
-            # cofre manual reinjetavam um pedido já concluído (eles rodam depois do
-            # filter_completed_orders acima), e o pedido voltava para a Conferência.
-            # A reimportação explícita do ADMIN continua possível porque
-            # reactivate_completed_orders_from_delta remove o registro de completed_orders.
-            if key in ("conf_pedidos", "conf_pedidos_rascunhos") and "filter_completed_orders_v1772" in globals():
-                value = filter_completed_orders_v1772(value)
-        except Exception as exc:
-            print(f"Aviso: override manual não aplicado na leitura de {key}: {exc}", file=sys.stderr)
+        # V18.56: cada etapa tem o seu próprio try. Antes um único try cobria todas,
+        # e uma exceção no cofre ou no tombstone PULAVA o filtro final de concluídos —
+        # o pedido reinjetado pelo override/cofre voltava para a Conferência.
+        etapas = []
+        if value is not None and "_admin_override_apply" in globals():
+            etapas.append(("override", lambda v: _admin_override_apply(key, v)))
+        if key == "conf_pedidos" and "_admin_manual_order_vault_apply" in globals():
+            etapas.append(("cofre manual", _admin_manual_order_vault_apply))
+        if key in ("conf_pedidos", "conf_pedidos_rascunhos") and "_pending_filter_manual_deleted_orders_value" in globals():
+            etapas.append(("tombstone", _pending_filter_manual_deleted_orders_value))
+        # V17.82: conclusão é a ÚLTIMA barreira da fila também na LEITURA, exatamente
+        # como save_storage() já faz na escrita. Sem isto, o override __ENTITY__ e o
+        # cofre manual reinjetavam um pedido já concluído (eles rodam depois do
+        # filter_completed_orders acima), e o pedido voltava para a Conferência.
+        # A reimportação explícita do ADMIN continua possível porque
+        # reactivate_completed_orders_from_delta remove o registro de completed_orders.
+        if key in ("conf_pedidos", "conf_pedidos_rascunhos") and "filter_completed_orders_v1772" in globals():
+            etapas.append(("concluidos", filter_completed_orders_v1772))
+        for nome_etapa, etapa in etapas:
+            try:
+                value = etapa(value)
+            except Exception as exc:
+                print(f"Aviso: etapa '{nome_etapa}' não aplicada na leitura de {key}: {exc}", file=sys.stderr)
         return value, int(row["version"]), row["updated_at"]
 
 
@@ -4493,7 +4561,7 @@ def save_storage(
         except Exception:
             DB.rollback()
             raise
-    backup_daily()
+    backup_daily_em_segundo_plano()
     return merged, version, updated
 
 
@@ -6199,6 +6267,13 @@ def _pending_admin_restore_orders(order_keys: set[str]) -> None:
     keys={normalize(x) for x in order_keys if normalize(x)}
     if not keys:
         return
+    # V18.56: a conexão é UMA só para todas as threads. Sem o DB_LOCK, o COMMIT
+    # abaixo gravava pela metade a transação de um save_storage() de outra thread.
+    with DB_LOCK:
+        _pending_admin_restore_orders_locked(keys)
+
+
+def _pending_admin_restore_orders_locked(keys: set[str]) -> None:
     # Tombstone genérico V17.66.
     row=DB.execute("SELECT value,version FROM storage WHERE key=?", (PENDING_ORDER_DELETE_KEY_V1766,)).fetchone()
     if row:
@@ -6685,6 +6760,21 @@ def ml_status_payload() -> dict[str, Any]:
 ML_ITEM_META_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 ML_ITEM_META_CACHE_LOCK = threading.RLock()
 ML_ITEM_META_CACHE_TTL = 20 * 60
+ML_ITEM_META_CACHE_MAX = 20000
+
+
+def _cache_podar(cache: dict[str, tuple[float, Any]], ttl: float, limite: int) -> None:
+    """V18.56: os caches em memória tinham TTL mas nenhuma limpeza — entradas
+    vencidas ficavam para sempre. Remove as vencidas e, se ainda passar do limite,
+    as mais antigas. Chamar com a trava do cache (quando houver)."""
+    if len(cache) < limite:
+        return
+    agora = time.time()
+    for chave in [k for k, (t, _) in cache.items() if agora - t >= ttl]:
+        cache.pop(chave, None)
+    if len(cache) >= limite:
+        for chave, _ in sorted(cache.items(), key=lambda kv: kv[1][0])[: len(cache) - limite // 2]:
+            cache.pop(chave, None)
 
 
 def _ml_item_meta_from_body(body: dict[str, Any]) -> dict[str, Any]:
@@ -6808,6 +6898,7 @@ def ml_items_meta(ids: list[str]) -> dict[str, dict[str, Any]]:
                     meta = unknown_meta(mlb, batch_error)
                 ML_ITEM_META_CACHE[mlb] = (time.time(), dict(meta))
                 result[mlb] = dict(meta)
+            _cache_podar(ML_ITEM_META_CACHE, ML_ITEM_META_CACHE_TTL, ML_ITEM_META_CACHE_MAX)
 
     return result
 
@@ -6926,6 +7017,13 @@ def ml_store_token(
         pass
 
 
+# V18.56: o refresh_token do ML também é de USO ÚNICO. Seis workers + os handlers
+# HTTP pedem o token; quando ele entrava nos últimos 300 s, dois renovavam juntos com
+# a mesma chave e um levava invalid_grant (ou gravava um par já ultrapassado).
+# Mesma solução da Shopee (V18.01): um renova, os outros esperam e reaproveitam.
+ML_TOKEN_LOCK = threading.Lock()
+
+
 def ml_access_token(*, force_refresh: bool = False) -> tuple[str, str]:
     row = ml_integration_row()
     if not row or not row["access_token"]:
@@ -6934,6 +7032,21 @@ def ml_access_token(*, force_refresh: bool = False) -> tuple[str, str]:
         raise RuntimeError("ML_CLIENT_ID / ML_CLIENT_SECRET não estão configurados no servidor.")
     if not force_refresh and int(row["expires_at_epoch"] or 0) > int(time.time()) + 300:
         return str(row["access_token"]), str(row["seller_id"])
+    token_antes = str(row["access_token"] or "")
+    with ML_TOKEN_LOCK:
+        row = ml_integration_row()
+        if not row or not row["access_token"]:
+            raise RuntimeError("Mercado Livre ainda não está conectado.")
+        expira = int(row["expires_at_epoch"] or 0)
+        # Outro renovou enquanto esperávamos: reaproveita (vale também após um 401).
+        if str(row["access_token"] or "") != token_antes and expira > int(time.time()) + 60:
+            return str(row["access_token"]), str(row["seller_id"])
+        if not force_refresh and expira > int(time.time()) + 300:
+            return str(row["access_token"]), str(row["seller_id"])
+        return _ml_refresh_token_locked(row)
+
+
+def _ml_refresh_token_locked(row: sqlite3.Row) -> tuple[str, str]:
     refresh_token = str(row["refresh_token"] or "")
     if not refresh_token:
         if int(row["expires_at_epoch"] or 0) <= int(time.time()):
@@ -10408,6 +10521,7 @@ def nome_fiscal_do_pedido(row: dict[str, Any]) -> str:
 # quem clicou. Somente leitura: nada aqui grava no banco.
 CLIENTE_FISCAL_CACHE: dict[str, tuple[float, dict[str, Any]]] = {}
 CLIENTE_FISCAL_CACHE_SEGUNDOS = 600
+CLIENTE_FISCAL_CACHE_MAX = 5000
 
 
 def _linhas_do_pedido(pedido: str) -> list[dict[str, Any]]:
@@ -10681,6 +10795,7 @@ def cliente_fiscal_do_pedido(pedido: str) -> dict[str, Any]:
                 aviso = f"Não consegui ler Dados para a NF-e no Mercado Livre: {str(exc)[:200]}"
             if billing.get("name") or billing.get("doc_number"):
                 CLIENTE_FISCAL_CACHE[order_id] = (agora, billing)
+                _cache_podar(CLIENTE_FISCAL_CACHE, CLIENTE_FISCAL_CACHE_SEGUNDOS, CLIENTE_FISCAL_CACHE_MAX)
         numero_api = re.sub(r"\D", "", str(billing.get("doc_number") or ""))
         if not documento["numero"] and len(numero_api) in (11, 14):
             documento = {"tipo": "CNPJ" if len(numero_api) == 14 else "CPF", "numero": numero_api}
@@ -12483,8 +12598,9 @@ def vendas_sync_loop(stop_event: threading.Event) -> None:
             conectados = vendas_marketplaces_conectados()
             if conectados:
                 vendas_sync_once()
-        except Exception:
-            pass
+        except Exception as exc:
+            # V18.56: antes o erro era engolido sem rastro.
+            print(f"[vendas-sync] falhou: {exc}", file=sys.stderr, flush=True)
         # V18.22: esta linha ficava FORA do try. Se levantasse, a thread morria
         # calada e as vendas paravam de sincronizar até alguém reiniciar o serviço
         # — foi assim que o relatório de 22/09 saiu com o dia congelado às 19h.
@@ -13096,12 +13212,12 @@ def ml_ads_sync_loop(stop_event: threading.Event) -> None:
     while not stop_event.is_set():
         try:
             ml_ads_sync_once()
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[ml-ads-sync] falhou: {exc}", file=sys.stderr, flush=True)
         try:
             shopee_ads_sync_once()
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[shopee-ads-sync] falhou: {exc}", file=sys.stderr, flush=True)
         if stop_event.wait(ML_ADS_SYNC_INTERVAL):
             break
 
@@ -13294,8 +13410,8 @@ def financeiro_frete_loop(stop_event: threading.Event) -> None:
     while not stop_event.is_set():
         try:
             ml_frete_envio_preencher()
-        except Exception:
-            pass
+        except Exception as exc:
+            print(f"[financeiro-frete] falhou: {exc}", file=sys.stderr, flush=True)
         if stop_event.wait(FINANCEIRO_FRETE_INTERVALO):
             break
 
@@ -15455,6 +15571,10 @@ def _ads_data_iso(valor: Any) -> str:
     return ""
 
 
+ADS_XLSX_MAX_DESCOMPACTADO = 150 * 1024 * 1024
+ADS_XLSX_MAX_COLUNAS = 16384
+
+
 def _ads_xlsx_planilhas(conteudo: bytes):
     """Gera (nome, linhas) de cada planilha; cada linha é uma lista de textos."""
     import xml.etree.ElementTree as ET
@@ -15465,8 +15585,12 @@ def _ads_xlsx_planilhas(conteudo: bytes):
     except zipfile.BadZipFile:
         raise ValueError("O arquivo não é uma planilha .xlsx.")
     nomes = set(z.namelist())
+    # V18.56: limita também a SOMA descompactada (antes só cada parte, 80 MB) — um
+    # zip com várias partes grandes esgotava a memória do processo único da expedição.
+    total = 0
     for info in z.infolist():
-        if info.file_size > 80 * 1024 * 1024:
+        total += max(0, int(info.file_size or 0))
+        if info.file_size > 80 * 1024 * 1024 or total > ADS_XLSX_MAX_DESCOMPACTADO:
             raise ValueError("Planilha grande demais para ser um relatório de Ads.")
     textos: list[str] = []
     if "xl/sharedStrings.xml" in nomes:
@@ -15491,9 +15615,15 @@ def _ads_xlsx_planilhas(conteudo: bytes):
                 ref = re.match(r"[A-Z]+", str(c.get("r") or ""))
                 if not ref:
                     continue
+                # V18.56: o Excel vai até XFD (16.384 colunas). Uma referência como
+                # "ZZZZZZZZZZ1" montava uma lista de ~10^14 itens e travava o servidor.
+                if len(ref.group(0)) > 3:
+                    raise ValueError("Planilha com coluna inválida — não parece o relatório de Ads.")
                 col = 0
                 for ch in ref.group(0):
                     col = col * 26 + ord(ch) - 64
+                if col > ADS_XLSX_MAX_COLUNAS:
+                    raise ValueError("Planilha com coluna inválida — não parece o relatório de Ads.")
                 v = c.find(f"{ns}v")
                 if c.get("t") == "inlineStr":
                     texto = "".join(t.text or "" for t in c.iter(f"{ns}t"))
@@ -16557,8 +16687,9 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             canal = str((query.get("marketplace") or [""])[0] or "").strip().lower()
             try:
-                with DB_LOCK:
-                    self.send_json(vendas_dashboard_payload(inicio, fim, canal))
+                with DB_LOCK:  # V18.56: calcula sob o lock, envia fora dele
+                    resposta = vendas_dashboard_payload(inicio, fim, canal)
+                self.send_json(resposta)
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
@@ -16665,8 +16796,9 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": "A data inicial não pode ser maior que a final."}, 400)
                 return
             try:
-                with DB_LOCK:
-                    self.send_json(vendas_payload(inicio, fim))
+                with DB_LOCK:  # V18.56: calcula sob o lock, envia fora dele
+                    resposta = vendas_payload(inicio, fim)
+                self.send_json(resposta)
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
@@ -17507,11 +17639,18 @@ class AppHandler(BaseHTTPRequestHandler):
         )
 
     def handle_storage_get(self, query: dict[str, list[str]]) -> None:
+        # V18.56: monta a resposta sob o DB_LOCK e ENVIA fora dele. Antes a escrita no
+        # socket (conf_pedidos inteiro, a cada polling de cada aba) segurava o lock
+        # global: um cliente lento na rede parava a bipagem de todo mundo.
+        with DB_LOCK:
+            resposta, status = self._storage_get_resposta(query)
+        self.send_json(resposta, status)
+
+    def _storage_get_resposta(self, query: dict[str, list[str]]) -> tuple[dict[str, Any], int]:
         with DB_LOCK:
             if (query.get("list") or [""])[0] == "1":
                 keys = [row[0] for row in DB.execute("SELECT key FROM storage ORDER BY key")]
-                self.send_json({"keys": keys})
-                return
+                return {"keys": keys}, 200
             versions_arg = (query.get("versions") or [""])[0]
             if versions_arg:
                 requested = [key.strip() for key in versions_arg.split(",") if key.strip()]
@@ -17522,8 +17661,7 @@ class AppHandler(BaseHTTPRequestHandler):
                         requested,
                     ).fetchall()
                 } if requested else {}
-                self.send_json({"versions": {key: rows.get(key, 0) for key in requested}})
-                return
+                return {"versions": {key: rows.get(key, 0) for key in requested}}, 200
             keys_arg = (query.get("keys") or [""])[0]
             if keys_arg:
                 values: dict[str, Any] = {}
@@ -17532,14 +17670,12 @@ class AppHandler(BaseHTTPRequestHandler):
                     value, version, _ = get_storage(key)
                     values[key] = value
                     versions[key] = version
-                self.send_json({"values": values, "versions": versions})
-                return
+                return {"values": values, "versions": versions}, 200
             key = (query.get("key") or [""])[0]
             if not key:
-                self.send_json({"error": "Chave não informada."}, 400)
-                return
+                return {"error": "Chave não informada."}, 400
             value, version, updated = get_storage(key)
-            self.send_json({"exists": value is not None, "value": value, "version": version, "updated_at": updated})
+            return {"exists": value is not None, "value": value, "version": version, "updated_at": updated}, 200
 
     def handle_sku_history_get(self, query: dict[str, list[str]]) -> None:
         def q(name: str) -> str:
@@ -17864,7 +18000,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     f"|pedido_referencia={ref_order or '-'}"
                 )[:4000],
             )
-            backup_daily()
+            backup_daily_em_segundo_plano()
             self.send_json({
                 "ok": True,
                 "sku": sku,
@@ -18510,7 +18646,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     raise
 
             audit(ctx["username"], "order.sku.manual_override", f"{ref_order}|{uid}|{old_sku}->{sku}"[:4000])
-            backup_daily()
+            backup_daily_em_segundo_plano()
             self.send_json({
                 "ok": True,
                 "uid": uid,
@@ -18686,7 +18822,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     f"|pedidos_pendentes={pending_order_count}|rascunhos={matched_draft_line_count}"
                 )[:4000],
             )
-            backup_daily()
+            backup_daily_em_segundo_plano()
             self.send_json({
                 "ok": True,
                 "uid": uid,
@@ -18751,7 +18887,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     DB.rollback()
                     raise
             audit(ctx["username"], "order.complete", pedido)
-            backup_daily()
+            backup_daily_em_segundo_plano()
             # V17.72: devolve o estado canônico já concluído para o cache da
             # estação que finalizou, sem depender de uma segunda leitura/race.
             self.send_json({
@@ -19361,6 +19497,63 @@ class AppHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
 
+# V18.56: uma exceção fora do try interno matava a thread em silêncio (keepalive do
+# token, workers da Shopee, relatório diário) e a integração parava até alguém
+# reiniciar o serviço. Este invólucro registra o erro e reinicia o worker.
+WORKER_REINICIO_SEGUNDOS = 60
+
+
+def _worker_protegido(alvo: Any) -> Any:
+    def executar(stop_event: threading.Event) -> None:
+        nome = getattr(alvo, "__name__", "worker")
+        while not stop_event.is_set():
+            try:
+                alvo(stop_event)
+                return  # o loop terminou normalmente (stop)
+            except Exception as exc:
+                try:
+                    print(f"[{nome}] parou com erro e será reiniciado: {exc}", file=sys.stderr, flush=True)
+                    _ml_worker_state_update(last_error=f"{nome}: {str(exc)[:500]}")
+                except Exception:
+                    pass
+                if stop_event.wait(WORKER_REINICIO_SEGUNDOS):
+                    return
+    executar.__name__ = f"protegido_{getattr(alvo, '__name__', 'worker')}"
+    return executar
+
+
+# V18.56: ml_event_log e shopee_event_log cresciam para sempre (o worker de
+# etiquetas Shopee grava um "OK" a cada ciclo com trabalho). audit_log é histórico
+# e NÃO é limpo.
+LOG_EVENTOS_DIAS = 90
+
+
+def limpar_logs_antigos(dias: int = LOG_EVENTOS_DIAS) -> dict[str, int]:
+    corte = (datetime.now(timezone.utc).astimezone() - timedelta(days=dias)).isoformat(timespec="milliseconds")
+    removidos: dict[str, int] = {}
+    for tabela in ("ml_event_log", "shopee_event_log"):
+        with DB_LOCK:
+            cur = DB.execute(f"DELETE FROM {tabela} WHERE created_at < ?", (corte,))
+            DB.commit()
+        removidos[tabela] = int(cur.rowcount or 0)
+    return removidos
+
+
+def manutencao_diaria_loop(stop_event: threading.Event) -> None:
+    if stop_event.wait(300):
+        return
+    while not stop_event.is_set():
+        try:
+            removidos = limpar_logs_antigos()
+            if any(removidos.values()):
+                print(f"[manutencao] logs antigos removidos: {removidos}", flush=True)
+        except Exception as exc:
+            print(f"[manutencao] falhou: {exc}", file=sys.stderr, flush=True)
+        backup_daily_em_segundo_plano()  # garante o backup do dia mesmo sem ninguém salvar
+        if stop_event.wait(6 * 3600):
+            break
+
+
 def main() -> None:
     init_db()
     # V18.04: limpa, uma vez no boot, o selo de kit que sobrou nas vendas de
@@ -19377,77 +19570,84 @@ def main() -> None:
     threading.Thread(target=backup_daily, name="backup-inicial", daemon=True).start()
     watcher_stop = threading.Event()
     watcher_thread = threading.Thread(
-        target=ml_pending_label_watch_loop,
+        target=_worker_protegido(ml_pending_label_watch_loop),
         args=(watcher_stop,),
         name="ml-pending-label-watcher",
         daemon=True,
     )
     new_order_thread = threading.Thread(
-        target=ml_new_order_watch_loop,
+        target=_worker_protegido(ml_new_order_watch_loop),
         args=(watcher_stop,),
         name="ml-new-order-watcher",
         daemon=True,
     )
     manual_reconcile_thread = threading.Thread(
-        target=ml_reconcile_manual_orders_loop,
+        target=_worker_protegido(ml_reconcile_manual_orders_loop),
         args=(watcher_stop,),
         name="ml-manual-order-reconciler",
         daemon=True,
     )
     token_keeper_thread = threading.Thread(
-        target=ml_token_keepalive_loop,
+        target=_worker_protegido(ml_token_keepalive_loop),
         args=(watcher_stop,),
         name="ml-token-keeper",
         daemon=True,
     )
     safety_catchup_thread = threading.Thread(
-        target=ml_safety_catchup_loop,
+        target=_worker_protegido(ml_safety_catchup_loop),
         args=(watcher_stop,),
         name="ml-safety-catchup",
         daemon=True,
     )
     shopee_label_thread = threading.Thread(
-        target=shopee_label_worker_loop,
+        target=_worker_protegido(shopee_label_worker_loop),
         args=(watcher_stop,),
         name="shopee-label-worker",
         daemon=True,
     )
     # V17.92: pedidos Shopee entram sozinhos, sem o botão de sincronizar.
     shopee_orders_thread = threading.Thread(
-        target=shopee_orders_worker_loop,
+        target=_worker_protegido(shopee_orders_worker_loop),
         args=(watcher_stop,),
         name="shopee-orders-worker",
         daemon=True,
     )
     # V17.99: vendas do ML e da Shopee para o Dashboard de vendas.
     vendas_ml_thread = threading.Thread(
-        target=vendas_sync_loop,
+        target=_worker_protegido(vendas_sync_loop),
         args=(watcher_stop,),
         name="vendas-sync",
         daemon=True,
     )
     # V18.31: frete por conta do vendedor das vendas recentes (Financeiro).
     frete_thread = threading.Thread(
-        target=financeiro_frete_loop,
+        target=_worker_protegido(financeiro_frete_loop),
         args=(watcher_stop,),
         name="financeiro-frete",
         daemon=True,
     )
     # V18.30: gasto com Publicidade (Product Ads) para o Financeiro.
     ads_thread = threading.Thread(
-        target=ml_ads_sync_loop,
+        target=_worker_protegido(ml_ads_sync_loop),
         args=(watcher_stop,),
         name="ml-ads-sync",
         daemon=True,
     )
     # V18.13: agente de relatório diário por e-mail (00:01).
     relatorio_thread = threading.Thread(
-        target=relatorio_diario_loop,
+        target=_worker_protegido(relatorio_diario_loop),
         args=(watcher_stop,),
         name="relatorio-diario",
         daemon=True,
     )
+    manutencao_thread = threading.Thread(
+        target=_worker_protegido(manutencao_diaria_loop),
+        args=(watcher_stop,),
+        name="manutencao-diaria",
+        daemon=True,
+    )
     _ml_worker_state_update(started_at=now_iso(), last_error="")
+    manutencao_thread.start()
     watcher_thread.start()
     new_order_thread.start()
     manual_reconcile_thread.start()

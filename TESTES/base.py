@@ -67,17 +67,21 @@ def iniciar_servidor() -> str:
 
 def reiniciar_banco() -> None:
     """Recria o banco do zero, exatamente como em uma instalação nova."""
-    try:
-        with S.DB_LOCK:
-            S.DB.close()
-    except Exception:
-        pass
-    for sufixo in ("", "-wal", "-shm"):
-        alvo = Path(str(S.DB_PATH) + sufixo)
-        if alvo.exists():
-            alvo.unlink()
-    S.DB = S.connect_db()
-    S.init_db()
+    # V18.56: o backup diário roda em thread própria, com conexão própria ao arquivo.
+    # Espera ele terminar (e impede um novo) enquanto o arquivo é apagado — no Windows
+    # um arquivo aberto não pode ser removido.
+    with S.BACKUP_LOCK:
+        try:
+            with S.DB_LOCK:
+                S.DB.close()
+        except Exception:
+            pass
+        for sufixo in ("", "-wal", "-shm"):
+            alvo = Path(str(S.DB_PATH) + sufixo)
+            if alvo.exists():
+                alvo.unlink()
+        S.DB = S.connect_db()
+        S.init_db()
     S.LOGIN_ATTEMPTS.clear()
     S.OWNER_REAUTH_FAILURES.clear()
 

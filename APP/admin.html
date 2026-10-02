@@ -4834,10 +4834,12 @@ async function atualizarVendaMercadoLivreAdmin(uid,botao){
     const fonteNome=String(det.client_name_source||"").trim();
     const billingId=String(det.billing_info_id||"").trim();
     const errosFiscal=Array.isArray(det.billing_info_errors)?det.billing_info_errors.filter(Boolean):[];
+    // V18.56: nome do comprador e mensagens da API vão para innerHTML — escapados.
+    const esc=escaparHistoricoSku;
     const detalheNome=nomeAtual
-      ?` Cliente: ${nomeAtual}${fonteNome?` (${fonteNome.replaceAll("_"," ")})`:""}.`
-      :` Nome do comprador ainda indisponível${billingId?` (billing_info_id ${billingId})`:""}; o nome atual foi mantido.${errosFiscal.length?` Diagnóstico fiscal: ${errosFiscal[0]}`:""}`;
-    mostrarStatusImportacaoPedidos(nomeAtual?"sucesso":"aviso",`↻ Venda ${orderId} atualizada pela API do Mercado Livre. ${itens} item(ns), ${atualizados} atualizado(s), ${inseridos} novo(s).${detalheNome}`);
+      ?` Cliente: ${esc(nomeAtual)}${fonteNome?` (${esc(fonteNome.replaceAll("_"," "))})`:""}.`
+      :` Nome do comprador ainda indisponível${billingId?` (billing_info_id ${esc(billingId)})`:""}; o nome atual foi mantido.${errosFiscal.length?` Diagnóstico fiscal: ${esc(errosFiscal[0])}`:""}`;
+    mostrarStatusImportacaoPedidos(nomeAtual?"sucesso":"aviso",`↻ Venda ${esc(orderId)} atualizada pela API do Mercado Livre. ${itens} item(ns), ${atualizados} atualizado(s), ${inseridos} novo(s).${detalheNome}`);
     setStatusBanco("● Venda atualizada","ok");
   }catch(e){
     console.error(e);

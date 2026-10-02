@@ -392,12 +392,23 @@
     }
   }
 
+  // V18.56: o polling não tinha prazo. Se uma requisição travasse na rede,
+  // pollEmAndamento ficava true e a tela parava de atualizar em silêncio.
+  function fetchComPrazo(url, ms) {
+    if (typeof AbortController === "undefined") return fetch(url, { cache: "no-store" });
+    const controle = new AbortController();
+    // O prazo cobre também a leitura do corpo (.json()); abortar depois que a
+    // resposta já foi lida não tem efeito.
+    setTimeout(() => controle.abort(), ms);
+    return fetch(url, { cache: "no-store", signal: controle.signal });
+  }
+
   async function consultarAlteracoes() {
     const conferenciaEmSegundoPlano = document.documentElement?.dataset?.pwaApp === "conferencia";
     if (pollEmAndamento || (document.hidden && !conferenciaEmSegundoPlano)) return;
     pollEmAndamento = true;
     try {
-      const resposta = await fetch(`${API}?versions=${encodeURIComponent(CHAVES_MONITORADAS.join(","))}`, { cache: "no-store" });
+      const resposta = await fetchComPrazo(`${API}?versions=${encodeURIComponent(CHAVES_MONITORADAS.join(","))}`, 15000);
       if (!resposta.ok) throw new Error(`HTTP ${resposta.status}`);
       const dados = await resposta.json();
       conectado = true;
@@ -411,7 +422,7 @@
         }
         if (versaoAntiga === versaoNova) continue;
         const antigo = cache.has(chave) ? cache.get(chave) : undefined;
-        const atual = await fetch(`${API}?key=${encodeURIComponent(chave)}`, { cache: "no-store" });
+        const atual = await fetchComPrazo(`${API}?key=${encodeURIComponent(chave)}`, 60000);
         if (!atual.ok) throw new Error(`HTTP ${atual.status}`);
         const detalhe = await atual.json();
         const novo = detalhe.exists ? String(detalhe.value ?? "") : null;

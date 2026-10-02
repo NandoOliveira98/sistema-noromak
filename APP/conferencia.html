@@ -820,6 +820,13 @@ function escaparHtml(valor) {
     .replace(/'/g, "&#039;");
 }
 
+// V18.56: argumento de JS dentro de onclick="...". escaparHtml sozinho NÃO protege
+// ali: o navegador desfaz o &#039; antes de rodar o JS e a aspa fecha a string.
+// JSON.stringify gera a string JS válida e escaparHtml a protege dentro do atributo.
+function argJs(valor) {
+  return escaparHtml(JSON.stringify(String(valor ?? "")));
+}
+
 function lerJsonSeguro(chave, padrao) {
   try {
     const valor = appStorage.getItem(chave);
@@ -2269,7 +2276,7 @@ function renderizarListaPedidos() {
         <div class="pedido-item ${selecionadoTeclado ? 'pedido-teclado-selecionado' : ''}"
              data-pedido-uid="${escaparHtml(uid)}" tabindex="${selecionadoTeclado ? '0' : '-1'}"
              role="button" aria-label="Abrir pedido ${escaparHtml(numPedidoExibicao)}"
-             onclick="selecionarPedidoPorClique('${uid}')">
+             onclick="selecionarPedidoPorClique(${argJs(uid)})">
           <div class="pedido-topo-linha"><span>Pedido ${escaparHtml(numPedidoExibicao)}</span><span class="pedido-marketplace-badge ${marketplacePedido}">${escaparHtml(nomeMarketplace(marketplacePedido))}</span></div>
           ${nomeCliente ? `<div class="pedido-cliente">👤 ${escaparHtml(nomeCliente)}</div>` : ''}
           <div class="pedido-cliente">📅 Despacho: ${escaparHtml(dataPedidoItem(itemPedido)||hojeLocalConferencia())}</div>
@@ -2372,16 +2379,16 @@ function desenharTabela() {
     let valFoto = extrairCampo(i, "Foto").toLowerCase();
     let urlImg = mapaFotos[valFoto] || mapaFotos[keySKU];
 
-    let tagImg = urlImg ? `<img src="${urlImg}" class="img-produto">` : `<span style="color:#999; font-size:11px;">Sem Foto</span>`;
+    let tagImg = urlImg ? `<img src="${escaparHtml(urlImg)}" class="img-produto">` : `<span style="color:#999; font-size:11px;">Sem Foto</span>`;
 
     html += `
       <tr class="${classe}">
         <td>${tagImg}</td>
-        <td><span class="sku-texto">${valSKU || '---'}</span></td>
-        <td style="text-align:left;">${extrairCampo(i, "Descrição")}${String(extrairCampo(i,"Kit")||"").toUpperCase()==="SIM"||extrairCampo(i,"Nome do Kit")?`<div style="margin-top:4px"><span class="pedido-status-mini" style="background:#f3e8ff;color:#6b21a8">🎁 ${escaparHtml(extrairCampo(i,"Nome do Kit")||extrairCampo(i,"SkuKitOrigem")||"Kit")}</span></div>`:""}${extrairCampo(i,"Observação")?`<div style="margin-top:4px"><span class="pedido-status-mini" style="background:#fff3cd;color:#8a5a00">⚠ ${escaparHtml(extrairCampo(i,"Observação"))}</span></div>`:""}</td>
-        <td>${extrairCampo(i, "Quantidade") || 0}</td>
-        <td>${i.Lido || 0}</td>
-        <td><button type="button" style="border:0;border-radius:6px;padding:6px 9px;background:#ffebee;color:#c62828;font-weight:800;cursor:pointer" onclick="excluirProdutoPedidoConferencia('${escaparHtml(String(i.__uidLinha||i.__uidPedido||''))}')">🗑 Excluir</button></td>
+        <td><span class="sku-texto">${escaparHtml(valSKU || '---')}</span></td>
+        <td style="text-align:left;">${escaparHtml(extrairCampo(i, "Descrição"))}${String(extrairCampo(i,"Kit")||"").toUpperCase()==="SIM"||extrairCampo(i,"Nome do Kit")?`<div style="margin-top:4px"><span class="pedido-status-mini" style="background:#f3e8ff;color:#6b21a8">🎁 ${escaparHtml(extrairCampo(i,"Nome do Kit")||extrairCampo(i,"SkuKitOrigem")||"Kit")}</span></div>`:""}${extrairCampo(i,"Observação")?`<div style="margin-top:4px"><span class="pedido-status-mini" style="background:#fff3cd;color:#8a5a00">⚠ ${escaparHtml(extrairCampo(i,"Observação"))}</span></div>`:""}</td>
+        <td>${escaparHtml(extrairCampo(i, "Quantidade") || 0)}</td>
+        <td>${escaparHtml(i.Lido || 0)}</td>
+        <td><button type="button" style="border:0;border-radius:6px;padding:6px 9px;background:#ffebee;color:#c62828;font-weight:800;cursor:pointer" onclick="excluirProdutoPedidoConferencia(${argJs(i.__uidLinha||i.__uidPedido||'')})">🗑 Excluir</button></td>
       </tr>
     `;
   });
@@ -2436,8 +2443,8 @@ function mostrarModalMultiplosPedidos(lista, codBarras) {
     let itemBase = dadosPedidos.find(x => extrairCampo(x, "Pedido") === match.numPedido);
     let cliente = nomeClienteConferencia(itemBase);
     html += `
-      <button class="btn-opcao-pedido" onclick="selecionarPedidoMultiplo('${match.uidPedido}', '${codBarras}')">
-        Pedido ${pedidoParaExibicao(match.numPedido,obterMarketplaceItem(itemBase))} - Cliente: ${cliente || 'Não informado'}
+      <button class="btn-opcao-pedido" onclick="selecionarPedidoMultiplo(${argJs(match.uidPedido)}, ${argJs(codBarras)})">
+        Pedido ${escaparHtml(pedidoParaExibicao(match.numPedido,obterMarketplaceItem(itemBase)))} - Cliente: ${escaparHtml(cliente || 'Não informado')}
       </button>
     `;
   });
@@ -3327,7 +3334,7 @@ function renderizarHistorico() {
       <td>${escaparHtml(log.operador || "-")}</td>
       <td>${Number(log.qtdUnidades || log.qtdItens || 0)}</td>
       <td><span class="badge-reimpressoes">${qtdReimp}</span></td>
-      <td><button class="btn-reimprimir" ${disponivel ? `onclick="abrirModalReimpressao('${log.id}')"` : "disabled title='Registro antigo sem dados de impressão'"}>Reimprimir</button></td>
+      <td><button class="btn-reimprimir" ${disponivel ? `onclick="abrirModalReimpressao(${argJs(log.id)})"` : "disabled title='Registro antigo sem dados de impressão'"}>Reimprimir</button></td>
     </tr>`;
   }).join("");
 }

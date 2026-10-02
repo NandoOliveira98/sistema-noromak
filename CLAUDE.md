@@ -58,11 +58,17 @@ Consequências práticas, não negociáveis:
 
 ## 2. Stack e execução
 
-- Backend: `servidor_web.py` — ~13.9k linhas, **apenas biblioteca padrão do Python**
+- Backend: `servidor_web.py` — ~19.5k linhas, **apenas biblioteca padrão do Python**
   (sem dependências externas). `ThreadingHTTPServer` em `127.0.0.1:8100`.
 - O nginx **não** remove o prefixo: todas as rotas vivem sob `BASE_PATH = "/expedicao"`.
 - Persistência: SQLite em `/home/expedicao/dados/expedicao.db` (fora da pasta do código).
-  Backup diário automático em `/home/expedicao/backups`.
+  Backup diário automático em `/home/expedicao/backups` (V18.56: thread própria com
+  `BACKUP_LOCK`, cópia por conexão de leitura separada — **sem** o `DB_LOCK` —, `.gz.tmp`
+  renomeado no fim; a requisição só dispara `backup_daily_em_segundo_plano()`).
+- Todos os workers sobem embrulhados em `_worker_protegido` (V18.56): erro fora do try
+  é registrado e o worker reinicia em 60 s. `manutencao_diaria_loop` apaga
+  `ml_event_log`/`shopee_event_log` com mais de 90 dias (`audit_log` **não** é limpo).
+- Respostas HTTP são montadas sob o `DB_LOCK` e **enviadas fora dele** (V18.56).
 - Front-end: HTML/CSS/JS puro em `APP/`, sem build step. Arquivos monolíticos.
 - Segredos reais só em `/home/expedicao/.env` no servidor. Ver `.env.example`.
 
@@ -79,7 +85,8 @@ APP/
   estacao-impressao.html     estação Zebra / QZ Tray
   financeiro.html            faturamento, gastos e lucro (V18.30; substituiu a
                              Rentabilidade ML na V18.33)
-  analise-full.html, compras.html (Demanda de Compra), analise-ads.html (Análise de ADS, V18.54)
+  analise-full.html, compras.html (Demanda de Compra), analise-ads.html (Análise de ADS, V18.54),
+  promocoes.html, kits-analise.html (Oportunidades de Kit, V18.47)
                              (Central de Pendências e Promoções ML removidas na V17.99;
                              /pendencias e /promocoes-ml abrem o Admin)
   shared-storage.js          cache versionado + polling (CRÍTICO)
@@ -224,6 +231,8 @@ keepalive do token (~300 s), catch-up de segurança (~900 s).
 Etiquetas: `_ml_fetch_shipping_zpl` / `_ml_store_linked_label`.
 Rentabilidade via billing API com cache em `ml_profitability_billing_cache`.
 Tratar expiração do token: já houve cenário de `access_token` sem `refresh_token`.
+**V18.56:** o `refresh_token` é de uso único — a renovação passa pelo `ML_TOKEN_LOCK` e relê
+a linha sob a trava (outro já renovou? reaproveita), igual ao `SHOPEE_TOKEN_LOCK`.
 
 ### Shopee
 Fluxo de etiqueta: `get_shipping_parameter` → `ship_order` → `get_tracking_number` →
@@ -435,7 +444,7 @@ Não toca no banco de produção e não faz chamada para ML, Shopee ou Apollo.
 O `publicar.sh` chama `./testar.sh` antes do `git push` e **cancela a publicação** se
 qualquer teste falhar — nada é enviado e a operação continua no ar.
 
-Os testes ficam em `TESTES/`:
+Os testes ficam em `TESTES/` (são 30 arquivos; os principais):
 
 | Arquivo | Cobre |
 |---|---|
@@ -443,6 +452,7 @@ Os testes ficam em `TESTES/`:
 | `test_conferencia.py` | bip monotônico, metadados de conferência, conclusão canônica, cofre manual |
 | `test_financeiro.py` | imposto de 12%, lucro bruto/líquido, tarifa por pedido (não por linha), venda sem custo não vira lucro, Ads sem duplicidade, escrow Shopee, frete só do vendedor |
 | `test_ads_analise.py` | leitura do .xlsx do ML, planilha errada recusada, mesmo período substitui, lucro por anúncio sem Ads em dobro |
+| `test_auditoria_v1856.py` | renovação do token ML serializada, backup sem `DB_LOCK` e sem `.gz` cortado, reinclusão sob lock, filtro de concluídos sempre aplicado, vínculo MLB manual preservado, `.xlsx` malicioso, worker protegido, limpeza de logs/caches |
 | `test_instalacao.py` | instalação nova, idempotência do `init_db`, versionamento do storage, autenticação |
 | `base.py` | infraestrutura: banco temporário, servidor real em porta livre, cliente HTTP |
 
