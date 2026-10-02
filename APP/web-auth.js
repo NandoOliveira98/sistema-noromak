@@ -104,10 +104,23 @@
     }
   }
 
+  // V18.57: com o login único, apagar só a sessão própria não tira ninguém —
+  // o portão manda a identidade de novo na próxima requisição. Então o "Sair"
+  // encerra também a sessão do NoromakWeb (mesma rota do "Sair" de lá) e vai
+  // para o /login dele com navegação dura.
+  const NOROMAKWEB_LOGOUT = "/api/v1/auth/logout";
+  const NOROMAKWEB_LOGIN = "/login";
+  let currentUser = null;
+
   async function logout(reloadTo = `${BASE}/`) {
+    const sso = currentUser?.sso === "noromakweb";
+    if (sso) {
+      try { await fetch(NOROMAKWEB_LOGOUT, { method: "POST", credentials: "same-origin", cache: "no-store" }); } catch (_) {}
+    }
     try { await jsonFetch(API_LOGOUT, { method: "POST", body: "{}" }); } catch (_) {}
     clearLegacySession();
-    location.href = reloadTo;
+    if (sso) window.location.href = NOROMAKWEB_LOGIN;
+    else location.href = reloadTo;
   }
 
   async function performLogin(username, password, area, errorId, button) {
@@ -277,6 +290,7 @@
     try {
       const data = await jsonFetch(API_SESSION);
       const user = data.authenticated ? data.user : null;
+      currentUser = user;
       if (kind === "access") {
         if (user) renderAccessMenu(user);
         else renderAccessLogin();
