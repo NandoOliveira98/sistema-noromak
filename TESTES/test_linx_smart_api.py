@@ -263,7 +263,9 @@ class LinxSmartApi(_BaseLinx):
 
     def test_rota_de_teste_e_so_do_admin(self):
         anonimo = type(self.cliente)(self.url_base)
-        status, _ = anonimo.pedir("POST", "/api/linx/testar", {"documento": CPF})
+        # Sem corpo: o servidor recusa sem ler o corpo e fecha a conexão; com corpo,
+        # o Windows às vezes aborta o envio (WinError 10053) e o teste ficava instável.
+        status, _ = anonimo.pedir("POST", "/api/linx/testar")
         self.assertIn(status, (401, 403))
         self.assertEqual(self.linx.chamadas, [])
         self.linx.clientes[CPF] = [{"Cliente": 3, "Nome": "N", "Cpf": int(CPF)}]
