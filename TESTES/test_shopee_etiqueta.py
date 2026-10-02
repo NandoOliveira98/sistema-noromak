@@ -197,3 +197,120 @@ class SincronizacaoNaoApagaPedidoOrganizado(__import__("base").TesteNoromak):
         finally:
             S.shopee_manual_sync = original
         self.assertEqual(chamadas, [{"acordar_etiquetas": False}])
+
+
+class EtiquetaShopeeSemEspera(__import__("base").TesteNoromak):
+    """V18.62 — etiquetas Shopee demoravam 7 a 10 minutos (ou mais) para cair.
+
+    O worker andava uma etapa por ciclo de 3 min (organizar → rastreio → gerar →
+    baixar), a importação de pedido novo não o acordava, a fila de pendentes sem
+    etiqueta cortava em 40 sem olhar a data e cada pedido fazia uma chamada só de
+    diagnóstico.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.originais = (S.shopee_api_get, S.shopee_api_post, S.shopee_api_post_bytes,
+                          S.shopee_log_event, S.SHOPEE_DOC_RESULT_RETRY_WAIT)
+        S.shopee_log_event = lambda *a, **k: None
+        S.SHOPEE_DOC_RESULT_RETRY_WAIT = 0
+        self.chamadas = []
+
+    def tearDown(self):
+        (S.shopee_api_get, S.shopee_api_post, S.shopee_api_post_bytes,
+         S.shopee_log_event, S.SHOPEE_DOC_RESULT_RETRY_WAIT) = self.originais
+        super().tearDown()
+
+    def fingir_shopee(self, status_result):
+        """status_result: lista de status devolvidos em sequência por get_shipping_document_result."""
+        fila = list(status_result)
+
+        def get(path, params=None):
+            self.chamadas.append(path)
+            if path.endswith("get_tracking_number"):
+                return {"response": {"tracking_number": "BR1"}}
+            return {"response": {}}
+
+        def post(path, body=None):
+            self.chamadas.append(path)
+            if path.endswith("get_shipping_document_parameter"):
+                return {"response": {"result_list": [{"order_sn": "NOVO01", "suggest_shipping_document_type": "THERMAL_AIR_WAYBILL"}]}}
+            if path.endswith("create_shipping_document"):
+                return {"response": {"result_list": [{"order_sn": "NOVO01"}]}}
+            if path.endswith("get_shipping_document_result"):
+                st = fila.pop(0) if fila else "PROCESSING"
+                return {"response": {"result_list": [{"order_sn": "NOVO01", "status": st}]}}
+            return {"response": {}}
+
+        S.shopee_api_get = get
+        S.shopee_api_post = post
+        S.shopee_api_post_bytes = lambda path, body=None: (b"^XA^FDX^FS^XZ", "text/plain")
+
+    def test_etiqueta_em_processamento_e_consultada_de_novo_no_mesmo_ciclo(self):
+        self.fingir_shopee(["PROCESSING", "READY"])
+        r = S.shopee_sync_shipping_documents([{"order_sn": "NOVO01"}], ja_organizados={"NOVO01"})
+        self.assertEqual(r["vinculados"], 1, "REGRESSÃO: etiqueta pronta segundos depois ficou para o próximo ciclo (3 min)")
+
+    def test_etiqueta_pronta_nao_faz_chamada_de_diagnostico(self):
+        self.fingir_shopee(["READY"])
+        S.shopee_sync_shipping_documents([{"order_sn": "NOVO01"}], ja_organizados={"NOVO01"})
+        self.assertNotIn("/api/v2/logistics/get_shipping_document_data_info", self.chamadas)
+
+    def test_pedido_novo_nao_fica_fora_da_fila_de_pendentes(self):
+        import time as _t
+        from base import gravar_como_integracao, linha
+        ontem = _t.strftime("%Y-%m-%d", _t.localtime(_t.time() - 86400))
+        hoje = _t.strftime("%Y-%m-%d")
+        linhas = [linha(f"TRAVADO{i:03d}", "SKU", uid=f"T{i}", Marketplace="SHOPEE",
+                        **{"Data do Pedido": ontem}) for i in range(45)]
+        linhas.append(linha("NOVOHOJE01", "SKU", uid="N1", Marketplace="SHOPEE", **{"Data do Pedido": hoje}))
+        gravar_como_integracao(linhas)
+        fila = [x["order_sn"] for x in S.shopee_pedidos_sem_etiqueta()]
+        self.assertEqual(fila[0], "NOVOHOJE01", "REGRESSÃO: pedido novo ficou atrás de 40 travados e nunca ganha etiqueta")
+
+    def test_worker_volta_rapido_so_enquanto_ha_pedido_no_meio_do_fluxo(self):
+        normal, rapido = S.SHOPEE_LABEL_WORKER_INTERVAL, S.SHOPEE_LABEL_FOLLOWUP_INTERVAL
+        self.assertLess(rapido, normal)
+        espera, n = S._shopee_label_proxima_espera({"aguardando": 1}, 0)
+        self.assertEqual((espera, n), (rapido, 1))
+        espera, n = S._shopee_label_proxima_espera({"aguardando": 0}, 3)
+        self.assertEqual((espera, n), (normal, 0))
+        # Pedido que nunca anda (ex.: sem NF-e) não pode prender o worker no ritmo rápido.
+        espera, n = S._shopee_label_proxima_espera({"aguardando": 1}, S.SHOPEE_LABEL_FOLLOWUP_MAX)
+        self.assertEqual(espera, normal)
+        # Progresso real (etiqueta vinculada) zera o limite.
+        espera, n = S._shopee_label_proxima_espera({"aguardando": 1, "vinculados": 1}, S.SHOPEE_LABEL_FOLLOWUP_MAX)
+        self.assertEqual((espera, n), (rapido, 1))
+
+
+class ImportacaoDePedidoNovoAcordaEtiquetas(__import__("base").TesteNoromak):
+    """V18.62 — o worker de pedidos (a cada minuto) não acordava o de etiquetas:
+    o pedido novo esperava até 3 min só para começar."""
+
+    def setUp(self):
+        super().setUp()
+        from base import linha
+        self.originais = (S.shopee_status_payload, S.shopee_current_shipments, S.shopee_order_details,
+                          S._shopee_build_pending_lines, S.shopee_log_event)
+        S.shopee_status_payload = lambda: {"connected": True, "shop_id": "1"}
+        S.shopee_current_shipments = lambda: [{"order_sn": "NOVOPEDIDO01", "package_number": "P1"}]
+        S.shopee_order_details = lambda sns: [{"order_sn": x, "order_status": "READY_TO_SHIP"} for x in sns]
+        S._shopee_build_pending_lines = lambda order, pkgs, produtos: [
+            linha(order["order_sn"], "SKU-1", uid="U-" + order["order_sn"],
+                  Marketplace="SHOPEE", OrigemCadastro="API_SHOPEE")]
+        S.shopee_log_event = lambda *a, **k: None
+        S.SHOPEE_LABEL_WAKE_EVENT.clear()
+
+    def tearDown(self):
+        (S.shopee_status_payload, S.shopee_current_shipments, S.shopee_order_details,
+         S._shopee_build_pending_lines, S.shopee_log_event) = self.originais
+        S.SHOPEE_LABEL_WAKE_EVENT.clear()
+        super().tearDown()
+
+    def test_pedido_novo_acorda_e_repeticao_nao(self):
+        S.shopee_manual_sync(acordar_etiquetas=False)
+        self.assertTrue(S.SHOPEE_LABEL_WAKE_EVENT.is_set(), "REGRESSÃO: pedido novo não acordou o worker de etiquetas")
+        S.SHOPEE_LABEL_WAKE_EVENT.clear()
+        S.shopee_manual_sync(acordar_etiquetas=False)
+        self.assertFalse(S.SHOPEE_LABEL_WAKE_EVENT.is_set(),
+                         "a sincronização de cada minuto não pode acordar o worker sem pedido novo (V17.92)")

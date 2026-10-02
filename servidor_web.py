@@ -39,7 +39,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.61-FULL-MLB"
+APP_VERSION = "18.62-SHOPEE-ETIQUETA-RAPIDA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -187,6 +187,13 @@ PRECIFICADOR_BULK_LOCK = threading.Lock()
 SHOPEE_LABEL_WORKER_LOCK = threading.Lock()
 SHOPEE_LABEL_WAKE_EVENT = threading.Event()
 SHOPEE_LABEL_WORKER_INTERVAL = max(60, min(900, int(os.getenv("SHOPEE_LABEL_WORKER_INTERVAL", "180"))))
+# V18.62: com pedido no meio do fluxo (rastreio ou documento ainda saindo) o worker
+# volta em 30 s em vez de 3 min — no máximo 8 vezes seguidas sem progresso, para um
+# pedido que nunca anda (ex.: sem NF-e) não prender o ritmo rápido.
+SHOPEE_LABEL_FOLLOWUP_INTERVAL = max(10, min(120, int(os.getenv("SHOPEE_LABEL_FOLLOWUP_INTERVAL", "30"))))
+SHOPEE_LABEL_FOLLOWUP_MAX = 8
+# V18.62: espera curta antes de reconsultar rastreio/documento no mesmo ciclo.
+SHOPEE_DOC_RESULT_RETRY_WAIT = 3.0
 # V17.31: evita repetir ship_order a cada ciclo depois que a Shopee já confirmou o arrange.
 SHOPEE_SHIP_ORDER_CACHE_LOCK = threading.Lock()
 SHOPEE_SHIP_ORDER_CACHE: dict[tuple[str, str], float] = {}
@@ -5603,7 +5610,7 @@ def shopee_sync_shipping_documents(shipments: list[dict[str,str]],
         "consultados":0,"shipping_parameter_ok":0,"ship_order_ok":0,"ship_order_pendente":0,
         "tracking_ok":0,"tracking_pendente":0,"criados":0,"prontos":0,"baixados":0,
         "vinculados":0,"nao_zpl":0,"pendentes":0,"erros":0,"data_info_ok":0,
-        "data_info_imagem":0,
+        "data_info_imagem":0,"aguardando":0,
     }
     orders=_shopee_logistics_order_list(shipments)
     if not orders:
@@ -5683,6 +5690,7 @@ def shopee_sync_shipping_documents(shipments: list[dict[str,str]],
                 # 1) get_shipping_parameter -> 2) ship_order. Só pula o POST quando
                 # este mesmo processo já recebeu confirmação recente para o pacote.
                 arranged,unsplit_order=_shopee_ship_order_cached(order_sn,pkg)
+                organizado_neste_ciclo=not arranged and order_sn not in ja_organizados
                 # V17.91: pedido que não está mais na lista "a organizar" da Shopee
                 # (get_shipment_list) já foi organizado — vai direto ao rastreio.
                 if order_sn in ja_organizados:
@@ -5778,26 +5786,34 @@ def shopee_sync_shipping_documents(shipments: list[dict[str,str]],
                     q["package_number"]=pkg
                 tracking=""
                 hint=""
-                try:
-                    tr=shopee_api_get("/api/v2/logistics/get_tracking_number", q)
-                    tresp=tr.get("response") if isinstance(tr.get("response"),dict) else {}
-                    tracking=str(tresp.get("tracking_number") or "").strip()
-                    hint=str(tresp.get("hint") or "").strip()
-                    # V17.91: pedido que chegou já organizado não sabe se é unsplit;
-                    # sem rastreio consultando sem o pacote, tenta com o pacote.
-                    if not tracking and pkg and "package_number" not in q:
-                        tr=shopee_api_get("/api/v2/logistics/get_tracking_number", {"order_sn":order_sn,"package_number":pkg})
+                # V18.62: logo após o ship_order o rastreio costuma levar alguns
+                # segundos; uma segunda tentativa curta evita esperar o ciclo seguinte.
+                for tentativa in range(2 if organizado_neste_ciclo else 1):
+                    if tentativa:
+                        time.sleep(SHOPEE_DOC_RESULT_RETRY_WAIT)
+                    try:
+                        tr=shopee_api_get("/api/v2/logistics/get_tracking_number", q)
                         tresp=tr.get("response") if isinstance(tr.get("response"),dict) else {}
                         tracking=str(tresp.get("tracking_number") or "").strip()
-                        hint=hint or str(tresp.get("hint") or "").strip()
-                except Exception as exc:
-                    shopee_log_event("tracking_number",f"order={order_sn}","AVISO",_safe_err(exc))
+                        hint=str(tresp.get("hint") or "").strip()
+                        # V17.91: pedido que chegou já organizado não sabe se é unsplit;
+                        # sem rastreio consultando sem o pacote, tenta com o pacote.
+                        if not tracking and pkg and "package_number" not in q:
+                            tr=shopee_api_get("/api/v2/logistics/get_tracking_number", {"order_sn":order_sn,"package_number":pkg})
+                            tresp=tr.get("response") if isinstance(tr.get("response"),dict) else {}
+                            tracking=str(tresp.get("tracking_number") or "").strip()
+                            hint=hint or str(tresp.get("hint") or "").strip()
+                    except Exception as exc:
+                        shopee_log_event("tracking_number",f"order={order_sn}","AVISO",_safe_err(exc))
+                    if tracking:
+                        break
                 if tracking:
                     summary["tracking_ok"] += 1
                     shopee_log_event("tracking_number",f"order={order_sn}","OK",f"obtido=sim; pacote={'sim' if pkg and not unsplit_order else 'nao'}; unsplit={'sim' if unsplit_order else 'nao'}")
                 else:
                     summary["tracking_pendente"] += 1
                     summary["pendentes"] += 1
+                    summary["aguardando"] += 1
                     shopee_log_event("tracking_number",f"order={order_sn}","PENDENTE",f"obtido=nao; pacote={'sim' if pkg and not unsplit_order else 'nao'}; unsplit={'sim' if unsplit_order else 'nao'}; hint={hint[:300] or '-'}")
                     # O tracking pode ser emitido alguns minutos depois do ship_order.
                     # Worker tenta novamente no próximo ciclo; não faz polling aqui.
@@ -5848,19 +5864,37 @@ def shopee_sync_shipping_documents(shipments: list[dict[str,str]],
                 if not (create_ok or create_soft):
                     continue
 
-                # 5) Uma única consulta de status por ciclo; PROCESSING fica para o worker.
+                # 5) Consulta de status. V18.62: se ainda estiver gerando, espera
+                # alguns segundos e consulta UMA vez mais; o resto fica para o worker.
                 result_row={"order_sn":order_sn}
                 if pkg:
                     result_row["package_number"]=pkg
                 if dtype:
                     result_row["shipping_document_type"]=dtype
-                try:
-                    result=shopee_api_post("/api/v2/logistics/get_shipping_document_result", {"order_list":[result_row]})
-                    rlist=_parse_result_list(result)
-                except Exception as exc:
-                    msg=_safe_err(exc)
+                rlist=[]
+                result_exc=None
+                for tentativa in range(2):
+                    if tentativa:
+                        time.sleep(SHOPEE_DOC_RESULT_RETRY_WAIT)
+                    try:
+                        result=shopee_api_post("/api/v2/logistics/get_shipping_document_result", {"order_list":[result_row]})
+                        rlist=_parse_result_list(result)
+                        result_exc=None
+                    except Exception as exc:
+                        rlist=[]
+                        result_exc=exc
+                        if "shipping_document_should_print_first" not in _safe_err(exc):
+                            break
+                        continue
+                    st_tmp=str((rlist[0] if rlist else {}).get("status") or "").upper().strip()
+                    ferr_tmp=str((rlist[0] if rlist else {}).get("fail_error") or "").strip()
+                    if rlist and (ferr_tmp or st_tmp not in {"PROCESSING","PENDING",""}):
+                        break
+                if result_exc is not None:
+                    msg=_safe_err(result_exc)
                     summary["pendentes"] += 1
                     if "shipping_document_should_print_first" in msg:
+                        summary["aguardando"] += 1
                         shopee_log_event("shipping_document_result",f"order={order_sn}","AVISO",f"create confirmado neste ciclo, mas Shopee ainda não liberou result; {msg}")
                     else:
                         summary["erros"] += 1
@@ -5869,6 +5903,7 @@ def shopee_sync_shipping_documents(shipments: list[dict[str,str]],
 
                 if not rlist:
                     summary["pendentes"] += 1
+                    summary["aguardando"] += 1
                     shopee_log_event("shipping_document_result",f"order={order_sn}","PENDENTE","result_list vazio")
                     continue
 
@@ -5911,7 +5946,9 @@ def shopee_sync_shipping_documents(shipments: list[dict[str,str]],
                         shopee_log_event("shipping_document_download",f"order={order_sn}","ERRO",_safe_err(exc))
                 elif st in {"PROCESSING","PENDING",""} and not ferr:
                     summary["pendentes"] += 1
+                    summary["aguardando"] += 1
                     shopee_log_event("shipping_document_result",f"order={order_sn}","PENDENTE",f"status={st or 'PROCESSING'}; doc={dtype or '-'}")
+                    continue
                 elif ferr or st=="FAILED":
                     summary["erros"] += 1
                     summary["pendentes"] += 1
@@ -5919,6 +5956,10 @@ def shopee_sync_shipping_documents(shipments: list[dict[str,str]],
                 else:
                     summary["pendentes"] += 1
 
+                # V18.62: o diagnóstico era uma chamada extra por pedido em todo ciclo,
+                # inclusive com a etiqueta já baixada. Agora só roda quando algo falhou.
+                if st=="READY":
+                    continue
                 # Diagnóstico por pedido; nunca bloqueia o fluxo principal se falhar.
                 try:
                     dinfo_payload={"order_sn":order_sn}
@@ -5957,7 +5998,7 @@ def shopee_pedidos_sem_etiqueta(dias: int = 10, limite: int = 40) -> list[dict[s
     except Exception:
         banco = {}
     vinculados = set((banco.get("porChave") or {}).keys()) if isinstance(banco, dict) else set()
-    saida: list[dict[str, str]] = []
+    candidatos: list[tuple[str, dict[str, str]]] = []
     vistos: set[str] = set()
     for row in _rows_from_storage_value(pendentes):
         if not isinstance(row, dict) or "SHOPEE" not in str(row.get("Marketplace") or "").upper():
@@ -5965,13 +6006,15 @@ def shopee_pedidos_sem_etiqueta(dias: int = 10, limite: int = 40) -> list[dict[s
         order_sn = str(row.get("Pedido") or "").strip()
         if not order_sn or order_sn in vistos or order_sn in vinculados:
             continue
-        if _vendas_data_iso(row.get("Data do Pedido")) < corte:
+        data = _vendas_data_iso(row.get("Data do Pedido"))
+        if data < corte:
             continue
         vistos.add(order_sn)
-        saida.append({"order_sn": order_sn, "package_number": str(row.get("PacoteShopee") or "").strip()})
-        if len(saida) >= limite:
-            break
-    return saida
+        candidatos.append((data, {"order_sn": order_sn, "package_number": str(row.get("PacoteShopee") or "").strip()}))
+    # V18.62: mais recentes primeiro. Antes o corte em `limite` seguia a ordem do
+    # banco e pedidos travados (ex.: sem NF-e) deixavam o pedido novo de fora.
+    candidatos.sort(key=lambda x: x[0], reverse=True)
+    return [x for _, x in candidatos[:limite]]
 
 
 def shopee_current_shipments() -> list[dict[str, str]]:
@@ -6559,11 +6602,18 @@ def _shopee_manual_sync_sem_trava(acordar_etiquetas: bool = True) -> dict[str, A
         )
         final_rows = _rows_from_storage_value(saved)
         imported_orders = len({order_number(r) for r in final_rows if normalize(r.get("OrigemCadastro")) == "API_SHOPEE"})
+        # V18.62: pedido que entrou agora na fila acorda o worker de etiquetas na
+        # hora (antes esperava até 3 min). Sem pedido novo, segue a regra da V17.92.
+        pedidos_antes = {order_number(r) for r in current if isinstance(r, dict)}
+        pedidos_novos = {
+            order_number(r) for r in final_rows
+            if isinstance(r, dict) and normalize(r.get("OrigemCadastro")) == "API_SHOPEE"
+        } - pedidos_antes
         # V17.27: nunca bloqueia a requisição esperando criação/READY/download de etiqueta.
         # O worker do servidor acorda imediatamente e continua o fluxo em background.
         # V17.92: a sincronização automática (a cada minuto) não acorda o worker
         # de etiquetas — ele segue no intervalo próprio, sem multiplicar chamadas.
-        if acordar_etiquetas:
+        if acordar_etiquetas or pedidos_novos:
             SHOPEE_LABEL_WAKE_EVENT.set()
         shipping_docs = {
             "enfileirados": len(shipments),
@@ -6633,6 +6683,21 @@ def shopee_orders_worker_loop(stop_event: threading.Event) -> None:
         stop_event.wait(SHOPEE_ORDERS_WORKER_INTERVAL)
 
 
+def _shopee_label_proxima_espera(result: dict[str, Any], rapidos: int) -> tuple[int, int]:
+    """V18.62 — quanto o worker de etiquetas espera até o próximo ciclo.
+
+    Com pedido no meio do fluxo (rastreio ou documento ainda saindo) volta em
+    SHOPEE_LABEL_FOLLOWUP_INTERVAL. Sem progresso, no máximo
+    SHOPEE_LABEL_FOLLOWUP_MAX vezes seguidas; etiqueta vinculada ou envio
+    organizado zera a contagem. Retorna (segundos, ciclos rápidos seguidos).
+    """
+    if int(result.get("vinculados", 0) or 0) or int(result.get("ship_order_ok", 0) or 0):
+        rapidos = 0
+    if int(result.get("aguardando", 0) or 0) and rapidos < SHOPEE_LABEL_FOLLOWUP_MAX:
+        return SHOPEE_LABEL_FOLLOWUP_INTERVAL, rapidos + 1
+    return SHOPEE_LABEL_WORKER_INTERVAL, 0
+
+
 def shopee_label_worker_loop(stop_event: threading.Event) -> None:
     """Continua geração/consulta/download das etiquetas Shopee em background.
 
@@ -6652,9 +6717,11 @@ def shopee_label_worker_loop(stop_event: threading.Event) -> None:
             shopee_log_event("etiqueta_reparada", "boot", "ERRO", str(exc)[:500])
         except Exception:
             pass
+    espera, rapidos = SHOPEE_LABEL_WORKER_INTERVAL, 0
     while not stop_event.is_set():
-        # Acorda imediatamente após sincronização manual ou no intervalo de segurança.
-        SHOPEE_LABEL_WAKE_EVENT.wait(SHOPEE_LABEL_WORKER_INTERVAL)
+        # Acorda imediatamente após sincronização manual / pedido novo, ou no intervalo.
+        SHOPEE_LABEL_WAKE_EVENT.wait(espera)
+        espera = SHOPEE_LABEL_WORKER_INTERVAL
         SHOPEE_LABEL_WAKE_EVENT.clear()
         if stop_event.is_set():
             break
@@ -6674,16 +6741,17 @@ def shopee_label_worker_loop(stop_event: threading.Event) -> None:
                 continue
             result = shopee_sync_shipping_documents(
                 shipments + organizados, ja_organizados={x["order_sn"] for x in organizados})
+            espera, rapidos = _shopee_label_proxima_espera(result, rapidos)
             shopee_log_event(
                 "shipping_worker",
                 f"shop_id={st.get('shop_id')}",
                 "OK",
                 "consultados={consultados}; shipping_param={shipping_parameter_ok}; ship_order={ship_order_ok}; "
                 "tracking={tracking_ok}; prontos={prontos}; baixados={baixados}; vinculados={vinculados}; "
-                "pendentes={pendentes}; erros={erros}".format(**{
+                "pendentes={pendentes}; erros={erros}; aguardando={aguardando}".format(**{
                     k: int(result.get(k, 0) or 0)
-                    for k in ("consultados","shipping_parameter_ok","ship_order_ok","tracking_ok","prontos","baixados","vinculados","pendentes","erros")
-                }),
+                    for k in ("consultados","shipping_parameter_ok","ship_order_ok","tracking_ok","prontos","baixados","vinculados","pendentes","erros","aguardando")
+                }) + f"; proximo_ciclo={espera}s",
             )
         except Exception as exc:
             shopee_log_event("shipping_worker", "background", "ERRO", str(exc)[:800])
