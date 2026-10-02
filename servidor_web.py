@@ -39,11 +39,14 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
-APP_VERSION = "18.62-SHOPEE-ETIQUETA-RAPIDA"
+APP_VERSION = "18.63-PUBLICACAO-SEGURA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
 PORT = int(os.getenv("EXP_PORT", "8100"))
+# V18.63: "0" desliga TODOS os workers (ML, Shopee, vendas, Ads, Linx, relatório,
+# manutenção e backup do boot). Só para teste de boot e homologação — nunca em produção.
+WORKERS_ENABLED = os.getenv("EXP_WORKERS", "1").strip().lower() not in {"0", "false", "nao", "não"}
 ROOT_DIR = Path(__file__).resolve().parent
 APP_DIR = ROOT_DIR / "APP"
 DB_PATH = Path(os.getenv("EXP_DB_PATH", "/home/expedicao/dados/expedicao.db"))
@@ -17512,6 +17515,8 @@ class AppHandler(BaseHTTPRequestHandler):
                     "ok": True,
                     "version": APP_VERSION,
                     "server_time": now_iso(),
+                    # V18.63: o publicar.sh exige true em produção.
+                    "workers": WORKERS_ENABLED,
                     "mercadolivre_worker": {
                         "server_side": True,
                         "started_at": ml_worker_status_payload().get("started_at", ""),
@@ -20766,7 +20771,8 @@ def main() -> None:
     # V18.12: o backup diário comprime ~1 GB e NÃO pode bloquear o boot — senão a
     # porta 8100 demora a abrir e o deploy parece ter falhado (aconteceu na V18.11).
     # Roda em segundo plano: a porta abre na hora e o backup comprime depois.
-    threading.Thread(target=backup_daily, name="backup-inicial", daemon=True).start()
+    if WORKERS_ENABLED:
+        threading.Thread(target=backup_daily, name="backup-inicial", daemon=True).start()
     watcher_stop = threading.Event()
     watcher_thread = threading.Thread(
         target=_worker_protegido(ml_pending_label_watch_loop),
@@ -20853,19 +20859,25 @@ def main() -> None:
         daemon=True,
     )
     _ml_worker_state_update(started_at=now_iso(), last_error="")
-    manutencao_thread.start()
-    watcher_thread.start()
-    new_order_thread.start()
-    manual_reconcile_thread.start()
-    token_keeper_thread.start()
-    safety_catchup_thread.start()
-    shopee_label_thread.start()
-    shopee_orders_thread.start()
-    vendas_ml_thread.start()
-    frete_thread.start()
-    ads_thread.start()
-    relatorio_thread.start()
-    linx_clientes_thread.start()
+    # V18.63: EXP_WORKERS=0 sobe só o HTTP — teste de boot e homologação. Uma cópia do
+    # banco tem os tokens de produção e o refresh_token do ML é de uso único: um
+    # worker rodando fora da produção derrubaria a conexão de verdade.
+    if WORKERS_ENABLED:
+        manutencao_thread.start()
+        watcher_thread.start()
+        new_order_thread.start()
+        manual_reconcile_thread.start()
+        token_keeper_thread.start()
+        safety_catchup_thread.start()
+        shopee_label_thread.start()
+        shopee_orders_thread.start()
+        vendas_ml_thread.start()
+        frete_thread.start()
+        ads_thread.start()
+        relatorio_thread.start()
+        linx_clientes_thread.start()
+    else:
+        print("[boot] EXP_WORKERS=0: workers de integração DESLIGADOS (só HTTP).", flush=True)
     server = ThreadingHTTPServer((HOST, PORT), AppHandler)
     server.daemon_threads = True
     print(f"Sistema de Conferência Web {APP_VERSION} em http://{HOST}:{PORT}{BASE_PATH}", flush=True)

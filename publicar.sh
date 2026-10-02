@@ -30,6 +30,71 @@ if ! ./testar.sh; then
 fi
 echo
 
+# V18.63: o que vai subir e o que esta no ar. O commit anterior e guardado para
+# VOLTAR SOZINHO se a versao nova nao subir — sem isso um erro no boot deixava a
+# operacao parada ate alguem corrigir na mao.
+VERSAO_NOVA="$(sed -n 's/^APP_VERSION = "\(.*\)"$/\1/p' servidor_web.py)"
+if [ -z "$VERSAO_NOVA" ]; then
+  echo "ERRO: nao achei o APP_VERSION em servidor_web.py."
+  exit 1
+fi
+COMMIT_NOVO="$(git rev-parse HEAD)"
+QUEM="$(git config user.name || true)"; QUEM="${QUEM:-${USERNAME:-${USER:-desconhecido}}}"
+
+echo ">> conferindo o que esta no ar..."
+if ! COMMIT_ANTERIOR="$(ssh expedicao "git -C /home/expedicao/app rev-parse HEAD")"; then
+  echo "ERRO: nao consegui ler a versao atual do servidor. Nada foi enviado."
+  exit 1
+fi
+VERSAO_NO_AR="$(ssh expedicao "curl -fsS http://127.0.0.1:8100/expedicao/api/health | python3 -c 'import sys,json; print(json.load(sys.stdin).get(\"version\",\"\"))'" 2>/dev/null || true)"
+echo "   no ar:   ${VERSAO_NO_AR:-(nao respondeu)}  [${COMMIT_ANTERIOR:0:8}]"
+echo "   subindo: $VERSAO_NOVA  [${COMMIT_NOVO:0:8}]"
+if [ "$COMMIT_ANTERIOR" = "$COMMIT_NOVO" ]; then
+  echo "ERRO: este commit ja esta no ar. Nada a publicar."
+  exit 1
+fi
+if [ -n "$VERSAO_NO_AR" ] && [ "$VERSAO_NO_AR" = "$VERSAO_NOVA" ]; then
+  echo "ERRO: a versao $VERSAO_NOVA ja esta no ar com outro codigo."
+  echo "Suba o APP_VERSION (servidor_web.py) e o VERSAO.txt antes de publicar —"
+  echo "e pela versao que a publicacao confere se o codigo novo realmente subiu."
+  exit 1
+fi
+
+# V18.63: o restart derruba o sistema por alguns segundos e a conferencia aberta
+# recebe "o servidor nao esta respondendo". Mostra quem esta conferindo agora
+# (bloqueios com heartbeat nos ultimos 90 s) e so continua com confirmacao.
+EM_CONFERENCIA="$(ssh expedicao "python3 -" <<'PY' || true
+import sqlite3
+from datetime import datetime, timezone
+db = sqlite3.connect("file:/home/expedicao/dados/expedicao.db?mode=ro", uri=True, timeout=10)
+agora = datetime.now(timezone.utc)
+for operador, computador, pedido, quando in db.execute(
+        "SELECT operator, computer, order_id, updated_at FROM order_locks"):
+    try:
+        if (agora - datetime.fromisoformat(quando)).total_seconds() <= 90:
+            print("   - %s (%s) conferindo o pedido %s" % (operador, computador, pedido))
+    except Exception:
+        pass
+PY
+)"
+if [ -n "$EM_CONFERENCIA" ]; then
+  echo
+  echo "ATENCAO: tem gente conferindo agora:"
+  echo "$EM_CONFERENCIA"
+  echo "O sistema fica fora do ar alguns segundos durante a publicacao."
+  if [ "${PUBLICAR_COM_OPERACAO:-}" = "1" ]; then
+    echo ">> PUBLICAR_COM_OPERACAO=1: seguindo mesmo assim."
+  elif [ -t 0 ]; then
+    read -r -p "Publicar mesmo assim? [s/N] " RESPOSTA
+    case "$RESPOSTA" in s|S|sim|SIM) ;; *) echo "PUBLICACAO CANCELADA. Nada foi enviado."; exit 1;; esac
+  else
+    echo "PUBLICACAO CANCELADA. Nada foi enviado."
+    echo "Para publicar mesmo assim: PUBLICAR_COM_OPERACAO=1 ./publicar.sh"
+    exit 1
+  fi
+fi
+echo
+
 # V18.11: backup consistente e COMPRIMIDO do banco ANTES de enviar/reiniciar. Se
 # falhar, a publicacao para aqui — nunca subimos sem uma copia de seguranca do
 # estado atual. Comprime (SQLite gzipa ~5x) e mantem os 3 mais recentes, porque o
@@ -83,6 +148,47 @@ then
 fi
 echo
 
+# V18.63: espera o /api/health responder COM a versao pedida (vazio = qualquer uma)
+# e com os workers ligados — EXP_WORKERS=0 e so para teste e homologacao.
+esperar_versao() {
+  ssh expedicao "bash -s -- '$1'" <<'SH'
+for i in $(seq 1 30); do
+  if curl -fsS http://127.0.0.1:8100/expedicao/api/health 2>/dev/null | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+pedida = sys.argv[1]
+sys.exit(0 if d.get("ok") and (not pedida or d.get("version") == pedida) and d.get("workers", True) is not False else 1)
+' "$1" 2>/dev/null; then
+    exit 0
+  fi
+  sleep 3
+done
+exit 1
+SH
+}
+
+registrar() {
+  ssh expedicao "printf '%s\t%s\t%s\t%s\t%s\n' \"\$(date '+%Y-%m-%d %H:%M:%S')\" '$1' '$2' '$3' '$QUEM' >> /home/expedicao/deploys.log" || true
+}
+
+# V18.63: volta o codigo do servidor para o commit que estava no ar e reinicia.
+# O banco NAO volta (o backup de antes do deploy esta em /home/expedicao/backups).
+reverter() {
+  echo
+  echo ">> VOLTANDO para a versao que estava no ar (${VERSAO_NO_AR:-?} [${COMMIT_ANTERIOR:0:8}])..."
+  if ssh expedicao "git -C /home/expedicao/app reset --hard $COMMIT_ANTERIOR" \
+     && ssh expedicao "sudo -n systemctl restart expedicao" \
+     && esperar_versao "$VERSAO_NO_AR"; then
+    registrar "${VERSAO_NO_AR:-?}" "$COMMIT_ANTERIOR" "REVERTIDO (falhou $VERSAO_NOVA)"
+    echo ">> a versao anterior voltou e esta respondendo. A operacao continua."
+    echo ">> Corrija aqui, suba o APP_VERSION e publique de novo. Diagnostico: ./verificar_servidor.sh"
+  else
+    registrar "${VERSAO_NO_AR:-?}" "$COMMIT_ANTERIOR" "FALHA AO REVERTER"
+    echo "!! NAO CONSEGUI VOLTAR A VERSAO ANTERIOR. O SISTEMA PODE ESTAR FORA DO AR."
+    echo "!! Execute ./verificar_servidor.sh agora."
+  fi
+}
+
 echo ">> enviando pro servidor..."
 git push producao HEAD:master
 
@@ -92,18 +198,25 @@ if ! ssh expedicao "sudo -n systemctl restart expedicao"; then
   echo "ERRO: sua conta nao tem reinicio sem senha liberado para o servico expedicao."
   echo "Peca ao responsavel pelo servidor para liberar exatamente:"
   echo "  systemctl restart expedicao"
+  # O codigo ja foi trocado no disco: volta para o que esta rodando, senao o proximo
+  # restart automatico do systemd subiria a versao nova sem ninguem conferir.
+  ssh expedicao "git -C /home/expedicao/app reset --hard $COMMIT_ANTERIOR" || true
+  registrar "$VERSAO_NOVA" "$COMMIT_NOVO" "CANCELADO (sem permissao de restart)"
   exit 1
 fi
 
-echo ">> aguardando o servico responder na porta 8100 (ate 90s)..."
+echo ">> aguardando a versao $VERSAO_NOVA responder na porta 8100 (ate 90s)..."
 # V18.12: espera com paciencia. A VPS e fraca e o boot pode levar alguns segundos;
 # 3s fixos davam falso negativo (a operacao subia logo depois).
-if ! ssh expedicao 'for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8100/expedicao/api/health && exit 0; sleep 3; done; exit 1'; then
+if ! esperar_versao "$VERSAO_NOVA"; then
   echo
-  echo "ERRO: os arquivos foram enviados, mas o aplicativo nao respondeu na porta 8100 em 90s."
-  echo "Execute: ./verificar_servidor.sh"
+  echo "ERRO: a versao $VERSAO_NOVA nao respondeu em 90s."
+  ssh expedicao "sudo -n journalctl -u expedicao -n 40 --no-pager" 2>/dev/null || true
+  reverter
   exit 1
 fi
+registrar "$VERSAO_NOVA" "$COMMIT_NOVO" "OK"
+echo ">> $VERSAO_NOVA no ar."
 echo
 
 echo ">> conferindo o endereco publico..."

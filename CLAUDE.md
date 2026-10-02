@@ -11,8 +11,8 @@ Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Ca
 
 ## 0. NUNCA PUBLICAR SEM AUTORIZAÇÃO
 
-**Não execute `./publicar.sh`, `git push producao`, nem nada que reinicie o serviço em
-produção, por iniciativa própria. Nunca.**
+**Não execute `./publicar.sh`, `./voltar_versao.sh`, `git push producao`, nem nada que
+reinicie o serviço em produção, por iniciativa própria. Nunca.**
 
 O fluxo obrigatório é sempre:
 
@@ -118,8 +118,26 @@ git commit -m "V17.xx - descricao da alteracao"
 ./publicar.sh
 ```
 
-`publicar.sh` exige árvore limpa, faz `git push producao HEAD:master`, reinicia o serviço
-via ssh e valida `/api/health` interno **e** o endereço público.
+`publicar.sh` exige árvore limpa, roda o `testar.sh`, faz backup do banco, faz
+`git push producao HEAD:master`, reinicia o serviço via ssh e valida `/api/health` interno
+**e** o endereço público.
+
+**V18.63 — publicação segura:**
+- Antes de enviar, lê o commit e a versão no ar. Recusa se o `APP_VERSION` for igual ao
+  que já está no ar (é pela versão que confere se o código novo subiu).
+- Lista quem está conferindo agora (`order_locks` com heartbeat ≤ 90 s) e só segue com
+  confirmação; sem terminal, cancela, a menos que `PUBLICAR_COM_OPERACAO=1`.
+- Depois do restart, exige o `/api/health` com **a versão nova** e `workers: true`. Se
+  não vier em 90 s, **volta sozinho** para o commit anterior (`git reset --hard` no
+  servidor + restart). O banco não volta — para isso existe o backup pré-deploy.
+- Cada publicação fica registrada em `/home/expedicao/deploys.log`
+  (data, versão, commit, resultado, quem).
+- `./voltar_versao.sh [commit]` volta a produção para o deploy OK anterior quando a versão
+  subiu mas tem bug. É ação em produção: **mesma regra da seção 0**, só com autorização.
+- `EXP_WORKERS=0` sobe só o HTTP, sem nenhum worker (ML, Shopee, vendas, Ads, Linx,
+  relatório, manutenção, backup do boot). Usado pelo `TESTES/test_boot.py`, que sobe o
+  `servidor_web.py` de verdade pelo `main()`. **Nunca em produção**: uma cópia do banco
+  tem os tokens reais e o `refresh_token` do ML é de uso único.
 
 Em divergência com o remoto:
 
@@ -453,6 +471,7 @@ Os testes ficam em `TESTES/` (são 30 arquivos; os principais):
 | `test_financeiro.py` | imposto de 12%, lucro bruto/líquido, tarifa por pedido (não por linha), venda sem custo não vira lucro, Ads sem duplicidade, escrow Shopee, frete só do vendedor |
 | `test_ads_analise.py` | leitura do .xlsx do ML, planilha errada recusada, mesmo período substitui, lucro por anúncio sem Ads em dobro |
 | `test_auditoria_v1856.py` | renovação do token ML serializada, backup sem `DB_LOCK` e sem `.gz` cortado, reinclusão sob lock, filtro de concluídos sempre aplicado, vínculo MLB manual preservado, `.xlsx` malicioso, worker protegido, limpeza de logs/caches |
+| `test_boot.py` | sobe o `servidor_web.py` pelo `main()` como processo (EXP_WORKERS=0) e exige o `/api/health` com a versão do código; `VERSAO.txt` = `APP_VERSION` |
 | `test_instalacao.py` | instalação nova, idempotência do `init_db`, versionamento do storage, autenticação |
 | `base.py` | infraestrutura: banco temporário, servidor real em porta livre, cliente HTTP |
 
