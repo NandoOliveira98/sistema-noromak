@@ -350,6 +350,11 @@
     .button--accent{border-color:var(--orange);background:var(--orange);color:#172536}
     .button:disabled{opacity:.5;cursor:not-allowed}
     .kit-tag{display:inline-block;padding:0 5px;border-radius:4px;background:#e8f0f7;color:var(--navy);font-weight:800;font-size:.68rem}
+    .new-panel{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:13px;border:1px solid var(--line);border-bottom:0;background:#f7fbff}
+    .new-panel strong{color:var(--navy);flex:1 1 100%}
+    .new-panel .field--code{flex:0 1 210px}.new-panel .field--desc{flex:1 1 260px}.new-panel .field--qty{flex:0 1 130px}
+    .new-tag{display:inline-block;padding:0 5px;border-radius:4px;background:#fff1d6;color:#9a5b00;font-weight:800;font-size:.68rem}
+    .new-remove{margin-left:6px;padding:0 6px;border:1px solid var(--line);border-radius:5px;background:#fff;color:#b42318;font-weight:800;cursor:pointer}
     .transfer-hint{margin-top:4px;padding:3px 6px;border-radius:6px;background:#eef6ff;color:#123b63;font-size:.76rem;line-height:1.35}
     .pick-modal{position:fixed;inset:0;z-index:50;display:flex;align-items:flex-start;justify-content:center;padding:24px 16px;background:rgba(18,37,54,.45);overflow:auto}
     .pick-dialog{width:min(1100px,100%);padding:22px;border-radius:14px;background:#fff;box-shadow:var(--shadow)}
@@ -440,6 +445,7 @@
           <option value="URGENTE">Urgente</option>
           <option value="ATENÇÃO">Atenção</option>
           <option value="OK">OK</option>
+          <option value="NOVO">Produto novo</option>
         </select>
 
         <label class="visually-hidden" for="targetDays">Prazo da reposição</label>
@@ -450,10 +456,21 @@
         <button id="apolloCheck" class="button button--primary" type="button">↻ Verificar estoque Araçatuba</button>
 
         <button id="pickListButton" class="button button--accent" type="button" disabled>☰ Lista de separação</button>
+        <button id="newProductButton" class="button" type="button">+ Produto novo</button>
         <button id="onlyNeed" class="button" type="button" aria-pressed="false">Somente com reposição</button>
         <button id="clearFilters" class="button" type="button">Limpar filtros</button>
         <button id="exportButton" class="button" type="button">Exportar análise</button>
       </div>
+
+      <!-- V18.58: produto que ainda não está no relatório do Full (nunca vendeu / nunca foi para lá). -->
+      <form id="newProductPanel" class="new-panel hidden" autocomplete="off">
+        <strong>Produto novo para o FULL — ainda não aparece no relatório do Mercado Livre</strong>
+        <input id="newCode" class="field field--code" type="text" placeholder="Código Apollo (ex.: 0893556005)" aria-label="Código Apollo" required>
+        <input id="newDesc" class="field field--desc" type="text" placeholder="Descrição (opcional — o Apollo completa)" aria-label="Descrição">
+        <input id="newQty" class="field field--qty" type="number" inputmode="numeric" min="1" step="1" placeholder="Qtd. a enviar" aria-label="Quantidade a enviar" required>
+        <button class="button button--primary" type="submit">Adicionar</button>
+        <button id="newCancel" class="button" type="button">Fechar</button>
+      </form>
 
       <div class="table-panel">
         <div class="table-scroll">
@@ -478,7 +495,7 @@
       </div>
 
       <p class="method">
-        Regras do modelo: venda diária = vendas em 30 dias ÷ 30; necessidade = máximo entre venda diária × prazo menos unidades que ocupam espaço no Full e zero; cobertura = unidades no Full ÷ venda diária. Cobertura abaixo de 7 dias é URGENTE, de 7 a menos de 15 dias é ATENÇÃO e a partir de 15 dias é OK. Quando não há vendas, o modelo usa cobertura zero e classifica como URGENTE. Estoque considerado: somente Apollo Araçatuba (de onde sai o FULL), já descontado o que está no FULL. SKU Apollo = trecho após o primeiro “-” (157507-0893556005 → 0893556005). Só são consultados os SKUs com algo a enviar; o Apollo aceita 20 consultas por minuto. Kits (Cadastro de Kits ou SKU KIT2-, KIT3-…) consomem a quantidade de cada componente. Anúncios que usam o mesmo código dividem o estoque: o mais urgente pega primeiro.
+        Regras do modelo: venda diária = vendas em 30 dias ÷ 30; necessidade = máximo entre venda diária × prazo menos unidades que ocupam espaço no Full e zero; cobertura = unidades no Full ÷ venda diária. Cobertura abaixo de 7 dias é URGENTE, de 7 a menos de 15 dias é ATENÇÃO e a partir de 15 dias é OK. Quando não há vendas, o modelo usa cobertura zero e classifica como URGENTE. Estoque considerado: somente Apollo Araçatuba (de onde sai o FULL), já descontado o que está no FULL. SKU Apollo = trecho após o primeiro “-” (157507-0893556005 → 0893556005). Só são consultados os SKUs com algo a enviar; o Apollo aceita 20 consultas por minuto. Kits (Cadastro de Kits ou SKU KIT2-, KIT3-…) consomem a quantidade de cada componente. Anúncios que usam o mesmo código dividem o estoque: o mais urgente pega primeiro. Produto novo (+ Produto novo) não tem venda nem estoque no Full: a quantidade digitada é o que se quer enviar, em qualquer prazo, e ele divide o estoque depois dos anúncios urgentes. Fica guardado neste navegador até ser removido ou aparecer no relatório.
       </p>
     </section>
   </main>
@@ -770,6 +787,7 @@
         if (!data.length) throw new Error("O relatório foi reconhecido, mas nenhum produto foi encontrado.");
 
         state.data = data;
+        const novos = mergeManualProducts();
         apolloStore.clear();
         pickRemoved.clear();
         pickQty.clear();
@@ -782,7 +800,7 @@
         element("workspace").classList.remove("hidden");
         element("onlyNeed").setAttribute("aria-pressed", "false");
         element("onlyNeed").classList.remove("button--active");
-        element("sourceMeta").textContent = `${file.name} · Aba ${parsed.summaryName} · ${data.length} produtos${state.updatedAt ? ` · ${state.updatedAt}` : ""}`;
+        element("sourceMeta").textContent = `${file.name} · Aba ${parsed.summaryName} · ${data.length} produtos${novos ? ` + ${novos} novo(s)` : ""}${state.updatedAt ? ` · ${state.updatedAt}` : ""}`;
         showMessage(`Planilha validada e processada: ${data.length} produtos analisados.`, "success");
         renderSummary();
         applyFilters();
@@ -823,7 +841,7 @@
         element("needHeader").textContent = `Enviar (${element("targetDays").value === "15" ? 15 : 30} dias)`;
 
         state.filtered = state.data.filter((item) => {
-          if (query && !normalizeText(`${item.product} ${item.sku} ${item.code}`).includes(query)) return false;
+          if (query && !normalizeText(`${productName(item)} ${item.sku} ${item.code}`).includes(query)) return false;
           if (status && item.status !== status) return false;
           if (state.onlyNeed && item[targetKey] <= 0) return false;
           return true;
@@ -838,7 +856,7 @@
       }
 
       function statusBadge(status) {
-        const className = status === "URGENTE" ? "urgent" : status === "ATENÇÃO" ? "attention" : "ok";
+        const className = status === "URGENTE" ? "urgent" : status === "ATENÇÃO" || status === "NOVO" ? "attention" : "ok";
         return `<span class="badge badge--${className}">${escapeHtml(status)}</span>`;
       }
 
@@ -854,11 +872,11 @@
         emptyState.classList.add("hidden");
         body.innerHTML = state.filtered.map((item) => `
           <tr data-code="${escapeHtml(item.code)}">
-            <td class="code">${escapeHtml(item.sku || "—")}<span class="sub">${isKit(item) ? `<span class="kit-tag">KIT</span> ${escapeHtml(kitLabel(item))}` : `Apollo: ${escapeHtml(skuApolloNormalizado(item.sku) || "—")}`}</span></td>
-            <td class="product">${escapeHtml(item.product)}<span class="sub">${escapeHtml(item.code || "")}</span></td>
+            <td class="code">${escapeHtml(item.sku || "—")}<span class="sub">${item.manual ? `<span class="new-tag">NOVO</span> manual<button class="new-remove" type="button" data-new-remove="${escapeHtml(item.sku)}" title="Remover produto novo">✕</button>` : isKit(item) ? `<span class="kit-tag">KIT</span> ${escapeHtml(kitLabel(item))}` : `Apollo: ${escapeHtml(apolloKey(item) || "—")}`}</span></td>
+            <td class="product">${escapeHtml(productName(item))}<span class="sub">${escapeHtml(item.manual ? "Ainda não está no Full" : item.code || "")}</span></td>
             <td class="num">${formatNumber(item.sales)}</td>
             <td class="num">${formatNumber(item.occupied)}</td>
-            <td class="cover">${statusBadge(item.status)}${formatNumber(item.coverage, 1)} dias</td>
+            <td class="cover">${item.manual ? statusBadge("NOVO") : `${statusBadge(item.status)}${formatNumber(item.coverage, 1)} dias`}</td>
             <td class="num selected-need">${formatNumber(item.needTarget)}</td>
             <td class="num">${item.apolloAvailable===null?"—":formatNumber(item.apolloAvailable)}${isKit(item)&&item.apolloParts.length?`<span class="sub">${item.apolloParts.map(p=>`${formatNumber(p.avail)} un.`).join(" + ")}</span>`:""}</td>
             <td class="num"><strong>${item.apolloCanSend===null?"—":formatNumber(item.apolloCanSend)}</strong></td>
@@ -887,7 +905,8 @@
       // casas). Trocar prazo só recalcula — não gasta consulta, que o Apollo
       // limita a 20 por minuto.
       const apolloStore = new Map();
-      const apolloKey = (item) => String(skuApolloNormalizado(item.sku) || "").trim().toUpperCase();
+      // V18.58: produto novo já é digitado como código Apollo — não corta no "-" (4062-HS360).
+      const apolloKey = (item) => String((item.manual ? item.sku : skuApolloNormalizado(item.sku)) || "").trim().toUpperCase();
       let apolloRunning = false;
       let apolloCancel = false;
 
@@ -899,6 +918,83 @@
       // pode ter vários componentes. A composição vem do servidor (mesma regra
       // dos pedidos ML: Cadastro de Kits, depois prefixo KITn-).
       const kitStore = new Map();
+
+      // V18.58: produtos novos — ainda não vendidos, então não estão no relatório do
+      // Full e a fórmula (vendas ÷ 30) daria zero. A quantidade a enviar é digitada e
+      // vale para 15 e 30 dias. Guardados só neste navegador (conveniência de quem
+      // monta o envio); saem sozinhos quando o código aparece no relatório.
+      const MANUAL_STORAGE_KEY = "nm_full_produtos_novos_v1";
+      function readManualProducts() {
+        try {
+          const list = JSON.parse(localStorage.getItem(MANUAL_STORAGE_KEY) || "[]");
+          return Array.isArray(list) ? list.filter(p => p && p.code && Number(p.qty) > 0) : [];
+        } catch (_) { return []; }
+      }
+      function writeManualProducts(list) {
+        try { localStorage.setItem(MANUAL_STORAGE_KEY, JSON.stringify(list)); } catch (_) { /* sem storage: vale só nesta sessão */ }
+      }
+      let manualProducts = readManualProducts();
+
+      const productName = (item) => item.manual
+        ? (item.product || apolloStore.get(apolloKey(item))?.description || "Produto novo")
+        : item.product;
+
+      function manualRow(p, index) {
+        const qty = Math.floor(Number(p.qty) || 0);
+        return {
+          manual: true, sourceRow: 1000000 + index, code: "", universal: "", sku: p.code, product: p.desc || "",
+          sales: 0, occupied: 0, apt: 0, daily: 0, need15: qty, need30: qty, coverage: 0,
+          status: "NOVO", priority: 2, rank: "", mlUrgency: "", mlSend: 0,
+          apolloAvailable: null, apolloShortage: null, apolloCanSend: null, apolloSituation: "NÃO CONSULTADO",
+          apolloBranches: [], apolloError: "", apolloMessage: ""
+        };
+      }
+
+      // Tira os novos antigos de state.data e põe a lista atual. Código que já
+      // está no relatório não entra de novo (e sai da lista guardada).
+      function mergeManualProducts() {
+        state.data = state.data.filter(item => !item.manual);
+        const inReport = new Set(state.data.map(item => apolloKey(item)).filter(Boolean));
+        const keep = manualProducts.filter(p => !inReport.has(String(p.code).toUpperCase()));
+        if (keep.length !== manualProducts.length) { manualProducts = keep; writeManualProducts(keep); }
+        keep.forEach((p, i) => state.data.push(manualRow(p, i)));
+        return keep.length;
+      }
+
+      function refreshAfterManualChange() {
+        mergeManualProducts();
+        renderSummary();
+        applyFilters();
+        renderApolloSummary();
+      }
+
+      function addManualProduct(event) {
+        event.preventDefault();
+        const code = cleanText(element("newCode").value).toUpperCase();
+        const desc = cleanText(element("newDesc").value);
+        const qty = Math.floor(Number(element("newQty").value));
+        if (!code) { showMessage("Informe o código Apollo do produto novo.", "error"); return; }
+        if (!Number.isFinite(qty) || qty < 1) { showMessage("Informe a quantidade a enviar (1 ou mais).", "error"); return; }
+        const existing = state.data.find(item => !item.manual && apolloKey(item) === code);
+        if (existing) {
+          showMessage(`O código ${code} já está no relatório do Full (${existing.sku}) — use a linha dele.`, "error");
+          return;
+        }
+        const replaced = manualProducts.some(p => p.code === code);
+        manualProducts = manualProducts.filter(p => p.code !== code).concat([{ code, desc, qty }]);
+        writeManualProducts(manualProducts);
+        refreshAfterManualChange();
+        element("newCode").value = ""; element("newDesc").value = ""; element("newQty").value = "";
+        element("newCode").focus();
+        showMessage(`${code} ${replaced ? "atualizado" : "adicionado"}: ${formatNumber(qty)} un. a enviar. Clique em “Verificar estoque Araçatuba” para consultar o Apollo.`, "success");
+      }
+
+      function removeManualProduct(code) {
+        manualProducts = manualProducts.filter(p => p.code !== code);
+        writeManualProducts(manualProducts);
+        refreshAfterManualChange();
+        showMessage(`${code} removido dos produtos novos.`, "success");
+      }
       let kitsPromise = Promise.resolve();
 
       function loadKits() {
@@ -1227,7 +1323,8 @@
           "Kit (composição)": isKit(item) ? kitLabel(item) : "",
           "Código ML": item.code,
           "Código universal": item.universal,
-          "Produto": item.product,
+          "Produto": productName(item),
+          "Origem": item.manual ? "Produto novo (manual)" : "Relatório Full",
           "Vendas 30 dias": item.sales,
           "Unidades que ocupam espaço no Full": item.occupied,
           "Venda diária": Number(item.daily.toFixed(6)),
@@ -1287,6 +1384,17 @@
         applyFilters();
         renderSummary();
         renderApolloSummary();
+      });
+      element("newProductButton").addEventListener("click", () => {
+        const panel = element("newProductPanel");
+        panel.classList.toggle("hidden");
+        if (!panel.classList.contains("hidden")) element("newCode").focus();
+      });
+      element("newCancel").addEventListener("click", () => element("newProductPanel").classList.add("hidden"));
+      element("newProductPanel").addEventListener("submit", addManualProduct);
+      element("resultsBody").addEventListener("click", (event) => {
+        const remove = event.target.closest("[data-new-remove]");
+        if (remove) removeManualProduct(remove.dataset.newRemove);
       });
       element("onlyNeed").addEventListener("click", () => {
         state.onlyNeed = !state.onlyNeed;
