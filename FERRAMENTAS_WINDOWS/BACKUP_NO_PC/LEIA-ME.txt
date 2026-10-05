@@ -1,0 +1,32 @@
+BACKUP DO BANCO NO PC (V18.65)
+==============================
+
+O que faz
+  Copia todo dia o backup do banco da Expedição (expedicao_AAAA-MM-DD.db.gz) da VPS
+  para Documentos\BACKUP_NOROMAK neste PC. Guarda as últimas 30 cópias.
+  Só lê do servidor: nunca apaga nem altera nada lá.
+
+Instalar (uma vez, neste PC)
+  powershell -ExecutionPolicy Bypass -File instalar_tarefa.ps1
+
+Rodar agora, à mão
+  powershell -ExecutionPolicy Bypass -File baixar_backup.ps1
+
+Remover a tarefa
+  powershell -ExecutionPolicy Bypass -File instalar_tarefa.ps1 -Remover
+
+Requisitos
+  - O atalho "expedicao" no %USERPROFILE%\.ssh\config e a chave ~/.ssh/expedicao
+    (os mesmos do publicar.sh).
+  - Uma rede em que a porta 22 da VPS responda. Em 05/10/2026 ela respondia no cabo
+    do escritório e NÃO respondia no Wi-Fi.
+
+Avisos
+  - Se a cópia mais nova tiver mais de 3 dias, aparece uma janela de aviso.
+  - O log fica em Documentos\BACKUP_NOROMAK\baixar_backup.log.
+  - O arquivo .db.gz é o banco inteiro, inclusive os tokens do Mercado Livre e da Shopee.
+    Não envie para ninguém e não deixe em pasta compartilhada.
+
+Restaurar
+  Descompactar o .gz dá o expedicao.db. Restaurar em produção é ação de servidor:
+  só com o dono do sistema, como qualquer publicação.
