@@ -6,8 +6,8 @@
 <title>Promoções do Mercado Livre — Noromak</title>
 <link rel="icon" href="data:,">
 <style>
-:root{--navy:#123b63;--navy2:#1c578b;--orange:#f59b23;--ink:#172536;--muted:#6a7a8c;--page:#eef3f8;--line:#dde6ef;--soft:#eef3f8;
---ok:#16764a;--okbg:#eaf8f0;--warn:#8a5a00;--warnbg:#fff6dc;--bad:#b42318;--badbg:#fff0ee;--blue:#1c4f93;--bluebg:#eaf2fd;--roxo:#6d3fc0;--roxobg:#f2ecfd;}
+:root{--navy:#12345B;--navy2:#1F57A5;--orange:#F28B18;--ink:#18324A;--muted:#586A7D;--page:#F4F7FB;--line:#DCE5EF;--soft:#F4F7FB;
+--ok:#1B7A3E;--okbg:#E7F4EC;--warn:#8A5300;--warnbg:#FFF4E0;--bad:#b42318;--badbg:#FDECEA;--blue:#1F57A5;--bluebg:#EAF1FA;--roxo:#6d3fc0;--roxobg:#f2ecfd;}
 *{box-sizing:border-box}
 body{margin:0;background:var(--page);color:var(--ink);font-family:"Segoe UI",Arial,sans-serif;font-size:14px}
 .top{background:linear-gradient(120deg,var(--navy),var(--navy2));border-bottom:4px solid var(--orange);color:#fff}
@@ -52,7 +52,7 @@ tbody tr:hover{background:#f7fafd}
 .mlblink{color:inherit;text-decoration:none;border-bottom:1px dotted currentColor}
 .mlblink:hover{color:var(--navy);border-bottom-style:solid}
 .tagml{font-size:9.5px;font-weight:800;background:#fdecea;color:#b3261e;border-radius:5px;padding:1px 5px;margin-left:5px}
-.semvinc{font-size:9.5px;font-weight:800;background:#fff3d6;color:#8a5a00;border-radius:5px;padding:1px 5px;margin-left:5px}
+.semvinc{font-size:9.5px;font-weight:800;background:#fff3d6;color:#8A5300;border-radius:5px;padding:1px 5px;margin-left:5px}
 .btn.vinc{background:#f3ecff;border-color:#d9c8f7;color:var(--roxo)}
 .irprec{display:inline-block;margin-left:5px;text-decoration:none;color:var(--navy);font-weight:900;
   background:#eef5ff;border:1px solid #cfe0f0;border-radius:6px;padding:0 5px;font-size:12px;line-height:1.5}
@@ -72,7 +72,7 @@ tbody tr:hover{background:#f7fafd}
 .mask.on{display:flex}
 .modal{background:#fff;border-radius:15px;max-width:920px;width:100%;overflow:hidden;box-shadow:0 18px 50px rgba(0,0,0,.28);transition:max-width .18s}
 .modal.largo{max-width:1500px}
-.precwrap{border-top:1px solid var(--soft);background:#f6f8fa;display:none}
+.precwrap{border-top:1px solid var(--soft);background:#F4F7FB;display:none}
 .precwrap.on{display:block}
 .precwrap .cab{display:flex;align-items:center;gap:10px;padding:9px 15px;font-size:12.5px;color:var(--muted);flex-wrap:wrap}
 .precwrap .cab b{color:var(--navy);font-size:13px}
@@ -313,7 +313,7 @@ function vinculoCelula(it,i){
            it.sku_anuncio+' <span class="semvinc">fora do Precificador</span></span>'+campo;
   if(!it.sku_anuncio)
     return '<span class="semvinc">anúncio sem SKU no ML</span>'+campo;
-  return '<span style="font-size:11.5px;color:#8a5a00">'+(it.sku_anuncio_codigo||it.sku_anuncio)+' <span class="semvinc">do anúncio</span></span>'+campo;
+  return '<span style="font-size:11.5px;color:#8A5300">'+(it.sku_anuncio_codigo||it.sku_anuncio)+' <span class="semvinc">do anúncio</span></span>'+campo;
 }
 async function vincular(i){
   const it=ITENS[i];

@@ -19,14 +19,15 @@
 <script src="https://unpkg.com/@zxing/browser@0.1.5/umd/zxing-browser.min.js"></script>
 
 <style>
+  /* V18.65: paleta do guia de estilo (Claude Design) — so cores, layout intacto. */
   :root {
-    --primary: #2B4E75;      /* Azul da Marca */
-    --secondary: #F28C18;    /* Laranja da Marca */
-    --bg-light: #F4F7F9;     /* Fundo Geral */
+    --primary: #1F57A5;      /* Azul da Marca */
+    --secondary: #F28B18;    /* Laranja da Marca */
+    --bg-light: #F4F7FB;     /* Fundo Geral */
   }
 
   * { box-sizing: border-box; }
-  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: var(--bg-light); margin: 0; color: #333; }
+  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: var(--bg-light); margin: 0; color: #18324A; }
 
   #telaLogin {
     position: fixed; top: 0; left: 0; width: 100vw; height: 100vh;
@@ -54,7 +55,7 @@
 
   .box-card input[type="text"], .box-card input[type="password"] {
     width: 100%; padding: 12px; margin-bottom: 12px;
-    border: 1px solid #ccc; border-radius: 6px; font-size: 14px;
+    border: 1px solid #C9D6E5; border-radius: 6px; font-size: 14px;
     transition: border-color 0.3s;
   }
   .box-card input:focus { border-color: var(--secondary); outline: none; }
@@ -82,28 +83,28 @@
   .btn-logoff:hover { opacity: 0.9; }
 
   .container { display: flex; height: calc(100vh - 63px); }
-  .menu { width: 320px; background: white; overflow-y: auto; border-right: 1px solid #ddd; padding: 15px; }
+  .menu { width: 320px; background: white; overflow-y: auto; border-right: 1px solid #DCE5EF; padding: 15px; }
   .conteudo { flex: 1; padding: 25px; overflow-y: auto; }
 
   .busca-container { margin-bottom: 15px; }
-  .busca-input { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 13px; background: #f9f9f9; }
+  .busca-input { width: 100%; padding: 10px; border: 1px solid #C9D6E5; border-radius: 6px; font-size: 13px; background: #f9f9f9; }
 
   table { width: 100%; border-collapse: collapse; margin-top: 15px; background: white; border-radius: 6px; overflow: hidden; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
   th { background: var(--primary); color: white; padding: 12px 10px; font-size: 13px; }
-  td { padding: 10px; border-bottom: 1px solid #eee; text-align: center; font-size: 13px; }
+  td { padding: 10px; border-bottom: 1px solid #EDF2F7; text-align: center; font-size: 13px; }
 
-  .ok { background: #E8F5E9; }
-  .pendente { background: #FFF8E1; }
+  .ok { background: #E7F4EC; }
+  .pendente { background: #FFF4E0; }
 
-  #barra { width: 100%; background: #ddd; height: 18px; border-radius: 6px; overflow: hidden; box-shadow: inset 0 1px 3px rgba(0,0,0,0.1); }
-  #progresso { height: 100%; width: 0%; background: #2e7d32; transition: .3s; }
+  #barra { width: 100%; background: #DCE5EF; height: 18px; border-radius: 6px; overflow: hidden; box-shadow: inset 0 1px 3px rgba(0,0,0,0.1); }
+  #progresso { height: 100%; width: 0%; background: #1B7A3E; transition: .3s; }
 
-  .pedido-item { padding: 12px; cursor: pointer; border-bottom: 1px solid #eee; font-weight: bold; color: var(--primary); border-radius: 4px; transition: background 0.2s; }
+  .pedido-item { padding: 12px; cursor: pointer; border-bottom: 1px solid #EDF2F7; font-weight: bold; color: var(--primary); border-radius: 4px; transition: background 0.2s; }
   .pedido-item:hover { background: #eef3f7; }
-  .pedido-cliente { font-size: 12px; color: #666; font-weight: normal; margin-top: 3px; }
+  .pedido-cliente { font-size: 12px; color: #586A7D; font-weight: normal; margin-top: 3px; }
 
   .status { font-size: 18px; font-weight: bold; margin-top: 20px; }
-  .img-produto { width: 65px; height: 65px; object-fit: contain; border-radius: 4px; border: 1px solid #ccc; background: #fff; }
+  .img-produto { width: 65px; height: 65px; object-fit: contain; border-radius: 4px; border: 1px solid #C9D6E5; background: #fff; }
   .sku-texto { font-weight: bold; font-size: 13px; color: var(--primary); }
 
   /* V18.02: status da Zebra discreto — bolinha (verde=ON / vermelho=OFF) + "Zebra".
@@ -111,12 +112,12 @@
      qz-desconectado que as funções já alternam. */
   .qz-status { display: inline-flex; align-items: center; gap: 5px; font-size: 0; margin-top: 3px; cursor: default; }
   .qz-status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #9aa7b4; }
-  .qz-status::after { content: "Zebra"; font-size: 11px; font-weight: 600; color: #7b8a9c; }
+  .qz-status::after { content: "Zebra"; font-size: 11px; font-weight: 600; color: #586A7D; }
   .qz-conectado::before { background: #2e9e5b; box-shadow: 0 0 5px rgba(46,158,91,.55); }
   .qz-desconectado::before { background: #e06666; }
   .etiqueta-status { display: inline-block; font-size: 12px; font-weight: 700; padding: 6px 10px; border-radius: 6px; margin-bottom: 14px; }
-  .etiqueta-ok { background: #e8f5e9; color: #2e7d32; border: 1px solid #a5d6a7; }
-  .etiqueta-erro { background: #ffebee; color: #c62828; border: 1px solid #ef9a9a; }
+  .etiqueta-ok { background: #E7F4EC; color: #1B7A3E; border: 1px solid #B9DEC6; }
+  .etiqueta-erro { background: #FDECEA; color: #B42318; border: 1px solid #F2C1BB; }
 
   /* Modal de Multiplos Pedidos */
   #modalMultiplos {
@@ -125,7 +126,7 @@
   }
   .modal-card { background: white; padding: 25px; border-radius: 8px; width: 450px; text-align: center; box-shadow: 0 5px 20px rgba(0,0,0,0.2); }
   .btn-opcao-pedido { width: 100%; padding: 10px; margin-top: 8px; background: var(--primary); color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; }
-  .btn-opcao-pedido:hover { background: #1f3a58; }
+  .btn-opcao-pedido:hover { background: #194B91; }
 
   /* Modal da Nota Simplificada */
   #modalNotaSimplificada {
@@ -144,7 +145,7 @@
   .autosave-status { display:block; font-size:10px; opacity:.9; margin-top:3px; }
 
   .ean-rapido-topo { position:relative; display:inline-flex; align-items:center; }
-  .btn-ean-rapido-resumo { background:#2e7d32; border-color:rgba(255,255,255,.38); white-space:nowrap; }
+  .btn-ean-rapido-resumo { background:#1B7A3E; border-color:rgba(255,255,255,.38); white-space:nowrap; }
   .btn-ean-rapido-resumo:hover, .ean-rapido-topo.aberto .btn-ean-rapido-resumo { background:#256829; }
   .btn-ean-rapido-resumo.salvo { background:#176d34; box-shadow:0 0 0 3px rgba(102,207,114,.2); }
   .ean-rapido-card { display:none; position:fixed; top:70px; right:16px; z-index:17100; width:min(900px,calc(100vw - 32px)); margin:0; padding:13px 14px; border:1px solid #b9cce0; border-top:5px solid var(--secondary); border-radius:9px; background:#f7fafc; color:#263b50; box-shadow:0 18px 45px rgba(0,0,0,.28); }
@@ -159,18 +160,18 @@
   .ean-rapido-campo { display:flex; flex-direction:column; gap:4px; color:#344e68; font-size:10px; font-weight:900; text-transform:uppercase; }
   .ean-rapido-campo input { min-width:0; width:100%; padding:10px 11px; border:1px solid #b6c4d2; border-radius:6px; background:#fff; color:#1e2d3d; font-family:Consolas,monospace; font-size:14px; font-weight:750; text-transform:none; }
   .ean-rapido-campo input:focus { border-color:var(--secondary); box-shadow:0 0 0 3px rgba(242,140,24,.16); outline:0; }
-  .btn-salvar-ean-rapido { min-height:40px; padding:10px 15px; border:0; border-radius:6px; background:#2e7d32; color:#fff; cursor:pointer; font-size:11px; font-weight:900; white-space:nowrap; }
+  .btn-salvar-ean-rapido { min-height:40px; padding:10px 15px; border:0; border-radius:6px; background:#1B7A3E; color:#fff; cursor:pointer; font-size:11px; font-weight:900; white-space:nowrap; }
   .btn-salvar-ean-rapido:disabled { opacity:.58; cursor:wait; }
   .ean-rapido-status { min-height:15px; margin-top:6px; color:#607387; font-size:10px; line-height:1.35; }
   .ean-rapido-status.ok { color:#25702a; font-weight:800; }
-  .ean-rapido-status.erro { color:#c62828; font-weight:800; }
+  .ean-rapido-status.erro { color:#B42318; font-weight:800; }
 
   .mensagem-detalhada { display:none; margin-top:14px; padding:14px 16px; border-radius:8px; border-left:5px solid; box-shadow:0 2px 7px rgba(0,0,0,.06); }
   .mensagem-detalhada.mostrar { display:block; }
-  .mensagem-detalhada.erro { background:#ffebee; border-color:#c62828; color:#7f1d1d; }
-  .mensagem-detalhada.aviso { background:#fff8e1; border-color:#f9a825; color:#7a4b00; }
-  .mensagem-detalhada.info { background:#eaf2fb; border-color:var(--primary); color:#1f3a58; }
-  .mensagem-detalhada.sucesso { background:#e8f5e9; border-color:#2e7d32; color:#1b5e20; }
+  .mensagem-detalhada.erro { background:#FDECEA; border-color:#B42318; color:#8C1C13; }
+  .mensagem-detalhada.aviso { background:#FFF4E0; border-color:#F28B18; color:#7a4b00; }
+  .mensagem-detalhada.info { background:#EAF1FA; border-color:var(--primary); color:#194B91; }
+  .mensagem-detalhada.sucesso { background:#E7F4EC; border-color:#1B7A3E; color:#145C2F; }
   .mensagem-titulo { font-size:15px; font-weight:800; margin-bottom:5px; }
   .mensagem-detalhe { font-size:13px; line-height:1.45; white-space:pre-line; }
   .mensagem-orientacao { font-size:12px; margin-top:7px; font-weight:600; }
@@ -180,25 +181,25 @@
   .btn-acao-secundaria { background:#fff; color:#444; border:1px solid #bbb !important; }
 
   .pedido-status-mini { display:inline-block; margin-top:5px; padding:3px 7px; border-radius:10px; font-size:10px; font-weight:700; }
-  .pedido-status-impressao { background:#fff3cd; color:#856404; }
+  .pedido-status-impressao { background:#FFF4E0; color:#8A5300; }
   .pedido-status-andamento { background:#e3f2fd; color:#1565c0; }
-  .pedido-status-ja-feito { background:#fff3cd; color:#7a5200; border:1px solid #e5bd57; }
-  .pedido-historico-anterior { display:none; margin:0 0 10px; padding:8px 10px; border-radius:7px; background:#fff8e1; border:1px solid #edc85d; color:#755000; font-size:12px; font-weight:800; }
+  .pedido-status-ja-feito { background:#FFF4E0; color:#8A5300; border:1px solid #e5bd57; }
+  .pedido-historico-anterior { display:none; margin:0 0 10px; padding:8px 10px; border-radius:7px; background:#FFF4E0; border:1px solid #edc85d; color:#755000; font-size:12px; font-weight:800; }
 
   .modal-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.58); justify-content:center; align-items:center; z-index:9995; padding:20px; }
   .modal-historico-card { background:white; border-radius:10px; width:min(1100px, 96vw); max-height:92vh; overflow:auto; box-shadow:0 10px 35px rgba(0,0,0,.3); padding:24px; }
   .historico-topo { display:flex; justify-content:space-between; align-items:center; gap:15px; border-bottom:2px solid var(--secondary); padding-bottom:10px; }
   .historico-filtros { display:flex; gap:10px; flex-wrap:wrap; margin:15px 0; }
-  .historico-filtros input { flex:1; min-width:250px; padding:10px; border:1px solid #ccc; border-radius:6px; }
-  .historico-resumo { font-size:12px; color:#555; margin-bottom:8px; }
+  .historico-filtros input { flex:1; min-width:250px; padding:10px; border:1px solid #C9D6E5; border-radius:6px; }
+  .historico-resumo { font-size:12px; color:#4A5D72; margin-bottom:8px; }
   .historico-tabela th, .historico-tabela td { font-size:12px; }
   .btn-reimprimir { background:var(--secondary); color:#fff; border:0; padding:7px 10px; border-radius:5px; font-weight:700; cursor:pointer; }
   .btn-reimprimir:disabled { background:#bbb; cursor:not-allowed; }
   .badge-reimpressoes { display:inline-block; background:#eef3f7; color:var(--primary); padding:3px 7px; border-radius:10px; font-weight:700; }
   .modal-reimpressao-card { background:white; border-radius:10px; width:min(520px, 95vw); padding:25px; box-shadow:0 10px 35px rgba(0,0,0,.3); }
   .modal-reimpressao-card label { display:block; font-weight:700; color:var(--primary); margin:12px 0 5px; font-size:13px; }
-  .modal-reimpressao-card select, .modal-reimpressao-card textarea { width:100%; padding:10px; border:1px solid #ccc; border-radius:6px; }
-  .reprint-alerta { background:#fff8e1; border-left:4px solid #f9a825; padding:10px; font-size:12px; margin-top:12px; }
+  .modal-reimpressao-card select, .modal-reimpressao-card textarea { width:100%; padding:10px; border:1px solid #C9D6E5; border-radius:6px; }
+  .reprint-alerta { background:#FFF4E0; border-left:4px solid #F28B18; padding:10px; font-size:12px; margin-top:12px; }
 
 
   /* Modo de conferência sem mouse */
@@ -217,7 +218,7 @@
   .atalho-linha kbd {
     min-width: 37px; display: inline-block; text-align: center; padding: 3px 6px;
     border: 1px solid #aeb8c2; border-bottom-width: 2px; border-radius: 4px;
-    background: white; color: #263746; font-family: 'Segoe UI', sans-serif; font-size: 10px; font-weight: 800;
+    background: white; color: #18324A; font-family: 'Segoe UI', sans-serif; font-size: 10px; font-weight: 800;
     box-shadow: 0 1px 1px rgba(0,0,0,.08);
   }
   .atalhos-rodape { margin-top: 3px; padding-top: 7px; border-top: 1px solid #dce4eb; font-size: 10px; color: #657483; }
@@ -227,15 +228,15 @@
   .pedido-item:focus { outline: 3px solid rgba(242,140,24,.45); outline-offset: -3px; background: #fff6e9; }
   .filtro-marketplace-box { margin-bottom: 12px; padding: 10px; background: #f5f8fb; border: 1px solid #d7e1ea; border-radius: 7px; }
   .filtro-marketplace-box label { display:block; margin-bottom:6px; color:var(--primary); font-size:11px; font-weight:800; }
-  .filtro-marketplace-select { width:100%; padding:9px 10px; border:1px solid #b8c5d1; border-radius:6px; background:white; color:#263746; font-size:12px; font-weight:700; }
+  .filtro-marketplace-select { width:100%; padding:9px 10px; border:1px solid #C9D6E5; border-radius:6px; background:white; color:#18324A; font-size:12px; font-weight:700; }
   .filtro-marketplace-resumo { margin-top:6px; color:#667786; font-size:10px; line-height:1.35; }
-  .aviso-etiquetas-disponiveis { margin:0 0 12px; padding:9px 10px; border-radius:7px; background:#e8f5e9; border:1px solid #a5d6a7; color:#256029; font-size:10px; font-weight:700; line-height:1.35; }
+  .aviso-etiquetas-disponiveis { margin:0 0 12px; padding:9px 10px; border-radius:7px; background:#E7F4EC; border:1px solid #B9DEC6; color:#145C2F; font-size:10px; font-weight:700; line-height:1.35; }
   .pedido-topo-linha { display:flex; align-items:center; justify-content:space-between; gap:6px; }
   .pedido-marketplace-badge { display:inline-block; flex:0 0 auto; padding:3px 6px; border-radius:10px; font-size:9px; font-weight:900; letter-spacing:.2px; }
   .pedido-marketplace-badge.mercado_livre { background:#fff3bf; color:#735c00; border:1px solid #e4c94c; }
   .pedido-marketplace-badge.shopee { background:#ffe2d8; color:#9c2d0e; border:1px solid #f0a184; }
   .pedido-marketplace-badge.magalu { background:#ddecff; color:#174b83; border:1px solid #91b9e6; }
-  .pedido-marketplace-badge.desconhecido { background:#eee; color:#666; border:1px solid #ccc; }
+  .pedido-marketplace-badge.desconhecido { background:#EDF2F7; color:#586A7D; border:1px solid #C9D6E5; }
   .atalho-pulso { animation: atalhoPulso .7s ease; }
   @keyframes atalhoPulso {
     0%,100% { box-shadow: none; }
@@ -269,14 +270,14 @@
   .scanner-camera-fechar { border:0; background:rgba(255,255,255,.12); color:#fff; width:38px; height:38px; border-radius:50%; font-size:20px; cursor:pointer; }
   .scanner-camera-preview { position:relative; margin:14px; border-radius:12px; overflow:hidden; background:#000; min-height:300px; }
   .scanner-camera-preview video { display:block; width:100%; height:min(62dvh,520px); min-height:300px; object-fit:cover; background:#000; }
-  .scanner-mira { position:absolute; left:8%; right:8%; top:36%; height:28%; border:3px solid #F28C18; border-radius:12px; box-shadow:0 0 0 9999px rgba(0,0,0,.28); pointer-events:none; }
+  .scanner-mira { position:absolute; left:8%; right:8%; top:36%; height:28%; border:3px solid #F28B18; border-radius:12px; box-shadow:0 0 0 9999px rgba(0,0,0,.28); pointer-events:none; }
   .scanner-linha { position:absolute; left:10%; right:10%; top:50%; height:2px; background:#fff; box-shadow:0 0 9px #fff; animation:scannerLinha 1.7s ease-in-out infinite; pointer-events:none; }
   @keyframes scannerLinha { 0%,100%{transform:translateY(-45px);opacity:.45} 50%{transform:translateY(45px);opacity:1} }
   .scanner-camera-status { padding:0 16px 12px; text-align:center; min-height:42px; font-size:13px; line-height:1.4; color:#dce8f3; }
   .scanner-camera-acoes { display:flex; gap:9px; padding:0 14px 15px; }
   .scanner-camera-acoes button { flex:1; padding:11px 10px; border:0; border-radius:7px; font-weight:800; cursor:pointer; }
   .scanner-btn-secundario { background:#e8eef5; color:#203a55; }
-  .scanner-btn-principal { background:#F28C18; color:#fff; }
+  .scanner-btn-principal { background:#F28B18; color:#fff; }
   .scanner-ajuda { padding:0 16px 15px; color:#aebdca; font-size:11px; line-height:1.45; text-align:center; }
 
   @media (max-width: 780px) {
@@ -335,7 +336,7 @@
     <div class="logo-box">
       <img src="/nk-logo.svg?v=14.5" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=14.5';">
     </div>
-    <h2>Login do Sistema</h2><div style="font-size:11px;color:#6b7b89;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 11.9 — EAN em todos os pedidos do SKU</div>
+    <h2>Login do Sistema</h2><div style="font-size:11px;color:#586A7D;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 11.9 — EAN em todos os pedidos do SKU</div>
 
     <div class="box-upload-rede" style="border-style:solid;">
       <label>🗄 PEDIDOS COMPARTILHADOS NA REDE:</label>
@@ -347,7 +348,7 @@
     <button class="btn-entrar" onclick="fazerLogin()">ENTRAR</button>
     <button type="button" class="btn-solicitar-acesso" onclick="abrirSolicitacaoUsuario()">SOLICITAR NOVO USUÁRIO</button>
     <button type="button" class="pwa-install-btn pwa-login" data-pwa-install>⬇ INSTALAR CONFERÊNCIA NO COMPUTADOR</button>
-    <div class="pwa-installed-note">Abre em janela própria e cria um ícone separado no Windows.</div><div style="font-size:10px;color:#6b7b89;margin-top:7px;line-height:1.35;">Escolha Admin ou Operador. O login só será liberado após aprovação.</div>
+    <div class="pwa-installed-note">Abre em janela própria e cria um ícone separado no Windows.</div><div style="font-size:10px;color:#586A7D;margin-top:7px;line-height:1.35;">Escolha Admin ou Operador. O login só será liberado após aprovação.</div>
     <div id="erroLogin" class="erro-msg"></div>
   </div>
 </div>
@@ -355,19 +356,19 @@
 <div id="modalMultiplos">
   <div class="modal-card">
     <h3 style="color:var(--primary); margin-top:0;">Este produto está em múltiplos pedidos!</h3>
-    <p style="font-size:13px; color:#555;">Selecione para qual cliente/pedido deseja destinar este item:</p>
+    <p style="font-size:13px; color:#4A5D72;">Selecione para qual cliente/pedido deseja destinar este item:</p>
     <div id="listaOpcoesMultiplos" style="max-height: 250px; overflow-y: auto; margin-top: 15px;"></div>
-    <button onclick="fecharModalMultiplos()" style="margin-top:15px; padding:8px 15px; background:#ccc; border:none; border-radius:4px; cursor:pointer; font-weight:bold;">Cancelar</button>
+    <button onclick="fecharModalMultiplos()" style="margin-top:15px; padding:8px 15px; background:#C9D6E5; border:none; border-radius:4px; cursor:pointer; font-weight:bold;">Cancelar</button>
   </div>
 </div>
 
 <div id="modalNotaSimplificada">
   <div class="modal-nota-card">
     <h3 style="color:var(--primary); margin-top:0; border-bottom: 2px solid var(--secondary); padding-bottom: 8px;">📄 Nota Fiscal Simplificada</h3>
-    <pre id="conteudoNotaTexto" style="background: #f8f9fa; padding: 15px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px; font-family: monospace; white-space: pre-wrap; word-wrap: break-word; max-height: 350px; overflow-y: auto;"></pre>
+    <pre id="conteudoNotaTexto" style="background: #f8f9fa; padding: 15px; border: 1px solid #DCE5EF; border-radius: 6px; font-size: 13px; font-family: monospace; white-space: pre-wrap; word-wrap: break-word; max-height: 350px; overflow-y: auto;"></pre>
     <div style="display: flex; gap: 10px; margin-top: 15px;">
-      <button onclick="baixarArquivoTxtNota()" style="flex:1; padding: 10px; background: #2e7d32; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">💾 Baixar TXT da Nota</button>
-      <button onclick="fecharModalNota()" style="padding: 10px 20px; background: #ccc; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">Fechar</button>
+      <button onclick="baixarArquivoTxtNota()" style="flex:1; padding: 10px; background: #1B7A3E; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">💾 Baixar TXT da Nota</button>
+      <button onclick="fecharModalNota()" style="padding: 10px 20px; background: #C9D6E5; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">Fechar</button>
     </div>
   </div>
 
@@ -378,7 +379,7 @@
     <div class="historico-topo">
       <div>
         <h2 style="margin:0; color:var(--primary);">🕘 Histórico de conferência</h2>
-        <div style="font-size:12px; color:#666; margin-top:3px;">Conferências, impressões e reimpressões compartilhadas no servidor Web.</div>
+        <div style="font-size:12px; color:#586A7D; margin-top:3px;">Conferências, impressões e reimpressões compartilhadas no servidor Web.</div>
       </div>
       <button onclick="fecharHistorico()" class="btn-acao-secundaria" style="padding:8px 13px; border-radius:6px; cursor:pointer;">Fechar</button>
     </div>
@@ -413,7 +414,7 @@
     <label for="observacaoReimpressao">Observação</label>
     <textarea id="observacaoReimpressao" rows="3" placeholder="Informe detalhes quando necessário."></textarea>
     <div class="reprint-alerta">A reimpressão ficará registrada com operador, data, horário e motivo. Confira o pedido antes de confirmar.</div>
-    <label style="display:flex; gap:8px; align-items:flex-start; color:#333; font-weight:600;">
+    <label style="display:flex; gap:8px; align-items:flex-start; color:#18324A; font-weight:600;">
       <input id="confirmacaoReimpressao" type="checkbox" style="margin-top:3px;"> Confirmo que revisei o número do pedido e que esta reimpressão é necessária.
     </label>
     <div style="display:flex; gap:10px; margin-top:18px;">
@@ -498,19 +499,19 @@
 <!-- V18.02: painel do dia por marketplace (cards clicaveis = filtro) — igual a maquete -->
 <style>
   .conf-dia-painel{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;padding:14px 18px 2px}
-  .conf-dia-card{text-align:left;background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:12px 15px;cursor:pointer;font:inherit;transition:box-shadow .12s,border-color .12s}
+  .conf-dia-card{text-align:left;background:#fff;border:1px solid #DCE5EF;border-radius:11px;padding:12px 15px;cursor:pointer;font:inherit;transition:box-shadow .12s,border-color .12s}
   .conf-dia-card:hover{border-color:#b3c4d8}
   .conf-dia-card.ativo{border-color:#12345b;box-shadow:0 0 0 2px rgba(18,52,91,.18)}
-  .conf-dia-nome{display:flex;align-items:center;gap:7px;font-weight:600;font-size:13px;color:#7b8a9c;margin-bottom:9px}
+  .conf-dia-nome{display:flex;align-items:center;gap:7px;font-weight:600;font-size:13px;color:#586A7D;margin-bottom:9px}
   .conf-dia-dot{width:9px;height:9px;border-radius:50%;background:#9aa7b4;flex:0 0 auto}
   .conf-dia-dot.mercado_livre{background:#f5b800}.conf-dia-dot.shopee{background:#ee4d2d}.conf-dia-dot.magalu{background:#0086ff}.conf-dia-dot.todos{background:#12345b}
   .conf-dia-filtrando{margin-left:auto;font-size:10px;font-weight:700;color:#12345b;opacity:0}
   .conf-dia-card.ativo .conf-dia-filtrando{opacity:1}
-  .conf-dia-card.todos .conf-dia-filtrando{color:#7b8a9c}
+  .conf-dia-card.todos .conf-dia-filtrando{color:#586A7D}
   .conf-dia-nums{display:flex;align-items:baseline;gap:18px}
   .conf-dia-num{display:flex;flex-direction:column}
-  .conf-dia-num b{font-size:23px;line-height:1;font-weight:700;color:#1e293b}
-  .conf-dia-num small{font-size:10.5px;color:#7b8a9c;margin-top:3px}
+  .conf-dia-num b{font-size:23px;line-height:1;font-weight:700;color:#18324A}
+  .conf-dia-num small{font-size:10.5px;color:#586A7D;margin-top:3px}
   .conf-dia-num.falta b{color:#d97706}
   .conf-dia-num.falta.zero b{color:#16a34a}
   .conf-dia-barra{height:5px;border-radius:99px;background:#eef2f6;margin-top:11px;overflow:hidden}
@@ -580,7 +581,7 @@
         <div class="atalhos-rodape">O leitor pode ser usado normalmente. Quando ele envia Enter, o sistema confirma o código completo imediatamente.</div>
       </div>
     </div>
-    <hr style="border:0; border-top:1px solid #eee; margin: 10px 0;">
+    <hr style="border:0; border-top:1px solid #EDF2F7; margin: 10px 0;">
     <div id="listaPedidos"></div>
   </div>
 
@@ -597,7 +598,7 @@
     <br>
 
     <div class="leitor-codigo-linha">
-      <input type="text" id="codigo" placeholder="Bipe, digite ou escaneie o código de barras..." oninput="agendarLeituraCodigo(this)" onkeydown="confirmarLeituraCodigo(event, this)" autocomplete="off" inputmode="numeric" enterkeyhint="done" aria-label="Código de barras" style="width: 100%; padding: 12px; font-size: 15px; border: 1px solid #ccc; border-radius: 6px;">
+      <input type="text" id="codigo" placeholder="Bipe, digite ou escaneie o código de barras..." oninput="agendarLeituraCodigo(this)" onkeydown="confirmarLeituraCodigo(event, this)" autocomplete="off" inputmode="numeric" enterkeyhint="done" aria-label="Código de barras" style="width: 100%; padding: 12px; font-size: 15px; border: 1px solid #C9D6E5; border-radius: 6px;">
       <button type="button" id="btnAbrirCameraCodigo" class="btn-camera-codigo" onclick="abrirScannerCamera()">📷 ESCANEAR CÓDIGO</button>
     </div>
 
@@ -1807,10 +1808,10 @@ function salvarEanRapidoConferencia() {
 function verificarStatusPlanilhaLogin() {
   const statusDiv = document.getElementById("statusCargaLogin");
   if (usuariosCadastrados.length > 0) {
-    statusDiv.style.color = "#2e7d32";
+    statusDiv.style.color = "#1B7A3E";
     statusDiv.innerHTML = "✔ Sistema pronto e conectado (" + usuariosCadastrados.length + " usuários carregados).";
   } else {
-    statusDiv.style.color = "#c62828";
+    statusDiv.style.color = "#B42318";
     statusDiv.innerHTML = "⚠ Carregue a planilha Excel para iniciar.";
   }
 }
@@ -2385,10 +2386,10 @@ function desenharTabela() {
       <tr class="${classe}">
         <td>${tagImg}</td>
         <td><span class="sku-texto">${escaparHtml(valSKU || '---')}</span></td>
-        <td style="text-align:left;">${escaparHtml(extrairCampo(i, "Descrição"))}${String(extrairCampo(i,"Kit")||"").toUpperCase()==="SIM"||extrairCampo(i,"Nome do Kit")?`<div style="margin-top:4px"><span class="pedido-status-mini" style="background:#f3e8ff;color:#6b21a8">🎁 ${escaparHtml(extrairCampo(i,"Nome do Kit")||extrairCampo(i,"SkuKitOrigem")||"Kit")}</span></div>`:""}${extrairCampo(i,"Observação")?`<div style="margin-top:4px"><span class="pedido-status-mini" style="background:#fff3cd;color:#8a5a00">⚠ ${escaparHtml(extrairCampo(i,"Observação"))}</span></div>`:""}</td>
+        <td style="text-align:left;">${escaparHtml(extrairCampo(i, "Descrição"))}${String(extrairCampo(i,"Kit")||"").toUpperCase()==="SIM"||extrairCampo(i,"Nome do Kit")?`<div style="margin-top:4px"><span class="pedido-status-mini" style="background:#f3e8ff;color:#6b21a8">🎁 ${escaparHtml(extrairCampo(i,"Nome do Kit")||extrairCampo(i,"SkuKitOrigem")||"Kit")}</span></div>`:""}${extrairCampo(i,"Observação")?`<div style="margin-top:4px"><span class="pedido-status-mini" style="background:#FFF4E0;color:#8A5300">⚠ ${escaparHtml(extrairCampo(i,"Observação"))}</span></div>`:""}</td>
         <td>${escaparHtml(extrairCampo(i, "Quantidade") || 0)}</td>
         <td>${escaparHtml(i.Lido || 0)}</td>
-        <td><button type="button" style="border:0;border-radius:6px;padding:6px 9px;background:#ffebee;color:#c62828;font-weight:800;cursor:pointer" onclick="excluirProdutoPedidoConferencia(${argJs(i.__uidLinha||i.__uidPedido||'')})">🗑 Excluir</button></td>
+        <td><button type="button" style="border:0;border-radius:6px;padding:6px 9px;background:#FDECEA;color:#B42318;font-weight:800;cursor:pointer" onclick="excluirProdutoPedidoConferencia(${argJs(i.__uidLinha||i.__uidPedido||'')})">🗑 Excluir</button></td>
       </tr>
     `;
   });
@@ -2572,7 +2573,7 @@ Motivo: ${resultadoEtiqueta.erro}`,
   impressaoEmAndamento = true;
   input.disabled = true;
   document.getElementById("statusMsg").innerHTML = "🖨 Enviando 1 etiqueta 10x15 para a impressora...";
-  document.getElementById("statusMsg").style.color = "#2B4E75";
+  document.getElementById("statusMsg").style.color = "#1F57A5";
   mostrarMensagemDetalhada("info", "Impressão em andamento", `Pedido ${numPedExibicao}`, "Aguarde a confirmação antes de retirar a etiqueta.");
 
   try {
@@ -3760,8 +3761,8 @@ function verificarStatusPlanilhaLogin(){
   const pedidos=JSON.parse(appStorage.getItem("conf_pedidos")||"[]");
   const usuarios=JSON.parse(appStorage.getItem("conf_usuarios")||"[]");
   const unicos=new Set(pedidos.map(x=>normalizarIdentificadorExato(extrairCampo(x,"Pedido"))).filter(Boolean)).size;
-  if(usuarios.length>0){statusDiv.style.color="#2e7d32";statusDiv.innerHTML=`✔ Dados do servidor conectados: ${unicos} pedido(s) pendente(s) e ${usuarios.length} usuário(s).`;}
-  else{statusDiv.style.color="#c62828";statusDiv.innerHTML="⚠ Servidor Web sem usuários. Entre como admin e abra o Banco Administrativo.";}
+  if(usuarios.length>0){statusDiv.style.color="#1B7A3E";statusDiv.innerHTML=`✔ Dados do servidor conectados: ${unicos} pedido(s) pendente(s) e ${usuarios.length} usuário(s).`;}
+  else{statusDiv.style.color="#B42318";statusDiv.innerHTML="⚠ Servidor Web sem usuários. Entre como admin e abra o Banco Administrativo.";}
 }
 function enriquecerPedidosComBancoProdutos(){
   let produtos=[];try{produtos=JSON.parse(appStorage.getItem("conf_produtos")||"[]");}catch(_){return;}
@@ -3848,16 +3849,16 @@ window.addEventListener("storage",event=>{
 
 </script>
 <style>
-  .btn-solicitar-acesso{width:100%;padding:11px;margin-top:9px;background:#fff;color:#2B4E75;border:1px solid #2B4E75;border-radius:6px;cursor:pointer;font-size:13px;font-weight:800}
+  .btn-solicitar-acesso{width:100%;padding:11px;margin-top:9px;background:#fff;color:#1F57A5;border:1px solid #1F57A5;border-radius:6px;cursor:pointer;font-size:13px;font-weight:800}
   .btn-solicitar-acesso:hover{background:#eef4fa}
   .solicitacao-overlay{display:none;position:fixed;inset:0;background:rgba(15,27,39,.68);z-index:12000;align-items:center;justify-content:center;padding:18px}
   .solicitacao-overlay.ativo{display:flex}
   .solicitacao-card{width:min(470px,96vw);background:#fff;border-radius:12px;box-shadow:0 20px 55px rgba(0,0,0,.32);overflow:hidden;text-align:left}
-  .solicitacao-topo{background:#2B4E75;color:#fff;padding:17px 20px;border-bottom:4px solid #F28C18}
+  .solicitacao-topo{background:#1F57A5;color:#fff;padding:17px 20px;border-bottom:4px solid #F28B18}
   .solicitacao-topo h3{margin:0;font-size:18px}
   .solicitacao-corpo{padding:20px}
   .solicitacao-corpo .field{margin-bottom:13px}
-  .solicitacao-corpo label{display:block;margin-bottom:5px;font-size:12px;color:#2B4E75;font-weight:800}
+  .solicitacao-corpo label{display:block;margin-bottom:5px;font-size:12px;color:#1F57A5;font-weight:800}
   .solicitacao-corpo input,.solicitacao-corpo select{width:100%;padding:11px;border:1px solid #b9c4ce;border-radius:6px;font-size:14px}
   .solicitacao-acoes{display:flex;gap:10px;justify-content:flex-end;padding:0 20px 20px}
   .solicitacao-acoes button{padding:10px 15px;border:0;border-radius:6px;font-weight:800;cursor:pointer}
@@ -3879,7 +3880,7 @@ window.addEventListener("storage",event=>{
     </div>
     <div class="solicitacao-acoes">
       <button type="button" style="background:#e3e8ed;color:#334;" onclick="fecharSolicitacaoUsuario()">Cancelar</button>
-      <button type="button" id="btnEnviarSolicitacaoUsuario" style="background:#2e7d32;color:#fff;" onclick="enviarSolicitacaoUsuario()">Enviar para aprovação</button>
+      <button type="button" id="btnEnviarSolicitacaoUsuario" style="background:#1B7A3E;color:#fff;" onclick="enviarSolicitacaoUsuario()">Enviar para aprovação</button>
     </div>
   </div>
 </div>
@@ -3956,23 +3957,23 @@ window.addEventListener("storage",event=>{
   .btn-alerta-resumo:hover,.alerta-novos-pedidos-topo.aberto .btn-alerta-resumo{background:rgba(255,255,255,.24)}
   .alerta-topo-ponto{width:8px;height:8px;border-radius:50%;background:#66cf72;box-shadow:0 0 0 3px rgba(102,207,114,.16)}
   .alerta-topo-ponto.inativo{background:#aab4bf;box-shadow:none}
-  .alerta-novos-pedidos-painel{display:none;position:absolute;top:calc(100% + 9px);right:0;width:min(330px,calc(100vw - 24px));padding:12px;border:1px solid #b8c8d8;border-top:4px solid #F28C18;border-radius:8px;background:#fff;color:#253c55;box-shadow:0 16px 40px rgba(0,0,0,.25);z-index:17000}
+  .alerta-novos-pedidos-painel{display:none;position:absolute;top:calc(100% + 9px);right:0;width:min(330px,calc(100vw - 24px));padding:12px;border:1px solid #b8c8d8;border-top:4px solid #F28B18;border-radius:8px;background:#fff;color:#253c55;box-shadow:0 16px 40px rgba(0,0,0,.25);z-index:17000}
   .alerta-novos-pedidos-topo.aberto .alerta-novos-pedidos-painel{display:block}
   .alerta-novos-pedidos-info{margin-bottom:9px}
-  .alerta-novos-pedidos-titulo{font-size:12px;font-weight:900;color:#2B4E75;line-height:1.25}
+  .alerta-novos-pedidos-titulo{font-size:12px;font-weight:900;color:#1F57A5;line-height:1.25}
   .alerta-novos-pedidos-status{font-size:10px;color:#66788a;margin-top:4px;line-height:1.35}
   .alerta-novos-pedidos-acoes{display:flex;gap:6px;flex-wrap:wrap}
   .alerta-novos-pedidos-acoes button{flex:1;border:0;border-radius:6px;padding:8px 9px;cursor:pointer;font-size:9px;font-weight:900;white-space:nowrap}
-  .btn-alerta-som-ativo{background:#2e7d32;color:#fff}
+  .btn-alerta-som-ativo{background:#1B7A3E;color:#fff}
   .btn-alerta-som-inativo{background:#e5e9ed;color:#48545f}
-  .btn-alerta-teste{background:#2B4E75;color:#fff}
-  .toast-novo-pedido{position:fixed;right:18px;bottom:18px;z-index:16000;width:min(390px,calc(100vw - 36px));background:#17395c;color:#fff;border-left:5px solid #F28C18;border-radius:10px;box-shadow:0 16px 40px rgba(0,0,0,.28);padding:14px 16px;opacity:0;transform:translateY(18px);pointer-events:none;transition:opacity .2s ease,transform .2s ease}
+  .btn-alerta-teste{background:#1F57A5;color:#fff}
+  .toast-novo-pedido{position:fixed;right:18px;bottom:18px;z-index:16000;width:min(390px,calc(100vw - 36px));background:#17395c;color:#fff;border-left:5px solid #F28B18;border-radius:10px;box-shadow:0 16px 40px rgba(0,0,0,.28);padding:14px 16px;opacity:0;transform:translateY(18px);pointer-events:none;transition:opacity .2s ease,transform .2s ease}
   .toast-novo-pedido.ativo{opacity:1;transform:translateY(0)}
   .toast-novo-pedido strong{display:block;font-size:14px;margin-bottom:3px}
   .toast-novo-pedido span{display:block;font-size:11px;line-height:1.4;color:#e8f0f7}
   @media(max-width:780px){.alerta-novos-pedidos-topo{flex:1 1 auto}.btn-alerta-resumo{width:100%;justify-content:center;min-height:40px}.alerta-novos-pedidos-painel{right:auto;left:0}.alerta-novos-pedidos-acoes button{min-height:38px}.toast-novo-pedido{right:10px;bottom:78px;width:calc(100vw - 20px)}}
 
-.pedido-status-etiqueta-ok{background:#dcfce7;color:#166534;border:1px solid #86efac}
+.pedido-status-etiqueta-ok{background:#dcfce7;color:#145C2F;border:1px solid #86efac}
 .pedido-status-etiqueta-pendente{background:#fff7ed;color:#9a3412;border:1px solid #fdba74}
 
   /* V16.70 - cabeçalho reorganizado + coleta do dia */
@@ -4009,7 +4010,7 @@ window.addEventListener("storage",event=>{
   .coleta-expedicao-box.coleta-com-dados{
     background:#fff8df;
     border-color:#f5c84c;
-    color:#17344f;
+    color:#12345B;
   }
   .coleta-expedicao-box.coleta-sem-dados{
     color:#eef5fb;
@@ -4093,12 +4094,12 @@ window.addEventListener("storage",event=>{
 
   .popup-coleta-overlay{position:fixed;inset:0;z-index:12000;background:rgba(10,31,53,.48);display:none;align-items:flex-start;justify-content:center;padding-top:90px;backdrop-filter:blur(2px)}
   .popup-coleta-overlay.mostrar{display:flex}
-  .popup-coleta-card{width:min(520px,calc(100vw - 28px));display:grid;grid-template-columns:56px 1fr auto;align-items:center;gap:14px;padding:18px 20px;border-radius:16px;background:#fff8df;border:2px solid #f2c247;box-shadow:0 22px 70px rgba(0,0,0,.30);color:#17344f}
+  .popup-coleta-card{width:min(520px,calc(100vw - 28px));display:grid;grid-template-columns:56px 1fr auto;align-items:center;gap:14px;padding:18px 20px;border-radius:16px;background:#fff8df;border:2px solid #f2c247;box-shadow:0 22px 70px rgba(0,0,0,.30);color:#12345B}
   .popup-coleta-icone{font-size:34px;text-align:center}
   .popup-coleta-titulo{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:#7a5a00;font-weight:900;margin-bottom:4px}
   .popup-coleta-horario{font-size:20px;font-weight:900}
-  .popup-coleta-codigo{font-size:16px;font-weight:900;color:#08743b;margin-top:4px}
-  .popup-coleta-ok{border:0;border-radius:9px;background:#2b5b8a;color:#fff;font-weight:900;padding:10px 16px;cursor:pointer;font-size:13px}
+  .popup-coleta-codigo{font-size:16px;font-weight:900;color:#1B7A3E;margin-top:4px}
+  .popup-coleta-ok{border:0;border-radius:9px;background:#1F57A5;color:#fff;font-weight:900;padding:10px 16px;cursor:pointer;font-size:13px}
   @media(max-width:780px){
     .popup-coleta-overlay{padding-top:30px}
     .popup-coleta-card{grid-template-columns:44px 1fr}
@@ -4107,7 +4108,7 @@ window.addEventListener("storage",event=>{
 </style>
 <style id="skin-conf-v1802">
   /* V18.02 — pele calma da Conferência (aprovada na maquete). Só visual, sem HTML. */
-  body{background:#f1f4f8}
+  body{background:#F4F7FB}
   header.conf-header-v1670{background:#12345b;border-bottom:1px solid rgba(255,255,255,.08);box-shadow:0 1px 6px rgba(0,0,0,.10);min-height:64px}
   .coleta-expedicao-box{background:rgba(255,255,255,.08);border-color:rgba(255,255,255,.18)}
   /* Zebra discreta — vence a especificidade do cabeçalho (2 classes) */
@@ -4116,15 +4117,15 @@ window.addEventListener("storage",event=>{
   .conf-header-v1670 .btn-header,.conf-header-v1670 .btn-logoff{background:rgba(255,255,255,.10)!important;color:#fff!important;border:0!important;font-weight:600!important;border-radius:8px!important}
   .conf-header-v1670 .btn-header:hover{background:rgba(255,255,255,.20)!important}
   .conf-acoes-operacao{border-left-color:rgba(255,255,255,.14)}
-  .menu{background:#fff;border-right:1px solid #e6ecf3;padding:16px}
+  .menu{background:#fff;border-right:1px solid #DCE5EF;padding:16px}
   .menu h3{color:#12345b!important}
   .conteudo{padding:18px 22px}
-  #listaPedidos .pedido-item{border:1px solid #e2e8f0!important;border-radius:10px!important;padding:11px 13px!important;margin-bottom:8px!important;background:#fff!important;color:#1e293b!important;font-weight:600!important;box-shadow:0 1px 2px rgba(16,42,67,.04)}
+  #listaPedidos .pedido-item{border:1px solid #DCE5EF!important;border-radius:10px!important;padding:11px 13px!important;margin-bottom:8px!important;background:#fff!important;color:#18324A!important;font-weight:600!important;box-shadow:0 1px 2px rgba(16,42,67,.04)}
   #listaPedidos .pedido-item:hover{border-color:#b9d4f4!important;background:#f7fafe!important}
   #listaPedidos .pedido-item.pedido-teclado-selecionado{border-color:#12345b!important;box-shadow:0 0 0 2px rgba(18,52,91,.15)!important}
-  .pedido-cliente{font-weight:500;color:#64748b}
-  table{box-shadow:none!important;border:1px solid #e8edf3!important;margin-top:12px}
-  th{background:#eef3f9!important;color:#55677a!important;font-size:10.5px!important;text-transform:uppercase;letter-spacing:.03em;font-weight:700!important;border-bottom:1px solid #e2e8f0}
+  .pedido-cliente{font-weight:500;color:#586A7D}
+  table{box-shadow:none!important;border:1px solid #DCE5EF!important;margin-top:12px}
+  th{background:#F7F9FC!important;color:#586A7D!important;font-size:10.5px!important;text-transform:uppercase;letter-spacing:.03em;font-weight:700!important;border-bottom:1px solid #DCE5EF}
   td{border-bottom:1px solid #f1f5f9}
   .leitor-codigo-linha #codigo{border:2px solid #12345b!important;border-radius:9px!important}
   /* Cabeçalho mais slim (feel da maquete) */
@@ -4136,9 +4137,9 @@ window.addEventListener("storage",event=>{
   .coleta-expedicao-horario{font-size:12.5px!important;font-weight:700!important}
   .coleta-expedicao-codigo{font-size:11px!important;font-weight:600!important}
   /* Colunas como cartões flutuantes sobre o fundo cinza */
-  .container{gap:14px!important;padding:14px 18px!important;background:#f1f4f8;align-items:flex-start}
-  .menu{border:1px solid #e6ecf3!important;border-radius:12px!important;align-self:flex-start;max-height:calc(100vh - 96px)}
-  .conteudo{background:#fff!important;border:1px solid #e6ecf3!important;border-radius:12px!important}
+  .container{gap:14px!important;padding:14px 18px!important;background:#F4F7FB;align-items:flex-start}
+  .menu{border:1px solid #DCE5EF!important;border-radius:12px!important;align-self:flex-start;max-height:calc(100vh - 96px)}
+  .conteudo{background:#fff!important;border:1px solid #DCE5EF!important;border-radius:12px!important}
   /* Limpa a lista como na maquete: sem o aviso verde e sem a caixa de atalhos */
   .aviso-etiquetas-disponiveis{display:none!important}
   #painelAtalhos{display:none!important}
@@ -4150,7 +4151,7 @@ window.addEventListener("storage",event=>{
   /* ===== Cabeçalho igual a maquete ===== */
   header.conf-header-v1670{grid-template-columns:auto auto auto 1fr!important;gap:16px!important}
   .logo-mini-box.conf-marca-v1802{display:flex!important;align-items:center;gap:8px;width:auto!important;height:auto!important}
-  .conf-marca-n{background:#F28C18;color:#12345b;font-weight:800;border-radius:7px;padding:2px 9px;font-size:16px;line-height:1.4}
+  .conf-marca-n{background:#F28B18;color:#12345b;font-weight:800;border-radius:7px;padding:2px 9px;font-size:16px;line-height:1.4}
   .conf-marca-txt{color:#fff;font-weight:700;font-size:16px;white-space:nowrap}
   .conf-operador-nome{font-size:13px;color:#cfe0f0}
   /* coleta como texto inline, sem caixa nem icone */
@@ -4161,7 +4162,7 @@ window.addEventListener("storage",event=>{
   /* a maquete nao tem instalar nem sino de alerta */
   .btn-install-conf,#alertaNovosPedidosTopo,.conf-acoes-navegacao .pwa-install-btn{display:none!important}
   /* Central laranja (icone) como na maquete */
-  .conf-acoes-navegacao .btn-header{background:#F28C18!important;color:#12345b!important;border:0!important}
+  .conf-acoes-navegacao .btn-header{background:#F28B18!important;color:#12345b!important;border:0!important}
   .conf-acoes-navegacao .btn-header:hover{background:#e07f0d!important}
   .btn-central-v1802::before{content:"🏠";font-size:16px;line-height:1}
   /* Zebra online ao lado da Central (direita) */

@@ -9,21 +9,21 @@
   <style>
     :root {
       color-scheme: light;
-      --navy: #123b63;
-      --navy-2: #1c578b;
-      --orange: #f59b23;
-      --ink: #172536;
-      --muted: #637488;
-      --page: #eef3f8;
+      --navy: #12345B;
+      --navy-2: #1F57A5;
+      --orange: #F28B18;
+      --ink: #18324A;
+      --muted: #586A7D;
+      --page: #F4F7FB;
       --surface: #ffffff;
-      --line: #d4dee9;
+      --line: #DCE5EF;
       --line-soft: #e8eef4;
       --urgent: #b42318;
-      --urgent-bg: #fff0ee;
-      --attention: #8a5a00;
-      --attention-bg: #fff6dc;
-      --ok: #16764a;
-      --ok-bg: #eaf8f0;
+      --urgent-bg: #FDECEA;
+      --attention: #8A5300;
+      --attention-bg: #FFF4E0;
+      --ok: #1B7A3E;
+      --ok-bg: #E7F4EC;
       --shadow: 0 12px 30px rgba(24, 55, 86, 0.09);
     }
 
@@ -349,9 +349,9 @@
     .apollo-card small{display:block;color:var(--muted);font-weight:750;text-transform:uppercase;font-size:.72rem}
     .apollo-card strong{display:block;margin-top:3px;color:var(--navy);font-size:1.45rem}
     .apollo-status{display:inline-flex;padding:4px 8px;border-radius:999px;font-weight:800;font-size:.72rem;white-space:nowrap}
-    .apollo-status.ok{background:#eaf8f0;color:#16764a}.apollo-status.partial{background:#fff6e5;color:#9a5b00}.apollo-status.short{background:#fff0ee;color:#b42318}.apollo-status.unknown{background:#eef3f8;color:#637488}
-    .apollo-cell{min-width:125px}.apollo-msg{min-width:230px;white-space:normal}.apollo-msg .apollo-branches{font-size:.78rem;color:#23384f}.apollo-branches{font-size:.72rem;color:#637488;margin-top:3px;white-space:normal;line-height:1.35}
-    .button--accent{border-color:var(--orange);background:var(--orange);color:#172536}
+    .apollo-status.ok{background:#E7F4EC;color:#1B7A3E}.apollo-status.partial{background:#fff6e5;color:#8A5300}.apollo-status.short{background:#FDECEA;color:#b42318}.apollo-status.unknown{background:#F4F7FB;color:#586A7D}
+    .apollo-cell{min-width:125px}.apollo-msg{min-width:230px;white-space:normal}.apollo-msg .apollo-branches{font-size:.78rem;color:#23384f}.apollo-branches{font-size:.72rem;color:#586A7D;margin-top:3px;white-space:normal;line-height:1.35}
+    .button--accent{border-color:var(--orange);background:var(--orange);color:#18324A}
     .button:disabled{opacity:.5;cursor:not-allowed}
     .ads{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px}
     .ad-chip{display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:6px;background:#f6f9fc;font-size:.72rem;line-height:1.5}
@@ -364,9 +364,9 @@
     .new-panel{display:flex;flex-wrap:wrap;gap:10px;align-items:center;padding:13px;border:1px solid var(--line);border-bottom:0;background:#f7fbff}
     .new-panel strong{color:var(--navy);flex:1 1 100%}
     .new-panel .field--code{flex:0 1 210px}.new-panel .field--desc{flex:1 1 260px}.new-panel .field--qty{flex:0 1 130px}
-    .new-tag{display:inline-block;padding:0 5px;border-radius:4px;background:#fff1d6;color:#9a5b00;font-weight:800;font-size:.68rem}
+    .new-tag{display:inline-block;padding:0 5px;border-radius:4px;background:#fff1d6;color:#8A5300;font-weight:800;font-size:.68rem}
     .new-remove{margin-left:6px;padding:0 6px;border:1px solid var(--line);border-radius:5px;background:#fff;color:#b42318;font-weight:800;cursor:pointer}
-    .transfer-hint{margin-top:4px;padding:3px 6px;border-radius:6px;background:#eef6ff;color:#123b63;font-size:.76rem;line-height:1.35}
+    .transfer-hint{margin-top:4px;padding:3px 6px;border-radius:6px;background:#eef6ff;color:#12345B;font-size:.76rem;line-height:1.35}
     .pick-modal{position:fixed;inset:0;z-index:50;display:flex;align-items:flex-start;justify-content:center;padding:24px 16px;background:rgba(18,37,54,.45);overflow:auto}
     .pick-dialog{width:min(1100px,100%);padding:22px;border-radius:14px;background:#fff;box-shadow:var(--shadow)}
     .pick-head{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start;justify-content:space-between;margin-bottom:6px}
@@ -379,14 +379,14 @@
     .pick-table th{position:static;padding:8px;font-size:.76rem}
     .pick-table td{font-size:.82rem}
     .pick-check{width:90px;text-align:center !important;border-left:1px solid var(--line-soft)}
-    .pick-box{display:inline-block;width:18px;height:18px;border:2px solid #637488;border-radius:4px;vertical-align:middle}
+    .pick-box{display:inline-block;width:18px;height:18px;border:2px solid #586A7D;border-radius:4px;vertical-align:middle}
     .pick-remove{width:44px;text-align:center !important}
     .pick-qty{width:110px}
     .pick-qty-input{width:74px;min-height:32px;padding:4px 6px;border:1px solid var(--line);border-radius:7px;text-align:right;font-weight:800;font-size:.9rem;color:var(--ink)}
     .pick-qty-input:focus{outline:3px solid rgba(245,155,35,.42);border-color:var(--orange)}
     .print-only{display:none}
     .pick-x{width:30px;height:30px;border:1px solid var(--line);border-radius:8px;background:#fff;color:#b42318;font-weight:800;cursor:pointer}
-    .pick-x:hover{background:#fff0ee;border-color:#efb6b2}
+    .pick-x:hover{background:#FDECEA;border-color:#efb6b2}
     .pick-removed{margin-top:14px;padding:10px 12px;border:1px dashed #aebdcb;border-radius:10px;background:#f7f9fc;font-size:.84rem;color:var(--ink)}
     .pick-removed small{color:var(--muted)}
     .pick-removed-item{display:inline-flex;align-items:center;gap:6px;margin:6px 8px 0 0;padding:4px 6px 4px 10px;border:1px solid var(--line);border-radius:999px;background:#fff}
@@ -413,7 +413,7 @@
       <h1>Demanda Full + Estoque Apollo</h1>
       <p>Importe somente o relatório geral de estoque do Mercado Livre. O processamento acontece neste navegador.</p>
     <div style="margin-top:12px;display:flex;gap:9px;flex-wrap:wrap">
-        <a href="/expedicao/admin" class="button" style="background:#fff;color:#123b63;border-color:#fff">← Central Noromak</a>
+        <a href="/expedicao/admin" class="button" style="background:#fff;color:#12345B;border-color:#fff">← Central Noromak</a>
         <span id="xlsxRuntimeStatus" style="display:inline-flex;align-items:center;padding:8px 11px;border-radius:9px;background:rgba(255,255,255,.14);font-size:12px;font-weight:700">Excel: verificando…</span>
       </div>
     </div>

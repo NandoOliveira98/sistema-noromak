@@ -12,11 +12,11 @@
      GET /api/ads-analise · POST /api/ads-analise/importar. -->
 <style>
 :root{
-  --canvas:#f6f8fa; --tile:#ffffff; --line:#e3e8ef; --line2:#eef2f6;
-  --ink:#0f1e2e; --ink2:#5b6b7f; --ink3:#93a1b1;
-  --navy:#123b63; --navy2:#1c578b; --navy3:#4b87c4; --navy4:#9cc0e4;
-  --orange:#f59b23; --pos:#0f766e; --neg:#b42318; --warn:#8a5a00; --warnbg:#fff8e6; --warnln:#f0d9a0;
-  --c-escalar:#1c578b; --c-ok:#0f766e; --c-alto:#d08a17; --c-sem:#b42318;
+  --canvas:#F4F7FB; --tile:#ffffff; --line:#DCE5EF; --line2:#eef2f6;
+  --ink:#18324A; --ink2:#586A7D; --ink3:#93a1b1;
+  --navy:#12345B; --navy2:#1F57A5; --navy3:#4b87c4; --navy4:#9cc0e4;
+  --orange:#F28B18; --pos:#1B7A3E; --neg:#b42318; --warn:#8A5300; --warnbg:#FFF4E0; --warnln:#F3D19B;
+  --c-escalar:#1F57A5; --c-ok:#1B7A3E; --c-alto:#d08a17; --c-sem:#b42318;
   --r:8px;
 }
 *{box-sizing:border-box}
@@ -243,8 +243,8 @@ const ACAO = {
   preco:   {t:'Rever preço ou frete', n:'Dá prejuízo mesmo sem o Ads. Pausar o Ads não resolve.', c:'#b42318'},
   reduzir: {t:'Reduzir a verba',      n:'O produto dá margem, mas o Ads consome mais que ela.', c:'#d08a17'},
   pausar:  {t:'Pausar o Ads',         n:`Gastou (R$ ${MIN_GASTO}+ ou ${MIN_CLIQUES}+ cliques) e não vendeu nada no período, nem sem Ads.`, c:'#6b4fa0'},
-  escalar: {t:'Pode escalar',         n:`Dá lucro, o Ads usa menos da metade da margem e vendeu ${POUCAS_UNIDADES}+ unidades. Confira o estoque antes.`, c:'#1c578b'},
-  manter:  {t:'Manter',               n:'Dá lucro depois do Ads.', c:'#0f766e'},
+  escalar: {t:'Pode escalar',         n:`Dá lucro, o Ads usa menos da metade da margem e vendeu ${POUCAS_UNIDADES}+ unidades. Confira o estoque antes.`, c:'#1F57A5'},
+  manter:  {t:'Manter',               n:'Dá lucro depois do Ads.', c:'#1B7A3E'},
   conferir:{t:'Conferir o custo',     n:'Falta custo, tarifa ou frete de alguma venda, ou a venda não foi localizada.', c:'#9cc0e4'},
   ruido:   {t:'Gasto pequeno sem venda', n:`Menos de R$ ${MIN_GASTO} e menos de ${MIN_CLIQUES} cliques: ainda é cedo para decidir.`, c:'#c3ccd6'},
 };

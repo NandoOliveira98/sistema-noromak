@@ -22,13 +22,13 @@
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"></script>
 <style>
   :root {
-    --primary: #2B4E75;      /* Azul da Marca */
-    --secondary: #F28C18;    /* Laranja da Marca */
-    --bg-light: #F4F7F9;     /* Fundo Geral */
+    --primary: #1F57A5;      /* Azul da Marca */
+    --secondary: #F28B18;    /* Laranja da Marca */
+    --bg-light: #F4F7FB;     /* Fundo Geral */
   }
 
   * { box-sizing: border-box; }
-  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: var(--bg-light); margin: 0; color: #333; }
+  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: var(--bg-light); margin: 0; color: #18324A; }
 
   /* TELA DE LOGIN ESTILIZADA */
   #loginAdmin {
@@ -60,7 +60,7 @@
   .box-login h2 { margin-top: 0; color: var(--primary); font-size: 18px; margin-bottom: 20px; font-weight: 600; }
   .box-login input {
     width: 100%; padding: 12px; margin-bottom: 12px;
-    border: 1px solid #ccc; border-radius: 6px; font-size: 14px;
+    border: 1px solid #C9D6E5; border-radius: 6px; font-size: 14px;
     transition: border-color 0.3s;
   }
   .box-login input:focus { border-color: var(--secondary); outline: none; }
@@ -80,8 +80,8 @@
   label { font-weight: bold; font-size: 13px; display: block; margin-bottom: 6px; color: var(--primary); }
   input[type="file"] { width: 100%; padding: 10px; background: #eef3f7; border: 1px dashed var(--secondary); border-radius: 6px; cursor: pointer; }
   
-  .btn-salvar { width: 100%; padding: 14px; background: #2e7d32; color: white; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 16px; transition: background 0.3s; }
-  .btn-salvar:hover { background: #1b5e20; }
+  .btn-salvar { width: 100%; padding: 14px; background: #1B7A3E; color: white; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 16px; transition: background 0.3s; }
+  .btn-salvar:hover { background: #145C2F; }
   
   .btn-sair { background: var(--secondary); color: white; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; font-weight: bold; transition: opacity 0.3s; }
   .btn-sair:hover { opacity: 0.9; }
@@ -94,7 +94,7 @@
   td { padding: 10px; border-bottom: 1px solid #eef3f7; font-size: 13px; text-align: left; }
   tr:nth-child(even) { background: #f9fbfc; }
   
-  .btn-excel { background: #1b5e20; color: white; border: none; padding: 10px 15px; border-radius: 6px; font-weight: bold; cursor: pointer; margin-right: 10px; transition: opacity 0.3s; }
+  .btn-excel { background: #145C2F; color: white; border: none; padding: 10px 15px; border-radius: 6px; font-weight: bold; cursor: pointer; margin-right: 10px; transition: opacity 0.3s; }
   .btn-limpar { background: var(--secondary); color: white; border: none; padding: 10px 15px; border-radius: 6px; font-weight: bold; cursor: pointer; transition: opacity 0.3s; }
   .btn-excel:hover, .btn-limpar:hover { opacity: 0.9; }
 
@@ -149,15 +149,15 @@
   }
   .vinculo-shopee-item img {
     width: 100%; max-height: 230px; object-fit: contain; object-position: top;
-    border: 1px solid #cbd5e1; background: #fff;
+    border: 1px solid #C9D6E5; background: #fff;
   }
   .vinculo-shopee-item select {
     width: 100%; padding: 11px; border: 1px solid #94a3b8; border-radius: 6px;
     font-size: 14px; background: #fff;
   }
   .acoes-modal-shopee { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; }
-  .btn-confirmar-shopee { padding: 11px 18px; background: #2e7d32; color: #fff; border: 0; border-radius: 6px; font-weight: 700; cursor: pointer; }
-  .btn-pular-shopee { padding: 11px 18px; background: #64748b; color: #fff; border: 0; border-radius: 6px; font-weight: 700; cursor: pointer; }
+  .btn-confirmar-shopee { padding: 11px 18px; background: #1B7A3E; color: #fff; border: 0; border-radius: 6px; font-weight: 700; cursor: pointer; }
+  .btn-pular-shopee { padding: 11px 18px; background: #586A7D; color: #fff; border: 0; border-radius: 6px; font-weight: 700; cursor: pointer; }
   @media (max-width: 720px) {
     .vinculo-shopee-item { grid-template-columns: 1fr; }
   }
@@ -168,16 +168,16 @@
   .container-admin { max-width: 1500px; padding: 22px; }
   .header-identidade { display:flex; align-items:center; gap:18px; }
   .header-titulos h1 { margin:0; color:var(--primary); font-size:20px; }
-  .header-titulos small { color:#64748b; }
-  .save-pill { display:inline-flex; align-items:center; gap:6px; padding:7px 10px; border-radius:999px; background:#e8f5e9; color:#2e7d32; font-size:11px; font-weight:800; }
-  .save-pill.salvando { background:#fff8e1; color:#9a6700; }
-  .save-pill.erro { background:#ffebee; color:#c62828; }
+  .header-titulos small { color:#586A7D; }
+  .save-pill { display:inline-flex; align-items:center; gap:6px; padding:7px 10px; border-radius:999px; background:#E7F4EC; color:#1B7A3E; font-size:11px; font-weight:800; }
+  .save-pill.salvando { background:#FFF4E0; color:#9a6700; }
+  .save-pill.erro { background:#FDECEA; color:#B42318; }
   .resumo-grid { display:grid; grid-template-columns:repeat(4,minmax(160px,1fr)); gap:12px; margin-bottom:18px; }
   .resumo-card { background:#fff; border-radius:10px; padding:16px; box-shadow:0 3px 12px rgba(0,0,0,.07); border-top:4px solid var(--secondary); }
   .resumo-card strong { display:block; color:var(--primary); font-size:24px; }
-  .resumo-card span { color:#64748b; font-size:12px; }
+  .resumo-card span { color:#586A7D; font-size:12px; }
   .abas-admin { display:flex; gap:7px; flex-wrap:wrap; background:#fff; padding:9px; border-radius:10px; box-shadow:0 3px 12px rgba(0,0,0,.06); margin-bottom:16px; position:sticky; top:8px; z-index:30; }
-  .aba-btn { border:1px solid #cbd5e1; background:#f8fafc; color:var(--primary); padding:10px 14px; border-radius:7px; font-weight:800; cursor:pointer; }
+  .aba-btn { border:1px solid #C9D6E5; background:#f8fafc; color:var(--primary); padding:10px 14px; border-radius:7px; font-weight:800; cursor:pointer; }
   .aba-btn.ativa { background:var(--primary); color:#fff; border-color:var(--primary); }
   .aba-painel { display:none; }
   .aba-painel.ativa { display:block; }
@@ -185,13 +185,13 @@
   .toolbar-grid input[type=text] { min-width:280px; flex:1; padding:10px; border:1px solid #b9c5d1; border-radius:6px; }
   .btn-primario,.btn-secundario,.btn-perigo,.btn-sucesso { border:0; border-radius:6px; padding:9px 12px; font-weight:800; cursor:pointer; }
   .btn-primario { background:var(--primary); color:#fff; }
-  .btn-secundario { background:#eef3f7; color:var(--primary); border:1px solid #cbd5e1; }
-  .btn-perigo { background:#c62828; color:#fff; }
-  .btn-sucesso { background:#2e7d32; color:#fff; }
-  .excel-wrap { overflow:auto; max-height:64vh; border:1px solid #cbd5e1; border-radius:8px; background:#fff; }
+  .btn-secundario { background:#eef3f7; color:var(--primary); border:1px solid #C9D6E5; }
+  .btn-perigo { background:#B42318; color:#fff; }
+  .btn-sucesso { background:#1B7A3E; color:#fff; }
+  .excel-wrap { overflow:auto; max-height:64vh; border:1px solid #C9D6E5; border-radius:8px; background:#fff; }
   table.excel-grid { margin:0; border-collapse:separate; border-spacing:0; min-width:1840px; border-radius:0; }
   .excel-grid th { position:sticky; top:0; z-index:5; background:var(--primary); white-space:nowrap; padding:8px; border-right:1px solid rgba(255,255,255,.18); }
-  .excel-grid td { padding:0; border-right:1px solid #e2e8f0; border-bottom:1px solid #e2e8f0; background:#fff; }
+  .excel-grid td { padding:0; border-right:1px solid #DCE5EF; border-bottom:1px solid #DCE5EF; background:#fff; }
   .excel-grid tr:nth-child(even) td { background:#fbfdff; }
   .excel-grid input,.excel-grid select { width:100%; min-width:85px; border:0; background:transparent; padding:8px; font-size:12px; outline:none; }
   .excel-grid input:focus,.excel-grid select:focus { box-shadow:inset 0 0 0 2px var(--secondary); background:#fffdf8; }
@@ -200,34 +200,34 @@
   .excel-grid .campo-pedido { min-width:165px; font-family:Consolas,monospace; font-weight:700; }
   .excel-grid .campo-foto { min-width:170px; }
   .ean-pedido-editor { min-width:255px; padding:5px; display:grid; grid-template-columns:minmax(145px,1fr) auto; gap:5px; align-items:center; }
-  .ean-pedido-editor input { min-width:145px; border:1px solid #b8c5d1; border-radius:5px; background:#fff; font-family:Consolas,monospace; font-size:13px; font-weight:750; }
-  .ean-pedido-editor input.ean-alterado { border-color:#f7941d; box-shadow:0 0 0 2px rgba(247,148,29,.18); background:#fffaf2; }
+  .ean-pedido-editor input { min-width:145px; border:1px solid #C9D6E5; border-radius:5px; background:#fff; font-family:Consolas,monospace; font-size:13px; font-weight:750; }
+  .ean-pedido-editor input.ean-alterado { border-color:#F28B18; box-shadow:0 0 0 2px rgba(247,148,29,.18); background:#fffaf2; }
   .ean-pedido-acoes { display:flex; gap:4px; }
   .ean-pedido-acoes button { border:0; border-radius:5px; padding:6px 7px; cursor:pointer; font-size:10px; font-weight:900; white-space:nowrap; }
-  .btn-ean-salvar { background:#2e7d32; color:#fff; }
-  .btn-ean-banco { background:#e8f1fb; color:#1f57a5; border:1px solid #b9cce0 !important; }
-  .ean-pedido-status { grid-column:1/-1; min-height:12px; color:#64748b; font-size:9px; line-height:1.2; }
-  .ean-pedido-status.ok { color:#2e7d32; font-weight:800; }
-  .ean-pedido-status.erro { color:#c62828; font-weight:800; }
+  .btn-ean-salvar { background:#1B7A3E; color:#fff; }
+  .btn-ean-banco { background:#EAF1FA; color:#1f57a5; border:1px solid #b9cce0 !important; }
+  .ean-pedido-status { grid-column:1/-1; min-height:12px; color:#586A7D; font-size:9px; line-height:1.2; }
+  .ean-pedido-status.ok { color:#1B7A3E; font-weight:800; }
+  .ean-pedido-status.erro { color:#B42318; font-weight:800; }
   .linha-acoes { display:flex; gap:4px; padding:4px; min-width:104px; }
   .linha-acoes button { border:0; border-radius:4px; padding:5px 7px; cursor:pointer; font-weight:800; }
-  .linha-valida td:first-child { box-shadow:inset 4px 0 #2e7d32; }
-  .linha-rascunho td:first-child { box-shadow:inset 4px 0 #f9a825; }
+  .linha-valida td:first-child { box-shadow:inset 4px 0 #1B7A3E; }
+  .linha-rascunho td:first-child { box-shadow:inset 4px 0 #F28B18; }
   .market-auto { font-weight:800; color:var(--primary); background:#eef3f7 !important; }
-  .grid-rodape { display:flex; justify-content:space-between; align-items:center; gap:10px; padding-top:10px; color:#64748b; font-size:12px; }
+  .grid-rodape { display:flex; justify-content:space-between; align-items:center; gap:10px; padding-top:10px; color:#586A7D; font-size:12px; }
   .paginacao { display:flex; gap:6px; align-items:center; }
-  .paginacao button { padding:7px 10px; border:1px solid #cbd5e1; background:#fff; border-radius:5px; cursor:pointer; }
-  .aviso-banco { background:#eaf2fb; border-left:4px solid var(--primary); padding:11px 13px; border-radius:7px; color:#274766; font-size:12px; line-height:1.45; margin-bottom:14px; }
-  .contador-mini { font-size:11px; color:#64748b; font-weight:700; }
+  .paginacao button { padding:7px 10px; border:1px solid #C9D6E5; background:#fff; border-radius:5px; cursor:pointer; }
+  .aviso-banco { background:#EAF1FA; border-left:4px solid var(--primary); padding:11px 13px; border-radius:7px; color:#274766; font-size:12px; line-height:1.45; margin-bottom:14px; }
+  .contador-mini { font-size:11px; color:#586A7D; font-weight:700; }
   .status-celula { font-size:10px; font-weight:800; padding:3px 6px; border-radius:10px; display:inline-block; margin:6px; white-space:nowrap; }
-  .status-ja-feito { display:inline-block; margin:4px 6px 6px; padding:5px 7px; border-radius:8px; font-size:9px; font-weight:950; line-height:1.25; background:#c62828; color:#fff; border:1px solid #8e0000; white-space:normal; }
+  .status-ja-feito { display:inline-block; margin:4px 6px 6px; padding:5px 7px; border-radius:8px; font-size:9px; font-weight:950; line-height:1.25; background:#B42318; color:#fff; border:1px solid #8e0000; white-space:normal; }
   .pedido-cell-wrap { min-width:165px; padding:0; }
   .pedido-cell-wrap .campo-pedido { min-width:165px; }
-  .pedido-ja-feito-destaque { display:block; margin:4px 5px 5px; padding:6px 7px; border-radius:6px; background:#c62828; color:#fff; border:2px solid #8e0000; font-size:10px; font-weight:950; line-height:1.2; text-align:center; letter-spacing:.2px; box-shadow:0 1px 4px rgba(0,0,0,.22); white-space:normal; }
+  .pedido-ja-feito-destaque { display:block; margin:4px 5px 5px; padding:6px 7px; border-radius:6px; background:#B42318; color:#fff; border:2px solid #8e0000; font-size:10px; font-weight:950; line-height:1.2; text-align:center; letter-spacing:.2px; box-shadow:0 1px 4px rgba(0,0,0,.22); white-space:normal; }
   .pedido-ja-feito-data { display:block; margin-top:2px; font-size:9px; font-weight:800; color:#fff; }
   .linha-ja-feito td:nth-child(2) { background:#fff7f2 !important; box-shadow:inset 0 0 0 2px rgba(216,67,21,.18); }
-  .status-pendente { background:#e8f5e9; color:#2e7d32; }
-  .status-rascunho { background:#fff8e1; color:#9a6700; }
+  .status-pendente { background:#E7F4EC; color:#1B7A3E; }
+  .status-rascunho { background:#FFF4E0; color:#9a6700; }
   .importacao-excel-box {
     display:block;
     background:#eef7ff; border:1px solid #b8d5ee; border-left:4px solid var(--primary);
@@ -247,10 +247,10 @@
   /* CONFERÊNCIA AUTOMÁTICA DE SKU KIT — V10.5 */
   .kit-review-overlay { display:none; position:fixed; inset:0; z-index:14500; background:rgba(15,23,42,.78); align-items:center; justify-content:center; padding:18px; }
   .kit-review-overlay.ativo { display:flex; }
-  .kit-review-card { width:min(1040px,98vw); max-height:94vh; overflow:auto; background:#fff; border-radius:14px; box-shadow:0 24px 70px rgba(0,0,0,.4); border-top:6px solid #f7941d; }
+  .kit-review-card { width:min(1040px,98vw); max-height:94vh; overflow:auto; background:#fff; border-radius:14px; box-shadow:0 24px 70px rgba(0,0,0,.4); border-top:6px solid #F28B18; }
   .kit-review-topo { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; padding:20px 22px 14px; border-bottom:1px solid #e5e7eb; }
   .kit-review-topo h2 { margin:0; color:var(--primary); }
-  .kit-review-topo p { margin:6px 0 0; color:#64748b; font-size:12px; line-height:1.45; }
+  .kit-review-topo p { margin:6px 0 0; color:#586A7D; font-size:12px; line-height:1.45; }
   .kit-review-alerta { margin:16px 22px 0; padding:11px 13px; border-radius:8px; background:#fff7ed; color:#9a3412; border:1px solid #fdba74; font-size:12px; font-weight:700; line-height:1.4; }
   .kit-review-lista { padding:14px 22px 4px; display:grid; gap:12px; }
   .kit-review-pedido { border:1px solid #dbe4ee; border-radius:10px; overflow:hidden; background:#fff; }
@@ -260,38 +260,38 @@
   .kit-review-item { display:grid; grid-template-columns:minmax(150px,.8fr) 90px minmax(260px,1.6fr) 130px; gap:10px; align-items:center; padding:11px 12px; border-top:1px solid #eef2f7; }
   .kit-review-item:first-child { border-top:0; }
   .kit-review-sku { display:inline-block; background:#ffedd5; color:#9a3412; border:2px solid #f97316; border-radius:8px; padding:6px 8px; font-weight:950; word-break:break-word; }
-  .kit-review-qtd { font-weight:850; color:#334155; }
-  .kit-review-desc { color:#475569; font-size:12px; line-height:1.35; }
-  .kit-review-check { display:flex; align-items:center; justify-content:center; gap:7px; font-size:12px; font-weight:850; color:#166534; cursor:pointer; }
-  .kit-review-check input { width:19px; height:19px; accent-color:#2e7d32; }
+  .kit-review-qtd { font-weight:850; color:#18324A; }
+  .kit-review-desc { color:#4A5D72; font-size:12px; line-height:1.35; }
+  .kit-review-check { display:flex; align-items:center; justify-content:center; gap:7px; font-size:12px; font-weight:850; color:#145C2F; cursor:pointer; }
+  .kit-review-check input { width:19px; height:19px; accent-color:#1B7A3E; }
   .kit-review-acoes { display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; padding:16px 22px 20px; border-top:1px solid #e5e7eb; margin-top:12px; }
   .kit-review-acoes-direita { display:flex; gap:9px; flex-wrap:wrap; }
-  .kit-review-contador { color:#64748b; font-size:12px; font-weight:750; align-self:center; }
+  .kit-review-contador { color:#586A7D; font-size:12px; font-weight:750; align-self:center; }
   @media(max-width:760px){ .kit-review-item{grid-template-columns:1fr 80px;} .kit-review-desc{grid-column:1/-1;} .kit-review-check{justify-content:flex-start;} }
 
   /* ALERTA DE PEDIDO JÁ PENDENTE — V10.6 */
   .dup-planilha-overlay { display:none; position:fixed; inset:0; z-index:14600; background:rgba(15,23,42,.80); align-items:center; justify-content:center; padding:18px; }
   .dup-planilha-overlay.ativo { display:flex; }
-  .dup-planilha-card { width:min(900px,97vw); max-height:92vh; overflow:auto; background:#fff; border-radius:14px; box-shadow:0 24px 70px rgba(0,0,0,.42); border-top:6px solid #dc2626; }
+  .dup-planilha-card { width:min(900px,97vw); max-height:92vh; overflow:auto; background:#fff; border-radius:14px; box-shadow:0 24px 70px rgba(0,0,0,.42); border-top:6px solid #B42318; }
   .dup-planilha-topo { padding:20px 22px 14px; border-bottom:1px solid #e5e7eb; }
-  .dup-planilha-topo h2 { margin:0; color:#b91c1c; }
-  .dup-planilha-topo p { margin:7px 0 0; color:#475569; font-size:12px; line-height:1.5; }
-  .dup-planilha-alerta { margin:16px 22px 0; padding:12px 14px; border-radius:9px; background:#fef2f2; color:#991b1b; border:1px solid #fca5a5; font-size:12px; font-weight:800; line-height:1.45; }
+  .dup-planilha-topo h2 { margin:0; color:#B42318; }
+  .dup-planilha-topo p { margin:7px 0 0; color:#4A5D72; font-size:12px; line-height:1.5; }
+  .dup-planilha-alerta { margin:16px 22px 0; padding:12px 14px; border-radius:9px; background:#fef2f2; color:#8C1C13; border:1px solid #fca5a5; font-size:12px; font-weight:800; line-height:1.45; }
   .dup-planilha-lista { padding:14px 22px 4px; display:grid; gap:9px; }
-  .dup-planilha-item { display:grid; grid-template-columns:minmax(150px,.75fr) minmax(130px,.7fr) minmax(220px,1.4fr) auto; gap:10px; align-items:center; border:1px solid #fecaca; border-left:5px solid #dc2626; background:#fffafa; border-radius:9px; padding:11px 12px; }
-  .dup-planilha-pedido { font-weight:950; color:#991b1b; font-size:14px; }
+  .dup-planilha-item { display:grid; grid-template-columns:minmax(150px,.75fr) minmax(130px,.7fr) minmax(220px,1.4fr) auto; gap:10px; align-items:center; border:1px solid #F2C1BB; border-left:5px solid #B42318; background:#fffafa; border-radius:9px; padding:11px 12px; }
+  .dup-planilha-pedido { font-weight:950; color:#8C1C13; font-size:14px; }
   .dup-planilha-market { display:inline-block; width:max-content; max-width:100%; background:#315b86; color:#fff; border-radius:12px; padding:4px 7px; font-size:10px; font-weight:900; }
-  .dup-planilha-cliente { color:#334155; font-size:12px; line-height:1.35; }
-  .dup-planilha-data { color:#64748b; font-size:11px; font-weight:750; white-space:nowrap; }
+  .dup-planilha-cliente { color:#18324A; font-size:12px; line-height:1.35; }
+  .dup-planilha-data { color:#586A7D; font-size:11px; font-weight:750; white-space:nowrap; }
   .dup-planilha-acoes { display:flex; justify-content:flex-end; gap:9px; flex-wrap:wrap; padding:16px 22px 20px; border-top:1px solid #e5e7eb; margin-top:12px; }
-  .btn-duplicado-cancelar { background:#64748b !important; }
-  .btn-duplicado-continuar { background:#dc2626 !important; }
+  .btn-duplicado-cancelar { background:#586A7D !important; }
+  .btn-duplicado-continuar { background:#B42318 !important; }
   @media(max-width:720px){ .dup-planilha-item{grid-template-columns:1fr 1fr;} .dup-planilha-cliente{grid-column:1/-1;} .dup-planilha-data{text-align:right;} }
   .importacao-status { display:none; margin:0 0 12px; border-radius:7px; padding:10px 12px; font-size:12px; line-height:1.5; }
-  .importacao-status.info { display:block; background:#eef3f7; color:#334155; border:1px solid #cbd5e1; }
-  .importacao-status.sucesso { display:block; background:#e8f5e9; color:#1b5e20; border:1px solid #a5d6a7; }
-  .importacao-status.aviso { display:block; background:#fff8e1; color:#8a5a00; border:1px solid #ffe082; }
-  .importacao-status.erro { display:block; background:#ffebee; color:#b71c1c; border:1px solid #ef9a9a; }
+  .importacao-status.info { display:block; background:#eef3f7; color:#18324A; border:1px solid #C9D6E5; }
+  .importacao-status.sucesso { display:block; background:#E7F4EC; color:#145C2F; border:1px solid #B9DEC6; }
+  .importacao-status.aviso { display:block; background:#FFF4E0; color:#8A5300; border:1px solid #ffe082; }
+  .importacao-status.erro { display:block; background:#FDECEA; color:#b71c1c; border:1px solid #F2C1BB; }
   .market-grid { grid-template-columns:repeat(3,minmax(250px,1fr)); }
   @media(max-width:900px){ .resumo-grid{grid-template-columns:repeat(2,1fr)} .container-admin{padding:10px} }
 
@@ -318,7 +318,7 @@
     font-size: 14px; background: #fff;
   }
   .usuario-modal-acoes { display: flex; gap: 10px; justify-content: flex-end; padding: 0 22px 20px; }
-  .usuario-modal-erro { min-height: 20px; margin-top: 8px; color: #c62828; font-size: 13px; font-weight: 700; }
+  .usuario-modal-erro { min-height: 20px; margin-top: 8px; color: #B42318; font-size: 13px; font-weight: 700; }
   .usuario-versao { display:inline-block; margin-left:8px; padding:3px 8px; border-radius:12px; background:#e8f1f8; color:var(--primary); font-size:11px; font-weight:700; }
   .usuario-contador { margin: 10px 0 0; font-size: 12px; color:#526475; font-weight:600; }
 
@@ -337,8 +337,8 @@
   }
   .print-modal-topo { display:flex; align-items:flex-start; justify-content:space-between; gap:15px; padding:18px 22px 12px; border-bottom:1px solid #e6edf3; }
   .print-modal-topo h2 { margin:0; color:var(--primary); }
-  .print-modal-topo p { margin:5px 0 0; color:#64748b; font-size:12px; line-height:1.45; }
-  .print-modal-fechar { border:0; background:#eef2f7; color:#334155; width:36px; height:36px; border-radius:50%; font-size:20px; cursor:pointer; }
+  .print-modal-topo p { margin:5px 0 0; color:#586A7D; font-size:12px; line-height:1.45; }
+  .print-modal-fechar { border:0; background:#eef2f7; color:#18324A; width:36px; height:36px; border-radius:50%; font-size:20px; cursor:pointer; }
   .print-modal-corpo { display:grid; grid-template-columns:minmax(350px,1fr) minmax(390px,1fr); gap:18px; padding:18px 22px; }
   .print-coluna { min-width:0; }
   .print-drop-zone {
@@ -353,7 +353,7 @@
   .print-drop-zone.tem-imagem .print-drop-instrucoes { display:none; }
   .print-drop-icone { font-size:42px; margin-bottom:7px; }
   .print-drop-instrucoes strong { display:block; color:var(--primary); font-size:16px; }
-  .print-drop-instrucoes span { display:block; color:#64748b; font-size:12px; margin-top:6px; line-height:1.45; }
+  .print-drop-instrucoes span { display:block; color:#586A7D; font-size:12px; margin-top:6px; line-height:1.45; }
   .print-acoes-imagem { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
   .print-acoes-imagem button { flex:1; min-width:150px; }
   .print-form-grid { display:grid; grid-template-columns:1fr 1fr; gap:11px; }
@@ -365,21 +365,21 @@
   .print-form-grid textarea { min-height:72px; resize:vertical; }
   .print-form-grid input:focus,.print-form-grid select:focus,.print-form-grid textarea:focus { border-color:#7c3aed; box-shadow:0 0 0 3px rgba(124,58,237,.10); outline:none; }
   .print-form-grid .campo-atencao { border-color:#e6a700; background:#fffdf1; }
-  .print-form-grid .campo-confirmado { border-color:#2e7d32; background:#f6fff7; }
+  .print-form-grid .campo-confirmado { border-color:#1B7A3E; background:#f6fff7; }
   .print-produto-encontrado { margin-top:11px; padding:10px 12px; border-radius:8px; background:#eef7ff; border:1px solid #b8d5ee; color:#274766; font-size:12px; line-height:1.45; }
-  .print-produto-encontrado.ok { background:#e8f5e9; border-color:#a5d6a7; color:#1b5e20; }
-  .print-produto-encontrado.aviso { background:#fff8e1; border-color:#ffe082; color:#8a5a00; }
-  .print-ocr-status { margin-top:11px; padding:10px 12px; border-radius:8px; background:#eef3f7; color:#334155; font-size:12px; min-height:40px; }
-  .print-ocr-status.erro { background:#ffebee; color:#b71c1c; border:1px solid #ef9a9a; }
-  .print-ocr-status.sucesso { background:#e8f5e9; color:#1b5e20; border:1px solid #a5d6a7; }
+  .print-produto-encontrado.ok { background:#E7F4EC; border-color:#B9DEC6; color:#145C2F; }
+  .print-produto-encontrado.aviso { background:#FFF4E0; border-color:#ffe082; color:#8A5300; }
+  .print-ocr-status { margin-top:11px; padding:10px 12px; border-radius:8px; background:#eef3f7; color:#18324A; font-size:12px; min-height:40px; }
+  .print-ocr-status.erro { background:#FDECEA; color:#b71c1c; border:1px solid #F2C1BB; }
+  .print-ocr-status.sucesso { background:#E7F4EC; color:#145C2F; border:1px solid #B9DEC6; }
   .print-progresso { height:8px; margin-top:7px; border-radius:8px; overflow:hidden; background:#dbe4ec; }
   .print-progresso > div { height:100%; width:0%; background:#7c3aed; transition:width .2s; }
   .print-texto-ocr { margin-top:10px; }
-  .print-texto-ocr summary { cursor:pointer; color:#64748b; font-size:11px; font-weight:700; }
-  .print-texto-ocr pre { max-height:150px; overflow:auto; white-space:pre-wrap; font-size:10px; background:#0f172a; color:#e2e8f0; padding:10px; border-radius:7px; }
+  .print-texto-ocr summary { cursor:pointer; color:#586A7D; font-size:11px; font-weight:700; }
+  .print-texto-ocr pre { max-height:150px; overflow:auto; white-space:pre-wrap; font-size:10px; background:#0f172a; color:#DCE5EF; padding:10px; border-radius:7px; }
   .print-modal-acoes { display:flex; justify-content:flex-end; gap:9px; flex-wrap:wrap; padding:0 22px 20px; }
   .print-modal-acoes button:disabled,.print-acoes-imagem button:disabled { opacity:.55; cursor:not-allowed; }
-  .print-privacidade { font-size:10px; color:#64748b; margin-top:7px; line-height:1.4; }
+  .print-privacidade { font-size:10px; color:#586A7D; margin-top:7px; line-height:1.4; }
   @media(max-width:880px){ .print-modal-corpo{grid-template-columns:1fr}.print-drop-zone{min-height:260px}.print-form-grid{grid-template-columns:1fr}.print-form-grid .campo-largo{grid-column:auto} }
 
   /* CADASTRO DE KITS */
@@ -388,28 +388,28 @@
   .kit-modal-card { width:min(980px,96vw); max-height:92vh; overflow:auto; background:#fff; border-radius:12px; box-shadow:0 20px 65px rgba(0,0,0,.35); }
   .kit-modal-topo { display:flex; align-items:flex-start; justify-content:space-between; gap:15px; padding:18px 22px 12px; border-bottom:1px solid #e6edf3; }
   .kit-modal-topo h2 { margin:0; color:var(--primary); }
-  .kit-modal-topo p { margin:5px 0 0; color:#64748b; font-size:12px; line-height:1.45; }
+  .kit-modal-topo p { margin:5px 0 0; color:#586A7D; font-size:12px; line-height:1.45; }
   .kit-modal-corpo { padding:18px 22px; }
   .kit-form-grid { display:grid; grid-template-columns:1.1fr 1fr .7fr .7fr; gap:11px; margin-bottom:15px; }
   .kit-form-grid .campo-largo { grid-column:span 2; }
   .kit-form-grid input { width:100%; padding:10px 11px; border:1px solid #b9c6d2; border-radius:7px; font-size:13px; }
-  .kit-itens-wrap { border:1px solid #cbd5e1; border-radius:8px; overflow:auto; }
+  .kit-itens-wrap { border:1px solid #C9D6E5; border-radius:8px; overflow:auto; }
   .kit-itens-tabela { margin:0; min-width:760px; }
   .kit-itens-tabela th { padding:9px; }
   .kit-itens-tabela td { padding:7px; vertical-align:middle; }
-  .kit-itens-tabela input { width:100%; padding:8px; border:1px solid #cbd5e1; border-radius:6px; }
-  .kit-produto-desc { color:#475569; font-size:11px; line-height:1.35; min-width:260px; }
-  .kit-produto-desc.ok { color:#1b5e20; font-weight:700; }
-  .kit-produto-desc.erro { color:#b91c1c; font-weight:700; }
+  .kit-itens-tabela input { width:100%; padding:8px; border:1px solid #C9D6E5; border-radius:6px; }
+  .kit-produto-desc { color:#4A5D72; font-size:11px; line-height:1.35; min-width:260px; }
+  .kit-produto-desc.ok { color:#145C2F; font-weight:700; }
+  .kit-produto-desc.erro { color:#B42318; font-weight:700; }
   .kit-modal-acoes { display:flex; justify-content:space-between; gap:9px; flex-wrap:wrap; padding:0 22px 20px; }
   .kit-modal-acoes-direita { display:flex; gap:9px; flex-wrap:wrap; }
-  .kit-celula-resumo { min-width:135px; padding:7px 8px; font-size:11px; color:#475569; line-height:1.35; }
+  .kit-celula-resumo { min-width:135px; padding:7px 8px; font-size:11px; color:#4A5D72; line-height:1.35; }
   .kit-badge { display:inline-block; background:#f3e8ff; color:#6b21a8; border:1px solid #d8b4fe; border-radius:10px; padding:3px 7px; font-size:10px; font-weight:900; }
   @media(max-width:820px){ .kit-form-grid{grid-template-columns:1fr 1fr}.kit-form-grid .campo-largo{grid-column:1/-1} }
   .print-kit-toggle-wrap { border:1px solid #d8b4fe; background:#faf5ff; border-radius:8px; padding:10px 12px; }
   .print-kit-toggle { display:flex!important; align-items:center; gap:9px; margin:0!important; color:#6b21a8; cursor:pointer; }
   .print-kit-toggle input { width:18px!important; height:18px; margin:0; accent-color:#7e22ce; box-shadow:none!important; }
-  .print-kit-toggle-wrap small { display:block; color:#64748b; margin-top:5px; line-height:1.4; }
+  .print-kit-toggle-wrap small { display:block; color:#586A7D; margin-top:5px; line-height:1.4; }
   .print-kit-painel { border:1px solid #d8b4fe; background:#fcfaff; border-radius:9px; padding:12px; }
   .print-kit-grid { display:grid; grid-template-columns:1fr; gap:10px; margin-bottom:10px; }
   .print-kit-acoes { display:flex; justify-content:flex-start; margin-top:9px; }
@@ -421,22 +421,22 @@
   .integracao-card{border:1px solid #dbe4ee;border-radius:12px;padding:16px;background:#fff}
   .integracao-card h3{margin:0 0 8px;color:var(--primary)}
   .integracao-status{display:inline-flex;align-items:center;gap:7px;padding:7px 10px;border-radius:999px;font-size:11px;font-weight:900;margin:4px 0 12px}
-  .integracao-status.ok{background:#dcfce7;color:#166534}.integracao-status.off{background:#f1f5f9;color:#475569}.integracao-status.erro{background:#fee2e2;color:#991b1b}
+  .integracao-status.ok{background:#dcfce7;color:#145C2F}.integracao-status.off{background:#f1f5f9;color:#4A5D72}.integracao-status.erro{background:#FDECEA;color:#8C1C13}
   .integracao-dados{display:grid;grid-template-columns:155px 1fr;gap:7px 10px;font-size:12px;margin:8px 0 14px}
-  .integracao-dados b{color:#334155}.integracao-dados span{color:#475569;word-break:break-word}
+  .integracao-dados b{color:#18324A}.integracao-dados span{color:#4A5D72;word-break:break-word}
   .integracao-acoes{display:flex;gap:8px;flex-wrap:wrap}
   .integracao-nota{margin-top:12px;padding:10px 12px;border-radius:8px;background:#eff6ff;border:1px solid #bfdbfe;color:#1e3a8a;font-size:11px;line-height:1.45}
   .integracao-alerta{margin-top:12px;padding:10px 12px;border-radius:8px;background:#fff7ed;border:1px solid #fdba74;color:#9a3412;font-size:11px;line-height:1.45}
-  .ml-log-wrap{max-height:48vh;overflow:auto;border:1px solid #e2e8f0;border-radius:8px}
-  .ml-log-table{width:100%;border-collapse:collapse;font-size:11px}.ml-log-table th,.ml-log-table td{padding:7px 8px;border-bottom:1px solid #e2e8f0;text-align:left;vertical-align:top}
-  .ml-log-table th{background:#f8fafc;color:#334155;position:sticky;top:0}
+  .ml-log-wrap{max-height:48vh;overflow:auto;border:1px solid #DCE5EF;border-radius:8px}
+  .ml-log-table{width:100%;border-collapse:collapse;font-size:11px}.ml-log-table th,.ml-log-table td{padding:7px 8px;border-bottom:1px solid #DCE5EF;text-align:left;vertical-align:top}
+  .ml-log-table th{background:#f8fafc;color:#18324A;position:sticky;top:0}
   @media(max-width:900px){.integracao-grid{grid-template-columns:1fr}.integracao-dados{grid-template-columns:1fr}}
 
 
   .usuario-acessos{display:grid;grid-template-columns:repeat(2,minmax(120px,1fr));gap:6px 8px;min-width:290px}
   .usuario-acesso-item{display:flex;align-items:center;gap:7px;padding:7px 9px;border:1px solid #d6e1ed;border-radius:8px;background:#f8fbfe;color:#294763;font-size:11px;font-weight:800;white-space:nowrap}
   .usuario-acesso-item input{width:16px!important;height:16px!important;min-height:16px!important;margin:0;accent-color:#1F57A5}
-  .usuario-acesso-item:has(input:checked){background:#eaf2fb;border-color:#a9c3df;color:#173e70}
+  .usuario-acesso-item:has(input:checked){background:#EAF1FA;border-color:#a9c3df;color:#12345B}
   .usuario-acessos-legenda{display:block;margin-top:4px;color:#6c7d8d;font-size:9.5px;line-height:1.25}
   @media(max-width:900px){.usuario-acessos{grid-template-columns:1fr;min-width:170px}}
 
@@ -445,7 +445,7 @@
 .security-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
 .security-card{border:1px solid #d9e3ef;border-radius:14px;background:#fff;padding:16px;box-shadow:0 4px 16px rgba(15,47,87,.06)}
 .security-card h3{margin:0 0 12px;color:#123f73;font-size:16px}
-.security-row{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:9px 0;border-bottom:1px solid #eef3f8}
+.security-row{display:flex;justify-content:space-between;gap:12px;align-items:center;padding:9px 0;border-bottom:1px solid #F4F7FB}
 .security-row:last-child{border-bottom:0}
 .security-row span:first-child{color:#53677d}
 .security-badge{display:inline-flex;align-items:center;border-radius:999px;padding:5px 9px;font-weight:800;font-size:12px}
@@ -460,7 +460,7 @@
 .owner-modal-body{padding:20px}.owner-modal-field{margin-bottom:14px}.owner-modal-field label{display:block;font-weight:800;color:#29465f;margin-bottom:6px}
 .owner-modal-field input{width:100%;box-sizing:border-box;padding:11px 12px;border:1px solid #cad8e6;border-radius:9px;font-size:16px}
 .owner-modal-note{font-size:12px;color:#687b8f;background:#f4f8fc;border-radius:9px;padding:9px 10px;margin-bottom:14px}
-.owner-modal-error{display:none;color:#b42318;background:#fff0ee;border:1px solid #ffd0ca;border-radius:9px;padding:9px 10px;margin-bottom:12px;font-size:13px}.owner-modal-error.show{display:block}
+.owner-modal-error{display:none;color:#b42318;background:#FDECEA;border:1px solid #ffd0ca;border-radius:9px;padding:9px 10px;margin-bottom:12px;font-size:13px}.owner-modal-error.show{display:block}
 .owner-modal-actions{display:flex;justify-content:flex-end;gap:9px}
 .security-lock-icon{font-size:26px}
 @media(max-width:900px){.security-grid{grid-template-columns:1fr}.security-owner-banner{align-items:flex-start;flex-direction:column}}
@@ -470,7 +470,7 @@
 .coleta-popup-v1713{position:fixed;inset:0;z-index:100100;background:rgba(7,20,36,.58);display:none;align-items:center;justify-content:center;padding:18px}
 .coleta-popup-v1713.open{display:flex}
 .coleta-popup-card-v1713{width:min(520px,100%);background:#fff;border-radius:17px;box-shadow:0 28px 90px rgba(0,0,0,.28);overflow:hidden}
-.coleta-popup-head-v1713{background:linear-gradient(135deg,#123b63,#1f57a5);color:#fff;padding:18px 20px}
+.coleta-popup-head-v1713{background:linear-gradient(135deg,#12345B,#1f57a5);color:#fff;padding:18px 20px}
 .coleta-popup-head-v1713 h3{margin:0;font-size:19px}.coleta-popup-head-v1713 p{margin:5px 0 0;font-size:12px;opacity:.9}
 .coleta-popup-body-v1713{padding:20px}.coleta-popup-grid-v1713{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .coleta-popup-field-v1713 label{display:block;font-weight:800;color:#29465f;margin-bottom:6px;font-size:12px}
@@ -498,12 +498,12 @@
   .etiquetas-reprocessar-status{display:none;margin:0 0 10px;padding:9px 11px;border-radius:8px;font-size:10.5px;font-weight:750;line-height:1.45}
   .etiquetas-reprocessar-status.mostrar{display:block}
   .etiquetas-reprocessar-status.processando{background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af}
-  .etiquetas-reprocessar-status.sucesso{background:#ecfdf3;border:1px solid #bbf7d0;color:#166534}
+  .etiquetas-reprocessar-status.sucesso{background:#ecfdf3;border:1px solid #bbf7d0;color:#145C2F}
   .etiquetas-reprocessar-status.aviso{background:#fff7ed;border:1px solid #fed7aa;color:#9a3412}
   .etiquetas-lote-barra{display:none;align-items:center;gap:8px;flex-wrap:wrap;margin:0 0 10px;padding:9px 10px;border:1px solid #f0b8b8;border-radius:8px;background:#fff7f7}
   .etiquetas-lote-barra.mostrar{display:flex}
   .etiquetas-lote-barra button{border:1px solid #ccd6df;background:#fff;color:#31516f;border-radius:7px;padding:6px 9px;font-size:10px;font-weight:900;cursor:pointer}
-  .etiquetas-lote-barra button.perigo{border-color:#c62828;background:#c62828;color:#fff}
+  .etiquetas-lote-barra button.perigo{border-color:#B42318;background:#B42318;color:#fff}
   .etiquetas-lote-barra button.perigo:disabled{opacity:.45;cursor:not-allowed}
   .etiquetas-lote-contador{margin-left:auto;font-size:10px;font-weight:900;color:#7a2e2e}
   .etiquetas-persistentes-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
@@ -513,15 +513,15 @@
   .etiqueta-persistente-item{display:grid;grid-template-columns:minmax(0,1fr) 28px;gap:7px;align-items:center;padding:8px 7px;border-bottom:1px solid #edf1f5}
   .etiqueta-persistente-item:last-child{border-bottom:0}
   .etiqueta-selecao-wrap{display:none;align-items:center;justify-content:center}
-  .etiqueta-selecao-wrap input{width:16px;height:16px;cursor:pointer;accent-color:#c62828}
+  .etiqueta-selecao-wrap input{width:16px;height:16px;cursor:pointer;accent-color:#B42318}
   .etiquetas-persistentes-box.modo-lote .etiqueta-persistente-item{grid-template-columns:20px minmax(0,1fr) 28px}
   .etiquetas-persistentes-box.modo-lote .etiqueta-selecao-wrap{display:flex}
   .etiqueta-persistente-principal{font-size:11px;color:#263e55;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .etiqueta-persistente-detalhe{font-size:9.5px;color:#708193;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .etiqueta-persistente-status{display:inline-block;margin-top:4px;padding:2px 6px;border-radius:999px;background:#e7f5ea;color:#277233;font-size:9px;font-weight:900}
   .etiqueta-persistente-status.sem-vinculo{background:#fff4d6;color:#936500}
-  .etiqueta-remover-x{width:27px;height:27px;border:0;border-radius:50%;background:#fff0f0;color:#c62828;font-size:17px;font-weight:900;line-height:27px;cursor:pointer;padding:0;transition:.15s}
-  .etiqueta-remover-x:hover{background:#c62828;color:#fff;transform:scale(1.05)}
+  .etiqueta-remover-x{width:27px;height:27px;border:0;border-radius:50%;background:#fff0f0;color:#B42318;font-size:17px;font-weight:900;line-height:27px;cursor:pointer;padding:0;transition:.15s}
+  .etiqueta-remover-x:hover{background:#B42318;color:#fff;transform:scale(1.05)}
   .etiquetas-vazio{padding:16px 8px;text-align:center;color:#8a99a8;font-size:10px}
   .etiquetas-persistentes-aviso{margin-top:9px;font-size:10px;color:#607284;line-height:1.45}
   @media(max-width:900px){.etiquetas-persistentes-grid{grid-template-columns:1fr}}
@@ -536,16 +536,16 @@
   .sku-hist-table{min-width:1180px}
   .sku-hist-table td{vertical-align:top}
   .sku-hist-sku-antigo,.sku-hist-sku-novo{display:inline-block;padding:4px 7px;border-radius:5px;font-weight:900;font-family:ui-monospace,SFMono-Regular,Consolas,monospace}
-  .sku-hist-sku-antigo{background:#fee2e2;color:#991b1b}
-  .sku-hist-sku-novo{background:#dcfce7;color:#166534}
+  .sku-hist-sku-antigo{background:#FDECEA;color:#8C1C13}
+  .sku-hist-sku-novo{background:#dcfce7;color:#145C2F}
   .sku-hist-tela{display:inline-flex;padding:4px 7px;border-radius:12px;font-size:10px;font-weight:900;background:#e8f1fa;color:#1f57a5}
-  .sku-hist-tela.conf{background:#fff3cd;color:#8a5a00}
-  .sku-hist-vazio{padding:28px;text-align:center;color:#64748b}
+  .sku-hist-tela.conf{background:#FFF4E0;color:#8A5300}
+  .sku-hist-vazio{padding:28px;text-align:center;color:#586A7D}
   @media(max-width:1100px){.sku-hist-filtros{grid-template-columns:repeat(2,minmax(0,1fr))}.sku-hist-filtros button{grid-column:1/-1}}
 </style>
 
 <style id="noromak-v15-shell">
-:root{--v15-nav:#12345b;--v15-nav2:#1d4d7b;--v15-bg:#f4f7fb;--v15-line:#dce5ef;--v15-text:#18324a;--v15-muted:#6b7d90;--v15-orange:#f28b18}
+:root{--v15-nav:#12345b;--v15-nav2:#1d4d7b;--v15-bg:#f4f7fb;--v15-line:#dce5ef;--v15-text:#18324a;--v15-muted:#586A7D;--v15-orange:#f28b18}
 body{background:var(--v15-bg)!important}
 #painelConteudo.container-admin{max-width:none!important;margin-left:238px!important;padding:22px 26px 40px!important;transition:margin .2s ease}
 .v15-sidebar{position:fixed;left:0;top:0;bottom:0;width:238px;background:linear-gradient(180deg,var(--v15-nav),#0d2947);z-index:1200;color:#fff;padding:18px 14px;box-sizing:border-box;overflow:auto;box-shadow:8px 0 24px rgba(20,48,80,.12)}
@@ -556,7 +556,7 @@ body{background:var(--v15-bg)!important}
 .abas-admin{display:none!important}.card-admin{border-radius:14px!important;border:1px solid var(--v15-line)!important;box-shadow:0 5px 20px rgba(26,59,89,.05)!important}.card-admin h2{color:var(--v15-text)!important}.aviso-banco{border-radius:10px!important;background:#f7faff!important;border-color:#dbe7f2!important;color:#496177!important}.toolbar-grid{gap:8px!important}.excel-wrap{border-radius:10px!important;border-color:#dbe4ee!important}.excel-grid thead th{position:sticky;top:0;background:#edf3f9!important;color:#2b4d6a!important;font-size:11px!important}.btn-primario,.btn-sucesso,.btn-secundario,.btn-perigo{border-radius:8px!important}
 .v15-overview{display:grid;grid-template-columns:2fr 1fr;gap:14px;margin-bottom:16px}.v15-overview-card{background:white;border:1px solid var(--v15-line);border-radius:14px;padding:16px 18px;box-shadow:0 5px 20px rgba(26,59,89,.05)}.v15-overview-card h3{margin:0 0 5px;color:var(--v15-text);font-size:15px}.v15-overview-card p{margin:0;color:var(--v15-muted);font-size:12px;line-height:1.5}.v15-quick{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.v15-quick a,.v15-quick button{border:1px solid #d6e2ee;background:#f7faff;color:#204e79;padding:8px 10px;border-radius:8px;font-size:12px;font-weight:800;text-decoration:none;cursor:pointer}.v15-status-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:#22a35a;margin-right:6px}
 @media(max-width:1000px){.v15-sidebar{width:72px;padding:14px 8px}.v15-brand div:last-child,.v15-nav-section,.v15-nav-label,.v15-sidebar-footer .v15-nav-label{display:none}.v15-brand{justify-content:center;padding-left:0;padding-right:0}.v15-nav-item{justify-content:center;padding:11px 6px}.v15-nav-icon{width:auto;font-size:17px}#painelConteudo.container-admin{margin-left:72px!important;padding:15px!important}.v15-overview{grid-template-columns:1fr}}
-.v151-dashboard{display:block;margin-bottom:18px}.v151-dashboard[hidden]{display:none!important}.v151-dashboard-head{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin:2px 0 18px}.v151-eyebrow{font-size:10px;letter-spacing:.13em;font-weight:1000;color:#1f57a5;margin-bottom:4px}.v151-dashboard-head h2{margin:0;color:#16344f;font-size:24px}.v151-dashboard-head p{margin:5px 0 0;color:#6b7d90;font-size:12px}.v151-global-search-wrap{position:relative;width:min(420px,42vw);display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #d8e3ee;border-radius:11px;padding:0 12px;box-shadow:0 4px 16px rgba(26,59,89,.04)}.v151-global-search-wrap input{width:100%;border:0!important;box-shadow:none!important;background:transparent!important;padding:11px 2px!important;font-size:12px!important;outline:0}.v151-global-results{display:none;position:absolute;z-index:1500;left:0;right:0;top:calc(100% + 6px);background:#fff;border:1px solid #d8e3ee;border-radius:11px;box-shadow:0 14px 35px rgba(23,52,79,.16);max-height:330px;overflow:auto}.v151-global-results.show{display:block}.v151-search-row{display:block;width:100%;border:0;background:#fff;text-align:left;padding:10px 12px;border-bottom:1px solid #edf2f7;cursor:pointer;color:#284861}.v151-search-row:hover{background:#f5f9fd}.v151-search-row b{display:block;font-size:12px}.v151-search-row small{display:block;color:#7a8c9e;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.v151-kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:11px;margin-bottom:13px}.v151-kpi{display:flex;align-items:center;gap:11px;text-align:left;background:#fff;border:1px solid #dbe5ef;border-radius:13px;padding:14px;box-shadow:0 4px 16px rgba(26,59,89,.045);text-decoration:none;color:#17344f;cursor:pointer;font:inherit;transition:.15s transform,.15s box-shadow}.v151-kpi:hover{transform:translateY(-1px);box-shadow:0 8px 22px rgba(26,59,89,.09)}.v151-kpi-icon{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;font-size:16px;background:#eaf3ff}.v151-kpi-icon.orange{background:#fff0df}.v151-kpi-icon.green{background:#e7f7ed}.v151-kpi-icon.amber{background:#fff7db}.v151-kpi-icon.red{background:#feecec;color:#b42318}.v151-kpi b{display:block;font-size:24px;line-height:1;color:#143957}.v151-kpi small{display:block;margin-top:5px;color:#738598;font-size:11px;font-weight:750}.v151-kpi.danger{border-color:#f1d3d3}.v151-main-grid{display:grid;grid-template-columns:1.35fr .95fr;gap:13px}.v151-panel{background:#fff;border:1px solid #dbe5ef;border-radius:14px;padding:15px 17px;box-shadow:0 5px 18px rgba(26,59,89,.045);min-width:0}.v151-panel-title{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:13px}.v151-panel-title h3{margin:0;color:#173750;font-size:14px}.v151-panel-title p{margin:3px 0 0;color:#8191a1;font-size:10.5px}.v151-soft-badge{font-size:10px;color:#667c90;background:#f3f7fb;padding:5px 7px;border-radius:12px}.v151-link-btn{border:0;background:transparent;color:#1f57a5;font-weight:850;font-size:11px;cursor:pointer}.v151-flow-panel{grid-column:1/2}.v151-flow{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 2px 2px}.v151-flow>div{min-width:70px;text-align:center}.v151-flow b{display:block;font-size:22px;color:#173d5e}.v151-flow span{font-size:10px;color:#7b8d9e;font-weight:750}.v151-flow i{height:2px;flex:1;background:linear-gradient(90deg,#bcd0e4,#f0a04b);border-radius:2px;position:relative}.v151-flow i:after{content:'›';position:absolute;right:-2px;top:-10px;color:#e18829;font-style:normal;font-size:16px}.v151-integrations{display:grid;gap:8px}.v151-integrations>div{display:grid;grid-template-columns:12px 1fr auto;gap:7px;align-items:center;padding:7px 8px;background:#f8fafc;border-radius:9px}.v151-integrations strong{font-size:11px;color:#24465f}.v151-integrations small{font-size:10px;color:#718397;text-align:right}.v151-dot{width:8px;height:8px;border-radius:50%;background:#9aa8b5}.v151-dot.ok{background:#22a35a;box-shadow:0 0 0 3px #dff4e7}.v151-dot.off{background:#aeb9c3}.v151-dot.warn{background:#e59a20;box-shadow:0 0 0 3px #fff0d1}.v151-dot.err{background:#d94b4b;box-shadow:0 0 0 3px #fde4e4}.v151-dot.wait{background:#91a3b4}.v151-alert-count{min-width:24px;text-align:center;border-radius:12px;background:#fff0df;color:#a85b06;font-size:11px;font-weight:900;padding:4px 7px}.v151-alerts{display:grid;gap:7px}.v151-alert{border:0;width:100%;display:flex;align-items:center;gap:9px;text-align:left;background:#fafbfc;border-radius:9px;padding:9px 10px;cursor:pointer;color:#355169}.v151-alert:hover{background:#f3f7fb}.v151-alert .ico{width:27px;height:27px;border-radius:8px;display:grid;place-items:center;background:#fff0df}.v151-alert.red .ico{background:#fde9e9}.v151-alert b{display:block;font-size:11px}.v151-alert small{display:block;color:#8090a0;font-size:9.5px;margin-top:2px}.v151-empty{color:#789;font-size:11px;padding:15px;text-align:center;background:#f8fafc;border-radius:9px}.v151-productivity{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.v151-productivity>div{padding:11px 8px;background:#f7faff;border-radius:10px;text-align:center}.v151-productivity b{display:block;color:#173d5e;font-size:17px}.v151-productivity span{display:block;color:#7b8d9f;font-size:9.5px;margin-top:3px}.v151-chart-panel{grid-column:1/2}.v151-chart{height:155px;display:flex;align-items:flex-end;gap:12px;padding:12px 4px 2px}.v151-bar-wrap{height:100%;flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:4px;min-width:32px}.v151-bar-value{font-size:9px;color:#64788c;font-weight:800}.v151-bar{width:min(32px,70%);background:linear-gradient(180deg,#2a6db1,#17487a);border-radius:6px 6px 2px 2px;min-height:3px}.v151-bar-label{font-size:9px;color:#8090a0;font-weight:700}.v151-shortcuts{display:grid;grid-template-columns:1fr 1fr;gap:8px}.v151-shortcuts a,.v151-shortcuts button{border:1px solid #dce6ef;background:#f8fbfe;color:#24557f;border-radius:9px;padding:10px;text-decoration:none;text-align:left;font:inherit;font-size:10.5px;font-weight:800;cursor:pointer}.v151-shortcuts a:hover,.v151-shortcuts button:hover{background:#edf5fc}.v151-problem-banner{display:none;margin-bottom:13px;background:#fff7ed;border:1px solid #fed7aa;color:#9a4e09;border-radius:11px;padding:10px 13px;font-size:11px}.v151-problem-banner.show{display:block}.v151-problem-banner button{float:right;border:0;background:transparent;color:#9a4e09;font-weight:900;cursor:pointer}.resumo-grid{display:none!important}
+.v151-dashboard{display:block;margin-bottom:18px}.v151-dashboard[hidden]{display:none!important}.v151-dashboard-head{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin:2px 0 18px}.v151-eyebrow{font-size:10px;letter-spacing:.13em;font-weight:1000;color:#1f57a5;margin-bottom:4px}.v151-dashboard-head h2{margin:0;color:#16344f;font-size:24px}.v151-dashboard-head p{margin:5px 0 0;color:#586A7D;font-size:12px}.v151-global-search-wrap{position:relative;width:min(420px,42vw);display:flex;align-items:center;gap:8px;background:#fff;border:1px solid #d8e3ee;border-radius:11px;padding:0 12px;box-shadow:0 4px 16px rgba(26,59,89,.04)}.v151-global-search-wrap input{width:100%;border:0!important;box-shadow:none!important;background:transparent!important;padding:11px 2px!important;font-size:12px!important;outline:0}.v151-global-results{display:none;position:absolute;z-index:1500;left:0;right:0;top:calc(100% + 6px);background:#fff;border:1px solid #d8e3ee;border-radius:11px;box-shadow:0 14px 35px rgba(23,52,79,.16);max-height:330px;overflow:auto}.v151-global-results.show{display:block}.v151-search-row{display:block;width:100%;border:0;background:#fff;text-align:left;padding:10px 12px;border-bottom:1px solid #edf2f7;cursor:pointer;color:#284861}.v151-search-row:hover{background:#f5f9fd}.v151-search-row b{display:block;font-size:12px}.v151-search-row small{display:block;color:#7a8c9e;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.v151-kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:11px;margin-bottom:13px}.v151-kpi{display:flex;align-items:center;gap:11px;text-align:left;background:#fff;border:1px solid #DCE5EF;border-radius:13px;padding:14px;box-shadow:0 4px 16px rgba(26,59,89,.045);text-decoration:none;color:#12345B;cursor:pointer;font:inherit;transition:.15s transform,.15s box-shadow}.v151-kpi:hover{transform:translateY(-1px);box-shadow:0 8px 22px rgba(26,59,89,.09)}.v151-kpi-icon{width:36px;height:36px;border-radius:10px;display:grid;place-items:center;font-size:16px;background:#eaf3ff}.v151-kpi-icon.orange{background:#fff0df}.v151-kpi-icon.green{background:#e7f7ed}.v151-kpi-icon.amber{background:#fff7db}.v151-kpi-icon.red{background:#feecec;color:#b42318}.v151-kpi b{display:block;font-size:24px;line-height:1;color:#143957}.v151-kpi small{display:block;margin-top:5px;color:#738598;font-size:11px;font-weight:750}.v151-kpi.danger{border-color:#f1d3d3}.v151-main-grid{display:grid;grid-template-columns:1.35fr .95fr;gap:13px}.v151-panel{background:#fff;border:1px solid #DCE5EF;border-radius:14px;padding:15px 17px;box-shadow:0 5px 18px rgba(26,59,89,.045);min-width:0}.v151-panel-title{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:13px}.v151-panel-title h3{margin:0;color:#173750;font-size:14px}.v151-panel-title p{margin:3px 0 0;color:#8191a1;font-size:10.5px}.v151-soft-badge{font-size:10px;color:#667c90;background:#f3f7fb;padding:5px 7px;border-radius:12px}.v151-link-btn{border:0;background:transparent;color:#1f57a5;font-weight:850;font-size:11px;cursor:pointer}.v151-flow-panel{grid-column:1/2}.v151-flow{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 2px 2px}.v151-flow>div{min-width:70px;text-align:center}.v151-flow b{display:block;font-size:22px;color:#173d5e}.v151-flow span{font-size:10px;color:#7b8d9e;font-weight:750}.v151-flow i{height:2px;flex:1;background:linear-gradient(90deg,#bcd0e4,#f0a04b);border-radius:2px;position:relative}.v151-flow i:after{content:'›';position:absolute;right:-2px;top:-10px;color:#e18829;font-style:normal;font-size:16px}.v151-integrations{display:grid;gap:8px}.v151-integrations>div{display:grid;grid-template-columns:12px 1fr auto;gap:7px;align-items:center;padding:7px 8px;background:#f8fafc;border-radius:9px}.v151-integrations strong{font-size:11px;color:#24465f}.v151-integrations small{font-size:10px;color:#718397;text-align:right}.v151-dot{width:8px;height:8px;border-radius:50%;background:#9aa8b5}.v151-dot.ok{background:#22a35a;box-shadow:0 0 0 3px #dff4e7}.v151-dot.off{background:#aeb9c3}.v151-dot.warn{background:#e59a20;box-shadow:0 0 0 3px #fff0d1}.v151-dot.err{background:#d94b4b;box-shadow:0 0 0 3px #fde4e4}.v151-dot.wait{background:#91a3b4}.v151-alert-count{min-width:24px;text-align:center;border-radius:12px;background:#fff0df;color:#a85b06;font-size:11px;font-weight:900;padding:4px 7px}.v151-alerts{display:grid;gap:7px}.v151-alert{border:0;width:100%;display:flex;align-items:center;gap:9px;text-align:left;background:#fafbfc;border-radius:9px;padding:9px 10px;cursor:pointer;color:#355169}.v151-alert:hover{background:#f3f7fb}.v151-alert .ico{width:27px;height:27px;border-radius:8px;display:grid;place-items:center;background:#fff0df}.v151-alert.red .ico{background:#fde9e9}.v151-alert b{display:block;font-size:11px}.v151-alert small{display:block;color:#8090a0;font-size:9.5px;margin-top:2px}.v151-empty{color:#789;font-size:11px;padding:15px;text-align:center;background:#f8fafc;border-radius:9px}.v151-productivity{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.v151-productivity>div{padding:11px 8px;background:#f7faff;border-radius:10px;text-align:center}.v151-productivity b{display:block;color:#173d5e;font-size:17px}.v151-productivity span{display:block;color:#7b8d9f;font-size:9.5px;margin-top:3px}.v151-chart-panel{grid-column:1/2}.v151-chart{height:155px;display:flex;align-items:flex-end;gap:12px;padding:12px 4px 2px}.v151-bar-wrap{height:100%;flex:1;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:4px;min-width:32px}.v151-bar-value{font-size:9px;color:#64788c;font-weight:800}.v151-bar{width:min(32px,70%);background:linear-gradient(180deg,#2a6db1,#17487a);border-radius:6px 6px 2px 2px;min-height:3px}.v151-bar-label{font-size:9px;color:#8090a0;font-weight:700}.v151-shortcuts{display:grid;grid-template-columns:1fr 1fr;gap:8px}.v151-shortcuts a,.v151-shortcuts button{border:1px solid #dce6ef;background:#f8fbfe;color:#24557f;border-radius:9px;padding:10px;text-decoration:none;text-align:left;font:inherit;font-size:10.5px;font-weight:800;cursor:pointer}.v151-shortcuts a:hover,.v151-shortcuts button:hover{background:#edf5fc}.v151-problem-banner{display:none;margin-bottom:13px;background:#fff7ed;border:1px solid #fed7aa;color:#9a4e09;border-radius:11px;padding:10px 13px;font-size:11px}.v151-problem-banner.show{display:block}.v151-problem-banner button{float:right;border:0;background:transparent;color:#9a4e09;font-weight:900;cursor:pointer}.resumo-grid{display:none!important}
 @media(max-width:1280px){.v151-kpis{grid-template-columns:repeat(3,1fr)}.v151-main-grid{grid-template-columns:1fr}.v151-flow-panel,.v151-chart-panel{grid-column:auto}.v151-dashboard-head{flex-direction:column}.v151-global-search-wrap{width:100%;max-width:none}}
 @media(max-width:760px){.v151-kpis{grid-template-columns:1fr 1fr}.v151-flow{overflow-x:auto;justify-content:flex-start}.v151-flow>div{min-width:76px}.v151-productivity{grid-template-columns:1fr 1fr}.v151-shortcuts{grid-template-columns:1fr}.v151-dashboard-head h2{font-size:20px}}
 /* V17.99: Dashboard de vendas */
@@ -568,7 +568,7 @@ body{background:var(--v15-bg)!important}
 .v1799-legenda{display:flex;align-items:center;gap:12px;font-size:11px;font-weight:750;color:#35546f;flex-wrap:wrap;justify-content:flex-end}
 .v1799-legenda span{white-space:nowrap}
 .v1799-canais{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px;margin-bottom:13px}
-.v1799-canal{background:#fff;border:1px solid #dbe5ef;border-radius:13px;padding:11px 15px;box-shadow:0 4px 16px rgba(26,59,89,.045)}
+.v1799-canal{background:#fff;border:1px solid #DCE5EF;border-radius:13px;padding:11px 15px;box-shadow:0 4px 16px rgba(26,59,89,.045)}
 .v1799-canal-top{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
 .v1799-canal-top strong{font-size:12px;color:#1c3e5c}.v1799-canal-top b{font-size:17px;color:#143957;font-variant-numeric:tabular-nums}
 .v1799-canal small{display:block;margin-top:3px;color:#7b8d9e;font-size:10.5px}
@@ -576,25 +576,25 @@ body{background:var(--v15-bg)!important}
 .v1799-canal.off{opacity:.65}
 .v1799-canais[hidden],.v1799-legenda span[hidden]{display:none!important}
 .v1799-bar{display:flex;justify-content:space-between;align-items:flex-end;gap:14px;flex-wrap:wrap;margin:6px 0 11px}
-.v1799-bar h3{margin:0;color:#16344f;font-size:17px}.v1799-bar p{margin:3px 0 0;color:#6b7d90;font-size:11.5px}
+.v1799-bar h3{margin:0;color:#16344f;font-size:17px}.v1799-bar p{margin:3px 0 0;color:#586A7D;font-size:11.5px}
 .v1799-controles{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .v1799-seg{display:inline-flex;background:#fff;border:1px solid #d8e3ee;border-radius:10px;padding:3px;gap:2px}
 .v1799-seg button{border:0;background:transparent;color:#35546f;font:inherit;font-size:11.5px;font-weight:800;padding:6px 10px;border-radius:7px;cursor:pointer}
 .v1799-seg button:hover{background:#f1f6fb}.v1799-seg button.ativo{background:#1f57a5;color:#fff}
-.v1799-datas{display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid #d8e3ee;border-radius:10px;padding:3px 8px;font-size:11px;color:#6b7d90}
-.v1799-datas input{border:0!important;background:transparent!important;box-shadow:none!important;padding:4px 2px!important;font:inherit;font-size:11.5px!important;color:#17344f;width:auto!important}
+.v1799-datas{display:inline-flex;align-items:center;gap:6px;background:#fff;border:1px solid #d8e3ee;border-radius:10px;padding:3px 8px;font-size:11px;color:#586A7D}
+.v1799-datas input{border:0!important;background:transparent!important;box-shadow:none!important;padding:4px 2px!important;font:inherit;font-size:11.5px!important;color:#12345B;width:auto!important}
 .v1799-sync{border:1px solid #d8e3ee;background:#fff;color:#1f57a5;border-radius:10px;padding:7px 11px;font:inherit;font-size:11.5px;font-weight:850;cursor:pointer}
 .v1799-sync:disabled{opacity:.6;cursor:wait}
 .v1799-aviso{margin:0 0 11px;padding:9px 12px;border-radius:10px;background:#eef6ff;border:1px solid #cfe0f5;color:#1d4a78;font-size:11.5px}
 .v1799-aviso.erro{background:#fff4f2;border-color:#f3c9c2;color:#8f2a1c}
 .v1799-kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:11px;margin-bottom:13px}
-.v1799-kpi{background:#fff;border:1px solid #dbe5ef;border-radius:13px;padding:13px 15px;box-shadow:0 4px 16px rgba(26,59,89,.045);min-width:0}
+.v1799-kpi{background:#fff;border:1px solid #DCE5EF;border-radius:13px;padding:13px 15px;box-shadow:0 4px 16px rgba(26,59,89,.045);min-width:0}
 .v1799-kpi small{display:block;color:#738598;font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.04em}
 .v1799-kpi b{display:block;margin-top:5px;font-size:clamp(16px,1.45vw,24px);line-height:1.1;color:#143957;font-variant-numeric:tabular-nums;white-space:nowrap;letter-spacing:-.01em}
-.v1799-var{display:block;margin-top:5px;font-size:10.5px;font-weight:800;color:#6b7d90}
-.v1799-var.sobe{color:#16764a}.v1799-var.desce{color:#b42318}.v1799-var small{font-weight:600;color:#8a99a8;text-transform:none;letter-spacing:0;display:inline;font-size:10px}
+.v1799-var{display:block;margin-top:5px;font-size:10.5px;font-weight:800;color:#586A7D}
+.v1799-var.sobe{color:#1B7A3E}.v1799-var.desce{color:#b42318}.v1799-var small{font-weight:600;color:#8a99a8;text-transform:none;letter-spacing:0;display:inline;font-size:10px}
 .v1799-chart-panel{position:relative;margin-bottom:13px}
-.v1799-chart{height:190px;display:flex;align-items:flex-end;gap:2px;padding:8px 2px 0;border-bottom:1px solid #dbe5ef;position:relative}
+.v1799-chart{height:190px;display:flex;align-items:flex-end;gap:2px;padding:8px 2px 0;border-bottom:1px solid #DCE5EF;position:relative}
 .v1799-col{flex:1;min-width:3px;height:100%;display:flex;flex-direction:column;justify-content:flex-end;gap:2px;cursor:default;position:relative;outline:0}
 .v1799-col i{display:block;min-height:0}.v1799-col i.ml{background:var(--v1799-ml)}.v1799-col i.shopee{background:var(--v1799-shopee)}
 .v1799-col i:first-child{border-radius:4px 4px 0 0}
@@ -621,7 +621,7 @@ body{background:var(--v15-bg)!important}
 
 
 <style id="v1766-kit-delete-style">
-.btn-excluir-kit-inteiro{align-self:end;border:1px solid #ef9a9a;background:#fff5f5;color:#b42318;border-radius:8px;padding:8px 10px;font-weight:800;font-size:12px;cursor:pointer;white-space:nowrap}.btn-excluir-kit-inteiro:hover{background:#ffe4e4;border-color:#e57373}
+.btn-excluir-kit-inteiro{align-self:end;border:1px solid #F2C1BB;background:#fff5f5;color:#b42318;border-radius:8px;padding:8px 10px;font-weight:800;font-size:12px;cursor:pointer;white-space:nowrap}.btn-excluir-kit-inteiro:hover{background:#ffe4e4;border-color:#e57373}
 </style>
 
 <style id="v1779-pedidos-dia-css">
@@ -632,7 +632,7 @@ body{background:var(--v15-bg)!important}
 .v1779-filters input,.v1779-filters select{width:100%;box-sizing:border-box;padding:10px;border:1px solid #cad9e8;border-radius:9px;background:#fff}
 .v1779-kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:14px 0}
 /* V17.86 */.v1786-lote{border:0;border-radius:9px;padding:9px 14px;background:#12345b;color:#fff;font-weight:700;cursor:pointer}.v1786-lote:disabled{opacity:.55;cursor:wait}
-.v1779-kpi{padding:13px;border:1px solid #dbe7f2;border-radius:12px;background:#f8fbfe}.v1779-kpi b{font-size:22px;display:block;color:#0b365b}.v1779-kpi span{font-size:11px;color:#64748b}
+.v1779-kpi{padding:13px;border:1px solid #dbe7f2;border-radius:12px;background:#f8fbfe}.v1779-kpi b{font-size:22px;display:block;color:#0b365b}.v1779-kpi span{font-size:11px;color:#586A7D}
 .v1779-table{width:100%;border-collapse:collapse;font-size:12px}.v1779-table th{background:#edf5fc;text-align:left;padding:9px;white-space:nowrap}.v1779-table td{padding:9px;border-bottom:1px solid #e6edf4;vertical-align:top}
 .v1779-badge{display:inline-block;padding:4px 7px;border-radius:999px;background:#eef4fa;font-weight:700;font-size:10px}.v1779-ok{background:#e7f8ed;color:#16723b}.v1779-wait{background:#fff4dd;color:#8b5a00}
 .v1779-actions{display:flex;gap:5px}.v1779-actions button{border:1px solid #cbdbea;background:white;border-radius:7px;padding:6px 8px;cursor:pointer;font-size:11px}.v1779-actions button:hover{background:#eef6fd}
@@ -643,7 +643,7 @@ body{background:var(--v15-bg)!important}
 .v1783-filters{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin:14px 0}
 .v1783-filters input[type=date]{padding:10px;border:1px solid #cad9e8;border-radius:9px;background:#fff}
 .v1783-filters #vdBusca{flex:1;min-width:220px;padding:10px;border:1px solid #cad9e8;border-radius:9px;background:#fff}
-.v1783-lbl{font-size:12px;color:#55677a;font-weight:700}
+.v1783-lbl{font-size:12px;color:#586A7D;font-weight:700}
 .v1783-mono{font-family:Consolas,monospace}
 .v1783-num{text-align:right;font-variant-numeric:tabular-nums;font-weight:700}
 .v1783-mk{display:inline-block;background:#eef4fa;border-radius:999px;padding:2px 8px;font-size:11px;margin-right:4px;color:#23415d}
@@ -763,7 +763,7 @@ body{background:var(--v15-bg)!important}
 <div id="modalVinculoShopee">
   <div class="modal-shopee-card">
     <h2 style="color:var(--primary); margin-top:0;">Confirmar etiquetas Shopee</h2>
-    <p style="color:#475569; margin-bottom:8px;">
+    <p style="color:#4A5D72; margin-bottom:8px;">
       A etiqueta foi lida, mas o pedido não veio como texto no arquivo e o rastreio do QR não estava salvo no pedido.
       Confira o pedido impresso na prévia e clique em <b>Confirmar vínculos</b>.
     </p>
@@ -817,7 +817,7 @@ body{background:var(--v15-bg)!important}
     <div class="logo-box">
       <img src="/nk-logo.svg?v=14.5" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=14.5';">
     </div>
-    <h2>Painel do Administrador</h2><div style="font-size:11px;color:#6b7b89;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 12.2 — permissões por módulo</div>
+    <h2>Painel do Administrador</h2><div style="font-size:11px;color:#586A7D;margin:-12px 0 14px;font-weight:700;">Versão Web/Linux 12.2 — permissões por módulo</div>
     <div style="font-size:12px;color:#667;margin:-8px 0 14px;line-height:1.4;">Use o administrador principal ou qualquer usuário cadastrado com perfil <b>Admin</b>.</div>
     <input type="text" id="usuarioAdmin" placeholder="Usuário Admin">
     <input type="password" id="senhaAdmin" placeholder="Senha">
@@ -834,34 +834,34 @@ body{background:var(--v15-bg)!important}
 <nav class="v15-sidebar" aria-label="Navegação principal">
   <div class="v15-brand"><div class="v15-brand-badge">N</div><div><strong>Noromak</strong><small>Sistema de Expedição</small></div></div>
   <div class="v15-nav-section">Visão geral</div>
-  <button class="v15-nav-item active" data-v15-nav="dashboard" onclick="abrirDashboardV151();v15Nav(this)"><span class="v15-nav-icon">▣</span><span class="v15-nav-label">Dashboard</span></button>
+  <button class="v15-nav-item active" data-v15-nav="dashboard" onclick="abrirDashboardV151();v15Nav(this)"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3h7v9H3zM14 3h7v5h-7zM14 12h7v9h-7zM3 16h7v5H3z"/></svg></span><span class="v15-nav-label">Dashboard</span></button>
   <div class="v15-nav-section">Expedição</div>
-  <button class="v15-nav-item" data-v15-nav="pedidos" onclick="abrirAbaAdmin('pedidos');v15Nav(this)"><span class="v15-nav-icon">📋</span><span class="v15-nav-label">Pedidos pendentes</span></button>
-  <button class="v15-nav-item" data-v15-nav="pedidos-dia" onclick="abrirAbaAdmin('pedidos-dia');v15Nav(this)"><span class="v15-nav-icon">📅</span><span class="v15-nav-label">Pedidos do dia</span></button>
-  <button class="v15-nav-item" data-v15-nav="coleta" onclick="abrirAbaAdmin('coleta');v15Nav(this)"><span class="v15-nav-icon">🚚</span><span class="v15-nav-label">Coleta do dia</span></button>
-  <button class="v15-nav-item" data-v15-nav="etiquetas" onclick="abrirAbaAdmin('etiquetas');v15Nav(this)"><span class="v15-nav-icon">🏷</span><span class="v15-nav-label">Etiquetas / Importar TXT</span></button>
-  <a class="v15-nav-item" href="/expedicao/conferencia" target="_blank" rel="noopener"><span class="v15-nav-icon">✓</span><span class="v15-nav-label">Conferência</span></a>
-  <button class="v15-nav-item" onclick="abrirAbaAdmin('historico');v15Nav(this)"><span class="v15-nav-icon">🕘</span><span class="v15-nav-label">Histórico</span></button>
+  <button class="v15-nav-item" data-v15-nav="pedidos" onclick="abrirAbaAdmin('pedidos');v15Nav(this)"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/></svg></span><span class="v15-nav-label">Pedidos pendentes</span></button>
+  <button class="v15-nav-item" data-v15-nav="pedidos-dia" onclick="abrirAbaAdmin('pedidos-dia');v15Nav(this)"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h18v16H3zM3 10h18M8 3v4M16 3v4"/></svg></span><span class="v15-nav-label">Pedidos do dia</span></button>
+  <button class="v15-nav-item" data-v15-nav="coleta" onclick="abrirAbaAdmin('coleta');v15Nav(this)"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 6h13v10H1zM14 10h4l3 3v3h-7zM5 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM18 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"/></svg></span><span class="v15-nav-label">Coleta do dia</span></button>
+  <button class="v15-nav-item" data-v15-nav="etiquetas" onclick="abrirAbaAdmin('etiquetas');v15Nav(this)"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8zM7.5 7.5h.01"/></svg></span><span class="v15-nav-label">Etiquetas / Importar TXT</span></button>
+  <a class="v15-nav-item" href="/expedicao/conferencia" target="_blank" rel="noopener"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><span class="v15-nav-label">Conferência</span></a>
+  <button class="v15-nav-item" onclick="abrirAbaAdmin('historico');v15Nav(this)"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2"/></svg></span><span class="v15-nav-label">Histórico</span></button>
   <div class="v15-nav-section">Comercial</div>
-  <a class="v15-nav-item" href="/expedicao/precificador" target="_blank" rel="noopener"><span class="v15-nav-icon">$</span><span class="v15-nav-label">Precificador</span></a>
-  <a class="v15-nav-item" href="/expedicao/promocoes" target="_blank" rel="noopener"><span class="v15-nav-icon">🏷</span><span class="v15-nav-label">Promoções ML</span></a>
-  <a class="v15-nav-item" href="/expedicao/analise-full" target="_blank" rel="noopener"><span class="v15-nav-icon">📦</span><span class="v15-nav-label">Demanda Full</span></a>
-  <a class="v15-nav-item" href="/expedicao/compras" target="_blank" rel="noopener"><span class="v15-nav-icon">🛒</span><span class="v15-nav-label">Demanda de Compra</span></a>
+  <a class="v15-nav-item" href="/expedicao/precificador" target="_blank" rel="noopener"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></span><span class="v15-nav-label">Precificador</span></a>
+  <a class="v15-nav-item" href="/expedicao/promocoes" target="_blank" rel="noopener"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 5 5 19M6.5 9a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM17.5 20a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z"/></svg></span><span class="v15-nav-label">Promoções ML</span></a>
+  <a class="v15-nav-item" href="/expedicao/analise-full" target="_blank" rel="noopener"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8 12 3 3 8v8l9 5 9-5zM3 8l9 5 9-5M12 13v8"/></svg></span><span class="v15-nav-label">Demanda Full</span></a>
+  <a class="v15-nav-item" href="/expedicao/compras" target="_blank" rel="noopener"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3h2l2.4 12.2a2 2 0 0 0 2 1.8h7.7a2 2 0 0 0 2-1.6L21 8H6M9 21h.01M18 21h.01"/></svg></span><span class="v15-nav-label">Demanda de Compra</span></a>
   <!-- V18.33: o Financeiro substitui a Rentabilidade ML (mesma conta, ML + Shopee). -->
-  <a class="v15-nav-item" href="/expedicao/financeiro" target="_blank" rel="noopener"><span class="v15-nav-icon">💰</span><span class="v15-nav-label">Financeiro</span></a>
+  <a class="v15-nav-item" href="/expedicao/financeiro" target="_blank" rel="noopener"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7h18v13H3zM3 7l3-4h12l3 4M16 14h2"/></svg></span><span class="v15-nav-label">Financeiro</span></a>
   <!-- V18.54: relatório de Anúncios patrocinados do ML cruzado com o lucro de cada anúncio. -->
-  <a class="v15-nav-item" href="/expedicao/analise-ads" target="_blank" rel="noopener"><span class="v15-nav-icon">📣</span><span class="v15-nav-label">Análise de ADS</span></a>
+  <a class="v15-nav-item" href="/expedicao/analise-ads" target="_blank" rel="noopener"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11v3l13 5V6L3 11zM16 9a3 3 0 0 1 0 6M7 15.5V20h3v-3.3"/></svg></span><span class="v15-nav-label">Análise de ADS</span></a>
   <!-- V18.47: o que os clientes já compram junto e pode virar kit. -->
-  <a class="v15-nav-item" href="/expedicao/kits-analise" target="_blank" rel="noopener"><span class="v15-nav-icon">🧩</span><span class="v15-nav-label">Oportunidades de Kit</span></a>
-  <button class="v15-nav-item" onclick="abrirAbaAdmin('produtos');v15Nav(this)"><span class="v15-nav-icon">📦</span><span class="v15-nav-label">Produtos</span></button>
-  <button class="v15-nav-item" onclick="abrirAbaAdmin('kits');v15Nav(this)"><span class="v15-nav-icon">🎁</span><span class="v15-nav-label">Kits</span></button>
+  <a class="v15-nav-item" href="/expedicao/kits-analise" target="_blank" rel="noopener"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h6v3a2 2 0 1 0 4 0V4h6v6h-3a2 2 0 1 0 0 4h3v6H4z"/></svg></span><span class="v15-nav-label">Oportunidades de Kit</span></a>
+  <button class="v15-nav-item" onclick="abrirAbaAdmin('produtos');v15Nav(this)"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16.5 9.4 7.5 4.2M21 16V8l-9-5-9 5v8l9 5zM3.3 7 12 12l8.7-5M12 22V12"/></svg></span><span class="v15-nav-label">Produtos</span></button>
+  <button class="v15-nav-item" onclick="abrirAbaAdmin('kits');v15Nav(this)"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12v10H4V12M2 7h20v5H2zM12 22V7"/></svg></span><span class="v15-nav-label">Kits</span></button>
   <div class="v15-nav-section">Integrações</div>
-  <button class="v15-nav-item" onclick="abrirAbaAdmin('integracoes');v15Nav(this)"><span class="v15-nav-icon">🔌</span><span class="v15-nav-label">Central de integrações</span></button>
-  <a class="v15-nav-item" href="/expedicao/estacao-impressao" target="_blank" rel="noopener"><span class="v15-nav-icon">🖨</span><span class="v15-nav-label">Estação Zebra</span></a>
+  <button class="v15-nav-item" onclick="abrirAbaAdmin('integracoes');v15Nav(this)"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4"/></svg></span><span class="v15-nav-label">Central de integrações</span></button>
+  <a class="v15-nav-item" href="/expedicao/estacao-impressao" target="_blank" rel="noopener"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M6 14h12v8H6z"/></svg></span><span class="v15-nav-label">Estação Zebra</span></a>
   <div class="v15-nav-section">Administração</div>
-  <button class="v15-nav-item" onclick="abrirAbaAdmin('usuarios');v15Nav(this)"><span class="v15-nav-icon">👥</span><span class="v15-nav-label">Usuários</span></button>
-  <button class="v15-nav-item" data-v15-nav="seguranca" onclick="abrirAbaAdmin('seguranca');v15Nav(this)"><span class="v15-nav-icon">🛡️</span><span class="v15-nav-label">Segurança</span></button>
-  <div class="v15-sidebar-footer"><button class="v15-nav-item" onclick="sairAdmin()"><span class="v15-nav-icon">↪</span><span class="v15-nav-label">Sair</span></button></div>
+  <button class="v15-nav-item" onclick="abrirAbaAdmin('usuarios');v15Nav(this)"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/></svg></span><span class="v15-nav-label">Usuários</span></button>
+  <button class="v15-nav-item" data-v15-nav="seguranca" onclick="abrirAbaAdmin('seguranca');v15Nav(this)"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span><span class="v15-nav-label">Segurança</span></button>
+  <div class="v15-sidebar-footer"><button class="v15-nav-item" onclick="sairAdmin()"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg></span><span class="v15-nav-label">Sair</span></button></div>
 </nav>
 
 <div id="painelConteudo" class="container-admin">
@@ -958,7 +958,7 @@ body{background:var(--v15-bg)!important}
     .pd8-fundo.aberto{opacity:1;pointer-events:auto}
     .pd8-gaveta{position:fixed;top:0;right:0;height:100%;width:430px;max-width:94vw;background:#f6f9fc;
       box-shadow:-12px 0 40px rgba(15,30,50,.25);transform:translateX(100%);transition:transform .2s;
-      display:flex;flex-direction:column;z-index:6001;font-family:inherit;color:#1e293b}
+      display:flex;flex-direction:column;z-index:6001;font-family:inherit;color:#18324A}
     .pd8-gaveta.aberto{transform:translateX(0)}
     .pd8-gh{position:relative;background:linear-gradient(90deg,#123a63,#1d4d7b);color:#fff;padding:16px 40px 16px 18px}
     .pd8-gh .cod{font-family:Consolas,monospace;font-size:12px;opacity:.85;word-break:break-all}
@@ -967,38 +967,38 @@ body{background:var(--v15-bg)!important}
     .pd8-body{padding:16px 18px;overflow:auto}
     .pd8-badges{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
     .pd8-badge{font-size:11px;font-weight:800;border-radius:7px;padding:4px 9px}
-    .pd8-cA{background:#e7f8ed;color:#15803d}.pd8-cB{background:#fef3c7;color:#92600e}.pd8-cC{background:#f1f5f9;color:#64748b}
+    .pd8-cA{background:#e7f8ed;color:#1B7A3E}.pd8-cB{background:#fef3c7;color:#92600e}.pd8-cC{background:#f1f5f9;color:#586A7D}
     .pd8-forn{background:#eef2f9;color:#123a63}
-    .pd8-mp h3{display:flex;align-items:center;gap:7px;color:#1e293b;text-transform:none;letter-spacing:0;font-size:13px}
+    .pd8-mp h3{display:flex;align-items:center;gap:7px;color:#18324A;text-transform:none;letter-spacing:0;font-size:13px}
     .pd8-dot{width:9px;height:9px;border-radius:50%;display:inline-block}
     .pd8-dot.ml{background:#2f6fd0}.pd8-dot.shopee{background:#ee4d2d}
     .pd8-tiles{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:14px}
-    .pd8-tile{background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:10px}
+    .pd8-tile{background:#fff;border:1px solid #DCE5EF;border-radius:10px;padding:10px}
     .pd8-tile .v{font-size:18px;font-weight:800;line-height:1}
-    .pd8-tile .l{font-size:10.5px;color:#748295;margin-top:4px}
-    .pd8-sec{background:#fff;border:1px solid #e2e8f0;border-radius:11px;padding:13px 14px;margin-bottom:12px}
-    .pd8-sec h3{margin:0 0 9px;font-size:12px;text-transform:uppercase;letter-spacing:.03em;color:#748295}
+    .pd8-tile .l{font-size:10.5px;color:#586A7D;margin-top:4px}
+    .pd8-sec{background:#fff;border:1px solid #DCE5EF;border-radius:11px;padding:13px 14px;margin-bottom:12px}
+    .pd8-sec h3{margin:0 0 9px;font-size:12px;text-transform:uppercase;letter-spacing:.03em;color:#586A7D}
     .pd8-linha{display:flex;justify-content:space-between;align-items:center;font-size:13px;padding:5px 0;border-top:1px solid #f1f5f9}
     .pd8-linha:first-of-type{border-top:0}
-    .pd8-linha.pd8-tot{border-top:2px solid #e2e8f0;padding-top:8px}
-    .pd8-mut{color:#748295;font-size:11px}
-    .pd8-nota{font-size:11px;color:#748295;margin-top:8px;line-height:1.5}
+    .pd8-linha.pd8-tot{border-top:2px solid #DCE5EF;padding-top:8px}
+    .pd8-mut{color:#586A7D;font-size:11px}
+    .pd8-nota{font-size:11px;color:#586A7D;margin-top:8px;line-height:1.5}
     .pd8-filial{display:flex;justify-content:space-between;font-size:13px;padding:6px 0;border-top:1px solid #f1f5f9}
     .pd8-filial:first-child{border-top:0}
     .pd8-disp{font-weight:800}
-    .pd8-sem{color:#748295;font-style:italic;font-size:12.5px}
+    .pd8-sem{color:#586A7D;font-style:italic;font-size:12.5px}
     .pd8-demanda{border:1px solid #f0d49a;background:#fff4e6;border-radius:11px;padding:14px;margin-bottom:12px}
     .pd8-demanda.ok{border-color:#b7e4c7;background:#e7f8ed}
     .pd8-cabd{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
     .pd8-tit{font-weight:800;font-size:13px}
     .pd8-compra{font-size:24px;font-weight:800;color:#d97706}
     .pd8-demanda.ok .pd8-compra{color:#16a34a}
-    .pd8-compra.pd8-nd{color:#748295}
+    .pd8-compra.pd8-nd{color:#586A7D}
     .pd8-expl{font-size:12px;color:#5b4a2a;line-height:1.5}
     .pd8-demanda.ok .pd8-expl{color:#245c39}
     .pd8-acaminho{display:flex;align-items:center;gap:8px;margin-top:10px;font-size:12.5px}
     .pd8-acaminho input{width:70px;border:1px solid #cdd8e6;border-radius:7px;padding:6px 8px;font:inherit;text-align:center}
-    .pd8-rodape{margin-top:auto;padding:14px 18px;border-top:1px solid #e2e8f0;background:#fff}
+    .pd8-rodape{margin-top:auto;padding:14px 18px;border-top:1px solid #DCE5EF;background:#fff}
     .pd8-rodape a{display:block;text-align:center;text-decoration:none;border-radius:9px;padding:11px;font-weight:700;background:#123a63;color:#fff}
   </style>
   <div class="pd8-fundo" id="pd8Fundo" onclick="pd8Fechar()"></div>
@@ -1085,7 +1085,7 @@ body{background:var(--v15-bg)!important}
 
   <section id="aba-pedidos-dia" class="aba-painel">
     <div class="card-admin">
-      <div class="v1779-head"><div><h2>📅 Central de Pedidos do Dia <span class="usuario-versao">V17.87</span></h2><div style="color:#64748b">Controle diário de vendas recebidas, inclusive as já conferidas.</div></div><div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px"><button type="button" id="pdNfeLoteBtn" class="v1786-lote" onclick="pdPuxarNfeLoteV1786()" title="A extensão lê nome e CPF de cada venda do Mercado Livre e da Shopee desta lista">Puxar nome e CPF (ML e Shopee)</button><span id="pdNfeLoteStatus" style="font-size:12px;color:#64748b">Cliente: nome e CPF da NF-e · Cód.Cliente: código no Linx</span></div></div>
+      <div class="v1779-head"><div><h2>📅 Central de Pedidos do Dia <span class="usuario-versao">V17.87</span></h2><div style="color:#586A7D">Controle diário de vendas recebidas, inclusive as já conferidas.</div></div><div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px"><button type="button" id="pdNfeLoteBtn" class="v1786-lote" onclick="pdPuxarNfeLoteV1786()" title="A extensão lê nome e CPF de cada venda do Mercado Livre e da Shopee desta lista">Puxar nome e CPF (ML e Shopee)</button><span id="pdNfeLoteStatus" style="font-size:12px;color:#586A7D">Cliente: nome e CPF da NF-e · Cód.Cliente: código no Linx</span></div></div>
       <div class="v1779-kpis">
         <div class="v1779-kpi"><b id="pdRecebidos">0</b><span>Recebidos</span></div>
         <div class="v1779-kpi"><b id="pdAguardando">0</b><span>Aguardando</span></div>
@@ -1100,7 +1100,7 @@ body{background:var(--v15-bg)!important}
         <input id="pdBusca" placeholder="Buscar pedido, SKU ou cliente..." oninput="renderPedidosDiaV1779()">
       </div>
       <div style="overflow:auto"><table class="v1779-table"><thead><tr><th>Pedido eCommerce</th><th>Contato</th><th>Situação</th><th>Cancelamento</th><th>NF Status</th><th>Cód.Cliente</th><th>Data Pedido</th><th>Data Contato</th><th>Cliente</th><th>Cód.Usu.</th><th>Usuário</th><th>Marketplace</th><th>Itens / Unid.</th><th>Ações</th></tr></thead><tbody id="pdCorpo"></tbody></table></div>
-      <div id="pdResumo" style="padding-top:12px;color:#64748b;font-size:12px"></div>
+      <div id="pdResumo" style="padding-top:12px;color:#586A7D;font-size:12px"></div>
     </div>
 
     <!-- V17.83: o que saiu no período, item a item. Base para rentabilidade,
@@ -1109,9 +1109,9 @@ body{background:var(--v15-bg)!important}
       <div class="v1779-head">
         <div>
           <h2>📦 O que vendeu <span class="usuario-versao">V17.83</span></h2>
-          <div style="color:#64748b">Unidades por peça no período, somando pedidos pendentes e já conferidos.</div>
+          <div style="color:#586A7D">Unidades por peça no período, somando pedidos pendentes e já conferidos.</div>
         </div>
-        <div style="font-size:12px;color:#64748b">Para rentabilidade, curva e compra</div>
+        <div style="font-size:12px;color:#586A7D">Para rentabilidade, curva e compra</div>
       </div>
 
       <div class="v1783-kpis">
@@ -1144,7 +1144,7 @@ body{background:var(--v15-bg)!important}
           <tbody id="vdCorpo"></tbody>
         </table>
       </div>
-      <div id="vdResumo" style="padding-top:12px;color:#64748b;font-size:12px"></div>
+      <div id="vdResumo" style="padding-top:12px;color:#586A7D;font-size:12px"></div>
     </div>
   </section>
 
@@ -1153,7 +1153,7 @@ body{background:var(--v15-bg)!important}
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap">
         <div>
           <h2 style="margin-bottom:5px">🚚 Coleta do dia <span class="usuario-versao">V16.69</span></h2>
-          <div style="color:#64748b">Edite diariamente o horário da coleta e o código de autorização. As informações ficam salvas no banco central.</div>
+          <div style="color:#586A7D">Edite diariamente o horário da coleta e o código de autorização. As informações ficam salvas no banco central.</div>
         </div>
         <span id="coletaAdminStatus" class="coleta-admin-status">Carregando...</span>
       </div>
@@ -1254,7 +1254,7 @@ body{background:var(--v15-bg)!important}
       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
         <div>
           <h2 style="margin-bottom:4px">Cadastro de kits <span class="usuario-versao">Versão 13.2</span></h2>
-          <div style="color:#64748b">Cadastre os SKUs vendidos como kit e escolha os componentes diretamente do Banco de Produtos.</div>
+          <div style="color:#586A7D">Cadastre os SKUs vendidos como kit e escolha os componentes diretamente do Banco de Produtos.</div>
         </div>
         <button class="btn-sucesso" onclick="novoKitAdmin()">＋ Novo kit</button>
       </div>
@@ -1278,7 +1278,7 @@ body{background:var(--v15-bg)!important}
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap">
         <div>
           <h2 id="tituloKitEditorAdmin" style="margin-bottom:4px">Editar Kit</h2>
-          <div style="color:#64748b">Cadastre os produtos que fazem parte do kit e suas respectivas quantidades.</div>
+          <div style="color:#586A7D">Cadastre os produtos que fazem parte do kit e suas respectivas quantidades.</div>
         </div>
       </div>
 
@@ -1297,9 +1297,9 @@ body{background:var(--v15-bg)!important}
         </label>
       </div>
 
-      <div style="margin-top:24px;padding-top:20px;border-top:1px solid #e2e8f0">
+      <div style="margin-top:24px;padding-top:20px;border-top:1px solid #DCE5EF">
         <h3 style="margin:0 0 4px">Composição do kit</h3>
-        <div style="color:#64748b;margin-bottom:18px">Adicione produtos já cadastrados no Banco de Produtos e informe a quantidade de cada um.</div>
+        <div style="color:#586A7D;margin-bottom:18px">Adicione produtos já cadastrados no Banco de Produtos e informe a quantidade de cada um.</div>
 
         <div style="display:grid;grid-template-columns:minmax(360px,1fr) 170px 190px;gap:14px;align-items:end">
           <label style="display:grid;gap:7px;font-weight:700">
@@ -1323,11 +1323,11 @@ body{background:var(--v15-bg)!important}
               <tbody id="corpoComponentesKitAdmin"></tbody>
             </table>
           </div>
-          <div id="kitComponentesResumoAdmin" style="margin-top:8px;color:#64748b"></div>
+          <div id="kitComponentesResumoAdmin" style="margin-top:8px;color:#586A7D"></div>
         </div>
       </div>
 
-      <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:24px;padding-top:18px;border-top:1px solid #e2e8f0">
+      <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:24px;padding-top:18px;border-top:1px solid #DCE5EF">
         <button class="btn-secundario" onclick="voltarListaKitsAdmin()">← Voltar</button>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
           <button id="btnExcluirKitEditorAdmin" class="btn-perigo" onclick="excluirKitEditorAdmin()">🗑 Excluir kit</button>
@@ -1350,7 +1350,7 @@ body{background:var(--v15-bg)!important}
   <section id="aba-etiquetas" class="aba-painel">
     <div class="card-admin">
       <h2>Etiquetas e publicação</h2>
-      <p style="font-size:13px;color:#555;">Os pedidos já vêm da servidor Web. Aqui você envia apenas os arquivos de etiquetas para vinculá-los aos pedidos pendentes.</p>
+      <p style="font-size:13px;color:#4A5D72;">Os pedidos já vêm da servidor Web. Aqui você envia apenas os arquivos de etiquetas para vinculá-los aos pedidos pendentes.</p>
       <div class="field"><label>Etiquetas por marketplace (.txt / .zpl / .prn):</label>
         <div class="market-grid">
           <div class="market-upload"><strong>Mercado Livre</strong><small>Impressão única 10x15: envio + cliente + SKU, descrição e quantidade.</small><input type="file" id="etiquetasMercadoLivreInput" accept=".txt,.zpl" multiple></div>
@@ -2651,7 +2651,7 @@ async function reconhecerEtiquetasShopeeRasterizadasEmSegundoPlano() {
     const status = document.getElementById("status");
     const restantes = registrosShopeeNaoVinculados().length;
     if (status) {
-      status.style.color = restantes ? "#b45309" : "#2e7d32";
+      status.style.color = restantes ? "#b45309" : "#1B7A3E";
       status.innerHTML = restantes
         ? `✔ Reprocessamento rápido concluído. ${restantes} etiqueta(s) Shopee já identificada(s), aguardando o pedido correspondente para vincular.`
         : "✔ Reprocessamento rápido concluído. Todas as etiquetas Shopee estão vinculadas.";
@@ -2687,7 +2687,7 @@ async function reconhecerEtiquetasShopeeRasterizadasEmSegundoPlano() {
 
     const restantes = registrosShopeeNaoVinculados().length;
     if (status) {
-      status.style.color = restantes ? "#b45309" : "#2e7d32";
+      status.style.color = restantes ? "#b45309" : "#1B7A3E";
       status.innerHTML = restantes
         ? `✔ TXT Shopee processado: ${reconhecidas} etiqueta(s) vinculada(s). ${restantes} aguardam vínculo manual.`
         : `✔ TXT Shopee reconhecido: ${reconhecidas} etiqueta(s) vinculada(s) automaticamente.`;
@@ -2902,10 +2902,10 @@ function abrirModalVinculosShopee(registros, pedidos) {
     }).join("");
 
     const textoOcr = registro.metadados?.textoOcr
-      ? `<div style="font-size:11px;color:#64748b;margin-top:8px;">Leitura automática: ${registro.metadados.textoOcr}</div>`
+      ? `<div style="font-size:11px;color:#586A7D;margin-top:8px;">Leitura automática: ${registro.metadados.textoOcr}</div>`
       : "";
 
-    const arquivo = registro.arquivo ? `<div style="font-size:11px;color:#64748b;margin-top:6px;">Arquivo: ${htmlSeguroBanco(registro.arquivo)}</div>` : "";
+    const arquivo = registro.arquivo ? `<div style="font-size:11px;color:#586A7D;margin-top:6px;">Arquivo: ${htmlSeguroBanco(registro.arquivo)}</div>` : "";
 
     return `<div class="vinculo-shopee-item">
       <div>${preview ? `<img src="${preview}" alt="Prévia da etiqueta Shopee ${indice + 1}">` : "Prévia gráfica indisponível — confira pelo arquivo e pelos dados lidos."}${arquivo}</div>
@@ -3012,7 +3012,7 @@ function vincularPendenciasShopeeAutomaticamente() {
   if (vinculados > 0) {
     const status = document.getElementById("status");
     if (status) {
-      status.style.color = "#2e7d32";
+      status.style.color = "#1B7A3E";
       status.innerHTML = `✔ Shopee: ${vinculados} etiqueta(s) identificada(s) pelo número do pedido e vinculada(s) automaticamente.`;
     }
   }
@@ -3166,7 +3166,7 @@ async function salvarEEnviarDados() {
         alert("Pedidos e etiquetas foram salvos, mas as fotos foram removidas porque o navegador atingiu o limite de armazenamento.");
       }
 
-      statusDiv.style.color = bancoEtiquetas.avisos.some(a => a.includes("não foi feita")) ? "#b45309" : "#2e7d32";
+      statusDiv.style.color = bancoEtiquetas.avisos.some(a => a.includes("não foi feita")) ? "#b45309" : "#1B7A3E";
       statusDiv.innerHTML = `✔ Dados publicados.<br>${montarResumoEtiquetas()}`;
     } catch (err) {
       console.error(err);
@@ -3243,7 +3243,7 @@ async function carregarHistoricoSkuAdmin(){
     }).join("");
   }catch(e){
     console.error(e);
-    corpo.innerHTML=`<tr><td colspan="10" class="sku-hist-vazio" style="color:#b91c1c">Erro ao carregar histórico: ${escaparHistoricoSku(e.message||e)}</td></tr>`;
+    corpo.innerHTML=`<tr><td colspan="10" class="sku-hist-vazio" style="color:#B42318">Erro ao carregar histórico: ${escaparHistoricoSku(e.message||e)}</td></tr>`;
     if(resumo)resumo.textContent="Não foi possível carregar o histórico.";
   }
 }
@@ -3633,10 +3633,10 @@ function renderizarKitsAdmin(){
         <td><b>${htmlSeguroBanco(kit.sku_kit||"")}</b></td>
         <td>${htmlSeguroBanco(kit.nome||"")}</td>
         <td>${htmlSeguroBanco(resumo)}</td>
-        <td>${kit.ativo!==false?'<span style="color:#15803d;font-weight:700">● Ativo</span>':'<span style="color:#64748b;font-weight:700">● Inativo</span>'}</td>
+        <td>${kit.ativo!==false?'<span style="color:#1B7A3E;font-weight:700">● Ativo</span>':'<span style="color:#586A7D;font-weight:700">● Inativo</span>'}</td>
       </tr>`);
   });
-  corpo.innerHTML=linhas.join("")||'<tr><td colspan="5" style="padding:20px;text-align:center;color:#64748b">Nenhum kit cadastrado.</td></tr>';
+  corpo.innerHTML=linhas.join("")||'<tr><td colspan="5" style="padding:20px;text-align:center;color:#586A7D">Nenhum kit cadastrado.</td></tr>';
   const resumo=document.getElementById("resumoKitsAdmin");
   if(resumo) resumo.textContent=`${kitsBancoAdmin.length} kit(s) cadastrado(s)`;
   preencherListaProdutosKitAdmin();
@@ -3699,13 +3699,13 @@ function renderizarComponentesKitAdmin(){
     const barra=produto?String(campoBanco(produto,"Código de Barras")||"").trim():"";
     return `
       <tr>
-        <td><b>${htmlSeguroBanco(comp.sku||"")}</b>${barra?`<div style="font-size:12px;color:#64748b;margin-top:3px">Código: ${htmlSeguroBanco(barra)}</div>`:""}</td>
+        <td><b>${htmlSeguroBanco(comp.sku||"")}</b>${barra?`<div style="font-size:12px;color:#586A7D;margin-top:3px">Código: ${htmlSeguroBanco(barra)}</div>`:""}</td>
         <td>${htmlSeguroBanco(descricao)}</td>
         <td style="width:180px"><input type="number" min="1" step="1" value="${Math.max(1,Number(comp.quantidade)||1)}" onchange="alterarQuantidadeComponenteKitAdmin(${indice},this.value)" style="max-width:120px"></td>
         <td style="width:150px"><button class="btn-perigo" onclick="removerComponenteKitAdmin(${indice})">🗑 Remover</button></td>
       </tr>`;
   });
-  corpo.innerHTML=linhas.join("")||'<tr><td colspan="4" style="padding:24px;text-align:center;color:#64748b">Nenhum produto adicionado ao kit.</td></tr>';
+  corpo.innerHTML=linhas.join("")||'<tr><td colspan="4" style="padding:24px;text-align:center;color:#586A7D">Nenhum produto adicionado ao kit.</td></tr>';
   const resumo=document.getElementById("kitComponentesResumoAdmin");
   if(resumo) resumo.textContent=`${comps.length} produto(s) na composição`;
 }
@@ -4048,9 +4048,9 @@ function pdRomaneioCreditoV1860(c){
 }
 function pdRomOpV1860(d,etapa){return [...(d.operacoes||[])].reverse().find(o=>o.etapa===etapa)||null;}
 function pdRomEtapaV1860(n,titulo,estado,corpo){
-  const cor={ok:"#f0fdf4;color:#166534;border-color:#bbf7d0",agora:"#eff6ff;color:#1e3a8a;border-color:#bfdbfe",trava:"#f8fafc;color:#94a3b8;border-color:#e2e8f0",erro:"#fef2f2;color:#991b1b;border-color:#fecaca"}[estado]||"";
+  const cor={ok:"#f0fdf4;color:#145C2F;border-color:#bbf7d0",agora:"#eff6ff;color:#1e3a8a;border-color:#bfdbfe",trava:"#f8fafc;color:#94a3b8;border-color:#DCE5EF",erro:"#fef2f2;color:#8C1C13;border-color:#F2C1BB"}[estado]||"";
   const icone={ok:"✅",agora:"👉",trava:"🔒",erro:"⚠️"}[estado]||"";
-  return `<div style="border:1px solid;border-radius:10px;padding:10px 12px;margin:8px 0;background:${cor}"><div style="font-weight:700">${icone} ${n}. ${titulo}</div><div style="font-size:13px;margin-top:4px;color:#334155">${corpo}</div></div>`;
+  return `<div style="border:1px solid;border-radius:10px;padding:10px 12px;margin:8px 0;background:${cor}"><div style="font-weight:700">${icone} ${n}. ${titulo}</div><div style="font-size:13px;margin-top:4px;color:#18324A">${corpo}</div></div>`;
 }
 function pdRomaneioRenderV1860(d,msg){
   pdRomaneioFecharV1860();pdRomaneioV1860=d;
@@ -4080,7 +4080,7 @@ function pdRomaneioRenderV1860(d,msg){
   else if(condOk){e2="ok";c2=`Condição do ${esc(d.marketplace)} definida no Linx.`;}
   else{
     e2=passo1?"agora":"trava";
-    c2=`O atendimento precisa estar com a condição do ${esc(d.marketplace)} (Shopee 971 · Magalu 983).${opCond&&opCond.situacao!=="ok"?` <span style="color:#991b1b">Última tentativa: ${esc(opCond.detalhe||"")}</span>`:""}`;
+    c2=`O atendimento precisa estar com a condição do ${esc(d.marketplace)} (Shopee 971 · Magalu 983).${opCond&&opCond.situacao!=="ok"?` <span style="color:#8C1C13">Última tentativa: ${esc(opCond.detalhe||"")}</span>`:""}`;
     if(passo1&&!opRom){
       const sel=d.escolhido||(cands[0]&&cands[0].contato)||"";
       c2+=`<div>${ext?b("Definir condição pela extensão","pdRomCondicaoV1860()",true,!sel):""}</div><label style="display:block;margin-top:6px"><input type="checkbox" id="pdRomCondV1860"> Já conferi a condição no Linx</label>`;
@@ -4092,21 +4092,21 @@ function pdRomaneioRenderV1860(d,msg){
   if(opRom){e3="ok";c3=`Impresso em ${esc(String(opRom.em).slice(0,16).replace("T"," "))} por ${esc(opRom.por||"—")} (atendimento ${esc(opRom.contato)}).`;}
   else{
     e3=passo1?"agora":"trava";
-    const linhaCand=x=>`<label style="display:block;border:1px solid #e2e8f0;border-radius:8px;padding:8px;margin:6px 0;cursor:pointer;background:#fff">
+    const linhaCand=x=>`<label style="display:block;border:1px solid #DCE5EF;border-radius:8px;padding:8px;margin:6px 0;cursor:pointer;background:#fff">
       <input type="radio" name="pdRomContatoV1860" value="${esc(x.contato)}" ${String(d.escolhido)===String(x.contato)?"checked":""}>
-      <b>Atendimento ${esc(x.contato)}</b> <span style="color:#64748b">${esc(x.situacao||"")} ${esc(String(x.data||"").slice(0,10))}</span>
-      ${x.itens_do_pedido?`<span style="color:#166534"> · ${x.itens_do_pedido} peça(s) batem com o pedido</span>`:`<span style="color:#b45309"> · nenhuma peça bate com o SKU do pedido</span>`}
+      <b>Atendimento ${esc(x.contato)}</b> <span style="color:#586A7D">${esc(x.situacao||"")} ${esc(String(x.data||"").slice(0,10))}</span>
+      ${x.itens_do_pedido?`<span style="color:#145C2F"> · ${x.itens_do_pedido} peça(s) batem com o pedido</span>`:`<span style="color:#b45309"> · nenhuma peça bate com o SKU do pedido</span>`}
       <table style="width:100%;font-size:12px;margin-top:6px"><tr><th style="text-align:left">Peça</th><th style="text-align:left">Descrição</th><th>Qtd</th></tr>
       ${(x.itens||[]).map(i=>`<tr><td>${esc(i.item)}</td><td>${esc(i.descricao)}</td><td style="text-align:center">${esc(String(i.quantidade??""))}</td></tr>`).join("")}</table></label>`;
     c3=d.aviso?`<div style="color:#92400e">${esc(d.aviso)}</div>`:"";
     if(cands.length){
       c3+=(d.situacao==="escolher"?'<div style="color:#b45309">Mais de um atendimento possível: escolha.</div>':"")+cands.map(linhaCand).join("")+
-        `<div style="margin-top:6px"><b>Observação</b><br><input id="pdRomObsV1860" value="${esc(d.observacao||"")}" maxlength="120" style="width:100%;padding:8px;border:1px solid #cbd5e1;border-radius:8px;text-transform:uppercase"></div>`+
+        `<div style="margin-top:6px"><b>Observação</b><br><input id="pdRomObsV1860" value="${esc(d.observacao||"")}" maxlength="120" style="width:100%;padding:8px;border:1px solid #C9D6E5;border-radius:8px;text-transform:uppercase"></div>`+
         `<div>${b("Imprimir romaneio","pdRomaneioImprimirV1860(this)",true,!(d.escrita_ativa&&passo1))}</div>`;
     }else if(ext&&d.cliente&&d.cliente.status==="encontrado"){
       c3+=`<div>${b("Buscar atendimentos no Linx (extensão)","pdRomBuscarContatosV1860()",false)}</div>`;
     }
-    if(!d.escrita_ativa)c3+=`<div style="color:#64748b;margin-top:4px">Gravação no Linx ainda desligada no servidor: dá para conferir, mas não para imprimir.</div>`;
+    if(!d.escrita_ativa)c3+=`<div style="color:#586A7D;margin-top:4px">Gravação no Linx ainda desligada no servidor: dá para conferir, mas não para imprimir.</div>`;
   }
 
   // 4. caixa
@@ -4114,7 +4114,7 @@ function pdRomaneioRenderV1860(d,msg){
   if(caixaOk){e4="ok";c4=`Enviado ao caixa em ${esc(String(opCaixa.em).slice(0,16).replace("T"," "))} por ${esc(opCaixa.por||"—")}.`;}
   else{
     e4=opRom?"agora":"trava";
-    c4=opCaixa?`<span style="color:#991b1b">Última tentativa: ${esc(opCaixa.detalhe||"")}</span>`:"Finaliza a venda no Linx (frente de caixa).";
+    c4=opCaixa?`<span style="color:#8C1C13">Última tentativa: ${esc(opCaixa.detalhe||"")}</span>`:"Finaliza a venda no Linx (frente de caixa).";
     if(opRom)c4+=`<div>${ext?b("Enviar ao caixa (extensão)","pdRomCaixaV1860()",true):'<span style="color:#b45309">Precisa da extensão 0.26 neste Chrome.</span>'}</div>`;
   }
 
@@ -4123,14 +4123,14 @@ function pdRomaneioRenderV1860(d,msg){
   div.innerHTML=`<div style="background:#fff;border-radius:14px;max-width:660px;width:100%;max-height:92vh;overflow:auto;padding:18px;box-shadow:0 20px 50px rgba(0,0,0,.3)">
     <div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">🧾 Linx · pedido ${esc(d.pedido)}</h3><button type="button" onclick="pdRomaneioFecharV1860()" style="border:0;background:none;font-size:20px;cursor:pointer">✕</button></div>
     <div style="margin:8px 0;font-size:13px;line-height:1.6">
-      <b>${esc(d.marketplace)}</b> · Cliente no Linx: ${c.cliente?`${esc(c.cliente)} — ${esc(c.nome||"")}`:"—"} ${c.documento?`<span style="color:#64748b">(${esc(c.documento)})</span>`:""}<br>
+      <b>${esc(d.marketplace)}</b> · Cliente no Linx: ${c.cliente?`${esc(c.cliente)} — ${esc(c.nome||"")}`:"—"} ${c.documento?`<span style="color:#586A7D">(${esc(c.documento)})</span>`:""}<br>
       <b>Crédito (Linx):</b> ${pdRomaneioCreditoV1860(c)}
     </div>
     ${pdRomEtapaV1860(1,"Cadastro e crédito",e1,c1)}
     ${pdRomEtapaV1860(2,"Condição de pagamento",e2,c2)}
     ${pdRomEtapaV1860(3,"Romaneio",e3,c3)}
     ${pdRomEtapaV1860(4,"Enviar ao caixa",e4,c4)}
-    <div id="pdRomMsgV1860" style="margin-top:8px;font-size:13px;color:#475569">${esc(msg||"")}</div>
+    <div id="pdRomMsgV1860" style="margin-top:8px;font-size:13px;color:#4A5D72">${esc(msg||"")}</div>
     <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
       <button type="button" class="btn-secundario" onclick="pdRomRecarregarV1860()">↻ Atualizar</button>
       <button type="button" class="btn-secundario" onclick="pdRomaneioFecharV1860()">Fechar</button>
@@ -4243,7 +4243,7 @@ function pdCelulaClienteV1786(pedido,f){
   const cf=pdFiscalV1786(pedido);
   if(!cf||!cf.nome_fiscal)return htmlSeguroBanco(f.Cliente||"—");
   const doc=cf.documento&&cf.documento.numero?`${cf.documento.tipo||"CPF"} ${cf.documento.numero}`:"";
-  return `<b>${htmlSeguroBanco(cf.nome_fiscal)}</b>${doc?`<div style="font-size:11px;color:#64748b">${htmlSeguroBanco(doc)}</div>`:""}`;
+  return `<b>${htmlSeguroBanco(cf.nome_fiscal)}</b>${doc?`<div style="font-size:11px;color:#586A7D">${htmlSeguroBanco(doc)}</div>`:""}`;
 }
 function pdCodClienteV1786(pedido,f){
   const cf=pdFiscalV1786(pedido);
@@ -4251,7 +4251,7 @@ function pdCodClienteV1786(pedido,f){
   /* V18.60 — consulta automática na Linx Smart API (só leitura): o cliente já existe lá? */
   const api=(cf&&cf.linx_api)||{},quando=htmlSeguroBanco(String(api.consultado_em||"").slice(0,16).replace("T"," "));
   if(api.status==="encontrado")return `<span title="Já cadastrado no Linx${api.nome?" como "+htmlSeguroBanco(api.nome):""} (consulta automática em ${quando})">🔎 ${htmlSeguroBanco(api.cliente)}</span>`;
-  if(api.status==="nao_cadastrado")return `<span style="color:#b91c1c;font-weight:600" title="A Linx não achou este CPF/CNPJ (consulta em ${quando}). Precisa cadastrar.">não cadastrado</span>`;
+  if(api.status==="nao_cadastrado")return `<span style="color:#B42318;font-weight:600" title="A Linx não achou este CPF/CNPJ (consulta em ${quando}). Precisa cadastrar.">não cadastrado</span>`;
   if(api.status==="varios")return `<span style="color:#b45309;font-weight:600" title="Mais de um cliente com este CPF/CNPJ no Linx. Confira no Linx qual usar.">vários no Linx</span>`;
   return htmlSeguroBanco(f["Cód.Cliente"]||f.CodigoCliente||"—");
 }
@@ -4379,7 +4379,7 @@ async function carregarVendasV1783(){
   const corpo=document.getElementById("vdCorpo");if(!corpo)return;
   const inicio=document.getElementById("vdInicio")?.value||"";
   const fim=document.getElementById("vdFim")?.value||"";
-  corpo.innerHTML='<tr><td colspan="7" style="text-align:center;padding:22px;color:#64748b">Carregando…</td></tr>';
+  corpo.innerHTML='<tr><td colspan="7" style="text-align:center;padding:22px;color:#586A7D">Carregando…</td></tr>';
   try{
     const params=new URLSearchParams();
     if(inicio)params.set("data_inicio",inicio);
@@ -4388,7 +4388,7 @@ async function carregarVendasV1783(){
     renderVendasV1783();
   }catch(erro){
     vendasV1783=null;
-    corpo.innerHTML=`<tr><td colspan="7" style="text-align:center;padding:22px;color:#c62828">Não foi possível carregar: ${htmlSeguroBanco(erro.message||erro)}</td></tr>`;
+    corpo.innerHTML=`<tr><td colspan="7" style="text-align:center;padding:22px;color:#B42318">Não foi possível carregar: ${htmlSeguroBanco(erro.message||erro)}</td></tr>`;
     ["vdPedidos","vdUnidades","vdSkus","vdConcluidos"].forEach(id=>v151Set(id,"—"));
   }
 }
@@ -4416,15 +4416,15 @@ function renderVendasV1783(){
     const mks=Object.entries(i.marketplaces||{})
       .map(([nome,qtd])=>`<span class="v1783-mk">${htmlSeguroBanco(nome)} ${qtd}</span>`).join("");
     return `<tr>
-      <td style="color:#64748b">${pos+1}</td>
+      <td style="color:#586A7D">${pos+1}</td>
       <td class="v1783-mono"><b>${htmlSeguroBanco(i.sku)}</b></td>
       <td>${htmlSeguroBanco(i.descricao||"—")}</td>
-      <td class="v1783-mono" style="color:#64748b">${htmlSeguroBanco(i.ean||"—")}</td>
+      <td class="v1783-mono" style="color:#586A7D">${htmlSeguroBanco(i.ean||"—")}</td>
       <td class="v1783-num">${i.unidades}</td>
       <td class="v1783-num" style="font-weight:400">${i.pedidos}</td>
       <td>${mks}</td>
     </tr>`;
-  }).join("")||'<tr><td colspan="7" style="text-align:center;padding:22px;color:#64748b">Nenhuma venda no período selecionado.</td></tr>';
+  }).join("")||'<tr><td colspan="7" style="text-align:center;padding:22px;color:#586A7D">Nenhuma venda no período selecionado.</td></tr>';
 
   const total=itens.reduce((s,i)=>s+(Number(i.unidades)||0),0);
   v151Set("vdResumo",`${itens.length} peça(s) · ${total} unidade(s) na listagem`);
@@ -4456,7 +4456,7 @@ function renderPedidosDiaV1779(){
    const f=x.first, unidades=x.e.linhas.reduce((s,r)=>s+(Number(r.Quantidade)||0),0)||Number(x.e.conf?.qtdUnidades||0), itens=x.e.linhas.length||Number(x.e.conf?.qtdItens||0), id=`pdDet${i}`;
    const detalhes=x.e.linhas.length?x.e.linhas.map(r=>`${htmlSeguroBanco(r.SKU||"—")} — ${htmlSeguroBanco(r.Descrição||"")} — Qtd. ${Number(r.Quantidade)||0}`).join("<br>"):"Dados dos itens preservados no histórico de conferência.";
    return `<tr><td><b>${htmlSeguroBanco(x.e.pedido)}</b><div id="${id}" class="v1779-detail">${detalhes}</div></td><td>${htmlSeguroBanco(f.Contato||f.TelefoneShopee||"—")}</td><td><span class="v1779-badge ${x.status==="conferido"?"v1779-ok":"v1779-wait"}">${labels[x.status]}</span></td><td>${x.status==="cancelado"?"SIM":"—"}</td><td>${htmlSeguroBanco(f["NF Status"]||f.NFStatus||(f.NF||f["Nota Fiscal"]?"Com NF":"—"))}</td><td>${pdCodClienteV1786(x.e.pedido,f)}</td><td>${htmlSeguroBanco(x.dp||"—")}</td><td>${htmlSeguroBanco(x.dc instanceof Date?x.dc.toLocaleString("pt-BR"):x.dc||"—")}</td><td>${pdCelulaClienteV1786(x.e.pedido,f)}</td><td>${htmlSeguroBanco(f["Cód.Usu."]||f.CodigoUsuario||"—")}</td><td>${htmlSeguroBanco(f.Usuario||f.ConferidoPor||"—")}</td><td>${htmlSeguroBanco(x.marketplace)}</td><td>${itens} / ${unidades}</td><td><div class="v1779-actions"><button data-pedido="${htmlSeguroBanco(x.e.pedido)}" title="Atualizar o cadastro deste cliente no Linx" onclick="pdClienteLinxV1785(this)">Cliente</button><button data-pedido="${htmlSeguroBanco(x.e.pedido)}" title="Conferir e imprimir o romaneio no Linx" onclick="pdRomaneioLinxV1860(this)">Romaneio</button><button onclick="pdDetalhesV1779('${id}')">Detalhes</button></div></td></tr>`;
- }).join("")||'<tr><td colspan="14" style="text-align:center;padding:25px;color:#64748b">Nenhum pedido encontrado para os filtros selecionados.</td></tr>';
+ }).join("")||'<tr><td colspan="14" style="text-align:center;padding:25px;color:#586A7D">Nenhum pedido encontrado para os filtros selecionados.</td></tr>';
  v151Set("pdResumo",`${rows.length} pedido(s) exibido(s)`);
 }
 
@@ -4805,7 +4805,7 @@ function pd8Fechar(){
   document.getElementById("pd8Gaveta").classList.remove("aberto");
   document.querySelectorAll("tr.pd8-sel").forEach(t=>t.classList.remove("pd8-sel"));
 }
-function pd8CorMargem(m){return m==null?"var(--muted)":m<10?"#dc2626":m<20?"#d97706":"#16a34a";}
+function pd8CorMargem(m){return m==null?"var(--muted)":m<10?"#B42318":m<20?"#d97706":"#16a34a";}
 function pd8LinhaMargem(renda, unidades, vendas, custoUnit){
   // Imposto de 12% sobre o preço vendido (ICMS), separado das tarifas do marketplace.
   const imposto=vendas*0.12;
@@ -5587,7 +5587,7 @@ function renderizarPedidosAdmin(){
   const inicio=(paginaPedidosAdmin-1)*ITENS_POR_PAGINA_PEDIDOS;
   const gruposPagina=grupos.slice(inicio,inicio+ITENS_POR_PAGINA_PEDIDOS);
   if(!filtrados.length){
-    corpo.innerHTML='<tr><td colspan="10" style="padding:28px;text-align:center;color:#64748b;background:#fff">Nenhum pedido encontrado.</td></tr>';
+    corpo.innerHTML='<tr><td colspan="10" style="padding:28px;text-align:center;color:#586A7D;background:#fff">Nenhum pedido encontrado.</td></tr>';
   }else{
     corpo.innerHTML=gruposPagina.map(grupo=>{
       const primeiro=grupo.itens[0];
@@ -5649,7 +5649,7 @@ function salvarProdutosAdmin(mostrar=false){
 function produtosFiltradosAdmin(){const t=normalizarBuscaBanco(document.getElementById("buscaProdutosAdmin")?.value||"");return produtosBancoAdmin.filter(p=>!t||CAMPOS_PRODUTOS_BANCO.some(c=>normalizarBuscaBanco(p[c]).includes(t)));}
 function renderizarProdutosAdmin(){
   const corpo=document.getElementById("corpoProdutosAdmin");if(!corpo)return;const lista=produtosFiltradosAdmin();const paginas=Math.max(1,Math.ceil(lista.length/ITENS_POR_PAGINA_PRODUTOS));paginaProdutosAdmin=Math.min(Math.max(1,paginaProdutosAdmin),paginas);const inicio=(paginaProdutosAdmin-1)*ITENS_POR_PAGINA_PRODUTOS;const parte=lista.slice(inicio,inicio+ITENS_POR_PAGINA_PRODUTOS);
-  corpo.innerHTML=parte.map(prod=>{const uid=prod.__uidProduto||(prod.__uidProduto=uidBanco("PROD"));const inp=(c,cls="")=>`<input class="${cls}" data-uidproduto="${htmlSeguroBanco(uid)}" data-campo="${htmlSeguroBanco(c)}" value="${htmlSeguroBanco(campoBanco(prod,c))}" onchange="atualizarCampoProdutoAdmin(this)">`;return `<tr><td><div class="linha-acoes"><button style="background:#ffebee;color:#c62828" onclick="excluirProdutoAdmin('${htmlSeguroBanco(uid)}')">🗑</button></div></td><td>${inp('SKU')}</td><td>${inp('Código de Barras')}</td><td>${inp('Descrição','campo-descricao')}</td><td>${inp('Marca')}</td><td>${inp('Fabricante')}</td><td>${inp('Aplicação','campo-descricao')}</td><td>${inp('Categoria')}</td><td>${inp('Rua')}</td><td>${inp('Módulo')}</td><td>${inp('Prateleira')}</td><td>${inp('Nível')}</td><td>${inp('Posição')}</td><td>${inp('Foto','campo-foto')}</td><td>${inp('Peso')}</td><td>${inp('Unidade')}</td><td>${inp('Ativo')}</td></tr>`;}).join("")||'<tr><td colspan="17" style="padding:25px;text-align:center;">Nenhum produto encontrado.</td></tr>';
+  corpo.innerHTML=parte.map(prod=>{const uid=prod.__uidProduto||(prod.__uidProduto=uidBanco("PROD"));const inp=(c,cls="")=>`<input class="${cls}" data-uidproduto="${htmlSeguroBanco(uid)}" data-campo="${htmlSeguroBanco(c)}" value="${htmlSeguroBanco(campoBanco(prod,c))}" onchange="atualizarCampoProdutoAdmin(this)">`;return `<tr><td><div class="linha-acoes"><button style="background:#FDECEA;color:#B42318" onclick="excluirProdutoAdmin('${htmlSeguroBanco(uid)}')">🗑</button></div></td><td>${inp('SKU')}</td><td>${inp('Código de Barras')}</td><td>${inp('Descrição','campo-descricao')}</td><td>${inp('Marca')}</td><td>${inp('Fabricante')}</td><td>${inp('Aplicação','campo-descricao')}</td><td>${inp('Categoria')}</td><td>${inp('Rua')}</td><td>${inp('Módulo')}</td><td>${inp('Prateleira')}</td><td>${inp('Nível')}</td><td>${inp('Posição')}</td><td>${inp('Foto','campo-foto')}</td><td>${inp('Peso')}</td><td>${inp('Unidade')}</td><td>${inp('Ativo')}</td></tr>`;}).join("")||'<tr><td colspan="17" style="padding:25px;text-align:center;">Nenhum produto encontrado.</td></tr>';
   document.getElementById("resumoProdutosAdmin").textContent=`${lista.length} produto(s) encontrado(s) de ${produtosBancoAdmin.length}`;document.getElementById("paginaProdutosTexto").textContent=`Página ${paginaProdutosAdmin} de ${paginas}`;
 }
 function atualizarCampoProdutoAdmin(el){const p=produtosBancoAdmin.find(x=>x.__uidProduto===el.dataset.uidproduto);if(!p)return;p[el.dataset.campo]=el.value;agendarSalvarProdutosAdmin();}
@@ -5685,7 +5685,7 @@ function renderizarUsuariosAdmin(){
     const inp=(campo,tipo="text")=>`<input type="${tipo}" data-uidusuario="${u.__uidUsuario}" data-campo="${campo}" value="${htmlSeguroBanco(campoBanco(u,campo))}" onchange="atualizarCampoUsuarioAdmin(this)">`;
     const check=(campo,label,icone)=>`<label class="usuario-acesso-item"><input type="checkbox" data-uidusuario="${u.__uidUsuario}" data-acesso="${campo}" ${acessoUsuarioAdmin(u,campo)?"checked":""} onchange="atualizarAcessoUsuarioAdmin(this)"><span>${icone} ${label}</span></label>`;
     return `<tr>
-      <td><div class="linha-acoes"><button style="background:#ffebee;color:#c62828" onclick="excluirUsuarioAdmin('${u.__uidUsuario}')">🗑</button></div></td>
+      <td><div class="linha-acoes"><button style="background:#FDECEA;color:#B42318" onclick="excluirUsuarioAdmin('${u.__uidUsuario}')">🗑</button></div></td>
       <td>${inp('Nome')}</td>
       <td>${inp('Login')}</td>
       <td>${inp('Senha','text')}</td>
@@ -6031,7 +6031,7 @@ function confirmarPedidosJaPendentesPlanilha(duplicados,origem="Planilha"){
     const data=dataExibicaoDuplicidadePlanilha(campoBanco(base,"Data do Pedido")||campoBanco(reg.importadas?.[0]||{},"Data do Pedido"));
     const qtdExistente=reg.existentes?.length||1;
     return `<div class="dup-planilha-item">
-      <div><div class="dup-planilha-pedido">⚠ ${htmlSeguroBanco(pedido)}</div><div style="font-size:10px;color:#991b1b;font-weight:800;margin-top:3px">JÁ ESTÁ PENDENTE · ${qtdExistente} linha(s)</div></div>
+      <div><div class="dup-planilha-pedido">⚠ ${htmlSeguroBanco(pedido)}</div><div style="font-size:10px;color:#8C1C13;font-weight:800;margin-top:3px">JÁ ESTÁ PENDENTE · ${qtdExistente} linha(s)</div></div>
       <div><span class="dup-planilha-market">${htmlSeguroBanco(market)}</span></div>
       <div class="dup-planilha-cliente">${htmlSeguroBanco(cliente)}</div>
       <div class="dup-planilha-data">${htmlSeguroBanco(data)}</div>
@@ -6108,7 +6108,7 @@ function renderizarConferenciaSkuKit(){
     const data=normalizarDataPedidoBanco(campoBanco(base,"Data do Pedido"),false);
     return `<div class="kit-review-pedido">
       <div class="kit-review-pedido-topo">
-        <div><strong>Pedido ${htmlSeguroBanco(pedidoExibido)}</strong><div style="font-size:11px;color:#64748b;margin-top:3px">${htmlSeguroBanco(cliente)}${data?` · ${htmlSeguroBanco(data.split("-").reverse().join("/"))}`:""}</div></div>
+        <div><strong>Pedido ${htmlSeguroBanco(pedidoExibido)}</strong><div style="font-size:11px;color:#586A7D;margin-top:3px">${htmlSeguroBanco(cliente)}${data?` · ${htmlSeguroBanco(data.split("-").reverse().join("/"))}`:""}</div></div>
         <span class="kit-review-market">${htmlSeguroBanco(market)}</span>
       </div>
       <div>${registros.map(({item,idx})=>`<div class="kit-review-item">
@@ -7217,7 +7217,7 @@ function renderizarComponentesKitPrint(preservarFoco=false){
   const corpo=document.getElementById("corpoItensKitPrint");if(!corpo)return;
   const ativo=preservarFoco?document.activeElement:null;
   const idAtivo=ativo?.dataset?.kitPrintId,campoAtivo=ativo?.dataset?.kitPrintCampo,pos=ativo?.selectionStart;
-  if(!componentesKitPrint.length){corpo.innerHTML='<tr><td colspan="4" style="padding:15px;text-align:center;color:#64748b">Adicione os produtos que compõem o kit.</td></tr>';return;}
+  if(!componentesKitPrint.length){corpo.innerHTML='<tr><td colspan="4" style="padding:15px;text-align:center;color:#586A7D">Adicione os produtos que compõem o kit.</td></tr>';return;}
   corpo.innerHTML=componentesKitPrint.map(item=>{
     const produto=item.produto||localizarProdutoBanco(item.codigo);item.produto=produto;
     const desc=produto?`${campoBanco(produto,"SKU")} · ${campoBanco(produto,"Descrição")}`:(item.codigo?"Produto não localizado no banco":"Informe o SKU ou EAN");
@@ -7400,7 +7400,7 @@ async function salvarEEnviarDados(){
     if(filesFotos.length){mapaFotos={};const tarefas=[];for(const file of filesFotos){if(/\.(jpg|jpeg|png|webp)$/i.test(file.name)){tarefas.push(new Promise(resolve=>{const r=new FileReader();r.onload=e=>{const nome=file.name.substring(0,file.name.lastIndexOf(".")).trim().toLowerCase();mapaFotos[nome]=e.target.result;resolve();};r.readAsDataURL(file);}));}}await Promise.all(tarefas);}
     appStorage.setPedidos(JSON.stringify(dadosPedidos),false);appStorage.setItem("conf_etiquetas",JSON.stringify(mapaEtiquetas));
     if(Object.keys(mapaFotos||{}).length){try{appStorage.setItem("conf_fotos",JSON.stringify(mapaFotos));}catch(e){appStorage.removeItem("conf_fotos");}}
-    appStorage.setItem("conf_banco_atualizado_em",new Date().toISOString());statusDiv.style.color="#2e7d32";statusDiv.innerHTML=`✔ Etiquetas salvas na servidor Web.<br>${montarResumoEtiquetas()}`;
+    appStorage.setItem("conf_banco_atualizado_em",new Date().toISOString());statusDiv.style.color="#1B7A3E";statusDiv.innerHTML=`✔ Etiquetas salvas na servidor Web.<br>${montarResumoEtiquetas()}`;
     // V16.21: inicia reconhecimento rasterizado somente depois que o TXT já foi persistido.
     setTimeout(()=>{ reconhecerEtiquetasShopeeRasterizadasEmSegundoPlano().catch(err=>console.error("Reconhecimento Shopee:",err)); },80);
   }catch(err){console.error(err);statusDiv.style.color="var(--secondary)";statusDiv.innerHTML="❌ Erro ao processar as etiquetas: "+err.message;}
@@ -7615,12 +7615,12 @@ document.addEventListener("DOMContentLoaded",()=>{
 </script>
 
 <style>
-  .btn-solicitar-acesso{width:100%;padding:11px;margin-top:9px;background:#fff;color:#2B4E75;border:1px solid #2B4E75;border-radius:6px;cursor:pointer;font-size:13px;font-weight:800}
+  .btn-solicitar-acesso{width:100%;padding:11px;margin-top:9px;background:#fff;color:#1F57A5;border:1px solid #1F57A5;border-radius:6px;cursor:pointer;font-size:13px;font-weight:800}
   .btn-solicitar-acesso:hover{background:#eef4fa}
   .solicitacao-overlay{display:none;position:fixed;inset:0;background:rgba(15,27,39,.68);z-index:12000;align-items:center;justify-content:center;padding:18px}
   .solicitacao-overlay.ativo{display:flex}
   .solicitacao-card{width:min(470px,96vw);background:#fff;border-radius:12px;box-shadow:0 20px 55px rgba(0,0,0,.32);overflow:hidden}
-  .solicitacao-topo{background:#2B4E75;color:#fff;padding:17px 20px;border-bottom:4px solid #F28C18}
+  .solicitacao-topo{background:#1F57A5;color:#fff;padding:17px 20px;border-bottom:4px solid #F28B18}
   .solicitacao-topo h3{margin:0;font-size:18px}
   .solicitacao-corpo{padding:20px}
   .solicitacao-corpo .field{margin-bottom:13px}
@@ -7628,15 +7628,15 @@ document.addEventListener("DOMContentLoaded",()=>{
   .solicitacao-acoes{display:flex;gap:10px;justify-content:flex-end;padding:0 20px 20px}
   .solicitacao-acoes button{padding:10px 15px;border:0;border-radius:6px;font-weight:800;cursor:pointer}
   .solicitacao-erro{min-height:18px;color:#b71c1c;font-size:12px;font-weight:700;margin-top:8px}
-  .solicitacoes-bloco{margin:16px 0 20px;padding:16px;background:#f8fafc;border:1px solid #d8e1e9;border-left:5px solid #F28C18;border-radius:8px}
+  .solicitacoes-bloco{margin:16px 0 20px;padding:16px;background:#f8fafc;border:1px solid #d8e1e9;border-left:5px solid #F28B18;border-radius:8px}
   .solicitacoes-cabecalho{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
-  .solicitacoes-cabecalho h3{margin:0;color:#2B4E75;font-size:16px}
-  .badge-pendencias{display:inline-flex;min-width:24px;height:24px;align-items:center;justify-content:center;padding:0 7px;border-radius:12px;background:#c62828;color:#fff;font-size:12px;font-weight:900}
+  .solicitacoes-cabecalho h3{margin:0;color:#1F57A5;font-size:16px}
+  .badge-pendencias{display:inline-flex;min-width:24px;height:24px;align-items:center;justify-content:center;padding:0 7px;border-radius:12px;background:#B42318;color:#fff;font-size:12px;font-weight:900}
   .tabela-solicitacoes{width:100%;border-collapse:collapse;background:#fff}
-  .tabela-solicitacoes th{background:#eaf0f6;color:#2B4E75;padding:9px;font-size:12px;text-align:left}
+  .tabela-solicitacoes th{background:#eaf0f6;color:#1F57A5;padding:9px;font-size:12px;text-align:left}
   .tabela-solicitacoes td{padding:9px;border-bottom:1px solid #e6ebef;font-size:12px}
-  .acao-aprovar{background:#2e7d32!important;color:#fff!important;border:0!important;padding:7px 9px!important;border-radius:5px!important;font-weight:800!important;cursor:pointer!important}
-  .acao-rejeitar{background:#ffebee!important;color:#b71c1c!important;border:1px solid #ef9a9a!important;padding:7px 9px!important;border-radius:5px!important;font-weight:800!important;cursor:pointer!important}
+  .acao-aprovar{background:#1B7A3E!important;color:#fff!important;border:0!important;padding:7px 9px!important;border-radius:5px!important;font-weight:800!important;cursor:pointer!important}
+  .acao-rejeitar{background:#FDECEA!important;color:#b71c1c!important;border:1px solid #F2C1BB!important;padding:7px 9px!important;border-radius:5px!important;font-weight:800!important;cursor:pointer!important}
   .solicitacao-vazia{padding:15px;text-align:center;color:#687887;font-size:12px}
 </style>
 
@@ -7655,7 +7655,7 @@ document.addEventListener("DOMContentLoaded",()=>{
     </div>
     <div class="solicitacao-acoes">
       <button type="button" style="background:#e3e8ed;color:#334;" onclick="fecharSolicitacaoUsuario()">Cancelar</button>
-      <button type="button" id="btnEnviarSolicitacaoUsuario" style="background:#2e7d32;color:#fff;" onclick="enviarSolicitacaoUsuario()">Enviar para aprovação</button>
+      <button type="button" id="btnEnviarSolicitacaoUsuario" style="background:#1B7A3E;color:#fff;" onclick="enviarSolicitacaoUsuario()">Enviar para aprovação</button>
     </div>
   </div>
 </div>
@@ -7754,7 +7754,7 @@ document.addEventListener("DOMContentLoaded",()=>{
     const pendentes=todas.filter(s=>txt(s.Status||"Pendente").toLowerCase()==="pendente").sort((a,b)=>txt(a.CriadoEm).localeCompare(txt(b.CriadoEm)));
     const data=v=>{try{return new Date(v).toLocaleString("pt-BR");}catch(_){return txt(v);}};
     bloco.innerHTML=`<div class="solicitacoes-cabecalho"><h3>Solicitações aguardando aprovação <span class="badge-pendencias">${pendentes.length}</span></h3><button type="button" class="btn-primario" onclick="abrirSolicitacaoUsuario('admin')">＋ Criar solicitação</button></div>`+
-      (pendentes.length?`<div style="overflow:auto"><table class="tabela-solicitacoes"><thead><tr><th>Nome</th><th>Login</th><th>Perfil solicitado</th><th>Solicitado em</th><th>Ações</th></tr></thead><tbody>${pendentes.map(s=>`<tr><td>${escapeHtml(s.Nome)}</td><td><b>${escapeHtml(s.Login)}</b></td><td><select id="perfil-aprovacao-${escapeHtml(s.id)}" style="padding:7px;border:1px solid #b8c5d1;border-radius:5px;font-weight:700;"><option value="Operador" ${(s.PerfilSolicitado||"Operador")==="Operador"?"selected":""}>Operador</option><option value="Admin" ${(s.PerfilSolicitado||"")==="Admin"?"selected":""}>Admin</option></select></td><td>${escapeHtml(data(s.CriadoEm))}</td><td style="display:flex;gap:6px"><button class="acao-aprovar" onclick="aprovarSolicitacaoUsuario('${escapeHtml(s.id)}')">✓ Aprovar</button><button class="acao-rejeitar" onclick="rejeitarSolicitacaoUsuario('${escapeHtml(s.id)}')">✕ Rejeitar</button></td></tr>`).join("")}</tbody></table></div>`:`<div class="solicitacao-vazia">Nenhuma solicitação pendente.</div>`);
+      (pendentes.length?`<div style="overflow:auto"><table class="tabela-solicitacoes"><thead><tr><th>Nome</th><th>Login</th><th>Perfil solicitado</th><th>Solicitado em</th><th>Ações</th></tr></thead><tbody>${pendentes.map(s=>`<tr><td>${escapeHtml(s.Nome)}</td><td><b>${escapeHtml(s.Login)}</b></td><td><select id="perfil-aprovacao-${escapeHtml(s.id)}" style="padding:7px;border:1px solid #C9D6E5;border-radius:5px;font-weight:700;"><option value="Operador" ${(s.PerfilSolicitado||"Operador")==="Operador"?"selected":""}>Operador</option><option value="Admin" ${(s.PerfilSolicitado||"")==="Admin"?"selected":""}>Admin</option></select></td><td>${escapeHtml(data(s.CriadoEm))}</td><td style="display:flex;gap:6px"><button class="acao-aprovar" onclick="aprovarSolicitacaoUsuario('${escapeHtml(s.id)}')">✓ Aprovar</button><button class="acao-rejeitar" onclick="rejeitarSolicitacaoUsuario('${escapeHtml(s.id)}')">✕ Rejeitar</button></td></tr>`).join("")}</tbody></table></div>`:`<div class="solicitacao-vazia">Nenhuma solicitação pendente.</div>`);
     const aba=document.querySelector('.aba-btn[data-aba="usuarios"]');
     if(aba) aba.innerHTML=`👥 Usuários${pendentes.length?` <span class="badge-pendencias" style="height:19px;min-width:19px;font-size:10px">${pendentes.length}</span>`:""}`;
   };
@@ -7835,26 +7835,26 @@ document.addEventListener("DOMContentLoaded",()=>{
 
 
 <style>
-.senha-acesso-celula{display:flex;align-items:center;gap:10px;min-width:255px}.senha-protegida-status{display:flex;flex-direction:column;line-height:1.2;min-width:105px}.senha-protegida-status strong{font-size:12px;color:#2b4e75}.senha-protegida-status small{font-size:10px;color:#718096}.senha-inicial-alerta{display:block;margin-top:4px;padding:4px 6px;border-radius:5px;background:#fff3cd;color:#8a5a00;border:1px solid #f4cf72;font-size:9px;font-weight:950}.btn-alterar-senha{border:0;border-radius:6px;background:#f7941d;color:white;font-weight:800;padding:8px 12px;cursor:pointer;white-space:nowrap}.btn-alterar-senha:hover{filter:brightness(.95)}.senha-usuario-identidade{background:#edf5fc;border:1px solid #bdd0e2;border-radius:8px;padding:10px 12px;margin-bottom:12px;display:flex;flex-direction:column}.senha-usuario-identidade span{font-size:10px;text-transform:uppercase;color:#6b7b89;font-weight:800}.senha-usuario-identidade strong{font-size:15px;color:#244d76}.senha-usuario-identidade small{color:#617487}.senha-mostrar-linha{display:flex;align-items:center;gap:8px;font-weight:700;color:#526475}.senha-mostrar-linha input{width:auto}.senha-regra{margin-top:10px;padding:9px 10px;background:#fff8e8;border-left:3px solid #f7941d;color:#5f5140;font-size:11px}.senha-salva-flash{animation:senhaFlash 1.2s ease}@keyframes senhaFlash{0%{background:#dff5e3}100%{background:transparent}}
+.senha-acesso-celula{display:flex;align-items:center;gap:10px;min-width:255px}.senha-protegida-status{display:flex;flex-direction:column;line-height:1.2;min-width:105px}.senha-protegida-status strong{font-size:12px;color:#1F57A5}.senha-protegida-status small{font-size:10px;color:#718096}.senha-inicial-alerta{display:block;margin-top:4px;padding:4px 6px;border-radius:5px;background:#FFF4E0;color:#8A5300;border:1px solid #f4cf72;font-size:9px;font-weight:950}.btn-alterar-senha{border:0;border-radius:6px;background:#F28B18;color:white;font-weight:800;padding:8px 12px;cursor:pointer;white-space:nowrap}.btn-alterar-senha:hover{filter:brightness(.95)}.senha-usuario-identidade{background:#edf5fc;border:1px solid #bdd0e2;border-radius:8px;padding:10px 12px;margin-bottom:12px;display:flex;flex-direction:column}.senha-usuario-identidade span{font-size:10px;text-transform:uppercase;color:#586A7D;font-weight:800}.senha-usuario-identidade strong{font-size:15px;color:#244d76}.senha-usuario-identidade small{color:#617487}.senha-mostrar-linha{display:flex;align-items:center;gap:8px;font-weight:700;color:#526475}.senha-mostrar-linha input{width:auto}.senha-regra{margin-top:10px;padding:9px 10px;background:#fff8e8;border-left:3px solid #F28B18;color:#5f5140;font-size:11px}.senha-salva-flash{animation:senhaFlash 1.2s ease}@keyframes senhaFlash{0%{background:#dff5e3}100%{background:transparent}}
 
-.filtros-data-pedidos{display:flex;align-items:end;gap:9px;flex-wrap:wrap;margin:10px 0 12px;padding:10px 12px;border:1px solid #dbe5f0;background:#f8fbff;border-radius:10px}
-.filtros-data-pedidos label{display:grid;gap:4px;font-size:12px;font-weight:800;color:#475569}
-.filtros-data-pedidos select,.filtros-data-pedidos input{min-width:165px;height:36px;border:1px solid #cbd5e1;border-radius:7px;padding:0 9px;background:#fff}
+.filtros-data-pedidos{display:flex;align-items:end;gap:9px;flex-wrap:wrap;margin:10px 0 12px;padding:10px 12px;border:1px solid #DCE5EF;background:#f8fbff;border-radius:10px}
+.filtros-data-pedidos label{display:grid;gap:4px;font-size:12px;font-weight:800;color:#4A5D72}
+.filtros-data-pedidos select,.filtros-data-pedidos input{min-width:165px;height:36px;border:1px solid #C9D6E5;border-radius:7px;padding:0 9px;background:#fff}
 
 /* V16.68 - Coleta diária editável */
 .coleta-admin-grid{display:grid;grid-template-columns:minmax(220px,1fr) minmax(220px,1fr);gap:18px;margin-top:18px}
 .coleta-admin-field{display:grid;gap:7px}
-.coleta-admin-field label{font-weight:800;color:#17344f;font-size:13px}
-.coleta-admin-field input{width:100%;border:1px solid #cbd8e5;border-radius:10px;padding:12px 13px;font-size:16px;background:#fff;color:#17344f;outline:none}
+.coleta-admin-field label{font-weight:800;color:#12345B;font-size:13px}
+.coleta-admin-field input{width:100%;border:1px solid #cbd8e5;border-radius:10px;padding:12px 13px;font-size:16px;background:#fff;color:#12345B;outline:none}
 .coleta-admin-field input:focus{border-color:#2b6cb0;box-shadow:0 0 0 3px rgba(43,108,176,.12)}
 .coleta-admin-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:18px}
 .coleta-admin-preview{margin-top:22px;border:1px solid #dbe6ef;border-radius:14px;background:linear-gradient(180deg,#f8fbff,#fff);padding:16px}
-.coleta-admin-preview-title{font-size:12px;font-weight:900;color:#64748b;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px}
+.coleta-admin-preview-title{font-size:12px;font-weight:900;color:#586A7D;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px}
 .coleta-admin-line{font-size:18px;font-weight:900;color:#0f3d70;line-height:1.55}
 .coleta-admin-line.codigo{color:#0b7a3d}
-.coleta-admin-meta{margin-top:10px;font-size:12px;color:#64748b}
-.coleta-admin-status{font-size:12px;font-weight:800;color:#64748b}
-.coleta-admin-status.ok{color:#15803d}.coleta-admin-status.erro{color:#b91c1c}
+.coleta-admin-meta{margin-top:10px;font-size:12px;color:#586A7D}
+.coleta-admin-status{font-size:12px;font-weight:800;color:#586A7D}
+.coleta-admin-status.ok{color:#1B7A3E}.coleta-admin-status.erro{color:#B42318}
 @media(max-width:760px){.coleta-admin-grid{grid-template-columns:1fr}}
 
 /* V16.73 - editor de kit por pedido pendente */
@@ -7867,7 +7867,7 @@ document.addEventListener("DOMContentLoaded",()=>{
 .kit-pedido-modal{width:min(720px,96vw);max-height:90vh;overflow:auto;background:#fff;border-radius:16px;padding:20px;box-shadow:0 24px 80px rgba(0,0,0,.3)}
 .kit-pedido-topo{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
 .kit-pedido-topo h3{margin:0;color:#173f6b}
-.kit-pedido-subtitulo{margin-top:4px;color:#64748b;font-size:12px}
+.kit-pedido-subtitulo{margin-top:4px;color:#586A7D;font-size:12px}
 .kit-pedido-fechar{border:0;background:#eef2f6;border-radius:8px;width:34px;height:34px;font-size:22px;cursor:pointer}
 .kit-pedido-aviso{margin-top:14px;padding:10px 12px;background:#fff8dd;border:1px solid #f3d46d;border-radius:10px;color:#745600;font-size:12px;font-weight:700}
 .kit-pedido-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:16px}
@@ -7905,7 +7905,7 @@ document.addEventListener("DOMContentLoaded",()=>{
       const uid=esc(u.__uidUsuario);
       const input=(campo)=>`<input type="text" data-uidusuario="${uid}" data-campo="${campo}" value="${esc(u[campo]||"")}" oninput="atualizarCampoUsuarioAdmin(this)">`;
       return `<tr data-linha-usuario="${uid}">
-        <td><div class="linha-acoes"><button style="background:#ffebee;color:#c62828" onclick="excluirUsuarioAdmin('${uid}')" title="Excluir usuário">🗑</button></div></td>
+        <td><div class="linha-acoes"><button style="background:#FDECEA;color:#B42318" onclick="excluirUsuarioAdmin('${uid}')" title="Excluir usuário">🗑</button></div></td>
         <td>${input("Nome")}</td>
         <td>${input("Login")}</td>
         <td><div class="senha-acesso-celula"><div class="senha-protegida-status"><strong>🔒 Senha protegida</strong><small>Não é possível visualizar a atual</small>${u.SenhaInicialPendente?'<span class="senha-inicial-alerta">⚠ TROCAR SENHA INICIAL</span>':''}</div><button type="button" class="btn-alterar-senha" onclick="abrirModalAlterarSenhaAdmin('${uid}')">Alterar senha</button></div></td>
@@ -8025,7 +8025,7 @@ document.addEventListener("DOMContentLoaded",()=>{
     const pedido=pedidoParaExibicao(String(dados.pedido||""),marketplace);
     const linhas=[[marketplace==="mercado_livre"?"Venda":"Pedido",pedido],["Cliente",resumirExtensao(dados.cliente,46)],["SKU",resumirExtensao(dados.sku,34)],["Quantidade",String(dados.quantidade||1)],["Produto",resumirExtensao(dados.descricao,58)]];
     const corpo=linhas.map((linha,i)=>`<text x="28" y="${55+i*38}" font-family="Arial" font-size="17" fill="#1e3a5f"><tspan font-weight="700">${escaparSvgExtensao(linha[0])}:</tspan> ${escaparSvgExtensao(linha[1])}</text>`).join("");
-    const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="760" height="250" viewBox="0 0 760 250"><rect width="760" height="250" rx="18" fill="#f4f8fc"/><rect x="8" y="8" width="744" height="234" rx="14" fill="none" stroke="#1f57a5" stroke-width="3"/><text x="28" y="27" font-family="Arial" font-size="14" font-weight="700" fill="#f7941d">DADOS LIDOS DIRETAMENTE DA ${escaparSvgExtensao(nome.toUpperCase())}</text>${corpo}</svg>`;
+    const svg=`<svg xmlns="http://www.w3.org/2000/svg" width="760" height="250" viewBox="0 0 760 250"><rect width="760" height="250" rx="18" fill="#f4f8fc"/><rect x="8" y="8" width="744" height="234" rx="14" fill="none" stroke="#1f57a5" stroke-width="3"/><text x="28" y="27" font-family="Arial" font-size="14" font-weight="700" fill="#F28B18">DADOS LIDOS DIRETAMENTE DA ${escaparSvgExtensao(nome.toUpperCase())}</text>${corpo}</svg>`;
     const preview=document.getElementById("previewImportacaoPrint");if(preview){preview.src="data:image/svg+xml;charset=utf-8,"+encodeURIComponent(svg);preview.alt="Resumo dos dados lidos diretamente do pedido";}
     document.getElementById("zonaColagemPrint")?.classList.add("tem-imagem");
     document.getElementById("btnLerImportacaoPrint")?.setAttribute("disabled","disabled");
@@ -8680,7 +8680,7 @@ document.addEventListener("DOMContentLoaded",()=>{
     modoRemocaoMassaEtiquetas=false;
     renderizarEtiquetasPersistentes();
     const status=document.getElementById("status");
-    if(status){status.style.color="#2e7d32";status.innerHTML=`✔ <b>${ids.length}</b> etiqueta(s) removida(s) do servidor em uma única operação.`;}
+    if(status){status.style.color="#1B7A3E";status.innerHTML=`✔ <b>${ids.length}</b> etiqueta(s) removida(s) do servidor em uma única operação.`;}
   }
   function removerEtiquetaPersistente(id){
     const banco=lerBancoEtqPersistente();
@@ -8697,7 +8697,7 @@ document.addEventListener("DOMContentLoaded",()=>{
     mapaEtiquetas=final; bancoEtiquetas=final;
     renderizarEtiquetasPersistentes();
     const status=document.getElementById("status");
-    if(status){status.style.color="#2e7d32";status.innerHTML=`✔ ${escEtq(desc)} removida do servidor.`;}
+    if(status){status.style.color="#1B7A3E";status.innerHTML=`✔ ${escEtq(desc)} removida do servidor.`;}
   }
   window.removerEtiquetaPersistente=removerEtiquetaPersistente;
   window.renderizarEtiquetasPersistentes=renderizarEtiquetasPersistentes;
@@ -8750,7 +8750,7 @@ document.addEventListener("DOMContentLoaded",()=>{
       ["etiquetasMercadoLivreInput","etiquetasMagaluInput","etiquetasShopeeInput"].forEach(id=>{const el=document.getElementById(id);if(el)el.value="";});
       renderizarEtiquetasPersistentes();
       const total=(mapaEtiquetas.ordem||[]).length;
-      statusDiv.style.color="#2e7d32";
+      statusDiv.style.color="#1B7A3E";
       statusDiv.innerHTML=`✔ Etiquetas salvas permanentemente no servidor.<br><b>${resultado.adicionadas}</b> nova(s) adicionada(s)${resultado.duplicadas?` · <b>${resultado.duplicadas}</b> já existente(s) ignorada(s)`:""} · <b>${total}</b> armazenada(s) no total.<br><span style="color:#1f57a5">Shopee: iniciando reconhecimento automático dos pedidos...</span>`;
 
       // V16.76: não deixa o lote Shopee parado em "Sem vínculo".
@@ -9149,13 +9149,13 @@ document.addEventListener("DOMContentLoaded",()=>{
 #aba-pedidos .excel-grid th{font-size:10px;padding:8px 6px;white-space:nowrap;position:sticky;top:0;z-index:2}
 #aba-pedidos .excel-grid td{padding:5px 6px;vertical-align:top}
 #aba-pedidos .excel-grid th:nth-child(1){width:82px}#aba-pedidos .excel-grid th:nth-child(2){width:150px}#aba-pedidos .excel-grid th:nth-child(3){width:92px}#aba-pedidos .excel-grid th:nth-child(4){width:112px}#aba-pedidos .excel-grid th:nth-child(5){width:205px}#aba-pedidos .excel-grid th:nth-child(6){width:205px}#aba-pedidos .excel-grid th:nth-child(7){width:58px}#aba-pedidos .excel-grid th:nth-child(8){width:235px}#aba-pedidos .excel-grid th:nth-child(9){width:240px}#aba-pedidos .excel-grid th:nth-child(10){width:92px}
-.linha-acoes-compacta{min-width:0!important;gap:3px!important;padding:0!important}.linha-acoes-compacta button{width:24px;height:24px;padding:0!important;font-size:11px}.linha-acoes-compacta .acao-atualizar{background:#e3f2fd;color:#1565c0}.linha-acoes-compacta .acao-excluir{background:#ffebee;color:#c62828}
+.linha-acoes-compacta{min-width:0!important;gap:3px!important;padding:0!important}.linha-acoes-compacta button{width:24px;height:24px;padding:0!important;font-size:11px}.linha-acoes-compacta .acao-atualizar{background:#e3f2fd;color:#1565c0}.linha-acoes-compacta .acao-excluir{background:#FDECEA;color:#B42318}
 .marketplace-pill-admin{display:inline-block;padding:5px 7px;border-radius:6px;background:#eef4fa;color:#214b75;font-size:10px;font-weight:900;white-space:nowrap}
-.cliente-conf-compacto{display:grid;gap:4px}.cliente-conf-compacto label{font-size:9px;font-weight:800;color:#64748b}.cliente-conf-compacto input{display:block;margin-top:2px;width:100%;min-width:0!important;padding:5px 6px!important;font-size:11px!important}
+.cliente-conf-compacto{display:grid;gap:4px}.cliente-conf-compacto label{font-size:9px;font-weight:800;color:#586A7D}.cliente-conf-compacto input{display:block;margin-top:2px;width:100%;min-width:0!important;padding:5px 6px!important;font-size:11px!important}
 .sku-pedido-compacto{display:grid;grid-template-columns:minmax(100px,1fr) auto auto;gap:4px;align-items:center;min-width:0}.sku-pedido-compacto input{min-width:0!important;width:100%;padding:6px!important}.btn-sku-compacto,.btn-sku-manual{border:1px solid #2563eb;background:#eff6ff;color:#1d4ed8;border-radius:5px;padding:5px 6px;font-size:10px;font-weight:850}.btn-sku-manual{border-color:#f59e0b;background:#fff7ed;color:#9a3412}
 .qtd-pedido-compacta{width:48px!important;min-width:48px!important;text-align:center}.data-pedido-compacta{min-width:0!important;width:100%;font-size:10px!important;padding:6px 3px!important}
 #aba-pedidos .ean-pedido-editor{min-width:0!important;grid-template-columns:minmax(100px,1fr) auto;gap:3px;padding:0}#aba-pedidos .ean-pedido-editor input{min-width:0!important;width:100%;font-size:11px;padding:6px}#aba-pedidos .ean-pedido-acoes{display:flex;gap:2px}#aba-pedidos .ean-pedido-acoes button{padding:5px 5px;font-size:9px}#aba-pedidos .ean-pedido-status{grid-column:1/-1;font-size:8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.produto-local-compacto{display:grid;gap:3px;min-width:0}.produto-local-compacto>strong{font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.produto-local-compacto>small{font-size:9px;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.produto-local-compacto{display:grid;gap:3px;min-width:0}.produto-local-compacto>strong{font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.produto-local-compacto>small{font-size:9px;color:#586A7D;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .pedido-detalhes-compactos{margin-top:2px}.pedido-detalhes-compactos summary{cursor:pointer;color:#1d5b96;font-weight:800;font-size:9px}.pedido-detalhes-grid{position:absolute;z-index:20;background:#fff;border:1px solid #cad8e6;box-shadow:0 8px 24px rgba(15,43,73,.15);border-radius:8px;padding:9px;display:grid;grid-template-columns:repeat(2,minmax(120px,1fr));gap:6px;width:430px}.pedido-detalhes-grid label{font-size:9px;font-weight:800;color:#526b83}.pedido-detalhes-grid input{display:block;width:100%;margin-top:2px;min-width:0!important;padding:5px!important;font-size:10px!important}.pedido-kit-detalhe{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:8px;padding-top:4px}
 @media(max-width:1100px){#aba-pedidos .excel-grid{min-width:1050px}.pedido-detalhes-grid{width:360px}}
 </style>
@@ -9219,13 +9219,13 @@ window.addEventListener("storage",e=>{
         <div style="display:flex;gap:12px;align-items:flex-start">
           <div style="font-size:30px">⚠️</div>
           <div style="flex:1">
-            <h3 style="margin:0 0 7px;font-size:19px;color:#991b1b">Conexão com Mercado Livre expirou</h3>
-            <p style="margin:0;color:#475569;line-height:1.45;font-size:14px">A sincronização de pedidos, etiquetas e custos do Mercado Livre pode estar interrompida. Reconecte a conta para o sistema voltar a atualizar automaticamente.</p>
+            <h3 style="margin:0 0 7px;font-size:19px;color:#8C1C13">Conexão com Mercado Livre expirou</h3>
+            <p style="margin:0;color:#4A5D72;line-height:1.45;font-size:14px">A sincronização de pedidos, etiquetas e custos do Mercado Livre pode estar interrompida. Reconecte a conta para o sistema voltar a atualizar automaticamente.</p>
             ${ml?.last_error?`<div style="margin-top:10px;padding:9px 10px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;font-size:12px;color:#9a3412">${mlHtmlSeguro(String(ml.last_error).slice(0,500))}</div>`:""}
           </div>
         </div>
         <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px">
-          <button id="nmMlExpiredClose" style="border:1px solid #cbd5e1;background:#fff;border-radius:8px;padding:9px 14px;cursor:pointer">Fechar</button>
+          <button id="nmMlExpiredClose" style="border:1px solid #C9D6E5;background:#fff;border-radius:8px;padding:9px 14px;cursor:pointer">Fechar</button>
           <button id="nmMlExpiredOpen" style="border:0;background:#2563eb;color:#fff;border-radius:8px;padding:9px 14px;font-weight:700;cursor:pointer">Abrir Integrações</button>
         </div>
       </div>`;
@@ -9276,7 +9276,7 @@ window.addEventListener("storage",e=>{
         <div class="coleta-popup-field-v1713"><label>Horário da coleta</label><input id="coletaPopupHorarioV1713" placeholder="10h45 - 12h45"></div>
         <div class="coleta-popup-field-v1713"><label>Código de autorização</label><input id="coletaPopupCodigoV1713" placeholder="B7BE16EA" autocomplete="off"></div>
       </div>
-      <div id="coletaPopupErroV1713" style="display:none;margin-top:12px;padding:9px 10px;border-radius:8px;background:#fff0ee;color:#a61b1b;font-size:12px;font-weight:700"></div>
+      <div id="coletaPopupErroV1713" style="display:none;margin-top:12px;padding:9px 10px;border-radius:8px;background:#FDECEA;color:#a61b1b;font-size:12px;font-weight:700"></div>
       <div class="coleta-popup-actions-v1713">
         <button type="button" class="btn-secundario" onclick="fecharColetaPopupV1713()">Agora não</button>
         <button type="button" class="btn-primario" onclick="salvarColetaPopupV1713()">Salvar coleta do dia</button>
@@ -9336,7 +9336,7 @@ window.addEventListener("storage",e=>{
 #corpoPedidosAdmin .pedido-coluna-principal{min-width:150px}
 .pedido-grupo-badge{display:inline-flex;align-items:center;gap:4px;width:max-content;border-radius:999px;padding:3px 7px;margin:0 0 5px;font-size:9px;font-weight:900;letter-spacing:.03em}
 .pedido-grupo-badge.kit{background:#dbeafe;color:#1d4ed8;border:1px solid #93c5fd}
-.pedido-grupo-badge.multi{background:#eef2f7;color:#475569;border:1px solid #cbd5e1}
+.pedido-grupo-badge.multi{background:#eef2f7;color:#4A5D72;border:1px solid #C9D6E5}
 .componente-kit-indice{min-height:12px;margin-bottom:2px}.componente-kit-indice span{font-size:9px;font-weight:800;color:#52708e;background:#edf4fb;border-radius:5px;padding:2px 5px}
 #corpoPedidosAdmin tr.pedido-grupo-meio td:not(.pedido-grupo-celula){border-top-color:#e8eff6!important}
 #corpoPedidosAdmin .pedido-grupo-input{font-weight:800}
@@ -9363,7 +9363,7 @@ window.addEventListener("storage",e=>{
 /* V17.58 — separação visual dos cards + paginação fora da lista */
 #aba-pedidos .card-admin{overflow:visible}
 #aba-pedidos .pedidos-rodape-fixo{position:relative;z-index:4;display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:14px;margin-top:12px;padding:10px 12px;background:#f8fbff;border:1px solid #d5e2ef;border-radius:10px;min-height:48px}
-#aba-pedidos .pedidos-rodape-nota{justify-self:end;color:#64748b;font-size:11px;white-space:nowrap}
+#aba-pedidos .pedidos-rodape-nota{justify-self:end;color:#586A7D;font-size:11px;white-space:nowrap}
 #aba-pedidos .pedidos-paginacao{justify-self:end;white-space:nowrap;background:#fff;padding:4px 5px;border:1px solid #d8e3ee;border-radius:8px}
 #aba-pedidos .pedido-card{margin-bottom:10px;transition:box-shadow .15s}
 #aba-pedidos .pedido-card:hover{box-shadow:0 4px 14px rgba(25,54,84,.12)}
@@ -9374,7 +9374,7 @@ window.addEventListener("storage",e=>{
 .marketplace-pill-admin.mp-shopee{background:#ffe7dc;color:#b43a0d}
 .pedido-item-acoes .acao-linx{width:auto;padding:0 7px;background:#12345b;color:#fff;font-size:10px;font-weight:800}
 .pedido-item-acoes .acao-linx:hover{background:#1d4d7b}
-.pedido-item-acoes .acao-romaneio{background:#f1f4f8;color:#8a99a8;cursor:not-allowed}
+.pedido-item-acoes .acao-romaneio{background:#F4F7FB;color:#8a99a8;cursor:not-allowed}
 .pedido-card-head input.conferencia-vazia{border-color:#f0c36d;background:#fffaf0}
 @media(max-width:900px){.pedido-item-row{grid-template-columns:62px 1fr 56px 1.2fr}.pedido-item-acoes{flex-wrap:wrap;padding-top:4px}}
 .pedido-card-head .pedido-card-conferencia{position:relative}.tag-nfe{font-style:normal;position:absolute;top:-1px;right:0;padding:1px 6px;border-radius:5px;background:#e7f8ed;color:#16723b;font-size:9px;font-weight:900;line-height:1.4}
@@ -9395,7 +9395,7 @@ window.addEventListener("storage",e=>{
   };
   window.renderizarUsuariosAdmin=function(){
     const corpo=document.getElementById('corpoUsuariosAdmin');if(!corpo)return;const lista=Array.isArray(usuariosEditorAdmin)?usuariosEditorAdmin:[];
-    corpo.innerHTML=lista.map(u=>{const uid=esc(u.__uidUsuario);return `<tr data-linha-usuario="${uid}"><td><button style="background:#ffebee;color:#c62828;border:0;border-radius:6px;padding:7px" onclick="excluirUsuarioAdmin('${uid}')" title="Excluir usuário">🗑</button></td><td><input data-uidusuario="${uid}" data-campo="Nome" value="${esc(u.Nome)}" oninput="atualizarCampoUsuarioAdmin(this)"></td><td><input data-uidusuario="${uid}" data-campo="Login" value="${esc(u.Login)}" readonly title="Para trocar o login, exclua e recrie o usuário"></td><td><div class="senha-acesso-celula"><div class="senha-protegida-status"><strong>🔒 Senha protegida</strong><small>Não é possível visualizar a atual</small></div><button type="button" class="btn-alterar-senha" onclick="abrirModalAlterarSenhaAdmin('${uid}')">Alterar senha</button></div></td><td><select data-uidusuario="${uid}" data-campo="Perfil" onchange="atualizarCampoUsuarioAdmin(this)"><option ${perfil(u.Perfil)==='Admin'?'selected':''}>Admin</option><option ${perfil(u.Perfil)==='Supervisor'?'selected':''}>Supervisor</option><option ${perfil(u.Perfil)==='Operador'?'selected':''}>Operador</option></select></td></tr>`}).join('')||'<tr><td colspan="5" style="padding:20px;text-align:center">Nenhum usuário cadastrado.</td></tr>';
+    corpo.innerHTML=lista.map(u=>{const uid=esc(u.__uidUsuario);return `<tr data-linha-usuario="${uid}"><td><button style="background:#FDECEA;color:#B42318;border:0;border-radius:6px;padding:7px" onclick="excluirUsuarioAdmin('${uid}')" title="Excluir usuário">🗑</button></td><td><input data-uidusuario="${uid}" data-campo="Nome" value="${esc(u.Nome)}" oninput="atualizarCampoUsuarioAdmin(this)"></td><td><input data-uidusuario="${uid}" data-campo="Login" value="${esc(u.Login)}" readonly title="Para trocar o login, exclua e recrie o usuário"></td><td><div class="senha-acesso-celula"><div class="senha-protegida-status"><strong>🔒 Senha protegida</strong><small>Não é possível visualizar a atual</small></div><button type="button" class="btn-alterar-senha" onclick="abrirModalAlterarSenhaAdmin('${uid}')">Alterar senha</button></div></td><td><select data-uidusuario="${uid}" data-campo="Perfil" onchange="atualizarCampoUsuarioAdmin(this)"><option ${perfil(u.Perfil)==='Admin'?'selected':''}>Admin</option><option ${perfil(u.Perfil)==='Supervisor'?'selected':''}>Supervisor</option><option ${perfil(u.Perfil)==='Operador'?'selected':''}>Operador</option></select></td></tr>`}).join('')||'<tr><td colspan="5" style="padding:20px;text-align:center">Nenhum usuário cadastrado.</td></tr>';
   };
   window.atualizarCampoUsuarioAdmin=function(el){const u=(usuariosEditorAdmin||[]).find(x=>String(x.__uidUsuario)===String(el.dataset.uidusuario));if(!u)return;u[el.dataset.campo]=el.value;if(typeof setStatusBanco==='function')setStatusBanco('Alterações pendentes — clique em Salvar alterações','salvando');};
   window.salvarUsuariosAdmin=async function(mostrar=false){
@@ -9457,6 +9457,8 @@ window.addEventListener("noromak:conference-name-saved",event=>{
   .v15-sidebar .v15-brand{justify-content:flex-start!important;padding:4px 8px 18px!important}
   .v15-sidebar .v15-nav-item{justify-content:flex-start!important;padding:12px 11px!important;font-size:14px!important;min-height:44px}
   .v15-sidebar .v15-nav-icon{width:22px!important;font-size:inherit!important}
+  /* V18.65: icones do menu em traco (SVG), no lugar dos emojis. */
+  .v15-sidebar .v15-nav-icon{display:inline-flex;align-items:center;justify-content:center;flex-shrink:0}.v15-sidebar .v15-nav-icon svg{display:block}
   .v1844-menu-btn{display:grid;place-items:center;position:fixed;left:10px;top:10px;z-index:100040;width:44px;height:44px;border:0;border-radius:11px;background:#12345b;color:#fff;font-size:21px;box-shadow:0 4px 14px rgba(13,41,71,.3);cursor:pointer}
   body.v1844-menu-aberto .v1844-menu-fundo{display:block;position:fixed;inset:0;z-index:100045;background:rgba(7,20,36,.5)}
   body.v1844-menu-aberto{overflow:hidden}
@@ -9520,7 +9522,7 @@ window.addEventListener("noromak:conference-name-saved",event=>{
   table.v1779-table.v1844-cartoes,table.v1779-table.v1844-cartoes tbody{display:block;width:100%}
   table.v1779-table.v1844-cartoes thead{display:none}
   table.v1779-table.v1844-cartoes tr{display:block;background:#fff;border:1px solid #d9e4ef;border-radius:12px;margin:0 0 10px;padding:6px 12px;box-shadow:0 1px 4px rgba(25,54,84,.06)}
-  table.v1779-table.v1844-cartoes td{display:grid;grid-template-columns:108px minmax(0,1fr);gap:8px;padding:7px 0;border-bottom:1px solid #eef3f8;overflow-wrap:anywhere}
+  table.v1779-table.v1844-cartoes td{display:grid;grid-template-columns:108px minmax(0,1fr);gap:8px;padding:7px 0;border-bottom:1px solid #F4F7FB;overflow-wrap:anywhere}
   table.v1779-table.v1844-cartoes td:last-child{border-bottom:0}
   table.v1779-table.v1844-cartoes td::before{content:attr(data-rotulo);font-size:11px;font-weight:800;color:#60758b}
   table.v1779-table.v1844-cartoes td[colspan]{display:block;text-align:center}

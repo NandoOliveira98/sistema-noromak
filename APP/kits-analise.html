@@ -10,10 +10,10 @@
      GET /api/kits-analise. Mesmo visual do Financeiro. -->
 <style>
 :root{
-  --canvas:#f6f8fa; --tile:#ffffff; --line:#e3e8ef; --line2:#eef2f6;
-  --ink:#0f1e2e; --ink2:#5b6b7f; --ink3:#93a1b1;
-  --navy:#123b63; --navy2:#1c578b; --navy3:#4b87c4; --navy4:#9cc0e4;
-  --orange:#f59b23; --pos:#0f766e; --neg:#b42318; --warn:#8a5a00; --warnbg:#fff8e6; --warnln:#f0d9a0;
+  --canvas:#F4F7FB; --tile:#ffffff; --line:#DCE5EF; --line2:#eef2f6;
+  --ink:#18324A; --ink2:#586A7D; --ink3:#93a1b1;
+  --navy:#12345B; --navy2:#1F57A5; --navy3:#4b87c4; --navy4:#9cc0e4;
+  --orange:#F28B18; --pos:#1B7A3E; --neg:#b42318; --warn:#8A5300; --warnbg:#FFF4E0; --warnln:#F3D19B;
   --r:8px;
 }
 *{box-sizing:border-box}
@@ -264,12 +264,12 @@ th.n,td.n{text-align:right;white-space:nowrap}
       const h = (H - T - B) * f.pedidos / max, x = L + i * bw + 8, w = bw - 16, y = H - B - h;
       const abaixo = f.ate != null && f.ate <= lim;
       const rot = f.ate == null ? `R$ ${f.de}+` : `R$ ${f.de}–${f.ate}`;
-      out += `<rect x="${x}" y="${y}" width="${w}" height="${Math.max(h, 1)}" rx="3" fill="${abaixo ? "#f59b23" : "#1c578b"}"><title>${rot}: ${num(f.pedidos)} pedidos · ${brl(f.faturamento)}</title></rect>`
+      out += `<rect x="${x}" y="${y}" width="${w}" height="${Math.max(h, 1)}" rx="3" fill="${abaixo ? "#F28B18" : "#1F57A5"}"><title>${rot}: ${num(f.pedidos)} pedidos · ${brl(f.faturamento)}</title></rect>`
         + `<text x="${x + w / 2}" y="${y - 6}" text-anchor="middle" font-size="12" font-weight="600" style="fill:var(--ink)">${num(f.pedidos)}</text>`
         + `<text x="${x + w / 2}" y="${H - B + 16}" text-anchor="middle" font-size="11.5">${rot}</text>`
         + `<text x="${x + w / 2}" y="${H - B + 30}" text-anchor="middle" font-size="10.5" style="fill:var(--ink3)">${pct(f.pedidos / total * 100)}</text>`;
     });
-    out += `<line x1="${L}" x2="${W - R}" y1="${H - B}" y2="${H - B}" stroke="#e3e8ef"/>`;
+    out += `<line x1="${L}" x2="${W - R}" y1="${H - B}" y2="${H - B}" stroke="#DCE5EF"/>`;
     svg.innerHTML = out;
     $("faixasInfo").textContent = `laranja = abaixo de ${brl(lim)}`;
   }

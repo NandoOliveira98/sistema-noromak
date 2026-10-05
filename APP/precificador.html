@@ -8,18 +8,18 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <style>
     :root {
-      --ink: #17395f;
-      --muted: #617286;
-      --paper: #eef5fd;
+      --ink: #18324A;
+      --muted: #586A7D;
+      --paper: #F4F7FB;
       --panel: #ffffff;
-      --line: #d7e2ee;
+      --line: #DCE5EF;
       --brand: #1F57A5;
-      --brand-dark: #173e70;
-      --brand-soft: #e8f1fb;
-      --orange: #F7941D;
+      --brand-dark: #12345B;
+      --brand-soft: #EAF1FA;
+      --orange: #F28B18;
       --blue: #1F57A5;
       --gold: #c97800;
-      --danger: #c62828;
+      --danger: #B42318;
       --shadow: 0 18px 45px rgba(24, 57, 95, .10);
       --radius: 18px;
     }
@@ -32,7 +32,7 @@
       color: var(--ink);
       background:
         radial-gradient(circle at 90% 0%, rgba(31, 87, 165, .12), transparent 30rem),
-        linear-gradient(135deg,#eef5fd,#dbe9f8);
+        linear-gradient(135deg,#F4F7FB,#dbe9f8);
       font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
 
@@ -59,14 +59,14 @@
     .brand-mark {
       width: 36px; height: 36px; border-radius: 10px;
       display: grid; place-items: center;
-      color: #fff; background: #F7941D;
+      color: #fff; background: #F28B18;
       font-weight: 900; letter-spacing: -.06em;
       box-shadow: inset 0 0 0 1px rgba(255,255,255,.4);
     }
     .brand h1 { margin: 0; font-size: 1rem; letter-spacing: -.02em; }
     .brand p { margin: 1px 0 0; color: #dce9f8; font-size: .7rem; }
-    .status { display: inline-flex; align-items: center; gap: 8px; color: #eaf2fb; font-size: .74rem; }
-    .status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #F7941D; box-shadow: 0 0 0 4px rgba(247,148,29,.18); }
+    .status { display: inline-flex; align-items: center; gap: 8px; color: #EAF1FA; font-size: .74rem; }
+    .status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #F28B18; box-shadow: 0 0 0 4px rgba(247,148,29,.18); }
 
     .app-shell {
       max-width: 1560px;
@@ -210,7 +210,7 @@
     .toast {
       position: fixed; right: 22px; bottom: 22px; z-index: 10;
       max-width: min(360px, calc(100vw - 44px)); padding: 13px 16px;
-      color: #fff; background: #173e70; border-radius: 12px; box-shadow: 0 14px 34px rgba(0,0,0,.24);
+      color: #fff; background: #12345B; border-radius: 12px; box-shadow: 0 14px 34px rgba(0,0,0,.24);
       font-size: .8rem; opacity: 0; transform: translateY(12px); pointer-events: none; transition: .2s ease;
     }
     .toast.show { opacity: 1; transform: translateY(0); }
@@ -261,12 +261,12 @@
       margin-top:10px;padding:9px 12px;border:1px solid var(--line);border-radius:10px;
       background:#f8faf9;display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:38px
     }
-    .cost-status-row small{font-size:.69rem;font-weight:800;color:#64748b}
+    .cost-status-row small{font-size:.69rem;font-weight:800;color:#586A7D}
     .topbar-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end}
     .notification-button{position:relative}
     .notification-badge{
       position:absolute;right:-7px;top:-7px;min-width:20px;height:20px;padding:0 5px;border-radius:999px;
-      display:grid;place-items:center;background:#dc2626;color:#fff;font-size:.65rem;font-weight:900;
+      display:grid;place-items:center;background:#B42318;color:#fff;font-size:.65rem;font-weight:900;
       border:2px solid #fff
     }
     .notification-badge[hidden]{display:none}
@@ -281,11 +281,11 @@
     .notification-title{font-weight:900;color:var(--ink);font-size:.82rem}
     .notification-sub{margin-top:3px;color:var(--muted);font-size:.68rem}
     .notification-values{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
-    .notification-old{color:#64748b;text-decoration:line-through;font-weight:800}
-    .notification-new{color:#15803d;font-weight:900}
-    .notification-change.up{color:#b91c1c;font-weight:900}
-    .notification-change.down{color:#15803d;font-weight:900}
-    .notification-empty{padding:28px;text-align:center;color:#64748b;border:1px dashed var(--line);border-radius:12px;background:#fafcfa}
+    .notification-old{color:#586A7D;text-decoration:line-through;font-weight:800}
+    .notification-new{color:#1B7A3E;font-weight:900}
+    .notification-change.up{color:#B42318;font-weight:900}
+    .notification-change.down{color:#1B7A3E;font-weight:900}
+    .notification-empty{padding:28px;text-align:center;color:#586A7D;border:1px dashed var(--line);border-radius:12px;background:#fafcfa}
     body.show-cost-notifications .workspace > section:not(#cost-notifications-panel){display:none}
     body.show-cost-notifications #cost-notifications-panel{display:block}
     @media(max-width:1180px){
@@ -298,18 +298,18 @@
     }
 
   
-      .branch-cost-panel{grid-column:1/-1;border:1px solid #dbe5f0;background:#f8fbff;border-radius:12px;padding:10px 12px}
+      .branch-cost-panel{grid-column:1/-1;border:1px solid #DCE5EF;background:#f8fbff;border-radius:12px;padding:10px 12px}
       .branch-cost-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:7px}
       .branch-cost-head strong{font-size:.72rem;color:#173b61}
-      .branch-cost-head span{font-size:.62rem;color:#64748b}
+      .branch-cost-head span{font-size:.62rem;color:#586A7D}
       .branch-cost-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px}
-      .branch-cost-item{border:1px solid #dbe5f0;background:#fff;border-radius:9px;padding:7px 9px;min-width:0}
+      .branch-cost-item{border:1px solid #DCE5EF;background:#fff;border-radius:9px;padding:7px 9px;min-width:0}
       .branch-cost-item.active{border-color:#1d5d96;box-shadow:0 0 0 1px #1d5d96 inset;background:#eef6ff}
       .branch-cost-item .branch-name{font-size:.65rem;font-weight:900;color:#24415e;display:block}
       .branch-cost-item .branch-value{font-size:.75rem;font-weight:900;color:#0f4f83;display:block;margin-top:2px}
       .branch-cost-item.missing .branch-value{color:#9a6700}
-      .branch-cost-item.error .branch-value{color:#b91c1c}
-      .branch-cost-item small{display:block;margin-top:2px;font-size:.56rem;color:#64748b;line-height:1.25}
+      .branch-cost-item.error .branch-value{color:#B42318}
+      .branch-cost-item small{display:block;margin-top:2px;font-size:.56rem;color:#586A7D;line-height:1.25}
       @media(max-width:760px){.branch-cost-grid{grid-template-columns:1fr}.branch-cost-panel{padding:9px}}
 
     
@@ -380,7 +380,7 @@
     .promo-kpi span{font-size:.68rem;font-weight:900;text-transform:uppercase;letter-spacing:.04em}
     .promo-kpi strong{font-size:1.45rem;line-height:1.1}
     .promo-kpi small{color:var(--muted);font-size:.64rem}
-    .promo-kpi.danger{background:#fff7f7;border-color:#fecaca}.promo-kpi.danger strong{color:#b91c1c}
+    .promo-kpi.danger{background:#fff7f7;border-color:#F2C1BB}.promo-kpi.danger strong{color:#B42318}
     .promo-kpi.warn{background:#fffaf0;border-color:#fed7aa}.promo-kpi.warn strong{color:#b45309}
     .promo-kpi.info{background:#f4f8ff;border-color:#bfdbfe}.promo-kpi.info strong{color:#1d4ed8}
     .promo-kpi.neutral{background:#f8fafc}
@@ -389,7 +389,7 @@
     .promo-stock-toggle input{width:17px;height:17px;min-height:17px;accent-color:var(--brand)}
     .promo-progress{margin:8px 0;padding:8px 10px;border:1px solid #bfdbfe;background:#eff6ff;border-radius:9px;font-size:.68rem;color:#1e40af}
     .promo-progress > div{height:5px;background:#dbeafe;border-radius:999px;overflow:hidden;margin-top:6px}.promo-progress i{display:block;height:100%;width:0;background:#2563eb;transition:width .2s}
-    .promo-help{padding:9px 11px;margin-bottom:10px;border:1px solid #dbe5f0;border-radius:10px;background:#f8fbff;color:#526477;font-size:.68rem;line-height:1.45}
+    .promo-help{padding:9px 11px;margin-bottom:10px;border:1px solid #DCE5EF;border-radius:10px;background:#f8fbff;color:#526477;font-size:.68rem;line-height:1.45}
     .promo-table-wrap{overflow:auto;border:1px solid var(--line);border-radius:12px;background:#fff;max-height:58vh}
     .promo-table{width:100%;border-collapse:collapse;min-width:980px}
     .promo-table th{position:sticky;top:0;z-index:2;background:#edf3f9;color:#30465e;font-size:.66rem;text-align:left;padding:9px 10px;border-bottom:1px solid #d8e2ec}
@@ -397,18 +397,18 @@
     .promo-table tr:hover td{background:#fbfdff}
     .promo-table input[type="date"]{min-height:30px;padding:5px 7px;border-radius:7px;font-size:.69rem}
     .promo-status-pill{display:inline-flex;padding:4px 7px;border-radius:999px;font-size:.62rem;font-weight:900;white-space:nowrap}
-    .promo-status-pill.expired{background:#fee2e2;color:#991b1b}.promo-status-pill.soon{background:#ffedd5;color:#9a3412}.promo-status-pill.ok{background:#dcfce7;color:#166534}.promo-status-pill.nodate{background:#e2e8f0;color:#475569}
-    .promo-stock{font-weight:900}.promo-stock.zero{color:#94a3b8}.promo-stock.positive{color:#15803d}.promo-stock.loading{color:#64748b}
+    .promo-status-pill.expired{background:#FDECEA;color:#8C1C13}.promo-status-pill.soon{background:#ffedd5;color:#9a3412}.promo-status-pill.ok{background:#dcfce7;color:#145C2F}.promo-status-pill.nodate{background:#DCE5EF;color:#4A5D72}
+    .promo-stock{font-weight:900}.promo-stock.zero{color:#94a3b8}.promo-stock.positive{color:#1B7A3E}.promo-stock.loading{color:#586A7D}
     .promo-apollo-box{display:flex;flex-direction:column;gap:3px;line-height:1.2}
-    .promo-apollo-sku{font-size:.66rem;font-weight:800;color:#475569;word-break:break-all}
+    .promo-apollo-sku{font-size:.66rem;font-weight:800;color:#4A5D72;word-break:break-all}
     .promo-apollo-stock{font-size:.78rem;font-weight:950}
-    .promo-apollo-stock.positive{color:#15803d}.promo-apollo-stock.zero{color:#b91c1c}.promo-apollo-stock.loading{color:#64748b}.promo-apollo-stock.error{color:#b45309}
-    .promo-apollo-review{display:inline-flex;align-items:center;width:max-content;padding:2px 6px;border-radius:999px;background:#dcfce7;color:#166534;font-size:.62rem;font-weight:950;text-transform:uppercase;letter-spacing:.02em}
-    .promo-apollo-branches{font-size:.62rem;color:#64748b;max-width:270px;white-space:normal}
+    .promo-apollo-stock.positive{color:#1B7A3E}.promo-apollo-stock.zero{color:#B42318}.promo-apollo-stock.loading{color:#586A7D}.promo-apollo-stock.error{color:#b45309}
+    .promo-apollo-review{display:inline-flex;align-items:center;width:max-content;padding:2px 6px;border-radius:999px;background:#dcfce7;color:#145C2F;font-size:.62rem;font-weight:950;text-transform:uppercase;letter-spacing:.02em}
+    .promo-apollo-branches{font-size:.62rem;color:#586A7D;max-width:270px;white-space:normal}
 
-    .promo-product-title{font-weight:850;color:#203b59;max-width:390px}.promo-product-sub{margin-top:2px;color:#64748b;font-size:.62rem}
+    .promo-product-title{font-weight:850;color:#203b59;max-width:390px}.promo-product-sub{margin-top:2px;color:#586A7D;font-size:.62rem}
     .promo-action{white-space:nowrap;text-decoration:none;display:inline-flex;align-items:center;justify-content:center}
-    .promo-footer{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-top:10px;color:#64748b;font-size:.68rem}.promo-footer > div{display:flex;align-items:center;gap:8px}
+    .promo-footer{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-top:10px;color:#586A7D;font-size:.68rem}.promo-footer > div{display:flex;align-items:center;gap:8px}
     @media(max-width:1100px){.promo-kpis{grid-template-columns:repeat(2,1fr)}.promo-toolbar{grid-template-columns:1fr 1fr 1fr}}
     @media(max-width:700px){.promo-kpis{grid-template-columns:1fr}.promo-toolbar{grid-template-columns:1fr}}
 
@@ -427,15 +427,15 @@
       align-items:center;
       margin:0 0 10px;
       padding:10px 12px;
-      border:1px solid #dbe5f0;
+      border:1px solid #DCE5EF;
       background:#f8fbff;
       border-radius:10px;
     }
     .promo-manage-title{font-size:.68rem;font-weight:900;color:#274563;white-space:nowrap}
-    .promo-manage-hint{color:#64748b;font-size:.64rem;text-align:right}
+    .promo-manage-hint{color:#586A7D;font-size:.64rem;text-align:right}
     .promo-actions{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
-    .promo-delete-btn{border:1px solid #fecaca !important;background:#fff7f7 !important;color:#b91c1c !important}
-    .promo-delete-btn:hover{background:#fee2e2 !important}
+    .promo-delete-btn{border:1px solid #F2C1BB !important;background:#fff7f7 !important;color:#B42318 !important}
+    .promo-delete-btn:hover{background:#FDECEA !important}
     /* V18.20: atalho da promoção para o Precificador */
     .promo-price-btn{border:1px solid #bfdbfe !important;background:#eff6ff !important;color:#1d4ed8 !important;font-weight:700}
     .promo-price-btn:hover{background:#dbeafe !important}
@@ -471,7 +471,7 @@
     #promo-rail-list{overflow:auto;min-height:0}
     .pr-item{border-top:1px solid #eef2ef;border-left:3px solid transparent;background:#fff;padding:7px 9px}
     .pr-item:hover{background:#f9fbfa}
-    .pr-item.venc{border-left-color:#c0392b}.pr-item.d7{border-left-color:#c77700}.pr-item.d15{border-left-color:#1F57A5}
+    .pr-item.venc{border-left-color:#B42318}.pr-item.d7{border-left-color:#c77700}.pr-item.d15{border-left-color:#1F57A5}
     .pr-item.ativo{background:#eef5ff}
     .pr-l1{display:flex;align-items:center;gap:6px}
     .pr-l2{display:flex;align-items:center;gap:4px;margin-top:2px}
@@ -486,11 +486,11 @@
     .pr-mini{border:1px solid var(--line);background:#fff;border-radius:6px;font-size:.58rem;font-weight:800;padding:2px 5px;cursor:pointer;color:var(--brand);text-decoration:none;line-height:1.5;flex:none}
     .pr-mini:hover{background:#eef5ff}
     .pr-dias{flex:none;font-size:.59rem;font-weight:800;border-radius:99px;padding:1px 6px}
-    .pr-dias.venc{background:#fdecea;color:#c0392b}.pr-dias.d7{background:#fff6e0;color:#8a5a00}.pr-dias.d15{background:#eaf2fd;color:#1F57A5}
+    .pr-dias.venc{background:#fdecea;color:#B42318}.pr-dias.d7{background:#fff6e0;color:#8A5300}.pr-dias.d15{background:#EAF1FA;color:#1F57A5}
     .pr-vazio{padding:14px 10px;font-size:.69rem;color:var(--muted);text-align:center}
     @media(max-width:1180px){.app-shell,body.promo-rail-collapsed .app-shell{grid-template-columns:minmax(0,1fr)}#promo-rail{display:none}}
-    .promo-stock.zero{color:#b91c1c !important;font-weight:900 !important}
-    .promo-stock.positive{color:#15803d !important;font-weight:900 !important}
+    .promo-stock.zero{color:#B42318 !important;font-weight:900 !important}
+    .promo-stock.positive{color:#1B7A3E !important;font-weight:900 !important}
     @media(max-width:900px){
       .promo-manage-bar{grid-template-columns:1fr 1fr}
       .promo-manage-title,.promo-manage-hint{grid-column:1/-1}
@@ -504,14 +504,14 @@
       margin-top:5px;
       font-size:.61rem;
       font-weight:800;
-      color:#64748b;
+      color:#586A7D;
       white-space:nowrap;
     }
     .promo-zero-row input{
       width:15px;
       height:15px;
       min-height:15px;
-      accent-color:#dc2626;
+      accent-color:#B42318;
     }
 
 .promo-kpis{grid-template-columns:repeat(5,minmax(135px,1fr)) !important}
@@ -525,7 +525,7 @@
 .promo-search-group input{width:100%;height:38px;box-sizing:border-box}
 .promo-search-group .btn{height:38px;white-space:nowrap}
 .promo-toolbar > select{height:38px;box-sizing:border-box;flex:0 1 175px;min-width:145px}
-.promo-stock-toggle{height:38px;box-sizing:border-box;justify-content:center;padding:0 10px;border:1px solid #dbe5f0;border-radius:9px;background:#fff;flex:0 0 auto}
+.promo-stock-toggle{height:38px;box-sizing:border-box;justify-content:center;padding:0 10px;border:1px solid #DCE5EF;border-radius:9px;background:#fff;flex:0 0 auto}
 .promo-toolbar-actions{display:flex;gap:8px;align-items:center;flex:0 0 auto;margin-left:auto}
 .promo-toolbar-actions .btn{height:38px;white-space:nowrap;padding-left:12px;padding-right:12px}
 #promo-import-btn{min-width:132px}
@@ -567,7 +567,7 @@
       .ml-link-table th{font-size:.61rem;text-transform:uppercase;letter-spacing:.03em;color:#63758a;background:#fcfdff}
       .ml-link-table tr:last-child td{border-bottom:0}
       .ml-link-badge{display:inline-flex;align-items:center;padding:2px 6px;border-radius:999px;font-weight:800;font-size:.61rem}
-      .ml-link-badge.ok{background:#e8f7ed;color:#137333}.ml-link-badge.warn{background:#fff2d5;color:#946200}.ml-link-badge.neutral{background:#eef3f8;color:#526579}
+      .ml-link-badge.ok{background:#e8f7ed;color:#137333}.ml-link-badge.warn{background:#fff2d5;color:#946200}.ml-link-badge.neutral{background:#F4F7FB;color:#526579}
       .ml-link-empty{padding:12px;color:#748497;text-align:center;font-size:.69rem}
       .ml-link-inline-form{display:flex;gap:6px;padding:7px 9px;border-top:1px solid #edf2f7;background:#fbfdff}
       .ml-link-inline-form input{flex:1;min-width:0;height:32px;font-size:.7rem}
@@ -724,7 +724,7 @@
         <div style="display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap">
           <div>
             <strong id="bulk-apollo-title">Atualizando banco pelo Apollo...</strong>
-            <div id="bulk-apollo-detail" style="margin-top:4px;color:#64748b;font-size:.72rem">Preparando atualização.</div>
+            <div id="bulk-apollo-detail" style="margin-top:4px;color:#586A7D;font-size:.72rem">Preparando atualização.</div>
           </div>
           <div id="bulk-apollo-count" style="font-weight:900;color:#1F57A5">0 / 0</div>
         </div>
@@ -993,7 +993,7 @@
         <div class="product-actions" style="align-items:center">
           <button class="btn btn-primary" id="save-btn" type="button">Salvar agora</button>
           <button class="btn btn-danger" id="delete-btn" type="button">Excluir</button>
-          <span id="autosave-status" style="margin-left:auto;color:#64748b;font-size:.7rem;font-weight:800">Salvamento automático ativo</span>
+          <span id="autosave-status" style="margin-left:auto;color:#586A7D;font-size:.7rem;font-weight:800">Salvamento automático ativo</span>
         </div>
       </section>
 
@@ -1919,7 +1919,7 @@ var state = {
       function setAutoSaveStatus(message, kind) {
         if (!el["autosave-status"]) return;
         el["autosave-status"].textContent = message;
-        el["autosave-status"].style.color = kind === "ok" ? "#15803d" : kind === "error" ? "#b91c1c" : "#64748b";
+        el["autosave-status"].style.color = kind === "ok" ? "#1B7A3E" : kind === "error" ? "#B42318" : "#586A7D";
       }
 
       function productReadyForAutoSave(product) {
@@ -2108,7 +2108,7 @@ var state = {
       function setCostApiStatus(message, kind) {
         if (!el["cost-api-status"]) return;
         el["cost-api-status"].textContent = message;
-        el["cost-api-status"].style.color = kind === "ok" ? "#15803d" : kind === "error" ? "#b91c1c" : "#64748b";
+        el["cost-api-status"].style.color = kind === "ok" ? "#1B7A3E" : kind === "error" ? "#B42318" : "#586A7D";
       }
 
       async function lookupAverageCostBySku(force, explicitSku) {
@@ -3753,7 +3753,7 @@ var state = {
         var body=document.getElementById("promo-table-body");
 
         body.innerHTML=part.map(promoRowHtml).join("") ||
-          '<tr><td colspan="5" style="padding:28px;text-align:center;color:#64748b">Nenhuma promoção encontrada. Para buscar por anúncio, digite o MLB completo (ex.: MLB2649952166) ou somente os números.</td></tr>';
+          '<tr><td colspan="5" style="padding:28px;text-align:center;color:#586A7D">Nenhuma promoção encontrada. Para buscar por anúncio, digite o MLB completo (ex.: MLB2649952166) ou somente os números.</td></tr>';
 
         document.getElementById("promo-summary").textContent=
           rows.length+" anúncio(s) da planilha · base carregada: "+promoRows.length+" · "+(document.getElementById("promo-hide-no-stock")?.checked

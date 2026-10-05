@@ -13,10 +13,10 @@
      e gráficos redesenhados. O cálculo e a API não mudaram. -->
 <style>
 :root{
-  --canvas:#f6f8fa; --tile:#ffffff; --line:#e3e8ef; --line2:#eef2f6;
-  --ink:#0f1e2e; --ink2:#5b6b7f; --ink3:#93a1b1;
-  --navy:#123b63; --navy2:#1c578b; --navy3:#4b87c4; --navy4:#9cc0e4;
-  --orange:#f59b23; --pos:#0f766e; --neg:#b42318; --warn:#8a5a00; --warnbg:#fff8e6; --warnln:#f0d9a0;
+  --canvas:#F4F7FB; --tile:#ffffff; --line:#DCE5EF; --line2:#eef2f6;
+  --ink:#18324A; --ink2:#586A7D; --ink3:#93a1b1;
+  --navy:#12345B; --navy2:#1F57A5; --navy3:#4b87c4; --navy4:#9cc0e4;
+  --orange:#F28B18; --pos:#1B7A3E; --neg:#b42318; --warn:#8A5300; --warnbg:#FFF4E0; --warnln:#F3D19B;
   --r:8px;
 }
 *{box-sizing:border-box}
@@ -241,8 +241,8 @@ th.n,td.n{text-align:right}
     if (n >= 1000) return Math.round(v / 1000) + "k";
     return String(Math.round(v || 0));
   };
-  const COR = { fat: "#123b63", cmv: "#1c578b", taxa: "#4b87c4", frete: "#9cc0e4",
-                ads: "#f59b23", imposto: "#c3ccd6", outros: "#e0e6ec", lucro: "#0f766e", perda: "#b42318" };
+  const COR = { fat: "#12345B", cmv: "#1F57A5", taxa: "#4b87c4", frete: "#9cc0e4",
+                ads: "#F28B18", imposto: "#c3ccd6", outros: "#e0e6ec", lucro: "#1B7A3E", perda: "#b42318" };
 
   const state = { dados: null, aba: "sku", carregando: false };
 
@@ -367,15 +367,15 @@ th.n,td.n{text-align:right}
       const h = Math.max(2, base - topo);
       barras += `<rect x="${x.toFixed(1)}" y="${topo.toFixed(1)}" width="${w.toFixed(1)}" height="${h.toFixed(1)}" fill="${p.cor}" rx="2">`
         + `<title>${esc(p.n)}: ${esc(brl(Math.abs(p.v)))}</title></rect>`;
-      rotulos += `<text x="${(x + w / 2).toFixed(1)}" y="${(topo - 7).toFixed(1)}" text-anchor="middle" font-size="10.5" font-weight="600" fill="#0f1e2e">${esc(curto(Math.abs(p.v)))}</text>`
+      rotulos += `<text x="${(x + w / 2).toFixed(1)}" y="${(topo - 7).toFixed(1)}" text-anchor="middle" font-size="10.5" font-weight="600" fill="#18324A">${esc(curto(Math.abs(p.v)))}</text>`
         + `<text x="${(x + w / 2).toFixed(1)}" y="${H - 20}" text-anchor="middle" font-size="10">${esc(p.n.split(" ")[0])}</text>`
         + (p.n.includes(" ") ? `<text x="${(x + w / 2).toFixed(1)}" y="${H - 9}" text-anchor="middle" font-size="10">${esc(p.n.split(" ").slice(1).join(" "))}</text>` : "");
       if (!p.total && i < passos.length - 1) {
         const ly = y(acc);
-        barras += `<line x1="${(x + w).toFixed(1)}" x2="${(x + larg).toFixed(1)}" y1="${ly.toFixed(1)}" y2="${ly.toFixed(1)}" stroke="#cbd5e1" stroke-dasharray="3 3"/>`;
+        barras += `<line x1="${(x + w).toFixed(1)}" x2="${(x + larg).toFixed(1)}" y1="${ly.toFixed(1)}" y2="${ly.toFixed(1)}" stroke="#C9D6E5" stroke-dasharray="3 3"/>`;
       }
     });
-    $("waterfall").innerHTML = g + `<line x1="${pad.l}" x2="${W - pad.r}" y1="${y(0).toFixed(1)}" y2="${y(0).toFixed(1)}" stroke="#cbd5e1"/>` + barras + rotulos;
+    $("waterfall").innerHTML = g + `<line x1="${pad.l}" x2="${W - pad.r}" y1="${y(0).toFixed(1)}" y2="${y(0).toFixed(1)}" stroke="#C9D6E5"/>` + barras + rotulos;
     $("waterInfo").textContent = t.faturamento
       ? (t.lucro_liquido < 0 ? "prejuízo de " + brl(Math.abs(t.lucro_liquido)) : "sobram " + brl(t.lucro_liquido / t.faturamento * 100) + " a cada R$ 100")
       : "";
@@ -439,8 +439,8 @@ th.n,td.n{text-align:right}
         + `<title>${esc(f.n)}: ${esc(brl(f.v))} (${(f.v / soma * 100).toFixed(1)}%)</title></path>`;
       ang = a2;
     });
-    svg += `<text x="${cx}" y="${cy - 4}" text-anchor="middle" font-size="10.5" fill="#5b6b7f">Margem líquida</text>`
-      + `<text x="${cx}" y="${cy + 15}" text-anchor="middle" font-size="19" font-weight="600" fill="${t.lucro_liquido >= 0 ? "#0f1e2e" : "#b42318"}">${esc(pct(t.margem_liquida))}</text>`;
+    svg += `<text x="${cx}" y="${cy - 4}" text-anchor="middle" font-size="10.5" fill="#586A7D">Margem líquida</text>`
+      + `<text x="${cx}" y="${cy + 15}" text-anchor="middle" font-size="19" font-weight="600" fill="${t.lucro_liquido >= 0 ? "#18324A" : "#b42318"}">${esc(pct(t.margem_liquida))}</text>`;
     $("rosca").innerHTML = svg;
     $("roscaLegenda").innerHTML = fatias.map((f) =>
       `<div class="it"><span class="nm"><i style="background:${f.cor}"></i>${esc(f.n)}</span>`

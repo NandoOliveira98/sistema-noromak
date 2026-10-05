@@ -3,47 +3,71 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#1F57A5">
+  <meta name="theme-color" content="#12345B">
   <link rel="icon" href="/favicon.ico?v=14.5" sizes="any">
   <link rel="shortcut icon" href="/favicon.ico?v=14.5">
   <title>Expedição Noromak — Acesso</title>
   <style>
-    :root{--blue:#1F57A5;--orange:#F7941D;--ink:#17395f;--muted:#617286}
+    /* V18.65: layout do guia de estilo (Claude Design) — painel marinho + formulário.
+       As classes que o web-auth.js monta dentro de #webAccessPortal continuam as mesmas. */
+    :root{--navy:#12345B;--blue:#1F57A5;--blue-hover:#194B91;--orange:#F28B18;--ink:#18324A;--muted:#586A7D;--line:#DCE5EF;--bg:#F4F7FB}
     *{box-sizing:border-box}
-    body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:linear-gradient(135deg,#eef5fd,#dbe9f8);font-family:"Plus Jakarta Sans",Segoe UI,Arial,sans-serif;color:var(--ink)}
-    .shell{width:min(720px,100%);background:#fff;border-radius:20px;box-shadow:0 25px 70px rgba(24,57,95,.20);overflow:hidden;border-top:8px solid var(--orange)}
-    .head{padding:30px 34px 20px;text-align:center}
-    .head img{max-width:230px;max-height:68px;object-fit:contain}
-    h1{margin:12px 0 8px;color:var(--blue);font-size:28px}
-    .head p{margin:0;color:var(--muted);line-height:1.55}
-    #webAccessPortal{padding:0 34px 34px}
-    .access-user{padding:18px;border:1px solid #c9dcf1;background:#eef5fd;border-radius:14px;display:flex;flex-direction:column;gap:4px}
-    .access-user span{font-size:12px;color:#65778a}.access-user strong{font-size:22px}.access-user small{font-size:13px;color:#50677d}
+    body{margin:0;min-height:100vh;display:grid;place-items:center;padding:32px 16px;background:var(--bg);font-family:"Segoe UI",Arial,sans-serif;color:var(--ink)}
+    .shell{width:min(980px,100%);display:flex;flex-wrap:wrap;background:#fff;border:1px solid var(--line);border-radius:18px;overflow:hidden;box-shadow:0 24px 60px rgba(18,52,91,.12)}
+    .side{flex:1 1 340px;background:var(--navy);color:#fff;padding:44px 40px;display:flex;flex-direction:column;justify-content:space-between;gap:36px}
+    .brand{display:flex;align-items:center;gap:12px}
+    .brand-mark{width:44px;height:44px;border-radius:11px;background:var(--orange);display:grid;place-items:center;color:var(--navy);font-weight:700;font-size:18px}
+    .brand-name{display:flex;flex-direction:column}.brand-name b{font-size:16px;letter-spacing:2.5px}.brand-name span{font-size:12px;color:#B7C7DB}
+    .side h1{margin:0 0 12px;font-size:32px;line-height:1.15;letter-spacing:-.5px}
+    .side p{margin:0;font-size:15px;line-height:1.6;color:#C9D6E6}
+    .side ul{list-style:none;margin:0;padding:0;display:grid;gap:12px;font-size:14px;color:#E3EAF3}
+    .side li{display:flex;align-items:center;gap:10px}
+    .side svg{flex-shrink:0}
+    .main{flex:1 1 380px;padding:40px 44px;display:flex;flex-direction:column;justify-content:center;gap:22px}
+    .main-logo{max-width:200px;max-height:56px;object-fit:contain;object-position:left}
+    #webAccessPortal{padding:0}
+    .access-user{padding:16px 18px;border:1px solid #C6D8EF;background:#EAF1FA;border-radius:12px;display:flex;flex-direction:column;gap:4px}
+    .access-user span{font-size:12px;color:var(--muted)}.access-user strong{font-size:22px;color:var(--navy)}.access-user small{font-size:13px;color:var(--muted)}
     .access-actions{display:grid;gap:10px;margin-top:18px}
-    .access-actions a.module-action{min-height:52px;display:grid;grid-template-columns:38px 1fr 38px;align-items:center;text-align:center;text-decoration:none;border-radius:11px;padding:8px 12px;font-weight:850;font-size:16px;background:var(--blue);color:#fff;border:2px solid var(--blue);box-shadow:0 3px 8px rgba(31,87,165,.10);transition:.15s ease}
+    .access-actions a.module-action{min-height:52px;display:grid;grid-template-columns:38px 1fr 38px;align-items:center;text-align:center;text-decoration:none;border-radius:9px;padding:8px 12px;font-weight:600;font-size:16px;background:var(--blue);color:#fff;border:1px solid var(--blue);transition:background .15s ease}
     .access-actions a.module-action::after{content:"›";font-size:25px;font-weight:500;opacity:.75}
-    .access-actions a.module-action:hover{background:#194b91;border-color:#194b91;transform:translateY(-1px)}
-    .access-actions .module-icon{width:30px;height:30px;display:grid;place-items:center;border-radius:8px;background:var(--orange);color:#fff;font-size:15px;font-weight:950}
-    .access-denied{margin-top:18px;padding:16px;border-radius:12px;background:#fff4e7;border:1px solid #f4c88e;color:#754612;line-height:1.5}
-    .back-link{display:block;text-align:center;margin-top:18px;color:var(--blue);font-weight:700;text-decoration:none;font-size:13px}
-    .note{padding:17px 34px;background:#f8fafc;border-top:1px solid #e2e8ef;color:#6b7784;font-size:12px;line-height:1.5;text-align:center}
+    .access-actions a.module-action:hover{background:var(--blue-hover);border-color:var(--blue-hover)}
+    .access-actions .module-icon{width:30px;height:30px;display:grid;place-items:center;border-radius:8px;background:var(--orange);color:var(--navy);font-size:15px;font-weight:700}
+    .access-denied{margin-top:18px;padding:16px;border-radius:10px;background:#FFF4E0;border:1px solid #F3D19B;color:#7A4A00;line-height:1.5}
+    .back-link{display:block;text-align:center;margin-top:18px;color:var(--blue);font-weight:600;text-decoration:none;font-size:13px}
+    .note{display:flex;gap:10px;padding:12px 14px;border-radius:10px;background:var(--bg);border:1px solid #E3EAF2;color:#4A5D72;font-size:13px;line-height:1.5}
+    .note svg{flex-shrink:0;margin-top:1px}
 
-    .stock-login{display:grid;gap:9px;padding:2px 0}.stock-login h2{margin:0 0 2px;color:var(--blue);font-size:21px}.stock-login p{margin:0 0 12px;color:var(--muted);font-size:13px;line-height:1.45}.stock-login label{font-size:12px;font-weight:800;color:#365570}.stock-login input{width:100%;padding:13px 14px;border:1px solid #b9c9da;border-radius:9px;font-size:15px;outline:none}.stock-login input:focus{border-color:var(--blue);box-shadow:0 0 0 3px rgba(31,87,165,.12)}.stock-login button,.logout-access{border:0;border-radius:9px;padding:13px 16px;background:var(--blue);color:#fff;font-weight:850;cursor:pointer;margin-top:6px}.stock-login button:disabled{opacity:.65;cursor:wait}.stock-error{min-height:20px;color:#b42318;font-size:12px;font-weight:750}.logout-access{width:100%;background:#fff!important;color:var(--blue)!important;border:1px solid #b9c9da!important}
+    .stock-login{display:grid;gap:9px;padding:2px 0}.stock-login h2{margin:0 0 2px;color:var(--navy);font-size:24px}.stock-login p{margin:0 0 12px;color:var(--muted);font-size:14px;line-height:1.45}.stock-login label{font-size:13px;font-weight:600;color:var(--ink)}.stock-login input{width:100%;height:48px;padding:0 14px;border:1px solid #C9D6E5;border-radius:9px;font-size:15px;color:var(--ink);outline:none}.stock-login input:focus{border-color:var(--blue);box-shadow:0 0 0 3px #D3E2F5}.stock-login button,.logout-access{border:0;border-radius:9px;min-height:50px;padding:0 16px;background:var(--blue);color:#fff;font-size:15px;font-weight:600;cursor:pointer;margin-top:8px}.stock-login button:hover{background:var(--blue-hover)}.stock-login button:disabled{opacity:.65;cursor:wait}.stock-error{min-height:20px;color:#B42318;font-size:13px;font-weight:600}.logout-access{width:100%;background:#fff!important;color:var(--blue)!important;border:1px solid #C9D6E5!important}
+    @media(max-width:760px){.side{padding:28px 24px;gap:22px}.side ul{display:none}.side h1{font-size:26px}.main{padding:28px 24px}}
   </style>
   <script src="/expedicao/web-auth.js"></script>
 </head>
 <body>
   <main class="shell">
-    <section class="head">
-      <img src="/nk-logo.svg?v=14.5" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=14.5';">
-      <h1>Sistema de Expedição</h1>
-      <p>Entre com o usuário do estoque. Administração e Conferência podem ser instaladas como aplicativos separados no Windows.</p>
+    <section class="side">
+      <div class="brand">
+        <div class="brand-mark">NK</div>
+        <div class="brand-name"><b>NOROMAK</b><span>Grupo Noromak</span></div>
+      </div>
+      <div>
+        <h1>Sistema de Expedição</h1>
+        <p>Pedidos do Mercado Livre e da Shopee, conferência por código de barras, etiquetas e financeiro em um só lugar.</p>
+      </div>
+      <ul>
+        <li><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#F28B18" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3h7v9H3zM14 3h7v5h-7zM14 12h7v9h-7zM3 16h7v5H3z"/></svg>Administração</li>
+        <li><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#F28B18" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5v14M7 5v14M11 5v14M15 5v14M18 5v14M21 5v14"/></svg>Conferência</li>
+        <li><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#F28B18" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M6 14h12v8H6z"/></svg>Estação de impressão Zebra</li>
+      </ul>
     </section>
-    <section id="webAccessPortal"></section>
-    <div class="note">
-      <img src="/grupo-noromak.png?v=14.5" alt="Grupo Noromak" style="display:block;max-width:180px;max-height:42px;margin:0 auto 10px;object-fit:contain" onerror="this.style.display='none'">
-      O NoromakWeb protege o endereço externo. Para instalar, abra a tela desejada e clique em <b>Instalar Admin</b> ou <b>Instalar Conferência</b>.
-    </div>
+    <section class="main">
+      <img class="main-logo" src="/nk-logo.svg?v=14.5" alt="Noromak" onerror="this.onerror=null;this.src='/nk-logo.png?v=14.5';">
+      <section id="webAccessPortal"></section>
+      <div class="note">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#1F57A5" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        <span>O NoromakWeb protege o endereço externo. Para instalar, abra a tela desejada e clique em <b>Instalar Admin</b> ou <b>Instalar Conferência</b>.</span>
+      </div>
+    </section>
   </main>
 </body>
 </html>
