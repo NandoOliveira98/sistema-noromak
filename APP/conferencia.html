@@ -3781,17 +3781,24 @@ function removerLinhasArtificiaisKitShopee(rows){
     if(!porPedido.has(pedido))porPedido.set(pedido,[]);
     porPedido.get(pedido).push({row,idx});
   });
+  // V18.66: conta e remove pelo SKU DA PRÓPRIA LINHA. As linhas de componente do kit
+  // (KITDB_…) guardam o SKU do kit em SkuOrigemImportacao; contar por ele escondia os
+  // componentes e a linha artificial do kit ficava — o operador apagava à mão
+  // (22 exclusões manuais até 28/09: 0893600022/0893764272, kit2-0893764272, KIT2-CAM1010).
+  const ehSkuDeKit=sku=>sku.includes("/")||/^kit\s*\d*[-_: ]+/i.test(sku);
+  const skuDaLinha=row=>String(extrairCampo(row,"SKU")||row.SkuOrigemImportacao||row.SkuReferenciaShopee||"").trim();
   const remover=new Set();
   porPedido.forEach(grupo=>{
     const qtdReal=new Map();
     grupo.forEach(({row})=>{
-      const sku=String(row.SkuOrigemImportacao||row.SkuReferenciaShopee||extrairCampo(row,"SKU")||"").trim();
-      if(!sku||sku.includes("/")||/^kit\s*\d*[-_: ]+/i.test(sku))return;
+      const sku=skuDaLinha(row);
+      if(!sku||ehSkuDeKit(sku))return;
       const chave=normalizarIdentificadorExato(sku);
       qtdReal.set(chave,(qtdReal.get(chave)||0)+Math.max(1,Number(extrairCampo(row,"Quantidade")||1)||1));
     });
     grupo.forEach(({row,idx})=>{
-      const sku=String(row.SkuOrigemImportacao||row.SkuReferenciaShopee||extrairCampo(row,"SKU")||"").trim();
+      const sku=skuDaLinha(row);
+      if(!ehSkuDeKit(sku))return;
       if(sku.includes("/")){
         const partes=sku.split("/").map(x=>normalizarIdentificadorExato(x)).filter(Boolean);
         if(partes.length>=2&&[...new Set(partes)].every(parte=>qtdReal.has(parte))){remover.add(idx);return;}
