@@ -1,5 +1,0 @@
-NOROMAK V17.76 — BOTÃO SHOPEE PARA TODOS OS USUÁRIOS
-- /api/order-conference-name não exige mais perfil Admin; exige sessão Noromak válida.
-- A permissão é somente para esta ação estreita: localizar pedido e definir Nome Conferência.
-- Nenhuma outra rota administrativa foi liberada.
-- Mantida validação pós-COMMIT verified=true e overrides manuais.

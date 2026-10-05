@@ -1,9 +1,0 @@
-V17.44 - PEDIDOS PERSISTENTES / MERGE SEGURO
-
-Correção principal:
-- Todos os pedidos existentes em conf_pedidos passam a ser preservados por padrão.
-- Sincronizações automáticas de Mercado Livre/Shopee, importações por planilha e salvamentos concorrentes não podem apagar pedidos ausentes na carga atual.
-- Inclusões manuais recebem OrigemCadastro=MANUAL_ADMIN.
-- Exclusões continuam possíveis apenas por ações explícitas que autorizam remoção.
-- Pedidos concluídos continuam saindo dos pendentes pela rotina normal de conclusão.
-- Mantidas as correções da V17.43 para Shopee: exclusão persistente de linhas e filtro de KIT artificial.

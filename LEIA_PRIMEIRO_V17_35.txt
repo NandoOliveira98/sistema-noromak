@@ -1,8 +1,0 @@
-V17.35 - AJUSTES DE LAYOUT DO PRECIFICADOR
-
-- Barra de filtros e ações responsiva; Importar planilha não sai mais da tela.
-- Cadastro manual / Adicionar produto separado da área de busca.
-- Preço OK e Estoque zerado ficam empilhados na mesma área da linha.
-- Indicador de Servidor Web reduzido para uma bolinha global: verde conectado, vermelho indisponível.
-- Clique na bolinha continua exibindo detalhes/teste de conexão.
-- Baseada na V17.33 estável, sem as alterações globais de performance da V17.34.

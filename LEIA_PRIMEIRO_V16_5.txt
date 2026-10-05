@@ -1,8 +1,0 @@
-V16.5 - CORRECAO NOME FISCAL MERCADO LIVRE
-
-- Cliente usa Dados para NF-e.
-- Fluxo atual: buyer.billing_info.id -> /orders/billing-info/MLB/{id}.
-- Compatibilidade: consulta fiscal V2 no endpoint legado enquanto a migracao do Mercado Livre estiver em paralelo.
-- Leitura compativel com name/last_name e additional_info.
-- Nunca usa username/nickname/destinatario como Cliente.
-- Pedidos pendentes sem nome fiscal sao relidos pela sincronizacao.

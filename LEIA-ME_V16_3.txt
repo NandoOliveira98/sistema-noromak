@@ -1,8 +1,0 @@
-SISTEMA NOROMAK V16.3
-
-- Reorganiza os botoes da integracao Mercado Livre.
-- Acoes diarias no topo: Sincronizar agora e Verificar etiquetas e vincular.
-- Acoes de conta separadas abaixo: Gerenciar conexao e Desconectar conta.
-- Remove da interface o botao Reautorizar acesso 24h.
-- Quando o Mercado Livre nao retorna refresh_token, o painel informa o diagnostico sem orientar reconexoes repetidas da conta master.
-- Mantem o worker 24/7 e o diagnostico OAuth da V16.2.

@@ -1,9 +1,0 @@
-NOROMAK V17.20 - SHOPEE DADOS FISCAIS
-
-- Cliente Shopee não usa mais buyer_username como fallback.
-- Prioriza buyer_name, recipient_address.name e address.name válidos.
-- Dados mascarados são ignorados.
-- Sem nome real disponível, exibe NOME NÃO DISPONÍVEL.
-- Armazena separadamente usuário Shopee, CPF/CNPJ e telefone quando a API os disponibilizar.
-- Inclui diagnóstico seguro de presença/mascaramento dos campos, sem tokens/credenciais.
-- Ressincronização atualiza pedidos Shopee API existentes e preserva pedidos manuais/ML.

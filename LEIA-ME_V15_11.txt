@@ -1,9 +1,0 @@
-V15.11 - Rentabilidade ML com conciliacao financeira
-
-- Consulta Billing ML por order_id em lotes de ate 60.
-- Mantem cache local para reduzir chamadas repetidas e risco de HTTP 429.
-- Tarifa ML prioriza Billing oficial; Orders permanece como fallback.
-- Frete do vendedor continua vindo de /shipments/{id}/costs.
-- Outros custos/bonificacoes do Billing sao consolidados sem duplicar frete.
-- Custos nao confirmados ficam como dados parciais, com diagnostico na tela.
-- Custo do produto permanece como snapshot do Apollo.

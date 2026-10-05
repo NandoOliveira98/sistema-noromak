@@ -1,8 +1,0 @@
-NOROMAK V17.80 — CONCLUSÃO E EXCLUSÃO CANÔNICAS
-- completed_orders e tombstone ADMIN são barreiras finais também na LEITURA, depois de overrides/cofre manual.
-- Concluir pedido desativa eventual cópia no cofre manual e remove pending/drafts.
-- Excluir pedido inteiro mantém tombstone soberano e devolve value/version canônicos.
-- Excluir linha devolve value/version canônicos.
-- Conclusão devolve o estado canônico relido, evitando cache local ressuscitar registro.
-- Somente inclusão ADMIN explícita pode restaurar tombstone.
-- Preserva V17.79 Pedidos do Dia, V17.78 quantidades e polling 10/30.

@@ -1,9 +1,0 @@
-V17.54 - PROMOÇÕES: VENCIDAS SEM ITENS REVISADOS
-
-ALTERAÇÕES
-- O card e o filtro Vencidas não contam/exibem anúncios marcados como Preço OK ou Estoque zerado.
-- Novo filtro: Revisados (Preço OK / Estoque zerado).
-- Mantido filtro separado Somente Preço OK.
-- O filtro Revisados mostra também os itens com Estoque zerado mesmo quando "Ocultar estoque zerado" está ativo.
-- Os registros continuam na base importada e mantêm o autosave atual.
-- Nenhuma alteração nas regras de preço, estoque Apollo, importação ou integrações.

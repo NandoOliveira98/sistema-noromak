@@ -1,7 +1,0 @@
-NOROMAK V17.59 — CORREÇÃO DA PAGINAÇÃO DE PEDIDOS
-
-- Paginação agora fica realmente depois do último card.
-- Removido o max-height herdado da antiga tabela.
-- Rodapé em fluxo normal, sem sobreposição.
-- Mantido o azul mais escuro dos cabeçalhos da V17.58.
-- Nenhuma função operacional foi alterada.

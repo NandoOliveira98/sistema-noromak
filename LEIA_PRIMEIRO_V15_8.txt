@@ -1,9 +1,0 @@
-V15.8 — CORREÇÃO RENTABILIDADE MERCADO LIVRE
-
-- Corrige painel preso em "Carregando...".
-- Vendas passam a ser buscadas diretamente em /orders/search do Mercado Livre.
-- Pedidos locais/histórico funcionam como fallback.
-- O carregamento inicial mostra as vendas rapidamente e usa custos já armazenados.
-- "Atualizar custos" consulta Apollo e custos ML disponíveis.
-- Mensagens de erro ficam visíveis na tabela, sem carregamento infinito.
-- Não estima custos que a API não informou.

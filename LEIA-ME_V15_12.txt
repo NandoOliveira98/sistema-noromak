@@ -1,8 +1,0 @@
-NOROMAK V15.12 — RENTABILIDADE ML / BILLING POR PERÍODO
-
-- Atualizar custos força nova conciliação financeira.
-- Usa Billing do período da venda (BILL + CREDIT_NOTE) filtrado por order_ids.
-- Mantém fallback oficial billing/order/details e Orders sale_fee/marketplace_fee.
-- Frete continua vindo de shipment costs e custo de produto do Apollo.
-- R$ 0 não é tratado como tarifa confirmada quando o Billing não identificou a cobrança.
-- Resultados são armazenados em cache local.

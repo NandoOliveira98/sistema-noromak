@@ -1,8 +1,0 @@
-NOROMAK V17.57
-
-- Pedidos Pendentes redesenhados em cartões por venda, com componentes de kit dentro do mesmo bloco.
-- Sem repetição visual de Pedido/Marketplace/Data/Cliente para cada componente.
-- Usuários agora usam /api/roles como fonte canônica.
-- Criar, alterar perfil/nome/senha e excluir são persistidos diretamente no servidor.
-- A tela não grava mais a lista de usuários via conf_usuarios/local/session como fonte principal.
-- Após qualquer ação, a lista é recarregada exclusivamente do servidor.

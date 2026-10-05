@@ -1,9 +1,0 @@
-NOROMAK WEB V16.75.1 — HOTFIX 502
-
-Correção urgente da V16.75:
-- Corrigida inicialização SQL da nova base Shopee.
-- A tabela shopee_integration agora encerra corretamente a instrução SQL.
-- O bloco de tabelas Mercado Livre voltou a usar executescript(), pois contém várias instruções.
-- Isso evita a falha de inicialização que causava Cloudflare 502 / Host Error.
-
-A base da integração Shopee permanece preparada e ainda não executa chamadas de produção enquanto o Go-Live estiver pendente.

@@ -1,8 +1,0 @@
-V16.16 - BUSCA RENTABILIDADE ML RESILIENTE
-
-- Corrige tela zerada após V16.15.
-- Status válidos são consultados separadamente (paid e partially_refunded).
-- Se filtro de datas da Orders API falhar/vier vazio, faz varredura oficial paginada e filtra a data no servidor.
-- Se a API continuar indisponível, usa pedidos ML locais do mesmo período como fallback real.
-- Datas locais aceitam YYYY-MM-DD e DD/MM/YYYY.
-- Buscar período continua sem Billing/frete por pedido para evitar HTTP 504.

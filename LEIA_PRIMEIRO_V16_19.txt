@@ -1,7 +1,0 @@
-V16.19 - CORRECAO ETIQUETAS SHOPEE PRESAS EM OCR
-
-- OCR Shopee passa a ter timeout de 12 segundos.
-- Se o OCR travar ou nao carregar, a etiqueta continua sendo salva.
-- Worker OCR e reiniciado apos timeout/erro.
-- Vínculo visual/manual assume quando o pedido nao puder ser identificado automaticamente.
-- Uma falha de OCR nao bloqueia as demais etiquetas do arquivo.

@@ -1,7 +1,0 @@
-NOROMAK V17.22 - SHOPEE NOME DESTINATARIO / DIAGNOSTICO
-
-- Corrige a V17.21 e mantém response_optional_fields como CSV no get_order_detail.
-- Solicita recipient_address explicitamente e também campos de nome disponíveis.
-- Cliente prioriza recipient_address.name; depois buyer_name; nunca buyer_username.
-- Adiciona diagnóstico seguro (visível/mascarado/ausente), sem registrar nome, CPF, endereço ou tokens em claro.
-- Preserva pedidos manuais, Mercado Livre e demais origens.

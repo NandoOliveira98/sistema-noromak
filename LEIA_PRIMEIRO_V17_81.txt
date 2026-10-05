@@ -1,1 +1,0 @@
-V17.81: ADMIN pode excluir qualquer pedido inteiro. Exclusão remove pending/drafts, cofre manual e cria tombstone soberano. Sucesso só após releitura confirmar ausência.

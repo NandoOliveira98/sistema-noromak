@@ -1,7 +1,0 @@
-NOROMAK V17.21 - SHOPEE NOME DO DESTINATARIO
-
-- Prioriza recipient_address.name como Cliente nos pedidos Shopee.
-- Solicita recipient_address explicitamente no get_order_detail.
-- buyer_username nunca e usado como nome do cliente.
-- Mantem CPF/CNPJ e dados fiscais separados.
-- Ressincronizacao atualiza pedidos Shopee existentes sem apagar pedidos manuais/ML.

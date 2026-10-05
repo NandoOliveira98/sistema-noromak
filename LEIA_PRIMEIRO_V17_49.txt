@@ -1,9 +1,0 @@
-V17.49 - SKU OPERACIONAL ML + EDIÇÃO MANUAL REAL
-
-- Mercado Livre: quando o SKU vier como 158529-0893117732, o sistema usa 0893117732 como SKU operacional.
-- O valor bruto 158529-0893117732 continua guardado em SkuOrigemImportacao.
-- Prefixos de KIT (KIT2-, KIT3- etc.) não são removidos.
-- Admin: digitar SKU não re-renderiza mais a linha antes do clique.
-- O botão Salvar SKU persiste explicitamente o valor manual e ativa SkuManualOverride.
-- Sincronizações futuras localizam a linha pelo UID/identidade ML e respeitam o SKU manual.
-- Deduplicação legada agora prefere a forma operacional curta quando houver par prefixado/curto.

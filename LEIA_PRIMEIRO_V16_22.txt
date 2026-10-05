@@ -1,6 +1,0 @@
-V16.22 - KITS NA RENTABILIDADE
-
-- Reconhece kits diretamente pelo Cadastro de Kits mesmo quando SkuKitOrigem não veio expandido.
-- Aceita variações de SKU com espaços, hífens, pontos e barras.
-- Reconstrói a composição e soma os custos Apollo dos componentes.
-- Atualizar/Reprocessar pendentes substitui snapshot antigo quando o custo do kit for encontrado.

@@ -1,9 +1,0 @@
-V15.7 - RENTABILIDADE MERCADO LIVRE
-
-Novo módulo: Comercial > Rentabilidade ML.
-- Abre em nova aba.
-- Faturamento por venda, custo Apollo, custos ML disponíveis, lucro e margem.
-- Filtros por período, busca e vendas com prejuízo.
-- O custo Apollo é salvo como snapshot por venda/SKU: atualizações futuras de custo não alteram retroativamente o custo histórico já capturado.
-- Taxas/frete que a API não disponibilizar aparecem como dados parciais; o sistema não inventa valores.
-- Botão Atualizar custos consulta novamente dados comerciais do Mercado Livre, mantendo o custo histórico Apollo já salvo.

@@ -1,9 +1,0 @@
-NOROMAK WEB V16.79 — SHOPEE: RASTREIO E PEDIDO SEPARADOS
-
-- Corrigida a exibição incorreta dos códigos BR...: são rastreios, não pedidos.
-- Novo status: "Rastreio identificado · pedido ainda não lido".
-- Novo botão "Reconhecer pedidos Shopee".
-- Primeiro cruza rastreio com pedidos locais sem OCR.
-- Somente etiquetas sem pedido seguem para OCR.
-- OCR usa até 3 workers em paralelo, recorte menor e cache persistente.
-- Reprocessar vínculos continua rápido e sem OCR.

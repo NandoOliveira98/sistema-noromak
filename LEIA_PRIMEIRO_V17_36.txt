@@ -1,9 +1,0 @@
-V17.36 - SUPORTE À EXTENSÃO: PROMOÇÕES + APOLLO
-
-Base: V17.35 (derivada da V17.33 estável).
-
-Alteração localizada:
-- Permite que usuários com acesso ao Precificador gravem a chave compartilhada ml_promocoes_datas_v1.
-- Necessário para editar Data, Preço OK e Estoque zerado pela extensão no Mercado Livre.
-- Nenhuma regra de cálculo, Shopee, Conferência, banco de pedidos ou integração ML foi alterada.
-- A consulta Apollo continua usando o endpoint autenticado existente /api/full/apollo-stock.

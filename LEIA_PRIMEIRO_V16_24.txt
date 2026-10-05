@@ -1,7 +1,0 @@
-V16.24 - KITS POR PREFIXO DE QUANTIDADE
-
-Correção específica do KIT3-KS001 e casos equivalentes.
-- Cadastro de Kits manual continua tendo prioridade.
-- Se não houver composição manual, KIT2-ABC = 2 x ABC, KIT3-ABC = 3 x ABC etc.
-- O custo é buscado no Apollo pelo SKU base e multiplicado pela quantidade do prefixo.
-- A regra também vale na sincronização de pedidos e no reprocessamento da Rentabilidade.

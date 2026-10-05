@@ -1,9 +1,0 @@
-V14.25 - Testes realizados
-
-1. Python backend: py_compile OK.
-2. Resolução Hosted View: quando /orders/{id}/shipments retorna return antes de forward,
-   o sistema seleciona explicitamente type=forward.
-3. Compatibilidade: aceita direction=forward do contrato legado e mantém fallback da vista antiga.
-4. Vínculo resiliente: uma linha marcada VINCULADA sem registro ZPL real em conf_etiquetas
-   não é mais considerada integrada e volta a ser elegível para recuperação automática.
-5. Descoberta/watchers passam a resolver o shipment forward oficial antes de usar shipping.id antigo.
