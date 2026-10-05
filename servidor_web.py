@@ -252,7 +252,8 @@ OPERATOR_WRITE_KEYS = {
     "ml_sku_mlb_links_v1",
     "ml_promocoes_datas_v1",
     "conf_coleta_dia_v1",
-    "conf_shopee_exclusoes_v1",
+    # V18.66: conf_shopee_exclusoes_v1 saiu daqui. Só quem exclui produto de pedido
+    # (Admin e Supervisor) registra exclusão; o operador não apaga mais linhas reais.
 }
 
 
@@ -3762,6 +3763,109 @@ def preserve_pending_records_v1714(current_value: str | None, new_value: str) ->
     if deduped != newer:
         newer=deduped;changed=True
     return json_dumps(newer) if changed else new_value
+
+# V18.66 (item 1 das permissões, decisão do dono em 05/10): excluir produto de um
+# pedido é do Admin e do Supervisor. O operador só remove a linha ARTIFICIAL de um kit
+# da Shopee cujos componentes já estão no pedido — a mesma regra da limpeza
+# automática da Conferência (removerLinhasArtificiaisKitShopee), que grava sozinha.
+def _id_exato_v1866(valor: Any) -> str:
+    texto = unicodedata.normalize("NFD", str(valor or ""))
+    texto = "".join(ch for ch in texto if not unicodedata.combining(ch))
+    return re.sub(r"[^A-Z0-9]", "", texto.upper())
+
+
+def _sku_de_kit_v1866(sku: str) -> bool:
+    return "/" in sku or bool(re.match(r"^kit\s*\d*[-_: ]+", sku, re.I))
+
+
+def _linha_shopee_v1866(row: dict[str, Any]) -> bool:
+    if "SHOPEE" in normalize(row.get("Marketplace") or row.get("marketplace")):
+        return True
+    pedido = _id_exato_v1866(order_number(row))
+    return bool(re.match(r"^26[A-Z0-9]{12}$", pedido) and re.search(r"[A-Z]", pedido))
+
+
+def _ids_linhas_artificiais_kit_v1866(rows: list[Any]) -> set[str]:
+    def sku_da_linha(row: dict[str, Any]) -> str:
+        return str(row.get("SKU") or row.get("SkuOrigemImportacao") or row.get("SkuReferenciaShopee") or "").strip()
+
+    def qtd(row: dict[str, Any]) -> int:
+        try:
+            return max(1, int(float(str(row.get("Quantidade") or 1))))
+        except Exception:
+            return 1
+
+    por_pedido: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+    for i, row in enumerate(rows):
+        if isinstance(row, dict) and _linha_shopee_v1866(row):
+            pedido = _id_exato_v1866(order_number(row))
+            if pedido:
+                por_pedido.setdefault(pedido, []).append((i, row))
+    artificiais: set[str] = set()
+    for grupo in por_pedido.values():
+        qtd_real: dict[str, int] = {}
+        for _, row in grupo:
+            sku = sku_da_linha(row)
+            if sku and not _sku_de_kit_v1866(sku):
+                chave = _id_exato_v1866(sku)
+                qtd_real[chave] = qtd_real.get(chave, 0) + qtd(row)
+        for i, row in grupo:
+            sku = sku_da_linha(row)
+            if not _sku_de_kit_v1866(sku):
+                continue
+            artificial = False
+            if "/" in sku:
+                partes = {_id_exato_v1866(p) for p in sku.split("/") if _id_exato_v1866(p)}
+                artificial = len(partes) >= 2 and all(p in qtd_real for p in partes)
+            if not artificial:
+                m = re.match(r"^kit\s*(\d+)?[-_: ]+(.+)$", sku, re.I)
+                if m:
+                    mult = max(1, int(m.group(1) or 1))
+                    base = _id_exato_v1866(m.group(2))
+                    artificial = bool(base) and qtd_real.get(base, 0) >= mult
+            if artificial:
+                artificiais.add(_pending_identity_v1714(row, i))
+    return artificiais
+
+
+def operador_remocoes_pendentes_v1866(old_value: str | None, new_value: str) -> tuple[list[str], str]:
+    """Remoções de conf_pedidos pedidas por quem não é Admin nem Supervisor.
+
+    Devolve (linhas recusadas, novo valor). Só conta como remoção do operador o que
+    estava na cópia que ELE leu (old_value) e sumiu da gravação; linhas que chegaram
+    depois pela sincronização são mantidas, não recusadas.
+    """
+    atual_bruto, _, _ = get_storage("conf_pedidos")
+    try:
+        atual = json.loads(atual_bruto or "[]")
+        novas = json.loads(new_value or "[]")
+        lidas = json.loads(old_value) if old_value else atual
+    except Exception:
+        return [], new_value
+    if not all(isinstance(x, list) for x in (atual, novas, lidas)):
+        return [], new_value
+    ids_novas = {_pending_identity_v1714(r, i) for i, r in enumerate(novas) if isinstance(r, dict)}
+    removidas = {
+        _pending_identity_v1714(r, i): r
+        for i, r in enumerate(lidas)
+        if isinstance(r, dict) and _pending_identity_v1714(r, i) not in ids_novas
+    }
+    artificiais = _ids_linhas_artificiais_kit_v1866(lidas)
+    recusadas = [
+        f"{order_number(r)} {r.get('SKU') or ''}".strip()
+        for ident, r in removidas.items() if ident not in artificiais
+    ]
+    if recusadas:
+        return recusadas, new_value
+    saida = list(novas)
+    for i, r in enumerate(atual):
+        if not isinstance(r, dict):
+            continue
+        ident = _pending_identity_v1714(r, i)
+        if ident not in ids_novas and ident not in removidas:
+            saida.append(r)
+    return [], json_dumps(saida)
+
 
 # V18.49: o banco do Precificador é UM objeto {"products": [...], "selectedId", ...}.
 # O merge abaixo só juntava listas; para objeto ficava com a última gravação
@@ -18386,6 +18490,20 @@ class AppHandler(BaseHTTPRequestHandler):
                 force = True
             allow_label_deletes = bool(req.get("allowLabelDeletes"))
             allow_pending_deletes = bool(req.get("allowPendingDeletes"))
+            # V18.66 (item 1): operador só remove a linha artificial de kit da Shopee.
+            if (key == "conf_pedidos" and allow_pending_deletes
+                    and str(ctx.get("app_role") or "").lower() != "admin"
+                    and not module_allowed(ctx, "admin")):
+                recusadas, new_value = operador_remocoes_pendentes_v1866(old_value, new_value)
+                if recusadas:
+                    audit(ctx["username"], "security.denied.pending_delete", "; ".join(recusadas)[:1000])
+                    self.send_json({
+                        "error": "Excluir produto do pedido é com o supervisor ou o Admin. "
+                                 "Nada foi apagado.",
+                        "code": "EXCLUSAO_SO_SUPERVISOR",
+                        "linhas": recusadas[:20],
+                    }, 403)
+                    return
             if key == "conf_etiquetas" and not allow_label_deletes:
                 current_labels, _, _ = get_storage("conf_etiquetas")
                 new_value = preserve_label_records(current_labels, new_value)

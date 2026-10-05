@@ -2391,7 +2391,9 @@ function desenharTabela() {
         <td style="text-align:left;">${escaparHtml(extrairCampo(i, "Descrição"))}${String(extrairCampo(i,"Kit")||"").toUpperCase()==="SIM"||extrairCampo(i,"Nome do Kit")?`<div style="margin-top:4px"><span class="pedido-status-mini" style="background:#f3e8ff;color:#6b21a8">🎁 ${escaparHtml(extrairCampo(i,"Nome do Kit")||extrairCampo(i,"SkuKitOrigem")||"Kit")}</span></div>`:""}${extrairCampo(i,"Observação")?`<div style="margin-top:4px"><span class="pedido-status-mini" style="background:#FFF4E0;color:#8A5300">⚠ ${escaparHtml(extrairCampo(i,"Observação"))}</span></div>`:""}</td>
         <td>${escaparHtml(extrairCampo(i, "Quantidade") || 0)}</td>
         <td>${escaparHtml(i.Lido || 0)}</td>
-        <td><button type="button" style="border:0;border-radius:6px;padding:6px 9px;background:#FDECEA;color:#B42318;font-weight:800;cursor:pointer" onclick="excluirProdutoPedidoConferencia(${argJs(i.__uidLinha||i.__uidPedido||'')})"><i class=nk-i-trash></i> Excluir</button></td>
+        <td>${podeExcluirProdutoPedido()
+          ? `<button type="button" style="border:0;border-radius:6px;padding:6px 9px;background:#FDECEA;color:#B42318;font-weight:800;cursor:pointer" onclick="excluirProdutoPedidoConferencia(${argJs(i.__uidLinha||i.__uidPedido||'')})"><i class=nk-i-trash></i> Excluir</button>`
+          : `<button type="button" disabled title="Excluir produto do pedido é com o supervisor" style="border:0;border-radius:6px;padding:6px 9px;background:#EEF2F6;color:#8A99A8;font-weight:700;cursor:not-allowed"><i class=nk-i-lock></i> Supervisor</button>`}</td>
       </tr>
     `;
   });
@@ -3822,7 +3824,18 @@ function registrarExclusaoManualShopeeConferencia(item){
     lista.push({Pedido:pedido,SkuOrigem:skuOrigem,SKU:String(extrairCampo(item,"SKU")||""),UidLinha:uid,ExcluidoEm:new Date().toISOString(),Origem:"MANUAL"});
   appStorage.setItem("conf_shopee_exclusoes_v1",JSON.stringify(lista));
 }
+// V18.66 (item 1 das permissões): excluir produto do pedido é do Admin e do Supervisor.
+// O servidor recusa o resto; a linha artificial de kit a limpeza automática já tira sozinha.
+function podeExcluirProdutoPedido(){
+  const u=window.EXPEDICAO_USER||{};
+  const p=u.permissions||{};
+  return String(u.app_role||"").toLowerCase()==="admin"||p.admin===true;
+}
 function excluirProdutoPedidoConferencia(uid){
+  if(!podeExcluirProdutoPedido()){
+    mostrarMensagemDetalhada("aviso","Peça ao supervisor","Excluir produto do pedido é com o supervisor ou o Admin. Se for a linha de um KIT duplicada, ela sai sozinha quando os produtos do kit estão no pedido.","");
+    return;
+  }
   const alvo=pedidoAtual.find(x=>String(x.__uidLinha||x.__uidPedido||"")===String(uid));
   if(!alvo)return;
   if(!confirm(`Excluir ${extrairCampo(alvo,"SKU")||"este produto"} deste pedido? A Shopee não irá adicioná-lo novamente automaticamente.`))return;
