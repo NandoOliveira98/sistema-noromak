@@ -39,6 +39,10 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
+# V18.65: a fonte do tema (APP/fonts/*.woff2) fica no próprio servidor — o CSP só
+# aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
+mimetypes.add_type("font/woff2", ".woff2")
+
 APP_VERSION = "18.65-PALETA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"

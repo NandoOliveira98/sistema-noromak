@@ -522,7 +522,7 @@
   .etiqueta-persistente-status.sem-vinculo{background:#fff4d6;color:#936500}
   .etiqueta-remover-x{width:27px;height:27px;border:0;border-radius:50%;background:#fff0f0;color:#B42318;font-size:17px;font-weight:900;line-height:27px;cursor:pointer;padding:0;transition:.15s}
   .etiqueta-remover-x:hover{background:#B42318;color:#fff;transform:scale(1.05)}
-  .etiquetas-vazio{padding:16px 8px;text-align:center;color:#8a99a8;font-size:10px}
+  .etiquetas-vazio{padding:16px 8px;text-align:center;color:#5F7186;font-size:10px}
   .etiquetas-persistentes-aviso{margin-top:9px;font-size:10px;color:#607284;line-height:1.45}
   @media(max-width:900px){.etiquetas-persistentes-grid{grid-template-columns:1fr}}
 </style>
@@ -592,7 +592,7 @@ body{background:var(--v15-bg)!important}
 .v1799-kpi small{display:block;color:#738598;font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.04em}
 .v1799-kpi b{display:block;margin-top:5px;font-size:clamp(16px,1.45vw,24px);line-height:1.1;color:#143957;font-variant-numeric:tabular-nums;white-space:nowrap;letter-spacing:-.01em}
 .v1799-var{display:block;margin-top:5px;font-size:10.5px;font-weight:800;color:#586A7D}
-.v1799-var.sobe{color:#1B7A3E}.v1799-var.desce{color:#b42318}.v1799-var small{font-weight:600;color:#8a99a8;text-transform:none;letter-spacing:0;display:inline;font-size:10px}
+.v1799-var.sobe{color:#1B7A3E}.v1799-var.desce{color:#b42318}.v1799-var small{font-weight:600;color:#5F7186;text-transform:none;letter-spacing:0;display:inline;font-size:10px}
 .v1799-chart-panel{position:relative;margin-bottom:13px}
 .v1799-chart{height:190px;display:flex;align-items:flex-end;gap:2px;padding:8px 2px 0;border-bottom:1px solid #DCE5EF;position:relative}
 .v1799-col{flex:1;min-width:3px;height:100%;display:flex;flex-direction:column;justify-content:flex-end;gap:2px;cursor:default;position:relative;outline:0}
@@ -608,10 +608,10 @@ body{background:var(--v15-bg)!important}
 .v1799-top td{padding:7px 6px;border-bottom:1px solid #f0f4f8;color:#284861;vertical-align:middle}
 .v1799-top tr:last-child td{border-bottom:0}
 .v1799-top .n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
-.v1799-top .pos{width:22px;color:#8a99a8;font-weight:800}
+.v1799-top .pos{width:22px;color:#5F7186;font-weight:800}
 .v1799-top .prod{max-width:0;width:100%}
 .v1799-top .prod b{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-weight:750;color:#1c3e5c}
-.v1799-top .prod small{display:block;color:#8a99a8;font-size:10px;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.v1799-top .prod small{display:block;color:#5F7186;font-size:10px;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .v1799-top .share{display:flex;gap:1px;height:3px;border-radius:2px;background:#e6edf4;margin-top:4px;overflow:hidden}.v1799-top .share i{display:block;height:3px}.v1799-top .share i.ml{background:var(--v1799-ml)}.v1799-top .share i.shopee{background:var(--v1799-shopee)}
 .v1799-rodape{margin:10px 2px 0;color:#7b8d9e;font-size:10.5px}
 @media(max-width:760px){.v1799-canais{grid-template-columns:1fr}}
@@ -649,6 +649,8 @@ body{background:var(--v15-bg)!important}
 .v1783-mk{display:inline-block;background:#eef4fa;border-radius:999px;padding:2px 8px;font-size:11px;margin-right:4px;color:#23415d}
 @media(max-width:1000px){.v1783-kpis{grid-template-columns:repeat(2,1fr)}}
 </style>
+<!-- V18.65: tema comum (fonte, foco e icones) por ultimo no head. -->
+<link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
 </head>
 <body>
 
@@ -658,7 +660,7 @@ body{background:var(--v15-bg)!important}
   <div class="print-modal-card" role="dialog" aria-modal="true" aria-labelledby="tituloImportacaoPrint">
     <div class="print-modal-topo">
       <div>
-        <h2 id="tituloImportacaoPrint">📷 Importar pedido por print</h2>
+        <h2 id="tituloImportacaoPrint"><i class=nk-i-camera></i> Importar pedido por print</h2>
         <p>Cole, arraste ou selecione um print do Mercado Livre, Shopee ou Magalu. Revise os dados e marque a opção de kit quando a venda possuir vários componentes.</p>
       </div>
       <button type="button" class="print-modal-fechar" onclick="fecharImportacaoPorPrint()" aria-label="Fechar">×</button>
@@ -676,7 +678,7 @@ body{background:var(--v15-bg)!important}
         <input id="arquivoImportacaoPrint" type="file" accept="image/png,image/jpeg,image/webp,image/bmp" hidden onchange="receberArquivoPrint(event)">
         <div class="print-acoes-imagem">
           <button type="button" class="btn-secundario" onclick="acionarArquivoPrint()">Selecionar imagem</button>
-          <button type="button" id="btnLerImportacaoPrint" class="btn-print-importacao btn-primario" onclick="lerImportacaoPorPrint()" disabled>🔎 Ler print</button>
+          <button type="button" id="btnLerImportacaoPrint" class="btn-print-importacao btn-primario" onclick="lerImportacaoPorPrint()" disabled><i class=nk-i-search></i> Ler print</button>
           <button type="button" class="btn-secundario" onclick="limparImportacaoPorPrint()">Limpar</button>
         </div>
         <div class="print-privacidade">A imagem é utilizada somente durante a leitura e não é gravada no banco compartilhado.</div>
@@ -723,7 +725,7 @@ body{background:var(--v15-bg)!important}
           <div class="campo-largo print-kit-toggle-wrap">
             <label class="print-kit-toggle" for="printEhKit">
               <input id="printEhKit" type="checkbox" onchange="alternarKitImportacaoPrint()">
-              <span>🎁 Este pedido é um kit</span>
+              <span><i class=nk-i-gift></i> Este pedido é um kit</span>
             </label>
             <small>Marque esta opção quando uma unidade vendida possuir dois ou mais produtos diferentes. Os componentes serão conferidos separadamente.</small>
           </div>
@@ -754,7 +756,7 @@ body{background:var(--v15-bg)!important}
     </div>
     <div class="print-modal-acoes">
       <button type="button" class="btn-secundario" onclick="fecharImportacaoPorPrint()">Cancelar</button>
-      <button type="button" id="btnSalvarImportacaoPrint" class="btn-sucesso" onclick="salvarPedidoImportadoPorPrint()" disabled>✓ Salvar pedido</button>
+      <button type="button" id="btnSalvarImportacaoPrint" class="btn-sucesso" onclick="salvarPedidoImportadoPorPrint()" disabled><i class=nk-i-check></i> Salvar pedido</button>
       <button type="button" id="btnSalvarOutroPrint" class="btn-primario" onclick="salvarPedidoImportadoPorPrint(true)" disabled>Salvar e ler outro</button>
     </div>
   </div>
@@ -779,7 +781,7 @@ body{background:var(--v15-bg)!important}
 <div id="modalPedidosDuplicadosPlanilha" class="dup-planilha-overlay" aria-hidden="true">
   <div class="dup-planilha-card" role="dialog" aria-modal="true" aria-labelledby="tituloPedidosDuplicadosPlanilha">
     <div class="dup-planilha-topo">
-      <h2 id="tituloPedidosDuplicadosPlanilha">⚠ Pedido já importado</h2>
+      <h2 id="tituloPedidosDuplicadosPlanilha"><i class=nk-i-alert></i> Pedido já importado</h2>
       <p id="subtituloPedidosDuplicadosPlanilha">Um ou mais pedidos desta planilha já estão na tela de Pedidos pendentes.</p>
     </div>
     <div class="dup-planilha-alerta">Esses pedidos já existem nos <b>Pedidos pendentes</b>. O sistema não vai seguir silenciosamente: escolha se deseja cancelar ou continuar. Ao continuar, os dados existentes serão mantidos/atualizados sem criar uma segunda cópia do mesmo pedido e SKU.</div>
@@ -795,7 +797,7 @@ body{background:var(--v15-bg)!important}
   <div class="kit-review-card" role="dialog" aria-modal="true" aria-labelledby="tituloConferenciaSkuKit">
     <div class="kit-review-topo">
       <div>
-        <h2 id="tituloConferenciaSkuKit">🎁 Conferência de pedidos com SKU KIT</h2>
+        <h2 id="tituloConferenciaSkuKit"><i class=nk-i-gift></i> Conferência de pedidos com SKU KIT</h2>
         <p id="subtituloConferenciaSkuKit">Foram encontrados SKUs contendo a palavra KIT. Esta tela mostra somente esses pedidos para uma revisão rápida antes de seguir a operação.</p>
       </div>
     </div>
@@ -804,9 +806,9 @@ body{background:var(--v15-bg)!important}
     <div class="kit-review-acoes">
       <div id="contadorConferenciaSkuKit" class="kit-review-contador"></div>
       <div class="kit-review-acoes-direita">
-        <button type="button" class="btn-secundario" onclick="marcarTodosConferenciaSkuKit()">✓ Marcar todos</button>
+        <button type="button" class="btn-secundario" onclick="marcarTodosConferenciaSkuKit()"><i class=nk-i-check></i> Marcar todos</button>
         <button type="button" class="btn-secundario" onclick="fecharConferenciaSkuKit(false)">Revisar depois</button>
-        <button type="button" id="btnConcluirConferenciaSkuKit" class="btn-sucesso" onclick="concluirConferenciaSkuKit()" disabled>✓ Concluir conferência</button>
+        <button type="button" id="btnConcluirConferenciaSkuKit" class="btn-sucesso" onclick="concluirConferenciaSkuKit()" disabled><i class=nk-i-check></i> Concluir conferência</button>
       </div>
     </div>
   </div>
@@ -821,9 +823,9 @@ body{background:var(--v15-bg)!important}
     <div style="font-size:12px;color:#667;margin:-8px 0 14px;line-height:1.4;">Use o administrador principal ou qualquer usuário cadastrado com perfil <b>Admin</b>.</div>
     <input type="text" id="usuarioAdmin" placeholder="Usuário Admin">
     <input type="password" id="senhaAdmin" placeholder="Senha">
-    <button onclick="autenticarAdmin()">ENTRAR NO PAINEL</button>
-    <button type="button" class="btn-solicitar-acesso" onclick="abrirSolicitacaoUsuario('login-admin')">SOLICITAR NOVO USUÁRIO</button>
-    <button type="button" class="pwa-install-btn pwa-login" data-pwa-install>⬇ INSTALAR ADMIN NO COMPUTADOR</button>
+    <button onclick="autenticarAdmin()">Entrar no painel</button>
+    <button type="button" class="btn-solicitar-acesso" onclick="abrirSolicitacaoUsuario('login-admin')">Solicitar novo usuário</button>
+    <button type="button" class="pwa-install-btn pwa-login" data-pwa-install><i class=nk-i-download></i> Instalar Admin no computador</button>
     <div class="pwa-installed-note">Cria um aplicativo separado do navegador, com ícone próprio no Windows.</div>
     <div id="erroLoginAdmin" class="erro-msg"></div>
   </div>
@@ -870,7 +872,7 @@ body{background:var(--v15-bg)!important}
       <div class="logo-mini-box"><img src="/grupo-noromak.png?v=15.1" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=15.1';"></div>
       <div class="header-titulos"><h1>Central Operacional Noromak</h1><small>Expedição, produtos, precificação e integrações</small></div>
     </div>
-    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end;"><a href="/expedicao/estacao-impressao" target="_blank" rel="noopener" style="text-decoration:none;background:#1F57A5;color:white;padding:8px 13px;border-radius:6px;font-size:12px;font-weight:800;">🖨 ESTAÇÃO ZEBRA</a><button type="button" class="pwa-install-btn pwa-header" data-pwa-install>⬇ Instalar Admin</button><span id="statusBancoAdmin" class="save-pill">● Banco Web ativo</span><button class="btn-sair" onclick="sairAdmin()">Sair do Painel</button></div>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:flex-end;"><a href="/expedicao/estacao-impressao" target="_blank" rel="noopener" style="text-decoration:none;background:#1F57A5;color:white;padding:8px 13px;border-radius:6px;font-size:12px;font-weight:800;"><i class=nk-i-printer></i> Estação Zebra</a><button type="button" class="pwa-install-btn pwa-header" data-pwa-install><i class=nk-i-download></i> Instalar Admin</button><span id="statusBancoAdmin" class="save-pill">● Banco Web ativo</span><button class="btn-sair" onclick="sairAdmin()">Sair do Painel</button></div>
   </div>
 
 
@@ -889,10 +891,10 @@ body{background:var(--v15-bg)!important}
     </div>
 
     <div class="v151-kpis">
-      <button class="v151-kpi" onclick="abrirAbaAdmin('pedidos')"><span class="v151-kpi-icon blue">📋</span><span><b id="v151Pendentes">0</b><small>Pedidos pendentes</small></span></button>
-      <a class="v151-kpi" href="/expedicao/conferencia" target="_blank" rel="noopener"><span class="v151-kpi-icon orange">✓</span><span><b id="v151Conferencia">0</b><small>Prontos p/ conferência</small></span></a>
-      <button class="v151-kpi" onclick="abrirAbaAdmin('historico')"><span class="v151-kpi-icon green">✓</span><span><b id="v151ConferidosHoje">0</b><small>Conferidos hoje</small></span></button>
-      <button class="v151-kpi" onclick="abrirAbaAdmin('etiquetas')"><span class="v151-kpi-icon amber">🏷</span><span><b id="v151EtiquetasPendentes">0</b><small>Etiquetas pendentes</small></span></button>
+      <button class="v151-kpi" onclick="abrirAbaAdmin('pedidos')"><span class="v151-kpi-icon blue"><i class=nk-i-clipboard></i></span><span><b id="v151Pendentes">0</b><small>Pedidos pendentes</small></span></button>
+      <a class="v151-kpi" href="/expedicao/conferencia" target="_blank" rel="noopener"><span class="v151-kpi-icon orange"><i class=nk-i-check></i></span><span><b id="v151Conferencia">0</b><small>Prontos p/ conferência</small></span></a>
+      <button class="v151-kpi" onclick="abrirAbaAdmin('historico')"><span class="v151-kpi-icon green"><i class=nk-i-check></i></span><span><b id="v151ConferidosHoje">0</b><small>Conferidos hoje</small></span></button>
+      <button class="v151-kpi" onclick="abrirAbaAdmin('etiquetas')"><span class="v151-kpi-icon amber"><i class=nk-i-tag></i></span><span><b id="v151EtiquetasPendentes">0</b><small>Etiquetas pendentes</small></span></button>
       <button class="v151-kpi danger" onclick="v151AbrirProblemas()"><span class="v151-kpi-icon red">!</span><span><b id="v151Problemas">0</b><small>Problemas</small></span></button>
     </div>
 
@@ -1019,15 +1021,15 @@ body{background:var(--v15-bg)!important}
   </aside>
 
   <div class="abas-admin">
-    <button class="aba-btn ativa" data-aba="pedidos" onclick="abrirAbaAdmin('pedidos')">📋 Pedidos pendentes</button><button class="aba-btn" data-aba="pedidos-dia" onclick="abrirAbaAdmin('pedidos-dia')" style="display:none">📅 Pedidos do dia</button>
-    <button class="aba-btn" data-aba="produtos" onclick="abrirAbaAdmin('produtos')">📦 Banco de produtos</button>
-    <button class="aba-btn" data-aba="kits" onclick="abrirAbaAdmin('kits')">🎁 Cadastro de kits</button>
-    <button class="aba-btn" data-aba="usuarios" onclick="abrirAbaAdmin('usuarios')">👥 Usuários</button>
-    <button class="aba-btn" data-aba="etiquetas" onclick="abrirAbaAdmin('etiquetas')">🏷 Etiquetas</button>
-    <button class="aba-btn" data-aba="historico" onclick="abrirAbaAdmin('historico')">🕘 Histórico</button>
-    <button class="aba-btn" data-aba="historico-sku" onclick="abrirAbaAdmin('historico-sku')">🔁 Histórico de SKU</button>
-    <button class="aba-btn" data-aba="integracoes" onclick="abrirAbaAdmin('integracoes')">🔌 Integrações</button>
-    <button class="aba-btn" data-aba="seguranca" onclick="abrirAbaAdmin('seguranca')">🛡️ Segurança</button>
+    <button class="aba-btn ativa" data-aba="pedidos" onclick="abrirAbaAdmin('pedidos')"><i class=nk-i-clipboard></i> Pedidos pendentes</button><button class="aba-btn" data-aba="pedidos-dia" onclick="abrirAbaAdmin('pedidos-dia')" style="display:none"><i class=nk-i-calendar></i> Pedidos do dia</button>
+    <button class="aba-btn" data-aba="produtos" onclick="abrirAbaAdmin('produtos')"><i class=nk-i-box></i> Banco de produtos</button>
+    <button class="aba-btn" data-aba="kits" onclick="abrirAbaAdmin('kits')"><i class=nk-i-gift></i> Cadastro de kits</button>
+    <button class="aba-btn" data-aba="usuarios" onclick="abrirAbaAdmin('usuarios')"><i class=nk-i-users></i> Usuários</button>
+    <button class="aba-btn" data-aba="etiquetas" onclick="abrirAbaAdmin('etiquetas')"><i class=nk-i-tag></i> Etiquetas</button>
+    <button class="aba-btn" data-aba="historico" onclick="abrirAbaAdmin('historico')"><i class=nk-i-clock></i> Histórico</button>
+    <button class="aba-btn" data-aba="historico-sku" onclick="abrirAbaAdmin('historico-sku')"><i class=nk-i-refresh></i> Histórico de SKU</button>
+    <button class="aba-btn" data-aba="integracoes" onclick="abrirAbaAdmin('integracoes')"><i class=nk-i-plug></i> Integrações</button>
+    <button class="aba-btn" data-aba="seguranca" onclick="abrirAbaAdmin('seguranca')"><i class=nk-i-shield></i> Segurança</button>
   </div>
 
   <section id="aba-pedidos" class="aba-painel ativa">
@@ -1044,18 +1046,18 @@ body{background:var(--v15-bg)!important}
         <input id="importarRelatorioMercadoLivreInput" type="file" accept=".xlsx,.xls" hidden onchange="importarRelatorioMercadoLivreAdmin(event)">
         <input id="importarRelatorioShopeeInput" type="file" accept=".xlsx,.xls" hidden onchange="importarRelatorioShopeeAdmin(event)">
         <div class="importacao-acoes-grid">
-          <button class="btn-primario btn-importar-interno" onclick="abrirSeletorImportacaoPedidos()">📄 Excel interno</button>
-          <button class="btn-primario btn-importar-ml" onclick="abrirSeletorRelatorioMercadoLivre()">🟡 Relatório Mercado Livre</button>
-          <button class="btn-primario btn-importar-shopee" onclick="abrirSeletorRelatorioShopee()">🟠 Relatório Shopee</button>
-          <button class="btn-print-importacao btn-primario" onclick="abrirImportacaoPorPrint()">📷 Importar por print</button>
+          <button class="btn-primario btn-importar-interno" onclick="abrirSeletorImportacaoPedidos()"><i class=nk-i-file></i> Excel interno</button>
+          <button class="btn-primario btn-importar-ml" onclick="abrirSeletorRelatorioMercadoLivre()"><i class=nk-dot-ml></i> Relatório Mercado Livre</button>
+          <button class="btn-primario btn-importar-shopee" onclick="abrirSeletorRelatorioShopee()"><i class=nk-dot-shopee></i> Relatório Shopee</button>
+          <button class="btn-print-importacao btn-primario" onclick="abrirImportacaoPorPrint()"><i class=nk-i-camera></i> Importar por print</button>
         </div>
       </div>
       <div id="statusImportacaoPedidos" class="importacao-status"></div>
       <div class="toolbar-grid">
         <input id="buscaPedidosAdmin" type="text" placeholder="Buscar pedido, cliente, SKU, EAN ou descrição..." oninput="paginaPedidosAdmin=1;agendarRenderPedidosAdmin()">
         <button class="btn-primario" onclick="adicionarLinhaPedidoAdmin()">＋ Nova linha</button>
-        <button class="btn-sucesso" onclick="salvarPedidosAdmin(true)">💾 Salvar agora</button>
-        <button class="btn-secundario" onclick="exportarBancoExcel()">⬇ Backup em Excel</button>
+        <button class="btn-sucesso" onclick="salvarPedidosAdmin(true)"><i class=nk-i-save></i> Salvar agora</button>
+        <button class="btn-secundario" onclick="exportarBancoExcel()"><i class=nk-i-download></i> Backup em Excel</button>
       </div>
       <div class="filtros-data-pedidos">
         <label>Ordenar por data
@@ -1085,7 +1087,7 @@ body{background:var(--v15-bg)!important}
 
   <section id="aba-pedidos-dia" class="aba-painel">
     <div class="card-admin">
-      <div class="v1779-head"><div><h2>📅 Central de Pedidos do Dia <span class="usuario-versao">V17.87</span></h2><div style="color:#586A7D">Controle diário de vendas recebidas, inclusive as já conferidas.</div></div><div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px"><button type="button" id="pdNfeLoteBtn" class="v1786-lote" onclick="pdPuxarNfeLoteV1786()" title="A extensão lê nome e CPF de cada venda do Mercado Livre e da Shopee desta lista">Puxar nome e CPF (ML e Shopee)</button><span id="pdNfeLoteStatus" style="font-size:12px;color:#586A7D">Cliente: nome e CPF da NF-e · Cód.Cliente: código no Linx</span></div></div>
+      <div class="v1779-head"><div><h2><i class=nk-i-calendar></i> Central de Pedidos do Dia <span class="usuario-versao">V17.87</span></h2><div style="color:#586A7D">Controle diário de vendas recebidas, inclusive as já conferidas.</div></div><div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px"><button type="button" id="pdNfeLoteBtn" class="v1786-lote" onclick="pdPuxarNfeLoteV1786()" title="A extensão lê nome e CPF de cada venda do Mercado Livre e da Shopee desta lista">Puxar nome e CPF (ML e Shopee)</button><span id="pdNfeLoteStatus" style="font-size:12px;color:#586A7D">Cliente: nome e CPF da NF-e · Cód.Cliente: código no Linx</span></div></div>
       <div class="v1779-kpis">
         <div class="v1779-kpi"><b id="pdRecebidos">0</b><span>Recebidos</span></div>
         <div class="v1779-kpi"><b id="pdAguardando">0</b><span>Aguardando</span></div>
@@ -1108,7 +1110,7 @@ body{background:var(--v15-bg)!important}
     <div class="card-admin" style="margin-top:18px">
       <div class="v1779-head">
         <div>
-          <h2>📦 O que vendeu <span class="usuario-versao">V17.83</span></h2>
+          <h2><i class=nk-i-box></i> O que vendeu <span class="usuario-versao">V17.83</span></h2>
           <div style="color:#586A7D">Unidades por peça no período, somando pedidos pendentes e já conferidos.</div>
         </div>
         <div style="font-size:12px;color:#586A7D">Para rentabilidade, curva e compra</div>
@@ -1152,7 +1154,7 @@ body{background:var(--v15-bg)!important}
     <div class="card-admin">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap">
         <div>
-          <h2 style="margin-bottom:5px">🚚 Coleta do dia <span class="usuario-versao">V16.69</span></h2>
+          <h2 style="margin-bottom:5px"><i class=nk-i-truck></i> Coleta do dia <span class="usuario-versao">V16.69</span></h2>
           <div style="color:#586A7D">Edite diariamente o horário da coleta e o código de autorização. As informações ficam salvas no banco central.</div>
         </div>
         <span id="coletaAdminStatus" class="coleta-admin-status">Carregando...</span>
@@ -1171,7 +1173,7 @@ body{background:var(--v15-bg)!important}
       </div>
 
       <div class="coleta-admin-actions">
-        <button class="btn-sucesso" type="button" onclick="salvarColetaDiaAdmin()">💾 Salvar coleta do dia</button>
+        <button class="btn-sucesso" type="button" onclick="salvarColetaDiaAdmin()"><i class=nk-i-save></i> Salvar coleta do dia</button>
         <button class="btn-secundario" type="button" onclick="limparColetaDiaAdmin()">Limpar campos</button>
       </div>
 
@@ -1189,7 +1191,7 @@ body{background:var(--v15-bg)!important}
     <div class="kit-pedido-modal">
       <div class="kit-pedido-topo">
         <div>
-          <h3>🧩 Corrigir kit deste pedido</h3>
+          <h3><i class=nk-i-puzzle></i> Corrigir kit deste pedido</h3>
           <div id="kitPedidoSubtituloAdmin" class="kit-pedido-subtitulo"></div>
         </div>
         <button type="button" class="kit-pedido-fechar" onclick="fecharEditorKitPedidoAdmin()">×</button>
@@ -1225,7 +1227,7 @@ body{background:var(--v15-bg)!important}
 
       <div class="kit-pedido-acoes">
         <button type="button" class="btn-secundario" onclick="fecharEditorKitPedidoAdmin()">Cancelar</button>
-        <button type="button" class="btn-primario" onclick="aplicarCorrecaoKitPedidoAdmin()">✓ Aplicar correção neste pedido</button>
+        <button type="button" class="btn-primario" onclick="aplicarCorrecaoKitPedidoAdmin()"><i class=nk-i-check></i> Aplicar correção neste pedido</button>
       </div>
     </div>
   </div>
@@ -1237,8 +1239,8 @@ body{background:var(--v15-bg)!important}
       <div class="toolbar-grid">
         <input id="buscaProdutosAdmin" type="text" placeholder="Buscar SKU, EAN, descrição, marca ou localização..." oninput="paginaProdutosAdmin=1;renderizarProdutosAdmin()">
         <button class="btn-primario" onclick="adicionarProdutoAdmin()">＋ Novo produto</button>
-        <button class="btn-sucesso" onclick="salvarProdutosAdmin(true)">💾 Salvar agora</button>
-        <button class="btn-secundario" onclick="exportarBancoExcel()">⬇ Backup em Excel</button>
+        <button class="btn-sucesso" onclick="salvarProdutosAdmin(true)"><i class=nk-i-save></i> Salvar agora</button>
+        <button class="btn-secundario" onclick="exportarBancoExcel()"><i class=nk-i-download></i> Backup em Excel</button>
       </div>
       <div class="excel-wrap">
         <table class="excel-grid"><thead><tr>
@@ -1330,8 +1332,8 @@ body{background:var(--v15-bg)!important}
       <div style="display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:24px;padding-top:18px;border-top:1px solid #DCE5EF">
         <button class="btn-secundario" onclick="voltarListaKitsAdmin()">← Voltar</button>
         <div style="display:flex;gap:10px;flex-wrap:wrap">
-          <button id="btnExcluirKitEditorAdmin" class="btn-perigo" onclick="excluirKitEditorAdmin()">🗑 Excluir kit</button>
-          <button class="btn-sucesso" onclick="salvarKitEditorAdmin()">💾 Salvar alterações</button>
+          <button id="btnExcluirKitEditorAdmin" class="btn-perigo" onclick="excluirKitEditorAdmin()"><i class=nk-i-trash></i> Excluir kit</button>
+          <button class="btn-sucesso" onclick="salvarKitEditorAdmin()"><i class=nk-i-save></i> Salvar alterações</button>
         </div>
       </div>
     </div>
@@ -1341,7 +1343,7 @@ body{background:var(--v15-bg)!important}
     <div class="card-admin">
       <h2>Usuários e aprovações <span class="usuario-versao">Versão 12.3 — permissões + precificador online</span></h2>
       <div class="aviso-banco"><b>Login próprio do estoque:</b> cada pessoa tem usuário, senha e acessos individuais. Marque quais módulos cada usuário pode abrir: <b>Conferência, Painel Administrativo, Estação de Impressão e Precificador</b>. As permissões são validadas também pelo servidor. Por segurança, a senha atual não pode ser visualizada.</div>
-      <div class="toolbar-grid"><button type="button" id="btnNovoUsuarioAdmin" class="btn-primario" onclick="abrirSolicitacaoUsuario('admin')">＋ Solicitar novo usuário</button><button type="button" class="btn-sucesso" onclick="salvarUsuariosProtegidoAdmin()">💾 Salvar alterações</button></div>
+      <div class="toolbar-grid"><button type="button" id="btnNovoUsuarioAdmin" class="btn-primario" onclick="abrirSolicitacaoUsuario('admin')">＋ Solicitar novo usuário</button><button type="button" class="btn-sucesso" onclick="salvarUsuariosProtegidoAdmin()"><i class=nk-i-save></i> Salvar alterações</button></div>
       <div id="contadorUsuariosAdmin" class="usuario-contador"></div>
       <div class="excel-wrap" id="tabelaUsuariosAdminWrap" style="max-height:56vh;"><table class="excel-grid" style="min-width:1120px;"><thead><tr><th>Ação</th><th>Nome</th><th>Login</th><th>Senha / acesso</th><th>Perfil</th><th>Acessos aos módulos</th></tr></thead><tbody id="corpoUsuariosAdmin"></tbody></table></div>
     </div>
@@ -1361,18 +1363,18 @@ body{background:var(--v15-bg)!important}
       </div>
       <div class="etiquetas-persistentes-box">
         <div class="etiquetas-persistentes-topo">
-          <div><h3>📌 Etiquetas armazenadas no servidor</h3><p>Depois de processadas, permanecem salvas mesmo ao atualizar a página ou abrir o sistema em outro computador.</p></div>
+          <div><h3><i class=nk-i-pin></i> Etiquetas armazenadas no servidor</h3><p>Depois de processadas, permanecem salvas mesmo ao atualizar a página ou abrir o sistema em outro computador.</p></div>
           <div class="etiquetas-persistentes-topo-direita">
             <div id="resumoEtiquetasPersistentes" class="etiquetas-persistentes-resumo">0 etiquetas armazenadas</div>
-            <button type="button" id="btnReprocessarVinculosEtiquetas" class="btn-etiquetas-reprocessar" onclick="reprocessarVinculosEtiquetasPersistentes()">🔄 Reprocessar vínculos</button>
-            <button type="button" id="btnReconhecerPedidosShopee" class="btn-etiquetas-reprocessar" onclick="reconhecerPedidosShopeePersistentes()" title="Lê visualmente o número do pedido diretamente do ZPL rasterizado; não usa OCR externo">⚡ Reconhecer pedidos Shopee</button>
-            <button type="button" id="btnAtivarRemocaoMassa" class="btn-etiquetas-lote" onclick="alternarRemocaoMassaEtiquetas()">☑ Remover em massa</button>
+            <button type="button" id="btnReprocessarVinculosEtiquetas" class="btn-etiquetas-reprocessar" onclick="reprocessarVinculosEtiquetasPersistentes()"><i class=nk-i-refresh></i> Reprocessar vínculos</button>
+            <button type="button" id="btnReconhecerPedidosShopee" class="btn-etiquetas-reprocessar" onclick="reconhecerPedidosShopeePersistentes()" title="Lê visualmente o número do pedido diretamente do ZPL rasterizado; não usa OCR externo"><i class=nk-i-zap></i> Reconhecer pedidos Shopee</button>
+            <button type="button" id="btnAtivarRemocaoMassa" class="btn-etiquetas-lote" onclick="alternarRemocaoMassaEtiquetas()"><i class=nk-i-check></i> Remover em massa</button>
           </div>
         </div>
         <div id="barraRemocaoMassaEtiquetas" class="etiquetas-lote-barra">
           <button type="button" onclick="selecionarTodasEtiquetasPersistentes()">Selecionar todas</button>
           <button type="button" onclick="limparSelecaoEtiquetasPersistentes()">Limpar seleção</button>
-          <button type="button" id="btnRemoverEtiquetasSelecionadas" class="perigo" onclick="removerEtiquetasSelecionadasPersistentes()" disabled>🗑 Remover selecionadas</button>
+          <button type="button" id="btnRemoverEtiquetasSelecionadas" class="perigo" onclick="removerEtiquetasSelecionadasPersistentes()" disabled><i class=nk-i-trash></i> Remover selecionadas</button>
           <button type="button" onclick="cancelarRemocaoMassaEtiquetas()">Cancelar</button>
           <span id="contadorSelecaoEtiquetas" class="etiquetas-lote-contador">0 selecionadas</span>
         </div>
@@ -1381,7 +1383,7 @@ body{background:var(--v15-bg)!important}
         <div class="etiquetas-persistentes-aviso"><b>Vínculos:</b> se uma etiqueta ficou <b>Sem vínculo</b> porque o pedido ainda não existia, use <b>Reprocessar vínculos</b> depois que o pedido entrar. Não é necessário apagar nem reenviar o arquivo. <b>Remoção manual:</b> clique no <b>×</b> ao lado de uma etiqueta para apagá-la. Para apagar várias de uma vez, use <b>Remover em massa</b>.</div>
       </div>
       <div class="field"><label>Pasta de fotos dos produtos (opcional):</label><input type="file" id="fotosInput" webkitdirectory directory multiple></div>
-      <button class="btn-salvar" onclick="salvarEEnviarDados()">PROCESSAR E VINCULAR ETIQUETAS AOS PEDIDOS</button>
+      <button class="btn-salvar" onclick="salvarEEnviarDados()">Processar e vincular etiquetas aos pedidos</button>
       <div id="status"></div>
     </div>
   </section>
@@ -1390,14 +1392,14 @@ body{background:var(--v15-bg)!important}
   
   <section id="aba-seguranca" class="aba-painel">
     <div class="card-admin">
-      <h2>🛡️ Segurança do sistema <span class="usuario-versao">V17.11 — OWNER + 2FA</span></h2>
+      <h2><i class=nk-i-shield></i> Segurança do sistema <span class="usuario-versao">V17.11 — OWNER + 2FA</span></h2>
       <div class="security-owner-banner">
         <div><strong id="secOwnerName">OWNER</strong><small>Proprietário exclusivo da infraestrutura lógica do Noromak</small></div>
         <span id="secOwnerStatus" class="security-badge warn">Verificando…</span>
       </div>
       <div class="security-grid">
         <div class="security-card">
-          <h3>🔐 Identidade e autenticação</h3>
+          <h3><i class=nk-i-lock></i> Identidade e autenticação</h3>
           <div class="security-row"><span>Conta OWNER</span><span id="secOwnerAccount">—</span></div>
           <div class="security-row"><span>2FA do OWNER</span><span id="sec2fa" class="security-badge warn">Verificando…</span></div>
           <div class="security-row"><span>Códigos de recuperação</span><span id="secRecovery" class="security-badge warn">Verificando…</span></div>
@@ -1405,23 +1407,23 @@ body{background:var(--v15-bg)!important}
           <div class="security-row"><span>Sessão web</span><strong id="secSession">—</strong></div>
         </div>
         <div class="security-card">
-          <h3>🔒 Operações críticas</h3>
+          <h3><i class=nk-i-lock></i> Operações críticas</h3>
           <div class="security-row"><span>Alterar usuários/admins</span><span class="security-badge ok">OWNER</span></div>
           <div class="security-row"><span>Desconectar marketplaces</span><span class="security-badge ok">OWNER</span></div>
           <div class="security-row"><span>Renovar token Zebra</span><span class="security-badge ok">OWNER</span></div>
           <div class="security-row"><span>Reautenticação</span><strong id="secReauthWindow">—</strong></div>
           <div class="security-row"><span>Estado atual</span><span id="secReauthState" class="security-badge off">Bloqueado</span></div>
-          <div class="security-actions"><button type="button" class="btn-primario" onclick="testarReautenticacaoOwnerAdmin()">🔑 Reautenticar OWNER</button><button type="button" class="btn-secundario" onclick="carregarSegurancaAdmin()">↻ Atualizar status</button></div>
+          <div class="security-actions"><button type="button" class="btn-primario" onclick="testarReautenticacaoOwnerAdmin()"><i class=nk-i-key></i> Reautenticar OWNER</button><button type="button" class="btn-secundario" onclick="carregarSegurancaAdmin()">↻ Atualizar status</button></div>
         </div>
         <div class="security-card">
-          <h3>🌐 Proteções do servidor</h3>
+          <h3><i class=nk-i-globe></i> Proteções do servidor</h3>
           <div class="security-row"><span>Segredos no navegador</span><span id="secSecrets" class="security-badge ok">Bloqueados</span></div>
           <div class="security-row"><span>Headers HTTP de segurança</span><span class="security-badge ok">Ativos</span></div>
           <div class="security-row"><span>Limite de tentativas OWNER</span><span class="security-badge ok">5 / 5 min</span></div>
           <div class="security-row"><span>Versão ativa</span><strong id="secVersion">—</strong></div>
         </div>
         <div class="security-card">
-          <h3>⚠️ Controle do proprietário</h3>
+          <h3><i class=nk-i-alert></i> Controle do proprietário</h3>
           <p style="margin:0;color:#5c7187;line-height:1.5">A conta OWNER não pode ser rebaixada pelo painel. Ações críticas exigem novamente sua senha e o código do Authenticator. A exclusão remota do servidor continua desativada nesta fase.</p>
           <div class="security-actions"><span class="security-badge ok">✓ Fase 2 protegida</span></div>
         </div>
@@ -1431,11 +1433,11 @@ body{background:var(--v15-bg)!important}
 
 <section id="aba-integracoes" class="aba-painel">
     <div class="card-admin">
-      <h3>🔌 Integrações</h3>
+      <h3><i class=nk-i-plug></i> Integrações</h3>
       <div class="aviso-banco"><b>Mercado Livre API:</b> conecta a conta vendedora diretamente à Expedição. Novas vendas recebidas por <b>Orders_v2</b> e alterações de <b>Shipments</b> entram no servidor sem depender de planilha ou extensão. Planilha, extensão e print continuam disponíveis como contingência.</div>
       <div class="integracao-grid">
         <div class="integracao-card">
-          <h3>🟡 Mercado Livre</h3>
+          <h3><i class=nk-dot-ml></i> Mercado Livre</h3>
           <div id="mlIntegracaoStatus" class="integracao-status off">⚪ Carregando...</div>
           <div class="integracao-dados">
             <b>Conta</b><span id="mlIntegracaoConta">—</span>
@@ -1452,15 +1454,15 @@ body{background:var(--v15-bg)!important}
           <div class="integracao-acoes">
             <button type="button" id="btnMlConectar" class="btn-primario" onclick="conectarMercadoLivreAdmin()">Conectar Mercado Livre</button>
             <button type="button" id="btnMlSincronizar" class="btn-sucesso" onclick="sincronizarMercadoLivreAdmin()" disabled>↻ Sincronizar agora</button>
-            <button type="button" id="btnMlVerificarEtiquetas" class="btn-secundario" onclick="verificarEtiquetasMercadoLivreAdmin()" disabled>🏷 Verificar etiquetas disponíveis e vincular</button>
-            <button type="button" id="btnMlAtualizarNomesNfe" class="btn-secundario" onclick="atualizarNomesNfeMercadoLivreAdmin()">🧾 Atualizar nomes pelas NF-e</button>
+            <button type="button" id="btnMlVerificarEtiquetas" class="btn-secundario" onclick="verificarEtiquetasMercadoLivreAdmin()" disabled><i class=nk-i-tag></i> Verificar etiquetas disponíveis e vincular</button>
+            <button type="button" id="btnMlAtualizarNomesNfe" class="btn-secundario" onclick="atualizarNomesNfeMercadoLivreAdmin()"><i class=nk-i-file></i> Atualizar nomes pelas NF-e</button>
             <button type="button" id="btnMlDesconectar" class="btn-perigo" onclick="desconectarMercadoLivreAdmin()" disabled>Desconectar</button>
           </div>
           <div id="mlIntegracaoMensagem" class="integracao-nota">As credenciais ficam somente no <code>/home/expedicao/.env</code>; o Client Secret nunca é enviado ao navegador.</div>
           <div class="integracao-alerta"><b>Importante para o nginx:</b> a rota <code>/expedicao/api/integracoes/mercadolivre/notificacoes</code> precisa aceitar chamadas do Mercado Livre sem o login do CRM. Ela não dá acesso aos dados do sistema; apenas recebe o evento e valida o <code>application_id</code>/<code>user_id</code> antes de consultar a API.</div>
         </div>
         <div class="integracao-card">
-          <h3>🟠 Shopee</h3>
+          <h3><i class=nk-dot-shopee></i> Shopee</h3>
           <div id="shopeeIntegracaoStatus" class="integracao-status off">⚪ Carregando...</div>
           <div class="integracao-dados">
             <b>Partner ID</b><span id="shopeePartnerId">—</span>
@@ -1477,7 +1479,7 @@ body{background:var(--v15-bg)!important}
           <div id="shopeeIntegracaoMensagem" class="integracao-nota">Shopee Open Platform Live. Sincroniza pedidos aguardando expedição; Partner Key e tokens permanecem somente no servidor.</div>
         </div>
         <div class="integracao-card">
-          <h3>🧾 Linx DMS · Smart API</h3>
+          <h3><i class=nk-i-file></i> Linx DMS · Smart API</h3>
           <div id="linxIntegracaoStatus" class="integracao-status off">⚪ Carregando...</div>
           <div class="integracao-dados">
             <b>Gateway</b><span id="linxGateway">—</span>
@@ -1496,7 +1498,7 @@ body{background:var(--v15-bg)!important}
           <div id="linxIntegracaoMensagem" class="integracao-nota">Somente leitura: o servidor consulta no Linx se o cliente de cada venda já está cadastrado (pelo CPF/CNPJ da nota) e mostra na coluna Cód.Cliente da Central. Nada é gravado no Linx.</div>
         </div>
         <div class="integracao-card">
-          <h3>🖨 Agente Zebra autônomo</h3>
+          <h3><i class=nk-i-printer></i> Agente Zebra autônomo</h3>
           <div id="zebraAgentStatus" class="integracao-status off">⚪ Carregando...</div>
           <div class="integracao-dados">
             <b>Token de conexão</b><span><code id="zebraAgentToken">—</code></span>
@@ -1511,7 +1513,7 @@ body{background:var(--v15-bg)!important}
           <div class="integracao-nota">Instale uma única vez no computador conectado à Zebra. Depois disso, o agente consulta a fila diretamente do servidor e continua online mesmo com todas as abas do navegador fechadas.</div>
         </div>
         <div class="integracao-card">
-          <h3>📜 Log da integração</h3>
+          <h3><i class=nk-i-file></i> Log da integração</h3>
           <div class="integracao-acoes" style="margin-bottom:10px"><button type="button" class="btn-secundario" onclick="carregarLogsMercadoLivreAdmin()">Atualizar log</button></div>
           <div class="ml-log-wrap">
             <table class="ml-log-table">
@@ -1526,7 +1528,7 @@ body{background:var(--v15-bg)!important}
 
   <section id="aba-historico-sku" class="aba-painel">
     <div class="card-admin">
-      <h3>🔁 Histórico de alterações de SKU</h3>
+      <h3><i class=nk-i-refresh></i> Histórico de alterações de SKU</h3>
       <div class="aviso-banco"><b>Rastreabilidade:</b> o servidor registra somente quando um SKU realmente muda. O histórico mostra dia, horário, usuário, tela de origem, forma da alteração, pedido, marketplace e o valor anterior/novo. Registros ficam no banco do servidor e são compartilhados entre as máquinas.</div>
       <div class="sku-hist-filtros">
         <label>Pedido<input id="filtroHistSkuPedido" type="text" placeholder="Número do pedido"></label>
@@ -1550,7 +1552,7 @@ body{background:var(--v15-bg)!important}
   <section id="aba-historico" class="aba-painel">
     <div class="card-admin">
       <h3>Relatório de conferências concluídas</h3>
-      <div style="margin-bottom:15px;"><button class="btn-excel" onclick="exportarExcelLogs()">📊 BAIXAR RELATÓRIO EM EXCEL</button><button class="btn-limpar" onclick="limparLogs()">🗑 LIMPAR HISTÓRICO</button></div>
+      <div style="margin-bottom:15px;"><button class="btn-excel" onclick="exportarExcelLogs()"><i class=nk-i-chart></i> Baixar relatório em Excel</button><button class="btn-limpar" onclick="limparLogs()"><i class=nk-i-trash></i> Limpar histórico</button></div>
       <table><thead><tr><th>Pedido</th><th>Operador</th><th>Data / Hora</th><th>Qtd Itens</th></tr></thead><tbody id="corpoLogs"><tr><td colspan="4" style="text-align:center;">Nenhum log registrado até o momento.</td></tr></tbody></table>
     </div>
   </section>
@@ -3702,7 +3704,7 @@ function renderizarComponentesKitAdmin(){
         <td><b>${htmlSeguroBanco(comp.sku||"")}</b>${barra?`<div style="font-size:12px;color:#586A7D;margin-top:3px">Código: ${htmlSeguroBanco(barra)}</div>`:""}</td>
         <td>${htmlSeguroBanco(descricao)}</td>
         <td style="width:180px"><input type="number" min="1" step="1" value="${Math.max(1,Number(comp.quantidade)||1)}" onchange="alterarQuantidadeComponenteKitAdmin(${indice},this.value)" style="max-width:120px"></td>
-        <td style="width:150px"><button class="btn-perigo" onclick="removerComponenteKitAdmin(${indice})">🗑 Remover</button></td>
+        <td style="width:150px"><button class="btn-perigo" onclick="removerComponenteKitAdmin(${indice})"><i class=nk-i-trash></i> Remover</button></td>
       </tr>`;
   });
   corpo.innerHTML=linhas.join("")||'<tr><td colspan="4" style="padding:24px;text-align:center;color:#586A7D">Nenhum produto adicionado ao kit.</td></tr>';
@@ -4121,7 +4123,7 @@ function pdRomaneioRenderV1860(d,msg){
   const div=document.createElement("div");div.id="pdRomaneioModalV1860";
   div.style.cssText="position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px";
   div.innerHTML=`<div style="background:#fff;border-radius:14px;max-width:660px;width:100%;max-height:92vh;overflow:auto;padding:18px;box-shadow:0 20px 50px rgba(0,0,0,.3)">
-    <div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">🧾 Linx · pedido ${esc(d.pedido)}</h3><button type="button" onclick="pdRomaneioFecharV1860()" style="border:0;background:none;font-size:20px;cursor:pointer">✕</button></div>
+    <div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0"><i class=nk-i-file></i> Linx · pedido ${esc(d.pedido)}</h3><button type="button" onclick="pdRomaneioFecharV1860()" style="border:0;background:none;font-size:20px;cursor:pointer"><i class=nk-i-x></i></button></div>
     <div style="margin:8px 0;font-size:13px;line-height:1.6">
       <b>${esc(d.marketplace)}</b> · Cliente no Linx: ${c.cliente?`${esc(c.cliente)} — ${esc(c.nome||"")}`:"—"} ${c.documento?`<span style="color:#586A7D">(${esc(c.documento)})</span>`:""}<br>
       <b>Crédito (Linx):</b> ${pdRomaneioCreditoV1860(c)}
@@ -5604,7 +5606,7 @@ function renderizarPedidosAdmin(){
         <label>Data<input class="data-pedido-compacta" type="date" data-grupo-pedido="${htmlSeguroBanco(pedidoOriginal)}" data-campo="Data do Pedido" value="${htmlSeguroBanco(normalizarDataPedidoBanco(primeiro['Data do Pedido'],true))}" onchange="atualizarCampoGrupoPedidoAdmin(this)"></label>
         <label class="pedido-card-cliente">Cliente<input data-grupo-pedido="${htmlSeguroBanco(pedidoOriginal)}" data-campo="Cliente" value="${htmlSeguroBanco(campoBanco(primeiro,'Cliente'))}" onchange="atualizarCampoGrupoPedidoAdmin(this)"></label>
         <label class="pedido-card-conferencia">Conferência${primeiro.NomeConferenciaFonte==="nfe_extensao"?' <em class="tag-nfe" title="Preenchido com o nome de Dados para a NF-e">NF-e</em>':''}<input class="${String(campoBanco(primeiro,'Nome Conferência')).trim()?'':'conferencia-vazia'}" placeholder="Aguardando nome da NF-e" data-grupo-pedido="${htmlSeguroBanco(pedidoOriginal)}" data-campo="Nome Conferência" value="${htmlSeguroBanco(campoBanco(primeiro,'Nome Conferência'))}" onchange="atualizarCampoGrupoPedidoAdmin(this)"></label>
-        <div class="pedido-card-acoes"><div class="pedido-card-status">${status}</div>${usuarioAtualEhAdminV1766()?`<button type="button" class="btn-excluir-kit-inteiro" title="Excluir definitivamente da Conferência e Pedidos Pendentes" onclick="excluirPedidoInteiroAdmin('${htmlSeguroBanco(pedidoOriginal)}','${htmlSeguroBanco(primeiro.Marketplace)}')">🗑 Excluir pedido</button>`:''}</div>
+        <div class="pedido-card-acoes"><div class="pedido-card-status">${status}</div>${usuarioAtualEhAdminV1766()?`<button type="button" class="btn-excluir-kit-inteiro" title="Excluir definitivamente da Conferência e Pedidos Pendentes" onclick="excluirPedidoInteiroAdmin('${htmlSeguroBanco(pedidoOriginal)}','${htmlSeguroBanco(primeiro.Marketplace)}')"><i class=nk-i-trash></i> Excluir pedido</button>`:''}</div>
       </div>`;
       const itens=grupo.itens.map((item,indice)=>{
         item.Marketplace=marketplaceExibicaoBanco(item.Pedido);
@@ -5618,9 +5620,9 @@ function renderizarPedidosAdmin(){
         const skuEditor=`<div class="sku-pedido-compacto"><input data-uidlinha="${uid}" data-campo="SKU" value="${htmlSeguroBanco(campoBanco(item,'SKU'))}" oninput="atualizarCampoPedidoAdmin(this,true)"><button type="button" class="btn-sku-compacto" onclick="salvarSkuManualAdmin('${uid}',this)">Salvar</button>${skuManual?`<button type="button" class="btn-sku-manual" onclick="restaurarSkuIntegracaoAdmin('${uid}')">↶</button>`:''}</div>`;
         const localizacao=[campoBanco(item,'Rua'),campoBanco(item,'Módulo'),campoBanco(item,'Prateleira'),campoBanco(item,'Nível'),campoBanco(item,'Posição')].filter(v=>String(v||'').trim()).join(' · ');
         const kitResumo=textoKitBanco(item)?`<span class="kit-badge">KIT</span> ${htmlSeguroBanco(textoKitBanco(item))}`:'Item normal';
-        const detalhes=`<details class="pedido-detalhes-compactos"><summary>Mais detalhes</summary><div class="pedido-detalhes-grid"><label>Descrição${inp('Descrição','campo-descricao')}</label><label>Rua${inp('Rua')}</label><label>Módulo${inp('Módulo')}</label><label>Prateleira${inp('Prateleira')}</label><label>Nível${inp('Nível')}</label><label>Posição${inp('Posição')}</label><label>Foto${inp('Foto','campo-foto')}</label><div class="pedido-kit-detalhe"><span>${kitResumo}</span><button type="button" class="btn-kit-pedido-editar" onclick="abrirEditorKitPedidoAdmin('${uid}')">✎ Kit</button></div></div></details>`;
+        const detalhes=`<details class="pedido-detalhes-compactos"><summary>Mais detalhes</summary><div class="pedido-detalhes-grid"><label>Descrição${inp('Descrição','campo-descricao')}</label><label>Rua${inp('Rua')}</label><label>Módulo${inp('Módulo')}</label><label>Prateleira${inp('Prateleira')}</label><label>Nível${inp('Nível')}</label><label>Posição${inp('Posição')}</label><label>Foto${inp('Foto','campo-foto')}</label><div class="pedido-kit-detalhe"><span>${kitResumo}</span><button type="button" class="btn-kit-pedido-editar" onclick="abrirEditorKitPedidoAdmin('${uid}')"><i class=nk-i-pencil></i> Kit</button></div></div></details>`;
         return `<div class="pedido-item-row">
-          <div class="pedido-item-acoes"><button title="Adicionar item" onclick="adicionarItemMesmoPedido('${uid}')">＋</button><button title="Atualizar" onclick="atualizarVendaMercadoLivreAdmin('${uid}',this)">↻</button><button title="Excluir item" class="acao-excluir" onclick="excluirLinhaPedidoAdmin('${uid}')">🗑</button>${indice===0?`<button type="button" class="acao-linx" data-pedido="${htmlSeguroBanco(pedidoOriginal)}" title="Atualizar o cadastro deste cliente no Linx" onclick="pdClienteLinxV1785(this)">Linx</button><button type="button" class="acao-romaneio" title="Imprimir romaneio — em desenvolvimento" disabled>🧾</button>`:''}</div>
+          <div class="pedido-item-acoes"><button title="Adicionar item" onclick="adicionarItemMesmoPedido('${uid}')">＋</button><button title="Atualizar" onclick="atualizarVendaMercadoLivreAdmin('${uid}',this)">↻</button><button title="Excluir item" class="acao-excluir" onclick="excluirLinhaPedidoAdmin('${uid}')"><i class=nk-i-trash></i></button>${indice===0?`<button type="button" class="acao-linx" data-pedido="${htmlSeguroBanco(pedidoOriginal)}" title="Atualizar o cadastro deste cliente no Linx" onclick="pdClienteLinxV1785(this)">Linx</button><button type="button" class="acao-romaneio" title="Imprimir romaneio — em desenvolvimento" disabled><i class=nk-i-file></i></button>`:''}</div>
           <div class="pedido-item-num">${total>1?`<b>${ehKit?'Componente':'Item'} ${indice+1}/${total}</b>`:''}</div>
           <label class="pedido-item-sku"><span>SKU</span>${skuEditor}</label>
           <label class="pedido-item-qtd"><span>Qtd.</span><input type="number" min="1" data-uidlinha="${uid}" data-campo="Quantidade" value="${htmlSeguroBanco(item.Quantidade||'1')}" onchange="atualizarCampoPedidoAdmin(this)"></label>
@@ -5649,7 +5651,7 @@ function salvarProdutosAdmin(mostrar=false){
 function produtosFiltradosAdmin(){const t=normalizarBuscaBanco(document.getElementById("buscaProdutosAdmin")?.value||"");return produtosBancoAdmin.filter(p=>!t||CAMPOS_PRODUTOS_BANCO.some(c=>normalizarBuscaBanco(p[c]).includes(t)));}
 function renderizarProdutosAdmin(){
   const corpo=document.getElementById("corpoProdutosAdmin");if(!corpo)return;const lista=produtosFiltradosAdmin();const paginas=Math.max(1,Math.ceil(lista.length/ITENS_POR_PAGINA_PRODUTOS));paginaProdutosAdmin=Math.min(Math.max(1,paginaProdutosAdmin),paginas);const inicio=(paginaProdutosAdmin-1)*ITENS_POR_PAGINA_PRODUTOS;const parte=lista.slice(inicio,inicio+ITENS_POR_PAGINA_PRODUTOS);
-  corpo.innerHTML=parte.map(prod=>{const uid=prod.__uidProduto||(prod.__uidProduto=uidBanco("PROD"));const inp=(c,cls="")=>`<input class="${cls}" data-uidproduto="${htmlSeguroBanco(uid)}" data-campo="${htmlSeguroBanco(c)}" value="${htmlSeguroBanco(campoBanco(prod,c))}" onchange="atualizarCampoProdutoAdmin(this)">`;return `<tr><td><div class="linha-acoes"><button style="background:#FDECEA;color:#B42318" onclick="excluirProdutoAdmin('${htmlSeguroBanco(uid)}')">🗑</button></div></td><td>${inp('SKU')}</td><td>${inp('Código de Barras')}</td><td>${inp('Descrição','campo-descricao')}</td><td>${inp('Marca')}</td><td>${inp('Fabricante')}</td><td>${inp('Aplicação','campo-descricao')}</td><td>${inp('Categoria')}</td><td>${inp('Rua')}</td><td>${inp('Módulo')}</td><td>${inp('Prateleira')}</td><td>${inp('Nível')}</td><td>${inp('Posição')}</td><td>${inp('Foto','campo-foto')}</td><td>${inp('Peso')}</td><td>${inp('Unidade')}</td><td>${inp('Ativo')}</td></tr>`;}).join("")||'<tr><td colspan="17" style="padding:25px;text-align:center;">Nenhum produto encontrado.</td></tr>';
+  corpo.innerHTML=parte.map(prod=>{const uid=prod.__uidProduto||(prod.__uidProduto=uidBanco("PROD"));const inp=(c,cls="")=>`<input class="${cls}" data-uidproduto="${htmlSeguroBanco(uid)}" data-campo="${htmlSeguroBanco(c)}" value="${htmlSeguroBanco(campoBanco(prod,c))}" onchange="atualizarCampoProdutoAdmin(this)">`;return `<tr><td><div class="linha-acoes"><button style="background:#FDECEA;color:#B42318" onclick="excluirProdutoAdmin('${htmlSeguroBanco(uid)}')"><i class=nk-i-trash></i></button></div></td><td>${inp('SKU')}</td><td>${inp('Código de Barras')}</td><td>${inp('Descrição','campo-descricao')}</td><td>${inp('Marca')}</td><td>${inp('Fabricante')}</td><td>${inp('Aplicação','campo-descricao')}</td><td>${inp('Categoria')}</td><td>${inp('Rua')}</td><td>${inp('Módulo')}</td><td>${inp('Prateleira')}</td><td>${inp('Nível')}</td><td>${inp('Posição')}</td><td>${inp('Foto','campo-foto')}</td><td>${inp('Peso')}</td><td>${inp('Unidade')}</td><td>${inp('Ativo')}</td></tr>`;}).join("")||'<tr><td colspan="17" style="padding:25px;text-align:center;">Nenhum produto encontrado.</td></tr>';
   document.getElementById("resumoProdutosAdmin").textContent=`${lista.length} produto(s) encontrado(s) de ${produtosBancoAdmin.length}`;document.getElementById("paginaProdutosTexto").textContent=`Página ${paginaProdutosAdmin} de ${paginas}`;
 }
 function atualizarCampoProdutoAdmin(el){const p=produtosBancoAdmin.find(x=>x.__uidProduto===el.dataset.uidproduto);if(!p)return;p[el.dataset.campo]=el.value;agendarSalvarProdutosAdmin();}
@@ -5685,7 +5687,7 @@ function renderizarUsuariosAdmin(){
     const inp=(campo,tipo="text")=>`<input type="${tipo}" data-uidusuario="${u.__uidUsuario}" data-campo="${campo}" value="${htmlSeguroBanco(campoBanco(u,campo))}" onchange="atualizarCampoUsuarioAdmin(this)">`;
     const check=(campo,label,icone)=>`<label class="usuario-acesso-item"><input type="checkbox" data-uidusuario="${u.__uidUsuario}" data-acesso="${campo}" ${acessoUsuarioAdmin(u,campo)?"checked":""} onchange="atualizarAcessoUsuarioAdmin(this)"><span>${icone} ${label}</span></label>`;
     return `<tr>
-      <td><div class="linha-acoes"><button style="background:#FDECEA;color:#B42318" onclick="excluirUsuarioAdmin('${u.__uidUsuario}')">🗑</button></div></td>
+      <td><div class="linha-acoes"><button style="background:#FDECEA;color:#B42318" onclick="excluirUsuarioAdmin('${u.__uidUsuario}')"><i class=nk-i-trash></i></button></div></td>
       <td>${inp('Nome')}</td>
       <td>${inp('Login')}</td>
       <td>${inp('Senha','text')}</td>
@@ -7225,7 +7227,7 @@ function renderizarComponentesKitPrint(preservarFoco=false){
       <td><input data-kit-print-id="${htmlSeguroBanco(item.id)}" data-kit-print-campo="codigo" value="${htmlSeguroBanco(item.codigo)}" placeholder="SKU ou código de barras" oninput="atualizarComponenteKitPrint(this)"></td>
       <td><input type="number" min="1" step="1" data-kit-print-id="${htmlSeguroBanco(item.id)}" data-kit-print-campo="quantidade" value="${htmlSeguroBanco(item.quantidade||1)}" onchange="atualizarComponenteKitPrint(this)"></td>
       <td><div class="kit-produto-desc ${produto?'ok':item.codigo?'erro':''}">${htmlSeguroBanco(desc)}</div></td>
-      <td><button class="btn-perigo" type="button" onclick="excluirComponenteKitPrint('${htmlSeguroBanco(item.id)}')">🗑</button></td>
+      <td><button class="btn-perigo" type="button" onclick="excluirComponenteKitPrint('${htmlSeguroBanco(item.id)}')"><i class=nk-i-trash></i></button></td>
     </tr>`;
   }).join("");
   if(idAtivo&&campoAtivo){
@@ -7754,7 +7756,7 @@ document.addEventListener("DOMContentLoaded",()=>{
     const pendentes=todas.filter(s=>txt(s.Status||"Pendente").toLowerCase()==="pendente").sort((a,b)=>txt(a.CriadoEm).localeCompare(txt(b.CriadoEm)));
     const data=v=>{try{return new Date(v).toLocaleString("pt-BR");}catch(_){return txt(v);}};
     bloco.innerHTML=`<div class="solicitacoes-cabecalho"><h3>Solicitações aguardando aprovação <span class="badge-pendencias">${pendentes.length}</span></h3><button type="button" class="btn-primario" onclick="abrirSolicitacaoUsuario('admin')">＋ Criar solicitação</button></div>`+
-      (pendentes.length?`<div style="overflow:auto"><table class="tabela-solicitacoes"><thead><tr><th>Nome</th><th>Login</th><th>Perfil solicitado</th><th>Solicitado em</th><th>Ações</th></tr></thead><tbody>${pendentes.map(s=>`<tr><td>${escapeHtml(s.Nome)}</td><td><b>${escapeHtml(s.Login)}</b></td><td><select id="perfil-aprovacao-${escapeHtml(s.id)}" style="padding:7px;border:1px solid #C9D6E5;border-radius:5px;font-weight:700;"><option value="Operador" ${(s.PerfilSolicitado||"Operador")==="Operador"?"selected":""}>Operador</option><option value="Admin" ${(s.PerfilSolicitado||"")==="Admin"?"selected":""}>Admin</option></select></td><td>${escapeHtml(data(s.CriadoEm))}</td><td style="display:flex;gap:6px"><button class="acao-aprovar" onclick="aprovarSolicitacaoUsuario('${escapeHtml(s.id)}')">✓ Aprovar</button><button class="acao-rejeitar" onclick="rejeitarSolicitacaoUsuario('${escapeHtml(s.id)}')">✕ Rejeitar</button></td></tr>`).join("")}</tbody></table></div>`:`<div class="solicitacao-vazia">Nenhuma solicitação pendente.</div>`);
+      (pendentes.length?`<div style="overflow:auto"><table class="tabela-solicitacoes"><thead><tr><th>Nome</th><th>Login</th><th>Perfil solicitado</th><th>Solicitado em</th><th>Ações</th></tr></thead><tbody>${pendentes.map(s=>`<tr><td>${escapeHtml(s.Nome)}</td><td><b>${escapeHtml(s.Login)}</b></td><td><select id="perfil-aprovacao-${escapeHtml(s.id)}" style="padding:7px;border:1px solid #C9D6E5;border-radius:5px;font-weight:700;"><option value="Operador" ${(s.PerfilSolicitado||"Operador")==="Operador"?"selected":""}>Operador</option><option value="Admin" ${(s.PerfilSolicitado||"")==="Admin"?"selected":""}>Admin</option></select></td><td>${escapeHtml(data(s.CriadoEm))}</td><td style="display:flex;gap:6px"><button class="acao-aprovar" onclick="aprovarSolicitacaoUsuario('${escapeHtml(s.id)}')"><i class=nk-i-check></i> Aprovar</button><button class="acao-rejeitar" onclick="rejeitarSolicitacaoUsuario('${escapeHtml(s.id)}')"><i class=nk-i-x></i> Rejeitar</button></td></tr>`).join("")}</tbody></table></div>`:`<div class="solicitacao-vazia">Nenhuma solicitação pendente.</div>`);
     const aba=document.querySelector('.aba-btn[data-aba="usuarios"]');
     if(aba) aba.innerHTML=`👥 Usuários${pendentes.length?` <span class="badge-pendencias" style="height:19px;min-width:19px;font-size:10px">${pendentes.length}</span>`:""}`;
   };
@@ -7905,7 +7907,7 @@ document.addEventListener("DOMContentLoaded",()=>{
       const uid=esc(u.__uidUsuario);
       const input=(campo)=>`<input type="text" data-uidusuario="${uid}" data-campo="${campo}" value="${esc(u[campo]||"")}" oninput="atualizarCampoUsuarioAdmin(this)">`;
       return `<tr data-linha-usuario="${uid}">
-        <td><div class="linha-acoes"><button style="background:#FDECEA;color:#B42318" onclick="excluirUsuarioAdmin('${uid}')" title="Excluir usuário">🗑</button></div></td>
+        <td><div class="linha-acoes"><button style="background:#FDECEA;color:#B42318" onclick="excluirUsuarioAdmin('${uid}')" title="Excluir usuário"><i class=nk-i-trash></i></button></div></td>
         <td>${input("Nome")}</td>
         <td>${input("Login")}</td>
         <td><div class="senha-acesso-celula"><div class="senha-protegida-status"><strong>🔒 Senha protegida</strong><small>Não é possível visualizar a atual</small>${u.SenhaInicialPendente?'<span class="senha-inicial-alerta">⚠ TROCAR SENHA INICIAL</span>':''}</div><button type="button" class="btn-alterar-senha" onclick="abrirModalAlterarSenhaAdmin('${uid}')">Alterar senha</button></div></td>
@@ -9253,7 +9255,7 @@ window.addEventListener("storage",e=>{
 
 <div id="ownerSecurityModal" class="owner-modal-backdrop" aria-hidden="true">
   <div class="owner-modal" role="dialog" aria-modal="true" aria-labelledby="ownerModalTitle">
-    <div class="owner-modal-head"><h3 id="ownerModalTitle">🛡️ Confirmação do Proprietário</h3><p id="ownerModalReason">Operação crítica do Noromak</p></div>
+    <div class="owner-modal-head"><h3 id="ownerModalTitle"><i class=nk-i-shield></i> Confirmação do Proprietário</h3><p id="ownerModalReason">Operação crítica do Noromak</p></div>
     <form id="ownerSecurityForm" class="owner-modal-body">
       <div class="owner-modal-note">Confirme sua identidade com a <b>senha do OWNER</b> e o código atual do <b>Authenticator</b>. A liberação vale somente nesta sessão por alguns minutos.</div>
       <div id="ownerModalError" class="owner-modal-error"></div>
@@ -9268,7 +9270,7 @@ window.addEventListener("storage",e=>{
 <div id="coletaPopupV1713" class="coleta-popup-v1713" aria-hidden="true">
   <div class="coleta-popup-card-v1713">
     <div class="coleta-popup-head-v1713">
-      <h3>🚚 Coleta do dia</h3>
+      <h3><i class=nk-i-truck></i> Coleta do dia</h3>
       <p>Primeira abertura do Admin hoje. Informe os dados da coleta para a Expedição.</p>
     </div>
     <div class="coleta-popup-body-v1713">
@@ -9374,7 +9376,7 @@ window.addEventListener("storage",e=>{
 .marketplace-pill-admin.mp-shopee{background:#ffe7dc;color:#b43a0d}
 .pedido-item-acoes .acao-linx{width:auto;padding:0 7px;background:#12345b;color:#fff;font-size:10px;font-weight:800}
 .pedido-item-acoes .acao-linx:hover{background:#1d4d7b}
-.pedido-item-acoes .acao-romaneio{background:#F4F7FB;color:#8a99a8;cursor:not-allowed}
+.pedido-item-acoes .acao-romaneio{background:#F4F7FB;color:#5F7186;cursor:not-allowed}
 .pedido-card-head input.conferencia-vazia{border-color:#f0c36d;background:#fffaf0}
 @media(max-width:900px){.pedido-item-row{grid-template-columns:62px 1fr 56px 1.2fr}.pedido-item-acoes{flex-wrap:wrap;padding-top:4px}}
 .pedido-card-head .pedido-card-conferencia{position:relative}.tag-nfe{font-style:normal;position:absolute;top:-1px;right:0;padding:1px 6px;border-radius:5px;background:#e7f8ed;color:#16723b;font-size:9px;font-weight:900;line-height:1.4}
@@ -9395,7 +9397,7 @@ window.addEventListener("storage",e=>{
   };
   window.renderizarUsuariosAdmin=function(){
     const corpo=document.getElementById('corpoUsuariosAdmin');if(!corpo)return;const lista=Array.isArray(usuariosEditorAdmin)?usuariosEditorAdmin:[];
-    corpo.innerHTML=lista.map(u=>{const uid=esc(u.__uidUsuario);return `<tr data-linha-usuario="${uid}"><td><button style="background:#FDECEA;color:#B42318;border:0;border-radius:6px;padding:7px" onclick="excluirUsuarioAdmin('${uid}')" title="Excluir usuário">🗑</button></td><td><input data-uidusuario="${uid}" data-campo="Nome" value="${esc(u.Nome)}" oninput="atualizarCampoUsuarioAdmin(this)"></td><td><input data-uidusuario="${uid}" data-campo="Login" value="${esc(u.Login)}" readonly title="Para trocar o login, exclua e recrie o usuário"></td><td><div class="senha-acesso-celula"><div class="senha-protegida-status"><strong>🔒 Senha protegida</strong><small>Não é possível visualizar a atual</small></div><button type="button" class="btn-alterar-senha" onclick="abrirModalAlterarSenhaAdmin('${uid}')">Alterar senha</button></div></td><td><select data-uidusuario="${uid}" data-campo="Perfil" onchange="atualizarCampoUsuarioAdmin(this)"><option ${perfil(u.Perfil)==='Admin'?'selected':''}>Admin</option><option ${perfil(u.Perfil)==='Supervisor'?'selected':''}>Supervisor</option><option ${perfil(u.Perfil)==='Operador'?'selected':''}>Operador</option></select></td></tr>`}).join('')||'<tr><td colspan="5" style="padding:20px;text-align:center">Nenhum usuário cadastrado.</td></tr>';
+    corpo.innerHTML=lista.map(u=>{const uid=esc(u.__uidUsuario);return `<tr data-linha-usuario="${uid}"><td><button style="background:#FDECEA;color:#B42318;border:0;border-radius:6px;padding:7px" onclick="excluirUsuarioAdmin('${uid}')" title="Excluir usuário"><i class=nk-i-trash></i></button></td><td><input data-uidusuario="${uid}" data-campo="Nome" value="${esc(u.Nome)}" oninput="atualizarCampoUsuarioAdmin(this)"></td><td><input data-uidusuario="${uid}" data-campo="Login" value="${esc(u.Login)}" readonly title="Para trocar o login, exclua e recrie o usuário"></td><td><div class="senha-acesso-celula"><div class="senha-protegida-status"><strong>🔒 Senha protegida</strong><small>Não é possível visualizar a atual</small></div><button type="button" class="btn-alterar-senha" onclick="abrirModalAlterarSenhaAdmin('${uid}')">Alterar senha</button></div></td><td><select data-uidusuario="${uid}" data-campo="Perfil" onchange="atualizarCampoUsuarioAdmin(this)"><option ${perfil(u.Perfil)==='Admin'?'selected':''}>Admin</option><option ${perfil(u.Perfil)==='Supervisor'?'selected':''}>Supervisor</option><option ${perfil(u.Perfil)==='Operador'?'selected':''}>Operador</option></select></td></tr>`}).join('')||'<tr><td colspan="5" style="padding:20px;text-align:center">Nenhum usuário cadastrado.</td></tr>';
   };
   window.atualizarCampoUsuarioAdmin=function(el){const u=(usuariosEditorAdmin||[]).find(x=>String(x.__uidUsuario)===String(el.dataset.uidusuario));if(!u)return;u[el.dataset.campo]=el.value;if(typeof setStatusBanco==='function')setStatusBanco('Alterações pendentes — clique em Salvar alterações','salvando');};
   window.salvarUsuariosAdmin=async function(mostrar=false){
@@ -9581,5 +9583,18 @@ window.addEventListener("noromak:conference-name-saved",event=>{
   if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",iniciar);else iniciar();
 })();
 </script>
+<style id="topo-admin-v1865">
+  /* V18.65 — topo do Admin enxuto (guia de estilo). Só no computador: no celular vale o topo da V18.44.
+     A logo e o "Sair" já estão no menu lateral; aqui ficam o título, a Estação, o usuário e o status do banco. */
+  @media (min-width:1001px){
+    .header-topo{padding:10px 20px!important;margin-bottom:14px!important;min-height:0!important;box-shadow:none!important;border:1px solid #DCE5EF!important;border-radius:12px!important}
+    .header-topo .logo-mini-box{display:none!important}
+    .header-titulos h1{font-size:17px!important;margin:0!important;color:#12345B!important}
+    .header-titulos small{display:none!important}
+    .header-topo .btn-sair{display:none!important}
+    .header-topo>div:last-child{gap:8px!important}
+    .header-topo>div:last-child>a,.header-topo>div:last-child>button{font-weight:600!important;border-radius:8px!important}
+  }
+</style>
 </body>
 </html>

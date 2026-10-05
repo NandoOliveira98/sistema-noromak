@@ -406,6 +406,8 @@
 </style>
   <script src="/expedicao/xlsx.full.min.js"></script>
   <script defer src="/expedicao/web-auth.js"></script>
+<!-- V18.65: tema comum (fonte, foco e icones) por ultimo no head. -->
+<link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
 </head>
 <body>
   <header class="topbar">
@@ -466,7 +468,7 @@
         </select>
         <button id="apolloCheck" class="button button--primary" type="button">↻ Verificar estoque Araçatuba</button>
 
-        <button id="pickListButton" class="button button--accent" type="button" disabled>☰ Lista de separação</button>
+        <button id="pickListButton" class="button button--accent" type="button" disabled><i class=nk-i-list></i> Lista de separação</button>
         <button id="newProductButton" class="button" type="button">+ Produto novo</button>
         <button id="onlyNeed" class="button" type="button" aria-pressed="false">Somente com reposição</button>
         <button id="clearFilters" class="button" type="button">Limpar filtros</button>
@@ -892,7 +894,7 @@
         emptyState.classList.add("hidden");
         body.innerHTML = state.filtered.map((item) => `
           <tr data-code="${escapeHtml(item.code)}">
-            <td class="code">${escapeHtml(item.sku || "—")}<span class="sub">${item.manual ? `<span class="new-tag">NOVO</span> manual<button class="new-remove" type="button" data-new-remove="${escapeHtml(item.sku)}" title="Remover produto novo">✕</button>` : isKit(item) ? `<span class="kit-tag">KIT</span> ${escapeHtml(kitLabel(item))}` : `Apollo: ${escapeHtml(apolloKey(item) || "—")}`}</span></td>
+            <td class="code">${escapeHtml(item.sku || "—")}<span class="sub">${item.manual ? `<span class="new-tag">NOVO</span> manual<button class="new-remove" type="button" data-new-remove="${escapeHtml(item.sku)}" title="Remover produto novo"><i class=nk-i-x></i></button>` : isKit(item) ? `<span class="kit-tag">KIT</span> ${escapeHtml(kitLabel(item))}` : `Apollo: ${escapeHtml(apolloKey(item) || "—")}`}</span></td>
             <td class="product">${escapeHtml(productName(item))}<span class="sub">${escapeHtml(item.manual ? "Ainda não está no Full" : item.code || "")}</span>${adsCell(item)}</td>
             <td class="num">${formatNumber(item.sales)}</td>
             <td class="num">${formatNumber(item.occupied)}</td>
@@ -1392,7 +1394,7 @@
           <td>${escapeHtml(r.desc || "")}</td>
           <td class="num pick-qty"><input class="pick-qty-input no-print" type="number" inputmode="numeric" min="1" max="${r.units}" step="1" value="${r.qty}" data-qty="${escapeHtml(r.key)}" aria-label="Quantidade de ${escapeHtml(r.key)}"><strong class="print-only">${formatNumber(r.qty)}</strong>${r.qty < r.units ? `<span class="sub no-print">sugerido ${formatNumber(r.units)}</span>` : ""}</td>
           <td class="pick-check"><span class="pick-box"></span></td>
-          <td class="pick-remove no-print"><button class="pick-x" type="button" data-remove="${escapeHtml(r.key)}" title="Tirar da lista">✕</button></td></tr>`).join("")
+          <td class="pick-remove no-print"><button class="pick-x" type="button" data-remove="${escapeHtml(r.key)}" title="Tirar da lista"><i class=nk-i-x></i></button></td></tr>`).join("")
           || `<tr><td colspan="6" class="empty-state">Nada a separar.</td></tr>`;
         element("pickRemovedBox").classList.toggle("hidden", !list.removed.length);
         element("pickRemoved").innerHTML = list.removed.map(r => `

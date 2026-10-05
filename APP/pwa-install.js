@@ -15,7 +15,7 @@
     return value === "admin" || value === "estacao" ? value : "conferencia";
   };
   const appLabel = () => appType() === "admin" ? "Administração" : appType() === "estacao" ? "Estação Zebra" : "Conferência";
-  const readyLabel = () => appType() === "admin" ? "⬇ INSTALAR ADMIN" : appType() === "estacao" ? "⬇ INSTALAR ESTAÇÃO" : "⬇ INSTALAR CONFERÊNCIA";
+  const readyLabel = () => appType() === "admin" ? "Instalar Admin" : appType() === "estacao" ? "Instalar Estação" : "Instalar Conferência";
 
   function setButtonState(state) {
     const installed = standalone();
@@ -24,7 +24,7 @@
       btn.disabled = state === "waiting";
       btn.classList.toggle("pwa-ready", state === "ready");
       btn.classList.toggle("pwa-waiting", state === "waiting");
-      btn.textContent = state === "ready" ? readyLabel() : state === "waiting" ? "⏳ PREPARANDO INSTALAÇÃO…" : readyLabel();
+      btn.textContent = state === "ready" ? readyLabel() : state === "waiting" ? "Preparando instalação…" : readyLabel();
       btn.title = installed ? "Aplicativo já instalado" : state === "ready" ? `Instalar ${appLabel()} no computador` : "Aguardando o Chrome liberar a instalação";
       btn.setAttribute("aria-label", btn.title);
     });

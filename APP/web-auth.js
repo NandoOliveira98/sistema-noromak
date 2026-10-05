@@ -162,7 +162,11 @@
     }
     addUserPill(user);
     const logoff = document.querySelector(".btn-logoff");
-    if (logoff) logoff.textContent = "SAIR DO USUÁRIO";
+    // V18.65: na Conferência o botão é só ícone (texto escondido); o ícone de traço vem do theme.css.
+    if (logoff) {
+      if (logoff.classList.contains("btn-icon-only")) logoff.innerHTML = "<i class=nk-i-power></i>";
+      else logoff.textContent = "Sair do usuário";
+    }
     window.fazerLogoff = async function() {
       try {
         if (typeof window.liberarBloqueioPedidoAtual === "function") window.liberarBloqueioPedidoAtual();
@@ -245,7 +249,7 @@
         <label>Senha</label>
         <input id="stockAccessPassword" type="password" autocomplete="current-password" placeholder="Digite sua senha">
         <div id="stockAccessError" class="stock-error">${escapeHtml(message)}</div>
-        <button id="stockAccessButton" type="submit">ENTRAR NO SISTEMA</button>
+        <button id="stockAccessButton" type="submit">Entrar no sistema</button>
       </form>`;
     host.querySelector("#stockAccessForm")?.addEventListener("submit", event => {
       event.preventDefault();
@@ -269,10 +273,10 @@
         <small>Login: ${escapeHtml(user.username)} · Perfil: ${profileLabel(user.app_role)}</small>
       </div>
       <div class="access-actions">
-        ${permission(user,"conferencia") ? `<a class="module-action" href="${BASE}/conferencia"><span class="module-icon">✓</span><span>Abrir Conferência</span></a>` : ""}
-        ${permission(user,"admin") ? `<a class="module-action" href="${BASE}/admin"><span class="module-icon">⚙</span><span>Abrir Painel Administrativo</span></a>` : ""}
-        ${permission(user,"estacao") ? `<a class="module-action" href="${BASE}/estacao-impressao"><span class="module-icon">▣</span><span>Abrir Estação de Impressão</span></a>` : ""}
-        ${permission(user,"precificador") ? `<a class="module-action" href="${BASE}/precificador"><span class="module-icon">$</span><span>Abrir Precificador</span></a>` : ""}
+        ${permission(user,"conferencia") ? `<a class="module-action" href="${BASE}/conferencia"><span class="module-icon"><i class=nk-i-check></i></span><span>Abrir Conferência</span></a>` : ""}
+        ${permission(user,"admin") ? `<a class="module-action" href="${BASE}/admin"><span class="module-icon"><i class=nk-i-dashboard></i></span><span>Abrir Painel Administrativo</span></a>` : ""}
+        ${permission(user,"estacao") ? `<a class="module-action" href="${BASE}/estacao-impressao"><span class="module-icon"><i class=nk-i-printer></i></span><span>Abrir Estação de Impressão</span></a>` : ""}
+        ${permission(user,"precificador") ? `<a class="module-action" href="${BASE}/precificador"><span class="module-icon"><i class=nk-i-dollar></i></span><span>Abrir Precificador</span></a>` : ""}
         ${!["conferencia","admin","estacao","precificador"].some(m=>permission(user,m)) ? `<div class="access-denied">Este usuário não possui módulos liberados. Peça ao administrador para marcar os acessos necessários.</div>` : ""}
         <button id="stockAccessLogout" type="button" class="logout-access">Sair e trocar usuário</button>
       </div>`;

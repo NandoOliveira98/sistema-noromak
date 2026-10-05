@@ -30,6 +30,8 @@
 .ssl-link{display:inline-block;margin-top:8px;color:#1F57A5;font-weight:800}
 @media(max-width:700px){.grid,.metricas{grid-template-columns:1fr}.topo{align-items:flex-start}.topo img{max-width:130px}.wrap{margin-top:14px}}
 </style>
+<!-- V18.65: tema comum (fonte, foco e icones) por ultimo no head. -->
+<link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
 </head>
 <body>
 <div id="loginLayer" class="login-layer">
@@ -40,12 +42,12 @@
     <input id="loginUser" autocomplete="username" placeholder="Usuário / Login" required>
     <input id="loginPassword" type="password" autocomplete="current-password" placeholder="Senha" required>
     <div id="loginError" class="erro"></div>
-    <button id="loginButton" class="btn btn-orange" style="width:100%" type="submit">ATIVAR E INICIAR</button>
+    <button id="loginButton" class="btn btn-orange" style="width:100%" type="submit">Ativar e iniciar</button>
   </form>
 </div>
 <header class="topo">
   <img src="/grupo-noromak.png?v=14.5" alt="Grupo Noromak" onerror="this.onerror=null;this.src='/nk-logo.svg?v=14.5'">
-  <div style="display:flex;align-items:center;gap:12px"><button type="button" class="pwa-install-btn pwa-header" data-pwa-install>⬇ INSTALAR ESTAÇÃO</button><div style="text-align:right"><h1>Estação Zebra</h1><small>Zebra Browser Print + USB</small></div></div>
+  <div style="display:flex;align-items:center;gap:12px"><button type="button" class="pwa-install-btn pwa-header" data-pwa-install><i class=nk-i-download></i> Instalar Estação</button><div style="text-align:right"><h1>Estação Zebra</h1><small>Zebra Browser Print + USB</small></div></div>
 </header>
 <main class="wrap">
   <section class="card">

@@ -327,6 +327,8 @@
 <script src="/expedicao/web-auth.js"></script>
 <script src="/expedicao/zebra-browser-print.js?v=14.5"></script>
 <script defer src="/expedicao/pwa-install.js?v=14.5"></script>
+<!-- V18.65: tema comum (fonte, foco e icones) por ultimo no head. -->
+<link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
 </head>
 
 <body>
@@ -339,15 +341,15 @@
     <h2>Login do Sistema</h2><div style="font-size:11px;color:#586A7D;margin:-9px 0 13px;font-weight:700;">Versão Web/Linux 11.9 — EAN em todos os pedidos do SKU</div>
 
     <div class="box-upload-rede" style="border-style:solid;">
-      <label>🗄 PEDIDOS COMPARTILHADOS NA REDE:</label>
+      <label><i class=nk-i-database></i> Pedidos compartilhados na rede:</label>
       <div id="statusCargaLogin" class="status-sistema">Verificando a servidor Web de pedidos...</div>
     </div>
 
     <input type="text" id="usuarioInput" placeholder="Usuário / Login" onkeydown="if(event.key==='Enter') fazerLogin()">
     <input type="password" id="senhaInput" placeholder="Senha" onkeydown="if(event.key==='Enter') fazerLogin()">
-    <button class="btn-entrar" onclick="fazerLogin()">ENTRAR</button>
-    <button type="button" class="btn-solicitar-acesso" onclick="abrirSolicitacaoUsuario()">SOLICITAR NOVO USUÁRIO</button>
-    <button type="button" class="pwa-install-btn pwa-login" data-pwa-install>⬇ INSTALAR CONFERÊNCIA NO COMPUTADOR</button>
+    <button class="btn-entrar" onclick="fazerLogin()">Entrar</button>
+    <button type="button" class="btn-solicitar-acesso" onclick="abrirSolicitacaoUsuario()">Solicitar novo usuário</button>
+    <button type="button" class="pwa-install-btn pwa-login" data-pwa-install><i class=nk-i-download></i> Instalar Conferência no computador</button>
     <div class="pwa-installed-note">Abre em janela própria e cria um ícone separado no Windows.</div><div style="font-size:10px;color:#586A7D;margin-top:7px;line-height:1.35;">Escolha Admin ou Operador. O login só será liberado após aprovação.</div>
     <div id="erroLogin" class="erro-msg"></div>
   </div>
@@ -364,10 +366,10 @@
 
 <div id="modalNotaSimplificada">
   <div class="modal-nota-card">
-    <h3 style="color:var(--primary); margin-top:0; border-bottom: 2px solid var(--secondary); padding-bottom: 8px;">📄 Nota Fiscal Simplificada</h3>
+    <h3 style="color:var(--primary); margin-top:0; border-bottom: 2px solid var(--secondary); padding-bottom: 8px;"><i class=nk-i-file></i> Nota Fiscal Simplificada</h3>
     <pre id="conteudoNotaTexto" style="background: #f8f9fa; padding: 15px; border: 1px solid #DCE5EF; border-radius: 6px; font-size: 13px; font-family: monospace; white-space: pre-wrap; word-wrap: break-word; max-height: 350px; overflow-y: auto;"></pre>
     <div style="display: flex; gap: 10px; margin-top: 15px;">
-      <button onclick="baixarArquivoTxtNota()" style="flex:1; padding: 10px; background: #1B7A3E; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">💾 Baixar TXT da Nota</button>
+      <button onclick="baixarArquivoTxtNota()" style="flex:1; padding: 10px; background: #1B7A3E; color: white; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;"><i class=nk-i-save></i> Baixar TXT da Nota</button>
       <button onclick="fecharModalNota()" style="padding: 10px 20px; background: #C9D6E5; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">Fechar</button>
     </div>
   </div>
@@ -378,14 +380,14 @@
   <div class="modal-historico-card">
     <div class="historico-topo">
       <div>
-        <h2 style="margin:0; color:var(--primary);">🕘 Histórico de conferência</h2>
+        <h2 style="margin:0; color:var(--primary);"><i class=nk-i-clock></i> Histórico de conferência</h2>
         <div style="font-size:12px; color:#586A7D; margin-top:3px;">Conferências, impressões e reimpressões compartilhadas no servidor Web.</div>
       </div>
       <button onclick="fecharHistorico()" class="btn-acao-secundaria" style="padding:8px 13px; border-radius:6px; cursor:pointer;">Fechar</button>
     </div>
     <div class="historico-filtros">
       <input id="filtroHistorico" type="text" placeholder="Buscar pedido, cliente, operador ou marketplace..." oninput="renderizarHistorico()">
-      <button onclick="exportarHistoricoExcel()" class="btn-acao-principal" style="border:0; border-radius:6px; padding:9px 13px; cursor:pointer; font-weight:700;">📊 Exportar Excel</button>
+      <button onclick="exportarHistoricoExcel()" class="btn-acao-principal" style="border:0; border-radius:6px; padding:9px 13px; cursor:pointer; font-weight:700;"><i class=nk-i-chart></i> Exportar Excel</button>
     </div>
     <div id="resumoHistorico" class="historico-resumo"></div>
     <div style="overflow:auto;">
@@ -399,7 +401,7 @@
 
 <div id="modalReimpressao" class="modal-overlay">
   <div class="modal-reimpressao-card">
-    <h3 style="margin-top:0; color:var(--primary); border-bottom:2px solid var(--secondary); padding-bottom:8px;">🖨️ Reimpressão controlada</h3>
+    <h3 style="margin-top:0; color:var(--primary); border-bottom:2px solid var(--secondary); padding-bottom:8px;"><i class=nk-i-printer></i> Reimpressão controlada</h3>
     <div id="resumoReimpressao" style="font-size:13px; line-height:1.5;"></div>
     <label for="motivoReimpressao">Motivo obrigatório</label>
     <select id="motivoReimpressao">
@@ -418,7 +420,7 @@
       <input id="confirmacaoReimpressao" type="checkbox" style="margin-top:3px;"> Confirmo que revisei o número do pedido e que esta reimpressão é necessária.
     </label>
     <div style="display:flex; gap:10px; margin-top:18px;">
-      <button id="btnConfirmarReimpressao" onclick="confirmarReimpressao()" style="flex:1; background:var(--secondary); color:white; border:0; border-radius:6px; padding:11px; font-weight:800; cursor:pointer;">REIMPRIMIR</button>
+      <button id="btnConfirmarReimpressao" onclick="confirmarReimpressao()" style="flex:1; background:var(--secondary); color:white; border:0; border-radius:6px; padding:11px; font-weight:800; cursor:pointer;">Reimprimir</button>
       <button onclick="fecharModalReimpressao()" style="padding:11px 18px; border:1px solid #bbb; background:white; border-radius:6px; cursor:pointer; font-weight:700;">Cancelar</button>
     </div>
   </div>
@@ -448,8 +450,8 @@
   <div class="conf-acoes-header">
     <div class="conf-acoes-grupo conf-acoes-navegacao">
       <span id="qzStatusBadge" class="qz-status qz-desconectado">Zebra</span>
-      <a class="btn-header btn-header-compacto btn-icon-only btn-central-v1802" href="/expedicao/admin" title="Central" aria-label="Central">🏠</a>
-      <button type="button" class="pwa-install-btn pwa-header btn-header-compacto btn-icon-only btn-install-conf" data-pwa-install title="Instalar Conferência" aria-label="Instalar Conferência">⬇</button>
+      <a class="btn-header btn-header-compacto btn-icon-only btn-central-v1802" href="/expedicao/admin" title="Central" aria-label="Central"><i class=nk-i-home></i></a>
+      <button type="button" class="pwa-install-btn pwa-header btn-header-compacto btn-icon-only btn-install-conf" data-pwa-install title="Instalar Conferência" aria-label="Instalar Conferência"><i class=nk-i-download></i></button>
     </div>
 
     <div class="conf-acoes-grupo conf-acoes-operacao">
@@ -464,22 +466,22 @@
             <button class="ean-rapido-fechar" type="button" onclick="fecharPainelEanRapido()" aria-label="Fechar cadastro de EAN">×</button>
           </div>
           <div class="ean-rapido-campos">
-            <label class="ean-rapido-campo">SKU DO PRODUTO
+            <label class="ean-rapido-campo">SKU do produto
               <input id="eanRapidoSku" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Digite o SKU" oninput="this.dataset.sugerido='0';atualizarPreviaEanRapido()" onkeydown="atalhoEanRapido(event,'sku')">
             </label>
-            <label class="ean-rapido-campo">CÓDIGO DE BARRAS / EAN
+            <label class="ean-rapido-campo">Código de barras / EAN
               <input id="eanRapidoCodigo" type="text" inputmode="numeric" enterkeyhint="done" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Bipe ou digite o EAN" onkeydown="atalhoEanRapido(event,'ean')">
             </label>
-            <button id="btnSalvarEanRapido" class="btn-salvar-ean-rapido" type="button" onclick="salvarEanRapidoConferencia()">💾 SALVAR NO BANCO</button>
+            <button id="btnSalvarEanRapido" class="btn-salvar-ean-rapido" type="button" onclick="salvarEanRapidoConferencia()"><i class=nk-i-save></i> Salvar no banco</button>
           </div>
           <div id="eanRapidoStatus" class="ean-rapido-status" role="status">Use esta função quando o produto do pedido estiver sem EAN.</div>
         </section>
       </div>
 
       <div id="alertaNovosPedidosTopo" class="alerta-novos-pedidos-topo"></div>
-      <button class="btn-header btn-header-compacto" onclick="alternarPainelAtalhos()">⌨ ATALHOS</button>
-      <button class="btn-header btn-header-compacto" onclick="abrirHistorico()">🕘 HISTÓRICO</button>
-      <button class="btn-logoff btn-header-compacto btn-icon-only btn-sair-icon" onclick="fazerLogoff()" title="Sair do usuário" aria-label="Sair do usuário">⏻</button>
+      <button class="btn-header btn-header-compacto" onclick="alternarPainelAtalhos()">Atalhos</button>
+      <button class="btn-header btn-header-compacto" onclick="abrirHistorico()"><i class=nk-i-clock></i> Histórico</button>
+      <button class="btn-logoff btn-header-compacto btn-icon-only btn-sair-icon" onclick="fazerLogoff()" title="Sair do usuário" aria-label="Sair do usuário"><i class=nk-i-power></i></button>
     </div>
   </div>
 </header>
@@ -552,7 +554,7 @@
     </div>
 
     <div class="filtro-marketplace-box" style="display:none">
-      <label for="filtroMarketplacePedidos">🛒 FILTRAR POR MARKETPLACE</label>
+      <label for="filtroMarketplacePedidos"><i class=nk-i-cart></i> Filtrar por marketplace</label>
       <select id="filtroMarketplacePedidos" class="filtro-marketplace-select" onchange="alterarFiltroMarketplacePedidos(this.value)">
         <option value="todos">Todos os marketplaces</option>
         <option value="mercado_livre">Mercado Livre</option>
@@ -599,7 +601,7 @@
 
     <div class="leitor-codigo-linha">
       <input type="text" id="codigo" placeholder="Bipe, digite ou escaneie o código de barras..." oninput="agendarLeituraCodigo(this)" onkeydown="confirmarLeituraCodigo(event, this)" autocomplete="off" inputmode="numeric" enterkeyhint="done" aria-label="Código de barras" style="width: 100%; padding: 12px; font-size: 15px; border: 1px solid #C9D6E5; border-radius: 6px;">
-      <button type="button" id="btnAbrirCameraCodigo" class="btn-camera-codigo" onclick="abrirScannerCamera()">📷 ESCANEAR CÓDIGO</button>
+      <button type="button" id="btnAbrirCameraCodigo" class="btn-camera-codigo" onclick="abrirScannerCamera()"><i class=nk-i-camera></i> Escanear código</button>
     </div>
 
     <table>
@@ -624,7 +626,7 @@
 <div id="scannerCameraOverlay" class="scanner-camera-overlay" role="dialog" aria-modal="true" aria-labelledby="scannerCameraTitulo">
   <div class="scanner-camera-card">
     <div class="scanner-camera-topo">
-      <h3 id="scannerCameraTitulo">📷 Ler código de barras</h3>
+      <h3 id="scannerCameraTitulo"><i class=nk-i-camera></i> Ler código de barras</h3>
       <button type="button" class="scanner-camera-fechar" onclick="fecharScannerCamera()" aria-label="Fechar câmera">×</button>
     </div>
     <div class="scanner-camera-preview">
@@ -634,7 +636,7 @@
     </div>
     <div id="scannerCameraStatus" class="scanner-camera-status">Aponte a câmera traseira para o código de barras.</div>
     <div class="scanner-camera-acoes">
-      <button type="button" class="scanner-btn-secundario" onclick="trocarCameraScanner()">🔄 Trocar câmera</button>
+      <button type="button" class="scanner-btn-secundario" onclick="trocarCameraScanner()"><i class=nk-i-refresh></i> Trocar câmera</button>
       <button type="button" class="scanner-btn-principal" onclick="fecharScannerCamera()">Fechar</button>
     </div>
     <div class="scanner-ajuda">Centralize o código dentro do retângulo e mantenha o celular parado. A leitura é confirmada automaticamente.</div>
@@ -1800,7 +1802,7 @@ function salvarEanRapidoConferencia() {
   } finally {
     if (botao) {
       botao.disabled = false;
-      botao.textContent = "💾 SALVAR NO BANCO";
+      botao.innerHTML = "<i class=nk-i-save></i> Salvar no banco";
     }
   }
 }
@@ -2389,7 +2391,7 @@ function desenharTabela() {
         <td style="text-align:left;">${escaparHtml(extrairCampo(i, "Descrição"))}${String(extrairCampo(i,"Kit")||"").toUpperCase()==="SIM"||extrairCampo(i,"Nome do Kit")?`<div style="margin-top:4px"><span class="pedido-status-mini" style="background:#f3e8ff;color:#6b21a8">🎁 ${escaparHtml(extrairCampo(i,"Nome do Kit")||extrairCampo(i,"SkuKitOrigem")||"Kit")}</span></div>`:""}${extrairCampo(i,"Observação")?`<div style="margin-top:4px"><span class="pedido-status-mini" style="background:#FFF4E0;color:#8A5300">⚠ ${escaparHtml(extrairCampo(i,"Observação"))}</span></div>`:""}</td>
         <td>${escaparHtml(extrairCampo(i, "Quantidade") || 0)}</td>
         <td>${escaparHtml(i.Lido || 0)}</td>
-        <td><button type="button" style="border:0;border-radius:6px;padding:6px 9px;background:#FDECEA;color:#B42318;font-weight:800;cursor:pointer" onclick="excluirProdutoPedidoConferencia(${argJs(i.__uidLinha||i.__uidPedido||'')})">🗑 Excluir</button></td>
+        <td><button type="button" style="border:0;border-radius:6px;padding:6px 9px;background:#FDECEA;color:#B42318;font-weight:800;cursor:pointer" onclick="excluirProdutoPedidoConferencia(${argJs(i.__uidLinha||i.__uidPedido||'')})"><i class=nk-i-trash></i> Excluir</button></td>
       </tr>
     `;
   });
@@ -3428,7 +3430,7 @@ ${detalhe.orientacao}`);
   } finally {
     reimpressaoEmAndamento = false;
     botao.disabled = false;
-    botao.textContent = "REIMPRIMIR";
+    botao.textContent = "Reimprimir";
   }
 }
 
@@ -4087,7 +4089,7 @@ window.addEventListener("storage",event=>{
   .btn-icon-only{width:34px!important;min-width:34px!important;max-width:34px!important;height:32px!important;padding:0!important;font-size:0!important;display:inline-flex!important;align-items:center!important;justify-content:center!important}
   .btn-icon-only::before{font-size:16px;line-height:1}
   .btn-install-conf::before{content:"⬇"}
-  .btn-sair-icon::before{content:"⏻"}
+  .btn-sair-icon::before{content:none} /* V18.65: icone em traco no proprio botao */
   .btn-alerta-icon-only{width:34px!important;min-width:34px!important;height:32px!important;padding:0!important;display:inline-flex!important;align-items:center!important;justify-content:center!important;border-radius:7px!important}
   .btn-alerta-icon-only #alertaTopoTexto{font-size:15px}
   .conf-header-v1670 .alerta-novos-pedidos-topo{max-width:none}
@@ -4164,7 +4166,8 @@ window.addEventListener("storage",event=>{
   /* Central laranja (icone) como na maquete */
   .conf-acoes-navegacao .btn-header{background:#F28B18!important;color:#12345b!important;border:0!important}
   .conf-acoes-navegacao .btn-header:hover{background:#e07f0d!important}
-  .btn-central-v1802::before{content:"🏠";font-size:16px;line-height:1}
+  .btn-central-v1802::before{content:none} /* V18.65: icone em traco no proprio botao */
+  .btn-icon-only i[class^="nk-i-"]{width:17px;height:17px}
   /* Zebra online ao lado da Central (direita) */
   .conf-acoes-navegacao{gap:8px;align-items:center}
   .conf-acoes-navegacao .qz-status{margin-top:0!important}
@@ -4202,8 +4205,8 @@ window.addEventListener("storage",event=>{
         </div>
         <div class="alerta-novos-pedidos-acoes">
           <button id="btnAlternarAlertaPedidos" type="button" onclick="window.alternarAlertaSonoroPedidos()"></button>
-          <button id="btnVolumeAlertaPedidos" class="btn-alerta-teste" type="button" onclick="window.alternarVolumeAlertaPedidos()">🔊 VOLUME MÁXIMO</button>
-          <button class="btn-alerta-teste" type="button" onclick="window.testarAlertaSonoroPedidos()">▶ TESTAR</button>
+          <button id="btnVolumeAlertaPedidos" class="btn-alerta-teste" type="button" onclick="window.alternarVolumeAlertaPedidos()">Volume máximo</button>
+          <button class="btn-alerta-teste" type="button" onclick="window.testarAlertaSonoroPedidos()">Testar</button>
         </div>
       </div>`;
 
@@ -4223,10 +4226,10 @@ window.addEventListener("storage",event=>{
     const resumo = document.getElementById("alertaTopoTexto");
     if (btn) {
       btn.className = alertaAtivo ? "btn-alerta-som-ativo" : "btn-alerta-som-inativo";
-      btn.textContent = alertaAtivo ? "🔊 SOM ATIVO" : "🔇 SOM DESATIVADO";
+      btn.textContent = alertaAtivo ? "Som ativo" : "Som desativado";
     }
     if (btnVolume) {
-      btnVolume.textContent = volumeMaximo ? "🔊 VOLUME MÁXIMO" : "🔉 VOLUME NORMAL";
+      btnVolume.textContent = volumeMaximo ? "Volume máximo" : "Volume normal";
       btnVolume.title = volumeMaximo ? "Alarme reforçado para ambiente de estoque" : "Alarme em volume normal";
     }
     if (ponto) ponto.classList.toggle("inativo", !alertaAtivo);

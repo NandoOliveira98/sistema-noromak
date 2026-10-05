@@ -28,7 +28,7 @@ main{width:min(1560px,calc(100% - 32px));margin:0 auto;padding:18px 0 40px}
 .cfg-actions{display:flex;gap:9px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap}
 label.f{display:flex;flex-direction:column;gap:5px;font-size:11px;font-weight:800;color:var(--muted);text-transform:uppercase;letter-spacing:.03em}
 label.f select,label.f input,label.f textarea{font-size:14px;font-weight:600;color:var(--ink);text-transform:none;letter-spacing:0;padding:9px 10px;border:1px solid var(--line);border-radius:9px;background:#fff;min-height:40px}
-label.f small{font-weight:600;text-transform:none;letter-spacing:0;color:#8a99a8}
+label.f small{font-weight:600;text-transform:none;letter-spacing:0;color:#5F7186}
 .btn{font-weight:800;border-radius:10px;padding:10px 15px;min-height:40px;cursor:pointer;border:1px solid var(--line);background:#fff;color:var(--navy);white-space:nowrap}
 .btn.pri{background:var(--navy);border-color:var(--navy);color:#fff}.btn.acc{background:var(--orange);border-color:var(--orange);color:#18324A}
 .btn.del{color:var(--bad);border-color:#efb6b2}.btn:disabled{opacity:.55;cursor:not-allowed}
@@ -54,7 +54,7 @@ label.f small{font-weight:600;text-transform:none;letter-spacing:0;color:#8a99a8
 .tools .acts{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-left:auto}
 .send-group{display:flex;align-items:stretch;border:1px solid var(--navy);border-radius:10px;overflow:hidden}
 .send-group input{height:40px;border:0;padding:0 12px;width:220px;font-size:13px;font-weight:600;color:var(--ink)}
-.send-group input::placeholder{color:#9aa7b4;font-weight:500}
+.send-group input::placeholder{color:#5F7186;font-weight:500}
 .send-group button{height:40px;border:0;border-left:1px solid var(--navy);background:var(--navy);color:#fff;font-weight:800;padding:0 14px;cursor:pointer;white-space:nowrap}
 .send-group button:disabled{opacity:.55;cursor:not-allowed}
 .panel{background:#fff;border:1px solid var(--line);border-radius:0 0 13px 13px;overflow:auto;max-height:64vh}
@@ -62,8 +62,8 @@ table{width:100%;min-width:1320px;border-collapse:separate;border-spacing:0}
 th{position:sticky;top:0;z-index:2;background:var(--navy);color:#fff;font-size:11px;font-weight:800;text-align:left;padding:10px 8px;white-space:nowrap}
 td{padding:8px;border-bottom:1px solid var(--soft);font-size:12.5px;vertical-align:middle}
 .n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
-tr.off td{color:#9aa7b4}
-.desc b{display:block;font-weight:700}.desc small{color:#8a99a8;font-size:11px}
+tr.off td{color:#5F7186}
+.desc b{display:block;font-weight:700}.desc small{color:#5F7186;font-size:11px}
 .curva{display:inline-block;min-width:22px;text-align:center;border-radius:6px;font-weight:900;font-size:11px;padding:2px 5px;background:#F4F7FB;color:var(--navy)}.curva.A{background:#e3efff;color:#1F57A5}
 .cob{display:inline-flex;align-items:center;gap:5px;font-weight:800;font-size:11px;border-radius:999px;padding:3px 8px;white-space:nowrap}
 .cob.bad{background:var(--badbg);color:var(--bad)}.cob.warn{background:var(--warnbg);color:var(--warn)}.cob.ok{background:var(--okbg);color:var(--ok)}.cob.nd{background:#F4F7FB;color:var(--muted)}
@@ -76,7 +76,7 @@ tr.off td{color:#9aa7b4}
 td.casaA{background:#f2f8ff;border-left:2px solid #dbe9f7;font-weight:800}
 td.casaA.zero{color:var(--bad)}
 td.casaB{border-right:2px solid #dbe9f7}
-td.outra{color:#9aa7b4}td.outra.tem{color:#1F57A5;font-weight:700}
+td.outra{color:#5F7186}td.outra.tem{color:#1F57A5;font-weight:700}
 .tr-tag{display:inline-block;font-size:10.5px;font-weight:800;color:#6d3fc0;background:#f2ecfd;border-radius:6px;padding:2px 7px;white-space:nowrap;margin:1px 0}
 .tr-no{color:#b6c0cc;font-size:11px}
 .report{margin-top:16px}
@@ -95,6 +95,8 @@ td.outra{color:#9aa7b4}td.outra.tem{color:#1F57A5;font-weight:700}
 </style>
 <script src="/expedicao/xlsx.full.min.js"></script>
 <script defer src="/expedicao/web-auth.js"></script>
+<!-- V18.65: tema comum (fonte, foco e icones) por ultimo no head. -->
+<link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
 </head>
 <body>
 <header class="top"><div>
@@ -115,7 +117,7 @@ td.outra{color:#9aa7b4}td.outra.tem{color:#1F57A5;font-weight:700}
       <label class="field"><span>Transferir acima de</span><input id="limiteTransf" type="number" min="0" step="10" placeholder="0"><small>R$ — só se compensar o frete</small></label>
     </div>
     <div class="cfg-actions">
-      <button id="editarBtn" class="btn" type="button">✎ Editar fornecedor</button>
+      <button id="editarBtn" class="btn" type="button"><i class=nk-i-pencil></i> Editar fornecedor</button>
       <button id="novoBtn" class="btn pri" type="button">＋ Novo fornecedor</button>
     </div>
     <div id="editor" class="editor hidden">
@@ -155,10 +157,10 @@ td.outra{color:#9aa7b4}td.outra.tem{color:#1F57A5;font-weight:700}
       <label><input id="completar" type="checkbox" checked> Completar até o mínimo</label>
       <div class="acts">
         <button id="estoqueBtn" class="btn" type="button">↻ Atualizar estoque</button>
-        <button id="exportar" class="btn acc" type="button">⬇ Planilha</button>
+        <button id="exportar" class="btn acc" type="button"><i class=nk-i-download></i> Planilha</button>
         <div class="send-group" title="Enviar o pedido de compra por e-mail">
           <input id="compradorEmail" type="email" placeholder="e-mail do comprador">
-          <button id="enviarComprador" type="button">✉ Enviar ao comprador</button>
+          <button id="enviarComprador" type="button"><i class=nk-i-mail></i> Enviar ao comprador</button>
         </div>
       </div>
     </div>
@@ -354,7 +356,7 @@ td.outra{color:#9aa7b4}td.outra.tem{color:#1F57A5;font-weight:700}
     if (x.custo == null) return `<input class="custo-in" inputmode="decimal" placeholder="R$ custo" data-custo="${esc(x.codigo)}" aria-label="Custo de ${esc(x.codigo)}">`;
     if (x.custo_origem === "apollo" || !x.custo_origem) return brl(x.custo);
     const quando = br(x.custo_data) ? " " + br(x.custo_data).slice(0, 5) : "";
-    return `${brl(x.custo)}<button class="custo-edit" type="button" data-editar-custo="${esc(x.codigo)}" title="Digitar outro custo">✎</button><br><span class="tag reserva" title="O Apollo está sem custo (sem estoque)">${ORIGEM_CUSTO[x.custo_origem] || ""}${quando}</span>`;
+    return `${brl(x.custo)}<button class="custo-edit" type="button" data-editar-custo="${esc(x.codigo)}" title="Digitar outro custo"><i class=nk-i-pencil></i></button><br><span class="tag reserva" title="O Apollo está sem custo (sem estoque)">${ORIGEM_CUSTO[x.custo_origem] || ""}${quando}</span>`;
   }
   async function salvarCusto(codigo, texto) {
     try {
