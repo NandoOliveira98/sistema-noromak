@@ -3288,12 +3288,20 @@ function exportarExcelLogs() {
   XLSX.writeFile(wb, "Relatorio_Conferencias.xlsx");
 }
 
-function limparLogs() {
-  if (confirm("Tem certeza que deseja apagar todo o histórico de logs?")) {
-    appStorage.removeItem("conf_logs");
-    logsConferência = [];
-    renderizarTabelaLogs();
+// V18.66: apagar uma base inteira exige Admin + confirmação do proprietário no servidor.
+// Antes o removeItem disparava o DELETE sem esperar resposta; agora a tela confere.
+async function limparLogs() {
+  if (!confirm("Tem certeza que deseja apagar todo o histórico de logs?")) return;
+  try {
+    await confirmarOwnerSeguranca("Apagar todo o histórico de logs da conferência");
+    await securityApiAdmin("/expedicao/api/storage?key=conf_logs", {method: "DELETE"});
+  } catch (erro) {
+    alert("O histórico não foi apagado: " + (erro && erro.message ? erro.message : erro));
+    return;
   }
+  appStorage.removeItem("conf_logs");
+  logsConferência = [];
+  renderizarTabelaLogs();
 }
 
 

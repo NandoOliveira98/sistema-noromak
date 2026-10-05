@@ -18101,10 +18101,16 @@ class AppHandler(BaseHTTPRequestHandler):
         path = self.route_path()
         query = parse_qs(urlparse(self.path).query)
         if path == "/api/storage":
-            ctx = self.auth(admin_only=True)
-            if ctx is None:
-                return
+            # V18.66 (decisão do dono, 05/10): apagar uma base inteira é só do Admin e
+            # com a confirmação do proprietário (senha + 2FA). Antes o Supervisor
+            # apagava produtos, kits ou etiquetas de uma vez.
             key = (query.get("key") or [""])[0].strip()
+            quem = session_context(self)
+            if quem is not None and not require_owner_context(quem):
+                audit(quem["username"], "security.denied.storage_delete", key)
+            ctx = self.auth_full_admin()
+            if ctx is None or not self.require_owner_reauth(ctx):
+                return
             if not key:
                 self.send_json({"error": "Chave não informada."}, 400)
                 return
