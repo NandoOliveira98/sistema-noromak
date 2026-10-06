@@ -205,6 +205,28 @@ estoque** — E!). É o mesmo fluxo que já mapeamos pela extensão do Linx.
   (e com qual usuário), o significado dos códigos de crédito, se o token vai como `Bearer` (configurável em
   `LINX_AUTH_ESQUEMA`) e o formato real da resposta da consulta.
 
+## 4c. Teste do crédito pela API (V18.70 — chamado da Linx)
+
+Em 06/10/2026 a Linx avisou: *"Ajuste em SmartAPI endpoint
+AtualizarCadastroClienteSimplificado campo BloqueioCredito"*, disponível para validação.
+Se funcionar, o **Crédito normal** (`BloqueioCredito = "1"`) sai do robô do Apollo.
+O aviso **não** fala de `SituacaoCredito` (Cadastro Aprovado, 421) nem da validade.
+
+Admin > Integrações > Linx > **Testar crédito pela API** (`POST /api/linx/teste-credito`,
+`linx_teste_bloqueio_credito`):
+
+1. lê o cliente (`ConsultaClientes`) — tem que ser **um** código para o CPF/CNPJ;
+2. **simula**: mostra o crédito atual e o corpo que seria enviado. Não grava;
+3. com `LINX_ESCRITA_ATIVA=1` e um segundo clique, chama o Simplificado;
+4. relê o cliente e compara campo a campo: diz se o crédito pegou e **lista qualquer outro
+   campo que mudou**.
+
+O Simplificado regrava o cadastro **inteiro** (campo ausente pode voltar vazio). Por isso o
+corpo é montado do cadastro atual e só o `BloqueioCredito` muda. Campos que a consulta não
+devolve (`TipoPessoa`, `Departamento`, `UsuarioVendedor`…) **não** são enviados — se algum
+sumir, aparece na lista do passo 4. Conferir também na tela do Apollo.
+Cada gravação fica no `audit_log` (`linx.teste_credito`, antes → depois).
+
 ## 5. Plano de teste sugerido (tudo só-leitura)
 
 1. **Acesso da VPS:** da VPS, `POST /api-seguranca/token` com o usuário de integração.

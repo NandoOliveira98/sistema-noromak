@@ -1628,6 +1628,7 @@ body{background:var(--v15-bg)!important}
           <div class="integracao-acoes">
             <button type="button" class="btn-primario" onclick="testarLinxAdmin()">Testar conexão</button>
             <button type="button" class="btn-sucesso" onclick="sincronizarLinxAdmin()">↻ Consultar clientes agora</button>
+            <button type="button" class="btn-secundario" onclick="testarCreditoLinxAdmin()" title="Chamado da Linx (06/10): BloqueioCredito no AtualizarCadastroClienteSimplificado">Testar crédito pela API</button>
             <button type="button" class="btn-secundario" onclick="copiarTokenRoboLinxAdmin()">Copiar token do robô</button>
             <button type="button" class="btn-perigo" onclick="renovarTokenRoboLinxAdmin()">Renovar token do robô</button>
           </div>
@@ -9133,6 +9134,36 @@ async function testarLinxAdmin(){
     const d=await mlApiAdmin("/expedicao/api/linx/testar",{method:"POST",body:JSON.stringify({documento:doc})});
     const q=d.consulta;
     if(msg)msg.textContent="✅ Login na Linx OK."+(q?(q.status==="encontrado"?` Cliente ${q.cliente} — ${q.nome}.`:q.status==="varios"?` ${q.candidatos.length} clientes com este documento: ${q.candidatos.map(x=>x.cliente).join(", ")}.`:" Este documento não está cadastrado no Linx."):"");
+  }catch(e){if(msg)msg.textContent="❌ "+e.message;}
+  carregarIntegracaoLinxAdmin();
+}
+/* V18.70 — teste do BloqueioCredito pelo AtualizarCadastroClienteSimplificado (chamado da Linx).
+   1º simula (mostra o que vai e o crédito atual); só grava depois de confirmar. */
+async function testarCreditoLinxAdmin(){
+  const nomes={"0":"Sem bloqueio","1":"Crédito normal","2":"Consultar antes","3":"Crédito suspenso","4":"Advogado","5":"Venda suspensa"};
+  const doc=prompt("Teste do crédito pela Smart API (chamado da Linx).\n\nCPF/CNPJ de UM cliente de teste já cadastrado no Linx:","");
+  if(!doc)return;
+  const bloqueio=(prompt("Situação de crédito a gravar:\n0 = Sem bloqueio\n1 = Crédito normal\n2 = Consultar antes\n3 = Crédito suspenso\n4 = Advogado\n5 = Venda suspensa","1")??"").trim();
+  if(!bloqueio)return;
+  const msg=document.getElementById("linxIntegracaoMensagem");
+  if(msg)msg.textContent="Lendo o cadastro no Linx…";
+  try{
+    const s=await mlApiAdmin("/expedicao/api/linx/teste-credito",{method:"POST",body:JSON.stringify({documento:doc,bloqueio})});
+    const atual=s.bloqueio_antes?`${s.bloqueio_antes} (${nomes[s.bloqueio_antes]||"?"})`:"vazio";
+    if(msg)msg.textContent=`Simulação: cliente ${s.cliente} — ${s.nome}. Crédito hoje: ${atual}; cadastro (Aprovado): ${s.situacao_antes||"vazio"}. Nada foi gravado.`;
+    if(!s.escrita_ativa){alert(`Simulação OK — cliente ${s.cliente} (${s.nome}), crédito hoje ${atual}.\n\nPara gravar de verdade, ligue LINX_ESCRITA_ATIVA=1 no .env do servidor e reinicie.`);return;}
+    if(!confirm(`GRAVAR no Linx?\n\nCliente ${s.cliente} — ${s.nome}\nCrédito: ${atual} → ${s.bloqueio_pedido} (${s.bloqueio_pedido_nome})\n\nO cadastro inteiro é reenviado com os dados atuais (${Object.keys(s.corpo||{}).length} campos). Depois o Noromak relê e mostra tudo o que mudou.`))return;
+    if(msg)msg.textContent="Gravando e relendo…";
+    const d=await mlApiAdmin("/expedicao/api/linx/teste-credito",{method:"POST",body:JSON.stringify({documento:doc,bloqueio,gravar:true})});
+    const outros=(d.outros_campos_alterados||[]).map(x=>`${x.campo}: "${x.antes}" → "${x.depois}"`);
+    const linhas=[
+      d.gravou_bloqueio?`✅ A correção funcionou: crédito ${d.bloqueio_antes||"vazio"} → ${d.bloqueio_depois}.`:`❌ A Linx aceitou, mas o crédito continua "${d.bloqueio_depois||"vazio"}" (pedido: ${d.bloqueio_pedido}).`,
+      `Cadastro (Aprovado): ${d.situacao_antes||"vazio"} → ${d.situacao_depois||"vazio"}.`,
+      outros.length?`⚠️ Outros campos mudaram: ${outros.join("; ")}`:"Nenhum outro campo mudou.",
+      "Confira também na tela do Apollo."
+    ];
+    if(msg)msg.textContent=linhas.join(" ");
+    alert(linhas.join("\n\n"));
   }catch(e){if(msg)msg.textContent="❌ "+e.message;}
   carregarIntegracaoLinxAdmin();
 }
