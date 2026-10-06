@@ -245,6 +245,12 @@ segue o perfil: travada ligada no Supervisor, travada desligada no Operador. A m
 boot (`ensure_app_user_permissions_schema`) só roda quando as colunas acabam de ser criadas — antes
 religava todos os módulos de todo Admin a cada reinício.
 
+**Tela de Usuários (V18.69):** padrão da Visão geral (rótulo, título, cartões de resumo) e uma linha
+por usuário (`.usr-linha`, renderizador da V17.57 no fim do `admin.html`); módulos são a mesma
+célula do `user-permissions.js` (`nkCelulaModulosUsuario(u,'div')`) em formato de botão. Linha
+alterada e não salva fica marcada e o "Salvar" mostra quantas (`__usrBaseV1869`, refeito a cada
+carga do servidor). Solicitações só aparecem quando há pendente.
+
 **Menu do Admin (V18.68):** Visão geral (Dashboard, Financeiro) fixa; Expedição, Vendas e anúncios,
 Estoque e compras, Cadastros e Sistema são grupos recolhíveis (`.v15-grp`, estado no `localStorage`
 `nk_menu_grupos_v1868`, padrão só Expedição aberta). O grupo da tela atual abre sozinho; fechado,
@@ -362,6 +368,8 @@ de 30 dias é regravada e o que é mais antigo fica como histórico. `ml_visitas
 dia em que cada anúncio foi buscado, e a rodada **retoma** só o que falta (restart, erro). 404 =
 anúncio sumiu, espera o dia seguinte; 5 erros seguidos (sem conexão/permissão) param a rodada.
 Dia sem número na resposta **não** vira zero. Situação: `GET /api/ml-visitas/status` (admin).
+**O ML só devolve os dias que tiveram visita** (visto em produção, 06/10): anúncio sem nenhuma visita
+no período não tem linha nenhuma. A resposta inclui o dia de hoje (parcial); a tela usa até ontem.
 A mesma rodada guarda o retrato do anúncio (título, SKU, preço, status, estoque, categoria — 1x por
 dia, `/items?ids=` de 20 em 20) e o nome da categoria (`ml_categoria_v1868`), para a tela não chamar o ML.
 **Tela Conversão** (`APP/conversao.html`, `/conversao`, menu Comercial, só **admin**;

@@ -397,7 +397,7 @@ function abrir(i){
       <div><dt>Faturamento</dt><dd>${i.faturamento?brl(i.faturamento):'—'}</dd></div>
       <div><dt>Potencial (estimativa)</dt><dd>${i.potencial?brl(i.potencial):'—'}</dd></div>
       <div><dt>Cliques de Ads</dt><dd>${i.cliques_ads!=null?num(i.cliques_ads):'—'}</dd></div>
-      <div><dt>Dias com visita coletada</dt><dd>${num(i.dias_com_visita)} de ${num(D.periodo.dias)}</dd></div>
+      <div><dt title="O ML só informa os dias que tiveram visita">Dias com alguma visita</dt><dd>${num(i.dias_com_visita)} de ${num(D.periodo.dias)}</dd></div>
     </dl>
     <p style="margin:0 0 4px"><b>O que fazer</b></p><p style="margin:0 0 6px;color:var(--ink2)">${g.o}</p>
     ${blocos}

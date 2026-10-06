@@ -44,8 +44,9 @@
     u.Acessos[key]=!!value;
     if (typeof agendarSalvarUsuariosAdmin === "function") agendarSalvarUsuariosAdmin();
   }
-  function buildCell(u){
-    const td=document.createElement("td");
+  // V18.69: tag "div" monta a mesma célula para a lista nova de usuários (sem tabela).
+  function buildCell(u, tag){
+    const td=document.createElement(tag||"td");
     td.className="acessos-modulos-v123";
     const wrap=document.createElement("div");
     wrap.className="usuario-acessos";
@@ -76,10 +77,12 @@
       wrap.appendChild(lab);
     });
     td.appendChild(wrap);
-    const small=document.createElement("span");
-    small.className="usuario-acessos-legenda";
-    small.textContent="Marque os módulos liberados para este usuário.";
-    td.appendChild(small);
+    if(!tag || tag==="td"){
+      const small=document.createElement("span");
+      small.className="usuario-acessos-legenda";
+      small.textContent="Marque os módulos liberados para este usuário.";
+      td.appendChild(small);
+    }
     return td;
   }
   function hydrate(){
@@ -114,13 +117,14 @@
         const sel=ev.target;
         if(!sel || sel.tagName!=="SELECT" || sel.dataset.campo!=="Perfil") return;
         const u=getUsers().find(x=>String(x.__uidUsuario)===String(sel.dataset.uidusuario));
-        const td=sel.closest("tr")?.querySelector("td.acessos-modulos-v123");
+        const td=sel.closest("tr, [data-linha-usuario]")?.querySelector(".acessos-modulos-v123");
         if(!u || !td) return;
-        td.replaceWith(buildCell(u));
+        td.replaceWith(buildCell(u, td.tagName.toLowerCase()));
         if (typeof agendarSalvarUsuariosAdmin === "function") agendarSalvarUsuariosAdmin();
       });
     }
     setInterval(hydrate,1200);
   });
   window.hidratarPermissoesUsuariosV123=hydrate;
+  window.nkCelulaModulosUsuario=buildCell;
 })();

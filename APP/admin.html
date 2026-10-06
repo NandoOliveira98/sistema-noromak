@@ -443,6 +443,60 @@
   .usuario-acesso-item.usuario-acesso-travado input{cursor:help}
   .usuario-acessos-legenda{display:block;margin-top:4px;color:#6c7d8d;font-size:9.5px;line-height:1.25}
   @media(max-width:900px){.usuario-acessos{grid-template-columns:1fr;min-width:170px}}
+  /* V18.69: tela de Usuários no padrão do sistema. Tudo preso a #aba-usuarios. */
+  #aba-usuarios .usr-tela{padding:22px 24px}
+  #aba-usuarios .usr-head{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin:0 0 16px}
+  #aba-usuarios .usr-head h2{margin:0;color:#16344f!important;font-size:24px;border:0;padding:0}
+  #aba-usuarios .usr-head p{margin:5px 0 0;color:#586A7D;font-size:12px}
+  #aba-usuarios .usr-head-acoes{display:flex;gap:8px;flex-wrap:wrap}
+  #aba-usuarios .usr-btn{display:inline-flex;align-items:center;gap:6px;border:1px solid #DCE5EF;background:#fff;color:#12345B;border-radius:8px;padding:9px 14px;font:inherit;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap;width:auto;margin:0;box-shadow:none;text-transform:none}
+  #aba-usuarios .usr-btn:hover{border-color:#a9c3df;background:#F4F7FB}
+  #aba-usuarios .usr-btn-pri{background:#1F57A5;border-color:#1F57A5;color:#fff}
+  #aba-usuarios .usr-btn-pri:hover{background:#194B91;border-color:#194B91}
+  #aba-usuarios .usr-btn-pri.tem-alteracao{background:#F28B18;border-color:#F28B18}
+  #aba-usuarios .usr-btn-sm{padding:7px 11px;font-size:12px}
+  #aba-usuarios .usr-btn-x{color:#B42318;padding:7px 9px}
+  #aba-usuarios .usr-btn-x:hover{background:#FDECEA;border-color:#f3c2bd}
+  #aba-usuarios .usr-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:11px;margin:0 0 16px}
+  #aba-usuarios .usr-kpi{cursor:default}
+  #aba-usuarios .usr-kpi:hover{transform:none}
+  #aba-usuarios #blocoSolicitacoesUsuarios:not(:has(table)){display:none}
+  #aba-usuarios .usr-lista-cab,#aba-usuarios .usr-linha{display:grid;grid-template-columns:minmax(200px,1.2fr) 150px minmax(330px,2fr) auto;gap:16px;align-items:center}
+  #aba-usuarios .usr-lista-cab{padding:0 16px 6px;color:#586A7D;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}
+  #aba-usuarios .usr-lista{display:grid;gap:8px}
+  #aba-usuarios .usr-linha{background:#fff;border:1px solid #DCE5EF;border-left:3px solid transparent;border-radius:12px;padding:12px 14px;box-shadow:0 2px 10px rgba(26,59,89,.035)}
+  #aba-usuarios .usr-linha.alterado{border-left-color:#F28B18;background:#FFFBF5}
+  #aba-usuarios .usr-linha.senha-salva-flash{border-left-color:#1B7A3E}
+  #aba-usuarios .usr-id{display:flex;align-items:center;gap:12px;min-width:0}
+  #aba-usuarios .usr-av{flex:none;width:38px;height:38px;border-radius:50%;display:grid;place-items:center;font-size:13px;font-weight:700;background:#E7F4EC;color:#1B7A3E}
+  #aba-usuarios [data-perfil="admin"] .usr-av{background:#EAF1FA;color:#1F57A5}
+  #aba-usuarios [data-perfil="supervisor"] .usr-av{background:#FFF4E0;color:#8A5300}
+  #aba-usuarios .usr-id-txt{min-width:0;flex:1}
+  #aba-usuarios .usr-nome{display:block;width:100%;border:1px solid transparent;background:transparent;border-radius:6px;padding:3px 6px;margin:0 0 0 -7px;font:inherit;font-size:14px;font-weight:600;color:#18324A;box-shadow:none;min-height:0}
+  #aba-usuarios .usr-nome:hover{border-color:#DCE5EF;background:#fff}
+  #aba-usuarios .usr-nome:focus{border-color:#9DBCE6;background:#fff;outline:none}
+  #aba-usuarios .usr-login{display:block;font-family:var(--nk-mono,Consolas,monospace);font-size:11.5px;color:#586A7D}
+  #aba-usuarios .usr-perfil select{width:100%;border:1px solid #DCE5EF;border-radius:8px;padding:7px 10px;font:inherit;font-size:13px;font-weight:600;color:#18324A;background:#fff;min-height:0;margin:0}
+  #aba-usuarios .usr-acoes{display:flex;gap:6px;justify-content:flex-end}
+  #aba-usuarios .usr-mods{min-width:0}
+  #aba-usuarios .usr-mods .usuario-acessos{display:flex;flex-wrap:wrap;gap:6px;min-width:0}
+  #aba-usuarios .usr-mods .usuario-acesso-item{position:relative;display:inline-flex;align-items:center;gap:6px;padding:6px 11px;border:1px solid #DCE5EF;border-radius:999px;background:#fff;color:#586A7D;font-size:12px;font-weight:600;cursor:pointer;margin:0;user-select:none;opacity:1}
+  #aba-usuarios .usr-mods .usuario-acesso-item input{position:absolute;opacity:0;width:1px!important;height:1px!important;min-height:0!important;pointer-events:none}
+  #aba-usuarios .usr-mods .usuario-acesso-item i[class^="nk-i-"]{color:#8A99AA}
+  #aba-usuarios .usr-mods .usuario-acesso-item:hover{border-color:#a9c3df}
+  #aba-usuarios .usr-mods .usuario-acesso-item:has(input:checked){background:#1F57A5;border-color:#1F57A5;color:#fff}
+  #aba-usuarios .usr-mods .usuario-acesso-item:has(input:checked) i[class^="nk-i-"]{color:#fff}
+  #aba-usuarios .usr-mods .usuario-acesso-item:has(input:focus-visible){outline:3px solid #9DBCE6;outline-offset:2px}
+  #aba-usuarios .usr-mods .usuario-acesso-item.usuario-acesso-travado{cursor:help;border-style:dashed}
+  #aba-usuarios .usr-mods .usuario-acesso-item.usuario-acesso-travado:has(input:checked){background:#5E84BD;border-color:#5E84BD}
+  #aba-usuarios .usr-mods .usuario-acesso-item.usuario-acesso-travado::after{content:"";width:11px;height:11px;background:currentColor;opacity:.8;-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='4' y='11' width='16' height='10' rx='2'/%3E%3Cpath d='M8 11V7a4 4 0 0 1 8 0v4'/%3E%3C/svg%3E") center/contain no-repeat;mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'%3E%3Crect x='4' y='11' width='16' height='10' rx='2'/%3E%3Cpath d='M8 11V7a4 4 0 0 1 8 0v4'/%3E%3C/svg%3E") center/contain no-repeat}
+  #aba-usuarios .usr-vazio{padding:24px;text-align:center;color:#586A7D;background:#fff;border:1px dashed #DCE5EF;border-radius:12px}
+  #aba-usuarios .usr-rodape{display:flex;gap:8px;align-items:flex-start;margin:14px 2px 0;color:#586A7D;font-size:12px;line-height:1.5}
+  #aba-usuarios .usr-rodape i{color:#1F57A5;margin-top:2px}
+  @media(max-width:1100px){#aba-usuarios .usr-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}#aba-usuarios .usr-lista-cab{display:none}
+    #aba-usuarios .usr-linha{grid-template-columns:1fr 150px;grid-template-areas:"id perfil" "mods mods" "acoes acoes"}
+    #aba-usuarios .usr-id{grid-area:id}#aba-usuarios .usr-perfil{grid-area:perfil}#aba-usuarios .usr-mods{grid-area:mods}#aba-usuarios .usr-acoes{grid-area:acoes;justify-content:flex-start}}
+  @media(max-width:560px){#aba-usuarios .usr-tela{padding:16px}#aba-usuarios .usr-head{flex-direction:column}#aba-usuarios .usr-linha{grid-template-columns:1fr;grid-template-areas:"id" "perfil" "mods" "acoes"}}
 
 
 /* V17.11 - Segurança OWNER */
@@ -1407,12 +1461,27 @@ body{background:var(--v15-bg)!important}
   </section>
 
   <section id="aba-usuarios" class="aba-painel">
-    <div class="card-admin">
-      <h2>Usuários e aprovações <span class="usuario-versao">Versão 12.3 — permissões + precificador online</span></h2>
-      <div class="aviso-banco"><b>Login próprio do estoque:</b> cada pessoa tem usuário, senha e acessos individuais. Marque quais módulos cada usuário pode abrir: <b>Conferência, Painel Administrativo, Estação de Impressão e Precificador</b>. As permissões são validadas também pelo servidor. Por segurança, a senha atual não pode ser visualizada.</div>
-      <div class="toolbar-grid"><button type="button" id="btnNovoUsuarioAdmin" class="btn-primario" onclick="abrirSolicitacaoUsuario('admin')">＋ Solicitar novo usuário</button><button type="button" class="btn-sucesso" onclick="salvarUsuariosProtegidoAdmin()"><i class=nk-i-save></i> Salvar alterações</button></div>
-      <div id="contadorUsuariosAdmin" class="usuario-contador"></div>
-      <div class="excel-wrap" id="tabelaUsuariosAdminWrap" style="max-height:56vh;"><table class="excel-grid" style="min-width:1120px;"><thead><tr><th>Ação</th><th>Nome</th><th>Login</th><th>Senha / acesso</th><th>Perfil</th><th>Acessos aos módulos</th></tr></thead><tbody id="corpoUsuariosAdmin"></tbody></table></div>
+    <!-- V18.69: tela de Usuários no padrão visual do sistema (mesmo cabeçalho da Visão geral,
+         cartões de resumo e uma linha por usuário). Comportamento igual: /api/roles, confirmação
+         do OWNER ao salvar e Admin travado pelo perfil (user-permissions.js). -->
+    <div class="card-admin usr-tela">
+      <div class="usr-head">
+        <div>
+          <div class="v151-eyebrow">SISTEMA</div>
+          <h2>Usuários e acessos</h2>
+          <p>Quem entra no sistema e o que cada pessoa pode abrir. O servidor também confere as permissões.</p>
+        </div>
+        <div class="usr-head-acoes">
+          <button type="button" id="btnNovoUsuarioAdmin" class="usr-btn" onclick="abrirSolicitacaoUsuario('admin')"><i class=nk-i-users></i> Solicitar novo usuário</button>
+          <button type="button" id="btnSalvarUsuariosAdmin" class="usr-btn usr-btn-pri" onclick="salvarUsuariosProtegidoAdmin()"><i class=nk-i-save></i> <span>Salvar alterações</span></button>
+        </div>
+      </div>
+      <div class="usr-kpis" id="usrKpis"></div>
+      <div id="blocoSolicitacoesUsuarios" class="solicitacoes-bloco"></div>
+      <div id="contadorUsuariosAdmin" class="usuario-contador" hidden></div>
+      <div class="usr-lista-cab" aria-hidden="true"><span>Usuário</span><span>Perfil</span><span>Módulos que pode abrir</span><span></span></div>
+      <div class="usr-lista" id="corpoUsuariosAdmin"></div>
+      <p class="usr-rodape"><i class=nk-i-shield></i> A senha atual nunca é exibida. Salvar pede a confirmação do proprietário (senha + código). O <b>Supervisor</b> sempre tem o Admin; o <b>Operador</b> nunca tem — para mudar, troque o perfil.</p>
     </div>
   </section>
 
@@ -7901,7 +7970,7 @@ document.addEventListener("DOMContentLoaded",()=>{
 
   function prepararTela(){
     const btn=document.getElementById("btnNovoUsuarioAdmin");
-    if(btn){btn.textContent="＋ Solicitar novo usuário";btn.onclick=()=>abrirSolicitacaoUsuario("admin");}
+    if(btn){btn.innerHTML="<i class=nk-i-users></i> Solicitar novo usuário";btn.onclick=()=>abrirSolicitacaoUsuario("admin");}  // V18.69: ícone do tema
     garantirBlocoSolicitacoes();renderizarSolicitacoesAdmin();
   }
   if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",prepararTela);else prepararTela();
@@ -9253,7 +9322,7 @@ document.addEventListener("DOMContentLoaded",()=>{
   if(typeof original==='function')window.abrirAbaAdmin=function(nome){if(ehSupervisor()&&['usuarios','seguranca','integracoes'].includes(String(nome))){alert('Esta área é exclusiva do Administrador.');return;}return original.apply(this,arguments);};
 })();
 </script>
-<script src="/expedicao/user-permissions.js?v=18.68"></script>
+<script src="/expedicao/user-permissions.js?v=18.69"></script>
 
 <script id="noromak-v15-js">
 function v15Nav(el){document.querySelectorAll('.v15-nav-item').forEach(x=>x.classList.remove('active'));if(el)el.classList.add('active');}
@@ -9468,11 +9537,38 @@ window.addEventListener("storage",e=>{
   function mapServer(u){return {Nome:u.display_name||u.username||'',Login:u.username||'',Senha:'********',Perfil:u.display_profile||perfil(u.role),Ativo:u.active!==false&&u.active!==0,Aprovado:true,AcessoConferencia:!!u.can_conferencia,AcessoAdmin:!!u.can_admin,AcessoEstacao:!!u.can_estacao,AcessoPrecificador:!!u.can_precificador,__uidUsuario:'USR-'+String(u.username||'').toLowerCase(),__serverUsername:String(u.username||'').toLowerCase()};}
   async function api(path,opt={}){const r=await fetch(BASE+path,{credentials:'same-origin',cache:'no-store',...opt,headers:{'Accept':'application/json',...(opt.body?{'Content-Type':'application/json; charset=utf-8'}:{}),...(opt.headers||{})}});let d={};try{d=await r.json()}catch(_){ }if(!r.ok)throw new Error(d.error||('HTTP '+r.status));return d;}
   window.carregarUsuariosCanonicosV1757=async function(){
-    try{const d=await api('/api/roles');const lista=(Array.isArray(d.users)?d.users:[]).map(mapServer);usuariosEditorAdmin=lista;if(typeof usuariosCadastrados!=='undefined')usuariosCadastrados=lista;renderizarUsuariosAdmin();const c=document.getElementById('contadorUsuariosAdmin');if(c)c.textContent=lista.length+' usuário(s) cadastrado(s) no servidor.';return lista;}catch(e){console.error('[V17.57 usuarios]',e);if(typeof setStatusBanco==='function')setStatusBanco('Erro ao carregar usuários do servidor','erro');throw e;}
+    try{const d=await api('/api/roles');const lista=(Array.isArray(d.users)?d.users:[]).map(mapServer);usuariosEditorAdmin=lista;window.__usrBaseV1869={};lista.forEach(u=>{window.__usrBaseV1869[u.__uidUsuario]=JSON.stringify([String(u.Nome||'').trim(),perfil(u.Perfil),u.AcessoConferencia!==false,u.AcessoAdmin===true,u.AcessoEstacao===true,u.AcessoPrecificador===true])});if(typeof usuariosCadastrados!=='undefined')usuariosCadastrados=lista;renderizarUsuariosAdmin();const c=document.getElementById('contadorUsuariosAdmin');if(c)c.textContent=lista.length+' usuário(s) cadastrado(s) no servidor.';return lista;}catch(e){console.error('[V17.57 usuarios]',e);if(typeof setStatusBanco==='function')setStatusBanco('Erro ao carregar usuários do servidor','erro');throw e;}
   };
+  /* V18.69: lista no padrão do sistema — uma linha por usuário (iniciais, nome/login, perfil,
+     módulos em botões e ações). A linha alterada e não salva fica marcada, e o botão Salvar
+     mostra quantas faltam. Módulos: mesma célula do user-permissions.js (Admin travado pelo perfil). */
+  const assinatura=u=>JSON.stringify([String(u.Nome||'').trim(),perfil(u.Perfil),u.AcessoConferencia!==false,u.AcessoAdmin===true,u.AcessoEstacao===true,u.AcessoPrecificador===true]);
+  window.__usrBaseV1869=window.__usrBaseV1869||{};
+  function usrMarcarAlteracoes(){
+    const lista=Array.isArray(usuariosEditorAdmin)?usuariosEditorAdmin:[];let n=0;
+    lista.forEach(u=>{const alt=window.__usrBaseV1869[u.__uidUsuario]!==assinatura(u);if(alt)n++;
+      const linha=document.querySelector('#corpoUsuariosAdmin [data-linha-usuario="'+CSS.escape(String(u.__uidUsuario))+'"]');if(linha){linha.classList.toggle('alterado',alt);linha.dataset.perfil=perfil(u.Perfil).toLowerCase();}});
+    const b=document.getElementById('btnSalvarUsuariosAdmin');
+    if(b){b.classList.toggle('tem-alteracao',n>0);const t=b.querySelector('span');if(t)t.textContent=n?`Salvar alterações (${n})`:'Salvar alterações';}
+  }
+  window.usrMarcarAlteracoesV1869=usrMarcarAlteracoes;
+  const iniciais=n=>String(n||'?').trim().split(/\s+/).filter(Boolean).slice(0,2).map(p=>p[0]).join('').toUpperCase()||'?';
   window.renderizarUsuariosAdmin=function(){
     const corpo=document.getElementById('corpoUsuariosAdmin');if(!corpo)return;const lista=Array.isArray(usuariosEditorAdmin)?usuariosEditorAdmin:[];
-    corpo.innerHTML=lista.map(u=>{const uid=esc(u.__uidUsuario);return `<tr data-linha-usuario="${uid}"><td><button style="background:#FDECEA;color:#B42318;border:0;border-radius:6px;padding:7px" onclick="excluirUsuarioAdmin('${uid}')" title="Excluir usuário"><i class=nk-i-trash></i></button></td><td><input data-uidusuario="${uid}" data-campo="Nome" value="${esc(u.Nome)}" oninput="atualizarCampoUsuarioAdmin(this)"></td><td><input data-uidusuario="${uid}" data-campo="Login" value="${esc(u.Login)}" readonly title="Para trocar o login, exclua e recrie o usuário"></td><td><div class="senha-acesso-celula"><div class="senha-protegida-status"><strong><i class=nk-i-lock></i> Senha protegida</strong><small>Não é possível visualizar a atual</small></div><button type="button" class="btn-alterar-senha" onclick="abrirModalAlterarSenhaAdmin('${uid}')">Alterar senha</button></div></td><td><select data-uidusuario="${uid}" data-campo="Perfil" onchange="atualizarCampoUsuarioAdmin(this)"><option ${perfil(u.Perfil)==='Admin'?'selected':''}>Admin</option><option ${perfil(u.Perfil)==='Supervisor'?'selected':''}>Supervisor</option><option ${perfil(u.Perfil)==='Operador'?'selected':''}>Operador</option></select></td></tr>`}).join('')||'<tr><td colspan="5" style="padding:20px;text-align:center">Nenhum usuário cadastrado.</td></tr>';
+    const cont={Admin:0,Supervisor:0,Operador:0};lista.forEach(u=>cont[perfil(u.Perfil)]++);
+    const k=document.getElementById('usrKpis');
+    if(k)k.innerHTML=[['Usuários',lista.length,'users','blue'],['Admin',cont.Admin,'settings','blue'],['Supervisor',cont.Supervisor,'shield','orange'],['Operador',cont.Operador,'check','green']]
+      .map(([t,v,ic,cor])=>`<div class="v151-kpi usr-kpi"><span class="v151-kpi-icon ${cor}"><i class=nk-i-${ic}></i></span><span><b>${v}</b><small>${t}</small></span></div>`).join('');
+    corpo.innerHTML=lista.map(u=>{const uid=esc(u.__uidUsuario),p=perfil(u.Perfil);return `<div class="usr-linha" data-linha-usuario="${uid}" data-perfil="${p.toLowerCase()}">
+      <div class="usr-id"><span class="usr-av">${esc(iniciais(u.Nome||u.Login))}</span><div class="usr-id-txt"><input class="usr-nome" data-uidusuario="${uid}" data-campo="Nome" value="${esc(u.Nome)}" oninput="atualizarCampoUsuarioAdmin(this)" aria-label="Nome" title="Clique para editar o nome"><small class="usr-login" title="Para trocar o login, exclua e recrie o usuário">${esc(u.Login)}</small></div></div>
+      <div class="usr-perfil"><select data-uidusuario="${uid}" data-campo="Perfil" onchange="atualizarCampoUsuarioAdmin(this)" aria-label="Perfil"><option ${p==='Admin'?'selected':''}>Admin</option><option ${p==='Supervisor'?'selected':''}>Supervisor</option><option ${p==='Operador'?'selected':''}>Operador</option></select></div>
+      <div class="usr-mods-slot"></div>
+      <div class="usr-acoes"><button type="button" class="usr-btn usr-btn-sm" onclick="abrirModalAlterarSenhaAdmin('${uid}')" title="A senha atual nunca é exibida"><i class=nk-i-key></i> Senha</button><button type="button" class="usr-btn usr-btn-sm usr-btn-x" onclick="excluirUsuarioAdmin('${uid}')" title="Excluir usuário" aria-label="Excluir usuário"><i class=nk-i-trash></i></button></div>
+    </div>`}).join('')||'<div class="usr-vazio">Nenhum usuário cadastrado.</div>';
+    lista.forEach(u=>{const slot=corpo.querySelector('[data-linha-usuario="'+CSS.escape(String(u.__uidUsuario))+'"] .usr-mods-slot');
+      if(slot&&typeof window.nkCelulaModulosUsuario==='function'){const c=window.nkCelulaModulosUsuario(u,'div');c.classList.add('usr-mods');slot.replaceWith(c);}});
+    if(!corpo.__usrOuvindo){corpo.__usrOuvindo=true;['input','change'].forEach(ev=>corpo.addEventListener(ev,()=>setTimeout(usrMarcarAlteracoes,0)));}
+    usrMarcarAlteracoes();
   };
   window.atualizarCampoUsuarioAdmin=function(el){const u=(usuariosEditorAdmin||[]).find(x=>String(x.__uidUsuario)===String(el.dataset.uidusuario));if(!u)return;u[el.dataset.campo]=el.value;if(typeof setStatusBanco==='function')setStatusBanco('Alterações pendentes — clique em Salvar alterações','salvando');};
   window.salvarUsuariosAdmin=async function(mostrar=false){
