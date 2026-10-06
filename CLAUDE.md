@@ -238,6 +238,18 @@ funcional, não administrativo: **não transforma o usuário em Admin**.
 
 Alterar `conf_usuarios` exige reautenticação do OWNER (senha + TOTP).
 
+**Supervisor = operador com `can_admin`** (`is_supervisor_user`). Por isso, no `POST /api/roles`, o
+Supervisor tem o Admin sempre ligado e os **outros módulos valem o que foi marcado** (V18.68: antes
+recebia tudo liberado e a caixa desmarcada "voltava"). Na tela (`user-permissions.js`) a caixa Admin
+segue o perfil: travada ligada no Supervisor, travada desligada no Operador. A migração de módulos do
+boot (`ensure_app_user_permissions_schema`) só roda quando as colunas acabam de ser criadas — antes
+religava todos os módulos de todo Admin a cada reinício.
+
+**Menu do Admin (V18.68):** Visão geral (Dashboard, Financeiro) fixa; Expedição, Vendas e anúncios,
+Estoque e compras, Cadastros e Sistema são grupos recolhíveis (`.v15-grp`, estado no `localStorage`
+`nk_menu_grupos_v1868`, padrão só Expedição aberta). O grupo da tela atual abre sozinho; fechado,
+ganha ponto laranja. No modo só ícones (761–1000 px) os títulos somem e tudo aparece.
+
 ---
 
 ## 6. Integrações

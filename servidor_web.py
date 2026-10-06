@@ -1544,14 +1544,17 @@ def ensure_app_user_permissions_schema() -> None:
                 DB.execute(f"ALTER TABLE app_users ADD COLUMN {name} {ddl}")
                 changed = True
         # Migração segura: administradores existentes recebem tudo; operadores, Conferência.
-        DB.execute(
-            """UPDATE app_users SET
-                 can_conferencia=1,
-                 can_admin=CASE WHEN role='admin' THEN 1 ELSE COALESCE(can_admin,0) END,
-                 can_estacao=CASE WHEN role='admin' THEN 1 ELSE COALESCE(can_estacao,0) END,
-                 can_precificador=CASE WHEN role='admin' THEN 1 ELSE COALESCE(can_precificador,0) END
-               WHERE role='admin' OR can_conferencia IS NULL"""
-        )
+        # V18.68: só quando as colunas acabaram de ser criadas. Rodava em TODO boot e
+        # religava os módulos que o ADMIN tinha desmarcado de um usuário Admin.
+        if changed:
+            DB.execute(
+                """UPDATE app_users SET
+                     can_conferencia=1,
+                     can_admin=CASE WHEN role='admin' THEN 1 ELSE COALESCE(can_admin,0) END,
+                     can_estacao=CASE WHEN role='admin' THEN 1 ELSE COALESCE(can_estacao,0) END,
+                     can_precificador=CASE WHEN role='admin' THEN 1 ELSE COALESCE(can_precificador,0) END
+                   WHERE role='admin' OR can_conferencia IS NULL"""
+            )
         # V17.82: o UPDATE acima roda SEMPRE, então o COMMIT também precisa rodar sempre.
         # Em uma instalação nova as colunas já nascem no executescript (changed=False) e o
         # UPDATE ficava em transação implícita aberta, fazendo o BEGIN IMMEDIATE de
@@ -20445,7 +20448,15 @@ class AppHandler(BaseHTTPRequestHandler):
             password = str(req.get("password") or "").strip() or None
             raw_permissions = req.get("permissions") if isinstance(req.get("permissions"), dict) else {}
             if supervisor:
-                permissions = {"conferencia": True, "admin": True, "estacao": True, "precificador": True}
+                # V18.68: antes o Supervisor recebia sempre tudo liberado e o módulo
+                # desmarcado pelo ADMIN "voltava". Agora vale o que foi marcado; só o
+                # Admin fica sempre ligado, porque é o que faz dele Supervisor.
+                permissions = {
+                    "conferencia": bool(raw_permissions.get("conferencia", True)),
+                    "admin": True,
+                    "estacao": bool(raw_permissions.get("estacao", True)),
+                    "precificador": bool(raw_permissions.get("precificador", True)),
+                }
             else:
                 permissions = {
                     "conferencia": bool(raw_permissions.get("conferencia", role != "admin")),

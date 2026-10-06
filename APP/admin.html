@@ -437,6 +437,10 @@
   .usuario-acesso-item{display:flex;align-items:center;gap:7px;padding:7px 9px;border:1px solid #d6e1ed;border-radius:8px;background:#f8fbfe;color:#294763;font-size:11px;font-weight:800;white-space:nowrap}
   .usuario-acesso-item input{width:16px!important;height:16px!important;min-height:16px!important;margin:0;accent-color:#1F57A5}
   .usuario-acesso-item:has(input:checked){background:#EAF1FA;border-color:#a9c3df;color:#12345B}
+  /* V18.68: ícone do tema no lugar do emoji; Admin travado pelo perfil (Supervisor/Operador). */
+  .usuario-acesso-item i[class^="nk-i-"]{color:#1F57A5;margin-right:0!important}
+  .usuario-acesso-item.usuario-acesso-travado{opacity:.7;cursor:help}
+  .usuario-acesso-item.usuario-acesso-travado input{cursor:help}
   .usuario-acessos-legenda{display:block;margin-top:4px;color:#6c7d8d;font-size:9.5px;line-height:1.25}
   @media(max-width:900px){.usuario-acessos{grid-template-columns:1fr;min-width:170px}}
 
@@ -835,36 +839,97 @@ body{background:var(--v15-bg)!important}
 
 <nav class="v15-sidebar" aria-label="Navegação principal">
   <div class="v15-brand"><div class="v15-brand-badge">N</div><div><strong>Noromak</strong><small>Sistema de Expedição</small></div></div>
+  <!-- V18.68: menu por assunto e com grupos recolhíveis (o título abre/fecha; cada computador lembra). -->
   <div class="v15-nav-section">Visão geral</div>
   <button class="v15-nav-item active" data-v15-nav="dashboard" onclick="abrirDashboardV151();v15Nav(this)"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3h7v9H3zM14 3h7v5h-7zM14 12h7v9h-7zM3 16h7v5H3z"/></svg></span><span class="v15-nav-label">Dashboard</span></button>
-  <div class="v15-nav-section">Expedição</div>
+  <!-- V18.33: o Financeiro substitui a Rentabilidade ML (mesma conta, ML + Shopee). -->
+  <a class="v15-nav-item" href="/expedicao/financeiro" target="_blank" rel="noopener"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7h18v13H3zM3 7l3-4h12l3 4M16 14h2"/></svg></span><span class="v15-nav-label">Financeiro</span></a>
+  <div class="v15-grp" data-v15-grp="expedicao">
+  <button type="button" class="v15-nav-section v15-grp-h" aria-expanded="true"><span>Expedição</span><span class="v15-grp-n">6</span><span class="v15-grp-seta" aria-hidden="true">▾</span></button>
+  <div class="v15-grp-b">
   <button class="v15-nav-item" data-v15-nav="pedidos" onclick="abrirAbaAdmin('pedidos');v15Nav(this)"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01"/></svg></span><span class="v15-nav-label">Pedidos pendentes</span></button>
   <button class="v15-nav-item" data-v15-nav="pedidos-dia" onclick="abrirAbaAdmin('pedidos-dia');v15Nav(this)"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 5h18v16H3zM3 10h18M8 3v4M16 3v4"/></svg></span><span class="v15-nav-label">Pedidos do dia</span></button>
   <button class="v15-nav-item" data-v15-nav="coleta" onclick="abrirAbaAdmin('coleta');v15Nav(this)"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 6h13v10H1zM14 10h4l3 3v3h-7zM5 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM18 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4z"/></svg></span><span class="v15-nav-label">Coleta do dia</span></button>
   <button class="v15-nav-item" data-v15-nav="etiquetas" onclick="abrirAbaAdmin('etiquetas');v15Nav(this)"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8zM7.5 7.5h.01"/></svg></span><span class="v15-nav-label">Etiquetas / Importar TXT</span></button>
   <a class="v15-nav-item" href="/expedicao/conferencia" target="_blank" rel="noopener"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></span><span class="v15-nav-label">Conferência</span></a>
   <button class="v15-nav-item" onclick="abrirAbaAdmin('historico');v15Nav(this)"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2"/></svg></span><span class="v15-nav-label">Histórico</span></button>
-  <div class="v15-nav-section">Comercial</div>
-  <a class="v15-nav-item" href="/expedicao/precificador" target="_blank" rel="noopener"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></span><span class="v15-nav-label">Precificador</span></a>
-  <a class="v15-nav-item" href="/expedicao/promocoes" target="_blank" rel="noopener"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 5 5 19M6.5 9a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM17.5 20a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z"/></svg></span><span class="v15-nav-label">Promoções ML</span></a>
-  <a class="v15-nav-item" href="/expedicao/analise-full" target="_blank" rel="noopener"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8 12 3 3 8v8l9 5 9-5zM3 8l9 5 9-5M12 13v8"/></svg></span><span class="v15-nav-label">Demanda Full</span></a>
-  <a class="v15-nav-item" href="/expedicao/compras" target="_blank" rel="noopener"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3h2l2.4 12.2a2 2 0 0 0 2 1.8h7.7a2 2 0 0 0 2-1.6L21 8H6M9 21h.01M18 21h.01"/></svg></span><span class="v15-nav-label">Demanda de Compra</span></a>
-  <!-- V18.33: o Financeiro substitui a Rentabilidade ML (mesma conta, ML + Shopee). -->
-  <a class="v15-nav-item" href="/expedicao/financeiro" target="_blank" rel="noopener"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7h18v13H3zM3 7l3-4h12l3 4M16 14h2"/></svg></span><span class="v15-nav-label">Financeiro</span></a>
-  <!-- V18.54: relatório de Anúncios patrocinados do ML cruzado com o lucro de cada anúncio. -->
-  <a class="v15-nav-item" href="/expedicao/analise-ads" target="_blank" rel="noopener"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11v3l13 5V6L3 11zM16 9a3 3 0 0 1 0 6M7 15.5V20h3v-3.3"/></svg></span><span class="v15-nav-label">Análise de ADS</span></a>
+  </div></div>
+  <div class="v15-grp" data-v15-grp="vendas">
+  <button type="button" class="v15-nav-section v15-grp-h" aria-expanded="true"><span>Vendas e anúncios</span><span class="v15-grp-n">5</span><span class="v15-grp-seta" aria-hidden="true">▾</span></button>
+  <div class="v15-grp-b">
   <!-- V18.68: Conversão dos anúncios (vendas ÷ visitas). -->
   <a class="v15-nav-item" href="/expedicao/conversao" target="_blank" rel="noopener"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 4h18l-7 8v6l-4 2v-8L3 4z"/></svg></span><span class="v15-nav-label">Conversão</span></a>
+  <!-- V18.54: relatório de Anúncios patrocinados do ML cruzado com o lucro de cada anúncio. -->
+  <a class="v15-nav-item" href="/expedicao/analise-ads" target="_blank" rel="noopener"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11v3l13 5V6L3 11zM16 9a3 3 0 0 1 0 6M7 15.5V20h3v-3.3"/></svg></span><span class="v15-nav-label">Análise de ADS</span></a>
+  <a class="v15-nav-item" href="/expedicao/promocoes" target="_blank" rel="noopener"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 5 5 19M6.5 9a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM17.5 20a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z"/></svg></span><span class="v15-nav-label">Promoções ML</span></a>
+  <a class="v15-nav-item" href="/expedicao/precificador" target="_blank" rel="noopener"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg></span><span class="v15-nav-label">Precificador</span></a>
   <!-- V18.47: o que os clientes já compram junto e pode virar kit. -->
   <a class="v15-nav-item" href="/expedicao/kits-analise" target="_blank" rel="noopener"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 4h6v3a2 2 0 1 0 4 0V4h6v6h-3a2 2 0 1 0 0 4h3v6H4z"/></svg></span><span class="v15-nav-label">Oportunidades de Kit</span></a>
+  </div></div>
+  <div class="v15-grp" data-v15-grp="estoque">
+  <button type="button" class="v15-nav-section v15-grp-h" aria-expanded="true"><span>Estoque e compras</span><span class="v15-grp-n">2</span><span class="v15-grp-seta" aria-hidden="true">▾</span></button>
+  <div class="v15-grp-b">
+  <a class="v15-nav-item" href="/expedicao/analise-full" target="_blank" rel="noopener"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 8 12 3 3 8v8l9 5 9-5zM3 8l9 5 9-5M12 13v8"/></svg></span><span class="v15-nav-label">Demanda Full</span></a>
+  <a class="v15-nav-item" href="/expedicao/compras" target="_blank" rel="noopener"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 3h2l2.4 12.2a2 2 0 0 0 2 1.8h7.7a2 2 0 0 0 2-1.6L21 8H6M9 21h.01M18 21h.01"/></svg></span><span class="v15-nav-label">Demanda de Compra</span></a>
+  </div></div>
+  <div class="v15-grp" data-v15-grp="cadastros">
+  <button type="button" class="v15-nav-section v15-grp-h" aria-expanded="true"><span>Cadastros</span><span class="v15-grp-n">2</span><span class="v15-grp-seta" aria-hidden="true">▾</span></button>
+  <div class="v15-grp-b">
   <button class="v15-nav-item" onclick="abrirAbaAdmin('produtos');v15Nav(this)"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16.5 9.4 7.5 4.2M21 16V8l-9-5-9 5v8l9 5zM3.3 7 12 12l8.7-5M12 22V12"/></svg></span><span class="v15-nav-label">Produtos</span></button>
   <button class="v15-nav-item" onclick="abrirAbaAdmin('kits');v15Nav(this)"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12v10H4V12M2 7h20v5H2zM12 22V7"/></svg></span><span class="v15-nav-label">Kits</span></button>
-  <div class="v15-nav-section">Integrações</div>
+  </div></div>
+  <div class="v15-grp" data-v15-grp="sistema">
+  <button type="button" class="v15-nav-section v15-grp-h" aria-expanded="true"><span>Sistema</span><span class="v15-grp-n">4</span><span class="v15-grp-seta" aria-hidden="true">▾</span></button>
+  <div class="v15-grp-b">
   <button class="v15-nav-item" onclick="abrirAbaAdmin('integracoes');v15Nav(this)"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4"/></svg></span><span class="v15-nav-label">Central de integrações</span></button>
   <a class="v15-nav-item" href="/expedicao/estacao-impressao" target="_blank" rel="noopener"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M6 14h12v8H6z"/></svg></span><span class="v15-nav-label">Estação Zebra</span></a>
-  <div class="v15-nav-section">Administração</div>
   <button class="v15-nav-item" onclick="abrirAbaAdmin('usuarios');v15Nav(this)"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8"/></svg></span><span class="v15-nav-label">Usuários</span></button>
   <button class="v15-nav-item" data-v15-nav="seguranca" onclick="abrirAbaAdmin('seguranca');v15Nav(this)"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span><span class="v15-nav-label">Segurança</span></button>
+  </div></div>
+  <style id="v1868-menu-grupos">
+  /* V18.68: título do grupo vira botão; fechado mostra quantos itens tem. */
+  .v15-grp-h{display:flex;align-items:center;gap:6px;width:calc(100% - 16px);background:none;border:0;cursor:pointer;padding:4px 6px;margin-left:2px;border-radius:6px;font-family:inherit;text-align:left}
+  .v15-grp-h:hover{color:#fff;background:rgba(255,255,255,.06)}
+  .v15-grp-n{display:none;font-size:10px;letter-spacing:0;background:rgba(255,255,255,.12);color:#cfe0f0;border-radius:8px;padding:0 6px}
+  .v15-grp-seta{margin-left:auto;font-size:12px;transition:transform .15s}
+  .v15-grp.fechado .v15-grp-seta{transform:rotate(-90deg)}
+  .v15-grp.fechado .v15-grp-n{display:inline-block}
+  .v15-grp.fechado .v15-grp-b{display:none}
+  .v15-grp.tem-ativo .v15-grp-h{color:#fff}
+  .v15-grp.fechado.tem-ativo .v15-grp-h::after{content:"";width:6px;height:6px;border-radius:50%;background:var(--v15-orange);margin-left:4px}
+  /* Menu só de ícones (tela média): sem títulos, todos os itens à mostra. */
+  @media(min-width:761px) and (max-width:1000px){.v15-grp-h{display:none!important}.v15-grp.fechado .v15-grp-b{display:block}}
+  /* Celular (gaveta, V18.44 força display:block nos títulos): o título do grupo continua em linha. */
+  @media(max-width:760px){.v15-sidebar .v15-grp .v15-grp-h{display:flex!important}}
+  </style>
+  <script>
+  /* V18.68: grupos recolhíveis do menu. Começa com Expedição aberta; o que cada um
+     abre/fecha fica guardado neste navegador. O grupo da tela atual abre sozinho;
+     se for fechado depois, o título ganha um ponto laranja. */
+  (function(){
+    const CHAVE="nk_menu_grupos_v1868";
+    const nav=document.currentScript.closest("nav");
+    const grupos=[...nav.querySelectorAll(".v15-grp")];
+    let abertos;
+    try{abertos=JSON.parse(localStorage.getItem(CHAVE)||"null")}catch(_){abertos=null}
+    if(!Array.isArray(abertos))abertos=["expedicao"];
+    const guardar=()=>{try{localStorage.setItem(CHAVE,JSON.stringify(grupos.filter(g=>!g.classList.contains("fechado")).map(g=>g.dataset.v15Grp)))}catch(_){}};
+    const marcar=(g,aberto)=>{g.classList.toggle("fechado",!aberto);g.querySelector(".v15-grp-h").setAttribute("aria-expanded",String(aberto))};
+    grupos.forEach(g=>{
+      marcar(g,abertos.includes(g.dataset.v15Grp));
+      g.querySelector(".v15-grp-h").addEventListener("click",()=>{marcar(g,g.classList.contains("fechado"));guardar()});
+    });
+    let ativoAntes=null;
+    const ativo=()=>{
+      const el=nav.querySelector(".v15-nav-item.active");
+      grupos.forEach(g=>g.classList.toggle("tem-ativo",!!el&&g.contains(el)));
+      if(el&&el!==ativoAntes){const g=el.closest(".v15-grp");if(g&&g.classList.contains("fechado")){marcar(g,true);guardar()}}
+      ativoAntes=el;
+    };
+    new MutationObserver(ativo).observe(nav,{subtree:true,attributes:true,attributeFilter:["class"]});
+    ativo();
+  })();
+  </script>
   <div class="v15-sidebar-footer"><button class="v15-nav-item" onclick="sairAdmin()"><span class="v15-nav-icon"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg></span><span class="v15-nav-label">Sair</span></button></div>
 </nav>
 
@@ -7920,7 +7985,7 @@ document.addEventListener("DOMContentLoaded",()=>{
         <td><div class="linha-acoes"><button style="background:#FDECEA;color:#B42318" onclick="excluirUsuarioAdmin('${uid}')" title="Excluir usuário"><i class=nk-i-trash></i></button></div></td>
         <td>${input("Nome")}</td>
         <td>${input("Login")}</td>
-        <td><div class="senha-acesso-celula"><div class="senha-protegida-status"><strong>🔒 Senha protegida</strong><small>Não é possível visualizar a atual</small>${u.SenhaInicialPendente?'<span class="senha-inicial-alerta">⚠ TROCAR SENHA INICIAL</span>':''}</div><button type="button" class="btn-alterar-senha" onclick="abrirModalAlterarSenhaAdmin('${uid}')">Alterar senha</button></div></td>
+        <td><div class="senha-acesso-celula"><div class="senha-protegida-status"><strong><i class=nk-i-lock></i> Senha protegida</strong><small>Não é possível visualizar a atual</small>${u.SenhaInicialPendente?'<span class="senha-inicial-alerta">⚠ TROCAR SENHA INICIAL</span>':''}</div><button type="button" class="btn-alterar-senha" onclick="abrirModalAlterarSenhaAdmin('${uid}')">Alterar senha</button></div></td>
         <td><select data-uidusuario="${uid}" data-campo="Perfil" onchange="atualizarCampoUsuarioAdmin(this)"><option ${perfilNormalizado(u.Perfil)==="Admin"?"selected":""}>Admin</option><option ${perfilNormalizado(u.Perfil)==="Supervisor"?"selected":""}>Supervisor</option><option ${perfilNormalizado(u.Perfil)==="Operador"?"selected":""}>Operador</option></select></td>
       </tr>`;
     }).join("")||'<tr><td colspan="5" style="padding:20px;text-align:center;">Nenhum usuário cadastrado.</td></tr>';
@@ -9188,7 +9253,7 @@ document.addEventListener("DOMContentLoaded",()=>{
   if(typeof original==='function')window.abrirAbaAdmin=function(nome){if(ehSupervisor()&&['usuarios','seguranca','integracoes'].includes(String(nome))){alert('Esta área é exclusiva do Administrador.');return;}return original.apply(this,arguments);};
 })();
 </script>
-<script src="/expedicao/user-permissions.js?v=15.1"></script>
+<script src="/expedicao/user-permissions.js?v=18.68"></script>
 
 <script id="noromak-v15-js">
 function v15Nav(el){document.querySelectorAll('.v15-nav-item').forEach(x=>x.classList.remove('active'));if(el)el.classList.add('active');}
@@ -9407,7 +9472,7 @@ window.addEventListener("storage",e=>{
   };
   window.renderizarUsuariosAdmin=function(){
     const corpo=document.getElementById('corpoUsuariosAdmin');if(!corpo)return;const lista=Array.isArray(usuariosEditorAdmin)?usuariosEditorAdmin:[];
-    corpo.innerHTML=lista.map(u=>{const uid=esc(u.__uidUsuario);return `<tr data-linha-usuario="${uid}"><td><button style="background:#FDECEA;color:#B42318;border:0;border-radius:6px;padding:7px" onclick="excluirUsuarioAdmin('${uid}')" title="Excluir usuário"><i class=nk-i-trash></i></button></td><td><input data-uidusuario="${uid}" data-campo="Nome" value="${esc(u.Nome)}" oninput="atualizarCampoUsuarioAdmin(this)"></td><td><input data-uidusuario="${uid}" data-campo="Login" value="${esc(u.Login)}" readonly title="Para trocar o login, exclua e recrie o usuário"></td><td><div class="senha-acesso-celula"><div class="senha-protegida-status"><strong>🔒 Senha protegida</strong><small>Não é possível visualizar a atual</small></div><button type="button" class="btn-alterar-senha" onclick="abrirModalAlterarSenhaAdmin('${uid}')">Alterar senha</button></div></td><td><select data-uidusuario="${uid}" data-campo="Perfil" onchange="atualizarCampoUsuarioAdmin(this)"><option ${perfil(u.Perfil)==='Admin'?'selected':''}>Admin</option><option ${perfil(u.Perfil)==='Supervisor'?'selected':''}>Supervisor</option><option ${perfil(u.Perfil)==='Operador'?'selected':''}>Operador</option></select></td></tr>`}).join('')||'<tr><td colspan="5" style="padding:20px;text-align:center">Nenhum usuário cadastrado.</td></tr>';
+    corpo.innerHTML=lista.map(u=>{const uid=esc(u.__uidUsuario);return `<tr data-linha-usuario="${uid}"><td><button style="background:#FDECEA;color:#B42318;border:0;border-radius:6px;padding:7px" onclick="excluirUsuarioAdmin('${uid}')" title="Excluir usuário"><i class=nk-i-trash></i></button></td><td><input data-uidusuario="${uid}" data-campo="Nome" value="${esc(u.Nome)}" oninput="atualizarCampoUsuarioAdmin(this)"></td><td><input data-uidusuario="${uid}" data-campo="Login" value="${esc(u.Login)}" readonly title="Para trocar o login, exclua e recrie o usuário"></td><td><div class="senha-acesso-celula"><div class="senha-protegida-status"><strong><i class=nk-i-lock></i> Senha protegida</strong><small>Não é possível visualizar a atual</small></div><button type="button" class="btn-alterar-senha" onclick="abrirModalAlterarSenhaAdmin('${uid}')">Alterar senha</button></div></td><td><select data-uidusuario="${uid}" data-campo="Perfil" onchange="atualizarCampoUsuarioAdmin(this)"><option ${perfil(u.Perfil)==='Admin'?'selected':''}>Admin</option><option ${perfil(u.Perfil)==='Supervisor'?'selected':''}>Supervisor</option><option ${perfil(u.Perfil)==='Operador'?'selected':''}>Operador</option></select></td></tr>`}).join('')||'<tr><td colspan="5" style="padding:20px;text-align:center">Nenhum usuário cadastrado.</td></tr>';
   };
   window.atualizarCampoUsuarioAdmin=function(el){const u=(usuariosEditorAdmin||[]).find(x=>String(x.__uidUsuario)===String(el.dataset.uidusuario));if(!u)return;u[el.dataset.campo]=el.value;if(typeof setStatusBanco==='function')setStatusBanco('Alterações pendentes — clique em Salvar alterações','salvando');};
   window.salvarUsuariosAdmin=async function(mostrar=false){
