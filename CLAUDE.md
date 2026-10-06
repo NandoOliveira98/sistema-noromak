@@ -360,6 +360,11 @@ mediana da **categoria** (5+ anúncios com 30+ visitas), senão da conta. Grupos
 3+ vendas), campeão, na média, poucas visitas (< 30, ruído). "Potencial" = visitas × (ref − conv) ×
 ticket — **estimativa** para ordenar, marcada assim. Anúncio que vendeu sem visita coletada fica
 **fora** da conta (`vendeu_sem_visita_coletada`), nunca como conversão infinita.
+**Dicas** (só no front, `dicasDe`): por situação e com os números do anúncio — estoque (pausado,
+zerado, dura < 10 dias), preço, compatibilidade, fotos/título, frete (abaixo de R$ 79 sugere kit),
+Ads (reduzir quando ≥ 25% das visitas são pagas e não convertem; criar/aumentar na joia), exposição
+e perguntas. Máximo 3 "Fazer primeiro"; anúncio parado (pausado/encerrado/sem estoque) não recebe
+dica de escalar. A primeira dica vira a coluna "Próxima ação".
 
 ### Análise de ADS (V18.54)
 `APP/analise-ads.html` (`/analise-ads`, menu Comercial, só **admin**). O relatório "Anúncios

@@ -85,6 +85,14 @@ table.cv{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;m
 .drawer dt{font-size:11px;color:var(--ink2)}
 .drawer dd{margin:2px 0 0;font-weight:600;font-variant-numeric:tabular-nums}
 .drawer ul{padding-left:18px;line-height:1.55;margin:6px 0}
+.pr{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;margin:14px 0 4px}
+ul.dicas{list-style:none;padding:0;margin:0;display:grid;gap:6px}
+.dica{display:grid;grid-template-columns:22px 1fr;gap:8px;background:var(--canvas);border-radius:8px;padding:9px 10px;line-height:1.45}
+.dica>i{color:var(--navy2);margin-top:2px}
+.dica .da{font-size:11px;color:var(--ink3);font-weight:600}
+.dica .dt{color:var(--ink2);font-size:12.5px;margin-top:2px}
+.acao{display:flex;gap:6px;align-items:flex-start;white-space:normal;max-width:230px;font-size:12.5px}
+.acao i{color:var(--navy2);margin-top:2px}
 .funil{display:flex;gap:4px;margin:12px 0}
 .funil div{flex:1;background:var(--infobg);border-radius:6px;padding:8px;text-align:center;font-size:12px}
 .funil b{display:block;font-size:17px}
@@ -199,6 +207,7 @@ async function carregar(){
   aviso(av.length?'<b>Atenção:</b> '+av.join('; ')+'.':'');
   $('conteudo').hidden=false;
   if(!D.itens.some(i=>i.grupo===st.tab)) st.tab='todos';
+  prepararDicas();
   kpis(); grupos(); disp(); render(); notas();
 }
 
@@ -255,7 +264,7 @@ function disp(){
   });
 }
 
-const COLS=[['titulo','Anúncio','l'],['grupo','Situação','l'],['visitas','Visitas'],['pedidos','Vendas'],['conversao','Conversão'],
+const COLS=[['titulo','Anúncio','l'],['grupo','Situação','l'],['acao_p','Próxima ação','l'],['visitas','Visitas'],['pedidos','Vendas'],['conversao','Conversão'],
   ['conversao_ref','Referência'],['cliques_ads','Cliques Ads'],['faturamento','Faturamento'],['potencial','Potencial']];
 function filtra(i,k){return k==='todos'||(k==='caindo'?i.caindo:i.grupo===k)}
 function delta(a,b){ if(a==null||b==null) return ''; const d=a-b; if(Math.abs(d)<1e-9) return '';
@@ -273,6 +282,7 @@ function render(){
   const body=L.slice(0,st.lim).map(i=>`<tr data-m="${i.mlb}">
     <td class="l ttl">${esc(i.titulo||'(sem título)')}<div class="mlb">${i.mlb}${i.sku?' · SKU '+esc(i.sku):''}${i.status&&i.status!=='active'?' · '+esc(stt(i.status)):''}</div>${i.categoria?`<div class="muted" style="font-size:11.5px">${esc(i.categoria)}</div>`:''}</td>
     <td class="l"><span class="chip" style="background:${G[i.grupo].bg};color:${G[i.grupo].c==='#B8C4D0'?'var(--ink2)':G[i.grupo].c}"><i style="background:${G[i.grupo].c}"></i>${G[i.grupo].t}</span>${i.caindo?'<div><span class="tag">conversão caindo</span></div>':''}</td>
+    <td class="l">${i._dicas[0]?`<div class="acao" title="${esc(AREA[i._dicas[0].a][0])}"><i class="nk-i-${AREA[i._dicas[0].a][1]}" aria-hidden="true"></i><span>${esc(i._dicas[0].c)}${i._dicas.length>1?` <span class="muted">+${i._dicas.length-1}</span>`:''}</span></div>`:dash}</td>
     <td>${num(i.visitas)}${i.visitas_ant!=null?`<div class="muted" style="font-size:11px">antes ${num(i.visitas_ant)}</div>`:''}</td>
     <td>${num(i.pedidos)}${i.unidades!==i.pedidos?`<div class="muted" style="font-size:11px">${num(i.unidades)} un.</div>`:''}</td>
     <td><b>${pct(i.conversao)}</b>${delta(i.conversao,i.conversao_ant)}</td>
@@ -282,7 +292,7 @@ function render(){
     <td>${i.potencial?`<b style="color:var(--neg)">${brl(i.potencial)}</b>`:dash}</td></tr>`).join('')
     ||`<tr><td colspan="${COLS.length}" class="l muted" style="padding:20px">Nenhum anúncio nesse filtro.</td></tr>`;
   $('tab').innerHTML=head+'<tbody>'+body+'</tbody>';
-  document.querySelectorAll('#tab th').forEach(th=>th.onclick=()=>{const c=th.dataset.k;if(st.sort===c)st.dir*=-1;else{st.sort=c;st.dir=(c==='titulo'||c==='grupo')?1:-1}render()});
+  document.querySelectorAll('#tab th').forEach(th=>th.onclick=()=>{const c=th.dataset.k;if(st.sort===c)st.dir*=-1;else{st.sort=c;st.dir=(c==='titulo'||c==='grupo'||c==='acao_p')?1:-1}render()});
   const por=Object.fromEntries(L.map(i=>[i.mlb,i]));
   document.querySelectorAll('#tab tbody tr[data-m]').forEach(tr=>tr.onclick=()=>abrir(por[tr.dataset.m]));
   const more=$('more'); more.style.display=L.length>st.lim?'':'none'; more.textContent=`Mostrar mais (${num(L.length-st.lim)} restantes)`;
@@ -291,19 +301,90 @@ $('more').onclick=()=>{st.lim+=100;render()};
 $('q').oninput=e=>{st.q=e.target.value;st.lim=50;render()};
 $('dias').onchange=carregar;
 
+// Dicas por situação do anúncio. Regras simples, na ordem do que costuma dar resultado
+// primeiro; cada dica diz o porquê com os números do próprio anúncio.
+const AREA={estoque:['Estoque','box'],preco:['Preço','dollar'],compat:['Compatibilidade','puzzle'],
+  fotos:['Fotos e anúncio','camera'],frete:['Frete','truck'],ads:['Ads','zap'],busca:['Exposição','search'],perguntas:['Perguntas','clipboard']};
+const PRIO={1:['Fazer primeiro','var(--neg)'],2:['Depois','var(--warn)'],3:['Se der tempo','var(--ink3)']};
+const LIMITE_CUSTO_FIXO=79;   // abaixo disso o ML cobra um custo fixo por unidade (mesmo limite da tela de Kits)
+const vezes=v=>v.toLocaleString('pt-BR',{maximumFractionDigits:1})+'x';
+function dicasDe(i){
+  const L=[], add=(a,p,c,t)=>L.push({a,p,c,t});
+  const dias=D.periodo.dias, ref=i.conversao_ref, conv=i.conversao;
+  const ratio=(ref&&conv!=null)?conv/ref:null;
+  const porDia=i.unidades/dias;
+  const dura=(i.estoque!=null&&porDia>0)?i.estoque/porDia:null;
+  const adsShare=(i.cliques_ads!=null&&i.visitas)?i.cliques_ads/i.visitas:null;
+  const ruim=i.grupo==='vitrine'||i.grupo==='abaixo';
+  const refTxt=i.ref_origem==='categoria'?'da categoria':'da conta';
+  // parado (pausado, encerrado ou sem estoque): primeiro voltar a vender; nada de escalar Ads/preço
+  const parado=i.status==='paused'||i.status==='closed'||i.estoque===0;
+
+  if(i.status==='paused') add('estoque',1,'Anúncio pausado','Está pausado no ML. Se tem a peça no Apollo, reative: a visita de agora não vira venda.');
+  else if(i.status==='closed') add('estoque',2,'Anúncio encerrado','Encerrado no ML. Se a peça ainda é vendida, republique (o ML mantém o histórico de visitas do anúncio original).');
+  if(i.status==='active'&&i.estoque===0)
+    add('estoque',1,'Sem estoque no ML','Estoque zerado: quem visita não consegue comprar e a posição na busca cai. Reponha (ou envie para o Full) e, até lá, pause o Ads deste anúncio.');
+  else if(dura!=null&&i.estoque>0&&dura<10&&(i.grupo==='campeao'||i.grupo==='joia'||porDia>=0.5))
+    add('estoque',1,Math.round(dura)<=1?'Estoque para ~1 dia':`Estoque para ~${Math.round(dura)} dias`,`Vende ${porDia.toLocaleString('pt-BR',{maximumFractionDigits:1})} un. por dia e tem ${num(i.estoque)} un. no ML. Ficar sem estoque derruba a posição conquistada: reponha antes de aumentar o Ads.`);
+
+  if(i.caindo) add('preco',1,'A conversão caiu: ver o que mudou',`Caiu de ${pct(i.conversao_ant)} para ${pct(conv)}. Confira nesta ordem: 1) preço dos concorrentes e se o anúncio perdeu o catálogo; 2) frete e prazo; 3) se faltou estoque em parte do período; 4) avaliações e perguntas recentes.`);
+  if(i.visitas_ant>=100&&i.visitas<i.visitas_ant*0.6)
+    add('busca',2,`Visitas caíram ${Math.round((1-i.visitas/i.visitas_ant)*100)}%`,`De ${num(i.visitas_ant)} para ${num(i.visitas)}: perdeu posição na busca. Veja se o Ads foi pausado, se perdeu o catálogo ou se houve atraso de envio ou reclamação.`);
+
+  if(ruim){
+    add('preco',i.grupo==='vitrine'?1:2,'Comparar o preço com os concorrentes',
+      `A conversão está ${ratio!=null?Math.round((1-ratio)*100)+'% ':''}abaixo da referência ${refTxt}. Compare com os 3 primeiros da busca pela mesma peça e com o catálogo. Se couber na margem do Precificador, teste −3% a −5% por 7 dias e confira aqui se a conversão sobe. Se não subir, o problema não é o preço.`);
+    add('compat',i.grupo==='vitrine'?1:2,'Preencher a compatibilidade',
+      'Em autopeça a primeira dúvida é "serve no meu carro?". Preencha marca, modelo, ano e motor na compatibilidade do ML: quem filtra pelo carro não vê anúncio sem ela, e a dúvida derruba a conversão.');
+    add('fotos',2,'Melhorar as fotos',
+      'Primeira foto: a peça inteira, fundo branco, sem texto. Depois: a embalagem com a marca, o código gravado na peça, as medidas e a peça instalada. Use todas as fotos que o ML permite.');
+    add('fotos',2,'Título e ficha técnica',
+      'Título com peça + marca + carro + ano/motor (ex.: "Pastilha de Freio Dianteira Cobreq Onix 1.4 2013 a 2019"). Preencha todos os atributos, inclusive o código original (OEM): muita gente busca pelo código.');
+    add('frete',2,'Frete e prazo','Se os concorrentes têm Full (entrega em 1 dia) ou frete grátis e este não, a diferença pesa na decisão. Avalie enviar para o Full.'+
+      (i.preco!=null&&i.preco<LIMITE_CUSTO_FIXO?` Abaixo de R$ ${LIMITE_CUSTO_FIXO} o ML cobra um custo fixo por unidade: um kit com 2 ou mais peças passa do limite e costuma ficar mais competitivo (veja Oportunidades de Kit).`:''));
+    add('perguntas',3,'Ler as perguntas do anúncio','Pergunta que se repete é informação que falta na descrição ou nas fotos. Responder em até 1 hora também ajuda a converter.');
+    if(adsShare!=null&&adsShare>=0.25)
+      add('ads',1,'Reduzir o Ads até corrigir',`${pct(adsShare)} das visitas vieram de clique pago${i.gasto_ads?` (${brl(i.gasto_ads)} no período)`:''} e convertem pouco. Baixe o lance ou pause o Ads deste anúncio até resolver preço e ficha; senão você paga pela visita que não compra.`);
+    else if(i.gasto_ads&&!i.pedidos)
+      add('ads',1,'Pausar o Ads',`Gastou ${brl(i.gasto_ads)} em Ads sem nenhuma venda no período.`);
+  }
+  if(i.grupo==='joia'&&parado){
+    add('busca',2,'Depois de reativar, vale escalar',`Converte ${vezes(ratio)} a referência ${refTxt}. Quando voltar a ter estoque e estiver ativo, é bom candidato a Ads.`);
+  } else if(i.grupo==='joia'){
+    if(!i.cliques_ads) add('ads',1,'Criar uma campanha de Ads',`Converte ${vezes(ratio)} a referência ${refTxt}: cada visita a mais tende a virar venda. Comece com orçamento pequeno e ACOS-alvo abaixo da margem do produto; acompanhe na Análise de ADS.`);
+    else add('ads',1,'Aumentar o Ads',`Já tem Ads (${num(i.cliques_ads)} cliques) e converte ${vezes(ratio)} a referência: aumente o orçamento ou o ACOS-alvo para ganhar visitas.`);
+    add('busca',2,'Aparecer em mais buscas','Pouca visita é pouca exposição. Revise o título com os termos que o comprador usa (peça + carro + ano), a categoria e os atributos.');
+    add('preco',3,'Não baixar o preço','Já converte bem acima da média: baixar o preço só reduz a margem. Se quiser, teste +3%.');
+  }
+  if(i.grupo==='campeao'&&!parado){
+    if(ratio!=null&&ratio>=1.5) add('preco',2,'Testar um preço um pouco maior',`Converte ${vezes(ratio)} a referência com muita visita. Um aumento de 2% a 3% tende a passar despercebido e vai direto para a margem; acompanhe aqui se a conversão se mantém.`);
+    else add('preco',3,'Manter o preço','Muito visto e convertendo bem: mexer no preço sem motivo é arriscado.');
+    add('busca',3,'Campanhas do ML','Anúncio forte é bom candidato às campanhas e ofertas do ML (tela Promoções), que dão ainda mais exposição.');
+    if(!i.cliques_ads) add('ads',3,'Ads é opcional aqui','O tráfego orgânico já é forte. Ads aqui serve para defender a posição em datas de pico.');
+  }
+  if(i.grupo==='na_media'&&!parado){
+    add('ads',2,'Testar Ads com orçamento pequeno','Converte na média e tem pouca visita: um teste curto mostra se mais visita vira venda.');
+    add('fotos',3,'Revisar fotos e título','Pequenas melhorias em foto e título costumam subir a conversão de anúncio mediano.');
+  }
+  if(i.grupo==='pouca_amostra'){
+    add('busca',2,'Quase ninguém vê este anúncio',`${num(i.visitas)} visitas em ${dias} dias. Confira a categoria, se o título tem os termos de busca (peça + carro + ano) e se os atributos estão completos.`);
+    if(i.pedidos>0&&!parado) add('ads',3,'Vendeu mesmo com pouca visita','Pode ser uma joia escondida: um teste pequeno de Ads mostra se escala.');
+  }
+  L.sort((a,b)=>a.p-b.p);
+  L.forEach((d,k)=>{if(d.p===1&&k>=3)d.p=2});   // no máximo 3 "fazer primeiro": senão nada é prioridade
+  return L;
+}
+function prepararDicas(){
+  D.itens.forEach(i=>{i._dicas=dicasDe(i);const d=i._dicas[0];i.acao_p=d?d.p+ORDEM.indexOf(i.grupo)/10:9;i.acao=d?d.c:''});
+}
+function dicaHtml(d){
+  return `<li class="dica"><i class="nk-i-${AREA[d.a][1]}" aria-hidden="true"></i><div><div class="da">${AREA[d.a][0]}</div><b>${esc(d.c)}</b><div class="dt">${d.t}</div></div></li>`;
+}
+
 function abrir(i){
-  const g=G[i.grupo], dicas=[];
-  if(i.caindo) dicas.push(`<b>A conversão caiu de ${pct(i.conversao_ant)} para ${pct(i.conversao)}.</b> Causas comuns: concorrente baixou o preço, o anúncio perdeu o catálogo, o frete mudou ou ficou sem estoque em parte do período.`);
-  if(i.grupo==='vitrine'||i.grupo==='abaixo'){
-    dicas.push('Comparar o preço com o concorrente e com o catálogo; conferir se cabe na margem do Precificador.');
-    dicas.push('Frete: o concorrente tem Full ou frete grátis e este não?');
-    dicas.push('Fotos, título e compatibilidade (marca/modelo/ano) preenchidos?');
-    if(i.cliques_ads) dicas.push(`${num(i.cliques_ads)} das ${num(i.visitas)} visitas vieram de clique pago (${pct(i.cliques_ads/i.visitas)}). Tráfego pago que não converte é gasto sem retorno.`);
-  }
-  if(i.grupo==='joia'||i.grupo==='campeao'){
-    if(i.estoque!=null) dicas.push(`Estoque no ML: <b>${num(i.estoque)} un.</b>${i.estoque<5?' — pouco para escalar.':''}`);
-    if(i.grupo==='joia') dicas.push(i.cliques_ads?`Já tem Ads (${num(i.cliques_ads)} cliques): dá para aumentar a verba.`:'Sem Ads no período: bom candidato a uma campanha.');
-  }
+  const g=G[i.grupo];
+  const blocos=[1,2,3].map(p=>{const L=i._dicas.filter(d=>d.p===p); return L.length?
+    `<div class="pr" style="color:${PRIO[p][1]}">${PRIO[p][0]}</div><ul class="dicas">${L.map(dicaHtml).join('')}</ul>`:''}).join('');
   $('drawer').innerHTML=`<button class="x" aria-label="Fechar">×</button>
     <h3>${esc(i.titulo||i.mlb)}</h3>
     <div class="mlb">${i.mlb}${i.sku?' · SKU '+esc(i.sku):''}${i.preco!=null?' · '+brl(i.preco):''}${i.status?' · '+esc(stt(i.status)):''}</div>
@@ -318,8 +399,8 @@ function abrir(i){
       <div><dt>Cliques de Ads</dt><dd>${i.cliques_ads!=null?num(i.cliques_ads):'—'}</dd></div>
       <div><dt>Dias com visita coletada</dt><dd>${num(i.dias_com_visita)} de ${num(D.periodo.dias)}</dd></div>
     </dl>
-    <p style="margin:0 0 4px"><b>O que fazer</b></p><p style="margin:0;color:var(--ink2)">${g.o}</p>
-    ${dicas.length?`<ul>${dicas.map(d=>`<li>${d}</li>`).join('')}</ul>`:''}
+    <p style="margin:0 0 4px"><b>O que fazer</b></p><p style="margin:0 0 6px;color:var(--ink2)">${g.o}</p>
+    ${blocos}
     <p><a class="btn" href="https://produto.mercadolivre.com.br/${i.mlb.replace('MLB','MLB-')}" target="_blank" rel="noopener">Abrir anúncio no ML</a></p>`;
   $('drawer').classList.add('on'); $('drawer').setAttribute('aria-hidden','false');
   $('drawer').querySelector('.x').onclick=fechar;
