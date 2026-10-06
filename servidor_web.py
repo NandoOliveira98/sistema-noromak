@@ -14274,7 +14274,11 @@ def ml_visitas_status() -> dict[str, Any]:
     with DB_LOCK:
         hoje_ok = DB.execute("SELECT COUNT(*) FROM ml_visitas_item_v1868 WHERE buscado_dia = ?",
                              (hoje.isoformat(),)).fetchone()[0]
-        com_erro = DB.execute("SELECT COUNT(*) FROM ml_visitas_item_v1868 WHERE erro <> ''").fetchone()[0]
+        # erro com buscado_dia de hoje = anúncio que o ML não acha (404): não é falha da coleta
+        com_erro = DB.execute("SELECT COUNT(*) FROM ml_visitas_item_v1868 WHERE erro <> '' AND buscado_dia <> ?",
+                              (hoje.isoformat(),)).fetchone()[0]
+        nao_encontrados = DB.execute("SELECT COUNT(*) FROM ml_visitas_item_v1868 WHERE erro <> '' AND buscado_dia = ?",
+                                     (hoje.isoformat(),)).fetchone()[0]
         janela = DB.execute(
             "SELECT COUNT(DISTINCT item_id), COALESCE(SUM(visitas),0), MIN(dia), MAX(dia) "
             "FROM ml_visitas_dia_v1868 WHERE dia >= ?", (desde,)).fetchone()
@@ -14290,6 +14294,7 @@ def ml_visitas_status() -> dict[str, Any]:
         "ultima_rodada": _ML_VISITAS_ESTADO["ultimo"],
         "buscados_hoje": int(hoje_ok or 0),
         "com_erro": int(com_erro or 0),
+        "nao_encontrados_hoje": int(nao_encontrados or 0),
         "janela": {"desde": desde, "anuncios": int(janela[0] or 0), "visitas": int(janela[1] or 0),
                    "primeiro_dia": janela[2] or "", "ultimo_dia": janela[3] or ""},
         "historico_desde": historico[0] or "",

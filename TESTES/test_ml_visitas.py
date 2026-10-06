@@ -108,6 +108,13 @@ class VisitasML(TesteNoromak):
         self.assertIn("pulado", r)
         self.assertEqual(self.chamadas, [])
 
+    def test_status_separa_anuncio_sumido_de_erro(self):
+        self.respostas["MLB1"] = RuntimeError('Mercado Livre HTTP 404: {"error":"not_found"}')
+        S.ml_visitas_rodada(forcar_horario=True, pausa=0)   # hoje de verdade, como o status
+        st = S.ml_visitas_status()
+        self.assertEqual((st["com_erro"], st["nao_encontrados_hoje"]), (0, 1),
+                         "anúncio que o ML não acha não é falha da coleta")
+
     def test_status_so_para_admin(self):
         self.rodar()
         status, corpo = self.cliente.pedir("GET", "/api/ml-visitas/status")
