@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Noromak · Ruptura de estoque</title>
+<!-- V18.72: Ruptura — venda perdida por falta de estoque nos anúncios do ML. O estoque vem do
+     histórico ml_estoque_dia_v1872 (checagem a cada 2 h dos anúncios que vendem + retrato
+     diário de todos), as vendas de vendas_v1799. GET /api/ruptura?dias=30. Somente leitura. -->
+<style>
+:root{
+  --canvas:#F4F7FB; --tile:#ffffff; --line:#DCE5EF; --line2:#eef2f6;
+  --ink:#18324A; --ink2:#586A7D; --ink3:#5F7186;
+  --navy:#12345B; --navy2:#1F57A5; --orange:#F28B18;
+  --pos:#1B7A3E; --posbg:#E7F4EC; --neg:#B42318; --negbg:#FDECEA; --warn:#8A5300; --warnbg:#FFF4E0; --warnln:#F3D19B;
+  --infobg:#E8F0FB; --cinza:#8A99AA; --cinzabg:#EEF1F5;
+  --r:8px;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--canvas);color:var(--ink);font-family:"Segoe UI",system-ui,-apple-system,Arial,sans-serif;font-size:13.5px;line-height:1.45}
+.wrap{max-width:1280px;margin:0 auto;padding:20px 16px 48px}
+header{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between;margin-bottom:16px}
+h1{font-size:20px;margin:0;font-weight:650}
+.sub{color:var(--ink2);font-size:12.5px}
+.btn{border:1px solid var(--line);background:var(--tile);color:var(--ink);border-radius:6px;padding:7px 12px;font:inherit;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center}
+.acoes{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:12px}
+.card{background:var(--tile);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px;min-width:0}
+.span12{grid-column:span 12}
+.k5{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;grid-column:span 12}
+.k-lbl{color:var(--ink2);font-size:12px;font-weight:600}
+.k-val{font-size:24px;font-weight:650;margin:2px 0;font-variant-numeric:tabular-nums}
+.k-sub{color:var(--ink2);font-size:12px}
+.k-click{cursor:pointer}.k-click:hover{border-color:var(--navy2)}
+.callout{background:var(--warnbg);border:1px solid var(--warnln);border-radius:var(--r);padding:12px 14px;margin-bottom:12px}
+.callout b{color:var(--warn)}
+.notas{color:var(--ink2);font-size:12px}
+.notas ul{margin:6px 0 0 18px;padding:0}
+.tbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;margin-bottom:10px}
+.tabs{display:flex;flex-wrap:wrap;gap:4px}
+.tab{border:1px solid var(--line);background:var(--tile);color:var(--ink2);border-radius:999px;padding:5px 11px;font:inherit;font-size:12.5px;cursor:pointer;display:inline-flex;gap:6px;align-items:center}
+.tab.on{background:var(--navy2);border-color:var(--navy2);color:#fff}
+.tab .dot{width:8px;height:8px;border-radius:50%}
+input[type=search]{border:1px solid var(--line);background:var(--tile);color:var(--ink);border-radius:6px;padding:6px 10px;font:inherit;min-width:0;width:260px;max-width:100%}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:6px}
+table.rp{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;min-width:960px}
+.rp th{position:sticky;top:0;background:var(--tile);color:var(--ink2);font-weight:600;font-size:12px;text-align:right;padding:7px 8px;border-bottom:1px solid var(--line);cursor:pointer;user-select:none;white-space:nowrap}
+.rp th.l,.rp td.l{text-align:left}
+.rp th.sorted{color:var(--ink)}
+.rp td{padding:7px 8px;border-bottom:1px solid var(--line2);text-align:right;white-space:nowrap;vertical-align:top}
+.rp tbody tr{cursor:pointer}
+.rp tbody tr:hover td{background:var(--line2)}
+.ttl{max-width:340px;white-space:normal!important}
+.mlb{font-family:Consolas,monospace;font-size:11px;color:var(--ink3)}
+.muted{color:var(--ink3)}
+.chip{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:4px;white-space:nowrap}
+.chip i{width:7px;height:7px;border-radius:50%}
+.full{display:inline-block;font-size:10.5px;font-weight:700;color:#fff;background:#00A650;border-radius:3px;padding:0 5px;margin-left:4px;vertical-align:1px}
+.acao{white-space:normal;max-width:240px;font-size:12.5px}
+.more{margin-top:10px;text-align:center}
+.drawer{position:fixed;top:0;right:0;width:min(460px,100%);height:100%;background:var(--tile);box-shadow:-8px 0 30px rgba(0,0,0,.15);transform:translateX(105%);transition:transform .2s;padding:20px;overflow:auto;z-index:20}
+.drawer.on{transform:none}
+.drawer h3{margin:0 30px 4px 0;font-size:16px}
+.drawer .x{position:absolute;top:14px;right:14px;border:0;background:none;font-size:24px;cursor:pointer;color:var(--ink2)}
+.drawer dl{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:14px 0}
+.drawer dl div{background:var(--canvas);border-radius:8px;padding:8px 10px}
+.drawer dt{font-size:11px;color:var(--ink2)}
+.drawer dd{margin:2px 0 0;font-weight:600;font-variant-numeric:tabular-nums}
+.drawer ol{padding-left:20px;line-height:1.55;margin:6px 0 14px}
+.drawer .links{display:flex;flex-wrap:wrap;gap:6px}
+</style>
+<script defer src="/expedicao/web-auth.js"></script>
+<link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Ruptura de estoque</h1>
+      <div class="sub" id="periodo">Carregando…</div>
+    </div>
+    <div class="acoes">
+      <select class="btn" id="dias" title="Período do perdido">
+        <option value="7">Últimos 7 dias</option>
+        <option value="30" selected>Últimos 30 dias</option>
+        <option value="60">Últimos 60 dias</option>
+        <option value="90">Últimos 90 dias</option>
+      </select>
+      <a class="btn" href="/expedicao/admin">Central Noromak</a>
+    </div>
+  </header>
+
+  <div class="callout" id="aviso" hidden></div>
+
+  <div id="conteudo" hidden>
+  <div class="grid">
+    <div class="k5" id="kpis"></div>
+    <div class="card span12" id="lista">
+      <div class="tbar">
+        <div class="tabs" id="tabs"></div>
+        <input type="search" id="q" placeholder="Buscar título, MLB ou SKU…">
+      </div>
+      <div class="tw"><table class="rp" id="tab"></table></div>
+      <div class="more"><button class="btn" id="more">Mostrar mais</button></div>
+    </div>
+    <div class="card span12 notas" id="notas"></div>
+  </div>
+  </div>
+</div>
+<aside class="drawer" id="drawer" aria-hidden="true"></aside>
+
+<script>
+(function(){
+"use strict";
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const dataBR=d=>String(d||'').slice(0,10).split('-').reverse().join('/');
+const horaBR=d=>{const s=String(d||'');return s?dataBR(s)+(s.length>15?' '+s.slice(11,16):''):'—'};
+const num=v=>Number(v||0).toLocaleString('pt-BR');
+const dec=v=>Number(v||0).toLocaleString('pt-BR',{maximumFractionDigits:1});
+const brl=v=>Number(v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL',maximumFractionDigits:0});
+const dash='<span class="muted">—</span>';
+const STATUS={active:'ativo',paused:'pausado',closed:'encerrado',under_review:'em revisão',inactive:'inativo'};
+async function api(url){
+  const r=await fetch('/expedicao'+url,{credentials:'same-origin',cache:'no-store',headers:{Accept:'application/json'}});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok||d.ok===false) throw new Error(d.error||('HTTP '+r.status));
+  return d;
+}
+const G={
+  zerado:{t:'Zerado agora',c:'#B42318',bg:'var(--negbg)'},
+  critico:{t:'Vai zerar',c:'#d06a17',bg:'var(--warnbg)'},
+  atencao:{t:'Atenção',c:'#b8961c',bg:'var(--warnbg)'},
+  pausado:{t:'Pausado vendendo',c:'#5F7186',bg:'var(--cinzabg)'},
+  ok:{t:'Estoque ok',c:'#1B7A3E',bg:'var(--posbg)'}
+};
+const ORDEM=['zerado','critico','atencao','pausado','ok'];
+let D=null, st={tab:'zerado',q:'',sort:'',dir:-1,lim:50};
+
+function aviso(html){$('aviso').innerHTML=html;$('aviso').hidden=!html}
+// quanto repor para cobrir 30 dias de venda
+const repor=i=>Math.max(0,Math.ceil(i.ritmo_dia*30-(i.estoque||0)));
+
+function acao(i){
+  if(i.grupo==='zerado') return i.full?'Enviar para o Full':'Repor o estoque no anúncio';
+  if(i.grupo==='critico') return i.full?`Programar envio ao Full (~${num(repor(i))} un.)`:`Repor ~${num(repor(i))} un. já`;
+  if(i.grupo==='atencao') return `Programar reposição (~${num(repor(i))} un.)`;
+  if(i.grupo==='pausado') return 'Reativar o anúncio';
+  return '';
+}
+
+async function carregar(){
+  $('periodo').textContent='Carregando…';
+  try{ D=await api('/api/ruptura?dias='+$('dias').value); }
+  catch(e){ aviso('<b>Não foi possível carregar.</b> '+esc(e.message)); $('periodo').textContent=''; return; }
+  const c=D.coleta||{};
+  $('periodo').textContent=`Perdido de ${dataBR(D.periodo.inicio)} a ${dataBR(D.periodo.fim)} · ritmo de venda dos últimos ${D.base.dias} dias · última checagem ${horaBR(c.ultima_checagem)}`;
+  if(!c.primeiro_dia){
+    aviso('<b>Ainda não há estoque coletado.</b> A checagem roda sozinha a cada '+D.regras.intervalo_horas+' h (a primeira uns 15 minutos depois de o sistema subir) e também na coleta diária das visitas, depois das 06:00.');
+    $('conteudo').hidden=true; return;
+  }
+  const av=[];
+  if(!c.cobre_periodo) av.push(`o histórico de estoque começou em <b>${dataBR(c.primeiro_dia)}</b>, então o <b>perdido no período</b> só conta a partir dessa data e vai se completando com o tempo. "Zerado agora" e "vai zerar" já valem`);
+  if(D.resumo.vendeu_sem_estoque_coletado) av.push(`${num(D.resumo.vendeu_sem_estoque_coletado)} anúncio(s) venderam mas ainda não tiveram o estoque checado e ficaram de fora`);
+  aviso(av.length?'<b>Atenção:</b> '+av.join('; ')+'.':'');
+  $('conteudo').hidden=false;
+  if(!D.itens.some(i=>i.grupo===st.tab)) st.tab=D.itens.some(i=>i.grupo==='critico')?'critico':'todos';
+  D.itens.forEach(i=>{i.acao=acao(i);i.repor=repor(i)});
+  kpis(); render(); notas();
+}
+
+function kpis(){
+  const r=D.resumo;
+  const k=(g,l,v,s,cor)=>`<div class="card k-click" data-g="${g}"><div class="k-lbl">${l}</div><div class="k-val"${cor?` style="color:${cor}"`:''}>${v}</div><div class="k-sub">${s}</div></div>`;
+  $('kpis').innerHTML=
+    k('zerado','Perdendo agora',brl(r.perda_dia)+'<span style="font-size:14px;font-weight:600">/dia</span>',`${num(r.zerados)} anúncio(s) que vendem estão sem estoque`,r.zerados?'var(--neg)':'')+
+    k('critico',`Vão zerar em até ${D.regras.critico_dias} dias`,num(r.criticos),`${brl(r.risco_dia)}/dia de venda em risco`,r.criticos?'#d06a17':'')+
+    k('atencao',`Entre ${D.regras.critico_dias} e ${D.regras.atencao_dias} dias`,num(r.atencao),'programar a reposição')+
+    k('todos','Perdido no período (estimativa)',brl(r.perdido),`~${dec(r.unidades_perdidas)} un. que deixaram de vender`,r.perdido?'var(--neg)':'')+
+    k('pausado','Pausados que vendem',num(r.pausados),'pausados com estoque: venda parada');
+  document.querySelectorAll('.k-click').forEach(e=>e.onclick=()=>{st.tab=e.dataset.g;st.sort='';st.lim=50;render();$('lista').scrollIntoView({behavior:'smooth'})});
+}
+
+const COLS=[['titulo','Anúncio','l'],['grupo','Situação','l'],['acao','O que fazer','l'],['estoque','Estoque'],['ritmo_dia','Venda/dia'],
+  ['cobertura_dias','Dura'],['perda_dia','Perde/dia'],['dias_sem_estoque','Dias sem estoque'],['perdido','Perdido']];
+// ordem padrão de cada aba: o que mais dói primeiro
+const SORT_PADRAO={zerado:['perda_dia',-1],critico:['cobertura_dias',1],atencao:['cobertura_dias',1],pausado:['ritmo_dia',-1],ok:['perdido',-1],todos:['perdido',-1]};
+function filtra(i,k){return k==='todos'||i.grupo===k}
+function render(){
+  const cnt=k=>D.itens.filter(i=>filtra(i,k)).length;
+  const abas=ORDEM.filter(k=>cnt(k)).concat(['todos']);
+  $('tabs').innerHTML=abas.map(k=>`<button class="tab ${st.tab===k?'on':''}" data-k="${k}">${G[k]?`<i class="dot" style="background:${G[k].c}"></i>${G[k].t}`:'Todos'} <span>${num(cnt(k))}</span></button>`).join('');
+  document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{st.tab=b.dataset.k;st.sort='';st.lim=50;render()});
+  const [sk,sd]=st.sort?[st.sort,st.dir]:SORT_PADRAO[st.tab];
+  const q=st.q.trim().toLowerCase();
+  let L=D.itens.filter(i=>filtra(i,st.tab)&&(!q||[i.titulo,i.mlb,i.sku].some(x=>String(x||'').toLowerCase().includes(q))));
+  L.sort((a,b)=>{let x=a[sk],y=b[sk]; if(sk==='grupo'){x=ORDEM.indexOf(x);y=ORDEM.indexOf(y)}
+    if(sk==='perda_dia'){x=x??a.risco_dia;y=y??b.risco_dia}
+    if(x==null&&y==null)return 0; if(x==null)return 1; if(y==null)return -1; return (typeof x==='string'?x.localeCompare(y):x-y)*sd});
+  const head=`<thead><tr>${COLS.map(([c,t,cl])=>`<th class="${cl||''} ${sk===c?'sorted':''}" data-k="${c}">${t}${sk===c?(sd<0?' ↓':' ↑'):''}</th>`).join('')}</tr></thead>`;
+  const body=L.slice(0,st.lim).map(i=>`<tr data-m="${i.mlb}">
+    <td class="l ttl">${esc(i.titulo||'(sem título)')}${i.full?'<span class="full">FULL</span>':''}<div class="mlb">${i.mlb}${i.sku?' · SKU '+esc(i.sku):''}${i.status&&i.status!=='active'?' · '+esc(STATUS[i.status]||i.status):''}</div></td>
+    <td class="l"><span class="chip" style="background:${G[i.grupo].bg};color:${G[i.grupo].c}"><i style="background:${G[i.grupo].c}"></i>${G[i.grupo].t}</span></td>
+    <td class="l acao">${i.acao?esc(i.acao):dash}</td>
+    <td>${i.estoque!=null?num(i.estoque):dash}</td>
+    <td>${dec(i.ritmo_dia)}</td>
+    <td>${i.grupo==='zerado'?'<b style="color:var(--neg)">0</b>':i.cobertura_dias!=null?dec(i.cobertura_dias)+' d':dash}</td>
+    <td>${i.perda_dia?`<b style="color:var(--neg)">${brl(i.perda_dia)}</b>`:i.risco_dia?`<span title="em risco se zerar">${brl(i.risco_dia)}</span>`:dash}</td>
+    <td>${i.dias_sem_estoque?dec(i.dias_sem_estoque):dash}</td>
+    <td>${i.perdido?`<b style="color:var(--neg)">${brl(i.perdido)}</b>`:dash}</td></tr>`).join('')
+    ||`<tr><td colspan="${COLS.length}" class="l muted" style="padding:20px">Nenhum anúncio nesse filtro.</td></tr>`;
+  $('tab').innerHTML=head+'<tbody>'+body+'</tbody>';
+  document.querySelectorAll('#tab th').forEach(th=>th.onclick=()=>{const c=th.dataset.k;if(sk===c){st.sort=c;st.dir=sd*-1}else{st.sort=c;st.dir=(c==='titulo'||c==='grupo'||c==='acao'||c==='cobertura_dias')?1:-1}render()});
+  const por=Object.fromEntries(L.map(i=>[i.mlb,i]));
+  document.querySelectorAll('#tab tbody tr[data-m]').forEach(tr=>tr.onclick=()=>abrir(por[tr.dataset.m]));
+  const more=$('more'); more.style.display=L.length>st.lim?'':'none'; more.textContent=`Mostrar mais (${num(L.length-st.lim)} restantes)`;
+}
+$('more').onclick=()=>{st.lim+=100;render()};
+$('q').oninput=e=>{st.q=e.target.value;st.lim=50;render()};
+$('dias').onchange=carregar;
+
+function passos(i){
+  const P=[];
+  if(i.grupo==='zerado'){
+    P.push(`Cada dia assim deixa de vender ~${dec(i.ritmo_dia)} un. (${i.perda_dia?brl(i.perda_dia):'—'}). Além da venda, o anúncio perde posição na busca e demora para recuperar.`);
+    if(i.full){
+      P.push('Anúncio no Full: o estoque está no armazém do ML. Confira a peça no Apollo (Araçatuba) e programe o envio na <b>Demanda Full</b>.');
+    }else{
+      P.push('Confira a peça no Apollo. Se tem na loja, o estoque do anúncio está desatualizado: corrija a quantidade no ML agora.');
+      P.push('Se não tem, entra na <b>Demanda de Compra</b>.');
+    }
+    P.push('Pause o Ads deste anúncio até voltar o estoque: senão você paga por clique que não pode comprar.');
+  }else if(i.grupo==='critico'||i.grupo==='atencao'){
+    P.push(`Vende ~${dec(i.ritmo_dia)} un./dia e tem ${num(i.estoque)} un.: dura uns <b>${dec(i.cobertura_dias)} dias</b>. Para 30 dias de venda faltam ~${num(i.repor)} un.`);
+    P.push(i.full?'Considere o prazo de agendamento e de recebimento do Full: o envio precisa chegar antes de zerar.':'Considere o prazo do fornecedor: o pedido precisa chegar antes de zerar.');
+    if(i.grupo==='critico') P.push('Não aumente Ads nem faça promoção neste anúncio até repor: só adianta a ruptura.');
+  }else if(i.grupo==='pausado'){
+    P.push(`Está pausado com ${num(i.estoque)} un. e vendia ~${dec(i.ritmo_dia)} un./dia. Se a pausa não foi de propósito (problema de preço, cadastro ou fornecedor), reative.`);
+  }else{
+    P.push(`Estoque para ~${i.cobertura_dias!=null?dec(i.cobertura_dias):'—'} dias. Nada a fazer agora.`);
+  }
+  return P;
+}
+function abrir(i){
+  const g=G[i.grupo];
+  $('drawer').innerHTML=`<button class="x" aria-label="Fechar">×</button>
+    <h3>${esc(i.titulo||i.mlb)}${i.full?'<span class="full">FULL</span>':''}</h3>
+    <div class="mlb">${i.mlb}${i.sku?' · SKU '+esc(i.sku):''}${i.preco!=null?' · '+brl(i.preco):''}${i.status?' · '+esc(STATUS[i.status]||i.status):''}</div>
+    <p style="margin:10px 0 0"><span class="chip" style="background:${g.bg};color:${g.c}"><i style="background:${g.c}"></i>${g.t}</span></p>
+    <dl>
+      <div><dt>Estoque no ML</dt><dd>${i.estoque!=null?num(i.estoque)+' un.':'—'}</dd></div>
+      <div><dt>Checado em</dt><dd>${horaBR(i.checado_em)}</dd></div>
+      <div><dt>Venda por dia (com estoque)</dt><dd>${dec(i.ritmo_dia)} un.</dd></div>
+      <div><dt>Ticket médio</dt><dd>${i.ticket?brl(i.ticket):'—'}</dd></div>
+      <div><dt>Dias sem estoque no período</dt><dd>${dec(i.dias_sem_estoque)} <span class="muted" style="font-weight:400">de ${num(i.dias_checados)} checados</span></dd></div>
+      <div><dt>Perdido (estimativa)</dt><dd>${i.perdido?brl(i.perdido)+` <span class="muted" style="font-weight:400">~${dec(i.unidades_perdidas)} un.</span>`:'—'}</dd></div>
+      <div><dt>Vendido no período</dt><dd>${num(i.unidades)} un. · ${brl(i.faturamento)}</dd></div>
+      <div><dt>Para 30 dias de venda</dt><dd>${i.repor?'faltam ~'+num(i.repor)+' un.':'cobre'}</dd></div>
+    </dl>
+    <p style="margin:0 0 4px"><b>O que fazer</b></p>
+    <ol>${passos(i).map(p=>`<li>${p}</li>`).join('')}</ol>
+    <div class="links">
+      <a class="btn" href="https://produto.mercadolivre.com.br/${i.mlb.replace('MLB','MLB-')}" target="_blank" rel="noopener">Abrir anúncio no ML</a>
+      ${i.full?'<a class="btn" href="/expedicao/analise-full" target="_blank" rel="noopener">Demanda Full</a>':'<a class="btn" href="/expedicao/compras" target="_blank" rel="noopener">Demanda de Compra</a>'}
+    </div>`;
+  $('drawer').classList.add('on'); $('drawer').setAttribute('aria-hidden','false');
+  $('drawer').querySelector('.x').onclick=fechar;
+}
+function fechar(){$('drawer').classList.remove('on');$('drawer').setAttribute('aria-hidden','true')}
+document.addEventListener('keydown',e=>{if(e.key==='Escape')fechar()});
+
+function notas(){
+  const r=D.regras;
+  $('notas').innerHTML=`<b>Como é calculado</b><ul>
+    <li><b>Sem estoque</b> = o anúncio com quantidade 0 no ML (ou pausado pelo ML por falta de estoque). Pausa manual com estoque não é ruptura: aparece em "Pausados que vendem". Anúncio encerrado fica fora.</li>
+    <li><b>Venda por dia</b> = unidades vendidas nos últimos ${r.base_dias} dias ÷ dias em que o anúncio <b>tinha estoque</b>. Dia sem checagem conta como com estoque, o que deixa o ritmo mais baixo, nunca inflado.</li>
+    <li><b>Dura</b> = estoque atual ÷ venda por dia. <b>Vai zerar</b>: até ${r.critico_dias} dias; <b>Atenção</b>: até ${r.atencao_dias} dias.</li>
+    <li><b>Perdido</b> = venda por dia × dias sem estoque no período × ticket médio. Dia em que o anúncio ficou sem estoque só parte do tempo conta pela fração das checagens. É uma <b>estimativa</b> para priorizar, não dinheiro garantido.</li>
+    <li>Estoque: checado no ML a cada ${r.intervalo_horas} h para os anúncios que venderam nos últimos ${r.base_dias} dias, e 1x por dia para todos (coleta das visitas). No Full, é o estoque do armazém do ML. Só Mercado Livre por enquanto.</li></ul>`;
+}
+
+carregar();
+})();
+</script>
+</body>
+</html>

@@ -43,7 +43,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "18.71-SHOPEE-KIT-COMPONENTES"
+APP_VERSION = "18.72-RUPTURA-ESTOQUE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -1987,6 +1987,23 @@ def init_db() -> None:
                 nome TEXT NOT NULL DEFAULT '',
                 buscado_em TEXT NOT NULL DEFAULT ''
             );
+            -- V18.72: estoque do anúncio dia a dia (Ruptura). O retrato de
+            -- ml_visitas_item_v1868 é sobrescrito todo dia; aqui fica o histórico.
+            -- sem_estoque/checagens = fração do dia em que o anúncio não vendia.
+            CREATE TABLE IF NOT EXISTS ml_estoque_dia_v1872 (
+                item_id TEXT NOT NULL,
+                dia TEXT NOT NULL,
+                checagens INTEGER NOT NULL DEFAULT 0,
+                sem_estoque INTEGER NOT NULL DEFAULT 0,
+                estoque_min INTEGER,
+                estoque_ultimo INTEGER,
+                ultimo_sem_estoque INTEGER NOT NULL DEFAULT 0,
+                status_ultimo TEXT NOT NULL DEFAULT '',
+                logistica TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY(item_id, dia)
+            );
+            CREATE INDEX IF NOT EXISTS idx_ml_estoque_dia ON ml_estoque_dia_v1872(dia);
             -- Mapa ad_group -> anúncio/SKU. Resolvido uma vez e reaproveitado:
             -- o ad_group agrupa as variações do mesmo produto (novo fluxo do ML).
             CREATE TABLE IF NOT EXISTS ml_ads_grupo_v1830 (
@@ -14421,6 +14438,7 @@ def _ml_visitas_detalhes(anuncios: list[str], hoje_iso: str, stop_event: threadi
                          str(d.get("status") or ""), int(estoque) if isinstance(estoque, (int, float)) else None,
                          str(d.get("categoria") or ""), hoje_iso))
                 DB.commit()
+            _ml_estoque_registrar(info, hoje_iso)   # V18.72: histórico de estoque (Ruptura)
             gravados += len(info)
         if pausa > 0:
             if stop_event is not None:
@@ -14729,6 +14747,236 @@ def conversao_payload(dias: int = 30, hoje: date | None = None) -> dict[str, Any
                    "potencial": round(sum(i["potencial"] or 0 for i in itens), 2),
                    "caindo": sum(1 for i in itens if i["caindo"]),
                    "vendeu_sem_visita_coletada": sem_visita_com_venda},
+        "itens": itens,
+    }
+
+
+# V18.72: Ruptura — venda perdida por falta de estoque nos anúncios do ML.
+RUPTURA_BASE_DIAS = 60            # janela do ritmo de venda (e dos anúncios checados a cada 2 h)
+RUPTURA_CRITICO_DIAS = 7          # estoque para até 7 dias: repor já
+RUPTURA_ATENCAO_DIAS = 15
+RUPTURA_INTERVALO = 7200          # checagem do estoque dos anúncios que vendem
+RUPTURA_PAUSA = 0.5               # segundos entre lotes de 20 anúncios
+RUPTURA_LOCK = threading.Lock()
+_RUPTURA_ESTADO: dict[str, Any] = {"rodando": False, "inicio": "", "fim": "", "ultimo": {}}
+
+
+def _ml_estoque_registrar(info: dict[str, dict[str, Any]], dia: str, quando: str | None = None) -> int:
+    """Soma uma checagem de estoque por anúncio no dia (ml_estoque_dia_v1872).
+
+    Sem estoque = available_quantity 0 ou sub_status out_of_stock (o ML pausa o anúncio
+    sozinho quando zera). Pausa manual com estoque NÃO é ruptura. Anúncio sem estoque
+    informado não é contado: desconhecido nunca vira zero.
+    """
+    quando = quando or now_iso()
+    linhas = []
+    for mlb, d in (info or {}).items():
+        if not mlb or not isinstance(d, dict):
+            continue
+        est = d.get("estoque")
+        est_int = int(est) if isinstance(est, (int, float)) and not isinstance(est, bool) else None
+        sub = [str(s) for s in (d.get("sub_status") or [])] if isinstance(d.get("sub_status"), list) else []
+        sem = (est_int is not None and est_int <= 0) or "out_of_stock" in sub
+        if est_int is None and not sem:
+            continue
+        if est_int is None:
+            est_int = 0
+        linhas.append((str(mlb), dia, 1 if sem else 0, est_int, est_int, 1 if sem else 0,
+                       str(d.get("status") or ""), str(d.get("logistica") or ""), quando))
+    if not linhas:
+        return 0
+    with DB_LOCK:
+        DB.executemany(
+            "INSERT INTO ml_estoque_dia_v1872(item_id,dia,checagens,sem_estoque,estoque_min,estoque_ultimo,"
+            "ultimo_sem_estoque,status_ultimo,logistica,updated_at) VALUES(?,?,1,?,?,?,?,?,?,?) "
+            "ON CONFLICT(item_id,dia) DO UPDATE SET checagens=checagens+1,"
+            "sem_estoque=sem_estoque+excluded.sem_estoque,"
+            "estoque_min=MIN(COALESCE(estoque_min,excluded.estoque_min),excluded.estoque_min),"
+            "estoque_ultimo=excluded.estoque_ultimo,ultimo_sem_estoque=excluded.ultimo_sem_estoque,"
+            "status_ultimo=excluded.status_ultimo,"
+            "logistica=CASE WHEN excluded.logistica<>'' THEN excluded.logistica ELSE logistica END,"
+            "updated_at=excluded.updated_at", linhas)
+        DB.commit()
+    return len(linhas)
+
+
+def ml_estoque_rodada(stop_event: threading.Event | None = None, *, hoje: date | None = None,
+                      pausa: float | None = None) -> dict[str, Any]:
+    """Checa o estoque dos anúncios que venderam nos últimos 60 dias (20 por chamada).
+
+    Somente leitura no ML. Os outros anúncios entram 1x por dia pela rodada das visitas.
+    """
+    hoje = hoje or datetime.now(BR_TZ).date()
+    if not RUPTURA_LOCK.acquire(blocking=False):
+        return {"ok": True, "pulado": "já está rodando"}
+    pausa = RUPTURA_PAUSA if pausa is None else pausa
+    try:
+        _RUPTURA_ESTADO.update(rodando=True, inicio=now_iso(), fim="")
+        linha = ml_integration_row()
+        if not linha or not str(linha["access_token"] or "").strip():
+            resultado = {"ok": True, "pulado": "Mercado Livre não conectado"}
+            _RUPTURA_ESTADO["ultimo"] = resultado
+            return resultado
+        desde = (hoje - timedelta(days=RUPTURA_BASE_DIAS)).isoformat()
+        with DB_LOCK:
+            anuncios = [str(r["anuncio"]) for r in DB.execute(
+                "SELECT DISTINCT anuncio FROM vendas_v1799 WHERE marketplace='ml' AND anuncio <> '' "
+                "AND sale_day >= ? ORDER BY anuncio", (desde,)).fetchall()]
+        checados = 0
+        for i in range(0, len(anuncios), 20):
+            if stop_event is not None and stop_event.is_set():
+                break
+            info = ml_itens_detalhe(anuncios[i:i + 20])
+            checados += _ml_estoque_registrar(info, hoje.isoformat())
+            if pausa > 0:
+                if stop_event is not None:
+                    if stop_event.wait(pausa):
+                        break
+                else:
+                    time.sleep(pausa)
+        resultado = {"ok": True, "anuncios": len(anuncios), "checados": checados,
+                     "sem_resposta": len(anuncios) - checados}
+        _RUPTURA_ESTADO["ultimo"] = resultado
+        return resultado
+    finally:
+        _RUPTURA_ESTADO.update(rodando=False, fim=now_iso())
+        RUPTURA_LOCK.release()
+
+
+def ml_estoque_loop(stop_event: threading.Event) -> None:
+    """A cada 2 h, o estoque dos anúncios que vendem (pega a ruptura no meio do dia)."""
+    if stop_event.wait(900):
+        return
+    while not stop_event.is_set():
+        try:
+            ml_estoque_rodada(stop_event)
+        except Exception as exc:
+            _RUPTURA_ESTADO["ultimo"] = {"ok": False, "erro": str(exc)[:300]}
+            print(f"[ml-estoque] falhou: {exc}", file=sys.stderr, flush=True)
+        if stop_event.wait(RUPTURA_INTERVALO):
+            break
+
+
+def ruptura_payload(dias: int = 30, hoje: date | None = None) -> dict[str, Any]:
+    """Venda perdida por falta de estoque, por anúncio do ML. Só lê o banco.
+
+    Ritmo = unidades vendidas nos últimos 60 dias ÷ dias COM estoque nesses 60 (dia sem
+    checagem conta como com estoque: o ritmo fica mais baixo, nunca inflado). Perdido no
+    período = ritmo × dias sem estoque × ticket médio — uma ESTIMATIVA, marcada assim.
+    Anúncio que vendeu e ainda não teve o estoque checado fica fora (nunca vira zero).
+    """
+    dias = max(1, min(90, int(dias or 30)))
+    hoje = hoje or datetime.now(BR_TZ).date()
+    fim = hoje - timedelta(days=1)                 # hoje ainda não fechou
+    ini = fim - timedelta(days=dias - 1)
+    base_dias = max(dias, RUPTURA_BASE_DIAS)
+    base_ini = fim - timedelta(days=base_dias - 1)
+    p = (ini.isoformat(), fim.isoformat())
+    with DB_LOCK:
+        vendas_sql = ("SELECT anuncio, COALESCE(SUM(qty),0) AS un, COUNT(DISTINCT order_id) AS pedidos, "
+                      "COALESCE(SUM(amount),0) AS fat, MAX(title) AS titulo, MAX(sku) AS sku FROM vendas_v1799 "
+                      "WHERE marketplace='ml' AND anuncio <> '' AND sale_day BETWEEN ? AND ? GROUP BY anuncio")
+        base = {str(r["anuncio"]): dict(r) for r in DB.execute(vendas_sql, (base_ini.isoformat(), p[1])).fetchall()}
+        per = {str(r["anuncio"]): dict(r) for r in DB.execute(vendas_sql, p).fetchall()}
+        zeros = {str(r["item_id"]): dict(r) for r in DB.execute(
+            "SELECT item_id, SUM(1.0*sem_estoque/checagens) AS zb, "
+            "SUM(CASE WHEN dia >= ? THEN 1.0*sem_estoque/checagens ELSE 0 END) AS zp, "
+            "SUM(CASE WHEN dia >= ? THEN 1 ELSE 0 END) AS obs_p FROM ml_estoque_dia_v1872 "
+            "WHERE dia BETWEEN ? AND ? AND checagens > 0 GROUP BY item_id",
+            (p[0], p[0], base_ini.isoformat(), p[1])).fetchall()}
+        atual = {str(r["item_id"]): dict(r) for r in DB.execute(
+            "SELECT e.* FROM ml_estoque_dia_v1872 e JOIN (SELECT item_id, MAX(dia) AS d FROM ml_estoque_dia_v1872 "
+            "GROUP BY item_id) m ON m.item_id = e.item_id AND m.d = e.dia").fetchall()}
+        info = {str(r["item_id"]): dict(r) for r in DB.execute(
+            "SELECT i.item_id, i.titulo, i.sku, i.preco, COALESCE(c.nome,'') AS categoria FROM ml_visitas_item_v1868 i "
+            "LEFT JOIN ml_categoria_v1868 c ON c.categoria_id = i.categoria_id").fetchall()}
+        primeiro_dia, ultima = DB.execute(
+            "SELECT MIN(dia), MAX(updated_at) FROM ml_estoque_dia_v1872").fetchone()
+
+    itens: list[dict[str, Any]] = []
+    sem_coleta = encerrados = 0
+    for mlb, b in sorted(base.items()):
+        un = int(b.get("un") or 0)
+        if un <= 0:
+            continue
+        a = atual.get(mlb)
+        if not a:
+            sem_coleta += 1
+            continue
+        status = str(a.get("status_ultimo") or "")
+        if status == "closed":
+            encerrados += 1
+            continue
+        z = zeros.get(mlb) or {}
+        zb, zp = float(z.get("zb") or 0), float(z.get("zp") or 0)
+        ritmo = un / max(1.0, base_dias - zb)
+        d = info.get(mlb) or {}
+        ticket = float(b.get("fat") or 0) / un if float(b.get("fat") or 0) > 0 else _money_number(d.get("preco"))
+        estoque = a.get("estoque_ultimo")
+        cobertura = (estoque / ritmo) if (estoque is not None and ritmo > 0) else None
+        perda_dia = risco_dia = None
+        if int(a.get("ultimo_sem_estoque") or 0):
+            grupo = "zerado"
+            perda_dia = round(ritmo * ticket, 2) if ticket else None
+        elif status == "paused":
+            grupo = "pausado"
+        elif cobertura is not None and cobertura <= RUPTURA_CRITICO_DIAS:
+            grupo = "critico"
+            risco_dia = round(ritmo * ticket, 2) if ticket else None
+        elif cobertura is not None and cobertura <= RUPTURA_ATENCAO_DIAS:
+            grupo = "atencao"
+        else:
+            grupo = "ok"
+        v = per.get(mlb) or {}
+        itens.append({
+            "mlb": mlb,
+            "titulo": d.get("titulo") or b.get("titulo") or "",
+            "sku": d.get("sku") or b.get("sku") or "",
+            "categoria": d.get("categoria") or "",
+            "status": status,
+            "preco": d.get("preco"),
+            "full": str(a.get("logistica") or "") == "fulfillment",
+            "estoque": estoque,
+            "checado_em": a.get("updated_at") or "",
+            "checado_dia": a.get("dia") or "",
+            "grupo": grupo,
+            "ritmo_dia": round(ritmo, 4),
+            "ticket": round(ticket, 2) if ticket else None,
+            "cobertura_dias": round(cobertura, 1) if cobertura is not None else None,
+            "perda_dia": perda_dia,
+            "risco_dia": risco_dia,
+            "unidades_base": un,
+            "unidades": int(v.get("un") or 0),
+            "faturamento": round(float(v.get("fat") or 0), 2),
+            "dias_sem_estoque": round(zp, 2),
+            "dias_checados": int(z.get("obs_p") or 0),
+            "unidades_perdidas": round(ritmo * zp, 1),
+            "perdido": round(ritmo * zp * ticket, 2) if (ticket and zp > 0) else 0.0,
+        })
+
+    def soma(campo: str, grupo: str | None = None) -> float:
+        return round(sum(i[campo] or 0 for i in itens if grupo is None or i["grupo"] == grupo), 2)
+
+    return {
+        "ok": True,
+        "periodo": {"inicio": p[0], "fim": p[1], "dias": dias},
+        "base": {"inicio": base_ini.isoformat(), "fim": p[1], "dias": base_dias},
+        "coleta": {"primeiro_dia": primeiro_dia or "", "ultima_checagem": ultima or "",
+                   "cobre_periodo": bool(primeiro_dia) and primeiro_dia <= p[0],
+                   "rodando": bool(_RUPTURA_ESTADO["rodando"]), "ultima_rodada": _RUPTURA_ESTADO["ultimo"]},
+        "regras": {"base_dias": base_dias, "critico_dias": RUPTURA_CRITICO_DIAS,
+                   "atencao_dias": RUPTURA_ATENCAO_DIAS, "intervalo_horas": RUPTURA_INTERVALO // 3600},
+        "resumo": {"anuncios": len(itens),
+                   "zerados": sum(1 for i in itens if i["grupo"] == "zerado"),
+                   "perda_dia": soma("perda_dia"),
+                   "criticos": sum(1 for i in itens if i["grupo"] == "critico"),
+                   "risco_dia": soma("risco_dia"),
+                   "atencao": sum(1 for i in itens if i["grupo"] == "atencao"),
+                   "pausados": sum(1 for i in itens if i["grupo"] == "pausado"),
+                   "perdido": soma("perdido"),
+                   "unidades_perdidas": round(sum(i["unidades_perdidas"] for i in itens), 1),
+                   "vendeu_sem_estoque_coletado": sem_coleta,
+                   "encerrados": encerrados},
         "itens": itens,
     }
 
@@ -16495,7 +16743,8 @@ def ml_itens_do_vendedor(offset: int = 0, limite: int = 50, forcar: bool = False
 def ml_itens_detalhe(mlbs: list[str]) -> dict[str, dict[str, Any]]:
     """Título, preço e o SKU que o vendedor cadastrou no próprio anúncio."""
     out: dict[str, dict[str, Any]] = {}
-    campos = "id,title,price,status,sub_status,available_quantity,seller_custom_field,attributes,category_id"
+    # V18.72: shipping traz o logistic_type (Full ou não) para a Ruptura.
+    campos = "id,title,price,status,sub_status,available_quantity,seller_custom_field,attributes,category_id,shipping"
     for i in range(0, len(mlbs), 20):   # a API aceita 20 ids por chamada
         lote = [x for x in mlbs[i:i + 20] if x]
         if not lote:
@@ -16524,7 +16773,9 @@ def ml_itens_detalhe(mlbs: list[str]) -> dict[str, dict[str, Any]]:
                         "status": corpo.get("status"),
                         "sub_status": corpo.get("sub_status") or [],
                         "estoque": corpo.get("available_quantity"),
-                        "categoria": str(corpo.get("category_id") or "")}  # V18.68: Conversão
+                        "categoria": str(corpo.get("category_id") or ""),  # V18.68: Conversão
+                        "logistica": str((corpo.get("shipping") if isinstance(corpo.get("shipping"), dict)
+                                          else {}).get("logistic_type") or "")}  # V18.72: Ruptura
     return out
 
 
@@ -17902,6 +18153,17 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
+        if path == "/api/ruptura":
+            # V18.72: venda perdida por falta de estoque (anúncios do ML). Somente leitura.
+            if self.auth(admin_only=True) is None:
+                return
+            try:
+                self.send_json(ruptura_payload(int(str((query.get("dias") or ["30"])[0] or "30"))))
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
         if path == "/api/ads-analise":
             # V18.54: Análise de ADS (relatório do ML + lucro por anúncio). Somente leitura.
             if self.auth(admin_only=True) is None:
@@ -18153,6 +18415,8 @@ class AppHandler(BaseHTTPRequestHandler):
             "/analise-ads": "admin", "/analise-ads/": "admin", "/analise-ads.html": "admin",
             # V18.68: Conversão dos anúncios.
             "/conversao": "admin", "/conversao/": "admin", "/conversao.html": "admin",
+            # V18.72: Ruptura (venda perdida por falta de estoque).
+            "/ruptura": "admin", "/ruptura/": "admin", "/ruptura.html": "admin",
             # V18.33: a Rentabilidade ML virou o Financeiro; o endereço antigo abre a tela nova.
             "/rentabilidade-ml": "admin", "/rentabilidade-ml/": "admin", "/rentabilidade-ml.html": "admin",
             "/estacao-impressao": "estacao", "/estacao-impressao/": "estacao", "/estacao-impressao.html": "estacao",
@@ -20795,6 +21059,9 @@ class AppHandler(BaseHTTPRequestHandler):
             "/conversao": "conversao.html",
             "/conversao/": "conversao.html",
             "/conversao.html": "conversao.html",
+            "/ruptura": "ruptura.html",
+            "/ruptura/": "ruptura.html",
+            "/ruptura.html": "ruptura.html",
             "/rentabilidade-ml": "financeiro.html",
             "/rentabilidade-ml/": "financeiro.html",
             "/rentabilidade-ml.html": "financeiro.html",
@@ -20994,6 +21261,13 @@ def main() -> None:
         name="ml-visitas",
         daemon=True,
     )
+    # V18.72: estoque dos anúncios que vendem, a cada 2 h (Ruptura).
+    estoque_thread = threading.Thread(
+        target=_worker_protegido(ml_estoque_loop),
+        args=(watcher_stop,),
+        name="ml-estoque",
+        daemon=True,
+    )
     # V18.13: agente de relatório diário por e-mail (00:01).
     relatorio_thread = threading.Thread(
         target=_worker_protegido(relatorio_diario_loop),
@@ -21031,6 +21305,7 @@ def main() -> None:
         frete_thread.start()
         ads_thread.start()
         visitas_thread.start()
+        estoque_thread.start()
         relatorio_thread.start()
         linx_clientes_thread.start()
     else:

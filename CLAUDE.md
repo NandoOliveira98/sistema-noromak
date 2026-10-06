@@ -395,6 +395,21 @@ Ads (reduzir quando ≥ 25% das visitas são pagas e não convertem; criar/aumen
 e perguntas. Máximo 3 "Fazer primeiro"; anúncio parado (pausado/encerrado/sem estoque) não recebe
 dica de escalar. A primeira dica vira a coluna "Próxima ação".
 
+### Ruptura de estoque (V18.72)
+`APP/ruptura.html` (`/ruptura`, menu Estoque e compras, só **admin**; `GET /api/ruptura?dias=30`,
+`ruptura_payload`). Venda perdida por falta de estoque, **só ML** por enquanto. O retrato de
+`ml_visitas_item_v1868` é sobrescrito todo dia, por isso o histórico fica em `ml_estoque_dia_v1872`
+(item, dia, checagens, checagens sem estoque, estoque mínimo/último, status, logística), alimentada
+pela rodada diária das visitas (todos os anúncios) e pelo worker `ml_estoque_loop` (a cada 2 h, só
+os anúncios que venderam nos últimos 60 dias, 20 por chamada). **Sem estoque** = quantidade 0 ou
+sub_status `out_of_stock`; pausa manual com estoque **não** é ruptura (grupo "pausado vendendo");
+encerrado fica fora; estoque não informado **não** vira zero. Ritmo = unidades dos últimos 60 dias ÷
+dias **com** estoque (dia sem checagem conta como com estoque: o ritmo fica mais baixo, nunca
+inflado). Perdido = ritmo × dias sem estoque (fração das checagens) × ticket — **estimativa**.
+Grupos: zerado agora (R$/dia perdido), vai zerar (≤ 7 dias), atenção (≤ 15), pausado, ok. Full vem
+de `shipping.logistic_type` (`ml_itens_detalhe` passou a pedir `shipping`). O histórico só começa a
+contar a partir da publicação: "zerado agora" e "vai zerar" valem desde o primeiro dia.
+
 ### Análise de ADS (V18.54)
 `APP/analise-ads.html` (`/analise-ads`, menu Comercial, só **admin**). O relatório "Anúncios
 patrocinados" que o ML deixa baixar em Publicidade > Relatórios (.xlsx) é **importado à mão**
