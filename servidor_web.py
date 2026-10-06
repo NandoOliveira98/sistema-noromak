@@ -11697,13 +11697,16 @@ def _linx_dialogo(resposta: Any) -> str:
 def _linx_cadastro_situacao(pedido: str) -> dict[str, bool]:
     """V18.60: o cadastro vem ANTES do romaneio (regra do dono, 02/10/2026).
     feito = o Noromak tem o código do cliente gravado (pela extensão, robô ou API).
-    pela_api = a última atualização foi pela Smart API, que NÃO libera crédito."""
+    pela_api = a última atualização foi pela Smart API.
+    credito_api = V18.70: a API gravou e a releitura confirmou 420, 421 e validade."""
     guardado = _cliente_fiscal_guardado(pedido) or {}
     cadastros = [o for o in linx_operacoes_do_pedido(pedido)
                  if o["etapa"] in ("cadastro", "cadastro_robo") and o["situacao"] == "ok"]
     ultimo = cadastros[-1] if cadastros else None
+    creditos = [o for o in linx_operacoes_do_pedido(pedido) if o["etapa"] == "credito"]
     return {"feito": bool(str(guardado.get("linx_cliente") or "").strip()) or ultimo is not None,
-            "pela_api": bool(ultimo and ultimo["etapa"] == "cadastro")}
+            "pela_api": bool(ultimo and ultimo["etapa"] == "cadastro"),
+            "credito_api": bool(creditos and creditos[-1]["situacao"] == "ok")}
 
 
 def linx_romaneio_confirmar(pedido: str, contato: Any, observacao: str, *, condicao_conferida: bool = False,
@@ -11737,9 +11740,9 @@ def linx_romaneio_confirmar(pedido: str, contato: Any, observacao: str, *, condi
     cadastro = _linx_cadastro_situacao(pedido)
     if not cadastro["feito"]:
         return {"ok": False, "error": "Atualize o cadastro do cliente no Linx antes do romaneio."}
-    if cadastro["pela_api"] and not credito_conferido:
-        return {"ok": False, "error": "O cadastro foi atualizado pela API, que não libera crédito. Libere no Linx "
-                                      "(Aprovado + Crédito normal) e marque que conferiu."}
+    if cadastro["pela_api"] and not cadastro["credito_api"] and not credito_conferido:
+        return {"ok": False, "error": "O crédito não foi confirmado pela API. Libere no Linx (Aprovado + "
+                                      "Crédito normal + validade) e marque que conferiu."}
     try:
         lista = _linx_lista_romaneio(contato_num)
         itens = _linx_itens_resumo(lista)
@@ -11773,10 +11776,131 @@ def linx_romaneio_confirmar(pedido: str, contato: Any, observacao: str, *, condi
             "observacao": observacao, "itens": itens, "mensagens": mensagens}
 
 
+# ---------------------------------------------------------------------------
+# V18.70 — crédito pela Smart API, no botão "Atualizar cadastro" do pedido.
+# Chamado da Linx (aviso de 06/10/2026): "Ajuste em SmartAPI endpoint
+# AtualizarCadastroClienteSimplificado campo BloqueioCredito".
+#
+# O dono precisa dos TRÊS campos da tela do cliente no Linx:
+#   Situação de Crédito (420) = Crédito normal  → BloqueioCredito "1" (está no contrato)
+#   Cadastro (421)            = Aprovado        → SituacaoCredito "1" (NÃO está no contrato)
+#   Validade de Crédito       = hoje            → DataLimiteCredito  (NÃO está no contrato)
+# Os três vão no corpo; quem diz se pegou é a releitura, campo a campo. O
+# romaneio só dispensa a conferência manual quando os três foram confirmados.
+#
+# O Simplificado REGRAVA o cadastro inteiro: campo que não vai no corpo pode
+# voltar vazio. Por isso o corpo é montado do cadastro atual (ConsultaClientes)
+# e qualquer outro campo que mudar aparece na tela.
+# ---------------------------------------------------------------------------
+LINX_CREDITO_BLOQUEIO = "1"   # Situação de Crédito (420): 1 = Crédito normal
+LINX_CREDITO_SITUACAO = "1"   # Cadastro (421): 1 = Aprovado
+# (campo do Simplificado, campos da ConsultaClientes onde o valor está)
+LINX_SIMPLIFICADO_DO_CADASTRO = (
+    ("Nome", ("Nome",)), ("Fantasia", ("Fantasia",)),
+    ("CEP", ("CepEntrega",)), ("Cidade", ("MunicipioEntrega",)), ("UF", ("UfEntrega",)),
+    ("TipoVia", ("TipoVia_Entrega",)), ("Endereco", ("LogradouroEntrega",)),
+    ("Complemento", ("ComplementoEntrega",)), ("Bairro", ("BairroEntrega",)),
+    ("EnderecoCobranca", ("EndCobrancaUtilizado",)),
+    ("DDD", ("DDDTelefone", "DddTelefone")), ("Telefone", ("Telefone",)),
+    ("DDDCelular", ("DDDCelular", "DddCelular")), ("Celular", ("Celular",)),
+    ("PaisCelular", ("CodigoPaisCelular",)), ("Ramal", ("Ramal",)),
+    ("DDDFax", ("DDDFax",)), ("Fax", ("Fax",)), ("CaixaPostal", ("CaixaPostal",)),
+    ("EmailCasa", ("EmailCasa", "EMailCasa")), ("EmailTrabalho", ("EmailTrabalho", "EMailTrabalho")),
+    ("Identidade", ("IDENTIDADE", "Identidade")), ("CNH", ("CNH",)),
+    ("InscricaoEstadual", ("InscricaoEstadual",)), ("InscricaoMunicipal", ("InscricaoMunicipal",)),
+    ("IndicadorInscricaoEstadual", ("IndicadorInscEstadual",)),
+    ("Categoria", ("Categoria",)), ("Segmento", ("Segmento",)), ("RamoAtividade", ("RamoAtividade",)),
+    ("Regiao", ("Regiao",)), ("DataNascimento", ("DataNascimento",)), ("EstadoCivil", ("EstadoCivil",)),
+    ("Clifor", ("Clifor",)), ("Observacao", ("Observacao",)), ("OrigemCadastro", ("OrigemCadastro",)),
+    ("RecebeEmail", ("RecebeEmail",)),
+)
+LINX_CAMPOS_CREDITO = ("BloqueioCredito", "SituacaoCredito", "DataLimiteCredito",
+                       "DisponibilidadeCredito", "Conceito")
+
+
+# Regra do dono (17/09/2026): nome e endereço no Linx sem acento.
+LINX_CAMPOS_SEM_ACENTO = ("Nome", "Fantasia", "TipoVia", "Endereco", "Complemento", "Bairro", "Cidade")
+
+
+def _linx_sem_acento(texto: Any) -> str:
+    base = unicodedata.normalize("NFD", str(texto or ""))
+    return "".join(ch for ch in base if not unicodedata.combining(ch))
+
+
+def _linx_corpo_simplificado(reg: dict[str, Any], documento: str) -> dict[str, Any]:
+    corpo: dict[str, Any] = {}
+    for destino, origens in LINX_SIMPLIFICADO_DO_CADASTRO:
+        for origem in origens:
+            if reg.get(origem) is not None:
+                corpo[destino] = reg[origem]
+                break
+    for campo in LINX_CAMPOS_SEM_ACENTO:
+        if isinstance(corpo.get(campo), str):
+            corpo[campo] = _linx_sem_acento(corpo[campo])
+    corpo.update({
+        "CPFCNPJ": documento, "ObrigaCPFCNPJ": True, "BPVCategoria": True,
+        "ValidarCamposObrigatorios": True, "VerificaTelefone": False,
+        "CadastraCepAutomaticamente": False, "NaoValidarCepCadastroAutomatico": True,
+        "BypassValidacaoDocumento": False,
+        "Empresa": LINX_EMPRESA, "Revenda": LINX_REVENDA, "Cliente": int(reg["Cliente"]),
+    })
+    return corpo
+
+
+def _linx_diferencas(antes: dict[str, Any], depois: dict[str, Any]) -> list[dict[str, str]]:
+    def texto(reg: dict[str, Any], campo: str) -> str:
+        valor = reg.get(campo)
+        return "" if valor is None else str(valor).strip()
+    campos = [o for _, origens in LINX_SIMPLIFICADO_DO_CADASTRO for o in origens] + list(LINX_CAMPOS_CREDITO)
+    return [{"campo": c, "antes": texto(antes, c), "depois": texto(depois, c)}
+            for c in dict.fromkeys(campos)
+            if (c in antes or c in depois) and texto(antes, c) != texto(depois, c)
+            # tirar o acento é de propósito (regra do dono): não é alteração a avisar
+            and _linx_sem_acento(texto(antes, c)).upper() != _linx_sem_acento(texto(depois, c)).upper()]
+
+
+def _linx_registro_do_cliente(documento: str, cliente: str) -> dict[str, Any]:
+    return next((r for r in _linx_registros_do_documento(documento)
+                 if str(r.get("Cliente")).strip() == str(cliente)), {})
+
+
+def _linx_credito_atualizar(documento: str, cliente: str) -> dict[str, Any]:
+    """Crédito normal + Aprovado + validade hoje pelo Simplificado; relê e confere.
+
+    Devolve, por campo, True (confirmado na releitura), False (não pegou) ou None
+    (a consulta não devolve esse campo — só dá para conferir no Apollo).
+    Levanta LinxErro em falha de comunicação."""
+    hoje = datetime.now(timezone(timedelta(hours=-3))).strftime("%Y-%m-%d")
+    antes = _linx_registro_do_cliente(documento, cliente)
+    if not antes:
+        return {"ok": False, "error": "O cliente não voltou na releitura do Linx."}
+    corpo = _linx_corpo_simplificado(antes, documento)
+    corpo.update({"BloqueioCredito": LINX_CREDITO_BLOQUEIO, "SituacaoCredito": LINX_CREDITO_SITUACAO,
+                  "DataLimiteCredito": f"{hoje}T00:00:00"})
+    status, resposta = linx_chamar_status(
+        "POST", f"{LINX_PATH_CLIENTES}/Geral/ManutencaoClienteSimplificado/AtualizarCadastroClienteSimplificado", corpo)
+    if status == 208:
+        return {"ok": False, "error": f"A Linx perguntou: {_linx_dialogo(resposta) or 'confirmação'} Nada foi respondido."}
+    # Neste gateway 200 não é confirmação: relê e confere campo a campo.
+    depois = _linx_registro_do_cliente(documento, cliente)
+    validade = depois.get("DataLimiteCredito")
+    campos = {
+        "situacao_credito": str(depois.get("BloqueioCredito") or "").strip() == LINX_CREDITO_BLOQUEIO,
+        "cadastro_aprovado": str(depois.get("SituacaoCredito") or "").strip() == LINX_CREDITO_SITUACAO,
+        "validade": None if "DataLimiteCredito" not in depois else str(validade or "").startswith(hoje),
+    }
+    valores = {"situacao_credito": str(depois.get("BloqueioCredito") or "").strip(),
+               "cadastro_aprovado": str(depois.get("SituacaoCredito") or "").strip(),
+               "validade": "" if validade is None else str(validade)[:10]}
+    outros = [d for d in _linx_diferencas(antes, depois) if d["campo"] not in LINX_CAMPOS_CREDITO]
+    return {"ok": True, "liberado": all(v is True for v in campos.values()), "campos": campos,
+            "valores": valores, "outros_campos_alterados": outros}
+
+
 def linx_cadastro_atualizar(pedido: str, usuario: str = "") -> dict[str, Any]:
     """Nome da NF-e (maiúsculo), telefones e e-mail pela regra de 17/09/2026, pela
-    rota AtualizarCadastroClienteAAR — só estes campos. Endereço e CRÉDITO não
-    passam por aqui (a API não altera crédito)."""
+    rota AtualizarCadastroClienteAAR. V18.70: em seguida o crédito (420, 421 e
+    validade) pelo Simplificado — ver _linx_credito_atualizar. Endereço não muda."""
     pedido = str(pedido or "").strip()
     bloqueio = _linx_escrita_bloqueada()
     if bloqueio:
@@ -11793,7 +11917,7 @@ def linx_cadastro_atualizar(pedido: str, usuario: str = "") -> dict[str, Any]:
         if consulta["status"] != "encontrado":
             return {"ok": False, "error": "Cliente não cadastrado no Linx (ou mais de um com este CPF). "
                                           "A API atualiza, mas não inclui sem conferência."}
-        nome_linx = re.sub(r"\s+", " ", nome).strip().upper()
+        nome_linx = _linx_sem_acento(re.sub(r"\s+", " ", nome).strip()).upper()  # V18.70: sem acento
         corpo = {
             "Nome": nome_linx, "Email": LINX_CADASTRO_EMAIL, "CPFCNPJ": documento,
             "DDDTelefone": LINX_CADASTRO_DDD, "Telefone": LINX_CADASTRO_TELEFONE,
@@ -11815,127 +11939,17 @@ def linx_cadastro_atualizar(pedido: str, usuario: str = "") -> dict[str, Any]:
     if not conferido:
         return {"ok": False, "error": f"A Linx aceitou, mas o nome continua \"{depois.get('nome') or '—'}\". Confira no Linx."}
     salvar_cliente_fiscal(pedido, documento, nome, linx_cliente=str(consulta["cliente"]), fonte="linx_api", usuario=usuario)
-    return {"ok": True, "pedido": pedido, "cliente": consulta["cliente"], "nome": nome_linx,
-            "credito": depois.get("credito") or {}}
-
-
-# ---------------------------------------------------------------------------
-# V18.70 — teste do crédito pela Smart API (chamado da Linx, aviso de 06/10/2026:
-# "Ajuste em SmartAPI endpoint AtualizarCadastroClienteSimplificado campo
-# BloqueioCredito"). Se passar, o "Crédito normal" deixa de depender do robô.
-#
-# O Simplificado REGRAVA o cadastro inteiro: campo que não vai no corpo pode
-# voltar vazio. Por isso o corpo é montado do cadastro atual (ConsultaClientes),
-# só o BloqueioCredito muda, e depois o cliente é relido e comparado campo a
-# campo. Primeiro sempre simula (não chama nada que grava); gravar exige
-# LINX_ESCRITA_ATIVA=1 e um segundo clique do admin.
-# ---------------------------------------------------------------------------
-LINX_BLOQUEIO_CREDITO = {"0": "Sem bloqueio", "1": "Crédito normal", "2": "Consultar antes",
-                         "3": "Crédito suspenso", "4": "Advogado", "5": "Venda suspensa"}
-# (campo do Simplificado, campos da ConsultaClientes onde o valor está)
-LINX_SIMPLIFICADO_DO_CADASTRO = (
-    ("Nome", ("Nome",)), ("Fantasia", ("Fantasia",)),
-    ("CEP", ("CepEntrega",)), ("Cidade", ("MunicipioEntrega",)), ("UF", ("UfEntrega",)),
-    ("TipoVia", ("TipoVia_Entrega",)), ("Endereco", ("LogradouroEntrega",)),
-    ("Complemento", ("ComplementoEntrega",)), ("Bairro", ("BairroEntrega",)),
-    ("EnderecoCobranca", ("EndCobrancaUtilizado",)),
-    ("DDD", ("DDDTelefone", "DddTelefone")), ("Telefone", ("Telefone",)),
-    ("DDDCelular", ("DDDCelular", "DddCelular")), ("Celular", ("Celular",)),
-    ("PaisCelular", ("CodigoPaisCelular",)), ("Ramal", ("Ramal",)),
-    ("DDDFax", ("DDDFax",)), ("Fax", ("Fax",)), ("CaixaPostal", ("CaixaPostal",)),
-    ("EmailCasa", ("EmailCasa", "EMailCasa")), ("EmailTrabalho", ("EmailTrabalho", "EMailTrabalho")),
-    ("Identidade", ("IDENTIDADE", "Identidade")), ("CNH", ("CNH",)),
-    ("InscricaoEstadual", ("InscricaoEstadual",)), ("InscricaoMunicipal", ("InscricaoMunicipal",)),
-    ("IndicadorInscricaoEstadual", ("IndicadorInscEstadual",)),
-    ("Categoria", ("Categoria",)), ("Segmento", ("Segmento",)), ("RamoAtividade", ("RamoAtividade",)),
-    ("Regiao", ("Regiao",)), ("DataNascimento", ("DataNascimento",)), ("EstadoCivil", ("EstadoCivil",)),
-    ("Clifor", ("Clifor",)), ("Observacao", ("Observacao",)), ("OrigemCadastro", ("OrigemCadastro",)),
-    ("RecebeEmail", ("RecebeEmail",)),
-)
-# Campos relidos para mostrar o que mudou (além dos copiados acima).
-LINX_CAMPOS_CREDITO = ("BloqueioCredito", "SituacaoCredito", "DisponibilidadeCredito", "Conceito")
-
-
-def _linx_corpo_simplificado(reg: dict[str, Any], documento: str, bloqueio: str) -> dict[str, Any]:
-    corpo: dict[str, Any] = {}
-    for destino, origens in LINX_SIMPLIFICADO_DO_CADASTRO:
-        for origem in origens:
-            if reg.get(origem) is not None:
-                corpo[destino] = reg[origem]
-                break
-    corpo.update({
-        "CPFCNPJ": documento, "ObrigaCPFCNPJ": True, "BPVCategoria": True,
-        "ValidarCamposObrigatorios": True, "VerificaTelefone": False,
-        "CadastraCepAutomaticamente": False, "NaoValidarCepCadastroAutomatico": True,
-        "BypassValidacaoDocumento": False,
-        "Empresa": LINX_EMPRESA, "Revenda": LINX_REVENDA, "Cliente": int(reg["Cliente"]),
-        "BloqueioCredito": bloqueio,
-    })
-    return corpo
-
-
-def _linx_diferencas(antes: dict[str, Any], depois: dict[str, Any]) -> list[dict[str, str]]:
-    def texto(reg: dict[str, Any], campo: str) -> str:
-        valor = reg.get(campo)
-        return "" if valor is None else str(valor).strip()
-    campos = [o for _, origens in LINX_SIMPLIFICADO_DO_CADASTRO for o in origens] + list(LINX_CAMPOS_CREDITO)
-    return [{"campo": c, "antes": texto(antes, c), "depois": texto(depois, c)}
-            for c in dict.fromkeys(campos)
-            if (c in antes or c in depois) and texto(antes, c) != texto(depois, c)]
-
-
-def linx_teste_bloqueio_credito(documento: str, bloqueio: str = "1", *, gravar: bool = False,
-                                usuario: str = "") -> dict[str, Any]:
-    numero = re.sub(r"\D", "", str(documento or ""))
-    bloqueio = str(bloqueio if bloqueio is not None else "").strip()
-    if bloqueio not in LINX_BLOQUEIO_CREDITO:
-        return {"ok": False, "error": "Situação de crédito inválida (0 a 5; 1 = Crédito normal)."}
-    if gravar:
-        trava = _linx_escrita_bloqueada()
-        if trava:
-            return {"ok": False, "error": trava}
-    elif linx_configuracao_faltando():
-        return {"ok": False, "error": "Linx Smart API não configurada no servidor."}
+    # V18.70: crédito. Falha aqui não desfaz o nome, que já foi conferido.
     try:
-        registros = _linx_registros_do_documento(numero)
-        if len({str(r.get("Cliente")).strip() for r in registros}) != 1:
-            return {"ok": False, "error": "Este CPF/CNPJ não tem exatamente um cliente no Linx "
-                                          f"({len(registros)} encontrados). Escolha outro para o teste."}
-        antes = registros[0]
-        corpo = _linx_corpo_simplificado(antes, numero, bloqueio)
-        resumo = {"cliente": str(antes.get("Cliente")), "nome": str(antes.get("Nome") or ""),
-                  "bloqueio_antes": str(antes.get("BloqueioCredito") or "").strip(),
-                  "situacao_antes": str(antes.get("SituacaoCredito") or "").strip(),
-                  "bloqueio_pedido": bloqueio, "bloqueio_pedido_nome": LINX_BLOQUEIO_CREDITO[bloqueio]}
-        if not gravar:
-            _linx_registrar()
-            return {"ok": True, "simulacao": True, **resumo, "corpo": corpo, "escrita_ativa": LINX_ESCRITA_ATIVA}
-        status, resposta = linx_chamar_status(
-            "POST", f"{LINX_PATH_CLIENTES}/Geral/ManutencaoClienteSimplificado/AtualizarCadastroClienteSimplificado", corpo)
-        if status == 208:
-            pergunta = _linx_dialogo(resposta) or "A Linx pediu uma confirmação."
-            audit(usuario, "linx.teste_credito", f"{resumo['cliente']}|pergunta")
-            return {"ok": False, "situacao": "pergunta", **resumo,
-                    "error": f"A Linx perguntou: {pergunta} Nada foi respondido."}
-        # Neste gateway 200 não é confirmação: relê e compara.
-        depois = next((r for r in _linx_registros_do_documento(numero)
-                       if str(r.get("Cliente")).strip() == resumo["cliente"]), {})
+        credito = _linx_credito_atualizar(documento, str(consulta["cliente"]))
     except (LinxErro, ValueError) as exc:
         _linx_registrar(str(exc))
-        if gravar:
-            audit(usuario, "linx.teste_credito", f"erro|{str(exc)[:200]}")
-        return {"ok": False, "error": str(exc)}
-    _linx_registrar()
-    diferencas = _linx_diferencas(antes, depois)
-    bloqueio_depois = str(depois.get("BloqueioCredito") or "").strip()
-    outros = [d for d in diferencas if d["campo"] != "BloqueioCredito"]
-    audit(usuario, "linx.teste_credito",
-          f"{resumo['cliente']}|{resumo['bloqueio_antes']}->{bloqueio}|depois={bloqueio_depois}"
-          f"|outros={','.join(d['campo'] for d in outros)}")
-    return {"ok": True, "simulacao": False, **resumo, "bloqueio_depois": bloqueio_depois,
-            "situacao_depois": str(depois.get("SituacaoCredito") or "").strip(),
-            "gravou_bloqueio": bloqueio_depois == bloqueio, "outros_campos_alterados": outros,
-            "diferencas": diferencas, "resposta": resposta}
+        credito = {"ok": False, "error": str(exc)}
+    situacao = "ok" if credito.get("liberado") else ("parcial" if credito.get("ok") else "erro")
+    _linx_operacao_registrar(pedido, "credito", situacao, credito, "", usuario)
+    audit(usuario, "linx.credito", f"{pedido}|{consulta['cliente']}|{situacao}|{json_dumps(credito.get('valores') or {})}")
+    return {"ok": True, "pedido": pedido, "cliente": consulta["cliente"], "nome": nome_linx,
+            "credito": credito}
 
 
 # ---------------------------------------------------------------------------
@@ -18166,21 +18180,6 @@ class AppHandler(BaseHTTPRequestHandler):
                     )
                 else:
                     resultado = linx_cadastro_atualizar(str(body.get("pedido") or ""), usuario=usuario)
-                self.send_json(resultado, 200 if resultado.get("ok") else 409)
-            except Exception as exc:
-                self.send_json({"ok": False, "error": str(exc)}, 500)
-            return
-        # V18.70 — teste do BloqueioCredito pelo Simplificado (chamado da Linx).
-        # Sem "gravar" só simula; com "gravar" exige LINX_ESCRITA_ATIVA=1.
-        if path == "/api/linx/teste-credito":
-            ctx = self.auth(admin_only=True)
-            if ctx is None:
-                return
-            try:
-                body = self.read_json()
-                resultado = linx_teste_bloqueio_credito(
-                    str(body.get("documento") or ""), str(body.get("bloqueio") if body.get("bloqueio") is not None else "1"),
-                    gravar=body.get("gravar") is True, usuario=str(ctx.get("username") or ""))
                 self.send_json(resultado, 200 if resultado.get("ok") else 409)
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)

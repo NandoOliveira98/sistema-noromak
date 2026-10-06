@@ -205,27 +205,31 @@ estoque** — E!). É o mesmo fluxo que já mapeamos pela extensão do Linx.
   (e com qual usuário), o significado dos códigos de crédito, se o token vai como `Bearer` (configurável em
   `LINX_AUTH_ESQUEMA`) e o formato real da resposta da consulta.
 
-## 4c. Teste do crédito pela API (V18.70 — chamado da Linx)
+## 4c. Crédito pela API no "Atualizar cadastro" (V18.70 — chamado da Linx)
 
 Em 06/10/2026 a Linx avisou: *"Ajuste em SmartAPI endpoint
 AtualizarCadastroClienteSimplificado campo BloqueioCredito"*, disponível para validação.
-Se funcionar, o **Crédito normal** (`BloqueioCredito = "1"`) sai do robô do Apollo.
-O aviso **não** fala de `SituacaoCredito` (Cadastro Aprovado, 421) nem da validade.
 
-Admin > Integrações > Linx > **Testar crédito pela API** (`POST /api/linx/teste-credito`,
-`linx_teste_bloqueio_credito`):
+O dono precisa dos **três** campos da tela do cliente, cliente por cliente, pelo botão
+do pedido (Pedidos do dia > Romaneio > etapa 1 > **Cadastro + crédito pela API**):
 
-1. lê o cliente (`ConsultaClientes`) — tem que ser **um** código para o CPF/CNPJ;
-2. **simula**: mostra o crédito atual e o corpo que seria enviado. Não grava;
-3. com `LINX_ESCRITA_ATIVA=1` e um segundo clique, chama o Simplificado;
-4. relê o cliente e compara campo a campo: diz se o crédito pegou e **lista qualquer outro
-   campo que mudou**.
+| Tela do Linx | Campo da API | Valor | No contrato do Simplificado? |
+|---|---|---|---|
+| Situação de Crédito (420) | `BloqueioCredito` | `"1"` Crédito normal | sim (o campo do chamado) |
+| Cadastro (421) | `SituacaoCredito` | `"1"` Aprovado | **não** |
+| Validade de Crédito | `DataLimiteCredito` | hoje `AAAA-MM-DDT00:00:00` | **não** |
 
-O Simplificado regrava o cadastro **inteiro** (campo ausente pode voltar vazio). Por isso o
-corpo é montado do cadastro atual e só o `BloqueioCredito` muda. Campos que a consulta não
-devolve (`TipoPessoa`, `Departamento`, `UsuarioVendedor`…) **não** são enviados — se algum
-sumir, aparece na lista do passo 4. Conferir também na tela do Apollo.
-Cada gravação fica no `audit_log` (`linx.teste_credito`, antes → depois).
+`linx_cadastro_atualizar`: primeiro o `AtualizarCadastroClienteAAR` (nome da NF-e em
+maiúsculo e **sem acento**, telefones 11 111111111, e-mail lojavirtual@); depois `_linx_credito_atualizar` manda os três pelo Simplificado e
+**relê** o cliente. Cada campo volta ✅ (confirmado), ❌ (não pegou) ou ❔ (a consulta não
+devolve o campo — conferir no Apollo). Fica em `linx_operacoes_v1860` (etapa `credito`:
+`ok`, `parcial` ou `erro`) e no `audit_log` (`linx.credito`). O romaneio só dispensa a
+caixa "conferi o crédito" quando os **três** foram confirmados (`credito_api`).
+
+O Simplificado REGRAVA o cadastro inteiro (campo ausente pode voltar vazio): o corpo é
+montado do cadastro atual (nome e endereço sem acento) e qualquer outro campo que mudar aparece em amarelo na etapa 1.
+Campos que a consulta não devolve (`TipoPessoa`, `Departamento`, `UsuarioVendedor`…) não
+são enviados. Falha no crédito não desfaz o nome, que já foi conferido.
 
 ## 5. Plano de teste sugerido (tudo só-leitura)
 

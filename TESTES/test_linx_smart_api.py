@@ -34,8 +34,10 @@ class LinxFalsa:
         self.listas = {}            # contato -> ItensRomaneio pendentes
         self.confirma_status = 200  # 208 = Linx perguntando algo
         self.nome_depois_aar = None
-        self.simplificado_ignora_bloqueio = False   # V18.70: Linx sem a correção
+        # V18.70: campos de crédito que o Simplificado NÃO grava (Linx sem a correção)
+        self.simplificado_ignora = ()
         self.simplificado_apaga = ()                 # campos que o Simplificado zera
+        self.simplificado_corpos = []
         falsa = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -73,9 +75,11 @@ class LinxFalsa:
                     return self.responder(200, ["Romaneio 123 gerado"])
                 if self.path == "/api-veiculos-crm/Geral/ManutencaoClienteSimplificado/AtualizarCadastroClienteSimplificado":
                     dados = json.loads(corpo)
+                    falsa.simplificado_corpos.append(dados)
                     for reg in falsa.clientes.get(dados["CPFCNPJ"], []):
-                        if not falsa.simplificado_ignora_bloqueio:
-                            reg["BloqueioCredito"] = dados["BloqueioCredito"]
+                        for campo in ("BloqueioCredito", "SituacaoCredito", "DataLimiteCredito"):
+                            if campo in dados and campo not in falsa.simplificado_ignora:
+                                reg[campo] = dados[campo]
                         for campo in falsa.simplificado_apaga:
                             reg[campo] = ""
                     return self.responder(200, None)
@@ -410,19 +414,20 @@ class LinxRomaneio(_BaseLinx):
     def test_romaneio_so_depois_do_cadastro(self):
         S.LINX_ESCRITA_ATIVA = True
         self.criar_pedido(cadastrado=False)
-        self.assertEqual(self.preparar()["cadastro"], {"feito": False, "pela_api": False})
+        self.assertEqual(self.preparar()["cadastro"], {"feito": False, "pela_api": False, "credito_api": False})
         status, corpo = self.confirmar()
         self.assertEqual(status, 409, corpo)
         self.assertIn("antes do romaneio", corpo["error"])
         self.assertEqual(self.linx.gravacoes(), [])
 
     def test_cadastro_pela_api_exige_credito_conferido(self):
-        """A API não libera crédito: depois dela, alguém confere no Linx."""
+        """Crédito que a API não confirmou: alguém confere no Linx."""
         S.LINX_ESCRITA_ATIVA = True
+        self.linx.simplificado_ignora = ("SituacaoCredito",)
         self.criar_pedido(cadastrado=False)
         status, corpo = self.cliente.pedir("POST", "/api/linx/cadastro", {"pedido": self.PEDIDO})
         self.assertEqual(status, 200, corpo)
-        self.assertEqual(self.preparar()["cadastro"], {"feito": True, "pela_api": True})
+        self.assertEqual(self.preparar()["cadastro"], {"feito": True, "pela_api": True, "credito_api": False})
         status, corpo = self.confirmar()
         self.assertEqual(status, 409, corpo)
         self.assertIn("crédito", corpo["error"])
@@ -513,7 +518,7 @@ class LinxRoboEExtensao(_BaseLinx):
         self.assertIsNone(vazio["item"], "entregou o mesmo cadastro duas vezes")
         status, corpo = self.robo("POST", "/api/linx/robo/resultado", {"id": item["id"], "ok": True, "cliente": "81558"})
         self.assertEqual(status, 200, corpo)
-        self.assertEqual(S._linx_cadastro_situacao(self.PEDIDO), {"feito": True, "pela_api": False},
+        self.assertEqual(S._linx_cadastro_situacao(self.PEDIDO), {"feito": True, "pela_api": False, "credito_api": False},
                          "cadastro do robô inclui crédito: não pede conferência")
         self.assertEqual(self.lista()[self.PEDIDO]["linx_cliente"], "81558")
 
@@ -554,84 +559,111 @@ class LinxRoboEExtensao(_BaseLinx):
 
 
 
-class LinxTesteCredito(_BaseLinx):
-    """V18.70 — chamado da Linx: BloqueioCredito no AtualizarCadastroClienteSimplificado.
+class LinxCreditoNoCadastro(_BaseLinx):
+    """V18.70 — o botão "Atualizar cadastro" do pedido também grava o crédito:
+    Cadastro (421) Aprovado, Situação de Crédito (420) Crédito normal e validade
+    hoje, pelo AtualizarCadastroClienteSimplificado (chamado da Linx, 06/10/2026).
 
-    O Simplificado regrava o cadastro inteiro: o corpo vem do cadastro atual, só o
-    crédito muda, e depois o cliente é relido e comparado campo a campo."""
+    O Simplificado regrava o cadastro inteiro: o corpo vem do cadastro atual e o
+    cliente é relido e comparado campo a campo. 200 não é confirmação."""
+
+    PEDIDO = "2000018464816980"
 
     def setUp(self):
         super().setUp()
+        S.LINX_ESCRITA_ATIVA = True
         self.linx.clientes[CPF] = [{
             "Cliente": 81558, "Nome": "NAOR PRATO JUNIOR", "Cpf": int(CPF), "CepEntrega": 16010000,
             "MunicipioEntrega": "ARACATUBA", "UfEntrega": "SP", "LogradouroEntrega": "RUA TESTE 10",
             "BairroEntrega": "CENTRO", "DDDTelefone": 11, "Telefone": 111111111, "DDDCelular": 11,
             "Celular": 111111111, "EmailCasa": "lojavirtual@noromak.com.br", "Categoria": 1,
-            "SituacaoCredito": "1", "BloqueioCredito": "2",
+            "SituacaoCredito": "0", "BloqueioCredito": "0", "DataLimiteCredito": None,
         }]
+        gravar_como_integracao([linha(self.PEDIDO, "157507-0893117732", uid="L1", Marketplace="MERCADO LIVRE")],
+                               origem="API Mercado Livre")
+        self.assertTrue(S.salvar_cliente_fiscal(self.PEDIDO, CPF, "Naor Prato Junior", fonte="teste")["ok"])
 
-    def pedir(self, **corpo):
-        return self.cliente.pedir("POST", "/api/linx/teste-credito", {"documento": CPF, **corpo})
-
-    def test_simulacao_nao_grava_e_reenvia_o_cadastro_atual(self):
-        S.LINX_ESCRITA_ATIVA = True
-        status, corpo = self.pedir(bloqueio="1")
+    def atualizar(self):
+        status, corpo = self.cliente.pedir("POST", "/api/linx/cadastro", {"pedido": self.PEDIDO})
         self.assertEqual(status, 200, corpo)
-        self.assertTrue(corpo["simulacao"])
-        self.assertEqual((corpo["cliente"], corpo["bloqueio_antes"]), ("81558", "2"))
-        enviado = corpo["corpo"]
-        self.assertEqual(enviado["BloqueioCredito"], "1")
-        self.assertEqual((enviado["Endereco"], enviado["Cidade"], enviado["CEP"]), ("RUA TESTE 10", "ARACATUBA", 16010000))
-        self.assertEqual((enviado["Cliente"], enviado["CPFCNPJ"]), (81558, CPF))
-        self.assertTrue(enviado["BPVCategoria"])
-        self.assertEqual(self.linx.gravacoes(), [])
+        return corpo["credito"]
 
-    def test_escrita_desligada_nao_grava(self):
-        S.LINX_ESCRITA_ATIVA = False
-        status, corpo = self.pedir(bloqueio="1", gravar=True)
-        self.assertEqual(status, 409, corpo)
-        self.assertIn("LINX_ESCRITA_ATIVA", corpo["error"])
-        self.assertEqual(self.linx.gravacoes(), [])
+    def test_manda_os_tres_campos_e_o_cadastro_atual(self):
+        self.atualizar()
+        enviado = self.linx.simplificado_corpos[0]
+        self.assertEqual((enviado["BloqueioCredito"], enviado["SituacaoCredito"]), ("1", "1"))
+        hoje = S.datetime.now(S.timezone(S.timedelta(hours=-3))).strftime("%Y-%m-%d")
+        self.assertEqual(enviado["DataLimiteCredito"], hoje + "T00:00:00")
+        self.assertEqual((enviado["Endereco"], enviado["Bairro"], enviado["CEP"]), ("RUA TESTE 10", "CENTRO", 16010000))
+        self.assertEqual((enviado["Cliente"], enviado["CPFCNPJ"], enviado["Nome"]), (81558, CPF, "NAOR PRATO JUNIOR"))
 
-    def test_correcao_funcionou(self):
-        S.LINX_ESCRITA_ATIVA = True
-        status, corpo = self.pedir(bloqueio="1", gravar=True)
-        self.assertEqual(status, 200, corpo)
-        self.assertTrue(corpo["gravou_bloqueio"])
-        self.assertEqual((corpo["bloqueio_antes"], corpo["bloqueio_depois"]), ("2", "1"))
-        self.assertEqual(corpo["outros_campos_alterados"], [])
+    def test_tres_confirmados_liberam_o_romaneio_sem_caixa(self):
+        credito = self.atualizar()
+        self.assertTrue(credito["liberado"], credito)
+        self.assertEqual(credito["outros_campos_alterados"], [])
+        self.assertEqual(S._linx_cadastro_situacao(self.PEDIDO),
+                         {"feito": True, "pela_api": True, "credito_api": True})
 
-    def test_linx_aceita_mas_nao_grava_o_credito(self):
-        """200 não é confirmação: sem a correção, o teste diz que falhou."""
-        S.LINX_ESCRITA_ATIVA = True
-        self.linx.simplificado_ignora_bloqueio = True
-        status, corpo = self.pedir(bloqueio="1", gravar=True)
-        self.assertEqual(status, 200, corpo)
-        self.assertFalse(corpo["gravou_bloqueio"])
-        self.assertEqual(corpo["bloqueio_depois"], "2")
+    def test_campo_que_nao_pegou_nao_libera(self):
+        """Linx sem a correção (ou que ignora 421): o romaneio continua pedindo a conferência."""
+        self.linx.simplificado_ignora = ("SituacaoCredito",)
+        credito = self.atualizar()
+        self.assertFalse(credito["liberado"])
+        self.assertEqual(credito["campos"], {"situacao_credito": True, "cadastro_aprovado": False, "validade": True})
+        self.assertEqual(credito["valores"]["cadastro_aprovado"], "0")
+        self.assertFalse(S._linx_cadastro_situacao(self.PEDIDO)["credito_api"])
+
+    def test_validade_que_a_consulta_nao_devolve_nao_conta_como_confirmada(self):
+        del self.linx.clientes[CPF][0]["DataLimiteCredito"]
+        self.linx.simplificado_ignora = ("DataLimiteCredito",)
+        credito = self.atualizar()
+        self.assertIsNone(credito["campos"]["validade"])
+        self.assertFalse(credito["liberado"])
 
     def test_campo_apagado_pela_linx_aparece(self):
-        S.LINX_ESCRITA_ATIVA = True
         self.linx.simplificado_apaga = ("BairroEntrega",)
-        _, corpo = self.pedir(bloqueio="1", gravar=True)
-        self.assertEqual(corpo["outros_campos_alterados"],
+        credito = self.atualizar()
+        self.assertEqual(credito["outros_campos_alterados"],
                          [{"campo": "BairroEntrega", "antes": "CENTRO", "depois": ""}])
 
-    def test_valor_invalido_e_mais_de_um_cliente_sao_recusados(self):
-        S.LINX_ESCRITA_ATIVA = True
-        status, corpo = self.pedir(bloqueio="9", gravar=True)
-        self.assertEqual(status, 409, corpo)
-        self.linx.clientes[CPF].append({**self.linx.clientes[CPF][0], "Cliente": 90000})
-        status, corpo = self.pedir(bloqueio="1", gravar=True)
-        self.assertEqual(status, 409, corpo)
-        self.assertIn("exatamente um", corpo["error"])
-        self.assertEqual(self.linx.gravacoes(), [])
+    def test_erro_no_credito_nao_desfaz_o_nome(self):
+        self.linx.simplificado_apaga = ()
+        original = S._linx_credito_atualizar
+        def falha(*a, **k):
+            raise S.LinxErro("Linx respondeu HTTP 400: BPVCategoria obrigatorio", 400)
+        S._linx_credito_atualizar = falha
+        try:
+            credito = self.atualizar()
+        finally:
+            S._linx_credito_atualizar = original
+        self.assertFalse(credito["ok"])
+        self.assertIn("BPVCategoria", credito["error"])
+        self.assertEqual(self.lista()[self.PEDIDO]["linx_cliente"], "81558")
+        self.assertEqual(S._linx_cadastro_situacao(self.PEDIDO)["credito_api"], False)
 
-    def test_so_admin(self):
-        anonimo = type(self.cliente)(self.url_base)
-        status, _ = anonimo.pedir("POST", "/api/linx/teste-credito")
-        self.assertIn(status, (401, 403))
-        self.assertEqual(self.linx.chamadas, [])
+    def test_nome_da_nf_e_endereco_vao_sem_acento(self):
+        """Regra do dono: nome da NF-e em maiúsculo e nome/endereço sem acento."""
+        self.assertTrue(S.salvar_cliente_fiscal(self.PEDIDO, CPF, "João Sebastião Araújo", fonte="teste")["ok"])
+        reg = self.linx.clientes[CPF][0]
+        reg.update(LogradouroEntrega="RUA SÃO JOÃO 10", BairroEntrega="JARDIM PAULISTÂNIA",
+                   MunicipioEntrega="ARAÇATUBA")
+        self.atualizar()
+        aar = [c for c in self.linx.chamadas if c["path"].endswith("AtualizarCadastroClienteAAR")]
+        self.assertEqual(json.loads(aar[0]["corpo"])["Nome"], "JOAO SEBASTIAO ARAUJO")
+        enviado = self.linx.simplificado_corpos[0]
+        self.assertEqual((enviado["Nome"], enviado["Endereco"], enviado["Bairro"], enviado["Cidade"]),
+                         ("JOAO SEBASTIAO ARAUJO", "RUA SAO JOAO 10", "JARDIM PAULISTANIA", "ARACATUBA"))
+        self.assertEqual(enviado["EmailCasa"], "lojavirtual@noromak.com.br")
+        self.assertEqual(self.linx.simplificado_corpos and S._linx_diferencas(
+            {"LogradouroEntrega": "RUA SÃO JOÃO 10"}, {"LogradouroEntrega": "RUA SAO JOAO 10"}), [])
+        self.assertEqual((enviado["DDD"], enviado["Telefone"], enviado["DDDCelular"], enviado["Celular"]),
+                         (11, 111111111, 11, 111111111))
+
+    def test_escrita_desligada_nao_grava_nada(self):
+        S.LINX_ESCRITA_ATIVA = False
+        status, corpo = self.cliente.pedir("POST", "/api/linx/cadastro", {"pedido": self.PEDIDO})
+        self.assertEqual(status, 409, corpo)
+        self.assertEqual(self.linx.gravacoes(), [])
 
 if __name__ == "__main__":
     unittest.main()
