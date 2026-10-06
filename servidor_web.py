@@ -43,7 +43,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "18.70-LINX-TESTE-CREDITO"
+APP_VERSION = "18.71-SHOPEE-KIT-COMPONENTES"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -3794,6 +3794,12 @@ def preserve_pending_records_v1714(current_value: str | None, new_value: str) ->
                 )
                 if equivalent:
                     continue
+            # V18.71: a linha colada de um KIT da Shopee ("A/B") não volta quando os
+            # componentes do kit já estão no mesmo pedido (a sincronização agora abre
+            # o kit). Só sem bip; a mesma regra da limpeza da Conferência (V18.66).
+            if _linha_shopee_v1866(row) and not int(float(str(row.get("Lido") or 0) or 0)) and                     _pending_identity_v1714(row, len(newer)) in _ids_linhas_artificiais_kit_v1866([*newer, row]):
+                changed=True
+                continue
             newer.append(row);ids.add(ident);changed=True
     deduped=_dedupe_ml_legacy_sku_rows(newer)
     if deduped != newer:
@@ -6388,6 +6394,64 @@ def _shopee_consolidate_api_quantities_v1778(lines: list[dict[str, Any]]) -> lis
     return result
 
 
+def _shopee_expand_kit_lines(lines: list[dict[str, Any]], products: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """V18.71: KIT da Shopee vira os produtos do kit, pelo Cadastro de Kits (como no ML).
+
+    Bug de 06/10/2026 (261006VAG06G07): a Shopee manda uma linha só com o SKU do
+    anúncio do kit ("0893600022/0893764272"). O Admin abria o kit só na tela
+    (V16.46) e a Conferência mostrava a linha colada, que não dá para bipar.
+
+    Só abre kit CADASTRADO e ativo cujo SKU é exatamente o do kit (produto comum
+    nunca herda composição). O __uidLinha é o mesmo que o Admin grava ao salvar
+    (KITDB_<pedido>_<kit>_<sku>_<i>): casa com linhas já gravadas e seus bips.
+    SkuOrigemImportacao vira o SKU do componente, para a exclusão manual de UM
+    componente não apagar o kit inteiro; o SKU do anúncio fica em SkuReferenciaShopee.
+    """
+    if not lines:
+        return []
+    catalog = _load_kit_catalog()
+    if not catalog:
+        return lines
+    out: list[dict[str, Any]] = []
+    for row in lines:
+        sku = str(row.get("SkuOrigemImportacao") or row.get("SKU") or "").strip()
+        kit = _kit_catalog_lookup(catalog, sku) if sku else None
+        if kit and normalize(kit.get("sku_kit")) != normalize(sku) and not re.match(r"^KIT", sku, flags=re.I):
+            kit = None
+        comps = (kit or {}).get("componentes") or []
+        if not kit or not kit.get("ativo", True) or not comps or (
+            len(comps) == 1 and int(comps[0].get("quantidade") or 0) == 1 and normalize(comps[0].get("sku")) == normalize(sku)
+        ):
+            out.append(row)
+            continue
+        try:
+            kits = max(1, int(float(row.get("Quantidade") or 1)))
+        except Exception:
+            kits = 1
+        kit_sku = str(kit.get("sku_kit") or sku).strip()
+        for indice, comp in enumerate(comps):
+            comp_sku = str(comp.get("sku") or "").strip()
+            por_kit = max(1, int(comp.get("quantidade") or 1))
+            nova = dict(row)
+            for campo in ("Código de Barras", "Rua", "Módulo", "Prateleira", "Nível", "Posição", "Foto"):
+                nova[campo] = ""
+            nova.update({
+                "SKU": comp_sku, "Quantidade": str(kits * por_kit),
+                "Kit": "SIM", "Nome do Kit": str(kit.get("nome") or kit_sku).strip(),
+                "Quantidade de Kits": str(kits), "Quantidade por Kit": str(por_kit),
+                "SkuKitOrigem": kit_sku, "SkuOrigemImportacao": comp_sku,
+                "__uidLinha": f"KITDB_{normalize(order_number(row))}_{normalize(kit_sku)}_{normalize(comp_sku)}_{indice}",
+            })
+            product = _ml_find_product(products, comp_sku)
+            if product:
+                for field in ("SKU", "Código de Barras", "Descrição", "Rua", "Módulo", "Prateleira", "Nível", "Posição", "Foto"):
+                    value = product.get(field)
+                    if str(value or "").strip():
+                        nova[field] = value
+            out.append(nova)
+    return out
+
+
 def _shopee_filter_artificial_kit_lines(lines: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Remove linhas artificiais de kit quando os produtos reais já vieram da Shopee.
 
@@ -6729,7 +6793,13 @@ def _shopee_manual_sync_sem_trava(acordar_etiquetas: bool = True) -> dict[str, A
         # exclusões manuais persistentes feitas no Admin/Conferência.
         api_lines = _shopee_consolidate_api_quantities_v1778(api_lines)
         api_lines = _shopee_filter_artificial_kit_lines(api_lines)
+        # V18.71: exclusões manuais valem ANTES de abrir o kit (a linha do kit que o
+        # ADMIN excluiu não volta como componentes) e DEPOIS (a exclusão de um
+        # componente só continua valendo).
         manual_deletions = _shopee_load_manual_deletions()
+        if manual_deletions:
+            api_lines = [row for row in api_lines if not _shopee_is_manually_deleted(row, manual_deletions)]
+        api_lines = _shopee_expand_kit_lines(api_lines, products)
         if manual_deletions:
             api_lines = [row for row in api_lines if not _shopee_is_manually_deleted(row, manual_deletions)]
 

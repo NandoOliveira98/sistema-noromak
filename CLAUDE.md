@@ -281,6 +281,15 @@ bug das etiquetas automáticas da V17.89 a V17.98. `shopee_reparar_etiquetas_sem
 Quantidade da API é a autoridade automática **exceto** onde houver alteração explícita do
 ADMIN (V17.78). Linhas são identificadas por IDs da API, não por posição. KITs não devem
 gerar SKU artificial concatenado quando os componentes reais já existem.
+**V18.71 — kit vira componentes no servidor:** a Shopee pode mandar só a linha do anúncio
+do kit ("0893600022/0893764272"). `_shopee_expand_kit_lines` abre pelo Cadastro de Kits
+(só kit cadastrado, ativo e com o SKU exato — como no ML), com o mesmo `__uidLinha` que o
+Admin grava (`KITDB_<pedido>_<kit>_<sku>_<i>`). Antes disso o Admin abria o kit só na
+**tela** (V16.46) e a Conferência via a linha colada até alguém salvar no Admin. Ordem na
+sincronização: filtro da linha artificial → exclusões manuais → abrir kit → exclusões de
+novo (a exclusão da linha do kit e a de um componente continuam valendo). A linha colada
+antiga não é ressuscitada pelo `preserve_pending_records_v1714` quando os componentes já
+estão no pedido e ela não tem bip.
 
 ### Apollo (ERP)
 Consultas de custo e estoque via `CRM_COST_API_URL` / `CRM_STOCK_API_URL`, cache de 180 s.
