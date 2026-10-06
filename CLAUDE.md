@@ -341,6 +341,16 @@ abre o Financeiro. `ml_profitability_snapshot` **não é mais alimentada**, mas 
 lida (custo de reserva da Demanda de Compra e histórico da gaveta do Dashboard, via
 `_ml_custo_venda_por_pedido`, que prefere o custo capturado no ato da venda).
 
+### Visitas dos anúncios (V18.68)
+Base da futura análise de **conversão** (vendas ÷ visitas). Worker `ml_visitas_loop`: depois das
+06:00 (Brasília), uma rodada por dia busca `/items/{MLB}/visits/time_window?last=30&unit=day` de
+**todos** os anúncios (`ml_todos_os_anuncios`) — a API aceita **um** anúncio por chamada, então são
+~1.600 chamadas espaçadas (0,25 s). Grava em `ml_visitas_dia_v1868` (item, dia, visitas): a janela
+de 30 dias é regravada e o que é mais antigo fica como histórico. `ml_visitas_item_v1868` marca o
+dia em que cada anúncio foi buscado, e a rodada **retoma** só o que falta (restart, erro). 404 =
+anúncio sumiu, espera o dia seguinte; 5 erros seguidos (sem conexão/permissão) param a rodada.
+Dia sem número na resposta **não** vira zero. Situação: `GET /api/ml-visitas/status` (admin).
+
 ### Análise de ADS (V18.54)
 `APP/analise-ads.html` (`/analise-ads`, menu Comercial, só **admin**). O relatório "Anúncios
 patrocinados" que o ML deixa baixar em Publicidade > Relatórios (.xlsx) é **importado à mão**

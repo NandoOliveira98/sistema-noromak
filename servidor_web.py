@@ -43,7 +43,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "18.67-EXCLUSAO-SUPERVISOR"
+APP_VERSION = "18.68-VISITAS-ML"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -1951,6 +1951,25 @@ def init_db() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_ml_ads_item_dia ON ml_ads_item_dia_v1830(dia);
             CREATE INDEX IF NOT EXISTS idx_ml_ads_item_sku ON ml_ads_item_dia_v1830(sku, dia);
+            -- V18.68: visitas por anúncio e por dia (base da análise de conversão).
+            -- O ML só devolve um anúncio por chamada; a janela de 30 dias é regravada
+            -- todo dia e o que é mais antigo fica como histórico.
+            CREATE TABLE IF NOT EXISTS ml_visitas_dia_v1868 (
+                item_id TEXT NOT NULL,
+                dia TEXT NOT NULL,
+                visitas INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY(item_id, dia)
+            );
+            CREATE INDEX IF NOT EXISTS idx_ml_visitas_dia ON ml_visitas_dia_v1868(dia);
+            -- Controle da coleta: em que dia o anúncio já foi buscado (a rodada
+            -- retoma de onde parou depois de um restart ou de um erro).
+            CREATE TABLE IF NOT EXISTS ml_visitas_item_v1868 (
+                item_id TEXT PRIMARY KEY,
+                buscado_dia TEXT NOT NULL DEFAULT '',
+                buscado_em TEXT NOT NULL DEFAULT '',
+                erro TEXT NOT NULL DEFAULT ''
+            );
             -- Mapa ad_group -> anúncio/SKU. Resolvido uma vez e reaproveitado:
             -- o ad_group agrupa as variações do mesmo produto (novo fluxo do ML).
             CREATE TABLE IF NOT EXISTS ml_ads_grupo_v1830 (
@@ -14113,6 +14132,186 @@ def financeiro_frete_loop(stop_event: threading.Event) -> None:
             break
 
 
+# V18.68: visitas dos anúncios do ML, todo dia, para medir conversão (vendas ÷ visitas).
+# Uma chamada por anúncio (/items/{id}/visits/time_window — a API recusa mais de um
+# id por vez). ~1.600 anúncios ≈ 15 min de coleta espaçada, uma vez por dia.
+ML_VISITAS_DIAS = 30
+ML_VISITAS_HORA_INICIO = 6        # depois das 06:00 (Brasília) o dia anterior já fechou
+ML_VISITAS_PAUSA = 0.25           # segundos entre chamadas: não disputar limite com os outros workers
+ML_VISITAS_ERROS_SEGUIDOS = 5     # sem conexão / sem permissão: para a rodada e tenta na próxima
+ML_VISITAS_INTERVALO = 1800
+ML_VISITAS_LOCK = threading.Lock()
+_ML_VISITAS_ESTADO: dict[str, Any] = {"rodando": False, "inicio": "", "fim": "", "ultimo": {}}
+
+
+def _ml_visitas_parse(data: Any) -> dict[str, int]:
+    """{dia: visitas} da resposta do time_window. Dia sem número é ignorado (nunca vira zero)."""
+    out: dict[str, int] = {}
+    if not isinstance(data, dict):
+        return out
+    for r in data.get("results") or []:
+        if not isinstance(r, dict):
+            continue
+        dia = str(r.get("date") or "")[:10]
+        total = r.get("total")
+        if not re.match(r"^\d{4}-\d{2}-\d{2}$", dia) or isinstance(total, bool):
+            continue
+        try:
+            out[dia] = max(0, int(total))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def ml_visitas_rodada(stop_event: threading.Event | None = None, *, hoje: date | None = None,
+                      forcar_horario: bool = False, pausa: float | None = None) -> dict[str, Any]:
+    """Busca as visitas dos últimos 30 dias dos anúncios que ainda não foram buscados hoje.
+
+    Somente leitura no ML. Pode ser chamada várias vezes no dia: só faz o que falta.
+    """
+    hoje = hoje or datetime.now(BR_TZ).date()
+    if not forcar_horario and datetime.now(BR_TZ).hour < ML_VISITAS_HORA_INICIO:
+        return {"ok": True, "pulado": "antes do horário"}
+    if not ML_VISITAS_LOCK.acquire(blocking=False):
+        return {"ok": True, "pulado": "já está rodando"}
+    pausa = ML_VISITAS_PAUSA if pausa is None else pausa
+    hoje_iso = hoje.isoformat()
+    try:
+        _ML_VISITAS_ESTADO.update(rodando=True, inicio=now_iso(), fim="")
+        linha = ml_integration_row()
+        if not linha or not str(linha["access_token"] or "").strip():
+            resultado = {"ok": True, "pulado": "Mercado Livre não conectado"}
+            _ML_VISITAS_ESTADO["ultimo"] = resultado
+            return resultado
+        anuncios = ml_todos_os_anuncios()
+        with DB_LOCK:
+            feitos = {str(r["item_id"]) for r in DB.execute(
+                "SELECT item_id FROM ml_visitas_item_v1868 WHERE buscado_dia = ?", (hoje_iso,)).fetchall()}
+        pendentes = [m for m in anuncios if m not in feitos]
+        buscados, nao_encontrados, erros, seguidos = 0, 0, 0, 0
+        ultimo_erro = ""
+        for item_id in pendentes:
+            if stop_event is not None and stop_event.is_set():
+                break
+            rota = (f"/items/{quote(item_id)}/visits/time_window"
+                    f"?last={ML_VISITAS_DIAS}&unit=day&ending={hoje_iso}")
+            dias: dict[str, int] | None = None
+            erro = ""
+            for tentativa in range(2):
+                try:
+                    dias = _ml_visitas_parse(ml_api_get(rota))
+                    erro = ""
+                    break
+                except Exception as exc:
+                    erro = str(exc)[:300]
+                    if "HTTP 429" in erro and tentativa == 0:
+                        # limite do ML: espera e tenta uma vez mais
+                        if stop_event is not None:
+                            if stop_event.wait(60):
+                                break
+                        else:
+                            time.sleep(min(60, max(0.0, pausa) * 10))
+                        continue
+                    break
+            agora = now_iso()
+            if dias is not None:
+                with DB_LOCK:
+                    DB.executemany(
+                        "INSERT INTO ml_visitas_dia_v1868(item_id,dia,visitas,updated_at) VALUES(?,?,?,?) "
+                        "ON CONFLICT(item_id,dia) DO UPDATE SET visitas=excluded.visitas,updated_at=excluded.updated_at",
+                        [(item_id, d, v, agora) for d, v in dias.items()])
+                    DB.execute(
+                        "INSERT INTO ml_visitas_item_v1868(item_id,buscado_dia,buscado_em,erro) VALUES(?,?,?,'') "
+                        "ON CONFLICT(item_id) DO UPDATE SET buscado_dia=excluded.buscado_dia,"
+                        "buscado_em=excluded.buscado_em,erro=''", (item_id, hoje_iso, agora))
+                    DB.commit()
+                buscados += 1
+                seguidos = 0
+            elif "HTTP 404" in erro:
+                # anúncio que o ML não acha mais: marca como feito hoje para não insistir
+                with DB_LOCK:
+                    DB.execute(
+                        "INSERT INTO ml_visitas_item_v1868(item_id,buscado_dia,buscado_em,erro) VALUES(?,?,?,?) "
+                        "ON CONFLICT(item_id) DO UPDATE SET buscado_dia=excluded.buscado_dia,"
+                        "buscado_em=excluded.buscado_em,erro=excluded.erro", (item_id, hoje_iso, agora, erro))
+                    DB.commit()
+                nao_encontrados += 1
+                seguidos = 0
+            else:
+                # outro erro: fica pendente e entra de novo na próxima rodada
+                with DB_LOCK:
+                    DB.execute(
+                        "INSERT INTO ml_visitas_item_v1868(item_id,erro) VALUES(?,?) "
+                        "ON CONFLICT(item_id) DO UPDATE SET erro=excluded.erro", (item_id, erro))
+                    DB.commit()
+                erros += 1
+                seguidos += 1
+                ultimo_erro = erro
+                if seguidos >= ML_VISITAS_ERROS_SEGUIDOS:
+                    break
+            if pausa > 0:
+                if stop_event is not None:
+                    if stop_event.wait(pausa):
+                        break
+                else:
+                    time.sleep(pausa)
+        resultado = {"ok": erros == 0, "anuncios": len(anuncios), "ja_buscados_hoje": len(feitos),
+                     "buscados": buscados, "nao_encontrados": nao_encontrados, "erros": erros,
+                     "ultimo_erro": ultimo_erro, "interrompido": seguidos >= ML_VISITAS_ERROS_SEGUIDOS}
+        _ML_VISITAS_ESTADO["ultimo"] = resultado
+        if erros:
+            print(f"[ml-visitas] {erros} erro(s); último: {ultimo_erro}", file=sys.stderr, flush=True)
+        return resultado
+    finally:
+        _ML_VISITAS_ESTADO.update(rodando=False, fim=now_iso())
+        ML_VISITAS_LOCK.release()
+
+
+def ml_visitas_status() -> dict[str, Any]:
+    """Situação da coleta de visitas (para conferir depois de publicar). Somente leitura."""
+    hoje = datetime.now(BR_TZ).date()
+    desde = (hoje - timedelta(days=ML_VISITAS_DIAS)).isoformat()
+    with DB_LOCK:
+        hoje_ok = DB.execute("SELECT COUNT(*) FROM ml_visitas_item_v1868 WHERE buscado_dia = ?",
+                             (hoje.isoformat(),)).fetchone()[0]
+        com_erro = DB.execute("SELECT COUNT(*) FROM ml_visitas_item_v1868 WHERE erro <> ''").fetchone()[0]
+        janela = DB.execute(
+            "SELECT COUNT(DISTINCT item_id), COALESCE(SUM(visitas),0), MIN(dia), MAX(dia) "
+            "FROM ml_visitas_dia_v1868 WHERE dia >= ?", (desde,)).fetchone()
+        historico = DB.execute("SELECT MIN(dia), COUNT(*) FROM ml_visitas_dia_v1868").fetchone()
+        top = [dict(r) for r in DB.execute(
+            "SELECT item_id, SUM(visitas) AS visitas FROM ml_visitas_dia_v1868 WHERE dia >= ? "
+            "GROUP BY item_id ORDER BY visitas DESC LIMIT 10", (desde,)).fetchall()]
+    return {
+        "ok": True,
+        "rodando": bool(_ML_VISITAS_ESTADO["rodando"]),
+        "inicio_ultima_rodada": _ML_VISITAS_ESTADO["inicio"],
+        "fim_ultima_rodada": _ML_VISITAS_ESTADO["fim"],
+        "ultima_rodada": _ML_VISITAS_ESTADO["ultimo"],
+        "buscados_hoje": int(hoje_ok or 0),
+        "com_erro": int(com_erro or 0),
+        "janela": {"desde": desde, "anuncios": int(janela[0] or 0), "visitas": int(janela[1] or 0),
+                   "primeiro_dia": janela[2] or "", "ultimo_dia": janela[3] or ""},
+        "historico_desde": historico[0] or "",
+        "linhas": int(historico[1] or 0),
+        "mais_visitados": top,
+    }
+
+
+def ml_visitas_loop(stop_event: threading.Event) -> None:
+    """Uma rodada completa por dia, depois das 06:00; a cada 30 min só confere o que falta."""
+    if stop_event.wait(600):
+        return
+    while not stop_event.is_set():
+        try:
+            ml_visitas_rodada(stop_event)
+        except Exception as exc:
+            _ML_VISITAS_ESTADO["ultimo"] = {"ok": False, "erro": str(exc)[:300]}
+            print(f"[ml-visitas] falhou: {exc}", file=sys.stderr, flush=True)
+        if stop_event.wait(ML_VISITAS_INTERVALO):
+            break
+
+
 def _financeiro_custos_venda_ml(order_ids: list[str]) -> dict[str, dict[str, Any]]:
     """Tarifa e frete como o ML mostrou NO ATO DA VENDA, por pedido.
 
@@ -17247,6 +17446,15 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
+        if path == "/api/ml-visitas/status":
+            # V18.68: situação da coleta diária de visitas dos anúncios. Somente leitura.
+            if self.auth(admin_only=True) is None:
+                return
+            try:
+                self.send_json(ml_visitas_status())
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
         if path == "/api/ads-analise":
             # V18.54: Análise de ADS (relatório do ML + lucro por anúncio). Somente leitura.
             if self.auth(admin_only=True) is None:
@@ -20319,6 +20527,13 @@ def main() -> None:
         name="ml-ads-sync",
         daemon=True,
     )
+    # V18.68: visitas dos anúncios do ML (conversão), uma vez por dia.
+    visitas_thread = threading.Thread(
+        target=_worker_protegido(ml_visitas_loop),
+        args=(watcher_stop,),
+        name="ml-visitas",
+        daemon=True,
+    )
     # V18.13: agente de relatório diário por e-mail (00:01).
     relatorio_thread = threading.Thread(
         target=_worker_protegido(relatorio_diario_loop),
@@ -20355,6 +20570,7 @@ def main() -> None:
         vendas_ml_thread.start()
         frete_thread.start()
         ads_thread.start()
+        visitas_thread.start()
         relatorio_thread.start()
         linx_clientes_thread.start()
     else:
