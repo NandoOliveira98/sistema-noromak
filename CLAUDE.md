@@ -350,6 +350,16 @@ de 30 dias é regravada e o que é mais antigo fica como histórico. `ml_visitas
 dia em que cada anúncio foi buscado, e a rodada **retoma** só o que falta (restart, erro). 404 =
 anúncio sumiu, espera o dia seguinte; 5 erros seguidos (sem conexão/permissão) param a rodada.
 Dia sem número na resposta **não** vira zero. Situação: `GET /api/ml-visitas/status` (admin).
+A mesma rodada guarda o retrato do anúncio (título, SKU, preço, status, estoque, categoria — 1x por
+dia, `/items?ids=` de 20 em 20) e o nome da categoria (`ml_categoria_v1868`), para a tela não chamar o ML.
+**Tela Conversão** (`APP/conversao.html`, `/conversao`, menu Comercial, só **admin**;
+`GET /api/conversao?dias=30`, `conversao_payload`): conversão = **pedidos** ÷ visitas (como o ML
+mede), hoje fora (não fechou), comparado com o período anterior de mesmo tamanho. Referência =
+mediana da **categoria** (5+ anúncios com 30+ visitas), senão da conta. Grupos: vitrine sem venda
+(muito visto, < metade da referência), abaixo, joia escondida (pouco visto, ≥ 1,5× a referência e
+3+ vendas), campeão, na média, poucas visitas (< 30, ruído). "Potencial" = visitas × (ref − conv) ×
+ticket — **estimativa** para ordenar, marcada assim. Anúncio que vendeu sem visita coletada fica
+**fora** da conta (`vendeu_sem_visita_coletada`), nunca como conversão infinita.
 
 ### Análise de ADS (V18.54)
 `APP/analise-ads.html` (`/analise-ads`, menu Comercial, só **admin**). O relatório "Anúncios

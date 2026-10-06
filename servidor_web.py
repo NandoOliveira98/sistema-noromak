@@ -1968,7 +1968,21 @@ def init_db() -> None:
                 item_id TEXT PRIMARY KEY,
                 buscado_dia TEXT NOT NULL DEFAULT '',
                 buscado_em TEXT NOT NULL DEFAULT '',
-                erro TEXT NOT NULL DEFAULT ''
+                erro TEXT NOT NULL DEFAULT '',
+                -- retrato do anúncio (1x por dia, junto com as visitas): a tela de
+                -- Conversão lê só o banco e nunca chama o ML
+                titulo TEXT NOT NULL DEFAULT '',
+                sku TEXT NOT NULL DEFAULT '',
+                preco REAL,
+                status TEXT NOT NULL DEFAULT '',
+                estoque INTEGER,
+                categoria_id TEXT NOT NULL DEFAULT '',
+                detalhe_dia TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS ml_categoria_v1868 (
+                categoria_id TEXT PRIMARY KEY,
+                nome TEXT NOT NULL DEFAULT '',
+                buscado_em TEXT NOT NULL DEFAULT ''
             );
             -- Mapa ad_group -> anúncio/SKU. Resolvido uma vez e reaproveitado:
             -- o ad_group agrupa as variações do mesmo produto (novo fluxo do ML).
@@ -14163,6 +14177,63 @@ def _ml_visitas_parse(data: Any) -> dict[str, int]:
     return out
 
 
+def _ml_visitas_detalhes(anuncios: list[str], hoje_iso: str, stop_event: threading.Event | None,
+                         pausa: float) -> int:
+    """Título, SKU, preço, status, estoque e categoria de cada anúncio, 1x por dia.
+
+    20 anúncios por chamada (/items?ids=). Anúncio que não volta fica com o retrato
+    anterior. Nome da categoria: uma chamada por categoria nova, guardada para sempre.
+    """
+    with DB_LOCK:
+        prontos = {str(r["item_id"]) for r in DB.execute(
+            "SELECT item_id FROM ml_visitas_item_v1868 WHERE detalhe_dia = ?", (hoje_iso,)).fetchall()}
+    faltam = [m for m in anuncios if m not in prontos]
+    gravados = 0
+    for i in range(0, len(faltam), 20):
+        if stop_event is not None and stop_event.is_set():
+            return gravados
+        lote = faltam[i:i + 20]
+        info = ml_itens_detalhe(lote)
+        if info:
+            with DB_LOCK:
+                for mlb, d in info.items():
+                    estoque = d.get("estoque")
+                    DB.execute(
+                        "INSERT INTO ml_visitas_item_v1868(item_id,titulo,sku,preco,status,estoque,categoria_id,detalhe_dia) "
+                        "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(item_id) DO UPDATE SET titulo=excluded.titulo,"
+                        "sku=excluded.sku,preco=excluded.preco,status=excluded.status,estoque=excluded.estoque,"
+                        "categoria_id=excluded.categoria_id,detalhe_dia=excluded.detalhe_dia",
+                        (mlb, str(d.get("titulo") or ""), str(d.get("sku_ml") or ""), _money_number(d.get("preco")),
+                         str(d.get("status") or ""), int(estoque) if isinstance(estoque, (int, float)) else None,
+                         str(d.get("categoria") or ""), hoje_iso))
+                DB.commit()
+            gravados += len(info)
+        if pausa > 0:
+            if stop_event is not None:
+                if stop_event.wait(pausa):
+                    return gravados
+            else:
+                time.sleep(pausa)
+    with DB_LOCK:
+        sem_nome = [str(r["categoria_id"]) for r in DB.execute(
+            "SELECT DISTINCT i.categoria_id FROM ml_visitas_item_v1868 i LEFT JOIN ml_categoria_v1868 c "
+            "ON c.categoria_id = i.categoria_id WHERE i.categoria_id <> '' AND c.categoria_id IS NULL").fetchall()]
+    for cat in sem_nome:
+        if stop_event is not None and stop_event.is_set():
+            break
+        try:
+            dados = ml_api_get(f"/categories/{quote(cat)}")
+            nome = str((dados or {}).get("name") or "") if isinstance(dados, dict) else ""
+        except Exception:
+            continue   # tenta de novo amanhã
+        if nome:
+            with DB_LOCK:
+                DB.execute("INSERT OR REPLACE INTO ml_categoria_v1868(categoria_id,nome,buscado_em) VALUES(?,?,?)",
+                           (cat, nome, now_iso()))
+                DB.commit()
+    return gravados
+
+
 def ml_visitas_rodada(stop_event: threading.Event | None = None, *, hoje: date | None = None,
                       forcar_horario: bool = False, pausa: float | None = None) -> dict[str, Any]:
     """Busca as visitas dos últimos 30 dias dos anúncios que ainda não foram buscados hoje.
@@ -14255,9 +14326,13 @@ def ml_visitas_rodada(stop_event: threading.Event | None = None, *, hoje: date |
                         break
                 else:
                     time.sleep(pausa)
+        interrompido = seguidos >= ML_VISITAS_ERROS_SEGUIDOS
+        detalhes = 0
+        if not interrompido and not (stop_event is not None and stop_event.is_set()):
+            detalhes = _ml_visitas_detalhes(anuncios, hoje_iso, stop_event, pausa)
         resultado = {"ok": erros == 0, "anuncios": len(anuncios), "ja_buscados_hoje": len(feitos),
                      "buscados": buscados, "nao_encontrados": nao_encontrados, "erros": erros,
-                     "ultimo_erro": ultimo_erro, "interrompido": seguidos >= ML_VISITAS_ERROS_SEGUIDOS}
+                     "ultimo_erro": ultimo_erro, "interrompido": interrompido, "detalhes": detalhes}
         _ML_VISITAS_ESTADO["ultimo"] = resultado
         if erros:
             print(f"[ml-visitas] {erros} erro(s); último: {ultimo_erro}", file=sys.stderr, flush=True)
@@ -14300,6 +14375,147 @@ def ml_visitas_status() -> dict[str, Any]:
         "historico_desde": historico[0] or "",
         "linhas": int(historico[1] or 0),
         "mais_visitados": top,
+    }
+
+
+# V18.68: Conversão dos anúncios (vendas ÷ visitas). Só lê o banco.
+CONVERSAO_MIN_VISITAS = 30        # abaixo disso a conversão é ruído (1 venda = 3%)
+CONVERSAO_MIN_CATEGORIA = 5       # anúncios com amostra para a categoria ter referência própria
+CONVERSAO_MIN_PEDIDOS_JOIA = 3
+
+
+def _mediana(valores: list[float]) -> float | None:
+    v = sorted(valores)
+    if not v:
+        return None
+    m = len(v) // 2
+    return v[m] if len(v) % 2 else (v[m - 1] + v[m]) / 2
+
+
+def conversao_payload(dias: int = 30, hoje: date | None = None) -> dict[str, Any]:
+    """Visitas × vendas por anúncio do ML, no período e no período anterior de mesmo tamanho.
+
+    Conversão = pedidos ÷ visitas (o mesmo critério do ML: uma venda com 2 unidades é
+    uma venda). A referência de cada anúncio é a mediana da CATEGORIA dele quando a
+    categoria tem amostra; senão a da conta. Anúncio sem visita coletada fica de fora
+    da conta (nunca vira zero). O "potencial" é uma estimativa e vem marcado assim.
+    """
+    dias = max(1, min(150, int(dias or 30)))
+    hoje = hoje or datetime.now(BR_TZ).date()
+    fim = hoje - timedelta(days=1)                 # hoje ainda não fechou
+    ini = fim - timedelta(days=dias - 1)
+    fim_ant = ini - timedelta(days=1)
+    ini_ant = fim_ant - timedelta(days=dias - 1)
+    p = (ini.isoformat(), fim.isoformat())
+    pa = (ini_ant.isoformat(), fim_ant.isoformat())
+    with DB_LOCK:
+        vis = {str(r["item_id"]): (int(r["v"] or 0), int(r["d"] or 0)) for r in DB.execute(
+            "SELECT item_id, SUM(visitas) AS v, COUNT(*) AS d FROM ml_visitas_dia_v1868 "
+            "WHERE dia BETWEEN ? AND ? GROUP BY item_id", p).fetchall()}
+        vis_ant = {str(r["item_id"]): (int(r["v"] or 0), int(r["d"] or 0)) for r in DB.execute(
+            "SELECT item_id, SUM(visitas) AS v, COUNT(*) AS d FROM ml_visitas_dia_v1868 "
+            "WHERE dia BETWEEN ? AND ? GROUP BY item_id", pa).fetchall()}
+        vendas_sql = ("SELECT anuncio, COUNT(DISTINCT order_id) AS pedidos, COALESCE(SUM(qty),0) AS un, "
+                      "COALESCE(SUM(amount),0) AS fat, MAX(title) AS titulo, MAX(sku) AS sku FROM vendas_v1799 "
+                      "WHERE marketplace='ml' AND anuncio <> '' AND sale_day BETWEEN ? AND ? GROUP BY anuncio")
+        ven = {str(r["anuncio"]): dict(r) for r in DB.execute(vendas_sql, p).fetchall()}
+        ven_ant = {str(r["anuncio"]): dict(r) for r in DB.execute(vendas_sql, pa).fetchall()}
+        ads = {str(r["item_id"]): dict(r) for r in DB.execute(
+            "SELECT item_id, SUM(clicks) AS cliques, SUM(cost) AS gasto FROM ml_ads_item_dia_v1830 "
+            "WHERE item_id <> '' AND dia BETWEEN ? AND ? GROUP BY item_id", p).fetchall()}
+        info = {str(r["item_id"]): dict(r) for r in DB.execute(
+            "SELECT i.*, COALESCE(c.nome,'') AS categoria FROM ml_visitas_item_v1868 i "
+            "LEFT JOIN ml_categoria_v1868 c ON c.categoria_id = i.categoria_id").fetchall()}
+        ultimo_dia = DB.execute("SELECT MAX(dia) FROM ml_visitas_dia_v1868").fetchone()[0] or ""
+        primeiro_dia = DB.execute("SELECT MIN(dia) FROM ml_visitas_dia_v1868").fetchone()[0] or ""
+
+    itens: list[dict[str, Any]] = []
+    sem_visita_com_venda = 0
+    for mlb in sorted(set(vis) | set(ven)):
+        if mlb not in vis:
+            sem_visita_com_venda += 1      # vendeu, mas a visita ainda não foi coletada
+            continue
+        visitas, dias_cob = vis[mlb]
+        v, va = ven.get(mlb) or {}, ven_ant.get(mlb) or {}
+        d = info.get(mlb) or {}
+        pedidos = int(v.get("pedidos") or 0)
+        visitas_ant = vis_ant[mlb][0] if mlb in vis_ant else None
+        pedidos_ant = int(va.get("pedidos") or 0)
+        a = ads.get(mlb) or {}
+        itens.append({
+            "mlb": mlb,
+            "titulo": d.get("titulo") or v.get("titulo") or va.get("titulo") or "",
+            "sku": d.get("sku") or v.get("sku") or "",
+            "status": d.get("status") or "",
+            "preco": d.get("preco"),
+            "estoque": d.get("estoque"),
+            "categoria_id": d.get("categoria_id") or "",
+            "categoria": d.get("categoria") or "",
+            "visitas": visitas,
+            "dias_com_visita": dias_cob,
+            "pedidos": pedidos,
+            "unidades": int(v.get("un") or 0),
+            "faturamento": round(float(v.get("fat") or 0), 2),
+            "conversao": (pedidos / visitas) if visitas > 0 else None,
+            "visitas_ant": visitas_ant,
+            "pedidos_ant": pedidos_ant if visitas_ant is not None else None,
+            "conversao_ant": (pedidos_ant / visitas_ant) if visitas_ant else None,
+            "cliques_ads": int(a["cliques"]) if a.get("cliques") is not None else None,
+            "gasto_ads": round(float(a["gasto"]), 2) if a.get("gasto") is not None else None,
+        })
+
+    amostra = [i for i in itens if i["visitas"] >= CONVERSAO_MIN_VISITAS]
+    ref_conta = _mediana([i["conversao"] for i in amostra])
+    por_cat: dict[str, list[float]] = {}
+    for i in amostra:
+        if i["categoria_id"]:
+            por_cat.setdefault(i["categoria_id"], []).append(i["conversao"])
+    ref_cat = {c: _mediana(v) for c, v in por_cat.items() if len(v) >= CONVERSAO_MIN_CATEGORIA}
+    corte_visitas = _mediana([float(i["visitas"]) for i in amostra])
+    # ticket de referência de quem não vendeu: o preço do anúncio
+    for i in itens:
+        if i["categoria_id"] in ref_cat:
+            i["conversao_ref"], i["ref_origem"] = ref_cat[i["categoria_id"]], "categoria"
+        else:
+            i["conversao_ref"], i["ref_origem"] = ref_conta, "conta"
+        ref, conv = i["conversao_ref"], i["conversao"]
+        ticket = (i["faturamento"] / i["pedidos"]) if i["pedidos"] else _money_number(i["preco"])
+        i["potencial"] = None
+        if i["visitas"] < CONVERSAO_MIN_VISITAS or ref is None or conv is None or corte_visitas is None:
+            i["grupo"] = "pouca_amostra"
+        elif i["visitas"] >= corte_visitas:
+            i["grupo"] = "campeao" if conv >= ref else ("vitrine" if conv < ref * 0.5 else "abaixo")
+        elif conv >= ref * 1.5 and i["pedidos"] >= CONVERSAO_MIN_PEDIDOS_JOIA:
+            i["grupo"] = "joia"
+        else:
+            i["grupo"] = "na_media" if conv >= ref else "abaixo"
+        if i["grupo"] in ("vitrine", "abaixo") and ticket:
+            i["potencial"] = round(i["visitas"] * (ref - conv) * ticket, 2)
+        ca = i["conversao_ant"]
+        i["caindo"] = bool(ca and i["visitas_ant"] and i["visitas_ant"] >= CONVERSAO_MIN_VISITAS
+                           and i["pedidos_ant"] >= CONVERSAO_MIN_PEDIDOS_JOIA and conv is not None and conv < ca * 0.7)
+
+    tot_vis = sum(i["visitas"] for i in itens)
+    tot_ped = sum(i["pedidos"] for i in itens)
+    return {
+        "ok": True,
+        "periodo": {"inicio": p[0], "fim": p[1], "dias": dias},
+        "periodo_anterior": {"inicio": pa[0], "fim": pa[1]},
+        "coleta": {"primeiro_dia": primeiro_dia, "ultimo_dia": ultimo_dia,
+                   "cobre_periodo": bool(primeiro_dia) and primeiro_dia <= p[0],
+                   "cobre_anterior": bool(primeiro_dia) and primeiro_dia <= pa[0]},
+        "regras": {"min_visitas": CONVERSAO_MIN_VISITAS, "min_categoria": CONVERSAO_MIN_CATEGORIA,
+                   "min_pedidos_joia": CONVERSAO_MIN_PEDIDOS_JOIA, "corte_visitas": corte_visitas},
+        "resumo": {"anuncios": len(itens), "visitas": tot_vis, "pedidos": tot_ped,
+                   "unidades": sum(i["unidades"] for i in itens),
+                   "faturamento": round(sum(i["faturamento"] for i in itens), 2),
+                   "conversao": (tot_ped / tot_vis) if tot_vis else None,
+                   "conversao_ref_conta": ref_conta,
+                   "categorias_com_referencia": len(ref_cat),
+                   "potencial": round(sum(i["potencial"] or 0 for i in itens), 2),
+                   "caindo": sum(1 for i in itens if i["caindo"]),
+                   "vendeu_sem_visita_coletada": sem_visita_com_venda},
+        "itens": itens,
     }
 
 
@@ -16065,7 +16281,7 @@ def ml_itens_do_vendedor(offset: int = 0, limite: int = 50, forcar: bool = False
 def ml_itens_detalhe(mlbs: list[str]) -> dict[str, dict[str, Any]]:
     """Título, preço e o SKU que o vendedor cadastrou no próprio anúncio."""
     out: dict[str, dict[str, Any]] = {}
-    campos = "id,title,price,status,sub_status,available_quantity,seller_custom_field,attributes"
+    campos = "id,title,price,status,sub_status,available_quantity,seller_custom_field,attributes,category_id"
     for i in range(0, len(mlbs), 20):   # a API aceita 20 ids por chamada
         lote = [x for x in mlbs[i:i + 20] if x]
         if not lote:
@@ -16093,7 +16309,8 @@ def ml_itens_detalhe(mlbs: list[str]) -> dict[str, dict[str, Any]]:
                         "preco": corpo.get("price"), "sku_ml": sku,
                         "status": corpo.get("status"),
                         "sub_status": corpo.get("sub_status") or [],
-                        "estoque": corpo.get("available_quantity")}
+                        "estoque": corpo.get("available_quantity"),
+                        "categoria": str(corpo.get("category_id") or "")}  # V18.68: Conversão
     return out
 
 
@@ -17460,6 +17677,17 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
+        if path == "/api/conversao":
+            # V18.68: Conversão dos anúncios (vendas ÷ visitas). Somente leitura.
+            if self.auth(admin_only=True) is None:
+                return
+            try:
+                self.send_json(conversao_payload(int(str((query.get("dias") or ["30"])[0] or "30"))))
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
         if path == "/api/ads-analise":
             # V18.54: Análise de ADS (relatório do ML + lucro por anúncio). Somente leitura.
             if self.auth(admin_only=True) is None:
@@ -17709,6 +17937,8 @@ class AppHandler(BaseHTTPRequestHandler):
             "/kits-analise": "admin", "/kits-analise/": "admin", "/kits-analise.html": "admin",
             # V18.54: Análise de ADS.
             "/analise-ads": "admin", "/analise-ads/": "admin", "/analise-ads.html": "admin",
+            # V18.68: Conversão dos anúncios.
+            "/conversao": "admin", "/conversao/": "admin", "/conversao.html": "admin",
             # V18.33: a Rentabilidade ML virou o Financeiro; o endereço antigo abre a tela nova.
             "/rentabilidade-ml": "admin", "/rentabilidade-ml/": "admin", "/rentabilidade-ml.html": "admin",
             "/estacao-impressao": "estacao", "/estacao-impressao/": "estacao", "/estacao-impressao.html": "estacao",
@@ -20340,6 +20570,9 @@ class AppHandler(BaseHTTPRequestHandler):
             "/analise-ads": "analise-ads.html",
             "/analise-ads/": "analise-ads.html",
             "/analise-ads.html": "analise-ads.html",
+            "/conversao": "conversao.html",
+            "/conversao/": "conversao.html",
+            "/conversao.html": "conversao.html",
             "/rentabilidade-ml": "financeiro.html",
             "/rentabilidade-ml/": "financeiro.html",
             "/rentabilidade-ml.html": "financeiro.html",

@@ -30,7 +30,19 @@ class VisitasML(TesteNoromak):
             "MLB3": resposta("MLB3", {"2026-10-05": 0}),
         }
 
+        self.detalhes = []
+
         def falso(rota, **_):
+            if rota.startswith("/items?ids="):
+                self.detalhes.append(rota)
+                ids = rota.split("ids=")[1].split("&")[0].split(",")
+                return [{"code": 200, "body": {"id": m, "title": "Peça " + m, "price": 100.0, "status": "active",
+                                               "available_quantity": 5, "category_id": "MLBCAT",
+                                               "attributes": [{"id": "SELLER_SKU", "value_name": "SKU-" + m}]}}
+                        for m in ids]
+            if rota.startswith("/categories/"):
+                self.detalhes.append(rota)
+                return {"id": "MLBCAT", "name": "Pastilhas de Freio"}
             self.chamadas.append(rota)
             item = rota.split("/")[2]
             r = self.respostas[item]
@@ -121,6 +133,113 @@ class VisitasML(TesteNoromak):
         self.assertEqual(status, 200, corpo)
         self.assertEqual(corpo["linhas"], 4)
         self.assertEqual(corpo["historico_desde"], "2026-10-04")
+
+    def test_guarda_o_retrato_do_anuncio_uma_vez_por_dia(self):
+        self.rodar()
+        with S.DB_LOCK:
+            r = dict(S.DB.execute("SELECT * FROM ml_visitas_item_v1868 WHERE item_id='MLB1'").fetchone())
+            cat = S.DB.execute("SELECT nome FROM ml_categoria_v1868 WHERE categoria_id='MLBCAT'").fetchone()
+        self.assertEqual((r["titulo"], r["sku"], r["preco"], r["estoque"], r["categoria_id"]),
+                         ("Peça MLB1", "SKU-MLB1", 100.0, 5, "MLBCAT"))
+        self.assertEqual(cat["nome"], "Pastilhas de Freio")
+        self.detalhes.clear()
+        self.rodar()
+        self.assertEqual(self.detalhes, [], "o retrato do anúncio foi buscado de novo no mesmo dia")
+
+
+class Conversao(TesteNoromak):
+    """Conversão = vendas ÷ visitas, com referência da categoria (ou da conta)."""
+
+    HOJE = date(2026, 10, 6)          # período de 30 dias: 06/09 a 05/10
+
+    def visita(self, item, dia, n):
+        with S.DB_LOCK:
+            S.DB.execute("INSERT OR REPLACE INTO ml_visitas_dia_v1868(item_id,dia,visitas,updated_at) VALUES(?,?,?,'')",
+                         (item, dia, n))
+            S.DB.commit()
+
+    def venda(self, item, dia, pedidos, valor=100.0):
+        with S.DB_LOCK:
+            for k in range(pedidos):
+                S.DB.execute("INSERT INTO vendas_v1799(marketplace,order_id,line_key,sale_at,sale_day,sku,anuncio,title,"
+                             "qty,amount,status,updated_at) VALUES('ml',?,?,?,?,?,?,?,1,?,'paid','')",
+                             (f"{item}-{dia}-{k}", "1", dia, dia, "S", item, "Título " + item, valor))
+            S.DB.commit()
+
+    def categoria(self, item, cat):
+        with S.DB_LOCK:
+            S.DB.execute("INSERT OR REPLACE INTO ml_visitas_item_v1868(item_id,categoria_id,titulo) VALUES(?,?,?)",
+                         (item, cat, "Anúncio " + item))
+            S.DB.commit()
+
+    def payload(self):
+        dados = S.conversao_payload(30, hoje=self.HOJE)
+        return dados, {i["mlb"]: i for i in dados["itens"]}
+
+    def test_conversao_e_vendas_dividido_por_visitas_no_periodo(self):
+        self.visita("MLB1", "2026-10-01", 200)
+        self.visita("MLB1", "2026-08-20", 999)      # fora do período: não entra
+        self.venda("MLB1", "2026-10-01", 4)
+        self.venda("MLB1", "2026-10-06", 9)         # hoje: ainda não fechou, não entra
+        _, i = self.payload()
+        self.assertEqual((i["MLB1"]["visitas"], i["MLB1"]["pedidos"]), (200, 4))
+        self.assertAlmostEqual(i["MLB1"]["conversao"], 0.02)
+
+    def test_anuncio_sem_visita_coletada_nao_vira_conversao_infinita(self):
+        self.venda("MLB9", "2026-10-01", 3)
+        dados, i = self.payload()
+        self.assertNotIn("MLB9", i, "anúncio sem visita coletada entrou na conta")
+        self.assertEqual(dados["resumo"]["vendeu_sem_visita_coletada"], 1)
+
+    def test_referencia_da_categoria_quando_tem_amostra(self):
+        # categoria A converte ~5%; categoria B (pouca amostra) usa a referência da conta
+        for k in range(1, 6):
+            m = f"MLBA{k}"
+            self.categoria(m, "A")
+            self.visita(m, "2026-10-01", 100)
+            self.venda(m, "2026-10-01", 5)
+        self.categoria("MLBB1", "B")
+        self.visita("MLBB1", "2026-10-01", 100)
+        self.venda("MLBB1", "2026-10-01", 1)
+        _, i = self.payload()
+        self.assertEqual(i["MLBA1"]["ref_origem"], "categoria")
+        self.assertAlmostEqual(i["MLBA1"]["conversao_ref"], 0.05)
+        self.assertEqual(i["MLBB1"]["ref_origem"], "conta")
+
+    def test_classifica_vitrine_joia_campeao_e_pouca_amostra(self):
+        dados = {  # item: (visitas, pedidos)
+            "MLBV": (1000, 2),      # muito visto, 0,2%  -> vitrine
+            "MLBC": (1000, 40),     # muito visto, 4%    -> campeão
+            "MLBM1": (400, 8), "MLBM2": (400, 8), "MLBM3": (300, 6),   # meio, 2%
+            "MLBJ": (100, 6),       # pouco visto, 6% e 6 vendas -> joia
+            "MLBP": (10, 2),        # 10 visitas -> ruído
+        }
+        for m, (v, p) in dados.items():
+            self.visita(m, "2026-10-01", v)
+            self.venda(m, "2026-10-01", p)
+        r, i = self.payload()
+        self.assertEqual(i["MLBV"]["grupo"], "vitrine")
+        self.assertEqual(i["MLBC"]["grupo"], "campeao")
+        self.assertEqual(i["MLBJ"]["grupo"], "joia")
+        self.assertEqual(i["MLBP"]["grupo"], "pouca_amostra")
+        # potencial = visitas × (ref − conv) × ticket; ref da conta = 2%
+        self.assertAlmostEqual(i["MLBV"]["potencial"], round(1000 * (0.02 - 0.002) * 100, 2))
+        self.assertIsNone(i["MLBC"]["potencial"])
+
+    def test_conversao_caindo_contra_o_periodo_anterior(self):
+        self.visita("MLB1", "2026-08-20", 200)
+        self.venda("MLB1", "2026-08-20", 10)        # antes: 5%
+        self.visita("MLB1", "2026-10-01", 200)
+        self.venda("MLB1", "2026-10-01", 2)         # agora: 1%
+        r, i = self.payload()
+        self.assertTrue(i["MLB1"]["caindo"])
+        self.assertEqual(r["resumo"]["caindo"], 1)
+
+    def test_rota_e_somente_admin_e_responde(self):
+        status, corpo = self.cliente.pedir("GET", "/api/conversao?dias=30")
+        self.assertEqual(status, 200, corpo)
+        self.assertTrue(corpo["ok"])
+        self.assertEqual(corpo["periodo"]["dias"], 30)
 
 
 if __name__ == "__main__":

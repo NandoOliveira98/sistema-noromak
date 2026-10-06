@@ -1,0 +1,344 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Noromak · Conversão dos anúncios</title>
+<!-- V18.68: Conversão dos anúncios do ML — vendas ÷ visitas por anúncio. As visitas vêm do
+     worker diário (ml_visitas_dia_v1868), as vendas de vendas_v1799 e os cliques de Ads de
+     ml_ads_item_dia_v1830. A referência é a mediana da categoria (ou da conta).
+     GET /api/conversao?dias=30. Somente leitura. -->
+<style>
+:root{
+  --canvas:#F4F7FB; --tile:#ffffff; --line:#DCE5EF; --line2:#eef2f6;
+  --ink:#18324A; --ink2:#586A7D; --ink3:#5F7186;
+  --navy:#12345B; --navy2:#1F57A5; --orange:#F28B18;
+  --pos:#1B7A3E; --posbg:#E7F4EC; --neg:#B42318; --negbg:#FDECEA; --warn:#8A5300; --warnbg:#FFF4E0; --warnln:#F3D19B;
+  --infobg:#E8F0FB; --cinza:#8A99AA; --cinzabg:#EEF1F5;
+  --r:8px;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--canvas);color:var(--ink);font-family:"Segoe UI",system-ui,-apple-system,Arial,sans-serif;font-size:13.5px;line-height:1.45}
+.wrap{max-width:1280px;margin:0 auto;padding:20px 16px 48px}
+header{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between;margin-bottom:16px}
+h1{font-size:20px;margin:0;font-weight:650}
+.sub{color:var(--ink2);font-size:12.5px}
+.btn{border:1px solid var(--line);background:var(--tile);color:var(--ink);border-radius:6px;padding:7px 12px;font:inherit;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center}
+.acoes{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:12px}
+.card{background:var(--tile);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px;min-width:0}
+.span3{grid-column:span 3}.span5{grid-column:span 5}.span7{grid-column:span 7}.span12{grid-column:span 12}
+.k5{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;grid-column:span 12}
+@media (max-width:980px){.span5,.span7{grid-column:span 12}}
+.k-lbl{color:var(--ink2);font-size:12px;font-weight:600}
+.k-val{font-size:24px;font-weight:650;margin:2px 0;font-variant-numeric:tabular-nums}
+.k-sub{color:var(--ink2);font-size:12px}
+h2{font-size:14px;margin:0 0 2px;font-weight:650}
+.desc{color:var(--ink2);font-size:12px;margin:0 0 12px}
+.callout{background:var(--warnbg);border:1px solid var(--warnln);border-radius:var(--r);padding:12px 14px;margin-bottom:12px}
+.callout b{color:var(--warn)}
+.notas{background:var(--tile);color:var(--ink2);font-size:12px}
+.notas ul{margin:6px 0 0 18px;padding:0}
+/* grupos */
+.grupos{display:grid;gap:6px}
+.gr{display:grid;grid-template-columns:12px 1fr auto;gap:10px;align-items:start;padding:8px;border-radius:6px;cursor:pointer}
+.gr:hover{background:var(--line2)}
+.gr .sw{width:10px;height:10px;border-radius:50%;margin-top:4px}
+.gr .t{font-weight:600}.gr .n{color:var(--ink2);font-size:12px}
+.gr .m{font-variant-numeric:tabular-nums;text-align:right;white-space:nowrap}
+.gr .m small{display:block;color:var(--ink2)}
+/* dispersão */
+.chart{position:relative}
+.chart svg{display:block;width:100%;height:auto}
+.tip{position:absolute;pointer-events:none;background:var(--tile);border:1px solid var(--line);border-radius:6px;padding:6px 9px;font-size:12px;box-shadow:0 4px 14px rgba(0,0,0,.12);display:none;max-width:300px;z-index:5}
+/* tabela */
+.tbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;margin-bottom:10px}
+.tabs{display:flex;flex-wrap:wrap;gap:4px}
+.tab{border:1px solid var(--line);background:var(--tile);color:var(--ink2);border-radius:999px;padding:5px 11px;font:inherit;font-size:12.5px;cursor:pointer;display:inline-flex;gap:6px;align-items:center}
+.tab.on{background:var(--navy2);border-color:var(--navy2);color:#fff}
+.tab .dot{width:8px;height:8px;border-radius:50%}
+input[type=search]{border:1px solid var(--line);background:var(--tile);color:var(--ink);border-radius:6px;padding:6px 10px;font:inherit;min-width:240px}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:6px}
+table.cv{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;min-width:980px}
+.cv th{position:sticky;top:0;background:var(--tile);color:var(--ink2);font-weight:600;font-size:12px;text-align:right;padding:7px 8px;border-bottom:1px solid var(--line);cursor:pointer;user-select:none;white-space:nowrap}
+.cv th.l,.cv td.l{text-align:left}
+.cv th.sorted{color:var(--ink)}
+.cv td{padding:7px 8px;border-bottom:1px solid var(--line2);text-align:right;white-space:nowrap;vertical-align:top}
+.cv tbody tr{cursor:pointer}
+.cv tbody tr:hover td{background:var(--line2)}
+.ttl{max-width:340px;white-space:normal!important}
+.mlb{font-family:Consolas,monospace;font-size:11px;color:var(--ink3)}
+.muted{color:var(--ink3)}
+.chip{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:4px;white-space:nowrap}
+.chip i{width:7px;height:7px;border-radius:50%}
+.tag{display:inline-block;margin-top:3px;font-size:11px;font-weight:600;color:var(--warn);background:var(--warnbg);border:1px solid var(--warnln);border-radius:4px;padding:0 5px}
+.up{color:var(--pos);font-size:11px}.down{color:var(--neg);font-size:11px}
+.more{margin-top:10px;text-align:center}
+/* gaveta */
+.drawer{position:fixed;top:0;right:0;width:min(460px,100%);height:100%;background:var(--tile);box-shadow:-8px 0 30px rgba(0,0,0,.15);transform:translateX(105%);transition:transform .2s;padding:20px;overflow:auto;z-index:20}
+.drawer.on{transform:none}
+.drawer h3{margin:0 30px 4px 0;font-size:16px}
+.drawer .x{position:absolute;top:14px;right:14px;border:0;background:none;font-size:24px;cursor:pointer;color:var(--ink2)}
+.drawer dl{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin:14px 0}
+.drawer dl div{background:var(--canvas);border-radius:8px;padding:8px 10px}
+.drawer dt{font-size:11px;color:var(--ink2)}
+.drawer dd{margin:2px 0 0;font-weight:600;font-variant-numeric:tabular-nums}
+.drawer ul{padding-left:18px;line-height:1.55;margin:6px 0}
+.funil{display:flex;gap:4px;margin:12px 0}
+.funil div{flex:1;background:var(--infobg);border-radius:6px;padding:8px;text-align:center;font-size:12px}
+.funil b{display:block;font-size:17px}
+</style>
+<script defer src="/expedicao/web-auth.js"></script>
+<!-- V18.65: tema comum (fonte, foco e icones) por ultimo no head. -->
+<link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Conversão dos anúncios</h1>
+      <div class="sub" id="periodo">Carregando…</div>
+    </div>
+    <div class="acoes">
+      <select class="btn" id="dias" title="Período">
+        <option value="7">Últimos 7 dias</option>
+        <option value="30" selected>Últimos 30 dias</option>
+        <option value="60">Últimos 60 dias</option>
+        <option value="90">Últimos 90 dias</option>
+      </select>
+      <a class="btn" href="/expedicao/admin">Central Noromak</a>
+    </div>
+  </header>
+
+  <div class="callout" id="aviso" hidden></div>
+
+  <div id="conteudo" hidden>
+  <div class="grid">
+    <div class="k5" id="kpis"></div>
+
+    <div class="card span5">
+      <h2>Situação dos anúncios</h2>
+      <p class="desc">Cada anúncio comparado com a conversão de referência da categoria dele. Clique para filtrar a lista.</p>
+      <div class="grupos" id="grupos"></div>
+    </div>
+
+    <div class="card span7">
+      <h2>Visitas × conversão</h2>
+      <p class="desc" id="dispDesc"></p>
+      <div class="chart" id="disp"><div class="tip"></div></div>
+    </div>
+
+    <div class="card span12" id="lista">
+      <div class="tbar">
+        <div class="tabs" id="tabs"></div>
+        <input type="search" id="q" placeholder="Buscar título, MLB, SKU ou categoria…">
+      </div>
+      <div class="tw"><table class="cv" id="tab"></table></div>
+      <div class="more"><button class="btn" id="more">Mostrar mais</button></div>
+    </div>
+
+    <div class="card span12 notas" id="notas"></div>
+  </div>
+  </div>
+</div>
+<aside class="drawer" id="drawer" aria-hidden="true"></aside>
+
+<script>
+(function(){
+"use strict";
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const dataBR=d=>String(d||'').slice(0,10).split('-').reverse().join('/');
+const num=v=>Number(v||0).toLocaleString('pt-BR');
+const brl=v=>Number(v||0).toLocaleString('pt-BR',{style:'currency',currency:'BRL',maximumFractionDigits:0});
+const pct=v=>v==null?'—':(v*100).toLocaleString('pt-BR',{minimumFractionDigits:1,maximumFractionDigits:1})+'%';
+const dash='<span class="muted">—</span>';
+const pp=v=>(v*100).toLocaleString('pt-BR',{minimumFractionDigits:1,maximumFractionDigits:1})+' p.p.';
+const STATUS={active:'ativo',paused:'pausado',closed:'encerrado',under_review:'em revisão',inactive:'inativo'};
+const stt=s=>STATUS[s]||s;
+async function api(url){
+  const r=await fetch('/expedicao'+url,{credentials:'same-origin',cache:'no-store',headers:{Accept:'application/json'}});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok||d.ok===false) throw new Error(d.error||('HTTP '+r.status));
+  return d;
+}
+const G={
+  vitrine:{t:'Vitrine sem venda',c:'#B42318',bg:'var(--negbg)',n:'Muito visto e converte menos da metade da referência',
+    o:'Muita gente olha e pouca compra. Rever preço contra o concorrente/catálogo, frete, fotos e compatibilidade.'},
+  abaixo:{t:'Abaixo da referência',c:'#d08a17',bg:'var(--warnbg)',n:'Converte menos que a referência da categoria',
+    o:'Vale olhar preço e ficha do anúncio; menos urgente que a vitrine sem venda.'},
+  joia:{t:'Joia escondida',c:'#1B7A3E',bg:'var(--posbg)',n:'Pouco visto e converte bem acima da referência',
+    o:'Cada visita rende. Candidato a Ads ou a melhorar título e atributos para aparecer mais. Confira o estoque antes.'},
+  campeao:{t:'Campeão',c:'#1F57A5',bg:'var(--infobg)',n:'Muito visto e converte na referência ou acima',
+    o:'Proteger o estoque e não mexer no preço sem motivo. Acompanhar se a conversão cai.'},
+  na_media:{t:'Na média',c:'#5F7186',bg:'var(--cinzabg)',n:'Pouco visto e converte na referência',
+    o:'Sem urgência. Se tiver margem, pode testar Ads para ganhar visitas.'},
+  pouca_amostra:{t:'Poucas visitas',c:'#B8C4D0',bg:'var(--cinzabg)',n:'Menos visitas que o mínimo: a conversão ainda é ruído',
+    o:'Pouca visita para concluir algo. Se o anúncio importa, rever título, atributos e fotos para aparecer na busca.'}
+};
+const ORDEM=['vitrine','abaixo','joia','campeao','na_media','pouca_amostra'];
+let D=null, st={tab:'vitrine',q:'',sort:'potencial',dir:-1,lim:50};
+
+function aviso(html){$('aviso').innerHTML=html;$('aviso').hidden=!html}
+
+async function carregar(){
+  $('periodo').textContent='Carregando…';
+  try{ D=await api('/api/conversao?dias='+$('dias').value); }
+  catch(e){ aviso('<b>Não foi possível carregar.</b> '+esc(e.message)); $('periodo').textContent=''; return; }
+  const c=D.coleta||{};
+  $('periodo').textContent=`${dataBR(D.periodo.inicio)} a ${dataBR(D.periodo.fim)} · comparado com ${dataBR(D.periodo_anterior.inicio)} a ${dataBR(D.periodo_anterior.fim)}`;
+  if(!c.ultimo_dia){
+    aviso('<b>Ainda não há visitas coletadas.</b> A coleta roda sozinha todo dia depois das 06:00 e leva uns 15 minutos. Volte mais tarde.');
+    $('conteudo').hidden=true; return;
+  }
+  const av=[];
+  if(!c.cobre_periodo) av.push(`as visitas só começaram a ser coletadas em <b>${dataBR(c.primeiro_dia)}</b>; o ML devolve no máximo os 30 dias anteriores à primeira coleta. Períodos maiores vão se completando com o tempo`);
+  else if(!c.cobre_anterior) av.push(`ainda não há visitas do período anterior (${dataBR(D.periodo_anterior.inicio)} a ${dataBR(D.periodo_anterior.fim)}), então o alerta de <b>conversão caindo</b> fica incompleto`);
+  if(D.resumo.vendeu_sem_visita_coletada) av.push(`${num(D.resumo.vendeu_sem_visita_coletada)} anúncio(s) venderam mas ainda não têm visitas coletadas e ficaram fora da conta`);
+  aviso(av.length?'<b>Atenção:</b> '+av.join('; ')+'.':'');
+  $('conteudo').hidden=false;
+  if(!D.itens.some(i=>i.grupo===st.tab)) st.tab='todos';
+  kpis(); grupos(); disp(); render(); notas();
+}
+
+function kpis(){
+  const r=D.resumo;
+  const k=(l,v,s,cor)=>`<div class="card"><div class="k-lbl">${l}</div><div class="k-val"${cor?` style="color:${cor}"`:''}>${v}</div><div class="k-sub">${s}</div></div>`;
+  $('kpis').innerHTML=
+    k('Visitas',num(r.visitas),`${num(r.anuncios)} anúncios com visita`)+
+    k('Vendas',num(r.pedidos),`${num(r.unidades)} un. · ${brl(r.faturamento)}`)+
+    k('Conversão da conta',pct(r.conversao),`referência (mediana): <b>${pct(r.conversao_ref_conta)}</b>`)+
+    k('Potencial (estimativa)',brl(r.potencial),'se os abaixo da referência chegassem nela','var(--neg)')+
+    k('Conversão caindo',num(r.caindo),'caiu mais de 30% contra o período anterior',r.caindo?'var(--warn)':'');
+}
+
+function grupos(){
+  $('grupos').innerHTML=ORDEM.map(g=>{
+    const L=D.itens.filter(i=>i.grupo===g); if(!L.length) return '';
+    const pot=L.reduce((s,i)=>s+(i.potencial||0),0), vis=L.reduce((s,i)=>s+i.visitas,0);
+    return `<div class="gr" data-g="${g}"><i class="sw" style="background:${G[g].c}"></i>
+      <div><div class="t">${G[g].t} <span class="muted">· ${num(L.length)}</span></div><div class="n">${G[g].n}</div></div>
+      <div class="m">${pot?`<b style="color:var(--neg)">${brl(pot)}</b><small>potencial</small>`:`${num(vis)}<small>visitas</small>`}</div></div>`}).join('');
+  document.querySelectorAll('.gr').forEach(e=>e.onclick=()=>{st.tab=e.dataset.g;st.lim=50;render();$('lista').scrollIntoView({behavior:'smooth'})});
+}
+
+function disp(){
+  const L=D.itens.filter(i=>i.grupo!=='pouca_amostra'&&i.conversao!=null);
+  const box=$('disp'), tip=box.querySelector('.tip');
+  $('dispDesc').textContent=`Cada ponto é um anúncio com ${D.regras.min_visitas}+ visitas (${num(L.length)}). A linha vertical é a mediana de visitas; a horizontal, a referência da conta. A cor compara com a referência da categoria, por isso um ponto pode estar acima da linha e ainda ser laranja. Clique num ponto para ver o detalhe.`;
+  box.querySelectorAll('svg').forEach(s=>s.remove());
+  if(!L.length){ box.insertAdjacentHTML('afterbegin','<p class="muted">Nenhum anúncio com visitas suficientes ainda.</p>'); return; }
+  const W=640,H=330,Le=48,B=36,T=10,R=12,lx=v=>Math.log10(Math.max(1,v));
+  const mn=lx(Math.min(...L.map(i=>i.visitas))*.85), mx=lx(Math.max(...L.map(i=>i.visitas))*1.15);
+  const cmax=Math.max(...L.map(i=>i.conversao),D.resumo.conversao_ref_conta||0)*1.12||0.01;
+  const X=v=>Le+(lx(v)-mn)/((mx-mn)||1)*(W-Le-R), Y=c=>H-B-(c/cmax)*(H-B-T);
+  let s=`<rect x="${Le}" y="${T}" width="${W-Le-R}" height="${H-B-T}" fill="#FAFCFE" stroke="#DCE5EF"/>`;
+  const cv=D.regras.corte_visitas, rf=D.resumo.conversao_ref_conta;
+  if(cv) s+=`<line x1="${X(cv)}" x2="${X(cv)}" y1="${T}" y2="${H-B}" stroke="#9DB0C6" stroke-dasharray="4 3"/>`;
+  if(rf!=null) s+=`<line x1="${Le}" x2="${W-R}" y1="${Y(rf)}" y2="${Y(rf)}" stroke="#9DB0C6" stroke-dasharray="4 3"/>`;
+  [0,cmax/2,cmax].forEach(c=>s+=`<text x="${Le-6}" y="${Y(c)+4}" text-anchor="end" font-size="11" fill="#586A7D">${pct(c)}</text>`);
+  [10,30,100,300,1000,3000,10000,30000].filter(v=>lx(v)>=mn&&lx(v)<=mx).forEach(v=>s+=`<text x="${X(v)}" y="${H-B+15}" text-anchor="middle" font-size="11" fill="#586A7D">${num(v)}</text>`);
+  s+=`<text x="${(Le+W-R)/2}" y="${H-4}" text-anchor="middle" font-size="11" fill="#586A7D">visitas no período (escala log)</text>`;
+  const ordem=[...L].sort((a,b)=>b.faturamento-a.faturamento);
+  ordem.forEach(i=>{const r=4+Math.min(9,Math.sqrt(i.faturamento||0)/12);
+    s+=`<circle cx="${X(i.visitas).toFixed(1)}" cy="${Y(i.conversao).toFixed(1)}" r="${r.toFixed(1)}" fill="${G[i.grupo].c}" fill-opacity=".72" stroke="#fff" data-m="${i.mlb}" style="cursor:pointer"/>`});
+  box.insertAdjacentHTML('afterbegin',`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Dispersão de visitas e conversão">${s}</svg>`);
+  const por=Object.fromEntries(L.map(i=>[i.mlb,i]));
+  box.querySelectorAll('circle').forEach(c=>{
+    const i=por[c.dataset.m];
+    c.onmousemove=e=>{const b=box.getBoundingClientRect();tip.style.display='block';
+      tip.innerHTML=`<b>${esc(i.titulo||i.mlb)}</b><br>${num(i.visitas)} visitas · ${num(i.pedidos)} vendas · ${pct(i.conversao)}<br><span class="muted">${G[i.grupo].t}</span>`;
+      tip.style.left=Math.min(e.clientX-b.left+12,b.width-310)+'px';tip.style.top=(e.clientY-b.top+12)+'px'};
+    c.onmouseleave=()=>tip.style.display='none';
+    c.onclick=()=>abrir(i);
+  });
+}
+
+const COLS=[['titulo','Anúncio','l'],['grupo','Situação','l'],['visitas','Visitas'],['pedidos','Vendas'],['conversao','Conversão'],
+  ['conversao_ref','Referência'],['cliques_ads','Cliques Ads'],['faturamento','Faturamento'],['potencial','Potencial']];
+function filtra(i,k){return k==='todos'||(k==='caindo'?i.caindo:i.grupo===k)}
+function delta(a,b){ if(a==null||b==null) return ''; const d=a-b; if(Math.abs(d)<1e-9) return '';
+  return `<div class="${d<0?'down':'up'}" title="diferença contra o período anterior">${d<0?'▼':'▲'} ${pp(Math.abs(d))}</div>`}
+function render(){
+  const cnt=k=>D.itens.filter(i=>filtra(i,k)).length;
+  const abas=ORDEM.filter(k=>cnt(k)).concat(cnt('caindo')?['caindo']:[],['todos']);
+  $('tabs').innerHTML=abas.map(k=>`<button class="tab ${st.tab===k?'on':''}" data-k="${k}">${G[k]?`<i class="dot" style="background:${G[k].c}"></i>${G[k].t}`:k==='caindo'?'<i class="dot" style="background:var(--warn)"></i>Conversão caindo':'Todos'} <span>${num(cnt(k))}</span></button>`).join('');
+  document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{st.tab=b.dataset.k;st.lim=50;render()});
+  const q=st.q.trim().toLowerCase();
+  let L=D.itens.filter(i=>filtra(i,st.tab)&&(!q||[i.titulo,i.mlb,i.sku,i.categoria].some(x=>String(x||'').toLowerCase().includes(q))));
+  const k=st.sort; L.sort((a,b)=>{let x=a[k],y=b[k]; if(k==='grupo'){x=ORDEM.indexOf(x);y=ORDEM.indexOf(y)}
+    if(x==null&&y==null)return 0; if(x==null)return 1; if(y==null)return -1; return (typeof x==='string'?x.localeCompare(y):x-y)*st.dir});
+  const head=`<thead><tr>${COLS.map(([c,t,cl])=>`<th class="${cl||''} ${st.sort===c?'sorted':''}" data-k="${c}">${t}${st.sort===c?(st.dir<0?' ↓':' ↑'):''}</th>`).join('')}</tr></thead>`;
+  const body=L.slice(0,st.lim).map(i=>`<tr data-m="${i.mlb}">
+    <td class="l ttl">${esc(i.titulo||'(sem título)')}<div class="mlb">${i.mlb}${i.sku?' · SKU '+esc(i.sku):''}${i.status&&i.status!=='active'?' · '+esc(stt(i.status)):''}</div>${i.categoria?`<div class="muted" style="font-size:11.5px">${esc(i.categoria)}</div>`:''}</td>
+    <td class="l"><span class="chip" style="background:${G[i.grupo].bg};color:${G[i.grupo].c==='#B8C4D0'?'var(--ink2)':G[i.grupo].c}"><i style="background:${G[i.grupo].c}"></i>${G[i.grupo].t}</span>${i.caindo?'<div><span class="tag">conversão caindo</span></div>':''}</td>
+    <td>${num(i.visitas)}${i.visitas_ant!=null?`<div class="muted" style="font-size:11px">antes ${num(i.visitas_ant)}</div>`:''}</td>
+    <td>${num(i.pedidos)}${i.unidades!==i.pedidos?`<div class="muted" style="font-size:11px">${num(i.unidades)} un.</div>`:''}</td>
+    <td><b>${pct(i.conversao)}</b>${delta(i.conversao,i.conversao_ant)}</td>
+    <td>${pct(i.conversao_ref)}<div class="muted" style="font-size:11px">${i.ref_origem==='categoria'?'categoria':'conta'}</div></td>
+    <td>${i.cliques_ads!=null?num(i.cliques_ads):dash}</td>
+    <td>${i.faturamento?brl(i.faturamento):dash}</td>
+    <td>${i.potencial?`<b style="color:var(--neg)">${brl(i.potencial)}</b>`:dash}</td></tr>`).join('')
+    ||`<tr><td colspan="${COLS.length}" class="l muted" style="padding:20px">Nenhum anúncio nesse filtro.</td></tr>`;
+  $('tab').innerHTML=head+'<tbody>'+body+'</tbody>';
+  document.querySelectorAll('#tab th').forEach(th=>th.onclick=()=>{const c=th.dataset.k;if(st.sort===c)st.dir*=-1;else{st.sort=c;st.dir=(c==='titulo'||c==='grupo')?1:-1}render()});
+  const por=Object.fromEntries(L.map(i=>[i.mlb,i]));
+  document.querySelectorAll('#tab tbody tr[data-m]').forEach(tr=>tr.onclick=()=>abrir(por[tr.dataset.m]));
+  const more=$('more'); more.style.display=L.length>st.lim?'':'none'; more.textContent=`Mostrar mais (${num(L.length-st.lim)} restantes)`;
+}
+$('more').onclick=()=>{st.lim+=100;render()};
+$('q').oninput=e=>{st.q=e.target.value;st.lim=50;render()};
+$('dias').onchange=carregar;
+
+function abrir(i){
+  const g=G[i.grupo], dicas=[];
+  if(i.caindo) dicas.push(`<b>A conversão caiu de ${pct(i.conversao_ant)} para ${pct(i.conversao)}.</b> Causas comuns: concorrente baixou o preço, o anúncio perdeu o catálogo, o frete mudou ou ficou sem estoque em parte do período.`);
+  if(i.grupo==='vitrine'||i.grupo==='abaixo'){
+    dicas.push('Comparar o preço com o concorrente e com o catálogo; conferir se cabe na margem do Precificador.');
+    dicas.push('Frete: o concorrente tem Full ou frete grátis e este não?');
+    dicas.push('Fotos, título e compatibilidade (marca/modelo/ano) preenchidos?');
+    if(i.cliques_ads) dicas.push(`${num(i.cliques_ads)} das ${num(i.visitas)} visitas vieram de clique pago (${pct(i.cliques_ads/i.visitas)}). Tráfego pago que não converte é gasto sem retorno.`);
+  }
+  if(i.grupo==='joia'||i.grupo==='campeao'){
+    if(i.estoque!=null) dicas.push(`Estoque no ML: <b>${num(i.estoque)} un.</b>${i.estoque<5?' — pouco para escalar.':''}`);
+    if(i.grupo==='joia') dicas.push(i.cliques_ads?`Já tem Ads (${num(i.cliques_ads)} cliques): dá para aumentar a verba.`:'Sem Ads no período: bom candidato a uma campanha.');
+  }
+  $('drawer').innerHTML=`<button class="x" aria-label="Fechar">×</button>
+    <h3>${esc(i.titulo||i.mlb)}</h3>
+    <div class="mlb">${i.mlb}${i.sku?' · SKU '+esc(i.sku):''}${i.preco!=null?' · '+brl(i.preco):''}${i.status?' · '+esc(stt(i.status)):''}</div>
+    ${i.categoria?`<div class="muted" style="font-size:12px;margin-top:2px">${esc(i.categoria)}</div>`:''}
+    <p style="margin:10px 0 0"><span class="chip" style="background:${g.bg};color:${g.c==='#B8C4D0'?'var(--ink2)':g.c}"><i style="background:${g.c}"></i>${g.t}</span>${i.caindo?' <span class="tag">conversão caindo</span>':''}</p>
+    <div class="funil"><div>Visitas<b>${num(i.visitas)}</b></div><div>Vendas<b>${num(i.pedidos)}</b></div><div>Conversão<b>${pct(i.conversao)}</b></div></div>
+    <dl>
+      <div><dt>Referência (${i.ref_origem==='categoria'?'categoria':'conta'})</dt><dd>${pct(i.conversao_ref)}</dd></div>
+      <div><dt>Período anterior</dt><dd>${pct(i.conversao_ant)}${i.visitas_ant!=null?` <span class="muted" style="font-weight:400">(${num(i.visitas_ant)} vis.)</span>`:''}</dd></div>
+      <div><dt>Faturamento</dt><dd>${i.faturamento?brl(i.faturamento):'—'}</dd></div>
+      <div><dt>Potencial (estimativa)</dt><dd>${i.potencial?brl(i.potencial):'—'}</dd></div>
+      <div><dt>Cliques de Ads</dt><dd>${i.cliques_ads!=null?num(i.cliques_ads):'—'}</dd></div>
+      <div><dt>Dias com visita coletada</dt><dd>${num(i.dias_com_visita)} de ${num(D.periodo.dias)}</dd></div>
+    </dl>
+    <p style="margin:0 0 4px"><b>O que fazer</b></p><p style="margin:0;color:var(--ink2)">${g.o}</p>
+    ${dicas.length?`<ul>${dicas.map(d=>`<li>${d}</li>`).join('')}</ul>`:''}
+    <p><a class="btn" href="https://produto.mercadolivre.com.br/${i.mlb.replace('MLB','MLB-')}" target="_blank" rel="noopener">Abrir anúncio no ML</a></p>`;
+  $('drawer').classList.add('on'); $('drawer').setAttribute('aria-hidden','false');
+  $('drawer').querySelector('.x').onclick=fechar;
+}
+function fechar(){$('drawer').classList.remove('on');$('drawer').setAttribute('aria-hidden','true')}
+document.addEventListener('keydown',e=>{if(e.key==='Escape')fechar()});
+
+function notas(){
+  const r=D.regras;
+  $('notas').innerHTML=`<b>Como é calculado</b><ul>
+    <li><b>Conversão</b> = vendas ÷ visitas no período (uma venda com 2 unidades conta como 1 venda, como o ML mede). O dia de hoje fica de fora porque ainda não fechou.</li>
+    <li><b>Referência</b> = mediana da conversão dos anúncios da mesma categoria com ${r.min_visitas}+ visitas, quando a categoria tem ${r.min_categoria}+ anúncios assim (${num(D.resumo.categorias_com_referencia)} categorias); senão, a mediana da conta.</li>
+    <li><b>Muito visto</b> = ${r.corte_visitas!=null?num(Math.round(r.corte_visitas)):'—'}+ visitas (mediana). <b>Vitrine sem venda</b>: muito visto e conversão abaixo da metade da referência. <b>Joia escondida</b>: pouco visto, conversão 50% acima da referência e ${r.min_pedidos_joia}+ vendas.</li>
+    <li><b>Potencial</b> = visitas × (referência − conversão) × ticket médio do anúncio (ou o preço, se não vendeu). É uma <b>estimativa</b> para ordenar a lista, não dinheiro garantido.</li>
+    <li>Visitas: coletadas do Mercado Livre todo dia depois das 06:00 (última: ${dataBR(D.coleta.ultimo_dia)}). Vendas: as mesmas do Dashboard. Anúncio sem visita coletada fica fora da conta, nunca como zero.</li></ul>`;
+}
+
+carregar();
+})();
+</script>
+</body>
+</html>
