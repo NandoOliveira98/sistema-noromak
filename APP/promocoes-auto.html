@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Noromak · Promoções automáticas</title>
+<!-- V18.73: renovação automática do desconto próprio (PRICE_DISCOUNT) de 30 dias. Só os anúncios
+     que o ADMIN marcou; mesmo preço da promoção que acabou. GET /api/promocoes-auto/renovacao,
+     POST .../marcar, .../renovar, .../checar e /api/promocoes-auto/config (Automático = OWNER). -->
+<style>
+:root{
+  --canvas:#F4F7FB; --tile:#fff; --line:#DCE5EF; --line2:#eef2f6;
+  --ink:#18324A; --ink2:#586A7D; --ink3:#5F7186; --navy2:#1F57A5;
+  --pos:#1B7A3E; --posbg:#E7F4EC; --neg:#B42318; --negbg:#FDECEA; --warn:#8A5300; --warnbg:#FFF4E0; --warnln:#F3D19B;
+  --infobg:#E8F0FB; --cinzabg:#EEF1F5; --r:8px;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--canvas);color:var(--ink);font-family:"Segoe UI",system-ui,Arial,sans-serif;font-size:13.5px;line-height:1.45}
+.wrap{max-width:1280px;margin:0 auto;padding:20px 16px 48px}
+header{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;justify-content:space-between;margin-bottom:14px}
+h1{font-size:20px;margin:0;font-weight:650}
+h2{font-size:14px;margin:0 0 2px;font-weight:650}
+.sub,.desc{color:var(--ink2);font-size:12.5px}.desc{margin:0 0 10px;font-size:12px}
+.btn{border:1px solid var(--line);background:var(--tile);color:var(--ink);border-radius:6px;padding:7px 12px;font:inherit;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center}
+.btn.pri{background:var(--navy2);border-color:var(--navy2);color:#fff}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn.mini{padding:3px 9px;font-size:12px}
+.acoesl{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.grid{display:grid;grid-template-columns:repeat(12,1fr);gap:12px}
+.card{background:var(--tile);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px;min-width:0}
+.s12{grid-column:span 12}.s8{grid-column:span 8}.s4{grid-column:span 4}
+#lado{display:grid;grid-template-columns:1fr 1fr;gap:6px 28px}#lado>*{min-width:0}@media (max-width:760px){#lado{grid-template-columns:1fr}}
+@media (max-width:980px){.s8,.s4{grid-column:span 12}}
+.k5{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;grid-column:span 12}
+.k-lbl{color:var(--ink2);font-size:12px;font-weight:600}.k-val{font-size:24px;font-weight:650;margin:2px 0}.k-sub{color:var(--ink2);font-size:12px}
+.callout{background:var(--warnbg);border:1px solid var(--warnln);border-radius:var(--r);padding:12px 14px;margin-bottom:12px}
+.modos{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:8px}
+@media (max-width:640px){.modos{grid-template-columns:1fr}}
+.modo{border:1.5px solid var(--line);border-radius:8px;padding:10px 12px;cursor:pointer;background:var(--tile);text-align:left;font:inherit;color:inherit}
+.modo.on{border-color:var(--navy2);background:var(--infobg)}
+.modo b{display:block}.modo span{color:var(--ink2);font-size:12px}
+.regras{display:grid;gap:10px}
+.rg{display:grid;grid-template-columns:1fr auto;gap:8px;align-items:center;border-bottom:1px solid var(--line2);padding-bottom:8px}
+.rg small{display:block;color:var(--ink2);font-size:11.5px}
+input[type=number],input[type=text]{border:1px solid var(--line);border-radius:6px;padding:5px 7px;font:inherit;background:var(--tile);color:var(--ink)}
+.rg input[type=number]{width:70px;text-align:right}
+.tbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;margin-bottom:10px}
+.tabs{display:flex;flex-wrap:wrap;gap:4px}
+.tab{border:1px solid var(--line);background:var(--tile);color:var(--ink2);border-radius:999px;padding:5px 11px;font:inherit;font-size:12.5px;cursor:pointer}
+.tab.on{background:var(--navy2);border-color:var(--navy2);color:#fff}
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:6px}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;min-width:960px}
+th{background:var(--tile);color:var(--ink2);font-weight:600;font-size:12px;text-align:right;padding:7px 8px;border-bottom:1px solid var(--line);white-space:nowrap}
+td{padding:7px 8px;border-bottom:1px solid var(--line2);text-align:right;vertical-align:top;white-space:nowrap}
+th.l,td.l{text-align:left}
+.ttl{white-space:normal;max-width:300px}
+.mlb{font-family:Consolas,monospace;font-size:11px;color:var(--ink3)}
+.muted{color:var(--ink3)}
+.chip{display:inline-block;font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:4px}
+.c-ok{background:var(--posbg);color:var(--pos)}.c-rev{background:var(--warnbg);color:var(--warn)}
+.c-no{background:var(--negbg);color:var(--neg)}.c-sc{background:var(--cinzabg);color:var(--ink2)}.c-in{background:var(--infobg);color:var(--navy2)}
+.mot{white-space:normal;max-width:300px;font-size:12px;color:var(--ink2);margin-top:3px}
+.aviso{white-space:normal;max-width:300px;font-size:12px;color:var(--neg);margin-top:3px;font-weight:600}
+.log td{font-size:12.5px}
+.notas{color:var(--ink2);font-size:12.5px}.notas ul{margin:6px 0 0 18px;padding:0}.notas li{margin-bottom:4px}
+.toast{position:fixed;bottom:18px;left:50%;transform:translateX(-50%);background:#18324A;color:#fff;padding:9px 16px;border-radius:8px;font-size:13px;display:none;z-index:30;max-width:90%}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.35);display:none;align-items:center;justify-content:center;z-index:25;padding:16px}
+.modal.on{display:flex}
+.modal form{background:var(--tile);border-radius:10px;padding:20px;width:min(360px,100%);display:grid;gap:10px}
+.modal input{width:100%}
+.erro{color:var(--neg);font-size:12.5px}
+</style>
+<script defer src="/expedicao/web-auth.js"></script>
+<link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div><h1>Promoções automáticas</h1>
+      <div class="sub" id="sub">Carregando…</div></div>
+    <div class="acoesl">
+      <button class="btn" id="checar">Conferir agora</button>
+      <a class="btn" href="/expedicao/promocoes" target="_blank" rel="noopener">Promoções ML</a>
+      <a class="btn" href="/expedicao/admin">Central Noromak</a>
+    </div>
+  </header>
+  <div class="callout" id="aviso" hidden></div>
+
+  <div class="grid" id="conteudo" hidden>
+    <div class="card s12">
+      <h2>Desconto próprio de 30 dias, renovando sozinho</h2>
+      <p class="desc">Quando o desconto próprio de um anúncio <b>marcado</b> acaba, o sistema cria outro de 30 dias com o <b>mesmo preço</b>. Se o anúncio estiver numa campanha do ML, espera ela acabar. Comece em <b>Simulação</b> e confira por alguns dias o que ele faria.</p>
+      <div class="modos" id="modos">
+        <button class="modo" data-m="simulacao"><b>Simulação</b><span>Só mostra o que renovaria. Não chama o ML.</span></button>
+        <button class="modo" data-m="lote"><b>Aprovar em lote</b><span>O sistema separa; você marca e clica em Renovar.</span></button>
+        <button class="modo" data-m="automatico"><b>Automático</b><span>Renova sozinho o que passa em todas as regras. Ligar pede senha + código.</span></button>
+      </div>
+    </div>
+
+    <div class="k5" id="kpis"></div>
+
+    <div class="card s12" id="lista">
+      <div class="tbar">
+        <div class="tabs" id="tabs"></div>
+        <div class="acoesl"><span class="muted" id="sel"></span><button class="btn pri" id="renovar" disabled>Renovar selecionadas</button></div>
+      </div>
+      <div class="tw"><table id="tab"></table></div>
+    </div>
+
+    <div class="card s12" id="lado">
+      <div>
+      <h2>Incluir anúncio</h2>
+      <p class="desc">Marca para renovar. O preço é opcional: sem ele, o sistema usa o da promoção que está valendo.</p>
+      <div class="acoesl"><input type="text" id="novoMlb" placeholder="MLB ou número" style="width:150px">
+        <input type="text" id="novoPreco" placeholder="Preço (opcional)" style="width:120px">
+        <button class="btn" id="incluir">Marcar</button></div>
+      </div>
+      <div>
+      <h2>Regras</h2>
+      <p class="desc">Valem para a renovação automática e para o clique em Renovar.</p>
+      <div class="regras">
+        <div class="rg"><div>Margem mínima da promoção<small>Abaixo disso não renova (vai para "Revisar"). Também é a régua do aviso de campanha.</small></div><div><input type="number" id="margem_min_promo"> %</div></div>
+        <div class="rg"><div>Duração da promoção</div><div><input type="number" id="duracao_dias"> dias</div></div>
+        <div class="rg"><div>Não renovar se o estoque dura menos de<small>Pela Ruptura de estoque</small></div><div><input type="number" id="estoque_min_dias"> dias</div></div>
+        <div class="rg"><div>Limite por dia<small>Teto do modo automático</small></div><div><input type="number" id="limite_dia"> renovações</div></div>
+      </div>
+      <div style="margin-top:12px"><button class="btn" id="salvarRegras">Salvar regras</button></div>
+      </div>
+    </div>
+
+    <div class="card s12">
+      <h2>Histórico</h2>
+      <p class="desc">Tudo o que foi marcado, renovado ou recusado, por quem e por quê.</p>
+      <div class="tw"><table class="log" id="log"></table></div>
+    </div>
+
+    <div class="card s12 notas">
+      <b>Antes de renovar, o sistema confere</b>
+      <ul>
+        <li>Anúncio ativo no ML e com custo no Precificador. O SKU vem do vínculo MLB↔SKU; sem vínculo, do próprio anúncio. <b>Kit</b>: custo = soma dos componentes com o custo de hoje (Precificador ou Cadastro de Kits); faltou o custo de um componente, não renova.</li>
+        <li><b>Margem</b> no preço da promoção ≥ a <b>margem mínima da promoção</b> (mesma conta do Precificador: preço − comissão − taxa − imposto − custo). Abaixo disso, vai para "Revisar".</li>
+        <li>Preço acima do <b>preço mínimo</b> (lucro zero) e dentro do piso e do teto que o ML impõe ao anúncio. O preço do anúncio precisa continuar acima do preço da promoção.</li>
+        <li><b>Estoque</b> pela Ruptura: zerado ou durando menos que o limite, não renova.</li>
+        <li>Em <b>campanha do ML</b>: não mexe, espera ela acabar. Se a margem na campanha ficou abaixo da mínima, mostra um <b>aviso</b> (não sai da campanha sozinho).</li>
+        <li>Conferência completa de hora em hora. Perto do vencimento, o sistema acorda <b>1 minuto depois</b> de a promoção acabar e confere só aquele anúncio a cada 2 minutos até a nova aparecer, para não ficar sem desconto. Nunca renova o mesmo anúncio duas vezes no mesmo dia.</li>
+        <li>Os convites de campanha do ML (aceitar pela margem) vêm na próxima etapa.</li>
+      </ul>
+    </div>
+  </div>
+</div>
+<div class="modal" id="owner"><form id="ownerForm">
+  <b>Ligar o modo Automático</b>
+  <span class="desc" style="margin:0">Confirme com a senha e o código do aplicativo autenticador do proprietário.</span>
+  <input type="password" id="ownerSenha" placeholder="Senha" autocomplete="current-password" required>
+  <input type="text" id="ownerCodigo" placeholder="Código de 6 dígitos" inputmode="numeric" autocomplete="one-time-code" required>
+  <div class="erro" id="ownerErro"></div>
+  <div class="acoesl"><button class="btn pri" type="submit">Confirmar</button><button class="btn" type="button" id="ownerCancelar">Cancelar</button></div>
+</form></div>
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+"use strict";
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const brl=v=>v==null?'—':Number(v).toLocaleString('pt-BR',{style:'currency',currency:'BRL'});
+const pct=v=>v==null?'—':(v*100).toLocaleString('pt-BR',{maximumFractionDigits:1})+'%';
+const dataBR=d=>String(d||'').slice(0,10).split('-').reverse().join('/');
+const horaBR=d=>{const s=String(d||'');return s?dataBR(s)+(s.length>15?' '+s.slice(11,16):''):'—'};
+async function api(url,corpo){
+  const r=await fetch('/expedicao'+url,{method:corpo?'POST':'GET',credentials:'same-origin',cache:'no-store',
+    headers:corpo?{'Content-Type':'application/json',Accept:'application/json'}:{Accept:'application/json'},body:corpo?JSON.stringify(corpo):undefined});
+  const d=await r.json().catch(()=>({}));
+  if(!r.ok||d.ok===false){const e=new Error(d.error||('HTTP '+r.status));e.status=r.status;e.code=d.code;throw e}
+  return d;
+}
+function toast(t){const e=$('toast');e.textContent=t;e.style.display='block';clearTimeout(e._t);e._t=setTimeout(()=>e.style.display='none',4200)}
+let D=null, tab='marcados'; const marcados=new Set();
+const PRONTA={simulacao:['Renovaria','c-in'],lote:['Pronta para renovar','c-in'],automatico:['Renova na próxima checagem','c-ok']};
+function chip(i){
+  const S={ativa:['Ativa','c-ok'],revisar:['Revisar','c-rev'],estoque:['Pausada: estoque','c-rev'],em_campanha:['Em campanha do ML','c-sc'],
+    erro:['Erro ao ler o ML','c-no'],nao_checado:['Aguardando checagem','c-sc'],nao_marcado:['Não marcado','c-sc']};
+  const s=i.situacao==='pronta'?PRONTA[D.config.modo_renovacao]:(S[i.situacao]||[i.situacao,'c-sc']);
+  return `<span class="chip ${s[1]}">${esc(s[0])}</span>`;
+}
+const precisa=i=>i.marcado&&['revisar','estoque','erro'].includes(i.situacao);
+const F={marcados:['Marcados',i=>i.marcado],
+  7:['Vencem em 7 dias',i=>i.dias_para_vencer!=null&&i.dias_para_vencer>=0&&i.dias_para_vencer<=7],
+  15:['Em 15 dias',i=>i.dias_para_vencer!=null&&i.dias_para_vencer>=0&&i.dias_para_vencer<=15],
+  30:['Em 30 dias',i=>i.dias_para_vencer!=null&&i.dias_para_vencer>=0&&i.dias_para_vencer<=30],
+  vencidas:['Vencidas',i=>i.dias_para_vencer!=null&&i.dias_para_vencer<0&&i.situacao!=='ativa'&&i.situacao!=='em_campanha'],
+  precisa:['Precisam de você',precisa], avisos:['Avisos de campanha',i=>!!i.aviso],
+  nao:['Não marcados',i=>!i.marcado], todos:['Todos',()=>true]};
+
+async function carregar(){
+  try{ D=await api('/api/promocoes-auto/renovacao'); }
+  catch(e){ $('aviso').innerHTML='<b>Não foi possível carregar.</b> '+esc(e.message); $('aviso').hidden=false; $('sub').textContent=''; return; }
+  const u=D.estado||{};
+  $('sub').textContent=`Conferência de hora em hora · última ${horaBR(u.fim)}${u.rodando?' · conferindo agora…':''}`;
+  $('conteudo').hidden=false; $('aviso').hidden=true;
+  document.querySelectorAll('.modo').forEach(m=>m.classList.toggle('on',m.dataset.m===D.config.modo_renovacao));
+  ['duracao_dias','estoque_min_dias','limite_dia','margem_min_promo'].forEach(k=>$(k).value=D.config[k]);
+  kpis(); render(); historico();
+}
+function kpis(){
+  const L=D.itens, M=L.filter(i=>i.marcado);
+  const k=(t,l,v,s,c)=>`<div class="card" style="cursor:pointer" data-t="${t}"><div class="k-lbl">${l}</div><div class="k-val"${c?` style="color:${c}"`:''}>${v}</div><div class="k-sub">${s}</div></div>`;
+  const prontas=M.filter(i=>i.situacao==='pronta').length;
+  $('kpis').innerHTML=k('marcados','Marcados para renovar',M.length,`de ${L.length} com desconto próprio`)+
+    k('marcados',PRONTA[D.config.modo_renovacao][0],prontas,'venceram e passam nas regras',prontas?'var(--navy2)':'')+
+    k('precisa','Precisam de você',M.filter(precisa).length,'margem, estoque, custo ou preço','var(--warn)')+
+    k('avisos','Avisos de campanha',L.filter(i=>i.aviso).length,'margem caiu numa campanha do ML',L.some(i=>i.aviso)?'var(--neg)':'')+
+    k('marcados','Renovadas',D.renovadas_30_dias,'nos últimos 30 dias');
+  document.querySelectorAll('#kpis [data-t]').forEach(e=>e.onclick=()=>{tab=e.dataset.t;render();$('lista').scrollIntoView({behavior:'smooth'})});
+}
+function render(){
+  const L=D.itens;
+  $('tabs').innerHTML=Object.keys(F).map(k=>`<button class="tab ${tab===k?'on':''}" data-k="${k}">${F[k][0]} ${L.filter(F[k][1]).length}</button>`).join('');
+  document.querySelectorAll('#tabs .tab').forEach(b=>b.onclick=()=>{tab=b.dataset.k;render()});
+  const R=L.filter(F[tab][1]).sort((a,b)=>(a.dias_para_vencer??999)-(b.dias_para_vencer??999));
+  const vence=i=>{const v=i.dias_para_vencer;if(v==null)return '<span class="muted">—</span>';
+    return (v<0?`<b style="color:var(--neg)">há ${-v} dia${v<-1?'s':''}</b>`:v===0?'<b>hoje</b>':`em ${v} dia${v>1?'s':''}`)+`<div class="muted" style="font-size:11px">${dataBR(i.fim)}</div>`};
+  $('tab').innerHTML=`<thead><tr><th class="l"></th><th class="l">Anúncio</th><th>Preço do anúncio</th><th>Preço da promoção</th><th>Vence</th><th>Margem</th><th class="l">Situação</th><th class="l">Renovar sozinha</th></tr></thead><tbody>`+
+   (R.map(i=>`<tr><td class="l">${i.marcado&&i.situacao!=='ativa'&&i.situacao!=='em_campanha'?`<input type="checkbox" data-m="${i.mlb}" ${marcados.has(i.mlb)?'checked':''} aria-label="Selecionar ${i.mlb}">`:''}</td>
+    <td class="l ttl">${esc(i.titulo||'(título ainda não coletado)')}<div class="mlb">${i.mlb}${i.sku?' · SKU '+esc(i.sku):''}</div></td>
+    <td>${brl(i.preco_anuncio)}</td>
+    <td><b>${brl(i.preco)}</b>${i.desconto!=null?`<div class="muted" style="font-size:11px">${pct(i.desconto)} off</div>`:''}${i.situacao==='em_campanha'&&i.promo_preco?`<div style="font-size:11px;color:var(--warn)">na campanha: ${brl(i.promo_preco)}</div>`:''}${i.marcado?`<div><button class="btn mini" data-preco="${i.mlb}">alterar</button></div>`:''}</td>
+    <td>${vence(i)}</td>
+    <td>${i.margem!=null?`<b>${pct(i.margem)}</b>`:'<span class="muted">—</span>'}</td>
+    <td class="l">${chip(i)}${i.motivo?`<div class="mot">${esc(i.motivo)}</div>`:''}${i.aviso?`<div class="aviso">⚠ ${esc(i.aviso)}</div>`:''}</td>
+    <td class="l"><label style="display:inline-flex;gap:6px;align-items:center"><input type="checkbox" data-marcar="${i.mlb}" ${i.marcado?'checked':''}> ${i.marcado?'sim':'não'}</label></td></tr>`).join('')
+    ||`<tr><td colspan="8" class="l muted" style="padding:18px">${tab==='marcados'?'Nenhum anúncio marcado ainda. Marque na aba "Não marcados" ou inclua pelo número do anúncio.':'Nenhum anúncio neste filtro.'}</td></tr>`)+'</tbody>';
+  document.querySelectorAll('#tab [data-m]').forEach(c=>c.onchange=()=>{c.checked?marcados.add(c.dataset.m):marcados.delete(c.dataset.m);botao()});
+  document.querySelectorAll('#tab [data-marcar]').forEach(c=>c.onchange=()=>marcar(c.dataset.marcar,c.checked));
+  document.querySelectorAll('#tab [data-preco]').forEach(b=>b.onclick=()=>{
+    const v=prompt('Preço da promoção para '+b.dataset.preco+' (vale nas próximas renovações):');
+    if(v) marcar(b.dataset.preco,true,v)});
+  botao();
+}
+function botao(){$('renovar').disabled=!marcados.size;$('sel').textContent=marcados.size?marcados.size+' selecionada(s)':''}
+async function marcar(mlb,ativo,preco){
+  try{ await api('/api/promocoes-auto/renovacao/marcar',{mlb,ativo,preco:preco?String(preco).replace(',','.'):undefined});
+    toast(ativo?`${mlb} marcado: entra na próxima conferência`:`${mlb} não renova mais sozinho`); carregar(); }
+  catch(e){ toast(e.message); carregar(); }
+}
+$('incluir').onclick=()=>{const m=$('novoMlb').value.trim(); if(!m) return; marcar(m,true,$('novoPreco').value.trim()); $('novoMlb').value='';$('novoPreco').value=''};
+$('renovar').onclick=async()=>{
+  const L=[...marcados]; if(!confirm(`Renovar ${L.length} promoção(ões) por 30 dias agora, no Mercado Livre?`)) return;
+  $('renovar').disabled=true; toast('Renovando…');
+  try{ const r=await api('/api/promocoes-auto/renovacao/renovar',{mlbs:L});
+    const ok=r.resultados.filter(x=>x.ok).length, nao=r.resultados.filter(x=>!x.ok);
+    toast(`${ok} renovada(s)`+(nao.length?` · ${nao.length} não: ${nao[0].motivo}`:''));
+    marcados.clear(); carregar(); }
+  catch(e){ toast(e.message); botao(); }
+};
+$('checar').onclick=async()=>{try{await api('/api/promocoes-auto/renovacao/checar',{});toast('Conferindo os anúncios marcados. Atualize em 1 a 2 minutos.');setTimeout(carregar,8000)}catch(e){toast(e.message)}};
+async function salvarConfig(corpo){
+  try{ await api('/api/promocoes-auto/config',corpo); toast('Salvo.'); carregar(); }
+  catch(e){
+    if(e.status===428){ return pedirOwner(()=>salvarConfig(corpo)); }
+    toast(e.message);
+  }
+}
+$('salvarRegras').onclick=()=>salvarConfig({duracao_dias:+$('duracao_dias').value,estoque_min_dias:+$('estoque_min_dias').value,limite_dia:+$('limite_dia').value,margem_min_promo:+$('margem_min_promo').value});
+document.querySelectorAll('.modo').forEach(m=>m.onclick=()=>{
+  if(m.dataset.m===D.config.modo_renovacao) return;
+  if(m.dataset.m==='automatico'&&!confirm('No Automático o sistema renova sozinho no Mercado Livre os anúncios marcados que passarem nas regras. Ligar?')) return;
+  salvarConfig({modo_renovacao:m.dataset.m});
+});
+let depoisOwner=null;
+function pedirOwner(fn){depoisOwner=fn;$('ownerErro').textContent='';$('ownerSenha').value='';$('ownerCodigo').value='';$('owner').classList.add('on');$('ownerSenha').focus()}
+$('ownerCancelar').onclick=()=>{$('owner').classList.remove('on');depoisOwner=null};
+$('ownerForm').onsubmit=async e=>{
+  e.preventDefault();
+  try{ await api('/api/security/owner/reauth',{password:$('ownerSenha').value,code:$('ownerCodigo').value});
+    $('owner').classList.remove('on'); const fn=depoisOwner; depoisOwner=null; fn&&fn(); }
+  catch(ex){ $('ownerErro').textContent=ex.message; $('ownerCodigo').value=''; }
+};
+function historico(){
+  const A={marcada:'Marcada',desmarcada:'Desmarcada',renovada:'Renovada',falhou:'Recusada pelo ML'};
+  $('log').innerHTML=`<thead><tr><th class="l">Quando</th><th class="l">Anúncio</th><th class="l">Ação</th><th>Preço</th><th>Margem</th><th class="l">Até</th><th class="l">Por</th><th class="l">Detalhe</th></tr></thead><tbody>`+
+   (D.historico.map(h=>`<tr><td class="l">${horaBR(h.quando)}</td><td class="l mlb">${esc(h.mlb)}</td><td class="l">${esc(A[h.acao]||h.acao)}</td>
+     <td>${brl(h.preco)}</td><td>${pct(h.margem)}</td><td class="l">${h.fim?dataBR(h.fim):'—'}</td><td class="l muted">${esc(h.por)}</td>
+     <td class="l" style="white-space:normal;max-width:340px;font-size:12px;color:var(--ink2)">${esc(h.motivo)}</td></tr>`).join('')
+    ||'<tr><td colspan="8" class="l muted" style="padding:16px">Nada ainda.</td></tr>')+'</tbody>';
+}
+carregar();
+})();
+</script>
+</body>
+</html>

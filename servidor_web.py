@@ -43,7 +43,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "18.72-RUPTURA-ESTOQUE"
+APP_VERSION = "18.73-PROMO-RENOVACAO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2004,6 +2004,46 @@ def init_db() -> None:
                 PRIMARY KEY(item_id, dia)
             );
             CREATE INDEX IF NOT EXISTS idx_ml_estoque_dia ON ml_estoque_dia_v1872(dia);
+            -- V18.73: renovação automática do desconto próprio (PRICE_DISCOUNT).
+            -- Só entra o anúncio que o ADMIN marcou; o preço é o da promoção que acabou.
+            CREATE TABLE IF NOT EXISTS promo_renovacao_v1873 (
+                mlb TEXT PRIMARY KEY,
+                marcado INTEGER NOT NULL DEFAULT 0,
+                preco REAL,
+                situacao TEXT NOT NULL DEFAULT '',
+                motivo TEXT NOT NULL DEFAULT '',
+                aviso TEXT NOT NULL DEFAULT '',
+                fim TEXT NOT NULL DEFAULT '',
+                promo_tipo TEXT NOT NULL DEFAULT '',
+                promo_preco REAL,
+                margem REAL,
+                checado_em TEXT NOT NULL DEFAULT '',
+                renovado_dia TEXT NOT NULL DEFAULT '',
+                renovado_em TEXT NOT NULL DEFAULT '',
+                marcado_por TEXT NOT NULL DEFAULT '',
+                marcado_em TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS promo_auto_config_v1873 (
+                chave TEXT PRIMARY KEY,
+                valor TEXT NOT NULL DEFAULT '',
+                atualizado_em TEXT NOT NULL DEFAULT '',
+                atualizado_por TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS promo_auto_log_v1873 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                quando TEXT NOT NULL,
+                dia TEXT NOT NULL DEFAULT '',
+                mlb TEXT NOT NULL DEFAULT '',
+                tipo TEXT NOT NULL DEFAULT '',
+                acao TEXT NOT NULL DEFAULT '',
+                preco REAL,
+                margem REAL,
+                inicio TEXT NOT NULL DEFAULT '',
+                fim TEXT NOT NULL DEFAULT '',
+                por TEXT NOT NULL DEFAULT '',
+                motivo TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_promo_auto_log_dia ON promo_auto_log_v1873(dia, acao);
             -- Mapa ad_group -> anúncio/SKU. Resolvido uma vez e reaproveitado:
             -- o ad_group agrupa as variações do mesmo produto (novo fluxo do ML).
             CREATE TABLE IF NOT EXISTS ml_ads_grupo_v1830 (
@@ -16896,9 +16936,13 @@ def promo_atualizar_data_planilha(mlb: str, fim: str, ator: str = "") -> bool:
     return True
 
 
-def ml_promocao_aplicar(mlb: str, preco: Any, inicio: str, fim: str, ator: str = "") -> dict[str, Any]:
+def ml_promocao_aplicar(mlb: str, preco: Any, inicio: str, fim: str, ator: str = "",
+                        sku: str = "") -> dict[str, Any]:
     """Sobe um desconto próprio no ML. A trava do preço mínimo mora AQUI, no
-    servidor — a tela também avisa, mas quem decide é este ponto."""
+    servidor — a tela também avisa, mas quem decide é este ponto.
+
+    V18.73: sem vínculo MLB↔SKU, usa o SKU do próprio anúncio; kit tem custo pelos
+    componentes (_promo_produtos). `sku` já resolvido pode vir de quem chama."""
     mlb = str(mlb or "").strip().upper()
     if not mlb.startswith("MLB"):
         mlb = "MLB" + re.sub(r"\D", "", mlb)
@@ -16909,8 +16953,12 @@ def ml_promocao_aplicar(mlb: str, preco: Any, inicio: str, fim: str, ator: str =
     if preco <= 0:
         raise ValueError("Preço inválido.")
 
-    sku = _ml_vinculos_mlb_sku().get(mlb, "")
-    prod = _precificador_produtos_ml().get(sku)
+    produtos = _promo_produtos()
+    if not sku:
+        vinculos = _ml_vinculos_mlb_sku()
+        sku_anuncio = "" if vinculos.get(mlb) else (ml_itens_detalhe([mlb]).get(mlb) or {}).get("sku_ml")
+        sku = _promo_resolver_sku(mlb, sku_anuncio, produtos, vinculos)
+    prod = produtos.get(sku)
     if not prod:
         raise ValueError(f"{mlb} não tem SKU com custo no Precificador. Sem custo não dá para garantir a margem.")
     minimo = promo_preco_minimo(prod)
@@ -16967,6 +17015,534 @@ def ml_promocao_remover(mlb: str, ator: str = "") -> dict[str, Any]:
     except Exception:
         pass
     return {"ok": True, "mlb": mlb, "resposta": resposta}
+
+
+# ---------------------------------------------------------------------------
+# V18.73: renovação automática do desconto próprio (PRICE_DISCOUNT) de 30 dias.
+#
+# Só o anúncio que o ADMIN marcou. Quando o desconto próprio acaba, cria outro
+# com o MESMO preço da promoção que acabou, de hoje até hoje + 30 dias. Antes de
+# criar, confere: anúncio ativo, custo no Precificador, margem do produto, preço
+# mínimo, piso/teto do ML e estoque (Ruptura). Em campanha do ML, espera ela
+# acabar — e, se a margem na campanha ficou abaixo da do produto, só AVISA.
+# Modos: simulacao (padrão, não chama o ML) -> lote (você clica) -> automatico
+# (ligar exige senha + 2FA do OWNER). A criação passa por ml_promocao_aplicar(),
+# que mantém a trava do preço mínimo do servidor.
+# ---------------------------------------------------------------------------
+PROMO_AUTO_PADRAO: dict[str, Any] = {"modo_renovacao": "simulacao", "duracao_dias": 30,
+                                     "estoque_min_dias": 7, "limite_dia": 30,
+                                     # margem mínima DA PROMOÇÃO, em % (não a margem-alvo do
+                                     # Precificador: desconto quase sempre fica abaixo dela)
+                                     "margem_min_promo": 10}
+PROMO_AUTO_MODOS = ("simulacao", "lote", "automatico")
+PROMO_RENOVACAO_INTERVALO = 3600
+PROMO_RENOVACAO_PAUSA = 0.3
+PROMO_RENOVACAO_LOCK = threading.Lock()
+_PROMO_RENOVACAO_ESTADO: dict[str, Any] = {"rodando": False, "inicio": "", "fim": "", "ultimo": {}}
+
+
+def _mlb_normalizar(mlb: Any) -> str:
+    texto = str(mlb or "").strip().upper()
+    numero = re.sub(r"\D", "", texto)
+    return "MLB" + numero if numero else ""
+
+
+def promo_auto_config() -> dict[str, Any]:
+    cfg = dict(PROMO_AUTO_PADRAO)
+    with DB_LOCK:
+        linhas = DB.execute("SELECT chave, valor FROM promo_auto_config_v1873").fetchall()
+    for r in linhas:
+        chave = str(r["chave"])
+        if chave not in cfg:
+            continue
+        if isinstance(PROMO_AUTO_PADRAO[chave], int):
+            try:
+                cfg[chave] = int(r["valor"])
+            except (TypeError, ValueError):
+                pass
+        else:
+            cfg[chave] = str(r["valor"])
+    if cfg["modo_renovacao"] not in PROMO_AUTO_MODOS:
+        cfg["modo_renovacao"] = "simulacao"
+    return cfg
+
+
+def promo_auto_config_salvar(dados: dict[str, Any], ator: str) -> dict[str, Any]:
+    """Grava só as chaves conhecidas, com limites. Quem exige o OWNER é a rota."""
+    limites = {"duracao_dias": (1, 60), "estoque_min_dias": (0, 60), "limite_dia": (1, 500),
+               "margem_min_promo": (0, 50)}
+    novos: dict[str, str] = {}
+    for chave, valor in (dados or {}).items():
+        if chave == "modo_renovacao":
+            if valor not in PROMO_AUTO_MODOS:
+                raise ValueError("Modo inválido.")
+            novos[chave] = str(valor)
+        elif chave in limites:
+            try:
+                n = int(valor)
+            except (TypeError, ValueError):
+                raise ValueError(f"Valor inválido para {chave}.")
+            lo, hi = limites[chave]
+            if not lo <= n <= hi:
+                raise ValueError(f"{chave} precisa ficar entre {lo} e {hi}.")
+            novos[chave] = str(n)
+    agora = now_iso()
+    with DB_LOCK:
+        for chave, valor in novos.items():
+            DB.execute("INSERT INTO promo_auto_config_v1873(chave,valor,atualizado_em,atualizado_por) VALUES(?,?,?,?) "
+                       "ON CONFLICT(chave) DO UPDATE SET valor=excluded.valor,atualizado_em=excluded.atualizado_em,"
+                       "atualizado_por=excluded.atualizado_por", (chave, valor, agora, ator))
+        DB.commit()
+    if novos:
+        audit(ator, "promocoes.auto.config", json_dumps(novos))
+    return promo_auto_config()
+
+
+def _promo_log(mlb: str, acao: str, por: str, motivo: str = "", preco: float | None = None,
+               margem: float | None = None, inicio: str = "", fim: str = "", dia: str = "") -> None:
+    with DB_LOCK:
+        DB.execute("INSERT INTO promo_auto_log_v1873(quando,dia,mlb,tipo,acao,preco,margem,inicio,fim,por,motivo) "
+                   "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                   (now_iso(), dia or datetime.now(BR_TZ).date().isoformat(), mlb, "renovacao", acao,
+                    preco, margem, inicio, fim, por, motivo[:400]))
+        DB.commit()
+
+
+def promo_renovacao_marcar(mlb: Any, ativo: bool, ator: str, preco: Any = None) -> dict[str, Any]:
+    """Liga/desliga a renovação de um anúncio. Preço opcional (senão vem da promoção vigente)."""
+    mlb = _mlb_normalizar(mlb)
+    if not mlb:
+        raise ValueError("Informe o número do anúncio (MLB).")
+    valor = _money_number(preco) if preco not in (None, "") else None
+    if valor is not None and valor <= 0:
+        raise ValueError("Preço inválido.")
+    agora = now_iso()
+    with DB_LOCK:
+        DB.execute("INSERT INTO promo_renovacao_v1873(mlb,marcado,preco,marcado_por,marcado_em) VALUES(?,?,?,?,?) "
+                   "ON CONFLICT(mlb) DO UPDATE SET marcado=excluded.marcado,"
+                   "preco=COALESCE(excluded.preco,preco),marcado_por=excluded.marcado_por,marcado_em=excluded.marcado_em",
+                   (mlb, 1 if ativo else 0, valor, ator, agora))
+        DB.commit()
+    _promo_log(mlb, "marcada" if ativo else "desmarcada", ator, preco=valor)
+    return {"ok": True, "mlb": mlb, "marcado": bool(ativo)}
+
+
+def _promo_ruptura_por_anuncio() -> dict[str, dict[str, Any]]:
+    """Situação de estoque de cada anúncio, pela Ruptura (V18.72). Erro = sem informação."""
+    try:
+        return {i["mlb"]: i for i in ruptura_payload(30)["itens"]}
+    except Exception:
+        return {}
+
+
+def _promo_margem_minima(cfg: dict[str, Any]) -> float:
+    """V18.73: a régua é a margem mínima da promoção (configurável), não a margem-alvo."""
+    return max(0.0, float(cfg.get("margem_min_promo", PROMO_AUTO_PADRAO["margem_min_promo"]))) / 100.0
+
+
+def _promo_produtos() -> dict[str, dict[str, Any]]:
+    """Produtos do Precificador para a conta da promoção, COM os kits.
+
+    _precificador_produtos_ml() pula os kits, e anúncio de kit ficava sempre "sem custo".
+    Kit do Precificador: custo = soma dos componentes com o custo de HOJE (o guardado
+    pode estar velho); só se faltar componente usa o custo guardado. Kit só do Cadastro
+    de Kits: soma dos componentes, com as taxas do primeiro componente. Componente sem
+    custo = kit sem custo (nunca estimado).
+    """
+    produtos = dict(_precificador_produtos_ml())
+    raw, _, _ = get_storage("precificador_online_v1")
+    try:
+        lista = (json.loads(raw or "{}") or {}).get("products") or []
+    except Exception:
+        lista = []
+
+    def custo_componentes(itens: list[tuple[str, float]]) -> float | None:
+        total = 0.0
+        for sku, qtd in itens:
+            comp = produtos.get(sku)
+            if not comp or comp["custo"] <= 0 or qtd <= 0:
+                return None
+            total += comp["custo"] * qtd
+        return round(total, 4) if itens else None
+
+    for p in lista if isinstance(lista, list) else []:
+        if not isinstance(p, dict) or not p.get("isKit"):
+            continue
+        sku = str(p.get("sku") or "").strip().upper()
+        if not sku or sku in produtos:
+            continue
+        itens = []
+        for it in p.get("kitItems") or []:
+            if isinstance(it, dict):
+                try:
+                    itens.append((str(it.get("sku") or "").strip().upper(), float(it.get("quantidade") or 0)))
+                except (TypeError, ValueError):
+                    itens.append(("", 0.0))
+        custo = custo_componentes(itens)
+        if custo is None:
+            guardado = _money_number(p.get("custo")) or 0.0
+            custo = guardado if guardado > 0 and not any(not s for s, _ in itens) and itens else None
+        if not custo:
+            continue
+        ml = (p.get("marketplaces") or {}).get("ml") or {}
+        produtos[sku] = {
+            "sku": sku, "produto": str(p.get("produto") or "").strip(), "curva": "",
+            "custo": float(custo), "imposto": float(p.get("imposto") or 0),
+            "comissao": float(ml.get("comissao") or 0),
+            "taxa_fixa": float(ml.get("taxaFixa") or 0) + float(ml.get("frete") or 0),
+            "margem_alvo": float(ml.get("margem") or 0.15), "kit": True,
+        }
+    try:
+        catalogo = _load_kit_catalog()
+    except Exception:
+        catalogo = {}
+    for sku_kit, kit in catalogo.items():
+        sku = str(sku_kit or "").strip().upper()
+        if not sku or sku in produtos or not kit.get("ativo", True):
+            continue
+        itens = [(str(c.get("sku") or "").strip().upper(), float(c.get("quantidade") or 0))
+                 for c in kit.get("componentes") or [] if isinstance(c, dict)]
+        custo = custo_componentes(itens)
+        if not custo:
+            continue
+        base = produtos[itens[0][0]]
+        produtos[sku] = dict(base, sku=sku, produto=str(kit.get("nome") or sku), curva="",
+                             custo=float(custo), kit=True)
+    return produtos
+
+
+def _promo_resolver_sku(mlb: str, sku_anuncio: Any, produtos: dict[str, Any],
+                        vinculos: dict[str, str] | None = None) -> str:
+    """V18.73: o vínculo MLB↔SKU manda (canônico); sem ele, o SKU do próprio anúncio
+    (como a tela Promoções ML já faz desde a V18.25). Só 7% das promoções tinham vínculo."""
+    vinculos = _ml_vinculos_mlb_sku() if vinculos is None else vinculos
+    if vinculos.get(mlb):
+        return vinculos[mlb]
+    bruto = str(sku_anuncio or "").strip().upper()
+    if not bruto:
+        return ""
+    for candidato in (ml_sku_do_anuncio(bruto, produtos), _compras_codigo(bruto, produtos)):
+        if candidato and candidato in produtos:
+            return candidato
+    return ""
+
+
+def _pct_br(valor: float, casas: int = 1) -> str:
+    return f"{valor * 100:.{casas}f}%".replace(".", ",")
+
+
+def _dia_br(iso: str) -> str:
+    d = str(iso or "")[:10]
+    return "/".join(reversed(d.split("-"))) if re.match(r"^\d{4}-\d{2}-\d{2}$", d) else ""
+
+
+def _promo_renovacao_avaliar(mlb: str, preco: float | None, promos: list[dict[str, Any]],
+                             det: dict[str, Any], prod: dict[str, Any] | None,
+                             rup: dict[str, Any] | None, cfg: dict[str, Any], hoje: date) -> dict[str, Any]:
+    """Decide o que fazer com UM anúncio marcado. Não chama o ML."""
+    out: dict[str, Any] = {"situacao": "", "motivo": "", "aviso": "", "fim": "", "preco": preco,
+                           "promo_tipo": "", "promo_preco": None, "margem": None}
+    proprios = [x for x in promos if x.get("type") == ML_PROMO_TIPO]
+    vigente_proprio = next((x for x in proprios if str(x.get("status") or "").lower() in ("started", "pending")), None)
+    if vigente_proprio:
+        if _money_number(vigente_proprio.get("price")):
+            out["preco"] = _money_number(vigente_proprio.get("price"))
+        out.update(situacao="ativa", fim=str(vigente_proprio.get("finish_date") or ""),
+                   promo_tipo=ML_PROMO_TIPO, promo_preco=out["preco"])
+        out["motivo"] = f"Desconto próprio até {_dia_br(out['fim'])}: renova quando acabar"
+        if prod and out["preco"]:
+            out["margem"] = promo_conta(prod, out["preco"])["margem"]
+        return out
+    vigente = ml_promo_vigente(promos)
+    if vigente and str(vigente.get("type") or "") not in (ML_PROMO_TIPO, "BANK"):
+        tipo = str(vigente.get("type") or "")
+        nome = str(vigente.get("name") or ML_PROMO_TIPO_NOME.get(tipo, tipo))
+        out.update(situacao="em_campanha", fim=str(vigente.get("finish_date") or ""), promo_tipo=tipo,
+                   promo_preco=_money_number(vigente.get("price")))
+        out["motivo"] = (f"Está na campanha \"{nome}\" até {_dia_br(out['fim'])}: "
+                         "o desconto próprio volta quando ela acabar")
+        if prod and out["promo_preco"]:
+            m = promo_conta(prod, out["promo_preco"])["margem"]
+            out["margem"] = m
+            minimo = _promo_margem_minima(cfg)
+            if m < minimo:
+                # V18.73: decisão do dono — não sai da campanha, só avisa.
+                out["aviso"] = (f"Margem na campanha {_pct_br(m)} (mínimo da promoção {_pct_br(minimo, 0)}). "
+                                "Avalie sair da campanha no Mercado Livre.")
+        return out
+
+    def revisar(motivo: str, situacao: str = "revisar") -> dict[str, Any]:
+        out.update(situacao=situacao, motivo=motivo)
+        return out
+
+    status = str(det.get("status") or "")
+    if det and status != "active":
+        return revisar(f"Anúncio {status or 'sem status'} no Mercado Livre: reative para renovar")
+    if not prod:
+        return revisar("Sem custo no Precificador (nem pelo vínculo MLB↔SKU nem pelo SKU do anúncio): "
+                       "não dá para garantir a margem")
+    if not preco:
+        return revisar("Sem o preço da promoção anterior: informe o preço para renovar")
+    r = rup or {}
+    cobertura = r.get("cobertura_dias")
+    if r.get("grupo") == "zerado" or (cobertura is not None and cobertura < cfg["estoque_min_dias"]):
+        dura = "sem estoque" if r.get("grupo") == "zerado" else f"estoque para {cobertura:.0f} dia(s)"
+        return revisar(f"{dura[0].upper() + dura[1:]} (Ruptura): não renova até repor", "estoque")
+    preco_anuncio = _money_number(det.get("preco"))
+    if preco_anuncio and preco >= preco_anuncio:
+        return revisar(f"O preço do anúncio ({_brl_srv(preco_anuncio)}) está igual ou abaixo do preço "
+                       f"da promoção ({_brl_srv(preco)}): rever o preço")
+    minimo = promo_preco_minimo(prod)
+    if minimo and preco < minimo:
+        return revisar(f"{_brl_srv(preco)} está abaixo do preço mínimo ({_brl_srv(minimo)}): daria prejuízo")
+    base = next((x for x in proprios), {})
+    piso, teto = _money_number(base.get("min_discounted_price")), _money_number(base.get("max_discounted_price"))
+    if piso and preco < piso:
+        return revisar(f"O Mercado Livre não aceita menos de {_brl_srv(piso)} neste anúncio")
+    if teto and preco > teto:
+        return revisar(f"O Mercado Livre não aceita mais de {_brl_srv(teto)} neste anúncio")
+    conta = promo_conta(prod, preco)
+    out["margem"] = conta["margem"]
+    mmin = _promo_margem_minima(cfg)
+    if conta["margem"] < mmin:
+        return revisar(f"Margem {_pct_br(conta['margem'])} abaixo da mínima da promoção ({_pct_br(mmin, 0)})")
+    fim = (hoje + timedelta(days=cfg["duracao_dias"])).isoformat()
+    out.update(situacao="pronta", fim=fim + "T00:00:00",
+               motivo=f"Renova por {_brl_srv(preco)} até {_dia_br(fim)} (margem {_pct_br(conta['margem'])})")
+    return out
+
+
+def promo_renovacao_rodada(stop_event: threading.Event | None = None, *, hoje: date | None = None,
+                           pausa: float | None = None, so: list[str] | None = None,
+                           ator: str = "sistema", apenas: list[str] | None = None) -> dict[str, Any]:
+    """Confere os anúncios marcados e renova o que venceu.
+
+    Worker (so=None): renova sozinho só no modo automático, até o limite do dia.
+    `apenas`: o worker confere só estes marcados (os que acabaram de vencer).
+    Clique do ADMIN (so=[...]): renova os escolhidos em qualquer modo — é uma ação
+    explícita dele —, passando pelas mesmas conferências.
+    """
+    hoje = hoje or datetime.now(BR_TZ).date()
+    manual = so is not None
+    if not PROMO_RENOVACAO_LOCK.acquire(timeout=120 if manual else 0.01):
+        return {"ok": True, "pulado": "já está rodando", "resultados": []}
+    pausa = PROMO_RENOVACAO_PAUSA if pausa is None else pausa
+    hoje_iso = hoje.isoformat()
+    try:
+        _PROMO_RENOVACAO_ESTADO.update(rodando=True, inicio=now_iso(), fim="")
+        linha_ml = ml_integration_row()
+        if not linha_ml or not str(linha_ml["access_token"] or "").strip():
+            resultado = {"ok": True, "pulado": "Mercado Livre não conectado", "resultados": []}
+            _PROMO_RENOVACAO_ESTADO["ultimo"] = resultado
+            return resultado
+        cfg = promo_auto_config()
+        with DB_LOCK:
+            linhas = {str(r["mlb"]): dict(r) for r in DB.execute(
+                "SELECT * FROM promo_renovacao_v1873 WHERE marcado = 1").fetchall()}
+            feitas_hoje = DB.execute("SELECT COUNT(*) FROM promo_auto_log_v1873 WHERE dia=? AND acao='renovada' "
+                                     "AND por='sistema'", (hoje_iso,)).fetchone()[0]
+        if manual:
+            alvo = [m for m in (_mlb_normalizar(x) for x in so) if m]
+        elif apenas is not None:
+            alvo = sorted(m for m in (_mlb_normalizar(x) for x in apenas) if m in linhas)
+        else:
+            alvo = sorted(linhas)
+        detalhes = ml_itens_detalhe(alvo) if alvo else {}
+        produtos = _promo_produtos()
+        vinculos = _ml_vinculos_mlb_sku()
+        ruptura = _promo_ruptura_por_anuncio() if alvo else {}
+        cont = {"checados": 0, "renovadas": 0, "renovaria": 0, "revisar": 0, "erros": 0}
+        resultados: list[dict[str, Any]] = []
+        for mlb in alvo:
+            if stop_event is not None and stop_event.is_set():
+                break
+            row = linhas.get(mlb) or {}
+            sku = _promo_resolver_sku(mlb, (detalhes.get(mlb) or {}).get("sku_ml"), produtos, vinculos)
+            try:
+                promos = ml_promocoes_do_item(mlb)
+            except Exception as exc:
+                cont["erros"] += 1
+                av = {"situacao": "erro", "motivo": f"Não consegui ler as promoções no ML: {str(exc)[:200]}",
+                      "aviso": "", "fim": row.get("fim") or "", "preco": row.get("preco"), "promo_tipo": "",
+                      "promo_preco": None, "margem": None}
+            else:
+                prod = produtos.get(sku)
+                av = _promo_renovacao_avaliar(mlb, _money_number(row.get("preco")), promos,
+                                              detalhes.get(mlb) or {}, prod, ruptura.get(mlb), cfg, hoje)
+            cont["checados"] += 1
+            renovado_dia = row.get("renovado_dia") or ""
+            renovado_em = row.get("renovado_em") or ""
+            ok = False
+            if av["situacao"] == "pronta" and renovado_dia == hoje_iso:
+                # já renovou hoje e o ML ainda não mostra a nova: nunca renova duas vezes
+                av.update(situacao="ativa", motivo="Renovada hoje; aguardando o Mercado Livre mostrar a nova")
+            elif av["situacao"] == "pronta":
+                automatico = cfg["modo_renovacao"] == "automatico" and feitas_hoje < cfg["limite_dia"]
+                if manual or automatico:
+                    inicio = hoje_iso + "T00:00:00"
+                    try:
+                        r = ml_promocao_aplicar(mlb, av["preco"], inicio, av["fim"],
+                                                ator if manual else "renovacao-automatica", sku=sku)
+                        ok = True
+                        cont["renovadas"] += 1
+                        feitas_hoje += 0 if manual else 1
+                        renovado_dia, renovado_em = hoje_iso, now_iso()
+                        _promo_log(mlb, "renovada", ator, av["motivo"], av["preco"], r.get("margem"),
+                                   inicio, av["fim"], hoje_iso)
+                        av.update(situacao="ativa", promo_tipo=ML_PROMO_TIPO, promo_preco=av["preco"],
+                                  motivo=f"Renovada em {_dia_br(hoje_iso)} até {_dia_br(av['fim'])}")
+                    except Exception as exc:
+                        cont["erros"] += 1
+                        _promo_log(mlb, "falhou", ator, str(exc), av["preco"], None, inicio, av["fim"], hoje_iso)
+                        av.update(situacao="revisar", motivo=f"O Mercado Livre recusou: {str(exc)[:240]}")
+                else:
+                    cont["renovaria"] += 1
+                    if cfg["modo_renovacao"] == "automatico":
+                        av["motivo"] += " · limite do dia atingido"
+            if av["situacao"] in ("revisar", "estoque"):
+                cont["revisar"] += 1
+            with DB_LOCK:
+                DB.execute(
+                    "INSERT INTO promo_renovacao_v1873(mlb,marcado,preco,situacao,motivo,aviso,fim,promo_tipo,promo_preco,"
+                    "margem,checado_em,renovado_dia,renovado_em) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                    "ON CONFLICT(mlb) DO UPDATE SET preco=excluded.preco,situacao=excluded.situacao,"
+                    "motivo=excluded.motivo,aviso=excluded.aviso,fim=excluded.fim,promo_tipo=excluded.promo_tipo,"
+                    "promo_preco=excluded.promo_preco,margem=excluded.margem,checado_em=excluded.checado_em,"
+                    "renovado_dia=excluded.renovado_dia,renovado_em=excluded.renovado_em",
+                    (mlb, int(row.get("marcado") or 0), av["preco"], av["situacao"], av["motivo"], av["aviso"],
+                     av["fim"], av["promo_tipo"], av["promo_preco"], av["margem"], now_iso(),
+                     renovado_dia, renovado_em))
+                DB.commit()
+            resultados.append({"mlb": mlb, "ok": ok, "situacao": av["situacao"], "motivo": av["motivo"]})
+            if pausa > 0:
+                if stop_event is not None:
+                    if stop_event.wait(pausa):
+                        break
+                else:
+                    time.sleep(pausa)
+        resultado = {"ok": True, "modo": cfg["modo_renovacao"], **cont, "resultados": resultados}
+        if not manual:
+            _PROMO_RENOVACAO_ESTADO["ultimo"] = {k: v for k, v in resultado.items() if k != "resultados"}
+        return resultado
+    finally:
+        _PROMO_RENOVACAO_ESTADO.update(rodando=False, fim=now_iso())
+        PROMO_RENOVACAO_LOCK.release()
+
+
+PROMO_VENCIDA_JANELA = 4 * 3600    # depois do vencimento, confere de perto por até 4 h
+PROMO_VENCIDA_REPETE = 120         # ... a cada 2 min, só os anúncios que venceram
+
+
+def _promo_fim_dt(fim: Any) -> datetime | None:
+    """finish_date do ML. Sem fuso, é horário de Brasília (o ML da conta é BR)."""
+    texto = str(fim or "").strip()
+    if not texto:
+        return None
+    try:
+        dt = datetime.fromisoformat(texto.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=BR_TZ)
+
+
+def _promo_proxima_espera(agora: datetime | None = None) -> tuple[float, list[str]]:
+    """V18.73 (melhoria 3): quanto esperar até a próxima conferência e quem já venceu.
+
+    Em vez de até 1 h sem desconto, o worker acorda 1 min depois do vencimento de
+    cada promoção marcada e, enquanto o ML ainda não mostrar a nova, confere SÓ os
+    anúncios vencidos a cada 2 min (por até 4 h). O resto segue de hora em hora.
+    """
+    agora = agora or datetime.now(BR_TZ)
+    with DB_LOCK:
+        linhas = DB.execute("SELECT mlb, fim FROM promo_renovacao_v1873 WHERE marcado=1 AND situacao='ativa' "
+                            "AND fim <> ''").fetchall()
+    espera = float(PROMO_RENOVACAO_INTERVALO)
+    vencidos: list[str] = []
+    for r in linhas:
+        fim = _promo_fim_dt(r["fim"])
+        if fim is None:
+            continue
+        passou = (agora - fim).total_seconds()
+        if 0 <= passou <= PROMO_VENCIDA_JANELA:
+            vencidos.append(str(r["mlb"]))
+            espera = min(espera, PROMO_VENCIDA_REPETE)
+        elif passou < 0:
+            espera = min(espera, -passou + 60)
+    return max(30.0, espera), sorted(vencidos)
+
+
+def promo_renovacao_loop(stop_event: threading.Event) -> None:
+    """Rodada completa de hora em hora; perto do vencimento, só os que venceram."""
+    if stop_event.wait(1200):
+        return
+    proxima_completa = 0.0
+    while not stop_event.is_set():
+        try:
+            if time.time() >= proxima_completa:
+                promo_renovacao_rodada(stop_event)
+                proxima_completa = time.time() + PROMO_RENOVACAO_INTERVALO
+            else:
+                _, vencidos = _promo_proxima_espera()
+                if vencidos:
+                    promo_renovacao_rodada(stop_event, apenas=vencidos)
+            espera, _ = _promo_proxima_espera()
+        except Exception as exc:
+            _PROMO_RENOVACAO_ESTADO["ultimo"] = {"ok": False, "erro": str(exc)[:300]}
+            print(f"[promo-renovacao] falhou: {exc}", file=sys.stderr, flush=True)
+            espera = PROMO_RENOVACAO_INTERVALO
+        espera = min(espera, max(30.0, proxima_completa - time.time()))
+        if stop_event.wait(espera):
+            break
+
+
+def promo_renovacao_payload(hoje: date | None = None) -> dict[str, Any]:
+    """Marcados + os anúncios do monitor de promoções do Precificador. Só lê o banco."""
+    hoje = hoje or datetime.now(BR_TZ).date()
+    with DB_LOCK:
+        linhas = {str(r["mlb"]): dict(r) for r in DB.execute("SELECT * FROM promo_renovacao_v1873").fetchall()}
+        retrato = {str(r["item_id"]): dict(r) for r in DB.execute(
+            "SELECT item_id, titulo, sku, preco FROM ml_visitas_item_v1868").fetchall()}
+        historico = [dict(r) for r in DB.execute(
+            "SELECT * FROM promo_auto_log_v1873 ORDER BY id DESC LIMIT 100").fetchall()]
+        renovadas_30 = DB.execute("SELECT COUNT(*) FROM promo_auto_log_v1873 WHERE acao='renovada' AND dia >= ?",
+                                  ((hoje - timedelta(days=30)).isoformat(),)).fetchone()[0]
+    monitor: dict[str, str] = {}
+    try:
+        bruto, _, _ = get_storage(PROMO_DATAS_KEY)
+        for r in (json.loads(bruto or "{}").get("rows") or []):
+            mlb = _mlb_normalizar((r or {}).get("mlb"))
+            if mlb and re.match(r"^\d{4}-\d{2}-\d{2}", str(r.get("date") or "")):
+                monitor[mlb] = str(r["date"])[:10]
+    except Exception:
+        monitor = {}
+    vinculos = _ml_vinculos_mlb_sku()
+    itens: list[dict[str, Any]] = []
+    for mlb in sorted(set(linhas) | set(monitor)):
+        r = linhas.get(mlb) or {}
+        foto = retrato.get(mlb) or {}
+        marcado = bool(r.get("marcado"))
+        fim = (r.get("fim") if marcado and r.get("fim") else "") or monitor.get(mlb, "") or r.get("fim") or ""
+        dias = None
+        if re.match(r"^\d{4}-\d{2}-\d{2}", fim):
+            dias = (datetime.strptime(fim[:10], "%Y-%m-%d").date() - hoje).days
+        preco_anuncio = _money_number(foto.get("preco"))
+        preco = _money_number(r.get("preco"))
+        itens.append({
+            "mlb": mlb, "titulo": foto.get("titulo") or "", "sku": vinculos.get(mlb) or foto.get("sku") or "",
+            "marcado": marcado, "no_monitor": mlb in monitor,
+            "situacao": (r.get("situacao") or "nao_checado") if marcado else "nao_marcado",
+            "motivo": r.get("motivo") or "", "aviso": r.get("aviso") or "",
+            "fim": fim, "dias_para_vencer": dias,
+            "preco": preco, "preco_anuncio": preco_anuncio,
+            "desconto": round(1 - preco / preco_anuncio, 4) if preco and preco_anuncio else None,
+            "promo_tipo": r.get("promo_tipo") or "", "promo_preco": r.get("promo_preco"),
+            "margem": r.get("margem"), "checado_em": r.get("checado_em") or "",
+            "renovado_em": r.get("renovado_em") or "", "marcado_por": r.get("marcado_por") or "",
+        })
+    return {"ok": True, "hoje": hoje.isoformat(), "config": promo_auto_config(),
+            "estado": dict(_PROMO_RENOVACAO_ESTADO), "renovadas_30_dias": int(renovadas_30 or 0),
+            "intervalo_minutos": PROMO_RENOVACAO_INTERVALO // 60,
+            "itens": itens, "historico": historico}
 
 
 def _compras_produtos_precificador() -> dict[str, dict[str, Any]]:
@@ -18153,6 +18729,15 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
+        if path == "/api/promocoes-auto/renovacao":
+            # V18.73: renovação automática do desconto próprio. Somente leitura.
+            if self.auth(admin_only=True) is None:
+                return
+            try:
+                self.send_json(promo_renovacao_payload())
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
         if path == "/api/ruptura":
             # V18.72: venda perdida por falta de estoque (anúncios do ML). Somente leitura.
             if self.auth(admin_only=True) is None:
@@ -18417,6 +19002,8 @@ class AppHandler(BaseHTTPRequestHandler):
             "/conversao": "admin", "/conversao/": "admin", "/conversao.html": "admin",
             # V18.72: Ruptura (venda perdida por falta de estoque).
             "/ruptura": "admin", "/ruptura/": "admin", "/ruptura.html": "admin",
+            # V18.73: promoções automáticas (age sozinha no ML: só admin).
+            "/promocoes-auto": "admin", "/promocoes-auto/": "admin", "/promocoes-auto.html": "admin",
             # V18.33: a Rentabilidade ML virou o Financeiro; o endereço antigo abre a tela nova.
             "/rentabilidade-ml": "admin", "/rentabilidade-ml/": "admin", "/rentabilidade-ml.html": "admin",
             "/estacao-impressao": "estacao", "/estacao-impressao/": "estacao", "/estacao-impressao.html": "estacao",
@@ -18591,6 +19178,62 @@ class AppHandler(BaseHTTPRequestHandler):
                     self.send_json({"ok": False, "error": str(exc)}, 400)
                 except Exception as exc:
                     self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/promocoes-auto/config":
+            # V18.73: regras da renovação. Ligar o automático exige senha + 2FA do OWNER.
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                try:
+                    body = self.read_json() or {}
+                    liga_auto = (body.get("modo_renovacao") == "automatico"
+                                 and promo_auto_config()["modo_renovacao"] != "automatico")
+                    if liga_auto and not self.require_owner_reauth(ctx):
+                        audit(ctx["username"], "security.denied.owner_reauth", "promocoes.auto.automatico")
+                        return
+                    self.send_json({"ok": True, "config": promo_auto_config_salvar(body, ctx["username"])})
+                except ValueError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 400)
+                except Exception as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/promocoes-auto/renovacao/marcar":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                try:
+                    body = self.read_json() or {}
+                    res = promo_renovacao_marcar(body.get("mlb"), bool(body.get("ativo")), ctx["username"],
+                                                 preco=body.get("preco"))
+                    audit(ctx["username"], "promocoes.auto.marcar", f"{res['mlb']}|{res['marcado']}")
+                    self.send_json(res)
+                except ValueError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 400)
+                except Exception as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/promocoes-auto/renovacao/renovar":
+            # V18.73: clique do ADMIN — renova os escolhidos agora, com as mesmas conferências.
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                try:
+                    body = self.read_json() or {}
+                    mlbs = [str(x) for x in (body.get("mlbs") or [])][:50]
+                    if not mlbs:
+                        raise ValueError("Escolha ao menos um anúncio.")
+                    res = promo_renovacao_rodada(so=mlbs, ator=ctx["username"], pausa=0)
+                    audit(ctx["username"], "promocoes.auto.renovar", ",".join(mlbs))
+                    self.send_json(res)
+                except ValueError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 400)
+                except Exception as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/promocoes-auto/renovacao/checar":
+            # Confere agora (em segundo plano); no automático, renova o que venceu.
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                threading.Thread(target=lambda: promo_renovacao_rodada(), name="promo-renovacao-manual",
+                                 daemon=True).start()
+                self.send_json({"ok": True, "iniciado": True})
             return
         if path == "/api/compras/enviar-comprador":
             # V18.14: envia o pedido de compra montado na tela para o comprador.
@@ -21062,6 +21705,9 @@ class AppHandler(BaseHTTPRequestHandler):
             "/ruptura": "ruptura.html",
             "/ruptura/": "ruptura.html",
             "/ruptura.html": "ruptura.html",
+            "/promocoes-auto": "promocoes-auto.html",
+            "/promocoes-auto/": "promocoes-auto.html",
+            "/promocoes-auto.html": "promocoes-auto.html",
             "/rentabilidade-ml": "financeiro.html",
             "/rentabilidade-ml/": "financeiro.html",
             "/rentabilidade-ml.html": "financeiro.html",
@@ -21268,6 +21914,13 @@ def main() -> None:
         name="ml-estoque",
         daemon=True,
     )
+    # V18.73: renovação do desconto próprio de 30 dias (anúncios marcados), de hora em hora.
+    promo_renovacao_thread = threading.Thread(
+        target=_worker_protegido(promo_renovacao_loop),
+        args=(watcher_stop,),
+        name="promo-renovacao",
+        daemon=True,
+    )
     # V18.13: agente de relatório diário por e-mail (00:01).
     relatorio_thread = threading.Thread(
         target=_worker_protegido(relatorio_diario_loop),
@@ -21306,6 +21959,7 @@ def main() -> None:
         ads_thread.start()
         visitas_thread.start()
         estoque_thread.start()
+        promo_renovacao_thread.start()
         relatorio_thread.start()
         linx_clientes_thread.start()
     else:

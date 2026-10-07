@@ -410,6 +410,30 @@ Grupos: zerado agora (R$/dia perdido), vai zerar (≤ 7 dias), atenção (≤ 15
 de `shipping.logistic_type` (`ml_itens_detalhe` passou a pedir `shipping`). O histórico só começa a
 contar a partir da publicação: "zerado agora" e "vai zerar" valem desde o primeiro dia.
 
+### Promoções automáticas — renovação do desconto próprio (V18.73)
+`APP/promocoes-auto.html` (`/promocoes-auto`, menu Vendas e anúncios, só **admin**). Quando o
+desconto próprio (`PRICE_DISCOUNT`) de um anúncio **marcado pelo ADMIN** acaba, cria outro de
+`duracao_dias` (30) com o **mesmo preço** da promoção que acabou (o preço é atualizado a cada
+conferência enquanto a promoção vale; "alterar" na tela grava outro). Worker
+`promo_renovacao_loop`: rodada completa de hora em hora e, perto do vencimento
+(`_promo_proxima_espera`), acorda 1 min depois do `finish_date` (sem fuso = Brasília) e confere
+**só** os vencidos a cada 2 min por até 4 h — a lacuna sem desconto caiu de até 1 h para ~1–2 min.
+A criação passa por `ml_promocao_aplicar()` (trava do preço mínimo, piso/teto do ML, data do
+monitor). **SKU** (`_promo_resolver_sku`, vale também para o `ml_promocao_aplicar`): o vínculo
+MLB↔SKU manda; sem ele, o SKU do próprio anúncio (só 7% tinham vínculo). **Kit**
+(`_promo_produtos`): custo = componentes com o custo de hoje (kit do Precificador, senão Cadastro
+de Kits com as taxas do 1º componente); componente sem custo = kit sem custo. Antes de renovar
+(`_promo_renovacao_avaliar`): anúncio ativo, custo, preço do anúncio acima do da promoção, ≥ preço
+mínimo, piso/teto, margem ≥ **margem mínima da promoção** (`margem_min_promo`, padrão 10% — não a
+margem-alvo, que desconto quase sempre fura) e estoque pela Ruptura (`estoque_min_dias`). Em
+**campanha do ML** espera ela acabar; margem na campanha abaixo da mínima vira só **aviso**
+(decisão do dono: não sai da campanha). Modos em
+`promo_auto_config_v1873`: `simulacao` (padrão, não chama o ML) → `lote` (clique) → `automatico`
+(ligar exige **senha + 2FA do OWNER**; `limite_dia`). Nunca renova o mesmo anúncio duas vezes no
+dia (`renovado_dia`). Tudo em `promo_auto_log_v1873`. A lista junta os marcados e o monitor do
+Precificador (`ml_promocoes_datas_v1`). **Não testado contra o ML de verdade:** a primeira
+renovação real deve ser acompanhada. Próxima etapa: aceitar convites de campanha pela margem.
+
 ### Análise de ADS (V18.54)
 `APP/analise-ads.html` (`/analise-ads`, menu Comercial, só **admin**). O relatório "Anúncios
 patrocinados" que o ML deixa baixar em Publicidade > Relatórios (.xlsx) é **importado à mão**
