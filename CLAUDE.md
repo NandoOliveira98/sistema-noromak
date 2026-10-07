@@ -438,7 +438,10 @@ lido NA conferência decide (da Ruptura só vem o ritmo de venda) e a leitura en
 dela (`_ml_estoque_registrar`). Marcar já confere na hora (`apenas=[mlb]`, regras do worker); a
 tela mostra o preço do anúncio lido na conferência (`preco_anuncio`, migrado por
 `ensure_promo_renovacao_schema`) e, depois de conferido, **só a data do ML** — a do monitor só
-antes, marcada "pelo monitor, não conferido" (`fim_origem`). Próxima etapa: convites de campanha.
+antes, marcada "pelo monitor, não conferido" (`fim_origem`). **V18.75 — tela no padrão Noromak**
+(rótulo + título + cartões com ícone da Visão geral): "Todos" é o filtro padrão, busca por MLB/SKU/título,
+páginas de 25/50/100 (lista tem 1.100+ anúncios), cartão "Renovadas em 30 dias" abre a lista própria
+(`renovado_em`), histórico e regras recolhíveis. Próxima etapa: convites de campanha.
 
 ### Análise de ADS (V18.54)
 `APP/analise-ads.html` (`/analise-ads`, menu Comercial, só **admin**). O relatório "Anúncios
