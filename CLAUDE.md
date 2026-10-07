@@ -431,8 +431,14 @@ margem-alvo, que desconto quase sempre fura) e estoque pela Ruptura (`estoque_mi
 `promo_auto_config_v1873`: `simulacao` (padrão, não chama o ML) → `lote` (clique) → `automatico`
 (ligar exige **senha + 2FA do OWNER**; `limite_dia`). Nunca renova o mesmo anúncio duas vezes no
 dia (`renovado_dia`). Tudo em `promo_auto_log_v1873`. A lista junta os marcados e o monitor do
-Precificador (`ml_promocoes_datas_v1`). **Não testado contra o ML de verdade:** a primeira
-renovação real deve ser acompanhada. Próxima etapa: aceitar convites de campanha pela margem.
+Precificador (`ml_promocoes_datas_v1`). **1ª renovação real OK em 07/10** (MLB1362876721, lote).
+**V18.74 — o dado ao vivo manda:** MLB1050410219 aparecia "Sem estoque" com 10 un. no ML — a
+Ruptura tinha checado às 08:14 (pausado, 0 un.) e o anúncio foi reativado depois. Agora o estoque
+lido NA conferência decide (da Ruptura só vem o ritmo de venda) e a leitura entra no histórico
+dela (`_ml_estoque_registrar`). Marcar já confere na hora (`apenas=[mlb]`, regras do worker); a
+tela mostra o preço do anúncio lido na conferência (`preco_anuncio`, migrado por
+`ensure_promo_renovacao_schema`) e, depois de conferido, **só a data do ML** — a do monitor só
+antes, marcada "pelo monitor, não conferido" (`fim_origem`). Próxima etapa: convites de campanha.
 
 ### Análise de ADS (V18.54)
 `APP/analise-ads.html` (`/analise-ads`, menu Comercial, só **admin**). O relatório "Anúncios

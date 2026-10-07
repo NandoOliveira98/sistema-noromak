@@ -43,7 +43,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "18.73-PROMO-RENOVACAO"
+APP_VERSION = "18.74-PROMO-ESTOQUE-AO-VIVO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -1494,6 +1494,15 @@ def ensure_ml_billing_credito_schema() -> None:
         DB.commit()
 
 
+def ensure_promo_renovacao_schema() -> None:
+    """V18.74: preço do anúncio lido NA CONFERÊNCIA (a tela mostrava o retrato da manhã)."""
+    with DB_LOCK:
+        info = DB.execute("PRAGMA table_info(promo_renovacao_v1873)").fetchall()
+        if info and "preco_anuncio" not in {str(r["name"]) for r in info}:
+            DB.execute("ALTER TABLE promo_renovacao_v1873 ADD COLUMN preco_anuncio REAL")
+            DB.commit()
+
+
 def ensure_shopee_escrow_schema() -> None:
     """V18.35: acrescenta ams_commission (comissão de afiliados/AMS da Shopee).
 
@@ -2017,6 +2026,7 @@ def init_db() -> None:
                 promo_tipo TEXT NOT NULL DEFAULT '',
                 promo_preco REAL,
                 margem REAL,
+                preco_anuncio REAL,
                 checado_em TEXT NOT NULL DEFAULT '',
                 renovado_dia TEXT NOT NULL DEFAULT '',
                 renovado_em TEXT NOT NULL DEFAULT '',
@@ -2191,6 +2201,7 @@ def init_db() -> None:
     ensure_app_sessions_schema()
     ensure_app_user_permissions_schema()
     ensure_shopee_escrow_schema()
+    ensure_promo_renovacao_schema()
     ensure_ml_billing_credito_schema()
     ensure_ml_billing_data_schema()
     ensure_cliente_fiscal_linx_api_schema()  # V18.60
@@ -17284,10 +17295,18 @@ def _promo_renovacao_avaliar(mlb: str, preco: float | None, promos: list[dict[st
     if not preco:
         return revisar("Sem o preço da promoção anterior: informe o preço para renovar")
     r = rup or {}
-    cobertura = r.get("cobertura_dias")
-    if r.get("grupo") == "zerado" or (cobertura is not None and cobertura < cfg["estoque_min_dias"]):
-        dura = "sem estoque" if r.get("grupo") == "zerado" else f"estoque para {cobertura:.0f} dia(s)"
-        return revisar(f"{dura[0].upper() + dura[1:]} (Ruptura): não renova até repor", "estoque")
+    zerado, cobertura = r.get("grupo") == "zerado", r.get("cobertura_dias")
+    vivo = det.get("estoque")
+    if isinstance(vivo, (int, float)) and not isinstance(vivo, bool):
+        # V18.74: o estoque lido AGORA no ML manda. A Ruptura pode ter checado horas
+        # antes (anúncio pausado/zerado e reativado depois) — só o ritmo vem dela.
+        sub = det.get("sub_status") if isinstance(det.get("sub_status"), list) else []
+        zerado = vivo <= 0 or "out_of_stock" in [str(x) for x in sub]
+        ritmo = _money_number(r.get("ritmo_dia")) or 0.0
+        cobertura = (float(vivo) / ritmo) if (ritmo > 0 and not zerado) else None
+    if zerado or (cobertura is not None and cobertura < cfg["estoque_min_dias"]):
+        dura = "sem estoque" if zerado else f"estoque para {cobertura:.0f} dia(s)"
+        return revisar(f"{dura[0].upper() + dura[1:]} no Mercado Livre: não renova até repor", "estoque")
     preco_anuncio = _money_number(det.get("preco"))
     if preco_anuncio and preco >= preco_anuncio:
         return revisar(f"O preço do anúncio ({_brl_srv(preco_anuncio)}) está igual ou abaixo do preço "
@@ -17348,6 +17367,11 @@ def promo_renovacao_rodada(stop_event: threading.Event | None = None, *, hoje: d
         else:
             alvo = sorted(linhas)
         detalhes = ml_itens_detalhe(alvo) if alvo else {}
+        if detalhes:
+            try:   # V18.74: a leitura ao vivo também atualiza o histórico da Ruptura
+                _ml_estoque_registrar(detalhes, hoje_iso)
+            except Exception:
+                pass
         produtos = _promo_produtos()
         vinculos = _ml_vinculos_mlb_sku()
         ruptura = _promo_ruptura_por_anuncio() if alvo else {}
@@ -17404,14 +17428,15 @@ def promo_renovacao_rodada(stop_event: threading.Event | None = None, *, hoje: d
             with DB_LOCK:
                 DB.execute(
                     "INSERT INTO promo_renovacao_v1873(mlb,marcado,preco,situacao,motivo,aviso,fim,promo_tipo,promo_preco,"
-                    "margem,checado_em,renovado_dia,renovado_em) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                    "margem,checado_em,renovado_dia,renovado_em,preco_anuncio) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(mlb) DO UPDATE SET preco=excluded.preco,situacao=excluded.situacao,"
                     "motivo=excluded.motivo,aviso=excluded.aviso,fim=excluded.fim,promo_tipo=excluded.promo_tipo,"
                     "promo_preco=excluded.promo_preco,margem=excluded.margem,checado_em=excluded.checado_em,"
-                    "renovado_dia=excluded.renovado_dia,renovado_em=excluded.renovado_em",
+                    "renovado_dia=excluded.renovado_dia,renovado_em=excluded.renovado_em,"
+                    "preco_anuncio=COALESCE(excluded.preco_anuncio,preco_anuncio)",
                     (mlb, int(row.get("marcado") or 0), av["preco"], av["situacao"], av["motivo"], av["aviso"],
                      av["fim"], av["promo_tipo"], av["promo_preco"], av["margem"], now_iso(),
-                     renovado_dia, renovado_em))
+                     renovado_dia, renovado_em, _money_number((detalhes.get(mlb) or {}).get("preco"))))
                 DB.commit()
             resultados.append({"mlb": mlb, "ok": ok, "situacao": av["situacao"], "motivo": av["motivo"]})
             if pausa > 0:
@@ -17521,18 +17546,25 @@ def promo_renovacao_payload(hoje: date | None = None) -> dict[str, Any]:
         r = linhas.get(mlb) or {}
         foto = retrato.get(mlb) or {}
         marcado = bool(r.get("marcado"))
-        fim = (r.get("fim") if marcado and r.get("fim") else "") or monitor.get(mlb, "") or r.get("fim") or ""
+        # V18.74: conferido = a data é a do ML (vazia se não há promoção). A data do
+        # monitor do Precificador só aparece antes da 1ª conferência, marcada como tal.
+        conferido = marcado and bool(r.get("checado_em"))
+        if conferido:
+            fim, fim_origem = str(r.get("fim") or ""), "ml"
+        else:
+            fim, fim_origem = monitor.get(mlb, ""), ("monitor" if monitor.get(mlb) else "")
         dias = None
         if re.match(r"^\d{4}-\d{2}-\d{2}", fim):
             dias = (datetime.strptime(fim[:10], "%Y-%m-%d").date() - hoje).days
-        preco_anuncio = _money_number(foto.get("preco"))
+        preco_anuncio = _money_number(r.get("preco_anuncio")) if conferido else None
+        preco_anuncio = preco_anuncio or _money_number(foto.get("preco"))
         preco = _money_number(r.get("preco"))
         itens.append({
             "mlb": mlb, "titulo": foto.get("titulo") or "", "sku": vinculos.get(mlb) or foto.get("sku") or "",
             "marcado": marcado, "no_monitor": mlb in monitor,
             "situacao": (r.get("situacao") or "nao_checado") if marcado else "nao_marcado",
             "motivo": r.get("motivo") or "", "aviso": r.get("aviso") or "",
-            "fim": fim, "dias_para_vencer": dias,
+            "fim": fim, "fim_origem": fim_origem, "dias_para_vencer": dias,
             "preco": preco, "preco_anuncio": preco_anuncio,
             "desconto": round(1 - preco / preco_anuncio, 4) if preco and preco_anuncio else None,
             "promo_tipo": r.get("promo_tipo") or "", "promo_preco": r.get("promo_preco"),
@@ -19204,6 +19236,11 @@ class AppHandler(BaseHTTPRequestHandler):
                     res = promo_renovacao_marcar(body.get("mlb"), bool(body.get("ativo")), ctx["username"],
                                                  preco=body.get("preco"))
                     audit(ctx["username"], "promocoes.auto.marcar", f"{res['mlb']}|{res['marcado']}")
+                    if res["marcado"]:
+                        # V18.74: confere na hora (antes ficava "aguardando" até a próxima hora cheia).
+                        # Regras do worker: só renova sozinho no modo automático.
+                        threading.Thread(target=lambda m=res["mlb"]: promo_renovacao_rodada(apenas=[m]),
+                                         name="promo-renovacao-marcar", daemon=True).start()
                     self.send_json(res)
                 except ValueError as exc:
                     self.send_json({"ok": False, "error": str(exc)}, 400)

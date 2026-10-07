@@ -169,7 +169,8 @@ class Renovacao(Base):
 
     def test_estoque_acabando_nao_renova(self):
         original = S._promo_ruptura_por_anuncio
-        S._promo_ruptura_por_anuncio = lambda: {"MLB1": {"grupo": "critico", "cobertura_dias": 3.0}}
+        # vende 20/dia e tem 50 ao vivo: dura 2,5 dias (< 7)
+        S._promo_ruptura_por_anuncio = lambda: {"MLB1": {"grupo": "critico", "cobertura_dias": 3.0, "ritmo_dia": 20.0}}
         try:
             self.marcar()
             self.modo("automatico")
@@ -271,6 +272,78 @@ class SkuKitEMargem(Base):
         self.rodar()
         self.assertIn("12%", self.item()["motivo"])
         self.assertEqual(len(self.posts), 1)
+
+
+class DadoAoVivoManda(Base):
+    """V18.74: MLB1050410219 foi reativado (10 un.) depois da checagem da Ruptura das
+    08:14 (pausado, 0 un.). A conferência das 09:16 leu o anúncio ao vivo, mas a trava
+    usou o dado velho da Ruptura e mostrou "Sem estoque"."""
+
+    def test_estoque_ao_vivo_vence_a_ruptura_antiga(self):
+        original = S._promo_ruptura_por_anuncio
+        S._promo_ruptura_por_anuncio = lambda: {"MLB1": {"grupo": "zerado", "cobertura_dias": 0.0, "ritmo_dia": 0.5}}
+        try:
+            self.itens["MLB1"]["estoque"] = 10          # ao vivo: tem estoque
+            self.marcar()
+            self.modo("automatico")
+            self.rodar()
+            self.assertEqual(len(self.posts), 1, self.item()["motivo"])
+        finally:
+            S._promo_ruptura_por_anuncio = original
+
+    def test_estoque_ao_vivo_usa_o_ritmo_da_ruptura(self):
+        original = S._promo_ruptura_por_anuncio
+        # vende 2/dia e tem 6 ao vivo: dura 3 dias (< 7) -> não renova
+        S._promo_ruptura_por_anuncio = lambda: {"MLB1": {"grupo": "ok", "cobertura_dias": 40.0, "ritmo_dia": 2.0}}
+        try:
+            self.itens["MLB1"]["estoque"] = 6
+            self.marcar()
+            self.modo("automatico")
+            self.rodar()
+            self.assertEqual(self.item()["situacao"], "estoque")
+        finally:
+            S._promo_ruptura_por_anuncio = original
+
+    def test_a_conferencia_atualiza_o_historico_de_estoque(self):
+        self.marcar()
+        self.rodar()
+        with S.DB_LOCK:
+            r = S.DB.execute("SELECT estoque_ultimo FROM ml_estoque_dia_v1872 WHERE item_id='MLB1'").fetchone()
+        self.assertEqual(r["estoque_ultimo"], 50)
+
+    def test_preco_do_anuncio_e_o_da_conferencia(self):
+        with S.DB_LOCK:
+            S.DB.execute("INSERT OR REPLACE INTO ml_visitas_item_v1868(item_id,preco) VALUES('MLB1',67.5)")
+            S.DB.commit()
+        self.marcar()
+        self.rodar()
+        self.assertEqual(self.item()["preco_anuncio"], 100.0)
+
+    def test_antes_de_conferir_a_data_e_do_monitor_e_vem_marcada(self):
+        S.save_storage(S.PROMO_DATAS_KEY, None, S.json_dumps({"rows": [{"mlb": "1", "date": "2026-10-23"}]}), False,
+                       actor="t", actor_role="admin", source_screen="t")
+        self.marcar()
+        i = self.item()
+        self.assertEqual((i["situacao"], i["fim_origem"]), ("nao_checado", "monitor"))
+        # depois de conferir, sem promoção ativa no ML, a data do monitor não aparece mais
+        self.marcar()
+        S.promo_auto_config_salvar({"modo_renovacao": "simulacao"}, "t")
+        S.promo_auto_config_salvar({"estoque_min_dias": 0}, "t")
+        self.itens["MLB1"]["status"] = "paused"
+        self.rodar()
+        i = self.item()
+        self.assertEqual((i["fim"], i["fim_origem"]), ("", "ml"))
+
+    def test_marcar_pela_rota_ja_confere(self):
+        status, corpo = self.cliente.pedir("POST", "/api/promocoes-auto/renovacao/marcar",
+                                           {"mlb": "MLB1", "ativo": True, "preco": "90"})
+        self.assertEqual(status, 200, corpo)
+        import time
+        for _ in range(50):
+            if self.item()["situacao"] != "nao_checado":
+                break
+            time.sleep(0.1)
+        self.assertEqual(self.item()["situacao"], "pronta")
 
 
 class SemDiaSemDesconto(Base):
