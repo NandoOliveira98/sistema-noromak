@@ -526,3 +526,23 @@ class KitTemCustoNasPromocoes(unittest.TestCase):
         self.assertAlmostEqual(it["precificador"]["comissao"], 0.165)
         produtos = S._promo_produtos()
         self.assertAlmostEqual(S._promo_produto(produtos, S._promo_resolver_sku("MLB11", "KIT2-PA18", produtos, {}))["custo"], 20.0)
+
+    def test_i_custo_zero_sem_pecas_e_sem_custo_e_sem_margem(self):
+        # antes: "Sem custo" na situação, mas a coluna Margem mostrava 88% (conta com custo 0)
+        self._kit_como_produto("KIT27200155", 0)
+        it = self._anuncio("MLB12", "KIT27200155")
+        self.assertFalse(it["tem_custo"])
+        self.assertNotIn("conta", it)
+        self.assertNotIn("precificador", it)
+
+    def test_j_tela_diz_de_onde_veio_o_custo_do_kit(self):
+        self.assertEqual(self._anuncio("MLB13", "KITP")["precificador"]["kit"], "precificador")
+        self.assertEqual(self._anuncio("MLB14", "KIT2-PA18")["precificador"]["kit"], "pecas")
+        self.assertEqual(self._anuncio("MLB15", "PA18")["precificador"]["kit"], "")
+
+    def test_k_kit_zerado_com_taxas_zeradas_usa_as_da_peca(self):
+        # KIT2-CF40 estava no Precificador com custo, comissão e taxa zerados: margem saía 35%
+        self._kit_como_produto("KIT2-PA18", 0, comissao=0)
+        p = self._anuncio("MLB16", "KIT2-PA18")["precificador"]
+        self.assertAlmostEqual(p["custo"], 20.0)
+        self.assertAlmostEqual(p["comissao"], 0.12)     # a do PA18

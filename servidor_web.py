@@ -17098,7 +17098,8 @@ def promocoes_painel(mlbs: list[str]) -> dict[str, Any]:
             "promo_tipo_nome": ML_PROMO_TIPO_NOME.get(str((vigente or {}).get("type") or ""),
                                                       str((vigente or {}).get("type") or "")),
             "promo_nome": (vigente or {}).get("name") or "",
-            "tem_custo": bool(prod),
+            # V18.80: produto com custo 0 no Precificador NÃO tem custo (antes a margem saía 88%)
+            "tem_custo": bool(prod and prod["custo"] > 0),
             "campanha": None,
         }
         if campanha:
@@ -17107,7 +17108,7 @@ def promocoes_painel(mlbs: list[str]) -> dict[str, Any]:
                 "inicio": campanha.get("start_date"), "fim": campanha.get("finish_date"),
                 "status": campanha.get("status"),
             }
-        if prod:
+        if linha["tem_custo"]:
             linha["minimo"] = promo_preco_minimo(prod)
             linha["ideal"] = promo_preco_ideal(prod)
             # V18.28: os mesmos campos que o Precificador mostra, para decidir a
@@ -17119,6 +17120,9 @@ def promocoes_painel(mlbs: list[str]) -> dict[str, Any]:
                 "taxa_fixa": round(prod["taxa_fixa"], 2),
                 "margem_alvo": prod["margem_alvo"],
                 "curva": prod["curva"],
+                # V18.80: de onde veio o custo do kit, para a tela dizer
+                "kit": ("pecas" if prod.get("kit_pelas_pecas") else "cadastro" if prod.get("kit_cadastro")
+                        else "precificador" if prod.get("kit") else ""),
             }
             if linha["ideal"]:
                 no_ideal = promo_conta(prod, linha["ideal"])
@@ -17670,7 +17674,7 @@ def _promo_produtos() -> dict[str, dict[str, Any]]:
             continue
         base = produtos.get(itens[0][0]) or produtos[_compras_codigo(itens[0][0], produtos)]
         produtos[sku] = dict(base, sku=sku, produto=str(kit.get("nome") or sku), curva="",
-                             custo=float(custo), kit=True)
+                             custo=float(custo), kit=True, kit_cadastro=True)
     return produtos
 
 
@@ -17729,7 +17733,11 @@ def _promo_produto(produtos: dict[str, dict[str, Any]], sku: Any) -> dict[str, A
         if not kit:
             return atual
         if atual is not None:
-            kit = dict(atual, custo=kit["custo"], kit=True, produto=atual.get("produto") or kit["produto"])
+            # taxas do cadastro do kit; zeradas (nunca preenchidas, como o custo) = as da 1ª peça,
+            # senão comissão 0% inflava a margem (KIT2-CF40 dava 35%)
+            taxas = atual if atual["comissao"] > 0 else kit
+            kit = dict(atual, custo=kit["custo"], kit=True, produto=atual.get("produto") or kit["produto"],
+                       comissao=taxas["comissao"], taxa_fixa=taxas["taxa_fixa"])
         kit["kit_pelas_pecas"] = True
         produtos[sku] = kit
     return produtos[sku]

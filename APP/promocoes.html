@@ -399,7 +399,7 @@ function atualizar(){
   $("lMin").textContent="mínimo "+brl(min); $("lIdeal").textContent="ideal "+brl(ideal);
   const P=it.precificador||{};
   $("prec").innerHTML = P.custo==null ? '<div class="l"><span>Sem custo cadastrado para este SKU.</span></div>' :
-    '<div class="l"><span>Custo do produto <span style="color:#0e7c7c;font-size:11px">(Apollo)</span></span><b>'+brl(P.custo)+'</b></div>'+
+    '<div class="l"><span>Custo do produto <span style="color:#0e7c7c;font-size:11px">('+({pecas:"soma das peças no Precificador",cadastro:"Cadastro de Kits, peças do Precificador",precificador:"kit do Precificador"}[P.kit]||"Apollo")+')</span></span><b>'+brl(P.custo)+'</b></div>'+
     '<div class="l"><span>Imposto</span><b>'+pct((P.imposto||0)*100)+'</b></div>'+
     '<div class="l"><span>Comissão do Mercado Livre</span><b>'+pct((P.comissao||0)*100)+'</b></div>'+
     '<div class="l"><span>Taxa fixa / frete</span><b>'+brl(P.taxa_fixa)+'</b></div>'+
