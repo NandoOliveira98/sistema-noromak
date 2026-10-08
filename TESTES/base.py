@@ -84,6 +84,8 @@ def reiniciar_banco() -> None:
         S.init_db()
     S.LOGIN_ATTEMPTS.clear()
     S.OWNER_REAUTH_FAILURES.clear()
+    S._ml_full_ignorados_cache_limpar()  # V18.78: cópia em memória da tabela de Full
+    S._ML_LOG_ULTIMO.clear()
 
 
 class Cliente:

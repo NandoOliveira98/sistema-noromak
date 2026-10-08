@@ -76,7 +76,8 @@ Consequências práticas, não negociáveis:
   `BACKUP_LOCK`, cópia por conexão de leitura separada — **sem** o `DB_LOCK` —, `.gz.tmp`
   renomeado no fim; a requisição só dispara `backup_daily_em_segundo_plano()`). **V18.78:**
   com um `expedicao_predeploy_*.db.gz` de menos de 2 h (o `publicar.sh` acabou de copiar
-  tudo), o diário espera — antes o boot fazia um segundo backup completo logo após o deploy.
+  tudo), o diário espera e fica **agendado** para 2 h depois (`_backup_agendar_depois_do_predeploy`)
+  — antes o boot fazia um segundo backup completo logo após o deploy.
   `ml_event_log`/`shopee_event_log` guardam **30 dias** (era 90; `DELETE` não encolhe o
   arquivo — `VACUUM` manual, fora do expediente, devolve o espaço).
 - Todos os workers sobem embrulhados em `_worker_protegido` (V18.56): erro fora do try
@@ -289,9 +290,14 @@ página a cada ciclo (16 pedidos × ~383 registros em 12 h). Agora `ml_import_or
 pedido em `ml_full_ignorado_v1878` e o vigia e o catch-up pulam o que está lá (45 dias; o
 webhook e o botão Atualizar continuam chamando `ml_import_order` direto). A reconciliação de
 manuais (60 s) não reimporta mais linha que a API já reconheceu (venda **e** envio
-preenchidos — quem acompanha a etiqueta é `_ml_all_pending_label_candidates`). E os workers
-usam `ml_log_event_se_mudou`: só grava no `ml_event_log` quando (resultado, detalhe) mudou para
-aquele recurso. Ainda em aberto (maior ganho, mais delicado): `_ml_linked_order_ids` decodifica
+preenchidos — quem acompanha a etiqueta é `_ml_all_pending_label_candidates`; envio **Full**
+protegido pelo ADMIN fica fora dessa regra, senão ninguém o revisitaria). A memória de Full
+tem cópia em RAM (relida a cada hora) e é **desfeita** pelo dado ao vivo: o caminho não-Full do
+`ml_import_order` chama `_ml_full_ignorado_esquecer` — cache nunca é fonte de verdade. Os
+workers (inclusive os `except`) usam `ml_log_event_se_mudou` / `shopee_log_event_se_mudou`
+(`_log_se_mudou`): só grava quando (resultado, detalhe) mudou para aquele recurso. O backup
+copia por lotes (`backup(pages=2000, sleep=0.05)`, também no `publicar.sh`): `ionice` só vale
+com CFQ/BFQ. Ainda em aberto (maior ganho, mais delicado): `_ml_linked_order_ids` decodifica
 o `conf_etiquetas` inteiro (com os ZPL) a cada ciclo — cachear por versão do storage.
 
 ### Shopee

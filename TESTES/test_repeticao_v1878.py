@@ -98,8 +98,27 @@ class FullNaoReimporta(TesteNoromak):
         S.ml_new_order_watch_once()
         self.assertIn("N1", self.importacoes, "o pedido normal deixou de ser importado")
         self.assertNotIn("N1", S._ml_full_ignorados(), "pedido normal entrou na memória de Full")
-        S.ml_new_order_watch_once()
-        self.assertEqual(self.importacoes.count("N1"), 2, "pedido normal sem etiqueta continua sendo acompanhado")
+
+    def test_pedido_que_deixa_de_ser_full_sai_da_memoria(self):
+        # Cache nunca é fonte de verdade: o dado ao vivo (envio comum) desfaz a memória.
+        self._ml_falso(["F1"], full={"F1"})
+        S.ml_import_order("F1", source="teste")
+        self.assertIn("F1", S._ml_full_ignorados())
+        self._ml_falso(["F1"], full=set())
+        # O pedido falso não tem itens, então a importação normal para adiante — mas a
+        # memória de Full já foi desfeita antes disso (é o primeiro passo do caminho normal).
+        with self.assertRaises(RuntimeError):
+            S.ml_import_order("F1", source="teste")
+        self.assertNotIn("F1", S._ml_full_ignorados(),
+                         "REGRESSÃO: pedido importado como normal continuou na memória de Full")
+        self.assertEqual(S.ml_new_order_watch_once().get("ignored_full"), 0)
+
+    def test_esquecer_devolve_se_removeu(self):
+        self._ml_falso(["F1"], full={"F1"})
+        S.ml_import_order("F1", source="teste")
+        self.assertTrue(S._ml_full_ignorado_esquecer("F1"))
+        self.assertFalse(S._ml_full_ignorado_esquecer("F1"))
+        self.assertFalse(S._ml_full_ignorado_esquecer(""))
 
     def test_catchup_pula_full_conhecido(self):
         self._ml_falso(["F1"], full={"F1"})
@@ -123,6 +142,17 @@ class ReconciliacaoSemRepeticao(TesteNoromak):
         self.assertNotIn("2000000000001", numeros,
                          "REGRESSÃO: pedido já vinculado continuou sendo reconciliado a cada 60 s")
         self.assertIn("2000000000002", numeros, "o pedido manual sem envio saiu da reconciliação")
+
+    def test_linha_vinculada_a_envio_full_continua_sendo_revista(self):
+        # O vigia de etiquetas pula fulfillment; se a linha sobreviveu (ADMIN protegeu),
+        # a reconciliação tem que continuar sendo quem passa por ela.
+        gravar_como_integracao([
+            linha_ml("2000000000003", "SKU-F", ShipmentIdMercadoLivre="4400000000003",
+                     LogisticaMercadoLivre="fulfillment", ManualAdminProtegido="SIM"),
+        ], origem="API Mercado Livre")
+        self.assertNotIn(("2000000000003", "4400000000003"), S._ml_all_pending_label_candidates())
+        self.assertIn("2000000000003", S._ml_manual_pending_numbers(),
+                      "linha Full protegida ficou sem ninguém acompanhando")
 
     def test_linha_vinculada_continua_no_vigia_de_etiquetas(self):
         gravar_como_integracao([
@@ -156,6 +186,21 @@ class LogSoQuandoMuda(TesteNoromak):
         S.ml_log_event_se_mudou("teste", "/orders/2", "", "", "FULL IGNORADO", "{}")
         self.assertEqual(registros_log("teste", "FULL IGNORADO"), 2)
 
+    def test_shopee_tambem_deduplica(self):
+        for _ in range(4):
+            S.shopee_log_event_se_mudou("shipping_worker", "background", "OK", "consultados=0")
+        S.shopee_log_event_se_mudou("shipping_worker", "background", "OK", "consultados=2")
+        with S.DB_LOCK:
+            total = S.DB.execute(
+                "SELECT COUNT(*) FROM shopee_event_log WHERE topic='shipping_worker' AND result='OK'"
+            ).fetchone()[0]
+        self.assertEqual(total, 2)
+
+    def test_ml_e_shopee_nao_se_misturam(self):
+        S.ml_log_event_se_mudou("x", "/r", "", "", "OK", "")
+        self.assertTrue(S.shopee_log_event_se_mudou("x", "/r", "OK", ""),
+                        "mesmo tópico/recurso em logs diferentes não pode colidir")
+
     def test_retencao_do_log_e_curta(self):
         self.assertLessEqual(S.LOG_EVENTOS_DIAS, 30,
                              "ml_event_log é diagnóstico: 2,85 milhões de linhas em 43 dias com 90")
@@ -185,12 +230,26 @@ class BackupDoBootNaoDuplicaPreDeploy(unittest.TestCase):
         os.utime(f, (t, t))
         return f
 
+    def tearDown(self) -> None:
+        t = S._BACKUP_ADIADO_TIMER
+        if t is not None:
+            t.cancel()
+        S._BACKUP_ADIADO_TIMER = None
+
     def test_predeploy_recente_adia_o_diario(self):
         self._limpar()
         self._predeploy(idade_segundos=60)
         S.backup_daily()
         self.assertFalse(S._backup_alvo_hoje().exists(),
                          "REGRESSÃO: o boot fez um segundo backup completo logo depois do pré-deploy")
+        # ...mas o diário não é esquecido: fica agendado para depois das 2 h do pré-deploy.
+        t = S._BACKUP_ADIADO_TIMER
+        self.assertIsNotNone(t, "o diário adiado não foi agendado")
+        self.assertTrue(t.is_alive())
+        self.assertGreater(t.interval, S.BACKUP_PREDEPLOY_RECENTE_HORAS * 3600)
+        # Um só agendamento por vez.
+        S.backup_daily()
+        self.assertIs(S._BACKUP_ADIADO_TIMER, t)
 
     def test_predeploy_antigo_nao_impede_o_diario(self):
         self._limpar()

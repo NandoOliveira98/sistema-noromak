@@ -21,6 +21,33 @@ if [ -n "$(git status --porcelain)" ]; then
   exit 1
 fi
 
+# V18.78: o aviso de "gente conferindo" (mais abaixo) so ve bloqueios com heartbeat
+# nos ultimos 90 s — entre um pedido e outro ele fica vazio mesmo as 11:25 de um dia
+# util. E o backup pre-deploy ocupa disco e CPU por ~3 min numa VPS de 1 GB dividida
+# com o CRM (travou tudo as 11:25 de 08/10; foram 12 deploys entre 02/10 e 08/10, 5 so
+# em 06/10). Em dia util, das 08:00 as 18:00 de Brasilia, so publica com confirmacao
+# explicita — e pergunta AQUI, antes dos ~9 min de testes.
+AGORA_BR="$(ssh expedicao "TZ=America/Sao_Paulo date '+%u %H'" 2>/dev/null || true)"
+if [ -n "$AGORA_BR" ]; then
+  DIA_SEMANA_BR=$((10#${AGORA_BR%% *})); HORA_BR=$((10#${AGORA_BR##* }))
+  if [ "$DIA_SEMANA_BR" -le 5 ] && [ "$HORA_BR" -ge 8 ] && [ "$HORA_BR" -lt 18 ]; then
+    echo "ATENCAO: horario comercial no servidor (dia util, ${HORA_BR}h de Brasilia)."
+    echo "O backup pre-deploy ocupa o disco por ~3 min e o restart derruba a Expedicao."
+    echo "O recomendado e publicar antes das 08:00 ou depois das 18:00, agrupando as versoes."
+    if [ "${PUBLICAR_NO_EXPEDIENTE:-}" = "1" ]; then
+      echo ">> PUBLICAR_NO_EXPEDIENTE=1: seguindo mesmo assim."
+    elif [ -t 0 ]; then
+      read -r -p "Publicar em horario comercial mesmo assim? [s/N] " RESPOSTA
+      case "$RESPOSTA" in s|S|sim|SIM) ;; *) echo "PUBLICACAO CANCELADA. Nada foi enviado."; exit 1;; esac
+    else
+      echo "PUBLICACAO CANCELADA. Nada foi enviado."
+      echo "Para publicar mesmo assim: PUBLICAR_NO_EXPEDIENTE=1 ./publicar.sh"
+      exit 1
+    fi
+    echo
+  fi
+fi
+
 echo ">> validando antes de publicar..."
 if ! ./testar.sh; then
   echo
@@ -95,32 +122,6 @@ if [ -n "$EM_CONFERENCIA" ]; then
 fi
 echo
 
-# V18.78: entre um pedido e outro o bloqueio e liberado, entao a lista acima fica
-# vazia mesmo as 11:25 de um dia util. E o backup pre-deploy ocupa disco e CPU por
-# ~3 min numa VPS de 1 GB dividida com o CRM (travou tudo as 11:25 de 08/10; foram
-# 12 deploys entre 02/10 e 08/10, 5 so em 06/10). Em dia util, das 08:00 as 18:00 de
-# Brasilia, so publica com confirmacao explicita.
-AGORA_BR="$(ssh expedicao "TZ=America/Sao_Paulo date '+%u %H'" 2>/dev/null || true)"
-if [ -n "$AGORA_BR" ]; then
-  DIA_SEMANA_BR=$((10#${AGORA_BR%% *})); HORA_BR=$((10#${AGORA_BR##* }))
-  if [ "$DIA_SEMANA_BR" -le 5 ] && [ "$HORA_BR" -ge 8 ] && [ "$HORA_BR" -lt 18 ]; then
-    echo "ATENCAO: horario comercial no servidor (dia util, ${HORA_BR}h de Brasilia)."
-    echo "O backup pre-deploy ocupa o disco por ~3 min e o restart derruba a Expedicao."
-    echo "O recomendado e publicar antes das 08:00 ou depois das 18:00, agrupando as versoes."
-    if [ "${PUBLICAR_NO_EXPEDIENTE:-}" = "1" ]; then
-      echo ">> PUBLICAR_NO_EXPEDIENTE=1: seguindo mesmo assim."
-    elif [ -t 0 ]; then
-      read -r -p "Publicar em horario comercial mesmo assim? [s/N] " RESPOSTA
-      case "$RESPOSTA" in s|S|sim|SIM) ;; *) echo "PUBLICACAO CANCELADA. Nada foi enviado."; exit 1;; esac
-    else
-      echo "PUBLICACAO CANCELADA. Nada foi enviado."
-      echo "Para publicar mesmo assim: PUBLICAR_NO_EXPEDIENTE=1 ./publicar.sh"
-      exit 1
-    fi
-    echo
-  fi
-fi
-
 # V18.11: backup consistente e COMPRIMIDO do banco ANTES de enviar/reiniciar. Se
 # falhar, a publicacao para aqui — nunca subimos sem uma copia de seguranca do
 # estado atual. Comprime (SQLite gzipa ~5x) e mantem os 3 mais recentes, porque o
@@ -138,7 +139,9 @@ final = base + ".db.gz"
 origem = sqlite3.connect("/home/expedicao/dados/expedicao.db", timeout=60)
 saida = sqlite3.connect(tmp_db)
 with saida:
-    origem.backup(saida)   # backup online consistente (lida com WAL)
+    # backup online consistente (lida com WAL). V18.78: por lotes com pausa — a copia
+    # inteira de uma vez saturava o disco; ionice so vale com CFQ/BFQ.
+    origem.backup(saida, pages=2000, sleep=0.05)
 saida.close(); origem.close()
 # Verifica que o backup abre e tem dados ANTES de comprimir.
 conf = sqlite3.connect(tmp_db)

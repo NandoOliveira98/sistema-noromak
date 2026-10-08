@@ -3179,13 +3179,39 @@ def _backup_predeploy_recente(horas: float = BACKUP_PREDEPLOY_RECENTE_HORAS) -> 
     return False
 
 
+_BACKUP_ADIADO_LOCK = threading.Lock()
+_BACKUP_ADIADO_TIMER: threading.Timer | None = None
+
+
+def _backup_agendar_depois_do_predeploy() -> bool:
+    """V18.78: quando o diário é adiado por causa de um pré-deploy recente, marca uma
+    tentativa para quando ele completar 2 h. Sem isso, num deploy à noite sem
+    movimento o diário daquele dia nunca era criado (a manutenção de 6 h já caía
+    no dia seguinte). Um só agendamento por vez."""
+    global _BACKUP_ADIADO_TIMER
+    if not WORKERS_ENABLED:
+        return False
+    with _BACKUP_ADIADO_LOCK:
+        if _BACKUP_ADIADO_TIMER is not None and _BACKUP_ADIADO_TIMER.is_alive():
+            return False
+        t = threading.Timer(BACKUP_PREDEPLOY_RECENTE_HORAS * 3600 + 60, backup_daily_em_segundo_plano)
+        t.daemon = True
+        t.name = "backup-adiado"
+        t.start()
+        _BACKUP_ADIADO_TIMER = t
+    return True
+
+
 def backup_daily_em_segundo_plano() -> None:
     """V18.56: chamado pelas requisições. Nunca faz a cópia dentro da requisição do
     usuário — antes o primeiro save do dia copiava ~1 GB e a bipagem parava."""
     if BACKUP_LOCK.locked():
         return
     try:
-        if _backup_alvo_hoje().exists() or _backup_predeploy_recente():
+        if _backup_alvo_hoje().exists():
+            return
+        if _backup_predeploy_recente():
+            _backup_agendar_depois_do_predeploy()
             return
     except Exception:
         return
@@ -3209,6 +3235,7 @@ def _backup_daily_locked() -> None:
         if alvo_gz.exists():
             return
         if _backup_predeploy_recente():  # V18.78
+            _backup_agendar_depois_do_predeploy()
             return
         # V18.11: comprimido, cada diário cai de ~1 GB para ~75 MB; mantém só os
         # BACKUP_DAILY_KEEP mais recentes.
@@ -3224,7 +3251,10 @@ def _backup_daily_locked() -> None:
         try:
             dest = sqlite3.connect(tmp)
             try:
-                src.backup(dest)
+                # V18.78: por lotes, com pausa — a cópia inteira de uma vez saturava o
+                # disco por minutos (ionice só vale com CFQ/BFQ; em mq-deadline/none,
+                # o comum em VPS, não faz nada). 2000 páginas ≈ 8 MB por lote.
+                src.backup(dest, pages=2000, sleep=0.05)
             finally:
                 dest.close()
         finally:
@@ -7063,7 +7093,9 @@ def shopee_label_worker_loop(stop_event: threading.Event) -> None:
             result = shopee_sync_shipping_documents(
                 shipments + organizados, ja_organizados={x["order_sn"] for x in organizados})
             espera, rapidos = _shopee_label_proxima_espera(result, rapidos)
-            shopee_log_event(
+            # V18.78: só grava quando os contadores mudaram — ciclo de 30 s com os mesmos
+            # números era uma linha nova em shopee_event_log a cada vez (V18.56 já avisava).
+            shopee_log_event_se_mudou(
                 "shipping_worker",
                 f"shop_id={st.get('shop_id')}",
                 "OK",
@@ -7111,21 +7143,34 @@ def ml_log_event(topic: str, resource: str, user_id: Any, application_id: Any, r
 # Aqui só vai para o banco quando (resultado, detalhe) mudou desde o último
 # registro daquele (tópico, recurso). Memória em processo: depois de um restart
 # cada recurso é registrado uma vez e pronto.
-_ML_LOG_ULTIMO: dict[tuple[str, str], tuple[str, str]] = {}
+_ML_LOG_ULTIMO: dict[tuple[str, str, str], tuple[str, str]] = {}
 _ML_LOG_ULTIMO_LOCK = threading.Lock()
 _ML_LOG_ULTIMO_MAX = 20000
 
 
-def ml_log_event_se_mudou(topic: str, resource: str, user_id: Any, application_id: Any, result: str, detail: str = "") -> bool:
-    chave = (str(topic or ""), str(resource or ""))
-    valor = (str(result or ""), str(detail or ""))
+def _log_se_mudou(chave: tuple[str, str, str], valor: tuple[str, str]) -> bool:
+    """Devolve True (e lembra) quando `valor` difere do último visto para `chave`.
+    Serve ao log do ML e ao da Shopee — a chave começa pelo nome do log."""
     with _ML_LOG_ULTIMO_LOCK:
         if _ML_LOG_ULTIMO.get(chave) == valor:
             return False
         if len(_ML_LOG_ULTIMO) >= _ML_LOG_ULTIMO_MAX:
             _ML_LOG_ULTIMO.clear()
         _ML_LOG_ULTIMO[chave] = valor
+    return True
+
+
+def ml_log_event_se_mudou(topic: str, resource: str, user_id: Any, application_id: Any, result: str, detail: str = "") -> bool:
+    if not _log_se_mudou(("ml", str(topic or ""), str(resource or "")), (str(result or ""), str(detail or ""))):
+        return False
     ml_log_event(topic, resource, user_id, application_id, result, detail)
+    return True
+
+
+def shopee_log_event_se_mudou(topic: str, resource: str, result: str, detail: str = "") -> bool:
+    if not _log_se_mudou(("shopee", str(topic or ""), str(resource or "")), (str(result or ""), str(detail or ""))):
+        return False
+    shopee_log_event(topic, resource, result, detail)
     return True
 
 
@@ -9257,7 +9302,10 @@ def _ml_manual_pending_numbers() -> set[str]:
         # 60 s — quem acompanha a etiqueta dela é o vigia de etiquetas pendentes
         # (_ml_all_pending_label_candidates). Antes, 71 pedidos eram reimportados
         # ~168 vezes em 12 h sem nada mudar.
-        if sale_id and str(row.get("ShipmentIdMercadoLivre") or "").strip():
+        # Exceção: envio Full também fica fora do vigia de etiquetas — se a linha
+        # sobreviveu (ADMIN protegeu), a reconciliação continua sendo quem a revê.
+        if (sale_id and str(row.get("ShipmentIdMercadoLivre") or "").strip()
+                and str(row.get("LogisticaMercadoLivre") or "").strip().lower() != "fulfillment"):
             continue
         for raw_id in (order_number(row), sale_id, row.get("PackIdMercadoLivre")):
             digits = re.sub(r"\D+", "", str(raw_id or ""))
@@ -9328,7 +9376,7 @@ def ml_reconcile_manual_orders_once() -> dict[str, int]:
                     )
                 except Exception as exc:
                     errors += 1
-                    ml_log_event(
+                    ml_log_event_se_mudou(
                         "manual_reconcile", f"/orders/{order_id}", seller_id, ML_CLIENT_ID,
                         "ERRO", str(exc)[:1200]
                     )
@@ -9357,7 +9405,7 @@ def ml_reconcile_manual_orders_loop(stop_event: threading.Event) -> None:
                 ml_reconcile_manual_orders_once()
         except Exception as exc:
             try:
-                ml_log_event("manual_reconcile", "/orders/search", "", ML_CLIENT_ID, "ERRO", str(exc)[:1200])
+                ml_log_event_se_mudou("manual_reconcile", "/orders/search", "", ML_CLIENT_ID, "ERRO", str(exc)[:1200])
             except Exception:
                 pass
         if stop_event.wait(ML_MANUAL_RECONCILE_INTERVAL):
@@ -9586,6 +9634,11 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
             "updated": 0,
             "items": 0,
         }
+
+    # V18.78: o pedido chegou aqui como NÃO-Full. Se um dia entrou na memória de Full
+    # (leitura errada do envio, mudança de logística), o dado ao vivo desfaz — cache
+    # nunca é fonte de verdade (CLAUDE.md, seção 1).
+    _ml_full_ignorado_esquecer(order_id)
 
     receiver = ""
     if isinstance(shipment, dict):
@@ -10116,7 +10169,7 @@ def ml_pending_label_watch_once() -> dict[str, int]:
                     )
         except Exception as exc:
             errors += 1
-            ml_log_event(
+            ml_log_event_se_mudou(
                 "shipment_watcher", f"/shipments/{shipment_id}",
                 "", ML_CLIENT_ID, "ERRO", str(exc)[:1200]
             )
@@ -10424,12 +10477,24 @@ def ml_pending_label_watch_loop(stop_event: threading.Event) -> None:
                                  "ERRO DESCOBERTA", str(discovery_exc)[:1200])
         except Exception as exc:
             try:
-                ml_log_event("shipment_watcher", "/pending", "", ML_CLIENT_ID, "ERRO", str(exc)[:1200])
+                ml_log_event_se_mudou("shipment_watcher", "/pending", "", ML_CLIENT_ID, "ERRO", str(exc)[:1200])
             except Exception:
                 pass
 
 
 ML_FULL_IGNORADO_DIAS = 45  # V18.78: cobre a janela que o vigia e o catch-up consultam
+# V18.78: cópia em memória da tabela, para o vigia de 20 s não tomar o DB_LOCK só
+# para isso. Alimentada por registrar/esquecer; relida do banco a cada hora (expiração).
+_ML_FULL_IGNORADOS_CACHE: set[str] | None = None
+_ML_FULL_IGNORADOS_CARREGADO_EM = 0.0
+_ML_FULL_IGNORADOS_TTL = 3600.0
+_ML_FULL_IGNORADOS_LOCK = threading.Lock()
+
+
+def _ml_full_ignorados_cache_limpar() -> None:
+    global _ML_FULL_IGNORADOS_CACHE
+    with _ML_FULL_IGNORADOS_LOCK:
+        _ML_FULL_IGNORADOS_CACHE = None
 
 
 def _ml_full_ignorado_registrar(order_id: str, origem: str = "") -> None:
@@ -10443,12 +10508,30 @@ def _ml_full_ignorado_registrar(order_id: str, origem: str = "") -> None:
             (oid, now_iso(), str(origem or "")[:200]),
         )
         DB.commit()
+    with _ML_FULL_IGNORADOS_LOCK:
+        if _ML_FULL_IGNORADOS_CACHE is not None:
+            _ML_FULL_IGNORADOS_CACHE.add(oid)
 
 
-def _ml_full_ignorados(dias: int = ML_FULL_IGNORADO_DIAS) -> set[str]:
-    """V18.78: pedidos Full já classificados nos últimos `dias`. O vigia de 20 s e o
-    catch-up pulam estes — antes reimportavam cada um a cada ciclo. O webhook e o
-    botão Atualizar do Admin chamam ml_import_order direto e NÃO passam por aqui."""
+def _ml_full_ignorado_esquecer(order_id: str) -> bool:
+    """V18.78: o pedido foi importado como NÃO-Full — sai da memória na hora."""
+    oid = str(order_id or "").strip()
+    if not oid:
+        return False
+    with DB_LOCK:
+        try:
+            cur = DB.execute("DELETE FROM ml_full_ignorado_v1878 WHERE order_id=?", (oid,))
+            DB.commit()
+            removido = int(cur.rowcount or 0) > 0
+        except Exception:
+            removido = False
+    with _ML_FULL_IGNORADOS_LOCK:
+        if _ML_FULL_IGNORADOS_CACHE is not None:
+            _ML_FULL_IGNORADOS_CACHE.discard(oid)
+    return removido
+
+
+def _ml_full_ignorados_do_banco(dias: int) -> set[str]:
     corte = (datetime.now(timezone.utc).astimezone() - timedelta(days=dias)).isoformat(timespec="milliseconds")
     with DB_LOCK:
         try:
@@ -10456,6 +10539,28 @@ def _ml_full_ignorados(dias: int = ML_FULL_IGNORADO_DIAS) -> set[str]:
         except Exception:
             rows = []
     return {str(r[0]) for r in rows}
+
+
+def _ml_full_ignorados(dias: int = ML_FULL_IGNORADO_DIAS) -> set[str]:
+    """V18.78: pedidos Full já classificados nos últimos `dias`. O vigia de 20 s e o
+    catch-up pulam estes — antes reimportavam cada um a cada ciclo. O webhook e o
+    botão Atualizar do Admin chamam ml_import_order direto e NÃO passam por aqui."""
+    global _ML_FULL_IGNORADOS_CACHE, _ML_FULL_IGNORADOS_CARREGADO_EM
+    if dias != ML_FULL_IGNORADO_DIAS:
+        return _ml_full_ignorados_do_banco(dias)
+    agora = time.time()
+    with _ML_FULL_IGNORADOS_LOCK:
+        atual = _ML_FULL_IGNORADOS_CACHE
+        vencido = atual is None or (agora - _ML_FULL_IGNORADOS_CARREGADO_EM) > _ML_FULL_IGNORADOS_TTL
+    if vencido:
+        # Lê o banco FORA da trava do cache (ordem fixa: nunca DB_LOCK dentro dela).
+        ids = _ml_full_ignorados_do_banco(dias)
+        with _ML_FULL_IGNORADOS_LOCK:
+            _ML_FULL_IGNORADOS_CACHE = ids
+            _ML_FULL_IGNORADOS_CARREGADO_EM = agora
+            atual = ids
+    with _ML_FULL_IGNORADOS_LOCK:
+        return set(atual or ())
 
 
 def _ml_linked_order_ids() -> set[str]:
@@ -10703,7 +10808,7 @@ def ml_catchup_orders(recovery_since: str = "", *, source: str = "reconexão") -
         return result_payload
     except Exception as exc:
         try:
-            ml_log_event("catchup", "/orders/search", "", ML_CLIENT_ID, "ERRO", str(exc)[:1200])
+            ml_log_event_se_mudou("catchup", "/orders/search", "", ML_CLIENT_ID, "ERRO", str(exc)[:1200])
         except Exception:
             pass
         return {"ok": False, "checked": 0, "imported": 0, "ignored_full": 0, "errors": [{"error": str(exc)}]}
@@ -10749,7 +10854,7 @@ def ml_safety_catchup_loop(stop_event: threading.Event) -> None:
         except Exception as exc:
             _ml_worker_state_update(last_catchup_at=now_iso(), last_error=str(exc)[:1200])
             try:
-                ml_log_event("safety_catchup", "/orders/search", "", ML_CLIENT_ID, "ERRO", str(exc)[:1200])
+                ml_log_event_se_mudou("safety_catchup", "/orders/search", "", ML_CLIENT_ID, "ERRO", str(exc)[:1200])
             except Exception:
                 pass
         if stop_event.wait(ML_SAFETY_CATCHUP_INTERVAL):
@@ -10822,8 +10927,8 @@ def ml_new_order_watch_once() -> dict[str, int]:
                                              "kit_components_applied": detail.get("kit_components_applied") or 0}))
             except Exception as exc:
                 errors += 1
-                ml_log_event("new_order_watcher", f"/orders/{order_id}", seller_id, ML_CLIENT_ID,
-                             "ERRO", str(exc)[:1200])
+                ml_log_event_se_mudou("new_order_watcher", f"/orders/{order_id}", seller_id, ML_CLIENT_ID,
+                                      "ERRO", str(exc)[:1200])
         if errors == 0:
             _ml_update_last_sync(poll_started_at)
         return {"checked": checked, "imported": imported, "refreshed_pending": refreshed_pending, "ignored_full": ignored_full, "errors": errors}
@@ -10852,7 +10957,7 @@ def ml_new_order_watch_loop(stop_event: threading.Event) -> None:
             consecutive_errors = min(consecutive_errors + 1, 4)
             _ml_worker_state_update(last_order_poll_at=now_iso(), last_error=str(exc)[:1200])
             try:
-                ml_log_event("new_order_watcher", "/orders/search", "", ML_CLIENT_ID, "ERRO", str(exc)[:1200])
+                ml_log_event_se_mudou("new_order_watcher", "/orders/search", "", ML_CLIENT_ID, "ERRO", str(exc)[:1200])
             except Exception:
                 pass
         wait_seconds = min(120, ML_NEW_ORDER_WATCH_INTERVAL * (2 ** consecutive_errors))
