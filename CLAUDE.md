@@ -441,7 +441,12 @@ tela mostra o preço do anúncio lido na conferência (`preco_anuncio`, migrado 
 antes, marcada "pelo monitor, não conferido" (`fim_origem`). **V18.75 — tela no padrão Noromak**
 (rótulo + título + cartões com ícone da Visão geral): "Todos" é o filtro padrão, busca por MLB/SKU/título,
 páginas de 25/50/100 (lista tem 1.100+ anúncios), cartão "Renovadas em 30 dias" abre a lista própria
-(`renovado_em`), histórico e regras recolhíveis. Próxima etapa: convites de campanha.
+(`renovado_em`), histórico e regras recolhíveis. **V18.76 — remover da lista** (anúncio apagado no ML):
+`promo_renovacao_remover` apaga a linha de renovação e grava o tombstone `promo_removidos_v1876`
+(some da lista mesmo vindo do monitor; a rodada e o clique Renovar nunca o tocam); **incluir de novo
+desfaz** (reinclusão explícita do ADMIN). Não chama o ML. Seleção em lote em qualquer linha (Renovar só
+vale para marcados sem promoção valendo); Incluir virou janela; Regras em 4 blocos com Salvar só quando
+há alteração. Próxima etapa: convites de campanha.
 
 ### Análise de ADS (V18.54)
 `APP/analise-ads.html` (`/analise-ads`, menu Comercial, só **admin**). O relatório "Anúncios

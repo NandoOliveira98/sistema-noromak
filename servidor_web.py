@@ -43,7 +43,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "18.75-PROMO-TELA-PADRAO"
+APP_VERSION = "18.76-PROMO-REMOVER"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2054,6 +2054,13 @@ def init_db() -> None:
                 motivo TEXT NOT NULL DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS idx_promo_auto_log_dia ON promo_auto_log_v1873(dia, acao);
+            -- V18.76: anúncio removido pelo ADMIN (apagado no ML). Some da renovação e da lista,
+            -- mesmo que continue no monitor do Precificador. Incluir de novo desfaz.
+            CREATE TABLE IF NOT EXISTS promo_removidos_v1876 (
+                mlb TEXT PRIMARY KEY,
+                removido_em TEXT NOT NULL DEFAULT '',
+                removido_por TEXT NOT NULL DEFAULT ''
+            );
             -- Mapa ad_group -> anúncio/SKU. Resolvido uma vez e reaproveitado:
             -- o ad_group agrupa as variações do mesmo produto (novo fluxo do ML).
             CREATE TABLE IF NOT EXISTS ml_ads_grupo_v1830 (
@@ -17129,6 +17136,8 @@ def promo_renovacao_marcar(mlb: Any, ativo: bool, ator: str, preco: Any = None) 
         raise ValueError("Preço inválido.")
     agora = now_iso()
     with DB_LOCK:
+        if ativo:   # V18.76: incluir de novo é a reinclusão explícita do ADMIN
+            DB.execute("DELETE FROM promo_removidos_v1876 WHERE mlb=?", (mlb,))
         DB.execute("INSERT INTO promo_renovacao_v1873(mlb,marcado,preco,marcado_por,marcado_em) VALUES(?,?,?,?,?) "
                    "ON CONFLICT(mlb) DO UPDATE SET marcado=excluded.marcado,"
                    "preco=COALESCE(excluded.preco,preco),marcado_por=excluded.marcado_por,marcado_em=excluded.marcado_em",
@@ -17136,6 +17145,31 @@ def promo_renovacao_marcar(mlb: Any, ativo: bool, ator: str, preco: Any = None) 
         DB.commit()
     _promo_log(mlb, "marcada" if ativo else "desmarcada", ator, preco=valor)
     return {"ok": True, "mlb": mlb, "marcado": bool(ativo)}
+
+
+def promo_renovacao_remover(mlbs: list[Any], ator: str) -> dict[str, Any]:
+    """V18.76: remoção completa (anúncio apagado no ML). Não chama o ML: tira da renovação,
+    apaga o preço guardado e esconde da lista para sempre (tombstone), inclusive o que vem
+    do monitor do Precificador. Incluir o anúncio de novo desfaz."""
+    alvo = sorted({m for m in (_mlb_normalizar(x) for x in (mlbs or [])) if m})
+    if not alvo:
+        raise ValueError("Escolha ao menos um anúncio.")
+    agora = now_iso()
+    with DB_LOCK:
+        for mlb in alvo:
+            DB.execute("DELETE FROM promo_renovacao_v1873 WHERE mlb=?", (mlb,))
+            DB.execute("INSERT INTO promo_removidos_v1876(mlb,removido_em,removido_por) VALUES(?,?,?) "
+                       "ON CONFLICT(mlb) DO UPDATE SET removido_em=excluded.removido_em,"
+                       "removido_por=excluded.removido_por", (mlb, agora, ator))
+        DB.commit()
+    for mlb in alvo:
+        _promo_log(mlb, "removida", ator, "Removido da lista (anúncio apagado no Mercado Livre)")
+    return {"ok": True, "removidos": len(alvo), "mlbs": alvo}
+
+
+def _promo_removidos() -> set[str]:
+    with DB_LOCK:
+        return {str(r["mlb"]) for r in DB.execute("SELECT mlb FROM promo_removidos_v1876").fetchall()}
 
 
 def _promo_ruptura_por_anuncio() -> dict[str, dict[str, Any]]:
@@ -17360,8 +17394,9 @@ def promo_renovacao_rodada(stop_event: threading.Event | None = None, *, hoje: d
                 "SELECT * FROM promo_renovacao_v1873 WHERE marcado = 1").fetchall()}
             feitas_hoje = DB.execute("SELECT COUNT(*) FROM promo_auto_log_v1873 WHERE dia=? AND acao='renovada' "
                                      "AND por='sistema'", (hoje_iso,)).fetchone()[0]
+        removidos = _promo_removidos()
         if manual:
-            alvo = [m for m in (_mlb_normalizar(x) for x in so) if m]
+            alvo = [m for m in (_mlb_normalizar(x) for x in so) if m and m not in removidos]
         elif apenas is not None:
             alvo = sorted(m for m in (_mlb_normalizar(x) for x in apenas) if m in linhas)
         else:
@@ -17541,8 +17576,9 @@ def promo_renovacao_payload(hoje: date | None = None) -> dict[str, Any]:
     except Exception:
         monitor = {}
     vinculos = _ml_vinculos_mlb_sku()
+    removidos = _promo_removidos()
     itens: list[dict[str, Any]] = []
-    for mlb in sorted(set(linhas) | set(monitor)):
+    for mlb in sorted((set(linhas) | set(monitor)) - removidos):
         r = linhas.get(mlb) or {}
         foto = retrato.get(mlb) or {}
         marcado = bool(r.get("marcado"))
@@ -17573,7 +17609,7 @@ def promo_renovacao_payload(hoje: date | None = None) -> dict[str, Any]:
         })
     return {"ok": True, "hoje": hoje.isoformat(), "config": promo_auto_config(),
             "estado": dict(_PROMO_RENOVACAO_ESTADO), "renovadas_30_dias": int(renovadas_30 or 0),
-            "intervalo_minutos": PROMO_RENOVACAO_INTERVALO // 60,
+            "intervalo_minutos": PROMO_RENOVACAO_INTERVALO // 60, "removidos": len(removidos),
             "itens": itens, "historico": historico}
 
 
@@ -19258,6 +19294,21 @@ class AppHandler(BaseHTTPRequestHandler):
                         raise ValueError("Escolha ao menos um anúncio.")
                     res = promo_renovacao_rodada(so=mlbs, ator=ctx["username"], pausa=0)
                     audit(ctx["username"], "promocoes.auto.renovar", ",".join(mlbs))
+                    self.send_json(res)
+                except ValueError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 400)
+                except Exception as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/promocoes-auto/renovacao/remover":
+            # V18.76: remoção completa (anúncio apagado no ML). Não chama o ML.
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                try:
+                    body = self.read_json() or {}
+                    mlbs = [str(x) for x in (body.get("mlbs") or [])][:500]
+                    res = promo_renovacao_remover(mlbs, ctx["username"])
+                    audit(ctx["username"], "promocoes.auto.remover", ",".join(res["mlbs"])[:900])
                     self.send_json(res)
                 except ValueError as exc:
                     self.send_json({"ok": False, "error": str(exc)}, 400)

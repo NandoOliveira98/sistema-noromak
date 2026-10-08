@@ -9,7 +9,9 @@
      que o ADMIN marcou; mesmo preço da promoção que acabou. GET /api/promocoes-auto/renovacao,
      POST .../marcar, .../renovar, .../checar e /api/promocoes-auto/config (Automático = OWNER).
      V18.75: tela no padrão Noromak (cabeçalho e cartões da Visão geral), busca por MLB/SKU,
-     "Todos" como filtro padrão, páginas de 50 e histórico recolhido. -->
+     "Todos" como filtro padrão, páginas de 50 e histórico recolhido.
+     V18.76: remover anúncio da lista (apagado no ML), seleção em lote, Incluir em janela e
+     Regras em blocos no padrão dos cartões, com Salvar só quando há alteração. -->
 <style>
 :root{
   --canvas:#F4F7FB; --tile:#fff; --line:#DCE5EF; --line2:#EDF2F7;
@@ -35,6 +37,12 @@ a{color:inherit}
 .btn.pri:hover{background:var(--navy2h);border-color:var(--navy2h)}
 .btn:disabled{opacity:.45;cursor:not-allowed}
 .btn.mini{padding:4px 9px;font-size:12px;font-weight:600}
+.btn.perigo{color:var(--neg);border-color:#f3c2bd}
+.btn.perigo:hover{background:var(--negbg);border-color:var(--neg)}
+.btn.pri.alterado{background:var(--orange);border-color:var(--orange)}
+.btn.pri.alterado:hover{background:#d97a10;border-color:#d97a10}
+.icone-btn{border:1px solid transparent;background:transparent;color:var(--ink3);border-radius:8px;width:30px;height:30px;display:inline-grid;place-items:center;cursor:pointer;font-size:15px}
+.icone-btn:hover{color:var(--neg);background:var(--negbg);border-color:#f3c2bd}
 .callout{background:var(--warnbg);border:1px solid var(--warnln);border-radius:12px;padding:12px 14px;margin-bottom:12px}
 .painel{background:#fff;border:1px solid var(--line);border-radius:14px;padding:16px 18px;box-shadow:var(--sombra);min-width:0}
 .painel-tit{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:12px;flex-wrap:wrap}
@@ -111,21 +119,24 @@ th.c,td.c{text-align:center}
 .pg:disabled{opacity:.4;cursor:not-allowed}
 .pg-gap{padding:0 4px;color:var(--ink3)}
 select.pp{border:1px solid var(--line);border-radius:8px;padding:5px 8px;font:inherit;font-size:12.5px;background:#fff;color:var(--ink);margin-left:6px}
-.duas{display:grid;grid-template-columns:1fr 1.3fr;gap:14px}
-@media (max-width:900px){.duas{grid-template-columns:1fr}}
+/* V18.76: regras em blocos, no padrão dos cartões */
+.regras4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+@media (max-width:1100px){.regras4{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media (max-width:560px){.regras4{grid-template-columns:1fr}}
+.regra{border:1px solid var(--line);border-radius:12px;padding:14px;display:flex;flex-direction:column;gap:12px;background:#fff;transition:.15s border-color,.15s background}
+.regra.mudou{border-color:var(--orange);background:#FFFBF5}
+.regra-top{display:flex;gap:10px;align-items:flex-start}
+.regra-top .kpi-ic{width:32px;height:32px;font-size:15px}
+.regra b{display:block;font-size:13px;color:var(--ink)}
+.regra small{display:block;color:var(--ink2);font-size:11.5px;margin-top:2px;line-height:1.4}
+.ig{display:flex;align-items:stretch;border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-top:auto;background:#fff}
+.ig:focus-within{border-color:var(--navy2);box-shadow:0 0 0 3px rgba(31,87,165,.12)}
+.ig input{border:0;outline:0;width:100%;min-width:0;padding:8px 10px;font:inherit;font-size:17px;font-weight:700;color:var(--ink);text-align:right;font-variant-numeric:tabular-nums}
+.ig span{background:var(--canvas);border-left:1px solid var(--line);padding:0 12px;display:flex;align-items:center;color:var(--ink2);font-size:12.5px;font-weight:600;white-space:nowrap}
+.regras-rodape{display:flex;align-items:center;gap:6px;color:var(--ink2);font-size:12px;margin-top:12px}
 .campo label{display:block;font-size:12px;font-weight:600;color:var(--ink2);margin-bottom:5px}
 .inp{border:1px solid var(--line);border-radius:8px;padding:8px 10px;font:inherit;font-size:13px;background:#fff;color:var(--ink);width:100%}
 .inp:focus{border-color:var(--navy2);outline:0;box-shadow:0 0 0 3px rgba(31,87,165,.12)}
-.linha-inc{display:grid;grid-template-columns:1.3fr 1fr auto;gap:8px;align-items:end}
-@media (max-width:560px){.linha-inc{grid-template-columns:1fr}}
-.regras{display:grid}
-.rg{display:grid;grid-template-columns:1fr auto;gap:12px;align-items:center;border-bottom:1px solid var(--line2);padding:9px 0}
-.rg:first-child{padding-top:0}
-.rg:last-child{border-bottom:0;padding-bottom:0}
-.rg b{font-weight:600;font-size:13px}
-.rg small{display:block;color:var(--ink2);font-size:11.5px}
-.rg .num{display:flex;align-items:center;gap:6px;color:var(--ink2);font-size:12.5px}
-.rg input{width:72px;text-align:right;border:1px solid var(--line);border-radius:8px;padding:6px 8px;font:inherit;font-weight:600;color:var(--ink)}
 details.painel{padding:0}
 details.painel>summary{list-style:none;cursor:pointer;padding:14px 18px;display:flex;align-items:center;justify-content:space-between;gap:10px}
 details.painel>summary::-webkit-details-marker{display:none}
@@ -196,37 +207,41 @@ details.painel>.dentro{padding:0 18px 16px}
 
     <section class="painel" id="lista">
       <div class="barra">
-        <label class="busca" id="buscaBox"><i class=nk-i-search></i>
-          <input type="search" id="q" placeholder="Buscar por MLB, SKU ou título" autocomplete="off" aria-label="Buscar por MLB, SKU ou título">
-          <button type="button" id="limparBusca" aria-label="Limpar busca"><i class=nk-i-x></i></button></label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;flex:1 1 380px">
+          <label class="busca" id="buscaBox"><i class=nk-i-search></i>
+            <input type="search" id="q" placeholder="Buscar por MLB, SKU ou título" autocomplete="off" aria-label="Buscar por MLB, SKU ou título">
+            <button type="button" id="limparBusca" aria-label="Limpar busca"><i class=nk-i-x></i></button></label>
+          <button class="btn" id="abrirIncluir"><span aria-hidden="true" style="font-size:16px;line-height:1">+</span> Incluir anúncio</button>
+        </div>
         <div class="chips" id="tabs"></div>
       </div>
       <div class="selbar" id="selbar"><span id="sel"></span>
-        <div style="display:flex;gap:6px"><button class="btn mini" id="limparSel">Limpar seleção</button><button class="btn pri" id="renovar"><i class=nk-i-refresh></i> Renovar selecionadas</button></div></div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn mini" id="limparSel">Limpar seleção</button>
+          <button class="btn perigo" id="removerSel"><i class=nk-i-trash></i> Remover da lista</button>
+          <button class="btn pri" id="renovar"><i class=nk-i-refresh></i> Renovar</button></div></div>
       <div class="tw"><table id="tab"></table></div>
       <div class="pag" id="pag"></div>
     </section>
 
-    <div class="duas">
-      <section class="painel">
-        <div class="painel-tit"><div><h2>Incluir anúncio</h2><p>Marca para renovar e confere na hora no Mercado Livre. Sem preço, usa o da promoção que está valendo.</p></div></div>
-        <div class="linha-inc">
-          <div class="campo"><label for="novoMlb">Anúncio (MLB)</label><input class="inp" type="text" id="novoMlb" placeholder="MLB1234567890" autocomplete="off"></div>
-          <div class="campo"><label for="novoPreco">Preço da promoção</label><input class="inp" type="text" id="novoPreco" placeholder="opcional" inputmode="decimal" autocomplete="off"></div>
-          <button class="btn pri" id="incluir"><i class=nk-i-check></i> Marcar</button>
-        </div>
-      </section>
-      <section class="painel">
-        <div class="painel-tit"><div><h2>Regras</h2><p>Valem para a renovação automática e para o clique em Renovar.</p></div>
-          <button class="btn" id="salvarRegras"><i class=nk-i-save></i> Salvar regras</button></div>
-        <div class="regras">
-          <div class="rg"><div><b>Margem mínima da promoção</b><small>Abaixo disso não renova. Também é a régua do aviso de campanha.</small></div><div class="num"><input type="number" id="margem_min_promo"> %</div></div>
-          <div class="rg"><div><b>Duração da promoção</b></div><div class="num"><input type="number" id="duracao_dias"> dias</div></div>
-          <div class="rg"><div><b>Não renovar se o estoque dura menos de</b><small>Estoque lido na hora no ML ÷ ritmo de venda da Ruptura</small></div><div class="num"><input type="number" id="estoque_min_dias"> dias</div></div>
-          <div class="rg"><div><b>Limite por dia</b><small>Teto do modo automático</small></div><div class="num"><input type="number" id="limite_dia"> renovações</div></div>
-        </div>
-      </section>
-    </div>
+    <section class="painel" id="regrasBox">
+      <div class="painel-tit"><div><h2>Regras da renovação</h2><p>Valem para a renovação automática e para o clique em Renovar. Conferidas de novo antes de cada envio ao Mercado Livre.</p></div>
+        <button class="btn pri" id="salvarRegras" disabled><i class=nk-i-save></i> <span>Salvar regras</span></button></div>
+      <div class="regras4">
+        <label class="regra" data-k="margem_min_promo"><div class="regra-top"><span class="kpi-ic ok"><i class=nk-i-dollar></i></span>
+          <div><b>Margem mínima da promoção</b><small>Abaixo disso não renova. Também é a régua do aviso de campanha.</small></div></div>
+          <div class="ig"><input type="number" id="margem_min_promo" min="0" max="50" step="1"><span>%</span></div></label>
+        <label class="regra" data-k="duracao_dias"><div class="regra-top"><span class="kpi-ic"><i class=nk-i-calendar></i></span>
+          <div><b>Duração da promoção</b><small>Cada renovação cria uma promoção nova com este prazo.</small></div></div>
+          <div class="ig"><input type="number" id="duracao_dias" min="1" max="60" step="1"><span>dias</span></div></label>
+        <label class="regra" data-k="estoque_min_dias"><div class="regra-top"><span class="kpi-ic warn"><i class=nk-i-box></i></span>
+          <div><b>Estoque mínimo</b><small>Não renova se o estoque lido no ML dura menos que isso (ritmo de venda da Ruptura).</small></div></div>
+          <div class="ig"><input type="number" id="estoque_min_dias" min="0" max="60" step="1"><span>dias</span></div></label>
+        <label class="regra" data-k="limite_dia"><div class="regra-top"><span class="kpi-ic or"><i class=nk-i-zap></i></span>
+          <div><b>Limite por dia</b><small>Teto de renovações do modo Automático. O clique em Renovar não conta.</small></div></div>
+          <div class="ig"><input type="number" id="limite_dia" min="1" max="500" step="1"><span>por dia</span></div></label>
+      </div>
+      <div class="regras-rodape" id="regrasRodape"><i class=nk-i-shield></i> Ligar o modo Automático pede a senha e o código do proprietário.</div>
+    </section>
 
     <details class="painel" id="histBox">
       <summary><h2><i class=nk-i-clock></i> Histórico <span class="cont" id="histCont">0</span></h2><span class="seta" aria-hidden="true">▾</span></summary>
@@ -271,6 +286,17 @@ details.painel>.dentro{padding:0 18px 16px}
     <p>Vale para as próximas renovações. Logo depois de salvar, o sistema confere o anúncio no Mercado Livre (margem, piso e teto do ML e estoque).</p>
   </div>
   <div class="mf"><button class="btn" type="button" id="precoCancelar">Cancelar</button><button class="btn pri" type="submit" id="precoSalvar">Salvar preço</button></div>
+</form></div>
+<div class="modal" id="incluirModal" role="dialog" aria-modal="true" aria-labelledby="incTit"><form id="incluirForm" novalidate>
+  <div class="mh"><h3 id="incTit">Incluir anúncio</h3></div>
+  <div class="mb">
+    <p>Marca o anúncio para renovar e confere na hora no Mercado Livre. Sem preço, o sistema usa o da promoção que está valendo.</p>
+    <div class="campo"><label for="novoMlb">Anúncio (MLB)</label><input class="inp" type="text" id="novoMlb" placeholder="MLB1234567890" autocomplete="off"></div>
+    <div class="campo"><label for="novoPreco">Preço da promoção <span class="muted" style="font-weight:500">(opcional)</span></label>
+      <div class="reais"><span>R$</span><input type="text" id="novoPreco" inputmode="decimal" autocomplete="off" placeholder="0,00"></div></div>
+    <div class="erro" id="incErro"></div>
+  </div>
+  <div class="mf"><button class="btn" type="button" id="incCancelar">Cancelar</button><button class="btn pri" type="submit"><i class=nk-i-check></i> Marcar para renovar</button></div>
 </form></div>
 <div class="modal" id="confModal" role="dialog" aria-modal="true" aria-labelledby="confTit"><form id="confForm">
   <div class="mh"><h3 id="confTit"></h3></div>
@@ -329,7 +355,7 @@ async function carregar(){
   $('conteudo').hidden=false; $('aviso').hidden=true;
   document.querySelectorAll('#modos button').forEach(m=>{const on=m.dataset.m===D.config.modo_renovacao;m.classList.toggle('on',on);m.setAttribute('aria-checked',on)});
   $('modoDesc').innerHTML=MODOS[D.config.modo_renovacao]||'';
-  ['duracao_dias','estoque_min_dias','limite_dia','margem_min_promo'].forEach(k=>$(k).value=D.config[k]);
+  REGRAS.forEach(k=>$(k).value=D.config[k]); regrasMudaram();
   kpis(); render(); historico();
 }
 function kpis(){
@@ -361,8 +387,8 @@ function render(){
   const vence=i=>{const v=i.dias_para_vencer;if(v==null)return '<span class="muted">—</span>';
     return (v<0?`<b style="color:var(--neg)">há ${-v} dia${v<-1?'s':''}</b>`:v===0?'<b>hoje</b>':`em ${v} dia${v>1?'s':''}`)+
       `<div class="sub2">${dataBR(i.fim)}${i.fim_origem==='monitor'?' · pelo monitor':''}</div>`};
-  const selecionavel=i=>i.marcado&&i.situacao!=='ativa'&&i.situacao!=='em_campanha';
-  $('tab').innerHTML=`<thead><tr><th class="c" style="width:34px"></th><th class="l">Anúncio</th><th>Preço do anúncio</th><th>Promoção</th><th>Vence</th><th>Margem</th><th class="l">Situação</th><th class="l">Renovar sozinha</th></tr></thead><tbody>`+
+  const selecionavel=()=>true;   // V18.76: qualquer linha pode ser selecionada (Remover em lote)
+  $('tab').innerHTML=`<thead><tr><th class="c" style="width:34px"><input type="checkbox" id="selTodos" title="Selecionar todos deste filtro" aria-label="Selecionar todos deste filtro"></th><th class="l">Anúncio</th><th>Preço do anúncio</th><th>Promoção</th><th>Vence</th><th>Margem</th><th class="l">Situação</th><th class="l">Renovar sozinha</th></tr></thead><tbody>`+
    (P.map(i=>`<tr class="${i.marcado?'marc':''}"><td class="c">${selecionavel(i)?`<input type="checkbox" data-m="${i.mlb}" ${marcados.has(i.mlb)?'checked':''} aria-label="Selecionar ${i.mlb}">`:''}</td>
     <td class="l ttl">${esc(i.titulo||'(título ainda não coletado)')}<div class="mlb">${i.mlb}${i.sku?' · SKU '+esc(i.sku):''}</div></td>
     <td>${brl(i.preco_anuncio)}</td>
@@ -370,19 +396,31 @@ function render(){
     <td>${vence(i)}</td>
     <td>${i.margem!=null?`<b>${pct(i.margem)}</b>`:'<span class="muted">—</span>'}</td>
     <td class="l">${chip(i)}${i.situacao==='nao_checado'?'<div class="mot">Conferindo no Mercado Livre…</div>':''}${i.motivo?`<div class="mot">${esc(i.motivo)}</div>`:''}${i.aviso?`<div class="aviso"><i class=nk-i-alert></i><span>${esc(i.aviso)}</span></div>`:''}</td>
-    <td class="l"><label class="sw"><input type="checkbox" data-marcar="${i.mlb}" ${i.marcado?'checked':''}><span class="tr"></span>${i.marcado?'Sim':'Não'}</label></td></tr>`).join('')
+    <td class="l"><div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><label class="sw"><input type="checkbox" data-marcar="${i.mlb}" ${i.marcado?'checked':''}><span class="tr"></span>${i.marcado?'Sim':'Não'}</label>
+      <button class="icone-btn" data-remover="${i.mlb}" title="Remover da lista (anúncio apagado no ML)" aria-label="Remover ${i.mlb} da lista"><i class=nk-i-trash></i></button></div></td></tr>`).join('')
     ||`<tr><td colspan="8" class="vazio">${q?`Nenhum anúncio encontrado para "<b>${esc(q)}</b>".`:tab==='marcados'?'Nenhum anúncio marcado ainda. Ligue "Renovar sozinha" na lista ou inclua pelo número do anúncio.':'Nenhum anúncio neste filtro.'}</td></tr>`)+'</tbody>';
-  document.querySelectorAll('#tab [data-m]').forEach(c=>c.onchange=()=>{c.checked?marcados.add(c.dataset.m):marcados.delete(c.dataset.m);botao()});
+  document.querySelectorAll('#tab [data-m]').forEach(c=>c.onchange=()=>{c.checked?marcados.add(c.dataset.m):marcados.delete(c.dataset.m);estadoSelTodos();botao()});
   document.querySelectorAll('#tab [data-marcar]').forEach(c=>c.onchange=()=>marcar(c.dataset.marcar,c.checked));
   document.querySelectorAll('#tab [data-preco]').forEach(b=>b.onclick=()=>abrirPreco(L.find(x=>x.mlb===b.dataset.preco)));
+  document.querySelectorAll('#tab [data-remover]').forEach(b=>b.onclick=()=>remover([b.dataset.remover]));
+  // V18.76: seleciona TODOS os anúncios do filtro e da busca atuais (todas as páginas, não só esta)
+  const st=$('selTodos'); filtroAtual=R; estadoSelTodos();
+  st.title=R.length>porPagina?`Selecionar todos os ${num(R.length)} deste filtro (todas as páginas)`:'Selecionar todos deste filtro';
+  st.onchange=()=>{ if(st.checked) R.forEach(i=>marcados.add(i.mlb)); else R.forEach(i=>marcados.delete(i.mlb)); render(); };
   paginacao(R.length,paginas,ini,P.length);
   botao();
+}
+let filtroAtual=[];
+function estadoSelTodos(){
+  const st=$('selTodos'); if(!st) return;
+  const R=filtroAtual, n=R.filter(i=>marcados.has(i.mlb)).length;
+  st.checked=R.length>0&&n===R.length; st.indeterminate=n>0&&n<R.length; st.disabled=!R.length;
 }
 function paginacao(total,paginas,ini,qtd){
   const nums=[];
   if(paginas<=7){for(let n=1;n<=paginas;n++)nums.push(n)}
   else{nums.push(1);if(pagina>4)nums.push('…');for(let n=Math.max(2,pagina-1);n<=Math.min(paginas-1,pagina+1);n++)nums.push(n);if(pagina<paginas-3)nums.push('…');nums.push(paginas)}
-  $('pag').innerHTML=`<span>${total?`Mostrando <b>${num(ini+1)}–${num(ini+qtd)}</b> de <b>${num(total)}</b>`:'Nenhum anúncio'}</span>
+  $('pag').innerHTML=`<span>${total?`Mostrando <b>${num(ini+1)}–${num(ini+qtd)}</b> de <b>${num(total)}</b>`:'Nenhum anúncio'}${D.removidos?` <span class="muted">· ${num(D.removidos)} removido(s) da lista</span>`:''}</span>
     <div class="pag-nav">${paginas>1?`<button class="pg" data-p="${pagina-1}" ${pagina<=1?'disabled':''} aria-label="Página anterior">‹</button>
       ${nums.map(n=>n==='…'?'<span class="pg-gap">…</span>':`<button class="pg ${n===pagina?'on':''}" data-p="${n}">${n}</button>`).join('')}
       <button class="pg" data-p="${pagina+1}" ${pagina>=paginas?'disabled':''} aria-label="Próxima página">›</button>`:''}
@@ -390,35 +428,70 @@ function paginacao(total,paginas,ini,qtd){
   document.querySelectorAll('#pag [data-p]').forEach(b=>b.onclick=()=>{pagina=+b.dataset.p;render();$('lista').scrollIntoView({behavior:'smooth',block:'start'})});
   $('pp').onchange=e=>{porPagina=+e.target.value;pagina=1;try{localStorage.setItem('nk_promo_auto_pp',porPagina)}catch(x){}render()};
 }
-function botao(){$('selbar').classList.toggle('on',marcados.size>0);$('sel').innerHTML=`<b>${marcados.size}</b> selecionada(s) para renovar`}
+// só anúncio marcado e sem promoção valendo vai para o Renovar
+const renovaveis=()=>[...marcados].filter(m=>{const i=D&&D.itens.find(x=>x.mlb===m);return i&&i.marcado&&i.situacao!=='ativa'&&i.situacao!=='em_campanha'});
+function botao(){
+  $('selbar').classList.toggle('on',marcados.size>0);
+  $('sel').innerHTML=`<b>${num(marcados.size)}</b> selecionado(s)${marcados.size>porPagina?' <span class="muted">· inclui outras páginas</span>':''}`;
+  const r=renovaveis().length; $('renovar').disabled=!r;
+  $('renovar').innerHTML=`<i class=nk-i-refresh></i> Renovar${r?` (${r})`:''}`;
+  $('renovar').title=r?'':'Só anúncios marcados e sem promoção valendo podem ser renovados';
+}
 let tBusca=null;
 $('q').oninput=e=>{q=e.target.value;$('buscaBox').classList.toggle('tem',!!q);clearTimeout(tBusca);tBusca=setTimeout(()=>{pagina=1;render()},150)};
 $('limparBusca').onclick=e=>{e.preventDefault();q='';$('q').value='';$('buscaBox').classList.remove('tem');pagina=1;render();$('q').focus()};
 $('limparSel').onclick=()=>{marcados.clear();render()};
+$('removerSel').onclick=()=>remover([...marcados]);
+async function remover(L){
+  if(!L.length) return;
+  const um=L.length===1, i=um&&D.itens.find(x=>x.mlb===L[0]);
+  if(!await confirmar(um?'Remover anúncio da lista':`Remover ${num(L.length)} anúncios da lista`,
+    `${um?(i&&i.titulo?i.titulo+' ('+L[0]+')':L[0]):num(L.length)+' anúncios'} ${um?'sai':'saem'} da renovação e da lista, inclusive do que vem do monitor do Precificador. Use para anúncio apagado no Mercado Livre — nada é enviado ao ML. Para trazer de volta, inclua o anúncio de novo pelo número.`,'Remover')) return;
+  try{ const r=await api('/api/promocoes-auto/renovacao/remover',{mlbs:L});
+    L.forEach(m=>marcados.delete(m)); toast(`${num(r.removidos)} anúncio(s) removido(s) da lista`); carregar(); }
+  catch(e){ toast(e.message) }
+}
 async function marcar(mlb,ativo,preco){
   try{ await api('/api/promocoes-auto/renovacao/marcar',{mlb,ativo,preco:preco?String(preco).replace(',','.'):undefined});
     toast(ativo?(preco?`Preço salvo. Conferindo ${mlb} no Mercado Livre…`:`${mlb} marcado. Conferindo no Mercado Livre…`):`${mlb} não renova mais sozinho`); carregar();
     if(ativo) setTimeout(carregar,4000); }
   catch(e){ toast(e.message); carregar(); }
 }
-$('incluir').onclick=()=>{const m=$('novoMlb').value.trim(); if(!m) return $('novoMlb').focus(); marcar(m,true,$('novoPreco').value.trim()); $('novoMlb').value='';$('novoPreco').value=''};
+$('abrirIncluir').onclick=()=>{$('novoMlb').value='';$('novoPreco').value='';$('incErro').textContent='';abrirModal('incluirModal','novoMlb')};
+$('incCancelar').onclick=()=>fecharModal('incluirModal');
+$('incluirForm').onsubmit=e=>{
+  e.preventDefault();
+  const m=$('novoMlb').value.trim().toUpperCase(), bruto=$('novoPreco').value.trim(), v=bruto?numBR(bruto):null;
+  if(!/\d{6,}/.test(m)){$('incErro').textContent='Informe o número do anúncio (MLB).';return $('novoMlb').focus()}
+  if(bruto&&v==null){$('incErro').textContent='Preço inválido.';return $('novoPreco').focus()}
+  fecharModal('incluirModal'); marcar(m,true,v!=null?String(v):'');
+};
 $('renovar').onclick=async()=>{
-  const L=[...marcados];
+  const L=renovaveis(); if(!L.length) return;
   if(!await confirmar('Renovar no Mercado Livre',`Criar agora ${L.length===1?'1 promoção':L.length+' promoções'} de ${D.config.duracao_dias} dias, com o mesmo preço da anterior. Antes de enviar, o sistema confere de novo margem, piso e teto do ML e estoque.`,'Renovar agora')) return;
   $('renovar').disabled=true; toast('Renovando…');
   try{ const r=await api('/api/promocoes-auto/renovacao/renovar',{mlbs:L});
     const ok=r.resultados.filter(x=>x.ok).length, nao=r.resultados.filter(x=>!x.ok);
     toast(`${ok} renovada(s)`+(nao.length?` · ${nao.length} não: ${nao[0].motivo}`:''));
-    marcados.clear(); carregar(); }
+    L.forEach(m=>marcados.delete(m)); carregar(); }
   catch(e){ toast(e.message); }
-  finally{ $('renovar').disabled=false; }
+  finally{ botao(); }
 };
 $('checar').onclick=async()=>{try{await api('/api/promocoes-auto/renovacao/checar',{});toast('Conferindo os anúncios marcados no Mercado Livre…');setTimeout(carregar,6000)}catch(e){toast(e.message)}};
 async function salvarConfig(corpo){
   try{ await api('/api/promocoes-auto/config',corpo); toast('Salvo.'); carregar(); }
   catch(e){ if(e.status===428) return pedirOwner(()=>salvarConfig(corpo)); toast(e.message); }
 }
-$('salvarRegras').onclick=()=>salvarConfig({duracao_dias:+$('duracao_dias').value,estoque_min_dias:+$('estoque_min_dias').value,limite_dia:+$('limite_dia').value,margem_min_promo:+$('margem_min_promo').value});
+const REGRAS=['margem_min_promo','duracao_dias','estoque_min_dias','limite_dia'];
+function regrasMudaram(){
+  if(!D) return 0;
+  let n=0; REGRAS.forEach(k=>{const m=String($(k).value)!==String(D.config[k]);n+=m;document.querySelector(`.regra[data-k="${k}"]`).classList.toggle('mudou',m)});
+  const b=$('salvarRegras'); b.disabled=!n; b.classList.toggle('alterado',!!n);
+  b.querySelector('span').textContent=n?`Salvar ${n} alteração${n>1?'ões':''}`:'Salvar regras';
+  return n;
+}
+REGRAS.forEach(k=>$(k).addEventListener('input',regrasMudaram));
+$('salvarRegras').onclick=()=>{const c={};REGRAS.forEach(k=>{if(String($(k).value)!==String(D.config[k]))c[k]=+$(k).value});if(Object.keys(c).length)salvarConfig(c)};
 document.querySelectorAll('#modos button').forEach(m=>m.onclick=async()=>{
   if(m.dataset.m===D.config.modo_renovacao) return;
   if(m.dataset.m==='automatico'&&!await confirmar('Ligar o modo Automático',`O sistema vai renovar sozinho, no Mercado Livre, os anúncios marcados que passarem em todas as regras (até ${D.config.limite_dia} por dia). O que não passar continua esperando você. Em seguida será pedida a confirmação do proprietário.`,'Continuar')) return;
@@ -460,12 +533,13 @@ $('precoForm').onsubmit=async e=>{
   e.preventDefault(); const v=numBR($('precoValor').value); if(v==null||!precoItem||$('precoSalvar').disabled) return;
   fecharModal('precoModal'); await marcar(precoItem.mlb,true,String(v));
 };
-['precoModal','confModal','owner'].forEach(id=>$(id).addEventListener('mousedown',e=>{
+['precoModal','confModal','owner','incluirModal'].forEach(id=>$(id).addEventListener('mousedown',e=>{
   if(e.target.id!==id) return;
   if(id==='confModal') fecharConf(false); else if(id==='owner') $('ownerCancelar').click(); else fecharModal(id)}));
 document.addEventListener('keydown',e=>{if(e.key!=='Escape')return;
   if($('confModal').classList.contains('on')) fecharConf(false);
   else if($('precoModal').classList.contains('on')) fecharModal('precoModal');
+  else if($('incluirModal').classList.contains('on')) fecharModal('incluirModal');
   else if($('owner').classList.contains('on')) $('ownerCancelar').click()});
 let depoisOwner=null;
 function pedirOwner(fn){depoisOwner=fn;$('ownerErro').textContent='';$('ownerSenha').value='';$('ownerCodigo').value='';abrirModal('owner','ownerSenha')}
@@ -477,7 +551,7 @@ $('ownerForm').onsubmit=async e=>{
   catch(ex){ $('ownerErro').textContent=ex.message; $('ownerCodigo').value=''; }
 };
 function historico(){
-  const A={marcada:['Marcada','c-in'],desmarcada:['Desmarcada','c-sc'],renovada:['Renovada','c-ok'],falhou:['Recusada pelo ML','c-no']};
+  const A={marcada:['Marcada','c-in'],desmarcada:['Desmarcada','c-sc'],renovada:['Renovada','c-ok'],falhou:['Recusada pelo ML','c-no'],removida:['Removida da lista','c-no']};
   $('histCont').textContent=num(D.historico.length);
   $('log').innerHTML=`<thead><tr><th class="l">Quando</th><th class="l">Anúncio</th><th class="l">Ação</th><th>Preço</th><th>Margem</th><th class="l">Até</th><th class="l">Por</th><th class="l">Detalhe</th></tr></thead><tbody>`+
    (D.historico.map(h=>{const a=A[h.acao]||[h.acao,'c-sc'];return `<tr><td class="l">${horaBR(h.quando)}</td><td class="l mlb">${esc(h.mlb)}</td><td class="l"><span class="chip ${a[1]}">${esc(a[0])}</span></td>

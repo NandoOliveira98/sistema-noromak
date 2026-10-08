@@ -346,6 +346,59 @@ class DadoAoVivoManda(Base):
         self.assertEqual(self.item()["situacao"], "pronta")
 
 
+class RemoverAnuncio(Base):
+    """V18.76: anúncio apagado no ML sai da renovação e da lista de vez (inclusive do monitor
+    do Precificador). Incluir de novo pelo número desfaz a remoção."""
+
+    def _monitor(self, *mlbs):
+        S.save_storage(S.PROMO_DATAS_KEY, None, S.json_dumps(
+            {"rows": [{"mlb": m.replace("MLB", ""), "date": "2026-10-20"} for m in mlbs]}), False,
+            actor="t", actor_role="admin", source_screen="t")
+
+    def mlbs(self):
+        return {i["mlb"] for i in S.promo_renovacao_payload(hoje=HOJE)["itens"]}
+
+    def test_remover_tira_da_lista_mesmo_estando_no_monitor(self):
+        self._monitor("MLB1", "MLB7")
+        self.marcar()
+        r = S.promo_renovacao_remover(["MLB1", "mlb7"], "admin_teste")
+        self.assertEqual(r["removidos"], 2)
+        self.assertEqual(self.mlbs() & {"MLB1", "MLB7"}, set())
+        self.assertEqual(S.promo_renovacao_payload(hoje=HOJE)["removidos"], 2)
+
+    def test_removido_nao_e_conferido_nem_renovado(self):
+        self.marcar()
+        self.modo("automatico")
+        S.promo_renovacao_remover(["MLB1"], "admin_teste")
+        self.rodar()
+        self.assertEqual(self.posts, [])
+        r = S.promo_renovacao_rodada(hoje=HOJE, pausa=0, so=["MLB1"], ator="admin_teste")
+        self.assertEqual(r["resultados"], [], "anúncio removido não pode ser renovado pelo clique")
+        self.assertEqual(self.posts, [])
+
+    def test_incluir_de_novo_desfaz_a_remocao(self):
+        self._monitor("MLB1")
+        self.marcar()
+        S.promo_renovacao_remover(["MLB1"], "admin_teste")
+        self.marcar()
+        self.assertIn("MLB1", self.mlbs())
+        self.assertEqual(S.promo_renovacao_payload(hoje=HOJE)["removidos"], 0)
+
+    def test_historico_registra_a_remocao(self):
+        self.marcar()
+        S.promo_renovacao_remover(["MLB1"], "admin_teste")
+        log = S.promo_renovacao_payload(hoje=HOJE)["historico"]
+        self.assertEqual((log[0]["mlb"], log[0]["acao"], log[0]["por"]), ("MLB1", "removida", "admin_teste"))
+
+    def test_rota_remover_so_admin_e_valida(self):
+        self.marcar()
+        status, corpo = self.cliente.pedir("POST", "/api/promocoes-auto/renovacao/remover", {"mlbs": []})
+        self.assertEqual(status, 400, corpo)
+        status, corpo = self.cliente.pedir("POST", "/api/promocoes-auto/renovacao/remover", {"mlbs": ["MLB1"]})
+        self.assertEqual((status, corpo["removidos"]), (200, 1), corpo)
+        self.assertNotIn("MLB1", self.mlbs())
+
+
 class SemDiaSemDesconto(Base):
     """Melhoria 3: o worker acorda logo depois do vencimento e confere só aquele anúncio."""
 
