@@ -43,7 +43,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "18.79-ROMANEIO-PEDIDOS"
+APP_VERSION = "18.80-CUSTO-KIT-PROMOCOES"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -17023,8 +17023,12 @@ def promocoes_painel(mlbs: list[str]) -> dict[str, Any]:
     V18.25: o SKU vem de duas fontes — o vínculo MLB↔SKU (canônico) e, quando
     ele não existe, o `seller_custom_field` do próprio anúncio. Assim a tela
     mostra o anúncio mesmo sem vínculo e oferece criar o vínculo ali.
+
+    V18.80: _promo_produtos (com os kits) no lugar de _precificador_produtos_ml, que pula
+    os kits — anúncio de kit aparecia sempre "Sem custo" aqui. Kit fora do cadastro abre
+    pelo SKU do anúncio (_promo_kit_pelo_sku), igual à renovação automática.
     """
-    produtos = _precificador_produtos_ml()
+    produtos = _promo_produtos()
     vinculos = _ml_vinculos_mlb_sku()
     detalhes = ml_itens_detalhe(list(mlbs)[:PROMO_PAINEL_MAX])
     itens: list[dict[str, Any]] = []
@@ -17063,7 +17067,9 @@ def promocoes_painel(mlbs: list[str]) -> dict[str, Any]:
         sku_vinculo = vinculos.get(mlb, "")
         # O vínculo manda; sem ele, usa o SKU que está no próprio anúncio.
         sku = sku_vinculo or (sku_ml_codigo if sku_ml_codigo in produtos else "")
-        prod = produtos.get(sku)
+        if not sku and _promo_produto(produtos, sku_ml):
+            sku = sku_ml_codigo = sku_ml   # V18.80: kit aberto pelo SKU do anúncio
+        prod = _promo_produto(produtos, sku)
         linha: dict[str, Any] = {
             "mlb": mlb, "sku": sku,
             "vinculado": bool(sku_vinculo),
@@ -17385,7 +17391,7 @@ def ml_promocao_aplicar(mlb: str, preco: Any, inicio: str, fim: str, ator: str =
         vinculos = _ml_vinculos_mlb_sku()
         sku_anuncio = "" if vinculos.get(mlb) else (ml_itens_detalhe([mlb]).get(mlb) or {}).get("sku_ml")
         sku = _promo_resolver_sku(mlb, sku_anuncio, produtos, vinculos)
-    prod = produtos.get(sku)
+    prod = _promo_produto(produtos, sku)
     if not prod:
         raise ValueError(f"{mlb} não tem SKU com custo no Precificador. Sem custo não dá para garantir a margem.")
     # V18.77: comissão e frete do anúncio lidos no ML (só leitura) antes de qualquer envio
@@ -17615,7 +17621,8 @@ def _promo_produtos() -> dict[str, dict[str, Any]]:
     def custo_componentes(itens: list[tuple[str, float]]) -> float | None:
         total = 0.0
         for sku, qtd in itens:
-            comp = produtos.get(sku)
+            # V18.80: componente gravado como "prefixo-código" também acha o código
+            comp = produtos.get(sku) or produtos.get(_compras_codigo(sku, produtos))
             if not comp or comp["custo"] <= 0 or qtd <= 0:
                 return None
             total += comp["custo"] * qtd
@@ -17661,26 +17668,95 @@ def _promo_produtos() -> dict[str, dict[str, Any]]:
         custo = custo_componentes(itens)
         if not custo:
             continue
-        base = produtos[itens[0][0]]
+        base = produtos.get(itens[0][0]) or produtos[_compras_codigo(itens[0][0], produtos)]
         produtos[sku] = dict(base, sku=sku, produto=str(kit.get("nome") or sku), curva="",
                              custo=float(custo), kit=True)
     return produtos
 
 
+def _promo_kit_pelo_sku(sku: Any, produtos: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    """V18.80: kit que não está no Precificador nem no Cadastro de Kits, aberto pelo SKU do
+    anúncio com a MESMA regra da Demanda de Compra (compras_vendas_por_codigo):
+    full_kit_compositions (Cadastro de Kits, depois KIT2-/KIT3-) e, sem isso, "A/B" (com ou
+    sem "KIT-" na frente) = uma de cada. 66 anúncios da lista de promoções (KIT2-PA18,
+    KIT-ACP126/0893764272...) ficavam "sem custo". Custo = componentes do Precificador;
+    componente sem custo = kit sem custo (nunca estimado). Taxas do 1º componente, como o
+    kit do Cadastro de Kits em _promo_produtos."""
+    texto = str(sku or "").strip().upper()
+    if not texto:
+        return None
+    sem_prefixo = ml_sku_do_anuncio(texto)
+    comps = None
+    for candidato in dict.fromkeys((texto, sem_prefixo)):
+        comps = (full_kit_compositions([candidato]).get(candidato) or {}).get("componentes")
+        if comps:
+            break
+    if comps:
+        itens = [(str(c["sku"]), float(c["quantidade"])) for c in comps]
+    else:
+        base = re.sub(r"^KIT\s*[-_: ]+", "", sem_prefixo)
+        if "/" not in base:
+            return None
+        itens = [(x.strip(), 1.0) for x in base.split("/")]
+    total, nomes, primeiro = 0.0, [], None
+    for parte, qtd in itens:
+        codigo = _compras_codigo(ml_sku_do_anuncio(parte, produtos), produtos) or _compras_codigo(parte, produtos)
+        comp = produtos.get(codigo) if codigo else None
+        if not comp or comp["custo"] <= 0 or qtd <= 0:
+            return None
+        primeiro = primeiro or comp
+        total += comp["custo"] * qtd
+        nomes.append(f"{qtd:g}× {codigo}")
+    if not primeiro:
+        return None
+    return dict(primeiro, sku=texto, produto="Kit: " + " + ".join(nomes), curva="",
+                custo=round(total, 4), kit=True)
+
+
+def _promo_produto(produtos: dict[str, dict[str, Any]], sku: Any) -> dict[str, Any] | None:
+    """V18.80: produto da conta da promoção — o do Precificador/Cadastro de Kits ou o kit
+    aberto pelo SKU do anúncio (guardado no próprio dict para a mesma rodada).
+
+    O custo do Precificador manda. Só quando ele está ZERADO (151 kits estão lá como produto
+    comum, "KIT2-PA18", e 62 sem custo) soma as peças pelo SKU — decisão do dono em 08/10 —
+    mantendo as taxas do próprio cadastro do Precificador."""
+    sku = str(sku or "").strip().upper()
+    if not sku:
+        return None
+    atual = produtos.get(sku)
+    if atual is None or (atual["custo"] <= 0 and not atual.get("kit_pelas_pecas")):
+        kit = _promo_kit_pelo_sku(sku, {k: v for k, v in produtos.items() if k != sku})
+        if not kit:
+            return atual
+        if atual is not None:
+            kit = dict(atual, custo=kit["custo"], kit=True, produto=atual.get("produto") or kit["produto"])
+        kit["kit_pelas_pecas"] = True
+        produtos[sku] = kit
+    return produtos[sku]
+
+
 def _promo_resolver_sku(mlb: str, sku_anuncio: Any, produtos: dict[str, Any],
                         vinculos: dict[str, str] | None = None) -> str:
     """V18.73: o vínculo MLB↔SKU manda (canônico); sem ele, o SKU do próprio anúncio
-    (como a tela Promoções ML já faz desde a V18.25). Só 7% das promoções tinham vínculo."""
+    (como a tela Promoções ML já faz desde a V18.25). Só 7% das promoções tinham vínculo.
+    V18.80: kit fora do cadastro vira componentes pelo SKU do anúncio (_promo_kit_pelo_sku)."""
     vinculos = _ml_vinculos_mlb_sku() if vinculos is None else vinculos
     if vinculos.get(mlb):
         return vinculos[mlb]
     bruto = str(sku_anuncio or "").strip().upper()
     if not bruto:
         return ""
-    for candidato in (ml_sku_do_anuncio(bruto, produtos), _compras_codigo(bruto, produtos)):
-        if candidato and candidato in produtos:
-            return candidato
-    return ""
+    codigo = ml_sku_do_anuncio(bruto, produtos)
+    if codigo in produtos:
+        return codigo
+    if _promo_produto(produtos, bruto):
+        return bruto
+    # V18.80: "KIT2-PA18" nunca vira o simples "PA18" (_compras_codigo corta no traço):
+    # o kit de 2 entrava com o custo de 1 peça e a margem saía inflada (mesmo bug da V18.03).
+    if re.match(r"^KIT", codigo):
+        return ""
+    candidato = _compras_codigo(bruto, produtos)
+    return candidato if candidato in produtos else ""
 
 
 def _pct_br(valor: float, casas: int = 1) -> str:
@@ -17838,7 +17914,7 @@ def promo_renovacao_rodada(stop_event: threading.Event | None = None, *, hoje: d
             else:
                 det = detalhes.get(mlb) or {}
                 # V18.77: comissão e frete do anúncio no ML (o Precificador só se o ML não responder)
-                prod, origem_taxas = _promo_prod_com_ml(produtos.get(sku), mlb,
+                prod, origem_taxas = _promo_prod_com_ml(_promo_produto(produtos, sku), mlb,
                                                         _money_number(row.get("preco")) or _money_number(det.get("preco")), det)
                 av = _promo_renovacao_avaliar(mlb, _money_number(row.get("preco")), promos,
                                               det, prod, ruptura.get(mlb), cfg, hoje)
@@ -18009,7 +18085,7 @@ def promo_renovacao_payload(hoje: date | None = None) -> dict[str, Any]:
 
     def conta_do(mlb: str, sku_anuncio: Any) -> dict[str, Any] | None:
         sku = _promo_resolver_sku(mlb, sku_anuncio, produtos, vinculos) if produtos else ""
-        prod = produtos.get(sku) if sku else None
+        prod = _promo_produto(produtos, sku)
         if not prod or prod["custo"] <= 0:
             return None
         # V18.77: editável = produto que está no Precificador (kit do Cadastro de Kits usa as

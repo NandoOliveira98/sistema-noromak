@@ -311,7 +311,7 @@ tbody tr.lin.aberta td{background:var(--infobg)}
     <details class="painel notas">
       <summary><h2><i class=nk-i-shield></i> Antes de renovar, o sistema confere</h2><span class="seta" aria-hidden="true">▾</span></summary>
       <div class="dentro"><ul>
-        <li>Anúncio ativo no ML e com custo no Precificador. O SKU vem do vínculo MLB↔SKU; sem vínculo, do próprio anúncio. <b>Kit</b>: custo = soma dos componentes com o custo de hoje; faltou o custo de um componente, não renova.</li>
+        <li>Anúncio ativo no ML e com custo no Precificador. O SKU vem do vínculo MLB↔SKU; sem vínculo, do próprio anúncio. <b>Kit</b>: custo = soma dos componentes com o custo de hoje (Precificador, Cadastro de Kits ou o próprio SKU do anúncio: KIT2-X = 2× X, A/B = um de cada); faltou o custo de um componente, não renova.</li>
         <li><b>Margem</b> no preço da promoção ≥ a <b>margem mínima da promoção</b> (mesma conta do Precificador: preço − comissão − taxa − imposto − custo).</li>
         <li>Preço acima do <b>preço mínimo</b> (lucro zero), dentro do piso e do teto que o ML impõe e abaixo do preço do anúncio.</li>
         <li><b>Estoque</b> lido na hora no ML: zerado ou durando menos que o limite (pelo ritmo de venda da Ruptura), não renova.</li>
@@ -694,7 +694,7 @@ function abrirGaveta(i){
     Object.entries(GT).forEach(([id,[k,f]])=>{const e=$(id);e.value=f===1?fmt2(c[k]):fmtN(c[k]*100,2);
       e.disabled=!c.editavel||(id==='gtCusto'&&!c.custo_editavel);e.classList.remove('mudou')});
     $('gtCustoRot').textContent=c.kit?'Custo do kit (componentes)':'Custo (R$)';
-    $('gavTaxasNota').textContent=!c.editavel?'Kit só do Cadastro de Kits: usa as taxas do 1º componente. Para mudar, cadastre o kit no Precificador.'
+    $('gavTaxasNota').textContent=!c.editavel?'Kit fora do Precificador (Cadastro de Kits ou aberto pelo SKU do anúncio): custo dos componentes e taxas do 1º componente. Para mudar, cadastre o kit no Precificador.'
       :`Salvar grava no Precificador (SKU ${c.sku}) o custo e o que você alterar à mão; vale para todos os anúncios deste produto.`+(c.kit?' O custo do kit vem dos componentes.':'');
     $('gtSalvar').disabled=true;
     gavApollo=null; $('gavApolloBox').hidden=!c.custo_editavel;

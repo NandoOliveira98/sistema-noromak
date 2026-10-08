@@ -488,6 +488,14 @@ coluna Margem, o aviso de campanha e a trava do mínimo** (`ml_promocao_aplicar`
 (`_promo_prod_com_ml`); ML sem resposta = valor do Precificador, registrado no motivo. Comissão/frete
 do ML **não** são gravados no Precificador (valor por anúncio ≠ valor por produto). Cache 3 h.
 Próxima etapa: convites de campanha.
+**V18.80 — custo de kit nas Promoções:** a tela Promoções (`promocoes_painel`) lia
+`_precificador_produtos_ml()`, que pula os kits; agora usa `_promo_produtos()`. Kit fora do
+Precificador e do Cadastro de Kits abre pelo SKU do anúncio (`_promo_kit_pelo_sku`, regra da Demanda de
+Compra: `full_kit_compositions` e "A/B" = um de cada, com ou sem "KIT-"); todo lookup passa por
+`_promo_produto`. **O custo do Precificador manda** (kit com itens = mesma conta da tela; 151 kits estão
+lá como produto comum, "KIT2-PA18", com custo digitado). Só quando ele está **zerado** soma as peças
+pelo SKU, com as taxas do cadastro do kit (decisão do dono, 08/10). `_promo_resolver_sku` não deixa mais o `_compras_codigo` ler "KIT14-X" como o simples
+"X" (custo de 1 peça, margem inflada). "KIT27200155" sem cadastro continua sem custo (rótulo, V18.19).
 
 ### Análise de ADS (V18.54)
 `APP/analise-ads.html` (`/analise-ads`, menu Comercial, só **admin**). O relatório "Anúncios

@@ -438,3 +438,91 @@ class PromocaoEmVigorDeQualquerTipo(unittest.TestCase):
         self.assertEqual(it["promo_tipo_nome"], "campanha do ML")
         # piso/teto do ML continuam vindo do desconto próprio (o que o Noromak aplica)
         self.assertEqual(it["piso_ml"], 22.36)
+
+
+class KitTemCustoNasPromocoes(unittest.TestCase):
+    """V18.80: a tela Promoções lia _precificador_produtos_ml(), que PULA os kits — anúncio
+    de kit aparecia sempre "Sem custo". E kit sem cadastro (KIT2-PA18, KIT-ACP126/0893764272:
+    66 anúncios da lista de promoções em 08/10) não abria em componentes em nenhuma tela."""
+
+    ML = {"taxaFixa": 0, "comissao": 0.12, "frete": 0, "margem": 0.2}
+
+    def setUp(self):
+        self.orig = (S.ml_itens_detalhe, S.ml_promocoes_do_item, S._ml_vinculos_mlb_sku)
+        self.det = {}
+        S.ml_itens_detalhe = lambda mlbs: {m: self.det[m] for m in mlbs if m in self.det}
+        S.ml_promocoes_do_item = lambda mlb: []
+        S._ml_vinculos_mlb_sku = lambda: {}
+        self._storage("precificador_online_v1", {"products": [
+            {"sku": "PA18", "produto": "Peça A", "custo": 10.0, "imposto": 0.12, "marketplaces": {"ml": self.ML}},
+            {"sku": "0893764272", "produto": "Peça B", "custo": 4.0, "imposto": 0.12, "marketplaces": {"ml": self.ML}},
+            {"sku": "KITP", "produto": "Kit do Precificador", "custo": 1.0, "imposto": 0.12, "isKit": True,
+             "kitItems": [{"sku": "PA18", "quantidade": 3}], "marketplaces": {"ml": self.ML}},
+        ]})
+        self._storage("conf_kits", [])
+
+    def tearDown(self):
+        S.ml_itens_detalhe, S.ml_promocoes_do_item, S._ml_vinculos_mlb_sku = self.orig
+
+    def _storage(self, chave, valor):
+        atual, _, _ = S.get_storage(chave)
+        S.save_storage(chave, atual, S.json_dumps(valor), False, actor="teste", actor_role="admin")
+
+    def _anuncio(self, mlb, sku):
+        self.det[mlb] = {"titulo": "Kit", "preco": 99.0, "sku_ml": sku, "status": "active",
+                         "sub_status": [], "estoque": 5}
+        return S.promocoes_painel([mlb])["itens"][0]
+
+    def test_a_kit_do_precificador_tem_custo_na_tela(self):
+        it = self._anuncio("MLB1", "KITP")
+        self.assertTrue(it["tem_custo"])
+        self.assertAlmostEqual(it["precificador"]["custo"], 30.0)   # 3 x 10, custo de hoje
+
+    def test_b_kit_pelo_prefixo_kitn(self):
+        it = self._anuncio("MLB2", "155230-KIT2-PA18")
+        self.assertTrue(it["tem_custo"])
+        self.assertAlmostEqual(it["precificador"]["custo"], 20.0)
+
+    def test_c_kit_a_barra_b_com_prefixo_kit(self):
+        it = self._anuncio("MLB3", "KIT-PA18/0893764272")
+        self.assertTrue(it["tem_custo"])
+        self.assertAlmostEqual(it["precificador"]["custo"], 14.0)
+
+    def test_d_componente_sem_custo_fica_sem_custo(self):
+        self.assertFalse(self._anuncio("MLB4", "KIT-PA18/NAOEXISTE")["tem_custo"])
+        self.assertFalse(self._anuncio("MLB5", "155230-PSD820/1")["tem_custo"])
+
+    def test_e_kit_como_rotulo_nao_vira_quantidade(self):
+        # V18.19: "KIT27200155" e "KIT10256081 - 10256080" são rótulo, não "N unidades de"
+        self.assertIsNone(S._promo_kit_pelo_sku("KIT27200155", S._promo_produtos()))
+        self.assertIsNone(S._promo_kit_pelo_sku("KIT10256081 - 10256080", S._promo_produtos()))
+
+    def test_f_renovacao_e_aplicar_usam_o_mesmo_kit(self):
+        produtos = S._promo_produtos()
+        sku = S._promo_resolver_sku("MLB9", "KIT2-PA18", produtos, {})
+        self.assertEqual(sku, "KIT2-PA18")
+        # ml_promocao_aplicar recebe o sku e recalcula com um dict novo
+        self.assertAlmostEqual(S._promo_produto(S._promo_produtos(), sku)["custo"], 20.0)
+
+    def _kit_como_produto(self, sku, custo, comissao=0.165):
+        atual, _, _ = S.get_storage("precificador_online_v1")
+        dados = json.loads(atual)
+        dados["products"].append({"sku": sku, "produto": "Kit no Precificador", "custo": custo, "imposto": 0.12,
+                                  "marketplaces": {"ml": dict(self.ML, comissao=comissao)}})
+        self._storage("precificador_online_v1", dados)
+
+    def test_g_custo_do_kit_no_precificador_manda(self):
+        # kit cadastrado no Precificador como produto comum, com custo digitado: vale ESSE custo
+        self._kit_como_produto("KIT2-PA18", 50.0)
+        it = self._anuncio("MLB10", "KIT2-PA18")
+        self.assertAlmostEqual(it["precificador"]["custo"], 50.0)
+
+    def test_h_kit_do_precificador_com_custo_zero_soma_as_pecas(self):
+        # decisão do dono (08/10): custo 0 no Precificador = soma das peças, com as taxas DO KIT
+        self._kit_como_produto("KIT2-PA18", 0, comissao=0.165)
+        it = self._anuncio("MLB11", "KIT2-PA18")
+        self.assertTrue(it["tem_custo"])
+        self.assertAlmostEqual(it["precificador"]["custo"], 20.0)
+        self.assertAlmostEqual(it["precificador"]["comissao"], 0.165)
+        produtos = S._promo_produtos()
+        self.assertAlmostEqual(S._promo_produto(produtos, S._promo_resolver_sku("MLB11", "KIT2-PA18", produtos, {}))["custo"], 20.0)
