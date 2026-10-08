@@ -31,6 +31,14 @@ class Base(TesteNoromak):
         S._precificador_produtos_ml = lambda: {"SKU1": dict(PROD)}
         S._ml_vinculos_mlb_sku = lambda: {"MLB1": "SKU1", "MLB2": "SKU1"}
         S.promo_atualizar_data_planilha = lambda *a, **k: True
+        # V18.77: comissão e frete do anúncio vêm do ML. Por padrão o ML "não responde"
+        # (vale o Precificador); os testes de tarifa trocam por self.tarifa_ml(...).
+        self._orig_api = S.ml_api_get
+        S._ML_TARIFA_CACHE.clear()
+
+        def sem_ml(caminho, headers=None):
+            raise RuntimeError("ML simulado: sem resposta")
+        S.ml_api_get = sem_ml
         self.promos = {"MLB1": [promo_propria("candidate")], "MLB2": [promo_propria("candidate")]}
         self.itens = {"MLB1": {"titulo": "Peça 1", "preco": 100.0, "status": "active", "estoque": 50, "sku_ml": "SKU1"},
                       "MLB2": {"titulo": "Peça 2", "preco": 100.0, "status": "active", "estoque": 50, "sku_ml": "SKU1"}}
@@ -48,7 +56,21 @@ class Base(TesteNoromak):
     def tearDown(self):
         (S.ml_promocoes_do_item, S.ml_itens_detalhe, S._ml_promo_http, S._precificador_produtos_ml,
          S._ml_vinculos_mlb_sku, S.ml_integration_row, S.promo_atualizar_data_planilha) = self._orig
+        S.ml_api_get = self._orig_api
+        S._ML_TARIFA_CACHE.clear()
         super().tearDown()
+
+    def tarifa_ml(self, comissao_pct=12, frete=15.0):
+        def fake(caminho, headers=None):
+            if caminho.startswith("/items/"):
+                return {"price": 100.0, "listing_type_id": "gold_special", "category_id": "MLB1234", "shipping": {}}
+            if caminho.startswith("/sites/MLB/listing_prices"):
+                return [{"sale_fee_amount": 0, "sale_fee_details": {"percentage_fee": comissao_pct, "fixed_fee": 0}}]
+            if "/shipping_options/free" in caminho:
+                return {"coverage": {"all_country": {"list_cost": frete}}}
+            raise AssertionError(caminho)
+        S.ml_api_get = fake
+        S._ML_TARIFA_CACHE.clear()
 
     def marcar(self, mlb="MLB1", preco=90.0):
         S.promo_renovacao_marcar(mlb, True, "admin_teste", preco=preco)
@@ -466,6 +488,178 @@ class Rotas(Base):
         i = {x["mlb"]: x for x in S.promo_renovacao_payload(hoje=HOJE)["itens"]}
         self.assertFalse(i["MLB123"]["marcado"])
         self.assertEqual(i["MLB123"]["fim"][:10], "2026-10-08")
+
+
+class TarifaDoML(Base):
+    """V18.77: a renovação usa a comissão e o frete DO ANÚNCIO no ML (teste real de 08/10
+    bateu com o cobrado). O Precificador tem 12% e taxa 0 para tudo; o anúncio pode pagar
+    frete e outra comissão, e a margem que parecia boa não é."""
+
+    def test_frete_do_ml_derruba_a_margem_e_nao_renova(self):
+        # R$ 90 pelo Precificador: 90 - 10,80 - 10,80 - 50 = 18,40 -> 20,4% (renovaria)
+        # com o frete de R$ 15 do ML: 3,40 -> 3,8% (abaixo da mínima de 10%)
+        self.tarifa_ml(frete=15.0)
+        self.marcar()
+        self.modo("automatico")
+        self.rodar()
+        self.assertEqual(self.posts, [])
+        i = self.item()
+        self.assertEqual(i["situacao"], "revisar")
+        self.assertIn("Margem 3,8%", i["motivo"])
+        self.assertAlmostEqual(i["margem"], 0.0378, places=3)
+
+    def test_comissao_da_categoria_vem_do_ml(self):
+        # comissão 16% e frete 0: 90 - 14,40 - 10,80 - 50 = 14,80 -> 16,4%
+        self.tarifa_ml(comissao_pct=16, frete=0.0)
+        self.marcar()
+        self.rodar()
+        self.assertAlmostEqual(self.item()["margem"], 0.1644, places=3)
+
+    def test_ml_sem_resposta_usa_o_precificador_e_avisa(self):
+        self.marcar()
+        self.modo("automatico")
+        self.rodar()
+        self.assertEqual(len(self.posts), 1)          # 20,4% pelo Precificador
+        log = S.promo_renovacao_payload(hoje=HOJE)["historico"]
+        self.assertTrue(any("Precificador" in (h["motivo"] or "") for h in log if h["acao"] == "renovada"), log)
+
+    def test_trava_do_minimo_ao_criar_usa_o_frete_do_ml(self):
+        # mínimo pelo Precificador: 50 / 0,76 = 65,79; com frete 15: 65 / 0,76 = 85,53
+        self.tarifa_ml(frete=15.0)
+        with self.assertRaises(ValueError) as c:
+            S.ml_promocao_aplicar("MLB1", 80.0, "2026-10-06T00:00:00", "2026-11-05T00:00:00", "t", sku="SKU1")
+        self.assertIn("85,53", str(c.exception))
+        self.assertEqual(self.posts, [])
+
+
+class ContaNaLista(Base):
+    """V18.77: a gaveta de preço da tela calcula margem/lucro no navegador com a mesma
+    conta do servidor — o payload traz custo e taxas de cada anúncio."""
+
+    def test_item_traz_custo_taxas_minimo_e_ideal(self):
+        self.marcar()
+        c = self.item()["conta"]
+        self.assertEqual(c["sku"], "SKU1")
+        self.assertEqual((c["custo"], c["comissao"], c["imposto"], c["taxa_fixa"]), (50.0, 0.12, 0.12, 0.0))
+        self.assertAlmostEqual(c["minimo"], 65.79)          # 50 / (1 - 0,24)
+        self.assertAlmostEqual(c["ideal"], 81.97)           # 50 / (1 - 0,24 - 0,15)
+        self.assertAlmostEqual(c["margem_min"], 0.10)
+
+    def test_nao_marcado_tambem_traz_a_conta(self):
+        S.promo_renovacao_marcar("MLB2", False, "admin_teste")
+        self.assertEqual(self.item("MLB2")["conta"]["sku"], "SKU1")
+
+    def _produtos(self):
+        raw, _, _ = S.get_storage("precificador_online_v1")
+        return {p["sku"]: p for p in S.json.loads(raw)["products"]}
+
+    def _precificador_real(self):
+        S._precificador_produtos_ml = self._orig[3]
+        atual, _, _ = S.get_storage("precificador_online_v1")
+        S.save_storage("precificador_online_v1", atual, S.json_dumps({"products": [
+            {"_id": "p1", "sku": "SKU1", "produto": "Peça", "custo": 50.0, "imposto": 0.12, "curva": "A",
+             "marketplaces": {"ml": {"taxaFixa": 6.0, "comissao": 0.12, "frete": 1.0, "margem": 0.15},
+                              "shopee": {"frete": 0, "margem": 0.2}}},
+            {"_id": "p2", "sku": "OUTRO", "produto": "Outra", "custo": 10.0, "imposto": 0.12,
+             "marketplaces": {"ml": {"taxaFixa": 0, "comissao": 0.12, "frete": 0, "margem": 0.2}}}]}),
+            False, actor="teste", actor_role="admin")
+
+    def test_editar_custo_e_taxas_grava_no_precificador_so_daquele_produto(self):
+        # V18.77: a gaveta edita custo e taxas e o Precificador passa a usar os mesmos valores
+        self._precificador_real()
+        r = S.precificador_produto_ml_atualizar("SKU1", {"custo": 60, "taxa_fixa": 10, "comissao": 0.14,
+                                                         "imposto": 0.10, "margem": 0.2}, "admin_teste")
+        self.assertTrue(r["ok"], r)
+        p = self._produtos()
+        self.assertEqual(p["SKU1"]["custo"], 60.0)
+        self.assertEqual(p["SKU1"]["imposto"], 0.10)
+        # "Taxa fixa / frete" é a soma: o frete fica, a taxa fixa absorve a diferença
+        self.assertEqual(p["SKU1"]["marketplaces"]["ml"], {"taxaFixa": 9.0, "comissao": 0.14, "frete": 1.0, "margem": 0.2})
+        self.assertEqual(p["SKU1"]["marketplaces"]["shopee"], {"frete": 0, "margem": 0.2})   # intocado
+        self.assertEqual(p["OUTRO"]["custo"], 10.0)
+        c = S._promo_produtos()["SKU1"]
+        self.assertEqual((c["custo"], c["taxa_fixa"], c["comissao"]), (60.0, 10.0, 0.14))
+
+    def test_custo_do_apollo_grava_filial_e_custos_por_filial_como_o_precificador(self):
+        self._precificador_real()
+        self.marcar()
+        self.assertEqual(self.item()["conta"]["filial_custo"], 1)          # padrão: Araçatuba
+        filiais = [{"revenda": 1, "casa": "Araçatuba", "custo_medio": 55.5, "tem_cadastro": True, "erro": None},
+                   {"revenda": 3, "casa": "Bauru", "custo_medio": 61.0, "tem_cadastro": True, "lixo": "x"},
+                   {"revenda": "abc"}]
+        r = S.precificador_produto_ml_atualizar("SKU1", {"custo": 61.0, "filial_custo": 3, "custos_filiais": filiais}, "a")
+        self.assertTrue(r["ok"], r)
+        p = self._produtos()["SKU1"]
+        self.assertEqual((p["custo"], p["filialCusto"]), (61.0, 3))
+        self.assertEqual(p["custosFiliais"], [
+            {"revenda": 1, "casa": "Araçatuba", "custo_medio": 55.5, "tem_cadastro": True, "erro": None},
+            {"revenda": 3, "casa": "Bauru", "custo_medio": 61.0, "tem_cadastro": True, "erro": None}])
+        self.assertEqual(self.item()["conta"]["filial_custo"], 3)
+
+    def test_editar_recusa_valor_impossivel_e_sku_fora_do_precificador(self):
+        self._precificador_real()
+        self.assertFalse(S.precificador_produto_ml_atualizar("SKU1", {"custo": 0}, "a")["ok"])
+        self.assertFalse(S.precificador_produto_ml_atualizar("SKU1", {"comissao": 0.6, "imposto": 0.5}, "a")["ok"])
+        self.assertFalse(S.precificador_produto_ml_atualizar("NAOEXISTE", {"custo": 5}, "a")["ok"])
+        self.assertEqual(self._produtos()["SKU1"]["custo"], 50.0)
+
+    def test_conta_diz_o_que_pode_ser_editado(self):
+        self._precificador_real()
+        self.marcar()
+        c = self.item()["conta"]
+        self.assertTrue(c["editavel"])
+        self.assertTrue(c["custo_editavel"])
+
+    def _ml_tarifas(self, falha_frete=False):
+        chamadas = []
+
+        def fake(caminho, headers=None):
+            chamadas.append(caminho)
+            if caminho.startswith("/items/MLB1"):
+                return {"id": "MLB1", "price": 100.0, "listing_type_id": "gold_special", "category_id": "MLB263725",
+                        "shipping": {"logistic_type": "cross_docking", "free_shipping": False}}
+            if caminho.startswith("/sites/MLB/listing_prices"):
+                self.assertIn("listing_type_id=gold_special", caminho)
+                self.assertIn("category_id=MLB263725", caminho)
+                return [{"sale_fee_amount": 3.37, "sale_fee_details": {"percentage_fee": 13, "fixed_fee": 0}}]
+            if "/shipping_options/free" in caminho:
+                if falha_frete:
+                    raise RuntimeError("HTTP 403")
+                return {"coverage": {"all_country": {"list_cost": 6.95, "currency_id": "BRL"}}}
+            raise AssertionError(caminho)
+        S.ml_api_get = fake
+        return chamadas
+
+    def test_tarifa_e_frete_do_anuncio_vem_do_ml(self):
+        # V18.77: teste real de 08/10 — listing_prices e shipping_options/free batem com o cobrado
+        orig = S.ml_api_get
+        try:
+            chamadas = self._ml_tarifas()
+            S._ML_TARIFA_CACHE.clear()
+            r = S.ml_tarifa_frete_anuncio("MLB1", 25.9)
+            self.assertEqual((r["comissao"], r["taxa_fixa"], r["frete"], r["tarifa"]), (0.13, 0.0, 6.95, 3.37))
+            self.assertEqual((r["tipo"], r["categoria"], r["preco"]), ("gold_special", "MLB263725", 25.9))
+            n = len(chamadas)
+            S.ml_tarifa_frete_anuncio("MLB1", 25.9)          # cache: não chama o ML de novo
+            self.assertEqual(len(chamadas), n)
+        finally:
+            S.ml_api_get = orig
+
+    def test_frete_que_nao_vem_fica_nulo_e_nao_zero(self):
+        orig = S.ml_api_get
+        try:
+            self._ml_tarifas(falha_frete=True)
+            S._ML_TARIFA_CACHE.clear()
+            r = S.ml_tarifa_frete_anuncio("MLB1", 25.9)
+            self.assertEqual(r["comissao"], 0.13)
+            self.assertIsNone(r["frete"])
+        finally:
+            S.ml_api_get = orig
+
+    def test_sem_custo_no_precificador_a_conta_vem_nula(self):
+        S._ml_vinculos_mlb_sku = lambda: {}
+        S.promo_renovacao_marcar("MLB9", True, "admin_teste", preco=90.0)
+        self.assertIsNone(self.item("MLB9")["conta"])
 
 
 if __name__ == "__main__":

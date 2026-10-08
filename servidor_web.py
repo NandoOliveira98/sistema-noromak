@@ -43,7 +43,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "18.76-PROMO-REMOVER"
+APP_VERSION = "18.77-PROMO-PRECO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -16536,6 +16536,210 @@ def promo_preco_ideal(prod: dict[str, Any]) -> float | None:
     return round((prod["custo"] + prod["taxa_fixa"]) / divisor, 2)
 
 
+def precificador_produto_ml_atualizar(sku: Any, campos: dict[str, Any], ator: str) -> dict[str, Any]:
+    """V18.77: a gaveta de preço das Promoções automáticas edita custo e taxas do ML de UM
+    produto do Precificador. Grava só os campos daquele produto, pelo merge do
+    precificador_online_v1 (lê -> altera -> save_storage com o lido), como a atualização
+    pelo Apollo: quem estiver editando outro produto no Precificador não perde nada.
+    Frações (0,12 = 12%). "Taxa fixa / frete" é a soma das duas: o frete fica e a taxa
+    fixa absorve a diferença. Kit: o custo vem dos componentes e não é editado aqui."""
+    sku = str(sku or "").strip().upper()
+    if not sku:
+        return {"ok": False, "error": "SKU não informado."}
+
+    def numero(nome: str, minimo: float, maximo: float, aberto: bool = False) -> float | None:
+        if campos.get(nome) is None or campos.get(nome) == "":
+            return None
+        try:
+            v = float(str(campos[nome]).replace(",", "."))
+        except (TypeError, ValueError):
+            raise ValueError(f"Valor inválido em {nome}.")
+        if v != v or v < minimo or v > maximo or (aberto and v <= minimo):
+            raise ValueError(f"Valor fora do permitido em {nome}.")
+        return round(v, 4)
+
+    try:
+        custo = numero("custo", 0.0, 1e7, aberto=True)
+        taxa = numero("taxa_fixa", 0.0, 1e5)
+        comissao = numero("comissao", 0.0, 0.9)
+        imposto = numero("imposto", 0.0, 0.9)
+        margem = numero("margem", 0.0, 0.9)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}
+    # V18.77: custo puxado do Apollo na gaveta — guarda a filial e os custos por filial
+    # no mesmo formato que o Precificador grava depois de consultar o Apollo.
+    filial = campos.get("filial_custo")
+    try:
+        filial = int(filial) if filial not in (None, "") else None
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "Filial do custo inválida."}
+    if filial is not None and not 1 <= filial <= 99:
+        return {"ok": False, "error": "Filial do custo inválida."}
+    filiais = None
+    if isinstance(campos.get("custos_filiais"), list):
+        filiais = []
+        for row in campos["custos_filiais"][:20]:
+            if not isinstance(row, dict):
+                continue
+            try:
+                revenda = int(row.get("revenda"))
+            except (TypeError, ValueError):
+                continue
+            cm = _money_number(row.get("custo_medio"))
+            tc = row.get("tem_cadastro")
+            filiais.append({"revenda": revenda, "casa": str(row.get("casa") or "")[:40],
+                            "custo_medio": round(cm, 2) if cm is not None else None,
+                            "tem_cadastro": tc if isinstance(tc, bool) else None,
+                            "erro": str(row["erro"])[:200] if row.get("erro") else None})
+    raw, _, _ = get_storage("precificador_online_v1")
+    try:
+        dados = json.loads(raw or "{}")
+    except Exception:
+        dados = {}
+    produtos = dados.get("products") if isinstance(dados, dict) else None
+    prod = next((x for x in produtos or [] if isinstance(x, dict)
+                 and str(x.get("sku") or "").strip().upper() == sku), None)
+    if not prod:
+        return {"ok": False, "error": f"O SKU {sku} não está no Precificador: cadastre lá primeiro."}
+    if custo is not None and prod.get("isKit"):
+        return {"ok": False, "error": "Kit: o custo vem dos componentes, altere no Precificador."}
+    mp = prod.get("marketplaces") if isinstance(prod.get("marketplaces"), dict) else {}
+    ml = dict(mp.get("ml") or {})
+    if comissao is not None:
+        ml["comissao"] = comissao
+    if margem is not None:
+        ml["margem"] = margem
+    if taxa is not None:
+        frete = float(ml.get("frete") or 0)
+        if frete > taxa:
+            ml["frete"] = 0
+            frete = 0.0
+        ml["taxaFixa"] = round(taxa - frete, 2)
+    soma = (ml.get("comissao") or 0) + (imposto if imposto is not None else float(prod.get("imposto") or 0)) \
+        + (ml.get("margem") or 0)
+    if soma >= 1:
+        return {"ok": False, "error": "Comissão + imposto + margem chegam a 100%: não existe preço possível."}
+    if custo is not None:
+        prod["custo"] = round(custo, 2)
+    if filial is not None:
+        prod["filialCusto"] = filial
+    if filiais is not None:
+        prod["custosFiliais"] = filiais
+    if imposto is not None:
+        prod["imposto"] = imposto
+    prod["marketplaces"] = dict(mp, ml=ml)
+    prod["updatedAt"] = now_iso()
+    dados["products"] = produtos
+    save_storage("precificador_online_v1", raw, json_dumps(dados), False,
+                 actor=ator or "sistema", actor_role="admin",
+                 source_screen="promocoes-auto", change_method="promocoes.auto.custo")
+    audit(ator or "sistema", "precificador.produto.promocoes",
+          f"{sku}|custo={custo}|filial={filial}|taxa={taxa}|comissao={comissao}|imposto={imposto}|margem={margem}")
+    return {"ok": True, "sku": sku}
+
+
+_ML_TARIFA_CACHE: dict[tuple[Any, ...], tuple[float, Any]] = {}
+_ML_TARIFA_CACHE_LOCK = threading.Lock()
+# A renovação confere os marcados de hora em hora: 3 h de cache evita repetir as mesmas
+# chamadas a cada rodada. Comissão é por tipo+categoria (anúncios iguais dividem a consulta).
+ML_TARIFA_CACHE_SEGUNDOS = 3 * 3600
+
+
+def _ml_tarifa_cache(chave: tuple[Any, ...], buscar: Any) -> Any:
+    agora = time.time()
+    with _ML_TARIFA_CACHE_LOCK:
+        hit = _ML_TARIFA_CACHE.get(chave)
+        if hit and agora - hit[0] < ML_TARIFA_CACHE_SEGUNDOS:
+            return hit[1]
+    valor = buscar()
+    with _ML_TARIFA_CACHE_LOCK:
+        if len(_ML_TARIFA_CACHE) > 5000:
+            _ML_TARIFA_CACHE.clear()
+        _ML_TARIFA_CACHE[chave] = (agora, valor)
+    return valor
+
+
+def ml_tarifa_frete_anuncio(mlb: Any, preco: Any = None, *, tipo: str = "", categoria: str = "") -> dict[str, Any]:
+    """V18.77: comissão, taxa fixa e frete do ANÚNCIO, direto do ML. Só leitura.
+
+    Teste real em 08/10/2026 (6 anúncios): /sites/MLB/listing_prices e
+    /users/{seller}/shipping_options/free bateram centavo a centavo com a tarifa e o
+    frete cobrados nas vendas. A comissão depende da categoria (13% em algumas, não 12%)
+    e a taxa fixa veio 0 em todas as faixas: o anúncio barato paga FRETE.
+    O que o ML não devolver fica None (nunca zero) e vai em `erros`.
+    `tipo`/`categoria` já lidos (ml_itens_detalhe) evitam a chamada a /items."""
+    mlb = _mlb_normalizar(mlb)
+    if not mlb:
+        raise ValueError("Anúncio (MLB) inválido.")
+    try:
+        preco_f = round(float(str(preco).replace(",", ".")), 2) if preco not in (None, "") else None
+    except (TypeError, ValueError):
+        raise ValueError("Preço inválido.")
+    item: dict[str, Any] = {}
+    if not tipo or not categoria or not preco_f:
+        bruto = _ml_tarifa_cache(("item", mlb), lambda: ml_api_get(
+            f"/items/{mlb}?attributes=id,price,listing_type_id,category_id,shipping"))
+        item = bruto if isinstance(bruto, dict) else {}
+        tipo = tipo or str(item.get("listing_type_id") or "")
+        categoria = categoria or str(item.get("category_id") or "")
+        preco_f = preco_f or _money_number(item.get("price"))
+    if not tipo or not categoria or not preco_f:
+        raise ValueError("O Mercado Livre não devolveu tipo, categoria ou preço do anúncio.")
+    ship = item.get("shipping") if isinstance(item.get("shipping"), dict) else {}
+    out: dict[str, Any] = {"ok": True, "mlb": mlb, "preco": preco_f, "tipo": tipo, "categoria": categoria,
+                           "logistica": str(ship.get("logistic_type") or ""), "frete_gratis": bool(ship.get("free_shipping")),
+                           "comissao": None, "taxa_fixa": None, "tarifa": None, "frete": None, "erros": []}
+    try:
+        q = urlencode({"price": preco_f, "listing_type_id": tipo, "category_id": categoria})
+        lp = _ml_tarifa_cache(("taxa", tipo, categoria, preco_f), lambda: ml_api_get(f"/sites/MLB/listing_prices?{q}"))
+        lp = lp[0] if isinstance(lp, list) and lp else lp
+        det = (lp or {}).get("sale_fee_details") or {}
+        pct = _money_number(det.get("percentage_fee"))
+        out["comissao"] = round(pct / 100.0, 4) if pct is not None else None
+        out["taxa_fixa"] = _money_number(det.get("fixed_fee"))
+        out["tarifa"] = _money_number((lp or {}).get("sale_fee_amount"))
+    except Exception as exc:
+        out["erros"].append(f"tarifa: {exc}")
+    try:
+        seller = str((ml_integration_row() or {})["seller_id"] or "")
+        fr = _ml_tarifa_cache(("frete", mlb), lambda: ml_api_get(
+            f"/users/{seller}/shipping_options/free?item_id={mlb}")) if seller else {}
+        cov = (((fr or {}).get("coverage") or {}).get("all_country") or {}) if isinstance(fr, dict) else {}
+        out["frete"] = _money_number(cov.get("list_cost"))
+    except Exception as exc:
+        out["erros"].append(f"frete: {exc}")
+    return out
+
+
+PROMO_TAXAS_DO_PRECIFICADOR = "taxas do Precificador (o Mercado Livre não respondeu)"
+
+
+def _promo_prod_com_ml(prod: dict[str, Any] | None, mlb: str, preco: Any,
+                       det: dict[str, Any] | None = None) -> tuple[dict[str, Any] | None, str]:
+    """V18.77: a conta da promoção usa a comissão e o frete DO ANÚNCIO no ML (decisão do
+    dono em 08/10). O que o ML não devolver fica com o valor do Precificador — nunca zero.
+    Devolve (produto para a conta, origem): origem "" = tudo do ML."""
+    if not prod:
+        return prod, ""
+    det = det or {}
+    try:
+        t = ml_tarifa_frete_anuncio(mlb, preco, tipo=str(det.get("tipo") or ""),
+                                    categoria=str(det.get("categoria") or ""))
+    except Exception:
+        return prod, PROMO_TAXAS_DO_PRECIFICADOR
+    novo = dict(prod)
+    if t.get("comissao") is not None:
+        novo["comissao"] = t["comissao"]
+    if t.get("frete") is not None:
+        novo["taxa_fixa"] = round((t.get("taxa_fixa") or 0.0) + t["frete"], 2)
+    if t.get("comissao") is None and t.get("frete") is None:
+        return prod, PROMO_TAXAS_DO_PRECIFICADOR
+    if t.get("comissao") is None or t.get("frete") is None:
+        falta = "comissão" if t.get("comissao") is None else "frete"
+        return novo, f"{falta} do Precificador (o Mercado Livre não respondeu)"
+    return novo, ""
+
+
 PROMO_PAINEL_MAX = 40
 
 
@@ -16802,7 +17006,9 @@ def ml_itens_detalhe(mlbs: list[str]) -> dict[str, dict[str, Any]]:
     """Título, preço e o SKU que o vendedor cadastrou no próprio anúncio."""
     out: dict[str, dict[str, Any]] = {}
     # V18.72: shipping traz o logistic_type (Full ou não) para a Ruptura.
-    campos = "id,title,price,status,sub_status,available_quantity,seller_custom_field,attributes,category_id,shipping"
+    # V18.77: listing_type_id para a comissão do anúncio (ml_tarifa_frete_anuncio)
+    campos = ("id,title,price,status,sub_status,available_quantity,seller_custom_field,attributes,category_id,"
+              "shipping,listing_type_id")
     for i in range(0, len(mlbs), 20):   # a API aceita 20 ids por chamada
         lote = [x for x in mlbs[i:i + 20] if x]
         if not lote:
@@ -16832,6 +17038,7 @@ def ml_itens_detalhe(mlbs: list[str]) -> dict[str, dict[str, Any]]:
                         "sub_status": corpo.get("sub_status") or [],
                         "estoque": corpo.get("available_quantity"),
                         "categoria": str(corpo.get("category_id") or ""),  # V18.68: Conversão
+                        "tipo": str(corpo.get("listing_type_id") or ""),       # V18.77: comissão
                         "logistica": str((corpo.get("shipping") if isinstance(corpo.get("shipping"), dict)
                                           else {}).get("logistic_type") or "")}  # V18.72: Ruptura
     return out
@@ -16979,6 +17186,8 @@ def ml_promocao_aplicar(mlb: str, preco: Any, inicio: str, fim: str, ator: str =
     prod = produtos.get(sku)
     if not prod:
         raise ValueError(f"{mlb} não tem SKU com custo no Precificador. Sem custo não dá para garantir a margem.")
+    # V18.77: comissão e frete do anúncio lidos no ML (só leitura) antes de qualquer envio
+    prod, _origem = _promo_prod_com_ml(prod, mlb, preco)
     minimo = promo_preco_minimo(prod)
     if minimo is None:
         raise ValueError(f"Sem custo válido para {sku}: não dá para calcular o preço mínimo.")
@@ -17425,9 +17634,14 @@ def promo_renovacao_rodada(stop_event: threading.Event | None = None, *, hoje: d
                       "aviso": "", "fim": row.get("fim") or "", "preco": row.get("preco"), "promo_tipo": "",
                       "promo_preco": None, "margem": None}
             else:
-                prod = produtos.get(sku)
+                det = detalhes.get(mlb) or {}
+                # V18.77: comissão e frete do anúncio no ML (o Precificador só se o ML não responder)
+                prod, origem_taxas = _promo_prod_com_ml(produtos.get(sku), mlb,
+                                                        _money_number(row.get("preco")) or _money_number(det.get("preco")), det)
                 av = _promo_renovacao_avaliar(mlb, _money_number(row.get("preco")), promos,
-                                              detalhes.get(mlb) or {}, prod, ruptura.get(mlb), cfg, hoje)
+                                              det, prod, ruptura.get(mlb), cfg, hoje)
+                if origem_taxas and prod and av["situacao"] in ("pronta", "revisar"):
+                    av["motivo"] += f" · {origem_taxas}"
             cont["checados"] += 1
             renovado_dia = row.get("renovado_dia") or ""
             renovado_em = row.get("renovado_em") or ""
@@ -17577,6 +17791,34 @@ def promo_renovacao_payload(hoje: date | None = None) -> dict[str, Any]:
         monitor = {}
     vinculos = _ml_vinculos_mlb_sku()
     removidos = _promo_removidos()
+    # V18.77: custo e taxas de cada anúncio, para a gaveta de preço da tela calcular
+    # margem e lucro com a MESMA conta do servidor (promo_conta). Sem custo = None.
+    try:
+        produtos = _promo_produtos()
+    except Exception:
+        produtos = {}
+    margem_min = _promo_margem_minima(promo_auto_config())
+    try:
+        no_precificador = {str(p.get("sku") or "").strip().upper(): int(p.get("filialCusto") or 1)
+                           for p in (json.loads(get_storage("precificador_online_v1")[0] or "{}").get("products") or [])
+                           if isinstance(p, dict)}
+    except Exception:
+        no_precificador = {}
+
+    def conta_do(mlb: str, sku_anuncio: Any) -> dict[str, Any] | None:
+        sku = _promo_resolver_sku(mlb, sku_anuncio, produtos, vinculos) if produtos else ""
+        prod = produtos.get(sku) if sku else None
+        if not prod or prod["custo"] <= 0:
+            return None
+        # V18.77: editável = produto que está no Precificador (kit do Cadastro de Kits usa as
+        # taxas do 1º componente e não tem linha própria); custo de kit vem dos componentes.
+        return {"sku": sku, "editavel": sku in no_precificador, "custo_editavel": sku in no_precificador and not prod.get("kit"),
+                "filial_custo": no_precificador.get(sku) or 1,
+                "custo": round(prod["custo"], 2), "comissao": prod["comissao"],
+                "imposto": prod["imposto"], "taxa_fixa": round(prod["taxa_fixa"], 2),
+                "margem_alvo": prod["margem_alvo"], "margem_min": margem_min, "kit": bool(prod.get("kit")),
+                "minimo": promo_preco_minimo(prod), "ideal": promo_preco_ideal(prod)}
+
     itens: list[dict[str, Any]] = []
     for mlb in sorted((set(linhas) | set(monitor)) - removidos):
         r = linhas.get(mlb) or {}
@@ -17606,6 +17848,7 @@ def promo_renovacao_payload(hoje: date | None = None) -> dict[str, Any]:
             "promo_tipo": r.get("promo_tipo") or "", "promo_preco": r.get("promo_preco"),
             "margem": r.get("margem"), "checado_em": r.get("checado_em") or "",
             "renovado_em": r.get("renovado_em") or "", "marcado_por": r.get("marcado_por") or "",
+            "conta": conta_do(mlb, foto.get("sku")),
         })
     return {"ok": True, "hoje": hoje.isoformat(), "config": promo_auto_config(),
             "estado": dict(_PROMO_RENOVACAO_ESTADO), "renovadas_30_dias": int(renovadas_30 or 0),
@@ -18797,6 +19040,18 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
+        if path == "/api/promocoes-auto/tarifa":
+            # V18.77: comissão, taxa fixa e frete do anúncio no ML (só leitura), para a gaveta
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            try:
+                self.send_json(ml_tarifa_frete_anuncio((query.get("mlb") or [""])[0], (query.get("preco") or [""])[0]))
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 502)
+            return
         if path == "/api/promocoes-auto/renovacao":
             # V18.73: renovação automática do desconto próprio. Somente leitura.
             if self.auth(admin_only=True) is None:
@@ -19263,6 +19518,17 @@ class AppHandler(BaseHTTPRequestHandler):
                     self.send_json({"ok": False, "error": str(exc)}, 400)
                 except Exception as exc:
                     self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/promocoes-auto/produto":
+            # V18.77: custo e taxas editados na gaveta de preço gravam no Precificador
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                if not module_allowed(ctx, "precificador"):
+                    self.send_json({"ok": False, "error": "Acesso ao Precificador não autorizado."}, 403)
+                    return
+                body = self.read_json() or {}
+                res = precificador_produto_ml_atualizar(body.get("sku"), body, ctx["username"])
+                self.send_json(res, 200 if res.get("ok") else 400)
             return
         if path == "/api/promocoes-auto/renovacao/marcar":
             ctx = self.auth(admin_only=True)

@@ -446,7 +446,18 @@ páginas de 25/50/100 (lista tem 1.100+ anúncios), cartão "Renovadas em 30 dia
 (some da lista mesmo vindo do monitor; a rodada e o clique Renovar nunca o tocam); **incluir de novo
 desfaz** (reinclusão explícita do ADMIN). Não chama o ML. Seleção em lote em qualquer linha (Renovar só
 vale para marcados sem promoção valendo); Incluir virou janela; Regras em 4 blocos com Salvar só quando
-há alteração. Próxima etapa: convites de campanha.
+há alteração. **V18.77 — gaveta de preço e taxas do ML:** clicar na linha (ou "alterar") abre
+uma gaveta com o Precificador reduzido: preço, régua mínimo/ideal, atalhos, margem e lucro. Custo
+vem do **Apollo** como no Precificador (filial do produto, padrão Araçatuba; cartões por filial);
+custo e taxas editáveis gravam **só aquele SKU** no `precificador_online_v1` pelo merge
+(`POST /api/promocoes-auto/produto`, `precificador_produto_ml_atualizar`; kit não edita custo).
+**Comissão e frete vêm do ML por anúncio** (`ml_tarifa_frete_anuncio`: `/sites/MLB/listing_prices`
++ `/users/{seller}/shipping_options/free`, teste real de 08/10 bateu centavo a centavo com o
+cobrado; taxa fixa veio 0, a comissão varia por categoria). Decisão do dono: a **renovação, a
+coluna Margem, o aviso de campanha e a trava do mínimo** (`ml_promocao_aplicar`) usam esses valores
+(`_promo_prod_com_ml`); ML sem resposta = valor do Precificador, registrado no motivo. Comissão/frete
+do ML **não** são gravados no Precificador (valor por anúncio ≠ valor por produto). Cache 3 h.
+Próxima etapa: convites de campanha.
 
 ### Análise de ADS (V18.54)
 `APP/analise-ads.html` (`/analise-ads`, menu Comercial, só **admin**). O relatório "Anúncios
