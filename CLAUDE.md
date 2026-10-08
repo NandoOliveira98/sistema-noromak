@@ -28,6 +28,16 @@ A autorização vale para **aquela** publicação — não vale para a próxima.
 Motivo: este sistema roda a operação real de expedição da empresa. O `publicar.sh`
 reinicia o serviço em produção na hora; um erro só aparece quando a operação já parou.
 
+**Quando publicar (V18.78).** Cada deploy custa mais do que o restart: o backup pré-deploy
+copia e comprime o banco inteiro (1,6 GB em 08/10) numa VPS de 1 GB dividida com o CRM — às
+11:25 de 08/10 isso parou a bipagem e o CRM por minutos. Entre 02/10 e 08/10 foram 12
+deploys, 5 só em 06/10, quase todos no expediente. Por isso:
+
+- Publicar **antes das 08:00 ou depois das 18:00** (Brasília). Em dia útil nesse horário o
+  `publicar.sh` pede confirmação (ou `PUBLICAR_NO_EXPEDIENTE=1`) — só com motivo operacional.
+- **Agrupar** as versões prontas em uma publicação; não subir várias no mesmo dia.
+- Ao pedir o "pode subir", dizer o horário e lembrar o custo do backup.
+
 ---
 
 ## 1. Regra arquitetural absoluta
@@ -64,7 +74,11 @@ Consequências práticas, não negociáveis:
 - Persistência: SQLite em `/home/expedicao/dados/expedicao.db` (fora da pasta do código).
   Backup diário automático em `/home/expedicao/backups` (V18.56: thread própria com
   `BACKUP_LOCK`, cópia por conexão de leitura separada — **sem** o `DB_LOCK` —, `.gz.tmp`
-  renomeado no fim; a requisição só dispara `backup_daily_em_segundo_plano()`).
+  renomeado no fim; a requisição só dispara `backup_daily_em_segundo_plano()`). **V18.78:**
+  com um `expedicao_predeploy_*.db.gz` de menos de 2 h (o `publicar.sh` acabou de copiar
+  tudo), o diário espera — antes o boot fazia um segundo backup completo logo após o deploy.
+  `ml_event_log`/`shopee_event_log` guardam **30 dias** (era 90; `DELETE` não encolhe o
+  arquivo — `VACUUM` manual, fora do expediente, devolve o espaço).
 - Todos os workers sobem embrulhados em `_worker_protegido` (V18.56): erro fora do try
   é registrado e o worker reinicia em 60 s. `manutencao_diaria_loop` apaga
   `ml_event_log`/`shopee_event_log` com mais de 90 dias (`audit_log` **não** é limpo).
@@ -269,6 +283,16 @@ Rentabilidade via billing API com cache em `ml_profitability_billing_cache`.
 Tratar expiração do token: já houve cenário de `access_token` sem `refresh_token`.
 **V18.56:** o `refresh_token` é de uso único — a renovação passa pelo `ML_TOKEN_LOCK` e relê
 a linha sob a trava (outro já renovou? reaproveita), igual ao `SHOPEE_TOKEN_LOCK`.
+**V18.78 — trabalho repetido (40% de CPU em produção, 08/10):** pedido **Full** nunca entrava
+em `completed` nem em `linked_local`, então o vigia de 20 s reimportava cada Full da primeira
+página a cada ciclo (16 pedidos × ~383 registros em 12 h). Agora `ml_import_order` grava o
+pedido em `ml_full_ignorado_v1878` e o vigia e o catch-up pulam o que está lá (45 dias; o
+webhook e o botão Atualizar continuam chamando `ml_import_order` direto). A reconciliação de
+manuais (60 s) não reimporta mais linha que a API já reconheceu (venda **e** envio
+preenchidos — quem acompanha a etiqueta é `_ml_all_pending_label_candidates`). E os workers
+usam `ml_log_event_se_mudou`: só grava no `ml_event_log` quando (resultado, detalhe) mudou para
+aquele recurso. Ainda em aberto (maior ganho, mais delicado): `_ml_linked_order_ids` decodifica
+o `conf_etiquetas` inteiro (com os ZPL) a cada ciclo — cachear por versão do storage.
 
 ### Shopee
 Fluxo de etiqueta: `get_shipping_parameter` → `ship_order` → `get_tracking_number` →
@@ -590,6 +614,7 @@ Os testes ficam em `TESTES/` (são 30 arquivos; os principais):
 | `test_ads_analise.py` | leitura do .xlsx do ML, planilha errada recusada, mesmo período substitui, lucro por anúncio sem Ads em dobro |
 | `test_auditoria_v1856.py` | renovação do token ML serializada, backup sem `DB_LOCK` e sem `.gz` cortado, reinclusão sob lock, filtro de concluídos sempre aplicado, vínculo MLB manual preservado, `.xlsx` malicioso, worker protegido, limpeza de logs/caches |
 | `test_boot.py` | sobe o `servidor_web.py` pelo `main()` como processo (EXP_WORKERS=0) e exige o `/api/health` com a versão do código; `VERSAO.txt` = `APP_VERSION` |
+| `test_repeticao_v1878.py` | Full importado uma vez só (vigia e catch-up), reconciliação não repete linha já vinculada, log só quando muda, retenção ≤ 30 dias, boot não duplica o backup pré-deploy |
 | `test_instalacao.py` | instalação nova, idempotência do `init_db`, versionamento do storage, autenticação |
 | `base.py` | infraestrutura: banco temporário, servidor real em porta livre, cliente HTTP |
 

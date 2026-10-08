@@ -43,7 +43,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "18.77-PROMO-PRECO"
+APP_VERSION = "18.78-DEPLOY-LEVE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -2061,6 +2061,14 @@ def init_db() -> None:
                 removido_em TEXT NOT NULL DEFAULT '',
                 removido_por TEXT NOT NULL DEFAULT ''
             );
+            -- V18.78: memória dos pedidos Full já classificados. Sem ela o vigia de
+            -- 20 s reimportava (2–3 chamadas ao ML + leitura do conf_pedidos) e
+            -- registrava "FULL IGNORADO" para os mesmos pedidos o dia inteiro.
+            CREATE TABLE IF NOT EXISTS ml_full_ignorado_v1878 (
+                order_id TEXT PRIMARY KEY,
+                visto_em TEXT NOT NULL,
+                origem TEXT NOT NULL DEFAULT ''
+            );
             -- Mapa ad_group -> anúncio/SKU. Resolvido uma vez e reaproveitado:
             -- o ad_group agrupa as variações do mesmo produto (novo fluxo do ML).
             CREATE TABLE IF NOT EXISTS ml_ads_grupo_v1830 (
@@ -3152,13 +3160,32 @@ def _backup_alvo_hoje() -> Path:
     return BACKUP_DIR / f"expedicao_{datetime.now().strftime('%Y-%m-%d')}.db.gz"
 
 
+BACKUP_PREDEPLOY_RECENTE_HORAS = 2
+
+
+def _backup_predeploy_recente(horas: float = BACKUP_PREDEPLOY_RECENTE_HORAS) -> bool:
+    """V18.78: o publicar.sh acaba de copiar e comprimir o banco inteiro
+    (expedicao_predeploy_*.db.gz). No primeiro deploy do dia o boot fazia OUTRA
+    cópia de 1,6 GB segundos depois, enquanto todos os workers partiam — dois
+    backups pesados em ~5 min, na pior hora. Com um pré-deploy recente, o diário
+    espera (próximo save ou a manutenção de 6 h)."""
+    try:
+        limite = time.time() - horas * 3600
+        for p in BACKUP_DIR.glob("expedicao_predeploy_*.db.gz"):
+            if p.stat().st_mtime >= limite:
+                return True
+    except Exception:
+        return False
+    return False
+
+
 def backup_daily_em_segundo_plano() -> None:
     """V18.56: chamado pelas requisições. Nunca faz a cópia dentro da requisição do
     usuário — antes o primeiro save do dia copiava ~1 GB e a bipagem parava."""
     if BACKUP_LOCK.locked():
         return
     try:
-        if _backup_alvo_hoje().exists():
+        if _backup_alvo_hoje().exists() or _backup_predeploy_recente():
             return
     except Exception:
         return
@@ -3180,6 +3207,8 @@ def _backup_daily_locked() -> None:
         dia = datetime.now().strftime("%Y-%m-%d")
         alvo_gz = BACKUP_DIR / f"expedicao_{dia}.db.gz"
         if alvo_gz.exists():
+            return
+        if _backup_predeploy_recente():  # V18.78
             return
         # V18.11: comprimido, cada diário cai de ~1 GB para ~75 MB; mantém só os
         # BACKUP_DAILY_KEEP mais recentes.
@@ -7076,6 +7105,30 @@ def ml_log_event(topic: str, resource: str, user_id: Any, application_id: Any, r
         DB.commit()
 
 
+# V18.78: os workers registravam o MESMO resultado para o MESMO recurso a cada
+# ciclo (71 pedidos manuais ~168 vezes cada em 12 h; 16 Full ~383 vezes cada).
+# Cada registro é um INSERT + commit segurando o DB_LOCK — disputa com a bipagem.
+# Aqui só vai para o banco quando (resultado, detalhe) mudou desde o último
+# registro daquele (tópico, recurso). Memória em processo: depois de um restart
+# cada recurso é registrado uma vez e pronto.
+_ML_LOG_ULTIMO: dict[tuple[str, str], tuple[str, str]] = {}
+_ML_LOG_ULTIMO_LOCK = threading.Lock()
+_ML_LOG_ULTIMO_MAX = 20000
+
+
+def ml_log_event_se_mudou(topic: str, resource: str, user_id: Any, application_id: Any, result: str, detail: str = "") -> bool:
+    chave = (str(topic or ""), str(resource or ""))
+    valor = (str(result or ""), str(detail or ""))
+    with _ML_LOG_ULTIMO_LOCK:
+        if _ML_LOG_ULTIMO.get(chave) == valor:
+            return False
+        if len(_ML_LOG_ULTIMO) >= _ML_LOG_ULTIMO_MAX:
+            _ML_LOG_ULTIMO.clear()
+        _ML_LOG_ULTIMO[chave] = valor
+    ml_log_event(topic, resource, user_id, application_id, result, detail)
+    return True
+
+
 def ml_integration_row() -> sqlite3.Row | None:
     with DB_LOCK:
         return DB.execute("SELECT * FROM ml_integration WHERE id=1").fetchone()
@@ -9199,6 +9252,13 @@ def _ml_manual_pending_numbers() -> set[str]:
         sale_id = str(row.get("VendaMercadoLivre") or "").strip()
         if sale_id and sale_id in linked:
             continue
+        # V18.78: linha que a API já reconheceu (venda E envio preenchidos por
+        # _ml_bind_manual_pending_rows) não precisa ser reconciliada de novo a cada
+        # 60 s — quem acompanha a etiqueta dela é o vigia de etiquetas pendentes
+        # (_ml_all_pending_label_candidates). Antes, 71 pedidos eram reimportados
+        # ~168 vezes em 12 h sem nada mudar.
+        if sale_id and str(row.get("ShipmentIdMercadoLivre") or "").strip():
+            continue
         for raw_id in (order_number(row), sale_id, row.get("PackIdMercadoLivre")):
             digits = re.sub(r"\D+", "", str(raw_id or ""))
             if digits:
@@ -9253,9 +9313,12 @@ def ml_reconcile_manual_orders_once() -> dict[str, int]:
                     remaining.difference_update(aliases)
                     if detail.get("ready_for_conference"):
                         ready += 1
-                    ml_log_event(
+                    # V18.78: "VINCULADO" só quando o vínculo foi criado agora; e só
+                    # grava no log quando o resultado mudou.
+                    ml_log_event_se_mudou(
                         "manual_reconcile", f"/orders/{order_id}", seller_id, ML_CLIENT_ID,
-                        "PEDIDO MANUAL VINCULADO",
+                        "PEDIDO MANUAL VINCULADO" if int(detail.get("manual_rows_bound") or 0) > 0
+                        else "PEDIDO MANUAL REVISTO / AGUARDANDO ETIQUETA",
                         json_dumps({
                             "order_id": order_id,
                             "pack_id": detail.get("pack_id") or "",
@@ -9509,6 +9572,7 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
                 client_ip="127.0.0.1", allow_completed_reimport=False,
                 remove_pending_identities=_pending_removed_identities_v1852(before_rows, pending),
             )
+        _ml_full_ignorado_registrar(order_id, source)  # V18.78: o vigia e o catch-up não voltam a este pedido
         return {
             "order_id": order_id,
             "pack_id": pack_id,
@@ -10365,6 +10429,35 @@ def ml_pending_label_watch_loop(stop_event: threading.Event) -> None:
                 pass
 
 
+ML_FULL_IGNORADO_DIAS = 45  # V18.78: cobre a janela que o vigia e o catch-up consultam
+
+
+def _ml_full_ignorado_registrar(order_id: str, origem: str = "") -> None:
+    """V18.78: lembra que este pedido é Mercado Envios Full (não passa pela expedição)."""
+    oid = str(order_id or "").strip()
+    if not oid:
+        return
+    with DB_LOCK:
+        DB.execute(
+            "INSERT OR REPLACE INTO ml_full_ignorado_v1878(order_id,visto_em,origem) VALUES(?,?,?)",
+            (oid, now_iso(), str(origem or "")[:200]),
+        )
+        DB.commit()
+
+
+def _ml_full_ignorados(dias: int = ML_FULL_IGNORADO_DIAS) -> set[str]:
+    """V18.78: pedidos Full já classificados nos últimos `dias`. O vigia de 20 s e o
+    catch-up pulam estes — antes reimportavam cada um a cada ciclo. O webhook e o
+    botão Atualizar do Admin chamam ml_import_order direto e NÃO passam por aqui."""
+    corte = (datetime.now(timezone.utc).astimezone() - timedelta(days=dias)).isoformat(timespec="milliseconds")
+    with DB_LOCK:
+        try:
+            rows = DB.execute("SELECT order_id FROM ml_full_ignorado_v1878 WHERE visto_em >= ?", (corte,)).fetchall()
+        except Exception:
+            rows = []
+    return {str(r[0]) for r in rows}
+
+
 def _ml_linked_order_ids() -> set[str]:
     """Pedidos cuja etiqueta ML realmente existe no banco de etiquetas.
 
@@ -10507,6 +10600,7 @@ def ml_catchup_orders(recovery_since: str = "", *, source: str = "reconexão") -
         # Pequena sobreposição evita perder pedidos exatamente na borda do marcador.
         since_dt = since_dt - timedelta(minutes=5)
         existing = _ml_existing_order_ids()
+        existing |= _ml_full_ignorados()  # V18.78: Full já classificado não é reimportado
 
         imported = 0
         ignored_full = 0
@@ -10549,7 +10643,7 @@ def ml_catchup_orders(recovery_since: str = "", *, source: str = "reconexão") -
                     if detail.get("ignored") and detail.get("reason") == "FULL":
                         ignored_full += 1
                         existing.add(order_id)
-                        ml_log_event(
+                        ml_log_event_se_mudou(
                             "catchup", f"/orders/{order_id}", seller_id, ML_CLIENT_ID,
                             "FULL IGNORADO", json_dumps({"order_id": order_id, "source": source})
                         )
@@ -10681,6 +10775,9 @@ def ml_new_order_watch_once() -> dict[str, int]:
         completed = _ml_completed_order_ids()
         linked_local = _ml_linked_order_ids()
         local_or_completed = _ml_existing_order_ids()
+        # V18.78: pedido Full nunca entrava em `completed` nem em `linked_local`, então
+        # cada Full da primeira página era reimportado a cada 20 s, o dia inteiro.
+        full_ignorados = _ml_full_ignorados()
         checked = imported = refreshed_pending = ignored_full = errors = 0
         for order in orders or []:
             if not isinstance(order, dict):
@@ -10689,7 +10786,7 @@ def ml_new_order_watch_once() -> dict[str, int]:
             if not order_id:
                 continue
             checked += 1
-            if order_id in completed or order_id in linked_local:
+            if order_id in completed or order_id in linked_local or order_id in full_ignorados:
                 continue
             try:
                 # Pedido já existe localmente, mas ainda sem etiqueta: não fazemos
@@ -10709,15 +10806,15 @@ def ml_new_order_watch_once() -> dict[str, int]:
                 detail = ml_import_order(order_id, source="API Mercado Livre / entrada automática")
                 if detail.get("ignored") and detail.get("reason") == "FULL":
                     ignored_full += 1
-                    ml_log_event("new_order_watcher", f"/orders/{order_id}", seller_id, ML_CLIENT_ID,
-                                 "FULL IGNORADO", json_dumps({"order_id": order_id}))
+                    ml_log_event_se_mudou("new_order_watcher", f"/orders/{order_id}", seller_id, ML_CLIENT_ID,
+                                          "FULL IGNORADO", json_dumps({"order_id": order_id}))
                 else:
                     imported += 1
                     if detail.get("ready_for_conference"):
                         linked_local.add(order_id)
                     else:
                         refreshed_pending += 1
-                    ml_log_event("new_order_watcher", f"/orders/{order_id}", seller_id, ML_CLIENT_ID,
+                    ml_log_event_se_mudou("new_order_watcher", f"/orders/{order_id}", seller_id, ML_CLIENT_ID,
                                  "PEDIDO IMPORTADO/ATUALIZADO",
                                  json_dumps({"order_id": order_id,
                                              "ready_for_conference": bool(detail.get("ready_for_conference")),
@@ -22145,7 +22242,10 @@ def _worker_protegido(alvo: Any) -> Any:
 # V18.56: ml_event_log e shopee_event_log cresciam para sempre (o worker de
 # etiquetas Shopee grava um "OK" a cada ciclo com trabalho). audit_log é histórico
 # e NÃO é limpo.
-LOG_EVENTOS_DIAS = 90
+# V18.78: 90 → 30 dias. Em 08/10 o ml_event_log tinha 2,85 milhões de linhas
+# (~0,8 GB, metade do banco) desde 26/08 — é diagnóstico, não auditoria. O DELETE
+# não encolhe o arquivo: um VACUUM manual, fora do expediente, devolve o espaço.
+LOG_EVENTOS_DIAS = 30
 
 
 def limpar_logs_antigos(dias: int = LOG_EVENTOS_DIAS) -> dict[str, int]:
