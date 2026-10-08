@@ -43,7 +43,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "18.80-CUSTO-KIT-PROMOCOES"
+APP_VERSION = "18.81-PROMO-TITULO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
@@ -1495,12 +1495,21 @@ def ensure_ml_billing_credito_schema() -> None:
 
 
 def ensure_promo_renovacao_schema() -> None:
-    """V18.74: preço do anúncio lido NA CONFERÊNCIA (a tela mostrava o retrato da manhã)."""
+    """V18.74: preço do anúncio lido NA CONFERÊNCIA (a tela mostrava o retrato da manhã).
+    V18.81: título e SKU lidos na conferência — anúncio criado depois do retrato diário
+    das 06:00 aparecia "(título ainda não coletado)"."""
     with DB_LOCK:
         info = DB.execute("PRAGMA table_info(promo_renovacao_v1873)").fetchall()
-        if info and "preco_anuncio" not in {str(r["name"]) for r in info}:
+        colunas = {str(r["name"]) for r in info}
+        if not info:
+            return
+        if "preco_anuncio" not in colunas:
             DB.execute("ALTER TABLE promo_renovacao_v1873 ADD COLUMN preco_anuncio REAL")
-            DB.commit()
+        if "titulo" not in colunas:
+            DB.execute("ALTER TABLE promo_renovacao_v1873 ADD COLUMN titulo TEXT NOT NULL DEFAULT ''")
+        if "sku_ml" not in colunas:
+            DB.execute("ALTER TABLE promo_renovacao_v1873 ADD COLUMN sku_ml TEXT NOT NULL DEFAULT ''")
+        DB.commit()
 
 
 def ensure_shopee_escrow_schema() -> None:
@@ -17963,15 +17972,19 @@ def promo_renovacao_rodada(stop_event: threading.Event | None = None, *, hoje: d
             with DB_LOCK:
                 DB.execute(
                     "INSERT INTO promo_renovacao_v1873(mlb,marcado,preco,situacao,motivo,aviso,fim,promo_tipo,promo_preco,"
-                    "margem,checado_em,renovado_dia,renovado_em,preco_anuncio) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                    "margem,checado_em,renovado_dia,renovado_em,preco_anuncio,titulo,sku_ml) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(mlb) DO UPDATE SET preco=excluded.preco,situacao=excluded.situacao,"
                     "motivo=excluded.motivo,aviso=excluded.aviso,fim=excluded.fim,promo_tipo=excluded.promo_tipo,"
                     "promo_preco=excluded.promo_preco,margem=excluded.margem,checado_em=excluded.checado_em,"
                     "renovado_dia=excluded.renovado_dia,renovado_em=excluded.renovado_em,"
-                    "preco_anuncio=COALESCE(excluded.preco_anuncio,preco_anuncio)",
+                    "preco_anuncio=COALESCE(excluded.preco_anuncio,preco_anuncio),"
+                    "titulo=CASE WHEN excluded.titulo<>'' THEN excluded.titulo ELSE titulo END,"
+                    "sku_ml=CASE WHEN excluded.sku_ml<>'' THEN excluded.sku_ml ELSE sku_ml END",
                     (mlb, int(row.get("marcado") or 0), av["preco"], av["situacao"], av["motivo"], av["aviso"],
                      av["fim"], av["promo_tipo"], av["promo_preco"], av["margem"], now_iso(),
-                     renovado_dia, renovado_em, _money_number((detalhes.get(mlb) or {}).get("preco"))))
+                     renovado_dia, renovado_em, _money_number((detalhes.get(mlb) or {}).get("preco")),
+                     # V18.81: título/SKU lidos agora no ML (a tela usa quando não há retrato do dia)
+                     str((detalhes.get(mlb) or {}).get("titulo") or ""), str((detalhes.get(mlb) or {}).get("sku_ml") or "")))
                 DB.commit()
             resultados.append({"mlb": mlb, "ok": ok, "situacao": av["situacao"], "motivo": av["motivo"]})
             if pausa > 0:
@@ -18124,7 +18137,8 @@ def promo_renovacao_payload(hoje: date | None = None) -> dict[str, Any]:
         preco_anuncio = preco_anuncio or _money_number(foto.get("preco"))
         preco = _money_number(r.get("preco"))
         itens.append({
-            "mlb": mlb, "titulo": foto.get("titulo") or "", "sku": vinculos.get(mlb) or foto.get("sku") or "",
+            "mlb": mlb, "titulo": foto.get("titulo") or r.get("titulo") or "",
+            "sku": vinculos.get(mlb) or foto.get("sku") or r.get("sku_ml") or "",
             "marcado": marcado, "no_monitor": mlb in monitor,
             "situacao": (r.get("situacao") or "nao_checado") if marcado else "nao_marcado",
             "motivo": r.get("motivo") or "", "aviso": r.get("aviso") or "",
@@ -18134,7 +18148,7 @@ def promo_renovacao_payload(hoje: date | None = None) -> dict[str, Any]:
             "promo_tipo": r.get("promo_tipo") or "", "promo_preco": r.get("promo_preco"),
             "margem": r.get("margem"), "checado_em": r.get("checado_em") or "",
             "renovado_em": r.get("renovado_em") or "", "marcado_por": r.get("marcado_por") or "",
-            "conta": conta_do(mlb, foto.get("sku")),
+            "conta": conta_do(mlb, foto.get("sku") or r.get("sku_ml")),
         })
     return {"ok": True, "hoje": hoje.isoformat(), "config": promo_auto_config(),
             "estado": dict(_PROMO_RENOVACAO_ESTADO), "renovadas_30_dias": int(renovadas_30 or 0),

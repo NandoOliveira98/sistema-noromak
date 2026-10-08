@@ -497,6 +497,10 @@ lá como produto comum, "KIT2-PA18", com custo digitado). Só quando ele está *
 pelo SKU, com as taxas do cadastro do kit (zeradas = as da 1ª peça; decisão do dono, 08/10). A tela
 Promoções diz de onde veio o custo (`precificador.kit`) e custo 0 não mostra mais margem (dava 88%). `_promo_resolver_sku` não deixa mais o `_compras_codigo` ler "KIT14-X" como o simples
 "X" (custo de 1 peça, margem inflada). "KIT27200155" sem cadastro continua sem custo (rótulo, V18.19).
+**V18.81 — título sem retrato:** título/SKU da lista vinham só do retrato diário
+(`ml_visitas_item_v1868`, 06:00); anúncio criado depois aparecia "(título ainda não coletado)". A
+conferência de hora em hora grava o título e o SKU lidos no ML (`promo_renovacao_v1873.titulo/sku_ml`,
+migração em `ensure_promo_renovacao_schema`); o retrato do dia continua mandando quando existe.
 
 ### Análise de ADS (V18.54)
 `APP/analise-ads.html` (`/analise-ads`, menu Comercial, só **admin**). O relatório "Anúncios

@@ -532,6 +532,29 @@ class TarifaDoML(Base):
         self.assertEqual(self.posts, [])
 
 
+class TituloSemRetrato(Base):
+    """V18.81: o título vinha só do retrato diário (ml_visitas_item_v1868, 06:00). Anúncio
+    criado depois da rodada aparecia "(título ainda não coletado)" na lista, mesmo com a
+    conferência lendo o título no ML de hora em hora (MLB5353816529, 08/10)."""
+
+    def test_titulo_e_sku_lidos_na_conferencia_aparecem_sem_retrato(self):
+        S._ml_vinculos_mlb_sku = lambda: {}
+        self.marcar()
+        self.rodar()
+        i = self.item()
+        self.assertEqual(i["titulo"], "Peça 1")
+        self.assertEqual(i["sku"], "SKU1")
+        self.assertIsNotNone(i["conta"])          # o SKU do anúncio também acha o custo
+
+    def test_retrato_do_dia_continua_mandando(self):
+        self.marcar()
+        self.rodar()
+        with S.DB_LOCK:
+            S.DB.execute("INSERT INTO ml_visitas_item_v1868(item_id,titulo,sku,preco) VALUES('MLB1','Título do retrato','SKU1',100)")
+            S.DB.commit()
+        self.assertEqual(self.item()["titulo"], "Título do retrato")
+
+
 class ContaNaLista(Base):
     """V18.77: a gaveta de preço da tela calcula margem/lucro no navegador com a mesma
     conta do servidor — o payload traz custo e taxas de cada anúncio."""
