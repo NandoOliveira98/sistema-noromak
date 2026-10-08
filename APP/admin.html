@@ -4310,10 +4310,11 @@ async function pdRomRecarregarV1860(msg,contatos){
 }
 async function pdRomaneioLinxV1860(btn){
   const pedido=String(btn?.dataset?.pedido||"").trim();if(!pedido)return;
-  const original=btn.textContent;btn.disabled=true;btn.textContent="Consultando…";
+  // V18.79: guarda o HTML (o botão da tela Pedidos é só o ícone; textContent o apagava).
+  const original=btn.innerHTML,soIcone=!btn.textContent.trim();btn.disabled=true;if(!soIcone)btn.textContent="Consultando…";
   try{pdRomaneioRenderV1860(await mlApiAdmin("/expedicao/api/linx/romaneio?pedido="+encodeURIComponent(pedido)));}
   catch(e){alert("Romaneio: "+e.message);}
-  finally{btn.disabled=false;btn.textContent=original;}
+  finally{btn.disabled=false;btn.innerHTML=original;}
 }
 async function pdRomRoboV1860(){
   const d=pdRomaneioV1860;if(!d)return;
@@ -5784,7 +5785,7 @@ function renderizarPedidosAdmin(){
         const kitResumo=textoKitBanco(item)?`<span class="kit-badge">KIT</span> ${htmlSeguroBanco(textoKitBanco(item))}`:'Item normal';
         const detalhes=`<details class="pedido-detalhes-compactos"><summary>Mais detalhes</summary><div class="pedido-detalhes-grid"><label>Descrição${inp('Descrição','campo-descricao')}</label><label>Rua${inp('Rua')}</label><label>Módulo${inp('Módulo')}</label><label>Prateleira${inp('Prateleira')}</label><label>Nível${inp('Nível')}</label><label>Posição${inp('Posição')}</label><label>Foto${inp('Foto','campo-foto')}</label><div class="pedido-kit-detalhe"><span>${kitResumo}</span><button type="button" class="btn-kit-pedido-editar" onclick="abrirEditorKitPedidoAdmin('${uid}')"><i class=nk-i-pencil></i> Kit</button></div></div></details>`;
         return `<div class="pedido-item-row">
-          <div class="pedido-item-acoes"><button title="Adicionar item" onclick="adicionarItemMesmoPedido('${uid}')">＋</button><button title="Atualizar" onclick="atualizarVendaMercadoLivreAdmin('${uid}',this)">↻</button><button title="Excluir item" class="acao-excluir" onclick="excluirLinhaPedidoAdmin('${uid}')"><i class=nk-i-trash></i></button>${indice===0?`<button type="button" class="acao-linx" data-pedido="${htmlSeguroBanco(pedidoOriginal)}" title="Atualizar o cadastro deste cliente no Linx" onclick="pdClienteLinxV1785(this)">Linx</button><button type="button" class="acao-romaneio" title="Imprimir romaneio — em desenvolvimento" disabled><i class=nk-i-file></i></button>`:''}</div>
+          <div class="pedido-item-acoes"><button title="Adicionar item" onclick="adicionarItemMesmoPedido('${uid}')">＋</button><button title="Atualizar" onclick="atualizarVendaMercadoLivreAdmin('${uid}',this)">↻</button><button title="Excluir item" class="acao-excluir" onclick="excluirLinhaPedidoAdmin('${uid}')"><i class=nk-i-trash></i></button>${indice===0?`<button type="button" class="acao-linx" data-pedido="${htmlSeguroBanco(pedidoOriginal)}" title="Atualizar o cadastro deste cliente no Linx" onclick="pdClienteLinxV1785(this)">Linx</button><button type="button" class="acao-romaneio" data-pedido="${htmlSeguroBanco(pedidoOriginal)}" title="Romaneio no Linx (Smart API): conferir e imprimir" onclick="pdRomaneioLinxV1860(this)"><i class=nk-i-file></i></button>`:''}</div>
           <div class="pedido-item-num">${total>1?`<b>${ehKit?'Componente':'Item'} ${indice+1}/${total}</b>`:''}</div>
           <label class="pedido-item-sku"><span>SKU</span>${skuEditor}</label>
           <label class="pedido-item-qtd"><span>Qtd.</span><input type="number" min="1" data-uidlinha="${uid}" data-campo="Quantidade" value="${htmlSeguroBanco(item.Quantidade||'1')}" onchange="atualizarCampoPedidoAdmin(this)"></label>
@@ -9538,7 +9539,10 @@ window.addEventListener("storage",e=>{
 .marketplace-pill-admin.mp-shopee{background:#ffe7dc;color:#b43a0d}
 .pedido-item-acoes .acao-linx{width:auto;padding:0 7px;background:#12345b;color:#fff;font-size:10px;font-weight:800}
 .pedido-item-acoes .acao-linx:hover{background:#1d4d7b}
-.pedido-item-acoes .acao-romaneio{background:#F4F7FB;color:#5F7186;cursor:not-allowed}
+/* V18.79: botão Romaneio da tela Pedidos ligado ao mesmo fluxo de Pedidos do Dia (Smart API). */
+.pedido-item-acoes .acao-romaneio{background:#eef4fb;color:#12345b}
+.pedido-item-acoes .acao-romaneio:hover{background:#dce8f5}
+.pedido-item-acoes .acao-romaneio:disabled{cursor:progress;opacity:.6}
 .pedido-card-head input.conferencia-vazia{border-color:#f0c36d;background:#fffaf0}
 @media(max-width:900px){.pedido-item-row{grid-template-columns:62px 1fr 56px 1.2fr}.pedido-item-acoes{flex-wrap:wrap;padding-top:4px}}
 .pedido-card-head .pedido-card-conferencia{position:relative}.tag-nfe{font-style:normal;position:absolute;top:-1px;right:0;padding:1px 6px;border-radius:5px;background:#e7f8ed;color:#16723b;font-size:9px;font-weight:900;line-height:1.4}
