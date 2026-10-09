@@ -2,7 +2,10 @@
   "use strict";
 
   const BASE = location.pathname.startsWith("/expedicao") ? "/expedicao" : "";
-  const TELA_ATUAL = location.pathname.includes("/admin") ? "Admin" :
+  // V18.82: as telas do Admin ganharam endereço próprio (/expedicao/pedidos-dia...) e continuam
+  // sendo o Admin — mesma lista do ROTAS_ADMIN do servidor_web.py (TESTES/test_rotas_v1882.py).
+  const ROTAS_ADMIN_V1882 = /\/(dashboard|pedidos-pendentes|pedidos-dia|coleta|etiquetas|historico|historico-sku|produtos|kits|integracoes|usuarios|seguranca|pendencias|central-pendencias|promocoes-ml)\/?$/i;
+  const TELA_ATUAL = (location.pathname.includes("/admin") || ROTAS_ADMIN_V1882.test(location.pathname)) ? "Admin" :
     (location.pathname.includes("/conferencia") ? "Conferência" :
     (location.pathname.includes("/estacao-impressao") ? "Estação de impressão" :
     (location.pathname.includes("/precificador") ? "Precificador" : "Sistema")));

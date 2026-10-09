@@ -271,6 +271,18 @@ Estoque e compras, Cadastros e Sistema são grupos recolhíveis (`.v15-grp`, est
 `nk_menu_grupos_v1868`, padrão só Expedição aberta). O grupo da tela atual abre sozinho; fechado,
 ganha ponto laranja. No modo só ícones (761–1000 px) os títulos somem e tudo aparece.
 
+**Menu único e endereço por tela (V18.82):** a lista de telas vive só em `APP/nk-menu.js` (`MENU`).
+O Admin desenha o menu dentro do próprio `<nav>` (`nkMenuDesenhar`); as outras telas carregam
+`nk-menu.js` com `data-shell` + `nk-ui.css` e ganham o mesmo menu à esquerda (Conferência e Estação
+Zebra ficam sem, de propósito: tela cheia de trabalho). Itens são links: clique abre na mesma aba,
+Ctrl+clique em outra. Cada tela do Admin tem endereço (`/expedicao/pedidos-dia`, `/usuarios`...,
+`ROTAS_ADMIN_V1882` no servidor), todos servem o mesmo `admin.html`; o script `rotas-admin-v1882` (o
+último do arquivo) embrulha `abrirAbaAdmin`/`abrirDashboardV151` para o endereço acompanhar a tela
+(F5, Voltar, link). `/admin` e `?aba=` continuam valendo. A mesma lista está no `web-auth.js` (senão a
+página vira portal e o Admin não ativa), no `shared-storage.js` (senão a tela audita como "Sistema")
+e no `sw.js`; `TESTES/test_rotas_v1882.py` prende os quatro. Os scripts compartilhados levam `?v=` porque
+o service worker entrega `.js` do cache primeiro.
+
 ---
 
 ## 6. Integrações

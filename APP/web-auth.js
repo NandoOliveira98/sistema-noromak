@@ -19,9 +19,14 @@
     return module === "conferencia";
   };
 
+  // V18.82: mesma lista do ROTAS_ADMIN do servidor_web.py (TESTES/test_rotas_v1882.py confere).
+  const ROTAS_ADMIN_V1882 = /\/(dashboard|pedidos-pendentes|pedidos-dia|coleta|etiquetas|historico|historico-sku|produtos|kits|integracoes|usuarios|seguranca|pendencias|central-pendencias|promocoes-ml)$/i;
+
   function pageKind() {
     const path = location.pathname.replace(/\/+$/, "");
     if (/\/(admin|administracao)(\.html)?$/i.test(path)) return "admin";
+    // V18.82: cada tela do Admin tem o seu endereço; todas abrem o admin.html.
+    if (ROTAS_ADMIN_V1882.test(path)) return "admin";
     if (/\/(conferencia|pedidos)(\.html)?$/i.test(path)) return "conference";
     return "access";
   }
@@ -310,6 +315,9 @@
       else showConferenceLogin(message);
     }
   }
+
+  // V18.82: o "Sair" do menu lateral único (nk-menu.js) nas telas fora do Admin.
+  window.expedicaoSair = () => logout(`${BASE}/`);
 
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", initialize);
   else initialize();

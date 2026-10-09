@@ -1,4 +1,6 @@
-const CACHE = "noromak-expedicao-pwa-14.10";
+const CACHE = "noromak-expedicao-pwa-18.82";
+// V18.82: telas do Admin com endereço próprio — sem rede, caem na cópia do Admin.
+const ROTAS_ADMIN_V1882 = /\/(dashboard|pedidos-pendentes|pedidos-dia|coleta|etiquetas|historico|historico-sku|produtos|kits|integracoes|usuarios|seguranca)\/?$/i;
 const SHELL = [
   "/expedicao/",
   "/expedicao/acesso",
@@ -27,7 +29,7 @@ self.addEventListener("fetch", event => {
     return;
   }
   if (req.mode === "navigate") {
-    event.respondWith(fetch(req).then(res => { const copy=res.clone(); caches.open(CACHE).then(c=>c.put(req,copy)); return res; }).catch(async()=> (await caches.match(req)) || (url.pathname.includes("admin") ? caches.match("/expedicao/admin") : url.pathname.includes("conferencia") ? caches.match("/expedicao/conferencia") : caches.match("/expedicao/"))));
+    event.respondWith(fetch(req).then(res => { const copy=res.clone(); caches.open(CACHE).then(c=>c.put(req,copy)); return res; }).catch(async()=> (await caches.match(req)) || ((url.pathname.includes("admin") || ROTAS_ADMIN_V1882.test(url.pathname)) ? caches.match("/expedicao/admin") : url.pathname.includes("conferencia") ? caches.match("/expedicao/conferencia") : caches.match("/expedicao/"))));
     return;
   }
   event.respondWith(caches.match(req).then(cached => {

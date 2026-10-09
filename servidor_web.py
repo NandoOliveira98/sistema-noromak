@@ -43,9 +43,16 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "18.81-PROMO-TITULO"
+APP_VERSION = "18.82-ROTAS-MENU"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
+# V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
+# módulo admin, como /admin), e a tela é escolhida pelo endereço no navegador. Mesma lista do
+# APP/nk-menu.js, APP/web-auth.js e APP/shared-storage.js (TESTES/test_rotas_v1882.py confere).
+ROTAS_ADMIN_V1882 = (
+    "/dashboard", "/pedidos-pendentes", "/pedidos-dia", "/coleta", "/etiquetas", "/historico",
+    "/historico-sku", "/produtos", "/kits", "/integracoes", "/usuarios", "/seguranca",
+)
 HOST = os.getenv("EXP_HOST", "127.0.0.1")
 PORT = int(os.getenv("EXP_PORT", "8100"))
 # V18.63: "0" desliga TODOS os workers (ML, Shopee, vendas, Ads, Linx, relatório,
@@ -19638,6 +19645,9 @@ class AppHandler(BaseHTTPRequestHandler):
             "/analise-full": "precificador", "/analise-full/": "precificador", "/analise-full.html": "precificador",
             "/full": "precificador", "/full/": "precificador",
         }
+        # V18.82: telas do Admin com endereço próprio.
+        for rota in ROTAS_ADMIN_V1882:
+            page_modules[rota] = page_modules[rota + "/"] = "admin"
         required = page_modules.get(path)
         if required:
             ctx = session_context(self)
@@ -22383,6 +22393,9 @@ class AppHandler(BaseHTTPRequestHandler):
             "/shared-storage.js": "shared-storage.js",
             "/web-auth.js": "web-auth.js",
         }
+        # V18.82: telas do Admin com endereço próprio abrem o admin.html.
+        for rota in ROTAS_ADMIN_V1882:
+            routes[rota] = routes[rota + "/"] = "admin.html"
         filename = routes.get(path, path.lstrip("/"))
         safe = Path(filename)
         if ".." in safe.parts:
