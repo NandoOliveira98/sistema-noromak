@@ -43,7 +43,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "18.88-POS-VENDA-ML"
+APP_VERSION = "18.89-CONVITES-CAMPANHA-ML"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -2240,6 +2240,7 @@ def init_db() -> None:
     ensure_linx_robo_schema()  # V18.60
     ensure_saude_schema()  # V18.83
     ensure_posvenda_schema()  # V18.88
+    ensure_promo_convite_schema()  # V18.89
     migrate_legacy_if_empty()
     ensure_storage_defaults()
     seed_sku_state_from_storage()
@@ -18609,7 +18610,9 @@ PROMO_AUTO_PADRAO: dict[str, Any] = {"modo_renovacao": "simulacao", "duracao_dia
                                      "estoque_min_dias": 7, "limite_dia": 30,
                                      # margem mínima DA PROMOÇÃO, em % (não a margem-alvo do
                                      # Precificador: desconto quase sempre fica abaixo dela)
-                                     "margem_min_promo": 10}
+                                     "margem_min_promo": 10,
+                                     # V18.89: convites de campanha do ML (mesmos modos da renovação)
+                                     "modo_convites": "simulacao"}
 PROMO_AUTO_MODOS = ("simulacao", "lote", "automatico")
 PROMO_RENOVACAO_INTERVALO = 3600
 PROMO_RENOVACAO_PAUSA = 0.3
@@ -18640,6 +18643,8 @@ def promo_auto_config() -> dict[str, Any]:
             cfg[chave] = str(r["valor"])
     if cfg["modo_renovacao"] not in PROMO_AUTO_MODOS:
         cfg["modo_renovacao"] = "simulacao"
+    if cfg["modo_convites"] not in PROMO_AUTO_MODOS:
+        cfg["modo_convites"] = "simulacao"
     return cfg
 
 
@@ -18649,7 +18654,7 @@ def promo_auto_config_salvar(dados: dict[str, Any], ator: str) -> dict[str, Any]
                "margem_min_promo": (0, 50)}
     novos: dict[str, str] = {}
     for chave, valor in (dados or {}).items():
-        if chave == "modo_renovacao":
+        if chave in ("modo_renovacao", "modo_convites"):
             if valor not in PROMO_AUTO_MODOS:
                 raise ValueError("Modo inválido.")
             novos[chave] = str(valor)
@@ -19253,6 +19258,484 @@ def promo_renovacao_loop(stop_event: threading.Event) -> None:
         espera = min(espera, max(30.0, proxima_completa - time.time()))
         if stop_event.wait(espera):
             break
+
+
+# ---------------------------------------------------------------------------
+# V18.89: convites de campanha do ML nas Promoções automáticas.
+#
+# O ML convida anúncios para campanhas (SMART e PRICE_MATCHING cofinanciadas
+# automáticas, MARKETPLACE_CAMPAIGN cofinanciada, DEAL tradicional). A rodada
+# (worker a cada 3 h + botão) lê as campanhas (/seller-promotions/users/{id}),
+# os itens de cada uma (/seller-promotions/promotions/{id}/items, paginado por
+# search_after) e avalia cada convite com a MESMA régua da renovação: custo
+# (Precificador/kit), comissão e frete do anúncio no ML, preço mínimo, margem
+# mínima da promoção e estoque. Decisões do dono (09/10): todos os convidados
+# aparecem; aceitar em lote com um clique; o automático (exige OWNER) aceita só o
+# que passa nas regras; na DEAL usa o preço sugerido se der margem, senão o maior
+# preço que o ML aceita, senão não aceita.
+#
+# Receita do vendedor na cofinanciada = preço original × (1 − parte do vendedor):
+# o ML paga a parte dele (meli_percentage). Sem a parte do vendedor, usa o preço
+# que o comprador paga (conta mais conservadora). O boost do ML (desconto nos
+# custos por venda) NÃO entra — a margem real fica igual ou melhor que a mostrada.
+# ---------------------------------------------------------------------------
+PROMO_CONVITE_TIPOS = ("SMART", "PRICE_MATCHING", "MARKETPLACE_CAMPAIGN", "DEAL")
+PROMO_CONVITE_INTERVALO = 3 * 3600
+PROMO_CONVITE_PAUSA = 0.3
+PROMO_CONVITE_LOCK = threading.Lock()
+_PROMO_CONVITE_ESTADO: dict[str, Any] = {"rodando": False, "inicio": "", "fim": "", "ultimo": {}}
+
+
+def ensure_promo_convite_schema() -> None:
+    with DB_LOCK:
+        DB.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS ml_campanha_v1889 (
+                promotion_id TEXT PRIMARY KEY,
+                tipo TEXT NOT NULL DEFAULT '',
+                nome TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT '',
+                inicio TEXT NOT NULL DEFAULT '',
+                fim TEXT NOT NULL DEFAULT '',
+                prazo TEXT NOT NULL DEFAULT '',
+                meli_pct REAL,
+                seller_pct REAL,
+                visto_em TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS ml_convite_v1889 (
+                promotion_id TEXT NOT NULL,
+                mlb TEXT NOT NULL,
+                tipo TEXT NOT NULL DEFAULT '',
+                status_item TEXT NOT NULL DEFAULT '',
+                offer_id TEXT NOT NULL DEFAULT '',
+                preco_original REAL,
+                preco REAL,
+                preco_sugerido REAL,
+                preco_min REAL,
+                preco_max REAL,
+                meli_pct REAL,
+                seller_pct REAL,
+                inicio TEXT NOT NULL DEFAULT '',
+                fim TEXT NOT NULL DEFAULT '',
+                titulo TEXT NOT NULL DEFAULT '',
+                sku TEXT NOT NULL DEFAULT '',
+                situacao TEXT NOT NULL DEFAULT '',
+                motivo TEXT NOT NULL DEFAULT '',
+                receita REAL,
+                preco_escolhido REAL,
+                margem REAL,
+                aceito_em TEXT NOT NULL DEFAULT '',
+                aceito_por TEXT NOT NULL DEFAULT '',
+                visto_em TEXT NOT NULL DEFAULT '',
+                avaliado_em TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY(promotion_id, mlb)
+            );
+            CREATE INDEX IF NOT EXISTS idx_ml_convite_mlb ON ml_convite_v1889(mlb);
+            """
+        )
+        DB.commit()
+
+
+def _promo_convite_log(mlb: str, acao: str, por: str, motivo: str = "", preco: float | None = None,
+                       margem: float | None = None, fim: str = "") -> None:
+    with DB_LOCK:
+        DB.execute("INSERT INTO promo_auto_log_v1873(quando,dia,mlb,tipo,acao,preco,margem,inicio,fim,por,motivo) "
+                   "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                   (now_iso(), datetime.now(BR_TZ).date().isoformat(), mlb, "convite", acao, preco, margem,
+                    "", fim, por, motivo[:400]))
+        DB.commit()
+
+
+def _promo_convite_itens(promotion_id: str, tipo: str, maximo_paginas: int = 60) -> list[dict[str, Any]]:
+    """Itens da campanha (candidatos e os que já participam), paginados por search_after."""
+    itens: list[dict[str, Any]] = []
+    depois = ""
+    for _ in range(maximo_paginas):
+        caminho = (f"/seller-promotions/promotions/{quote(promotion_id)}/items?"
+                   + urlencode({"promotion_type": tipo, "app_version": "v2", "limit": "50",
+                                **({"search_after": depois} if depois else {})}))
+        r = _ml_promo_http("GET", caminho)
+        lista = (r.get("results") if isinstance(r, dict) else None) or []
+        for x in lista:
+            if not isinstance(x, dict):
+                continue
+            if isinstance(x.get("results"), list):   # a doc mostra uma lista dentro da outra
+                itens += [y for y in x["results"] if isinstance(y, dict)]
+            else:
+                itens.append(x)
+        paging = r.get("paging") if isinstance(r, dict) and isinstance(r.get("paging"), dict) else {}
+        depois = str((r.get("searchAfter") or r.get("search_after") or paging.get("searchAfter")
+                      or paging.get("search_after") or "") if isinstance(r, dict) else "")
+        if not lista or not depois:
+            break
+    return itens
+
+
+def _promo_convite_receita(c: dict[str, Any]) -> float | None:
+    """Quanto o vendedor recebe por unidade na cofinanciada (o ML paga a parte dele)."""
+    orig = _money_number(c.get("preco_original"))
+    sp = c.get("seller_pct")
+    if orig and isinstance(sp, (int, float)) and not isinstance(sp, bool) and 0 <= sp < 100:
+        return round(orig * (1 - float(sp) / 100), 2)
+    preco = _money_number(c.get("preco"))
+    return round(preco, 2) if preco else None
+
+
+def _promo_estoque_curto(det: dict[str, Any], rup: dict[str, Any] | None, cfg: dict[str, Any]) -> str:
+    """Mesma regra da renovação: estoque lido agora no ML manda; da Ruptura só o ritmo."""
+    r = rup or {}
+    zerado, cobertura = r.get("grupo") == "zerado", r.get("cobertura_dias")
+    vivo = det.get("estoque")
+    if isinstance(vivo, (int, float)) and not isinstance(vivo, bool):
+        sub = det.get("sub_status") if isinstance(det.get("sub_status"), list) else []
+        zerado = vivo <= 0 or "out_of_stock" in [str(x) for x in sub]
+        ritmo = _money_number(r.get("ritmo_dia")) or 0.0
+        cobertura = (float(vivo) / ritmo) if (ritmo > 0 and not zerado) else None
+    if zerado:
+        return "Sem estoque no Mercado Livre: não entra em campanha até repor"
+    if cobertura is not None and cobertura < cfg["estoque_min_dias"]:
+        return f"Estoque para {cobertura:.0f} dia(s): a campanha só adiantaria a ruptura"
+    return ""
+
+
+def _promo_convite_avaliar(c: dict[str, Any], det: dict[str, Any], prod: dict[str, Any] | None,
+                           rup: dict[str, Any] | None, cfg: dict[str, Any],
+                           agora: datetime | None = None) -> dict[str, Any]:
+    """Decide UM convite. Não chama o ML. situacao: pronto, revisar, estoque, aceito, expirado."""
+    agora = agora or datetime.now(timezone.utc)
+    out: dict[str, Any] = {"situacao": "", "motivo": "", "receita": None, "preco_escolhido": None, "margem": None}
+    st = str(c.get("status_item") or "").lower()
+    if st in ("pending", "started"):
+        out.update(situacao="aceito", motivo="Participando da campanha" if st == "started" else "Aceito; começa em breve")
+        preco = _money_number(c.get("preco"))
+        out["receita"] = _promo_convite_receita(c) if c.get("tipo") != "DEAL" else preco
+        if prod and out["receita"]:
+            out["margem"] = promo_conta(prod, out["receita"])["margem"]
+        return out
+    prazo = _posvenda_dt(c.get("prazo") or c.get("fim"))
+    if prazo and prazo < agora:
+        out.update(situacao="expirado", motivo="O prazo para aceitar já passou")
+        return out
+
+    def revisar(motivo: str, situacao: str = "revisar") -> dict[str, Any]:
+        out.update(situacao=situacao, motivo=motivo)
+        return out
+
+    status = str(det.get("status") or "")
+    if det and status != "active":
+        return revisar(f"Anúncio {status or 'sem status'} no Mercado Livre")
+    if not prod:
+        return revisar("Sem custo no Precificador (nem pelo vínculo MLB↔SKU nem pelo SKU do anúncio): "
+                       "não dá para garantir a margem")
+    falta_estoque = _promo_estoque_curto(det, rup, cfg)
+    if falta_estoque:
+        return revisar(falta_estoque, "estoque")
+    mmin = _promo_margem_minima(cfg)
+    minimo = promo_preco_minimo(prod)
+    if c.get("tipo") == "DEAL":
+        piso, teto = _money_number(c.get("preco_min")), _money_number(c.get("preco_max"))
+        opcoes = []
+        for p in (_money_number(c.get("preco_sugerido")), teto):
+            if p and (not piso or p >= piso) and (not teto or p <= teto) and p not in opcoes:
+                opcoes.append(p)
+        if not opcoes:
+            return revisar("O Mercado Livre não informou o preço sugerido nem a faixa da campanha")
+        for p in opcoes:
+            conta = promo_conta(prod, p)
+            if conta["margem"] >= mmin and (not minimo or p >= minimo):
+                out.update(situacao="pronto", receita=p, preco_escolhido=p, margem=conta["margem"])
+                qual = "sugerido pelo ML" if p == _money_number(c.get("preco_sugerido")) else "o maior que o ML aceita"
+                out["motivo"] = f"Aceita por {_brl_srv(p)} ({qual}), margem {_pct_br(conta['margem'])}"
+                return out
+        melhor = promo_conta(prod, opcoes[-1])
+        out.update(margem=melhor["margem"], receita=opcoes[-1])
+        return revisar(f"Mesmo no maior preço que o ML aceita ({_brl_srv(opcoes[-1])}) a margem fica "
+                       f"{_pct_br(melhor['margem'])}, abaixo da mínima da promoção ({_pct_br(mmin, 0)})")
+    receita = _promo_convite_receita(c)
+    out["receita"] = receita
+    if not receita:
+        return revisar("O Mercado Livre não informou o preço da campanha")
+    if c.get("tipo") in ("SMART", "PRICE_MATCHING") and not c.get("offer_id"):
+        return revisar("O Mercado Livre não informou o código do convite (offer_id): aceite pelo site do ML")
+    conta = promo_conta(prod, receita)
+    out["margem"] = conta["margem"]
+    if minimo and receita < minimo:
+        return revisar(f"Você receberia {_brl_srv(receita)}, abaixo do preço mínimo ({_brl_srv(minimo)}): daria prejuízo")
+    if conta["margem"] < mmin:
+        return revisar(f"Margem {_pct_br(conta['margem'])} abaixo da mínima da promoção ({_pct_br(mmin, 0)})")
+    parte_ml = c.get("meli_pct")
+    extra = f"; o ML paga {str(parte_ml).replace('.', ',')}% do desconto" if parte_ml else ""
+    out.update(situacao="pronto", motivo=f"Você recebe {_brl_srv(receita)}, margem {_pct_br(conta['margem'])}{extra}")
+    return out
+
+
+def _promo_convite_gravar_avaliacao(pid: str, mlb: str, av: dict[str, Any], titulo: str = "", sku: str = "") -> None:
+    with DB_LOCK:
+        DB.execute("UPDATE ml_convite_v1889 SET situacao=?, motivo=?, receita=?, preco_escolhido=?, margem=?, "
+                   "titulo=CASE WHEN ?<>'' THEN ? ELSE titulo END, sku=CASE WHEN ?<>'' THEN ? ELSE sku END, "
+                   "avaliado_em=? WHERE promotion_id=? AND mlb=?",
+                   (av["situacao"], av["motivo"][:400], av["receita"], av["preco_escolhido"], av["margem"],
+                    titulo, titulo, sku, sku, now_iso(), pid, mlb))
+        DB.commit()
+
+
+def _promo_convite_contexto(mlbs: list[str]) -> dict[str, Any]:
+    """Tudo o que a avaliação precisa, lido uma vez por rodada."""
+    detalhes: dict[str, dict[str, Any]] = {}
+    for i in range(0, len(mlbs), 20):
+        detalhes.update(ml_itens_detalhe(mlbs[i:i + 20]) or {})
+    return {"detalhes": detalhes, "produtos": _promo_produtos(), "vinculos": _ml_vinculos_mlb_sku(),
+            "ruptura": _promo_ruptura_por_anuncio() if mlbs else {}, "cfg": promo_auto_config()}
+
+
+def _promo_convite_avaliar_linha(c: dict[str, Any], ctx: dict[str, Any]) -> tuple[dict[str, Any], str, str]:
+    mlb = c["mlb"]
+    det = ctx["detalhes"].get(mlb) or {}
+    sku = _promo_resolver_sku(mlb, det.get("sku_ml"), ctx["produtos"], ctx["vinculos"])
+    base = _promo_produto(ctx["produtos"], sku)
+    preco_ref = _money_number(c.get("preco")) or _money_number(c.get("preco_sugerido")) or _money_number(det.get("preco"))
+    prod, origem = _promo_prod_com_ml(base, mlb, preco_ref, det) if base else (None, "")
+    av = _promo_convite_avaliar(c, det, prod, ctx["ruptura"].get(mlb), ctx["cfg"])
+    if origem and av["situacao"] in ("pronto", "revisar"):
+        av["motivo"] += f" · {origem}"
+    return av, str(det.get("titulo") or ""), sku or str(det.get("sku_ml") or "")
+
+
+def promo_convites_rodada(stop_event: threading.Event | None = None, *, ator: str = "sistema",
+                          pausa: float | None = None) -> dict[str, Any]:
+    """Lê os convites no ML, avalia e (só no automático) aceita o que passa nas regras."""
+    if not PROMO_CONVITE_LOCK.acquire(blocking=False):
+        return {"ok": True, "pulado": "já está rodando"}
+    pausa = PROMO_CONVITE_PAUSA if pausa is None else pausa
+    try:
+        _PROMO_CONVITE_ESTADO.update(rodando=True, inicio=now_iso(), fim="")
+        linha = ml_integration_row()
+        if not linha or not str(linha["access_token"] or "").strip():
+            resultado = {"ok": True, "pulado": "Mercado Livre não conectado"}
+            _PROMO_CONVITE_ESTADO["ultimo"] = resultado
+            return resultado
+        seller_id = str(linha["seller_id"] or "")
+        campanhas: list[dict[str, Any]] = []
+        try:
+            offset = 0
+            for _ in range(10):
+                r = _ml_promo_http("GET", f"/seller-promotions/users/{quote(seller_id)}?app_version=v2&offset={offset}&limit=50")
+                lista = (r.get("results") if isinstance(r, dict) else None) or []
+                campanhas += [c for c in lista if isinstance(c, dict) and c.get("id")]
+                total = int(((r.get("paging") or {}).get("total") or 0) if isinstance(r, dict) else 0)
+                offset += 50
+                if not lista or offset >= total:
+                    break
+        except Exception as exc:
+            msg = str(exc)[:400]
+            ml_log_event_se_mudou("promo_convites", "/seller-promotions/users", seller_id, ML_CLIENT_ID, "ERRO", msg)
+            resultado = {"ok": False, "erro": msg}
+            _PROMO_CONVITE_ESTADO["ultimo"] = resultado
+            return resultado
+        agora = now_iso()
+        removidos = _promo_removidos()
+        vistas: set[str] = set()
+        vistos: set[tuple[str, str]] = set()
+        erros: list[str] = []
+        for camp in campanhas:
+            tipo = str(camp.get("type") or "")
+            st = str(camp.get("status") or "").lower()
+            if tipo not in PROMO_CONVITE_TIPOS or st not in ("started", "pending"):
+                continue
+            pid = str(camp["id"])
+            ben = camp.get("benefits") if isinstance(camp.get("benefits"), dict) else {}
+            vistas.add(pid)
+            with DB_LOCK:
+                DB.execute("INSERT OR REPLACE INTO ml_campanha_v1889(promotion_id,tipo,nome,status,inicio,fim,prazo,"
+                           "meli_pct,seller_pct,visto_em) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                           (pid, tipo, str(camp.get("name") or ""), st, str(camp.get("start_date") or ""),
+                            str(camp.get("finish_date") or ""), str(camp.get("deadline_date") or ""),
+                            _posvenda_float(ben.get("meli_percent")), _posvenda_float(ben.get("seller_percent")), agora))
+                DB.commit()
+            try:
+                itens = _promo_convite_itens(pid, tipo)
+            except Exception as exc:
+                erros.append(f"{pid}: {str(exc)[:160]}")
+                continue
+            for it in itens:
+                mlb = _mlb_normalizar(it.get("id"))
+                if not mlb or mlb in removidos:
+                    continue
+                vistos.add((pid, mlb))
+                sp = _posvenda_float(it.get("seller_percentage"))
+                mp = _posvenda_float(it.get("meli_percentage"))
+                with DB_LOCK:
+                    DB.execute(
+                        "INSERT INTO ml_convite_v1889(promotion_id,mlb,tipo,status_item,offer_id,preco_original,preco,"
+                        "preco_sugerido,preco_min,preco_max,meli_pct,seller_pct,inicio,fim,visto_em) "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(promotion_id,mlb) DO UPDATE SET "
+                        "tipo=excluded.tipo,status_item=excluded.status_item,"
+                        "offer_id=CASE WHEN excluded.offer_id<>'' THEN excluded.offer_id ELSE offer_id END,"
+                        "preco_original=excluded.preco_original,preco=excluded.preco,preco_sugerido=excluded.preco_sugerido,"
+                        "preco_min=excluded.preco_min,preco_max=excluded.preco_max,meli_pct=excluded.meli_pct,"
+                        "seller_pct=excluded.seller_pct,inicio=excluded.inicio,fim=excluded.fim,visto_em=excluded.visto_em",
+                        (pid, mlb, tipo, str(it.get("status") or ""), str(it.get("offer_id") or it.get("ref_id") or ""),
+                         _posvenda_float(it.get("original_price")), _posvenda_float(it.get("price")),
+                         _posvenda_float(it.get("suggested_discounted_price")), _posvenda_float(it.get("min_discounted_price")),
+                         _posvenda_float(it.get("max_discounted_price")),
+                         mp if mp is not None else _posvenda_float(ben.get("meli_percent")),
+                         sp if sp is not None else _posvenda_float(ben.get("seller_percent")),
+                         str(it.get("start_date") or camp.get("start_date") or ""),
+                         str(it.get("end_date") or camp.get("finish_date") or ""), agora))
+                    DB.commit()
+            if pausa > 0 and stop_event is not None and stop_event.wait(pausa):
+                break
+        # convite que saiu da lista do ML (expirou, item deixou de ser elegível) sai daqui;
+        # os aceitos ficam como histórico até a campanha acabar.
+        with DB_LOCK:
+            atuais = [(str(r["promotion_id"]), str(r["mlb"])) for r in DB.execute(
+                "SELECT promotion_id, mlb FROM ml_convite_v1889 WHERE status_item='candidate'").fetchall()]
+            for chave in atuais:
+                if chave not in vistos:
+                    DB.execute("DELETE FROM ml_convite_v1889 WHERE promotion_id=? AND mlb=?", chave)
+            for pid in [str(r["promotion_id"]) for r in DB.execute("SELECT promotion_id FROM ml_campanha_v1889").fetchall()]:
+                if pid not in vistas:
+                    DB.execute("UPDATE ml_campanha_v1889 SET status='finished' WHERE promotion_id=?", (pid,))
+                    DB.execute("DELETE FROM ml_convite_v1889 WHERE promotion_id=? AND status_item='candidate'", (pid,))
+            DB.commit()
+            linhas = [dict(r) for r in DB.execute(
+                "SELECT v.*, c.prazo FROM ml_convite_v1889 v LEFT JOIN ml_campanha_v1889 c "
+                "ON c.promotion_id=v.promotion_id WHERE c.status IN ('started','pending')").fetchall()]
+            aceitos_hoje = DB.execute("SELECT COUNT(*) FROM promo_auto_log_v1873 WHERE dia=? AND tipo='convite' "
+                                      "AND acao='aceito' AND por='sistema'",
+                                      (datetime.now(BR_TZ).date().isoformat(),)).fetchone()[0]
+        ctx = _promo_convite_contexto(sorted({l["mlb"] for l in linhas}))
+        cont = {"campanhas": len(vistas), "convites": 0, "prontos": 0, "aceitos_agora": 0, "revisar": 0}
+        automatico = ctx["cfg"].get("modo_convites") == "automatico"
+        for c in linhas:
+            if stop_event is not None and stop_event.is_set():
+                break
+            av, titulo, sku = _promo_convite_avaliar_linha(c, ctx)
+            _promo_convite_gravar_avaliacao(c["promotion_id"], c["mlb"], av, titulo, sku)
+            cont["convites"] += 1 if av["situacao"] != "aceito" else 0
+            cont["prontos"] += 1 if av["situacao"] == "pronto" else 0
+            cont["revisar"] += 1 if av["situacao"] in ("revisar", "estoque") else 0
+            if automatico and av["situacao"] == "pronto" and aceitos_hoje < ctx["cfg"]["limite_dia"]:
+                try:
+                    promo_convite_aceitar(c["promotion_id"], c["mlb"], "sistema", reavaliar=False)
+                    aceitos_hoje += 1
+                    cont["aceitos_agora"] += 1
+                except Exception:
+                    pass   # o erro já fica na linha e no histórico
+        resultado = {"ok": not erros, **cont, "erros": erros[:5], "em": now_iso()}
+        ml_log_event_se_mudou("promo_convites", "/seller-promotions/users", seller_id, ML_CLIENT_ID,
+                              "OK" if not erros else "ERRO", "; ".join(erros)[:400])
+        _PROMO_CONVITE_ESTADO["ultimo"] = resultado
+        return resultado
+    finally:
+        _PROMO_CONVITE_ESTADO.update(rodando=False, fim=now_iso())
+        PROMO_CONVITE_LOCK.release()
+
+
+def promo_convite_aceitar(promotion_id: str, mlb: str, ator: str, *, reavaliar: bool = True) -> dict[str, Any]:
+    """Aceita um convite no ML. Só o que passa nas regras (pronto); com reavaliar, confere de
+    novo com o anúncio lido agora — o convite pode ter sido avaliado horas antes."""
+    pid = str(promotion_id or "").strip()
+    mlb = _mlb_normalizar(mlb)
+    with DB_LOCK:
+        r = DB.execute("SELECT v.*, c.prazo FROM ml_convite_v1889 v LEFT JOIN ml_campanha_v1889 c "
+                       "ON c.promotion_id=v.promotion_id WHERE v.promotion_id=? AND v.mlb=?", (pid, mlb)).fetchone()
+    if r is None:
+        raise ValueError("Convite não encontrado. Clique em Buscar convites.")
+    c = dict(r)
+    if mlb in _promo_removidos():
+        raise ValueError("Anúncio removido da lista pelo ADMIN.")
+    av = {"situacao": c["situacao"], "motivo": c["motivo"], "preco_escolhido": c["preco_escolhido"],
+          "receita": c["receita"], "margem": c["margem"]}
+    if reavaliar:
+        av, titulo, sku = _promo_convite_avaliar_linha(c, _promo_convite_contexto([mlb]))
+        _promo_convite_gravar_avaliacao(pid, mlb, av, titulo, sku)
+    if av["situacao"] != "pronto":
+        raise ValueError(av["motivo"] or "Este convite não passa nas regras.")
+    corpo: dict[str, Any] = {"promotion_id": pid, "promotion_type": c["tipo"]}
+    if c["tipo"] in ("SMART", "PRICE_MATCHING"):
+        corpo["offer_id"] = c["offer_id"]
+    elif c["tipo"] == "DEAL":
+        corpo["deal_price"] = av["preco_escolhido"]
+    try:
+        resp = _ml_promo_http("POST", f"/seller-promotions/items/{mlb}?app_version=v2", corpo)
+    except Exception as exc:
+        msg = str(exc)[:300]
+        with DB_LOCK:
+            DB.execute("UPDATE ml_convite_v1889 SET situacao='erro', motivo=? WHERE promotion_id=? AND mlb=?",
+                       (f"O Mercado Livre recusou: {msg}", pid, mlb))
+            DB.commit()
+        _promo_convite_log(mlb, "falhou", ator, f"{pid}: {msg}", av.get("preco_escolhido") or av.get("receita"), av.get("margem"))
+        raise RuntimeError(msg) from exc
+    resp = resp if isinstance(resp, dict) else {}
+    with DB_LOCK:
+        DB.execute("UPDATE ml_convite_v1889 SET status_item='pending', situacao='aceito', motivo='Aceito; começa em breve', "
+                   "offer_id=CASE WHEN ?<>'' THEN ? ELSE offer_id END, preco=COALESCE(?,preco), aceito_em=?, aceito_por=? "
+                   "WHERE promotion_id=? AND mlb=?",
+                   (str(resp.get("offer_id") or ""), str(resp.get("offer_id") or ""), _posvenda_float(resp.get("price")),
+                    now_iso(), ator, pid, mlb))
+        DB.commit()
+    _promo_convite_log(mlb, "aceito", ator, f"{pid} ({c['tipo']}): {av['motivo']}",
+                       av.get("preco_escolhido") or av.get("receita"), av.get("margem"), c.get("fim") or "")
+    audit(ator, "promocoes.convite.aceitar", f"{mlb}|{pid}|{c['tipo']}")
+    return {"ok": True, "mlb": mlb, "promotion_id": pid, "preco": _posvenda_float(resp.get("price"))}
+
+
+def promo_convites_aceitar_lote(itens: list[dict[str, Any]], ator: str) -> dict[str, Any]:
+    resultados = []
+    for it in (itens or [])[:200]:
+        pid, mlb = str(it.get("promotion_id") or ""), str(it.get("mlb") or "")
+        try:
+            promo_convite_aceitar(pid, mlb, ator)
+            resultados.append({"promotion_id": pid, "mlb": mlb, "ok": True})
+        except Exception as exc:
+            resultados.append({"promotion_id": pid, "mlb": mlb, "ok": False, "erro": str(exc)[:300]})
+    return {"ok": True, "aceitos": sum(1 for r in resultados if r["ok"]), "resultados": resultados}
+
+
+def promo_convites_loop(stop_event: threading.Event) -> None:
+    """A cada 3 h: os candidatos das campanhas mudam todo dia."""
+    if stop_event.wait(1200):
+        return
+    while not stop_event.is_set():
+        try:
+            promo_convites_rodada(stop_event)
+        except Exception as exc:
+            _PROMO_CONVITE_ESTADO["ultimo"] = {"ok": False, "erro": str(exc)[:300]}
+            print(f"[promo-convites] falhou: {exc}", file=sys.stderr, flush=True)
+        if stop_event.wait(PROMO_CONVITE_INTERVALO):
+            break
+
+
+def promo_convites_payload() -> dict[str, Any]:
+    """Convites guardados (só lê o banco)."""
+    with DB_LOCK:
+        linhas = [dict(r) for r in DB.execute(
+            "SELECT v.*, c.nome AS campanha, c.prazo, c.fim AS campanha_fim FROM ml_convite_v1889 v "
+            "JOIN ml_campanha_v1889 c ON c.promotion_id=v.promotion_id WHERE c.status IN ('started','pending') "
+            "ORDER BY c.prazo, v.mlb").fetchall()]
+        campanhas = [dict(r) for r in DB.execute(
+            "SELECT * FROM ml_campanha_v1889 WHERE status IN ('started','pending') ORDER BY prazo").fetchall()]
+    cfg = promo_auto_config()
+    itens = []
+    for l in linhas:
+        itens.append({k: l[k] for k in ("promotion_id", "mlb", "tipo", "status_item", "preco_original", "preco",
+                                        "preco_sugerido", "preco_min", "preco_max", "meli_pct", "seller_pct",
+                                        "inicio", "fim", "titulo", "sku", "situacao", "motivo", "receita",
+                                        "preco_escolhido", "margem", "aceito_em", "aceito_por", "campanha", "prazo",
+                                        "avaliado_em")}
+                     | {"tipo_nome": ML_PROMO_TIPO_NOME.get(l["tipo"], l["tipo"])})
+    por_campanha = {}
+    for i in itens:
+        g = por_campanha.setdefault(i["promotion_id"], {"convites": 0, "prontos": 0, "aceitos": 0})
+        g["aceitos" if i["situacao"] == "aceito" else "convites"] += 1
+        g["prontos"] += 1 if i["situacao"] == "pronto" else 0
+    for c in campanhas:
+        c.update(por_campanha.get(c["promotion_id"], {"convites": 0, "prontos": 0, "aceitos": 0}))
+        c["tipo_nome"] = ML_PROMO_TIPO_NOME.get(c["tipo"], c["tipo"])
+    return {"ok": True, "modo": cfg.get("modo_convites", "simulacao"), "margem_min_promo": cfg["margem_min_promo"],
+            "limite_dia": cfg["limite_dia"], "estoque_min_dias": cfg["estoque_min_dias"],
+            "coleta": dict(_PROMO_CONVITE_ESTADO), "campanhas": campanhas, "itens": itens}
 
 
 def promo_renovacao_payload(hoje: date | None = None) -> dict[str, Any]:
@@ -20534,6 +21017,15 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 502)
             return
+        if path == "/api/promocoes-auto/convites":
+            # V18.89: convites de campanha do ML com a avaliação das regras (só lê o banco).
+            if self.auth(admin_only=True) is None:
+                return
+            try:
+                self.send_json(promo_convites_payload())
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
         if path == "/api/promocoes-auto/renovacao":
             # V18.73: renovação automática do desconto próprio. Somente leitura.
             if self.auth(admin_only=True) is None:
@@ -21034,8 +21526,10 @@ class AppHandler(BaseHTTPRequestHandler):
             if ctx is not None:
                 try:
                     body = self.read_json() or {}
-                    liga_auto = (body.get("modo_renovacao") == "automatico"
-                                 and promo_auto_config()["modo_renovacao"] != "automatico")
+                    atual = promo_auto_config()
+                    # V18.89: ligar o automático dos convites também exige o OWNER
+                    liga_auto = any(body.get(k) == "automatico" and atual[k] != "automatico"
+                                    for k in ("modo_renovacao", "modo_convites"))
                     if liga_auto and not self.require_owner_reauth(ctx):
                         audit(ctx["username"], "security.denied.owner_reauth", "promocoes.auto.automatico")
                         return
@@ -21132,6 +21626,29 @@ class AppHandler(BaseHTTPRequestHandler):
                             print(f"[posvenda] sincronizar: {exc}", file=sys.stderr, flush=True)
                 threading.Thread(target=_sincronizar, name="posvenda-manual", daemon=True).start()
                 self.send_json({"ok": True, "iniciado": True})
+            return
+        if path == "/api/promocoes-auto/convites/buscar":
+            # V18.89: lê os convites no ML agora (em segundo plano).
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                threading.Thread(target=lambda: promo_convites_rodada(), name="promo-convites-manual",
+                                 daemon=True).start()
+                self.send_json({"ok": True, "iniciado": True})
+            return
+        if path == "/api/promocoes-auto/convites/aceitar":
+            # V18.89: aceita no ML os convites escolhidos (só os que passam nas regras).
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                try:
+                    body = self.read_json() or {}
+                    itens = body.get("itens") if isinstance(body.get("itens"), list) else []
+                    if not itens:
+                        raise ValueError("Escolha ao menos um convite.")
+                    self.send_json(promo_convites_aceitar_lote(itens, ctx["username"]))
+                except ValueError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 400)
+                except Exception as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 500)
             return
         if path == "/api/promocoes-auto/renovacao/buscar-novos":
             # V18.84: manual (sem worker) — inclui na lista, sem marcar, o anúncio do ML que falta.
@@ -23733,6 +24250,7 @@ SAUDE_WORKERS_INFO: dict[str, tuple[str, bool, int]] = {
     "ml_estoque_loop": ("Estoque dos anúncios (Ruptura)", False, 120),
     "promo_renovacao_loop": ("Promoções automáticas", False, 120),
     "posvenda_loop": ("Pós-venda do Mercado Livre", False, 60),
+    "promo_convites_loop": ("Convites de campanha do ML", False, 120),
     "relatorio_diario_loop": ("Relatório diário por e-mail", False, 60),
     "manutencao_diaria_loop": ("Manutenção diária (limpeza de logs)", False, 120),
     "linx_clientes_loop": ("Clientes no Linx", False, 120),
@@ -24637,6 +25155,13 @@ def main() -> None:
         name="posvenda",
         daemon=True,
     )
+    # V18.89: convites de campanha do ML, a cada 3 h (aceita sozinho só no modo automático).
+    promo_convites_thread = threading.Thread(
+        target=_worker_protegido(promo_convites_loop),
+        args=(watcher_stop,),
+        name="promo-convites",
+        daemon=True,
+    )
     # V18.73: renovação do desconto próprio de 30 dias (anúncios marcados), de hora em hora.
     promo_renovacao_thread = threading.Thread(
         target=_worker_protegido(promo_renovacao_loop),
@@ -24690,6 +25215,7 @@ def main() -> None:
         visitas_thread.start()
         estoque_thread.start()
         posvenda_thread.start()
+        promo_convites_thread.start()
         promo_renovacao_thread.start()
         relatorio_thread.start()
         linx_clientes_thread.start()

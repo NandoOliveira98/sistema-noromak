@@ -324,6 +324,31 @@ html[data-tema="escuro"] .gav-tag{background-color:#383519!important;color:#979C
       <div class="pag" id="pag"></div>
     </section>
 
+    <!-- V18.89: convites de campanha do ML (SMART, cofinanciada, preço competitivo, tradicional). -->
+    <section class="painel" id="convitesBox">
+      <div class="modo-linha">
+        <div>
+          <div class="painel-tit" style="margin:0"><div><h2>Convites de campanha do Mercado Livre</h2>
+            <p id="convIntro">Carregando…</p></div></div>
+          <div class="modo-desc" id="convModoDesc"></div>
+        </div>
+        <div style="display:grid;gap:8px;justify-items:end">
+          <div class="seg" id="convModos" role="radiogroup" aria-label="Modo dos convites">
+            <button data-m="simulacao" role="radio"><i class=nk-i-search></i> Simulação</button>
+            <button data-m="lote" role="radio"><i class=nk-i-list></i> Aprovar em lote</button>
+            <button data-m="automatico" role="radio"><i class=nk-i-zap></i> Automático</button>
+          </div>
+          <button class="btn" id="convBuscar" title="Lê agora no Mercado Livre os convites e confere as regras"><i class=nk-i-refresh></i> Buscar convites</button>
+        </div>
+      </div>
+      <div class="chips" id="convTabs" style="margin:12px 0 10px"></div>
+      <div class="selbar" id="convSelbar"><span id="convSel"></span>
+        <div style="display:flex;gap:6px;flex-wrap:wrap"><button class="btn mini" id="convLimpar">Limpar seleção</button>
+          <button class="btn pri" id="convAceitar"><i class=nk-i-check></i> Aceitar</button></div></div>
+      <div class="tw"><table id="convTab"></table></div>
+      <div class="pag"><span id="convRodape"></span><button class="btn mini" id="convMais" hidden>Mostrar mais</button></div>
+    </section>
+
     <section class="painel" id="regrasBox">
       <div class="painel-tit"><div><h2>Regras da renovação</h2><p>Valem para a renovação automática e para o clique em Renovar. Conferidas de novo antes de cada envio ao Mercado Livre.</p></div>
         <button class="btn pri" id="salvarRegras" disabled><i class=nk-i-save></i> <span>Salvar regras</span></button></div>
@@ -836,7 +861,7 @@ $('ownerForm').onsubmit=async e=>{
   catch(ex){ $('ownerErro').textContent=ex.message; $('ownerCodigo').value=''; }
 };
 function historico(){
-  const A={marcada:['Marcada','c-in'],desmarcada:['Desmarcada','c-sc'],renovada:['Renovada','c-ok'],falhou:['Recusada pelo ML','c-no'],removida:['Removida da lista','c-no'],incluidos_ml:['Novos do ML','c-in']};
+  const A={marcada:['Marcada','c-in'],desmarcada:['Desmarcada','c-sc'],renovada:['Renovada','c-ok'],falhou:['Recusada pelo ML','c-no'],removida:['Removida da lista','c-no'],incluidos_ml:['Novos do ML','c-in'],aceito:['Convite aceito','c-ok']};
   $('histCont').textContent=num(D.historico.length);
   $('log').innerHTML=`<thead><tr><th class="l">Quando</th><th class="l">Anúncio</th><th class="l">Ação</th><th>Preço</th><th>Margem</th><th class="l">Até</th><th class="l">Por</th><th class="l">Detalhe</th></tr></thead><tbody>`+
    (D.historico.map(h=>{const a=A[h.acao]||[h.acao,'c-sc'];return `<tr><td class="l">${horaBR(h.quando)}</td><td class="l mlb">${esc(h.mlb)}</td><td class="l"><span class="chip ${a[1]}">${esc(a[0])}</span></td>
@@ -844,6 +869,102 @@ function historico(){
      <td class="l" style="white-space:normal;max-width:360px;font-size:12px;color:var(--ink2)">${esc(h.motivo)}</td></tr>`}).join('')
     ||'<tr><td colspan="8" class="vazio">Nada ainda.</td></tr>')+'</tbody>';
 }
+carregar();
+// V18.89: o script dos convites (abaixo) usa a mesma API, janelas e confirmação do proprietário.
+window.nkPromoAuto={api,confirmar,pedirOwner,toast,esc,brl,pct,num,horaBR,recarregar:()=>carregar()};
+})();
+</script>
+<script>
+/* V18.89 — Convites de campanha do ML. GET /api/promocoes-auto/convites (só lê o banco; a
+   leitura no ML é do worker a cada 3 h ou do botão Buscar convites), POST .../convites/aceitar
+   (o servidor confere de novo, com o anúncio lido agora, antes de enviar) e o modo em
+   /api/promocoes-auto/config (modo_convites; Automático = OWNER). */
+(function(){
+"use strict";
+const P=window.nkPromoAuto; if(!P) return;
+const {api,confirmar,pedirOwner,toast,esc,brl,pct,num,horaBR}=P;
+const $=id=>document.getElementById(id);
+let C=null, filtro='pronto', limite=50; const sel=new Set();
+const chave=i=>i.promotion_id+'|'+i.mlb;
+const MODOS={simulacao:'<b>Simulação</b>: mostra o que aceitaria. Nada é aceito sozinho; você ainda pode aceitar à mão.',
+  lote:'<b>Aprovar em lote</b>: o sistema separa os convites que passam nas regras; você seleciona e clica em Aceitar.',
+  automatico:'<b>Automático</b>: aceita sozinho, a cada 3 h, os convites que passam em todas as regras (até o limite do dia). O resto espera você.'};
+const PRONTO={simulacao:['Aceitaria','c-in','check'],lote:['Pronto para aceitar','c-in','check'],automatico:['Aceita na próxima busca','c-ok','check']};
+const SIT={aceito:['Participando','c-ok','check'],revisar:['Revisar','c-rev','alert'],estoque:['Sem estoque','c-rev','box'],
+  expirado:['Prazo encerrado','c-sc','clock'],erro:['Recusado pelo ML','c-no','x'],'':['Ainda não conferido','c-sc','clock']};
+const F={pronto:['Prontos',i=>i.situacao==='pronto'],revisar:['Precisam de você',i=>['revisar','estoque','erro'].includes(i.situacao)],
+  aceito:['Participando',i=>i.situacao==='aceito'],todos:['Todos',()=>true]};
+function chip(i){const s=i.situacao==='pronto'?PRONTO[C.modo]:(SIT[i.situacao]||[i.situacao,'c-sc','']);
+  return `<span class="chip ${s[1]}">${s[2]?`<i class=nk-i-${s[2]}></i>`:''}${esc(s[0])}</span>`}
+const prazoTxt=i=>{const t=Date.parse(i.prazo||i.fim||'');if(!isFinite(t))return '';const d=Math.ceil((t-Date.now())/864e5);
+  return d<0?'prazo encerrado':d===0?'aceitar até hoje':`aceitar em até ${d} dia${d>1?'s':''}`};
+
+async function carregar(){
+  try{ C=await api('/api/promocoes-auto/convites'); }
+  catch(e){ $('convIntro').textContent='Não foi possível carregar os convites: '+e.message; return; }
+  const u=C.coleta||{}, ult=u.ultimo||{};
+  $('convIntro').innerHTML=`O ML convida anúncios para campanhas (nas cofinanciadas ele paga parte do desconto). Cada convite passa pelas <b>mesmas regras da renovação</b>: margem mínima ${C.margem_min_promo}%, custo, preço mínimo e estoque para ${C.estoque_min_dias} dias. `+
+    `${C.campanhas.length?`${num(C.campanhas.length)} campanha(s) com convite`:'Nenhuma campanha com convite'} · busca a cada 3 h · última ${horaBR(u.fim)}${u.rodando?' · buscando agora…':''}`+
+    (ult.ok===false?` · <b style="color:var(--neg)">erro: ${esc(ult.erro||(ult.erros||[]).join('; '))}</b>`:'');
+  document.querySelectorAll('#convModos button').forEach(m=>{const on=m.dataset.m===C.modo;m.classList.toggle('on',on);m.setAttribute('aria-checked',on)});
+  $('convModoDesc').innerHTML=MODOS[C.modo]||'';
+  for(const k of [...sel]) if(!C.itens.some(i=>chave(i)===k&&i.situacao==='pronto')) sel.delete(k);
+  if(!C.itens.some(F[filtro][1])) filtro=C.itens.some(F.revisar[1])?'revisar':'todos';
+  render();
+}
+function render(){
+  const L=C.itens;
+  $('convTabs').innerHTML=Object.keys(F).map(k=>`<button class="chipf ${filtro===k?'on':''}" data-k="${k}">${F[k][0]} <span>${num(L.filter(F[k][1]).length)}</span></button>`).join('');
+  document.querySelectorAll('#convTabs .chipf').forEach(b=>b.onclick=()=>{filtro=b.dataset.k;limite=50;render()});
+  const R=L.filter(F[filtro][1]).sort((a,b)=>(b.margem??-9)-(a.margem??-9)), V=R.slice(0,limite);
+  const prontos=R.filter(i=>i.situacao==='pronto');
+  $('convTab').innerHTML=`<thead><tr><th class="c" style="width:34px"><input type="checkbox" id="convTodos" title="Selecionar todos os prontos deste filtro" aria-label="Selecionar todos os prontos" ${prontos.length?'':'disabled'}></th>
+    <th class="l">Anúncio</th><th class="l">Campanha</th><th>Preço do anúncio</th><th>Comprador paga</th><th>Você recebe</th><th>Margem</th><th class="l">Situação</th></tr></thead><tbody>`+
+   (V.map(i=>{const comprador=i.tipo==='DEAL'?(i.preco_escolhido||i.preco||i.preco_sugerido):i.preco;
+     return `<tr><td class="c">${i.situacao==='pronto'?`<input type="checkbox" data-c="${esc(chave(i))}" ${sel.has(chave(i))?'checked':''} aria-label="Selecionar ${esc(i.mlb)}">`:''}</td>
+     <td class="l ttl">${esc(i.titulo||'(título ainda não lido)')}<div class="mlb">${esc(i.mlb)}${i.sku?' · SKU '+esc(i.sku):''}</div></td>
+     <td class="l" style="white-space:normal;max-width:240px">${esc(i.campanha||i.promotion_id)}<div class="sub2">${esc(i.tipo_nome)}${prazoTxt(i)?' · '+prazoTxt(i):''}</div></td>
+     <td>${brl(i.preco_original)}</td>
+     <td>${brl(comprador)}${comprador&&i.preco_original?`<div class="sub2">${pct(1-comprador/i.preco_original)} off</div>`:''}${i.tipo==='DEAL'&&i.preco_min?`<div class="sub2">ML aceita ${brl(i.preco_min)}–${brl(i.preco_max)}</div>`:''}</td>
+     <td><b>${brl(i.receita)}</b>${i.meli_pct?`<div class="sub2">ML paga ${String(i.meli_pct).replace('.',',')}%</div>`:''}</td>
+     <td>${i.margem!=null?`<b>${pct(i.margem)}</b>`:'<span class="muted">—</span>'}</td>
+     <td class="l">${chip(i)}${i.motivo?`<div class="mot">${esc(i.motivo)}</div>`:''}${i.aceito_por?`<div class="sub2">aceito por ${esc(i.aceito_por)} ${horaBR(i.aceito_em)}</div>`:''}</td></tr>`}).join('')
+    ||`<tr><td colspan="8" class="vazio">${L.length?'Nenhum convite neste filtro.':'Nenhum convite de campanha guardado. Clique em <b>Buscar convites</b>.'}</td></tr>`)+'</tbody>';
+  document.querySelectorAll('#convTab [data-c]').forEach(c=>c.onchange=()=>{c.checked?sel.add(c.dataset.c):sel.delete(c.dataset.c);barra()});
+  const t=$('convTodos'); if(t){ t.checked=prontos.length>0&&prontos.every(i=>sel.has(chave(i)));
+    t.onchange=()=>{prontos.forEach(i=>t.checked?sel.add(chave(i)):sel.delete(chave(i)));render()} }
+  $('convRodape').innerHTML=R.length?`Mostrando <b>${num(V.length)}</b> de <b>${num(R.length)}</b>`:'';
+  $('convMais').hidden=R.length<=limite;
+  barra();
+}
+function barra(){
+  $('convSelbar').classList.toggle('on',sel.size>0);
+  $('convSel').innerHTML=`<b>${num(sel.size)}</b> convite(s) selecionado(s)`;
+  $('convAceitar').disabled=!sel.size;
+  $('convAceitar').innerHTML=`<i class=nk-i-check></i> Aceitar${sel.size?` (${sel.size})`:''}`;
+}
+$('convMais').onclick=()=>{limite+=100;render()};
+$('convLimpar').onclick=()=>{sel.clear();render()};
+$('convAceitar').onclick=async()=>{
+  const L=[...sel].map(k=>{const [promotion_id,mlb]=k.split('|');return {promotion_id,mlb}}); if(!L.length) return;
+  if(!await confirmar('Aceitar no Mercado Livre',`Entrar em ${L.length===1?'1 campanha':L.length+' campanhas'} agora. Antes de enviar, o sistema confere de novo margem, preço mínimo e estoque com o anúncio lido agora; o que não passar fica de fora. Enquanto a campanha valer, o desconto próprio do anúncio espera ela acabar.`,'Aceitar agora')) return;
+  $('convAceitar').disabled=true; toast('Aceitando…');
+  try{ const r=await api('/api/promocoes-auto/convites/aceitar',{itens:L});
+    const nao=r.resultados.filter(x=>!x.ok);
+    toast(`${r.aceitos} aceito(s)`+(nao.length?` · ${nao.length} não: ${nao[0].erro}`:''));
+    sel.clear(); carregar(); P.recarregar(); }
+  catch(e){ toast(e.message); barra(); }
+};
+$('convBuscar').onclick=async()=>{try{await api('/api/promocoes-auto/convites/buscar',{});toast('Buscando os convites no Mercado Livre… a lista atualiza em instantes.');setTimeout(carregar,15000);setTimeout(carregar,45000)}catch(e){toast(e.message)}};
+async function salvarModo(m){
+  try{ await api('/api/promocoes-auto/config',{modo_convites:m}); toast('Salvo.'); carregar(); }
+  catch(e){ if(e.status===428) return pedirOwner(()=>salvarModo(m)); toast(e.message); }
+}
+document.querySelectorAll('#convModos button').forEach(m=>m.onclick=async()=>{
+  if(!C||m.dataset.m===C.modo) return;
+  if(m.dataset.m==='automatico'&&!await confirmar('Aceitar convites sozinho',`O sistema vai aceitar sozinho, no Mercado Livre, os convites de campanha que passarem em todas as regras (até ${C.limite_dia} por dia). O que não passar continua esperando você. Em seguida será pedida a confirmação do proprietário.`,'Continuar')) return;
+  salvarModo(m.dataset.m);
+});
 carregar();
 })();
 </script>

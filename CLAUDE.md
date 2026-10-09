@@ -582,6 +582,21 @@ anúncios (`ml_todos_os_anuncios(forcar=True)`) e inclui **sem marcar** o que n�
 (nem na tabela nem no monitor), com título/SKU/preço do `ml_itens_detalhe` (só de quem falta).
 Removido pelo ADMIN (`promo_removidos_v1876`) nunca volta por aqui (conferido de novo sob a trava);
 encerrado e sem resposta do ML não entram. Fica no histórico como "Novos do ML".
+**V18.89 — convites de campanha do ML** (seção própria na mesma tela; `GET /api/promocoes-auto/convites`,
+`POST .../convites/aceitar` e `.../convites/buscar`). Tipos: `SMART`, `PRICE_MATCHING`, `MARKETPLACE_CAMPAIGN`
+e `DEAL` (`PROMO_CONVITE_TIPOS`). Worker `promo_convites_loop` (3 h) lê `/seller-promotions/users/{id}` e
+`/seller-promotions/promotions/{id}/items` (paginado por `search_after`) para `ml_campanha_v1889` /
+`ml_convite_v1889`, e avalia cada convite (`_promo_convite_avaliar`) com a régua da renovação: custo
+(`_promo_produto`), comissão/frete do anúncio (`_promo_prod_com_ml`), preço mínimo, `margem_min_promo` e
+estoque (`_promo_estoque_curto`). Na cofinanciada a margem usa o que o **vendedor recebe** =
+preço original × (1 − `seller_percentage`) — o ML paga a parte dele; o boost não entra (margem real ≥ a
+mostrada). **DEAL** (decisão do dono, 09/10): preço sugerido se der margem, senão o maior que o ML aceita
+(`max_discounted_price`), senão não aceita. Aceitar (`promo_convite_aceitar`) só o que está "pronto", **reconferido
+com o anúncio lido agora**; corpo do POST por tipo (SMART/PRICE_MATCHING com `offer_id`; DEAL com `deal_price`;
+cofinanciada só a campanha). Modos em `modo_convites` (simulação → lote → automático; ligar o automático exige
+OWNER, `limite_dia` vale para os dois). Convite que sai da lista do ML é apagado; aceito fica. Histórico em
+`promo_auto_log_v1873` com `tipo='convite'`. Removido pelo ADMIN não aparece. Em campanha, a renovação do
+desconto próprio espera ela acabar (regra da V18.73).
 
 ### Análise de ADS (V18.54)
 `APP/analise-ads.html` (`/analise-ads`, menu Comercial, só **admin**). O relatório "Anúncios
