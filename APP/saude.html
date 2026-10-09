@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Noromak · Saúde do sistema</title>
+<!-- V18.83: Painel de saúde — integrações, rotinas automáticas (workers), fila da Zebra, backup,
+     disco, memória e CPU, com os alertas por e-mail. GET /api/saude (módulo admin, só leitura);
+     quem recebe os alertas: POST /api/saude/config e /api/saude/teste-email (só perfil Admin). -->
+<script defer src="/expedicao/web-auth.js?v=18.82"></script>
+<link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
+<link rel="stylesheet" href="/expedicao/nk-ui.css?v=18.83">
+<!-- V18.83: tema claro/escuro, avisos, confirmação e tabela padrão. -->
+<script src="/expedicao/nk-ui.js?v=18.83"></script>
+<script defer src="/expedicao/nk-menu.js?v=18.83" data-shell></script>
+<style>
+body{margin:0;background:var(--nk-canvas);color:var(--nk-ink);font-family:var(--nk-font)}
+.geral{display:flex;align-items:center;gap:14px;padding:16px 18px}
+.geral .ic{flex:none;width:44px;height:44px;border-radius:12px;display:grid;place-items:center;font-size:22px}
+.geral.ok .ic{background:var(--nk-ok);color:#fff}.geral.warn .ic{background:#C27803;color:#fff}.geral.bad .ic{background:var(--nk-bad);color:#fff}
+.geral h2{margin:0;font-size:17px;color:var(--nk-head)}
+.geral p{margin:3px 0 0;color:var(--nk-ink2);font-size:12.5px}
+.grade{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:11px}
+.item{background:var(--nk-tile);border:1px solid var(--nk-line);border-radius:12px;padding:12px 14px;display:grid;gap:6px;align-content:start;min-width:0}
+.item.warn{border-color:var(--nk-warn-ln);box-shadow:inset 3px 0 0 #C27803}
+.item.bad{border-color:var(--nk-bad-ln);box-shadow:inset 3px 0 0 var(--nk-bad)}
+.item-top{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}
+.item b{font-size:13px;color:var(--nk-head)}
+.item .res{font-size:12.5px;color:var(--nk-ink)}
+.item .det{font-size:11.5px;color:var(--nk-ink2);word-break:break-word}
+.item a{font-size:12px;font-weight:600;color:var(--nk-pri);text-decoration:none;justify-self:start}
+.item a:hover{text-decoration:underline}
+.grupo-tit{margin:4px 0 8px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--nk-ink2);font-weight:700}
+.cfg{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:16px}
+@media(max-width:860px){.cfg{grid-template-columns:1fr}}
+.cfg-linha{display:flex;flex-wrap:wrap;gap:14px;align-items:center}
+.cfg textarea{min-height:64px;resize:vertical}
+.nota{font-size:12px;color:var(--nk-ink2)}
+.tipo{font-weight:700}
+.tipo.alerta,.tipo.falha_envio{color:var(--nk-bad)}.tipo.resolvido{color:var(--nk-ok)}.tipo.lembrete{color:var(--nk-warn)}
+.erro-txt{color:var(--nk-bad);font-size:11.5px}
+</style>
+<style id="escuro-v1883">
+/* V18.83 — modo escuro desta tela (cores fixas do código; as variáveis vêm do nk-ui.css). */
+html[data-tema="escuro"] .nk-sw .tr{background:#3A4A5E}
+</style>
+</head>
+<body>
+<main class="nk-pagina">
+  <div class="nk-cab">
+    <div>
+      <div class="nk-rotulo">Sistema</div>
+      <h1>Saúde do sistema</h1>
+      <p id="sub">Carregando…</p>
+    </div>
+    <div class="nk-acoes">
+      <button class="nk-btn pri" id="atualizar"><i class=nk-i-refresh></i> Atualizar</button>
+    </div>
+  </div>
+
+  <div class="nk-carregando" id="carregando">Conferindo o sistema…</div>
+  <div class="nk-aviso bad" id="erro" hidden></div>
+
+  <div class="nk-pilha" id="conteudo" hidden>
+    <section class="nk-painel geral" id="geral"></section>
+    <div class="nk-kpis" id="kpis"></div>
+
+    <section class="nk-painel">
+      <div class="nk-painel-tit"><div><h2>O que está sendo conferido</h2>
+        <p>O servidor confere tudo sozinho a cada minuto, mesmo com esta tela fechada. Esta tela se atualiza a cada 30 segundos.</p></div></div>
+      <div id="grupos"></div>
+    </section>
+
+    <section class="nk-painel">
+      <div class="nk-painel-tit"><div><h2>Rotinas automáticas (workers)</h2>
+        <p>Trabalham em segundo plano, no servidor: buscam pedidos e etiquetas, renovam conexões, sincronizam vendas.</p></div></div>
+      <div class="nk-tw"><table class="nk-tab" id="workers" data-nk-tabela="rotinas" data-nk-exportar="0"></table></div>
+    </section>
+
+    <section class="nk-painel">
+      <div class="nk-painel-tit"><div><h2>Alertas por e-mail</h2>
+        <p id="regraTxt"></p></div></div>
+      <div class="cfg">
+        <div class="nk-pilha" style="gap:12px">
+          <div class="cfg-linha">
+            <label class="nk-sw"><input type="checkbox" id="cfgAtivo"><span class="tr"></span> Enviar alertas por e-mail</label>
+            <label class="nk-sw"><input type="checkbox" id="cfgAtencao"><span class="tr"></span> Avisar também o que está em atenção</label>
+          </div>
+          <label class="nk-campo">Quem recebe (um e-mail por linha ou separados por vírgula)
+            <textarea id="cfgEmails" spellcheck="false"></textarea></label>
+          <div class="cfg-linha">
+            <label class="nk-campo" style="width:220px">Lembrar a cada (horas), se continuar
+              <input type="number" id="cfgLembrete" min="1" max="48" step="1"></label>
+          </div>
+          <div class="cfg-linha">
+            <button class="nk-btn pri" id="salvar" disabled><i class=nk-i-save></i> Salvar</button>
+            <button class="nk-btn" id="testar"><i class=nk-i-mail></i> Enviar e-mail de teste</button>
+            <span class="nota" id="cfgMsg"></span>
+          </div>
+          <div class="nota" id="cfgNota"></div>
+        </div>
+        <div>
+          <div class="grupo-tit">Problemas em aberto</div>
+          <div id="ativos"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="nk-painel">
+      <div class="nk-painel-tit"><div><h2>Histórico de alertas</h2><p>Os 40 avisos mais recentes.</p></div></div>
+      <div class="nk-tw"><table class="nk-tab" id="historico" data-nk-tabela="historico_alertas"></table></div>
+    </section>
+  </div>
+</main>
+<script>
+(() => {
+  "use strict";
+  const B = "/expedicao";
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));
+  const NIVEL = {critico:{cls:"bad",txt:"Crítico"},atencao:{cls:"warn",txt:"Atenção"},ok:{cls:"ok",txt:"OK"},info:{cls:"",txt:"Informação"}};
+  const TIPO = {alerta:"Alerta enviado",lembrete:"Lembrete",resolvido:"Resolvido",teste:"Teste",falha_envio:"Falha no envio"};
+  const dataHora = iso => { const d = new Date(iso); return isNaN(d) ? "—" : d.toLocaleString("pt-BR",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}); };
+  const selo = n => { const x = NIVEL[n] || NIVEL.info; return `<span class="nk-selo ${x.cls}">${x.txt}</span>`; };
+  let dados = null, base = "", podeConfigurar = false, timer = null;
+
+  async function api(url, opcoes = {}) {
+    const r = await fetch(B + url, {cache:"no-store", credentials:"same-origin", headers:{"Content-Type":"application/json"}, ...opcoes});
+    let d = {}; try { d = await r.json(); } catch (_) {}
+    if (!r.ok || d.ok === false) throw new Error(d.error || `HTTP ${r.status}`);
+    return d;
+  }
+
+  function desenhar() {
+    const d = dados, checks = d.checks;
+    const n = k => checks.filter(c => c.nivel === k).length;
+    const crit = n("critico"), aten = n("atencao");
+    $("sub").textContent = `Versão ${d.versao} · no ar há ${d.no_ar_ha} · conferido às ${new Date(d.gerado_em).toLocaleTimeString("pt-BR")}`;
+    const g = $("geral");
+    if (crit) { g.className = "nk-painel geral bad"; g.innerHTML = `<div class="ic"><i class=nk-i-alert></i></div><div><h2>${crit} problema(s) crítico(s)</h2><p>${esc(checks.filter(c=>c.nivel==="critico").map(c=>c.titulo).join(" · "))}</p></div>`; }
+    else if (aten) { g.className = "nk-painel geral warn"; g.innerHTML = `<div class="ic"><i class=nk-i-alert></i></div><div><h2>Funcionando, com ${aten} ponto(s) de atenção</h2><p>${esc(checks.filter(c=>c.nivel==="atencao").map(c=>c.titulo).join(" · "))}</p></div>`; }
+    else { g.className = "nk-painel geral ok"; g.innerHTML = `<div class="ic"><i class=nk-i-check></i></div><div><h2>Tudo funcionando</h2><p>Nenhum problema encontrado na última conferência.</p></div>`; }
+
+    const ws = d.workers, wOk = ws.filter(w => w.nivel === "ok").length;
+    const cfg = d.config;
+    $("kpis").innerHTML = [
+      ["bad","nk-i-alert",crit,"Crítico"],
+      ["warn","nk-i-alert",aten,"Atenção"],
+      ["ok","nk-i-check",n("ok"),"Funcionando"],
+      ["", "nk-i-refresh", d.workers_ligados ? `${wOk}/${ws.length}` : "—", d.workers_ligados ? "Rotinas normais" : "Rotinas desligadas"],
+      [cfg.ativo && cfg.emails.length ? "ok" : "warn", "nk-i-mail", cfg.ativo && cfg.emails.length ? cfg.emails.length : "Off", cfg.ativo && cfg.emails.length ? "Recebem alertas" : "Alertas desligados"],
+    ].map(([c,ic,v,t]) => `<div class="nk-kpi"><span class="nk-kpi-ic ${c}"><i class=${ic}></i></span><div><b>${esc(v)}</b><small>${esc(t)}</small></div></div>`).join("");
+
+    const grupos = ["Operação","Servidor","Rotinas"];
+    $("grupos").innerHTML = grupos.map(gr => {
+      const itens = checks.filter(c => c.grupo === gr);
+      if (!itens.length) return "";
+      itens.sort((a,b) => ({critico:0,atencao:1,ok:2,info:3}[a.nivel]) - ({critico:0,atencao:1,ok:2,info:3}[b.nivel]));
+      return `<div class="grupo-tit">${esc(gr)}</div><div class="grade" style="margin-bottom:14px">` + itens.map(c => {
+        const cls = (NIVEL[c.nivel]||NIVEL.info).cls;
+        const acao = c.acao ? `<a href="${B}${esc(c.acao)}">${esc(c.acao_txt || "Abrir")} →</a>` : "";
+        return `<div class="item ${cls}"><div class="item-top"><b>${esc(c.titulo)}</b>${selo(c.nivel)}</div><div class="res">${esc(c.resumo)}</div>${c.detalhe?`<div class="det">${esc(c.detalhe)}</div>`:""}${acao}</div>`;
+      }).join("") + `</div>`;
+    }).join("");
+
+    $("workers").innerHTML = `<thead><tr><th>Rotina</th><th>Situação</th><th>Última pausa terminou</th><th class="n">Ciclos</th><th class="n">Erros</th><th>Último erro</th></tr></thead><tbody>` +
+      ws.map(w => `<tr><td><b>${esc(w.nome)}</b>${w.essencial?` <span class="nk-muted" title="Essencial para a expedição">· essencial</span>`:""}</td>
+        <td>${selo(w.nivel)} <span class="nk-muted">${esc(w.situacao)}</span></td>
+        <td>${w.ultimo_ciclo ? dataHora(w.ultimo_ciclo) : "—"}</td><td class="n">${w.ciclos}</td><td class="n">${w.erros}</td>
+        <td>${w.ultimo_erro ? `<span class="erro-txt">${esc(w.ultimo_erro)}</span> <span class="nk-muted">${dataHora(w.ultimo_erro_em)}</span>` : "—"}</td></tr>`).join("") + `</tbody>`;
+
+    const r = d.regras;
+    $("regraTxt").textContent = `Um item vira alerta depois de ${r.rodadas} conferências seguidas em Crítico (cerca de ${r.rodadas} min). Nos primeiros ${Math.round(r.carencia_boot_s/60)} min depois de uma publicação nada é enviado, porque as rotinas ainda estão começando. Quando o problema resolve, chega outro e-mail avisando.`;
+    $("ativos").innerHTML = d.alertas_ativos.length ? d.alertas_ativos.map(a =>
+      `<div class="item ${(NIVEL[a.nivel]||NIVEL.info).cls}" style="margin-bottom:8px"><div class="item-top"><b>${esc(a.titulo)}</b>${selo(a.nivel)}</div><div class="res">${esc(a.resumo)}</div><div class="det">Desde ${dataHora(a.desde)}${a.alertado_em?` · avisado ${dataHora(a.alertado_em)}`:" · ainda não avisado"}</div></div>`).join("")
+      : `<div class="nk-vazio" style="padding:16px">Nenhum problema em aberto.</div>`;
+    $("historico").innerHTML = d.historico.length ? `<thead><tr><th>Quando</th><th>Tipo</th><th>Item</th><th>Resumo</th><th>Para</th></tr></thead><tbody>` +
+      d.historico.map(h => `<tr><td>${dataHora(h.quando)}</td><td><span class="tipo ${esc(h.tipo)}">${esc(TIPO[h.tipo]||h.tipo)}</span></td><td>${esc(h.titulo)}</td>
+        <td>${esc(h.resumo)}${h.erro?`<div class="erro-txt">${esc(h.erro)}</div>`:""}</td><td class="nk-muted">${esc(h.destinatarios||"—")}</td></tr>`).join("") + `</tbody>`
+      : `<tbody><tr><td class="nk-vazio">Nenhum alerta até agora.</td></tr></tbody>`;
+  }
+
+  function preencherConfig() {
+    const c = dados.config;
+    $("cfgAtivo").checked = !!c.ativo;
+    $("cfgAtencao").checked = !!c.avisar_atencao;
+    $("cfgEmails").value = (c.emails || []).join("\n");
+    $("cfgLembrete").value = c.lembrete_horas;
+    base = estadoConfig();
+    $("salvar").disabled = true;
+    const notas = [];
+    if (!c.smtp_configurado) notas.push("O envio de e-mail (SMTP) não está configurado no servidor: os alertas ficam só no histórico desta tela.");
+    if (!podeConfigurar) notas.push("Só o perfil Admin altera quem recebe os alertas.");
+    $("cfgNota").textContent = notas.join(" ");
+    for (const id of ["cfgAtivo","cfgAtencao","cfgEmails","cfgLembrete","testar"]) $(id).disabled = !podeConfigurar;
+  }
+  const estadoConfig = () => JSON.stringify([$("cfgAtivo").checked, $("cfgAtencao").checked, $("cfgEmails").value.trim(), String($("cfgLembrete").value)]);
+  for (const id of ["cfgAtivo","cfgAtencao","cfgEmails","cfgLembrete"]) $(id).addEventListener("input", () => { $("salvar").disabled = !podeConfigurar || estadoConfig() === base; });
+
+  async function carregar(primeira = false) {
+    try {
+      dados = await api("/api/saude");
+      $("erro").hidden = true;
+      $("carregando").hidden = true;
+      $("conteudo").hidden = false;
+      desenhar();
+      if (primeira || estadoConfig() === base) preencherConfig();
+    } catch (e) {
+      $("carregando").hidden = true;
+      $("erro").hidden = false;
+      $("erro").textContent = "Não foi possível conferir a saúde do sistema: " + e.message;
+    }
+  }
+
+  $("atualizar").onclick = () => carregar();
+  $("salvar").onclick = async () => {
+    $("cfgMsg").textContent = "Salvando…";
+    try {
+      const d = await api("/api/saude/config", {method:"POST", body: JSON.stringify({
+        ativo: $("cfgAtivo").checked, avisar_atencao: $("cfgAtencao").checked,
+        emails: $("cfgEmails").value, lembrete_horas: Number($("cfgLembrete").value) })});
+      dados.config = d.config; preencherConfig(); desenhar();
+      $("cfgMsg").textContent = "Salvo.";
+    } catch (e) { $("cfgMsg").textContent = e.message; }
+  };
+  $("testar").onclick = async () => {
+    if (estadoConfig() !== base) { $("cfgMsg").textContent = "Salve antes de testar."; return; }
+    $("cfgMsg").textContent = "Enviando…";
+    try { const d = await api("/api/saude/teste-email", {method:"POST", body:"{}"}); $("cfgMsg").textContent = "Enviado para " + d.enviado_para.join(", ") + "."; carregar(); }
+    catch (e) { $("cfgMsg").textContent = "Não enviou: " + e.message; }
+  };
+
+  async function iniciar() {
+    try {
+      const r = await fetch(B + "/api/auth/session", {cache:"no-store", credentials:"same-origin"});
+      const s = await r.json();
+      podeConfigurar = !!(s.authenticated && s.user && s.user.app_role === "admin");
+    } catch (_) {}
+    await carregar(true);
+    timer = setInterval(() => { if (!document.hidden) carregar(); }, 30000);
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) carregar(); });
+  }
+  iniciar();
+})();
+</script>
+</body>
+</html>

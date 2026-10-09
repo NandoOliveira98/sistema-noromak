@@ -32,6 +32,22 @@
 </style>
 <!-- V18.65: tema comum (fonte, foco e icones) por ultimo no head. -->
 <link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
+<link rel="stylesheet" href="/expedicao/nk-ui.css?v=18.83">
+<!-- V18.83: tema claro/escuro, avisos, confirmação e tabela padrão. -->
+<script src="/expedicao/nk-ui.js?v=18.83"></script>
+<style id="escuro-v1883">
+/* V18.83 — modo escuro desta tela (cores fixas do código; as variáveis vêm do nk-ui.css). */
+html[data-tema="escuro"] .card{background-color:#17212E!important;border-color:#2B3949!important;box-shadow:none!important}
+html[data-tema="escuro"] .pill{background-color:#15283F!important;color:#86B4F2!important}
+html[data-tema="escuro"] .automatico{background:#132E20!important;border-color:#22543A!important;color:#5BC285!important}
+html[data-tema="escuro"] .aviso{background-color:#33250C!important;border-color:#5C4317!important;color:#F0B357!important}
+html[data-tema="escuro"] .status.wait{background-color:#33250C!important;color:#F0B357!important}
+html[data-tema="escuro"] .status.ok{background-color:#132E20!important;color:#5BC285!important}
+html[data-tema="escuro"] .status.erro,html[data-tema="escuro"] .status.err{background-color:#3B1714!important;color:#F2857B!important}
+html[data-tema="escuro"] .btn-success{background-color:#1F8A4C!important}
+html[data-tema="escuro"] .btn-danger{background-color:#C2392D!important}
+html[data-tema="escuro"] :is(h1,h2,h3){color:#EEF3F9}
+</style>
 </head>
 <body>
 <div id="loginLayer" class="login-layer">

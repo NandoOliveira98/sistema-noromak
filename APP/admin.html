@@ -710,7 +710,457 @@ body{background:var(--v15-bg)!important}
 <!-- V18.65: tema comum (fonte, foco e icones) por ultimo no head. -->
 <link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
 <!-- V18.82: componentes comuns e menu lateral único (nk-menu.js). -->
-<link rel="stylesheet" href="/expedicao/nk-ui.css?v=18.82">
+<link rel="stylesheet" href="/expedicao/nk-ui.css?v=18.83">
+<!-- V18.83: tema claro/escuro, avisos, confirmação e tabela padrão. -->
+<script src="/expedicao/nk-ui.js?v=18.83" data-alertas="toast"></script>
+<style id="escuro-auto-v1883">
+/* V18.83 — GERADO por FERRAMENTAS_WINDOWS/gerar_modo_escuro.py a partir das cores fixas desta tela.
+   Não editar aqui (é refeito); ajuste à mão no <style id="escuro-v1883">. */
+html[data-tema="escuro"] body{color:#C4D0DB!important}
+html[data-tema="escuro"] .box-login{background-color:#18222D!important}
+html[data-tema="escuro"] .box-login input{border:1px solid #2B3E55!important}
+html[data-tema="escuro"] .card-admin{background-color:#18222D!important}
+html[data-tema="escuro"] input[type="file"]{background-color:#1A2A38!important}
+html[data-tema="escuro"] table{background-color:#18222D!important}
+html[data-tema="escuro"] td{border-bottom:1px solid #2A4255!important}
+html[data-tema="escuro"] tr:nth-child(even){background-color:#1B2E37!important}
+html[data-tema="escuro"] .header-topo{background-color:#18222D!important}
+html[data-tema="escuro"] .market-upload{background-color:#192939!important;border:1px solid #2C4153!important}
+html[data-tema="escuro"] .market-upload small{color:#AEAEBA!important}
+html[data-tema="escuro"] .regra-impressao{background-color:#1A2A38!important;color:#BCBCCA!important}
+html[data-tema="escuro"] .modal-shopee-card{background-color:#18222D!important}
+html[data-tema="escuro"] .vinculo-shopee-item{border-bottom:1px solid #333C4C!important}
+html[data-tema="escuro"] .vinculo-shopee-item img{background-color:#18222D!important;border:1px solid #2B3E55!important}
+html[data-tema="escuro"] .vinculo-shopee-item select{background-color:#18222D!important}
+html[data-tema="escuro"] .header-titulos small{color:#A9B5C2!important}
+html[data-tema="escuro"] .save-pill{background-color:#1A3825!important;color:#8AE5AC!important}
+html[data-tema="escuro"] .save-pill.salvando{background-color:#3F2F12!important;color:#EDCA82!important}
+html[data-tema="escuro"] .save-pill.erro{background-color:#3F1712!important;color:#ED8A82!important}
+html[data-tema="escuro"] .resumo-card{background-color:#18222D!important}
+html[data-tema="escuro"] .resumo-card span{color:#A9B5C2!important}
+html[data-tema="escuro"] .abas-admin{background-color:#18222D!important}
+html[data-tema="escuro"] .aba-btn{background-color:#192939!important;border:1px solid #2B3E55!important}
+html[data-tema="escuro"] .toolbar-grid input[type=text]{border:1px solid #30404F!important}
+html[data-tema="escuro"] .btn-secundario{background-color:#1A2A38!important;border:1px solid #2B3E55!important}
+html[data-tema="escuro"] .excel-wrap{background-color:#18222D!important;border:1px solid #2B3E55!important}
+html[data-tema="escuro"] .excel-grid th{border-right:1px solid rgba(56,63,71,0.18)!important}
+html[data-tema="escuro"] .excel-grid td{background-color:#18222D!important;border-right:1px solid #2A3F56!important;border-bottom:1px solid #2A3F56!important}
+html[data-tema="escuro"] .excel-grid tr:nth-child(even) td{background-color:#19222E!important}
+html[data-tema="escuro"] .excel-grid input:focus,html[data-tema="escuro"] .excel-grid select:focus{background-color:#19232E!important}
+html[data-tema="escuro"] .ean-pedido-editor input{background-color:#18222D!important;border:1px solid #2B3E55!important}
+html[data-tema="escuro"] .ean-pedido-editor input.ean-alterado{background-color:#3F2E12!important}
+html[data-tema="escuro"] .btn-ean-banco{background-color:#14263E!important;color:#87B0E8!important;border:1px solid #293F56!important}
+html[data-tema="escuro"] .ean-pedido-status{color:#A9B5C2!important}
+html[data-tema="escuro"] .ean-pedido-status.ok{color:#8AE5AC!important}
+html[data-tema="escuro"] .ean-pedido-status.erro{color:#ED8A82!important}
+html[data-tema="escuro"] .market-auto{background-color:#1A2A38!important}
+html[data-tema="escuro"] .grid-rodape{color:#A9B5C2!important}
+html[data-tema="escuro"] .paginacao button{background-color:#18222D!important;border:1px solid #2B3E55!important}
+html[data-tema="escuro"] .aviso-banco{background-color:#14263E!important;color:#B7C6D4!important}
+html[data-tema="escuro"] .contador-mini{color:#A9B5C2!important}
+html[data-tema="escuro"] .linha-ja-feito td:nth-child(2){background-color:#3F2412!important}
+html[data-tema="escuro"] .status-pendente{background-color:#1A3825!important;color:#8AE5AC!important}
+html[data-tema="escuro"] .status-rascunho{background-color:#3F2F12!important;color:#EDCA82!important}
+html[data-tema="escuro"] .importacao-excel-box{background-color:#122A3F!important;border:1px solid #23425C!important}
+html[data-tema="escuro"] .importacao-excel-box small{color:#B1BBC4!important}
+html[data-tema="escuro"] .kit-review-card{background-color:#18222D!important}
+html[data-tema="escuro"] .kit-review-topo{border-bottom:1px solid #333C4C!important}
+html[data-tema="escuro"] .kit-review-topo p{color:#A9B5C2!important}
+html[data-tema="escuro"] .kit-review-alerta{background-color:#3F2B12!important;color:#ED9D82!important;border:1px solid #5C4023!important}
+html[data-tema="escuro"] .kit-review-pedido{background-color:#18222D!important;border:1px solid #2A3F55!important}
+html[data-tema="escuro"] .kit-review-pedido-topo{background-color:#142A3E!important;border-bottom:1px solid #2A3F55!important}
+html[data-tema="escuro"] .kit-review-pedido-topo strong{color:#BBC8D6!important}
+html[data-tema="escuro"] .kit-review-item{border-top:1px solid #2A3D55!important}
+html[data-tema="escuro"] .kit-review-sku{background-color:#3F2C12!important;color:#ED9D82!important}
+html[data-tema="escuro"] .kit-review-qtd{color:#C4D0DB!important}
+html[data-tema="escuro"] .kit-review-desc{color:#ADBACA!important}
+html[data-tema="escuro"] .kit-review-check{color:#8AE6AC!important}
+html[data-tema="escuro"] .kit-review-acoes{border-top:1px solid #333C4C!important}
+html[data-tema="escuro"] .kit-review-contador{color:#A9B5C2!important}
+html[data-tema="escuro"] .dup-planilha-card{background-color:#18222D!important}
+html[data-tema="escuro"] .dup-planilha-topo{border-bottom:1px solid #333C4C!important}
+html[data-tema="escuro"] .dup-planilha-topo h2{color:#ED8A82!important}
+html[data-tema="escuro"] .dup-planilha-topo p{color:#ADBACA!important}
+html[data-tema="escuro"] .dup-planilha-alerta{background-color:#3F1212!important;color:#ED8A82!important;border:1px solid #5C2323!important}
+html[data-tema="escuro"] .dup-planilha-item{background-color:#19222E!important;border:1px solid #5C2923!important}
+html[data-tema="escuro"] .dup-planilha-pedido{color:#ED8A82!important}
+html[data-tema="escuro"] .dup-planilha-cliente{color:#C4D0DB!important}
+html[data-tema="escuro"] .dup-planilha-data{color:#A9B5C2!important}
+html[data-tema="escuro"] .dup-planilha-acoes{border-top:1px solid #333C4C!important}
+html[data-tema="escuro"] .importacao-status.info{background-color:#1A2A38!important;color:#C4D0DB!important;border:1px solid #2B3E55!important}
+html[data-tema="escuro"] .importacao-status.sucesso{background-color:#1A3825!important;color:#8AE6AC!important;border:1px solid #2A5539!important}
+html[data-tema="escuro"] .importacao-status.aviso{background-color:#3F2F12!important;color:#EDC282!important;border:1px solid #5C4E23!important}
+html[data-tema="escuro"] .importacao-status.erro{background-color:#3F1712!important;color:#EC8383!important;border:1px solid #5C2923!important}
+html[data-tema="escuro"] .usuario-modal-card{background-color:#18222D!important}
+html[data-tema="escuro"] .usuario-modal-topo{border-bottom:1px solid #2B4155!important}
+html[data-tema="escuro"] .usuario-modal-corpo input,html[data-tema="escuro"] .usuario-modal-corpo select{background-color:#18222D!important;border:1px solid #304050!important}
+html[data-tema="escuro"] .usuario-modal-erro{color:#ED8A82!important}
+html[data-tema="escuro"] .usuario-versao{background-color:#162B3C!important}
+html[data-tema="escuro"] .usuario-contador{color:#ACB9C5!important}
+html[data-tema="escuro"] .print-modal-card{background-color:#18222D!important}
+html[data-tema="escuro"] .print-modal-topo{border-bottom:1px solid #2B4155!important}
+html[data-tema="escuro"] .print-modal-topo p{color:#A9B5C2!important}
+html[data-tema="escuro"] .print-modal-fechar{background-color:#1A2738!important;color:#C4D0DB!important}
+html[data-tema="escuro"] .print-drop-zone{background-color:#192939!important}
+html[data-tema="escuro"] .print-drop-zone:focus,html[data-tema="escuro"] .print-drop-zone.arrastando{background-color:#21123F!important}
+html[data-tema="escuro"] .print-drop-zone.tem-imagem{background-color:#1A2738!important}
+html[data-tema="escuro"] .print-drop-zone img{background-color:#18222D!important}
+html[data-tema="escuro"] .print-drop-instrucoes span{color:#A9B5C2!important}
+html[data-tema="escuro"] .print-form-grid input,html[data-tema="escuro"] .print-form-grid select,html[data-tema="escuro"] .print-form-grid textarea{background-color:#18222D!important;border:1px solid #304050!important}
+html[data-tema="escuro"] .print-form-grid .campo-atencao{background-color:#3F3912!important}
+html[data-tema="escuro"] .print-form-grid .campo-confirmado{background-color:#123F17!important}
+html[data-tema="escuro"] .print-produto-encontrado{background-color:#122A3F!important;border:1px solid #23425C!important;color:#B7C6D4!important}
+html[data-tema="escuro"] .print-produto-encontrado.ok{background-color:#1A3825!important;border-color:#2A5539!important;color:#8AE6AC!important}
+html[data-tema="escuro"] .print-produto-encontrado.aviso{background-color:#3F2F12!important;border-color:#5C4E23!important;color:#EDC282!important}
+html[data-tema="escuro"] .print-ocr-status{background-color:#1A2A38!important;color:#C4D0DB!important}
+html[data-tema="escuro"] .print-ocr-status.erro{background-color:#3F1712!important;color:#EC8383!important;border:1px solid #5C2923!important}
+html[data-tema="escuro"] .print-ocr-status.sucesso{background-color:#1A3825!important;color:#8AE6AC!important;border:1px solid #2A5539!important}
+html[data-tema="escuro"] .print-progresso{background-color:#1B2A36!important}
+html[data-tema="escuro"] .print-texto-ocr summary{color:#A9B5C2!important}
+html[data-tema="escuro"] .print-privacidade{color:#A9B5C2!important}
+html[data-tema="escuro"] .kit-modal-card{background-color:#18222D!important}
+html[data-tema="escuro"] .kit-modal-topo{border-bottom:1px solid #2B4155!important}
+html[data-tema="escuro"] .kit-modal-topo p{color:#A9B5C2!important}
+html[data-tema="escuro"] .kit-form-grid input{border:1px solid #304050!important}
+html[data-tema="escuro"] .kit-itens-wrap{border:1px solid #2B3E55!important}
+html[data-tema="escuro"] .kit-itens-tabela input{border:1px solid #2B3E55!important}
+html[data-tema="escuro"] .kit-produto-desc{color:#ADBACA!important}
+html[data-tema="escuro"] .kit-produto-desc.ok{color:#8AE6AC!important}
+html[data-tema="escuro"] .kit-produto-desc.erro{color:#ED8A82!important}
+html[data-tema="escuro"] .kit-celula-resumo{color:#ADBACA!important}
+html[data-tema="escuro"] .kit-badge{background-color:#28123F!important;color:#BC88E8!important;border:1px solid #3F235C!important}
+html[data-tema="escuro"] .print-kit-toggle-wrap{background-color:#29123F!important;border:1px solid #3F235C!important}
+html[data-tema="escuro"] .print-kit-toggle{color:#BC88E8!important}
+html[data-tema="escuro"] .print-kit-toggle-wrap small{color:#A9B5C2!important}
+html[data-tema="escuro"] .print-kit-painel{background-color:#19222E!important;border:1px solid #3F235C!important}
+html[data-tema="escuro"] .integracao-card{background-color:#18222D!important;border:1px solid #2A3F55!important}
+html[data-tema="escuro"] .integracao-status.ok{background-color:#123F22!important;color:#8AE6AC!important}
+html[data-tema="escuro"] .integracao-status.off{background-color:#192939!important;color:#ADBACA!important}
+html[data-tema="escuro"] .integracao-status.erro{background-color:#3F1712!important;color:#ED8A82!important}
+html[data-tema="escuro"] .integracao-dados b{color:#C4D0DB!important}
+html[data-tema="escuro"] .integracao-dados span{color:#ADBACA!important}
+html[data-tema="escuro"] .integracao-nota{background-color:#12263F!important;border:1px solid #233D5C!important;color:#8AA2E5!important}
+html[data-tema="escuro"] .integracao-alerta{background-color:#3F2B12!important;border:1px solid #5C4023!important;color:#ED9D82!important}
+html[data-tema="escuro"] .ml-log-wrap{border:1px solid #2A3F56!important}
+html[data-tema="escuro"] .ml-log-table th,html[data-tema="escuro"] .ml-log-table td{border-bottom:1px solid #2A3F56!important}
+html[data-tema="escuro"] .ml-log-table th{background-color:#192939!important;color:#C4D0DB!important}
+html[data-tema="escuro"] .usuario-acesso-item{background-color:#12293F!important;border:1px solid #293F56!important;color:#B8C6D4!important}
+html[data-tema="escuro"] .usuario-acesso-item:has(input:checked){background-color:#14263E!important;border-color:#273F59!important;color:#C0CCD9!important}
+html[data-tema="escuro"] .usuario-acesso-item i[class^="nk-i-"]{color:#87B0E8!important}
+html[data-tema="escuro"] #aba-usuarios .usr-head h2{color:#C3CFDB!important}
+html[data-tema="escuro"] #aba-usuarios .usr-head p{color:#A9B5C2!important}
+html[data-tema="escuro"] #aba-usuarios .usr-btn{background-color:#18222D!important;border:1px solid #2A3F56!important;color:#C0CCD9!important}
+html[data-tema="escuro"] #aba-usuarios .usr-btn:hover{background-color:#17263A!important;border-color:#273F59!important}
+html[data-tema="escuro"] #aba-usuarios .usr-btn-x{color:#ED8A82!important}
+html[data-tema="escuro"] #aba-usuarios .usr-btn-x:hover{background-color:#3F1712!important;border-color:#5C2823!important}
+html[data-tema="escuro"] #aba-usuarios .usr-lista-cab{color:#A9B5C2!important}
+html[data-tema="escuro"] #aba-usuarios .usr-linha{background-color:#18222D!important;border:1px solid #2A3F56!important}
+html[data-tema="escuro"] #aba-usuarios .usr-linha.alterado{background-color:#3F2D12!important}
+html[data-tema="escuro"] #aba-usuarios .usr-av{background-color:#1A3825!important;color:#8AE5AC!important}
+html[data-tema="escuro"] #aba-usuarios [data-perfil="admin"] .usr-av{background-color:#14263E!important;color:#87B0E8!important}
+html[data-tema="escuro"] #aba-usuarios [data-perfil="supervisor"] .usr-av{background-color:#3F2F12!important;color:#EDC282!important}
+html[data-tema="escuro"] #aba-usuarios .usr-nome{color:#C4D0DB!important}
+html[data-tema="escuro"] #aba-usuarios .usr-nome:hover{background-color:#18222D!important;border-color:#2A3F56!important}
+html[data-tema="escuro"] #aba-usuarios .usr-nome:focus{background-color:#18222D!important;border-color:#233B5C!important}
+html[data-tema="escuro"] #aba-usuarios .usr-login{color:#A9B5C2!important}
+html[data-tema="escuro"] #aba-usuarios .usr-perfil select{background-color:#18222D!important;border:1px solid #2A3F56!important;color:#C4D0DB!important}
+html[data-tema="escuro"] #aba-usuarios .usr-mods .usuario-acesso-item{background-color:#18222D!important;border:1px solid #2A3F56!important;color:#A9B5C2!important}
+html[data-tema="escuro"] #aba-usuarios .usr-mods .usuario-acesso-item:hover{border-color:#273F59!important}
+html[data-tema="escuro"] #aba-usuarios .usr-vazio{background-color:#18222D!important;color:#A9B5C2!important;border:1px dashed #2A3F56!important}
+html[data-tema="escuro"] #aba-usuarios .usr-rodape{color:#A9B5C2!important}
+html[data-tema="escuro"] #aba-usuarios .usr-rodape i{color:#87B0E8!important}
+html[data-tema="escuro"] .security-card{background-color:#18222D!important;border:1px solid #293E57!important}
+html[data-tema="escuro"] .security-card h3{color:#BAC7D5!important}
+html[data-tema="escuro"] .security-row{border-bottom:1px solid #263C59!important}
+html[data-tema="escuro"] .security-row span:first-child{color:#A8B6C5!important}
+html[data-tema="escuro"] .security-badge.ok{background-color:#173B23!important;color:#84EBA5!important}
+html[data-tema="escuro"] .security-badge.warn{background-color:#3F3212!important;color:#EDC682!important}
+html[data-tema="escuro"] .security-badge.off{background-color:#3F1212!important;color:#EB8484!important}
+html[data-tema="escuro"] .security-owner-banner{background:linear-gradient(135deg,#12293F,#18222D)!important;border:1px solid #233E5C!important}
+html[data-tema="escuro"] .security-owner-banner strong{color:#BAC7D6!important}
+html[data-tema="escuro"] .owner-modal{background-color:#18222D!important}
+html[data-tema="escuro"] .owner-modal-field label{color:#B9C8D5!important}
+html[data-tema="escuro"] .owner-modal-field input{border:1px solid #2A4055!important}
+html[data-tema="escuro"] .owner-modal-note{background-color:#15293D!important}
+html[data-tema="escuro"] .owner-modal-error{background-color:#3F1712!important;color:#ED8A82!important;border:1px solid #5C2A23!important}
+html[data-tema="escuro"] .coleta-popup-card-v1713{background-color:#18222D!important}
+html[data-tema="escuro"] .coleta-popup-field-v1713 label{color:#B9C8D5!important}
+html[data-tema="escuro"] .coleta-popup-field-v1713 input{border:1px solid #2B4055!important}
+html[data-tema="escuro"] .etiquetas-persistentes-box{background-color:#12293F!important;border:1px solid #2D4053!important}
+html[data-tema="escuro"] .etiquetas-persistentes-resumo{background-color:#182A3A!important;color:#9CB8D3!important}
+html[data-tema="escuro"] .btn-etiquetas-lote{background-color:#18222D!important;color:#ED8A82!important}
+html[data-tema="escuro"] .btn-etiquetas-lote:hover{background-color:#3F1212!important}
+html[data-tema="escuro"] .btn-etiquetas-reprocessar{background-color:#12273F!important;border:1px solid #233D5C!important;color:#87B0E8!important}
+html[data-tema="escuro"] .btn-etiquetas-reprocessar:hover{background-color:#12273F!important}
+html[data-tema="escuro"] .etiquetas-reprocessar-status.processando{background-color:#12263F!important;border:1px solid #233D5C!important;color:#859DEA!important}
+html[data-tema="escuro"] .etiquetas-reprocessar-status.sucesso{background-color:#123F25!important;border:1px solid #235C37!important;color:#8AE6AC!important}
+html[data-tema="escuro"] .etiquetas-reprocessar-status.aviso{background-color:#3F2B12!important;border:1px solid #5C4223!important;color:#ED9D82!important}
+html[data-tema="escuro"] .etiquetas-lote-barra{background-color:#3F1212!important;border:1px solid #5C2323!important}
+html[data-tema="escuro"] .etiquetas-lote-barra button{background-color:#18222D!important;border:1px solid #2F4150!important;color:#9CB8D3!important}
+html[data-tema="escuro"] .etiquetas-lote-contador{color:#D89797!important}
+html[data-tema="escuro"] .etiquetas-persistentes-coluna{background-color:#18222D!important;border:1px solid #2D4053!important}
+html[data-tema="escuro"] .etiquetas-persistentes-cabecalho{background-color:#172A3B!important;border-bottom:1px solid #2D4053!important}
+html[data-tema="escuro"] .etiqueta-persistente-item{border-bottom:1px solid #2D4052!important}
+html[data-tema="escuro"] .etiqueta-persistente-principal{color:#BDCAD7!important}
+html[data-tema="escuro"] .etiqueta-persistente-status{background-color:#193920!important;color:#95DBA0!important}
+html[data-tema="escuro"] .etiqueta-persistente-status.sem-vinculo{background-color:#3F3312!important;color:#EDCC82!important}
+html[data-tema="escuro"] .etiqueta-remover-x{background-color:#3F1212!important;color:#ED8A82!important}
+html[data-tema="escuro"] .sku-hist-filtros label{color:#ACB9C5!important}
+html[data-tema="escuro"] .sku-hist-filtros input,html[data-tema="escuro"] .sku-hist-filtros select{background-color:#18222D!important;border:1px solid #304050!important}
+html[data-tema="escuro"] .sku-hist-sku-antigo{background-color:#3F1712!important;color:#ED8A82!important}
+html[data-tema="escuro"] .sku-hist-sku-novo{background-color:#123F22!important;color:#8AE6AC!important}
+html[data-tema="escuro"] .sku-hist-tela{background-color:#13293F!important;color:#87B0E8!important}
+html[data-tema="escuro"] .sku-hist-tela.conf{background-color:#3F2F12!important;color:#EDC282!important}
+html[data-tema="escuro"] .sku-hist-vazio{color:#A9B5C2!important}
+html[data-tema="escuro"] .v15-brand{border-bottom:1px solid rgba(56,63,71,0.12)!important}
+html[data-tema="escuro"] .v15-brand-badge{background-color:#18222D!important}
+html[data-tema="escuro"] .v15-nav-item:hover,html[data-tema="escuro"] .v15-nav-item.active{background-color:rgba(24,34,45,0.11)!important}
+html[data-tema="escuro"] .v15-sidebar-footer{border-top:1px solid rgba(56,63,71,0.12)!important}
+html[data-tema="escuro"] .resumo-card{background-color:#18222D!important}
+html[data-tema="escuro"] .aviso-banco{background-color:#12233F!important;border-color:#264159!important;color:#AABBCB!important}
+html[data-tema="escuro"] .excel-wrap{border-color:#2A3F55!important}
+html[data-tema="escuro"] .excel-grid thead th{background-color:#16293B!important;color:#B5C5D3!important}
+html[data-tema="escuro"] .v15-overview-card{background-color:#18222D!important}
+html[data-tema="escuro"] .v15-quick a,html[data-tema="escuro"] .v15-quick button{background-color:#12233F!important;border:1px solid #284057!important;color:#8EB9E1!important}
+html[data-tema="escuro"] .v151-eyebrow{color:#87B0E8!important}
+html[data-tema="escuro"] .v151-dashboard-head h2{color:#C3CFDB!important}
+html[data-tema="escuro"] .v151-dashboard-head p{color:#A9B5C2!important}
+html[data-tema="escuro"] .v151-global-search-wrap{background-color:#18222D!important;border:1px solid #294056!important}
+html[data-tema="escuro"] .v151-global-results{background-color:#18222D!important;border:1px solid #294056!important}
+html[data-tema="escuro"] .v151-search-row{background-color:#18222D!important;border-bottom:1px solid #294056!important;color:#B9C8D5!important}
+html[data-tema="escuro"] .v151-search-row:hover{background-color:#12293F!important}
+html[data-tema="escuro"] .v151-kpi{background-color:#18222D!important;border:1px solid #2A3F56!important;color:#C0CCD9!important}
+html[data-tema="escuro"] .v151-kpi-icon{background-color:#12263F!important}
+html[data-tema="escuro"] .v151-kpi-icon.orange{background-color:#3F2A12!important}
+html[data-tema="escuro"] .v151-kpi-icon.green{background-color:#163B24!important}
+html[data-tema="escuro"] .v151-kpi-icon.amber{background-color:#3F3512!important}
+html[data-tema="escuro"] .v151-kpi-icon.red{background-color:#3F1212!important;color:#ED8A82!important}
+html[data-tema="escuro"] .v151-kpi b{color:#C1CFDA!important}
+html[data-tema="escuro"] .v151-kpi.danger{border-color:#5B2424!important}
+html[data-tema="escuro"] .v151-panel{background-color:#18222D!important;border:1px solid #2A3F56!important}
+html[data-tema="escuro"] .v151-panel-title h3{color:#C2D0DA!important}
+html[data-tema="escuro"] .v151-soft-badge{background-color:#16293B!important}
+html[data-tema="escuro"] .v151-link-btn{color:#87B0E8!important}
+html[data-tema="escuro"] .v151-flow b{color:#BECCD8!important}
+html[data-tema="escuro"] .v151-flow i{background:linear-gradient(90deg,#182939,#f0a04b)!important}
+html[data-tema="escuro"] .v151-integrations>div{background-color:#192939!important}
+html[data-tema="escuro"] .v151-integrations strong{color:#BACAD6!important}
+html[data-tema="escuro"] .v151-alert-count{background-color:#3F2A12!important;color:#EDBA82!important}
+html[data-tema="escuro"] .v151-alert{background-color:#1D2935!important;color:#B3C3D1!important}
+html[data-tema="escuro"] .v151-alert:hover{background-color:#16293B!important}
+html[data-tema="escuro"] .v151-alert .ico{background-color:#3F2A12!important}
+html[data-tema="escuro"] .v151-alert.red .ico{background-color:#3F1212!important}
+html[data-tema="escuro"] .v151-empty{background-color:#192939!important}
+html[data-tema="escuro"] .v151-productivity>div{background-color:#12233F!important}
+html[data-tema="escuro"] .v151-productivity b{color:#BECCD8!important}
+html[data-tema="escuro"] .v151-shortcuts a,html[data-tema="escuro"] .v151-shortcuts button{background-color:#12293F!important;border:1px solid #2A4156!important;color:#90BBDF!important}
+html[data-tema="escuro"] .v151-shortcuts a:hover,html[data-tema="escuro"] .v151-shortcuts button:hover{background-color:#122A3F!important}
+html[data-tema="escuro"] .v151-problem-banner{background-color:#3F2B12!important;border:1px solid #5C4223!important;color:#EDB582!important}
+html[data-tema="escuro"] .v151-problem-banner button{color:#EDB582!important}
+html[data-tema="escuro"] .v1799-legenda{color:#9EB9D1!important}
+html[data-tema="escuro"] .v1799-canal{background-color:#18222D!important;border:1px solid #2A3F56!important}
+html[data-tema="escuro"] .v1799-canal-top strong{color:#BDCBD8!important}
+html[data-tema="escuro"] .v1799-canal-top b{color:#C1CFDA!important}
+html[data-tema="escuro"] .v1799-canal .barra{background-color:#192938!important}
+html[data-tema="escuro"] .v1799-bar h3{color:#C3CFDB!important}
+html[data-tema="escuro"] .v1799-bar p{color:#A9B5C2!important}
+html[data-tema="escuro"] .v1799-seg{background-color:#18222D!important;border:1px solid #294056!important}
+html[data-tema="escuro"] .v1799-seg button{color:#9EB9D1!important}
+html[data-tema="escuro"] .v1799-seg button:hover{background-color:#15293D!important}
+html[data-tema="escuro"] .v1799-datas{background-color:#18222D!important;border:1px solid #294056!important;color:#A9B5C2!important}
+html[data-tema="escuro"] .v1799-datas input{color:#C0CCD9!important}
+html[data-tema="escuro"] .v1799-sync{background-color:#18222D!important;border:1px solid #294056!important;color:#87B0E8!important}
+html[data-tema="escuro"] .v1799-aviso{background-color:#12273F!important;border:1px solid #233D5C!important;color:#B5C4D3!important}
+html[data-tema="escuro"] .v1799-aviso.erro{background-color:#3F1912!important;border-color:#5C2B23!important;color:#E89388!important}
+html[data-tema="escuro"] .v1799-kpi{background-color:#18222D!important;border:1px solid #2A3F56!important}
+html[data-tema="escuro"] .v1799-kpi b{color:#C1CFDA!important}
+html[data-tema="escuro"] .v1799-var{color:#A9B5C2!important}
+html[data-tema="escuro"] .v1799-var.sobe{color:#8AE5AC!important}
+html[data-tema="escuro"] .v1799-var.desce{color:#ED8A82!important}
+html[data-tema="escuro"] .v1799-chart{border-bottom:1px solid #2A3F56!important}
+html[data-tema="escuro"] .v1799-col.zero i.vazio{background-color:#1B2937!important}
+html[data-tema="escuro"] .v1799-top th{border-bottom:1px solid #294056!important}
+html[data-tema="escuro"] .v1799-top td{border-bottom:1px solid #2A4055!important;color:#B9C8D5!important}
+html[data-tema="escuro"] .v1799-top .prod b{color:#BDCBD8!important}
+html[data-tema="escuro"] .v1799-top .share{background-color:#192938!important}
+html[data-tema="escuro"] .btn-excluir-kit-inteiro{background-color:#3F1212!important;border:1px solid #5C2923!important;color:#ED8A82!important}
+html[data-tema="escuro"] .btn-excluir-kit-inteiro:hover{background-color:#3F1212!important}
+html[data-tema="escuro"] .v1779-marketplaces span{background-color:#16293B!important;border:1px solid #264159!important;color:#BBC9D6!important}
+html[data-tema="escuro"] .v1779-filters input,html[data-tema="escuro"] .v1779-filters select{background-color:#18222D!important;border:1px solid #294056!important}
+html[data-tema="escuro"] .v1779-kpi{background-color:#12293F!important;border:1px solid #264159!important}
+html[data-tema="escuro"] .v1779-kpi b{color:#C2CFDB!important}
+html[data-tema="escuro"] .v1779-kpi span{color:#A9B5C2!important}
+html[data-tema="escuro"] .v1779-table th{background-color:#122A3F!important}
+html[data-tema="escuro"] .v1779-table td{border-bottom:1px solid #294056!important}
+html[data-tema="escuro"] .v1779-badge{background-color:#15293C!important}
+html[data-tema="escuro"] .v1779-ok{background-color:#153C23!important;color:#87E8AE!important}
+html[data-tema="escuro"] .v1779-wait{background-color:#3F3112!important;color:#EDC782!important}
+html[data-tema="escuro"] .v1779-actions button{background-color:#18222D!important;border:1px solid #284158!important}
+html[data-tema="escuro"] .v1779-actions button:hover{background-color:#122A3F!important}
+html[data-tema="escuro"] .v1779-detail{background-color:#12293F!important}
+html[data-tema="escuro"] .v1783-filters input[type=date]{background-color:#18222D!important;border:1px solid #294056!important}
+html[data-tema="escuro"] .v1783-filters #vdBusca{background-color:#18222D!important;border:1px solid #294056!important}
+html[data-tema="escuro"] .v1783-lbl{color:#A9B5C2!important}
+html[data-tema="escuro"] .v1783-mk{background-color:#15293C!important;color:#BBC9D6!important}
+html[data-tema="escuro"] .v15-grp-h:hover{background-color:rgba(24,34,45,0.06)!important}
+html[data-tema="escuro"] .v15-grp-n{background-color:rgba(24,34,45,0.12)!important}
+html[data-tema="escuro"] tr.pd8-row:hover{background-color:#12273F!important}
+html[data-tema="escuro"] tr.pd8-sel{background-color:#12263F!important}
+html[data-tema="escuro"] .pd8-gaveta{background-color:#16293B!important;color:#C4D0DB!important}
+html[data-tema="escuro"] .pd8-cA{background-color:#153C23!important;color:#8AE5AC!important}
+html[data-tema="escuro"] .pd8-cB{background-color:#3F3612!important;color:#EDC582!important}
+html[data-tema="escuro"] .pd8-cC{background-color:#192939!important;color:#A9B5C2!important}
+html[data-tema="escuro"] .pd8-forn{background-color:#17243B!important;color:#BECBD8!important}
+html[data-tema="escuro"] .pd8-mp h3{color:#C4D0DB!important}
+html[data-tema="escuro"] .pd8-tile{background-color:#18222D!important;border:1px solid #2A3F56!important}
+html[data-tema="escuro"] .pd8-tile .l{color:#A9B5C2!important}
+html[data-tema="escuro"] .pd8-sec{background-color:#18222D!important;border:1px solid #2A3F56!important}
+html[data-tema="escuro"] .pd8-sec h3{color:#A9B5C2!important}
+html[data-tema="escuro"] .pd8-linha{border-top:1px solid #294057!important}
+html[data-tema="escuro"] .pd8-linha.pd8-tot{border-top:2px solid #2A3F56!important}
+html[data-tema="escuro"] .pd8-mut{color:#A9B5C2!important}
+html[data-tema="escuro"] .pd8-nota{color:#A9B5C2!important}
+html[data-tema="escuro"] .pd8-filial{border-top:1px solid #294057!important}
+html[data-tema="escuro"] .pd8-sem{color:#A9B5C2!important}
+html[data-tema="escuro"] .pd8-demanda{background-color:#3F2B12!important;border:1px solid #5C4A23!important}
+html[data-tema="escuro"] .pd8-demanda.ok{background-color:#153C23!important;border-color:#275939!important}
+html[data-tema="escuro"] .pd8-compra.pd8-nd{color:#A9B5C2!important}
+html[data-tema="escuro"] .pd8-expl{color:#D2C09D!important}
+html[data-tema="escuro"] .pd8-demanda.ok .pd8-expl{color:#98D7B0!important}
+html[data-tema="escuro"] .pd8-acaminho input{border:1px solid #2B3D54!important}
+html[data-tema="escuro"] .pd8-rodape{background-color:#18222D!important;border-top:1px solid #2A3F56!important}
+html[data-tema="escuro"] .btn-solicitar-acesso{background-color:#18222D!important;color:#87B0E8!important}
+html[data-tema="escuro"] .btn-solicitar-acesso:hover{background-color:#15293C!important}
+html[data-tema="escuro"] .solicitacao-card{background-color:#18222D!important}
+html[data-tema="escuro"] .solicitacao-corpo input,html[data-tema="escuro"] .solicitacao-corpo select{border:1px solid #31404E!important}
+html[data-tema="escuro"] .solicitacao-erro{color:#EC8383!important}
+html[data-tema="escuro"] .solicitacoes-bloco{background-color:#192939!important;border:1px solid #2D4152!important}
+html[data-tema="escuro"] .solicitacoes-cabecalho h3{color:#87B0E8!important}
+html[data-tema="escuro"] .tabela-solicitacoes{background-color:#18222D!important}
+html[data-tema="escuro"] .tabela-solicitacoes th{background-color:#192939!important;color:#87B0E8!important}
+html[data-tema="escuro"] .tabela-solicitacoes td{border-bottom:1px solid #304250!important}
+html[data-tema="escuro"] .acao-rejeitar{background-color:#3F1712!important;color:#EC8383!important;border:1px solid #5C2923!important}
+html[data-tema="escuro"] .senha-protegida-status strong{color:#87B0E8!important}
+html[data-tema="escuro"] .senha-inicial-alerta{background-color:#3F2F12!important;color:#EDC282!important;border:1px solid #5C4C23!important}
+html[data-tema="escuro"] .senha-usuario-identidade{background-color:#122A3F!important;border:1px solid #294056!important}
+html[data-tema="escuro"] .senha-usuario-identidade span{color:#A9B5C2!important}
+html[data-tema="escuro"] .senha-usuario-identidade strong{color:#92B8DE!important}
+html[data-tema="escuro"] .senha-mostrar-linha{color:#ACB9C5!important}
+html[data-tema="escuro"] .senha-regra{background-color:#3F3212!important;color:#CEC3B6!important}
+html[data-tema="escuro"] .filtros-data-pedidos{background-color:#19232E!important;border:1px solid #2A3F56!important}
+html[data-tema="escuro"] .filtros-data-pedidos label{color:#ADBACA!important}
+html[data-tema="escuro"] .filtros-data-pedidos select,html[data-tema="escuro"] .filtros-data-pedidos input{background-color:#18222D!important;border:1px solid #2B3E55!important}
+html[data-tema="escuro"] .coleta-admin-field label{color:#C0CCD9!important}
+html[data-tema="escuro"] .coleta-admin-field input{background-color:#18222D!important;border:1px solid #2B4054!important;color:#C0CCD9!important}
+html[data-tema="escuro"] .coleta-admin-preview{background:linear-gradient(180deg,#19232E,#18222D)!important;border:1px solid #294256!important}
+html[data-tema="escuro"] .coleta-admin-preview-title{color:#A9B5C2!important}
+html[data-tema="escuro"] .coleta-admin-line{color:#BBC8D6!important}
+html[data-tema="escuro"] .coleta-admin-line.codigo{color:#82EDB2!important}
+html[data-tema="escuro"] .coleta-admin-meta{color:#A9B5C2!important}
+html[data-tema="escuro"] .coleta-admin-status{color:#A9B5C2!important}
+html[data-tema="escuro"] .coleta-admin-status.ok{color:#8AE5AC!important}
+html[data-tema="escuro"] .coleta-admin-status.erro{color:#ED8A82!important}
+html[data-tema="escuro"] .btn-kit-pedido-editar{background-color:#12273F!important;border:1px solid #2A3F56!important;color:#B6C6D3!important}
+html[data-tema="escuro"] .btn-kit-pedido-editar:hover{background-color:#12293F!important}
+html[data-tema="escuro"] .kit-pedido-modal{background-color:#18222D!important}
+html[data-tema="escuro"] .kit-pedido-topo h3{color:#BBC8D6!important}
+html[data-tema="escuro"] .kit-pedido-subtitulo{color:#A9B5C2!important}
+html[data-tema="escuro"] .kit-pedido-fechar{background-color:#1B2936!important}
+html[data-tema="escuro"] .kit-pedido-aviso{background-color:#3F3612!important;border:1px solid #5C4F23!important;color:#EDD182!important}
+html[data-tema="escuro"] .kit-pedido-grid label{color:#B9C7D5!important}
+html[data-tema="escuro"] .kit-pedido-grid input,html[data-tema="escuro"] .kit-pedido-grid select{background-color:#18222D!important;border:1px solid #2B4054!important}
+html[data-tema="escuro"] .kit-pedido-composicao{border:1px solid #2A4156!important}
+html[data-tema="escuro"] .kit-pedido-comp-title{background-color:#16293B!important;color:#BBC8D6!important;border-bottom:1px solid #2B4055!important}
+html[data-tema="escuro"] .kit-pedido-comp-row{border-bottom:1px solid #2C4053!important}
+html[data-tema="escuro"] .kit-override-badge{background-color:#122D3F!important;color:#B8CAD4!important}
+html[data-tema="escuro"] #aba-pedidos .excel-wrap{border:1px solid #2B4154!important}
+html[data-tema="escuro"] .linha-acoes-compacta .acao-atualizar{background-color:#122C3F!important;color:#82B4ED!important}
+html[data-tema="escuro"] .linha-acoes-compacta .acao-excluir{background-color:#3F1712!important;color:#ED8A82!important}
+html[data-tema="escuro"] .marketplace-pill-admin{background-color:#15293C!important;color:#B5C4D3!important}
+html[data-tema="escuro"] .cliente-conf-compacto label{color:#A9B5C2!important}
+html[data-tema="escuro"] .btn-sku-compacto,html[data-tema="escuro"] .btn-sku-manual{background-color:#12263F!important;color:#829EED!important}
+html[data-tema="escuro"] .btn-sku-manual{background-color:#3F2B12!important;color:#ED9D82!important}
+html[data-tema="escuro"] .produto-local-compacto>small{color:#A9B5C2!important}
+html[data-tema="escuro"] .pedido-detalhes-compactos summary{color:#87B9E8!important}
+html[data-tema="escuro"] .pedido-detalhes-grid{background-color:#18222D!important;border:1px solid #2A4055!important}
+html[data-tema="escuro"] .pedido-detalhes-grid label{color:#A5B6C6!important}
+html[data-tema="escuro"] #corpoPedidosAdmin tr.pedido-grupo-kit td{background-color:#19222E!important}
+html[data-tema="escuro"] #corpoPedidosAdmin .pedido-grupo-celula{background-color:#12293F!important;border-left:1px solid #26405A!important;border-right:1px solid #26405A!important}
+html[data-tema="escuro"] .pedido-grupo-badge.kit{background-color:#12263F!important;color:#829EED!important;border:1px solid #233E5C!important}
+html[data-tema="escuro"] .pedido-grupo-badge.multi{background-color:#1A2738!important;color:#ADBACA!important;border:1px solid #2B3E55!important}
+html[data-tema="escuro"] .componente-kit-indice span{background-color:#13293E!important}
+html[data-tema="escuro"] #corpoPedidosAdmin tr.pedido-grupo-meio td:not(.pedido-grupo-celula){border-top-color:#274058!important}
+html[data-tema="escuro"] .pedido-card{background-color:#18222D!important;border:1px solid #294057!important}
+html[data-tema="escuro"] .pedido-card-head{background-color:#12283F!important;border-bottom:1px solid #26405A!important}
+html[data-tema="escuro"] .pedido-card-head input{background-color:#18222D!important;border:1px solid #2A4055!important}
+html[data-tema="escuro"] .pedido-card-badge{background-color:#12233F!important;color:#82B8ED!important}
+html[data-tema="escuro"] .pedido-card-badge.kit{background-color:#12263F!important;color:#82B9ED!important}
+html[data-tema="escuro"] .pedido-item-row{border-bottom:1px solid #294056!important}
+html[data-tema="escuro"] .pedido-item-acoes button{background-color:#13293E!important;color:#89B8E7!important}
+html[data-tema="escuro"] .pedido-item-acoes .acao-excluir{background-color:#3F1215!important;color:#E28D92!important}
+html[data-tema="escuro"] .pedido-item-num{color:#A5B8C9!important}
+html[data-tema="escuro"] .pedido-item-sku input,html[data-tema="escuro"] .pedido-item-qtd input,html[data-tema="escuro"] .pedido-item-ean input{border:1px solid #2A4055!important}
+html[data-tema="escuro"] .pedido-item-produto strong{color:#C5D1DC!important}
+html[data-tema="escuro"] .pedido-detalhes-compactos summary{color:#82B8ED!important}
+html[data-tema="escuro"] #aba-pedidos .pedidos-rodape-fixo{background-color:#19232E!important;border:1px solid #274059!important}
+html[data-tema="escuro"] #aba-pedidos .pedidos-rodape-nota{color:#A9B5C2!important}
+html[data-tema="escuro"] #aba-pedidos .pedidos-paginacao{background-color:#18222D!important;border:1px solid #294056!important}
+html[data-tema="escuro"] .marketplace-pill-admin.mp-ml{background-color:#3F3812!important;color:#EDD882!important}
+html[data-tema="escuro"] .marketplace-pill-admin.mp-shopee{background-color:#3F2012!important;color:#ED9F82!important}
+html[data-tema="escuro"] .pedido-item-acoes .acao-romaneio{background-color:#14273E!important;color:#C0CCD9!important}
+html[data-tema="escuro"] .pedido-item-acoes .acao-romaneio:hover{background-color:#15283D!important}
+html[data-tema="escuro"] .pedido-card-head input.conferencia-vazia{background-color:#3F3012!important;border-color:#5C4923!important}
+html[data-tema="escuro"] .tag-nfe{background-color:#153C23!important;color:#87E8AE!important}
+@media(max-width:760px){
+html[data-tema="escuro"] table.v1779-table.v1844-cartoes tr{background-color:#18222D!important;border:1px solid #294057!important}
+html[data-tema="escuro"] table.v1779-table.v1844-cartoes td{border-bottom:1px solid #263C59!important}
+}
+@media (min-width:1001px){
+html[data-tema="escuro"] .header-topo{border:1px solid #2A3F56!important}
+html[data-tema="escuro"] .header-titulos h1{color:#C0CCD9!important}
+}
+/* cores em style="..." */
+html[data-tema="escuro"] [style*="color:#4A5D72" i]{color:#ADBACA!important}
+html[data-tema="escuro"] [style*="color: #4A5D72" i]{color:#ADBACA!important}
+html[data-tema="escuro"] [style*="color:#586A7D" i]{color:#A9B5C2!important}
+html[data-tema="escuro"] [style*="color: #586A7D" i]{color:#A9B5C2!important}
+html[data-tema="escuro"] [style*="color:#667" i]{color:#AEAEBA!important}
+html[data-tema="escuro"] [style*="color: #667" i]{color:#AEAEBA!important}
+html[data-tema="escuro"] [style*="color:#526475" i]{color:#ACB9C5!important}
+html[data-tema="escuro"] [style*="color: #526475" i]{color:#ACB9C5!important}
+html[data-tema="escuro"] [style*="color:#b45309" i]{color:#EDB082!important}
+html[data-tema="escuro"] [style*="color: #b45309" i]{color:#EDB082!important}
+html[data-tema="escuro"] [style*="color:#B42318" i]{color:#ED8A82!important}
+html[data-tema="escuro"] [style*="color: #B42318" i]{color:#ED8A82!important}
+html[data-tema="escuro"] [style*="color:#1B7A3E" i]{color:#8AE5AC!important}
+html[data-tema="escuro"] [style*="color: #1B7A3E" i]{color:#8AE5AC!important}
+html[data-tema="escuro"] [style*="color:#8C1C13" i]{color:#ED8A82!important}
+html[data-tema="escuro"] [style*="color: #8C1C13" i]{color:#ED8A82!important}
+html[data-tema="escuro"] [style*="color:#18324A" i]{color:#C4D0DB!important}
+html[data-tema="escuro"] [style*="color: #18324A" i]{color:#C4D0DB!important}
+html[data-tema="escuro"] [style*="background:#fff" i]{background-color:#18222D!important}
+html[data-tema="escuro"] [style*="background: #fff" i]{background-color:#18222D!important}
+html[data-tema="escuro"] [style*="color:#145C2F" i]{color:#8AE6AC!important}
+html[data-tema="escuro"] [style*="color: #145C2F" i]{color:#8AE6AC!important}
+html[data-tema="escuro"] [style*="color:#92400e" i]{color:#EDAB82!important}
+html[data-tema="escuro"] [style*="color: #92400e" i]{color:#EDAB82!important}
+html[data-tema="escuro"] [style*="background:#FDECEA" i]{background-color:#3F1712!important}
+html[data-tema="escuro"] [style*="background: #FDECEA" i]{background-color:#3F1712!important}
+html[data-tema="escuro"] [style*="color:#5d6d7a" i]{color:#ABB6BF!important}
+html[data-tema="escuro"] [style*="color: #5d6d7a" i]{color:#ABB6BF!important}
+html[data-tema="escuro"] [style*="background:#e3e8ed" i]{background-color:#1D2934!important}
+html[data-tema="escuro"] [style*="background: #e3e8ed" i]{background-color:#1D2934!important}
+html[data-tema="escuro"] [style*="color:#334" i]{color:#C3C3D2!important}
+html[data-tema="escuro"] [style*="color: #334" i]{color:#C3C3D2!important}
+html[data-tema="escuro"] [style*="color:#1f57a5" i]{color:#87B0E8!important}
+html[data-tema="escuro"] [style*="color: #1f57a5" i]{color:#87B0E8!important}
+html[data-tema="escuro"] [style*="background:#fff7ed" i]{background-color:#3F2B12!important}
+html[data-tema="escuro"] [style*="background: #fff7ed" i]{background-color:#3F2B12!important}
+html[data-tema="escuro"] [style*="color:#9a3412" i]{color:#ED9D82!important}
+html[data-tema="escuro"] [style*="color: #9a3412" i]{color:#ED9D82!important}
+html[data-tema="escuro"] [style*="color:#a61b1b" i]{color:#EB8484!important}
+html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
+</style>
 </head>
 <body>
 
@@ -912,7 +1362,7 @@ body{background:var(--v15-bg)!important}
   </style>
   <!-- V18.82: o menu (itens, grupos recolhíveis, Sair) vem do nk-menu.js, o mesmo das outras telas.
        Cada item é um link com o endereço da tela (/expedicao/pedidos-dia...): Ctrl+clique abre em outra aba. -->
-  <script src="/expedicao/nk-menu.js?v=18.82"></script>
+  <script src="/expedicao/nk-menu.js?v=18.83"></script>
   <script>nkMenuDesenhar(document.currentScript);</script>
 </nav>
 
@@ -1151,7 +1601,7 @@ body{background:var(--v15-bg)!important}
         <select id="pdStatus" onchange="renderPedidosDiaV1779()"><option value="">Todos status</option><option value="aguardando">Aguardando</option><option value="separacao">Em separação</option><option value="conferido">Conferido</option><option value="cancelado">Cancelado</option></select>
         <input id="pdBusca" placeholder="Buscar pedido, SKU ou cliente..." oninput="renderPedidosDiaV1779()">
       </div>
-      <div style="overflow:auto"><table class="v1779-table"><thead><tr><th>Pedido eCommerce</th><th>Contato</th><th>Situação</th><th>Cancelamento</th><th>NF Status</th><th>Cód.Cliente</th><th>Data Pedido</th><th>Data Contato</th><th>Cliente</th><th>Cód.Usu.</th><th>Usuário</th><th>Marketplace</th><th>Itens / Unid.</th><th>Ações</th></tr></thead><tbody id="pdCorpo"></tbody></table></div>
+      <div style="overflow:auto"><table class="v1779-table" data-nk-tabela="pedidos_do_dia"><thead><tr><th>Pedido eCommerce</th><th>Contato</th><th>Situação</th><th>Cancelamento</th><th>NF Status</th><th>Cód.Cliente</th><th>Data Pedido</th><th>Data Contato</th><th>Cliente</th><th>Cód.Usu.</th><th>Usuário</th><th>Marketplace</th><th>Itens / Unid.</th><th>Ações</th></tr></thead><tbody id="pdCorpo"></tbody></table></div>
       <div id="pdResumo" style="padding-top:12px;color:#586A7D;font-size:12px"></div>
     </div>
 
@@ -1187,7 +1637,7 @@ body{background:var(--v15-bg)!important}
       <div id="vdCanais" class="v1779-marketplaces"></div>
 
       <div style="overflow:auto;margin-top:12px">
-        <table class="v1779-table">
+        <table class="v1779-table" data-nk-tabela="vendas_do_dia">
           <thead><tr>
             <th>#</th><th>SKU</th><th>Descrição</th><th>EAN</th>
             <th style="text-align:right">Unidades</th><th style="text-align:right">Pedidos</th>
@@ -1581,7 +2031,7 @@ body{background:var(--v15-bg)!important}
           <h3><i class=nk-i-file></i> Log da integração</h3>
           <div class="integracao-acoes" style="margin-bottom:10px"><button type="button" class="btn-secundario" onclick="carregarLogsMercadoLivreAdmin()">Atualizar log</button></div>
           <div class="ml-log-wrap">
-            <table class="ml-log-table">
+            <table class="ml-log-table" data-nk-tabela="log_mercado_livre">
               <thead><tr><th>Data/hora</th><th>Tópico</th><th>Resultado</th><th>Recurso / detalhe</th></tr></thead>
               <tbody id="mlIntegracaoLogs"><tr><td colspan="4">Nenhum log carregado.</td></tr></tbody>
             </table>
@@ -1606,7 +2056,7 @@ body{background:var(--v15-bg)!important}
       </div>
       <div class="sku-hist-resumo"><span id="resumoHistoricoSkuAdmin">Carregue o histórico para visualizar.</span><button type="button" class="btn-secundario" onclick="limparFiltrosHistoricoSkuAdmin()">Limpar filtros</button></div>
       <div class="excel-wrap">
-        <table class="excel-grid sku-hist-table">
+        <table class="excel-grid sku-hist-table" data-nk-tabela="historico_sku">
           <thead><tr><th>Dia</th><th>Horário</th><th>Usuário</th><th>Tela</th><th>Forma</th><th>Pedido</th><th>Marketplace</th><th>SKU anterior</th><th>SKU novo</th><th>Descrição</th></tr></thead>
           <tbody id="corpoHistoricoSkuAdmin"><tr><td colspan="10" class="sku-hist-vazio">Nenhuma consulta realizada.</td></tr></tbody>
         </table>
@@ -1618,7 +2068,7 @@ body{background:var(--v15-bg)!important}
     <div class="card-admin">
       <h3>Relatório de conferências concluídas</h3>
       <div style="margin-bottom:15px;"><button class="btn-excel" onclick="exportarExcelLogs()"><i class=nk-i-chart></i> Baixar relatório em Excel</button><button class="btn-limpar" onclick="limparLogs()"><i class=nk-i-trash></i> Limpar histórico</button></div>
-      <table><thead><tr><th>Pedido</th><th>Operador</th><th>Data / Hora</th><th>Qtd Itens</th></tr></thead><tbody id="corpoLogs"><tr><td colspan="4" style="text-align:center;">Nenhum log registrado até o momento.</td></tr></tbody></table>
+      <table data-nk-tabela="historico_conferencias"><thead><tr><th>Pedido</th><th>Operador</th><th>Data / Hora</th><th>Qtd Itens</th></tr></thead><tbody id="corpoLogs"><tr><td colspan="4" style="text-align:center;">Nenhum log registrado até o momento.</td></tr></tbody></table>
     </div>
   </section>
 </div>
@@ -3356,7 +3806,7 @@ function exportarExcelLogs() {
 // V18.66: apagar uma base inteira exige Admin + confirmação do proprietário no servidor.
 // Antes o removeItem disparava o DELETE sem esperar resposta; agora a tela confere.
 async function limparLogs() {
-  if (!confirm("Tem certeza que deseja apagar todo o histórico de logs?")) return;
+  if (!await nkConfirmar("Tem certeza que deseja apagar todo o histórico de logs?")) return;
   try {
     await confirmarOwnerSeguranca("Apagar todo o histórico de logs da conferência");
     await securityApiAdmin("/expedicao/api/storage?key=conf_logs", {method: "DELETE"});
@@ -3853,11 +4303,11 @@ function salvarKitEditorAdmin(){
   setStatusBanco("● Kit salvo — a integração já pode usar essa composição automaticamente","ok");
   voltarListaKitsAdmin();
 }
-function excluirKitEditorAdmin(){
+async function excluirKitEditorAdmin(){
   if(kitEditorIndiceAdmin<0) return;
   const kit=kitsBancoAdmin[kitEditorIndiceAdmin];
   if(!kit) return;
-  if(!confirm(`Excluir o kit ${kit.sku_kit||""}?`)) return;
+  if(!await nkConfirmar(`Excluir o kit ${kit.sku_kit||""}?`)) return;
   kitsBancoAdmin.splice(kitEditorIndiceAdmin,1);
   persistirKitsBancoAdmin();
   setStatusBanco("Kit excluído","ok");
@@ -4243,7 +4693,7 @@ async function pdRomaneioLinxV1860(btn){
 }
 async function pdRomRoboV1860(){
   const d=pdRomaneioV1860;if(!d)return;
-  if(!confirm(`Mandar o cadastro de ${d.cliente?.nome_fiscal||d.pedido} para o robô do Apollo?\n\nEle grava, quando o PC do escritório estiver ocioso: nome da NF-e, 11 111111111, lojavirtual@noromak.com.br, endereços sem acento, nascimento, Cadastro Aprovado, Crédito normal e validade hoje.`))return;
+  if(!await nkConfirmar(`Mandar o cadastro de ${d.cliente?.nome_fiscal||d.pedido} para o robô do Apollo?\n\nEle grava, quando o PC do escritório estiver ocioso: nome da NF-e, 11 111111111, lojavirtual@noromak.com.br, endereços sem acento, nascimento, Cadastro Aprovado, Crédito normal e validade hoje.`))return;
   pdRomMsgV1860("Enviando para a fila do robô…");
   try{const r=await mlApiAdmin("/expedicao/api/linx/robo/fila",{method:"POST",body:JSON.stringify({pedido:d.pedido})});await pdRomRecarregarV1860(r.ja_na_fila?"Já estava na fila do robô.":"✅ Na fila do robô. Ele avisa aqui quando terminar (clique em Atualizar).");}
   catch(e){pdRomMsgV1860("❌ "+e.message);}
@@ -4288,7 +4738,7 @@ async function pdRomaneioImprimirV1860(btn){
   if(cond&&!cond.checked){pdRomMsgV1860("Defina a condição de pagamento (etapa 2) ou marque que já conferiu.");return;}
   const cand=(d.candidatos||[]).find(x=>String(x.contato)===sel.value)||{};
   const resumo=(cand.itens||[]).map(i=>`${i.item} x${i.quantidade}`).join(", ");
-  if(!confirm(`Imprimir o romaneio no estoque?\n\nPedido ${d.pedido}\nAtendimento ${sel.value}\nObservação: ${obs}\nItens: ${resumo}\n\nIsso movimenta o estoque no Linx e não volta atrás.`))return;
+  if(!await nkConfirmar(`Imprimir o romaneio no estoque?\n\nPedido ${d.pedido}\nAtendimento ${sel.value}\nObservação: ${obs}\nItens: ${resumo}\n\nIsso movimenta o estoque no Linx e não volta atrás.`))return;
   btn.disabled=true;pdRomMsgV1860("Enviando ao Linx…");
   try{
     const r=await mlApiAdmin("/expedicao/api/linx/romaneio",{method:"POST",body:JSON.stringify({pedido:d.pedido,contato:sel.value,observacao:obs,condicao_conferida:!!(cond&&cond.checked),credito_conferido:!!(cred&&cred.checked)})});
@@ -4312,7 +4762,7 @@ async function pdRomCaixaV1860(){
 }
 async function pdCadastroLinxV1860(){
   const d=pdRomaneioV1860;if(!d)return;
-  if(!confirm(`Atualizar no Linx o cliente ${d.cliente?.cliente}?\n\nNome: ${String(d.cliente?.nome_fiscal||"").toUpperCase()}\nTelefone e celular: 11 111111111\nE-mail: lojavirtual@noromak.com.br\nCadastro (421): Aprovado\nSituação de Crédito (420): Crédito normal\nValidade de Crédito: hoje\n\nO resto do cadastro é reenviado como está. Depois o Noromak relê o cliente e mostra o que pegou.`))return;
+  if(!await nkConfirmar(`Atualizar no Linx o cliente ${d.cliente?.cliente}?\n\nNome: ${String(d.cliente?.nome_fiscal||"").toUpperCase()}\nTelefone e celular: 11 111111111\nE-mail: lojavirtual@noromak.com.br\nCadastro (421): Aprovado\nSituação de Crédito (420): Crédito normal\nValidade de Crédito: hoje\n\nO resto do cadastro é reenviado como está. Depois o Noromak relê o cliente e mostra o que pegou.`))return;
   pdRomMsgV1860("Atualizando cadastro e crédito…");
   try{
     const r=await mlApiAdmin("/expedicao/api/linx/cadastro",{method:"POST",body:JSON.stringify({pedido:d.pedido})});
@@ -5202,7 +5652,7 @@ async function excluirPedidoInteiroAdmin(pedido,marketplace){
     alert("Somente o ADMIN pode excluir o pedido de forma definitiva.");
     return;
   }
-  if(!confirm(`Excluir o KIT INTEIRO do pedido ${pedido}?\n\nTodos os componentes serão removidos e nenhuma sincronização poderá recriar este pedido automaticamente.`))return;
+  if(!await nkConfirmar(`Excluir o KIT INTEIRO do pedido ${pedido}?\n\nTodos os componentes serão removidos e nenhuma sincronização poderá recriar este pedido automaticamente.`))return;
   try{
     setStatusBanco("● Excluindo KIT inteiro e bloqueando reescrita...","salvando");
     const baseApi=location.pathname.startsWith("/expedicao")?"/expedicao":"";
@@ -5230,7 +5680,7 @@ async function excluirLinhaPedidoAdmin(uid){
   const texto=ehKit
     ?"Excluir este componente do KIT? A exclusão ficará protegida e ele não voltará nas próximas sincronizações."
     :"Excluir esta linha do pedido? Se for Shopee, a exclusão ficará protegida contra novas sincronizações.";
-  if((item.Pedido||item.SKU||item["Código de Barras"])&&!confirm(texto))return;
+  if((item.Pedido||item.SKU||item["Código de Barras"])&&!await nkConfirmar(texto))return;
   try{
     setStatusBanco("● Excluindo item do pedido...","salvando");
     const baseApi=location.pathname.startsWith("/expedicao")?"/expedicao":"";
@@ -5334,11 +5784,11 @@ function salvarSkuManualAdmin(uid,botao=null){
     if(botao){botao.disabled=false;botao.textContent="Salvar SKU";}
   }
 }
-function restaurarSkuIntegracaoAdmin(uid){
+async function restaurarSkuIntegracaoAdmin(uid){
   const item=pedidosEditorAdmin.find(x=>x.__uidLinha===uid);if(!item)return;
   const original=String(item.SkuOrigemImportacao||"").trim();
   if(!original){alert("Este item não possui SKU original registrado pela integração.");return;}
-  if(!confirm(`Restaurar o SKU original da integração?\n\nAtual: ${item.SKU||"(vazio)"}\nOriginal: ${original}`))return;
+  if(!await nkConfirmar(`Restaurar o SKU original da integração?\n\nAtual: ${item.SKU||"(vazio)"}\nOriginal: ${original}`))return;
   item.SKU=original;
   delete item.SkuManualOverride;
   delete item.SkuManualEditadoEm;
@@ -5744,7 +6194,7 @@ function renderizarProdutosAdmin(){
 }
 function atualizarCampoProdutoAdmin(el){const p=produtosBancoAdmin.find(x=>x.__uidProduto===el.dataset.uidproduto);if(!p)return;p[el.dataset.campo]=el.value;agendarSalvarProdutosAdmin();}
 function adicionarProdutoAdmin(){const p=Object.fromEntries(CAMPOS_PRODUTOS_BANCO.map(c=>[c,""]));p.__uidProduto=uidBanco("PROD");p.Ativo="SIM";produtosBancoAdmin.unshift(p);paginaProdutosAdmin=1;renderizarProdutosAdmin();agendarSalvarProdutosAdmin();setTimeout(()=>document.querySelector(`[data-uidproduto="${p.__uidProduto}"][data-campo="SKU"]`)?.focus(),30);}
-function excluirProdutoAdmin(uid){const p=produtosBancoAdmin.find(x=>x.__uidProduto===uid);if(!p)return;if(!confirm(`Excluir o produto ${p.SKU||p["Código de Barras"]||"sem código"}?`))return;produtosBancoAdmin=produtosBancoAdmin.filter(x=>x.__uidProduto!==uid);renderizarProdutosAdmin();salvarProdutosAdmin(false);}
+async function excluirProdutoAdmin(uid){const p=produtosBancoAdmin.find(x=>x.__uidProduto===uid);if(!p)return;if(!await nkConfirmar(`Excluir o produto ${p.SKU||p["Código de Barras"]||"sem código"}?`))return;produtosBancoAdmin=produtosBancoAdmin.filter(x=>x.__uidProduto!==uid);renderizarProdutosAdmin();salvarProdutosAdmin(false);}
 function mudarPaginaProdutos(delta){paginaProdutosAdmin+=delta;renderizarProdutosAdmin();}
 
 function agendarSalvarUsuariosAdmin(){
@@ -5837,10 +6287,10 @@ function adicionarUsuarioAdmin(){
     campo?.focus?.();
   },60);
 }
-function excluirUsuarioAdmin(uid){
+async function excluirUsuarioAdmin(uid){
   const alvo=usuariosEditorAdmin.find(x=>x.__uidUsuario===uid);
   if(String(alvo?.Owner||"").toLowerCase()==="true"||String(alvo?.Login||"").toLowerCase()==="luis"){alert("A conta OWNER não pode ser excluída pelo painel.");return;}
-  if(!confirm("Excluir este usuário? A exclusão só será efetivada após Salvar alterações com confirmação do OWNER."))return;
+  if(!await nkConfirmar("Excluir este usuário? A exclusão só será efetivada após Salvar alterações com confirmação do OWNER."))return;
   usuariosEditorAdmin=usuariosEditorAdmin.filter(x=>x.__uidUsuario!==uid);
   renderizarUsuariosAdmin();
   setStatusBanco("● Exclusão pendente — confirme em Salvar alterações","aviso");
@@ -7849,13 +8299,13 @@ document.addEventListener("DOMContentLoaded",()=>{
     if(aba) aba.innerHTML=`👥 Usuários${pendentes.length?` <span class="badge-pendencias" style="height:19px;min-width:19px;font-size:10px">${pendentes.length}</span>`:""}`;
   };
 
-  window.aprovarSolicitacaoUsuario = function(id){
+  window.aprovarSolicitacaoUsuario = async function(id){
     const solicitacoes=lerSolicitacoes();
     const req=solicitacoes.find(s=>s.id===id);
     if(!req||txt(req.Status||"Pendente").toLowerCase()!=="pendente"){alert("Esta solicitação já foi processada ou não existe mais.");renderizarSolicitacoesAdmin();return;}
     const seletorPerfil=document.getElementById("perfil-aprovacao-"+id);
     const perfilAprovado=txt(seletorPerfil?.value||req.PerfilSolicitado||"Operador")==="Admin"?"Admin":"Operador";
-    if(!confirm(`Aprovar ${req.Nome} como ${perfilAprovado}?`))return;
+    if(!await nkConfirmar(`Aprovar ${req.Nome} como ${perfilAprovado}?`))return;
     try{
       const usuarios=jsonLista("conf_usuarios");
       const chave=loginNormalizado(req.Login);
@@ -8751,13 +9201,13 @@ document.addEventListener("DOMContentLoaded",()=>{
     etiquetasSelecionadasPersistentes.clear();
     renderizarEtiquetasPersistentes();
   }
-  function removerEtiquetasSelecionadasPersistentes(){
+  async function removerEtiquetasSelecionadasPersistentes(){
     const banco=lerBancoEtqPersistente();
     const ids=[...etiquetasSelecionadasPersistentes].filter(id=>banco.registros?.[id]);
     if(!ids.length){atualizarControlesRemocaoMassaEtiquetas();return;}
     const vinculadas=ids.filter(id=>!!banco.registros[id]?.pedido).length;
     const aviso=vinculadas?`\n\n${vinculadas} etiqueta(s) está(ão) vinculada(s) a pedidos pendentes. Esses pedidos deixarão de ficar disponíveis para Conferência até receberem outra etiqueta.`:"";
-    if(!confirm(`Remover ${ids.length} etiqueta(s) selecionada(s)?${aviso}\n\nA remoção será aplicada para todas as máquinas.`)) return;
+    if(!await nkConfirmar(`Remover ${ids.length} etiqueta(s) selecionada(s)?${aviso}\n\nA remoção será aplicada para todas as máquinas.`)) return;
     const remover=new Set(ids);
     ids.forEach(id=>delete banco.registros[id]);
     banco.ordem=(banco.ordem||[]).filter(id=>!remover.has(id));
@@ -8772,12 +9222,12 @@ document.addEventListener("DOMContentLoaded",()=>{
     const status=document.getElementById("status");
     if(status){status.style.color="#1B7A3E";status.innerHTML=`✔ <b>${ids.length}</b> etiqueta(s) removida(s) do servidor em uma única operação.`;}
   }
-  function removerEtiquetaPersistente(id){
+  async function removerEtiquetaPersistente(id){
     const banco=lerBancoEtqPersistente();
     const r=banco.registros?.[id]; if(!r){renderizarEtiquetasPersistentes();return;}
     const desc=descricaoRegistroEtq(r);
     const aviso=r.pedido?"\n\nEsse pedido deixará de ter esta etiqueta disponível na Conferência.":"";
-    if(!confirm(`Remover ${desc}?${aviso}\n\nA remoção será aplicada para todas as máquinas.`)) return;
+    if(!await nkConfirmar(`Remover ${desc}?${aviso}\n\nA remoção será aplicada para todas as máquinas.`)) return;
     delete banco.registros[id];
     banco.ordem=(banco.ordem||[]).filter(x=>x!==id);
     banco.auditoria=(banco.auditoria||[]).filter(a=>a?.etiqueta!==id);
@@ -9024,7 +9474,7 @@ async function copiarTokenZebraAdmin(){
   catch(_){prompt("Copie o token abaixo:",token);}
 }
 async function renovarTokenZebraAdmin(){
-  if(!confirm("Renovar o token? O agente instalado precisará ser configurado novamente com o novo token."))return;
+  if(!await nkConfirmar("Renovar o token? O agente instalado precisará ser configurado novamente com o novo token."))return;
   try{await confirmarOwnerSeguranca("Renovar a credencial do agente Zebra");await mlApiAdmin("/expedicao/api/print/agent/rotate-token",{method:"POST",body:"{}"});await carregarAgenteZebraAdmin();alert("Token renovado.");}
   catch(e){alert("Erro ao renovar token: "+e.message);}
 }
@@ -9064,7 +9514,7 @@ async function copiarTokenRoboLinxAdmin(){
   catch(_){prompt("Copie o token do robô:",linxRoboTokenV1860);}
 }
 async function renovarTokenRoboLinxAdmin(){
-  if(!confirm("Renovar o token do robô? O robô para de funcionar até você colar o novo token no robo-config.json."))return;
+  if(!await nkConfirmar("Renovar o token do robô? O robô para de funcionar até você colar o novo token no robo-config.json."))return;
   try{await confirmarOwnerSeguranca("Renovar a credencial do robô do Apollo");await mlApiAdmin("/expedicao/api/linx/robo/renovar",{method:"POST",body:"{}"});await carregarTokenRoboLinxAdmin();alert("Token renovado.");}
   catch(e){alert("Erro ao renovar: "+e.message);}
 }
@@ -9141,7 +9591,7 @@ Pedidos sem detalhe: ${d.detail_missing}`:""}`);
   finally{if(btn){btn.textContent="↻ Sincronizar agora";await carregarIntegracaoShopeeAdmin();}}
 }
 async function desconectarShopeeAdmin(){
-  if(!confirm("Desconectar a Shopee? Os pedidos já importados serão mantidos."))return;
+  if(!await nkConfirmar("Desconectar a Shopee? Os pedidos já importados serão mantidos."))return;
   try{await confirmarOwnerSeguranca("Desconectar a integração da Shopee");await mlApiAdmin("/expedicao/api/integracoes/shopee/disconnect",{method:"POST",body:"{}"});await carregarIntegracaoShopeeAdmin();}
   catch(e){alert("Erro ao desconectar Shopee: "+e.message);}
 }
@@ -9205,7 +9655,7 @@ async function atualizarNomesNfeMercadoLivreAdmin(){
   }finally{if(btn){btn.disabled=false;btn.textContent=original;}}
 }
 async function desconectarMercadoLivreAdmin(){
-  if(!confirm("Desconectar a conta do Mercado Livre? Os pedidos já importados serão mantidos."))return;
+  if(!await nkConfirmar("Desconectar a conta do Mercado Livre? Os pedidos já importados serão mantidos."))return;
   try{
     await confirmarOwnerSeguranca("Desconectar a integração do Mercado Livre");
     await mlApiAdmin("/expedicao/api/integracoes/mercadolivre/disconnect",{method:"POST",body:"{}"});
@@ -9522,7 +9972,7 @@ window.addEventListener("storage",e=>{
   window.salvarUsuariosAdmin=async function(mostrar=false){
     try{for(const u of (usuariosEditorAdmin||[])){const login=String(u.__serverUsername||u.Login||'').trim().toLowerCase();if(!login)continue;await api('/api/roles',{method:'POST',body:JSON.stringify({username:login,display_name:String(u.Nome||login).trim(),role:perfil(u.Perfil).toLowerCase(),active:u.Ativo!==false,permissions:{conferencia:u.AcessoConferencia!==false,admin:u.AcessoAdmin===true,estacao:u.AcessoEstacao===true,precificador:u.AcessoPrecificador===true}})});}await carregarUsuariosCanonicosV1757();if(typeof setStatusBanco==='function')setStatusBanco('● Usuários salvos no servidor','ok');if(mostrar)alert('Alterações de usuários salvas no servidor.');return true;}catch(e){if(typeof setStatusBanco==='function')setStatusBanco('Erro ao salvar usuários','erro');if(mostrar)alert('Não foi possível salvar: '+(e.message||e));return false;}
   };
-  window.excluirUsuarioAdmin=async function(uid){const u=(usuariosEditorAdmin||[]).find(x=>String(x.__uidUsuario)===String(uid));if(!u)return;if(!confirm(`Excluir o usuário ${u.Login||u.Nome}?`))return;try{await api('/api/roles?username='+encodeURIComponent(u.__serverUsername||u.Login),{method:'DELETE'});await carregarUsuariosCanonicosV1757();if(typeof setStatusBanco==='function')setStatusBanco('● Usuário excluído no servidor','ok');}catch(e){alert('Não foi possível excluir o usuário: '+(e.message||e));}};
+  window.excluirUsuarioAdmin=async function(uid){const u=(usuariosEditorAdmin||[]).find(x=>String(x.__uidUsuario)===String(uid));if(!u)return;if(!await nkConfirmar(`Excluir o usuário ${u.Login||u.Nome}?`))return;try{await api('/api/roles?username='+encodeURIComponent(u.__serverUsername||u.Login),{method:'DELETE'});await carregarUsuariosCanonicosV1757();if(typeof setStatusBanco==='function')setStatusBanco('● Usuário excluído no servidor','ok');}catch(e){alert('Não foi possível excluir o usuário: '+(e.message||e));}};
   window.confirmarNovoUsuarioAdmin=async function(){const erro=document.getElementById('erroNovoUsuarioAdmin');const btn=document.getElementById('btnConfirmarNovoUsuario');if(erro)erro.textContent='';const nome=String(document.getElementById('novoUsuarioNome')?.value||'').trim(),login=String(document.getElementById('novoUsuarioLogin')?.value||'').trim().toLowerCase(),senha=String(document.getElementById('novoUsuarioSenha')?.value||''),p=perfil(document.getElementById('novoUsuarioPerfil')?.value);if(!nome||!login||!senha){if(erro)erro.textContent='Preencha Nome, Login e Senha.';return;}try{if(btn){btn.disabled=true;btn.textContent='Salvando...'}await api('/api/roles',{method:'POST',body:JSON.stringify({username:login,display_name:nome,role:p.toLowerCase(),active:true,password:senha})});await carregarUsuariosCanonicosV1757();fecharModalNovoUsuarioAdmin();if(typeof setStatusBanco==='function')setStatusBanco('● Usuário criado no servidor','ok');}catch(e){if(erro)erro.textContent=e.message||String(e);}finally{if(btn){btn.disabled=false;btn.textContent='Salvar usuário'}}};
   const salvarSenhaAnterior=window.salvarNovaSenhaAdmin;window.salvarNovaSenhaAdmin=async function(){await salvarSenhaAnterior();setTimeout(()=>carregarUsuariosCanonicosV1757().catch(()=>{}),150)};
   document.addEventListener('DOMContentLoaded',()=>setTimeout(()=>carregarUsuariosCanonicosV1757().catch(()=>{}),300));
@@ -9751,6 +10201,53 @@ window.addEventListener("noromak:conference-name-saved",event=>{
   });
 })();
 </script>
+<style id="escuro-admin-v1883">
+/* V18.83 — modo escuro do Admin (html[data-tema="escuro"], ligado no menu). Só cor: medidas e
+   regras de dados não mudam. As classes vieram da auditoria de contraste de cada aba. */
+html[data-tema="escuro"]{--v15-nav:#0B1A2C;--v15-nav2:#132A44}
+/* superfícies brancas */
+html[data-tema="escuro"] :is(.card-admin,.header-topo,.resumo-card,.v15-overview-card,.v151-panel,.v151-kpi,.v1799-kpi,.v1799-seg,.v1799-canal,.v151-global-search-wrap,.v1799-datas,.v1799-sync,
+  .pd8-sec,.pd8-rodape,.pedido-card,.pedido-detalhes-grid,.paginacao button,.pedidos-paginacao,.v1779-actions button,table.v1779-table,.etiquetas-persistentes-coluna,.btn-etiquetas-lote,
+  .excel-wrap,table.excel-grid,.excel-grid td,.sku-hist-vazio,.integracao-card,table.ml-log-table,.usr-kpi,.usr-tela,.usr-btn,.usr-linha,.security-card,.coleta-card,.kit-itens-tabela,
+  .tabela-solicitacoes,#aba-historico table,.modal-conteudo,.modal-box,.modal-card){background-color:#17212E!important;color:#E2E9F1;border-color:#2B3949!important}
+/* superfícies cinza-claro, zebra e cabeçalho de tabela */
+html[data-tema="escuro"] :is(.aviso-banco,.filtros-data-pedidos,.grid-rodape,.v1779-kpi,.market-upload,.etiquetas-persistentes-box,.regra-impressao,.v151-empty,.v151-soft-badge,#vdCanais span,
+  .integracao-status.off,.excel-grid tbody tr:nth-child(even) td,tr.pedido-grupo-kit td){background-color:#1B2735!important;color:#C9D5E2!important;border-color:#2B3949!important}
+html[data-tema="escuro"] :is(.excel-grid thead th,.v1779-table th,#aba-historico th,.ml-log-table th,.sku-hist-table th,table th){background-color:#1E2B3B!important;color:#A8B6C6!important;border-color:#2B3949!important}
+html[data-tema="escuro"] :is(td,th){border-color:#2B3949!important}
+html[data-tema="escuro"] .pd8-gaveta{background-color:#0F1722!important;color:#E2E9F1}
+html[data-tema="escuro"] tr.pd8-row:hover{background-color:#1E2B3B!important}
+html[data-tema="escuro"] tr.pd8-sel{background-color:#15283F!important}
+/* botões claros */
+html[data-tema="escuro"] :is(.btn-secundario,.pedido-item-acoes button,.btn-sku-compacto,.btn-ean-banco,.btn-kit-pedido-editar,.acao-romaneio,.btn-etiquetas-reprocessar,.v1779-actions button,.paginacao button){background-color:#1C2A3B!important;color:#A9C8F0!important;border-color:#2F4259!important}
+html[data-tema="escuro"] :is(.acao-excluir,.btn-excluir-kit-inteiro,.linha-acoes button,.btn-limpar){background-color:#3B1714!important;color:#F2857B!important;border-color:#64271F!important}
+html[data-tema="escuro"] .paginacao button.ativa,html[data-tema="escuro"] .paginacao button.ativo{background-color:#3B7AD9!important;color:#fff!important}
+/* selos e faixas de situação */
+html[data-tema="escuro"] :is(.status-pendente,.v1779-ok,.security-badge.ok,.integracao-status.ok,#statusBancoAdmin.save-pill,.v151-kpi-icon.green){background-color:#132E20!important;color:#5BC285!important;border-color:#22543A!important}
+html[data-tema="escuro"] :is(.v1779-wait,.integracao-alerta,.pd8-demanda,.v151-kpi-icon.amber){background-color:#33250C!important;color:#F0B357!important;border-color:#5C4317!important}
+html[data-tema="escuro"] :is(.integracao-status.erro,.security-badge.off,.v151-kpi-icon.red){background-color:#3B1714!important;color:#F2857B!important;border-color:#64271F!important}
+html[data-tema="escuro"] :is(.integracao-nota,.importacao-excel-box,.pedido-card-head,.pedido-card-badge,.marketplace-pill-admin,.v1783-mk,.usuario-versao,.usr-av,.etiquetas-persistentes-cabecalho,
+  .etiquetas-persistentes-resumo,#webUserPill,.v151-kpi-icon.blue){background-color:#15283F!important;color:#86B4F2!important;border-color:#28456A!important}
+html[data-tema="escuro"] .v151-kpi-icon.orange{background-color:#3A2510!important;color:#F5A54A!important}
+/* textos escuros fixos */
+html[data-tema="escuro"] :is(.v151-dashboard-head h2,#v1799Titulo,.header-titulos h1,.card-admin h2,.card-admin h3,.integracao-card h3,.security-card h3,.usr-tela h2){color:#EEF3F9!important}
+html[data-tema="escuro"] .v151-eyebrow{color:#86B4F2!important}
+html[data-tema="escuro"] .pd8-gh .fechar{background-color:#1C2A3B!important;color:#E2E9F1!important}
+html[data-tema="escuro"] #painelConteudo :is(p,small,label,span,div){scrollbar-color:#33445A #0F1722}
+/* linhas pares (regra genérica tr:nth-child(2n)) e barras */
+html[data-tema="escuro"] tr:nth-child(2n){background-color:#1A2533}
+html[data-tema="escuro"] .v1799-canal .barra{background-color:#223041!important}
+/* textos escuros fixos: números, títulos e rótulos */
+html[data-tema="escuro"] :is(.v151-kpi b,.v1799-kpi b,.v1779-kpi b,.usr-kpi b,.v1799-canal-top strong,.v1799-canal-top b,.v151-panel h3,.v1799-chart-panel h3,.coleta-admin-line,
+  .integracao-dados b,#secOwnerName,.pedido-item-produto strong,.usr-tela b){color:#EEF3F9!important}
+html[data-tema="escuro"] :is(.v1799-seg button,.v1799-legenda span,.v1799-var.v1799-neutro,.ean-pedido-status,.pedido-item-num b,.filtros-data-pedidos label,.importacao-excel-topo small,
+  .importacao-excel-topo small b,.pedidos-rodape-nota,.v1779-kpi span,.v1783-lbl,.coleta-admin-field label,.coleta-admin-status,.coleta-admin-preview-title,.coleta-admin-meta,.market-upload small,
+  .card-admin>p,.sku-hist-filtros label,.integracao-dados span,.integracao-dados code,.usr-lista-cab span,.usr-rodape,.usr-rodape b,.usr-login,.security-row span:not(.security-badge),
+  .v1799-kpi small,.v151-kpi small,.v151-kpi span:not(.v151-kpi-icon),.usr-tela p){color:#A8B6C6!important}
+html[data-tema="escuro"] .v1799-seg button.ativo{background-color:#3B7AD9!important;color:#fff!important}
+html[data-tema="escuro"] .pedido-detalhes-compactos summary{color:#86B4F2!important}
+html[data-tema="escuro"] .coleta-admin-line.codigo{color:#5BC285!important}
+</style>
 <style id="topo-admin-v1865">
   /* V18.65 — topo do Admin enxuto (guia de estilo). Só no computador: no celular vale o topo da V18.44.
      A logo e o "Sair" já estão no menu lateral; aqui ficam o título, a Estação, o usuário e o status do banco. */

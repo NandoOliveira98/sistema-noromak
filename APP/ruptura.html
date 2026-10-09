@@ -73,8 +73,10 @@ table.rp{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;m
 <script defer src="/expedicao/web-auth.js?v=18.82"></script>
 <link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
 <!-- V18.82: componentes comuns e menu lateral único (nk-menu.js). -->
-<link rel="stylesheet" href="/expedicao/nk-ui.css?v=18.82">
-<script defer src="/expedicao/nk-menu.js?v=18.82" data-shell></script>
+<link rel="stylesheet" href="/expedicao/nk-ui.css?v=18.83">
+<!-- V18.83: tema claro/escuro, avisos, confirmação e tabela padrão. -->
+<script src="/expedicao/nk-ui.js?v=18.83"></script>
+<script defer src="/expedicao/nk-menu.js?v=18.83" data-shell></script>
 </head>
 <body>
 <div class="wrap">
@@ -104,7 +106,7 @@ table.rp{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;m
         <div class="tabs" id="tabs"></div>
         <input type="search" id="q" placeholder="Buscar título, MLB ou SKU…">
       </div>
-      <div class="tw"><table class="rp" id="tab"></table></div>
+      <div class="tw"><table class="rp" id="tab" data-nk-tabela="ruptura" data-nk-ordenar="0"></table></div>
       <div class="more"><button class="btn" id="more">Mostrar mais</button></div>
     </div>
     <div class="card span12 notas" id="notas"></div>

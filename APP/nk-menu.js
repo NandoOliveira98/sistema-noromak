@@ -45,6 +45,8 @@
       { id: "kits", rotulo: "Kits", href: "/kits", aba: "kits", modulo: "admin", icone: "M20 12v10H4V12M2 7h20v5H2zM12 22V7" },
     ] },
     { grupo: "sistema", titulo: "Sistema", itens: [
+      // V18.83: integrações, rotinas, backup, disco e alertas por e-mail.
+      { id: "saude", rotulo: "Saúde do sistema", href: "/saude", modulo: "admin", icone: "M22 12h-4l-3 9L9 3l-3 9H2" },
       { id: "integracoes", rotulo: "Central de integrações", href: "/integracoes", aba: "integracoes", modulo: "admin", soAdmin: true, icone: "M9 2v6M15 2v6M6 8h12v4a6 6 0 0 1-12 0zM12 18v4" },
       { id: "estacao", rotulo: "Estação Zebra", href: "/estacao-impressao", modulo: "estacao", alias: ["/print-station"], icone: "M6 9V2h12v7M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2M6 14h12v8H6z" },
       { id: "usuarios", rotulo: "Usuários", href: "/usuarios", aba: "usuarios", modulo: "admin", soAdmin: true, icone: "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM22 21v-2a4 4 0 0 0-3-3.9M16 3.1a4 4 0 0 1 0 7.8" },
@@ -66,12 +68,14 @@
 
   function itemHTML(i) {
     return `<a class="v15-nav-item" href="${B}${i.href}" data-v15-nav="${esc(i.aba || i.id)}" data-nk-id="${esc(i.id)}"` +
-      `${i.aba ? ` data-nk-aba="${esc(i.aba)}"` : ""} data-nk-modulo="${esc(i.modulo)}"${i.soAdmin ? " data-nk-so-admin=\"1\"" : ""}>` +
+      `${i.aba ? ` data-nk-aba="${esc(i.aba)}"` : ""} data-nk-modulo="${esc(i.modulo)}"${i.soAdmin ? " data-nk-so-admin=\"1\"" : ""} title="${esc(i.rotulo)}">` +
       `<span class="v15-nav-icon">${ic(i.icone)}</span><span class="v15-nav-label">${esc(i.rotulo)}</span></a>`;
   }
 
   function menuHTML() {
-    let h = `<div class="v15-brand"><div class="v15-brand-badge">N</div><div><strong>Noromak</strong><small>Sistema de Expedição</small></div></div>`;
+    // V18.83: «/» recolhe o menu para só ícones (no computador); a escolha fica neste navegador.
+    let h = `<div class="v15-brand"><div class="v15-brand-badge">N</div><div><strong>Noromak</strong><small>Sistema de Expedição</small></div>` +
+      `<button type="button" class="nk-recolher" data-nk-recolher aria-label="Recolher menu" title="Recolher menu">«</button></div>`;
     for (const g of MENU) {
       const visiveis = g.itens.filter(i => !i.oculto);
       if (g.fixo) {
@@ -82,7 +86,9 @@
         `<span>${esc(g.titulo)}</span><span class="v15-grp-n">${visiveis.length}</span><span class="v15-grp-seta" aria-hidden="true">▾</span></button>` +
         `<div class="v15-grp-b">${visiveis.map(itemHTML).join("")}</div></div>`;
     }
-    h += `<div class="v15-sidebar-footer"><button type="button" class="v15-nav-item" data-nk-sair="1"><span class="v15-nav-icon">${ic("M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9")}</span><span class="v15-nav-label">Sair</span></button></div>`;
+    // V18.83: tema claro/escuro (nk-ui.js); some quando a tela não carrega o nk-ui.js.
+    h += `<div class="v15-sidebar-footer"><button type="button" class="v15-nav-item nk-tema-btn" data-nk-tema="1" hidden><span class="v15-nav-icon"></span><span class="v15-nav-label"></span></button>`;
+    h += `<button type="button" class="v15-nav-item" data-nk-sair="1"><span class="v15-nav-icon">${ic("M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9")}</span><span class="v15-nav-label">Sair</span></button></div>`;
     return h;
   }
 
@@ -144,6 +150,44 @@
     });
   }
 
+  const LUA = "M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z";
+  const SOL = "M12 17a5 5 0 1 0 0-10 5 5 0 0 0 0 10zM12 1v2M12 21v2M4.2 4.2l1.4 1.4M18.4 18.4l1.4 1.4M1 12h2M21 12h2M4.2 19.8l1.4-1.4M18.4 5.6l1.4-1.4";
+  function ligarTema(nav) {
+    const btn = nav.querySelector("[data-nk-tema]");
+    if (!btn) return;
+    const desenhar = () => {
+      if (!window.nkTema) { btn.hidden = true; return; }
+      const escuro = window.nkTema.atual() === "escuro";
+      btn.hidden = false;
+      btn.querySelector(".v15-nav-icon").innerHTML = ic(escuro ? SOL : LUA);
+      btn.querySelector(".v15-nav-label").textContent = escuro ? "Modo claro" : "Modo escuro";
+      btn.title = escuro ? "Voltar para o modo claro" : "Usar o modo escuro";
+    };
+    btn.addEventListener("click", () => { if (window.nkTema) { window.nkTema.alternar(); desenhar(); } });
+    document.addEventListener("nk-tema", desenhar);
+    desenhar();
+  }
+
+  const CHAVE_RECOLHIDO = "nk_menu_recolhido_v1883";
+  function ligarRecolher(nav, padraoRecolhido) {
+    const btn = nav.querySelector("[data-nk-recolher]");
+    if (!btn) return;
+    let salvo = null;
+    try { salvo = localStorage.getItem(CHAVE_RECOLHIDO); } catch (_) {}
+    const aplicar = recolhido => {
+      document.body.classList.toggle("nk-menu-recolhido", recolhido);
+      btn.textContent = recolhido ? "»" : "«";
+      btn.title = btn.ariaLabel = recolhido ? "Abrir o menu" : "Recolher menu";
+    };
+    aplicar(salvo === null ? !!padraoRecolhido : salvo === "1");
+    btn.addEventListener("click", e => {
+      e.stopPropagation();
+      const recolhido = !document.body.classList.contains("nk-menu-recolhido");
+      try { localStorage.setItem(CHAVE_RECOLHIDO, recolhido ? "1" : "0"); } catch (_) {}
+      aplicar(recolhido);
+    });
+  }
+
   function ligarSair(nav) {
     nav.addEventListener("click", e => {
       if (!e.target.closest("[data-nk-sair]")) return;
@@ -160,14 +204,31 @@
     scriptAtual.insertAdjacentHTML("beforebegin", menuHTML());
     ligarGrupos(nav);
     ligarSair(nav);
+    ligarTema(nav);
+    ligarRecolher(nav, false);
     marcarAtivo(nav);
     const permissoes = () => aplicarPermissoes(nav);
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", permissoes); else permissoes();
     return nav;
   }
 
+  // V18.83 — padrão Noromak: acima do título vai o nome do grupo do menu (ex.: "Estoque e compras"),
+  // quando a tela ainda não tem o rótulo dela.
+  function rotuloDaTela() {
+    const it = itemDoCaminho(caminhoRelativo());
+    const g = it && MENU.find(gr => gr.itens.some(i => i.id === it.id));
+    const h1 = document.querySelector("h1");
+    if (!g || !h1) return;
+    const antes = h1.previousElementSibling;
+    if (antes && /rotulo|eyebrow/i.test(antes.className || "")) return;
+    const d = document.createElement("div");
+    d.className = "nk-rotulo nk-rotulo-auto";
+    d.textContent = g.titulo;
+    h1.before(d);
+  }
+
   // Demais telas: monta o menu à esquerda, o botão ☰ do celular e o fundo escuro da gaveta.
-  function nkMenuShell() {
+  function nkMenuShell(padraoRecolhido = false) {
     if (document.querySelector("nav.v15-sidebar")) return;
     document.body.classList.add("nk-shell");
     const nav = document.createElement("nav");
@@ -185,10 +246,13 @@
     nav.addEventListener("click", e => { if (e.target.closest(".v15-nav-item")) fechar(); });
     document.body.prepend(nav);
     document.body.append(btn, fundo);
-    // O "← Central Noromak" de cada tela vira redundante com o menu.
-    document.querySelectorAll(`a[href="${B}/admin"]`).forEach(a => { if (/central noromak/i.test(a.textContent || "")) a.style.display = "none"; });
+    // O "← Central Noromak" / "← Voltar ao Sistema" de cada tela vira redundante com o menu.
+    document.querySelectorAll(`a[href="${B}/admin"],a[href="${B}/"]`).forEach(a => { if (/central noromak|voltar ao sistema/i.test(a.textContent || "")) a.style.display = "none"; });
+    rotuloDaTela();
     ligarGrupos(nav);
     ligarSair(nav);
+    ligarTema(nav);
+    ligarRecolher(nav, padraoRecolhido === true);
     marcarAtivo(nav);
     aplicarPermissoes(nav);
   }
@@ -199,7 +263,10 @@
 
   // Telas que pedem o menu com <script src="nk-menu.js" data-shell>: monta sozinho.
   const eu = document.currentScript;
+  // data-shell="recolhido": a tela começa com o menu só de ícones (Precificador, que precisa de largura).
+  const PADRAO_RECOLHIDO = !!(eu && eu.getAttribute("data-shell") === "recolhido");
   if (eu && eu.hasAttribute("data-shell")) {
-    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", nkMenuShell); else nkMenuShell();
+    const montar = () => nkMenuShell(PADRAO_RECOLHIDO);
+    if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", montar); else montar();
   }
 })();

@@ -152,8 +152,17 @@ th.n,td.n{text-align:right}
 <!-- V18.65: tema comum (fonte, foco e icones) por ultimo no head. -->
 <link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
 <!-- V18.82: componentes comuns e menu lateral único (nk-menu.js). -->
-<link rel="stylesheet" href="/expedicao/nk-ui.css?v=18.82">
-<script defer src="/expedicao/nk-menu.js?v=18.82" data-shell></script>
+<link rel="stylesheet" href="/expedicao/nk-ui.css?v=18.83">
+<!-- V18.83: tema claro/escuro, avisos, confirmação e tabela padrão. -->
+<script src="/expedicao/nk-ui.js?v=18.83"></script>
+<script defer src="/expedicao/nk-menu.js?v=18.83" data-shell></script>
+<style id="escuro-v1883">
+/* V18.83 — modo escuro desta tela (cores fixas do código; as variáveis vêm do nk-ui.css). */
+html[data-tema="escuro"] thead th{background-color:#1E2B3B!important}
+html[data-tema="escuro"] .seg button:hover{background-color:#1E2B3B!important}
+html[data-tema="escuro"] .faixa :is(b,li,span,div){color:#F0B357!important}
+html[data-tema="escuro"] .faixa{color:#F0B357!important}
+</style>
 </head>
 <body>
 
@@ -209,7 +218,7 @@ th.n,td.n{text-align:right}
 
   <section class="bloco col12">
     <div class="bloco-cab"><h2>Por canal</h2><em id="mpInfo"></em></div>
-    <div style="overflow:auto"><table id="tabelaMp"></table></div>
+    <div style="overflow:auto"><table id="tabelaMp" data-nk-tabela="financeiro_marketplaces"></table></div>
   </section>
 
   <section class="bloco col12">
@@ -222,7 +231,7 @@ th.n,td.n{text-align:right}
       <input type="search" id="filtro" placeholder="Filtrar por SKU, produto ou número do pedido">
       <span class="cont" id="contador"></span>
     </div>
-    <div class="rolar"><table id="tabela"></table></div>
+    <div class="rolar"><table id="tabela" data-nk-tabela="financeiro_pedidos"></table></div>
   </section>
 
   <div class="rodape" id="rodape"></div>

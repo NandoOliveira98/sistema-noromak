@@ -329,6 +329,160 @@
 <script defer src="/expedicao/pwa-install.js?v=14.5"></script>
 <!-- V18.65: tema comum (fonte, foco e icones) por ultimo no head. -->
 <link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
+<link rel="stylesheet" href="/expedicao/nk-ui.css?v=18.83">
+<!-- V18.83: tema claro/escuro, avisos, confirmação e tabela padrão. -->
+<script src="/expedicao/nk-ui.js?v=18.83"></script>
+<style id="escuro-auto-v1883">
+/* V18.83 — GERADO por FERRAMENTAS_WINDOWS/gerar_modo_escuro.py a partir das cores fixas desta tela.
+   Não editar aqui (é refeito); ajuste à mão no <style id="escuro-v1883">. */
+html[data-tema="escuro"] body{color:#C4D0DB!important}
+html[data-tema="escuro"] .box-card{background-color:#18222D!important}
+html[data-tema="escuro"] .box-upload-rede{background-color:#1A2A38!important}
+html[data-tema="escuro"] .box-card input[type="text"],html[data-tema="escuro"] .box-card input[type="password"]{border:1px solid #2B3E55!important}
+html[data-tema="escuro"] .menu{background-color:#18222D!important;border-right:1px solid #2A3F56!important}
+html[data-tema="escuro"] .busca-input{background-color:#1A242F!important;border:1px solid #2B3E55!important}
+html[data-tema="escuro"] table{background-color:#18222D!important}
+html[data-tema="escuro"] td{border-bottom:1px solid #294056!important}
+html[data-tema="escuro"] .ok{background-color:#1A3825!important}
+html[data-tema="escuro"] .pendente{background-color:#3F2F12!important}
+html[data-tema="escuro"] #barra{background-color:#1A2838!important}
+html[data-tema="escuro"] .pedido-item{border-bottom:1px solid #294056!important}
+html[data-tema="escuro"] .pedido-item:hover{background-color:#1A2A38!important}
+html[data-tema="escuro"] .pedido-cliente{color:#A9B5C2!important}
+html[data-tema="escuro"] .img-produto{background-color:#18222D!important;border:1px solid #2B3E55!important}
+html[data-tema="escuro"] .etiqueta-ok{background-color:#1A3825!important;color:#8AE5AC!important;border:1px solid #2A5539!important}
+html[data-tema="escuro"] .etiqueta-erro{background-color:#3F1712!important;color:#ED8A82!important;border:1px solid #5C2923!important}
+html[data-tema="escuro"] .modal-card{background-color:#18222D!important}
+html[data-tema="escuro"] .modal-nota-card{background-color:#18222D!important}
+html[data-tema="escuro"] .btn-header{background-color:rgba(24,34,45,0.14)!important;border:1px solid rgba(56,63,71,0.35)!important}
+html[data-tema="escuro"] .btn-header:hover{background-color:rgba(24,34,45,0.24)!important}
+html[data-tema="escuro"] .btn-ean-rapido-resumo{border-color:rgba(56,63,71,0.38)!important}
+html[data-tema="escuro"] .ean-rapido-card{background-color:#182C3A!important;border:1px solid #293F56!important;color:#BECBD8!important}
+html[data-tema="escuro"] .ean-rapido-fechar{background-color:#1B2937!important;color:#B8C6D4!important}
+html[data-tema="escuro"] .ean-rapido-fechar:hover{background-color:#1C2936!important}
+html[data-tema="escuro"] .ean-rapido-campo{color:#B3C2D2!important}
+html[data-tema="escuro"] .ean-rapido-campo input{background-color:#18222D!important;border:1px solid #2F4050!important;color:#C6D1DD!important}
+html[data-tema="escuro"] .ean-rapido-status.ok{color:#94DC98!important}
+html[data-tema="escuro"] .ean-rapido-status.erro{color:#ED8A82!important}
+html[data-tema="escuro"] .mensagem-detalhada.erro{background-color:#3F1712!important;color:#ED8A82!important}
+html[data-tema="escuro"] .mensagem-detalhada.aviso{background-color:#3F2F12!important;color:#EDC482!important}
+html[data-tema="escuro"] .mensagem-detalhada.info{background-color:#14263E!important;color:#85AFEA!important}
+html[data-tema="escuro"] .mensagem-detalhada.sucesso{background-color:#1A3825!important;color:#8AE6AC!important}
+html[data-tema="escuro"] .btn-acao-secundaria{background-color:#18222D!important;color:#C7C7C7!important;border:1px solid #383F47!important}
+html[data-tema="escuro"] .pedido-status-impressao{background-color:#3F2F12!important;color:#EDC282!important}
+html[data-tema="escuro"] .pedido-status-andamento{background-color:#122C3F!important;color:#82B4ED!important}
+html[data-tema="escuro"] .pedido-status-ja-feito{background-color:#3F2F12!important;color:#EDC282!important;border:1px solid #5C4C23!important}
+html[data-tema="escuro"] .pedido-historico-anterior{background-color:#3F2F12!important;border:1px solid #5C4E23!important;color:#EDCB82!important}
+html[data-tema="escuro"] .modal-historico-card{background-color:#18222D!important}
+html[data-tema="escuro"] .historico-filtros input{border:1px solid #2B3E55!important}
+html[data-tema="escuro"] .historico-resumo{color:#ADBACA!important}
+html[data-tema="escuro"] .badge-reimpressoes{background-color:#1A2A38!important}
+html[data-tema="escuro"] .modal-reimpressao-card{background-color:#18222D!important}
+html[data-tema="escuro"] .modal-reimpressao-card select,html[data-tema="escuro"] .modal-reimpressao-card textarea{border:1px solid #2B3E55!important}
+html[data-tema="escuro"] .reprint-alerta{background-color:#3F2F12!important}
+html[data-tema="escuro"] .atalhos-box{background-color:#182C3A!important;border:1px solid #2D3F53!important}
+html[data-tema="escuro"] .atalhos-titulo{background-color:#1A2A38!important}
+html[data-tema="escuro"] .atalho-linha{color:#B9C3CE!important}
+html[data-tema="escuro"] .atalho-linha kbd{background-color:#18222D!important;border:1px solid #33404D!important;color:#C4D0DB!important}
+html[data-tema="escuro"] .atalhos-rodape{border-top:1px solid #2E4152!important}
+html[data-tema="escuro"] .pedido-item.pedido-teclado-selecionado{background-color:#12293F!important}
+html[data-tema="escuro"] .pedido-item:focus{background-color:#3F2D12!important}
+html[data-tema="escuro"] .filtro-marketplace-box{background-color:#182939!important;border:1px solid #2C4153!important}
+html[data-tema="escuro"] .filtro-marketplace-select{background-color:#18222D!important;border:1px solid #2B3E55!important;color:#C4D0DB!important}
+html[data-tema="escuro"] .aviso-etiquetas-disponiveis{background-color:#1A3825!important;border:1px solid #2A5539!important;color:#8AE6AC!important}
+html[data-tema="escuro"] .pedido-marketplace-badge.mercado_livre{background-color:#3F3712!important;color:#EDD882!important;border:1px solid #5C5223!important}
+html[data-tema="escuro"] .pedido-marketplace-badge.shopee{background-color:#3F1E12!important;color:#ED9982!important}
+html[data-tema="escuro"] .pedido-marketplace-badge.magalu{background-color:#12263F!important;color:#86B6EA!important;border:1px solid #233E5C!important}
+html[data-tema="escuro"] .pedido-marketplace-badge.desconhecido{background-color:#192938!important;color:#A9B5C2!important;border:1px solid #2B3E55!important}
+html[data-tema="escuro"] .scanner-camera-card{border:1px solid rgba(56,63,71,0.18)!important}
+html[data-tema="escuro"] .scanner-camera-topo{border-bottom:1px solid rgba(56,63,71,0.14)!important}
+html[data-tema="escuro"] .scanner-camera-fechar{background-color:rgba(24,34,45,0.12)!important}
+html[data-tema="escuro"] .scanner-linha{background-color:#18222D!important}
+html[data-tema="escuro"] .scanner-btn-secundario{background-color:#192839!important;color:#BECBD8!important}
+html[data-tema="escuro"] .conf-dia-card{background-color:#18222D!important;border:1px solid #2A3F56!important}
+html[data-tema="escuro"] .conf-dia-card:hover{border-color:#2C3E54!important}
+html[data-tema="escuro"] .conf-dia-nome{color:#A9B5C2!important}
+html[data-tema="escuro"] .conf-dia-filtrando{color:#C0CCD9!important}
+html[data-tema="escuro"] .conf-dia-card.todos .conf-dia-filtrando{color:#A9B5C2!important}
+html[data-tema="escuro"] .conf-dia-num b{color:#C4D0DB!important}
+html[data-tema="escuro"] .conf-dia-num small{color:#A9B5C2!important}
+html[data-tema="escuro"] .conf-dia-barra{background-color:#1B2936!important}
+html[data-tema="escuro"] .conf-dia-card.todos{background-color:#19222E!important}
+html[data-tema="escuro"] .btn-solicitar-acesso{background-color:#18222D!important;color:#87B0E8!important}
+html[data-tema="escuro"] .btn-solicitar-acesso:hover{background-color:#15293C!important}
+html[data-tema="escuro"] .solicitacao-card{background-color:#18222D!important}
+html[data-tema="escuro"] .solicitacao-corpo label{color:#87B0E8!important}
+html[data-tema="escuro"] .solicitacao-corpo input,html[data-tema="escuro"] .solicitacao-corpo select{border:1px solid #31404E!important}
+html[data-tema="escuro"] .solicitacao-erro{color:#EC8383!important}
+html[data-tema="escuro"] .btn-alerta-resumo{background-color:rgba(24,34,45,0.14)!important;border:1px solid rgba(56,63,71,0.35)!important}
+html[data-tema="escuro"] .btn-alerta-resumo:hover,html[data-tema="escuro"] .alerta-novos-pedidos-topo.aberto .btn-alerta-resumo{background-color:rgba(24,34,45,0.24)!important}
+html[data-tema="escuro"] .alerta-novos-pedidos-painel{background-color:#18222D!important;border:1px solid #2D4053!important;color:#BDC9D7!important}
+html[data-tema="escuro"] .alerta-novos-pedidos-titulo{color:#87B0E8!important}
+html[data-tema="escuro"] .btn-alerta-som-inativo{background-color:#1E2933!important;color:#B7C0C9!important}
+html[data-tema="escuro"] .pedido-status-etiqueta-ok{background-color:#123F22!important;color:#8AE6AC!important;border:1px solid #235C38!important}
+html[data-tema="escuro"] .pedido-status-etiqueta-pendente{background-color:#3F2B12!important;color:#ED9D82!important;border:1px solid #5C4023!important}
+html[data-tema="escuro"] .coleta-expedicao-box{background-color:rgba(24,34,45,0.1)!important;border:1px solid rgba(56,63,71,0.28)!important}
+html[data-tema="escuro"] .coleta-expedicao-box.coleta-com-dados{background-color:#3F3512!important;border-color:#5C4D23!important;color:#C0CCD9!important}
+html[data-tema="escuro"] .coleta-com-dados .coleta-expedicao-codigo{color:#82EDB2!important}
+html[data-tema="escuro"] .conf-acoes-operacao{border-left:1px solid rgba(56,63,71,0.22)!important}
+html[data-tema="escuro"] .popup-coleta-card{background-color:#3F3512!important;border:2px solid #5C4C23!important;color:#C0CCD9!important}
+html[data-tema="escuro"] .popup-coleta-titulo{color:#EDD182!important}
+html[data-tema="escuro"] .popup-coleta-codigo{color:#8AE5AC!important}
+html[data-tema="escuro"] body{background-color:#17263A!important}
+html[data-tema="escuro"] header.conf-header-v1670{border-bottom:1px solid rgba(56,63,71,0.08)!important}
+html[data-tema="escuro"] .coleta-expedicao-box{background-color:rgba(24,34,45,0.08)!important;border-color:rgba(56,63,71,0.18)!important}
+html[data-tema="escuro"] .conf-header-v1670 .btn-header,html[data-tema="escuro"] .conf-header-v1670 .btn-logoff{background-color:rgba(24,34,45,0.1)!important}
+html[data-tema="escuro"] .conf-header-v1670 .btn-header:hover{background-color:rgba(24,34,45,0.2)!important}
+html[data-tema="escuro"] .conf-acoes-operacao{border-left-color:rgba(56,63,71,0.14)!important}
+html[data-tema="escuro"] .menu{background-color:#18222D!important;border-right:1px solid #2A3F56!important}
+html[data-tema="escuro"] .menu h3{color:#C0CCD9!important}
+html[data-tema="escuro"] #listaPedidos .pedido-item{background-color:#18222D!important;border:1px solid #2A3F56!important;color:#C4D0DB!important}
+html[data-tema="escuro"] #listaPedidos .pedido-item:hover{background-color:#12263F!important;border-color:#233D5C!important}
+html[data-tema="escuro"] .pedido-cliente{color:#A9B5C2!important}
+html[data-tema="escuro"] table{border:1px solid #2A3F56!important}
+html[data-tema="escuro"] th{background-color:#18253A!important;color:#A9B5C2!important;border-bottom:1px solid #2A3F56!important}
+html[data-tema="escuro"] td{border-bottom:1px solid #294057!important}
+html[data-tema="escuro"] .container{background-color:#17263A!important}
+html[data-tema="escuro"] .menu{border:1px solid #2A3F56!important}
+html[data-tema="escuro"] .conteudo{background-color:#18222D!important;border:1px solid #2A3F56!important}
+@media (max-width: 780px){
+html[data-tema="escuro"] .menu{border-bottom:1px solid #2F4151!important}
+html[data-tema="escuro"] .leitor-codigo-linha{background-color:rgba(27,43,54,0.97)!important;border:1px solid #2D4252!important}
+}
+/* cores em style="..." */
+html[data-tema="escuro"] [style*="color:#586A7D" i]{color:#A9B5C2!important}
+html[data-tema="escuro"] [style*="color: #586A7D" i]{color:#A9B5C2!important}
+html[data-tema="escuro"] [style*="color:#4A5D72" i]{color:#ADBACA!important}
+html[data-tema="escuro"] [style*="color: #4A5D72" i]{color:#ADBACA!important}
+html[data-tema="escuro"] [style*="background:#C9D6E5" i]{background-color:#1A2837!important}
+html[data-tema="escuro"] [style*="background: #C9D6E5" i]{background-color:#1A2837!important}
+html[data-tema="escuro"] [style*="background:#f8f9fa" i]{background-color:#1F2933!important}
+html[data-tema="escuro"] [style*="background: #f8f9fa" i]{background-color:#1F2933!important}
+html[data-tema="escuro"] [style*="color:#18324A" i]{color:#C4D0DB!important}
+html[data-tema="escuro"] [style*="color: #18324A" i]{color:#C4D0DB!important}
+html[data-tema="escuro"] [style*="background:#f3e8ff" i]{background-color:#28123F!important}
+html[data-tema="escuro"] [style*="background: #f3e8ff" i]{background-color:#28123F!important}
+html[data-tema="escuro"] [style*="color:#6b21a8" i]{color:#BC88E8!important}
+html[data-tema="escuro"] [style*="color: #6b21a8" i]{color:#BC88E8!important}
+html[data-tema="escuro"] [style*="background:#FFF4E0" i]{background-color:#3F2F12!important}
+html[data-tema="escuro"] [style*="background: #FFF4E0" i]{background-color:#3F2F12!important}
+html[data-tema="escuro"] [style*="color:#8A5300" i]{color:#EDC282!important}
+html[data-tema="escuro"] [style*="color: #8A5300" i]{color:#EDC282!important}
+html[data-tema="escuro"] [style*="background:#FDECEA" i]{background-color:#3F1712!important}
+html[data-tema="escuro"] [style*="background: #FDECEA" i]{background-color:#3F1712!important}
+html[data-tema="escuro"] [style*="color:#B42318" i]{color:#ED8A82!important}
+html[data-tema="escuro"] [style*="color: #B42318" i]{color:#ED8A82!important}
+html[data-tema="escuro"] [style*="background:#EEF2F6" i]{background-color:#1B2936!important}
+html[data-tema="escuro"] [style*="background: #EEF2F6" i]{background-color:#1B2936!important}
+html[data-tema="escuro"] [style*="color:#5d6d7a" i]{color:#ABB6BF!important}
+html[data-tema="escuro"] [style*="color: #5d6d7a" i]{color:#ABB6BF!important}
+html[data-tema="escuro"] [style*="color:#526475" i]{color:#ACB9C5!important}
+html[data-tema="escuro"] [style*="color: #526475" i]{color:#ACB9C5!important}
+html[data-tema="escuro"] [style*="background:#e3e8ed" i]{background-color:#1D2934!important}
+html[data-tema="escuro"] [style*="background: #e3e8ed" i]{background-color:#1D2934!important}
+html[data-tema="escuro"] [style*="color:#334" i]{color:#C3C3D2!important}
+html[data-tema="escuro"] [style*="color: #334" i]{color:#C3C3D2!important}
+</style>
 </head>
 
 <body>

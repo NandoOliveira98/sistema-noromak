@@ -125,8 +125,16 @@ tbody tr:hover{background:#f7fafd}
 <!-- V18.65: tema comum (fonte, foco e icones) por ultimo no head. -->
 <link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
 <!-- V18.82: componentes comuns e menu lateral único (nk-menu.js). -->
-<link rel="stylesheet" href="/expedicao/nk-ui.css?v=18.82">
-<script defer src="/expedicao/nk-menu.js?v=18.82" data-shell></script>
+<link rel="stylesheet" href="/expedicao/nk-ui.css?v=18.83">
+<!-- V18.83: tema claro/escuro, avisos, confirmação e tabela padrão. -->
+<script src="/expedicao/nk-ui.js?v=18.83"></script>
+<script defer src="/expedicao/nk-menu.js?v=18.83" data-shell></script>
+<style id="escuro-v1883">
+/* V18.83 — modo escuro desta tela (cores fixas do código; as variáveis vêm do nk-ui.css). */
+html[data-tema="escuro"] :is(.kpi,.barra-topo,.panel,.btn,.barra-topo button.sec){background-color:#17212E!important;border-color:#2B3949!important}
+html[data-tema="escuro"] :is(.btn,.barra-topo button.sec){color:#A9C8F0!important}
+html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;color:#A8B6C6!important}
+</style>
 </head>
 <body>
 <header class="top"><div>
@@ -150,7 +158,7 @@ tbody tr:hover{background:#f7fafd}
     <span style="font-size:12px;color:var(--muted)" id="rodape"></span>
   </div>
   <div class="panel">
-    <table>
+    <table data-nk-tabela="promocoes_ml">
       <thead><tr>
         <th>Anúncio / Produto</th><th class="n">Preço cheio</th><th class="n">Promoção hoje</th>
         <th>Período</th><th class="n">Mínimo</th><th class="n">Ideal</th>

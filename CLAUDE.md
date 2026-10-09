@@ -5,7 +5,7 @@ Shopee, manuais), expedição, separação, conferência por código de barras, 
 produtos/SKUs/EANs, kits, precificação, promoções, rentabilidade, estoque, Central de
 Pendências e histórico.
 
-Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas**.
+Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V18.83).
 
 ---
 
@@ -105,9 +105,12 @@ APP/
                              (Central de Pendências e Promoções ML removidas na V17.99;
                              /pendencias e /promocoes-ml abrem o Admin)
   shared-storage.js          cache versionado + polling (CRÍTICO)
+  nk-menu.js                 menu lateral único + endereço de cada tela (V18.82)
+  nk-ui.js / nk-ui.css       tema claro/escuro, avisos, confirmação, tabela padrão (V18.83)
+  saude.html                 Painel de saúde + alertas por e-mail (V18.83)
   web-auth.js, user-permissions.js, sw.js, pwa-install.js
 DADOS/                       seed ml_sku_mlb_links_seed.json (fora do Git)
-FERRAMENTAS_WINDOWS/         agente de impressão Zebra, 2FA do owner
+FERRAMENTAS_WINDOWS/         agente de impressão Zebra, 2FA do owner, gerar_modo_escuro.py (V18.83)
 publicar.sh                  publicação em produção
 testar.sh                    validação obrigatória antes de publicar
 verificar_servidor.sh        diagnóstico remoto do serviço
@@ -283,6 +286,24 @@ página vira portal e o Admin não ativa), no `shared-storage.js` (senão a tela
 e no `sw.js`; `TESTES/test_rotas_v1882.py` prende os quatro. Os scripts compartilhados levam `?v=` porque
 o service worker entrega `.js` do cache primeiro.
 
+**Peças comuns e modo escuro (V18.83):** toda tela carrega `nk-ui.css` + `nk-ui.js` no `<head>`
+(sem `defer`: o tema entra antes de desenhar). `nkTema` (claro/escuro, `localStorage` `nk_tema_v1883`,
+botão no rodapé do menu, vale para todas as abas), `nkToast` (aviso), `await nkConfirmar(texto)` (janela
+padrão; exclusão começa com foco em Cancelar) e `table[data-nk-tabela]` (clique no título ordena,
+3º clique volta à ordem da tela; botão Exportar gera .csv para o Excel; `data-nk-ordenar="0"` = só
+exportar). O Admin troca `alert()` por aviso (`data-alertas="toast"`) e usa `nkConfirmar` — exceto o
+confirm do "atualizar o banco de produtos" (o retorno é usado na hora). **A Conferência e a Estação
+NÃO trocam o `alert()`:** lá ele trava o leitor de código de barras de propósito. Peças padrão para
+tela nova: `.nk-pagina`, `.nk-cab` (`.nk-rotulo` + `h1` + `p`), `.nk-kpi`, `.nk-painel`, `.nk-selo`,
+`.nk-btn`, `.nk-tab` — todas só com as variáveis `--nk-*`, que o modo escuro troca. Telas com menu ganham
+o cabeçalho padrão (rótulo do grupo posto pelo `nk-menu.js`, título 24px, sem faixa colorida) e o botão
+«/» que recolhe o menu (o Precificador começa recolhido: `data-shell="recolhido"`).
+**Modo escuro das telas antigas:** as cores fixas viram regras `html[data-tema="escuro"] ...` geradas por
+`python FERRAMENTAS_WINDOWS/gerar_modo_escuro.py APP/<tela>.html` (bloco `escuro-auto-v1883`, refeito a
+cada execução — rode de novo ao mexer em cor de uma tela); o ajuste à mão fica em `escuro-v1883` /
+`escuro-admin-v1883`. Toda regra desses blocos começa com o prefixo do modo escuro: o claro não muda
+(`TESTES/test_ui_v1883.py`).
+
 ---
 
 ## 6. Integrações
@@ -409,6 +430,24 @@ O sync da fatura ganhou backoff no HTTP 429 e retoma do `last_id`.
 abre o Financeiro. `ml_profitability_snapshot` **não é mais alimentada**, mas continua sendo
 lida (custo de reserva da Demanda de Compra e histórico da gaveta do Dashboard, via
 `_ml_custo_venda_por_pedido`, que prefere o custo capturado no ato da venda).
+
+### Painel de saúde e alertas (V18.83)
+`APP/saude.html` (`/saude`, menu Sistema; ver = módulo admin, mudar quem recebe = só perfil Admin).
+`GET /api/saude` (`saude_payload`): Mercado Livre (conexão, token, última busca de pedidos), Shopee,
+fila da Zebra (job parado > 10/30 min) e estações, rotinas (workers), backup diário (> 26/30 h), disco,
+banco/WAL, memória (`/proc/meminfo`), CPU do processo, erros das integrações na última hora, vendas,
+relatório diário e promoções automáticas. Cada checagem que quebra vira "atenção", nunca derruba o painel.
+**Pulso dos workers:** o `_worker_protegido` entrega ao worker um `_EventoComPulso` — cada
+`stop_event.wait()` registra quando pausou, por quanto tempo e quando acordou (`SAUDE_WORKERS`). Sem
+mexer nos workers dá para ver esperando / trabalhando / travado (limite por worker em
+`SAUDE_WORKERS_INFO`). Quem espera por outro evento usa `_saude_esperar` (Shopee etiquetas). **Worker
+novo no `main()` precisa entrar em `SAUDE_WORKERS_INFO`** (o teste confere).
+**Alertas** (`saude_alertas_loop`, 1 min): e-mail quando um item fica Crítico por
+`SAUDE_ALERTA_RODADAS` (3) rodadas seguidas, nada nos 10 min depois do boot, lembrete a cada
+`lembrete_horas` (6) e e-mail de "resolvido". SMTP com falha: não marca como avisado e espera 15 min
+antes de tentar de novo. Destinatários em `saude_config_v1883` (padrão: `RELATORIO_EMAILS`); estado em
+`saude_alerta_estado_v1883`, histórico em `saude_alerta_log_v1883` (1000 últimos). Link do e-mail:
+`EXP_PUBLIC_URL` (padrão https://noromakweb.com.br/expedicao). WhatsApp fica para depois (provedor a escolher).
 
 ### Visitas dos anúncios (V18.68)
 Base da futura análise de **conversão** (vendas ÷ visitas). Worker `ml_visitas_loop`: depois das

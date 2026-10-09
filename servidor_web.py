@@ -43,7 +43,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "18.82-ROTAS-MENU"
+APP_VERSION = "18.83-SAUDE-VISUAL"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -2238,6 +2238,7 @@ def init_db() -> None:
     ensure_cliente_fiscal_linx_api_schema()  # V18.60
     ensure_linx_operacoes_schema()  # V18.60
     ensure_linx_robo_schema()  # V18.60
+    ensure_saude_schema()  # V18.83
     migrate_legacy_if_empty()
     ensure_storage_defaults()
     seed_sku_state_from_storage()
@@ -7087,7 +7088,8 @@ def shopee_label_worker_loop(stop_event: threading.Event) -> None:
     espera, rapidos = SHOPEE_LABEL_WORKER_INTERVAL, 0
     while not stop_event.is_set():
         # Acorda imediatamente após sincronização manual / pedido novo, ou no intervalo.
-        SHOPEE_LABEL_WAKE_EVENT.wait(espera)
+        # V18.83: a espera por este evento também conta no pulso do Painel de saúde.
+        _saude_esperar(SHOPEE_LABEL_WAKE_EVENT, espera)
         espera = SHOPEE_LABEL_WORKER_INTERVAL
         SHOPEE_LABEL_WAKE_EVENT.clear()
         if stop_event.is_set():
@@ -19368,6 +19370,15 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
+        if path == "/api/saude":
+            # V18.83: Painel de saúde (integrações, workers, backup, disco, alertas). Somente leitura.
+            if self.auth(admin_only=True) is None:
+                return
+            try:
+                self.send_json(saude_payload())
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
         if path == "/api/ruptura":
             # V18.72: venda perdida por falta de estoque (anúncios do ML). Somente leitura.
             if self.auth(admin_only=True) is None:
@@ -19632,6 +19643,8 @@ class AppHandler(BaseHTTPRequestHandler):
             "/conversao": "admin", "/conversao/": "admin", "/conversao.html": "admin",
             # V18.72: Ruptura (venda perdida por falta de estoque).
             "/ruptura": "admin", "/ruptura/": "admin", "/ruptura.html": "admin",
+            # V18.83: Painel de saúde do sistema.
+            "/saude": "admin", "/saude/": "admin", "/saude.html": "admin",
             # V18.73: promoções automáticas (age sozinha no ML: só admin).
             "/promocoes-auto": "admin", "/promocoes-auto/": "admin", "/promocoes-auto.html": "admin",
             # V18.33: a Rentabilidade ML virou o Financeiro; o endereço antigo abre a tela nova.
@@ -19811,6 +19824,20 @@ class AppHandler(BaseHTTPRequestHandler):
                     self.send_json({"ok": False, "error": str(exc)}, 400)
                 except Exception as exc:
                     self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path in ("/api/saude/config", "/api/saude/teste-email"):
+            # V18.83: quem recebe os alertas de saúde. Só o perfil Admin (Supervisor não).
+            ctx = self.auth_full_admin()
+            if ctx is not None:
+                try:
+                    if path == "/api/saude/config":
+                        self.send_json({"ok": True, "config": saude_config_salvar(self.read_json() or {}, ctx["username"])})
+                    else:
+                        self.send_json({"ok": True, "enviado_para": saude_teste_email(ctx["username"])})
+                except ValueError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 400)
+                except Exception as exc:
+                    self.send_json({"ok": False, "error": str(exc)[:500]}, 500)
             return
         if path == "/api/promocoes-auto/config":
             # V18.73: regras da renovação. Ligar o automático exige senha + 2FA do OWNER.
@@ -22367,6 +22394,8 @@ class AppHandler(BaseHTTPRequestHandler):
             "/conversao/": "conversao.html",
             "/conversao.html": "conversao.html",
             "/ruptura": "ruptura.html",
+            "/saude": "saude.html",
+            "/saude/": "saude.html",
             "/ruptura/": "ruptura.html",
             "/ruptura.html": "ruptura.html",
             "/promocoes-auto": "promocoes-auto.html",
@@ -22433,18 +22462,804 @@ class AppHandler(BaseHTTPRequestHandler):
 # V18.56: uma exceção fora do try interno matava a thread em silêncio (keepalive do
 # token, workers da Shopee, relatório diário) e a integração parava até alguém
 # reiniciar o serviço. Este invólucro registra o erro e reinicia o worker.
+# =====================================================================================
+# V18.83 — Painel de saúde do sistema e alertas por e-mail
+# =====================================================================================
+# Até aqui o problema só aparecia quando a operação já tinha parado: conexão do ML caída,
+# worker parado, backup que não rodou, disco cheio, fila da Zebra travada. Agora o servidor
+# confere tudo a cada minuto (saude_alertas_loop), mostra em /expedicao/saude e manda e-mail
+# quando um item fica CRÍTICO por SAUDE_ALERTA_RODADAS rodadas seguidas — e de novo quando
+# resolve. Somente leitura: nada aqui chama ML/Shopee/Apollo nem altera pedido.
+
+SAUDE_INTERVALO_SEGUNDOS = 60
+SAUDE_ALERTA_RODADAS = 3          # ~3 min em crítico antes do e-mail (evita alarme de reinício)
+SAUDE_CARENCIA_BOOT_SEGUNDOS = 600  # depois de subir, os workers ainda estão aquecendo
+SAUDE_PUBLIC_URL = os.getenv("EXP_PUBLIC_URL", "https://noromakweb.com.br/expedicao").rstrip("/")
+SAUDE_BOOT_EPOCH = time.time()
+SAUDE_NIVEIS = {"ok": 0, "info": 0, "atencao": 1, "critico": 2}
+
+# Pulso dos workers: cada worker roda dentro do _worker_protegido, que entrega a ele um
+# stop_event com pulso (_EventoComPulso). Toda pausa entre ciclos (stop_event.wait) fica
+# registrada: quando começou, por quanto tempo e quando acordou. Assim dá para saber, sem
+# mexer em nenhum worker, se ele está esperando o próximo ciclo, trabalhando, ou travado.
+SAUDE_WORKERS: dict[str, dict[str, Any]] = {}
+SAUDE_WORKERS_LOCK = threading.Lock()
+_SAUDE_LOCAL = threading.local()
+
+# nome do loop -> (rótulo, essencial para a expedição?, minutos trabalhando sem pausar antes de
+# "pode estar travado"). Os de rodada longa (visitas, Ads, estoque) pausam com time.sleep
+# entre chamadas, por isso o limite deles é largo.
+SAUDE_WORKERS_INFO: dict[str, tuple[str, bool, int]] = {
+    "ml_new_order_watch_loop": ("Pedidos novos do Mercado Livre", True, 20),
+    "ml_pending_label_watch_loop": ("Etiquetas do Mercado Livre", True, 20),
+    "ml_token_keepalive_loop": ("Renovação da conexão do Mercado Livre", True, 20),
+    "ml_reconcile_manual_orders_loop": ("Pedidos manuais do Mercado Livre", False, 30),
+    "ml_safety_catchup_loop": ("Recuperação de pedidos do Mercado Livre", False, 45),
+    "shopee_orders_worker_loop": ("Pedidos novos da Shopee", True, 20),
+    "shopee_label_worker_loop": ("Etiquetas da Shopee", True, 30),
+    "vendas_sync_loop": ("Vendas (Dashboard e Financeiro)", False, 120),
+    "financeiro_frete_loop": ("Frete das vendas (Financeiro)", False, 120),
+    "ml_ads_sync_loop": ("Publicidade do Mercado Livre", False, 180),
+    "ml_visitas_loop": ("Visitas dos anúncios (Conversão)", False, 180),
+    "ml_estoque_loop": ("Estoque dos anúncios (Ruptura)", False, 120),
+    "promo_renovacao_loop": ("Promoções automáticas", False, 120),
+    "relatorio_diario_loop": ("Relatório diário por e-mail", False, 60),
+    "manutencao_diaria_loop": ("Manutenção diária (limpeza de logs)", False, 120),
+    "linx_clientes_loop": ("Clientes no Linx", False, 120),
+    "saude_alertas_loop": ("Alertas de saúde", False, 20),
+}
+
+
+def _saude_pulso(evento: str, espera: float | None = None, erro: str = "", nome: str | None = None) -> None:
+    nome = nome or getattr(_SAUDE_LOCAL, "worker", None)
+    if not nome:
+        return
+    agora = time.time()
+    with SAUDE_WORKERS_LOCK:
+        w = SAUDE_WORKERS.get(nome)
+        if w is None:
+            w = SAUDE_WORKERS[nome] = {"iniciado": agora, "esperando": False, "espera_inicio": 0.0,
+                                       "espera_s": 0.0, "acordou": agora, "ciclos": 0, "erros": 0,
+                                       "ultimo_erro": "", "ultimo_erro_em": 0.0}
+        if evento == "espera":
+            w["esperando"] = True
+            w["espera_inicio"] = agora
+            w["espera_s"] = float("inf") if espera is None else max(0.0, float(espera))
+        elif evento == "acordou":
+            w["esperando"] = False
+            w["acordou"] = agora
+            w["ciclos"] += 1
+        elif evento == "inicio":
+            w["esperando"] = False
+            w["acordou"] = agora
+        elif evento == "erro":
+            w["esperando"] = False
+            w["acordou"] = agora
+            w["erros"] += 1
+            w["ultimo_erro"] = str(erro or "")[:300]
+            w["ultimo_erro_em"] = agora
+
+
+class _EventoComPulso:
+    """threading.Event que registra cada espera do worker no pulso. Todo o resto
+    (is_set, set, clear...) é o próprio evento original."""
+
+    def __init__(self, evento: threading.Event) -> None:
+        self._evento = evento
+
+    def wait(self, timeout: float | None = None) -> bool:
+        _saude_pulso("espera", timeout)
+        try:
+            return self._evento.wait(timeout)
+        finally:
+            _saude_pulso("acordou")
+
+    def __getattr__(self, nome: str) -> Any:
+        return getattr(self._evento, nome)
+
+
+def _saude_esperar(evento: threading.Event, timeout: float | None) -> bool:
+    """Para o worker que espera por outro evento (ex.: SHOPEE_LABEL_WAKE_EVENT)."""
+    _saude_pulso("espera", timeout)
+    try:
+        return evento.wait(timeout)
+    finally:
+        _saude_pulso("acordou")
+
+
+def _saude_dt(valor: Any) -> datetime | None:
+    try:
+        texto = str(valor or "").strip()
+        if not texto:
+            return None
+        dt = datetime.fromisoformat(texto.replace("Z", "+00:00"))
+        return dt if dt.tzinfo else dt.replace(tzinfo=BR_TZ)
+    except (TypeError, ValueError):
+        return None
+
+
+def _saude_idade_txt(segundos: float) -> str:
+    s = max(0, int(segundos))
+    if s < 90:
+        return f"{s} s"
+    if s < 90 * 60:
+        return f"{s // 60} min"
+    if s < 48 * 3600:
+        h, m = divmod(s // 60, 60)
+        return f"{h} h" + (f" {m:02d} min" if m and h < 10 else "")
+    return f"{s // 86400} dias"
+
+
+def _saude_num(valor: float, casas: int = 0) -> str:
+    """Número no formato brasileiro (vírgula decimal)."""
+    return f"{valor:.{casas}f}".replace(".", ",")
+
+
+def _saude_epoch_iso(epoch: float) -> str:
+    return datetime.fromtimestamp(epoch, timezone.utc).astimezone(BR_TZ).isoformat(timespec="seconds") if epoch else ""
+
+
+def _saude_expediente(agora: datetime | None = None) -> bool:
+    agora = agora or datetime.now(BR_TZ)
+    return agora.weekday() < 5 and 7 <= agora.hour < 18
+
+
+def _saude_item(id_: str, grupo: str, titulo: str, nivel: str, resumo: str, detalhe: str = "",
+                acao: str = "", acao_txt: str = "") -> dict[str, Any]:
+    return {"id": id_, "grupo": grupo, "titulo": titulo, "nivel": nivel, "resumo": resumo,
+            "detalhe": detalhe, "acao": acao, "acao_txt": acao_txt}
+
+
+def saude_workers(agora: float | None = None) -> list[dict[str, Any]]:
+    agora = agora or time.time()
+    with SAUDE_WORKERS_LOCK:
+        estado = {k: dict(v) for k, v in SAUDE_WORKERS.items()}
+    aquecendo = agora - SAUDE_BOOT_EPOCH < SAUDE_CARENCIA_BOOT_SEGUNDOS
+    lista: list[dict[str, Any]] = []
+    for nome, (rotulo, essencial, limite_min) in SAUDE_WORKERS_INFO.items():
+        w = estado.get(nome)
+        item: dict[str, Any] = {"id": nome, "nome": rotulo, "essencial": essencial, "nivel": "ok",
+                                "situacao": "", "ultimo_ciclo": "", "ciclos": 0, "erros": 0,
+                                "ultimo_erro": "", "ultimo_erro_em": ""}
+        if not WORKERS_ENABLED:
+            item.update(nivel="info", situacao="Desligado neste servidor (EXP_WORKERS=0)")
+        elif not w:
+            item.update(nivel="ok" if aquecendo else ("critico" if essencial else "atencao"),
+                        situacao="Iniciando" if aquecendo else "Não está rodando")
+        else:
+            item.update(ultimo_ciclo=_saude_epoch_iso(w["acordou"]), ciclos=w["ciclos"], erros=w["erros"],
+                        ultimo_erro=w["ultimo_erro"], ultimo_erro_em=_saude_epoch_iso(w["ultimo_erro_em"]))
+            if w["esperando"]:
+                fim = w["espera_inicio"] + w["espera_s"]
+                if w["espera_s"] == float("inf"):
+                    item["situacao"] = "Aguardando"
+                elif agora <= fim + 120:
+                    item["situacao"] = f"Aguardando o próximo ciclo (em {_saude_idade_txt(fim - agora)})"
+                else:
+                    item.update(nivel="atencao", situacao=f"Deveria ter acordado há {_saude_idade_txt(agora - fim)}")
+            else:
+                trabalhando = agora - w["acordou"]
+                if trabalhando > limite_min * 60:
+                    item.update(nivel="critico" if essencial else "atencao",
+                                situacao=f"Trabalhando há {_saude_idade_txt(trabalhando)} sem pausa — pode estar travado")
+                else:
+                    item["situacao"] = "Trabalhando agora"
+            if w["ultimo_erro_em"] and agora - w["ultimo_erro_em"] < 15 * 60 and item["nivel"] == "ok":
+                item.update(nivel="atencao", situacao=f"Reiniciado depois de erro há {_saude_idade_txt(agora - w['ultimo_erro_em'])}")
+        lista.append(item)
+    return lista
+
+
+# Uso de CPU do próprio processo: média entre duas medições (a rodada de saúde mede a cada minuto).
+_SAUDE_CPU = {"wall": time.time(), "cpu": time.process_time(), "pct": None}
+_SAUDE_CPU_LOCK = threading.Lock()
+
+
+def _saude_cpu_processo() -> float | None:
+    with _SAUDE_CPU_LOCK:
+        wall, cpu = time.time(), time.process_time()
+        dt = wall - _SAUDE_CPU["wall"]
+        if dt >= 20:
+            _SAUDE_CPU["pct"] = round(max(0.0, (cpu - _SAUDE_CPU["cpu"]) / dt * 100), 1)
+            _SAUDE_CPU["wall"], _SAUDE_CPU["cpu"] = wall, cpu
+        return _SAUDE_CPU["pct"]
+
+
+def _saude_memoria() -> dict[str, float] | None:
+    try:
+        dados: dict[str, int] = {}
+        with open("/proc/meminfo", encoding="utf-8") as fh:
+            for linha in fh:
+                chave, _, valor = linha.partition(":")
+                dados[chave.strip()] = int(valor.strip().split()[0])
+        total = dados.get("MemTotal", 0)
+        if not total:
+            return None
+        livre = dados.get("MemAvailable", dados.get("MemFree", 0))
+        swap_total = dados.get("SwapTotal", 0)
+        swap_usado = swap_total - dados.get("SwapFree", 0)
+        return {"total_mb": total / 1024, "livre_mb": livre / 1024, "livre_pct": livre * 100 / total,
+                "swap_usado_mb": swap_usado / 1024, "swap_total_mb": swap_total / 1024}
+    except (OSError, ValueError, IndexError):
+        return None
+
+
+def _saude_check(funcao: Any, id_: str, grupo: str, titulo: str) -> list[dict[str, Any]]:
+    """Uma checagem que quebra vira "atenção: não foi possível verificar" — nunca derruba o painel."""
+    try:
+        r = funcao()
+        return r if isinstance(r, list) else [r]
+    except Exception as exc:
+        return [_saude_item(id_, grupo, titulo, "atencao", "Não foi possível verificar", str(exc)[:300])]
+
+
+def _saude_ml() -> list[dict[str, Any]]:
+    st = ml_status_payload()
+    g = "Operação"
+    if not st["configured"]:
+        return [_saude_item("ml_conexao", g, "Mercado Livre", "info", "Não configurado neste servidor")]
+    itens: list[dict[str, Any]] = []
+    detalhe = f"Último erro registrado: {st['last_error'][:200]}" if st.get("last_error") else ""
+    if not st["connected"] or st["needs_reconnect"]:
+        itens.append(_saude_item("ml_conexao", g, "Mercado Livre", "critico",
+                                 "Desconectado: pedidos e etiquetas do ML pararam de entrar",
+                                 detalhe or "Reconecte em Central de integrações.", "/integracoes", "Reconectar"))
+        return itens
+    restante = int(st.get("token_seconds_remaining") or 0)
+    if st["token_expired"]:
+        vencido_ha = int(time.time()) - int(st.get("expires_at_epoch") or 0)
+        nivel = "critico" if vencido_ha > 15 * 60 else "atencao"
+        itens.append(_saude_item("ml_conexao", g, "Mercado Livre", nivel,
+                                 f"Token vencido há {_saude_idade_txt(vencido_ha)} e ainda não renovado",
+                                 detalhe, "/integracoes", "Ver integração"))
+    else:
+        itens.append(_saude_item("ml_conexao", g, "Mercado Livre", "ok",
+                                 f"Conectado ({st.get('nickname') or st.get('seller_id')}) · token vale mais {_saude_idade_txt(restante)}",
+                                 detalhe))
+    if WORKERS_ENABLED:
+        poll = _saude_dt(ml_worker_status_payload().get("last_order_poll_at"))
+        idade = (datetime.now(timezone.utc) - poll).total_seconds() if poll else None
+        aquecendo = time.time() - SAUDE_BOOT_EPOCH < SAUDE_CARENCIA_BOOT_SEGUNDOS
+        if idade is None:
+            itens.append(_saude_item("ml_pedidos", g, "Busca de pedidos do ML", "ok" if aquecendo else "atencao",
+                                     "Ainda não buscou pedidos desde que o servidor subiu"))
+        else:
+            nivel = "critico" if idade > 15 * 60 else ("atencao" if idade > 5 * 60 else "ok")
+            itens.append(_saude_item("ml_pedidos", g, "Busca de pedidos do ML", nivel,
+                                     f"Última busca há {_saude_idade_txt(idade)}"))
+    return itens
+
+
+def _saude_shopee() -> dict[str, Any]:
+    st = shopee_status_payload()
+    g = "Operação"
+    if not st["configured"]:
+        return _saude_item("shopee_conexao", g, "Shopee", "info", "Não configurada neste servidor")
+    if not st["connected"]:
+        return _saude_item("shopee_conexao", g, "Shopee", "critico",
+                           "Desconectada: pedidos e etiquetas da Shopee pararam de entrar",
+                           st.get("last_error") or "", "/integracoes", "Reconectar")
+    detalhe = f"Último erro registrado: {st['last_error'][:200]}" if st.get("last_error") else ""
+    expira = int(st.get("token_expires_at") or 0)
+    vencido_ha = int(time.time()) - expira if expira else 0
+    if expira and vencido_ha > 30 * 60:
+        return _saude_item("shopee_conexao", g, "Shopee", "critico",
+                           f"Token vencido há {_saude_idade_txt(vencido_ha)} e não renovado", detalhe,
+                           "/integracoes", "Ver integração")
+    return _saude_item("shopee_conexao", g, "Shopee", "ok", f"Conectada ({st.get('shop_name') or st.get('shop_id')})", detalhe)
+
+
+def _saude_impressao() -> list[dict[str, Any]]:
+    g = "Operação"
+    agora = datetime.now(timezone.utc)
+    duas_horas = (agora - timedelta(hours=2)).astimezone().isoformat(timespec="milliseconds")
+    with DB_LOCK:
+        fila = DB.execute("SELECT COUNT(*) AS n, MIN(created_at) AS mais_antigo FROM print_jobs WHERE status IN ('queued','claimed')").fetchone()
+        falhas = DB.execute("SELECT COUNT(*) AS n FROM print_jobs WHERE status='failed' AND updated_at >= ?", (duas_horas,)).fetchone()
+        online = DB.execute("SELECT COUNT(*) AS n FROM print_stations WHERE last_seen_epoch >= ?", (int(time.time()) - 120,)).fetchone()
+        estacoes = DB.execute("SELECT COUNT(*) AS n FROM print_stations").fetchone()
+    itens: list[dict[str, Any]] = []
+    n = int(fila["n"] or 0)
+    antigo = _saude_dt(fila["mais_antigo"])
+    idade = (agora - antigo).total_seconds() if antigo else 0
+    if n and idade > 30 * 60:
+        nivel, resumo = "critico", f"{n} etiqueta(s) na fila, a mais antiga há {_saude_idade_txt(idade)}"
+    elif n and idade > 10 * 60:
+        nivel, resumo = "atencao", f"{n} etiqueta(s) na fila, a mais antiga há {_saude_idade_txt(idade)}"
+    else:
+        nivel, resumo = "ok", (f"{n} etiqueta(s) saindo agora" if n else "Fila vazia")
+    nf = int(falhas["n"] or 0)
+    if nf and nivel == "ok":
+        nivel = "atencao"
+    itens.append(_saude_item("impressao_fila", g, "Fila de impressão (Zebra)", nivel,
+                             resumo + (f" · {nf} falha(s) nas últimas 2 h" if nf else ""), "",
+                             "/estacao-impressao", "Abrir Estação"))
+    total_estacoes = int(estacoes["n"] or 0)
+    no_ar = int(online["n"] or 0)
+    if not total_estacoes:
+        itens.append(_saude_item("impressao_estacoes", g, "Estações Zebra", "info", "Nenhuma estação cadastrada"))
+    elif no_ar:
+        itens.append(_saude_item("impressao_estacoes", g, "Estações Zebra", "ok", f"{no_ar} de {total_estacoes} conectada(s)"))
+    else:
+        itens.append(_saude_item("impressao_estacoes", g, "Estações Zebra",
+                                 "atencao" if _saude_expediente() else "info",
+                                 "Nenhuma estação conectada" + ("" if _saude_expediente() else " (fora do expediente)"),
+                                 "O agente de impressão do computador da Zebra não está respondendo."))
+    return itens
+
+
+def _saude_workers_check() -> dict[str, Any]:
+    g = "Servidor"
+    lista = saude_workers()
+    if not WORKERS_ENABLED:
+        return _saude_item("workers", g, "Rotinas automáticas (workers)", "info", "Desligadas neste servidor (EXP_WORKERS=0)")
+    ruins = [w for w in lista if SAUDE_NIVEIS[w["nivel"]] > 0]
+    pior = max((w["nivel"] for w in lista), key=lambda n: SAUDE_NIVEIS[n], default="ok")
+    if not ruins:
+        return _saude_item("workers", g, "Rotinas automáticas (workers)", "ok", f"{len(lista)} rodando normalmente")
+    resumo = "; ".join(f"{w['nome']}: {w['situacao']}" for w in sorted(ruins, key=lambda w: -SAUDE_NIVEIS[w["nivel"]])[:3])
+    return _saude_item("workers", g, "Rotinas automáticas (workers)", pior, resumo,
+                       f"{len(ruins)} de {len(lista)} com problema. Detalhes na lista de rotinas abaixo.")
+
+
+def _saude_backup() -> dict[str, Any]:
+    g = "Servidor"
+    arquivos = sorted(BACKUP_DIR.glob("expedicao_????-??-??.db.gz"), key=lambda p: p.stat().st_mtime) if BACKUP_DIR.exists() else []
+    if not arquivos:
+        return _saude_item("backup", g, "Backup diário", "critico" if WORKERS_ENABLED else "info",
+                           "Nenhum backup diário encontrado", f"Pasta: {BACKUP_DIR}")
+    ultimo = arquivos[-1]
+    idade = time.time() - ultimo.stat().st_mtime
+    tamanho = ultimo.stat().st_size / 1024 / 1024
+    nivel = "critico" if idade > 30 * 3600 else ("atencao" if idade > 26 * 3600 else "ok")
+    return _saude_item("backup", g, "Backup diário", nivel,
+                       f"Último há {_saude_idade_txt(idade)} ({ultimo.name}, {tamanho:.0f} MB)",
+                       f"{len(arquivos)} backup(s) guardado(s) em {BACKUP_DIR}")
+
+
+def _saude_disco() -> list[dict[str, Any]]:
+    g = "Servidor"
+    uso = shutil.disk_usage(DB_PATH.parent)
+    livre_pct = uso.free * 100 / uso.total if uso.total else 0
+    nivel = "critico" if livre_pct < 10 else ("atencao" if livre_pct < 20 else "ok")
+    itens = [_saude_item("disco", g, "Disco", nivel,
+                         f"{_saude_num(uso.free / 1024 ** 3, 1)} GB livres de {_saude_num(uso.total / 1024 ** 3, 1)} GB ({livre_pct:.0f}%)")]
+    banco = DB_PATH.stat().st_size if DB_PATH.exists() else 0
+    wal_path = Path(str(DB_PATH) + "-wal")
+    wal = wal_path.stat().st_size if wal_path.exists() else 0
+    itens.append(_saude_item("banco", g, "Banco de dados", "atencao" if wal > 512 * 1024 ** 2 else "ok",
+                             f"{banco / 1024 ** 2:.0f} MB" + (f" + {wal / 1024 ** 2:.0f} MB de diário (WAL)" if wal else ""),
+                             "Diário (WAL) acima de 512 MB indica que o banco não está consolidando." if wal > 512 * 1024 ** 2 else ""))
+    return itens
+
+
+def _saude_maquina() -> list[dict[str, Any]]:
+    g = "Servidor"
+    itens: list[dict[str, Any]] = []
+    mem = _saude_memoria()
+    if mem:
+        nivel = "critico" if mem["livre_pct"] < 5 else ("atencao" if mem["livre_pct"] < 12 else "ok")
+        swap = f" · swap em uso: {mem['swap_usado_mb']:.0f} de {mem['swap_total_mb']:.0f} MB" if mem["swap_total_mb"] else ""
+        itens.append(_saude_item("memoria", g, "Memória", nivel,
+                                 f"{mem['livre_mb']:.0f} MB livres de {mem['total_mb']:.0f} MB ({mem['livre_pct']:.0f}%)" + swap))
+    else:
+        itens.append(_saude_item("memoria", g, "Memória", "info", "Medição disponível só no servidor Linux"))
+    pct = _saude_cpu_processo()
+    carga = ""
+    if hasattr(os, "getloadavg"):
+        try:
+            l1, l5, _ = os.getloadavg()
+            carga = f" · carga da máquina {_saude_num(l5, 2)} ({os.cpu_count() or 1} núcleo(s))"
+        except OSError:
+            pass
+    if pct is None:
+        itens.append(_saude_item("cpu", g, "Processador", "ok", "Medindo…" + carga))
+    else:
+        nivel = "critico" if pct > 90 else ("atencao" if pct > 60 else "ok")
+        itens.append(_saude_item("cpu", g, "Processador", nivel, f"Sistema usando {pct:.0f}% de CPU" + carga,
+                                 "Média do último minuto." + (" Uso alto e contínuo atrasa a bipagem e o CRM, que dividem a mesma máquina." if nivel != "ok" else "")))
+    return itens
+
+
+def _saude_erros_integracao() -> dict[str, Any]:
+    g = "Rotinas"
+    corte = (datetime.now(timezone.utc).astimezone() - timedelta(hours=1)).isoformat(timespec="milliseconds")
+    with DB_LOCK:
+        ml = DB.execute("SELECT COUNT(*) AS n FROM ml_event_log WHERE result='ERRO' AND created_at >= ?", (corte,)).fetchone()
+        sp = DB.execute("SELECT COUNT(*) AS n FROM shopee_event_log WHERE result='ERRO' AND created_at >= ?", (corte,)).fetchone()
+        ultimo = DB.execute(
+            "SELECT * FROM (SELECT created_at, topic, detail, 'Mercado Livre' AS origem FROM ml_event_log WHERE result='ERRO' AND created_at >= ? "
+            "UNION ALL SELECT created_at, topic, detail, 'Shopee' AS origem FROM shopee_event_log WHERE result='ERRO' AND created_at >= ?) "
+            "ORDER BY created_at DESC LIMIT 1", (corte, corte)).fetchone()
+    n_ml, n_sp = int(ml["n"] or 0), int(sp["n"] or 0)
+    total = n_ml + n_sp
+    nivel = "atencao" if total >= 30 else "ok"
+    detalhe = f"Último: {ultimo['origem']} · {ultimo['topic']} · {str(ultimo['detail'])[:200]}" if ultimo else ""
+    return _saude_item("erros_integracao", g, "Erros das integrações (última hora)", nivel,
+                       f"Mercado Livre: {n_ml} · Shopee: {n_sp}" if total else "Nenhum erro na última hora", detalhe)
+
+
+def _saude_vendas() -> list[dict[str, Any]]:
+    g = "Rotinas"
+    if not WORKERS_ENABLED:
+        return []
+    itens: list[dict[str, Any]] = []
+    for mp, nome in (("ml", "Mercado Livre"), ("shopee", "Shopee")):
+        quando = _saude_dt(_vendas_meta(f"ultima_sincronizacao_{mp}"))
+        erro = _vendas_meta(f"ultimo_erro_{mp}")
+        if not quando and not erro:
+            continue  # canal que nunca sincronizou (não configurado): sem aviso diário
+        idade = (datetime.now(timezone.utc) - quando).total_seconds() if quando else None
+        if erro:
+            nivel, resumo = "atencao", "A última sincronização falhou"
+        elif idade is not None and idade > 60 * 60:
+            nivel, resumo = "atencao", f"Sem sincronizar há {_saude_idade_txt(idade)}"
+        else:
+            nivel, resumo = "ok", f"Sincronizado há {_saude_idade_txt(idade or 0)}"
+        itens.append(_saude_item(f"vendas_{mp}", g, f"Vendas do {nome} (Dashboard)", nivel, resumo, str(erro or "")[:300]))
+    return itens
+
+
+def _saude_relatorio() -> dict[str, Any] | list[dict[str, Any]]:
+    g = "Rotinas"
+    cfg = relatorio_diario_config()
+    if not (cfg["ativo"] and cfg["host"] and cfg["user"] and cfg["senha"] and cfg["destinatarios"]):
+        return []
+    agora = datetime.now(BR_TZ)
+    try:
+        hora = max(0, min(23, int(os.getenv("RELATORIO_HORA", "8"))))
+    except ValueError:
+        hora = 8
+    ontem = (agora.date() - timedelta(days=1)).isoformat()
+    enviado = _vendas_meta("relatorio_diario_ultimo")
+    if agora.hour >= hora + 1 and enviado != ontem:
+        return _saude_item("relatorio_diario", g, "Relatório diário por e-mail", "atencao",
+                           f"O relatório de {_data_br(ontem)} não saiu", f"Último enviado: {_data_br(enviado) if enviado else 'nenhum'}")
+    return _saude_item("relatorio_diario", g, "Relatório diário por e-mail", "ok",
+                       f"Último enviado: {_data_br(enviado) if enviado else 'nenhum'}")
+
+
+def _saude_promocoes() -> list[dict[str, Any]]:
+    g = "Rotinas"
+    cfg = promo_auto_config()
+    if cfg.get("modo_renovacao") != "automatico":
+        return []
+    corte = (datetime.now(timezone.utc).astimezone() - timedelta(hours=24)).isoformat(timespec="milliseconds")
+    with DB_LOCK:
+        falhas = DB.execute("SELECT COUNT(*) AS n, MAX(motivo) AS motivo FROM promo_auto_log_v1873 WHERE acao='falhou' AND quando >= ?", (corte,)).fetchone()
+    n = int(falhas["n"] or 0)
+    return [_saude_item("promocoes_auto", g, "Promoções automáticas", "atencao" if n else "ok",
+                        f"{n} renovação(ões) falharam nas últimas 24 h" if n else "Nenhuma falha nas últimas 24 h",
+                        str(falhas["motivo"] or "")[:200] if n else "", "/promocoes-auto", "Abrir Promoções automáticas")]
+
+
+def saude_checks() -> list[dict[str, Any]]:
+    itens: list[dict[str, Any]] = []
+    itens += _saude_check(_saude_ml, "ml_conexao", "Operação", "Mercado Livre")
+    itens += _saude_check(_saude_shopee, "shopee_conexao", "Operação", "Shopee")
+    itens += _saude_check(_saude_impressao, "impressao_fila", "Operação", "Fila de impressão (Zebra)")
+    itens += _saude_check(_saude_workers_check, "workers", "Servidor", "Rotinas automáticas (workers)")
+    itens += _saude_check(_saude_backup, "backup", "Servidor", "Backup diário")
+    itens += _saude_check(_saude_disco, "disco", "Servidor", "Disco")
+    itens += _saude_check(_saude_maquina, "memoria", "Servidor", "Memória e processador")
+    itens += _saude_check(_saude_erros_integracao, "erros_integracao", "Rotinas", "Erros das integrações")
+    itens += _saude_check(_saude_vendas, "vendas", "Rotinas", "Vendas")
+    itens += _saude_check(_saude_relatorio, "relatorio_diario", "Rotinas", "Relatório diário")
+    itens += _saude_check(_saude_promocoes, "promocoes_auto", "Rotinas", "Promoções automáticas")
+    return itens
+
+
+# ---------- Alertas ----------
+
+SAUDE_CONFIG_PADRAO: dict[str, Any] = {"ativo": True, "emails": [], "avisar_atencao": False, "lembrete_horas": 6}
+_SAUDE_ENVIO = {"falhou_ate": 0.0}
+
+
+def ensure_saude_schema() -> None:
+    with DB_LOCK:
+        DB.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS saude_config_v1883 (
+                chave TEXT PRIMARY KEY,
+                valor TEXT NOT NULL,
+                atualizado_em TEXT NOT NULL DEFAULT '',
+                atualizado_por TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS saude_alerta_estado_v1883 (
+                check_id TEXT PRIMARY KEY,
+                nivel TEXT NOT NULL,
+                titulo TEXT NOT NULL DEFAULT '',
+                resumo TEXT NOT NULL DEFAULT '',
+                desde TEXT NOT NULL,
+                rodadas INTEGER NOT NULL DEFAULT 0,
+                alertado_em TEXT NOT NULL DEFAULT '',
+                ultimo_aviso_em TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS saude_alerta_log_v1883 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                quando TEXT NOT NULL,
+                tipo TEXT NOT NULL,
+                check_id TEXT NOT NULL DEFAULT '',
+                nivel TEXT NOT NULL DEFAULT '',
+                titulo TEXT NOT NULL DEFAULT '',
+                resumo TEXT NOT NULL DEFAULT '',
+                destinatarios TEXT NOT NULL DEFAULT '',
+                erro TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_saude_alerta_log_quando ON saude_alerta_log_v1883(quando);
+            """
+        )
+        DB.commit()
+
+
+def saude_config() -> dict[str, Any]:
+    cfg = dict(SAUDE_CONFIG_PADRAO)
+    cfg["emails"] = list(relatorio_diario_config()["destinatarios"])  # padrão: quem recebe o relatório diário
+    with DB_LOCK:
+        linhas = DB.execute("SELECT chave, valor FROM saude_config_v1883").fetchall()
+    for r in linhas:
+        try:
+            valor = json.loads(r["valor"])
+        except (TypeError, ValueError):
+            continue
+        if r["chave"] in cfg:
+            cfg[r["chave"]] = valor
+    smtp = relatorio_diario_config()
+    cfg["smtp_configurado"] = bool(smtp["host"] and smtp["user"] and smtp["senha"])
+    return cfg
+
+
+def saude_config_salvar(dados: dict[str, Any], ator: str) -> dict[str, Any]:
+    novos: dict[str, Any] = {}
+    if "ativo" in dados:
+        novos["ativo"] = bool(dados["ativo"])
+    if "avisar_atencao" in dados:
+        novos["avisar_atencao"] = bool(dados["avisar_atencao"])
+    if "lembrete_horas" in dados:
+        try:
+            novos["lembrete_horas"] = max(1, min(48, int(dados["lembrete_horas"])))
+        except (TypeError, ValueError):
+            raise ValueError("Lembrete: informe um número de horas entre 1 e 48.")
+    if "emails" in dados:
+        brutos = dados["emails"] if isinstance(dados["emails"], list) else re.split(r"[,;\s]+", str(dados["emails"] or ""))
+        emails = []
+        for e in brutos:
+            e = str(e or "").strip()
+            if not e:
+                continue
+            if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", e):
+                raise ValueError(f"E-mail inválido: {e}")
+            if e.lower() not in {x.lower() for x in emails}:
+                emails.append(e)
+        if len(emails) > 10:
+            raise ValueError("No máximo 10 e-mails.")
+        novos["emails"] = emails
+    with DB_LOCK:
+        for chave, valor in novos.items():
+            DB.execute(
+                "INSERT INTO saude_config_v1883(chave, valor, atualizado_em, atualizado_por) VALUES(?,?,?,?) "
+                "ON CONFLICT(chave) DO UPDATE SET valor=excluded.valor, atualizado_em=excluded.atualizado_em, atualizado_por=excluded.atualizado_por",
+                (chave, json.dumps(valor, ensure_ascii=False), now_iso(), ator))
+        DB.commit()
+    audit(ator, "saude.config", json.dumps(novos, ensure_ascii=False)[:500])
+    return saude_config()
+
+
+def _saude_log(tipo: str, item: dict[str, Any] | None = None, destinatarios: list[str] | None = None, erro: str = "") -> None:
+    item = item or {}
+    with DB_LOCK:
+        DB.execute(
+            "INSERT INTO saude_alerta_log_v1883(quando, tipo, check_id, nivel, titulo, resumo, destinatarios, erro) VALUES(?,?,?,?,?,?,?,?)",
+            (now_iso(), tipo, str(item.get("id") or ""), str(item.get("nivel") or ""), str(item.get("titulo") or "")[:200],
+             str(item.get("resumo") or "")[:500], ", ".join(destinatarios or []), str(erro or "")[:500]))
+        DB.execute("DELETE FROM saude_alerta_log_v1883 WHERE id NOT IN (SELECT id FROM saude_alerta_log_v1883 ORDER BY id DESC LIMIT 1000)")
+        DB.commit()
+
+
+def _saude_email(novos: list[dict[str, Any]], lembretes: list[dict[str, Any]], resolvidos: list[dict[str, Any]]) -> tuple[str, str, str]:
+    esc = html_module.escape
+    rotulo = {"critico": "CRÍTICO", "atencao": "ATENÇÃO", "ok": "OK", "info": "OK"}
+    cor = {"critico": "#B42318", "atencao": "#8A5300", "ok": "#1B7A3E", "info": "#1B7A3E"}
+    problemas = novos + lembretes
+    if problemas:
+        primeiro = problemas[0]["titulo"]
+        extra = f" (+{len(problemas) - 1})" if len(problemas) > 1 else ""
+        assunto = f"Noromak ALERTA — {primeiro}{extra}"
+    else:
+        primeiro = resolvidos[0]["titulo"]
+        extra = f" (+{len(resolvidos) - 1})" if len(resolvidos) > 1 else ""
+        assunto = f"Noromak RESOLVIDO — {primeiro}{extra}"
+    blocos_txt: list[str] = []
+    blocos_html: list[str] = []
+
+    def secao(titulo: str, itens: list[dict[str, Any]]) -> None:
+        if not itens:
+            return
+        blocos_txt.append(titulo.upper())
+        linhas = []
+        for i in itens:
+            blocos_txt.append(f"- [{rotulo.get(i['nivel'], i['nivel'])}] {i['titulo']}: {i['resumo']}" + (f" ({i['detalhe']})" if i.get("detalhe") else ""))
+            linhas.append(
+                f"<tr><td style='padding:8px 10px;border-bottom:1px solid #DCE5EF;white-space:nowrap'>"
+                f"<b style='color:{cor.get(i['nivel'], '#18324A')}'>{rotulo.get(i['nivel'], i['nivel'])}</b></td>"
+                f"<td style='padding:8px 10px;border-bottom:1px solid #DCE5EF'><b>{esc(i['titulo'])}</b><br>{esc(i['resumo'])}"
+                + (f"<br><span style='color:#586A7D;font-size:12px'>{esc(i['detalhe'])}</span>" if i.get("detalhe") else "")
+                + "</td></tr>")
+        blocos_txt.append("")
+        blocos_html.append(f"<h3 style='margin:18px 0 6px;font-size:14px;color:#12345B'>{esc(titulo)}</h3>"
+                           f"<table style='border-collapse:collapse;width:100%;font-size:13px'>{''.join(linhas)}</table>")
+
+    secao("Novos problemas", novos)
+    secao("Continuam sem solução", lembretes)
+    secao("Resolvidos", resolvidos)
+    link = f"{SAUDE_PUBLIC_URL}/saude"
+    texto = "\n".join(blocos_txt) + f"\nPainel de saúde: {link}\n"
+    corpo = (f"<div style='font-family:Segoe UI,Arial,sans-serif;color:#18324A;max-width:640px'>"
+             f"<h2 style='margin:0 0 4px;font-size:18px;color:#12345B'>Saúde do Sistema Noromak</h2>"
+             f"<div style='color:#586A7D;font-size:12px'>{esc(datetime.now(BR_TZ).strftime('%d/%m/%Y %H:%M'))} · versão {esc(APP_VERSION)}</div>"
+             + "".join(blocos_html)
+             + f"<p style='margin-top:18px'><a href='{esc(link)}' style='background:#1F57A5;color:#fff;padding:9px 14px;border-radius:6px;text-decoration:none'>Abrir o painel de saúde</a></p>"
+             "<p style='color:#586A7D;font-size:11px'>Aviso automático do Sistema Noromak. Configure quem recebe em Sistema › Saúde do sistema.</p></div>")
+    return assunto, texto, corpo
+
+
+def saude_alertas_rodada(enviar: Any = None) -> dict[str, Any]:
+    """Uma rodada: confere tudo, atualiza quem está em problema e manda UM e-mail com o que
+    é novo, o que continua (lembrete a cada lembrete_horas) e o que resolveu.
+    `enviar` existe para o teste trocar o SMTP."""
+    enviar = enviar or enviar_email_smtp
+    cfg = saude_config()
+    checks = saude_checks()
+    agora = now_iso()
+    agora_dt = datetime.now(timezone.utc)
+    carencia = time.time() - SAUDE_BOOT_EPOCH < SAUDE_CARENCIA_BOOT_SEGUNDOS
+    with DB_LOCK:
+        estado = {str(r["check_id"]): dict(r) for r in DB.execute("SELECT * FROM saude_alerta_estado_v1883")}
+    novos: list[dict[str, Any]] = []
+    lembretes: list[dict[str, Any]] = []
+    resolvidos: list[dict[str, Any]] = []
+    gravar: dict[str, dict[str, Any] | None] = {}
+    vistos = set()
+    for c in checks:
+        vistos.add(c["id"])
+        conta = c["nivel"] == "critico" or (cfg["avisar_atencao"] and c["nivel"] == "atencao")
+        e = estado.get(c["id"])
+        if conta:
+            if not e or e["nivel"] != c["nivel"]:
+                e = {"check_id": c["id"], "nivel": c["nivel"], "titulo": c["titulo"], "resumo": c["resumo"],
+                     "desde": (e or {}).get("desde") or agora, "rodadas": 0,
+                     "alertado_em": "", "ultimo_aviso_em": ""}
+            e.update(rodadas=int(e["rodadas"]) + 1, titulo=c["titulo"], resumo=c["resumo"])
+            if not e["alertado_em"]:
+                if e["rodadas"] >= SAUDE_ALERTA_RODADAS and not carencia:
+                    novos.append({**c, "_estado": e})
+            else:
+                ultimo = _saude_dt(e["ultimo_aviso_em"] or e["alertado_em"])
+                if ultimo and (agora_dt - ultimo).total_seconds() >= float(cfg["lembrete_horas"]) * 3600:
+                    lembretes.append({**c, "_estado": e})
+            gravar[c["id"]] = e
+        elif e:
+            if e["alertado_em"]:
+                resolvidos.append({**c, "resumo": f"{c['resumo']} (antes: {e['resumo']})"})
+            gravar[c["id"]] = None
+    # Item que deixou de existir (ex.: integração desligada): sai do estado sem e-mail.
+    for check_id in set(estado) - vistos:
+        gravar[check_id] = None
+    enviado: list[str] = []
+    erro_envio = ""
+    pode_enviar = cfg["ativo"] and cfg["emails"] and time.time() >= _SAUDE_ENVIO["falhou_ate"]
+    if (novos or lembretes or resolvidos) and pode_enviar:
+        assunto, texto, corpo = _saude_email(novos, lembretes, resolvidos)
+        try:
+            enviado = enviar(assunto, texto, corpo, list(cfg["emails"]))
+        except Exception as exc:
+            erro_envio = str(exc)[:500]
+            _SAUDE_ENVIO["falhou_ate"] = time.time() + 15 * 60  # não martela o SMTP a cada minuto
+            _saude_log("falha_envio", {"titulo": assunto}, list(cfg["emails"]), erro_envio)
+    sucesso = bool(enviado)
+    for c in novos:
+        if sucesso:
+            c["_estado"]["alertado_em"] = c["_estado"]["ultimo_aviso_em"] = agora
+            _saude_log("alerta", c, enviado)
+        elif not cfg["ativo"] or not cfg["emails"]:
+            # Alertas desligados: registra no histórico do painel, sem e-mail.
+            c["_estado"]["alertado_em"] = c["_estado"]["ultimo_aviso_em"] = agora
+            _saude_log("alerta", c, [], "e-mail de alerta desligado ou sem destinatário")
+    for c in lembretes:
+        if sucesso:
+            c["_estado"]["ultimo_aviso_em"] = agora
+            _saude_log("lembrete", c, enviado)
+    for c in resolvidos:
+        _saude_log("resolvido", c, enviado if sucesso else [], "" if sucesso else (erro_envio or "sem e-mail"))
+    with DB_LOCK:
+        for check_id, e in gravar.items():
+            if e is None:
+                DB.execute("DELETE FROM saude_alerta_estado_v1883 WHERE check_id=?", (check_id,))
+            else:
+                DB.execute(
+                    "INSERT INTO saude_alerta_estado_v1883(check_id, nivel, titulo, resumo, desde, rodadas, alertado_em, ultimo_aviso_em) "
+                    "VALUES(:check_id,:nivel,:titulo,:resumo,:desde,:rodadas,:alertado_em,:ultimo_aviso_em) "
+                    "ON CONFLICT(check_id) DO UPDATE SET nivel=excluded.nivel, titulo=excluded.titulo, resumo=excluded.resumo, "
+                    "desde=excluded.desde, rodadas=excluded.rodadas, alertado_em=excluded.alertado_em, ultimo_aviso_em=excluded.ultimo_aviso_em",
+                    {k: e[k] for k in ("check_id", "nivel", "titulo", "resumo", "desde", "rodadas", "alertado_em", "ultimo_aviso_em")})
+        DB.commit()
+    return {"novos": [c["id"] for c in novos], "lembretes": [c["id"] for c in lembretes],
+            "resolvidos": [c["id"] for c in resolvidos], "enviado_para": enviado, "erro_envio": erro_envio}
+
+
+def saude_teste_email(ator: str) -> list[str]:
+    cfg = saude_config()
+    if not cfg["emails"]:
+        raise ValueError("Cadastre pelo menos um e-mail para os alertas.")
+    item = _saude_item("teste", "Sistema", "Teste do alerta", "ok", f"E-mail de teste pedido por {ator}. Se chegou, os alertas vão chegar.")
+    assunto, texto, corpo = _saude_email([], [], [item])
+    assunto = "Noromak — teste do alerta de saúde"
+    try:
+        enviado = enviar_email_smtp(assunto, texto, corpo, list(cfg["emails"]))
+    except Exception as exc:
+        _saude_log("falha_envio", item, list(cfg["emails"]), str(exc))
+        raise
+    _saude_log("teste", item, enviado)
+    return enviado
+
+
+def saude_payload() -> dict[str, Any]:
+    checks = saude_checks()
+    pior = max((c["nivel"] for c in checks), key=lambda n: SAUDE_NIVEIS.get(n, 0), default="ok")
+    with DB_LOCK:
+        ativos = [dict(r) for r in DB.execute("SELECT * FROM saude_alerta_estado_v1883 ORDER BY desde")]
+        historico = [dict(r) for r in DB.execute("SELECT * FROM saude_alerta_log_v1883 ORDER BY id DESC LIMIT 40")]
+    return {
+        "ok": True,
+        "gerado_em": now_iso(),
+        "versao": APP_VERSION,
+        "no_ar_desde": _saude_epoch_iso(SAUDE_BOOT_EPOCH),
+        "no_ar_ha": _saude_idade_txt(time.time() - SAUDE_BOOT_EPOCH),
+        "workers_ligados": WORKERS_ENABLED,
+        "geral": pior,
+        "checks": checks,
+        "workers": saude_workers(),
+        "config": saude_config(),
+        "alertas_ativos": ativos,
+        "historico": historico,
+        "regras": {"intervalo_s": SAUDE_INTERVALO_SEGUNDOS, "rodadas": SAUDE_ALERTA_RODADAS,
+                   "carencia_boot_s": SAUDE_CARENCIA_BOOT_SEGUNDOS},
+    }
+
+
+def saude_alertas_loop(stop_event: threading.Event) -> None:
+    """Worker: confere a saúde a cada minuto e manda os alertas por e-mail."""
+    while not stop_event.wait(SAUDE_INTERVALO_SEGUNDOS):
+        try:
+            saude_alertas_rodada()
+        except Exception as exc:
+            print(f"[saude-alertas] rodada falhou: {exc}", file=sys.stderr, flush=True)
+
+
 WORKER_REINICIO_SEGUNDOS = 60
 
 
 def _worker_protegido(alvo: Any) -> Any:
     def executar(stop_event: threading.Event) -> None:
         nome = getattr(alvo, "__name__", "worker")
+        # V18.83: o worker recebe o stop_event com pulso (cada espera fica registrada) e o
+        # Painel de saúde sabe se ele está esperando, trabalhando ou travado.
+        anterior = getattr(_SAUDE_LOCAL, "worker", None)
+        _SAUDE_LOCAL.worker = nome
+        try:
+            _rodar(stop_event, nome, _EventoComPulso(stop_event))
+        finally:
+            _SAUDE_LOCAL.worker = anterior
+
+    def _rodar(stop_event: threading.Event, nome: str, evento: Any) -> None:
         while not stop_event.is_set():
             try:
-                alvo(stop_event)
+                _saude_pulso("inicio")
+                alvo(evento)
                 return  # o loop terminou normalmente (stop)
             except Exception as exc:
                 try:
+                    _saude_pulso("erro", erro=str(exc))
                     print(f"[{nome}] parou com erro e será reiniciado: {exc}", file=sys.stderr, flush=True)
                     _ml_worker_state_update(last_error=f"{nome}: {str(exc)[:500]}")
                 except Exception:
@@ -22611,6 +23426,13 @@ def main() -> None:
         name="linx-clientes",
         daemon=True,
     )
+    # V18.83: Painel de saúde — confere tudo a cada minuto e manda os alertas por e-mail.
+    saude_thread = threading.Thread(
+        target=_worker_protegido(saude_alertas_loop),
+        args=(watcher_stop,),
+        name="saude-alertas",
+        daemon=True,
+    )
     _ml_worker_state_update(started_at=now_iso(), last_error="")
     # V18.63: EXP_WORKERS=0 sobe só o HTTP — teste de boot e homologação. Uma cópia do
     # banco tem os tokens de produção e o refresh_token do ML é de uso único: um
@@ -22632,6 +23454,7 @@ def main() -> None:
         promo_renovacao_thread.start()
         relatorio_thread.start()
         linx_clientes_thread.start()
+        saude_thread.start()
     else:
         print("[boot] EXP_WORKERS=0: workers de integração DESLIGADOS (só HTTP).", flush=True)
     server = ThreadingHTTPServer((HOST, PORT), AppHandler)

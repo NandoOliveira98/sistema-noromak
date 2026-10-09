@@ -409,8 +409,61 @@
 <!-- V18.65: tema comum (fonte, foco e icones) por ultimo no head. -->
 <link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
 <!-- V18.82: componentes comuns e menu lateral único (nk-menu.js). -->
-<link rel="stylesheet" href="/expedicao/nk-ui.css?v=18.82">
-<script defer src="/expedicao/nk-menu.js?v=18.82" data-shell></script>
+<link rel="stylesheet" href="/expedicao/nk-ui.css?v=18.83">
+<!-- V18.83: tema claro/escuro, avisos, confirmação e tabela padrão. -->
+<script src="/expedicao/nk-ui.js?v=18.83"></script>
+<script defer src="/expedicao/nk-menu.js?v=18.83" data-shell></script>
+<style id="escuro-auto-v1883">
+/* V18.83 — GERADO por FERRAMENTAS_WINDOWS/gerar_modo_escuro.py a partir das cores fixas desta tela.
+   Não editar aqui (é refeito); ajuste à mão no <style id="escuro-v1883">. */
+html[data-tema="escuro"] .upload-panel.is-dragging{background-color:#3F2E12!important}
+html[data-tema="escuro"] .button{background-color:#18222D!important}
+html[data-tema="escuro"] .button:hover{border-color:#304050!important}
+html[data-tema="escuro"] .button--active{background-color:#172A3B!important}
+html[data-tema="escuro"] .message{background-color:#18222D!important}
+html[data-tema="escuro"] .message--error{background-color:#3F1512!important;border-color:#5C2723!important;color:#EC8983!important}
+html[data-tema="escuro"] .message--success{background-color:#163B26!important;border-color:#2A553E!important;color:#87E8BC!important}
+html[data-tema="escuro"] .card--need .card__value{color:#EDB982!important}
+html[data-tema="escuro"] .toolbar{background-color:#18222D!important}
+html[data-tema="escuro"] .field{background-color:#18222D!important}
+html[data-tema="escuro"] .table-panel{background-color:#18222D!important}
+html[data-tema="escuro"] th{border-right:1px solid rgba(56,63,71,0.18)!important}
+html[data-tema="escuro"] td{color:#C0CCD9!important}
+html[data-tema="escuro"] tbody tr:hover{background-color:#16293B!important}
+html[data-tema="escuro"] .selected-need{background-color:#3F3012!important}
+html[data-tema="escuro"] .need-input{background-color:#18222D!important}
+html[data-tema="escuro"] .need-input--edited{background-color:#3F2E12!important}
+html[data-tema="escuro"] .need-reset{background-color:#18222D!important}
+html[data-tema="escuro"] .apollo-card{background-color:#18222D!important}
+html[data-tema="escuro"] .apollo-status.ok{background-color:#1A3825!important;color:#8AE5AC!important}
+html[data-tema="escuro"] .apollo-status.partial{background-color:#3F3012!important;color:#EDC282!important}
+html[data-tema="escuro"] .apollo-status.short{background-color:#3F1712!important;color:#ED8A82!important}
+html[data-tema="escuro"] .apollo-status.unknown{background-color:#17263A!important;color:#A9B5C2!important}
+html[data-tema="escuro"] .apollo-msg .apollo-branches{color:#BFCBD9!important}
+html[data-tema="escuro"] .apollo-branches{color:#A9B5C2!important}
+html[data-tema="escuro"] .button--accent{color:#C4D0DB!important}
+html[data-tema="escuro"] .ad-chip{background-color:#16293B!important}
+html[data-tema="escuro"] .ad-chip--top{background-color:#3F2E12!important}
+html[data-tema="escuro"] .kit-tag{background-color:#172A3B!important}
+html[data-tema="escuro"] .new-panel{background-color:#12293F!important}
+html[data-tema="escuro"] .new-tag{background-color:#3F3012!important;color:#EDC282!important}
+html[data-tema="escuro"] .new-remove{background-color:#18222D!important;color:#ED8A82!important}
+html[data-tema="escuro"] .transfer-hint{background-color:#12273F!important;color:#C0CCD9!important}
+html[data-tema="escuro"] .pick-dialog{background-color:#18222D!important}
+html[data-tema="escuro"] .pick-x{background-color:#18222D!important;color:#ED8A82!important}
+html[data-tema="escuro"] .pick-x:hover{background-color:#3F1712!important;border-color:#5C2723!important}
+html[data-tema="escuro"] .pick-removed{background-color:#18253A!important;border:1px dashed #304050!important}
+html[data-tema="escuro"] .pick-removed-item{background-color:#18222D!important}
+@media print{
+html[data-tema="escuro"] body.printing-pick{background-color:#18222D!important}
+html[data-tema="escuro"] .pick-table th{background-color:#18222D!important;color:#E6E6E6!important}
+}
+/* cores em style="..." */
+html[data-tema="escuro"] [style*="background:#fff" i]{background-color:#18222D!important}
+html[data-tema="escuro"] [style*="background: #fff" i]{background-color:#18222D!important}
+html[data-tema="escuro"] [style*="color:#12345B" i]{color:#C0CCD9!important}
+html[data-tema="escuro"] [style*="color: #12345B" i]{color:#C0CCD9!important}
+</style>
 </head>
 <body>
   <header class="topbar">

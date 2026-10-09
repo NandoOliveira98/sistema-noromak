@@ -47,3 +47,211 @@ body.nk-shell{padding-left:238px;box-sizing:border-box}
   body.nk-menu-aberto{overflow:hidden}
 }
 @media print{body.nk-shell{padding-left:0}.nk-shell .v15-sidebar,.nk-menu-btn,.nk-menu-fundo{display:none!important}}
+
+/* ---------- 2. Cores do sistema (tokens) — V18.83 ----------
+   Todas as peças abaixo usam só estas variáveis; o modo escuro troca as variáveis. */
+:root{
+  --nk-canvas:#F4F7FB;--nk-tile:#FFFFFF;--nk-tile2:#F8FAFC;--nk-hover:#FAFCFE;
+  --nk-line:#DCE5EF;--nk-line2:#EDF2F7;--nk-line-forte:#A9C3DF;
+  --nk-ink:#18324A;--nk-ink2:#586A7D;--nk-ink3:#7A8C9E;--nk-head:#16344F;
+  --nk-pri:#1F57A5;--nk-pri-h:#194B91;--nk-pri-txt:#FFFFFF;--nk-foco:rgba(31,87,165,.14);
+  --nk-ok:#1B7A3E;--nk-ok-bg:#E7F4EC;--nk-ok-ln:#B9DEC7;
+  --nk-warn:#8A5300;--nk-warn-bg:#FFF4E0;--nk-warn-ln:#F3D19B;
+  --nk-bad:#B42318;--nk-bad-bg:#FDECEA;--nk-bad-ln:#F3C2BD;
+  --nk-info:#1F57A5;--nk-info-bg:#EAF1FA;--nk-info-ln:#C9DAF0;
+  --nk-cinza-bg:#EEF1F5;--nk-sombra:0 4px 16px rgba(26,59,89,.045);--nk-sombra2:0 12px 32px rgba(18,52,91,.16);
+}
+
+/* ---------- 3. Peças padrão (cabeçalho, botões, cartões, painéis, selos, tabela) ---------- */
+.nk-pagina [hidden]{display:none!important}
+.nk-pagina{max-width:1320px;margin:0 auto;padding:18px 24px 48px;color:var(--nk-ink);font-size:13.5px;line-height:1.45}
+@media(max-width:640px){.nk-pagina{padding:14px 16px 72px}}
+.nk-cab{display:flex;justify-content:space-between;align-items:flex-start;gap:20px;margin:0 0 16px;flex-wrap:wrap}
+.nk-rotulo{font-size:10px;letter-spacing:.13em;font-weight:700;color:var(--nk-pri);margin-bottom:4px;text-transform:uppercase}
+.nk-cab h1{margin:0;color:var(--nk-head);font-size:24px;font-weight:700;line-height:1.2}
+.nk-cab p{margin:5px 0 0;color:var(--nk-ink2);font-size:12px}
+.nk-acoes{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.nk-btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--nk-line);background:var(--nk-tile);color:var(--nk-head);border-radius:8px;padding:8px 14px;font:inherit;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap;text-decoration:none;line-height:1.2}
+.nk-btn:hover{border-color:var(--nk-line-forte);background:var(--nk-canvas)}
+.nk-btn.pri{background:var(--nk-pri);border-color:var(--nk-pri);color:var(--nk-pri-txt)}
+.nk-btn.pri:hover{background:var(--nk-pri-h);border-color:var(--nk-pri-h)}
+.nk-btn.perigo{color:var(--nk-bad);border-color:var(--nk-bad-ln)}
+.nk-btn.perigo:hover{background:var(--nk-bad-bg);border-color:var(--nk-bad)}
+.nk-btn.mini{padding:4px 9px;font-size:12px}
+.nk-btn:disabled{opacity:.45;cursor:not-allowed}
+.nk-pilha{display:grid;gap:14px}
+.nk-painel{background:var(--nk-tile);border:1px solid var(--nk-line);border-radius:14px;padding:16px 18px;box-shadow:var(--nk-sombra);min-width:0}
+.nk-painel-tit{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:12px;flex-wrap:wrap}
+.nk-painel-tit h2{margin:0;font-size:14px;color:var(--nk-head);font-weight:700}
+.nk-painel-tit p{margin:3px 0 0;color:var(--nk-ink2);font-size:12px}
+.nk-kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:11px}
+.nk-kpi{display:flex;align-items:center;gap:11px;text-align:left;background:var(--nk-tile);border:1px solid var(--nk-line);border-radius:13px;padding:13px 14px;box-shadow:var(--nk-sombra);color:var(--nk-head);font:inherit;min-width:0}
+button.nk-kpi{cursor:pointer;transition:.15s transform,.15s box-shadow}
+button.nk-kpi:hover{transform:translateY(-1px);box-shadow:0 8px 22px rgba(26,59,89,.09)}
+.nk-kpi-ic{flex:none;width:36px;height:36px;border-radius:10px;display:grid;place-items:center;font-size:17px;background:var(--nk-info-bg);color:var(--nk-info)}
+.nk-kpi-ic.ok{background:var(--nk-ok-bg);color:var(--nk-ok)}.nk-kpi-ic.warn{background:var(--nk-warn-bg);color:var(--nk-warn)}.nk-kpi-ic.bad{background:var(--nk-bad-bg);color:var(--nk-bad)}
+.nk-kpi b{display:block;font-size:22px;line-height:1.05;color:var(--nk-head);font-variant-numeric:tabular-nums}
+.nk-kpi small{display:block;margin-top:4px;color:var(--nk-ink2);font-size:11.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nk-selo{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:700;padding:3px 9px;border-radius:999px;white-space:nowrap;background:var(--nk-cinza-bg);color:var(--nk-ink2)}
+.nk-selo::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+.nk-selo.ok{background:var(--nk-ok-bg);color:var(--nk-ok)}.nk-selo.warn{background:var(--nk-warn-bg);color:var(--nk-warn)}
+.nk-selo.bad{background:var(--nk-bad-bg);color:var(--nk-bad)}.nk-selo.info{background:var(--nk-info-bg);color:var(--nk-info)}
+.nk-aviso{border-radius:12px;padding:12px 14px;border:1px solid var(--nk-warn-ln);background:var(--nk-warn-bg);color:var(--nk-ink)}
+.nk-aviso.ok{border-color:var(--nk-ok-ln);background:var(--nk-ok-bg)}.nk-aviso.bad{border-color:var(--nk-bad-ln);background:var(--nk-bad-bg)}.nk-aviso.info{border-color:var(--nk-info-ln);background:var(--nk-info-bg)}
+.nk-tw{overflow-x:auto;border:1px solid var(--nk-line);border-radius:10px;background:var(--nk-tile)}
+table.nk-tab{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+.nk-tab th{background:var(--nk-tile2);color:var(--nk-ink2);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.05em;text-align:left;padding:9px 10px;border-bottom:1px solid var(--nk-line);white-space:nowrap;position:sticky;top:0;z-index:1}
+.nk-tab td{padding:9px 10px;border-bottom:1px solid var(--nk-line2);text-align:left;vertical-align:top;color:var(--nk-ink)}
+.nk-tab tbody tr:last-child td{border-bottom:0}
+.nk-tab tbody tr:hover td{background:var(--nk-hover)}
+.nk-tab .n{text-align:right}
+.nk-muted{color:var(--nk-ink3)}
+.nk-vazio{padding:28px;text-align:center;color:var(--nk-ink2)}
+.nk-carregando{display:flex;align-items:center;justify-content:center;gap:10px;padding:28px;color:var(--nk-ink2)}
+.nk-carregando::before{content:"";width:18px;height:18px;border-radius:50%;border:2px solid var(--nk-line);border-top-color:var(--nk-pri);animation:nk-gira .8s linear infinite}
+@keyframes nk-gira{to{transform:rotate(360deg)}}
+.nk-sw{position:relative;display:inline-flex;align-items:center;gap:8px;cursor:pointer;font-size:12.5px;color:var(--nk-ink2);font-weight:600}
+.nk-sw input{position:absolute;opacity:0;width:1px;height:1px}
+.nk-sw .tr{flex:none;width:34px;height:20px;border-radius:999px;background:#C9D4E0;position:relative;transition:.15s}
+.nk-sw .tr::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.2);transition:.15s}
+.nk-sw input:checked+.tr{background:var(--nk-pri)}
+.nk-sw input:checked+.tr::after{left:16px}
+.nk-sw input:focus-visible+.tr{outline:3px solid #9DBCE6;outline-offset:2px}
+.nk-sw input:disabled+.tr{opacity:.5}
+.nk-campo{display:grid;gap:5px;font-size:12px;font-weight:600;color:var(--nk-ink2)}
+.nk-campo input,.nk-campo textarea,.nk-campo select{font:inherit;font-size:13px;font-weight:400;color:var(--nk-ink);background:var(--nk-tile);border:1px solid var(--nk-line);border-radius:8px;padding:8px 10px;min-width:0}
+.nk-campo input:focus,.nk-campo textarea:focus,.nk-campo select:focus{outline:0;border-color:var(--nk-pri);box-shadow:0 0 0 3px var(--nk-foco)}
+
+/* ---------- 4. Avisos, confirmação e tabela padrão (nk-ui.js) — V18.83 ---------- */
+.nk-toasts{position:fixed;right:16px;bottom:16px;z-index:2147483000;display:grid;gap:8px;width:min(400px,calc(100vw - 32px));pointer-events:none}
+.nk-toast{pointer-events:auto;display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:start;background:var(--nk-tile);color:var(--nk-ink);border:1px solid var(--nk-line);border-left:4px solid var(--nk-info);border-radius:10px;padding:11px 10px 11px 12px;box-shadow:var(--nk-sombra2);font:13px/1.45 var(--nk-font);animation:nk-entra .18s ease-out}
+.nk-toast>i{margin-top:2px;color:var(--nk-info)}
+.nk-toast.ok{border-left-color:var(--nk-ok)}.nk-toast.ok>i{color:var(--nk-ok)}
+.nk-toast.aviso{border-left-color:#C27803}.nk-toast.aviso>i{color:var(--nk-warn)}
+.nk-toast.erro{border-left-color:var(--nk-bad)}.nk-toast.erro>i{color:var(--nk-bad)}
+.nk-toast-txt{white-space:pre-line;word-break:break-word;max-height:40vh;overflow:auto}
+.nk-toast-x{border:0;background:transparent;color:var(--nk-ink3);font-size:18px;line-height:1;cursor:pointer;padding:0 4px;border-radius:6px}
+.nk-toast-x:hover{color:var(--nk-ink);background:var(--nk-canvas)}
+.nk-toast.saindo{opacity:0;transform:translateY(6px);transition:.18s}
+@keyframes nk-entra{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@media(max-width:640px){.nk-toasts{right:12px;left:12px;width:auto;bottom:72px}}
+.nk-dialogo-fundo{position:fixed;inset:0;z-index:2147482000;background:rgba(10,24,40,.48);display:grid;place-items:center;padding:16px;animation:nk-fade .12s}
+@keyframes nk-fade{from{opacity:0}}
+.nk-dialogo{background:var(--nk-tile);color:var(--nk-ink);border:1px solid var(--nk-line);border-radius:14px;box-shadow:var(--nk-sombra2);width:min(460px,100%);padding:20px 20px 16px;font:13.5px/1.5 var(--nk-font);max-height:calc(100vh - 32px);overflow:auto}
+.nk-dialogo h2{margin:0 0 8px;font-size:16px;color:var(--nk-head);line-height:1.3}
+.nk-dialogo-txt{white-space:pre-line;color:var(--nk-ink2);word-break:break-word}
+.nk-dialogo-acoes{display:flex;justify-content:flex-end;gap:8px;margin-top:18px;flex-wrap:wrap}
+.nk-btn.perigo-cheio{background:var(--nk-bad);border-color:var(--nk-bad);color:#fff}
+.nk-btn.perigo-cheio:hover{filter:brightness(.92)}
+.nk-tabela-barra{display:flex;justify-content:flex-end;margin:0 0 6px}
+table.nk-tabela thead th.nk-ord{cursor:pointer;user-select:none}
+table.nk-tabela thead th.nk-ord:hover{color:var(--nk-pri)}
+table.nk-tabela thead th.nk-ord-asc::after{content:" ▲";font-size:9px;color:var(--nk-pri)}
+table.nk-tabela thead th.nk-ord-desc::after{content:" ▼";font-size:9px;color:var(--nk-pri)}
+.nk-tema-btn .v15-nav-icon svg{display:block}
+
+/* ---------- 5. Modo escuro — V18.83 ----------
+   Ligado pelo nk-ui.js (html[data-tema="escuro"], escolha no menu lateral). Troca as cores
+   do sistema (--nk-*) e as variáveis que cada tela antiga definiu por conta própria; o que
+   está com cor fixa no código ganha regra própria mais abaixo. */
+html[data-tema="escuro"]{
+  color-scheme:dark;
+  --nk-canvas:#0F1722;--nk-tile:#17212E;--nk-tile2:#1B2735;--nk-hover:#1E2B3B;
+  --nk-line:#2B3949;--nk-line2:#223041;--nk-line-forte:#40536A;
+  --nk-ink:#E2E9F1;--nk-ink2:#A8B6C6;--nk-ink3:#8395A8;--nk-head:#EEF3F9;--nk-muted:#A8B6C6;
+  --nk-pri:#3B7AD9;--nk-pri-h:#2F6AC4;--nk-foco:rgba(91,150,240,.28);
+  --nk-ok:#5BC285;--nk-ok-bg:#132E20;--nk-ok-ln:#22543A;
+  --nk-warn:#F0B357;--nk-warn-bg:#33250C;--nk-warn-ln:#5C4317;
+  --nk-bad:#F2857B;--nk-bad-bg:#3B1714;--nk-bad-ln:#64271F;
+  --nk-info:#86B4F2;--nk-info-bg:#15283F;--nk-info-ln:#28456A;
+  --nk-cinza-bg:#223041;--nk-sombra:0 1px 0 rgba(0,0,0,.25);--nk-sombra2:0 14px 36px rgba(0,0,0,.5);
+  --nk-bg:#0F1722;--nk-navy:#BFD3EC;--nk-blue:#3B7AD9;--nk-blue-hover:#2F6AC4;
+  /* telas antigas: superfícies */
+  --canvas:#0F1722;--page:#0F1722;--paper:#0F1722;--bg:#0F1722;--bg-light:#0F1722;--fundo:#0F1722;--v15-bg:#0F1722;
+  --tile:#17212E;--panel:#17212E;--surface:#17212E;--soft:#1B2735;
+  --line:#2B3949;--line2:#223041;--line-soft:#223041;--v15-line:#2B3949;
+  /* texto */
+  --ink:#E2E9F1;--ink2:#A8B6C6;--ink3:#8395A8;--muted:#A8B6C6;--v15-text:#E2E9F1;--v15-muted:#A8B6C6;
+  --navy:#5B93E6;--brand-dark:#5B93E6;--azul2:#5B93E6;
+  --navy2:#3B7AD9;--navy2h:#2F6AC4;--navy-2:#3B7AD9;--blue:#3B7AD9;--blue-hover:#2F6AC4;--brand:#3B7AD9;--primary:#3B7AD9;--azul:#3B7AD9;
+  --navy3:#6FA3DC;--navy4:#3E6A99;
+  /* situação */
+  --pos:#5BC285;--ok:#5BC285;--verde:#5BC285;--c-ok:#5BC285;
+  --posbg:#132E20;--okbg:#132E20;--ok-bg:#132E20;
+  --neg:#F2857B;--bad:#F2857B;--danger:#F2857B;--urgent:#F2857B;--vermelho:#F2857B;--c-sem:#F2857B;
+  --negbg:#3B1714;--badbg:#3B1714;--urgent-bg:#3B1714;
+  --warn:#F0B357;--attention:#F0B357;--gold:#F0B357;--c-alto:#F0B357;
+  --warnbg:#33250C;--attention-bg:#33250C;--warnln:#5C4317;
+  --infobg:#15283F;--bluebg:#15283F;--brand-soft:#15283F;--c-escalar:#86B4F2;
+  --cinza:#8395A8;--cinzabg:#223041;
+  --roxo:#B39CF5;--comp:#B39CF5;--compl:#9D85E8;--roxobg:#271C40;--compbg:#271C40;--nec:#6FA3EE;
+  --sombra:none;--shadow:0 1px 0 rgba(0,0,0,.3);
+}
+html[data-tema="escuro"] body{background-color:var(--nk-canvas);color:var(--nk-ink)}
+/* Campos de formulário (muitos com cor fixa no código). */
+html[data-tema="escuro"] input:not([type=checkbox]):not([type=radio]):not([type=range]):not([type=color]),
+html[data-tema="escuro"] select,html[data-tema="escuro"] textarea{background-color:#111B27!important;color:var(--nk-ink)!important;border-color:var(--nk-line)!important}
+html[data-tema="escuro"] input::placeholder,html[data-tema="escuro"] textarea::placeholder{color:#6D7F93!important}
+html[data-tema="escuro"] input:disabled,html[data-tema="escuro"] select:disabled,html[data-tema="escuro"] textarea:disabled{background-color:#162130!important;color:#8395A8!important}
+/* Fundo branco escrito direto no HTML gerado pelo JS (style="background:#fff"). */
+html[data-tema="escuro"] [style*="background:#fff" i],html[data-tema="escuro"] [style*="background: #fff" i],
+html[data-tema="escuro"] [style*="background:white" i],html[data-tema="escuro"] [style*="background-color:#fff" i],
+html[data-tema="escuro"] [style*="background:#ffffff" i],html[data-tema="escuro"] [style*="background: white" i]{background-color:var(--nk-tile)!important;color:var(--nk-ink)}
+html[data-tema="escuro"] [style*="color:#18324A" i],html[data-tema="escuro"] [style*="color:#16344f" i],html[data-tema="escuro"] [style*="color:#12345B" i],
+html[data-tema="escuro"] [style*="color:#173750" i],html[data-tema="escuro"] [style*="color:#143957" i]{color:var(--nk-head)!important}
+html[data-tema="escuro"] [style*="color:#586A7D" i],html[data-tema="escuro"] [style*="color:#5F7186" i],html[data-tema="escuro"] [style*="color:#7A8C9E" i]{color:var(--nk-ink2)!important}
+html[data-tema="escuro"] img:not([src$=".svg"]){filter:brightness(.92)}
+html[data-tema="escuro"] ::-webkit-scrollbar{width:11px;height:11px}
+html[data-tema="escuro"] ::-webkit-scrollbar-thumb{background:#33445A;border-radius:8px;border:2px solid #0F1722}
+html[data-tema="escuro"] ::-webkit-scrollbar-track{background:#0F1722}
+/* Menu lateral: um tom mais fundo que a página. */
+html[data-tema="escuro"] .v15-sidebar{background:linear-gradient(180deg,#0B1A2C,#081321)!important;box-shadow:1px 0 0 #1E2B3B!important}
+
+/* ---------- 6. Menu recolhido (só ícones) no computador — V18.83 ----------
+   Botão «/» no topo do menu (nk-menu.js). Vale no Admin e nas outras telas. */
+.nk-recolher{margin-left:auto;flex:none;width:26px;height:26px;border:0;border-radius:7px;background:rgba(255,255,255,.08);color:#cfe0f0;font-size:15px;line-height:1;cursor:pointer;display:grid;place-items:center}
+.nk-recolher:hover{background:rgba(255,255,255,.16);color:#fff}
+@media(max-width:1000px){.nk-recolher{display:none!important}}
+@media(min-width:1001px){
+  body.nk-shell.nk-menu-recolhido{padding-left:72px}
+  .nk-menu-recolhido .v15-sidebar{width:72px!important;padding:14px 8px!important}
+  .nk-menu-recolhido .v15-brand{flex-direction:column;justify-content:center;padding-left:0!important;padding-right:0!important;gap:8px}
+  .nk-menu-recolhido .v15-brand>div:not(.v15-brand-badge),.nk-menu-recolhido .v15-nav-section,.nk-menu-recolhido .v15-nav-label{display:none!important}
+  .nk-menu-recolhido .nk-recolher{margin:0}
+  .nk-menu-recolhido .v15-nav-item{justify-content:center;padding:11px 6px}
+  .nk-menu-recolhido .v15-grp-h{display:none!important}
+  .nk-menu-recolhido .v15-grp.fechado .v15-grp-b{display:block}
+  .nk-menu-recolhido #painelConteudo.container-admin{margin-left:72px!important}
+}
+/* O botão « virou o último filho da marca: a regra antiga "div:last-child" não esconde mais o nome. */
+@media(min-width:761px) and (max-width:1000px){.v15-brand>div:not(.v15-brand-badge){display:none!important}}
+
+/* ---------- 7. Cabeçalho padrão Noromak nas telas com menu — V18.83 ----------
+   Rótulo do grupo (posto pelo nk-menu.js) + título de 24px + subtítulo discreto, sem faixa
+   colorida: o mesmo da Visão geral, Promoções automáticas e Saúde. Só aparência. */
+.nk-shell .nk-rotulo-auto{margin-bottom:3px}
+/* ADS, Conversão, Ruptura */
+body.nk-shell .wrap>header h1{font-size:24px;font-weight:700;color:var(--nk-head);line-height:1.2}
+body.nk-shell .wrap>header .sub{font-size:12px;margin-top:5px}
+/* Financeiro, Oportunidades de Kit (barra de filtros fixa continua) */
+body.nk-shell header.topo{background:var(--nk-canvas);border-bottom:0}
+body.nk-shell header.topo .topo-in{padding-top:18px;padding-bottom:12px;align-items:flex-end}
+body.nk-shell header.topo .marca{flex-direction:column;align-items:flex-start;gap:3px}
+body.nk-shell header.topo .marca h1{font-size:24px;font-weight:700;color:var(--nk-head);line-height:1.2}
+/* Demanda de Compra, Promoções ML */
+body.nk-shell header.top{background:transparent;border-bottom:0;color:var(--nk-ink)}
+body.nk-shell header.top h1{font-size:24px;font-weight:700;color:var(--nk-head);line-height:1.2}
+body.nk-shell header.top p{color:var(--nk-ink2);font-size:12px}
+body.nk-shell header.top a,body.nk-shell header.top button{background:var(--nk-tile);border:1px solid var(--nk-line);color:var(--nk-head);font-weight:600}
+body.nk-shell header.top a:hover,body.nk-shell header.top button:hover{border-color:var(--nk-line-forte);background:var(--nk-canvas)}
+/* Demanda Full */
+body.nk-shell header.topbar:has(.topbar__inner){background:transparent;border-bottom:0;color:var(--nk-ink)}
+body.nk-shell header.topbar:has(.topbar__inner) h1{font-size:24px;font-weight:700;color:var(--nk-head)}
+body.nk-shell header.topbar:has(.topbar__inner) p{color:var(--nk-ink2);font-size:12px}
+body.nk-shell #xlsxRuntimeStatus{background:var(--nk-info-bg)!important;color:var(--nk-info)}
+/* Precificador: a faixa azul vira o cabeçalho padrão; os botões dele continuam à direita */
+body.nk-shell header.topbar:has(.brand){background:transparent;color:var(--nk-ink);border-bottom:0;padding-top:16px}
+body.nk-shell header.topbar:has(.brand) .brand img,body.nk-shell header.topbar:has(.brand) .brand-mark{display:none!important}
+body.nk-shell header.topbar:has(.brand) .brand h1{font-size:24px;font-weight:700;color:var(--nk-head)}
+body.nk-shell header.topbar:has(.brand) .brand p{color:var(--nk-ink2);font-size:12px}
+body.nk-shell header.topbar:has(.brand) .status{color:var(--nk-ink2)}
