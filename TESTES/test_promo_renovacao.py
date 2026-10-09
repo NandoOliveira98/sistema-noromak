@@ -685,5 +685,78 @@ class ContaNaLista(Base):
         self.assertIsNone(self.item("MLB9")["conta"])
 
 
+class BuscarNovos(Base):
+    """V18.84: botão "Buscar novos no ML" — anúncio que existe no ML e não está na lista entra
+    sem marcar. Removido pelo ADMIN não volta; encerrado não entra; nada é marcado sozinho."""
+
+    def setUp(self):
+        super().setUp()
+        self._orig_todos = S.ml_todos_os_anuncios
+        self.no_ml = ["MLB1", "MLB2", "MLB5", "MLB6", "MLB7", "MLB8"]
+        S.ml_todos_os_anuncios = lambda forcar=False: list(self.no_ml)
+        self.itens.update({
+            "MLB5": {"titulo": "Novo ativo", "preco": 120.0, "status": "active", "estoque": 3, "sku_ml": "SKU5"},
+            "MLB6": {"titulo": "Novo pausado", "preco": 80.0, "status": "paused", "estoque": 0, "sku_ml": ""},
+            "MLB7": {"titulo": "Encerrado", "preco": 50.0, "status": "closed", "estoque": 0, "sku_ml": ""},
+            # MLB8 o ML não devolveu: não entra (não inventa título nem status)
+        })
+        self.pedidos = []
+        detalhe = S.ml_itens_detalhe
+        S.ml_itens_detalhe = lambda mlbs: (self.pedidos.append(list(mlbs)), detalhe(mlbs))[1]
+
+    def tearDown(self):
+        S.ml_todos_os_anuncios = self._orig_todos
+        super().tearDown()
+
+    def lista(self):
+        return {i["mlb"]: i for i in S.promo_renovacao_payload(hoje=HOJE)["itens"]}
+
+    def test_inclui_o_que_falta_sem_marcar(self):
+        self.marcar("MLB1")
+        S.save_storage(S.PROMO_DATAS_KEY, None, S.json_dumps({"rows": [{"mlb": "2", "date": "2026-10-20"}]}), False,
+                       actor="t", actor_role="admin", source_screen="t")
+        r = S.promo_renovacao_buscar_novos("admin_teste")
+        self.assertEqual((r["incluidos"], r["encerrados"], r["sem_resposta"]), (2, 1, 1), r)
+        # só pergunta ao ML o detalhe de quem falta (não da lista inteira)
+        self.assertEqual(sorted(sum(self.pedidos, [])), ["MLB5", "MLB6", "MLB7", "MLB8"])
+        L = self.lista()
+        self.assertEqual(set(L), {"MLB1", "MLB2", "MLB5", "MLB6"})
+        self.assertFalse(L["MLB5"]["marcado"])
+        self.assertEqual((L["MLB5"]["titulo"], L["MLB5"]["sku"], L["MLB5"]["preco_anuncio"]),
+                         ("Novo ativo", "SKU5", 120.0))
+        self.assertTrue(L["MLB1"]["marcado"], "quem já estava marcado continua igual")
+
+    def test_segunda_busca_nao_repete(self):
+        S.promo_renovacao_buscar_novos("admin_teste")
+        self.pedidos.clear()
+        r = S.promo_renovacao_buscar_novos("admin_teste")
+        self.assertEqual(r["incluidos"], 0)
+        # encerrado e sem resposta são perguntados de novo (podem ter mudado); os incluídos não
+        self.assertNotIn("MLB5", sum(self.pedidos, []))
+
+    def test_removido_pelo_admin_nao_volta(self):
+        S.promo_renovacao_remover(["MLB5"], "admin_teste")
+        S.promo_renovacao_buscar_novos("admin_teste")
+        self.assertNotIn("MLB5", self.lista())
+        self.assertNotIn("MLB5", sum(self.pedidos, []))
+
+    def test_nao_marca_nem_renova(self):
+        self.modo("automatico")
+        S.promo_renovacao_buscar_novos("admin_teste")
+        self.rodar()
+        self.assertEqual(self.posts, [])
+
+    def test_historico_registra_a_busca(self):
+        S.promo_renovacao_buscar_novos("admin_teste")
+        log = S.promo_renovacao_payload(hoje=HOJE)["historico"]
+        self.assertEqual((log[0]["acao"], log[0]["por"]), ("incluidos_ml", "admin_teste"))
+
+    def test_rota_buscar_novos(self):
+        status, corpo = self.cliente.pedir("POST", "/api/promocoes-auto/renovacao/buscar-novos", {})
+        # lista vazia: entram MLB1, MLB2, MLB5 e MLB6 (MLB7 encerrado, MLB8 sem resposta)
+        self.assertEqual((status, corpo.get("incluidos")), (200, 4), corpo)
+        self.assertIn("MLB6", self.lista())
+
+
 if __name__ == "__main__":
     unittest.main()

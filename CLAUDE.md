@@ -552,6 +552,12 @@ Promoções diz de onde veio o custo (`precificador.kit`) e custo 0 não mostra 
 (`ml_visitas_item_v1868`, 06:00); anúncio criado depois aparecia "(título ainda não coletado)". A
 conferência de hora em hora grava o título e o SKU lidos no ML (`promo_renovacao_v1873.titulo/sku_ml`,
 migração em `ensure_promo_renovacao_schema`); o retrato do dia continua mandando quando existe.
+**V18.84 — "Buscar novos no ML":** botão **manual** (sem worker, por decisão do dono) na lista;
+`POST /api/promocoes-auto/renovacao/buscar-novos` → `promo_renovacao_buscar_novos`. Lê todos os
+anúncios (`ml_todos_os_anuncios(forcar=True)`) e inclui **sem marcar** o que não está na lista
+(nem na tabela nem no monitor), com título/SKU/preço do `ml_itens_detalhe` (só de quem falta).
+Removido pelo ADMIN (`promo_removidos_v1876`) nunca volta por aqui (conferido de novo sob a trava);
+encerrado e sem resposta do ML não entram. Fica no histórico como "Novos do ML".
 
 ### Análise de ADS (V18.54)
 `APP/analise-ads.html` (`/analise-ads`, menu Comercial, só **admin**). O relatório "Anúncios

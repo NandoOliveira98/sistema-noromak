@@ -312,6 +312,7 @@ html[data-tema="escuro"] .gav-tag{background-color:#3F3B12!important;color:#979C
             <input type="search" id="q" placeholder="Buscar por MLB, SKU ou título" autocomplete="off" aria-label="Buscar por MLB, SKU ou título">
             <button type="button" id="limparBusca" aria-label="Limpar busca"><i class=nk-i-x></i></button></label>
           <button class="btn" id="abrirIncluir"><span aria-hidden="true" style="font-size:16px;line-height:1">+</span> Incluir anúncio</button>
+          <button class="btn" id="buscarNovos" title="Procura no Mercado Livre os anúncios que ainda não estão nesta lista e inclui sem marcar"><i class=nk-i-refresh></i> Buscar novos no ML</button>
         </div>
         <div class="chips" id="tabs"></div>
       </div>
@@ -581,6 +582,16 @@ async function marcar(mlb,ativo,preco){
 }
 $('abrirIncluir').onclick=()=>{$('novoMlb').value='';$('novoPreco').value='';$('incErro').textContent='';abrirModal('incluirModal','novoMlb')};
 $('incCancelar').onclick=()=>fecharModal('incluirModal');
+// V18.84: verificação manual (sem rotina automática) — anúncio do ML que falta entra sem marcar
+$('buscarNovos').onclick=async()=>{
+  const b=$('buscarNovos'), txt=b.innerHTML; b.disabled=true; b.innerHTML='<i class=nk-i-refresh></i> Buscando no ML…';
+  try{ const r=await api('/api/promocoes-auto/renovacao/buscar-novos',{});
+    const extra=[r.encerrados?`${num(r.encerrados)} encerrado(s) ignorado(s)`:'',r.sem_resposta?`${num(r.sem_resposta)} sem resposta do ML`:''].filter(Boolean).join(' · ');
+    toast((r.incluidos?`${num(r.incluidos)} anúncio(s) novo(s) incluído(s) — estão em "Não marcados"`:'Nenhum anúncio novo: a lista já tem todos os anúncios do ML')+(extra?' · '+extra:''));
+    if(r.incluidos){tab='nao';pagina=1} carregar(); }
+  catch(e){ toast(e.message) }
+  finally{ b.disabled=false; b.innerHTML=txt }
+};
 $('incluirForm').onsubmit=e=>{
   e.preventDefault();
   const m=$('novoMlb').value.trim().toUpperCase(), bruto=$('novoPreco').value.trim(), v=bruto?numBR(bruto):null;
@@ -825,7 +836,7 @@ $('ownerForm').onsubmit=async e=>{
   catch(ex){ $('ownerErro').textContent=ex.message; $('ownerCodigo').value=''; }
 };
 function historico(){
-  const A={marcada:['Marcada','c-in'],desmarcada:['Desmarcada','c-sc'],renovada:['Renovada','c-ok'],falhou:['Recusada pelo ML','c-no'],removida:['Removida da lista','c-no']};
+  const A={marcada:['Marcada','c-in'],desmarcada:['Desmarcada','c-sc'],renovada:['Renovada','c-ok'],falhou:['Recusada pelo ML','c-no'],removida:['Removida da lista','c-no'],incluidos_ml:['Novos do ML','c-in']};
   $('histCont').textContent=num(D.historico.length);
   $('log').innerHTML=`<thead><tr><th class="l">Quando</th><th class="l">Anúncio</th><th class="l">Ação</th><th>Preço</th><th>Margem</th><th class="l">Até</th><th class="l">Por</th><th class="l">Detalhe</th></tr></thead><tbody>`+
    (D.historico.map(h=>{const a=A[h.acao]||[h.acao,'c-sc'];return `<tr><td class="l">${horaBR(h.quando)}</td><td class="l mlb">${esc(h.mlb)}</td><td class="l"><span class="chip ${a[1]}">${esc(a[0])}</span></td>

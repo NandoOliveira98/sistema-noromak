@@ -43,7 +43,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "18.83-SAUDE-VISUAL"
+APP_VERSION = "18.84-PROMO-NOVOS"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -17611,6 +17611,65 @@ def _promo_removidos() -> set[str]:
         return {str(r["mlb"]) for r in DB.execute("SELECT mlb FROM promo_removidos_v1876").fetchall()}
 
 
+def _promo_monitor_datas() -> dict[str, str]:
+    """MLB -> data de fim (AAAA-MM-DD) do monitor de promoções do Precificador."""
+    monitor: dict[str, str] = {}
+    try:
+        bruto, _, _ = get_storage(PROMO_DATAS_KEY)
+        for r in (json.loads(bruto or "{}").get("rows") or []):
+            mlb = _mlb_normalizar((r or {}).get("mlb"))
+            if mlb and re.match(r"^\d{4}-\d{2}-\d{2}", str(r.get("date") or "")):
+                monitor[mlb] = str(r["date"])[:10]
+    except Exception:
+        return {}
+    return monitor
+
+
+def promo_renovacao_buscar_novos(ator: str) -> dict[str, Any]:
+    """V18.84: botão "Buscar novos no ML" (manual, sem worker). Anúncio que existe no ML e não
+    está na lista (nem marcado, nem no monitor) entra SEM marcar — renovar continua sendo
+    decisão do ADMIN. Removido pelo ADMIN (tombstone V18.76) nunca volta por aqui; encerrado
+    não entra; sem resposta do ML não entra (não inventa título nem status). Custo: a lista do
+    vendedor (~16 chamadas) + o detalhe só de quem falta (20 por chamada)."""
+    todos = ml_todos_os_anuncios(forcar=True)
+    with DB_LOCK:
+        na_lista = {str(r["mlb"]) for r in DB.execute("SELECT mlb FROM promo_renovacao_v1873").fetchall()}
+    conhecidos = na_lista | set(_promo_monitor_datas()) | _promo_removidos()
+    vistos: set[str] = set()
+    faltam = [m for m in (_mlb_normalizar(x) for x in todos)
+              if m and m not in conhecidos and not (m in vistos or vistos.add(m))]
+    detalhe = ml_itens_detalhe(faltam) if faltam else {}
+    novos: list[tuple[str, dict[str, Any]]] = []
+    encerrados = sem_resposta = 0
+    for mlb in faltam:
+        d = detalhe.get(mlb)
+        if not d:
+            sem_resposta += 1
+        elif str(d.get("status") or "").lower() == "closed":
+            encerrados += 1
+        else:
+            novos.append((mlb, d))
+    incluidos = 0
+    with DB_LOCK:
+        for mlb, d in novos:
+            # o tombstone é conferido de novo aqui, sob a trava: remoção feita durante a busca vale
+            cur = DB.execute(
+                "INSERT INTO promo_renovacao_v1873(mlb,marcado,preco_anuncio,titulo,sku_ml) "
+                "SELECT ?,0,?,?,? WHERE NOT EXISTS (SELECT 1 FROM promo_removidos_v1876 WHERE mlb=?) "
+                "ON CONFLICT(mlb) DO NOTHING",
+                (mlb, _money_number(d.get("preco")), str(d.get("titulo") or "")[:300],
+                 str(d.get("sku_ml") or "")[:120], mlb))
+            incluidos += max(0, cur.rowcount or 0)
+        DB.commit()
+    if incluidos:
+        _promo_log("", "incluidos_ml", ator,
+                   f"{incluidos} anúncio(s) do Mercado Livre incluído(s) na lista, sem marcar"
+                   + (f" · {encerrados} encerrado(s) ignorado(s)" if encerrados else ""))
+    return {"ok": True, "no_ml": len(set(_mlb_normalizar(x) for x in todos if x)), "faltavam": len(faltam),
+            "incluidos": incluidos, "encerrados": encerrados, "sem_resposta": sem_resposta,
+            "mlbs": [m for m, _ in novos][:50]}
+
+
 def _promo_ruptura_por_anuncio() -> dict[str, dict[str, Any]]:
     """Situação de estoque de cada anúncio, pela Ruptura (V18.72). Erro = sem informação."""
     try:
@@ -18088,15 +18147,7 @@ def promo_renovacao_payload(hoje: date | None = None) -> dict[str, Any]:
             "SELECT * FROM promo_auto_log_v1873 ORDER BY id DESC LIMIT 100").fetchall()]
         renovadas_30 = DB.execute("SELECT COUNT(*) FROM promo_auto_log_v1873 WHERE acao='renovada' AND dia >= ?",
                                   ((hoje - timedelta(days=30)).isoformat(),)).fetchone()[0]
-    monitor: dict[str, str] = {}
-    try:
-        bruto, _, _ = get_storage(PROMO_DATAS_KEY)
-        for r in (json.loads(bruto or "{}").get("rows") or []):
-            mlb = _mlb_normalizar((r or {}).get("mlb"))
-            if mlb and re.match(r"^\d{4}-\d{2}-\d{2}", str(r.get("date") or "")):
-                monitor[mlb] = str(r["date"])[:10]
-    except Exception:
-        monitor = {}
+    monitor = _promo_monitor_datas()
     vinculos = _ml_vinculos_mlb_sku()
     removidos = _promo_removidos()
     # V18.77: custo e taxas de cada anúncio, para a gaveta de preço da tela calcular
@@ -18144,6 +18195,9 @@ def promo_renovacao_payload(hoje: date | None = None) -> dict[str, Any]:
             dias = (datetime.strptime(fim[:10], "%Y-%m-%d").date() - hoje).days
         preco_anuncio = _money_number(r.get("preco_anuncio")) if conferido else None
         preco_anuncio = preco_anuncio or _money_number(foto.get("preco"))
+        if preco_anuncio is None and not marcado:
+            # V18.84: incluído pelo "Buscar novos no ML" antes do retrato das 06:00
+            preco_anuncio = _money_number(r.get("preco_anuncio"))
         preco = _money_number(r.get("preco"))
         itens.append({
             "mlb": mlb, "titulo": foto.get("titulo") or r.get("titulo") or "",
@@ -19915,6 +19969,17 @@ class AppHandler(BaseHTTPRequestHandler):
                     self.send_json(res)
                 except ValueError as exc:
                     self.send_json({"ok": False, "error": str(exc)}, 400)
+                except Exception as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/promocoes-auto/renovacao/buscar-novos":
+            # V18.84: manual (sem worker) — inclui na lista, sem marcar, o anúncio do ML que falta.
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                try:
+                    res = promo_renovacao_buscar_novos(ctx["username"])
+                    audit(ctx["username"], "promocoes.auto.buscar_novos", f"{res['incluidos']}|{res['faltavam']}")
+                    self.send_json(res)
                 except Exception as exc:
                     self.send_json({"ok": False, "error": str(exc)}, 500)
             return
