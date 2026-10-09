@@ -7897,6 +7897,17 @@ function salvarPedidoImportadoPorPrint(lerOutro=false){
       appStorage.upsertPedidosAdmin(consolidadas,`EXTENSAO_CHROME_${origemExtensaoAdmin.toUpperCase()}`);
       carregarBancoInternoAdmin();
       resultado.inseridas=consolidadas.length;
+    }else if(typeof appStorage?.upsertPedidosAdmin==="function"){
+      // V18.86: o print é inclusão explícita do ADMIN — grava pela mesma rota da
+      // extensão, que desfaz a exclusão anterior do pedido (V17.78). Pela rota comum
+      // o tombstone tirava o pedido da fila logo depois do "salvo" (09/10: pedido
+      // excluído por quantidade errada não voltava). A mesclagem continua a mesma:
+      // linha existente do pedido é atualizada (mesmo UID), não duplicada.
+      resultado=mesclarPedidosImportados(consolidadas,avisos);
+      const chavesPrint=new Set(consolidadas.map(chavePedidoItemImportado).filter(Boolean));
+      const linhasPrint=pedidosEditorAdmin.filter(x=>consolidadas.includes(x)||chavesPrint.has(chavePedidoItemImportado(x)));
+      appStorage.upsertPedidosAdmin(linhasPrint,"PAINEL_ADMIN_PRINT");
+      carregarBancoInternoAdmin();
     }else{
       resultado=mesclarPedidosImportados(consolidadas,avisos);
       salvarPedidosAdmin(false);

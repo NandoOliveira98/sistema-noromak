@@ -726,5 +726,8 @@ Para o front-end, se o Node estiver disponível: `node --check APP/shared-storag
 - `completed_orders` não é informação visual, é barreira operacional de reentrada.
 - Dashboard "Produtividade hoje" conta cada pedido **uma única vez** por marketplace;
   linhas e componentes de KIT não podem multiplicar a contagem.
+- Reinclusão pelo ADMIN (extensão **e** "Ler print", V18.86) grava por `appStorage.upsertPedidosAdmin`
+  (`/api/admin-order-upsert`), que desfaz o tombstone do pedido. Pela rota comum (`/api/storage`) o
+  tombstone continua valendo e o pedido some logo depois do "salvo" (`test_reinclusao_print_v1886.py`).
 - A Central de Pedidos do Dia mostra também os já conferidos — ela **não** se comporta
   como Pedidos Pendentes.
