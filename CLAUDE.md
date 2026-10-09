@@ -108,6 +108,7 @@ APP/
   nk-menu.js                 menu lateral único + endereço de cada tela (V18.82)
   nk-ui.js / nk-ui.css       tema claro/escuro, avisos, confirmação, tabela padrão (V18.83)
   saude.html                 Painel de saúde + alertas por e-mail (V18.83)
+  posvenda.html              Pós-venda ML: reclamações, perguntas, perdas, reputação (V18.88)
   web-auth.js, user-permissions.js, sw.js, pwa-install.js
 DADOS/                       seed ml_sku_mlb_links_seed.json (fora do Git)
 FERRAMENTAS_WINDOWS/         agente de impressão Zebra, 2FA do owner, gerar_modo_escuro.py (V18.83)
@@ -449,6 +450,28 @@ novo no `main()` precisa entrar em `SAUDE_WORKERS_INFO`** (o teste confere).
 antes de tentar de novo. Destinatários em `saude_config_v1883` (padrão: `RELATORIO_EMAILS`); estado em
 `saude_alerta_estado_v1883`, histórico em `saude_alerta_log_v1883` (1000 últimos). Link do e-mail:
 `EXP_PUBLIC_URL` (padrão https://noromakweb.com.br/expedicao). WhatsApp fica para depois (provedor a escolher).
+
+### Pós-venda do Mercado Livre (V18.88)
+`APP/posvenda.html` (`/posvenda`, menu Vendas e anúncios, módulo **admin**; `GET /api/posvenda?dias=30`,
+`posvenda_payload`, só lê o banco). Worker `posvenda_loop`: perguntas a cada 5 min, reclamações e
+reputação a cada 15 min. **Reclamações** (`ml_reclamacao_v1888`): `/post-purchase/v1/claims/search` sempre
+com `players.role=respondent` + `players.user_id` (a doc proíbe busca só por status); `status=opened` + `range=`
+(1ª carga: `date_created` dos últimos 180 dias; depois `last_updated` desde a mais recente − 1 dia; data
+**com milissegundos**). Nova/alterada (ou aberta lida há > 1 h) é detalhada: `/detail`, `/affects-reputation`,
+`/orders/{id}` (total e `transaction_amount_refunded`), `/post-purchase/v2/claims/{id}/returns` (+ `/reviews`
+da triagem) e `/charges/return-cost` (frete da devolução cobrado do vendedor). 150 por rodada. Prazo = ação
+obrigatória do vendedor (`prazo`) ou o do `/detail` quando a vez é do vendedor (`prazo_detalhe`, coluna própria
+para a busca não apagar). Responder reclamação continua **no ML** (decisão do dono, 09/10).
+**Perda** (`_posvenda_valores`): frete da devolução + custo do produto que não voltou ou voltou inservível
+(custo = regra do Financeiro, `_financeiro_custo_unitario`) + reembolso parcial com o produto ficando com o
+comprador. Produto que voltou bom não é perda; cobertura do ML ou vendedor vencedor = 0. "Vendas desfeitas" é
+mostrado à parte e **não** é perda. Valor que o ML não informou fica nulo e a reclamação vira "incompleta" —
+nunca zero. **Perguntas** (`ml_pergunta_v1888`): `/questions/search?seller_id&status=UNANSWERED&api_version=4`;
+a que sai da lista é relida (`/questions/{id}`). Responder: `POST /api/posvenda/responder` → `POST /answers`
+(JSON, via `_ml_promo_http`), audit `ml_pergunta_responder`. **Reputação**: `/users/{id}` → `seller_reputation`,
+um retrato por dia em `ml_reputacao_dia_v1888`. **Painel de saúde**: `posvenda_prazo` fica Crítico (e-mail)
+com reclamação cujo prazo do vendedor vence em < 24 h. Sem permissão no DevCenter (403) aparece na tela e no
+painel, nunca vira "nenhuma reclamação".
 
 ### Visitas dos anúncios (V18.68)
 Base da futura análise de **conversão** (vendas ÷ visitas). Worker `ml_visitas_loop`: depois das

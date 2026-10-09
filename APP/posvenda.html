@@ -1,0 +1,315 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Noromak · Pós-venda</title>
+<!-- V18.88: Pós-venda do Mercado Livre — reclamações abertas (prazo do vendedor), perguntas sem
+     resposta (responde por aqui: POST /api/posvenda/responder), relatório de perdas com
+     reclamações e devoluções, e reputação. GET /api/posvenda?dias=30 (módulo admin, só lê o
+     banco; a coleta é do worker posvenda_loop). Responder reclamação continua no ML. -->
+<script defer src="/expedicao/web-auth.js?v=18.82"></script>
+<link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
+<link rel="stylesheet" href="/expedicao/nk-ui.css?v=18.87">
+<script src="/expedicao/nk-ui.js?v=18.83"></script>
+<script defer src="/expedicao/nk-menu.js?v=18.88" data-shell></script>
+<style>
+body{margin:0;background:var(--nk-canvas);color:var(--nk-ink);font-family:var(--nk-font)}
+.abas{display:flex;flex-wrap:wrap;gap:6px;border-bottom:1px solid var(--nk-line);margin-bottom:14px}
+.aba{border:0;background:none;color:var(--nk-ink2);font:inherit;font-weight:700;font-size:13px;padding:9px 12px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;display:inline-flex;gap:7px;align-items:center}
+.aba.on{color:var(--nk-pri);border-bottom-color:var(--nk-pri)}
+.aba .cont{font-size:11px;background:var(--nk-cinza-bg);color:var(--nk-ink2);border-radius:999px;padding:1px 7px}
+.aba .cont.bad{background:var(--nk-bad-bg);color:var(--nk-bad)}
+.barra{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;margin-bottom:10px}
+.barra input[type=search]{font:inherit;border:1px solid var(--nk-line);background:var(--nk-tile);color:var(--nk-ink);border-radius:8px;padding:7px 10px;width:340px;max-width:100%}
+.nk-cab select{font:inherit;font-size:13px;border:1px solid var(--nk-line);background:var(--nk-tile);color:var(--nk-ink);border-radius:8px;padding:7px 10px}
+.mini{font-size:11.5px;color:var(--nk-ink2)}
+.mono{font-family:Consolas,monospace;font-size:11.5px;color:var(--nk-ink3)}
+.prazo{font-weight:700;white-space:nowrap}
+.prazo.bad{color:var(--nk-bad)}.prazo.warn{color:var(--nk-warn)}
+.txt{min-width:170px;max-width:340px;white-space:normal}
+.perguntas{display:grid;gap:10px}
+.pg{border:1px solid var(--nk-line);border-radius:12px;padding:12px 14px;background:var(--nk-tile);display:grid;gap:8px}
+.pg.velha{border-color:var(--nk-warn-ln);box-shadow:inset 3px 0 0 var(--nk-warn)}
+.pg-top{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.pg-q{font-size:14px;color:var(--nk-head);font-weight:600}
+.pg textarea{font:inherit;font-size:13px;width:100%;min-height:56px;resize:vertical;border:1px solid var(--nk-line);background:var(--nk-tile);color:var(--nk-ink);border-radius:8px;padding:8px 10px;box-sizing:border-box}
+.pg textarea:focus{outline:0;border-color:var(--nk-pri);box-shadow:0 0 0 3px var(--nk-foco)}
+.pg-acoes{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.perda-grade{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-bottom:14px}
+.perda{border:1px solid var(--nk-line);border-radius:12px;padding:11px 13px;background:var(--nk-tile)}
+.perda small{display:block;color:var(--nk-ink2);font-size:11.5px;font-weight:600}
+.perda b{display:block;font-size:20px;color:var(--nk-head);font-variant-numeric:tabular-nums;margin-top:3px}
+.perda.dest{border-color:var(--nk-bad-ln);background:var(--nk-bad-bg)}
+.perda.dest b{color:var(--nk-bad)}
+.duas{display:grid;grid-template-columns:repeat(auto-fit,minmax(560px,1fr));gap:14px;margin-bottom:14px}
+@media(max-width:640px){.duas{grid-template-columns:1fr}}
+.sub-tit{margin:0 0 8px;font-size:12px;font-weight:700;color:var(--nk-ink2);text-transform:uppercase;letter-spacing:.06em}
+.termo{display:flex;gap:4px;margin:6px 0 12px}
+.termo i{flex:1;height:12px;border-radius:3px;opacity:.25}
+.termo i.on{opacity:1;outline:2px solid var(--nk-head);outline-offset:1px}
+.notas{font-size:12px;color:var(--nk-ink2)}
+.notas ul{margin:6px 0 0 18px;padding:0}
+.notas li{margin:3px 0}
+.inc{color:var(--nk-warn);font-size:11px;font-weight:700}
+</style>
+</head>
+<body>
+<main class="nk-pagina">
+  <div class="nk-cab">
+    <div>
+      <div class="nk-rotulo">Vendas e anúncios</div>
+      <h1>Pós-venda</h1>
+      <p id="sub">Carregando…</p>
+    </div>
+    <div class="nk-acoes">
+      <select id="dias" title="Período do relatório">
+        <option value="30" selected>Últimos 30 dias</option>
+        <option value="60">Últimos 60 dias</option>
+        <option value="90">Últimos 90 dias</option>
+        <option value="180">Últimos 180 dias</option>
+      </select>
+      <button class="nk-btn" id="buscar" title="Busca agora no Mercado Livre (em segundo plano)"><i class=nk-i-refresh></i> Buscar agora</button>
+    </div>
+  </div>
+
+  <div class="nk-carregando" id="carregando">Carregando o pós-venda…</div>
+  <div class="nk-aviso bad" id="erro" hidden></div>
+
+  <div class="nk-pilha" id="conteudo" hidden>
+    <div class="nk-aviso" id="aviso" hidden></div>
+    <div class="nk-kpis" id="kpis"></div>
+
+    <section class="nk-painel">
+      <div class="abas" id="abas"></div>
+      <div id="painel-abertas"></div>
+      <div id="painel-perguntas" hidden></div>
+      <div id="painel-perdas" hidden></div>
+      <div id="painel-reputacao" hidden></div>
+    </section>
+
+    <section class="nk-painel notas" id="notas"></section>
+  </div>
+</main>
+<script>
+(() => {
+  "use strict";
+  const B = "/expedicao";
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));
+  const brl = v => v == null ? "—" : Number(v).toLocaleString("pt-BR", {style:"currency", currency:"BRL"});
+  const num = v => Number(v || 0).toLocaleString("pt-BR");
+  const pct = v => v == null ? "—" : Number(v).toLocaleString("pt-BR", {maximumFractionDigits:2}) + "%";
+  const dataBR = iso => { const d = new Date(iso); return isNaN(d) ? "—" : d.toLocaleDateString("pt-BR"); };
+  const dataHora = iso => { const d = new Date(iso); return isNaN(d) ? "—" : d.toLocaleString("pt-BR", {day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit"}); };
+  const horasTxt = h => { if (h == null) return "—"; const a = Math.abs(h); const t = a >= 48 ? Math.round(a / 24) + " dias" : a >= 1 ? Math.round(a) + " h" : Math.max(1, Math.round(a * 60)) + " min"; return h < 0 ? "venceu há " + t : t; };
+  const vendaML = id => id ? `https://www.mercadolivre.com.br/vendas/${encodeURIComponent(id)}/detalhe` : "";
+  const ETAPA = {claim:"Reclamação", dispute:"Mediação do ML", recontact:"Recontato", stale:"Com o ML", none:"—"};
+  const DEV = {pending:"Criada", label_generated:"Etiqueta gerada", scheduled:"Coleta agendada", shipped:"A caminho", delivered:"Entregue",
+    not_delivered:"Não entregue", cancelled:"Cancelada", expired:"Expirou", failed:"Falhou", return_to_buyer:"Voltando ao comprador"};
+  const PRODUTO = {voltou:["ok","Voltou"], nao_voltou:["bad","Não voltou"], inservivel:["bad","Voltou sem condição de venda"],
+    ficou_parcial:["warn","Ficou com o comprador (reembolso parcial)"], sem_perda:["ok","Sem perda"], conferir:["warn","Conferir"], em_aberto:["info","Em aberto"]};
+  const NIVEL = {"1_red":["#E5332A","Vermelho"], "2_orange":["#F28B18","Laranja"], "3_yellow":["#F5C518","Amarelo"], "4_light_green":["#9BCB3C","Verde-claro"], "5_green":["#2FA84F","Verde"]};
+  let D = null, aba = "abertas", busca = "";
+
+  async function api(url, opcoes = {}) {
+    const r = await fetch(B + url, {cache:"no-store", credentials:"same-origin", headers:{"Content-Type":"application/json", Accept:"application/json"}, ...opcoes});
+    let d = {}; try { d = await r.json(); } catch (_) {}
+    if (!r.ok || d.ok === false) throw new Error(d.error || `HTTP ${r.status}`);
+    return d;
+  }
+
+  async function carregar() {
+    try { D = await api("/api/posvenda?dias=" + $("dias").value); }
+    catch (e) { $("carregando").hidden = true; $("erro").hidden = false; $("erro").textContent = "Não foi possível carregar: " + e.message; return; }
+    $("carregando").hidden = true; $("erro").hidden = true; $("conteudo").hidden = false;
+    desenhar();
+  }
+
+  function desenhar() {
+    const c = D.coleta, rc = c.reclamacoes || {}, pg = c.perguntas || {};
+    $("sub").textContent = `Mercado Livre · reclamações a cada ${D.regras.intervalo_min} min, perguntas a cada ${D.regras.perguntas_intervalo_min} min` +
+      (rc.em ? ` · última busca ${dataHora(rc.em)}` : "") + (c.rodando ? " · buscando agora…" : "");
+    const av = [];
+    if (rc.ok === false) av.push(`<b>Reclamações:</b> ${rc.sem_permissao ? "o aplicativo do Noromak no ML não tem a permissão de pós-venda (DevCenter → Permissões funcionais) — habilite e reconecte o ML em Integrações. " : ""}${esc(rc.erro || "")}`);
+    if (pg.ok === false) av.push(`<b>Perguntas:</b> ${pg.sem_permissao ? "falta a permissão de perguntas e respostas no aplicativo do ML. " : ""}${esc(pg.erro || "")}`);
+    if (!c.total_guardadas && rc.ok !== false) av.push(`Nenhuma reclamação guardada ainda. A primeira busca traz as dos últimos ${D.regras.historico_dias} dias e começa uns 2 minutos depois de o sistema subir (ou clique em "Buscar agora").`);
+    if (c.pendentes_detalhe) av.push(`${num(c.pendentes_detalhe)} reclamação(ões) ainda sem todos os detalhes: entram nas próximas buscas.`);
+    $("aviso").hidden = !av.length; $("aviso").innerHTML = av.join("<br>");
+    kpis(); abas(); mostrarAba();
+    notas();
+  }
+
+  function kpis() {
+    const urg = D.abertas.filter(a => a.horas_restantes != null && a.horas_restantes < D.regras.prazo_critico_horas).length;
+    const voce = D.abertas.filter(a => a.acao || a.responsavel === "seller").length;
+    const rel = D.relatorio, rep = D.reputacao[0];
+    const nv = rep && NIVEL[rep.nivel];
+    const k = (id, cls, ic, v, t) => `<button class="nk-kpi" data-aba="${id}"><span class="nk-kpi-ic ${cls}"><i class=${ic}></i></span><div><b>${v}</b><small>${esc(t)}</small></div></button>`;
+    $("kpis").innerHTML =
+      k("abertas", urg ? "bad" : voce ? "warn" : "ok", "nk-i-alert", num(D.abertas.length), `abertas · ${num(voce)} esperando você`) +
+      k("abertas", urg ? "bad" : "ok", "nk-i-alert", num(urg), `prazo em menos de ${D.regras.prazo_critico_horas} h`) +
+      k("perguntas", D.perguntas.length ? "warn" : "ok", "nk-i-mail", num(D.perguntas.length), "perguntas sem resposta") +
+      k("perdas", rel.perda ? "bad" : "", "nk-i-alert", brl(rel.perda), `perda em ${D.periodo.dias} dias` + (rel.incompletas ? ` · ${rel.incompletas} incompleta(s)` : "")) +
+      k("reputacao", nv ? "" : "", "nk-i-check", nv ? `<span style="color:${nv[0]}">●</span> ${nv[1]}` : "—", "reputação (termômetro)");
+    document.querySelectorAll("#kpis .nk-kpi").forEach(b => b.onclick = () => { aba = b.dataset.aba; abas(); mostrarAba(); });
+  }
+
+  function abas() {
+    const urg = D.abertas.filter(a => a.horas_restantes != null && a.horas_restantes < D.regras.prazo_critico_horas).length;
+    const L = [["abertas", "Reclamações abertas", D.abertas.length, urg], ["perguntas", "Perguntas", D.perguntas.length, D.perguntas.length],
+               ["perdas", "Perdas e devoluções", D.relatorio.reclamacoes, 0], ["reputacao", "Reputação", null, 0]];
+    $("abas").innerHTML = L.map(([id, t, n, alerta]) => `<button class="aba ${aba === id ? "on" : ""}" data-aba="${id}">${t}${n != null ? ` <span class="cont ${alerta ? "bad" : ""}">${num(n)}</span>` : ""}</button>`).join("");
+    document.querySelectorAll(".aba").forEach(b => b.onclick = () => { aba = b.dataset.aba; abas(); mostrarAba(); });
+  }
+
+  function mostrarAba() {
+    for (const id of ["abertas", "perguntas", "perdas", "reputacao"]) $("painel-" + id).hidden = id !== aba;
+    ({abertas: desenharAbertas, perguntas: desenharPerguntas, perdas: desenharPerdas, reputacao: desenharReputacao})[aba]();
+  }
+
+  function selo(cls, txt) { return `<span class="nk-selo ${cls}">${esc(txt)}</span>`; }
+  function prazoHTML(a) {
+    if (a.horas_restantes == null) return a.responsavel && a.responsavel !== "seller" ? `<span class="mini">vez do ${a.responsavel === "buyer" ? "comprador" : "ML"}</span>` : "—";
+    const cls = a.horas_restantes < D.regras.prazo_critico_horas ? "bad" : a.horas_restantes < 72 ? "warn" : "";
+    return `<span class="prazo ${cls}">${horasTxt(a.horas_restantes)}</span><div class="mini">${dataHora(a.prazo)}</div>`;
+  }
+  function anuncioHTML(a) {
+    return `${esc(a.titulo || "(anúncio não lido)")}<div class="mono">${a.order_id ? "Pedido " + esc(a.order_id) : "Reclamação " + esc(a.claim_id)}${a.sku ? " · SKU " + esc(a.sku) : ""}</div>`;
+  }
+  const filtra = a => !busca || [a.titulo, a.order_id, a.claim_id, a.sku, a.motivo].some(x => String(x || "").toLowerCase().includes(busca));
+  function barraBusca(alvo) {
+    return `<div class="barra"><input type="search" id="q-${alvo}" placeholder="Buscar pedido, SKU, anúncio ou motivo…" value="${esc(busca)}"></div>`;
+  }
+  function ligarBusca(alvo, redesenhar) {
+    const q = $("q-" + alvo); if (!q) return;
+    q.oninput = () => { busca = q.value.trim().toLowerCase(); const pos = q.selectionStart; redesenhar(); const n = $("q-" + alvo); n.focus(); n.setSelectionRange(pos, pos); };
+  }
+
+  function desenharAbertas() {
+    const L = D.abertas.filter(filtra);
+    $("painel-abertas").innerHTML = barraBusca("abertas") + (L.length ? `<div class="nk-tw"><table class="nk-tab" data-nk-tabela="reclamacoes_abertas"><thead><tr>
+      <th>Pedido / anúncio</th><th>Motivo</th><th>Situação</th><th>O que fazer</th><th>Prazo</th><th class="n">Valor</th><th>Reputação</th><th data-nk-sem-ordem></th></tr></thead><tbody>` +
+      L.map(a => `<tr><td class="txt">${anuncioHTML(a)}</td>
+        <td class="txt">${esc(a.motivo || a.motivo_id)}${a.problema ? `<div class="mini">${esc(a.problema)}</div>` : ""}</td>
+        <td>${selo(a.etapa === "dispute" ? "warn" : "info", ETAPA[a.etapa] || a.etapa)}${a.tem_devolucao ? `<div class="mini">Devolução: ${esc(DEV[a.devolucao_status] || a.devolucao_status || "—")}</div>` : ""}${a.titulo_ml ? `<div class="mini">${esc(a.titulo_ml)}</div>` : ""}</td>
+        <td class="txt"><b>${esc(a.acao_txt || (a.responsavel === "seller" ? "Ação do vendedor" : "—"))}</b></td>
+        <td>${prazoHTML(a)}</td>
+        <td class="n">${brl(a.pedido_total)}</td>
+        <td>${a.afeta_reputacao === "affected" ? selo("bad", "Afeta") : a.afeta_reputacao === "not_affected" ? selo("ok", "Não afeta") : "—"}</td>
+        <td>${a.order_id ? `<a class="nk-btn mini" href="${vendaML(a.order_id)}" target="_blank" rel="noopener">Abrir no ML</a>` : ""}</td></tr>`).join("") + `</tbody></table></div>`
+      : `<div class="nk-vazio">${D.abertas.length ? "Nenhuma reclamação aberta com essa busca." : "Nenhuma reclamação aberta. 🎉"}</div>`);
+    ligarBusca("abertas", desenharAbertas);
+  }
+
+  function desenharPerguntas() {
+    const r = D.perguntas_resumo;
+    const cab = `<p class="mini" style="margin:0 0 10px">Respondidas nos últimos 30 dias: <b>${num(r.respondidas_30d)}</b>${r.mediana_horas != null ? ` · metade delas em até <b>${horasTxt(r.mediana_horas)}</b>` : ""}. A resposta vai direto para o anúncio no Mercado Livre e fica registrada com o seu usuário.</p>`;
+    if (!D.perguntas.length) { $("painel-perguntas").innerHTML = cab + `<div class="nk-vazio">Nenhuma pergunta sem resposta.</div>`; return; }
+    $("painel-perguntas").innerHTML = cab + `<div class="perguntas">` + D.perguntas.map(p => `<div class="pg ${p.horas_esperando > 12 ? "velha" : ""}" data-id="${esc(p.pergunta_id)}">
+      <div class="pg-top"><div class="mini">${p.item_titulo ? esc(p.item_titulo) + " " : ""}<span class="mono">${esc(p.item_id)}</span></div>
+        <div class="mini">há ${horasTxt(p.horas_esperando)} · ${dataHora(p.criada_em)}</div></div>
+      <div class="pg-q">${esc(p.texto)}</div>
+      <textarea maxlength="${D.regras.resposta_max}" placeholder="Escreva a resposta…"></textarea>
+      <div class="pg-acoes"><span class="mini cont">0 / ${D.regras.resposta_max}</span>
+        <span><a class="nk-btn mini" href="https://produto.mercadolivre.com.br/${esc(String(p.item_id).replace("MLB", "MLB-"))}" target="_blank" rel="noopener">Ver anúncio</a>
+        <button class="nk-btn pri mini responder" disabled>Responder</button></span></div></div>`).join("") + `</div>`;
+    document.querySelectorAll(".pg").forEach(el => {
+      const ta = el.querySelector("textarea"), bt = el.querySelector(".responder"), ct = el.querySelector(".cont");
+      ta.oninput = () => { ct.textContent = `${ta.value.length} / ${D.regras.resposta_max}`; bt.disabled = !ta.value.trim(); };
+      bt.onclick = async () => {
+        bt.disabled = true; bt.textContent = "Enviando…";
+        try {
+          await api("/api/posvenda/responder", {method:"POST", body: JSON.stringify({pergunta_id: el.dataset.id, texto: ta.value})});
+          nkToast("Resposta enviada ao Mercado Livre.", "ok");
+          D.perguntas = D.perguntas.filter(p => String(p.pergunta_id) !== el.dataset.id);
+          D.perguntas_resumo.respondidas_30d += 1;
+          kpis(); abas(); desenharPerguntas();
+        } catch (e) { nkToast("Não foi possível responder: " + e.message, "erro"); bt.disabled = false; bt.textContent = "Responder"; }
+      };
+    });
+  }
+
+  function linhasGrupo(L, primeira) {
+    return L.map(g => `<tr><td class="txt">${esc(g.rotulo)}</td><td class="n">${num(g.reclamacoes)}</td><td class="n">${num(g.devolucoes)}</td>
+      <td class="n">${brl(g.frete_devolucao)}</td><td class="n">${brl(g.produto_perdido)}</td><td class="n">${brl(g.reembolso_parcial)}</td>
+      <td class="n"><b>${brl(g.perda)}</b>${g.incompletas ? ` <span class="inc" title="sem todos os valores">+${g.incompletas}?</span>` : ""}</td></tr>`).join("");
+  }
+  const cabGrupo = t => `<thead><tr><th>${t}</th><th class="n">Reclam.</th><th class="n">Devol.</th><th class="n">Frete devol.</th><th class="n">Produto perdido</th><th class="n">Reemb. parcial</th><th class="n">Perda</th></tr></thead>`;
+
+  function desenharPerdas() {
+    const r = D.relatorio;
+    const card = (t, v, dest, sub) => `<div class="perda ${dest ? "dest" : ""}"><small>${esc(t)}</small><b>${v}</b>${sub ? `<div class="mini">${sub}</div>` : ""}</div>`;
+    const L = r.itens.filter(filtra);
+    $("painel-perdas").innerHTML = `<div class="perda-grade">
+        ${card("Perda no período", brl(r.perda), true, `${pct(r.perda_sobre_faturamento)} do faturamento ML (${brl(r.faturamento_ml)})`)}
+        ${card("Frete de devolução", brl(r.frete_devolucao), false, "cobrado pelo ML")}
+        ${card("Produto perdido", brl(r.produto_perdido), false, "custo do que não voltou ou voltou sem condição")}
+        ${card("Reembolso parcial", brl(r.reembolso_parcial), false, "comprador ficou com o produto")}
+        ${card("Vendas desfeitas", brl(r.venda_desfeita), false, "dinheiro devolvido ao comprador")}
+        ${card("Reclamações", num(r.reclamacoes), false, `${num(r.devolucoes)} com devolução · ${pct(r.taxa_reclamacao)} dos ${num(r.pedidos_ml)} pedidos · ${num(r.em_aberto)} em aberto`)}
+      </div>
+      ${r.incompletas ? `<div class="nk-aviso" style="margin-bottom:14px">${num(r.incompletas)} reclamação(ões) fechada(s) sem todos os valores (frete da devolução, reembolso, custo do produto ou situação do produto): ficam fora da soma até o dado chegar. Veja a coluna "Falta" na lista.</div>` : ""}
+      <div class="duas">
+        <div><p class="sub-tit">Por mês</p><div class="nk-tw"><table class="nk-tab" data-nk-tabela="perdas_por_mes">${cabGrupo("Mês")}<tbody>${linhasGrupo(r.por_mes) || `<tr><td colspan="7" class="nk-vazio">Sem reclamações no período.</td></tr>`}</tbody></table></div></div>
+        <div><p class="sub-tit">Por motivo</p><div class="nk-tw"><table class="nk-tab" data-nk-tabela="perdas_por_motivo">${cabGrupo("Motivo")}<tbody>${linhasGrupo(r.por_motivo) || `<tr><td colspan="7" class="nk-vazio">—</td></tr>`}</tbody></table></div></div>
+      </div>
+      <p class="sub-tit">Por anúncio (os 30 que mais perderam)</p>
+      <div class="nk-tw" style="margin-bottom:14px"><table class="nk-tab" data-nk-tabela="perdas_por_anuncio">${cabGrupo("Anúncio")}<tbody>${linhasGrupo(r.por_anuncio.slice(0, 30)) || `<tr><td colspan="7" class="nk-vazio">—</td></tr>`}</tbody></table></div>
+      <p class="sub-tit">Todas as reclamações do período</p>
+      ${barraBusca("perdas")}
+      <div class="nk-tw"><table class="nk-tab" data-nk-tabela="reclamacoes_periodo"><thead><tr><th>Aberta</th><th>Pedido / anúncio</th><th>Motivo</th><th>Como terminou</th><th>Produto</th>
+        <th class="n">Venda</th><th class="n">Devolvido</th><th class="n">Frete devol.</th><th class="n">Produto perdido</th><th class="n">Reemb. parcial</th><th class="n">Perda</th><th>Falta</th></tr></thead><tbody>` +
+      (L.map(a => { const p = PRODUTO[a.produto] || ["", a.produto || "—"]; return `<tr><td>${dataBR(a.aberta_em)}</td><td class="txt">${anuncioHTML(a)}</td>
+        <td class="txt">${esc(a.motivo || a.motivo_id)}</td>
+        <td class="txt">${a.status === "opened" ? selo("info", "Em aberto") : esc(a.resolucao_txt || "—")}${a.cobertura === 1 ? `<div class="mini">Coberto pelo ML</div>` : ""}${a.tem_devolucao ? `<div class="mini">Devolução: ${esc(DEV[a.devolucao_status] || a.devolucao_status || "—")}</div>` : ""}</td>
+        <td>${p[0] ? selo(p[0], p[1]) : esc(p[1])}</td>
+        <td class="n">${brl(a.pedido_total)}</td><td class="n">${brl(a.venda_desfeita)}</td><td class="n">${brl(a.frete_devolucao)}</td>
+        <td class="n">${brl(a.produto_perdido)}</td><td class="n">${brl(a.reembolso_parcial)}</td><td class="n"><b>${brl(a.perda)}</b></td>
+        <td class="mini">${esc((a.pendente || []).join(", ")) || (a.erro ? `<span title="${esc(a.erro)}">erro na leitura</span>` : "")}</td></tr>`; }).join("")
+        || `<tr><td colspan="12" class="nk-vazio">Nenhuma reclamação no período.</td></tr>`) + `</tbody></table></div>`;
+    ligarBusca("perdas", desenharPerdas);
+  }
+
+  function desenharReputacao() {
+    const R = D.reputacao;
+    if (!R.length) { $("painel-reputacao").innerHTML = `<div class="nk-vazio">A reputação ainda não foi lida. Ela é atualizada a cada ${D.regras.intervalo_min} min.</div>`; return; }
+    const a = R[0];
+    const ordem = ["1_red", "2_orange", "3_yellow", "4_light_green", "5_green"];
+    const taxa = v => v == null ? "—" : pct(v * 100);
+    $("painel-reputacao").innerHTML = `<div class="termo">${ordem.map(n => `<i class="${a.nivel === n ? "on" : ""}" style="background:${NIVEL[n][0]}"></i>`).join("")}</div>
+      <p style="margin:0 0 12px"><b>${esc((NIVEL[a.nivel] || ["", a.nivel || "Sem cor"])[1])}</b>${a.mercado_lider ? ` · MercadoLíder ${esc(a.mercado_lider)}` : ""} · ${num(a.vendas_periodo)} vendas concluídas (${esc(a.periodo || "período do ML")}) · lido ${dataHora(a.atualizado_em)}</p>
+      <div class="perda-grade">
+        <div class="perda"><small>Reclamações</small><b>${taxa(a.reclamacoes_taxa)}</b><div class="mini">${num(a.reclamacoes_qtd)} no período do ML</div></div>
+        <div class="perda"><small>Envios com atraso</small><b>${taxa(a.atrasos_taxa)}</b><div class="mini">${num(a.atrasos_qtd)} no período do ML</div></div>
+        <div class="perda"><small>Cancelamentos</small><b>${taxa(a.cancelamentos_taxa)}</b><div class="mini">${num(a.cancelamentos_qtd)} no período do ML</div></div>
+      </div>
+      <p class="sub-tit">Dia a dia (último retrato de cada dia)</p>
+      <div class="nk-tw"><table class="nk-tab" data-nk-tabela="reputacao_dia"><thead><tr><th>Dia</th><th>Cor</th><th class="n">Reclamações</th><th class="n">Atrasos</th><th class="n">Cancelamentos</th><th class="n">Vendas</th></tr></thead><tbody>` +
+      R.map(r => `<tr><td>${r.dia.split("-").reverse().join("/")}</td><td>${NIVEL[r.nivel] ? `<span style="color:${NIVEL[r.nivel][0]}">●</span> ${NIVEL[r.nivel][1]}` : esc(r.nivel || "—")}</td>
+        <td class="n">${taxa(r.reclamacoes_taxa)}</td><td class="n">${taxa(r.atrasos_taxa)}</td><td class="n">${taxa(r.cancelamentos_taxa)}</td><td class="n">${num(r.vendas_periodo)}</td></tr>`).join("") + `</tbody></table></div>`;
+  }
+
+  function notas() {
+    $("notas").innerHTML = `<b>Como é calculado</b><ul>
+      <li><b>Reclamações abertas</b>: as do Mercado Livre em que a loja é a parte reclamada. <b>Prazo</b> é o da ação obrigatória do vendedor. Menos de ${D.regras.prazo_critico_horas} h vira alerta por e-mail no Painel de saúde. Responder reclamação continua no ML ("Abrir no ML").</li>
+      <li><b>Perda</b> = frete da devolução cobrado pelo ML + custo do produto que não voltou (ou voltou sem condição de venda, pela triagem do ML) + reembolso parcial quando o comprador ficou com o produto. Produto que voltou bom não é perda: o dinheiro volta ao comprador e a peça volta ao estoque.</li>
+      <li><b>Vendas desfeitas</b> = dinheiro devolvido ao comprador (não conta quando o ML cobriu ou quando o vendedor ganhou). Mostra o tamanho do problema, mas não é perda: a venda simplesmente não aconteceu.</li>
+      <li>O <b>custo do produto</b> segue a mesma regra do Financeiro (Precificador/Apollo, kit = soma dos componentes). Nada é estimado: valor que o ML não informou fica em branco e a reclamação aparece como incompleta.</li>
+      <li>Não entra: a tarifa de venda e o frete de ida (o ML estorna a tarifa quando devolve o dinheiro, e isso já aparece na fatura do Financeiro). Só Mercado Livre por enquanto.</li></ul>`;
+  }
+
+  $("dias").onchange = carregar;
+  $("buscar").onclick = async () => {
+    $("buscar").disabled = true;
+    try { await api("/api/posvenda/sincronizar", {method:"POST", body:"{}"}); nkToast("Buscando no Mercado Livre. A tela atualiza sozinha em 1 minuto.", "info"); setTimeout(carregar, 60000); }
+    catch (e) { nkToast("Não foi possível buscar: " + e.message, "erro"); }
+    setTimeout(() => { $("buscar").disabled = false; }, 60000);
+  };
+  carregar();
+  setInterval(() => { if (!document.hidden && aba !== "perguntas") carregar(); }, 5 * 60 * 1000);
+})();
+</script>
+</body>
+</html>

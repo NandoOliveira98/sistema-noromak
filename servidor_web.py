@@ -43,7 +43,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "18.87-MENU-ABA-NOVA"
+APP_VERSION = "18.88-POS-VENDA-ML"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -2239,6 +2239,7 @@ def init_db() -> None:
     ensure_linx_operacoes_schema()  # V18.60
     ensure_linx_robo_schema()  # V18.60
     ensure_saude_schema()  # V18.83
+    ensure_posvenda_schema()  # V18.88
     migrate_legacy_if_empty()
     ensure_storage_defaults()
     seed_sku_state_from_storage()
@@ -15490,6 +15491,907 @@ def ml_visitas_loop(stop_event: threading.Event) -> None:
             break
 
 
+# ---------------------------------------------------------------------------
+# V18.88: Pós-venda do Mercado Livre — reclamações, devoluções, perguntas e reputação.
+#
+# Reclamações: /post-purchase/v1/claims/search (players.role=respondent +
+# players.user_id = o vendedor; status=opened, e range=last_updated para pegar as
+# que mudaram/fecharam). Cada reclamação nova ou alterada ganha os detalhes: prazo e
+# responsável (/detail), se afeta a reputação, o pedido (/orders: valor e reembolso),
+# a devolução (/post-purchase/v2/claims/{id}/returns: situação, se o produto voltou,
+# a revisão da triagem) e o frete da devolução cobrado do vendedor
+# (/charges/return-cost). Só LEITURA no ML: responder reclamação continua no ML
+# (decisão do dono, 09/10). Perguntas: lista as sem resposta e responde pelo
+# Noromak (POST /answers), registrado no audit_log com o usuário.
+#
+# Perda (relatório): só com o que o ML informa, nada estimado — o que falta fica
+# nulo e a reclamação aparece como "incompleta". Ver _posvenda_valores().
+# ---------------------------------------------------------------------------
+POSVENDA_INTERVALO = 900            # reclamações e reputação: a cada 15 min
+POSVENDA_PERGUNTAS_INTERVALO = 300  # perguntas: a cada 5 min
+POSVENDA_HISTORICO_DIAS = 180       # primeira carga: reclamações abertas nos últimos 180 dias
+POSVENDA_DETALHES_POR_RODADA = 150  # o resto fica para a próxima rodada
+POSVENDA_REVISITAR_ABERTA = 3600    # reclamação aberta: relê o prazo de hora em hora
+POSVENDA_PAUSA = 0.3
+POSVENDA_PRAZO_CRITICO_H = 24       # Painel de saúde: prazo do vendedor em menos de 24 h = crítico
+POSVENDA_PERGUNTAS_GUARDAR_DIAS = 90
+POSVENDA_RESPOSTA_MAX = 2000        # limite de caracteres do ML para a resposta
+POSVENDA_LOCK = threading.Lock()
+_POSVENDA_ESTADO: dict[str, Any] = {"rodando": False, "inicio": "", "fim": "", "ultimo": {},
+                                    "perguntas": {}, "reputacao_em": 0.0}
+
+# Motivos de encerramento (resolution.reason) mais comuns, para a tela.
+POSVENDA_RESOLUCAO_TXT = {
+    "payment_refunded": "Dinheiro devolvido ao comprador", "partial_refunded": "Reembolso parcial",
+    "item_returned": "Produto devolvido", "reimbursed": "Reembolsado", "coverage_decision": "Coberto pelo ML",
+    "no_bpp": "Sem cobertura do ML", "respondent_timeout": "Vendedor não respondeu a tempo",
+    "prefered_to_keep_product": "Comprador ficou com o produto", "low_cost": "Devolução não compensava (baixo custo)",
+    "return_canceled": "Devolução cancelada pelo comprador", "return_expired": "Devolução expirou",
+    "opened_claim_by_mistake": "Aberta por engano", "worked_out_with_seller": "Resolvida com o vendedor",
+    "seller_sent_product": "Vendedor enviou o produto", "already_shipped": "Produto a caminho",
+    "not_delivered": "Produto não entregue", "found_missing_parts": "Comprador achou as peças",
+    "seller_explained_functions": "Vendedor explicou o funcionamento", "timeout": "Comprador não agiu a tempo",
+    "charged_back": "Contestação no cartão", "item_changed": "Troca feita",
+}
+POSVENDA_ACAO_TXT = {
+    "send_message_to_complainant": "Responder ao comprador", "send_message_to_mediator": "Responder ao mediador",
+    "refund": "Devolver o dinheiro", "allow_return": "Aceitar a devolução", "allow_return_label": "Aceitar a devolução",
+    "allow_partial_refund": "Oferecer reembolso parcial", "open_dispute": "Pedir mediação",
+    "send_potential_shipping": "Informar data de envio", "add_shipping_evidence": "Enviar comprovante de envio",
+    "send_tracking_number": "Enviar código de rastreio", "return_review": "Revisar o produto devolvido",
+    "return_review_ok": "Revisar o produto devolvido", "return_review_fail": "Revisar o produto devolvido",
+    "send_attachments": "Enviar anexos",
+}
+
+
+def ensure_posvenda_schema() -> None:
+    with DB_LOCK:
+        DB.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS ml_reclamacao_v1888 (
+                claim_id TEXT PRIMARY KEY,
+                order_id TEXT NOT NULL DEFAULT '',
+                recurso TEXT NOT NULL DEFAULT '',
+                tipo TEXT NOT NULL DEFAULT '',
+                etapa TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT '',
+                motivo_id TEXT NOT NULL DEFAULT '',
+                entregue INTEGER,
+                aberta_em TEXT NOT NULL DEFAULT '',
+                atualizada_ml TEXT NOT NULL DEFAULT '',
+                fechada_em TEXT NOT NULL DEFAULT '',
+                resolucao TEXT NOT NULL DEFAULT '',
+                beneficiado TEXT NOT NULL DEFAULT '',
+                fechada_por TEXT NOT NULL DEFAULT '',
+                cobertura INTEGER,
+                acao TEXT NOT NULL DEFAULT '',
+                prazo TEXT NOT NULL DEFAULT '',
+                prazo_detalhe TEXT NOT NULL DEFAULT '',
+                responsavel TEXT NOT NULL DEFAULT '',
+                titulo_ml TEXT NOT NULL DEFAULT '',
+                problema TEXT NOT NULL DEFAULT '',
+                afeta_reputacao TEXT NOT NULL DEFAULT '',
+                tem_devolucao INTEGER NOT NULL DEFAULT 0,
+                devolucao_status TEXT NOT NULL DEFAULT '',
+                devolucao_subtipo TEXT NOT NULL DEFAULT '',
+                devolucao_destino TEXT NOT NULL DEFAULT '',
+                dinheiro_status TEXT NOT NULL DEFAULT '',
+                produto_condicao TEXT NOT NULL DEFAULT '',
+                frete_devolucao REAL,
+                pedido_total REAL,
+                reembolsado REAL,
+                itens_json TEXT NOT NULL DEFAULT '[]',
+                precisa_detalhe INTEGER NOT NULL DEFAULT 1,
+                detalhado_em TEXT NOT NULL DEFAULT '',
+                erro TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_ml_reclamacao_status ON ml_reclamacao_v1888(status);
+            CREATE INDEX IF NOT EXISTS idx_ml_reclamacao_aberta ON ml_reclamacao_v1888(aberta_em);
+            CREATE TABLE IF NOT EXISTS ml_reclamacao_motivo_v1888 (
+                motivo_id TEXT PRIMARY KEY,
+                nome TEXT NOT NULL DEFAULT '',
+                detalhe TEXT NOT NULL DEFAULT '',
+                buscado_em TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS ml_pergunta_v1888 (
+                pergunta_id TEXT PRIMARY KEY,
+                item_id TEXT NOT NULL DEFAULT '',
+                texto TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT '',
+                criada_em TEXT NOT NULL DEFAULT '',
+                comprador_id TEXT NOT NULL DEFAULT '',
+                resposta TEXT NOT NULL DEFAULT '',
+                respondida_em TEXT NOT NULL DEFAULT '',
+                respondida_por TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_ml_pergunta_status ON ml_pergunta_v1888(status);
+            CREATE TABLE IF NOT EXISTS ml_reputacao_dia_v1888 (
+                dia TEXT PRIMARY KEY,
+                nivel TEXT NOT NULL DEFAULT '',
+                mercado_lider TEXT NOT NULL DEFAULT '',
+                vendas_periodo INTEGER,
+                periodo TEXT NOT NULL DEFAULT '',
+                reclamacoes_taxa REAL,
+                reclamacoes_qtd INTEGER,
+                atrasos_taxa REAL,
+                atrasos_qtd INTEGER,
+                cancelamentos_taxa REAL,
+                cancelamentos_qtd INTEGER,
+                atualizado_em TEXT NOT NULL DEFAULT ''
+            );
+            """
+        )
+        DB.commit()
+
+
+def _posvenda_iso_ml(dt: datetime) -> str:
+    """Data no formato que a busca de reclamações exige (com milissegundos)."""
+    return dt.astimezone(BR_TZ).strftime("%Y-%m-%dT%H:%M:%S.000-03:00")
+
+
+def _posvenda_dt(valor: Any) -> datetime | None:
+    texto = str(valor or "").strip()
+    if not texto:
+        return None
+    try:
+        dt = datetime.fromisoformat(texto.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return dt if dt.tzinfo else dt.replace(tzinfo=BR_TZ)
+
+
+def _posvenda_float(valor: Any) -> float | None:
+    if isinstance(valor, bool) or valor is None or valor == "":
+        return None
+    try:
+        return float(valor)
+    except (TypeError, ValueError):
+        return None
+
+
+def _posvenda_vendedor(claim: dict[str, Any]) -> dict[str, Any]:
+    for p in claim.get("players") or []:
+        if isinstance(p, dict) and (p.get("role") == "respondent" or p.get("type") == "seller"):
+            return p
+    return {}
+
+
+def _posvenda_acao_vendedor(claim: dict[str, Any]) -> tuple[str, str]:
+    """(ação, prazo) que o vendedor precisa cumprir: a obrigatória com o prazo mais curto."""
+    melhor: tuple[str, str] = ("", "")
+    for a in _posvenda_vendedor(claim).get("available_actions") or []:
+        if not isinstance(a, dict) or not a.get("mandatory"):
+            continue
+        prazo = str(a.get("due_date") or "")
+        if not melhor[0] or (prazo and (not melhor[1] or prazo < melhor[1])):
+            melhor = (str(a.get("action") or ""), prazo)
+    return melhor
+
+
+def _posvenda_prazo(r: dict[str, Any]) -> str:
+    """Prazo do vendedor: o da ação obrigatória (busca); sem ela, o do detalhe quando a
+    vez é do vendedor. Guardados em colunas separadas para a busca não apagar o do detalhe."""
+    if r.get("prazo"):
+        return str(r["prazo"])
+    if r.get("responsavel") == "seller" and r.get("prazo_detalhe"):
+        return str(r["prazo_detalhe"])
+    return ""
+
+
+def _posvenda_base_da_busca(claim: dict[str, Any]) -> dict[str, Any]:
+    """Campos que a própria busca já traz."""
+    res = claim.get("resolution") if isinstance(claim.get("resolution"), dict) else {}
+    acao, prazo = _posvenda_acao_vendedor(claim)
+    recurso = str(claim.get("resource") or "")
+    relacionados = [str(x) for x in (claim.get("related_entities") or [])]
+    tipo = str(claim.get("type") or "")
+    entregue = claim.get("fulfilled")
+    return {
+        "claim_id": str(claim.get("id") or ""),
+        "order_id": str(claim.get("resource_id") or "") if recurso == "order" else "",
+        "recurso": recurso,
+        "tipo": tipo,
+        "etapa": str(claim.get("stage") or ""),
+        "status": str(claim.get("status") or ""),
+        "motivo_id": str(claim.get("reason_id") or ""),
+        "entregue": None if entregue is None else (1 if entregue else 0),
+        "aberta_em": str(claim.get("date_created") or ""),
+        "atualizada_ml": str(claim.get("last_updated") or ""),
+        "fechada_em": str(res.get("date_created") or "") if res else "",
+        "resolucao": str(res.get("reason") or "") if res else "",
+        "beneficiado": ",".join(str(x) for x in (res.get("benefited") or [])) if res else "",
+        "fechada_por": str(res.get("closed_by") or "") if res else "",
+        "cobertura": (1 if res.get("applied_coverage") else 0) if res and res.get("applied_coverage") is not None else None,
+        "acao": acao,
+        "prazo": prazo,
+        "tem_devolucao": 1 if ("return" in relacionados or tipo in ("return", "returns")) else 0,
+    }
+
+
+def _posvenda_gravar_base(base: dict[str, Any]) -> bool:
+    """Grava/atualiza a reclamação. Devolve True quando é nova ou mudou no ML."""
+    agora = now_iso()
+    with DB_LOCK:
+        atual = DB.execute("SELECT atualizada_ml, status, detalhado_em FROM ml_reclamacao_v1888 WHERE claim_id=?",
+                           (base["claim_id"],)).fetchone()
+        mudou = atual is None or str(atual["atualizada_ml"]) != base["atualizada_ml"] or str(atual["status"]) != base["status"]
+        if atual is None:
+            DB.execute(
+                "INSERT INTO ml_reclamacao_v1888(claim_id,order_id,recurso,tipo,etapa,status,motivo_id,entregue,aberta_em,"
+                "atualizada_ml,fechada_em,resolucao,beneficiado,fechada_por,cobertura,acao,prazo,tem_devolucao,"
+                "precisa_detalhe,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?)",
+                (base["claim_id"], base["order_id"], base["recurso"], base["tipo"], base["etapa"], base["status"],
+                 base["motivo_id"], base["entregue"], base["aberta_em"], base["atualizada_ml"], base["fechada_em"],
+                 base["resolucao"], base["beneficiado"], base["fechada_por"], base["cobertura"], base["acao"],
+                 base["prazo"], base["tem_devolucao"], agora))
+        else:
+            DB.execute(
+                "UPDATE ml_reclamacao_v1888 SET order_id=CASE WHEN ?<>'' THEN ? ELSE order_id END,recurso=?,tipo=?,etapa=?,"
+                "status=?,motivo_id=?,entregue=?,aberta_em=?,atualizada_ml=?,fechada_em=?,resolucao=?,beneficiado=?,"
+                "fechada_por=?,cobertura=?,acao=?,prazo=?,tem_devolucao=MAX(tem_devolucao,?),"
+                "precisa_detalhe=CASE WHEN ? THEN 1 ELSE precisa_detalhe END,updated_at=? WHERE claim_id=?",
+                (base["order_id"], base["order_id"], base["recurso"], base["tipo"], base["etapa"], base["status"],
+                 base["motivo_id"], base["entregue"], base["aberta_em"], base["atualizada_ml"], base["fechada_em"],
+                 base["resolucao"], base["beneficiado"], base["fechada_por"], base["cobertura"], base["acao"],
+                 base["prazo"], base["tem_devolucao"], 1 if mudou else 0, agora, base["claim_id"]))
+        DB.commit()
+    return mudou
+
+
+def _posvenda_pedido_valores(order: dict[str, Any]) -> dict[str, Any]:
+    """Valor da venda, quanto foi devolvido ao comprador e os itens (SKU, qtd, preço)."""
+    itens = []
+    total_itens = 0.0
+    for oi in order.get("order_items") or []:
+        if not isinstance(oi, dict):
+            continue
+        item = oi.get("item") if isinstance(oi.get("item"), dict) else {}
+        qtd = _posvenda_float(oi.get("quantity")) or 0.0
+        preco = _posvenda_float(oi.get("unit_price")) or 0.0
+        total_itens += qtd * preco
+        itens.append({"item_id": str(item.get("id") or ""), "titulo": str(item.get("title") or ""),
+                      "sku": str(item.get("seller_sku") or item.get("seller_custom_field") or ""),
+                      "qtd": qtd, "preco": preco})
+    total = _posvenda_float(order.get("total_amount"))
+    if total is None and itens:
+        total = round(total_itens, 2)
+    reembolsado: float | None = None
+    pagamentos = [p for p in (order.get("payments") or []) if isinstance(p, dict)]
+    if pagamentos:
+        reembolsado = round(sum(_posvenda_float(p.get("transaction_amount_refunded")) or 0.0 for p in pagamentos), 2)
+    return {"pedido_total": total, "reembolsado": reembolsado, "itens": itens}
+
+
+def _posvenda_motivo(motivo_id: str) -> None:
+    """Nome do motivo (PDD/PNR...), uma vez por motivo."""
+    if not motivo_id:
+        return
+    with DB_LOCK:
+        if DB.execute("SELECT 1 FROM ml_reclamacao_motivo_v1888 WHERE motivo_id=?", (motivo_id,)).fetchone():
+            return
+    try:
+        r = ml_api_get(f"/post-purchase/v1/claims/reasons/{quote(motivo_id)}")
+    except Exception:
+        return
+    if not isinstance(r, dict):
+        return
+    with DB_LOCK:
+        DB.execute("INSERT OR REPLACE INTO ml_reclamacao_motivo_v1888(motivo_id,nome,detalhe,buscado_em) VALUES(?,?,?,?)",
+                   (motivo_id, str(r.get("name") or ""), str(r.get("detail") or ""), now_iso()))
+        DB.commit()
+
+
+def _posvenda_detalhar(claim_id: str) -> dict[str, Any]:
+    """Busca no ML os detalhes de uma reclamação. Cada parte que falha fica em branco
+    (desconhecido nunca vira zero) e o erro é guardado na linha."""
+    with DB_LOCK:
+        r = DB.execute("SELECT * FROM ml_reclamacao_v1888 WHERE claim_id=?", (claim_id,)).fetchone()
+    if r is None:
+        return {"ok": False, "erro": "reclamação não encontrada"}
+    row = dict(r)
+    upd: dict[str, Any] = {}
+    erros: list[str] = []
+    aberta = row["status"] == "opened"
+    cid = quote(claim_id)
+
+    def tentar(nome: str, funcao: Any) -> Any:
+        try:
+            return funcao()
+        except Exception as exc:
+            msg = str(exc)
+            # 404 = o ML não tem esse dado para a reclamação (sem devolução, sem custo...)
+            if "HTTP 404" not in msg:
+                erros.append(f"{nome}: {msg[:160]}")
+            return None
+
+    if aberta:
+        det = tentar("detalhe", lambda: ml_api_get(f"/post-purchase/v1/claims/{cid}/detail"))
+        if isinstance(det, dict):
+            upd["responsavel"] = str(det.get("action_responsible") or "")
+            upd["titulo_ml"] = str(det.get("title") or "")
+            upd["problema"] = str(det.get("problem") or "")
+            upd["prazo_detalhe"] = str(det.get("due_date") or "")
+        rep = tentar("reputação", lambda: ml_api_get(f"/post-purchase/v1/claims/{cid}/affects-reputation"))
+        if isinstance(rep, dict):
+            upd["afeta_reputacao"] = str(rep.get("affects_reputation") or "")
+    _posvenda_motivo(row["motivo_id"])
+
+    order_id = row["order_id"]
+    if row["tem_devolucao"]:
+        dev = tentar("devolução", lambda: ml_api_get(f"/post-purchase/v2/claims/{cid}/returns"))
+        if isinstance(dev, dict) and dev:
+            upd["devolucao_status"] = str(dev.get("status") or "")
+            upd["devolucao_subtipo"] = str(dev.get("subtype") or "")
+            upd["dinheiro_status"] = str(dev.get("status_money") or "")
+            destinos = [str(((s.get("destination") or {}).get("name")) or "") for s in (dev.get("shipments") or [])
+                        if isinstance(s, dict) and s.get("type") == "return"]
+            upd["devolucao_destino"] = destinos[0] if destinos else ""
+            if not order_id:
+                pedidos = [o for o in (dev.get("orders") or []) if isinstance(o, dict) and o.get("order_id")]
+                if pedidos:
+                    order_id = upd["order_id"] = str(pedidos[0]["order_id"])
+            if "reviews" in [str(x) for x in (dev.get("related_entities") or [])] and dev.get("id"):
+                rev = tentar("revisão", lambda: ml_api_get(f"/post-purchase/v1/returns/{quote(str(dev['id']))}/reviews"))
+                for rv in (rev or {}).get("reviews") or [] if isinstance(rev, dict) else []:
+                    for rr in rv.get("resource_reviews") or []:
+                        if isinstance(rr, dict) and rr.get("product_condition"):
+                            upd["produto_condicao"] = str(rr["product_condition"])
+        custo = tentar("frete da devolução", lambda: ml_api_get(f"/post-purchase/v1/claims/{cid}/charges/return-cost"))
+        if isinstance(custo, dict) and _posvenda_float(custo.get("amount")) is not None:
+            upd["frete_devolucao"] = round(float(custo["amount"]), 2)
+    if order_id:
+        order = tentar("pedido", lambda: ml_api_get(f"/orders/{quote(order_id)}"))
+        if isinstance(order, dict) and order:
+            v = _posvenda_pedido_valores(order)
+            upd["pedido_total"] = v["pedido_total"]
+            upd["reembolsado"] = v["reembolsado"]
+            upd["itens_json"] = json_dumps(v["itens"])
+    upd["erro"] = "; ".join(erros)[:600]
+    upd["detalhado_em"] = now_iso()
+    upd["precisa_detalhe"] = 0
+    upd["updated_at"] = now_iso()
+    with DB_LOCK:
+        DB.execute(f"UPDATE ml_reclamacao_v1888 SET {', '.join(k + '=?' for k in upd)} WHERE claim_id=?",
+                   tuple(upd.values()) + (claim_id,))
+        DB.commit()
+    return {"ok": not erros, "erros": erros}
+
+
+def _posvenda_buscar(seller_id: str, filtros: dict[str, str], stop_event: threading.Event | None = None,
+                     maximo: int = 3000) -> list[dict[str, Any]]:
+    achados: list[dict[str, Any]] = []
+    offset = 0
+    while offset < maximo:
+        params = {"players.role": "respondent", "players.user_id": seller_id, "limit": "100", "offset": str(offset),
+                  "sort": "last_updated:desc", **filtros}
+        r = ml_api_get("/post-purchase/v1/claims/search?" + urlencode(params))
+        dados = (r.get("data") if isinstance(r, dict) else None) or []
+        achados += [c for c in dados if isinstance(c, dict) and c.get("id")]
+        total = int(((r.get("paging") or {}).get("total") or 0) if isinstance(r, dict) else 0)
+        offset += 100
+        if not dados or offset >= total or offset + 100 >= 10000:
+            break
+        if stop_event is not None and stop_event.wait(POSVENDA_PAUSA):
+            break
+    return achados
+
+
+def posvenda_reclamacoes_rodada(stop_event: threading.Event | None = None, *, agora: datetime | None = None,
+                                pausa: float | None = None) -> dict[str, Any]:
+    """Busca as reclamações abertas e as que mudaram, e detalha as novas/alteradas."""
+    if not POSVENDA_LOCK.acquire(blocking=False):
+        return {"ok": True, "pulado": "já está rodando"}
+    pausa = POSVENDA_PAUSA if pausa is None else pausa
+    agora = agora or datetime.now(timezone.utc)
+    try:
+        _POSVENDA_ESTADO.update(rodando=True, inicio=now_iso(), fim="")
+        linha = ml_integration_row()
+        if not linha or not str(linha["access_token"] or "").strip():
+            resultado = {"ok": True, "pulado": "Mercado Livre não conectado"}
+            _POSVENDA_ESTADO["ultimo"] = resultado
+            return resultado
+        seller_id = str(linha["seller_id"] or "")
+        with DB_LOCK:
+            ultima = DB.execute("SELECT MAX(atualizada_ml) AS m FROM ml_reclamacao_v1888").fetchone()["m"]
+        try:
+            achados = _posvenda_buscar(seller_id, {"status": "opened"}, stop_event)
+            ultima_dt = _posvenda_dt(ultima)
+            if ultima_dt is None:
+                desde = agora - timedelta(days=POSVENDA_HISTORICO_DIAS)
+                achados += _posvenda_buscar(seller_id, {"range": f"date_created:after:{_posvenda_iso_ml(desde)}"}, stop_event)
+            else:
+                # um dia de folga: relógio do ML e reclamação que mudou no meio da rodada anterior
+                desde = ultima_dt - timedelta(days=1)
+                achados += _posvenda_buscar(seller_id, {"range": f"last_updated:after:{_posvenda_iso_ml(desde)}"}, stop_event)
+        except Exception as exc:
+            msg = str(exc)[:500]
+            ml_log_event_se_mudou("posvenda", "/post-purchase/v1/claims/search", seller_id, ML_CLIENT_ID, "ERRO", msg)
+            resultado = {"ok": False, "erro": msg, "sem_permissao": ("HTTP 403" in msg or "HTTP 401" in msg)}
+            _POSVENDA_ESTADO["ultimo"] = resultado
+            return resultado
+        vistos: set[str] = set()
+        novas = 0
+        for c in achados:
+            base = _posvenda_base_da_busca(c)
+            if not base["claim_id"] or base["claim_id"] in vistos:
+                continue
+            vistos.add(base["claim_id"])
+            if _posvenda_gravar_base(base):
+                novas += 1
+        # aberta que não veio na busca de abertas (fechou e a busca por data ainda não pegou)
+        # ou aberta sem leitura há mais de 1 h: detalha de novo (o prazo muda).
+        # mesmo formato do now_iso() (fuso local), senão a comparação de texto erra
+        limite = (datetime.now(timezone.utc) - timedelta(seconds=POSVENDA_REVISITAR_ABERTA)).astimezone().isoformat(timespec="milliseconds")
+        with DB_LOCK:
+            DB.execute("UPDATE ml_reclamacao_v1888 SET precisa_detalhe=1 WHERE status='opened' AND detalhado_em < ?",
+                       (limite,))
+            DB.commit()
+            fila = [str(r["claim_id"]) for r in DB.execute(
+                "SELECT claim_id FROM ml_reclamacao_v1888 WHERE precisa_detalhe=1 "
+                "ORDER BY CASE WHEN status='opened' THEN 0 ELSE 1 END, aberta_em DESC LIMIT ?",
+                (POSVENDA_DETALHES_POR_RODADA,)).fetchall()]
+        detalhadas = falhas = 0
+        for cid in fila:
+            if stop_event is not None and stop_event.is_set():
+                break
+            r = _posvenda_detalhar(cid)
+            detalhadas += 1
+            falhas += 0 if r.get("ok") else 1
+            if pausa > 0:
+                if stop_event is not None:
+                    if stop_event.wait(pausa):
+                        break
+                else:
+                    time.sleep(pausa)
+        resultado = {"ok": True, "encontradas": len(vistos), "novas_ou_alteradas": novas,
+                     "detalhadas": detalhadas, "com_erro": falhas, "em": now_iso()}
+        ml_log_event_se_mudou("posvenda", "/post-purchase/v1/claims/search", seller_id, ML_CLIENT_ID, "OK", "")
+        _POSVENDA_ESTADO["ultimo"] = resultado
+        return resultado
+    finally:
+        _POSVENDA_ESTADO.update(rodando=False, fim=now_iso())
+        POSVENDA_LOCK.release()
+
+
+def posvenda_reputacao_rodada(dia: str | None = None) -> dict[str, Any]:
+    """Retrato do termômetro do vendedor (/users/{id}), um por dia (o último do dia vale)."""
+    linha = ml_integration_row()
+    if not linha or not str(linha["access_token"] or "").strip():
+        return {"ok": True, "pulado": "Mercado Livre não conectado"}
+    seller_id = str(linha["seller_id"] or "")
+    u = ml_api_get(f"/users/{quote(seller_id)}")
+    rep = (u.get("seller_reputation") if isinstance(u, dict) else None) or {}
+    met = rep.get("metrics") if isinstance(rep.get("metrics"), dict) else {}
+
+    def m(chave: str, campo: str) -> Any:
+        bloco = met.get(chave) if isinstance(met.get(chave), dict) else {}
+        return bloco.get(campo)
+
+    vendas = m("sales", "completed")
+    dia = dia or datetime.now(BR_TZ).date().isoformat()
+    with DB_LOCK:
+        DB.execute(
+            "INSERT OR REPLACE INTO ml_reputacao_dia_v1888(dia,nivel,mercado_lider,vendas_periodo,periodo,reclamacoes_taxa,"
+            "reclamacoes_qtd,atrasos_taxa,atrasos_qtd,cancelamentos_taxa,cancelamentos_qtd,atualizado_em) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            (dia, str(rep.get("level_id") or ""), str(rep.get("power_seller_status") or ""),
+             int(vendas) if isinstance(vendas, (int, float)) else None, str(m("sales", "period") or ""),
+             _posvenda_float(m("claims", "rate")), m("claims", "value"),
+             _posvenda_float(m("delayed_handling_time", "rate")), m("delayed_handling_time", "value"),
+             _posvenda_float(m("cancellations", "rate")), m("cancellations", "value"), now_iso()))
+        DB.commit()
+    _POSVENDA_ESTADO["reputacao_em"] = time.time()
+    return {"ok": True, "nivel": str(rep.get("level_id") or "")}
+
+
+def _posvenda_gravar_pergunta(q: dict[str, Any], respondida_por: str = "") -> None:
+    ans = q.get("answer") if isinstance(q.get("answer"), dict) else {}
+    de = q.get("from") if isinstance(q.get("from"), dict) else {}
+    with DB_LOCK:
+        DB.execute(
+            "INSERT INTO ml_pergunta_v1888(pergunta_id,item_id,texto,status,criada_em,comprador_id,resposta,respondida_em,"
+            "respondida_por,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(pergunta_id) DO UPDATE SET "
+            "item_id=excluded.item_id,texto=excluded.texto,status=excluded.status,criada_em=excluded.criada_em,"
+            "comprador_id=excluded.comprador_id,"
+            "resposta=CASE WHEN excluded.resposta<>'' THEN excluded.resposta ELSE ml_pergunta_v1888.resposta END,"
+            "respondida_em=CASE WHEN excluded.respondida_em<>'' THEN excluded.respondida_em ELSE ml_pergunta_v1888.respondida_em END,"
+            "respondida_por=CASE WHEN ml_pergunta_v1888.respondida_por<>'' THEN ml_pergunta_v1888.respondida_por "
+            "ELSE excluded.respondida_por END,updated_at=excluded.updated_at",
+            (str(q.get("id") or ""), str(q.get("item_id") or ""), str(q.get("text") or ""), str(q.get("status") or ""),
+             str(q.get("date_created") or ""), str(de.get("id") or ""), str(ans.get("text") or ""),
+             str(ans.get("date_created") or ""), respondida_por, now_iso()))
+        DB.commit()
+
+
+def posvenda_perguntas_rodada(stop_event: threading.Event | None = None) -> dict[str, Any]:
+    """Perguntas sem resposta. As que saíram da lista (respondidas no ML, apagadas) são relidas."""
+    linha = ml_integration_row()
+    if not linha or not str(linha["access_token"] or "").strip():
+        resultado = {"ok": True, "pulado": "Mercado Livre não conectado"}
+        _POSVENDA_ESTADO["perguntas"] = resultado
+        return resultado
+    seller_id = str(linha["seller_id"] or "")
+    abertas: dict[str, dict[str, Any]] = {}
+    try:
+        offset = 0
+        while offset < 1000:
+            r = ml_api_get("/questions/search?" + urlencode({"seller_id": seller_id, "status": "UNANSWERED",
+                                                             "api_version": "4", "limit": "50", "offset": str(offset)}))
+            lista = (r.get("questions") if isinstance(r, dict) else None) or []
+            for q in lista:
+                if isinstance(q, dict) and q.get("id"):
+                    abertas[str(q["id"])] = q
+            offset += 50
+            if not lista or offset >= int((r.get("total") if isinstance(r, dict) else 0) or 0):
+                break
+    except Exception as exc:
+        msg = str(exc)[:500]
+        ml_log_event_se_mudou("posvenda", "/questions/search", seller_id, ML_CLIENT_ID, "ERRO", msg)
+        resultado = {"ok": False, "erro": msg, "sem_permissao": ("HTTP 403" in msg or "HTTP 401" in msg)}
+        _POSVENDA_ESTADO["perguntas"] = resultado
+        return resultado
+    for q in abertas.values():
+        _posvenda_gravar_pergunta(q)
+    with DB_LOCK:
+        sumiram = [str(r["pergunta_id"]) for r in DB.execute(
+            "SELECT pergunta_id FROM ml_pergunta_v1888 WHERE status='UNANSWERED'").fetchall()
+            if str(r["pergunta_id"]) not in abertas]
+    relidas = 0
+    for qid in sumiram[:30]:
+        if stop_event is not None and stop_event.is_set():
+            break
+        try:
+            q = ml_api_get(f"/questions/{quote(qid)}?api_version=4")
+            if isinstance(q, dict) and q.get("id"):
+                _posvenda_gravar_pergunta(q, respondida_por="Mercado Livre" if q.get("status") == "ANSWERED" else "")
+                relidas += 1
+        except Exception as exc:
+            if "HTTP 404" in str(exc):   # apagada pelo comprador/ML
+                with DB_LOCK:
+                    DB.execute("UPDATE ml_pergunta_v1888 SET status='DELETED', updated_at=? WHERE pergunta_id=?",
+                               (now_iso(), qid))
+                    DB.commit()
+    corte = (datetime.now(timezone.utc) - timedelta(days=POSVENDA_PERGUNTAS_GUARDAR_DIAS)).astimezone().isoformat(timespec="milliseconds")
+    with DB_LOCK:
+        DB.execute("DELETE FROM ml_pergunta_v1888 WHERE status<>'UNANSWERED' AND updated_at < ?", (corte,))
+        DB.commit()
+    ml_log_event_se_mudou("posvenda", "/questions/search", seller_id, ML_CLIENT_ID, "OK", "")
+    resultado = {"ok": True, "sem_resposta": len(abertas), "relidas": relidas, "em": now_iso()}
+    _POSVENDA_ESTADO["perguntas"] = resultado
+    return resultado
+
+
+def posvenda_responder(pergunta_id: str, texto: str, ator: str) -> dict[str, Any]:
+    """Responde a pergunta no ML (POST /answers). Só pergunta conhecida e ainda sem resposta."""
+    pergunta_id = str(pergunta_id or "").strip()
+    texto = str(texto or "").strip()
+    if not pergunta_id.isdigit():
+        raise ValueError("Pergunta inválida.")
+    if not texto:
+        raise ValueError("Escreva a resposta.")
+    if len(texto) > POSVENDA_RESPOSTA_MAX:
+        raise ValueError(f"A resposta passa de {POSVENDA_RESPOSTA_MAX} caracteres (limite do Mercado Livre).")
+    with DB_LOCK:
+        r = DB.execute("SELECT status FROM ml_pergunta_v1888 WHERE pergunta_id=?", (pergunta_id,)).fetchone()
+    if r is None:
+        raise ValueError("Pergunta não encontrada. Atualize a tela.")
+    if str(r["status"]) != "UNANSWERED":
+        raise ValueError("Esta pergunta já foi respondida ou não está mais disponível.")
+    resposta = _ml_promo_http("POST", "/answers", {"question_id": int(pergunta_id), "text": texto})
+    agora = now_iso()
+    resp = resposta.get("answer") if isinstance(resposta, dict) and isinstance(resposta.get("answer"), dict) else {}
+    with DB_LOCK:
+        DB.execute("UPDATE ml_pergunta_v1888 SET status='ANSWERED', resposta=?, respondida_em=?, respondida_por=?, "
+                   "updated_at=? WHERE pergunta_id=?",
+                   (str(resp.get("text") or texto), str(resp.get("date_created") or agora), ator, agora, pergunta_id))
+        DB.commit()
+    audit(ator, "ml_pergunta_responder", f"{pergunta_id}: {texto[:500]}")
+    return {"ok": True, "pergunta_id": pergunta_id}
+
+
+def posvenda_loop(stop_event: threading.Event) -> None:
+    """Perguntas a cada 5 min; reclamações e reputação a cada 15 min."""
+    if stop_event.wait(120):
+        return
+    proxima_reclamacao = 0.0
+    while not stop_event.is_set():
+        try:
+            posvenda_perguntas_rodada(stop_event)
+        except Exception as exc:
+            _POSVENDA_ESTADO["perguntas"] = {"ok": False, "erro": str(exc)[:300]}
+            print(f"[posvenda] perguntas falharam: {exc}", file=sys.stderr, flush=True)
+        if time.time() >= proxima_reclamacao:
+            proxima_reclamacao = time.time() + POSVENDA_INTERVALO
+            try:
+                posvenda_reclamacoes_rodada(stop_event)
+            except Exception as exc:
+                _POSVENDA_ESTADO["ultimo"] = {"ok": False, "erro": str(exc)[:300]}
+                print(f"[posvenda] reclamações falharam: {exc}", file=sys.stderr, flush=True)
+            try:
+                posvenda_reputacao_rodada()
+            except Exception as exc:
+                print(f"[posvenda] reputação falhou: {exc}", file=sys.stderr, flush=True)
+        if stop_event.wait(POSVENDA_PERGUNTAS_INTERVALO):
+            break
+
+
+def _posvenda_valores(r: dict[str, Any], custo_unit: Any) -> dict[str, Any]:
+    """Quanto a reclamação custou. Só com o que o ML informa; o que falta fica None.
+
+    - venda_desfeita: dinheiro devolvido ao comprador que saiu do vendedor (com
+      cobertura do ML, quem paga é o ML: 0).
+    - frete_devolucao: o que o ML cobra do vendedor pelo envio da devolução.
+    - produto_perdido: custo do produto que não voltou (comprador ficou, devolução
+      de baixo custo) ou voltou sem condição de venda (triagem: inservível,
+      descartado, não chegou). Produto que voltou bom = 0.
+    - reembolso_parcial: comprador ficou com o produto e recebeu parte do dinheiro.
+    perda = frete_devolucao + produto_perdido + reembolso_parcial.
+    Reclamação aberta ainda não tem perda (fica "em aberto").
+    """
+    itens = []
+    try:
+        itens = json.loads(r.get("itens_json") or "[]")
+    except Exception:
+        itens = []
+    total = _posvenda_float(r.get("pedido_total"))
+    reemb = _posvenda_float(r.get("reembolsado"))
+    coberto = r.get("cobertura") == 1
+    fechada = r.get("status") == "closed"
+    venceu_vendedor = "respondent" in str(r.get("beneficiado") or "").split(",") and "complainant" not in str(r.get("beneficiado") or "")
+    out: dict[str, Any] = {"venda_desfeita": None, "frete_devolucao": None, "produto_perdido": None,
+                           "reembolso_parcial": None, "perda": None, "produto": "", "pendente": [], "custo_produto": None}
+    # custo do que foi vendido (para o produto perdido)
+    custo = 0.0
+    sem_custo = not itens
+    for i in itens:
+        unit = custo_unit(str(i.get("sku") or ""))
+        if unit is None:
+            sem_custo = True
+            continue
+        custo += unit * (_posvenda_float(i.get("qtd")) or 0.0)
+    out["custo_produto"] = None if sem_custo else round(custo, 2)
+    if not fechada:
+        out["produto"] = "em_aberto"
+        return out
+    # frete da devolução
+    if r.get("tem_devolucao"):
+        out["frete_devolucao"] = _posvenda_float(r.get("frete_devolucao"))
+        if out["frete_devolucao"] is None and str(r.get("devolucao_subtipo")) == "low_cost":
+            out["frete_devolucao"] = 0.0   # baixo custo: não gera envio de devolução
+        if out["frete_devolucao"] is None:
+            out["pendente"].append("frete da devolução")
+    else:
+        out["frete_devolucao"] = 0.0
+    # venda desfeita
+    if coberto or venceu_vendedor:
+        out["venda_desfeita"] = 0.0
+    elif reemb is None:
+        out["pendente"].append("reembolso")
+    else:
+        out["venda_desfeita"] = reemb
+    # o produto
+    condicao = str(r.get("produto_condicao") or "")
+    dev_status = str(r.get("devolucao_status") or "")
+    parcial = (reemb is not None and total and 0 < reemb < total * 0.98)
+    if coberto or venceu_vendedor or (reemb is not None and reemb == 0):
+        out["produto"], out["produto_perdido"], out["reembolso_parcial"] = "sem_perda", 0.0, 0.0
+    elif condicao in ("unsaleable", "discard", "missing"):
+        out["produto"] = "inservivel"
+        out["produto_perdido"], out["reembolso_parcial"] = out["custo_produto"], 0.0
+    elif r.get("tem_devolucao") and dev_status == "delivered" and str(r.get("devolucao_subtipo")) != "low_cost":
+        out["produto"], out["produto_perdido"], out["reembolso_parcial"] = "voltou", 0.0, 0.0
+    elif parcial and not (r.get("tem_devolucao") and dev_status == "delivered"):
+        out["produto"], out["produto_perdido"], out["reembolso_parcial"] = "ficou_parcial", 0.0, reemb
+    elif reemb is not None and r.get("entregue") == 1 and (not r.get("tem_devolucao") or str(r.get("devolucao_subtipo")) == "low_cost"
+                                                           or dev_status in ("expired", "cancelled", "not_delivered")):
+        out["produto"] = "nao_voltou"
+        out["produto_perdido"], out["reembolso_parcial"] = out["custo_produto"], 0.0
+    else:
+        out["produto"] = "conferir"   # não entregue, devolução em andamento, ou sem dado
+        out["pendente"].append("situação do produto")
+    if out["produto"] in ("inservivel", "nao_voltou") and out["produto_perdido"] is None:
+        out["pendente"].append("custo do produto")
+    partes = [out["frete_devolucao"], out["produto_perdido"], out["reembolso_parcial"]]
+    if all(p is not None for p in partes):
+        out["perda"] = round(sum(partes), 2)
+    return out
+
+
+def posvenda_payload(dias: int = 30, hoje: date | None = None) -> dict[str, Any]:
+    """Tela de Pós-venda. Só lê o banco (a coleta é do worker)."""
+    dias = max(1, min(int(dias), 365))
+    hoje = hoje or datetime.now(BR_TZ).date()
+    d1 = hoje - timedelta(days=dias - 1)
+    agora = datetime.now(timezone.utc)
+    with DB_LOCK:
+        recl = [dict(r) for r in DB.execute(
+            "SELECT r.*, m.detalhe AS motivo_txt FROM ml_reclamacao_v1888 r "
+            "LEFT JOIN ml_reclamacao_motivo_v1888 m ON m.motivo_id=r.motivo_id").fetchall()]
+        perguntas = [dict(r) for r in DB.execute(
+            "SELECT p.*, i.titulo AS item_titulo FROM ml_pergunta_v1888 p "
+            "LEFT JOIN ml_visitas_item_v1868 i ON i.item_id=p.item_id "
+            "WHERE p.status='UNANSWERED' ORDER BY p.criada_em").fetchall()]
+        respondidas = [dict(r) for r in DB.execute(
+            "SELECT criada_em, respondida_em, respondida_por FROM ml_pergunta_v1888 "
+            "WHERE status='ANSWERED' AND respondida_em<>''").fetchall()]
+        reput = [dict(r) for r in DB.execute(
+            "SELECT * FROM ml_reputacao_dia_v1888 ORDER BY dia DESC LIMIT 60").fetchall()]
+        fat = DB.execute("SELECT COALESCE(SUM(amount),0) AS v, COUNT(DISTINCT order_id) AS n FROM vendas_v1799 "
+                         "WHERE marketplace='ml' AND sale_day BETWEEN ? AND ?", (d1.isoformat(), hoje.isoformat())).fetchone()
+
+    produtos = _compras_produtos_precificador()
+    reservas = _compras_custos_reserva(produtos)
+    skus = []
+    for r in recl:
+        try:
+            skus += [str(i.get("sku") or "") for i in json.loads(r.get("itens_json") or "[]")]
+        except Exception:
+            pass
+    kits = full_kit_compositions([s for s in skus if s])
+    cache: dict[str, Any] = {}
+
+    def custo_unit(sku: str) -> float | None:
+        return _financeiro_custo_unitario(sku, produtos, reservas, kits, cache)[0] if sku else None
+
+    abertas, fechadas = [], []
+    for r in recl:
+        try:
+            itens = json.loads(r.get("itens_json") or "[]")
+        except Exception:
+            itens = []
+        prazo_txt = _posvenda_prazo(r) if r["status"] == "opened" else ""
+        prazo = _posvenda_dt(prazo_txt)
+        horas = round((prazo - agora).total_seconds() / 3600, 1) if prazo else None
+        item = {
+            "claim_id": r["claim_id"], "order_id": r["order_id"], "tipo": r["tipo"], "etapa": r["etapa"],
+            "status": r["status"], "motivo_id": r["motivo_id"], "motivo": r.get("motivo_txt") or "",
+            "aberta_em": r["aberta_em"], "fechada_em": r["fechada_em"], "resolucao": r["resolucao"],
+            "resolucao_txt": POSVENDA_RESOLUCAO_TXT.get(r["resolucao"], r["resolucao"]),
+            "beneficiado": r["beneficiado"], "cobertura": r["cobertura"], "acao": r["acao"],
+            "acao_txt": POSVENDA_ACAO_TXT.get(r["acao"], r["acao"]), "prazo": prazo_txt, "horas_restantes": horas,
+            "responsavel": r["responsavel"], "titulo_ml": r["titulo_ml"], "problema": r["problema"],
+            "afeta_reputacao": r["afeta_reputacao"], "tem_devolucao": bool(r["tem_devolucao"]),
+            "devolucao_status": r["devolucao_status"], "devolucao_subtipo": r["devolucao_subtipo"],
+            "devolucao_destino": r["devolucao_destino"], "dinheiro_status": r["dinheiro_status"],
+            "produto_condicao": r["produto_condicao"], "pedido_total": r["pedido_total"],
+            "reembolsado": r["reembolsado"], "itens": itens, "erro": r["erro"],
+            "detalhado": bool(r["detalhado_em"]),
+            "sku": ", ".join(sorted({str(i.get("sku") or "") for i in itens if i.get("sku")})),
+            "anuncio": (itens[0].get("item_id") if itens else ""),
+            "titulo": (itens[0].get("titulo") if itens else ""),
+        }
+        item.update(_posvenda_valores(r, custo_unit))
+        if r["status"] == "opened":
+            abertas.append(item)
+        else:
+            fechadas.append(item)
+    abertas.sort(key=lambda x: (x["horas_restantes"] is None, x["horas_restantes"] if x["horas_restantes"] is not None else 0,
+                                x["aberta_em"]))
+
+    # relatório: reclamações ABERTAS no período (as abertas entram como "em aberto")
+    def no_periodo(x: dict[str, Any]) -> bool:
+        return d1.isoformat() <= str(x["aberta_em"])[:10] <= hoje.isoformat()
+
+    periodo = [x for x in fechadas + abertas if no_periodo(x)]
+    fech_p = [x for x in periodo if x["status"] != "opened"]
+
+    def soma(campo: str, lista: list[dict[str, Any]]) -> float:
+        return round(sum(float(x[campo]) for x in lista if x.get(campo) is not None), 2)
+
+    def agrupar(chave_fn: Any) -> list[dict[str, Any]]:
+        g: dict[str, dict[str, Any]] = {}
+        for x in periodo:
+            k, rot = chave_fn(x)
+            a = g.setdefault(k, {"chave": k, "rotulo": rot, "reclamacoes": 0, "devolucoes": 0, "abertas": 0,
+                                 "venda_desfeita": 0.0, "frete_devolucao": 0.0, "produto_perdido": 0.0,
+                                 "reembolso_parcial": 0.0, "perda": 0.0, "incompletas": 0})
+            a["reclamacoes"] += 1
+            a["devolucoes"] += 1 if x["tem_devolucao"] else 0
+            if x["status"] == "opened":
+                a["abertas"] += 1
+                continue
+            for c in ("venda_desfeita", "frete_devolucao", "produto_perdido", "reembolso_parcial", "perda"):
+                a[c] = round(a[c] + float(x.get(c) or 0), 2)
+            a["incompletas"] += 1 if x["perda"] is None else 0
+        return sorted(g.values(), key=lambda a: (-a["perda"], -a["reclamacoes"]))
+
+    respondidas_30 = []
+    corte_30 = agora - timedelta(days=30)
+    for p in respondidas:
+        c, rsp = _posvenda_dt(p["criada_em"]), _posvenda_dt(p["respondida_em"])
+        if c and rsp and rsp >= corte_30 and rsp >= c:
+            respondidas_30.append((rsp - c).total_seconds() / 3600)
+    respondidas_30.sort()
+    for p in perguntas:
+        c = _posvenda_dt(p["criada_em"])
+        p["horas_esperando"] = round((agora - c).total_seconds() / 3600, 1) if c else None
+
+    faturamento = round(float(fat["v"] or 0), 2)
+    perda_total = soma("perda", fech_p)
+    return {
+        "ok": True,
+        "periodo": {"inicio": d1.isoformat(), "fim": hoje.isoformat(), "dias": dias},
+        "coleta": {"reclamacoes": _POSVENDA_ESTADO.get("ultimo") or {}, "perguntas": _POSVENDA_ESTADO.get("perguntas") or {},
+                   "rodando": bool(_POSVENDA_ESTADO.get("rodando")), "total_guardadas": len(recl),
+                   "pendentes_detalhe": sum(1 for r in recl if r["precisa_detalhe"])},
+        "abertas": abertas,
+        "perguntas": perguntas,
+        "perguntas_resumo": {
+            "sem_resposta": len(perguntas),
+            "respondidas_30d": len(respondidas_30),
+            "mediana_horas": round(respondidas_30[len(respondidas_30) // 2], 1) if respondidas_30 else None,
+        },
+        "reputacao": reput,
+        "relatorio": {
+            "reclamacoes": len(periodo),
+            "devolucoes": sum(1 for x in periodo if x["tem_devolucao"]),
+            "em_aberto": sum(1 for x in periodo if x["status"] == "opened"),
+            "fechadas": len(fech_p),
+            "incompletas": sum(1 for x in fech_p if x["perda"] is None),
+            "venda_desfeita": soma("venda_desfeita", fech_p),
+            "frete_devolucao": soma("frete_devolucao", fech_p),
+            "produto_perdido": soma("produto_perdido", fech_p),
+            "reembolso_parcial": soma("reembolso_parcial", fech_p),
+            "perda": perda_total,
+            "faturamento_ml": faturamento,
+            "pedidos_ml": int(fat["n"] or 0),
+            "perda_sobre_faturamento": round(perda_total / faturamento * 100, 2) if faturamento else None,
+            "taxa_reclamacao": round(len(periodo) / int(fat["n"]) * 100, 2) if int(fat["n"] or 0) else None,
+            "por_motivo": agrupar(lambda x: (x["motivo_id"] or "?", x["motivo"] or x["motivo_id"] or "Sem motivo")),
+            "por_anuncio": agrupar(lambda x: (x["anuncio"] or x["order_id"] or x["claim_id"],
+                                              (x["titulo"] or x["anuncio"] or "Sem anúncio") + (f" · SKU {x['sku']}" if x["sku"] else ""))),
+            "por_mes": sorted(agrupar(lambda x: (str(x["aberta_em"])[:7], str(x["aberta_em"])[:7])), key=lambda a: a["chave"]),
+            "itens": sorted(periodo, key=lambda x: x["aberta_em"], reverse=True),
+        },
+        "regras": {"prazo_critico_horas": POSVENDA_PRAZO_CRITICO_H, "historico_dias": POSVENDA_HISTORICO_DIAS,
+                   "intervalo_min": POSVENDA_INTERVALO // 60, "perguntas_intervalo_min": POSVENDA_PERGUNTAS_INTERVALO // 60,
+                   "resposta_max": POSVENDA_RESPOSTA_MAX},
+    }
+
+
+def _saude_posvenda() -> list[dict[str, Any]]:
+    """V18.88: reclamação do ML com prazo do vendedor vencendo (< 24 h) = crítico (vira e-mail)."""
+    g = "Operação"
+    if not ml_status_payload().get("configured"):
+        return []
+    ultimo = _POSVENDA_ESTADO.get("ultimo") or {}
+    agora = datetime.now(timezone.utc)
+    with DB_LOCK:
+        abertas = [dict(r) for r in DB.execute(
+            "SELECT claim_id, order_id, acao, prazo, prazo_detalhe, responsavel FROM ml_reclamacao_v1888 "
+            "WHERE status='opened'").fetchall()]
+    vencendo = []
+    com_acao = 0
+    for r in abertas:
+        prazo = _posvenda_dt(_posvenda_prazo(r))
+        if r["acao"] or prazo:
+            com_acao += 1
+        if prazo and (prazo - agora).total_seconds() < POSVENDA_PRAZO_CRITICO_H * 3600:
+            vencendo.append((prazo, r))
+    if vencendo:
+        vencendo.sort(key=lambda x: x[0])
+        prazo, r = vencendo[0]
+        horas = (prazo - agora).total_seconds() / 3600
+        quando = f"vence em {_saude_idade_txt(horas * 3600)}" if horas > 0 else f"venceu há {_saude_idade_txt(-horas * 3600)}"
+        return [_saude_item("posvenda_prazo", g, "Reclamações do Mercado Livre", "critico",
+                            f"{len(vencendo)} reclamação(ões) com prazo do vendedor em menos de {POSVENDA_PRAZO_CRITICO_H} h",
+                            f"A mais urgente ({POSVENDA_ACAO_TXT.get(r['acao'], r['acao']) or 'ação do vendedor'}, "
+                            f"pedido {r['order_id'] or r['claim_id']}) {quando}.", "/posvenda", "Abrir Pós-venda")]
+    if ultimo and ultimo.get("ok") is False:
+        return [_saude_item("posvenda_prazo", g, "Reclamações do Mercado Livre", "atencao",
+                            "Não foi possível ler as reclamações no ML",
+                            ("Falta a permissão de pós-venda no aplicativo do ML (DevCenter). " if ultimo.get("sem_permissao") else "")
+                            + str(ultimo.get("erro") or "")[:200], "/posvenda", "Abrir Pós-venda")]
+    if com_acao:
+        return [_saude_item("posvenda_prazo", g, "Reclamações do Mercado Livre", "atencao",
+                            f"{com_acao} reclamação(ões) esperando ação do vendedor", "", "/posvenda", "Abrir Pós-venda")]
+    return [_saude_item("posvenda_prazo", g, "Reclamações do Mercado Livre", "ok",
+                        f"{len(abertas)} reclamação(ões) aberta(s), nenhuma esperando o vendedor" if abertas
+                        else "Nenhuma reclamação aberta")]
+
+
 def _financeiro_custos_venda_ml(order_ids: list[str]) -> dict[str, dict[str, Any]]:
     """Tarifa e frete como o ML mostrou NO ATO DA VENDA, por pedido.
 
@@ -19650,6 +20552,17 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
+        if path == "/api/posvenda":
+            # V18.88: Pós-venda do ML (reclamações, devoluções e perdas, perguntas, reputação). Só lê o banco.
+            if self.auth(admin_only=True) is None:
+                return
+            try:
+                self.send_json(posvenda_payload(int(str((query.get("dias") or ["30"])[0] or "30"))))
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
         if path == "/api/ruptura":
             # V18.72: venda perdida por falta de estoque (anúncios do ML). Somente leitura.
             if self.auth(admin_only=True) is None:
@@ -19914,6 +20827,8 @@ class AppHandler(BaseHTTPRequestHandler):
             "/conversao": "admin", "/conversao/": "admin", "/conversao.html": "admin",
             # V18.72: Ruptura (venda perdida por falta de estoque).
             "/ruptura": "admin", "/ruptura/": "admin", "/ruptura.html": "admin",
+            # V18.88: Pós-venda do ML.
+            "/posvenda": "admin", "/posvenda/": "admin", "/posvenda.html": "admin",
             # V18.83: Painel de saúde do sistema.
             "/saude": "admin", "/saude/": "admin", "/saude.html": "admin",
             # V18.73: promoções automáticas (age sozinha no ML: só admin).
@@ -20191,6 +21106,32 @@ class AppHandler(BaseHTTPRequestHandler):
                     self.send_json({"ok": False, "error": str(exc)}, 400)
                 except Exception as exc:
                     self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/posvenda/responder":
+            # V18.88: responde a pergunta do comprador no ML (POST /answers). Fica no audit_log.
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                try:
+                    dados = self.read_json()
+                    self.send_json(posvenda_responder(str(dados.get("pergunta_id") or ""), str(dados.get("texto") or ""),
+                                                      ctx["username"]))
+                except ValueError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 400)
+                except Exception as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 502)
+            return
+        if path == "/api/posvenda/sincronizar":
+            # V18.88: busca agora (em segundo plano) perguntas, reclamações e reputação.
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                def _sincronizar() -> None:
+                    for f in (posvenda_perguntas_rodada, posvenda_reclamacoes_rodada, posvenda_reputacao_rodada):
+                        try:
+                            f()
+                        except Exception as exc:
+                            print(f"[posvenda] sincronizar: {exc}", file=sys.stderr, flush=True)
+                threading.Thread(target=_sincronizar, name="posvenda-manual", daemon=True).start()
+                self.send_json({"ok": True, "iniciado": True})
             return
         if path == "/api/promocoes-auto/renovacao/buscar-novos":
             # V18.84: manual (sem worker) — inclui na lista, sem marcar, o anúncio do ML que falta.
@@ -22682,6 +23623,9 @@ class AppHandler(BaseHTTPRequestHandler):
             "/saude": "saude.html",
             "/saude/": "saude.html",
             "/ruptura/": "ruptura.html",
+            "/posvenda": "posvenda.html",
+            "/posvenda/": "posvenda.html",
+            "/posvenda.html": "posvenda.html",
             "/ruptura.html": "ruptura.html",
             "/promocoes-auto": "promocoes-auto.html",
             "/promocoes-auto/": "promocoes-auto.html",
@@ -22788,6 +23732,7 @@ SAUDE_WORKERS_INFO: dict[str, tuple[str, bool, int]] = {
     "ml_visitas_loop": ("Visitas dos anúncios (Conversão)", False, 180),
     "ml_estoque_loop": ("Estoque dos anúncios (Ruptura)", False, 120),
     "promo_renovacao_loop": ("Promoções automáticas", False, 120),
+    "posvenda_loop": ("Pós-venda do Mercado Livre", False, 60),
     "relatorio_diario_loop": ("Relatório diário por e-mail", False, 60),
     "manutencao_diaria_loop": ("Manutenção diária (limpeza de logs)", False, 120),
     "linx_clientes_loop": ("Clientes no Linx", False, 120),
@@ -23222,6 +24167,7 @@ def saude_checks() -> list[dict[str, Any]]:
     itens: list[dict[str, Any]] = []
     itens += _saude_check(_saude_ml, "ml_conexao", "Operação", "Mercado Livre")
     itens += _saude_check(_saude_shopee, "shopee_conexao", "Operação", "Shopee")
+    itens += _saude_check(_saude_posvenda, "posvenda_prazo", "Operação", "Reclamações do Mercado Livre")
     itens += _saude_check(_saude_impressao, "impressao_fila", "Operação", "Fila de impressão (Zebra)")
     itens += _saude_check(_saude_workers_check, "workers", "Servidor", "Rotinas automáticas (workers)")
     itens += _saude_check(_saude_backup, "backup", "Servidor", "Backup diário")
@@ -23684,6 +24630,13 @@ def main() -> None:
         name="ml-estoque",
         daemon=True,
     )
+    # V18.88: pós-venda do ML — perguntas a cada 5 min, reclamações e reputação a cada 15 min.
+    posvenda_thread = threading.Thread(
+        target=_worker_protegido(posvenda_loop),
+        args=(watcher_stop,),
+        name="posvenda",
+        daemon=True,
+    )
     # V18.73: renovação do desconto próprio de 30 dias (anúncios marcados), de hora em hora.
     promo_renovacao_thread = threading.Thread(
         target=_worker_protegido(promo_renovacao_loop),
@@ -23736,6 +24689,7 @@ def main() -> None:
         ads_thread.start()
         visitas_thread.start()
         estoque_thread.start()
+        posvenda_thread.start()
         promo_renovacao_thread.start()
         relatorio_thread.start()
         linx_clientes_thread.start()
