@@ -613,6 +613,12 @@ Gerencial Peças, Faturamento, Peças Balcão Premium, Veículos CRM. Tudo em
 `INTEGRACAO_LINX_SMART_API.md` — inclusive quais operações **gravam/movimentam estoque** (nunca testar).
 `OrdemCompra/Historico` (demanda mensal balcão/oficina/telemarketing) e `DetalhesPedidos`
 (compra em aberto) são o caminho para a Demanda de Compra definitiva.
+**V18.85:** **F02 Financeiro** assinado em 08/10 (títulos, alçadas, consórcio — **não** faz cadastro,
+crédito, romaneio, caixa nem nota; faturar no caixa não existe em nenhuma assinatura). Cada produto
+tem a sua chave (`LINX_API_CHAVE_<S01|V01|P02|G03|F01|F02>`, vazia = a geral; a de um produto dá 401
+em outro). Admin → Integrações → *Testar Linx* roda o diagnóstico só leitura (`LINX_DIAGNOSTICO`, lista
+fechada; devolve contagens e nomes de campos, nunca valores). Mapa das etapas em
+`INTEGRACAO_LINX_SMART_API.md` §4d.
 
 **Botão Cliente (V17.85):** atualiza o cadastro no **Linx DMS** (ERP em `10.1.15.1`, rede
 do escritório — a VPS não alcança). O servidor só entrega CPF/CNPJ e nome de "Dados para

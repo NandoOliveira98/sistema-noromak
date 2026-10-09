@@ -43,7 +43,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "18.84-PROMO-NOVOS"
+APP_VERSION = "18.85-LINX-CHAVES"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -11452,6 +11452,21 @@ LINX_USUARIO_CODIGO = int(os.getenv("LINX_USUARIO_CODIGO", "0") or 0)
 LINX_CODIGO_ORIGEM = int(os.getenv("LINX_CODIGO_ORIGEM", "32") or 32)
 LINX_PATH_SEGURANCA = os.getenv("LINX_PATH_SEGURANCA", "/api-seguranca").strip().rstrip("/")
 LINX_PATH_CLIENTES = os.getenv("LINX_PATH_CLIENTES", "/api-veiculos-crm").strip().rstrip("/")
+# V18.85: cada produto assinado tem a SUA chave no portal — a chave de um produto dá
+# 401 em outro (medido pelo NoromakWeb no F02, 08/10/2026). LINX_API_CHAVE_<produto>
+# no .env; vazio = usa a LINX_API_CHAVE geral (como era até a V18.84).
+LINX_PATH_GERENCIAL = os.getenv("LINX_PATH_GERENCIAL", "/api-gerencial-pecas").strip().rstrip("/")
+LINX_PATH_FATURAMENTO = os.getenv("LINX_PATH_FATURAMENTO", "/api-faturamento").strip().rstrip("/")
+LINX_PATH_FINANCEIRO = os.getenv("LINX_PATH_FINANCEIRO", "/api-financeiro").strip().rstrip("/")
+LINX_PRODUTOS_NOMES = {
+    "S01": "Segurança (token)",
+    "V01": "Veículos CRM (cliente e crédito)",
+    "P02": "Peças Balcão (romaneio e caixa)",
+    "G03": "Gerencial Peças (atendimentos abertos)",
+    "F01": "Faturamento (condições de pagamento, XML da nota)",
+    "F02": "Financeiro (títulos)",
+}
+LINX_API_CHAVES = {cod: os.getenv(f"LINX_API_CHAVE_{cod}", "").strip() for cod in LINX_PRODUTOS_NOMES}
 # O portal não diz como o token vai nas chamadas; "Bearer" é o mais provável.
 LINX_AUTH_ESQUEMA = os.getenv("LINX_AUTH_ESQUEMA", "Bearer").strip()
 LINX_HTTP_TIMEOUT = max(5, min(60, int(os.getenv("LINX_HTTP_TIMEOUT", "25") or 25)))
@@ -11476,10 +11491,35 @@ class LinxErro(RuntimeError):
 def linx_configuracao_faltando() -> list[str]:
     """Nomes (nunca valores) das variáveis do .env que faltam."""
     return [nome for nome, valor in (
-        ("LINX_API_CHAVE", LINX_API_CHAVE),
+        # V18.85: o token sai com a chave da S01 (ou a geral).
+        ("LINX_API_CHAVE", linx_chave_do_produto("S01")),
         ("LINX_API_USUARIO", LINX_API_USUARIO),
         ("LINX_API_SENHA", LINX_API_SENHA),
     ) if not valor]
+
+
+def linx_chave_do_produto(produto: str) -> str:
+    return LINX_API_CHAVES.get(produto) or LINX_API_CHAVE
+
+
+def _linx_produto_do_caminho(caminho: str) -> str:
+    """V18.85: qual produto assinado atende este caminho (pelo prefixo /api-...)."""
+    prefixos = {LINX_PATH_SEGURANCA: "S01", LINX_PATH_CLIENTES: "V01", LINX_PATH_PECAS: "P02",
+                LINX_PATH_GERENCIAL: "G03", LINX_PATH_FATURAMENTO: "F01", LINX_PATH_FINANCEIRO: "F02"}
+    for prefixo, produto in prefixos.items():
+        if prefixo and (caminho == prefixo or caminho.startswith(prefixo + "/")):
+            return produto
+    return ""
+
+
+def linx_chaves_status() -> list[dict[str, str]]:
+    """De onde sai a chave de cada produto — nunca o valor."""
+    saida = []
+    for produto, nome in LINX_PRODUTOS_NOMES.items():
+        origem = "propria" if LINX_API_CHAVES.get(produto) else ("geral" if LINX_API_CHAVE else "falta")
+        saida.append({"produto": produto, "nome": nome, "chave": origem,
+                      "variavel": f"LINX_API_CHAVE_{produto}"})
+    return saida
 
 
 def _linx_registrar(erro: str = "") -> None:
@@ -11499,8 +11539,13 @@ def _linx_http_status(metodo: str, caminho: str, *, corpo: Any = None, form: dic
                       com_token: bool = True) -> tuple[int, Any]:
     """Devolve (status, json). O status importa: a Linx responde 208 quando quer
     uma confirmação do usuário (diálogo), e isso NUNCA é respondido sozinho."""
+    produto = _linx_produto_do_caminho(caminho)
+    chave = linx_chave_do_produto(produto) if produto else LINX_API_CHAVE
+    if not chave:
+        variavel = f"LINX_API_CHAVE_{produto} ou LINX_API_CHAVE" if produto else "LINX_API_CHAVE"
+        raise LinxErro(f"Falta a chave da assinatura {produto} no .env do servidor ({variavel}).".replace("  ", " "))
     headers = {
-        "Ocp-Apim-Subscription-Key": LINX_API_CHAVE,
+        "Ocp-Apim-Subscription-Key": chave,
         "Accept": "application/json",
         "User-Agent": f"NoromakExpedicao/{APP_VERSION}",
     }
@@ -11786,6 +11831,7 @@ def linx_status_payload() -> dict[str, Any]:
         "revenda": LINX_REVENDA,
         "token_valido": bool(LINX_TOKEN["access_token"]) and time.time() < LINX_TOKEN["expira"],
         "escrita_ativa": LINX_ESCRITA_ATIVA,
+        "chaves": linx_chaves_status(),
         "ultimo_ok": LINX_ESTADO["ultimo_ok"],
         "ultimo_erro": LINX_ESTADO["ultimo_erro"],
         "ultimo_erro_em": LINX_ESTADO["ultimo_erro_em"],
@@ -11805,6 +11851,177 @@ def linx_testar_conexao(documento: str = "") -> dict[str, Any]:
     except (LinxErro, ValueError) as exc:
         _linx_registrar(str(exc))
         return {"ok": False, "error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
+# V18.85 — diagnóstico da Smart API, SOMENTE LEITURA, por uma lista FECHADA.
+# Responde o que falta saber para ligar romaneio, caixa e crédito pelo servidor:
+#   - a chave de cada produto funciona? (S01, V01, P02, G03, F01, F02)
+#   - a Agenda lista os atendimentos do cliente? (romaneio sem a extensão)
+#   - os atendimentos abertos (G03) trazem vendedor e valor? (caixa sem a extensão)
+#   - as condições 213/971/983 aparecem? (F01)
+#   - os títulos do cliente vêm do F02? (conferir o faturamento depois)
+# Devolve contagens e NOMES de campos — nunca valores (CPF, nome, telefone vêm
+# nessas respostas). Nenhuma função daqui grava: nenhuma entra em LINX_DIAGNOSTICO
+# sem ser consulta (o teste confere a lista).
+# ---------------------------------------------------------------------------
+LINX_DIAGNOSTICO = (
+    ("S01", "POST", "/token"),
+    ("V01", "POST", "/Geral/ConsultaClientes/ConsultaClientes"),
+    ("P02", "GET", "/VendaExternaPecas/Contatos/Agenda/{empresa}/{revenda}/{usuario}"),
+    ("G03", "POST", "/ConsultaGerencial/Pecas/AtendimentosAbertos"),
+    ("F01", "GET", "/Faturamento/Cadastros/CondicoesPagamento/ObterListaCondicoesPagamento/{empresa}"),
+    ("F02", "GET", "/Alcadas/GetRevendas"),
+    ("F02", "POST", "/Titulos/ConsultarTitulos"),
+)
+LINX_CONDICOES_MARKETPLACE = {213: "Mercado Livre", 971: "Shopee", 983: "Magalu"}
+
+
+def _linx_lista_da_resposta(resposta: Any) -> list[Any]:
+    if isinstance(resposta, list):
+        return resposta
+    if isinstance(resposta, dict):
+        for valor in resposta.values():
+            if isinstance(valor, list):
+                return valor
+        return [resposta] if resposta else []
+    return []
+
+
+def _linx_campos(itens: list[Any]) -> list[str]:
+    campos: set[str] = set()
+    for item in itens[:50]:
+        if isinstance(item, dict):
+            campos.update(str(k) for k in item.keys())
+    return sorted(campos)[:80]
+
+
+def linx_diagnostico(documento: str = "") -> dict[str, Any]:
+    """V18.85: roda cada consulta da lista e diz o que funcionou. Só leitura."""
+    numero = re.sub(r"\D", "", str(documento or ""))
+    hoje = datetime.now(timezone(timedelta(hours=-3))).date()
+    testes: list[dict[str, Any]] = []
+    contexto: dict[str, Any] = {"cliente": ""}
+
+    def rodar(produto: str, funcao: str, executar) -> None:
+        inicio = time.time()
+        item: dict[str, Any] = {"produto": produto, "nome": LINX_PRODUTOS_NOMES.get(produto, ""),
+                                "funcao": funcao, "ok": False, "status": 0, "resumo": "", "campos": []}
+        try:
+            resumo, campos = executar()
+            item.update(ok=True, status=200, resumo=resumo, campos=campos)
+        except _LinxPulo as exc:
+            item.update(pulado=True, resumo=str(exc))
+        except LinxErro as exc:
+            if exc.status == 412:
+                # 412 = "não achei" nesta API: a chamada funcionou.
+                item.update(ok=True, status=412, resumo="Nada encontrado (412).")
+            else:
+                item.update(status=exc.status, erro=str(exc)[:300])
+        except Exception as exc:  # resposta em formato inesperado não derruba o resto
+            item.update(erro=f"{type(exc).__name__}: {str(exc)[:200]}")
+        item["ms"] = int((time.time() - inicio) * 1000)
+        testes.append(item)
+
+    def token():
+        linx_obter_token(forcar=True)
+        return "Token recebido.", []
+
+    def cliente():
+        if len(numero) not in (11, 14):
+            raise _LinxPulo("Informe um CPF/CNPJ para testar a consulta de cliente e os títulos.")
+        registros = _linx_registros_do_documento(numero)
+        codigos = sorted({str(r.get("Cliente")).strip() for r in registros})
+        if len(codigos) == 1:
+            contexto["cliente"] = codigos[0]
+        credito = sorted({c for r in registros for c in LINX_CAMPOS_CREDITO if c in r})
+        return (f"{len(codigos)} cadastro(s) para o documento. Campos de crédito na resposta: "
+                f"{', '.join(credito) or 'nenhum'}.", _linx_campos(registros))
+
+    def agenda():
+        usuario = LINX_USUARIO_ATENDIMENTOS or LINX_USUARIO_CODIGO
+        itens = _linx_lista_da_resposta(linx_chamar(
+            "GET", f"{LINX_PATH_PECAS}/VendaExternaPecas/Contatos/Agenda/{LINX_EMPRESA}/{LINX_REVENDA}/{usuario}"))
+        resumo = f"{len(itens)} contato(s) na Agenda do usuário {usuario}."
+        if contexto["cliente"]:
+            do_cliente = [i for i in itens if isinstance(i, dict)
+                          and str(i.get("Cliente") or "").strip() == contexto["cliente"]]
+            resumo += f" {len(do_cliente)} deste cliente."
+        return resumo, _linx_campos(itens)
+
+    def atendimentos_abertos():
+        corpo = {"codigoUsuario": LINX_USUARIO_CODIGO, "codigoFilial": LINX_REVENDA,
+                 "dataInicio": (hoje - timedelta(days=30)).isoformat() + "T00:00:00",
+                 "dataFim": hoje.isoformat() + "T23:59:59", "marca": "",
+                 "empresaRevenda": f"{LINX_EMPRESA}-{LINX_REVENDA}"}
+        itens = _linx_lista_da_resposta(linx_chamar(
+            "POST", f"{LINX_PATH_GERENCIAL}/ConsultaGerencial/Pecas/AtendimentosAbertos", corpo))
+        campos = _linx_campos(itens)
+        minusculos = [c.lower() for c in campos]
+        tem_vendedor = any("vendedor" in c for c in minusculos)
+        tem_valor = any("valor" in c or c.startswith("val") for c in minusculos)
+        return (f"{len(itens)} atendimento(s) aberto(s) nos últimos 30 dias. Vendedor: "
+                f"{'sim' if tem_vendedor else 'não'} · valor: {'sim' if tem_valor else 'não'}.", campos)
+
+    def condicoes():
+        itens = _linx_lista_da_resposta(linx_chamar(
+            "GET", f"{LINX_PATH_FATURAMENTO}/Faturamento/Cadastros/CondicoesPagamento/"
+                   f"ObterListaCondicoesPagamento/{LINX_EMPRESA}"))
+        achadas = set()
+        for item in itens:
+            if not isinstance(item, dict):
+                continue
+            for campo, valor in item.items():
+                if "condicao" in str(campo).lower():
+                    try:
+                        codigo = int(str(valor).strip())
+                    except ValueError:
+                        continue
+                    if codigo in LINX_CONDICOES_MARKETPLACE:
+                        achadas.add(codigo)
+        marcas = " · ".join(f"{c} {m}: {'sim' if c in achadas else 'não'}"
+                            for c, m in LINX_CONDICOES_MARKETPLACE.items())
+        return f"{len(itens)} condição(ões). {marcas}.", _linx_campos(itens)
+
+    def revendas():
+        itens = _linx_lista_da_resposta(linx_chamar("GET", f"{LINX_PATH_FINANCEIRO}/Alcadas/GetRevendas"))
+        codigos = sorted({str(i.get("Revenda")) for i in itens if isinstance(i, dict) and i.get("Revenda") is not None})
+        return f"{len(itens)} revenda(s): {', '.join(codigos) or '—'}.", _linx_campos(itens)
+
+    def titulos():
+        if not contexto["cliente"]:
+            raise _LinxPulo("Precisa de um CPF/CNPJ com um cadastro só no Linx.")
+        # Revenda obrigatória; sem Status só vem o que está em aberto (manual do F02).
+        itens = _linx_lista_da_resposta(linx_chamar(
+            "POST", f"{LINX_PATH_FINANCEIRO}/Titulos/ConsultarTitulos",
+            {"Empresa": LINX_EMPRESA, "Revenda": LINX_REVENDA, "Cliente": int(contexto["cliente"])}))
+        tipos: dict[str, int] = {}
+        for i in itens:
+            if isinstance(i, dict):
+                tipos[str(i.get("Tipo") or "?")] = tipos.get(str(i.get("Tipo") or "?"), 0) + 1
+        detalhe = ", ".join(f"{n} {t}" for t, n in sorted(tipos.items()))
+        return (f"{len(itens)} título(s) em aberto na revenda {LINX_REVENDA}" + (f" ({detalhe})." if detalhe else "."),
+                _linx_campos(itens))
+
+    if linx_configuracao_faltando():
+        return {"ok": False, "error": "Linx Smart API não configurada no servidor: falta "
+                                      + ", ".join(linx_configuracao_faltando()) + "."}
+    rodar("S01", "Token", token)
+    if not testes[-1]["ok"]:
+        _linx_registrar(testes[-1].get("erro") or "token")
+        return {"ok": True, "testes": testes, "chaves": linx_chaves_status()}
+    rodar("V01", "Consulta de cliente (ConsultaClientes)", cliente)
+    rodar("P02", "Agenda de atendimentos", agenda)
+    rodar("G03", "Atendimentos abertos", atendimentos_abertos)
+    rodar("F01", "Condições de pagamento", condicoes)
+    rodar("F02", "Revendas (GetRevendas)", revendas)
+    rodar("F02", "Títulos do cliente (ConsultarTitulos)", titulos)
+    _linx_registrar()
+    return {"ok": True, "testes": testes, "chaves": linx_chaves_status()}
+
+
+class _LinxPulo(Exception):
+    """Teste do diagnóstico que não roda sem um dado (ex.: CPF)."""
 
 
 def linx_clientes_sem_cadastro() -> dict[str, Any]:
@@ -19805,7 +20022,7 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
-        if path in ("/api/linx/testar", "/api/linx/clientes/sincronizar"):
+        if path in ("/api/linx/testar", "/api/linx/clientes/sincronizar", "/api/linx/diagnostico"):
             ctx = self.auth(admin_only=True)
             if ctx is None:
                 return
@@ -19813,6 +20030,9 @@ class AppHandler(BaseHTTPRequestHandler):
                 body = self.read_json()
                 if path == "/api/linx/testar":
                     resultado = linx_testar_conexao(str(body.get("documento") or ""))
+                elif path == "/api/linx/diagnostico":
+                    # V18.85: só leitura, lista fechada (LINX_DIAGNOSTICO).
+                    resultado = linx_diagnostico(str(body.get("documento") or ""))
                 else:
                     resultado = linx_clientes_sincronizar()
                 audit(str(ctx.get("username") or ""), "linx." + path.rsplit("/", 1)[-1],

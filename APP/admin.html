@@ -425,6 +425,10 @@
   .integracao-dados{display:grid;grid-template-columns:155px 1fr;gap:7px 10px;font-size:12px;margin:8px 0 14px}
   .integracao-dados b{color:#18324A}.integracao-dados span{color:#4A5D72;word-break:break-word}
   .integracao-acoes{display:flex;gap:8px;flex-wrap:wrap}
+  .linx-diag{margin-top:10px;display:grid;gap:6px;font-size:12px}
+  .linx-diag-item{border:1px solid var(--nk-line);border-radius:8px;padding:8px 10px;background:var(--nk-bg);color:var(--nk-ink)}
+  .linx-diag-item.ok{border-color:var(--nk-ok-ln)}.linx-diag-item.erro{border-color:var(--nk-bad-ln)}
+  .linx-diag-item small{display:block;color:var(--nk-muted);margin-top:3px;word-break:break-word}
   .integracao-nota{margin-top:12px;padding:10px 12px;border-radius:8px;background:#eff6ff;border:1px solid #bfdbfe;color:#1e3a8a;font-size:11px;line-height:1.45}
   .integracao-alerta{margin-top:12px;padding:10px 12px;border-radius:8px;background:#fff7ed;border:1px solid #fdba74;color:#9a3412;font-size:11px;line-height:1.45}
   .ml-log-wrap{max-height:48vh;overflow:auto;border:1px solid #DCE5EF;border-radius:8px}
@@ -2002,15 +2006,17 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
             <b>Clientes consultados</b><span id="linxContagem">—</span>
             <b>Última resposta</b><span id="linxUltimoOk">—</span>
             <b>Credenciais</b><span>Somente no servidor</span>
+            <b>Chave por produto</b><span id="linxChaves">—</span>
             <b>Token do robô do Apollo</b><span><code id="linxRoboToken">—</code></span>
           </div>
           <div class="integracao-acoes">
-            <button type="button" class="btn-primario" onclick="testarLinxAdmin()">Testar conexão</button>
+            <button type="button" class="btn-primario" onclick="testarLinxAdmin()">Testar Linx (só leitura)</button>
             <button type="button" class="btn-sucesso" onclick="sincronizarLinxAdmin()">↻ Consultar clientes agora</button>
             <button type="button" class="btn-secundario" onclick="copiarTokenRoboLinxAdmin()">Copiar token do robô</button>
             <button type="button" class="btn-perigo" onclick="renovarTokenRoboLinxAdmin()">Renovar token do robô</button>
           </div>
           <div id="linxIntegracaoMensagem" class="integracao-nota">Somente leitura: o servidor consulta no Linx se o cliente de cada venda já está cadastrado (pelo CPF/CNPJ da nota) e mostra na coluna Cód.Cliente da Central. Nada é gravado no Linx.</div>
+          <div id="linxDiagnostico" class="linx-diag" hidden></div>
         </div>
         <div class="integracao-card">
           <h3><i class=nk-i-printer></i> Agente Zebra autônomo</h3>
@@ -9490,6 +9496,8 @@ async function carregarIntegracaoLinxAdmin(){
     v151Set("linxEmpresa",`${d.empresa??"—"} / ${d.revenda??"—"}`);
     v151Set("linxContagem",`${c.encontrado||0} cadastrados · ${c.nao_cadastrado||0} sem cadastro · ${c.varios||0} vários · ${c.pendente||0} na fila${c.erro?` · ${c.erro} com erro`:""}`);
     v151Set("linxUltimoOk",d.ultimo_ok?mlDataHora(d.ultimo_ok):"—");
+    /* V18.85: cada produto tem a sua chave no portal da Linx. */
+    v151Set("linxChaves",(d.chaves||[]).map(k=>`${k.produto} ${k.chave==="propria"?"própria":k.chave==="geral"?"geral":"falta"}`).join(" · ")||"—");
     if(!d.configurado){
       badge.className="integracao-status off";badge.textContent="🟡 Aguardando credenciais no servidor";
       if(msg)msg.textContent=`Falta no /home/expedicao/.env: ${(d.faltando||[]).join(", ")}. Depois reinicie o serviço.`;
@@ -9518,15 +9526,28 @@ async function renovarTokenRoboLinxAdmin(){
   try{await confirmarOwnerSeguranca("Renovar a credencial do robô do Apollo");await mlApiAdmin("/expedicao/api/linx/robo/renovar",{method:"POST",body:"{}"});await carregarTokenRoboLinxAdmin();alert("Token renovado.");}
   catch(e){alert("Erro ao renovar: "+e.message);}
 }
+/* V18.85: diagnóstico só leitura — token, cliente, Agenda, atendimentos abertos,
+   condições de pagamento e títulos (F02). Mostra contagens e nomes de campos, nunca dados. */
 async function testarLinxAdmin(){
-  const doc=(prompt("Testar a conexão com a Linx.\n\nOpcional: digite um CPF/CNPJ para consultar (só leitura). Deixe vazio para testar só o login.","")??null);
+  const doc=(prompt("Testar a Linx (só leitura, nada é gravado).\n\nOpcional: CPF/CNPJ de um cliente que já comprou — testa também a consulta de cliente, os atendimentos dele e os títulos. Vazio = só o resto.","")??null);
   if(doc===null)return;
-  const msg=document.getElementById("linxIntegracaoMensagem");
-  if(msg)msg.textContent="Testando…";
+  const msg=document.getElementById("linxIntegracaoMensagem"),caixa=document.getElementById("linxDiagnostico");
+  if(msg)msg.textContent="Testando… (pode levar até 1 minuto)";
+  if(caixa){caixa.hidden=true;caixa.innerHTML="";}
   try{
-    const d=await mlApiAdmin("/expedicao/api/linx/testar",{method:"POST",body:JSON.stringify({documento:doc})});
-    const q=d.consulta;
-    if(msg)msg.textContent="✅ Login na Linx OK."+(q?(q.status==="encontrado"?` Cliente ${q.cliente} — ${q.nome}.`:q.status==="varios"?` ${q.candidatos.length} clientes com este documento: ${q.candidatos.map(x=>x.cliente).join(", ")}.`:" Este documento não está cadastrado no Linx."):"");
+    const d=await mlApiAdmin("/expedicao/api/linx/diagnostico",{method:"POST",body:JSON.stringify({documento:doc})});
+    const t=d.testes||[];
+    const ok=t.filter(x=>x.ok).length,erro=t.filter(x=>!x.ok&&!x.pulado).length;
+    if(msg)msg.textContent=`Diagnóstico: ${ok} ok · ${erro} com erro · ${t.length-ok-erro} não testado(s).`;
+    if(caixa){
+      caixa.innerHTML=t.map(x=>{
+        const icone=x.ok?"✅":x.pulado?"⏭️":"❌";
+        const texto=x.ok||x.pulado?x.resumo:(x.erro||"Falhou.");
+        const campos=(x.campos||[]).length?`<small>Campos: ${pd8Esc(x.campos.join(", "))}</small>`:"";
+        return `<div class="linx-diag-item ${x.ok?"ok":x.pulado?"":"erro"}">${icone} <b>${pd8Esc(x.produto)}</b> · ${pd8Esc(x.funcao)} <span style="opacity:.6">(${Number(x.ms||0)} ms)</span><br>${pd8Esc(texto)}${campos}</div>`;
+      }).join("");
+      caixa.hidden=!t.length;
+    }
   }catch(e){if(msg)msg.textContent="❌ "+e.message;}
   carregarIntegracaoLinxAdmin();
 }

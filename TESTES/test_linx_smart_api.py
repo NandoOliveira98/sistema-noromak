@@ -38,6 +38,11 @@ class LinxFalsa:
         self.simplificado_ignora = ()
         self.simplificado_apaga = ()                 # campos que o Simplificado zera
         self.simplificado_corpos = []
+        # V18.85: respostas das consultas do diagnóstico (G03, F01, F02)
+        self.atendimentos_abertos = []
+        self.condicoes = []
+        self.revendas = [{"Empresa": 1, "Revenda": 1, "Nome": "ARACATUBA"}]
+        self.titulos = None                          # None = 412 "não achei"
         falsa = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -88,12 +93,22 @@ class LinxFalsa:
                     for reg in falsa.clientes.get(dados["CPFCNPJ"], []):
                         reg["Nome"] = falsa.nome_depois_aar or dados["Nome"]
                     return self.responder(200, None)
+                if self.path == "/api-gerencial-pecas/ConsultaGerencial/Pecas/AtendimentosAbertos":
+                    return self.responder(200, falsa.atendimentos_abertos)
+                if self.path == "/api-financeiro/Titulos/ConsultarTitulos":
+                    if falsa.titulos is None:
+                        return self.responder(412, {"MensagemDeErro": "Nenhum titulo encontrado"})
+                    return self.responder(200, falsa.titulos)
                 self.responder(404, {})
 
             def do_GET(self):
                 falsa.chamadas.append({"path": self.path, "headers": dict(self.headers), "corpo": ""})
                 if self.path.startswith("/api-pecas-balcao-premium/VendaExternaPecas/Contatos/Agenda/"):
                     return self.responder(200, falsa.agenda)
+                if self.path.startswith("/api-faturamento/Faturamento/Cadastros/CondicoesPagamento/"):
+                    return self.responder(200, falsa.condicoes)
+                if self.path == "/api-financeiro/Alcadas/GetRevendas":
+                    return self.responder(200, falsa.revendas)
                 self.responder(404, {})
 
             def responder(self, status, dados):
@@ -128,7 +143,8 @@ class _BaseLinx(TesteNoromak):
         self.linx = LinxFalsa()
         self.original = {k: getattr(S, k) for k in
                          ("LINX_API_BASE", "LINX_API_CHAVE", "LINX_API_USUARIO", "LINX_API_SENHA",
-                          "LINX_ESCRITA_ATIVA")}
+                          "LINX_ESCRITA_ATIVA", "LINX_API_CHAVES")}
+        S.LINX_API_CHAVES = {k: "" for k in S.LINX_PRODUTOS_NOMES}
         S.LINX_API_BASE = self.linx.url
         S.LINX_API_CHAVE = "chave-assinatura"
         S.LINX_API_USUARIO = "integracao"
@@ -664,6 +680,121 @@ class LinxCreditoNoCadastro(_BaseLinx):
         status, corpo = self.cliente.pedir("POST", "/api/linx/cadastro", {"pedido": self.PEDIDO})
         self.assertEqual(status, 409, corpo)
         self.assertEqual(self.linx.gravacoes(), [])
+
+class LinxChavesEDiagnostico(_BaseLinx):
+    """V18.85: uma chave por produto assinado e o diagnóstico só leitura."""
+
+    def chave_usada(self, trecho):
+        return [c["headers"].get("Ocp-Apim-Subscription-Key") for c in self.linx.chamadas if trecho in c["path"]]
+
+    def preparar_linx(self):
+        self.linx.clientes[CPF] = [{"Cliente": 81558, "Nome": "NAOR PRATO JUNIOR", "Cpf": int(CPF),
+                                    "BloqueioCredito": "1", "SituacaoCredito": "2"}]
+        self.linx.agenda = [{"Cliente": 81558, "Contato": 786057, "DataContato": "2026-10-09"},
+                            {"Cliente": 999, "Contato": 786058, "DataContato": "2026-10-09"}]
+        self.linx.atendimentos_abertos = [{"Contato": 786057, "NomeCliente": "NAOR PRATO JUNIOR",
+                                           "NomeVendedor": "LOJA VIRTUAL", "ValorTotal": 105.69}]
+        self.linx.condicoes = [{"Condicao": 213, "Descricao": "CT - MERCADO LIVRE"},
+                               {"Condicao": 971, "Descricao": "CT - SHOPEE"}]
+        self.linx.titulos = [{"Tipo": "CR", "Titulo": 1, "CpfCnpj": CPF, "NomeCliente": "NAOR PRATO JUNIOR",
+                              "TelefoneCliente": "988887777"}]
+
+    def test_cada_produto_usa_a_sua_chave(self):
+        S.LINX_API_CHAVE = "chave-geral"
+        S.LINX_API_CHAVES.update(S01="chave-s01", V01="chave-v01", F02="chave-f02")
+        self.preparar_linx()
+        r = S.linx_diagnostico(CPF)
+        self.assertTrue(all(t["ok"] for t in r["testes"]), r)
+        self.assertEqual(set(self.chave_usada("/api-seguranca/")), {"chave-s01"})
+        self.assertEqual(set(self.chave_usada("/api-veiculos-crm/")), {"chave-v01"})
+        self.assertEqual(set(self.chave_usada("/api-financeiro/")), {"chave-f02"})
+        # sem chave própria: a geral, como até a V18.84
+        self.assertEqual(set(self.chave_usada("/api-pecas-balcao-premium/")), {"chave-geral"})
+        self.assertEqual(set(self.chave_usada("/api-gerencial-pecas/")), {"chave-geral"})
+        status, corpo = self.cliente.pedir("GET", "/api/linx/status")
+        self.assertEqual(status, 200, corpo)
+        origem = {k["produto"]: k["chave"] for k in corpo["chaves"]}
+        self.assertEqual(origem["S01"], "propria")
+        self.assertEqual(origem["P02"], "geral")
+        self.assertNotIn("chave-s01", json.dumps(corpo))
+        self.assertNotIn("chave-geral", json.dumps(corpo))
+
+    def test_produto_sem_chave_nao_e_chamado(self):
+        S.LINX_API_CHAVE = ""
+        S.LINX_API_CHAVES.update(S01="chave-s01", V01="chave-v01")
+        self.preparar_linx()
+        r = S.linx_diagnostico(CPF)
+        por_produto = {}
+        for t in r["testes"]:
+            por_produto.setdefault(t["produto"], []).append(t)
+        self.assertTrue(por_produto["V01"][0]["ok"])
+        self.assertFalse(por_produto["P02"][0]["ok"])
+        self.assertIn("LINX_API_CHAVE_P02", por_produto["P02"][0]["erro"])
+        self.assertEqual([c for c in self.linx.chamadas if "/api-pecas" in c["path"] or "/api-financeiro" in c["path"]],
+                         [], "chamou produto sem chave (iria com a chave vazia)")
+        status, corpo = self.cliente.pedir("GET", "/api/linx/status")
+        self.assertTrue(corpo["configurado"])
+        self.assertEqual({k["produto"]: k["chave"] for k in corpo["chaves"]}["F02"], "falta")
+
+    def test_diagnostico_so_le_e_nao_devolve_dados_pessoais(self):
+        self.preparar_linx()
+        r = S.linx_diagnostico(CPF)
+        self.assertTrue(r["ok"], r)
+        self.assertTrue(all(t["ok"] for t in r["testes"]), r["testes"])
+        texto = json.dumps(r, ensure_ascii=False)
+        for dado in (CPF, "NAOR", "988887777", "LOJA VIRTUAL", SENHA):
+            self.assertNotIn(dado, texto)
+        resumo = {t["funcao"]: t["resumo"] for t in r["testes"]}
+        self.assertIn("1 deste cliente", resumo["Agenda de atendimentos"])
+        self.assertIn("Vendedor: sim · valor: sim", resumo["Atendimentos abertos"])
+        self.assertIn("213 Mercado Livre: sim", resumo["Condições de pagamento"])
+        self.assertIn("983 Magalu: não", resumo["Condições de pagamento"])
+        self.assertIn("1 título(s)", resumo["Títulos do cliente (ConsultarTitulos)"])
+        # Só as rotas da lista fechada — e nenhuma que grava.
+        prefixos = {"S01": "/api-seguranca", "V01": "/api-veiculos-crm", "P02": "/api-pecas-balcao-premium",
+                    "G03": "/api-gerencial-pecas", "F01": "/api-faturamento", "F02": "/api-financeiro"}
+        permitidas = {prefixos[produto] + rota.split("{")[0] for produto, _m, rota in S.LINX_DIAGNOSTICO}
+        for chamada in self.linx.chamadas:
+            self.assertTrue(any(chamada["path"].startswith(p) for p in permitidas), chamada["path"])
+        self.assertEqual(self.linx.gravacoes(), [])
+        proibidas = ("Adicionar", "Lancar", "Cancelamento", "Autoriza", "Insere", "Altera", "Criar",
+                     "Confirma", "Inserir", "Atualiza", "Cadastrar", "Grava", "Importa")
+        for _produto, _metodo, rota in S.LINX_DIAGNOSTICO:
+            self.assertFalse(any(p in rota for p in proibidas), rota)
+
+    def test_titulos_412_e_nada_encontrado_nao_erro(self):
+        self.preparar_linx()
+        self.linx.titulos = None
+        r = S.linx_diagnostico(CPF)
+        titulos = [t for t in r["testes"] if t["funcao"].startswith("Títulos")][0]
+        self.assertTrue(titulos["ok"])
+        self.assertEqual(titulos["status"], 412)
+
+    def test_sem_cpf_pula_cliente_e_titulos(self):
+        self.preparar_linx()
+        r = S.linx_diagnostico("")
+        pulados = [t["produto"] for t in r["testes"] if t.get("pulado")]
+        self.assertEqual(pulados, ["V01", "F02"])
+        self.assertEqual(self.linx.consultas(), [])
+        self.assertFalse(any("ConsultarTitulos" in c["path"] for c in self.linx.chamadas))
+
+    def test_linx_fora_do_ar_para_no_token(self):
+        S.LINX_API_BASE = "http://127.0.0.1:9"     # nada escuta aqui
+        r = S.linx_diagnostico(CPF)
+        self.assertEqual(len(r["testes"]), 1)
+        self.assertFalse(r["testes"][0]["ok"])
+        self.assertNotIn(SENHA, json.dumps(r))
+
+    def test_rota_do_diagnostico_e_so_do_admin(self):
+        anonimo = type(self.cliente)(self.url_base)
+        status, _ = anonimo.pedir("POST", "/api/linx/diagnostico")
+        self.assertIn(status, (401, 403))
+        self.assertEqual(self.linx.chamadas, [])
+        self.preparar_linx()
+        status, corpo = self.cliente.pedir("POST", "/api/linx/diagnostico", {"documento": CPF})
+        self.assertEqual(status, 200, corpo)
+        self.assertEqual(len(corpo["testes"]), 7)
+
 
 if __name__ == "__main__":
     unittest.main()

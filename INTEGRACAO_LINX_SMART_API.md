@@ -39,8 +39,14 @@ Assinaturas ativas desde 13/08/2026, em nome de *14.346.930/0001-06 — NOROMAK 
 | F01 Faturamento | Faturamento | `/api-faturamento` | 6 |
 | P02 Peças Balcão Premium | Peças Balcão Premium | `/api-pecas-balcao-premium` | 38 |
 | V01 Veículos CRM | Veículos CRM | `/api-veiculos-crm` | 8 |
+| F02 Financeiro | Financeiro | `/api-financeiro` | 19 — **assinada em 08/10/2026** (seção 4d) |
 
-As outras 14 APIs (seção 6) pedem assinatura **com aprovação da Linx**.
+As outras 13 APIs (seção 6) pedem assinatura **com aprovação da Linx**.
+
+**Uma chave por produto (V18.85).** A chave de um produto dá **401** em outro (medido pelo
+NoromakWeb no F02, 08/10/2026). No `.env`: `LINX_API_CHAVE_S01`, `_V01`, `_P02`, `_G03`,
+`_F01`, `_F02`; vazia = usa a `LINX_API_CHAVE` geral. Produto sem chave nenhuma não é
+chamado. O token de sempre (S01) vale para todos.
 
 Legenda das tabelas: **L** = só leitura (seguro testar) · **E** = grava algo no Linx
 (**não testar sem combinar**) · **E!** = movimenta estoque, emite/importa nota ou mexe em
@@ -231,6 +237,33 @@ montado do cadastro atual (nome e endereço sem acento) e qualquer outro campo q
 Campos que a consulta não devolve (`TipoPessoa`, `Departamento`, `UsuarioVendedor`…) não
 são enviados. Falha no crédito não desfaz o nome, que já foi conferido.
 
+## 4d. F02 Financeiro e o mapa cadastro → romaneio → caixa → faturamento (09/10/2026)
+
+O F02 (manual completo no repositório do NoromakWeb: `apollo_f02_financeiro`) tem 19
+funções: **títulos** (consultar; criar a receber/a pagar/cartão; adiantamento; cancelar
+adiantamento; lançamento contábil), **alçadas** (títulos a pagar em aberto, aprovar
+pagamento, empresas, revendas, centros de custo, usuários) e **consórcio**. 10 leem, 9 gravam.
+Ele **não** mexe em cadastro, crédito do cliente, romaneio, caixa nem nota. Não baixa
+título. Regras medidas: `Revenda` obrigatória; sem `Status` só vem o aberto; `412` = não
+achei; data vazia = `0001-01-01T00:00:00`; o corpo de erro pode trazer SQL (não logar).
+
+| Etapa | Onde está na API | Situação no Noromak |
+|---|---|---|
+| Cadastro + crédito | V01 `AtualizarCadastroClienteAAR` + `BloqueioCredito` no Simplificado | V18.70 pronto; nunca rodou em produção (sem `LINX_*` no `.env` em 09/10). 421 e validade fora do contrato |
+| Romaneio | P02 `GeraListaRomaneio` → `AtualizaQuantidades` → `ConfirmaRomaneio` | V18.60 pronto, desligado; localizar o atendimento depende da Agenda (não confirmada) |
+| Condição de pagamento (971/983) | **nenhuma assinada** (só E02) | extensão |
+| Enviar ao caixa | P02 `Confirmar/Validacoes`, `VerificaAtualizacaoIpi`, `InserirOuReenviarItensFrenteCaixaOuExpedicao` | extensão; vendedor e valor talvez venham do G03 `AtendimentosAbertos` (o diagnóstico responde) |
+| Faturar no caixa (NF de saída) | **nenhuma das 6 assinadas** | manual. Não usar `AdicionarTituloReceber`/`CriarTituloCartao` no lugar: criam título sem nota e duplicam o do caixa |
+| Conferir que faturou | F02 `ConsultarTitulos` (só leitura) | possível próxima etapa |
+
+**Diagnóstico (V18.85)** — Admin → Integrações → *Testar Linx (só leitura)*, rota
+`POST /api/linx/diagnostico` (admin). Roda uma lista fechada (`LINX_DIAGNOSTICO`): token,
+`ConsultaClientes`, Agenda, G03 `AtendimentosAbertos`, F01 condições, F02 `GetRevendas` e
+`ConsultarTitulos`. Devolve ✅/❌ por função com contagens e **nomes** de campos, nunca valores.
+Sem CPF, a consulta de cliente e os títulos ficam de fora. O corpo do `AtendimentosAbertos`
+é um palpite do contrato (`codigoUsuario`, `codigoFilial`, datas, `marca`, `empresaRevenda`):
+se a Linx recusar, a mensagem de erro diz o que ajustar.
+
 ## 5. Plano de teste sugerido (tudo só-leitura)
 
 1. **Acesso da VPS:** da VPS, `POST /api-seguranca/token` com o usuário de integração.
@@ -257,7 +290,6 @@ Nada da seção "E"/"E!" entra no teste.
 |---|---|---|---|
 | E01 E-Commerce | `/api-e-commerce` | 13 | consulta/cadastro de cliente, `ConsultaPecaGerencial`, atendimento (inserir contato/item) |
 | E02 E-Commerce Premium | `/api-e-commerce-premium` | 19 | o de cima + condições de pagamento, lista de pagamentos, XML da nota |
-| F02 Financeiro | `/api-financeiro` | 19 | títulos a pagar/receber (consultar, incluir), alçadas, consórcio |
 | G01 Gerencial Fiscal | `/api-gerencial-fiscal` | 19 | NF emitidas, NF em atraso, quantidade de NF por usuário/transação |
 | G02 Gerencial Oficina | `/api-gerencial-oficina` | 37 | OS encerradas, passagens, consultor técnico, mecânico, simulador de custos |
 | G04 Gerencial Veículos | `/api-gerencial-veiculos` | 60 | análise de vendas de veículos, propostas, bônus |
@@ -270,8 +302,8 @@ Nada da seção "E"/"E!" entra no teste.
 | V03 Gestão Show Room Premium | `/api-veiculos-gestao-show-room-premium` | 90 | negociação, test drive, propostas, simulação |
 | V04 Leads Veículos | `/api-leads-veiculos` | 7 | leads e distribuição de contatos |
 
-Para a Noromak, as que podem valer a pena depois: **F02 Financeiro** (títulos),
-**G01 Gerencial Fiscal** (notas emitidas/atrasadas) e **G05 Gestão Administrativa**
+Para a Noromak, as que podem valer a pena depois (o F02 já foi assinado em 08/10/2026):
+**E02 E-Commerce Premium** (condição de pagamento do atendimento), **G01 Gerencial Fiscal** (notas emitidas/atrasadas) e **G05 Gestão Administrativa**
 (lista Empresa/Revenda). Para peças e compras, **o que já está assinado basta**.
 
 Contato da Linx no portal: automotivo.distribuicao@linx.com.br.
