@@ -277,8 +277,9 @@ ganha ponto laranja. No modo só ícones (761–1000 px) os títulos somem e tud
 **Menu único e endereço por tela (V18.82):** a lista de telas vive só em `APP/nk-menu.js` (`MENU`).
 O Admin desenha o menu dentro do próprio `<nav>` (`nkMenuDesenhar`); as outras telas carregam
 `nk-menu.js` com `data-shell` + `nk-ui.css` e ganham o mesmo menu à esquerda (Conferência e Estação
-Zebra ficam sem, de propósito: tela cheia de trabalho). Itens são links: clique abre na mesma aba,
-Ctrl+clique em outra. Cada tela do Admin tem endereço (`/expedicao/pedidos-dia`, `/usuarios`...,
+Zebra ficam sem, de propósito: tela cheia de trabalho). Itens são links que abrem em **aba nova** (V18.87,
+pedido do dono; dentro do Admin as telas do próprio Admin trocam no lugar),
+Ctrl+clique também. Cada tela do Admin tem endereço (`/expedicao/pedidos-dia`, `/usuarios`...,
 `ROTAS_ADMIN_V1882` no servidor), todos servem o mesmo `admin.html`; o script `rotas-admin-v1882` (o
 último do arquivo) embrulha `abrirAbaAdmin`/`abrirDashboardV151` para o endereço acompanhar a tela
 (F5, Voltar, link). `/admin` e `?aba=` continuam valendo. A mesma lista está no `web-auth.js` (senão a

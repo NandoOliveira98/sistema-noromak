@@ -61,10 +61,12 @@ def fundo_escuro(txt: str) -> str | None:
     if _lum(r, g, b) < 0.80:
         return None
     h, l, s = colorsys.rgb_to_hls(r, g, b)
-    if s < 0.12 or l > 0.985:  # branco/cinza: superfície do sistema
+    # V18.87: quase branco com um leve tom (ex.: #F7FAF4 do Precificador) virava verde-oliva.
+    # Quase branco é superfície; só fundo realmente colorido (selo, aviso) mantém o tom, discreto.
+    if s < 0.12 or l >= 0.94:  # branco/cinza/quase branco: superfície do sistema
         nl, ns, h = 0.135 + (1 - l) * 0.35, 0.30, 0.59
-    else:  # tingido (verde, vermelho, âmbar, azul claro): mesmo tom, escuro
-        nl, ns = 0.16, min(0.55, s * 0.6 + 0.15)
+    else:  # tingido (verde, vermelho, âmbar, azul claro): mesmo tom, escuro e pouco saturado
+        nl, ns = 0.16, min(0.38, s * 0.5 + 0.10)
     r, g, b = colorsys.hls_to_rgb(h, nl, ns)
     return _hex(r, g, b, a)
 

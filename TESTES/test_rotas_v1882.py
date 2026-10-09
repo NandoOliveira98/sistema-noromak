@@ -106,6 +106,16 @@ class RotasDasTelas(TesteNoromak):
             status, _, _ = self.abrir(i["href"], self.cliente.cookie)
             self.assertEqual(status, 200, f"o item {i['id']} do menu aponta para {i['href']}, que não abre")
 
+    def test_itens_do_menu_abrem_em_aba_nova(self):
+        """V18.87: o dono pediu de volta — cada item do menu abre em aba nova (as telas do Admin
+        trocam no lugar só quando o clique é dentro do próprio Admin)."""
+        js = (APP / "nk-menu.js").read_text(encoding="utf-8")
+        m = re.search(r"function itemHTML\(i\) \{(.*?)\n  \}", js, re.S)
+        self.assertIsNotNone(m)
+        self.assertIn('target="_blank" rel="noopener"', m.group(1))
+        admin = (APP / "admin.html").read_text(encoding="utf-8")
+        self.assertIn('a.v15-nav-item[data-nk-aba]', admin, "o Admin deixou de trocar as próprias telas no lugar")
+
     def test_telas_com_menu_carregam_o_menu_unico(self):
         for pagina in ("financeiro", "conversao", "analise-ads", "promocoes", "promocoes-auto",
                        "kits-analise", "ruptura", "analise-full", "compras", "precificador"):

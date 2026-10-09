@@ -66,8 +66,11 @@
   function abaDoCaminho(caminho) { const i = itemDoCaminho(caminho); return i && i.aba ? i.aba : null; }
   function itemDaAba(aba) { return ITENS.find(i => i.aba === aba) || null; }
 
+  // V18.87: como antes da V18.82, cada item abre em aba nova (target=_blank). Dentro do Admin,
+  // o clique simples numa tela do próprio Admin (data-nk-aba) é interceptado pelo script
+  // rotas-admin-v1882 e troca a tela sem recarregar.
   function itemHTML(i) {
-    return `<a class="v15-nav-item" href="${B}${i.href}" data-v15-nav="${esc(i.aba || i.id)}" data-nk-id="${esc(i.id)}"` +
+    return `<a class="v15-nav-item" href="${B}${i.href}" target="_blank" rel="noopener" data-v15-nav="${esc(i.aba || i.id)}" data-nk-id="${esc(i.id)}"` +
       `${i.aba ? ` data-nk-aba="${esc(i.aba)}"` : ""} data-nk-modulo="${esc(i.modulo)}"${i.soAdmin ? " data-nk-so-admin=\"1\"" : ""} title="${esc(i.rotulo)}">` +
       `<span class="v15-nav-icon">${ic(i.icone)}</span><span class="v15-nav-label">${esc(i.rotulo)}</span></a>`;
   }

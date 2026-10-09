@@ -200,6 +200,10 @@ html[data-tema="escuro"] [style*="background:#ffffff" i],html[data-tema="escuro"
 html[data-tema="escuro"] [style*="color:#18324A" i],html[data-tema="escuro"] [style*="color:#16344f" i],html[data-tema="escuro"] [style*="color:#12345B" i],
 html[data-tema="escuro"] [style*="color:#173750" i],html[data-tema="escuro"] [style*="color:#143957" i]{color:var(--nk-head)!important}
 html[data-tema="escuro"] [style*="color:#586A7D" i],html[data-tema="escuro"] [style*="color:#5F7186" i],html[data-tema="escuro"] [style*="color:#7A8C9E" i]{color:var(--nk-ink2)!important}
+/* V18.87: cor de status posta pelo JS (el.style.color = "#B42318") o navegador grava como rgb(...). */
+html[data-tema="escuro"] [style^="color: rgb(180, 35, 24)"],html[data-tema="escuro"] [style*="; color: rgb(180, 35, 24)"]{color:#F2857B!important}
+html[data-tema="escuro"] [style^="color: rgb(27, 122, 62)"],html[data-tema="escuro"] [style*="; color: rgb(27, 122, 62)"]{color:#5BC285!important}
+html[data-tema="escuro"] [style^="color: rgb(88, 106, 125)"],html[data-tema="escuro"] [style*="; color: rgb(88, 106, 125)"]{color:#A8B6C6!important}
 html[data-tema="escuro"] img:not([src$=".svg"]){filter:brightness(.92)}
 html[data-tema="escuro"] ::-webkit-scrollbar{width:11px;height:11px}
 html[data-tema="escuro"] ::-webkit-scrollbar-thumb{background:#33445A;border-radius:8px;border:2px solid #0F1722}

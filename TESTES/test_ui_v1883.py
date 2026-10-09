@@ -110,6 +110,19 @@ class PecasComuns(unittest.TestCase):
         self.assertNotIn('html[data-tema="escuro"] .btn{', html, "botão azul com texto branco não deve ser convertido")
         self.assertIn('[style*="background:#FDECEA" i]', html)
 
+    def test_quase_branco_com_tom_vira_superficie_neutra(self):
+        """V18.87: o Precificador usa fundos quase brancos esverdeados (#F7FAF4...) que viravam
+        verde-oliva no modo escuro. Quase branco é superfície; selo colorido mantém o tom."""
+        sys.path.insert(0, str(RAIZ / "FERRAMENTAS_WINDOWS"))
+        import gerar_modo_escuro as G
+        import colorsys
+        for clara in ("#F7FAF4", "#FBFDF7", "#F4F8EF", "#FFFFFF"):
+            r, g, b = (int(G.fundo_escuro(clara)[i:i + 2], 16) / 255 for i in (1, 3, 5))
+            _, _, s = colorsys.rgb_to_hls(r, g, b)
+            self.assertFalse(g > r + 0.03 and g > b, f"{clara} virou verde no modo escuro: {G.fundo_escuro(clara)}")
+        r, g, b = (int(G.fundo_escuro("#D8F0E0")[i:i + 2], 16) / 255 for i in (1, 3, 5))
+        self.assertGreater(g, r, "selo verde de verdade deve continuar esverdeado")
+
     def test_menu_tem_tema_e_recolher(self):
         js = (APP / "nk-menu.js").read_text(encoding="utf-8")
         self.assertIn("data-nk-tema", js)
