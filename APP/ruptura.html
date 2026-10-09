@@ -86,6 +86,11 @@ table.rp{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;m
       <div class="sub" id="periodo">Carregando…</div>
     </div>
     <div class="acoes">
+      <!-- V18.90: Mercado Livre ou Shopee (mesma conta; ?mp=shopee abre direto na Shopee). -->
+      <select class="btn" id="mkt" title="Marketplace">
+        <option value="ml">Mercado Livre</option>
+        <option value="shopee">Shopee</option>
+      </select>
       <select class="btn" id="dias" title="Período do perdido">
         <option value="7">Últimos 7 dias</option>
         <option value="30" selected>Últimos 30 dias</option>
@@ -104,7 +109,7 @@ table.rp{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;m
     <div class="card span12" id="lista">
       <div class="tbar">
         <div class="tabs" id="tabs"></div>
-        <input type="search" id="q" placeholder="Buscar título, MLB ou SKU…">
+        <input type="search" id="q" placeholder="Buscar título, anúncio ou SKU…">
       </div>
       <div class="tw"><table class="rp" id="tab" data-nk-tabela="ruptura" data-nk-ordenar="0"></table></div>
       <div class="more"><button class="btn" id="more">Mostrar mais</button></div>
@@ -155,9 +160,16 @@ function acao(i){
   return '';
 }
 
+// V18.90: marketplace escolhido (ML ou Shopee); o endereço guarda a escolha (?mp=shopee).
+try{ const mp=new URLSearchParams(location.search).get('mp'); if(mp==='shopee') document.getElementById('mkt').value='shopee'; }catch(e){}
+const mkt=()=>document.getElementById('mkt').value;
+document.getElementById('mkt').addEventListener('change',()=>{
+  try{ const u=new URL(location.href); if(mkt()==='shopee') u.searchParams.set('mp','shopee'); else u.searchParams.delete('mp'); history.replaceState(null,'',u); }catch(e){}
+  carregar();
+});
 async function carregar(){
   $('periodo').textContent='Carregando…';
-  try{ D=await api('/api/ruptura?dias='+$('dias').value); }
+  try{ D=await api('/api/ruptura?dias='+$('dias').value+'&marketplace='+mkt()); }
   catch(e){ aviso('<b>Não foi possível carregar.</b> '+esc(e.message)); $('periodo').textContent=''; return; }
   const c=D.coleta||{};
   $('periodo').textContent=`Perdido de ${dataBR(D.periodo.inicio)} a ${dataBR(D.periodo.fim)} · ritmo de venda dos últimos ${D.base.dias} dias · última checagem ${horaBR(c.ultima_checagem)}`;
@@ -232,7 +244,7 @@ function passos(i){
     if(i.full){
       P.push('Anúncio no Full: o estoque está no armazém do ML. Confira a peça no Apollo (Araçatuba) e programe o envio na <b>Demanda Full</b>.');
     }else{
-      P.push('Confira a peça no Apollo. Se tem na loja, o estoque do anúncio está desatualizado: corrija a quantidade no ML agora.');
+      P.push(`Confira a peça no Apollo. Se tem na loja, o estoque do anúncio está desatualizado: corrija a quantidade ${D.marketplace==='shopee'?'na Shopee':'no ML'} agora.`);
       P.push('Se não tem, entra na <b>Demanda de Compra</b>.');
     }
     P.push('Pause o Ads deste anúncio até voltar o estoque: senão você paga por clique que não pode comprar.');
@@ -266,7 +278,7 @@ function abrir(i){
     <p style="margin:0 0 4px"><b>O que fazer</b></p>
     <ol>${passos(i).map(p=>`<li>${p}</li>`).join('')}</ol>
     <div class="links">
-      <a class="btn" href="https://produto.mercadolivre.com.br/${i.mlb.replace('MLB','MLB-')}" target="_blank" rel="noopener">Abrir anúncio no ML</a>
+      ${i.link?`<a class="btn" href="${esc(i.link)}" target="_blank" rel="noopener">Abrir anúncio ${D.marketplace==='shopee'?'na Shopee':'no ML'}</a>`:''}
       ${i.full?'<a class="btn" href="/expedicao/analise-full" target="_blank" rel="noopener">Demanda Full</a>':'<a class="btn" href="/expedicao/compras" target="_blank" rel="noopener">Demanda de Compra</a>'}
     </div>`;
   $('drawer').classList.add('on'); $('drawer').setAttribute('aria-hidden','false');
@@ -282,7 +294,7 @@ function notas(){
     <li><b>Venda por dia</b> = unidades vendidas nos últimos ${r.base_dias} dias ÷ dias em que o anúncio <b>tinha estoque</b>. Dia sem checagem conta como com estoque, o que deixa o ritmo mais baixo, nunca inflado.</li>
     <li><b>Dura</b> = estoque atual ÷ venda por dia. <b>Vai zerar</b>: até ${r.critico_dias} dias; <b>Atenção</b>: até ${r.atencao_dias} dias.</li>
     <li><b>Perdido</b> = venda por dia × dias sem estoque no período × ticket médio. Dia em que o anúncio ficou sem estoque só parte do tempo conta pela fração das checagens. É uma <b>estimativa</b> para priorizar, não dinheiro garantido.</li>
-    <li>Estoque: checado no ML a cada ${r.intervalo_horas} h para os anúncios que venderam nos últimos ${r.base_dias} dias, e 1x por dia para todos (coleta das visitas). No Full, é o estoque do armazém do ML. Só Mercado Livre por enquanto.</li></ul>`;
+    <li>Estoque: checado ${D.marketplace==='shopee'?'na Shopee':'no ML'} a cada ${r.intervalo_horas} h para os anúncios que venderam nos últimos ${r.base_dias} dias, e 1x por dia para todos (retrato das 06:00).${D.marketplace==='shopee'?' Na Shopee, anúncio com variações conta o estoque somado de todas elas; "pausado" é o anúncio desativado (UNLIST).':' No Full, é o estoque do armazém do ML.'}</li></ul>`;
 }
 
 carregar();

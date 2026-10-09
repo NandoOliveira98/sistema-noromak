@@ -515,6 +515,20 @@ Grupos: zerado agora (R$/dia perdido), vai zerar (≤ 7 dias), atenção (≤ 15
 de `shipping.logistic_type` (`ml_itens_detalhe` passou a pedir `shipping`). O histórico só começa a
 contar a partir da publicação: "zerado agora" e "vai zerar" valem desde o primeiro dia.
 
+### Conversão e Ruptura da Shopee (V18.90)
+As duas telas ganharam a escolha **Mercado Livre / Shopee** (`?mp=shopee`; APIs com `&marketplace=shopee`).
+`conversao_payload` e `ruptura_payload` recebem `marketplace` e leem as tabelas de `ANUNCIO_FONTES` — as da
+Shopee têm **as mesmas colunas** das do ML (`shopee_item_v1890`, `shopee_visitas_dia_v1890`,
+`shopee_estoque_dia_v1890`), e o status é traduzido para o vocabulário do ML (`SHOPEE_STATUS_ML`: NORMAL=active,
+UNLIST=paused, deletado=closed). Worker `shopee_anuncios_loop` (30 min): depois das 06:00, **retrato do dia**
+(`get_item_list` NORMAL+UNLIST, `get_item_base_info` em lotes de 50 — título, SKU, preço, estoque
+`stock_info_v2.summary_info.total_available_stock` — e `get_item_extra_info` — `views`); fora dele, a cada 2 h,
+o estoque de quem vendeu nos últimos 60 dias. **A Shopee não tem visita por dia na API**: `views` é o total
+acumulado; a visita do dia anterior = retrato de hoje − o retrato anterior (`shopee_views_v1890`, 10 dias).
+Se o total **cair**, o dia não entra e o anúncio fica com `views_nao_acumulado=1` (aviso na tela). Sem categoria
+nem Ads da Shopee: referência = mediana da conta e a tela não dá dica de Ads (`tem_ads`). Anúncio com variações
+conta o estoque somado. `_ml_estoque_registrar(..., tabela=)` aceita só as duas tabelas de estoque.
+
 ### Promoções automáticas — renovação do desconto próprio (V18.73)
 `APP/promocoes-auto.html` (`/promocoes-auto`, menu Vendas e anúncios, só **admin**). Quando o
 desconto próprio (`PRICE_DISCOUNT`) de um anúncio **marcado pelo ADMIN** acaba, cria outro de

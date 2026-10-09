@@ -43,7 +43,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "18.89-CONVITES-CAMPANHA-ML"
+APP_VERSION = "18.90-SHOPEE-CONVERSAO-RUPTURA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -2241,6 +2241,7 @@ def init_db() -> None:
     ensure_saude_schema()  # V18.83
     ensure_posvenda_schema()  # V18.88
     ensure_promo_convite_schema()  # V18.89
+    ensure_shopee_anuncios_schema()  # V18.90
     migrate_legacy_if_empty()
     ensure_storage_defaults()
     seed_sku_state_from_storage()
@@ -15121,7 +15122,7 @@ def _mediana(valores: list[float]) -> float | None:
     return v[m] if len(v) % 2 else (v[m - 1] + v[m]) / 2
 
 
-def conversao_payload(dias: int = 30, hoje: date | None = None) -> dict[str, Any]:
+def conversao_payload(dias: int = 30, hoje: date | None = None, marketplace: str = "ml") -> dict[str, Any]:
     """Visitas × vendas por anúncio do ML, no período e no período anterior de mesmo tamanho.
 
     Conversão = pedidos ÷ visitas (o mesmo critério do ML: uma venda com 2 unidades é
@@ -15130,6 +15131,7 @@ def conversao_payload(dias: int = 30, hoje: date | None = None) -> dict[str, Any
     da conta (nunca vira zero). O "potencial" é uma estimativa e vem marcado assim.
     """
     dias = max(1, min(150, int(dias or 30)))
+    f = _anuncio_fonte(marketplace)   # V18.90: ML ou Shopee, mesmas colunas
     hoje = hoje or datetime.now(BR_TZ).date()
     fim = hoje - timedelta(days=1)                 # hoje ainda não fechou
     ini = fim - timedelta(days=dias - 1)
@@ -15139,24 +15141,29 @@ def conversao_payload(dias: int = 30, hoje: date | None = None) -> dict[str, Any
     pa = (ini_ant.isoformat(), fim_ant.isoformat())
     with DB_LOCK:
         vis = {str(r["item_id"]): (int(r["v"] or 0), int(r["d"] or 0)) for r in DB.execute(
-            "SELECT item_id, SUM(visitas) AS v, COUNT(*) AS d FROM ml_visitas_dia_v1868 "
+            f"SELECT item_id, SUM(visitas) AS v, COUNT(*) AS d FROM {f['vis']} "
             "WHERE dia BETWEEN ? AND ? GROUP BY item_id", p).fetchall()}
         vis_ant = {str(r["item_id"]): (int(r["v"] or 0), int(r["d"] or 0)) for r in DB.execute(
-            "SELECT item_id, SUM(visitas) AS v, COUNT(*) AS d FROM ml_visitas_dia_v1868 "
+            f"SELECT item_id, SUM(visitas) AS v, COUNT(*) AS d FROM {f['vis']} "
             "WHERE dia BETWEEN ? AND ? GROUP BY item_id", pa).fetchall()}
         vendas_sql = ("SELECT anuncio, COUNT(DISTINCT order_id) AS pedidos, COALESCE(SUM(qty),0) AS un, "
                       "COALESCE(SUM(amount),0) AS fat, MAX(title) AS titulo, MAX(sku) AS sku FROM vendas_v1799 "
-                      "WHERE marketplace='ml' AND anuncio <> '' AND sale_day BETWEEN ? AND ? GROUP BY anuncio")
-        ven = {str(r["anuncio"]): dict(r) for r in DB.execute(vendas_sql, p).fetchall()}
-        ven_ant = {str(r["anuncio"]): dict(r) for r in DB.execute(vendas_sql, pa).fetchall()}
+                      "WHERE marketplace=? AND anuncio <> '' AND sale_day BETWEEN ? AND ? GROUP BY anuncio")
+        ven = {str(r["anuncio"]): dict(r) for r in DB.execute(vendas_sql, (marketplace,) + p).fetchall()}
+        ven_ant = {str(r["anuncio"]): dict(r) for r in DB.execute(vendas_sql, (marketplace,) + pa).fetchall()}
         ads = {str(r["item_id"]): dict(r) for r in DB.execute(
-            "SELECT item_id, SUM(clicks) AS cliques, SUM(cost) AS gasto FROM ml_ads_item_dia_v1830 "
-            "WHERE item_id <> '' AND dia BETWEEN ? AND ? GROUP BY item_id", p).fetchall()}
+            f"SELECT item_id, SUM(clicks) AS cliques, SUM(cost) AS gasto FROM {f['ads']} "
+            "WHERE item_id <> '' AND dia BETWEEN ? AND ? GROUP BY item_id", p).fetchall()} if f["ads"] else {}
         info = {str(r["item_id"]): dict(r) for r in DB.execute(
-            "SELECT i.*, COALESCE(c.nome,'') AS categoria FROM ml_visitas_item_v1868 i "
-            "LEFT JOIN ml_categoria_v1868 c ON c.categoria_id = i.categoria_id").fetchall()}
-        ultimo_dia = DB.execute("SELECT MAX(dia) FROM ml_visitas_dia_v1868").fetchone()[0] or ""
-        primeiro_dia = DB.execute("SELECT MIN(dia) FROM ml_visitas_dia_v1868").fetchone()[0] or ""
+            (f"SELECT i.*, COALESCE(c.nome,'') AS categoria FROM {f['item']} i "
+             f"LEFT JOIN {f['cat']} c ON c.categoria_id = i.categoria_id") if f["cat"] else
+            f"SELECT i.*, '' AS categoria FROM {f['item']} i").fetchall()}
+        ultimo_dia = DB.execute(f"SELECT MAX(dia) FROM {f['vis']}").fetchone()[0] or ""
+        primeiro_dia = DB.execute(f"SELECT MIN(dia) FROM {f['vis']}").fetchone()[0] or ""
+        # V18.90: na Shopee a visita é a diferença do total acumulado; se o total cair, o
+        # anúncio fica marcado e o dia não entra.
+        nao_acumulado = (DB.execute("SELECT COUNT(*) FROM shopee_item_v1890 WHERE views_nao_acumulado=1").fetchone()[0]
+                         if marketplace == "shopee" else 0)
 
     itens: list[dict[str, Any]] = []
     sem_visita_com_venda = 0
@@ -15173,6 +15180,7 @@ def conversao_payload(dias: int = 30, hoje: date | None = None) -> dict[str, Any
         a = ads.get(mlb) or {}
         itens.append({
             "mlb": mlb,
+            "link": _anuncio_link(marketplace, mlb),
             "titulo": d.get("titulo") or v.get("titulo") or va.get("titulo") or "",
             "sku": d.get("sku") or v.get("sku") or "",
             "status": d.get("status") or "",
@@ -15228,6 +15236,8 @@ def conversao_payload(dias: int = 30, hoje: date | None = None) -> dict[str, Any
     tot_ped = sum(i["pedidos"] for i in itens)
     return {
         "ok": True,
+        "marketplace": marketplace, "marketplace_nome": f["nome"],
+        "tem_ads": bool(f["ads"]), "tem_categoria": bool(f["cat"]), "views_nao_acumulado": nao_acumulado,
         "periodo": {"inicio": p[0], "fim": p[1], "dias": dias},
         "periodo_anterior": {"inicio": pa[0], "fim": pa[1]},
         "coleta": {"primeiro_dia": primeiro_dia, "ultimo_dia": ultimo_dia,
@@ -15258,13 +15268,17 @@ RUPTURA_LOCK = threading.Lock()
 _RUPTURA_ESTADO: dict[str, Any] = {"rodando": False, "inicio": "", "fim": "", "ultimo": {}}
 
 
-def _ml_estoque_registrar(info: dict[str, dict[str, Any]], dia: str, quando: str | None = None) -> int:
+def _ml_estoque_registrar(info: dict[str, dict[str, Any]], dia: str, quando: str | None = None,
+                          tabela: str = "ml_estoque_dia_v1872") -> int:
     """Soma uma checagem de estoque por anúncio no dia (ml_estoque_dia_v1872).
 
     Sem estoque = available_quantity 0 ou sub_status out_of_stock (o ML pausa o anúncio
     sozinho quando zera). Pausa manual com estoque NÃO é ruptura. Anúncio sem estoque
     informado não é contado: desconhecido nunca vira zero.
     """
+    # V18.90: a Shopee grava na tabela dela, com as mesmas colunas (shopee_estoque_dia_v1890).
+    if tabela not in ("ml_estoque_dia_v1872", "shopee_estoque_dia_v1890"):
+        raise ValueError("tabela de estoque inválida")
     quando = quando or now_iso()
     linhas = []
     for mlb, d in (info or {}).items():
@@ -15284,7 +15298,7 @@ def _ml_estoque_registrar(info: dict[str, dict[str, Any]], dia: str, quando: str
         return 0
     with DB_LOCK:
         DB.executemany(
-            "INSERT INTO ml_estoque_dia_v1872(item_id,dia,checagens,sem_estoque,estoque_min,estoque_ultimo,"
+            f"INSERT INTO {tabela}(item_id,dia,checagens,sem_estoque,estoque_min,estoque_ultimo,"
             "ultimo_sem_estoque,status_ultimo,logistica,updated_at) VALUES(?,?,1,?,?,?,?,?,?,?) "
             "ON CONFLICT(item_id,dia) DO UPDATE SET checagens=checagens+1,"
             "sem_estoque=sem_estoque+excluded.sem_estoque,"
@@ -15354,7 +15368,7 @@ def ml_estoque_loop(stop_event: threading.Event) -> None:
             break
 
 
-def ruptura_payload(dias: int = 30, hoje: date | None = None) -> dict[str, Any]:
+def ruptura_payload(dias: int = 30, hoje: date | None = None, marketplace: str = "ml") -> dict[str, Any]:
     """Venda perdida por falta de estoque, por anúncio do ML. Só lê o banco.
 
     Ritmo = unidades vendidas nos últimos 60 dias ÷ dias COM estoque nesses 60 (dia sem
@@ -15363,6 +15377,7 @@ def ruptura_payload(dias: int = 30, hoje: date | None = None) -> dict[str, Any]:
     Anúncio que vendeu e ainda não teve o estoque checado fica fora (nunca vira zero).
     """
     dias = max(1, min(90, int(dias or 30)))
+    f = _anuncio_fonte(marketplace)   # V18.90: ML ou Shopee, mesmas colunas
     hoje = hoje or datetime.now(BR_TZ).date()
     fim = hoje - timedelta(days=1)                 # hoje ainda não fechou
     ini = fim - timedelta(days=dias - 1)
@@ -15372,23 +15387,24 @@ def ruptura_payload(dias: int = 30, hoje: date | None = None) -> dict[str, Any]:
     with DB_LOCK:
         vendas_sql = ("SELECT anuncio, COALESCE(SUM(qty),0) AS un, COUNT(DISTINCT order_id) AS pedidos, "
                       "COALESCE(SUM(amount),0) AS fat, MAX(title) AS titulo, MAX(sku) AS sku FROM vendas_v1799 "
-                      "WHERE marketplace='ml' AND anuncio <> '' AND sale_day BETWEEN ? AND ? GROUP BY anuncio")
-        base = {str(r["anuncio"]): dict(r) for r in DB.execute(vendas_sql, (base_ini.isoformat(), p[1])).fetchall()}
-        per = {str(r["anuncio"]): dict(r) for r in DB.execute(vendas_sql, p).fetchall()}
+                      "WHERE marketplace=? AND anuncio <> '' AND sale_day BETWEEN ? AND ? GROUP BY anuncio")
+        base = {str(r["anuncio"]): dict(r) for r in DB.execute(vendas_sql, (marketplace, base_ini.isoformat(), p[1])).fetchall()}
+        per = {str(r["anuncio"]): dict(r) for r in DB.execute(vendas_sql, (marketplace,) + p).fetchall()}
         zeros = {str(r["item_id"]): dict(r) for r in DB.execute(
             "SELECT item_id, SUM(1.0*sem_estoque/checagens) AS zb, "
             "SUM(CASE WHEN dia >= ? THEN 1.0*sem_estoque/checagens ELSE 0 END) AS zp, "
-            "SUM(CASE WHEN dia >= ? THEN 1 ELSE 0 END) AS obs_p FROM ml_estoque_dia_v1872 "
+            f"SUM(CASE WHEN dia >= ? THEN 1 ELSE 0 END) AS obs_p FROM {f['est']} "
             "WHERE dia BETWEEN ? AND ? AND checagens > 0 GROUP BY item_id",
             (p[0], p[0], base_ini.isoformat(), p[1])).fetchall()}
         atual = {str(r["item_id"]): dict(r) for r in DB.execute(
-            "SELECT e.* FROM ml_estoque_dia_v1872 e JOIN (SELECT item_id, MAX(dia) AS d FROM ml_estoque_dia_v1872 "
+            f"SELECT e.* FROM {f['est']} e JOIN (SELECT item_id, MAX(dia) AS d FROM {f['est']} "
             "GROUP BY item_id) m ON m.item_id = e.item_id AND m.d = e.dia").fetchall()}
         info = {str(r["item_id"]): dict(r) for r in DB.execute(
-            "SELECT i.item_id, i.titulo, i.sku, i.preco, COALESCE(c.nome,'') AS categoria FROM ml_visitas_item_v1868 i "
-            "LEFT JOIN ml_categoria_v1868 c ON c.categoria_id = i.categoria_id").fetchall()}
+            (f"SELECT i.item_id, i.titulo, i.sku, i.preco, COALESCE(c.nome,'') AS categoria FROM {f['item']} i "
+             f"LEFT JOIN {f['cat']} c ON c.categoria_id = i.categoria_id") if f["cat"] else
+            f"SELECT i.item_id, i.titulo, i.sku, i.preco, '' AS categoria FROM {f['item']} i").fetchall()}
         primeiro_dia, ultima = DB.execute(
-            "SELECT MIN(dia), MAX(updated_at) FROM ml_estoque_dia_v1872").fetchone()
+            f"SELECT MIN(dia), MAX(updated_at) FROM {f['est']}").fetchone()
 
     itens: list[dict[str, Any]] = []
     sem_coleta = encerrados = 0
@@ -15427,6 +15443,7 @@ def ruptura_payload(dias: int = 30, hoje: date | None = None) -> dict[str, Any]:
         v = per.get(mlb) or {}
         itens.append({
             "mlb": mlb,
+            "link": _anuncio_link(marketplace, mlb),
             "titulo": d.get("titulo") or b.get("titulo") or "",
             "sku": d.get("sku") or b.get("sku") or "",
             "categoria": d.get("categoria") or "",
@@ -15454,13 +15471,15 @@ def ruptura_payload(dias: int = 30, hoje: date | None = None) -> dict[str, Any]:
     def soma(campo: str, grupo: str | None = None) -> float:
         return round(sum(i[campo] or 0 for i in itens if grupo is None or i["grupo"] == grupo), 2)
 
+    estado = _SHOPEE_ANUNCIOS_ESTADO if marketplace == "shopee" else _RUPTURA_ESTADO
     return {
         "ok": True,
+        "marketplace": marketplace, "marketplace_nome": f["nome"],
         "periodo": {"inicio": p[0], "fim": p[1], "dias": dias},
         "base": {"inicio": base_ini.isoformat(), "fim": p[1], "dias": base_dias},
         "coleta": {"primeiro_dia": primeiro_dia or "", "ultima_checagem": ultima or "",
                    "cobre_periodo": bool(primeiro_dia) and primeiro_dia <= p[0],
-                   "rodando": bool(_RUPTURA_ESTADO["rodando"]), "ultima_rodada": _RUPTURA_ESTADO["ultimo"]},
+                   "rodando": bool(estado["rodando"]), "ultima_rodada": estado["ultimo"]},
         "regras": {"base_dias": base_dias, "critico_dias": RUPTURA_CRITICO_DIAS,
                    "atencao_dias": RUPTURA_ATENCAO_DIAS, "intervalo_horas": RUPTURA_INTERVALO // 3600},
         "resumo": {"anuncios": len(itens),
@@ -15476,6 +15495,275 @@ def ruptura_payload(dias: int = 30, hoje: date | None = None) -> dict[str, Any]:
                    "encerrados": encerrados},
         "itens": itens,
     }
+
+
+# ---------------------------------------------------------------------------
+# V18.90: Conversão e Ruptura também na Shopee.
+#
+# A Shopee não tem visitas por dia na API: get_item_extra_info devolve `views`, o total
+# acumulado do anúncio. Um retrato por dia (depois das 06:00) guarda esse total em
+# shopee_views_v1890 e a visita do dia anterior = retrato de hoje − o retrato anterior.
+# Se o total CAIR (o número não é acumulado ou a Shopee zerou), o dia não é gravado e o
+# anúncio fica marcado — nada é inventado. Estoque e status vêm do get_item_base_info
+# (stock_info_v2.summary_info.total_available_stock; item_status NORMAL/UNLIST...).
+# As tabelas têm as MESMAS colunas das do ML, para a Conversão e a Ruptura lerem as duas
+# com a mesma conta (ANUNCIO_FONTES). Status traduzido para o vocabulário do ML.
+# ---------------------------------------------------------------------------
+SHOPEE_ANUNCIOS_HORA_INICIO = 6
+SHOPEE_ANUNCIOS_INTERVALO = 1800        # acorda a cada 30 min: retrato do dia (1x) e estoque (a cada 2 h)
+SHOPEE_ESTOQUE_INTERVALO = 7200
+SHOPEE_ANUNCIOS_PAUSA = 0.3
+SHOPEE_ANUNCIOS_LOCK = threading.Lock()
+_SHOPEE_ANUNCIOS_ESTADO: dict[str, Any] = {"rodando": False, "inicio": "", "fim": "", "ultimo": {},
+                                          "estoque_em": 0.0}
+SHOPEE_STATUS_ML = {"NORMAL": "active", "UNLIST": "paused", "REVIEWING": "under_review", "BANNED": "inactive",
+                    "SELLER_DELETE": "closed", "SHOPEE_DELETE": "closed"}
+
+
+def ensure_shopee_anuncios_schema() -> None:
+    with DB_LOCK:
+        DB.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS shopee_item_v1890 (
+                item_id TEXT PRIMARY KEY,
+                titulo TEXT NOT NULL DEFAULT '',
+                sku TEXT NOT NULL DEFAULT '',
+                preco REAL,
+                status TEXT NOT NULL DEFAULT '',
+                estoque INTEGER,
+                categoria_id TEXT NOT NULL DEFAULT '',
+                detalhe_dia TEXT NOT NULL DEFAULT '',
+                views_nao_acumulado INTEGER NOT NULL DEFAULT 0,
+                buscado_em TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS shopee_views_v1890 (
+                item_id TEXT NOT NULL,
+                dia TEXT NOT NULL,
+                views INTEGER NOT NULL,
+                PRIMARY KEY(item_id, dia)
+            );
+            CREATE TABLE IF NOT EXISTS shopee_visitas_dia_v1890 (
+                item_id TEXT NOT NULL,
+                dia TEXT NOT NULL,
+                visitas INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY(item_id, dia)
+            );
+            CREATE INDEX IF NOT EXISTS idx_shopee_visitas_dia ON shopee_visitas_dia_v1890(dia);
+            CREATE TABLE IF NOT EXISTS shopee_estoque_dia_v1890 (
+                item_id TEXT NOT NULL,
+                dia TEXT NOT NULL,
+                checagens INTEGER NOT NULL DEFAULT 0,
+                sem_estoque INTEGER NOT NULL DEFAULT 0,
+                estoque_min INTEGER,
+                estoque_ultimo INTEGER,
+                ultimo_sem_estoque INTEGER NOT NULL DEFAULT 0,
+                status_ultimo TEXT NOT NULL DEFAULT '',
+                logistica TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY(item_id, dia)
+            );
+            CREATE INDEX IF NOT EXISTS idx_shopee_estoque_dia ON shopee_estoque_dia_v1890(dia);
+            """
+        )
+        DB.commit()
+
+
+def shopee_conectada() -> bool:
+    row = shopee_integration_row()
+    return bool(row and str(row["access_token"] or "").strip() and str(row["shop_id"] or "").strip())
+
+
+def shopee_itens_ids(status_lista: tuple[str, ...] = ("NORMAL", "UNLIST")) -> dict[str, str]:
+    """item_id -> status (vocabulário do ML) de todos os anúncios da loja."""
+    out: dict[str, str] = {}
+    for st in status_lista:
+        offset = 0
+        for _ in range(200):
+            r = shopee_api_get("/api/v2/product/get_item_list",
+                               {"offset": offset, "page_size": 100, "item_status": st})
+            resp = r.get("response") or {}
+            for it in resp.get("item") or []:
+                if isinstance(it, dict) and it.get("item_id"):
+                    out[str(it["item_id"])] = SHOPEE_STATUS_ML.get(str(it.get("item_status") or st), "")
+            if not resp.get("has_next_page"):
+                break
+            offset = int(resp.get("next_offset") or (offset + 100))
+    return out
+
+
+def shopee_itens_detalhe(ids: list[str]) -> dict[str, dict[str, Any]]:
+    """Título, SKU, preço, status e estoque, no formato do ml_itens_detalhe (50 por chamada)."""
+    out: dict[str, dict[str, Any]] = {}
+    for i in range(0, len(ids), 50):
+        lote = [str(x) for x in ids[i:i + 50] if str(x).isdigit()]
+        if not lote:
+            continue
+        r = shopee_api_get("/api/v2/product/get_item_base_info", {"item_id_list": ",".join(lote)})
+        for it in (r.get("response") or {}).get("item_list") or []:
+            if not isinstance(it, dict) or not it.get("item_id"):
+                continue
+            resumo = ((it.get("stock_info_v2") or {}).get("summary_info") or {}) if isinstance(it.get("stock_info_v2"), dict) else {}
+            est = resumo.get("total_available_stock")
+            precos = [p for p in (it.get("price_info") or []) if isinstance(p, dict)]
+            preco = _money_number(precos[0].get("current_price")) if precos else None
+            out[str(it["item_id"])] = {
+                "titulo": str(it.get("item_name") or ""), "sku_ml": str(it.get("item_sku") or ""),
+                "preco": preco, "status": SHOPEE_STATUS_ML.get(str(it.get("item_status") or ""), ""),
+                "sub_status": [], "estoque": int(est) if isinstance(est, (int, float)) and not isinstance(est, bool) else None,
+                "categoria": str(it.get("category_id") or ""), "logistica": "",
+            }
+    return out
+
+
+def shopee_itens_views(ids: list[str]) -> dict[str, int]:
+    """Total acumulado de visualizações (get_item_extra_info, 50 por chamada)."""
+    out: dict[str, int] = {}
+    for i in range(0, len(ids), 50):
+        lote = [str(x) for x in ids[i:i + 50] if str(x).isdigit()]
+        if not lote:
+            continue
+        r = shopee_api_get("/api/v2/product/get_item_extra_info", {"item_id_list": ",".join(lote)})
+        for it in (r.get("response") or {}).get("item_list") or []:
+            v = it.get("views") if isinstance(it, dict) else None
+            if isinstance(v, (int, float)) and not isinstance(v, bool) and it.get("item_id"):
+                out[str(it["item_id"])] = int(v)
+    return out
+
+
+def _shopee_views_registrar(views: dict[str, int], hoje: date) -> dict[str, int]:
+    """Guarda o retrato de hoje e grava a visita do dia anterior (diferença entre retratos)."""
+    hoje_iso, ontem = hoje.isoformat(), (hoje - timedelta(days=1)).isoformat()
+    gravadas = caiu = 0
+    agora = now_iso()
+    with DB_LOCK:
+        anteriores = {str(r["item_id"]): (str(r["dia"]), int(r["views"])) for r in DB.execute(
+            "SELECT v.item_id, v.dia, v.views FROM shopee_views_v1890 v JOIN (SELECT item_id, MAX(dia) AS d "
+            "FROM shopee_views_v1890 WHERE dia < ? GROUP BY item_id) m ON m.item_id=v.item_id AND m.d=v.dia",
+            (hoje_iso,)).fetchall()}
+        for item, total in views.items():
+            DB.execute("INSERT OR REPLACE INTO shopee_views_v1890(item_id,dia,views) VALUES(?,?,?)", (item, hoje_iso, total))
+            ant = anteriores.get(item)
+            if not ant:
+                continue
+            if total < ant[1]:
+                caiu += 1
+                DB.execute("UPDATE shopee_item_v1890 SET views_nao_acumulado=1 WHERE item_id=?", (item,))
+                continue
+            # retrato de mais de um dia atrás (servidor fora do ar): o total do intervalo
+            # entra no último dia fechado — a soma do período continua certa.
+            DB.execute("INSERT INTO shopee_visitas_dia_v1890(item_id,dia,visitas,updated_at) VALUES(?,?,?,?) "
+                       "ON CONFLICT(item_id,dia) DO UPDATE SET visitas=excluded.visitas,updated_at=excluded.updated_at",
+                       (item, ontem, total - ant[1], agora))
+            gravadas += 1
+        DB.execute("DELETE FROM shopee_views_v1890 WHERE dia < ?", ((hoje - timedelta(days=10)).isoformat(),))
+        DB.commit()
+    return {"visitas_gravadas": gravadas, "total_caiu": caiu}
+
+
+def _shopee_itens_gravar(info: dict[str, dict[str, Any]], status: dict[str, str], hoje_iso: str) -> None:
+    agora = now_iso()
+    with DB_LOCK:
+        for item, d in info.items():
+            DB.execute(
+                "INSERT INTO shopee_item_v1890(item_id,titulo,sku,preco,status,estoque,categoria_id,detalhe_dia,buscado_em) "
+                "VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(item_id) DO UPDATE SET titulo=excluded.titulo,sku=excluded.sku,"
+                "preco=COALESCE(excluded.preco,preco),status=excluded.status,estoque=excluded.estoque,"
+                "categoria_id=excluded.categoria_id,detalhe_dia=excluded.detalhe_dia,buscado_em=excluded.buscado_em",
+                (item, d["titulo"], d["sku_ml"], d["preco"], d["status"] or status.get(item, ""), d["estoque"],
+                 d["categoria"], hoje_iso, agora))
+        DB.commit()
+
+
+def shopee_anuncios_rodada(stop_event: threading.Event | None = None, *, hoje: date | None = None,
+                           completa: bool | None = None, agora_ts: float | None = None) -> dict[str, Any]:
+    """Retrato do dia (todos os anúncios: dados, estoque e visualizações) depois das 06:00;
+    fora dele, só o estoque dos anúncios que venderam nos últimos 60 dias (a cada 2 h)."""
+    if not SHOPEE_ANUNCIOS_LOCK.acquire(blocking=False):
+        return {"ok": True, "pulado": "já está rodando"}
+    agora_dt = datetime.now(BR_TZ)
+    hoje = hoje or agora_dt.date()
+    hoje_iso = hoje.isoformat()
+    agora_ts = time.time() if agora_ts is None else agora_ts
+    try:
+        _SHOPEE_ANUNCIOS_ESTADO.update(rodando=True, inicio=now_iso(), fim="")
+        if not shopee_conectada():
+            resultado = {"ok": True, "pulado": "Shopee não conectada"}
+            _SHOPEE_ANUNCIOS_ESTADO["ultimo"] = resultado
+            return resultado
+        if completa is None:
+            with DB_LOCK:
+                feito = DB.execute("SELECT 1 FROM shopee_views_v1890 WHERE dia=? LIMIT 1", (hoje_iso,)).fetchone()
+            completa = not feito and agora_dt.hour >= SHOPEE_ANUNCIOS_HORA_INICIO
+        resultado: dict[str, Any] = {"ok": True, "completa": bool(completa)}
+        try:
+            if completa:
+                status = shopee_itens_ids()
+                ids = sorted(status)
+                info = shopee_itens_detalhe(ids)
+                _shopee_itens_gravar(info, status, hoje_iso)
+                resultado["estoque_registrado"] = _ml_estoque_registrar(info, hoje_iso, tabela="shopee_estoque_dia_v1890")
+                views = shopee_itens_views(ids)
+                resultado.update(anuncios=len(ids), com_views=len(views), **_shopee_views_registrar(views, hoje))
+                _SHOPEE_ANUNCIOS_ESTADO["estoque_em"] = agora_ts
+            elif agora_ts - float(_SHOPEE_ANUNCIOS_ESTADO.get("estoque_em") or 0) >= SHOPEE_ESTOQUE_INTERVALO:
+                desde = (hoje - timedelta(days=RUPTURA_BASE_DIAS)).isoformat()
+                with DB_LOCK:
+                    ids = [str(r["anuncio"]) for r in DB.execute(
+                        "SELECT DISTINCT anuncio FROM vendas_v1799 WHERE marketplace='shopee' AND anuncio <> '' "
+                        "AND sale_day >= ?", (desde,)).fetchall()]
+                info = shopee_itens_detalhe(ids)
+                resultado.update(anuncios=len(ids),
+                                 estoque_registrado=_ml_estoque_registrar(info, hoje_iso, tabela="shopee_estoque_dia_v1890"))
+                _SHOPEE_ANUNCIOS_ESTADO["estoque_em"] = agora_ts
+            else:
+                resultado["pulado"] = "nada a fazer agora"
+        except Exception as exc:
+            msg = str(exc)[:400]
+            shopee_log_event_se_mudou("anuncios", "/api/v2/product", "ERRO", msg)
+            resultado = {"ok": False, "erro": msg}
+        _SHOPEE_ANUNCIOS_ESTADO["ultimo"] = {**resultado, "em": now_iso()}
+        return resultado
+    finally:
+        _SHOPEE_ANUNCIOS_ESTADO.update(rodando=False, fim=now_iso())
+        SHOPEE_ANUNCIOS_LOCK.release()
+
+
+def shopee_anuncios_loop(stop_event: threading.Event) -> None:
+    if stop_event.wait(900):
+        return
+    while not stop_event.is_set():
+        try:
+            shopee_anuncios_rodada(stop_event)
+        except Exception as exc:
+            _SHOPEE_ANUNCIOS_ESTADO["ultimo"] = {"ok": False, "erro": str(exc)[:300]}
+            print(f"[shopee-anuncios] falhou: {exc}", file=sys.stderr, flush=True)
+        if stop_event.wait(SHOPEE_ANUNCIOS_INTERVALO):
+            break
+
+
+# Onde cada marketplace guarda o anúncio, as visitas e o estoque (mesmas colunas).
+ANUNCIO_FONTES: dict[str, dict[str, Any]] = {
+    "ml": {"vis": "ml_visitas_dia_v1868", "item": "ml_visitas_item_v1868", "cat": "ml_categoria_v1868",
+           "ads": "ml_ads_item_dia_v1830", "est": "ml_estoque_dia_v1872", "nome": "Mercado Livre"},
+    "shopee": {"vis": "shopee_visitas_dia_v1890", "item": "shopee_item_v1890", "cat": "", "ads": "",
+               "est": "shopee_estoque_dia_v1890", "nome": "Shopee"},
+}
+
+
+def _anuncio_fonte(marketplace: str) -> dict[str, Any]:
+    f = ANUNCIO_FONTES.get(str(marketplace or "ml"))
+    if f is None:
+        raise ValueError("Marketplace inválido.")
+    return f
+
+
+def _anuncio_link(marketplace: str, item_id: str) -> str:
+    if marketplace == "shopee":
+        row = shopee_integration_row()
+        loja = str(row["shop_id"] or "") if row else ""
+        return f"https://shopee.com.br/product/{loja}/{item_id}" if loja else ""
+    return "https://produto.mercadolivre.com.br/" + str(item_id).replace("MLB", "MLB-")
 
 
 def ml_visitas_loop(stop_event: threading.Event) -> None:
@@ -20999,7 +21287,8 @@ class AppHandler(BaseHTTPRequestHandler):
             if self.auth(admin_only=True) is None:
                 return
             try:
-                self.send_json(conversao_payload(int(str((query.get("dias") or ["30"])[0] or "30"))))
+                self.send_json(conversao_payload(int(str((query.get("dias") or ["30"])[0] or "30")),
+                                                 marketplace=str((query.get("marketplace") or ["ml"])[0] or "ml")))
             except ValueError as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 400)
             except Exception as exc:
@@ -21060,7 +21349,8 @@ class AppHandler(BaseHTTPRequestHandler):
             if self.auth(admin_only=True) is None:
                 return
             try:
-                self.send_json(ruptura_payload(int(str((query.get("dias") or ["30"])[0] or "30"))))
+                self.send_json(ruptura_payload(int(str((query.get("dias") or ["30"])[0] or "30")),
+                                               marketplace=str((query.get("marketplace") or ["ml"])[0] or "ml")))
             except ValueError as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 400)
             except Exception as exc:
@@ -24248,6 +24538,7 @@ SAUDE_WORKERS_INFO: dict[str, tuple[str, bool, int]] = {
     "ml_ads_sync_loop": ("Publicidade do Mercado Livre", False, 180),
     "ml_visitas_loop": ("Visitas dos anúncios (Conversão)", False, 180),
     "ml_estoque_loop": ("Estoque dos anúncios (Ruptura)", False, 120),
+    "shopee_anuncios_loop": ("Anúncios da Shopee (Conversão e Ruptura)", False, 120),
     "promo_renovacao_loop": ("Promoções automáticas", False, 120),
     "posvenda_loop": ("Pós-venda do Mercado Livre", False, 60),
     "promo_convites_loop": ("Convites de campanha do ML", False, 120),
@@ -25155,6 +25446,13 @@ def main() -> None:
         name="posvenda",
         daemon=True,
     )
+    # V18.90: anúncios da Shopee — retrato do dia (visualizações, estoque) e estoque a cada 2 h.
+    shopee_anuncios_thread = threading.Thread(
+        target=_worker_protegido(shopee_anuncios_loop),
+        args=(watcher_stop,),
+        name="shopee-anuncios",
+        daemon=True,
+    )
     # V18.89: convites de campanha do ML, a cada 3 h (aceita sozinho só no modo automático).
     promo_convites_thread = threading.Thread(
         target=_worker_protegido(promo_convites_loop),
@@ -25216,6 +25514,7 @@ def main() -> None:
         estoque_thread.start()
         posvenda_thread.start()
         promo_convites_thread.start()
+        shopee_anuncios_thread.start()
         promo_renovacao_thread.start()
         relatorio_thread.start()
         linx_clientes_thread.start()

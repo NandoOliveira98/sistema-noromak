@@ -114,6 +114,11 @@ ul.dicas{list-style:none;padding:0;margin:0;display:grid;gap:6px}
       <div class="sub" id="periodo">Carregando…</div>
     </div>
     <div class="acoes">
+      <!-- V18.90: Mercado Livre ou Shopee (mesma conta; ?mp=shopee abre direto na Shopee). -->
+      <select class="btn" id="mkt" title="Marketplace">
+        <option value="ml">Mercado Livre</option>
+        <option value="shopee">Shopee</option>
+      </select>
       <select class="btn" id="dias" title="Período">
         <option value="7">Últimos 7 dias</option>
         <option value="30" selected>Últimos 30 dias</option>
@@ -145,7 +150,7 @@ ul.dicas{list-style:none;padding:0;margin:0;display:grid;gap:6px}
     <div class="card span12" id="lista">
       <div class="tbar">
         <div class="tabs" id="tabs"></div>
-        <input type="search" id="q" placeholder="Buscar título, MLB, SKU ou categoria…">
+        <input type="search" id="q" placeholder="Buscar título, anúncio, SKU ou categoria…">
       </div>
       <div class="tw"><table class="cv" id="tab" data-nk-tabela="conversao" data-nk-ordenar="0"></table></div>
       <div class="more"><button class="btn" id="more">Mostrar mais</button></div>
@@ -195,19 +200,29 @@ let D=null, st={tab:'vitrine',q:'',sort:'potencial',dir:-1,lim:50};
 
 function aviso(html){$('aviso').innerHTML=html;$('aviso').hidden=!html}
 
+// V18.90: marketplace escolhido (ML ou Shopee); o endereço guarda a escolha (?mp=shopee).
+try{ const mp=new URLSearchParams(location.search).get('mp'); if(mp==='shopee') document.getElementById('mkt').value='shopee'; }catch(e){}
+const mkt=()=>document.getElementById('mkt').value;
+document.getElementById('mkt').addEventListener('change',()=>{
+  try{ const u=new URL(location.href); if(mkt()==='shopee') u.searchParams.set('mp','shopee'); else u.searchParams.delete('mp'); history.replaceState(null,'',u); }catch(e){}
+  carregar();
+});
 async function carregar(){
   $('periodo').textContent='Carregando…';
-  try{ D=await api('/api/conversao?dias='+$('dias').value); }
+  try{ D=await api('/api/conversao?dias='+$('dias').value+'&marketplace='+mkt()); }
   catch(e){ aviso('<b>Não foi possível carregar.</b> '+esc(e.message)); $('periodo').textContent=''; return; }
   const c=D.coleta||{};
   $('periodo').textContent=`${dataBR(D.periodo.inicio)} a ${dataBR(D.periodo.fim)} · comparado com ${dataBR(D.periodo_anterior.inicio)} a ${dataBR(D.periodo_anterior.fim)}`;
   if(!c.ultimo_dia){
-    aviso('<b>Ainda não há visitas coletadas.</b> A coleta roda sozinha todo dia depois das 06:00 e leva uns 15 minutos. Volte mais tarde.');
+    aviso(D.marketplace==='shopee'
+      ?'<b>Ainda não há visitas da Shopee.</b> A Shopee só informa o total acumulado de visualizações de cada anúncio: o sistema tira um retrato por dia, depois das 06:00, e a visita do dia é a diferença entre dois retratos. Os números aparecem a partir do segundo dia de coleta.'
+      :'<b>Ainda não há visitas coletadas.</b> A coleta roda sozinha todo dia depois das 06:00 e leva uns 15 minutos. Volte mais tarde.');
     $('conteudo').hidden=true; return;
   }
   const av=[];
-  if(!c.cobre_periodo) av.push(`as visitas só começaram a ser coletadas em <b>${dataBR(c.primeiro_dia)}</b>; o ML devolve no máximo os 30 dias anteriores à primeira coleta. Períodos maiores vão se completando com o tempo`);
+  if(!c.cobre_periodo) av.push(D.marketplace==='shopee'?`as visitas da Shopee só começaram a ser coletadas em <b>${dataBR(c.primeiro_dia)}</b> (a Shopee não tem histórico de visitas por dia: cada dia vem da diferença entre dois retratos). Os números vão se completando com o tempo`:`as visitas só começaram a ser coletadas em <b>${dataBR(c.primeiro_dia)}</b>; o ML devolve no máximo os 30 dias anteriores à primeira coleta. Períodos maiores vão se completando com o tempo`);
   else if(!c.cobre_anterior) av.push(`ainda não há visitas do período anterior (${dataBR(D.periodo_anterior.inicio)} a ${dataBR(D.periodo_anterior.fim)}), então o alerta de <b>conversão caindo</b> fica incompleto`);
+  if(D.views_nao_acumulado) av.push(`${num(D.views_nao_acumulado)} anúncio(s) da Shopee tiveram o total de visualizações diminuindo entre dois retratos; nesses dias a visita não foi contada`);
   if(D.resumo.vendeu_sem_visita_coletada) av.push(`${num(D.resumo.vendeu_sem_visita_coletada)} anúncio(s) venderam mas ainda não têm visitas coletadas e ficaram fora da conta`);
   aviso(av.length?'<b>Atenção:</b> '+av.join('; ')+'.':'');
   $('conteudo').hidden=false;
@@ -314,7 +329,8 @@ const PRIO={1:['Fazer primeiro','var(--neg)'],2:['Depois','var(--warn)'],3:['Se 
 const LIMITE_CUSTO_FIXO=79;   // abaixo disso o ML cobra um custo fixo por unidade (mesmo limite da tela de Kits)
 const vezes=v=>v.toLocaleString('pt-BR',{maximumFractionDigits:1})+'x';
 function dicasDe(i){
-  const L=[], add=(a,p,c,t)=>L.push({a,p,c,t});
+  // V18.90: dica de Ads só onde o sistema lê o Ads (ML); na Shopee ficaria sempre "crie uma campanha".
+  const L=[], add=(a,p,c,t)=>{ if(a==='ads'&&!D.tem_ads) return; L.push({a,p,c,t}); };
   const dias=D.periodo.dias, ref=i.conversao_ref, conv=i.conversao;
   const ratio=(ref&&conv!=null)?conv/ref:null;
   const porDia=i.unidades/dias;
@@ -406,7 +422,7 @@ function abrir(i){
     </dl>
     <p style="margin:0 0 4px"><b>O que fazer</b></p><p style="margin:0 0 6px;color:var(--ink2)">${g.o}</p>
     ${blocos}
-    <p><a class="btn" href="https://produto.mercadolivre.com.br/${i.mlb.replace('MLB','MLB-')}" target="_blank" rel="noopener">Abrir anúncio no ML</a></p>`;
+    ${i.link?`<p><a class="btn" href="${esc(i.link)}" target="_blank" rel="noopener">Abrir anúncio ${D.marketplace==='shopee'?'na Shopee':'no ML'}</a></p>`:''}`;
   $('drawer').classList.add('on'); $('drawer').setAttribute('aria-hidden','false');
   $('drawer').querySelector('.x').onclick=fechar;
 }
@@ -420,7 +436,9 @@ function notas(){
     <li><b>Referência</b> = mediana da conversão dos anúncios da mesma categoria com ${r.min_visitas}+ visitas, quando a categoria tem ${r.min_categoria}+ anúncios assim (${num(D.resumo.categorias_com_referencia)} categorias); senão, a mediana da conta.</li>
     <li><b>Muito visto</b> = ${r.corte_visitas!=null?num(Math.round(r.corte_visitas)):'—'}+ visitas (mediana). <b>Vitrine sem venda</b>: muito visto e conversão abaixo da metade da referência. <b>Joia escondida</b>: pouco visto, conversão 50% acima da referência e ${r.min_pedidos_joia}+ vendas.</li>
     <li><b>Potencial</b> = visitas × (referência − conversão) × ticket médio do anúncio (ou o preço, se não vendeu). É uma <b>estimativa</b> para ordenar a lista, não dinheiro garantido.</li>
-    <li>Visitas: coletadas do Mercado Livre todo dia depois das 06:00 (última: ${dataBR(D.coleta.ultimo_dia)}). Vendas: as mesmas do Dashboard. Anúncio sem visita coletada fica fora da conta, nunca como zero.</li></ul>`;
+    <li>${D.marketplace==='shopee'
+      ?`Visitas: a Shopee só informa o total acumulado de visualizações; o sistema tira um retrato por dia depois das 06:00 e a visita do dia é a diferença entre dois retratos (última: ${dataBR(D.coleta.ultimo_dia)}). Sem categoria nem Ads da Shopee: a referência é a da conta.`
+      :`Visitas: coletadas do Mercado Livre todo dia depois das 06:00 (última: ${dataBR(D.coleta.ultimo_dia)}).`} Vendas: as mesmas do Dashboard. Anúncio sem visita coletada fica fora da conta, nunca como zero.</li></ul>`;
 }
 
 carregar();
