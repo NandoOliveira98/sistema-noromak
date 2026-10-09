@@ -659,6 +659,18 @@ recente entre o **último custo > 0 visto** (`custos_conhecidos_v1807`, alimenta
 e por todo `crm_cost_lookup`) e o **custo da venda** do ML (`ml_profitability_snapshot`). Nunca grava
 custo zero. `POST /api/compras/custo`. Definitivo: custo da última venda pela Linx Smart API.
 
+**V18.91 — demanda pela Linx (construída sem resposta real; produção sem credenciais em 09/10):**
+para os códigos dos fornecedores cadastrados (`_compras_codigos_dos_fornecedores`), o worker `linx_demanda_loop`
+(21h–6h, 400 por rodada, retoma no dia) e o botão "Atualizar da Linx" chamam, na P02,
+`OrdemCompra/Historico/{codigo}` (→ `linx_demanda_mes_v1891`) e `DetalhesPedidos` com `ApenasPendentes`
+(→ `linx_compra_aberta_v1891`). Leitura tolerante (`_linx_ci`, `_linx_mes`); a **1ª resposta real** de cada
+tipo fica em `linx_demanda_amostra_v1891` (`GET /api/compras/linx/amostra`, perfil Admin) — **conferir ao ligar
+as credenciais** (corpo, código do item na URL, nomes de campo). O e-commerce é faturado no Linx (dono, 09/10):
+a demanda da Linx já inclui ML + Shopee — **uma OU a outra, nunca somadas**. Na tela: coluna "Linx (total)" dos
+últimos meses fechados (período ÷ 30), a média usa a Linx quando há histórico; "A caminho" vem da compra em
+aberto, e o digitado continua mandando. Código sem histórico (412) ou com erro fica **nulo**: nunca vira zero por
+cima da venda do e-commerce.
+
 ### Linx Smart API (levantamento 21/09/2026)
 API oficial da Linx para o Linx DMS, na nuvem: gateway `https://auto-gwsmartapi.linx.com.br/<api>`,
 chave em `Ocp-Apim-Subscription-Key` + token de `POST /api-seguranca/token`. Assinadas: Segurança,

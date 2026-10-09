@@ -78,6 +78,12 @@ fornecedor e sem o campo "A caminho" digitado.
 
 ---
 
+**V18.91 (09/10/2026, construído sem resposta real):** a Demanda de Compra já chama
+`OrdemCompra/Historico/{codigo}` e `DetalhesPedidos` (P02) — ver CLAUDE.md. Ao ligar as credenciais:
+1) Admin → Demanda de Compra → "Atualizar da Linx" num fornecedor pequeno; 2) `GET /expedicao/api/compras/linx/amostra`
+mostra a 1ª resposta de cada consulta; 3) conferir se o código do Apollo serve na URL (ou se precisa do
+`ItemEstoque` interno da `ConsultaPecaGerencial`), o corpo (`ConfiguracaoBase`) e os nomes dos campos.
+
 ## 4. Operações das APIs assinadas
 
 ### S01 Segurança — `/api-seguranca`

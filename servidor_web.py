@@ -43,7 +43,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "18.90-SHOPEE-CONVERSAO-RUPTURA"
+APP_VERSION = "18.91-DEMANDA-COMPRA-LINX"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -2242,6 +2242,7 @@ def init_db() -> None:
     ensure_posvenda_schema()  # V18.88
     ensure_promo_convite_schema()  # V18.89
     ensure_shopee_anuncios_schema()  # V18.90
+    ensure_linx_demanda_schema()  # V18.91
     migrate_legacy_if_empty()
     ensure_storage_defaults()
     seed_sku_state_from_storage()
@@ -20181,6 +20182,345 @@ def compras_vendas_por_codigo(dias: int, conhecidos: dict[str, Any]) -> tuple[di
     return vendas, sem_codigo
 
 
+# ---------------------------------------------------------------------------
+# V18.91: Demanda de Compra pela Linx Smart API (P02, só leitura).
+#
+# Para os códigos dos fornecedores cadastrados na Demanda de Compra, busca:
+#   - OrdemCompra/Historico/{codigo}: demanda mensal de TODOS os canais (balcão, oficina,
+#     telemarketing — o e-commerce é faturado no Linx, decisão/informação do dono em 09/10,
+#     então a demanda da Linx JÁ inclui ML + Shopee: as duas nunca somam);
+#   - DetalhesPedidos (ApenasPendentes): compra em aberto (pedida − baixada) e a data provável.
+# CONSTRUÍDO PELO CONTRATO DO PORTAL, SEM RESPOSTA REAL (produção não tinha credenciais em
+# 09/10): a leitura é tolerante (nomes de campo sem diferenciar maiúscula, mês em vários
+# formatos) e a 1ª resposta de cada tipo fica guardada em linx_demanda_amostra_v1891 para
+# ajustar o formato. Sem dado da Linx, a tela continua com a venda do e-commerce.
+# Worker à noite (21h–6h, 400 códigos por rodada, retoma no dia) + botão por fornecedor.
+# ---------------------------------------------------------------------------
+LINX_DEMANDA_POR_RODADA = 400
+LINX_DEMANDA_PAUSA = 0.5
+LINX_DEMANDA_HORAS = (21, 6)          # janela da noite (Brasília): de 21h às 6h
+LINX_DEMANDA_LOCK = threading.Lock()
+_LINX_DEMANDA_ESTADO: dict[str, Any] = {"rodando": False, "inicio": "", "fim": "", "ultimo": {}}
+
+
+def ensure_linx_demanda_schema() -> None:
+    with DB_LOCK:
+        DB.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS linx_demanda_mes_v1891 (
+                codigo TEXT NOT NULL,
+                mes TEXT NOT NULL,
+                total REAL,
+                balcao REAL,
+                oficina REAL,
+                telemark REAL,
+                atualizado_em TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY(codigo, mes)
+            );
+            CREATE TABLE IF NOT EXISTS linx_compra_aberta_v1891 (
+                codigo TEXT NOT NULL,
+                pedido TEXT NOT NULL,
+                pedida REAL,
+                baixada REAL,
+                situacao TEXT NOT NULL DEFAULT '',
+                previsao TEXT NOT NULL DEFAULT '',
+                atualizado_em TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY(codigo, pedido)
+            );
+            CREATE TABLE IF NOT EXISTS linx_demanda_item_v1891 (
+                codigo TEXT PRIMARY KEY,
+                buscado_dia TEXT NOT NULL DEFAULT '',
+                buscado_em TEXT NOT NULL DEFAULT '',
+                ok INTEGER NOT NULL DEFAULT 0,
+                meses INTEGER NOT NULL DEFAULT 0,
+                erro TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS linx_demanda_amostra_v1891 (
+                tipo TEXT PRIMARY KEY,
+                codigo TEXT NOT NULL DEFAULT '',
+                quando TEXT NOT NULL DEFAULT '',
+                json TEXT NOT NULL DEFAULT ''
+            );
+            """
+        )
+        DB.commit()
+
+
+def _linx_ci(d: dict[str, Any], *nomes: str) -> Any:
+    """Campo pelo nome, sem diferenciar maiúscula/minúscula (o contrato real não foi visto)."""
+    if not isinstance(d, dict):
+        return None
+    baixo = {str(k).lower(): v for k, v in d.items()}
+    for n in nomes:
+        if n.lower() in baixo and baixo[n.lower()] not in (None, ""):
+            return baixo[n.lower()]
+    return None
+
+
+def _linx_num(valor: Any) -> float | None:
+    if isinstance(valor, bool) or valor is None or valor == "":
+        return None
+    if isinstance(valor, (int, float)):
+        return float(valor)
+    texto = str(valor).strip().replace(".", "").replace(",", ".") if "," in str(valor) else str(valor).strip()
+    try:
+        return float(texto)
+    except ValueError:
+        return None
+
+
+def _linx_mes(e: dict[str, Any]) -> str:
+    ano, mes = _linx_num(_linx_ci(e, "Ano")), _linx_num(_linx_ci(e, "Mes", "MesNumero"))
+    if ano and mes and 1 <= mes <= 12 and ano > 1900:
+        return f"{int(ano):04d}-{int(mes):02d}"
+    texto = str(_linx_ci(e, "MesAno", "AnoMes", "Periodo", "Competencia", "DataReferencia", "Data", "Mes") or "")
+    m = re.search(r"(\d{4})[-/](\d{1,2})", texto)
+    if m and 1 <= int(m.group(2)) <= 12:
+        return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}"
+    m = re.search(r"\b(\d{1,2})[-/](\d{4})\b", texto)
+    if m and 1 <= int(m.group(1)) <= 12:
+        return f"{int(m.group(2)):04d}-{int(m.group(1)):02d}"
+    m = re.fullmatch(r"(\d{4})(\d{2})", texto.strip())
+    if m and 1 <= int(m.group(2)) <= 12:
+        return f"{m.group(1)}-{m.group(2)}"
+    return ""
+
+
+def _linx_demanda_meses(resposta: Any) -> tuple[dict[str, dict[str, float | None]], int]:
+    """{mes: {total, balcao, oficina, telemark}} e quantas linhas não deram para ler."""
+    meses: dict[str, dict[str, float | None]] = {}
+    ilegiveis = 0
+    for e in _linx_lista_da_resposta(resposta):
+        if not isinstance(e, dict):
+            continue
+        mes = _linx_mes(e)
+        canais = {"balcao": _linx_num(_linx_ci(e, "DemandaBalcao")),
+                  "oficina": _linx_num(_linx_ci(e, "DemandaOficina")),
+                  "telemark": _linx_num(_linx_ci(e, "DemandaTelemark", "DemandaTelemarketing"))}
+        total = _linx_num(_linx_ci(e, "DemandaTotal", "Demanda", "QuantidadeDemanda"))
+        if total is None and any(v is not None for v in canais.values()):
+            total = sum(v or 0.0 for v in canais.values())
+        if not mes or total is None:
+            ilegiveis += 1
+            continue
+        meses[mes] = {"total": total, **canais}
+    return meses, ilegiveis
+
+
+def _linx_compras_abertas(resposta: Any) -> list[dict[str, Any]]:
+    out = []
+    for e in _linx_lista_da_resposta(resposta):
+        if not isinstance(e, dict):
+            continue
+        pedida = _linx_num(_linx_ci(e, "QuantidadePedida", "QtdePedida"))
+        baixada = _linx_num(_linx_ci(e, "QuantidadeBaixada", "QtdeBaixada")) or 0.0
+        if pedida is None:
+            continue
+        out.append({"pedido": str(_linx_ci(e, "CodigoPedido", "Pedido", "NumeroPedido") or len(out) + 1),
+                    "pedida": pedida, "baixada": baixada,
+                    "situacao": str(_linx_ci(e, "SituacaoPedido", "Situacao") or ""),
+                    "previsao": str(_linx_ci(e, "DataProvavelRecebimento", "DataPrevista", "PrevisaoEntrega") or "")[:10]})
+    return out
+
+
+def _linx_amostra(tipo: str, codigo: str, resposta: Any) -> None:
+    """Guarda a 1ª resposta real de cada tipo (para conferir o formato). Não tem dado pessoal."""
+    with DB_LOCK:
+        if DB.execute("SELECT 1 FROM linx_demanda_amostra_v1891 WHERE tipo=?", (tipo,)).fetchone():
+            return
+        DB.execute("INSERT INTO linx_demanda_amostra_v1891(tipo,codigo,quando,json) VALUES(?,?,?,?)",
+                   (tipo, codigo, now_iso(), json_dumps(resposta)[:6000]))
+        DB.commit()
+
+
+def _linx_demanda_corpo_base() -> dict[str, Any]:
+    # O portal mostra ConfiguracaoBase{Empresa, Revenda, Usuario} na ConsultaPecaGerencial; vai
+    # também solto (campos a mais costumam ser ignorados). Conferir com a amostra real.
+    base = {"Empresa": LINX_EMPRESA, "Revenda": LINX_REVENDA, "Usuario": LINX_USUARIO_CODIGO}
+    return {"ConfiguracaoBase": dict(base), **base, "CodigoUsuario": LINX_USUARIO_CODIGO}
+
+
+def linx_demanda_item(codigo: str) -> dict[str, Any]:
+    """Busca e grava a demanda mensal e a compra em aberto de UM código. Só leitura."""
+    codigo = str(codigo or "").strip().upper()
+    agora, hoje = now_iso(), datetime.now(BR_TZ).date().isoformat()
+    erros: list[str] = []
+    meses: dict[str, dict[str, float | None]] = {}
+    abertas: list[dict[str, Any]] = []
+    try:
+        hist = linx_chamar("POST", f"{LINX_PATH_PECAS}/ConsultaPecaGerencial/InfoGerencial/OrdemCompra/Historico/"
+                                   f"{quote(codigo)}", _linx_demanda_corpo_base())
+        _linx_amostra("historico", codigo, hist)
+        meses, ilegiveis = _linx_demanda_meses(hist)
+        if ilegiveis and not meses:
+            erros.append("histórico em formato não reconhecido (veja a amostra)")
+    except LinxErro as exc:
+        if exc.status not in (404, 412):      # 412 = "não achei" nesta API
+            erros.append(f"histórico: {str(exc)[:200]}")
+    try:
+        ped = linx_chamar("POST", f"{LINX_PATH_PECAS}/ConsultaPecaGerencial/DetalhesPedidos",
+                          {**_linx_demanda_corpo_base(), "CodigoItem": codigo, "ItemEstoque": codigo,
+                           "ItemEstoquePublico": codigo, "ApenasPendentes": True, "MostrarTodasFiliais": True})
+        _linx_amostra("pedidos", codigo, ped)
+        abertas = _linx_compras_abertas(ped)
+    except LinxErro as exc:
+        if exc.status not in (404, 412):
+            erros.append(f"pedidos: {str(exc)[:200]}")
+    ok = not erros
+    with DB_LOCK:
+        if ok or meses:
+            DB.execute("DELETE FROM linx_demanda_mes_v1891 WHERE codigo=?", (codigo,))
+            DB.executemany("INSERT INTO linx_demanda_mes_v1891(codigo,mes,total,balcao,oficina,telemark,atualizado_em) "
+                           "VALUES(?,?,?,?,?,?,?)", [(codigo, m, v["total"], v["balcao"], v["oficina"], v["telemark"], agora)
+                                                     for m, v in meses.items()])
+        if ok:
+            DB.execute("DELETE FROM linx_compra_aberta_v1891 WHERE codigo=?", (codigo,))
+            DB.executemany("INSERT OR REPLACE INTO linx_compra_aberta_v1891(codigo,pedido,pedida,baixada,situacao,previsao,"
+                           "atualizado_em) VALUES(?,?,?,?,?,?,?)",
+                           [(codigo, a["pedido"], a["pedida"], a["baixada"], a["situacao"], a["previsao"], agora) for a in abertas])
+        DB.execute("INSERT OR REPLACE INTO linx_demanda_item_v1891(codigo,buscado_dia,buscado_em,ok,meses,erro) "
+                   "VALUES(?,?,?,?,?,?)", (codigo, hoje, agora, 1 if ok else 0, len(meses), "; ".join(erros)[:400]))
+        DB.commit()
+    return {"ok": ok, "codigo": codigo, "meses": len(meses), "abertas": len(abertas), "erros": erros}
+
+
+def _compras_codigos_dos_fornecedores(nome: str = "") -> list[str]:
+    """Códigos (Precificador) que caem em algum fornecedor da Demanda de Compra (ou só em `nome`)."""
+    produtos = _compras_produtos_precificador()
+    raw, _, _ = get_storage("conf_produtos")
+    linhas = _rows_from_storage_value(raw)
+    saida: set[str] = set()
+    for cfg in compras_fornecedores():
+        if nome and cfg["nome"] != nome.strip().upper():
+            continue
+        marca = {_compras_codigo(str(p.get("SKU") or ""), produtos) for p in linhas
+                 if str(p.get("Marca") or "").strip().upper() == cfg["nome"]}
+        for codigo, p in produtos.items():
+            texto = p["descricao"].upper()
+            if (codigo in cfg["codigos"] or codigo in marca or any(codigo.startswith(x) for x in cfg["prefixos"])
+                    or any(x in texto for x in cfg["palavras"])):
+                saida.add(codigo)
+    return sorted(saida)
+
+
+def linx_demanda_rodada(stop_event: threading.Event | None = None, *, fornecedor: str = "",
+                        forcar: bool = False, pausa: float | None = None) -> dict[str, Any]:
+    """Atualiza os códigos ainda não buscados hoje (no botão: todos os do fornecedor)."""
+    if not LINX_DEMANDA_LOCK.acquire(blocking=False):
+        return {"ok": True, "pulado": "já está rodando"}
+    pausa = LINX_DEMANDA_PAUSA if pausa is None else pausa
+    try:
+        _LINX_DEMANDA_ESTADO.update(rodando=True, inicio=now_iso(), fim="")
+        faltando = linx_configuracao_faltando()
+        if faltando or not linx_chave_do_produto("P02"):
+            resultado = {"ok": True, "pulado": "Linx Smart API não configurada no servidor"}
+            _LINX_DEMANDA_ESTADO["ultimo"] = resultado
+            return resultado
+        hoje = datetime.now(BR_TZ).date().isoformat()
+        codigos = _compras_codigos_dos_fornecedores(fornecedor)
+        with DB_LOCK:
+            feitos = {str(r["codigo"]) for r in DB.execute(
+                "SELECT codigo FROM linx_demanda_item_v1891 WHERE buscado_dia=? AND ok=1", (hoje,)).fetchall()}
+        fila = [c for c in codigos if forcar or c not in feitos][:LINX_DEMANDA_POR_RODADA if not forcar else 2000]
+        ok = falhas = seguidas = 0
+        for codigo in fila:
+            if stop_event is not None and stop_event.is_set():
+                break
+            try:
+                r = linx_demanda_item(codigo)
+            except Exception as exc:   # resposta em formato inesperado: registra e segue
+                r = {"ok": False}
+                with DB_LOCK:
+                    DB.execute("INSERT OR REPLACE INTO linx_demanda_item_v1891(codigo,buscado_dia,buscado_em,ok,meses,erro) "
+                               "VALUES(?,?,?,0,0,?)", (codigo, hoje, now_iso(), f"{type(exc).__name__}: {str(exc)[:200]}"))
+                    DB.commit()
+            ok += 1 if r["ok"] else 0
+            falhas += 0 if r["ok"] else 1
+            seguidas = 0 if r["ok"] else seguidas + 1
+            if seguidas >= 5:      # sem conexão/permissão: para e tenta na próxima rodada
+                break
+            if pausa > 0:
+                if stop_event is not None:
+                    if stop_event.wait(pausa):
+                        break
+                else:
+                    time.sleep(pausa)
+        resultado = {"ok": falhas == 0, "codigos": len(codigos), "buscados": ok + falhas, "com_erro": falhas, "em": now_iso()}
+        _LINX_DEMANDA_ESTADO["ultimo"] = resultado
+        return resultado
+    finally:
+        _LINX_DEMANDA_ESTADO.update(rodando=False, fim=now_iso())
+        LINX_DEMANDA_LOCK.release()
+
+
+def linx_demanda_loop(stop_event: threading.Event) -> None:
+    """De hora em hora, só na janela da noite (não disputa a Linx com o expediente)."""
+    if stop_event.wait(1800):
+        return
+    while not stop_event.is_set():
+        hora = datetime.now(BR_TZ).hour
+        if hora >= LINX_DEMANDA_HORAS[0] or hora < LINX_DEMANDA_HORAS[1]:
+            try:
+                linx_demanda_rodada(stop_event)
+            except Exception as exc:
+                _LINX_DEMANDA_ESTADO["ultimo"] = {"ok": False, "erro": str(exc)[:300]}
+                print(f"[linx-demanda] falhou: {exc}", file=sys.stderr, flush=True)
+        if stop_event.wait(3600):
+            break
+
+
+def linx_demanda_por_codigo(codigos: list[str], dias: int, hoje: date | None = None) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+    """Demanda Linx de cada código no período da tela: os últimos M meses FECHADOS
+    (M = dias ÷ 30, arredondado, mínimo 1). Mês sem linha num item buscado com sucesso = 0."""
+    hoje = hoje or datetime.now(BR_TZ).date()
+    m = max(1, round(max(1, dias) / 30))
+    primeiro_do_mes = hoje.replace(day=1)
+    meses = []
+    ano, mes = primeiro_do_mes.year, primeiro_do_mes.month
+    for _ in range(m):
+        mes -= 1
+        if mes == 0:
+            ano, mes = ano - 1, 12
+        meses.append(f"{ano:04d}-{mes:02d}")
+    dias_eq = m * 30.4375
+    marcas = ",".join("?" * len(meses))
+    with DB_LOCK:
+        itens = {str(r["codigo"]): dict(r) for r in DB.execute("SELECT * FROM linx_demanda_item_v1891").fetchall()}
+        linhas = DB.execute(f"SELECT codigo, SUM(total) AS t, SUM(balcao) AS b, SUM(oficina) AS o, SUM(telemark) AS tm "
+                            f"FROM linx_demanda_mes_v1891 WHERE mes IN ({marcas}) GROUP BY codigo", meses).fetchall()
+        abertas = DB.execute("SELECT codigo, SUM(MAX(0, COALESCE(pedida,0) - COALESCE(baixada,0))) AS q, "
+                             "MIN(NULLIF(previsao,'')) AS prev FROM linx_compra_aberta_v1891 GROUP BY codigo").fetchall()
+        amostras = {str(r["tipo"]): str(r["quando"]) for r in DB.execute(
+            "SELECT tipo, quando FROM linx_demanda_amostra_v1891").fetchall()}
+    soma = {str(r["codigo"]): r for r in linhas}
+    cam = {str(r["codigo"]): r for r in abertas}
+    out: dict[str, dict[str, Any]] = {}
+    for c in codigos:
+        it = itens.get(c)
+        if not it or not (it["ok"] or it["meses"]):
+            continue
+        s = soma.get(c)
+        a = cam.get(c)
+        # Sem nenhum mês de histórico (a Linx "não achou" o código) a demanda fica NULA: a
+        # tela continua com a venda do e-commerce, nunca troca por um zero.
+        tem_hist = int(it["meses"] or 0) > 0
+        total = (float(s["t"] or 0) if s else 0.0) if tem_hist else None
+        out[c] = {"linx_total": round(total, 2) if total is not None else None,
+                  "linx_media_dia": round(total / dias_eq, 4) if total is not None else None,
+                  "linx_canais": ({"balcao": float(s["b"] or 0) if s else 0.0, "oficina": float(s["o"] or 0) if s else 0.0,
+                                   "telemark": float(s["tm"] or 0) if s else 0.0} if tem_hist else None),
+                  "linx_caminho": (round(float(a["q"] or 0), 2) if a else 0.0) if it["ok"] else None,
+                  "linx_previsao": (str(a["prev"] or "") if a else ""), "linx_atualizado": it["buscado_em"]}
+    resumo = {"configurada": not linx_configuracao_faltando() and bool(linx_chave_do_produto("P02")),
+              "meses": meses, "dias_equivalentes": dias_eq,
+              "itens_com_dado": sum(1 for v in out.values() if v["linx_total"] is not None),
+              "itens_com_erro": sum(1 for c in codigos if (itens.get(c) or {}).get("erro")),
+              "erro_exemplo": next((str(itens[c]["erro"]) for c in codigos if (itens.get(c) or {}).get("erro")), ""),
+              "amostras": amostras, "rodando": bool(_LINX_DEMANDA_ESTADO["rodando"]),
+              "ultima_rodada": _LINX_DEMANDA_ESTADO["ultimo"]}
+    return out, resumo
+
+
 def compras_demanda_payload(fornecedor: str, dias: int) -> dict[str, Any]:
     nome = str(fornecedor or "").strip().upper()
     cfg = next((f for f in compras_fornecedores() if f["nome"] == nome), None)
@@ -20219,11 +20559,18 @@ def compras_demanda_payload(fornecedor: str, dias: int) -> dict[str, Any]:
                       "custo_origem": origem, "custo_data": data_custo,
                       "vendido": int(v.get("ml", 0) + v.get("shopee", 0)),
                       "vendido_ml": int(v.get("ml", 0)), "vendido_shopee": int(v.get("shopee", 0))})
-    itens.sort(key=lambda x: (-x["vendido"], x["codigo"]))
+    # V18.91: demanda de todos os canais e compra em aberto pela Linx, ao lado do e-commerce
+    # (o e-commerce é faturado no Linx: a tela usa uma OU a outra, nunca soma).
+    linx, linx_resumo = linx_demanda_por_codigo([x["codigo"] for x in itens], dias)
+    for x in itens:
+        x.update(linx.get(x["codigo"]) or {"linx_total": None, "linx_media_dia": None, "linx_canais": None,
+                                           "linx_caminho": None, "linx_previsao": "", "linx_atualizado": ""})
+    itens.sort(key=lambda x: (-max(x["vendido"], x["linx_total"] or 0), x["codigo"]))
     with DB_LOCK:
         primeiro = DB.execute("SELECT MIN(sale_day) AS d FROM vendas_v1799").fetchone()["d"]
     return {
         "ok": True,
+        "linx": linx_resumo,
         "fornecedor": cfg,
         "dias": dias,
         "vendas_desde": primeiro or "",
@@ -21228,6 +21575,15 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
+        if path == "/api/compras/linx/amostra":
+            # V18.91: a 1ª resposta real de cada consulta da Linx (para conferir o formato). Só perfil Admin.
+            ctx = self.auth_full_admin()
+            if ctx is None:
+                return
+            with DB_LOCK:
+                linhas = [dict(r) for r in DB.execute("SELECT * FROM linx_demanda_amostra_v1891").fetchall()]
+            self.send_json({"ok": True, "amostras": linhas})
+            return
         if path == "/api/compras/comprador":
             # V18.14: e-mail do comprador (um para tudo). V18.17: + limite de transferência.
             if self.auth(admin_only=True) is None:
@@ -21957,6 +22313,19 @@ class AppHandler(BaseHTTPRequestHandler):
             if ctx is not None:
                 threading.Thread(target=lambda: promo_renovacao_rodada(), name="promo-renovacao-manual",
                                  daemon=True).start()
+                self.send_json({"ok": True, "iniciado": True})
+            return
+        if path == "/api/compras/linx/atualizar":
+            # V18.91: busca agora, na Linx, a demanda e a compra em aberto do fornecedor (só leitura).
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                body = self.read_json() or {}
+                nome = str(body.get("fornecedor") or "").strip().upper()
+                if not nome or not any(f["nome"] == nome for f in compras_fornecedores()):
+                    self.send_json({"ok": False, "error": "Fornecedor não cadastrado."}, 400)
+                    return
+                threading.Thread(target=lambda: linx_demanda_rodada(fornecedor=nome, forcar=True),
+                                 name="linx-demanda-manual", daemon=True).start()
                 self.send_json({"ok": True, "iniciado": True})
             return
         if path == "/api/compras/enviar-comprador":
@@ -24539,6 +24908,7 @@ SAUDE_WORKERS_INFO: dict[str, tuple[str, bool, int]] = {
     "ml_visitas_loop": ("Visitas dos anúncios (Conversão)", False, 180),
     "ml_estoque_loop": ("Estoque dos anúncios (Ruptura)", False, 120),
     "shopee_anuncios_loop": ("Anúncios da Shopee (Conversão e Ruptura)", False, 120),
+    "linx_demanda_loop": ("Demanda de Compra pela Linx", False, 180),
     "promo_renovacao_loop": ("Promoções automáticas", False, 120),
     "posvenda_loop": ("Pós-venda do Mercado Livre", False, 60),
     "promo_convites_loop": ("Convites de campanha do ML", False, 120),
@@ -25446,6 +25816,13 @@ def main() -> None:
         name="posvenda",
         daemon=True,
     )
+    # V18.91: demanda de todos os canais e compra em aberto pela Linx, à noite.
+    linx_demanda_thread = threading.Thread(
+        target=_worker_protegido(linx_demanda_loop),
+        args=(watcher_stop,),
+        name="linx-demanda",
+        daemon=True,
+    )
     # V18.90: anúncios da Shopee — retrato do dia (visualizações, estoque) e estoque a cada 2 h.
     shopee_anuncios_thread = threading.Thread(
         target=_worker_protegido(shopee_anuncios_loop),
@@ -25515,6 +25892,7 @@ def main() -> None:
         posvenda_thread.start()
         promo_convites_thread.start()
         shopee_anuncios_thread.start()
+        linx_demanda_thread.start()
         promo_renovacao_thread.start()
         relatorio_thread.start()
         linx_clientes_thread.start()
