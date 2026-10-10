@@ -4089,7 +4089,10 @@ function carregarBancoInternoAdmin(){
     produtosBancoAdmin=JSON.parse(appStorage.getItem("conf_produtos")||"[]");
     kitsBancoAdmin=JSON.parse(appStorage.getItem("conf_kits")||"[]");
     if(!Array.isArray(kitsBancoAdmin)) kitsBancoAdmin=[];
-    usuariosEditorAdmin=JSON.parse(appStorage.getItem("conf_usuarios")||"[]");
+    // V18.96: depois que a lista oficial (/api/roles, V17.57) carregou, ela é a única fonte da tela de
+    // Usuários. Antes, toda mudança da fila de pedidos (a cada poucos segundos) trocava a lista pelo
+    // conf_usuarios e a alteração ainda não salva voltava (a filial do Lucas "voltava para Araçatuba").
+    if(!window.__usrCanonicoV1896) usuariosEditorAdmin=JSON.parse(appStorage.getItem("conf_usuarios")||"[]");
 
     // V16.46: abrir/atualizar o Admin é SOMENTE LEITURA para as filas.
     // A normalização abaixo serve apenas para exibição no editor e NÃO deve
@@ -8382,7 +8385,7 @@ document.addEventListener("DOMContentLoaded",()=>{
     const pendentes=todas.filter(s=>txt(s.Status||"Pendente").toLowerCase()==="pendente").sort((a,b)=>txt(a.CriadoEm).localeCompare(txt(b.CriadoEm)));
     const data=v=>{try{return new Date(v).toLocaleString("pt-BR");}catch(_){return txt(v);}};
     bloco.innerHTML=`<div class="solicitacoes-cabecalho"><h3>Solicitações aguardando aprovação <span class="badge-pendencias">${pendentes.length}</span></h3><button type="button" class="btn-primario" onclick="abrirSolicitacaoUsuario('admin')">＋ Criar solicitação</button></div>`+
-      (pendentes.length?`<div style="overflow:auto"><table class="tabela-solicitacoes"><thead><tr><th>Nome</th><th>Login</th><th>Perfil solicitado</th><th>Solicitado em</th><th>Ações</th></tr></thead><tbody>${pendentes.map(s=>`<tr><td>${escapeHtml(s.Nome)}</td><td><b>${escapeHtml(s.Login)}</b></td><td><select id="perfil-aprovacao-${escapeHtml(s.id)}" style="padding:7px;border:1px solid #C9D6E5;border-radius:5px;font-weight:700;"><option value="Operador" ${(s.PerfilSolicitado||"Operador")==="Operador"?"selected":""}>Operador</option><option value="Admin" ${(s.PerfilSolicitado||"")==="Admin"?"selected":""}>Admin</option></select></td><td>${escapeHtml(data(s.CriadoEm))}</td><td style="display:flex;gap:6px"><button class="acao-aprovar" onclick="aprovarSolicitacaoUsuario('${escapeHtml(s.id)}')"><i class=nk-i-check></i> Aprovar</button><button class="acao-rejeitar" onclick="rejeitarSolicitacaoUsuario('${escapeHtml(s.id)}')"><i class=nk-i-x></i> Rejeitar</button></td></tr>`).join("")}</tbody></table></div>`:`<div class="solicitacao-vazia">Nenhuma solicitação pendente.</div>`);
+      (pendentes.length?`<div style="overflow:auto"><table class="tabela-solicitacoes"><thead><tr><th>Nome</th><th>Login</th><th>Perfil e filial</th><th>Solicitado em</th><th>Ações</th></tr></thead><tbody>${pendentes.map(s=>`<tr><td>${escapeHtml(s.Nome)}</td><td><b>${escapeHtml(s.Login)}</b></td><td><select id="perfil-aprovacao-${escapeHtml(s.id)}" style="padding:7px;border:1px solid #C9D6E5;border-radius:5px;font-weight:700;"><option value="Operador" ${(s.PerfilSolicitado||"Operador")==="Operador"?"selected":""}>Operador</option><option value="Admin" ${(s.PerfilSolicitado||"")==="Admin"?"selected":""}>Admin</option></select> <select id="filial-aprovacao-${escapeHtml(s.id)}" title="Filial que o usuário vai ver" style="padding:7px;border:1px solid #C9D6E5;border-radius:5px;font-weight:700;"><option value="aracatuba">Araçatuba</option><option value="bauru">Bauru</option><option value="todas">Todas (só Admin)</option></select></td><td>${escapeHtml(data(s.CriadoEm))}</td><td style="display:flex;gap:6px"><button class="acao-aprovar" onclick="aprovarSolicitacaoUsuario('${escapeHtml(s.id)}')"><i class=nk-i-check></i> Aprovar</button><button class="acao-rejeitar" onclick="rejeitarSolicitacaoUsuario('${escapeHtml(s.id)}')"><i class=nk-i-x></i> Rejeitar</button></td></tr>`).join("")}</tbody></table></div>`:`<div class="solicitacao-vazia">Nenhuma solicitação pendente.</div>`);
     const aba=document.querySelector('.aba-btn[data-aba="usuarios"]');
     if(aba) aba.innerHTML=`👥 Usuários${pendentes.length?` <span class="badge-pendencias" style="height:19px;min-width:19px;font-size:10px">${pendentes.length}</span>`:""}`;
   };
@@ -8393,22 +8396,29 @@ document.addEventListener("DOMContentLoaded",()=>{
     if(!req||txt(req.Status||"Pendente").toLowerCase()!=="pendente"){alert("Esta solicitação já foi processada ou não existe mais.");renderizarSolicitacoesAdmin();return;}
     const seletorPerfil=document.getElementById("perfil-aprovacao-"+id);
     const perfilAprovado=txt(seletorPerfil?.value||req.PerfilSolicitado||"Operador")==="Admin"?"Admin":"Operador";
-    if(!await nkConfirmar(`Aprovar ${req.Nome} como ${perfilAprovado}?`))return;
+    // V18.96: a filial é escolhida na aprovação (antes nascia sempre Araçatuba).
+    let filialAprovada=txt(document.getElementById("filial-aprovacao-"+id)?.value||"aracatuba")||"aracatuba";
+    if(filialAprovada==="todas"&&perfilAprovado!=="Admin"){alert("Só o perfil Admin pode ver todas as filiais.");return;}
+    if(!await nkConfirmar(`Aprovar ${req.Nome} como ${perfilAprovado} (${({aracatuba:"Araçatuba",bauru:"Bauru",todas:"todas as filiais"})[filialAprovada]||filialAprovada})?`))return;
     try{
       const usuarios=jsonLista("conf_usuarios");
       const chave=loginNormalizado(req.Login);
       if(usuarios.some(u=>loginNormalizado(u.Login??u.Usuario??u["Usuário"])===chave)) throw new Error("Já existe um usuário com esse login.");
       const sessao=adminSessao();
-      const novo={__uidUsuario:"USR-"+Date.now().toString(36).toUpperCase()+"-"+Math.random().toString(36).slice(2,7).toUpperCase(),Nome:req.Nome,Login:req.Login,Senha:req.Senha,Perfil:perfilAprovado,Ativo:true,Aprovado:true,CriadoEm:req.CriadoEm,AprovadoEm:agoraISO(),AprovadoPor:sessao.Login||sessao.Nome||"admin"};
+      const novo={__uidUsuario:"USR-"+Date.now().toString(36).toUpperCase()+"-"+Math.random().toString(36).slice(2,7).toUpperCase(),Nome:req.Nome,Login:req.Login,Senha:req.Senha,Perfil:perfilAprovado,Filial:filialAprovada,Ativo:true,Aprovado:true,CriadoEm:req.CriadoEm,AprovadoEm:agoraISO(),AprovadoPor:sessao.Login||sessao.Nome||"admin"};
       usuarios.push(novo);
       appStorage.setItem("conf_usuarios",JSON.stringify(usuarios));
       const confirmados=jsonLista("conf_usuarios");
       if(!confirmados.some(u=>loginNormalizado(u.Login)===chave)) throw new Error("Não foi possível confirmar o usuário aprovado no servidor Web.");
       req.Status="Aprovado";req.PerfilAprovado=perfilAprovado;req.AprovadoEm=agoraISO();req.AprovadoPor=novo.AprovadoPor;req.Senha="";
       salvarSolicitacoes(solicitacoes);
-      if(typeof usuariosEditorAdmin!=="undefined") usuariosEditorAdmin=confirmados;
-      if(typeof usuariosCadastrados!=="undefined") usuariosCadastrados=confirmados;
-      if(typeof renderizarUsuariosAdmin==="function") renderizarUsuariosAdmin();
+      // V18.96: recarrega pela lista oficial (/api/roles) — a mesma que o Salvar usa.
+      if(typeof window.carregarUsuariosCanonicosV1757==="function"){try{await window.carregarUsuariosCanonicosV1757();}catch(_){}}
+      else{
+        if(typeof usuariosEditorAdmin!=="undefined") usuariosEditorAdmin=confirmados;
+        if(typeof usuariosCadastrados!=="undefined") usuariosCadastrados=confirmados;
+        if(typeof renderizarUsuariosAdmin==="function") renderizarUsuariosAdmin();
+      }
       renderizarSolicitacoesAdmin();
       alert(`Usuário ${req.Login} aprovado como ${novo.Perfil}. Ele já pode entrar no sistema.`);
     }catch(e){alert("Não foi possível aprovar: "+(e.message||e));}
@@ -10075,7 +10085,7 @@ html[data-tema="escuro"] .btn-mover-filial-v1895{background:#17212E;border-color
   function mapServer(u){return {Nome:u.display_name||u.username||'',Login:u.username||'',Senha:'********',Perfil:u.display_profile||perfil(u.role),Ativo:u.active!==false&&u.active!==0,Aprovado:true,AcessoConferencia:!!u.can_conferencia,AcessoAdmin:!!u.can_admin,AcessoEstacao:!!u.can_estacao,AcessoPrecificador:!!u.can_precificador,Filial:u.filial||'aracatuba',__uidUsuario:'USR-'+String(u.username||'').toLowerCase(),__serverUsername:String(u.username||'').toLowerCase()};}
   async function api(path,opt={}){const r=await fetch(BASE+path,{credentials:'same-origin',cache:'no-store',...opt,headers:{'Accept':'application/json',...(opt.body?{'Content-Type':'application/json; charset=utf-8'}:{}),...(opt.headers||{})}});let d={};try{d=await r.json()}catch(_){ }if(!r.ok)throw new Error(d.error||('HTTP '+r.status));return d;}
   window.carregarUsuariosCanonicosV1757=async function(){
-    try{const d=await api('/api/roles');const lista=(Array.isArray(d.users)?d.users:[]).map(mapServer);usuariosEditorAdmin=lista;window.__usrBaseV1869={};lista.forEach(u=>{window.__usrBaseV1869[u.__uidUsuario]=JSON.stringify([String(u.Nome||'').trim(),perfil(u.Perfil),u.AcessoConferencia!==false,u.AcessoAdmin===true,u.AcessoEstacao===true,u.AcessoPrecificador===true,u.Filial||'aracatuba'])});if(typeof usuariosCadastrados!=='undefined')usuariosCadastrados=lista;renderizarUsuariosAdmin();const c=document.getElementById('contadorUsuariosAdmin');if(c)c.textContent=lista.length+' usuário(s) cadastrado(s) no servidor.';return lista;}catch(e){console.error('[V17.57 usuarios]',e);if(typeof setStatusBanco==='function')setStatusBanco('Erro ao carregar usuários do servidor','erro');throw e;}
+    try{const d=await api('/api/roles');const lista=(Array.isArray(d.users)?d.users:[]).map(mapServer);usuariosEditorAdmin=lista;window.__usrCanonicoV1896=true;window.__usrBaseV1869={};lista.forEach(u=>{window.__usrBaseV1869[u.__uidUsuario]=JSON.stringify([String(u.Nome||'').trim(),perfil(u.Perfil),u.AcessoConferencia!==false,u.AcessoAdmin===true,u.AcessoEstacao===true,u.AcessoPrecificador===true,u.Filial||'aracatuba'])});if(typeof usuariosCadastrados!=='undefined')usuariosCadastrados=lista;renderizarUsuariosAdmin();const c=document.getElementById('contadorUsuariosAdmin');if(c)c.textContent=lista.length+' usuário(s) cadastrado(s) no servidor.';return lista;}catch(e){console.error('[V17.57 usuarios]',e);if(typeof setStatusBanco==='function')setStatusBanco('Erro ao carregar usuários do servidor','erro');throw e;}
   };
   /* V18.69: lista no padrão do sistema — uma linha por usuário (iniciais, nome/login, perfil,
      módulos em botões e ações). A linha alterada e não salva fica marcada, e o botão Salvar

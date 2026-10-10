@@ -278,3 +278,41 @@ class Telas(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PushApple(unittest.TestCase):
+    """V18.96 — produção 10/10: a Apple recusou o aviso do iPhone com HTTP 400 BadWebPushTopic."""
+
+    def _cabecalhos(self, endpoint):
+        enviados = {}
+
+        class Resp:
+            status = 201
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        def abrir(req, timeout=0):
+            enviados.update({k.lower(): v for k, v in req.header_items()})
+            return Resp()
+        with mock.patch.object(S, "_avisos_vapid_jwt", return_value="a.b.c"), \
+                mock.patch.object(S, "avisos_vapid_publica", return_value="CHAVE"), \
+                mock.patch.object(S.urllib.request, "urlopen", side_effect=abrir):
+            self.assertEqual(S._avisos_push_enviar(endpoint)[0], 201)
+        return enviados
+
+    def test_apple_sem_topic(self):
+        self.assertNotIn("topic", self._cabecalhos("https://web.push.apple.com/QBy_abc"))
+
+    def test_google_continua_com_topic(self):
+        self.assertEqual(self._cabecalhos(FCM).get("topic"), "noromak-venda")
+
+
+class TesteRecusado(Avisos):
+
+    def test_recusa_mostra_o_motivo(self):
+        self.inscrever()
+        self.resposta_push = 400
+        status, corpo = self.cliente.pedir("POST", "/api/avisos-venda/testar", {"endpoint": FCM})
+        self.assertEqual(status, 200, "502 virava a página de erro do nginx e escondia o motivo")
+        self.assertFalse(corpo["ok"])
+        self.assertIn("HTTP 400", corpo["error"])

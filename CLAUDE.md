@@ -5,7 +5,7 @@ Shopee, manuais), expedição, separação, conferência por código de barras, 
 produtos/SKUs/EANs, kits, precificação, promoções, rentabilidade, estoque, Central de
 Pendências e histórico.
 
-Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V18.95).
+Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V18.96).
 
 ---
 
@@ -472,7 +472,9 @@ quem incluiu. `Casa` = filial que confere; `ContaMercadoLivre` = conta do ML (et
 importação não desfaz. **Bauru imprime em PDF** (térmica não-Zebra): `GET /api/etiqueta-ml-pdf?pedido=` baixa
 `/shipment_labels?response_type=pdf` com a conta do pedido e a Conferência abre a janela de impressão
 (`imprimirEtiquetaPdfV1895`). Em Bauru o operador informa a coleta clicando na caixa da coleta. Usuários:
-campo Filial na tela (via `POST /api/roles`, `filial`) e no `conf_usuarios`. Ainda só da principal: Dashboard,
+campo Filial na tela (via `POST /api/roles`, `filial`), na aprovação de solicitação e no `conf_usuarios`. **V18.96:**
+o `carregarBancoInternoAdmin` (roda a cada mudança da fila) não troca mais a lista oficial de usuários
+(`window.__usrCanonicoV1896`): antes a alteração não salva na tela de Usuários "voltava". Ainda só da principal: Dashboard,
 Financeiro, vendas e demais telas de gestão (V18.96).
 
 ### Casas: Araçatuba e Bauru (V18.94)
@@ -509,7 +511,9 @@ push por vez por aparelho (`pendente_desde`, 10 min) + `Topic`: sem pilha quando
 on-line; renovar a inscrição ao abrir a tela **não** adianta o ponto (perderia a venda a caminho). 404/410 do
 serviço de push = aparelho sai. Com uma tela do Noromak à vista, o service worker manda as vendas para ela
 (popup + som); sem, notificação do sistema (o Safari exige notificação sempre). Sem push (navegador sem
-suporte ou notificação bloqueada), a tela aberta consulta `/api/avisos-venda/recentes` a cada 30 s. iPhone:
+suporte ou notificação bloqueada), a tela aberta consulta `/api/avisos-venda/recentes` a cada 30 s. **V18.96:** a
+Apple recusa o cabeçalho `Topic` (HTTP 400 `BadWebPushTopic`): ele só vai para os outros serviços; o "Enviar
+teste" recusado volta 200 com o motivo (502 virava a página de erro do nginx). iPhone:
 só com o Noromak instalado na Tela de Início (iOS 16.4+). Endereços de push aceitos: `AVISOS_PUSH_HOSTS`.
 
 ### Pós-venda do Mercado Livre (V18.88)

@@ -250,3 +250,22 @@ class TelasFilial(TesteNoromak):
         self.assertIn("moverPedidoFilialAdminV1895", admin)
         self.assertIn('id="novoUsuarioFilial"', admin)
         self.assertIn('data-campo="Filial"', admin)
+
+
+class UsuarioFilialV1896(TesteNoromak):
+    """V18.96 — produção 10/10: o Lucas criado por Solicitar → Aprovar ficava em Araçatuba e a
+    escolha de Bauru na lista "voltava" (a lista era trocada a cada mudança da fila)."""
+
+    def test_aprovacao_grava_a_filial(self):
+        lista = S.app_users_payload()
+        lista.append({"Nome": "Lucas", "Login": "lucas", "Senha": "abc12345", "Perfil": "Operador",
+                      "Filial": "bauru", "Ativo": True})
+        S.apply_app_users_payload(json.dumps(lista), USUARIO_ADMIN)
+        self.assertEqual({u["Login"]: u["Filial"] for u in S.app_users_payload()}["lucas"], "bauru")
+
+    def test_tela_nao_troca_a_lista_oficial(self):
+        from base import RAIZ
+        admin = (RAIZ / "APP" / "admin.html").read_text(encoding="utf-8")
+        self.assertIn('if(!window.__usrCanonicoV1896) usuariosEditorAdmin=', admin)
+        self.assertIn('id="filial-aprovacao-', admin)
+        self.assertIn("Filial:filialAprovada", admin)

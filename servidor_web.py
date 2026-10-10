@@ -44,7 +44,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "18.95-FILIAL-CONFERENCIA"
+APP_VERSION = "18.96-USUARIO-FILIAL-PUSH-IPHONE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -23027,7 +23027,7 @@ class AppHandler(BaseHTTPRequestHandler):
                         audit(ctx["username"], "avisos_venda.desligar", str(dados.get("aparelho") or "")[:120])
                     else:
                         res = avisos_testar(str(dados.get("endpoint") or ""), ctx["username"])
-                    self.send_json(res, 200 if res.get("ok") else 502)
+                    self.send_json(res)  # V18.96: o motivo vai no "error" (502 virava a página do nginx)
                 except ValueError as exc:
                     self.send_json({"ok": False, "error": str(exc)}, 400)
                 except Exception as exc:
@@ -26126,10 +26126,15 @@ def _avisos_push_enviar(endpoint: str) -> tuple[int, str]:
     estiver desligado, o serviço guarda só o último aviso, não uma pilha."""
     u = urlparse(endpoint)
     token = _avisos_vapid_jwt(f"{u.scheme}://{u.netloc}")
-    req = urllib.request.Request(endpoint, data=b"", method="POST", headers={
-        "TTL": "43200", "Urgency": "high", "Topic": "noromak-venda", "Content-Length": "0",
+    cabecalhos = {
+        "TTL": "43200", "Urgency": "high", "Content-Length": "0",
         "Authorization": f"vapid t={token}, k={avisos_vapid_publica()}",
-    })
+    }
+    # V18.96: a Apple recusa o Topic (HTTP 400 BadWebPushTopic, iPhone em produção 10/10).
+    # Lá a pilha é evitada só pelo "um push por vez" (pendente_desde).
+    if not (u.hostname or "").lower().endswith(".push.apple.com"):
+        cabecalhos["Topic"] = "noromak-venda"
+    req = urllib.request.Request(endpoint, data=b"", method="POST", headers=cabecalhos)
     try:
         with urllib.request.urlopen(req, timeout=15) as resp:
             return int(resp.status), ""
@@ -26192,7 +26197,10 @@ def avisos_testar(endpoint: str, username: str) -> dict[str, Any]:
         DB.commit()
     status = _avisos_enviar_para(sub)
     if not 200 <= status < 300:
-        return {"ok": False, "error": f"O serviço de notificação recusou (HTTP {status})."}
+        with DB_LOCK:
+            row = DB.execute("SELECT ultimo_status FROM aviso_inscricao_v1893 WHERE endpoint=?", (endpoint,)).fetchone()
+        detalhe = str(row["ultimo_status"] or "") if row else f"HTTP {status}"
+        return {"ok": False, "error": f"O serviço de notificação recusou: {detalhe}"[:300]}
     return {"ok": True}
 
 
