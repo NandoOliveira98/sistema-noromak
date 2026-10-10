@@ -259,3 +259,10 @@ body.nk-shell header.topbar:has(.brand) .brand img,body.nk-shell header.topbar:h
 body.nk-shell header.topbar:has(.brand) .brand h1{font-size:24px;font-weight:700;color:var(--nk-head)}
 body.nk-shell header.topbar:has(.brand) .brand p{color:var(--nk-ink2);font-size:12px}
 body.nk-shell header.topbar:has(.brand) .status{color:var(--nk-ink2)}
+
+/* V18.95: seletor de filial no rodapé do menu (só quem vê todas as filiais). */
+.nk-filial-sel{cursor:default}
+.nk-filial-select{flex:1;min-width:0;background:rgba(255,255,255,.08);color:inherit;border:1px solid rgba(255,255,255,.22);border-radius:7px;padding:4px 6px;font:inherit;font-size:12.5px;cursor:pointer}
+.nk-filial-select option{color:#18324A;background:#fff}
+body.nk-menu-recolhido .nk-filial-select{display:none}
+@media(min-width:761px) and (max-width:1000px){.v15-sidebar .nk-filial-select{display:none}}

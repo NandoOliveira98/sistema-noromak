@@ -49,6 +49,31 @@
         ? ["conf_pedidos","conf_etiquetas","conf_banco_atualizado_em"]
         : CHAVES_MONITORADAS_TODAS;
 
+  // V18.95: filial escolhida no seletor (só quem vê "todas"; o servidor ignora para os
+  // demais). Vai em TODA chamada à API desta origem — inclusive nos fetch() das telas.
+  const CHAVE_FILIAL = "nk_filial_v1895";
+  function filialEscolhida() {
+    try { return window.localStorage.getItem(CHAVE_FILIAL) || ""; } catch (_) { return ""; }
+  }
+  if (window.fetch && !window.fetch.__nkFilial) {
+    const fetchOriginal = window.fetch.bind(window);
+    const fetchComFilial = (entrada, opcoes) => {
+      const filial = filialEscolhida();
+      if (filial && typeof entrada === "string") {
+        let caminho = "";
+        try { caminho = new URL(entrada, location.href).pathname; } catch (_) {}
+        if (caminho.startsWith(BASE + "/api/")) {
+          const cab = new Headers((opcoes && opcoes.headers) || {});
+          if (!cab.has("X-Noromak-Filial")) cab.set("X-Noromak-Filial", filial);
+          opcoes = { ...(opcoes || {}), headers: cab };
+        }
+      }
+      return fetchOriginal(entrada, opcoes);
+    };
+    fetchComFilial.__nkFilial = true;
+    window.fetch = fetchComFilial;
+  }
+
   const cache = new Map();
   const versoes = new Map();
   let conectado = true;
@@ -82,6 +107,7 @@
     xhr.open(metodo, url, false);
     xhr.setRequestHeader("Accept", "application/json");
     xhr.setRequestHeader("X-Expedicao-Tela", TELA_ATUAL);
+    if (filialEscolhida()) xhr.setRequestHeader("X-Noromak-Filial", filialEscolhida());  // V18.95
     if (corpo !== undefined) xhr.setRequestHeader("Content-Type", "application/json; charset=utf-8");
     if (corpo && corpo.key === "conf_produtos") xhr.setRequestHeader("X-Expedicao-Forma", TELA_ATUAL === "Admin" ? "Banco de produtos" : "Sincronização de produtos");
     else if (corpo && (corpo.key === "conf_pedidos" || corpo.key === "conf_pedidos_rascunhos")) xhr.setRequestHeader("X-Expedicao-Forma", TELA_ATUAL === "Admin" ? "Pedidos pendentes / importação" : (TELA_ATUAL === "Conferência" ? "Tela de conferência" : "Sincronização de pedidos"));
@@ -110,6 +136,24 @@
   }
 
   const appStorage = {
+    // V18.95: troca a filial vista (seletor de quem vê "todas"): limpa as cópias e recarrega.
+    filialEscolhida,
+    trocarFilial(filial) {
+      try {
+        if (filial && filial !== "todas") window.localStorage.setItem(CHAVE_FILIAL, filial);
+        else window.localStorage.removeItem(CHAVE_FILIAL);
+        Object.keys(window.sessionStorage).filter(k => k.startsWith("rede_cache_")).forEach(k => window.sessionStorage.removeItem(k));
+      } catch (_) {}
+      cache.clear();
+      versoes.clear();
+      location.reload();
+    },
+    // V18.95: descarta a cópia em memória de uma chave (a próxima leitura busca no servidor).
+    recarregar(chave) {
+      chave = String(chave);
+      cache.delete(chave);
+      try { window.sessionStorage.removeItem("rede_cache_" + chave); } catch (_) {}
+    },
     getItem(chave) {
       chave = String(chave);
       if (ehLocal(chave)) return window.localStorage.getItem(chave);

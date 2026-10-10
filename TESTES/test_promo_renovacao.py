@@ -54,6 +54,12 @@ class Base(TesteNoromak):
         S._ml_promo_http = http
 
     def tearDown(self):
+        # V18.92: a rota Marcar confere em segundo plano; espera terminar antes de fechar o
+        # banco temporário (senão a conferência cai em "Cannot operate on a closed database")
+        import threading
+        for t in threading.enumerate():
+            if t.name == "promo-renovacao-marcar":
+                t.join(10)
         (S.ml_promocoes_do_item, S.ml_itens_detalhe, S._ml_promo_http, S._precificador_produtos_ml,
          S._ml_vinculos_mlb_sku, S.ml_integration_row, S.promo_atualizar_data_planilha) = self._orig
         S.ml_api_get = self._orig_api

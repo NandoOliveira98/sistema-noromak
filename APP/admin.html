@@ -7,8 +7,8 @@
 <meta name="application-name" content="Noromak Admin">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="manifest" href="/expedicao/manifest-admin.webmanifest?v=14.5" crossorigin="use-credentials">
-<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=14.5">
+<link rel="manifest" href="/expedicao/manifest-admin.webmanifest?v=18.94" crossorigin="use-credentials">
+<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=18.94">
 <link rel="icon" href="/favicon.ico?v=14.5" sizes="any">
 <link rel="shortcut icon" href="/favicon.ico?v=14.5">
 <link rel="stylesheet" href="/expedicao/pwa-install.css?v=14.5">
@@ -466,6 +466,8 @@
   #aba-usuarios .usr-kpi:hover{transform:none}
   #aba-usuarios #blocoSolicitacoesUsuarios:not(:has(table)){display:none}
   #aba-usuarios .usr-lista-cab,#aba-usuarios .usr-linha{display:grid;grid-template-columns:minmax(200px,1.2fr) 150px minmax(330px,2fr) auto;gap:16px;align-items:center}
+  #aba-usuarios .usr-perfil{display:grid;gap:6px}
+  #aba-usuarios .usr-filial{font-size:12px}
   #aba-usuarios .usr-lista-cab{padding:0 16px 6px;color:#586A7D;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em}
   #aba-usuarios .usr-lista{display:grid;gap:8px}
   #aba-usuarios .usr-linha{background:#fff;border:1px solid #DCE5EF;border-left:3px solid transparent;border-radius:12px;padding:12px 14px;box-shadow:0 2px 10px rgba(26,59,89,.035)}
@@ -541,7 +543,7 @@
 @media(max-width:600px){.coleta-popup-grid-v1713{grid-template-columns:1fr}}
 
 </style>
-<script src="/expedicao/shared-storage.js?v=18.82"></script>
+<script src="/expedicao/shared-storage.js?v=18.95"></script>
 <script src="/expedicao/web-auth.js?v=18.82"></script>
 <script defer src="/expedicao/pwa-install.js?v=14.5"></script>
 
@@ -714,7 +716,7 @@ body{background:var(--v15-bg)!important}
 <!-- V18.65: tema comum (fonte, foco e icones) por ultimo no head. -->
 <link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
 <!-- V18.82: componentes comuns e menu lateral único (nk-menu.js). -->
-<link rel="stylesheet" href="/expedicao/nk-ui.css?v=18.87">
+<link rel="stylesheet" href="/expedicao/nk-ui.css?v=18.95">
 <!-- V18.83: tema claro/escuro, avisos, confirmação e tabela padrão. -->
 <script src="/expedicao/nk-ui.js?v=18.83" data-alertas="toast"></script>
 <style id="escuro-auto-v1883">
@@ -1366,7 +1368,7 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
   </style>
   <!-- V18.82: o menu (itens, grupos recolhíveis, Sair) vem do nk-menu.js, o mesmo das outras telas.
        Cada item é um link com o endereço da tela (/expedicao/pedidos-dia...): Ctrl+clique abre em outra aba. -->
-  <script src="/expedicao/nk-menu.js?v=18.88"></script>
+  <script src="/expedicao/nk-menu.js?v=18.95"></script>
   <script>nkMenuDesenhar(document.currentScript);</script>
 </nav>
 
@@ -1862,7 +1864,7 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
       <div class="usr-kpis" id="usrKpis"></div>
       <div id="blocoSolicitacoesUsuarios" class="solicitacoes-bloco"></div>
       <div id="contadorUsuariosAdmin" class="usuario-contador" hidden></div>
-      <div class="usr-lista-cab" aria-hidden="true"><span>Usuário</span><span>Perfil</span><span>Módulos que pode abrir</span><span></span></div>
+      <div class="usr-lista-cab" aria-hidden="true"><span>Usuário</span><span>Perfil e filial</span><span>Módulos que pode abrir</span><span></span></div>
       <div class="usr-lista" id="corpoUsuariosAdmin"></div>
       <p class="usr-rodape"><i class=nk-i-shield></i> A senha atual nunca é exibida. Salvar pede a confirmação do proprietário (senha + código). O <b>Supervisor</b> sempre tem o Admin; o <b>Operador</b> nunca tem — para mudar, troque o perfil.</p>
     </div>
@@ -1973,12 +1975,28 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
           <div class="integracao-acoes">
             <button type="button" id="btnMlConectar" class="btn-primario" onclick="conectarMercadoLivreAdmin()">Conectar Mercado Livre</button>
             <button type="button" id="btnMlSincronizar" class="btn-sucesso" onclick="sincronizarMercadoLivreAdmin()" disabled>↻ Sincronizar agora</button>
-            <button type="button" id="btnMlVerificarEtiquetas" class="btn-secundario" onclick="verificarEtiquetasMercadoLivreAdmin()" disabled><i class=nk-i-tag></i> Verificar etiquetas disponíveis e vincular</button>
-            <button type="button" id="btnMlAtualizarNomesNfe" class="btn-secundario" onclick="atualizarNomesNfeMercadoLivreAdmin()"><i class=nk-i-file></i> Atualizar nomes pelas NF-e</button>
+            <!-- V18.93: "Verificar etiquetas disponíveis e vincular" e "Atualizar nomes pelas NF-e" saíram
+                 (pedido do dono): os workers do servidor já vinculam etiquetas e nomes sozinhos. -->
             <button type="button" id="btnMlDesconectar" class="btn-perigo" onclick="desconectarMercadoLivreAdmin()" disabled>Desconectar</button>
           </div>
           <div id="mlIntegracaoMensagem" class="integracao-nota">As credenciais ficam somente no <code>/home/expedicao/.env</code>; o Client Secret nunca é enviado ao navegador.</div>
           <div class="integracao-alerta"><b>Importante para o nginx:</b> a rota <code>/expedicao/api/integracoes/mercadolivre/notificacoes</code> precisa aceitar chamadas do Mercado Livre sem o login do CRM. Ela não dá acesso aos dados do sistema; apenas recebe o evento e valida o <code>application_id</code>/<code>user_id</code> antes de consultar a API.</div>
+        </div>
+        <!-- V18.94: conta do Mercado Livre de Bauru (casa com expedição própria). -->
+        <div class="integracao-card" id="mlBauruCard">
+          <h3><i class=nk-dot-ml></i> Mercado Livre · Bauru</h3>
+          <div id="mlBauruStatus" class="integracao-status off">⚪ Carregando...</div>
+          <div class="integracao-dados">
+            <b>Conta</b><span id="mlBauruConta">—</span>
+            <b>Seller ID</b><span id="mlBauruSeller">—</span>
+            <b>Última sincronização</b><span id="mlBauruSync">—</span>
+            <b>Refresh token</b><span id="mlBauruRefresh">—</span>
+          </div>
+          <div class="integracao-acoes">
+            <button type="button" id="btnMlBauruConectar" class="btn-primario" onclick="conectarMlBauruAdmin()">Conectar Mercado Livre de Bauru</button>
+            <button type="button" id="btnMlBauruDesconectar" class="btn-perigo" onclick="desconectarMlBauruAdmin()" disabled>Desconectar</button>
+          </div>
+          <div class="integracao-nota">Antes de clicar em Conectar, entre no Mercado Livre com a conta de <b>Bauru</b> (ou saia da conta de Araçatuba): o Mercado Livre autoriza a conta que estiver aberta no navegador. A mesma conta nunca fica nas duas casas — o sistema recusa. Os pedidos de Bauru entram marcados como da casa Bauru.</div>
         </div>
         <div class="integracao-card">
           <h3><i class=nk-dot-shopee></i> Shopee</h3>
@@ -2034,7 +2052,10 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
           <div class="integracao-nota">Instale uma única vez no computador conectado à Zebra. Depois disso, o agente consulta a fila diretamente do servidor e continua online mesmo com todas as abas do navegador fechadas.</div>
         </div>
         <div class="integracao-card">
-          <h3><i class=nk-i-file></i> Log da integração</h3>
+          <!-- V18.93: o log pode ser minimizado; a escolha fica neste navegador. -->
+          <h3 style="display:flex;align-items:center;gap:10px;justify-content:space-between"><span><i class=nk-i-file></i> Log da integração</span>
+            <button type="button" id="btnMlLogMinimizar" class="btn-secundario" onclick="alternarLogMlV1893()" aria-expanded="true" aria-controls="mlLogCorpo">Minimizar</button></h3>
+          <div id="mlLogCorpo">
           <div class="integracao-acoes" style="margin-bottom:10px"><button type="button" class="btn-secundario" onclick="carregarLogsMercadoLivreAdmin()">Atualizar log</button></div>
           <div class="ml-log-wrap">
             <table class="ml-log-table" data-nk-tabela="log_mercado_livre">
@@ -2042,6 +2063,18 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
               <tbody id="mlIntegracaoLogs"><tr><td colspan="4">Nenhum log carregado.</td></tr></tbody>
             </table>
           </div>
+          </div>
+          <script>
+          function alternarLogMlV1893(minimizar){
+            const corpo=document.getElementById("mlLogCorpo"),btn=document.getElementById("btnMlLogMinimizar");
+            if(!corpo||!btn)return;
+            if(typeof minimizar!=="boolean"){minimizar=!corpo.hidden;try{localStorage.setItem("nk_ml_log_minimizado_v1893",minimizar?"1":"0");}catch(_){}}
+            corpo.hidden=minimizar;
+            btn.textContent=minimizar?"Mostrar log":"Minimizar";
+            btn.setAttribute("aria-expanded",String(!minimizar));
+          }
+          (function(){let m=false;try{m=localStorage.getItem("nk_ml_log_minimizado_v1893")==="1";}catch(_){}alternarLogMlV1893(m);})();
+          </script>
         </div>
       </div>
     </div>
@@ -2089,6 +2122,8 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
       <div class="field"><label>Login</label><input id="novoUsuarioLogin" type="text" autocomplete="off" placeholder="Ex.: maria"></div>
       <div class="field"><label>Senha</label><input id="novoUsuarioSenha" type="password" autocomplete="new-password" placeholder="Digite uma senha"></div>
       <div class="field"><label>Perfil</label><select id="novoUsuarioPerfil"><option value="Operador">Operador</option><option value="Supervisor">Supervisor</option><option value="Admin">Admin</option></select></div>
+      <!-- V18.95: filial que o usuário vê (Todas só para o perfil Admin). -->
+      <div class="field"><label>Filial</label><select id="novoUsuarioFilial"><option value="aracatuba">Araçatuba</option><option value="bauru">Bauru</option><option value="todas">Todas as filiais (só Admin)</option></select></div>
       <label style="display:flex;align-items:center;gap:8px;font-weight:600;color:#526475;"><input id="mostrarSenhaNovoUsuario" type="checkbox" style="width:auto;" onchange="alternarSenhaNovoUsuarioAdmin()"> Mostrar senha</label>
       <div id="erroNovoUsuarioAdmin" class="usuario-modal-erro"></div>
     </div>
@@ -5022,7 +5057,7 @@ function abrirAbaAdmin(nome){
   if(nome==="coleta") carregarColetaDiaAdmin(!coletaAdminCarregada);
   if(nome==="historico-sku") carregarHistoricoSkuAdmin();
   if(nome==="kits") renderizarKitsAdmin();
-  if(nome==="integracoes"){carregarIntegracaoMercadoLivreAdmin();carregarLogsMercadoLivreAdmin();carregarIntegracaoShopeeAdmin();carregarAgenteZebraAdmin();carregarIntegracaoLinxAdmin();carregarTokenRoboLinxAdmin();}
+  if(nome==="integracoes"){carregarIntegracaoMercadoLivreAdmin();carregarIntegracaoMlBauruAdmin();carregarLogsMercadoLivreAdmin();carregarIntegracaoShopeeAdmin();carregarAgenteZebraAdmin();carregarIntegracaoLinxAdmin();carregarTokenRoboLinxAdmin();}
   if(nome==="seguranca") carregarSegurancaAdmin().catch(e=>alert("Segurança: "+e.message));
 }
 function abrirDashboardV151(){
@@ -5605,7 +5640,7 @@ async function atualizarVendaMercadoLivreAdmin(uid,botao){
   if(!item)return;
   const orderId=String(item.VendaMercadoLivre||"").trim();
   if(!orderId){
-    alert("Este pedido ainda não possui o ID original da venda do Mercado Livre. Use Integrações > Verificar etiquetas disponíveis e vincular para reconciliá-lo primeiro.");
+    alert("Este pedido ainda não possui o ID original da venda do Mercado Livre. Aguarde a sincronização automática do servidor ou use Integrações > Sincronizar agora.");
     return;
   }
   const anterior=botao?.textContent||"↻";
@@ -5680,6 +5715,42 @@ async function excluirPedidoInteiroAdmin(pedido,marketplace){
   }
 }
 async function excluirKitInteiroAdmin(pedido,marketplace){return excluirPedidoInteiroAdmin(pedido,marketplace);}
+// V18.95 — filial do pedido e "Mover de filial" (só quem vê todas as filiais; decisão do dono, 10/10).
+const FILIAIS_ADMIN_V1895={aracatuba:"Araçatuba",bauru:"Bauru"};
+function filialDaLinhaAdminV1895(l){const c=String((l&&l.Casa)||"").toLowerCase();return FILIAIS_ADMIN_V1895[c]?c:"aracatuba";}
+function usuarioVeTodasFiliaisV1895(){return String((window.EXPEDICAO_USER||{}).casa||"")==="todas";}
+function filialPedidoAdminV1895(itens,pedido){
+  if(!usuarioVeTodasFiliaisV1895())return "";
+  const f=filialDaLinhaAdminV1895((itens||[])[0]);
+  const destino=f==="bauru"?"aracatuba":"bauru";
+  const p=htmlSeguroBanco(pedido);
+  return `<span class="filial-pill-v1895 ${f}" title="Filial que confere este pedido">${FILIAIS_ADMIN_V1895[f]}</span>`+
+    (usuarioAtualEhAdminV1766()?`<button type="button" class="btn-mover-filial-v1895" title="A etiqueta continua vindo da conta de origem do Mercado Livre" onclick="moverPedidoFilialAdminV1895('${p}','${destino}')">Mover p/ ${FILIAIS_ADMIN_V1895[destino]}</button>`:"");
+}
+async function moverPedidoFilialAdminV1895(pedido,destino){
+  if(!pedido||!FILIAIS_ADMIN_V1895[destino])return;
+  if(!await nkConfirmar(`Mover o pedido ${pedido} para a filial ${FILIAIS_ADMIN_V1895[destino]}?\n\nEle sai da Conferência da outra filial. A etiqueta continua vindo da conta de origem do Mercado Livre e a importação automática não desfaz a mudança.`))return;
+  try{
+    setStatusBanco("● Movendo pedido de filial...","salvando");
+    const baseApi=location.pathname.startsWith("/expedicao")?"/expedicao":"";
+    const r=await fetch(baseApi+"/api/pedido-mover-filial",{method:"POST",credentials:"same-origin",cache:"no-store",
+      headers:{"Accept":"application/json","Content-Type":"application/json; charset=utf-8"},
+      body:JSON.stringify({pedido:String(pedido),filial:destino})});
+    let d={};try{d=await r.json();}catch(_){}
+    if(!r.ok||d.ok===false)throw new Error(d.error||("HTTP "+r.status));
+    const alvo=normalizarBuscaBanco(pedido);
+    const seletor=(window.appStorage&&appStorage.filialEscolhida&&appStorage.filialEscolhida())||"";
+    if(seletor&&seletor!==destino)pedidosEditorAdmin=pedidosEditorAdmin.filter(x=>normalizarBuscaBanco(x.Pedido)!==alvo);
+    else pedidosEditorAdmin.forEach(x=>{if(normalizarBuscaBanco(x.Pedido)===alvo)x.Casa=destino;});
+    if(window.appStorage&&typeof appStorage.recarregar==="function")appStorage.recarregar("conf_pedidos");
+    renderizarPedidosAdmin();
+    setTimeout(()=>{try{carregarBancoInternoAdmin();}catch(_){}},100);
+    setStatusBanco(`● Pedido movido para ${FILIAIS_ADMIN_V1895[destino]}`,"ok");
+  }catch(e){
+    console.error(e);setStatusBanco("Erro ao mover de filial","erro");
+    alert("Não foi possível mover o pedido de filial: "+(e.message||e));
+  }
+}
 async function excluirLinhaPedidoAdmin(uid){
   const item=pedidosEditorAdmin.find(x=>x.__uidLinha===uid); if(!item)return;
   const ehKit=normalizarBuscaBanco(item.Kit)==="sim"||!!String(item.SkuKitOrigem||item["Nome do Kit"]||"").trim();
@@ -6150,7 +6221,7 @@ function renderizarPedidosAdmin(){
         <label>Data<input class="data-pedido-compacta" type="date" data-grupo-pedido="${htmlSeguroBanco(pedidoOriginal)}" data-campo="Data do Pedido" value="${htmlSeguroBanco(normalizarDataPedidoBanco(primeiro['Data do Pedido'],true))}" onchange="atualizarCampoGrupoPedidoAdmin(this)"></label>
         <label class="pedido-card-cliente">Cliente<input data-grupo-pedido="${htmlSeguroBanco(pedidoOriginal)}" data-campo="Cliente" value="${htmlSeguroBanco(campoBanco(primeiro,'Cliente'))}" onchange="atualizarCampoGrupoPedidoAdmin(this)"></label>
         <label class="pedido-card-conferencia">Conferência${primeiro.NomeConferenciaFonte==="nfe_extensao"?' <em class="tag-nfe" title="Preenchido com o nome de Dados para a NF-e">NF-e</em>':''}<input class="${String(campoBanco(primeiro,'Nome Conferência')).trim()?'':'conferencia-vazia'}" placeholder="Aguardando nome da NF-e" data-grupo-pedido="${htmlSeguroBanco(pedidoOriginal)}" data-campo="Nome Conferência" value="${htmlSeguroBanco(campoBanco(primeiro,'Nome Conferência'))}" onchange="atualizarCampoGrupoPedidoAdmin(this)"></label>
-        <div class="pedido-card-acoes"><div class="pedido-card-status">${status}</div>${usuarioAtualEhAdminV1766()?`<button type="button" class="btn-excluir-kit-inteiro" title="Excluir definitivamente da Conferência e Pedidos Pendentes" onclick="excluirPedidoInteiroAdmin('${htmlSeguroBanco(pedidoOriginal)}','${htmlSeguroBanco(primeiro.Marketplace)}')"><i class=nk-i-trash></i> Excluir pedido</button>`:''}</div>
+        <div class="pedido-card-acoes"><div class="pedido-card-status">${status}</div>${filialPedidoAdminV1895(grupo.itens,pedidoOriginal)}${usuarioAtualEhAdminV1766()?`<button type="button" class="btn-excluir-kit-inteiro" title="Excluir definitivamente da Conferência e Pedidos Pendentes" onclick="excluirPedidoInteiroAdmin('${htmlSeguroBanco(pedidoOriginal)}','${htmlSeguroBanco(primeiro.Marketplace)}')"><i class=nk-i-trash></i> Excluir pedido</button>`:''}</div>
       </div>`;
       const itens=grupo.itens.map((item,indice)=>{
         item.Marketplace=marketplaceExibicaoBanco(item.Pedido);
@@ -9631,6 +9702,35 @@ async function desconectarShopeeAdmin(){
 function conectarMercadoLivreAdmin(){
   window.location.href="/expedicao/api/integracoes/mercadolivre/connect";
 }
+// V18.94: conta do Mercado Livre de Bauru.
+async function carregarIntegracaoMlBauruAdmin(){
+  const badge=document.getElementById("mlBauruStatus");if(!badge)return;
+  try{
+    const d=await mlApiAdmin("/expedicao/api/integracoes/mercadolivre/status?casa=bauru");
+    const ml=d.mercadolivre||{};
+    const conectado=ml.connected===true, expirado=ml.token_expired===true;
+    badge.className="integracao-status "+(conectado?"ok":expirado?"erro":"off");
+    badge.textContent=expirado?"🔴 Token de Bauru expirado — conecte de novo":conectado?"🟢 Conectado":"⚪ Ainda não conectado";
+    document.getElementById("mlBauruConta").textContent=ml.nickname||"—";
+    document.getElementById("mlBauruSeller").textContent=ml.seller_id||"—";
+    document.getElementById("mlBauruSync").textContent=ml.last_sync_at?mlDataHora(ml.last_sync_at):"—";
+    document.getElementById("mlBauruRefresh").textContent=conectado?((ml.worker||{}).has_refresh_token||ml.has_refresh_token?"🟢 Disponível":"🟡 Ausente"):"—";
+    const des=document.getElementById("btnMlBauruDesconectar");if(des)des.disabled=!conectado&&!expirado;
+    const con=document.getElementById("btnMlBauruConectar");if(con)con.textContent=conectado?"Reconectar Bauru":"Conectar Mercado Livre de Bauru";
+  }catch(e){badge.className="integracao-status erro";badge.textContent="🔴 "+e.message;}
+}
+async function conectarMlBauruAdmin(){
+  if(!await nkConfirmar("Você está logado no Mercado Livre com a conta de BAURU neste navegador? O Mercado Livre autoriza a conta que estiver aberta."))return;
+  window.location.href="/expedicao/api/integracoes/mercadolivre/connect?casa=bauru";
+}
+async function desconectarMlBauruAdmin(){
+  if(!await nkConfirmar("Desconectar a conta do Mercado Livre de Bauru? Os pedidos já importados serão mantidos."))return;
+  try{
+    await confirmarOwnerSeguranca("Desconectar o Mercado Livre de Bauru");
+    await mlApiAdmin("/expedicao/api/integracoes/mercadolivre/disconnect?casa=bauru",{method:"POST",body:"{}"});
+    await carregarIntegracaoMlBauruAdmin();await carregarLogsMercadoLivreAdmin();
+  }catch(e){alert("Erro ao desconectar: "+e.message);}
+}
 async function sincronizarMercadoLivreAdmin(){
   const btn=document.getElementById("btnMlSincronizar");if(btn){btn.disabled=true;btn.textContent="Sincronizando...";}
   try{
@@ -9942,6 +10042,14 @@ window.addEventListener("storage",e=>{
 #aba-pedidos .pedido-card:hover{box-shadow:0 4px 14px rgba(25,54,84,.12)}
 /* V17.87 — Pedidos pendentes: ações do pedido, marketplace e Conferência */
 .pedido-card-acoes{display:flex;flex-direction:column;align-items:flex-end;gap:6px;align-self:center}
+/* V18.95: filial do pedido e Mover de filial. */
+.filial-pill-v1895{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;background:#E8F0FB;color:#1F57A5}
+.filial-pill-v1895.bauru{background:#FFE7D1;color:#9A3D00}
+.btn-mover-filial-v1895{border:1px solid #C9DAF0;background:#fff;color:#1F57A5;border-radius:7px;padding:4px 8px;font-size:11px;font-weight:700;cursor:pointer}
+.btn-mover-filial-v1895:hover{background:#EAF1FA}
+html[data-tema="escuro"] .filial-pill-v1895{background:#15283F;color:#86B4F2}
+html[data-tema="escuro"] .filial-pill-v1895.bauru{background:#3A2412;color:#F0B357}
+html[data-tema="escuro"] .btn-mover-filial-v1895{background:#17212E;border-color:#28456A;color:#86B4F2}
 .pedido-card-acoes .pedido-card-status{justify-self:auto}
 .marketplace-pill-admin.mp-ml{background:#fff5bf;color:#5c4a00}
 .marketplace-pill-admin.mp-shopee{background:#ffe7dc;color:#b43a0d}
@@ -9964,15 +10072,15 @@ window.addEventListener("storage",e=>{
   const BASE=location.pathname.startsWith('/expedicao')?'/expedicao':'';
   const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));
   const perfil=v=>{const p=String(v||'').toLowerCase();return p.includes('admin')?'Admin':(p.includes('supervisor')?'Supervisor':'Operador')};
-  function mapServer(u){return {Nome:u.display_name||u.username||'',Login:u.username||'',Senha:'********',Perfil:u.display_profile||perfil(u.role),Ativo:u.active!==false&&u.active!==0,Aprovado:true,AcessoConferencia:!!u.can_conferencia,AcessoAdmin:!!u.can_admin,AcessoEstacao:!!u.can_estacao,AcessoPrecificador:!!u.can_precificador,__uidUsuario:'USR-'+String(u.username||'').toLowerCase(),__serverUsername:String(u.username||'').toLowerCase()};}
+  function mapServer(u){return {Nome:u.display_name||u.username||'',Login:u.username||'',Senha:'********',Perfil:u.display_profile||perfil(u.role),Ativo:u.active!==false&&u.active!==0,Aprovado:true,AcessoConferencia:!!u.can_conferencia,AcessoAdmin:!!u.can_admin,AcessoEstacao:!!u.can_estacao,AcessoPrecificador:!!u.can_precificador,Filial:u.filial||'aracatuba',__uidUsuario:'USR-'+String(u.username||'').toLowerCase(),__serverUsername:String(u.username||'').toLowerCase()};}
   async function api(path,opt={}){const r=await fetch(BASE+path,{credentials:'same-origin',cache:'no-store',...opt,headers:{'Accept':'application/json',...(opt.body?{'Content-Type':'application/json; charset=utf-8'}:{}),...(opt.headers||{})}});let d={};try{d=await r.json()}catch(_){ }if(!r.ok)throw new Error(d.error||('HTTP '+r.status));return d;}
   window.carregarUsuariosCanonicosV1757=async function(){
-    try{const d=await api('/api/roles');const lista=(Array.isArray(d.users)?d.users:[]).map(mapServer);usuariosEditorAdmin=lista;window.__usrBaseV1869={};lista.forEach(u=>{window.__usrBaseV1869[u.__uidUsuario]=JSON.stringify([String(u.Nome||'').trim(),perfil(u.Perfil),u.AcessoConferencia!==false,u.AcessoAdmin===true,u.AcessoEstacao===true,u.AcessoPrecificador===true])});if(typeof usuariosCadastrados!=='undefined')usuariosCadastrados=lista;renderizarUsuariosAdmin();const c=document.getElementById('contadorUsuariosAdmin');if(c)c.textContent=lista.length+' usuário(s) cadastrado(s) no servidor.';return lista;}catch(e){console.error('[V17.57 usuarios]',e);if(typeof setStatusBanco==='function')setStatusBanco('Erro ao carregar usuários do servidor','erro');throw e;}
+    try{const d=await api('/api/roles');const lista=(Array.isArray(d.users)?d.users:[]).map(mapServer);usuariosEditorAdmin=lista;window.__usrBaseV1869={};lista.forEach(u=>{window.__usrBaseV1869[u.__uidUsuario]=JSON.stringify([String(u.Nome||'').trim(),perfil(u.Perfil),u.AcessoConferencia!==false,u.AcessoAdmin===true,u.AcessoEstacao===true,u.AcessoPrecificador===true,u.Filial||'aracatuba'])});if(typeof usuariosCadastrados!=='undefined')usuariosCadastrados=lista;renderizarUsuariosAdmin();const c=document.getElementById('contadorUsuariosAdmin');if(c)c.textContent=lista.length+' usuário(s) cadastrado(s) no servidor.';return lista;}catch(e){console.error('[V17.57 usuarios]',e);if(typeof setStatusBanco==='function')setStatusBanco('Erro ao carregar usuários do servidor','erro');throw e;}
   };
   /* V18.69: lista no padrão do sistema — uma linha por usuário (iniciais, nome/login, perfil,
      módulos em botões e ações). A linha alterada e não salva fica marcada, e o botão Salvar
      mostra quantas faltam. Módulos: mesma célula do user-permissions.js (Admin travado pelo perfil). */
-  const assinatura=u=>JSON.stringify([String(u.Nome||'').trim(),perfil(u.Perfil),u.AcessoConferencia!==false,u.AcessoAdmin===true,u.AcessoEstacao===true,u.AcessoPrecificador===true]);
+  const assinatura=u=>JSON.stringify([String(u.Nome||'').trim(),perfil(u.Perfil),u.AcessoConferencia!==false,u.AcessoAdmin===true,u.AcessoEstacao===true,u.AcessoPrecificador===true,u.Filial||'aracatuba']);
   window.__usrBaseV1869=window.__usrBaseV1869||{};
   function usrMarcarAlteracoes(){
     const lista=Array.isArray(usuariosEditorAdmin)?usuariosEditorAdmin:[];let n=0;
@@ -9991,7 +10099,8 @@ window.addEventListener("storage",e=>{
       .map(([t,v,ic,cor])=>`<div class="v151-kpi usr-kpi"><span class="v151-kpi-icon ${cor}"><i class=nk-i-${ic}></i></span><span><b>${v}</b><small>${t}</small></span></div>`).join('');
     corpo.innerHTML=lista.map(u=>{const uid=esc(u.__uidUsuario),p=perfil(u.Perfil);return `<div class="usr-linha" data-linha-usuario="${uid}" data-perfil="${p.toLowerCase()}">
       <div class="usr-id"><span class="usr-av">${esc(iniciais(u.Nome||u.Login))}</span><div class="usr-id-txt"><input class="usr-nome" data-uidusuario="${uid}" data-campo="Nome" value="${esc(u.Nome)}" oninput="atualizarCampoUsuarioAdmin(this)" aria-label="Nome" title="Clique para editar o nome"><small class="usr-login" title="Para trocar o login, exclua e recrie o usuário">${esc(u.Login)}</small></div></div>
-      <div class="usr-perfil"><select data-uidusuario="${uid}" data-campo="Perfil" onchange="atualizarCampoUsuarioAdmin(this)" aria-label="Perfil"><option ${p==='Admin'?'selected':''}>Admin</option><option ${p==='Supervisor'?'selected':''}>Supervisor</option><option ${p==='Operador'?'selected':''}>Operador</option></select></div>
+      <div class="usr-perfil"><select data-uidusuario="${uid}" data-campo="Perfil" onchange="atualizarCampoUsuarioAdmin(this)" aria-label="Perfil"><option ${p==='Admin'?'selected':''}>Admin</option><option ${p==='Supervisor'?'selected':''}>Supervisor</option><option ${p==='Operador'?'selected':''}>Operador</option></select>
+        <select class="usr-filial" data-uidusuario="${uid}" data-campo="Filial" onchange="atualizarCampoUsuarioAdmin(this)" aria-label="Filial" title="Filial que este usuário vê (Todas só para o perfil Admin)">${[['aracatuba','Araçatuba'],['bauru','Bauru'],['todas','Todas as filiais']].filter(([v])=>v!=='todas'||p==='Admin'||u.Filial==='todas').map(([v,t])=>`<option value="${v}" ${(u.Filial||'aracatuba')===v?'selected':''}>${t}</option>`).join('')}</select></div>
       <div class="usr-mods-slot"></div>
       <div class="usr-acoes"><button type="button" class="usr-btn usr-btn-sm" onclick="abrirModalAlterarSenhaAdmin('${uid}')" title="A senha atual nunca é exibida"><i class=nk-i-key></i> Senha</button><button type="button" class="usr-btn usr-btn-sm usr-btn-x" onclick="excluirUsuarioAdmin('${uid}')" title="Excluir usuário" aria-label="Excluir usuário"><i class=nk-i-trash></i></button></div>
     </div>`}).join('')||'<div class="usr-vazio">Nenhum usuário cadastrado.</div>';
@@ -10002,10 +10111,10 @@ window.addEventListener("storage",e=>{
   };
   window.atualizarCampoUsuarioAdmin=function(el){const u=(usuariosEditorAdmin||[]).find(x=>String(x.__uidUsuario)===String(el.dataset.uidusuario));if(!u)return;u[el.dataset.campo]=el.value;if(typeof setStatusBanco==='function')setStatusBanco('Alterações pendentes — clique em Salvar alterações','salvando');};
   window.salvarUsuariosAdmin=async function(mostrar=false){
-    try{for(const u of (usuariosEditorAdmin||[])){const login=String(u.__serverUsername||u.Login||'').trim().toLowerCase();if(!login)continue;await api('/api/roles',{method:'POST',body:JSON.stringify({username:login,display_name:String(u.Nome||login).trim(),role:perfil(u.Perfil).toLowerCase(),active:u.Ativo!==false,permissions:{conferencia:u.AcessoConferencia!==false,admin:u.AcessoAdmin===true,estacao:u.AcessoEstacao===true,precificador:u.AcessoPrecificador===true}})});}await carregarUsuariosCanonicosV1757();if(typeof setStatusBanco==='function')setStatusBanco('● Usuários salvos no servidor','ok');if(mostrar)alert('Alterações de usuários salvas no servidor.');return true;}catch(e){if(typeof setStatusBanco==='function')setStatusBanco('Erro ao salvar usuários','erro');if(mostrar)alert('Não foi possível salvar: '+(e.message||e));return false;}
+    try{for(const u of (usuariosEditorAdmin||[])){const login=String(u.__serverUsername||u.Login||'').trim().toLowerCase();if(!login)continue;await api('/api/roles',{method:'POST',body:JSON.stringify({username:login,display_name:String(u.Nome||login).trim(),role:perfil(u.Perfil).toLowerCase(),active:u.Ativo!==false,filial:(perfil(u.Perfil)!=='Admin'&&u.Filial==='todas')?'aracatuba':(u.Filial||'aracatuba'),permissions:{conferencia:u.AcessoConferencia!==false,admin:u.AcessoAdmin===true,estacao:u.AcessoEstacao===true,precificador:u.AcessoPrecificador===true}})});}await carregarUsuariosCanonicosV1757();if(typeof setStatusBanco==='function')setStatusBanco('● Usuários salvos no servidor','ok');if(mostrar)alert('Alterações de usuários salvas no servidor.');return true;}catch(e){if(typeof setStatusBanco==='function')setStatusBanco('Erro ao salvar usuários','erro');if(mostrar)alert('Não foi possível salvar: '+(e.message||e));return false;}
   };
   window.excluirUsuarioAdmin=async function(uid){const u=(usuariosEditorAdmin||[]).find(x=>String(x.__uidUsuario)===String(uid));if(!u)return;if(!await nkConfirmar(`Excluir o usuário ${u.Login||u.Nome}?`))return;try{await api('/api/roles?username='+encodeURIComponent(u.__serverUsername||u.Login),{method:'DELETE'});await carregarUsuariosCanonicosV1757();if(typeof setStatusBanco==='function')setStatusBanco('● Usuário excluído no servidor','ok');}catch(e){alert('Não foi possível excluir o usuário: '+(e.message||e));}};
-  window.confirmarNovoUsuarioAdmin=async function(){const erro=document.getElementById('erroNovoUsuarioAdmin');const btn=document.getElementById('btnConfirmarNovoUsuario');if(erro)erro.textContent='';const nome=String(document.getElementById('novoUsuarioNome')?.value||'').trim(),login=String(document.getElementById('novoUsuarioLogin')?.value||'').trim().toLowerCase(),senha=String(document.getElementById('novoUsuarioSenha')?.value||''),p=perfil(document.getElementById('novoUsuarioPerfil')?.value);if(!nome||!login||!senha){if(erro)erro.textContent='Preencha Nome, Login e Senha.';return;}try{if(btn){btn.disabled=true;btn.textContent='Salvando...'}await api('/api/roles',{method:'POST',body:JSON.stringify({username:login,display_name:nome,role:p.toLowerCase(),active:true,password:senha})});await carregarUsuariosCanonicosV1757();fecharModalNovoUsuarioAdmin();if(typeof setStatusBanco==='function')setStatusBanco('● Usuário criado no servidor','ok');}catch(e){if(erro)erro.textContent=e.message||String(e);}finally{if(btn){btn.disabled=false;btn.textContent='Salvar usuário'}}};
+  window.confirmarNovoUsuarioAdmin=async function(){const erro=document.getElementById('erroNovoUsuarioAdmin');const btn=document.getElementById('btnConfirmarNovoUsuario');if(erro)erro.textContent='';const nome=String(document.getElementById('novoUsuarioNome')?.value||'').trim(),login=String(document.getElementById('novoUsuarioLogin')?.value||'').trim().toLowerCase(),senha=String(document.getElementById('novoUsuarioSenha')?.value||''),p=perfil(document.getElementById('novoUsuarioPerfil')?.value);if(!nome||!login||!senha){if(erro)erro.textContent='Preencha Nome, Login e Senha.';return;}try{if(btn){btn.disabled=true;btn.textContent='Salvando...'}const filialNova=String(document.getElementById('novoUsuarioFilial')?.value||'aracatuba');if(filialNova==='todas'&&p!=='Admin'){if(erro)erro.textContent='Só o perfil Admin pode ver todas as filiais.';return;}await api('/api/roles',{method:'POST',body:JSON.stringify({username:login,display_name:nome,role:p.toLowerCase(),active:true,password:senha,filial:filialNova})});await carregarUsuariosCanonicosV1757();fecharModalNovoUsuarioAdmin();if(typeof setStatusBanco==='function')setStatusBanco('● Usuário criado no servidor','ok');}catch(e){if(erro)erro.textContent=e.message||String(e);}finally{if(btn){btn.disabled=false;btn.textContent='Salvar usuário'}}};
   const salvarSenhaAnterior=window.salvarNovaSenhaAdmin;window.salvarNovaSenhaAdmin=async function(){await salvarSenhaAnterior();setTimeout(()=>carregarUsuariosCanonicosV1757().catch(()=>{}),150)};
   document.addEventListener('DOMContentLoaded',()=>setTimeout(()=>carregarUsuariosCanonicosV1757().catch(()=>{}),300));
 })();

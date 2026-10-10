@@ -5,7 +5,7 @@ Shopee, manuais), expedição, separação, conferência por código de barras, 
 produtos/SKUs/EANs, kits, precificação, promoções, rentabilidade, estoque, Central de
 Pendências e histórico.
 
-Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V18.83).
+Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V18.95).
 
 ---
 
@@ -109,6 +109,7 @@ APP/
   nk-ui.js / nk-ui.css       tema claro/escuro, avisos, confirmação, tabela padrão (V18.83)
   saude.html                 Painel de saúde + alertas por e-mail (V18.83)
   posvenda.html              Pós-venda ML: reclamações, perguntas, perdas, reputação (V18.88)
+  nk-avisos.js               avisos de venda: popup com som + Web Push (V18.93)
   web-auth.js, user-permissions.js, sw.js, pwa-install.js
 DADOS/                       seed ml_sku_mlb_links_seed.json (fora do Git)
 FERRAMENTAS_WINDOWS/         agente de impressão Zebra, 2FA do owner, gerar_modo_escuro.py (V18.83)
@@ -451,6 +452,66 @@ antes de tentar de novo. Destinatários em `saude_config_v1883` (padrão: `RELAT
 `saude_alerta_estado_v1883`, histórico em `saude_alerta_log_v1883` (1000 últimos). Link do e-mail:
 `EXP_PUBLIC_URL` (padrão https://noromakweb.com.br/expedicao). WhatsApp fica para depois (provedor a escolher).
 
+### Conferência por filial (V18.95)
+Decisões do dono (10/10, entrevista): cada usuário tem uma **filial** (`app_users.casa`: aracatuba, bauru ou
+— só perfil Admin — todas); na migração, Admin = todas e os demais = Araçatuba. Quem tem "todas" escolhe a
+filial no **seletor do rodapé do menu** (`nk-menu.js`, `localStorage nk_filial_v1895`); o `shared-storage.js`
+manda `X-Noromak-Filial` em toda chamada à API (inclusive `fetch` das telas) e o servidor só aceita o
+cabeçalho de quem tem "todas" (`filial_efetiva`). **O filtro é no servidor**: `storage_filtrar_por_filial` em
+toda leitura e resposta de `conf_pedidos`, `conf_etiquetas` (filial do registro = a do pedido na fila, senão
+`casa` do registro), `conf_historico_conferencias_v2`, `conf_logs` e `conf_coleta_dia_v1` (Bauru em
+`porFilial.bauru`). **Na gravação** `storage_remontar_por_filial` junta de volta o que o usuário não via (no
+novo e no oldValue) ANTES das regras de exclusão/merge/override — sem isso a fila filtrada gravada por um Admin
+viraria tombstone ADMIN da outra filial — e marca com a filial o que nasce sem marca. Rotas de pedido
+(concluir, travar, excluir linha/kit, Nome Conferência, SKU, EAN) passam por `pedido_de_outra_filial` (403
+`OUTRA_FILIAL`) e devolvem a fila filtrada; o corpo da requisição fica guardado (`read_body`) e é zerado a cada
+requisição (`handle_one_request`). Pedido manual (`admin-order-upsert`, planilha, Ler print) fica na filial de
+quem incluiu. `Casa` = filial que confere; `ContaMercadoLivre` = conta do ML (etiqueta, token, reconciliação —
+`ml_casa_da_linha`). **Mover de filial** (Pedidos pendentes, só perfil Admin com "todas";
+`POST /api/pedido-mover-filial`) grava pelo `save_storage` como ADMIN: vira override do campo `Casa` e a
+importação não desfaz. **Bauru imprime em PDF** (térmica não-Zebra): `GET /api/etiqueta-ml-pdf?pedido=` baixa
+`/shipment_labels?response_type=pdf` com a conta do pedido e a Conferência abre a janela de impressão
+(`imprimirEtiquetaPdfV1895`). Em Bauru o operador informa a coleta clicando na caixa da coleta. Usuários:
+campo Filial na tela (via `POST /api/roles`, `filial`) e no `conf_usuarios`. Ainda só da principal: Dashboard,
+Financeiro, vendas e demais telas de gestão (V18.96).
+
+### Casas: Araçatuba e Bauru (V18.94)
+Bauru tem **só conta do Mercado Livre** (a Shopee é só de Araçatuba) e expede **neste sistema, separada por
+filial** (V18.95). **A V18.94 não sobe sem a V18.95** (sem ela os pedidos de Bauru apareceriam na fila de
+Araçatuba).
+Araçatuba (`CASA_PRINCIPAL`) continua na linha id=1 de `ml_integration`; as outras casas ficam em
+`ml_integration_casa_v1894`. Todo o código do ML lê a conta da **casa atual** (`ml_casa_atual()`, por thread);
+`with ml_na_casa("bauru"):` faz o mesmo código usar a conta de Bauru (thread nova precisa entrar na casa de novo).
+Os 5 workers da expedição ML (pedidos novos, etiquetas, reconciliação de manuais, token, catch-up) rodam para
+cada casa de `ml_casas_conectadas()`; os de vendas, Ads, visitas, promoções e pós-venda ainda só para a principal.
+Cada casa tem a própria trava de renovação (`_ml_token_lock`). A mesma conta do ML nunca fica em duas casas
+(`ml_store_token` recusa). O OAuth leva a casa no `ml_oauth_state.casa`; o webhook vai para a casa do `user_id`
+(`ml_casa_do_seller`). Pedido importado ganha `Casa` (linha sem `Casa` = principal: tudo o que existia, manual,
+Shopee); `_ml_all_pending_label_candidates`, `_ml_manual_pending_numbers` e
+`_ml_recover_local_pending_identifiers_once` só olham as linhas da casa atual. Log do ML marca `[Bauru]` no
+tópico. Rotas `status`/`connect`/`disconnect` aceitam `?casa=bauru`; cartão "Mercado Livre · Bauru" na Central
+de Integrações. Ainda falta: botões que reimportam um pedido específico (rodam na principal) e a separação da fila.
+
+### Avisos de venda (V18.93)
+Popup com som no canto da tela e notificação no celular/computador **com o site fechado** (Web Push).
+Liga **por aparelho** no botão "Avisos de venda" do rodapé do menu (`APP/nk-avisos.js`, carregado pelo
+`nk-menu.js`; só quem tem o módulo **admin**; Conferência e Estação ficam sem, de propósito). Quem descobre
+a venda são os vigias que já existem — `ml_new_order_watch_once` (o mesmo `/orders/search` de 20 s) e a
+sincronização da Shopee (o mesmo `get_order_detail` de 1 min): **nenhuma chamada a mais**. `avisos_venda_registrar`
+grava em `aviso_venda_v1893` (carrinho do ML = uma venda, `pack:<id>`); a **1ª leitura de cada marketplace
+só marca** o que existe (sem enxurrada no dia da publicação) e venda vista pela 1ª vez com mais de 48 h entra
+calada. O worker `avisos_venda_loop` manda um push **vazio** a cada aparelho de `aviso_inscricao_v1893`; o
+service worker (`sw.js`) pede as vendas em `POST /api/avisos-venda/entregar` (autoriza pelo endereço de push
+inscrito — o cookie pode ter vencido no celular). Push vazio dispensa criptografar o conteúdo: só a assinatura
+VAPID (ES256, P-256 em **Python puro**, `p256_assinar`, conferida com o vetor da RFC 6979 e com o OpenSSL).
+O par de chaves fica em `aviso_config_v1893` e **nunca** é trocado (trocar invalida todos os aparelhos). Um
+push por vez por aparelho (`pendente_desde`, 10 min) + `Topic`: sem pilha quando o celular volta a ficar
+on-line; renovar a inscrição ao abrir a tela **não** adianta o ponto (perderia a venda a caminho). 404/410 do
+serviço de push = aparelho sai. Com uma tela do Noromak à vista, o service worker manda as vendas para ela
+(popup + som); sem, notificação do sistema (o Safari exige notificação sempre). Sem push (navegador sem
+suporte ou notificação bloqueada), a tela aberta consulta `/api/avisos-venda/recentes` a cada 30 s. iPhone:
+só com o Noromak instalado na Tela de Início (iOS 16.4+). Endereços de push aceitos: `AVISOS_PUSH_HOSTS`.
+
 ### Pós-venda do Mercado Livre (V18.88)
 `APP/posvenda.html` (`/posvenda`, menu Vendas e anúncios, módulo **admin**; `GET /api/posvenda?dias=30`,
 `posvenda_payload`, só lê o banco). Worker `posvenda_loop`: perguntas a cada 5 min, reclamações e
@@ -611,6 +672,20 @@ cofinanciada só a campanha). Modos em `modo_convites` (simulação → lote →
 OWNER, `limite_dia` vale para os dois). Convite que sai da lista do ML é apagado; aceito fica. Histórico em
 `promo_auto_log_v1873` com `tipo='convite'`. Removido pelo ADMIN não aparece. Em campanha, a renovação do
 desconto próprio espera ela acabar (regra da V18.73).
+**V18.92 — conferência rodando e dois computadores:** a rodada de hora em hora (~5 min para ~250
+marcados) segurava a vez inteira: o Renovar clicado no meio esperava até 120 s e o nginx (60 s)
+dava **HTTP 504**; o anúncio marcado no meio ficava "Ainda não conferido" até a hora seguinte
+(a conferência imediata desistia em 0,01 s). Agora `PROMO_RENOVACAO_LOCK` é a vez de **um
+anúncio** (ler o ML, decidir, gravar) e a linha é **relida sob ela** — desmarcar, remover ou mudar
+o preço em outro computador não é desfeito por uma rodada que começou antes; dois cliques em
+Renovar criam uma promoção só. `PROMO_RODADA_LOCK` só impede duas rodadas **completas** juntas.
+Marcar, remover e o clique entram entre um anúncio e outro (a `pausa` fica fora da vez). O
+Renovar tem prazo (`PROMO_MANUAL_PRAZO`, 40 s) e devolve `pendentes`, que a tela pede de novo.
+A tela consulta `GET /api/promocoes-auto/renovacao/versao` a cada 10 s (impressão digital só do
+que a lista mostra — sem `checado_em`, senão recarregaria a lista inteira durante a rodada) e
+recarrega quando muda, sem apagar regra digitada e não salva. A gaveta manda `preco_antes`; preço
+mudado em outro computador = **409** com o preço novo, nunca sobrescreve calado
+(`TESTES/test_promo_concorrencia_v1892.py`).
 
 ### Análise de ADS (V18.54)
 `APP/analise-ads.html` (`/analise-ads`, menu Comercial, só **admin**). O relatório "Anúncios
@@ -762,6 +837,9 @@ Os testes ficam em `TESTES/` (são 30 arquivos; os principais):
 | `test_auditoria_v1856.py` | renovação do token ML serializada, backup sem `DB_LOCK` e sem `.gz` cortado, reinclusão sob lock, filtro de concluídos sempre aplicado, vínculo MLB manual preservado, `.xlsx` malicioso, worker protegido, limpeza de logs/caches |
 | `test_boot.py` | sobe o `servidor_web.py` pelo `main()` como processo (EXP_WORKERS=0) e exige o `/api/health` com a versão do código; `VERSAO.txt` = `APP_VERSION` |
 | `test_repeticao_v1878.py` | Full importado uma vez só (vigia e catch-up), reconciliação não repete linha já vinculada, log só quando muda, retenção ≤ 30 dias, boot não duplica o backup pré-deploy |
+| `test_avisos_venda_v1893.py` | assinatura VAPID válida (RFC 6979), 1ª leitura não avisa a fila, venda repetida/antiga não avisa, carrinho = 1 venda, vigia do ML sem chamada a mais, um push por vez, renovar não pula venda, só módulo Admin, 404/410 remove o aparelho |
+| `test_casas_ml_v1894.py` | conta ML por casa: Bauru não toca em Araçatuba, mesma conta nas duas casas recusada, token renovado por casa, OAuth grava na casa certa, webhook pela casa do seller, pedido de Bauru entra marcado, cada casa revê só os pedidos dela |
+| `test_filial_v1895.py` | filial do usuário (Admin = todas), Bauru só recebe a fila/etiquetas/histórico/coleta de Bauru, gravação filtrada não apaga a outra filial nem vira tombstone ADMIN, concluir/travar pedido de outra filial = 403, Mover de filial resiste à importação, PDF com a conta do pedido |
 | `test_instalacao.py` | instalação nova, idempotência do `init_db`, versionamento do storage, autenticação |
 | `base.py` | infraestrutura: banco temporário, servidor real em porta livre, cliente HTTP |
 

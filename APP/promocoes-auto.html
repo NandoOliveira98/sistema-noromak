@@ -230,10 +230,10 @@ tbody tr.lin.aberta td{background:var(--infobg)}
 <script defer src="/expedicao/web-auth.js?v=18.82"></script>
 <link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
 <!-- V18.82: componentes comuns e menu lateral único (nk-menu.js). -->
-<link rel="stylesheet" href="/expedicao/nk-ui.css?v=18.87">
+<link rel="stylesheet" href="/expedicao/nk-ui.css?v=18.95">
 <!-- V18.83: tema claro/escuro, avisos, confirmação e tabela padrão. -->
 <script src="/expedicao/nk-ui.js?v=18.83"></script>
-<script defer src="/expedicao/nk-menu.js?v=18.88" data-shell></script>
+<script defer src="/expedicao/nk-menu.js?v=18.95" data-shell></script>
 <style id="escuro-auto-v1883">
 /* V18.83 — GERADO por FERRAMENTAS_WINDOWS/gerar_modo_escuro.py a partir das cores fixas desta tela.
    Não editar aqui (é refeito); ajuste à mão no <style id="escuro-v1883">. */
@@ -407,6 +407,7 @@ html[data-tema="escuro"] .gav-tag{background-color:#383519!important;color:#979C
     <button class="x" type="button" id="gavFechar" aria-label="Fechar">×</button></div>
   <div class="gav-body">
     <p class="gav-info" id="gavInfo"></p>
+    <div class="gav-ml aviso" id="gavOutro" hidden role="status"></div>
     <label class="gav-rot" for="gavPreco">Preço da promoção</label>
     <div class="gav-preco"><span>R$</span><input type="text" id="gavPreco" inputmode="decimal" autocomplete="off" placeholder="0,00"></div>
     <input type="range" id="gavSlider" step="0.01" aria-label="Ajustar o preço da promoção">
@@ -492,15 +493,39 @@ const F={todos:['Todos',()=>true],marcados:['Marcados',i=>i.marcado],prontas:['P
   precisa:['Precisam de você',precisa], avisos:['Avisos de campanha',i=>!!i.aviso], nao:['Não marcados',i=>!i.marcado]};
 
 async function carregar(){
+  const antes=D;
   try{ D=await api('/api/promocoes-auto/renovacao'); }
-  catch(e){ $('aviso').innerHTML='<b>Não foi possível carregar.</b> '+esc(e.message); $('aviso').hidden=false; $('sub').textContent=''; return; }
+  catch(e){ if(antes){D=antes;return} $('aviso').innerHTML='<b>Não foi possível carregar.</b> '+esc(e.message); $('aviso').hidden=false; $('sub').textContent=''; return; }
   const u=D.estado||{};
-  $('sub').textContent=`Conferência de hora em hora · última ${horaBR(u.fim)}${u.rodando?' · conferindo agora…':''}`;
+  $('sub').textContent=`Conferência de hora em hora · última ${horaBR(u.fim)}${D.rodando?' · conferindo agora…':''}`;
   $('conteudo').hidden=false; $('aviso').hidden=true;
   document.querySelectorAll('#modos button').forEach(m=>{const on=m.dataset.m===D.config.modo_renovacao;m.classList.toggle('on',on);m.setAttribute('aria-checked',on)});
   $('modoDesc').innerHTML=MODOS[D.config.modo_renovacao]||'';
-  REGRAS.forEach(k=>$(k).value=D.config[k]); regrasMudaram();
-  kpis(); render(); historico();
+  // V18.92: a lista recarrega sozinha — regra digitada e ainda não salva não é apagada
+  REGRAS.forEach(k=>{if(!antes||String($(k).value)===String(antes.config[k]))$(k).value=D.config[k]}); regrasMudaram();
+  kpis(); render(); historico(); gavOutroPC();
+}
+// V18.92: dois computadores — a tela pergunta a versão a cada 10 s (leve) e só recarrega a
+// lista quando algo mudou (outro computador, conferência, renovação). Aba escondida não pergunta.
+let carregando=false;
+async function acompanhar(){
+  if(!D||carregando||document.hidden) return;
+  try{ const v=await api('/api/promocoes-auto/renovacao/versao');
+    if(v.versao!==D.versao){carregando=true;try{await carregar()}finally{carregando=false}} }
+  catch(e){}
+}
+setInterval(acompanhar,10000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)acompanhar()});
+function gavOutroPC(){
+  const g=gavItem; if(!g||!$('gav').classList.contains('on')) return;
+  const novo=D.itens.find(x=>x.mlb===g.mlb);
+  document.querySelectorAll('#tab tr[data-linha]').forEach(t=>t.classList.toggle('aberta',t.dataset.linha===g.mlb));
+  if(!novo){$('gavOutro').textContent='Este anúncio saiu da lista em outro computador.';$('gavOutro').hidden=false;$('gavSalvar').disabled=true;return}
+  if(novo.preco!==g.preco||novo.marcado!==g.marcado){
+    $('gavOutro').innerHTML=`Alterado em outro computador: ${novo.marcado?'promoção agora <b>'+brl(novo.preco)+'</b>':'não renova mais sozinho'}. Confira antes de salvar.`;
+    $('gavOutro').hidden=false;
+  }
+  gavItem=novo;   // salvar daqui em diante compara com o que acabou de ser mostrado
 }
 function kpis(){
   const L=D.itens, M=L.filter(i=>i.marcado), p=PRONTA[D.config.modo_renovacao];
@@ -599,8 +624,10 @@ async function remover(L){
     L.forEach(m=>marcados.delete(m)); toast(`${num(r.removidos)} anúncio(s) removido(s) da lista`); carregar(); }
   catch(e){ toast(e.message) }
 }
-async function marcar(mlb,ativo,preco){
-  try{ await api('/api/promocoes-auto/renovacao/marcar',{mlb,ativo,preco:preco?String(preco).replace(',','.'):undefined});
+async function marcar(mlb,ativo,preco,antes){
+  const corpo={mlb,ativo,preco:preco?String(preco).replace(',','.'):undefined};
+  if(antes!==undefined) corpo.preco_antes=antes;   // V18.92: preço que a gaveta mostrava
+  try{ await api('/api/promocoes-auto/renovacao/marcar',corpo);
     toast(ativo?(preco?`Preço salvo. Conferindo ${mlb} no Mercado Livre…`:`${mlb} marcado. Conferindo no Mercado Livre…`):`${mlb} não renova mais sozinho`); carregar();
     if(ativo) setTimeout(carregar,4000); }
   catch(e){ toast(e.message); carregar(); }
@@ -628,14 +655,23 @@ $('renovar').onclick=async()=>{
   const L=renovaveis(); if(!L.length) return;
   if(!await confirmar('Renovar no Mercado Livre',`Criar agora ${L.length===1?'1 promoção':L.length+' promoções'} de ${D.config.duracao_dias} dias, com o mesmo preço da anterior. Antes de enviar, o sistema confere de novo margem, piso e teto do ML e estoque.`,'Renovar agora')) return;
   $('renovar').disabled=true; toast('Renovando…');
-  try{ const r=await api('/api/promocoes-auto/renovacao/renovar',{mlbs:L});
-    const ok=r.resultados.filter(x=>x.ok).length, nao=r.resultados.filter(x=>!x.ok);
+  // V18.92: o servidor responde em até ~40 s (antes do limite do nginx); o que não coube
+  // volta em `pendentes` e é pedido de novo aqui, sem HTTP 504.
+  let pend=L, ok=0; const nao=[];
+  try{ while(pend.length){
+      const r=await api('/api/promocoes-auto/renovacao/renovar',{mlbs:pend});
+      ok+=r.resultados.filter(x=>x.ok).length; nao.push(...r.resultados.filter(x=>!x.ok));
+      const resto=r.pendentes||[];
+      if(resto.length&&!r.resultados.length){nao.push({motivo:'o sistema está ocupado; tente de novo em instantes'});break}
+      pend=resto; if(pend.length) toast(`${ok} renovada(s) · faltam ${pend.length}…`);
+    }
     toast(`${ok} renovada(s)`+(nao.length?` · ${nao.length} não: ${nao[0].motivo}`:''));
     L.forEach(m=>marcados.delete(m)); carregar(); }
-  catch(e){ toast(e.message); }
+  catch(e){ toast(e.message); carregar(); }
   finally{ botao(); }
 };
-$('checar').onclick=async()=>{try{await api('/api/promocoes-auto/renovacao/checar',{});toast('Conferindo os anúncios marcados no Mercado Livre…');setTimeout(carregar,6000)}catch(e){toast(e.message)}};
+$('checar').onclick=async()=>{try{const r=await api('/api/promocoes-auto/renovacao/checar',{});
+  toast(r.iniciado===false?'Já está conferindo agora. A lista se atualiza sozinha.':'Conferindo os anúncios marcados no Mercado Livre… A lista se atualiza sozinha.');setTimeout(carregar,3000)}catch(e){toast(e.message)}};
 async function salvarConfig(corpo){
   try{ await api('/api/promocoes-auto/config',corpo); toast('Salvo.'); carregar(); }
   catch(e){ if(e.status===428) return pedirOwner(()=>salvarConfig(corpo)); toast(e.message); }
@@ -760,7 +796,7 @@ const fmt2=v=>Number(v).toLocaleString('pt-BR',{minimumFractionDigits:2,maximumF
 function gavConta(c,p){const lucro=p-p*c.comissao-p*c.imposto-c.taxa_fixa-c.custo;return {lucro,margem:p>0?lucro/p:0}}
 function abrirGaveta(i){
   if(!i) return; gavItem=i; const c=i.conta; gavC=c?gavRecalc({...c}):null; gavRef=c?{...c}:null;
-  gavML=null; gavManual.clear(); clearTimeout(gavMLTimer); $('gavMl').hidden=true; $('gtComTag').hidden=true; $('gtTaxaTag').hidden=true;
+  gavML=null; gavManual.clear(); clearTimeout(gavMLTimer); $('gavMl').hidden=true; $('gavOutro').hidden=true; $('gtComTag').hidden=true; $('gtTaxaTag').hidden=true;
   $('gavTit').textContent=i.titulo||'(título ainda não coletado)';
   $('gavSub').textContent=i.mlb+(i.sku?' · SKU '+i.sku:'');
   $('gavInfo').innerHTML=`Anúncio <b>${brl(i.preco_anuncio)}</b>`+(i.preco!=null?` · promoção atual <b>${brl(i.preco)}</b>`:'')+(i.dias_para_vencer!=null?` · ${i.dias_para_vencer<0?'venceu há '+(-i.dias_para_vencer)+' dia(s)':'vence em '+i.dias_para_vencer+' dia(s)'}`:'');
@@ -841,7 +877,7 @@ $('gavSlider').oninput=e=>{$('gavPreco').value=fmt2(+e.target.value);gavAtualiza
 $('gavFechar').onclick=fecharGaveta; $('gavCancelar').onclick=fecharGaveta; $('gavFundo').onclick=fecharGaveta;
 $('gavForm').onsubmit=async e=>{
   e.preventDefault(); const v=numBR($('gavPreco').value), i=gavItem; if(v==null||!i||$('gavSalvar').disabled) return;
-  fecharGaveta(); await marcar(i.mlb,true,String(v));
+  fecharGaveta(); await marcar(i.mlb,true,String(v),i.preco??null);
 };
 ['confModal','owner','incluirModal'].forEach(id=>$(id).addEventListener('mousedown',e=>{
   if(e.target.id!==id) return;

@@ -11,6 +11,7 @@ Sem dependências externas: usa apenas a biblioteca padrão do Python.
 from __future__ import annotations
 
 import base64
+import contextlib
 import io
 import gzip
 import hashlib
@@ -43,7 +44,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "18.91-DEMANDA-COMPRA-LINX"
+APP_VERSION = "18.95-FILIAL-CONFERENCIA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -1580,6 +1581,12 @@ def ensure_app_user_permissions_schema() -> None:
                      can_precificador=CASE WHEN role='admin' THEN 1 ELSE COALESCE(can_precificador,0) END
                    WHERE role='admin' OR can_conferencia IS NULL"""
             )
+        # V18.95: filial do usuário (aracatuba, bauru ou todas). Ao criar a coluna, quem é
+        # Admin fica com "todas" e os demais com Araçatuba (decisão do dono, 10/10): nada muda
+        # para quem já trabalha.
+        if "casa" not in columns:
+            DB.execute("ALTER TABLE app_users ADD COLUMN casa TEXT NOT NULL DEFAULT 'aracatuba'")
+            DB.execute("UPDATE app_users SET casa='todas' WHERE role='admin'")
         # V17.82: o UPDATE acima roda SEMPRE, então o COMMIT também precisa rodar sempre.
         # Em uma instalação nova as colunas já nascem no executescript (changed=False) e o
         # UPDATE ficava em transação implícita aberta, fazendo o BEGIN IMMEDIATE de
@@ -2243,6 +2250,8 @@ def init_db() -> None:
     ensure_promo_convite_schema()  # V18.89
     ensure_shopee_anuncios_schema()  # V18.90
     ensure_linx_demanda_schema()  # V18.91
+    ensure_avisos_venda_schema()  # V18.93
+    ensure_ml_casas_schema()  # V18.94
     migrate_legacy_if_empty()
     ensure_storage_defaults()
     seed_sku_state_from_storage()
@@ -2958,8 +2967,8 @@ def upsert_app_user(
     DB.execute(
         """INSERT INTO app_users(
              username,display_name,password_hash,password_salt,password_iterations,role,active,
-             can_conferencia,can_admin,can_estacao,can_precificador,updated_at,updated_by
-           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(username) DO UPDATE SET
+             can_conferencia,can_admin,can_estacao,can_precificador,updated_at,updated_by,casa
+           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(username) DO UPDATE SET
            display_name=excluded.display_name,password_hash=excluded.password_hash,password_salt=excluded.password_salt,
            password_iterations=excluded.password_iterations,role=excluded.role,active=excluded.active,
            can_conferencia=excluded.can_conferencia,can_admin=excluded.can_admin,
@@ -2970,6 +2979,9 @@ def upsert_app_user(
             1 if perms["conferencia"] else 0, 1 if perms["admin"] else 0,
             1 if perms["estacao"] else 0, 1 if perms["precificador"] else 0,
             now_iso(), updated_by,
+            # V18.95: usuário NOVO nasce com a filial padrão (Admin vê todas); o que já existe
+            # mantém a dele (a coluna não entra no UPDATE acima).
+            "todas" if role == "admin" else "aracatuba",
         ),
     )
 
@@ -3044,7 +3056,7 @@ def migrate_app_users() -> None:
 def app_users_payload() -> list[dict[str, Any]]:
     rows = DB.execute(
         """SELECT username,display_name,role,active,can_conferencia,can_admin,can_estacao,can_precificador,
-                  updated_at,updated_by FROM app_users ORDER BY display_name,username"""
+                  updated_at,updated_by,casa FROM app_users ORDER BY display_name,username"""
     ).fetchall()
     return [
         {
@@ -3066,6 +3078,7 @@ def app_users_payload() -> list[dict[str, Any]]:
                 "estacao": bool(row["can_estacao"]),
                 "precificador": bool(row["can_precificador"]),
             },
+            "Filial": usuario_filial(row),  # V18.95
             "AtualizadoEm": row["updated_at"],
             "AtualizadoPor": row["updated_by"],
             "SenhaInicialPendente": str(row["updated_by"] or "").lower().startswith(("migração", "bootstrap")),
@@ -3132,9 +3145,18 @@ def apply_app_users_payload(value: str, actor: str) -> str:
                     "estacao": bool(raw.get("AcessoEstacao", raw_access.get("estacao", role == "admin"))),
                     "precificador": bool(raw.get("AcessoPrecificador", raw_access.get("precificador", role == "admin"))),
                 }
+            # V18.95: filial; sem o campo, o usuário que já existe mantém a dele.
+            filial = None
+            if "Filial" in raw:
+                filial = filial_normalizar(raw.get("Filial"), role)
+            elif username not in existing:
+                filial = FILIAL_TODAS if role == "admin" else CASA_PRINCIPAL
+            elif role != "admin" and str(existing[username]["casa"] or "") == FILIAL_TODAS:
+                filial = CASA_PRINCIPAL  # deixou de ser Admin: perde o "todas"
             prepared.append({
                 "username": username, "display_name": display_name, "role": role,
-                "active": active, "password": password or None, "permissions": permissions
+                "active": active, "password": password or None, "permissions": permissions,
+                "filial": filial,
             })
 
         actor_row = existing.get(actor)
@@ -3152,6 +3174,8 @@ def apply_app_users_payload(value: str, actor: str) -> str:
                     row["username"], row["display_name"], row["role"], row["active"], row["password"], actor,
                     permissions=row["permissions"]
                 )
+                if row["filial"]:
+                    DB.execute("UPDATE app_users SET casa=? WHERE username=?", (row["filial"], row["username"]))
             for username in set(existing) - seen:
                 DB.execute("DELETE FROM app_users WHERE username=?", (username,))
             DB.execute("DELETE FROM app_sessions WHERE username NOT IN (SELECT username FROM app_users) OR username IN (SELECT username FROM app_users WHERE active=0)")
@@ -4408,7 +4432,20 @@ def _marketplace_de_pedido_concluido(payload_json: str) -> str:
     return ""
 
 
-def conferencia_conclusoes_do_dia(horas: int = 48) -> list[dict[str, str]]:
+def _filial_de_pedido_concluido(payload_json: str) -> str:
+    """V18.95: filial de um pedido concluído (a das linhas guardadas na conclusão)."""
+    try:
+        rows = json.loads(payload_json or "[]")
+        if isinstance(rows, list):
+            for r in rows:
+                if isinstance(r, dict):
+                    return filial_da_linha(r)
+    except Exception:
+        pass
+    return CASA_PRINCIPAL
+
+
+def conferencia_conclusoes_do_dia(horas: int = 48, filial: str = "todas") -> list[dict[str, str]]:
     """V18.08 — conclusões recentes lidas do servidor (completed_orders), que é a
     fonte COMPARTILHADA entre máquinas. O painel do dia da Conferência conta os
     "conferidos" daqui, para o número aparecer igual em qualquer computador. Antes
@@ -4425,6 +4462,8 @@ def conferencia_conclusoes_do_dia(horas: int = 48) -> list[dict[str, str]]:
         ).fetchall()
     saida: list[dict[str, str]] = []
     for r in rows:
+        if filial != FILIAL_TODAS and _filial_de_pedido_concluido(str(r["payload"] or "")) != filial:
+            continue  # V18.95: o painel do dia conta só a filial de quem olha
         saida.append({
             "pedido": str(r["order_id"] or ""),
             "marketplace": _marketplace_de_pedido_concluido(str(r["payload"] or "")),
@@ -5132,7 +5171,7 @@ def noromakweb_sso_context(handler: BaseHTTPRequestHandler) -> dict[str, Any] | 
     with DB_LOCK:
         row = DB.execute(
             """SELECT username,display_name,role,active,
-                      can_conferencia,can_admin,can_estacao,can_precificador
+                      can_conferencia,can_admin,can_estacao,can_precificador,casa
                FROM app_users WHERE username=?""",
             (username,),
         ).fetchone()
@@ -5151,6 +5190,7 @@ def noromakweb_sso_context(handler: BaseHTTPRequestHandler) -> dict[str, Any] | 
         "area": "noromakweb",
         # Sem cookie próprio: a janela de reautenticação crítica fica por usuário.
         "session_key": hashlib.sha256(f"noromakweb-sso|{username}".encode("utf-8")).hexdigest(),
+        "casa": usuario_filial(row),  # V18.95
         "is_owner": is_owner_username(row["username"]),
         "sso": "noromakweb",
     }
@@ -5170,7 +5210,7 @@ def session_context(handler: BaseHTTPRequestHandler) -> dict[str, Any] | None:
     with DB_LOCK:
         row = DB.execute(
             """SELECT s.token_hash,s.username,s.area,s.expires_at,u.display_name,u.role,u.active,
-                      u.can_conferencia,u.can_admin,u.can_estacao,u.can_precificador
+                      u.can_conferencia,u.can_admin,u.can_estacao,u.can_precificador,u.casa
                FROM app_sessions s JOIN app_users u ON u.username=s.username
                WHERE s.token_hash=?""",
             (token_hash,),
@@ -5194,6 +5234,7 @@ def session_context(handler: BaseHTTPRequestHandler) -> dict[str, Any] | None:
         "area": str(row["area"] or "conferencia"),
         # Identificador irreversível da sessão para a janela de reautenticação crítica.
         "session_key": token_hash,
+        "casa": usuario_filial(row),  # V18.95: filial (aracatuba, bauru ou todas)
         "is_owner": is_owner_username(row["username"]),
     }
 
@@ -6933,6 +6974,11 @@ def _shopee_manual_sync_sem_trava(acordar_etiquetas: bool = True) -> dict[str, A
 
         order_sns = list(packages_by_order)
         details = shopee_order_details(order_sns) if order_sns else []
+        # V18.93: aviso de venda com o mesmo detalhe (sem chamada a mais).
+        try:
+            avisos_venda_registrar("shopee", avisos_vendas_da_shopee(details))
+        except Exception as exc:
+            print(f"[avisos-venda] shopee: {exc}", file=sys.stderr, flush=True)
         products_raw, _, _ = get_storage("conf_produtos")
         products = _rows_from_storage_value(products_raw)
         api_lines: list[dict[str, Any]] = []
@@ -7142,6 +7188,10 @@ def ml_credentials_configured() -> bool:
 
 
 def ml_log_event(topic: str, resource: str, user_id: Any, application_id: Any, result: str, detail: str = "") -> None:
+    # V18.94: evento de outra casa aparece marcado no log ("[Bauru] new_order_watcher").
+    casa = ml_casa_atual()
+    if casa != CASA_PRINCIPAL:
+        topic = f"[{CASAS.get(casa, casa)}] {topic or ''}"
     with DB_LOCK:
         DB.execute(
             """INSERT INTO ml_event_log(created_at,topic,resource,user_id,application_id,result,detail)
@@ -7183,7 +7233,7 @@ def _log_se_mudou(chave: tuple[str, str, str], valor: tuple[str, str]) -> bool:
 
 
 def ml_log_event_se_mudou(topic: str, resource: str, user_id: Any, application_id: Any, result: str, detail: str = "") -> bool:
-    if not _log_se_mudou(("ml", str(topic or ""), str(resource or "")), (str(result or ""), str(detail or ""))):
+    if not _log_se_mudou(("ml", ml_casa_atual(), str(topic or ""), str(resource or "")), (str(result or ""), str(detail or ""))):
         return False
     ml_log_event(topic, resource, user_id, application_id, result, detail)
     return True
@@ -7196,9 +7246,401 @@ def shopee_log_event_se_mudou(topic: str, resource: str, result: str, detail: st
     return True
 
 
-def ml_integration_row() -> sqlite3.Row | None:
+# ---------------------------------------------------------------------------
+# V18.94 — uma conta do Mercado Livre por CASA (Araçatuba e Bauru).
+#
+# Araçatuba (a casa principal) continua exatamente onde sempre esteve: a linha id=1
+# de ml_integration. As outras casas ficam em ml_integration_casa_v1894, uma linha por
+# casa. Todo o código do ML (token, renovação, /orders, etiqueta, importação) lê a
+# conta da CASA ATUAL — por padrão a principal; com `with ml_na_casa("bauru"):` o
+# mesmo código passa a usar a conta de Bauru. Assim nada do que Araçatuba faz muda,
+# e Bauru reaproveita as mesmas regras (ADMIN soberano, concluídos, kits, Full...).
+# O contexto é por thread: quem abre thread nova precisa entrar na casa de novo.
+# ---------------------------------------------------------------------------
+CASA_PRINCIPAL = "aracatuba"
+CASAS = {"aracatuba": "Araçatuba", "bauru": "Bauru"}
+_ML_CASA_LOCAL = threading.local()
+
+
+def ml_casa_atual() -> str:
+    return getattr(_ML_CASA_LOCAL, "casa", CASA_PRINCIPAL)
+
+
+def ml_casa_valida(casa: Any) -> str:
+    casa = str(casa or "").strip().lower() or CASA_PRINCIPAL
+    if casa not in CASAS:
+        raise ValueError(f"Casa desconhecida: {casa}")
+    return casa
+
+
+@contextlib.contextmanager
+def ml_na_casa(casa: str):
+    anterior = getattr(_ML_CASA_LOCAL, "casa", None)
+    _ML_CASA_LOCAL.casa = ml_casa_valida(casa)
+    try:
+        yield
+    finally:
+        if anterior is None:
+            try:
+                del _ML_CASA_LOCAL.casa
+            except AttributeError:
+                pass
+        else:
+            _ML_CASA_LOCAL.casa = anterior
+
+
+def ml_casa_da_linha(row: dict[str, Any]) -> str:
+    """CONTA do ML de um pedido da fila (com qual conta buscar etiqueta e reconciliar).
+    V18.95: a conta (`ContaMercadoLivre`) é separada da filial que confere (`Casa`): o
+    ADMIN pode mover o pedido de filial, mas a etiqueta continua vindo da conta de origem.
+    Linha sem marca (tudo o que existia antes da V18.94, manual, Shopee) é da principal."""
+    row = row or {}
+    casa = str(row.get("ContaMercadoLivre") or row.get("Casa") or "").strip().lower()
+    return casa if casa in CASAS else CASA_PRINCIPAL
+
+
+# ---------------------------------------------------------------------------
+# V18.95 — Conferência separada por FILIAL (decisões do dono, 10/10).
+#
+# Cada usuário tem uma filial (app_users.casa): aracatuba, bauru ou — só perfil Admin —
+# todas. Quem tem "todas" escolhe a filial num seletor do Admin (cabeçalho
+# X-Noromak-Filial; sem ele, vê tudo). O FILTRO É NO SERVIDOR: fila, etiquetas, histórico
+# e coleta saem do /api/storage só com a filial efetiva. Na gravação, o que o usuário não
+# via é JUNTADO DE VOLTA antes do save_storage (storage_remontar_por_filial): senão uma
+# fila filtrada gravada por um Admin viraria tombstone ADMIN de tudo da outra filial
+# (_admin_override_record_delta) e um operador perderia linhas. Linha sem `Casa` é de
+# Araçatuba. Shopee é sempre Araçatuba.
+# ---------------------------------------------------------------------------
+FILIAL_TODAS = "todas"
+FILIAL_CHAVES_LISTA = ("conf_pedidos", "conf_historico_conferencias_v2", "conf_logs")
+FILIAL_CHAVES = (*FILIAL_CHAVES_LISTA, "conf_etiquetas", "conf_coleta_dia_v1")
+
+
+def usuario_filial(row: Any) -> str:
+    try:
+        casa = str(row["casa"] or "").strip().lower()
+    except (KeyError, IndexError, TypeError):
+        casa = ""
+    try:
+        admin = str(row["role"] or "").lower() == "admin"
+    except (KeyError, IndexError, TypeError):
+        admin = False
+    if casa == FILIAL_TODAS:
+        return FILIAL_TODAS if admin else CASA_PRINCIPAL
+    return casa if casa in CASAS else CASA_PRINCIPAL
+
+
+def filial_normalizar(valor: Any, role: str) -> str:
+    texto = unicodedata.normalize("NFKD", str(valor or "")).encode("ascii", "ignore").decode().strip().lower()
+    if texto in ("", "aracatuba"):
+        return CASA_PRINCIPAL
+    if texto in ("todas", "todas as filiais"):
+        if str(role or "").lower() != "admin":
+            raise ValueError("Só o perfil Admin pode ver todas as filiais.")
+        return FILIAL_TODAS
+    if texto in CASAS:
+        return texto
+    raise ValueError(f"Filial desconhecida: {valor}")
+
+
+def filial_efetiva(ctx: dict[str, Any] | None, escolhida: Any = "") -> str:
+    """Filial que a requisição enxerga: a do usuário; quem tem "todas" pode escolher uma."""
+    casa = str((ctx or {}).get("casa") or CASA_PRINCIPAL)
+    if casa != FILIAL_TODAS:
+        return casa if casa in CASAS else CASA_PRINCIPAL
+    escolhida = str(escolhida or "").strip().lower()
+    return escolhida if escolhida in CASAS else FILIAL_TODAS
+
+
+def filial_da_linha(row: Any) -> str:
+    casa = str(row.get("Casa") or "").strip().lower() if isinstance(row, dict) else ""
+    return casa if casa in CASAS else CASA_PRINCIPAL
+
+
+def _filial_json(valor: str | None, padrao: Any) -> Any:
+    try:
+        return json.loads(valor) if valor else padrao
+    except Exception:
+        return None
+
+
+def _filial_mapa_pedidos() -> dict[str, str]:
+    """Pedido (normalizado) → filial, pela fila atual."""
+    bruto, _, _ = get_storage("conf_pedidos")
+    mapa: dict[str, str] = {}
+    for row in _rows_from_storage_value(bruto):
+        if isinstance(row, dict):
+            numero = normalize(order_number(row))
+            if numero:
+                mapa.setdefault(numero, filial_da_linha(row))
+    return mapa
+
+
+def _filial_do_registro_etiqueta(rec: dict[str, Any], mapa: dict[str, str]) -> str:
+    # O pedido na fila manda (o ADMIN pode ter mudado a filial); sem ele, a filial gravada
+    # na etiqueta (a da conta que baixou ou a de quem subiu o arquivo).
+    for numero in [rec.get("pedido"), *(rec.get("vinculadoA") or [])]:
+        n = normalize(numero)
+        if n and n in mapa:
+            return mapa[n]
+    casa = str(rec.get("casa") or "").strip().lower()
+    return casa if casa in CASAS else CASA_PRINCIPAL
+
+
+def _filial_coleta(valor: Any, filial: str) -> dict[str, Any]:
+    obj = valor if isinstance(valor, dict) else {}
+    if filial == FILIAL_TODAS:
+        return obj
+    if filial == CASA_PRINCIPAL:
+        return {k: v for k, v in obj.items() if k != "porFilial"}
+    por = obj.get("porFilial") if isinstance(obj.get("porFilial"), dict) else {}
+    return por.get(filial) if isinstance(por.get(filial), dict) else {}
+
+
+def storage_filtrar_por_filial(key: str, valor: str | None, filial: str) -> str | None:
+    """O valor que a filial enxerga (leitura e resposta de gravação)."""
+    if filial == FILIAL_TODAS or valor is None or key not in FILIAL_CHAVES:
+        return valor
+    dados = _filial_json(valor, None)
+    if key in FILIAL_CHAVES_LISTA:
+        if not isinstance(dados, list):
+            return valor
+        return json_dumps([r for r in dados if not isinstance(r, dict) or filial_da_linha(r) == filial])
+    if key == "conf_coleta_dia_v1":
+        return json_dumps(_filial_coleta(dados, filial))
+    if key == "conf_etiquetas":
+        if not isinstance(dados, dict):
+            return valor
+        mapa = _filial_mapa_pedidos()
+        registros = dados.get("registros") if isinstance(dados.get("registros"), dict) else {}
+        visiveis = {rid: rec for rid, rec in registros.items()
+                    if not isinstance(rec, dict) or _filial_do_registro_etiqueta(rec, mapa) == filial}
+        banco = dict(dados)
+        banco["registros"] = visiveis
+        banco["ordem"] = [rid for rid in (dados.get("ordem") or []) if str(rid) in visiveis]
+        banco["auditoria"] = [a for a in (dados.get("auditoria") or [])
+                              if not isinstance(a, dict) or str(a.get("etiqueta") or "") in visiveis]
+        return json_dumps(rebuild_label_bank(banco))
+    return valor
+
+
+def storage_remontar_por_filial(key: str, valor_cliente: str | None, filial: str) -> str | None:
+    """Gravação de quem vê uma filial só: junta de volta o que ela não via (estado atual do
+    banco) e marca com a filial o que nasceu sem marca. Sem isso, a fila filtrada gravada
+    apagaria (ou viraria tombstone ADMIN de) tudo da outra filial."""
+    if valor_cliente is None or key not in FILIAL_CHAVES:
+        return valor_cliente
+    if filial == FILIAL_TODAS:
+        if key == "conf_coleta_dia_v1":
+            # Quem grava a coleta de Araçatuba vendo tudo não apaga a das outras filiais.
+            novo = _filial_json(valor_cliente, {})
+            atual = _filial_json(get_storage(key)[0], {})
+            if isinstance(novo, dict) and isinstance(atual, dict) and isinstance(atual.get("porFilial"), dict):
+                novo.setdefault("porFilial", atual["porFilial"])
+                return json_dumps(novo)
+        return valor_cliente
+    atual_bruto, _, _ = get_storage(key)
+    novo = _filial_json(valor_cliente, None)
+    atual = _filial_json(atual_bruto, None)
+    if key in FILIAL_CHAVES_LISTA:
+        if not isinstance(novo, list):
+            return valor_cliente
+        escondidas = [r for r in (atual if isinstance(atual, list) else [])
+                      if isinstance(r, dict) and filial_da_linha(r) != filial]
+        proprias = []
+        for r in novo:
+            if isinstance(r, dict):
+                if str(r.get("Casa") or "").strip() and filial_da_linha(r) != filial:
+                    continue  # linha de outra filial que o cliente não deveria ter: vale a do banco
+                if filial != CASA_PRINCIPAL and not str(r.get("Casa") or "").strip():
+                    r = {**r, "Casa": filial}
+            proprias.append(r)
+        return json_dumps(proprias + escondidas)
+    if key == "conf_coleta_dia_v1":
+        base = atual if isinstance(atual, dict) else {}
+        coleta = novo if isinstance(novo, dict) else {}
+        por = dict(base.get("porFilial") or {}) if isinstance(base.get("porFilial"), dict) else {}
+        if filial == CASA_PRINCIPAL:
+            return json_dumps({**{k: v for k, v in coleta.items() if k != "porFilial"}, "porFilial": por})
+        por[filial] = {k: v for k, v in coleta.items() if k != "porFilial"}
+        return json_dumps({**base, "porFilial": por})
+    if key == "conf_etiquetas":
+        if not isinstance(novo, dict):
+            return valor_cliente
+        mapa = _filial_mapa_pedidos()
+        atual = atual if isinstance(atual, dict) else {}
+        atuais = atual.get("registros") if isinstance(atual.get("registros"), dict) else {}
+        escondidos = {rid: rec for rid, rec in atuais.items()
+                      if isinstance(rec, dict) and _filial_do_registro_etiqueta(rec, mapa) != filial}
+        registros: dict[str, Any] = {}
+        for rid, rec in (novo.get("registros") or {}).items():
+            if rid in escondidos:
+                continue
+            if isinstance(rec, dict) and filial != CASA_PRINCIPAL and not str(rec.get("casa") or "").strip():
+                rec = {**rec, "casa": filial}
+            registros[rid] = rec
+        registros.update(escondidos)
+        banco = dict(novo)
+        banco["registros"] = registros
+        banco["ordem"] = [*[rid for rid in (novo.get("ordem") or []) if str(rid) in registros and str(rid) not in escondidos],
+                          *[rid for rid in (atual.get("ordem") or []) if str(rid) in escondidos]]
+        banco["auditoria"] = [*(novo.get("auditoria") or []),
+                              *[a for a in (atual.get("auditoria") or [])
+                                if isinstance(a, dict) and str(a.get("etiqueta") or "") in escondidos]][-250:]
+        return json_dumps(rebuild_label_bank(banco))
+    return valor_cliente
+
+
+def _filial_linhas_do_pedido(pedido: Any) -> list[dict[str, Any]]:
+    numero = normalize(pedido)
+    bruto, _, _ = get_storage("conf_pedidos")
+    return [r for r in _rows_from_storage_value(bruto)
+            if isinstance(r, dict) and numero and numero in {normalize(order_number(r)), normalize(r.get("VendaMercadoLivre")),
+                                                             normalize(r.get("PackIdMercadoLivre"))}]
+
+
+def ml_etiqueta_pdf(pedido: str, filial: str) -> bytes:
+    """V18.95: etiqueta do ML em PDF (10x15) para a filial sem Zebra (Bauru). Buscada na
+    hora, com a CONTA do pedido (a filial pode ter sido mudada pelo ADMIN)."""
     with DB_LOCK:
-        return DB.execute("SELECT * FROM ml_integration WHERE id=1").fetchone()
+        linhas = _filial_linhas_do_pedido(pedido)
+    if not linhas:
+        raise ValueError(f"Pedido {pedido} não está na fila.")
+    if filial != FILIAL_TODAS and not any(filial_da_linha(r) == filial for r in linhas):
+        raise PermissionError(f"O pedido {pedido} é de outra filial.")
+    envio = next((str(r.get("ShipmentIdMercadoLivre") or "").strip() for r in linhas
+                  if str(r.get("ShipmentIdMercadoLivre") or "").strip()), "")
+    if not envio:
+        raise ValueError(f"Pedido {pedido} ainda sem envio do Mercado Livre.")
+    with ml_na_casa(ml_casa_da_linha(linhas[0])):
+        bruto, _ = ml_api_get_bytes(f"/shipment_labels?{urlencode({'shipment_ids': envio, 'response_type': 'pdf'})}")
+    if not bruto.startswith(b"%PDF"):
+        raise RuntimeError("O Mercado Livre não devolveu a etiqueta em PDF.")
+    return bruto
+
+
+def pedido_mover_filial(pedido: str, filial: str, usuario: str) -> dict[str, Any]:
+    """V18.95: o ADMIN muda a filial que confere o pedido (decisão do dono, 10/10). Grava
+    pelo save_storage como ADMIN: vira override do campo Casa e a importação do ML não
+    desfaz. A conta (ContaMercadoLivre) não muda: a etiqueta continua vindo dela."""
+    if filial not in CASAS:
+        raise ValueError(f"Filial desconhecida: {filial}")
+    numero = normalize(pedido)
+    with DB_LOCK:
+        bruto, _, _ = get_storage("conf_pedidos")
+        linhas = _rows_from_storage_value(bruto)
+        movidas = 0
+        novas = []
+        for r in linhas:
+            if (isinstance(r, dict) and numero and numero in {normalize(order_number(r)), normalize(r.get("VendaMercadoLivre")),
+                                                              normalize(r.get("PackIdMercadoLivre"))}):
+                if filial_da_linha(r) != filial:
+                    r = {**r, "Casa": filial}
+                    if "MERCADO" in normalize(r.get("Marketplace")) and not str(r.get("ContaMercadoLivre") or "").strip():
+                        r["ContaMercadoLivre"] = ml_casa_da_linha({**r, "Casa": ""})
+                    movidas += 1
+            novas.append(r)
+        if not any(isinstance(r, dict) and numero in {normalize(order_number(r)), normalize(r.get("VendaMercadoLivre")),
+                                                       normalize(r.get("PackIdMercadoLivre"))} for r in linhas):
+            raise ValueError(f"Pedido {pedido} não está na fila.")
+        if movidas:
+            save_storage("conf_pedidos", bruto, json_dumps(novas), False, actor=usuario, actor_role="admin",
+                         source_screen="Admin / Pedidos pendentes", change_method=f"Mover de filial para {CASAS[filial]}",
+                         client_ip="127.0.0.1")
+    return {"ok": True, "pedido": pedido, "filial": filial, "linhas": movidas}
+
+
+def pedido_da_filial(pedido: Any, filial: str) -> bool:
+    """O pedido pode ser tocado por quem vê `filial`? Pedido que não está na fila: sim
+    (cada rota decide o que fazer com pedido inexistente)."""
+    if filial == FILIAL_TODAS:
+        return True
+    numero = normalize(pedido)
+    if not numero:
+        return True
+    bruto, _, _ = get_storage("conf_pedidos")
+    achou = False
+    for row in _rows_from_storage_value(bruto):
+        if isinstance(row, dict) and numero in {normalize(order_number(row)), normalize(row.get("VendaMercadoLivre")),
+                                                normalize(row.get("PackIdMercadoLivre"))}:
+            achou = True
+            if filial_da_linha(row) == filial:
+                return True
+    return not achou
+
+
+def ensure_ml_casas_schema() -> None:
+    with DB_LOCK:
+        DB.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS ml_integration_casa_v1894 (
+                casa TEXT PRIMARY KEY,
+                seller_id TEXT NOT NULL DEFAULT '',
+                nickname TEXT NOT NULL DEFAULT '',
+                access_token TEXT NOT NULL DEFAULT '',
+                refresh_token TEXT NOT NULL DEFAULT '',
+                token_type TEXT NOT NULL DEFAULT 'Bearer',
+                scope TEXT NOT NULL DEFAULT '',
+                expires_at_epoch INTEGER NOT NULL DEFAULT 0,
+                connected_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT '',
+                last_sync_at TEXT NOT NULL DEFAULT '',
+                last_error TEXT NOT NULL DEFAULT ''
+            );
+            """
+        )
+        colunas = {r[1] for r in DB.execute("PRAGMA table_info(ml_oauth_state)").fetchall()}
+        if "casa" not in colunas:
+            DB.execute("ALTER TABLE ml_oauth_state ADD COLUMN casa TEXT NOT NULL DEFAULT 'aracatuba'")
+        DB.commit()
+
+
+def _ml_tabela_conta() -> tuple[str, str, tuple[Any, ...]]:
+    """(tabela, condição, parâmetros) da conta ML da casa atual."""
+    casa = ml_casa_atual()
+    if casa == CASA_PRINCIPAL:
+        return "ml_integration", "id=1", ()
+    return "ml_integration_casa_v1894", "casa=?", (casa,)
+
+
+def _ml_conta_atualizar(campos: str, valores: tuple[Any, ...]) -> None:
+    """UPDATE na conta ML da casa atual (`campos` = "a=?,b=?")."""
+    tabela, onde, params = _ml_tabela_conta()
+    with DB_LOCK:
+        DB.execute(f"UPDATE {tabela} SET {campos} WHERE {onde}", tuple(valores) + params)
+        DB.commit()
+
+
+def ml_integration_row() -> sqlite3.Row | None:
+    tabela, onde, params = _ml_tabela_conta()
+    with DB_LOCK:
+        return DB.execute(f"SELECT * FROM {tabela} WHERE {onde}", params).fetchone()
+
+
+def ml_casas_conectadas() -> list[str]:
+    """Casas com conta ML conectada (a principal primeiro)."""
+    casas = []
+    for casa in CASAS:
+        try:
+            with ml_na_casa(casa):
+                row = ml_integration_row()
+            if row and str(row["access_token"] or "").strip():
+                casas.append(casa)
+        except Exception:
+            continue
+    return casas
+
+
+def ml_casa_do_seller(seller_id: Any) -> str | None:
+    seller_id = str(seller_id or "").strip()
+    if not seller_id:
+        return None
+    for casa in CASAS:
+        with ml_na_casa(casa):
+            row = ml_integration_row()
+        if row and str(row["seller_id"] or "") == seller_id:
+            return casa
+    return None
 
 
 def ml_status_payload() -> dict[str, Any]:
@@ -7458,31 +7900,64 @@ def ml_store_token(
     connected_at = str(previous["connected_at"] or "") if previous else ""
     if not connected_at:
         connected_at = now_iso()
-    with DB_LOCK:
-        DB.execute(
-            """INSERT INTO ml_integration(
-                 id,seller_id,nickname,access_token,refresh_token,token_type,scope,
-                 expires_at_epoch,connected_at,updated_at,last_sync_at,last_error
-               ) VALUES(1,?,?,?,?,?,?,?,?,?,?,?)
-               ON CONFLICT(id) DO UPDATE SET
-                 seller_id=excluded.seller_id,
-                 nickname=CASE WHEN excluded.nickname<>'' THEN excluded.nickname ELSE ml_integration.nickname END,
-                 access_token=excluded.access_token,
-                 refresh_token=excluded.refresh_token,
-                 token_type=excluded.token_type,
-                 scope=excluded.scope,
-                 expires_at_epoch=excluded.expires_at_epoch,
-                 connected_at=CASE WHEN ml_integration.connected_at='' THEN excluded.connected_at ELSE ml_integration.connected_at END,
-                 updated_at=excluded.updated_at,
-                 last_error=excluded.last_error""",
-            (
-                seller_id, nickname, access_token, refresh_token, token_type, scope,
-                expires_at, connected_at, now_iso(),
-                str(previous["last_sync_at"] or "") if previous else "",
-                token_error,
-            ),
-        )
-        DB.commit()
+    # V18.94: a mesma conta do ML nunca pode ficar em duas casas (conectar Bauru logado na
+    # conta de Araçatuba faria os pedidos entrarem duas vezes, cada um numa fila).
+    dona = ml_casa_do_seller(seller_id)
+    if dona and dona != ml_casa_atual():
+        raise RuntimeError(f"Esta conta do Mercado Livre já está conectada em {CASAS[dona]}. "
+                           f"Entre no Mercado Livre com a conta de {CASAS[ml_casa_atual()]} e conecte de novo.")
+    if ml_casa_atual() != CASA_PRINCIPAL:
+        with DB_LOCK:
+            DB.execute(
+                """INSERT INTO ml_integration_casa_v1894(
+                     casa,seller_id,nickname,access_token,refresh_token,token_type,scope,
+                     expires_at_epoch,connected_at,updated_at,last_sync_at,last_error
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(casa) DO UPDATE SET
+                     seller_id=excluded.seller_id,
+                     nickname=CASE WHEN excluded.nickname<>'' THEN excluded.nickname ELSE ml_integration_casa_v1894.nickname END,
+                     access_token=excluded.access_token,
+                     refresh_token=excluded.refresh_token,
+                     token_type=excluded.token_type,
+                     scope=excluded.scope,
+                     expires_at_epoch=excluded.expires_at_epoch,
+                     connected_at=CASE WHEN ml_integration_casa_v1894.connected_at='' THEN excluded.connected_at ELSE ml_integration_casa_v1894.connected_at END,
+                     updated_at=excluded.updated_at,
+                     last_error=excluded.last_error""",
+                (
+                    ml_casa_atual(), seller_id, nickname, access_token, refresh_token, token_type, scope,
+                    expires_at, connected_at, now_iso(),
+                    str(previous["last_sync_at"] or "") if previous else "",
+                    token_error,
+                ),
+            )
+            DB.commit()
+    else:
+        with DB_LOCK:
+            DB.execute(
+                """INSERT INTO ml_integration(
+                     id,seller_id,nickname,access_token,refresh_token,token_type,scope,
+                     expires_at_epoch,connected_at,updated_at,last_sync_at,last_error
+                   ) VALUES(1,?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(id) DO UPDATE SET
+                     seller_id=excluded.seller_id,
+                     nickname=CASE WHEN excluded.nickname<>'' THEN excluded.nickname ELSE ml_integration.nickname END,
+                     access_token=excluded.access_token,
+                     refresh_token=excluded.refresh_token,
+                     token_type=excluded.token_type,
+                     scope=excluded.scope,
+                     expires_at_epoch=excluded.expires_at_epoch,
+                     connected_at=CASE WHEN ml_integration.connected_at='' THEN excluded.connected_at ELSE ml_integration.connected_at END,
+                     updated_at=excluded.updated_at,
+                     last_error=excluded.last_error""",
+                (
+                    seller_id, nickname, access_token, refresh_token, token_type, scope,
+                    expires_at, connected_at, now_iso(),
+                    str(previous["last_sync_at"] or "") if previous else "",
+                    token_error,
+                ),
+            )
+            DB.commit()
 
     try:
         ml_log_event(
@@ -7505,6 +7980,15 @@ def ml_store_token(
 # a mesma chave e um levava invalid_grant (ou gravava um par já ultrapassado).
 # Mesma solução da Shopee (V18.01): um renova, os outros esperam e reaproveitam.
 ML_TOKEN_LOCK = threading.Lock()
+# V18.94: cada casa renova a própria conta; a principal continua no ML_TOKEN_LOCK.
+_ML_TOKEN_LOCKS_CASA: dict[str, threading.Lock] = {}
+
+
+def _ml_token_lock() -> threading.Lock:
+    casa = ml_casa_atual()
+    if casa == CASA_PRINCIPAL:
+        return ML_TOKEN_LOCK
+    return _ML_TOKEN_LOCKS_CASA.setdefault(casa, threading.Lock())
 
 
 def ml_access_token(*, force_refresh: bool = False) -> tuple[str, str]:
@@ -7516,7 +8000,7 @@ def ml_access_token(*, force_refresh: bool = False) -> tuple[str, str]:
     if not force_refresh and int(row["expires_at_epoch"] or 0) > int(time.time()) + 300:
         return str(row["access_token"]), str(row["seller_id"])
     token_antes = str(row["access_token"] or "")
-    with ML_TOKEN_LOCK:
+    with _ml_token_lock():
         row = ml_integration_row()
         if not row or not row["access_token"]:
             raise RuntimeError("Mercado Livre ainda não está conectado.")
@@ -7624,6 +8108,14 @@ def ml_token_keepalive_loop(stop_event: threading.Event) -> None:
         return
     while not stop_event.is_set():
         ml_token_keepalive_once()
+        # V18.94: as outras casas renovam a própria conta (o estado da tela é o da principal).
+        for casa in ml_casas_conectadas():
+            if casa != CASA_PRINCIPAL:
+                try:
+                    with ml_na_casa(casa):
+                        ml_token_keepalive_once()
+                except Exception:
+                    pass
         if stop_event.wait(ML_TOKEN_KEEPALIVE_INTERVAL):
             break
 
@@ -7990,7 +8482,8 @@ def ml_promotions_analysis_payload(max_items: int = 250, tax_percent: float = 12
             "summary": summary, "campaigns_count": len(campaigns), "rows": rows,
             "errors": errors[:30], "tax_percent": tax_percent}
 
-def ml_oauth_authorization_url() -> str:
+def ml_oauth_authorization_url(casa: str = CASA_PRINCIPAL) -> str:
+    casa = ml_casa_valida(casa)  # V18.94: a casa que está sendo conectada vai junto no state
     if not ml_credentials_configured():
         raise RuntimeError("Configure ML_CLIENT_ID e ML_CLIENT_SECRET no /home/expedicao/.env antes de conectar.")
     state = secrets.token_urlsafe(32)
@@ -8000,8 +8493,8 @@ def ml_oauth_authorization_url() -> str:
     with DB_LOCK:
         DB.execute("DELETE FROM ml_oauth_state WHERE expires_at_epoch<?", (now_epoch,))
         DB.execute(
-            "INSERT INTO ml_oauth_state(state,code_verifier,created_at,expires_at_epoch) VALUES(?,?,?,?)",
-            (state, verifier, now_iso(), now_epoch + 15 * 60),
+            "INSERT INTO ml_oauth_state(state,code_verifier,created_at,expires_at_epoch,casa) VALUES(?,?,?,?,?)",
+            (state, verifier, now_iso(), now_epoch + 15 * 60, casa),
         )
         DB.commit()
     # V18.22: o scope PRECISA ir aqui, na autorização. Sem ele o Mercado Livre
@@ -8024,8 +8517,6 @@ def ml_oauth_authorization_url() -> str:
 
 
 def ml_exchange_authorization_code(code: str, state: str) -> dict[str, Any]:
-    previous_integration = ml_integration_row()
-    recovery_since = str(previous_integration["last_sync_at"] or "") if previous_integration else ""
     now_epoch = int(time.time())
     with DB_LOCK:
         row = DB.execute("SELECT * FROM ml_oauth_state WHERE state=?", (state,)).fetchone()
@@ -8035,6 +8526,17 @@ def ml_exchange_authorization_code(code: str, state: str) -> dict[str, Any]:
         DB.commit()
     if not row or int(row["expires_at_epoch"] or 0) < now_epoch:
         raise RuntimeError("Estado OAuth inválido ou expirado. Inicie a conexão novamente.")
+    # V18.94: grava o token na conta da casa que pediu a conexão.
+    casa = str(row["casa"] or CASA_PRINCIPAL) if "casa" in row.keys() else CASA_PRINCIPAL
+    with ml_na_casa(casa):
+        status = _ml_exchange_authorization_code_na_casa(code, row)
+    status["casa"] = casa
+    return status
+
+
+def _ml_exchange_authorization_code_na_casa(code: str, row: sqlite3.Row) -> dict[str, Any]:
+    previous_integration = ml_integration_row()
+    recovery_since = str(previous_integration["last_sync_at"] or "") if previous_integration else ""
     payload = ml_http_json(
         "POST",
         f"{ML_API_BASE}/oauth/token",
@@ -9138,6 +9640,7 @@ def _ml_store_linked_label(*, operational_order_id: str, order_id: str, pack_id:
         "chaves": keys, "vinculadoA": [operational_order_id], "pedido": operational_order_id,
         "vinculo": "api_mercadolivre_ready_to_print", "origem": "api_mercadolivre",
         "adicionadaEm": now_iso(), "adicionadaPor": "mercadolivre-api",
+        "casa": ml_casa_atual(),  # V18.95: filial da etiqueta sem pedido na fila = a da conta
     }
     bank["registros"][rid] = record
     if rid not in bank["ordem"]:
@@ -9294,6 +9797,8 @@ def _ml_bind_manual_pending_rows(
         old = (str(row.get("VendaMercadoLivre") or ""), str(row.get("PackIdMercadoLivre") or ""), str(row.get("ShipmentIdMercadoLivre") or ""))
         row["Pedido"] = operational_order_id
         row["VendaMercadoLivre"] = order_id
+        row["Casa"] = ml_casa_atual()  # V18.94: o pedido manual passa a ser da casa da conta que o achou
+        row["ContaMercadoLivre"] = ml_casa_atual()  # V18.95
         row["PackIdMercadoLivre"] = pack_id
         row["ShipmentIdMercadoLivre"] = shipment_id
         row["LogisticaMercadoLivre"] = logistic
@@ -9310,11 +9815,14 @@ def _ml_manual_pending_numbers() -> set[str]:
     raw, _, _ = get_storage("conf_pedidos")
     linked = _ml_linked_order_ids()
     result: set[str] = set()
+    casa = ml_casa_atual()
     for row in _rows_from_storage_value(raw):
         if not isinstance(row, dict):
             continue
         marketplace = normalize(row.get("Marketplace"))
         if "MERCADO LIVRE" not in marketplace and "MERCADOLIVRE" not in marketplace:
+            continue
+        if ml_casa_da_linha(row) != casa:  # V18.94: cada casa reconcilia só os pedidos dela
             continue
         sale_id = str(row.get("VendaMercadoLivre") or "").strip()
         if sale_id and sale_id in linked:
@@ -9420,11 +9928,12 @@ def ml_reconcile_manual_orders_loop(stop_event: threading.Event) -> None:
         return
     while not stop_event.is_set():
         try:
-            row = ml_integration_row()
             # V14.6: reconcilia enquanto houver access_token utilizável. A ausência
             # de refresh_token impede apenas a renovação futura, não o uso do token atual.
-            if row and str(row["access_token"] or "").strip():
-                ml_reconcile_manual_orders_once()
+            # V18.94: cada casa reconcilia só os pedidos manuais dela.
+            for casa in ml_casas_conectadas():
+                with ml_na_casa(casa):
+                    ml_reconcile_manual_orders_once()
         except Exception as exc:
             try:
                 ml_log_event_se_mudou("manual_reconcile", "/orders/search", "", ML_CLIENT_ID, "ERRO", str(exc)[:1200])
@@ -9777,6 +10286,11 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
                 "PackIdMercadoLivre": pack_id,
                 "ShipmentIdMercadoLivre": shipment_id,
                 "StatusMercadoLivre": status,
+                # V18.94: casa da expedição = conta do ML de onde o pedido veio.
+                # V18.95: a filial (Casa) pode ser mudada pelo ADMIN ("Mover de filial",
+                # protegida pelo override); a conta (ContaMercadoLivre) não muda.
+                "Casa": ml_casa_atual(),
+                "ContaMercadoLivre": ml_casa_atual(),
                 "LogisticaMercadoLivre": _ml_logistic_type(shipment),
                 "NomeFiscalMercadoLivre": fiscal_name,
                 "CPFMercadoLivre": fiscal_doc_number if fiscal_doc_type == "CPF" else "",
@@ -9984,12 +10498,7 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
         client_ip="127.0.0.1",
         allow_completed_reimport=False,
     )
-    with DB_LOCK:
-        DB.execute(
-            "UPDATE ml_integration SET last_sync_at=?, updated_at=?, last_error='' WHERE id=1",
-            (now_iso(), now_iso()),
-        )
-        DB.commit()
+    _ml_conta_atualizar("last_sync_at=?, updated_at=?, last_error=''", (now_iso(), now_iso()))  # V18.94: conta da casa
     return {
         "order_id": order_id,
         "pack_id": pack_id,
@@ -10031,10 +10540,19 @@ def ml_process_notification(payload: dict[str, Any]) -> None:
     if ML_CLIENT_ID and app_id and app_id != ML_CLIENT_ID:
         ml_log_event(topic, resource, user_id, app_id, "IGNORADO", "application_id diferente do aplicativo configurado")
         return
-    integration = ml_integration_row()
-    if integration and integration["seller_id"] and user_id and str(integration["seller_id"]) != user_id:
-        ml_log_event(topic, resource, user_id, app_id, "IGNORADO", "user_id diferente do seller conectado")
-        return
+    # V18.94: o aviso vai para a casa dona do user_id; seller que não é de nenhuma casa é ignorado.
+    casa = ml_casa_do_seller(user_id) if user_id else ml_casa_atual()
+    if user_id and casa is None:
+        integration = ml_integration_row()
+        if integration and integration["seller_id"]:
+            ml_log_event(topic, resource, user_id, app_id, "IGNORADO", "user_id diferente do seller conectado")
+            return
+        casa = ml_casa_atual()
+    with ml_na_casa(casa):
+        _ml_process_notification_na_casa(payload, topic, resource, user_id, app_id)
+
+
+def _ml_process_notification_na_casa(payload: dict[str, Any], topic: str, resource: str, user_id: str, app_id: str) -> None:
     try:
         if topic in {"orders_v2", "orders"} and "/orders/" in resource:
             order_id = resource.rstrip("/").split("/")[-1]
@@ -10080,9 +10598,7 @@ def ml_process_notification(payload: dict[str, Any]) -> None:
         ml_log_event(topic, resource, user_id, app_id, "IGNORADO", "Tópico/recurso sem ação configurada")
     except Exception as exc:
         ml_log_event(topic, resource, user_id, app_id, "ERRO", str(exc))
-        with DB_LOCK:
-            DB.execute("UPDATE ml_integration SET last_error=?,updated_at=? WHERE id=1", (str(exc)[:2000], now_iso()))
-            DB.commit()
+        _ml_conta_atualizar("last_error=?,updated_at=?", (str(exc)[:2000], now_iso()))  # V18.94: conta da casa
 
 
 def _ml_all_pending_label_candidates() -> list[tuple[str, str]]:
@@ -10091,11 +10607,14 @@ def _ml_all_pending_label_candidates() -> list[tuple[str, str]]:
     rows = _rows_from_storage_value(raw)
     seen: set[tuple[str, str]] = set()
     candidates: list[tuple[str, str]] = []
+    casa = ml_casa_atual()
     for row in rows:
         if not isinstance(row, dict):
             continue
         marketplace = normalize(row.get("Marketplace"))
         if "MERCADO LIVRE" not in marketplace and "MERCADOLIVRE" not in marketplace:
+            continue
+        if ml_casa_da_linha(row) != casa:  # V18.94: a etiqueta é buscada com a conta da casa do pedido
             continue
         if str(row.get("Etiqueta API Mercado Livre") or "").strip().upper() == "VINCULADA":
             continue
@@ -10113,20 +10632,28 @@ def _ml_all_pending_label_candidates() -> list[tuple[str, str]]:
     return candidates
 
 
+_ML_PENDING_WATCH_CURSOR_CASA: dict[str, int] = {}  # V18.94: posição do lote de cada casa (fora a principal)
+
+
 def _ml_pending_label_candidates() -> list[tuple[str, str]]:
     """Retorna um lote circular; os primeiros 20 nunca bloqueiam os seguintes."""
     global ML_PENDING_WATCH_CURSOR
     all_candidates = _ml_all_pending_label_candidates()
     total = len(all_candidates)
-    if total <= ML_PENDING_WATCH_BATCH:
-        with ML_PENDING_WATCH_CURSOR_LOCK:
-            ML_PENDING_WATCH_CURSOR = 0
-        return all_candidates
+    casa = ml_casa_atual()
     with ML_PENDING_WATCH_CURSOR_LOCK:
-        start = ML_PENDING_WATCH_CURSOR % total
-        count = min(ML_PENDING_WATCH_BATCH, total)
-        batch = [all_candidates[(start + i) % total] for i in range(count)]
-        ML_PENDING_WATCH_CURSOR = (start + count) % total
+        cursor = ML_PENDING_WATCH_CURSOR if casa == CASA_PRINCIPAL else _ML_PENDING_WATCH_CURSOR_CASA.get(casa, 0)
+        if total <= ML_PENDING_WATCH_BATCH:
+            novo, batch = 0, all_candidates
+        else:
+            start = cursor % total
+            count = min(ML_PENDING_WATCH_BATCH, total)
+            batch = [all_candidates[(start + i) % total] for i in range(count)]
+            novo = (start + count) % total
+        if casa == CASA_PRINCIPAL:
+            ML_PENDING_WATCH_CURSOR = novo
+        else:
+            _ML_PENDING_WATCH_CURSOR_CASA[casa] = novo
     return batch
 
 
@@ -10252,11 +10779,14 @@ def _ml_recover_local_pending_identifiers_once(*, max_identifiers: int = 80) -> 
     completed = _ml_completed_order_ids()
     identifiers: list[str] = []
     shipment_ids: list[str] = []
+    casa = ml_casa_atual()
     for row in _rows_from_storage_value(raw):
         if not isinstance(row, dict):
             continue
         marketplace = normalize(row.get("Marketplace"))
         if "MERCADO LIVRE" not in marketplace and "MERCADOLIVRE" not in marketplace:
+            continue
+        if ml_casa_da_linha(row) != casa:  # V18.94
             continue
         oid = str(row.get("VendaMercadoLivre") or "").strip()
         if oid and (oid in linked or oid in completed):
@@ -10476,32 +11006,40 @@ def ml_pending_label_watch_loop(stop_event: threading.Event) -> None:
     cycles = 0
     discovery_every = max(1, int(round(120 / max(1, ML_PENDING_WATCH_INTERVAL))))
     while not stop_event.wait(ML_PENDING_WATCH_INTERVAL):
-        try:
-            row = ml_integration_row()
-            if not row or not str(row["access_token"] or "").strip():
-                continue
-            ml_pending_label_watch_once()
-            cycles += 1
-            if cycles % discovery_every == 0:
-                try:
-                    # Varredura automática curta: até 3 dias / 4 páginas (200 pedidos).
-                    # A verificação manual continua usando a janela completa configurada.
-                    recovery = _ml_recover_local_pending_identifiers_once(max_identifiers=30)
-                    if recovery.get("ready"):
-                        ml_log_event("shipment_watcher", "/local-recovery", "", ML_CLIENT_ID,
-                                     "PEDIDOS PRESOS RECUPERADOS", json_dumps(recovery))
-                    result = _ml_discover_untracked_ready_labels_once(days=3, max_pages=4)
-                    if result.get("api_linked"):
-                        ml_log_event("shipment_watcher", "/orders/search", "", ML_CLIENT_ID,
-                                     "ETIQUETAS RECUPERADAS", json_dumps(result))
-                except Exception as discovery_exc:
-                    ml_log_event("shipment_watcher", "/orders/search", "", ML_CLIENT_ID,
-                                 "ERRO DESCOBERTA", str(discovery_exc)[:1200])
-        except Exception as exc:
+        casas = ml_casas_conectadas()
+        if not casas:
+            continue
+        cycles += 1
+        # V18.94: cada casa revê as etiquetas dos pedidos DELA, com a conta dela.
+        for casa in casas:
+            with ml_na_casa(casa):
+                _ml_pending_label_watch_ciclo(cycles % discovery_every == 0)
+
+
+def _ml_pending_label_watch_ciclo(descobrir: bool) -> None:
+    """Um ciclo do vigia de etiquetas na casa atual (V18.94: era o corpo do laço)."""
+    try:
+        ml_pending_label_watch_once()
+        if descobrir:
             try:
-                ml_log_event_se_mudou("shipment_watcher", "/pending", "", ML_CLIENT_ID, "ERRO", str(exc)[:1200])
-            except Exception:
-                pass
+                # Varredura automática curta: até 3 dias / 4 páginas (200 pedidos).
+                # A verificação manual continua usando a janela completa configurada.
+                recovery = _ml_recover_local_pending_identifiers_once(max_identifiers=30)
+                if recovery.get("ready"):
+                    ml_log_event("shipment_watcher", "/local-recovery", "", ML_CLIENT_ID,
+                                 "PEDIDOS PRESOS RECUPERADOS", json_dumps(recovery))
+                result = _ml_discover_untracked_ready_labels_once(days=3, max_pages=4)
+                if result.get("api_linked"):
+                    ml_log_event("shipment_watcher", "/orders/search", "", ML_CLIENT_ID,
+                                 "ETIQUETAS RECUPERADAS", json_dumps(result))
+            except Exception as discovery_exc:
+                ml_log_event("shipment_watcher", "/orders/search", "", ML_CLIENT_ID,
+                             "ERRO DESCOBERTA", str(discovery_exc)[:1200])
+    except Exception as exc:
+        try:
+            ml_log_event_se_mudou("shipment_watcher", "/pending", "", ML_CLIENT_ID, "ERRO", str(exc)[:1200])
+        except Exception:
+            pass
 
 
 ML_FULL_IGNORADO_DIAS = 45  # V18.78: cobre a janela que o vigia e o catch-up consultam
@@ -10693,12 +11231,8 @@ def _ml_parse_datetime(value: Any) -> datetime | None:
 
 
 def _ml_update_last_sync(marker: str, *, error: str = "") -> None:
-    with DB_LOCK:
-        DB.execute(
-            "UPDATE ml_integration SET last_sync_at=?,updated_at=?,last_error=? WHERE id=1",
-            (str(marker or now_iso()), now_iso(), str(error or "")[:3000]),
-        )
-        DB.commit()
+    # V18.94: grava na conta da casa atual.
+    _ml_conta_atualizar("last_sync_at=?,updated_at=?,last_error=?", (str(marker or now_iso()), now_iso(), str(error or "")[:3000]))
 
 
 def ml_catchup_orders(recovery_since: str = "", *, source: str = "reconexão") -> dict[str, Any]:
@@ -10801,15 +11335,7 @@ def ml_catchup_orders(recovery_since: str = "", *, source: str = "reconexão") -
             _ml_update_last_sync(scan_started_at)
         else:
             # Mantém o marcador antigo para uma futura tentativa não saltar pedidos.
-            with DB_LOCK:
-                DB.execute(
-                    "UPDATE ml_integration SET updated_at=?,last_error=? WHERE id=1",
-                    (
-                        now_iso(),
-                        "" if not errors else json_dumps(errors[:5]),
-                    ),
-                )
-                DB.commit()
+            _ml_conta_atualizar("updated_at=?,last_error=?", (now_iso(), "" if not errors else json_dumps(errors[:5])))
 
         result_payload = {
             "ok": completed_scan and not errors,
@@ -10870,9 +11396,10 @@ def ml_safety_catchup_loop(stop_event: threading.Event) -> None:
         return
     while not stop_event.is_set():
         try:
-            row = ml_integration_row()
-            if row and str(row["access_token"] or "").strip():
-                ml_safety_catchup_once()
+            # V18.94: varredura de segurança de cada casa conectada.
+            for casa in ml_casas_conectadas():
+                with ml_na_casa(casa):
+                    ml_safety_catchup_once()
         except Exception as exc:
             _ml_worker_state_update(last_catchup_at=now_iso(), last_error=str(exc)[:1200])
             try:
@@ -10899,6 +11426,12 @@ def ml_new_order_watch_once() -> dict[str, int]:
         })
         result = ml_api_get(f"/orders/search?{query}")
         orders = result.get("results") if isinstance(result, dict) else []
+        # V18.93: aviso de venda com o mesmo resultado (sem chamada a mais). Nunca
+        # atrapalha a entrada de pedidos.
+        try:
+            avisos_venda_registrar("ml", avisos_vendas_do_ml(orders))
+        except Exception as exc:
+            print(f"[avisos-venda] ml: {exc}", file=sys.stderr, flush=True)
         completed = _ml_completed_order_ids()
         linked_local = _ml_linked_order_ids()
         local_or_completed = _ml_existing_order_ids()
@@ -10964,8 +11497,9 @@ def ml_new_order_watch_loop(stop_event: threading.Event) -> None:
     # Faz uma primeira busca logo após o servidor subir.
     while not stop_event.is_set():
         try:
-            row = ml_integration_row()
-            if row and str(row["access_token"] or "").strip():
+            # V18.94: uma busca por casa conectada; o estado da tela mostra a principal.
+            casas = ml_casas_conectadas()
+            if CASA_PRINCIPAL in casas:
                 result = ml_new_order_watch_once()
                 _ml_worker_state_update(
                     last_order_poll_at=now_iso(),
@@ -10975,6 +11509,14 @@ def ml_new_order_watch_loop(stop_event: threading.Event) -> None:
                 consecutive_errors = 0 if not result.get("errors") else min(consecutive_errors + 1, 4)
             else:
                 consecutive_errors = 0
+            for casa in casas:
+                if casa == CASA_PRINCIPAL:
+                    continue
+                try:
+                    with ml_na_casa(casa):
+                        ml_new_order_watch_once()
+                except Exception as exc_casa:
+                    ml_log_event_se_mudou("new_order_watcher", "/orders/search", casa, ML_CLIENT_ID, "ERRO", str(exc_casa)[:1200])
         except Exception as exc:
             consecutive_errors = min(consecutive_errors + 1, 4)
             _ml_worker_state_update(last_order_poll_at=now_iso(), last_error=str(exc)[:1200])
@@ -11015,12 +11557,7 @@ def ml_manual_sync() -> dict[str, Any]:
                 imported.append(detail)
         except Exception as exc:
             errors.append({"order_id": order_id, "error": str(exc)})
-    with DB_LOCK:
-        DB.execute(
-            "UPDATE ml_integration SET last_sync_at=?,updated_at=?,last_error=? WHERE id=1",
-            (now_iso(), now_iso(), (json_dumps(errors[:5]) if errors else "")),
-        )
-        DB.commit()
+    _ml_conta_atualizar("last_sync_at=?,updated_at=?,last_error=?", (now_iso(), now_iso(), (json_dumps(errors[:5]) if errors else "")))
     ml_log_event(
         "manual_sync", "/orders/search", seller_id, ML_CLIENT_ID,
         "OK" if not errors else "PARCIAL",
@@ -18905,7 +19442,38 @@ PROMO_AUTO_PADRAO: dict[str, Any] = {"modo_renovacao": "simulacao", "duracao_dia
 PROMO_AUTO_MODOS = ("simulacao", "lote", "automatico")
 PROMO_RENOVACAO_INTERVALO = 3600
 PROMO_RENOVACAO_PAUSA = 0.3
+# V18.92: a vez é por ANÚNCIO (ler o ML, decidir, gravar), não pela rodada inteira. A rodada
+# de hora em hora (~5 min) segurava a vez toda: o Renovar clicado no meio esperava até 120 s
+# e o nginx (60 s) devolvia 504; o anúncio marcado no meio não era conferido.
 PROMO_RENOVACAO_LOCK = threading.Lock()
+PROMO_RODADA_LOCK = threading.Lock()   # só uma rodada COMPLETA por vez (worker ou "Conferir agora")
+PROMO_MANUAL_PRAZO = 40.0              # o clique responde antes do proxy_read_timeout (60 s)
+PROMO_VEZ_ESPERA = 30.0
+
+
+class PromoOcupado(ValueError):
+    """A vez do anúncio não veio a tempo (outro computador/rodada gravando o mesmo)."""
+
+
+class PromoConflito(Exception):
+    """V18.92: o preço mudou em outro computador depois que a tela foi carregada."""
+
+
+def _promo_vez(espera: float = PROMO_VEZ_ESPERA):
+    if not PROMO_RENOVACAO_LOCK.acquire(timeout=max(0.01, espera)):
+        raise PromoOcupado("O sistema está gravando esta lista agora. Tente de novo em instantes.")
+    return _PromoVez()
+
+
+class _PromoVez:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        PROMO_RENOVACAO_LOCK.release()
+        return False
+
+
 _PROMO_RENOVACAO_ESTADO: dict[str, Any] = {"rodando": False, "inicio": "", "fim": "", "ultimo": {}}
 
 
@@ -18978,8 +19546,14 @@ def _promo_log(mlb: str, acao: str, por: str, motivo: str = "", preco: float | N
         DB.commit()
 
 
-def promo_renovacao_marcar(mlb: Any, ativo: bool, ator: str, preco: Any = None) -> dict[str, Any]:
-    """Liga/desliga a renovação de um anúncio. Preço opcional (senão vem da promoção vigente)."""
+def promo_renovacao_marcar(mlb: Any, ativo: bool, ator: str, preco: Any = None,
+                           conferir_preco: bool = False, preco_antes: Any = None) -> dict[str, Any]:
+    """Liga/desliga a renovação de um anúncio. Preço opcional (senão vem da promoção vigente).
+
+    V18.92: `conferir_preco` — a tela manda o preço que mostrava (`preco_antes`); se outro
+    computador ou a conferência mudou o preço nesse meio, recusa (PromoConflito) em vez de
+    sobrescrever sem a pessoa ver.
+    """
     mlb = _mlb_normalizar(mlb)
     if not mlb:
         raise ValueError("Informe o número do anúncio (MLB).")
@@ -18987,7 +19561,16 @@ def promo_renovacao_marcar(mlb: Any, ativo: bool, ator: str, preco: Any = None) 
     if valor is not None and valor <= 0:
         raise ValueError("Preço inválido.")
     agora = now_iso()
-    with DB_LOCK:
+    with _promo_vez(), DB_LOCK:
+        if conferir_preco:
+            linha = DB.execute("SELECT preco FROM promo_renovacao_v1873 WHERE mlb=?", (mlb,)).fetchone()
+            atual = _money_number(linha["preco"]) if linha else None
+            antes = _money_number(preco_antes) if preco_antes not in (None, "") else None
+            if (round(atual, 2) if atual is not None else None) != (round(antes, 2) if antes is not None else None):
+                raise PromoConflito(
+                    f"O preço deste anúncio foi alterado em outro computador (agora "
+                    f"{_brl_srv(atual) if atual is not None else 'sem preço'}). A lista foi atualizada: "
+                    "confira e salve de novo.")
         if ativo:   # V18.76: incluir de novo é a reinclusão explícita do ADMIN
             DB.execute("DELETE FROM promo_removidos_v1876 WHERE mlb=?", (mlb,))
         DB.execute("INSERT INTO promo_renovacao_v1873(mlb,marcado,preco,marcado_por,marcado_em) VALUES(?,?,?,?,?) "
@@ -19007,7 +19590,7 @@ def promo_renovacao_remover(mlbs: list[Any], ator: str) -> dict[str, Any]:
     if not alvo:
         raise ValueError("Escolha ao menos um anúncio.")
     agora = now_iso()
-    with DB_LOCK:
+    with _promo_vez(), DB_LOCK:   # V18.92: nunca no meio da gravação de uma conferência
         for mlb in alvo:
             DB.execute("DELETE FROM promo_renovacao_v1873 WHERE mlb=?", (mlb,))
             DB.execute("INSERT INTO promo_removidos_v1876(mlb,removido_em,removido_por) VALUES(?,?,?) "
@@ -19352,40 +19935,50 @@ def _promo_renovacao_avaliar(mlb: str, preco: float | None, promos: list[dict[st
 
 def promo_renovacao_rodada(stop_event: threading.Event | None = None, *, hoje: date | None = None,
                            pausa: float | None = None, so: list[str] | None = None,
-                           ator: str = "sistema", apenas: list[str] | None = None) -> dict[str, Any]:
+                           ator: str = "sistema", apenas: list[str] | None = None,
+                           prazo: float | None = None) -> dict[str, Any]:
     """Confere os anúncios marcados e renova o que venceu.
 
     Worker (so=None): renova sozinho só no modo automático, até o limite do dia.
-    `apenas`: o worker confere só estes marcados (os que acabaram de vencer).
+    `apenas`: o worker confere só estes marcados (os que acabaram de vencer, ou o que
+    acabou de ser marcado).
     Clique do ADMIN (so=[...]): renova os escolhidos em qualquer modo — é uma ação
     explícita dele —, passando pelas mesmas conferências.
+
+    V18.92: a vez (PROMO_RENOVACAO_LOCK) é tomada anúncio por anúncio, e a linha é relida
+    sob ela: o clique entra entre um anúncio e outro da rodada de hora em hora, e o que
+    outro computador mudou no meio (desmarcar, remover, preço, renovar) não é desfeito.
+    Só a rodada COMPLETA é exclusiva (PROMO_RODADA_LOCK). `prazo` (segundos): o que não
+    coube volta em `pendentes`, para a tela pedir de novo.
     """
     hoje = hoje or datetime.now(BR_TZ).date()
     manual = so is not None
-    if not PROMO_RENOVACAO_LOCK.acquire(timeout=120 if manual else 0.01):
-        return {"ok": True, "pulado": "já está rodando", "resultados": []}
+    completa = not manual and apenas is None
+    if completa and not PROMO_RODADA_LOCK.acquire(blocking=False):
+        return {"ok": True, "pulado": "já está rodando", "resultados": [], "pendentes": []}
+    limite = time.monotonic() + prazo if prazo else None
     pausa = PROMO_RENOVACAO_PAUSA if pausa is None else pausa
     hoje_iso = hoje.isoformat()
     try:
-        _PROMO_RENOVACAO_ESTADO.update(rodando=True, inicio=now_iso(), fim="")
+        if completa:
+            _PROMO_RENOVACAO_ESTADO.update(rodando=True, inicio=now_iso(), fim="")
         linha_ml = ml_integration_row()
         if not linha_ml or not str(linha_ml["access_token"] or "").strip():
-            resultado = {"ok": True, "pulado": "Mercado Livre não conectado", "resultados": []}
-            _PROMO_RENOVACAO_ESTADO["ultimo"] = resultado
+            resultado = {"ok": True, "pulado": "Mercado Livre não conectado", "resultados": [], "pendentes": []}
+            if completa:
+                _PROMO_RENOVACAO_ESTADO["ultimo"] = resultado
             return resultado
         cfg = promo_auto_config()
         with DB_LOCK:
-            linhas = {str(r["mlb"]): dict(r) for r in DB.execute(
-                "SELECT * FROM promo_renovacao_v1873 WHERE marcado = 1").fetchall()}
-            feitas_hoje = DB.execute("SELECT COUNT(*) FROM promo_auto_log_v1873 WHERE dia=? AND acao='renovada' "
-                                     "AND por='sistema'", (hoje_iso,)).fetchone()[0]
+            marcados_agora = {str(r["mlb"]) for r in DB.execute(
+                "SELECT mlb FROM promo_renovacao_v1873 WHERE marcado = 1").fetchall()}
         removidos = _promo_removidos()
         if manual:
             alvo = [m for m in (_mlb_normalizar(x) for x in so) if m and m not in removidos]
         elif apenas is not None:
-            alvo = sorted(m for m in (_mlb_normalizar(x) for x in apenas) if m in linhas)
+            alvo = sorted(m for m in (_mlb_normalizar(x) for x in apenas) if m in marcados_agora)
         else:
-            alvo = sorted(linhas)
+            alvo = sorted(marcados_agora)
         detalhes = ml_itens_detalhe(alvo) if alvo else {}
         if detalhes:
             try:   # V18.74: a leitura ao vivo também atualiza o histórico da Ruptura
@@ -19397,10 +19990,18 @@ def promo_renovacao_rodada(stop_event: threading.Event | None = None, *, hoje: d
         ruptura = _promo_ruptura_por_anuncio() if alvo else {}
         cont = {"checados": 0, "renovadas": 0, "renovaria": 0, "revisar": 0, "erros": 0}
         resultados: list[dict[str, Any]] = []
-        for mlb in alvo:
-            if stop_event is not None and stop_event.is_set():
-                break
-            row = linhas.get(mlb) or {}
+        pendentes: list[str] = []
+
+        def conferir(mlb: str) -> None:
+            """Um anúncio, com a vez na mão: relê a linha, lê o ML, decide e grava."""
+            with DB_LOCK:
+                achada = DB.execute("SELECT * FROM promo_renovacao_v1873 WHERE mlb=?", (mlb,)).fetchone()
+                removido = DB.execute("SELECT 1 FROM promo_removidos_v1876 WHERE mlb=?", (mlb,)).fetchone()
+                feitas_hoje = DB.execute("SELECT COUNT(*) FROM promo_auto_log_v1873 WHERE dia=? AND acao='renovada' "
+                                         "AND por='sistema'", (hoje_iso,)).fetchone()[0]
+            row = dict(achada) if achada else {}
+            if removido or (not manual and not row.get("marcado")):
+                return   # V18.92: removido/desmarcado depois que a rodada começou
             sku = _promo_resolver_sku(mlb, (detalhes.get(mlb) or {}).get("sku_ml"), produtos, vinculos)
             try:
                 promos = ml_promocoes_do_item(mlb)
@@ -19434,7 +20035,6 @@ def promo_renovacao_rodada(stop_event: threading.Event | None = None, *, hoje: d
                                                 ator if manual else "renovacao-automatica", sku=sku)
                         ok = True
                         cont["renovadas"] += 1
-                        feitas_hoje += 0 if manual else 1
                         renovado_dia, renovado_em = hoje_iso, now_iso()
                         _promo_log(mlb, "renovada", ator, av["motivo"], av["preco"], r.get("margem"),
                                    inicio, av["fim"], hoje_iso)
@@ -19468,19 +20068,36 @@ def promo_renovacao_rodada(stop_event: threading.Event | None = None, *, hoje: d
                      str((detalhes.get(mlb) or {}).get("titulo") or ""), str((detalhes.get(mlb) or {}).get("sku_ml") or "")))
                 DB.commit()
             resultados.append({"mlb": mlb, "ok": ok, "situacao": av["situacao"], "motivo": av["motivo"]})
-            if pausa > 0:
+
+        for n, mlb in enumerate(alvo):
+            if stop_event is not None and stop_event.is_set():
+                break
+            espera = PROMO_VEZ_ESPERA if limite is None else min(PROMO_VEZ_ESPERA, limite - time.monotonic())
+            if espera <= 0 or not PROMO_RENOVACAO_LOCK.acquire(timeout=espera):
+                if limite is not None:   # clique: o resto volta para a tela pedir de novo
+                    pendentes.extend(alvo[n:])
+                    break
+                continue                 # worker: fica para a próxima conferência
+            try:
+                conferir(mlb)
+            finally:
+                PROMO_RENOVACAO_LOCK.release()
+            if pausa > 0:   # fora da vez: é aqui que o clique de outro computador entra
                 if stop_event is not None:
                     if stop_event.wait(pausa):
                         break
                 else:
                     time.sleep(pausa)
-        resultado = {"ok": True, "modo": cfg["modo_renovacao"], **cont, "resultados": resultados}
-        if not manual:
-            _PROMO_RENOVACAO_ESTADO["ultimo"] = {k: v for k, v in resultado.items() if k != "resultados"}
+        resultado = {"ok": True, "modo": cfg["modo_renovacao"], **cont, "resultados": resultados,
+                     "pendentes": pendentes}
+        if completa:
+            _PROMO_RENOVACAO_ESTADO["ultimo"] = {k: v for k, v in resultado.items()
+                                                 if k not in ("resultados", "pendentes")}
         return resultado
     finally:
-        _PROMO_RENOVACAO_ESTADO.update(rodando=False, fim=now_iso())
-        PROMO_RENOVACAO_LOCK.release()
+        if completa:
+            _PROMO_RENOVACAO_ESTADO.update(rodando=False, fim=now_iso())
+            PROMO_RODADA_LOCK.release()
 
 
 PROMO_VENCIDA_JANELA = 4 * 3600    # depois do vencimento, confere de perto por até 4 h
@@ -20027,9 +20644,33 @@ def promo_convites_payload() -> dict[str, Any]:
             "coleta": dict(_PROMO_CONVITE_ESTADO), "campanhas": campanhas, "itens": itens}
 
 
+def promo_renovacao_versao() -> dict[str, Any]:
+    """V18.92: impressão digital do que a tela mostra, para dois computadores verem o mesmo.
+
+    Só o que aparece na lista entra (situação, preço, datas, motivo...), não o horário da
+    conferência: uma rodada que não muda nada não faz a tela recarregar a lista inteira.
+    """
+    h = hashlib.sha1()
+    with DB_LOCK:
+        for r in DB.execute("SELECT mlb,marcado,preco,situacao,motivo,aviso,fim,promo_tipo,promo_preco,margem,"
+                            "renovado_em,preco_anuncio,titulo,sku_ml FROM promo_renovacao_v1873 ORDER BY mlb"):
+            h.update(repr(tuple(r)).encode("utf-8"))
+        h.update(repr(DB.execute("SELECT MAX(id) FROM promo_auto_log_v1873").fetchone()[0]).encode())
+        h.update(repr(DB.execute("SELECT COUNT(*), MAX(removido_em) FROM promo_removidos_v1876").fetchone()[:]).encode())
+        # monitor do Precificador: só a versão do storage (barato), não o JSON inteiro
+        monitor = DB.execute("SELECT version FROM storage WHERE key=?", (PROMO_DATAS_KEY,)).fetchone()
+        h.update(repr(monitor[0] if monitor else None).encode())
+    h.update(json.dumps(promo_auto_config(), sort_keys=True).encode("utf-8"))
+    h.update(b"rodando" if PROMO_RODADA_LOCK.locked() else b"parado")
+    return {"ok": True, "versao": h.hexdigest()[:16], "rodando": PROMO_RODADA_LOCK.locked()}
+
+
 def promo_renovacao_payload(hoje: date | None = None) -> dict[str, Any]:
     """Marcados + os anúncios do monitor de promoções do Precificador. Só lê o banco."""
     hoje = hoje or datetime.now(BR_TZ).date()
+    # V18.92: calculada ANTES de ler a lista — o que mudar no meio deixa a versão velha e a
+    # tela recarrega na próxima consulta (o contrário perderia a mudança).
+    versao = promo_renovacao_versao()["versao"]
     with DB_LOCK:
         linhas = {str(r["mlb"]): dict(r) for r in DB.execute("SELECT * FROM promo_renovacao_v1873").fetchall()}
         retrato = {str(r["item_id"]): dict(r) for r in DB.execute(
@@ -20104,8 +20745,8 @@ def promo_renovacao_payload(hoje: date | None = None) -> dict[str, Any]:
             "renovado_em": r.get("renovado_em") or "", "marcado_por": r.get("marcado_por") or "",
             "conta": conta_do(mlb, foto.get("sku") or r.get("sku_ml")),
         })
-    return {"ok": True, "hoje": hoje.isoformat(), "config": promo_auto_config(),
-            "estado": dict(_PROMO_RENOVACAO_ESTADO), "renovadas_30_dias": int(renovadas_30 or 0),
+    return {"ok": True, "hoje": hoje.isoformat(), "config": promo_auto_config(), "versao": versao,
+            "estado": dict(_PROMO_RENOVACAO_ESTADO), "rodando": PROMO_RODADA_LOCK.locked(), "renovadas_30_dias": int(renovadas_30 or 0),
             "intervalo_minutos": PROMO_RENOVACAO_INTERVALO // 60, "removidos": len(removidos),
             "itens": itens, "historico": historico}
 
@@ -21146,6 +21787,13 @@ def kits_analise_payload(dias: int = 90, marketplace: str = "", min_pedidos: int
 class AppHandler(BaseHTTPRequestHandler):
     server_version = "NoromakExpedicao/16.16"
 
+    def handle_one_request(self) -> None:
+        # V18.95: o mesmo handler pode atender várias requisições na mesma conexão; o corpo
+        # guardado e a filial da resposta são de UMA requisição só.
+        self._corpo_lido = None
+        self._filial_resposta_pedidos = None
+        super().handle_one_request()
+
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
 
@@ -21196,6 +21844,11 @@ class AppHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def send_json(self, data: Any, status: int = 200, headers: dict[str, str] | None = None) -> None:
+        # V18.95: rotas de pedido devolvem a fila em "value"; quem vê uma filial só recebe a dela.
+        filial = getattr(self, "_filial_resposta_pedidos", None)
+        if filial and filial != FILIAL_TODAS and isinstance(data, dict) and isinstance(data.get("value"), str):
+            with DB_LOCK:
+                data = {**data, "value": storage_filtrar_por_filial("conf_pedidos", data["value"], filial)}
         content_type = "application/json; charset=utf-8"
         body, compressed = self.encoded_body(json.dumps(data, ensure_ascii=False).encode("utf-8"), content_type)
         self.send_response(status)
@@ -21231,13 +21884,37 @@ class AppHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def read_body(self) -> bytes:
+        # V18.95: guarda o corpo — a porta da filial lê o "pedido" antes do handler.
+        if getattr(self, "_corpo_lido", None) is not None:
+            return self._corpo_lido
         try:
             length = int(self.headers.get("Content-Length", "0"))
         except ValueError:
             length = 0
         if length > MAX_BODY:
             raise ValueError("Conteúdo excede 100 MB")
-        return self.rfile.read(length) if length else b""
+        self._corpo_lido = self.rfile.read(length) if length else b""
+        return self._corpo_lido
+
+    def pedido_de_outra_filial(self, ctx: dict[str, Any]) -> bool:
+        """V18.95: recusa (403) mexer em pedido de outra filial. Vale para concluir, travar,
+        excluir linha/kit, Nome Conferência, SKU e EAN. A resposta dessas rotas (que devolve
+        a fila) sai filtrada pela filial."""
+        filial = self.filial_da_requisicao(ctx)
+        self._filial_resposta_pedidos = filial
+        if filial == FILIAL_TODAS:
+            return False
+        try:
+            pedido = str(self.read_json().get("pedido") or "").strip()
+        except Exception:
+            return False
+        with DB_LOCK:
+            permitido = pedido_da_filial(pedido, filial)
+        if permitido:
+            return False
+        audit(ctx["username"], "security.denied.outra_filial", f"{pedido}|{filial}")
+        self.send_json({"ok": False, "error": f"O pedido {pedido} é de outra filial.", "code": "OUTRA_FILIAL"}, 403)
+        return True
 
     def read_json(self) -> dict[str, Any]:
         raw = self.read_body()
@@ -21364,6 +22041,36 @@ class AppHandler(BaseHTTPRequestHandler):
             ctx = session_context(self)
             self.send_json({"authenticated": bool(ctx), "user": ctx} if ctx else {"authenticated": False})
             return
+        if path == "/api/etiqueta-ml-pdf":
+            # V18.95: etiqueta do ML em PDF para a filial sem Zebra (Bauru).
+            ctx = self.auth()
+            if ctx is None:
+                return
+            if not (module_allowed(ctx, "conferencia") or module_allowed(ctx, "admin")):
+                self.send_json({"error": "Sem acesso à Conferência."}, 403)
+                return
+            pedido = str((query.get("pedido") or [""])[0] or "").strip()
+            try:
+                pdf = ml_etiqueta_pdf(pedido, self.filial_da_requisicao(ctx))
+            except PermissionError as exc:
+                self.send_json({"ok": False, "error": str(exc), "code": "OUTRA_FILIAL"}, 403)
+                return
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 404)
+                return
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 502)
+                return
+            audit(ctx["username"], "etiqueta.ml.pdf", pedido)
+            self.send_response(200)
+            self.send_security_headers()
+            self.send_header("Content-Type", "application/pdf")
+            self.send_header("Content-Length", str(len(pdf)))
+            self.send_header("Content-Disposition", f'inline; filename="etiqueta-{re.sub(r"[^0-9A-Za-z_-]", "", pedido)}.pdf"')
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(pdf)
+            return
         if path == "/api/conferencia/conclusoes-dia":
             # V18.08: painel do dia lê os "conferidos" do servidor (compartilhado).
             ctx = self.auth()
@@ -21372,7 +22079,7 @@ class AppHandler(BaseHTTPRequestHandler):
             if not (module_allowed(ctx, "conferencia") or module_allowed(ctx, "admin")):
                 self.send_json({"error": "Sem acesso à Conferência."}, 403)
                 return
-            self.send_json({"ok": True, "conclusoes": conferencia_conclusoes_do_dia()})
+            self.send_json({"ok": True, "conclusoes": conferencia_conclusoes_do_dia(filial=self.filial_da_requisicao(ctx))})
             return
         if path == "/api/precificador/promocoes":
             # V18.23: promoções do ML + a conta do Precificador, por anúncio.
@@ -21449,13 +22156,28 @@ class AppHandler(BaseHTTPRequestHandler):
         if path == "/api/integracoes/mercadolivre/status":
             ctx = self.auth(admin_only=True)
             if ctx is not None:
-                self.send_json({"ok": True, "mercadolivre": ml_status_payload()})
+                # V18.94: ?casa=bauru mostra a conta de Bauru; sem casa, a principal (como sempre).
+                try:
+                    casa = ml_casa_valida((query.get("casa") or [""])[0])
+                except ValueError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 400)
+                    return
+                with ml_na_casa(casa):
+                    status = ml_status_payload()
+                status["casa"] = casa
+                status["casa_nome"] = CASAS[casa]
+                self.send_json({"ok": True, "mercadolivre": status})
             return
         if path == "/api/integracoes/mercadolivre/connect":
             ctx = self.auth(admin_only=True)
             if ctx is not None:
                 try:
-                    self.send_redirect(ml_oauth_authorization_url())
+                    casa = ml_casa_valida((query.get("casa") or [""])[0])
+                    if casa != CASA_PRINCIPAL:
+                        audit(ctx["username"], "ml.connect", CASAS[casa])
+                    self.send_redirect(ml_oauth_authorization_url(casa))
+                except ValueError as exc:
+                    self.send_json({"error": str(exc)}, 400)
                 except Exception as exc:
                     self.send_json({"error": str(exc)}, 503)
             return
@@ -21544,7 +22266,7 @@ class AppHandler(BaseHTTPRequestHandler):
         if path == "/api/storage":
             ctx = self.auth()
             if ctx is not None:
-                self.handle_storage_get(query)
+                self.handle_storage_get(query, self.filial_da_requisicao(ctx))
             return
         if path == "/api/roles":
             ctx = self.auth_full_admin()
@@ -21671,12 +22393,41 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
+        if path == "/api/promocoes-auto/renovacao/versao":
+            # V18.92: leve — a tela consulta a cada 10 s e só recarrega a lista quando muda
+            if self.auth(admin_only=True) is None:
+                return
+            try:
+                self.send_json(promo_renovacao_versao())
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
         if path == "/api/promocoes-auto/renovacao":
             # V18.73: renovação automática do desconto próprio. Somente leitura.
             if self.auth(admin_only=True) is None:
                 return
             try:
                 self.send_json(promo_renovacao_payload())
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/avisos-venda/chave":
+            # V18.93: chave pública do push (applicationServerKey) e o último aviso.
+            if self.auth(admin_only=True) is None:
+                return
+            try:
+                self.send_json({"ok": True, "chave": avisos_vapid_publica(), "ultimo_id": _avisos_ultimo_id()})
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/avisos-venda/recentes":
+            # V18.93: tela aberta sem push (navegador sem suporte ou permissão negada).
+            if self.auth(admin_only=True) is None:
+                return
+            try:
+                self.send_json(avisos_venda_recentes(int(str((query.get("desde") or ["0"])[0] or "0"))))
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
@@ -22201,8 +22952,10 @@ class AppHandler(BaseHTTPRequestHandler):
             if ctx is not None:
                 try:
                     body = self.read_json() or {}
+                    # V18.92: a tela manda o preço que mostrava; se outro computador mudou, 409
                     res = promo_renovacao_marcar(body.get("mlb"), bool(body.get("ativo")), ctx["username"],
-                                                 preco=body.get("preco"))
+                                                 preco=body.get("preco"), conferir_preco="preco_antes" in body,
+                                                 preco_antes=body.get("preco_antes"))
                     audit(ctx["username"], "promocoes.auto.marcar", f"{res['mlb']}|{res['marcado']}")
                     if res["marcado"]:
                         # V18.74: confere na hora (antes ficava "aguardando" até a próxima hora cheia).
@@ -22210,6 +22963,8 @@ class AppHandler(BaseHTTPRequestHandler):
                         threading.Thread(target=lambda m=res["mlb"]: promo_renovacao_rodada(apenas=[m]),
                                          name="promo-renovacao-marcar", daemon=True).start()
                     self.send_json(res)
+                except PromoConflito as exc:
+                    self.send_json({"ok": False, "error": str(exc), "code": "conflito"}, 409)
                 except ValueError as exc:
                     self.send_json({"ok": False, "error": str(exc)}, 400)
                 except Exception as exc:
@@ -22224,7 +22979,8 @@ class AppHandler(BaseHTTPRequestHandler):
                     mlbs = [str(x) for x in (body.get("mlbs") or [])][:50]
                     if not mlbs:
                         raise ValueError("Escolha ao menos um anúncio.")
-                    res = promo_renovacao_rodada(so=mlbs, ator=ctx["username"], pausa=0)
+                    # V18.92: responde antes do nginx (60 s); o que não coube volta em `pendentes`
+                    res = promo_renovacao_rodada(so=mlbs, ator=ctx["username"], pausa=0, prazo=PROMO_MANUAL_PRAZO)
                     audit(ctx["username"], "promocoes.auto.renovar", ",".join(mlbs))
                     self.send_json(res)
                 except ValueError as exc:
@@ -22242,6 +22998,36 @@ class AppHandler(BaseHTTPRequestHandler):
                     res = promo_renovacao_remover(mlbs, ctx["username"])
                     audit(ctx["username"], "promocoes.auto.remover", ",".join(res["mlbs"])[:900])
                     self.send_json(res)
+                except ValueError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 400)
+                except Exception as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/avisos-venda/entregar":
+            # V18.93: o service worker recebeu o push vazio e pede as vendas. Sem sessão: a
+            # autorização é o endereço de push inscrito (o cookie pode ter vencido no celular).
+            try:
+                self.send_json(avisos_entregar(str(self.read_json().get("endpoint") or "")))
+            except Exception as exc:
+                self.send_json({"ok": False, "vendas": [], "error": str(exc)}, 500)
+            return
+        if path in ("/api/avisos-venda/inscrever", "/api/avisos-venda/desinscrever", "/api/avisos-venda/testar"):
+            # V18.93: liga/desliga os avisos de venda NESTE aparelho; só quem tem o Admin.
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                try:
+                    dados = self.read_json()
+                    if path.endswith("/inscrever"):
+                        inscricao = dados.get("inscricao") if isinstance(dados.get("inscricao"), dict) else {}
+                        res = avisos_inscrever(ctx["username"], inscricao, str(dados.get("aparelho") or ""))
+                        if not dados.get("renovar"):
+                            audit(ctx["username"], "avisos_venda.ligar", str(dados.get("aparelho") or "")[:120])
+                    elif path.endswith("/desinscrever"):
+                        res = avisos_desinscrever(str(dados.get("endpoint") or ""))
+                        audit(ctx["username"], "avisos_venda.desligar", str(dados.get("aparelho") or "")[:120])
+                    else:
+                        res = avisos_testar(str(dados.get("endpoint") or ""), ctx["username"])
+                    self.send_json(res, 200 if res.get("ok") else 502)
                 except ValueError as exc:
                     self.send_json({"ok": False, "error": str(exc)}, 400)
                 except Exception as exc:
@@ -22311,9 +23097,12 @@ class AppHandler(BaseHTTPRequestHandler):
             # Confere agora (em segundo plano); no automático, renova o que venceu.
             ctx = self.auth(admin_only=True)
             if ctx is not None:
+                if PROMO_RODADA_LOCK.locked():   # V18.92: diz que já está conferindo
+                    self.send_json({"ok": True, "iniciado": False, "rodando": True})
+                    return
                 threading.Thread(target=lambda: promo_renovacao_rodada(), name="promo-renovacao-manual",
                                  daemon=True).start()
-                self.send_json({"ok": True, "iniciado": True})
+                self.send_json({"ok": True, "iniciado": True, "rodando": True})
             return
         if path == "/api/compras/linx/atualizar":
             # V18.91: busca agora, na Linx, a demanda e a compra em aberto do fornecedor (só leitura).
@@ -22673,11 +23462,20 @@ class AppHandler(BaseHTTPRequestHandler):
                     audit(ctx["username"], "security.denied.owner_reauth", "mercadolivre.disconnect")
                     self.send_json({"error": "Somente o proprietário pode desconectar integrações."}, 403)
                     return
+                # V18.94: desconecta só a conta da casa pedida (sem casa = a principal, como sempre).
+                try:
+                    casa = ml_casa_valida((parse_qs(urlparse(self.path).query).get("casa") or [""])[0])
+                except ValueError as exc:
+                    self.send_json({"error": str(exc)}, 400)
+                    return
                 with DB_LOCK:
-                    DB.execute("DELETE FROM ml_integration WHERE id=1")
-                    DB.execute("DELETE FROM ml_oauth_state")
+                    if casa == CASA_PRINCIPAL:
+                        DB.execute("DELETE FROM ml_integration WHERE id=1")
+                    else:
+                        DB.execute("DELETE FROM ml_integration_casa_v1894 WHERE casa=?", (casa,))
+                    DB.execute("DELETE FROM ml_oauth_state WHERE COALESCE(casa,'aracatuba')=?", (casa,))
                     DB.commit()
-                audit(ctx["username"], "ml.disconnect", "Mercado Livre")
+                audit(ctx["username"], "ml.disconnect", "Mercado Livre" + ("" if casa == CASA_PRINCIPAL else f" · {CASAS[casa]}"))
                 self.send_json({"ok": True})
             return
         if path == "/api/auth/login":
@@ -22727,36 +23525,55 @@ class AppHandler(BaseHTTPRequestHandler):
             if ctx is not None:
                 self.handle_storage_post(ctx)
             return
+        if path == "/api/pedido-mover-filial":
+            # V18.95: só o perfil Admin (Supervisor não), e só quem vê as duas filiais.
+            ctx = self.auth_full_admin()
+            if ctx is not None:
+                if str(ctx.get("casa") or "") != FILIAL_TODAS:
+                    self.send_json({"ok": False, "error": "Só quem vê todas as filiais pode mover pedido de filial."}, 403)
+                    return
+                try:
+                    dados = self.read_json()
+                    res = pedido_mover_filial(str(dados.get("pedido") or "").strip(),
+                                              str(dados.get("filial") or "").strip().lower(), ctx["username"])
+                    audit(ctx["username"], "pedido.mover_filial", f"{res['pedido']}|{res['filial']}|{res['linhas']}")
+                    self.send_json(res)
+                except ValueError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 400)
+                except Exception as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 409)
+            return
         if path == "/api/admin-order-upsert":
             ctx = self.auth(admin_only=True)
             if ctx is not None:
+                self._filial_resposta_pedidos = self.filial_da_requisicao(ctx)  # V18.95
                 self.handle_admin_order_upsert(ctx)
             return
         if path == "/api/order-kit-delete":
             ctx = self.auth(admin_only=True)
-            if ctx is not None:
+            if ctx is not None and not self.pedido_de_outra_filial(ctx):  # V18.95
                 self.handle_order_kit_delete(ctx)
             return
         if path == "/api/order-line-delete":
             ctx = self.auth()
-            if ctx is not None:
+            if ctx is not None and not self.pedido_de_outra_filial(ctx):  # V18.95
                 self.handle_order_line_delete(ctx)
             return
         if path == "/api/order-conference-name":
             # V17.76: ação operacional estreita. Qualquer usuário Noromak
             # autenticado pode preencher somente o Nome de Conferência.
             ctx = self.auth()
-            if ctx is not None:
+            if ctx is not None and not self.pedido_de_outra_filial(ctx):  # V18.95
                 self.handle_order_conference_name(ctx)
             return
         if path == "/api/order-sku":
             ctx = self.auth(admin_only=True)
-            if ctx is not None:
+            if ctx is not None and not self.pedido_de_outra_filial(ctx):  # V18.95
                 self.handle_order_sku(ctx)
             return
         if path == "/api/order-ean":
             ctx = self.auth(admin_only=True)
-            if ctx is not None:
+            if ctx is not None and not self.pedido_de_outra_filial(ctx):  # V18.95
                 self.handle_order_ean(ctx)
             return
         if path == "/api/product-ean":
@@ -22766,12 +23583,12 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/order-lock":
             ctx = self.auth()
-            if ctx is not None:
+            if ctx is not None and not self.pedido_de_outra_filial(ctx):  # V18.95
                 self.handle_order_lock(ctx)
             return
         if path == "/api/order-complete":
             ctx = self.auth()
-            if ctx is not None:
+            if ctx is not None and not self.pedido_de_outra_filial(ctx):  # V18.95
                 self.handle_order_complete(ctx)
             return
         if path == "/api/roles":
@@ -22832,10 +23649,15 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         try:
             status = ml_exchange_authorization_code(code, state)
-            ml_log_event("oauth", "/callback", status.get("seller_id"), ML_CLIENT_ID, "CONECTADO", status.get("nickname") or "")
+            casa = str(status.get("casa") or CASA_PRINCIPAL)
+            ml_log_event("oauth", "/callback", status.get("seller_id"), ML_CLIENT_ID, "CONECTADO",
+                         (status.get("nickname") or "") + ("" if casa == CASA_PRINCIPAL else f" · {CASAS[casa]}"))
+
+            def _catchup_na_casa(desde: str = str(status.get("recovery_since") or ""), casa: str = casa) -> None:
+                with ml_na_casa(casa):  # V18.94: a thread nova entra na casa que conectou
+                    ml_catchup_after_reconnect(desde)
             threading.Thread(
-                target=ml_catchup_after_reconnect,
-                args=(str(status.get("recovery_since") or ""),),
+                target=_catchup_na_casa,
                 name="ml-catchup-reconnect",
                 daemon=True,
             ).start()
@@ -22940,7 +23762,7 @@ class AppHandler(BaseHTTPRequestHandler):
             user = {
                 "username": username, "nome": row["display_name"] or username,
                 "app_role": row["role"], "app_active": True, "is_owner": is_owner_username(username),
-                "permissions": permissions
+                "permissions": permissions, "casa": usuario_filial(row),  # V18.95
             }
             audit(username, "auth.login", f"{area}:{client_computer(self)}")
             self.send_json(
@@ -22966,15 +23788,20 @@ class AppHandler(BaseHTTPRequestHandler):
             headers={"Set-Cookie": self.session_cookie_header("", expire=True)},
         )
 
-    def handle_storage_get(self, query: dict[str, list[str]]) -> None:
+    def filial_da_requisicao(self, ctx: dict[str, Any] | None) -> str:
+        """V18.95: filial que esta requisição enxerga (a do usuário; quem tem "todas" escolhe
+        pelo seletor do Admin, cabeçalho X-Noromak-Filial)."""
+        return filial_efetiva(ctx, self.headers.get("X-Noromak-Filial") or "")
+
+    def handle_storage_get(self, query: dict[str, list[str]], filial: str = "todas") -> None:
         # V18.56: monta a resposta sob o DB_LOCK e ENVIA fora dele. Antes a escrita no
         # socket (conf_pedidos inteiro, a cada polling de cada aba) segurava o lock
         # global: um cliente lento na rede parava a bipagem de todo mundo.
         with DB_LOCK:
-            resposta, status = self._storage_get_resposta(query)
+            resposta, status = self._storage_get_resposta(query, filial)
         self.send_json(resposta, status)
 
-    def _storage_get_resposta(self, query: dict[str, list[str]]) -> tuple[dict[str, Any], int]:
+    def _storage_get_resposta(self, query: dict[str, list[str]], filial: str = "todas") -> tuple[dict[str, Any], int]:
         with DB_LOCK:
             if (query.get("list") or [""])[0] == "1":
                 keys = [row[0] for row in DB.execute("SELECT key FROM storage ORDER BY key")]
@@ -22996,13 +23823,14 @@ class AppHandler(BaseHTTPRequestHandler):
                 versions: dict[str, int] = {}
                 for key in keys_arg.split(","):
                     value, version, _ = get_storage(key)
-                    values[key] = value
+                    values[key] = storage_filtrar_por_filial(key, value, filial)  # V18.95
                     versions[key] = version
                 return {"values": values, "versions": versions}, 200
             key = (query.get("key") or [""])[0]
             if not key:
                 return {"error": "Chave não informada."}, 400
             value, version, updated = get_storage(key)
+            value = storage_filtrar_por_filial(key, value, filial)  # V18.95: só a filial do usuário
             return {"exists": value is not None, "value": value, "version": version, "updated_at": updated}, 200
 
     def handle_sku_history_get(self, query: dict[str, list[str]]) -> None:
@@ -23117,6 +23945,17 @@ class AppHandler(BaseHTTPRequestHandler):
             new_value = str(req.get("newValue"))
             old_value = None if "oldValue" not in req or req.get("oldValue") is None else str(req.get("oldValue"))
             force = bool(req.get("force"))
+            # V18.95: quem vê uma filial só gravou a parte dela; junta de volta o resto, no
+            # novo e no snapshot antigo, ANTES de qualquer regra de exclusão/merge/override.
+            filial = self.filial_da_requisicao(ctx)
+            if key in FILIAL_CHAVES and (filial != FILIAL_TODAS or key == "conf_coleta_dia_v1"):
+                with DB_LOCK:
+                    new_value = storage_remontar_por_filial(key, new_value, filial)
+                    if key == "conf_coleta_dia_v1":
+                        old_value = None
+                        force = True
+                    elif old_value is not None and filial != FILIAL_TODAS:
+                        old_value = storage_remontar_por_filial(key, old_value, filial)
             # V17.62: snapshots completos do navegador não são mais autoridade para MLB↔SKU.
             # Um cache parcial não pode apagar centenas de vínculos importados. Inclusão/remoção
             # explícita usa /api/precificador/ml-vinculos/manual.
@@ -23194,6 +24033,8 @@ class AppHandler(BaseHTTPRequestHandler):
                     nfe_name_update = ml_update_pending_names_from_uploaded_nfe()
                 except Exception as exc:
                     nfe_name_update = {"ok": False, "error": str(exc)[:500]}
+            with DB_LOCK:
+                value = storage_filtrar_por_filial(key, value, filial)  # V18.95
             self.send_json({"ok": True, "value": value, "version": version, "updated_at": updated,
                             "nfe_name_update": nfe_name_update})
         except (ValueError, json.JSONDecodeError) as exc:
@@ -23400,6 +24241,11 @@ class AppHandler(BaseHTTPRequestHandler):
                 row["ManualAdminCriadoEm"] = str(row.get("ManualAdminCriadoEm") or now)
                 row["ManualAdminAtualizadoEm"] = now
                 row["__manualAdminVault"] = True
+                # V18.95: pedido incluído à mão fica na filial de quem incluiu (com "todas",
+                # a do seletor; sem seletor, Araçatuba = sem marca).
+                filial_req = getattr(self, "_filial_resposta_pedidos", FILIAL_TODAS)
+                if filial_req not in (FILIAL_TODAS, CASA_PRINCIPAL) and not str(row.get("Casa") or "").strip():
+                    row["Casa"] = filial_req
                 incoming.append(row)
             if not incoming:
                 raise ValueError("Nenhuma linha válida foi recebida.")
@@ -24638,11 +25484,12 @@ class AppHandler(BaseHTTPRequestHandler):
         with DB_LOCK:
             rows = DB.execute(
                 """SELECT username,display_name,role,active,can_conferencia,can_admin,can_estacao,can_precificador,
-                          updated_at,updated_by FROM app_users ORDER BY display_name,username"""
+                          updated_at,updated_by,casa FROM app_users ORDER BY display_name,username"""
             ).fetchall()
         users = []
         for row in rows:
             item = dict(row)
+            item["filial"] = usuario_filial(row)  # V18.95
             item["display_profile"] = "Admin" if item.get("role") == "admin" else ("Supervisor" if is_supervisor_user(row) else "Operador")
             users.append(item)
         self.send_json({"users": users, "seed_admin": ADMIN_USERNAME, "login_interno": True})
@@ -24684,16 +25531,23 @@ class AppHandler(BaseHTTPRequestHandler):
                 raise ValueError("Informe uma senha para o novo usuário.")
             if username == ctx["username"] and (not active or not permissions["admin"]):
                 raise ValueError("Você não pode retirar seu próprio acesso ao Painel Administrativo.")
+            # V18.95: filial do usuário. Sem o campo, quem já existe mantém a dele (deixando de
+            # ser Admin, perde o "todas"); usuário novo nasce com a padrão do perfil.
+            filial = filial_normalizar(req.get("filial"), role) if "filial" in req else None
+            if filial is None and current and role != "admin" and str(current["casa"] or "") == FILIAL_TODAS:
+                filial = CASA_PRINCIPAL
             with DB_LOCK:
                 DB.execute("BEGIN IMMEDIATE")
                 try:
                     upsert_app_user(username, display_name, role, active, password, ctx["username"], permissions=permissions)
+                    if filial:
+                        DB.execute("UPDATE app_users SET casa=? WHERE username=?", (filial, username))
                     DB.commit()
                 except Exception:
                     DB.rollback()
                     raise
             sync_app_users_storage()
-            audit(ctx["username"], "user.save", f"{username}:{role}:{int(active)}")
+            audit(ctx["username"], "user.save", f"{username}:{role}:{int(active)}" + (f":{filial}" if filial else ""))
             self.send_json({"ok": True})
         except (ValueError, json.JSONDecodeError) as exc:
             self.send_json({"error": str(exc)}, 400)
@@ -24864,6 +25718,505 @@ class AppHandler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
 
+# ---------------------------------------------------------------------------
+# V18.93 — Avisos de venda: popup com som na tela aberta e notificação no celular
+# ou no computador mesmo com o site fechado (Web Push).
+#
+# Quem descobre a venda são os vigias que JÁ existem: o de pedidos novos do ML
+# (/orders/search a cada 20 s) e a sincronização da Shopee (a cada 1 min). Nenhuma
+# chamada a mais ao ML ou à Shopee. A venda vai para aviso_venda_v1893 (uma linha por
+# venda; carrinho do ML = uma venda) e o worker avisos_venda_loop manda um push VAZIO
+# para cada aparelho inscrito. O aparelho, ao receber, pede ao Noromak o que chegou
+# (/api/avisos-venda/entregar). Push vazio dispensa a criptografia do conteúdo (só
+# a assinatura VAPID, ES256, feita aqui em Python puro — o servidor não tem
+# dependência externa) e nenhum dado da venda passa pelo Google/Apple/Mozilla.
+# Só avisa: nada aqui grava em pedido, fila ou storage.
+# ---------------------------------------------------------------------------
+AVISOS_VENDA_EVENT = threading.Event()
+AVISOS_VAPID_LOCK = threading.Lock()
+# Venda que o vigia vê pela 1ª vez mas é mais velha que isso (boleto compensado, fila
+# antiga) entra sem avisar.
+AVISOS_VENDA_RECENTE_HORAS = 48
+# Aparelho que recebeu o push e ainda não buscou a venda não ganha outro push antes disso
+# (sem pilha de notificações quando o celular volta a ficar on-line).
+AVISOS_PENDENTE_REENVIO_S = 600
+AVISOS_GUARDAR_DIAS = 30
+# Só serviços de push conhecidos (o endereço é dado pelo navegador; nunca rede interna).
+AVISOS_PUSH_HOSTS = (".googleapis.com", ".mozilla.com", ".mozaws.net", ".push.apple.com", ".notify.windows.com")
+AVISOS_VAPID_CONTATO = os.getenv("AVISOS_VAPID_CONTATO", "https://noromakweb.com.br")
+
+_P256_P = 0xFFFFFFFF00000001000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFF
+_P256_A = _P256_P - 3
+_P256_N = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
+_P256_G = (0x6B17D1F2E12C4247F8BCE6E563A440F277037D812DEB33A0F4A13945D898C296,
+           0x4FE342E2FE1A7F9B8EE7EB4A7C0F9E162BCE33576B315ECECBB6406837BF51F5)
+
+
+def _p256_somar(p1: tuple[int, int] | None, p2: tuple[int, int] | None) -> tuple[int, int] | None:
+    if p1 is None:
+        return p2
+    if p2 is None:
+        return p1
+    x1, y1 = p1
+    x2, y2 = p2
+    p = _P256_P
+    if x1 == x2:
+        if (y1 + y2) % p == 0:
+            return None
+        inc = (3 * x1 * x1 + _P256_A) * pow(2 * y1, -1, p) % p
+    else:
+        inc = (y2 - y1) * pow(x2 - x1, -1, p) % p
+    x3 = (inc * inc - x1 - x2) % p
+    return x3, (inc * (x1 - x3) - y1) % p
+
+
+def _p256_multiplicar(k: int, ponto: tuple[int, int] = _P256_G) -> tuple[int, int]:
+    resultado: tuple[int, int] | None = None
+    atual: tuple[int, int] | None = ponto
+    while k:
+        if k & 1:
+            resultado = _p256_somar(resultado, atual)
+        atual = _p256_somar(atual, atual)
+        k >>= 1
+    if resultado is None:
+        raise ValueError("Chave P-256 inválida.")
+    return resultado
+
+
+def _p256_k_rfc6979(d: int, h1: bytes) -> int:
+    """k determinístico (RFC 6979): a assinatura não depende de um sorteio."""
+    x = d.to_bytes(32, "big")
+    h = (int.from_bytes(h1, "big") % _P256_N).to_bytes(32, "big")
+    v = b"\x01" * 32
+    k = b"\x00" * 32
+    k = hmac.new(k, v + b"\x00" + x + h, hashlib.sha256).digest()
+    v = hmac.new(k, v, hashlib.sha256).digest()
+    k = hmac.new(k, v + b"\x01" + x + h, hashlib.sha256).digest()
+    v = hmac.new(k, v, hashlib.sha256).digest()
+    while True:
+        v = hmac.new(k, v, hashlib.sha256).digest()
+        cand = int.from_bytes(v, "big")
+        if 1 <= cand < _P256_N:
+            return cand
+        k = hmac.new(k, v + b"\x00", hashlib.sha256).digest()
+        v = hmac.new(k, v, hashlib.sha256).digest()
+
+
+def p256_assinar(d: int, mensagem: bytes) -> tuple[int, int]:
+    """ECDSA P-256 + SHA-256 (o ES256 do JWT do VAPID)."""
+    h1 = hashlib.sha256(mensagem).digest()
+    k = _p256_k_rfc6979(d, h1)
+    r = _p256_multiplicar(k)[0] % _P256_N
+    s = pow(k, -1, _P256_N) * (int.from_bytes(h1, "big") + r * d) % _P256_N
+    if not r or not s:
+        raise ValueError("Assinatura P-256 inválida.")
+    return r, s
+
+
+def _b64url(dados: bytes) -> str:
+    return base64.urlsafe_b64encode(dados).rstrip(b"=").decode("ascii")
+
+
+def ensure_avisos_venda_schema() -> None:
+    with DB_LOCK:
+        DB.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS aviso_venda_v1893 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                marketplace TEXT NOT NULL,
+                venda_id TEXT NOT NULL,
+                venda_em TEXT NOT NULL DEFAULT '',
+                valor REAL,
+                titulo TEXT NOT NULL DEFAULT '',
+                qtd INTEGER NOT NULL DEFAULT 0,
+                itens INTEGER NOT NULL DEFAULT 0,
+                silencioso INTEGER NOT NULL DEFAULT 0,
+                criado_em TEXT NOT NULL,
+                UNIQUE(marketplace, venda_id)
+            );
+            CREATE TABLE IF NOT EXISTS aviso_inscricao_v1893 (
+                endpoint TEXT PRIMARY KEY,
+                p256dh TEXT NOT NULL DEFAULT '',
+                auth TEXT NOT NULL DEFAULT '',
+                username TEXT NOT NULL,
+                aparelho TEXT NOT NULL DEFAULT '',
+                criado_em TEXT NOT NULL,
+                atualizado_em TEXT NOT NULL,
+                ultimo_id INTEGER NOT NULL DEFAULT 0,
+                pendente_desde REAL NOT NULL DEFAULT 0,
+                teste INTEGER NOT NULL DEFAULT 0,
+                ultimo_envio_em TEXT NOT NULL DEFAULT '',
+                ultimo_status TEXT NOT NULL DEFAULT '',
+                falhas INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS aviso_config_v1893 (
+                chave TEXT PRIMARY KEY,
+                valor TEXT NOT NULL
+            );
+            """
+        )
+        DB.commit()
+
+
+def _avisos_vapid_privada() -> int:
+    """Par de chaves VAPID do servidor. Criado uma vez e NUNCA trocado: trocar invalida
+    a inscrição de todos os aparelhos."""
+    with AVISOS_VAPID_LOCK:
+        with DB_LOCK:
+            row = DB.execute("SELECT valor FROM aviso_config_v1893 WHERE chave='vapid_privada'").fetchone()
+            if row:
+                return int(str(row["valor"]), 16)
+            d = secrets.randbelow(_P256_N - 1) + 1
+            DB.execute("INSERT INTO aviso_config_v1893(chave,valor) VALUES('vapid_privada',?)", (format(d, "064x"),))
+            DB.commit()
+            return d
+
+
+def avisos_vapid_publica() -> str:
+    """Chave pública (65 bytes, ponto não comprimido) em base64url — o applicationServerKey."""
+    x, y = _p256_multiplicar(_avisos_vapid_privada())
+    return _b64url(b"\x04" + x.to_bytes(32, "big") + y.to_bytes(32, "big"))
+
+
+_AVISOS_JWT_CACHE: dict[str, tuple[float, str]] = {}
+
+
+def _avisos_vapid_jwt(audiencia: str, agora: float | None = None) -> str:
+    agora = time.time() if agora is None else agora
+    em_cache = _AVISOS_JWT_CACHE.get(audiencia)
+    if em_cache and em_cache[0] - agora > 3600:
+        return em_cache[1]
+    expira = int(agora) + 12 * 3600
+    cabeca = _b64url(json.dumps({"typ": "JWT", "alg": "ES256"}, separators=(",", ":")).encode())
+    corpo = _b64url(json.dumps({"aud": audiencia, "exp": expira, "sub": AVISOS_VAPID_CONTATO}, separators=(",", ":")).encode())
+    assinado = f"{cabeca}.{corpo}".encode("ascii")
+    r, s = p256_assinar(_avisos_vapid_privada(), assinado)
+    token = f"{cabeca}.{corpo}.{_b64url(r.to_bytes(32, 'big') + s.to_bytes(32, 'big'))}"
+    _AVISOS_JWT_CACHE[audiencia] = (float(expira), token)
+    return token
+
+
+def _avisos_endpoint_valido(endpoint: str) -> bool:
+    try:
+        u = urlparse(str(endpoint or ""))
+    except ValueError:
+        return False
+    host = (u.hostname or "").lower()
+    return u.scheme == "https" and len(endpoint) <= 2000 and any(host.endswith(h) for h in AVISOS_PUSH_HOSTS)
+
+
+def _avisos_dt(valor: Any) -> datetime | None:
+    try:
+        texto = str(valor or "").strip()
+        if not texto:
+            return None
+        dt = datetime.fromisoformat(texto.replace("Z", "+00:00"))
+        return dt if dt.tzinfo else dt.replace(tzinfo=BR_TZ)
+    except (TypeError, ValueError):
+        return None
+
+
+def avisos_venda_registrar(marketplace: str, vendas: list[dict[str, Any]]) -> int:
+    """Guarda as vendas que o vigia viu. Devolve quantas viram aviso.
+
+    A 1ª leitura de cada marketplace só marca o que já existe (sem avisar a fila inteira
+    no dia da publicação); depois disso, venda nova e recente avisa."""
+    if not vendas:
+        return 0
+    limite = datetime.now(BR_TZ) - timedelta(hours=AVISOS_VENDA_RECENTE_HORAS)
+    agora = now_iso()
+    novas = 0
+    with DB_LOCK:
+        primeira = DB.execute("SELECT 1 FROM aviso_config_v1893 WHERE chave=?", (f"base_{marketplace}",)).fetchone() is None
+        for v in vendas:
+            venda_id = str(v.get("venda_id") or "").strip()
+            if not venda_id:
+                continue
+            quando = _avisos_dt(v.get("venda_em"))
+            silencioso = 1 if (primeira or quando is None or quando < limite) else 0
+            valor = v.get("valor")
+            cur = DB.execute(
+                "INSERT OR IGNORE INTO aviso_venda_v1893(marketplace,venda_id,venda_em,valor,titulo,qtd,itens,silencioso,criado_em) "
+                "VALUES(?,?,?,?,?,?,?,?,?)",
+                (marketplace, venda_id, str(v.get("venda_em") or ""), None if valor is None else round(float(valor), 2),
+                 str(v.get("titulo") or "")[:200], int(v.get("qtd") or 0), int(v.get("itens") or 0), silencioso, agora),
+            )
+            if cur.rowcount and not silencioso:
+                novas += 1
+        if primeira:
+            DB.execute("INSERT OR IGNORE INTO aviso_config_v1893(chave,valor) VALUES(?,?)", (f"base_{marketplace}", agora))
+        DB.commit()
+    if novas:
+        AVISOS_VENDA_EVENT.set()
+    return novas
+
+
+def _avisos_resumo_itens(itens: list[tuple[str, int]]) -> dict[str, Any]:
+    titulo = next((t for t, _ in itens if t), "")
+    return {"titulo": titulo, "qtd": sum(q for _, q in itens), "itens": len(itens)}
+
+
+def avisos_vendas_do_ml(orders: Any) -> list[dict[str, Any]]:
+    """Resultado do /orders/search (o mesmo do vigia de 20 s) → vendas. Pedidos do mesmo
+    carrinho (pack) viram uma venda só."""
+    vendas: dict[str, dict[str, Any]] = {}
+    for o in orders or []:
+        if not isinstance(o, dict) or str(o.get("status") or "paid").lower() not in ("paid", "partially_refunded"):
+            continue
+        order_id = str(o.get("id") or "").strip()
+        if not order_id:
+            continue
+        pack = str(o.get("pack_id") or "").strip()
+        chave = f"pack:{pack}" if pack else order_id
+        v = vendas.setdefault(chave, {"venda_id": chave, "venda_em": str(o.get("date_closed") or o.get("date_created") or ""),
+                                      "valor": 0.0, "_itens": []})
+        itens = [i for i in (o.get("order_items") or []) if isinstance(i, dict)]
+        total = _money_number(o.get("total_amount"))
+        if total is None:
+            total = sum((_money_number(i.get("unit_price")) or 0.0) * int(i.get("quantity") or 0) for i in itens)
+        v["valor"] += float(total or 0)
+        for i in itens:
+            item = i.get("item") if isinstance(i.get("item"), dict) else {}
+            v["_itens"].append((str(item.get("title") or "").strip(), int(i.get("quantity") or 0)))
+    return [{**{k: x for k, x in v.items() if k != "_itens"}, **_avisos_resumo_itens(v["_itens"])} for v in vendas.values()]
+
+
+def avisos_vendas_da_shopee(pedidos: Any) -> list[dict[str, Any]]:
+    """get_order_detail (o mesmo da sincronização de 1 min) → vendas. Valor = preço com
+    desconto × quantidade, o critério do Dashboard."""
+    out = []
+    for o in pedidos or []:
+        if not isinstance(o, dict):
+            continue
+        sn = str(o.get("order_sn") or "").strip()
+        if not sn:
+            continue
+        try:
+            venda_em = datetime.fromtimestamp(int(o.get("create_time") or 0), BR_TZ).isoformat()
+        except (TypeError, ValueError, OSError):
+            venda_em = ""
+        itens: list[tuple[str, int]] = []
+        valor = 0.0
+        for it in o.get("item_list") or []:
+            if not isinstance(it, dict):
+                continue
+            try:
+                qtd = int(it.get("model_quantity_purchased") or 0)
+            except (TypeError, ValueError):
+                qtd = 0
+            preco = _money_number(it.get("model_discounted_price"))
+            if preco is None or preco <= 0:
+                preco = _money_number(it.get("model_original_price")) or 0.0
+            valor += float(preco) * qtd
+            itens.append((str(it.get("item_name") or "").strip(), qtd))
+        out.append({"venda_id": sn, "venda_em": venda_em, "valor": valor, **_avisos_resumo_itens(itens)})
+    return out
+
+
+def _avisos_brl(valor: Any) -> str:
+    try:
+        return "R$ " + f"{float(valor):,.2f}".replace(",", "#").replace(".", ",").replace("#", ".")
+    except (TypeError, ValueError):
+        return ""
+
+
+def _avisos_formatar(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
+    canal = "ML" if row["marketplace"] == "ml" else "Shopee"
+    valor = _avisos_brl(row["valor"]) if row["valor"] is not None else ""
+    corpo = str(row["titulo"] or "Produto sem título")
+    if int(row["qtd"] or 0):
+        corpo += f" ({int(row['qtd'])} un.)"
+    if int(row["itens"] or 0) > 1:
+        corpo += f" + {int(row['itens']) - 1} item(ns)"
+    return {
+        "id": int(row["id"]), "marketplace": row["marketplace"], "venda_id": row["venda_id"],
+        "venda_em": row["venda_em"], "valor": row["valor"],
+        "titulo": f"Venda {canal}" + (f" · {valor}" if valor else ""), "corpo": corpo,
+    }
+
+
+def _avisos_usuario_pode(username: str) -> bool:
+    """Só quem tem o módulo Admin recebe (decisão do dono, 10/10)."""
+    with DB_LOCK:
+        row = DB.execute(
+            "SELECT username,role,active,can_conferencia,can_admin,can_estacao,can_precificador FROM app_users WHERE username=?",
+            (str(username or "").strip().lower(),),
+        ).fetchone()
+    return bool(row and row["active"] and user_permissions_from_row(row).get("admin"))
+
+
+def _avisos_ultimo_id() -> int:
+    with DB_LOCK:
+        return int(DB.execute("SELECT COALESCE(MAX(id),0) FROM aviso_venda_v1893").fetchone()[0])
+
+
+def avisos_venda_recentes(desde_id: int, limite: int = 20) -> dict[str, Any]:
+    """Para a tela aberta sem push (polling): vendas avisáveis depois de desde_id."""
+    corte = (datetime.now(BR_TZ) - timedelta(hours=12)).isoformat()
+    with DB_LOCK:
+        rows = DB.execute(
+            "SELECT * FROM aviso_venda_v1893 WHERE id>? AND silencioso=0 AND criado_em>=? ORDER BY id LIMIT ?",
+            (int(desde_id or 0), corte, int(limite)),
+        ).fetchall()
+    return {"ok": True, "ultimo_id": _avisos_ultimo_id(), "vendas": [_avisos_formatar(r) for r in rows]}
+
+
+def avisos_inscrever(username: str, inscricao: dict[str, Any], aparelho: str) -> dict[str, Any]:
+    endpoint = str(inscricao.get("endpoint") or "").strip()
+    chaves = inscricao.get("keys") if isinstance(inscricao.get("keys"), dict) else {}
+    if not _avisos_endpoint_valido(endpoint):
+        raise ValueError("Endereço de notificação inválido para este navegador.")
+    agora = now_iso()
+    ultimo = _avisos_ultimo_id()
+    with DB_LOCK:
+        # Aparelho novo começa a partir de agora (inscrever não reenvia venda antiga). O que
+        # já estava inscrito (a tela renova a cada abertura) mantém o ponto em que parou:
+        # adiantar aqui perderia a venda cujo push ainda está a caminho.
+        DB.execute(
+            "INSERT INTO aviso_inscricao_v1893(endpoint,p256dh,auth,username,aparelho,criado_em,atualizado_em,ultimo_id) "
+            "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(endpoint) DO UPDATE SET p256dh=excluded.p256dh,auth=excluded.auth,"
+            "username=excluded.username,aparelho=excluded.aparelho,atualizado_em=excluded.atualizado_em,falhas=0",
+            (endpoint, str(chaves.get("p256dh") or "")[:200], str(chaves.get("auth") or "")[:100],
+             str(username or "").strip().lower(), str(aparelho or "")[:120], agora, agora, ultimo),
+        )
+        DB.commit()
+    return {"ok": True, "ultimo_id": ultimo}
+
+
+def avisos_desinscrever(endpoint: str) -> dict[str, Any]:
+    with DB_LOCK:
+        cur = DB.execute("DELETE FROM aviso_inscricao_v1893 WHERE endpoint=?", (str(endpoint or "").strip(),))
+        DB.commit()
+    return {"ok": True, "removido": bool(cur.rowcount)}
+
+
+def avisos_entregar(endpoint: str) -> dict[str, Any]:
+    """O aparelho recebeu o push (vazio) e pede o que chegou. A autorização é o próprio
+    endereço de push inscrito — o cookie da sessão pode ter vencido no celular."""
+    endpoint = str(endpoint or "").strip()
+    with DB_LOCK:
+        sub = DB.execute("SELECT * FROM aviso_inscricao_v1893 WHERE endpoint=?", (endpoint,)).fetchone() if endpoint else None
+    if not sub or not _avisos_usuario_pode(sub["username"]):
+        return {"ok": False, "vendas": []}
+    corte = (datetime.now(BR_TZ) - timedelta(hours=12)).isoformat()
+    with DB_LOCK:
+        rows = DB.execute(
+            "SELECT * FROM aviso_venda_v1893 WHERE id>? AND silencioso=0 AND criado_em>=? ORDER BY id DESC LIMIT 20",
+            (int(sub["ultimo_id"]), corte),
+        ).fetchall()
+        total = int(DB.execute(
+            "SELECT COUNT(*) FROM aviso_venda_v1893 WHERE id>? AND silencioso=0 AND criado_em>=?",
+            (int(sub["ultimo_id"]), corte),
+        ).fetchone()[0])
+        ultimo = int(DB.execute("SELECT COALESCE(MAX(id),0) FROM aviso_venda_v1893").fetchone()[0])
+        DB.execute(
+            "UPDATE aviso_inscricao_v1893 SET ultimo_id=MAX(ultimo_id,?),pendente_desde=0,teste=0 WHERE endpoint=?",
+            (ultimo, endpoint),
+        )
+        DB.commit()
+    vendas = [_avisos_formatar(r) for r in reversed(rows)]
+    if sub["teste"]:
+        vendas.append({"id": 0, "marketplace": "teste", "venda_id": "teste", "venda_em": now_iso(), "valor": None,
+                       "titulo": "Teste de aviso de venda", "corpo": "Assim vai chegar cada venda nova do ML e da Shopee."})
+    return {"ok": True, "vendas": vendas, "total": total + (1 if sub["teste"] else 0)}
+
+
+def _avisos_push_enviar(endpoint: str) -> tuple[int, str]:
+    """POST vazio no serviço de push (RFC 8030 + VAPID, RFC 8292). Topic: se o aparelho
+    estiver desligado, o serviço guarda só o último aviso, não uma pilha."""
+    u = urlparse(endpoint)
+    token = _avisos_vapid_jwt(f"{u.scheme}://{u.netloc}")
+    req = urllib.request.Request(endpoint, data=b"", method="POST", headers={
+        "TTL": "43200", "Urgency": "high", "Topic": "noromak-venda", "Content-Length": "0",
+        "Authorization": f"vapid t={token}, k={avisos_vapid_publica()}",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return int(resp.status), ""
+    except urllib.error.HTTPError as exc:
+        try:
+            detalhe = exc.read(300).decode("utf-8", "replace")
+        except Exception:
+            detalhe = ""
+        return int(exc.code), detalhe
+    except Exception as exc:
+        return 0, str(exc)[:300]
+
+
+def _avisos_enviar_para(sub: sqlite3.Row) -> int:
+    status, detalhe = _avisos_push_enviar(str(sub["endpoint"]))
+    with DB_LOCK:
+        if status in (404, 410):
+            # Aparelho desinstalou, limpou os dados ou bloqueou as notificações.
+            DB.execute("DELETE FROM aviso_inscricao_v1893 WHERE endpoint=?", (sub["endpoint"],))
+        elif 200 <= status < 300:
+            DB.execute("UPDATE aviso_inscricao_v1893 SET pendente_desde=?,ultimo_envio_em=?,ultimo_status='OK',falhas=0 WHERE endpoint=?",
+                       (time.time(), now_iso(), sub["endpoint"]))
+        else:
+            DB.execute("UPDATE aviso_inscricao_v1893 SET ultimo_envio_em=?,ultimo_status=?,falhas=falhas+1 WHERE endpoint=?",
+                       (now_iso(), f"HTTP {status} {detalhe}"[:300], sub["endpoint"]))
+        DB.commit()
+    return status
+
+
+def avisos_venda_enviar_rodada() -> dict[str, int]:
+    """Um push para cada aparelho que tem venda nova e não está com push pendente."""
+    agora = time.time()
+    with DB_LOCK:
+        ultimo = int(DB.execute("SELECT COALESCE(MAX(id),0) FROM aviso_venda_v1893 WHERE silencioso=0").fetchone()[0])
+        subs = DB.execute(
+            "SELECT * FROM aviso_inscricao_v1893 WHERE ultimo_id<? AND falhas<50", (ultimo,)
+        ).fetchall()
+    enviados = pulados = removidos = 0
+    for sub in subs:
+        if sub["pendente_desde"] and agora - float(sub["pendente_desde"]) < AVISOS_PENDENTE_REENVIO_S:
+            pulados += 1
+            continue
+        if not _avisos_usuario_pode(sub["username"]):
+            avisos_desinscrever(sub["endpoint"])
+            removidos += 1
+            continue
+        status = _avisos_enviar_para(sub)
+        enviados += 1 if 200 <= status < 300 else 0
+    return {"enviados": enviados, "pulados": pulados, "removidos": removidos}
+
+
+def avisos_testar(endpoint: str, username: str) -> dict[str, Any]:
+    endpoint = str(endpoint or "").strip()
+    with DB_LOCK:
+        sub = DB.execute("SELECT * FROM aviso_inscricao_v1893 WHERE endpoint=? AND username=?",
+                         (endpoint, str(username or "").strip().lower())).fetchone()
+        if not sub:
+            raise ValueError("Este aparelho não está com os avisos ligados.")
+        DB.execute("UPDATE aviso_inscricao_v1893 SET teste=1 WHERE endpoint=?", (endpoint,))
+        DB.commit()
+    status = _avisos_enviar_para(sub)
+    if not 200 <= status < 300:
+        return {"ok": False, "error": f"O serviço de notificação recusou (HTTP {status})."}
+    return {"ok": True}
+
+
+def avisos_venda_loop(stop_event: threading.Event) -> None:
+    ultima_limpeza = 0.0
+    while not stop_event.is_set():
+        AVISOS_VENDA_EVENT.clear()
+        try:
+            avisos_venda_enviar_rodada()
+        except Exception as exc:
+            print(f"[avisos-venda] falhou: {exc}", file=sys.stderr, flush=True)
+        if time.time() - ultima_limpeza > 86400:
+            try:
+                corte = (datetime.now(BR_TZ) - timedelta(days=AVISOS_GUARDAR_DIAS)).isoformat()
+                with DB_LOCK:
+                    DB.execute("DELETE FROM aviso_venda_v1893 WHERE criado_em<?", (corte,))
+                    DB.commit()
+                ultima_limpeza = time.time()
+            except Exception:
+                pass
+        # Acorda na hora com venda nova; a cada 2 min revê os pushes pendentes.
+        _saude_esperar(AVISOS_VENDA_EVENT, 120)
+
+
 # V18.56: uma exceção fora do try interno matava a thread em silêncio (keepalive do
 # token, workers da Shopee, relatório diário) e a integração parava até alguém
 # reiniciar o serviço. Este invólucro registra o erro e reinicia o worker.
@@ -24916,6 +26269,7 @@ SAUDE_WORKERS_INFO: dict[str, tuple[str, bool, int]] = {
     "manutencao_diaria_loop": ("Manutenção diária (limpeza de logs)", False, 120),
     "linx_clientes_loop": ("Clientes no Linx", False, 120),
     "saude_alertas_loop": ("Alertas de saúde", False, 20),
+    "avisos_venda_loop": ("Avisos de venda (notificações)", False, 20),
 }
 
 
@@ -25871,6 +27225,13 @@ def main() -> None:
         name="saude-alertas",
         daemon=True,
     )
+    # V18.93: avisos de venda (push para os aparelhos inscritos).
+    avisos_venda_thread = threading.Thread(
+        target=_worker_protegido(avisos_venda_loop),
+        args=(watcher_stop,),
+        name="avisos-venda",
+        daemon=True,
+    )
     _ml_worker_state_update(started_at=now_iso(), last_error="")
     # V18.63: EXP_WORKERS=0 sobe só o HTTP — teste de boot e homologação. Uma cópia do
     # banco tem os tokens de produção e o refresh_token do ML é de uso único: um
@@ -25897,6 +27258,7 @@ def main() -> None:
         relatorio_thread.start()
         linx_clientes_thread.start()
         saude_thread.start()
+        avisos_venda_thread.start()
     else:
         print("[boot] EXP_WORKERS=0: workers de integração DESLIGADOS (só HTTP).", flush=True)
     server = ThreadingHTTPServer((HOST, PORT), AppHandler)

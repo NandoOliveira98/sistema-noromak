@@ -93,6 +93,11 @@
     }
     // V18.83: tema claro/escuro (nk-ui.js); some quando a tela não carrega o nk-ui.js.
     h += `<div class="v15-sidebar-footer"><button type="button" class="v15-nav-item nk-tema-btn" data-nk-tema="1" hidden><span class="v15-nav-icon"></span><span class="v15-nav-label"></span></button>`;
+    // V18.95: filial que as telas mostram — só para quem vê todas as filiais (perfil Admin).
+    h += `<label class="v15-nav-item nk-filial-sel" data-nk-filial="1" hidden title="Filial mostrada nas telas (Pedidos, Conferência, Etiquetas...)"><span class="v15-nav-icon">${ic("M12 21s-7-6.3-7-11a7 7 0 0 1 14 0c0 4.7-7 11-7 11zM12 12.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5")}</span>` +
+      `<select class="nk-filial-select" aria-label="Filial"><option value="todas">Todas as filiais</option><option value="aracatuba">Araçatuba</option><option value="bauru">Bauru</option></select></label>`;
+    // V18.93: avisos de venda (nk-avisos.js); só para quem tem o módulo Admin.
+    h += `<button type="button" class="v15-nav-item" data-nk-avisos="1" data-nk-modulo="admin" hidden><span class="v15-nav-icon"></span><span class="v15-nav-label">Avisos de venda</span></button>`;
     h += `<button type="button" class="v15-nav-item" data-nk-sair="1"><span class="v15-nav-icon">${ic("M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9")}</span><span class="v15-nav-label">Sair</span></button></div>`;
     return h;
   }
@@ -140,6 +145,7 @@
       } catch (_) { return; }
     }
     if (!user) return;
+    ligarFilial(nav, user);
     const perm = user.permissions || {};
     const pode = m => Object.prototype.hasOwnProperty.call(perm, m) ? !!perm[m] : (user.app_role === "admin" || m === "conferencia");
     const supervisor = user.app_role !== "admin" && pode("admin");
@@ -152,6 +158,24 @@
       const n = [...g.querySelectorAll(".v15-nav-item")].filter(a => !a.hidden).length;
       g.style.display = n ? "" : "none";
       const c = g.querySelector(".v15-grp-n"); if (c) c.textContent = n;
+    });
+  }
+
+  // V18.95: seletor de filial (quem vê "todas"). A escolha vale para todas as telas e abas
+  // deste navegador; o servidor filtra pelo cabeçalho que o shared-storage.js manda.
+  function ligarFilial(nav, user) {
+    const rot = nav.querySelector("[data-nk-filial]");
+    if (!rot) return;
+    if (String(user.casa || "") !== "todas") { rot.hidden = true; rot.style.display = "none"; return; }
+    rot.hidden = false;
+    const sel = rot.querySelector("select");
+    let atual = "";
+    try { atual = localStorage.getItem("nk_filial_v1895") || ""; } catch (_) {}
+    sel.value = atual || "todas";
+    sel.addEventListener("change", () => {
+      if (window.appStorage && typeof window.appStorage.trocarFilial === "function") { window.appStorage.trocarFilial(sel.value); return; }
+      try { if (sel.value === "todas") localStorage.removeItem("nk_filial_v1895"); else localStorage.setItem("nk_filial_v1895", sel.value); } catch (_) {}
+      location.reload();
     });
   }
 
@@ -212,6 +236,7 @@
     ligarTema(nav);
     ligarRecolher(nav, false);
     marcarAtivo(nav);
+    carregarAvisos();
     const permissoes = () => aplicarPermissoes(nav);
     if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", permissoes); else permissoes();
     return nav;
@@ -260,6 +285,18 @@
     ligarRecolher(nav, padraoRecolhido === true);
     marcarAtivo(nav);
     aplicarPermissoes(nav);
+    carregarAvisos();
+  }
+
+  // V18.93: avisos de venda — vem junto com o menu (a Conferência e a Estação, sem menu, ficam sem).
+  function carregarAvisos() {
+    if (window.nkAvisos) { window.nkAvisos.ligarBotoes(); return; }
+    if (document.querySelector('script[data-nk-avisos-js]')) return;
+    const s = document.createElement("script");
+    s.src = `${B}/nk-avisos.js?v=18.93`;
+    s.defer = true;
+    s.dataset.nkAvisosJs = "1";
+    document.head.append(s);
   }
 
   window.nkMenu = { MENU, ITENS, itemDoCaminho, abaDoCaminho, itemDaAba, caminhoRelativo, base: B };

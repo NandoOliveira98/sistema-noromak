@@ -7,8 +7,8 @@
 <meta name="application-name" content="Noromak Conferência">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="manifest" href="/expedicao/manifest-conferencia.webmanifest?v=14.5" crossorigin="use-credentials">
-<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/conferencia-180.png?v=14.5">
+<link rel="manifest" href="/expedicao/manifest-conferencia.webmanifest?v=18.94" crossorigin="use-credentials">
+<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/conferencia-180.png?v=18.94">
 <link rel="icon" href="/favicon.ico?v=14.5" sizes="any">
 <link rel="shortcut icon" href="/favicon.ico?v=14.5">
 <link rel="stylesheet" href="/expedicao/pwa-install.css?v=14.5">
@@ -323,13 +323,13 @@
   }
 
 </style>
-<script src="/expedicao/shared-storage.js?v=18.82"></script>
+<script src="/expedicao/shared-storage.js?v=18.95"></script>
 <script src="/expedicao/web-auth.js?v=18.82"></script>
 <script src="/expedicao/zebra-browser-print.js?v=14.5"></script>
 <script defer src="/expedicao/pwa-install.js?v=14.5"></script>
 <!-- V18.65: tema comum (fonte, foco e icones) por ultimo no head. -->
 <link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
-<link rel="stylesheet" href="/expedicao/nk-ui.css?v=18.87">
+<link rel="stylesheet" href="/expedicao/nk-ui.css?v=18.95">
 <!-- V18.83: tema claro/escuro, avisos, confirmação e tabela padrão. -->
 <script src="/expedicao/nk-ui.js?v=18.83"></script>
 <style id="escuro-auto-v1883">
@@ -483,6 +483,14 @@ html[data-tema="escuro"] [style*="background: #e3e8ed" i]{background-color:#2029
 html[data-tema="escuro"] [style*="color:#334" i]{color:#C3C3D2!important}
 html[data-tema="escuro"] [style*="color: #334" i]{color:#C3C3D2!important}
 </style>
+<style id="filial-v1895">
+/* V18.95: filial da Conferência no cabeçalho (Bauru em laranja, para não confundir). */
+.conf-filial-v1895{display:inline-block;margin-top:2px;padding:2px 8px;border-radius:999px;font:600 11px/1.5 system-ui,sans-serif;background:#E8F0FB;color:#1F57A5}
+.conf-filial-v1895[data-filial="bauru"]{background:#FFE7D1;color:#9A3D00}
+.conf-filial-v1895[data-filial="todas"]{background:#EEF1F5;color:#586A7D}
+html[data-tema="escuro"] .conf-filial-v1895{background:#15283F;color:#86B4F2}
+html[data-tema="escuro"] .conf-filial-v1895[data-filial="bauru"]{background:#3A2412;color:#F0B357}
+</style>
 </head>
 
 <body>
@@ -588,6 +596,7 @@ html[data-tema="escuro"] [style*="color: #334" i]{color:#C3C3D2!important}
 
   <div class="conf-operador-bloco">
     <div id="infoUsuario" class="conf-operador-nome">Operador —</div>
+    <div id="filialConferenciaV1895" class="conf-filial-v1895" hidden></div>
     <div class="conf-operador-status">
       <span id="autosaveStatus" class="autosave-status">Salvamento automático ativo</span>
     </div>
@@ -2147,6 +2156,83 @@ function mostrarPopupColetaConferencia(horario,codigo){
   overlay.setAttribute("aria-hidden","false");
   setTimeout(()=>overlay.querySelector(".popup-coleta-ok")?.focus(),30);
 }
+// V18.95 — filial da Conferência (cada usuário vê só a dele; quem vê "todas" usa o seletor do Admin).
+const FILIAIS_V1895={aracatuba:"Araçatuba",bauru:"Bauru",todas:"Todas as filiais"};
+function filialEfetivaConferenciaV1895(){
+  const u=window.EXPEDICAO_USER||{};
+  const casa=String(u.casa||"aracatuba");
+  if(casa!=="todas")return casa;
+  try{const esc=(window.appStorage&&appStorage.filialEscolhida&&appStorage.filialEscolhida())||"";return esc||"todas";}catch(_){return "todas";}
+}
+function mostrarFilialConferenciaV1895(){
+  const el=document.getElementById("filialConferenciaV1895");
+  if(!el)return;
+  const f=filialEfetivaConferenciaV1895();
+  el.hidden=!window.EXPEDICAO_USER;
+  el.textContent=`Filial: ${FILIAIS_V1895[f]||f}`;
+  el.dataset.filial=f;
+  const box=document.getElementById("coletaExpedicaoBox");
+  if(box&&f!=="aracatuba"&&f!=="todas"){
+    box.style.cursor="pointer";
+    box.dataset.editavelV1895="1";
+  }
+}
+// Em Bauru o próprio operador informa a coleta do dia (decisão do dono, 10/10). Grava só a
+// coleta da filial: o servidor guarda separado e não toca na de Araçatuba.
+function editarColetaFilialV1895(){
+  const f=filialEfetivaConferenciaV1895();
+  if(f==="aracatuba"||f==="todas")return;
+  let atual={};
+  try{atual=JSON.parse(appStorage.getItem(COLETA_DIA_STORAGE_KEY_CONFERENCIA)||"{}")||{};}catch(_){}
+  const horario=prompt(`Coleta de hoje em ${FILIAIS_V1895[f]||f} — horário (ex.: 14h00 - 15h00):`,String(atual.horario||""));
+  if(horario===null)return;
+  const codigo=prompt("Código de autorização da coleta:",String(atual.codigo||""));
+  if(codigo===null)return;
+  const hoje=new Date();
+  const dados={
+    data:`${hoje.getFullYear()}-${String(hoje.getMonth()+1).padStart(2,"0")}-${String(hoje.getDate()).padStart(2,"0")}`,
+    horario:String(horario).trim(),codigo:String(codigo).trim().toUpperCase(),
+    atualizadoEm:hoje.toISOString(),
+    atualizadoPor:String((window.usuarioLogado&&(window.usuarioLogado.Nome||window.usuarioLogado.Login))||"Conferência")
+  };
+  try{appStorage.setItem(COLETA_DIA_STORAGE_KEY_CONFERENCIA,JSON.stringify(dados));}
+  catch(e){alert("Não foi possível gravar a coleta: "+e.message);return;}
+  carregarColetaExpedicao(false);
+}
+document.addEventListener("click",e=>{if(e.target.closest('#coletaExpedicaoBox[data-editavel-v1895="1"]'))editarColetaFilialV1895();});
+document.addEventListener("DOMContentLoaded",()=>{mostrarFilialConferenciaV1895();setTimeout(mostrarFilialConferenciaV1895,1500);setTimeout(mostrarFilialConferenciaV1895,5000);});
+
+// Etiqueta do ML em PDF (10x15): baixada na hora pelo servidor, com a conta do pedido, e
+// impressa pela janela de impressão do navegador na térmica comum.
+async function imprimirEtiquetaPdfV1895(pedido, data){
+  const r=await fetch(`/expedicao/api/etiqueta-ml-pdf?pedido=${encodeURIComponent(pedido)}`,{credentials:"same-origin",cache:"no-store"});
+  if(!r.ok){
+    let msg=`HTTP ${r.status}`;
+    try{msg=(await r.json()).error||msg;}catch(_){}
+    throw new Error("Etiqueta em PDF indisponível: "+msg);
+  }
+  const url=URL.createObjectURL(await r.blob());
+  await new Promise(resolve=>{
+    let quadro=document.getElementById("etiquetaPdfV1895");
+    if(quadro)quadro.remove();
+    quadro=document.createElement("iframe");
+    quadro.id="etiquetaPdfV1895";
+    quadro.style.cssText="position:fixed;right:0;bottom:0;width:1px;height:1px;border:0;opacity:0";
+    quadro.onload=()=>{
+      setTimeout(()=>{
+        try{quadro.contentWindow.focus();quadro.contentWindow.print();}
+        catch(_){window.open(url,"_blank");}
+        resolve();
+      },300);
+    };
+    quadro.src=url;
+    document.body.appendChild(quadro);
+  });
+  setTimeout(()=>URL.revokeObjectURL(url),120000);
+  const lista=Array.isArray(data)?data.slice():[];
+  return {quantidade:Math.max(1,lista.length),dados:lista,modo:"pdf",pendente:false};
+}
+
 function carregarColetaExpedicao(mostrarPopup=false){
   const box=document.getElementById("coletaExpedicaoBox");
   const horarioEl=document.getElementById("coletaExpedicaoHorario");
@@ -3325,6 +3411,10 @@ async function aguardarImpressaoRemota(jobId, limiteMs = 90000) {
 
 async function imprimirDadosComFallback(pedido, marketplace, data, reprint = false) {
   const badge = document.getElementById("qzStatusBadge");
+  // V18.95: filial sem Zebra (Bauru) imprime a etiqueta do ML em PDF na térmica comum.
+  if (filialEfetivaConferenciaV1895() === "bauru" && normalizarMarketplace(marketplace) === "mercado_livre") {
+    return await imprimirEtiquetaPdfV1895(pedido, data);
+  }
   if (normalizarMarketplace(marketplace) === "mercado_livre") {
     data = (Array.isArray(data) ? data : [])
       .map(somenteEtiquetaEnvioMercadoLivreZPL)
