@@ -138,7 +138,7 @@ class Filiais(TesteNoromak):
         self.assertIn("A1", self.vendas(), "REGRESSÃO: o Admin com o seletor em Bauru apagou Araçatuba")
         with S.DB_LOCK:
             tomb = S.DB.execute("SELECT COUNT(*) FROM admin_manual_overrides WHERE storage_key='conf_pedidos' "
-                                "AND field_name='__ENTITY__' AND value_json LIKE '%deleted%'").fetchone()[0]
+                                "AND field_name='__ENTITY__' AND is_deleted=1").fetchone()[0]  # V19.00: era LIKE '%deleted%', que nunca casava
         self.assertEqual(tomb, 0, "virou tombstone ADMIN de pedido que o Admin nem via")
 
     # ------------------------------------------------------------------ rotas de pedido
@@ -245,7 +245,7 @@ class TelasFilial(TesteNoromak):
         conf = (app / "conferencia.html").read_text(encoding="utf-8")
         self.assertIn("imprimirEtiquetaPdfV1895", conf)
         self.assertIn("/api/etiqueta-ml-pdf", conf)
-        self.assertIn("shared-storage.js?v=18.95", conf)
+        self.assertIn("shared-storage.js?v=19.00", conf)
         admin = (app / "admin.html").read_text(encoding="utf-8")
         self.assertIn("moverPedidoFilialAdminV1895", admin)
         self.assertIn('id="novoUsuarioFilial"', admin)

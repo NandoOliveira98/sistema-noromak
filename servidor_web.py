@@ -44,7 +44,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "18.99-PROMO-BAURU"
+APP_VERSION = "19.00-TELA-FILIAL"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -263,6 +263,31 @@ OPERATOR_WRITE_KEYS = {
     # V18.66: conf_shopee_exclusoes_v1 saiu daqui. Só quem exclui produto de pedido
     # (Admin e Supervisor) registra exclusão; o operador não apaga mais linhas reais.
 }
+
+# V19.00: leitura pelo GET /api/storage. Antes devolvia QUALQUER chave a qualquer usuário
+# logado: o operador lia o token do agente Zebra (ZPL das etiquetas, fila de impressão), o do
+# robô Linx (fila de CPFs), os custos do Precificador e a senha de quem pediu acesso.
+# Segredo não sai nem entra por esta rota, para ninguém (cada um tem a rota própria, com o
+# OWNER para trocar); quem não tem o módulo admin lê só o que a tela dele usa.
+STORAGE_SEGREDOS = {"print_agent_token_v1", "linx_robo_token_v1"}  # = *_TOKEN_STORAGE_KEY
+STORAGE_LEITURA_CONFERENCIA = {  # Conferência e Estação de impressão
+    "conf_pedidos", "conf_pedidos_rascunhos", "conf_produtos", "conf_kits", "conf_etiquetas",
+    "conf_fotos", "conf_historico_conferencias_v2", "conf_logs", "conf_banco_atualizado_em",
+    "conf_usuarios", "conf_coleta_dia_v1", "conf_nomes_conferencia_v1", "conf_shopee_exclusoes_v1",
+}
+STORAGE_LEITURA_PRECIFICADOR = {
+    "precificador_online_v1", "precificador_alertas_custo_v1", "ml_sku_mlb_links_v1", "ml_promocoes_datas_v1",
+}
+
+
+def storage_leitura_permitida(ctx: dict[str, Any], key: str) -> bool:
+    if key in STORAGE_SEGREDOS:
+        return False
+    if str(ctx.get("app_role") or "").lower() == "admin" or module_allowed(ctx, "admin"):
+        return True  # Admin e Supervisor: as telas de gestão leem as outras chaves
+    if key in STORAGE_LEITURA_CONFERENCIA and (module_allowed(ctx, "conferencia") or module_allowed(ctx, "estacao")):
+        return True
+    return key in STORAGE_LEITURA_PRECIFICADOR and module_allowed(ctx, "precificador")
 
 
 def _openssl_output(args: list[str], *, stdin: bytes | None = None) -> bytes:
@@ -3010,20 +3035,37 @@ def legacy_users_from_migration() -> list[dict[str, Any]]:
     return []
 
 
+# V19.00: senha vinda de arquivo/banco legado só vale se tiver este tamanho. O arquivo de
+# MIGRACAO_INICIAL está no Git com "123"; abaixo disso o usuário recebe a senha inicial.
+SENHA_LEGADA_MINIMA = 8
+
+
+def _senha_legada(valor: Any) -> str | None:
+    senha = str(valor or "").strip()
+    if senha in ("", PASSWORD_MASK) or len(senha) < SENHA_LEGADA_MINIMA:
+        return None
+    return senha
+
+
 def migrate_app_users() -> None:
     with DB_LOCK:
         DB.execute("BEGIN IMMEDIATE")
         try:
-            for raw in legacy_users_from_migration():
+            # V19.00: os usuários legados (arquivo de MIGRACAO_INICIAL, conf_usuarios antigo e
+            # user_roles da 7.3) só são trazidos na instalação NOVA — app_users ainda vazia.
+            # Antes isto rodava em todo boot com only_if_missing: o usuário que o Admin excluía
+            # voltava a cada publicação/reinício (felipe e matheus com a senha "123" do arquivo).
+            instalacao_nova = not DB.execute("SELECT 1 FROM app_users LIMIT 1").fetchone()
+            for raw in (legacy_users_from_migration() if instalacao_nova else []):
                 username = str(raw.get("Login") or raw.get("Usuario") or raw.get("Usuário") or "").strip().lower()
                 if not username:
                     continue
                 role = "admin" if "admin" in str(raw.get("Perfil") or "").lower() else "operador"
                 active = raw.get("Ativo", True) not in (False, "false", "0", 0, "inativo")
-                password = str(raw.get("Senha") or "").strip() or None
+                password = _senha_legada(raw.get("Senha"))
                 upsert_app_user(username, str(raw.get("Nome") or username), role, active, password, "migração portátil", only_if_missing=True)
 
-            current = DB.execute("SELECT value FROM storage WHERE key='conf_usuarios'").fetchone()
+            current = DB.execute("SELECT value FROM storage WHERE key='conf_usuarios'").fetchone() if instalacao_nova else None
             if current:
                 try:
                     rows = json.loads(current["value"] or "[]")
@@ -3038,13 +3080,11 @@ def migrate_app_users() -> None:
                             continue
                         role = "admin" if "admin" in str(raw.get("Perfil") or "").lower() else "operador"
                         active = raw.get("Ativo", raw.get("Aprovado", True)) not in (False, "false", "0", 0, "inativo")
-                        password = str(raw.get("Senha") or "").strip()
-                        if password in ("", PASSWORD_MASK):
-                            password = None
+                        password = _senha_legada(raw.get("Senha"))
                         upsert_app_user(username, str(raw.get("Nome") or username), role, active, password, "migração banco", only_if_missing=True)
 
             # Perfis criados na versão 7.3 recebem senha inicial para poderem entrar no novo login interno.
-            for row in DB.execute("SELECT username,display_name,role,active FROM user_roles").fetchall():
+            for row in (DB.execute("SELECT username,display_name,role,active FROM user_roles").fetchall() if instalacao_nova else []):
                 initial = initial_password_for(row["username"], row["role"])
                 upsert_app_user(row["username"], row["display_name"] or row["username"], row["role"], bool(row["active"]), initial, "migração 7.3", only_if_missing=True)
 
@@ -3185,6 +3225,7 @@ def apply_app_users_payload(value: str, actor: str) -> str:
                     DB.execute("UPDATE app_users SET casa=? WHERE username=?", (row["filial"], row["username"]))
             for username in set(existing) - seen:
                 DB.execute("DELETE FROM app_users WHERE username=?", (username,))
+                DB.execute("DELETE FROM user_roles WHERE username=?", (username,))  # V19.00: perfil antigo também
             DB.execute("DELETE FROM app_sessions WHERE username NOT IN (SELECT username FROM app_users) OR username IN (SELECT username FROM app_users WHERE active=0)")
             DB.commit()
         except Exception:
@@ -4839,16 +4880,24 @@ def save_storage(
             if key == "conf_pedidos" and allow_completed_reimport and not force and old_value is not None:
                 new_value, _ = reactivate_completed_orders_from_delta(old_value, new_value, actor or "admin")
             current, version, _ = get_storage(key)
+            # V19.00: o delta do ADMIN é o que ELE mudou — compara com o que a tela dele tinha
+            # (oldValue), não com o banco. Contra o banco, um pedido que a integração trouxe
+            # depois de a tela carregar faltava na lista gravada e virava tombstone ADMIN (sumia
+            # para sempre), e um campo que a integração atualizou nesse meio-tempo virava
+            # "alteração do ADMIN" com o valor velho da tela. O que entrou no banco depois do
+            # snapshot fica com o merge de três vias (merge_arrays mantém o que a tela não tinha).
+            # Sem snapshot (rota interna) ou com force, a base continua sendo o banco.
+            base_admin = old_value if (old_value not in (None, "") and not force) else current
             # V17.52: o cofre de pedidos manuais é independente do snapshot principal.
             # Uma inclusão/edição do ADMIN fica registrada antes de qualquer merge.
             if key == "conf_pedidos" and normalize(actor_role) == "ADMIN":
-                _admin_manual_order_vault_sync(current, new_value, actor or "admin", allow_pending_deletes)
+                _admin_manual_order_vault_sync(base_admin, new_value, actor or "admin", allow_pending_deletes)
             # V17.48: toda gravação explícita feita por ADMIN registra somente o
             # delta manual antes de qualquer merge. Assim o servidor pode aplicar
             # essas decisões novamente sobre sincronizações futuras.
             admin_override_count = 0
             if normalize(actor_role) == "ADMIN":
-                admin_override_count = _admin_override_record_delta(key, current, new_value, actor or "admin")
+                admin_override_count = _admin_override_record_delta(key, base_admin, new_value, actor or "admin")
             # V17.44: conf_pedidos é cumulativo por padrão. Qualquer sincronização
             # automática/importação deve MESCLAR com o banco atual e nunca apagar
             # pedidos que não vieram na resposta/arquivo desta rodada. Remoções só
@@ -7454,9 +7503,16 @@ def storage_remontar_por_filial(key: str, valor_cliente: str | None, filial: str
             return valor_cliente
         escondidas = [r for r in (atual if isinstance(atual, list) else [])
                       if isinstance(r, dict) and filial_da_linha(r) != filial]
+        # V19.00: a filial de uma linha que já existe é a do BANCO. Uma aba com a cópia de outra
+        # filial (seletor trocado em outra aba, ou operador cuja filial o Admin mudou com a tela
+        # aberta) mandava as linhas de Araçatuba sem "Casa" — e elas eram remarcadas como Bauru.
+        filial_no_banco = {item_id(key, r, i): filial_da_linha(r)
+                           for i, r in enumerate(atual if isinstance(atual, list) else []) if isinstance(r, dict)}
         proprias = []
-        for r in novo:
+        for i, r in enumerate(novo):
             if isinstance(r, dict):
+                if filial_no_banco.get(item_id(key, r, i), filial) != filial:
+                    continue  # no banco é de outra filial: vale a do banco (já está em escondidas)
                 if str(r.get("Casa") or "").strip() and filial_da_linha(r) != filial:
                     continue  # linha de outra filial que o cliente não deveria ter: vale a do banco
                 if filial != CASA_PRINCIPAL and not str(r.get("Casa") or "").strip():
@@ -22626,7 +22682,7 @@ class AppHandler(BaseHTTPRequestHandler):
         if path == "/api/storage":
             ctx = self.auth()
             if ctx is not None:
-                self.handle_storage_get(query, self.filial_da_requisicao(ctx))
+                self.handle_storage_get(query, self.filial_da_requisicao(ctx), ctx)
             return
         if path == "/api/roles":
             ctx = self.auth_full_admin()
@@ -24161,18 +24217,30 @@ class AppHandler(BaseHTTPRequestHandler):
         pelo seletor do Admin, cabeçalho X-Noromak-Filial)."""
         return filial_efetiva(ctx, self.headers.get("X-Noromak-Filial") or "")
 
-    def handle_storage_get(self, query: dict[str, list[str]], filial: str = "todas") -> None:
+    def handle_storage_get(self, query: dict[str, list[str]], filial: str = "todas",
+                           ctx: dict[str, Any] | None = None) -> None:
         # V18.56: monta a resposta sob o DB_LOCK e ENVIA fora dele. Antes a escrita no
         # socket (conf_pedidos inteiro, a cada polling de cada aba) segurava o lock
         # global: um cliente lento na rede parava a bipagem de todo mundo.
         with DB_LOCK:
-            resposta, status = self._storage_get_resposta(query, filial)
+            resposta, status = self._storage_get_resposta(query, filial, ctx)
         self.send_json(resposta, status)
 
-    def _storage_get_resposta(self, query: dict[str, list[str]], filial: str = "todas") -> tuple[dict[str, Any], int]:
+    def _storage_get_resposta(self, query: dict[str, list[str]], filial: str = "todas",
+                              ctx: dict[str, Any] | None = None) -> tuple[dict[str, Any], int]:
+        ctx = ctx or {}
+
+        def recusa(chave: str) -> tuple[dict[str, Any], int]:
+            # V19.00: lista fechada por perfil/módulo (storage_leitura_permitida).
+            audit(str(ctx.get("username") or "desconhecido"), "security.denied.storage_read", chave[:200])
+            return {"error": f"Este usuário não pode ler {chave}.", "code": "LEITURA_NAO_PERMITIDA"}, 403
+
         with DB_LOCK:
             if (query.get("list") or [""])[0] == "1":
-                keys = [row[0] for row in DB.execute("SELECT key FROM storage ORDER BY key")]
+                if str(ctx.get("app_role") or "").lower() != "admin":
+                    return recusa("list")  # V19.00: a lista de chaves é só do perfil Admin
+                keys = [row[0] for row in DB.execute("SELECT key FROM storage ORDER BY key")
+                        if row[0] not in STORAGE_SEGREDOS]
                 return {"keys": keys}, 200
             versions_arg = (query.get("versions") or [""])[0]
             if versions_arg:
@@ -24190,6 +24258,8 @@ class AppHandler(BaseHTTPRequestHandler):
                 values: dict[str, Any] = {}
                 versions: dict[str, int] = {}
                 for key in keys_arg.split(","):
+                    if not storage_leitura_permitida(ctx, key):
+                        return recusa(key)
                     value, version, _ = get_storage(key)
                     values[key] = storage_filtrar_por_filial(key, value, filial)  # V18.95
                     versions[key] = version
@@ -24197,6 +24267,8 @@ class AppHandler(BaseHTTPRequestHandler):
             key = (query.get("key") or [""])[0]
             if not key:
                 return {"error": "Chave não informada."}, 400
+            if not storage_leitura_permitida(ctx, key):
+                return recusa(key)
             value, version, updated = get_storage(key)
             value = storage_filtrar_por_filial(key, value, filial)  # V18.95: só a filial do usuário
             return {"exists": value is not None, "value": value, "version": version, "updated_at": updated}, 200
@@ -24301,6 +24373,11 @@ class AppHandler(BaseHTTPRequestHandler):
             key = str(req.get("key") or "").strip()
             if not key or "newValue" not in req:
                 raise ValueError("Chave ou valor inválido.")
+            if key in STORAGE_SEGREDOS:
+                # V19.00: token de agente/robô só pela rota própria (trocar exige o OWNER).
+                audit(ctx["username"], "security.denied.storage_secret_write", key)
+                self.send_json({"error": f"{key} não é gravado por aqui.", "code": "SEGREDO"}, 403)
+                return
             if key == "precificador_online_v1" and not module_allowed(ctx, "precificador"):
                 self.send_json({"error": "Este usuário não possui acesso para alterar o Precificador."}, 403)
                 return
@@ -25939,6 +26016,8 @@ class AppHandler(BaseHTTPRequestHandler):
                     self.send_json({"error": "Não é possível remover o último administrador ativo."}, 400)
                     return
             DB.execute("DELETE FROM app_users WHERE username=?", (username,))
+            # V19.00: o perfil antigo (7.3) também sai, senão é resto de um usuário excluído.
+            DB.execute("DELETE FROM user_roles WHERE username=?", (username,))
             DB.commit()
         sync_app_users_storage()
         audit(ctx["username"], "role.delete", username)

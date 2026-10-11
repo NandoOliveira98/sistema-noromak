@@ -5,7 +5,7 @@ Shopee, manuais), expedição, separação, conferência por código de barras, 
 produtos/SKUs/EANs, kits, precificação, promoções, rentabilidade, estoque, Central de
 Pendências e histórico.
 
-Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V18.99).
+Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V19.00).
 
 ---
 
@@ -199,7 +199,12 @@ merge, para que nenhuma integração passe por cima:
 
 1. `reactivate_completed_orders_from_delta` (só com `allow_completed_reimport`, ADMIN)
 2. `_admin_manual_order_vault_sync` — cofre de pedidos manuais
-3. `_admin_override_record_delta` — registra o delta manual antes de qualquer merge
+3. `_admin_override_record_delta` — registra o delta manual antes de qualquer merge.
+   **V19.00:** o delta é contra o que a **tela** tinha (`oldValue`), não contra o banco
+   (`base_admin`; sem `oldValue` ou com `force`, o banco). Contra o banco, um pedido que
+   chegou depois de a tela carregar virava tombstone ADMIN e um campo atualizado pela
+   integração virava "alteração do ADMIN" com o valor velho. O que a tela não tinha fica
+   com o merge de três vias.
 4. `filter_completed_orders_v1772` — concluído nunca volta
 5. `preserve_conference_progress_v1770` — bip é monotônico
 6. `_preserve_admin_manual_pending` + `preserve_pending_records_v1714`
@@ -234,6 +239,14 @@ persistem imediatamente, sem esperar o ciclo do polling.
 Não criar timers duplicados nem ampliar a lista de chaves monitoradas sem necessidade —
 a V17.34 tentou otimização global e causou regressões graves em produção.
 
+**Filial por página (V19.00):** o seletor de filial (`nk_filial_v1895`) é lido **uma vez**,
+quando a página abre (`FILIAL_DA_PAGINA`), e é ele que vai no `X-Noromak-Filial`. Lido a cada
+requisição, a troca numa aba fazia as outras gravarem a fila antiga com a filial nova (aba
+de Bauru gravando como "Todas" apagava Araçatuba). No servidor, `storage_remontar_por_filial`
+respeita a filial que a linha **já tem no banco** — a cópia de uma tela não remarca linha
+existente. Mudou `shared-storage.js` ou `nk-menu.js`: suba o `?v=` em todas as telas e o
+`CACHE` do `sw.js`.
+
 ---
 
 ## 5. Rotas e permissões
@@ -256,7 +269,21 @@ recebe automaticamente as áreas sensíveis. Módulos por usuário: `conferencia
 Admin pode gravar — inclui `conf_etiquetas`, `conf_fotos` e `conf_pedidos`. Isso é
 funcional, não administrativo: **não transforma o usuário em Admin**.
 
+**Leitura (V19.00):** o `GET /api/storage` passa por `storage_leitura_permitida`. Os tokens do
+agente Zebra e do robô Linx (`STORAGE_SEGREDOS`) não saem nem entram por ali para ninguém (cada
+um tem a rota própria; trocar exige OWNER). Quem tem o módulo admin (Admin e Supervisor) lê o
+resto; os demais leem só `STORAGE_LEITURA_CONFERENCIA` (com conferencia ou estacao) e
+`STORAGE_LEITURA_PRECIFICADOR` (com precificador, inclusive a extensão). `?list=1` é só do perfil
+Admin; `?versions=` (polling) não muda. **Tela nova de operador que lê outra chave: incluir na
+lista**, senão ela recebe 403.
+
 Alterar `conf_usuarios` exige reautenticação do OWNER (senha + TOTP).
+
+**Migração de usuários (V19.00):** `migrate_app_users` só traz usuários legados
+(`MIGRACAO_INICIAL`, `conf_usuarios` antigo, `user_roles`) na instalação **nova** (`app_users`
+vazia), e senha legada com menos de 8 caracteres é trocada pela inicial. Antes rodava em todo
+boot: o usuário excluído voltava a cada publicação (felipe/matheus com "123"). Excluir usuário
+apaga também de `user_roles`.
 
 **Supervisor = operador com `can_admin`** (`is_supervisor_user`). Por isso, no `POST /api/roles`, o
 Supervisor tem o Admin sempre ligado e os **outros módulos valem o que foi marcado** (V18.68: antes
@@ -875,6 +902,8 @@ Os testes ficam em `TESTES/` (são 30 arquivos; os principais):
 | `test_venda_despachada_v1897.py` | venda com envio já despachado/entregue não entra, a da integração sai, a do ADMIN fica, vigia de etiquetas limpa |
 | `test_vendas_conta_v1898.py` | vendas de Bauru em tabela própria, sincronizar uma conta não apaga a outra, Bauru fora do custo do Financeiro, Dashboard filtra Todas/Araçatuba/Bauru |
 | `test_promo_bauru_v1899.py` | modo/limite por conta e regras iguais, cada anúncio renovado com a sua conta, limite do dia por conta, clique nas duas contas, buscar novos nas duas, convites de uma conta não apagam os da outra, mesma campanha nas duas, tela com filtro de conta |
+| `test_tela_desatualizada_v1900.py` | excluir/salvar com a tela desatualizada não apaga pedido que chegou depois, campo que a integração mudou não vira override do ADMIN, aba de uma filial gravando com o cabeçalho de outra não apaga nem remarca a outra filial, operador com a filial trocada e a tela aberta, filial lida uma vez por página |
+| `test_auditoria_v1900.py` | operador não lê token do agente Zebra/robô Linx, custos nem senha de pedido de acesso; Conferência, Estação e Precificador continuam lendo o que usam; segredo não é gravado pela rota comum; lista de chaves só do Admin; usuário excluído não volta no reinício e senha fraca do arquivo de migração não vale |
 | `test_instalacao.py` | instalação nova, idempotência do `init_db`, versionamento do storage, autenticação |
 | `base.py` | infraestrutura: banco temporário, servidor real em porta livre, cliente HTTP |
 

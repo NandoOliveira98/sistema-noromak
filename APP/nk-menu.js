@@ -169,8 +169,11 @@
     if (String(user.casa || "") !== "todas") { rot.hidden = true; rot.style.display = "none"; return; }
     rot.hidden = false;
     const sel = rot.querySelector("select");
+    // V19.00: mostra a filial com que ESTA página trabalha (lida uma vez ao abrir, no
+    // shared-storage.js), não a última escolhida em outra aba.
     let atual = "";
-    try { atual = localStorage.getItem("nk_filial_v1895") || ""; } catch (_) {}
+    if (window.appStorage && typeof window.appStorage.filialEscolhida === "function") atual = window.appStorage.filialEscolhida() || "";
+    else { try { atual = localStorage.getItem("nk_filial_v1895") || ""; } catch (_) {} }
     sel.value = atual || "todas";
     sel.addEventListener("change", () => {
       if (window.appStorage && typeof window.appStorage.trocarFilial === "function") { window.appStorage.trocarFilial(sel.value); return; }

@@ -52,8 +52,15 @@
   // V18.95: filial escolhida no seletor (só quem vê "todas"; o servidor ignora para os
   // demais). Vai em TODA chamada à API desta origem — inclusive nos fetch() das telas.
   const CHAVE_FILIAL = "nk_filial_v1895";
-  function filialEscolhida() {
+  // V19.00: lida UMA vez, quando a página abre. Antes era lida a cada requisição: trocada
+  // numa aba, as outras continuavam com a fila da filial antiga e passavam a gravar com o
+  // cabeçalho da nova (aba de Bauru gravando como "Todas" apagava Araçatuba). Cada aba
+  // trabalha com a filial com que abriu; trocarFilial() recarrega a aba que trocou.
+  const FILIAL_DA_PAGINA = (() => {
     try { return window.localStorage.getItem(CHAVE_FILIAL) || ""; } catch (_) { return ""; }
+  })();
+  function filialEscolhida() {
+    return FILIAL_DA_PAGINA;
   }
   if (window.fetch && !window.fetch.__nkFilial) {
     const fetchOriginal = window.fetch.bind(window);
