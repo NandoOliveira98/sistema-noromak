@@ -5,7 +5,7 @@ Shopee, manuais), expedição, separação, conferência por código de barras, 
 produtos/SKUs/EANs, kits, precificação, promoções, rentabilidade, estoque, Central de
 Pendências e histórico.
 
-Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V18.96).
+Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V18.97).
 
 ---
 
@@ -486,7 +486,10 @@ Araçatuba (`CASA_PRINCIPAL`) continua na linha id=1 de `ml_integration`; as out
 `with ml_na_casa("bauru"):` faz o mesmo código usar a conta de Bauru (thread nova precisa entrar na casa de novo).
 Os 5 workers da expedição ML (pedidos novos, etiquetas, reconciliação de manuais, token, catch-up) rodam para
 cada casa de `ml_casas_conectadas()`; os de vendas, Ads, visitas, promoções e pós-venda ainda só para a principal.
-Cada casa tem a própria trava de renovação (`_ml_token_lock`). A mesma conta do ML nunca fica em duas casas
+Cada casa tem a própria trava de renovação (`_ml_token_lock`). **V18.97:** venda cujo envio já saiu (`ML_ENVIO_JA_DESPACHADO`: shipped, delivered,
+not_delivered) não entra na fila, a linha da integração sai (a protegida pelo ADMIN fica) e o pedido vai para a
+memória do vigia (`ml_full_ignorado_v1878`); o vigia de etiquetas tira da fila quem esperava etiqueta e já saiu —
+ao conectar Bauru (10/10) entraram as vendas entregues de setembro. A mesma conta do ML nunca fica em duas casas
 (`ml_store_token` recusa). O OAuth leva a casa no `ml_oauth_state.casa`; o webhook vai para a casa do `user_id`
 (`ml_casa_do_seller`). Pedido importado ganha `Casa` (linha sem `Casa` = principal: tudo o que existia, manual,
 Shopee); `_ml_all_pending_label_candidates`, `_ml_manual_pending_numbers` e
@@ -844,6 +847,7 @@ Os testes ficam em `TESTES/` (são 30 arquivos; os principais):
 | `test_avisos_venda_v1893.py` | assinatura VAPID válida (RFC 6979), 1ª leitura não avisa a fila, venda repetida/antiga não avisa, carrinho = 1 venda, vigia do ML sem chamada a mais, um push por vez, renovar não pula venda, só módulo Admin, 404/410 remove o aparelho |
 | `test_casas_ml_v1894.py` | conta ML por casa: Bauru não toca em Araçatuba, mesma conta nas duas casas recusada, token renovado por casa, OAuth grava na casa certa, webhook pela casa do seller, pedido de Bauru entra marcado, cada casa revê só os pedidos dela |
 | `test_filial_v1895.py` | filial do usuário (Admin = todas), Bauru só recebe a fila/etiquetas/histórico/coleta de Bauru, gravação filtrada não apaga a outra filial nem vira tombstone ADMIN, concluir/travar pedido de outra filial = 403, Mover de filial resiste à importação, PDF com a conta do pedido |
+| `test_venda_despachada_v1897.py` | venda com envio já despachado/entregue não entra, a da integração sai, a do ADMIN fica, vigia de etiquetas limpa |
 | `test_instalacao.py` | instalação nova, idempotência do `init_db`, versionamento do storage, autenticação |
 | `base.py` | infraestrutura: banco temporário, servidor real em porta livre, cliente HTTP |
 

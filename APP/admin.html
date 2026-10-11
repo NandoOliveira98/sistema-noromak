@@ -5730,6 +5730,18 @@ function filialPedidoAdminV1895(itens,pedido){
   return `<span class="filial-pill-v1895 ${f}" title="Filial que confere este pedido">${FILIAIS_ADMIN_V1895[f]}</span>`+
     (usuarioAtualEhAdminV1766()?`<button type="button" class="btn-mover-filial-v1895" title="A etiqueta continua vindo da conta de origem do Mercado Livre" onclick="moverPedidoFilialAdminV1895('${p}','${destino}')">Mover p/ ${FILIAIS_ADMIN_V1895[destino]}</button>`:"");
 }
+// V18.97: selo e botão separados (vão em lugares diferentes da barra do cartão).
+function filialSeloAdminV1897(itens){
+  if(!usuarioVeTodasFiliaisV1895())return "";
+  const f=filialDaLinhaAdminV1895((itens||[])[0]);
+  return `<span class="filial-pill-v1895 ${f}" title="Filial que confere este pedido">${FILIAIS_ADMIN_V1895[f]}</span>`;
+}
+function moverFilialBotaoAdminV1897(itens,pedido){
+  if(!usuarioVeTodasFiliaisV1895()||!usuarioAtualEhAdminV1766())return "";
+  const f=filialDaLinhaAdminV1895((itens||[])[0]);
+  const destino=f==="bauru"?"aracatuba":"bauru";
+  return `<button type="button" class="btn-mover-filial-v1895" title="Muda a filial que confere. A etiqueta continua vindo da conta de origem do Mercado Livre." onclick="moverPedidoFilialAdminV1895('${htmlSeguroBanco(pedido)}','${destino}')">Mover p/ ${FILIAIS_ADMIN_V1895[destino]}</button>`;
+}
 async function moverPedidoFilialAdminV1895(pedido,destino){
   if(!pedido||!FILIAIS_ADMIN_V1895[destino])return;
   if(!await nkConfirmar(`Mover o pedido ${pedido} para a filial ${FILIAIS_ADMIN_V1895[destino]}?\n\nEle sai da Conferência da outra filial. A etiqueta continua vindo da conta de origem do Mercado Livre e a importação automática não desfaz a mudança.`))return;
@@ -6218,13 +6230,18 @@ function renderizarPedidosAdmin(){
       const todasValidas=grupo.itens.every(linhaPedidoValidaBanco);
       const badge=total>1?`<span class="pedido-card-badge ${ehKit?'kit':'multi'}">${ehKit?'KIT':'VENDA'} · ${total} itens</span>`:'';
       const status=`<span class="status-celula ${todasValidas?'status-pendente':'status-rascunho'}">${todasValidas?'PENDENTE':'RASCUNHO'}</span>`;
+      // V18.97: selos (situação, KIT/VENDA, filial) e ações (Mover de filial, Excluir) numa barra
+      // no topo do cartão, no padrão das outras telas; os campos ficam numa linha só.
       const header=`<div class="pedido-card-head">
-        <div class="pedido-card-id">${badge}<label>Pedido<input class="campo-pedido" data-grupo-pedido="${htmlSeguroBanco(pedidoOriginal)}" data-campo="Pedido" value="${htmlSeguroBanco(pedidoExibicaoBanco(primeiro.Pedido,primeiro.Marketplace))}" onchange="atualizarCampoGrupoPedidoAdmin(this)"></label></div>
+        <div class="pedido-card-topo">
+          <div class="pedido-card-selos">${status}${badge}${filialSeloAdminV1897(grupo.itens)}</div>
+          <div class="pedido-card-botoes">${moverFilialBotaoAdminV1897(grupo.itens,pedidoOriginal)}${usuarioAtualEhAdminV1766()?`<button type="button" class="btn-excluir-kit-inteiro" title="Excluir definitivamente da Conferência e Pedidos Pendentes" onclick="excluirPedidoInteiroAdmin('${htmlSeguroBanco(pedidoOriginal)}','${htmlSeguroBanco(primeiro.Marketplace)}')"><i class=nk-i-trash></i> Excluir pedido</button>`:''}</div>
+        </div>
+        <div class="pedido-card-id"><label>Pedido<input class="campo-pedido" data-grupo-pedido="${htmlSeguroBanco(pedidoOriginal)}" data-campo="Pedido" value="${htmlSeguroBanco(pedidoExibicaoBanco(primeiro.Pedido,primeiro.Marketplace))}" onchange="atualizarCampoGrupoPedidoAdmin(this)"></label></div>
         <div><small>Marketplace</small><span class="marketplace-pill-admin ${/mercado/i.test(primeiro.Marketplace)?'mp-ml':/shopee/i.test(primeiro.Marketplace)?'mp-shopee':''}">${htmlSeguroBanco(primeiro.Marketplace)}</span></div>
         <label>Data<input class="data-pedido-compacta" type="date" data-grupo-pedido="${htmlSeguroBanco(pedidoOriginal)}" data-campo="Data do Pedido" value="${htmlSeguroBanco(normalizarDataPedidoBanco(primeiro['Data do Pedido'],true))}" onchange="atualizarCampoGrupoPedidoAdmin(this)"></label>
         <label class="pedido-card-cliente">Cliente<input data-grupo-pedido="${htmlSeguroBanco(pedidoOriginal)}" data-campo="Cliente" value="${htmlSeguroBanco(campoBanco(primeiro,'Cliente'))}" onchange="atualizarCampoGrupoPedidoAdmin(this)"></label>
         <label class="pedido-card-conferencia">Conferência${primeiro.NomeConferenciaFonte==="nfe_extensao"?' <em class="tag-nfe" title="Preenchido com o nome de Dados para a NF-e">NF-e</em>':''}<input class="${String(campoBanco(primeiro,'Nome Conferência')).trim()?'':'conferencia-vazia'}" placeholder="Aguardando nome da NF-e" data-grupo-pedido="${htmlSeguroBanco(pedidoOriginal)}" data-campo="Nome Conferência" value="${htmlSeguroBanco(campoBanco(primeiro,'Nome Conferência'))}" onchange="atualizarCampoGrupoPedidoAdmin(this)"></label>
-        <div class="pedido-card-acoes"><div class="pedido-card-status">${status}</div>${filialPedidoAdminV1895(grupo.itens,pedidoOriginal)}${usuarioAtualEhAdminV1766()?`<button type="button" class="btn-excluir-kit-inteiro" title="Excluir definitivamente da Conferência e Pedidos Pendentes" onclick="excluirPedidoInteiroAdmin('${htmlSeguroBanco(pedidoOriginal)}','${htmlSeguroBanco(primeiro.Marketplace)}')"><i class=nk-i-trash></i> Excluir pedido</button>`:''}</div>
       </div>`;
       const itens=grupo.itens.map((item,indice)=>{
         item.Marketplace=marketplaceExibicaoBanco(item.Pedido);
@@ -10032,7 +10049,7 @@ window.addEventListener("storage",e=>{
 #aba-pedidos .pedido-card-row>td{padding:0;border:0;background:transparent}
 .pedido-card{background:#fff;border:1px solid #d9e4ef;border-radius:12px;overflow:hidden;box-shadow:0 1px 4px rgba(25,54,84,.06)}
 .pedido-card-kit{border-left:4px solid #2f80ed}
-.pedido-card-head{display:grid;grid-template-columns:minmax(190px,1.25fr) 105px 130px minmax(150px,1fr) minmax(170px,1.15fr) auto;gap:10px;align-items:end;padding:10px 12px;background:#e5effa;border-bottom:1px solid #cbdced}
+.pedido-card-head{display:grid;grid-template-columns:minmax(190px,1.25fr) 105px 130px minmax(150px,1fr) minmax(170px,1.15fr);gap:10px;align-items:end;padding:10px 12px;background:#e5effa;border-bottom:1px solid #cbdced}
 .pedido-card-head label,.pedido-item-row label{display:grid;gap:3px;font-size:10px;font-weight:800;color:#60758b;text-transform:none}
 .pedido-card-head input{height:31px;padding:5px 8px;border:1px solid #cbd9e7;border-radius:7px;background:#fff;font-size:12px;min-width:0}
 .pedido-card-id{display:flex;align-items:end;gap:7px}.pedido-card-id label{flex:1}.pedido-card-badge{display:inline-flex;align-items:center;white-space:nowrap;padding:4px 7px;border-radius:999px;background:#eaf2ff;color:#1761a9;font-size:10px;font-weight:900;margin-bottom:4px}.pedido-card-badge.kit{background:#e8f2ff;color:#0b63b6}
@@ -10040,7 +10057,7 @@ window.addEventListener("storage",e=>{
 .pedido-card-itens{padding:0 12px}.pedido-item-row{display:grid;grid-template-columns:150px 82px minmax(190px,1fr) 58px minmax(230px,1.05fr) minmax(220px,1.25fr);gap:9px;align-items:start;padding:9px 0;border-bottom:1px solid #edf2f7}.pedido-item-row:last-child{border-bottom:0}
 .pedido-item-acoes{display:flex;gap:4px;padding-top:18px}.pedido-item-acoes button{width:25px;height:25px;padding:0;border:0;border-radius:6px;background:#edf4fb;color:#1d568d;font-size:12px;cursor:pointer}.pedido-item-acoes .acao-excluir{background:#fff0f1;color:#c7333c}
 .pedido-item-num{padding-top:19px;font-size:10px;color:#4c6781}.pedido-item-sku .sku-pedido-compacto{display:flex;gap:5px}.pedido-item-sku input,.pedido-item-qtd input,.pedido-item-ean input{height:31px;min-width:0;width:100%;padding:5px 7px;border:1px solid #cbd9e7;border-radius:7px;font-size:11px}.pedido-item-qtd input{text-align:center}.pedido-item-produto>span,.pedido-item-sku>span,.pedido-item-qtd>span,.pedido-item-ean>span{font-size:9px;font-weight:800;color:#60758b}.pedido-item-produto strong{display:block;margin-top:3px;font-size:11px;color:#1d2f40;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.pedido-item-produto small{display:block;margin-top:3px;color:#7b8b9d;font-size:9px}.pedido-detalhes-compactos{margin-top:4px}.pedido-detalhes-compactos summary{font-size:9px;color:#1761a9;font-weight:800;cursor:pointer}.ean-pedido-acoes{display:flex;gap:4px;margin-top:3px}.ean-pedido-acoes button,.btn-sku-compacto,.btn-sku-manual{height:24px;padding:2px 6px;font-size:9px;border-radius:5px}.ean-pedido-status{font-size:8px!important;margin-top:2px!important}.marketplace-pill-admin{display:inline-flex}.cliente-conf-compacto{gap:4px}
-@media(max-width:1250px){.pedido-card-head{grid-template-columns:1.1fr 90px 120px 1fr 1fr auto}.pedido-item-row{grid-template-columns:150px 70px 1fr 52px 1.05fr 1.1fr}}
+@media(max-width:1250px){.pedido-card-head{grid-template-columns:1.1fr 90px 120px 1fr 1fr}.pedido-item-row{grid-template-columns:150px 70px 1fr 52px 1.05fr 1.1fr}}
 @media(max-width:900px){.pedido-card-head{grid-template-columns:1fr 1fr 1fr}.pedido-item-row{grid-template-columns:54px 1fr 56px 1.2fr}.pedido-item-num{display:none}.pedido-item-produto{grid-column:2/-1}}
 
 /* V17.58 — separação visual dos cards + paginação fora da lista */
@@ -10052,6 +10069,11 @@ window.addEventListener("storage",e=>{
 #aba-pedidos .pedido-card:hover{box-shadow:0 4px 14px rgba(25,54,84,.12)}
 /* V17.87 — Pedidos pendentes: ações do pedido, marketplace e Conferência */
 .pedido-card-acoes{display:flex;flex-direction:column;align-items:flex-end;gap:6px;align-self:center}
+/* V18.97: barra do topo do cartão — selos à esquerda, ações à direita, uma linha só. */
+.pedido-card-topo{grid-column:1/-1;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;min-height:28px}
+.pedido-card-selos,.pedido-card-botoes{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.pedido-card-selos .status-celula{margin:0}
+.pedido-card-botoes .btn-excluir-kit-inteiro,.pedido-card-botoes .btn-mover-filial-v1895{align-self:auto;height:28px;padding:0 10px;font-size:12px;border-radius:7px;display:inline-flex;align-items:center;gap:5px}
 /* V18.95: filial do pedido e Mover de filial. */
 .filial-pill-v1895{display:inline-block;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;background:#E8F0FB;color:#1F57A5}
 .filial-pill-v1895.bauru{background:#FFE7D1;color:#9A3D00}
@@ -10215,8 +10237,9 @@ window.addEventListener("noromak:conference-name-saved",event=>{
   .filtros-data-pedidos select,.filtros-data-pedidos input{min-width:0!important;width:100%;height:42px!important;box-sizing:border-box}
   .filtros-data-pedidos button{grid-column:1/-1}
   #aba-pedidos .pedido-card-head{grid-template-columns:1fr 1fr!important;gap:8px;padding:10px}
-  #aba-pedidos .pedido-card-head>*:first-child{grid-column:1/-1}
+  #aba-pedidos .pedido-card-head>*:first-child,#aba-pedidos .pedido-card-head>.pedido-card-id{grid-column:1/-1}
   #aba-pedidos .pedido-card-acoes{grid-column:1/-1;flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:flex-start}
+  #aba-pedidos .pedido-card-topo{grid-column:1/-1}
   #aba-pedidos .pedido-card-head input,#aba-pedidos .pedido-item-row input{height:40px!important}
   #aba-pedidos .pedido-card-itens{padding:0 10px}
   #aba-pedidos .pedido-item-row{grid-template-columns:1fr 72px!important;gap:8px;padding:12px 0}

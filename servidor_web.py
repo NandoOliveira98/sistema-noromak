@@ -44,7 +44,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "18.96-USUARIO-FILIAL-PUSH-IPHONE"
+APP_VERSION = "18.97-VENDA-JA-DESPACHADA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -9943,6 +9943,10 @@ def ml_reconcile_manual_orders_loop(stop_event: threading.Event) -> None:
             break
 
 
+# V18.97: envio que já saiu — a venda não tem mais o que conferir nem etiqueta para imprimir.
+ML_ENVIO_JA_DESPACHADO = frozenset({"shipped", "delivered", "not_delivered"})
+
+
 def _ml_remove_cancelled_from_pending(
     pending: list[dict[str, Any]],
     *,
@@ -10160,6 +10164,55 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
             "ignored": True,
             "reason": "FULL",
             "logistic_type": _ml_logistic_type(shipment),
+            "removed_existing_api_rows": removed,
+            "inserted": 0,
+            "updated": 0,
+            "items": 0,
+        }
+
+    # V18.97: venda cujo envio JÁ SAIU (despachado, entregue, não entregue) não é trabalho de
+    # expedição. Produção 10/10: ao conectar a conta de Bauru o vigia trouxe as vendas pagas de
+    # setembro/outubro já entregues e o dono teve de excluir uma a uma. Mesma regra do Full: não
+    # entra na fila, a linha que a integração criou sai (pedido protegido pelo ADMIN fica) e o
+    # pedido vai para a memória do vigia (não volta a ser importado a cada 20 s).
+    status_envio = str((shipment or {}).get("status") or "").strip().lower() if isinstance(shipment, dict) else ""
+    if status_envio in ML_ENVIO_JA_DESPACHADO:
+        before_rows = pending
+        before = len(pending)
+        pending = [
+            row for row in pending
+            if not (
+                isinstance(row, dict)
+                and not _admin_manual_pending_protected(row)
+                and (
+                    str(row.get("VendaMercadoLivre") or "").strip() == order_id
+                    or (pack_id and str(row.get("PackIdMercadoLivre") or "").strip() == pack_id)
+                )
+                and (
+                    str(row.get("VendaMercadoLivre") or "").strip()
+                    or "mercado livre" in str(row.get("OrigemCadastro") or "").lower()
+                )
+            )
+        ]
+        removed = before - len(pending)
+        if removed:
+            save_storage(
+                "conf_pedidos", current_raw, json_dumps(pending), False,
+                actor="mercadolivre-api", actor_role="sistema",
+                source_screen="API Mercado Livre",
+                change_method=f"Ignorado - envio já {status_envio}",
+                client_ip="127.0.0.1", allow_completed_reimport=False,
+                remove_pending_identities=_pending_removed_identities_v1852(before_rows, pending),
+            )
+        _ml_full_ignorado_registrar(order_id, source)  # memória do vigia (a tabela é a do Full)
+        return {
+            "order_id": order_id,
+            "pack_id": pack_id,
+            "shipment_id": shipment_id,
+            "status": status,
+            "ignored": True,
+            "reason": "DESPACHADO",
+            "shipment_status": status_envio,
             "removed_existing_api_rows": removed,
             "inserted": 0,
             "updated": 0,
@@ -10682,6 +10735,19 @@ def ml_pending_label_watch_once() -> dict[str, int]:
                     "", ML_CLIENT_ID, "CANCELAMENTO PROCESSADO",
                     json_dumps({"order_id": order_id, "shipment_id": shipment_id,
                                 "removed": result.get("removed_pending_rows", 0)})
+                )
+                continue
+
+            # V18.97: esperava etiqueta mas o envio já saiu (despachado/entregue por fora):
+            # reimporta, e a importação tira da fila a linha que a integração criou.
+            if status in ML_ENVIO_JA_DESPACHADO:
+                triggered += 1
+                result = ml_import_order(order_id, source="API Mercado Livre / watcher envio já despachado")
+                ml_log_event_se_mudou(
+                    "shipment_watcher", f"/shipments/{shipment_id}",
+                    "", ML_CLIENT_ID, "JÁ DESPACHADO / FORA DA FILA",
+                    json_dumps({"order_id": order_id, "shipment_id": shipment_id, "status": status,
+                                "removed": result.get("removed_existing_api_rows", 0)})
                 )
                 continue
 
@@ -11464,7 +11530,9 @@ def ml_new_order_watch_once() -> dict[str, int]:
                     except Exception:
                         continue
                 detail = ml_import_order(order_id, source="API Mercado Livre / entrada automática")
-                if detail.get("ignored") and detail.get("reason") == "FULL":
+                if detail.get("ignored") and detail.get("reason") == "DESPACHADO":
+                    ignored_full += 1  # V18.97: venda já despachada/entregue, fora da fila
+                elif detail.get("ignored") and detail.get("reason") == "FULL":
                     ignored_full += 1
                     ml_log_event_se_mudou("new_order_watcher", f"/orders/{order_id}", seller_id, ML_CLIENT_ID,
                                           "FULL IGNORADO", json_dumps({"order_id": order_id}))
