@@ -5,7 +5,7 @@ Shopee, manuais), expedição, separação, conferência por código de barras, 
 produtos/SKUs/EANs, kits, precificação, promoções, rentabilidade, estoque, Central de
 Pendências e histórico.
 
-Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V18.98).
+Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V18.99).
 
 ---
 
@@ -689,6 +689,21 @@ cofinanciada só a campanha). Modos em `modo_convites` (simulação → lote →
 OWNER, `limite_dia` vale para os dois). Convite que sai da lista do ML é apagado; aceito fica. Histórico em
 `promo_auto_log_v1873` com `tipo='convite'`. Removido pelo ADMIN não aparece. Em campanha, a renovação do
 desconto próprio espera ela acabar (regra da V18.73).
+**V18.99 — conta de Bauru** (decisões do dono, 10/10): as REGRAS (margem mínima da promoção, duração,
+estoque) valem para as duas contas; o **modo** (renovação e convites) e o **limite do dia** são de cada conta
+(`PROMO_AUTO_POR_CONTA`; na principal as chaves de sempre, nas outras `chave@conta`, e sem valor gravado Bauru
+começa em Simulação). `promo_auto_config()` lê a conta da **casa atual** — dentro de `ml_na_casa("bauru")` o modo
+é o de Bauru. `promo_renovacao_v1873.conta`, `promo_auto_log_v1873.conta` e `ml_convite_v1889.conta`;
+`ml_campanha_v1889` foi refeita com PK `(conta, promotion_id)` (a mesma campanha do ML pode convidar as duas
+contas). `promo_renovacao_rodada` e `promo_convites_rodada` dão uma volta por conta conectada
+(`_promo_renovacao_rodada_conta` / `_promo_convites_rodada_conta`): cada conta só confere/aceita o que é dela,
+com o token dela, e o limite do dia conta por conta; a limpeza dos convites é só da conta da volta. Aceitar
+convite roda na conta do convite. "Buscar novos no ML" passa pelas duas contas (lista de anúncios em cache por
+conta, `_ML_ANUNCIOS_CACHE_CASA`). Renovação de Bauru **não** atualiza o monitor do Precificador (é de
+Araçatuba). Tela: filtro Todas / Araçatuba / Bauru (`nk_promo_conta_v1899`), selo da conta em cada anúncio e
+convite, os botões de modo mexem na conta do filtro (Todas = Araçatuba) e o Incluir escolhe a conta. Bauru ainda
+não tem ritmo de venda na Ruptura (as vendas dela não estão em `vendas_v1799`): o critério de estoque mínimo em
+dias fica sem dado para ela.
 **V18.92 — conferência rodando e dois computadores:** a rodada de hora em hora (~5 min para ~250
 marcados) segurava a vez inteira: o Renovar clicado no meio esperava até 120 s e o nginx (60 s)
 dava **HTTP 504**; o anúncio marcado no meio ficava "Ainda não conferido" até a hora seguinte
@@ -859,6 +874,7 @@ Os testes ficam em `TESTES/` (são 30 arquivos; os principais):
 | `test_filial_v1895.py` | filial do usuário (Admin = todas), Bauru só recebe a fila/etiquetas/histórico/coleta de Bauru, gravação filtrada não apaga a outra filial nem vira tombstone ADMIN, concluir/travar pedido de outra filial = 403, Mover de filial resiste à importação, PDF com a conta do pedido |
 | `test_venda_despachada_v1897.py` | venda com envio já despachado/entregue não entra, a da integração sai, a do ADMIN fica, vigia de etiquetas limpa |
 | `test_vendas_conta_v1898.py` | vendas de Bauru em tabela própria, sincronizar uma conta não apaga a outra, Bauru fora do custo do Financeiro, Dashboard filtra Todas/Araçatuba/Bauru |
+| `test_promo_bauru_v1899.py` | modo/limite por conta e regras iguais, cada anúncio renovado com a sua conta, limite do dia por conta, clique nas duas contas, buscar novos nas duas, convites de uma conta não apagam os da outra, mesma campanha nas duas, tela com filtro de conta |
 | `test_instalacao.py` | instalação nova, idempotência do `init_db`, versionamento do storage, autenticação |
 | `base.py` | infraestrutura: banco temporário, servidor real em porta livre, cliente HTTP |
 

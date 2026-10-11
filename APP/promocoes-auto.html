@@ -270,6 +270,15 @@ html[data-tema="escuro"] .gav-filial{background-color:#18222D!important}
 html[data-tema="escuro"] .gav-filial:hover:not(:disabled){border-color:#273F59!important}
 html[data-tema="escuro"] .gav-tag{background-color:#383519!important;color:#979CD8!important}
 </style>
+<style id="contas-v1899">
+/* V18.99: filtro e selo da conta do Mercado Livre. */
+.conta-seg{justify-self:start;width:max-content}
+.modo-conta{font-size:12px;color:var(--nk-ink2,#586A7D)}
+.casa-b{display:inline-block;margin-left:6px;padding:0 7px;border-radius:999px;font-size:10.5px;font-weight:700;line-height:17px;background:#E8F0FB;color:#1F57A5;vertical-align:1px}
+.casa-b.bauru{background:#FFE7D1;color:#9A3D00}
+html[data-tema="escuro"] .casa-b{background:#15283F;color:#86B4F2}
+html[data-tema="escuro"] .casa-b.bauru{background:#3A2412;color:#F0B357}
+</style>
 </head>
 <body>
 <div class="wrap">
@@ -295,13 +304,23 @@ html[data-tema="escuro"] .gav-tag{background-color:#383519!important;color:#979C
             <p>Quando o desconto de um anúncio <b>marcado</b> acaba, o sistema cria outro de 30 dias com o <b>mesmo preço</b>. Em campanha do ML, espera ela acabar.</p></div></div>
           <div class="modo-desc" id="modoDesc"></div>
         </div>
+        <div style="display:grid;gap:6px;justify-items:end">
+        <div class="modo-conta" id="modoConta" hidden></div>
         <div class="seg" id="modos" role="radiogroup" aria-label="Modo de renovação">
           <button data-m="simulacao" role="radio"><i class=nk-i-search></i> Simulação</button>
           <button data-m="lote" role="radio"><i class=nk-i-list></i> Aprovar em lote</button>
           <button data-m="automatico" role="radio"><i class=nk-i-zap></i> Automático</button>
         </div>
+        </div>
       </div>
     </section>
+
+    <!-- V18.99: conta do Mercado Livre (aparece com mais de uma conta conectada). -->
+    <div class="seg conta-seg" id="contaSeg" role="radiogroup" aria-label="Conta do Mercado Livre" hidden>
+      <button data-c="todas" role="radio">Todas as contas</button>
+      <button data-c="aracatuba" role="radio">Araçatuba</button>
+      <button data-c="bauru" role="radio">Bauru</button>
+    </div>
 
     <div class="kpis" id="kpis"></div>
 
@@ -437,6 +456,8 @@ html[data-tema="escuro"] .gav-tag{background-color:#383519!important;color:#979C
   <div class="mb">
     <p>Marca o anúncio para renovar e confere na hora no Mercado Livre. Sem preço, o sistema usa o da promoção que está valendo.</p>
     <div class="campo"><label for="novoMlb">Anúncio (MLB)</label><input class="inp" type="text" id="novoMlb" placeholder="MLB1234567890" autocomplete="off"></div>
+    <div class="campo" id="novoContaCampo" hidden><label for="novoConta">Conta do Mercado Livre</label>
+      <select class="inp" id="novoConta"><option value="aracatuba">Araçatuba</option><option value="bauru">Bauru</option></select></div>
     <div class="campo"><label for="novoPreco">Preço da promoção <span class="muted" style="font-weight:500">(opcional)</span></label>
       <div class="reais"><span>R$</span><input type="text" id="novoPreco" inputmode="decimal" autocomplete="off" placeholder="0,00"></div></div>
     <div class="erro" id="incErro"></div>
@@ -471,6 +492,17 @@ async function api(url,corpo){
 function toast(t){const e=$('toast');e.textContent=t;e.style.display='block';clearTimeout(e._t);e._t=setTimeout(()=>e.style.display='none',4200)}
 // V18.75: "Todos" é o filtro padrão; o tamanho da página fica guardado no navegador
 let D=null, tab='todos', q='', pagina=1, porPagina=50; const marcados=new Set();
+// V18.99: filtro de conta do ML. Com "Todas" ou "Araçatuba", modo e limite mostrados/alterados são
+// os de Araçatuba; com "Bauru", os de Bauru. As regras (margem, duração, estoque) são das duas.
+let contaF='todas'; try{ contaF=localStorage.getItem('nk_promo_conta_v1899')||'todas' }catch(e){}
+const NOMES_CONTA={aracatuba:'Araçatuba',bauru:'Bauru'};
+const multi=()=>!!(D&&Array.isArray(D.contas)&&D.contas.length>1);
+const contaModo=()=>(contaF!=='todas'&&D&&D.config_contas&&D.config_contas[contaF])?contaF:'aracatuba';
+const cfgDe=c=>(D&&D.config_contas&&D.config_contas[c])||D.config;
+const cfgM=()=>cfgDe(contaModo());
+const base=()=>(D?D.itens:[]).filter(i=>!multi()||contaF==='todas'||(i.casa||'aracatuba')===contaF);
+const regraValor=k=>k==='limite_dia'?cfgM().limite_dia:D.config[k];
+const seloConta=i=>multi()?`<span class="casa-b ${esc(i.casa||'aracatuba')}">${esc(NOMES_CONTA[i.casa]||'Araçatuba')}</span>`:'';
 try{ const pp=+localStorage.getItem('nk_promo_auto_pp'); if([25,50,100].includes(pp)) porPagina=pp }catch(e){}
 const MODOS={simulacao:'<b>Simulação</b>: só mostra o que renovaria. Nada é enviado ao Mercado Livre.',
   lote:'<b>Aprovar em lote</b>: o sistema separa o que venceu; você seleciona e clica em Renovar.',
@@ -479,7 +511,7 @@ const PRONTA={simulacao:['Renovaria','c-in','refresh'],lote:['Pronta para renova
 const SIT={ativa:['Ativa','c-ok','check'],revisar:['Revisar','c-rev','alert'],estoque:['Sem estoque','c-rev','box'],em_campanha:['Em campanha do ML','c-sc','tag'],
   erro:['Erro ao ler o ML','c-no','x'],nao_checado:['Ainda não conferido','c-sc','clock'],nao_marcado:['Não marcado','c-sc','']};
 function chip(i){
-  const s=i.situacao==='pronta'?PRONTA[D.config.modo_renovacao]:(SIT[i.situacao]||[i.situacao,'c-sc','']);
+  const s=i.situacao==='pronta'?PRONTA[cfgDe(i.casa||'aracatuba').modo_renovacao]:(SIT[i.situacao]||[i.situacao,'c-sc','']);
   return `<span class="chip ${s[1]}">${s[2]?`<i class=nk-i-${s[2]}></i>`:''}${esc(s[0])}</span>`;
 }
 const precisa=i=>i.marcado&&['revisar','estoque','erro'].includes(i.situacao);
@@ -499,10 +531,9 @@ async function carregar(){
   const u=D.estado||{};
   $('sub').textContent=`Conferência de hora em hora · última ${horaBR(u.fim)}${D.rodando?' · conferindo agora…':''}`;
   $('conteudo').hidden=false; $('aviso').hidden=true;
-  document.querySelectorAll('#modos button').forEach(m=>{const on=m.dataset.m===D.config.modo_renovacao;m.classList.toggle('on',on);m.setAttribute('aria-checked',on)});
-  $('modoDesc').innerHTML=MODOS[D.config.modo_renovacao]||'';
+  desenharConta();
   // V18.92: a lista recarrega sozinha — regra digitada e ainda não salva não é apagada
-  REGRAS.forEach(k=>{if(!antes||String($(k).value)===String(antes.config[k]))$(k).value=D.config[k]}); regrasMudaram();
+  REGRAS.forEach(k=>{if(!antes||String($(k).value)===String(k==='limite_dia'?((antes.config_contas||{})[contaModo()]||antes.config).limite_dia:antes.config[k]))$(k).value=regraValor(k)}); regrasMudaram();
   kpis(); render(); historico(); gavOutroPC();
 }
 // V18.92: dois computadores — a tela pergunta a versão a cada 10 s (leve) e só recarrega a
@@ -527,8 +558,25 @@ function gavOutroPC(){
   }
   gavItem=novo;   // salvar daqui em diante compara com o que acabou de ser mostrado
 }
+// V18.99: filtro de conta, nome da conta do modo e o modo dela.
+function desenharConta(){
+  if(!multi()&&contaF!=='todas') contaF='todas';
+  $('contaSeg').hidden=!multi();
+  document.querySelectorAll('#contaSeg button').forEach(b=>{const on=b.dataset.c===contaF;b.classList.toggle('on',on);b.setAttribute('aria-checked',on);
+    b.hidden=b.dataset.c!=='todas'&&!(D.contas||[]).some(c=>c.conta===b.dataset.c)});
+  $('modoConta').hidden=!multi();
+  $('modoConta').innerHTML=`Modo da conta <b>${esc(NOMES_CONTA[contaModo()])}</b>${contaF==='todas'?' · escolha Bauru acima para o modo de Bauru':''}`;
+  document.querySelectorAll('#modos button').forEach(m=>{const on=m.dataset.m===cfgM().modo_renovacao;m.classList.toggle('on',on);m.setAttribute('aria-checked',on)});
+  $('modoDesc').innerHTML=MODOS[cfgM().modo_renovacao]||'';
+  const lim=document.querySelector('.regra[data-k="limite_dia"] b'); if(lim) lim.textContent=multi()?`Limite por dia · ${NOMES_CONTA[contaModo()]}`:lim.dataset.orig||lim.textContent;
+}
+document.querySelectorAll('#contaSeg button').forEach(b=>b.onclick=()=>{
+  contaF=b.dataset.c; try{localStorage.setItem('nk_promo_conta_v1899',contaF)}catch(e){}
+  pagina=1; marcados.clear(); desenharConta(); REGRAS.forEach(k=>$(k).value=regraValor(k)); regrasMudaram(); kpis(); render();
+  document.dispatchEvent(new CustomEvent('nk-promo-conta'));
+});
 function kpis(){
-  const L=D.itens, M=L.filter(i=>i.marcado), p=PRONTA[D.config.modo_renovacao];
+  const L=base(), M=L.filter(i=>i.marcado), p=PRONTA[cfgM().modo_renovacao];
   const k=(t,ic,cls,v,l)=>`<button class="kpi ${tab===t?'on':''}" data-t="${t}"><span class="kpi-ic ${cls}"><i class=nk-i-${ic}></i></span><span style="min-width:0"><b>${num(v)}</b><small>${l}</small></span></button>`;
   $('kpis').innerHTML=
     k('marcados','list','',M.length,'Marcados para renovar')+
@@ -540,14 +588,14 @@ function kpis(){
 }
 function filtrados(){
   const termo=semAcento(q.trim()), dig=termo.replace(/\D/g,'');
-  return D.itens.filter(F[tab][1]).filter(i=>{
+  return base().filter(F[tab][1]).filter(i=>{
     if(!termo) return true;
     if(dig.length>=6&&i.mlb.replace(/\D/g,'').includes(dig)) return true;
     return semAcento([i.mlb,i.sku,i.titulo].join(' ')).includes(termo);
   }).sort((a,b)=>(b.marcado-a.marcado)||((a.dias_para_vencer??999)-(b.dias_para_vencer??999)));
 }
 function render(){
-  const L=D.itens;
+  const L=base();
   $('tabs').innerHTML=Object.keys(F).filter(k=>k==='todos'||k===tab||L.some(F[k][1])).map(k=>`<button class="chipf ${tab===k?'on':''}" data-k="${k}">${F[k][0]} <span>${num(L.filter(F[k][1]).length)}</span></button>`).join('');
   document.querySelectorAll('#tabs .chipf').forEach(b=>b.onclick=()=>{tab=b.dataset.k;pagina=1;kpis();render()});
   const R=filtrados(), paginas=Math.max(1,Math.ceil(R.length/porPagina));
@@ -559,7 +607,7 @@ function render(){
   const selecionavel=()=>true;   // V18.76: qualquer linha pode ser selecionada (Remover em lote)
   $('tab').innerHTML=`<thead><tr><th class="c" style="width:34px"><input type="checkbox" id="selTodos" title="Selecionar todos deste filtro" aria-label="Selecionar todos deste filtro"></th><th class="l">Anúncio</th><th>Preço do anúncio</th><th>Promoção</th><th>Vence</th><th>Margem</th><th class="l">Situação</th><th class="l">Renovar sozinha</th></tr></thead><tbody>`+
    (P.map(i=>`<tr class="lin ${i.marcado?'marc':''} ${gavItem&&gavItem.mlb===i.mlb?'aberta':''}" data-linha="${i.mlb}" title="Clique para ver margem e lucro"><td class="c">${selecionavel(i)?`<input type="checkbox" data-m="${i.mlb}" ${marcados.has(i.mlb)?'checked':''} aria-label="Selecionar ${i.mlb}">`:''}</td>
-    <td class="l ttl">${esc(i.titulo||'(título ainda não coletado)')}<div class="mlb">${i.mlb}${i.sku?' · SKU '+esc(i.sku):''}</div></td>
+    <td class="l ttl">${esc(i.titulo||'(título ainda não coletado)')}<div class="mlb">${i.mlb}${i.sku?' · SKU '+esc(i.sku):''}${seloConta(i)}</div></td>
     <td>${brl(i.preco_anuncio)}</td>
     <td><b>${brl(i.preco)}</b>${i.desconto!=null?`<div class="sub2">${pct(i.desconto)} off</div>`:''}${i.situacao==='em_campanha'&&i.promo_preco?`<div class="sub2" style="color:var(--warn)">na campanha: ${brl(i.promo_preco)}</div>`:''}${i.marcado?`<div style="margin-top:4px"><button class="btn mini" data-preco="${i.mlb}"><i class=nk-i-pencil></i> alterar</button></div>`:''}</td>
     <td>${vence(i)}</td>
@@ -624,15 +672,18 @@ async function remover(L){
     L.forEach(m=>marcados.delete(m)); toast(`${num(r.removidos)} anúncio(s) removido(s) da lista`); carregar(); }
   catch(e){ toast(e.message) }
 }
-async function marcar(mlb,ativo,preco,antes){
+async function marcar(mlb,ativo,preco,antes,conta){
   const corpo={mlb,ativo,preco:preco?String(preco).replace(',','.'):undefined};
+  if(conta) corpo.conta=conta;   // V18.99: anúncio novo entra na conta escolhida no Incluir
   if(antes!==undefined) corpo.preco_antes=antes;   // V18.92: preço que a gaveta mostrava
   try{ await api('/api/promocoes-auto/renovacao/marcar',corpo);
     toast(ativo?(preco?`Preço salvo. Conferindo ${mlb} no Mercado Livre…`:`${mlb} marcado. Conferindo no Mercado Livre…`):`${mlb} não renova mais sozinho`); carregar();
     if(ativo) setTimeout(carregar,4000); }
   catch(e){ toast(e.message); carregar(); }
 }
-$('abrirIncluir').onclick=()=>{$('novoMlb').value='';$('novoPreco').value='';$('incErro').textContent='';abrirModal('incluirModal','novoMlb')};
+$('abrirIncluir').onclick=()=>{$('novoMlb').value='';$('novoPreco').value='';$('incErro').textContent='';
+  $('novoContaCampo').hidden=!multi(); $('novoConta').value=contaModo();
+  abrirModal('incluirModal','novoMlb')};
 $('incCancelar').onclick=()=>fecharModal('incluirModal');
 // V18.84: verificação manual (sem rotina automática) — anúncio do ML que falta entra sem marcar
 $('buscarNovos').onclick=async()=>{
@@ -649,7 +700,7 @@ $('incluirForm').onsubmit=e=>{
   const m=$('novoMlb').value.trim().toUpperCase(), bruto=$('novoPreco').value.trim(), v=bruto?numBR(bruto):null;
   if(!/\d{6,}/.test(m)){$('incErro').textContent='Informe o número do anúncio (MLB).';return $('novoMlb').focus()}
   if(bruto&&v==null){$('incErro').textContent='Preço inválido.';return $('novoPreco').focus()}
-  fecharModal('incluirModal'); marcar(m,true,v!=null?String(v):'');
+  fecharModal('incluirModal'); marcar(m,true,v!=null?String(v):'',undefined,multi()?$('novoConta').value:undefined);
 };
 $('renovar').onclick=async()=>{
   const L=renovaveis(); if(!L.length) return;
@@ -673,22 +724,23 @@ $('renovar').onclick=async()=>{
 $('checar').onclick=async()=>{try{const r=await api('/api/promocoes-auto/renovacao/checar',{});
   toast(r.iniciado===false?'Já está conferindo agora. A lista se atualiza sozinha.':'Conferindo os anúncios marcados no Mercado Livre… A lista se atualiza sozinha.');setTimeout(carregar,3000)}catch(e){toast(e.message)}};
 async function salvarConfig(corpo){
+  corpo={...corpo,conta:contaModo()};   // V18.99: modo e limite do dia são da conta do filtro
   try{ await api('/api/promocoes-auto/config',corpo); toast('Salvo.'); carregar(); }
   catch(e){ if(e.status===428) return pedirOwner(()=>salvarConfig(corpo)); toast(e.message); }
 }
 const REGRAS=['margem_min_promo','duracao_dias','estoque_min_dias','limite_dia'];
 function regrasMudaram(){
   if(!D) return 0;
-  let n=0; REGRAS.forEach(k=>{const m=String($(k).value)!==String(D.config[k]);n+=m;document.querySelector(`.regra[data-k="${k}"]`).classList.toggle('mudou',m)});
+  let n=0; REGRAS.forEach(k=>{const m=String($(k).value)!==String(regraValor(k));n+=m;document.querySelector(`.regra[data-k="${k}"]`).classList.toggle('mudou',m)});
   const b=$('salvarRegras'); b.disabled=!n; b.classList.toggle('alterado',!!n);
   b.querySelector('span').textContent=n?`Salvar ${n} alteração${n>1?'ões':''}`:'Salvar regras';
   return n;
 }
 REGRAS.forEach(k=>$(k).addEventListener('input',regrasMudaram));
-$('salvarRegras').onclick=()=>{const c={};REGRAS.forEach(k=>{if(String($(k).value)!==String(D.config[k]))c[k]=+$(k).value});if(Object.keys(c).length)salvarConfig(c)};
+$('salvarRegras').onclick=()=>{const c={};REGRAS.forEach(k=>{if(String($(k).value)!==String(regraValor(k)))c[k]=+$(k).value});if(Object.keys(c).length)salvarConfig(c)};
 document.querySelectorAll('#modos button').forEach(m=>m.onclick=async()=>{
-  if(m.dataset.m===D.config.modo_renovacao) return;
-  if(m.dataset.m==='automatico'&&!await confirmar('Ligar o modo Automático',`O sistema vai renovar sozinho, no Mercado Livre, os anúncios marcados que passarem em todas as regras (até ${D.config.limite_dia} por dia). O que não passar continua esperando você. Em seguida será pedida a confirmação do proprietário.`,'Continuar')) return;
+  if(m.dataset.m===cfgM().modo_renovacao) return;
+  if(m.dataset.m==='automatico'&&!await confirmar('Ligar o modo Automático'+(multi()?' · '+NOMES_CONTA[contaModo()]:''),`O sistema vai renovar sozinho, no Mercado Livre, os anúncios marcados${multi()?' da conta '+NOMES_CONTA[contaModo()]:''} que passarem em todas as regras (até ${cfgM().limite_dia} por dia). O que não passar continua esperando você. Em seguida será pedida a confirmação do proprietário.`,'Continuar')) return;
   salvarConfig({modo_renovacao:m.dataset.m});
 });
 // janelas no padrão do sistema (Esc fecha; clicar fora fecha)
@@ -907,7 +959,8 @@ function historico(){
 }
 carregar();
 // V18.89: o script dos convites (abaixo) usa a mesma API, janelas e confirmação do proprietário.
-window.nkPromoAuto={api,confirmar,pedirOwner,toast,esc,brl,pct,num,horaBR,recarregar:()=>carregar()};
+window.nkPromoAuto={api,confirmar,pedirOwner,toast,esc,brl,pct,num,horaBR,recarregar:()=>carregar(),
+  contaF:()=>contaF,contaModo:()=>contaModo(),multi:()=>multi(),nomeConta:c=>NOMES_CONTA[c]||'Araçatuba'};   // V18.99
 })();
 </script>
 <script>
@@ -930,7 +983,17 @@ const SIT={aceito:['Participando','c-ok','check'],revisar:['Revisar','c-rev','al
   expirado:['Prazo encerrado','c-sc','clock'],erro:['Recusado pelo ML','c-no','x'],'':['Ainda não conferido','c-sc','clock']};
 const F={pronto:['Prontos',i=>i.situacao==='pronto'],revisar:['Precisam de você',i=>['revisar','estoque','erro'].includes(i.situacao)],
   aceito:['Participando',i=>i.situacao==='aceito'],todos:['Todos',()=>true]};
-function chip(i){const s=i.situacao==='pronto'?PRONTO[C.modo]:(SIT[i.situacao]||[i.situacao,'c-sc','']);
+// V18.99: modo e limite dos convites de cada conta; a lista segue o filtro de conta da tela.
+const modoDe=c=>(C.modos&&C.modos[c])||C.modo;
+const limiteDe=c=>(C.limites&&C.limites[c])||C.limite_dia;
+const daConta=i=>!P.multi()||P.contaF()==='todas'||(i.conta||'aracatuba')===P.contaF();
+function desenharModo(){
+  if(!C) return;
+  document.querySelectorAll('#convModos button').forEach(m=>{const on=m.dataset.m===modoDe(P.contaModo());m.classList.toggle('on',on);m.setAttribute('aria-checked',on)});
+  $('convModoDesc').innerHTML=(P.multi()?`Modo dos convites da conta <b>${esc(P.nomeConta(P.contaModo()))}</b>. `:'')+(MODOS[modoDe(P.contaModo())]||'');
+}
+document.addEventListener('nk-promo-conta',()=>{if(C){sel.clear();desenharModo();render()}});
+function chip(i){const s=i.situacao==='pronto'?PRONTO[modoDe(i.conta||'aracatuba')]:(SIT[i.situacao]||[i.situacao,'c-sc','']);
   return `<span class="chip ${s[1]}">${s[2]?`<i class=nk-i-${s[2]}></i>`:''}${esc(s[0])}</span>`}
 const prazoTxt=i=>{const t=Date.parse(i.prazo||i.fim||'');if(!isFinite(t))return '';const d=Math.ceil((t-Date.now())/864e5);
   return d<0?'prazo encerrado':d===0?'aceitar até hoje':`aceitar em até ${d} dia${d>1?'s':''}`};
@@ -942,14 +1005,13 @@ async function carregar(){
   $('convIntro').innerHTML=`O ML convida anúncios para campanhas (nas cofinanciadas ele paga parte do desconto). Cada convite passa pelas <b>mesmas regras da renovação</b>: margem mínima ${C.margem_min_promo}%, custo, preço mínimo e estoque para ${C.estoque_min_dias} dias. `+
     `${C.campanhas.length?`${num(C.campanhas.length)} campanha(s) com convite`:'Nenhuma campanha com convite'} · busca a cada 3 h · última ${horaBR(u.fim)}${u.rodando?' · buscando agora…':''}`+
     (ult.ok===false?` · <b style="color:var(--neg)">erro: ${esc(ult.erro||(ult.erros||[]).join('; '))}</b>`:'');
-  document.querySelectorAll('#convModos button').forEach(m=>{const on=m.dataset.m===C.modo;m.classList.toggle('on',on);m.setAttribute('aria-checked',on)});
-  $('convModoDesc').innerHTML=MODOS[C.modo]||'';
+  desenharModo();
   for(const k of [...sel]) if(!C.itens.some(i=>chave(i)===k&&i.situacao==='pronto')) sel.delete(k);
   if(!C.itens.some(F[filtro][1])) filtro=C.itens.some(F.revisar[1])?'revisar':'todos';
   render();
 }
 function render(){
-  const L=C.itens;
+  const L=C.itens.filter(daConta);
   $('convTabs').innerHTML=Object.keys(F).map(k=>`<button class="chipf ${filtro===k?'on':''}" data-k="${k}">${F[k][0]} <span>${num(L.filter(F[k][1]).length)}</span></button>`).join('');
   document.querySelectorAll('#convTabs .chipf').forEach(b=>b.onclick=()=>{filtro=b.dataset.k;limite=50;render()});
   const R=L.filter(F[filtro][1]).sort((a,b)=>(b.margem??-9)-(a.margem??-9)), V=R.slice(0,limite);
@@ -958,7 +1020,7 @@ function render(){
     <th class="l">Anúncio</th><th class="l">Campanha</th><th>Preço do anúncio</th><th>Comprador paga</th><th>Você recebe</th><th>Margem</th><th class="l">Situação</th></tr></thead><tbody>`+
    (V.map(i=>{const comprador=i.tipo==='DEAL'?(i.preco_escolhido||i.preco||i.preco_sugerido):i.preco;
      return `<tr><td class="c">${i.situacao==='pronto'?`<input type="checkbox" data-c="${esc(chave(i))}" ${sel.has(chave(i))?'checked':''} aria-label="Selecionar ${esc(i.mlb)}">`:''}</td>
-     <td class="l ttl">${esc(i.titulo||'(título ainda não lido)')}<div class="mlb">${esc(i.mlb)}${i.sku?' · SKU '+esc(i.sku):''}</div></td>
+     <td class="l ttl">${esc(i.titulo||'(título ainda não lido)')}<div class="mlb">${esc(i.mlb)}${i.sku?' · SKU '+esc(i.sku):''}${P.multi()?`<span class="casa-b ${esc(i.conta||'aracatuba')}">${esc(P.nomeConta(i.conta))}</span>`:''}</div></td>
      <td class="l" style="white-space:normal;max-width:240px">${esc(i.campanha||i.promotion_id)}<div class="sub2">${esc(i.tipo_nome)}${prazoTxt(i)?' · '+prazoTxt(i):''}</div></td>
      <td>${brl(i.preco_original)}</td>
      <td>${brl(comprador)}${comprador&&i.preco_original?`<div class="sub2">${pct(1-comprador/i.preco_original)} off</div>`:''}${i.tipo==='DEAL'&&i.preco_min?`<div class="sub2">ML aceita ${brl(i.preco_min)}–${brl(i.preco_max)}</div>`:''}</td>
@@ -993,12 +1055,12 @@ $('convAceitar').onclick=async()=>{
 };
 $('convBuscar').onclick=async()=>{try{await api('/api/promocoes-auto/convites/buscar',{});toast('Buscando os convites no Mercado Livre… a lista atualiza em instantes.');setTimeout(carregar,15000);setTimeout(carregar,45000)}catch(e){toast(e.message)}};
 async function salvarModo(m){
-  try{ await api('/api/promocoes-auto/config',{modo_convites:m}); toast('Salvo.'); carregar(); }
+  try{ await api('/api/promocoes-auto/config',{modo_convites:m,conta:P.contaModo()}); toast('Salvo.'); carregar(); }
   catch(e){ if(e.status===428) return pedirOwner(()=>salvarModo(m)); toast(e.message); }
 }
 document.querySelectorAll('#convModos button').forEach(m=>m.onclick=async()=>{
-  if(!C||m.dataset.m===C.modo) return;
-  if(m.dataset.m==='automatico'&&!await confirmar('Aceitar convites sozinho',`O sistema vai aceitar sozinho, no Mercado Livre, os convites de campanha que passarem em todas as regras (até ${C.limite_dia} por dia). O que não passar continua esperando você. Em seguida será pedida a confirmação do proprietário.`,'Continuar')) return;
+  if(!C||m.dataset.m===modoDe(P.contaModo())) return;
+  if(m.dataset.m==='automatico'&&!await confirmar('Aceitar convites sozinho'+(P.multi()?' · '+P.nomeConta(P.contaModo()):''),`O sistema vai aceitar sozinho, no Mercado Livre, os convites de campanha${P.multi()?' da conta '+P.nomeConta(P.contaModo()):''} que passarem em todas as regras (até ${limiteDe(P.contaModo())} por dia). O que não passar continua esperando você. Em seguida será pedida a confirmação do proprietário.`,'Continuar')) return;
   salvarModo(m.dataset.m);
 });
 carregar();

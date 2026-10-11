@@ -27,7 +27,9 @@ class Base(TesteNoromak):
         super().setUp()
         self._orig = (S.ml_promocoes_do_item, S.ml_itens_detalhe, S._ml_promo_http, S._precificador_produtos_ml,
                       S._ml_vinculos_mlb_sku, S.ml_integration_row, S.promo_atualizar_data_planilha)
-        S.ml_integration_row = lambda: {"access_token": "TESTE", "seller_id": "1"}
+        # V18.99: conectada só a conta principal (Bauru não conectada nestes cenários)
+        S.ml_integration_row = lambda: ({"access_token": "TESTE", "seller_id": "1"}
+                                        if S.ml_casa_atual() == S.CASA_PRINCIPAL else None)
         S._precificador_produtos_ml = lambda: {"SKU1": dict(PROD)}
         S._ml_vinculos_mlb_sku = lambda: {"MLB1": "SKU1", "MLB2": "SKU1"}
         S.promo_atualizar_data_planilha = lambda *a, **k: True
