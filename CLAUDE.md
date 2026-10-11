@@ -5,7 +5,7 @@ Shopee, manuais), expedição, separação, conferência por código de barras, 
 produtos/SKUs/EANs, kits, precificação, promoções, rentabilidade, estoque, Central de
 Pendências e histórico.
 
-Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V19.00).
+Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V19.01).
 
 ---
 
@@ -461,6 +461,27 @@ abre o Financeiro. `ml_profitability_snapshot` **não é mais alimentada**, mas 
 lida (custo de reserva da Demanda de Compra e histórico da gaveta do Dashboard, via
 `_ml_custo_venda_por_pedido`, que prefere o custo capturado no ato da venda).
 
+### Auditor de cobranças do ML (V19.01)
+`APP/auditoria-ml.html` (`/auditoria-ml`, menu Visão geral abaixo do Financeiro, módulo **admin**; spec em
+`docs/superpowers/specs/2026-10-11-auditoria-cobrancas-ml-design.md`). Encontra na fatura do ML o que parece
+cobrado indevidamente e acompanha cada **caso** (`ml_cobranca_caso_v1901`) até o fim. Não há API para contestar:
+a equipe contesta na Central de Ajuda do ML (texto pronto + planilha .csv na tela); o auditor **só lê** o ML.
+Tipos: **estorno que não veio** (pedido cancelado: tarifa e frete; reembolso total por reclamação: só a tarifa;
+reembolso parcial fica fora), **frete de devolução** (reclamação fechada que o vendedor ganhou ou que o ML cobriu —
+mesma regra do Pós-venda), **tarifa/frete acima do esperado** (tarifa da fatura × `ml_venda_custo_v1830`; frete da
+fatura **por envio** × valor cheio do envio, `ml_frete_envio_v1830.bruto` = `gross_amount` da mesma resposta do
+`/shipments/{id}/costs`; abaixo de R$ 2,00 só soma no cartão "Diferenças pequenas") e **ajuste de peso** (desligado:
+`ML_FATURA_AJUSTE_PESO` vazio até achar o código em `GET /api/auditoria-ml/codigos`, só perfil Admin). Um
+lançamento pertence a **um caso só** (estorno > devolução > peso > acima). Carência de 30 dias ("Aguardando
+estorno") para estorno e devolução. **Regra de ouro:** a rodada atualiza números e lançamentos, **nunca** a situação
+humana (contestado, negado, ignorado); só vira Recuperado/Recuperado em parte pelo crédito na fatura (recuperado =
+maior diferença vista − diferença atual). Ignorado (motivo obrigatório) fica na tabela e por isso nunca é recriado.
+`auditoria_detectar` é **pura** (só banco); a rodada `auditoria_rodada` (worker `ml_auditoria_loop`, uma vez entre
+02:00 e 06:00, ou "Auditar agora") baixa a fatura (mês atual e anterior + um mês antigo por noite até 6, com o
+`FINANCEIRO_SYNC_LOCK`), consulta `/orders/{id}` dos pedidos com cobrança que sumiram de `vendas_v1799`
+(`ml_pedido_status_v1901`, uma vez cada) e completa o valor cheio do frete. Só Araçatuba por enquanto. Linha no
+relatório das 08:00 (`auditoria_resumo_email`; cada caso avisado uma vez, `avisado_em`).
+
 ### Painel de saúde e alertas (V18.83)
 `APP/saude.html` (`/saude`, menu Sistema; ver = módulo admin, mudar quem recebe = só perfil Admin).
 `GET /api/saude` (`saude_payload`): Mercado Livre (conexão, token, última busca de pedidos), Shopee,
@@ -904,6 +925,7 @@ Os testes ficam em `TESTES/` (são 30 arquivos; os principais):
 | `test_promo_bauru_v1899.py` | modo/limite por conta e regras iguais, cada anúncio renovado com a sua conta, limite do dia por conta, clique nas duas contas, buscar novos nas duas, convites de uma conta não apagam os da outra, mesma campanha nas duas, tela com filtro de conta |
 | `test_tela_desatualizada_v1900.py` | excluir/salvar com a tela desatualizada não apaga pedido que chegou depois, campo que a integração mudou não vira override do ADMIN, aba de uma filial gravando com o cabeçalho de outra não apaga nem remarca a outra filial, operador com a filial trocada e a tela aberta, filial lida uma vez por página |
 | `test_auditoria_v1900.py` | operador não lê token do agente Zebra/robô Linx, custos nem senha de pedido de acesso; Conferência, Estação e Precificador continuam lendo o que usam; segredo não é gravado pela rota comum; lista de chaves só do Admin; usuário excluído não volta no reinício e senha fraca do arquivo de migração não vale |
+| `test_auditoria_cobrancas_v1901.py` | cada tipo de cobrança indevida, carência de 30 dias, R$ 2,00, frete do carrinho por envio, lançamento em um caso só, situação humana nunca desfeita, ignorado não volta, recuperado total/parcial (negado vira recuperado), detecção sem chamar o ML, permissões, linha do e-mail uma vez |
 | `test_instalacao.py` | instalação nova, idempotência do `init_db`, versionamento do storage, autenticação |
 | `base.py` | infraestrutura: banco temporário, servidor real em porta livre, cliente HTTP |
 

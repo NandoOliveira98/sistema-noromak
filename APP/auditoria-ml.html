@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="data:,">
+<title>Noromak · Cobranças do ML</title>
+<!-- V19.01: Auditor de cobranças do Mercado Livre. Lista o que a fatura do ML parece ter
+     cobrado indevidamente (estorno que não veio, frete de devolução, tarifa/frete acima do
+     esperado, ajuste de peso) e acompanha cada caso até o fim. A contestação é feita pela
+     equipe no ML; aqui só se marca a situação. GET /api/auditoria-ml (módulo admin, só lê
+     o banco; quem busca no ML é a rotina ml_auditoria_loop de madrugada ou "Auditar agora"). -->
+<script defer src="/expedicao/web-auth.js?v=18.82"></script>
+<link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
+<link rel="stylesheet" href="/expedicao/nk-ui.css?v=18.95">
+<script src="/expedicao/nk-ui.js?v=18.83"></script>
+<script defer src="/expedicao/nk-menu.js?v=19.01" data-shell></script>
+<style>
+body{margin:0;background:var(--nk-canvas);color:var(--nk-ink);font-family:var(--nk-font)}
+.barra{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:14px 0 10px}
+.barra select,.barra input{font:inherit;font-size:13px;border:1px solid var(--nk-line);border-radius:8px;padding:7px 9px;background:var(--nk-tile);color:var(--nk-ink)}
+.barra input[type=search]{min-width:200px}
+.barra .esp{flex:1}
+.mini{font-size:11.5px;color:var(--nk-ink2)}
+.nk-kpi{cursor:pointer}
+.nk-kpi.on{outline:2px solid var(--nk-pri);outline-offset:-1px}
+.nk-kpi.so-info{cursor:default}
+td.num,th.num{text-align:right!important;white-space:nowrap}
+#tabela tbody tr[data-id]{cursor:pointer}
+#tabela tbody tr[data-id]:hover td{background:var(--nk-hover)}
+.tipo{font-size:12px;color:var(--nk-ink2)}
+.prazo{font-size:11px;color:var(--nk-bad);font-weight:700;display:block;margin-top:3px}
+.rodape{display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-top:14px;color:var(--nk-ink2);font-size:12px}
+.rodape input{width:110px;font:inherit;font-size:12px;border:1px solid var(--nk-line);border-radius:8px;padding:5px 8px;background:var(--nk-tile);color:var(--nk-ink)}
+.fundo{position:fixed;inset:0;background:rgba(10,20,35,.35);display:none;z-index:100060}
+.gaveta{position:fixed;top:0;right:0;bottom:0;width:min(580px,100%);background:var(--nk-tile);box-shadow:-8px 0 30px rgba(0,0,0,.18);
+  transform:translateX(105%);transition:transform .2s;z-index:100061;display:flex;flex-direction:column;color:var(--nk-ink)}
+.gaveta.on{transform:none}.fundo.on{display:block}
+.g-cab{padding:16px 18px;border-bottom:1px solid var(--nk-line);display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+.g-cab h2{margin:0;font-size:17px;color:var(--nk-head)}
+.g-cab p{margin:4px 0 0;font-size:12px;color:var(--nk-ink2)}
+.g-cab a{color:var(--nk-pri)}
+.g-corpo{padding:14px 18px;overflow:auto;flex:1;display:grid;grid-template-columns:minmax(0,1fr);gap:14px;align-content:start}
+.valores{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+@media(max-width:520px){.valores{grid-template-columns:repeat(2,1fr)}}
+.valores div{background:var(--nk-canvas);border-radius:10px;padding:9px 10px}
+.valores small{display:block;font-size:11px;color:var(--nk-ink2);font-weight:600}
+.valores b{font-size:15px;color:var(--nk-head);font-variant-numeric:tabular-nums}
+.sec h3{margin:0 0 6px;font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--nk-ink2)}
+.texto{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--nk-canvas);border:1px solid var(--nk-line);border-radius:10px;padding:10px 12px;font-size:13px;line-height:1.5}
+.g-acoes{padding:12px 18px;border-top:1px solid var(--nk-line);display:flex;gap:8px;flex-wrap:wrap}
+.hist{font-size:12px;color:var(--nk-ink2);display:grid;gap:3px}
+</style>
+</head>
+<body>
+<main class="nk-pagina">
+  <div class="nk-cab">
+    <div>
+      <div class="nk-rotulo">Visão geral</div>
+      <h1>Cobranças do ML</h1>
+      <p id="sub">Carregando…</p>
+    </div>
+    <div class="nk-acoes">
+      <button class="nk-btn" id="bAuditar" title="Busca a fatura e confere os pedidos agora (em segundo plano)"><i class=nk-i-refresh></i> Auditar agora</button>
+      <button class="nk-btn pri" id="bPlanilha" disabled>Baixar planilha (0)</button>
+    </div>
+  </div>
+
+  <div class="nk-carregando" id="carregando">Carregando as cobranças…</div>
+  <div class="nk-aviso bad" id="erro" hidden></div>
+
+  <div id="conteudo" hidden>
+    <div class="nk-aviso info" id="aviso" hidden></div>
+    <div class="nk-kpis" id="kpis"></div>
+
+    <div class="barra">
+      <select id="fSit" title="Situação">
+        <option value="a_contestar">A contestar</option>
+        <option value="aguardando">Aguardando estorno</option>
+        <option value="contestado">Contestado</option>
+        <option value="recuperado">Recuperados</option>
+        <option value="negado">Negados</option>
+        <option value="ignorado">Ignorados</option>
+        <option value="">Todas as situações</option>
+      </select>
+      <select id="fTipo" title="Tipo"><option value="">Todos os tipos</option></select>
+      <select id="fMes" title="Mês da fatura"><option value="">Todos os meses</option></select>
+      <input id="fBusca" type="search" placeholder="Buscar pedido…">
+      <span class="esp"></span>
+      <span class="mini" id="contagem"></span>
+    </div>
+
+    <div class="nk-tw">
+      <table class="nk-tab" id="tabela">
+        <thead><tr>
+          <th style="width:30px"><input type="checkbox" id="todos" title="Selecionar todos da lista"></th>
+          <th>Pedido</th><th>Venda</th><th>Tipo</th><th>Fatura</th>
+          <th class="num">Cobrado</th><th class="num">Esperado</th><th class="num">Diferença</th><th class="num">Recuperado</th>
+          <th>Situação</th>
+        </tr></thead>
+        <tbody id="linhas"></tbody>
+      </table>
+    </div>
+
+    <div class="rodape">
+      <span id="rRodada"></span>
+      <span id="rCobertura"></span>
+      <span id="rPeso"></span>
+      <label style="display:flex;gap:6px;align-items:center">Prazo do ML para contestar
+        <input id="prazo" type="number" min="1" max="3650" placeholder="não informado"> dias</label>
+    </div>
+  </div>
+</main>
+
+<div class="fundo" id="fundo"></div>
+<aside class="gaveta" id="gaveta" aria-label="Caso"></aside>
+
+<script>
+(() => {
+  "use strict";
+  const B = "/expedicao";
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));
+  const R = v => v == null ? "—" : Number(v).toLocaleString("pt-BR", {style:"currency", currency:"BRL"});
+  const D = s => /^\d{4}-\d{2}-\d{2}/.test(String(s || "")) ? String(s).slice(0, 10).split("-").reverse().join("/") : "—";
+  const DH = iso => { const d = new Date(iso); return isNaN(d) ? "—" : d.toLocaleString("pt-BR", {day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit"}); };
+  const MES = p => /^\d{4}-\d{2}/.test(String(p || "")) ? `${String(p).slice(5, 7)}/${String(p).slice(0, 4)}` : "—";
+  const vendaML = id => `https://www.mercadolivre.com.br/vendas/${encodeURIComponent(id)}/detalhe`;
+  const SIT = {aguardando:["Aguardando estorno","info"], a_contestar:["A contestar","warn"], contestado:["Contestado","info"],
+    recuperado:["Recuperado","ok"], recuperado_parcial:["Recuperado em parte","ok"], negado:["Negado","bad"], ignorado:["Ignorado",""]};
+  const aberto = c => c.diferenca - (c.recuperado || 0);
+  let DADOS = null, aguardandoRodada = null;
+  const sel = new Set();
+
+  async function api(url, opcoes = {}) {
+    const r = await fetch(B + url, {cache:"no-store", credentials:"same-origin", headers:{"Content-Type":"application/json", Accept:"application/json"}, ...opcoes});
+    let d = {}; try { d = await r.json(); } catch (_) {}
+    if (!r.ok || d.ok === false) throw new Error(d.error || `HTTP ${r.status}`);
+    return d;
+  }
+
+  async function carregar() {
+    try { DADOS = await api("/api/auditoria-ml"); }
+    catch (e) { $("carregando").hidden = true; $("erro").hidden = false; $("erro").textContent = "Não foi possível carregar: " + e.message; return; }
+    $("carregando").hidden = true; $("erro").hidden = true; $("conteudo").hidden = false;
+    preencherFiltros(); desenhar();
+    if (aguardandoRodada && !DADOS.rodando) { aguardandoRodada = null; nkToast("Rodada terminada. A lista foi atualizada.", "ok"); }
+    if (DADOS.rodando) setTimeout(carregar, 10000);
+  }
+
+  function preencherFiltros() {
+    const t = $("fTipo"), m = $("fMes");
+    if (t.options.length === 1) for (const [k, v] of Object.entries(DADOS.tipos)) t.add(new Option(v, k));
+    const atual = m.value;
+    const meses = [...new Set(DADOS.casos.map(c => c.periodo_fatura).filter(Boolean))].sort().reverse();
+    m.innerHTML = `<option value="">Todos os meses</option>` + meses.map(x => `<option value="${esc(x)}">${MES(x)}</option>`).join("");
+    m.value = meses.includes(atual) ? atual : "";
+    if (document.activeElement !== $("prazo")) $("prazo").value = DADOS.config.prazo_contestacao_dias || "";
+  }
+
+  function desenhar() {
+    const d = DADOS, rod = d.rodada || {};
+    $("sub").textContent = `Cobranças da fatura do Mercado Livre que parecem indevidas · conta Araçatuba · últimos ${d.regras.meses} meses`;
+    const avisos = [];
+    if (!d.casos.length && !rod.fim) avisos.push("Nenhuma rodada ainda. A rotina roda de madrugada (02:00 às 06:00) ou clique em <b>Auditar agora</b>. A primeira carga baixa a fatura aos poucos: os 6 meses ficam completos em alguns dias.");
+    if (d.rodando) avisos.push("Rodada em andamento… a lista atualiza sozinha quando terminar.");
+    if (rod.fatura && rod.fatura.erro) avisos.push("Fatura do ML: " + esc(rod.fatura.erro));
+    $("aviso").hidden = !avisos.length; $("aviso").innerHTML = avisos.join("<br>");
+    kpis();
+    const sit = $("fSit").value, tipo = $("fTipo").value, mes = $("fMes").value, q = $("fBusca").value.trim();
+    const lista = d.casos.filter(c => (!sit || c.situacao === sit || (sit === "recuperado" && c.situacao === "recuperado_parcial"))
+      && (!tipo || c.tipo === tipo) && (!mes || c.periodo_fatura === mes)
+      && (!q || String(c.order_id).includes(q) || String(c.shipment_id).includes(q) || ((c.prova || {}).pedidos || []).some(p => String(p).includes(q))));
+    $("contagem").textContent = `${lista.length} caso(s)`;
+    $("linhas").innerHTML = lista.length ? lista.map(c => {
+      const [st, cls] = SIT[c.situacao] || [c.situacao, ""];
+      const pedidos = (c.prova || {}).pedidos || [];
+      const extra = c.situacao === "aguardando" && c.dias_para_contestar != null ? `<span class="mini" style="display:block">vira "A contestar" em ${c.dias_para_contestar} dia(s)</span>` : "";
+      return `<tr data-id="${esc(c.caso_id)}">
+        <td data-pare><input type="checkbox" data-sel="${esc(c.caso_id)}" ${sel.has(c.caso_id) ? "checked" : ""}></td>
+        <td><b>${esc(c.order_id)}</b>${pedidos.length > 1 ? ` <span class="mini">+${pedidos.length - 1}</span>` : ""}</td>
+        <td>${D(c.sale_day)}</td><td class="tipo">${esc(c.tipo_nome)}</td><td>${MES(c.periodo_fatura)}</td>
+        <td class="num">${R(c.cobrado)}</td><td class="num">${R(c.esperado)}</td><td class="num"><b>${R(c.diferenca)}</b></td>
+        <td class="num">${c.recuperado ? R(c.recuperado) : "—"}</td>
+        <td><span class="nk-selo ${cls}">${esc(st)}</span>${extra}${c.fora_prazo ? '<span class="prazo">provavelmente fora do prazo</span>' : ""}</td></tr>`;
+    }).join("") : `<tr><td colspan="10" class="nk-vazio">Nenhum caso nesta situação.</td></tr>`;
+    document.querySelectorAll("#linhas tr[data-id]").forEach(tr => tr.onclick = ev => { if (!ev.target.closest("[data-pare]")) abrir(tr.dataset.id); });
+    document.querySelectorAll("[data-sel]").forEach(cb => cb.onchange = () => { cb.checked ? sel.add(cb.dataset.sel) : sel.delete(cb.dataset.sel); botaoPlanilha(); });
+    $("todos").checked = lista.length > 0 && lista.every(c => sel.has(c.caso_id));
+    $("todos").onchange = e => { lista.forEach(c => e.target.checked ? sel.add(c.caso_id) : sel.delete(c.caso_id)); desenhar(); };
+    botaoPlanilha();
+    $("rRodada").textContent = rod.fim ? `Última rodada: ${DH(rod.fim)}${rod.novos != null ? ` · ${rod.novos} caso(s) novo(s)` : ""}` : "Nenhuma rodada ainda";
+    const baixados = d.cobertura.filter(m => m.baixado);
+    $("rCobertura").textContent = `Fatura baixada: ${baixados.length} de ${d.cobertura.length} meses` +
+      (baixados.length < d.cobertura.length ? ` (faltam ${d.cobertura.filter(m => !m.baixado).map(m => MES(m.mes)).join(", ")})` : "");
+    $("rPeso").innerHTML = d.peso_ligado ? "Ajuste de peso: <b>ligado</b>" : "Ajuste de peso: <b>desligado</b> (aguardando descobrir o código na fatura)";
+  }
+
+  function kpis() {
+    const d = DADOS, r = d.resumo, f = $("fSit").value;
+    const k = (id, cls, ic, v, t) => `<button class="nk-kpi ${f === id ? "on" : ""}" data-k="${id}"><span class="nk-kpi-ic ${cls}">${ic}</span><div><b>${v}</b><small>${t}</small></div></button>`;
+    const q = s => (r[s] || {}).qtd || 0, tot = s => (r[s] || {}).total || 0;
+    $("kpis").innerHTML =
+      k("a_contestar", "warn", "!", R(tot("a_contestar")), `A contestar · ${q("a_contestar")} caso(s)`) +
+      k("aguardando", "", "⏳", R(tot("aguardando")), `Aguardando estorno · ${q("aguardando")}`) +
+      k("contestado", "", "✉", R(tot("contestado")), `Contestado em aberto · ${q("contestado")}`) +
+      k("recuperado", "ok", "✓", R(d.recuperado_mes), "Recuperado no mês") +
+      `<div class="nk-kpi so-info" title="Diferenças abaixo de ${R(d.regras.minimo)} por pedido: não viram caso, só somam aqui"><span class="nk-kpi-ic">≈</span><div><b>${R(d.pequenas_mes.total)}</b><small>Diferenças pequenas do mês · ${d.pequenas_mes.qtd} pedido(s)</small></div></div>`;
+    document.querySelectorAll("[data-k]").forEach(b => b.onclick = () => { $("fSit").value = b.dataset.k; desenhar(); });
+  }
+
+  function botaoPlanilha() {
+    const b = $("bPlanilha");
+    b.disabled = !sel.size; b.textContent = `Baixar planilha (${sel.size})`;
+  }
+
+  function abrir(id) {
+    const c = DADOS.casos.find(x => x.caso_id === id);
+    if (!c) return;
+    const [st, cls] = SIT[c.situacao] || [c.situacao, ""];
+    const pedeAcao = ["aguardando", "a_contestar", "recuperado_parcial"].includes(c.situacao);
+    const lanc = c.lancamentos || [];
+    const g = $("gaveta");
+    g.innerHTML = `
+      <div class="g-cab"><div>
+        <h2>Pedido ${esc(c.order_id)}</h2>
+        <p>${esc(c.tipo_nome)}${c.sale_day ? ` · venda em ${D(c.sale_day)}` : ""}${c.evento_em ? ` · ${esc(c.evento_txt)} ${D(c.evento_em)}` : ""}
+          · <a href="${vendaML(c.order_id)}" target="_blank" rel="noopener">abrir a venda no ML ↗</a></p>
+        <div style="margin-top:8px"><span class="nk-selo ${cls}">${esc(st)}</span>${c.fora_prazo ? ' <span class="nk-selo bad">provavelmente fora do prazo</span>' : ""}</div>
+      </div><button class="nk-btn mini" id="gFechar" title="Fechar">✕</button></div>
+      <div class="g-corpo">
+        <div class="valores">
+          <div><small>Cobrado</small><b>${R(c.cobrado)}</b></div><div><small>Esperado</small><b>${R(c.esperado)}</b></div>
+          <div><small>Diferença</small><b>${R(c.diferenca)}</b></div><div><small>Recuperado</small><b>${c.recuperado ? R(c.recuperado) : "—"}</b></div>
+        </div>
+        ${(c.prova || {}).nota ? `<div class="nk-aviso info">${esc(c.prova.nota)}</div>` : ""}
+        ${((c.prova || {}).pedidos || []).length > 1 ? `<div class="nk-aviso info">Envio ${esc(c.shipment_id)} cobre ${c.prova.pedidos.length} pedidos do mesmo carrinho: ${c.prova.pedidos.map(esc).join(", ")}.</div>` : ""}
+        <div class="sec"><h3>Lançamentos da fatura</h3>
+          ${lanc.length ? `<div class="nk-tw"><table class="nk-tab"><thead><tr><th>Código</th><th>Nº</th><th>Descrição</th><th>Data</th><th class="num">Valor</th></tr></thead><tbody>
+          ${lanc.map(x => `<tr><td>${esc(x.sub_type)}</td><td>${esc(x.detail_id)}</td><td>${esc(x.descricao)}${x.credito ? ' <span class="nk-selo ok">crédito</span>' : ""}</td><td>${D(x.data)}</td><td class="num">${R(x.valor)}</td></tr>`).join("")}
+          </tbody></table></div>` : `<div class="mini">${c.tipo === "devolucao" ? `O valor vem da reclamação ${esc(c.claim_id)} (frete da devolução cobrado do vendedor, informado pelo ML).` : "Sem lançamentos guardados."}</div>`}</div>
+        <div class="sec"><h3>Texto da contestação</h3>
+          <div class="texto">${esc(c.texto)}</div>
+          <div style="margin-top:8px"><button class="nk-btn mini" id="gCopiar">Copiar texto</button></div></div>
+        ${pedeAcao || c.situacao === "contestado" ? `<label class="nk-campo">Protocolo do ML<input id="gProto" maxlength="80" value="${esc(c.protocolo || "")}" placeholder="número do atendimento no ML"></label>` : ""}
+        ${pedeAcao ? `<label class="nk-campo">Motivo para não contestar (só se for dispensar)<input id="gMotivo" maxlength="300" placeholder="ex.: cobrança correta, troca de categoria"></label>` : ""}
+        <div class="sec"><h3>Histórico</h3><div class="hist">
+          <span>Caso criado em ${DH(c.criado_em)}.</span>
+          ${c.contestado_em ? `<span>Contestado em ${DH(c.contestado_em)} por ${esc(c.contestado_por)}${c.protocolo ? ` · protocolo ${esc(c.protocolo)}` : ""}.</span>` : ""}
+          ${c.negado_em ? `<span>Marcado como Negado em ${DH(c.negado_em)}. Se o crédito aparecer depois, vira Recuperado sozinho.</span>` : ""}
+          ${c.recuperado_em ? `<span>Crédito encontrado na fatura em ${DH(c.recuperado_em)}: ${R(c.recuperado)}.</span>` : ""}
+          ${c.situacao === "ignorado" ? `<span>Ignorado em ${DH(c.ignorado_em)} por ${esc(c.ignorado_por)}: “${esc(c.motivo_ignorado)}”. A rodada nunca recria este caso.</span>` : ""}
+        </div></div>
+      </div>
+      <div class="g-acoes">
+        ${pedeAcao ? `<button class="nk-btn pri" data-a="contestar">Contestei</button><button class="nk-btn" data-a="ignorar">Não contestar</button>` : ""}
+        ${c.situacao === "contestado" ? `<button class="nk-btn pri" data-a="protocolo">Salvar protocolo</button><button class="nk-btn perigo" data-a="negar">Negado pelo ML</button>` : ""}
+        ${["contestado", "negado", "ignorado"].includes(c.situacao) ? `<button class="nk-btn" data-a="reabrir">Reabrir</button>` : ""}
+      </div>`;
+    g.classList.add("on"); $("fundo").classList.add("on");
+    $("gFechar").onclick = fechar;
+    $("gCopiar").onclick = async () => {
+      try { await navigator.clipboard.writeText(c.texto); nkToast("Texto copiado. Cole na contestação do Mercado Livre.", "ok"); }
+      catch (_) { nkToast("Não foi possível copiar: selecione o texto e copie com Ctrl+C.", "erro"); }
+    };
+    g.querySelectorAll("[data-a]").forEach(b => b.onclick = () => acao(c, b.dataset.a, b));
+  }
+
+  async function acao(c, a, botao) {
+    const corpo = {caso_id: c.caso_id, acao: a, protocolo: ($("gProto") || {}).value || "", motivo: ($("gMotivo") || {}).value || ""};
+    if (a === "ignorar") {
+      if (!corpo.motivo.trim()) { nkToast("Escreva o motivo para não contestar.", "erro"); $("gMotivo").focus(); return; }
+      if (!(await nkConfirmar("Não contestar este caso?\n\nEle vai para Ignorados e a rotina nunca o recria. Dá para reabrir depois."))) return;
+    }
+    if (a === "negar" && !(await nkConfirmar("Marcar como Negado pelo ML?\n\nSe o crédito aparecer depois na fatura, o caso vira Recuperado sozinho."))) return;
+    botao.disabled = true;
+    try {
+      await api("/api/auditoria-ml/caso", {method:"POST", body:JSON.stringify(corpo)});
+      nkToast({contestar:"Caso marcado como Contestado. Quando o crédito aparecer na fatura, vira Recuperado sozinho.",
+        protocolo:"Protocolo salvo.", negar:"Marcado como Negado.", ignorar:"Caso ignorado.", reabrir:"Caso reaberto: voltou para A contestar."}[a], "ok");
+      fechar(); await carregar();
+    } catch (e) { nkToast(e.message, "erro"); botao.disabled = false; }
+  }
+
+  function fechar() { $("gaveta").classList.remove("on"); $("fundo").classList.remove("on"); }
+
+  function planilha() {
+    const n = v => Number(v || 0).toFixed(2).replace(".", ",");
+    const cab = ["Pedido", "Pedidos do envio", "Data da venda", "Mes da fatura", "Tipo", "Codigo do lancamento", "Numero do lancamento",
+      "Cobrado", "Esperado", "Diferenca", "Recuperado", "Situacao", "Protocolo", "Texto da contestacao"];
+    const linhas = DADOS.casos.filter(c => sel.has(c.caso_id)).map(c => {
+      const l = (c.lancamentos || []).filter(x => !x.credito);
+      return [c.order_id, ((c.prova || {}).pedidos || []).join(" "), D(c.sale_day), MES(c.periodo_fatura), c.tipo_nome,
+        l.map(x => x.sub_type).join(" + "), l.map(x => x.detail_id).join(" + "), n(c.cobrado), n(c.esperado), n(c.diferenca),
+        n(c.recuperado), (SIT[c.situacao] || [c.situacao])[0], c.protocolo || "", c.texto];
+    });
+    // Texto que começa com = + - @ viraria fórmula no Excel: vai com apóstrofo na frente.
+    const cel = x => { let t = String(x ?? ""); if (/^[=+\-@]/.test(t)) t = "'" + t; return `"${t.replace(/"/g, '""')}"`; };
+    const csv = "﻿" + [cab, ...linhas].map(r => r.map(cel).join(";")).join("\r\n");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([csv], {type:"text/csv;charset=utf-8"}));
+    a.download = `contestacao-ml-${DADOS.hoje}.csv`;
+    document.body.appendChild(a); a.click(); a.remove();
+    nkToast(`Planilha com ${linhas.length} caso(s) gerada.`, "ok");
+  }
+
+  $("fundo").onclick = fechar;
+  document.addEventListener("keydown", e => { if (e.key === "Escape") fechar(); });
+  ["fSit", "fTipo", "fMes"].forEach(id => $(id).onchange = desenhar);
+  $("fBusca").oninput = desenhar;
+  $("bPlanilha").onclick = planilha;
+  $("bAuditar").onclick = async () => {
+    try {
+      const r = await api("/api/auditoria-ml/rodar", {method:"POST", body:"{}"});
+      aguardandoRodada = true;
+      nkToast(r.em_andamento ? "Já existe uma rodada em andamento." : "Rodada iniciada em segundo plano. Pode levar alguns minutos.", "ok");
+      setTimeout(carregar, 3000);
+    } catch (e) { nkToast(e.message, "erro"); }
+  };
+  $("prazo").onchange = async () => {
+    try {
+      await api("/api/auditoria-ml/config", {method:"POST", body:JSON.stringify({prazo_contestacao_dias: $("prazo").value})});
+      nkToast("Prazo salvo.", "ok"); await carregar();
+    } catch (e) { nkToast(e.message, "erro"); }
+  };
+  carregar();
+})();
+</script>
+</body>
+</html>

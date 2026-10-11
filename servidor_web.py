@@ -44,7 +44,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.00-TELA-FILIAL"
+APP_VERSION = "19.01-COBRANCAS-ML"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -2284,6 +2284,7 @@ def init_db() -> None:
     ensure_avisos_venda_schema()  # V18.93
     ensure_ml_casas_schema()  # V18.94
     ensure_vendas_conta_schema()  # V18.98
+    ensure_auditoria_cobrancas_schema()  # V19.01
     migrate_legacy_if_empty()
     ensure_storage_defaults()
     seed_sku_state_from_storage()
@@ -15620,15 +15621,17 @@ def ml_frete_envio_preencher(limite: int = 0) -> dict[str, Any]:
             data = _ml_profitability_api_get(f"/shipments/{quote(sid)}/costs",
                                              headers={"x-format-new": "true"}, attempts=2)
             custo = _ml_shipping_cost_parse(data, str(seller_id or ""))
+            # V19.01: o valor cheio do envio vem na MESMA resposta (é o que a fatura lança).
+            bruto = _ml_shipping_gross_parse(data)
             erro = "" if custo is not None else "envio sem custo de remetente no payload"
         except Exception as exc:
-            custo, erro = None, str(exc)[:200]
+            custo, bruto, erro = None, None, str(exc)[:200]
         with DB_LOCK:
             DB.execute(
-                "INSERT INTO ml_frete_envio_v1830(shipment_id,cost,captured_at,captured_epoch,erro) VALUES(?,?,?,?,?) "
-                "ON CONFLICT(shipment_id) DO UPDATE SET cost=excluded.cost,captured_at=excluded.captured_at,"
-                "captured_epoch=excluded.captured_epoch,erro=excluded.erro",
-                (sid, custo, now_iso(), agora, erro))
+                "INSERT INTO ml_frete_envio_v1830(shipment_id,cost,bruto,captured_at,captured_epoch,erro) VALUES(?,?,?,?,?,?) "
+                "ON CONFLICT(shipment_id) DO UPDATE SET cost=excluded.cost,bruto=COALESCE(excluded.bruto,ml_frete_envio_v1830.bruto),"
+                "captured_at=excluded.captured_at,captured_epoch=excluded.captured_epoch,erro=excluded.erro",
+                (sid, custo, bruto, now_iso(), agora, erro))
             DB.commit()
         if custo is not None:
             buscados += 1
@@ -15646,6 +15649,754 @@ def financeiro_frete_loop(stop_event: threading.Event) -> None:
             print(f"[financeiro-frete] falhou: {exc}", file=sys.stderr, flush=True)
         if stop_event.wait(FINANCEIRO_FRETE_INTERVALO):
             break
+
+
+# ---------------------------------------------------------------------------
+# V19.01: Auditor de cobranças do Mercado Livre (spec em
+# docs/superpowers/specs/2026-10-11-auditoria-cobrancas-ml-design.md).
+#
+# Encontra na fatura do ML o que parece cobrado indevidamente e acompanha cada
+# caso até o fim. Não existe API para contestar: a equipe contesta na Central de
+# Ajuda do ML. Aqui o ML é só LIDO. Regras de ouro:
+# - a rodada atualiza números e lançamentos, NUNCA a situação marcada por uma
+#   pessoa (contestado, negado, ignorado). A única transição automática sobre ela
+#   é para recuperado, porque vem do dado da fatura;
+# - caso ignorado continua na tabela: é a presença dele que impede a recriação
+#   (mesma lógica de tombstone da regra do ADMIN);
+# - um lançamento da fatura pertence a UM caso só (estorno > devolução > peso >
+#   acima do esperado);
+# - a detecção (auditoria_detectar) só lê o banco: quem chama o ML é a rodada.
+# Primeira versão (decisão do dono, 11/10): só Araçatuba, regras afinadas com o uso.
+# ---------------------------------------------------------------------------
+AUDITORIA_CARENCIA_DIAS = 30           # espera do estorno de cancelamento/devolução
+AUDITORIA_MINIMO = 2.00                # "acima do esperado": abaixo disso só soma no cartão
+AUDITORIA_MESES = 6                    # histórico auditado
+AUDITORIA_STATUS_POR_RODADA = max(10, min(2000, int(os.getenv("AUDITORIA_STATUS_POR_RODADA", "300"))))
+AUDITORIA_BRUTO_POR_RODADA = max(10, min(2000, int(os.getenv("AUDITORIA_BRUTO_POR_RODADA", "200"))))
+AUDITORIA_PAUSA = 0.25
+AUDITORIA_HORA_INICIO, AUDITORIA_HORA_FIM = 2, 6   # rotina só de madrugada (Brasília)
+AUDITORIA_LOCK = threading.Lock()
+# Código do ajuste de peso/medidas na fatura: vazio = tipo desligado. Preencher depois
+# de olhar GET /api/auditoria-ml/codigos com os dados reais (decisão do dono: não chutar).
+ML_FATURA_AJUSTE_PESO: set[str] = set()
+AUDITORIA_TIPOS = {
+    "estorno": "Estorno que não veio",
+    "devolucao": "Frete de devolução indevido",
+    "tarifa_acima": "Tarifa acima do esperado",
+    "frete_acima": "Frete acima do esperado",
+    "peso": "Ajuste de peso/medidas",
+}
+AUDITORIA_SITUACOES = ("aguardando", "a_contestar", "contestado", "recuperado", "recuperado_parcial", "negado", "ignorado")
+_AUDITORIA_CAMPOS = ("caso_id", "conta", "tipo", "order_id", "pack_id", "shipment_id", "claim_id", "sale_day",
+                     "evento_em", "evento_txt", "periodo_fatura", "lancamentos_json", "prova_json")
+
+
+def ensure_auditoria_cobrancas_schema() -> None:
+    with DB_LOCK:
+        DB.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS ml_cobranca_caso_v1901 (
+                caso_id TEXT PRIMARY KEY,
+                conta TEXT NOT NULL DEFAULT 'aracatuba',
+                tipo TEXT NOT NULL,
+                order_id TEXT NOT NULL DEFAULT '',
+                pack_id TEXT NOT NULL DEFAULT '',
+                shipment_id TEXT NOT NULL DEFAULT '',
+                claim_id TEXT NOT NULL DEFAULT '',
+                sale_day TEXT NOT NULL DEFAULT '',
+                evento_em TEXT NOT NULL DEFAULT '',
+                evento_txt TEXT NOT NULL DEFAULT '',
+                periodo_fatura TEXT NOT NULL DEFAULT '',
+                lancamentos_json TEXT NOT NULL DEFAULT '[]',
+                prova_json TEXT NOT NULL DEFAULT '{}',
+                cobrado REAL NOT NULL DEFAULT 0,
+                esperado REAL NOT NULL DEFAULT 0,
+                diferenca REAL NOT NULL DEFAULT 0,
+                recuperado REAL NOT NULL DEFAULT 0,
+                recuperado_em TEXT NOT NULL DEFAULT '',
+                situacao TEXT NOT NULL DEFAULT 'a_contestar',
+                contestado_em TEXT NOT NULL DEFAULT '',
+                contestado_por TEXT NOT NULL DEFAULT '',
+                protocolo TEXT NOT NULL DEFAULT '',
+                negado_em TEXT NOT NULL DEFAULT '',
+                ignorado_em TEXT NOT NULL DEFAULT '',
+                ignorado_por TEXT NOT NULL DEFAULT '',
+                motivo_ignorado TEXT NOT NULL DEFAULT '',
+                criado_em TEXT NOT NULL DEFAULT '',
+                atualizado_em TEXT NOT NULL DEFAULT '',
+                avisado_em TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_ml_cobranca_situacao ON ml_cobranca_caso_v1901(situacao);
+            CREATE TABLE IF NOT EXISTS ml_pedido_status_v1901 (
+                order_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL DEFAULT '',
+                cancelado_em TEXT NOT NULL DEFAULT '',
+                motivo TEXT NOT NULL DEFAULT '',
+                consultado_em TEXT NOT NULL DEFAULT '',
+                erro TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS ml_cobranca_estado_v1901 (
+                chave TEXT PRIMARY KEY,
+                valor TEXT NOT NULL DEFAULT ''
+            );
+            """
+        )
+        cols = {r[1] for r in DB.execute("PRAGMA table_info(ml_frete_envio_v1830)").fetchall()}
+        if cols and "bruto" not in cols:
+            DB.execute("ALTER TABLE ml_frete_envio_v1830 ADD COLUMN bruto REAL")
+        DB.commit()
+
+
+def _ml_shipping_gross_parse(data: Any) -> float | None:
+    """V19.01: valor CHEIO do envio (comprador + vendedor) — é o que a fatura lança (V18.53)."""
+    if not isinstance(data, dict):
+        return None
+    v = _money_number(data.get("gross_amount"))
+    return round(abs(v), 2) if v is not None else None
+
+
+def _auditoria_estado(chave: str, valor: Any = None) -> Any:
+    with DB_LOCK:
+        if valor is not None:
+            DB.execute("INSERT INTO ml_cobranca_estado_v1901(chave,valor) VALUES(?,?) "
+                       "ON CONFLICT(chave) DO UPDATE SET valor=excluded.valor",
+                       (chave, json.dumps(valor, ensure_ascii=False)))
+            DB.commit()
+            return valor
+        r = DB.execute("SELECT valor FROM ml_cobranca_estado_v1901 WHERE chave=?", (chave,)).fetchone()
+    if not r:
+        return None
+    try:
+        return json.loads(r[0])
+    except Exception:
+        return None
+
+
+def _auditoria_dia(valor: Any) -> str:
+    s = str(valor or "").strip()
+    return s[:10] if re.match(r"^\d{4}-\d{2}-\d{2}", s) else ""
+
+
+def _auditoria_ordinal(dia: str) -> int | None:
+    try:
+        return datetime.strptime(dia, "%Y-%m-%d").date().toordinal()
+    except (TypeError, ValueError):
+        return None
+
+
+def _auditoria_desde(hoje: Any) -> str:
+    """Primeiro dia do mês, AUDITORIA_MESES meses atrás (o mês atual conta)."""
+    ano, mes = hoje.year, hoje.month - (AUDITORIA_MESES - 1)
+    while mes < 1:
+        mes += 12
+        ano -= 1
+    return f"{ano:04d}-{mes:02d}-01"
+
+
+def _auditoria_grupo(e: dict[str, Any]) -> str | None:
+    """Em que conta da auditoria o lançamento entra: tarifa, frete, peso — ou nenhuma."""
+    sub = str(e.get("detail_sub_type") or "").upper()
+    trans = str(e.get("transaction_detail") or "")
+    if sub in ML_FATURA_AJUSTE_PESO:
+        return "peso"
+    if _ml_billing_is_neutro(sub) or _ml_billing_is_publicidade(sub, str(e.get("detail_type") or ""), trans):
+        return None
+    if _ml_billing_v1513_is_shipping(sub, trans, str(e.get("raw_json") or "")):
+        return "frete"
+    if _ml_billing_v1513_is_sale_fee(sub, trans):
+        return "tarifa"
+    return None
+
+
+def _auditoria_lanc_publico(e: dict[str, Any]) -> dict[str, Any]:
+    credito = bool(_ml_billing_credito_do_lancamento(str(e.get("detail_type") or ""), str(e.get("detail_sub_type") or "")))
+    v = abs(_money_number(e.get("detail_amount")) or 0.0)
+    return {"detail_id": str(e.get("detail_id") or ""), "sub_type": str(e.get("detail_sub_type") or ""),
+            "descricao": str(e.get("transaction_detail") or "")[:160], "valor": round(-v if credito else v, 2),
+            "data": _auditoria_dia(e.get("detail_date")), "credito": credito,
+            "periodo": str(e.get("period_key") or "")[:7]}
+
+
+def _auditoria_somar(entries: list[dict[str, Any]], grupos: tuple[str, ...], usados: set[str],
+                     desde_dia: str = "") -> tuple[float, float, list[dict[str, Any]]]:
+    """(cobranças, créditos, lançamentos) dos grupos pedidos, sem os já usados por outro caso."""
+    cobr = cred = 0.0
+    lista: list[dict[str, Any]] = []
+    for e in entries:
+        did = str(e.get("detail_id") or "")
+        if did in usados or _auditoria_grupo(e) not in grupos:
+            continue
+        if desde_dia and _auditoria_dia(e.get("detail_date")) and _auditoria_dia(e.get("detail_date")) < desde_dia:
+            continue
+        p = _auditoria_lanc_publico(e)
+        if p["credito"]:
+            cred += abs(p["valor"])
+        else:
+            cobr += p["valor"]
+        lista.append(p)
+    return round(cobr, 2), round(cred, 2), lista
+
+
+def auditoria_detectar(hoje: Any = None) -> dict[str, Any]:  # noqa: C901
+    """Calcula os casos a partir do banco. Função PURA: não chama o ML."""
+    hoje = hoje or datetime.now(BR_TZ).date()
+    desde = _auditoria_desde(hoje)
+    with DB_LOCK:
+        # Só as colunas usadas (raw_json cortado como em _ml_billing_v1513_is_shipping): 6 meses de
+        # fatura inteira na memória pesariam na VPS de 1 GB.
+        brutos = [dict(r) for r in DB.execute(
+            "SELECT period_key, detail_id, order_id, pack_id, shipment_id, detail_amount, detail_type, detail_sub_type, "
+            "transaction_detail, debited_from_operation, detail_date, sale_fee_net, substr(raw_json,1,3000) AS raw_json "
+            "FROM ml_billing_period_detail WHERE period_key>=? AND order_id<>'' ORDER BY period_key,detail_id",
+            (desde,)).fetchall()]
+        ativas = {str(r[0]) for r in DB.execute("SELECT DISTINCT order_id FROM vendas_v1799 WHERE marketplace='ml'")}
+        status = {str(r["order_id"]): dict(r) for r in DB.execute("SELECT * FROM ml_pedido_status_v1901 WHERE erro=''")}
+        reclamacoes = [dict(r) for r in DB.execute("SELECT * FROM ml_reclamacao_v1888 WHERE order_id<>''")]
+        venda_custo: dict[str, dict[str, Any]] = {}
+        for r in DB.execute("SELECT order_id, SUM(sale_fee) AS fee, COUNT(sale_fee) AS com_fee, MAX(shipment_id) AS sid, "
+                            "MIN(sale_day) AS dia FROM ml_venda_custo_v1830 GROUP BY order_id"):
+            venda_custo[str(r["order_id"])] = {"fee": r["fee"] if r["com_fee"] else None,
+                                               "shipment": str(r["sid"] or ""), "dia": str(r["dia"] or "")}
+        bruto_envio = {str(r[0]): r[1] for r in DB.execute(
+            "SELECT shipment_id, bruto FROM ml_frete_envio_v1830 WHERE bruto IS NOT NULL")}
+    por_pedido: dict[str, list[dict[str, Any]]] = {}
+    for e in brutos:
+        por_pedido.setdefault(str(e["order_id"]), []).append(e)
+    por_pedido = {k: _ml_billing_dedupe(v) for k, v in por_pedido.items()}
+
+    casos: list[dict[str, Any]] = []
+    usados: set[str] = set()
+    pedidos_com_caso: set[str] = set()
+    hoje_ord = hoje.toordinal()
+
+    def periodo_de(lista: list[dict[str, Any]], dia_padrao: str) -> str:
+        for x in lista:
+            if not x["credito"] and x.get("periodo"):
+                return x["periodo"]
+        return dia_padrao[:7]
+
+    def novo(tipo: str, chave: str, order_id: str, cobrado: float, esperado: float, atual: float,
+             lista: list[dict[str, Any]], *, evento: str = "", evento_txt: str = "", carencia: bool = False,
+             shipment: str = "", claim: str = "", prova: dict[str, Any] | None = None, minimo: float = 0.01) -> None:
+        for x in lista:
+            usados.add(x["detail_id"])
+        sale_day = (venda_custo.get(order_id) or {}).get("dia") or ""
+        casos.append({
+            "caso_id": f"{tipo}:{chave}", "tipo": tipo, "order_id": order_id, "shipment_id": shipment,
+            "claim_id": claim, "sale_day": sale_day, "evento_em": evento, "evento_txt": evento_txt,
+            "periodo_fatura": periodo_de(lista, evento or sale_day or hoje.isoformat()),
+            "lancamentos": lista, "prova": prova or {}, "cobrado": round(cobrado, 2), "esperado": round(esperado, 2),
+            "atual": round(atual, 2), "carencia": carencia, "minimo": minimo,
+        })
+
+    # 1) Estorno que não veio: cancelado (tarifa + frete) ou reembolso total por reclamação (só tarifa).
+    for oid, st in status.items():
+        if str(st.get("status") or "").lower() != "cancelled" or oid not in por_pedido:
+            continue
+        cobr, cred, lista = _auditoria_somar(por_pedido[oid], ("tarifa", "frete"), usados)
+        if not lista:
+            continue
+        evento = _auditoria_dia(st.get("cancelado_em")) or _auditoria_dia(st.get("consultado_em"))
+        novo("estorno", oid, oid, cobr, 0.0, cobr - cred, lista, evento=evento, evento_txt="cancelado em", carencia=True)
+        pedidos_com_caso.add(oid)
+    for r in reclamacoes:
+        oid = str(r.get("order_id") or "")
+        total = _money_number(r.get("pedido_total"))
+        reemb = _money_number(r.get("reembolsado"))
+        if oid in pedidos_com_caso or oid not in por_pedido or not total or reemb is None or reemb < total - 0.01:
+            continue
+        cobr, cred, lista = _auditoria_somar(por_pedido[oid], ("tarifa",), usados)
+        if not lista:
+            continue
+        evento = _auditoria_dia(r.get("fechada_em")) or _auditoria_dia(r.get("atualizada_ml"))
+        novo("estorno", oid, oid, cobr, 0.0, cobr - cred, lista, evento=evento, evento_txt="reembolso total em",
+             carencia=True, claim=str(r.get("claim_id") or ""),
+             prova={"nota": "Devolução com reembolso total: espera-se de volta só a tarifa de venda."})
+        pedidos_com_caso.add(oid)
+
+    # 2) Frete de devolução cobrado em reclamação que o vendedor ganhou ou que o ML cobriu.
+    for r in reclamacoes:
+        oid = str(r.get("order_id") or "")
+        frete_dev = _money_number(r.get("frete_devolucao"))
+        fechada = _auditoria_dia(r.get("fechada_em"))
+        if not frete_dev or frete_dev <= 0 or str(r.get("status") or "") != "closed" or not fechada:
+            continue
+        ben = str(r.get("beneficiado") or "")
+        venceu_vendedor = "respondent" in ben.split(",") and "complainant" not in ben
+        if not (venceu_vendedor or r.get("cobertura") == 1):
+            continue
+        aberta = _auditoria_dia(r.get("aberta_em"))
+        _cobr, cred, lista = _auditoria_somar(por_pedido.get(oid, []), ("frete",), usados, desde_dia=aberta)
+        motivo = "o vendedor ganhou" if venceu_vendedor else "teve cobertura do Mercado Livre"
+        novo("devolucao", oid, oid, frete_dev, 0.0, frete_dev - cred, lista, evento=fechada,
+             evento_txt=f"reclamação encerrada ({motivo}) em", carencia=True, claim=str(r.get("claim_id") or ""),
+             prova={"motivo": motivo})
+        pedidos_com_caso.add(oid)
+
+    # 3) Ajuste de peso/medidas: um caso por lançamento (desligado sem o código).
+    if ML_FATURA_AJUSTE_PESO:
+        for oid, entries in por_pedido.items():
+            for e in entries:
+                did = str(e.get("detail_id") or "")
+                if did in usados or _auditoria_grupo(e) != "peso":
+                    continue
+                p = _auditoria_lanc_publico(e)
+                if p["credito"]:
+                    continue
+                creditos = sum(abs(_auditoria_lanc_publico(x)["valor"]) for x in entries
+                               if _auditoria_grupo(x) == "peso" and str(x.get("detail_id") or "") not in usados
+                               and _auditoria_lanc_publico(x)["credito"])
+                novo("peso", did, oid, p["valor"], 0.0, p["valor"] - creditos, [p], evento=p["data"],
+                     evento_txt="cobrado em")
+
+    # 4) Acima do esperado — só venda ativa, sem estorno nem devolução no pedido.
+    com_devolucao = {str(r.get("order_id") or "") for r in reclamacoes if r.get("tem_devolucao")}
+    bloqueados = pedidos_com_caso | com_devolucao
+    pequenas: dict[str, dict[str, Any]] = {}
+
+    def pequena(periodo: str, valor: float) -> None:
+        p = pequenas.setdefault(periodo, {"qtd": 0, "total": 0.0})
+        p["qtd"] += 1
+        p["total"] = round(p["total"] + valor, 2)
+
+    for oid in sorted(ativas & set(por_pedido) - bloqueados):
+        esperado = (venda_custo.get(oid) or {}).get("fee")
+        if esperado is None:
+            continue
+        cobr, cred, lista = _auditoria_somar(por_pedido[oid], ("tarifa",), usados)
+        if not lista:
+            continue
+        fatura = (_ml_billing_consolidar_lancamentos(
+            [e for e in por_pedido[oid] if _auditoria_grupo(e) == "tarifa"]) or {}).get("sale_fee")
+        if fatura is None:
+            continue
+        atual = round(float(fatura) - float(esperado), 2)
+        if 0.01 < atual < AUDITORIA_MINIMO:
+            pequena(periodo_de(lista, (venda_custo.get(oid) or {}).get("dia") or ""), atual)
+        novo("tarifa_acima", oid, oid, float(fatura), float(esperado), atual, lista,
+             evento=(venda_custo.get(oid) or {}).get("dia") or "", evento_txt="venda em", minimo=AUDITORIA_MINIMO)
+
+    envios: dict[str, list[str]] = {}
+    for oid, vc in venda_custo.items():
+        if vc.get("shipment") and oid in ativas:
+            envios.setdefault(vc["shipment"], []).append(oid)
+    for sid, pedidos in sorted(envios.items()):
+        if set(pedidos) & bloqueados or sid not in bruto_envio:
+            continue
+        juntos: list[dict[str, Any]] = []
+        for oid in sorted(pedidos):
+            juntos += [e for e in por_pedido.get(oid, []) if str(e.get("shipment_id") or "") in ("", sid)]
+        cobr, cred, lista = _auditoria_somar(_ml_billing_dedupe(juntos), ("frete",), usados)
+        if not lista:
+            continue
+        esperado = float(bruto_envio[sid])
+        atual = round(cobr - cred - esperado, 2)
+        principal = sorted(pedidos)[0]
+        if 0.01 < atual < AUDITORIA_MINIMO:
+            pequena(periodo_de(lista, (venda_custo.get(principal) or {}).get("dia") or ""), atual)
+        novo("frete_acima", sid, principal, cobr - cred, esperado, atual, lista, shipment=sid,
+             evento=(venda_custo.get(principal) or {}).get("dia") or "", evento_txt="venda em",
+             minimo=AUDITORIA_MINIMO, prova={"pedidos": sorted(pedidos)})
+
+    # Carência vencida conta a partir do evento.
+    for c in casos:
+        ev = _auditoria_ordinal(c["evento_em"])
+        c["carencia_vencida"] = (not c["carencia"]) or ev is None or hoje_ord - ev >= AUDITORIA_CARENCIA_DIAS
+    return {"casos": casos, "pequenas": pequenas, "hoje": hoje.isoformat()}
+
+
+def auditoria_gravar(detectado: dict[str, Any], hoje: Any = None) -> dict[str, Any]:
+    """Grava os casos respeitando a regra de ouro (situação humana nunca é desfeita)."""
+    hoje = hoje or datetime.now(BR_TZ).date()
+    agora = now_iso()
+    novos = 0
+    with DB_LOCK:
+        for c in detectado.get("casos") or []:
+            atual = float(c["atual"])
+            r = DB.execute("SELECT * FROM ml_cobranca_caso_v1901 WHERE caso_id=?", (c["caso_id"],)).fetchone()
+            lanc = json.dumps(c["lancamentos"], ensure_ascii=False)
+            prova = json.dumps(c["prova"], ensure_ascii=False)
+            if r is None:
+                if atual <= 0.01 or atual < float(c.get("minimo") or 0.01):
+                    continue
+                situacao = "a_contestar" if c["carencia_vencida"] else "aguardando"
+                DB.execute(
+                    "INSERT INTO ml_cobranca_caso_v1901(caso_id,conta,tipo,order_id,shipment_id,claim_id,sale_day,evento_em,"
+                    "evento_txt,periodo_fatura,lancamentos_json,prova_json,cobrado,esperado,diferenca,situacao,criado_em,atualizado_em) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (c["caso_id"], CASA_PRINCIPAL, c["tipo"], c["order_id"], c["shipment_id"], c["claim_id"], c["sale_day"],
+                     c["evento_em"], c["evento_txt"], c["periodo_fatura"], lanc, prova, c["cobrado"], c["esperado"],
+                     round(atual, 2), situacao, agora, agora))
+                novos += 1
+                continue
+            r = dict(r)
+            diferenca = round(max(float(r["diferenca"] or 0), atual), 2)
+            cobrado = round(max(float(r["cobrado"] or 0), float(c["cobrado"])), 2)
+            recuperado = round(max(0.0, diferenca - max(atual, 0.0)), 2)
+            recuperado_em = r["recuperado_em"]
+            if recuperado > float(r["recuperado"] or 0) + 0.005:
+                recuperado_em = agora
+            sit = r["situacao"]
+            if sit != "ignorado":
+                if recuperado >= diferenca - 0.01 and diferenca > 0:
+                    sit = "recuperado"
+                elif recuperado > 0.01:
+                    sit = "recuperado_parcial"
+                elif sit == "aguardando" and c["carencia_vencida"]:
+                    sit = "a_contestar"
+            DB.execute(
+                "UPDATE ml_cobranca_caso_v1901 SET lancamentos_json=?,prova_json=?,cobrado=?,esperado=?,diferenca=?,"
+                "recuperado=?,recuperado_em=?,situacao=?,evento_em=?,evento_txt=?,atualizado_em=? WHERE caso_id=?",
+                (lanc if c["lancamentos"] else r["lancamentos_json"], prova, cobrado, c["esperado"], diferenca,
+                 recuperado, recuperado_em, sit, c["evento_em"] or r["evento_em"], c["evento_txt"] or r["evento_txt"],
+                 agora, c["caso_id"]))
+        # Carência vencida também para o caso que a rodada não viu de novo.
+        limite = datetime.fromordinal(hoje.toordinal() - AUDITORIA_CARENCIA_DIAS).date().isoformat()
+        DB.execute("UPDATE ml_cobranca_caso_v1901 SET situacao='a_contestar', atualizado_em=? "
+                   "WHERE situacao='aguardando' AND evento_em<>'' AND evento_em<=?", (agora, limite))
+        DB.commit()
+    pequenas = detectado.get("pequenas") or {}
+    _auditoria_estado("pequenas", pequenas)
+    return {"ok": True, "novos": novos, "pequenas": pequenas}
+
+
+def auditoria_caso_acao(caso_id: str, acao: str, usuario: str, *, protocolo: str = "", motivo: str = "") -> dict[str, Any]:
+    """Situação marcada por uma pessoa. Cada mudança vai para o audit_log."""
+    permitido = {
+        "contestar": ("aguardando", "a_contestar", "recuperado_parcial", "contestado"),
+        "protocolo": ("contestado",),
+        "negar": ("contestado",),
+        "ignorar": ("aguardando", "a_contestar", "recuperado_parcial"),
+        "reabrir": ("contestado", "negado", "ignorado"),
+    }
+    if acao not in permitido:
+        return {"ok": False, "error": "Ação desconhecida.", "status": 400}
+    protocolo = str(protocolo or "").strip()[:80]
+    motivo = str(motivo or "").strip()[:300]
+    if acao == "ignorar" and not motivo:
+        return {"ok": False, "error": "Escreva o motivo para não contestar.", "status": 400}
+    agora = now_iso()
+    with DB_LOCK:
+        r = DB.execute("SELECT situacao FROM ml_cobranca_caso_v1901 WHERE caso_id=?", (str(caso_id),)).fetchone()
+        if r is None:
+            return {"ok": False, "error": "Caso não encontrado.", "status": 404}
+        if r[0] not in permitido[acao]:
+            return {"ok": False, "error": f"Não dá para {acao} um caso nesta situação.", "status": 409}
+        if acao == "contestar":
+            DB.execute("UPDATE ml_cobranca_caso_v1901 SET situacao='contestado',contestado_em=?,contestado_por=?,"
+                       "protocolo=?,atualizado_em=? WHERE caso_id=?", (agora, usuario, protocolo, agora, caso_id))
+        elif acao == "protocolo":
+            DB.execute("UPDATE ml_cobranca_caso_v1901 SET protocolo=?,atualizado_em=? WHERE caso_id=?",
+                       (protocolo, agora, caso_id))
+        elif acao == "negar":
+            DB.execute("UPDATE ml_cobranca_caso_v1901 SET situacao='negado',negado_em=?,atualizado_em=? WHERE caso_id=?",
+                       (agora, agora, caso_id))
+        elif acao == "ignorar":
+            DB.execute("UPDATE ml_cobranca_caso_v1901 SET situacao='ignorado',ignorado_em=?,ignorado_por=?,"
+                       "motivo_ignorado=?,atualizado_em=? WHERE caso_id=?", (agora, usuario, motivo, agora, caso_id))
+        else:
+            DB.execute("UPDATE ml_cobranca_caso_v1901 SET situacao='a_contestar',motivo_ignorado='',ignorado_em='',"
+                       "ignorado_por='',atualizado_em=? WHERE caso_id=?", (agora, caso_id))
+        DB.commit()
+    audit(usuario, f"ml_cobranca_{acao}", json.dumps({"caso": caso_id, "protocolo": protocolo, "motivo": motivo},
+                                                      ensure_ascii=False))
+    return {"ok": True}
+
+
+def _auditoria_texto(c: dict[str, Any]) -> str:
+    """Parágrafo pronto para colar na contestação do ML."""
+    lanc = [x for x in (c.get("lancamentos") or []) if not x.get("credito")]
+    partes = [f"{(x.get('descricao') or x.get('sub_type') or 'lançamento').lower()} de {_brl_srv(x.get('valor'))} "
+              f"(lançamento {x.get('sub_type')} nº {x.get('detail_id')})" for x in lanc]
+    lista = " e ".join(partes) or f"{_brl_srv(c.get('cobrado'))}"
+    p = str(c.get("periodo_fatura") or "")
+    mes = f"{p[5:7]}/{p[:4]}" if len(p) >= 7 else p
+    dif = _brl_srv(c.get("diferenca"))
+    base = f"Pedido {c.get('order_id')}" + (f", venda em {_data_br(c['sale_day'])}" if c.get("sale_day") else "")
+    tipo = c.get("tipo")
+    if tipo == "estorno":
+        return (f"{base}, {c.get('evento_txt') or 'cancelado em'} {_data_br(c.get('evento_em') or '')}. Na fatura de {mes} "
+                f"foi cobrado {lista}, sem o estorno correspondente até hoje. Solicito a devolução de {dif}.")
+    if tipo == "devolucao":
+        return (f"{base}. A reclamação {c.get('claim_id') or ''} foi encerrada em {_data_br(c.get('evento_em') or '')} "
+                f"({(c.get('prova') or {}).get('motivo') or 'a favor do vendedor'}), mas o frete da devolução de "
+                f"{_brl_srv(c.get('cobrado'))} foi cobrado do vendedor"
+                + (f" ({lista})" if lanc else "") + f". Solicito a devolução de {dif}.")
+    if tipo == "tarifa_acima":
+        return (f"{base}. No detalhe da venda a tarifa informada foi de {_brl_srv(c.get('esperado'))}, mas na fatura de "
+                f"{mes} foi cobrado {lista}. Solicito a devolução da diferença de {dif}.")
+    if tipo == "frete_acima":
+        pedidos = (c.get("prova") or {}).get("pedidos") or []
+        extra = f" (envio {c.get('shipment_id')}, pedidos {', '.join(pedidos)})" if len(pedidos) > 1 else f" (envio {c.get('shipment_id')})"
+        return (f"{base}{extra}. O custo do envio informado pelo Mercado Livre foi de {_brl_srv(c.get('esperado'))}, "
+                f"mas na fatura de {mes} foi cobrado {lista}. Solicito a devolução da diferença de {dif}.")
+    return (f"{base}. Na fatura de {mes} foi cobrado {lista} por diferença de peso/medidas. "
+            f"Solicito a revisão e a devolução de {dif}.")
+
+
+def _auditoria_config() -> dict[str, Any]:
+    cfg = _auditoria_estado("config") or {}
+    prazo = cfg.get("prazo_contestacao_dias")
+    return {"prazo_contestacao_dias": int(prazo) if isinstance(prazo, int) and prazo > 0 else None}
+
+
+def auditoria_config_salvar(prazo: Any) -> dict[str, Any]:
+    try:
+        valor = int(prazo) if str(prazo or "").strip() not in ("", "0") else None
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "Prazo inválido.", "status": 400}
+    if valor is not None and not 1 <= valor <= 3650:
+        return {"ok": False, "error": "Prazo inválido.", "status": 400}
+    _auditoria_estado("config", {"prazo_contestacao_dias": valor})
+    return {"ok": True, **_auditoria_config()}
+
+
+def auditoria_payload(hoje: Any = None) -> dict[str, Any]:
+    hoje = hoje or datetime.now(BR_TZ).date()
+    mes = hoje.isoformat()[:7]
+    cfg = _auditoria_config()
+    prazo = cfg["prazo_contestacao_dias"]
+    with DB_LOCK:
+        linhas = [dict(r) for r in DB.execute("SELECT * FROM ml_cobranca_caso_v1901 ORDER BY criado_em DESC, caso_id")]
+        sync = {(str(r["period_key"]), str(r["document_type"])): str(r["status"] or "")
+                for r in DB.execute("SELECT period_key, document_type, status FROM ml_billing_period_sync")}
+    casos = []
+    resumo = {s: {"qtd": 0, "total": 0.0} for s in AUDITORIA_SITUACOES}
+    recuperado_mes = 0.0
+    for r in linhas:
+        try:
+            r["lancamentos"] = json.loads(r.pop("lancamentos_json") or "[]")
+        except Exception:
+            r["lancamentos"] = []
+        try:
+            r["prova"] = json.loads(r.pop("prova_json") or "{}")
+        except Exception:
+            r["prova"] = {}
+        r["tipo_nome"] = AUDITORIA_TIPOS.get(r["tipo"], r["tipo"])
+        r["texto"] = _auditoria_texto(r)
+        primeira = min([x["data"] for x in r["lancamentos"] if x.get("data")] or [r["evento_em"] or ""]) or ""
+        ordem = _auditoria_ordinal(primeira)
+        r["fora_prazo"] = bool(prazo and ordem is not None and r["situacao"] in ("a_contestar", "aguardando")
+                               and hoje.toordinal() - ordem > prazo)
+        if r["situacao"] == "aguardando":
+            ev = _auditoria_ordinal(r["evento_em"])
+            r["dias_para_contestar"] = max(0, AUDITORIA_CARENCIA_DIAS - (hoje.toordinal() - ev)) if ev else None
+        s = resumo.setdefault(r["situacao"], {"qtd": 0, "total": 0.0})
+        s["qtd"] += 1
+        s["total"] = round(s["total"] + (float(r["diferenca"]) - float(r["recuperado"] or 0)), 2)
+        if str(r.get("recuperado_em") or "")[:7] == mes:
+            recuperado_mes = round(recuperado_mes + float(r["recuperado"] or 0), 2)
+        casos.append(r)
+    meses = []
+    ano, m = int(_auditoria_desde(hoje)[:4]), int(_auditoria_desde(hoje)[5:7])
+    for _ in range(AUDITORIA_MESES):
+        chave = f"{ano:04d}-{m:02d}-01"
+        meses.append({"mes": chave[:7], "baixado": sync.get((chave, "BILL")) in ("ok", "empty")})
+        m += 1
+        if m > 12:
+            m, ano = 1, ano + 1
+    pequenas = (_auditoria_estado("pequenas") or {}).get(mes) or {"qtd": 0, "total": 0.0}
+    return {"ok": True, "hoje": hoje.isoformat(), "casos": casos, "resumo": resumo, "recuperado_mes": recuperado_mes,
+            "pequenas_mes": pequenas, "rodada": _auditoria_estado("rodada") or {}, "cobertura": meses,
+            "config": cfg, "peso_ligado": bool(ML_FATURA_AJUSTE_PESO), "tipos": AUDITORIA_TIPOS,
+            "regras": {"carencia_dias": AUDITORIA_CARENCIA_DIAS, "minimo": AUDITORIA_MINIMO, "meses": AUDITORIA_MESES},
+            "rodando": AUDITORIA_LOCK.locked()}
+
+
+def auditoria_codigos() -> dict[str, Any]:
+    """Códigos de cobrança que existem na fatura (só leitura, sem dado de cliente)."""
+    with DB_LOCK:
+        rows = [dict(r) for r in DB.execute(
+            "SELECT detail_sub_type AS sub, detail_type AS dtype, COUNT(DISTINCT detail_id) AS qtd, "
+            "MAX(transaction_detail) AS exemplo FROM ml_billing_period_detail GROUP BY detail_sub_type, detail_type "
+            "ORDER BY qtd DESC")]
+        totais = {}
+        for r in DB.execute("SELECT detail_sub_type, detail_id, MAX(ABS(detail_amount)) AS v FROM ml_billing_period_detail "
+                            "GROUP BY detail_sub_type, detail_id"):
+            totais[str(r[0] or "")] = round(totais.get(str(r[0] or ""), 0.0) + float(r[2] or 0), 2)
+    codigos = []
+    vistos: set[str] = set()
+    for r in rows:
+        sub = str(r["sub"] or "")
+        if sub in vistos:
+            continue
+        vistos.add(sub)
+        e = {"detail_sub_type": sub, "detail_type": r["dtype"], "transaction_detail": r["exemplo"]}
+        grupo = _auditoria_grupo(e)
+        if grupo is None:
+            grupo = ("ads" if _ml_billing_is_publicidade(sub, str(r["dtype"] or ""), str(r["exemplo"] or ""))
+                     else "neutro" if _ml_billing_is_neutro(sub) else "outros")
+        codigos.append({"sub_type": sub, "classe": grupo, "qtd": int(r["qtd"] or 0), "total": totais.get(sub, 0.0),
+                        "exemplo": str(r["exemplo"] or "")[:160]})
+    return {"ok": True, "codigos": codigos, "peso": sorted(ML_FATURA_AJUSTE_PESO)}
+
+
+def auditoria_consultar_status(hoje: Any = None, *, limite: int = 0, pausa: float = AUDITORIA_PAUSA) -> dict[str, Any]:
+    """Situação no ML (/orders/{id}) dos pedidos com cobrança que sumiram das vendas
+    (venda cancelada some de vendas_v1799). Cada pedido é consultado uma vez; erro tenta
+    de novo depois de um dia."""
+    hoje = hoje or datetime.now(BR_TZ).date()
+    desde = _auditoria_desde(hoje)
+    limite = max(1, int(limite or AUDITORIA_STATUS_POR_RODADA))
+    ontem = datetime.fromordinal(hoje.toordinal() - 1).date().isoformat()
+    with DB_LOCK:
+        candidatos = [str(r[0]) for r in DB.execute(
+            "SELECT DISTINCT b.order_id FROM ml_billing_period_detail b "
+            "WHERE b.period_key>=? AND b.order_id<>'' "
+            "AND b.order_id NOT IN (SELECT order_id FROM vendas_v1799 WHERE marketplace='ml') "
+            "AND b.order_id NOT IN (SELECT order_id FROM ml_pedido_status_v1901 WHERE erro='' OR consultado_em>?) "
+            "ORDER BY b.order_id DESC LIMIT ?", (desde, ontem, limite)).fetchall()]
+    consultados = erros = 0
+    for oid in candidatos:
+        try:
+            o = ml_api_get(f"/orders/{quote(oid)}")
+            o = o if isinstance(o, dict) else {}
+            cd = o.get("cancel_detail") if isinstance(o.get("cancel_detail"), dict) else {}
+            linha = (oid, str(o.get("status") or ""), str(cd.get("date") or (o.get("date_last_updated") if
+                     str(o.get("status") or "") == "cancelled" else "") or ""),
+                     str(cd.get("description") or cd.get("code") or "")[:200], hoje.isoformat(), "")
+            consultados += 1
+        except Exception as exc:
+            linha = (oid, "", "", "", hoje.isoformat(), str(exc)[:200] or "erro")
+            erros += 1
+        with DB_LOCK:
+            DB.execute("INSERT INTO ml_pedido_status_v1901(order_id,status,cancelado_em,motivo,consultado_em,erro) "
+                       "VALUES(?,?,?,?,?,?) ON CONFLICT(order_id) DO UPDATE SET status=excluded.status,"
+                       "cancelado_em=excluded.cancelado_em,motivo=excluded.motivo,consultado_em=excluded.consultado_em,"
+                       "erro=excluded.erro", linha)
+            DB.commit()
+        if pausa:
+            time.sleep(pausa)
+    return {"candidatos": len(candidatos), "consultados": consultados, "erros": erros}
+
+
+def ml_frete_bruto_preencher(hoje: Any = None, *, limite: int = 0, pausa: float = AUDITORIA_PAUSA) -> dict[str, Any]:
+    """Valor cheio dos envios gravados antes da V19.01 (relê /shipments/{id}/costs)."""
+    hoje = hoje or datetime.now(BR_TZ).date()
+    limite = max(1, int(limite or AUDITORIA_BRUTO_POR_RODADA))
+    with DB_LOCK:
+        pendentes = [str(r[0]) for r in DB.execute(
+            "SELECT DISTINCT f.shipment_id FROM ml_frete_envio_v1830 f JOIN ml_venda_custo_v1830 v "
+            "ON v.shipment_id=f.shipment_id WHERE f.bruto IS NULL AND f.erro='' AND v.sale_day>=? "
+            "ORDER BY v.sale_day DESC LIMIT ?", (_auditoria_desde(hoje), limite)).fetchall()]
+    buscados = 0
+    for sid in pendentes:
+        try:
+            data = _ml_profitability_api_get(f"/shipments/{quote(sid)}/costs", headers={"x-format-new": "true"}, attempts=2)
+            bruto = _ml_shipping_gross_parse(data)
+        except Exception:
+            bruto = None
+        if bruto is not None:
+            with DB_LOCK:
+                DB.execute("UPDATE ml_frete_envio_v1830 SET bruto=? WHERE shipment_id=?", (bruto, sid))
+                DB.commit()
+            buscados += 1
+        if pausa:
+            time.sleep(pausa)
+    return {"pendentes": len(pendentes), "buscados": buscados}
+
+
+def _auditoria_sincronizar_fatura(hoje: Any) -> dict[str, Any]:
+    """Mês atual e anterior sempre; e um mês antigo por rodada até cobrir AUDITORIA_MESES."""
+    if not FINANCEIRO_SYNC_LOCK.acquire(blocking=False):
+        return {"pulado": "Sincronização do Financeiro em andamento."}
+    try:
+        try:
+            _, seller_id = ml_access_token()
+        except Exception as exc:
+            return {"erro": str(exc)[:200]}
+        atual = f"{hoje.year:04d}-{hoje.month:02d}-01"
+        anterior_dt = datetime(hoje.year, hoje.month, 1) - timedelta(days=1)
+        anterior = f"{anterior_dt.year:04d}-{anterior_dt.month:02d}-01"
+        alvo = [(atual, True), (anterior, True)]
+        ano, m = int(_auditoria_desde(hoje)[:4]), int(_auditoria_desde(hoje)[5:7])
+        for _ in range(AUDITORIA_MESES):
+            chave = f"{ano:04d}-{m:02d}-01"
+            if chave not in (atual, anterior):
+                st = _ml_billing_v1513_sync_state(chave, "BILL")
+                if not st or str(st.get("status") or "") not in ("ok", "empty"):
+                    alvo.append((chave, False))
+                    break
+            m += 1
+            if m > 12:
+                m, ano = 1, ano + 1
+        feitos = []
+        for chave, forcar in alvo:
+            for doc in ("BILL", "CREDIT_NOTE"):
+                try:
+                    r = _ml_billing_v1513_sync_period(chave, doc, str(seller_id or ""), force=forcar)
+                    feitos.append({"periodo": chave[:7], "doc": doc, "status": r.get("status")})
+                except Exception as exc:
+                    feitos.append({"periodo": chave[:7], "doc": doc, "status": "error", "erro": str(exc)[:200]})
+        return {"periodos": feitos}
+    finally:
+        FINANCEIRO_SYNC_LOCK.release()
+
+
+def auditoria_rodada(*, pausa: float = AUDITORIA_PAUSA) -> dict[str, Any]:
+    """Uma rodada completa: fatura → situação dos pedidos → valor cheio do frete → casos."""
+    if not AUDITORIA_LOCK.acquire(blocking=False):
+        return {"ok": True, "em_andamento": True}
+    hoje = datetime.now(BR_TZ).date()
+    estado: dict[str, Any] = {"inicio": now_iso(), "fim": "", "ok": False}
+    try:
+        _auditoria_estado("rodada", {**estado, "rodando": True})
+        with ml_na_casa(CASA_PRINCIPAL):
+            for etapa, fn in (("fatura", lambda: _auditoria_sincronizar_fatura(hoje)),
+                              ("status", lambda: auditoria_consultar_status(hoje, pausa=pausa)),
+                              ("frete", lambda: ml_frete_bruto_preencher(hoje, pausa=pausa))):
+                try:
+                    estado[etapa] = fn()
+                except Exception as exc:
+                    estado[etapa] = {"erro": str(exc)[:200]}
+        r = auditoria_gravar(auditoria_detectar(hoje), hoje)
+        estado.update(ok=True, novos=r["novos"])
+        return {"ok": True, **estado}
+    except Exception as exc:
+        estado["erro"] = str(exc)[:300]
+        print(f"[auditoria-ml] rodada falhou: {exc}", file=sys.stderr, flush=True)
+        return {"ok": False, **estado}
+    finally:
+        estado["fim"] = now_iso()
+        try:
+            _auditoria_estado("rodada", estado)
+        finally:
+            AUDITORIA_LOCK.release()
+
+
+def ml_auditoria_loop(stop_event: threading.Event) -> None:
+    """Uma rodada por madrugada (02:00–06:00, Brasília): fora do expediente e longe da VPS ocupada."""
+    if stop_event.wait(300):
+        return
+    while not stop_event.is_set():
+        agora = datetime.now(BR_TZ)
+        hoje = agora.date().isoformat()
+        if AUDITORIA_HORA_INICIO <= agora.hour < AUDITORIA_HORA_FIM and _auditoria_estado("ultima_noite") != hoje:
+            _auditoria_estado("ultima_noite", hoje)
+            res = auditoria_rodada()
+            print(f"[auditoria-ml] rodada: novos={res.get('novos')} ok={res.get('ok')}", flush=True)
+        if stop_event.wait(900):
+            break
+
+
+def auditoria_resumo_email(*, marcar: bool = False) -> str:
+    """Linha do relatório das 08:00. Cada caso é contado como "novo" uma vez só."""
+    mes = datetime.now(BR_TZ).date().isoformat()[:7]
+    with DB_LOCK:
+        novos = DB.execute("SELECT caso_id, diferenca FROM ml_cobranca_caso_v1901 "
+                           "WHERE situacao='a_contestar' AND avisado_em=''").fetchall()
+        recuperado = DB.execute("SELECT COALESCE(SUM(recuperado),0) FROM ml_cobranca_caso_v1901 "
+                                "WHERE substr(recuperado_em,1,7)=?", (mes,)).fetchone()[0] or 0.0
+        if marcar and novos:
+            DB.executemany("UPDATE ml_cobranca_caso_v1901 SET avisado_em=? WHERE caso_id=?",
+                           [(now_iso(), r[0]) for r in novos])
+            DB.commit()
+    partes = []
+    if novos:
+        partes.append(f"{len(novos)} caso(s) novo(s) a contestar ({_brl_srv(sum(float(r[1] or 0) for r in novos))})")
+    if recuperado and float(recuperado) > 0.009:
+        partes.append(f"{_brl_srv(recuperado)} recuperados no mês")
+    return ("Cobranças do ML: " + " · ".join(partes)) if partes else ""
 
 
 # V18.68: visitas dos anúncios do ML, todo dia, para medir conversão (vendas ÷ visitas).
@@ -18204,6 +18955,13 @@ def relatorio_diario_html(d: dict[str, Any]) -> str:
         f"<b>⚠ Este número pode estar incompleto.</b><br>{esc(aviso)}<br>"
         f"<span style='color:#94722a'>Confira o Dashboard de vendas antes de decidir por ele.</span></div>"
     ) if aviso else ""
+    # V19.01: linha do auditor de cobranças do ML (só quando há algo a dizer).
+    cobrancas = str(d.get("cobrancas") or "")
+    cobrancas_html = (
+        f"<div style='background:#eef5ff;border:1px solid #c8dcf5;border-radius:10px;padding:10px 14px;"
+        f"margin:0 0 16px;color:#123a63;font-size:13px'><b>{esc(cobrancas)}</b><br>"
+        f"<span style='color:#586a7d'>Veja em Cobranças do ML no sistema.</span></div>"
+    ) if cobrancas else ""
     return f"""<div style="font-family:'Segoe UI',system-ui,sans-serif;color:#1e293b;max-width:680px;margin:auto">
 <h2 style="color:#123a63;margin:0 0 4px">Noromak — Vendas de {esc(_data_br(d['dia']))}</h2>
 <p style="color:#748295;margin:0 0 16px">Resumo do dia que fechou.</p>
@@ -18223,7 +18981,7 @@ def relatorio_diario_html(d: dict[str, Any]) -> str:
       <div style="font-size:22px;font-weight:800">{_brl_srv(d['ticket_medio'])}</div><div style="font-size:12px;color:#748295">Ticket médio</div></td>
   </tr>
 </table>
-<h3 style="color:#123a63;margin:0 0 6px;font-size:15px">Por marketplace</h3>
+{cobrancas_html}<h3 style="color:#123a63;margin:0 0 6px;font-size:15px">Por marketplace</h3>
 <table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:18px">
   <thead><tr style="background:#123a63;color:#fff;font-size:11px;text-transform:uppercase">
     <th style="padding:6px 10px;text-align:left">Canal</th><th style="padding:6px 10px;text-align:right">Pedidos</th>
@@ -18249,6 +19007,10 @@ def relatorio_diario_texto(d: dict[str, Any]) -> str:
         linhas.append(f"ATENCAO: este numero pode estar incompleto - {d['aviso']}")
     linhas += [
         f"Faturamento: {_brl_srv(d['faturamento'])} | Pedidos: {d['pedidos']} | Unidades: {d['unidades']} | Ticket: {_brl_srv(d['ticket_medio'])}",
+    ]
+    if d.get("cobrancas"):  # V19.01
+        linhas.append(str(d["cobrancas"]))
+    linhas += [
         "",
         "Por marketplace:",
     ]
@@ -18353,9 +19115,19 @@ def relatorio_diario_enviar(dia: str, forcar: bool = False) -> dict[str, Any]:
         print(f"[relatorio-diario] sincronização falhou: {exc}", file=sys.stderr)
     dados = relatorio_diario_dados(dia)
     dados["aviso"] = relatorio_diario_frescor(dia)
+    # V19.01: linha do auditor de cobranças do ML. Só marca como avisado depois de enviar.
+    try:
+        dados["cobrancas"] = auditoria_resumo_email()
+    except Exception as exc:
+        print(f"[relatorio-diario] cobranças do ML: {exc}", file=sys.stderr)
     assunto = f"Noromak — Vendas de {_data_br(dia)}: {_brl_srv(dados['faturamento'])} em {dados['pedidos']} pedido(s)"
     destinatarios = relatorio_diario_enviar_email(assunto, relatorio_diario_texto(dados), relatorio_diario_html(dados))
     _vendas_meta("relatorio_diario_ultimo", dia)
+    if dados.get("cobrancas"):
+        try:
+            auditoria_resumo_email(marcar=True)
+        except Exception as exc:
+            print(f"[relatorio-diario] cobranças do ML (marcar): {exc}", file=sys.stderr)
     return {"ok": True, "dia": dia, "faturamento": dados["faturamento"], "pedidos": dados["pedidos"], "destinatarios": destinatarios}
 
 
@@ -22769,6 +23541,21 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
+        if path == "/api/auditoria-ml":
+            # V19.01: casos do auditor de cobranças do ML (mesma permissão do Financeiro).
+            if self.auth(admin_only=True) is None:
+                return
+            try:
+                self.send_json(auditoria_payload())
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/auditoria-ml/codigos":
+            # V19.01: códigos de cobrança da fatura (descobrir o do ajuste de peso). Só perfil Admin.
+            if self.auth_full_admin() is None:
+                return
+            self.send_json(auditoria_codigos())
+            return
         if path == "/api/ml-visitas/status":
             # V18.68: situação da coleta diária de visitas dos anúncios. Somente leitura.
             if self.auth(admin_only=True) is None:
@@ -23129,6 +23916,8 @@ class AppHandler(BaseHTTPRequestHandler):
             "/compras": "admin", "/compras/": "admin", "/compras.html": "admin",
             # V18.30: Financeiro (faturamento, gastos e lucro).
             "/financeiro": "admin", "/financeiro/": "admin", "/financeiro.html": "admin",
+            # V19.01: Auditor de cobranças do ML.
+            "/auditoria-ml": "admin", "/auditoria-ml/": "admin", "/auditoria-ml.html": "admin",
             # V18.47: Oportunidades de Kit.
             "/kits-analise": "admin", "/kits-analise/": "admin", "/kits-analise.html": "admin",
             # V18.54: Análise de ADS.
@@ -23627,6 +24416,29 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": str(exc) or "Arquivo inválido."}, 400)
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path in ("/api/auditoria-ml/caso", "/api/auditoria-ml/rodar", "/api/auditoria-ml/config"):
+            # V19.01: auditor de cobranças do ML — situação dos casos, rodada manual e prazo.
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            req = self.read_json() or {}
+            if path == "/api/auditoria-ml/rodar":
+                if AUDITORIA_LOCK.locked():
+                    self.send_json({"ok": True, "em_andamento": True})
+                    return
+                threading.Thread(target=auditoria_rodada, name="auditoria-ml-manual", daemon=True).start()
+                audit(ctx["username"], "ml_cobranca_rodar", "")
+                self.send_json({"ok": True, "iniciada": True})
+                return
+            if path == "/api/auditoria-ml/config":
+                r = auditoria_config_salvar(req.get("prazo_contestacao_dias"))
+                if r.get("ok"):
+                    audit(ctx["username"], "ml_cobranca_config", json.dumps(r, ensure_ascii=False))
+            else:
+                r = auditoria_caso_acao(str(req.get("caso_id") or ""), str(req.get("acao") or ""), ctx["username"],
+                                        protocolo=str(req.get("protocolo") or ""), motivo=str(req.get("motivo") or ""))
+            self.send_json(r, int(r.pop("status", 200)) if not r.get("ok") else 200)
             return
         if path == "/api/financeiro/sincronizar":
             # V18.30: busca fatura do ML, escrow da Shopee e Ads do período.
@@ -26087,6 +26899,9 @@ class AppHandler(BaseHTTPRequestHandler):
             "/financeiro": "financeiro.html",
             "/financeiro/": "financeiro.html",
             "/financeiro.html": "financeiro.html",
+            "/auditoria-ml": "auditoria-ml.html",
+            "/auditoria-ml/": "auditoria-ml.html",
+            "/auditoria-ml.html": "auditoria-ml.html",
             "/kits-analise": "kits-analise.html",
             "/kits-analise/": "kits-analise.html",
             "/kits-analise.html": "kits-analise.html",
@@ -26712,6 +27527,7 @@ SAUDE_WORKERS_INFO: dict[str, tuple[str, bool, int]] = {
     "shopee_label_worker_loop": ("Etiquetas da Shopee", True, 30),
     "vendas_sync_loop": ("Vendas (Dashboard e Financeiro)", False, 120),
     "financeiro_frete_loop": ("Frete das vendas (Financeiro)", False, 120),
+    "ml_auditoria_loop": ("Auditor de cobranças do ML", False, 180),
     "ml_ads_sync_loop": ("Publicidade do Mercado Livre", False, 180),
     "ml_visitas_loop": ("Visitas dos anúncios (Conversão)", False, 180),
     "ml_estoque_loop": ("Estoque dos anúncios (Ruptura)", False, 120),
@@ -27597,6 +28413,13 @@ def main() -> None:
         name="financeiro-frete",
         daemon=True,
     )
+    # V19.01: auditor de cobranças do ML (uma rodada por madrugada).
+    auditoria_thread = threading.Thread(
+        target=_worker_protegido(ml_auditoria_loop),
+        args=(watcher_stop,),
+        name="auditoria-ml",
+        daemon=True,
+    )
     # V18.30: gasto com Publicidade (Product Ads) para o Financeiro.
     ads_thread = threading.Thread(
         target=_worker_protegido(ml_ads_sync_loop),
@@ -27702,6 +28525,7 @@ def main() -> None:
         shopee_orders_thread.start()
         vendas_ml_thread.start()
         frete_thread.start()
+        auditoria_thread.start()
         ads_thread.start()
         visitas_thread.start()
         estoque_thread.start()

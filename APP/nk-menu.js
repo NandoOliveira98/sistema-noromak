@@ -16,6 +16,8 @@
     { grupo: "visao", titulo: "Visão geral", fixo: true, itens: [
       { id: "dashboard", rotulo: "Dashboard", href: "/dashboard", aba: "dashboard", modulo: "admin", alias: ["/admin", "/administracao"], icone: "M3 3h7v9H3zM14 3h7v5h-7zM14 12h7v9h-7zM3 16h7v5H3z" },
       { id: "financeiro", rotulo: "Financeiro", href: "/financeiro", modulo: "admin", alias: ["/rentabilidade-ml"], icone: "M3 7h18v13H3zM3 7l3-4h12l3 4M16 14h2" },
+      // V19.01: Auditor de cobranças do ML (mesma permissão do Financeiro).
+      { id: "auditoria-ml", rotulo: "Cobranças do ML", href: "/auditoria-ml", modulo: "admin", icone: "M6 2h12v20l-3-2-3 2-3-2-3 2zM9 7h6M9 11h6M9 15h3" },
     ] },
     { grupo: "expedicao", titulo: "Expedição", itens: [
       { id: "pedidos", rotulo: "Pedidos pendentes", href: "/pedidos-pendentes", aba: "pedidos", modulo: "admin", alias: ["/pendencias", "/central-pendencias"], icone: "M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01" },
