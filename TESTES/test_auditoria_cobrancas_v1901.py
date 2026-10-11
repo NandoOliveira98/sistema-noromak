@@ -420,6 +420,16 @@ class LinhaDoEmail(Base):
         self.assertIn("Cobranças do ML", S.relatorio_diario_html(dados))
 
 
+
+class IconeDasTelas(TesteNoromak):
+    """V19.02: as telas novas declaravam ícone vazio (data:,) e a aba ficava sem o símbolo do Noromak."""
+
+    def test_toda_tela_tem_o_icone_do_noromak(self):
+        for pagina in sorted((RAIZ / "APP").glob("*.html")):
+            html = pagina.read_text(encoding="utf-8")
+            self.assertIn('rel="icon" href="/favicon.ico', html, f"{pagina.name} sem o ícone do Noromak na aba")
+            self.assertNotIn('href="data:,"', html, f"{pagina.name} com ícone vazio")
+
 if __name__ == "__main__":
     import unittest
     unittest.main()
