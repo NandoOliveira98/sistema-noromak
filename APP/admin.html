@@ -1413,6 +1413,12 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
           <p id="v1799Periodo">Carregando…</p>
         </div>
         <div class="v1799-controles">
+          <!-- V18.98: conta do Mercado Livre que vendeu (Shopee é de Araçatuba). -->
+          <div class="v1799-seg" role="group" aria-label="Conta">
+            <button type="button" data-v1799-conta="todas" class="ativo">Todas</button>
+            <button type="button" data-v1799-conta="aracatuba">Araçatuba</button>
+            <button type="button" data-v1799-conta="bauru">Bauru</button>
+          </div>
           <div class="v1799-seg" role="group" aria-label="Marketplace">
             <button type="button" data-v1799-canal="" class="ativo">Todos</button>
             <button type="button" data-v1799-canal="ml"><span class="v1799-dot ml"></span>Mercado Livre</button>
@@ -5136,7 +5142,8 @@ function v151RenderChart(hist){
 // /api/dashboard/vendas, que lê a cópia local das vendas (atualizada pelo
 // servidor a cada 10 min).
 // ---------------------------------------------------------------------------
-const v1799={timer:null,req:0,iniciado:false,canal:"",dias:30};
+const v1799={timer:null,req:0,iniciado:false,canal:"",dias:30,conta:(()=>{try{return localStorage.getItem("nk_dash_conta_v1898")||"todas";}catch(_){return "todas";}})()};
+const V1799_CONTAS={todas:"todas as contas",aracatuba:"Araçatuba",bauru:"Bauru"};
 const V1799_CANAIS={ml:"Mercado Livre",shopee:"Shopee"};
 const v1799Brl=v=>Number(v||0).toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
 const v1799Num=v=>Number(v||0).toLocaleString("pt-BR");
@@ -5161,7 +5168,7 @@ async function v1799Carregar(){
   const de=document.getElementById("v1799De")?.value,ate=document.getElementById("v1799Ate")?.value;if(!de||!ate)return;
   const req=++v1799.req;
   try{
-    const r=await fetch(`/expedicao/api/dashboard/vendas?data_inicio=${encodeURIComponent(de)}&data_fim=${encodeURIComponent(ate)}&marketplace=${encodeURIComponent(v1799.canal)}`,{credentials:"same-origin",cache:"no-store"});
+    const r=await fetch(`/expedicao/api/dashboard/vendas?data_inicio=${encodeURIComponent(de)}&data_fim=${encodeURIComponent(ate)}&marketplace=${encodeURIComponent(v1799.canal)}&conta=${encodeURIComponent(v1799.conta)}`,{credentials:"same-origin",cache:"no-store"});
     const d=await r.json().catch(()=>({}));
     if(req!==v1799.req)return;
     if(!r.ok||!d.ok)throw new Error(d.error||`HTTP ${r.status}`);
@@ -5175,12 +5182,14 @@ function v1799Render(d){
   const res=d.resumo||{},ant=d.anterior||{},per=d.periodo||{},pa=d.periodo_anterior||{},sync=d.sincronizacao||{};
   v1799.dias=Number(per.dias)||30; // V18.08: base do cálculo de demanda na gaveta
   const rotuloAnt=`${v1799Curta(pa.inicio)}–${v1799Curta(pa.fim)}`;
-  v151Set("v1799Periodo",`${v1799Br(per.inicio)} a ${v1799Br(per.fim)} · ${per.dias} dia(s) · comparado com ${v1799Br(pa.inicio)} a ${v1799Br(pa.fim)}`);
+  // V18.98: com "Todas", a linha do período mostra quanto veio de cada conta.
+  const contas=(d.conta==="todas"&&Array.isArray(d.por_conta))?" · "+d.por_conta.map(c=>`${c.nome} ${v1799Brl(c.faturamento)}`).join(" · "):"";
+  v151Set("v1799Periodo",`${v1799Br(per.inicio)} a ${v1799Br(per.fim)} · ${per.dias} dia(s) · comparado com ${v1799Br(pa.inicio)} a ${v1799Br(pa.fim)}${contas}`);
   v151Set("v1799Fat",v1799Brl(res.faturamento));v151Set("v1799Ped",v1799Num(res.pedidos));v151Set("v1799Un",v1799Num(res.unidades));
   v151Set("v1799Ticket",v1799Brl(res.ticket_medio));v151Set("v1799Skus",v1799Num(res.skus));
   v1799Variacao("v1799FatVar",res.faturamento,ant.faturamento,rotuloAnt);v1799Variacao("v1799PedVar",res.pedidos,ant.pedidos,rotuloAnt);
   v1799Variacao("v1799UnVar",res.unidades,ant.unidades,rotuloAnt);v1799Variacao("v1799TicketVar",res.ticket_medio,ant.ticket_medio,rotuloAnt);
-  v151Set("v1799Titulo",v1799.canal?`Vendas · ${V1799_CANAIS[v1799.canal]}`:"Vendas · todos os marketplaces");
+  v151Set("v1799Titulo",(v1799.canal?`Vendas · ${V1799_CANAIS[v1799.canal]}`:"Vendas · todos os marketplaces")+(v1799.conta&&v1799.conta!=="todas"?` · ${V1799_CONTAS[v1799.conta]}`:""));
   // Histórico ainda carregando / erro de sincronização, por marketplace.
   const av=document.getElementById("v1799Aviso");const msgs=[];let temErro=false;
   Object.entries(sync).forEach(([m,st])=>{
@@ -5460,6 +5469,11 @@ function v1799Abrir(){
     ["v1799De","v1799Ate"].forEach(id=>document.getElementById(id).addEventListener("change",()=>{document.querySelectorAll("[data-v1799-periodo]").forEach(b=>b.classList.remove("ativo"));v1799Carregar();}));
     document.getElementById("v1799Sincronizar").addEventListener("click",v1799Sincronizar);
     document.querySelectorAll("[data-v1799-canal]").forEach(b=>b.addEventListener("click",()=>{v1799.canal=b.dataset.v1799Canal;document.querySelectorAll("[data-v1799-canal]").forEach(x=>x.classList.toggle("ativo",x===b));v1799Carregar();}));
+    // V18.98: filtro por conta (lembrado neste navegador).
+    document.querySelectorAll("[data-v1799-conta]").forEach(b=>{
+      b.classList.toggle("ativo",b.dataset.v1799Conta===v1799.conta);
+      b.addEventListener("click",()=>{v1799.conta=b.dataset.v1799Conta;try{localStorage.setItem("nk_dash_conta_v1898",v1799.conta);}catch(_){}document.querySelectorAll("[data-v1799-conta]").forEach(x=>x.classList.toggle("ativo",x===b));v1799Carregar();});
+    });
     // Enquanto o Dashboard estiver aberto, recarrega a cada 5 minutos.
     v1799.timer=setInterval(()=>{const dash=document.getElementById("v151Dashboard");if(dash&&!dash.hidden&&!document.hidden)v1799Carregar();},300000);
     v1799Periodo("30");return;

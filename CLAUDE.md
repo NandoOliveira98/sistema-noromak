@@ -5,7 +5,7 @@ Shopee, manuais), expedição, separação, conferência por código de barras, 
 produtos/SKUs/EANs, kits, precificação, promoções, rentabilidade, estoque, Central de
 Pendências e histórico.
 
-Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V18.97).
+Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V18.98).
 
 ---
 
@@ -452,6 +452,16 @@ antes de tentar de novo. Destinatários em `saude_config_v1883` (padrão: `RELAT
 `saude_alerta_estado_v1883`, histórico em `saude_alerta_log_v1883` (1000 últimos). Link do e-mail:
 `EXP_PUBLIC_URL` (padrão https://noromakweb.com.br/expedicao). WhatsApp fica para depois (provedor a escolher).
 
+### Vendas por conta no Dashboard (V18.98)
+Decisão do dono (10/10): filtro **Todas / Araçatuba / Bauru** pela conta do ML que vendeu (Shopee = Araçatuba),
+e por enquanto **só no Dashboard**. As vendas das outras contas ficam em `vendas_conta_v1898` (mesmas colunas
++ `conta`), preenchida pelo mesmo `vendas_sync_loop` rodando `vendas_sync_marketplace("ml")` dentro de
+`ml_na_casa(casa)`; as marcas de sincronização ganham sufixo (`ml@bauru`, `_vendas_chave`). As 12 telas que
+leem `vendas_v1799` (Financeiro, Demanda de Compra, relatório, Conversão, Ruptura...) continuam só com Araçatuba;
+o custo da venda (`ml_venda_custo_v1830`) também. `vendas_dashboard_payload(..., conta=)` lê a fonte certa
+(UNION em "todas") e devolve `por_conta`; `GET /api/dashboard/vendas?conta=`. A escolha fica no navegador
+(`nk_dash_conta_v1898`).
+
 ### Conferência por filial (V18.95)
 Decisões do dono (10/10, entrevista): cada usuário tem uma **filial** (`app_users.casa`: aracatuba, bauru ou
 — só perfil Admin — todas); na migração, Admin = todas e os demais = Araçatuba. Quem tem "todas" escolhe a
@@ -848,6 +858,7 @@ Os testes ficam em `TESTES/` (são 30 arquivos; os principais):
 | `test_casas_ml_v1894.py` | conta ML por casa: Bauru não toca em Araçatuba, mesma conta nas duas casas recusada, token renovado por casa, OAuth grava na casa certa, webhook pela casa do seller, pedido de Bauru entra marcado, cada casa revê só os pedidos dela |
 | `test_filial_v1895.py` | filial do usuário (Admin = todas), Bauru só recebe a fila/etiquetas/histórico/coleta de Bauru, gravação filtrada não apaga a outra filial nem vira tombstone ADMIN, concluir/travar pedido de outra filial = 403, Mover de filial resiste à importação, PDF com a conta do pedido |
 | `test_venda_despachada_v1897.py` | venda com envio já despachado/entregue não entra, a da integração sai, a do ADMIN fica, vigia de etiquetas limpa |
+| `test_vendas_conta_v1898.py` | vendas de Bauru em tabela própria, sincronizar uma conta não apaga a outra, Bauru fora do custo do Financeiro, Dashboard filtra Todas/Araçatuba/Bauru |
 | `test_instalacao.py` | instalação nova, idempotência do `init_db`, versionamento do storage, autenticação |
 | `base.py` | infraestrutura: banco temporário, servidor real em porta livre, cliente HTTP |
 

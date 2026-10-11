@@ -44,7 +44,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "18.97-VENDA-JA-DESPACHADA"
+APP_VERSION = "18.98-VENDAS-POR-CONTA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -2252,6 +2252,7 @@ def init_db() -> None:
     ensure_linx_demanda_schema()  # V18.91
     ensure_avisos_venda_schema()  # V18.93
     ensure_ml_casas_schema()  # V18.94
+    ensure_vendas_conta_schema()  # V18.98
     migrate_legacy_if_empty()
     ensure_storage_defaults()
     seed_sku_state_from_storage()
@@ -14431,9 +14432,67 @@ def _vendas_meta(key: str, value: str | None = None) -> str:
     return str(row["value"]) if row else ""
 
 
+# ---------------------------------------------------------------------------
+# V18.98 — vendas das OUTRAS contas do ML (Bauru) para o Dashboard (decisão do dono, 10/10:
+# filtro Todas / Araçatuba / Bauru pela conta que vendeu, e por enquanto SÓ no Dashboard).
+# Ficam numa tabela à parte, com as mesmas colunas: as 12 telas que leem vendas_v1799
+# (Financeiro, Demanda de Compra, relatório, Conversão, Ruptura...) continuam só com
+# Araçatuba até cada uma ganhar Bauru de propósito.
+# ---------------------------------------------------------------------------
+VENDAS_CONTAS = {"todas": "Todas as contas", "aracatuba": "Araçatuba", "bauru": "Bauru"}
+
+
+def ensure_vendas_conta_schema() -> None:
+    with DB_LOCK:
+        DB.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS vendas_conta_v1898 (
+                conta TEXT NOT NULL,
+                marketplace TEXT NOT NULL,
+                order_id TEXT NOT NULL,
+                line_key TEXT NOT NULL,
+                pack_id TEXT NOT NULL DEFAULT '',
+                sale_at TEXT NOT NULL,
+                sale_day TEXT NOT NULL,
+                sku TEXT NOT NULL DEFAULT '',
+                anuncio TEXT NOT NULL DEFAULT '',
+                title TEXT NOT NULL DEFAULT '',
+                qty INTEGER NOT NULL DEFAULT 0,
+                amount REAL NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(conta, marketplace, order_id, line_key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_vendas_conta_v1898_dia ON vendas_conta_v1898(conta, sale_day);
+            """
+        )
+        DB.commit()
+
+
+def _vendas_chave(marketplace: str) -> str:
+    """Chave das marcas de sincronização (histórico, última, erro): a da casa principal é a de
+    sempre ("ml"); as outras contas ganham sufixo ("ml@bauru")."""
+    casa = ml_casa_atual()
+    return marketplace if (marketplace != "ml" or casa == CASA_PRINCIPAL) else f"{marketplace}@{casa}"
+
+
 def _vendas_gravar(marketplace: str, date_from: str, date_to: str, records: list[tuple[Any, ...]], complete: bool) -> None:
     """Só apaga a janela quando a busca veio completa; senão apenas acrescenta,
     para nunca perder venda por uma busca truncada."""
+    casa = ml_casa_atual()
+    if marketplace == "ml" and casa != CASA_PRINCIPAL:
+        # V18.98: outra conta do ML — tabela própria, a janela apagada é só a dela.
+        with DB_LOCK:
+            if complete:
+                DB.execute("DELETE FROM vendas_conta_v1898 WHERE conta=? AND marketplace=? AND sale_day BETWEEN ? AND ?",
+                           (casa, marketplace, date_from, date_to))
+            DB.executemany(
+                "INSERT OR REPLACE INTO vendas_conta_v1898(conta,marketplace,order_id,line_key,pack_id,sale_at,sale_day,sku,anuncio,title,qty,amount,status,updated_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                [(casa, *r) for r in records],
+            )
+            DB.commit()
+        return
     with DB_LOCK:
         if complete:
             DB.execute("DELETE FROM vendas_v1799 WHERE marketplace=? AND sale_day BETWEEN ? AND ?", (marketplace, date_from, date_to))
@@ -14489,7 +14548,7 @@ def vendas_ml_sync_window(date_from: str, date_to: str) -> dict[str, Any]:
     # Nunca pode derrubar a sincronização de vendas: é só o custo, e ele se
     # completa sozinho no ciclo seguinte.
     try:
-        if custos_venda:
+        if custos_venda and ml_casa_atual() == CASA_PRINCIPAL:  # V18.98: Financeiro ainda só de Araçatuba
             with DB_LOCK:
                 DB.executemany(
                     "INSERT INTO ml_venda_custo_v1830(order_id,line_key,sku,sale_fee,shipment_id,sale_day,captured_at) "
@@ -14609,24 +14668,26 @@ def vendas_marketplaces_conectados() -> list[str]:
 
 def vendas_sync_marketplace(marketplace: str) -> list[dict[str, Any]]:
     """Um ciclo de um marketplace: últimos 3 dias sempre; 30 dias uma vez por dia
-    (reembolsos/cancelamentos tardios); e uma janela de histórico por ciclo."""
+    (reembolsos/cancelamentos tardios); e uma janela de histórico por ciclo.
+    V18.98: roda na conta da casa atual; as marcas de sincronização são por conta."""
+    chave = _vendas_chave(marketplace)
     hoje = datetime.now(BR_TZ).date()
     feito = _vendas_sync_intervalo(marketplace, hoje - timedelta(days=2), hoje)
-    if _vendas_meta(f"resync_30d_{marketplace}") != hoje.isoformat():
+    if _vendas_meta(f"resync_30d_{chave}") != hoje.isoformat():
         feito += _vendas_sync_intervalo(marketplace, hoje - timedelta(days=30), hoje - timedelta(days=3))
-        _vendas_meta(f"resync_30d_{marketplace}", hoje.isoformat())
+        _vendas_meta(f"resync_30d_{chave}", hoje.isoformat())
     mais_antigo = hoje - timedelta(days=VENDAS_HISTORY_DAYS - 1)
     try:
-        carregado_ate = datetime.strptime(_vendas_meta(f"historico_desde_{marketplace}") or "", "%Y-%m-%d").date()
+        carregado_ate = datetime.strptime(_vendas_meta(f"historico_desde_{chave}") or "", "%Y-%m-%d").date()
     except ValueError:
         carregado_ate = hoje - timedelta(days=2)
     if carregado_ate > mais_antigo:
         fim = carregado_ate - timedelta(days=1)
         inicio = max(mais_antigo, fim - timedelta(days=VENDAS_JANELA_MAX[marketplace] - 1))
         feito.append(VENDAS_SYNC_WINDOW[marketplace](inicio.isoformat(), fim.isoformat()))
-        _vendas_meta(f"historico_desde_{marketplace}", inicio.isoformat())
-    _vendas_meta(f"ultima_sincronizacao_{marketplace}", now_iso())
-    _vendas_meta(f"ultimo_erro_{marketplace}", "")
+        _vendas_meta(f"historico_desde_{chave}", inicio.isoformat())
+    _vendas_meta(f"ultima_sincronizacao_{chave}", now_iso())
+    _vendas_meta(f"ultimo_erro_{chave}", "")
     return feito
 
 
@@ -14641,6 +14702,17 @@ def vendas_sync_once() -> dict[str, Any]:
             except Exception as exc:
                 _vendas_meta(f"ultimo_erro_{marketplace}", f"{now_iso()} {str(exc)[:500]}")
                 resultado[marketplace] = {"erro": str(exc)[:500]}
+        # V18.98: as outras contas do ML (Bauru) — só para o Dashboard.
+        for casa in ml_casas_conectadas():
+            if casa == CASA_PRINCIPAL:
+                continue
+            with ml_na_casa(casa):
+                chave = _vendas_chave("ml")
+                try:
+                    resultado[chave] = vendas_sync_marketplace("ml")
+                except Exception as exc:
+                    _vendas_meta(f"ultimo_erro_{chave}", f"{now_iso()} {str(exc)[:500]}")
+                    resultado[chave] = {"erro": str(exc)[:500]}
         return resultado
     finally:
         VENDAS_SYNC_LOCK.release()
@@ -14672,14 +14744,26 @@ def vendas_sync_loop(stop_event: threading.Event) -> None:
         carregando = False
         try:
             carregando = any(not vendas_historico_completo(m) for m in conectados)
+            # V18.98: histórico da conta de Bauru também acelera o ciclo enquanto carrega.
+            carregando = carregando or any(not vendas_historico_completo(f"ml@{c}")
+                                           for c in ml_casas_conectadas() if c != CASA_PRINCIPAL)
         except Exception:
             pass
         if stop_event.wait(60 if carregando else VENDAS_SYNC_INTERVAL):
             break
 
 
-def vendas_dashboard_payload(date_from: str, date_to: str, marketplace: str = "") -> dict[str, Any]:
-    """Resumo de vendas do período (todos os marketplaces ou um) + período anterior."""
+def vendas_dashboard_payload(date_from: str, date_to: str, marketplace: str = "", conta: str = "todas") -> dict[str, Any]:
+    """Resumo de vendas do período (todos os marketplaces ou um) + período anterior.
+    V18.98: `conta` = todas, aracatuba (conta NOROMAK + Shopee) ou bauru (NOROMAK_BAURU)."""
+    conta = conta if conta in VENDAS_CONTAS else "todas"
+    colunas = "marketplace,order_id,line_key,pack_id,sale_at,sale_day,sku,anuncio,title,qty,amount,status"
+    if conta == "aracatuba":
+        fonte = "vendas_v1799"
+    elif conta == "todas":
+        fonte = f"(SELECT {colunas} FROM vendas_v1799 UNION ALL SELECT {colunas} FROM vendas_conta_v1898)"
+    else:
+        fonte = f"(SELECT {colunas} FROM vendas_conta_v1898 WHERE conta='{conta}')"  # conta já validada
     d1 = datetime.strptime(date_from, "%Y-%m-%d").date()
     d2 = datetime.strptime(date_to, "%Y-%m-%d").date()
     if d1 > d2:
@@ -14699,7 +14783,7 @@ def vendas_dashboard_payload(date_from: str, date_to: str, marketplace: str = ""
     def resumo(a: date, b: date) -> dict[str, Any]:
         row = DB.execute(
             f"SELECT COUNT(DISTINCT {pedido}) AS pedidos, COALESCE(SUM(qty),0) AS unidades, "
-            f"COALESCE(SUM(amount),0) AS faturamento FROM vendas_v1799 WHERE sale_day BETWEEN ? AND ?{filtro}",
+            f"COALESCE(SUM(amount),0) AS faturamento FROM {fonte} WHERE sale_day BETWEEN ? AND ?{filtro}",
             periodo(a, b),
         ).fetchone()
         pedidos = int(row["pedidos"] or 0)
@@ -14711,7 +14795,7 @@ def vendas_dashboard_payload(date_from: str, date_to: str, marketplace: str = ""
         rows = DB.execute(
             f"SELECT {produto} AS sku, MAX(title) AS titulo, SUM(qty) AS unidades, SUM(amount) AS faturamento, "
             f"COUNT(DISTINCT {pedido}) AS pedidos, SUM(CASE WHEN marketplace='ml' THEN qty ELSE 0 END) AS un_ml, "
-            f"SUM(CASE WHEN marketplace='shopee' THEN qty ELSE 0 END) AS un_shopee FROM vendas_v1799 "
+            f"SUM(CASE WHEN marketplace='shopee' THEN qty ELSE 0 END) AS un_shopee FROM {fonte} "
             f"WHERE sale_day BETWEEN ? AND ?{filtro} GROUP BY {produto} ORDER BY {ordem} DESC LIMIT 20",
             periodo(d1, d2),
         ).fetchall()
@@ -14724,7 +14808,7 @@ def vendas_dashboard_payload(date_from: str, date_to: str, marketplace: str = ""
     por_dia_raw: dict[str, dict[str, Any]] = {}
     for r in DB.execute(
         f"SELECT sale_day, marketplace, COUNT(DISTINCT order_id) AS pedidos, SUM(qty) AS unidades, SUM(amount) AS faturamento "
-        f"FROM vendas_v1799 WHERE sale_day BETWEEN ? AND ?{filtro} GROUP BY sale_day, marketplace",
+        f"FROM {fonte} WHERE sale_day BETWEEN ? AND ?{filtro} GROUP BY sale_day, marketplace",
         periodo(d1, d2),
     ).fetchall():
         dia = por_dia_raw.setdefault(r["sale_day"], {})
@@ -14747,15 +14831,25 @@ def vendas_dashboard_payload(date_from: str, date_to: str, marketplace: str = ""
             continue
         row = DB.execute(
             f"SELECT COUNT(DISTINCT order_id) AS pedidos, COALESCE(SUM(qty),0) AS unidades, COALESCE(SUM(amount),0) AS faturamento "
-            f"FROM vendas_v1799 WHERE sale_day BETWEEN ? AND ? AND marketplace=?",
+            f"FROM {fonte} WHERE sale_day BETWEEN ? AND ? AND marketplace=?",
             (d1.isoformat(), d2.isoformat(), m),
         ).fetchone()
         por_marketplace.append({"marketplace": m, "nome": nome, "pedidos": int(row["pedidos"] or 0),
                                 "unidades": int(row["unidades"] or 0), "faturamento": round(float(row["faturamento"] or 0), 2)})
     skus_vendidos = DB.execute(
-        f"SELECT COUNT(DISTINCT {produto}) AS n FROM vendas_v1799 WHERE sale_day BETWEEN ? AND ?{filtro}",
+        f"SELECT COUNT(DISTINCT {produto}) AS n FROM {fonte} WHERE sale_day BETWEEN ? AND ?{filtro}",
         periodo(d1, d2),
     ).fetchone()["n"]
+    # V18.98: total de cada conta no período (para a faixa do filtro).
+    por_conta = []
+    for c, tabela, filtro_conta in (("aracatuba", "vendas_v1799", ""), ("bauru", "vendas_conta_v1898", " AND conta='bauru'")):
+        row = DB.execute(
+            f"SELECT COUNT(DISTINCT marketplace || ':' || order_id) AS pedidos, COALESCE(SUM(amount),0) AS faturamento "
+            f"FROM {tabela} WHERE sale_day BETWEEN ? AND ?{filtro_conta}{filtro}",
+            periodo(d1, d2),
+        ).fetchone()
+        por_conta.append({"conta": c, "nome": VENDAS_CONTAS[c], "pedidos": int(row["pedidos"] or 0),
+                          "faturamento": round(float(row["faturamento"] or 0), 2)})
     conectados = vendas_marketplaces_conectados()
     sincronizacao = {}
     for m in VENDAS_MARKETPLACES:
@@ -14767,9 +14861,20 @@ def vendas_dashboard_payload(date_from: str, date_to: str, marketplace: str = ""
             "historico_desde": primeiro or "",
             "historico_completo": vendas_historico_completo(m),
         }
+    if "bauru" in ml_casas_conectadas():
+        primeiro = DB.execute("SELECT MIN(sale_day) AS d FROM vendas_conta_v1898 WHERE conta='bauru'").fetchone()["d"]
+        sincronizacao["ml@bauru"] = {
+            "conectado": True,
+            "ultima": _vendas_meta("ultima_sincronizacao_ml@bauru"),
+            "erro": _vendas_meta("ultimo_erro_ml@bauru"),
+            "historico_desde": primeiro or "",
+            "historico_completo": vendas_historico_completo("ml@bauru"),
+        }
     return {
         "ok": True,
         "marketplace": marketplace or "todos",
+        "conta": conta,
+        "por_conta": por_conta,
         "periodo": {"inicio": d1.isoformat(), "fim": d2.isoformat(), "dias": dias},
         "periodo_anterior": {"inicio": p1.isoformat(), "fim": p2.isoformat()},
         "resumo": {**atual, "skus": int(skus_vendidos or 0)},
@@ -22395,7 +22500,9 @@ class AppHandler(BaseHTTPRequestHandler):
             canal = str((query.get("marketplace") or [""])[0] or "").strip().lower()
             try:
                 with DB_LOCK:  # V18.56: calcula sob o lock, envia fora dele
-                    resposta = vendas_dashboard_payload(inicio, fim, canal)
+                    # V18.98: ?conta=todas|aracatuba|bauru (conta do ML que vendeu; Shopee é Araçatuba).
+                    resposta = vendas_dashboard_payload(inicio, fim, canal,
+                                                        str((query.get("conta") or ["todas"])[0] or "todas").strip().lower())
                 self.send_json(resposta)
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
