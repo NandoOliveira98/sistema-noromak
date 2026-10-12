@@ -34,6 +34,9 @@ os.environ["EXP_MIGRATION_DIR"] = str(DIR_TEMP / "sem_migracao")
 os.environ["EXP_ADMIN_USUARIO"] = USUARIO_ADMIN
 os.environ["EXP_ADMIN_SENHA"] = SENHA_ADMIN
 os.environ["EXP_USUARIO_SENHA_INICIAL"] = SENHA_ADMIN
+# V19.03: cada teste faz login, e as 600 mil rodadas do PBKDF2 de produção custavam
+# ~0,6 s por teste (8 min da suíte). Nos testes, 1.000 rodadas; produção não muda.
+os.environ["EXP_PASSWORD_ITERATIONS"] = "1000"
 
 sys.path.insert(0, str(RAIZ))
 import servidor_web as S  # noqa: E402
@@ -43,6 +46,20 @@ import servidor_web as S  # noqa: E402
 S.ML_SKU_MLB_SEED_PATH = DIR_TEMP / "seed_inexistente.json"
 # Silencia o log de acesso do BaseHTTPRequestHandler durante os testes.
 S.AppHandler.log_message = lambda *args, **kwargs: None
+
+# V19.03: o banco temporário é recriado a cada teste; esperar o disco confirmar cada
+# gravação custava ~0,6 s por teste. Só nos testes: sem fsync e diário em memória.
+_connect_db_producao = S.connect_db
+
+
+def _connect_db_testes():
+    conn = _connect_db_producao()
+    conn.execute("PRAGMA synchronous=OFF")
+    conn.execute("PRAGMA journal_mode=MEMORY")
+    return conn
+
+
+S.connect_db = _connect_db_testes
 
 _servidor: ThreadingHTTPServer | None = None
 _url_base = ""
