@@ -140,5 +140,36 @@ class CampanhasPorAnuncio(Base):
         self.assertEqual(self.pares("aracatuba"), {("P-MLB17937078", "MLB1")})
 
 
+class PausaEInterrupcao(CampanhasPorAnuncio):
+
+    def test_buscar_convites_sem_stop_event_tambem_pausa(self):
+        self.na_lista("MLB1")
+        self.na_lista("MLB2")
+        self.campanhas = [{"id": "P-X", "type": "SMART", "status": "started"}]
+        chamadas = []
+        orig = S.time.sleep
+        S.time.sleep = lambda s: chamadas.append(s)
+        try:
+            S.promo_convites_rodada(pausa=0.3)
+        finally:
+            S.time.sleep = orig
+        self.assertGreaterEqual(chamadas.count(0.3), 3, "1 campanha + 2 anúncios sem pausa")
+
+    def test_rodada_interrompida_nao_limpa(self):
+        import threading
+        self.na_lista("MLB1")
+        self.por_anuncio["MLB1"] = REAL[:2]
+        self.rodar()
+        antes = self.pares()
+        self.por_anuncio["MLB1"] = []
+        parar = threading.Event()
+        parar.set()
+        S._promo_convites_rodada_conta(parar, pausa=0)
+        self.assertEqual(self.pares(), antes)
+        with S.DB_LOCK:
+            st = {r[0] for r in S.DB.execute("SELECT status FROM ml_campanha_v1889").fetchall()}
+        self.assertNotIn("finished", st)
+
+
 if __name__ == "__main__":
     unittest.main()

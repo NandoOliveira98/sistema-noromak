@@ -22168,6 +22168,17 @@ def _promo_convite_avaliar_linha(c: dict[str, Any], ctx: dict[str, Any]) -> tupl
 PROMO_CAMPANHA_ANUNCIO_TIPOS = tuple(PROMO_CONVITE_TIPOS) + ("LIGHTNING",)
 
 
+def _promo_convite_pausar(stop_event: threading.Event | None, pausa: float) -> bool:
+    """V19.04: pausa entre chamadas ao ML tambem sem stop_event (Buscar convites manual).
+    Devolve True se a rodada foi interrompida."""
+    if pausa <= 0:
+        return bool(stop_event is not None and stop_event.is_set())
+    if stop_event is not None:
+        return stop_event.wait(pausa)
+    time.sleep(pausa)
+    return False
+
+
 def _promo_campanhas_do_anuncio(mlb: str) -> list[dict[str, Any]]:
     """V19.04: GET /seller-promotions/items/{mlb}?app_version=v2 (404 = nada para o anúncio)."""
     return ml_promocoes_do_item(mlb)
@@ -22290,7 +22301,7 @@ def _promo_convites_rodada_conta(stop_event: threading.Event | None = None, *, a
                          str(it.get("start_date") or camp.get("start_date") or ""),
                          str(it.get("end_date") or camp.get("finish_date") or ""), agora, casa))
                     DB.commit()
-            if pausa > 0 and stop_event is not None and stop_event.wait(pausa):
+            if _promo_convite_pausar(stop_event, pausa):
                 break
         # V19.04: leitura por anúncio (lista da renovação desta conta).
         lidos: set[str] = set()
@@ -22308,7 +22319,7 @@ def _promo_convites_rodada_conta(stop_event: threading.Event | None = None, *, a
                                         (mlb, casa)).fetchall():
                         vistas.add(str(r["promotion_id"]))
                         vistos.add((str(r["promotion_id"]), mlb))
-                if pausa > 0 and stop_event is not None and stop_event.wait(pausa):
+                if _promo_convite_pausar(stop_event, pausa):
                     break
                 continue
             lidos.add(mlb)
@@ -22352,7 +22363,7 @@ def _promo_convites_rodada_conta(stop_event: threading.Event | None = None, *, a
                          _posvenda_float(it.get("max_discounted_price")), _posvenda_float(it.get("meli_percentage")),
                          _posvenda_float(it.get("seller_percentage")), inicio, fim, agora, casa))
                     DB.commit()
-            if pausa > 0 and stop_event is not None and stop_event.wait(pausa):
+            if _promo_convite_pausar(stop_event, pausa):
                 break
         # convite que saiu da lista do ML (expirou, item deixou de ser elegível) sai daqui;
         # os aceitos ficam como histórico até a campanha acabar.
@@ -22360,13 +22371,15 @@ def _promo_convites_rodada_conta(stop_event: threading.Event | None = None, *, a
         with DB_LOCK:
             atuais = [(str(r["promotion_id"]), str(r["mlb"])) for r in DB.execute(
                 "SELECT promotion_id, mlb FROM ml_convite_v1889 WHERE status_item='candidate' AND conta=?", (casa,)).fetchall()]
-            for chave in atuais:
+            # V19.04: rodada interrompida (stop_event) nao viu tudo: nao limpa nada desta vez.
+            interrompida = stop_event is not None and stop_event.is_set()
+            for chave in ([] if interrompida else atuais):
                 # V19.04: anúncio lido nesta rodada -> vale o que a leitura dele trouxe
                 if (chave not in vistos_anuncio) if chave[1] in lidos else (chave not in vistos):
                     DB.execute("DELETE FROM ml_convite_v1889 WHERE promotion_id=? AND mlb=?", chave)
             for pid in [str(r["promotion_id"]) for r in DB.execute(
                     "SELECT promotion_id FROM ml_campanha_v1889 WHERE conta=?", (casa,)).fetchall()]:
-                if pid not in vistas:
+                if pid not in vistas and not interrompida:
                     DB.execute("UPDATE ml_campanha_v1889 SET status='finished' WHERE promotion_id=? AND conta=?", (pid, casa))
                     DB.execute("DELETE FROM ml_convite_v1889 WHERE promotion_id=? AND status_item='candidate' AND conta=?",
                                (pid, casa))
