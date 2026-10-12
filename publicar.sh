@@ -129,7 +129,12 @@ echo
 # V18.78: roda em prioridade MINIMA de CPU (nice 19) e de disco (ionice idle):
 # a copia + gzip de 1,6 GB em prioridade normal parava a bipagem e o CRM.
 echo ">> backup de seguranca do banco antes de publicar (prioridade baixa)..."
-if ! ssh expedicao 'if command -v ionice >/dev/null 2>&1; then exec ionice -c 3 nice -n 19 python3 -; else exec nice -n 19 python3 -; fi' <<'PY'
+# V19.03: o backup roda DESTACADO no servidor (nohup) e aqui so consultamos o log a cada
+# 10 s com conexoes curtas. Antes a conexao ssh ficava ~4 min muda esperando o backup e a
+# rede derrubava a conexao parada: o backup terminava no servidor e a publicacao travava
+# para sempre aqui (12/10, 3 tentativas). Envia o script, dispara e acompanha.
+BKP_LOG="/home/expedicao/backups/predeploy_ultimo.log"
+if ! ssh expedicao "cat > /home/expedicao/backups/predeploy_backup.py" <<'PY'
 import sqlite3, time, os, glob, sys, gzip, shutil
 destino_dir = "/home/expedicao/backups"
 os.makedirs(destino_dir, exist_ok=True)
@@ -170,7 +175,37 @@ for velho in glob.glob(os.path.join(destino_dir, "expedicao_predeploy_*.db.gz"))
     if idade_dias > LIMITE_DIAS:
         os.remove(velho)
         print("   removido backup antigo (%.1f dias):" % idade_dias, velho)
+print("   BACKUP_FIM_OK")
 PY
+then
+  echo
+  echo "PUBLICACAO CANCELADA: nao consegui enviar o script de backup ao servidor."
+  echo "Nada foi enviado e a operacao continua no ar."
+  exit 1
+fi
+if ! ssh expedicao "rm -f $BKP_LOG; P='nice -n 19'; command -v ionice >/dev/null 2>&1 && P='ionice -c 3 nice -n 19'; nohup setsid \$P python3 /home/expedicao/backups/predeploy_backup.py > $BKP_LOG 2>&1 < /dev/null & echo disparado"; then
+  echo
+  echo "PUBLICACAO CANCELADA: nao consegui disparar o backup no servidor."
+  echo "Nada foi enviado e a operacao continua no ar."
+  exit 1
+fi
+BKP_OK=0
+for i in $(seq 1 90); do
+  sleep 10
+  BKP_SAIDA="$(ssh -o ConnectTimeout=15 expedicao "cat $BKP_LOG 2>/dev/null; pgrep -f '[p]redeploy_backup.py' >/dev/null && echo RODANDO" 2>/dev/null || true)"
+  if printf '%s' "$BKP_SAIDA" | grep -q "BACKUP_FIM_OK"; then
+    printf '%s\n' "$BKP_SAIDA" | grep -v "BACKUP_FIM_OK\|RODANDO"
+    BKP_OK=1
+    break
+  fi
+  if [ -n "$BKP_SAIDA" ] && ! printf '%s' "$BKP_SAIDA" | grep -q "RODANDO"; then
+    printf '%s\n' "$BKP_SAIDA"
+    break
+  fi
+  echo "   backup em andamento... $((i * 10)) s"
+done
+echo
+if [ "$BKP_OK" != "1" ]
 then
   echo
   echo "PUBLICACAO CANCELADA: nao consegui fazer o backup do banco."
