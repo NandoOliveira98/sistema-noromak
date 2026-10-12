@@ -20,6 +20,7 @@ import hmac
 import json
 import mimetypes
 import os
+import math
 import re
 import secrets
 import shutil
@@ -33,7 +34,7 @@ import urllib.error
 import urllib.request
 import unicodedata
 import zipfile
-from datetime import datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -9381,6 +9382,163 @@ def full_nao_aceito_lista() -> dict[str, dict[str, Any]]:
     with DB_LOCK:
         rows = DB.execute("SELECT * FROM full_nao_aceito_v1903").fetchall()
     return {r["codigo"]: dict(r) for r in rows}
+
+
+# V19.03: remessa Full automática — cálculo puro (sem Apollo, sem ML).
+FULL_REMESSA_PRAZO = 30
+FULL_REMESSA_MINIMO = 150
+FULL_NOVO_VENDAS_MIN = 10
+FULL_NOVO_QTD_MAX = 10
+FULL_REVENDA = 1
+
+
+def _full_a_caminho() -> dict[str, int]:
+    """V19.03: unidades já agendadas (remessa 'agendada', item não removido) por anúncio."""
+    with DB_LOCK:
+        rows = DB.execute(
+            "SELECT i.anuncio, SUM(COALESCE(i.qtd_admin, i.qtd_sugerida)) AS q FROM full_remessa_item_v1903 i "
+            "JOIN full_remessa_v1903 r ON r.remessa_id=i.remessa_id "
+            "WHERE r.situacao='agendada' AND i.removido=0 GROUP BY i.anuncio"
+        ).fetchall()
+    return {r["anuncio"]: int(r["q"] or 0) for r in rows}
+
+
+def full_remessa_candidatos(hoje: date | None = None) -> dict[str, Any]:
+    """V19.03: anúncios Full (estoque dia a dia, últimos 7 dias) com venda de 30 dias,
+    código Apollo/componentes e o que já está a caminho; mais os produtos novos."""
+    hoje = hoje or datetime.now(BR_TZ).date()
+    desde_full = (hoje - timedelta(days=7)).isoformat()
+    desde_venda = (hoje - timedelta(days=FULL_REMESSA_PRAZO - 1)).isoformat()
+    ate = hoje.isoformat()
+    conhecidos = _compras_produtos_precificador()
+    nao_aceito = full_nao_aceito_lista()
+    with DB_LOCK:
+        full_rows = DB.execute(
+            "SELECT e.item_id, e.estoque_ultimo, e.logistica FROM ml_estoque_dia_v1872 e "
+            "JOIN (SELECT item_id, MAX(dia) AS dia FROM ml_estoque_dia_v1872 WHERE dia >= ? GROUP BY item_id) m "
+            "ON m.item_id=e.item_id AND m.dia=e.dia ORDER BY e.item_id", (desde_full,)
+        ).fetchall()
+        full_rows = [r for r in full_rows if str(r["logistica"] or "") == "fulfillment"]
+        info: dict[str, Any] = {}
+        ids = [r["item_id"] for r in full_rows]
+        for i in range(0, len(ids), 500):
+            lote = ids[i:i + 500]
+            for r in DB.execute(f"SELECT item_id, sku, titulo FROM ml_visitas_item_v1868 WHERE item_id IN ({','.join('?' * len(lote))})", lote).fetchall():
+                info[r["item_id"]] = r
+        venda_anuncio = {r["anuncio"]: int(r["q"] or 0) for r in DB.execute(
+            "SELECT anuncio, SUM(qty) AS q FROM vendas_v1799 WHERE marketplace='ml' AND sale_day >= ? AND sale_day <= ? GROUP BY anuncio",
+            (desde_venda, ate)).fetchall()}
+        venda_sku = DB.execute(
+            "SELECT sku, SUM(qty) AS q, MAX(title) AS t FROM vendas_v1799 WHERE marketplace='ml' AND sale_day >= ? AND sale_day <= ? GROUP BY sku",
+            (desde_venda, ate)).fetchall()
+    a_caminho = _full_a_caminho()
+    skus = [str(info[r["item_id"]]["sku"] or "").strip() if r["item_id"] in info else "" for r in full_rows]
+    kits = full_kit_compositions(skus + [r["sku"] for r in venda_sku])
+    anuncios: list[dict[str, Any]] = []
+    fora: list[dict[str, Any]] = []
+    codigos: set[str] = set()
+    for r, sku in zip(full_rows, skus):
+        mlb = r["item_id"]
+        titulo = str(info[mlb]["titulo"] or "") if mlb in info else ""
+        base = {"anuncio": mlb, "sku": sku, "titulo": titulo}
+        if not sku:
+            fora.append({**base, "codigo": "", "motivo": "anúncio sem SKU"})
+            continue
+        kit = (kits.get(sku) or {}).get("componentes")
+        comps: list[dict[str, Any]] = []
+        if kit:
+            for c in kit:
+                cod = _compras_codigo(c["sku"], conhecidos)
+                if not cod:
+                    comps = []
+                    break
+                comps.append({"codigo": _full_codigo(cod), "qtd": int(c["quantidade"])})
+        else:
+            cod = _compras_codigo(sku, conhecidos)
+            if cod:
+                comps = [{"codigo": _full_codigo(cod), "qtd": 1}]
+        if not comps:
+            fora.append({**base, "codigo": "", "motivo": "SKU sem código Apollo"})
+            continue
+        codigo = ",".join(c["codigo"] for c in comps)
+        if any(c["codigo"] in nao_aceito for c in comps):
+            fora.append({**base, "codigo": codigo, "motivo": "não aceito no Full"})
+            continue
+        codigos.update(c["codigo"] for c in comps)
+        anuncios.append({**base, "codigo": codigo, "componentes": comps,
+                         "venda_30d": venda_anuncio.get(mlb, 0),
+                         "no_full": None if r["estoque_ultimo"] is None else int(r["estoque_ultimo"]),
+                         "a_caminho": a_caminho.get(mlb, 0)})
+    # V19.03: novos = código vendido no ML (kit e "A/B" fora) sem anúncio Full.
+    por_codigo: dict[str, dict[str, Any]] = {}
+    for r in venda_sku:
+        sku = str(r["sku"] or "").strip()
+        if not sku or sku in kits or "/" in sku:
+            continue
+        cod = _full_codigo(_compras_codigo(sku, conhecidos))
+        if not cod:
+            continue
+        alvo = por_codigo.setdefault(cod, {"venda": 0, "sku": sku, "titulo": str(r["t"] or "")})
+        alvo["venda"] += int(r["q"] or 0)
+    novos: list[dict[str, Any]] = []
+    for cod, v in sorted(por_codigo.items()):
+        if v["venda"] < FULL_NOVO_VENDAS_MIN or cod in codigos:
+            continue
+        base = {"anuncio": f"NOVO:{cod}", "codigo": cod, "sku": v["sku"], "titulo": v["titulo"]}
+        if cod in nao_aceito:
+            fora.append({**base, "motivo": "não aceito no Full"})
+            continue
+        novos.append({**base, "componentes": [{"codigo": cod, "qtd": 1}], "venda_30d": v["venda"],
+                      "no_full": None, "a_caminho": a_caminho.get(f"NOVO:{cod}", 0)})
+    return {"anuncios": anuncios, "novos": novos, "codigos": codigos, "fora": fora}
+
+
+def full_remessa_calcular(cand: dict[str, Any], estoque: dict[str, Any]) -> dict[str, Any]:
+    """V19.03: quantidade a mandar por anúncio. `estoque` (código -> disponível no Apollo,
+    None = não respondeu) vem pronto do chamador: aqui não se chama o Apollo. Saldo
+    compartilhado entre anúncios e kits, o mais urgente (menor cobertura) primeiro.
+    Código ausente do `estoque` = desconhecido, nunca zero."""
+    saldo: dict[str, Any] = {}
+    for k, v in (estoque or {}).items():
+        saldo[_full_codigo(k)] = None if v is None else float(v)
+
+    def possivel(comps: list[dict[str, Any]]) -> Any:
+        valores = []
+        for c in comps:
+            s = saldo.get(c["codigo"])
+            if s is None:
+                return None
+            valores.append(int(math.floor(max(0.0, s) / c["qtd"])))
+        return min(valores) if valores else None
+
+    def montar(a: dict[str, Any], nec: int, cob: Any, novo: bool) -> dict[str, Any]:
+        disp = possivel(a["componentes"])
+        motivo = ""
+        if disp is None:
+            qtd = 0
+            motivo = "Apollo não respondeu"
+        else:
+            qtd = max(0, min(nec, disp))
+            for c in a["componentes"]:
+                saldo[c["codigo"]] -= qtd * c["qtd"]
+        return {"anuncio": a["anuncio"], "codigo": a["codigo"], "sku": a.get("sku", ""), "titulo": a.get("titulo", ""),
+                "novo": 1 if novo else 0, "confirmado": 0 if novo else 1, "venda_30d": int(a["venda_30d"]),
+                "no_full": a.get("no_full"), "a_caminho": int(a.get("a_caminho") or 0), "cobertura_dias": cob,
+                "necessidade": nec, "estoque_apollo": disp, "qtd_sugerida": qtd, "motivo": motivo,
+                "componentes": a["componentes"]}
+
+    prep = []
+    for a in cand.get("anuncios") or []:
+        diaria = a["venda_30d"] / FULL_REMESSA_PRAZO
+        nf = a.get("no_full") or 0   # V19.03: ML sem número conta 0 na necessidade, mas fica None no item
+        nec = max(0, int(math.ceil(diaria * FULL_REMESSA_PRAZO)) - nf - int(a.get("a_caminho") or 0))
+        cob = round(nf / diaria, 1) if diaria > 0 else None
+        prep.append((a, nec, cob))
+    prep.sort(key=lambda t: (t[2] is None, t[2] or 0))
+    itens = [montar(a, nec, cob, False) for a, nec, cob in prep]
+    novos = [montar(a, min(int(a["venda_30d"]), FULL_NOVO_QTD_MAX), None, True) for a in cand.get("novos") or []]
+    unidades = sum(i["qtd_sugerida"] for i in itens + novos if i["qtd_sugerida"] > 0 and i["confirmado"] == 1)
+    return {"itens": itens, "novos": novos, "unidades": unidades, "fora": list(cand.get("fora") or [])}
 
 
 def _expand_ml_order_item(item_data: dict[str, Any], kit_catalog: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
