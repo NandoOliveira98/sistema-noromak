@@ -484,7 +484,7 @@ maior diferença vista − diferença atual). Ignorado (motivo obrigatório) fic
 relatório das 08:00 (`auditoria_resumo_email`; cada caso avisado uma vez, `avisado_em`).
 
 ### Remessa Full automática (V19.03)
-`APP/compras.html` (seção no topo da **Demanda Full**; spec em `docs/superpowers/specs/2026-10-11-remessa-full-automatica-design.md`).
+`APP/analise-full.html` (seção no topo da **Demanda Full**; spec em `docs/superpowers/specs/2026-10-11-remessa-full-automatica-design.md`).
 Monta sozinha a remessa para o Full do ML e acompanha até o recebimento. Tabelas: `full_remessa_v1903` (cabeçalho, situação,
 `fora_json`, `sem_apollo`), `full_remessa_item_v1903` (uma linha por anúncio) e `full_nao_aceito_v1903` (tombstone **por código**).
 **Candidatos** (`full_remessa_candidatos`): anúncio Full = `ml_estoque_dia_v1872` com logística `fulfillment` (últimos 7 dias), SKU de
