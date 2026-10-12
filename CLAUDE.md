@@ -490,7 +490,7 @@ Monta sozinha a remessa para o Full do ML e acompanha até o recebimento. Tabela
 **Candidatos** (`full_remessa_candidatos`): anúncio Full = `ml_estoque_dia_v1872` com logística `fulfillment` (últimos 7 dias), SKU de
 `ml_visitas_item_v1868`. **Cálculo** (`full_remessa_calcular`, puro, sem Apollo nem ML): venda de 30 dias, **kit conta 1** unidade,
 estoque disponível do Apollo **só Araçatuba** (revenda 1) dividido entre anúncios do mesmo código, mais urgente primeiro;
-`disponivel: null` (Apollo sem resposta) **nunca vira zero** e o item vira `sem_apollo`, que **bloqueia** a remessa de ficar pronta.
+`disponivel: null` (Apollo sem resposta) **nunca vira zero** e o item fica sem quantidade (conta em `sem_apollo`, aviso na tela).
 "A caminho" só conta remessa **agendada**, item confirmado e com quantidade. **Rodada** (`full_remessa_rodada`): existe **uma** remessa
 aberta; ajuste do ADMIN (`qtd_admin`, `removido`, `confirmado`) **nunca é desfeito** pela rodada; se o ADMIN agendou durante a leitura
 do Apollo, a rodada é descartada (cálculo velho). **Novos** (código com ≥ 10 vendas no ML, sem anúncio Full, kit e "A/B" fora, máx. 10):
@@ -502,6 +502,11 @@ nem como novo. Situações: `montando` → `pronta` (≥ **150** unidades confir
 `/api/full/remessa*` e `/api/full/nao-aceito*` (módulo **admin**; ValueError vira 400). O botão **Procurar datas** manda
 `postMessage` para a extensão **Agendador Full v0.3** (contrato em `INTEGRACAO_AGENDADOR_FULL.md`; extensão **ainda não feita**, fica
 fora deste repo como as outras). Teste: `TESTES/test_remessa_full_v1903.py`.
+**Revisão final:**
+- Apollo parcial: fica `pronta` quando as unidades de itens com estoque do Apollo **conhecido** chegam a 150 (obs "Apollo não respondeu para N códigos"); sem resposta nenhuma, `montando`. O worker dá 3000 s ao Apollo; o "Montar agora", 600 s.
+- "A caminho" vence: agendada há mais de **10 dias** da data agendada vira `recebida` ("recebida por prazo").
+- Anúncio Full com SKU "A/B" = um de cada (conta 1); parte sem código Apollo = fora "SKU sem código Apollo".
+- Novo sem estoque no Apollo (0) vai para fora "sem estoque no Apollo" (sem resposta: "Apollo não respondeu"), não para os novos.
 
 ### Painel de saúde e alertas (V18.83)
 `APP/saude.html` (`/saude`, menu Sistema; ver = módulo admin, mudar quem recebe = só perfil Admin).

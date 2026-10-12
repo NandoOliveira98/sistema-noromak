@@ -9457,6 +9457,14 @@ def full_remessa_candidatos(hoje: date | None = None) -> dict[str, Any]:
                     comps = []
                     break
                 comps.append({"codigo": _full_codigo(cod), "qtd": int(c["quantidade"])})
+        elif "/" in sku:
+            # V19.03: "A/B" = um de cada (conta 1); qualquer parte sem código = fora.
+            for parte in [p.strip() for p in sku.split("/") if p.strip()]:
+                cod = _compras_codigo(parte, conhecidos)
+                if not cod:
+                    comps = []
+                    break
+                comps.append({"codigo": _full_codigo(cod), "qtd": 1})
         else:
             cod = _compras_codigo(sku, conhecidos)
             if cod:
@@ -9540,9 +9548,19 @@ def full_remessa_calcular(cand: dict[str, Any], estoque: dict[str, Any]) -> dict
         prep.append((a, nec, cob))
     prep.sort(key=lambda t: (t[2] is None, t[2] or 0))
     itens = [montar(a, nec, cob, False) for a, nec, cob in prep]
-    novos = [montar(a, min(int(a["venda_30d"]), FULL_NOVO_QTD_MAX), None, True) for a in cand.get("novos") or []]
+    novos = []
+    fora = list(cand.get("fora") or [])
+    for a in cand.get("novos") or []:
+        # V19.03: novo sem estoque no Apollo (0) ou sem resposta não é sugerido: vai para fora.
+        disp = possivel(a["componentes"])
+        if disp is None or disp <= 0:
+            fora.append({"anuncio": a["anuncio"], "codigo": a["codigo"], "sku": a.get("sku", ""),
+                         "titulo": a.get("titulo", ""),
+                         "motivo": "Apollo não respondeu" if disp is None else "sem estoque no Apollo"})
+            continue
+        novos.append(montar(a, min(int(a["venda_30d"]), FULL_NOVO_QTD_MAX), None, True))
     unidades = sum(i["qtd_sugerida"] for i in itens + novos if i["qtd_sugerida"] > 0 and i["confirmado"] == 1)
-    return {"itens": itens, "novos": novos, "unidades": unidades, "fora": list(cand.get("fora") or [])}
+    return {"itens": itens, "novos": novos, "unidades": unidades, "fora": fora}
 
 
 # V19.03: remessa Full — rodada, gravação e ajustes do ADMIN.
@@ -9596,18 +9614,22 @@ def full_remessa_estoque_apollo(codigos: set[str], prazo_s: float = 600) -> dict
 _FULL_CONTA = "removido=0 AND confirmado=1 AND COALESCE(qtd_admin, qtd_sugerida) > 0"
 
 
-def _full_remessa_recontar(remessa_id: int, pode_pronta: bool = True) -> dict[str, Any]:
-    """V19.03: total (COALESCE(qtd_admin, qtd_sugerida) das confirmadas e não removidas) e situação. Sob DB_LOCK."""
+def _full_remessa_recontar(remessa_id: int) -> dict[str, Any]:
+    """V19.03: total (COALESCE(qtd_admin, qtd_sugerida) das confirmadas e não removidas) e situação. Sob DB_LOCK.
+    Pronta quando as unidades de itens com estoque do Apollo CONHECIDO chegam ao mínimo: Apollo
+    parcial não trava a remessa para sempre; sem resposta nenhuma, fica montando."""
     cab = DB.execute("SELECT * FROM full_remessa_v1903 WHERE remessa_id=?", (remessa_id,)).fetchone()
-    r = DB.execute(f"SELECT COALESCE(SUM(COALESCE(qtd_admin, qtd_sugerida)),0) AS t, COUNT(*) AS n "
+    r = DB.execute(f"SELECT COALESCE(SUM(COALESCE(qtd_admin, qtd_sugerida)),0) AS t, COUNT(*) AS n, "
+                   f"COALESCE(SUM(CASE WHEN estoque_apollo IS NOT NULL THEN COALESCE(qtd_admin, qtd_sugerida) ELSE 0 END),0) AS k "
                    f"FROM full_remessa_item_v1903 WHERE remessa_id=? AND {_FULL_CONTA}", (remessa_id,)).fetchone()
     total = int(r["t"] or 0)
+    conhecidas = int(r["k"] or 0)
     situacao = cab["situacao"]
     if situacao in FULL_REMESSA_ABERTA:
-        if total < FULL_REMESSA_MINIMO:
-            situacao = "montando"
-        elif pode_pronta:
+        if total >= FULL_REMESSA_MINIMO and conhecidas >= FULL_REMESSA_MINIMO:
             situacao = "pronta"
+        else:
+            situacao = "montando"
     DB.execute("UPDATE full_remessa_v1903 SET unidades=?, itens=?, situacao=? WHERE remessa_id=?",
                (total, int(r["n"] or 0), situacao, remessa_id))
     return {"remessa_id": remessa_id, "situacao": situacao, "unidades": total}
@@ -9616,15 +9638,21 @@ def _full_remessa_recontar(remessa_id: int, pode_pronta: bool = True) -> dict[st
 def _full_remessa_conferir_recebidas(hoje: date) -> None:
     """V19.03: agendada vira recebida quando todo anúncio (não novo, não removido, confirmado,
     qtd > 0) tem no_full atual >= no_full do agendamento + 50% da qtd. Sob DB_LOCK."""
-    agendadas = DB.execute("SELECT remessa_id FROM full_remessa_v1903 WHERE situacao='agendada'").fetchall()
+    agendadas = DB.execute("SELECT remessa_id, agendada_para FROM full_remessa_v1903 WHERE situacao='agendada'").fetchall()
     if not agendadas:
         return
+    limite = (hoje - timedelta(days=10)).isoformat()
     desde = (hoje - timedelta(days=7)).isoformat()
     atual = {r["item_id"]: r["estoque_ultimo"] for r in DB.execute(
         "SELECT e.item_id, e.estoque_ultimo FROM ml_estoque_dia_v1872 e "
         "JOIN (SELECT item_id, MAX(dia) AS dia FROM ml_estoque_dia_v1872 WHERE dia >= ? GROUP BY item_id) m "
         "ON m.item_id=e.item_id AND m.dia=e.dia", (desde,)).fetchall()}
     for cab in agendadas:
+        # V19.03: "a caminho" não fica para sempre: 10 dias depois da data agendada vira recebida.
+        if str(cab["agendada_para"] or "") and str(cab["agendada_para"]) < limite:
+            DB.execute("UPDATE full_remessa_v1903 SET situacao='recebida', obs=? WHERE remessa_id=?",
+                       ("recebida por prazo (10 dias após a data agendada)", cab["remessa_id"]))
+            continue
         itens = DB.execute(
             f"SELECT anuncio, no_full, COALESCE(qtd_admin, qtd_sugerida) AS q FROM full_remessa_item_v1903 "
             f"WHERE remessa_id=? AND novo=0 AND {_FULL_CONTA}", (cab["remessa_id"],)).fetchall()
@@ -9636,7 +9664,7 @@ def _full_remessa_conferir_recebidas(hoje: date) -> None:
                        ("Recebida automaticamente (estoque Full subiu).", cab["remessa_id"]))
 
 
-def full_remessa_rodada(hoje: date | None = None, estoque: dict | None = None) -> dict[str, Any]:
+def full_remessa_rodada(hoje: date | None = None, estoque: dict | None = None, prazo_s: float = 600) -> dict[str, Any]:
     """V19.03: recalcula (ou abre) a única remessa aberta. Ajuste humano (qtd_admin,
     removido, confirmado de novo) nunca é desfeito. Apollo lido fora do DB_LOCK."""
     hoje = hoje or datetime.now(BR_TZ).date()
@@ -9650,7 +9678,7 @@ def full_remessa_rodada(hoje: date | None = None, estoque: dict | None = None) -
         cods = set(cand.get("codigos") or set())
         for a in (cand.get("anuncios") or []) + (cand.get("novos") or []):
             cods.update(c["codigo"] for c in a.get("componentes") or [])
-        estoque = full_remessa_estoque_apollo(cods)
+        estoque = full_remessa_estoque_apollo(cods, prazo_s=prazo_s)
     calc = full_remessa_calcular(cand, estoque)
     linhas = calc["itens"] + calc["novos"]
     sem_apollo = len({i["codigo"] for i in linhas if i["necessidade"] > 0 and i["estoque_apollo"] is None})
@@ -9695,7 +9723,7 @@ def full_remessa_rodada(hoje: date | None = None, estoque: dict | None = None) -
                 DB.execute("DELETE FROM full_remessa_item_v1903 WHERE remessa_id=? AND anuncio=?", (rid, anuncio))
         DB.execute("UPDATE full_remessa_v1903 SET montada_em=?, obs=?, fora_json=?, sem_apollo=? WHERE remessa_id=?",
                    (now_iso(), obs, json.dumps(calc["fora"], ensure_ascii=False), sem_apollo, rid))
-        res = _full_remessa_recontar(rid, pode_pronta=not sem_apollo)
+        res = _full_remessa_recontar(rid)
         DB.commit()
     res["obs"] = obs
     return res
@@ -9721,7 +9749,8 @@ def full_remessa_atual() -> dict[str, Any] | None:
     return {"remessa_id": cab["remessa_id"], "situacao": cab["situacao"], "unidades": cab["unidades"],
             "itens": [r for r in rows if not r["novo"]], "novos": [r for r in rows if r["novo"]],
             "fora": fora, "nao_aceito": list(full_nao_aceito_lista().values()),
-            "montada_em": cab["montada_em"], "obs": cab["obs"], "agendada_para": cab["agendada_para"]}
+            "montada_em": cab["montada_em"], "obs": cab["obs"], "agendada_para": cab["agendada_para"],
+            "sem_apollo": int(cab["sem_apollo"] or 0)}
 
 
 FULL_REMESSA_MONTAR_LOCK = threading.Lock()  # V19.03: uma montagem manual por vez
@@ -9785,7 +9814,7 @@ def full_remessa_loop(stop_event: threading.Event) -> None:
                     _full_remessa_schema()
                     ult = DB.execute("SELECT montada_em FROM full_remessa_v1903 ORDER BY remessa_id DESC LIMIT 1").fetchone()
                 if ult is None or str(ult[0] or "")[:10] != hoje:
-                    res = full_remessa_rodada()
+                    res = full_remessa_rodada(prazo_s=3000)   # V19.03: worker sem nginx, dá tempo ao Apollo (20/min)
                     print(f"[remessa-full] rodada: {res.get('situacao')} {res.get('unidades')} un.", flush=True)
                 full_remessa_avisar()
         except Exception as exc:
@@ -9803,20 +9832,23 @@ def _full_remessa_aberta_ou_erro(remessa_id: int) -> Any:
     return cab
 
 
-def full_remessa_ajustar(remessa_id: int, anuncio: str, *, qtd: int | None = None, removido: bool | None = None,
+_FULL_SEM_MUDANCA = object()   # V19.03: qtd ausente = não mexe; qtd None = volta à sugestão
+
+
+def full_remessa_ajustar(remessa_id: int, anuncio: str, *, qtd: Any = _FULL_SEM_MUDANCA, removido: bool | None = None,
                          confirmado: bool | None = None, usuario: str) -> dict[str, Any]:
-    """V19.03: ajuste do ADMIN numa linha; a rodada nunca desfaz."""
-    if qtd is not None:
+    """V19.03: ajuste do ADMIN numa linha; a rodada nunca desfaz. qtd=None limpa o qtd_admin."""
+    if qtd is not _FULL_SEM_MUDANCA and qtd is not None:
         if isinstance(qtd, bool) or not isinstance(qtd, int) or qtd < 0:
             raise ValueError("Quantidade inválida.")
     anuncio = str(anuncio or "").strip()
     rid = int(remessa_id)
     with DB_LOCK:
-        cab = _full_remessa_aberta_ou_erro(rid)
+        _full_remessa_aberta_ou_erro(rid)
         linha = DB.execute("SELECT * FROM full_remessa_item_v1903 WHERE remessa_id=? AND anuncio=?", (rid, anuncio)).fetchone()
         if linha is None:
             raise ValueError("Anúncio não está na remessa.")
-        if qtd is not None:
+        if qtd is not _FULL_SEM_MUDANCA:
             DB.execute("UPDATE full_remessa_item_v1903 SET qtd_admin=? WHERE remessa_id=? AND anuncio=?", (qtd, rid, anuncio))
         if removido is not None:
             DB.execute("UPDATE full_remessa_item_v1903 SET removido=? WHERE remessa_id=? AND anuncio=?",
@@ -9824,10 +9856,11 @@ def full_remessa_ajustar(remessa_id: int, anuncio: str, *, qtd: int | None = Non
         if confirmado is not None and linha["novo"]:
             DB.execute("UPDATE full_remessa_item_v1903 SET confirmado=? WHERE remessa_id=? AND anuncio=?",
                        (1 if confirmado else 0, rid, anuncio))
-        res = _full_remessa_recontar(rid, pode_pronta=not int(cab["sem_apollo"] or 0))
+        res = _full_remessa_recontar(rid)
         DB.commit()
     audit(str(usuario or "sistema"), "full.remessa.ajustar", json.dumps(
-        {"remessa_id": rid, "anuncio": anuncio, "qtd": qtd, "removido": removido, "confirmado": confirmado},
+        {"remessa_id": rid, "anuncio": anuncio, "qtd": None if qtd is _FULL_SEM_MUDANCA else qtd,
+         "qtd_volta_sugestao": qtd is None, "removido": removido, "confirmado": confirmado},
         ensure_ascii=False))
     return res
 
@@ -25113,13 +25146,17 @@ class AppHandler(BaseHTTPRequestHandler):
                             print(f"[remessa-full] manual: {exc}", file=sys.stderr, flush=True)
                         finally:
                             FULL_REMESSA_MONTAR_LOCK.release()
-                    threading.Thread(target=_montar, name="full-remessa-manual", daemon=True).start()
+                    try:
+                        threading.Thread(target=_montar, name="full-remessa-manual", daemon=True).start()
+                    except Exception:
+                        FULL_REMESSA_MONTAR_LOCK.release()   # V19.03: thread não subiu: não trava o botão (vira 500)
+                        raise
                     audit(usuario, "full.remessa.montar", "")
                     self.send_json({"ok": True, "rodando": True})
                     return
                 if path == "/api/full/remessa/ajustar":
                     r = full_remessa_ajustar(int(req.get("remessa_id")), str(req.get("anuncio") or ""),
-                                             qtd=req.get("qtd") if "qtd" in req else None,
+                                             qtd=req["qtd"] if "qtd" in req else _FULL_SEM_MUDANCA,
                                              removido=bool(req["removido"]) if "removido" in req else None,
                                              confirmado=bool(req["confirmado"]) if "confirmado" in req else None,
                                              usuario=usuario)

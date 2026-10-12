@@ -310,3 +310,84 @@ class TelaRemessa(unittest.TestCase):
         self.assertIn("noromak-full-procurar-datas-ok", html)
         self.assertIn('id="remessaFull"', html)
         self.assertTrue((RAIZ / "INTEGRACAO_AGENDADOR_FULL.md").exists())
+
+
+class RevisaoFinal(Calculo):
+    """V19.03: ajustes da revisão final."""
+
+    def _venda_nova(self, sku, qtd):
+        d = (HOJE - timedelta(days=2)).isoformat()
+        with S.DB_LOCK:
+            S.DB.execute("INSERT INTO vendas_v1799(marketplace,order_id,line_key,sale_at,sale_day,sku,anuncio,title,qty,amount,status,updated_at) "
+                         "VALUES('ml',?,'1',?,?,?,'MLB77','t',?,10,'paid','')", (f"n{sku}", d, d, sku, qtd))
+            S.DB.commit()
+
+    def test_apollo_parcial_com_151_conhecidas_fica_pronta(self):
+        self.anuncio("MLB1", "A", no_full=0, venda=151)
+        self.anuncio("MLB2", "B", no_full=0, venda=10)
+        r = S.full_remessa_rodada(HOJE, estoque={"A": 1000, "B": None})
+        self.assertEqual(r["situacao"], "pronta")
+        self.assertIn("Apollo não respondeu para 1", r["obs"])
+
+    def test_apollo_todo_desconhecido_fica_montando(self):
+        self.anuncio("MLB1", "A", no_full=0, venda=151)
+        self.anuncio("MLB2", "B", no_full=0, venda=10)
+        r = S.full_remessa_rodada(HOJE, estoque={"A": None, "B": None})
+        self.assertEqual(r["situacao"], "montando")
+        # ajuste do ADMIN em item sem Apollo não libera a pronta
+        S.full_remessa_ajustar(r["remessa_id"], "MLB1", qtd=200, usuario="admin")
+        self.assertEqual(S.full_remessa_atual()["situacao"], "montando")
+
+    def test_a_caminho_expira_10_dias_apos_a_data(self):
+        self.anuncio("MLB1", "A", no_full=0, venda=160)
+        r = S.full_remessa_rodada(HOJE, estoque={"A": 1000})
+        S.full_remessa_agendar(r["remessa_id"], (HOJE - timedelta(days=11)).isoformat(), "admin")
+        S.full_remessa_rodada(HOJE, estoque={"A": 1000})
+        with S.DB_LOCK:
+            c = S.DB.execute("SELECT situacao, obs FROM full_remessa_v1903 WHERE remessa_id=?", (r["remessa_id"],)).fetchone()
+        self.assertEqual(c["situacao"], "recebida")
+        self.assertIn("prazo", c["obs"])
+
+    def test_a_caminho_dentro_do_prazo_continua_agendada(self):
+        self.anuncio("MLB1", "A", no_full=0, venda=160)
+        r = S.full_remessa_rodada(HOJE, estoque={"A": 1000})
+        S.full_remessa_agendar(r["remessa_id"], (HOJE - timedelta(days=10)).isoformat(), "admin")
+        S.full_remessa_rodada(HOJE, estoque={"A": 1000})
+        self.assertEqual(self._situacao(r["remessa_id"]), "agendada")
+
+    def _situacao(self, rid):
+        with S.DB_LOCK:
+            return S.DB.execute("SELECT situacao FROM full_remessa_v1903 WHERE remessa_id=?", (rid,)).fetchone()[0]
+
+    def test_sku_a_barra_b_consome_um_de_cada_e_conta_1(self):
+        self.anuncio("MLB5", "A/B", no_full=0, venda=30)
+        r = self.calc({"A": 10, "B": 100})
+        i = r["itens"][0]
+        self.assertEqual(sorted(c["codigo"] for c in i["componentes"]), ["A", "B"])
+        self.assertEqual(i["qtd_sugerida"], 10)
+        self.assertEqual(r["unidades"], 10)
+
+    def test_sku_a_barra_desconhecido_fica_fora(self):
+        self.anuncio("MLB5", "A/ZZZ", no_full=0, venda=30)
+        r = self.calc({"A": 10})
+        self.assertEqual(r["itens"], [])
+        self.assertEqual(r["fora"][0]["motivo"], "SKU sem código Apollo")
+
+    def test_novo_sem_estoque_vai_para_fora(self):
+        self._venda_nova("B", 14)
+        self._venda_nova("C", 14)
+        r = self.calc({"B": 0, "C": None})
+        self.assertEqual(r["novos"], [])
+        motivos = {f["codigo"]: f["motivo"] for f in r["fora"]}
+        self.assertEqual(motivos["B"], "sem estoque no Apollo")
+        self.assertEqual(motivos["C"], "Apollo não respondeu")
+
+    def test_qtd_null_volta_a_sugestao(self):
+        self.anuncio("MLB1", "A", no_full=0, venda=160)
+        r = S.full_remessa_rodada(HOJE, estoque={"A": 1000})
+        S.full_remessa_ajustar(r["remessa_id"], "MLB1", qtd=40, usuario="admin")
+        S.full_remessa_ajustar(r["remessa_id"], "MLB1", removido=False, usuario="admin")
+        self.assertEqual(S.full_remessa_atual()["itens"][0]["qtd_admin"], 40)   # ausente = sem mudança
+        res = S.full_remessa_ajustar(r["remessa_id"], "MLB1", qtd=None, usuario="admin")
+        self.assertIsNone(S.full_remessa_atual()["itens"][0]["qtd_admin"])
+        self.assertEqual(res["situacao"], "pronta")
