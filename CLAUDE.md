@@ -5,7 +5,7 @@ Shopee, manuais), expedição, separação, conferência por código de barras, 
 produtos/SKUs/EANs, kits, precificação, promoções, rentabilidade, estoque, Central de
 Pendências e histórico.
 
-Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V19.01).
+Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V19.03).
 
 ---
 
@@ -118,6 +118,7 @@ testar.sh                    validação obrigatória antes de publicar
 verificar_servidor.sh        diagnóstico remoto do serviço
 TESTES/                      suíte de invariantes críticas
 IDEIA_INTEGRACAO_CLAUDE.md   ideia registrada, ainda não decidida
+INTEGRACAO_AGENDADOR_FULL.md contrato postMessage com a extensão Agendador Full (V19.03)
 ```
 
 > **Ideia em aberto:** integrar o sistema com o Claude para apoiar a operação
@@ -481,6 +482,26 @@ maior diferença vista − diferença atual). Ignorado (motivo obrigatório) fic
 `FINANCEIRO_SYNC_LOCK`), consulta `/orders/{id}` dos pedidos com cobrança que sumiram de `vendas_v1799`
 (`ml_pedido_status_v1901`, uma vez cada) e completa o valor cheio do frete. Só Araçatuba por enquanto. Linha no
 relatório das 08:00 (`auditoria_resumo_email`; cada caso avisado uma vez, `avisado_em`).
+
+### Remessa Full automática (V19.03)
+`APP/compras.html` (seção no topo da **Demanda Full**; spec em `docs/superpowers/specs/2026-10-11-remessa-full-automatica-design.md`).
+Monta sozinha a remessa para o Full do ML e acompanha até o recebimento. Tabelas: `full_remessa_v1903` (cabeçalho, situação,
+`fora_json`, `sem_apollo`), `full_remessa_item_v1903` (uma linha por anúncio) e `full_nao_aceito_v1903` (tombstone **por código**).
+**Candidatos** (`full_remessa_candidatos`): anúncio Full = `ml_estoque_dia_v1872` com logística `fulfillment` (últimos 7 dias), SKU de
+`ml_visitas_item_v1868`. **Cálculo** (`full_remessa_calcular`, puro, sem Apollo nem ML): venda de 30 dias, **kit conta 1** unidade,
+estoque disponível do Apollo **só Araçatuba** (revenda 1) dividido entre anúncios do mesmo código, mais urgente primeiro;
+`disponivel: null` (Apollo sem resposta) **nunca vira zero** e o item vira `sem_apollo`, que **bloqueia** a remessa de ficar pronta.
+"A caminho" só conta remessa **agendada**, item confirmado e com quantidade. **Rodada** (`full_remessa_rodada`): existe **uma** remessa
+aberta; ajuste do ADMIN (`qtd_admin`, `removido`, `confirmado`) **nunca é desfeito** pela rodada; se o ADMIN agendou durante a leitura
+do Apollo, a rodada é descartada (cálculo velho). **Novos** (código com ≥ 10 vendas no ML, sem anúncio Full, kit e "A/B" fora, máx. 10):
+só sugeridos e **só entram com confirmação**. **Não aceito no Full** (ML recusou): tombstone por código, não volta como sugestão
+nem como novo. Situações: `montando` → `pronta` (≥ **150** unidades confirmadas) → `agendada` (congela; a próxima rodada abre outra)
+→ `recebida` (automática quando o estoque no Full subiu ≥ **50%** da quantidade; remessa **só de novos** só manual). Worker
+`full_remessa_loop` (depois das 05:00 Brasília, 1x/dia; no `SAUDE_WORKERS_INFO`). Aviso 1x/dia pelo `aviso_venda_v1893` com
+`marketplace='full'` (popup/push de remessa, não de venda); linha no e-mail das 08:00 quando há remessa pronta. Rotas
+`/api/full/remessa*` e `/api/full/nao-aceito*` (módulo **admin**; ValueError vira 400). O botão **Procurar datas** manda
+`postMessage` para a extensão **Agendador Full v0.3** (contrato em `INTEGRACAO_AGENDADOR_FULL.md`; extensão **ainda não feita**, fica
+fora deste repo como as outras). Teste: `TESTES/test_remessa_full_v1903.py`.
 
 ### Painel de saúde e alertas (V18.83)
 `APP/saude.html` (`/saude`, menu Sistema; ver = módulo admin, mudar quem recebe = só perfil Admin).
@@ -926,6 +947,7 @@ Os testes ficam em `TESTES/` (são 30 arquivos; os principais):
 | `test_tela_desatualizada_v1900.py` | excluir/salvar com a tela desatualizada não apaga pedido que chegou depois, campo que a integração mudou não vira override do ADMIN, aba de uma filial gravando com o cabeçalho de outra não apaga nem remarca a outra filial, operador com a filial trocada e a tela aberta, filial lida uma vez por página |
 | `test_auditoria_v1900.py` | operador não lê token do agente Zebra/robô Linx, custos nem senha de pedido de acesso; Conferência, Estação e Precificador continuam lendo o que usam; segredo não é gravado pela rota comum; lista de chaves só do Admin; usuário excluído não volta no reinício e senha fraca do arquivo de migração não vale |
 | `test_auditoria_cobrancas_v1901.py` | cada tipo de cobrança indevida, carência de 30 dias, R$ 2,00, frete do carrinho por envio, lançamento em um caso só, situação humana nunca desfeita, ignorado não volta, recuperado total/parcial (negado vira recuperado), detecção sem chamar o ML, permissões, linha do e-mail uma vez |
+| `test_remessa_full_v1903.py` | cálculo (30 dias, kit conta 1, Apollo Araçatuba dividido, null nunca zero), uma remessa aberta, ajuste do ADMIN nunca desfeito, mínimo de 150, rodada descartada se agendaram durante a leitura, novos só com confirmação, não aceito por código, recebida automática (≥ 50%) e manual, aviso 1x/dia, linha do e-mail, rotas e permissões |
 | `test_instalacao.py` | instalação nova, idempotência do `init_db`, versionamento do storage, autenticação |
 | `base.py` | infraestrutura: banco temporário, servidor real em porta livre, cliente HTTP |
 
