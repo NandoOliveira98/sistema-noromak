@@ -2080,7 +2080,8 @@ def init_db() -> None:
                 agendada_em TEXT NOT NULL DEFAULT '',
                 agendada_por TEXT NOT NULL DEFAULT '',
                 obs TEXT NOT NULL DEFAULT '',
-                fora_json TEXT NOT NULL DEFAULT '[]'   -- V19.03: o que ficou fora na última rodada
+                fora_json TEXT NOT NULL DEFAULT '[]',  -- V19.03: o que ficou fora na última rodada
+                sem_apollo INTEGER NOT NULL DEFAULT 0  -- V19.03: códigos sem Apollo na última rodada
             );
             CREATE TABLE IF NOT EXISTS full_remessa_item_v1903 (
                 remessa_id INTEGER NOT NULL,
@@ -9399,7 +9400,9 @@ def _full_a_caminho() -> dict[str, int]:
         rows = DB.execute(
             "SELECT i.anuncio, SUM(COALESCE(i.qtd_admin, i.qtd_sugerida)) AS q FROM full_remessa_item_v1903 i "
             "JOIN full_remessa_v1903 r ON r.remessa_id=i.remessa_id "
-            "WHERE r.situacao='agendada' AND i.removido=0 GROUP BY i.anuncio"
+            # V19.03: só o que vai de fato — confirmado e com quantidade.
+            "WHERE r.situacao='agendada' AND i.removido=0 AND i.confirmado=1 "
+            "AND COALESCE(i.qtd_admin, i.qtd_sugerida) > 0 GROUP BY i.anuncio"
         ).fetchall()
     return {r["anuncio"]: int(r["q"] or 0) for r in rows}
 
@@ -9553,6 +9556,15 @@ def _full_remessa_schema() -> None:
     cols = {r[1] for r in DB.execute("PRAGMA table_info(full_remessa_v1903)").fetchall()}
     if "fora_json" not in cols:
         DB.execute("ALTER TABLE full_remessa_v1903 ADD COLUMN fora_json TEXT NOT NULL DEFAULT '[]'")
+    if "sem_apollo" not in cols:
+        DB.execute("ALTER TABLE full_remessa_v1903 ADD COLUMN sem_apollo INTEGER NOT NULL DEFAULT 0")
+
+
+def _full_remessa_marca() -> tuple:
+    """V19.03: retrato (remessa aberta, agendadas) para descobrir agendamento durante a rodada. Sob DB_LOCK."""
+    aberta = DB.execute("SELECT MAX(remessa_id) FROM full_remessa_v1903 WHERE situacao IN ('montando','pronta')").fetchone()[0]
+    ag = DB.execute("SELECT COUNT(*), COALESCE(MAX(agendada_em),'') FROM full_remessa_v1903 WHERE agendada_em<>''").fetchone()
+    return (aberta, int(ag[0] or 0), ag[1])
 
 
 def full_remessa_estoque_apollo(codigos: set[str], prazo_s: float = 600) -> dict[str, Any]:
@@ -9632,6 +9644,7 @@ def full_remessa_rodada(hoje: date | None = None, estoque: dict | None = None) -
         _full_remessa_schema()
         _full_remessa_conferir_recebidas(hoje)
         DB.commit()
+        marca = _full_remessa_marca()
     cand = full_remessa_candidatos(hoje)
     if estoque is None:
         cods = set(cand.get("codigos") or set())
@@ -9643,6 +9656,13 @@ def full_remessa_rodada(hoje: date | None = None, estoque: dict | None = None) -
     sem_apollo = len({i["codigo"] for i in linhas if i["necessidade"] > 0 and i["estoque_apollo"] is None})
     obs = f"Apollo não respondeu para {sem_apollo} códigos." if sem_apollo else ""
     with DB_LOCK:
+        if _full_remessa_marca() != marca:
+            # V19.03: ADMIN agendou durante a leitura — o cálculo (a caminho) ficou velho.
+            atual = DB.execute("SELECT remessa_id, situacao, unidades FROM full_remessa_v1903 "
+                               "ORDER BY (situacao IN ('montando','pronta')) DESC, remessa_id DESC LIMIT 1").fetchone()
+            res = dict(atual) if atual else {"remessa_id": None, "situacao": "", "unidades": 0}
+            res["obs"] = "rodada descartada: remessa agendada durante a leitura"
+            return res
         cab = DB.execute("SELECT * FROM full_remessa_v1903 WHERE situacao IN ('montando','pronta') "
                          "ORDER BY remessa_id DESC LIMIT 1").fetchone()
         if cab is None:
@@ -9673,8 +9693,8 @@ def full_remessa_rodada(hoje: date | None = None, estoque: dict | None = None) -
                            ("Fora do cálculo desta rodada (mantido pelo ajuste do ADMIN).", rid, anuncio))
             else:
                 DB.execute("DELETE FROM full_remessa_item_v1903 WHERE remessa_id=? AND anuncio=?", (rid, anuncio))
-        DB.execute("UPDATE full_remessa_v1903 SET montada_em=?, obs=?, fora_json=? WHERE remessa_id=?",
-                   (now_iso(), obs, json.dumps(calc["fora"], ensure_ascii=False), rid))
+        DB.execute("UPDATE full_remessa_v1903 SET montada_em=?, obs=?, fora_json=?, sem_apollo=? WHERE remessa_id=?",
+                   (now_iso(), obs, json.dumps(calc["fora"], ensure_ascii=False), sem_apollo, rid))
         res = _full_remessa_recontar(rid, pode_pronta=not sem_apollo)
         DB.commit()
     res["obs"] = obs
@@ -9734,7 +9754,7 @@ def full_remessa_ajustar(remessa_id: int, anuncio: str, *, qtd: int | None = Non
         if confirmado is not None and linha["novo"]:
             DB.execute("UPDATE full_remessa_item_v1903 SET confirmado=? WHERE remessa_id=? AND anuncio=?",
                        (1 if confirmado else 0, rid, anuncio))
-        res = _full_remessa_recontar(rid, pode_pronta="Apollo" not in str(cab["obs"] or ""))
+        res = _full_remessa_recontar(rid, pode_pronta=not int(cab["sem_apollo"] or 0))
         DB.commit()
     audit(str(usuario or "sistema"), "full.remessa.ajustar", json.dumps(
         {"remessa_id": rid, "anuncio": anuncio, "qtd": qtd, "removido": removido, "confirmado": confirmado},

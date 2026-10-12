@@ -196,3 +196,33 @@ class Rodada(Calculo):
         finally:
             S.crm_stock_lookup = orig
         self.assertEqual(e, {"A": 7.0, "B": None, "C": None})
+
+    def test_novo_nao_confirmado_nao_vai_a_caminho(self):
+        self.anuncio("MLB1", "A", no_full=0, venda=160)
+        d = (HOJE - timedelta(days=2)).isoformat()
+        with S.DB_LOCK:
+            S.DB.execute("INSERT INTO vendas_v1799(marketplace,order_id,line_key,sale_at,sale_day,sku,anuncio,title,qty,amount,status,updated_at) "
+                         "VALUES('ml','n1','1',?,?,'C','MLB77','t',14,10,'paid','')", (d, d))
+            S.DB.commit()
+        r = S.full_remessa_rodada(HOJE, estoque={"A": 1000, "C": 100})
+        S.full_remessa_agendar(r["remessa_id"], "2026-10-20", "admin")
+        self.assertNotIn("NOVO:C", S._full_a_caminho())
+        self.assertEqual(S._full_a_caminho()["MLB1"], 160)
+
+    def test_agendar_durante_a_leitura_descarta_a_rodada(self):
+        self.anuncio("MLB1", "A", no_full=0, venda=160)
+        r = S.full_remessa_rodada(HOJE, estoque={"A": 1000})
+        orig = S.full_remessa_estoque_apollo
+
+        def lendo(codigos, prazo_s=600):
+            S.full_remessa_agendar(r["remessa_id"], "2026-10-20", "admin")
+            return {"A": 1000}
+        S.full_remessa_estoque_apollo = lendo
+        try:
+            r2 = S.full_remessa_rodada(HOJE)
+        finally:
+            S.full_remessa_estoque_apollo = orig
+        self.assertIn("rodada descartada", r2["obs"])
+        with S.DB_LOCK:
+            n = S.DB.execute("SELECT COUNT(*) FROM full_remessa_v1903").fetchone()[0]
+        self.assertEqual(n, 1)   # nenhuma remessa nova com o cálculo velho
