@@ -297,3 +297,16 @@ class Rotas(Calculo):
         self.assertEqual(st, 400, c)
         st, c = self.cliente.pedir("GET", "/api/full/remessa")
         self.assertEqual(c["historico"][0]["remessa_id"], rid)
+
+
+class TelaRemessa(unittest.TestCase):
+    """V19.03: seção Remessa sugerida na Demanda Full e mensagem para o Agendador."""
+
+    def test_tela_chama_a_api_e_conversa_com_a_extensao(self):
+        from base import RAIZ
+        html = (RAIZ / "APP" / "analise-full.html").read_text(encoding="utf-8")
+        self.assertIn("/api/full/remessa", html)
+        self.assertIn("noromak-full-procurar-datas", html)
+        self.assertIn("noromak-full-procurar-datas-ok", html)
+        self.assertIn('id="remessaFull"', html)
+        self.assertTrue((RAIZ / "INTEGRACAO_AGENDADOR_FULL.md").exists())

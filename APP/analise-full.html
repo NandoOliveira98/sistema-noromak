@@ -479,6 +479,19 @@ html[data-tema="escuro"] [style*="color: #12345B" i]{color:#C0CCD9!important}
   </header>
 
   <main>
+    <!-- V19.03: Remessa Full automática (montada pelo servidor; ajustes do ADMIN valem por cima) -->
+    <section id="remessaFull" class="nk-painel" style="margin:0 0 16px;padding:16px">
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between">
+        <h2 style="margin:0;font-size:18px">Remessa sugerida</h2>
+        <div style="display:flex;flex-wrap:wrap;gap:8px">
+          <button type="button" class="nk-btn" id="rfMontar">Montar agora</button>
+          <button type="button" class="nk-btn" id="rfProcurar" hidden>Procurar datas</button>
+          <button type="button" class="nk-btn" id="rfAgendar" hidden>Marcar agendada</button>
+          <button type="button" class="nk-btn" id="rfRecebida" hidden>Marcar recebida</button>
+        </div>
+      </div>
+      <div id="rfCorpo" style="margin-top:12px;color:var(--nk-ink2)">Carregando...</div>
+    </section>
     <section id="dropZone" class="upload-panel" aria-labelledby="uploadTitle">
       <div>
         <span id="uploadTitle" class="upload-panel__title">Selecione a planilha do Mercado Livre</span>
@@ -1641,6 +1654,176 @@ html[data-tema="escuro"] [style*="color: #12345B" i]{color:#C0CCD9!important}
         getData: () => state.data.map((item) => ({ ...item })),
         getVisibleData: () => state.filtered.map((item) => ({ ...item }))
       };
+    })();
+  </script>
+  <script>
+    // V19.03: Remessa Full automática — seção "Remessa sugerida" (servidor monta; ADMIN ajusta).
+    (() => {
+      const API = "/expedicao";
+      const MINIMO = 150;
+      const $ = (id) => document.getElementById(id);
+      const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+      const num = (v) => (v === null || v === undefined || v === "" ? "" : Number(v).toLocaleString("pt-BR", { maximumFractionDigits: 1 }));
+      const vazio = (v) => v === null || v === undefined;
+      const qtdDe = (i) => (i.qtd_admin ?? i.qtd_sugerida);
+      const dataBr = (s) => { const m = String(s || "").match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/); return m ? `${m[3]}/${m[2]}${m[4] ? ` ${m[4]}:${m[5]}` : ""}` : ""; };
+      const aviso = (t, tipo) => (window.nkToast ? window.nkToast(t, tipo) : alert(t));
+      let remessa = null;
+      const abertos = new Set();
+
+      async function chamar(caminho, corpo) {
+        const resp = await fetch(API + caminho, {
+          method: corpo === undefined ? "GET" : "POST", credentials: "same-origin", cache: "no-store",
+          headers: { "Content-Type": "application/json", "Accept": "application/json" },
+          body: corpo === undefined ? undefined : JSON.stringify(corpo)
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok || data.ok === false) throw new Error(data.error || `HTTP ${resp.status}`);
+        return data;
+      }
+
+      async function carregar() {
+        try { remessa = (await chamar("/api/full/remessa")).remessa; desenhar(); }
+        catch (e) { $("rfCorpo").textContent = `Não foi possível ler a remessa: ${e.message}`; }
+      }
+
+      async function enviar(caminho, corpo, ok) {
+        try {
+          const data = await chamar(caminho, corpo);
+          if ("remessa" in data) remessa = data.remessa;
+          desenhar();
+          if (ok) aviso(ok, "ok");
+        } catch (e) { aviso(e.message, "erro"); await carregar(); }
+      }
+
+      function selo(r) {
+        if (r.situacao === "pronta") return '<span class="nk-selo ok">Pronta para agendar</span>';
+        if (r.situacao === "agendada") return `<span class="nk-selo info">Agendada ${esc(dataBr(r.agendada_para))}</span>`;
+        if (r.situacao === "recebida") return '<span class="nk-selo">Recebida</span>';
+        return '<span class="nk-selo warn">Montando</span>';
+      }
+
+      function tabela(lista, novos) {
+        if (!lista.length) return '<p style="color:var(--nk-ink2);margin:6px 0">Nenhum item.</p>';
+        const editavel = remessa.situacao === "montando" || remessa.situacao === "pronta";
+        const linhas = lista.map((i) => {
+          const apollo = vazio(i.estoque_apollo)
+            ? '<span class="nk-selo warn" title="Apollo não respondeu">não respondeu</span>' : num(i.estoque_apollo);
+          const qtd = editavel && !i.removido
+            ? `<input type="number" min="0" step="1" class="rf-qtd" data-anuncio="${esc(i.anuncio)}" value="${esc(qtdDe(i))}" style="width:72px;padding:4px;border:1px solid var(--nk-line);border-radius:6px;background:var(--nk-tile);color:var(--nk-head)"${vazio(i.qtd_admin) ? "" : ' title="Ajustada pelo ADMIN"'}>`
+            : num(qtdDe(i));
+          const acoes = !editavel ? "" : [
+            novos && !i.confirmado && !i.removido ? `<button type="button" class="nk-btn mini pri" data-acao="confirmar" data-anuncio="${esc(i.anuncio)}">Confirmar</button>` : "",
+            i.removido ? `<button type="button" class="nk-btn mini" data-acao="voltar" data-anuncio="${esc(i.anuncio)}">Voltar</button>`
+                       : `<button type="button" class="nk-btn mini" data-acao="tirar" data-anuncio="${esc(i.anuncio)}">Tirar</button>`,
+            `<button type="button" class="nk-btn mini perigo" data-acao="naoaceito" data-codigo="${esc(i.codigo)}">Não aceito no Full</button>`
+          ].join(" ");
+          return `<tr${i.removido ? ' style="opacity:.5"' : ""}><td>${esc(i.anuncio)}</td><td>${esc(i.titulo)}${i.motivo ? `<br><small style="color:var(--nk-ink2)">${esc(i.motivo)}</small>` : ""}</td>`
+            + `<td>${esc(i.codigo)}</td><td>${num(i.venda_30d)}</td><td>${vazio(i.no_full) ? "" : num(i.no_full)}</td>`
+            + `<td>${vazio(i.cobertura_dias) ? "" : num(i.cobertura_dias) + " d"}</td><td>${num(i.necessidade)}</td>`
+            + `<td>${apollo}</td><td>${qtd}</td><td style="white-space:nowrap">${acoes}</td></tr>`;
+        }).join("");
+        return `<div style="overflow-x:auto"><table data-nk-tabela style="width:100%"><thead><tr><th>Anúncio</th><th>Título</th><th>Código</th><th>Venda 30 d</th><th>No Full</th><th>Cobertura</th><th>Necessidade</th><th>Apollo</th><th>Qtd</th><th></th></tr></thead><tbody>${linhas}</tbody></table></div>`;
+      }
+
+      function bloco(chave, titulo, conteudo) {
+        return `<details data-rf="${chave}" style="margin-top:12px"${abertos.has(chave) ? " open" : ""}><summary style="cursor:pointer;font-weight:700;color:var(--nk-head)">${esc(titulo)}</summary><div style="margin-top:8px">${conteudo}</div></details>`;
+      }
+
+      function desenhar() {
+        const r = remessa;
+        $("rfProcurar").hidden = !(r && r.situacao === "pronta");
+        $("rfAgendar").hidden = !(r && (r.situacao === "pronta" || r.situacao === "montando"));
+        $("rfRecebida").hidden = !(r && r.situacao === "agendada");
+        if (!r) { $("rfCorpo").innerHTML = '<p style="margin:0;color:var(--nk-ink2)">Nenhuma remessa montada ainda. Use "Montar agora".</p>'; return; }
+        const itens = r.itens || [], novos = r.novos || [], fora = r.fora || [], nao = r.nao_aceito || [];
+        const unid = Number(r.unidades || 0);
+        const ativos = itens.filter((i) => !i.removido).length;
+        const kpis = `<div class="nk-kpis">
+          <div class="nk-kpi"><div><b>${selo(r)}</b><small>Situação${r.obs ? " · " + esc(r.obs) : ""}</small></div></div>
+          <div class="nk-kpi"><div><b>${num(unid)} / ${MINIMO}</b><small>Unidades (mínimo ${MINIMO})</small></div></div>
+          <div class="nk-kpi"><div><b>${ativos}</b><small>Itens${novos.length ? ` · ${novos.length} novo(s)` : ""}</small></div></div>
+          <div class="nk-kpi"><div><b>${esc(dataBr(r.montada_em)) || "—"}</b><small>Montada em</small></div></div></div>`;
+        const foraHtml = fora.length ? `<ul style="margin:0;padding-left:18px">${fora.map((f) => `<li><b>${esc(f.anuncio)}</b> ${esc(f.sku)} — ${esc(f.titulo)}: <span style="color:var(--nk-ink2)">${esc(f.motivo)}</span></li>`).join("")}</ul>` : '<p style="margin:0;color:var(--nk-ink2)">Nada.</p>';
+        const naoHtml = nao.length ? `<ul style="margin:0;padding-left:18px">${nao.map((n) => `<li><b>${esc(n.codigo)}</b>: ${esc(n.motivo)} <small style="color:var(--nk-ink2)">(${esc(n.marcado_por)} ${esc(dataBr(n.marcado_em))})</small> <button type="button" class="nk-btn mini" data-acao="liberar" data-codigo="${esc(n.codigo)}">Liberar de novo</button></li>`).join("")}</ul>` : '<p style="margin:0;color:var(--nk-ink2)">Nenhum.</p>';
+        $("rfCorpo").innerHTML = kpis + `<div style="margin-top:12px">${tabela(itens, false)}</div>`
+          + bloco("novos", `Novos sugeridos (${novos.length})`, tabela(novos, true))
+          + bloco("fora", `Fora da remessa (${fora.length})`, foraHtml)
+          + bloco("nao", `Não aceitos no Full (${nao.length})`, naoHtml);
+      }
+
+      $("rfCorpo").addEventListener("toggle", (ev) => {
+        const d = ev.target;
+        if (d && d.matches && d.matches("details[data-rf]")) { if (d.open) abertos.add(d.dataset.rf); else abertos.delete(d.dataset.rf); }
+      }, true);
+
+      $("rfCorpo").addEventListener("change", (ev) => {
+        const inp = ev.target.closest(".rf-qtd");
+        if (!inp || !remessa) return;
+        const qtd = Math.max(0, Math.round(Number(inp.value) || 0));
+        enviar("/api/full/remessa/ajustar", { remessa_id: remessa.remessa_id, anuncio: inp.dataset.anuncio, qtd }, "Quantidade salva.");
+      });
+
+      $("rfCorpo").addEventListener("click", async (ev) => {
+        const b = ev.target.closest("button[data-acao]");
+        if (!b || !remessa) return;
+        const rid = remessa.remessa_id, an = b.dataset.anuncio, cod = b.dataset.codigo;
+        if (b.dataset.acao === "confirmar") return enviar("/api/full/remessa/ajustar", { remessa_id: rid, anuncio: an, confirmado: true });
+        if (b.dataset.acao === "tirar") return enviar("/api/full/remessa/ajustar", { remessa_id: rid, anuncio: an, removido: true });
+        if (b.dataset.acao === "voltar") return enviar("/api/full/remessa/ajustar", { remessa_id: rid, anuncio: an, removido: false });
+        if (b.dataset.acao === "naoaceito") {
+          // nkConfirmar não tem campo: o motivo vem do prompt() (esta tela não é a Conferência).
+          const motivo = prompt(`Não aceito no Full: ${cod}\nMotivo (obrigatório):`, "");
+          if (motivo === null) return;
+          if (!motivo.trim()) return aviso("Informe o motivo.", "aviso");
+          return enviar("/api/full/nao-aceito", { codigo: cod, motivo: motivo.trim() }, "Marcado como não aceito no Full.");
+        }
+        if (b.dataset.acao === "liberar") {
+          if (!(await nkConfirmar(`Liberar ${cod} para voltar a ser sugerido no Full?`))) return;
+          return enviar("/api/full/nao-aceito/liberar", { codigo: cod }, "Liberado.");
+        }
+      });
+
+      $("rfMontar").addEventListener("click", async () => {
+        try {
+          const d = await chamar("/api/full/remessa/montar", {});
+          aviso(d.ja_rodando ? "A remessa já está sendo montada." : "Montando a remessa (consulta o Apollo). Atualizo em 20 s.", "info");
+          setTimeout(carregar, 20000);
+        } catch (e) { aviso(e.message, "erro"); }
+      });
+
+      $("rfAgendar").addEventListener("click", () => {
+        if (!remessa) return;
+        const data = prompt("Data agendada no Full (AAAA-MM-DD):", new Date().toISOString().slice(0, 10));
+        if (data === null) return;
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(data.trim())) return aviso("Data no formato AAAA-MM-DD.", "aviso");
+        enviar("/api/full/remessa/agendar", { remessa_id: remessa.remessa_id, data: data.trim() }, "Remessa marcada como agendada.");
+      });
+
+      $("rfRecebida").addEventListener("click", async () => {
+        if (!remessa) return;
+        if (!(await nkConfirmar("Marcar a remessa como recebida no Full?"))) return;
+        enviar("/api/full/remessa/situacao", { remessa_id: remessa.remessa_id, situacao: "recebida" }, "Remessa marcada como recebida.");
+      });
+
+      let esperaExt = null;
+      window.addEventListener("message", (ev) => {
+        if (ev.source !== window || !ev.data || ev.data.tipo !== "noromak-full-procurar-datas-ok") return;
+        if (esperaExt) { clearTimeout(esperaExt); esperaExt = null; }
+        aviso("Agendador Full recebeu a remessa.", "ok");
+      });
+
+      $("rfProcurar").addEventListener("click", () => {
+        const r = remessa;
+        if (!r || r.situacao !== "pronta") return;
+        window.postMessage({tipo: "noromak-full-procurar-datas", versao: 1, remessa_id: r.remessa_id,
+          itens: r.itens.filter(i => !i.removido && i.confirmado && (i.qtd_admin ?? i.qtd_sugerida) > 0)
+            .map(i => ({anuncio: i.anuncio, sku: i.sku, titulo: i.titulo, quantidade: i.qtd_admin ?? i.qtd_sugerida}))}, location.origin);
+        if (esperaExt) clearTimeout(esperaExt);
+        esperaExt = setTimeout(() => { esperaExt = null; aviso("Extensão do Agendador Full não respondeu: instale a v0.3", "aviso"); }, 3000);
+      });
+
+      carregar();
     })();
   </script>
 </body>
