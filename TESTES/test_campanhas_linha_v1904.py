@@ -171,5 +171,89 @@ class PausaEInterrupcao(CampanhasPorAnuncio):
         self.assertNotIn("finished", st)
 
 
+class ComparacaoNaLinha(Base):
+    """V19.04 (tarefa 2): cada linha da renovação traz as campanhas do anúncio e a mais lucrativa."""
+
+    def setUp(self):
+        super().setUp()
+        with S.DB_LOCK:   # promoção atual a R$ 65: lucro 0,76×65 − 50 = −0,60
+            S.DB.execute("INSERT OR REPLACE INTO promo_renovacao_v1873(mlb, conta, marcado, preco, situacao) "
+                         "VALUES('MLB1','aracatuba',1,65.0,'ok')")
+            S.DB.commit()
+
+    def convite_db(self, pid, tipo, receita, situacao="pronto", mlb="MLB1", conta="aracatuba",
+                   prazo="2099-12-31T23:59:00Z", status="started"):
+        with S.DB_LOCK:
+            S.DB.execute("INSERT OR REPLACE INTO ml_campanha_v1889(conta,promotion_id,tipo,status,nome,prazo) "
+                         "VALUES(?,?,?,?,?,?)", (conta, pid, tipo, status, "Camp " + pid, prazo))
+            S.DB.execute("INSERT OR REPLACE INTO ml_convite_v1889(promotion_id,mlb,tipo,status_item,preco_original,"
+                         "preco,situacao,motivo,receita,conta) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                         (pid, mlb, tipo, "candidate", 100.0, receita, situacao, "m", receita, conta))
+            S.DB.commit()
+
+    def linha(self, mlb="MLB1"):
+        p = S.promo_renovacao_payload()
+        return {i["mlb"]: i for i in p["itens"]}[mlb], p
+
+    def test_melhor_pelo_lucro_e_ganho(self):
+        self.convite_db("P-A", "SMART", 85.0)
+        self.convite_db("P-B", "PRICE_MATCHING", 90.0)
+        i, p = self.linha()
+        self.assertAlmostEqual(i["lucro_promo"], -0.6, places=2)
+        self.assertEqual([c["promotion_id"] for c in i["campanhas"]], ["P-B", "P-A"])
+        self.assertEqual(i["campanhas"][0]["nome_tipo"], "Preço competitivo")
+        self.assertEqual(i["campanhas"][1]["nome_tipo"], "Desconto inteligente")
+        self.assertAlmostEqual(i["campanhas"][0]["lucro"], 18.4, places=2)
+        self.assertTrue(i["campanhas"][0]["pode_aceitar"])
+        self.assertEqual(i["campanha_melhor"]["promotion_id"], "P-B")
+        self.assertAlmostEqual(i["campanha_melhor"]["ganho"], 19.0, places=2)
+        self.assertEqual(p["resumo"]["campanha_mais_lucro"], 1)
+
+    def test_abaixo_da_minima_nunca_melhor(self):
+        self.convite_db("P-A", "SMART", 70.0)   # lucro 3,20 > −0,60, mas margem 4,6%
+        i, p = self.linha()
+        self.assertEqual(len(i["campanhas"]), 1)
+        self.assertIsNone(i["campanha_melhor"])
+        self.assertEqual(p["resumo"]["campanha_mais_lucro"], 0)
+
+    def test_relampago_pode_ser_melhor_mas_nao_aceita(self):
+        self.convite_db("P-A", "SMART", 85.0)
+        self.convite_db("LGH-1", "LIGHTNING", 95.0, situacao="so_ver")
+        i, _ = self.linha()
+        self.assertEqual(i["campanha_melhor"]["promotion_id"], "LGH-1")
+        self.assertFalse(i["campanha_melhor"]["pode_aceitar"])
+        self.assertEqual(i["campanha_melhor"]["nome_tipo"], "Oferta relâmpago")
+
+    def test_sem_custo_lucros_nulos(self):
+        S._precificador_produtos_ml = lambda: {}
+        self.convite_db("P-A", "SMART", 85.0)
+        i, p = self.linha()
+        self.assertIsNone(i["lucro_promo"])
+        self.assertIsNone(i["campanhas"][0]["lucro"])
+        self.assertIsNone(i["campanha_melhor"])
+        self.assertEqual(p["resumo"]["campanha_mais_lucro"], 0)
+
+    def test_outra_conta_expirado_e_removido_fora(self):
+        self.convite_db("P-A", "SMART", 85.0, conta="bauru")
+        self.convite_db("P-B", "SMART", 85.0, prazo="2000-01-01T00:00:00Z")
+        self.convite_db("P-C", "SMART", 85.0, situacao="expirado")
+        self.convite_db("P-D", "SMART", 85.0, status="finished")
+        i, _ = self.linha()
+        self.assertEqual(i["campanhas"], [])
+        self.convite_db("P-E", "SMART", 85.0)
+        S.promo_renovacao_remover(["MLB1"], "admin_teste")
+        p = S.promo_renovacao_payload()
+        self.assertNotIn("MLB1", [x["mlb"] for x in p["itens"]])
+
+    def test_sem_promocao_compara_com_preco_do_anuncio(self):
+        with S.DB_LOCK:
+            S.DB.execute("UPDATE promo_renovacao_v1873 SET preco=NULL, preco_anuncio=100.0, marcado=0")
+            S.DB.commit()
+        self.convite_db("P-A", "SMART", 85.0)
+        i, _ = self.linha()
+        self.assertAlmostEqual(i["lucro_promo"], 26.0, places=2)
+        self.assertIsNone(i["campanha_melhor"])
+
+
 if __name__ == "__main__":
     unittest.main()

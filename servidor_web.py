@@ -20420,12 +20420,18 @@ _ML_TARIFA_CACHE_LOCK = threading.Lock()
 ML_TARIFA_CACHE_SEGUNDOS = 3 * 3600
 
 
+# V19.04: leitura só do cache (payload da tela não chama o ML; sem cache = valor do Precificador)
+_ML_TARIFA_SO_CACHE = threading.local()
+
+
 def _ml_tarifa_cache(chave: tuple[Any, ...], buscar: Any) -> Any:
     agora = time.time()
     with _ML_TARIFA_CACHE_LOCK:
         hit = _ML_TARIFA_CACHE.get(chave)
         if hit and agora - hit[0] < ML_TARIFA_CACHE_SEGUNDOS:
             return hit[1]
+    if getattr(_ML_TARIFA_SO_CACHE, "ativo", False):
+        raise RuntimeError("tarifa do anúncio fora do cache")
     valor = buscar()
     with _ML_TARIFA_CACHE_LOCK:
         if len(_ML_TARIFA_CACHE) > 5000:
@@ -20555,6 +20561,11 @@ def ml_sku_do_anuncio(bruto: Any, conhecidos: dict[str, Any] | None = None) -> s
             return depois
     return texto
 
+
+# V19.04: nome do tipo de campanha na linha do anúncio (Promoções automáticas)
+PROMO_CAMPANHA_NOME_TIPO = {"SMART": "Desconto inteligente", "PRICE_MATCHING": "Preço competitivo",
+                            "MARKETPLACE_CAMPAIGN": "Campanha do ML", "DEAL": "Oferta do dia",
+                            "LIGHTNING": "Oferta relâmpago"}
 
 ML_PROMO_TIPO_NOME = {
     "PRICE_DISCOUNT": "desconto próprio",
@@ -22605,6 +22616,35 @@ def promo_renovacao_payload(hoje: date | None = None) -> dict[str, Any]:
                 "margem_alvo": prod["margem_alvo"], "margem_min": margem_min, "kit": bool(prod.get("kit")),
                 "minimo": promo_preco_minimo(prod), "ideal": promo_preco_ideal(prod)}
 
+    # V19.04: campanhas do ML de cada anúncio/conta (uma consulta, agrupada aqui), mesma
+    # seleção do promo_convites_payload (campanha started/pending), sem as expiradas.
+    agora_utc = datetime.now(timezone.utc)
+    with DB_LOCK:
+        conv_linhas = [dict(x) for x in DB.execute(
+            "SELECT v.promotion_id, v.mlb, v.conta, v.tipo, v.preco, v.preco_escolhido, v.preco_sugerido, "
+            "v.receita, v.situacao, v.motivo, v.fim, c.prazo FROM ml_convite_v1889 v "
+            "JOIN ml_campanha_v1889 c ON c.promotion_id=v.promotion_id AND c.conta=v.conta "
+            "WHERE c.status IN ('started','pending')").fetchall()]
+    convites_por: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for cv in conv_linhas:
+        if str(cv.get("situacao") or "") == "expirado":
+            continue
+        prazo_cv = _posvenda_dt(cv.get("prazo") or cv.get("fim"))
+        if prazo_cv and prazo_cv < agora_utc:
+            continue
+        convites_por.setdefault((str(cv["mlb"]), str(cv["conta"] or CASA_PRINCIPAL)), []).append(cv)
+
+    def lucro_em(base: dict[str, Any] | None, mlb: str, preco_v: float | None) -> dict[str, Any] | None:
+        # mesmo prod da coluna Margem (comissão/frete do anúncio), só do cache: nenhuma chamada ao ML
+        if not base or not preco_v or base["custo"] <= 0:
+            return None
+        _ML_TARIFA_SO_CACHE.ativo = True
+        try:
+            prod_v, _ = _promo_prod_com_ml(base, mlb, preco_v, None)
+        finally:
+            _ML_TARIFA_SO_CACHE.ativo = False
+        return promo_conta(prod_v, preco_v)
+
     itens: list[dict[str, Any]] = []
     for mlb in sorted((set(linhas) | set(monitor)) - removidos):
         r = linhas.get(mlb) or {}
@@ -22642,13 +22682,47 @@ def promo_renovacao_payload(hoje: date | None = None) -> dict[str, Any]:
             # V18.99: conta do Mercado Livre do anúncio (o do monitor do Precificador é da principal)
             "casa": str(r.get("conta") or CASA_PRINCIPAL),
         })
+        # V19.04: lucro por venda na promoção atual (a da coluna Promoção; sem ela, o preço do
+        # anúncio) × cada campanha do ML do anúncio/conta. Sem custo = lucro nulo, nunca "melhor".
+        it = itens[-1]
+        base_prod = None
+        if produtos:
+            base_prod = _promo_produto(produtos, _promo_resolver_sku(mlb, foto.get("sku") or r.get("sku_ml"),
+                                                                     produtos, vinculos))
+        preco_atual = (_money_number(r.get("promo_preco")) if it["situacao"] == "em_campanha" else None)             or preco or preco_anuncio
+        c_atual = lucro_em(base_prod, mlb, preco_atual)
+        it["lucro_promo"] = c_atual["lucro"] if c_atual else None
+        campanhas_l: list[dict[str, Any]] = []
+        for cv in convites_por.get((mlb, it["casa"]), []):
+            preco_cv = (_money_number(cv.get("preco")) or _money_number(cv.get("preco_escolhido"))
+                        or _money_number(cv.get("preco_sugerido")))
+            recebe = _money_number(cv.get("receita"))
+            c_cv = lucro_em(base_prod, mlb, recebe)
+            campanhas_l.append({
+                "promotion_id": cv["promotion_id"], "tipo": cv["tipo"],
+                "nome_tipo": PROMO_CAMPANHA_NOME_TIPO.get(cv["tipo"], cv["tipo"]),
+                "preco": preco_cv, "recebe": recebe,
+                "lucro": c_cv["lucro"] if c_cv else None, "margem": c_cv["margem"] if c_cv else None,
+                "situacao": cv.get("situacao") or "", "motivo": cv.get("motivo") or "",
+                "pode_aceitar": cv.get("situacao") == "pronto" and cv["tipo"] != "LIGHTNING"})
+        campanhas_l.sort(key=lambda x: (x["lucro"] is None, -(x["lucro"] or 0)))
+        melhor = None
+        if it["lucro_promo"] is not None:
+            for cc in campanhas_l:
+                if (cc["lucro"] is not None and cc["lucro"] > it["lucro_promo"] and cc["margem"] is not None
+                        and cc["margem"] >= margem_min and cc["situacao"] in ("pronto", "so_ver")):
+                    melhor = dict(cc, ganho=round(cc["lucro"] - it["lucro_promo"], 2))
+                    break
+        it["campanhas"], it["campanha_melhor"] = campanhas_l, melhor
     conectadas = ml_casas_conectadas() or [CASA_PRINCIPAL]
     return {"ok": True, "hoje": hoje.isoformat(), "config": promo_auto_config(CASA_PRINCIPAL), "versao": versao,
             "config_contas": {c: promo_auto_config(c) for c in conectadas},
             "contas": [{"conta": c, "nome": CASAS[c]} for c in conectadas],
             "estado": dict(_PROMO_RENOVACAO_ESTADO), "rodando": PROMO_RODADA_LOCK.locked(), "renovadas_30_dias": int(renovadas_30 or 0),
             "intervalo_minutos": PROMO_RENOVACAO_INTERVALO // 60, "removidos": len(removidos),
-            "itens": itens, "historico": historico}
+            "itens": itens, "historico": historico,
+            # V19.04: contador do cartão/filtro "Campanha dá mais lucro"
+            "resumo": {"campanha_mais_lucro": sum(1 for i in itens if i.get("campanha_melhor"))}}
 
 
 def _compras_produtos_precificador() -> dict[str, dict[str, Any]]:
