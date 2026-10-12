@@ -98,3 +98,101 @@ class Calculo(TesteNoromak):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Rodada(Calculo):
+    def test_pronta_com_150(self):
+        self.anuncio("MLB1", "A", no_full=0, venda=160)
+        r = S.full_remessa_rodada(HOJE, estoque={"A": 1000})
+        self.assertEqual(r["situacao"], "pronta")
+        self.assertEqual(r["unidades"], 160)
+
+    def test_abaixo_de_150_espera(self):
+        self.anuncio("MLB1", "A", no_full=0, venda=100)
+        self.assertEqual(S.full_remessa_rodada(HOJE, estoque={"A": 1000})["situacao"], "montando")
+
+    def test_ajuste_admin_sobrevive_a_rodada(self):
+        self.anuncio("MLB1", "A", no_full=0, venda=160)
+        r = S.full_remessa_rodada(HOJE, estoque={"A": 1000})
+        S.full_remessa_ajustar(r["remessa_id"], "MLB1", qtd=40, usuario="admin")
+        r2 = S.full_remessa_rodada(HOJE, estoque={"A": 1000})
+        self.assertEqual(r2["remessa_id"], r["remessa_id"])
+        item = S.full_remessa_atual()["itens"][0]
+        self.assertEqual(item["qtd_admin"], 40)
+        self.assertEqual(r2["situacao"], "montando")   # 40 < 150
+
+    def test_agendada_vira_a_caminho_e_nao_repete(self):
+        self.anuncio("MLB1", "A", no_full=0, venda=160)
+        r = S.full_remessa_rodada(HOJE, estoque={"A": 1000})
+        S.full_remessa_agendar(r["remessa_id"], "2026-10-20", "admin")
+        r2 = S.full_remessa_rodada(HOJE, estoque={"A": 1000})
+        self.assertNotEqual(r2["remessa_id"], r["remessa_id"])
+        self.assertEqual(r2["unidades"], 0)
+
+    def test_apollo_caido_nao_marca_pronta(self):
+        self.anuncio("MLB1", "A", no_full=0, venda=160)
+        r = S.full_remessa_rodada(HOJE, estoque={"A": None})
+        self.assertEqual(r["situacao"], "montando")
+        self.assertIn("Apollo", r["obs"])
+
+    def test_confirmar_novo_entra_na_conta(self):
+        self.anuncio("MLB1", "A", no_full=0, venda=145)
+        d = (HOJE - timedelta(days=2)).isoformat()
+        with S.DB_LOCK:
+            S.DB.execute("INSERT INTO vendas_v1799(marketplace,order_id,line_key,sale_at,sale_day,sku,anuncio,title,qty,amount,status,updated_at) "
+                         "VALUES('ml','n1','1',?,?,'C','MLB77','t',14,10,'paid','')", (d, d))
+            S.DB.commit()
+        r = S.full_remessa_rodada(HOJE, estoque={"A": 1000, "C": 100})
+        self.assertEqual(r["situacao"], "montando")
+        S.full_remessa_ajustar(r["remessa_id"], "NOVO:C", confirmado=True, usuario="admin")
+        self.assertEqual(S.full_remessa_rodada(HOJE, estoque={"A": 1000, "C": 100})["situacao"], "pronta")
+
+    def test_ajuste_invalido_e_agendada_recusa(self):
+        self.anuncio("MLB1", "A", no_full=0, venda=160)
+        r = S.full_remessa_rodada(HOJE, estoque={"A": 1000})
+        with self.assertRaises(ValueError):
+            S.full_remessa_ajustar(r["remessa_id"], "MLB1", qtd=-1, usuario="admin")
+        with self.assertRaises(ValueError):
+            S.full_remessa_ajustar(r["remessa_id"], "MLB999", qtd=1, usuario="admin")
+        S.full_remessa_agendar(r["remessa_id"], "2026-10-20", "admin")
+        with self.assertRaisesRegex(ValueError, "agendada"):
+            S.full_remessa_ajustar(r["remessa_id"], "MLB1", qtd=1, usuario="admin")
+
+    def test_recebida_manual(self):
+        self.anuncio("MLB1", "A", no_full=0, venda=160)
+        r = S.full_remessa_rodada(HOJE, estoque={"A": 1000})
+        S.full_remessa_agendar(r["remessa_id"], "2026-10-20", "admin")
+        self.assertEqual(S.full_remessa_situacao(r["remessa_id"], "recebida", "admin")["situacao"], "recebida")
+
+    def _situacao(self, rid):
+        with S.DB_LOCK:
+            return S.DB.execute("SELECT situacao FROM full_remessa_v1903 WHERE remessa_id=?", (rid,)).fetchone()[0]
+
+    def test_recebida_automatica_quando_full_sobe(self):
+        self.anuncio("MLB1", "A", no_full=0, venda=160)
+        r = S.full_remessa_rodada(HOJE, estoque={"A": 1000})
+        S.full_remessa_agendar(r["remessa_id"], "2026-10-20", "admin")
+        S.full_remessa_rodada(HOJE, estoque={"A": 1000})
+        self.assertEqual(self._situacao(r["remessa_id"]), "agendada")
+        with S.DB_LOCK:
+            S.DB.execute("INSERT INTO ml_estoque_dia_v1872(item_id,dia,checagens,estoque_ultimo,logistica,updated_at) "
+                         "VALUES('MLB1',?,1,80,'fulfillment','')", (HOJE.isoformat(),))
+            S.DB.commit()
+        S.full_remessa_rodada(HOJE, estoque={"A": 1000})
+        self.assertEqual(self._situacao(r["remessa_id"]), "recebida")
+
+    def test_estoque_apollo_revenda_1_e_casa_sem_resposta(self):
+        orig = S.crm_stock_lookup
+
+        def falso(cod, op="", wait_seconds=0.0):
+            if cod == "A":
+                return {"estoques": [{"revenda": 1, "disponivel": 7}, {"revenda": 2, "disponivel": 50}], "casas_sem_resposta": []}
+            if cod == "B":
+                return {"estoques": [{"revenda": 1, "disponivel": None}], "casas_sem_resposta": [1]}
+            raise S.CrmLimiteAtingido(30)
+        S.crm_stock_lookup = falso
+        try:
+            e = S.full_remessa_estoque_apollo({"A", "B", "C"}, prazo_s=0)
+        finally:
+            S.crm_stock_lookup = orig
+        self.assertEqual(e, {"A": 7.0, "B": None, "C": None})
