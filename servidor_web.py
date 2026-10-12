@@ -9724,6 +9724,23 @@ def full_remessa_atual() -> dict[str, Any] | None:
             "montada_em": cab["montada_em"], "obs": cab["obs"], "agendada_para": cab["agendada_para"]}
 
 
+FULL_REMESSA_MONTAR_LOCK = threading.Lock()  # V19.03: uma montagem manual por vez
+
+
+def full_remessa_historico() -> list[dict[str, Any]]:
+    """V19.03: últimas 10 remessas agendadas/recebidas, com itens."""
+    with DB_LOCK:
+        _full_remessa_schema()
+        out = []
+        for c in DB.execute("SELECT * FROM full_remessa_v1903 WHERE situacao IN ('agendada','recebida') "
+                            "ORDER BY remessa_id DESC LIMIT 10").fetchall():
+            itens = [dict(r) for r in DB.execute(
+                "SELECT * FROM full_remessa_item_v1903 WHERE remessa_id=? ORDER BY anuncio", (c["remessa_id"],)).fetchall()]
+            out.append({"remessa_id": c["remessa_id"], "situacao": c["situacao"], "unidades": c["unidades"],
+                        "agendada_para": c["agendada_para"], "itens": itens})
+    return out
+
+
 def full_remessa_avisar(hoje: date | None = None) -> bool:
     """V19.03: avisa (popup + push) uma vez por dia que a remessa Full está pronta."""
     hoje = hoje or datetime.now(BR_TZ).date()
@@ -24102,6 +24119,16 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
+        if path == "/api/full/remessa":
+            # V19.03: remessa Full automática (somente leitura) + histórico das últimas 10.
+            if self.auth(admin_only=True) is None:
+                return
+            try:
+                out = {"ok": True, "remessa": full_remessa_atual(), "historico": full_remessa_historico()}
+                self.send_json(out)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
         if path == "/api/auditoria-ml/codigos":
             # V19.01: códigos de cobrança da fatura (descobrir o do ajuste de peso). Só perfil Admin.
             if self.auth_full_admin() is None:
@@ -25064,6 +25091,55 @@ class AppHandler(BaseHTTPRequestHandler):
                     self.send_json({"error": str(exc)}, 400)
                 except Exception as exc:
                     self.send_json({"error": str(exc)}, 500)
+            return
+        if path in ("/api/full/remessa/ajustar", "/api/full/remessa/agendar", "/api/full/remessa/situacao",
+                    "/api/full/remessa/montar", "/api/full/nao-aceito", "/api/full/nao-aceito/liberar"):
+            # V19.03: remessa Full automática — só módulo admin; ValueError vira 400.
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            req = self.read_json() or {}
+            usuario = str(ctx.get("username") or "")
+            try:
+                if path == "/api/full/remessa/montar":
+                    # Apollo lento passa dos 60 s do nginx: roda em segundo plano, uma por vez.
+                    if not FULL_REMESSA_MONTAR_LOCK.acquire(blocking=False):
+                        self.send_json({"ok": True, "rodando": True, "ja_rodando": True})
+                        return
+                    def _montar() -> None:
+                        try:
+                            full_remessa_rodada()
+                        except Exception as exc:
+                            print(f"[remessa-full] manual: {exc}", file=sys.stderr, flush=True)
+                        finally:
+                            FULL_REMESSA_MONTAR_LOCK.release()
+                    threading.Thread(target=_montar, name="full-remessa-manual", daemon=True).start()
+                    audit(usuario, "full.remessa.montar", "")
+                    self.send_json({"ok": True, "rodando": True})
+                    return
+                if path == "/api/full/remessa/ajustar":
+                    r = full_remessa_ajustar(int(req.get("remessa_id")), str(req.get("anuncio") or ""),
+                                             qtd=req.get("qtd") if "qtd" in req else None,
+                                             removido=bool(req["removido"]) if "removido" in req else None,
+                                             confirmado=bool(req["confirmado"]) if "confirmado" in req else None,
+                                             usuario=usuario)
+                elif path == "/api/full/remessa/agendar":
+                    r = full_remessa_agendar(int(req.get("remessa_id")), str(req.get("data") or ""), usuario)
+                elif path == "/api/full/remessa/situacao":
+                    r = full_remessa_situacao(int(req.get("remessa_id")), str(req.get("situacao") or ""), usuario)
+                elif path == "/api/full/nao-aceito":
+                    codigo = str(req.get("codigo") or "").strip()
+                    if not codigo:
+                        raise ValueError("Informe o código.")
+                    full_nao_aceito_marcar(codigo, str(req.get("motivo") or ""), usuario)
+                    r = {}
+                else:
+                    r = {"liberado": full_nao_aceito_liberar(str(req.get("codigo") or ""), usuario)}
+                self.send_json({"ok": True, "resultado": r, "remessa": full_remessa_atual()})
+            except (ValueError, TypeError) as exc:
+                self.send_json({"error": str(exc)}, 400)
+            except Exception as exc:
+                self.send_json({"error": str(exc)}, 500)
             return
         if path == "/api/full/apollo-stock":
             ctx = self.auth()

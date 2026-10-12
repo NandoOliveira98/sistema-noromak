@@ -251,3 +251,49 @@ class Aviso(Calculo):
 
     def test_worker_no_painel_de_saude(self):
         self.assertIn("full_remessa_loop", S.SAUDE_WORKERS_INFO)
+
+
+from base import Cliente
+SENHA = "Senha-de-teste-1903"
+
+
+class Rotas(Calculo):
+    def test_operador_403(self):
+        with S.DB_LOCK:
+            S.upsert_app_user("op_1903", "Operador", "operador", True, SENHA, "teste",
+                              permissions={"conferencia": True, "admin": False, "estacao": False, "precificador": False})
+            S.DB.commit()
+        op = Cliente(self.url_base)
+        op.entrar("op_1903", SENHA, area="conferencia")
+        self.assertEqual(op.pedir("GET", "/api/full/remessa")[0], 403)
+        self.assertEqual(op.pedir("POST", "/api/full/nao-aceito", {"codigo": "X"})[0], 403)
+
+    def test_nao_aceito_pela_rota(self):
+        st, c = self.cliente.pedir("POST", "/api/full/nao-aceito", {"codigo": "abc1", "motivo": "frágil"})
+        self.assertEqual(st, 200, c)
+        st, c = self.cliente.pedir("GET", "/api/full/remessa")
+        self.assertEqual(st, 200, c)
+        self.assertIn("ABC1", S.full_nao_aceito_lista())
+        st, c = self.cliente.pedir("POST", "/api/full/nao-aceito/liberar", {"codigo": "abc1"})
+        self.assertEqual(st, 200, c)
+        self.assertNotIn("ABC1", S.full_nao_aceito_lista())
+
+    def test_nao_aceito_na_remessa(self):
+        self.anuncio("MLB1", "A", no_full=0, venda=160)
+        S.full_remessa_rodada(HOJE, estoque={"A": 1000})
+        self.cliente.pedir("POST", "/api/full/nao-aceito", {"codigo": "ZZ", "motivo": "m"})
+        st, c = self.cliente.pedir("GET", "/api/full/remessa")
+        self.assertEqual([n["codigo"] for n in c["remessa"]["nao_aceito"]], ["ZZ"])
+
+    def test_agendada_recusa_ajuste_e_data_ruim(self):
+        self.anuncio("MLB1", "A", no_full=0, venda=160)
+        r = S.full_remessa_rodada(HOJE, estoque={"A": 1000})
+        rid = r["remessa_id"]
+        st, c = self.cliente.pedir("POST", "/api/full/remessa/agendar", {"remessa_id": rid, "data": "20/10/2026"})
+        self.assertEqual(st, 400, c)
+        st, c = self.cliente.pedir("POST", "/api/full/remessa/agendar", {"remessa_id": rid, "data": "2026-10-20"})
+        self.assertEqual(st, 200, c)
+        st, c = self.cliente.pedir("POST", "/api/full/remessa/ajustar", {"remessa_id": rid, "anuncio": "MLB1", "qtd": 1})
+        self.assertEqual(st, 400, c)
+        st, c = self.cliente.pedir("GET", "/api/full/remessa")
+        self.assertEqual(c["historico"][0]["remessa_id"], rid)
