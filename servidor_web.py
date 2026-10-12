@@ -22580,7 +22580,7 @@ def promo_renovacao_payload(hoje: date | None = None) -> dict[str, Any]:
     with DB_LOCK:
         linhas = {str(r["mlb"]): dict(r) for r in DB.execute("SELECT * FROM promo_renovacao_v1873").fetchall()}
         retrato = {str(r["item_id"]): dict(r) for r in DB.execute(
-            "SELECT item_id, titulo, sku, preco FROM ml_visitas_item_v1868").fetchall()}
+            "SELECT item_id, titulo, sku, preco, categoria_id FROM ml_visitas_item_v1868").fetchall()}
         historico = [dict(r) for r in DB.execute(
             "SELECT * FROM promo_auto_log_v1873 ORDER BY id DESC LIMIT 100").fetchall()]
         renovadas_30 = DB.execute("SELECT COUNT(*) FROM promo_auto_log_v1873 WHERE acao='renovada' AND dia >= ?",
@@ -22621,7 +22621,7 @@ def promo_renovacao_payload(hoje: date | None = None) -> dict[str, Any]:
     agora_utc = datetime.now(timezone.utc)
     with DB_LOCK:
         conv_linhas = [dict(x) for x in DB.execute(
-            "SELECT v.promotion_id, v.mlb, v.conta, v.tipo, v.preco, v.preco_escolhido, v.preco_sugerido, "
+            "SELECT v.promotion_id, v.mlb, v.conta, v.tipo, v.status_item, v.preco, v.preco_escolhido, v.preco_sugerido, "
             "v.receita, v.situacao, v.motivo, v.fim, c.prazo FROM ml_convite_v1889 v "
             "JOIN ml_campanha_v1889 c ON c.promotion_id=v.promotion_id AND c.conta=v.conta "
             "WHERE c.status IN ('started','pending')").fetchall()]
@@ -22629,21 +22629,30 @@ def promo_renovacao_payload(hoje: date | None = None) -> dict[str, Any]:
     for cv in conv_linhas:
         if str(cv.get("situacao") or "") == "expirado":
             continue
+        # V19.04: campanha já aceita (participando ou começando) continua aparecendo após o prazo
+        if str(cv.get("status_item") or "").lower() in ("started", "pending") or cv.get("situacao") == "aceito":
+            convites_por.setdefault((str(cv["mlb"]), str(cv["conta"] or CASA_PRINCIPAL)), []).append(cv)
+            continue
         prazo_cv = _posvenda_dt(cv.get("prazo") or cv.get("fim"))
         if prazo_cv and prazo_cv < agora_utc:
             continue
         convites_por.setdefault((str(cv["mlb"]), str(cv["conta"] or CASA_PRINCIPAL)), []).append(cv)
 
-    def lucro_em(base: dict[str, Any] | None, mlb: str, preco_v: float | None) -> dict[str, Any] | None:
-        # mesmo prod da coluna Margem (comissão/frete do anúncio), só do cache: nenhuma chamada ao ML
-        if not base or not preco_v or base["custo"] <= 0:
+    def prod_da_linha(base: dict[str, Any] | None, mlb: str, preco_ref: float | None,
+                      categoria: str) -> dict[str, Any] | None:
+        # V19.04: UM prod por linha, como o da coluna Margem (comissão/frete do anúncio no preço
+        # da promoção atual), só do cache — nenhuma chamada ao ML; sem cache = Precificador.
+        # Aproximação conhecida: a mesma comissão/frete vale para o preço da campanha, ignorando
+        # mudança de faixa (comissão por preço, limite do frete grátis) entre um preço e outro.
+        if not base or not preco_ref or base["custo"] <= 0:
             return None
+        anterior = getattr(_ML_TARIFA_SO_CACHE, "ativo", False)
         _ML_TARIFA_SO_CACHE.ativo = True
         try:
-            prod_v, _ = _promo_prod_com_ml(base, mlb, preco_v, None)
+            prod_v, _ = _promo_prod_com_ml(base, mlb, preco_ref, {"categoria": categoria})
         finally:
-            _ML_TARIFA_SO_CACHE.ativo = False
-        return promo_conta(prod_v, preco_v)
+            _ML_TARIFA_SO_CACHE.ativo = anterior
+        return prod_v
 
     itens: list[dict[str, Any]] = []
     for mlb in sorted((set(linhas) | set(monitor)) - removidos):
@@ -22689,15 +22698,17 @@ def promo_renovacao_payload(hoje: date | None = None) -> dict[str, Any]:
         if produtos:
             base_prod = _promo_produto(produtos, _promo_resolver_sku(mlb, foto.get("sku") or r.get("sku_ml"),
                                                                      produtos, vinculos))
-        preco_atual = (_money_number(r.get("promo_preco")) if it["situacao"] == "em_campanha" else None)             or preco or preco_anuncio
-        c_atual = lucro_em(base_prod, mlb, preco_atual)
+        preco_atual = ((_money_number(r.get("promo_preco")) if it["situacao"] == "em_campanha" else None)
+                       or preco or preco_anuncio)
+        prod_linha = prod_da_linha(base_prod, mlb, preco_atual, str(foto.get("categoria_id") or ""))
+        c_atual = promo_conta(prod_linha, preco_atual) if prod_linha else None
         it["lucro_promo"] = c_atual["lucro"] if c_atual else None
         campanhas_l: list[dict[str, Any]] = []
         for cv in convites_por.get((mlb, it["casa"]), []):
             preco_cv = (_money_number(cv.get("preco")) or _money_number(cv.get("preco_escolhido"))
                         or _money_number(cv.get("preco_sugerido")))
             recebe = _money_number(cv.get("receita"))
-            c_cv = lucro_em(base_prod, mlb, recebe)
+            c_cv = promo_conta(prod_linha, recebe) if (prod_linha and recebe) else None
             campanhas_l.append({
                 "promotion_id": cv["promotion_id"], "tipo": cv["tipo"],
                 "nome_tipo": PROMO_CAMPANHA_NOME_TIPO.get(cv["tipo"], cv["tipo"]),

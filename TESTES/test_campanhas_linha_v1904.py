@@ -254,6 +254,30 @@ class ComparacaoNaLinha(Base):
         self.assertAlmostEqual(i["lucro_promo"], 26.0, places=2)
         self.assertIsNone(i["campanha_melhor"])
 
+    def test_mesma_base_com_cache_quente_num_preco_so(self):
+        # cache quente só no preço da promoção (65): comissão 20%, frete 5 — vale também para a campanha (85)
+        orig = S.ml_tarifa_frete_anuncio
+        def tarifa(mlb, preco=None, **kw):
+            if round(float(preco), 2) == 65.0:
+                return {"comissao": 0.20, "taxa_fixa": 0.0, "frete": 5.0}
+            raise RuntimeError("fora do cache")
+        S.ml_tarifa_frete_anuncio = tarifa
+        try:
+            self.convite_db("P-A", "SMART", 85.0)
+            i, _ = self.linha()
+        finally:
+            S.ml_tarifa_frete_anuncio = orig
+        self.assertAlmostEqual(i["lucro_promo"], 65 * 0.68 - 5 - 50, places=2)
+        self.assertAlmostEqual(i["campanhas"][0]["lucro"], 85 * 0.68 - 5 - 50, places=2)
+
+    def test_aceita_continua_depois_do_prazo(self):
+        self.convite_db("P-A", "SMART", 85.0, situacao="aceito", prazo="2000-01-01T00:00:00Z")
+        with S.DB_LOCK:
+            S.DB.execute("UPDATE ml_convite_v1889 SET status_item='started'")
+            S.DB.commit()
+        i, _ = self.linha()
+        self.assertEqual([c["promotion_id"] for c in i["campanhas"]], ["P-A"])
+
 
 if __name__ == "__main__":
     unittest.main()
