@@ -798,8 +798,10 @@ mudado em outro computador = **409** com o preço novo, nunca sobrescreve calado
 (`/seller-promotions/users/{id}`) não traz todas (SMART e PRICE_MATCHING só apareciam por anúncio); gravam em
 `ml_convite_v1889` como antes. O `promo_renovacao_payload` anexa a cada linha `lucro_promo`, `campanhas` e
 `campanha_melhor` (+ `resumo.campanha_mais_lucro`). Critério = **lucro por venda em R$**, numa base só por linha:
-o mesmo `prod` (comissão/frete do anúncio no preço da promoção atual) calcula a promoção e todas as campanhas —
-aproximação que ignora a troca de faixa de comissão/frete grátis entre os dois preços. Melhor = lucro maior que o da
+o mesmo `prod` calcula a promoção e todas as campanhas — comissão e taxa fixa+frete do ML **gravadas na conferência**
+da renovação (`promo_renovacao_v1873.comissao_ml/taxa_fixa_ml/tarifa_em`, a mesma base da coluna Margem; ML sem
+resposta não apaga), sem elas as do Precificador; o payload não chama o ML. Aproximação: ignora a troca de faixa de
+comissão/frete grátis entre os dois preços. Relâmpago não é sugerida para anúncio parado/sem estoque. Melhor = lucro maior que o da
 promoção, margem ≥ `margem_min_promo` e situação pronta; sem custo fica nulo ("sem custo"), nunca zero. Na tela: coluna
 "Campanha do ML" (melhor + Aceitar, "ver outras N"), cartão e filtro "Campanha do ML dá mais lucro", "lucro R$/venda"
 na Promoção. **Oferta relâmpago** entra na comparação mas só para ver ("aceitar no ML": exige escolher estoque). Só

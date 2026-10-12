@@ -1546,6 +1546,10 @@ def ensure_promo_renovacao_schema() -> None:
         # V18.99: conta do ML de cada anúncio (o MLB é de uma conta só) e de cada linha do histórico.
         if "conta" not in colunas:
             DB.execute("ALTER TABLE promo_renovacao_v1873 ADD COLUMN conta TEXT NOT NULL DEFAULT 'aracatuba'")
+        # V19.04: comissão e taxa fixa (+frete) do ML usadas na conferência (base do lucro na linha)
+        for col, tipo_col in (("comissao_ml", "REAL"), ("taxa_fixa_ml", "REAL"), ("tarifa_em", "TEXT NOT NULL DEFAULT ''")):
+            if col not in colunas:
+                DB.execute(f"ALTER TABLE promo_renovacao_v1873 ADD COLUMN {col} {tipo_col}")
         log = {str(r["name"]) for r in DB.execute("PRAGMA table_info(promo_auto_log_v1873)").fetchall()}
         if log and "conta" not in log:
             DB.execute("ALTER TABLE promo_auto_log_v1873 ADD COLUMN conta TEXT NOT NULL DEFAULT 'aracatuba'")
@@ -20420,18 +20424,12 @@ _ML_TARIFA_CACHE_LOCK = threading.Lock()
 ML_TARIFA_CACHE_SEGUNDOS = 3 * 3600
 
 
-# V19.04: leitura só do cache (payload da tela não chama o ML; sem cache = valor do Precificador)
-_ML_TARIFA_SO_CACHE = threading.local()
-
-
 def _ml_tarifa_cache(chave: tuple[Any, ...], buscar: Any) -> Any:
     agora = time.time()
     with _ML_TARIFA_CACHE_LOCK:
         hit = _ML_TARIFA_CACHE.get(chave)
         if hit and agora - hit[0] < ML_TARIFA_CACHE_SEGUNDOS:
             return hit[1]
-    if getattr(_ML_TARIFA_SO_CACHE, "ativo", False):
-        raise RuntimeError("tarifa do anúncio fora do cache")
     valor = buscar()
     with _ML_TARIFA_CACHE_LOCK:
         if len(_ML_TARIFA_CACHE) > 5000:
@@ -21737,6 +21735,7 @@ def _promo_renovacao_rodada_conta(stop_event: threading.Event | None = None, *, 
             try:
                 promos = ml_promocoes_do_item(mlb)
             except Exception as exc:
+                tarifa_ml = (None, None, "")
                 cont["erros"] += 1
                 av = {"situacao": "erro", "motivo": f"Não consegui ler as promoções no ML: {str(exc)[:200]}",
                       "aviso": "", "fim": row.get("fim") or "", "preco": row.get("preco"), "promo_tipo": "",
@@ -21750,6 +21749,10 @@ def _promo_renovacao_rodada_conta(stop_event: threading.Event | None = None, *, 
                                               det, prod, ruptura.get(mlb), cfg, hoje)
                 if origem_taxas and prod and av["situacao"] in ("pronta", "revisar"):
                     av["motivo"] += f" · {origem_taxas}"
+                # V19.04: guarda a base do ML (a mesma da coluna Margem) para o lucro na linha;
+                # ML sem resposta = mantém o que estava gravado
+                tarifa_ml = ((prod["comissao"], prod["taxa_fixa"], now_iso())
+                             if prod and origem_taxas != PROMO_TAXAS_DO_PRECIFICADOR else (None, None, ""))
             cont["checados"] += 1
             renovado_dia = row.get("renovado_dia") or ""
             renovado_em = row.get("renovado_em") or ""
@@ -21784,20 +21787,24 @@ def _promo_renovacao_rodada_conta(stop_event: threading.Event | None = None, *, 
             with DB_LOCK:
                 DB.execute(
                     "INSERT INTO promo_renovacao_v1873(mlb,marcado,preco,situacao,motivo,aviso,fim,promo_tipo,promo_preco,"
-                    "margem,checado_em,renovado_dia,renovado_em,preco_anuncio,titulo,sku_ml,conta) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                    "margem,checado_em,renovado_dia,renovado_em,preco_anuncio,titulo,sku_ml,conta,comissao_ml,taxa_fixa_ml,tarifa_em) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(mlb) DO UPDATE SET preco=excluded.preco,situacao=excluded.situacao,"
                     "motivo=excluded.motivo,aviso=excluded.aviso,fim=excluded.fim,promo_tipo=excluded.promo_tipo,"
                     "promo_preco=excluded.promo_preco,margem=excluded.margem,checado_em=excluded.checado_em,"
                     "renovado_dia=excluded.renovado_dia,renovado_em=excluded.renovado_em,"
                     "preco_anuncio=COALESCE(excluded.preco_anuncio,preco_anuncio),"
                     "titulo=CASE WHEN excluded.titulo<>'' THEN excluded.titulo ELSE titulo END,"
-                    "sku_ml=CASE WHEN excluded.sku_ml<>'' THEN excluded.sku_ml ELSE sku_ml END",
+                    "sku_ml=CASE WHEN excluded.sku_ml<>'' THEN excluded.sku_ml ELSE sku_ml END,"
+                    "comissao_ml=COALESCE(excluded.comissao_ml,comissao_ml),"
+                    "taxa_fixa_ml=COALESCE(excluded.taxa_fixa_ml,taxa_fixa_ml),"
+                    "tarifa_em=CASE WHEN excluded.tarifa_em<>'' THEN excluded.tarifa_em ELSE tarifa_em END",
                     (mlb, int(row.get("marcado") or 0), av["preco"], av["situacao"], av["motivo"], av["aviso"],
                      av["fim"], av["promo_tipo"], av["promo_preco"], av["margem"], now_iso(),
                      renovado_dia, renovado_em, _money_number((detalhes.get(mlb) or {}).get("preco")),
                      # V18.81: título/SKU lidos agora no ML (a tela usa quando não há retrato do dia)
                      str((detalhes.get(mlb) or {}).get("titulo") or ""), str((detalhes.get(mlb) or {}).get("sku_ml") or ""),
-                     casa))
+                     casa) + tarifa_ml)
                 DB.commit()
             resultados.append({"mlb": mlb, "ok": ok, "situacao": av["situacao"], "motivo": av["motivo"]})
 
@@ -22580,7 +22587,7 @@ def promo_renovacao_payload(hoje: date | None = None) -> dict[str, Any]:
     with DB_LOCK:
         linhas = {str(r["mlb"]): dict(r) for r in DB.execute("SELECT * FROM promo_renovacao_v1873").fetchall()}
         retrato = {str(r["item_id"]): dict(r) for r in DB.execute(
-            "SELECT item_id, titulo, sku, preco, categoria_id FROM ml_visitas_item_v1868").fetchall()}
+            "SELECT item_id, titulo, sku, preco, status, estoque FROM ml_visitas_item_v1868").fetchall()}
         historico = [dict(r) for r in DB.execute(
             "SELECT * FROM promo_auto_log_v1873 ORDER BY id DESC LIMIT 100").fetchall()]
         renovadas_30 = DB.execute("SELECT COUNT(*) FROM promo_auto_log_v1873 WHERE acao='renovada' AND dia >= ?",
@@ -22638,20 +22645,18 @@ def promo_renovacao_payload(hoje: date | None = None) -> dict[str, Any]:
             continue
         convites_por.setdefault((str(cv["mlb"]), str(cv["conta"] or CASA_PRINCIPAL)), []).append(cv)
 
-    def prod_da_linha(base: dict[str, Any] | None, mlb: str, preco_ref: float | None,
-                      categoria: str) -> dict[str, Any] | None:
-        # V19.04: UM prod por linha, como o da coluna Margem (comissão/frete do anúncio no preço
-        # da promoção atual), só do cache — nenhuma chamada ao ML; sem cache = Precificador.
+    def prod_da_linha(base: dict[str, Any] | None, r: dict[str, Any]) -> dict[str, Any] | None:
+        # V19.04: UM prod por linha, na mesma base da coluna Margem: comissão e taxa fixa (+frete)
+        # do ML gravadas na última conferência; sem elas, as do Precificador. Nenhuma chamada ao ML.
         # Aproximação conhecida: a mesma comissão/frete vale para o preço da campanha, ignorando
         # mudança de faixa (comissão por preço, limite do frete grátis) entre um preço e outro.
-        if not base or not preco_ref or base["custo"] <= 0:
+        if not base or base["custo"] <= 0:
             return None
-        anterior = getattr(_ML_TARIFA_SO_CACHE, "ativo", False)
-        _ML_TARIFA_SO_CACHE.ativo = True
-        try:
-            prod_v, _ = _promo_prod_com_ml(base, mlb, preco_ref, {"categoria": categoria})
-        finally:
-            _ML_TARIFA_SO_CACHE.ativo = anterior
+        prod_v = dict(base)
+        if r.get("comissao_ml") is not None:
+            prod_v["comissao"] = float(r["comissao_ml"])
+        if r.get("taxa_fixa_ml") is not None:
+            prod_v["taxa_fixa"] = float(r["taxa_fixa_ml"])
         return prod_v
 
     itens: list[dict[str, Any]] = []
@@ -22700,8 +22705,8 @@ def promo_renovacao_payload(hoje: date | None = None) -> dict[str, Any]:
                                                                      produtos, vinculos))
         preco_atual = ((_money_number(r.get("promo_preco")) if it["situacao"] == "em_campanha" else None)
                        or preco or preco_anuncio)
-        prod_linha = prod_da_linha(base_prod, mlb, preco_atual, str(foto.get("categoria_id") or ""))
-        c_atual = promo_conta(prod_linha, preco_atual) if prod_linha else None
+        prod_linha = prod_da_linha(base_prod, r)
+        c_atual = promo_conta(prod_linha, preco_atual) if (prod_linha and preco_atual) else None
         it["lucro_promo"] = c_atual["lucro"] if c_atual else None
         campanhas_l: list[dict[str, Any]] = []
         for cv in convites_por.get((mlb, it["casa"]), []):
@@ -22718,10 +22723,15 @@ def promo_renovacao_payload(hoje: date | None = None) -> dict[str, Any]:
                 "pode_aceitar": cv.get("situacao") == "pronto" and cv["tipo"] != "LIGHTNING"})
         campanhas_l.sort(key=lambda x: (x["lucro"] is None, -(x["lucro"] or 0)))
         melhor = None
+        # V19.04: oferta relâmpago (so_ver) não é sugerida para anúncio parado ou sem estoque (retrato do dia)
+        est_foto = foto.get("estoque")
+        parado = (str(foto.get("status") or "") not in ("", "active")
+                  or (isinstance(est_foto, (int, float)) and est_foto <= 0))
+        ok_sit = ("pronto",) if parado else ("pronto", "so_ver")
         if it["lucro_promo"] is not None:
             for cc in campanhas_l:
                 if (cc["lucro"] is not None and cc["lucro"] > it["lucro_promo"] and cc["margem"] is not None
-                        and cc["margem"] >= margem_min and cc["situacao"] in ("pronto", "so_ver")):
+                        and cc["margem"] >= margem_min and cc["situacao"] in ok_sit):
                     melhor = dict(cc, ganho=round(cc["lucro"] - it["lucro_promo"], 2))
                     break
         it["campanhas"], it["campanha_melhor"] = campanhas_l, melhor

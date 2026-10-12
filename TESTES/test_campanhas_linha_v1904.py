@@ -254,21 +254,55 @@ class ComparacaoNaLinha(Base):
         self.assertAlmostEqual(i["lucro_promo"], 26.0, places=2)
         self.assertIsNone(i["campanha_melhor"])
 
-    def test_mesma_base_com_cache_quente_num_preco_so(self):
-        # cache quente só no preço da promoção (65): comissão 20%, frete 5 — vale também para a campanha (85)
-        orig = S.ml_tarifa_frete_anuncio
-        def tarifa(mlb, preco=None, **kw):
-            if round(float(preco), 2) == 65.0:
-                return {"comissao": 0.20, "taxa_fixa": 0.0, "frete": 5.0}
-            raise RuntimeError("fora do cache")
-        S.ml_tarifa_frete_anuncio = tarifa
+    def test_base_do_ml_gravada_na_conferencia_vale_depois_do_reinicio(self):
+        # conferência: ML devolve comissão 20% e frete 5 → gravados na linha
+        orig = (S.ml_tarifa_frete_anuncio, S.ml_promocoes_do_item)
+        S.ml_tarifa_frete_anuncio = lambda mlb, preco=None, **kw: {"comissao": 0.20, "taxa_fixa": 0.0, "frete": 5.0}
+        S.ml_promocoes_do_item = lambda mlb: []
         try:
-            self.convite_db("P-A", "SMART", 85.0)
-            i, _ = self.linha()
+            S.promo_renovacao_rodada(apenas=["MLB1"])
         finally:
-            S.ml_tarifa_frete_anuncio = orig
+            S.ml_tarifa_frete_anuncio, S.ml_promocoes_do_item = orig
+        S._ML_TARIFA_CACHE.clear()   # "reinício": nada em memória
+        with S.DB_LOCK:
+            row = S.DB.execute("SELECT comissao_ml, taxa_fixa_ml, tarifa_em FROM promo_renovacao_v1873 WHERE mlb='MLB1'").fetchone()
+            S.DB.execute("UPDATE promo_renovacao_v1873 SET preco=65.0, situacao='ok'")
+            S.DB.commit()
+        self.assertEqual((row[0], row[1]), (0.20, 5.0))
+        self.assertTrue(row[2])
+        self.convite_db("P-A", "SMART", 85.0)
+        i, _ = self.linha()
         self.assertAlmostEqual(i["lucro_promo"], 65 * 0.68 - 5 - 50, places=2)
         self.assertAlmostEqual(i["campanhas"][0]["lucro"], 85 * 0.68 - 5 - 50, places=2)
+
+    def test_ml_sem_resposta_nao_apaga_base_gravada(self):
+        with S.DB_LOCK:
+            S.DB.execute("UPDATE promo_renovacao_v1873 SET comissao_ml=0.2, taxa_fixa_ml=5.0, tarifa_em='x'")
+            S.DB.commit()
+        orig = S.ml_promocoes_do_item
+        S.ml_promocoes_do_item = lambda mlb: []
+        try:
+            S.promo_renovacao_rodada(apenas=["MLB1"])   # ml_api_get falha: taxas do Precificador
+        finally:
+            S.ml_promocoes_do_item = orig
+        with S.DB_LOCK:
+            row = S.DB.execute("SELECT comissao_ml, taxa_fixa_ml FROM promo_renovacao_v1873 WHERE mlb='MLB1'").fetchone()
+        self.assertEqual((row[0], row[1]), (0.2, 5.0))
+
+    def test_sem_base_gravada_usa_precificador(self):
+        self.convite_db("P-A", "SMART", 85.0)
+        i, _ = self.linha()
+        self.assertAlmostEqual(i["lucro_promo"], 65 * 0.76 - 50, places=2)
+        self.assertAlmostEqual(i["campanhas"][0]["lucro"], 85 * 0.76 - 50, places=2)
+
+    def test_relampago_nao_sugerido_em_anuncio_parado(self):
+        with S.DB_LOCK:
+            S.DB.execute("INSERT OR REPLACE INTO ml_visitas_item_v1868(item_id, status, estoque, preco) "
+                         "VALUES('MLB1','paused',0,100.0)")
+            S.DB.commit()
+        self.convite_db("LGH-1", "LIGHTNING", 95.0, situacao="so_ver")
+        i, _ = self.linha()
+        self.assertIsNone(i["campanha_melhor"])
 
     def test_aceita_continua_depois_do_prazo(self):
         self.convite_db("P-A", "SMART", 85.0, situacao="aceito", prazo="2000-01-01T00:00:00Z")
