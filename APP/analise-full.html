@@ -480,6 +480,7 @@ html[data-tema="escuro"] [style*="color: #12345B" i]{color:#C0CCD9!important}
 
   <main>
     <!-- V19.03: Remessa Full automática (montada pelo servidor; ajustes do ADMIN valem por cima) -->
+    <style>#remessaFull [hidden]{display:none!important}</style>
     <section id="remessaFull" class="nk-painel" style="margin:0 0 16px;padding:16px">
       <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between">
         <h2 style="margin:0;font-size:18px">Remessa sugerida</h2>
@@ -1687,13 +1688,18 @@ html[data-tema="escuro"] [style*="color: #12345B" i]{color:#C0CCD9!important}
         catch (e) { $("rfCorpo").textContent = `Não foi possível ler a remessa: ${e.message}`; }
       }
 
-      async function enviar(caminho, corpo, ok) {
+      async function enviar(caminho, corpo, ok, botao) {
+        if (botao) botao.disabled = true;
         try {
           const data = await chamar(caminho, corpo);
           if ("remessa" in data) remessa = data.remessa;
+          // V19.03: quem já foi para outra Qtd (Tab) continua nela depois de redesenhar.
+          const foco = document.activeElement && document.activeElement.classList && document.activeElement.classList.contains("rf-qtd") ? document.activeElement.dataset.anuncio : null;
           desenhar();
+          if (foco) { const el = [...document.querySelectorAll("#rfCorpo .rf-qtd")].find((x) => x.dataset.anuncio === foco); if (el) el.focus(); }
           if (ok) aviso(ok, "ok");
         } catch (e) { aviso(e.message, "erro"); await carregar(); }
+        finally { if (botao && botao.isConnected) botao.disabled = false; }
       }
 
       function selo(r) {
@@ -1760,7 +1766,9 @@ html[data-tema="escuro"] [style*="color: #12345B" i]{color:#C0CCD9!important}
       $("rfCorpo").addEventListener("change", (ev) => {
         const inp = ev.target.closest(".rf-qtd");
         if (!inp || !remessa) return;
-        const qtd = Math.max(0, Math.round(Number(inp.value) || 0));
+        const bruto = String(inp.value).trim();
+        const qtd = Number(bruto);
+        if (bruto === "" || !Number.isFinite(qtd) || qtd < 0) { aviso("Quantidade inválida", "aviso"); desenhar(); return; }
         enviar("/api/full/remessa/ajustar", { remessa_id: remessa.remessa_id, anuncio: inp.dataset.anuncio, qtd }, "Quantidade salva.");
       });
 
@@ -1768,28 +1776,30 @@ html[data-tema="escuro"] [style*="color: #12345B" i]{color:#C0CCD9!important}
         const b = ev.target.closest("button[data-acao]");
         if (!b || !remessa) return;
         const rid = remessa.remessa_id, an = b.dataset.anuncio, cod = b.dataset.codigo;
-        if (b.dataset.acao === "confirmar") return enviar("/api/full/remessa/ajustar", { remessa_id: rid, anuncio: an, confirmado: true });
-        if (b.dataset.acao === "tirar") return enviar("/api/full/remessa/ajustar", { remessa_id: rid, anuncio: an, removido: true });
-        if (b.dataset.acao === "voltar") return enviar("/api/full/remessa/ajustar", { remessa_id: rid, anuncio: an, removido: false });
+        if (b.dataset.acao === "confirmar") return enviar("/api/full/remessa/ajustar", { remessa_id: rid, anuncio: an, confirmado: true }, null, b);
+        if (b.dataset.acao === "tirar") return enviar("/api/full/remessa/ajustar", { remessa_id: rid, anuncio: an, removido: true }, null, b);
+        if (b.dataset.acao === "voltar") return enviar("/api/full/remessa/ajustar", { remessa_id: rid, anuncio: an, removido: false }, null, b);
         if (b.dataset.acao === "naoaceito") {
           // nkConfirmar não tem campo: o motivo vem do prompt() (esta tela não é a Conferência).
           const motivo = prompt(`Não aceito no Full: ${cod}\nMotivo (obrigatório):`, "");
           if (motivo === null) return;
           if (!motivo.trim()) return aviso("Informe o motivo.", "aviso");
-          return enviar("/api/full/nao-aceito", { codigo: cod, motivo: motivo.trim() }, "Marcado como não aceito no Full.");
+          return enviar("/api/full/nao-aceito", { codigo: cod, motivo: motivo.trim() }, "Marcado como não aceito no Full.", b);
         }
         if (b.dataset.acao === "liberar") {
           if (!(await nkConfirmar(`Liberar ${cod} para voltar a ser sugerido no Full?`))) return;
-          return enviar("/api/full/nao-aceito/liberar", { codigo: cod }, "Liberado.");
+          return enviar("/api/full/nao-aceito/liberar", { codigo: cod }, "Liberado.", b);
         }
       });
 
       $("rfMontar").addEventListener("click", async () => {
+        const bt = $("rfMontar"); bt.disabled = true;
         try {
           const d = await chamar("/api/full/remessa/montar", {});
           aviso(d.ja_rodando ? "A remessa já está sendo montada." : "Montando a remessa (consulta o Apollo). Atualizo em 20 s.", "info");
           setTimeout(carregar, 20000);
         } catch (e) { aviso(e.message, "erro"); }
+        finally { bt.disabled = false; }
       });
 
       $("rfAgendar").addEventListener("click", () => {
@@ -1797,13 +1807,13 @@ html[data-tema="escuro"] [style*="color: #12345B" i]{color:#C0CCD9!important}
         const data = prompt("Data agendada no Full (AAAA-MM-DD):", new Date().toISOString().slice(0, 10));
         if (data === null) return;
         if (!/^\d{4}-\d{2}-\d{2}$/.test(data.trim())) return aviso("Data no formato AAAA-MM-DD.", "aviso");
-        enviar("/api/full/remessa/agendar", { remessa_id: remessa.remessa_id, data: data.trim() }, "Remessa marcada como agendada.");
+        enviar("/api/full/remessa/agendar", { remessa_id: remessa.remessa_id, data: data.trim() }, "Remessa marcada como agendada.", $("rfAgendar"));
       });
 
       $("rfRecebida").addEventListener("click", async () => {
         if (!remessa) return;
         if (!(await nkConfirmar("Marcar a remessa como recebida no Full?"))) return;
-        enviar("/api/full/remessa/situacao", { remessa_id: remessa.remessa_id, situacao: "recebida" }, "Remessa marcada como recebida.");
+        enviar("/api/full/remessa/situacao", { remessa_id: remessa.remessa_id, situacao: "recebida" }, "Remessa marcada como recebida.", $("rfRecebida"));
       });
 
       let esperaExt = null;
