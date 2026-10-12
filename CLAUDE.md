@@ -5,7 +5,7 @@ Shopee, manuais), expedição, separação, conferência por código de barras, 
 produtos/SKUs/EANs, kits, precificação, promoções, rentabilidade, estoque, Central de
 Pendências e histórico.
 
-Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V19.03).
+Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V19.04).
 
 ---
 
@@ -793,6 +793,19 @@ recarrega quando muda, sem apagar regra digitada e não salva. A gaveta manda `p
 mudado em outro computador = **409** com o preço novo, nunca sobrescreve calado
 (`TESTES/test_promo_concorrencia_v1892.py`).
 
+**V19.04 — campanhas na linha** (decisões do dono, 12/10): as campanhas do ML passam a ser lidas **por anúncio**
+(`GET /seller-promotions/items/{MLB}?app_version=v2`, com o token da conta do anúncio), porque a lista da conta
+(`/seller-promotions/users/{id}`) não traz todas (SMART e PRICE_MATCHING só apareciam por anúncio); gravam em
+`ml_convite_v1889` como antes. O `promo_renovacao_payload` anexa a cada linha `lucro_promo`, `campanhas` e
+`campanha_melhor` (+ `resumo.campanha_mais_lucro`). Critério = **lucro por venda em R$**, numa base só por linha:
+o mesmo `prod` (comissão/frete do anúncio no preço da promoção atual) calcula a promoção e todas as campanhas —
+aproximação que ignora a troca de faixa de comissão/frete grátis entre os dois preços. Melhor = lucro maior que o da
+promoção, margem ≥ `margem_min_promo` e situação pronta; sem custo fica nulo ("sem custo"), nunca zero. Na tela: coluna
+"Campanha do ML" (melhor + Aceitar, "ver outras N"), cartão e filtro "Campanha do ML dá mais lucro", "lucro R$/venda"
+na Promoção. **Oferta relâmpago** entra na comparação mas só para ver ("aceitar no ML": exige escolher estoque). Só
+sugere; aceitar continua por `promo_convite_aceitar`. A **lista separada de convites saiu**; o modo dos convites
+(simulação/lote/automático com OWNER) e o "Buscar convites" foram para o bloco de Regras, mesmos ids.
+
 ### Análise de ADS (V18.54)
 `APP/analise-ads.html` (`/analise-ads`, menu Comercial, só **admin**). O relatório "Anúncios
 patrocinados" que o ML deixa baixar em Publicidade > Relatórios (.xlsx) é **importado à mão**
@@ -953,6 +966,7 @@ Os testes ficam em `TESTES/` (são 30 arquivos; os principais):
 | `test_auditoria_v1900.py` | operador não lê token do agente Zebra/robô Linx, custos nem senha de pedido de acesso; Conferência, Estação e Precificador continuam lendo o que usam; segredo não é gravado pela rota comum; lista de chaves só do Admin; usuário excluído não volta no reinício e senha fraca do arquivo de migração não vale |
 | `test_auditoria_cobrancas_v1901.py` | cada tipo de cobrança indevida, carência de 30 dias, R$ 2,00, frete do carrinho por envio, lançamento em um caso só, situação humana nunca desfeita, ignorado não volta, recuperado total/parcial (negado vira recuperado), detecção sem chamar o ML, permissões, linha do e-mail uma vez |
 | `test_remessa_full_v1903.py` | cálculo (30 dias, kit conta 1, Apollo Araçatuba dividido, null nunca zero), uma remessa aberta, ajuste do ADMIN nunca desfeito, mínimo de 150, rodada descartada se agendaram durante a leitura, novos só com confirmação, não aceito por código, recebida automática (≥ 50%) e manual, aviso 1x/dia, linha do e-mail, rotas e permissões |
+| `test_campanhas_linha_v1904.py` | campanhas lidas por anúncio e pela conta certa, pausa/interrupção sem limpeza, lucro da promoção e de cada campanha na mesma base, melhor só acima do lucro e da margem mínima, relâmpago sem Aceitar, sem custo = nulo, expirada/outra conta/removida fora, tela com a coluna nova e sem a lista de convites |
 | `test_instalacao.py` | instalação nova, idempotência do `init_db`, versionamento do storage, autenticação |
 | `base.py` | infraestrutura: banco temporário, servidor real em porta livre, cliente HTTP |
 

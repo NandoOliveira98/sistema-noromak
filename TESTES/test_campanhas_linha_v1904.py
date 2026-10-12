@@ -279,5 +279,19 @@ class ComparacaoNaLinha(Base):
         self.assertEqual([c["promotion_id"] for c in i["campanhas"]], ["P-A"])
 
 
+class TelaCampanhaNaLinha(unittest.TestCase):
+    # V19.04: coluna nova na lista; a lista separada de convites saiu, o modo ficou nas Regras.
+    def test_tela(self):
+        from base import RAIZ
+        h = (RAIZ / "APP" / "promocoes-auto.html").read_text(encoding="utf-8")
+        self.assertIn('<th class="l">Campanha do ML</th>', h)
+        self.assertIn("Campanha do ML dá mais lucro", h)
+        self.assertNotIn('id="convTab"', h)
+        for i in ('id="convModos"', 'id="convBuscar"', 'id="convModoDesc"'):
+            self.assertIn(i, h)
+        self.assertLess(h.index('id="regrasBox"'), h.index('id="convModos"'))
+        self.assertIn("e.stopPropagation()", h)
+
+
 if __name__ == "__main__":
     unittest.main()
