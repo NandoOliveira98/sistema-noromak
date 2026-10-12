@@ -22068,6 +22068,13 @@ def _promo_convite_avaliar(c: dict[str, Any], det: dict[str, Any], prod: dict[st
     if prazo and prazo < agora:
         out.update(situacao="expirado", motivo="O prazo para aceitar já passou")
         return out
+    if c.get("tipo") == "LIGHTNING":
+        # V19.04: oferta relâmpago só se mostra (estoque e horário se escolhem no ML); nunca "pronto"
+        receita = _money_number(c.get("preco")) or _money_number(c.get("preco_sugerido"))
+        out.update(situacao="so_ver", motivo="Oferta relâmpago: aceitar no ML", receita=receita)
+        if prod and receita:
+            out["margem"] = promo_conta(prod, receita)["margem"]
+        return out
 
     def revisar(motivo: str, situacao: str = "revisar") -> dict[str, Any]:
         out.update(situacao=situacao, motivo=motivo)
@@ -22151,6 +22158,31 @@ def _promo_convite_avaliar_linha(c: dict[str, Any], ctx: dict[str, Any]) -> tupl
     if origem and av["situacao"] in ("pronto", "revisar"):
         av["motivo"] += f" · {origem}"
     return av, str(det.get("titulo") or ""), sku or str(det.get("sku_ml") or "")
+
+
+# V19.04: campanhas lidas POR ANÚNCIO. A lista do vendedor (/seller-promotions/users) não traz o
+# "Preço competitivo" (PRICE_MATCHING criado por anúncio) nem a oferta relâmpago; a leitura do
+# anúncio (/seller-promotions/items/{MLB}) traz tudo o que se aplica a ele. Para os anúncios
+# lidos, ela é a autoridade de quais pares (campanha, anúncio) existem. Cupom e o desconto
+# próprio (PRICE_DISCOUNT, cuidado pela renovação) ficam de fora.
+PROMO_CAMPANHA_ANUNCIO_TIPOS = tuple(PROMO_CONVITE_TIPOS) + ("LIGHTNING",)
+
+
+def _promo_campanhas_do_anuncio(mlb: str) -> list[dict[str, Any]]:
+    """V19.04: GET /seller-promotions/items/{mlb}?app_version=v2 (404 = nada para o anúncio)."""
+    return ml_promocoes_do_item(mlb)
+
+
+def _promo_anuncios_da_conta(casa: str) -> list[str]:
+    """V19.04: anúncios da lista da renovação desta conta (+ monitor, que é da principal), sem os removidos."""
+    with DB_LOCK:
+        mlbs = {str(r["mlb"]) for r in DB.execute(
+            "SELECT mlb FROM promo_renovacao_v1873 WHERE conta=?", (casa,)).fetchall()}
+        outras = {str(r["mlb"]) for r in DB.execute(
+            "SELECT mlb FROM promo_renovacao_v1873 WHERE conta<>?", (casa,)).fetchall()}
+    if casa == CASA_PRINCIPAL:
+        mlbs |= {m for m in _promo_monitor_datas() if m not in outras}
+    return sorted(m for m in mlbs - _promo_removidos() if m)
 
 
 def promo_convites_rodada(stop_event: threading.Event | None = None, *, ator: str = "sistema",
@@ -22260,6 +22292,68 @@ def _promo_convites_rodada_conta(stop_event: threading.Event | None = None, *, a
                     DB.commit()
             if pausa > 0 and stop_event is not None and stop_event.wait(pausa):
                 break
+        # V19.04: leitura por anúncio (lista da renovação desta conta).
+        lidos: set[str] = set()
+        vistos_anuncio: set[tuple[str, str]] = set()
+        for mlb in _promo_anuncios_da_conta(casa):
+            if stop_event is not None and stop_event.is_set():
+                break
+            try:
+                promos = _promo_campanhas_do_anuncio(mlb)
+            except Exception as exc:
+                erros.append(f"{mlb}: {str(exc)[:160]}")
+                # erro na leitura não limpa nada: o que já existia do anúncio continua valendo
+                with DB_LOCK:
+                    for r in DB.execute("SELECT promotion_id FROM ml_convite_v1889 WHERE mlb=? AND conta=?",
+                                        (mlb, casa)).fetchall():
+                        vistas.add(str(r["promotion_id"]))
+                        vistos.add((str(r["promotion_id"]), mlb))
+                if pausa > 0 and stop_event is not None and stop_event.wait(pausa):
+                    break
+                continue
+            lidos.add(mlb)
+            for it in promos:
+                tipo = str(it.get("type") or "")
+                st = str(it.get("status") or "").lower()
+                pid = str(it.get("id") or "")
+                if not pid or tipo not in PROMO_CAMPANHA_ANUNCIO_TIPOS or st not in ("candidate", "pending", "started"):
+                    continue
+                vistas.add(pid)
+                vistos_anuncio.add((pid, mlb))
+                with DB_LOCK:
+                    camp = DB.execute("SELECT inicio, fim FROM ml_campanha_v1889 WHERE conta=? AND promotion_id=?",
+                                      (casa, pid)).fetchone()
+                    if camp is None:
+                        # campanha que só aparece no anúncio: entra para a tela e a avaliação a enxergarem
+                        DB.execute("INSERT INTO ml_campanha_v1889(conta,promotion_id,tipo,nome,status,inicio,fim,prazo,"
+                                   "visto_em) VALUES(?,?,?,?,?,?,?,?,?)",
+                                   (casa, pid, tipo, str(it.get("name") or ""), "started",
+                                    str(it.get("start_date") or ""), str(it.get("finish_date") or ""), "", agora))
+                    else:
+                        DB.execute("UPDATE ml_campanha_v1889 SET status=CASE WHEN status IN ('started','pending') "
+                                   "THEN status ELSE 'started' END, visto_em=? WHERE conta=? AND promotion_id=?",
+                                   (agora, casa, pid))
+                    inicio = str(it.get("start_date") or (camp["inicio"] if camp else "") or "")
+                    fim = str(it.get("finish_date") or it.get("end_date") or (camp["fim"] if camp else "") or "")
+                    DB.execute(
+                        "INSERT INTO ml_convite_v1889(promotion_id,mlb,tipo,status_item,offer_id,preco_original,preco,"
+                        "preco_sugerido,preco_min,preco_max,meli_pct,seller_pct,inicio,fim,visto_em,conta) "
+                        "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(promotion_id,mlb) DO UPDATE SET "
+                        "tipo=excluded.tipo,status_item=excluded.status_item,"
+                        "offer_id=CASE WHEN excluded.offer_id<>'' THEN excluded.offer_id ELSE offer_id END,"
+                        "preco_original=excluded.preco_original,preco=excluded.preco,preco_sugerido=excluded.preco_sugerido,"
+                        "preco_min=excluded.preco_min,preco_max=excluded.preco_max,"
+                        "meli_pct=COALESCE(excluded.meli_pct,meli_pct),seller_pct=COALESCE(excluded.seller_pct,seller_pct),"
+                        "inicio=excluded.inicio,fim=excluded.fim,visto_em=excluded.visto_em,conta=excluded.conta",
+                        (pid, mlb, tipo, st, str(it.get("offer_id") or it.get("ref_id") or ""),
+                         _posvenda_float(it.get("original_price")), _posvenda_float(it.get("price")),
+                         _posvenda_float(it.get("suggested_discounted_price")),
+                         _posvenda_float(it.get("min_discounted_price")),
+                         _posvenda_float(it.get("max_discounted_price")), _posvenda_float(it.get("meli_percentage")),
+                         _posvenda_float(it.get("seller_percentage")), inicio, fim, agora, casa))
+                    DB.commit()
+            if pausa > 0 and stop_event is not None and stop_event.wait(pausa):
+                break
         # convite que saiu da lista do ML (expirou, item deixou de ser elegível) sai daqui;
         # os aceitos ficam como histórico até a campanha acabar.
         # V18.99: a limpeza é SÓ desta conta (antes apagaria os convites da outra).
@@ -22267,7 +22361,8 @@ def _promo_convites_rodada_conta(stop_event: threading.Event | None = None, *, a
             atuais = [(str(r["promotion_id"]), str(r["mlb"])) for r in DB.execute(
                 "SELECT promotion_id, mlb FROM ml_convite_v1889 WHERE status_item='candidate' AND conta=?", (casa,)).fetchall()]
             for chave in atuais:
-                if chave not in vistos:
+                # V19.04: anúncio lido nesta rodada -> vale o que a leitura dele trouxe
+                if (chave not in vistos_anuncio) if chave[1] in lidos else (chave not in vistos):
                     DB.execute("DELETE FROM ml_convite_v1889 WHERE promotion_id=? AND mlb=?", chave)
             for pid in [str(r["promotion_id"]) for r in DB.execute(
                     "SELECT promotion_id FROM ml_campanha_v1889 WHERE conta=?", (casa,)).fetchall()]:
@@ -22330,6 +22425,8 @@ def _promo_convite_aceitar_conta(pid: str, mlb: str, ator: str, *, reavaliar: bo
     c = dict(r)
     if mlb in _promo_removidos():
         raise ValueError("Anúncio removido da lista pelo ADMIN.")
+    if c.get("tipo") == "LIGHTNING":   # V19.04
+        raise ValueError("Oferta relâmpago: aceite pelo site do Mercado Livre.")
     av = {"situacao": c["situacao"], "motivo": c["motivo"], "preco_escolhido": c["preco_escolhido"],
           "receita": c["receita"], "margem": c["margem"]}
     if reavaliar:
