@@ -2067,6 +2067,45 @@ def init_db() -> None:
                 PRIMARY KEY(item_id, dia)
             );
             CREATE INDEX IF NOT EXISTS idx_ml_estoque_dia ON ml_estoque_dia_v1872(dia);
+            -- V19.03: remessa Full automática (spec 2026-10-11-remessa-full-automatica-design.md).
+            CREATE TABLE IF NOT EXISTS full_remessa_v1903 (
+                remessa_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                situacao TEXT NOT NULL DEFAULT 'montando',   -- montando|pronta|agendada|recebida
+                unidades INTEGER NOT NULL DEFAULT 0,
+                itens INTEGER NOT NULL DEFAULT 0,
+                montada_em TEXT NOT NULL DEFAULT '',
+                avisado_dia TEXT NOT NULL DEFAULT '',
+                agendada_para TEXT NOT NULL DEFAULT '',
+                agendada_em TEXT NOT NULL DEFAULT '',
+                agendada_por TEXT NOT NULL DEFAULT '',
+                obs TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS full_remessa_item_v1903 (
+                remessa_id INTEGER NOT NULL,
+                anuncio TEXT NOT NULL,            -- MLB, ou 'NOVO:<codigo>' para novos
+                codigo TEXT NOT NULL DEFAULT '',
+                sku TEXT NOT NULL DEFAULT '',
+                titulo TEXT NOT NULL DEFAULT '',
+                novo INTEGER NOT NULL DEFAULT 0,
+                confirmado INTEGER NOT NULL DEFAULT 1,
+                venda_30d INTEGER NOT NULL DEFAULT 0,
+                no_full INTEGER,
+                a_caminho INTEGER NOT NULL DEFAULT 0,
+                cobertura_dias REAL,
+                necessidade INTEGER NOT NULL DEFAULT 0,
+                estoque_apollo REAL,
+                qtd_sugerida INTEGER NOT NULL DEFAULT 0,
+                qtd_admin INTEGER,                -- ajuste humano: a rodada nunca mexe
+                removido INTEGER NOT NULL DEFAULT 0,
+                motivo TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY(remessa_id, anuncio)
+            );
+            CREATE TABLE IF NOT EXISTS full_nao_aceito_v1903 (
+                codigo TEXT PRIMARY KEY,
+                motivo TEXT NOT NULL DEFAULT '',
+                marcado_por TEXT NOT NULL DEFAULT '',
+                marcado_em TEXT NOT NULL DEFAULT ''
+            );
             -- V18.73: renovação automática do desconto próprio (PRICE_DISCOUNT).
             -- Só entra o anúncio que o ADMIN marcou; o preço é o da promoção que acabou.
             CREATE TABLE IF NOT EXISTS promo_renovacao_v1873 (
@@ -9309,6 +9348,39 @@ def full_anuncios_vendas(anuncios: list[Any], dias: int = 30) -> dict[str, dict[
             for r in rows:
                 out[r["anuncio"]] = {"unidades": int(r["unidades"] or 0), "pedidos": int(r["pedidos"] or 0), "titulo": str(r["titulo"] or "")}
     return out
+
+
+# V19.03: o ML recusa alguns produtos no Full. Tombstone do ADMIN por código:
+# nenhuma rodada tira daqui, só full_nao_aceito_liberar.
+def _full_codigo(valor: Any) -> str:
+    return str(valor or "").strip().upper()
+
+
+def full_nao_aceito_marcar(codigo: str, motivo: str, usuario: str) -> None:
+    c = _full_codigo(codigo)
+    if not c:
+        raise ValueError("Informe o código.")
+    with DB_LOCK:
+        DB.execute("INSERT OR REPLACE INTO full_nao_aceito_v1903(codigo,motivo,marcado_por,marcado_em) VALUES(?,?,?,?)",
+                   (c, str(motivo or "").strip()[:200], str(usuario or ""), now_iso()))
+        DB.commit()
+    audit(str(usuario or "sistema"), "full.nao_aceito.marcar", json.dumps({"codigo": c, "motivo": motivo}, ensure_ascii=False))
+
+
+def full_nao_aceito_liberar(codigo: str, usuario: str) -> bool:
+    c = _full_codigo(codigo)
+    with DB_LOCK:
+        n = DB.execute("DELETE FROM full_nao_aceito_v1903 WHERE codigo=?", (c,)).rowcount
+        DB.commit()
+    if n:
+        audit(str(usuario or "sistema"), "full.nao_aceito.liberar", json.dumps({"codigo": c}, ensure_ascii=False))
+    return bool(n)
+
+
+def full_nao_aceito_lista() -> dict[str, dict[str, Any]]:
+    with DB_LOCK:
+        rows = DB.execute("SELECT * FROM full_nao_aceito_v1903").fetchall()
+    return {r["codigo"]: dict(r) for r in rows}
 
 
 def _expand_ml_order_item(item_data: dict[str, Any], kit_catalog: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
