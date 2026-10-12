@@ -9724,6 +9724,59 @@ def full_remessa_atual() -> dict[str, Any] | None:
             "montada_em": cab["montada_em"], "obs": cab["obs"], "agendada_para": cab["agendada_para"]}
 
 
+def full_remessa_avisar(hoje: date | None = None) -> bool:
+    """V19.03: avisa (popup + push) uma vez por dia que a remessa Full está pronta."""
+    hoje = hoje or datetime.now(BR_TZ).date()
+    dia = hoje.isoformat()
+    with DB_LOCK:
+        _full_remessa_schema()
+        r = DB.execute("SELECT * FROM full_remessa_v1903 WHERE situacao='pronta' "
+                       "ORDER BY remessa_id DESC LIMIT 1").fetchone()
+        if r is None or r["avisado_dia"] == dia:
+            return False
+        titulo = f"Remessa Full pronta: {int(r['unidades'] or 0)} un. em {int(r['itens'] or 0)} itens"
+        DB.execute("INSERT OR IGNORE INTO aviso_venda_v1893(marketplace,venda_id,venda_em,valor,titulo,qtd,itens,silencioso,criado_em) "
+                   "VALUES('full',?,?,NULL,?,0,0,0,?)",
+                   (f"remessa:{r['remessa_id']}:{dia}", now_iso(), titulo, now_iso()))
+        DB.execute("UPDATE full_remessa_v1903 SET avisado_dia=? WHERE remessa_id=?", (dia, r["remessa_id"]))
+        DB.commit()
+    AVISOS_VENDA_EVENT.set()
+    return True
+
+
+def full_remessa_resumo_email() -> str:
+    """V19.03: linha do relatório das 08:00 (vazia quando não há remessa pronta)."""
+    with DB_LOCK:
+        _full_remessa_schema()
+        r = DB.execute("SELECT unidades,itens FROM full_remessa_v1903 WHERE situacao='pronta' "
+                       "ORDER BY remessa_id DESC LIMIT 1").fetchone()
+    if r is None:
+        return ""
+    return f"Remessa Full pronta: {int(r['unidades'] or 0)} un. em {int(r['itens'] or 0)} itens"
+
+
+def full_remessa_loop(stop_event: threading.Event) -> None:
+    """V19.03: uma rodada por dia depois das 05:00 (Brasília); depois avisa."""
+    if stop_event.wait(240):
+        return
+    while not stop_event.is_set():
+        try:
+            agora = datetime.now(BR_TZ)
+            hoje = agora.date().isoformat()
+            if agora.hour >= 5:
+                with DB_LOCK:
+                    _full_remessa_schema()
+                    ult = DB.execute("SELECT montada_em FROM full_remessa_v1903 ORDER BY remessa_id DESC LIMIT 1").fetchone()
+                if ult is None or str(ult[0] or "")[:10] != hoje:
+                    res = full_remessa_rodada()
+                    print(f"[remessa-full] rodada: {res.get('situacao')} {res.get('unidades')} un.", flush=True)
+                full_remessa_avisar()
+        except Exception as exc:
+            print(f"[remessa-full] erro: {exc}", file=sys.stderr, flush=True)
+        if stop_event.wait(1800):
+            break
+
+
 def _full_remessa_aberta_ou_erro(remessa_id: int) -> Any:
     cab = DB.execute("SELECT * FROM full_remessa_v1903 WHERE remessa_id=?", (int(remessa_id),)).fetchone()
     if cab is None:
@@ -19449,6 +19502,12 @@ def relatorio_diario_html(d: dict[str, Any]) -> str:
         f"margin:0 0 16px;color:#123a63;font-size:13px'><b>{esc(cobrancas)}</b><br>"
         f"<span style='color:#586a7d'>Veja em Cobranças do ML no sistema.</span></div>"
     ) if cobrancas else ""
+    remessa = str(d.get("remessa_full") or "")  # V19.03
+    cobrancas_html += (
+        f"<div style='background:#eefaf1;border:1px solid #bfe3c9;border-radius:10px;padding:10px 14px;"
+        f"margin:0 0 16px;color:#14532d;font-size:13px'><b>{esc(remessa)}</b><br>"
+        f"<span style='color:#586a7d'>Veja em Análise Full no sistema.</span></div>"
+    ) if remessa else ""
     return f"""<div style="font-family:'Segoe UI',system-ui,sans-serif;color:#1e293b;max-width:680px;margin:auto">
 <h2 style="color:#123a63;margin:0 0 4px">Noromak — Vendas de {esc(_data_br(d['dia']))}</h2>
 <p style="color:#748295;margin:0 0 16px">Resumo do dia que fechou.</p>
@@ -19497,6 +19556,8 @@ def relatorio_diario_texto(d: dict[str, Any]) -> str:
     ]
     if d.get("cobrancas"):  # V19.01
         linhas.append(str(d["cobrancas"]))
+    if d.get("remessa_full"):  # V19.03
+        linhas.append(str(d["remessa_full"]))
     linhas += [
         "",
         "Por marketplace:",
@@ -19607,6 +19668,10 @@ def relatorio_diario_enviar(dia: str, forcar: bool = False) -> dict[str, Any]:
         dados["cobrancas"] = auditoria_resumo_email()
     except Exception as exc:
         print(f"[relatorio-diario] cobranças do ML: {exc}", file=sys.stderr)
+    try:  # V19.03
+        dados["remessa_full"] = full_remessa_resumo_email()
+    except Exception as exc:
+        print(f"[relatorio-diario] remessa Full: {exc}", file=sys.stderr)
     assunto = f"Noromak — Vendas de {_data_br(dia)}: {_brl_srv(dados['faturamento'])} em {dados['pedidos']} pedido(s)"
     destinatarios = relatorio_diario_enviar_email(assunto, relatorio_diario_texto(dados), relatorio_diario_html(dados))
     _vendas_meta("relatorio_diario_ultimo", dia)
@@ -27771,6 +27836,10 @@ def _avisos_brl(valor: Any) -> str:
 
 def _avisos_formatar(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
     canal = "ML" if row["marketplace"] == "ml" else "Shopee"
+    if row["marketplace"] == "full":  # V19.03: aviso de remessa, não de venda
+        return {"id": int(row["id"]), "marketplace": "full", "venda_id": row["venda_id"], "venda_em": row["venda_em"],
+                "valor": None, "titulo": "Remessa Full", "corpo": str(row["titulo"] or ""),
+                "url": f"{BASE_PATH}/analise-full"}
     valor = _avisos_brl(row["valor"]) if row["valor"] is not None else ""
     corpo = str(row["titulo"] or "Produto sem título")
     if int(row["qtd"] or 0):
@@ -28014,6 +28083,7 @@ SAUDE_WORKERS_INFO: dict[str, tuple[str, bool, int]] = {
     "shopee_label_worker_loop": ("Etiquetas da Shopee", True, 30),
     "vendas_sync_loop": ("Vendas (Dashboard e Financeiro)", False, 120),
     "financeiro_frete_loop": ("Frete das vendas (Financeiro)", False, 120),
+    "full_remessa_loop": ("Remessa Full automática", False, 3600),
     "ml_auditoria_loop": ("Auditor de cobranças do ML", False, 180),
     "ml_ads_sync_loop": ("Publicidade do Mercado Livre", False, 180),
     "ml_visitas_loop": ("Visitas dos anúncios (Conversão)", False, 180),
@@ -28907,6 +28977,13 @@ def main() -> None:
         name="auditoria-ml",
         daemon=True,
     )
+    # V19.03: remessa Full automática (uma rodada por dia).
+    full_remessa_thread = threading.Thread(
+        target=_worker_protegido(full_remessa_loop),
+        args=(watcher_stop,),
+        name="full-remessa",
+        daemon=True,
+    )
     # V18.30: gasto com Publicidade (Product Ads) para o Financeiro.
     ads_thread = threading.Thread(
         target=_worker_protegido(ml_ads_sync_loop),
@@ -29013,6 +29090,7 @@ def main() -> None:
         vendas_ml_thread.start()
         frete_thread.start()
         auditoria_thread.start()
+        full_remessa_thread.start()
         ads_thread.start()
         visitas_thread.start()
         estoque_thread.start()

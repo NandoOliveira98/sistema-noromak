@@ -298,7 +298,7 @@
     if (window.nkAvisos) { window.nkAvisos.ligarBotoes(); return; }
     if (document.querySelector('script[data-nk-avisos-js]')) return;
     const s = document.createElement("script");
-    s.src = `${B}/nk-avisos.js?v=18.93`;
+    s.src = `${B}/nk-avisos.js?v=19.03`;
     s.defer = true;
     s.dataset.nkAvisosJs = "1";
     document.head.append(s);

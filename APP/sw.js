@@ -1,4 +1,4 @@
-const CACHE = "noromak-expedicao-pwa-19.01";
+const CACHE = "noromak-expedicao-pwa-19.03";
 // V18.82: telas do Admin com endereço próprio — sem rede, caem na cópia do Admin.
 const ROTAS_ADMIN_V1882 = /\/(dashboard|pedidos-pendentes|pedidos-dia|coleta|etiquetas|historico|historico-sku|produtos|kits|integracoes|usuarios|seguranca)\/?$/i;
 const SHELL = [
@@ -75,7 +75,7 @@ self.addEventListener("push", event => {
     for (const v of mostrar) {
       await self.registration.showNotification(v.titulo || "Nova venda", {
         body: v.corpo || "", tag: `nk-venda-${v.id}`, icon: AVISO_ICONE, badge: AVISO_ICONE,
-        vibrate: [200, 100, 200], timestamp: Date.parse(v.venda_em) || Date.now(), data: {url: AVISO_ABRIR},
+        vibrate: [200, 100, 200], timestamp: Date.parse(v.venda_em) || Date.now(), data: {url: v.url || AVISO_ABRIR},
       });
     }
     if (total > mostrar.length) {

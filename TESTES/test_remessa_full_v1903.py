@@ -226,3 +226,28 @@ class Rodada(Calculo):
         with S.DB_LOCK:
             n = S.DB.execute("SELECT COUNT(*) FROM full_remessa_v1903").fetchone()[0]
         self.assertEqual(n, 1)   # nenhuma remessa nova com o cálculo velho
+
+
+class Aviso(Calculo):
+    def test_avisa_uma_vez_por_dia(self):
+        self.anuncio("MLB1", "A", no_full=0, venda=160)
+        S.full_remessa_rodada(HOJE, estoque={"A": 1000})
+        self.assertTrue(S.full_remessa_avisar(HOJE))
+        self.assertFalse(S.full_remessa_avisar(HOJE))
+        self.assertTrue(S.full_remessa_avisar(HOJE + timedelta(days=1)))
+        with S.DB_LOCK:
+            n = S.DB.execute("SELECT COUNT(*) FROM aviso_venda_v1893 WHERE marketplace='full'").fetchone()[0]
+        self.assertEqual(n, 2)
+
+    def test_montando_nao_avisa(self):
+        self.anuncio("MLB1", "A", no_full=0, venda=10)
+        S.full_remessa_rodada(HOJE, estoque={"A": 1000})
+        self.assertFalse(S.full_remessa_avisar(HOJE))
+
+    def test_linha_do_email(self):
+        self.anuncio("MLB1", "A", no_full=0, venda=160)
+        S.full_remessa_rodada(HOJE, estoque={"A": 1000})
+        self.assertIn("160", S.full_remessa_resumo_email())
+
+    def test_worker_no_painel_de_saude(self):
+        self.assertIn("full_remessa_loop", S.SAUDE_WORKERS_INFO)
