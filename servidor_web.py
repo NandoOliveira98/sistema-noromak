@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.05-REMESSA-SO-COM-ESTOQUE"
+APP_VERSION = "19.06-CUSTO-ERRO-EM-CACHE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -709,7 +709,38 @@ def crm_stock_lookup(codigo: str, operador: str = "", wait_seconds: float = 0.0)
     return result
 
 
+# V19.06: erro do Apollo também fica guardado. A extensão do Precificador repetia o mesmo
+# código composto ("KIT", "A/B/C") ~300x/min, cada uma ia ao Apollo e gastava o limite de
+# 20/min dividido com o estoque (a Remessa Full ficou sem resposta para 13 códigos em 13/10).
+CRM_COST_ERRO_SEGUNDOS = 600       # o Apollo respondeu que não tem / recusou
+CRM_COST_ERRO_TRANSITORIO = 60     # limite, rede, resposta inválida
+CRM_COST_ERRO_CACHE: dict[str, tuple[float, float, str]] = {}
+
+
 def crm_cost_lookup(codigo: str, operador: str = "") -> dict[str, Any]:
+    """V19.06: crm_cost_lookup com cache de erro (ver CRM_COST_ERRO_CACHE)."""
+    chave = str(codigo or "").strip().upper()
+    if chave:
+        with CRM_COST_CACHE_LOCK:
+            erro = CRM_COST_ERRO_CACHE.get(chave)
+            if erro and time.monotonic() < erro[0] + erro[1]:
+                raise RuntimeError(erro[2])
+    try:
+        return _crm_cost_lookup_apollo(codigo, operador)
+    except RuntimeError as exc:
+        msg = str(exc)
+        if chave and "CHAVE_CRM" not in msg:
+            transitorio = any(t in msg for t in ("Limite", "indisponível", "inválida", "HTTP 5"))
+            with CRM_COST_CACHE_LOCK:
+                CRM_COST_ERRO_CACHE[chave] = (time.monotonic(),
+                                              CRM_COST_ERRO_TRANSITORIO if transitorio else CRM_COST_ERRO_SEGUNDOS, msg)
+                if len(CRM_COST_ERRO_CACHE) > 500:
+                    for k, _ in sorted(CRM_COST_ERRO_CACHE.items(), key=lambda it: it[1][0])[:200]:
+                        CRM_COST_ERRO_CACHE.pop(k, None)
+        raise
+
+
+def _crm_cost_lookup_apollo(codigo: str, operador: str = "") -> dict[str, Any]:
     """Consulta custo médio no Apollo através da API local fornecida ao sistema.
 
     A CHAVE_CRM nunca é enviada ao navegador. A consulta acontece somente
