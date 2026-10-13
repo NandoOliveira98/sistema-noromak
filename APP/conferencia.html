@@ -323,7 +323,7 @@
   }
 
 </style>
-<script src="/expedicao/shared-storage.js?v=19.00"></script>
+<script src="/expedicao/shared-storage.js?v=19.16"></script>
 <script src="/expedicao/web-auth.js?v=18.82"></script>
 <script src="/expedicao/zebra-browser-print.js?v=14.5"></script>
 <script defer src="/expedicao/pwa-install.js?v=14.5"></script>
@@ -1018,6 +1018,26 @@ function agendarSalvamentoProgressoBipe(){
 function agendarRenderizacaoListaPedidos(){
   if(temporizadorRenderListaBipe)clearTimeout(temporizadorRenderListaBipe);
   temporizadorRenderListaBipe=setTimeout(()=>{temporizadorRenderListaBipe=null;renderizarListaPedidos();},180);
+}
+// V19.16: bip leve — o bip mandava a fila INTEIRA ao servidor (~700 KB, a tela congelava no PC de
+// 4 GB). Agora só a linha; qualquer falha ou linha não achada volta ao caminho antigo.
+function salvarBipLeve(item) {
+  cancelarSalvamentoProgressoPendente();
+  try {
+    const pedido = extrairCampo(pedidoAtual[0], "Pedido");
+    const uid = String(item.__uidLinha || item.__uidPedido || "").trim();
+    const ok = typeof appStorage.salvarBip === "function" && appStorage.salvarBip(pedido, [{
+      uid, sku: extrairCampo(item, "SKU"), ean: extrairCampo(item, "Código de Barras"), lido: Number(item.Lido || 0)
+    }]);
+    if (!ok) return salvarProgressoAutomatico("Bip salvo");
+    if (pedido) appStorage.setItem(CHAVE_ULTIMO_PEDIDO, normalizarIdentificadorExato(pedido));
+    const hora = new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    atualizarIndicadorAutosave(`Bip salvo às ${hora}`);
+    return true;
+  } catch (erro) {
+    console.warn("Bip leve falhou; salvando a fila inteira.", erro);
+    return salvarProgressoAutomatico("Bip salvo");
+  }
 }
 function salvarProgressoAutomatico(motivo = "Progresso salvo") {
   cancelarSalvamentoProgressoPendente();
@@ -2755,7 +2775,8 @@ Quantidade solicitada: ${qtdTotal}`,
   desenharTabela();
   // V17.70: persiste o bip imediatamente no servidor. O antigo atraso de 600 ms
   // abria uma janela em que polling/storage podia recarregar Lido=0 e desfazer o bip.
-  salvarProgressoAutomatico("Bip salvo");
+  // V19.16: só a linha bipada (bip leve); sem ela, a fila inteira como antes.
+  salvarBipLeve(item);
   agendarRenderizacaoListaPedidos();
 
   if (!pedidoAtualFinalizado()) {

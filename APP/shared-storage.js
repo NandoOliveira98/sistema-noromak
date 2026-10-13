@@ -359,6 +359,29 @@
       return novo;
     },
 
+    // V19.16: bip leve — manda só as linhas bipadas (menos de 1 KB) em vez da fila inteira
+    // (~700 KB ida e volta). Atualiza a cópia local sem baixar nada; o polling traz a versão
+    // do servidor depois, em segundo plano. Devolve false (409) para a tela usar o caminho antigo.
+    salvarBip(pedido, linhas) {
+      const resposta = xhrJson("POST", BASE + "/api/order-progress", { pedido: String(pedido || ""), linhas: linhas || [] }, [409]);
+      if (resposta.__status === 409) return false;
+      const chave = "conf_pedidos";
+      if (cache.has(chave) && cache.get(chave)) {
+        try {
+          const lista = JSON.parse(cache.get(chave));
+          const ped = String(pedido || "").trim().toUpperCase();
+          for (const ln of linhas || []) {
+            const alvo = lista.find(r => r && String(r.Pedido || "").trim().toUpperCase() === ped && (ln.uid
+              ? [r.__uidLinha, r.__uidPedido].map(v => String(v || "").trim()).includes(ln.uid)
+              : String(r.SKU || "").trim().toUpperCase() === String(ln.sku || "").trim().toUpperCase() && String(r["Código de Barras"] || "").trim() === String(ln.ean || "").trim()));
+            if (alvo) alvo.Lido = Math.max(Number(alvo.Lido || 0), Number(ln.lido || 0));
+          }
+          cache.set(chave, JSON.stringify(lista));
+        } catch (_) { cache.delete(chave); }
+      }
+      return true;
+    },
+
     atualizarSkuPedido(referencia) {
       const resposta = xhrJson("POST", BASE + "/api/order-sku", referencia || {});
       for (const chave of resposta.updated_keys || ["conf_pedidos", "conf_pedidos_rascunhos"]) {

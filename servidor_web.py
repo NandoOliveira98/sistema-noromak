@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.15-EAN-CONFERENCIA"
+APP_VERSION = "19.16-BIP-LEVE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -26747,6 +26747,12 @@ class AppHandler(BaseHTTPRequestHandler):
             if ctx is not None and not self.pedido_de_outra_filial(ctx):  # V18.95
                 self.handle_order_line_delete(ctx)
             return
+        if path == "/api/order-progress":
+            # V19.16: bip leve — só a linha bipada, não a fila inteira.
+            ctx = self.auth()
+            if ctx is not None and not self.pedido_de_outra_filial(ctx):
+                self.handle_order_progress(ctx)
+            return
         if path == "/api/order-conference-name":
             # V17.76: ação operacional estreita. Qualquer usuário Noromak
             # autenticado pode preencher somente o Nome de Conferência.
@@ -27797,6 +27803,73 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_json({"ok": False, "error": str(exc)}, 400)
         except Exception as exc:
             self.send_json({"ok": False, "error": str(exc)}, 409)
+
+    def handle_order_progress(self, ctx: dict[str, Any]) -> None:
+        """V19.16 — bip leve. A Conferência mandava a fila INTEIRA a cada bip (~700 KB ida e volta,
+        XHR síncrono): o computador de 4 GB da expedição congelava (13/10). Aqui só o `Lido` das
+        linhas bipadas, direto no valor canônico (como o Nome Conferência), com as regras de sempre:
+        bip nunca diminui (V17.70), não passa da quantidade, pedido concluído não volta. Linha não
+        achada = 409 e a tela usa o caminho antigo (fila inteira)."""
+        try:
+            req = self.read_json()
+            pedido = str(req.get("pedido") or "").strip()
+            linhas = req.get("linhas") if isinstance(req.get("linhas"), list) else []
+            if not pedido or not linhas or len(linhas) > 200:
+                raise ValueError("Pedido ou linhas não informados.")
+            pedido_key = normalize(pedido)
+            recusa: tuple[dict[str, Any], int] | None = None   # V18.56: resposta sai fora do DB_LOCK
+            with DB_LOCK:
+                DB.execute("BEGIN IMMEDIATE")
+                try:
+                    if DB.execute("SELECT 1 FROM completed_orders WHERE order_key=?", (pedido_key,)).fetchone():
+                        recusa = ({"ok": False, "error": "Pedido já concluído.", "code": "CONCLUIDO"}, 409)
+                    raw_row = None if recusa else DB.execute("SELECT value,version FROM storage WHERE key='conf_pedidos'").fetchone()
+                    rows = json.loads(str(raw_row["value"] or "[]")) if raw_row else []
+                    do_pedido = [r for r in rows if isinstance(r, dict) and normalize(order_number(r)) == pedido_key]
+                    mudou = False
+                    for ln in ([] if recusa else linhas):
+                        if not isinstance(ln, dict):
+                            raise ValueError("Linha inválida.")
+                        uid = str(ln.get("uid") or "").strip()
+                        if uid:
+                            achadas = [r for r in do_pedido if uid in (str(r.get("__uidLinha") or "").strip(), str(r.get("__uidPedido") or "").strip())]
+                        else:
+                            achadas = [r for r in do_pedido if normalize(r.get("SKU")) == normalize(ln.get("sku"))
+                                       and str(r.get("Código de Barras") or "").strip() == str(ln.get("ean") or "").strip()]
+                        if len(achadas) != 1:
+                            recusa = ({"ok": False, "error": "Linha não encontrada no pedido.", "code": "LINHA"}, 409)
+                            break
+                        r = achadas[0]
+                        try:
+                            novo = int(ln.get("lido") or 0)
+                            qtd = int(float(r.get("Quantidade") or 0))
+                            atual = int(float(r.get("Lido") or 0))
+                        except (TypeError, ValueError):
+                            raise ValueError("Quantidade inválida.")
+                        valor = max(atual, min(max(0, novo), qtd if qtd > 0 else novo))   # nunca diminui
+                        if valor != atual:
+                            r["Lido"] = valor
+                            mudou = True
+                    versao = int(raw_row["version"] or 0) if raw_row else 0
+                    if recusa:
+                        DB.rollback()
+                    elif mudou:
+                        versao += 1
+                        DB.execute("UPDATE storage SET value=?,version=?,updated_at=? WHERE key='conf_pedidos'",
+                                   (json_dumps(rows), versao, now_iso()))
+                    if not recusa:
+                        DB.commit()
+                except Exception:
+                    DB.rollback()
+                    raise
+            if recusa:
+                self.send_json(*recusa)
+                return
+            self.send_json({"ok": True, "version": versao, "mudou": mudou})
+        except ValueError as exc:
+            self.send_json({"ok": False, "error": str(exc)}, 400)
+        except Exception as exc:
+            self.send_json({"ok": False, "error": str(exc)}, 500)
 
     def handle_order_conference_name(self, ctx: dict[str, Any]) -> None:
         """V17.73 — grava Nome Conferência diretamente no pedido canônico.

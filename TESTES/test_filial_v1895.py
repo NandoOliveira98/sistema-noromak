@@ -245,7 +245,7 @@ class TelasFilial(TesteNoromak):
         conf = (app / "conferencia.html").read_text(encoding="utf-8")
         self.assertIn("imprimirEtiquetaPdfV1895", conf)
         self.assertIn("/api/etiqueta-ml-pdf", conf)
-        self.assertIn("shared-storage.js?v=19.00", conf)
+        self.assertRegex(conf, r"shared-storage\.js\?v=19\.\d+")   # V19.16: a versão sobe a cada mudança do shared-storage
         admin = (app / "admin.html").read_text(encoding="utf-8")
         self.assertIn("moverPedidoFilialAdminV1895", admin)
         self.assertIn('id="novoUsuarioFilial"', admin)
