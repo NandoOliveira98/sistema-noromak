@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.14-META-MENSAL"
+APP_VERSION = "19.15-EAN-CONFERENCIA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -2430,6 +2430,7 @@ def init_db() -> None:
     ensure_cliente_fiscal_linx_api_schema()  # V18.60
     ensure_linx_operacoes_schema()  # V18.60
     ensure_linx_robo_schema()  # V18.60
+    ean_overrides_vazios_migrar_v1915()  # V19.15
     ensure_saude_schema()  # V18.83
     ensure_posvenda_schema()  # V18.88
     ensure_promo_convite_schema()  # V18.89
@@ -4681,6 +4682,46 @@ def conferencia_conclusoes_do_dia(horas: int = 48, filial: str = "todas") -> lis
 # sobreposição persistente. Jobs, importações e sincronizações podem continuar
 # atualizando dados automáticos, mas jamais sobrescrevem um campo alterado pelo
 # admin, recriam uma entidade removida por ele ou apagam uma entidade adicionada.
+def ean_overrides_vazios_migrar_v1915(forcar: bool = False) -> dict[str, int]:
+    """V19.15: em 30/09 um salvamento do Admin gravou o EAN VAZIO como override ADMIN em ~319
+    produtos (delta contra o banco, corrigido na V19.00). A leitura reaplicava o vazio e o "+ EAN"
+    da Conferência gravava o banco já com ele: cada EAN novo apagava os anteriores. Uma vez:
+    apaga só os overrides VAZIOS do EAN e devolve, a quem está sem EAN, o último EAN gravado pela
+    Conferência (audit_log product.ean.quick_update). EAN definido pelo ADMIN fica."""
+    with DB_LOCK:
+        DB.execute("CREATE TABLE IF NOT EXISTS migracao_v1915 (nome TEXT PRIMARY KEY, em TEXT NOT NULL)")
+        if not forcar and DB.execute("SELECT 1 FROM migracao_v1915 WHERE nome='ean_vazio'").fetchone():
+            return {"apagados": 0, "devolvidos": 0}
+        apagados = DB.execute("DELETE FROM admin_manual_overrides WHERE storage_key='conf_produtos' "
+                              "AND field_name='Código de Barras' AND TRIM(value_json) IN ('\"\"','null','')").rowcount
+        ultimo: dict[str, str] = {}
+        for r in DB.execute("SELECT detail FROM audit_log WHERE action='product.ean.quick_update' ORDER BY id").fetchall():
+            m = re.match(r"^(.*?)\|.*?->(.*?)\|", str(r["detail"] or "") + "|")
+            if m and m.group(1).strip() and m.group(2).strip():
+                ultimo[normalize(m.group(1))] = m.group(2).strip()
+        devolvidos = 0
+        row = DB.execute("SELECT value, version FROM storage WHERE key='conf_produtos'").fetchone()
+        if row is not None and ultimo:
+            try:
+                prods = json.loads(row["value"] or "[]")
+            except Exception:
+                prods = []
+            for p in prods if isinstance(prods, list) else []:
+                if isinstance(p, dict) and not str(p.get("Código de Barras") or "").strip():
+                    novo = ultimo.get(normalize(p.get("SKU")))
+                    if novo:
+                        p["Código de Barras"] = novo
+                        devolvidos += 1
+            if devolvidos:
+                DB.execute("UPDATE storage SET value=?, version=version+1, updated_at=? WHERE key='conf_produtos'",
+                           (json_dumps(prods), now_iso()))
+        DB.execute("INSERT OR REPLACE INTO migracao_v1915(nome,em) VALUES('ean_vazio',?)", (now_iso(),))
+        DB.commit()
+    if apagados or devolvidos:
+        print(f"[V19.15] EAN: {apagados} override(s) vazio(s) apagado(s), {devolvidos} EAN(s) devolvido(s)", flush=True)
+    return {"apagados": apagados, "devolvidos": devolvidos}
+
+
 def _admin_override_entity_id(storage_key: str, item: Any, index: int = 0) -> str:
     if not isinstance(item, dict):
         return f"IDX:{index}"
@@ -27248,6 +27289,20 @@ class AppHandler(BaseHTTPRequestHandler):
             with DB_LOCK:
                 DB.execute("BEGIN IMMEDIATE")
                 try:
+                    # V19.15: override ADMIN do EAN — vazio é resto do erro de 30/09 (delta contra o
+                    # banco) e sai; um EAN definido pelo ADMIN não é trocado pela Conferência.
+                    entidade = f"SKU:{sku}".upper()
+                    ov = DB.execute("SELECT value_json FROM admin_manual_overrides WHERE storage_key='conf_produtos' "
+                                    "AND field_name='Código de Barras' AND entity_id=? AND is_deleted=0", (entidade,)).fetchone()
+                    if ov is not None:
+                        try:
+                            valor_ov = str(json.loads(ov["value_json"]) or "").strip()
+                        except Exception:
+                            valor_ov = ""
+                        if valor_ov and valor_ov != ean:
+                            raise ValueError(f"O EAN deste SKU foi definido pelo Admin ({valor_ov}). Para trocar, altere no Banco de Produtos do Admin.")
+                        DB.execute("DELETE FROM admin_manual_overrides WHERE storage_key='conf_produtos' "
+                                   "AND field_name='Código de Barras' AND entity_id=?", (entidade,))
                     products, product_version = parse_rows("conf_produtos")
                     pending, pending_version = parse_rows("conf_pedidos")
                     drafts, draft_version = parse_rows("conf_pedidos_rascunhos")
