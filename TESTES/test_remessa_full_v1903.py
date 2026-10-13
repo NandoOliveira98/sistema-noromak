@@ -66,6 +66,16 @@ class Calculo(TesteNoromak):
         self.assertEqual(i["qtd_sugerida"], 0)
         self.assertIn("Apollo", i["motivo"])
 
+    def test_v1905_apollo_zerado_ou_sem_necessidade_fica_fora(self):
+        self.anuncio("MLB1", "A", no_full=0, venda=30)    # Apollo 0
+        self.anuncio("MLB2", "B", no_full=90, venda=30)   # Full cobre 90 dias
+        self.anuncio("MLB3", "C", no_full=0, venda=30)    # tem estoque
+        r = self.calc({"A": 0, "B": 100, "C": 5})
+        self.assertEqual([i["anuncio"] for i in r["itens"]], ["MLB3"])
+        motivos = {f["anuncio"]: f["motivo"] for f in r["fora"]}
+        self.assertEqual(motivos["MLB1"], "sem estoque no Apollo")
+        self.assertEqual(motivos["MLB2"], "Full já cobre 30 dias")
+
     def test_kit_conta_1_e_consome_componentes(self):
         self.anuncio("MLB9", "KIT2-A", no_full=0, venda=30)
         r = self.calc({"A": 20})

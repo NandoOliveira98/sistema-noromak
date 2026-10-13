@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.04-CAMPANHAS-NA-LINHA"
+APP_VERSION = "19.05-REMESSA-SO-COM-ESTOQUE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -9551,9 +9551,19 @@ def full_remessa_calcular(cand: dict[str, Any], estoque: dict[str, Any]) -> dict
         cob = round(nf / diaria, 1) if diaria > 0 else None
         prep.append((a, nec, cob))
     prep.sort(key=lambda t: (t[2] is None, t[2] or 0))
-    itens = [montar(a, nec, cob, False) for a, nec, cob in prep]
     novos = []
     fora = list(cand.get("fora") or [])
+    itens = []
+    for a, nec, cob in prep:
+        i = montar(a, nec, cob, False)
+        # V19.05: a remessa só leva o que tem no Apollo. Estoque conhecido e nada a mandar
+        # (Apollo zerado ou Full já cobre) vai para fora. Sem resposta continua no item (aviso).
+        if i["estoque_apollo"] is not None and i["qtd_sugerida"] <= 0:
+            fora.append({"anuncio": a["anuncio"], "codigo": a["codigo"], "sku": a.get("sku", ""),
+                         "titulo": a.get("titulo", ""),
+                         "motivo": "Full já cobre 30 dias" if nec <= 0 else "sem estoque no Apollo"})
+            continue
+        itens.append(i)
     for a in cand.get("novos") or []:
         # V19.03: novo sem estoque no Apollo (0) ou sem resposta não é sugerido: vai para fora.
         disp = possivel(a["componentes"])
