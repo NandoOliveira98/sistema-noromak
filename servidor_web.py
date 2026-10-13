@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.11-PROMO-SEM-ESTOQUE-E-ANDAMENTO"
+APP_VERSION = "19.12-DEMANDA-GERAL"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -23546,8 +23546,11 @@ def compras_demanda_payload(fornecedor: str, dias: int) -> dict[str, Any]:
             if codigo:
                 marca_cadastro.add(codigo)
     codigos = set(cfg["codigos"])
+    manual = compras_marcas_manuais()   # V19.12: marca escolhida à mão vale por cima das regras
 
     def do_fornecedor(codigo: str, desc: str) -> bool:
+        if codigo in manual:
+            return manual[codigo] == nome
         texto = desc.upper()
         return (codigo in codigos or codigo in marca_cadastro
                 or any(codigo.startswith(p) for p in cfg["prefixos"])
@@ -23575,10 +23578,15 @@ def compras_demanda_payload(fornecedor: str, dias: int) -> dict[str, Any]:
         x.update(linx.get(x["codigo"]) or {"linx_total": None, "linx_media_dia": None, "linx_canais": None,
                                            "linx_caminho": None, "linx_previsao": "", "linx_atualizado": ""})
     itens.sort(key=lambda x: (-max(x["vendido"], x["linx_total"] or 0), x["codigo"]))
+    # V19.12: estoque guardado pela demanda geral (a tela não consulta mais o Apollo na hora).
+    guardado = compras_estoque_guardado([x["codigo"] for x in itens])
+    for x in itens:
+        x["estoque"] = guardado.get(x["codigo"])
     with DB_LOCK:
         primeiro = DB.execute("SELECT MIN(sale_day) AS d FROM vendas_v1799").fetchone()["d"]
     return {
         "ok": True,
+        "geral": compras_geral_info(),
         "linx": linx_resumo,
         "fornecedor": cfg,
         "dias": dias,
@@ -23587,6 +23595,489 @@ def compras_demanda_payload(fornecedor: str, dias: int) -> dict[str, Any]:
         "sem_custo": sum(1 for x in itens if x["custo"] is None),
         "anuncios_sem_codigo": len(sem_codigo),
     }
+
+
+# ---------------------------------------------------------------------------
+# V19.12: Demanda de Compra GERAL (decisões do dono, 13/10). O 504 da tela vinha do
+# estoque lido NA HORA pelo navegador (lote de 40 peças × Apollo lento > 60 s do nginx).
+# Agora o servidor gera a demanda geral em segundo plano — vendas de 30 dias de todos os
+# itens e o Disponível do Apollo de cada código que VENDEU, espaçado — e guarda o
+# resultado; a tela só mostra o guardado, separado por marca. Toda segunda à 01:00 a
+# geral roda sozinha; às 07:00 sai o e-mail (resumo por marca + planilha com uma aba por
+# marca) para RELATORIO_EMAILS, só com a chave LIGADA (começa desligada: primeiro
+# classificar a aba "Sem marca"). Marca escolhida à mão vale por código, por cima das regras.
+# ---------------------------------------------------------------------------
+COMPRAS_GERAL_DIAS = 30
+COMPRAS_GERAL_INTERVALO = 4.0          # ~15 consultas/min: abaixo do limite de 20 do Apollo
+COMPRAS_GERAL_HORA_GERAR = 1           # segunda, Brasília
+COMPRAS_GERAL_HORA_EMAIL = 7
+COMPRAS_SEM_MARCA = "SEM MARCA"
+COMPRAS_GERAL_LOCK = threading.Lock()  # uma consulta geral (ou de marca) por vez
+COMPRAS_ANDAMENTO: dict[str, Any] = {}
+COMPRAS_ANDAMENTO_LOCK = threading.Lock()
+
+
+def _compras_geral_schema() -> None:
+    """Chamar sob DB_LOCK (idempotente)."""
+    DB.executescript("""
+        CREATE TABLE IF NOT EXISTS compras_estoque_v1912 (
+            codigo TEXT PRIMARY KEY,
+            consultado_em TEXT NOT NULL,
+            resultado_json TEXT NOT NULL DEFAULT '{}'
+        );
+        CREATE TABLE IF NOT EXISTS compras_marca_manual_v1912 (
+            codigo TEXT PRIMARY KEY,
+            fornecedor TEXT NOT NULL,
+            por TEXT NOT NULL DEFAULT '',
+            em TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS compras_geral_estado_v1912 (
+            chave TEXT PRIMARY KEY,
+            valor TEXT NOT NULL DEFAULT ''
+        );
+    """)
+
+
+def _compras_estado(chave: str, padrao: str = "") -> str:
+    with DB_LOCK:
+        _compras_geral_schema()
+        r = DB.execute("SELECT valor FROM compras_geral_estado_v1912 WHERE chave=?", (chave,)).fetchone()
+    return str(r["valor"]) if r else padrao
+
+
+def _compras_estado_gravar(chave: str, valor: str) -> None:
+    with DB_LOCK:
+        _compras_geral_schema()
+        DB.execute("INSERT INTO compras_geral_estado_v1912(chave,valor) VALUES(?,?) "
+                   "ON CONFLICT(chave) DO UPDATE SET valor=excluded.valor", (chave, valor))
+        DB.commit()
+
+
+def compras_andamento() -> dict[str, Any]:
+    with COMPRAS_ANDAMENTO_LOCK:
+        a = dict(COMPRAS_ANDAMENTO)
+    if a.get("rodando"):
+        a["restante_s"] = int(max(0, int(a.get("total") or 0) - int(a.get("feito") or 0)) * COMPRAS_GERAL_INTERVALO)
+    return a
+
+
+def compras_marcas_manuais() -> dict[str, str]:
+    with DB_LOCK:
+        _compras_geral_schema()
+        return {str(r["codigo"]): str(r["fornecedor"]) for r in
+                DB.execute("SELECT codigo, fornecedor FROM compras_marca_manual_v1912").fetchall()}
+
+
+def compras_marca_manual_salvar(codigo: str, fornecedor: str, usuario: str) -> dict[str, Any]:
+    """Marca escolhida pelo ADMIN para um código; vazio apaga (volta às regras)."""
+    codigo = str(codigo or "").strip().upper()
+    nome = re.sub(r"\s+", " ", str(fornecedor or "").strip().upper())
+    if not codigo:
+        raise ValueError("Informe o código da peça.")
+    if nome and nome not in {f["nome"] for f in compras_fornecedores()}:
+        raise ValueError("Fornecedor não cadastrado.")
+    with DB_LOCK:
+        _compras_geral_schema()
+        if nome:
+            DB.execute("INSERT INTO compras_marca_manual_v1912(codigo,fornecedor,por,em) VALUES(?,?,?,?) "
+                       "ON CONFLICT(codigo) DO UPDATE SET fornecedor=excluded.fornecedor, por=excluded.por, em=excluded.em",
+                       (codigo, nome, str(usuario or ""), now_iso()))
+        else:
+            DB.execute("DELETE FROM compras_marca_manual_v1912 WHERE codigo=?", (codigo,))
+        DB.commit()
+    audit(str(usuario or "sistema"), "compras.marca.manual", json.dumps({"codigo": codigo, "fornecedor": nome}, ensure_ascii=False))
+    return {"codigo": codigo, "fornecedor": nome}
+
+
+def _compras_regras_marca(produtos: dict[str, Any]) -> Any:
+    """Função codigo, descricao -> nomes dos fornecedores. A marca manual manda (uma só)."""
+    fornecedores = compras_fornecedores()
+    manual = compras_marcas_manuais()
+    raw, _, _ = get_storage("conf_produtos")
+    cadastro: dict[str, set[str]] = {}
+    for p in _rows_from_storage_value(raw):
+        marca = str(p.get("Marca") or "").strip().upper()
+        codigo = _compras_codigo(str(p.get("SKU") or ""), produtos)
+        if marca and codigo:
+            cadastro.setdefault(codigo, set()).add(marca)
+
+    def marcas(codigo: str, descricao: str) -> list[str]:
+        if codigo in manual:
+            return [manual[codigo]]
+        texto = str(descricao or "").upper()
+        return [f["nome"] for f in fornecedores
+                if codigo in f["codigos"] or f["nome"] in cadastro.get(codigo, set())
+                or any(codigo.startswith(x) for x in f["prefixos"]) or any(x in texto for x in f["palavras"])]
+    return marcas
+
+
+def _compras_resultado_estoque(stock: dict[str, Any], filial: int = 1) -> dict[str, Any]:
+    """Mesmo formato do /api/full/apollo-stock (filial 1 = Araçatuba): a tela usa os dois."""
+    rows = stock.get("estoques") if isinstance(stock.get("estoques"), list) else []
+    missing = []
+    for x in stock.get("casas_sem_resposta") or []:
+        try:
+            missing.append(int(x))
+        except (TypeError, ValueError):
+            pass
+    sel = [r for r in rows if int(r.get("revenda") or 0) == filial]
+    known = bool(sel) and filial not in missing and all(r.get("disponivel") is not None for r in sel)
+    return {"ok": True, "stock_known": known,
+            "available": sum(float(r.get("disponivel") or 0) for r in sel) if known else None,
+            "partial": False, "missing_branches": missing, "description": stock.get("descricao") or "",
+            "branches": rows}
+
+
+def compras_codigos_vendidos(fornecedor: str = "", dias: int = COMPRAS_GERAL_DIAS) -> list[str]:
+    """Códigos do Precificador que venderam no período (de um fornecedor, se pedido)."""
+    produtos = _compras_produtos_precificador()
+    vendas, _ = compras_vendas_por_codigo(dias, produtos)
+    nome = str(fornecedor or "").strip().upper()
+    marcas = _compras_regras_marca(produtos) if nome else None
+    out = []
+    for codigo, v in vendas.items():
+        if codigo not in produtos or int(v.get("ml", 0) + v.get("shopee", 0)) <= 0:
+            continue
+        if marcas is not None and nome not in marcas(codigo, produtos[codigo]["descricao"]):
+            continue
+        out.append(codigo)
+    return sorted(out)
+
+
+def compras_geral_rodada(fornecedor: str = "", stop_event: threading.Event | None = None,
+                         intervalo_s: float = COMPRAS_GERAL_INTERVALO) -> dict[str, Any]:
+    """Consulta o Apollo (Disponível) de cada código que vendeu e guarda. Sem fornecedor =
+    demanda geral (registra a data da geração). Cada resposta é gravada na hora: parar no
+    meio não perde o que já foi lido. Sem resposta = erro guardado, nunca zero."""
+    if not COMPRAS_GERAL_LOCK.acquire(blocking=False):
+        return {"ok": True, "ja_rodando": True}
+    nome = str(fornecedor or "").strip().upper()
+    etapa = f"Atualizando a marca {nome}" if nome else "Gerando a demanda geral"
+    with COMPRAS_ANDAMENTO_LOCK:
+        COMPRAS_ANDAMENTO.clear()
+        COMPRAS_ANDAMENTO.update({"rodando": True, "etapa": etapa, "fornecedor": nome, "total": 0, "feito": 0,
+                                  "codigo": "", "sem_resposta": 0, "inicio": now_iso(), "fim": ""})
+    feito = sem = 0
+    try:
+        codigos = compras_codigos_vendidos(nome)
+        with COMPRAS_ANDAMENTO_LOCK:
+            COMPRAS_ANDAMENTO["total"] = len(codigos)
+        for n, cod in enumerate(codigos):
+            if stop_event is not None and stop_event.is_set():
+                break
+            with COMPRAS_ANDAMENTO_LOCK:
+                COMPRAS_ANDAMENTO.update(feito=n, codigo=cod)
+            if n and intervalo_s > 0:
+                if stop_event is not None:
+                    if stop_event.wait(intervalo_s):
+                        break
+                else:
+                    time.sleep(intervalo_s)
+            try:
+                res = _compras_resultado_estoque(crm_stock_lookup(cod, "demanda-compra", 60.0))
+            except Exception as exc:   # inclui CrmLimiteAtingido: fica sem resposta
+                res = {"ok": False, "stock_known": False, "available": None, "branches": [], "error": str(exc)[:200]}
+            if not res.get("stock_known"):
+                sem += 1
+            with DB_LOCK:
+                _compras_geral_schema()
+                DB.execute("INSERT INTO compras_estoque_v1912(codigo,consultado_em,resultado_json) VALUES(?,?,?) "
+                           "ON CONFLICT(codigo) DO UPDATE SET consultado_em=excluded.consultado_em, resultado_json=excluded.resultado_json",
+                           (cod, now_iso(), json.dumps(res, ensure_ascii=False)))
+                DB.commit()
+            feito = n + 1
+        resumo = {"em": now_iso(), "codigos": len(codigos), "consultados": feito, "sem_resposta": sem,
+                  "completa": feito == len(codigos), "fornecedor": nome}
+        if not nome:
+            _compras_estado_gravar("ultima_geral", json.dumps(resumo, ensure_ascii=False))
+        return {"ok": True, **resumo}
+    finally:
+        with COMPRAS_ANDAMENTO_LOCK:
+            COMPRAS_ANDAMENTO.update(rodando=False, fim=now_iso(), codigo="", feito=feito, sem_resposta=sem)
+        COMPRAS_GERAL_LOCK.release()
+
+
+def compras_estoque_guardado(codigos: list[str]) -> dict[str, dict[str, Any]]:
+    if not codigos:
+        return {}
+    with DB_LOCK:
+        _compras_geral_schema()
+        out = {}
+        for i in range(0, len(codigos), 500):
+            parte = codigos[i:i + 500]
+            for r in DB.execute(f"SELECT * FROM compras_estoque_v1912 WHERE codigo IN ({','.join('?' * len(parte))})", parte).fetchall():
+                out[str(r["codigo"])] = {**_full_json(r["resultado_json"], {}), "consultado_em": r["consultado_em"]}
+    return out
+
+
+def compras_geral_info() -> dict[str, Any]:
+    return {"ultima": _full_json(_compras_estado("ultima_geral"), {}), "andamento": compras_andamento(),
+            "email_ligado": _compras_estado("email_ligado") == "1",
+            "email_ultimo": _full_json(_compras_estado("email_ultimo"), {}),
+            "destinatarios": relatorio_diario_config()["destinatarios"]}
+
+
+def compras_sem_marca_payload(dias: int = COMPRAS_GERAL_DIAS) -> dict[str, Any]:
+    """Peças que venderam e não caem em nenhum fornecedor (nem na marca manual)."""
+    produtos = _compras_produtos_precificador()
+    vendas, _ = compras_vendas_por_codigo(dias, produtos)
+    marcas = _compras_regras_marca(produtos)
+    itens = []
+    for codigo, v in vendas.items():
+        total = int(v.get("ml", 0) + v.get("shopee", 0))
+        if codigo not in produtos or total <= 0 or marcas(codigo, produtos[codigo]["descricao"]):
+            continue
+        p = produtos[codigo]
+        itens.append({"codigo": codigo, "descricao": p["descricao"], "curva": p["curva"], "vendido": total})
+    itens.sort(key=lambda x: (-x["vendido"], x["codigo"]))
+    return {"ok": True, "dias": dias, "itens": itens, "fornecedores": [f["nome"] for f in compras_fornecedores()]}
+
+
+def compras_calcular(d: dict[str, Any], limite_transf: float = 0.0) -> dict[str, Any]:
+    """A conta da tela (compras.html calcular()) no servidor, para o e-mail. "A caminho"
+    digitado fica no navegador: aqui vale só a compra em aberto da Linx (ou 0)."""
+    cfg = d["fornecedor"]
+    prazo, cob, dias = float(cfg["prazo"]), float(cfg["cobertura"]), float(d["dias"])
+    itens = []
+    for p in d["itens"]:
+        r = p.get("estoque") or {}
+        conhecido = bool(r.get("ok") and r.get("stock_known"))
+        araca = math.floor(float(r.get("available") or 0)) if conhecido else None
+
+        def casa(rev: int) -> Any:
+            b = next((x for x in r.get("branches") or [] if int(x.get("revenda") or 0) == rev), None)
+            return max(0, math.floor(float(b["disponivel"]))) if b and b.get("disponivel") is not None else None
+        usa_linx = p.get("linx_media_dia") is not None
+        caminho = float(p.get("linx_caminho") or 0)
+        media = float(p["linx_media_dia"]) if usa_linx else p["vendido"] / dias
+        tem_venda = p["vendido"] > 0 or (p.get("linx_total") or 0) > 0
+        cob_hoje = None if araca is None else ((araca + caminho) / media if media > 0 else math.inf)
+        nec = 0 if araca is None else max(0, math.ceil(media * (prazo + cob) - araca - caminho))
+        itens.append({**p, "araca": araca, "rib": casa(2), "bau": casa(3), "caminho": caminho, "media": media,
+                      "cob_hoje": cob_hoje, "necessidade": nec, "complemento": 0, "transferido": 0,
+                      "status": "semvenda" if not tem_venda else "ok" if conhecido else "nd"})
+    for x in itens:
+        if x["custo"] is None or x["necessidade"] <= 0:
+            continue
+        restante = x["necessidade"]
+        for d_ in sorted([v for v in (x["rib"], x["bau"]) if v], reverse=True):
+            pode = min(restante, d_)
+            if restante > 0 and pode * x["custo"] >= limite_transf:
+                restante -= pode
+                x["transferido"] += pode
+    qtd = lambda x: max(0, x["necessidade"] + x["complemento"] - x["transferido"])
+    valor = lambda x: 0.0 if x["custo"] is None else qtd(x) * x["custo"]
+    total = lambda: sum(valor(x) for x in itens)
+    for _ in range(20000):
+        if total() >= float(cfg["pedido_minimo"]):
+            break
+        cand = [(x, (x["araca"] + x["caminho"] + x["necessidade"] + x["complemento"]) / x["media"]) for x in itens
+                if x["status"] == "ok" and x["custo"] and x["media"] > 0 and x["curva"] in ("A", "B")]
+        cand = [c for c in cand if c[1] < prazo + cob * 2]
+        if not cand:
+            break
+        cand.sort(key=lambda c: (c[1], c[0]["curva"]))
+        cand[0][0]["complemento"] += 1
+    for x in itens:
+        x["comprar"] = qtd(x)
+        x["subtotal"] = round(valor(x), 2)
+    comprar = [x for x in itens if x["comprar"] > 0]
+    comprar.sort(key=lambda x: (1e9 if x["cob_hoje"] is None else x["cob_hoje"], -x["media"]))
+    t = round(total(), 2)
+    return {"fornecedor": cfg["nome"], "pedido_minimo": cfg["pedido_minimo"], "prazo": prazo, "itens": comprar,
+            "total": t, "atingiu_minimo": t >= float(cfg["pedido_minimo"]),
+            "zerando": sum(1 for x in itens if x["cob_hoje"] is not None and x["cob_hoje"] < prazo and x["status"] == "ok"),
+            "sem_estoque_conhecido": sum(1 for x in itens if x["status"] == "nd")}
+
+
+def _xlsx_abas(abas: list[tuple[str, list[list[tuple[Any, int]]]]]) -> bytes:
+    """.xlsx com várias abas, só biblioteca padrão (estilos do compras_pedido_xlsx:
+    1=cabeçalho navy, 2=moeda, 3=título de seção, 4=negrito)."""
+    import io
+    import zipfile
+    esc = html_module.escape
+
+    def cell(ci: int, ri: int, value: Any, style: int) -> str:
+        ref = "%s%d" % (_xlsx_col(ci), ri)
+        s = ' s="%d"' % style if style else ""
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return '<c r="%s"%s><v>%s</v></c>' % (ref, s, value)
+        return '<c r="%s"%s t="inlineStr"><is><t xml:space="preserve">%s</t></is></c>' % (ref, s, esc(str(value if value is not None else "")))
+    usados: set[str] = set()
+    nomes = []
+    for nome, _ in abas:
+        base = re.sub(r"[\[\]:*?/\\]", "-", str(nome or "Aba"))[:28] or "Aba"
+        n, k = base, 2
+        while n.upper() in usados:
+            n, k = f"{base[:25]}-{k}", k + 1
+        usados.add(n.upper())
+        nomes.append(n)
+    sheets = []
+    for _, linhas in abas:
+        rows_xml = ['<row r="%d">%s</row>' % (ri, "".join(cell(ci, ri, v, st) for ci, (v, st) in enumerate(cs)))
+                    for ri, cs in enumerate(linhas, 1)]
+        cols = "".join('<col min="%d" max="%d" width="%d" customWidth="1"/>' % (i + 1, i + 1, w)
+                       for i, w in enumerate([14, 46, 7, 10, 11, 11, 10, 9, 11, 15, 12, 9, 13, 14]))
+        sheets.append('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                      '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+                      '<cols>%s</cols><sheetData>%s</sheetData></worksheet>' % (cols, "".join(rows_xml)))
+    styles = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+              '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+              '<numFmts count="1"><numFmt numFmtId="164" formatCode="&quot;R$&quot;\\ #,##0.00"/></numFmts>'
+              '<fonts count="3"><font><sz val="11"/><name val="Calibri"/></font>'
+              '<font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Calibri"/></font>'
+              '<font><b/><sz val="11"/><name val="Calibri"/></font></fonts>'
+              '<fills count="4"><fill><patternFill patternType="none"/></fill>'
+              '<fill><patternFill patternType="gray125"/></fill>'
+              '<fill><patternFill patternType="solid"><fgColor rgb="FF123B63"/></patternFill></fill>'
+              '<fill><patternFill patternType="solid"><fgColor rgb="FFF2ECFD"/></patternFill></fill></fills>'
+              '<borders count="1"><border/></borders><cellStyleXfs count="1"><xf/></cellStyleXfs>'
+              '<cellXfs count="5"><xf/><xf fontId="1" fillId="2" applyFont="1" applyFill="1"/>'
+              '<xf numFmtId="164" applyNumberFormat="1"/><xf fontId="2" fillId="3" applyFont="1" applyFill="1"/>'
+              '<xf fontId="2" applyFont="1"/></cellXfs>'
+              '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>')
+    ct = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+          '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+          '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+          '<Default Extension="xml" ContentType="application/xml"/>'
+          '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+          + "".join('<Override PartName="/xl/worksheets/sheet%d.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' % (i + 1)
+                    for i in range(len(sheets)))
+          + '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>')
+    rels = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>')
+    wb = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+          '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+          'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>'
+          + "".join('<sheet name="%s" sheetId="%d" r:id="rId%d"/>' % (esc(n), i + 1, i + 1) for i, n in enumerate(nomes))
+          + '</sheets></workbook>')
+    wbrels = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+              '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+              + "".join('<Relationship Id="rId%d" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet%d.xml"/>' % (i + 1, i + 1)
+                        for i in range(len(sheets)))
+              + '<Relationship Id="rId%d" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>' % (len(sheets) + 1))
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", ct)
+        z.writestr("_rels/.rels", rels)
+        z.writestr("xl/workbook.xml", wb)
+        z.writestr("xl/_rels/workbook.xml.rels", wbrels)
+        z.writestr("xl/styles.xml", styles)
+        for i, s in enumerate(sheets):
+            z.writestr("xl/worksheets/sheet%d.xml" % (i + 1), s)
+    return buf.getvalue()
+
+
+def compras_geral_relatorio() -> dict[str, Any]:
+    """Uma conta por fornecedor (estoque guardado, 30 dias) + a lista Sem marca."""
+    limite = compras_limite_transferencia()
+    marcas = []
+    for f in compras_fornecedores():
+        try:
+            marcas.append(compras_calcular(compras_demanda_payload(f["nome"], COMPRAS_GERAL_DIAS), limite))
+        except Exception as exc:
+            marcas.append({"fornecedor": f["nome"], "erro": str(exc)[:200], "itens": [], "total": 0,
+                           "atingiu_minimo": False, "zerando": 0, "pedido_minimo": f["pedido_minimo"]})
+    marcas.sort(key=lambda m: (-float(m.get("total") or 0), m["fornecedor"]))
+    return {"marcas": marcas, "sem_marca": compras_sem_marca_payload()["itens"],
+            "geral": _full_json(_compras_estado("ultima_geral"), {})}
+
+
+def compras_geral_email(rel: dict[str, Any]) -> tuple[str, str, str, bytes]:
+    esc = html_module.escape
+    g = rel["geral"]
+    quando = esc(str(g.get("em") or "")[:16].replace("T", " "))
+    com_pedido = [m for m in rel["marcas"] if m.get("itens")]
+    assunto = f"Demanda de compra — {len(com_pedido)} fornecedor(es) com pedido"
+    linhas_html, linhas_txt = [], []
+    for m in rel["marcas"]:
+        st = "erro: " + m["erro"] if m.get("erro") else ("atinge o mínimo" if m["atingiu_minimo"] else "abaixo do mínimo")
+        linhas_html.append(f"<tr><td><b>{esc(m['fornecedor'])}</b></td><td style='text-align:right'>{len(m['itens'])}</td>"
+                           f"<td style='text-align:right'>{_brl_srv(m['total'])}</td><td>{esc(st)} ({_brl_srv(m['pedido_minimo'])})</td>"
+                           f"<td style='text-align:right;color:{'#b42318' if m.get('zerando') else '#18324A'}'>{m.get('zerando', 0)}</td></tr>")
+        linhas_txt.append(f"- {m['fornecedor']}: {len(m['itens'])} itens, {_brl_srv(m['total'])}, {st}, {m.get('zerando', 0)} zerando")
+    sem = rel["sem_marca"]
+    aviso_sem = (f"<p style='color:#8A5300'><b>{len(sem)} peça(s) vendida(s) sem marca</b> ficaram fora (aba Sem marca). "
+                 f"Classifique na tela da Demanda de Compra.</p>") if sem else ""
+    aviso_apollo = (f"<p style='color:#8A5300'>O Apollo não respondeu para {g.get('sem_resposta')} código(s): "
+                    f"esses itens ficam sem sugestão.</p>") if g.get("sem_resposta") else ""
+    html = (f"<div style='font-family:Segoe UI,Arial,sans-serif;color:#18324A'><h2 style='margin:0 0 4px'>Demanda de compra</h2>"
+            f"<p style='margin:0 0 12px;color:#586A7D'>Vendas de {COMPRAS_GERAL_DIAS} dias (ML + Shopee) · estoque Disponível "
+            f"do Apollo (Araçatuba) lido em {quando}.</p>{aviso_apollo}"
+            f"<table cellpadding='6' style='border-collapse:collapse;font-size:14px'><tr style='background:#123B63;color:#fff'>"
+            f"<th align='left'>Fornecedor</th><th>Itens</th><th>Valor</th><th align='left'>Pedido mínimo</th><th>Zerando antes de chegar</th></tr>"
+            f"{''.join(linhas_html)}</table>{aviso_sem}<p style='color:#586A7D'>Detalhe na planilha anexa (uma aba por marca).</p></div>")
+    texto = (f"Demanda de compra — vendas de {COMPRAS_GERAL_DIAS} dias, estoque lido em {quando}\n\n"
+             + "\n".join(linhas_txt) + (f"\n\n{len(sem)} peça(s) sem marca (aba Sem marca)." if sem else ""))
+    heads = ["Código", "Descrição", "Curva", "Vendido 30d", "Média/dia", "Araçatuba", "Ribeirão", "Bauru",
+             "A caminho (Linx)", "Cobertura (dias)", "Necessidade", "Comprar", "Custo un.", "Total"]
+    abas = [("Resumo", [[("Fornecedor", 1), ("Itens", 1), ("Valor", 1), ("Pedido mínimo", 1), ("Atinge", 1), ("Zerando", 1)]]
+             + [[(m["fornecedor"], 4), (len(m["itens"]), 0), (float(m["total"] or 0), 2), (float(m["pedido_minimo"] or 0), 2),
+                 ("sim" if m["atingiu_minimo"] else "não", 0), (int(m.get("zerando") or 0), 0)] for m in rel["marcas"]])]
+    for m in rel["marcas"]:
+        linhas = [[(f"{m['fornecedor']} — {_brl_srv(m['total'])}", 4)], [(h, 1) for h in heads]]
+        for x in m["itens"]:
+            cobv = x["cob_hoje"]
+            linhas.append([(x["codigo"], 0), (x["descricao"], 0), (x["curva"], 0), (x["vendido"], 0),
+                           (round(x["media"], 3), 0), ("" if x["araca"] is None else x["araca"], 0),
+                           ("" if x["rib"] is None else x["rib"], 0), ("" if x["bau"] is None else x["bau"], 0),
+                           (x["caminho"], 0), ("" if cobv is None or cobv == math.inf else round(cobv, 1), 0),
+                           (x["necessidade"], 0), (x["comprar"], 4), ("" if x["custo"] is None else x["custo"], 2),
+                           (x["subtotal"], 2)])
+        abas.append((m["fornecedor"], linhas))
+    abas.append(("Sem marca", [[(h, 1) for h in ("Código", "Descrição", "Curva", "Vendido 30d")]]
+                 + [[(x["codigo"], 0), (x["descricao"], 0), (x["curva"], 0), (x["vendido"], 0)] for x in sem]))
+    return assunto, texto, html, _xlsx_abas(abas)
+
+
+def compras_geral_enviar_email() -> list[str]:
+    dest = relatorio_diario_config()["destinatarios"]
+    if not dest:
+        raise RuntimeError("Defina RELATORIO_EMAILS no /home/expedicao/.env.")
+    assunto, texto, html, xlsx = compras_geral_email(compras_geral_relatorio())
+    nome = "demanda_compra_" + datetime.now(BR_TZ).date().isoformat() + ".xlsx"
+    enviados = enviar_email_smtp(assunto, texto, html, dest, [{"nome": nome, "conteudo": xlsx,
+                                 "subtype": "vnd.openxmlformats-officedocument.spreadsheetml.sheet"}])
+    _compras_estado_gravar("email_ultimo", json.dumps({"em": now_iso(), "para": enviados}, ensure_ascii=False))
+    return enviados
+
+
+def _compras_semana(agora: datetime) -> str:
+    a, s, _ = agora.isocalendar()
+    return f"{a}-W{s:02d}"
+
+
+def compras_geral_passo(agora: datetime, stop_event: threading.Event | None = None) -> str:
+    """Uma volta do agendamento (segunda, Brasília). Devolve o que fez (para o teste)."""
+    if agora.weekday() != 0 or agora.hour < COMPRAS_GERAL_HORA_GERAR:
+        return ""
+    semana = _compras_semana(agora)
+    if _compras_estado("semana_gerada") != semana:
+        _compras_estado_gravar("semana_gerada", semana)   # 1x por semana, mesmo se cair no meio
+        compras_geral_rodada(stop_event=stop_event)
+        return "gerou"
+    if (agora.hour >= COMPRAS_GERAL_HORA_EMAIL and _compras_estado("email_ligado") == "1"
+            and _compras_estado("semana_email") != semana and not compras_andamento().get("rodando")):
+        _compras_estado_gravar("semana_email", semana)
+        compras_geral_enviar_email()
+        return "email"
+    return ""
+
+
+def compras_geral_loop(stop_event: threading.Event) -> None:
+    """V19.12: segunda 01:00 gera a demanda geral; 07:00 manda o e-mail (se ligado)."""
+    if stop_event.wait(300):
+        return
+    while not stop_event.is_set():
+        try:
+            feito = compras_geral_passo(datetime.now(BR_TZ), stop_event)
+            if feito:
+                print(f"[demanda-geral] {feito}", flush=True)
+        except Exception as exc:
+            print(f"[demanda-geral] erro: {exc}", file=sys.stderr, flush=True)
+        if stop_event.wait(600):
+            break
 
 
 # ---------------------------------------------------------------------------
@@ -24685,6 +25176,20 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
+        if path == "/api/compras/geral":
+            # V19.12: situação da demanda geral (última geração, andamento, e-mail). Leve.
+            if self.auth(admin_only=True) is None:
+                return
+            self.send_json({"ok": True, **compras_geral_info()})
+            return
+        if path == "/api/compras/sem-marca":
+            if self.auth(admin_only=True) is None:
+                return
+            try:
+                self.send_json(compras_sem_marca_payload())
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
         if path == "/api/compras/linx/amostra":
             # V18.91: a 1ª resposta real de cada consulta da Linx (para conferir o formato). Só perfil Admin.
             ctx = self.auth_full_admin()
@@ -25276,6 +25781,37 @@ class AppHandler(BaseHTTPRequestHandler):
                 audit(str(ctx.get("username") or ""), "linx." + path.rsplit("/", 1)[-1],
                       "ok" if resultado.get("ok") else str(resultado.get("error") or "")[:200])
                 self.send_json(resultado, 200 if resultado.get("ok") else 502)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path in ("/api/compras/geral/gerar", "/api/compras/marca", "/api/compras/geral/email"):
+            # V19.12: demanda geral em segundo plano, marca manual por código e chave do e-mail.
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            try:
+                body = self.read_json() or {}
+                if path == "/api/compras/geral/gerar":
+                    fornecedor = str(body.get("fornecedor") or "")
+                    if compras_andamento().get("rodando"):
+                        self.send_json({"ok": True, "ja_rodando": True, **compras_geral_info()})
+                        return
+                    threading.Thread(target=compras_geral_rodada, args=(fornecedor,), name="demanda-geral", daemon=True).start()
+                    audit(ctx["username"], "compras.geral.gerar", fornecedor or "geral")
+                    self.send_json({"ok": True, "rodando": True})
+                elif path == "/api/compras/marca":
+                    self.send_json({"ok": True, **compras_marca_manual_salvar(str(body.get("codigo") or ""),
+                                                                            str(body.get("fornecedor") or ""), ctx["username"])})
+                else:
+                    if ctx.get("app_role") != "admin":
+                        self.send_json({"ok": False, "error": "Só o perfil Admin liga ou desliga o e-mail."}, 403)
+                        return
+                    ligado = bool(body.get("ligado"))
+                    _compras_estado_gravar("email_ligado", "1" if ligado else "0")
+                    audit(ctx["username"], "compras.geral.email", "ligado" if ligado else "desligado")
+                    self.send_json({"ok": True, **compras_geral_info()})
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
@@ -28840,6 +29376,7 @@ SAUDE_WORKERS_INFO: dict[str, tuple[str, bool, int]] = {
     "ml_estoque_loop": ("Estoque dos anúncios (Ruptura)", False, 120),
     "shopee_anuncios_loop": ("Anúncios da Shopee (Conversão e Ruptura)", False, 120),
     "linx_demanda_loop": ("Demanda de Compra pela Linx", False, 180),
+    "compras_geral_loop": ("Demanda de Compra geral (segunda)", False, 180),
     "promo_renovacao_loop": ("Promoções automáticas", False, 120),
     "posvenda_loop": ("Pós-venda do Mercado Livre", False, 60),
     "promo_convites_loop": ("Convites de campanha do ML", False, 120),
@@ -29815,6 +30352,13 @@ def main() -> None:
         name="promo-renovacao",
         daemon=True,
     )
+    # V19.12: demanda de compra geral (segunda 01:00) e e-mail (07:00, se ligado).
+    compras_geral_thread = threading.Thread(
+        target=_worker_protegido(compras_geral_loop),
+        args=(watcher_stop,),
+        name="compras-geral",
+        daemon=True,
+    )
     # V18.13: agente de relatório diário por e-mail (00:01).
     relatorio_thread = threading.Thread(
         target=_worker_protegido(relatorio_diario_loop),
@@ -29875,6 +30419,7 @@ def main() -> None:
         linx_demanda_thread.start()
         promo_renovacao_thread.start()
         relatorio_thread.start()
+        compras_geral_thread.start()
         linx_clientes_thread.start()
         saude_thread.start()
         avisos_venda_thread.start()

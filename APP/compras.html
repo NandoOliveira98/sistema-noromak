@@ -125,13 +125,30 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
   <div class="aviso" id="avisoLinx"><b>Versão provisória.</b> As vendas usadas são só do <b>Mercado Livre e da Shopee</b> — o que sai no balcão e na oficina ainda não entra, então a compra sugerida tende a ficar <b>abaixo</b> do real. O sistema também não sabe o que já foi comprado e está a caminho: preencha a coluna <b>A caminho</b>.</div>
   <div id="msg" class="msg hidden" role="status" aria-live="polite"></div>
 
+  <!-- V19.12: demanda geral gerada no servidor (o estoque não é mais lido na hora pelo navegador). -->
+  <section class="card" id="geral" aria-label="Demanda geral">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+      <div><b>Demanda geral</b> <span id="geralInfo" style="color:var(--muted)">carregando…</span></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <label title="Toda segunda: gera à 01:00 e manda às 07:00 para os e-mails do relatório de faturamento. Só o perfil Admin muda."><input id="geralEmail" type="checkbox"> E-mail toda segunda às 07:00</label>
+        <button id="semMarcaBtn" class="btn" type="button">Sem marca</button>
+        <button id="geralBtn" class="btn pri" type="button">Gerar demanda geral</button>
+      </div>
+    </div>
+    <div id="geralAnd" hidden style="margin-top:10px">
+      <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:13px"><b id="geralEtapa"></b><span id="geralTexto" style="color:var(--muted)"></span></div>
+      <div style="margin-top:6px;height:10px;border-radius:5px;background:var(--line);overflow:hidden"><div id="geralBarra" style="height:100%;width:0;background:var(--orange);transition:width .4s"></div></div>
+    </div>
+    <div id="semMarca" hidden style="margin-top:12px;overflow-x:auto"></div>
+  </section>
+
   <section class="card" aria-label="Fornecedor">
     <div class="cfg">
       <label class="field"><span>Fornecedor / marca</span><select id="fornecedor"></select><small>reconhecido por regras</small></label>
       <label class="field"><span>Pedido mínimo</span><input id="minimo" type="number" min="0" step="100"><small>pelo custo do Precificador</small></label>
       <label class="field"><span>Prazo de entrega</span><input id="prazo" type="number" min="0" step="1"><small>dias até chegar</small></label>
       <label class="field"><span>Cobertura desejada</span><input id="cobertura" type="number" min="0" step="1"><small>dias após chegar</small></label>
-      <label class="field"><span>Período de vendas</span><select id="periodo"><option value="30">30 dias</option><option value="60" selected>60 dias</option><option value="90">90 dias</option><option value="180">180 dias</option></select><small>base da média diária</small></label>
+      <label class="field"><span>Período de vendas</span><select id="periodo"><option value="30" selected>30 dias</option><option value="60">60 dias</option><option value="90">90 dias</option><option value="180">180 dias</option></select><small>base da média diária</small></label>
       <label class="field"><span>Transferir acima de</span><input id="limiteTransf" type="number" min="0" step="10" placeholder="0"><small>R$ — só se compensar o frete</small></label>
     </div>
     <div class="cfg-actions">
@@ -174,7 +191,7 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
       <label><input id="soComprar" type="checkbox" checked> Só o que entra no pedido</label>
       <label><input id="completar" type="checkbox" checked> Completar até o mínimo</label>
       <div class="acts">
-        <button id="estoqueBtn" class="btn" type="button">↻ Atualizar estoque</button>
+        <button id="estoqueBtn" class="btn" type="button" title="Consulta o Apollo só das peças desta marca que venderam, em segundo plano">↻ Atualizar só esta marca</button>
         <button id="exportar" class="btn acc" type="button"><i class=nk-i-download></i> Planilha</button>
         <div class="send-group" title="Enviar o pedido de compra por e-mail">
           <input id="compradorEmail" type="email" placeholder="e-mail do comprador">
@@ -232,7 +249,7 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
       localStorage.setItem(CACHE_ESTOQUE, JSON.stringify(c));
     } catch (_) {}
   }
-  restaurarEstoqueCache();
+  // V19.12: o estoque vem do servidor (demanda geral guardada); o cache do navegador não é mais lido.
 
   function msg(texto, tipo = "ok") { const m = $("msg"); m.textContent = texto; m.className = "msg " + tipo; if (!texto) m.className = "msg hidden"; }
   async function api(url, opts = {}) {
@@ -281,8 +298,14 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
       if (d.vendas_desde && d.vendas_desde > isoDiasAtras(Number($("periodo").value))) avisos.push(`O histórico de vendas começa em ${br(d.vendas_desde)}; períodos mais longos ainda estão incompletos.`);
       avisoLinx(d);
       msg(avisos.join(" "), avisos.length ? "erro" : "ok");
+      // V19.12: estoque guardado pela demanda geral (sem consulta ao Apollo na hora).
+      state.estoque = new Map(); state.estoqueT = new Map();
+      d.itens.forEach(x => { if (x.estoque) { state.estoque.set(x.codigo, x.estoque); state.estoqueT.set(x.codigo, Date.parse(x.estoque.consultado_em) || 0); } });
+      const semLeitura = d.itens.filter(x => (x.vendido > 0 || (x.linx_total || 0) > 0) && !x.estoque).length;
+      if (semLeitura) avisos.push(`${semLeitura} peça(s) que venderam ainda sem estoque lido: use "Atualizar só esta marca" ou "Gerar demanda geral".`);
+      msg(avisos.join(" "), avisos.length ? "erro" : "ok");
+      mostrarGeral(d.geral);
       render();
-      consultarEstoque();
     } catch (e) { msg("Não foi possível carregar a demanda: " + e.message, "erro"); }
   }
   // V18.91: o que a Linx trouxe para este fornecedor
@@ -308,32 +331,73 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
   const isoDiasAtras = (n) => { const d = new Date(); d.setDate(d.getDate() - (n - 1)); return d.toISOString().slice(0, 10); };
   const br = (iso) => { const m = String(iso || "").match(/^(\d{4})-(\d{2})-(\d{2})/); return m ? `${m[3]}/${m[2]}/${m[1]}` : ""; };
 
-  // Estoque: mesma rota da Demanda Full; o Apollo aceita 20 consultas/min.
-  async function consultarEstoque(forcar = false) {
-    if (state.consultando) { state.cancelar = true; return; }
-    const alvo = (state.dados?.itens || []).filter(x => x.vendido > 0 || (x.linx_total || 0) > 0).map(x => x.codigo).filter(c => forcar || !state.estoque.has(c));
-    if (!alvo.length) { render(); return; }
-    state.consultando = true; state.cancelar = false; $("estoqueBtn").textContent = "■ Parar consulta";
-    let pendentes = alvo.slice(); const total = pendentes.length;
+  // V19.12: o estoque é lido pelo servidor em segundo plano (geral ou só esta marca) e guardado.
+  async function consultarEstoque(soMarca) {
     try {
-      while (pendentes.length && !state.cancelar) {
-        msg(`Consultando estoque no Apollo: ${total - pendentes.length} de ${total} peça(s)…`);
-        const d = await api("/api/full/apollo-stock", { method: "POST", body: JSON.stringify({ filial: 1, nao_esperar: true, items: pendentes.slice(0, 40).map(sku => ({ sku, need: 1 })) }) });
-        let espera = 0; const feitos = new Set();
-        (d.results || []).forEach(r => { const k = String(r.sku || "").trim().toUpperCase(); if (r.pending) { espera = Math.max(espera, Number(r.retry_after) || 5); return; } state.estoque.set(k, r); state.estoqueT.set(k, Date.now()); feitos.add(k); });
-        pendentes = pendentes.filter(k => !feitos.has(k));
-        persistirCacheEstoque();
-        render();
-        if (!feitos.size && !espera) break;
-        for (let s = Math.ceil(espera); pendentes.length && s > 0 && !state.cancelar; s--) {
-          msg(`Estoque: ${total - pendentes.length} de ${total} peça(s). O Apollo aceita 20 consultas por minuto — continuando em ${s} s.`);
-          await sleep(1000);
-        }
-      }
-      msg(state.cancelar ? "Consulta de estoque interrompida." : "");
-    } catch (e) { msg("Falha ao consultar o estoque: " + e.message, "erro"); }
-    finally { state.consultando = false; state.cancelar = false; $("estoqueBtn").textContent = "↻ Atualizar estoque Apollo"; }
+      const d = await api("/api/compras/geral/gerar", { method: "POST", body: JSON.stringify({ fornecedor: soMarca && state.atual ? state.atual.nome : "" }) });
+      msg(d.ja_rodando ? "Já existe uma consulta ao Apollo em andamento." : "Consultando o Apollo em segundo plano: pode fechar a tela que continua.", "ok");
+      setTimeout(andamentoGeral, 800);
+    } catch (e) { msg("Não foi possível iniciar a consulta: " + e.message, "erro"); }
   }
+
+  const dataHora = (iso) => { const t = Date.parse(iso || ""); return isFinite(t) ? new Date(t).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : ""; };
+  function mostrarGeral(g) {
+    if (!g) return;
+    const u = g.ultima || {};
+    $("geralInfo").textContent = u.em
+      ? `de ${dataHora(u.em)} · ${u.codigos} peça(s) que venderam em 30 dias${u.sem_resposta ? ` · ${u.sem_resposta} sem resposta do Apollo` : ""}${u.completa === false ? " · interrompida" : ""}`
+      : "ainda não gerada: clique em Gerar demanda geral (leva de 1 a 2 horas, em segundo plano).";
+    $("geralEmail").checked = !!g.email_ligado;
+    $("geralEmail").title = `Toda segunda: gera à 01:00 e manda às 07:00 para ${(g.destinatarios || []).join(", ") || "(RELATORIO_EMAILS vazio)"}.${g.email_ultimo && g.email_ultimo.em ? " Último envio: " + dataHora(g.email_ultimo.em) + "." : ""} Só o perfil Admin muda.`;
+  }
+
+  let andTimer = null, andRodava = false;
+  async function andamentoGeral() {
+    clearTimeout(andTimer);
+    let g = null;
+    try { g = await api("/api/compras/geral"); } catch (_) {}
+    const a = (g && g.andamento) || {};
+    if (a.rodando) {
+      const total = Number(a.total || 0), feito = Number(a.feito || 0), pct = total ? Math.round(feito * 100 / total) : 0;
+      const min = Math.ceil(Number(a.restante_s || 0) / 60);
+      $("geralAnd").hidden = false;
+      $("geralEtapa").textContent = a.etapa || "Consultando o Apollo";
+      $("geralTexto").textContent = `${feito} de ${total} peças (${pct}%)${a.codigo ? " · agora: " + a.codigo : ""}${min > 0 ? ` · falta ~${min} min` : ""}`;
+      $("geralBarra").style.width = pct + "%";
+      $("geralBtn").disabled = true; $("estoqueBtn").disabled = true;
+      andRodava = true;
+      andTimer = setTimeout(andamentoGeral, 3000);
+      return;
+    }
+    $("geralBtn").disabled = false; $("estoqueBtn").disabled = false;
+    if (g) mostrarGeral(g);
+    if (andRodava) {
+      andRodava = false;
+      $("geralEtapa").textContent = `${a.etapa || "Consulta ao Apollo"}: concluída`;
+      $("geralTexto").textContent = `${a.feito || 0} peças${Number(a.sem_resposta || 0) ? ` · ${a.sem_resposta} sem resposta do Apollo` : ""}`;
+      $("geralBarra").style.width = "100%";
+      setTimeout(() => { if (!andRodava) $("geralAnd").hidden = true; }, 15000);
+      carregarDemanda();
+    } else $("geralAnd").hidden = true;
+    andTimer = setTimeout(andamentoGeral, 15000);
+  }
+
+  // V19.12: peças que venderam e não caem em nenhuma marca; a escolha vale por código, por cima das regras.
+  async function abrirSemMarca(forcar) {
+    const box = $("semMarca");
+    if (!forcar && !box.hidden) { box.hidden = true; return; }
+    box.hidden = false; box.textContent = "Carregando…";
+    try {
+      const d = await api("/api/compras/sem-marca");
+      $("semMarcaBtn").textContent = `Sem marca (${d.itens.length})`;
+      if (!d.itens.length) { box.innerHTML = '<p style="margin:0;color:var(--muted)">Toda peça que vendeu nos últimos 30 dias já tem marca.</p>'; return; }
+      const opts = '<option value="">escolher…</option>' + d.fornecedores.map(f => `<option>${esc(f)}</option>`).join("");
+      box.innerHTML = `<p style="margin:0 0 8px;color:var(--muted)">${d.itens.length} peça(s) venderam em 30 dias e não caem em nenhuma marca. A marca escolhida aqui fica guardada para o código.</p>
+        <table><thead><tr><th>Código</th><th>Descrição</th><th>Curva</th><th class="n">Vendido 30d</th><th>Marca</th></tr></thead><tbody>
+        ${d.itens.map(x => `<tr><td>${esc(x.codigo)}</td><td>${esc(x.descricao)}</td><td>${esc(x.curva || "")}</td><td class="n">${num(x.vendido)}</td><td><select data-marca="${esc(x.codigo)}">${opts}</select></td></tr>`).join("")}</tbody></table>`;
+    } catch (e) { box.textContent = "Não foi possível carregar: " + e.message; }
+  }
+  async function contarSemMarca() { try { const d = await api("/api/compras/sem-marca"); $("semMarcaBtn").textContent = `Sem marca (${d.itens.length})`; } catch (_) {} }
 
   function cfg() { return { minimo: Number($("minimo").value) || 0, prazo: Number($("prazo").value) || 0, cobertura: Number($("cobertura").value) || 0, periodo: Number($("periodo").value) || 60 }; }
   function limiteTransf() { return Math.max(0, Number($("limiteTransf").value) || 0); }
@@ -530,6 +594,25 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
   ["minimo", "prazo", "cobertura"].forEach(id => { $(id).addEventListener("input", () => { state.edits.clear(); render(); }); $(id).addEventListener("change", salvarConfigRapida); });
   ["busca", "soComprar", "completar"].forEach(id => $(id).addEventListener("input", render));
   $("estoqueBtn").addEventListener("click", () => consultarEstoque(true));
+  $("geralBtn").addEventListener("click", async () => {
+    if (!(await nkConfirmar("Gerar a demanda geral agora? O Apollo é consultado devagar (1 a 2 horas, em segundo plano) para não pesar no CRM."))) return;
+    consultarEstoque(false);
+  });
+  $("semMarcaBtn").addEventListener("click", () => abrirSemMarca(false));
+  $("semMarca").addEventListener("change", async e => {
+    const sel = e.target.closest("[data-marca]"); if (!sel || !sel.value) return;
+    try { await api("/api/compras/marca", { method: "POST", body: JSON.stringify({ codigo: sel.dataset.marca, fornecedor: sel.value }) });
+      nkToast(`${sel.dataset.marca} agora é ${sel.value}.`); await abrirSemMarca(true); if (state.atual) carregarDemanda(); }
+    catch (err) { msg("Não foi possível salvar a marca: " + err.message, "erro"); }
+  });
+  $("geralEmail").addEventListener("change", async e => {
+    const ligar = e.target.checked;
+    if (ligar && !(await nkConfirmar("Ligar o e-mail da demanda toda segunda às 07:00? Confira antes se a aba Sem marca está classificada."))) { e.target.checked = false; return; }
+    try { mostrarGeral(await api("/api/compras/geral/email", { method: "POST", body: JSON.stringify({ ligado: ligar }) })); nkToast(ligar ? "E-mail de segunda ligado." : "E-mail de segunda desligado."); }
+    catch (err) { e.target.checked = !ligar; msg("Não foi possível mudar o e-mail: " + err.message, "erro"); }
+  });
+  andamentoGeral();
+  contarSemMarca();
   $("novoBtn").addEventListener("click", () => abrirEditor(true));
   $("editarBtn").addEventListener("click", () => abrirEditor(false));
   $("edCancelar").addEventListener("click", () => $("editor").classList.add("hidden"));
