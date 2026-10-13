@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.10-RECONFERIR-APOLLO"
+APP_VERSION = "19.11-PROMO-SEM-ESTOQUE-E-ANDAMENTO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -9725,16 +9725,51 @@ FULL_APOLLO_CACHE: dict[str, tuple[float, float, str]] = {}   # código -> (quan
 FULL_APOLLO_CACHE_LOCK = threading.Lock()
 
 
+# V19.11: andamento da leitura do Apollo (Montar agora / rotina / reconferência) para a tela.
+FULL_ANDAMENTO: dict[str, Any] = {}
+FULL_ANDAMENTO_LOCK = threading.Lock()
+
+
+def full_remessa_andamento() -> dict[str, Any]:
+    with FULL_ANDAMENTO_LOCK:
+        a = dict(FULL_ANDAMENTO)
+    if a.get("rodando"):
+        falta = max(0, int(a.get("total") or 0) - int(a.get("feito") or 0))
+        a["restante_s"] = int(falta * float(a.get("intervalo_s") or 0))
+    return a
+
+
+def _full_andamento(**campos: Any) -> None:
+    with FULL_ANDAMENTO_LOCK:
+        FULL_ANDAMENTO.update(campos)
+
+
 def full_remessa_estoque_apollo(codigos: set[str], prazo_s: float = 600,
                                 locais: dict[str, str] | None = None, intervalo_s: float = FULL_APOLLO_INTERVALO,
-                                reusar_s: float = 0) -> dict[str, Any]:
+                                reusar_s: float = 0, etapa: str = "Montando a remessa") -> dict[str, Any]:
     """V19.03: disponível na revenda 1 (Araçatuba) por código. Fora do DB_LOCK.
     Casa sem resposta / erro / prazo estourado = None, nunca zero.
     V19.08: `intervalo_s` entre consultas reais; `reusar_s` > 0 aproveita o lido há menos que isso."""
     out: dict[str, Any] = {}
     fim = time.monotonic() + max(0.0, float(prazo_s))
+    lista = sorted({_full_codigo(c) for c in codigos if _full_codigo(c)})
+    with FULL_ANDAMENTO_LOCK:
+        FULL_ANDAMENTO.clear()
+        FULL_ANDAMENTO.update({"rodando": True, "etapa": etapa, "total": len(lista), "feito": 0, "codigo": "",
+                               "sem_resposta": 0, "inicio": now_iso(), "fim": "", "intervalo_s": float(intervalo_s)})
+    try:
+        _full_estoque_apollo_laco(lista, out, fim, intervalo_s, reusar_s, locais)
+    finally:
+        sem = sum(1 for v in out.values() if v is None)
+        _full_andamento(rodando=False, fim=now_iso(), codigo="", sem_resposta=sem, feito=len(out))
+    return out
+
+
+def _full_estoque_apollo_laco(lista: list[str], out: dict[str, Any], fim: float, intervalo_s: float,
+                              reusar_s: float, locais: dict[str, str] | None) -> None:
     primeira = True
-    for cod in sorted({_full_codigo(c) for c in codigos if _full_codigo(c)}):
+    for n, cod in enumerate(lista):
+        _full_andamento(feito=n, codigo=cod)
         out[cod] = None
         if reusar_s > 0:
             with FULL_APOLLO_CACHE_LOCK:
@@ -9775,7 +9810,6 @@ def full_remessa_estoque_apollo(codigos: set[str], prazo_s: float = 600,
                           if str(r.get("localizacao") or "").strip().strip(".")), "")
             with FULL_APOLLO_CACHE_LOCK:
                 FULL_APOLLO_CACHE[cod] = (time.monotonic(), out[cod], loc_c)
-    return out
 
 
 _FULL_CONTA = "removido=0 AND confirmado=1 AND COALESCE(qtd_admin, qtd_sugerida) > 0"
@@ -10151,7 +10185,8 @@ def full_remessa_reconferir(remessa_id: int, prazo_s: float = 600,
         rows = _full_remessa_itens_ordem(rid)
     cods = {_full_codigo(c.get("codigo")) for r in rows if _full_item_conta(r) > 0 for c in _full_item_comps(r)}
     cods.discard("")
-    disp = full_remessa_estoque_apollo(cods, prazo_s=prazo_s, intervalo_s=intervalo_s, reusar_s=0)
+    disp = full_remessa_estoque_apollo(cods, prazo_s=prazo_s, intervalo_s=intervalo_s, reusar_s=0,
+                                      etapa="Conferindo o Apollo antes de agendar")
     with DB_LOCK:
         _full_remessa_aberta_ou_erro(rid)
         rows = _full_remessa_itens_ordem(rid)
@@ -22903,6 +22938,17 @@ def promo_renovacao_payload(hoje: date | None = None) -> dict[str, Any]:
         linhas = {str(r["mlb"]): dict(r) for r in DB.execute("SELECT * FROM promo_renovacao_v1873").fetchall()}
         retrato = {str(r["item_id"]): dict(r) for r in DB.execute(
             "SELECT item_id, titulo, sku, preco, status, estoque FROM ml_visitas_item_v1868").fetchall()}
+        # V19.11: estoque mais recente de cada anúncio (histórico da Ruptura, checado até a cada 2 h)
+        # e se ele ficou sem estoque nos últimos 14 dias — para o filtro "Sem estoque" e o aviso
+        # "Voltou ao estoque sem promoção".
+        desde_est = (hoje - timedelta(days=14)).isoformat()
+        estoque_hist: dict[str, dict[str, Any]] = {}
+        for e in DB.execute(
+                "SELECT item_id, dia, sem_estoque, estoque_ultimo, ultimo_sem_estoque FROM ml_estoque_dia_v1872 "
+                "WHERE dia >= ? ORDER BY dia", (desde_est,)).fetchall():
+            h = estoque_hist.setdefault(str(e["item_id"]), {"zerou": False})
+            h["zerou"] = h["zerou"] or int(e["sem_estoque"] or 0) > 0
+            h.update(dia=e["dia"], estoque=e["estoque_ultimo"], ultimo_sem=bool(e["ultimo_sem_estoque"]))
         historico = [dict(r) for r in DB.execute(
             "SELECT * FROM promo_auto_log_v1873 ORDER BY id DESC LIMIT 100").fetchall()]
         renovadas_30 = DB.execute("SELECT COUNT(*) FROM promo_auto_log_v1873 WHERE acao='renovada' AND dia >= ?",
@@ -23014,6 +23060,18 @@ def promo_renovacao_payload(hoje: date | None = None) -> dict[str, Any]:
         # V19.04: lucro por venda na promoção atual (a da coluna Promoção; sem ela, o preço do
         # anúncio) × cada campanha do ML do anúncio/conta. Sem custo = lucro nulo, nunca "melhor".
         it = itens[-1]
+        # V19.11: estoque (None = não informado, nunca zero) e "voltou ao estoque sem promoção"
+        h_est = estoque_hist.get(mlb)
+        if h_est and h_est.get("estoque") is not None:
+            it["estoque"] = 0 if h_est.get("ultimo_sem") else int(h_est["estoque"])
+            it["estoque_dia"] = h_est.get("dia") or ""
+        else:
+            est_f = foto.get("estoque")
+            it["estoque"] = int(est_f) if isinstance(est_f, (int, float)) and not isinstance(est_f, bool) else None
+            it["estoque_dia"] = ""
+        sem_promo = (it["situacao"] not in ("ativa", "em_campanha")
+                     and (it["dias_para_vencer"] is None or it["dias_para_vencer"] < 0))
+        it["voltou_estoque"] = bool(h_est and h_est.get("zerou") and (it["estoque"] or 0) > 0 and sem_promo)
         base_prod = None
         if produtos:
             base_prod = _promo_produto(produtos, _promo_resolver_sku(mlb, foto.get("sku") or r.get("sku_ml"),
@@ -24691,6 +24749,12 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.send_json(auditoria_payload())
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/full/remessa/andamento":
+            # V19.11: barra de andamento da leitura do Apollo (leve: só memória, sem banco).
+            if self.auth(admin_only=True) is None:
+                return
+            self.send_json({"ok": True, "andamento": full_remessa_andamento()})
             return
         if path == "/api/full/remessa":
             # V19.03: remessa Full automática (somente leitura) + histórico das últimas 10.

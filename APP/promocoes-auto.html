@@ -84,6 +84,17 @@ a{color:inherit}
 .chipf span{font-size:11.5px;color:var(--ink3);font-variant-numeric:tabular-nums}
 .chipf.on{background:var(--navy2);border-color:var(--navy2);color:#fff}
 .chipf.on span{color:#cfe0f5}
+/* V19.11: cartões e filtros menores — os 7 cartões numa linha, filtros mais baixos */
+.kpis{grid-template-columns:repeat(7,minmax(0,1fr));gap:8px}
+@media (max-width:1300px){.kpis{grid-template-columns:repeat(4,minmax(0,1fr))}}
+@media (max-width:640px){.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.kpi{padding:8px 10px;gap:8px;border-radius:11px}
+.kpi-ic{width:28px;height:28px;font-size:14px;border-radius:8px}
+.kpi b{font-size:17px}
+.kpi small{font-size:10.5px;margin-top:2px;white-space:normal;line-height:1.2}
+.chips{gap:4px}
+.chipf{padding:3px 9px;font-size:11.5px;gap:4px}
+.chipf span{font-size:10.5px}
 .selbar{display:none;align-items:center;justify-content:space-between;gap:10px;background:var(--infobg);border:1px solid #c9daf0;border-radius:10px;padding:8px 10px 8px 14px;margin-bottom:10px;font-size:13px;color:var(--navy)}
 .selbar.on{display:flex}
 .tw{overflow-x:auto;border:1px solid var(--line);border-radius:10px}
@@ -516,6 +527,7 @@ function chip(i){
   const s=i.situacao==='pronta'?PRONTA[cfgDe(i.casa||'aracatuba').modo_renovacao]:(SIT[i.situacao]||[i.situacao,'c-sc','']);
   return `<span class="chip ${s[1]}">${s[2]?`<i class=nk-i-${s[2]}></i>`:''}${esc(s[0])}</span>`;
 }
+const semEstoque=i=>i.estoque===0;
 const precisa=i=>i.marcado&&['revisar','estoque','erro'].includes(i.situacao);
 const renovadaRecente=i=>{if(!i.renovado_em)return false;const t=Date.parse(i.renovado_em);return isFinite(t)&&Date.now()-t<=30*864e5};
 const F={todos:['Todos',()=>true],marcados:['Marcados',i=>i.marcado],prontas:['Prontas',i=>i.marcado&&i.situacao==='pronta'],
@@ -525,7 +537,9 @@ const F={todos:['Todos',()=>true],marcados:['Marcados',i=>i.marcado],prontas:['P
   v30:['Em 30 dias',i=>i.dias_para_vencer!=null&&i.dias_para_vencer>=0&&i.dias_para_vencer<=30],
   vencidas:['Vencidas',i=>i.dias_para_vencer!=null&&i.dias_para_vencer<0&&i.situacao!=='ativa'&&i.situacao!=='em_campanha'],
   precisa:['Precisam de você',precisa], avisos:['Avisos de campanha',i=>!!i.aviso], nao:['Não marcados',i=>!i.marcado],
-  campanha:['Campanha do ML dá mais lucro',i=>!!i.campanha_melhor]};   // V19.04
+  campanha:['Campanha do ML dá mais lucro',i=>!!i.campanha_melhor],   // V19.04
+  // V19.11: estoque do anúncio (null = não informado, conta como com estoque)
+  sem_estoque:['Sem estoque',semEstoque], voltou:['Voltou ao estoque sem promoção',i=>!!i.voltou_estoque]};
 
 async function carregar(){
   const antes=D;
@@ -587,12 +601,15 @@ function kpis(){
     k('precisa','alert','warn',M.filter(precisa).length,'Precisam de você')+
     k('avisos','bell','bad',L.filter(i=>i.aviso).length,'Avisos de campanha')+
     k('renovadas','check','ok',L.filter(renovadaRecente).length,'Renovadas em 30 dias')+
-    k('campanha','tag','ok',L.filter(i=>i.campanha_melhor).length,'Campanha do ML dá mais lucro');   // V19.04: conta só a conta filtrada (resumo.campanha_mais_lucro = todas)
+    k('campanha','tag','ok',L.filter(i=>i.campanha_melhor).length,'Campanha do ML dá mais lucro')+
+    k('voltou','bell','or',L.filter(i=>i.voltou_estoque).length,'Voltaram ao estoque sem promoção');   // V19.11   // V19.04: conta só a conta filtrada (resumo.campanha_mais_lucro = todas)
   document.querySelectorAll('#kpis [data-t]').forEach(e=>e.onclick=()=>{tab=tab===e.dataset.t?'todos':e.dataset.t;pagina=1;kpis();render();$('lista').scrollIntoView({behavior:'smooth',block:'start'})});
 }
+// V19.11: "Esconder sem estoque" ligado por padrão (lembrado no navegador)
+let escondeSemEst=true; try{ escondeSemEst=localStorage.getItem('nk_promo_esconde_sem_est_v1911')!=='0' }catch(e){}
 function filtrados(){
   const termo=semAcento(q.trim()), dig=termo.replace(/\D/g,'');
-  return base().filter(F[tab][1]).filter(i=>{
+  return base().filter(F[tab][1]).filter(i=>!escondeSemEst||tab==='sem_estoque'||!semEstoque(i)).filter(i=>{
     if(!termo) return true;
     if(dig.length>=6&&i.mlb.replace(/\D/g,'').includes(dig)) return true;
     return semAcento([i.mlb,i.sku,i.titulo].join(' ')).includes(termo);
@@ -630,7 +647,9 @@ async function aceitarCampanha(pid,mlb,btn){
 }
 function render(){
   const L=base();
-  $('tabs').innerHTML=Object.keys(F).filter(k=>k==='todos'||k===tab||L.some(F[k][1])).map(k=>`<button class="chipf ${tab===k?'on':''}" data-k="${k}">${F[k][0]} <span>${num(L.filter(F[k][1]).length)}</span></button>`).join('');
+  $('tabs').innerHTML=Object.keys(F).filter(k=>k==='todos'||k===tab||L.some(F[k][1])).map(k=>`<button class="chipf ${tab===k?'on':''}" data-k="${k}">${F[k][0]} <span>${num(L.filter(F[k][1]).filter(i=>!escondeSemEst||k==='sem_estoque'||!semEstoque(i)).length)}</span></button>`).join('')+
+    `<label class="chipf" style="cursor:pointer" title="Anúncios com estoque 0 no ML saem de todos os filtros (menos o Sem estoque)"><input type="checkbox" id="escSemEst" ${escondeSemEst?'checked':''} style="margin:0 4px 0 0;vertical-align:-2px">Esconder sem estoque</label>`;
+  $('escSemEst').onchange=e=>{escondeSemEst=e.target.checked;try{localStorage.setItem('nk_promo_esconde_sem_est_v1911',escondeSemEst?'1':'0')}catch(x){};pagina=1;render()};
   document.querySelectorAll('#tabs .chipf').forEach(b=>b.onclick=()=>{tab=b.dataset.k;pagina=1;kpis();render()});
   const R=filtrados(), paginas=Math.max(1,Math.ceil(R.length/porPagina));
   if(pagina>paginas) pagina=paginas;
@@ -641,7 +660,7 @@ function render(){
   const selecionavel=()=>true;   // V18.76: qualquer linha pode ser selecionada (Remover em lote)
   $('tab').innerHTML=`<thead><tr><th class="c" style="width:34px"><input type="checkbox" id="selTodos" title="Selecionar todos deste filtro" aria-label="Selecionar todos deste filtro"></th><th class="l">Anúncio</th><th>Preço do anúncio</th><th>Promoção</th><th>Vence</th><th>Margem</th><th class="l">Campanha do ML</th><th class="l">Situação</th><th class="l">Renovar sozinha</th></tr></thead><tbody>`+
    (P.map(i=>`<tr class="lin ${i.marcado?'marc':''} ${gavItem&&gavItem.mlb===i.mlb?'aberta':''}" data-linha="${i.mlb}" title="Clique para ver margem e lucro"><td class="c">${selecionavel(i)?`<input type="checkbox" data-m="${i.mlb}" ${marcados.has(i.mlb)?'checked':''} aria-label="Selecionar ${i.mlb}">`:''}</td>
-    <td class="l ttl">${esc(i.titulo||'(título ainda não coletado)')}<div class="mlb">${i.mlb}${i.sku?' · SKU '+esc(i.sku):''}${seloConta(i)}</div></td>
+    <td class="l ttl">${esc(i.titulo||'(título ainda não coletado)')}<div class="mlb">${i.mlb}${i.sku?' · SKU '+esc(i.sku):''}${seloConta(i)}</div>${i.estoque!=null?`<div class="sub2" style="${i.estoque===0?'color:var(--neg);font-weight:600':''}">${i.estoque===0?'Sem estoque no ML':num(i.estoque)+' em estoque'}</div>`:''}${i.voltou_estoque?`<div class="aviso"><i class=nk-i-bell></i><span>Voltou ao estoque e está sem promoção</span></div>`:''}</td>
     <td>${brl(i.preco_anuncio)}</td>
     <td><b>${brl(i.preco)}</b>${i.lucro_promo!=null?`<div class="sub2">lucro ${brl(i.lucro_promo)}/venda</div>`:''}${i.desconto!=null?`<div class="sub2">${pct(i.desconto)} off</div>`:''}${i.situacao==='em_campanha'&&i.promo_preco?`<div class="sub2" style="color:var(--warn)">na campanha: ${brl(i.promo_preco)}</div>`:''}${i.marcado?`<div style="margin-top:4px"><button class="btn mini" data-preco="${i.mlb}"><i class=nk-i-pencil></i> alterar</button></div>`:''}</td>
     <td>${vence(i)}</td>

@@ -492,6 +492,10 @@ html[data-tema="escuro"] [style*="color: #12345B" i]{color:#C0CCD9!important}
           <button type="button" class="nk-btn" id="rfRecebida" hidden>Marcar recebida</button>
         </div>
       </div>
+      <div id="rfAndamento" hidden style="margin-top:12px;padding:10px 12px;border:1px solid var(--nk-line, #DCE5EF);border-radius:10px">
+        <div style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:14px"><b id="rfAndEtapa"></b><span id="rfAndTexto" style="color:var(--nk-ink2)"></span></div>
+        <div style="margin-top:6px;height:10px;border-radius:5px;background:var(--nk-line, #DCE5EF);overflow:hidden"><div id="rfAndBarra" style="height:100%;width:0;background:#F28B18;transition:width .4s"></div></div>
+      </div>
       <div id="rfCorpo" style="margin-top:12px;color:var(--nk-ink2)">Carregando...</div>
     </section>
     <section id="dropZone" class="upload-panel" aria-labelledby="uploadTitle">
@@ -1695,6 +1699,38 @@ html[data-tema="escuro"] [style*="color: #12345B" i]{color:#C0CCD9!important}
         return data;
       }
 
+      // V19.11: barra de andamento da leitura do Apollo (Montar agora, rotina e conferência do agendar).
+      let andTimer = null, andRodava = false;
+      async function andamento() {
+        clearTimeout(andTimer);
+        let a = null;
+        try { a = (await chamar("/api/full/remessa/andamento")).andamento || {}; } catch (e) { a = null; }
+        const box = $("rfAndamento");
+        if (a && a.rodando) {
+          const total = Number(a.total || 0), feito = Number(a.feito || 0);
+          const pct = total ? Math.round(feito * 100 / total) : 0;
+          const min = Math.ceil(Number(a.restante_s || 0) / 60);
+          box.hidden = false;
+          $("rfAndEtapa").textContent = a.etapa || "Consultando o Apollo";
+          $("rfAndTexto").textContent = `${feito} de ${total} códigos (${pct}%)${a.codigo ? " · agora: " + a.codigo : ""}${min > 0 ? ` · falta ~${min} min` : ""}`;
+          $("rfAndBarra").style.width = pct + "%";
+          andRodava = true;
+          andTimer = setTimeout(andamento, 3000);
+          return;
+        }
+        if (andRodava && a) {
+          andRodava = false;
+          box.hidden = false;
+          $("rfAndEtapa").textContent = `${a.etapa || "Consulta ao Apollo"}: concluída`;
+          $("rfAndTexto").textContent = `${a.feito || 0} códigos${Number(a.sem_resposta || 0) ? ` · ${a.sem_resposta} sem resposta do Apollo` : ""}`;
+          $("rfAndBarra").style.width = "100%";
+          setTimeout(() => { if (!andRodava) box.hidden = true; }, 15000);
+          carregar();
+        } else if (!andRodava) box.hidden = true;
+        andTimer = setTimeout(andamento, 15000);
+      }
+      andamento();
+
       async function carregar() {
         try { remessa = (await chamar("/api/full/remessa")).remessa; desenhar(); }
         catch (e) { $("rfCorpo").textContent = `Não foi possível ler a remessa: ${e.message}`; }
@@ -1817,6 +1853,7 @@ html[data-tema="escuro"] [style*="color: #12345B" i]{color:#C0CCD9!important}
         const bt = $("rfMontar"); bt.disabled = true;
         try {
           const d = await chamar("/api/full/remessa/montar", {});
+          setTimeout(andamento, 800);
           aviso(d.ja_rodando ? "A remessa já está sendo montada." : "Montando a remessa. O Apollo é consultado devagar para não pesar no CRM: a tela atualiza sozinha quando terminar.", "info");
           // V19.08: a montagem leva minutos; confere a cada 30 s até a remessa mudar (máx. 30 min).
           const antes = remessa && remessa.montada_em;
@@ -1843,6 +1880,7 @@ html[data-tema="escuro"] [style*="color: #12345B" i]{color:#C0CCD9!important}
         try {
           const antesRec = (remessa.reconferencia || {}).em;
           await chamar("/api/full/remessa/reconferir", { remessa_id: remessa.remessa_id });
+          setTimeout(andamento, 800);
           aviso("Conferindo o disponível no Apollo antes de agendar...", "info");
           for (let v = 0; v < 120; v++) {
             await new Promise((ok) => setTimeout(ok, 5000));

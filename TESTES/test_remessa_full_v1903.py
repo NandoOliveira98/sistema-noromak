@@ -519,3 +519,31 @@ class ReconferirAoAgendar(Calculo):
         from base import RAIZ
         html = (RAIZ / "APP" / "analise-full.html").read_text(encoding="utf-8")
         self.assertIn("/api/full/remessa/reconferir", html)
+
+
+class AndamentoApollo(Calculo):
+    """V19.11: a tela acompanha a leitura do Apollo (13/10: 'ficamos às cegas')."""
+
+    def test_andamento_conta_codigo_a_codigo(self):
+        orig, vistos = S.crm_stock_lookup, []
+
+        def falso(cod, op="", wait_seconds=0.0):
+            vistos.append(dict(S.full_remessa_andamento()))
+            return {"estoques": [{"revenda": 1, "disponivel": 1 if cod != "C" else None}],
+                    "casas_sem_resposta": [] if cod != "C" else [1]}
+        S.crm_stock_lookup = falso
+        try:
+            S.full_remessa_estoque_apollo({"A", "B", "C"}, prazo_s=0, intervalo_s=0, etapa="Teste")
+        finally:
+            S.crm_stock_lookup = orig
+        self.assertEqual([(v["feito"], v["codigo"], v["total"], v["rodando"]) for v in vistos],
+                         [(0, "A", 3, True), (1, "B", 3, True), (2, "C", 3, True)])
+        fim = S.full_remessa_andamento()
+        self.assertFalse(fim["rodando"])
+        self.assertEqual((fim["feito"], fim["sem_resposta"], fim["etapa"]), (3, 1, "Teste"))
+
+    def test_rota_e_tela(self):
+        from base import RAIZ
+        html = (RAIZ / "APP" / "analise-full.html").read_text(encoding="utf-8")
+        self.assertIn("/api/full/remessa/andamento", html)
+        self.assertIn('id="rfAndamento"', html)
