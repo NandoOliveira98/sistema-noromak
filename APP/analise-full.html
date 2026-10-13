@@ -1817,8 +1817,17 @@ html[data-tema="escuro"] [style*="color: #12345B" i]{color:#C0CCD9!important}
         const bt = $("rfMontar"); bt.disabled = true;
         try {
           const d = await chamar("/api/full/remessa/montar", {});
-          aviso(d.ja_rodando ? "A remessa já está sendo montada." : "Montando a remessa (consulta o Apollo). Atualizo em 20 s.", "info");
-          setTimeout(carregar, 20000);
+          aviso(d.ja_rodando ? "A remessa já está sendo montada." : "Montando a remessa. O Apollo é consultado devagar para não pesar no CRM: a tela atualiza sozinha quando terminar.", "info");
+          // V19.08: a montagem leva minutos; confere a cada 30 s até a remessa mudar (máx. 30 min).
+          const antes = remessa && remessa.montada_em;
+          let voltas = 0;
+          const conferir = async () => {
+            voltas += 1;
+            await carregar();
+            if ((remessa && remessa.montada_em) !== antes) { aviso("Remessa montada.", "ok"); return; }
+            if (voltas < 60) setTimeout(conferir, 30000);
+          };
+          setTimeout(conferir, 30000);
         } catch (e) { aviso(e.message, "erro"); }
         finally { bt.disabled = false; }
       });

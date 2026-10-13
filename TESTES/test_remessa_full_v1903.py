@@ -219,6 +219,28 @@ class Rodada(Calculo):
             S.crm_stock_lookup = orig
         self.assertEqual(locais, {"A": "ZZ.9.14"})
 
+    def test_v1908_espaca_consultas_e_reaproveita(self):
+        orig, dormir = S.crm_stock_lookup, S.time.sleep
+        chamadas, esperas = [], []
+        S.crm_stock_lookup = lambda cod, op="", wait_seconds=0.0: chamadas.append(cod) or {
+            "estoques": [{"revenda": 1, "disponivel": 3, "localizacao": "L1"}], "casas_sem_resposta": []}
+        S.time.sleep = lambda s: esperas.append(s)
+        S.FULL_APOLLO_CACHE.clear()
+        try:
+            S.full_remessa_estoque_apollo({"A", "B", "C"}, prazo_s=100)
+            self.assertEqual(len(chamadas), 3)
+            self.assertEqual(esperas, [S.FULL_APOLLO_INTERVALO] * 2)   # entre as consultas, não antes
+            locais = {}
+            e = S.full_remessa_estoque_apollo({"A", "B", "C", "D"}, prazo_s=100, locais=locais, reusar_s=3600)
+            self.assertEqual(chamadas[3:], ["D"])                       # só o que faltava
+            self.assertEqual(e, {"A": 3.0, "B": 3.0, "C": 3.0, "D": 3.0})
+            self.assertEqual(locais["A"], "L1")
+            S.full_remessa_estoque_apollo({"A"}, prazo_s=100)            # sem reuso: lê de novo
+            self.assertEqual(chamadas[-1], "A")
+        finally:
+            S.crm_stock_lookup, S.time.sleep = orig, dormir
+            S.FULL_APOLLO_CACHE.clear()
+
     def test_v1907_lista_de_separacao(self):
         rows = [
             {"anuncio": "M1", "codigo": "A", "titulo": "Peça A", "confirmado": 1, "removido": 0, "qtd_sugerida": 5,
@@ -262,7 +284,7 @@ class Rodada(Calculo):
         r = S.full_remessa_rodada(HOJE, estoque={"A": 1000})
         orig = S.full_remessa_estoque_apollo
 
-        def lendo(codigos, prazo_s=600, locais=None):
+        def lendo(codigos, prazo_s=600, locais=None, reusar_s=0):
             S.full_remessa_agendar(r["remessa_id"], "2026-10-20", "admin")
             return {"A": 1000}
         S.full_remessa_estoque_apollo = lendo

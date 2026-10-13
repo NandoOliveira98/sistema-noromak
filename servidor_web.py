@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.07-REMESSA-SEPARACAO"
+APP_VERSION = "19.08-REMESSA-APOLLO-LEVE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -9638,14 +9638,39 @@ def _full_remessa_marca() -> tuple:
     return (aberta, int(ag[0] or 0), ag[1])
 
 
+# V19.08: o CRM (mesma VPS) sofria com ~100 consultas seguidas a cada 3 s (13/10, swap e CPU
+# roubada). A montagem espaça as consultas e guarda o resultado 1 h: o "Montar agora" no
+# expediente reaproveita e só vai ao Apollo pelo que falta. Resposta None não é guardada.
+FULL_APOLLO_INTERVALO = 10.0
+FULL_APOLLO_REUSO_S = 3600
+FULL_APOLLO_CACHE: dict[str, tuple[float, float, str]] = {}   # código -> (quando, disponível, localização)
+FULL_APOLLO_CACHE_LOCK = threading.Lock()
+
+
 def full_remessa_estoque_apollo(codigos: set[str], prazo_s: float = 600,
-                                locais: dict[str, str] | None = None) -> dict[str, Any]:
+                                locais: dict[str, str] | None = None, intervalo_s: float = FULL_APOLLO_INTERVALO,
+                                reusar_s: float = 0) -> dict[str, Any]:
     """V19.03: disponível na revenda 1 (Araçatuba) por código. Fora do DB_LOCK.
-    Casa sem resposta / erro / prazo estourado = None, nunca zero."""
+    Casa sem resposta / erro / prazo estourado = None, nunca zero.
+    V19.08: `intervalo_s` entre consultas reais; `reusar_s` > 0 aproveita o lido há menos que isso."""
     out: dict[str, Any] = {}
     fim = time.monotonic() + max(0.0, float(prazo_s))
+    primeira = True
     for cod in sorted({_full_codigo(c) for c in codigos if _full_codigo(c)}):
         out[cod] = None
+        if reusar_s > 0:
+            with FULL_APOLLO_CACHE_LOCK:
+                guardado = FULL_APOLLO_CACHE.get(cod)
+            if guardado and time.monotonic() - guardado[0] <= reusar_s:
+                out[cod] = guardado[1]
+                if locais is not None and guardado[2]:
+                    locais[cod] = guardado[2]
+                continue
+        if not primeira:
+            espera = min(float(intervalo_s), max(0.0, fim - time.monotonic()))
+            if espera > 0:
+                time.sleep(espera)
+        primeira = False
         try:
             stock = crm_stock_lookup(cod, "remessa-full", max(0.0, fim - time.monotonic()))
         except CrmLimiteAtingido:
@@ -9668,6 +9693,10 @@ def full_remessa_estoque_apollo(codigos: set[str], prazo_s: float = 600,
                 locais[cod] = loc
         if sel and FULL_REVENDA not in missing and all(r.get("disponivel") is not None for r in sel):
             out[cod] = sum(float(r.get("disponivel") or 0) for r in sel)
+            loc_c = next((str(r.get("localizacao") or "").strip() for r in sel
+                          if str(r.get("localizacao") or "").strip().strip(".")), "")
+            with FULL_APOLLO_CACHE_LOCK:
+                FULL_APOLLO_CACHE[cod] = (time.monotonic(), out[cod], loc_c)
     return out
 
 
@@ -9724,7 +9753,8 @@ def _full_remessa_conferir_recebidas(hoje: date) -> None:
                        ("Recebida automaticamente (estoque Full subiu).", cab["remessa_id"]))
 
 
-def full_remessa_rodada(hoje: date | None = None, estoque: dict | None = None, prazo_s: float = 600) -> dict[str, Any]:
+def full_remessa_rodada(hoje: date | None = None, estoque: dict | None = None, prazo_s: float = 600,
+                        reusar_s: float = 0) -> dict[str, Any]:
     """V19.03: recalcula (ou abre) a única remessa aberta. Ajuste humano (qtd_admin,
     removido, confirmado de novo) nunca é desfeito. Apollo lido fora do DB_LOCK."""
     hoje = hoje or datetime.now(BR_TZ).date()
@@ -9739,7 +9769,7 @@ def full_remessa_rodada(hoje: date | None = None, estoque: dict | None = None, p
         cods = set(cand.get("codigos") or set())
         for a in (cand.get("anuncios") or []) + (cand.get("novos") or []):
             cods.update(c["codigo"] for c in a.get("componentes") or [])
-        estoque = full_remessa_estoque_apollo(cods, prazo_s=prazo_s, locais=locais)
+        estoque = full_remessa_estoque_apollo(cods, prazo_s=prazo_s, locais=locais, reusar_s=reusar_s)
     calc = full_remessa_calcular(cand, estoque)
     linhas = calc["itens"] + calc["novos"]
     sem_apollo = len({i["codigo"] for i in linhas if i["necessidade"] > 0 and i["estoque_apollo"] is None})
@@ -9922,7 +9952,8 @@ def full_remessa_loop(stop_event: threading.Event) -> None:
                     _full_remessa_schema()
                     ult = DB.execute("SELECT montada_em FROM full_remessa_v1903 ORDER BY remessa_id DESC LIMIT 1").fetchone()
                 if ult is None or str(ult[0] or "")[:10] != hoje:
-                    res = full_remessa_rodada(prazo_s=3000)   # V19.03: worker sem nginx, dá tempo ao Apollo (20/min)
+                    # V19.03: worker sem nginx, dá tempo ao Apollo. V19.08: 1 consulta a cada 10 s, leitura nova.
+                    res = full_remessa_rodada(prazo_s=3000)
                     print(f"[remessa-full] rodada: {res.get('situacao')} {res.get('unidades')} un.", flush=True)
                 full_remessa_avisar()
         except Exception as exc:
@@ -25450,7 +25481,9 @@ class AppHandler(BaseHTTPRequestHandler):
                         return
                     def _montar() -> None:
                         try:
-                            full_remessa_rodada()
+                            # V19.08: em segundo plano, 10 s entre consultas (até 30 min) e reaproveita o
+                            # estoque lido na última hora: o CRM divide a VPS.
+                            full_remessa_rodada(prazo_s=1800, reusar_s=FULL_APOLLO_REUSO_S)
                         except Exception as exc:
                             print(f"[remessa-full] manual: {exc}", file=sys.stderr, flush=True)
                         finally:
