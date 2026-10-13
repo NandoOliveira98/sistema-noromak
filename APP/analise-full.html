@@ -410,9 +410,9 @@
 <!-- V18.65: tema comum (fonte, foco e icones) por ultimo no head. -->
 <link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
 <!-- V18.82: componentes comuns e menu lateral único (nk-menu.js). -->
-<link rel="stylesheet" href="/expedicao/nk-ui.css?v=18.95">
+<link rel="stylesheet" href="/expedicao/nk-ui.css?v=19.13">
 <!-- V18.83: tema claro/escuro, avisos, confirmação e tabela padrão. -->
-<script src="/expedicao/nk-ui.js?v=18.83"></script>
+<script src="/expedicao/nk-ui.js?v=19.13"></script>
 <script defer src="/expedicao/nk-menu.js?v=19.03" data-shell></script>
 <style id="escuro-auto-v1883">
 /* V18.83 — GERADO por FERRAMENTAS_WINDOWS/gerar_modo_escuro.py a partir das cores fixas desta tela.
@@ -1831,10 +1831,9 @@ html[data-tema="escuro"] [style*="color: #12345B" i]{color:#C0CCD9!important}
         if (b.dataset.acao === "sugestao") return enviar("/api/full/remessa/ajustar", { remessa_id: rid, anuncio: an, qtd: null }, "Voltou à quantidade sugerida.", b);
         if (b.dataset.acao === "voltar") return enviar("/api/full/remessa/ajustar", { remessa_id: rid, anuncio: an, removido: false }, null, b);
         if (b.dataset.acao === "naoaceito") {
-          // nkConfirmar não tem campo: o motivo vem do prompt() (esta tela não é a Conferência).
-          const motivo = prompt(`Não aceito no Full: ${cod}\nMotivo (obrigatório):`, "");
+          // V19.13: janela do padrão Noromak no lugar do prompt() do navegador.
+          const motivo = await nkPerguntar(`Não aceito no Full: ${cod}`, { detalhe: "Motivo (obrigatório):", obrigatorio: true, ok: "Marcar não aceito" });
           if (motivo === null) return;
-          if (!motivo.trim()) return aviso("Informe o motivo.", "aviso");
           return enviar("/api/full/nao-aceito", { codigo: cod, motivo: motivo.trim() }, "Marcado como não aceito no Full.", b);
         }
         if (b.dataset.acao === "liberar") {
@@ -1898,9 +1897,12 @@ html[data-tema="escuro"] [style*="color: #12345B" i]{color:#C0CCD9!important}
           await carregar();
         }
         if ((rec.sem_resposta || []).length && !(await nkConfirmar(`O Apollo não respondeu para ${rec.sem_resposta.length} código(s): ${rec.sem_resposta.slice(0, 8).join(", ")}. Agendar mesmo assim?`))) return;
-        const data = prompt("Data agendada no Full (AAAA-MM-DD):", new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" }));
+        // V19.13: calendário no lugar do prompt() do navegador.
+        const data = await nkPerguntar("Data agendada no Full", { tipo: "date", ok: "Marcar agendada",
+          detalhe: "Dia em que a remessa vai ser entregue no Full.", obrigatorio: true,
+          valor: new Date().toLocaleDateString("sv-SE", { timeZone: "America/Sao_Paulo" }),
+          validar: (v) => /^\d{4}-\d{2}-\d{2}$/.test(v) ? "" : "Escolha uma data." });
         if (data === null) return;
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(data.trim())) return aviso("Data no formato AAAA-MM-DD.", "aviso");
         enviar("/api/full/remessa/agendar", { remessa_id: remessa.remessa_id, data: data.trim() }, "Remessa marcada como agendada.", $("rfAgendar"));
       });
 

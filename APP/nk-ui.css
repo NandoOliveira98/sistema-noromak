@@ -140,6 +140,9 @@ table.nk-tab{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nu
 .nk-dialogo{background:var(--nk-tile);color:var(--nk-ink);border:1px solid var(--nk-line);border-radius:14px;box-shadow:var(--nk-sombra2);width:min(460px,100%);padding:20px 20px 16px;font:13.5px/1.5 var(--nk-font);max-height:calc(100vh - 32px);overflow:auto}
 .nk-dialogo h2{margin:0 0 8px;font-size:16px;color:var(--nk-head);line-height:1.3}
 .nk-dialogo-txt{white-space:pre-line;color:var(--nk-ink2);word-break:break-word}
+.nk-dialogo-campo{width:100%;margin-top:10px;padding:9px 11px;border:1px solid var(--nk-line);border-radius:9px;background:var(--nk-tile);color:var(--nk-ink);font:14px var(--nk-font);box-sizing:border-box}
+.nk-dialogo-campo:focus{outline:2px solid var(--nk-acc, #F28B18);outline-offset:1px}
+.nk-dialogo-erro{margin-top:6px;color:#b42318;font-size:12.5px}
 .nk-dialogo-acoes{display:flex;justify-content:flex-end;gap:8px;margin-top:18px;flex-wrap:wrap}
 .nk-btn.perigo-cheio{background:var(--nk-bad);border-color:var(--nk-bad);color:#fff}
 .nk-btn.perigo-cheio:hover{filter:brightness(.92)}

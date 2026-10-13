@@ -152,6 +152,48 @@
     });
   }
 
+  /* ---------- 3b. Pergunta com campo (V19.13: no lugar do prompt() do navegador) ---------- */
+  // await nkPerguntar("Data agendada no Full", { tipo: "date", valor: "2026-10-15" }) -> texto ou null (cancelou).
+  function nkPerguntar(titulo, opcoes = {}) {
+    return new Promise(resolver => {
+      quandoPronto(() => {
+        const anterior = document.activeElement;
+        const fundo = document.createElement("div");
+        fundo.className = "nk-dialogo-fundo";
+        const tipo = ["date", "number", "email", "text"].includes(opcoes.tipo) ? opcoes.tipo : "text";
+        fundo.innerHTML = `<form class="nk-dialogo" role="dialog" aria-modal="true" aria-labelledby="nkPergTit" novalidate>
+          <h2 id="nkPergTit">${esc(titulo)}</h2>${opcoes.detalhe ? `<div class="nk-dialogo-txt">${esc(opcoes.detalhe)}</div>` : ""}
+          <input class="nk-dialogo-campo" type="${tipo}" ${tipo === "text" ? 'inputmode="' + esc(opcoes.inputmode || "text") + '"' : ""}
+            placeholder="${esc(opcoes.placeholder || "")}" ${opcoes.min ? `min="${esc(opcoes.min)}"` : ""} aria-label="${esc(titulo)}">
+          <div class="nk-dialogo-erro" hidden></div>
+          <div class="nk-dialogo-acoes"><button type="button" class="nk-btn" data-r="0">${esc(opcoes.cancelar || "Cancelar")}</button>
+          <button type="submit" class="nk-btn pri">${esc(opcoes.ok || "Confirmar")}</button></div></form>`;
+        const campo = fundo.querySelector("input");
+        campo.value = opcoes.valor ?? "";
+        const erro = fundo.querySelector(".nk-dialogo-erro");
+        const fim = r => {
+          document.removeEventListener("keydown", teclas, true);
+          fundo.remove();
+          try { anterior && anterior.focus && anterior.focus(); } catch (_) {}
+          resolver(r);
+        };
+        const teclas = e => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); fim(null); } };
+        fundo.querySelector("form").addEventListener("submit", e => {
+          e.preventDefault();
+          const v = campo.value.trim();
+          const msg = (opcoes.obrigatorio && !v) ? "Preencha o campo." : (typeof opcoes.validar === "function" ? opcoes.validar(v) : "");
+          if (msg) { erro.textContent = msg; erro.hidden = false; campo.focus(); return; }
+          fim(v);
+        });
+        fundo.addEventListener("click", e => { if (e.target.closest('button[data-r="0"]') || e.target === fundo) fim(null); });
+        document.addEventListener("keydown", teclas, true);
+        document.body.append(fundo);
+        campo.focus();
+        if (tipo === "text") campo.select();
+      });
+    });
+  }
+
   /* ---------- 4. Tabela padrão ---------- */
   function valorCelula(td) {
     if (!td) return "";
@@ -293,9 +335,10 @@
     }).observe(document.body, { childList: true, subtree: true });
   });
 
-  window.nkUI = { versao: "18.83", tema: nkTema, toast: nkToast, confirmar: nkConfirmar, tabela: nkTabela, classificar };
+  window.nkUI = { versao: "18.83", tema: nkTema, toast: nkToast, confirmar: nkConfirmar, perguntar: nkPerguntar, tabela: nkTabela, classificar };
   window.nkTema = nkTema;
   window.nkToast = nkToast;
   window.nkConfirmar = nkConfirmar;
+  window.nkPerguntar = nkPerguntar;
   window.nkTabela = nkTabela;
 })();

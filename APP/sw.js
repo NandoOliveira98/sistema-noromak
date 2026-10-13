@@ -1,4 +1,4 @@
-const CACHE = "noromak-expedicao-pwa-19.03";
+const CACHE = "noromak-expedicao-pwa-19.13";
 // V18.82: telas do Admin com endereço próprio — sem rede, caem na cópia do Admin.
 const ROTAS_ADMIN_V1882 = /\/(dashboard|pedidos-pendentes|pedidos-dia|coleta|etiquetas|historico|historico-sku|produtos|kits|integracoes|usuarios|seguranca)\/?$/i;
 const SHELL = [

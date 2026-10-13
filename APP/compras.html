@@ -102,9 +102,9 @@ td.outra{color:#5F7186}td.outra.tem{color:#1F57A5;font-weight:700}
 <!-- V18.65: tema comum (fonte, foco e icones) por ultimo no head. -->
 <link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
 <!-- V18.82: componentes comuns e menu lateral único (nk-menu.js). -->
-<link rel="stylesheet" href="/expedicao/nk-ui.css?v=18.95">
+<link rel="stylesheet" href="/expedicao/nk-ui.css?v=19.13">
 <!-- V18.83: tema claro/escuro, avisos, confirmação e tabela padrão. -->
-<script src="/expedicao/nk-ui.js?v=18.83"></script>
+<script src="/expedicao/nk-ui.js?v=19.13"></script>
 <script defer src="/expedicao/nk-menu.js?v=19.03" data-shell></script>
 <style id="escuro-v1883">
 /* V18.83 — modo escuro desta tela (cores fixas do código; as variáveis vêm do nk-ui.css). */
@@ -622,11 +622,13 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
     try { await api("/api/compras/fornecedores", { method: "POST", body: JSON.stringify({ nome: state.atual.nome, excluir: true }) }); $("editor").classList.add("hidden"); await carregarFornecedores(); }
     catch (e) { msg("Não foi possível excluir: " + e.message, "erro"); }
   });
-  $("linhas").addEventListener("click", e => {
+  $("linhas").addEventListener("click", async e => {
     const b = e.target.closest("[data-editar-custo]");
     if (!b) return;
     const item = state.dados.itens.find(i => i.codigo === b.dataset.editarCusto);
-    const texto = prompt(`Custo unitário de ${b.dataset.editarCusto} (vazio apaga o custo digitado):`, item && item.custo_origem === "manual" ? String(item.custo).replace(".", ",") : "");
+    // V19.13: janela do padrão Noromak no lugar do prompt() do navegador.
+    const texto = await nkPerguntar(`Custo unitário de ${b.dataset.editarCusto}`, { detalhe: "Vazio apaga o custo digitado.", inputmode: "decimal",
+      placeholder: "R$ 0,00", ok: "Salvar custo", valor: item && item.custo_origem === "manual" ? String(item.custo).replace(".", ",") : "" });
     if (texto !== null) salvarCusto(b.dataset.editarCusto, texto.trim());
   });
   $("linhas").addEventListener("change", e => {
