@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.13-JANELA-PADRAO"
+APP_VERSION = "19.14-META-MENSAL"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -15760,6 +15760,52 @@ def vendas_sync_loop(stop_event: threading.Event) -> None:
             break
 
 
+# V19.14: meta mensal de faturamento no Dashboard (decisões do dono, 13/10): uma meta por mês,
+# de TODAS as vendas (ML Araçatuba + Bauru + Shopee), definida pelo perfil Admin. Mês sem meta
+# repete a do mês anterior mais recente. A barra é do mês corrente, independente do filtro da tela.
+def _meta_schema() -> None:
+    DB.execute("CREATE TABLE IF NOT EXISTS meta_mensal_v1914 (mes TEXT PRIMARY KEY, valor REAL NOT NULL, "
+               "por TEXT NOT NULL DEFAULT '', em TEXT NOT NULL)")
+
+
+def meta_mensal_payload(hoje: date | None = None) -> dict[str, Any]:
+    """Sob DB_LOCK."""
+    hoje = hoje or datetime.now(BR_TZ).date()
+    _meta_schema()
+    mes = hoje.strftime("%Y-%m")
+    r = DB.execute("SELECT mes, valor FROM meta_mensal_v1914 WHERE mes<=? ORDER BY mes DESC LIMIT 1", (mes,)).fetchone()
+    meta = float(r["valor"]) if r else None
+    inicio = hoje.replace(day=1)
+    prox = (inicio + timedelta(days=32)).replace(day=1)
+    dias_mes = (prox - inicio).days
+    fat = float((vendas_dashboard_payload(inicio.isoformat(), hoje.isoformat(), "", "todas").get("resumo") or {}).get("faturamento") or 0)
+    restantes = dias_mes - hoje.day + 1   # hoje ainda conta (o dia não fechou)
+    falta = max(0.0, meta - fat) if meta else None
+    return {"mes": mes, "meta": meta, "meta_do_mes": bool(r and r["mes"] == mes), "faturado": round(fat, 2),
+            "percentual": round(fat / meta * 100, 1) if meta else None, "falta": round(falta, 2) if falta is not None else None,
+            "dias_mes": dias_mes, "dia": hoje.day, "dias_restantes": restantes,
+            "ritmo_necessario": round(falta / restantes, 2) if falta and restantes > 0 else (0.0 if meta else None),
+            "projecao": round(fat / hoje.day * dias_mes, 2) if hoje.day else None,
+            "esperado_hoje": round(meta * (hoje.day - 1) / dias_mes, 2) if meta else None}
+
+
+def meta_mensal_salvar(mes: str, valor: Any, usuario: str) -> None:
+    if not re.match(r"^\d{4}-\d{2}$", str(mes or "")):
+        raise ValueError("Mês inválido (AAAA-MM).")
+    texto = str(valor if valor is not None else "").strip().replace("R$", "").replace(" ", "")
+    if re.fullmatch(r"\d{1,3}(\.\d{3})+", texto):   # "300.000" digitado = trezentos mil, não 300
+        texto = texto.replace(".", "")
+    v = float(valor) if isinstance(valor, (int, float)) and not isinstance(valor, bool) else _apollo_number(texto)
+    if v is None or v <= 0 or v > 1_000_000_000:
+        raise ValueError("Meta inválida.")
+    with DB_LOCK:
+        _meta_schema()
+        DB.execute("INSERT INTO meta_mensal_v1914(mes,valor,por,em) VALUES(?,?,?,?) ON CONFLICT(mes) DO UPDATE SET "
+                   "valor=excluded.valor, por=excluded.por, em=excluded.em", (mes, round(v, 2), str(usuario or ""), now_iso()))
+        DB.commit()
+    audit(str(usuario or "sistema"), "dashboard.meta", json.dumps({"mes": mes, "valor": round(v, 2)}))
+
+
 def vendas_dashboard_payload(date_from: str, date_to: str, marketplace: str = "", conta: str = "todas") -> dict[str, Any]:
     """Resumo de vendas do período (todos os marketplaces ou um) + período anterior.
     V18.98: `conta` = todas, aracatuba (conta NOROMAK + Shopee) ou bauru (NOROMAK_BAURU)."""
@@ -25206,6 +25252,17 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_json({"ok": True, "email": compras_comprador_email(),
                             "limite_transferencia": compras_limite_transferencia()})
             return
+        if path == "/api/dashboard/meta":
+            # V19.14: meta mensal (todas as vendas do mês corrente).
+            if self.auth(admin_only=True) is None:
+                return
+            try:
+                with DB_LOCK:
+                    out = {"ok": True, **meta_mensal_payload()}
+                self.send_json(out)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
         if path == "/api/dashboard/vendas":
             # V17.99: Dashboard de vendas (Mercado Livre e Shopee, com valor).
             ctx = self.auth(admin_only=True)
@@ -25810,6 +25867,22 @@ class AppHandler(BaseHTTPRequestHandler):
                     _compras_estado_gravar("email_ligado", "1" if ligado else "0")
                     audit(ctx["username"], "compras.geral.email", "ligado" if ligado else "desligado")
                     self.send_json({"ok": True, **compras_geral_info()})
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/dashboard/meta":
+            # V19.14: só o perfil Admin define a meta do mês.
+            ctx = self.auth_full_admin()
+            if ctx is None:
+                return
+            try:
+                body = self.read_json() or {}
+                meta_mensal_salvar(str(body.get("mes") or ""), body.get("valor"), ctx["username"])
+                with DB_LOCK:
+                    out = {"ok": True, **meta_mensal_payload()}
+                self.send_json(out)
             except ValueError as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 400)
             except Exception as exc:

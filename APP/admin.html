@@ -631,6 +631,18 @@ body{background:var(--v15-bg)!important}
 .v1799-seg button.ativo .v1799-dot{box-shadow:0 0 0 2px #fff}
 .v1799-legenda{display:flex;align-items:center;gap:12px;font-size:11px;font-weight:750;color:#35546f;flex-wrap:wrap;justify-content:flex-end}
 .v1799-legenda span{white-space:nowrap}
+.meta-v1914{background:#fff;border:1px solid #DCE5EF;border-radius:13px;padding:13px 15px;margin-bottom:13px;box-shadow:0 4px 16px rgba(26,59,89,.045)}
+.meta-v1914-topo{display:flex;justify-content:space-between;align-items:flex-end;gap:10px;flex-wrap:wrap}
+.meta-v1914-topo small{display:block;font-size:11px;font-weight:800;letter-spacing:.06em;text-transform:uppercase;color:#586A7D}
+.meta-v1914-topo b{font-size:20px;color:#12345B}.meta-v1914-dir{display:flex;align-items:center;gap:10px}
+.meta-v1914-pct{font-size:20px;font-weight:800;color:#F28B18}.meta-v1914-pct.ok{color:#1B7A3E}
+.meta-v1914-trilho{position:relative;height:16px;border-radius:8px;background:#E8EEF4;margin-top:10px;overflow:visible}
+.meta-v1914-barra{height:100%;width:0;border-radius:8px;background:linear-gradient(90deg,#1F57A5,#2a78d6);transition:width .6s}
+.meta-v1914-barra.ok{background:linear-gradient(90deg,#1B7A3E,#2EA05A)}
+.meta-v1914-hoje{position:absolute;top:-4px;bottom:-4px;width:3px;border-radius:2px;background:#F28B18}
+.meta-v1914-rodape{margin:8px 0 0;font-size:12.5px;color:#586A7D}
+html[data-tema="escuro"] .meta-v1914{background-color:#18222D!important;border-color:#2A3F56!important}
+html[data-tema="escuro"] .meta-v1914-topo b{color:#E6EEF6}html[data-tema="escuro"] .meta-v1914-trilho{background:#24323F}
 .v1799-canais{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px;margin-bottom:13px}
 .v1799-canal{background:#fff;border:1px solid #DCE5EF;border-radius:13px;padding:11px 15px;box-shadow:0 4px 16px rgba(26,59,89,.045)}
 .v1799-canal-top{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
@@ -1436,6 +1448,17 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
         </div>
       </div>
       <div id="v1799Aviso" class="v1799-aviso" hidden></div>
+      <!-- V19.14: meta mensal de faturamento (todas as vendas do mês, fora do filtro da tela). -->
+      <div id="metaV1914" class="meta-v1914" hidden>
+        <div class="meta-v1914-topo">
+          <div><small id="metaV1914Rot">Meta do mês</small><b id="metaV1914Valores">—</b></div>
+          <div class="meta-v1914-dir"><span id="metaV1914Pct" class="meta-v1914-pct"></span><button type="button" id="metaV1914Editar" class="v1799-sync" title="Só o perfil Admin define a meta">Definir meta</button></div>
+        </div>
+        <div class="meta-v1914-trilho" role="progressbar" aria-valuemin="0" aria-valuemax="100" id="metaV1914Trilho">
+          <div id="metaV1914Barra" class="meta-v1914-barra"></div><i id="metaV1914Hoje" class="meta-v1914-hoje" title="Onde deveria estar hoje para bater a meta"></i>
+        </div>
+        <p id="metaV1914Rodape" class="meta-v1914-rodape"></p>
+      </div>
       <div class="v1799-kpis">
         <div class="v1799-kpi"><small>Faturamento</small><b id="v1799Fat">—</b><span id="v1799FatVar" class="v1799-var"></span></div>
         <div class="v1799-kpi"><small>Pedidos</small><b id="v1799Ped">—</b><span id="v1799PedVar" class="v1799-var"></span></div>
@@ -5164,7 +5187,47 @@ function v1799Variacao(id,atual,anterior,rotulo){
   el.className="v1799-var "+(Math.abs(p)<0.5?"":sobe?"sobe":"desce");
   el.innerHTML=`${sobe?"▲":"▼"} ${Math.abs(p).toLocaleString("pt-BR",{maximumFractionDigits:1})}% <small>vs ${rotulo}</small>`;
 }
+// V19.14: meta mensal — todas as vendas do mês corrente, independente do filtro da tela.
+async function metaV1914Carregar(){
+  try{
+    const r=await fetch("/expedicao/api/dashboard/meta",{credentials:"same-origin",cache:"no-store"});
+    const d=await r.json().catch(()=>({}));if(!r.ok||!d.ok)return;
+    metaV1914Render(d);
+  }catch(_){}
+}
+function metaV1914Render(d){
+  const box=document.getElementById("metaV1914");if(!box)return;box.hidden=false;
+  const nomeMes=new Date(d.mes+"-15T12:00:00").toLocaleDateString("pt-BR",{month:"long"});
+  v151Set("metaV1914Rot",`Meta de ${nomeMes}${d.meta&&!d.meta_do_mes?" (repetida do mês anterior)":""} · todas as vendas`);
+  const barra=document.getElementById("metaV1914Barra"),pct=document.getElementById("metaV1914Pct"),hoje=document.getElementById("metaV1914Hoje");
+  if(!d.meta){
+    v151Set("metaV1914Valores",`${v1799Brl(d.faturado)} vendidos no mês`);pct.textContent="";barra.style.width="0";hoje.hidden=true;
+    v151Set("metaV1914Rodape","Nenhuma meta definida. Clique em Definir meta (perfil Admin).");return;
+  }
+  const p=Math.min(100,d.percentual||0),bateu=(d.percentual||0)>=100;
+  v151Set("metaV1914Valores",`${v1799Brl(d.faturado)} de ${v1799Brl(d.meta)}`);
+  pct.textContent=`${(d.percentual||0).toLocaleString("pt-BR",{maximumFractionDigits:1})}%`;pct.classList.toggle("ok",bateu);
+  barra.style.width=p+"%";barra.classList.toggle("ok",bateu);
+  document.getElementById("metaV1914Trilho").setAttribute("aria-valuenow",String(Math.round(p)));
+  hoje.hidden=false;hoje.style.left=`calc(${Math.min(100,(d.esperado_hoje||0)/d.meta*100)}% - 1px)`;
+  const adiantado=d.faturado>=(d.esperado_hoje||0);
+  v151Set("metaV1914Rodape",bateu
+    ?`Meta batida! ${v1799Brl(d.faturado-d.meta)} acima. Projeção do mês: ${v1799Brl(d.projecao)}.`
+    :`Faltam ${v1799Brl(d.falta)} em ${d.dias_restantes} dia(s) (contando hoje): ${v1799Brl(d.ritmo_necessario)} por dia. ${adiantado?"Acima":"Abaixo"} do ritmo da meta (marca laranja). Projeção do mês: ${v1799Brl(d.projecao)}.`);
+}
+document.addEventListener("click",async e=>{
+  if(!e.target.closest("#metaV1914Editar"))return;
+  const mes=new Date().toLocaleDateString("sv-SE",{timeZone:"America/Sao_Paulo"}).slice(0,7);
+  const v=await nkPerguntar("Meta de faturamento do mês",{detalhe:"Todas as vendas (ML Araçatuba + Bauru + Shopee). Vale para este mês e se repete nos próximos até alguém mudar.",inputmode:"decimal",placeholder:"Ex.: 300.000",ok:"Salvar meta",obrigatorio:true});
+  if(v===null)return;
+  try{
+    const r=await fetch("/expedicao/api/dashboard/meta",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:JSON.stringify({mes,valor:v})});
+    const d=await r.json().catch(()=>({}));if(!r.ok||!d.ok)throw new Error(d.error||`HTTP ${r.status}`);
+    metaV1914Render(d);nkToast("Meta salva.");
+  }catch(err){nkToast("Não foi possível salvar a meta: "+err.message,"erro");}
+});
 async function v1799Carregar(){
+  metaV1914Carregar();
   const de=document.getElementById("v1799De")?.value,ate=document.getElementById("v1799Ate")?.value;if(!de||!ate)return;
   const req=++v1799.req;
   try{
@@ -8455,11 +8518,11 @@ document.addEventListener("DOMContentLoaded",()=>{
     }catch(e){alert("Não foi possível aprovar: "+(e.message||e));}
   };
 
-  window.rejeitarSolicitacaoUsuario = function(id){
+  window.rejeitarSolicitacaoUsuario = async function(id){
     const solicitacoes=lerSolicitacoes();
     const req=solicitacoes.find(s=>s.id===id);
     if(!req)return;
-    const motivo=prompt("Motivo da rejeição (opcional):","");
+    const motivo=await nkPerguntar("Rejeitar a solicitação",{detalhe:"Motivo da rejeição (opcional):",ok:"Rejeitar"});   // V19.13
     if(motivo===null)return;
     const sessao=adminSessao();
     req.Status="Rejeitado";req.RejeitadoEm=agoraISO();req.RejeitadoPor=sessao.Login||sessao.Nome||"admin";req.MotivoRejeicao=txt(motivo);req.Senha="";
@@ -9600,7 +9663,7 @@ async function copiarTokenZebraAdmin(){
   const token=String(document.getElementById("zebraAgentToken")?.textContent||"").trim();
   if(!token||token==="—")return;
   try{await navigator.clipboard.writeText(token);alert("Token do agente Zebra copiado.");}
-  catch(_){prompt("Copie o token abaixo:",token);}
+  catch(_){await nkPerguntar("Copie o token do agente Zebra",{detalhe:"Selecionado: Ctrl+C para copiar.",valor:token,ok:"Fechar",cancelar:"Fechar"});}   // V19.13
 }
 async function renovarTokenZebraAdmin(){
   if(!await nkConfirmar("Renovar o token? O agente instalado precisará ser configurado novamente com o novo token."))return;
@@ -9642,7 +9705,7 @@ async function carregarTokenRoboLinxAdmin(){
 async function copiarTokenRoboLinxAdmin(){
   if(!linxRoboTokenV1860)await carregarTokenRoboLinxAdmin();
   try{await navigator.clipboard.writeText(linxRoboTokenV1860);alert("Token copiado. Cole no robo-config.json do PC do robô.");}
-  catch(_){prompt("Copie o token do robô:",linxRoboTokenV1860);}
+  catch(_){await nkPerguntar("Copie o token do robô",{detalhe:"Selecionado: Ctrl+C para copiar e cole no robo-config.json.",valor:linxRoboTokenV1860,ok:"Fechar",cancelar:"Fechar"});}   // V19.13
 }
 async function renovarTokenRoboLinxAdmin(){
   if(!await nkConfirmar("Renovar o token do robô? O robô para de funcionar até você colar o novo token no robo-config.json."))return;
@@ -9652,7 +9715,7 @@ async function renovarTokenRoboLinxAdmin(){
 /* V18.85: diagnóstico só leitura — token, cliente, Agenda, atendimentos abertos,
    condições de pagamento e títulos (F02). Mostra contagens e nomes de campos, nunca dados. */
 async function testarLinxAdmin(){
-  const doc=(prompt("Testar a Linx (só leitura, nada é gravado).\n\nOpcional: CPF/CNPJ de um cliente que já comprou — testa também a consulta de cliente, os atendimentos dele e os títulos. Vazio = só o resto.","")??null);
+  const doc=(await nkPerguntar("Testar a Linx (só leitura, nada é gravado)",{detalhe:"Opcional: CPF/CNPJ de um cliente que já comprou — testa também a consulta de cliente, os atendimentos dele e os títulos. Vazio = só o resto.",inputmode:"numeric",placeholder:"CPF/CNPJ (opcional)",ok:"Testar"})??null);   // V19.13
   if(doc===null)return;
   const msg=document.getElementById("linxIntegracaoMensagem"),caixa=document.getElementById("linxDiagnostico");
   if(msg)msg.textContent="Testando… (pode levar até 1 minuto)";
