@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.06-CUSTO-ERRO-EM-CACHE"
+APP_VERSION = "19.07-REMESSA-SEPARACAO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -2116,7 +2116,8 @@ def init_db() -> None:
                 agendada_por TEXT NOT NULL DEFAULT '',
                 obs TEXT NOT NULL DEFAULT '',
                 fora_json TEXT NOT NULL DEFAULT '[]',  -- V19.03: o que ficou fora na última rodada
-                sem_apollo INTEGER NOT NULL DEFAULT 0  -- V19.03: códigos sem Apollo na última rodada
+                sem_apollo INTEGER NOT NULL DEFAULT 0, -- V19.03: códigos sem Apollo na última rodada
+                locais_json TEXT NOT NULL DEFAULT '{}' -- V19.07: código -> localização no Apollo (Araçatuba)
             );
             CREATE TABLE IF NOT EXISTS full_remessa_item_v1903 (
                 remessa_id INTEGER NOT NULL,
@@ -2136,6 +2137,7 @@ def init_db() -> None:
                 qtd_admin INTEGER,                -- ajuste humano: a rodada nunca mexe
                 removido INTEGER NOT NULL DEFAULT 0,
                 motivo TEXT NOT NULL DEFAULT '',
+                componentes_json TEXT NOT NULL DEFAULT '[]',  -- V19.07: peças (kit) para a lista de separação
                 PRIMARY KEY(remessa_id, anuncio)
             );
             CREATE TABLE IF NOT EXISTS full_nao_aceito_v1903 (
@@ -9572,7 +9574,8 @@ def full_remessa_calcular(cand: dict[str, Any], estoque: dict[str, Any]) -> dict
                 "novo": 1 if novo else 0, "confirmado": 0 if novo else 1, "venda_30d": int(a["venda_30d"]),
                 "no_full": a.get("no_full"), "a_caminho": int(a.get("a_caminho") or 0), "cobertura_dias": cob,
                 "necessidade": nec, "estoque_apollo": disp, "qtd_sugerida": qtd, "motivo": motivo,
-                "componentes": a["componentes"]}
+                "componentes": a["componentes"],
+                "componentes_json": json.dumps([{"codigo": c["codigo"], "qtd": c["qtd"]} for c in a["componentes"]])}
 
     prep = []
     for a in cand.get("anuncios") or []:
@@ -9611,7 +9614,7 @@ def full_remessa_calcular(cand: dict[str, Any], estoque: dict[str, Any]) -> dict
 # V19.03: remessa Full — rodada, gravação e ajustes do ADMIN.
 FULL_REMESSA_ABERTA = ("montando", "pronta")
 _FULL_ITEM_COLS = ("codigo", "sku", "titulo", "novo", "venda_30d", "no_full", "a_caminho", "cobertura_dias",
-                   "necessidade", "estoque_apollo", "qtd_sugerida", "motivo")
+                   "necessidade", "estoque_apollo", "qtd_sugerida", "motivo", "componentes_json")
 
 
 def _full_remessa_schema() -> None:
@@ -9621,6 +9624,11 @@ def _full_remessa_schema() -> None:
         DB.execute("ALTER TABLE full_remessa_v1903 ADD COLUMN fora_json TEXT NOT NULL DEFAULT '[]'")
     if "sem_apollo" not in cols:
         DB.execute("ALTER TABLE full_remessa_v1903 ADD COLUMN sem_apollo INTEGER NOT NULL DEFAULT 0")
+    if "locais_json" not in cols:
+        DB.execute("ALTER TABLE full_remessa_v1903 ADD COLUMN locais_json TEXT NOT NULL DEFAULT '{}'")
+    icols = {r[1] for r in DB.execute("PRAGMA table_info(full_remessa_item_v1903)").fetchall()}
+    if "componentes_json" not in icols:
+        DB.execute("ALTER TABLE full_remessa_item_v1903 ADD COLUMN componentes_json TEXT NOT NULL DEFAULT '[]'")
 
 
 def _full_remessa_marca() -> tuple:
@@ -9630,7 +9638,8 @@ def _full_remessa_marca() -> tuple:
     return (aberta, int(ag[0] or 0), ag[1])
 
 
-def full_remessa_estoque_apollo(codigos: set[str], prazo_s: float = 600) -> dict[str, Any]:
+def full_remessa_estoque_apollo(codigos: set[str], prazo_s: float = 600,
+                                locais: dict[str, str] | None = None) -> dict[str, Any]:
     """V19.03: disponível na revenda 1 (Araçatuba) por código. Fora do DB_LOCK.
     Casa sem resposta / erro / prazo estourado = None, nunca zero."""
     out: dict[str, Any] = {}
@@ -9651,6 +9660,12 @@ def full_remessa_estoque_apollo(codigos: set[str], prazo_s: float = 600) -> dict
             except (TypeError, ValueError):
                 pass
         sel = [r for r in rows if int(r.get("revenda") or 0) == FULL_REVENDA]
+        if locais is not None:
+            # V19.07: localização da mesma resposta ("...." = casa sem prateleira cadastrada).
+            loc = next((str(r.get("localizacao") or "").strip() for r in sel
+                        if str(r.get("localizacao") or "").strip().strip(".")), "")
+            if loc:
+                locais[cod] = loc
         if sel and FULL_REVENDA not in missing and all(r.get("disponivel") is not None for r in sel):
             out[cod] = sum(float(r.get("disponivel") or 0) for r in sel)
     return out
@@ -9719,11 +9734,12 @@ def full_remessa_rodada(hoje: date | None = None, estoque: dict | None = None, p
         DB.commit()
         marca = _full_remessa_marca()
     cand = full_remessa_candidatos(hoje)
+    locais: dict[str, str] = {}
     if estoque is None:
         cods = set(cand.get("codigos") or set())
         for a in (cand.get("anuncios") or []) + (cand.get("novos") or []):
             cods.update(c["codigo"] for c in a.get("componentes") or [])
-        estoque = full_remessa_estoque_apollo(cods, prazo_s=prazo_s)
+        estoque = full_remessa_estoque_apollo(cods, prazo_s=prazo_s, locais=locais)
     calc = full_remessa_calcular(cand, estoque)
     linhas = calc["itens"] + calc["novos"]
     sem_apollo = len({i["codigo"] for i in linhas if i["necessidade"] > 0 and i["estoque_apollo"] is None})
@@ -9766,8 +9782,14 @@ def full_remessa_rodada(hoje: date | None = None, estoque: dict | None = None, p
                            ("Fora do cálculo desta rodada (mantido pelo ajuste do ADMIN).", rid, anuncio))
             else:
                 DB.execute("DELETE FROM full_remessa_item_v1903 WHERE remessa_id=? AND anuncio=?", (rid, anuncio))
-        DB.execute("UPDATE full_remessa_v1903 SET montada_em=?, obs=?, fora_json=?, sem_apollo=? WHERE remessa_id=?",
-                   (now_iso(), obs, json.dumps(calc["fora"], ensure_ascii=False), sem_apollo, rid))
+        try:
+            loc_ant = json.loads(DB.execute("SELECT locais_json FROM full_remessa_v1903 WHERE remessa_id=?", (rid,)).fetchone()[0] or "{}")
+        except Exception:
+            loc_ant = {}
+        loc_ant.update(locais)   # V19.07: Apollo sem resposta nesta rodada não apaga a prateleira já vista
+        DB.execute("UPDATE full_remessa_v1903 SET montada_em=?, obs=?, fora_json=?, sem_apollo=?, locais_json=? WHERE remessa_id=?",
+                   (now_iso(), obs, json.dumps(calc["fora"], ensure_ascii=False), sem_apollo,
+                    json.dumps(loc_ant, ensure_ascii=False), rid))
         res = _full_remessa_recontar(rid)
         DB.commit()
     res["obs"] = obs
@@ -9791,11 +9813,52 @@ def full_remessa_atual() -> dict[str, Any] | None:
         fora = json.loads(cab["fora_json"] or "[]")
     except Exception:
         fora = []
-    return {"remessa_id": cab["remessa_id"], "situacao": cab["situacao"], "unidades": cab["unidades"],
+    try:
+        locais = json.loads(cab["locais_json"] or "{}")
+    except Exception:
+        locais = {}
+    return {"remessa_id": cab["remessa_id"], "separacao": full_remessa_separacao(rows, locais), "situacao": cab["situacao"], "unidades": cab["unidades"],
             "itens": [r for r in rows if not r["novo"]], "novos": [r for r in rows if r["novo"]],
             "fora": fora, "nao_aceito": list(full_nao_aceito_lista().values()),
             "montada_em": cab["montada_em"], "obs": cab["obs"], "agendada_para": cab["agendada_para"],
             "sem_apollo": int(cab["sem_apollo"] or 0)}
+
+
+def _full_loc_chave(loc: str) -> tuple:
+    """V19.07: ZZ.9.14.A.99 parte a parte, números como números (ZZ.9.9 antes de ZZ.9.14)."""
+    partes = [p for p in re.split(r"[.\-\s/]+", str(loc or "").upper()) if p]
+    return tuple((0, int(p), "") if p.isdigit() else (1, 0, p) for p in partes)
+
+
+def full_remessa_separacao(rows: list[dict[str, Any]], locais: dict[str, str]) -> list[dict[str, Any]]:
+    """V19.07: lista de separação da remessa (Araçatuba) — itens confirmados, não removidos e
+    com quantidade; kit abre em cada peça; por código Apollo, em ordem de prateleira
+    (sem localização no fim). Mesma regra da lista da planilha (V17.96)."""
+    pick: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        q = r.get("qtd_admin") if r.get("qtd_admin") is not None else r.get("qtd_sugerida")
+        q = int(q or 0)
+        if r.get("removido") or not r.get("confirmado") or q <= 0:
+            continue
+        try:
+            comps = json.loads(r.get("componentes_json") or "[]")
+        except Exception:
+            comps = []
+        if not comps:
+            comps = [{"codigo": r.get("codigo") or "", "qtd": 1}]
+        kit = len(comps) > 1 or float(comps[0].get("qtd") or 1) != 1
+        for c in comps:
+            cod = _full_codigo(c.get("codigo"))
+            if not cod:
+                continue
+            p = pick.setdefault(cod, {"codigo": cod, "localizacao": str(locais.get(cod) or ""),
+                                      "descricao": "", "qtd": 0, "anuncios": []})
+            p["qtd"] += int(round(q * float(c.get("qtd") or 1)))
+            if not p["descricao"] or not kit:
+                p["descricao"] = ("Peça do kit: " if kit else "") + str(r.get("titulo") or "")
+            if r.get("anuncio") not in p["anuncios"]:
+                p["anuncios"].append(r.get("anuncio"))
+    return sorted(pick.values(), key=lambda p: (not p["localizacao"], _full_loc_chave(p["localizacao"]), p["codigo"]))
 
 
 FULL_REMESSA_MONTAR_LOCK = threading.Lock()  # V19.03: uma montagem manual por vez

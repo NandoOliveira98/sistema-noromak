@@ -207,6 +207,44 @@ class Rodada(Calculo):
             S.crm_stock_lookup = orig
         self.assertEqual(e, {"A": 7.0, "B": None, "C": None})
 
+    def test_v1907_localizacao_vem_da_mesma_consulta(self):
+        orig = S.crm_stock_lookup
+        S.crm_stock_lookup = lambda cod, op="", wait_seconds=0.0: {"estoques": [
+            {"revenda": 1, "disponivel": 7, "localizacao": "ZZ.9.14" if cod == "A" else "...."},
+            {"revenda": 2, "disponivel": 5, "localizacao": "X.1"}], "casas_sem_resposta": []}
+        locais = {}
+        try:
+            S.full_remessa_estoque_apollo({"A", "B"}, prazo_s=0, locais=locais)
+        finally:
+            S.crm_stock_lookup = orig
+        self.assertEqual(locais, {"A": "ZZ.9.14"})
+
+    def test_v1907_lista_de_separacao(self):
+        rows = [
+            {"anuncio": "M1", "codigo": "A", "titulo": "Peça A", "confirmado": 1, "removido": 0, "qtd_sugerida": 5,
+             "qtd_admin": None, "componentes_json": '[{"codigo": "A", "qtd": 1}]'},
+            {"anuncio": "M2", "codigo": "KIT2-B", "titulo": "Kit B", "confirmado": 1, "removido": 0, "qtd_sugerida": 3,
+             "qtd_admin": None, "componentes_json": '[{"codigo": "B", "qtd": 2}]'},
+            {"anuncio": "M3", "codigo": "A", "titulo": "Peça A", "confirmado": 1, "removido": 0, "qtd_sugerida": 9,
+             "qtd_admin": 2, "componentes_json": '[{"codigo": "A", "qtd": 1}]'},
+            {"anuncio": "M4", "codigo": "C", "titulo": "C", "confirmado": 1, "removido": 1, "qtd_sugerida": 4,
+             "qtd_admin": None, "componentes_json": "[]"},
+            {"anuncio": "M5", "codigo": "D", "titulo": "Novo D", "confirmado": 0, "removido": 0, "qtd_sugerida": 4,
+             "qtd_admin": None, "componentes_json": "[]"},
+            {"anuncio": "M6", "codigo": "E", "titulo": "E", "confirmado": 1, "removido": 0, "qtd_sugerida": 1,
+             "qtd_admin": None, "componentes_json": "[]"},
+        ]
+        lista = S.full_remessa_separacao(rows, {"A": "ZZ.9.14", "B": "ZZ.9.9"})
+        self.assertEqual([(p["codigo"], p["qtd"]) for p in lista], [("B", 6), ("A", 7), ("E", 1)])
+        self.assertEqual(lista[2]["localizacao"], "")
+        self.assertIn("kit", lista[0]["descricao"])
+
+    def test_v1907_rodada_entrega_a_lista(self):
+        self.anuncio("MLB1", "A", no_full=0, venda=160)
+        S.full_remessa_rodada(HOJE, estoque={"A": 1000})
+        sep = S.full_remessa_atual()["separacao"]
+        self.assertEqual([(p["codigo"], p["qtd"]) for p in sep], [("A", 160)])
+
     def test_novo_nao_confirmado_nao_vai_a_caminho(self):
         self.anuncio("MLB1", "A", no_full=0, venda=160)
         d = (HOJE - timedelta(days=2)).isoformat()
@@ -224,7 +262,7 @@ class Rodada(Calculo):
         r = S.full_remessa_rodada(HOJE, estoque={"A": 1000})
         orig = S.full_remessa_estoque_apollo
 
-        def lendo(codigos, prazo_s=600):
+        def lendo(codigos, prazo_s=600, locais=None):
             S.full_remessa_agendar(r["remessa_id"], "2026-10-20", "admin")
             return {"A": 1000}
         S.full_remessa_estoque_apollo = lendo

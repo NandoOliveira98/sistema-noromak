@@ -485,6 +485,7 @@ html[data-tema="escuro"] [style*="color: #12345B" i]{color:#C0CCD9!important}
       <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between">
         <h2 style="margin:0;font-size:18px">Remessa sugerida</h2>
         <div style="display:flex;flex-wrap:wrap;gap:8px">
+          <button type="button" class="nk-btn" id="rfSeparar" hidden>Lista de separação</button>
           <button type="button" class="nk-btn" id="rfMontar">Montar agora</button>
           <button type="button" class="nk-btn" id="rfProcurar" hidden>Procurar datas</button>
           <button type="button" class="nk-btn" id="rfAgendar" hidden>Marcar agendada</button>
@@ -1422,6 +1423,13 @@ html[data-tema="escuro"] [style*="color: #12345B" i]{color:#C0CCD9!important}
       // V17.98: quantidade editável — só para baixo (a sugestão já é o máximo
       // que Araçatuba tem e que o FULL precisa). Guardada por código Apollo.
       const pickQty = new Map();
+      // V19.07: a mesma janela serve à Remessa sugerida (lista montada pelo servidor).
+      let pickFonte = null;
+      window.nkSeparacaoRemessaV1907 = (linhas, meta) => {
+        if (!pickFonte) { pickRemoved.clear(); pickQty.clear(); }
+        pickFonte = { linhas, meta };
+        openPickList();
+      };
 
       // Localização do Apollo: ZZ.9.14.A.99 — compara parte a parte, números como números
       // (ZZ.9.9 antes de ZZ.9.14). Sem localização vai para o fim.
@@ -1439,7 +1447,8 @@ html[data-tema="escuro"] [style*="color: #12345B" i]{color:#C0CCD9!important}
 
       function buildPickList() {
         const pick = new Map();
-        state.data.forEach(item => {
+        if (pickFonte) pickFonte.linhas.forEach(p => pick.set(p.codigo, { key: p.codigo, loc: p.localizacao || "", desc: p.descricao || "", units: Number(p.qtd) || 0 }));
+        else state.data.forEach(item => {
           if (!(Number(item.apolloCanSend) > 0)) return;
           item.apolloParts.forEach(p => {
             const row = pick.get(p.key) || { key: p.key, loc: p.loc, desc: p.desc, units: 0 };
@@ -1459,7 +1468,8 @@ html[data-tema="escuro"] [style*="color: #12345B" i]{color:#C0CCD9!important}
         const list = buildPickList();
         const days = element("targetDays").value === "15" ? 15 : 30;
         const totalUnits = list.pick.reduce((s, r) => s + r.qty, 0);
-        element("pickMeta").textContent = `Planejamento para ${days} dias · ${list.pick.length} código(s) · ${formatNumber(totalUnits)} unidade(s) a separar em Araçatuba · ${state.fileName}`;
+        if (pickFonte) element("pickMeta").textContent = `${pickFonte.meta} · ${list.pick.length} código(s) · ${formatNumber(totalUnits)} unidade(s) a separar em Araçatuba`;
+        else element("pickMeta").textContent = `Planejamento para ${days} dias · ${list.pick.length} código(s) · ${formatNumber(totalUnits)} unidade(s) a separar em Araçatuba · ${state.fileName}`;
         element("pickBody").innerHTML = list.pick.map(r => `
           <tr><td class="code">${escapeHtml(r.loc || "sem localização")}</td><td class="code">${escapeHtml(r.key)}</td>
           <td>${escapeHtml(r.desc || "")}</td>
@@ -1482,6 +1492,7 @@ html[data-tema="escuro"] [style*="color: #12345B" i]{color:#C0CCD9!important}
       function closePickList() {
         element("pickModal").classList.add("hidden");
         document.body.classList.remove("printing-pick");
+        if (pickFonte) { pickFonte = null; pickRemoved.clear(); pickQty.clear(); }
       }
 
       function exportPickList() {
@@ -1492,7 +1503,7 @@ html[data-tema="escuro"] [style*="color: #12345B" i]{color:#C0CCD9!important}
         })));
         s1["!cols"] = [18, 16, 45, 12, 12].map(wch => ({ wch }));
         XLSX.utils.book_append_sheet(wb, s1, "Separar Araçatuba");
-        XLSX.writeFile(wb, "lista_separacao_full.xlsx", { compression: true });
+        XLSX.writeFile(wb, pickFonte ? "lista_separacao_remessa_full.xlsx" : "lista_separacao_full.xlsx", { compression: true });
       }
 
       function updateSortHeaders() {
@@ -1667,7 +1678,8 @@ html[data-tema="escuro"] [style*="color: #12345B" i]{color:#C0CCD9!important}
       const num = (v) => (v === null || v === undefined || v === "" ? "" : Number(v).toLocaleString("pt-BR", { maximumFractionDigits: 1 }));
       const vazio = (v) => v === null || v === undefined;
       const qtdDe = (i) => (i.qtd_admin ?? i.qtd_sugerida);
-      const dataBr = (s) => { const m = String(s || "").match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/); return m ? `${m[3]}/${m[2]}${m[4] ? ` ${m[4]}:${m[5]}` : ""}` : ""; };
+      // V19.07: data com hora e fuso (montada_em é UTC) mostra no horário de Brasília.
+      const dataBr = (s) => { if (/T\d{2}:\d{2}.*([+-]\d{2}:?\d{2}|Z)$/.test(String(s || ""))) { const d = new Date(s); if (!isNaN(d)) return d.toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }).replace(",", ""); } const m = String(s || "").match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/); return m ? `${m[3]}/${m[2]}${m[4] ? ` ${m[4]}:${m[5]}` : ""}` : ""; };
       const aviso = (t, tipo) => (window.nkToast ? window.nkToast(t, tipo) : alert(t));
       let remessa = null;
       const abertos = new Set();
@@ -1742,6 +1754,7 @@ html[data-tema="escuro"] [style*="color: #12345B" i]{color:#C0CCD9!important}
         $("rfProcurar").hidden = !(r && r.situacao === "pronta");
         $("rfAgendar").hidden = !(r && (r.situacao === "pronta" || r.situacao === "montando"));
         $("rfRecebida").hidden = !(r && r.situacao === "agendada");
+        $("rfSeparar").hidden = !(r && (r.separacao || []).length);
         if (!r) { $("rfCorpo").innerHTML = '<p style="margin:0;color:var(--nk-ink2)">Nenhuma remessa montada ainda. Use "Montar agora".</p>'; return; }
         const itens = r.itens || [], novos = r.novos || [], fora = r.fora || [], nao = r.nao_aceito || [];
         const unid = Number(r.unidades || 0);
@@ -1792,6 +1805,12 @@ html[data-tema="escuro"] [style*="color: #12345B" i]{color:#C0CCD9!important}
           if (!(await nkConfirmar(`Liberar ${cod} para voltar a ser sugerido no Full?`))) return;
           return enviar("/api/full/nao-aceito/liberar", { codigo: cod }, "Liberado.", b);
         }
+      });
+
+      // V19.07: lista de separação da remessa — por prateleira, kit aberto em peças (servidor).
+      $("rfSeparar").addEventListener("click", () => {
+        if (!remessa || !(remessa.separacao || []).length) return;
+        window.nkSeparacaoRemessaV1907(remessa.separacao, `Remessa ${remessa.remessa_id} · montada em ${dataBr(remessa.montada_em)}`);
       });
 
       $("rfMontar").addEventListener("click", async () => {
