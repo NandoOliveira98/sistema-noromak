@@ -461,3 +461,61 @@ class RevisaoFinal(Calculo):
         res = S.full_remessa_ajustar(r["remessa_id"], "MLB1", qtd=None, usuario="admin")
         self.assertIsNone(S.full_remessa_atual()["itens"][0]["qtd_admin"])
         self.assertEqual(res["situacao"], "pronta")
+
+
+class ReconferirAoAgendar(Calculo):
+    """V19.10: P10031 (13/10) — a remessa guardava Apollo 3 (leitura antiga); o Disponível
+    já era 1 (negociação de 2). Ao agendar, o Apollo é lido de novo."""
+
+    def _apollo(self, valores):
+        orig = S.crm_stock_lookup
+        S.crm_stock_lookup = lambda cod, op="", wait_seconds=0.0: {
+            "estoques": [{"revenda": 1, "disponivel": valores.get(cod)}],
+            "casas_sem_resposta": [] if valores.get(cod) is not None else [1]}
+        self.addCleanup(setattr, S, "crm_stock_lookup", orig)
+
+    def test_leitura_antiga_vira_falta_e_agendar_recusa(self):
+        self.anuncio("MLB1", "A", no_full=0, venda=7)
+        self.anuncio("MLB2", "B", no_full=0, venda=160)
+        r = S.full_remessa_rodada(HOJE, estoque={"A": 3, "B": 1000})
+        rid = r["remessa_id"]
+        self._apollo({"A": 1, "B": 1000})
+        rec = S.full_remessa_reconferir(rid, prazo_s=0, intervalo_s=0)
+        self.assertEqual(rec["falta"], [{"anuncio": "MLB1", "codigo": "A", "titulo": "T MLB1", "qtd": 3, "cabe": 1}])
+        item = next(i for i in S.full_remessa_atual()["itens"] if i["anuncio"] == "MLB1")
+        self.assertEqual(item["estoque_apollo"], 1)          # a tela mostra o Disponível de agora
+        self.assertEqual(item["qtd_sugerida"], 3)            # quantidade só muda com o ADMIN
+        with self.assertRaises(ValueError):
+            S.full_remessa_agendar(rid, "2026-10-20", "admin")
+        S.full_remessa_ajustar(rid, "MLB1", qtd=1, usuario="admin")
+        S.full_remessa_agendar(rid, "2026-10-20", "admin")
+
+    def test_sem_falta_agenda(self):
+        self.anuncio("MLB2", "B", no_full=0, venda=160)
+        rid = S.full_remessa_rodada(HOJE, estoque={"B": 1000})["remessa_id"]
+        self._apollo({"B": 500})
+        self.assertEqual(S.full_remessa_reconferir(rid, prazo_s=0, intervalo_s=0)["falta"], [])
+        S.full_remessa_agendar(rid, "2026-10-20", "admin")
+
+    def test_apollo_sem_resposta_nao_vira_falta(self):
+        self.anuncio("MLB1", "A", no_full=0, venda=7)
+        rid = S.full_remessa_rodada(HOJE, estoque={"A": 3})["remessa_id"]
+        self._apollo({})
+        rec = S.full_remessa_reconferir(rid, prazo_s=0, intervalo_s=0)
+        self.assertEqual(rec["falta"], [])
+        self.assertEqual(rec["sem_resposta"], ["A"])
+        item = S.full_remessa_atual()["itens"][0]
+        self.assertEqual(item["estoque_apollo"], 3)          # sem resposta não apaga o que se sabia
+
+    def test_codigo_dividido_mais_urgente_primeiro(self):
+        self.anuncio("MLB1", "A", no_full=0, venda=30)       # cobertura 0
+        self.anuncio("MLB3", "A", no_full=20, venda=60)      # cobertura 10
+        rid = S.full_remessa_rodada(HOJE, estoque={"A": 1000})["remessa_id"]
+        self._apollo({"A": 35})
+        falta = {f["anuncio"]: f["cabe"] for f in S.full_remessa_reconferir(rid, prazo_s=0, intervalo_s=0)["falta"]}
+        self.assertEqual(falta, {"MLB3": 5})                 # MLB1 leva 30, sobram 5 para os 40 do MLB3
+
+    def test_tela_reconfere_antes_de_agendar(self):
+        from base import RAIZ
+        html = (RAIZ / "APP" / "analise-full.html").read_text(encoding="utf-8")
+        self.assertIn("/api/full/remessa/reconferir", html)

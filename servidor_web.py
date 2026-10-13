@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.09-MEDICAO"
+APP_VERSION = "19.10-RECONFERIR-APOLLO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -9701,6 +9701,9 @@ def _full_remessa_schema() -> None:
         DB.execute("ALTER TABLE full_remessa_v1903 ADD COLUMN sem_apollo INTEGER NOT NULL DEFAULT 0")
     if "locais_json" not in cols:
         DB.execute("ALTER TABLE full_remessa_v1903 ADD COLUMN locais_json TEXT NOT NULL DEFAULT '{}'")
+    if "reconferencia_json" not in cols:
+        # V19.10: última reconferência do Apollo antes de agendar (disponível por código e faltas).
+        DB.execute("ALTER TABLE full_remessa_v1903 ADD COLUMN reconferencia_json TEXT NOT NULL DEFAULT '{}'")
     icols = {r[1] for r in DB.execute("PRAGMA table_info(full_remessa_item_v1903)").fetchall()}
     if "componentes_json" not in icols:
         DB.execute("ALTER TABLE full_remessa_item_v1903 ADD COLUMN componentes_json TEXT NOT NULL DEFAULT '[]'")
@@ -9926,7 +9929,14 @@ def full_remessa_atual() -> dict[str, Any] | None:
             "itens": [r for r in rows if not r["novo"]], "novos": [r for r in rows if r["novo"]],
             "fora": fora, "nao_aceito": list(full_nao_aceito_lista().values()),
             "montada_em": cab["montada_em"], "obs": cab["obs"], "agendada_para": cab["agendada_para"],
-            "sem_apollo": int(cab["sem_apollo"] or 0)}
+            "sem_apollo": int(cab["sem_apollo"] or 0), "reconferencia": _full_json(cab["reconferencia_json"], {})}
+
+
+def _full_json(texto: Any, padrao: Any) -> Any:
+    try:
+        return json.loads(texto or "") if texto else padrao
+    except Exception:
+        return padrao
 
 
 def _full_loc_chave(loc: str) -> tuple:
@@ -10079,6 +10089,89 @@ def full_remessa_ajustar(remessa_id: int, anuncio: str, *, qtd: Any = _FULL_SEM_
     return res
 
 
+# V19.10: P10031 (13/10) — a remessa mostrava Apollo 3 de uma leitura antiga; o Disponível já
+# era 1 (negociação de 2 peças aberta depois). Antes de agendar, o Apollo é lido de novo.
+FULL_RECONFERIR_INTERVALO = 3.0
+FULL_RECONFERIR_VALIDADE_S = 1800
+FULL_REMESSA_RECONFERIR_LOCK = threading.Lock()   # uma reconferência por vez
+
+
+def _full_item_comps(r: Any) -> list[dict[str, Any]]:
+    return _full_json(r["componentes_json"], []) or [{"codigo": r["codigo"], "qtd": 1}]
+
+
+def _full_item_conta(r: Any) -> int:
+    """V19.10: quantidade que vai na remessa (0 = removido, não confirmado ou sem quantidade)."""
+    q = r["qtd_admin"] if r["qtd_admin"] is not None else r["qtd_sugerida"]
+    return 0 if r["removido"] or not r["confirmado"] else max(0, int(q or 0))
+
+
+def _full_remessa_faltas(rows: list[Any], disp: dict[str, Any]) -> list[dict[str, Any]]:
+    """V19.10: com o disponível de agora (código -> número; ausente/None = não respondeu), quanto
+    cabe em cada item contado, o mais urgente (menor cobertura) primeiro — regra do cálculo.
+    Devolve só os itens cuja quantidade passa do que cabe. Pura."""
+    saldo = {_full_codigo(k): (None if v is None else float(v)) for k, v in disp.items()}
+    faltas = []
+    for r in rows:
+        q = _full_item_conta(r)
+        if q <= 0:
+            continue
+        comps = _full_item_comps(r)
+        valores: list[int] | None = []
+        for c in comps:
+            s_ = saldo.get(_full_codigo(c.get("codigo")))
+            if s_ is None:
+                valores = None
+                break
+            valores.append(int(math.floor(max(0.0, s_) / float(c.get("qtd") or 1))))
+        if not valores:
+            continue   # Apollo sem resposta: nunca vira falta (nem zero)
+        cabe = min(valores)
+        usa = min(q, cabe)
+        for c in comps:
+            saldo[_full_codigo(c.get("codigo"))] -= usa * float(c.get("qtd") or 1)
+        if q > cabe:
+            faltas.append({"anuncio": r["anuncio"], "codigo": r["codigo"], "titulo": r["titulo"], "qtd": q, "cabe": cabe})
+    return faltas
+
+
+def _full_remessa_itens_ordem(rid: int) -> list[Any]:
+    return DB.execute("SELECT * FROM full_remessa_item_v1903 WHERE remessa_id=? "
+                      "ORDER BY novo, cobertura_dias IS NULL, cobertura_dias, anuncio", (rid,)).fetchall()
+
+
+def full_remessa_reconferir(remessa_id: int, prazo_s: float = 600,
+                            intervalo_s: float = FULL_RECONFERIR_INTERVALO) -> dict[str, Any]:
+    """V19.10: lê o Apollo de novo (sem reaproveitar) para os itens contados, atualiza o
+    estoque_apollo da tela e guarda as faltas. A quantidade não muda: quem baixa é o ADMIN."""
+    rid = int(remessa_id)
+    with DB_LOCK:
+        _full_remessa_schema()
+        _full_remessa_aberta_ou_erro(rid)
+        rows = _full_remessa_itens_ordem(rid)
+    cods = {_full_codigo(c.get("codigo")) for r in rows if _full_item_conta(r) > 0 for c in _full_item_comps(r)}
+    cods.discard("")
+    disp = full_remessa_estoque_apollo(cods, prazo_s=prazo_s, intervalo_s=intervalo_s, reusar_s=0)
+    with DB_LOCK:
+        _full_remessa_aberta_ou_erro(rid)
+        rows = _full_remessa_itens_ordem(rid)
+        faltas = _full_remessa_faltas(rows, disp)
+        for r in rows:
+            comps = _full_item_comps(r)
+            vals = [disp.get(_full_codigo(c.get("codigo"))) for c in comps]
+            if not vals or any(v is None for v in vals):
+                continue   # sem resposta não apaga o que se sabia
+            novo = min(int(math.floor(max(0.0, float(v)) / float(c.get("qtd") or 1))) for v, c in zip(vals, comps))
+            DB.execute("UPDATE full_remessa_item_v1903 SET estoque_apollo=? WHERE remessa_id=? AND anuncio=?",
+                       (novo, rid, r["anuncio"]))
+        rec = {"em": now_iso(), "disponivel": {k: v for k, v in disp.items() if v is not None},
+               "sem_resposta": sorted(k for k, v in disp.items() if v is None), "falta": faltas}
+        DB.execute("UPDATE full_remessa_v1903 SET reconferencia_json=? WHERE remessa_id=?",
+                   (json.dumps(rec, ensure_ascii=False), rid))
+        DB.commit()
+    return rec
+
+
 def full_remessa_agendar(remessa_id: int, data: str, usuario: str) -> dict[str, Any]:
     """V19.03: congela a remessa; os itens viram 'a caminho' e a próxima rodada abre outra."""
     data = str(data or "").strip()
@@ -10088,7 +10181,19 @@ def full_remessa_agendar(remessa_id: int, data: str, usuario: str) -> dict[str, 
         raise ValueError("Data inválida (use AAAA-MM-DD).")
     rid = int(remessa_id)
     with DB_LOCK:
-        _full_remessa_aberta_ou_erro(rid)
+        _full_remessa_schema()
+        cab = _full_remessa_aberta_ou_erro(rid)
+        # V19.10: com reconferência recente, quantidade acima do Disponível de agora não agenda.
+        rec = _full_json(cab["reconferencia_json"], {})
+        try:
+            idade = (datetime.now(timezone.utc) - datetime.fromisoformat(str(rec.get("em")))).total_seconds()
+        except Exception:
+            idade = None
+        if idade is not None and idade <= FULL_RECONFERIR_VALIDADE_S:
+            faltas = _full_remessa_faltas(_full_remessa_itens_ordem(rid), rec.get("disponivel") or {})
+            if faltas:
+                raise ValueError("Quantidade acima do disponível no Apollo: " + ", ".join(
+                    f"{f['codigo']} ({f['qtd']} > {f['cabe']})" for f in faltas[:5]))
         res = _full_remessa_recontar(rid)
         DB.execute("UPDATE full_remessa_v1903 SET situacao='agendada', agendada_para=?, agendada_em=?, agendada_por=? "
                    "WHERE remessa_id=?", (data, now_iso(), str(usuario or ""), rid))
@@ -25569,7 +25674,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     self.send_json({"error": str(exc)}, 500)
             return
         if path in ("/api/full/remessa/ajustar", "/api/full/remessa/agendar", "/api/full/remessa/situacao",
-                    "/api/full/remessa/montar", "/api/full/nao-aceito", "/api/full/nao-aceito/liberar"):
+                    "/api/full/remessa/montar", "/api/full/remessa/reconferir", "/api/full/nao-aceito", "/api/full/nao-aceito/liberar"):
             # V19.03: remessa Full automática — só módulo admin; ValueError vira 400.
             ctx = self.auth(admin_only=True)
             if ctx is None:
@@ -25577,6 +25682,29 @@ class AppHandler(BaseHTTPRequestHandler):
             req = self.read_json() or {}
             usuario = str(ctx.get("username") or "")
             try:
+                if path == "/api/full/remessa/reconferir":
+                    # V19.10: lê o Apollo de novo antes de agendar; em segundo plano (nginx 60 s).
+                    rid_rec = int(req.get("remessa_id"))
+                    with DB_LOCK:
+                        _full_remessa_aberta_ou_erro(rid_rec)
+                    if not FULL_REMESSA_RECONFERIR_LOCK.acquire(blocking=False):
+                        self.send_json({"ok": True, "rodando": True, "ja_rodando": True})
+                        return
+                    def _reconferir() -> None:
+                        try:
+                            full_remessa_reconferir(rid_rec, prazo_s=600)
+                        except Exception as exc:
+                            print(f"[remessa-full] reconferir: {exc}", file=sys.stderr, flush=True)
+                        finally:
+                            FULL_REMESSA_RECONFERIR_LOCK.release()
+                    try:
+                        threading.Thread(target=_reconferir, name="full-remessa-reconferir", daemon=True).start()
+                    except Exception:
+                        FULL_REMESSA_RECONFERIR_LOCK.release()
+                        raise
+                    audit(usuario, "full.remessa.reconferir", json.dumps({"remessa_id": rid_rec}))
+                    self.send_json({"ok": True, "rodando": True})
+                    return
                 if path == "/api/full/remessa/montar":
                     # Apollo lento passa dos 60 s do nginx: roda em segundo plano, uma por vez.
                     if not FULL_REMESSA_MONTAR_LOCK.acquire(blocking=False):
