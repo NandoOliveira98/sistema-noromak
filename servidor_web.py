@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.08-REMESSA-APOLLO-LEVE"
+APP_VERSION = "19.09-MEDICAO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -170,7 +170,82 @@ CRM_COST_CACHE_SECONDS = max(30, min(600, int(os.getenv("CRM_COST_CACHE_SECONDS"
 CRM_RATE_LIMIT_PER_MINUTE = max(1, min(20, int(os.getenv("CRM_RATE_LIMIT_PER_MINUTE", "18"))))
 
 
-DB_LOCK = threading.RLock()
+# V19.09: medição de quem pesa. Em 13/10 o /api/health chegou a 46 s com a máquina
+# esperando o disco; o log só dizia QUAIS requisições chegaram, não quanto cada uma
+# (nem cada worker) segurou o banco. Cada linha de execução diz o que está fazendo em
+# _MEDIR_LOCAL.ctx ("GET /api/storage", "worker ml_new_order_watch_loop"); o DB_LOCK mede
+# quanto cada um ESPEROU e SEGUROU o banco, e a requisição mede quanto demorou inteira.
+_MEDIR_LOCAL = threading.local()
+_MEDIR_TRAVA = threading.Lock()
+MEDICAO: dict[str, dict[str, float]] = {}
+MEDICAO_LENTOS: list[dict[str, Any]] = []   # as 30 piores ocorrências isoladas
+MEDICAO_DESDE = [time.time()]
+
+
+def _medir_ctx() -> str:
+    ctx = getattr(_MEDIR_LOCAL, "ctx", None)
+    if ctx:
+        return ctx
+    nome = threading.current_thread().name or "thread"
+    return "thread " + re.sub(r"-\d+.*$", "", nome)
+
+
+def medir_registrar(ctx: str, tipo: str, segundos: float) -> None:
+    """V19.09: soma `segundos` em MEDICAO[ctx] (tipo: espera | posse | duracao)."""
+    with _MEDIR_TRAVA:
+        m = MEDICAO.setdefault(ctx, {})
+        m[tipo + "_n"] = m.get(tipo + "_n", 0) + 1
+        m[tipo + "_total"] = m.get(tipo + "_total", 0.0) + segundos
+        if segundos > m.get(tipo + "_max", 0.0):
+            m[tipo + "_max"] = segundos
+        if segundos >= 1.0:
+            MEDICAO_LENTOS.append({"ctx": ctx, "tipo": tipo, "segundos": round(segundos, 3),
+                                   "quando": datetime.now(timezone.utc).isoformat(timespec="seconds")})
+            MEDICAO_LENTOS.sort(key=lambda x: -x["segundos"])
+            del MEDICAO_LENTOS[30:]
+
+
+class _LockMedido:
+    """V19.09: RLock que mede espera e posse (só na volta mais externa de cada thread)."""
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._local = threading.local()
+
+    def acquire(self, blocking: bool = True, timeout: float = -1) -> bool:
+        nivel = getattr(self._local, "nivel", 0)
+        if nivel:
+            ok = self._lock.acquire(blocking, timeout)
+            if ok:
+                self._local.nivel = nivel + 1
+            return ok
+        t0 = time.monotonic()
+        ok = self._lock.acquire(blocking, timeout)
+        if ok:
+            t1 = time.monotonic()
+            self._local.nivel = 1
+            self._local.desde = t1
+            if t1 - t0 >= 0.001:
+                medir_registrar(_medir_ctx(), "espera", t1 - t0)
+        return ok
+
+    def release(self) -> None:
+        nivel = getattr(self._local, "nivel", 0) - 1
+        self._local.nivel = nivel
+        if nivel == 0:
+            posse = time.monotonic() - self._local.desde
+            self._lock.release()
+            medir_registrar(_medir_ctx(), "posse", posse)
+        else:
+            self._lock.release()
+
+    __enter__ = acquire
+
+    def __exit__(self, *exc: Any) -> None:
+        self.release()
+
+
+DB_LOCK = _LockMedido()
 AUTH_LOCK = threading.Lock()
 # V17.12: estado efêmero de segurança. Nunca é persistido em disco.
 # A liberação crítica desaparece ao reiniciar o serviço, por desenho.
@@ -23922,7 +23997,27 @@ class AppHandler(BaseHTTPRequestHandler):
         # guardado e a filial da resposta são de UMA requisição só.
         self._corpo_lido = None
         self._filial_resposta_pedidos = None
-        super().handle_one_request()
+        # V19.09: mede a requisição inteira; o nome (método + rota) é posto pelo parse_request.
+        _MEDIR_LOCAL.ctx = "http (conexão)"
+        t0 = time.monotonic()
+        try:
+            super().handle_one_request()
+        finally:
+            ctx = _MEDIR_LOCAL.ctx
+            if ctx != "http (conexão)":
+                medir_registrar(ctx, "duracao", time.monotonic() - t0)
+            _MEDIR_LOCAL.ctx = None
+
+    def parse_request(self) -> bool:
+        ok = super().parse_request()
+        if ok:
+            rota = urlparse(self.path).path
+            if rota.startswith(BASE_PATH):
+                rota = rota[len(BASE_PATH):] or "/"
+            if not rota.startswith("/api/"):
+                rota = "(página/arquivo)"
+            _MEDIR_LOCAL.ctx = f"{self.command} {rota}"
+        return ok
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stderr.write("%s - - [%s] %s\n" % (self.client_address[0], self.log_date_time_string(), fmt % args))
@@ -24590,6 +24685,14 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": str(exc)}, 400)
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/saude/medicao":
+            # V19.09: quem segura o banco e quem demora. Zerar é só do perfil Admin.
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            zerar = str((query.get("zerar") or [""])[0]) == "1" and str(ctx.get("app_role") or "").lower() == "admin"
+            self.send_json(medicao_payload(zerar))
             return
         if path == "/api/saude":
             # V18.83: Painel de saúde (integrações, workers, backup, disco, alertas). Somente leitura.
@@ -29250,6 +29353,30 @@ def saude_teste_email(ator: str) -> list[str]:
     return enviado
 
 
+def medicao_payload(zerar: bool = False) -> dict[str, Any]:
+    """V19.09: quem pesa — por requisição/worker: vezes, tempo total e pior caso de
+    duração, espera pelo banco e posse do banco. Ordenado pela posse total."""
+    with _MEDIR_TRAVA:
+        linhas = []
+        for ctx, m in MEDICAO.items():
+            item = {"ctx": ctx}
+            for tipo in ("duracao", "espera", "posse"):
+                item[tipo] = {"n": int(m.get(tipo + "_n", 0)), "total_s": round(m.get(tipo + "_total", 0.0), 3),
+                              "max_s": round(m.get(tipo + "_max", 0.0), 3)}
+            linhas.append(item)
+        lentos = list(MEDICAO_LENTOS)
+        desde = MEDICAO_DESDE[0]
+        if zerar:
+            MEDICAO.clear()
+            MEDICAO_LENTOS.clear()
+            MEDICAO_DESDE[0] = time.time()
+    linhas.sort(key=lambda i: (-i["posse"]["total_s"], -i["duracao"]["total_s"]))
+    janela = max(1.0, time.time() - desde)
+    return {"ok": True, "desde": _saude_epoch_iso(desde), "janela_s": round(janela),
+            "banco_ocupado_pct": round(100 * sum(i["posse"]["total_s"] for i in linhas) / janela, 1),
+            "itens": linhas, "lentos": lentos}
+
+
 def saude_payload() -> dict[str, Any]:
     checks = saude_checks()
     pior = max((c["nivel"] for c in checks), key=lambda n: SAUDE_NIVEIS.get(n, 0), default="ok")
@@ -29293,6 +29420,7 @@ def _worker_protegido(alvo: Any) -> Any:
         # Painel de saúde sabe se ele está esperando, trabalhando ou travado.
         anterior = getattr(_SAUDE_LOCAL, "worker", None)
         _SAUDE_LOCAL.worker = nome
+        _MEDIR_LOCAL.ctx = "worker " + nome   # V19.09
         try:
             _rodar(stop_event, nome, _EventoComPulso(stop_event))
         finally:

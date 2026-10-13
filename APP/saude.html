@@ -79,6 +79,15 @@ html[data-tema="escuro"] .nk-sw .tr{background:#3A4A5E}
       <div class="nk-tw"><table class="nk-tab" id="workers" data-nk-tabela="rotinas" data-nk-exportar="0"></table></div>
     </section>
 
+    <!-- V19.09: quem pesa — tempo de cada rota e de cada rotina segurando/esperando o banco. -->
+    <section class="nk-painel">
+      <div class="nk-painel-tit"><div><h2>Quem está pesando</h2>
+        <p id="medSub">Tempo que cada tela e cada rotina segurou o banco (os outros esperam nesse tempo) e quanto demorou.</p></div>
+        <button class="nk-btn" id="medZerar" title="Começa a contar de novo (só perfil Admin)">Zerar contagem</button></div>
+      <div class="nk-tw"><table class="nk-tab" id="medicao" data-nk-tabela="quem_pesa"></table></div>
+      <p class="nota" id="medLentos"></p>
+    </section>
+
     <section class="nk-painel">
       <div class="nk-painel-tit"><div><h2>Alertas por e-mail</h2>
         <p id="regraTxt"></p></div></div>
@@ -199,7 +208,23 @@ html[data-tema="escuro"] .nk-sw .tr{background:#3A4A5E}
   const estadoConfig = () => JSON.stringify([$("cfgAtivo").checked, $("cfgAtencao").checked, $("cfgEmails").value.trim(), String($("cfgLembrete").value)]);
   for (const id of ["cfgAtivo","cfgAtencao","cfgEmails","cfgLembrete"]) $(id).addEventListener("input", () => { $("salvar").disabled = !podeConfigurar || estadoConfig() === base; });
 
+  // V19.09
+  const seg = v => Number(v || 0).toLocaleString("pt-BR", {maximumFractionDigits: 2}) + " s";
+  async function carregarMedicao(zerar = false) {
+    try {
+      const m = await api("/api/saude/medicao" + (zerar ? "?zerar=1" : ""));
+      $("medSub").textContent = `Banco ocupado ${m.banco_ocupado_pct.toLocaleString("pt-BR")}% do tempo desde ${dataHora(m.desde)} (${Math.round(m.janela_s / 60)} min). Ordem: quem mais segurou o banco.`;
+      $("medicao").innerHTML = `<thead><tr><th>Tela / rotina</th><th class="num">Vezes</th><th class="num">Segurou o banco (total)</th><th class="num">Pior vez</th><th class="num">Esperou o banco (total)</th><th class="num">Demora média</th><th class="num">Pior demora</th></tr></thead><tbody>`
+        + m.itens.slice(0, 25).map(i => `<tr><td>${esc(i.ctx)}</td><td class="num">${(i.duracao.n || i.posse.n).toLocaleString("pt-BR")}</td>`
+          + `<td class="num">${seg(i.posse.total_s)}</td><td class="num">${seg(i.posse.max_s)}</td><td class="num">${seg(i.espera.total_s)}</td>`
+          + `<td class="num">${i.duracao.n ? seg(i.duracao.total_s / i.duracao.n) : "—"}</td><td class="num">${i.duracao.n ? seg(i.duracao.max_s) : "—"}</td></tr>`).join("") + "</tbody>";
+      $("medLentos").textContent = m.lentos.length ? "Piores ocorrências: " + m.lentos.slice(0, 8).map(l => `${l.ctx} ${l.tipo === "posse" ? "segurou" : l.tipo === "espera" ? "esperou" : "demorou"} ${seg(l.segundos)} (${dataHora(l.quando)})`).join(" · ") : "";
+    } catch (e) { $("medSub").textContent = "Medição indisponível: " + e.message; }
+  }
+  $("medZerar").onclick = () => carregarMedicao(true);
+
   async function carregar(primeira = false) {
+    carregarMedicao();
     try {
       dados = await api("/api/saude");
       $("erro").hidden = true;
