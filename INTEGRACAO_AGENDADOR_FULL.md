@@ -4,9 +4,20 @@ A tela **Demanda Full** (`/expedicao/analise-full`) tem a seção **Remessa suge
 pelo servidor (`GET /api/full/remessa`). Quando a remessa está **pronta** (situação `pronta`),
 o botão **Procurar datas** entrega os itens à extensão do Agendador Full por `window.postMessage`.
 
-A extensão fica **fora do repositório**: `Desktop\NOROMAK_AGENDADOR_FULL`. A partir da **v0.3**
-ela precisa de um *content script* que rode em `https://noromakweb.com.br/expedicao/analise-full*`
-(e no endereço local de teste), escute `message` na própria janela e responda.
+A extensão fica **fora do repositório**: `Desktop\NOROMAK_REMESSA_FULL` (**v0.3**, 13/10/2026). O
+agendamento da data continua com o Vaguei (`Desktop\VAGUEI`), que é o produto vendável e não conhece
+o Noromak. A v0.3 tem um *content script* em `https://noromakweb.com.br/expedicao/analise-full*`
+(e no endereço local de teste) que escuta `message` na própria janela e responde.
+
+**O que a v0.3 faz com a lista:** abre o "Planeje seu envio para o Full" do ML
+(`/anuncios/lista/shipment_planning/plans`), busca cada MLB
+(`POST /stock-management/shipment-planning/api/main/grid?search=MLB…`, corpo `{"products":[]}`) e mostra
+um painel. **Só no clique** "Criar envio no ML" chama `plan-validation` → (`star-products-validation`) →
+`plan-create` com `{planType:"custom", units:[{id:"MLBU…", shipmentUnits, recommendedQuantity, isStarProduct,
+isSuper, benefitId:"-", stockLevel:"-", fcVirtual}]}` e os cabeçalhos `csrf-token`/`x-csrf-token` (meta
+`csrf-token`); o ML responde `redirectUrl` `/shipping/inbounds/{id}/hub-v2`. Produto novo (`NOVO:`) e
+anúncio com variações ficam fora, para incluir à mão. Levantado em 13/10/2026 pelo código da tela do ML
+(API interna: se o ML mudar a tela, a extensão para até ser ajustada).
 
 ## Mensagem da tela para a extensão
 
