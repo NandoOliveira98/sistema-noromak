@@ -669,12 +669,13 @@ html[data-tema="escuro"] input.sku-travado-v1918{background:#2a2d33;color:#b8bcc
 .prec-right-col .ml-link-grid{grid-template-columns:1fr!important}
 .recolhe-v1922>summary{cursor:pointer;list-style:none;display:flex;flex-direction:column;gap:2px}
 .recolhe-v1922>summary::-webkit-details-marker{display:none}
-.recolhe-v1922>summary strong::after{content:" B8";color:#1F57A5}
-.recolhe-v1922[open]>summary strong::after{content:" BE"}
+.recolhe-v1922>summary strong::after{content:" \25B8";color:#1F57A5}
+.recolhe-v1922[open]>summary strong::after{content:" \25BE"}
 .recolhe-v1922>summary small{color:#586A7D;font-size:.7rem}
 .recolhe-v1922[open]>summary{margin-bottom:12px}
 #ml-link-section>.recolhe-v1922>summary{padding:4px 2px}
-.prec-right-col .prec-compare-panel{margin-top:14px;margin-bottom:0}
+.prec-left-col .prec-compare-panel{margin-top:14px;margin-bottom:0}
+.prec-left-col .ml-link-section{margin-top:14px}
 /* V19.21: tela usa a largura toda; coluna de preços maior; título em até 2 linhas */
 .app-shell{max-width:none!important}
 @media (min-width:1181px){.prec-two-col{grid-template-columns:minmax(0,1.25fr) minmax(520px,1fr)!important}}
@@ -1206,6 +1207,49 @@ html[data-tema="escuro"] [style*="color: #b45309" i]{color:#EDB082!important}
           <button class="btn btn-danger excluir-v1919" id="delete-btn" type="button">Excluir</button>
         </div>
       </section>
+<!-- V19.23: preços e anúncios (recolhidos) embaixo do produto aberto -->
+<section class="panel prec-compare-panel">
+        <details class="recolhe-v1922"><summary><span class="eyebrow">Resultado</span><strong>Preços por marketplace</strong><small>Mínimo, ideal, lucro e margem lado a lado — o destaque é o menor preço ideal</small></summary>
+        <div class="comparison"><table><thead><tr><th>Marketplace</th><th>Preço mínimo</th><th>Preço ideal</th><th>Lucro líquido</th><th>Margem real</th></tr></thead><tbody id="comparison-body"></tbody></table></div>
+        </details>
+      </section>
+<section class="ml-link-section" id="ml-link-section">
+        <details class="recolhe-v1922" id="ml-link-recolhe-v1922"><summary><strong>Mercado Livre · anúncios e promoções</strong><small>MLBs vinculados ao SKU e promoções deste produto</small></summary>
+        <div class="ml-link-head">
+          <div>
+            <h3>Mercado Livre · anúncios e promoções</h3>
+            <p>Os MLBs são vinculados automaticamente pelo SKU. Vínculo manual fica apenas para exceções.</p>
+          </div>
+          <div class="ml-link-actions">
+            <span id="ml-link-sync-status" class="ml-link-sync-status">Ainda não sincronizado</span>
+            <button class="btn btn-secondary ml-link-mini-btn" id="ml-link-refresh" type="button">↻ Sincronizar anúncios</button>
+          </div>
+        </div>
+
+        <div class="ml-link-grid">
+          <div class="ml-link-card">
+            <div class="ml-link-card-head">
+              <strong>Anúncios do SKU</strong>
+              <span id="ml-link-count" class="ml-link-badge neutral">0 anúncios</span>
+            </div>
+            <div id="ml-link-list" class="ml-link-empty">Selecione um produto para ver os anúncios vinculados.</div>
+            <div class="ml-link-inline-form">
+              <input id="ml-link-input" type="text" placeholder="Vínculo manual somente se o SKU não for identificado">
+              <button class="btn btn-secondary ml-link-mini-btn" id="ml-link-add" type="button">+ Vincular</button>
+            </div>
+          </div>
+
+          <div class="ml-link-card">
+            <div class="ml-link-card-head">
+              <strong>Promoções deste produto</strong>
+              <span id="ml-promo-count" class="ml-link-badge neutral">0 promoções</span>
+            </div>
+            <div id="ml-promo-summary" class="ml-link-empty">Nenhum anúncio vinculado.</div>
+          </div>
+        </div>
+              </details>
+      </section>
+
 
 
         </div>
@@ -1255,48 +1299,9 @@ html[data-tema="escuro"] [style*="color: #b45309" i]{color:#EDB082!important}
         </details>
       </section>
 <!-- V19.22: o cálculo automático (ML primeiro) fica em cima e aberto; preços e anúncios embaixo, recolhidos -->
-<section class="panel prec-compare-panel">
-        <details class="recolhe-v1922"><summary><span class="eyebrow">Resultado</span><strong>Preços por marketplace</strong><small>Mínimo, ideal, lucro e margem lado a lado — o destaque é o menor preço ideal</small></summary>
-        <div class="comparison"><table><thead><tr><th>Marketplace</th><th>Preço mínimo</th><th>Preço ideal</th><th>Lucro líquido</th><th>Margem real</th></tr></thead><tbody id="comparison-body"></tbody></table></div>
-        </details>
-      </section>
+
 <!-- V19.21: anúncios e promoções do SKU na coluna da direita (sobrava espaço) -->
-<section class="ml-link-section" id="ml-link-section">
-        <details class="recolhe-v1922" id="ml-link-recolhe-v1922"><summary><strong>Mercado Livre · anúncios e promoções</strong><small>MLBs vinculados ao SKU e promoções deste produto</small></summary>
-        <div class="ml-link-head">
-          <div>
-            <h3>Mercado Livre · anúncios e promoções</h3>
-            <p>Os MLBs são vinculados automaticamente pelo SKU. Vínculo manual fica apenas para exceções.</p>
-          </div>
-          <div class="ml-link-actions">
-            <span id="ml-link-sync-status" class="ml-link-sync-status">Ainda não sincronizado</span>
-            <button class="btn btn-secondary ml-link-mini-btn" id="ml-link-refresh" type="button">↻ Sincronizar anúncios</button>
-          </div>
-        </div>
 
-        <div class="ml-link-grid">
-          <div class="ml-link-card">
-            <div class="ml-link-card-head">
-              <strong>Anúncios do SKU</strong>
-              <span id="ml-link-count" class="ml-link-badge neutral">0 anúncios</span>
-            </div>
-            <div id="ml-link-list" class="ml-link-empty">Selecione um produto para ver os anúncios vinculados.</div>
-            <div class="ml-link-inline-form">
-              <input id="ml-link-input" type="text" placeholder="Vínculo manual somente se o SKU não for identificado">
-              <button class="btn btn-secondary ml-link-mini-btn" id="ml-link-add" type="button">+ Vincular</button>
-            </div>
-          </div>
-
-          <div class="ml-link-card">
-            <div class="ml-link-card-head">
-              <strong>Promoções deste produto</strong>
-              <span id="ml-promo-count" class="ml-link-badge neutral">0 promoções</span>
-            </div>
-            <div id="ml-promo-summary" class="ml-link-empty">Nenhum anúncio vinculado.</div>
-          </div>
-        </div>
-              </details>
-      </section>
 
 
         </div>

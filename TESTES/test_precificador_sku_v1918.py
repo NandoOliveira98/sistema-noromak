@@ -33,8 +33,11 @@ class TestTelaSimplesV1919(unittest.TestCase):
     def test_calculo_em_cima_preco_e_anuncios_recolhidos(self):
         # V19.22 (pedido do dono): cálculo automático em cima e aberto; preços e anúncios embaixo, recolhidos.
         self.assertIn('<details class="taxas-v1919" open>', HTML)
-        self.assertLess(HTML.index('class="taxas-v1919"'), HTML.index('class="panel prec-compare-panel"'))
+        # V19.23: preços e anúncios embaixo do produto aberto (coluna esquerda); cálculo sozinho na direita.
+        self.assertLess(HTML.index('class="panel prec-product-panel"'), HTML.index('class="panel prec-compare-panel"'))
         self.assertLess(HTML.index('class="panel prec-compare-panel"'), HTML.index('id="ml-link-section"'))
+        self.assertLess(HTML.index('id="ml-link-section"'), HTML.index('class="prec-right-col"'))
+        self.assertNotIn(chr(0x15), HTML)
         self.assertEqual(HTML.count('<details class="recolhe-v1922"'), 2)
         self.assertIn("function tituloProdutoV1919()", HTML)
         self.assertIn('id="retry-v1919"', HTML)
