@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.25-MAGALU-TOKEN-FORM"
+APP_VERSION = "19.26-MAGALU-PREVIA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -1965,6 +1965,13 @@ def init_db() -> None:
                 detail TEXT NOT NULL DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS idx_magalu_event_log_created ON magalu_event_log(created_at);
+            -- V19.26: 1ª resposta real de cada tipo (conferir os campos com a doc).
+            CREATE TABLE IF NOT EXISTS magalu_amostra_v1926 (
+                tipo TEXT PRIMARY KEY,
+                resposta TEXT NOT NULL DEFAULT '',
+                tem_dado INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT ''
+            );
             """
         )
         DB.executescript(
@@ -5955,6 +5962,127 @@ def magalu_access_token(force: bool = False) -> str:
             raise
         magalu_log_event("oauth_refresh", "", "OK", "Access token renovado.")
         return str(magalu_integration_row()["access_token"]).strip()
+
+
+# ---------------------------------------------------------------------------
+# V19.26 — Magalu, fase 1a: PRÉVIA dos pedidos que entrariam na fila. Só lê: nada
+# aqui grava em conf_pedidos. O dono confere com o Portal do Seller antes da 1b
+# (importação). A 1ª resposta real com pedidos fica em magalu_amostra_v1926 para
+# conferir os nomes dos campos (a documentação só tem exemplo).
+# ---------------------------------------------------------------------------
+MAGALU_PEDIDOS_POR_PAGINA = 100
+MAGALU_PEDIDOS_MAX_PAGINAS = 20
+# Entrega que ainda precisa sair daqui (shipped/delivered/cancelled/frozen ficam fora).
+MAGALU_ENTREGA_PARA_EXPEDIR = {"approved", "invoiced"}
+
+
+class MagaluHttp401(Exception):
+    pass
+
+
+def _magalu_http_get(url: str, token: str) -> Any:
+    """Só a chamada de rede. Isolada para poder ser testada."""
+    req = urllib.request.Request(url, method="GET", headers={
+        "Authorization": f"Bearer {token}", "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=25) as resp:
+            return json.loads(resp.read().decode("utf-8", "replace") or "{}")
+    except urllib.error.HTTPError as exc:
+        if exc.code == 401:
+            raise MagaluHttp401()
+        raise RuntimeError(f"Magalu HTTP {exc.code}: {exc.read().decode('utf-8', 'replace')[:500]}")
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Falha de rede na Magalu: {exc.reason}")
+
+
+def magalu_api_get(path: str, params: dict[str, Any] | None = None) -> Any:
+    query = {k: v for k, v in (params or {}).items() if v is not None and v != ""}
+    url = MAGALU_API_BASE + path + (("?" + urlencode(query)) if query else "")
+    try:
+        return _magalu_http_get(url, magalu_access_token())
+    except MagaluHttp401:
+        # Token recusado antes do vencimento: renova uma vez (sob a trava) e tenta de novo.
+        try:
+            return _magalu_http_get(url, magalu_access_token(force=True))
+        except MagaluHttp401:
+            raise RuntimeError("Magalu recusou o acesso (401). Reconecte a conta em Integrações.")
+
+
+def _magalu_guardar_amostra(tipo: str, resposta: Any) -> None:
+    tem_dado = bool(isinstance(resposta, dict) and resposta.get("results"))
+    with DB_LOCK:
+        atual = DB.execute("SELECT tem_dado FROM magalu_amostra_v1926 WHERE tipo=?", (tipo,)).fetchone()
+        if atual and (int(atual["tem_dado"] or 0) or not tem_dado):
+            return  # já tem a 1ª resposta com dado
+        DB.execute("INSERT OR REPLACE INTO magalu_amostra_v1926(tipo,resposta,tem_dado,created_at) VALUES(?,?,?,?)",
+                   (tipo, json_dumps(resposta)[:500000], 1 if tem_dado else 0, now_iso()))
+        DB.commit()
+
+
+def magalu_pedidos_abertos() -> list[dict[str, Any]]:
+    """Pedidos aprovados da Magalu (paginado). Só lê."""
+    pedidos_api: list[dict[str, Any]] = []
+    for pagina in range(MAGALU_PEDIDOS_MAX_PAGINAS):
+        params = {"status": "approved", "_limit": MAGALU_PEDIDOS_POR_PAGINA,
+                  "_offset": pagina * MAGALU_PEDIDOS_POR_PAGINA, "_sort": "purchased_at:asc"}
+        resp = magalu_api_get("/seller/v1/orders", params)
+        _magalu_guardar_amostra("orders", resp)
+        resultados = resp.get("results") if isinstance(resp, dict) else None
+        if not isinstance(resultados, list) or not resultados:
+            break
+        pedidos_api.extend(r for r in resultados if isinstance(r, dict))
+        if len(resultados) < MAGALU_PEDIDOS_POR_PAGINA:
+            break
+    return pedidos_api
+
+
+def magalu_pedidos_previa() -> dict[str, Any]:
+    pedidos_api = magalu_pedidos_abertos()
+    products_raw, _, _ = get_storage("conf_produtos")
+    products = _rows_from_storage_value(products_raw)
+    fila_raw, _, _ = get_storage("conf_pedidos")
+    na_fila = {order_number(r) for r in _rows_from_storage_value(fila_raw) if isinstance(r, dict)}
+    saida: list[dict[str, Any]] = []
+    for pedido in pedidos_api:
+        code = str(pedido.get("code") or "").strip()
+        if not code:
+            continue
+        linhas_brutas: list[dict[str, Any]] = []
+        limite = ""
+        for entrega in pedido.get("deliveries") or []:
+            if not isinstance(entrega, dict):
+                continue
+            if str(entrega.get("status") or "").strip().lower() not in MAGALU_ENTREGA_PARA_EXPEDIR:
+                continue
+            shipping = entrega.get("shipping") if isinstance(entrega.get("shipping"), dict) else {}
+            handling = shipping.get("handling_time") if isinstance(shipping.get("handling_time"), dict) else {}
+            limite = limite or str(handling.get("limit_date") or "")
+            for item in entrega.get("items") or []:
+                if not isinstance(item, dict):
+                    continue
+                info = item.get("info") if isinstance(item.get("info"), dict) else {}
+                sku = str(info.get("sku") or "").strip()
+                linhas_brutas.append({"Pedido": code, "SKU": sku, "SkuOrigemImportacao": sku,
+                                      "Quantidade": str(item.get("quantity") or 1),
+                                      "Descrição": str(info.get("name") or ""),
+                                      "EntregaMagalu": str(entrega.get("code") or "")})
+        if not linhas_brutas:
+            continue
+        linhas = []
+        for row in _shopee_expand_kit_lines(linhas_brutas, products):  # V18.71: mesma regra de kit
+            produto = _ml_find_product(products, str(row.get("SKU") or ""))
+            linhas.append({
+                "sku": str(row.get("SKU") or ""), "quantidade": str(row.get("Quantidade") or ""),
+                "descricao": str((produto or {}).get("Descrição") or row.get("Descrição") or ""),
+                "ean": str((produto or {}).get("Código de Barras") or ""),
+                "kit": str(row.get("SkuKitOrigem") or ""), "entrega": str(row.get("EntregaMagalu") or ""),
+                "cadastrado": bool(produto),
+            })
+        cliente = pedido.get("customer") if isinstance(pedido.get("customer"), dict) else {}
+        saida.append({"pedido": code, "comprado_em": str(pedido.get("purchased_at") or ""),
+                      "limite_envio": limite, "cliente": str(cliente.get("name") or ""),
+                      "ja_na_fila": code in na_fila, "linhas": linhas})
+    return {"ok": True, "pedidos": saida, "total_api": len(pedidos_api), "buscado_em": now_iso()}
 
 
 def shopee_api_get(path: str, params: dict[str, Any] | None = None, retry_auth: bool = True) -> dict[str, Any]:
@@ -25377,6 +25505,28 @@ class AppHandler(BaseHTTPRequestHandler):
                     self.send_redirect(magalu_connect_url())
                 except Exception as exc:
                     self.send_json({"error": str(exc)}, 503)
+            return
+        if path == "/api/integracoes/magalu/previa":  # V19.26: só lê, não grava na fila
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                try:
+                    resultado = magalu_pedidos_previa()
+                    magalu_log_event("previa", "/seller/v1/orders", "OK",
+                                     f"{len(resultado['pedidos'])} pedido(s) para expedir de {resultado['total_api']} aprovado(s)")
+                    self.send_json(resultado)
+                except Exception as exc:
+                    magalu_log_event("previa", "/seller/v1/orders", "ERRO", str(exc))
+                    self.send_json({"ok": False, "error": str(exc)}, 502)
+            return
+        if path == "/api/integracoes/magalu/amostra":  # V19.26: dados de cliente → só perfil Admin
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                if str(ctx.get("app_role") or "") != "admin":
+                    self.send_json({"error": "Somente o perfil Admin."}, 403)
+                    return
+                with DB_LOCK:
+                    rows = DB.execute("SELECT tipo,resposta,tem_dado,created_at FROM magalu_amostra_v1926").fetchall()
+                self.send_json({"ok": True, "amostras": [dict(r) for r in rows]})
             return
         if path == "/api/integracoes/magalu/logs":
             ctx = self.auth(admin_only=True)

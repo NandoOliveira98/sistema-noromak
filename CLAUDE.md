@@ -351,6 +351,7 @@ Uma conta só (Araçatuba). **Fase 0:** OAuth do ID Magalu (`magalu_connect_url`
 linha), tabelas `magalu_integration` / `magalu_oauth_state` / `magalu_event_log` (30 dias), rotas
 `/api/integracoes/magalu/{callback,status,connect,logs,disconnect}` e as páginas **públicas** `/termos` e
 `/privacidade` (o `idm client create` exige as duas + o callback). Credenciais `MAGALU_CLIENT_ID/SECRET` no `.env`.
+**Fase 1a (V19.26):** prévia **só leitura** — `GET /api/integracoes/magalu/previa` (`magalu_pedidos_previa`: `/seller/v1/orders?status=approved`, paginado; entrega `approved`/`invoiced` entra, kit aberto pelo `_shopee_expand_kit_lines`) e botão "Ver pedidos da Magalu" no cartão; **não grava em `conf_pedidos`**. A 1ª resposta com pedidos fica em `magalu_amostra_v1926` (`GET /api/integracoes/magalu/amostra`, perfil Admin) — conferir os campos antes da 1b (importação).
 
 ### Mercado Livre
 OAuth com `offline_access`. Cinco workers em background rodam 24/7 no servidor:
@@ -983,6 +984,7 @@ Os testes ficam em `TESTES/` (são 30 arquivos; os principais):
 | `test_remessa_full_v1903.py` | cálculo (30 dias, kit conta 1, Apollo Araçatuba dividido, null nunca zero), uma remessa aberta, ajuste do ADMIN nunca desfeito, mínimo de 150, rodada descartada se agendaram durante a leitura, novos só com confirmação, não aceito por código, recebida automática (≥ 50%) e manual, aviso 1x/dia, linha do e-mail, rotas e permissões |
 | `test_campanhas_linha_v1904.py` | campanhas lidas por anúncio e pela conta certa, pausa/interrupção sem limpeza, lucro da promoção e de cada campanha na mesma base, melhor só acima do lucro e da margem mínima, relâmpago sem Aceitar, sem custo = nulo, expirada/outra conta/removida fora, tela com a coluna nova e sem a lista de convites |
 | `test_magalu_v1924.py` | páginas de termos/privacidade sem login, URL de consentimento, state de uso único, token não vaza no status, renovação serializada com o refresh novo, callback com erro volta ao Admin |
+| `test_magalu_previa_v1926.py` | prévia não grava na fila, só entrega approved/invoiced, kit aberto, já-na-fila, paginação, 1ª resposta guardada, 401 renova o token uma vez |
 | `test_instalacao.py` | instalação nova, idempotência do `init_db`, versionamento do storage, autenticação |
 | `base.py` | infraestrutura: banco temporário, servidor real em porta livre, cliente HTTP |
 

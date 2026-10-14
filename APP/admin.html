@@ -2069,8 +2069,10 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
           <div class="integracao-acoes">
             <button type="button" id="btnMagaluConectar" class="btn-primario" onclick="conectarMagaluAdmin()">Conectar Magalu</button>
             <button type="button" id="btnMagaluDesconectar" class="btn-perigo" onclick="desconectarMagaluAdmin()" disabled>Desconectar</button>
+            <button type="button" id="btnMagaluPrevia" class="btn-secundario" onclick="previaMagaluAdmin()" disabled>Ver pedidos da Magalu</button>
           </div>
-          <div id="magaluIntegracaoMensagem" class="integracao-nota">Entre com a conta da <b>loja</b> (pessoa jurídica) no ID Magalu e escolha a loja da Noromak. Por enquanto só conecta: os pedidos da Magalu passam a entrar na próxima etapa.</div>
+          <div id="magaluPrevia"></div>
+          <div id="magaluIntegracaoMensagem" class="integracao-nota">Entre com a conta da <b>loja</b> (pessoa jurídica) no ID Magalu e escolha a loja da Noromak. "Ver pedidos da Magalu" mostra o que entraria na fila, sem gravar nada; a importação automática vem na próxima etapa.</div>
         </div>
         <div class="integracao-card">
           <h3><i class=nk-i-file></i> Linx DMS · Smart API</h3>
@@ -9836,6 +9838,7 @@ async function carregarIntegracaoMagaluAdmin(){
     if(mg.connected){
       badge.className="integracao-status ok";badge.textContent="🟢 Magalu conectada";
       if(conectar){conectar.disabled=false;conectar.textContent="Reconectar Magalu";}if(disc)disc.disabled=false;
+      const prev=document.getElementById("btnMagaluPrevia");if(prev)prev.disabled=false;
       if(msg&&mg.last_error)msg.textContent="Último erro: "+mg.last_error;
     }else if(!mg.configured){
       badge.className="integracao-status off";badge.textContent="🟡 Aguardando credenciais (MAGALU_CLIENT_ID no .env)";
@@ -9848,6 +9851,29 @@ async function carregarIntegracaoMagaluAdmin(){
   const estado=new URLSearchParams(location.search).get("magalu");
   if(estado==="conectada"&&msg)msg.textContent="✅ Magalu conectada ao Noromak.";
   else if(estado==="erro"&&msg)msg.textContent="❌ Não foi possível concluir a conexão com a Magalu. Tente de novo; o motivo fica no log da integração.";
+}
+// V19.26: prévia (fase 1a) — mostra o que ENTRARIA na fila; não grava nada.
+async function previaMagaluAdmin(){
+  const box=document.getElementById("magaluPrevia"),btn=document.getElementById("btnMagaluPrevia");
+  if(!box)return;
+  const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  const card=box.closest(".integracao-card");if(card)card.style.gridColumn="1 / -1";  // tabela larga: cartão na linha toda
+  if(btn){btn.disabled=true;btn.textContent="Buscando…";}
+  box.innerHTML='<div class="integracao-nota">Consultando a Magalu…</div>';
+  try{
+    const d=await mlApiAdmin("/expedicao/api/integracoes/magalu/previa");
+    const ps=d.pedidos||[];
+    let h=`<div class="integracao-nota"><b>Prévia — nada foi gravado.</b> ${ps.length} pedido(s) para expedir (de ${d.total_api||0} aprovado(s) na Magalu). Compare com o Portal do Seller.</div>`;
+    if(ps.length){
+      h+='<div class="ml-log-wrap" style="margin-top:10px"><table class="ml-log-table" data-nk-tabela="previa_magalu"><thead><tr><th>Pedido</th><th>Na fila?</th><th>Cliente</th><th>Enviar até</th><th>SKU</th><th>Qtd</th><th>Descrição</th><th>EAN</th><th>Kit</th></tr></thead><tbody>';
+      for(const p of ps){for(const l of p.linhas){
+        h+=`<tr><td>${esc(p.pedido)}</td><td>${p.ja_na_fila?"Sim (extensão/manual)":"Não"}</td><td>${esc(p.cliente)}</td><td>${p.limite_envio?esc(mlDataHora(p.limite_envio)):"—"}</td><td>${esc(l.sku)}${l.cadastrado?"":' <b title="SKU sem cadastro de produto">⚠</b>'}</td><td>${esc(l.quantidade)}</td><td>${esc(l.descricao)}</td><td>${esc(l.ean)||"—"}</td><td>${esc(l.kit)||"—"}</td></tr>`;
+      }}
+      h+='</tbody></table></div>';
+    }
+    box.innerHTML=h;
+  }catch(e){box.innerHTML=`<div class="integracao-alerta">❌ ${esc(e.message)}</div>`;}
+  finally{if(btn){btn.disabled=false;btn.textContent="Ver pedidos da Magalu";}}
 }
 function conectarMagaluAdmin(){window.location.href="/expedicao/api/integracoes/magalu/connect";}
 async function desconectarMagaluAdmin(){
