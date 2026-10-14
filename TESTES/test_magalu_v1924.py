@@ -114,6 +114,31 @@ class MagaluFase0(TesteNoromak):
         st, _, _ = _get_cru(self.url_base + "/api/integracoes/magalu/status")
         self.assertIn(st, (401, 403))
 
+    def test_token_vai_como_formulario_e_tenta_basic_no_invalid_client(self):
+        # V19.25: produção 14/10 — o code em JSON (como no exemplo da doc) deu 401 invalid_client.
+        import io, json as _json
+        enviados = []
+
+        class Resp(io.BytesIO):
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+
+        def abrir(req, timeout=0):
+            enviados.append(req)
+            if len(enviados) == 1:
+                raise urllib.error.HTTPError(req.full_url, 401, "x", {}, io.BytesIO(b'{"error":"invalid_client"}'))
+            return Resp(_json.dumps({"access_token": "A", "refresh_token": "R"}).encode())
+
+        with mock.patch.object(S.urllib.request, "urlopen", side_effect=abrir):
+            d = S._magalu_token_http({"grant_type": "authorization_code", "client_id": "CLI-ID",
+                                      "client_secret": "SEGREDO", "code": "C", "redirect_uri": "u"})
+        self.assertEqual(d["access_token"], "A")
+        primeiro, segundo = enviados
+        self.assertEqual(primeiro.get_header("Content-type"), "application/x-www-form-urlencoded")
+        self.assertIn(b"client_secret=SEGREDO", primeiro.data)
+        self.assertTrue(segundo.get_header("Authorization", "").startswith("Basic "))
+        self.assertNotIn(b"client_secret", segundo.data)
+
     def test_limpeza_inclui_log_da_magalu(self):
         S.magalu_log_event("teste", "", "OK")
         with S.DB_LOCK:

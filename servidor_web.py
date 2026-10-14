@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.24-MAGALU-CONEXAO"
+APP_VERSION = "19.25-MAGALU-TOKEN-FORM"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -5836,18 +5836,31 @@ def magalu_connect_url() -> str:
 
 
 def _magalu_token_http(dados: dict[str, str]) -> dict[str, Any]:
-    """Só a chamada de rede ao ID Magalu. Isolada para poder ser testada."""
-    if dados.get("grant_type") == "refresh_token":
-        corpo = urlencode(dados).encode("utf-8")
-        tipo = "application/x-www-form-urlencoded"
-    else:
-        corpo = json.dumps(dados).encode("utf-8")
-        tipo = "application/json"
-    req = urllib.request.Request(MAGALU_TOKEN_URL, data=corpo, method="POST",
-                                 headers={"Content-Type": tipo, "Accept": "application/json"})
-    try:
+    """Só a chamada de rede ao ID Magalu. Isolada para poder ser testada.
+
+    V19.25: produção 14/10 — o code em JSON (exemplo da doc) voltou 401 invalid_client
+    ("nenhuma autenticação de cliente incluída"). Vai como formulário com o secret no
+    corpo (client_secret_post); se ainda vier invalid_client, uma vez com Basic
+    (client_secret_basic). A recusa do cliente não gasta o code."""
+    def _enviar(campos: dict[str, str], basic: bool) -> dict[str, Any]:
+        cab = {"Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json"}
+        if basic:
+            par = f"{quote(campos.get('client_id', ''), safe='')}:{quote(campos.get('client_secret', ''), safe='')}"
+            cab["Authorization"] = "Basic " + base64.b64encode(par.encode("utf-8")).decode("ascii")
+            campos = {k: v for k, v in campos.items() if k != "client_secret"}
+        req = urllib.request.Request(MAGALU_TOKEN_URL, data=urlencode(campos).encode("utf-8"),
+                                     method="POST", headers=cab)
         with urllib.request.urlopen(req, timeout=20) as resp:
-            data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
+            return json.loads(resp.read().decode("utf-8", "replace") or "{}")
+
+    try:
+        try:
+            data = _enviar(dict(dados), basic=False)
+        except urllib.error.HTTPError as exc:
+            texto = exc.read().decode("utf-8", "replace")
+            if exc.code != 401 or "invalid_client" not in texto:
+                raise RuntimeError(f"ID Magalu HTTP {exc.code}: {texto[:500]}")
+            data = _enviar(dict(dados), basic=True)
     except urllib.error.HTTPError as exc:
         raise RuntimeError(f"ID Magalu HTTP {exc.code}: {exc.read().decode('utf-8', 'replace')[:500]}")
     except urllib.error.URLError as exc:

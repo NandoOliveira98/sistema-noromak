@@ -347,7 +347,7 @@ o Noromak só espera e mostra "aguardando NF"); 3 vendas em `vendas_v1799` (`mag
 API de análise financeira/DRE; sem ela, nula); 4 anúncios/preço/estoque **só leitura** (preço só por clique do
 ADMIN com a trava do mínimo; estoque **nunca** gravado); 5 pós-venda (SAC/perguntas na tela Pós-venda) e promoções.
 Uma conta só (Araçatuba). **Fase 0:** OAuth do ID Magalu (`magalu_connect_url` → `id.magalu.com/login` com
-`choose_tenants=true`; `magalu_exchange_code`; `magalu_access_token` renova sob `MAGALU_TOKEN_LOCK`, relendo a
+`choose_tenants=true`; `magalu_exchange_code`; token como **formulário** (o JSON do exemplo da doc dá 401 invalid_client — V19.25), com Basic de reserva; `magalu_access_token` renova sob `MAGALU_TOKEN_LOCK`, relendo a
 linha), tabelas `magalu_integration` / `magalu_oauth_state` / `magalu_event_log` (30 dias), rotas
 `/api/integracoes/magalu/{callback,status,connect,logs,disconnect}` e as páginas **públicas** `/termos` e
 `/privacidade` (o `idm client create` exige as duas + o callback). Credenciais `MAGALU_CLIENT_ID/SECRET` no `.env`.
