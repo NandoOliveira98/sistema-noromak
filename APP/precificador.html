@@ -665,6 +665,17 @@ input.sku-travado-v1918{background:var(--nk-fundo-2,#eef1f5);color:var(--nk-text
 html[data-tema="escuro"] input.sku-travado-v1918{background:#2a2d33;color:#b8bcc4}
 
 .kit-cadastrar-v1920{margin-top:4px;padding:3px 8px;font-size:.68rem;align-self:flex-start}
+.prec-right-col .ml-link-section{margin-top:14px}
+.prec-right-col .ml-link-grid{grid-template-columns:1fr!important}
+/* V19.21: tela usa a largura toda; coluna de preços maior; título em até 2 linhas */
+.app-shell{max-width:none!important}
+@media (min-width:1181px){.prec-two-col{grid-template-columns:minmax(0,1.25fr) minmax(520px,1fr)!important}}
+.prod-titulo-v1919{min-width:0}
+.prod-titulo-v1919 h2{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.prod-sku-v1921{font-size:.72rem;color:#586A7D;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:4px}
+.prod-sku-v1921:empty{display:none}
+.prec-compare-panel .comparison table{min-width:0!important;width:100%}
+.prec-compare-panel .comparison th,.prec-compare-panel .comparison td{padding:10px 8px;white-space:nowrap}
 /* V19.19: tela simples — título do produto aberto, resultado primeiro, uma linha de situação */
 .prod-titulo-v1919 h2{font-size:1.15rem;margin:2px 0 4px;word-break:break-word}
 .prod-selos-v1919{display:flex;gap:6px;flex-wrap:wrap}
@@ -1108,7 +1119,7 @@ html[data-tema="escuro"] [style*="color: #b45309" i]{color:#EDB082!important}
         <div class="prec-left-col">
 <section class="panel prec-product-panel">
         <div class="section-heading">
-          <div class="prod-titulo-v1919"><div class="eyebrow">Produto aberto</div><h2 id="prod-titulo-v1919">Nenhum produto aberto</h2><div class="prod-selos-v1919" id="prod-selos-v1919"></div></div>
+          <div class="prod-titulo-v1919"><div class="eyebrow">Produto aberto</div><h2 id="prod-titulo-v1919">Nenhum produto aberto</h2><div class="prod-sku-v1921" id="prod-sku-v1921"></div><div class="prod-selos-v1919" id="prod-selos-v1919"></div></div>
           <button class="btn btn-secondary" id="new-btn" type="button">+ Novo produto</button>
         </div>
         <div class="product-data-grid">
@@ -1188,40 +1199,7 @@ html[data-tema="escuro"] [style*="color: #b45309" i]{color:#EDB082!important}
         </div>
       </section>
 
-<section class="ml-link-section" id="ml-link-section">
-        <div class="ml-link-head">
-          <div>
-            <h3>Mercado Livre · anúncios e promoções</h3>
-            <p>Os MLBs são vinculados automaticamente pelo SKU. Vínculo manual fica apenas para exceções.</p>
-          </div>
-          <div class="ml-link-actions">
-            <span id="ml-link-sync-status" class="ml-link-sync-status">Ainda não sincronizado</span>
-            <button class="btn btn-secondary ml-link-mini-btn" id="ml-link-refresh" type="button">↻ Sincronizar anúncios</button>
-          </div>
-        </div>
 
-        <div class="ml-link-grid">
-          <div class="ml-link-card">
-            <div class="ml-link-card-head">
-              <strong>Anúncios do SKU</strong>
-              <span id="ml-link-count" class="ml-link-badge neutral">0 anúncios</span>
-            </div>
-            <div id="ml-link-list" class="ml-link-empty">Selecione um produto para ver os anúncios vinculados.</div>
-            <div class="ml-link-inline-form">
-              <input id="ml-link-input" type="text" placeholder="Vínculo manual somente se o SKU não for identificado">
-              <button class="btn btn-secondary ml-link-mini-btn" id="ml-link-add" type="button">+ Vincular</button>
-            </div>
-          </div>
-
-          <div class="ml-link-card">
-            <div class="ml-link-card-head">
-              <strong>Promoções deste produto</strong>
-              <span id="ml-promo-count" class="ml-link-badge neutral">0 promoções</span>
-            </div>
-            <div id="ml-promo-summary" class="ml-link-empty">Nenhum anúncio vinculado.</div>
-          </div>
-        </div>
-      </section>
         </div>
         <div class="prec-right-col">
 <section class="panel prec-compare-panel">
@@ -1270,6 +1248,41 @@ html[data-tema="escuro"] [style*="color: #b45309" i]{color:#EDB082!important}
           </article>
         </div>
         </details>
+      </section>
+<!-- V19.21: anúncios e promoções do SKU na coluna da direita (sobrava espaço) -->
+<section class="ml-link-section" id="ml-link-section">
+        <div class="ml-link-head">
+          <div>
+            <h3>Mercado Livre · anúncios e promoções</h3>
+            <p>Os MLBs são vinculados automaticamente pelo SKU. Vínculo manual fica apenas para exceções.</p>
+          </div>
+          <div class="ml-link-actions">
+            <span id="ml-link-sync-status" class="ml-link-sync-status">Ainda não sincronizado</span>
+            <button class="btn btn-secondary ml-link-mini-btn" id="ml-link-refresh" type="button">↻ Sincronizar anúncios</button>
+          </div>
+        </div>
+
+        <div class="ml-link-grid">
+          <div class="ml-link-card">
+            <div class="ml-link-card-head">
+              <strong>Anúncios do SKU</strong>
+              <span id="ml-link-count" class="ml-link-badge neutral">0 anúncios</span>
+            </div>
+            <div id="ml-link-list" class="ml-link-empty">Selecione um produto para ver os anúncios vinculados.</div>
+            <div class="ml-link-inline-form">
+              <input id="ml-link-input" type="text" placeholder="Vínculo manual somente se o SKU não for identificado">
+              <button class="btn btn-secondary ml-link-mini-btn" id="ml-link-add" type="button">+ Vincular</button>
+            </div>
+          </div>
+
+          <div class="ml-link-card">
+            <div class="ml-link-card-head">
+              <strong>Promoções deste produto</strong>
+              <span id="ml-promo-count" class="ml-link-badge neutral">0 promoções</span>
+            </div>
+            <div id="ml-promo-summary" class="ml-link-empty">Nenhum anúncio vinculado.</div>
+          </div>
+        </div>
       </section>
 
 
@@ -2706,7 +2719,11 @@ var state = {
             return String(i.value || "").split(" — ").slice(-1)[0].trim();
           }).filter(Boolean).join(" + ");
         }
-        h.textContent = sku ? sku + (nome ? " · " + nome : "") : (state.isNew ? "Novo produto" : "Nenhum produto aberto");
+        // V19.21: nome em destaque e o SKU numa linha menor (SKU de kit é enorme e empurrava tudo).
+        h.textContent = nome || sku || (state.isNew ? "Novo produto" : "Nenhum produto aberto");
+        h.title = h.textContent;
+        var linhaSku = byId("prod-sku-v1921");
+        if (linhaSku) { linhaSku.textContent = nome && sku ? "SKU " + sku : ""; linhaSku.title = sku; }
         var selos = [];
         if (state.isNew) selos.push('<span class="selo-v1919 novo">Novo · ainda não salvo</span>');
         if (el["is-kit"] && el["is-kit"].checked) selos.push('<span class="selo-v1919">Kit</span>');
