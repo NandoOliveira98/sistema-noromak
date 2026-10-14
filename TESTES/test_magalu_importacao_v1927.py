@@ -1,7 +1,6 @@
 """V19.27 — Magalu, fases 1b e 2: pedidos na fila e etiqueta automática.
 
-A importação começa DESLIGADA (decisão do dono, 14/10): só liga depois de conferir a prévia com
-o 1º pedido real. Barreiras iguais às da Shopee: exclusão do ADMIN e pedido concluído nunca
+A importação começa LIGADA (decisão do dono, 14/10), como nos outros marketplaces. Barreiras iguais às da Shopee: exclusão do ADMIN e pedido concluído nunca
 voltam, pedido que já veio pela extensão não duplica, kit vira componentes, edição manual fica.
 """
 
@@ -51,13 +50,13 @@ class MagaluImportacao(TesteNoromak):
     def importar(self):
         return S.magalu_importar_pedidos()
 
-    def test_comeca_desligada(self):
+    def test_comeca_ligada(self):
         with S.DB_LOCK:  # instalação nova: sem nada gravado
             S.DB.execute("DELETE FROM magalu_config_v1927")
             S.DB.commit()
-        self.assertFalse(S.magalu_importacao_ligada())
+        self.assertTrue(S.magalu_importacao_ligada(), "decisão do dono: igual aos outros marketplaces")
         st, corpo = self.cliente.pedir("GET", "/api/integracoes/magalu/status")
-        self.assertFalse(corpo["magalu"]["importacao_ligada"])
+        self.assertTrue(corpo["magalu"]["importacao_ligada"])
 
     def test_pedido_entra_na_fila_como_magalu(self):
         self.api = [_pedido("1111")]

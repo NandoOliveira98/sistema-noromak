@@ -9843,7 +9843,7 @@ async function carregarIntegracaoMagaluAdmin(){
       badge.className="integracao-status ok";badge.textContent="🟢 Magalu conectada";
       if(conectar){conectar.disabled=false;conectar.textContent="Reconectar Magalu";}if(disc)disc.disabled=false;
       const prev=document.getElementById("btnMagaluPrevia");if(prev)prev.disabled=false;
-      // V19.27: chave da importação (começa desligada).
+      // V19.27: chave da importação (começa ligada; Desligar = parada de emergência).
       const lig=!!mg.importacao_ligada,bi=document.getElementById("btnMagaluImportacao"),bs=document.getElementById("btnMagaluSincronizar");
       document.getElementById("magaluImportacao").textContent=lig?"🟢 Ligada — pedidos entram sozinhos a cada 2 min":"⚪ Desligada (só a prévia)";
       document.getElementById("magaluUltimaSync").textContent=mg.last_sync_at?mlDataHora(mg.last_sync_at):"—";

@@ -1965,7 +1965,7 @@ def init_db() -> None:
                 detail TEXT NOT NULL DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS idx_magalu_event_log_created ON magalu_event_log(created_at);
-            -- V19.27: chave da importação (começa desligada) e outras escolhas da Magalu.
+            -- V19.27: chave da importação (sem linha = ligada) e outras escolhas da Magalu.
             CREATE TABLE IF NOT EXISTS magalu_config_v1927 (
                 chave TEXT PRIMARY KEY,
                 valor TEXT NOT NULL DEFAULT '',
@@ -6095,8 +6095,8 @@ def magalu_pedidos_previa() -> dict[str, Any]:
 
 # ---------------------------------------------------------------------------
 # V19.27 — Magalu, fases 1b e 2: pedidos na fila (Pedidos pendentes/Conferência) e
-# etiqueta automática. A importação começa DESLIGADA: o dono liga em Integrações
-# depois de conferir a prévia com o 1º pedido real (decisão de 14/10).
+# etiqueta automática. A importação começa LIGADA, como a dos outros marketplaces
+# (decisão do dono, 14/10); o botão Desligar do cartão é a parada de emergência.
 # Regras (as da Shopee): chave = número do pedido Magalu; pedido que já está na fila
 # por outra origem (extensão/manual) NÃO é duplicado; kit vira componentes
 # (_shopee_expand_kit_lines); linha já importada só recebe os campos operacionais
@@ -6117,7 +6117,8 @@ MAGALU_CAMPOS_OPERACIONAIS = ("StatusMagalu", "Etiqueta API Magalu", "NF", "Nota
 def magalu_importacao_ligada() -> bool:
     with DB_LOCK:
         row = DB.execute("SELECT valor FROM magalu_config_v1927 WHERE chave='importacao'").fetchone()
-    return bool(row and str(row["valor"]) == "1")
+    # V19.27: sem escolha gravada = LIGADA (decisão do dono, 14/10: "igual aos outros marketplaces").
+    return True if not row else str(row["valor"]) == "1"
 
 
 def magalu_importacao_definir(ligada: bool, usuario: str) -> None:
