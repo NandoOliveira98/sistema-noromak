@@ -663,6 +663,42 @@
 .sku-trava-v1918 .btn{padding:0 10px}
 input.sku-travado-v1918{background:var(--nk-fundo-2,#eef1f5);color:var(--nk-texto-2,#556);cursor:default}
 html[data-tema="escuro"] input.sku-travado-v1918{background:#2a2d33;color:#b8bcc4}
+
+/* V19.19: tela simples — título do produto aberto, resultado primeiro, uma linha de situação */
+.prod-titulo-v1919 h2{font-size:1.15rem;margin:2px 0 4px;word-break:break-word}
+.prod-selos-v1919{display:flex;gap:6px;flex-wrap:wrap}
+@media (min-width:1001px){
+.prec-left-col .product-data-grid > .field:nth-child(1){grid-column:span 4}
+.prec-left-col .product-data-grid > .field:nth-child(2){grid-column:span 8}
+.prec-left-col .product-data-grid > .field:nth-child(n+3){grid-column:span 3}
+}
+.selo-v1919{font-size:.68rem;font-weight:800;padding:2px 8px;border-radius:999px;background:#E8EEF8;color:#1F57A5}
+.selo-v1919.curva{background:#EAF6EE;color:#1B7A3E}.selo-v1919.novo{background:#FFF4E5;color:#9A5B00}
+.branch-cost-panel{padding:8px 10px!important}
+.branch-cost-head span{display:none}
+.branch-cost-grid{display:flex!important;gap:6px!important;flex-wrap:wrap}
+.branch-cost-grid>*{flex:1 1 0;min-height:0!important;padding:6px 10px!important}
+.product-actions{display:flex;gap:10px;flex-wrap:wrap}
+.situacao-v1919{flex:1;display:flex;flex-direction:column;gap:2px;font-size:.72rem;font-weight:700;min-width:180px}
+.situacao-v1919 #autosave-status:empty{display:none}
+.situacao-v1919 #retry-v1919{align-self:flex-start;padding:3px 10px;font-size:.7rem}
+.situacao-v1919 small{font-size:.68rem}
+.situacao-v1919 small:empty{display:none}
+.excluir-v1919{margin-left:auto;background:transparent!important;border:1px solid #E4B4AE!important;color:#B42318!important;font-size:.72rem;padding:6px 10px}
+.prec-compare-panel{margin-bottom:14px}
+.taxas-v1919>summary{cursor:pointer;list-style:none;display:flex;flex-direction:column;gap:2px}
+.taxas-v1919>summary::-webkit-details-marker{display:none}
+.taxas-v1919>summary strong::after{content:" \25B8";color:#1F57A5}
+.taxas-v1919[open]>summary strong::after{content:" \25BE"}
+.taxas-v1919>summary small{color:#586A7D;font-size:.7rem}
+.taxas-v1919[open] .market-grid{margin-top:12px}
+.mais-v1919{position:relative}.mais-v1919>summary{list-style:none;cursor:pointer}
+.mais-v1919>summary::-webkit-details-marker{display:none}
+.mais-menu-v1919{position:absolute;right:0;top:calc(100% + 6px);z-index:40;display:flex;flex-direction:column;gap:6px;padding:8px;background:#fff;border:1px solid #D9E0EA;border-radius:10px;box-shadow:0 10px 24px rgba(0,0,0,.12)}
+.notification-badge.ponto-v1919{min-width:10px!important;width:10px;height:10px;padding:0!important;font-size:0!important}
+html[data-tema="escuro"] .selo-v1919{background:#26334a;color:#9cc0ff}
+html[data-tema="escuro"] .selo-v1919.curva{background:#1f3a2a;color:#8fd6a5}
+html[data-tema="escuro"] .mais-menu-v1919{background:#1d2026;border-color:#33373f}
 </style>
 <!-- V18.65: tema comum (fonte, foco e icones) por ultimo no head. -->
 <link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
@@ -829,8 +865,6 @@ html[data-tema="escuro"] [style*="color: #b45309" i]{color:#EDB082!important}
         <i class=nk-i-calendar></i> Promoções
         <span class="notification-badge" id="promotions-monitor-badge" hidden>0</span>
       </button>
-      <a href="/expedicao/promocoes" class="btn btn-secondary" style="text-decoration:none;display:inline-flex;align-items:center;gap:5px"
-         title="Renovar promoções com a margem conferida pelo Precificador"><i class=nk-i-tag></i> Promoções + margem</a>
       <a href="/expedicao/" style="color:#1F57A5;background:#fff;text-decoration:none;font-weight:900;font-size:.76rem;padding:8px 11px;border-radius:9px">← Voltar ao Sistema</a>
     </div>
   <a href="/expedicao/admin" class="btn btn-secondary" style="text-decoration:none;white-space:nowrap;">← Central Noromak</a>
@@ -864,8 +898,12 @@ html[data-tema="escuro"] [style*="color: #b45309" i]{color:#EDB082!important}
           <span class="count" id="product-count">0 produtos</span>
           <div class="toolbar-actions">
             <button class="btn btn-primary" id="bulk-apollo-btn" type="button">↻ Atualizar banco pelo Apollo</button>
-            <button class="btn btn-secondary" id="export-btn" type="button">Exportar backup</button>
-            <button class="btn btn-secondary" id="import-btn" type="button">Importar backup</button>
+            <details class="mais-v1919"><summary class="btn btn-secondary" title="Mais ações">⋯</summary>
+              <div class="mais-menu-v1919">
+                <button class="btn btn-secondary" id="export-btn" type="button">Exportar backup</button>
+                <button class="btn btn-secondary" id="import-btn" type="button">Importar backup</button>
+              </div>
+            </details>
             <input class="file-input" id="import-file" type="file" accept="application/json,.json">
           </div>
         </div>
@@ -1069,7 +1107,7 @@ html[data-tema="escuro"] [style*="color: #b45309" i]{color:#EDB082!important}
         <div class="prec-left-col">
 <section class="panel prec-product-panel">
         <div class="section-heading">
-          <div><div class="eyebrow">Cadastro · V16.76</div><h2>Dados do produto</h2><p>Altere os campos e veja os preços recalculados imediatamente.</p></div>
+          <div class="prod-titulo-v1919"><div class="eyebrow">Produto aberto</div><h2 id="prod-titulo-v1919">Nenhum produto aberto</h2><div class="prod-selos-v1919" id="prod-selos-v1919"></div></div>
           <button class="btn btn-secondary" id="new-btn" type="button">+ Novo produto</button>
         </div>
         <div class="product-data-grid">
@@ -1105,6 +1143,11 @@ html[data-tema="escuro"] [style*="color: #b45309" i]{color:#EDB082!important}
             <label for="imposto">Imposto (%)</label>
             <input id="imposto" type="number" min="0" max="99" step="0.01" inputmode="decimal">
           </div>
+
+          <div class="field field-curva-v1919">
+            <label for="curva">Curva</label>
+            <select id="curva"><option value="">—</option><option>A</option><option>B</option><option>C</option><option>D</option></select>
+          </div>
         </div>
 
         <div class="branch-cost-panel" id="branch-cost-panel">
@@ -1119,16 +1162,6 @@ html[data-tema="escuro"] [style*="color: #b45309" i]{color:#EDB082!important}
           </div>
         </div>
 
-        <div class="product-meta-row">
-          <div class="field">
-            <label for="curva">Curva</label>
-            <select id="curva"><option value="">—</option><option>A</option><option>B</option><option>C</option><option>D</option></select>
-          </div>
-          <div class="cost-status-row">
-            <small id="cost-api-status">Digite o SKU para consultar automaticamente.</small>
-            <small id="cost-last-change-note"></small>
-          </div>
-        </div>
         <div class="kit-choice">
           <label class="kit-check" for="is-kit"><input id="is-kit" type="checkbox"> Este produto é um kit</label>
           <small>Quando marcado, o custo do produto será a soma automática dos componentes.</small>
@@ -1144,8 +1177,13 @@ html[data-tema="escuro"] [style*="color: #b45309" i]{color:#EDB082!important}
         </div>
         <div class="product-actions" style="align-items:center">
           <button class="btn btn-primary" id="save-btn" type="button">Salvar agora</button>
-          <button class="btn btn-danger" id="delete-btn" type="button">Excluir</button>
-          <span id="autosave-status" style="margin-left:auto;color:#586A7D;font-size:.7rem;font-weight:800">Salvamento automático ativo</span>
+          <div class="situacao-v1919" role="status">
+            <span id="autosave-status"></span>
+            <button type="button" class="btn btn-secondary" id="retry-v1919" hidden>Tentar de novo</button>
+            <small id="cost-api-status">Digite o SKU para consultar automaticamente.</small>
+            <small id="cost-last-change-note"></small>
+          </div>
+          <button class="btn btn-danger excluir-v1919" id="delete-btn" type="button">Excluir</button>
         </div>
       </section>
 
@@ -1185,11 +1223,13 @@ html[data-tema="escuro"] [style*="color: #b45309" i]{color:#EDB082!important}
       </section>
         </div>
         <div class="prec-right-col">
+<section class="panel prec-compare-panel">
+        <div class="section-heading"><div><div class="eyebrow">Resultado</div><h2>Preços por marketplace</h2><p>O destaque indica o menor preço ideal.</p></div></div>
+        <div class="comparison"><table><thead><tr><th>Marketplace</th><th>Preço mínimo</th><th>Preço ideal</th><th>Lucro líquido</th><th>Margem real</th></tr></thead><tbody id="comparison-body"></tbody></table></div>
+      </section>
 <section class="panel prec-calc-panel">
-        <div class="section-heading">
-          <div><div class="eyebrow">Cálculo automático</div><h2>Marketplaces</h2><p>Os resultados consideram custo, imposto, comissão, taxa fixa/frete e margem desejada.</p></div>
-        </div>
-
+        <details class="taxas-v1919">
+        <summary><span class="eyebrow">Cálculo automático</span><strong>Ajustar taxas e margem</strong><small>Comissão, taxa fixa/frete e margem desejada de cada marketplace</small></summary>
         <div class="market-grid">
           <article class="market-card" data-market="ml">
             <div class="market-head ml"><strong>Mercado Livre</strong><span>Configuração por produto</span></div>
@@ -1228,12 +1268,10 @@ html[data-tema="escuro"] [style*="color: #b45309" i]{color:#EDB082!important}
             </div>
           </article>
         </div>
+        </details>
       </section>
 
-<section class="panel prec-compare-panel">
-        <div class="section-heading"><div><div class="eyebrow">Decisão</div><h2>Comparativo</h2><p>O destaque indica o menor preço ideal calculado.</p></div></div>
-        <div class="comparison"><table><thead><tr><th>Marketplace</th><th>Preço mínimo</th><th>Preço ideal</th><th>Lucro líquido</th><th>Margem real</th></tr></thead><tbody id="comparison-body"></tbody></table></div>
-      </section>
+
         </div>
       </div>
 
@@ -1772,6 +1810,7 @@ var state = {
         el.sku.classList.toggle("sku-travado-v1918", travar);
         el.sku.title = travar ? "SKU do produto salvo. Para buscar outro produto use a busca lá em cima; para trocar o SKU clique em ✎." : "";
         var b = byId("sku-alterar-v1918"); if (b) b.hidden = !travar;
+        tituloProdutoV1919();
       }
       function showToast(message) {
         el.toast.textContent = message;
@@ -2079,6 +2118,9 @@ var state = {
 
       function setAutoSaveStatus(message, kind) {
         if (!el["autosave-status"]) return;
+        // V19.19: uma linha de situação só; "ativo" não diz nada e erro ao salvar ganha "Tentar de novo".
+        if (message === "Salvamento automático ativo") message = "";
+        var retry = byId("retry-v1919"); if (retry) retry.hidden = !(kind === "error" && /salv/i.test(message));
         el["autosave-status"].textContent = message;
         el["autosave-status"].style.color = kind === "ok" ? "#1B7A3E" : kind === "error" ? "#B42318" : "#586A7D";
       }
@@ -2645,7 +2687,30 @@ var state = {
       }
 
       function productLabel(product) {
-        return product.produto || "Produto sem nome";
+        // V19.19: kit sem nome mostra os componentes, não "Produto sem nome".
+        if (product.produto) return product.produto;
+        var partes = (product.isKit && Array.isArray(product.kitItems) ? product.kitItems : []).map(function (item) {
+          return String(item && (item.produto || item.sku) || "").trim();
+        }).filter(Boolean);
+        return partes.length ? "Kit: " + partes.join(" + ") : "Produto sem nome";
+      }
+
+      // V19.19: título com o produto aberto — deixa claro o que se está editando.
+      function tituloProdutoV1919() {
+        var h = byId("prod-titulo-v1919"); if (!h) return;
+        var sku = String(el.sku.value || "").trim();
+        var nome = String(el.produto.value || "").trim();
+        if (!nome && el["is-kit"] && el["is-kit"].checked) {
+          nome = Array.prototype.map.call(document.querySelectorAll("#kit-items input[type=text], #kit-items input:not([type])"), function (i) {
+            return String(i.value || "").split(" — ").slice(-1)[0].trim();
+          }).filter(Boolean).join(" + ");
+        }
+        h.textContent = sku ? sku + (nome ? " · " + nome : "") : (state.isNew ? "Novo produto" : "Nenhum produto aberto");
+        var selos = [];
+        if (state.isNew) selos.push('<span class="selo-v1919 novo">Novo · ainda não salvo</span>');
+        if (el["is-kit"] && el["is-kit"].checked) selos.push('<span class="selo-v1919">Kit</span>');
+        if (el.curva && el.curva.value) selos.push('<span class="selo-v1919 curva">Curva ' + escapeHtml(el.curva.value) + '</span>');
+        byId("prod-selos-v1919").innerHTML = selos.join("");
       }
 
       function refreshAllKitCosts() {
@@ -3035,6 +3100,7 @@ var state = {
         el["shopee-results"].innerHTML = shopeeResults(results.shopee);
         el["magalu-results"].innerHTML = standardResults(results.magalu);
         renderComparison(results);
+        tituloProdutoV1919();
       }
 
       // V18.20: o bloco do Monitor de Promoções roda FORA deste escopo (as funções
@@ -3356,6 +3422,11 @@ var state = {
         el.search.dispatchEvent(new Event("input", { bubbles: true }));
         showToast("Para buscar produto use este campo de busca. O SKU do produto aberto não muda.");
       }, true);
+      byId("retry-v1919").addEventListener("click", function () { saveProduct(); });
+      ["produto", "curva", "is-kit"].forEach(function (id) {
+        el[id].addEventListener("input", tituloProdutoV1919);
+        el[id].addEventListener("change", tituloProdutoV1919);
+      });
       byId("sku-alterar-v1918").addEventListener("click", async function () {
         var atual = String(el.sku.value || "").trim();
         var texto = "Trocar o SKU do produto salvo \"" + atual + "\"? Isso muda o cadastro deste produto — não é para buscar outro.";
@@ -4739,6 +4810,22 @@ var state = {
           }
         }
       });
+</script>
+
+<script id="contadores-v1919">
+// V19.19: contador sempre alto vira ruído — mostra um ponto; o número fica ao passar o mouse.
+(function () {
+  function ajustar(b) {
+    var n = String(b.textContent || "").trim();
+    b.classList.add("ponto-v1919");
+    if (b.parentElement) b.parentElement.title = n && n !== "0" ? n + " pendente(s)" : "";
+  }
+  ["cost-alert-badge", "promotions-monitor-badge"].forEach(function (id) {
+    var b = document.getElementById(id); if (!b) return;
+    ajustar(b);
+    new MutationObserver(function () { ajustar(b); }).observe(b, { childList: true, characterData: true, subtree: true });
+  });
+})();
 </script>
 </body>
 </html>

@@ -20,3 +20,17 @@ class TestSkuTravado(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTelaSimplesV1919(unittest.TestCase):
+    """V19.19 — tela simples: título do produto aberto, resultado no topo, taxas recolhidas,
+    uma linha de situação, backup no menu ⋯. Os ids que o código usa continuam existindo."""
+    def test_ids_continuam_unicos(self):
+        for i in ("sku", "produto", "curva", "custo", "autosave-status", "cost-api-status",
+                  "cost-last-change-note", "export-btn", "import-btn", "delete-btn", "comparison-body"):
+            self.assertEqual(HTML.count('id="%s"' % i), 1, i)
+
+    def test_resultado_antes_das_taxas(self):
+        self.assertLess(HTML.index('class="panel prec-compare-panel"'), HTML.index('class="taxas-v1919"'))
+        self.assertIn("function tituloProdutoV1919()", HTML)
+        self.assertIn('id="retry-v1919"', HTML)
