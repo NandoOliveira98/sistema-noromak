@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.23-PRECIFICADOR-RECOLHIDOS-ESQUERDA"
+APP_VERSION = "19.24-MAGALU-CONEXAO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -108,6 +108,20 @@ SHOPEE_AUTH_PATH = os.getenv("SHOPEE_AUTH_PATH", "/api/v2/shop/auth_partner").st
 SHOPEE_TOKEN_PATH = os.getenv("SHOPEE_TOKEN_PATH", "/api/v2/auth/token/get").strip() or "/api/v2/auth/token/get"
 SHOPEE_REFRESH_PATH = os.getenv("SHOPEE_REFRESH_PATH", "/api/v2/auth/access_token/get").strip() or "/api/v2/auth/access_token/get"
 SHOPEE_AUTH_URL = os.getenv("SHOPEE_AUTH_URL", "").strip()
+
+# V19.24: Magalu (ID Magalu, OAuth 2.0 Authorization Code). Credenciais criadas pelo
+# `idm client create` (developers.magalu.com); o secret fica só no .env do servidor.
+MAGALU_CLIENT_ID = os.getenv("MAGALU_CLIENT_ID", "").strip()
+MAGALU_CLIENT_SECRET = os.getenv("MAGALU_CLIENT_SECRET", "").strip()
+MAGALU_REDIRECT_URI = os.getenv(
+    "MAGALU_REDIRECT_URI",
+    "https://noromakweb.com.br/expedicao/api/integracoes/magalu/callback",
+).strip()
+MAGALU_AUTH_URL = "https://id.magalu.com/login"
+MAGALU_TOKEN_URL = "https://id.magalu.com/oauth/token"
+MAGALU_API_BASE = os.getenv("MAGALU_API_BASE", "https://api.magalu.com").strip().rstrip("/")
+# Escopos extras pedidos no consentimento (somam aos --scopes-default do client).
+MAGALU_OAUTH_SCOPE = os.getenv("MAGALU_OAUTH_SCOPE", "open:order-order-seller:read").strip()
 
 # Mercado Livre API / OAuth. O Client Secret fica somente no .env do servidor.
 ML_CLIENT_ID = os.getenv("ML_CLIENT_ID", "").strip()
@@ -1924,6 +1938,35 @@ def init_db() -> None:
         )
         # V18.56: a limpeza diária dos logs filtra por data.
         DB.execute("CREATE INDEX IF NOT EXISTS idx_shopee_event_log_created ON shopee_event_log(created_at)")
+        # V19.24: Magalu — uma conta só (Araçatuba). Tokens só no banco do servidor.
+        DB.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS magalu_integration (
+                id INTEGER PRIMARY KEY CHECK (id=1),
+                access_token TEXT NOT NULL DEFAULT '',
+                refresh_token TEXT NOT NULL DEFAULT '',
+                scope TEXT NOT NULL DEFAULT '',
+                token_expires_at INTEGER NOT NULL DEFAULT 0,
+                connected_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT '',
+                last_sync_at TEXT NOT NULL DEFAULT '',
+                last_error TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS magalu_oauth_state (
+                state TEXT PRIMARY KEY,
+                expires_at_epoch INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS magalu_event_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                topic TEXT NOT NULL DEFAULT '',
+                resource TEXT NOT NULL DEFAULT '',
+                result TEXT NOT NULL DEFAULT '',
+                detail TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_magalu_event_log_created ON magalu_event_log(created_at);
+            """
+        )
         DB.executescript(
             """
             CREATE TABLE IF NOT EXISTS ml_integration (
@@ -5724,6 +5767,181 @@ def shopee_refresh_access_token(force: bool = False) -> sqlite3.Row:
         if not row:
             raise RuntimeError("Integração Shopee desapareceu após renovar o token.")
         return row
+
+
+# ---------------------------------------------------------------------------
+# V19.24 — Magalu, fase 0: só a conexão (OAuth do ID Magalu). Nada aqui lê pedido
+# nem grava na fila. Uma conta só, de Araçatuba (decisão do dono, 14/10).
+# Autorização: id.magalu.com/login?...&choose_tenants=true (o seller escolhe a loja).
+# Troca do code e renovação: POST id.magalu.com/oauth/token — o code em JSON, o
+# refresh em form-urlencoded (como na documentação). Access token dura até 2 h.
+# ---------------------------------------------------------------------------
+MAGALU_TOKEN_LOCK = threading.Lock()
+
+
+def magalu_credentials_configured() -> bool:
+    return bool(MAGALU_CLIENT_ID and MAGALU_CLIENT_SECRET)
+
+
+def magalu_integration_row() -> sqlite3.Row | None:
+    with DB_LOCK:
+        return DB.execute("SELECT * FROM magalu_integration WHERE id=1").fetchone()
+
+
+def magalu_log_event(topic: str, resource: str, result: str, detail: str = "") -> None:
+    with DB_LOCK:
+        DB.execute(
+            "INSERT INTO magalu_event_log(created_at,topic,resource,result,detail) VALUES(?,?,?,?,?)",
+            (now_iso(), str(topic or "")[:120], str(resource or "")[:500],
+             str(result or "")[:80], str(detail or "")[:2000]),
+        )
+        DB.commit()
+
+
+def magalu_status_payload() -> dict[str, Any]:
+    row = magalu_integration_row()
+    connected = bool(row and str(row["access_token"] or "").strip() and str(row["refresh_token"] or "").strip())
+    return {
+        "configured": magalu_credentials_configured(),
+        "connected": connected,
+        "client_id": MAGALU_CLIENT_ID,
+        "scope": str(row["scope"] or "") if row else "",
+        "connected_at": str(row["connected_at"] or "") if row else "",
+        "last_sync_at": str(row["last_sync_at"] or "") if row else "",
+        "last_error": str(row["last_error"] or "") if row else "",
+        "token_expires_at": int(row["token_expires_at"] or 0) if row else 0,
+        "redirect_uri": MAGALU_REDIRECT_URI,
+        "credentials_server_side": True,
+    }
+
+
+def magalu_connect_url() -> str:
+    if not magalu_credentials_configured():
+        raise RuntimeError("Configure MAGALU_CLIENT_ID e MAGALU_CLIENT_SECRET no /home/expedicao/.env antes de conectar.")
+    state = secrets.token_urlsafe(32)
+    now_epoch = int(time.time())
+    with DB_LOCK:
+        DB.execute("DELETE FROM magalu_oauth_state WHERE expires_at_epoch<?", (now_epoch,))
+        DB.execute("INSERT INTO magalu_oauth_state(state,expires_at_epoch) VALUES(?,?)", (state, now_epoch + 15 * 60))
+        DB.commit()
+    parametros = {
+        "client_id": MAGALU_CLIENT_ID,
+        "redirect_uri": MAGALU_REDIRECT_URI,
+        "scope": MAGALU_OAUTH_SCOPE,
+        "response_type": "code",
+        "choose_tenants": "true",  # obrigatório para seller: escolhe a loja (PJ)
+        "state": state,
+    }
+    return f"{MAGALU_AUTH_URL}?{urlencode(parametros)}"
+
+
+def _magalu_token_http(dados: dict[str, str]) -> dict[str, Any]:
+    """Só a chamada de rede ao ID Magalu. Isolada para poder ser testada."""
+    if dados.get("grant_type") == "refresh_token":
+        corpo = urlencode(dados).encode("utf-8")
+        tipo = "application/x-www-form-urlencoded"
+    else:
+        corpo = json.dumps(dados).encode("utf-8")
+        tipo = "application/json"
+    req = urllib.request.Request(MAGALU_TOKEN_URL, data=corpo, method="POST",
+                                 headers={"Content-Type": tipo, "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"ID Magalu HTTP {exc.code}: {exc.read().decode('utf-8', 'replace')[:500]}")
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Falha de rede no ID Magalu: {exc.reason}")
+    if not isinstance(data, dict):
+        raise RuntimeError("Resposta inválida do ID Magalu.")
+    return data
+
+
+def _magalu_gravar_token(data: dict[str, Any], conectando: bool) -> None:
+    access = str(data.get("access_token") or "").strip()
+    refresh = str(data.get("refresh_token") or "").strip()
+    if not access or not refresh:
+        raise RuntimeError("O ID Magalu não devolveu access_token/refresh_token.")
+    try:
+        expira = int(data.get("expires_in") or 7200)
+    except (TypeError, ValueError):
+        expira = 7200
+    agora = now_iso()
+    with DB_LOCK:
+        DB.execute(
+            """INSERT INTO magalu_integration(id,access_token,refresh_token,scope,token_expires_at,connected_at,updated_at,last_error)
+               VALUES(1,?,?,?,?,?,?,'')
+               ON CONFLICT(id) DO UPDATE SET
+                 access_token=excluded.access_token, refresh_token=excluded.refresh_token,
+                 scope=CASE WHEN excluded.scope='' THEN magalu_integration.scope ELSE excluded.scope END,
+                 token_expires_at=excluded.token_expires_at,
+                 connected_at=CASE WHEN ? THEN excluded.connected_at ELSE magalu_integration.connected_at END,
+                 updated_at=excluded.updated_at, last_error=''""",
+            (access, refresh, str(data.get("scope") or ""), int(time.time()) + max(60, expira),
+             agora, agora, 1 if conectando else 0),
+        )
+        DB.commit()
+
+
+def magalu_exchange_code(code: str, state: str) -> dict[str, Any]:
+    now_epoch = int(time.time())
+    with DB_LOCK:
+        row = DB.execute("SELECT * FROM magalu_oauth_state WHERE state=?", (state,)).fetchone()
+        DB.execute("DELETE FROM magalu_oauth_state WHERE state=? OR expires_at_epoch<?", (state, now_epoch))
+        DB.commit()
+    if not row or int(row["expires_at_epoch"] or 0) < now_epoch:
+        raise RuntimeError("Estado OAuth inválido ou expirado. Inicie a conexão novamente.")
+    data = _magalu_token_http({
+        "grant_type": "authorization_code",
+        "client_id": MAGALU_CLIENT_ID,
+        "client_secret": MAGALU_CLIENT_SECRET,
+        "redirect_uri": MAGALU_REDIRECT_URI,
+        "code": str(code or "").strip(),
+    })
+    _magalu_gravar_token(data, conectando=True)
+    magalu_log_event("oauth", "/callback", "CONECTADO", str(data.get("scope") or ""))
+    return magalu_status_payload()
+
+
+def _magalu_token_valido(row: sqlite3.Row | None, margem: int = 300) -> bool:
+    return bool(row and str(row["access_token"] or "").strip()
+                and int(row["token_expires_at"] or 0) > int(time.time()) + margem)
+
+
+def magalu_access_token(force: bool = False) -> str:
+    """Access token válido; renova com o refresh_token sob a trava (mesma regra da
+    Shopee/ML, V18.56: renovação serializada e relida sob a trava)."""
+    row = magalu_integration_row()
+    if not row or not str(row["refresh_token"] or "").strip():
+        raise RuntimeError("Magalu não conectada. Conecte a conta em Integrações.")
+    token_antes = str(row["access_token"] or "").strip()
+    if not force and _magalu_token_valido(row):
+        return token_antes
+    with MAGALU_TOKEN_LOCK:
+        row = magalu_integration_row()
+        if not row or not str(row["refresh_token"] or "").strip():
+            raise RuntimeError("Magalu não conectada. Conecte a conta em Integrações.")
+        if str(row["access_token"] or "").strip() != token_antes and _magalu_token_valido(row, margem=60):
+            return str(row["access_token"]).strip()
+        if not force and _magalu_token_valido(row):
+            return str(row["access_token"]).strip()
+        try:
+            data = _magalu_token_http({
+                "grant_type": "refresh_token",
+                "client_id": MAGALU_CLIENT_ID,
+                "client_secret": MAGALU_CLIENT_SECRET,
+                "refresh_token": str(row["refresh_token"]).strip(),
+            })
+            _magalu_gravar_token(data, conectando=False)
+        except Exception as exc:
+            with DB_LOCK:
+                DB.execute("UPDATE magalu_integration SET last_error=?, updated_at=? WHERE id=1",
+                           (str(exc)[:500], now_iso()))
+                DB.commit()
+            magalu_log_event("oauth_refresh", "", "ERRO", str(exc))
+            raise
+        magalu_log_event("oauth_refresh", "", "OK", "Access token renovado.")
+        return str(magalu_integration_row()["access_token"]).strip()
 
 
 def shopee_api_get(path: str, params: dict[str, Any] | None = None, retry_auth: bool = True) -> dict[str, Any]:
@@ -25116,6 +25334,45 @@ class AppHandler(BaseHTTPRequestHandler):
                     rows = DB.execute("SELECT * FROM shopee_event_log ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
                 self.send_json({"ok": True, "logs": [dict(row) for row in rows]})
             return
+        # V19.24: Magalu — conexão OAuth (fase 0). O callback é público (o ID Magalu
+        # redireciona o navegador para cá); a segurança é o state de uso único.
+        if path == "/api/integracoes/magalu/callback":
+            erro = str((query.get("error") or [""])[0] or "").strip()
+            code = str((query.get("code") or [""])[0] or "").strip()
+            state = str((query.get("state") or [""])[0] or "").strip()
+            try:
+                if erro:
+                    raise RuntimeError(f"ID Magalu recusou: {erro}")
+                if not code or not state:
+                    raise RuntimeError("Callback Magalu sem code/state.")
+                magalu_exchange_code(code, state)
+                self.send_redirect(BASE_PATH + "/admin?aba=integracoes&magalu=conectada")
+            except Exception as exc:
+                magalu_log_event("oauth", "/callback", "ERRO", str(exc))
+                self.send_redirect(BASE_PATH + "/admin?aba=integracoes&magalu=erro")
+            return
+        if path == "/api/integracoes/magalu/status":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                self.send_json({"ok": True, "magalu": magalu_status_payload()})
+            return
+        if path == "/api/integracoes/magalu/connect":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                try:
+                    audit(ctx["username"], "magalu.connect", "Magalu")
+                    self.send_redirect(magalu_connect_url())
+                except Exception as exc:
+                    self.send_json({"error": str(exc)}, 503)
+            return
+        if path == "/api/integracoes/magalu/logs":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                limit = max(1, min(200, int((query.get("limit") or ["50"])[0] or 50)))
+                with DB_LOCK:
+                    rows = DB.execute("SELECT * FROM magalu_event_log ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+                self.send_json({"ok": True, "logs": [dict(row) for row in rows]})
+            return
         if path == "/api/integracoes/mercadolivre/callback":
             self.handle_ml_callback(query)
             return
@@ -26597,6 +26854,20 @@ class AppHandler(BaseHTTPRequestHandler):
                     DB.commit()
                 shopee_log_event("disconnect", "", "OK", f"Desconectado por {ctx.get('username') or 'admin'}")
                 audit(ctx["username"], "shopee.disconnect", "Shopee")
+                self.send_json({"ok": True})
+            return
+        if path == "/api/integracoes/magalu/disconnect":  # V19.24: mesma regra da Shopee (OWNER)
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                if not self.require_owner_reauth(ctx):
+                    audit(ctx["username"], "security.denied.owner_reauth", "magalu.disconnect")
+                    self.send_json({"error": "Somente o proprietário pode desconectar integrações."}, 403)
+                    return
+                with DB_LOCK:
+                    DB.execute("DELETE FROM magalu_integration WHERE id=1")
+                    DB.commit()
+                magalu_log_event("disconnect", "", "OK", f"Desconectado por {ctx.get('username') or 'admin'}")
+                audit(ctx["username"], "magalu.disconnect", "Magalu")
                 self.send_json({"ok": True})
             return
         if path == "/api/integracoes/mercadolivre/notificacoes":
@@ -28977,6 +29248,11 @@ class AppHandler(BaseHTTPRequestHandler):
             "/full/": "analise-full.html",
             "/shared-storage.js": "shared-storage.js",
             "/web-auth.js": "web-auth.js",
+            # V19.24: páginas públicas exigidas pelo cadastro do app no ID Magalu.
+            "/termos": "termos.html",
+            "/termos/": "termos.html",
+            "/privacidade": "privacidade.html",
+            "/privacidade/": "privacidade.html",
         }
         # V18.82: telas do Admin com endereço próprio abrem o admin.html.
         for rota in ROTAS_ADMIN_V1882:
@@ -30383,7 +30659,7 @@ LOG_EVENTOS_DIAS = 30
 def limpar_logs_antigos(dias: int = LOG_EVENTOS_DIAS) -> dict[str, int]:
     corte = (datetime.now(timezone.utc).astimezone() - timedelta(days=dias)).isoformat(timespec="milliseconds")
     removidos: dict[str, int] = {}
-    for tabela in ("ml_event_log", "shopee_event_log"):
+    for tabela in ("ml_event_log", "shopee_event_log", "magalu_event_log"):  # V19.24: + Magalu
         with DB_LOCK:
             cur = DB.execute(f"DELETE FROM {tabela} WHERE created_at < ?", (corte,))
             DB.commit()

@@ -339,6 +339,19 @@ cada execução — rode de novo ao mexer em cor de uma tela); o ajuste à mão 
 
 ## 6. Integrações
 
+### Magalu (V19.24, fase 0 de 5)
+Plano decidido com o dono em 14/10 (integração completa "igual ao ML", por fases): 0 conexão; 1 pedidos na
+fila de Araçatuba (chave = número do pedido Magalu, nunca SKU; kit pela regra da Shopee V18.71; a extensão
+Importador continua como reserva e junta no mesmo pedido); 2 etiqueta Magalu Entregas (a NF-e vai pelo Linx —
+o Noromak só espera e mostra "aguardando NF"); 3 vendas em `vendas_v1799` (`magalu`) e Financeiro (tarifa pela
+API de análise financeira/DRE; sem ela, nula); 4 anúncios/preço/estoque **só leitura** (preço só por clique do
+ADMIN com a trava do mínimo; estoque **nunca** gravado); 5 pós-venda (SAC/perguntas na tela Pós-venda) e promoções.
+Uma conta só (Araçatuba). **Fase 0:** OAuth do ID Magalu (`magalu_connect_url` → `id.magalu.com/login` com
+`choose_tenants=true`; `magalu_exchange_code`; `magalu_access_token` renova sob `MAGALU_TOKEN_LOCK`, relendo a
+linha), tabelas `magalu_integration` / `magalu_oauth_state` / `magalu_event_log` (30 dias), rotas
+`/api/integracoes/magalu/{callback,status,connect,logs,disconnect}` e as páginas **públicas** `/termos` e
+`/privacidade` (o `idm client create` exige as duas + o callback). Credenciais `MAGALU_CLIENT_ID/SECRET` no `.env`.
+
 ### Mercado Livre
 OAuth com `offline_access`. Cinco workers em background rodam 24/7 no servidor:
 novos pedidos (~20 s), etiquetas pendentes (~15 s), reconcile de pedidos manuais (~60 s),
@@ -969,6 +982,7 @@ Os testes ficam em `TESTES/` (são 30 arquivos; os principais):
 | `test_auditoria_cobrancas_v1901.py` | cada tipo de cobrança indevida, carência de 30 dias, R$ 2,00, frete do carrinho por envio, lançamento em um caso só, situação humana nunca desfeita, ignorado não volta, recuperado total/parcial (negado vira recuperado), detecção sem chamar o ML, permissões, linha do e-mail uma vez |
 | `test_remessa_full_v1903.py` | cálculo (30 dias, kit conta 1, Apollo Araçatuba dividido, null nunca zero), uma remessa aberta, ajuste do ADMIN nunca desfeito, mínimo de 150, rodada descartada se agendaram durante a leitura, novos só com confirmação, não aceito por código, recebida automática (≥ 50%) e manual, aviso 1x/dia, linha do e-mail, rotas e permissões |
 | `test_campanhas_linha_v1904.py` | campanhas lidas por anúncio e pela conta certa, pausa/interrupção sem limpeza, lucro da promoção e de cada campanha na mesma base, melhor só acima do lucro e da margem mínima, relâmpago sem Aceitar, sem custo = nulo, expirada/outra conta/removida fora, tela com a coluna nova e sem a lista de convites |
+| `test_magalu_v1924.py` | páginas de termos/privacidade sem login, URL de consentimento, state de uso único, token não vaza no status, renovação serializada com o refresh novo, callback com erro volta ao Admin |
 | `test_instalacao.py` | instalação nova, idempotência do `init_db`, versionamento do storage, autenticação |
 | `base.py` | infraestrutura: banco temporário, servidor real em porta livre, cliente HTTP |
 
