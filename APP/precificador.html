@@ -664,6 +664,7 @@
 input.sku-travado-v1918{background:var(--nk-fundo-2,#eef1f5);color:var(--nk-texto-2,#556);cursor:default}
 html[data-tema="escuro"] input.sku-travado-v1918{background:#2a2d33;color:#b8bcc4}
 
+.kit-cadastrar-v1920{margin-top:4px;padding:3px 8px;font-size:.68rem;align-self:flex-start}
 /* V19.19: tela simples — título do produto aberto, resultado primeiro, uma linha de situação */
 .prod-titulo-v1919 h2{font-size:1.15rem;margin:2px 0 4px;word-break:break-word}
 .prod-selos-v1919{display:flex;gap:6px;flex-wrap:wrap}
@@ -2865,6 +2866,17 @@ var state = {
             warning.textContent = warningText;
             if (!warningText) warning.remove();
           }
+          // V19.20: componente sem cadastro ganha o atalho para cadastrar ali mesmo.
+          var item = state.kitDraft[index] || {};
+          var semCadastro = issues.missingCosts.has(index) && !item.productId && String(item.query || "").trim();
+          var atalho = costField ? costField.querySelector(".kit-cadastrar-v1920") : null;
+          if (semCadastro && !atalho && costField) {
+            atalho = document.createElement("button");
+            atalho.type = "button";
+            atalho.className = "btn btn-secondary kit-cadastrar-v1920";
+            atalho.textContent = "+ Cadastrar este produto";
+            costField.appendChild(atalho);
+          } else if (!semCadastro && atalho) atalho.remove();
         });
         return issues;
       }
@@ -2938,6 +2950,58 @@ var state = {
           return '<button class="kit-suggestion" type="button" data-kit-select-id="' + escapeHtml(product._id) + '" data-kit-select-index="' + index + '">' +
             '<strong>' + escapeHtml(productLabel(product)) + '</strong><span>SKU ' + escapeHtml(product.sku) + ' · custo ' + money(product.custo) + '</span></button>';
         }).join("");
+      }
+
+      // V19.20: cadastra no Precificador o componente do kit que não existe — descrição e custo
+      // do Apollo (mesma consulta do campo SKU); sem custo no Apollo, pergunta. Depois vincula.
+      async function cadastrarComponenteV1920(index, botao) {
+        var item = state.kitDraft[index];
+        if (!item) return;
+        var sku = String(item.query || "").split(" — ")[0].trim();
+        if (!sku) return;
+        var existente = findExactProduct(sku);
+        if (existente) { selectKitProduct(index, existente._id); return; }
+        if (botao) { botao.disabled = true; botao.textContent = "Consultando o Apollo..."; }
+        var custos = [], descricao = "";
+        try {
+          var resposta = await fetch("/expedicao/api/precificador/custo?codigo=" + encodeURIComponent(sku) + "&fresh=" + Date.now(), {
+            method: "GET", credentials: "same-origin", headers: { "Accept": "application/json" }
+          });
+          var dados = await resposta.json().catch(function () { return {}; });
+          if (resposta.ok && dados.ok) { custos = normalizeBranchCosts(dados.custos); descricao = String(dados.descricao || "").trim(); }
+        } catch (_) {}
+        var valida = custos.find(function (r) { return r.revenda === 1 && r.tem_cadastro === true && Number(r.custo_medio) > 0; })
+          || custos.find(function (r) { return r.tem_cadastro === true && Number(r.custo_medio) > 0; });
+        var custo = valida ? Number(valida.custo_medio) : NaN;
+        var perguntar = window.nkPerguntar || function (t) { return Promise.resolve(window.prompt(t)); };
+        if (!descricao) {
+          descricao = await perguntar("Nome do produto " + sku, { detalhe: "O Apollo não devolveu a descrição.", placeholder: "Descrição" });
+          if (descricao === null) { renderKitItems(); return; }
+          descricao = String(descricao).trim();
+        }
+        if (!(custo > 0)) {
+          var digitado = await perguntar("Custo de " + sku, { detalhe: "O Apollo não tem custo para este código. Informe o custo unitário (R$).", inputmode: "decimal", placeholder: "0,00" });
+          if (digitado === null) { renderKitItems(); return; }
+          digitado = String(digitado).trim();
+          custo = Number(digitado.indexOf(",") >= 0 ? digitado.replace(/\./g, "").replace(",", ".") : digitado);
+          if (!(custo > 0)) { showToast("Custo inválido. O produto não foi cadastrado."); renderKitItems(); return; }
+        }
+        if (findExactProduct(sku)) { selectKitProduct(index, findExactProduct(sku)._id); return; }
+        var produto = {
+          _id: "local-" + Date.now() + "-" + Math.random().toString(36).slice(2, 8),
+          sku: sku, produto: descricao, custo: Core.roundMoney(custo),
+          filialCusto: valida ? valida.revenda : 1, custosFiliais: custos,
+          imposto: 0.12, curva: "", isKit: false, kitItems: [], marketplaces: defaultMarketplaces()
+        };
+        state.products.unshift(produto);
+        try { persist(); } catch (erro) {
+          state.products.shift();
+          showToast(erro && erro.message ? erro.message : "Não foi possível cadastrar o produto.");
+          renderKitItems(); return;
+        }
+        selectKitProduct(index, produto._id);
+        renderProductList();
+        showToast("Produto " + sku + " cadastrado" + (valida ? " com o custo do Apollo." : "."));
       }
 
       function selectKitProduct(index, productId) {
@@ -3523,6 +3587,11 @@ var state = {
         if (exact) selectKitProduct(index, exact._id);
       });
       el["kit-items"].addEventListener("click", function (event) {
+        var cadastrar = event.target.closest(".kit-cadastrar-v1920");
+        if (cadastrar) {
+          cadastrarComponenteV1920(Number(cadastrar.closest("[data-kit-index]").getAttribute("data-kit-index")), cadastrar);
+          return;
+        }
         var selectButton = event.target.closest("[data-kit-select-id]");
         if (selectButton) {
           selectKitProduct(Number(selectButton.getAttribute("data-kit-select-index")), selectButton.getAttribute("data-kit-select-id"));

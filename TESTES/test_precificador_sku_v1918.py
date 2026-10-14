@@ -34,3 +34,15 @@ class TestTelaSimplesV1919(unittest.TestCase):
         self.assertLess(HTML.index('class="panel prec-compare-panel"'), HTML.index('class="taxas-v1919"'))
         self.assertIn("function tituloProdutoV1919()", HTML)
         self.assertIn('id="retry-v1919"', HTML)
+
+
+class TestCadastrarComponenteV1920(unittest.TestCase):
+    """V19.20 — componente do kit sem cadastro: botão cadastra com descrição/custo do Apollo
+    (ou perguntando) e já vincula; gravação que falha desfaz o cadastro."""
+    def test_atalho_e_regras(self):
+        self.assertIn("kit-cadastrar-v1920", HTML)
+        self.assertIn("async function cadastrarComponenteV1920(index, botao)", HTML)
+        corpo = HTML[HTML.index("async function cadastrarComponenteV1920"):HTML.index("function selectKitProduct(index, productId)")]
+        self.assertIn("findExactProduct(sku)", corpo)          # já existe: só vincula
+        self.assertIn("state.products.shift();", corpo)        # gravação falhou: desfaz
+        self.assertIn("selectKitProduct(index, produto._id)", corpo)
