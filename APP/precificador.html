@@ -667,6 +667,14 @@ html[data-tema="escuro"] input.sku-travado-v1918{background:#2a2d33;color:#b8bcc
 .kit-cadastrar-v1920{margin-top:4px;padding:3px 8px;font-size:.68rem;align-self:flex-start}
 .prec-right-col .ml-link-section{margin-top:14px}
 .prec-right-col .ml-link-grid{grid-template-columns:1fr!important}
+.recolhe-v1922>summary{cursor:pointer;list-style:none;display:flex;flex-direction:column;gap:2px}
+.recolhe-v1922>summary::-webkit-details-marker{display:none}
+.recolhe-v1922>summary strong::after{content:" B8";color:#1F57A5}
+.recolhe-v1922[open]>summary strong::after{content:" BE"}
+.recolhe-v1922>summary small{color:#586A7D;font-size:.7rem}
+.recolhe-v1922[open]>summary{margin-bottom:12px}
+#ml-link-section>.recolhe-v1922>summary{padding:4px 2px}
+.prec-right-col .prec-compare-panel{margin-top:14px;margin-bottom:0}
 /* V19.21: tela usa a largura toda; coluna de preços maior; título em até 2 linhas */
 .app-shell{max-width:none!important}
 @media (min-width:1181px){.prec-two-col{grid-template-columns:minmax(0,1.25fr) minmax(520px,1fr)!important}}
@@ -1202,13 +1210,10 @@ html[data-tema="escuro"] [style*="color: #b45309" i]{color:#EDB082!important}
 
         </div>
         <div class="prec-right-col">
-<section class="panel prec-compare-panel">
-        <div class="section-heading"><div><div class="eyebrow">Resultado</div><h2>Preços por marketplace</h2><p>O destaque indica o menor preço ideal.</p></div></div>
-        <div class="comparison"><table><thead><tr><th>Marketplace</th><th>Preço mínimo</th><th>Preço ideal</th><th>Lucro líquido</th><th>Margem real</th></tr></thead><tbody id="comparison-body"></tbody></table></div>
-      </section>
+
 <section class="panel prec-calc-panel">
-        <details class="taxas-v1919">
-        <summary><span class="eyebrow">Cálculo automático</span><strong>Ajustar taxas e margem</strong><small>Comissão, taxa fixa/frete e margem desejada de cada marketplace</small></summary>
+        <details class="taxas-v1919" open>
+        <summary><span class="eyebrow">Cálculo automático</span><strong>Taxas, margem e preço por marketplace</strong><small>Comissão, taxa fixa/frete e margem desejada de cada marketplace</small></summary>
         <div class="market-grid">
           <article class="market-card" data-market="ml">
             <div class="market-head ml"><strong>Mercado Livre</strong><span>Configuração por produto</span></div>
@@ -1249,8 +1254,15 @@ html[data-tema="escuro"] [style*="color: #b45309" i]{color:#EDB082!important}
         </div>
         </details>
       </section>
+<!-- V19.22: o cálculo automático (ML primeiro) fica em cima e aberto; preços e anúncios embaixo, recolhidos -->
+<section class="panel prec-compare-panel">
+        <details class="recolhe-v1922"><summary><span class="eyebrow">Resultado</span><strong>Preços por marketplace</strong><small>Mínimo, ideal, lucro e margem lado a lado — o destaque é o menor preço ideal</small></summary>
+        <div class="comparison"><table><thead><tr><th>Marketplace</th><th>Preço mínimo</th><th>Preço ideal</th><th>Lucro líquido</th><th>Margem real</th></tr></thead><tbody id="comparison-body"></tbody></table></div>
+        </details>
+      </section>
 <!-- V19.21: anúncios e promoções do SKU na coluna da direita (sobrava espaço) -->
 <section class="ml-link-section" id="ml-link-section">
+        <details class="recolhe-v1922" id="ml-link-recolhe-v1922"><summary><strong>Mercado Livre · anúncios e promoções</strong><small>MLBs vinculados ao SKU e promoções deste produto</small></summary>
         <div class="ml-link-head">
           <div>
             <h3>Mercado Livre · anúncios e promoções</h3>
@@ -1283,6 +1295,7 @@ html[data-tema="escuro"] [style*="color: #b45309" i]{color:#EDB082!important}
             <div id="ml-promo-summary" class="ml-link-empty">Nenhum anúncio vinculado.</div>
           </div>
         </div>
+              </details>
       </section>
 
 
