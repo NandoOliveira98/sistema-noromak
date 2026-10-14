@@ -659,6 +659,10 @@
         .prec-right-col .mini-grid,.prec-right-col .results{grid-template-columns:1fr !important}
       }
 
+.sku-trava-v1918{display:flex;gap:6px;align-items:stretch}.sku-trava-v1918 input{flex:1;min-width:0}
+.sku-trava-v1918 .btn{padding:0 10px}
+input.sku-travado-v1918{background:var(--nk-fundo-2,#eef1f5);color:var(--nk-texto-2,#556);cursor:default}
+html[data-tema="escuro"] input.sku-travado-v1918{background:#2a2d33;color:#b8bcc4}
 </style>
 <!-- V18.65: tema comum (fonte, foco e icones) por ultimo no head. -->
 <link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
@@ -1071,7 +1075,7 @@ html[data-tema="escuro"] [style*="color: #b45309" i]{color:#EDB082!important}
         <div class="product-data-grid">
           <div class="field">
             <label for="sku">SKU</label>
-            <input id="sku" type="text" autocomplete="off">
+            <div class="sku-trava-v1918"><input id="sku" type="text" autocomplete="off"><button type="button" id="sku-alterar-v1918" class="btn btn-secondary" title="Alterar o SKU deste produto" hidden>✎</button></div>
           </div>
 
           <div class="field field-product">
@@ -1760,6 +1764,15 @@ var state = {
           : "Precificador atualizado em tempo real.");
       }
 
+      // V19.18: SKU de produto já salvo fica travado — usavam o campo como busca e trocavam o
+      // SKU do produto aberto. Digitar nele leva para a busca de cima; trocar = botão ✎ + confirmação.
+      function skuTravaV1918() {
+        var travar = !state.isNew && String(el.sku.value || "").trim() !== "";
+        el.sku.readOnly = travar;
+        el.sku.classList.toggle("sku-travado-v1918", travar);
+        el.sku.title = travar ? "SKU do produto salvo. Para buscar outro produto use a busca lá em cima; para trocar o SKU clique em ✎." : "";
+        var b = byId("sku-alterar-v1918"); if (b) b.hidden = !travar;
+      }
       function showToast(message) {
         el.toast.textContent = message;
         el.toast.classList.add("show");
@@ -2110,6 +2123,7 @@ var state = {
         state.selectedId = product._id;
         state.isNew = false;
         state.dirty = false;
+        skuTravaV1918();
         var synchronization = refreshAllKitCosts();
         state.kitCycleIds = synchronization.cycleIds;
         persist();
@@ -2897,6 +2911,7 @@ var state = {
         var magalu = Object.assign({}, defaults.magalu, markets.magalu || {});
         setValue("sku", product.sku);
         setValue("produto", product.produto);
+        skuTravaV1918();
         state.branchCosts = normalizeBranchCosts(product.custosFiliais || []);
         state.branchCostBlocked = false;
         if (el["filial-custo"]) el["filial-custo"].value = String(Number(product.filialCusto || 1));
@@ -3195,6 +3210,7 @@ var state = {
         state.selectedId = product._id;
         state.isNew = false;
         state.dirty = false;
+        skuTravaV1918();
         var synchronization = refreshAllKitCosts();
         state.kitCycleIds = synchronization.cycleIds;
         persist();
@@ -3330,6 +3346,26 @@ var state = {
         lookupAverageCostBySku(true);
       });
       el.sku.addEventListener("input", scheduleAverageCostLookup);
+      el.sku.addEventListener("keydown", function (event) {
+        if (!el.sku.readOnly || event.ctrlKey || event.metaKey || event.altKey) return;
+        if (event.key.length !== 1 && event.key !== "Backspace" && event.key !== "Delete") return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        el.search.value = event.key.length === 1 ? event.key : "";
+        el.search.focus();
+        el.search.dispatchEvent(new Event("input", { bubbles: true }));
+        showToast("Para buscar produto use este campo de busca. O SKU do produto aberto não muda.");
+      }, true);
+      byId("sku-alterar-v1918").addEventListener("click", async function () {
+        var atual = String(el.sku.value || "").trim();
+        var texto = "Trocar o SKU do produto salvo \"" + atual + "\"? Isso muda o cadastro deste produto — não é para buscar outro.";
+        var ok = window.nkConfirmar ? await window.nkConfirmar(texto) : window.confirm(texto);
+        if (!ok) return;
+        el.sku.readOnly = false;
+        el.sku.classList.remove("sku-travado-v1918");
+        byId("sku-alterar-v1918").hidden = true;
+        el.sku.focus(); el.sku.select();
+      });
       el.sku.addEventListener("blur", function () {
         if (costLookupTimer) { clearTimeout(costLookupTimer); costLookupTimer = null; }
         lookupAverageCostBySku(false);
