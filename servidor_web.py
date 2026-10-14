@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.16-BIP-LEVE"
+APP_VERSION = "19.17-EAN-CONFERENCIA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -27296,17 +27296,13 @@ class AppHandler(BaseHTTPRequestHandler):
                 DB.execute("BEGIN IMMEDIATE")
                 try:
                     # V19.15: override ADMIN do EAN — vazio é resto do erro de 30/09 (delta contra o
-                    # banco) e sai; um EAN definido pelo ADMIN não é trocado pela Conferência.
+                    # banco) e sai. V19.17 (decisão do dono, 14/10): a Conferência é quem mais cadastra
+                    # EAN — o EAN bipado lá substitui também o definido pelo ADMIN (o override sai,
+                    # senão a leitura devolveria o antigo; o EAN anterior fica na auditoria).
                     entidade = f"SKU:{sku}".upper()
                     ov = DB.execute("SELECT value_json FROM admin_manual_overrides WHERE storage_key='conf_produtos' "
                                     "AND field_name='Código de Barras' AND entity_id=? AND is_deleted=0", (entidade,)).fetchone()
                     if ov is not None:
-                        try:
-                            valor_ov = str(json.loads(ov["value_json"]) or "").strip()
-                        except Exception:
-                            valor_ov = ""
-                        if valor_ov and valor_ov != ean:
-                            raise ValueError(f"O EAN deste SKU foi definido pelo Admin ({valor_ov}). Para trocar, altere no Banco de Produtos do Admin.")
                         DB.execute("DELETE FROM admin_manual_overrides WHERE storage_key='conf_produtos' "
                                    "AND field_name='Código de Barras' AND entity_id=?", (entidade,))
                     products, product_version = parse_rows("conf_produtos")

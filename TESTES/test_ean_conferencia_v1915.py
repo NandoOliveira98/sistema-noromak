@@ -39,14 +39,15 @@ class EanConferencia(TesteNoromak):
         self.ean("CH28", "333")
         self.assertEqual((ean_de("ZK403"), ean_de("ZK130"), ean_de("CH28")), ("111", "222", "333"))
 
-    def test_ean_definido_pelo_admin_nao_e_trocado_pela_conferencia(self):
+    def test_conferencia_troca_ean_definido_pelo_admin(self):
+        # V19.17 (decisão do dono, 14/10): a Conferência é quem mais cadastra EAN; o EAN
+        # bipado lá substitui o do Admin (antes a V19.15 recusava com 400).
         with S.DB_LOCK:
             S.DB.execute("INSERT OR REPLACE INTO admin_manual_overrides(storage_key,entity_id,field_name,value_json,is_deleted,updated_at,updated_by) "
                          "VALUES('conf_produtos','SKU:CH28','Código de Barras','\"999\"',0,'2026-10-01',?)", ("luis",))
             S.DB.commit()
-        st, c = self.cliente.pedir("POST", "/api/product-ean", {"sku": "CH28", "ean": "333"})
-        self.assertEqual(st, 400, c)
-        self.assertIn("Admin", c.get("error", ""))
+        self.ean("CH28", "333")
+        self.assertEqual(ean_de("CH28"), "333")
 
     def test_migracao_limpa_vazios_e_devolve_os_eans_do_registro(self):
         for s in ("ZK403", "ZK130"):
