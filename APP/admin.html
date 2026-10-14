@@ -435,6 +435,17 @@
   .ml-log-table{width:100%;border-collapse:collapse;font-size:11px}.ml-log-table th,.ml-log-table td{padding:7px 8px;border-bottom:1px solid #DCE5EF;text-align:left;vertical-align:top}
   .ml-log-table th{background:#f8fafc;color:#18324A;position:sticky;top:0}
   @media(max-width:900px){.integracao-grid{grid-template-columns:1fr}.integracao-dados{grid-template-columns:1fr}}
+  /* V19.25: cartões de integração começam recolhidos (só nome + situação); clique abre. */
+  .integracao-grid{align-items:start}
+  .integracao-card.nk-int-recolhivel{padding:12px 16px}
+  .nk-int-topo{display:flex;align-items:center;gap:10px;flex-wrap:wrap;cursor:pointer;user-select:none}
+  .nk-int-topo h3{margin:0!important;flex:0 1 auto}
+  .nk-int-topo .integracao-status{margin:0 0 0 auto;white-space:nowrap}
+  .nk-int-seta{font-size:12px;color:#4A5D72;transition:transform .15s}
+  .nk-int-recolhivel.nk-int-aberto .nk-int-seta{transform:rotate(90deg)}
+  .nk-int-recolhivel:not(.nk-int-aberto)>:not(.nk-int-topo){display:none!important}
+  .nk-int-recolhivel.nk-int-aberto .nk-int-topo{margin-bottom:12px}
+  .nk-int-sobre summary{cursor:pointer;font-size:12px;color:#4A5D72;margin-bottom:10px}
 
 
   .usuario-acessos{display:grid;grid-template-columns:repeat(2,minmax(120px,1fr));gap:6px 8px;min-width:290px}
@@ -1984,7 +1995,8 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
 <section id="aba-integracoes" class="aba-painel">
     <div class="card-admin">
       <h3><i class=nk-i-plug></i> Integrações</h3>
-      <div class="aviso-banco"><b>Mercado Livre API:</b> conecta a conta vendedora diretamente à Expedição. Novas vendas recebidas por <b>Orders_v2</b> e alterações de <b>Shipments</b> entram no servidor sem depender de planilha ou extensão. Planilha, extensão e print continuam disponíveis como contingência.</div>
+      <details class="nk-int-sobre"><summary>Como funcionam as integrações</summary>
+      <div class="aviso-banco"><b>Mercado Livre API:</b> conecta a conta vendedora diretamente à Expedição. Novas vendas recebidas por <b>Orders_v2</b> e alterações de <b>Shipments</b> entram no servidor sem depender de planilha ou extensão. Planilha, extensão e print continuam disponíveis como contingência.</div></details>
       <div class="integracao-grid">
         <div class="integracao-card">
           <h3><i class=nk-dot-ml></i> Mercado Livre</h3>
@@ -2118,7 +2130,22 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
             btn.textContent=minimizar?"Mostrar log":"Minimizar";
             btn.setAttribute("aria-expanded",String(!minimizar));
           }
-          (function(){let m=false;try{m=localStorage.getItem("nk_ml_log_minimizado_v1893")==="1";}catch(_){}alternarLogMlV1893(m);})();
+          (function(){let m=true;try{m=localStorage.getItem("nk_ml_log_minimizado_v1893")!=="0";}catch(_){}alternarLogMlV1893(m);})();  // V19.25: começa minimizado
+          // V19.25: todo cartão com situação vira recolhível — fechado mostra só nome + situação.
+          (function(){
+            document.querySelectorAll("#aba-integracoes .integracao-card").forEach(function(card){
+              const h3=card.querySelector(":scope > h3"),st=card.querySelector(":scope > .integracao-status");
+              if(!h3||!st)return;
+              const topo=document.createElement("div");
+              topo.className="nk-int-topo";topo.setAttribute("role","button");topo.tabIndex=0;topo.setAttribute("aria-expanded","false");
+              const seta=document.createElement("span");seta.className="nk-int-seta";seta.textContent="▶";
+              card.insertBefore(topo,h3);topo.append(seta,h3,st);
+              card.classList.add("nk-int-recolhivel");
+              const alternar=function(){const a=card.classList.toggle("nk-int-aberto");topo.setAttribute("aria-expanded",String(a));};
+              topo.addEventListener("click",alternar);
+              topo.addEventListener("keydown",function(e){if(e.key==="Enter"||e.key===" "){e.preventDefault();alternar();}});
+            });
+          })();
           </script>
         </div>
       </div>
