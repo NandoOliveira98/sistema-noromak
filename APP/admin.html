@@ -2063,6 +2063,8 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
           <div class="integracao-dados">
             <b>Client ID</b><span id="magaluClientId">—</span>
             <b>Conectada em</b><span id="magaluConectadaEm">—</span>
+            <b>Importação</b><span id="magaluImportacao">—</span>
+            <b>Última sincronização</b><span id="magaluUltimaSync">—</span>
             <b>Callback OAuth</b><span id="magaluCallback">—</span>
             <b>Credenciais</b><span>Somente no servidor</span>
           </div>
@@ -2070,9 +2072,11 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
             <button type="button" id="btnMagaluConectar" class="btn-primario" onclick="conectarMagaluAdmin()">Conectar Magalu</button>
             <button type="button" id="btnMagaluDesconectar" class="btn-perigo" onclick="desconectarMagaluAdmin()" disabled>Desconectar</button>
             <button type="button" id="btnMagaluPrevia" class="btn-secundario" onclick="previaMagaluAdmin()" disabled>Ver pedidos da Magalu</button>
+            <button type="button" id="btnMagaluImportacao" class="btn-secundario" onclick="alternarImportacaoMagaluAdmin()" disabled>Ligar importação</button>
+            <button type="button" id="btnMagaluSincronizar" class="btn-sucesso" onclick="sincronizarMagaluAdmin()" disabled>↻ Sincronizar agora</button>
           </div>
           <div id="magaluPrevia"></div>
-          <div id="magaluIntegracaoMensagem" class="integracao-nota">Entre com a conta da <b>loja</b> (pessoa jurídica) no ID Magalu e escolha a loja da Noromak. "Ver pedidos da Magalu" mostra o que entraria na fila, sem gravar nada; a importação automática vem na próxima etapa.</div>
+          <div id="magaluIntegracaoMensagem" class="integracao-nota">Entre com a conta da <b>loja</b> (pessoa jurídica) no ID Magalu e escolha a loja da Noromak. "Ver pedidos da Magalu" mostra o que entraria na fila, sem gravar nada. Com a importação ligada, os pedidos entram sozinhos em Pedidos pendentes e a etiqueta é baixada quando o Linx enviar a NF.</div>
         </div>
         <div class="integracao-card">
           <h3><i class=nk-i-file></i> Linx DMS · Smart API</h3>
@@ -9839,6 +9843,12 @@ async function carregarIntegracaoMagaluAdmin(){
       badge.className="integracao-status ok";badge.textContent="🟢 Magalu conectada";
       if(conectar){conectar.disabled=false;conectar.textContent="Reconectar Magalu";}if(disc)disc.disabled=false;
       const prev=document.getElementById("btnMagaluPrevia");if(prev)prev.disabled=false;
+      // V19.27: chave da importação (começa desligada).
+      const lig=!!mg.importacao_ligada,bi=document.getElementById("btnMagaluImportacao"),bs=document.getElementById("btnMagaluSincronizar");
+      document.getElementById("magaluImportacao").textContent=lig?"🟢 Ligada — pedidos entram sozinhos a cada 2 min":"⚪ Desligada (só a prévia)";
+      document.getElementById("magaluUltimaSync").textContent=mg.last_sync_at?mlDataHora(mg.last_sync_at):"—";
+      if(bi){bi.disabled=false;bi.textContent=lig?"Desligar importação":"Ligar importação";bi.dataset.ligada=lig?"1":"0";}
+      if(bs)bs.disabled=!lig;
       if(msg&&mg.last_error)msg.textContent="Último erro: "+mg.last_error;
     }else if(!mg.configured){
       badge.className="integracao-status off";badge.textContent="🟡 Aguardando credenciais (MAGALU_CLIENT_ID no .env)";
@@ -9874,6 +9884,24 @@ async function previaMagaluAdmin(){
     box.innerHTML=h;
   }catch(e){box.innerHTML=`<div class="integracao-alerta">❌ ${esc(e.message)}</div>`;}
   finally{if(btn){btn.disabled=false;btn.textContent="Ver pedidos da Magalu";}}
+}
+async function alternarImportacaoMagaluAdmin(){
+  const bi=document.getElementById("btnMagaluImportacao");const ligar=bi?.dataset.ligada!=="1";
+  const texto=ligar?"Ligar a importação da Magalu? Os pedidos aprovados passam a entrar sozinhos em Pedidos pendentes e na Conferência, e as etiquetas são baixadas quando a NF for emitida.":"Desligar a importação da Magalu? Os pedidos que já estão na fila continuam lá.";
+  if(!await nkConfirmar(texto))return;
+  try{await mlApiAdmin("/expedicao/api/integracoes/magalu/importacao",{method:"POST",body:JSON.stringify({ligada:ligar})});}
+  catch(e){alert("Magalu: "+e.message);}
+  await carregarIntegracaoMagaluAdmin();
+}
+async function sincronizarMagaluAdmin(){
+  const bs=document.getElementById("btnMagaluSincronizar"),msg=document.getElementById("magaluIntegracaoMensagem");
+  if(bs){bs.disabled=true;bs.textContent="Sincronizando…";}
+  try{
+    const d=await mlApiAdmin("/expedicao/api/integracoes/magalu/sincronizar",{method:"POST",body:"{}"});
+    if(msg)msg.textContent=`✅ Magalu: ${d.pedidos} pedido(s) na fila, ${d.etiquetas_novas} etiqueta(s) nova(s)${d.ja_na_fila_por_outra_origem?`, ${d.ja_na_fila_por_outra_origem} já estavam na fila pela extensão`:""}${d.erros_etiqueta?` — ${d.erros_etiqueta} etiqueta(s) com erro (ver log)`:""}.`;
+    if(typeof appStorage?.sincronizarAgora==="function")await appStorage.sincronizarAgora();
+  }catch(e){if(msg)msg.textContent="❌ "+e.message;}
+  finally{if(bs)bs.textContent="↻ Sincronizar agora";await carregarIntegracaoMagaluAdmin();}
 }
 function conectarMagaluAdmin(){window.location.href="/expedicao/api/integracoes/magalu/connect";}
 async function desconectarMagaluAdmin(){

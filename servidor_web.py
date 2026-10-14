@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.26-MAGALU-PREVIA"
+APP_VERSION = "19.27-MAGALU-PEDIDOS-ETIQUETA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -1965,6 +1965,13 @@ def init_db() -> None:
                 detail TEXT NOT NULL DEFAULT ''
             );
             CREATE INDEX IF NOT EXISTS idx_magalu_event_log_created ON magalu_event_log(created_at);
+            -- V19.27: chave da importação (começa desligada) e outras escolhas da Magalu.
+            CREATE TABLE IF NOT EXISTS magalu_config_v1927 (
+                chave TEXT PRIMARY KEY,
+                valor TEXT NOT NULL DEFAULT '',
+                atualizado_em TEXT NOT NULL DEFAULT '',
+                atualizado_por TEXT NOT NULL DEFAULT ''
+            );
             -- V19.26: 1ª resposta real de cada tipo (conferir os campos com a doc).
             CREATE TABLE IF NOT EXISTS magalu_amostra_v1926 (
                 tipo TEXT PRIMARY KEY,
@@ -5819,6 +5826,7 @@ def magalu_status_payload() -> dict[str, Any]:
         "token_expires_at": int(row["token_expires_at"] or 0) if row else 0,
         "redirect_uri": MAGALU_REDIRECT_URI,
         "credentials_server_side": True,
+        "importacao_ligada": magalu_importacao_ligada(),  # V19.27
     }
 
 
@@ -6083,6 +6091,305 @@ def magalu_pedidos_previa() -> dict[str, Any]:
                       "limite_envio": limite, "cliente": str(cliente.get("name") or ""),
                       "ja_na_fila": code in na_fila, "linhas": linhas})
     return {"ok": True, "pedidos": saida, "total_api": len(pedidos_api), "buscado_em": now_iso()}
+
+
+# ---------------------------------------------------------------------------
+# V19.27 — Magalu, fases 1b e 2: pedidos na fila (Pedidos pendentes/Conferência) e
+# etiqueta automática. A importação começa DESLIGADA: o dono liga em Integrações
+# depois de conferir a prévia com o 1º pedido real (decisão de 14/10).
+# Regras (as da Shopee): chave = número do pedido Magalu; pedido que já está na fila
+# por outra origem (extensão/manual) NÃO é duplicado; kit vira componentes
+# (_shopee_expand_kit_lines); linha já importada só recebe os campos operacionais
+# (status, NF, etiqueta) — o resto (Nome Conferência, SKU, EAN editados) fica; tudo
+# grava pelo save_storage, cujas barreiras finais (override/tombstone do ADMIN e
+# concluído) valem por último. API falhou = nada é gravado (a fila não esvazia).
+# Etiqueta: entrega faturada (invoiced) → POST /seller/v1/logistics/shipping-labels
+# (zpl) → baixa o signed_url → conf_etiquetas (marketplace "magalu"). Sem NF a
+# Magalu não libera: a linha mostra "AGUARDANDO NF".
+# ---------------------------------------------------------------------------
+MAGALU_SYNC_LOCK = threading.Lock()
+MAGALU_PEDIDOS_INTERVALO = max(60, min(900, int(os.getenv("MAGALU_PEDIDOS_INTERVALO", "120"))))
+MAGALU_CAMPOS_OPERACIONAIS = ("StatusMagalu", "Etiqueta API Magalu", "NF", "Nota Fiscal", "Chave de Acesso",
+                              "PrazoEnvioMagalu", "EntregaMagalu", "EntregaIdMagalu", "CanalMagalu",
+                              "MagaluAtualizadoEm")
+
+
+def magalu_importacao_ligada() -> bool:
+    with DB_LOCK:
+        row = DB.execute("SELECT valor FROM magalu_config_v1927 WHERE chave='importacao'").fetchone()
+    return bool(row and str(row["valor"]) == "1")
+
+
+def magalu_importacao_definir(ligada: bool, usuario: str) -> None:
+    with DB_LOCK:
+        DB.execute("INSERT OR REPLACE INTO magalu_config_v1927(chave,valor,atualizado_em,atualizado_por) VALUES('importacao',?,?,?)",
+                   ("1" if ligada else "0", now_iso(), str(usuario or "")))
+        DB.commit()
+    magalu_log_event("importacao", "", "LIGADA" if ligada else "DESLIGADA", f"por {usuario}")
+
+
+def _magalu_etiquetas_vinculadas() -> set[str]:
+    """IDs de entrega que já têm etiqueta da Magalu no banco de etiquetas."""
+    raw, _, _ = get_storage("conf_etiquetas")
+    try:
+        bank = json.loads(raw) if raw else {}
+    except Exception:
+        bank = {}
+    registros = bank.get("registros") if isinstance(bank, dict) and isinstance(bank.get("registros"), dict) else {}
+    ids: set[str] = set()
+    for rec in registros.values():
+        if isinstance(rec, dict) and rec.get("marketplace") == "magalu":
+            meta = rec.get("metadados") if isinstance(rec.get("metadados"), dict) else {}
+            if str(meta.get("entrega_id") or ""):
+                ids.add(str(meta.get("entrega_id")))
+    return ids
+
+
+def _magalu_baixar_etiqueta(corpo: dict[str, Any]) -> str:
+    """Gera a etiqueta (ZPL) da entrega e baixa o conteúdo do signed_url. Isolada para teste."""
+    token = magalu_access_token()
+    req = urllib.request.Request(MAGALU_API_BASE + "/seller/v1/logistics/shipping-labels",
+                                 data=json.dumps(corpo).encode("utf-8"), method="POST",
+                                 headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json",
+                                          "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            dados = json.loads(resp.read().decode("utf-8", "replace") or "{}")
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"Magalu etiqueta HTTP {exc.code}: {exc.read().decode('utf-8', 'replace')[:400]}")
+    _magalu_guardar_amostra("shipping_label", {"results": [dados]} if dados else {})
+    label = dados.get("label") if isinstance(dados, dict) and isinstance(dados.get("label"), dict) else {}
+    url = str(label.get("signed_url") or "").strip()
+    if not url.startswith("https://"):
+        raise RuntimeError("Magalu não devolveu o link da etiqueta.")
+    with urllib.request.urlopen(urllib.request.Request(url, method="GET"), timeout=30) as resp:
+        conteudo = resp.read().decode("utf-8", "replace")
+    if "^XA" not in conteudo.upper():
+        raise RuntimeError("O arquivo da etiqueta da Magalu não é ZPL.")
+    return conteudo
+
+
+def _magalu_guardar_etiqueta(pedido: str, entrega_code: str, entrega_id: str, nf: str, zpl: str) -> None:
+    raw, _, _ = get_storage("conf_etiquetas")
+    try:
+        bank = json.loads(raw) if raw else {}
+    except Exception:
+        bank = {}
+    if not isinstance(bank, dict):
+        bank = {}
+    bank["version"] = max(8, int(bank.get("version") or 0))
+    for chave, padrao in (("registros", {}), ("ordem", []), ("porChave", {}), ("avisos", []),
+                          ("auditoria", []), ("resumo", {}), ("vinculados", {})):
+        bank.setdefault(chave, padrao)
+    rid = "etq_magalu_api_" + hashlib.sha1(entrega_id.encode("utf-8")).hexdigest()[:18]
+    chaves = [x for x in (pedido, entrega_code, entrega_id, nf) if x]
+    bank["registros"][rid] = {
+        "id": rid, "marketplace": "magalu", "envio": zpl, "danfe": "",
+        "arquivo": f"Magalu API · entrega {entrega_code or entrega_id}",
+        "metadados": {"pedido": pedido, "entrega": entrega_code, "entrega_id": entrega_id, "chaveAcesso": nf},
+        "chaves": chaves, "vinculadoA": [pedido], "pedido": pedido,
+        "vinculo": "api_magalu", "origem": "api_magalu",
+        "adicionadaEm": now_iso(), "adicionadaPor": "magalu-api",
+    }
+    if rid not in bank["ordem"]:
+        bank["ordem"].append(rid)
+    for chave in chaves:
+        bank["porChave"].setdefault(chave, [])
+        if rid not in bank["porChave"][chave]:
+            bank["porChave"][chave].append(rid)
+    bank["atualizadoEm"] = now_iso()
+    bank["auditoria"].append({"marketplace": "magalu", "pedido": pedido, "criterio": "api_magalu",
+                              "etiqueta": rid, "arquivo": bank["registros"][rid]["arquivo"]})
+    bank["auditoria"] = bank["auditoria"][-250:]
+    save_storage("conf_etiquetas", raw, json_dumps(bank), False, actor="magalu-api", actor_role="sistema",
+                 source_screen="API Magalu", change_method="Etiqueta automática após NF", client_ip="127.0.0.1")
+
+
+def _magalu_linhas_do_pedido(pedido: dict[str, Any], products: list[dict[str, Any]],
+                             com_etiqueta: set[str]) -> list[dict[str, Any]]:
+    code = str(pedido.get("code") or "").strip()
+    cliente = pedido.get("customer") if isinstance(pedido.get("customer"), dict) else {}
+    canal = pedido.get("channel") if isinstance(pedido.get("channel"), dict) else {}
+    linhas: list[dict[str, Any]] = []
+    for entrega in pedido.get("deliveries") or []:
+        if not isinstance(entrega, dict):
+            continue
+        status = str(entrega.get("status") or "").strip().lower()
+        if status not in MAGALU_ENTREGA_PARA_EXPEDIR:
+            continue
+        entrega_id = str(entrega.get("id") or "").strip()
+        shipping = entrega.get("shipping") if isinstance(entrega.get("shipping"), dict) else {}
+        handling = shipping.get("handling_time") if isinstance(shipping.get("handling_time"), dict) else {}
+        notas = [n for n in (entrega.get("invoices") or []) if isinstance(n, dict)]
+        nf = str((notas[-1] if notas else {}).get("key") or "").strip()
+        if entrega_id in com_etiqueta:
+            etiqueta = "VINCULADA"
+        elif status == "invoiced":
+            etiqueta = "AGUARDANDO"
+        else:
+            etiqueta = "AGUARDANDO NF"
+        for indice, item in enumerate(entrega.get("items") or []):
+            if not isinstance(item, dict):
+                continue
+            info = item.get("info") if isinstance(item.get("info"), dict) else {}
+            sku = str(info.get("sku") or "").strip()
+            if not sku:
+                continue
+            try:
+                qtd = max(1, int(float(item.get("quantity") or 1)))
+            except Exception:
+                qtd = 1
+            identidade = f"{code}|{entrega_id}|{info.get('id') or ''}|{sku}|{item.get('sequencial') or indice}"
+            row = {
+                "Pedido": code, "Marketplace": "MAGALU",
+                "Data do Pedido": str(pedido.get("purchased_at") or "")[:10],
+                "Kit": "", "Nome do Kit": "", "Quantidade de Kits": "", "Quantidade por Kit": "",
+                "Cliente": str(cliente.get("name") or ""), "NomeFiscalMagalu": str(cliente.get("name") or ""),
+                "SKU": sku, "Quantidade": str(qtd), "Código de Barras": "",
+                "Descrição": str(info.get("name") or ""),
+                "Rua": "", "Módulo": "", "Prateleira": "", "Nível": "", "Posição": "", "Foto": "",
+                "NF": nf, "Nota Fiscal": nf, "Chave de Acesso": nf,
+                "StatusMagalu": status, "Etiqueta API Magalu": etiqueta,
+                "PrazoEnvioMagalu": str(handling.get("limit_date") or ""),
+                "EntregaMagalu": str(entrega.get("code") or ""), "EntregaIdMagalu": entrega_id,
+                "CanalMagalu": str(canal.get("id") or ""),
+                "OrigemCadastro": "API_MAGALU", "SkuOrigemImportacao": sku,
+                "MagaluAtualizadoEm": now_iso(), "CriadoEm": now_iso(),
+                "__uidLinha": "MAGALUAPI_" + hashlib.sha1(identidade.encode("utf-8")).hexdigest()[:20],
+            }
+            produto = _ml_find_product(products, sku)
+            if produto:
+                for campo in ("SKU", "Código de Barras", "Descrição", "Rua", "Módulo", "Prateleira", "Nível", "Posição", "Foto"):
+                    if str(produto.get(campo) or "").strip():
+                        row[campo] = produto.get(campo)
+            linhas.append(row)
+    return _shopee_expand_kit_lines(linhas, products)  # V18.71: mesma regra de kit
+
+
+def _magalu_merge(atual: list[dict[str, Any]], api: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], set[str], int]:
+    """Junta as linhas da API à fila. Retorna (fila, identidades removidas, pedidos pulados por já existirem)."""
+    pedidos_outra_origem = {normalize(order_number(r)) for r in atual
+                            if isinstance(r, dict) and normalize(r.get("OrigemCadastro")) != "API_MAGALU"}
+    ativos = {normalize(order_number(r)) for r in api}
+    antigos: dict[str, dict[str, Any]] = {}
+    saida: list[dict[str, Any]] = []
+    removidas: set[str] = set()
+    for indice, row in enumerate(atual):
+        if not isinstance(row, dict):
+            continue
+        if normalize(row.get("OrigemCadastro")) != "API_MAGALU":
+            saida.append(row)
+        elif normalize(order_number(row)) in ativos:
+            antigos[str(row.get("__uidLinha") or "")] = row
+        else:
+            removidas.add(_pending_identity_v1714(row, indice))  # entrega enviada/cancelada: sai
+    pulados: set[str] = set()
+    for nova in api:
+        pedido = normalize(order_number(nova))
+        if pedido in pedidos_outra_origem:
+            pulados.add(pedido)  # veio pela extensão/manual: não duplica
+            continue
+        velha = antigos.get(str(nova.get("__uidLinha") or ""))
+        if velha:
+            junta = dict(velha)
+            for campo in MAGALU_CAMPOS_OPERACIONAIS:
+                if campo in nova:
+                    junta[campo] = nova[campo]
+            saida.append(junta)
+        else:
+            saida.append(nova)
+    return saida, removidas, len(pulados)
+
+
+def magalu_importar_pedidos() -> dict[str, Any]:
+    with MAGALU_SYNC_LOCK:
+        pedidos_api = magalu_pedidos_abertos()  # erro aqui = nada gravado
+        products_raw, _, _ = get_storage("conf_produtos")
+        products = _rows_from_storage_value(products_raw)
+        # Fase 2: etiqueta das entregas faturadas que ainda não têm (antes de montar as
+        # linhas, para a linha já sair com "VINCULADA").
+        com_etiqueta = _magalu_etiquetas_vinculadas()
+        etiquetas_novas = erros_etiqueta = 0
+        for pedido in pedidos_api:
+            code = str(pedido.get("code") or "").strip()
+            canal = pedido.get("channel") if isinstance(pedido.get("channel"), dict) else {}
+            for entrega in pedido.get("deliveries") or []:
+                if not isinstance(entrega, dict) or str(entrega.get("status") or "").lower() != "invoiced":
+                    continue
+                entrega_id = str(entrega.get("id") or "").strip()
+                if not entrega_id or entrega_id in com_etiqueta:
+                    continue
+                notas = [n for n in (entrega.get("invoices") or []) if isinstance(n, dict)]
+                try:
+                    zpl = _magalu_baixar_etiqueta({"channel": {"id": str(canal.get("id") or "")},
+                                                   "deliveries": [{"id": entrega_id}],
+                                                   "label": {"format": "zpl", "type": "full"}})
+                    _magalu_guardar_etiqueta(code, str(entrega.get("code") or ""), entrega_id,
+                                             str((notas[-1] if notas else {}).get("key") or ""), zpl)
+                    com_etiqueta.add(entrega_id)
+                    etiquetas_novas += 1
+                except Exception as exc:
+                    erros_etiqueta += 1
+                    magalu_log_event_se_mudou("etiqueta", f"pedido={code} entrega={entrega_id}", "ERRO", str(exc)[:800])
+        api_linhas: list[dict[str, Any]] = []
+        for pedido in pedidos_api:
+            api_linhas.extend(_magalu_linhas_do_pedido(pedido, products, com_etiqueta))
+        atual_raw, _, _ = get_storage("conf_pedidos")
+        atual = _rows_from_storage_value(atual_raw)
+        fila, removidas, pulados = _magalu_merge(atual, api_linhas)
+        save_storage("conf_pedidos", atual_raw, json_dumps(fila), False,
+                     actor="sistema", actor_role="sistema", source_screen="Admin / Integrações / Magalu",
+                     change_method="Sincronização API Magalu", client_ip="127.0.0.1",
+                     allow_completed_reimport=False,
+                     # V18.52: remoção NOMEADA (entrega enviada/cancelada) — só as linhas
+                     # da API que saíram; linha protegida pelo ADMIN nunca sai por aqui.
+                     remove_pending_identities=removidas)
+        with DB_LOCK:
+            DB.execute("UPDATE magalu_integration SET last_sync_at=?, last_error='' WHERE id=1", (now_iso(),))
+            DB.commit()
+        resumo = {"ok": True, "pedidos": len({order_number(r) for r in api_linhas}), "linhas": len(api_linhas),
+                  "removidas": len(removidas), "ja_na_fila_por_outra_origem": pulados,
+                  "etiquetas_novas": etiquetas_novas, "erros_etiqueta": erros_etiqueta}
+        magalu_log_event_se_mudou("pedidos", "/seller/v1/orders", "OK",
+                                  f"{resumo['pedidos']} pedido(s), {resumo['linhas']} linha(s), {len(removidas)} removida(s), "
+                                  f"{pulados} já na fila, {etiquetas_novas} etiqueta(s) nova(s)")
+        return resumo
+
+
+_MAGALU_LOG_ULTIMO: dict[tuple[str, str], tuple[str, str]] = {}
+
+
+def magalu_log_event_se_mudou(topic: str, resource: str, result: str, detail: str = "") -> bool:
+    """V18.78: o worker só grava no log quando (resultado, detalhe) mudou."""
+    chave = (topic, resource)
+    if _MAGALU_LOG_ULTIMO.get(chave) == (result, detail):
+        return False
+    _MAGALU_LOG_ULTIMO[chave] = (result, detail)
+    magalu_log_event(topic, resource, result, detail)
+    return True
+
+
+def magalu_rodada() -> dict[str, Any]:
+    """Uma volta do worker: mantém o token vivo e, com a chave ligada, importa."""
+    if not magalu_status_payload().get("connected"):
+        return {"importou": False, "motivo": "desconectada"}
+    magalu_access_token()  # renova perto do vencimento, mesmo com a importação desligada
+    if not magalu_importacao_ligada():
+        return {"importou": False, "motivo": "importacao_desligada"}
+    return {"importou": True, **magalu_importar_pedidos()}
+
+
+def magalu_pedidos_loop(stop_event: threading.Event) -> None:
+    stop_event.wait(45)
+    while not stop_event.is_set():
+        try:
+            magalu_rodada()
+        except Exception as exc:
+            with DB_LOCK:
+                DB.execute("UPDATE magalu_integration SET last_error=? WHERE id=1", (str(exc)[:500],))
+                DB.commit()
+            magalu_log_event_se_mudou("pedidos", "worker", "ERRO", str(exc)[:800])
+        stop_event.wait(MAGALU_PEDIDOS_INTERVALO)
 
 
 def shopee_api_get(path: str, params: dict[str, Any] | None = None, retry_auth: bool = True) -> dict[str, Any]:
@@ -27019,6 +27326,33 @@ class AppHandler(BaseHTTPRequestHandler):
                 audit(ctx["username"], "shopee.disconnect", "Shopee")
                 self.send_json({"ok": True})
             return
+        if path == "/api/integracoes/magalu/importacao":  # V19.27: liga/desliga (perfil Admin)
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                if str(ctx.get("app_role") or "") != "admin":
+                    self.send_json({"error": "Somente o perfil Admin liga ou desliga a importação."}, 403)
+                    return
+                try:
+                    corpo = json.loads(self.read_body().decode("utf-8") or "{}")
+                except Exception:
+                    corpo = {}
+                ligada = bool(corpo.get("ligada"))
+                magalu_importacao_definir(ligada, ctx["username"])
+                audit(ctx["username"], "magalu.importacao", "ligada" if ligada else "desligada")
+                self.send_json({"ok": True, "importacao_ligada": ligada})
+            return
+        if path == "/api/integracoes/magalu/sincronizar":  # V19.27
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                if not magalu_importacao_ligada():
+                    self.send_json({"ok": False, "error": "A importação da Magalu está desligada. Ligue em Integrações."}, 409)
+                    return
+                try:
+                    self.send_json(magalu_importar_pedidos())
+                except Exception as exc:
+                    magalu_log_event("pedidos", "manual", "ERRO", str(exc))
+                    self.send_json({"ok": False, "error": str(exc)}, 502)
+            return
         if path == "/api/integracoes/magalu/disconnect":  # V19.24: mesma regra da Shopee (OWNER)
             ctx = self.auth(admin_only=True)
             if ctx is not None:
@@ -30002,6 +30336,7 @@ SAUDE_WORKERS_INFO: dict[str, tuple[str, bool, int]] = {
     "ml_reconcile_manual_orders_loop": ("Pedidos manuais do Mercado Livre", False, 30),
     "ml_safety_catchup_loop": ("Recuperação de pedidos do Mercado Livre", False, 45),
     "shopee_orders_worker_loop": ("Pedidos novos da Shopee", True, 20),
+    "magalu_pedidos_loop": ("Pedidos e etiquetas da Magalu", True, 20),  # V19.27
     "shopee_label_worker_loop": ("Etiquetas da Shopee", True, 30),
     "vendas_sync_loop": ("Vendas (Dashboard e Financeiro)", False, 120),
     "financeiro_frete_loop": ("Frete das vendas (Financeiro)", False, 120),
@@ -30904,6 +31239,13 @@ def main() -> None:
         name="shopee-orders-worker",
         daemon=True,
     )
+    # V19.27: pedidos e etiquetas da Magalu (importa só com a chave ligada).
+    magalu_thread = threading.Thread(
+        target=_worker_protegido(magalu_pedidos_loop),
+        args=(watcher_stop,),
+        name="magalu-pedidos-worker",
+        daemon=True,
+    )
     # V17.99: vendas do ML e da Shopee para o Dashboard de vendas.
     vendas_ml_thread = threading.Thread(
         target=_worker_protegido(vendas_sync_loop),
@@ -31042,6 +31384,7 @@ def main() -> None:
         safety_catchup_thread.start()
         shopee_label_thread.start()
         shopee_orders_thread.start()
+        magalu_thread.start()
         vendas_ml_thread.start()
         frete_thread.start()
         auditoria_thread.start()
