@@ -28,7 +28,8 @@ class Medicao(TesteNoromak):
         t.start(); t.join()
         i = self.item("worker teste_lento")
         self.assertEqual(i["posse"]["n"], 1)
-        self.assertGreaterEqual(i["posse"]["max_s"], 0.19)
+        # V19.24: folga para o relógio do Windows (~15 ms): sleep(0.2) já mediu 0,188 s.
+        self.assertGreaterEqual(i["posse"]["max_s"], 0.15)
 
     def test_espera_registrada_para_quem_ficou_na_fila(self):
         pegou = threading.Event()
