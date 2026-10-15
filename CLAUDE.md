@@ -944,6 +944,7 @@ código, usa o `cliente/buscar` (exato) e só depois o nome. Botão "Linx" do Ad
 (sem nome/CPF da NF-e guardados cai na extensão); extensão **0.31**: o ✏️ do ML abre `romaneio-api.html?funcao=cadastro`
 (nome/CPF lidos na venda vão por mensagem e o servidor guarda em `cliente_fiscal` antes).
 **V19.33 — CNPJ:** o ML mostra a NF-e em pares rótulo/valor ("Razão social" / "59.398.838 NOME"); a extensão 0.31.1 lê o valor depois do rótulo (tira o prefixo do MEI) e a **IE** ("Inscrição estadual (IE)"). Antes lia o rótulo "Tipo de contribuinte" como nome (pedido 2000018994284906): o servidor recusa nome que é rótulo (`EXP_NOME_ROTULO`). A IE só vai no `cliente/criar` (CNPJ); cliente existente recebe aviso — o `atualizar` não tem IE.
+**V19.34:** caixa com um botão só ("Enviar ao caixa" confere por trás, confirma o valor e envia). **V19.35 — endereço da Shopee:** `_exp_endereco_shopee` lê `recipient_address` do `get_order_detail` (rua/número/complemento do `full_address`, UF pelo nome do estado em `EXP_UF_POR_NOME`), sem acento como no ML; a Shopee **não informa o bairro** → `CENTRO` (`EXP_BAIRRO_PADRAO_SHOPEE`, decisão do dono 15/10, com aviso); texto mascarado (`*`) conta como faltando. Extensão 0.32: ✏️ também na Shopee.
 
 ### Vínculo MLB ↔ SKU
 Banco canônico `ml_sku_mlb_links_v1`, com seed em `DADOS/ml_sku_mlb_links_seed.json`.

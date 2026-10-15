@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.34-CAIXA-UM-BOTAO"
+APP_VERSION = "19.35-ENDERECO-SHOPEE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -15043,6 +15043,53 @@ def exp_buscar_cliente(documento: str, operador: str = "noromak") -> dict[str, A
             "nome": str(b.get("nome") or ""), "lista": lista}
 
 
+EXP_BAIRRO_PADRAO_SHOPEE = "CENTRO"
+EXP_UF_POR_NOME = {
+    "ACRE": "AC", "ALAGOAS": "AL", "AMAPA": "AP", "AMAZONAS": "AM", "BAHIA": "BA", "CEARA": "CE",
+    "DISTRITO FEDERAL": "DF", "ESPIRITO SANTO": "ES", "GOIAS": "GO", "MARANHAO": "MA", "MATO GROSSO": "MT",
+    "MATO GROSSO DO SUL": "MS", "MINAS GERAIS": "MG", "PARA": "PA", "PARAIBA": "PB", "PARANA": "PR",
+    "PERNAMBUCO": "PE", "PIAUI": "PI", "RIO DE JANEIRO": "RJ", "RIO GRANDE DO NORTE": "RN",
+    "RIO GRANDE DO SUL": "RS", "RONDONIA": "RO", "RORAIMA": "RR", "SANTA CATARINA": "SC", "SAO PAULO": "SP",
+    "SERGIPE": "SE", "TOCANTINS": "TO",
+}
+
+
+def _exp_endereco_shopee(order_sn: str) -> dict[str, Any]:
+    """V19.35 (pedido do dono, 15/10): endereço da Shopee pela API (get_order_detail →
+    recipient_address), sem acento como no ML. A página não mostra o bairro; a API traz
+    em `district`. Texto mascarado ("****") conta como faltando — nunca vai ao Apollo."""
+    detalhes = shopee_order_details([order_sn])
+    pedido = detalhes[0] if detalhes else {}
+    a = pedido.get("recipient_address") if isinstance(pedido.get("recipient_address"), dict) else {}
+    real = lambda v: "" if "*" in str(v or "") else _exp_limpo(v)
+    cidade, estado, bairro = real(a.get("city")), real(a.get("state")), real(a.get("district") or a.get("town"))
+    # Decisão do dono (15/10): a Shopee não informa o bairro → padrão "CENTRO".
+    bairro_padrao = not bairro
+    bairro = bairro or EXP_BAIRRO_PADRAO_SHOPEE
+    partes = [p.strip() for p in str(a.get("full_address") or "").split(",") if p.strip()]
+    rua = real(partes[0]) if partes else ""
+    numero = ""
+    complemento = ""
+    if len(partes) > 1 and re.fullmatch(r"\d+[A-Za-z]?|S/?N", partes[1].strip(), re.I):
+        numero = "" if partes[1].strip().upper() in ("SN", "S/N") else partes[1].strip()
+        resto = [real(p) for p in partes[2:]]
+        # o que sobra até o bairro/cidade é complemento ("Casa", "Apartamento 202")
+        for p in resto:
+            if not p or p in (bairro, cidade, estado) or re.fullmatch(r"\d{5}-?\d{3}", p):
+                break
+            complemento = p
+            break
+    uf = estado if len(estado) == 2 else EXP_UF_POR_NOME.get(estado, "")
+    endereco = {"rua": rua[:120], "numero": numero[:10], "complemento": complemento[:60], "bairro": bairro[:50],
+                "cep": re.sub(r"\D", "", str(a.get("zipcode") or "")), "cidade": cidade[:50], "uf": uf}
+    faltando = [k for k in ("rua", "bairro", "cep", "cidade", "uf") if not endereco[k]]
+    if faltando:
+        return {"endereco": None, "falta": "a Shopee não mandou " + ", ".join(faltando)}
+    if not endereco["complemento"]:
+        del endereco["complemento"]
+    return {"endereco": endereco, "falta": "", "bairro_padrao": bairro_padrao}
+
+
 def exp_endereco_entrega(pedido: str) -> dict[str, Any]:
     """V19.32 (decisão do dono): endereço do cadastro = Dados do envio da venda.
     Mercado Livre: /shipments/{id} com a conta do pedido. Devolve {endereco} só quando
@@ -15052,8 +15099,11 @@ def exp_endereco_entrega(pedido: str) -> dict[str, Any]:
     if not linhas:
         return {"endereco": None, "falta": "pedido não está no Noromak"}
     row = linhas[0]
-    if _vendas_marketplace(row.get("Marketplace") or row.get("Origem")) != "Mercado Livre":
-        return {"endereco": None, "falta": "endereço automático só para o Mercado Livre por enquanto"}
+    marketplace = _vendas_marketplace(row.get("Marketplace") or row.get("Origem"))
+    if marketplace == "Shopee":
+        return _exp_endereco_shopee(str(order_number(row) or pedido))
+    if marketplace != "Mercado Livre":
+        return {"endereco": None, "falta": f"endereço automático ainda não existe para {marketplace or 'este marketplace'}"}
     envio = re.sub(r"\D", "", str(row.get("ShipmentIdMercadoLivre") or ""))
     if not envio:
         return {"endereco": None, "falta": "pedido sem número de envio do ML"}
@@ -15120,6 +15170,8 @@ def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "", ie: Any
     endereco = end["endereco"]
     if not endereco:
         avisos.append("Endereço não enviado: " + end["falta"] + ".")
+    elif end.get("bairro_padrao"):
+        avisos.append(f"Bairro gravado como {EXP_BAIRRO_PADRAO_SHOPEE}: a Shopee não informa o bairro.")
     criado = False
     with EXP_PORTA_LOCK:
         try:

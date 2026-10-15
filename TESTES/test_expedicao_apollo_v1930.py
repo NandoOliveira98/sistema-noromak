@@ -385,6 +385,39 @@ class CadastroV1932(unittest.TestCase):
             r = S.exp_cadastro_atualizar(PEDIDO, "luis", ie="8005099728")
         self.assertTrue(any("8005099728" in a for a in r["avisos"]))
 
+    def _shopee(self, recipient):
+        gravar_como_admin([linha(PEDIDO, "0893764272", Marketplace="SHOPEE")])
+        S.salvar_cliente_fiscal(PEDIDO, "48500911808", "Leonardo Marques Coimbra Brandão", linx_cliente="83066",
+                                fonte="teste", usuario="teste")
+        porta = PortaFalsa()
+        with mock.patch.object(S, "_exp_porta", side_effect=porta), mock.patch.object(S, "EXP_CADASTRO_API", True), \
+                mock.patch.object(S, "shopee_order_details", return_value=[{"order_sn": PEDIDO, "recipient_address": recipient}]):
+            r = S.exp_cadastro_atualizar(PEDIDO, "luis")
+        return r, porta
+
+    def test_v1935_shopee_endereco_sem_acento_e_bairro_centro(self):
+        # Caso real 15/10, pedido 261015PK6V2UGV: a Shopee não mostra o bairro.
+        r, porta = self._shopee({"full_address": "R Jesuíno Antônio, 342, Casa, Osasco, São Paulo, 06045080",
+                                 "city": "Osasco", "state": "São Paulo", "zipcode": "06045080"})
+        self.assertTrue(r["ok"], r)
+        corpo = porta.corpo("cliente/atualizar")
+        self.assertEqual(corpo["nome"], "LEONARDO MARQUES COIMBRA BRANDAO")
+        self.assertEqual(corpo["endereco"], {"rua": "R JESUINO ANTONIO", "numero": "342", "complemento": "CASA",
+                                             "bairro": "CENTRO", "cep": "06045080", "cidade": "OSASCO", "uf": "SP"})
+        self.assertTrue(any("CENTRO" in a for a in r["avisos"]))
+
+    def test_v1935_shopee_bairro_da_api_vale_quando_vem(self):
+        r, porta = self._shopee({"full_address": "Avenida Amazonas, 95, Apartamento 202, Timóteo, Minas Gerais, 35180628",
+                                 "district": "Centro Norte", "city": "Timóteo", "state": "Minas Gerais", "zipcode": "35180-628"})
+        end = porta.corpo("cliente/atualizar")["endereco"]
+        self.assertEqual((end["bairro"], end["cidade"], end["uf"], end["complemento"]),
+                         ("CENTRO NORTE", "TIMOTEO", "MG", "APARTAMENTO 202"))
+
+    def test_v1935_shopee_mascarado_nao_vai(self):
+        r, porta = self._shopee({"full_address": "****", "city": "Osasco", "state": "São Paulo", "zipcode": "06045080"})
+        self.assertNotIn("endereco", porta.corpo("cliente/atualizar"))
+        self.assertTrue(any("Endereço não enviado" in a for a in r["avisos"]))
+
     def test_romaneio_sem_codigo_acha_pelo_cpf(self):
         _pedido_ml_com_envio()
         porta = PortaFalsa()
