@@ -4956,7 +4956,7 @@ function pdExpRenderV1930(d,msg){
       `<div style="color:#92400e;margin-bottom:6px">Antes: escolha a <b>condição de pagamento</b> do atendimento no Apollo${d.marketplace==="Shopee"?" (Shopee 971)":d.marketplace==="Magalu"?" (Magalu 983)":""}.</div>
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">Código do cliente no Apollo:
       <input id="pdExpCliV1930" inputmode="numeric" value="${esc(c.codigo||"")}" style="width:120px;padding:6px;border:1px solid #C9D6E5;border-radius:8px">
-      <button type="button" class="btn-secundario" onclick="pdExpPreviaV1930(this)">Conferir caixa</button></div>
+      <button type="button" class="btn-primario" onclick="pdExpPreviaV1930(this)">Enviar ao caixa</button></div>
       ${d.caixa_travado?`<label style="display:block;margin-top:6px"><input type="checkbox" id="pdExpConfV1930"> Conferi no Apollo: o atendimento <b>não</b> está no caixa.</label>`:""}
       <div id="pdExpPrevV1930" style="margin-top:6px"></div>`;
   }
@@ -4999,14 +4999,17 @@ async function pdExpPreviaV1930(btn){
   const d=pdExpV1930;if(!d)return;
   const cli=String(document.getElementById("pdExpCliV1930")?.value||"").replace(/\D/g,"");
   if(!cli){pdExpMsgV1930("Informe o código do cliente no Apollo.");return;}
-  const box=document.getElementById("pdExpPrevV1930");btn.disabled=true;pdExpMsgV1930("Conferindo o caixa no Apollo (não envia nada)…");
+  const box=document.getElementById("pdExpPrevV1930");btn.disabled=true;pdExpMsgV1930("Conferindo no Apollo…");
   try{
     const r=await pdExpApiV1930("caixa/previa",{method:"POST",body:JSON.stringify({pedido:d.pedido,cliente:cli})});
+    // V19.34: um botão só (pedido do dono) — confere por trás e, passando, já pede a confirmação e envia.
     const esc=htmlSeguroBanco,valor=Number(r.valor||0);
-    box.innerHTML=`<div>Atendimento <b>${esc(r.atendimento)}</b> · valor <b>R$ ${esc(valor.toFixed(2).replace(".",","))}</b></div>`+
-      (r.impedimentos||[]).concat(r.falhas||[]).map(t=>`<div style="color:#8C1C13">⚠️ ${esc(t)}</div>`).join("")+
-      (r.pode?`<button type="button" class="btn-primario" style="margin-top:6px" onclick="pdExpEnviarV1930(this,'${esc(r.atendimento)}','${esc(r.cliente)}',${valor})">Enviar ao caixa</button>`:"");
-    pdExpMsgV1930(r.pode?"Prévia OK.":"O Apollo não aceitou: veja acima. Nada foi enviado.");
+    if(!r.pode){
+      box.innerHTML=(r.impedimentos||[]).concat(r.falhas||[]).map(t=>`<div style="color:#8C1C13">⚠️ ${esc(t)}</div>`).join("");
+      pdExpMsgV1930("O Apollo não aceitou: veja acima. Nada foi enviado.");return;
+    }
+    box.innerHTML="";pdExpMsgV1930("");
+    await pdExpEnviarV1930(btn,String(r.atendimento),String(r.cliente),valor);
   }catch(e){pdExpMsgV1930("❌ "+htmlSeguroBanco(e.message));}
   finally{btn.disabled=false;}
 }
