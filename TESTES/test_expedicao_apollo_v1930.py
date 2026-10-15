@@ -472,6 +472,23 @@ class CadastroV1932(unittest.TestCase):
                          ("AVENIDA AMAZONAS", "95", "APARTAMENTO 202", "TIMOTEO", "MG", "CENTRO"))
         self.assertIsNone(S.exp_endereco_do_texto("Rua X, ******89")["endereco"])
 
+    def test_v1939_credito_que_nao_gravou_vira_aviso_no_topo(self):
+        # Caso real 15/10: clientes criados pela API voltaram "nao_gravou" e o caixa pediu a função 257.
+        _pedido_ml_com_envio(codigo="83068")
+        porta = PortaFalsa()
+        original = porta.__call__
+
+        def credito_nao_grava(rota, corpo, escrita=False):
+            if rota == "cliente/credito":
+                porta.chamadas.append((rota, dict(corpo)))
+                return {"ok": True, "situacao": "nao_gravou"}
+            return original(rota, corpo, escrita)
+
+        r, _ = self._rodar(credito_nao_grava)
+        self.assertEqual(r["credito"], "nao_gravou")
+        self.assertTrue(r["avisos"][0].startswith("CRÉDITO NÃO LIBERADO"))
+        self.assertIn("257", r["avisos"][0])
+
     def test_romaneio_sem_codigo_acha_pelo_cpf(self):
         _pedido_ml_com_envio()
         porta = PortaFalsa()

@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.38-ROMANEIO-JA-SOLTO"
+APP_VERSION = "19.39-AVISO-CREDITO-NAO-GRAVOU"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -15285,6 +15285,11 @@ def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "", ie: Any
             cr = _exp_porta("cliente/credito", {**base, "situacao_credito": "1"}, escrita=True)
         except PortaErro as exc:
             return {"ok": False, "situacao": "incerto" if exc.incerto else "erro", "cliente": codigo, "error": str(exc)}
+    # V19.39: crédito que o Apollo não gravou (descarte em silêncio da Linx: os clientes
+    # criados pela API em 15/10 voltaram "nao_gravou") trava o caixa na função 257.
+    if cr.get("situacao") in ("nao_gravou", "recusado", "incerto"):
+        avisos.insert(0, "CRÉDITO NÃO LIBERADO no Apollo (" + str(cr.get("situacao")) + "): libere a Situação de "
+                         "Crédito e o Cadastro no Apollo antes do caixa, senão ele pede a autorização da função 257.")
     salvar_cliente_fiscal(pedido, documento, nome, linx_cliente=codigo, fonte="porta", usuario=usuario)
     audit(usuario, "expedicao.cadastro", f"{pedido}|{codigo}|{'criado' if criado else 'atualizado'}|{cr.get('situacao')}")
     return {"ok": True, "situacao": "criado" if criado else "atualizado", "cliente": codigo,

@@ -5173,7 +5173,7 @@ async function pdExpCadastroV1932(botao){
   try{
     const r=await mlApiAdmin("/expedicao/api/expedicao-apollo/cadastro",{method:"POST",body:JSON.stringify({pedido})});
     carregarClientesFiscaisV1786();
-    const cred={liberado:"crédito liberado",ja_liberado:"crédito já estava liberado",bloqueado_pelo_financeiro:"⚠️ crédito BLOQUEADO pelo financeiro"}[r.credito]||`crédito: ${r.credito||"—"}`;
+    const cred={liberado:"crédito liberado",ja_liberado:"crédito já estava liberado",bloqueado_pelo_financeiro:"⚠️ crédito BLOQUEADO pelo financeiro",nao_gravou:"⚠️ crédito NÃO gravou"}[r.credito]||`crédito: ${r.credito||"—"}`;
     alert(`✅ Cliente ${r.cliente} ${r.situacao==="criado"?"CRIADO":"atualizado"} no Apollo · ${cred}`+
       (r.cidade_apollo?`\nCidade no Apollo: ${r.cidade_apollo}`:"")+((r.avisos||[]).length?`\n\n${r.avisos.join("\n")}`:""));
   }catch(e){alert("❌ Cadastro: "+e.message);}
