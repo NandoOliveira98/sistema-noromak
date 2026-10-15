@@ -139,6 +139,26 @@ class RomaneioCaixaPelaPorta(unittest.TestCase):
             d = S.exp_romaneio_preparar(PEDIDO)
         self.assertEqual(d["escolhido"], "")
 
+    def test_v1937_kit_com_peca_faltando_no_atendimento_nao_e_escolhido(self):
+        # Caso real 15/10, Shopee 261015P6NPQQHV: kit 0893600022/0893764272, atendimento só com o 0893764272.
+        gravar_como_admin([linha(PEDIDO, "0893600022/0893764272", Marketplace="SHOPEE")])
+        S.salvar_cliente_fiscal(PEDIDO, "10638907640", "Victor Ribeiro Goncalves Pereira", linx_cliente="72870",
+                                fonte="teste", usuario="teste")
+        previa = {"ok": True, "itens": [{"codigo": "0893764272", "a_soltar": 1.0}], "total_a_soltar": 1.0}
+        with mock.patch.object(S, "_exp_porta", side_effect=PortaFalsa(previa=previa)):
+            d = S.exp_romaneio_preparar(PEDIDO)
+        self.assertEqual(d["candidatos"][0]["faltam"], ["0893600022"])
+        self.assertEqual(d["escolhido"], "")
+
+    def test_v1937_sku_do_ml_com_prefixo_nao_acusa_falta(self):
+        gravar_como_admin([linha(PEDIDO, "157156-6008.005.005.00.R", Marketplace="MERCADO LIVRE")])
+        S.salvar_cliente_fiscal(PEDIDO, "06278073994", "Fulano de Tal", linx_cliente="83020", fonte="teste", usuario="t")
+        previa = {"ok": True, "itens": [{"codigo": "6008.005.005.00.R", "a_soltar": 1.0}], "total_a_soltar": 1.0}
+        with mock.patch.object(S, "_exp_porta", side_effect=PortaFalsa(previa=previa)):
+            d = S.exp_romaneio_preparar(PEDIDO)
+        self.assertEqual(d["candidatos"][0]["faltam"], [])
+        self.assertEqual(d["escolhido"], "787601")
+
     def test_dois_atendimentos_quem_escolhe_e_a_pessoa(self):
         _pedido_com_cliente()
         dois = [{"atendimento": 1, "valor": 10}, {"atendimento": 2, "valor": 20}]

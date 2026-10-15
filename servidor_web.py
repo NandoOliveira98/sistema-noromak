@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.36-ENDERECO-SHOPEE-PAGINA"
+APP_VERSION = "19.37-ROMANEIO-FALTA-PECA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -14826,6 +14826,28 @@ def _exp_estado_operacoes(pedido: str) -> dict[str, Any]:
             "caixa_travado": travado and not caixa_ok}
 
 
+def _exp_norm_codigo(texto: Any) -> str:
+    return re.sub(r"[^0-9A-Z]", "", str(texto or "").upper())
+
+
+def _exp_componentes_do_pedido(linhas: list[dict[str, Any]]) -> dict[str, str]:
+    """V19.37: peças que o pedido precisa no atendimento {código normalizado: como aparece}.
+    Kit "A/B" = cada peça; "KIT-" sai; "151490-0893270212" (anúncio-código do ML) = o código.
+    Caso real 15/10, Shopee 261015P6NPQQHV: SKU 0893600022/0893764272 e o atendimento só
+    tinha o 0893764272 — antes "1 peça bate" já escolhia e soltava o romaneio incompleto."""
+    saida: dict[str, str] = {}
+    for row in linhas:
+        sku = str(row.get("SKU") or row.get("Sku") or "").strip().upper()
+        for parte in sku.split("/"):
+            parte = re.sub(r"^KIT\d*-", "", parte.strip())
+            if re.match(r"^\d{5,}-.+", parte):
+                parte = parte.split("-", 1)[1]
+            chave = _exp_norm_codigo(parte)
+            if chave:
+                saida.setdefault(chave, parte)
+    return saida
+
+
 def exp_romaneio_preparar(pedido: str, atendimento: Any = "", cliente: Any = "") -> dict[str, Any]:
     """Mostra o que o botão do romaneio faria. Só leitura no Apollo."""
     pedido = str(pedido or "").strip()
@@ -14896,6 +14918,7 @@ def exp_romaneio_preparar(pedido: str, atendimento: Any = "", cliente: Any = "")
         if not abertos.get("ok"):
             return {**saida, "situacao": "erro", "aviso": abertos.get("erro") or "O Apollo não listou os atendimentos."}
         codigos = _linx_codigos_do_pedido(linhas)
+        componentes = _exp_componentes_do_pedido(linhas)
         for a in (abertos.get("atendimentos") or [])[:EXP_MAX_ATENDIMENTOS]:
             prev = _exp_porta("romaneio/previa", {"revenda": EXP_REVENDA, "atendimento": int(a["atendimento"]),
                                                    "operador": "noromak"})
@@ -14903,10 +14926,13 @@ def exp_romaneio_preparar(pedido: str, atendimento: Any = "", cliente: Any = "")
                       "quantidade": i.get("requisitada"), "a_soltar": i.get("a_soltar")}
                      for i in (prev.get("itens") or []) if isinstance(i, dict)]
             bate = sum(1 for i in itens if re.sub(r"[^0-9A-Z]", "", i["codigo"].upper()) in codigos)
+            no_atendimento = {_exp_norm_codigo(i["codigo"]) for i in itens}
+            faltam = [orig for chave, orig in componentes.items() if chave not in no_atendimento]
             saida["candidatos"].append({
                 "atendimento": str(a.get("atendimento")), "cliente": a.get("cliente"), "valor": a.get("valor"),
                 "aberto_em": a.get("aberto_em"), "vendedor": (a.get("vendedor") or {}).get("nome"),
                 "itens": itens, "total_a_soltar": prev.get("total_a_soltar") or 0, "bate": bate,
+                "faltam": faltam,
             })
     except PortaErro as exc:
         return {**saida, "situacao": "erro", "aviso": str(exc)}
@@ -14915,7 +14941,7 @@ def exp_romaneio_preparar(pedido: str, atendimento: Any = "", cliente: Any = "")
     # (ou o número digitado); senão quem escolhe é a pessoa.
     if numero and soltar:
         saida["escolhido"] = soltar[0]["atendimento"]
-    elif len(soltar) == 1 and (soltar[0]["bate"] or not codigos):
+    elif len(soltar) == 1 and (soltar[0]["bate"] or not codigos) and not soltar[0]["faltam"]:
         saida["escolhido"] = soltar[0]["atendimento"]
     if not saida["candidatos"]:
         return {**saida, "situacao": "sem_atendimento", "aviso": "Nenhum atendimento aberto para este cliente no Apollo."}

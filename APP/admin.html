@@ -4937,6 +4937,7 @@ function pdExpRenderV1930(d,msg){
       <input type="radio" name="pdExpAtdV1930" value="${esc(a.atendimento)}" ${String(d.escolhido)===String(a.atendimento)?"checked":""} ${a.total_a_soltar?"":"disabled"}>
       <b>Atendimento ${esc(a.atendimento)}</b> · R$ ${esc(Number(a.valor||0).toFixed(2).replace(".",","))} <span style="color:#586A7D">${esc(String(a.aberto_em||"").slice(0,10))} · ${esc(a.vendedor||"")}</span>
       ${a.total_a_soltar?(a.bate?`<span style="color:#145C2F"> · ${a.bate} peça(s) batem com o pedido</span>`:`<span style="color:#b45309"> · nenhuma peça bate com o pedido</span>`):`<span style="color:#586A7D"> · nada a soltar</span>`}
+      ${(a.faltam||[]).length?`<div style="color:#B42318;font-weight:600;margin-top:4px">⚠️ Falta no atendimento: ${esc(a.faltam.join(", "))}</div>`:""}
       <table style="width:100%;font-size:12px;margin-top:6px"><tr><th style="text-align:left">Peça</th><th style="text-align:left">Descrição</th><th>A soltar</th></tr>${(a.itens||[]).map(item).join("")}</table></label>`).join("");
     if(d.situacao==="escolher")b1='<div style="color:#b45309">Mais de um atendimento ou peças que não batem: escolha.</div>'+b1;
     if(d.busca_por_nome)b1=`<div style="color:#586A7D">Achado pelo nome da NF-e (${esc(d.busca_por_nome)}): confira se é o cliente certo.</div>`+b1;
@@ -4988,7 +4989,7 @@ async function pdExpSoltarV1930(btn){
   if(!obs){pdExpMsgV1930("Escreva a observação do romaneio.");return;}
   const a=(d.candidatos||[]).find(x=>String(x.atendimento)===sel.value)||{};
   const resumo=(a.itens||[]).filter(i=>i.a_soltar).map(i=>`${i.codigo} x${i.a_soltar}`).join(", ");
-  if(!await nkConfirmar(`Soltar o romaneio no estoque?\n\nPedido ${d.pedido}\nAtendimento ${sel.value}\nObservação: ${obs}\nItens: ${resumo}\n\nImprime no estoque e não volta atrás.`))return;
+  if(!await nkConfirmar(`Soltar o romaneio no estoque?\n\nPedido ${d.pedido}\nAtendimento ${sel.value}\nObservação: ${obs}\nItens: ${resumo}${(a.faltam||[]).length?`\n\n⚠️ FALTA NO ATENDIMENTO: ${a.faltam.join(", ")}`:""}\n\nImprime no estoque e não volta atrás.`))return;
   btn.disabled=true;pdExpMsgV1930("Soltando no Apollo…");
   try{
     const r=await pdExpApiV1930("romaneio/soltar",{method:"POST",body:JSON.stringify({pedido:d.pedido,atendimento:sel.value,observacao:obs})});
