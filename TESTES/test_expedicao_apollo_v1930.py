@@ -358,6 +358,33 @@ class CadastroV1932(unittest.TestCase):
         self.assertFalse(r["ok"])
         self.assertNotIn("cliente/criar", porta.rotas())
 
+    def test_v1933_rotulo_lido_como_nome_nao_grava(self):
+        # Caso real 15/10, pedido 2000018994284906 (CNPJ): a extensão leu "Tipo de contribuinte".
+        _pedido_ml_com_envio(codigo="83020", documento="59398838000128", nome="Tipo de contribuinte")
+        porta = PortaFalsa()
+        r, _ = self._rodar(porta)
+        self.assertEqual(r["situacao"], "nome_invalido")
+        self.assertEqual(porta.chamadas, [])
+
+    def test_v1933_ie_vai_na_criacao_do_cnpj(self):
+        _pedido_ml_com_envio(documento="59398838000128", nome="Gabriel Amorim Hespindola Soares")
+        porta = PortaFalsa()
+        porta.buscar = {"ok": True, "situacao": "nao_cadastrado"}
+        with mock.patch.object(S, "_exp_porta", side_effect=porta), mock.patch.object(S, "EXP_CADASTRO_API", True), \
+                mock.patch.object(S, "ml_api_get", return_value=ENVIO_ML):
+            r = S.exp_cadastro_atualizar(PEDIDO, "luis", ie="8005099728")
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(porta.corpo("cliente/criar")["inscricao_estadual"], "8005099728")
+        self.assertNotIn("inscricao_estadual", porta.corpo("cliente/atualizar"))  # campo desconhecido = 422
+
+    def test_v1933_ie_de_cliente_existente_vira_aviso(self):
+        _pedido_ml_com_envio(codigo="83020", documento="59398838000128", nome="Gabriel Amorim Hespindola Soares")
+        porta = PortaFalsa()
+        with mock.patch.object(S, "_exp_porta", side_effect=porta), mock.patch.object(S, "EXP_CADASTRO_API", True), \
+                mock.patch.object(S, "ml_api_get", return_value=ENVIO_ML):
+            r = S.exp_cadastro_atualizar(PEDIDO, "luis", ie="8005099728")
+        self.assertTrue(any("8005099728" in a for a in r["avisos"]))
+
     def test_romaneio_sem_codigo_acha_pelo_cpf(self):
         _pedido_ml_com_envio()
         porta = PortaFalsa()

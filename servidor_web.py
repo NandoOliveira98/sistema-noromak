@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.32-CADASTRO-CLIENTE-PELA-PORTA"
+APP_VERSION = "19.33-CADASTRO-CNPJ-IE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -15088,7 +15088,12 @@ def exp_endereco_entrega(pedido: str) -> dict[str, Any]:
     return {"endereco": endereco, "falta": ""}
 
 
-def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "") -> dict[str, Any]:
+# V19.33: rótulos da tela do ML que já foram lidos como nome (CNPJ, 15/10: "TIPO DE CONTRIBUINTE").
+EXP_NOME_ROTULO = re.compile(r"^(TIPO DE CONTRIBUINTE|NAO CONTRIBUINTE|CONTRIBUINTE|ISENTO|RAZAO SOCIAL|NOME COMPLETO"
+                             r"|INSCRICAO ESTADUAL.*|DADOS D.*|OBSERVAC.*)$")
+
+
+def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "", ie: Any = "") -> dict[str, Any]:
     """Botão do cadastro pela porta (V19.32, contrato real do Guilherme de 15/10):
     buscar pelo CPF -> (não cadastrado) criar -> atualizar nome + contatos + endereço -> crédito.
     Ligado com EXP_CADASTRO_API=1."""
@@ -15102,6 +15107,10 @@ def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "") -> dict
         return {"ok": False, "error": "Este pedido ainda não tem CPF/CNPJ da nota. Puxe nome e CPF primeiro."}
     codigo = re.sub(r"\D", "", str(cliente or "")) or conhecido["codigo"]
     nome_limpo = _exp_limpo(nome)[:70]
+    if nome_limpo and EXP_NOME_ROTULO.match(nome_limpo):
+        return {"ok": False, "situacao": "nome_invalido",
+                "error": f'O nome lido da NF-e ("{nome_limpo}") é um rótulo da tela, não o nome. Leia de novo na venda.'}
+    ie = re.sub(r"\D", "", str(ie or ""))
     operador = usuario[:60] or "noromak"
     avisos: list[str] = []
     try:
@@ -15130,7 +15139,9 @@ def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "") -> dict
                     c = _exp_porta("cliente/criar", {
                         "revenda": EXP_REVENDA, "documento": documento, "operador": operador, "nome": nome_limpo,
                         "email": LINX_CADASTRO_EMAIL, "ddd_celular": LINX_CADASTRO_DDD, "celular": EXP_CELULAR_PADRAO,
-                        "endereco": endereco}, escrita=True)
+                        "endereco": endereco,
+                        # V19.33: IE só existe na criação e só para CNPJ (contrato da porta).
+                        **({"inscricao_estadual": ie[:20]} if ie and len(documento) == 14 else {})}, escrita=True)
                     novo = re.sub(r"\D", "", str(c.get("cliente") or ""))
                     if c.get("situacao") not in ("criado", "ja_cadastrado") or not novo:
                         return {"ok": False, "situacao": c.get("situacao") or "erro",
@@ -15150,6 +15161,8 @@ def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "") -> dict
                 return {"ok": False, "situacao": at.get("situacao") or "erro", "cliente": codigo,
                         "error": at.get("erro") or "O Apollo não confirmou a atualização."}
             avisos += [str(x) for x in (at.get("avisos") or [])]
+            if ie and len(documento) == 14 and not criado:
+                avisos.append(f"Inscrição estadual {ie} não foi gravada: a API só grava IE na criação do cliente. Confira no Apollo.")
             cr = _exp_porta("cliente/credito", {**base, "situacao_credito": "1"}, escrita=True)
         except PortaErro as exc:
             return {"ok": False, "situacao": "incerto" if exc.incerto else "erro", "cliente": codigo, "error": str(exc)}
@@ -27165,7 +27178,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     nome_nf = str(body.get("nome") or "").strip()
                     if pedido and len(doc) in (11, 14) and nome_nf:
                         salvar_cliente_fiscal(pedido, doc, nome_nf, fonte="extensao", usuario=usuario)
-                    resultado = exp_cadastro_atualizar(pedido, usuario, body.get("cliente"))
+                    resultado = exp_cadastro_atualizar(pedido, usuario, body.get("cliente"), body.get("ie"))
                 self.send_json(resultado, 200 if resultado.get("ok") else 409)
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
