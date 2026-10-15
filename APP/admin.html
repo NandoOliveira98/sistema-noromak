@@ -4070,6 +4070,19 @@ function normalizarPendentesFiscalKitsAdmin(linhas){
       const ko=kitOrigemKey(r), sk=skuKey(r);
       return ko===kitSku||(!ko&&sk===kitSku);
     });
+    // V19.28: kit já aberto (pelo servidor desde a V18.71, ou salvo antes) é a fonte de
+    // verdade. Remontar pelo cadastro recriava o componente excluído e forçava a
+    // quantidade, e o "Salvar" gravava isso de volta (261013H9XUXGFC). Só remonta
+    // quando ainda existe a linha colada do anúncio do kit.
+    if(!relacionadas.some(r=>!kitOrigemKey(r)&&skuKey(r)===kitSku)){
+      relacionadas.forEach(r=>{
+        const l={...r};
+        const nf=String(l.NomeFiscalMercadoLivre||"").trim();
+        if(nf)l.Cliente=nf;
+        saida.push(l);
+      });
+      return;
+    }
     const principal={...(relacionadas[0]||linhaBase)};
     const fiscal=String(relacionadas.map(r=>r?.NomeFiscalMercadoLivre).find(v=>String(v||"").trim())||principal.NomeFiscalMercadoLivre||"").trim();
     if(fiscal)principal.Cliente=fiscal;
