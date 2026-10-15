@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.28-KIT-ADMIN-SEM-REMONTAR"
+APP_VERSION = "19.29-MAGALU-ETIQUETA-CANAL"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -6146,6 +6146,42 @@ def _magalu_etiquetas_vinculadas() -> set[str]:
     return ids
 
 
+class MagaluNaoEncontrado(RuntimeError):
+    """V19.29: 404 da etiqueta (DELIVERY_NOT_FOUND) — vale tentar outra forma do canal."""
+
+
+def _magalu_corpos_etiqueta(pedido: dict[str, Any], entrega: dict[str, Any]) -> list[dict[str, Any]]:
+    """V19.29: produção 15/10 (pedido 1578270107775283) — o pedido real NÃO traz channel.id
+    (a doc traz); o canal vazio deu 404 DELIVERY_NOT_FOUND. No exemplo da doc o channel.id é o
+    id do vendedor sem "GENPUB.", e a entrega real traz o vendedor e a filial (branch). Tenta,
+    nesta ordem: canal do vendedor + filial, canal do vendedor, id cheio do vendedor + filial e o
+    channel.id do pedido (quando vier). Sem repetir corpo igual."""
+    entrega_id = str(entrega.get("id") or "").strip()
+    vendedor = entrega.get("seller") if isinstance(entrega.get("seller"), dict) else {}
+    vendedor_id = str(vendedor.get("id") or "").strip()
+    curto = vendedor_id.split(".", 1)[1] if vendedor_id.upper().startswith("GENPUB.") else vendedor_id
+    filial_api = entrega.get("branch") if isinstance(entrega.get("branch"), dict) else {}
+    filial = {k: str(filial_api.get(k) or "") for k in ("external_id", "name") if str(filial_api.get(k) or "")}
+    canal = pedido.get("channel") if isinstance(pedido.get("channel"), dict) else {}
+    canal_id = str(canal.get("id") or "").strip()
+    tentativas: list[tuple[str, bool]] = []
+    if curto:
+        tentativas += [(curto, True), (curto, False)]
+    if vendedor_id and vendedor_id != curto:
+        tentativas.append((vendedor_id, True))
+    if canal_id:
+        tentativas.append((canal_id, True))
+    corpos: list[dict[str, Any]] = []
+    for cid, com_filial in tentativas:
+        ent: dict[str, Any] = {"id": entrega_id}
+        if com_filial and filial:
+            ent["branch"] = filial
+        corpo = {"channel": {"id": cid}, "deliveries": [ent], "label": {"format": "zpl", "type": "full"}}
+        if corpo not in corpos:
+            corpos.append(corpo)
+    return corpos
+
+
 def _magalu_baixar_etiqueta(corpo: dict[str, Any]) -> str:
     """Gera a etiqueta (ZPL) da entrega e baixa o conteúdo do signed_url. Isolada para teste."""
     token = magalu_access_token()
@@ -6157,7 +6193,10 @@ def _magalu_baixar_etiqueta(corpo: dict[str, Any]) -> str:
         with urllib.request.urlopen(req, timeout=30) as resp:
             dados = json.loads(resp.read().decode("utf-8", "replace") or "{}")
     except urllib.error.HTTPError as exc:
-        raise RuntimeError(f"Magalu etiqueta HTTP {exc.code}: {exc.read().decode('utf-8', 'replace')[:400]}")
+        texto = f"Magalu etiqueta HTTP {exc.code}: {exc.read().decode('utf-8', 'replace')[:400]}"
+        if exc.code == 404:
+            raise MagaluNaoEncontrado(texto)
+        raise RuntimeError(texto)
     _magalu_guardar_amostra("shipping_label", {"results": [dados]} if dados else {})
     label = dados.get("label") if isinstance(dados, dict) and isinstance(dados.get("label"), dict) else {}
     url = str(label.get("signed_url") or "").strip()
@@ -6322,9 +6361,16 @@ def magalu_importar_pedidos() -> dict[str, Any]:
                     continue
                 notas = [n for n in (entrega.get("invoices") or []) if isinstance(n, dict)]
                 try:
-                    zpl = _magalu_baixar_etiqueta({"channel": {"id": str(canal.get("id") or "")},
-                                                   "deliveries": [{"id": entrega_id}],
-                                                   "label": {"format": "zpl", "type": "full"}})
+                    zpl = ""
+                    ultimo_404: Exception | None = None
+                    for corpo in _magalu_corpos_etiqueta(pedido, entrega):  # V19.29
+                        try:
+                            zpl = _magalu_baixar_etiqueta(corpo)
+                            break
+                        except MagaluNaoEncontrado as exc404:
+                            ultimo_404 = exc404  # tenta a próxima forma do canal
+                    if not zpl:
+                        raise ultimo_404 or RuntimeError("Sem dados da entrega para pedir a etiqueta (vendedor/canal).")
                     _magalu_guardar_etiqueta(code, str(entrega.get("code") or ""), entrega_id,
                                              str((notas[-1] if notas else {}).get("key") or ""), zpl)
                     com_etiqueta.add(entrega_id)

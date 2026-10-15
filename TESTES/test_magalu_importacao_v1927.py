@@ -156,6 +156,43 @@ class MagaluImportacao(TesteNoromak):
         self.importar()
         self.baixar.assert_called_once()  # não baixa de novo
 
+    def test_etiqueta_com_o_canal_do_vendedor_v1929(self):
+        # V19.29: produção 15/10, pedido 1578270107775283 — o pedido real NÃO traz channel.id
+        # (só marketplace.document/alias); o canal vazio deu 404 DELIVERY_NOT_FOUND. O canal é o
+        # id do vendedor da entrega sem "GENPUB." (como no exemplo da doc) e a filial vai junto.
+        p = _pedido("1578270107775283", status_entrega="invoiced", nf="3526")
+        p["channel"] = {"marketplace": {"document": "47960950108836"}, "extras": {"alias": "Magazine Luiza"}}
+        p["deliveries"][0]["seller"] = {"id": "GENPUB.0087c9e2-69b2-4709-9926-c7285e236e54", "name": "noromak"}
+        p["deliveries"][0]["branch"] = {"external_id": "1", "name": "noromak-CD1", "uuid": "858e1c0f"}
+        self.api = [p]
+        self.importar()
+        corpo = self.baixar.call_args_list[0].args[0]
+        self.assertEqual(corpo["channel"], {"id": "0087c9e2-69b2-4709-9926-c7285e236e54"})
+        self.assertEqual(corpo["deliveries"], [{"id": "D-1578270107775283",
+                                                "branch": {"external_id": "1", "name": "noromak-CD1"}}])
+        self.assertEqual(self.linhas("1578270107775283")[0]["Etiqueta API Magalu"], "VINCULADA")
+
+    def test_404_tenta_as_outras_formas_do_canal_v1929(self):
+        p = _pedido("1212121212121212", status_entrega="invoiced")
+        p["channel"] = {}
+        p["deliveries"][0]["seller"] = {"id": "GENPUB.abc"}
+        p["deliveries"][0]["branch"] = {"external_id": "1", "name": "CD1"}
+        self.api = [p]
+        self.baixar.side_effect = [S.MagaluNaoEncontrado("404"), S.MagaluNaoEncontrado("404"), "^XA^FDOK^FS^XZ"]
+        self.importar()
+        canais = [c.args[0]["channel"] for c in self.baixar.call_args_list]
+        self.assertEqual(canais, [{"id": "abc"}, {"id": "abc"}, {"id": "GENPUB.abc"}])
+        self.assertNotIn("branch", self.baixar.call_args_list[1].args[0]["deliveries"][0], "2ª tentativa sem a filial")
+        self.assertEqual(self.linhas("1212121212121212")[0]["Etiqueta API Magalu"], "VINCULADA")
+
+    def test_outro_erro_nao_repete_v1929(self):
+        p = _pedido("3434343434343434", status_entrega="invoiced")
+        p["deliveries"][0]["seller"] = {"id": "GENPUB.abc"}
+        self.api = [p]
+        self.baixar.side_effect = RuntimeError("Magalu etiqueta HTTP 422")
+        self.importar()
+        self.assertEqual(self.baixar.call_count, 1)
+
     def test_erro_na_etiqueta_nao_impede_o_pedido(self):
         self.baixar.side_effect = RuntimeError("422")
         self.api = [_pedido("9898", status_entrega="invoiced")]
