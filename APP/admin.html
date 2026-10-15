@@ -4926,11 +4926,14 @@ async function pdExpCarregarV1930(pedido,extra,msg){
 }
 function pdExpRenderV1930(d,msg){
   pdExpV1930=d;document.getElementById("pdExpModalV1930")?.remove();
-  const esc=htmlSeguroBanco,c=d.cliente||{},rom=d.romaneio,cx=d.caixa;
+  const esc=htmlSeguroBanco,c=d.cliente||{},cx=d.caixa;
+  // V19.38: romaneio solto por fora do botão (no Apollo) libera o caixa com esse atendimento.
+  const rom=d.romaneio||(d.romaneio_fora?{contato:d.romaneio_fora,fora:true}:null);
   const bloco=(n,t,corpo)=>`<div style="border:1px solid #DCE5EF;border-radius:10px;padding:10px 12px;margin:8px 0"><b>${n}. ${t}</b><div style="margin-top:6px;font-size:13px">${corpo}</div></div>`;
   const item=i=>`<tr><td>${esc(i.codigo)}</td><td>${esc(i.descricao)}</td><td style="text-align:center">${esc(String(i.a_soltar??i.quantidade??""))}</td></tr>`;
   let b1;
-  if(rom){b1=`✅ Solto em ${esc(String(rom.em).slice(0,16).replace("T"," "))} por ${esc(rom.por||"—")} · atendimento <b>${esc(rom.contato)}</b>.`;}
+  if(rom&&rom.fora){b1=`✅ Romaneio já solto no Apollo · atendimento <b>${esc(rom.contato)}</b>.`;}
+  else if(rom){b1=`✅ Solto em ${esc(String(rom.em).slice(0,16).replace("T"," "))} por ${esc(rom.por||"—")} · atendimento <b>${esc(rom.contato)}</b>.`;}
   else{
     b1=d.aviso?`<div style="color:#92400e;margin-bottom:6px">${esc(d.aviso)}</div>`:"";
     b1+=(d.candidatos||[]).map(a=>`<label style="display:block;border:1px solid #DCE5EF;border-radius:8px;padding:8px;margin:6px 0;cursor:pointer">
@@ -5002,7 +5005,7 @@ async function pdExpPreviaV1930(btn){
   if(!cli){pdExpMsgV1930("Informe o código do cliente no Apollo.");return;}
   const box=document.getElementById("pdExpPrevV1930");btn.disabled=true;pdExpMsgV1930("Conferindo no Apollo…");
   try{
-    const r=await pdExpApiV1930("caixa/previa",{method:"POST",body:JSON.stringify({pedido:d.pedido,cliente:cli})});
+    const r=await pdExpApiV1930("caixa/previa",{method:"POST",body:JSON.stringify({pedido:d.pedido,cliente:cli,atendimento:(d.romaneio&&d.romaneio.contato)||d.romaneio_fora||""})});
     // V19.34: um botão só (pedido do dono) — confere por trás e, passando, já pede a confirmação e envia.
     const esc=htmlSeguroBanco,valor=Number(r.valor||0);
     if(!r.pode){

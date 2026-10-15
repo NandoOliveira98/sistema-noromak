@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.37-ROMANEIO-FALTA-PECA"
+APP_VERSION = "19.38-ROMANEIO-JA-SOLTO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -14945,6 +14945,14 @@ def exp_romaneio_preparar(pedido: str, atendimento: Any = "", cliente: Any = "")
         saida["escolhido"] = soltar[0]["atendimento"]
     if not saida["candidatos"]:
         return {**saida, "situacao": "sem_atendimento", "aviso": "Nenhum atendimento aberto para este cliente no Apollo."}
+    # V19.38: romaneio já solto por fora do botão (no Apollo): o atendimento tem as peças
+    # do pedido mas nada a soltar. Antes caía em "peças que não batem" e travava o caixa
+    # (caso real 15/10, Shopee 261015M126M9WD, atendimento 787596).
+    if not soltar and not saida["romaneio"]:
+        prontos = [c for c in saida["candidatos"] if (c["bate"] or not codigos) and not c["faltam"]]
+        if len(prontos) == 1:
+            saida["romaneio_fora"] = prontos[0]["atendimento"]
+            return {**saida, "situacao": "romaneio_fora"}
     return {**saida, "situacao": "pronto" if saida["escolhido"] else "escolher"}
 
 

@@ -159,6 +159,19 @@ class RomaneioCaixaPelaPorta(unittest.TestCase):
         self.assertEqual(d["candidatos"][0]["faltam"], [])
         self.assertEqual(d["escolhido"], "787601")
 
+    def test_v1938_romaneio_ja_solto_no_apollo_libera_o_caixa(self):
+        # Caso real 15/10, Shopee 261015M126M9WD: atendimento 787596 com a peça certa e nada a soltar.
+        _pedido_com_cliente()
+        ja_solto = {"ok": True, "itens": [{"codigo": "0893764272", "requisitada": 1.0, "a_soltar": 0.0}], "total_a_soltar": 0.0}
+        porta = PortaFalsa(previa=ja_solto)
+        with mock.patch.object(S, "_exp_porta", side_effect=porta):
+            d = S.exp_romaneio_preparar(PEDIDO)
+            self.assertEqual(d["situacao"], "romaneio_fora")
+            self.assertEqual(d["romaneio_fora"], "787601")
+            p = S.exp_caixa_previa(PEDIDO, d["romaneio_fora"], "", "luis")
+        self.assertTrue(p["pode"])
+        self.assertEqual(porta.corpo("caixa/previa")["atendimento"], 787601)
+
     def test_dois_atendimentos_quem_escolhe_e_a_pessoa(self):
         _pedido_com_cliente()
         dois = [{"atendimento": 1, "valor": 10}, {"atendimento": 2, "valor": 20}]
