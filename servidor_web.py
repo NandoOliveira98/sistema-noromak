@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.35-ENDERECO-SHOPEE"
+APP_VERSION = "19.36-ENDERECO-SHOPEE-PAGINA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -15090,6 +15090,35 @@ def _exp_endereco_shopee(order_sn: str) -> dict[str, Any]:
     return {"endereco": endereco, "falta": "", "bairro_padrao": bairro_padrao}
 
 
+def exp_endereco_do_texto(texto: Any) -> dict[str, Any]:
+    """V19.36: endereço como a página da Shopee mostra (a API devolve mascarado):
+    "R Jesuíno Antônio, 342, Casa, Osasco, São Paulo, 06045080" → rua, número,
+    complemento, cidade, estado e CEP (o fim é sempre cidade, estado, CEP). Sem
+    bairro na página → CENTRO (decisão do dono). Sem acento, como no ML."""
+    texto = str(texto or "").strip()
+    if not texto or "*" in texto:
+        return {"endereco": None, "falta": "a página não mostrou o endereço"}
+    partes = [p.strip() for p in texto.split(",") if p.strip()]
+    cep = re.sub(r"\D", "", partes[-1]) if partes else ""
+    if len(partes) < 4 or len(cep) != 8:
+        return {"endereco": None, "falta": "não entendi o endereço da página"}
+    estado, cidade = _exp_limpo(partes[-2]), _exp_limpo(partes[-3])
+    meio = partes[1:-3]
+    numero = ""
+    if meio and re.fullmatch(r"\d+[A-Za-z]?|S/?N", meio[0], re.I):
+        numero = "" if meio[0].upper().replace("/", "") == "SN" else meio[0]
+        meio = meio[1:]
+    endereco = {"rua": _exp_limpo(partes[0])[:120], "numero": numero[:10],
+                "complemento": _exp_limpo(", ".join(meio))[:60], "bairro": EXP_BAIRRO_PADRAO_SHOPEE,
+                "cep": cep, "cidade": cidade[:50],
+                "uf": estado if len(estado) == 2 else EXP_UF_POR_NOME.get(estado, "")}
+    if not (endereco["rua"] and endereco["cidade"] and endereco["uf"]):
+        return {"endereco": None, "falta": "não entendi o endereço da página"}
+    if not endereco["complemento"]:
+        del endereco["complemento"]
+    return {"endereco": endereco, "falta": "", "bairro_padrao": True}
+
+
 def exp_endereco_entrega(pedido: str) -> dict[str, Any]:
     """V19.32 (decisão do dono): endereço do cadastro = Dados do envio da venda.
     Mercado Livre: /shipments/{id} com a conta do pedido. Devolve {endereco} só quando
@@ -15143,7 +15172,8 @@ EXP_NOME_ROTULO = re.compile(r"^(TIPO DE CONTRIBUINTE|NAO CONTRIBUINTE|CONTRIBUI
                              r"|INSCRICAO ESTADUAL.*|DADOS D.*|OBSERVAC.*)$")
 
 
-def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "", ie: Any = "") -> dict[str, Any]:
+def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "", ie: Any = "",
+                           endereco_texto: Any = "") -> dict[str, Any]:
     """Botão do cadastro pela porta (V19.32, contrato real do Guilherme de 15/10):
     buscar pelo CPF -> (não cadastrado) criar -> atualizar nome + contatos + endereço -> crédito.
     Ligado com EXP_CADASTRO_API=1."""
@@ -15167,6 +15197,9 @@ def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "", ie: Any
         end = exp_endereco_entrega(pedido)
     except Exception as exc:  # ML fora do ar não impede nome/contatos
         end = {"endereco": None, "falta": f"não consegui ler o envio no ML ({exc})"}
+    if not end["endereco"] and endereco_texto:
+        # V19.36: a API (Shopee) mascarou; vale o endereço que a página mostrou.
+        end = exp_endereco_do_texto(endereco_texto)
     endereco = end["endereco"]
     if not endereco:
         avisos.append("Endereço não enviado: " + end["falta"] + ".")
@@ -27230,7 +27263,8 @@ class AppHandler(BaseHTTPRequestHandler):
                     nome_nf = str(body.get("nome") or "").strip()
                     if pedido and len(doc) in (11, 14) and nome_nf:
                         salvar_cliente_fiscal(pedido, doc, nome_nf, fonte="extensao", usuario=usuario)
-                    resultado = exp_cadastro_atualizar(pedido, usuario, body.get("cliente"), body.get("ie"))
+                    resultado = exp_cadastro_atualizar(pedido, usuario, body.get("cliente"), body.get("ie"),
+                                                       str(body.get("endereco_texto") or "")[:300])
                 self.send_json(resultado, 200 if resultado.get("ok") else 409)
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)

@@ -418,6 +418,27 @@ class CadastroV1932(unittest.TestCase):
         self.assertNotIn("endereco", porta.corpo("cliente/atualizar"))
         self.assertTrue(any("Endereço não enviado" in a for a in r["avisos"]))
 
+    def test_v1936_shopee_api_mascarada_usa_o_endereco_da_pagina(self):
+        # Caso real 15/10 (261015PK6V2UGV): a API devolveu o endereço mascarado.
+        gravar_como_admin([linha(PEDIDO, "0893764272", Marketplace="SHOPEE")])
+        S.salvar_cliente_fiscal(PEDIDO, "48500911808", "Leonardo Marques Coimbra Brandão", linx_cliente="83066",
+                                fonte="teste", usuario="teste")
+        porta = PortaFalsa()
+        with mock.patch.object(S, "_exp_porta", side_effect=porta), mock.patch.object(S, "EXP_CADASTRO_API", True), \
+                mock.patch.object(S, "shopee_order_details", return_value=[{"recipient_address": {"full_address": "****"}}]):
+            r = S.exp_cadastro_atualizar(PEDIDO, "luis",
+                                         endereco_texto="R Jesuíno Antônio, 342, Casa, Osasco, São Paulo, 06045080")
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(porta.corpo("cliente/atualizar")["endereco"], {
+            "rua": "R JESUINO ANTONIO", "numero": "342", "complemento": "CASA", "bairro": "CENTRO",
+            "cep": "06045080", "cidade": "OSASCO", "uf": "SP"})
+
+    def test_v1936_texto_da_pagina(self):
+        e = S.exp_endereco_do_texto("Avenida Amazonas, 95, Apartamento 202, Timóteo, Minas Gerais, 35180628")["endereco"]
+        self.assertEqual((e["rua"], e["numero"], e["complemento"], e["cidade"], e["uf"], e["bairro"]),
+                         ("AVENIDA AMAZONAS", "95", "APARTAMENTO 202", "TIMOTEO", "MG", "CENTRO"))
+        self.assertIsNone(S.exp_endereco_do_texto("Rua X, ******89")["endereco"])
+
     def test_romaneio_sem_codigo_acha_pelo_cpf(self):
         _pedido_ml_com_envio()
         porta = PortaFalsa()
