@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.30-ROMANEIO-CAIXA-PELA-PORTA"
+APP_VERSION = "19.31-ROMANEIO-ACHA-PELO-NOME"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -990,6 +990,7 @@ def _crm_cost_lookup_apollo(codigo: str, operador: str = "") -> dict[str, Any]:
             (c["custo_medio"] for c in custos_filiais if (c.get("custo_medio") or 0) > 0), None)
         if positivo:
             custos_registrar_auto([(result["codigo"], positivo)], "Apollo")
+        custo_apollo_registrar(result["codigo"], custos_filiais, custo)   # V19.31
     except Exception:
         pass
     with CRM_COST_CACHE_LOCK:
@@ -2081,6 +2082,13 @@ def init_db() -> None:
                 custo_manual REAL,
                 data_manual TEXT NOT NULL DEFAULT '',
                 manual_por TEXT NOT NULL DEFAULT ''
+            );
+            -- V19.31: último custo lido do Apollo, por filial (custos_conhecidos_v1807 mistura
+            -- Apollo e Precificador). Usado pelas Promoções automáticas, como a gaveta.
+            CREATE TABLE IF NOT EXISTS custo_apollo_v1931 (
+                codigo TEXT PRIMARY KEY,
+                custos_json TEXT NOT NULL DEFAULT '{}',
+                data TEXT NOT NULL DEFAULT ''
             );
             CREATE TABLE IF NOT EXISTS compras_fornecedores_v1800 (
                 nome TEXT PRIMARY KEY,
@@ -14848,9 +14856,28 @@ def exp_romaneio_preparar(pedido: str, atendimento: Any = "", cliente: Any = "")
                                 "cadastro": sit.get("cadastro"), "motivos": sit.get("motivos") or []}
             filtro = {"cliente_nome": saida["cliente"]["nome_apollo"]}
         else:
-            return {**saida, "situacao": "informar_atendimento",
-                    "aviso": "O Noromak não sabe o código deste cliente no Apollo. Informe o número do atendimento."}
-        abertos = _exp_porta("atendimentos/abertos", {"revenda": EXP_REVENDA, "dias": 90, "operador": "noromak", **filtro})
+            # V19.31: sem o código, busca pelo NOME DA NF-e (a porta ignora acento e
+            # caixa e exige todas as palavras); não achando, primeiro + último nome
+            # ("MARCIO COSTA DE ARAUJO" → "MARCIO ARAUJO"). Pode trazer homônimo: só
+            # escolhe sozinho com peças batendo. Exato só com cliente/buscar (CPF).
+            palavras = re.sub(r"[^A-Z ]", " ", unicodedata.normalize("NFKD", conhecido["nome_fiscal"])
+                              .encode("ascii", "ignore").decode().upper()).split()
+            tentativas = [" ".join(palavras)] if len(palavras) >= 2 else []
+            if len(palavras) > 2:
+                tentativas.append(f"{palavras[0]} {palavras[-1]}")
+            if not tentativas:
+                return {**saida, "situacao": "informar_atendimento",
+                        "aviso": "Sem o código do cliente nem o nome da NF-e. Informe o número do atendimento."}
+            abertos = {}
+            for nome_busca in tentativas:
+                abertos = _exp_porta("atendimentos/abertos", {"revenda": EXP_REVENDA, "dias": 90,
+                                                              "operador": "noromak", "cliente_nome": nome_busca})
+                if abertos.get("ok") and abertos.get("atendimentos"):
+                    saida["busca_por_nome"] = nome_busca
+                    break
+            filtro = {}
+        if filtro:
+            abertos = _exp_porta("atendimentos/abertos", {"revenda": EXP_REVENDA, "dias": 90, "operador": "noromak", **filtro})
         if not abertos.get("ok"):
             return {**saida, "situacao": "erro", "aviso": abertos.get("erro") or "O Apollo não listou os atendimentos."}
         codigos = _linx_codigos_do_pedido(linhas)
@@ -21573,6 +21600,49 @@ def custos_registrar_auto(itens: list[tuple[str, float]], origem: str) -> None:
         DB.commit()
 
 
+CUSTO_APOLLO_PROMO_DIAS = 30
+
+
+def custo_apollo_registrar(codigo: Any, custos_filiais: list[dict[str, Any]], custo_topo: Any = None) -> None:
+    """V19.31: guarda o custo > 0 de cada filial lido agora do Apollo (só filial com cadastro).
+    Leitura sem nenhum custo > 0 (estoque zerado) não apaga a anterior."""
+    codigo = str(codigo or "").strip().upper()
+    custos: dict[str, float] = {}
+    for c in custos_filiais or []:
+        try:
+            rev, valor = int(c.get("revenda") or 0), float(c.get("custo_medio") or 0)
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if rev > 0 and valor > 0 and c.get("tem_cadastro") is not False:
+            custos[str(rev)] = round(valor, 4)
+    if not codigo or not custos:
+        return
+    with DB_LOCK:
+        DB.execute("INSERT INTO custo_apollo_v1931(codigo,custos_json,data) VALUES(?,?,?) "
+                   "ON CONFLICT(codigo) DO UPDATE SET custos_json=excluded.custos_json, data=excluded.data",
+                   (codigo, json.dumps(custos), now_iso()))
+        DB.commit()
+
+
+def _custos_apollo_recentes(dias: int = CUSTO_APOLLO_PROMO_DIAS) -> dict[str, dict[int, float]]:
+    """V19.31: código -> {revenda: custo} das leituras do Apollo dos últimos `dias`."""
+    limite = datetime.now(timezone.utc) - timedelta(days=dias)
+    out: dict[str, dict[int, float]] = {}
+    with DB_LOCK:
+        linhas = DB.execute("SELECT codigo, custos_json, data FROM custo_apollo_v1931").fetchall()
+    for r in linhas:
+        try:
+            quando = datetime.fromisoformat(str(r["data"]).replace("Z", "+00:00"))
+            if quando.tzinfo is None:
+                quando = quando.replace(tzinfo=timezone.utc)
+            if quando < limite:
+                continue
+            out[r["codigo"]] = {int(k): float(v) for k, v in (json.loads(r["custos_json"] or "{}") or {}).items()}
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
 def custo_manual_salvar(codigo: str, custo: Any, usuario: str) -> dict[str, Any]:
     """V18.07: custo digitado na Demanda de Compra. Vazio/0 apaga."""
     codigo = str(codigo or "").strip().upper()
@@ -22824,6 +22894,21 @@ def _promo_produtos() -> dict[str, dict[str, Any]]:
         lista = (json.loads(raw or "{}") or {}).get("products") or []
     except Exception:
         lista = []
+    # V19.31: o custo lido do Apollo (o mesmo que a gaveta mostra: filial do produto, senão a
+    # 1ª com custo) manda sobre o guardado no Precificador. Caso real: linha com R$ 59,12 do
+    # Precificador dava lucro R$ 6,33 e a gaveta, com R$ 48,30 do Apollo, R$ 17,15. Sem leitura
+    # recente ou com custo 0 no Apollo fica o do Precificador. O Precificador não é alterado.
+    filial_de = {str(p.get("sku") or "").strip().upper(): int(p.get("filialCusto") or 1)
+                 for p in (lista if isinstance(lista, list) else []) if isinstance(p, dict)}
+    for sku, custos in _custos_apollo_recentes().items():
+        prod = produtos.get(sku)
+        if not prod or not custos:
+            continue
+        rev = filial_de.get(sku) or 1
+        valor = custos.get(rev) or next(iter(custos[k] for k in sorted(custos)), None)
+        if valor and valor > 0:
+            produtos[sku] = dict(prod, custo=float(valor), custo_origem="apollo",
+                                 custo_precificador=prod["custo"])
 
     def custo_componentes(itens: list[tuple[str, float]]) -> float | None:
         total = 0.0
@@ -24076,7 +24161,9 @@ def promo_renovacao_payload(hoje: date | None = None) -> dict[str, Any]:
         # taxas do 1º componente e não tem linha própria); custo de kit vem dos componentes.
         return {"sku": sku, "editavel": sku in no_precificador, "custo_editavel": sku in no_precificador and not prod.get("kit"),
                 "filial_custo": no_precificador.get(sku) or 1,
-                "custo": round(prod["custo"], 2), "comissao": prod["comissao"],
+                # V19.31: a gaveta compara o Apollo com o Precificador e salva a diferença; por
+                # isso recebe o custo GUARDADO no Precificador (a linha já usa o do Apollo).
+                "custo": round(prod.get("custo_precificador") or prod["custo"], 2), "comissao": prod["comissao"],
                 "imposto": prod["imposto"], "taxa_fixa": round(prod["taxa_fixa"], 2),
                 "margem_alvo": prod["margem_alvo"], "margem_min": margem_min, "kit": bool(prod.get("kit")),
                 "minimo": promo_preco_minimo(prod), "ideal": promo_preco_ideal(prod)}

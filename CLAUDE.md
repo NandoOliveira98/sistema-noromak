@@ -923,7 +923,7 @@ caixa/enviar, cadastro}` (módulo **admin** = Admin e Supervisor). O ícone de d
 pedido abre a janela nova (`pdExpRomaneioV1930`); a extensão Linx Cliente **0.30** troca o 🧾 da venda
 (ML e Shopee) por `romaneio-api.html`, que chama as mesmas rotas pelo service worker (login do Noromak
 do Chrome). Regras dos testes reais: atendimento achado pelo **nome no Apollo** (`cliente/situacao` com
-o código de `cliente_fiscal`), sem código o usuário digita o nº do atendimento; escolhe sozinho só um
+o código de `cliente_fiscal`); **V19.31:** sem código, busca pelo **nome da NF-e** (todas as palavras, sem acento) e, não achando, primeiro + último nome — pode trazer homônimo, então só escolhe sozinho com peças batendo (exato só quando a porta tiver `cliente/buscar` por CPF); o nº do atendimento digitado fica como reserva; escolhe sozinho só um
 atendimento com peças batendo; **observação digitada** (vazia não sai, até 100); caixa manda **sempre o
 código do cliente** (sem ele UF vazia → Erro 2619), a **condição de pagamento** é escolhida no Apollo
 (sem ela 412), envio com `valor_visto`; romaneio e caixa nunca saem duas vezes (`linx_operacoes_v1860`);

@@ -4939,6 +4939,7 @@ function pdExpRenderV1930(d,msg){
       ${a.total_a_soltar?(a.bate?`<span style="color:#145C2F"> · ${a.bate} peça(s) batem com o pedido</span>`:`<span style="color:#b45309"> · nenhuma peça bate com o pedido</span>`):`<span style="color:#586A7D"> · nada a soltar</span>`}
       <table style="width:100%;font-size:12px;margin-top:6px"><tr><th style="text-align:left">Peça</th><th style="text-align:left">Descrição</th><th>A soltar</th></tr>${(a.itens||[]).map(item).join("")}</table></label>`).join("");
     if(d.situacao==="escolher")b1='<div style="color:#b45309">Mais de um atendimento ou peças que não batem: escolha.</div>'+b1;
+    if(d.busca_por_nome)b1=`<div style="color:#586A7D">Achado pelo nome da NF-e (${esc(d.busca_por_nome)}): confira se é o cliente certo.</div>`+b1;
     b1+=`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;align-items:center"><span>Outro atendimento:</span>
       <input id="pdExpNumV1930" inputmode="numeric" placeholder="nº do atendimento" style="width:150px;padding:6px;border:1px solid #C9D6E5;border-radius:8px">
       <button type="button" class="btn-secundario" onclick="pdExpBuscarNumV1930()">Buscar</button></div>`;

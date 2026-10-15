@@ -97,6 +97,41 @@ class RomaneioCaixaPelaPorta(unittest.TestCase):
         self.assertEqual(porta.corpo("atendimentos/abertos")["atendimento"], 787601)
         self.assertEqual(d["escolhido"], "787601")
 
+    def test_v1931_sem_codigo_busca_pelo_nome_da_nfe(self):
+        # Caso real 15/10: pedido 2000018991339082, NF-e "Lindomar Souza Dos Santos", sem código.
+        _pedido_com_cliente(codigo="", nome="Lindomar Souza Dos Santos")
+        porta = PortaFalsa()
+        with mock.patch.object(S, "_exp_porta", side_effect=porta):
+            d = S.exp_romaneio_preparar(PEDIDO)
+        self.assertEqual(porta.corpo("atendimentos/abertos")["cliente_nome"], "LINDOMAR SOUZA DOS SANTOS")
+        self.assertNotIn("cliente/situacao", porta.rotas())
+        self.assertEqual(d["escolhido"], "787601")  # peças batem
+
+    def test_v1931_nome_completo_nao_acha_tenta_primeiro_e_ultimo(self):
+        _pedido_com_cliente(codigo="", nome="Márcio Costa de Araujo")
+        porta = PortaFalsa()
+        original = porta.__call__
+
+        def so_no_curto(rota, corpo, escrita=False):
+            if rota == "atendimentos/abertos" and corpo["cliente_nome"] != "MARCIO ARAUJO":
+                porta.chamadas.append((rota, dict(corpo)))
+                return {"ok": True, "atendimentos": []}
+            return original(rota, corpo, escrita)
+
+        with mock.patch.object(S, "_exp_porta", side_effect=so_no_curto):
+            d = S.exp_romaneio_preparar(PEDIDO)
+        nomes = [c["cliente_nome"] for r, c in porta.chamadas if r == "atendimentos/abertos"]
+        self.assertEqual(nomes, ["MARCIO COSTA DE ARAUJO", "MARCIO ARAUJO"])
+        self.assertEqual(d["busca_por_nome"], "MARCIO ARAUJO")
+        self.assertEqual(d["escolhido"], "787601")
+
+    def test_v1931_achado_pelo_nome_sem_peca_batendo_nao_escolhe(self):
+        _pedido_com_cliente(codigo="", nome="Lindomar Souza Dos Santos")
+        outra = {"ok": True, "itens": [{"codigo": "9999", "a_soltar": 1.0}], "total_a_soltar": 1.0}
+        with mock.patch.object(S, "_exp_porta", side_effect=PortaFalsa(previa=outra)):
+            d = S.exp_romaneio_preparar(PEDIDO)
+        self.assertEqual(d["escolhido"], "")
+
     def test_dois_atendimentos_quem_escolhe_e_a_pessoa(self):
         _pedido_com_cliente()
         dois = [{"atendimento": 1, "valor": 10}, {"atendimento": 2, "valor": 20}]
