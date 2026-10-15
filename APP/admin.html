@@ -4906,6 +4906,122 @@ async function pdCadastroLinxV1860(){
     await pdRomRecarregarV1860(cr.liberado?`✅ Cadastro ${r.cliente} atualizado e crédito liberado (conferido no Linx).`:`⚠️ Cadastro ${r.cliente} atualizado, mas o crédito não foi todo confirmado — veja a etapa 1.`);
   }catch(e){pdRomMsgV1860("❌ "+e.message);}
 }
+/* V19.30 — Romaneio e caixa pela PORTA DA EXPEDIÇÃO (NoromakWeb → Apollo).
+   O servidor fala com a porta; a tela só conduz: achar o atendimento, observação
+   (digitada, vazia de propósito), soltar, prévia do caixa e envio (vira nota).
+   A mesma rota atende a extensão na página da venda do ML/Shopee. */
+let pdExpV1930=null;
+const pdExpApiV1930=(p,o)=>mlApiAdmin("/expedicao/api/expedicao-apollo/"+p,o);
+function pdExpFecharV1930(){document.getElementById("pdExpModalV1930")?.remove();pdExpV1930=null;}
+function pdExpMsgV1930(t){const m=document.getElementById("pdExpMsgV1930");if(m)m.innerHTML=t;}
+async function pdExpRomaneioV1930(btn){
+  const pedido=String(btn?.dataset?.pedido||"").trim();if(!pedido)return;
+  const original=btn.innerHTML;btn.disabled=true;
+  try{await pdExpCarregarV1930(pedido);}catch(e){alert("Romaneio: "+e.message);}
+  finally{btn.disabled=false;btn.innerHTML=original;}
+}
+async function pdExpCarregarV1930(pedido,extra,msg){
+  const q=new URLSearchParams({pedido,...(extra||{})});
+  pdExpRenderV1930(await pdExpApiV1930("romaneio?"+q.toString()),msg);
+}
+function pdExpRenderV1930(d,msg){
+  pdExpV1930=d;document.getElementById("pdExpModalV1930")?.remove();
+  const esc=htmlSeguroBanco,c=d.cliente||{},rom=d.romaneio,cx=d.caixa;
+  const bloco=(n,t,corpo)=>`<div style="border:1px solid #DCE5EF;border-radius:10px;padding:10px 12px;margin:8px 0"><b>${n}. ${t}</b><div style="margin-top:6px;font-size:13px">${corpo}</div></div>`;
+  const item=i=>`<tr><td>${esc(i.codigo)}</td><td>${esc(i.descricao)}</td><td style="text-align:center">${esc(String(i.a_soltar??i.quantidade??""))}</td></tr>`;
+  let b1;
+  if(rom){b1=`✅ Solto em ${esc(String(rom.em).slice(0,16).replace("T"," "))} por ${esc(rom.por||"—")} · atendimento <b>${esc(rom.contato)}</b>.`;}
+  else{
+    b1=d.aviso?`<div style="color:#92400e;margin-bottom:6px">${esc(d.aviso)}</div>`:"";
+    b1+=(d.candidatos||[]).map(a=>`<label style="display:block;border:1px solid #DCE5EF;border-radius:8px;padding:8px;margin:6px 0;cursor:pointer">
+      <input type="radio" name="pdExpAtdV1930" value="${esc(a.atendimento)}" ${String(d.escolhido)===String(a.atendimento)?"checked":""} ${a.total_a_soltar?"":"disabled"}>
+      <b>Atendimento ${esc(a.atendimento)}</b> · R$ ${esc(Number(a.valor||0).toFixed(2).replace(".",","))} <span style="color:#586A7D">${esc(String(a.aberto_em||"").slice(0,10))} · ${esc(a.vendedor||"")}</span>
+      ${a.total_a_soltar?(a.bate?`<span style="color:#145C2F"> · ${a.bate} peça(s) batem com o pedido</span>`:`<span style="color:#b45309"> · nenhuma peça bate com o pedido</span>`):`<span style="color:#586A7D"> · nada a soltar</span>`}
+      <table style="width:100%;font-size:12px;margin-top:6px"><tr><th style="text-align:left">Peça</th><th style="text-align:left">Descrição</th><th>A soltar</th></tr>${(a.itens||[]).map(item).join("")}</table></label>`).join("");
+    if(d.situacao==="escolher")b1='<div style="color:#b45309">Mais de um atendimento ou peças que não batem: escolha.</div>'+b1;
+    b1+=`<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;align-items:center"><span>Outro atendimento:</span>
+      <input id="pdExpNumV1930" inputmode="numeric" placeholder="nº do atendimento" style="width:150px;padding:6px;border:1px solid #C9D6E5;border-radius:8px">
+      <button type="button" class="btn-secundario" onclick="pdExpBuscarNumV1930()">Buscar</button></div>`;
+    if((d.candidatos||[]).some(a=>a.total_a_soltar))b1+=`<div style="margin-top:8px"><b>Observação do romaneio</b><br>
+      <input id="pdExpObsV1930" maxlength="100" placeholder="ex.: MERCADO LIVRE 20/10" style="width:100%;padding:8px;border:1px solid #C9D6E5;border-radius:8px;text-transform:uppercase"></div>
+      <div style="margin-top:8px"><button type="button" class="btn-primario" onclick="pdExpSoltarV1930(this)">Soltar romaneio</button></div>`;
+  }
+  let b2;
+  if(cx){b2=`✅ Enviado ao caixa em ${esc(String(cx.em).slice(0,16).replace("T"," "))} por ${esc(cx.por||"—")}.`;}
+  else if(!rom){b2='<span style="color:#586A7D">Depois do romaneio.</span>';}
+  else{
+    const ult=d.caixa_ultima;
+    b2=(ult?`<div style="color:#8C1C13;margin-bottom:6px">Última tentativa (${esc(ult.situacao)}): ${esc(ult.detalhe||"")}</div>`:"")+
+      `<div style="color:#92400e;margin-bottom:6px">Antes: escolha a <b>condição de pagamento</b> do atendimento no Apollo${d.marketplace==="Shopee"?" (Shopee 971)":d.marketplace==="Magalu"?" (Magalu 983)":""}.</div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">Código do cliente no Apollo:
+      <input id="pdExpCliV1930" inputmode="numeric" value="${esc(c.codigo||"")}" style="width:120px;padding:6px;border:1px solid #C9D6E5;border-radius:8px">
+      <button type="button" class="btn-secundario" onclick="pdExpPreviaV1930(this)">Conferir caixa</button></div>
+      ${d.caixa_travado?`<label style="display:block;margin-top:6px"><input type="checkbox" id="pdExpConfV1930"> Conferi no Apollo: o atendimento <b>não</b> está no caixa.</label>`:""}
+      <div id="pdExpPrevV1930" style="margin-top:6px"></div>`;
+  }
+  const cred=d.credito?` · Crédito: <b>${esc(d.credito.veredito||"")}</b>`:"";
+  const div=document.createElement("div");div.id="pdExpModalV1930";
+  div.style.cssText="position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px";
+  div.innerHTML=`<div style="background:var(--nk-superficie,#fff);border-radius:14px;max-width:680px;width:100%;max-height:92vh;overflow:auto;padding:18px;box-shadow:0 20px 50px rgba(0,0,0,.3)">
+    <div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0"><i class=nk-i-file></i> Romaneio e caixa · pedido ${esc(d.pedido)}</h3><button type="button" onclick="pdExpFecharV1930()" style="border:0;background:none;font-size:20px;cursor:pointer"><i class=nk-i-x></i></button></div>
+    <div style="margin:8px 0;font-size:13px">${d.marketplace?`<b>${esc(d.marketplace)}</b> · `:""}Cliente no Apollo: ${c.codigo?`<b>${esc(c.codigo)}</b> ${esc(c.nome_apollo||"")}`:"—"} ${c.nome_fiscal?`<span style="color:#586A7D">(NF-e: ${esc(c.nome_fiscal)})</span>`:""}${cred}</div>
+    ${bloco(1,"Romaneio",b1)}${bloco(2,"Enviar ao caixa",b2)}
+    <div id="pdExpMsgV1930" style="margin-top:8px;font-size:13px;color:#4A5D72">${msg||""}</div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
+      <button type="button" class="btn-secundario" onclick="pdExpCarregarV1930(pdExpV1930.pedido)">↻ Atualizar</button>
+      <button type="button" class="btn-secundario" onclick="pdExpFecharV1930()">Fechar</button></div></div>`;
+  div.addEventListener("click",e=>{if(e.target===div)pdExpFecharV1930();});
+  document.body.appendChild(div);
+}
+async function pdExpBuscarNumV1930(){
+  const n=String(document.getElementById("pdExpNumV1930")?.value||"").replace(/\D/g,"");
+  if(!n){pdExpMsgV1930("Digite o número do atendimento.");return;}
+  pdExpMsgV1930("Buscando no Apollo…");
+  try{await pdExpCarregarV1930(pdExpV1930.pedido,{atendimento:n});}catch(e){pdExpMsgV1930("❌ "+htmlSeguroBanco(e.message));}
+}
+async function pdExpSoltarV1930(btn){
+  const d=pdExpV1930;if(!d)return;
+  const sel=document.querySelector('input[name="pdExpAtdV1930"]:checked');
+  const obs=String(document.getElementById("pdExpObsV1930")?.value||"").trim().toUpperCase();
+  if(!sel){pdExpMsgV1930("Escolha o atendimento.");return;}
+  if(!obs){pdExpMsgV1930("Escreva a observação do romaneio.");return;}
+  const a=(d.candidatos||[]).find(x=>String(x.atendimento)===sel.value)||{};
+  const resumo=(a.itens||[]).filter(i=>i.a_soltar).map(i=>`${i.codigo} x${i.a_soltar}`).join(", ");
+  if(!await nkConfirmar(`Soltar o romaneio no estoque?\n\nPedido ${d.pedido}\nAtendimento ${sel.value}\nObservação: ${obs}\nItens: ${resumo}\n\nImprime no estoque e não volta atrás.`))return;
+  btn.disabled=true;pdExpMsgV1930("Soltando no Apollo…");
+  try{
+    const r=await pdExpApiV1930("romaneio/soltar",{method:"POST",body:JSON.stringify({pedido:d.pedido,atendimento:sel.value,observacao:obs})});
+    await pdExpCarregarV1930(d.pedido,null,"✅ "+htmlSeguroBanco((r.mensagens||[]).join(" ")||"Romaneio solto.")+" Agora o caixa.");
+  }catch(e){pdExpMsgV1930("❌ "+htmlSeguroBanco(e.message));btn.disabled=false;}
+}
+async function pdExpPreviaV1930(btn){
+  const d=pdExpV1930;if(!d)return;
+  const cli=String(document.getElementById("pdExpCliV1930")?.value||"").replace(/\D/g,"");
+  if(!cli){pdExpMsgV1930("Informe o código do cliente no Apollo.");return;}
+  const box=document.getElementById("pdExpPrevV1930");btn.disabled=true;pdExpMsgV1930("Conferindo o caixa no Apollo (não envia nada)…");
+  try{
+    const r=await pdExpApiV1930("caixa/previa",{method:"POST",body:JSON.stringify({pedido:d.pedido,cliente:cli})});
+    const esc=htmlSeguroBanco,valor=Number(r.valor||0);
+    box.innerHTML=`<div>Atendimento <b>${esc(r.atendimento)}</b> · valor <b>R$ ${esc(valor.toFixed(2).replace(".",","))}</b></div>`+
+      (r.impedimentos||[]).concat(r.falhas||[]).map(t=>`<div style="color:#8C1C13">⚠️ ${esc(t)}</div>`).join("")+
+      (r.pode?`<button type="button" class="btn-primario" style="margin-top:6px" onclick="pdExpEnviarV1930(this,'${esc(r.atendimento)}','${esc(r.cliente)}',${valor})">Enviar ao caixa</button>`:"");
+    pdExpMsgV1930(r.pode?"Prévia OK.":"O Apollo não aceitou: veja acima. Nada foi enviado.");
+  }catch(e){pdExpMsgV1930("❌ "+htmlSeguroBanco(e.message));}
+  finally{btn.disabled=false;}
+}
+async function pdExpEnviarV1930(btn,atendimento,cliente,valor){
+  const d=pdExpV1930;if(!d)return;
+  const conf=document.getElementById("pdExpConfV1930");
+  if(conf&&!conf.checked){pdExpMsgV1930("Confira no Apollo e marque a caixa antes de tentar de novo.");return;}
+  if(!await nkConfirmar(`Enviar ao caixa?\n\nPedido ${d.pedido}\nAtendimento ${atendimento}\nValor R$ ${Number(valor).toFixed(2).replace(".",",")}\n\nVIRA NOTA FISCAL e não tem desfazer.`))return;
+  btn.disabled=true;pdExpMsgV1930("Enviando ao caixa…");
+  try{
+    const r=await pdExpApiV1930("caixa/enviar",{method:"POST",body:JSON.stringify({pedido:d.pedido,atendimento,cliente,valor_visto:valor,conferido:!!(conf&&conf.checked)})});
+    await pdExpCarregarV1930(d.pedido,null,"✅ "+htmlSeguroBanco(r.mensagem||"Enviado ao caixa."));
+  }catch(e){
+    try{await pdExpCarregarV1930(d.pedido,null,"❌ "+htmlSeguroBanco(e.message));}catch(_){pdExpMsgV1930("❌ "+htmlSeguroBanco(e.message));}
+  }
+}
 /* V17.86 — nome e CPF da NF-e na própria Central.
    A API do Mercado Livre bloqueia "Dados para a NF-e" para o Noromak (HTTP 403,
    18/09/2026). A extensão lê da página da venda, com a sessão de quem está
@@ -5130,7 +5246,7 @@ function renderPedidosDiaV1779(){
  corpo.innerHTML=rows.map((x,i)=>{
    const f=x.first, unidades=x.e.linhas.reduce((s,r)=>s+(Number(r.Quantidade)||0),0)||Number(x.e.conf?.qtdUnidades||0), itens=x.e.linhas.length||Number(x.e.conf?.qtdItens||0), id=`pdDet${i}`;
    const detalhes=x.e.linhas.length?x.e.linhas.map(r=>`${htmlSeguroBanco(r.SKU||"—")} — ${htmlSeguroBanco(r.Descrição||"")} — Qtd. ${Number(r.Quantidade)||0}`).join("<br>"):"Dados dos itens preservados no histórico de conferência.";
-   return `<tr><td><b>${htmlSeguroBanco(x.e.pedido)}</b><div id="${id}" class="v1779-detail">${detalhes}</div></td><td>${htmlSeguroBanco(f.Contato||f.TelefoneShopee||"—")}</td><td><span class="v1779-badge ${x.status==="conferido"?"v1779-ok":"v1779-wait"}">${labels[x.status]}</span></td><td>${x.status==="cancelado"?"SIM":"—"}</td><td>${htmlSeguroBanco(f["NF Status"]||f.NFStatus||(f.NF||f["Nota Fiscal"]?"Com NF":"—"))}</td><td>${pdCodClienteV1786(x.e.pedido,f)}</td><td>${htmlSeguroBanco(x.dp||"—")}</td><td>${htmlSeguroBanco(x.dc instanceof Date?x.dc.toLocaleString("pt-BR"):x.dc||"—")}</td><td>${pdCelulaClienteV1786(x.e.pedido,f)}</td><td>${htmlSeguroBanco(f["Cód.Usu."]||f.CodigoUsuario||"—")}</td><td>${htmlSeguroBanco(f.Usuario||f.ConferidoPor||"—")}</td><td>${htmlSeguroBanco(x.marketplace)}</td><td>${itens} / ${unidades}</td><td><div class="v1779-actions"><button data-pedido="${htmlSeguroBanco(x.e.pedido)}" title="Atualizar o cadastro deste cliente no Linx" onclick="pdClienteLinxV1785(this)">Cliente</button><button data-pedido="${htmlSeguroBanco(x.e.pedido)}" title="Conferir e imprimir o romaneio no Linx" onclick="pdRomaneioLinxV1860(this)">Romaneio</button><button onclick="pdDetalhesV1779('${id}')">Detalhes</button></div></td></tr>`;
+   return `<tr><td><b>${htmlSeguroBanco(x.e.pedido)}</b><div id="${id}" class="v1779-detail">${detalhes}</div></td><td>${htmlSeguroBanco(f.Contato||f.TelefoneShopee||"—")}</td><td><span class="v1779-badge ${x.status==="conferido"?"v1779-ok":"v1779-wait"}">${labels[x.status]}</span></td><td>${x.status==="cancelado"?"SIM":"—"}</td><td>${htmlSeguroBanco(f["NF Status"]||f.NFStatus||(f.NF||f["Nota Fiscal"]?"Com NF":"—"))}</td><td>${pdCodClienteV1786(x.e.pedido,f)}</td><td>${htmlSeguroBanco(x.dp||"—")}</td><td>${htmlSeguroBanco(x.dc instanceof Date?x.dc.toLocaleString("pt-BR"):x.dc||"—")}</td><td>${pdCelulaClienteV1786(x.e.pedido,f)}</td><td>${htmlSeguroBanco(f["Cód.Usu."]||f.CodigoUsuario||"—")}</td><td>${htmlSeguroBanco(f.Usuario||f.ConferidoPor||"—")}</td><td>${htmlSeguroBanco(x.marketplace)}</td><td>${itens} / ${unidades}</td><td><div class="v1779-actions"><button data-pedido="${htmlSeguroBanco(x.e.pedido)}" title="Atualizar o cadastro deste cliente no Linx" onclick="pdClienteLinxV1785(this)">Cliente</button><button data-pedido="${htmlSeguroBanco(x.e.pedido)}" title="Romaneio e envio ao caixa (Apollo)" onclick="pdExpRomaneioV1930(this)">Romaneio</button><button onclick="pdDetalhesV1779('${id}')">Detalhes</button></div></td></tr>`;
  }).join("")||'<tr><td colspan="14" style="text-align:center;padding:25px;color:#586A7D">Nenhum pedido encontrado para os filtros selecionados.</td></tr>';
  v151Set("pdResumo",`${rows.length} pedido(s) exibido(s)`);
 }
@@ -6396,7 +6512,7 @@ function renderizarPedidosAdmin(){
         const kitResumo=textoKitBanco(item)?`<span class="kit-badge">KIT</span> ${htmlSeguroBanco(textoKitBanco(item))}`:'Item normal';
         const detalhes=`<details class="pedido-detalhes-compactos"><summary>Mais detalhes</summary><div class="pedido-detalhes-grid"><label>Descrição${inp('Descrição','campo-descricao')}</label><label>Rua${inp('Rua')}</label><label>Módulo${inp('Módulo')}</label><label>Prateleira${inp('Prateleira')}</label><label>Nível${inp('Nível')}</label><label>Posição${inp('Posição')}</label><label>Foto${inp('Foto','campo-foto')}</label><div class="pedido-kit-detalhe"><span>${kitResumo}</span><button type="button" class="btn-kit-pedido-editar" onclick="abrirEditorKitPedidoAdmin('${uid}')"><i class=nk-i-pencil></i> Kit</button></div></div></details>`;
         return `<div class="pedido-item-row">
-          <div class="pedido-item-acoes"><button title="Adicionar item" onclick="adicionarItemMesmoPedido('${uid}')">＋</button><button title="Atualizar" onclick="atualizarVendaMercadoLivreAdmin('${uid}',this)">↻</button><button title="Excluir item" class="acao-excluir" onclick="excluirLinhaPedidoAdmin('${uid}')"><i class=nk-i-trash></i></button>${indice===0?`<button type="button" class="acao-linx" data-pedido="${htmlSeguroBanco(pedidoOriginal)}" title="Atualizar o cadastro deste cliente no Linx" onclick="pdClienteLinxV1785(this)">Linx</button><button type="button" class="acao-romaneio" data-pedido="${htmlSeguroBanco(pedidoOriginal)}" title="Romaneio no Linx (Smart API): conferir e imprimir" onclick="pdRomaneioLinxV1860(this)"><i class=nk-i-file></i></button>`:''}</div>
+          <div class="pedido-item-acoes"><button title="Adicionar item" onclick="adicionarItemMesmoPedido('${uid}')">＋</button><button title="Atualizar" onclick="atualizarVendaMercadoLivreAdmin('${uid}',this)">↻</button><button title="Excluir item" class="acao-excluir" onclick="excluirLinhaPedidoAdmin('${uid}')"><i class=nk-i-trash></i></button>${indice===0?`<button type="button" class="acao-linx" data-pedido="${htmlSeguroBanco(pedidoOriginal)}" title="Atualizar o cadastro deste cliente no Linx" onclick="pdClienteLinxV1785(this)">Linx</button><button type="button" class="acao-romaneio" data-pedido="${htmlSeguroBanco(pedidoOriginal)}" title="Romaneio e envio ao caixa (Apollo)" onclick="pdExpRomaneioV1930(this)"><i class=nk-i-file></i></button>`:''}</div>
           <div class="pedido-item-num">${total>1?`<b>${ehKit?'Componente':'Item'} ${indice+1}/${total}</b>`:''}</div>
           <label class="pedido-item-sku"><span>SKU</span>${skuEditor}</label>
           <label class="pedido-item-qtd"><span>Qtd.</span><input type="number" min="1" data-uidlinha="${uid}" data-campo="Quantidade" value="${htmlSeguroBanco(item.Quantidade||'1')}" onchange="atualizarCampoPedidoAdmin(this)"></label>

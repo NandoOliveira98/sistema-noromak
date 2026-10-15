@@ -1,0 +1,281 @@
+"""V19.30 — botão do romaneio/caixa (e cadastro, desligado) pelas portas da Expedição.
+
+Cada regra aqui saiu de um teste real com o Apollo em 15/10/2026:
+  - o caixa sem o código do cliente dá Erro 2619 (UF vazia) — o cliente vai sempre;
+  - o romaneio leva a observação digitada (vazia não sai);
+  - romaneio e caixa nunca saem duas vezes pelo Noromak;
+  - resposta perdida no caixa ("incerto") trava o próximo envio até alguém conferir;
+  - o cadastro só roda com EXP_CADASTRO_API=1 e manda e-mail + telefone + celular juntos.
+"""
+from __future__ import annotations
+
+import json
+import threading
+import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from unittest import mock
+
+from base import S, Cliente, iniciar_servidor, linha, gravar_como_admin, reiniciar_banco
+
+PEDIDO = "2000018986686836"
+
+
+class PortaFalsa:
+    """Imita as respostas reais da porta (formatos copiados dos testes de 15/10)."""
+
+    def __init__(self, abertos=None, previa=None, caixa_previa=None, enviar=None, soltar=None):
+        self.chamadas: list[tuple[str, dict]] = []
+        self.abertos = abertos if abertos is not None else [
+            {"atendimento": 787601, "cliente": "THAYNARA CRISTINA  SILVA", "vendedor": {"usuario": 210, "nome": "LUIS"},
+             "valor": 25.9, "aberto_em": "2026-10-14T20:11:21", "dias_aberto": 1}]
+        self.previa = previa or {"ok": True, "itens": [{"codigo": "0893764272", "descricao": "LIMPA AR", "requisitada": 1.0,
+                                                        "a_soltar": 1.0}], "total_a_soltar": 1.0}
+        self.caixa_previa = caixa_previa or {"ok": True, "valor": 25.9, "itens": [], "impedimentos": [], "pode_enviar": True,
+                                             "validacoes": {"validacoes": {"passou": True}, "ipi": {"passou": True}}}
+        self.enviar = enviar or {"ok": True, "situacao": "enviado", "mensagem_do_erp": "Itens enviados para frente de caixa."}
+        self.soltar = soltar or {"ok": True, "situacao": "solto", "soltos": [{"codigo": "0893764272", "quantidade": 1.0}],
+                                 "mensagens": ["Romaneio 124250 do contato 787601 gerado com sucesso!"]}
+
+    def __call__(self, rota, corpo, escrita=False):
+        self.chamadas.append((rota, dict(corpo)))
+        if rota == "cliente/situacao":
+            return {"ok": True, "cliente": corpo["cliente"], "nome": "THAYNARA CRISTINA  SILVA", "veredito": "consultar",
+                    "situacao_credito": {"codigo": "0"}, "cadastro": {"codigo": "0"}, "motivos": []}
+        if rota == "atendimentos/abertos":
+            return {"ok": True, "total": len(self.abertos), "atendimentos": self.abertos}
+        if rota == "romaneio/previa":
+            return self.previa
+        if rota == "romaneio/soltar":
+            return self.soltar
+        if rota == "caixa/previa":
+            return self.caixa_previa
+        if rota == "caixa/enviar":
+            if isinstance(self.enviar, Exception):
+                raise self.enviar
+            return self.enviar
+        if rota == "cliente/atualizar":
+            return {"ok": True, "situacao": "atualizado", "campos": list(corpo)}
+        if rota == "cliente/credito":
+            return {"ok": True, "situacao": "ja_liberado"}
+        raise AssertionError(f"rota inesperada {rota}")
+
+    def rotas(self):
+        return [r for r, _ in self.chamadas]
+
+    def corpo(self, rota):
+        return next(c for r, c in reversed(self.chamadas) if r == rota)
+
+
+def _pedido_com_cliente(codigo="83020", documento="06278073994", nome="Thaynara Cristina Silva"):
+    gravar_como_admin([linha(PEDIDO, "0893764272", Marketplace="MERCADO LIVRE")])
+    S.salvar_cliente_fiscal(PEDIDO, documento, nome, linx_cliente=codigo, fonte="teste", usuario="teste")
+
+
+class RomaneioCaixaPelaPorta(unittest.TestCase):
+    def setUp(self):
+        reiniciar_banco()
+
+    def test_cliente_conhecido_acha_o_atendimento_pelo_nome_do_apollo(self):
+        _pedido_com_cliente()
+        porta = PortaFalsa()
+        with mock.patch.object(S, "_exp_porta", side_effect=porta):
+            d = S.exp_romaneio_preparar(PEDIDO)
+        self.assertEqual(d["situacao"], "pronto")
+        self.assertEqual(d["escolhido"], "787601")
+        # A busca é pelo nome COMO ESTÁ NO APOLLO (não o da NF-e).
+        self.assertEqual(porta.corpo("atendimentos/abertos")["cliente_nome"], "THAYNARA CRISTINA  SILVA")
+        self.assertEqual(d["candidatos"][0]["bate"], 1)
+
+    def test_sem_codigo_pede_o_numero_do_atendimento(self):
+        gravar_como_admin([linha(PEDIDO, "0893764272", Marketplace="MERCADO LIVRE")])
+        porta = PortaFalsa()
+        with mock.patch.object(S, "_exp_porta", side_effect=porta):
+            d = S.exp_romaneio_preparar(PEDIDO)
+            self.assertEqual(d["situacao"], "informar_atendimento")
+            self.assertEqual(porta.chamadas, [])
+            d = S.exp_romaneio_preparar(PEDIDO, atendimento="787601")
+        self.assertEqual(porta.corpo("atendimentos/abertos")["atendimento"], 787601)
+        self.assertEqual(d["escolhido"], "787601")
+
+    def test_dois_atendimentos_quem_escolhe_e_a_pessoa(self):
+        _pedido_com_cliente()
+        dois = [{"atendimento": 1, "valor": 10}, {"atendimento": 2, "valor": 20}]
+        with mock.patch.object(S, "_exp_porta", side_effect=PortaFalsa(abertos=dois)):
+            d = S.exp_romaneio_preparar(PEDIDO)
+        self.assertEqual(d["situacao"], "escolher")
+        self.assertEqual(d["escolhido"], "")
+
+    def test_pecas_que_nao_batem_nao_sao_escolhidas_sozinhas(self):
+        _pedido_com_cliente()
+        outra = {"ok": True, "itens": [{"codigo": "9999", "a_soltar": 1.0}], "total_a_soltar": 1.0}
+        with mock.patch.object(S, "_exp_porta", side_effect=PortaFalsa(previa=outra)):
+            d = S.exp_romaneio_preparar(PEDIDO)
+        self.assertEqual(d["escolhido"], "")
+
+    def test_observacao_e_obrigatoria_e_romaneio_sai_uma_vez(self):
+        _pedido_com_cliente()
+        porta = PortaFalsa()
+        with mock.patch.object(S, "_exp_porta", side_effect=porta):
+            self.assertFalse(S.exp_romaneio_soltar(PEDIDO, "787601", "  ", "luis")["ok"])
+            self.assertNotIn("romaneio/soltar", porta.rotas())
+            r = S.exp_romaneio_soltar(PEDIDO, "787601", "mercado livre 20/10", "luis")
+            self.assertTrue(r["ok"])
+            self.assertEqual(porta.corpo("romaneio/soltar")["observacao"], "MERCADO LIVRE 20/10")
+            self.assertEqual(porta.corpo("romaneio/soltar")["operador"], "luis")
+            de_novo = S.exp_romaneio_soltar(PEDIDO, "787601", "MERCADO LIVRE", "luis")
+        self.assertFalse(de_novo["ok"])
+        self.assertEqual(porta.rotas().count("romaneio/soltar"), 1)
+
+    def test_caixa_manda_sempre_o_cliente(self):
+        _pedido_com_cliente()
+        porta = PortaFalsa()
+        with mock.patch.object(S, "_exp_porta", side_effect=porta):
+            S.exp_romaneio_soltar(PEDIDO, "787601", "MERCADO LIVRE", "luis")
+            p = S.exp_caixa_previa(PEDIDO, "", "", "luis")
+        self.assertTrue(p["pode"])
+        corpo = porta.corpo("caixa/previa")
+        self.assertEqual(corpo["cliente"], 83020)
+        self.assertEqual(corpo["atendimento"], 787601)  # do romaneio solto
+        self.assertIs(corpo["validar"], True)
+
+    def test_sem_codigo_do_cliente_o_caixa_nao_chama_o_apollo(self):
+        gravar_como_admin([linha(PEDIDO, "0893764272", Marketplace="MERCADO LIVRE")])
+        porta = PortaFalsa()
+        with mock.patch.object(S, "_exp_porta", side_effect=porta):
+            r = S.exp_caixa_previa(PEDIDO, "787601", "", "luis")
+        self.assertFalse(r["ok"])
+        self.assertIn("2619", r["error"])
+        self.assertEqual(porta.chamadas, [])
+
+    def test_ipi_recusado_nao_libera_o_envio(self):
+        _pedido_com_cliente()
+        ruim = {"ok": True, "valor": 25.9, "pode_enviar": True, "impedimentos": [],
+                "validacoes": {"validacoes": {"passou": True}, "ipi": {"passou": False, "texto": "não devolveu verdadeiro"}}}
+        with mock.patch.object(S, "_exp_porta", side_effect=PortaFalsa(caixa_previa=ruim)):
+            p = S.exp_caixa_previa(PEDIDO, "787601", "", "luis")
+        self.assertFalse(p["pode"])
+        self.assertTrue(any("ipi" in f for f in p["falhas"]))
+
+    def test_envio_leva_o_valor_visto_e_nao_repete(self):
+        _pedido_com_cliente()
+        porta = PortaFalsa()
+        with mock.patch.object(S, "_exp_porta", side_effect=porta):
+            S.exp_romaneio_soltar(PEDIDO, "787601", "MERCADO LIVRE", "luis")
+            r = S.exp_caixa_enviar(PEDIDO, "", "", 25.9, "luis")
+            self.assertTrue(r["ok"])
+            self.assertEqual(porta.corpo("caixa/enviar")["valor_visto"], 25.9)
+            self.assertEqual(porta.corpo("caixa/enviar")["cliente"], 83020)
+            de_novo = S.exp_caixa_enviar(PEDIDO, "", "", 25.9, "luis")
+        self.assertFalse(de_novo["ok"])
+        self.assertEqual(porta.rotas().count("caixa/enviar"), 1)
+
+    def test_resposta_perdida_trava_ate_conferir(self):
+        _pedido_com_cliente()
+        porta = PortaFalsa(enviar=S.PortaErro("sem resposta", incerto=True))
+        with mock.patch.object(S, "_exp_porta", side_effect=porta):
+            S.exp_romaneio_soltar(PEDIDO, "787601", "MERCADO LIVRE", "luis")
+            r = S.exp_caixa_enviar(PEDIDO, "", "", 25.9, "luis")
+            self.assertEqual(r["situacao"], "incerto")
+            travado = S.exp_caixa_enviar(PEDIDO, "", "", 25.9, "luis")
+            self.assertEqual(travado["situacao"], "travado")
+            self.assertEqual(porta.rotas().count("caixa/enviar"), 1)
+            porta.enviar = {"ok": True, "situacao": "enviado"}
+            ok = S.exp_caixa_enviar(PEDIDO, "", "", 25.9, "luis", conferido=True)
+        self.assertTrue(ok["ok"])
+
+    def test_condicao_de_pagamento_faltando_vira_instrucao(self):
+        _pedido_com_cliente()
+        recusa = {"ok": False, "situacao": "recusado",
+                  "erro": "HTTP 412: Necessário informar a(s) forma(s) de pagamento no botão Condições de Pagamento!"}
+        with mock.patch.object(S, "_exp_porta", side_effect=PortaFalsa(enviar=recusa)):
+            r = S.exp_caixa_enviar(PEDIDO, "787601", "", 25.9, "luis")
+        self.assertFalse(r["ok"])
+        self.assertIn("condição de pagamento", r["error"])
+
+
+class CadastroPelaPorta(unittest.TestCase):
+    def setUp(self):
+        reiniciar_banco()
+
+    def test_desligado_nao_chama_a_porta(self):
+        _pedido_com_cliente()
+        porta = PortaFalsa()
+        with mock.patch.object(S, "_exp_porta", side_effect=porta), mock.patch.object(S, "EXP_CADASTRO_API", False):
+            r = S.exp_cadastro_atualizar(PEDIDO, "luis")
+        self.assertEqual(r["situacao"], "desligado")
+        self.assertEqual(porta.chamadas, [])
+
+    def test_ligado_manda_os_tres_contatos_e_o_nome_limpo(self):
+        _pedido_com_cliente(nome="Thaynara  Cristína Silva")
+        porta = PortaFalsa()
+        with mock.patch.object(S, "_exp_porta", side_effect=porta), mock.patch.object(S, "EXP_CADASTRO_API", True):
+            r = S.exp_cadastro_atualizar(PEDIDO, "luis")
+        self.assertTrue(r["ok"])
+        corpo = porta.corpo("cliente/atualizar")
+        for campo in ("email", "telefone", "celular", "ddd_telefone", "ddd_celular"):
+            self.assertIn(campo, corpo)
+        self.assertEqual(corpo["nome"], "THAYNARA CRISTINA SILVA")
+        self.assertEqual(porta.corpo("cliente/credito")["situacao_credito"], "1")
+
+
+class _PortaHttp(BaseHTTPRequestHandler):
+    def do_POST(self):
+        self.server.chave = self.headers.get("X-Chave-Expedicao")
+        self.send_response(404)
+        self.end_headers()
+        self.wfile.write(b'{"detail":"Not Found"}')
+
+    def log_message(self, *a):
+        pass
+
+
+class PortaDeVerdade(unittest.TestCase):
+    def test_404_vira_porta_nao_liberada_e_a_chave_vai_no_cabecalho(self):
+        srv = ThreadingHTTPServer(("127.0.0.1", 0), _PortaHttp)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            with mock.patch.object(S, "EXP_PORTA_BASE", f"http://127.0.0.1:{srv.server_address[1]}/api/v1/expedicao"), \
+                    mock.patch.object(S, "CHAVE_CRM", "chave-teste"):
+                with self.assertRaises(S.PortaErro) as cm:
+                    S._exp_porta("romaneio/soltar", {"revenda": 1}, escrita=True)
+            self.assertIn("não está liberada", str(cm.exception))
+            self.assertFalse(cm.exception.incerto)
+            self.assertEqual(srv.chave, "chave-teste")
+        finally:
+            srv.shutdown()
+
+    def test_base_sai_da_url_do_custo(self):
+        self.assertTrue(S.EXP_PORTA_BASE.endswith("/api/v1/expedicao"))
+
+
+class Rotas(unittest.TestCase):
+    def setUp(self):
+        reiniciar_banco()
+        self.url = iniciar_servidor()
+
+    def test_sem_login_401_e_admin_usa(self):
+        anonimo = Cliente(self.url)
+        status, _ = anonimo.pedir("GET", f"/api/expedicao-apollo/romaneio?pedido={PEDIDO}")
+        self.assertEqual(status, 401)
+        _pedido_com_cliente()
+        admin = Cliente(self.url)
+        admin.entrar()
+        with mock.patch.object(S, "_exp_porta", side_effect=PortaFalsa()):
+            status, d = admin.pedir("GET", f"/api/expedicao-apollo/romaneio?pedido={PEDIDO}")
+            self.assertEqual(status, 200, d)
+            self.assertEqual(d["escolhido"], "787601")
+            status, d = admin.pedir("POST", "/api/expedicao-apollo/romaneio/soltar",
+                                    {"pedido": PEDIDO, "atendimento": "787601", "observacao": "SHOPEE"})
+            self.assertEqual(status, 200, d)
+            status, d = admin.pedir("POST", "/api/expedicao-apollo/cadastro", {"pedido": PEDIDO})
+        self.assertEqual(status, 409)
+        self.assertEqual(d["situacao"], "desligado")
+
+    def test_tela_usa_a_rota_nova(self):
+        html = (S.APP_DIR / "admin.html").read_text(encoding="utf-8")
+        self.assertIn("pdExpRomaneioV1930(this)", html)
+        self.assertNotIn("pdRomaneioLinxV1860(this)", html)
+
+
+if __name__ == "__main__":
+    unittest.main()

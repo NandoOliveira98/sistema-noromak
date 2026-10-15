@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.29-MAGALU-ETIQUETA-CANAL"
+APP_VERSION = "19.30-ROMANEIO-CAIXA-PELA-PORTA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -14730,6 +14730,303 @@ def linx_romaneio_confirmar(pedido: str, contato: Any, observacao: str, *, condi
 
 
 # ---------------------------------------------------------------------------
+# V19.30 — Romaneio, caixa e cadastro pelas PORTAS DA EXPEDIÇÃO do NoromakWeb
+# (127.0.0.1:8000/api/v1/expedicao/*, X-Chave-Expedicao = CHAVE_CRM; contrato no
+# /openapi.json dele). Testado de ponta a ponta em 15/10/2026 (787700, 787601).
+# A Expedição nunca recebe credencial da Linx: quem fala com o Apollo é a porta.
+# Regras que os testes ensinaram:
+#   - caixa: o código do CLIENTE vai sempre (sem ele a UF vai vazia → Erro 2619);
+#   - caixa: a condição de pagamento é escolhida no Apollo (sem ela, 412);
+#   - cadastro: e-mail + telefone + celular juntos (sem telefone o Apollo
+#     recusa com "falta o celular do cliente").
+# O botão do romaneio/caixa fica ativo; o do cadastro só com EXP_CADASTRO_API=1
+# (espera cliente/buscar, cliente/criar, nome e Endereço 1 na porta).
+# ---------------------------------------------------------------------------
+EXP_PORTA_BASE = os.getenv(
+    "EXP_PORTA_BASE", re.sub(r"/custo/?$", "", CRM_COST_API_URL) or "http://127.0.0.1:8000/api/v1/expedicao"
+).strip().rstrip("/")
+EXP_PORTA_TIMEOUT = max(30, min(300, int(os.getenv("EXP_PORTA_TIMEOUT", "180") or 180)))
+EXP_CADASTRO_API = os.getenv("EXP_CADASTRO_API", "0").strip().lower() in {"1", "true", "sim"}
+EXP_REVENDA = 1  # Araçatuba
+EXP_MAX_ATENDIMENTOS = 4  # cada um custa uma prévia (teto da porta: 12 leituras/min)
+EXP_PORTA_LOCK = threading.Lock()  # uma escrita por vez (a porta devolve 409 se repetir)
+
+
+class PortaErro(Exception):
+    """A porta respondeu com erro (ou não respondeu). `incerto` = a chamada saiu e a
+    resposta não voltou: conferir no Apollo antes de repetir."""
+
+    def __init__(self, mensagem: str, incerto: bool = False):
+        super().__init__(mensagem)
+        self.incerto = incerto
+
+
+def _exp_porta(rota: str, corpo: dict[str, Any], *, escrita: bool = False) -> dict[str, Any]:
+    if not CHAVE_CRM:
+        raise PortaErro("CHAVE_CRM não está configurada no servidor.")
+    req = urllib.request.Request(
+        f"{EXP_PORTA_BASE}/{rota}", data=json.dumps(corpo).encode("utf-8"), method="POST",
+        headers={"X-Chave-Expedicao": CHAVE_CRM, "Content-Type": "application/json",
+                 "Accept": "application/json", "User-Agent": f"NoromakExpedicao/{APP_VERSION}"},
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=EXP_PORTA_TIMEOUT) as resp:
+            raw = resp.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        texto = exc.read().decode("utf-8", errors="replace")[:600]
+        if exc.code == 404:
+            raise PortaErro("A porta do Apollo para esta etapa ainda não está liberada (404).") from exc
+        if exc.code == 401:
+            raise PortaErro("A porta do Apollo recusou a chave de serviço (401).") from exc
+        if exc.code == 409:
+            raise PortaErro("Este cliente/atendimento já está sendo mexido agora. Espere e atualize.") from exc
+        if exc.code == 429:
+            raise PortaErro("Muitas chamadas ao Apollo neste minuto. Espere um minuto e tente de novo.") from exc
+        raise PortaErro(f"A porta do Apollo respondeu HTTP {exc.code}: {texto}") from exc
+    except Exception as exc:  # timeout, conexão caída
+        if escrita:
+            raise PortaErro("A chamada saiu e a resposta não voltou. Confira no Apollo antes de repetir.",
+                            incerto=True) from exc
+        raise PortaErro(f"O Apollo não respondeu: {exc}") from exc
+    try:
+        dados = json.loads(raw or "{}")
+    except Exception:
+        raise PortaErro(f"Resposta inválida da porta: {raw[:200]}", incerto=escrita)
+    return dados if isinstance(dados, dict) else {}
+
+
+def _exp_cliente_do_pedido(pedido: str) -> dict[str, str]:
+    """Código no Apollo + CPF/CNPJ + nome da NF-e que o Noromak já conhece."""
+    guardado = _cliente_fiscal_guardado(pedido) or {}
+    documento = re.sub(r"\D", "", str(guardado.get("documento_numero") or ""))
+    codigo = re.sub(r"\D", "", str(guardado.get("linx_cliente") or ""))
+    if not codigo and guardado.get("linx_api_status") == "encontrado" \
+            and guardado.get("linx_api_documento") == guardado.get("documento_numero"):
+        codigo = re.sub(r"\D", "", str(guardado.get("linx_api_cliente") or ""))
+    return {"codigo": codigo, "documento": documento, "nome_fiscal": str(guardado.get("nome_fiscal") or "")}
+
+
+def _exp_estado_operacoes(pedido: str) -> dict[str, Any]:
+    ops = linx_operacoes_do_pedido(pedido)
+    rom = next((o for o in reversed(ops) if o["etapa"] == "romaneio" and o["situacao"] == "ok"), None)
+    caixa = [o for o in ops if o["etapa"] == "caixa"]
+    caixa_ok = next((o for o in reversed(caixa) if o["situacao"] == "ok"), None)
+    ultima_caixa = caixa[-1] if caixa else None
+    travado = bool(ultima_caixa and ultima_caixa["situacao"] in ("pergunta", "incerto"))
+    return {"operacoes": ops, "romaneio": rom, "caixa": caixa_ok, "caixa_ultima": ultima_caixa,
+            "caixa_travado": travado and not caixa_ok}
+
+
+def exp_romaneio_preparar(pedido: str, atendimento: Any = "", cliente: Any = "") -> dict[str, Any]:
+    """Mostra o que o botão do romaneio faria. Só leitura no Apollo."""
+    pedido = str(pedido or "").strip()
+    if not pedido:
+        return {"ok": False, "error": "Informe o pedido."}
+    with DB_LOCK:
+        linhas = _linhas_do_pedido(pedido)
+    marketplace = _vendas_marketplace(linhas[0].get("Marketplace") or linhas[0].get("Origem")) if linhas else ""
+    conhecido = _exp_cliente_do_pedido(pedido)
+    codigo = re.sub(r"\D", "", str(cliente or "")) or conhecido["codigo"]
+    numero = re.sub(r"\D", "", str(atendimento or ""))
+    saida: dict[str, Any] = {
+        "ok": True, "pedido": pedido, "marketplace": marketplace, "no_noromak": bool(linhas),
+        "cliente": {"codigo": codigo, "documento": conhecido["documento"], "nome_fiscal": conhecido["nome_fiscal"],
+                    "nome_apollo": ""},
+        "precisa_condicao": True, "candidatos": [], "escolhido": "", **_exp_estado_operacoes(pedido),
+    }
+    try:
+        filtro: dict[str, Any] = {}
+        if numero:
+            filtro = {"atendimento": int(numero)}
+        elif codigo and conhecido["documento"]:
+            sit = _exp_porta("cliente/situacao", {"revenda": EXP_REVENDA, "cliente": int(codigo),
+                                                   "documento": conhecido["documento"], "operador": "noromak"})
+            if not sit.get("ok"):
+                return {**saida, "situacao": "cliente", "aviso": sit.get("erro") or "O Apollo não confirmou o cliente."}
+            saida["cliente"]["nome_apollo"] = str(sit.get("nome") or "")
+            saida["credito"] = {"veredito": sit.get("veredito"), "situacao": sit.get("situacao_credito"),
+                                "cadastro": sit.get("cadastro"), "motivos": sit.get("motivos") or []}
+            filtro = {"cliente_nome": saida["cliente"]["nome_apollo"]}
+        else:
+            return {**saida, "situacao": "informar_atendimento",
+                    "aviso": "O Noromak não sabe o código deste cliente no Apollo. Informe o número do atendimento."}
+        abertos = _exp_porta("atendimentos/abertos", {"revenda": EXP_REVENDA, "dias": 90, "operador": "noromak", **filtro})
+        if not abertos.get("ok"):
+            return {**saida, "situacao": "erro", "aviso": abertos.get("erro") or "O Apollo não listou os atendimentos."}
+        codigos = _linx_codigos_do_pedido(linhas)
+        for a in (abertos.get("atendimentos") or [])[:EXP_MAX_ATENDIMENTOS]:
+            prev = _exp_porta("romaneio/previa", {"revenda": EXP_REVENDA, "atendimento": int(a["atendimento"]),
+                                                   "operador": "noromak"})
+            itens = [{"codigo": str(i.get("codigo") or ""), "descricao": str(i.get("descricao") or ""),
+                      "quantidade": i.get("requisitada"), "a_soltar": i.get("a_soltar")}
+                     for i in (prev.get("itens") or []) if isinstance(i, dict)]
+            bate = sum(1 for i in itens if re.sub(r"[^0-9A-Z]", "", i["codigo"].upper()) in codigos)
+            saida["candidatos"].append({
+                "atendimento": str(a.get("atendimento")), "cliente": a.get("cliente"), "valor": a.get("valor"),
+                "aberto_em": a.get("aberto_em"), "vendedor": (a.get("vendedor") or {}).get("nome"),
+                "itens": itens, "total_a_soltar": prev.get("total_a_soltar") or 0, "bate": bate,
+            })
+    except PortaErro as exc:
+        return {**saida, "situacao": "erro", "aviso": str(exc)}
+    soltar = [c for c in saida["candidatos"] if c["total_a_soltar"]]
+    # V19.30 (decisão do dono): escolhe sozinho só um atendimento, com peças batendo
+    # (ou o número digitado); senão quem escolhe é a pessoa.
+    if numero and soltar:
+        saida["escolhido"] = soltar[0]["atendimento"]
+    elif len(soltar) == 1 and (soltar[0]["bate"] or not codigos):
+        saida["escolhido"] = soltar[0]["atendimento"]
+    if not saida["candidatos"]:
+        return {**saida, "situacao": "sem_atendimento", "aviso": "Nenhum atendimento aberto para este cliente no Apollo."}
+    return {**saida, "situacao": "pronto" if saida["escolhido"] else "escolher"}
+
+
+def exp_romaneio_soltar(pedido: str, atendimento: Any, observacao: str, usuario: str) -> dict[str, Any]:
+    pedido = str(pedido or "").strip()
+    observacao = re.sub(r"\s+", " ", str(observacao or "")).strip().upper()
+    numero = re.sub(r"\D", "", str(atendimento or ""))
+    if not pedido or not numero:
+        return {"ok": False, "error": "Informe o pedido e o atendimento."}
+    if not observacao or len(observacao) > 100:
+        return {"ok": False, "error": "Escreva a observação do romaneio (até 100 caracteres)."}
+    if _exp_estado_operacoes(pedido)["romaneio"]:
+        return {"ok": False, "error": "O romaneio deste pedido já foi solto pelo Noromak."}
+    with EXP_PORTA_LOCK:
+        try:
+            r = _exp_porta("romaneio/soltar", {"revenda": EXP_REVENDA, "atendimento": int(numero),
+                                                "operador": usuario[:60] or "noromak", "observacao": observacao},
+                           escrita=True)
+        except PortaErro as exc:
+            _linx_operacao_registrar(pedido, "romaneio", "incerto" if exc.incerto else "erro", str(exc), numero, usuario)
+            return {"ok": False, "situacao": "incerto" if exc.incerto else "erro", "error": str(exc)}
+    if not r.get("ok") or r.get("situacao") != "solto":
+        motivo = r.get("erro") or r.get("mensagem") or json_dumps(r)[:300]
+        _linx_operacao_registrar(pedido, "romaneio", "erro", motivo, numero, usuario)
+        return {"ok": False, "situacao": r.get("situacao") or "erro", "error": motivo}
+    mensagens = [str(m) for m in (r.get("mensagens") or [])]
+    _linx_operacao_registrar(pedido, "romaneio", "ok", {"observacao": observacao, "soltos": r.get("soltos"),
+                                                       "mensagens": mensagens, "via": "porta"}, numero, usuario)
+    audit(usuario, "expedicao.romaneio", f"{pedido}|{numero}|{observacao}")
+    return {"ok": True, "situacao": "solto", "pedido": pedido, "atendimento": numero,
+            "observacao": observacao, "soltos": r.get("soltos") or [], "mensagens": mensagens}
+
+
+def _exp_caixa_corpo(pedido: str, atendimento: Any, cliente: Any) -> tuple[dict[str, Any] | None, str]:
+    numero = re.sub(r"\D", "", str(atendimento or ""))
+    if not numero:
+        estado = _exp_estado_operacoes(pedido)
+        numero = str((estado["romaneio"] or {}).get("contato") or "")
+    codigo = re.sub(r"\D", "", str(cliente or "")) or _exp_cliente_do_pedido(pedido)["codigo"]
+    if not numero:
+        return None, "Solte o romaneio primeiro (ou informe o atendimento)."
+    if not codigo:
+        return None, "Informe o código do cliente no Apollo: sem ele o caixa não acha a UF (Erro 2619)."
+    return {"revenda": EXP_REVENDA, "atendimento": int(numero), "cliente": int(codigo)}, ""
+
+
+def exp_caixa_previa(pedido: str, atendimento: Any, cliente: Any, usuario: str) -> dict[str, Any]:
+    pedido = str(pedido or "").strip()
+    corpo, erro = _exp_caixa_corpo(pedido, atendimento, cliente)
+    if not corpo:
+        return {"ok": False, "error": erro}
+    try:
+        r = _exp_porta("caixa/previa", {**corpo, "operador": usuario[:60] or "noromak", "validar": True})
+    except PortaErro as exc:
+        return {"ok": False, "error": str(exc)}
+    val = r.get("validacoes") or {}
+    falhas = [f"{k}: {(val.get(k) or {}).get('texto') or 'não passou'}" for k in ("validacoes", "ipi")
+              if not (val.get(k) or {}).get("passou")]
+    pode = bool(r.get("ok") and r.get("pode_enviar") and not r.get("impedimentos") and not falhas)
+    return {"ok": bool(r.get("ok")), "pode": pode, "atendimento": str(corpo["atendimento"]),
+            "cliente": str(corpo["cliente"]), "valor": r.get("valor"), "itens": r.get("itens") or [],
+            "impedimentos": r.get("impedimentos") or [], "falhas": falhas, "error": r.get("erro") or ""}
+
+
+def exp_caixa_enviar(pedido: str, atendimento: Any, cliente: Any, valor_visto: Any, usuario: str,
+                     conferido: bool = False) -> dict[str, Any]:
+    pedido = str(pedido or "").strip()
+    estado = _exp_estado_operacoes(pedido)
+    if estado["caixa"]:
+        return {"ok": False, "error": "Este pedido já foi enviado ao caixa pelo Noromak."}
+    if estado["caixa_travado"] and not conferido:
+        return {"ok": False, "situacao": "travado",
+                "error": "A última tentativa ficou sem resposta certa. Confira no Apollo e marque que conferiu."}
+    corpo, erro = _exp_caixa_corpo(pedido, atendimento, cliente)
+    if not corpo:
+        return {"ok": False, "error": erro}
+    try:
+        valor = round(float(valor_visto), 2)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "Rode a prévia do caixa antes de enviar (valor visto)."}
+    if valor <= 0:
+        return {"ok": False, "error": "Valor do atendimento inválido."}
+    numero = corpo["atendimento"]
+    with EXP_PORTA_LOCK:
+        try:
+            r = _exp_porta("caixa/enviar", {**corpo, "operador": usuario[:60] or "noromak", "valor_visto": valor},
+                           escrita=True)
+        except PortaErro as exc:
+            _linx_operacao_registrar(pedido, "caixa", "incerto" if exc.incerto else "erro", str(exc), numero, usuario)
+            return {"ok": False, "situacao": "incerto" if exc.incerto else "erro", "error": str(exc)}
+    situacao = str(r.get("situacao") or "")
+    texto = str(r.get("erro") or r.get("mensagem_do_erp") or r.get("mensagem") or "")
+    if situacao == "enviado":
+        _linx_operacao_registrar(pedido, "caixa", "ok", f"valor {valor} {texto}".strip(), numero, usuario)
+        audit(usuario, "expedicao.caixa", f"{pedido}|{numero}|{valor}")
+        return {"ok": True, "situacao": "enviado", "atendimento": str(numero), "valor": valor, "mensagem": texto}
+    marca = situacao if situacao in ("pergunta", "incerto") else "erro"
+    if "412" in texto or "forma(s) de pagamento" in texto.lower():
+        texto = "Escolha a condição de pagamento do atendimento no Apollo e clique de novo. " + texto
+    _linx_operacao_registrar(pedido, "caixa", marca, texto or json_dumps(r)[:300], numero, usuario)
+    return {"ok": False, "situacao": situacao or "erro", "error": texto or "O Apollo não confirmou o envio."}
+
+
+def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "") -> dict[str, Any]:
+    """Botão do cadastro pela porta. Desligado (EXP_CADASTRO_API=0) até a porta ter
+    cliente/buscar, cliente/criar, nome e Endereço 1 (pedido ao Guilherme, 15/10)."""
+    if not EXP_CADASTRO_API:
+        return {"ok": False, "situacao": "desligado",
+                "error": "Cadastro pela API ainda desligado: aguardando a porta do Apollo (buscar/criar cliente, nome e endereço)."}
+    pedido = str(pedido or "").strip()
+    conhecido = _exp_cliente_do_pedido(pedido)
+    documento, nome = conhecido["documento"], conhecido["nome_fiscal"]
+    if not documento:
+        return {"ok": False, "error": "Este pedido ainda não tem CPF/CNPJ da nota. Puxe nome e CPF primeiro."}
+    codigo = re.sub(r"\D", "", str(cliente or "")) or conhecido["codigo"]
+    nome_limpo = re.sub(r"\s+", " ", unicodedata.normalize("NFKD", nome).encode("ascii", "ignore").decode()).strip().upper()
+    contatos = {"email": LINX_CADASTRO_EMAIL, "ddd_telefone": LINX_CADASTRO_DDD, "telefone": LINX_CADASTRO_TELEFONE,
+                "ddd_celular": LINX_CADASTRO_DDD, "celular": LINX_CADASTRO_TELEFONE}
+    operador = usuario[:60] or "noromak"
+    with EXP_PORTA_LOCK:
+        try:
+            if not codigo:
+                b = _exp_porta("cliente/buscar", {"revenda": EXP_REVENDA, "documento": documento, "operador": operador})
+                if b.get("situacao") == "encontrado" and b.get("cliente"):
+                    codigo = str(b["cliente"])
+                elif b.get("situacao") == "nao_cadastrado":
+                    c = _exp_porta("cliente/criar", {"revenda": EXP_REVENDA, "documento": documento, "nome": nome_limpo,
+                                                     "operador": operador, **contatos}, escrita=True)
+                    if c.get("situacao") not in ("criado", "ja_existe") or not c.get("cliente"):
+                        return {"ok": False, "situacao": c.get("situacao") or "erro",
+                                "error": c.get("erro") or "O Apollo não criou o cliente."}
+                    codigo = str(c["cliente"])
+                else:
+                    return {"ok": False, "error": b.get("erro") or "Mais de um cliente com este CPF/CNPJ no Apollo."}
+            base = {"revenda": EXP_REVENDA, "cliente": int(codigo), "documento": documento, "operador": operador}
+            at = _exp_porta("cliente/atualizar", {**base, **contatos, **({"nome": nome_limpo} if nome_limpo else {})},
+                            escrita=True)
+            if at.get("situacao") != "atualizado":
+                return {"ok": False, "situacao": at.get("situacao") or "erro",
+                        "error": at.get("erro") or "O Apollo não confirmou a atualização."}
+            cr = _exp_porta("cliente/credito", {**base, "situacao_credito": "1"}, escrita=True)
+        except PortaErro as exc:
+            return {"ok": False, "situacao": "incerto" if exc.incerto else "erro", "error": str(exc)}
+    salvar_cliente_fiscal(pedido, documento, nome, linx_cliente=codigo, fonte="porta", usuario=usuario)
+    audit(usuario, "expedicao.cadastro", f"{pedido}|{codigo}|{cr.get('situacao')}")
+    return {"ok": True, "situacao": "atualizado", "cliente": codigo, "credito": cr.get("situacao"),
+            "credito_detalhe": cr.get("avisos") or [], "bloqueado": cr.get("situacao") == "bloqueado_pelo_financeiro"}
+
+
+# ---------------------------------------------------------------------------
 # V18.70 — crédito pela Smart API, no botão "Atualizar cadastro" do pedido.
 # Chamado da Linx (aviso de 06/10/2026): "Ajuste em SmartAPI endpoint
 # AtualizarCadastroClienteSimplificado campo BloqueioCredito".
@@ -26377,6 +26674,18 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
+        if path == "/api/expedicao-apollo/romaneio":
+            # V19.30: botão do romaneio pela porta da Expedição (Admin e Supervisor).
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            try:
+                q1 = lambda k: str((query.get(k) or [""])[0] or "")
+                resultado = exp_romaneio_preparar(q1("pedido"), q1("atendimento"), q1("cliente"))
+                self.send_json(resultado, 200 if resultado.get("ok") else 400)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
         if path in ("/api/linx/status", "/api/linx/clientes/sem-cadastro"):
             ctx = self.auth(admin_only=True)
             if ctx is None:
@@ -26633,6 +26942,29 @@ class AppHandler(BaseHTTPRequestHandler):
                     )
                 else:
                     resultado = linx_cadastro_atualizar(str(body.get("pedido") or ""), usuario=usuario)
+                self.send_json(resultado, 200 if resultado.get("ok") else 409)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        # V19.30: romaneio, caixa e cadastro pela porta da Expedição (Admin e Supervisor).
+        if path in ("/api/expedicao-apollo/romaneio/soltar", "/api/expedicao-apollo/caixa/previa",
+                    "/api/expedicao-apollo/caixa/enviar", "/api/expedicao-apollo/cadastro"):
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            try:
+                body = self.read_json()
+                usuario = str(ctx.get("username") or "")
+                pedido = str(body.get("pedido") or "")
+                if path.endswith("/romaneio/soltar"):
+                    resultado = exp_romaneio_soltar(pedido, body.get("atendimento"), str(body.get("observacao") or ""), usuario)
+                elif path.endswith("/caixa/previa"):
+                    resultado = exp_caixa_previa(pedido, body.get("atendimento"), body.get("cliente"), usuario)
+                elif path.endswith("/caixa/enviar"):
+                    resultado = exp_caixa_enviar(pedido, body.get("atendimento"), body.get("cliente"),
+                                                 body.get("valor_visto"), usuario, conferido=body.get("conferido") is True)
+                else:
+                    resultado = exp_cadastro_atualizar(pedido, usuario, body.get("cliente"))
                 self.send_json(resultado, 200 if resultado.get("ok") else 409)
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)

@@ -913,6 +913,25 @@ guarda na tabela **`cliente_fiscal`** (fora de `conf_pedidos`, de propósito): `
 também o código do cliente (coluna Cód.Cliente).
 O botão **Romaneio** continua só visual — não deve executar operação falsa.
 
+**V19.30 — Romaneio e caixa pelas portas da Expedição** (decisões do dono, 15/10). O NoromakWeb
+(Guilherme, mesma VPS) abriu portas em `127.0.0.1:8000/api/v1/expedicao/*` (`X-Chave-Expedicao` =
+`CHAVE_CRM`; contrato em `/openapi.json` dele): `cliente/{situacao,atualizar,credito}`,
+`atendimentos/{abertos,itens}`, `romaneio/{previa,soltar}` e `caixa/{previa,enviar}`. A Expedição
+nunca recebe credencial da Linx. `_exp_porta` (404 = "porta não liberada"; falha de rede numa escrita
+= `incerto`). Rotas do Noromak `/api/expedicao-apollo/{romaneio, romaneio/soltar, caixa/previa,
+caixa/enviar, cadastro}` (módulo **admin** = Admin e Supervisor). O ícone de documento da linha do
+pedido abre a janela nova (`pdExpRomaneioV1930`); a extensão Linx Cliente **0.30** troca o 🧾 da venda
+(ML e Shopee) por `romaneio-api.html`, que chama as mesmas rotas pelo service worker (login do Noromak
+do Chrome). Regras dos testes reais: atendimento achado pelo **nome no Apollo** (`cliente/situacao` com
+o código de `cliente_fiscal`), sem código o usuário digita o nº do atendimento; escolhe sozinho só um
+atendimento com peças batendo; **observação digitada** (vazia não sai, até 100); caixa manda **sempre o
+código do cliente** (sem ele UF vazia → Erro 2619), a **condição de pagamento** é escolhida no Apollo
+(sem ela 412), envio com `valor_visto`; romaneio e caixa nunca saem duas vezes (`linx_operacoes_v1860`);
+`pergunta`/`incerto` trava o caixa até marcar "conferi no Apollo". **Cadastro** (`exp_cadastro_atualizar`)
+fica **desligado** (`EXP_CADASTRO_API=0`) até a porta ter `cliente/buscar`, `cliente/criar`, nome e
+Endereço 1; manda e-mail + telefone + celular juntos (sem telefone o Apollo recusa). O romaneio antigo
+pela Smart API (`linx_romaneio_confirmar`) ficou sem botão. Teste: `TESTES/test_expedicao_apollo_v1930.py`.
+
 ### Vínculo MLB ↔ SKU
 Banco canônico `ml_sku_mlb_links_v1`, com seed em `DADOS/ml_sku_mlb_links_seed.json`.
 Um snapshot parcial do navegador **não** é autoridade: inclusão/remoção explícita usa
