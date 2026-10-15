@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.31-ROMANEIO-ACHA-PELO-NOME"
+APP_VERSION = "19.32-CADASTRO-CLIENTE-PELA-PORTA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -14754,7 +14754,8 @@ EXP_PORTA_BASE = os.getenv(
     "EXP_PORTA_BASE", re.sub(r"/custo/?$", "", CRM_COST_API_URL) or "http://127.0.0.1:8000/api/v1/expedicao"
 ).strip().rstrip("/")
 EXP_PORTA_TIMEOUT = max(30, min(300, int(os.getenv("EXP_PORTA_TIMEOUT", "180") or 180)))
-EXP_CADASTRO_API = os.getenv("EXP_CADASTRO_API", "0").strip().lower() in {"1", "true", "sim"}
+EXP_CADASTRO_API = os.getenv("EXP_CADASTRO_API", "1")  # V19.32: portas ligadas pelo Guilherme (15/10)
+EXP_CADASTRO_API = EXP_CADASTRO_API.strip().lower() in {"1", "true", "sim"}
 EXP_REVENDA = 1  # Araçatuba
 EXP_MAX_ATENDIMENTOS = 4  # cada um custa uma prévia (teto da porta: 12 leituras/min)
 EXP_PORTA_LOCK = threading.Lock()  # uma escrita por vez (a porta devolve 409 se repetir)
@@ -14844,6 +14845,20 @@ def exp_romaneio_preparar(pedido: str, atendimento: Any = "", cliente: Any = "")
     }
     try:
         filtro: dict[str, Any] = {}
+        # V19.32: sem o código mas com o CPF/CNPJ, o cliente/buscar dá o código exato
+        # (o nome da NF-e vira só reserva). Achado, fica guardado no pedido.
+        if not numero and not codigo and conhecido["documento"]:
+            try:
+                b = exp_buscar_cliente(conhecido["documento"])
+            except PortaErro:
+                b = {"situacao": ""}
+            if b["situacao"] == "encontrado" and b["cliente"]:
+                codigo = b["cliente"]
+                saida["cliente"]["codigo"] = codigo
+                salvar_cliente_fiscal(pedido, conhecido["documento"], conhecido["nome_fiscal"],
+                                      linx_cliente=codigo, fonte="porta-buscar", usuario="noromak")
+            elif b["situacao"] == "nao_cadastrado":
+                saida["cliente"]["nao_cadastrado"] = True
         if numero:
             filtro = {"atendimento": int(numero)}
         elif codigo and conhecido["documento"]:
@@ -15007,50 +15022,143 @@ def exp_caixa_enviar(pedido: str, atendimento: Any, cliente: Any, valor_visto: A
     return {"ok": False, "situacao": situacao or "erro", "error": texto or "O Apollo não confirmou o envio."}
 
 
+# V19.32: celular padrão do cadastro. O cliente/criar só aceita celular de 9 dígitos
+# começando com 9 (o 111111111 de antes é recusado); o mesmo número vale para todos.
+EXP_CELULAR_PADRAO = int(os.getenv("EXP_CELULAR_PADRAO", "999999999") or 999999999)
+
+
+def _exp_limpo(texto: Any) -> str:
+    base = unicodedata.normalize("NFKD", str(texto or "")).encode("ascii", "ignore").decode()
+    return re.sub(r"\s+", " ", base).strip().upper()
+
+
+def exp_buscar_cliente(documento: str, operador: str = "noromak") -> dict[str, Any]:
+    """cliente/buscar pelo CPF/CNPJ: {situacao: encontrado|nao_cadastrado|mais_de_um, cliente, nome, lista}.
+    Pesquisa que falha volta ok:false (nunca vira "não cadastrado")."""
+    b = _exp_porta("cliente/buscar", {"revenda": EXP_REVENDA, "documento": documento, "operador": operador[:60] or "noromak"})
+    if not b.get("ok"):
+        raise PortaErro(b.get("erro") or "O Apollo não respondeu a busca do cliente.")
+    lista = next((v for v in b.values() if isinstance(v, list)), [])
+    return {"situacao": str(b.get("situacao") or ""), "cliente": re.sub(r"\D", "", str(b.get("cliente") or "")),
+            "nome": str(b.get("nome") or ""), "lista": lista}
+
+
+def exp_endereco_entrega(pedido: str) -> dict[str, Any]:
+    """V19.32 (decisão do dono): endereço do cadastro = Dados do envio da venda.
+    Mercado Livre: /shipments/{id} com a conta do pedido. Devolve {endereco} só quando
+    vem inteiro (rua, bairro, CEP, cidade, UF) — a porta é tudo ou nada; senão {falta}."""
+    with DB_LOCK:
+        linhas = _linhas_do_pedido(pedido)
+    if not linhas:
+        return {"endereco": None, "falta": "pedido não está no Noromak"}
+    row = linhas[0]
+    if _vendas_marketplace(row.get("Marketplace") or row.get("Origem")) != "Mercado Livre":
+        return {"endereco": None, "falta": "endereço automático só para o Mercado Livre por enquanto"}
+    envio = re.sub(r"\D", "", str(row.get("ShipmentIdMercadoLivre") or ""))
+    if not envio:
+        return {"endereco": None, "falta": "pedido sem número de envio do ML"}
+    with ml_na_casa(ml_casa_da_linha(row)):
+        ship = ml_api_get(f"/shipments/{envio}")
+    ship = ship if isinstance(ship, dict) else {}
+    a = ship.get("receiver_address") if isinstance(ship.get("receiver_address"), dict) else {}
+    if not a:
+        dest = ship.get("destination") if isinstance(ship.get("destination"), dict) else {}
+        a = dest.get("shipping_address") if isinstance(dest.get("shipping_address"), dict) else {}
+
+    def nome_de(v: Any) -> Any:
+        return (v.get("name") if isinstance(v, dict) else v) or ""
+
+    estado = a.get("state")
+    uf = str((estado.get("id") if isinstance(estado, dict) else estado) or "").split("-")[-1][:2]
+    numero = str(a.get("street_number") or "").strip()
+    endereco = {
+        "rua": _exp_limpo(a.get("street_name"))[:120],
+        "numero": "" if numero.upper() in ("SN", "S/N", "0") else numero[:10],
+        "complemento": _exp_limpo(a.get("comment") or a.get("complement"))[:60],
+        "bairro": _exp_limpo(nome_de(a.get("neighborhood")))[:50],
+        "cep": re.sub(r"\D", "", str(a.get("zip_code") or "")),
+        "cidade": _exp_limpo(nome_de(a.get("city")))[:50],
+        "uf": uf.upper(),
+    }
+    faltando = [k for k in ("rua", "bairro", "cep", "cidade", "uf") if not endereco[k]]
+    if faltando:
+        return {"endereco": None, "falta": "o ML não mandou " + ", ".join(faltando)}
+    if not endereco["complemento"]:
+        del endereco["complemento"]
+    return {"endereco": endereco, "falta": ""}
+
+
 def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "") -> dict[str, Any]:
-    """Botão do cadastro pela porta. Desligado (EXP_CADASTRO_API=0) até a porta ter
-    cliente/buscar, cliente/criar, nome e Endereço 1 (pedido ao Guilherme, 15/10)."""
+    """Botão do cadastro pela porta (V19.32, contrato real do Guilherme de 15/10):
+    buscar pelo CPF -> (não cadastrado) criar -> atualizar nome + contatos + endereço -> crédito.
+    Ligado com EXP_CADASTRO_API=1."""
     if not EXP_CADASTRO_API:
         return {"ok": False, "situacao": "desligado",
-                "error": "Cadastro pela API ainda desligado: aguardando a porta do Apollo (buscar/criar cliente, nome e endereço)."}
+                "error": "Cadastro pela API ainda desligado no servidor (EXP_CADASTRO_API)."}
     pedido = str(pedido or "").strip()
     conhecido = _exp_cliente_do_pedido(pedido)
     documento, nome = conhecido["documento"], conhecido["nome_fiscal"]
     if not documento:
         return {"ok": False, "error": "Este pedido ainda não tem CPF/CNPJ da nota. Puxe nome e CPF primeiro."}
     codigo = re.sub(r"\D", "", str(cliente or "")) or conhecido["codigo"]
-    nome_limpo = re.sub(r"\s+", " ", unicodedata.normalize("NFKD", nome).encode("ascii", "ignore").decode()).strip().upper()
-    contatos = {"email": LINX_CADASTRO_EMAIL, "ddd_telefone": LINX_CADASTRO_DDD, "telefone": LINX_CADASTRO_TELEFONE,
-                "ddd_celular": LINX_CADASTRO_DDD, "celular": LINX_CADASTRO_TELEFONE}
+    nome_limpo = _exp_limpo(nome)[:70]
     operador = usuario[:60] or "noromak"
+    avisos: list[str] = []
+    try:
+        end = exp_endereco_entrega(pedido)
+    except Exception as exc:  # ML fora do ar não impede nome/contatos
+        end = {"endereco": None, "falta": f"não consegui ler o envio no ML ({exc})"}
+    endereco = end["endereco"]
+    if not endereco:
+        avisos.append("Endereço não enviado: " + end["falta"] + ".")
+    criado = False
     with EXP_PORTA_LOCK:
         try:
             if not codigo:
-                b = _exp_porta("cliente/buscar", {"revenda": EXP_REVENDA, "documento": documento, "operador": operador})
-                if b.get("situacao") == "encontrado" and b.get("cliente"):
-                    codigo = str(b["cliente"])
-                elif b.get("situacao") == "nao_cadastrado":
-                    c = _exp_porta("cliente/criar", {"revenda": EXP_REVENDA, "documento": documento, "nome": nome_limpo,
-                                                     "operador": operador, **contatos}, escrita=True)
-                    if c.get("situacao") not in ("criado", "ja_existe") or not c.get("cliente"):
+                b = exp_buscar_cliente(documento, operador)
+                if b["situacao"] == "encontrado" and b["cliente"]:
+                    codigo = b["cliente"]
+                elif b["situacao"] == "mais_de_um":
+                    return {"ok": False, "situacao": "mais_de_um", "lista": b["lista"],
+                            "error": "Mais de um cliente com este CPF/CNPJ no Apollo: informe o código certo."}
+                elif b["situacao"] == "nao_cadastrado":
+                    if not endereco:
+                        return {"ok": False, "situacao": "sem_endereco",
+                                "error": "Cliente novo precisa do endereço inteiro: " + end["falta"] + "."}
+                    if not nome_limpo:
+                        return {"ok": False, "error": "Cliente novo precisa do nome da NF-e."}
+                    c = _exp_porta("cliente/criar", {
+                        "revenda": EXP_REVENDA, "documento": documento, "operador": operador, "nome": nome_limpo,
+                        "email": LINX_CADASTRO_EMAIL, "ddd_celular": LINX_CADASTRO_DDD, "celular": EXP_CELULAR_PADRAO,
+                        "endereco": endereco}, escrita=True)
+                    novo = re.sub(r"\D", "", str(c.get("cliente") or ""))
+                    if c.get("situacao") not in ("criado", "ja_cadastrado") or not novo:
                         return {"ok": False, "situacao": c.get("situacao") or "erro",
                                 "error": c.get("erro") or "O Apollo não criou o cliente."}
-                    codigo = str(c["cliente"])
+                    codigo, criado = novo, c.get("situacao") == "criado"
                 else:
-                    return {"ok": False, "error": b.get("erro") or "Mais de um cliente com este CPF/CNPJ no Apollo."}
+                    return {"ok": False, "error": "Resposta inesperada da busca do cliente."}
             base = {"revenda": EXP_REVENDA, "cliente": int(codigo), "documento": documento, "operador": operador}
-            at = _exp_porta("cliente/atualizar", {**base, **contatos, **({"nome": nome_limpo} if nome_limpo else {})},
-                            escrita=True)
+            corpo = {**base, "email": LINX_CADASTRO_EMAIL, "ddd_telefone": LINX_CADASTRO_DDD,
+                     "telefone": LINX_CADASTRO_TELEFONE, "ddd_celular": LINX_CADASTRO_DDD, "celular": EXP_CELULAR_PADRAO}
+            if nome_limpo:
+                corpo["nome"] = nome_limpo
+            if endereco:
+                corpo["endereco"] = endereco
+            at = _exp_porta("cliente/atualizar", corpo, escrita=True)
             if at.get("situacao") != "atualizado":
-                return {"ok": False, "situacao": at.get("situacao") or "erro",
+                return {"ok": False, "situacao": at.get("situacao") or "erro", "cliente": codigo,
                         "error": at.get("erro") or "O Apollo não confirmou a atualização."}
+            avisos += [str(x) for x in (at.get("avisos") or [])]
             cr = _exp_porta("cliente/credito", {**base, "situacao_credito": "1"}, escrita=True)
         except PortaErro as exc:
-            return {"ok": False, "situacao": "incerto" if exc.incerto else "erro", "error": str(exc)}
+            return {"ok": False, "situacao": "incerto" if exc.incerto else "erro", "cliente": codigo, "error": str(exc)}
     salvar_cliente_fiscal(pedido, documento, nome, linx_cliente=codigo, fonte="porta", usuario=usuario)
-    audit(usuario, "expedicao.cadastro", f"{pedido}|{codigo}|{cr.get('situacao')}")
-    return {"ok": True, "situacao": "atualizado", "cliente": codigo, "credito": cr.get("situacao"),
-            "credito_detalhe": cr.get("avisos") or [], "bloqueado": cr.get("situacao") == "bloqueado_pelo_financeiro"}
+    audit(usuario, "expedicao.cadastro", f"{pedido}|{codigo}|{'criado' if criado else 'atualizado'}|{cr.get('situacao')}")
+    return {"ok": True, "situacao": "criado" if criado else "atualizado", "cliente": codigo,
+            "nome": nome_limpo, "endereco": endereco, "cidade_apollo": at.get("cidade"),
+            "credito": cr.get("situacao"), "avisos": avisos + [str(x) for x in (cr.get("avisos") or [])],
+            "bloqueado": cr.get("situacao") == "bloqueado_pelo_financeiro"}
 
 
 # ---------------------------------------------------------------------------
@@ -27051,6 +27159,12 @@ class AppHandler(BaseHTTPRequestHandler):
                     resultado = exp_caixa_enviar(pedido, body.get("atendimento"), body.get("cliente"),
                                                  body.get("valor_visto"), usuario, conferido=body.get("conferido") is True)
                 else:
+                    # V19.32: a extensão manda o nome/CPF de "Dados para a NF-e" lidos na
+                    # página da venda (a API do ML bloqueia esse dado): guarda antes.
+                    doc = re.sub(r"\D", "", str(body.get("documento") or ""))
+                    nome_nf = str(body.get("nome") or "").strip()
+                    if pedido and len(doc) in (11, 14) and nome_nf:
+                        salvar_cliente_fiscal(pedido, doc, nome_nf, fonte="extensao", usuario=usuario)
                     resultado = exp_cadastro_atualizar(pedido, usuario, body.get("cliente"))
                 self.send_json(resultado, 200 if resultado.get("ok") else 409)
             except Exception as exc:

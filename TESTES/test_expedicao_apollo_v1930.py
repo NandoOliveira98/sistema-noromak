@@ -25,6 +25,7 @@ class PortaFalsa:
 
     def __init__(self, abertos=None, previa=None, caixa_previa=None, enviar=None, soltar=None):
         self.chamadas: list[tuple[str, dict]] = []
+        self.buscar = {"ok": True, "situacao": "encontrado", "cliente": 83020, "nome": "THAYNARA CRISTINA  SILVA"}
         self.abertos = abertos if abertos is not None else [
             {"atendimento": 787601, "cliente": "THAYNARA CRISTINA  SILVA", "vendedor": {"usuario": 210, "nome": "LUIS"},
              "valor": 25.9, "aberto_em": "2026-10-14T20:11:21", "dias_aberto": 1}]
@@ -57,6 +58,10 @@ class PortaFalsa:
             return {"ok": True, "situacao": "atualizado", "campos": list(corpo)}
         if rota == "cliente/credito":
             return {"ok": True, "situacao": "ja_liberado"}
+        if rota == "cliente/buscar":
+            return self.buscar
+        if rota == "cliente/criar":
+            return {"ok": True, "situacao": "criado", "cliente": 99001}
         raise AssertionError(f"rota inesperada {rota}")
 
     def rotas(self):
@@ -101,6 +106,7 @@ class RomaneioCaixaPelaPorta(unittest.TestCase):
         # Caso real 15/10: pedido 2000018991339082, NF-e "Lindomar Souza Dos Santos", sem código.
         _pedido_com_cliente(codigo="", nome="Lindomar Souza Dos Santos")
         porta = PortaFalsa()
+        porta.buscar = {"ok": False, "erro": "busca fora"}  # V19.32: o nome é a reserva do CPF
         with mock.patch.object(S, "_exp_porta", side_effect=porta):
             d = S.exp_romaneio_preparar(PEDIDO)
         self.assertEqual(porta.corpo("atendimentos/abertos")["cliente_nome"], "LINDOMAR SOUZA DOS SANTOS")
@@ -110,6 +116,7 @@ class RomaneioCaixaPelaPorta(unittest.TestCase):
     def test_v1931_nome_completo_nao_acha_tenta_primeiro_e_ultimo(self):
         _pedido_com_cliente(codigo="", nome="Márcio Costa de Araujo")
         porta = PortaFalsa()
+        porta.buscar = {"ok": False, "erro": "busca fora"}
         original = porta.__call__
 
         def so_no_curto(rota, corpo, escrita=False):
@@ -253,6 +260,114 @@ class CadastroPelaPorta(unittest.TestCase):
         self.assertEqual(porta.corpo("cliente/credito")["situacao_credito"], "1")
 
 
+ENVIO_ML = {"receiver_address": {
+    "street_name": "Avenida Maranhão", "street_number": "915", "comment": "Casa 2",
+    "neighborhood": {"name": "Zona 01"}, "zip_code": "86870-250",
+    "city": {"name": "Ivaiporã"}, "state": {"id": "BR-PR", "name": "Paraná"}}}
+
+
+def _pedido_ml_com_envio(codigo="", documento="06278073994", nome="Thaynara Cristina Silva"):
+    gravar_como_admin([linha(PEDIDO, "0893764272", Marketplace="MERCADO LIVRE", ShipmentIdMercadoLivre="48263508506")])
+    S.salvar_cliente_fiscal(PEDIDO, documento, nome, linx_cliente=codigo, fonte="teste", usuario="teste")
+
+
+class CadastroV1932(unittest.TestCase):
+    """Contrato real do Guilherme (15/10): buscar → criar → atualizar com nome e endereço."""
+
+    def setUp(self):
+        reiniciar_banco()
+
+    def _rodar(self, porta, envio=ENVIO_ML):
+        with mock.patch.object(S, "_exp_porta", side_effect=porta), mock.patch.object(S, "EXP_CADASTRO_API", True), \
+                mock.patch.object(S, "ml_api_get", return_value=envio) as ml:
+            r = S.exp_cadastro_atualizar(PEDIDO, "luis")
+        return r, ml
+
+    def test_endereco_vem_dos_dados_do_envio_sem_acento(self):
+        _pedido_ml_com_envio(codigo="83020")
+        porta = PortaFalsa()
+        r, ml = self._rodar(porta)
+        self.assertTrue(r["ok"], r)
+        ml.assert_called_once_with("/shipments/48263508506")
+        self.assertEqual(porta.corpo("cliente/atualizar")["endereco"], {
+            "rua": "AVENIDA MARANHAO", "numero": "915", "complemento": "CASA 2", "bairro": "ZONA 01",
+            "cep": "86870250", "cidade": "IVAIPORA", "uf": "PR"})
+
+    def test_celular_padrao_e_o_que_a_criacao_aceita(self):
+        _pedido_ml_com_envio(codigo="83020")
+        porta = PortaFalsa()
+        self._rodar(porta)
+        corpo = porta.corpo("cliente/atualizar")
+        self.assertGreaterEqual(corpo["celular"], 900000000)
+        self.assertEqual(corpo["email"], "lojavirtual@noromak.com.br")
+
+    def test_sem_codigo_busca_pelo_cpf_e_nao_cria_quem_existe(self):
+        _pedido_ml_com_envio()
+        porta = PortaFalsa()
+        r, _ = self._rodar(porta)
+        self.assertEqual(r["cliente"], "83020")
+        self.assertEqual(porta.corpo("cliente/buscar")["documento"], "06278073994")
+        self.assertNotIn("cliente/criar", porta.rotas())
+        self.assertEqual(S._exp_cliente_do_pedido(PEDIDO)["codigo"], "83020")  # guardado
+
+    def test_nao_cadastrado_cria_com_endereco_e_depois_atualiza(self):
+        _pedido_ml_com_envio()
+        porta = PortaFalsa()
+        porta.buscar = {"ok": True, "situacao": "nao_cadastrado"}
+        r, _ = self._rodar(porta)
+        self.assertEqual(r["situacao"], "criado")
+        self.assertEqual(r["cliente"], "99001")
+        criar = porta.corpo("cliente/criar")
+        self.assertEqual(criar["nome"], "THAYNARA CRISTINA SILVA")
+        self.assertEqual(criar["endereco"]["cep"], "86870250")
+        self.assertNotIn("telefone", criar)  # fixo é opcional na criação
+        self.assertEqual(porta.corpo("cliente/atualizar")["cliente"], 99001)
+
+    def test_nao_cadastrado_sem_endereco_inteiro_nao_cria(self):
+        _pedido_ml_com_envio()
+        porta = PortaFalsa()
+        porta.buscar = {"ok": True, "situacao": "nao_cadastrado"}
+        sem_bairro = {"receiver_address": dict(ENVIO_ML["receiver_address"], neighborhood={})}
+        r, _ = self._rodar(porta, envio=sem_bairro)
+        self.assertEqual(r["situacao"], "sem_endereco")
+        self.assertIn("bairro", r["error"])
+        self.assertNotIn("cliente/criar", porta.rotas())
+
+    def test_cliente_existente_sem_endereco_inteiro_atualiza_o_resto_e_avisa(self):
+        _pedido_ml_com_envio(codigo="83020")
+        porta = PortaFalsa()
+        r, _ = self._rodar(porta, envio={"receiver_address": {"street_name": "Rua X"}})
+        self.assertTrue(r["ok"])
+        self.assertNotIn("endereco", porta.corpo("cliente/atualizar"))
+        self.assertTrue(any("Endereço não enviado" in a for a in r["avisos"]))
+
+    def test_mais_de_um_cliente_devolve_a_lista_e_nao_escolhe(self):
+        _pedido_ml_com_envio()
+        porta = PortaFalsa()
+        porta.buscar = {"ok": True, "situacao": "mais_de_um", "clientes": [{"cliente": 1}, {"cliente": 2}]}
+        r, _ = self._rodar(porta)
+        self.assertEqual(r["situacao"], "mais_de_um")
+        self.assertEqual(len(r["lista"]), 2)
+        self.assertNotIn("cliente/atualizar", porta.rotas())
+
+    def test_busca_que_falha_nunca_vira_nao_cadastrado(self):
+        _pedido_ml_com_envio()
+        porta = PortaFalsa()
+        porta.buscar = {"ok": False, "erro": "Apollo fora"}
+        r, _ = self._rodar(porta)
+        self.assertFalse(r["ok"])
+        self.assertNotIn("cliente/criar", porta.rotas())
+
+    def test_romaneio_sem_codigo_acha_pelo_cpf(self):
+        _pedido_ml_com_envio()
+        porta = PortaFalsa()
+        with mock.patch.object(S, "_exp_porta", side_effect=porta):
+            d = S.exp_romaneio_preparar(PEDIDO)
+        self.assertEqual(d["cliente"]["codigo"], "83020")
+        self.assertIn("cliente/situacao", porta.rotas())  # nome do Apollo, não o da NF-e
+        self.assertEqual(d["escolhido"], "787601")
+
+
 class _PortaHttp(BaseHTTPRequestHandler):
     def do_POST(self):
         self.server.chave = self.headers.get("X-Chave-Expedicao")
@@ -302,7 +417,8 @@ class Rotas(unittest.TestCase):
             status, d = admin.pedir("POST", "/api/expedicao-apollo/romaneio/soltar",
                                     {"pedido": PEDIDO, "atendimento": "787601", "observacao": "SHOPEE"})
             self.assertEqual(status, 200, d)
-            status, d = admin.pedir("POST", "/api/expedicao-apollo/cadastro", {"pedido": PEDIDO})
+            with mock.patch.object(S, "EXP_CADASTRO_API", False):
+                status, d = admin.pedir("POST", "/api/expedicao-apollo/cadastro", {"pedido": PEDIDO})
         self.assertEqual(status, 409)
         self.assertEqual(d["situacao"], "desligado")
 

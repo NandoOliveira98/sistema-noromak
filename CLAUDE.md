@@ -931,6 +931,18 @@ código do cliente** (sem ele UF vazia → Erro 2619), a **condição de pagamen
 fica **desligado** (`EXP_CADASTRO_API=0`) até a porta ter `cliente/buscar`, `cliente/criar`, nome e
 Endereço 1; manda e-mail + telefone + celular juntos (sem telefone o Apollo recusa). O romaneio antigo
 pela Smart API (`linx_romaneio_confirmar`) ficou sem botão. Teste: `TESTES/test_expedicao_apollo_v1930.py`.
+**V19.32 — cadastro pela porta (ligado; `EXP_CADASTRO_API=0` desliga).** Contrato real do Guilherme (15/10):
+`cliente/buscar` (CPF/CNPJ → `encontrado`/`nao_cadastrado`/`mais_de_um`; falha = `ok:false`, nunca "não
+cadastrado"), `cliente/criar` (nome, e-mail, celular de **9 dígitos começando com 9**, `endereco` inteiro;
+`ja_cadastrado` se já existe) e `cliente/atualizar` com `nome` + `endereco` (`EnderecoUm`: rua, numero,
+complemento, bairro, cep, cidade, uf — **tudo ou nada**); campo desconhecido = 422. Decisões do dono:
+endereço = **Dados do envio** (`exp_endereco_entrega`: `/shipments/{ShipmentIdMercadoLivre}` com a conta do
+pedido; só ML por enquanto), e-mail e celular **padrão para todos** (`EXP_CELULAR_PADRAO` = 11 999999999, o
+111111111 é recusado na criação; o fixo 11 111111111 só vai no atualizar). A **cidade** fica com a grafia
+do cadastro de CEP do Apollo (ele recusa a nossa se diferir) — a resposta diz como ficou. O romaneio, sem o
+código, usa o `cliente/buscar` (exato) e só depois o nome. Botão "Linx" do Admin = `pdExpCadastroV1932`
+(sem nome/CPF da NF-e guardados cai na extensão); extensão **0.31**: o ✏️ do ML abre `romaneio-api.html?funcao=cadastro`
+(nome/CPF lidos na venda vão por mensagem e o servidor guarda em `cliente_fiscal` antes).
 
 ### Vínculo MLB ↔ SKU
 Banco canônico `ml_sku_mlb_links_v1`, com seed em `DADOS/ml_sku_mlb_links_seed.json`.

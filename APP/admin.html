@@ -5147,6 +5147,31 @@ async function pdClienteLinxV1785(botao){
   }catch(e){alert(`Não consegui buscar os dados da NF-e do pedido ${pedido}: ${e.message}`)}
   finally{botao.disabled=false;botao.textContent=rotulo}
 }
+/* V19.32 — botão "Linx" grava o cadastro pela PORTA da Expedição (sem extensão):
+   busca pelo CPF → cria se não existir (endereço = Dados do envio do ML) → nome,
+   e-mail, telefone/celular padrão e endereço → crédito. Sem o nome/CPF da NF-e
+   guardados, cai na extensão (é ela que lê "Dados para a NF-e" no ML). */
+async function pdExpCadastroV1932(botao){
+  const pedido=String(botao?.dataset?.pedido||"").trim();if(!pedido)return;
+  let d;
+  try{d=await mlApiAdmin(`/expedicao/api/cliente-fiscal?pedido=${encodeURIComponent(pedido)}`);}
+  catch(e){alert(`Não consegui buscar os dados da NF-e do pedido ${pedido}: ${e.message}`);return;}
+  const doc=(d.documento&&d.documento.numero)||"",nome=d.nome_fiscal||"";
+  if(!doc||!nome){
+    if(document.documentElement.dataset.noromakLinx){alert("Este pedido ainda não tem nome/CPF da NF-e. Abrindo a extensão para ler na venda.");return pdClienteLinxV1785(botao);}
+    alert("Este pedido ainda não tem nome/CPF da NF-e. Use o ✏️ na página da venda do ML (extensão) para ler e gravar.");return;
+  }
+  if(!await nkConfirmar(`Atualizar o cliente no Apollo?\n\nPedido ${pedido}\nNome: ${nome.toUpperCase()}\n${(d.documento&&d.documento.tipo)||"CPF"}: ${doc}\nE-mail: lojavirtual@noromak.com.br\nTelefone/celular: padrão\nEndereço: Dados do envio da venda (sem acento)\nCrédito: 1 · Crédito normal\n\nSe o cliente não existir no Apollo, ele é criado.`))return;
+  const rotulo=botao.innerHTML;botao.disabled=true;botao.textContent="Gravando…";
+  try{
+    const r=await mlApiAdmin("/expedicao/api/expedicao-apollo/cadastro",{method:"POST",body:JSON.stringify({pedido})});
+    carregarClientesFiscaisV1786();
+    const cred={liberado:"crédito liberado",ja_liberado:"crédito já estava liberado",bloqueado_pelo_financeiro:"⚠️ crédito BLOQUEADO pelo financeiro"}[r.credito]||`crédito: ${r.credito||"—"}`;
+    alert(`✅ Cliente ${r.cliente} ${r.situacao==="criado"?"CRIADO":"atualizado"} no Apollo · ${cred}`+
+      (r.cidade_apollo?`\nCidade no Apollo: ${r.cidade_apollo}`:"")+((r.avisos||[]).length?`\n\n${r.avisos.join("\n")}`:""));
+  }catch(e){alert("❌ Cadastro: "+e.message);}
+  finally{botao.disabled=false;botao.innerHTML=rotulo;}
+}
 
 /* ===== V17.83 — O que vendeu no período =====
    A agregação vem pronta do servidor (/api/vendas), que é a única camada capaz
@@ -5247,7 +5272,7 @@ function renderPedidosDiaV1779(){
  corpo.innerHTML=rows.map((x,i)=>{
    const f=x.first, unidades=x.e.linhas.reduce((s,r)=>s+(Number(r.Quantidade)||0),0)||Number(x.e.conf?.qtdUnidades||0), itens=x.e.linhas.length||Number(x.e.conf?.qtdItens||0), id=`pdDet${i}`;
    const detalhes=x.e.linhas.length?x.e.linhas.map(r=>`${htmlSeguroBanco(r.SKU||"—")} — ${htmlSeguroBanco(r.Descrição||"")} — Qtd. ${Number(r.Quantidade)||0}`).join("<br>"):"Dados dos itens preservados no histórico de conferência.";
-   return `<tr><td><b>${htmlSeguroBanco(x.e.pedido)}</b><div id="${id}" class="v1779-detail">${detalhes}</div></td><td>${htmlSeguroBanco(f.Contato||f.TelefoneShopee||"—")}</td><td><span class="v1779-badge ${x.status==="conferido"?"v1779-ok":"v1779-wait"}">${labels[x.status]}</span></td><td>${x.status==="cancelado"?"SIM":"—"}</td><td>${htmlSeguroBanco(f["NF Status"]||f.NFStatus||(f.NF||f["Nota Fiscal"]?"Com NF":"—"))}</td><td>${pdCodClienteV1786(x.e.pedido,f)}</td><td>${htmlSeguroBanco(x.dp||"—")}</td><td>${htmlSeguroBanco(x.dc instanceof Date?x.dc.toLocaleString("pt-BR"):x.dc||"—")}</td><td>${pdCelulaClienteV1786(x.e.pedido,f)}</td><td>${htmlSeguroBanco(f["Cód.Usu."]||f.CodigoUsuario||"—")}</td><td>${htmlSeguroBanco(f.Usuario||f.ConferidoPor||"—")}</td><td>${htmlSeguroBanco(x.marketplace)}</td><td>${itens} / ${unidades}</td><td><div class="v1779-actions"><button data-pedido="${htmlSeguroBanco(x.e.pedido)}" title="Atualizar o cadastro deste cliente no Linx" onclick="pdClienteLinxV1785(this)">Cliente</button><button data-pedido="${htmlSeguroBanco(x.e.pedido)}" title="Romaneio e envio ao caixa (Apollo)" onclick="pdExpRomaneioV1930(this)">Romaneio</button><button onclick="pdDetalhesV1779('${id}')">Detalhes</button></div></td></tr>`;
+   return `<tr><td><b>${htmlSeguroBanco(x.e.pedido)}</b><div id="${id}" class="v1779-detail">${detalhes}</div></td><td>${htmlSeguroBanco(f.Contato||f.TelefoneShopee||"—")}</td><td><span class="v1779-badge ${x.status==="conferido"?"v1779-ok":"v1779-wait"}">${labels[x.status]}</span></td><td>${x.status==="cancelado"?"SIM":"—"}</td><td>${htmlSeguroBanco(f["NF Status"]||f.NFStatus||(f.NF||f["Nota Fiscal"]?"Com NF":"—"))}</td><td>${pdCodClienteV1786(x.e.pedido,f)}</td><td>${htmlSeguroBanco(x.dp||"—")}</td><td>${htmlSeguroBanco(x.dc instanceof Date?x.dc.toLocaleString("pt-BR"):x.dc||"—")}</td><td>${pdCelulaClienteV1786(x.e.pedido,f)}</td><td>${htmlSeguroBanco(f["Cód.Usu."]||f.CodigoUsuario||"—")}</td><td>${htmlSeguroBanco(f.Usuario||f.ConferidoPor||"—")}</td><td>${htmlSeguroBanco(x.marketplace)}</td><td>${itens} / ${unidades}</td><td><div class="v1779-actions"><button data-pedido="${htmlSeguroBanco(x.e.pedido)}" title="Atualizar o cadastro deste cliente no Linx" onclick="pdExpCadastroV1932(this)">Cliente</button><button data-pedido="${htmlSeguroBanco(x.e.pedido)}" title="Romaneio e envio ao caixa (Apollo)" onclick="pdExpRomaneioV1930(this)">Romaneio</button><button onclick="pdDetalhesV1779('${id}')">Detalhes</button></div></td></tr>`;
  }).join("")||'<tr><td colspan="14" style="text-align:center;padding:25px;color:#586A7D">Nenhum pedido encontrado para os filtros selecionados.</td></tr>';
  v151Set("pdResumo",`${rows.length} pedido(s) exibido(s)`);
 }
@@ -6513,7 +6538,7 @@ function renderizarPedidosAdmin(){
         const kitResumo=textoKitBanco(item)?`<span class="kit-badge">KIT</span> ${htmlSeguroBanco(textoKitBanco(item))}`:'Item normal';
         const detalhes=`<details class="pedido-detalhes-compactos"><summary>Mais detalhes</summary><div class="pedido-detalhes-grid"><label>Descrição${inp('Descrição','campo-descricao')}</label><label>Rua${inp('Rua')}</label><label>Módulo${inp('Módulo')}</label><label>Prateleira${inp('Prateleira')}</label><label>Nível${inp('Nível')}</label><label>Posição${inp('Posição')}</label><label>Foto${inp('Foto','campo-foto')}</label><div class="pedido-kit-detalhe"><span>${kitResumo}</span><button type="button" class="btn-kit-pedido-editar" onclick="abrirEditorKitPedidoAdmin('${uid}')"><i class=nk-i-pencil></i> Kit</button></div></div></details>`;
         return `<div class="pedido-item-row">
-          <div class="pedido-item-acoes"><button title="Adicionar item" onclick="adicionarItemMesmoPedido('${uid}')">＋</button><button title="Atualizar" onclick="atualizarVendaMercadoLivreAdmin('${uid}',this)">↻</button><button title="Excluir item" class="acao-excluir" onclick="excluirLinhaPedidoAdmin('${uid}')"><i class=nk-i-trash></i></button>${indice===0?`<button type="button" class="acao-linx" data-pedido="${htmlSeguroBanco(pedidoOriginal)}" title="Atualizar o cadastro deste cliente no Linx" onclick="pdClienteLinxV1785(this)">Linx</button><button type="button" class="acao-romaneio" data-pedido="${htmlSeguroBanco(pedidoOriginal)}" title="Romaneio e envio ao caixa (Apollo)" onclick="pdExpRomaneioV1930(this)"><i class=nk-i-file></i></button>`:''}</div>
+          <div class="pedido-item-acoes"><button title="Adicionar item" onclick="adicionarItemMesmoPedido('${uid}')">＋</button><button title="Atualizar" onclick="atualizarVendaMercadoLivreAdmin('${uid}',this)">↻</button><button title="Excluir item" class="acao-excluir" onclick="excluirLinhaPedidoAdmin('${uid}')"><i class=nk-i-trash></i></button>${indice===0?`<button type="button" class="acao-linx" data-pedido="${htmlSeguroBanco(pedidoOriginal)}" title="Atualizar o cadastro deste cliente no Linx" onclick="pdExpCadastroV1932(this)">Linx</button><button type="button" class="acao-romaneio" data-pedido="${htmlSeguroBanco(pedidoOriginal)}" title="Romaneio e envio ao caixa (Apollo)" onclick="pdExpRomaneioV1930(this)"><i class=nk-i-file></i></button>`:''}</div>
           <div class="pedido-item-num">${total>1?`<b>${ehKit?'Componente':'Item'} ${indice+1}/${total}</b>`:''}</div>
           <label class="pedido-item-sku"><span>SKU</span>${skuEditor}</label>
           <label class="pedido-item-qtd"><span>Qtd.</span><input type="number" min="1" data-uidlinha="${uid}" data-campo="Quantidade" value="${htmlSeguroBanco(item.Quantidade||'1')}" onchange="atualizarCampoPedidoAdmin(this)"></label>
