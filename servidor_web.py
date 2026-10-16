@@ -15970,6 +15970,27 @@ def _full_cad_destinatario_json(dado: Any) -> dict[str, Any] | None:
     return None
 
 
+def _full_cad_destinatario_ml(dado: Any) -> dict[str, Any] | None:
+    """Formato REAL de /users/{seller}/invoices/orders/{order} (conferido em 16/10, venda
+    2000018994767276): recipient.name, recipient.address{street_name, street_number,
+    complement, neighborhood, city, zip_code, state}, recipient.identifications{cnpj|cpf, ie, ie_type}."""
+    r = dado.get("recipient") if isinstance(dado, dict) else None
+    if not isinstance(r, dict):
+        return None
+    ids = r.get("identifications") if isinstance(r.get("identifications"), dict) else {}
+    a = r.get("address") if isinstance(r.get("address"), dict) else {}
+    complemento = re.split(r"\s*Refer[eê]ncia\s*:", str(a.get("complement") or ""), flags=re.I)[0]
+    ie_tipo = str(ids.get("ie_type") or "").lower()
+    return {"documento": re.sub(r"\D", "", str(ids.get("cnpj") or ids.get("cpf") or "")),
+            "nome": str(r.get("name") or ""),
+            "ie": str(ids.get("ie") or "") if ie_tipo in ("", "contribuinte") else "",
+            "contribuinte": ie_tipo,
+            "endereco": {"rua": a.get("street_name") or "", "numero": str(a.get("street_number") or ""),
+                         "complemento": complemento, "bairro": a.get("neighborhood") or "",
+                         "cep": re.sub(r"\D", "", str(a.get("zip_code") or "")), "cidade": a.get("city") or "",
+                         "uf": str(a.get("state") or "")[-2:]}}
+
+
 def ml_nota_da_venda(order_id: str) -> dict[str, Any] | None:
     """NF-e que o ML emitiu para a venda (Full). None = nota ainda não disponível."""
     row = ml_integration_row()
@@ -15983,17 +16004,13 @@ def ml_nota_da_venda(order_id: str) -> dict[str, Any] | None:
             return None
         raise
     _full_cad_amostra("nota", dado)
-    xml = _full_cad_procurar_xml(dado)
-    if not xml:
-        nota_id = str((dado.get("id") if isinstance(dado, dict) else "") or "").strip()
-        if nota_id:
-            try:
-                corpo, _ = ml_api_get_bytes(f"/users/{seller}/invoices/{quote(nota_id)}/xml")
-                xml = corpo.decode("utf-8", errors="replace")
-                _full_cad_amostra("xml", xml)
-            except RuntimeError:
-                xml = ""
-    return (nfe_destinatario_do_xml(xml) if xml else None) or _full_cad_destinatario_json(dado)
+    if isinstance(dado, dict) and str(dado.get("status") or "authorized") != "authorized":
+        return None                                  # nota ainda não autorizada
+    nota = _full_cad_destinatario_ml(dado)
+    if not nota:
+        xml = _full_cad_procurar_xml(dado)
+        nota = (nfe_destinatario_do_xml(xml) if xml else None) or _full_cad_destinatario_json(dado)
+    return nota
 
 
 def full_cadastro_atualizar(order_id: str, nota: dict[str, Any], usuario: str = "automatico") -> dict[str, Any]:

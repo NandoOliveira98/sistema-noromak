@@ -33,6 +33,46 @@ def _venda_full(dias_atras=0, anuncio=MLB):
         S.DB.commit()
 
 
+# Resposta REAL da API de notas do ML (16/10, venda 2000018994767276), resumida.
+NOTA_ML = {"id": 7240190018, "status": "authorized",
+           "recipient": {"name": "DIRECOES HIDRAULICAS JOINVILLE LTDA",
+                         "address": {"street_name": "Rua Lindóia", "street_number": "65",
+                                     "complement": "Mecanica Schumacher Referencia: Se a oficina estiver fechada",
+                                     "neighborhood": "Glória", "city": "Joinville", "zip_code": "89216300", "state": "SC"},
+                         "identifications": {"cnpj": "34151586000107", "crt": "simples", "ie": "260148008",
+                                             "ie_type": "contribuinte"}}}
+
+
+class FormatoReal(unittest.TestCase):
+    def setUp(self):
+        reiniciar_banco()
+
+    def test_le_o_recipient_da_api(self):
+        n = S._full_cad_destinatario_ml(NOTA_ML)
+        self.assertEqual((n["documento"], n["ie"]), ("34151586000107", "260148008"))
+        self.assertEqual(n["endereco"]["complemento"], "Mecanica Schumacher")
+        self.assertEqual(n["endereco"]["uf"], "SC")
+
+    def test_nao_contribuinte_vai_sem_ie(self):
+        nota = {**NOTA_ML, "recipient": {**NOTA_ML["recipient"], "identifications": {"cnpj": "34151586000107", "ie": "", "ie_type": "nao_contribuinte"}}}
+        self.assertEqual(S._full_cad_destinatario_ml(nota)["ie"], "")
+
+    def test_nota_nao_autorizada_e_sem_nota(self):
+        with mock.patch.object(S, "ml_api_get", return_value={**NOTA_ML, "status": "processing"}),                 mock.patch.object(S, "ml_integration_row", return_value={"seller_id": "1"}):
+            self.assertIsNone(S.ml_nota_da_venda("1"))
+
+    def test_corpo_do_apollo_com_a_nota_real(self):
+        porta = PortaFalsa()
+        porta.buscar = {"ok": True, "situacao": "encontrado", "cliente": 83065, "nome": "SHC COMPONENTES HIDRAULICOS EI"}
+        with mock.patch.object(S, "_exp_porta", side_effect=porta):
+            r = S.full_cadastro_atualizar("2000018994767276", S._full_cad_destinatario_ml(NOTA_ML))
+        self.assertTrue(r["ok"], r)
+        c = porta.corpo("cliente/atualizar")
+        self.assertEqual(c["nome"], "DIRECOES HIDRAULICAS JOINVILLE LTDA")
+        self.assertEqual((c["endereco"]["rua"], c["endereco"]["bairro"]), ("RUA LINDOIA", "GLORIA"))
+        self.assertEqual((c["categoria"], c["inscricao_estadual"]), (3, "260148008"))
+
+
 class Rodada(unittest.TestCase):
     def setUp(self):
         reiniciar_banco()
