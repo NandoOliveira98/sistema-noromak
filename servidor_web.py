@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.45-CADASTRO-CLIENTES-DO-FULL"
+APP_VERSION = "19.46-CODIGO-COM-HIFEN-NO-ROMANEIO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -15011,6 +15011,9 @@ def exp_romaneio_preparar(pedido: str, atendimento: Any = "", cliente: Any = "")
             return {**saida, "situacao": "erro", "aviso": abertos.get("erro") or "O Apollo não listou os atendimentos."}
         codigos = _linx_codigos_do_pedido(linhas)
         componentes = _exp_componentes_do_pedido(linhas)
+        # V19.46: código com hífen (Schulz "816.3279-0") — o SKU inteiro do anúncio também
+        # vale, senão "124656-816.3279-0" virava "8163279"+"0" e nunca batia.
+        codigos = codigos | set(componentes)
         for a in (abertos.get("atendimentos") or [])[:EXP_MAX_ATENDIMENTOS]:
             prev = _exp_porta("romaneio/previa", {"revenda": EXP_REVENDA, "atendimento": int(a["atendimento"]),
                                                    "operador": "noromak"})

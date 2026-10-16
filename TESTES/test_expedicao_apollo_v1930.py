@@ -585,3 +585,25 @@ class Rotas(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CodigoComHifen(unittest.TestCase):
+    """V19.46: Schulz usa código com hífen ("816.3279-0"). O SKU do anúncio "124656-816.3279-0"
+    era quebrado em todo hífen e nunca batia: "Peça do atendimento diferente do pedido"
+    (pedido real 2000019013311172, 16/10)."""
+
+    def setUp(self):
+        reiniciar_banco()
+
+    def test_codigo_com_hifen_bate(self):
+        gravar_como_admin([linha(PEDIDO, "124656-816.3279-0", Marketplace="MERCADO LIVRE")])
+        S.salvar_cliente_fiscal(PEDIDO, "03201119113", "Anderson Jose da Silva", linx_cliente="83148",
+                                fonte="teste", usuario="teste")
+        porta = PortaFalsa(previa={"ok": True, "itens": [{"codigo": "816.3279-0", "descricao": "CATRACA",
+                                                          "requisitada": 1.0, "a_soltar": 1.0}], "total_a_soltar": 1.0})
+        with mock.patch.object(S, "_exp_porta", side_effect=porta):
+            d = S.exp_romaneio_preparar(PEDIDO)
+        c = d["candidatos"][0]
+        self.assertTrue(c["bate"], c)
+        self.assertEqual(c["faltam"], [])
+        self.assertEqual(d["escolhido"], "787601")
