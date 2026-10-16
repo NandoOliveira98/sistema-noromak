@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.44-CATEGORIA-E-IE-NO-CADASTRO"
+APP_VERSION = "19.45-CADASTRO-CLIENTES-DO-FULL"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -2563,6 +2563,7 @@ def init_db() -> None:
     ensure_linx_operacoes_schema()  # V18.60
     ensure_cadastro_auto_schema()  # V19.41
     ensure_faturamento_schema()  # V19.43
+    ensure_cadastro_full_schema()  # V19.45
     ensure_linx_robo_schema()  # V18.60
     ean_overrides_vazios_migrar_v1915()  # V19.15
     ensure_saude_schema()  # V18.83
@@ -15800,6 +15801,387 @@ def faturamento_executar(pedido: str, usuario: str, condicao_ok: bool = False) -
 
 
 # ---------------------------------------------------------------------------
+# V19.45 — Cadastro do cliente das vendas do FULL (decisões do dono, 16/10).
+# Venda Full não passa pela fila (V18.78), mas a integração ML → Apollo cria o cliente
+# com o nome da CONTA do comprador ("Premium Flex") em vez da razão social da nota
+# ("M2 SOLUCOES GRAFICAS LTDA"). No Full quem emite a NF-e é o próprio ML (série 2), em
+# nome da Noromak: os dados certos estão na nota. Regras (as mesmas do automático):
+#   - NUNCA cria cliente: acha pelo CPF/CNPJ exato e só atualiza (nome, endereço sem
+#     acento, e-mail/telefones padrão, categoria e I.E. da nota). Mais de um = não mexe.
+#   - vendas Full dos últimos 30 dias: as de até 2 dias a qualquer hora; as mais antigas
+#     só à noite (21h–6h), devagar, para não pesar na porta do Guilherme;
+#   - nota ainda não disponível ou cliente fora do Apollo: tenta de hora em hora por 1
+#     dia; depois fica "sem nota" / "não encontrado" na lista do cartão (corrige à mão);
+#   - interruptor próprio, começa desligado; a 1ª resposta da API de notas fica guardada
+#     (cadastro_full_amostra_v1945) para conferir os campos antes de ligar.
+# Venda Full = anúncio com logística fulfillment (ml_estoque_dia_v1872) e que não passou
+# pela expedição (não está em completed_orders). Só Araçatuba por enquanto.
+# ---------------------------------------------------------------------------
+FULL_CAD_DIAS = 30
+FULL_CAD_RECENTE_DIAS = 2
+FULL_CAD_INTERVALO = 3600          # 1 h entre tentativas da mesma venda
+FULL_CAD_JANELA = 86400            # 1 dia tentando
+FULL_CAD_POR_RODADA = 4
+FULL_CAD_FINAIS = ("feito", "sem_nota", "nao_encontrado", "mais_de_um", "erro")
+
+
+def ensure_cadastro_full_schema() -> None:
+    with DB_LOCK:
+        DB.executescript(
+            """CREATE TABLE IF NOT EXISTS cadastro_full_v1945 (
+                   order_id TEXT PRIMARY KEY,
+                   inicio_epoch REAL NOT NULL DEFAULT 0,
+                   ultima_epoch REAL NOT NULL DEFAULT 0,
+                   tentativas INTEGER NOT NULL DEFAULT 0,
+                   situacao TEXT NOT NULL DEFAULT 'aguardando',
+                   detalhe TEXT NOT NULL DEFAULT '',
+                   documento TEXT NOT NULL DEFAULT '',
+                   nome TEXT NOT NULL DEFAULT '',
+                   cliente TEXT NOT NULL DEFAULT '',
+                   venda_dia TEXT NOT NULL DEFAULT '',
+                   atualizado_em TEXT NOT NULL DEFAULT ''
+               );
+               CREATE TABLE IF NOT EXISTS cadastro_full_config_v1945 (
+                   id INTEGER PRIMARY KEY CHECK (id = 1),
+                   ligado INTEGER NOT NULL DEFAULT 0,
+                   ligado_em TEXT NOT NULL DEFAULT '',
+                   por TEXT NOT NULL DEFAULT ''
+               );
+               CREATE TABLE IF NOT EXISTS cadastro_full_amostra_v1945 (
+                   tipo TEXT PRIMARY KEY,
+                   recebido_em TEXT NOT NULL,
+                   corpo TEXT NOT NULL
+               );"""
+        )
+        DB.commit()
+
+
+def cadastro_full_config() -> dict[str, Any]:
+    with DB_LOCK:
+        row = DB.execute("SELECT ligado, ligado_em, por FROM cadastro_full_config_v1945 WHERE id=1").fetchone()
+    return {"ligado": bool(row and row["ligado"]), "ligado_em": (row["ligado_em"] if row else ""),
+            "por": (row["por"] if row else "")}
+
+
+def cadastro_full_ligar(ligado: bool, usuario: str) -> dict[str, Any]:
+    with DB_LOCK:
+        DB.execute(
+            """INSERT INTO cadastro_full_config_v1945(id, ligado, ligado_em, por) VALUES(1,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET ligado=excluded.ligado, ligado_em=excluded.ligado_em, por=excluded.por""",
+            (1 if ligado else 0, now_iso() if ligado else "", str(usuario or "")[:80]),
+        )
+        DB.commit()
+    audit(usuario, "expedicao.cadastro_full", "ligado" if ligado else "desligado")
+    return {"ok": True, **cadastro_full_config()}
+
+
+def _full_cad_amostra(tipo: str, corpo: Any) -> None:
+    with DB_LOCK:
+        DB.execute("INSERT OR IGNORE INTO cadastro_full_amostra_v1945(tipo, recebido_em, corpo) VALUES(?,?,?)",
+                   (tipo, now_iso(), (corpo if isinstance(corpo, str) else json.dumps(corpo, ensure_ascii=False))[:60000]))
+        DB.commit()
+
+
+def _nfe_tag(no: Any, nome: str) -> str:
+    """Texto do 1º filho com esse nome (ignora o namespace da NF-e)."""
+    if no is None:
+        return ""
+    for el in no.iter():
+        if str(el.tag).rsplit("}", 1)[-1] == nome:
+            return str(el.text or "").strip()
+    return ""
+
+
+def _nfe_bloco(raiz: Any, nome: str) -> Any:
+    for el in raiz.iter():
+        if str(el.tag).rsplit("}", 1)[-1] == nome:
+            return el
+    return None
+
+
+def nfe_destinatario_do_xml(xml: str) -> dict[str, Any] | None:
+    """Destinatário da NF-e (layout nacional: dest/CNPJ|CPF, xNome, IE, indIEDest, enderDest)."""
+    import xml.etree.ElementTree as ET
+    try:
+        raiz = ET.fromstring(xml.encode("utf-8") if isinstance(xml, str) else xml)
+    except ET.ParseError:
+        return None
+    dest = _nfe_bloco(raiz, "dest")
+    if dest is None:
+        return None
+    end = _nfe_bloco(dest, "enderDest")
+    numero = _nfe_tag(end, "nro")
+    return {
+        "documento": re.sub(r"\D", "", _nfe_tag(dest, "CNPJ") or _nfe_tag(dest, "CPF")),
+        "nome": _nfe_tag(dest, "xNome"),
+        "ie": _nfe_tag(dest, "IE"),
+        "contribuinte": _nfe_tag(dest, "indIEDest"),
+        "endereco": {"rua": _nfe_tag(end, "xLgr"), "numero": "" if numero.upper() in ("SN", "S/N", "0") else numero,
+                     "complemento": _nfe_tag(end, "xCpl"), "bairro": _nfe_tag(end, "xBairro"),
+                     "cep": re.sub(r"\D", "", _nfe_tag(end, "CEP")), "cidade": _nfe_tag(end, "xMun"),
+                     "uf": _nfe_tag(end, "UF")},
+    }
+
+
+def _full_cad_procurar_xml(dado: Any, profundidade: int = 0) -> str:
+    """Leitura tolerante: a resposta da API de notas pode trazer o XML inteiro em algum campo."""
+    if profundidade > 6:
+        return ""
+    if isinstance(dado, str):
+        return dado if "<dest" in dado or "<nfeProc" in dado else ""
+    itens = dado.values() if isinstance(dado, dict) else dado if isinstance(dado, list) else []
+    for v in itens:
+        achado = _full_cad_procurar_xml(v, profundidade + 1)
+        if achado:
+            return achado
+    return ""
+
+
+def _full_cad_destinatario_json(dado: Any) -> dict[str, Any] | None:
+    """Reserva: destinatário em JSON (nomes de campo a confirmar na amostra)."""
+    if not isinstance(dado, dict):
+        return None
+    for chave in ("receiver", "recipient", "destinatario", "buyer", "customer"):
+        d = dado.get(chave)
+        if isinstance(d, dict):
+            ident = d.get("identification") if isinstance(d.get("identification"), dict) else {}
+            doc = re.sub(r"\D", "", str(d.get("document") or ident.get("number") or d.get("doc_number") or ""))
+            nome = str(d.get("name") or d.get("business_name") or d.get("legal_name") or "")
+            a = d.get("address") if isinstance(d.get("address"), dict) else {}
+            if doc and nome:
+                return {"documento": doc, "nome": nome, "ie": str(d.get("state_registration") or d.get("ie") or ""),
+                        "contribuinte": "",
+                        "endereco": {"rua": a.get("street_name") or a.get("street") or "", "numero": str(a.get("street_number") or a.get("number") or ""),
+                                     "complemento": a.get("comment") or a.get("complement") or "",
+                                     "bairro": (a.get("neighborhood") or {}).get("name") if isinstance(a.get("neighborhood"), dict) else a.get("neighborhood") or "",
+                                     "cep": re.sub(r"\D", "", str(a.get("zip_code") or "")),
+                                     "cidade": (a.get("city") or {}).get("name") if isinstance(a.get("city"), dict) else a.get("city") or "",
+                                     "uf": str(((a.get("state") or {}).get("id") if isinstance(a.get("state"), dict) else a.get("state")) or "").split("-")[-1]}}
+    for v in dado.values():
+        if isinstance(v, dict):
+            achado = _full_cad_destinatario_json(v)
+            if achado:
+                return achado
+        elif isinstance(v, list):
+            for x in v:
+                achado = _full_cad_destinatario_json(x)
+                if achado:
+                    return achado
+    return None
+
+
+def _full_cad_destinatario_ml(dado: Any) -> dict[str, Any] | None:
+    """Formato REAL de /users/{seller}/invoices/orders/{order} (conferido em 16/10, venda
+    2000018994767276): recipient.name, recipient.address{street_name, street_number,
+    complement, neighborhood, city, zip_code, state}, recipient.identifications{cnpj|cpf, ie, ie_type}."""
+    r = dado.get("recipient") if isinstance(dado, dict) else None
+    if not isinstance(r, dict):
+        return None
+    ids = r.get("identifications") if isinstance(r.get("identifications"), dict) else {}
+    a = r.get("address") if isinstance(r.get("address"), dict) else {}
+    complemento = re.split(r"\s*Refer[eê]ncia\s*:", str(a.get("complement") or ""), flags=re.I)[0]
+    ie_tipo = str(ids.get("ie_type") or "").lower()
+    return {"documento": re.sub(r"\D", "", str(ids.get("cnpj") or ids.get("cpf") or "")),
+            "nome": str(r.get("name") or ""),
+            "ie": str(ids.get("ie") or "") if ie_tipo in ("", "contribuinte") else "",
+            "contribuinte": ie_tipo,
+            "endereco": {"rua": a.get("street_name") or "", "numero": str(a.get("street_number") or ""),
+                         "complemento": complemento, "bairro": a.get("neighborhood") or "",
+                         "cep": re.sub(r"\D", "", str(a.get("zip_code") or "")), "cidade": a.get("city") or "",
+                         "uf": str(a.get("state") or "")[-2:]}}
+
+
+def ml_nota_da_venda(order_id: str) -> dict[str, Any] | None:
+    """NF-e que o ML emitiu para a venda (Full). None = nota ainda não disponível."""
+    row = ml_integration_row()
+    seller = str(row["seller_id"] if row else "").strip()
+    if not seller:
+        raise RuntimeError("Mercado Livre sem conta conectada.")
+    try:
+        dado = ml_api_get(f"/users/{seller}/invoices/orders/{quote(str(order_id))}")
+    except RuntimeError as exc:
+        if "HTTP 404" in str(exc):
+            return None
+        raise
+    _full_cad_amostra("nota", dado)
+    if isinstance(dado, dict) and str(dado.get("status") or "authorized") != "authorized":
+        return None                                  # nota ainda não autorizada
+    nota = _full_cad_destinatario_ml(dado)
+    if not nota:
+        xml = _full_cad_procurar_xml(dado)
+        nota = (nfe_destinatario_do_xml(xml) if xml else None) or _full_cad_destinatario_json(dado)
+    return nota
+
+
+def full_cadastro_atualizar(order_id: str, nota: dict[str, Any], usuario: str = "automatico") -> dict[str, Any]:
+    """Atualiza no Apollo o cliente da venda Full com os dados da nota. NUNCA cria."""
+    documento = re.sub(r"\D", "", str(nota.get("documento") or ""))
+    nome = _exp_limpo(nota.get("nome"))[:70]
+    if len(documento) not in (11, 14) or not nome:
+        return {"ok": False, "situacao": "erro", "error": "Nota sem CPF/CNPJ ou nome do destinatário."}
+    e = nota.get("endereco") or {}
+    endereco = {"rua": _exp_limpo(e.get("rua"))[:120], "numero": str(e.get("numero") or "").strip()[:10],
+                "complemento": _exp_limpo(e.get("complemento"))[:60], "bairro": _exp_limpo(e.get("bairro"))[:50],
+                "cep": re.sub(r"\D", "", str(e.get("cep") or "")), "cidade": _exp_limpo(e.get("cidade"))[:50],
+                "uf": _exp_limpo(e.get("uf"))[:2]}
+    avisos: list[str] = []
+    if any(not endereco[k] for k in ("rua", "bairro", "cep", "cidade", "uf")):
+        endereco = None
+        avisos.append("Endereço da nota incompleto: não enviado.")
+    elif not endereco["complemento"]:
+        del endereco["complemento"]
+    ie = re.sub(r"\D", "", str(nota.get("ie") or ""))
+    # Categoria pela nota (V19.44): CPF 1; CNPJ com I.E. 3; CNPJ sem I.E. 2 + ISENTO.
+    if len(documento) == 11:
+        fiscal: dict[str, Any] = {"categoria": 1}
+    elif ie:
+        fiscal = {"categoria": 3, "inscricao_estadual": ie[:20]}
+    else:
+        fiscal = {"categoria": 2, "inscricao_estadual": "ISENTO"}
+    operador = usuario[:60] or "noromak"
+    with EXP_PORTA_LOCK:
+        try:
+            b = exp_buscar_cliente(documento, operador)
+            if b["situacao"] == "mais_de_um":
+                return {"ok": False, "situacao": "mais_de_um", "error": "Mais de um cliente com este CPF/CNPJ no Apollo."}
+            if b["situacao"] != "encontrado" or not b["cliente"]:
+                return {"ok": False, "situacao": "nao_cadastrado", "error": "Cliente ainda não está no Apollo."}
+            codigo = b["cliente"]
+            corpo = {"revenda": EXP_REVENDA, "cliente": int(codigo), "documento": documento, "operador": operador,
+                     "email": LINX_CADASTRO_EMAIL, "ddd_telefone": LINX_CADASTRO_DDD, "telefone": LINX_CADASTRO_TELEFONE,
+                     "ddd_celular": LINX_CADASTRO_DDD, "celular": EXP_CELULAR_PADRAO, "nome": nome, **fiscal}
+            if endereco:
+                corpo["endereco"] = endereco
+            at = _exp_porta("cliente/atualizar", corpo, escrita=True)
+        except PortaErro as exc:
+            return {"ok": False, "situacao": "erro", "error": str(exc)}
+    if at.get("situacao") != "atualizado":
+        return {"ok": False, "situacao": "erro", "cliente": codigo, "error": at.get("erro") or "O Apollo não confirmou."}
+    avisos += [str(x) for x in (at.get("avisos") or [])]
+    audit(usuario, "expedicao.cadastro_full", f"{order_id}|{codigo}|{b.get('nome', '')[:40]} -> {nome[:40]}")
+    return {"ok": True, "situacao": "atualizado", "cliente": codigo, "nome": nome, "nome_antes": b.get("nome", ""),
+            "avisos": avisos}
+
+
+def _full_cad_vendas(hoje: date | None = None) -> list[dict[str, str]]:
+    """Vendas Full (Araçatuba) dos últimos 30 dias que não passaram pela expedição."""
+    hoje = hoje or datetime.now(BR_TZ).date()
+    desde = (hoje - timedelta(days=FULL_CAD_DIAS)).isoformat()
+    with DB_LOCK:
+        full = {r["item_id"] for r in DB.execute(
+            "SELECT DISTINCT item_id FROM ml_estoque_dia_v1872 WHERE logistica='fulfillment' AND dia >= ?",
+            ((hoje - timedelta(days=FULL_CAD_DIAS + 7)).isoformat(),)).fetchall()}
+        vendas = DB.execute(
+            "SELECT order_id, MIN(sale_day) AS dia, GROUP_CONCAT(DISTINCT anuncio) AS anuncios FROM vendas_v1799 "
+            "WHERE marketplace='ml' AND sale_day >= ? GROUP BY order_id ORDER BY dia DESC", (desde,)).fetchall()
+        concluidos = {r["order_id"] for r in DB.execute("SELECT order_id FROM completed_orders").fetchall()}
+    saida = []
+    for v in vendas:
+        anuncios = set(str(v["anuncios"] or "").split(","))
+        if anuncios & full and v["order_id"] not in concluidos:
+            saida.append({"order_id": str(v["order_id"]), "dia": str(v["dia"])})
+    return saida
+
+
+def _full_cad_registrar(order_id: str, dia: str, inicio: float, agora: float, tentativas: int, situacao: str,
+                        detalhe: str, documento: str = "", nome: str = "", cliente: str = "") -> None:
+    with DB_LOCK:
+        DB.execute(
+            """INSERT INTO cadastro_full_v1945(order_id,inicio_epoch,ultima_epoch,tentativas,situacao,detalhe,documento,nome,cliente,venda_dia,atualizado_em)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(order_id) DO UPDATE SET ultima_epoch=excluded.ultima_epoch, tentativas=excluded.tentativas,
+                   situacao=excluded.situacao, detalhe=excluded.detalhe,
+                   documento=CASE WHEN excluded.documento<>'' THEN excluded.documento ELSE cadastro_full_v1945.documento END,
+                   nome=CASE WHEN excluded.nome<>'' THEN excluded.nome ELSE cadastro_full_v1945.nome END,
+                   cliente=CASE WHEN excluded.cliente<>'' THEN excluded.cliente ELSE cadastro_full_v1945.cliente END,
+                   atualizado_em=excluded.atualizado_em""",
+            (order_id, inicio, agora, tentativas, situacao, str(detalhe or "")[:400], documento, nome[:120], cliente, dia, now_iso()),
+        )
+        DB.commit()
+
+
+def cadastro_full_rodada(agora: float | None = None, esperar=None, hoje: date | None = None) -> dict[str, int]:
+    cfg = cadastro_full_config()
+    contagem: dict[str, int] = {}
+    if not cfg["ligado"] or not EXP_CADASTRO_API:
+        return contagem
+    agora = float(agora if agora is not None else time.time())
+    hoje = hoje or datetime.fromtimestamp(agora, BR_TZ).date()
+    hora = datetime.fromtimestamp(agora, BR_TZ).hour
+    noite = hora >= 21 or hora < 6
+    recente = (hoje - timedelta(days=FULL_CAD_RECENTE_DIAS)).isoformat()
+    with DB_LOCK:
+        estados = {r["order_id"]: dict(r) for r in DB.execute("SELECT * FROM cadastro_full_v1945").fetchall()}
+    feitos = 0
+    for v in _full_cad_vendas(hoje):
+        e = estados.get(v["order_id"]) or {}
+        if e.get("situacao") in FULL_CAD_FINAIS:
+            continue
+        if e.get("ultima_epoch") and agora - float(e["ultima_epoch"]) < FULL_CAD_INTERVALO:
+            continue
+        if v["dia"] < recente and not noite:          # antigas só à noite
+            continue
+        if feitos >= FULL_CAD_POR_RODADA:
+            break
+        if feitos and esperar:
+            esperar(25)
+        feitos += 1
+        inicio = float(e.get("inicio_epoch") or agora)
+        tent = int(e.get("tentativas") or 0) + 1
+        vencido = agora - inicio >= FULL_CAD_JANELA
+        nota: dict[str, Any] | None = None
+        try:
+            nota = ml_nota_da_venda(v["order_id"])
+            if not nota:
+                r = {"ok": False, "situacao": "sem_nota", "error": "Nota do ML ainda não disponível."}
+            else:
+                r = full_cadastro_atualizar(v["order_id"], nota)
+        except Exception as exc:
+            r = {"ok": False, "situacao": "erro", "error": str(exc)}
+        sit = str(r.get("situacao") or "")
+        if r.get("ok"):
+            final = "feito"
+            det = f"{r.get('nome_antes') or '?'} → {r.get('nome')}" + ("; " + "; ".join(r["avisos"]) if r.get("avisos") else "")
+        elif sit == "mais_de_um":
+            final, det = "mais_de_um", r["error"]
+        elif sit == "sem_nota":
+            final, det = ("sem_nota" if vencido else "aguardando"), r["error"]
+        elif sit == "nao_cadastrado":
+            final, det = ("nao_encontrado" if vencido else "aguardando"), r["error"]
+        else:
+            final, det = ("erro" if vencido else "aguardando"), str(r.get("error") or "erro")
+        _full_cad_registrar(v["order_id"], v["dia"], inicio, agora, tent, final, det,
+                            str((nota or {}).get("documento") or ""), _exp_limpo((nota or {}).get("nome")),
+                            str(r.get("cliente") or ""))
+        contagem[final] = contagem.get(final, 0) + 1
+    return contagem
+
+
+def cadastro_full_loop(stop_event: threading.Event) -> None:
+    while not stop_event.is_set():
+        try:
+            cadastro_full_rodada(esperar=lambda s: stop_event.wait(s))
+        except Exception as exc:
+            print(f"[cadastro-full] {exc}", flush=True)
+        stop_event.wait(300)
+
+
+def cadastro_full_payload() -> dict[str, Any]:
+    with DB_LOCK:
+        cont = {r["situacao"]: int(r["n"]) for r in DB.execute(
+            "SELECT situacao, COUNT(*) AS n FROM cadastro_full_v1945 GROUP BY situacao").fetchall()}
+        pendencias = [dict(r) for r in DB.execute(
+            "SELECT order_id, venda_dia, situacao, detalhe, documento, nome, cliente FROM cadastro_full_v1945 "
+            "WHERE situacao IN ('sem_nota','nao_encontrado','mais_de_um','erro') ORDER BY venda_dia DESC LIMIT 100").fetchall()]
+        feitos = [dict(r) for r in DB.execute(
+            "SELECT order_id, venda_dia, detalhe, nome, cliente FROM cadastro_full_v1945 WHERE situacao='feito' "
+            "ORDER BY ultima_epoch DESC LIMIT 20").fetchall()]
+        amostra = DB.execute("SELECT COUNT(*) AS n FROM cadastro_full_amostra_v1945").fetchone()["n"]
+    return {"ok": True, **cadastro_full_config(), "contagem": cont, "pendencias": pendencias, "feitos": feitos,
+            "tem_amostra": bool(amostra)}
+
+
+# ---------------------------------------------------------------------------
 # V18.70 — crédito pela Smart API, no botão "Atualizar cadastro" do pedido.
 # Chamado da Linx (aviso de 06/10/2026): "Ajuste em SmartAPI endpoint
 # AtualizarCadastroClienteSimplificado campo BloqueioCredito".
@@ -27531,6 +27913,20 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
+        if path in ("/api/expedicao-apollo/cadastro-full", "/api/expedicao-apollo/cadastro-full/amostra"):
+            # V19.45: situação do cadastro do Full (módulo admin); a amostra só o perfil Admin.
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            if path.endswith("/amostra"):
+                if self.auth_full_admin() is None:
+                    return
+                with DB_LOCK:
+                    linhas = [dict(r) for r in DB.execute("SELECT * FROM cadastro_full_amostra_v1945").fetchall()]
+                self.send_json({"ok": True, "amostras": linhas})
+                return
+            self.send_json(cadastro_full_payload())
+            return
         if path == "/api/faturamento":
             # V19.43: fila de faturamento (Admin e Supervisor).
             ctx = self.auth(admin_only=True)
@@ -27823,6 +28219,14 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.send_json(resultado, 200 if resultado.get("ok") else 409)
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/expedicao-apollo/cadastro-full":
+            # V19.45: ligar/desligar o cadastro do Full — só o perfil Admin.
+            ctx = self.auth_full_admin()
+            if ctx is None:
+                return
+            body = self.read_json()
+            self.send_json(cadastro_full_ligar(body.get("ligado") is True, str(ctx.get("username") or "")))
             return
         if path in ("/api/faturamento/conferir", "/api/faturamento/executar"):
             # V19.43: conferir um pedido agora / executar um pedido do lote (Admin e Supervisor).
@@ -31650,6 +32054,7 @@ SAUDE_WORKERS_INFO: dict[str, tuple[str, bool, int]] = {
     "linx_demanda_loop": ("Demanda de Compra pela Linx", False, 180),
     "cadastro_auto_loop": ("Cadastro automático no Apollo", False, 60),  # V19.41
     "faturamento_loop": ("Fila de faturamento (conferência no Apollo)", False, 60),  # V19.43
+    "cadastro_full_loop": ("Cadastro dos clientes do Full", False, 60),  # V19.45
     "compras_geral_loop": ("Demanda de Compra geral (segunda)", False, 180),
     "promo_renovacao_loop": ("Promoções automáticas", False, 120),
     "posvenda_loop": ("Pós-venda do Mercado Livre", False, 60),
@@ -32619,6 +33024,13 @@ def main() -> None:
         name="cadastro-auto",
         daemon=True,
     )
+    # V19.45: cadastro dos clientes das vendas do Full pela nota do ML.
+    cadastro_full_thread = threading.Thread(
+        target=_worker_protegido(cadastro_full_loop),
+        args=(watcher_stop,),
+        name="cadastro-full",
+        daemon=True,
+    )
     # V19.43: confere em segundo plano os pedidos da fila de faturamento.
     faturamento_thread = threading.Thread(
         target=_worker_protegido(faturamento_loop),
@@ -32715,6 +33127,7 @@ def main() -> None:
         linx_demanda_thread.start()
         cadastro_auto_thread.start()  # V19.41
         faturamento_thread.start()  # V19.43
+        cadastro_full_thread.start()  # V19.45
         promo_renovacao_thread.start()
         relatorio_thread.start()
         compras_geral_thread.start()
