@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.43-FILA-DE-FATURAMENTO"
+APP_VERSION = "19.44-CATEGORIA-E-IE-NO-CADASTRO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -15315,8 +15315,19 @@ def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "", ie: Any
     if nome_limpo and EXP_NOME_ROTULO.match(nome_limpo):
         return {"ok": False, "situacao": "nome_invalido",
                 "error": f'O nome lido da NF-e ("{nome_limpo}") é um rótulo da tela, não o nome. Leia de novo na venda.'}
+    ie_isento = normalize(ie) == "ISENTO"
     ie = re.sub(r"\D", "", str(ie or ""))
     operador = usuario[:60] or "noromak"
+    # V19.44: categoria (351) e I.E. pela porta, no criar e no atualizar (Guilherme, 16/10).
+    # CPF = 1; CNPJ com I.E. = 3 + número; CNPJ sem I.E. = 2 + ISENTO. O automático não lê a
+    # I.E. da NF-e: para CNPJ ele não mexe (vazio não apaga a I.E. de quem tem).
+    fiscal: dict[str, Any] = {}
+    if len(documento) == 11:
+        fiscal = {"categoria": 1}
+    elif len(documento) == 14 and ie:
+        fiscal = {"categoria": 3, "inscricao_estadual": ie[:20]}
+    elif len(documento) == 14 and (ie_isento or usuario != "automatico"):
+        fiscal = {"categoria": 2, "inscricao_estadual": "ISENTO"}
     avisos: list[str] = []
     try:
         end = exp_endereco_entrega(pedido)
@@ -15355,8 +15366,7 @@ def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "", ie: Any
                         "revenda": EXP_REVENDA, "documento": documento, "operador": operador, "nome": nome_limpo,
                         "email": LINX_CADASTRO_EMAIL, "ddd_celular": LINX_CADASTRO_DDD, "celular": EXP_CELULAR_PADRAO,
                         "endereco": endereco,
-                        # V19.33: IE só existe na criação e só para CNPJ (contrato da porta).
-                        **({"inscricao_estadual": ie[:20]} if ie and len(documento) == 14 else {})}, escrita=True)
+                        **fiscal}, escrita=True)
                     novo = re.sub(r"\D", "", str(c.get("cliente") or ""))
                     if c.get("situacao") not in ("criado", "ja_cadastrado") or not novo:
                         return {"ok": False, "situacao": c.get("situacao") or "erro",
@@ -15371,13 +15381,16 @@ def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "", ie: Any
                 corpo["nome"] = nome_limpo
             if endereco:
                 corpo["endereco"] = endereco
+            corpo.update(fiscal)
             at = _exp_porta("cliente/atualizar", corpo, escrita=True)
             if at.get("situacao") != "atualizado":
                 return {"ok": False, "situacao": at.get("situacao") or "erro", "cliente": codigo,
                         "error": at.get("erro") or "O Apollo não confirmou a atualização."}
             avisos += [str(x) for x in (at.get("avisos") or [])]
-            if ie and len(documento) == 14 and not criado:
-                avisos.append(f"Inscrição estadual {ie} não foi gravada: a API só grava IE na criação do cliente. Confira no Apollo.")
+            if at.get("categoria") is not None or at.get("inscricao_estadual"):
+                avisos.append(f"Categoria {at.get('categoria') or '-'}, I.E. {at.get('inscricao_estadual') or '-'} no Apollo.")
+            elif len(documento) == 14 and not fiscal:
+                avisos.append("CNPJ: categoria e I.E. não enviadas (I.E. da NF-e não lida). Confira no Apollo.")
             cr = _exp_porta("cliente/credito", {**base, "situacao_credito": "1"}, escrita=True)
         except PortaErro as exc:
             return {"ok": False, "situacao": "incerto" if exc.incerto else "erro", "cliente": codigo, "error": str(exc)}

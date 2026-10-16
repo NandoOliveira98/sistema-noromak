@@ -408,7 +408,7 @@ class CadastroV1932(unittest.TestCase):
             r = S.exp_cadastro_atualizar(PEDIDO, "luis", ie="8005099728")
         self.assertTrue(r["ok"], r)
         self.assertEqual(porta.corpo("cliente/criar")["inscricao_estadual"], "8005099728")
-        self.assertNotIn("inscricao_estadual", porta.corpo("cliente/atualizar"))  # campo desconhecido = 422
+        self.assertEqual(porta.corpo("cliente/criar")["categoria"], 3)
 
     def test_v1933_ie_de_cliente_existente_vira_aviso(self):
         _pedido_ml_com_envio(codigo="83020", documento="59398838000128", nome="Gabriel Amorim Hespindola Soares")
@@ -416,7 +416,31 @@ class CadastroV1932(unittest.TestCase):
         with mock.patch.object(S, "_exp_porta", side_effect=porta), mock.patch.object(S, "EXP_CADASTRO_API", True), \
                 mock.patch.object(S, "ml_api_get", return_value=ENVIO_ML):
             r = S.exp_cadastro_atualizar(PEDIDO, "luis", ie="8005099728")
-        self.assertTrue(any("8005099728" in a for a in r["avisos"]))
+        self.assertTrue(r["ok"], r)
+        # V19.44: a porta agora grava I.E. e categoria também no atualizar.
+        corpo = porta.corpo("cliente/atualizar")
+        self.assertEqual((corpo["categoria"], corpo["inscricao_estadual"]), (3, "8005099728"))
+
+    def _v1944(self, documento, usuario, ie=""):
+        _pedido_ml_com_envio(codigo="83020", documento=documento, nome="Gabriel Amorim Hespindola Soares")
+        porta = PortaFalsa()
+        with mock.patch.object(S, "_exp_porta", side_effect=porta), mock.patch.object(S, "EXP_CADASTRO_API", True),                 mock.patch.object(S, "ml_api_get", return_value=ENVIO_ML):
+            S.exp_cadastro_atualizar(PEDIDO, usuario, ie=ie)
+        return porta.corpo("cliente/atualizar")
+
+    def test_v1944_cnpj_sem_ie_pelo_botao_vai_isento(self):
+        corpo = self._v1944("59398838000128", "luis")
+        self.assertEqual((corpo["categoria"], corpo["inscricao_estadual"]), (2, "ISENTO"))
+
+    def test_v1944_cpf_categoria_1_sem_ie(self):
+        corpo = self._v1944("06278073994", "luis")
+        self.assertEqual(corpo["categoria"], 1)
+        self.assertNotIn("inscricao_estadual", corpo)
+
+    def test_v1944_automatico_nao_mexe_na_ie_do_cnpj(self):
+        corpo = self._v1944("59398838000128", "automatico")
+        self.assertNotIn("categoria", corpo)
+        self.assertNotIn("inscricao_estadual", corpo)
 
     def _shopee(self, recipient):
         gravar_como_admin([linha(PEDIDO, "0893764272", Marketplace="SHOPEE")])
