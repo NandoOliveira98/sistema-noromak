@@ -614,3 +614,30 @@ class CodigoComHifen(unittest.TestCase):
         self.assertTrue(c["bate"], c)
         self.assertEqual(c["faltam"], [])
         self.assertEqual(d["escolhido"], "787601")
+
+
+class CodigoComBarra(unittest.TestCase):
+    """V19.48: "PSH367/80" é UM produto com barra no código, não um kit "A/B". O atendimento
+    tinha "PSH367/80" e a tela dizia "Falta no atendimento: PSH367, 80" (pedido real
+    2000019012332882, 16/10). O kit de verdade (peças separadas) continua exigindo cada peça."""
+
+    def setUp(self):
+        reiniciar_banco()
+
+    def _preparar(self, sku, itens):
+        gravar_como_admin([linha(PEDIDO, sku, Marketplace="MERCADO LIVRE")])
+        S.salvar_cliente_fiscal(PEDIDO, "03201119113", "Armando Ciampolini Neto", linx_cliente="83138",
+                                fonte="teste", usuario="teste")
+        porta = PortaFalsa(previa={"ok": True, "itens": [{"codigo": c, "descricao": "X", "requisitada": 1.0, "a_soltar": 1.0}
+                                                         for c in itens], "total_a_soltar": float(len(itens))})
+        with mock.patch.object(S, "_exp_porta", side_effect=porta):
+            return S.exp_romaneio_preparar(PEDIDO)["candidatos"][0]
+
+    def test_codigo_com_barra_e_um_produto(self):
+        c = self._preparar("PSH367/80", ["PSH367/80"])
+        self.assertTrue(c["bate"], c)
+        self.assertEqual(c["faltam"], [])
+
+    def test_kit_de_verdade_continua_exigindo_cada_peca(self):
+        c = self._preparar("0893600022/0893764272", ["0893764272"])
+        self.assertEqual(c["faltam"], ["0893600022"])

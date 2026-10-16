@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.47-CADASTRO-AUTO-USA-CPF-DA-API-ML"
+APP_VERSION = "19.48-CODIGO-COM-BARRA-E-UM-PRODUTO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -14939,6 +14939,22 @@ def _exp_componentes_do_pedido(linhas: list[dict[str, Any]]) -> dict[str, str]:
     return saida
 
 
+def _exp_codigos_inteiros(linhas: list[dict[str, Any]]) -> dict[str, list[str]]:
+    """V19.48: SKU com barra pode ser UM produto ("PSH367/80"), não um kit "A/B".
+    {código inteiro normalizado: peças em que ele foi quebrado}. Se o código inteiro está
+    no atendimento, as peças dele não faltam (pedido real 2000019012332882, 16/10)."""
+    saida: dict[str, list[str]] = {}
+    for row in linhas:
+        sku = re.sub(r"^KIT\d*-", "", str(row.get("SKU") or row.get("Sku") or "").strip().upper())
+        if "/" not in sku:
+            continue
+        if re.match(r"^\d{5,}-.+", sku):
+            sku = sku.split("-", 1)[1]
+        partes = [_exp_norm_codigo(re.sub(r"^KIT\d*-", "", p.strip())) for p in sku.split("/")]
+        saida[_exp_norm_codigo(sku)] = [p for p in partes if p]
+    return saida
+
+
 def exp_romaneio_preparar(pedido: str, atendimento: Any = "", cliente: Any = "") -> dict[str, Any]:
     """Mostra o que o botão do romaneio faria. Só leitura no Apollo."""
     pedido = str(pedido or "").strip()
@@ -15014,6 +15030,8 @@ def exp_romaneio_preparar(pedido: str, atendimento: Any = "", cliente: Any = "")
         # V19.46: código com hífen (Schulz "816.3279-0") — o SKU inteiro do anúncio também
         # vale, senão "124656-816.3279-0" virava "8163279"+"0" e nunca batia.
         codigos = codigos | set(componentes)
+        inteiros = _exp_codigos_inteiros(linhas)                # V19.48
+        codigos = codigos | set(inteiros)
         for a in (abertos.get("atendimentos") or [])[:EXP_MAX_ATENDIMENTOS]:
             prev = _exp_porta("romaneio/previa", {"revenda": EXP_REVENDA, "atendimento": int(a["atendimento"]),
                                                    "operador": "noromak"})
@@ -15022,6 +15040,10 @@ def exp_romaneio_preparar(pedido: str, atendimento: Any = "", cliente: Any = "")
                      for i in (prev.get("itens") or []) if isinstance(i, dict)]
             bate = sum(1 for i in itens if re.sub(r"[^0-9A-Z]", "", i["codigo"].upper()) in codigos)
             no_atendimento = {_exp_norm_codigo(i["codigo"]) for i in itens}
+            # V19.48: código com barra presente inteiro no atendimento cobre as "peças" dele.
+            for inteiro, partes in inteiros.items():
+                if inteiro in no_atendimento:
+                    no_atendimento.update(partes)
             faltam = [orig for chave, orig in componentes.items() if chave not in no_atendimento]
             saida["candidatos"].append({
                 "atendimento": str(a.get("atendimento")), "cliente": a.get("cliente"), "valor": a.get("valor"),
