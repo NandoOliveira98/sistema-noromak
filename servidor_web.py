@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.42-CADASTRO-BOTAO-MARCA-FEITO"
+APP_VERSION = "19.43-FILA-DE-FATURAMENTO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -2562,6 +2562,7 @@ def init_db() -> None:
     ensure_cliente_fiscal_linx_api_schema()  # V18.60
     ensure_linx_operacoes_schema()  # V18.60
     ensure_cadastro_auto_schema()  # V19.41
+    ensure_faturamento_schema()  # V19.43
     ensure_linx_robo_schema()  # V18.60
     ean_overrides_vazios_migrar_v1915()  # V19.15
     ensure_saude_schema()  # V18.83
@@ -15569,6 +15570,223 @@ def cadastro_auto_loop(stop_event: threading.Event) -> None:
 
 
 # ---------------------------------------------------------------------------
+# V19.43 — Fila de faturamento em lote (decisões do dono, 16/10). Tela /faturamento.
+# Cada pedido pendente do ML/Shopee/Magalu é conferido em segundo plano (de 10 em 10
+# min) e classificado. Só fica PRONTO com: cadastro atualizado (automático ou botão),
+# crédito liberado, UM atendimento, peças conferindo (kit inteiro) e valor do
+# atendimento IGUAL ao da venda (vendas_v1799: soma de amount do pedido/carrinho). O
+# resto fica "aguardando cadastro" ou "atenção" com o motivo. Na hora de executar, o
+# pedido é conferido DE NOVO (o Apollo pode ter mudado) — quem solta romaneio e envia
+# ao caixa são as rotas de sempre (exp_romaneio_soltar / exp_caixa_*).
+# ---------------------------------------------------------------------------
+FATURAMENTO_INTERVALO = 600
+FATURAMENTO_POR_RODADA = 4          # porta: 12 leituras/min; cada pedido ~3
+FATURAMENTO_MARKETPLACES = ("Mercado Livre", "Shopee", "Magalu")
+FATURAMENTO_OBS = {"Mercado Livre": "MERCADO LIVRE", "Shopee": "SHOPEE", "Magalu": "MAGALU"}
+
+
+def ensure_faturamento_schema() -> None:
+    with DB_LOCK:
+        DB.execute(
+            """CREATE TABLE IF NOT EXISTS faturamento_v1943 (
+                   order_key TEXT PRIMARY KEY,
+                   pedido TEXT NOT NULL DEFAULT '',
+                   marketplace TEXT NOT NULL DEFAULT '',
+                   situacao TEXT NOT NULL DEFAULT '',
+                   motivo TEXT NOT NULL DEFAULT '',
+                   cliente TEXT NOT NULL DEFAULT '',
+                   nome TEXT NOT NULL DEFAULT '',
+                   atendimento TEXT NOT NULL DEFAULT '',
+                   valor_pedido REAL,
+                   valor_atendimento REAL,
+                   conferido_epoch REAL NOT NULL DEFAULT 0,
+                   conferido_em TEXT NOT NULL DEFAULT ''
+               )"""
+        )
+        DB.commit()
+
+
+def _exp_valor_pedido(pedido: str) -> float | None:
+    """Valor da venda (produtos, sem frete) = soma de amount das linhas do pedido ou do
+    carrinho em vendas_v1799 (+ vendas das outras contas). Sem linha = None (desconhecido)."""
+    chave = str(pedido or "").strip()
+    with DB_LOCK:
+        total = None
+        for tabela in ("vendas_v1799", "vendas_conta_v1898"):
+            try:
+                r = DB.execute(f"SELECT COUNT(*) AS n, SUM(amount) AS s FROM {tabela} WHERE order_id=? OR pack_id=?",
+                               (chave, chave)).fetchone()
+            except sqlite3.OperationalError:
+                continue
+            if r and r["n"]:
+                total = (total or 0.0) + float(r["s"] or 0)
+    return round(total, 2) if total is not None else None
+
+
+def faturamento_classificar(pedido: str, d: dict[str, Any], valor_pedido: float | None) -> dict[str, Any]:
+    """Pura: a resposta do exp_romaneio_preparar + valor da venda → situação na fila."""
+    base = {"atendimento": "", "valor_atendimento": None}
+    if d.get("caixa"):
+        return {**base, "situacao": "feito", "motivo": "Enviado ao caixa."}
+    if not d.get("ok", True) or d.get("situacao") == "erro":
+        return {**base, "situacao": "atencao", "motivo": d.get("aviso") or d.get("error") or "Apollo não respondeu."}
+    cred = ((d.get("credito") or {}).get("situacao") or {}).get("codigo")
+    if cred is not None and str(cred) not in ("0", "1"):
+        return {**base, "situacao": "atencao", "motivo": "Crédito bloqueado no Apollo."}
+    rom = d.get("romaneio") or ({"contato": d["romaneio_fora"]} if d.get("romaneio_fora") else None)
+    if rom:
+        a = next((c for c in d.get("candidatos") or [] if str(c.get("atendimento")) == str(rom.get("contato"))), {})
+        return {"situacao": "pronto_caixa", "motivo": "Romaneio já solto: falta o caixa.",
+                "atendimento": str(rom.get("contato") or ""), "valor_atendimento": a.get("valor")}
+    soltar = [c for c in d.get("candidatos") or [] if c.get("total_a_soltar")]
+    if not soltar:
+        return {**base, "situacao": "atencao", "motivo": d.get("aviso") or "Nenhum atendimento aberto com peça a soltar."}
+    if len(soltar) > 1:
+        return {**base, "situacao": "atencao", "motivo": f"{len(soltar)} atendimentos abertos: escolha no painel."}
+    a = soltar[0]
+    info = {"atendimento": str(a.get("atendimento")), "valor_atendimento": a.get("valor")}
+    if a.get("faltam"):
+        return {**info, "situacao": "atencao", "motivo": "Falta no atendimento: " + ", ".join(a["faltam"])}
+    if not a.get("bate"):
+        return {**info, "situacao": "atencao", "motivo": "Peça do atendimento diferente do pedido."}
+    if valor_pedido is None:
+        return {**info, "situacao": "atencao", "motivo": "Valor da venda ainda não sincronizado."}
+    if abs(float(valor_pedido) - float(a.get("valor") or 0)) > 0.009:
+        return {**info, "situacao": "atencao",
+                "motivo": f"Valor diferente: venda R$ {valor_pedido:.2f} × atendimento R$ {float(a.get('valor') or 0):.2f}".replace(".", ",")}
+    return {**info, "situacao": "pronto", "motivo": ""}
+
+
+def faturamento_conferir(pedido: str, marketplace: str = "", agora: float | None = None) -> dict[str, Any]:
+    """Confere um pedido agora (Apollo) e grava a situação."""
+    agora = float(agora if agora is not None else time.time())
+    estado_cad = cadastro_auto_do_pedido(pedido) or {}
+    conhecido = _exp_cliente_do_pedido(pedido)
+    valor = _exp_valor_pedido(pedido)
+    if estado_cad.get("situacao") != "feito":
+        res = {"situacao": "aguardando_cadastro", "atendimento": "", "valor_atendimento": None,
+               "motivo": {"nao_encontrado": "Cliente não apareceu no Apollo em 1 h: use o botão do painel.",
+                          "mais_de_um": "Mais de um cliente com este CPF/CNPJ no Apollo."}.get(
+                   estado_cad.get("situacao"), "Aguardando o cadastro do cliente.")}
+        d = {}
+    else:
+        d = exp_romaneio_preparar(pedido)
+        res = faturamento_classificar(pedido, d, valor)
+    cliente = str(((d.get("cliente") or {}).get("codigo")) or estado_cad.get("cliente") or conhecido["codigo"] or "")
+    nome = str(conhecido["nome_fiscal"] or ((d.get("cliente") or {}).get("nome_apollo")) or "")
+    with DB_LOCK:
+        DB.execute(
+            """INSERT INTO faturamento_v1943(order_key,pedido,marketplace,situacao,motivo,cliente,nome,atendimento,
+                   valor_pedido,valor_atendimento,conferido_epoch,conferido_em) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(order_key) DO UPDATE SET marketplace=excluded.marketplace, situacao=excluded.situacao,
+                   motivo=excluded.motivo, cliente=excluded.cliente, nome=excluded.nome, atendimento=excluded.atendimento,
+                   valor_pedido=excluded.valor_pedido, valor_atendimento=excluded.valor_atendimento,
+                   conferido_epoch=excluded.conferido_epoch, conferido_em=excluded.conferido_em""",
+            (normalize(pedido), pedido, marketplace or (d.get("marketplace") or ""), res["situacao"], str(res.get("motivo") or "")[:300],
+             cliente, nome[:120], str(res.get("atendimento") or ""), valor, res.get("valor_atendimento"), agora, now_iso()),
+        )
+        DB.commit()
+    return {"pedido": pedido, "marketplace": marketplace or d.get("marketplace") or "", "cliente": cliente, "nome": nome,
+            "valor_pedido": valor, **res}
+
+
+def _faturamento_pendentes() -> list[tuple[str, str]]:
+    """(pedido, marketplace) dos pedidos na fila de pendentes, uma vez cada."""
+    with DB_LOCK:
+        pendentes, _, _ = get_storage("conf_pedidos")
+    vistos: dict[str, tuple[str, str]] = {}
+    for row in _rows_from_storage_value(pendentes):
+        if not isinstance(row, dict):
+            continue
+        mp = _vendas_marketplace(row.get("Marketplace") or row.get("Origem"))
+        pedido = str(order_number(row) or "").strip()
+        if pedido and mp in FATURAMENTO_MARKETPLACES:
+            vistos.setdefault(normalize(pedido), (pedido, mp))
+    return list(vistos.values())
+
+
+def faturamento_rodada(agora: float | None = None, esperar=None) -> int:
+    """Confere os pedidos que ainda não estão prontos (nem feitos), de 10 em 10 min."""
+    agora = float(agora if agora is not None else time.time())
+    with DB_LOCK:
+        estado = {r["order_key"]: dict(r) for r in DB.execute("SELECT * FROM faturamento_v1943").fetchall()}
+    feitos = 0
+    for pedido, mp in _faturamento_pendentes():
+        e = estado.get(normalize(pedido))
+        if e and (e["situacao"] == "feito" or agora - float(e["conferido_epoch"] or 0) < FATURAMENTO_INTERVALO):
+            continue
+        aguardando = (cadastro_auto_do_pedido(pedido) or {}).get("situacao") != "feito"
+        if not aguardando:                      # só quem vai ao Apollo conta no teto
+            if feitos >= FATURAMENTO_POR_RODADA:
+                continue
+            if feitos and esperar:
+                esperar(15)
+            feitos += 1
+        try:
+            faturamento_conferir(pedido, mp, agora)
+        except Exception as exc:
+            print(f"[faturamento] {pedido}: {exc}", flush=True)
+    return feitos
+
+
+def faturamento_loop(stop_event: threading.Event) -> None:
+    while not stop_event.is_set():
+        try:
+            faturamento_rodada(esperar=lambda s: stop_event.wait(s))
+        except Exception as exc:
+            print(f"[faturamento] {exc}", flush=True)
+        stop_event.wait(120)
+
+
+def faturamento_payload() -> dict[str, Any]:
+    """A tela: pedidos da fila de pendentes com a última conferência de cada um."""
+    pend = _faturamento_pendentes()
+    with DB_LOCK:
+        estado = {r["order_key"]: dict(r) for r in DB.execute("SELECT * FROM faturamento_v1943").fetchall()}
+    itens = []
+    for pedido, mp in pend:
+        e = estado.get(normalize(pedido))
+        if not e:
+            itens.append({"pedido": pedido, "marketplace": mp, "situacao": "nao_conferido", "motivo": "Ainda não conferido."})
+            continue
+        itens.append({"pedido": pedido, "marketplace": mp, "situacao": e["situacao"], "motivo": e["motivo"],
+                      "cliente": e["cliente"], "nome": e["nome"], "atendimento": e["atendimento"],
+                      "valor_pedido": e["valor_pedido"], "valor_atendimento": e["valor_atendimento"],
+                      "conferido_em": e["conferido_em"], "observacao": FATURAMENTO_OBS.get(mp, mp.upper())})
+    return {"ok": True, "itens": itens, "observacoes": FATURAMENTO_OBS}
+
+
+def faturamento_executar(pedido: str, usuario: str, condicao_ok: bool = False) -> dict[str, Any]:
+    """Um pedido do lote: confere DE NOVO, solta o romaneio e envia ao caixa. Shopee/Magalu
+    param em "condicao" (a troca da condição de pagamento só existe pelo Linx web, na
+    extensão do Chrome de quem clicou) e voltam com condicao_ok=True para o caixa."""
+    pedido = str(pedido or "").strip()
+    mp = next((m for p, m in _faturamento_pendentes() if normalize(p) == normalize(pedido)), "")
+    if not mp:
+        return {"ok": False, "etapa": "conferencia", "error": "Pedido não está mais na fila."}
+    c = faturamento_conferir(pedido, mp)
+    if c["situacao"] not in ("pronto", "pronto_caixa"):
+        return {"ok": False, "etapa": "conferencia", "situacao": c["situacao"], "error": c.get("motivo") or "Não está pronto."}
+    if c["situacao"] == "pronto":
+        r = exp_romaneio_soltar(pedido, c["atendimento"], FATURAMENTO_OBS.get(mp, mp.upper()), usuario)
+        if not r.get("ok"):
+            faturamento_conferir(pedido, mp)
+            return {"ok": False, "etapa": "romaneio", "error": r.get("error") or "Romaneio não saiu."}
+    if mp in ("Shopee", "Magalu") and not condicao_ok:
+        return {"ok": True, "etapa": "condicao", "atendimento": c["atendimento"], "marketplace": mp}
+    p = exp_caixa_previa(pedido, c["atendimento"], c["cliente"], usuario)
+    if not p.get("pode"):
+        motivo = "; ".join((p.get("impedimentos") or []) + (p.get("falhas") or [])) or p.get("error") or "Apollo recusou a prévia."
+        faturamento_conferir(pedido, mp)
+        return {"ok": False, "etapa": "caixa", "error": motivo}
+    e = exp_caixa_enviar(pedido, p["atendimento"], p["cliente"], p.get("valor"), usuario)
+    faturamento_conferir(pedido, mp)
+    if not e.get("ok"):
+        return {"ok": False, "etapa": "caixa", "situacao": e.get("situacao"), "error": e.get("error") or "Caixa não confirmou."}
+    return {"ok": True, "etapa": "feito", "atendimento": p["atendimento"], "valor": p.get("valor")}
+
+
+# ---------------------------------------------------------------------------
 # V18.70 — crédito pela Smart API, no botão "Atualizar cadastro" do pedido.
 # Chamado da Linx (aviso de 06/10/2026): "Ajuste em SmartAPI endpoint
 # AtualizarCadastroClienteSimplificado campo BloqueioCredito".
@@ -27293,6 +27511,16 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
+        if path == "/api/faturamento":
+            # V19.43: fila de faturamento (Admin e Supervisor).
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            try:
+                self.send_json(faturamento_payload())
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
         if path == "/api/expedicao-apollo/cadastro-auto":
             # V19.41: situação do cadastro automático (quem tem o módulo admin vê).
             ctx = self.auth(admin_only=True)
@@ -27466,6 +27694,8 @@ class AppHandler(BaseHTTPRequestHandler):
             "/posvenda": "admin", "/posvenda/": "admin", "/posvenda.html": "admin",
             # V18.83: Painel de saúde do sistema.
             "/saude": "admin", "/saude/": "admin", "/saude.html": "admin",
+            # V19.43: fila de faturamento em lote.
+            "/faturamento": "admin", "/faturamento/": "admin", "/faturamento.html": "admin",
             # V18.73: promoções automáticas (age sozinha no ML: só admin).
             "/promocoes-auto": "admin", "/promocoes-auto/": "admin", "/promocoes-auto.html": "admin",
             # V18.33: a Rentabilidade ML virou o Financeiro; o endereço antigo abre a tela nova.
@@ -27570,6 +27800,25 @@ class AppHandler(BaseHTTPRequestHandler):
                     )
                 else:
                     resultado = linx_cadastro_atualizar(str(body.get("pedido") or ""), usuario=usuario)
+                self.send_json(resultado, 200 if resultado.get("ok") else 409)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path in ("/api/faturamento/conferir", "/api/faturamento/executar"):
+            # V19.43: conferir um pedido agora / executar um pedido do lote (Admin e Supervisor).
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            try:
+                body = self.read_json()
+                pedido = str(body.get("pedido") or "")
+                if path.endswith("/conferir"):
+                    mp = next((m for p, m in _faturamento_pendentes() if normalize(p) == normalize(pedido)), "")
+                    resultado = {"ok": True, **faturamento_conferir(pedido, mp)} if mp else \
+                        {"ok": False, "error": "Pedido não está na fila."}
+                else:
+                    resultado = faturamento_executar(pedido, str(ctx.get("username") or ""),
+                                                     condicao_ok=body.get("condicao_ok") is True)
                 self.send_json(resultado, 200 if resultado.get("ok") else 409)
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
@@ -30746,6 +30995,9 @@ class AppHandler(BaseHTTPRequestHandler):
             "/ruptura": "ruptura.html",
             "/saude": "saude.html",
             "/saude/": "saude.html",
+            "/faturamento": "faturamento.html",
+            "/faturamento/": "faturamento.html",
+            "/faturamento.html": "faturamento.html",
             "/ruptura/": "ruptura.html",
             "/posvenda": "posvenda.html",
             "/posvenda/": "posvenda.html",
@@ -31377,6 +31629,7 @@ SAUDE_WORKERS_INFO: dict[str, tuple[str, bool, int]] = {
     "shopee_anuncios_loop": ("Anúncios da Shopee (Conversão e Ruptura)", False, 120),
     "linx_demanda_loop": ("Demanda de Compra pela Linx", False, 180),
     "cadastro_auto_loop": ("Cadastro automático no Apollo", False, 60),  # V19.41
+    "faturamento_loop": ("Fila de faturamento (conferência no Apollo)", False, 60),  # V19.43
     "compras_geral_loop": ("Demanda de Compra geral (segunda)", False, 180),
     "promo_renovacao_loop": ("Promoções automáticas", False, 120),
     "posvenda_loop": ("Pós-venda do Mercado Livre", False, 60),
@@ -32346,6 +32599,13 @@ def main() -> None:
         name="cadastro-auto",
         daemon=True,
     )
+    # V19.43: confere em segundo plano os pedidos da fila de faturamento.
+    faturamento_thread = threading.Thread(
+        target=_worker_protegido(faturamento_loop),
+        args=(watcher_stop,),
+        name="faturamento",
+        daemon=True,
+    )
     # V18.90: anúncios da Shopee — retrato do dia (visualizações, estoque) e estoque a cada 2 h.
     shopee_anuncios_thread = threading.Thread(
         target=_worker_protegido(shopee_anuncios_loop),
@@ -32434,6 +32694,7 @@ def main() -> None:
         shopee_anuncios_thread.start()
         linx_demanda_thread.start()
         cadastro_auto_thread.start()  # V19.41
+        faturamento_thread.start()  # V19.43
         promo_renovacao_thread.start()
         relatorio_thread.start()
         compras_geral_thread.start()

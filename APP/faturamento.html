@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="/favicon.ico?v=14.5" sizes="any">
+<title>Noromak · Faturamento</title>
+<!-- V19.43: fila de faturamento em lote. Cada pedido pendente é conferido no Apollo (portas da
+     Expedição) de 10 em 10 min; "pronto" = cadastro feito + crédito liberado + um atendimento só,
+     com as peças do pedido e o valor IGUAL ao da venda. O lote solta o romaneio (observação do
+     marketplace) e envia ao caixa, conferindo de novo cada pedido na hora. Shopee/Magalu trocam a
+     condição de pagamento pela extensão Linx (Linx web aberto). GET /api/faturamento,
+     POST /api/faturamento/{conferir,executar} (módulo admin). -->
+<script defer src="/expedicao/web-auth.js?v=19.40"></script>
+<link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
+<link rel="stylesheet" href="/expedicao/nk-ui.css?v=19.13">
+<script src="/expedicao/nk-ui.js?v=19.13"></script>
+<script defer src="/expedicao/nk-menu.js?v=19.43" data-shell></script>
+<style>
+body{margin:0;background:var(--nk-canvas);color:var(--nk-ink);font-family:var(--nk-font)}
+.abas{display:flex;gap:6px;flex-wrap:wrap;margin:14px 0}
+.barra{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+.barra .resumo{color:var(--nk-ink2);font-size:13px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:8px 10px;border-bottom:1px solid var(--nk-line);text-align:left;vertical-align:top}
+th{color:var(--nk-ink2);font-weight:600}
+td.num{text-align:right;white-space:nowrap}
+.res-ok{color:var(--nk-ok)}.res-erro{color:var(--nk-bad)}
+.vazio{padding:24px;text-align:center;color:var(--nk-ink2)}
+.tabela{overflow-x:auto}
+</style>
+</head>
+<body>
+<main class="nk-pagina">
+  <header class="nk-cab"><span class="nk-rotulo">Expedição</span><h1>Faturamento</h1>
+    <p>Pedidos conferidos no Apollo a cada 10 min. Os prontos saem em lote: romaneio + caixa.</p></header>
+  <div class="abas" id="abas"></div>
+  <section class="nk-painel">
+    <div class="barra">
+      <button class="nk-btn" id="btnLote" onclick="executarLote()" disabled>Faturar selecionados</button>
+      <button class="nk-btn" onclick="carregar()">Atualizar</button>
+      <span class="resumo" id="resumo"></span>
+    </div>
+    <div class="tabela"><table><thead id="cab"></thead><tbody id="corpo"></tbody></table></div>
+  </section>
+</main>
+<script>
+const ABAS=[["pronto","Prontos"],["atencao","Precisa de atenção"],["aguardando","Aguardando cadastro"],["feito","Feitos"]];
+let ITENS=[],ABA="pronto",RES={},RODANDO=false;
+const esc=v=>String(v??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const brl=v=>v==null||v===""?"—":Number(v).toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
+const grupo=s=>s==="pronto"||s==="pronto_caixa"?"pronto":s==="feito"?"feito":s==="aguardando_cadastro"||s==="nao_conferido"?"aguardando":"atencao";
+async function api(url,corpo){
+  const r=await fetch("/expedicao"+url,corpo?{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(corpo),credentials:"same-origin"}:{credentials:"same-origin"});
+  let d={};try{d=await r.json();}catch(_){}
+  if(!r.ok&&!d.error)d.error="HTTP "+r.status;
+  return d;
+}
+async function carregar(){
+  const d=await api("/api/faturamento");
+  if(!d.ok){document.getElementById("corpo").innerHTML=`<tr><td class=vazio>${esc(d.error||"Falha ao carregar.")}</td></tr>`;return;}
+  ITENS=d.itens||[];desenhar();
+}
+function desenhar(){
+  const cont={};ITENS.forEach(i=>{const g=grupo(i.situacao);cont[g]=(cont[g]||0)+1;});
+  document.getElementById("abas").innerHTML=ABAS.map(([k,t])=>`<button class="nk-tab${k===ABA?" ativo":""}" aria-pressed="${k===ABA}" onclick="ABA='${k}';desenhar()">${t} (${cont[k]||0})</button>`).join("");
+  const lista=ITENS.filter(i=>grupo(i.situacao)===ABA);
+  const sel=ABA==="pronto";
+  document.getElementById("cab").innerHTML=`<tr>${sel?'<th><input type=checkbox id=todos onchange="marcarTodos(this.checked)" aria-label="Selecionar todos"></th>':""}<th>Pedido</th><th>Marketplace</th><th>Cliente</th><th>Atendimento</th><th class=num>Venda</th><th class=num>Atendimento</th><th>Situação</th></tr>`;
+  document.getElementById("corpo").innerHTML=lista.length?lista.map(i=>{
+    const r=RES[i.pedido];
+    const sit=r?`<span class="${r.ok?"res-ok":"res-erro"}">${esc(r.texto)}</span>`:esc(i.situacao==="pronto_caixa"?"Romaneio já solto: falta o caixa.":(i.motivo||(sel?"Pronto":"")));
+    return `<tr>${sel?`<td><input type=checkbox class=sel value="${esc(i.pedido)}" onchange="atualizarBarra()" ${RODANDO?"disabled":""}></td>`:""}<td>${esc(i.pedido)}</td><td>${esc(i.marketplace)}</td><td>${esc(i.nome||"")}${i.cliente?` <small>(${esc(i.cliente)})</small>`:""}</td><td>${esc(i.atendimento||"—")}</td><td class=num>${brl(i.valor_pedido)}</td><td class=num>${brl(i.valor_atendimento)}</td><td>${sit}</td></tr>`;
+  }).join(""):`<tr><td colspan=8 class=vazio>Nada aqui.</td></tr>`;
+  atualizarBarra();
+}
+function selecionados(){return [...document.querySelectorAll("input.sel:checked")].map(e=>ITENS.find(i=>i.pedido===e.value)).filter(Boolean);}
+function marcarTodos(v){document.querySelectorAll("input.sel").forEach(e=>e.checked=v);atualizarBarra();}
+function atualizarBarra(){
+  const s=selecionados(),tot=s.reduce((a,i)=>a+Number(i.valor_atendimento||0),0);
+  document.getElementById("btnLote").disabled=RODANDO||!s.length;
+  document.getElementById("resumo").textContent=RODANDO?"Faturando… não feche a tela.":s.length?`${s.length} pedido(s) · ${brl(tot)}`:"";
+}
+function linxAcao(acao,dados){
+  return new Promise((resolve,reject)=>{
+    const v=String(document.documentElement.dataset.noromakLinx||"").split(".").map(Number);
+    if(!(v[0]>0||v[1]>=44)){reject(new Error('Precisa da extensão "Cadastro de Cliente no Linx" 0.44 e do Linx web aberto.'));return;}
+    const id="v1943-"+Date.now()+"-"+Math.random().toString(36).slice(2);
+    const fim=setTimeout(()=>{removeEventListener("message",ouvir);reject(new Error("A extensão não respondeu. O Linx web está aberto e logado?"));},180000);
+    function ouvir(ev){
+      if(ev.source!==window||ev.origin!==location.origin)return;
+      const m=ev.data||{};if(m.tipo!=="noromak-linx-acao-resposta"||m.id!==id)return;
+      clearTimeout(fim);removeEventListener("message",ouvir);
+      m.ok?resolve(m.resultado||{}):reject(new Error(m.erro||"Falha na extensão."));
+    }
+    addEventListener("message",ouvir);
+    postMessage({tipo:"noromak-linx-acao",id,acao,dados},location.origin);
+  });
+}
+async function faturarUm(i){
+  let r=await api("/api/faturamento/executar",{pedido:i.pedido});
+  if(r.ok&&r.etapa==="condicao"){
+    let c;
+    try{c=await linxAcao("condicao-definir-lote",{contato:r.atendimento,marketplace:r.marketplace});}
+    catch(e){return {ok:false,texto:"Romaneio solto; condição não trocada: "+e.message};}
+    if(c.situacao!=="DEFINIDA"&&c.situacao!=="JA_CORRETA")return {ok:false,texto:"Romaneio solto; condição: "+(c.motivo||c.situacao)};
+    r=await api("/api/faturamento/executar",{pedido:i.pedido,condicao_ok:true});
+  }
+  if(r.ok&&r.etapa==="feito")return {ok:true,texto:`Enviado ao caixa (atendimento ${r.atendimento}, ${brl(r.valor)}).`};
+  return {ok:false,texto:`${r.etapa?r.etapa+": ":""}${r.error||"falhou"}`};
+}
+async function executarLote(){
+  const s=selecionados();if(!s.length)return;
+  const tot=s.reduce((a,i)=>a+Number(i.valor_atendimento||0),0);
+  const temCond=s.some(i=>i.marketplace!=="Mercado Livre");
+  const ok=await nkConfirmar(`Faturar ${s.length} pedido(s), total ${brl(tot)}?\n\nCada pedido é conferido de novo no Apollo, o romaneio sai com a observação do marketplace e o atendimento vai para o caixa.`+(temCond?"\n\nShopee/Magalu: o Linx web precisa estar aberto neste Chrome (condição de pagamento).":""));
+  if(!ok)return;
+  RODANDO=true;RES={};desenhar();
+  for(const i of s){
+    RES[i.pedido]={ok:true,texto:"Faturando…"};desenhar();
+    try{RES[i.pedido]=await faturarUm(i);}catch(e){RES[i.pedido]={ok:false,texto:e.message};}
+    desenhar();
+  }
+  RODANDO=false;
+  const feitos=Object.values(RES).filter(r=>r.ok).length;
+  nkToast(`${feitos} de ${s.length} enviados ao caixa.`);
+  desenhar();
+}
+carregar();
+setInterval(()=>{if(!RODANDO&&!document.hidden)carregar();},60000);
+</script>
+</body>
+</html>
