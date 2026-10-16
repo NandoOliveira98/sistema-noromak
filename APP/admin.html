@@ -9579,9 +9579,7 @@ async function carregarCadastroFullAdmin(){
 }
 async function alternarCadastroFullAdmin(){
   const ligar=!cadFullLigadoV1945;
-  if(!await nkConfirmar(ligar?"Ligar o cadastro dos clientes do Full?
-
-O cliente das vendas Full vai ser corrigido no Apollo com os dados da nota do ML (nunca cria cliente).":"Desligar o cadastro dos clientes do Full?"))return;
+  if(!await nkConfirmar(ligar?"Ligar o cadastro dos clientes do Full?\n\nO cliente das vendas Full vai ser corrigido no Apollo com os dados da nota do ML (nunca cria cliente).":"Desligar o cadastro dos clientes do Full?"))return;
   try{await mlApiAdmin("/expedicao/api/expedicao-apollo/cadastro-full",{method:"POST",body:JSON.stringify({ligado:ligar})});await carregarCadastroFullAdmin();}
   catch(e){alert("Cadastro do Full: "+e.message);}
 }
