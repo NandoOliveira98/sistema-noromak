@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.49-PROMOCOES-AUTOMATICAS-SHOPEE"
+APP_VERSION = "19.50-SHOPEE-TAXAS-E-TELA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -24651,8 +24651,9 @@ SHOPEE_PROMO_LOCK = threading.Lock()
 _SHOPEE_PROMO_ESTADO: dict[str, Any] = {"rodando": False, "inicio": "", "fim": "", "ultimo": {}}
 # Mesma tabela do Precificador (APP/precificador.html, SHOPEE_BANDS): comissão e taxa fixa
 # pela faixa do PREÇO DE VENDA (o da promoção).
-SHOPEE_FAIXAS_TAXA = ((0.0, 80.0, 0.235, 4.0), (80.0, 100.0, 0.175, 16.0),
-                      (100.0, 200.0, 0.175, 20.0), (200.0, float("inf"), 0.175, 26.0))
+# V19.50: tabela atual da Shopee (print do dono, 16/10): até 79,99 = 20% + R$ 4,50; acima = 14% + R$ 16/20/26.
+SHOPEE_FAIXAS_TAXA = ((0.0, 80.0, 0.20, 4.5), (80.0, 100.0, 0.14, 16.0),
+                      (100.0, 200.0, 0.14, 20.0), (200.0, float("inf"), 0.14, 26.0))
 SHOPEE_PROMO_CAMPANHA = ("campaign", "campanha", "flash", "promotion conflict", "overlap",
                          "already in", "other promotion", "conflict")
 
@@ -25409,6 +25410,37 @@ def shopee_promo_buscar_novos(ator: str) -> dict[str, Any]:
     return {"ok": True, "incluidos": len(faltam)}
 
 
+def _shopee_promo_calculo(m: dict[str, Any], sku_item: Any, produtos: dict[str, Any], fretes: dict[str, float],
+                          cfg: dict[str, Any]) -> dict[str, Any] | None:
+    """V19.50: a conta de uma variação para a gaveta: custo e taxas do Precificador, preço mínimo,
+    preço para a margem mínima da promoção e a sugestão (10% de desconto se couber na margem mínima,
+    senão o preço da margem mínima). Sem custo = None (nunca custo zero)."""
+    sku = _shopee_promo_resolver_sku(m.get("sku") or sku_item, produtos)
+    prod = _promo_produto(produtos, sku) if sku else None
+    if not prod or float(prod.get("custo") or 0) <= 0:
+        return None
+    frete = fretes.get(prod["sku"], fretes.get(sku, 0.0))
+    mmin = _promo_margem_minima(cfg)
+    minimo = shopee_promo_preco_minimo(prod, frete)
+    na_margem = shopee_promo_preco_minimo(prod, frete, mmin)
+    orig = _money_number(m.get("preco_original"))
+    sugestao = None
+    if orig:
+        dez = round(orig * 0.9, 2)
+        sugestao = dez if (na_margem is None or dez >= na_margem) else na_margem
+        if sugestao is not None and sugestao >= orig:
+            sugestao = None   # nem o preço do anúncio dá a margem mínima
+    out = {"sku": prod["sku"], "custo": round(float(prod["custo"]), 2), "imposto": float(prod.get("imposto") or 0),
+           "frete": round(frete, 2), "preco_minimo": minimo, "preco_margem_min": na_margem,
+           "margem_min": mmin, "sugestao": sugestao, "kit": bool(prod.get("kit"))}
+    for chave, preco in (("anuncio", orig), ("promo", _money_number(m.get("preco"))), ("sugestao", sugestao)):
+        if preco:
+            c = shopee_promo_conta(prod, preco, frete)
+            out[f"lucro_{chave}"], out[f"margem_{chave}"] = c["lucro"], c["margem"]
+            out[f"taxa_{chave}"] = {"comissao_pct": c["comissao_pct"], "taxa_fixa": c["taxa_fixa"]}
+    return out
+
+
 def shopee_promo_payload(agora_ts: int | None = None) -> dict[str, Any]:
     """Lista da tela (só lê o banco)."""
     agora_ts = int(time.time()) if agora_ts is None else int(agora_ts)
@@ -25422,6 +25454,14 @@ def shopee_promo_payload(agora_ts: int | None = None) -> dict[str, Any]:
         historico = [dict(r) for r in DB.execute(
             "SELECT quando, item_id, acao, preco, margem, fim, por, motivo FROM shopee_promo_log_v1949 "
             "ORDER BY id DESC LIMIT 200").fetchall()]
+    # V19.50: a conta da gaveta (custo, taxas, preço mínimo e sugestão) sai já pronta, mesmo
+    # sem marcar — só lê o banco (Precificador), não chama a Shopee.
+    try:
+        produtos = _promo_produtos()
+        fretes = _shopee_fretes_precificador()
+    except Exception:
+        produtos, fretes = {}, {}
+    cfg = shopee_promo_config()
     itens = []
     for r in linhas:
         iid = str(r["item_id"])
@@ -25429,7 +25469,24 @@ def shopee_promo_payload(agora_ts: int | None = None) -> dict[str, Any]:
         fim_dt = _promo_fim_dt(r.get("fim"))
         dias = (fim_dt.date() - datetime.fromtimestamp(agora_ts, BR_TZ).date()).days if fim_dt else None
         situacao = r["situacao"] if r["marcado"] else ("nao_marcado" if r["situacao"] in ("", "nao_checado") else r["situacao"])
+        if r["marcado"] and situacao in ("", "nao_marcado"):
+            situacao = "nao_checado"   # V19.50: marcado e ainda sem conferência
+        mods = modelos.get(iid) or [{"model_id": "0", "nome": "", "sku": r["sku"] or ret.get("sku") or "",
+                                     "preco": None, "preco_original": r["preco_anuncio"] if r["preco_anuncio"] is not None else ret.get("preco"),
+                                     "estoque": r["estoque"] if r["estoque"] is not None else ret.get("estoque"),
+                                     "margem": None, "lucro": None, "situacao": "", "motivo": ""}]
+        calculos = {}
+        for m in mods:
+            calculos[str(m["model_id"])] = _shopee_promo_calculo(m, r["sku"] or ret.get("sku"), produtos, fretes, cfg)
+        precos = [m["preco"] for m in mods if m.get("preco")]
+        orig = r["preco_anuncio"] if r["preco_anuncio"] is not None else ret.get("preco")
+        c0 = next((c for c in calculos.values() if c), None)
         itens.append({
+            "calculos": calculos,
+            "lucro_promo": next((calculos[str(m["model_id"])].get("lucro_promo") for m in mods
+                                 if calculos.get(str(m["model_id"])) and m.get("preco")), None),
+            "desconto": (round(1 - min(precos) / orig, 4) if precos and orig else None),
+            "custo_ok": bool(c0),
             "item_id": iid, "marcado": bool(r["marcado"]), "titulo": r["titulo"] or ret.get("titulo") or "",
             "sku": r["sku"] or ret.get("sku") or "", "situacao": situacao, "motivo": r["motivo"], "aviso": r["aviso"],
             "fim": r["fim"], "inicio_nova": r["inicio_nova"], "dias_para_vencer": dias, "promo_nome": r["promo_nome"],

@@ -13,7 +13,7 @@ from base import S, TesteNoromak
 
 AGORA = int(datetime(2026, 10, 16, 12, 0, tzinfo=S.BR_TZ).timestamp())
 DIA = 86400
-# custo 40, imposto 12%; taxa Shopee pela faixa (R$ 80–99,99: 17,5% + R$ 16)
+# custo 40, imposto 12%; taxa Shopee pela faixa (R$ 80–99,99: 14% + R$ 16, tabela de 16/10)
 PROD = {"sku": "SKU1", "produto": "Peça", "curva": "A", "custo": 40.0, "imposto": 0.12,
         "comissao": 0.12, "taxa_fixa": 0.0, "margem_alvo": 0.15}
 
@@ -134,13 +134,14 @@ class Base(TesteNoromak):
 class Renovacao(Base):
 
     def test_taxa_pela_faixa_do_precificador(self):
-        self.assertEqual(S.shopee_taxas_por_preco(79.99), (0.235, 4.0))
-        self.assertEqual(S.shopee_taxas_por_preco(80.0), (0.175, 16.0))
-        self.assertEqual(S.shopee_taxas_por_preco(150.0), (0.175, 20.0))
-        self.assertEqual(S.shopee_taxas_por_preco(250.0), (0.175, 26.0))
-        c = S.shopee_promo_conta(PROD, 90.0)
-        # 90 − 15,75 − 16 − 10,80 − 40 = 7,45 (8,3%: abaixo da mínima de 10%)
-        self.assertEqual(c["lucro"], 7.45)
+        self.assertEqual(S.shopee_taxas_por_preco(79.99), (0.20, 4.5))
+        self.assertEqual(S.shopee_taxas_por_preco(80.0), (0.14, 16.0))
+        self.assertEqual(S.shopee_taxas_por_preco(150.0), (0.14, 20.0))
+        self.assertEqual(S.shopee_taxas_por_preco(250.0), (0.14, 26.0))
+        self.assertEqual(S.shopee_taxas_por_preco(600.0), (0.14, 26.0))
+        c = S.shopee_promo_conta(PROD, 85.0)
+        # 85 − 11,90 − 16 − 10,20 − 40 = 6,90 (8,1%: abaixo da mínima de 10%)
+        self.assertEqual(c["lucro"], 6.9)
 
     def test_vencendo_no_automatico_cria_a_proxima_comecando_no_fim_da_atual(self):
         fim = AGORA + 2 * DIA
@@ -242,7 +243,7 @@ class Renovacao(Base):
         self.assertEqual(self.sh.posts, [])
 
     def test_margem_abaixo_da_minima_nao_renova(self):
-        self.sh.promo(500, AGORA - 20 * DIA, AGORA + DIA, "ongoing", {"101": {"0": 90.0}})
+        self.sh.promo(500, AGORA - 20 * DIA, AGORA + DIA, "ongoing", {"101": {"0": 85.0}})
         self.marcar()
         self.modo("automatico")
         self.rodar()
@@ -276,6 +277,45 @@ class Renovacao(Base):
         self.modo("automatico")
         r = self.rodar()
         self.assertEqual((r["renovadas"], r["renovaria"]), (1, 1), r)
+
+
+class Gaveta(Base):
+
+    def test_conta_da_gaveta_com_o_produto_real_26330445(self):
+        """V19.50: custo R$ 20,96, imposto 12%, frete 0, anúncio R$ 53,90 (16/10). Sem marcar."""
+        prods = {"26330445": {"sku": "26330445", "produto": "Acrílico", "curva": "A", "custo": 20.96, "imposto": 0.12,
+                              "comissao": 0.12, "taxa_fixa": 0.0, "margem_alvo": 0.2}}
+        c = S._shopee_promo_calculo({"sku": "26330445", "preco_original": 53.90, "preco": None}, "", prods,
+                                    {"26330445": 0.0}, S.shopee_promo_config())
+        self.assertEqual((c["preco_minimo"], c["preco_margem_min"], c["sugestao"]), (37.45, 43.9, 48.51))
+        self.assertEqual((c["lucro_anuncio"], c["lucro_sugestao"]), (11.19, 7.53))
+
+    def test_sem_custo_nao_vira_zero(self):
+        self.assertIsNone(S._shopee_promo_calculo({"sku": "NAOEXISTE", "preco_original": 50.0}, "", {}, {},
+                                                  S.shopee_promo_config()))
+
+    def test_lista_traz_a_conta_sem_marcar(self):
+        with S.DB_LOCK:
+            S.DB.execute("INSERT INTO shopee_item_v1890(item_id,titulo,sku,status,preco,estoque) VALUES('101','Peça','SKU1','active',120,5)")
+            S.DB.commit()
+        S.shopee_promo_buscar_novos("admin_teste")
+        i = self.item("101")
+        self.assertFalse(i["marcado"])
+        self.assertEqual(i["calculos"]["0"]["custo"], 40.0)
+        self.assertEqual(i["calculos"]["0"]["sugestao"], 108.0)
+
+    def test_marcado_sem_conferencia_aparece_como_nao_conferido(self):
+        with S.DB_LOCK:
+            S.DB.execute("INSERT INTO shopee_item_v1890(item_id,titulo,sku,status) VALUES('101','Peça','SKU1','active')")
+            S.DB.commit()
+        S.shopee_promo_buscar_novos("admin_teste")
+        orig = S.shopee_promo_rodada
+        S.shopee_promo_rodada = lambda **k: {}
+        try:
+            self.marcar()
+        finally:
+            S.shopee_promo_rodada = orig
+        self.assertEqual(self.item()["situacao"], "nao_checado")
 
 
 class Variacoes(Base):

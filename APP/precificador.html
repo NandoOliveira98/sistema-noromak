@@ -1320,10 +1320,11 @@ html[data-tema="escuro"] [style*="color: #b45309" i]{color:#EDB082!important}
       "use strict";
 
       var SHOPEE_BANDS = [
-        { min: 0, max: 80, commission: 0.235, fixed: 4, label: "Até R$ 79,99" },
-        { min: 80, max: 100, commission: 0.175, fixed: 16, label: "R$ 80,00 a R$ 99,99" },
-        { min: 100, max: 200, commission: 0.175, fixed: 20, label: "R$ 100,00 a R$ 199,99" },
-        { min: 200, max: Infinity, commission: 0.175, fixed: 26, label: "A partir de R$ 200,00" }
+        // V19.50: tabela atual da Shopee (16/10). A mesma está no servidor (SHOPEE_FAIXAS_TAXA).
+        { min: 0, max: 80, commission: 0.20, fixed: 4.5, label: "Até R$ 79,99" },
+        { min: 80, max: 100, commission: 0.14, fixed: 16, label: "R$ 80,00 a R$ 99,99" },
+        { min: 100, max: 200, commission: 0.14, fixed: 20, label: "R$ 100,00 a R$ 199,99" },
+        { min: 200, max: Infinity, commission: 0.14, fixed: 26, label: "A partir de R$ 200,00" }
       ];
 
       function finiteNumber(value, fallback) {

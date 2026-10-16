@@ -5,7 +5,7 @@ Shopee, manuais), expedição, separação, conferência por código de barras, 
 produtos/SKUs/EANs, kits, precificação, promoções, rentabilidade, estoque, Central de
 Pendências e histórico.
 
-Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V19.49).
+Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V19.50).
 
 ---
 
@@ -844,7 +844,7 @@ anúncios que vencem no mesmo horário vão para **uma promoção só** ("Noroma
 criamos com o mesmo início, `shopee_promo_criada_v1949`). Regras = as do ML (margem mínima, duração, estoque); **modo
 e limite do dia próprios** (`modo_renovacao@shopee`/`limite_dia@shopee` em `promo_auto_config_v1873`, lidos por
 `promo_auto_config("shopee")`), começa em Simulação, Automático exige OWNER. Margem pela tabela de faixas do
-Precificador copiada para o servidor (`SHOPEE_FAIXAS_TAXA` = `SHOPEE_BANDS`), frete Shopee do Precificador, imposto e
+Precificador copiada para o servidor (`SHOPEE_FAIXAS_TAXA` = `SHOPEE_BANDS`) — **V19.50:** tabela atual da Shopee (16/10): até R$ 79,99 = 20% + R$ 4,50; R$ 80–99,99 = 14% + R$ 16; R$ 100–199,99 = 14% + R$ 20; ≥ R$ 200 = 14% + R$ 26 (mudou a Shopee: trocar nos DOIS lugares), frete Shopee do Precificador, imposto e
 custo pela regra do ML (`_promo_produtos`/`_promo_produto`, sem o vínculo MLB↔SKU). **Nunca** altera nem encerra
 promoção que não criou; anúncio com promoção **agendada** não ganha outra por cima. **Variação a variação**
 (`shopee_promo_modelo_v1949`, model_id "0" = sem variação): entram as que estavam na promoção, cada uma com o seu preço
