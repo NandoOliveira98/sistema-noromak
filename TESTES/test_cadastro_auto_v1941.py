@@ -181,3 +181,34 @@ class Rotas(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NomeCpfDaApiDoMl(unittest.TestCase):
+    """V19.47: o ML voltou a liberar billing-info (16/10) e a importação já grava
+    NomeFiscalMercadoLivre/CPFMercadoLivre na linha. O automático só olhava o que a
+    extensão gravou em cliente_fiscal: pedido 2000015556694429 ficou parado > 1 h."""
+
+    def setUp(self):
+        reiniciar_banco()
+
+    def _linha_api(self, **extra):
+        gravar_como_admin([linha(PEDIDO, "0893764272", Marketplace="MERCADO LIVRE", ShipmentIdMercadoLivre="48263508506",
+                                 NomeFiscalMercadoLivre="Fernando Henrique da Silva Souza",
+                                 CPFMercadoLivre="12569176648", **extra)])
+
+    def test_cpf_da_api_dispara_o_cadastro_sem_extensao(self):
+        S.cadastro_auto_ligar(True, "admin")
+        time.sleep(0.01)
+        self._linha_api()
+        porta = PortaFalsa()
+        with mock.patch.object(S, "_exp_porta", side_effect=porta), mock.patch.object(S, "EXP_CADASTRO_API", True), \
+                mock.patch.object(S, "ml_api_get", return_value=ENVIO_ML):
+            self.assertEqual(S.cadastro_auto_rodada()["feito"], 1)
+        self.assertEqual(porta.corpo("cliente/buscar")["documento"], "12569176648")
+        self.assertEqual(S._cliente_fiscal_guardado(PEDIDO)["documento_numero"], "12569176648")
+
+    def test_nao_sobrescreve_o_que_a_extensao_gravou(self):
+        self._linha_api()
+        S.salvar_cliente_fiscal(PEDIDO, "06278073994", "Fulano de Tal da Silva", fonte="extensao", usuario="t")
+        S.cliente_fiscal_da_api_ml()
+        self.assertEqual(S._cliente_fiscal_guardado(PEDIDO)["documento_numero"], "06278073994")

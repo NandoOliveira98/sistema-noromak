@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.46-CODIGO-COM-HIFEN-NO-ROMANEIO"
+APP_VERSION = "19.47-CADASTRO-AUTO-USA-CPF-DA-API-ML"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -15538,6 +15538,30 @@ def _cadastro_auto_candidatos(ligado_em: str) -> list[dict[str, Any]]:
     return saida
 
 
+def cliente_fiscal_da_api_ml() -> int:
+    """V19.47: o ML voltou a liberar o billing-info (conferido em 16/10) e a importação já
+    grava NomeFiscalMercadoLivre/CPFMercadoLivre/CNPJMercadoLivre na linha do pedido. Copia
+    para cliente_fiscal (fonte api_ml) SÓ quando o pedido ainda não tem nada lá — o que a
+    extensão gravou nunca é sobrescrito. Assim o automático anda sem ninguém clicar."""
+    with DB_LOCK:
+        pendentes, _, _ = get_storage("conf_pedidos")
+        ja = {r["order_key"] for r in DB.execute("SELECT order_key FROM cliente_fiscal").fetchall()}
+    novos = 0
+    for row in _rows_from_storage_value(pendentes):
+        if not isinstance(row, dict) or _vendas_marketplace(row.get("Marketplace") or row.get("Origem")) != "Mercado Livre":
+            continue
+        pedido = str(order_number(row) or "").strip()
+        doc = re.sub(r"\D", "", str(row.get("CNPJMercadoLivre") or row.get("CPFMercadoLivre") or ""))
+        nome = str(row.get("NomeFiscalMercadoLivre") or "").strip()
+        if not pedido or normalize(pedido) in ja or len(doc) not in (11, 14) or not nome:
+            continue
+        r = salvar_cliente_fiscal(pedido, doc, nome, fonte="api_ml", usuario="automatico")
+        if r.get("ok"):
+            ja.add(normalize(pedido))
+            novos += 1
+    return novos
+
+
 def cadastro_auto_rodada(agora: float | None = None, esperar=None) -> dict[str, int]:
     """Uma volta da rotina. `esperar(segundos)` espaça as chamadas à porta (teto de
     escritas por minuto); nos testes não espera."""
@@ -15546,6 +15570,10 @@ def cadastro_auto_rodada(agora: float | None = None, esperar=None) -> dict[str, 
     if not cfg["ligado"] or not EXP_CADASTRO_API:
         return contagem
     agora = float(agora if agora is not None else time.time())
+    try:
+        cliente_fiscal_da_api_ml()                      # V19.47
+    except Exception as exc:
+        print(f"[cadastro-auto] nome/CPF da API do ML: {exc}", flush=True)
     feitos = 0
     for c in _cadastro_auto_candidatos(cfg["ligado_em"]):
         if c["ultima"] and agora - c["ultima"] < CADASTRO_AUTO_INTERVALO:
