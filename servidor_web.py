@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.40-PERFIL-CONSULTA"
+APP_VERSION = "19.41-CADASTRO-AUTOMATICO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -2561,6 +2561,7 @@ def init_db() -> None:
     ensure_ml_billing_data_schema()
     ensure_cliente_fiscal_linx_api_schema()  # V18.60
     ensure_linx_operacoes_schema()  # V18.60
+    ensure_cadastro_auto_schema()  # V19.41
     ensure_linx_robo_schema()  # V18.60
     ean_overrides_vazios_migrar_v1915()  # V19.15
     ensure_saude_schema()  # V18.83
@@ -13790,6 +13791,10 @@ def lista_cliente_fiscal(dias: int = 45) -> dict[str, Any]:
         rows = DB.execute(
             "SELECT * FROM cliente_fiscal WHERE atualizado_em>=? ORDER BY atualizado_em", (limite,)
         ).fetchall()
+        # V19.41: situação do cadastro automático (feito / aguardando / não encontrado).
+        auto = {r["order_key"]: {"situacao": r["situacao"], "tentativas": r["tentativas"], "detalhe": r["detalhe"],
+                                 "atualizado_em": r["atualizado_em"]}
+                for r in DB.execute("SELECT * FROM cadastro_auto_v1941").fetchall()}
     return {"ok": True, "clientes": {
         r["pedido"]: {
             "documento": {"tipo": r["documento_tipo"], "numero": r["documento_numero"]},
@@ -13806,6 +13811,7 @@ def lista_cliente_fiscal(dias: int = 45) -> dict[str, Any]:
                 "consultado_em": r["linx_api_consultado_em"],
                 "credito": _json_obj(r["linx_api_credito"]),
             },
+            "cadastro_auto": auto.get(r["order_key"]),
         } for r in rows
     }}
 
@@ -14947,6 +14953,7 @@ def exp_romaneio_preparar(pedido: str, atendimento: Any = "", cliente: Any = "")
         "cliente": {"codigo": codigo, "documento": conhecido["documento"], "nome_fiscal": conhecido["nome_fiscal"],
                     "nome_apollo": ""},
         "precisa_condicao": True, "candidatos": [], "escolhido": "", **_exp_estado_operacoes(pedido),
+        "cadastro_auto": cadastro_auto_do_pedido(pedido),  # V19.41
     }
     try:
         filtro: dict[str, Any] = {}
@@ -15290,7 +15297,7 @@ EXP_NOME_ROTULO = re.compile(r"^(TIPO DE CONTRIBUINTE|NAO CONTRIBUINTE|CONTRIBUI
 
 
 def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "", ie: Any = "",
-                           endereco_texto: Any = "") -> dict[str, Any]:
+                           endereco_texto: Any = "", criar: bool = True) -> dict[str, Any]:
     """Botão do cadastro pela porta (V19.32, contrato real do Guilherme de 15/10):
     buscar pelo CPF -> (não cadastrado) criar -> atualizar nome + contatos + endereço -> crédito.
     Ligado com EXP_CADASTRO_API=1."""
@@ -15333,6 +15340,11 @@ def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "", ie: Any
                     return {"ok": False, "situacao": "mais_de_um", "lista": b["lista"],
                             "error": "Mais de um cliente com este CPF/CNPJ no Apollo: informe o código certo."}
                 elif b["situacao"] == "nao_cadastrado":
+                    # V19.41: o cadastro automático NUNCA cria (o cliente da venda demora
+                    # para cair no Apollo; criar na hora duplicaria). Volta e tenta depois.
+                    if not criar:
+                        return {"ok": False, "situacao": "nao_cadastrado",
+                                "error": "Cliente ainda não está no Apollo."}
                     if not endereco:
                         return {"ok": False, "situacao": "sem_endereco",
                                 "error": "Cliente novo precisa do endereço inteiro: " + end["falta"] + "."}
@@ -15379,6 +15391,175 @@ def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "", ie: Any
             "nome": nome_limpo, "endereco": endereco, "cidade_apollo": at.get("cidade"),
             "credito": cr.get("situacao"), "avisos": avisos + [str(x) for x in (cr.get("avisos") or [])],
             "bloqueado": cr.get("situacao") == "bloqueado_pelo_financeiro"}
+
+
+# ---------------------------------------------------------------------------
+# V19.41 — Cadastro automático do cliente no Apollo (decisões do dono, 16/10).
+# Uma rotina no servidor atualiza sozinha o cadastro dos pedidos novos do Mercado Livre
+# e da Shopee, com a MESMA gravação do botão (nome, e-mail e celular padrão, endereço
+# sem acento e crédito) — exp_cadastro_atualizar(..., criar=False). Regras:
+#   - NUNCA cria cliente: da venda até o cliente cair no Apollo leva um tempo incerto;
+#     criar na hora duplicaria. Não achou → tenta de novo a cada 10 min por até 1 h,
+#     contada de quando o Noromak recebeu o nome/CPF da NF-e (vale fora do expediente);
+#     depois fica "não encontrado no Apollo" e quem resolve é o botão.
+#   - só pedidos que chegaram DEPOIS de ligar; "mais de um cliente" ou erro não mexe;
+#   - cada pedido é feito uma vez; interruptor no Admin (perfil Admin), começa desligado.
+# ---------------------------------------------------------------------------
+CADASTRO_AUTO_INTERVALO = 600      # 10 min entre tentativas do mesmo pedido
+CADASTRO_AUTO_JANELA = 3600        # 1 h tentando
+CADASTRO_AUTO_POR_RODADA = 5       # a porta aceita 6 escritas/min; cada pedido = 2
+CADASTRO_AUTO_FINAIS = ("feito", "nao_encontrado", "mais_de_um", "erro")
+CADASTRO_AUTO_MARKETPLACES = ("Mercado Livre", "Shopee")
+
+
+def ensure_cadastro_auto_schema() -> None:
+    with DB_LOCK:
+        DB.execute(
+            """CREATE TABLE IF NOT EXISTS cadastro_auto_v1941 (
+                   order_key TEXT PRIMARY KEY,
+                   pedido TEXT NOT NULL DEFAULT '',
+                   inicio_epoch REAL NOT NULL DEFAULT 0,
+                   ultima_epoch REAL NOT NULL DEFAULT 0,
+                   tentativas INTEGER NOT NULL DEFAULT 0,
+                   situacao TEXT NOT NULL DEFAULT 'aguardando',
+                   detalhe TEXT NOT NULL DEFAULT '',
+                   cliente TEXT NOT NULL DEFAULT '',
+                   atualizado_em TEXT NOT NULL DEFAULT ''
+               )"""
+        )
+        DB.execute(
+            """CREATE TABLE IF NOT EXISTS cadastro_auto_config_v1941 (
+                   id INTEGER PRIMARY KEY CHECK (id = 1),
+                   ligado INTEGER NOT NULL DEFAULT 0,
+                   ligado_em TEXT NOT NULL DEFAULT '',
+                   por TEXT NOT NULL DEFAULT ''
+               )"""
+        )
+        DB.commit()
+
+
+def cadastro_auto_config() -> dict[str, Any]:
+    with DB_LOCK:
+        row = DB.execute("SELECT ligado, ligado_em, por FROM cadastro_auto_config_v1941 WHERE id=1").fetchone()
+    return {"ligado": bool(row and row["ligado"]), "ligado_em": (row["ligado_em"] if row else ""),
+            "por": (row["por"] if row else "")}
+
+
+def cadastro_auto_ligar(ligado: bool, usuario: str) -> dict[str, Any]:
+    atual = cadastro_auto_config()
+    # Ligar marca a hora: só entram pedidos cujo nome/CPF chegou depois disso.
+    ligado_em = (atual["ligado_em"] if atual["ligado"] else now_iso()) if ligado else atual["ligado_em"]
+    with DB_LOCK:
+        DB.execute(
+            """INSERT INTO cadastro_auto_config_v1941(id, ligado, ligado_em, por) VALUES(1,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET ligado=excluded.ligado, ligado_em=excluded.ligado_em, por=excluded.por""",
+            (1 if ligado else 0, ligado_em, str(usuario or "")[:80]),
+        )
+        DB.commit()
+    audit(usuario, "expedicao.cadastro_auto", "ligado" if ligado else "desligado")
+    return {"ok": True, **cadastro_auto_config()}
+
+
+def cadastro_auto_do_pedido(pedido: str) -> dict[str, Any] | None:
+    with DB_LOCK:
+        row = DB.execute("SELECT * FROM cadastro_auto_v1941 WHERE order_key=?", (normalize(pedido),)).fetchone()
+    return dict(row) if row else None
+
+
+def _cadastro_auto_registrar(pedido: str, inicio: float, agora: float, tentativas: int, situacao: str,
+                             detalhe: str, cliente: str = "") -> None:
+    with DB_LOCK:
+        DB.execute(
+            """INSERT INTO cadastro_auto_v1941(order_key,pedido,inicio_epoch,ultima_epoch,tentativas,situacao,detalhe,cliente,atualizado_em)
+               VALUES(?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(order_key) DO UPDATE SET ultima_epoch=excluded.ultima_epoch, tentativas=excluded.tentativas,
+                   situacao=excluded.situacao, detalhe=excluded.detalhe,
+                   cliente=CASE WHEN excluded.cliente<>'' THEN excluded.cliente ELSE cadastro_auto_v1941.cliente END,
+                   atualizado_em=excluded.atualizado_em""",
+            (normalize(pedido), pedido, inicio, agora, tentativas, situacao, str(detalhe or "")[:400], cliente, now_iso()),
+        )
+        DB.commit()
+
+
+def _cadastro_auto_candidatos(ligado_em: str) -> list[dict[str, Any]]:
+    """Pedidos pendentes (ML/Shopee) cujo nome/CPF da NF-e chegou depois de ligar e que
+    ainda não terminaram. O início da contagem de 1 h é a chegada do nome/CPF."""
+    with DB_LOCK:
+        pendentes, _, _ = get_storage("conf_pedidos")
+        fiscais = DB.execute(
+            "SELECT pedido, atualizado_em FROM cliente_fiscal WHERE documento_numero<>'' AND nome_fiscal<>'' AND atualizado_em>=?",
+            (ligado_em,),
+        ).fetchall()
+        estados = {r["order_key"]: dict(r) for r in DB.execute("SELECT * FROM cadastro_auto_v1941").fetchall()}
+    na_fila: dict[str, str] = {}
+    for row in _rows_from_storage_value(pendentes):
+        if isinstance(row, dict):
+            mp = _vendas_marketplace(row.get("Marketplace") or row.get("Origem"))
+            if mp in CADASTRO_AUTO_MARKETPLACES:
+                na_fila.setdefault(normalize(order_number(row)), mp)
+    saida = []
+    for f in fiscais:
+        chave = normalize(f["pedido"])
+        if chave not in na_fila:
+            continue
+        estado = estados.get(chave)
+        if estado and estado["situacao"] in CADASTRO_AUTO_FINAIS:
+            continue
+        try:
+            chegou = datetime.fromisoformat(str(f["atualizado_em"])).timestamp()
+        except Exception:
+            chegou = time.time()
+        saida.append({"pedido": f["pedido"], "inicio": (estado or {}).get("inicio_epoch") or chegou,
+                      "ultima": (estado or {}).get("ultima_epoch") or 0, "tentativas": (estado or {}).get("tentativas") or 0})
+    return saida
+
+
+def cadastro_auto_rodada(agora: float | None = None, esperar=None) -> dict[str, int]:
+    """Uma volta da rotina. `esperar(segundos)` espaça as chamadas à porta (teto de
+    escritas por minuto); nos testes não espera."""
+    cfg = cadastro_auto_config()
+    contagem = {"feito": 0, "aguardando": 0, "nao_encontrado": 0, "mais_de_um": 0, "erro": 0}
+    if not cfg["ligado"] or not EXP_CADASTRO_API:
+        return contagem
+    agora = float(agora if agora is not None else time.time())
+    feitos = 0
+    for c in _cadastro_auto_candidatos(cfg["ligado_em"]):
+        if c["ultima"] and agora - c["ultima"] < CADASTRO_AUTO_INTERVALO:
+            continue                                   # tenta de 10 em 10 min
+        if feitos >= CADASTRO_AUTO_POR_RODADA:
+            break
+        if feitos and esperar:
+            esperar(25)
+        feitos += 1
+        tent = int(c["tentativas"]) + 1
+        try:
+            r = exp_cadastro_atualizar(c["pedido"], "automatico", criar=False)
+        except Exception as exc:                       # nunca derruba a rodada
+            r = {"ok": False, "situacao": "erro", "error": str(exc)}
+        sit = str(r.get("situacao") or "")
+        vencido = agora - float(c["inicio"]) >= CADASTRO_AUTO_JANELA
+        if r.get("ok"):
+            final, det = "feito", "; ".join(r.get("avisos") or []) or f"crédito: {r.get('credito')}"
+        elif sit == "nao_cadastrado":
+            final, det = ("nao_encontrado" if vencido else "aguardando"), "Cliente ainda não está no Apollo."
+        elif sit == "mais_de_um":
+            final, det = "mais_de_um", "Mais de um cliente com este CPF/CNPJ no Apollo."
+        elif sit == "desligado":
+            break
+        else:
+            final, det = ("erro" if vencido else "aguardando"), str(r.get("error") or sit or "erro")
+        _cadastro_auto_registrar(c["pedido"], float(c["inicio"]), agora, tent, final, det, str(r.get("cliente") or ""))
+        contagem[final] = contagem.get(final, 0) + 1
+    return contagem
+
+
+def cadastro_auto_loop(stop_event: threading.Event) -> None:
+    while not stop_event.is_set():
+        try:
+            cadastro_auto_rodada(esperar=lambda s: stop_event.wait(s))
+        except Exception as exc:
+            print(f"[cadastro-auto] {exc}", flush=True)
+        stop_event.wait(120)
 
 
 # ---------------------------------------------------------------------------
@@ -27106,6 +27287,13 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
+        if path == "/api/expedicao-apollo/cadastro-auto":
+            # V19.41: situação do cadastro automático (quem tem o módulo admin vê).
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            self.send_json({"ok": True, **cadastro_auto_config()})
+            return
         if path == "/api/expedicao-apollo/romaneio":
             # V19.30: botão do romaneio pela porta da Expedição (Admin e Supervisor).
             ctx = self.auth(admin_only=True)
@@ -27379,6 +27567,14 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.send_json(resultado, 200 if resultado.get("ok") else 409)
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/expedicao-apollo/cadastro-auto":
+            # V19.41: ligar/desligar o cadastro automático — só o perfil Admin.
+            ctx = self.auth_full_admin()
+            if ctx is None:
+                return
+            body = self.read_json()
+            self.send_json(cadastro_auto_ligar(body.get("ligado") is True, str(ctx.get("username") or "")))
             return
         # V19.30: romaneio, caixa e cadastro pela porta da Expedição (Admin e Supervisor).
         if path in ("/api/expedicao-apollo/romaneio/soltar", "/api/expedicao-apollo/caixa/previa",
@@ -31174,6 +31370,7 @@ SAUDE_WORKERS_INFO: dict[str, tuple[str, bool, int]] = {
     "ml_estoque_loop": ("Estoque dos anúncios (Ruptura)", False, 120),
     "shopee_anuncios_loop": ("Anúncios da Shopee (Conversão e Ruptura)", False, 120),
     "linx_demanda_loop": ("Demanda de Compra pela Linx", False, 180),
+    "cadastro_auto_loop": ("Cadastro automático no Apollo", False, 60),  # V19.41
     "compras_geral_loop": ("Demanda de Compra geral (segunda)", False, 180),
     "promo_renovacao_loop": ("Promoções automáticas", False, 120),
     "posvenda_loop": ("Pós-venda do Mercado Livre", False, 60),
@@ -32136,6 +32333,13 @@ def main() -> None:
         name="linx-demanda",
         daemon=True,
     )
+    # V19.41: cadastro automático do cliente no Apollo (só atualiza, nunca cria).
+    cadastro_auto_thread = threading.Thread(
+        target=_worker_protegido(cadastro_auto_loop),
+        args=(watcher_stop,),
+        name="cadastro-auto",
+        daemon=True,
+    )
     # V18.90: anúncios da Shopee — retrato do dia (visualizações, estoque) e estoque a cada 2 h.
     shopee_anuncios_thread = threading.Thread(
         target=_worker_protegido(shopee_anuncios_loop),
@@ -32223,6 +32427,7 @@ def main() -> None:
         promo_convites_thread.start()
         shopee_anuncios_thread.start()
         linx_demanda_thread.start()
+        cadastro_auto_thread.start()  # V19.41
         promo_renovacao_thread.start()
         relatorio_thread.start()
         compras_geral_thread.start()
