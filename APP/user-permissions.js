@@ -12,12 +12,13 @@
   // sempre desligada no Operador. Os outros módulos ficam livres.
   function perfilDe(u){
     const p=String(u?.Perfil||"").toLowerCase();
-    return p.includes("admin")?"admin":(p.includes("supervisor")?"supervisor":"operador");
+    return p.includes("admin")?"admin":(p.includes("supervisor")?"supervisor":(p.includes("consulta")?"consulta":"operador"));
   }
   function travaAdmin(u){
     const p=perfilDe(u);
     if(p==="supervisor") return {valor:true,dica:"O Supervisor sempre tem o Admin. Para tirar, mude o perfil para Operador."};
     if(p==="operador") return {valor:false,dica:"Para dar acesso ao Admin, mude o perfil para Supervisor."};
+    if(p==="consulta") return {valor:true,dica:"Consulta vê o Admin, mas não altera nada."};
     return null;
   }
 
@@ -62,7 +63,13 @@
       input.type="checkbox";
       input.checked=accessValue(u,field,key);
       input.dataset.permissionField=field;
-      if(key==="admin" && trava){
+      // V19.40: Consulta tem os módulos fixos (vê Conferência, Admin e Precificador; sem Estação).
+      if(perfilDe(u)==="consulta"){
+        input.checked=key!=="estacao";
+        input.disabled=true;
+        lab.title="Perfil Consulta: módulos fixos, somente leitura.";
+        lab.classList.add("usuario-acesso-travado");
+      } else if(key==="admin" && trava){
         input.disabled=true;
         lab.title=trava.dica;
         lab.classList.add("usuario-acesso-travado");

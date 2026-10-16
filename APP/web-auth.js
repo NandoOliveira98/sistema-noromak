@@ -11,7 +11,38 @@
   const API_LOGOUT = `${BASE}/api/auth/logout`;
 
   const txt = value => String(value ?? "").trim();
-  const profileLabel = role => role === "admin" ? "Admin" : "Operador";
+  const profileLabel = role => role === "admin" ? "Admin" : (role === "consulta" ? "Consulta" : "Operador");
+
+  // V19.40: perfil Consulta (somente leitura). O servidor recusa toda gravação com
+  // 403 SOMENTE_LEITURA; aqui a tela mostra o selo e avisa quando algo foi recusado.
+  let avisoLeituraEm = 0;
+  function avisarSomenteLeitura() {
+    const agora = Date.now();
+    if (agora - avisoLeituraEm < 3000) return;
+    avisoLeituraEm = agora;
+    const texto = "Perfil Consulta: somente leitura. Nada foi alterado.";
+    if (typeof window.nkToast === "function") window.nkToast(texto, "aviso");
+    else console.warn(texto);
+  }
+  function marcarSomenteLeitura(user) {
+    if (!user || !user.somente_leitura || window.__nkSomenteLeituraV1940) return;
+    window.__nkSomenteLeituraV1940 = true;
+    document.documentElement.dataset.somenteLeitura = "1";
+    const selo = document.createElement("div");
+    selo.id = "nkSeloSomenteLeitura";
+    selo.textContent = "Somente leitura";
+    selo.title = "Perfil Consulta: você pode ver tudo, mas não alterar.";
+    selo.style.cssText = "position:fixed;left:50%;bottom:10px;transform:translateX(-50%);z-index:10001;padding:6px 14px;border-radius:999px;background:#fff4e5;color:#8a4b00;border:1px solid #f0c27b;font:700 12px Segoe UI,Arial;box-shadow:0 2px 8px rgba(0,0,0,.12);pointer-events:none";
+    (document.body || document.documentElement).appendChild(selo);
+    const original = window.fetch.bind(window);
+    window.fetch = async (...args) => {
+      const resposta = await original(...args);
+      if (resposta.status === 403) {
+        resposta.clone().json().then(d => { if (d && d.code === "SOMENTE_LEITURA") avisarSomenteLeitura(); }).catch(() => {});
+      }
+      return resposta;
+    };
+  }
   const permission = (user, module) => {
     const p = user?.permissions || {};
     if (Object.prototype.hasOwnProperty.call(p, module)) return !!p[module];
@@ -82,6 +113,7 @@
     };
     window.EXPEDICAO_USER = user;
     window.usuarioLogado = session;
+    marcarSomenteLeitura(user);  // V19.40
     try {
       localStorage.setItem("conf_sessao_ativa", JSON.stringify(session));
       if (permission(user, "admin")) {

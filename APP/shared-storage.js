@@ -129,6 +129,16 @@
     let resposta = {};
     try { resposta = xhr.responseText ? JSON.parse(xhr.responseText) : {}; } catch (_) { resposta = { error: xhr.responseText || "Falha desconhecida" }; }
     const sucesso = xhr.status >= 200 && xhr.status < 300;
+    // V19.40: perfil Consulta — recusa de gravação não é queda de rede. Descarta a cópia
+    // local da chave (a tela volta ao que está no servidor) e avisa.
+    if (xhr.status === 403 && resposta && resposta.code === "SOMENTE_LEITURA") {
+      if (corpo && corpo.key) {
+        cache.delete(String(corpo.key));
+        try { window.sessionStorage.removeItem("rede_cache_" + String(corpo.key)); } catch (_) {}
+      }
+      try { if (typeof window.nkToast === "function") window.nkToast("Perfil Consulta: somente leitura. Nada foi alterado.", "aviso"); } catch (_) {}
+      throw new Error(resposta.error || "Perfil Consulta: somente leitura.");
+    }
     if (!sucesso && !statusPermitidos.includes(xhr.status)) {
       conectado = false;
       ultimoErro = resposta.error || `HTTP ${xhr.status}: ${xhr.responseText || "falha no aplicativo"}`;

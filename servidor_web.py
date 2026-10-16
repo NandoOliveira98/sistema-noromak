@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.39-AVISO-CREDITO-NAO-GRAVOU"
+APP_VERSION = "19.40-PERFIL-CONSULTA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -373,6 +373,8 @@ STORAGE_LEITURA_PRECIFICADOR = {
 def storage_leitura_permitida(ctx: dict[str, Any], key: str) -> bool:
     if key in STORAGE_SEGREDOS:
         return False
+    if is_consulta_ctx(ctx) and key in CONSULTA_STORAGE_OCULTO:
+        return False  # V19.40: Consulta não vê a lista de usuários
     if str(ctx.get("app_role") or "").lower() == "admin" or module_allowed(ctx, "admin"):
         return True  # Admin e Supervisor: as telas de gestão leem as outras chaves
     if key in STORAGE_LEITURA_CONFERENCIA and (module_allowed(ctx, "conferencia") or module_allowed(ctx, "estacao")):
@@ -1577,13 +1579,12 @@ def session_ttl_for_area(area: str) -> int:
 
 def is_supervisor_user(row: sqlite3.Row | dict[str, Any]) -> bool:
     """Supervisor = operador com acesso operacional amplo ao Admin, sem poderes críticos de administrador."""
+    role = role_efetivo(row)
     try:
-        role = str(row["role"]).lower()
         can_admin = bool(row["can_admin"])
     except Exception:
-        role = str(row.get("role", "operador")).lower()
         can_admin = bool(row.get("can_admin"))
-    return role != "admin" and can_admin
+    return role not in ("admin", PERFIL_CONSULTA) and can_admin  # V19.40: Consulta não é Supervisor
 
 
 def session_ttl_for_user_area(area: str, row: sqlite3.Row | dict[str, Any]) -> int:
@@ -1721,6 +1722,10 @@ def ensure_app_user_permissions_schema() -> None:
             "can_estacao": "INTEGER NOT NULL DEFAULT 0",
             "can_precificador": "INTEGER NOT NULL DEFAULT 0",
         }
+        # V19.40: perfil Consulta = role 'operador' + somente_leitura=1. Fora do "additions"
+        # para não disparar a migração de módulos abaixo.
+        if "somente_leitura" not in columns:
+            DB.execute("ALTER TABLE app_users ADD COLUMN somente_leitura INTEGER NOT NULL DEFAULT 0")
         changed = False
         for name, ddl in additions.items():
             if name not in columns:
@@ -1751,7 +1756,69 @@ def ensure_app_user_permissions_schema() -> None:
         DB.commit()
 
 
+# V19.40: perfil Consulta (decisão do dono, 16/10) — vê tudo menos Usuários/Segurança, em
+# todas as filiais, e não altera nada. A trava é no servidor (consulta_bloqueada): botão que
+# a tela esqueceu de esconder também recebe 403 SOMENTE_LEITURA. Conferência só para ver a
+# fila; Estação Zebra fica de fora.
+PERFIL_CONSULTA = "consulta"
+CONSULTA_PERMISSOES = {"conferencia": True, "admin": True, "estacao": False, "precificador": True}
+# POST que só lê (ou só mexe na sessão/aparelho de quem está usando).
+CONSULTA_POST_LIVRES = {
+    "/api/auth/login", "/api/auth/logout", "/api/full/apollo-stock", "/api/full/kits", "/api/full/anuncios",
+    "/api/avisos-venda/inscrever", "/api/avisos-venda/desinscrever", "/api/avisos-venda/entregar",
+}
+# GET que muda alguma coisa (conectar integração) ou mostra a área de Segurança.
+CONSULTA_GET_BLOQUEADOS = {
+    "/api/integracoes/mercadolivre/connect", "/api/integracoes/shopee/connect",
+    "/api/integracoes/magalu/connect", "/api/security/status",
+}
+CONSULTA_STORAGE_OCULTO = {"conf_usuarios", "conf_solicitacoes_usuarios"}
+SOMENTE_LEITURA_ERRO = {"ok": False, "code": "SOMENTE_LEITURA",
+                        "error": "Perfil Consulta: somente leitura. Peça a um Admin para fazer esta alteração."}
+
+
+def is_consulta_role(role: Any) -> bool:
+    return str(role or "").strip().lower() == PERFIL_CONSULTA
+
+
+def role_efetivo(row: Any) -> str:
+    """V19.40: 'consulta' quando a linha tem somente_leitura=1; senão o role gravado."""
+    try:
+        role = str(row["role"] or "operador").lower()
+    except (KeyError, IndexError, TypeError):
+        role = str((row or {}).get("role") or "operador").lower() if isinstance(row, dict) else "operador"
+    try:
+        leitura = bool(row["somente_leitura"])
+    except (KeyError, IndexError, TypeError):
+        leitura = bool(row.get("somente_leitura")) if isinstance(row, dict) else False
+    return PERFIL_CONSULTA if leitura and role != "admin" else role
+
+
+def is_consulta_ctx(ctx: dict[str, Any] | None) -> bool:
+    return bool(ctx) and is_consulta_role(ctx.get("app_role"))
+
+
+def normalizar_role(valor: Any) -> str:
+    texto = str(valor or "").strip().lower()
+    if texto.startswith("admin"):
+        return "admin"
+    if texto.startswith(PERFIL_CONSULTA):
+        return PERFIL_CONSULTA
+    return "operador"
+
+
+def perfil_exibicao(row: sqlite3.Row | dict[str, Any]) -> str:
+    role = role_efetivo(row)
+    if role == "admin":
+        return "Admin"
+    if role == PERFIL_CONSULTA:
+        return "Consulta"
+    return "Supervisor" if is_supervisor_user(row) else "Operador"
+
+
 def user_permissions_from_row(row: sqlite3.Row | dict[str, Any]) -> dict[str, bool]:
+    if role_efetivo(row) == PERFIL_CONSULTA:
+        return dict(CONSULTA_PERMISSOES)
     role = str(row["role"] if "role" in row.keys() else row.get("role", "operador")).lower()
     def flag(name: str, admin_default: bool = False) -> bool:
         try:
@@ -3187,7 +3254,8 @@ def upsert_app_user(
     username = username.strip().lower()
     if not username:
         return
-    role = "admin" if str(role).lower().startswith("admin") else "operador"
+    role = normalizar_role(role)  # V19.40: aceita Consulta
+    somente_leitura = role == PERFIL_CONSULTA
     owner_account = is_owner_username(username)
     if owner_account:
         role = "admin"
@@ -3203,6 +3271,8 @@ def upsert_app_user(
     else:
         fallback = initial_password_for(username, role)
         pwd_hash, pwd_salt, iterations = password_digest(fallback)
+    if role == PERFIL_CONSULTA:
+        permissions = dict(CONSULTA_PERMISSOES)  # V19.40: módulos fixos do perfil
     if permissions is None:
         if existing:
             perms = user_permissions_from_row(existing)
@@ -3228,15 +3298,21 @@ def upsert_app_user(
            can_estacao=excluded.can_estacao,can_precificador=excluded.can_precificador,
            updated_at=excluded.updated_at,updated_by=excluded.updated_by""",
         (
-            username, display_name.strip() or username, pwd_hash, pwd_salt, iterations, role, 1 if active else 0,
+            username, display_name.strip() or username, pwd_hash, pwd_salt, iterations,
+            "operador" if role == PERFIL_CONSULTA else role, 1 if active else 0,
             1 if perms["conferencia"] else 0, 1 if perms["admin"] else 0,
             1 if perms["estacao"] else 0, 1 if perms["precificador"] else 0,
             now_iso(), updated_by,
             # V18.95: usuário NOVO nasce com a filial padrão (Admin vê todas); o que já existe
             # mantém a dele (a coluna não entra no UPDATE acima).
-            "todas" if role == "admin" else "aracatuba",
+            "todas" if role in ("admin", PERFIL_CONSULTA) else "aracatuba",
         ),
     )
+    # V19.40: Consulta fica gravado como operador (CHECK da tabela) + somente_leitura.
+    DB.execute("UPDATE app_users SET somente_leitura=? WHERE username=?",
+               (1 if somente_leitura and not owner_account else 0, username))
+    if somente_leitura and not owner_account:
+        DB.execute("UPDATE app_users SET casa=? WHERE username=?", (FILIAL_TODAS, username))
 
 
 def legacy_users_from_migration() -> list[dict[str, Any]]:
@@ -3324,7 +3400,7 @@ def migrate_app_users() -> None:
 def app_users_payload() -> list[dict[str, Any]]:
     rows = DB.execute(
         """SELECT username,display_name,role,active,can_conferencia,can_admin,can_estacao,can_precificador,
-                  updated_at,updated_by,casa FROM app_users ORDER BY display_name,username"""
+                  updated_at,updated_by,casa,somente_leitura FROM app_users ORDER BY display_name,username"""
     ).fetchall()
     return [
         {
@@ -3332,7 +3408,7 @@ def app_users_payload() -> list[dict[str, Any]]:
             "Nome": row["display_name"] or row["username"],
             "Login": row["username"],
             "Senha": PASSWORD_MASK,
-            "Perfil": ("Admin" if row["role"] == "admin" else ("Supervisor" if is_supervisor_user(row) else "Operador")),
+            "Perfil": perfil_exibicao(row),  # V19.40
             "Owner": is_owner_username(row["username"]),
             "Ativo": bool(row["active"]),
             "Aprovado": bool(row["active"]),
@@ -3394,7 +3470,8 @@ def apply_app_users_payload(value: str, actor: str) -> str:
                 raise ValueError(f"O login '{username}' está duplicado.")
             seen.add(username)
             display_name = str(raw.get("Nome") or username).strip() or username
-            role = "admin" if "admin" in str(raw.get("Perfil") or "").lower() else "operador"
+            perfil_txt = str(raw.get("Perfil") or "").lower()
+            role = "admin" if "admin" in perfil_txt else (PERFIL_CONSULTA if PERFIL_CONSULTA in perfil_txt else "operador")
             active = raw.get("Ativo", raw.get("Aprovado", True)) not in (False, "false", "0", 0, "inativo")
             password = str(raw.get("Senha") or "").strip()
             if password == PASSWORD_MASK:
@@ -5488,7 +5565,7 @@ def noromakweb_sso_context(handler: BaseHTTPRequestHandler) -> dict[str, Any] | 
     with DB_LOCK:
         row = DB.execute(
             """SELECT username,display_name,role,active,
-                      can_conferencia,can_admin,can_estacao,can_precificador,casa
+                      can_conferencia,can_admin,can_estacao,can_precificador,casa,somente_leitura
                FROM app_users WHERE username=?""",
             (username,),
         ).fetchone()
@@ -5501,7 +5578,7 @@ def noromakweb_sso_context(handler: BaseHTTPRequestHandler) -> dict[str, Any] | 
     return {
         "username": row["username"],
         "nome": row["display_name"] or row["username"],
-        "app_role": row["role"],
+        "app_role": role_efetivo(row),  # V19.40: "consulta" no perfil somente leitura
         "app_active": True,
         "permissions": user_permissions_from_row(row),
         "area": "noromakweb",
@@ -5509,6 +5586,7 @@ def noromakweb_sso_context(handler: BaseHTTPRequestHandler) -> dict[str, Any] | 
         "session_key": hashlib.sha256(f"noromakweb-sso|{username}".encode("utf-8")).hexdigest(),
         "casa": usuario_filial(row),  # V18.95
         "is_owner": is_owner_username(row["username"]),
+        "somente_leitura": role_efetivo(row) == PERFIL_CONSULTA,  # V19.40
         "sso": "noromakweb",
     }
 
@@ -5527,7 +5605,7 @@ def session_context(handler: BaseHTTPRequestHandler) -> dict[str, Any] | None:
     with DB_LOCK:
         row = DB.execute(
             """SELECT s.token_hash,s.username,s.area,s.expires_at,u.display_name,u.role,u.active,
-                      u.can_conferencia,u.can_admin,u.can_estacao,u.can_precificador,u.casa
+                      u.can_conferencia,u.can_admin,u.can_estacao,u.can_precificador,u.casa,u.somente_leitura
                FROM app_sessions s JOIN app_users u ON u.username=s.username
                WHERE s.token_hash=?""",
             (token_hash,),
@@ -5545,7 +5623,7 @@ def session_context(handler: BaseHTTPRequestHandler) -> dict[str, Any] | None:
     return {
         "username": row["username"],
         "nome": row["display_name"] or row["username"],
-        "app_role": row["role"],
+        "app_role": role_efetivo(row),  # V19.40: "consulta" no perfil somente leitura
         "app_active": True,
         "permissions": user_permissions_from_row(row),
         "area": str(row["area"] or "conferencia"),
@@ -5553,6 +5631,7 @@ def session_context(handler: BaseHTTPRequestHandler) -> dict[str, Any] | None:
         "session_key": token_hash,
         "casa": usuario_filial(row),  # V18.95: filial (aracatuba, bauru ou todas)
         "is_owner": is_owner_username(row["username"]),
+        "somente_leitura": role_efetivo(row) == PERFIL_CONSULTA,  # V19.40
     }
 
 
@@ -8298,6 +8377,8 @@ def usuario_filial(row: Any) -> str:
         admin = str(row["role"] or "").lower() == "admin"
     except (KeyError, IndexError, TypeError):
         admin = False
+    if role_efetivo(row) == PERFIL_CONSULTA:
+        return FILIAL_TODAS  # V19.40: Consulta vê sempre todas as filiais
     if casa == FILIAL_TODAS:
         return FILIAL_TODAS if admin else CASA_PRINCIPAL
     return casa if casa in CASAS else CASA_PRINCIPAL
@@ -8305,6 +8386,8 @@ def usuario_filial(row: Any) -> str:
 
 def filial_normalizar(valor: Any, role: str) -> str:
     texto = unicodedata.normalize("NFKD", str(valor or "")).encode("ascii", "ignore").decode().strip().lower()
+    if is_consulta_role(role):
+        return FILIAL_TODAS  # V19.40
     if texto in ("", "aracatuba"):
         return CASA_PRINCIPAL
     if texto in ("todas", "todas as filiais"):
@@ -26325,9 +26408,26 @@ class AppHandler(BaseHTTPRequestHandler):
     def do_HEAD(self) -> None:
         self.do_GET()
 
+    def consulta_bloqueada(self, metodo: str, path: str) -> bool:
+        """V19.40: perfil Consulta não altera nada — recusa antes de qualquer rota."""
+        if metodo == "GET" and path not in CONSULTA_GET_BLOQUEADOS:
+            return False
+        if metodo == "POST" and path in CONSULTA_POST_LIVRES:
+            return False
+        if not path.startswith("/api/"):
+            return False
+        ctx = session_context(self)
+        if not is_consulta_ctx(ctx):
+            return False
+        audit(str(ctx.get("username") or ""), "security.denied.somente_leitura", f"{metodo} {path}")
+        self.send_json(SOMENTE_LEITURA_ERRO, 403)
+        return True
+
     def do_GET(self) -> None:
         path = self.route_path()
         query = parse_qs(urlparse(self.path).query)
+        if self.consulta_bloqueada("GET", path):
+            return
         if path == "/api/health":
             self.send_json(
                 {
@@ -27202,6 +27302,8 @@ class AppHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = self.route_path()
+        if self.consulta_bloqueada("POST", path):
+            return
         # V17.86 — a extensão leu CPF/nome na venda (ou gravou no Linx): guarda.
         # Tabela própria (cliente_fiscal); não toca em conf_pedidos.
         if path == "/api/cliente-fiscal":
@@ -28363,6 +28465,8 @@ class AppHandler(BaseHTTPRequestHandler):
     def do_DELETE(self) -> None:
         path = self.route_path()
         query = parse_qs(urlparse(self.path).query)
+        if self.consulta_bloqueada("DELETE", path):
+            return
         if path == "/api/storage":
             # V18.66 (decisão do dono, 05/10): apagar uma base inteira é só do Admin e
             # com a confirmação do proprietário (senha + 2FA). Antes o Supervisor
@@ -28441,8 +28545,9 @@ class AppHandler(BaseHTTPRequestHandler):
                 DB.commit()
             user = {
                 "username": username, "nome": row["display_name"] or username,
-                "app_role": row["role"], "app_active": True, "is_owner": is_owner_username(username),
+                "app_role": role_efetivo(row), "app_active": True, "is_owner": is_owner_username(username),
                 "permissions": permissions, "casa": usuario_filial(row),  # V18.95
+                "somente_leitura": role_efetivo(row) == PERFIL_CONSULTA,  # V19.40
             }
             audit(username, "auth.login", f"{area}:{client_computer(self)}")
             self.send_json(
@@ -30262,13 +30367,15 @@ class AppHandler(BaseHTTPRequestHandler):
         with DB_LOCK:
             rows = DB.execute(
                 """SELECT username,display_name,role,active,can_conferencia,can_admin,can_estacao,can_precificador,
-                          updated_at,updated_by,casa FROM app_users ORDER BY display_name,username"""
+                          updated_at,updated_by,casa,somente_leitura FROM app_users ORDER BY display_name,username"""
             ).fetchall()
         users = []
         for row in rows:
             item = dict(row)
             item["filial"] = usuario_filial(row)  # V18.95
-            item["display_profile"] = "Admin" if item.get("role") == "admin" else ("Supervisor" if is_supervisor_user(row) else "Operador")
+            item["display_profile"] = perfil_exibicao(row)  # V19.40
+            item["role"] = role_efetivo(row)
+            item.pop("somente_leitura", None)
             users.append(item)
         self.send_json({"users": users, "seed_admin": ADMIN_USERNAME, "login_interno": True})
 
@@ -30302,7 +30409,9 @@ class AppHandler(BaseHTTPRequestHandler):
                 }
             if not username or any(ch.isspace() for ch in username):
                 raise ValueError("Informe o login do estoque sem espaços.")
-            if role not in ("admin", "operador"):
+            if is_consulta_role(role):
+                permissions = dict(CONSULTA_PERMISSOES)  # V19.40
+            if role not in ("admin", "operador", PERFIL_CONSULTA):
                 raise ValueError("Perfil inválido.")
             current = DB.execute("SELECT * FROM app_users WHERE username=?", (username,)).fetchone()
             if not current and not password:
@@ -30831,7 +30940,7 @@ def _avisos_usuario_pode(username: str) -> bool:
     """Só quem tem o módulo Admin recebe (decisão do dono, 10/10)."""
     with DB_LOCK:
         row = DB.execute(
-            "SELECT username,role,active,can_conferencia,can_admin,can_estacao,can_precificador FROM app_users WHERE username=?",
+            "SELECT username,role,active,can_conferencia,can_admin,can_estacao,can_precificador,somente_leitura FROM app_users WHERE username=?",
             (str(username or "").strip().lower(),),
         ).fetchone()
     return bool(row and row["active"] and user_permissions_from_row(row).get("admin"))

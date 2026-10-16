@@ -280,6 +280,17 @@ lista**, senão ela recebe 403.
 
 Alterar `conf_usuarios` exige reautenticação do OWNER (senha + TOTP).
 
+**Perfil Consulta (V19.40, decisões do dono 16/10):** vê tudo menos Usuários e Segurança, sempre em
+**todas** as filiais, e **não altera nada**. Gravado como `role='operador'` + `app_users.somente_leitura=1`
+(o CHECK da tabela só aceita admin/operador; recriar a tabela de produção não valia o risco) —
+`role_efetivo()` devolve `consulta` e é o `app_role` da sessão (`somente_leitura: true`). Módulos fixos
+(`CONSULTA_PERMISSOES`: Conferência só para ver a fila, Admin, Precificador; sem Estação). A trava é no
+servidor, antes de qualquer rota (`consulta_bloqueada` no `do_GET/do_POST/do_DELETE`): todo POST/DELETE
+recusado com 403 `SOMENTE_LEITURA`, menos os que só leem (`CONSULTA_POST_LIVRES`); GET que conecta
+integração ou mostra Segurança também (`CONSULTA_GET_BLOQUEADOS`). **Rota nova de POST que só lê e que o
+Consulta precisa: incluir em `CONSULTA_POST_LIVRES`.** Na tela: selo "Somente leitura" e aviso
+(`web-auth.js`); o `shared-storage.js` não trata a recusa como queda de rede e descarta a cópia local.
+
 **Migração de usuários (V19.00):** `migrate_app_users` só traz usuários legados
 (`MIGRACAO_INICIAL`, `conf_usuarios` antigo, `user_roles`) na instalação **nova** (`app_users`
 vazia), e senha legada com menos de 8 caracteres é trocada pela inicial. Antes rodava em todo
@@ -1018,6 +1029,7 @@ Os testes ficam em `TESTES/` (são 30 arquivos; os principais):
 | `test_auditoria_cobrancas_v1901.py` | cada tipo de cobrança indevida, carência de 30 dias, R$ 2,00, frete do carrinho por envio, lançamento em um caso só, situação humana nunca desfeita, ignorado não volta, recuperado total/parcial (negado vira recuperado), detecção sem chamar o ML, permissões, linha do e-mail uma vez |
 | `test_remessa_full_v1903.py` | cálculo (30 dias, kit conta 1, Apollo Araçatuba dividido, null nunca zero), uma remessa aberta, ajuste do ADMIN nunca desfeito, mínimo de 150, rodada descartada se agendaram durante a leitura, novos só com confirmação, não aceito por código, recebida automática (≥ 50%) e manual, aviso 1x/dia, linha do e-mail, rotas e permissões |
 | `test_campanhas_linha_v1904.py` | campanhas lidas por anúncio e pela conta certa, pausa/interrupção sem limpeza, lucro da promoção e de cada campanha na mesma base, melhor só acima do lucro e da margem mínima, relâmpago sem Aceitar, sem custo = nulo, expirada/outra conta/removida fora, tela com a coluna nova e sem a lista de convites |
+| `test_consulta_v1940.py` | perfil Consulta: lê fila e gestão, não grava fila/bip/conclusão/trava/impressão, não apaga nem conecta integração, não vê Usuários/Segurança, todas as filiais, sem Estação, perfil sobrevive ao salvar a lista de usuários |
 | `test_magalu_v1924.py` | páginas de termos/privacidade sem login, URL de consentimento, state de uso único, token não vaza no status, renovação serializada com o refresh novo, callback com erro volta ao Admin |
 | `test_magalu_previa_v1926.py` | prévia não grava na fila, só entrega approved/invoiced, kit aberto, já-na-fila, paginação, 1ª resposta guardada, 401 renova o token uma vez |
 | `test_magalu_importacao_v1927.py` | chave começa ligada, pedido entra como MAGALU, reimportar não duplica e mantém edição manual, kit, exclusão do ADMIN (pedido e linha) e concluído não voltam, pedido da extensão não duplica, enviado sai, falha da API não esvazia a fila, etiqueta da entrega faturada baixada uma vez e vinculada, erro na etiqueta não trava o pedido, rotas |
