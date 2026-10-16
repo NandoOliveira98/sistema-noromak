@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.41-CADASTRO-AUTOMATICO"
+APP_VERSION = "19.42-CADASTRO-BOTAO-MARCA-FEITO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -15386,6 +15386,12 @@ def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "", ie: Any
         avisos.insert(0, "CRÉDITO NÃO LIBERADO no Apollo (" + str(cr.get("situacao")) + "): libere a Situação de "
                          "Crédito e o Cadastro no Apollo antes do caixa, senão ele pede a autorização da função 257.")
     salvar_cliente_fiscal(pedido, documento, nome, linx_cliente=codigo, fonte="porta", usuario=usuario)
+    # V19.42: cadastro feito pelo BOTÃO também fica registrado como feito — o painel da
+    # extensão pula a etapa em qualquer computador (antes só no navegador que clicou) e
+    # a rotina automática não refaz o mesmo pedido.
+    if usuario != "automatico":
+        agora = time.time()
+        _cadastro_auto_registrar(pedido, agora, agora, 0, "feito", "pelo botão (" + usuario[:40] + ")", codigo)
     audit(usuario, "expedicao.cadastro", f"{pedido}|{codigo}|{'criado' if criado else 'atualizado'}|{cr.get('situacao')}")
     return {"ok": True, "situacao": "criado" if criado else "atualizado", "cliente": codigo,
             "nome": nome_limpo, "endereco": endereco, "cidade_apollo": at.get("cidade"),

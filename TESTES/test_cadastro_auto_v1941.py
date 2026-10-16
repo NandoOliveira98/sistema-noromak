@@ -130,6 +130,30 @@ class CadastroAuto(unittest.TestCase):
         self.assertEqual(S.lista_cliente_fiscal()["clientes"][PEDIDO]["cadastro_auto"]["situacao"], "aguardando")
 
 
+class BotaoMarcaFeito(unittest.TestCase):
+    """V19.42: cadastro pelo botão fica registrado — o painel pula a etapa em qualquer PC."""
+
+    def setUp(self):
+        reiniciar_banco()
+
+    def test_botao_registra_feito_e_a_rotina_nao_refaz(self):
+        _pedido()
+        porta = PortaFalsa()
+        with mock.patch.object(S, "_exp_porta", side_effect=porta), mock.patch.object(S, "EXP_CADASTRO_API", True), \
+                mock.patch.object(S, "ml_api_get", return_value=ENVIO_ML):
+            self.assertTrue(S.exp_cadastro_atualizar(PEDIDO, "luis")["ok"])
+            estado = S.cadastro_auto_do_pedido(PEDIDO)
+            self.assertEqual(estado["situacao"], "feito")
+            self.assertIn("botão", estado["detalhe"])
+            d = S.exp_romaneio_preparar(PEDIDO)
+            self.assertEqual(d["cadastro_auto"]["situacao"], "feito")
+            S.cadastro_auto_ligar(True, "admin")
+            S.salvar_cliente_fiscal(PEDIDO, "06278073994", "Fulano de Tal da Silva", fonte="extensao", usuario="t")
+            porta.chamadas.clear()
+            S.cadastro_auto_rodada(agora=time.time() + 700)
+        self.assertEqual(porta.chamadas, [])
+
+
 class Rotas(unittest.TestCase):
     def setUp(self):
         reiniciar_banco()
