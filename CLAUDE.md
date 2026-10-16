@@ -967,6 +967,16 @@ solta o romaneio com a observação do marketplace e envia ao caixa; Shopee/Maga
 troca a condição pela extensão Linx 0.44 (`condicao-definir-lote`, sem confirmação por pedido) antes de reenviar com
 `condicao_ok`. Etiquetas/TXT e Histórico saíram do menu (botões no "Importar pedidos"); Relatório ML/Shopee removidos.
 
+**V19.45 — Cliente do Full pela NF-e do ML** (decisões do dono, 16/10). Venda Full não passa pela fila, e a integração
+ML → Apollo cria o cliente com o nome da conta ("Premium Flex") em vez da razão social da nota (M2 SOLUCOES GRAFICAS).
+No Full a NF-e é emitida pelo **ML** (série 2): `ml_nota_da_venda` lê `/users/{seller}/invoices/orders/{order}` (XML da
+NF-e → `dest`; leitura tolerante, 1ª resposta em `cadastro_full_amostra_v1945`, **conferir ao ligar**). Worker
+`cadastro_full_loop` (5 min, 4 por rodada): vendas de `vendas_v1799` com anúncio `fulfillment` (`ml_estoque_dia_v1872`) e
+fora de `completed_orders`, 30 dias (até 2 dias a qualquer hora; mais antigas só 21h–6h). `full_cadastro_atualizar`:
+**nunca cria** (busca exata pelo documento), atualiza nome, endereço sem acento, e-mail/telefones padrão, categoria e
+I.E. da nota; sem crédito. Sem nota / cliente fora do Apollo: tenta de hora em hora por 1 dia, depois lista no cartão
+"Cadastro dos clientes do Full" (Admin → Integrações; interruptor próprio, desligado; só perfil Admin). Só Araçatuba.
+
 ### Vínculo MLB ↔ SKU
 Banco canônico `ml_sku_mlb_links_v1`, com seed em `DADOS/ml_sku_mlb_links_seed.json`.
 Um snapshot parcial do navegador **não** é autoridade: inclusão/remoção explícita usa

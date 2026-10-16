@@ -2111,6 +2111,20 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
           </div>
           <div class="integracao-nota">Só entram pedidos cujo nome/CPF da NF-e chegou depois de ligar. Só o perfil Admin liga e desliga.</div>
         </div>
+        <!-- V19.45: cadastro dos clientes do Full pela nota que o ML emitiu. -->
+        <div class="integracao-card">
+          <h3><i class=nk-i-file></i> Cadastro dos clientes do Full</h3>
+          <div id="cadFullStatus" class="integracao-status off">⚪ Carregando...</div>
+          <div class="integracao-dados">
+            <b>O que faz</b><span>Corrige no Apollo o cliente das vendas do Full com os dados da NF-e do ML (nome, endereço sem acento, categoria e I.E.)</span>
+            <b>Cliente fora do Apollo</b><span>Nunca cria: tenta de hora em hora por 1 dia; depois fica na lista abaixo</span>
+            <b>Situação</b><span id="cadFullContagem">—</span>
+          </div>
+          <div class="integracao-acoes">
+            <button type="button" id="btnCadFull" class="btn-primario" onclick="alternarCadastroFullAdmin()" disabled>Ligar</button>
+          </div>
+          <div id="cadFullLista" class="integracao-nota">Vendas Full dos últimos 30 dias (as antigas só à noite). Só o perfil Admin liga e desliga.</div>
+        </div>
         <div class="integracao-card">
           <h3><i class=nk-i-printer></i> Agente Zebra autônomo</h3>
           <div id="zebraAgentStatus" class="integracao-status off">⚪ Carregando...</div>
@@ -9545,8 +9559,35 @@ async function alternarCadastroAutoAdmin(){
   try{await mlApiAdmin("/expedicao/api/expedicao-apollo/cadastro-auto",{method:"POST",body:JSON.stringify({ligado:ligar})});await carregarCadastroAutoAdmin();}
   catch(e){alert("Cadastro automático: "+e.message);}
 }
+/* V19.45 — Cadastro dos clientes do Full: interruptor e pendências. */
+let cadFullLigadoV1945=false;
+async function carregarCadastroFullAdmin(){
+  const badge=document.getElementById("cadFullStatus"),btn=document.getElementById("btnCadFull");if(!badge)return;
+  try{
+    const d=await mlApiAdmin("/expedicao/api/expedicao-apollo/cadastro-full");
+    cadFullLigadoV1945=!!d.ligado;
+    badge.className="integracao-status "+(d.ligado?"ok":"off");
+    badge.textContent=d.ligado?"🟢 Ligado":"⚪ Desligado";
+    const c=d.contagem||{},nomes={feito:"feitos",aguardando:"aguardando",sem_nota:"sem nota",nao_encontrado:"não encontrados",mais_de_um:"mais de um",erro:"erro"};
+    document.getElementById("cadFullContagem").textContent=Object.keys(c).length?Object.entries(c).map(([k,n])=>n+" "+(nomes[k]||k)).join(" · "):"nenhuma venda ainda";
+    const esc=v=>String(v??"").replace(/[&<>"]/g,x=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[x]));
+    const linhas=(d.pendencias||[]).map(p=>`<div>${esc(p.venda_dia)} · venda ${esc(p.order_id)} · ${esc(nomes[p.situacao]||p.situacao)}${p.nome?" · "+esc(p.nome):""} — ${esc(p.detalhe)}</div>`).join("");
+    const feitos=(d.feitos||[]).slice(0,5).map(p=>`<div>✔ venda ${esc(p.order_id)} · cliente ${esc(p.cliente)} · ${esc(p.detalhe)}</div>`).join("");
+    document.getElementById("cadFullLista").innerHTML=(linhas?"<b>Corrigir à mão:</b>"+linhas:"")+(feitos?"<b>Últimos feitos:</b>"+feitos:"")||"Vendas Full dos últimos 30 dias (as antigas só à noite). Só o perfil Admin liga e desliga.";
+    btn.textContent=d.ligado?"Desligar":"Ligar";btn.className=d.ligado?"btn-perigo":"btn-primario";btn.disabled=false;
+  }catch(e){badge.className="integracao-status erro";badge.textContent="🔴 "+e.message;}
+}
+async function alternarCadastroFullAdmin(){
+  const ligar=!cadFullLigadoV1945;
+  if(!await nkConfirmar(ligar?"Ligar o cadastro dos clientes do Full?
+
+O cliente das vendas Full vai ser corrigido no Apollo com os dados da nota do ML (nunca cria cliente).":"Desligar o cadastro dos clientes do Full?"))return;
+  try{await mlApiAdmin("/expedicao/api/expedicao-apollo/cadastro-full",{method:"POST",body:JSON.stringify({ligado:ligar})});await carregarCadastroFullAdmin();}
+  catch(e){alert("Cadastro do Full: "+e.message);}
+}
 async function carregarIntegracaoLinxAdmin(){
   carregarCadastroAutoAdmin();
+  carregarCadastroFullAdmin();
   const badge=document.getElementById("linxIntegracaoStatus");if(!badge)return;
   const msg=document.getElementById("linxIntegracaoMensagem");
   try{
