@@ -69,6 +69,10 @@ class Geracao(Base):
         S.compras_geral_rodada("SCHULZ", intervalo_s=0)
         self.assertEqual(self.consultas, ["816.0009-0"])
         self.assertEqual(S.compras_geral_info()["ultima"], {})   # só marca não conta como geral
+        # V19.44: a demanda da marca fica com data própria.
+        m = S.compras_geral_info()["ultimas_marcas"]["SCHULZ"]
+        self.assertEqual(m["codigos"], 1)
+        self.assertTrue(m["em"])
 
     def test_andamento(self):
         vistos = []

@@ -128,10 +128,11 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
   <!-- V19.12: demanda geral gerada no servidor (o estoque não é mais lido na hora pelo navegador). -->
   <section class="card" id="geral" aria-label="Demanda geral">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
-      <div><b>Demanda geral</b> <span id="geralInfo" style="color:var(--muted)">carregando…</span></div>
+      <div><b>Demanda geral</b> <span id="geralInfo" style="color:var(--muted)">carregando…</span><div id="marcaInfo" style="color:var(--muted);font-size:13px;margin-top:2px"></div></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
         <label title="Toda segunda: gera à 01:00 e manda às 07:00 para os e-mails do relatório de faturamento. Só o perfil Admin muda."><input id="geralEmail" type="checkbox"> E-mail toda segunda às 07:00</label>
         <button id="semMarcaBtn" class="btn" type="button">Sem marca</button>
+        <button id="marcaBtn" class="btn" type="button" title="Mesma rotina da geral, só com as peças da marca escolhida (bem mais rápida)">Gerar demanda da marca</button>
         <button id="geralBtn" class="btn pri" type="button">Gerar demanda geral</button>
       </div>
     </div>
@@ -279,6 +280,7 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
 
   async function selecionarFornecedor(nome) {
     state.atual = state.fornecedores.find(f => f.nome === nome) || null;
+    mostrarMarca();
     if (!state.atual) return;
     $("minimo").value = state.atual.pedido_minimo; $("prazo").value = state.atual.prazo; $("cobertura").value = state.atual.cobertura;
     state.edits.clear(); state.off.clear(); carregarCaminho();
@@ -347,10 +349,21 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
     $("geralInfo").textContent = u.em
       ? `de ${dataHora(u.em)} · ${u.codigos} peça(s) que venderam em 30 dias${u.sem_resposta ? ` · ${u.sem_resposta} sem resposta do Apollo` : ""}${u.completa === false ? " · interrompida" : ""}`
       : "ainda não gerada: clique em Gerar demanda geral (leva de 1 a 2 horas, em segundo plano).";
+    state.geral = g; mostrarMarca();
     $("geralEmail").checked = !!g.email_ligado;
     $("geralEmail").title = `Toda segunda: gera à 01:00 e manda às 07:00 para ${(g.destinatarios || []).join(", ") || "(RELATORIO_EMAILS vazio)"}.${g.email_ultimo && g.email_ultimo.em ? " Último envio: " + dataHora(g.email_ultimo.em) + "." : ""} Só o perfil Admin muda.`;
   }
 
+  // V19.44: demanda gerada só da marca escolhida.
+  function mostrarMarca() {
+    const nome = state.atual ? String(state.atual.nome || "").toUpperCase() : "";
+    $("marcaBtn").textContent = nome ? `Gerar demanda de ${nome}` : "Gerar demanda da marca";
+    $("marcaBtn").disabled = !nome || andRodava;
+    const m = ((state.geral || {}).ultimas_marcas || {})[nome];
+    $("marcaInfo").textContent = !nome ? "" : m && m.em
+      ? `Demanda de ${nome} de ${dataHora(m.em)} · ${m.codigos} peça(s)${m.sem_resposta ? ` · ${m.sem_resposta} sem resposta do Apollo` : ""}${m.completa === false ? " · interrompida" : ""}`
+      : `Demanda só de ${nome}: ainda não gerada.`;
+  }
   let andTimer = null, andRodava = false;
   async function andamentoGeral() {
     clearTimeout(andTimer);
@@ -364,12 +377,12 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
       $("geralEtapa").textContent = a.etapa || "Consultando o Apollo";
       $("geralTexto").textContent = `${feito} de ${total} peças (${pct}%)${a.codigo ? " · agora: " + a.codigo : ""}${min > 0 ? ` · falta ~${min} min` : ""}`;
       $("geralBarra").style.width = pct + "%";
-      $("geralBtn").disabled = true; $("estoqueBtn").disabled = true;
+      $("geralBtn").disabled = true; $("estoqueBtn").disabled = true; $("marcaBtn").disabled = true;
       andRodava = true;
       andTimer = setTimeout(andamentoGeral, 3000);
       return;
     }
-    $("geralBtn").disabled = false; $("estoqueBtn").disabled = false;
+    $("geralBtn").disabled = false; $("estoqueBtn").disabled = false; mostrarMarca();
     if (g) mostrarGeral(g);
     if (andRodava) {
       andRodava = false;
@@ -594,6 +607,11 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
   ["minimo", "prazo", "cobertura"].forEach(id => { $(id).addEventListener("input", () => { state.edits.clear(); render(); }); $(id).addEventListener("change", salvarConfigRapida); });
   ["busca", "soComprar", "completar"].forEach(id => $(id).addEventListener("input", render));
   $("estoqueBtn").addEventListener("click", () => consultarEstoque(true));
+  $("marcaBtn").addEventListener("click", async () => {
+    if (!state.atual) return;
+    if (!(await nkConfirmar(`Gerar a demanda só de ${state.atual.nome} agora? O Apollo é consultado em segundo plano, só nas peças desta marca que venderam.`))) return;
+    consultarEstoque(true);
+  });
   $("geralBtn").addEventListener("click", async () => {
     if (!(await nkConfirmar("Gerar a demanda geral agora? O Apollo é consultado devagar (1 a 2 horas, em segundo plano) para não pesar no CRM."))) return;
     consultarEstoque(false);

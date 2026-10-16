@@ -25720,6 +25720,12 @@ def compras_geral_rodada(fornecedor: str = "", stop_event: threading.Event | Non
                   "completa": feito == len(codigos), "fornecedor": nome}
         if not nome:
             _compras_estado_gravar("ultima_geral", json.dumps(resumo, ensure_ascii=False))
+        else:
+            # V19.44: demanda gerada só de uma marca fica com data própria.
+            marcas = _full_json(_compras_estado("ultimas_marcas"), {})
+            marcas = marcas if isinstance(marcas, dict) else {}
+            marcas[nome] = resumo
+            _compras_estado_gravar("ultimas_marcas", json.dumps(marcas, ensure_ascii=False))
         return {"ok": True, **resumo}
     finally:
         with COMPRAS_ANDAMENTO_LOCK:
@@ -25742,6 +25748,7 @@ def compras_estoque_guardado(codigos: list[str]) -> dict[str, dict[str, Any]]:
 
 def compras_geral_info() -> dict[str, Any]:
     return {"ultima": _full_json(_compras_estado("ultima_geral"), {}), "andamento": compras_andamento(),
+            "ultimas_marcas": _full_json(_compras_estado("ultimas_marcas"), {}),
             "email_ligado": _compras_estado("email_ligado") == "1",
             "email_ultimo": _full_json(_compras_estado("email_ultimo"), {}),
             "destinatarios": relatorio_diario_config()["destinatarios"]}
