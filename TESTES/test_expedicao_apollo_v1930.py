@@ -526,9 +526,16 @@ class CadastroV1932(unittest.TestCase):
 class _PortaHttp(BaseHTTPRequestHandler):
     def do_POST(self):
         self.server.chave = self.headers.get("X-Chave-Expedicao")
+        corpo = b'{"detail":"Not Found"}'
+        # Tamanho e fim de conexão explícitos: sem eles a leitura às vezes falhava com a
+        # máquina carregada e o teste caía como "resposta não voltou" (publicação de 16/10).
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
         self.send_response(404)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(corpo)))
+        self.send_header("Connection", "close")
         self.end_headers()
-        self.wfile.write(b'{"detail":"Not Found"}')
+        self.wfile.write(corpo)
 
     def log_message(self, *a):
         pass
