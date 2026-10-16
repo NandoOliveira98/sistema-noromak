@@ -15778,7 +15778,14 @@ def faturamento_rodada(agora: float | None = None, esperar=None) -> int:
     with DB_LOCK:
         estado = {r["order_key"]: dict(r) for r in DB.execute("SELECT * FROM faturamento_v1943").fetchall()}
     feitos = 0
-    for pedido, mp in _faturamento_pendentes():
+    # V19.48: primeiro quem estava "aguardando cadastro" e já teve o cadastro feito, depois o
+    # que foi conferido há mais tempo — antes a rodada começava sempre pelo topo da fila e,
+    # com o teto por rodada, os do fim nunca chegavam (261016S2NU71S0, 16/10).
+    def _vez(item: tuple[str, str]) -> tuple[int, float]:
+        e = estado.get(normalize(item[0])) or {}
+        destravou = e.get("situacao") == "aguardando_cadastro" and             (cadastro_auto_do_pedido(item[0]) or {}).get("situacao") == "feito"
+        return (0 if destravou else 1, float(e.get("conferido_epoch") or 0))
+    for pedido, mp in sorted(_faturamento_pendentes(), key=_vez):
         e = estado.get(normalize(pedido))
         if e and (e["situacao"] == "feito" or agora - float(e["conferido_epoch"] or 0) < FATURAMENTO_INTERVALO):
             continue

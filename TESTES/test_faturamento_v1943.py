@@ -145,3 +145,30 @@ class Rotas(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Vez(unittest.TestCase):
+    """V19.48: a rodada sempre começava pelo topo da fila; com 4 por rodada e 10 min de
+    intervalo, os do fim nunca chegavam (261016S2NU71S0: cadastro feito 13:08, tela parada
+    em "Aguardando cadastro"). Agora vai primeiro quem teve o cadastro feito e o mais antigo."""
+
+    def setUp(self):
+        reiniciar_banco()
+
+    def test_cadastro_recem_feito_passa_na_frente(self):
+        pedidos = [f"20000190000000{i:02d}" for i in range(8)]
+        gravar_como_admin([linha(p, "0893764272", Marketplace="MERCADO LIVRE") for p in pedidos])
+        agora = time.time()
+        for p in pedidos[:7]:
+            S._cadastro_auto_registrar(p, agora, agora, 0, "feito", "t", "83020")
+        conferidos = []
+        with S.DB_LOCK:
+            for p in pedidos:
+                S.DB.execute("INSERT OR REPLACE INTO faturamento_v1943(order_key,pedido,situacao,conferido_epoch) VALUES(?,?,?,?)",
+                             (S.normalize(p), p, "atencao", agora - 700))
+            S.DB.execute("UPDATE faturamento_v1943 SET situacao='aguardando_cadastro', conferido_epoch=? WHERE pedido=?",
+                         (agora - 5000, pedidos[6]))
+            S.DB.commit()
+        with mock.patch.object(S, "faturamento_conferir", side_effect=lambda p, mp, a=None: conferidos.append(p)):
+            S.faturamento_rodada(agora=agora)
+        self.assertEqual(conferidos[0], pedidos[6])
