@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.48-CODIGO-COM-BARRA-E-UM-PRODUTO"
+APP_VERSION = "19.49-PROMOCOES-AUTOMATICAS-SHOPEE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -2557,6 +2557,7 @@ def init_db() -> None:
     ensure_app_user_permissions_schema()
     ensure_shopee_escrow_schema()
     ensure_promo_renovacao_schema()
+    ensure_shopee_promo_schema()  # V19.49
     ensure_ml_billing_credito_schema()
     ensure_ml_billing_data_schema()
     ensure_cliente_fiscal_linx_api_schema()  # V18.60
@@ -24621,6 +24622,853 @@ def promo_renovacao_loop(stop_event: threading.Event) -> None:
 
 
 # ---------------------------------------------------------------------------
+# V19.49: Promoções automáticas da SHOPEE — renovação do desconto próprio pela API
+# (v2.discount), com a mesma régua do ML. Decisões do dono (16/10, entrevista):
+#  - o ADMIN marca cada anúncio; a renovação cria UMA promoção por dia de vencimento
+#    ("Noromak auto DD/MM") que começa quando a anterior termina, com `duracao_dias`;
+#  - regras (margem mínima da promoção, duração, estoque) = as do ML; o MODO e o limite do
+#    dia são da Shopee (`modo_renovacao@shopee`, `limite_dia@shopee`), começa em Simulação
+#    e ligar o Automático exige senha + 2FA do OWNER;
+#  - taxa = tabela por faixa de preço do Precificador (SHOPEE_FAIXAS_TAXA), frete Shopee do
+#    Precificador, imposto e custo da mesma regra do ML (_promo_produtos/_promo_produto);
+#  - lê todas as promoções da loja e NUNCA altera nem encerra uma que não criou: só cria a
+#    próxima, e não cria por cima de uma promoção futura (agendada);
+#  - variação: entram todas as que estavam na promoção, cada uma com o seu preço e a sua
+#    trava (sem custo = não renova, nunca custo zero);
+#  - recusa por campanha da Shopee fica registrada e é tentada de novo na rodada seguinte;
+#  - simulação só LÊ a Shopee; a 1ª resposta de cada chamada fica na amostra (conferir antes
+#    de ligar o Lote).
+# A Shopee exige início ≥ 1 h no futuro: a nova promoção é criada com antecedência
+# (SHOPEE_PROMO_RENOVA_ANTES) e começa no segundo em que a anterior termina — sem lacuna.
+# ---------------------------------------------------------------------------
+SHOPEE_PROMO_CONTA = "shopee"
+SHOPEE_PROMO_POR_CONTA = ("modo_renovacao", "limite_dia")
+SHOPEE_PROMO_RENOVA_ANTES = 3 * 86400      # cria a próxima quando faltam 3 dias para acabar
+SHOPEE_PROMO_INICIO_MIN = 65 * 60          # a Shopee recusa início com menos de 1 h
+SHOPEE_PROMO_INTERVALO = 3600
+SHOPEE_PROMO_LOTE_ITENS = 50
+SHOPEE_PROMO_LOCK = threading.Lock()
+_SHOPEE_PROMO_ESTADO: dict[str, Any] = {"rodando": False, "inicio": "", "fim": "", "ultimo": {}}
+# Mesma tabela do Precificador (APP/precificador.html, SHOPEE_BANDS): comissão e taxa fixa
+# pela faixa do PREÇO DE VENDA (o da promoção).
+SHOPEE_FAIXAS_TAXA = ((0.0, 80.0, 0.235, 4.0), (80.0, 100.0, 0.175, 16.0),
+                      (100.0, 200.0, 0.175, 20.0), (200.0, float("inf"), 0.175, 26.0))
+SHOPEE_PROMO_CAMPANHA = ("campaign", "campanha", "flash", "promotion conflict", "overlap",
+                         "already in", "other promotion", "conflict")
+
+
+def ensure_shopee_promo_schema() -> None:
+    with DB_LOCK:
+        DB.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS shopee_promo_v1949 (
+                item_id TEXT PRIMARY KEY,
+                marcado INTEGER NOT NULL DEFAULT 0,
+                titulo TEXT NOT NULL DEFAULT '',
+                sku TEXT NOT NULL DEFAULT '',
+                situacao TEXT NOT NULL DEFAULT 'nao_checado',
+                motivo TEXT NOT NULL DEFAULT '',
+                aviso TEXT NOT NULL DEFAULT '',
+                fim TEXT NOT NULL DEFAULT '',
+                inicio_nova TEXT NOT NULL DEFAULT '',
+                promo_nome TEXT NOT NULL DEFAULT '',
+                promo_nossa INTEGER NOT NULL DEFAULT 0,
+                margem REAL,
+                preco_anuncio REAL,
+                estoque INTEGER,
+                checado_em TEXT NOT NULL DEFAULT '',
+                renovado_dia TEXT NOT NULL DEFAULT '',
+                renovado_em TEXT NOT NULL DEFAULT '',
+                marcado_por TEXT NOT NULL DEFAULT '',
+                marcado_em TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS shopee_promo_modelo_v1949 (
+                item_id TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                nome TEXT NOT NULL DEFAULT '',
+                sku TEXT NOT NULL DEFAULT '',
+                preco REAL,
+                preco_original REAL,
+                estoque INTEGER,
+                margem REAL,
+                lucro REAL,
+                situacao TEXT NOT NULL DEFAULT '',
+                motivo TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY(item_id, model_id)
+            );
+            CREATE TABLE IF NOT EXISTS shopee_promo_removidos_v1949 (
+                item_id TEXT PRIMARY KEY,
+                removido_em TEXT NOT NULL DEFAULT '',
+                removido_por TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS shopee_promo_criada_v1949 (
+                discount_id TEXT PRIMARY KEY,
+                nome TEXT NOT NULL DEFAULT '',
+                inicio INTEGER NOT NULL DEFAULT 0,
+                fim INTEGER NOT NULL DEFAULT 0,
+                criada_em TEXT NOT NULL DEFAULT '',
+                criada_por TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS shopee_promo_log_v1949 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                quando TEXT NOT NULL,
+                dia TEXT NOT NULL DEFAULT '',
+                item_id TEXT NOT NULL DEFAULT '',
+                acao TEXT NOT NULL DEFAULT '',
+                preco REAL,
+                margem REAL,
+                inicio TEXT NOT NULL DEFAULT '',
+                fim TEXT NOT NULL DEFAULT '',
+                por TEXT NOT NULL DEFAULT '',
+                motivo TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_shopee_promo_log_dia ON shopee_promo_log_v1949(dia, acao, por);
+            CREATE TABLE IF NOT EXISTS shopee_promo_amostra_v1949 (
+                chamada TEXT PRIMARY KEY,
+                resposta TEXT NOT NULL DEFAULT '',
+                em TEXT NOT NULL DEFAULT ''
+            );
+            """
+        )
+        DB.commit()
+
+
+def _shopee_item_id(valor: Any) -> str:
+    return re.sub(r"\D", "", str(valor or ""))
+
+
+def _shopee_promo_amostra(chamada: str, resposta: Any) -> None:
+    """1ª resposta real de cada chamada (conferir os campos antes de ligar o Lote)."""
+    try:
+        with DB_LOCK:
+            DB.execute("INSERT OR IGNORE INTO shopee_promo_amostra_v1949(chamada,resposta,em) VALUES(?,?,?)",
+                       (chamada, json_dumps(resposta)[:200000], now_iso()))
+            DB.commit()
+    except Exception:
+        pass
+
+
+def shopee_promo_amostra() -> dict[str, Any]:
+    with DB_LOCK:
+        linhas = DB.execute("SELECT chamada, resposta, em FROM shopee_promo_amostra_v1949 ORDER BY chamada").fetchall()
+    out = {}
+    for r in linhas:
+        try:
+            out[str(r["chamada"])] = {"em": r["em"], "resposta": json.loads(r["resposta"] or "null")}
+        except Exception:
+            out[str(r["chamada"])] = {"em": r["em"], "resposta": r["resposta"]}
+    return {"ok": True, "amostras": out}
+
+
+def shopee_promo_config() -> dict[str, Any]:
+    """Regras do ML (margem mínima, duração, estoque) + modo e limite do dia da Shopee."""
+    return promo_auto_config(SHOPEE_PROMO_CONTA)
+
+
+def shopee_promo_config_salvar(dados: dict[str, Any], ator: str) -> dict[str, Any]:
+    """Só o modo e o limite do dia da Shopee (as regras são as do ML, salvas pela tela do ML).
+    Quem exige o OWNER para o Automático é a rota."""
+    novos: dict[str, str] = {}
+    for chave, valor in (dados or {}).items():
+        if chave == "modo_renovacao":
+            if valor not in PROMO_AUTO_MODOS:
+                raise ValueError("Modo inválido.")
+            novos[chave] = str(valor)
+        elif chave == "limite_dia":
+            try:
+                n = int(valor)
+            except (TypeError, ValueError):
+                raise ValueError("Valor inválido para limite_dia.")
+            if not 1 <= n <= 500:
+                raise ValueError("limite_dia precisa ficar entre 1 e 500.")
+            novos[chave] = str(n)
+    agora = now_iso()
+    with DB_LOCK:
+        for chave, valor in novos.items():
+            DB.execute("INSERT INTO promo_auto_config_v1873(chave,valor,atualizado_em,atualizado_por) VALUES(?,?,?,?) "
+                       "ON CONFLICT(chave) DO UPDATE SET valor=excluded.valor,atualizado_em=excluded.atualizado_em,"
+                       "atualizado_por=excluded.atualizado_por", (f"{chave}@{SHOPEE_PROMO_CONTA}", valor, agora, ator))
+        DB.commit()
+    if novos:
+        audit(ator, "promocoes.shopee.config", json_dumps(novos))
+    return shopee_promo_config()
+
+
+def _shopee_promo_log(item_id: str, acao: str, por: str, motivo: str = "", preco: float | None = None,
+                      margem: float | None = None, inicio: str = "", fim: str = "", dia: str = "") -> None:
+    with DB_LOCK:
+        DB.execute("INSERT INTO shopee_promo_log_v1949(quando,dia,item_id,acao,preco,margem,inicio,fim,por,motivo) "
+                   "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                   (now_iso(), dia or datetime.now(BR_TZ).date().isoformat(), item_id, acao, preco, margem,
+                    inicio, fim, por, motivo[:400]))
+        DB.execute("DELETE FROM shopee_promo_log_v1949 WHERE id <= (SELECT MAX(id) - 3000 FROM shopee_promo_log_v1949)")
+        DB.commit()
+
+
+def shopee_taxas_por_preco(preco: float) -> tuple[float, float]:
+    """(comissão, taxa fixa) da Shopee pela faixa do preço — a tabela do Precificador."""
+    valor = round(max(0.0, float(preco or 0)), 2)
+    for ini, fim, comissao, fixa in SHOPEE_FAIXAS_TAXA:
+        if ini <= valor < fim:
+            return comissao, fixa
+    return SHOPEE_FAIXAS_TAXA[-1][2], SHOPEE_FAIXAS_TAXA[-1][3]
+
+
+def shopee_promo_conta(prod: dict[str, Any], preco: float, frete: float = 0.0) -> dict[str, Any]:
+    """Conta do Precificador na Shopee: preço − comissão − taxa fixa − frete − imposto − custo."""
+    preco = float(preco or 0)
+    comissao_pct, fixa = shopee_taxas_por_preco(preco)
+    comissao = preco * comissao_pct
+    imposto = preco * float(prod.get("imposto") or 0)
+    lucro = preco - comissao - fixa - float(frete or 0) - imposto - float(prod["custo"])
+    return {"preco": round(preco, 2), "comissao": round(comissao, 2), "comissao_pct": comissao_pct,
+            "taxa_fixa": round(fixa, 2), "frete": round(float(frete or 0), 2), "imposto": round(imposto, 2),
+            "custo": round(float(prod["custo"]), 2), "lucro": round(lucro, 2),
+            "margem": round(lucro / preco, 4) if preco > 0 else 0.0}
+
+
+def shopee_promo_preco_minimo(prod: dict[str, Any], frete: float = 0.0, margem: float = 0.0) -> float | None:
+    """Menor preço com a margem pedida (0 = lucro zero), faixa por faixa — como o solveShopeePrice."""
+    if float(prod.get("custo") or 0) <= 0:
+        return None
+    base = float(prod["custo"]) + float(frete or 0)
+    for ini, fim, comissao, fixa in SHOPEE_FAIXAS_TAXA:
+        divisor = 1 - float(prod.get("imposto") or 0) - comissao - margem
+        if divisor <= 0:
+            continue
+        preco = max(math.ceil((base + fixa) / divisor * 100 - 1e-6) / 100, ini)
+        if preco < fim:
+            return round(preco, 2)
+    return None
+
+
+def _shopee_fretes_precificador() -> dict[str, float]:
+    """SKU -> frete da Shopee digitado no Precificador (sem valor = 0, como na tela dele)."""
+    raw, _, _ = get_storage("precificador_online_v1")
+    try:
+        lista = (json.loads(raw or "{}") or {}).get("products") or []
+    except Exception:
+        lista = []
+    out: dict[str, float] = {}
+    for p in lista if isinstance(lista, list) else []:
+        if not isinstance(p, dict):
+            continue
+        sku = str(p.get("sku") or "").strip().upper()
+        sh = (p.get("marketplaces") or {}).get("shopee") or {}
+        if sku and isinstance(sh, dict):
+            out[sku] = float(_money_number(sh.get("frete")) or 0.0)
+    return out
+
+
+def _shopee_promo_resolver_sku(sku_anuncio: Any, produtos: dict[str, Any]) -> str:
+    """Mesma regra do ML sem o vínculo MLB↔SKU (que é do ML): SKU do anúncio/variação,
+    prefixo de anúncio tirado, kit pelo SKU; "KIT2-X" nunca vira o simples "X"."""
+    bruto = str(sku_anuncio or "").strip().upper()
+    if not bruto:
+        return ""
+    codigo = ml_sku_do_anuncio(bruto, produtos)
+    if codigo in produtos:
+        return codigo
+    if _promo_produto(produtos, bruto):
+        return bruto
+    if re.match(r"^KIT", codigo):
+        return ""
+    candidato = _compras_codigo(bruto, produtos)
+    return candidato if candidato in produtos else ""
+
+
+def _shopee_ts(valor: Any) -> int | None:
+    try:
+        n = int(float(valor))
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
+
+
+def _shopee_dia_ts(ts: int | None) -> str:
+    return datetime.fromtimestamp(ts, BR_TZ).strftime("%d/%m") if ts else ""
+
+
+def _shopee_iso_ts(ts: int | None) -> str:
+    return datetime.fromtimestamp(ts, BR_TZ).isoformat(timespec="seconds") if ts else ""
+
+
+def shopee_promocoes_da_loja() -> dict[str, list[dict[str, Any]]]:
+    """item_id -> promoções de desconto da loja em andamento ou agendadas, com o preço de cada
+    variação (model_id "0" = anúncio sem variação). Só lê."""
+    with DB_LOCK:
+        nossas = {str(r["discount_id"]) for r in DB.execute("SELECT discount_id FROM shopee_promo_criada_v1949").fetchall()}
+    por_item: dict[str, list[dict[str, Any]]] = {}
+    for status in ("ongoing", "upcoming"):
+        pagina = 1
+        for _ in range(50):
+            r = shopee_api_get("/api/v2/discount/get_discount_list",
+                               {"discount_status": status, "page_no": pagina, "page_size": 100})
+            _shopee_promo_amostra("get_discount_list", r)
+            resp = r.get("response") or {}
+            for d in resp.get("discount_list") or []:
+                if not isinstance(d, dict) or not d.get("discount_id"):
+                    continue
+                did = str(d["discount_id"])
+                ini, fim = _shopee_ts(d.get("start_time")), _shopee_ts(d.get("end_time"))
+                pg = 1
+                for _ in range(50):
+                    det = shopee_api_get("/api/v2/discount/get_discount",
+                                         {"discount_id": did, "page_no": pg, "page_size": 100})
+                    _shopee_promo_amostra("get_discount", det)
+                    dr = det.get("response") or {}
+                    for it in dr.get("item_list") or []:
+                        if not isinstance(it, dict) or not it.get("item_id"):
+                            continue
+                        modelos: dict[str, float] = {}
+                        for m in it.get("model_list") or []:
+                            if isinstance(m, dict) and m.get("model_id") not in (None, ""):
+                                preco = _money_number(m.get("model_promotion_price"))
+                                if preco:
+                                    modelos[str(m["model_id"])] = preco
+                        if not modelos and _money_number(it.get("item_promotion_price")):
+                            modelos["0"] = _money_number(it.get("item_promotion_price"))
+                        por_item.setdefault(str(it["item_id"]), []).append({
+                            "discount_id": did, "nome": str(d.get("discount_name") or dr.get("discount_name") or ""),
+                            "status": status, "inicio": ini, "fim": fim, "modelos": modelos, "nossa": did in nossas})
+                    if not dr.get("more"):
+                        break
+                    pg += 1
+            if not resp.get("more"):
+                break
+            pagina += 1
+    return por_item
+
+
+def shopee_itens_modelos(ids: list[str]) -> dict[str, dict[str, Any]]:
+    """Anúncio lido agora: status, título, SKU e as variações (preço normal, estoque, SKU).
+    model_id "0" = anúncio sem variação."""
+    out: dict[str, dict[str, Any]] = {}
+    for i in range(0, len(ids), 50):
+        lote = [str(x) for x in ids[i:i + 50] if str(x).isdigit()]
+        if not lote:
+            continue
+        r = shopee_api_get("/api/v2/product/get_item_base_info", {"item_id_list": ",".join(lote)})
+        _shopee_promo_amostra("get_item_base_info", r)
+        for it in (r.get("response") or {}).get("item_list") or []:
+            if not isinstance(it, dict) or not it.get("item_id"):
+                continue
+            iid = str(it["item_id"])
+            precos = [p for p in (it.get("price_info") or []) if isinstance(p, dict)]
+            resumo = ((it.get("stock_info_v2") or {}).get("summary_info") or {}) if isinstance(it.get("stock_info_v2"), dict) else {}
+            est = resumo.get("total_available_stock")
+            estoque = int(est) if isinstance(est, (int, float)) and not isinstance(est, bool) else None
+            out[iid] = {"titulo": str(it.get("item_name") or ""), "sku": str(it.get("item_sku") or ""),
+                        "status": SHOPEE_STATUS_ML.get(str(it.get("item_status") or ""), ""),
+                        "estoque": estoque, "tem_modelo": bool(it.get("has_model")), "modelos": {}}
+            if not it.get("has_model"):
+                p0 = precos[0] if precos else {}
+                out[iid]["modelos"]["0"] = {"nome": "", "sku": str(it.get("item_sku") or ""),
+                                            "preco": _money_number(p0.get("original_price")) or _money_number(p0.get("current_price")),
+                                            "estoque": estoque}
+    for iid, d in out.items():
+        if not d["tem_modelo"]:
+            continue
+        r = shopee_api_get("/api/v2/product/get_model_list", {"item_id": iid})
+        _shopee_promo_amostra("get_model_list", r)
+        resp = r.get("response") or {}
+        for m in resp.get("model") or []:
+            if not isinstance(m, dict) or m.get("model_id") in (None, ""):
+                continue
+            precos = [p for p in (m.get("price_info") or []) if isinstance(p, dict)]
+            p0 = precos[0] if precos else {}
+            resumo = ((m.get("stock_info_v2") or {}).get("summary_info") or {}) if isinstance(m.get("stock_info_v2"), dict) else {}
+            est = resumo.get("total_available_stock")
+            d["modelos"][str(m["model_id"])] = {
+                "nome": str(m.get("model_name") or ""),
+                "sku": str(m.get("model_sku") or ""),
+                "preco": _money_number(p0.get("original_price")) or _money_number(p0.get("current_price")),
+                "estoque": int(est) if isinstance(est, (int, float)) and not isinstance(est, bool) else None}
+    return out
+
+
+def shopee_promo_avaliar(item: dict[str, Any], precos: dict[str, float | None], det: dict[str, Any],
+                         promos: list[dict[str, Any]], produtos: dict[str, Any], fretes: dict[str, float],
+                         rup: dict[str, Any] | None, cfg: dict[str, Any], agora_ts: int) -> dict[str, Any]:
+    """Decide o que fazer com UM anúncio marcado da Shopee. Não chama a Shopee.
+
+    `precos`: model_id -> preço da promoção guardado (None = pegar da promoção vigente).
+    Devolve a situação do anúncio e, por variação, preço, margem e se pode renovar."""
+    out: dict[str, Any] = {"situacao": "", "motivo": "", "aviso": "", "fim": None, "inicio_nova": None,
+                           "promo_nome": "", "promo_nossa": False, "margem": None, "modelos": {}}
+    precos = dict(precos or {})
+    futura = next((p for p in sorted(promos, key=lambda x: x.get("inicio") or 0) if p.get("status") == "upcoming"), None)
+    vigente = next((p for p in promos if p.get("status") == "ongoing"), None)
+    # o preço guardado vazio vem da promoção que está valendo (ou da agendada)
+    for p in (vigente, futura):
+        for mid, preco in ((p or {}).get("modelos") or {}).items():
+            if precos.get(mid) is None:
+                precos[mid] = preco
+    modelos_det = det.get("modelos") or {}
+    # entram as variações que estavam na promoção (ou com preço digitado) e ainda existem no anúncio
+    ids_modelos = ([m for m in precos if not modelos_det or m in modelos_det] if precos else list(modelos_det))
+    for mid in ids_modelos:
+        md = modelos_det.get(mid) or {}
+        out["modelos"][mid] = {"nome": md.get("nome") or "", "sku": md.get("sku") or "",
+                               "preco": precos.get(mid), "preco_original": md.get("preco"),
+                               "estoque": md.get("estoque"), "margem": None, "lucro": None,
+                               "situacao": "", "motivo": ""}
+    if futura:
+        out.update(situacao="agendada", fim=futura.get("fim"), promo_nome=futura.get("nome") or "",
+                   promo_nossa=bool(futura.get("nossa")))
+        quando = f"de {_shopee_dia_ts(futura.get('inicio'))} a {_shopee_dia_ts(futura.get('fim'))}"
+        out["motivo"] = (f"Renovada: a próxima promoção ({quando}) já está agendada na Shopee" if futura.get("nossa")
+                         else f"Já tem promoção agendada na Shopee ({quando}): não cria outra por cima")
+        return out
+    if vigente and (vigente.get("fim") or 0) - agora_ts > SHOPEE_PROMO_RENOVA_ANTES:
+        out.update(situacao="ativa", fim=vigente.get("fim"), promo_nome=vigente.get("nome") or "",
+                   promo_nossa=bool(vigente.get("nossa")))
+        out["motivo"] = (f"Desconto até {_shopee_dia_ts(vigente.get('fim'))}: a próxima é criada "
+                         f"{SHOPEE_PROMO_RENOVA_ANTES // 86400} dias antes de acabar")
+        for mid, m in out["modelos"].items():
+            sku_m = _shopee_promo_resolver_sku(m["sku"] or det.get("sku"), produtos) if m["preco"] else ""
+            prod = _promo_produto(produtos, sku_m) if sku_m else None
+            if prod and prod.get("custo", 0) > 0:
+                conta = shopee_promo_conta(prod, m["preco"], fretes.get(prod["sku"], 0.0))
+                m.update(margem=conta["margem"], lucro=conta["lucro"])
+        margens = [m["margem"] for m in out["modelos"].values() if m["margem"] is not None]
+        out["margem"] = min(margens) if margens else None
+        return out
+    inicio = max((vigente or {}).get("fim") or 0, agora_ts + SHOPEE_PROMO_INICIO_MIN)
+    out["inicio_nova"] = inicio
+    if vigente and (vigente.get("fim") or 0) < agora_ts + SHOPEE_PROMO_INICIO_MIN:
+        out["aviso"] = "A promoção acaba em menos de 1 h: a Shopee só aceita a nova daqui a 1 h"
+
+    def revisar(motivo: str, situacao: str = "revisar") -> dict[str, Any]:
+        out.update(situacao=situacao, motivo=motivo)
+        return out
+
+    status = str(det.get("status") or "")
+    if det and status != "active":
+        return revisar(f"Anúncio {'pausado' if status == 'paused' else (status or 'sem status')} na Shopee: "
+                       "reative para renovar")
+    if not out["modelos"]:
+        return revisar("Sem o preço da promoção anterior: informe o preço para renovar")
+    r = rup or {}
+    vivo = det.get("estoque")
+    ritmo = _money_number(r.get("ritmo_dia")) or 0.0
+    if isinstance(vivo, (int, float)) and not isinstance(vivo, bool):
+        if vivo <= 0:
+            return revisar("Sem estoque na Shopee: não renova até repor", "estoque")
+        cobertura = (float(vivo) / ritmo) if ritmo > 0 else None
+        if cobertura is not None and cobertura < cfg["estoque_min_dias"]:
+            return revisar(f"Estoque para {cobertura:.0f} dia(s) na Shopee: não renova até repor", "estoque")
+    mmin = _promo_margem_minima(cfg)
+    prontas = 0
+    for mid, m in out["modelos"].items():
+        def ruim(motivo: str) -> None:
+            m.update(situacao="revisar", motivo=motivo)
+        sku = _shopee_promo_resolver_sku(m["sku"] or det.get("sku"), produtos)
+        prod = _promo_produto(produtos, sku) if sku else None
+        preco = m["preco"]
+        if not preco:
+            ruim("Sem preço da promoção")
+            continue
+        if not prod or float(prod.get("custo") or 0) <= 0:
+            ruim("Sem custo no Precificador: não dá para garantir a margem")
+            continue
+        frete = fretes.get(prod["sku"], fretes.get(sku, 0.0))
+        conta = shopee_promo_conta(prod, preco, frete)
+        m.update(margem=conta["margem"], lucro=conta["lucro"])
+        if isinstance(m["estoque"], (int, float)) and m["estoque"] <= 0 and mid != "0":
+            ruim("Variação sem estoque")
+            continue
+        if m["preco_original"] and preco >= m["preco_original"]:
+            ruim(f"O preço do anúncio ({_brl_srv(m['preco_original'])}) está igual ou abaixo do da promoção")
+            continue
+        minimo = shopee_promo_preco_minimo(prod, frete)
+        if minimo and preco < minimo:
+            ruim(f"{_brl_srv(preco)} abaixo do preço mínimo ({_brl_srv(minimo)}): daria prejuízo")
+            continue
+        if conta["margem"] < mmin:
+            ruim(f"Margem {_pct_br(conta['margem'])} abaixo da mínima da promoção ({_pct_br(mmin, 0)})")
+            continue
+        m.update(situacao="pronta", motivo=f"Renova por {_brl_srv(preco)} (margem {_pct_br(conta['margem'])})")
+        prontas += 1
+    margens = [m["margem"] for m in out["modelos"].values() if m["margem"] is not None]
+    out["margem"] = min(margens) if margens else None
+    fora = [m for m in out["modelos"].values() if m["situacao"] != "pronta"]
+    if not prontas:
+        return revisar(fora[0]["motivo"] if fora else "Nada a renovar")
+    fim = inicio + int(cfg["duracao_dias"]) * 86400
+    out.update(situacao="pronta", fim=fim,
+               motivo=f"Renova {prontas} {'variação' if prontas == 1 else 'variações'} de "
+                      f"{_shopee_dia_ts(inicio)} a {_shopee_dia_ts(fim)}"
+                      + (f" (margem {_pct_br(out['margem'])})" if out["margem"] is not None else ""))
+    if fora:
+        nomes = ", ".join((m["nome"] or m["sku"] or "variação") for m in fora[:3])
+        out["aviso"] = (out["aviso"] + " · " if out["aviso"] else "") + \
+            f"{len(fora)} variação(ões) fica(m) de fora: {nomes} — {fora[0]['motivo']}"
+    return out
+
+
+def _shopee_promo_nome(inicio: int) -> str:
+    return f"Noromak auto {_shopee_dia_ts(inicio)}"
+
+
+def _shopee_promo_criar(grupo: list[dict[str, Any]], inicio: int, fim: int, ator: str) -> dict[str, dict[str, str]]:
+    """Cria (ou reaproveita, se já criamos uma com o mesmo início) a promoção e põe os itens.
+    Devolve item_id -> {model_id: erro} dos que a Shopee recusou ({} = tudo aceito)."""
+    with DB_LOCK:
+        r = DB.execute("SELECT discount_id FROM shopee_promo_criada_v1949 WHERE inicio=? ORDER BY criada_em DESC LIMIT 1",
+                       (inicio,)).fetchone()
+    did = str(r["discount_id"]) if r else ""
+    if not did:
+        resp = shopee_api_post("/api/v2/discount/add_discount",
+                               {"discount_name": _shopee_promo_nome(inicio), "start_time": inicio, "end_time": fim})
+        _shopee_promo_amostra("add_discount", resp)
+        did = str((resp.get("response") or {}).get("discount_id") or "")
+        if not did:
+            raise RuntimeError("A Shopee não devolveu o número da promoção criada.")
+        with DB_LOCK:
+            DB.execute("INSERT OR REPLACE INTO shopee_promo_criada_v1949(discount_id,nome,inicio,fim,criada_em,criada_por) "
+                       "VALUES(?,?,?,?,?,?)", (did, _shopee_promo_nome(inicio), inicio, fim, now_iso(), ator))
+            DB.commit()
+    recusas: dict[str, dict[str, str]] = {}
+    for i in range(0, len(grupo), SHOPEE_PROMO_LOTE_ITENS):
+        lote = grupo[i:i + SHOPEE_PROMO_LOTE_ITENS]
+        corpo = []
+        for g in lote:
+            prontos = {mid: m for mid, m in g["av"]["modelos"].items() if m["situacao"] == "pronta"}
+            linha: dict[str, Any] = {"item_id": int(g["item_id"]), "purchase_limit": 0}
+            if set(prontos) == {"0"}:
+                linha["item_promotion_price"] = round(prontos["0"]["preco"], 2)
+            else:
+                linha["model_list"] = [{"model_id": int(mid), "model_promotion_price": round(m["preco"], 2)}
+                                       for mid, m in prontos.items()]
+            corpo.append(linha)
+        try:
+            resp = shopee_api_post("/api/v2/discount/add_discount_item", {"discount_id": int(did), "item_list": corpo})
+        except Exception as exc:
+            for g in lote:
+                recusas[g["item_id"]] = {"*": str(exc)[:300]}
+            continue
+        _shopee_promo_amostra("add_discount_item", resp)
+        for e in (resp.get("response") or {}).get("error_list") or []:
+            if isinstance(e, dict) and e.get("item_id"):
+                recusas.setdefault(str(e["item_id"]), {})[str(e.get("model_id") or "*")] = \
+                    str(e.get("fail_message") or e.get("fail_error") or "recusado")[:300]
+    return recusas
+
+
+def shopee_promo_rodada(*, so: list[str] | None = None, apenas: list[str] | None = None, ator: str = "sistema",
+                        agora_ts: int | None = None, espera: float = 0.0) -> dict[str, Any]:
+    """Confere os anúncios marcados da Shopee e cria a próxima promoção do que vai vencer.
+
+    Worker (so=None): cria sozinho só no modo automático, até o limite do dia (em anúncios).
+    Clique do ADMIN (so=[...]): renova os escolhidos em qualquer modo, com as mesmas
+    conferências. Simulação e lote fora do clique só leem a Shopee."""
+    pegou = SHOPEE_PROMO_LOCK.acquire(timeout=espera) if espera > 0 else SHOPEE_PROMO_LOCK.acquire(blocking=False)
+    if not pegou:
+        return {"ok": True, "pulado": "já está conferindo", "rodando": True, "resultados": []}
+    manual = so is not None
+    agora_ts = int(time.time()) if agora_ts is None else int(agora_ts)
+    hoje_iso = datetime.fromtimestamp(agora_ts, BR_TZ).date().isoformat()
+    try:
+        _SHOPEE_PROMO_ESTADO.update(rodando=True, inicio=now_iso(), fim="")
+        if not shopee_conectada():
+            res = {"ok": True, "pulado": "Shopee não conectada", "resultados": []}
+            _SHOPEE_PROMO_ESTADO["ultimo"] = res
+            return res
+        cfg = shopee_promo_config()
+        with DB_LOCK:
+            linhas = {str(r["item_id"]): dict(r) for r in DB.execute("SELECT * FROM shopee_promo_v1949").fetchall()}
+            removidos = {str(r["item_id"]) for r in DB.execute("SELECT item_id FROM shopee_promo_removidos_v1949").fetchall()}
+            guardados: dict[str, dict[str, float | None]] = {}
+            for r in DB.execute("SELECT item_id, model_id, preco FROM shopee_promo_modelo_v1949").fetchall():
+                guardados.setdefault(str(r["item_id"]), {})[str(r["model_id"])] = r["preco"]
+            feitas_hoje = DB.execute("SELECT COUNT(DISTINCT item_id) FROM shopee_promo_log_v1949 WHERE dia=? "
+                                     "AND acao='renovada' AND por='sistema'", (hoje_iso,)).fetchone()[0]
+        marcados = sorted(i for i, r in linhas.items() if r.get("marcado") and i not in removidos)
+        if manual:
+            alvo = [i for i in dict.fromkeys(_shopee_item_id(x) for x in so) if i and i not in removidos]
+        elif apenas is not None:
+            alvo = [i for i in dict.fromkeys(_shopee_item_id(x) for x in apenas) if i in marcados]
+        else:
+            alvo = marcados
+        if not alvo:
+            res = {"ok": True, "modo": cfg["modo_renovacao"], "checados": 0, "renovadas": 0, "renovaria": 0,
+                   "revisar": 0, "erros": 0, "resultados": []}
+            _SHOPEE_PROMO_ESTADO["ultimo"] = {k: v for k, v in res.items() if k != "resultados"}
+            return res
+        try:
+            promos = shopee_promocoes_da_loja()
+            detalhes = shopee_itens_modelos(alvo)
+        except Exception as exc:
+            msg = str(exc)[:400]
+            shopee_log_event_se_mudou("promocoes", "/api/v2/discount", "ERRO", msg)
+            with DB_LOCK:
+                for iid in alvo:
+                    DB.execute("INSERT INTO shopee_promo_v1949(item_id,situacao,motivo,checado_em) VALUES(?,?,?,?) "
+                               "ON CONFLICT(item_id) DO UPDATE SET situacao=excluded.situacao,motivo=excluded.motivo,"
+                               "checado_em=excluded.checado_em", (iid, "erro", f"Não consegui ler a Shopee: {msg[:240]}", now_iso()))
+                DB.commit()
+            res = {"ok": False, "erro": msg, "resultados": []}
+            _SHOPEE_PROMO_ESTADO["ultimo"] = res
+            return res
+        try:
+            _ml_estoque_registrar({i: {"estoque": d.get("estoque"), "status": d.get("status"), "sub_status": [],
+                                       "logistica": ""} for i, d in detalhes.items()},
+                                  hoje_iso, tabela="shopee_estoque_dia_v1890")
+        except Exception:
+            pass
+        produtos = _promo_produtos()
+        fretes = _shopee_fretes_precificador()
+        try:
+            ruptura = {str(i["mlb"]): i for i in ruptura_payload(30, marketplace="shopee")["itens"]}
+        except Exception:
+            ruptura = {}
+        cont = {"checados": 0, "renovadas": 0, "renovaria": 0, "revisar": 0, "erros": 0}
+        avaliados: list[dict[str, Any]] = []
+        for iid in alvo:
+            row = linhas.get(iid) or {}
+            det = detalhes.get(iid) or {}
+            av = shopee_promo_avaliar(row, guardados.get(iid) or {}, det, promos.get(iid) or [], produtos, fretes,
+                                      ruptura.get(iid), cfg, agora_ts)
+            cont["checados"] += 1
+            if av["situacao"] == "pronta" and row.get("renovado_dia") == hoje_iso:
+                av.update(situacao="agendada", motivo="Renovada hoje; aguardando a Shopee mostrar a nova promoção")
+            avaliados.append({"item_id": iid, "row": row, "det": det, "av": av})
+        # quem renova agora: clique (qualquer modo) ou automático até o limite (em anúncios)
+        prontos = [a for a in avaliados if a["av"]["situacao"] == "pronta"]
+        renovar: list[dict[str, Any]] = []
+        if manual:
+            renovar = prontos
+        elif cfg["modo_renovacao"] == "automatico":
+            vagas = max(0, int(cfg["limite_dia"]) - int(feitas_hoje))
+            renovar = prontos[:vagas]
+            for a in prontos[vagas:]:
+                a["av"]["motivo"] += " · limite do dia atingido"
+        for a in prontos:
+            if a not in renovar:
+                cont["renovaria"] += 1
+        grupos: dict[int, list[dict[str, Any]]] = {}
+        for a in renovar:
+            grupos.setdefault(int(a["av"]["inicio_nova"]), []).append(a)
+        por = ator if manual else "sistema"
+        for inicio, grupo in sorted(grupos.items()):
+            fim = inicio + int(cfg["duracao_dias"]) * 86400
+            try:
+                recusas = _shopee_promo_criar(grupo, inicio, fim, ator if manual else "renovacao-automatica")
+            except Exception as exc:
+                recusas = {a["item_id"]: {"*": str(exc)[:300]} for a in grupo}
+            for a in grupo:
+                av, iid = a["av"], a["item_id"]
+                erro = recusas.get(iid) or {}
+                if "*" in erro or (erro and all(mid in erro for mid, m in av["modelos"].items() if m["situacao"] == "pronta")):
+                    texto = erro.get("*") or next(iter(erro.values()))
+                    cont["erros"] += 1
+                    campanha = any(k in texto.lower() for k in SHOPEE_PROMO_CAMPANHA)
+                    av.update(situacao="revisar",
+                              motivo=("Em campanha da Shopee: tenta de novo na próxima conferência · " if campanha
+                                      else "A Shopee recusou: ") + texto[:240])
+                    _shopee_promo_log(iid, "falhou", por, texto, None, av["margem"], _shopee_iso_ts(inicio),
+                                      _shopee_iso_ts(fim), hoje_iso)
+                    continue
+                for mid, texto in erro.items():
+                    if mid in av["modelos"]:
+                        av["modelos"][mid].update(situacao="revisar", motivo="A Shopee recusou: " + texto[:200])
+                cont["renovadas"] += 1
+                a["renovado"] = True
+                precos_ok = [m["preco"] for mid, m in av["modelos"].items() if m["situacao"] == "pronta"]
+                _shopee_promo_log(iid, "renovada", por, av["motivo"], min(precos_ok) if precos_ok else None,
+                                  av["margem"], _shopee_iso_ts(inicio), _shopee_iso_ts(fim), hoje_iso)
+                av.update(situacao="agendada", fim=fim, promo_nome=_shopee_promo_nome(inicio), promo_nossa=True,
+                          motivo=f"Renovada em {_dia_br(hoje_iso)}: nova promoção de {_shopee_dia_ts(inicio)} "
+                                 f"a {_shopee_dia_ts(fim)}")
+        resultados = []
+        agora = now_iso()
+        with DB_LOCK:
+            for a in avaliados:
+                av, iid, det, row = a["av"], a["item_id"], a["det"], a["row"]
+                if av["situacao"] in ("revisar", "estoque"):
+                    cont["revisar"] += 1
+                renovado_dia = hoje_iso if a.get("renovado") else (row.get("renovado_dia") or "")
+                renovado_em = agora if a.get("renovado") else (row.get("renovado_em") or "")
+                precos_orig = [m["preco_original"] for m in av["modelos"].values() if m["preco_original"]]
+                DB.execute(
+                    "INSERT INTO shopee_promo_v1949(item_id,marcado,titulo,sku,situacao,motivo,aviso,fim,inicio_nova,"
+                    "promo_nome,promo_nossa,margem,preco_anuncio,estoque,checado_em,renovado_dia,renovado_em) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(item_id) DO UPDATE SET "
+                    "titulo=CASE WHEN excluded.titulo<>'' THEN excluded.titulo ELSE titulo END,"
+                    "sku=CASE WHEN excluded.sku<>'' THEN excluded.sku ELSE sku END,situacao=excluded.situacao,"
+                    "motivo=excluded.motivo,aviso=excluded.aviso,fim=excluded.fim,inicio_nova=excluded.inicio_nova,"
+                    "promo_nome=excluded.promo_nome,promo_nossa=excluded.promo_nossa,margem=excluded.margem,"
+                    "preco_anuncio=COALESCE(excluded.preco_anuncio,preco_anuncio),estoque=excluded.estoque,"
+                    "checado_em=excluded.checado_em,renovado_dia=excluded.renovado_dia,renovado_em=excluded.renovado_em",
+                    (iid, int(row.get("marcado") or 0), det.get("titulo") or "", det.get("sku") or "", av["situacao"],
+                     av["motivo"], av["aviso"], _shopee_iso_ts(av["fim"]), _shopee_iso_ts(av["inicio_nova"]),
+                     av["promo_nome"], 1 if av["promo_nossa"] else 0, av["margem"],
+                     min(precos_orig) if precos_orig else None, det.get("estoque"), agora, renovado_dia, renovado_em))
+                for mid, m in av["modelos"].items():
+                    # o preço guardado só é preenchido (da promoção vigente), nunca apagado aqui
+                    DB.execute(
+                        "INSERT INTO shopee_promo_modelo_v1949(item_id,model_id,nome,sku,preco,preco_original,estoque,"
+                        "margem,lucro,situacao,motivo) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(item_id,model_id) DO UPDATE SET "
+                        "nome=excluded.nome,sku=excluded.sku,preco=COALESCE(preco,excluded.preco),"
+                        "preco_original=excluded.preco_original,estoque=excluded.estoque,margem=excluded.margem,"
+                        "lucro=excluded.lucro,situacao=excluded.situacao,motivo=excluded.motivo",
+                        (iid, mid, m["nome"], m["sku"], m["preco"], m["preco_original"], m["estoque"], m["margem"],
+                         m["lucro"], m["situacao"], m["motivo"]))
+                resultados.append({"item_id": iid, "ok": bool(a.get("renovado")), "situacao": av["situacao"],
+                                   "motivo": av["motivo"]})
+            DB.commit()
+        res = {"ok": True, "modo": cfg["modo_renovacao"], **cont, "resultados": resultados}
+        _SHOPEE_PROMO_ESTADO["ultimo"] = {k: v for k, v in res.items() if k != "resultados"}
+        return res
+    finally:
+        _SHOPEE_PROMO_ESTADO.update(rodando=False, fim=now_iso())
+        SHOPEE_PROMO_LOCK.release()
+
+
+def shopee_promo_marcar(item_id: Any, ativo: bool, ator: str) -> dict[str, Any]:
+    iid = _shopee_item_id(item_id)
+    if not iid:
+        raise ValueError("Informe o número do anúncio da Shopee.")
+    agora = now_iso()
+    with DB_LOCK:
+        if ativo:   # incluir de novo é a reinclusão explícita do ADMIN
+            DB.execute("DELETE FROM shopee_promo_removidos_v1949 WHERE item_id=?", (iid,))
+        DB.execute("INSERT INTO shopee_promo_v1949(item_id,marcado,marcado_por,marcado_em) VALUES(?,?,?,?) "
+                   "ON CONFLICT(item_id) DO UPDATE SET marcado=excluded.marcado,marcado_por=excluded.marcado_por,"
+                   "marcado_em=excluded.marcado_em", (iid, 1 if ativo else 0, ator, agora))
+        DB.commit()
+    _shopee_promo_log(iid, "marcada" if ativo else "desmarcada", ator)
+    return {"ok": True, "item_id": iid, "marcado": bool(ativo)}
+
+
+def shopee_promo_precos(item_id: Any, modelos: dict[str, Any], ator: str,
+                        precos_antes: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Preço da promoção por variação, digitado na gaveta. `precos_antes` (o que a tela mostrava):
+    se outro computador mudou no meio, recusa (PromoConflito) em vez de sobrescrever."""
+    iid = _shopee_item_id(item_id)
+    if not iid or not isinstance(modelos, dict) or not modelos:
+        raise ValueError("Informe o anúncio e o preço de ao menos uma variação.")
+    novos: dict[str, float] = {}
+    for mid, preco in modelos.items():
+        valor = _money_number(preco)
+        if valor is None or valor <= 0:
+            raise ValueError("Preço inválido.")
+        novos[re.sub(r"\D", "", str(mid)) or "0"] = round(valor, 2)
+    with DB_LOCK:
+        atuais = {str(r["model_id"]): r["preco"] for r in DB.execute(
+            "SELECT model_id, preco FROM shopee_promo_modelo_v1949 WHERE item_id=?", (iid,)).fetchall()}
+        if precos_antes is not None:
+            for mid in novos:
+                antes = _money_number((precos_antes or {}).get(mid))
+                atual = atuais.get(mid)
+                if (round(atual, 2) if atual is not None else None) != (round(antes, 2) if antes is not None else None):
+                    raise PromoConflito("O preço deste anúncio foi alterado em outro computador. A lista foi "
+                                        "atualizada: confira e salve de novo.")
+        for mid, valor in novos.items():
+            DB.execute("INSERT INTO shopee_promo_modelo_v1949(item_id,model_id,preco) VALUES(?,?,?) "
+                       "ON CONFLICT(item_id,model_id) DO UPDATE SET preco=excluded.preco", (iid, mid, valor))
+        DB.execute("INSERT INTO shopee_promo_v1949(item_id) VALUES(?) ON CONFLICT(item_id) DO NOTHING", (iid,))
+        DB.commit()
+    _shopee_promo_log(iid, "preco", ator, json_dumps(novos)[:300], min(novos.values()))
+    return {"ok": True, "item_id": iid, "modelos": novos}
+
+
+def shopee_promo_remover(itens: list[Any], ator: str) -> dict[str, Any]:
+    """Tira da lista (anúncio apagado na Shopee): tombstone; incluir de novo desfaz. Não chama a Shopee."""
+    ids = [i for i in dict.fromkeys(_shopee_item_id(x) for x in itens or []) if i]
+    if not ids:
+        raise ValueError("Escolha ao menos um anúncio.")
+    agora = now_iso()
+    with DB_LOCK:
+        for iid in ids:
+            DB.execute("DELETE FROM shopee_promo_v1949 WHERE item_id=?", (iid,))
+            DB.execute("DELETE FROM shopee_promo_modelo_v1949 WHERE item_id=?", (iid,))
+            DB.execute("INSERT OR REPLACE INTO shopee_promo_removidos_v1949(item_id,removido_em,removido_por) VALUES(?,?,?)",
+                       (iid, agora, ator))
+        DB.commit()
+    for iid in ids:
+        _shopee_promo_log(iid, "removida", ator)
+    return {"ok": True, "removidos": len(ids), "itens": ids}
+
+
+def shopee_promo_buscar_novos(ator: str) -> dict[str, Any]:
+    """Inclui sem marcar os anúncios do retrato diário da Shopee (shopee_item_v1890) que não estão
+    na lista. Removido pelo ADMIN nunca volta por aqui; anúncio apagado (closed) não entra."""
+    with DB_LOCK:
+        faltam = DB.execute(
+            "SELECT item_id, titulo, sku FROM shopee_item_v1890 WHERE status <> 'closed' "
+            "AND item_id NOT IN (SELECT item_id FROM shopee_promo_v1949) "
+            "AND item_id NOT IN (SELECT item_id FROM shopee_promo_removidos_v1949)").fetchall()
+        for r in faltam:
+            DB.execute("INSERT OR IGNORE INTO shopee_promo_v1949(item_id,marcado,titulo,sku,situacao) VALUES(?,0,?,?,'nao_marcado')",
+                       (str(r["item_id"]), str(r["titulo"] or ""), str(r["sku"] or "")))
+        DB.commit()
+    if faltam:
+        _shopee_promo_log("", "incluidos", ator, f"{len(faltam)} anúncio(s) do retrato da Shopee")
+    return {"ok": True, "incluidos": len(faltam)}
+
+
+def shopee_promo_payload(agora_ts: int | None = None) -> dict[str, Any]:
+    """Lista da tela (só lê o banco)."""
+    agora_ts = int(time.time()) if agora_ts is None else int(agora_ts)
+    with DB_LOCK:
+        linhas = [dict(r) for r in DB.execute("SELECT * FROM shopee_promo_v1949 ORDER BY marcado DESC, titulo").fetchall()]
+        modelos: dict[str, list[dict[str, Any]]] = {}
+        for r in DB.execute("SELECT * FROM shopee_promo_modelo_v1949 ORDER BY item_id, model_id").fetchall():
+            modelos.setdefault(str(r["item_id"]), []).append(dict(r))
+        retrato = {str(r["item_id"]): dict(r) for r in DB.execute(
+            "SELECT item_id, titulo, sku, preco, estoque, status FROM shopee_item_v1890").fetchall()}
+        historico = [dict(r) for r in DB.execute(
+            "SELECT quando, item_id, acao, preco, margem, fim, por, motivo FROM shopee_promo_log_v1949 "
+            "ORDER BY id DESC LIMIT 200").fetchall()]
+    itens = []
+    for r in linhas:
+        iid = str(r["item_id"])
+        ret = retrato.get(iid) or {}
+        fim_dt = _promo_fim_dt(r.get("fim"))
+        dias = (fim_dt.date() - datetime.fromtimestamp(agora_ts, BR_TZ).date()).days if fim_dt else None
+        situacao = r["situacao"] if r["marcado"] else ("nao_marcado" if r["situacao"] in ("", "nao_checado") else r["situacao"])
+        itens.append({
+            "item_id": iid, "marcado": bool(r["marcado"]), "titulo": r["titulo"] or ret.get("titulo") or "",
+            "sku": r["sku"] or ret.get("sku") or "", "situacao": situacao, "motivo": r["motivo"], "aviso": r["aviso"],
+            "fim": r["fim"], "inicio_nova": r["inicio_nova"], "dias_para_vencer": dias, "promo_nome": r["promo_nome"],
+            "promo_nossa": bool(r["promo_nossa"]), "margem": r["margem"],
+            "preco_anuncio": r["preco_anuncio"] if r["preco_anuncio"] is not None else ret.get("preco"),
+            "estoque": r["estoque"] if r["estoque"] is not None else ret.get("estoque"),
+            "checado_em": r["checado_em"], "renovado_em": r["renovado_em"],
+            "modelos": [{"model_id": m["model_id"], "nome": m["nome"], "sku": m["sku"], "preco": m["preco"],
+                         "preco_original": m["preco_original"], "estoque": m["estoque"], "margem": m["margem"],
+                         "lucro": m["lucro"], "situacao": m["situacao"], "motivo": m["motivo"]}
+                        for m in modelos.get(iid, [])]})
+    marc = [i for i in itens if i["marcado"]]
+    resumo = {"total": len(itens), "marcados": len(marc),
+              "prontas": sum(1 for i in marc if i["situacao"] == "pronta"),
+              "agendadas": sum(1 for i in marc if i["situacao"] == "agendada"),
+              "ativas": sum(1 for i in marc if i["situacao"] == "ativa"),
+              "revisar": sum(1 for i in marc if i["situacao"] in ("revisar", "estoque", "erro"))}
+    return {"ok": True, "conectada": shopee_conectada(), "config": shopee_promo_config(), "itens": itens,
+            "resumo": resumo, "historico": historico, "rodando": bool(_SHOPEE_PROMO_ESTADO.get("rodando")),
+            "estado": {k: v for k, v in _SHOPEE_PROMO_ESTADO.items() if k != "rodando"},
+            "renova_antes_dias": SHOPEE_PROMO_RENOVA_ANTES // 86400}
+
+
+def shopee_promo_loop(stop_event: threading.Event) -> None:
+    """Conferência de hora em hora (a próxima promoção é criada dias antes: não precisa vigiar
+    o minuto do vencimento, como no ML)."""
+    if stop_event.wait(1500):
+        return
+    while not stop_event.is_set():
+        try:
+            shopee_promo_rodada()
+        except Exception as exc:
+            _SHOPEE_PROMO_ESTADO["ultimo"] = {"ok": False, "erro": str(exc)[:300]}
+            print(f"[shopee-promo] falhou: {exc}", file=sys.stderr, flush=True)
+        if stop_event.wait(SHOPEE_PROMO_INTERVALO):
+            break
+
+
+# ---------------------------------------------------------------------------
 # V18.89: convites de campanha do ML nas Promoções automáticas.
 #
 # O ML convida anúncios para campanhas (SMART e PRICE_MATCHING cofinanciadas
@@ -27799,6 +28647,25 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
+        if path == "/api/promocoes-auto/shopee":
+            # V19.49: promoções automáticas da Shopee. Somente leitura do banco.
+            if self.auth(admin_only=True) is None:
+                return
+            try:
+                self.send_json(shopee_promo_payload())
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/promocoes-auto/shopee/amostra":
+            # V19.49: 1ª resposta real de cada chamada da Shopee (conferir antes de ligar o Lote)
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            if str(ctx.get("app_role") or "") != "admin":
+                self.send_json({"ok": False, "error": "Somente o perfil Admin."}, 403)
+                return
+            self.send_json(shopee_promo_amostra())
+            return
         if path == "/api/promocoes-auto/renovacao":
             # V18.73: renovação automática do desconto próprio. Somente leitura.
             if self.auth(admin_only=True) is None:
@@ -28661,6 +29528,60 @@ class AppHandler(BaseHTTPRequestHandler):
                     self.send_json(res)
                 except Exception as exc:
                     self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path.startswith("/api/promocoes-auto/shopee/"):
+            # V19.49: promoções automáticas da Shopee (mesmas regras do ML; modo próprio)
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            acao = path.rsplit("/", 1)[-1]
+            try:
+                body = self.read_json() or {}
+                if acao == "config":
+                    atual = shopee_promo_config()
+                    if body.get("modo_renovacao") == "automatico" and atual["modo_renovacao"] != "automatico"                             and not self.require_owner_reauth(ctx):
+                        audit(ctx["username"], "security.denied.owner_reauth", "promocoes.shopee.automatico")
+                        return
+                    res = {"ok": True, "config": shopee_promo_config_salvar(body, ctx["username"])}
+                elif acao == "marcar":
+                    res = shopee_promo_marcar(body.get("item_id"), bool(body.get("ativo")), ctx["username"])
+                    audit(ctx["username"], "promocoes.shopee.marcar", f"{res['item_id']}|{res['marcado']}")
+                    if res["marcado"]:
+                        threading.Thread(target=lambda i=res["item_id"]: shopee_promo_rodada(apenas=[i], espera=60),
+                                         name="shopee-promo-marcar", daemon=True).start()
+                elif acao == "precos":
+                    res = shopee_promo_precos(body.get("item_id"), body.get("modelos") or {}, ctx["username"],
+                                              body.get("precos_antes") if "precos_antes" in body else None)
+                    audit(ctx["username"], "promocoes.shopee.precos", res["item_id"])
+                elif acao == "remover":
+                    res = shopee_promo_remover(list(body.get("itens") or [])[:500], ctx["username"])
+                    audit(ctx["username"], "promocoes.shopee.remover", ",".join(res["itens"])[:900])
+                elif acao == "buscar-novos":
+                    res = shopee_promo_buscar_novos(ctx["username"])
+                    audit(ctx["username"], "promocoes.shopee.buscar_novos", str(res["incluidos"]))
+                elif acao == "renovar":
+                    itens = [str(x) for x in (body.get("itens") or [])][:50]
+                    if not itens:
+                        raise ValueError("Escolha ao menos um anúncio.")
+                    res = shopee_promo_rodada(so=itens, ator=ctx["username"], espera=PROMO_MANUAL_PRAZO)
+                    audit(ctx["username"], "promocoes.shopee.renovar", ",".join(itens))
+                elif acao == "checar":
+                    if SHOPEE_PROMO_LOCK.locked():
+                        res = {"ok": True, "iniciado": False, "rodando": True}
+                    else:
+                        threading.Thread(target=lambda: shopee_promo_rodada(), name="shopee-promo-manual",
+                                         daemon=True).start()
+                        res = {"ok": True, "iniciado": True, "rodando": True}
+                else:
+                    self.send_json({"ok": False, "error": "Rota não encontrada."}, 404)
+                    return
+                self.send_json(res)
+            except PromoConflito as exc:
+                self.send_json({"ok": False, "error": str(exc), "code": "conflito"}, 409)
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
             return
         if path == "/api/promocoes-auto/renovacao/checar":
             # Confere agora (em segundo plano); no automático, renova o que venceu.
@@ -32117,6 +33038,7 @@ SAUDE_WORKERS_INFO: dict[str, tuple[str, bool, int]] = {
     "cadastro_full_loop": ("Cadastro dos clientes do Full", False, 60),  # V19.45
     "compras_geral_loop": ("Demanda de Compra geral (segunda)", False, 180),
     "promo_renovacao_loop": ("Promoções automáticas", False, 120),
+    "shopee_promo_loop": ("Promoções automáticas da Shopee", False, 120),  # V19.49
     "posvenda_loop": ("Pós-venda do Mercado Livre", False, 60),
     "promo_convites_loop": ("Convites de campanha do ML", False, 120),
     "relatorio_diario_loop": ("Relatório diário por e-mail", False, 60),
@@ -33189,6 +34111,9 @@ def main() -> None:
         faturamento_thread.start()  # V19.43
         cadastro_full_thread.start()  # V19.45
         promo_renovacao_thread.start()
+        # V19.49: promoções automáticas da Shopee (próxima promoção criada dias antes de acabar)
+        threading.Thread(target=_worker_protegido(shopee_promo_loop), args=(watcher_stop,),
+                         name="shopee-promo", daemon=True).start()
         relatorio_thread.start()
         compras_geral_thread.start()
         linx_clientes_thread.start()

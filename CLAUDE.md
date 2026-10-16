@@ -5,7 +5,7 @@ Shopee, manuais), expedição, separação, conferência por código de barras, 
 produtos/SKUs/EANs, kits, precificação, promoções, rentabilidade, estoque, Central de
 Pendências e histórico.
 
-Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V19.04).
+Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V19.49).
 
 ---
 
@@ -835,6 +835,28 @@ na Promoção. **Oferta relâmpago** entra na comparação mas só para ver ("ac
 sugere; aceitar continua por `promo_convite_aceitar`. A **lista separada de convites saiu**; o modo dos convites
 (simulação/lote/automático com OWNER) e o "Buscar convites" foram para o bloco de Regras, mesmos ids.
 
+### Promoções automáticas da Shopee (V19.49)
+Mesma tela `/promocoes-auto`, escolha **Mercado Livre / Shopee** no topo (`?mp=shopee`). Decisões do dono (16/10,
+entrevista): o ADMIN **marca cada anúncio**; quando faltam `SHOPEE_PROMO_RENOVA_ANTES` (3 dias) para a promoção
+acabar, o sistema cria a próxima pela API `v2.discount` (`add_discount` + `add_discount_item`), **começando no segundo
+em que a atual termina** (a Shopee exige início ≥ 1 h no futuro, por isso a antecedência), com `duracao_dias`. Os
+anúncios que vencem no mesmo horário vão para **uma promoção só** ("Noromak auto DD/MM"; reaproveita a que já
+criamos com o mesmo início, `shopee_promo_criada_v1949`). Regras = as do ML (margem mínima, duração, estoque); **modo
+e limite do dia próprios** (`modo_renovacao@shopee`/`limite_dia@shopee` em `promo_auto_config_v1873`, lidos por
+`promo_auto_config("shopee")`), começa em Simulação, Automático exige OWNER. Margem pela tabela de faixas do
+Precificador copiada para o servidor (`SHOPEE_FAIXAS_TAXA` = `SHOPEE_BANDS`), frete Shopee do Precificador, imposto e
+custo pela regra do ML (`_promo_produtos`/`_promo_produto`, sem o vínculo MLB↔SKU). **Nunca** altera nem encerra
+promoção que não criou; anúncio com promoção **agendada** não ganha outra por cima. **Variação a variação**
+(`shopee_promo_modelo_v1949`, model_id "0" = sem variação): entram as que estavam na promoção, cada uma com o seu preço
+e a sua trava; sem custo fica de fora (nunca custo zero). Estoque lido ao vivo (entra no histórico da Ruptura da
+Shopee). Recusa por campanha da Shopee fica "revisar" e é tentada de novo na rodada seguinte. Worker
+`shopee_promo_loop` (1 h). Tabelas `shopee_promo_v1949`, `_modelo_`, `_removidos_` (tombstone; marcar desfaz),
+`_criada_`, `_log_`, `_amostra_` (**1ª resposta real** de cada chamada, `GET /api/promocoes-auto/shopee/amostra`, perfil
+Admin — **conferir antes de ligar o Lote**: a API foi construída pela documentação, sem resposta real). Rotas
+`GET /api/promocoes-auto/shopee` e `POST /api/promocoes-auto/shopee/{marcar,precos,remover,buscar-novos,renovar,checar,config}`.
+"Buscar novos" lê o retrato diário (`shopee_item_v1890`), sem chamar a Shopee. Convites de campanha da Shopee ficam
+para depois. Teste: `TESTES/test_promo_shopee_v1949.py`.
+
 ### Análise de ADS (V18.54)
 `APP/analise-ads.html` (`/analise-ads`, menu Comercial, só **admin**). O relatório "Anúncios
 patrocinados" que o ML deixa baixar em Publicidade > Relatórios (.xlsx) é **importado à mão**
@@ -1050,6 +1072,7 @@ Os testes ficam em `TESTES/` (são 30 arquivos; os principais):
 | `test_remessa_full_v1903.py` | cálculo (30 dias, kit conta 1, Apollo Araçatuba dividido, null nunca zero), uma remessa aberta, ajuste do ADMIN nunca desfeito, mínimo de 150, rodada descartada se agendaram durante a leitura, novos só com confirmação, não aceito por código, recebida automática (≥ 50%) e manual, aviso 1x/dia, linha do e-mail, rotas e permissões |
 | `test_campanhas_linha_v1904.py` | campanhas lidas por anúncio e pela conta certa, pausa/interrupção sem limpeza, lucro da promoção e de cada campanha na mesma base, melhor só acima do lucro e da margem mínima, relâmpago sem Aceitar, sem custo = nulo, expirada/outra conta/removida fora, tela com a coluna nova e sem a lista de convites |
 | `test_consulta_v1940.py` | perfil Consulta: lê fila e gestão, não grava fila/bip/conclusão/trava/impressão, não apaga nem conecta integração, não vê Usuários/Segurança, todas as filiais, sem Estação, perfil sobrevive ao salvar a lista de usuários |
+| `test_promo_shopee_v1949.py` | promoção Shopee: próxima começa no fim da atual, uma por dia de vencimento, simulação/lote só leem, não renova 2x no dia, não cria por cima de agendada, nunca mexe em promoção manual, margem/estoque/pausado travam, variação a variação, recusa por campanha tenta de novo, modo da Shopee separado do ML, Automático com OWNER |
 | `test_magalu_v1924.py` | páginas de termos/privacidade sem login, URL de consentimento, state de uso único, token não vaza no status, renovação serializada com o refresh novo, callback com erro volta ao Admin |
 | `test_magalu_previa_v1926.py` | prévia não grava na fila, só entrega approved/invoiced, kit aberto, já-na-fila, paginação, 1ª resposta guardada, 401 renova o token uma vez |
 | `test_magalu_importacao_v1927.py` | chave começa ligada, pedido entra como MAGALU, reimportar não duplica e mantém edição manual, kit, exclusão do ADMIN (pedido e linha) e concluído não voltam, pedido da extensão não duplica, enviado sai, falha da API não esvazia a fila, etiqueta da entrega faturada baixada uma vez e vinculada, erro na etiqueta não trava o pedido, rotas |
