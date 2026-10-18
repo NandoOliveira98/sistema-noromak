@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.50-SHOPEE-TAXAS-E-TELA"
+APP_VERSION = "19.51-RESPOSTA-SEM-CORTE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -28012,6 +28012,15 @@ class AppHandler(BaseHTTPRequestHandler):
         if filial and filial != FILIAL_TODAS and isinstance(data, dict) and isinstance(data.get("value"), str):
             with DB_LOCK:
                 data = {**data, "value": storage_filtrar_por_filial("conf_pedidos", data["value"], filial)}
+        # V19.51: resposta antes de ler o corpo (401/403 sem sessão) deixava dados no socket; ao
+        # fechar, o Windows manda RST e o cliente perde a resposta (WinError 10053 no testar.sh,
+        # 18/10). Lê o corpo pequeno que sobrou antes de responder.
+        if getattr(self, "_corpo_lido", None) is None and self.command in ("POST", "PUT", "DELETE", "PATCH"):
+            try:
+                if 0 < int(self.headers.get("Content-Length", "0")) <= 1024 * 1024:
+                    self.read_body()
+            except Exception:
+                pass
         content_type = "application/json; charset=utf-8"
         body, compressed = self.encoded_body(json.dumps(data, ensure_ascii=False).encode("utf-8"), content_type)
         self.send_response(status)
