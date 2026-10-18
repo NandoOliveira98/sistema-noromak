@@ -2071,6 +2071,7 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
             <button type="button" id="btnMagaluConectar" class="btn-primario" onclick="conectarMagaluAdmin()">Conectar Magalu</button>
             <button type="button" id="btnMagaluDesconectar" class="btn-perigo" onclick="desconectarMagaluAdmin()" disabled>Desconectar</button>
             <button type="button" id="btnMagaluPrevia" class="btn-secundario" onclick="previaMagaluAdmin()" disabled>Ver pedidos da Magalu</button>
+            <button type="button" id="btnMagaluPromoTeste" class="btn-secundario" onclick="testePromoMagaluAdmin()" title="Só lê: promoções, SKUs e preços da Magalu. Nada é criado nem alterado.">Testar promoções (só leitura)</button>
             <button type="button" id="btnMagaluImportacao" class="btn-secundario" onclick="alternarImportacaoMagaluAdmin()" disabled>Ligar importação</button>
             <button type="button" id="btnMagaluSincronizar" class="btn-sucesso" onclick="sincronizarMagaluAdmin()" disabled>↻ Sincronizar agora</button>
           </div>
@@ -9725,6 +9726,26 @@ async function carregarIntegracaoMagaluAdmin(){
   const estado=new URLSearchParams(location.search).get("magalu");
   if(estado==="conectada"&&msg)msg.textContent="✅ Magalu conectada ao Noromak.";
   else if(estado==="erro"&&msg)msg.textContent="❌ Não foi possível concluir a conexão com a Magalu. Tente de novo; o motivo fica no log da integração.";
+}
+// V19.53: teste de leitura para a promoção automática da Magalu — só GET, nada é criado nem alterado.
+async function testePromoMagaluAdmin(){
+  const box=document.getElementById("magaluPrevia"),btn=document.getElementById("btnMagaluPromoTeste");
+  if(!box)return;
+  const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  const card=box.closest(".integracao-card");if(card)card.style.gridColumn="1 / -1";
+  if(btn){btn.disabled=true;btn.textContent="Lendo a Magalu…";}
+  box.innerHTML='<div class="integracao-nota">Lendo promoções, SKUs e preços na Magalu (só leitura)…</div>';
+  try{
+    const d=await mlApiAdmin("/expedicao/api/integracoes/magalu/teste-promocoes");
+    let h=`<div class="integracao-nota"><b>Teste de leitura — nada foi criado nem alterado.</b> ${d.promocoes} promoção(ões) na conta`+
+      (d.tipos_de_promocao&&d.tipos_de_promocao.length?` (tipos: ${esc(d.tipos_de_promocao.join(", "))})`:'')+`; ${d.skus_lidos} SKU(s) lidos do catálogo. As respostas ficaram guardadas para montar a promoção automática.</div>`;
+    h+='<div class="ml-log-wrap" style="margin-top:10px"><table class="ml-log-table"><thead><tr><th>Etapa</th><th>Chamada</th><th>Resultado</th><th>Campos recebidos</th></tr></thead><tbody>';
+    for(const e of d.etapas||[]){
+      h+=`<tr><td>${esc(e.etapa)}</td><td style="font-family:monospace;font-size:11px">${esc(e.caminho)}</td><td>${e.ok?"✅ "+esc(e.itens)+" item(ns)":"❌ "+esc(e.erro)}</td><td style="font-size:11px;white-space:normal;max-width:520px">${esc((e.campos||[]).join(", "))}</td></tr>`;
+    }
+    box.innerHTML=h+'</tbody></table></div>';
+  }catch(e){box.innerHTML=`<div class="integracao-alerta">❌ ${esc(e.message)}</div>`;}
+  finally{if(btn){btn.disabled=false;btn.textContent="Testar promoções (só leitura)";}}
 }
 // V19.26: prévia (fase 1a) — mostra o que ENTRARIA na fila; não grava nada.
 async function previaMagaluAdmin(){

@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.52-GAVETA-SHOPEE"
+APP_VERSION = "19.53-MAGALU-TESTE-PROMOCOES"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -6116,6 +6116,87 @@ def _magalu_guardar_amostra(tipo: str, resposta: Any) -> None:
         DB.execute("INSERT OR REPLACE INTO magalu_amostra_v1926(tipo,resposta,tem_dado,created_at) VALUES(?,?,?,?)",
                    (tipo, json_dumps(resposta)[:500000], 1 if tem_dado else 0, now_iso()))
         DB.commit()
+
+
+# ---------------------------------------------------------------------------
+# V19.53: teste de LEITURA para a promoção automática da Magalu (pedido do dono, 18/10).
+# A documentação da API Promocional não mostra os corpos (criar promoção, SKU da promoção, preço);
+# antes de construir, lê de verdade — promoções da loja, os SKUs de uma delas, SKUs do catálogo e o
+# preço de alguns — e guarda a resposta em magalu_amostra_v1926 (tipo "promo_*"). Só GET: nada é
+# criado nem alterado na Magalu. O token da loja já tem os escopos de promoção e de preço (18/10).
+# ---------------------------------------------------------------------------
+MAGALU_PROMO_TESTE_SKUS = 3
+
+
+def _magalu_lista(resp: Any) -> list[Any]:
+    """Itens de uma resposta paginada da Magalu (results/data/items/promotions/skus), tolerante."""
+    if isinstance(resp, list):
+        return resp
+    if isinstance(resp, dict):
+        for chave in ("results", "data", "items", "promotions", "skus", "promos"):
+            if isinstance(resp.get(chave), list):
+                return resp[chave]
+    return []
+
+
+def _magalu_campos(obj: Any, prefixo: str = "", fundo: int = 3) -> list[str]:
+    """Nomes dos campos (até 3 níveis) — para ver o formato sem precisar ler o JSON inteiro."""
+    out: list[str] = []
+    if fundo <= 0:
+        return out
+    if isinstance(obj, list):
+        return _magalu_campos(obj[0], prefixo + "[]", fundo) if obj else [prefixo + "[]"]
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            nome = f"{prefixo}.{k}" if prefixo else str(k)
+            out.append(nome)
+            if isinstance(v, (dict, list)):
+                out.extend(_magalu_campos(v, nome, fundo - 1))
+    return out
+
+
+def magalu_promo_teste() -> dict[str, Any]:
+    """Só leitura. Cada chamada vale por si: a que falhar mostra o erro e as outras seguem."""
+    magalu_access_token()   # sem conexão: erro claro antes de qualquer chamada
+    etapas: list[dict[str, Any]] = []
+
+    def chamar(nome: str, caminho: str, params: dict[str, Any] | None = None) -> Any:
+        try:
+            resp = magalu_api_get(caminho, params)
+        except Exception as exc:
+            etapas.append({"etapa": nome, "caminho": caminho, "ok": False, "erro": str(exc)[:500]})
+            return None
+        itens = _magalu_lista(resp)
+        _magalu_guardar_amostra(f"promo_{nome}", resp if isinstance(resp, dict) else {"results": resp})
+        # um registro só (detalhe da promoção, preço do SKU) conta como 1, não 0
+        qtd = len(itens) if itens or not (isinstance(resp, dict) and resp) else 1
+        etapas.append({"etapa": nome, "caminho": caminho, "ok": True, "itens": qtd,
+                       "campos": _magalu_campos(resp)[:80]})
+        return resp
+
+    promos = _magalu_lista(chamar("promocoes", "/seller/v1/promotions", {"_limit": 50}))
+    alvo = next((p for p in promos if isinstance(p, dict) and (p.get("id") or p.get("promotion_id"))), None)
+    if alvo:
+        pid = str(alvo.get("id") or alvo.get("promotion_id"))
+        chamar("promocao", f"/seller/v1/promotions/{pid}")
+        chamar("promocao_skus", f"/seller/v1/promotions/{pid}/skus", {"_limit": 20})
+    skus = _magalu_lista(chamar("catalogo_skus", "/seller/v1/portfolios/skus", {"_limit": 20}))
+    codigos = []
+    for item in skus:
+        if isinstance(item, dict):
+            codigo = item.get("sku") or item.get("code") or item.get("id")
+            if isinstance(codigo, dict):
+                codigo = codigo.get("code") or codigo.get("id")
+            if codigo:
+                codigos.append(str(codigo))
+    for codigo in codigos[:MAGALU_PROMO_TESTE_SKUS]:
+        chamar("preco", f"/seller/v1/portfolios/prices/{quote(codigo, safe='')}")
+    resumo = {"ok": True, "promocoes": len(promos), "skus_lidos": len(skus), "etapas": etapas,
+              "tipos_de_promocao": sorted({str((p.get("type") or {}).get("id") if isinstance(p.get("type"), dict) else p.get("type"))
+                                           for p in promos if isinstance(p, dict)})}
+    magalu_log_event("promo_teste", "/seller/v1/promotions", "OK" if all(e["ok"] for e in etapas) else "ERRO",
+                     "; ".join(f"{e['etapa']}={'ok' if e['ok'] else 'erro'}" for e in etapas)[:400])
+    return resumo
 
 
 def magalu_pedidos_abertos() -> list[dict[str, Any]]:
@@ -28405,6 +28486,17 @@ class AppHandler(BaseHTTPRequestHandler):
                     self.send_json(resultado)
                 except Exception as exc:
                     magalu_log_event("previa", "/seller/v1/orders", "ERRO", str(exc))
+                    self.send_json({"ok": False, "error": str(exc)}, 502)
+            return
+        if path == "/api/integracoes/magalu/teste-promocoes":  # V19.53: só lê promoções/SKUs/preços
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                if str(ctx.get("app_role") or "") != "admin":
+                    self.send_json({"ok": False, "error": "Somente o perfil Admin."}, 403)
+                    return
+                try:
+                    self.send_json(magalu_promo_teste())
+                except Exception as exc:
                     self.send_json({"ok": False, "error": str(exc)}, 502)
             return
         if path == "/api/integracoes/magalu/amostra":  # V19.26: dados de cliente → só perfil Admin
