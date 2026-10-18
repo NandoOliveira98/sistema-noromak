@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.51-RESPOSTA-SEM-CORTE"
+APP_VERSION = "19.52-GAVETA-SHOPEE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -24861,6 +24861,25 @@ def _shopee_fretes_precificador() -> dict[str, float]:
     return out
 
 
+def _shopee_margens_precificador() -> dict[str, float]:
+    """V19.51: SKU -> margem desejada da Shopee no Precificador (fração; o "Ideal" da gaveta)."""
+    raw, _, _ = get_storage("precificador_online_v1")
+    try:
+        lista = (json.loads(raw or "{}") or {}).get("products") or []
+    except Exception:
+        lista = []
+    out: dict[str, float] = {}
+    for p in lista if isinstance(lista, list) else []:
+        if not isinstance(p, dict):
+            continue
+        sku = str(p.get("sku") or "").strip().upper()
+        sh = (p.get("marketplaces") or {}).get("shopee") or {}
+        m = _money_number(sh.get("margem")) if isinstance(sh, dict) else None
+        if sku and m is not None and 0 <= m < 1:
+            out[sku] = float(m)
+    return out
+
+
 def _shopee_promo_resolver_sku(sku_anuncio: Any, produtos: dict[str, Any]) -> str:
     """Mesma regra do ML sem o vínculo MLB↔SKU (que é do ML): SKU do anúncio/variação,
     prefixo de anúncio tirado, kit pelo SKU; "KIT2-X" nunca vira o simples "X"."""
@@ -25411,7 +25430,7 @@ def shopee_promo_buscar_novos(ator: str) -> dict[str, Any]:
 
 
 def _shopee_promo_calculo(m: dict[str, Any], sku_item: Any, produtos: dict[str, Any], fretes: dict[str, float],
-                          cfg: dict[str, Any]) -> dict[str, Any] | None:
+                          cfg: dict[str, Any], margens: dict[str, float] | None = None) -> dict[str, Any] | None:
     """V19.50: a conta de uma variação para a gaveta: custo e taxas do Precificador, preço mínimo,
     preço para a margem mínima da promoção e a sugestão (10% de desconto se couber na margem mínima,
     senão o preço da margem mínima). Sem custo = None (nunca custo zero)."""
@@ -25423,6 +25442,10 @@ def _shopee_promo_calculo(m: dict[str, Any], sku_item: Any, produtos: dict[str, 
     mmin = _promo_margem_minima(cfg)
     minimo = shopee_promo_preco_minimo(prod, frete)
     na_margem = shopee_promo_preco_minimo(prod, frete, mmin)
+    alvo = (margens or {}).get(prod["sku"], (margens or {}).get(sku))
+    if alvo is None:
+        alvo = float(prod.get("margem_alvo") or 0.15)
+    ideal = shopee_promo_preco_minimo(prod, frete, alvo)
     orig = _money_number(m.get("preco_original"))
     sugestao = None
     if orig:
@@ -25432,7 +25455,8 @@ def _shopee_promo_calculo(m: dict[str, Any], sku_item: Any, produtos: dict[str, 
             sugestao = None   # nem o preço do anúncio dá a margem mínima
     out = {"sku": prod["sku"], "custo": round(float(prod["custo"]), 2), "imposto": float(prod.get("imposto") or 0),
            "frete": round(frete, 2), "preco_minimo": minimo, "preco_margem_min": na_margem,
-           "margem_min": mmin, "sugestao": sugestao, "kit": bool(prod.get("kit"))}
+           "margem_min": mmin, "sugestao": sugestao, "kit": bool(prod.get("kit")),
+           "ideal": ideal, "margem_alvo": round(alvo, 4)}   # V19.51: régua mínimo/ideal da gaveta
     for chave, preco in (("anuncio", orig), ("promo", _money_number(m.get("preco"))), ("sugestao", sugestao)):
         if preco:
             c = shopee_promo_conta(prod, preco, frete)
@@ -25459,8 +25483,9 @@ def shopee_promo_payload(agora_ts: int | None = None) -> dict[str, Any]:
     try:
         produtos = _promo_produtos()
         fretes = _shopee_fretes_precificador()
+        margens = _shopee_margens_precificador()
     except Exception:
-        produtos, fretes = {}, {}
+        produtos, fretes, margens = {}, {}, {}
     cfg = shopee_promo_config()
     itens = []
     for r in linhas:
@@ -25477,7 +25502,7 @@ def shopee_promo_payload(agora_ts: int | None = None) -> dict[str, Any]:
                                      "margem": None, "lucro": None, "situacao": "", "motivo": ""}]
         calculos = {}
         for m in mods:
-            calculos[str(m["model_id"])] = _shopee_promo_calculo(m, r["sku"] or ret.get("sku"), produtos, fretes, cfg)
+            calculos[str(m["model_id"])] = _shopee_promo_calculo(m, r["sku"] or ret.get("sku"), produtos, fretes, cfg, margens)
         precos = [m["preco"] for m in mods if m.get("preco")]
         orig = r["preco_anuncio"] if r["preco_anuncio"] is not None else ret.get("preco")
         c0 = next((c for c in calculos.values() if c), None)

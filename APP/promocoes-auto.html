@@ -543,6 +543,29 @@ body:not([data-mp="shopee"]) #shp{display:none!important}
   </div>
   <div class="gav-foot"><button class="btn" type="button" id="gavCancelar">Cancelar</button><button class="btn pri" type="submit" id="gavSalvar">Salvar preço</button></div>
 </form></aside>
+<!-- V19.51: gaveta lateral da Shopee, com as mesmas peças da do ML -->
+<div class="gav-fundo" id="sgFundo"></div>
+<aside class="gav" id="sg" role="dialog" aria-modal="true" aria-labelledby="sgTit"><form id="sgForm" novalidate style="display:contents">
+  <div class="gav-top"><div style="min-width:0"><h3 id="sgTit"></h3><div class="mlb" id="sgSub"></div></div>
+    <button class="x" type="button" id="sgFechar" aria-label="Fechar">×</button></div>
+  <div class="gav-body">
+    <p class="gav-info" id="sgInfo"></p>
+    <div class="chips" id="sgVars" style="margin-bottom:12px"></div>
+    <div class="gav-rot" id="sgRot">Preço da promoção</div>
+    <div class="gav-preco"><span>R$</span><input type="text" id="sgPreco" inputmode="decimal" autocomplete="off" placeholder="0,00"></div>
+    <input type="range" id="sgSlider" step="0.01" aria-label="Ajustar o preço da promoção">
+    <div class="gav-marcas" id="sgMarcas"></div>
+    <div class="gav-atalhos" id="sgAtalhos"></div>
+    <div class="gav-res" id="sgRes"></div>
+    <div class="gav-msg" id="sgMsg"></div>
+    <div id="sgTodasBox" hidden style="margin-top:10px"><button class="btn mini" type="button" id="sgTodas">Aplicar o mesmo desconto em todas as variações</button></div>
+    <details id="sgTaxasBox"><summary>Custo e taxas (do Precificador)</summary>
+      <div class="gav-taxas" id="sgTaxas"></div>
+      <div id="sgTaxasNota" style="font-size:11.5px;color:var(--ink2);margin-top:8px"></div>
+      <a class="gav-link" id="sgLink" target="_blank" rel="noopener">Abrir no Precificador ↗</a></details>
+  </div>
+  <div class="gav-foot"><button class="btn" type="button" id="sgCancelar">Cancelar</button><button class="btn pri" type="submit" id="sgSalvar">Salvar preço</button></div>
+</form></aside>
 <div class="modal" id="incluirModal" role="dialog" aria-modal="true" aria-labelledby="incTit"><form id="incluirForm" novalidate>
   <div class="mh"><h3 id="incTit">Incluir anúncio</h3></div>
   <div class="mb">
@@ -1250,7 +1273,6 @@ function render(){
       <td class="l">${chip(i)}${i.situacao==='nao_checado'?'<div class="mot">Conferindo na Shopee…</div>':''}${i.motivo?`<div class="mot">${esc(i.motivo)}</div>`:''}${i.aviso?`<div class="aviso"><i class=nk-i-alert></i><span>${esc(i.aviso)}</span></div>`:''}</td>
       <td class="l"><div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><label class="sw"><input type="checkbox" data-marcar="${esc(i.item_id)}" ${i.marcado?'checked':''}><span class="tr"></span>${i.marcado?'Sim':'Não'}</label>
         <button class="icone-btn" data-remover="${esc(i.item_id)}" title="Remover da lista (anúncio apagado na Shopee)" aria-label="Remover ${esc(i.item_id)} da lista"><i class=nk-i-trash></i></button></div></td></tr>`;
-    if(aberto===i.item_id) h+=`<tr class="shp-var"><td colspan="8">${gaveta(i)}</td></tr>`;
   });
   if(!PG.length) h+=`<tr><td colspan="8" class="vazio">${q?`Nenhum anúncio encontrado para "<b>${esc(q)}</b>".`:tab==='marcados'?'Nenhum anúncio marcado ainda. Ligue "Renovar sozinha" na lista.':D.itens.length?'Nenhum anúncio neste filtro.':'Nenhum anúncio na lista. Use “Buscar novos na Shopee”.'}</td></tr>`;
   $('shpTab').innerHTML=h+'</tbody>';
@@ -1261,11 +1283,10 @@ function render(){
   document.querySelectorAll('#shpTab [data-remover]').forEach(b=>b.onclick=()=>remover([b.dataset.remover]));
   const st=$('shpSelTodos'); estadoSelTodos(R);
   st.onchange=()=>{if(st.checked)R.forEach(i=>sel.add(i.item_id));else R.forEach(i=>sel.delete(i.item_id));render()};
-  const g=document.querySelector('#shpTab .shp-var'); if(g) ligarGaveta(g);
   paginacao(R.length,paginas,ini,PG.length);
   selbar();
 }
-function abrir(id){aberto=aberto===id?null:id;render()}
+function abrir(id){const i=D.itens.find(x=>x.item_id===id); if(i) abrirGaveta(i)}
 function estadoSelTodos(R){const st=$('shpSelTodos');if(!st)return;const n=R.filter(i=>sel.has(i.item_id)).length;
   st.checked=R.length>0&&n===R.length;st.indeterminate=n>0&&n<R.length;st.disabled=!R.length}
 function paginacao(total,paginas,ini,qtd){
@@ -1280,55 +1301,116 @@ function paginacao(total,paginas,ini,qtd){
   document.querySelectorAll('#shpPag [data-p]').forEach(b=>b.onclick=()=>{pagina=+b.dataset.p;render();$('shpLista').scrollIntoView({behavior:'smooth',block:'start'})});
   $('shpPp').onchange=e=>{porPagina=+e.target.value;pagina=1;try{localStorage.setItem('nk_promo_auto_pp',porPagina)}catch(x){}render()};
 }
-// a conta de uma variação (vem pronta do servidor): custo, taxas, preço mínimo e sugestão
-function conta(c){
-  if(!c) return '<div class="aviso" style="max-width:none"><i class=nk-i-alert></i><span>Sem custo no Precificador para este SKU: não dá para calcular a margem nem renovar.</span></div>';
-  const t=c.taxa_sugestao||c.taxa_promo||c.taxa_anuncio||{};
-  return `<div class="sub2" style="white-space:normal">Custo ${brl(c.custo)}${c.kit?' (kit)':''} · imposto ${pct(c.imposto)} · frete Shopee ${brl(c.frete)} · taxa ${pct(t.comissao_pct)} + ${brl(t.taxa_fixa)}</div>
-    <div class="sub2" style="white-space:normal">Mínimo (lucro zero) <b>${brl(c.preco_minimo)}</b> · na margem mínima (${pct(c.margem_min)}) <b>${brl(c.preco_margem_min)}</b>${c.lucro_anuncio!=null?` · sem promoção: lucro ${brl(c.lucro_anuncio)} (${pct(c.margem_anuncio)})`:''}</div>`;
-}
-function gaveta(i){
-  const cal=i.calculos||{};
-  const ms=i.modelos.length?i.modelos:[{model_id:'0',nome:'',sku:i.sku,preco:null,preco_original:i.preco_anuncio,estoque:i.estoque}];
-  return `<div class="shp-faixa">Desconto de <input class="inp" id="shpPct" inputmode="decimal" placeholder="%" aria-label="Desconto em %"> % sobre o preço do anúncio <button class="btn mini" type="button" id="shpAplicar">Aplicar em todas</button>
-     <button class="btn mini" type="button" id="shpSugerir" title="10% de desconto se couber na margem mínima; senão o preço da margem mínima">Usar o preço sugerido</button></div>
-   <table><thead><tr><th class="l">Variação</th><th>Preço do anúncio</th><th>Estoque</th><th>Preço da promoção</th><th>Sugerido</th><th>Margem</th><th>Lucro</th><th class="l">Custo e taxas</th></tr></thead><tbody>`+
-   ms.map(m=>{const c=cal[m.model_id]||null;return `<tr><td class="l">${esc(m.nome||(m.model_id==='0'?'Anúncio':'Variação '+m.model_id))}<div class="mlb">${esc(m.sku||'')}</div>${m.situacao?`<div style="margin-top:4px">${chip({situacao:m.situacao})}</div>`:''}${m.motivo?`<div class="mot">${esc(m.motivo)}</div>`:''}</td>
-     <td>${brl(m.preco_original)}</td><td>${m.estoque==null?'—':num(m.estoque)}</td>
-     <td><input class="inp" data-mid="${esc(m.model_id)}" data-orig="${m.preco_original??''}" data-antes="${m.preco??''}" data-sug="${c&&c.sugestao!=null?c.sugestao:''}" value="${m.preco!=null?String(m.preco.toFixed(2)).replace('.',','):''}" inputmode="decimal" aria-label="Preço da promoção"></td>
-     <td>${c&&c.sugestao!=null?`${brl(c.sugestao)}<div class="sub2">lucro ${brl(c.lucro_sugestao)} (${pct(c.margem_sugestao)})</div>`:'<span class="muted">—</span>'}</td>
-     <td data-margem="${esc(m.model_id)}">${c&&c.margem_promo!=null?pct(c.margem_promo):'—'}</td><td data-lucro="${esc(m.model_id)}">${c&&c.lucro_promo!=null?brl(c.lucro_promo):'—'}</td>
-     <td class="l" style="min-width:260px">${conta(c)}</td></tr>`}).join('')+
-   `</tbody></table><div style="display:flex;justify-content:flex-end;gap:8px;margin-top:10px"><button class="btn" type="button" id="shpFechar">Fechar</button><button class="btn pri" type="button" id="shpSalvar"><i class=nk-i-save></i> Salvar preço</button></div>`;
-}
-// mesma conta do servidor (SHOPEE_FAIXAS_TAXA), só para mostrar margem/lucro enquanto digita
+// V19.51: gaveta lateral da Shopee, igual à do ML: preço grande, régua mínimo/ideal, atalhos, margem e
+// lucro, custo e taxas. A conta (custo, taxa da faixa, frete, imposto) vem pronta do servidor; enquanto
+// digita, a mesma tabela de faixas do servidor (SHOPEE_FAIXAS_TAXA) refaz a margem na hora.
 const FAIXAS=[[0,80,0.20,4.5],[80,100,0.14,16],[100,200,0.14,20],[200,Infinity,0.14,26]];
-function contaLocal(c,preco){const f=FAIXAS.find(x=>preco>=x[0]&&preco<x[1])||FAIXAS[3];
-  const lucro=preco*(1-c.imposto-f[2])-c.custo-c.frete-f[3];return {lucro,margem:preco>0?lucro/preco:0}}
-function ligarGaveta(g){
-  const i=D.itens.find(x=>x.item_id===aberto)||{}, cal=i.calculos||{};
-  const atualizar=inp=>{const c=cal[inp.dataset.mid],v=numBR(inp.value);if(!c||v==null||v<=0)return;const r=contaLocal(c,v);
-    g.querySelector(`[data-margem="${inp.dataset.mid}"]`).innerHTML=`<b style="color:${r.margem<c.margem_min?'var(--neg)':'inherit'}">${pct(r.margem)}</b>`;
-    g.querySelector(`[data-lucro="${inp.dataset.mid}"]`).textContent=brl(r.lucro)};
-  g.querySelectorAll('[data-mid]').forEach(inp=>inp.oninput=()=>atualizar(inp));
-  $('shpFechar').onclick=()=>{aberto=null;render()};
-  $('shpAplicar').onclick=()=>{const p=numBR($('shpPct').value); if(p==null||p<=0||p>=90) return toast('Informe o desconto em %.');
-    g.querySelectorAll('[data-mid]').forEach(inp=>{const o=parseFloat(inp.dataset.orig); if(isFinite(o)&&o>0){inp.value=(Math.round(o*(1-p/100)*100)/100).toFixed(2).replace('.',',');atualizar(inp)}})};
-  $('shpSugerir').onclick=()=>{let n=0;g.querySelectorAll('[data-mid]').forEach(inp=>{if(inp.dataset.sug){inp.value=Number(inp.dataset.sug).toFixed(2).replace('.',',');atualizar(inp);n++}});
-    if(!n) toast('Sem preço sugerido: falta o custo no Precificador ou o preço do anúncio não dá a margem mínima.')};
-  $('shpSalvar').onclick=async()=>{
-    const modelos={},antes={};
-    for(const inp of g.querySelectorAll('[data-mid]')){ if(!inp.value.trim()) continue; const v=numBR(inp.value); if(v==null||v<=0) return toast('Preço inválido.');
-      modelos[inp.dataset.mid]=v; antes[inp.dataset.mid]=inp.dataset.antes===''?null:Number(inp.dataset.antes) }
-    if(!Object.keys(modelos).length) return toast('Informe ao menos um preço.');
-    const id=aberto;
-    try{ await api('/api/promocoes-auto/shopee/precos',{item_id:id,modelos,precos_antes:antes});
-      if(i.marcado){ await api('/api/promocoes-auto/shopee/marcar',{item_id:id,ativo:true}); toast('Preço salvo. Conferindo na Shopee…'); acompanhar() }
-      else toast('Preço salvo. Ligue "Renovar sozinha" para o sistema renovar.');
-      aberto=null; carregar(); }
-    catch(e){ toast(e.message); carregar(); }
-  };
+const faixa=p=>FAIXAS.find(x=>Math.round(p*100)/100>=x[0]&&Math.round(p*100)/100<x[1])||FAIXAS[3];
+function contaLocal(c,preco){const f=faixa(preco);
+  const lucro=preco*(1-c.imposto-f[2])-c.custo-c.frete-f[3];return {lucro,margem:preco>0?lucro/preco:0,com:f[2],fixa:f[3]}}
+const fmt2=v=>Number(v).toFixed(2).replace('.',',');
+let sgItem=null, sgVar=null, sgPrecos={}, sgModelos=[];
+function abrirGaveta(i){
+  sgItem=i;
+  sgModelos=i.modelos.length?i.modelos:[{model_id:'0',nome:'',sku:i.sku,preco:null,preco_original:i.preco_anuncio,estoque:i.estoque}];
+  sgPrecos={}; sgModelos.forEach(m=>{sgPrecos[m.model_id]=m.preco!=null?m.preco:null});
+  $('sgTit').textContent=i.titulo||'(título ainda não coletado)';
+  $('sgSub').textContent=i.item_id+(i.sku?' · SKU '+i.sku:'')+(sgModelos.length>1?` · ${sgModelos.length} variações`:'');
+  $('sgInfo').innerHTML=`Anúncio <b>${brl(i.preco_anuncio)}</b>`+(i.modelos.some(m=>m.preco!=null)?` · promoção atual <b>${precoPromo(i).replace(/<\/?b>/g,'')}</b>`:'')+
+    (i.dias_para_vencer!=null?` · ${i.dias_para_vencer<0?'venceu há '+(-i.dias_para_vencer)+' dia(s)':'vence em '+i.dias_para_vencer+' dia(s)'}`:'');
+  $('sgSalvar').innerHTML=i.marcado?'<i class=nk-i-check></i> Salvar preço':'<i class=nk-i-check></i> Marcar com este preço';
+  $('sgSalvar').title=i.marcado?'Vale para as próximas renovações':'Liga "Renovar sozinha" com este preço';
+  $('sgTodasBox').hidden=sgModelos.length<2;
+  trocarVar(sgModelos[0].model_id);
+  $('sg').classList.add('on'); $('sgFundo').classList.add('on');
+  document.querySelectorAll('#shpTab tr[data-linha]').forEach(t=>t.classList.toggle('aberta',t.dataset.linha===i.item_id));
+  setTimeout(()=>{$('sgPreco').focus();$('sgPreco').select()},60);
 }
+function fecharGaveta(){
+  sgItem=null; $('sg').classList.remove('on'); $('sgFundo').classList.remove('on');
+  document.querySelectorAll('#shpTab tr.aberta').forEach(t=>t.classList.remove('aberta'));
+}
+const sgM=()=>sgModelos.find(m=>m.model_id===sgVar)||sgModelos[0];
+const sgC=()=>(sgItem.calculos||{})[sgVar]||null;
+function guardarPreco(){const v=numBR($('sgPreco').value); if(sgVar!=null) sgPrecos[sgVar]=v}
+function trocarVar(mid){
+  if(sgVar!=null&&sgItem) guardarPreco();
+  sgVar=mid; const m=sgM(), c=sgC();
+  $('sgVars').innerHTML=sgModelos.length<2?'':sgModelos.map(x=>`<button type="button" class="chipf ${x.model_id===sgVar?'on':''}" data-var="${esc(x.model_id)}">${esc(x.nome||x.sku||'Variação '+x.model_id)} <span>${sgPrecos[x.model_id]!=null?brl(sgPrecos[x.model_id]):'—'}</span></button>`).join('');
+  $('sgVars').querySelectorAll('[data-var]').forEach(b=>b.onclick=()=>trocarVar(b.dataset.var));
+  $('sgRot').textContent=sgModelos.length<2?'Preço da promoção':`Preço da promoção · ${m.nome||m.sku||'variação '+m.model_id}`;
+  const cheio=m.preco_original;
+  const ini=sgPrecos[sgVar]!=null?sgPrecos[sgVar]:(c&&c.sugestao!=null?c.sugestao:(cheio?cheio*.9:null));
+  $('sgPreco').value=ini!=null?fmt2(ini):'';
+  taxas(); sgFaixa(); sgAtualizar();
+}
+function taxas(){
+  const c=sgC(), m=sgM();
+  $('sgTaxasBox').hidden=false;
+  if(!c){$('sgTaxas').innerHTML='';$('sgTaxasNota').textContent='Sem custo no Precificador para este SKU'+(m.sku?` (${m.sku})`:'')+': não dá para calcular a margem nem renovar. Cadastre o custo no Precificador.';
+    $('sgLink').href='/expedicao/precificador'+(m.sku?'?sku='+encodeURIComponent(m.sku):'');return}
+  const v=numBR($('sgPreco').value)||c.sugestao||m.preco_original||0, f=faixa(v);
+  const cel=(r,val)=>`<div><label>${r}</label><input value="${val}" disabled></div>`;
+  $('sgTaxas').innerHTML=cel(c.kit?'Custo do kit (componentes)':'Custo (R$)',fmt2(c.custo))+cel('Imposto (%)',fmt2(c.imposto*100))+
+    cel('Comissão Shopee (%)',fmt2(f[2]*100))+cel('Taxa fixa (R$)',fmt2(f[3]))+cel('Frete Shopee (R$)',fmt2(c.frete))+cel('Margem desejada (%)',fmt2((c.margem_alvo||0)*100));
+  $('sgTaxasNota').textContent=`Comissão e taxa fixa pela faixa do preço da promoção (tabela da Shopee). Custo, imposto, frete e margem vêm do Precificador (SKU ${c.sku}); para mudar, altere lá.`;
+  $('sgLink').href='/expedicao/precificador?sku='+encodeURIComponent(c.sku);
+}
+function sgFaixa(){
+  const m=sgM(), c=sgC(), cheio=m.preco_original, v=numBR($('sgPreco').value);
+  const mn=c&&c.preco_minimo, id=c&&c.ideal;
+  const base=[v,mn,id,cheio].filter(x=>x>0);
+  const sl=$('sgSlider'); sl.hidden=!base.length; if(!base.length) return;
+  sl.min=Math.max(0,Math.floor(Math.min(...base)*.9)); sl.max=Math.ceil(cheio||Math.max(...base)*1.1);
+  $('sgMarcas').innerHTML=(mn?`<span>Mín ${brl(mn)}</span>`:'<span></span>')+(id?`<span>Ideal ${brl(id)}</span>`:'')+(cheio?`<span>Anúncio ${brl(cheio)}</span>`:'');
+  const at=[];
+  if(mn&&(!cheio||mn<cheio)) at.push(['Mínimo',mn]);
+  if(id&&(!cheio||id<cheio)) at.push(['Ideal',id]);
+  if(c&&c.sugestao!=null) at.push(['Sugerido',c.sugestao]);
+  if(cheio) [5,10,15].forEach(d=>at.push(['−'+d+'%',Math.round(cheio*(100-d))/100]));
+  $('sgAtalhos').innerHTML=at.map(([t,v])=>`<button type="button" data-v="${v}">${t} · ${brl(v)}</button>`).join('');
+  $('sgAtalhos').querySelectorAll('button').forEach(b=>b.onclick=()=>{$('sgPreco').value=fmt2(+b.dataset.v);sgAtualizar()});
+}
+function sgAtualizar(deSlider){
+  if(!sgItem) return; const m=sgM(), c=sgC(), cheio=m.preco_original, bruto=$('sgPreco').value.trim(), v=numBR(bruto);
+  const res=$('sgRes'), msg=$('sgMsg'); msg.classList.remove('erro'); $('sgSalvar').disabled=false;
+  if(v!=null&&!deSlider) $('sgSlider').value=v;
+  if(v==null){res.className='gav-res cinza';res.innerHTML='<div><small>Digite o preço da promoção</small></div>';
+    msg.textContent=bruto?'Valor inválido.':'';msg.classList.toggle('erro',!!bruto);$('sgSalvar').disabled=!Object.values(sgPrecos).some(x=>x!=null);return}
+  const desc=cheio?` Desconto de <b>${pct(1-v/cheio)}</b> sobre o anúncio.`:'';
+  if(!c){res.className='gav-res cinza';res.innerHTML='<div><small>Sem custo no Precificador: margem e lucro não calculados.</small></div>';msg.innerHTML=desc.trim()}
+  else{
+    const k=contaLocal(c,v), f=k.lucro<0?'ruim':k.margem<c.margem_min?'at':'ok';
+    res.className='gav-res '+f;
+    res.innerHTML=`<div><b>${pct(k.margem)}</b><small>margem</small></div><div><b>${brl(k.lucro)}</b><small>lucro por venda</small></div>`;
+    msg.innerHTML=(f==='ruim'?'Abaixo do preço mínimo: dá prejuízo.':f==='at'?`Abaixo da margem mínima da promoção (${pct(c.margem_min)}): não renova.`:'Passa na margem mínima da promoção.')+desc+
+      `<div class="sub2" style="margin-top:4px">Taxa Shopee nesta faixa: ${pct(k.com)} + ${brl(k.fixa)}</div>`;
+    taxas();
+  }
+  if(cheio&&v>=cheio){msg.textContent=`Igual ou acima do preço do anúncio (${brl(cheio)}): não é promoção.`;msg.classList.add('erro');$('sgSalvar').disabled=true}
+}
+$('sgPreco').oninput=()=>sgAtualizar();
+$('sgPreco').onchange=()=>{const v=numBR($('sgPreco').value);if(v!=null)$('sgPreco').value=fmt2(v);sgFaixa();sgAtualizar()};
+$('sgSlider').oninput=e=>{$('sgPreco').value=fmt2(+e.target.value);sgAtualizar(true)};
+$('sgFechar').onclick=fecharGaveta; $('sgCancelar').onclick=fecharGaveta; $('sgFundo').onclick=fecharGaveta;
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('sg').classList.contains('on'))fecharGaveta()});
+$('sgTodas').onclick=()=>{
+  const m=sgM(), v=numBR($('sgPreco').value); if(v==null||!m.preco_original) return toast('Digite o preço desta variação primeiro.');
+  const d=1-v/m.preco_original;
+  sgModelos.forEach(x=>{if(x.preco_original) sgPrecos[x.model_id]=Math.round(x.preco_original*(1-d)*100)/100});
+  toast(`Desconto de ${pct(d)} aplicado em ${sgModelos.length} variações.`); trocarVar(sgVar);
+};
+$('sgForm').onsubmit=async e=>{
+  e.preventDefault(); if(!sgItem||$('sgSalvar').disabled) return; guardarPreco();
+  const modelos={},antes={};
+  sgModelos.forEach(m=>{const v=sgPrecos[m.model_id]; if(v!=null&&v>0){modelos[m.model_id]=v;antes[m.model_id]=m.preco??null}});
+  if(!Object.keys(modelos).length) return toast('Informe o preço da promoção.');
+  const i=sgItem; fecharGaveta();
+  try{ await api('/api/promocoes-auto/shopee/precos',{item_id:i.item_id,modelos,precos_antes:antes});
+    await api('/api/promocoes-auto/shopee/marcar',{item_id:i.item_id,ativo:true});
+    toast(i.marcado?'Preço salvo. Conferindo na Shopee…':`${i.item_id} marcado com este preço. Conferindo na Shopee…`); carregar(); acompanhar(); }
+  catch(e){ toast(e.message); carregar(); }
+};
 // a conferência leva alguns segundos: a tela recarrega até ela terminar (V19.50)
 function acompanhar(){[4000,9000,16000,30000].forEach(t=>setTimeout(()=>{if(mp==='shopee')carregar()},t))}
 function selbar(){
@@ -1380,7 +1462,7 @@ function historico(){
       <td>${brl(h.preco)}</td><td>${pct(h.margem)}</td><td class="l">${h.fim?dataBR(h.fim):'—'}</td><td class="l muted">${esc(h.por)}</td>
       <td class="l" style="white-space:normal;max-width:360px;font-size:12px;color:var(--ink2)">${esc(h.motivo)}</td></tr>`}).join('')||'<tr><td colspan="8" class="vazio">Nada ainda.</td></tr>')+'</tbody>';
 }
-setInterval(()=>{if(mp==='shopee'&&!document.hidden&&!aberto)carregar()},30000);
+setInterval(()=>{if(mp==='shopee'&&!document.hidden&&!sgItem)carregar()},30000);
 trocar(mp);
 })();
 </script>
