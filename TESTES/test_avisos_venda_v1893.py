@@ -267,6 +267,13 @@ class Telas(unittest.TestCase):
         self.assertNotIn("nk-avisos.js", conf)
         self.assertNotIn("nk-menu.js", conf)
 
+    def test_popup_so_na_aba_em_foco_v1957(self):
+        # V19.57: no Windows o Chrome diz "visible" para a aba de uma janela atrás de outro
+        # programa; o aviso ia só para o popup dela e ninguém via. Sem aba EM FOCO, notificação.
+        sw = (APP / "sw.js").read_text(encoding="utf-8")
+        self.assertIn('c.visibilityState === "visible" && c.focused', sw)
+        self.assertNotIn("aVista.find(c => c.focused) || aVista[0]", sw)
+
     def test_central_de_integracoes_v1893(self):
         """Pedido do dono (10/10): sem os botões de verificar etiquetas e nomes pela NF-e; log minimizável."""
         admin = (APP / "admin.html").read_text(encoding="utf-8")

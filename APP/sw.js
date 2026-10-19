@@ -1,4 +1,4 @@
-const CACHE = "noromak-expedicao-pwa-19.56";
+const CACHE = "noromak-expedicao-pwa-19.57";
 // V18.82: telas do Admin com endereço próprio — sem rede, caem na cópia do Admin.
 const ROTAS_ADMIN_V1882 = /\/(dashboard|pedidos-pendentes|pedidos-dia|coleta|etiquetas|historico|historico-sku|produtos|kits|integracoes|usuarios|seguranca)\/?$/i;
 const SHELL = [
@@ -61,8 +61,10 @@ self.addEventListener("push", event => {
       total = Number(d.total) || vendas.length;
     } catch (_) {}
     const janelas = await self.clients.matchAll({type: "window", includeUncontrolled: true});
-    const aVista = janelas.filter(c => c.visibilityState === "visible" && !SEM_POPUP.test(new URL(c.url).pathname));
-    const tela = aVista.find(c => c.focused) || aVista[0];
+    // V19.57: só a aba EM FOCO recebe o popup. No Windows a aba de uma janela atrás de outro
+    // programa continua "visible"; o aviso ia para ela e ninguém via até abrir a página.
+    const aVista = janelas.filter(c => c.visibilityState === "visible" && c.focused && !SEM_POPUP.test(new URL(c.url).pathname));
+    const tela = aVista[0];
     if (tela && vendas.length) {
       tela.postMessage({tipo: "nk-avisos-venda", vendas});
       // O Safari (iPhone) exige notificação a cada push; os outros dispensam com a tela à vista.
