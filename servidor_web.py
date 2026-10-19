@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.53-MAGALU-TESTE-PROMOCOES"
+APP_VERSION = "19.54-MAGALU-PROMOCOES-EM-ANDAMENTO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -6168,18 +6168,32 @@ def magalu_promo_teste() -> dict[str, Any]:
             return None
         itens = _magalu_lista(resp)
         _magalu_guardar_amostra(f"promo_{nome}", resp if isinstance(resp, dict) else {"results": resp})
-        # um registro só (detalhe da promoção, preço do SKU) conta como 1, não 0
-        qtd = len(itens) if itens or not (isinstance(resp, dict) and resp) else 1
+        # um registro só (detalhe da promoção) conta como 1; lista vazia ("results": []) conta 0
+        tem_lista = isinstance(resp, list) or (isinstance(resp, dict) and any(
+            isinstance(resp.get(k), list) for k in ("results", "data", "items", "promotions", "skus", "promos")))
+        qtd = len(itens) if tem_lista else (1 if isinstance(resp, dict) and resp else 0)
         etapas.append({"etapa": nome, "caminho": caminho, "ok": True, "itens": qtd,
                        "campos": _magalu_campos(resp)[:80]})
         return resp
 
-    promos = _magalu_lista(chamar("promocoes", "/seller/v1/promotions", {"_limit": 50}))
-    alvo = next((p for p in promos if isinstance(p, dict) and (p.get("id") or p.get("promotion_id"))), None)
-    if alvo:
-        pid = str(alvo.get("id") or alvo.get("promotion_id"))
-        chamar("promocao", f"/seller/v1/promotions/{pid}")
-        chamar("promocao_skus", f"/seller/v1/promotions/{pid}/skus", {"_limit": 20})
+    # V19.54: sem filtro a Magalu devolve só as que COMEÇAM entre hoje e +30 dias (start_date_gte/lte,
+    # visto em produção 18/10) — a promoção já em andamento ficava de fora. Pede desde 1 ano atrás.
+    agora = datetime.now(timezone.utc)
+    promos = _magalu_lista(chamar("promocoes", "/seller/v1/promotions", {
+        "_limit": 50, "start_date_gte": (agora - timedelta(days=365)).isoformat(),
+        "start_date_lte": (agora + timedelta(days=60)).isoformat()}))
+
+    def peso(p: dict[str, Any]) -> int:
+        tipo = p.get("type")
+        tipo = tipo.get("id") if isinstance(tipo, dict) else tipo
+        return (0 if tipo == "absolute_discount" else 1) + (0 if str(p.get("origin") or "") == "self_service" else 2)
+
+    alvos = sorted((p for p in promos if isinstance(p, dict) and (p.get("id") or p.get("promotion_id"))), key=peso)[:3]
+    for n, alvo in enumerate(alvos, 1):
+        pid = quote(str(alvo.get("id") or alvo.get("promotion_id")), safe="")
+        sufixo = "" if n == 1 else f"_{n}"
+        chamar("promocao" + sufixo, f"/seller/v1/promotions/{pid}")
+        chamar("promocao_skus" + sufixo, f"/seller/v1/promotions/{pid}/skus", {"_limit": 20})
     skus = _magalu_lista(chamar("catalogo_skus", "/seller/v1/portfolios/skus", {"_limit": 20}))
     codigos = []
     for item in skus:

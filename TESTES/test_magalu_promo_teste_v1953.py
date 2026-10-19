@@ -63,6 +63,33 @@ class MagaluPromoTeste(TesteNoromak):
             S.magalu_promo_teste()
         self.assertEqual(gravou, [], "o teste não pode abrir conexão própria (POST/PUT)")
 
+    def test_pede_as_promocoes_em_andamento_e_lista_vazia_conta_zero(self):
+        """V19.54: sem filtro a Magalu só devolve as que começam nos próximos 30 dias."""
+        params = {}
+        def fake(path, p=None):
+            if path == "/seller/v1/promotions":
+                params.update(p or {})
+                return {"results": [], "meta": {"page": {"count": 0}}}
+            return {"results": []}
+        with _Patches(fake):
+            r = S.magalu_promo_teste()
+        self.assertIn("start_date_gte", params)
+        self.assertLess(params["start_date_gte"], S.datetime.now(S.timezone.utc).isoformat())
+        self.assertEqual({e["etapa"]: e["itens"] for e in r["etapas"]}["promocoes"], 0)
+
+    def test_le_primeiro_a_promocao_de_preco_do_seller(self):
+        lidas = []
+        promos = {"results": [{"id": "C1", "type": {"id": "percentage_discount"}, "origin": "channel"},
+                              {"id": "S1", "type": {"id": "absolute_discount"}, "origin": "self_service"}]}
+        def fake(path, p=None):
+            lidas.append(path)
+            return promos if path == "/seller/v1/promotions" else {"results": []}
+        with _Patches(fake):
+            S.magalu_promo_teste()
+        detalhes = [x for x in lidas if x.startswith("/seller/v1/promotions/") and not x.endswith("/skus")]
+        self.assertEqual(detalhes[0], "/seller/v1/promotions/S1")
+        self.assertIn("/seller/v1/promotions/C1/skus", lidas)
+
     def test_rota_so_do_perfil_admin(self):
         respostas = [("/seller/v1/promotions", {"results": []})]
         with self._api(respostas):
