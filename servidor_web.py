@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.57-AVISOS-SO-ABA-EM-FOCO"
+APP_VERSION = "19.58-DASHBOARD-TEMPO-REAL"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -17779,6 +17779,9 @@ def _ml_profitability_recent_sales(days: int = 30, limit: int = 2000, date_from:
 VENDAS_SYNC_INTERVAL = max(120, min(3600, int(os.getenv("VENDAS_SYNC_INTERVAL", "600"))))
 VENDAS_HISTORY_DAYS = max(30, min(365, int(os.getenv("VENDAS_HISTORY_DAYS", "365"))))
 VENDAS_SYNC_LOCK = threading.Lock()
+# V19.58: venda nova vista pelos vigias (avisos) acorda a cópia rápida das vendas do Dashboard.
+VENDAS_SYNC_EVENT = threading.Event()
+VENDAS_RAPIDO_INTERVALO_MIN = 15  # s entre duas cópias rápidas (rajada de vendas = uma cópia)
 VENDAS_ML_LIMIT = 5000
 BR_TZ = timezone(timedelta(hours=-3))
 VENDAS_MARKETPLACES = {"ml": "Mercado Livre", "shopee": "Shopee"}
@@ -18086,6 +18089,59 @@ def vendas_sync_once() -> dict[str, Any]:
         return resultado
     finally:
         VENDAS_SYNC_LOCK.release()
+
+
+def vendas_sync_recente() -> dict[str, Any]:
+    """V19.58: cópia rápida, só de anteontem a hoje, de cada marketplace e conta. Chamada quando
+    o vigia acha venda nova; o ciclo de 10 min continua fazendo os 30 dias e o histórico."""
+    if not VENDAS_SYNC_LOCK.acquire(blocking=False):
+        return {"ok": False, "ocupado": True}   # a cópia completa já está rodando
+    try:
+        hoje = datetime.now(BR_TZ).date()
+        resultado: dict[str, Any] = {"ok": True}
+        alvos = [(m, None) for m in vendas_marketplaces_conectados()]
+        alvos += [("ml", c) for c in ml_casas_conectadas() if c != CASA_PRINCIPAL]
+        for marketplace, casa in alvos:
+            ctx = ml_na_casa(casa) if casa else contextlib.nullcontext()
+            with ctx:
+                chave = _vendas_chave(marketplace)
+                try:
+                    resultado[chave] = _vendas_sync_intervalo(marketplace, hoje - timedelta(days=2), hoje)
+                    _vendas_meta(f"ultima_sincronizacao_{chave}", now_iso())
+                except Exception as exc:
+                    resultado[chave] = {"erro": str(exc)[:500]}
+        return resultado
+    finally:
+        VENDAS_SYNC_LOCK.release()
+
+
+def vendas_rapido_loop(stop_event: threading.Event) -> None:
+    """V19.58: espera venda nova (VENDAS_SYNC_EVENT) e faz a cópia rápida."""
+    while not stop_event.is_set():
+        if not _saude_esperar(VENDAS_SYNC_EVENT, 60):
+            continue
+        if stop_event.wait(VENDAS_RAPIDO_INTERVALO_MIN):   # junta a rajada (carrinho, várias vendas)
+            break
+        VENDAS_SYNC_EVENT.clear()
+        try:
+            vendas_sync_recente()
+        except Exception as exc:
+            print(f"[vendas-rapido] falhou: {exc}", file=sys.stderr, flush=True)
+
+
+def vendas_versao() -> str:
+    """V19.58: impressão digital barata das vendas recentes (as duas tabelas). A tela do
+    Dashboard consulta a cada 15 s e só recarrega o resumo quando muda. Sob DB_LOCK ou não."""
+    desde = (datetime.now(BR_TZ).date() - timedelta(days=31)).isoformat()
+    partes = []
+    for tabela in ("vendas_v1799", "vendas_conta_v1898"):
+        try:
+            r = DB.execute(f"SELECT COUNT(*), ROUND(COALESCE(SUM(amount),0),2), COALESCE(SUM(qty),0) "
+                           f"FROM {tabela} WHERE sale_day>=?", (desde,)).fetchone()
+            partes.append(f"{r[0]}:{r[1]}:{r[2]}")
+        except sqlite3.Error:
+            partes.append("-")
+    return hashlib.sha1("|".join(partes).encode()).hexdigest()[:16]
 
 
 def vendas_historico_completo(marketplace: str) -> bool:
@@ -29419,6 +29475,15 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
+        if path == "/api/dashboard/vendas/versao":
+            # V19.58: a tela consulta a cada 15 s; resposta mínima, sem montar o resumo.
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            with DB_LOCK:
+                versao = vendas_versao()
+            self.send_json({"ok": True, "versao": versao})
+            return
         if path == "/api/dashboard/vendas":
             # V17.99: Dashboard de vendas (Mercado Livre e Shopee, com valor).
             ctx = self.auth(admin_only=True)
@@ -33608,6 +33673,7 @@ def avisos_venda_registrar(marketplace: str, vendas: list[dict[str, Any]]) -> in
         DB.commit()
     if novas:
         AVISOS_VENDA_EVENT.set()
+        VENDAS_SYNC_EVENT.set()   # V19.58: Dashboard em tempo real
     return novas
 
 
@@ -33929,6 +33995,7 @@ SAUDE_WORKERS_INFO: dict[str, tuple[str, bool, int]] = {
     "magalu_pedidos_loop": ("Pedidos e etiquetas da Magalu", True, 20),  # V19.27
     "shopee_label_worker_loop": ("Etiquetas da Shopee", True, 30),
     "vendas_sync_loop": ("Vendas (Dashboard e Financeiro)", False, 120),
+    "vendas_rapido_loop": ("Vendas novas no Dashboard (tempo real)", False, 20),  # V19.58
     "financeiro_frete_loop": ("Frete das vendas (Financeiro)", False, 120),
     "full_remessa_loop": ("Remessa Full automática", False, 3600),
     "ml_auditoria_loop": ("Auditor de cobranças do ML", False, 180),
@@ -34848,6 +34915,13 @@ def main() -> None:
         name="vendas-sync",
         daemon=True,
     )
+    # V19.58: cópia rápida das vendas quando o vigia acha venda nova.
+    vendas_rapido_thread = threading.Thread(
+        target=_worker_protegido(vendas_rapido_loop),
+        args=(watcher_stop,),
+        name="vendas-rapido",
+        daemon=True,
+    )
     # V18.31: frete por conta do vendedor das vendas recentes (Financeiro).
     frete_thread = threading.Thread(
         target=_worker_protegido(financeiro_frete_loop),
@@ -35002,6 +35076,7 @@ def main() -> None:
         shopee_orders_thread.start()
         magalu_thread.start()
         vendas_ml_thread.start()
+        vendas_rapido_thread.start()
         frete_thread.start()
         auditoria_thread.start()
         full_remessa_thread.start()

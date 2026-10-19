@@ -679,6 +679,12 @@ html[data-tema="escuro"] .meta-v1914-topo b{color:#E6EEF6}html[data-tema="escuro
 .v1799-kpi small{display:block;color:#738598;font-size:10.5px;font-weight:800;text-transform:uppercase;letter-spacing:.04em}
 .v1799-kpi b{display:block;margin-top:5px;font-size:clamp(16px,1.45vw,24px);line-height:1.1;color:#143957;font-variant-numeric:tabular-nums;white-space:nowrap;letter-spacing:-.01em}
 .v1799-var{display:block;margin-top:5px;font-size:10.5px;font-weight:800;color:#586A7D}
+/* V19.58: ranking com 5 linhas + brilho do número que mudou com venda nova */
+.v1957-oculta{display:none}
+.v1957-mais{display:block;width:100%;margin-top:6px;padding:8px;border:1px dashed var(--nk-borda,#D5DEE8);border-radius:8px;background:none;color:var(--nk-acento,#1F4E9E);font:700 12.5px/1 inherit;cursor:pointer}
+.v1957-mais:hover{background:var(--nk-fundo2,#F2F6FB)}
+@keyframes v1957-brilho{0%{box-shadow:0 0 0 0 rgba(34,160,90,.55);background-color:rgba(34,160,90,.12)}100%{box-shadow:0 0 0 10px rgba(34,160,90,0);background-color:transparent}}
+.v1957-brilho{animation:v1957-brilho 1.6s ease-out}
 .v1799-var.sobe{color:#1B7A3E}.v1799-var.desce{color:#b42318}.v1799-var small{font-weight:600;color:#5F7186;text-transform:none;letter-spacing:0;display:inline;font-size:10px}
 .v1799-chart-panel{position:relative;margin-bottom:13px}
 .v1799-chart{height:190px;display:flex;align-items:flex-end;gap:2px;padding:8px 2px 0;border-bottom:1px solid #DCE5EF;position:relative}
@@ -5484,7 +5490,24 @@ async function v1799Carregar(){
     const av=document.getElementById("v1799Aviso");av.hidden=false;av.className="v1799-aviso erro";av.textContent="Não foi possível carregar as vendas: "+e.message;
   }
 }
+// V19.58: Dashboard em tempo real. O servidor copia a venda nova assim que o vigia a vê;
+// aqui só se pergunta "mudou?" (resposta de poucos bytes) e o resumo é refeito só quando mudou.
+async function v1957Conferir(){
+  const dash=document.getElementById("v151Dashboard");if(!dash||dash.hidden||document.hidden)return;
+  try{
+    const r=await fetch("/expedicao/api/dashboard/vendas/versao",{credentials:"same-origin",cache:"no-store"});
+    const d=await r.json().catch(()=>({}));if(!r.ok||!d.ok)return;
+    if(v1799.versao&&d.versao!==v1799.versao){v1799.brilhar=true;v1799Carregar();}
+    v1799.versao=d.versao;
+  }catch(_){}
+}
+function v1957Brilho(ids){
+  ids.forEach(id=>{const el=document.getElementById(id);const card=el&&(el.closest(".v1799-kpi")||el.parentElement);if(!card)return;
+    card.classList.remove("v1957-brilho");void card.offsetWidth;card.classList.add("v1957-brilho");});
+}
 function v1799Render(d){
+  const kpiIds=["v1799Fat","v1799Ped","v1799Un","v1799Ticket","v1799Skus"];
+  const antes=kpiIds.map(id=>document.getElementById(id)?.textContent||"");
   const res=d.resumo||{},ant=d.anterior||{},per=d.periodo||{},pa=d.periodo_anterior||{},sync=d.sincronizacao||{};
   v1799.dias=Number(per.dias)||30; // V18.08: base do cálculo de demanda na gaveta
   const rotuloAnt=`${v1799Curta(pa.inicio)}–${v1799Curta(pa.fim)}`;
@@ -5493,6 +5516,7 @@ function v1799Render(d){
   v151Set("v1799Periodo",`${v1799Br(per.inicio)} a ${v1799Br(per.fim)} · ${per.dias} dia(s) · comparado com ${v1799Br(pa.inicio)} a ${v1799Br(pa.fim)}${contas}`);
   v151Set("v1799Fat",v1799Brl(res.faturamento));v151Set("v1799Ped",v1799Num(res.pedidos));v151Set("v1799Un",v1799Num(res.unidades));
   v151Set("v1799Ticket",v1799Brl(res.ticket_medio));v151Set("v1799Skus",v1799Num(res.skus));
+  if(v1799.brilhar){v1799.brilhar=false;v1957Brilho(kpiIds.filter((id,i)=>(document.getElementById(id)?.textContent||"")!==antes[i]));}
   v1799Variacao("v1799FatVar",res.faturamento,ant.faturamento,rotuloAnt);v1799Variacao("v1799PedVar",res.pedidos,ant.pedidos,rotuloAnt);
   v1799Variacao("v1799UnVar",res.unidades,ant.unidades,rotuloAnt);v1799Variacao("v1799TicketVar",res.ticket_medio,ant.ticket_medio,rotuloAnt);
   v151Set("v1799Titulo",(v1799.canal?`Vendas · ${V1799_CANAIS[v1799.canal]}`:"Vendas · todos os marketplaces")+(v1799.conta&&v1799.conta!=="todas"?` · ${V1799_CONTAS[v1799.conta]}`:""));
@@ -5555,14 +5579,28 @@ function v1799Tabela(id,itens,campo,res){
   if(!itens.length){box.innerHTML='<div class="v151-empty">Sem vendas no período.</div>';return;}
   const total=Number(res[campo]||0)||1;
   pd8Itens[id]=itens; // V18.08: guarda os itens para a gaveta de detalhe
+  // V19.58: só as 5 primeiras; "Mostrar mais" abre o restante na própria tabela (lembrado no navegador).
+  const aberto=v1957RankAberto(id);
   box.innerHTML=`<table><thead><tr><th>#</th><th>Produto</th><th class="n">Unid.</th><th class="n">Faturamento</th></tr></thead><tbody>${
     itens.map((x,i)=>{const pct=Number(x[campo]||0)/total*100;const pm=x.por_marketplace||{};const un=Number(x.unidades||0)||1;
       const canais=["ml","shopee"].filter(m=>pm[m]).map(m=>`${m==="ml"?"ML":"Shopee"} ${v1799Num(pm[m])}`).join(" · ");
       const barra=["ml","shopee"].map(m=>pm[m]?`<i class="${m}" style="width:${(Math.min(100,pct)*pm[m]/un).toFixed(2)}%"></i>`:"").join("");
-      return `<tr class="pd8-row" onclick="pd8Abrir('${id}',${i},this)" tabindex="0" title="Ver estoque, curva e demanda"><td class="pos">${i+1}</td>
+      return `<tr class="pd8-row${i>=V1957_RANK_LIMITE&&!aberto?" v1957-oculta":""}" onclick="pd8Abrir('${id}',${i},this)" tabindex="0" title="Ver estoque, curva e demanda"><td class="pos">${i+1}</td>
       <td class="prod" title="${htmlSeguroBanco(x.titulo)}"><b>${htmlSeguroBanco(x.titulo||x.sku)}</b><small>${htmlSeguroBanco(x.sku)} · ${v1799Num(x.pedidos)} pedido(s)${canais&&!v1799.canal?" ("+canais+" un.)":""} · ${pct.toLocaleString("pt-BR",{maximumFractionDigits:1})}% do ${campo==="unidades"?"total de unidades":"faturamento"}</small><span class="share">${barra}</span></td>
-      <td class="n">${v1799Num(x.unidades)}</td><td class="n">${v1799Brl(x.faturamento)}</td></tr>`;}).join("")}</tbody></table>`;
+      <td class="n">${v1799Num(x.unidades)}</td><td class="n">${v1799Brl(x.faturamento)}</td></tr>`;}).join("")}</tbody></table>${
+    itens.length>V1957_RANK_LIMITE?`<button type="button" class="v1957-mais" data-v1957-rank="${id}">${aberto?"Mostrar menos":`Mostrar mais (${itens.length-V1957_RANK_LIMITE})`}</button>`:""}`;
 }
+const V1957_RANK_LIMITE=5;
+function v1957RankAberto(id){try{return localStorage.getItem("nk_dash_rank_v1957_"+id)==="1";}catch(_){return false;}}
+document.addEventListener("click",e=>{
+  const b=e.target.closest("[data-v1957-rank]");if(!b)return;
+  const id=b.dataset.v1957Rank,abrir=!v1957RankAberto(id);
+  try{localStorage.setItem("nk_dash_rank_v1957_"+id,abrir?"1":"0");}catch(_){}
+  const box=document.getElementById(id);if(!box)return;
+  box.querySelectorAll("tbody tr").forEach((tr,i)=>tr.classList.toggle("v1957-oculta",!abrir&&i>=V1957_RANK_LIMITE));
+  const resto=box.querySelectorAll("tbody tr").length-V1957_RANK_LIMITE;
+  b.textContent=abrir?"Mostrar menos":`Mostrar mais (${resto})`;
+});
 
 // ===== V18.08: gaveta de detalhe do produto (estoque, curva, demanda) =====
 // Só leitura. Clica no produto do "Mais vendidos"/"Maior faturamento" e abre uma
@@ -5781,7 +5819,9 @@ function v1799Abrir(){
       b.addEventListener("click",()=>{v1799.conta=b.dataset.v1799Conta;try{localStorage.setItem("nk_dash_conta_v1898",v1799.conta);}catch(_){}document.querySelectorAll("[data-v1799-conta]").forEach(x=>x.classList.toggle("ativo",x===b));v1799Carregar();});
     });
     // Enquanto o Dashboard estiver aberto, recarrega a cada 5 minutos.
-    v1799.timer=setInterval(()=>{const dash=document.getElementById("v151Dashboard");if(dash&&!dash.hidden&&!document.hidden)v1799Carregar();},300000);
+    // V19.58: tempo real — consulta a impressão digital das vendas a cada 15 s e só recarrega quando muda.
+    v1799.timer=setInterval(v1957Conferir,15000);
+    document.addEventListener("visibilitychange",()=>{if(!document.hidden)v1957Conferir();});
     v1799Periodo("30");return;
   }
   v1799Carregar();
