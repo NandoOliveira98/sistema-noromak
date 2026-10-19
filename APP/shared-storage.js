@@ -222,6 +222,48 @@
       return consolidado;
     },
 
+    // V19.56: mesma gravação do setItem, mas sem travar a página. O Banco de produtos
+    // (milhares de linhas) gravado pelo XHR síncrono deixava o Chrome em "Página sem
+    // resposta" a cada campo editado. Quem chama garante uma gravação por vez.
+    async setItemAsync(chave, valor, base) {
+      chave = String(chave);
+      valor = String(valor);
+      if (ehLocal(chave)) return this.setItem(chave, valor);
+      let anterior = cache.has(chave) ? cache.get(chave) : null;
+      if (!cache.has(chave)) anterior = this.getItem(chave);
+      if (typeof base === "string") anterior = base;
+      const cab = { "Accept": "application/json", "Content-Type": "application/json; charset=utf-8", "X-Expedicao-Tela": TELA_ATUAL };
+      if (filialEscolhida()) cab["X-Noromak-Filial"] = filialEscolhida();
+      if (chave === "conf_produtos") cab["X-Expedicao-Forma"] = TELA_ATUAL === "Admin" ? "Banco de produtos" : "Sincronização de produtos";
+      let r;
+      try {
+        r = await fetch(API, { method: "POST", headers: cab, credentials: "same-origin", body: JSON.stringify({ key: chave, oldValue: anterior, newValue: valor }) });
+      } catch (erro) {
+        conectado = false; ultimoErro = erro.message || String(erro); atualizarIndicadorRede();
+        throw new Error("O servidor da Expedição não está respondendo. Atualize a página ou avise o administrador.");
+      }
+      const texto = await r.text();
+      let resposta = {};
+      try { resposta = texto ? JSON.parse(texto) : {}; } catch (_) { resposta = { error: texto || "Falha desconhecida" }; }
+      if (r.status === 403 && resposta && resposta.code === "SOMENTE_LEITURA") {
+        cache.delete(chave);
+        try { window.sessionStorage.removeItem("rede_cache_" + chave); } catch (_) {}
+        try { if (typeof window.nkToast === "function") window.nkToast("Perfil Consulta: somente leitura. Nada foi alterado.", "aviso"); } catch (_) {}
+        throw new Error(resposta.error || "Perfil Consulta: somente leitura.");
+      }
+      if (!r.ok) {
+        conectado = false; ultimoErro = resposta.error || `HTTP ${r.status}: ${texto || "falha no aplicativo"}`; atualizarIndicadorRede();
+        throw new Error(ultimoErro);
+      }
+      conectado = true; ultimoErro = ""; atualizarIndicadorRede();
+      const consolidado = resposta.value === null || resposta.value === undefined ? valor : String(resposta.value);
+      cache.set(chave, consolidado);
+      versoes.set(chave, Number(resposta.version || 0));
+      try { window.sessionStorage.setItem("rede_cache_" + chave, consolidado); } catch (_) {}
+      dispararStorage(chave, anterior, consolidado);
+      return consolidado;
+    },
+
     setPedidos(valor, permitirRemocoes = false) {
       const chave="conf_pedidos"; valor=String(valor);
       let anterior=cache.has(chave)?cache.get(chave):null;
