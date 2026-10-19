@@ -57,3 +57,23 @@ class DashboardTempoReal(TesteNoromak):
         self.assertIn("/expedicao/api/dashboard/vendas/versao", html)
         self.assertIn("V1957_RANK_LIMITE=5", html)
         self.assertIn("Mostrar mais", html)
+
+    def test_meta_em_cache_ate_mudar_venda_ou_meta(self):
+        with S.DB_LOCK:
+            S.meta_mensal_payload_cache()
+        with mock.patch.object(S, "vendas_dashboard_payload", side_effect=AssertionError("refez a conta")):
+            with S.DB_LOCK:
+                S.meta_mensal_payload_cache()   # nada mudou: não refaz
+        with S.DB_LOCK:
+            S.DB.execute("INSERT INTO vendas_v1799(marketplace,order_id,line_key,sale_at,sale_day,qty,amount,updated_at) "
+                         "VALUES('ml','M1','1',?,?,1,70,?)", (S.now_iso(), HOJE.isoformat(), S.now_iso()))
+            S.DB.commit()
+            self.assertEqual(S.meta_mensal_payload_cache()["faturado"], 70.0, "venda nova não entrou na meta")
+        S.meta_mensal_salvar(HOJE.strftime("%Y-%m"), 1000, "admin")
+        with S.DB_LOCK:
+            self.assertEqual(S.meta_mensal_payload_cache()["meta"], 1000.0, "meta nova não entrou")
+
+    def test_tela_selo_ao_vivo_e_botao_padrao(self):
+        html = (APP / "admin.html").read_text(encoding="utf-8")
+        self.assertIn('id="v1958Vivo"', html)
+        self.assertIn('class="nk-btn v1957-mais"', html)

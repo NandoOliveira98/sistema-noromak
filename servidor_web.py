@@ -18208,6 +18208,21 @@ def meta_mensal_payload(hoje: date | None = None) -> dict[str, Any]:
             "esperado_hoje": round(meta * (hoje.day - 1) / dias_mes, 2) if meta else None}
 
 
+_META_CACHE: dict[str, Any] = {}
+
+
+def meta_mensal_payload_cache() -> dict[str, Any]:
+    """V19.58: a meta refaz a conta do mês inteiro; só refaz quando muda venda, meta ou dia. Sob DB_LOCK."""
+    _meta_schema()
+    hoje = datetime.now(BR_TZ).date()
+    m = DB.execute("SELECT COALESCE(MAX(em),''), COUNT(*) FROM meta_mensal_v1914").fetchone()
+    chave = f"{hoje.isoformat()}|{vendas_versao()}|{m[0]}|{m[1]}"
+    if _META_CACHE.get("chave") != chave:
+        _META_CACHE["valor"] = meta_mensal_payload(hoje)
+        _META_CACHE["chave"] = chave
+    return dict(_META_CACHE["valor"])
+
+
 def meta_mensal_salvar(mes: str, valor: Any, usuario: str) -> None:
     if not re.match(r"^\d{4}-\d{2}$", str(mes or "")):
         raise ValueError("Mês inválido (AAAA-MM).")
@@ -29470,7 +29485,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             try:
                 with DB_LOCK:
-                    out = {"ok": True, **meta_mensal_payload()}
+                    out = {"ok": True, **meta_mensal_payload_cache()}
                 self.send_json(out)
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
@@ -30233,7 +30248,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 body = self.read_json() or {}
                 meta_mensal_salvar(str(body.get("mes") or ""), body.get("valor"), ctx["username"])
                 with DB_LOCK:
-                    out = {"ok": True, **meta_mensal_payload()}
+                    out = {"ok": True, **meta_mensal_payload_cache()}
                 self.send_json(out)
             except ValueError as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 400)

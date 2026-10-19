@@ -681,8 +681,11 @@ html[data-tema="escuro"] .meta-v1914-topo b{color:#E6EEF6}html[data-tema="escuro
 .v1799-var{display:block;margin-top:5px;font-size:10.5px;font-weight:800;color:#586A7D}
 /* V19.58: ranking com 5 linhas + brilho do número que mudou com venda nova */
 .v1957-oculta{display:none}
-.v1957-mais{display:block;width:100%;margin-top:6px;padding:8px;border:1px dashed var(--nk-borda,#D5DEE8);border-radius:8px;background:none;color:var(--nk-acento,#1F4E9E);font:700 12.5px/1 inherit;cursor:pointer}
-.v1957-mais:hover{background:var(--nk-fundo2,#F2F6FB)}
+.v1957-mais{display:flex;justify-content:center;width:100%;margin-top:8px}
+.v1958-vivo{display:inline-flex;align-items:center;gap:6px;margin-left:8px;vertical-align:middle;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:700;background:var(--nk-ok-bg,#E7F4EC);color:var(--nk-ok,#1B7A3E)}
+.v1958-vivo::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor;animation:v1958-pulso 2s infinite}
+.v1958-vivo.parado{background:var(--nk-tile,#F2F6FB);color:var(--nk-ink3,#7A8C9E)}.v1958-vivo.parado::before{animation:none}
+@keyframes v1958-pulso{50%{opacity:.3}}
 @keyframes v1957-brilho{0%{box-shadow:0 0 0 0 rgba(34,160,90,.55);background-color:rgba(34,160,90,.12)}100%{box-shadow:0 0 0 10px rgba(34,160,90,0);background-color:transparent}}
 .v1957-brilho{animation:v1957-brilho 1.6s ease-out}
 .v1799-var.sobe{color:#1B7A3E}.v1799-var.desce{color:#b42318}.v1799-var small{font-weight:600;color:#5F7186;text-transform:none;letter-spacing:0;display:inline;font-size:10px}
@@ -1438,7 +1441,7 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
     <div class="v1799-vendas">
       <div class="v1799-bar">
         <div>
-          <h3 id="v1799Titulo">Vendas · todos os marketplaces</h3>
+          <h3 id="v1799Titulo">Vendas · todos os marketplaces</h3> <span id="v1958Vivo" class="v1958-vivo" hidden></span>
           <p id="v1799Periodo">Carregando…</p>
         </div>
         <div class="v1799-controles">
@@ -5498,9 +5501,18 @@ async function v1957Conferir(){
     const r=await fetch("/expedicao/api/dashboard/vendas/versao",{credentials:"same-origin",cache:"no-store"});
     const d=await r.json().catch(()=>({}));if(!r.ok||!d.ok)return;
     if(v1799.versao&&d.versao!==v1799.versao){v1799.brilhar=true;v1799Carregar();}
-    v1799.versao=d.versao;
+    v1799.versao=d.versao;v1799.vivoEm=Date.now();
   }catch(_){}
+  v1958Selo();
 }
+// V19.58: selo "Ao vivo · atualizado há X s"; sem resposta há mais de 1 min, fica cinza com a hora.
+function v1958Selo(){
+  const el=document.getElementById("v1958Vivo");if(!el||!v1799.vivoEm)return;el.hidden=false;
+  const s=Math.round((Date.now()-v1799.vivoEm)/1000),parado=s>60;
+  el.classList.toggle("parado",parado);
+  el.textContent=parado?`sem atualizar desde ${new Date(v1799.vivoEm).toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"})}`:`Ao vivo · atualizado há ${s<5?"poucos":s} s`;
+}
+setInterval(v1958Selo,5000);
 function v1957Brilho(ids){
   ids.forEach(id=>{const el=document.getElementById(id);const card=el&&(el.closest(".v1799-kpi")||el.parentElement);if(!card)return;
     card.classList.remove("v1957-brilho");void card.offsetWidth;card.classList.add("v1957-brilho");});
@@ -5588,7 +5600,7 @@ function v1799Tabela(id,itens,campo,res){
       return `<tr class="pd8-row${i>=V1957_RANK_LIMITE&&!aberto?" v1957-oculta":""}" onclick="pd8Abrir('${id}',${i},this)" tabindex="0" title="Ver estoque, curva e demanda"><td class="pos">${i+1}</td>
       <td class="prod" title="${htmlSeguroBanco(x.titulo)}"><b>${htmlSeguroBanco(x.titulo||x.sku)}</b><small>${htmlSeguroBanco(x.sku)} · ${v1799Num(x.pedidos)} pedido(s)${canais&&!v1799.canal?" ("+canais+" un.)":""} · ${pct.toLocaleString("pt-BR",{maximumFractionDigits:1})}% do ${campo==="unidades"?"total de unidades":"faturamento"}</small><span class="share">${barra}</span></td>
       <td class="n">${v1799Num(x.unidades)}</td><td class="n">${v1799Brl(x.faturamento)}</td></tr>`;}).join("")}</tbody></table>${
-    itens.length>V1957_RANK_LIMITE?`<button type="button" class="v1957-mais" data-v1957-rank="${id}">${aberto?"Mostrar menos":`Mostrar mais (${itens.length-V1957_RANK_LIMITE})`}</button>`:""}`;
+    itens.length>V1957_RANK_LIMITE?`<button type="button" class="nk-btn v1957-mais" data-v1957-rank="${id}">${aberto?"Mostrar menos":`Mostrar mais (${itens.length-V1957_RANK_LIMITE})`}</button>`:""}`;
 }
 const V1957_RANK_LIMITE=5;
 function v1957RankAberto(id){try{return localStorage.getItem("nk_dash_rank_v1957_"+id)==="1";}catch(_){return false;}}
@@ -5820,7 +5832,7 @@ function v1799Abrir(){
     });
     // Enquanto o Dashboard estiver aberto, recarrega a cada 5 minutos.
     // V19.58: tempo real — consulta a impressão digital das vendas a cada 15 s e só recarrega quando muda.
-    v1799.timer=setInterval(v1957Conferir,15000);
+    v1799.timer=setInterval(v1957Conferir,15000);setTimeout(v1957Conferir,1500);
     document.addEventListener("visibilitychange",()=>{if(!document.hidden)v1957Conferir();});
     v1799Periodo("30");return;
   }
