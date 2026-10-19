@@ -5,7 +5,7 @@ Shopee, manuais), expedição, separação, conferência por código de barras, 
 produtos/SKUs/EANs, kits, precificação, promoções, rentabilidade, estoque, Central de
 Pendências e histórico.
 
-Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V19.50).
+Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V19.55).
 
 ---
 
@@ -856,6 +856,26 @@ Admin — **conferir antes de ligar o Lote**: a API foi construída pela documen
 `GET /api/promocoes-auto/shopee` e `POST /api/promocoes-auto/shopee/{marcar,precos,remover,buscar-novos,renovar,checar,config}`.
 "Buscar novos" lê o retrato diário (`shopee_item_v1890`), sem chamar a Shopee. Convites de campanha da Shopee ficam
 para depois. Teste: `TESTES/test_promo_shopee_v1949.py`.
+
+### Promoções automáticas da Magalu (V19.53 a V19.55)
+**V19.53/54 — teste de leitura** (botão "Testar promoções (só leitura)" no cartão Magalu, `GET /api/integracoes/magalu/teste-promocoes`,
+perfil Admin, só GET; respostas em `magalu_amostra_v1926` tipo `promo_*`). Formato real lido em 18/10: promoção `type.id=absolute_discount`
+("Preço Promocional"), `origin` self_service|channel, `validity.starts_at/ends_at` (UTC), `benefits.total` 100..6000 (desconto de 1% a 60%),
+`channel.id`; SKU da promoção com `price.original/promotional.value` (centavos); preço do anúncio em `/portfolios/prices/{sku}`
+(`list_price` = "de", `price` = "por"). **A lista `/seller/v1/promotions` sem filtro só traz as que COMEÇAM nos próximos 30 dias**: sempre
+mandar `start_date_gte`/`start_date_lte` (`_magalu_janela_promos`). O token da loja já tem os escopos de promoção e de preço.
+**V19.55 — aba Magalu** na mesma tela (`?mp=magalu`; a seção `#shp` e a gaveta servem Shopee e Magalu: `URLB()`, `NOME()`, `.mpn`,
+`.so-shopee`/`.so-magalu`). Mesma régua (`shopee_promo_avaliar` com `perfil`: nome, início mínimo e a conta de taxas), mesmo agrupamento
+por início ("Noromak auto DD/MM"), renova 3 dias antes. Taxas = Precificador `marketplaces.magalu` (comissão, taxa fixa, frete);
+**comissão 0 = sem taxa cadastrada → não renova** (metade dos produtos tem 0 no Precificador). Campanha da Magalu (`origin=channel`,
+ex. Feirão) = "em campanha": espera acabar e o preço dela **não** vira o nosso. Desconto fora de 1–60% = revisar. Estoque não vem do
+catálogo: fica desconhecido (não trava). SKU `BLOCKED` = parado. Criação (`_magalu_promo_criar`): `POST /seller/v1/promotions`
+(name, type, scope seller_choice, validity, channel) → `PUT /{id}/skus/{sku}` (`price.promotional`) → `POST /{id}/apply`; **corpo
+deduzido da leitura, ainda não confirmado** — cada 1ª resposta/erro vai para a amostra (`promo_criar*`). A 1ª criação real é com o
+dono, em 1 SKU, no Lote. Tabelas `magalu_promo_v1955` (`_removidos_`, `_criada_`, `_log_`), modo `modo_renovacao@magalu`, worker
+`magalu_promo_loop` (1 h). Rotas `GET /api/promocoes-auto/magalu` e `POST .../magalu/{marcar,precos,remover,buscar-novos,renovar,checar,config}`
+(o mesmo bloco da Shopee). "Buscar novos" lê o catálogo `/seller/v1/portfolios/skus`. Testes: `test_magalu_promo_teste_v1953.py`,
+`test_promo_magalu_v1955.py`.
 
 ### Análise de ADS (V18.54)
 `APP/analise-ads.html` (`/analise-ads`, menu Comercial, só **admin**). O relatório "Anúncios

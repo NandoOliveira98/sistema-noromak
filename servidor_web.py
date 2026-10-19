@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.54-MAGALU-PROMOCOES-EM-ANDAMENTO"
+APP_VERSION = "19.55-PROMOCOES-AUTOMATICAS-MAGALU"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -2558,6 +2558,7 @@ def init_db() -> None:
     ensure_shopee_escrow_schema()
     ensure_promo_renovacao_schema()
     ensure_shopee_promo_schema()  # V19.49
+    ensure_magalu_promo_schema()  # V19.55
     ensure_ml_billing_credito_schema()
     ensure_ml_billing_data_schema()
     ensure_cliente_fiscal_linx_api_schema()  # V18.60
@@ -25102,13 +25103,25 @@ def shopee_itens_modelos(ids: list[str]) -> dict[str, dict[str, Any]]:
     return out
 
 
+SHOPEE_PROMO_PERFIL: dict[str, Any] = {
+    "nome": "Shopee", "inicio_min": SHOPEE_PROMO_INICIO_MIN,
+    "conta": lambda prod, preco, fretes, sku: shopee_promo_conta(prod, preco, fretes.get(prod["sku"], fretes.get(sku, 0.0))),
+    "minimo": lambda prod, fretes, sku: shopee_promo_preco_minimo(prod, fretes.get(prod["sku"], fretes.get(sku, 0.0))),
+}
+
+
 def shopee_promo_avaliar(item: dict[str, Any], precos: dict[str, float | None], det: dict[str, Any],
                          promos: list[dict[str, Any]], produtos: dict[str, Any], fretes: dict[str, float],
-                         rup: dict[str, Any] | None, cfg: dict[str, Any], agora_ts: int) -> dict[str, Any]:
+                         rup: dict[str, Any] | None, cfg: dict[str, Any], agora_ts: int,
+                         perfil: dict[str, Any] | None = None) -> dict[str, Any]:
     """Decide o que fazer com UM anúncio marcado da Shopee. Não chama a Shopee.
+    V19.55: `perfil` troca o marketplace (nome, início mínimo e a conta das taxas) — a Magalu usa a
+    mesma régua com as taxas dela; sem perfil, Shopee como antes.
 
     `precos`: model_id -> preço da promoção guardado (None = pegar da promoção vigente).
     Devolve a situação do anúncio e, por variação, preço, margem e se pode renovar."""
+    pf = perfil or SHOPEE_PROMO_PERFIL
+    mp = pf["nome"]
     out: dict[str, Any] = {"situacao": "", "motivo": "", "aviso": "", "fim": None, "inicio_nova": None,
                            "promo_nome": "", "promo_nossa": False, "margem": None, "modelos": {}}
     precos = dict(precos or {})
@@ -25132,8 +25145,14 @@ def shopee_promo_avaliar(item: dict[str, Any], precos: dict[str, float | None], 
         out.update(situacao="agendada", fim=futura.get("fim"), promo_nome=futura.get("nome") or "",
                    promo_nossa=bool(futura.get("nossa")))
         quando = f"de {_shopee_dia_ts(futura.get('inicio'))} a {_shopee_dia_ts(futura.get('fim'))}"
-        out["motivo"] = (f"Renovada: a próxima promoção ({quando}) já está agendada na Shopee" if futura.get("nossa")
-                         else f"Já tem promoção agendada na Shopee ({quando}): não cria outra por cima")
+        out["motivo"] = (f"Renovada: a próxima promoção ({quando}) já está agendada na {mp}" if futura.get("nossa")
+                         else f"Já tem promoção agendada na {mp} ({quando}): não cria outra por cima")
+        return out
+    if vigente and str(vigente.get("origem") or "") == "channel":
+        # V19.55: campanha do marketplace (Feirão da Magalu): o desconto próprio espera ela acabar, como no ML
+        out.update(situacao="em_campanha", fim=vigente.get("fim"), promo_nome=vigente.get("nome") or "")
+        out["motivo"] = (f"Está na campanha \"{vigente.get('nome') or 'da ' + mp}\" até {_shopee_dia_ts(vigente.get('fim'))}: "
+                         "o desconto próprio volta quando ela acabar")
         return out
     if vigente and (vigente.get("fim") or 0) - agora_ts > SHOPEE_PROMO_RENOVA_ANTES:
         out.update(situacao="ativa", fim=vigente.get("fim"), promo_nome=vigente.get("nome") or "",
@@ -25144,15 +25163,16 @@ def shopee_promo_avaliar(item: dict[str, Any], precos: dict[str, float | None], 
             sku_m = _shopee_promo_resolver_sku(m["sku"] or det.get("sku"), produtos) if m["preco"] else ""
             prod = _promo_produto(produtos, sku_m) if sku_m else None
             if prod and prod.get("custo", 0) > 0:
-                conta = shopee_promo_conta(prod, m["preco"], fretes.get(prod["sku"], 0.0))
-                m.update(margem=conta["margem"], lucro=conta["lucro"])
+                conta = pf["conta"](prod, m["preco"], fretes, sku_m)
+                if conta:   # Magalu sem taxa cadastrada: fica sem margem (nunca inflada)
+                    m.update(margem=conta["margem"], lucro=conta["lucro"])
         margens = [m["margem"] for m in out["modelos"].values() if m["margem"] is not None]
         out["margem"] = min(margens) if margens else None
         return out
-    inicio = max((vigente or {}).get("fim") or 0, agora_ts + SHOPEE_PROMO_INICIO_MIN)
+    inicio = max((vigente or {}).get("fim") or 0, agora_ts + pf["inicio_min"])
     out["inicio_nova"] = inicio
-    if vigente and (vigente.get("fim") or 0) < agora_ts + SHOPEE_PROMO_INICIO_MIN:
-        out["aviso"] = "A promoção acaba em menos de 1 h: a Shopee só aceita a nova daqui a 1 h"
+    if vigente and (vigente.get("fim") or 0) < agora_ts + pf["inicio_min"] and pf["inicio_min"] >= 3600:
+        out["aviso"] = f"A promoção acaba em menos de 1 h: a {mp} só aceita a nova daqui a 1 h"
 
     def revisar(motivo: str, situacao: str = "revisar") -> dict[str, Any]:
         out.update(situacao=situacao, motivo=motivo)
@@ -25160,7 +25180,7 @@ def shopee_promo_avaliar(item: dict[str, Any], precos: dict[str, float | None], 
 
     status = str(det.get("status") or "")
     if det and status != "active":
-        return revisar(f"Anúncio {'pausado' if status == 'paused' else (status or 'sem status')} na Shopee: "
+        return revisar(f"Anúncio {'pausado' if status == 'paused' else (status or 'sem status')} na {mp}: "
                        "reative para renovar")
     if not out["modelos"]:
         return revisar("Sem o preço da promoção anterior: informe o preço para renovar")
@@ -25169,10 +25189,10 @@ def shopee_promo_avaliar(item: dict[str, Any], precos: dict[str, float | None], 
     ritmo = _money_number(r.get("ritmo_dia")) or 0.0
     if isinstance(vivo, (int, float)) and not isinstance(vivo, bool):
         if vivo <= 0:
-            return revisar("Sem estoque na Shopee: não renova até repor", "estoque")
+            return revisar(f"Sem estoque na {mp}: não renova até repor", "estoque")
         cobertura = (float(vivo) / ritmo) if ritmo > 0 else None
         if cobertura is not None and cobertura < cfg["estoque_min_dias"]:
-            return revisar(f"Estoque para {cobertura:.0f} dia(s) na Shopee: não renova até repor", "estoque")
+            return revisar(f"Estoque para {cobertura:.0f} dia(s) na {mp}: não renova até repor", "estoque")
     mmin = _promo_margem_minima(cfg)
     prontas = 0
     for mid, m in out["modelos"].items():
@@ -25187,8 +25207,10 @@ def shopee_promo_avaliar(item: dict[str, Any], precos: dict[str, float | None], 
         if not prod or float(prod.get("custo") or 0) <= 0:
             ruim("Sem custo no Precificador: não dá para garantir a margem")
             continue
-        frete = fretes.get(prod["sku"], fretes.get(sku, 0.0))
-        conta = shopee_promo_conta(prod, preco, frete)
+        conta = pf["conta"](prod, preco, fretes, sku)
+        if conta is None:
+            ruim(f"Sem as taxas da {mp} no Precificador: não dá para garantir a margem")
+            continue
         m.update(margem=conta["margem"], lucro=conta["lucro"])
         if isinstance(m["estoque"], (int, float)) and m["estoque"] <= 0 and mid != "0":
             ruim("Variação sem estoque")
@@ -25196,7 +25218,7 @@ def shopee_promo_avaliar(item: dict[str, Any], precos: dict[str, float | None], 
         if m["preco_original"] and preco >= m["preco_original"]:
             ruim(f"O preço do anúncio ({_brl_srv(m['preco_original'])}) está igual ou abaixo do da promoção")
             continue
-        minimo = shopee_promo_preco_minimo(prod, frete)
+        minimo = pf["minimo"](prod, fretes, sku)
         if minimo and preco < minimo:
             ruim(f"{_brl_srv(preco)} abaixo do preço mínimo ({_brl_srv(minimo)}): daria prejuízo")
             continue
@@ -25212,8 +25234,9 @@ def shopee_promo_avaliar(item: dict[str, Any], precos: dict[str, float | None], 
         return revisar(fora[0]["motivo"] if fora else "Nada a renovar")
     fim = inicio + int(cfg["duracao_dias"]) * 86400
     out.update(situacao="pronta", fim=fim,
-               motivo=f"Renova {prontas} {'variação' if prontas == 1 else 'variações'} de "
-                      f"{_shopee_dia_ts(inicio)} a {_shopee_dia_ts(fim)}"
+               motivo=(f"Renova {prontas} {'variação' if prontas == 1 else 'variações'} de "
+                       if set(out["modelos"]) != {"0"} else "Renova de ")   # V19.55: item sem variação
+                      + f"{_shopee_dia_ts(inicio)} a {_shopee_dia_ts(fim)}"
                       + (f" (margem {_pct_br(out['margem'])})" if out["margem"] is not None else ""))
     if fora:
         nomes = ", ".join((m["nome"] or m["sku"] or "variação") for m in fora[:3])
@@ -25642,6 +25665,683 @@ def shopee_promo_loop(stop_event: threading.Event) -> None:
             _SHOPEE_PROMO_ESTADO["ultimo"] = {"ok": False, "erro": str(exc)[:300]}
             print(f"[shopee-promo] falhou: {exc}", file=sys.stderr, flush=True)
         if stop_event.wait(SHOPEE_PROMO_INTERVALO):
+            break
+
+
+# ---------------------------------------------------------------------------
+# V19.55: Promoções automáticas da MAGALU — mesma regra e mesma tela da Shopee (V19.49). Decisões do
+# dono (18/10): "siga suas recomendações" — aba Magalu ao lado de ML e Shopee, começa em Simulação, a
+# 1ª criação real é feita com o dono em 1 SKU (Lote) e só depois o Automático.
+# Formato REAL lido em produção 18/10 (V19.53/V19.54, amostras promo_* em magalu_amostra_v1926):
+#  - promoção: id (uuid), name, type.id=absolute_discount ("Preço Promocional"), origin self_service|channel,
+#    status, scope seller_choice, validity.starts_at/ends_at (ISO UTC), benefits.total min 100/max 6000
+#    (desconto de 1% a 60%), channel.id;
+#  - SKU da promoção: sku, status, price.original/promotional.value (centavos, normalizer 100);
+#  - preço do anúncio: /seller/v1/portfolios/prices/{sku} → list_price ("de") e price ("por").
+# A lista de promoções, sem filtro, só traz as que COMEÇAM nos próximos 30 dias: sempre pedir a janela.
+# O CORPO de criar a promoção e de pôr o SKU não aparece na doc nem nas leituras: é montado com os nomes
+# que a leitura devolve, e a 1ª resposta (ou o erro) de cada envio fica na amostra (promo_criar_*).
+# Taxas = Precificador (marketplaces.magalu: comissão, taxa fixa, frete). Comissão 0 = SEM taxa
+# cadastrada (a Magalu sempre cobra): não renova — nunca margem inflada.
+# ---------------------------------------------------------------------------
+MAGALU_PROMO_CONTA = "magalu"
+MAGALU_PROMO_RENOVA_ANTES = 3 * 86400
+MAGALU_PROMO_INICIO_MIN = 10 * 60
+MAGALU_PROMO_INTERVALO = 3600
+MAGALU_PROMO_LOCK = threading.Lock()
+_MAGALU_PROMO_ESTADO: dict[str, Any] = {"rodando": False, "inicio": "", "fim": "", "ultimo": {}}
+MAGALU_DESCONTO_MIN, MAGALU_DESCONTO_MAX = 0.01, 0.60   # benefits.total da promoção real (100..6000)
+
+
+def ensure_magalu_promo_schema() -> None:
+    with DB_LOCK:
+        DB.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS magalu_promo_v1955 (
+                item_id TEXT PRIMARY KEY,
+                marcado INTEGER NOT NULL DEFAULT 0,
+                titulo TEXT NOT NULL DEFAULT '',
+                sku TEXT NOT NULL DEFAULT '',
+                status_catalogo TEXT NOT NULL DEFAULT '',
+                situacao TEXT NOT NULL DEFAULT 'nao_checado',
+                motivo TEXT NOT NULL DEFAULT '',
+                aviso TEXT NOT NULL DEFAULT '',
+                fim TEXT NOT NULL DEFAULT '',
+                inicio_nova TEXT NOT NULL DEFAULT '',
+                promo_nome TEXT NOT NULL DEFAULT '',
+                promo_nossa INTEGER NOT NULL DEFAULT 0,
+                margem REAL,
+                lucro REAL,
+                preco REAL,
+                preco_anuncio REAL,
+                checado_em TEXT NOT NULL DEFAULT '',
+                renovado_dia TEXT NOT NULL DEFAULT '',
+                renovado_em TEXT NOT NULL DEFAULT '',
+                marcado_por TEXT NOT NULL DEFAULT '',
+                marcado_em TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS magalu_promo_removidos_v1955 (
+                item_id TEXT PRIMARY KEY, removido_em TEXT NOT NULL DEFAULT '', removido_por TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS magalu_promo_criada_v1955 (
+                promotion_id TEXT PRIMARY KEY, nome TEXT NOT NULL DEFAULT '', inicio INTEGER NOT NULL DEFAULT 0,
+                fim INTEGER NOT NULL DEFAULT 0, criada_em TEXT NOT NULL DEFAULT '', criada_por TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS magalu_promo_log_v1955 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, quando TEXT NOT NULL, dia TEXT NOT NULL DEFAULT '',
+                item_id TEXT NOT NULL DEFAULT '', acao TEXT NOT NULL DEFAULT '', preco REAL, margem REAL,
+                inicio TEXT NOT NULL DEFAULT '', fim TEXT NOT NULL DEFAULT '', por TEXT NOT NULL DEFAULT '',
+                motivo TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_magalu_promo_log_dia ON magalu_promo_log_v1955(dia, acao, por);
+            """
+        )
+        DB.commit()
+
+
+def _magalu_sku_id(valor: Any) -> str:
+    return str(valor or "").strip()[:80]
+
+
+def _magalu_centavos(obj: Any) -> float | None:
+    """{value, normalizer} → reais. Número solto = centavos (normalizer 100, como a Magalu manda)."""
+    if isinstance(obj, dict):
+        v, n = obj.get("value"), obj.get("normalizer") or 100
+    else:
+        v, n = obj, 100
+    try:
+        return round(float(v) / float(n), 2) if v is not None else None
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
+def _magalu_ts(texto: Any) -> int | None:
+    try:
+        dt = datetime.fromisoformat(str(texto or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return int((dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).timestamp())
+
+
+def _magalu_iso(ts: int | None) -> str:
+    return datetime.fromtimestamp(ts, timezone.utc).isoformat(timespec="seconds") if ts else ""
+
+
+def magalu_promo_config() -> dict[str, Any]:
+    return promo_auto_config(MAGALU_PROMO_CONTA)
+
+
+def magalu_promo_config_salvar(dados: dict[str, Any], ator: str) -> dict[str, Any]:
+    novos: dict[str, str] = {}
+    for chave, valor in (dados or {}).items():
+        if chave == "modo_renovacao":
+            if valor not in PROMO_AUTO_MODOS:
+                raise ValueError("Modo inválido.")
+            novos[chave] = str(valor)
+        elif chave == "limite_dia":
+            try:
+                n = int(valor)
+            except (TypeError, ValueError):
+                raise ValueError("Valor inválido para limite_dia.")
+            if not 1 <= n <= 500:
+                raise ValueError("limite_dia precisa ficar entre 1 e 500.")
+            novos[chave] = str(n)
+    agora = now_iso()
+    with DB_LOCK:
+        for chave, valor in novos.items():
+            DB.execute("INSERT INTO promo_auto_config_v1873(chave,valor,atualizado_em,atualizado_por) VALUES(?,?,?,?) "
+                       "ON CONFLICT(chave) DO UPDATE SET valor=excluded.valor,atualizado_em=excluded.atualizado_em,"
+                       "atualizado_por=excluded.atualizado_por", (f"{chave}@{MAGALU_PROMO_CONTA}", valor, agora, ator))
+        DB.commit()
+    if novos:
+        audit(ator, "promocoes.magalu.config", json_dumps(novos))
+    return magalu_promo_config()
+
+
+def _magalu_promo_log(item_id: str, acao: str, por: str, motivo: str = "", preco: float | None = None,
+                      margem: float | None = None, inicio: str = "", fim: str = "", dia: str = "") -> None:
+    with DB_LOCK:
+        DB.execute("INSERT INTO magalu_promo_log_v1955(quando,dia,item_id,acao,preco,margem,inicio,fim,por,motivo) "
+                   "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                   (now_iso(), dia or datetime.now(BR_TZ).date().isoformat(), item_id, acao, preco, margem,
+                    inicio, fim, por, motivo[:400]))
+        DB.execute("DELETE FROM magalu_promo_log_v1955 WHERE id <= (SELECT MAX(id) - 3000 FROM magalu_promo_log_v1955)")
+        DB.commit()
+
+
+def _magalu_taxas_precificador() -> dict[str, dict[str, float]]:
+    """SKU -> {comissao, taxa_fixa, frete, margem} da Magalu no Precificador. Comissão 0 = sem taxa (fora)."""
+    raw, _, _ = get_storage("precificador_online_v1")
+    try:
+        lista = (json.loads(raw or "{}") or {}).get("products") or []
+    except Exception:
+        lista = []
+    out: dict[str, dict[str, float]] = {}
+    for p in lista if isinstance(lista, list) else []:
+        if not isinstance(p, dict):
+            continue
+        sku = str(p.get("sku") or "").strip().upper()
+        mg = (p.get("marketplaces") or {}).get("magalu") or {}
+        if not sku or not isinstance(mg, dict):
+            continue
+        com = _money_number(mg.get("comissao")) or 0.0
+        if com <= 0:
+            continue
+        out[sku] = {"comissao": float(com), "taxa_fixa": float(_money_number(mg.get("taxaFixa")) or 0.0),
+                    "frete": float(_money_number(mg.get("frete")) or 0.0),
+                    "margem": float(_money_number(mg.get("margem")) or 0.15)}
+    return out
+
+
+def _magalu_taxa(taxas: dict[str, dict[str, float]], prod: dict[str, Any], sku: Any) -> dict[str, float] | None:
+    return taxas.get(prod["sku"]) or taxas.get(str(sku or "").strip().upper())
+
+
+def magalu_promo_conta(prod: dict[str, Any], preco: float, tx: dict[str, float]) -> dict[str, Any]:
+    preco = float(preco or 0)
+    comissao = preco * tx["comissao"]
+    imposto = preco * float(prod.get("imposto") or 0)
+    lucro = preco - comissao - tx["taxa_fixa"] - tx["frete"] - imposto - float(prod["custo"])
+    return {"preco": round(preco, 2), "comissao": round(comissao, 2), "comissao_pct": tx["comissao"],
+            "taxa_fixa": round(tx["taxa_fixa"], 2), "frete": round(tx["frete"], 2), "imposto": round(imposto, 2),
+            "custo": round(float(prod["custo"]), 2), "lucro": round(lucro, 2),
+            "margem": round(lucro / preco, 4) if preco > 0 else 0.0}
+
+
+def magalu_promo_preco_minimo(prod: dict[str, Any], tx: dict[str, float], margem: float = 0.0) -> float | None:
+    divisor = 1 - tx["comissao"] - float(prod.get("imposto") or 0) - margem
+    if divisor <= 0 or float(prod.get("custo") or 0) <= 0:
+        return None
+    return round(math.ceil((float(prod["custo"]) + tx["taxa_fixa"] + tx["frete"]) / divisor * 100 - 1e-6) / 100, 2)
+
+
+def _magalu_perfil(taxas: dict[str, dict[str, float]]) -> dict[str, Any]:
+    def conta(prod, preco, _fretes, sku):
+        tx = _magalu_taxa(taxas, prod, sku)
+        return magalu_promo_conta(prod, preco, tx) if tx else None
+
+    def minimo(prod, _fretes, sku):
+        tx = _magalu_taxa(taxas, prod, sku)
+        return magalu_promo_preco_minimo(prod, tx) if tx else None
+    return {"nome": "Magalu", "inicio_min": MAGALU_PROMO_INICIO_MIN, "conta": conta, "minimo": minimo}
+
+
+def _magalu_janela_promos() -> dict[str, Any]:
+    agora = datetime.now(timezone.utc)
+    return {"start_date_gte": (agora - timedelta(days=365)).isoformat(),
+            "start_date_lte": (agora + timedelta(days=90)).isoformat()}
+
+
+def magalu_promocoes_da_loja() -> dict[str, list[dict[str, Any]]]:
+    """SKU -> promoções de Preço Promocional (da loja ou da Magalu) em andamento ou agendadas, com o
+    preço promocional de cada SKU. Só lê. Formato do Shopee: status ongoing/upcoming, modelos {"0": preço}."""
+    with DB_LOCK:
+        nossas = {str(r["promotion_id"]) for r in DB.execute("SELECT promotion_id FROM magalu_promo_criada_v1955").fetchall()}
+    agora = int(time.time())
+    por_sku: dict[str, list[dict[str, Any]]] = {}
+    offset = 0
+    for _ in range(40):
+        resp = magalu_api_get("/seller/v1/promotions", {"_limit": 50, "_offset": offset, **_magalu_janela_promos()})
+        lote = _magalu_lista(resp)
+        for p in lote:
+            if not isinstance(p, dict) or not p.get("id"):
+                continue
+            tipo = p.get("type")
+            tipo = tipo.get("id") if isinstance(tipo, dict) else tipo
+            if tipo != "absolute_discount" or str(p.get("status") or "") in ("finished", "canceled", "cancelled"):
+                continue
+            val = p.get("validity") or {}
+            ini, fim = _magalu_ts(val.get("starts_at")), _magalu_ts(val.get("ends_at"))
+            if fim and fim <= agora:
+                continue
+            situ = "upcoming" if (ini and ini > agora) else "ongoing"
+            pid = str(p["id"])
+            soff = 0
+            for _ in range(40):
+                sk = magalu_api_get(f"/seller/v1/promotions/{quote(pid, safe='')}/skus", {"_limit": 50, "_offset": soff})
+                itens = _magalu_lista(sk)
+                for it in itens:
+                    if not isinstance(it, dict) or not it.get("sku"):
+                        continue
+                    if str(it.get("status") or "") in ("rejected", "deleted"):
+                        continue
+                    preco = _magalu_centavos(((it.get("price") or {}).get("promotional")))
+                    por_sku.setdefault(str(it["sku"]), []).append({
+                        "promotion_id": pid, "discount_id": pid, "nome": str(p.get("name") or ""),
+                        "status": situ, "inicio": ini, "fim": fim, "origem": str(p.get("origin") or ""),
+                        # campanha da Magalu (origin channel) segura a data, mas o preço dela não vira o nosso
+                        "modelos": {"0": preco} if preco and str(p.get("origin") or "") == "self_service" else {},
+                        "nossa": pid in nossas})
+                if len(itens) < 50:
+                    break
+                soff += 50
+        if len(lote) < 50:
+            break
+        offset += 50
+    return por_sku
+
+
+def magalu_preco_do_sku(sku: str) -> dict[str, Any]:
+    """Preço "de" (list_price) e "por" (price) do SKU no canal Magalu. Só lê."""
+    resp = magalu_api_get(f"/seller/v1/portfolios/prices/{quote(sku, safe='')}")
+    linhas = [x for x in _magalu_lista(resp) if isinstance(x, dict)]
+    linha = next((x for x in linhas if str(((x.get("channel") or {}).get("id")) or "")), linhas[0] if linhas else {})
+    norm = linha.get("normalizer") or 100
+    de = _magalu_centavos({"value": linha.get("list_price"), "normalizer": norm})
+    por = _magalu_centavos({"value": linha.get("price"), "normalizer": norm})
+    return {"de": de, "por": por, "canal": str(((linha.get("channel") or {}).get("id")) or "")}
+
+
+def _magalu_promo_det(row: dict[str, Any], preco: dict[str, Any]) -> dict[str, Any]:
+    """O anúncio no formato que a régua (shopee_promo_avaliar) entende. Estoque não vem do catálogo:
+    fica desconhecido (nunca zero)."""
+    st = str(row.get("status_catalogo") or "").upper()
+    status = "active" if st in ("", "ACTIVE", "PUBLISHED", "APPROVED") else ("paused" if st in ("BLOCKED", "INACTIVE", "PAUSED") else st.lower())
+    base = preco.get("de") or preco.get("por")
+    return {"titulo": row.get("titulo") or "", "sku": row.get("sku") or row["item_id"], "status": status,
+            "estoque": None, "modelos": {"0": {"nome": "", "sku": row.get("sku") or row["item_id"], "preco": base,
+                                               "estoque": None}}}
+
+
+def magalu_promo_buscar_novos(ator: str) -> dict[str, Any]:
+    """Inclui sem marcar os SKUs do catálogo da Magalu que faltam na lista (removido nunca volta). Só lê."""
+    with DB_LOCK:
+        ja = {str(r["item_id"]) for r in DB.execute("SELECT item_id FROM magalu_promo_v1955").fetchall()}
+        removidos = {str(r["item_id"]) for r in DB.execute("SELECT item_id FROM magalu_promo_removidos_v1955").fetchall()}
+    novos, atualizados, offset = 0, 0, 0
+    for _ in range(200):
+        resp = magalu_api_get("/seller/v1/portfolios/skus", {"_limit": 100, "_offset": offset})
+        lote = [x for x in _magalu_lista(resp) if isinstance(x, dict) and x.get("sku")]
+        with DB_LOCK:
+            for it in lote:
+                sku = _magalu_sku_id(it["sku"])
+                if sku in removidos:
+                    continue
+                titulo, status = str(it.get("title") or ""), str(it.get("status") or "")
+                if sku in ja:
+                    DB.execute("UPDATE magalu_promo_v1955 SET titulo=?, status_catalogo=? WHERE item_id=?", (titulo, status, sku))
+                    atualizados += 1
+                else:
+                    DB.execute("INSERT OR IGNORE INTO magalu_promo_v1955(item_id,marcado,titulo,sku,status_catalogo,situacao) "
+                               "VALUES(?,0,?,?,?,'nao_marcado')", (sku, titulo, sku, status))
+                    ja.add(sku)
+                    novos += 1
+            DB.commit()
+        if len(lote) < 100:
+            break
+        offset += 100
+    if novos:
+        _magalu_promo_log("", "incluidos", ator, f"{novos} SKU(s) do catálogo da Magalu")
+    return {"ok": True, "incluidos": novos, "atualizados": atualizados}
+
+
+def _magalu_http_enviar(metodo: str, caminho: str, corpo: Any | None = None) -> Any:
+    """POST/PUT na Magalu (token renovado uma vez no 401). Erro HTTP vira RuntimeError com o corpo."""
+    def enviar(token: str) -> Any:
+        dados = json.dumps(corpo).encode("utf-8") if corpo is not None else b""
+        req = urllib.request.Request(MAGALU_API_BASE + caminho, data=dados, method=metodo, headers={
+            "Authorization": f"Bearer {token}", "Accept": "application/json", "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                texto = resp.read().decode("utf-8", "replace")
+                return json.loads(texto) if texto.strip() else {"status_http": resp.status}
+        except urllib.error.HTTPError as exc:
+            if exc.code == 401:
+                raise MagaluHttp401()
+            raise RuntimeError(f"Magalu HTTP {exc.code}: {exc.read().decode('utf-8', 'replace')[:600]}")
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"Falha de rede na Magalu: {exc.reason}")
+    try:
+        return enviar(magalu_access_token())
+    except MagaluHttp401:
+        return enviar(magalu_access_token(force=True))
+
+
+def _magalu_promo_nome(inicio: int) -> str:
+    return f"Noromak auto {datetime.fromtimestamp(inicio, BR_TZ).strftime('%d/%m')}"
+
+
+def _magalu_promo_achar(nome: str, inicio: int) -> str:
+    """O POST de criar responde 202 (assíncrono): acha a promoção criada pelo nome + início."""
+    for _ in range(3):
+        for p in _magalu_lista(magalu_api_get("/seller/v1/promotions", {"_limit": 50, **_magalu_janela_promos()})):
+            if isinstance(p, dict) and p.get("name") == nome and abs((_magalu_ts((p.get("validity") or {}).get("starts_at")) or 0) - inicio) <= 120:
+                return str(p.get("id") or "")
+        time.sleep(2)
+    return ""
+
+
+def _magalu_promo_criar(grupo: list[dict[str, Any]], inicio: int, fim: int, ator: str, canal: str) -> dict[str, str]:
+    """Cria (ou reaproveita a que já criamos com o mesmo início) a promoção Preço Promocional e põe os SKUs.
+    Devolve SKU -> erro dos recusados ({} = todos aceitos). Cada 1ª resposta fica na amostra."""
+    with DB_LOCK:
+        r = DB.execute("SELECT promotion_id FROM magalu_promo_criada_v1955 WHERE inicio=? ORDER BY criada_em DESC LIMIT 1",
+                       (inicio,)).fetchone()
+    pid = str(r["promotion_id"]) if r else ""
+    nome = _magalu_promo_nome(inicio)
+    if not pid:
+        corpo = {"name": nome, "description": "Criada pelo Noromak (renovação automática)",
+                 "type": {"id": "absolute_discount"}, "scope": "seller_choice",
+                 "validity": {"starts_at": _magalu_iso(inicio), "ends_at": _magalu_iso(fim)}}
+        if canal:
+            corpo["channel"] = {"id": canal}
+        resp = _magalu_http_enviar("POST", "/seller/v1/promotions", corpo)
+        _magalu_guardar_amostra("promo_criar", {"results": [resp], "corpo": corpo})
+        pid = str((resp or {}).get("id") or "") if isinstance(resp, dict) else ""
+        pid = pid or _magalu_promo_achar(nome, inicio)
+        if not pid:
+            raise RuntimeError("A Magalu aceitou o pedido mas a promoção ainda não apareceu: confira no Portal do Seller.")
+        with DB_LOCK:
+            DB.execute("INSERT OR REPLACE INTO magalu_promo_criada_v1955(promotion_id,nome,inicio,fim,criada_em,criada_por) "
+                       "VALUES(?,?,?,?,?,?)", (pid, nome, inicio, fim, now_iso(), ator))
+            DB.commit()
+    recusas: dict[str, str] = {}
+    for g in grupo:
+        m = g["av"]["modelos"].get("0") or {}
+        corpo = {"price": {"promotional": {"value": int(round(float(m["preco"]) * 100)), "normalizer": 100,
+                                           "currency": "BRL", "type": "value"}}}
+        try:
+            resp = _magalu_http_enviar("PUT", f"/seller/v1/promotions/{quote(pid, safe='')}/skus/{quote(g['item_id'], safe='')}", corpo)
+            _magalu_guardar_amostra("promo_criar_sku", {"results": [resp], "corpo": corpo})
+        except Exception as exc:
+            recusas[g["item_id"]] = str(exc)[:300]
+    if len(recusas) < len(grupo):
+        try:   # já inscrito: a mudança só vale depois do "apply" (doc); sem inscrição ela entra na adesão
+            resp = _magalu_http_enviar("POST", f"/seller/v1/promotions/{quote(pid, safe='')}/apply")
+            _magalu_guardar_amostra("promo_criar_apply", {"results": [resp]})
+        except Exception as exc:
+            _magalu_guardar_amostra("promo_criar_apply", {"results": [], "erro": str(exc)[:600]})
+    return recusas
+
+
+def magalu_promo_rodada(*, so: list[str] | None = None, apenas: list[str] | None = None, ator: str = "sistema",
+                        agora_ts: int | None = None, espera: float = 0.0) -> dict[str, Any]:
+    """Mesma rodada da Shopee: confere os marcados e cria a próxima promoção do que vai vencer.
+    Worker: cria sozinho só no Automático (limite do dia). Clique do ADMIN: os escolhidos, em qualquer modo."""
+    pegou = MAGALU_PROMO_LOCK.acquire(timeout=espera) if espera > 0 else MAGALU_PROMO_LOCK.acquire(blocking=False)
+    if not pegou:
+        return {"ok": True, "pulado": "já está conferindo", "rodando": True, "resultados": []}
+    manual = so is not None
+    agora_ts = int(time.time()) if agora_ts is None else int(agora_ts)
+    hoje_iso = datetime.fromtimestamp(agora_ts, BR_TZ).date().isoformat()
+    try:
+        _MAGALU_PROMO_ESTADO.update(rodando=True, inicio=now_iso(), fim="")
+        try:
+            magalu_access_token()
+        except Exception:
+            res = {"ok": True, "pulado": "Magalu não conectada", "resultados": []}
+            _MAGALU_PROMO_ESTADO["ultimo"] = res
+            return res
+        cfg = magalu_promo_config()
+        with DB_LOCK:
+            linhas = {str(r["item_id"]): dict(r) for r in DB.execute("SELECT * FROM magalu_promo_v1955").fetchall()}
+            removidos = {str(r["item_id"]) for r in DB.execute("SELECT item_id FROM magalu_promo_removidos_v1955").fetchall()}
+            feitas_hoje = DB.execute("SELECT COUNT(DISTINCT item_id) FROM magalu_promo_log_v1955 WHERE dia=? "
+                                     "AND acao='renovada' AND por='sistema'", (hoje_iso,)).fetchone()[0]
+        marcados = sorted(i for i, r in linhas.items() if r.get("marcado") and i not in removidos)
+        if manual:
+            alvo = [i for i in dict.fromkeys(_magalu_sku_id(x) for x in so) if i and i not in removidos]
+        elif apenas is not None:
+            alvo = [i for i in dict.fromkeys(_magalu_sku_id(x) for x in apenas) if i in marcados]
+        else:
+            alvo = marcados
+        cont = {"checados": 0, "renovadas": 0, "renovaria": 0, "revisar": 0, "erros": 0}
+        if not alvo:
+            res = {"ok": True, "modo": cfg["modo_renovacao"], **cont, "resultados": []}
+            _MAGALU_PROMO_ESTADO["ultimo"] = {k: v for k, v in res.items() if k != "resultados"}
+            return res
+        try:
+            promos = magalu_promocoes_da_loja()
+        except Exception as exc:
+            msg = str(exc)[:400]
+            magalu_log_event("promocoes", "/seller/v1/promotions", "ERRO", msg)
+            with DB_LOCK:
+                for iid in alvo:
+                    DB.execute("UPDATE magalu_promo_v1955 SET situacao='erro', motivo=?, checado_em=? WHERE item_id=?",
+                               (f"Não consegui ler a Magalu: {msg[:240]}", now_iso(), iid))
+                DB.commit()
+            res = {"ok": False, "erro": msg, "resultados": []}
+            _MAGALU_PROMO_ESTADO["ultimo"] = res
+            return res
+        produtos = _promo_produtos()
+        taxas = _magalu_taxas_precificador()
+        perfil = _magalu_perfil(taxas)
+        avaliados: list[dict[str, Any]] = []
+        for iid in alvo:
+            row = linhas.get(iid) or {"item_id": iid, "sku": iid}
+            try:
+                preco = magalu_preco_do_sku(iid)
+            except Exception as exc:
+                cont["erros"] += 1
+                avaliados.append({"item_id": iid, "row": row, "preco": {}, "av": {
+                    "situacao": "erro", "motivo": f"Não consegui ler o preço na Magalu: {str(exc)[:200]}", "aviso": "",
+                    "fim": None, "inicio_nova": None, "promo_nome": "", "promo_nossa": False, "margem": None, "modelos": {}}})
+                continue
+            det = _magalu_promo_det(row, preco)
+            guardado = {"0": row.get("preco")} if row.get("preco") else {}
+            av = shopee_promo_avaliar(row, guardado, det, promos.get(iid) or [], produtos, {}, None, cfg, agora_ts, perfil)
+            m0 = av["modelos"].get("0") or {}
+            if av["situacao"] == "pronta" and m0.get("preco") and det["modelos"]["0"]["preco"]:
+                desc = 1 - m0["preco"] / det["modelos"]["0"]["preco"]
+                if not MAGALU_DESCONTO_MIN <= desc <= MAGALU_DESCONTO_MAX:
+                    av.update(situacao="revisar", motivo=f"A Magalu só aceita desconto de 1% a 60% (este dá {_pct_br(desc)})")
+            cont["checados"] += 1
+            if av["situacao"] == "pronta" and row.get("renovado_dia") == hoje_iso:
+                av.update(situacao="agendada", motivo="Renovada hoje; aguardando a Magalu mostrar a nova promoção")
+            avaliados.append({"item_id": iid, "row": row, "preco": preco, "av": av})
+        prontos = [a for a in avaliados if a["av"]["situacao"] == "pronta"]
+        renovar: list[dict[str, Any]] = []
+        if manual:
+            renovar = prontos
+        elif cfg["modo_renovacao"] == "automatico":
+            vagas = max(0, int(cfg["limite_dia"]) - int(feitas_hoje))
+            renovar = prontos[:vagas]
+            for a in prontos[vagas:]:
+                a["av"]["motivo"] += " · limite do dia atingido"
+        cont["renovaria"] = sum(1 for a in prontos if a not in renovar)
+        grupos: dict[int, list[dict[str, Any]]] = {}
+        for a in renovar:
+            grupos.setdefault(int(a["av"]["inicio_nova"]), []).append(a)
+        por = ator if manual else "sistema"
+        for inicio, grupo in sorted(grupos.items()):
+            fim = inicio + int(cfg["duracao_dias"]) * 86400
+            canal = next((a["preco"].get("canal") for a in grupo if a["preco"].get("canal")), "")
+            try:
+                recusas = _magalu_promo_criar(grupo, inicio, fim, ator if manual else "renovacao-automatica", canal)
+            except Exception as exc:
+                recusas = {a["item_id"]: str(exc)[:300] for a in grupo}
+            for a in grupo:
+                av, iid = a["av"], a["item_id"]
+                m0 = av["modelos"].get("0") or {}
+                if iid in recusas:
+                    cont["erros"] += 1
+                    texto = recusas[iid]
+                    campanha = any(k in texto.lower() for k in SHOPEE_PROMO_CAMPANHA)
+                    av.update(situacao="revisar", motivo=("Em campanha da Magalu: tenta de novo na próxima conferência · "
+                                                          if campanha else "A Magalu recusou: ") + texto[:240])
+                    _magalu_promo_log(iid, "falhou", por, texto, m0.get("preco"), av["margem"], _magalu_iso(inicio), _magalu_iso(fim), hoje_iso)
+                    continue
+                cont["renovadas"] += 1
+                a["renovado"] = True
+                _magalu_promo_log(iid, "renovada", por, av["motivo"], m0.get("preco"), av["margem"],
+                                  _magalu_iso(inicio), _magalu_iso(fim), hoje_iso)
+                av.update(situacao="agendada", fim=fim, promo_nome=_magalu_promo_nome(inicio), promo_nossa=True,
+                          motivo=f"Renovada em {_dia_br(hoje_iso)}: nova promoção de {_shopee_dia_ts(inicio)} a {_shopee_dia_ts(fim)}")
+        resultados = []
+        agora = now_iso()
+        with DB_LOCK:
+            for a in avaliados:
+                av, iid, row = a["av"], a["item_id"], a["row"]
+                if av["situacao"] in ("revisar", "estoque"):
+                    cont["revisar"] += 1
+                m0 = av["modelos"].get("0") or {}
+                DB.execute(
+                    "INSERT INTO magalu_promo_v1955(item_id,marcado,sku,situacao,motivo,aviso,fim,inicio_nova,promo_nome,"
+                    "promo_nossa,margem,lucro,preco,preco_anuncio,checado_em,renovado_dia,renovado_em) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(item_id) DO UPDATE SET situacao=excluded.situacao,"
+                    "motivo=excluded.motivo,aviso=excluded.aviso,fim=excluded.fim,inicio_nova=excluded.inicio_nova,"
+                    "promo_nome=excluded.promo_nome,promo_nossa=excluded.promo_nossa,margem=excluded.margem,"
+                    "lucro=excluded.lucro,preco=COALESCE(preco,excluded.preco),"
+                    "preco_anuncio=COALESCE(excluded.preco_anuncio,preco_anuncio),checado_em=excluded.checado_em,"
+                    "renovado_dia=excluded.renovado_dia,renovado_em=excluded.renovado_em",
+                    (iid, int(row.get("marcado") or 0), row.get("sku") or iid, av["situacao"], av["motivo"], av["aviso"],
+                     _magalu_iso(av["fim"]), _magalu_iso(av["inicio_nova"]), av["promo_nome"], 1 if av["promo_nossa"] else 0,
+                     av["margem"], m0.get("lucro"), m0.get("preco"), (a["preco"] or {}).get("de"), agora,
+                     hoje_iso if a.get("renovado") else (row.get("renovado_dia") or ""),
+                     agora if a.get("renovado") else (row.get("renovado_em") or "")))
+                resultados.append({"item_id": iid, "ok": bool(a.get("renovado")), "situacao": av["situacao"], "motivo": av["motivo"]})
+            DB.commit()
+        res = {"ok": True, "modo": cfg["modo_renovacao"], **cont, "resultados": resultados}
+        _MAGALU_PROMO_ESTADO["ultimo"] = {k: v for k, v in res.items() if k != "resultados"}
+        return res
+    finally:
+        _MAGALU_PROMO_ESTADO.update(rodando=False, fim=now_iso())
+        MAGALU_PROMO_LOCK.release()
+
+
+def magalu_promo_marcar(item_id: Any, ativo: bool, ator: str) -> dict[str, Any]:
+    iid = _magalu_sku_id(item_id)
+    if not iid:
+        raise ValueError("Informe o SKU da Magalu.")
+    agora = now_iso()
+    with DB_LOCK:
+        if ativo:
+            DB.execute("DELETE FROM magalu_promo_removidos_v1955 WHERE item_id=?", (iid,))
+        DB.execute("INSERT INTO magalu_promo_v1955(item_id,sku,marcado,marcado_por,marcado_em) VALUES(?,?,?,?,?) "
+                   "ON CONFLICT(item_id) DO UPDATE SET marcado=excluded.marcado,marcado_por=excluded.marcado_por,"
+                   "marcado_em=excluded.marcado_em", (iid, iid, 1 if ativo else 0, ator, agora))
+        DB.commit()
+    _magalu_promo_log(iid, "marcada" if ativo else "desmarcada", ator)
+    return {"ok": True, "item_id": iid, "marcado": bool(ativo)}
+
+
+def magalu_promo_precos(item_id: Any, modelos: dict[str, Any], ator: str,
+                        precos_antes: dict[str, Any] | None = None) -> dict[str, Any]:
+    iid = _magalu_sku_id(item_id)
+    valor = _money_number((modelos or {}).get("0") if isinstance(modelos, dict) else None)
+    if not iid or valor is None or valor <= 0:
+        raise ValueError("Informe o SKU e o preço da promoção.")
+    with DB_LOCK:
+        r = DB.execute("SELECT preco FROM magalu_promo_v1955 WHERE item_id=?", (iid,)).fetchone()
+        if precos_antes is not None:
+            antes = _money_number((precos_antes or {}).get("0"))
+            atual = r["preco"] if r else None
+            if (round(atual, 2) if atual is not None else None) != (round(antes, 2) if antes is not None else None):
+                raise PromoConflito("O preço deste anúncio foi alterado em outro computador. A lista foi atualizada: "
+                                    "confira e salve de novo.")
+        DB.execute("INSERT INTO magalu_promo_v1955(item_id,sku,preco) VALUES(?,?,?) ON CONFLICT(item_id) DO UPDATE "
+                   "SET preco=excluded.preco", (iid, iid, round(valor, 2)))
+        DB.commit()
+    _magalu_promo_log(iid, "preco", ator, "", round(valor, 2))
+    return {"ok": True, "item_id": iid, "modelos": {"0": round(valor, 2)}}
+
+
+def magalu_promo_remover(itens: list[Any], ator: str) -> dict[str, Any]:
+    ids = [i for i in dict.fromkeys(_magalu_sku_id(x) for x in itens or []) if i]
+    if not ids:
+        raise ValueError("Escolha ao menos um anúncio.")
+    agora = now_iso()
+    with DB_LOCK:
+        for iid in ids:
+            DB.execute("DELETE FROM magalu_promo_v1955 WHERE item_id=?", (iid,))
+            DB.execute("INSERT OR REPLACE INTO magalu_promo_removidos_v1955(item_id,removido_em,removido_por) VALUES(?,?,?)",
+                       (iid, agora, ator))
+        DB.commit()
+    for iid in ids:
+        _magalu_promo_log(iid, "removida", ator)
+    return {"ok": True, "removidos": len(ids), "itens": ids}
+
+
+def _magalu_promo_calculo(row: dict[str, Any], produtos: dict[str, Any], taxas: dict[str, dict[str, float]],
+                          cfg: dict[str, Any]) -> dict[str, Any] | None:
+    """A conta da gaveta (mesmo formato da Shopee): custo e taxas do Precificador, mínimo, ideal e sugestão."""
+    sku = _shopee_promo_resolver_sku(row.get("sku") or row.get("item_id"), produtos)
+    prod = _promo_produto(produtos, sku) if sku else None
+    if not prod or float(prod.get("custo") or 0) <= 0:
+        return None
+    tx = _magalu_taxa(taxas, prod, sku)
+    if not tx:
+        return {"sem_taxas": True, "sku": prod["sku"], "custo": round(float(prod["custo"]), 2)}
+    mmin = _promo_margem_minima(cfg)
+    orig = _money_number(row.get("preco_anuncio"))
+    na_margem = magalu_promo_preco_minimo(prod, tx, mmin)
+    sugestao = None
+    if orig:
+        dez = round(orig * 0.9, 2)
+        sugestao = dez if (na_margem is None or dez >= na_margem) else na_margem
+        if sugestao is not None and sugestao >= orig:
+            sugestao = None
+    out = {"sku": prod["sku"], "custo": round(float(prod["custo"]), 2), "imposto": float(prod.get("imposto") or 0),
+           "frete": round(tx["frete"], 2), "comissao": tx["comissao"], "taxa_fixa": tx["taxa_fixa"],
+           "preco_minimo": magalu_promo_preco_minimo(prod, tx), "preco_margem_min": na_margem, "margem_min": mmin,
+           "sugestao": sugestao, "kit": bool(prod.get("kit")), "ideal": magalu_promo_preco_minimo(prod, tx, tx["margem"]),
+           "margem_alvo": round(tx["margem"], 4)}
+    for chave, preco in (("anuncio", orig), ("promo", _money_number(row.get("preco"))), ("sugestao", sugestao)):
+        if preco:
+            c = magalu_promo_conta(prod, preco, tx)
+            out[f"lucro_{chave}"], out[f"margem_{chave}"] = c["lucro"], c["margem"]
+            out[f"taxa_{chave}"] = {"comissao_pct": c["comissao_pct"], "taxa_fixa": c["taxa_fixa"]}
+    return out
+
+
+def magalu_promo_payload(agora_ts: int | None = None) -> dict[str, Any]:
+    """Lista da tela no mesmo formato da Shopee (um "modelo" 0 por SKU). Só lê o banco."""
+    agora_ts = int(time.time()) if agora_ts is None else int(agora_ts)
+    with DB_LOCK:
+        linhas = [dict(r) for r in DB.execute("SELECT * FROM magalu_promo_v1955 ORDER BY marcado DESC, titulo").fetchall()]
+        historico = [dict(r) for r in DB.execute(
+            "SELECT quando, item_id, acao, preco, margem, fim, por, motivo FROM magalu_promo_log_v1955 "
+            "ORDER BY id DESC LIMIT 200").fetchall()]
+    try:
+        produtos = _promo_produtos()
+        taxas = _magalu_taxas_precificador()
+    except Exception:
+        produtos, taxas = {}, {}
+    cfg = magalu_promo_config()
+    itens = []
+    for r in linhas:
+        fim_dt = _promo_fim_dt(r.get("fim"))
+        dias = (fim_dt.astimezone(BR_TZ).date() - datetime.fromtimestamp(agora_ts, BR_TZ).date()).days if fim_dt else None
+        situacao = r["situacao"] if r["marcado"] else ("nao_marcado" if r["situacao"] in ("", "nao_checado") else r["situacao"])
+        if r["marcado"] and situacao in ("", "nao_marcado"):
+            situacao = "nao_checado"
+        calc = _magalu_promo_calculo(r, produtos, taxas, cfg)
+        sem_taxas = bool(calc and calc.get("sem_taxas"))
+        itens.append({
+            "item_id": r["item_id"], "marcado": bool(r["marcado"]), "titulo": r["titulo"], "sku": r["sku"] or r["item_id"],
+            "situacao": situacao, "motivo": r["motivo"], "aviso": r["aviso"] or (
+                "Comissão da Magalu zerada no Precificador: cadastre a taxa para calcular a margem" if sem_taxas else ""),
+            "fim": r["fim"], "inicio_nova": r["inicio_nova"], "dias_para_vencer": dias, "promo_nome": r["promo_nome"],
+            "promo_nossa": bool(r["promo_nossa"]), "margem": r["margem"], "preco_anuncio": r["preco_anuncio"],
+            "estoque": None, "status_catalogo": r["status_catalogo"], "checado_em": r["checado_em"],
+            "renovado_em": r["renovado_em"],
+            "lucro_promo": r["lucro"],
+            "desconto": (round(1 - r["preco"] / r["preco_anuncio"], 4) if r["preco"] and r["preco_anuncio"] else None),
+            "modelos": [{"model_id": "0", "nome": "", "sku": r["sku"] or r["item_id"], "preco": r["preco"],
+                         "preco_original": r["preco_anuncio"], "estoque": None, "margem": r["margem"], "lucro": r["lucro"],
+                         "situacao": "", "motivo": ""}],
+            "calculos": {"0": None if (calc is None or sem_taxas) else calc}})
+    marc = [i for i in itens if i["marcado"]]
+    resumo = {"total": len(itens), "marcados": len(marc),
+              "prontas": sum(1 for i in marc if i["situacao"] == "pronta"),
+              "agendadas": sum(1 for i in marc if i["situacao"] == "agendada"),
+              "revisar": sum(1 for i in marc if i["situacao"] in ("revisar", "estoque", "erro"))}
+    return {"ok": True, "conectada": bool(magalu_integration_row()), "config": cfg, "itens": itens, "resumo": resumo,
+            "historico": historico, "rodando": bool(_MAGALU_PROMO_ESTADO.get("rodando")),
+            "estado": {k: v for k, v in _MAGALU_PROMO_ESTADO.items() if k != "rodando"},
+            "renova_antes_dias": MAGALU_PROMO_RENOVA_ANTES // 86400, "taxas_fixas": True}
+
+
+def magalu_promo_loop(stop_event: threading.Event) -> None:
+    if stop_event.wait(1800):
+        return
+    while not stop_event.is_set():
+        try:
+            magalu_promo_rodada()
+        except Exception as exc:
+            _MAGALU_PROMO_ESTADO["ultimo"] = {"ok": False, "erro": str(exc)[:300]}
+            print(f"[magalu-promo] falhou: {exc}", file=sys.stderr, flush=True)
+        if stop_event.wait(MAGALU_PROMO_INTERVALO):
             break
 
 
@@ -28844,12 +29544,12 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
-        if path == "/api/promocoes-auto/shopee":
-            # V19.49: promoções automáticas da Shopee. Somente leitura do banco.
+        if path in ("/api/promocoes-auto/shopee", "/api/promocoes-auto/magalu"):
+            # V19.49/V19.55: promoções automáticas da Shopee e da Magalu. Somente leitura do banco.
             if self.auth(admin_only=True) is None:
                 return
             try:
-                self.send_json(shopee_promo_payload())
+                self.send_json(magalu_promo_payload() if path.endswith("/magalu") else shopee_promo_payload())
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
@@ -29726,47 +30426,54 @@ class AppHandler(BaseHTTPRequestHandler):
                 except Exception as exc:
                     self.send_json({"ok": False, "error": str(exc)}, 500)
             return
-        if path.startswith("/api/promocoes-auto/shopee/"):
-            # V19.49: promoções automáticas da Shopee (mesmas regras do ML; modo próprio)
+        if path.startswith("/api/promocoes-auto/shopee/") or path.startswith("/api/promocoes-auto/magalu/"):
+            # V19.49: promoções automáticas da Shopee (mesmas regras do ML; modo próprio).
+            # V19.55: a Magalu usa as mesmas ações, com as funções dela.
             ctx = self.auth(admin_only=True)
             if ctx is None:
                 return
             acao = path.rsplit("/", 1)[-1]
+            mg = path.startswith("/api/promocoes-auto/magalu/")
+            nome_mp = "magalu" if mg else "shopee"
+            f_config, f_salvar = (magalu_promo_config, magalu_promo_config_salvar) if mg else (shopee_promo_config, shopee_promo_config_salvar)
+            f_marcar, f_precos = (magalu_promo_marcar, magalu_promo_precos) if mg else (shopee_promo_marcar, shopee_promo_precos)
+            f_remover, f_novos = (magalu_promo_remover, magalu_promo_buscar_novos) if mg else (shopee_promo_remover, shopee_promo_buscar_novos)
+            f_rodada, trava = (magalu_promo_rodada, MAGALU_PROMO_LOCK) if mg else (shopee_promo_rodada, SHOPEE_PROMO_LOCK)
             try:
                 body = self.read_json() or {}
                 if acao == "config":
-                    atual = shopee_promo_config()
+                    atual = f_config()
                     if body.get("modo_renovacao") == "automatico" and atual["modo_renovacao"] != "automatico"                             and not self.require_owner_reauth(ctx):
-                        audit(ctx["username"], "security.denied.owner_reauth", "promocoes.shopee.automatico")
+                        audit(ctx["username"], "security.denied.owner_reauth", f"promocoes.{nome_mp}.automatico")
                         return
-                    res = {"ok": True, "config": shopee_promo_config_salvar(body, ctx["username"])}
+                    res = {"ok": True, "config": f_salvar(body, ctx["username"])}
                 elif acao == "marcar":
-                    res = shopee_promo_marcar(body.get("item_id"), bool(body.get("ativo")), ctx["username"])
-                    audit(ctx["username"], "promocoes.shopee.marcar", f"{res['item_id']}|{res['marcado']}")
+                    res = f_marcar(body.get("item_id"), bool(body.get("ativo")), ctx["username"])
+                    audit(ctx["username"], f"promocoes.{nome_mp}.marcar", f"{res['item_id']}|{res['marcado']}")
                     if res["marcado"]:
-                        threading.Thread(target=lambda i=res["item_id"]: shopee_promo_rodada(apenas=[i], espera=60),
-                                         name="shopee-promo-marcar", daemon=True).start()
+                        threading.Thread(target=lambda i=res["item_id"]: f_rodada(apenas=[i], espera=60),
+                                         name=f"{nome_mp}-promo-marcar", daemon=True).start()
                 elif acao == "precos":
-                    res = shopee_promo_precos(body.get("item_id"), body.get("modelos") or {}, ctx["username"],
+                    res = f_precos(body.get("item_id"), body.get("modelos") or {}, ctx["username"],
                                               body.get("precos_antes") if "precos_antes" in body else None)
-                    audit(ctx["username"], "promocoes.shopee.precos", res["item_id"])
+                    audit(ctx["username"], f"promocoes.{nome_mp}.precos", res["item_id"])
                 elif acao == "remover":
-                    res = shopee_promo_remover(list(body.get("itens") or [])[:500], ctx["username"])
-                    audit(ctx["username"], "promocoes.shopee.remover", ",".join(res["itens"])[:900])
+                    res = f_remover(list(body.get("itens") or [])[:500], ctx["username"])
+                    audit(ctx["username"], f"promocoes.{nome_mp}.remover", ",".join(res["itens"])[:900])
                 elif acao == "buscar-novos":
-                    res = shopee_promo_buscar_novos(ctx["username"])
-                    audit(ctx["username"], "promocoes.shopee.buscar_novos", str(res["incluidos"]))
+                    res = f_novos(ctx["username"])
+                    audit(ctx["username"], f"promocoes.{nome_mp}.buscar_novos", str(res["incluidos"]))
                 elif acao == "renovar":
                     itens = [str(x) for x in (body.get("itens") or [])][:50]
                     if not itens:
                         raise ValueError("Escolha ao menos um anúncio.")
-                    res = shopee_promo_rodada(so=itens, ator=ctx["username"], espera=PROMO_MANUAL_PRAZO)
-                    audit(ctx["username"], "promocoes.shopee.renovar", ",".join(itens))
+                    res = f_rodada(so=itens, ator=ctx["username"], espera=PROMO_MANUAL_PRAZO)
+                    audit(ctx["username"], f"promocoes.{nome_mp}.renovar", ",".join(itens))
                 elif acao == "checar":
-                    if SHOPEE_PROMO_LOCK.locked():
+                    if trava.locked():
                         res = {"ok": True, "iniciado": False, "rodando": True}
                     else:
-                        threading.Thread(target=lambda: shopee_promo_rodada(), name="shopee-promo-manual",
+                        threading.Thread(target=lambda: f_rodada(), name=f"{nome_mp}-promo-manual",
                                          daemon=True).start()
                         res = {"ok": True, "iniciado": True, "rodando": True}
                 else:
@@ -33236,6 +33943,7 @@ SAUDE_WORKERS_INFO: dict[str, tuple[str, bool, int]] = {
     "compras_geral_loop": ("Demanda de Compra geral (segunda)", False, 180),
     "promo_renovacao_loop": ("Promoções automáticas", False, 120),
     "shopee_promo_loop": ("Promoções automáticas da Shopee", False, 120),  # V19.49
+    "magalu_promo_loop": ("Promoções automáticas da Magalu", False, 120),  # V19.55
     "posvenda_loop": ("Pós-venda do Mercado Livre", False, 60),
     "promo_convites_loop": ("Convites de campanha do ML", False, 120),
     "relatorio_diario_loop": ("Relatório diário por e-mail", False, 60),
@@ -34311,6 +35019,9 @@ def main() -> None:
         # V19.49: promoções automáticas da Shopee (próxima promoção criada dias antes de acabar)
         threading.Thread(target=_worker_protegido(shopee_promo_loop), args=(watcher_stop,),
                          name="shopee-promo", daemon=True).start()
+        # V19.55: promoções automáticas da Magalu (mesma régua da Shopee)
+        threading.Thread(target=_worker_protegido(magalu_promo_loop), args=(watcher_stop,),
+                         name="magalu-promo", daemon=True).start()
         relatorio_thread.start()
         compras_geral_thread.start()
         linx_clientes_thread.start()

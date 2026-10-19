@@ -300,9 +300,11 @@ html[data-tema="escuro"] .gav-tag{background-color:#383519!important;color:#979C
 html[data-tema="escuro"] .casa-b{background:#15283F;color:#86B4F2}
 html[data-tema="escuro"] .casa-b.bauru{background:#3A2412;color:#F0B357}
 /* V19.49: escolha Mercado Livre / Shopee (?mp=shopee). Só variáveis: o modo escuro troca. */
-.mp-seg{grid-template-columns:repeat(2,auto)}
-body[data-mp="shopee"] #conteudo,body[data-mp="shopee"] #aviso{display:none!important}
-body:not([data-mp="shopee"]) #shp{display:none!important}
+.mp-seg{grid-template-columns:repeat(3,auto)}
+body[data-mp="shopee"] #conteudo,body[data-mp="shopee"] #aviso,body[data-mp="magalu"] #conteudo,body[data-mp="magalu"] #aviso{display:none!important}
+body:not([data-mp="shopee"]):not([data-mp="magalu"]) #shp{display:none!important}
+/* V19.55: a mesma seção serve Shopee e Magalu; o que é só de um marketplace leva .so-shopee / .so-magalu */
+body[data-mp="magalu"] .so-shopee,body[data-mp="shopee"] .so-magalu{display:none!important}
 .shp-var td{background:var(--canvas)!important;white-space:normal}
 .shp-var table{min-width:0;background:transparent}
 .shp-var input.inp{width:110px;text-align:right}
@@ -321,7 +323,7 @@ body:not([data-mp="shopee"]) #shp{display:none!important}
     </div>
     <div class="head-acoes">
       <a class="btn" href="/expedicao/promocoes" target="_blank" rel="noopener"><i class=nk-i-tag></i> Promoções ML</a>
-      <div class="seg mp-seg" id="mpSeg" role="radiogroup" aria-label="Marketplace"><button type="button" data-mp="ml" class="on">Mercado Livre</button><button type="button" data-mp="shopee">Shopee</button></div>
+      <div class="seg mp-seg" id="mpSeg" role="radiogroup" aria-label="Marketplace"><button type="button" data-mp="ml" class="on">Mercado Livre</button><button type="button" data-mp="shopee">Shopee</button><button type="button" data-mp="magalu">Magalu</button></div>
       <button class="btn pri" id="checar"><i class=nk-i-refresh></i> Conferir agora</button>
     </div>
   </div>
@@ -430,13 +432,13 @@ body:not([data-mp="shopee"]) #shp{display:none!important}
     </details>
   </div>
 
-  <!-- V19.49/V19.50: Promoções automáticas da Shopee (mesma tela, ?mp=shopee), no padrão da aba ML -->
+  <!-- V19.49/V19.50/V19.55: Promoções automáticas da Shopee e da Magalu (mesma tela, ?mp=shopee), no padrão da aba ML -->
   <div class="pilha" id="shp">
     <div class="callout" id="shpAviso" hidden></div>
     <section class="painel">
       <div class="modo-linha">
         <div>
-          <div class="painel-tit" style="margin:0"><div><h2>Desconto próprio da Shopee, renovando sozinho</h2>
+          <div class="painel-tit" style="margin:0"><div><h2>Desconto próprio da <span class="mpn">Shopee</span>, renovando sozinho</h2>
             <p>Quando faltam <b id="shpAntes">3</b> dias para a promoção de um anúncio <b>marcado</b> acabar, o sistema cria a próxima com o <b>mesmo preço</b>, começando quando a atual termina. Promoção feita à mão nunca é alterada.</p></div></div>
           <div class="modo-desc" id="shpModoDesc"></div>
         </div>
@@ -458,7 +460,7 @@ body:not([data-mp="shopee"]) #shp{display:none!important}
           <label class="busca" id="shpBuscaBox"><i class=nk-i-search></i>
             <input type="search" id="shpQ" placeholder="Buscar por número, SKU ou título" autocomplete="off" aria-label="Buscar por número, SKU ou título">
             <button type="button" id="shpLimparBusca" aria-label="Limpar busca"><i class=nk-i-x></i></button></label>
-          <button class="btn" id="shpNovos" title="Inclui sem marcar os anúncios da Shopee que ainda não estão nesta lista"><i class=nk-i-refresh></i> Buscar novos na Shopee</button>
+          <button class="btn" id="shpNovos" title="Inclui sem marcar os anúncios da Shopee que ainda não estão nesta lista"><i class=nk-i-refresh></i> <span>Buscar novos na <span class="mpn">Shopee</span></span></button>
         </div>
         <div class="chips" id="shpTabs"></div>
       </div>
@@ -473,7 +475,7 @@ body:not([data-mp="shopee"]) #shp{display:none!important}
     <section class="painel">
       <div class="painel-tit"><div><h2><i class=nk-i-shield></i> Regras</h2>
         <p id="shpRegras"></p></div></div>
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><label class="muted" style="font-size:12.5px" for="shpLimite">Limite por dia do modo Automático (Shopee)</label>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><label class="muted" style="font-size:12.5px" for="shpLimite">Limite por dia do modo Automático (<span class="mpn">Shopee</span>)</label>
         <input class="inp" id="shpLimite" inputmode="numeric" style="width:80px">
         <button class="btn mini" id="shpSalvarLimite"><i class=nk-i-save></i> Salvar</button></div>
       <div class="regras-rodape"><i class=nk-i-shield></i> Ligar o modo Automático pede a senha e o código do proprietário.</div>
@@ -481,20 +483,22 @@ body:not([data-mp="shopee"]) #shp{display:none!important}
 
     <details class="painel" id="shpHistBox">
       <summary><h2><i class=nk-i-clock></i> Histórico <span class="cont" id="shpHistCont">0</span></h2><span class="seta" aria-hidden="true">▾</span></summary>
-      <div class="dentro"><p class="muted" style="margin:0 0 10px;font-size:12px">Tudo o que foi marcado, renovado ou recusado na Shopee, por quem e por quê.</p>
+      <div class="dentro"><p class="muted" style="margin:0 0 10px;font-size:12px">Tudo o que foi marcado, renovado ou recusado na <span class="mpn">Shopee</span>, por quem e por quê.</p>
         <div class="tw"><table class="log" id="shpLog"></table></div></div>
     </details>
 
     <details class="painel notas">
       <summary><h2><i class=nk-i-shield></i> Antes de renovar, o sistema confere</h2><span class="seta" aria-hidden="true">▾</span></summary>
       <div class="dentro"><ul>
-        <li>Anúncio ativo na Shopee e com custo no Precificador (pelo SKU do anúncio ou da variação; kit pelos componentes). Sem custo, não renova.</li>
-        <li><b>Taxa da Shopee</b> pela faixa do preço da promoção: até R$ 79,99 = 20% + R$ 4,50; R$ 80 a 99,99 = 14% + R$ 16; R$ 100 a 199,99 = 14% + R$ 20; a partir de R$ 200 = 14% + R$ 26. Mais o frete Shopee do Precificador e o imposto.</li>
+        <li>Anúncio ativo na <span class="mpn">Shopee</span> e com custo no Precificador (pelo SKU do anúncio ou da variação; kit pelos componentes). Sem custo, não renova.</li>
+        <li class="so-shopee"><b>Taxa da Shopee</b> pela faixa do preço da promoção: até R$ 79,99 = 20% + R$ 4,50; R$ 80 a 99,99 = 14% + R$ 16; R$ 100 a 199,99 = 14% + R$ 20; a partir de R$ 200 = 14% + R$ 26. Mais o frete Shopee do Precificador e o imposto.</li>
+        <li class="so-magalu"><b>Taxa da Magalu</b>: comissão, taxa fixa e frete do Precificador (aba Magalu do produto). Comissão <b>zerada</b> no Precificador conta como <b>sem taxa</b>: não renova até cadastrar. A Magalu aceita desconto de 1% a 60%.</li>
         <li><b>Margem</b> no preço da promoção ≥ a margem mínima da promoção; preço acima do <b>preço mínimo</b> (lucro zero) e abaixo do preço do anúncio.</li>
-        <li><b>Estoque</b> lido na hora na Shopee: zerado ou durando menos que o limite (ritmo de venda da Ruptura), não renova.</li>
+        <li><b>Estoque</b> lido na hora na <span class="mpn">Shopee</span>: zerado ou durando menos que o limite (ritmo de venda da Ruptura), não renova.</li>
         <li><b>Variações</b>: entram as que estavam na promoção, cada uma com o seu preço e a sua conferência; a que não passa fica de fora e as outras renovam.</li>
-        <li>Os anúncios que vencem no mesmo horário vão para uma promoção só ("Noromak auto DD/MM"). A Shopee só aceita promoção que começa daqui a 1 h ou mais: por isso a próxima é criada dias antes.</li>
-        <li>Recusa por campanha da Shopee: tenta de novo na próxima conferência (de hora em hora). Nunca tira produto de campanha.</li>
+        <li class="so-shopee">Os anúncios que vencem no mesmo horário vão para uma promoção só ("Noromak auto DD/MM"). A Shopee só aceita promoção que começa daqui a 1 h ou mais: por isso a próxima é criada dias antes.</li>
+        <li class="so-magalu">Os anúncios que vencem no mesmo horário vão para uma promoção só ("Noromak auto DD/MM", tipo Preço Promocional). Promoção de campanha da Magalu (Feirão, cupons) segura a data, mas o preço dela não vira o seu. Cupom <b>soma</b> com o preço promocional.</li>
+        <li>Recusa por campanha da <span class="mpn">Shopee</span>: tenta de novo na próxima conferência (de hora em hora). Nunca tira produto de campanha.</li>
       </ul></div>
     </details>
   </div>
@@ -648,7 +652,7 @@ async function carregar(){
   try{ D=await api('/api/promocoes-auto/renovacao'); }
   catch(e){ if(antes){D=antes;return} $('aviso').innerHTML='<b>Não foi possível carregar.</b> '+esc(e.message); $('aviso').hidden=false; $('sub').textContent=''; return; }
   const u=D.estado||{};
-  if(document.body.dataset.mp!=='shopee') $('sub').textContent=`Conferência de hora em hora · última ${horaBR(u.fim)}${D.rodando?' · conferindo agora…':''}`;   // V19.50: a aba Shopee tem o seu
+  if(!['shopee','magalu'].includes(document.body.dataset.mp)) $('sub').textContent=`Conferência de hora em hora · última ${horaBR(u.fim)}${D.rodando?' · conferindo agora…':''}`;   // V19.50: a aba Shopee tem o seu
   $('conteudo').hidden=false; $('aviso').hidden=true;
   desenharConta();
   // V18.92: a lista recarrega sozinha — regra digitada e ainda não salva não é apagada
@@ -1177,18 +1181,23 @@ carregar();
 const P=window.nkPromoAuto; if(!P) return;
 const {api,confirmar,pedirOwner,toast,esc,brl,pct,num,horaBR}=P;
 const $=id=>document.getElementById(id);
+let mp='ml'; try{ const q0=new URLSearchParams(location.search).get('mp'); mp=['shopee','magalu'].includes(q0)?q0:'ml' }catch(e){}
+// V19.55: a mesma aba serve a Shopee e a Magalu (mesma API, mesmas regras, taxas de cada uma)
+const ehMp=()=>mp==='shopee'||mp==='magalu';
+const NOME=()=>mp==='magalu'?'Magalu':'Shopee';
+const URLB=()=>'/api/promocoes-auto/'+mp;
 const dataBR=d=>String(d||'').slice(0,10).split('-').reverse().join('/');
 const semAc=t=>String(t||'').normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase();
 const numBR=t=>{const v=parseFloat(String(t||'').trim().replace(/\.(?=\d{3}(\D|$))/g,'').replace(',','.'));return isFinite(v)?v:null};
 let D=null, aberto=null, tab='todos', q='', pagina=1, porPagina=50; const sel=new Set();
 try{ const pp=+localStorage.getItem('nk_promo_auto_pp'); if([25,50,100].includes(pp)) porPagina=pp }catch(e){}
 let escondeSemEst=true; try{ escondeSemEst=localStorage.getItem('nk_promo_esconde_sem_est_v1911')!=='0' }catch(e){}
-const MODOS={simulacao:'<b>Simulação</b>: só mostra o que renovaria. Nada é enviado à Shopee.',
+const MODOS={simulacao:'<b>Simulação</b>: só mostra o que renovaria. Nada é enviado ao marketplace.',
   lote:'<b>Aprovar em lote</b>: o sistema separa o que vai vencer; você seleciona e clica em Renovar.',
   automatico:'<b>Automático</b>: cria sozinho a próxima promoção do que passa em todas as regras (até o limite do dia). O resto espera você.'};
 const PRONTA={simulacao:['Renovaria','c-in','refresh'],lote:['Pronta para renovar','c-in','refresh'],automatico:['Renova na próxima conferência','c-ok','refresh']};
 const SIT={agendada:['Próxima agendada','c-ok','check'],ativa:['Ativa','c-ok','check'],revisar:['Revisar','c-rev','alert'],estoque:['Sem estoque','c-rev','box'],
-  erro:['Erro ao ler a Shopee','c-no','x'],nao_checado:['Ainda não conferido','c-sc','clock'],nao_marcado:['Não marcado','c-sc','']};
+  erro:['Erro ao ler o marketplace','c-no','x'],em_campanha:['Em campanha do marketplace','c-sc','tag'],nao_checado:['Ainda não conferido','c-sc','clock'],nao_marcado:['Não marcado','c-sc','']};
 function chip(i){const s=i.situacao==='pronta'?PRONTA[D.config.modo_renovacao]:(SIT[i.situacao]||[i.situacao,'c-sc','']);
   return `<span class="chip ${s[1]}">${s[2]?`<i class=nk-i-${s[2]}></i>`:''}${esc(s[0])}</span>`}
 const semEstoque=i=>i.estoque===0;
@@ -1201,27 +1210,29 @@ const F={todos:['Todos',()=>true],marcados:['Marcados',i=>i.marcado],prontas:['P
   v30:['Em 30 dias',i=>i.dias_para_vencer!=null&&i.dias_para_vencer>=0&&i.dias_para_vencer<=30],
   precisa:['Precisam de você',precisa],nao:['Não marcados',i=>!i.marcado],sem_estoque:['Sem estoque',semEstoque]};
 
-let mp='ml'; try{ mp=new URLSearchParams(location.search).get('mp')==='shopee'?'shopee':'ml' }catch(e){}
+
 function trocar(novo){
   mp=novo; document.body.dataset.mp=mp;
   document.querySelectorAll('#mpSeg button').forEach(b=>b.classList.toggle('on',b.dataset.mp===mp));
-  try{ const u=new URL(location.href); if(mp==='shopee')u.searchParams.set('mp','shopee'); else u.searchParams.delete('mp'); history.replaceState(null,'',u) }catch(e){}
-  if(mp==='shopee') carregar(); else if(P.recarregar) P.recarregar();
+  try{ const u=new URL(location.href); if(ehMp())u.searchParams.set('mp',mp); else u.searchParams.delete('mp'); history.replaceState(null,'',u) }catch(e){}
+  document.querySelectorAll('.mpn').forEach(e=>e.textContent=NOME());
+  if(ehMp()){ if(D&&D.mp!==mp){D=null;sel.clear();tab='todos';pagina=1;$('shpTab').innerHTML='';$('shpKpis').innerHTML=''} carregar(); } else if(P.recarregar) P.recarregar();
 }
 document.querySelectorAll('#mpSeg button').forEach(b=>b.onclick=()=>trocar(b.dataset.mp));
 // o "Conferir agora" azul do topo confere a aba que está aberta
-$('checar').addEventListener('click',e=>{if(mp!=='shopee')return;e.stopImmediatePropagation();conferir()},true);
+$('checar').addEventListener('click',e=>{if(!ehMp())return;e.stopImmediatePropagation();conferir()},true);
 
 async function carregar(){
-  try{ D=await api('/api/promocoes-auto/shopee'); }
+  const pedido=mp;
+  try{ D=await api(URLB()); D.mp=pedido; if(pedido!==mp) return; }
   catch(e){ $('shpAviso').innerHTML='<b>Não foi possível carregar.</b> '+esc(e.message); $('shpAviso').hidden=false; return; }
-  $('shpAviso').hidden=!!D.conectada; if(!D.conectada) $('shpAviso').innerHTML='<b>Shopee não conectada.</b> Conecte em Admin → Integrações.';
+  $('shpAviso').hidden=!!D.conectada; if(!D.conectada) $('shpAviso').innerHTML=`<b>${NOME()} não conectada.</b> Conecte em Admin → Integrações.`;
   const c=D.config;
-  if(mp==='shopee') $('sub').textContent=`Shopee · conferência de hora em hora · última ${horaBR((D.estado||{}).fim)}${D.rodando?' · conferindo agora…':''}`;
+  if(ehMp()) $('sub').textContent=`${NOME()} · conferência de hora em hora · última ${horaBR((D.estado||{}).fim)}${D.rodando?' · conferindo agora…':''}`;
   $('shpModoDesc').innerHTML=MODOS[c.modo_renovacao]||'';
   document.querySelectorAll('#shpModos button').forEach(b=>{const on=b.dataset.m===c.modo_renovacao;b.classList.toggle('on',on);b.setAttribute('aria-checked',on)});
   if(document.activeElement!==$('shpLimite')) $('shpLimite').value=c.limite_dia;
-  $('shpRegras').innerHTML=`As regras são as mesmas do Mercado Livre: margem mínima da promoção <b>${c.margem_min_promo}%</b>, duração <b>${c.duracao_dias} dias</b>, estoque para <b>${c.estoque_min_dias} dia(s)</b>. Para mudar, use a aba Mercado Livre. O modo e o limite do dia são só da Shopee.`;
+  $('shpRegras').innerHTML=`As regras são as mesmas do Mercado Livre: margem mínima da promoção <b>${c.margem_min_promo}%</b>, duração <b>${c.duracao_dias} dias</b>, estoque para <b>${c.estoque_min_dias} dia(s)</b>. Para mudar, use a aba Mercado Livre. O modo e o limite do dia são só da ${NOME()}.`;
   $('shpAntes').textContent=D.renova_antes_dias;
   kpis(); render(); historico();
 }
@@ -1265,16 +1276,16 @@ function render(){
   PG.forEach(i=>{
     const nv=i.modelos.length>1?` · ${num(i.modelos.length)} variações`:'';
     h+=`<tr class="lin ${i.marcado?'marc':''} ${aberto===i.item_id?'aberta':''}" data-linha="${esc(i.item_id)}" title="Clique para ver custo, taxas e o preço sugerido"><td class="c"><input type="checkbox" data-m="${esc(i.item_id)}" ${sel.has(i.item_id)?'checked':''} aria-label="Selecionar ${esc(i.item_id)}"></td>
-      <td class="l ttl">${esc(i.titulo||'(título ainda não coletado)')}<div class="mlb">${esc(i.item_id)}${i.sku?' · SKU '+esc(i.sku):''}${nv}</div>${i.estoque!=null?`<div class="sub2" style="${i.estoque===0?'color:var(--neg);font-weight:600':''}">${i.estoque===0?'Sem estoque na Shopee':num(i.estoque)+' em estoque'}</div>`:''}</td>
+      <td class="l ttl">${esc(i.titulo||'(título ainda não coletado)')}<div class="mlb">${esc(i.item_id)}${i.sku?' · SKU '+esc(i.sku):''}${nv}</div>${i.estoque!=null?`<div class="sub2" style="${i.estoque===0?'color:var(--neg);font-weight:600':''}">${i.estoque===0?`Sem estoque na ${NOME()}`:num(i.estoque)+' em estoque'}</div>`:''}</td>
       <td>${brl(i.preco_anuncio)}</td>
       <td>${precoPromo(i)}${i.lucro_promo!=null?`<div class="sub2">lucro ${brl(i.lucro_promo)}/venda</div>`:''}${i.desconto!=null?`<div class="sub2">${pct(i.desconto)} off</div>`:''}<div style="margin-top:4px"><button class="btn mini" data-abrir="${esc(i.item_id)}"><i class=nk-i-pencil></i> alterar</button></div></td>
       <td>${vence(i)}</td>
       <td>${i.margem!=null?`<b>${pct(i.margem)}</b>`:'<span class="muted">—</span>'}</td>
-      <td class="l">${chip(i)}${i.situacao==='nao_checado'?'<div class="mot">Conferindo na Shopee…</div>':''}${i.motivo?`<div class="mot">${esc(i.motivo)}</div>`:''}${i.aviso?`<div class="aviso"><i class=nk-i-alert></i><span>${esc(i.aviso)}</span></div>`:''}</td>
+      <td class="l">${chip(i)}${i.situacao==='nao_checado'?`<div class="mot">Conferindo na ${NOME()}…</div>`:''}${i.motivo?`<div class="mot">${esc(i.motivo)}</div>`:''}${i.aviso?`<div class="aviso"><i class=nk-i-alert></i><span>${esc(i.aviso)}</span></div>`:''}</td>
       <td class="l"><div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><label class="sw"><input type="checkbox" data-marcar="${esc(i.item_id)}" ${i.marcado?'checked':''}><span class="tr"></span>${i.marcado?'Sim':'Não'}</label>
-        <button class="icone-btn" data-remover="${esc(i.item_id)}" title="Remover da lista (anúncio apagado na Shopee)" aria-label="Remover ${esc(i.item_id)} da lista"><i class=nk-i-trash></i></button></div></td></tr>`;
+        <button class="icone-btn" data-remover="${esc(i.item_id)}" title="Remover da lista (anúncio apagado na ${NOME()})" aria-label="Remover ${esc(i.item_id)} da lista"><i class=nk-i-trash></i></button></div></td></tr>`;
   });
-  if(!PG.length) h+=`<tr><td colspan="8" class="vazio">${q?`Nenhum anúncio encontrado para "<b>${esc(q)}</b>".`:tab==='marcados'?'Nenhum anúncio marcado ainda. Ligue "Renovar sozinha" na lista.':D.itens.length?'Nenhum anúncio neste filtro.':'Nenhum anúncio na lista. Use “Buscar novos na Shopee”.'}</td></tr>`;
+  if(!PG.length) h+=`<tr><td colspan="8" class="vazio">${q?`Nenhum anúncio encontrado para "<b>${esc(q)}</b>".`:tab==='marcados'?'Nenhum anúncio marcado ainda. Ligue "Renovar sozinha" na lista.':D.itens.length?'Nenhum anúncio neste filtro.':`Nenhum anúncio na lista. Use “Buscar novos na ${NOME()}”.`}</td></tr>`;
   $('shpTab').innerHTML=h+'</tbody>';
   document.querySelectorAll('#shpTab [data-m]').forEach(c=>c.onchange=()=>{c.checked?sel.add(c.dataset.m):sel.delete(c.dataset.m);estadoSelTodos(R);selbar()});
   document.querySelectorAll('#shpTab [data-marcar]').forEach(c=>c.onchange=()=>marcar(c.dataset.marcar,c.checked));
@@ -1306,7 +1317,8 @@ function paginacao(total,paginas,ini,qtd){
 // digita, a mesma tabela de faixas do servidor (SHOPEE_FAIXAS_TAXA) refaz a margem na hora.
 const FAIXAS=[[0,80,0.20,4.5],[80,100,0.14,16],[100,200,0.14,20],[200,Infinity,0.14,26]];
 const faixa=p=>FAIXAS.find(x=>Math.round(p*100)/100>=x[0]&&Math.round(p*100)/100<x[1])||FAIXAS[3];
-function contaLocal(c,preco){const f=faixa(preco);
+const taxaDe=(c,p)=>c&&c.comissao!=null?[0,Infinity,c.comissao,c.taxa_fixa||0]:faixa(p);   // V19.55: Magalu = taxa fixa do Precificador
+function contaLocal(c,preco){const f=taxaDe(c,preco);
   const lucro=preco*(1-c.imposto-f[2])-c.custo-c.frete-f[3];return {lucro,margem:preco>0?lucro/preco:0,com:f[2],fixa:f[3]}}
 const fmt2=v=>Number(v).toFixed(2).replace('.',',');
 let sgItem=null, sgVar=null, sgPrecos={}, sgModelos=[];
@@ -1349,11 +1361,11 @@ function taxas(){
   $('sgTaxasBox').hidden=false;
   if(!c){$('sgTaxas').innerHTML='';$('sgTaxasNota').textContent='Sem custo no Precificador para este SKU'+(m.sku?` (${m.sku})`:'')+': não dá para calcular a margem nem renovar. Cadastre o custo no Precificador.';
     $('sgLink').href='/expedicao/precificador'+(m.sku?'?sku='+encodeURIComponent(m.sku):'');return}
-  const v=numBR($('sgPreco').value)||c.sugestao||m.preco_original||0, f=faixa(v);
+  const v=numBR($('sgPreco').value)||c.sugestao||m.preco_original||0, f=taxaDe(c,v);
   const cel=(r,val)=>`<div><label>${r}</label><input value="${val}" disabled></div>`;
   $('sgTaxas').innerHTML=cel(c.kit?'Custo do kit (componentes)':'Custo (R$)',fmt2(c.custo))+cel('Imposto (%)',fmt2(c.imposto*100))+
-    cel('Comissão Shopee (%)',fmt2(f[2]*100))+cel('Taxa fixa (R$)',fmt2(f[3]))+cel('Frete Shopee (R$)',fmt2(c.frete))+cel('Margem desejada (%)',fmt2((c.margem_alvo||0)*100));
-  $('sgTaxasNota').textContent=`Comissão e taxa fixa pela faixa do preço da promoção (tabela da Shopee). Custo, imposto, frete e margem vêm do Precificador (SKU ${c.sku}); para mudar, altere lá.`;
+    cel(`Comissão ${NOME()} (%)`,fmt2(f[2]*100))+cel('Taxa fixa (R$)',fmt2(f[3]))+cel(`Frete ${NOME()} (R$)`,fmt2(c.frete))+cel('Margem desejada (%)',fmt2((c.margem_alvo||0)*100));
+  $('sgTaxasNota').textContent=(mp==='magalu'?'Comissão, taxa fixa e frete da Magalu vêm do Precificador (aba Magalu do produto).':'Comissão e taxa fixa pela faixa do preço da promoção (tabela da Shopee).')+` Custo, imposto, frete e margem vêm do Precificador (SKU ${c.sku}); para mudar, altere lá.`;
   $('sgLink').href='/expedicao/precificador?sku='+encodeURIComponent(c.sku);
 }
 function sgFaixa(){
@@ -1384,7 +1396,7 @@ function sgAtualizar(deSlider){
     res.className='gav-res '+f;
     res.innerHTML=`<div><b>${pct(k.margem)}</b><small>margem</small></div><div><b>${brl(k.lucro)}</b><small>lucro por venda</small></div>`;
     msg.innerHTML=(f==='ruim'?'Abaixo do preço mínimo: dá prejuízo.':f==='at'?`Abaixo da margem mínima da promoção (${pct(c.margem_min)}): não renova.`:'Passa na margem mínima da promoção.')+desc+
-      `<div class="sub2" style="margin-top:4px">Taxa Shopee nesta faixa: ${pct(k.com)} + ${brl(k.fixa)}</div>`;
+      `<div class="sub2" style="margin-top:4px">${mp==='magalu'?'Taxa da Magalu':'Taxa Shopee nesta faixa'}: ${pct(k.com)} + ${brl(k.fixa)}</div>`;
     taxas();
   }
   if(cheio&&v>=cheio){msg.textContent=`Igual ou acima do preço do anúncio (${brl(cheio)}): não é promoção.`;msg.classList.add('erro');$('sgSalvar').disabled=true}
@@ -1406,13 +1418,13 @@ $('sgForm').onsubmit=async e=>{
   sgModelos.forEach(m=>{const v=sgPrecos[m.model_id]; if(v!=null&&v>0){modelos[m.model_id]=v;antes[m.model_id]=m.preco??null}});
   if(!Object.keys(modelos).length) return toast('Informe o preço da promoção.');
   const i=sgItem; fecharGaveta();
-  try{ await api('/api/promocoes-auto/shopee/precos',{item_id:i.item_id,modelos,precos_antes:antes});
-    await api('/api/promocoes-auto/shopee/marcar',{item_id:i.item_id,ativo:true});
-    toast(i.marcado?'Preço salvo. Conferindo na Shopee…':`${i.item_id} marcado com este preço. Conferindo na Shopee…`); carregar(); acompanhar(); }
+  try{ await api(URLB()+'/precos',{item_id:i.item_id,modelos,precos_antes:antes});
+    await api(URLB()+'/marcar',{item_id:i.item_id,ativo:true});
+    toast(i.marcado?`Preço salvo. Conferindo na ${NOME()}…`:`${i.item_id} marcado com este preço. Conferindo na ${NOME()}…`); carregar(); acompanhar(); }
   catch(e){ toast(e.message); carregar(); }
 };
 // a conferência leva alguns segundos: a tela recarrega até ela terminar (V19.50)
-function acompanhar(){[4000,9000,16000,30000].forEach(t=>setTimeout(()=>{if(mp==='shopee')carregar()},t))}
+function acompanhar(){[4000,9000,16000,30000].forEach(t=>setTimeout(()=>{if(ehMp())carregar()},t))}
 function selbar(){
   $('shpSelbar').classList.toggle('on',sel.size>0);
   $('shpSel').innerHTML=`<b>${num(sel.size)}</b> selecionado(s)${sel.size>porPagina?' <span class="muted">· inclui outras páginas</span>':''}`;
@@ -1422,15 +1434,15 @@ function selbar(){
 }
 const renovaveis=()=>[...sel].filter(id=>{const x=D&&D.itens.find(y=>y.item_id===id);return x&&x.marcado&&x.situacao==='pronta'});
 async function marcar(id,ativo){
-  try{ await api('/api/promocoes-auto/shopee/marcar',{item_id:id,ativo}); toast(ativo?`${id} marcado. Conferindo na Shopee…`:`${id} não renova mais sozinho`); carregar(); if(ativo) acompanhar() }
+  try{ await api(URLB()+'/marcar',{item_id:id,ativo}); toast(ativo?`${id} marcado. Conferindo na ${NOME()}…`:`${id} não renova mais sozinho`); carregar(); if(ativo) acompanhar() }
   catch(e){ toast(e.message); carregar() }
 }
 async function remover(L){
   if(!L.length) return;
   const um=L.length===1, i=um&&D.itens.find(x=>x.item_id===L[0]);
   if(!await confirmar(um?'Remover anúncio da lista':`Remover ${num(L.length)} anúncios da lista`,
-    `${um?(i&&i.titulo?i.titulo+' ('+L[0]+')':L[0]):num(L.length)+' anúncios'} ${um?'sai':'saem'} da renovação e da lista e não ${um?'volta':'voltam'} pelo “Buscar novos”. Use para anúncio apagado na Shopee — nada é enviado à Shopee. Para trazer de volta, ligue “Renovar sozinha” de novo.`,'Remover')) return;
-  try{ const r=await api('/api/promocoes-auto/shopee/remover',{itens:L}); L.forEach(x=>sel.delete(x)); toast(`${num(r.removidos)} anúncio(s) removido(s) da lista`); carregar() }catch(e){toast(e.message)}
+    `${um?(i&&i.titulo?i.titulo+' ('+L[0]+')':L[0]):num(L.length)+' anúncios'} ${um?'sai':'saem'} da renovação e da lista e não ${um?'volta':'voltam'} pelo “Buscar novos”. Use para anúncio apagado na ${NOME()} — nada é enviado à ${NOME()}. Para trazer de volta, ligue “Renovar sozinha” de novo.`,'Remover')) return;
+  try{ const r=await api(URLB()+'/remover',{itens:L}); L.forEach(x=>sel.delete(x)); toast(`${num(r.removidos)} anúncio(s) removido(s) da lista`); carregar() }catch(e){toast(e.message)}
 }
 let tBusca=null;
 $('shpQ').oninput=e=>{q=e.target.value;$('shpBuscaBox').classList.toggle('tem',!!q);clearTimeout(tBusca);tBusca=setTimeout(()=>{pagina=1;render()},150)};
@@ -1439,30 +1451,30 @@ $('shpLimparSel').onclick=()=>{sel.clear();render()};
 $('shpRemover').onclick=()=>remover([...sel]);
 $('shpRenovar').onclick=async()=>{const L=renovaveis();
   if(!L.length) return toast('Nenhum dos selecionados está pronto para renovar.');
-  if(!await confirmar('Renovar na Shopee',`Cria agora na Shopee a próxima promoção de ${num(L.length)} anúncio(s), com os preços da lista. Antes de enviar, o sistema confere de novo margem, preço mínimo e estoque.`,'Renovar agora')) return;
-  try{ const r=await api('/api/promocoes-auto/shopee/renovar',{itens:L}); sel.clear();
+  if(!await confirmar(`Renovar na ${NOME()}`,`Cria agora na ${NOME()} a próxima promoção de ${num(L.length)} anúncio(s), com os preços da lista. Antes de enviar, o sistema confere de novo margem, preço mínimo e estoque.`,'Renovar agora')) return;
+  try{ const r=await api(URLB()+'/renovar',{itens:L}); sel.clear();
     toast(r.pulado?'O sistema está conferindo agora. Tente de novo em instantes.':`${num(r.renovadas||0)} renovado(s)${r.erros?' · '+num(r.erros)+' recusado(s)':''}`); carregar() }
   catch(e){ toast(e.message); carregar() }};
-$('shpNovos').onclick=async()=>{try{const r=await api('/api/promocoes-auto/shopee/buscar-novos',{}); toast(r.incluidos?`${num(r.incluidos)} anúncio(s) incluído(s), sem marcar`:'Nenhum anúncio novo'); if(r.incluidos){tab='nao';pagina=1} carregar()}catch(e){toast(e.message)}};
-async function conferir(){try{const r=await api('/api/promocoes-auto/shopee/checar',{}); toast(r.iniciado===false?'Já está conferindo na Shopee…':'Conferindo na Shopee… a lista atualiza em instantes.'); acompanhar()}catch(e){toast(e.message)}}
+$('shpNovos').onclick=async()=>{try{const r=await api(URLB()+'/buscar-novos',{}); toast(r.incluidos?`${num(r.incluidos)} anúncio(s) incluído(s), sem marcar`:'Nenhum anúncio novo'); if(r.incluidos){tab='nao';pagina=1} carregar()}catch(e){toast(e.message)}};
+async function conferir(){try{const r=await api(URLB()+'/checar',{}); toast(r.iniciado===false?`Já está conferindo na ${NOME()}…`:`Conferindo na ${NOME()}… a lista atualiza em instantes.`); acompanhar()}catch(e){toast(e.message)}}
 async function salvarConfig(corpo){
-  try{ await api('/api/promocoes-auto/shopee/config',corpo); toast('Salvo.'); carregar() }
+  try{ await api(URLB()+'/config',corpo); toast('Salvo.'); carregar() }
   catch(e){ if(e.status===428) return pedirOwner(()=>salvarConfig(corpo)); toast(e.message) }
 }
 document.querySelectorAll('#shpModos button').forEach(b=>b.onclick=async()=>{
   if(!D||b.dataset.m===D.config.modo_renovacao) return;
-  if(b.dataset.m==='automatico'&&!await confirmar('Renovar sozinho na Shopee',`O sistema vai criar sozinho, na Shopee, a próxima promoção dos anúncios marcados que passarem em todas as regras (até ${D.config.limite_dia} por dia). O que não passar continua esperando você. Em seguida será pedida a confirmação do proprietário.`,'Continuar')) return;
+  if(b.dataset.m==='automatico'&&!await confirmar(`Renovar sozinho na ${NOME()}`,`O sistema vai criar sozinho, na ${NOME()}, a próxima promoção dos anúncios marcados que passarem em todas as regras (até ${D.config.limite_dia} por dia). O que não passar continua esperando você. Em seguida será pedida a confirmação do proprietário.`,'Continuar')) return;
   salvarConfig({modo_renovacao:b.dataset.m})});
 $('shpSalvarLimite').onclick=()=>salvarConfig({limite_dia:$('shpLimite').value});
 function historico(){
-  const A={marcada:['Marcada','c-in'],desmarcada:['Desmarcada','c-sc'],renovada:['Renovada','c-ok'],falhou:['Recusada pela Shopee','c-no'],removida:['Removida da lista','c-no'],incluidos:['Novos da Shopee','c-in'],preco:['Preço alterado','c-in']};
+  const A={marcada:['Marcada','c-in'],desmarcada:['Desmarcada','c-sc'],renovada:['Renovada','c-ok'],falhou:[`Recusada pela ${NOME()}`,'c-no'],removida:['Removida da lista','c-no'],incluidos:[`Novos da ${NOME()}`,'c-in'],preco:['Preço alterado','c-in']};
   $('shpHistCont').textContent=num(D.historico.length);
   $('shpLog').innerHTML=`<thead><tr><th class="l">Quando</th><th class="l">Anúncio</th><th class="l">Ação</th><th>Preço</th><th>Margem</th><th class="l">Até</th><th class="l">Por</th><th class="l">Detalhe</th></tr></thead><tbody>`+
     (D.historico.map(h=>{const a=A[h.acao]||[h.acao,'c-sc'];return `<tr><td class="l">${horaBR(h.quando)}</td><td class="l mlb">${esc(h.item_id)}</td><td class="l"><span class="chip ${a[1]}">${esc(a[0])}</span></td>
       <td>${brl(h.preco)}</td><td>${pct(h.margem)}</td><td class="l">${h.fim?dataBR(h.fim):'—'}</td><td class="l muted">${esc(h.por)}</td>
       <td class="l" style="white-space:normal;max-width:360px;font-size:12px;color:var(--ink2)">${esc(h.motivo)}</td></tr>`}).join('')||'<tr><td colspan="8" class="vazio">Nada ainda.</td></tr>')+'</tbody>';
 }
-setInterval(()=>{if(mp==='shopee'&&!document.hidden&&!sgItem)carregar()},30000);
+setInterval(()=>{if(ehMp()&&!document.hidden&&!sgItem)carregar()},30000);
 trocar(mp);
 })();
 </script>
