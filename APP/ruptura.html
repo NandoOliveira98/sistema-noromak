@@ -269,6 +269,7 @@ function passos(i){
   return P;
 }
 function abrir(i){
+  $('drawer').style.width='';
   const g=G[i.grupo];
   $('drawer').innerHTML=`<button class="x" aria-label="Fechar">×</button>
     <h3>${esc(i.titulo||i.mlb)}${i.full?'<span class="full">FULL</span>':''}</h3>
@@ -322,13 +323,40 @@ function renderRel(){
   const body=L.map(p=>{
     const marcas=(p.parcial?' <span class="muted">(em andamento)</span>':'')+(!p.coleta_completa?' <span class="muted" title="o histórico de estoque começou em '+dataBR(R.primeiro_dia_coleta)+'">· coleta incompleta</span>':'');
     const top=p.top.slice(0,3).map(t=>`<div style="font-size:12px;line-height:1.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:340px" title="${esc(t.titulo)}">${esc(t.titulo||t.mlb)} <b>${brl(t.perdido)}</b></div>`).join('');
-    return `<tr><td class="l">${rotuloRel(p)}${marcas}</td><td>${p.perdido?`<b style="color:var(--neg)">${brl(p.perdido)}</b>`:dash}</td><td>${p.unidades_perdidas?dec(p.unidades_perdidas):dash}</td><td>${p.anuncios?num(p.anuncios):dash}</td><td>${p.dias_anuncio_sem_estoque?dec(p.dias_anuncio_sem_estoque):dash}</td><td class="l">${top||dash}</td></tr>`;
+    return `<tr data-p="${L.indexOf(p)}" style="cursor:${p.anuncios?'pointer':'default'}" title="${p.anuncios?'Ver todos os anúncios que faltaram':''}"><td class="l">${rotuloRel(p)}${marcas}</td><td>${p.perdido?`<b style="color:var(--neg)">${brl(p.perdido)}</b>`:dash}</td><td>${p.unidades_perdidas?dec(p.unidades_perdidas):dash}</td><td>${p.anuncios?num(p.anuncios):dash}</td><td>${p.dias_anuncio_sem_estoque?dec(p.dias_anuncio_sem_estoque):dash}</td><td class="l">${top||dash}</td></tr>`;
   }).join('');
   $('relTab').innerHTML=head+'<tbody>'+body+'</tbody>';
+  document.querySelectorAll('#relTab tbody tr[data-p]').forEach(tr=>tr.onclick=()=>{const p=L[+tr.dataset.p]; if(p&&p.anuncios) abrirPeriodo(p)});
+}
+// V19.61: gaveta com TODOS os anúncios que faltaram no período (clique na linha do quadro).
+function abrirPeriodo(p){
+  const itens=(p.itens||p.top||[]).slice();
+  const linha=t=>`<tr><td class="l" style="max-width:300px">${t.link?`<a href="${esc(t.link)}" target="_blank" rel="noopener">${esc(t.titulo||t.mlb)}</a>`:esc(t.titulo||t.mlb)}<div class="mlb">${esc(t.mlb)}${t.sku?' · SKU '+esc(t.sku):''}</div></td><td>${dec(t.dias_sem_estoque)}</td><td>${dec(t.unidades_perdidas)}</td><td><b style="color:var(--neg)">${brl(t.perdido)}</b></td></tr>`;
+  const d=$('drawer');
+  d.style.width='min(760px,100%)';
+  d.innerHTML=`<button class="x" aria-label="Fechar">×</button>
+    <h3>Faltou estoque — ${rotuloRel(p)}${p.parcial?' <span class="muted" style="font-weight:400">(em andamento)</span>':''}</h3>
+    <div class="mlb">${dataBR(p.inicio)} a ${dataBR(p.fim)}${!p.coleta_completa?' · coleta incompleta (histórico desde '+dataBR(R.primeiro_dia_coleta)+')':''}</div>
+    <dl>
+      <div><dt>Perdido (estimativa)</dt><dd>${brl(p.perdido)}</dd></div>
+      <div><dt>Unidades que deixaram de vender</dt><dd>${dec(p.unidades_perdidas)}</dd></div>
+      <div><dt>Anúncios zerados</dt><dd>${num(p.anuncios)}</dd></div>
+      <div><dt>Dias-anúncio sem estoque</dt><dd>${dec(p.dias_anuncio_sem_estoque)}</dd></div>
+    </dl>
+    <input type="search" id="perQ" placeholder="Buscar título, anúncio ou SKU…" style="width:100%;margin:0 0 8px">
+    <div class="tw"><table class="rp" style="min-width:560px"><thead><tr><th class="l">Anúncio</th><th>Dias sem estoque</th><th>Unidades</th><th>Perdido</th></tr></thead><tbody id="perCorpo"></tbody></table></div>
+    <div class="links" style="margin-top:10px"><button class="btn" id="perXlsx">⬇ Exportar Excel</button></div>`;
+  const pintar=()=>{const q=($('perQ').value||'').trim().toLowerCase();
+    const L=itens.filter(t=>!q||[t.titulo,t.mlb,t.sku].some(x=>String(x||'').toLowerCase().includes(q)));
+    $('perCorpo').innerHTML=L.map(linha).join('')||'<tr><td colspan="4" class="l muted" style="padding:14px">Nada encontrado.</td></tr>'};
+  $('perQ').oninput=pintar; pintar();
+  $('perXlsx').onclick=()=>{location.href='/expedicao/api/ruptura/relatorio.xlsx?marketplace='+mkt()};
+  d.classList.add('on'); d.setAttribute('aria-hidden','false');
+  d.querySelector('.x').onclick=fechar;
 }
 async function carregarRel(){
   R=null; renderRel();
-  try{ R=await api('/api/ruptura/relatorio?marketplace='+mkt()); }
+  try{ R=await api('/api/ruptura/relatorio?completo=1&marketplace='+mkt()); }
   catch(e){ $('relTab').innerHTML='<tbody><tr><td class="l muted" style="padding:14px">Não foi possível carregar o relatório: '+esc(e.message)+'</td></tr></tbody>'; return; }
   renderRel();
 }

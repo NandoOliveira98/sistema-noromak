@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.60-ESTOQUE-NO-FULL"
+APP_VERSION = "19.61-RUPTURA-DETALHE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -20532,8 +20532,11 @@ def ruptura_relatorio_payload(marketplace: str = "ml", hoje: date | None = None,
         encerrados = {str(r["item_id"]) for r in DB.execute(
             f"SELECT e.item_id FROM {f['est']} e JOIN (SELECT item_id, MAX(dia) AS d FROM {f['est']} "
             "GROUP BY item_id) m ON m.item_id = e.item_id AND m.d = e.dia WHERE e.status_ultimo='closed'").fetchall()}
-        titulos = {str(r["item_id"]): str(r["titulo"] or "") for r in DB.execute(
-            f"SELECT item_id, titulo FROM {f['item']}").fetchall()}
+        titulos: dict[str, str] = {}
+        skus: dict[str, str] = {}
+        for r in DB.execute(f"SELECT item_id, titulo, sku FROM {f['item']}").fetchall():
+            titulos[str(r["item_id"])] = str(r["titulo"] or "")
+            skus[str(r["item_id"])] = str(r["sku"] or "")
         primeiro_dia = (DB.execute(f"SELECT MIN(dia) FROM {f['est']}").fetchone() or [None])[0] or ""
     v_por: dict[str, list[tuple[str, int, float]]] = {}
     for r in vendas:
@@ -20561,7 +20564,8 @@ def ruptura_relatorio_payload(marketplace: str = "ml", hoje: date | None = None,
                 continue
             zb = sum(z for d, z in zs if bi <= d <= bf)
             ritmo = un / max(1.0, RUPTURA_BASE_DIAS - zb)
-            itens.append({"mlb": mlb, "titulo": titulos.get(mlb, ""), "dias_sem_estoque": round(zp, 2),
+            itens.append({"mlb": mlb, "titulo": titulos.get(mlb, ""), "sku": skus.get(mlb, ""),
+                          "link": _anuncio_link(marketplace, mlb), "dias_sem_estoque": round(zp, 2),
                           "unidades_perdidas": round(ritmo * zp, 1), "perdido": round(ritmo * zp * fat / un, 2)})
         itens.sort(key=lambda i: -i["perdido"])
         return {"inicio": ai, "fim": bf, "dias": (b - a).days + 1, "parcial": parcial,
@@ -29903,7 +29907,9 @@ class AppHandler(BaseHTTPRequestHandler):
             if self.auth(admin_only=True) is None:
                 return
             try:
-                self.send_json(ruptura_relatorio_payload(str((query.get("marketplace") or ["ml"])[0] or "ml")))
+                # V19.61: completo=1 traz todos os anúncios de cada período (a gaveta da tela).
+                self.send_json(ruptura_relatorio_payload(str((query.get("marketplace") or ["ml"])[0] or "ml"),
+                                                         completo=str((query.get("completo") or [""])[0]) == "1"))
             except ValueError as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 400)
             except Exception as exc:

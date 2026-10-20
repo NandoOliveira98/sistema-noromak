@@ -62,6 +62,15 @@ class RelatorioRuptura(Base):
         self.assertTrue(d["ok"])
 
 
+    def test_v1961_completo_traz_todos_os_anuncios(self):
+        self.preparar()
+        st, d = self.cliente.pedir("GET", "/api/ruptura/relatorio?marketplace=ml&completo=1")
+        self.assertEqual(st, 200)
+        s = next(p for p in d["semanas"] if p["perdido"] > 0)
+        self.assertEqual([i["mlb"] for i in s["itens"]], ["MLB1"])
+        st, d = self.cliente.pedir("GET", "/api/ruptura/relatorio?marketplace=ml")
+        self.assertNotIn("itens", d["semanas"][0])
+
     def test_excel(self):
         import io, zipfile
         self.preparar()
