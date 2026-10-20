@@ -25,8 +25,8 @@ class Calculo(TesteNoromak):
     def anuncio(self, mlb, sku, no_full, venda, dia=HOJE):
         d = (dia - timedelta(days=1)).isoformat()
         with S.DB_LOCK:
-            S.DB.execute("INSERT INTO ml_estoque_dia_v1872(item_id,dia,checagens,estoque_ultimo,logistica,updated_at) "
-                         "VALUES(?,?,1,?,'fulfillment','')", (mlb, d, no_full))
+            S.DB.execute("INSERT INTO ml_estoque_dia_v1872(item_id,dia,checagens,estoque_ultimo,estoque_full_ultimo,logistica,updated_at) "
+                         "VALUES(?,?,1,?,?,'fulfillment','')", (mlb, d, no_full, no_full))
             S.DB.execute("INSERT OR REPLACE INTO ml_visitas_item_v1868(item_id,sku,titulo) VALUES(?,?,?)", (mlb, sku, "T " + mlb))
             if venda:
                 S.DB.execute("INSERT INTO vendas_v1799(marketplace,order_id,line_key,sale_at,sale_day,sku,anuncio,title,qty,amount,status,updated_at) "
@@ -185,8 +185,8 @@ class Rodada(Calculo):
         S.full_remessa_rodada(HOJE, estoque={"A": 1000})
         self.assertEqual(self._situacao(r["remessa_id"]), "agendada")
         with S.DB_LOCK:
-            S.DB.execute("INSERT INTO ml_estoque_dia_v1872(item_id,dia,checagens,estoque_ultimo,logistica,updated_at) "
-                         "VALUES('MLB1',?,1,80,'fulfillment','')", (HOJE.isoformat(),))
+            S.DB.execute("INSERT INTO ml_estoque_dia_v1872(item_id,dia,checagens,estoque_ultimo,estoque_full_ultimo,logistica,updated_at) "
+                         "VALUES('MLB1',?,1,80,80,'fulfillment','')", (HOJE.isoformat(),))
             S.DB.commit()
         S.full_remessa_rodada(HOJE, estoque={"A": 1000})
         self.assertEqual(self._situacao(r["remessa_id"]), "recebida")

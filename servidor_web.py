@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.59-RUPTURA-RELATORIO"
+APP_VERSION = "19.60-ESTOQUE-NO-FULL"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -1650,6 +1650,16 @@ def ensure_ml_billing_credito_schema() -> None:
         DB.commit()
 
 
+def ensure_estoque_full_schema() -> None:
+    """V19.60: estoque no ARMAZÉM do Full por anúncio (Demanda Full). O available_quantity do
+    anúncio soma o depósito do vendedor: MLB6143159674 tinha 23 no anúncio e 0 no Full."""
+    with DB_LOCK:
+        cols = {str(r["name"]) for r in DB.execute("PRAGMA table_info(ml_estoque_dia_v1872)").fetchall()}
+        if cols and "estoque_full_ultimo" not in cols:
+            DB.execute("ALTER TABLE ml_estoque_dia_v1872 ADD COLUMN estoque_full_ultimo INTEGER")
+            DB.commit()
+
+
 def ensure_promo_renovacao_schema() -> None:
     """V18.74: preço do anúncio lido NA CONFERÊNCIA (a tela mostrava o retrato da manhã).
     V18.81: título e SKU lidos na conferência — anúncio criado depois do retrato diário
@@ -2557,6 +2567,7 @@ def init_db() -> None:
     ensure_app_user_permissions_schema()
     ensure_shopee_escrow_schema()
     ensure_promo_renovacao_schema()
+    ensure_estoque_full_schema()  # V19.60
     ensure_shopee_promo_schema()  # V19.49
     ensure_magalu_promo_schema()  # V19.55
     ensure_ml_billing_credito_schema()
@@ -10475,7 +10486,7 @@ def full_remessa_candidatos(hoje: date | None = None) -> dict[str, Any]:
     nao_aceito = full_nao_aceito_lista()
     with DB_LOCK:
         full_rows = DB.execute(
-            "SELECT e.item_id, e.estoque_ultimo, e.logistica FROM ml_estoque_dia_v1872 e "
+            "SELECT e.item_id, e.estoque_full_ultimo, e.logistica FROM ml_estoque_dia_v1872 e "
             "JOIN (SELECT item_id, MAX(dia) AS dia FROM ml_estoque_dia_v1872 WHERE dia >= ? GROUP BY item_id) m "
             "ON m.item_id=e.item_id AND m.dia=e.dia ORDER BY e.item_id", (desde_full,)
         ).fetchall()
@@ -10536,7 +10547,8 @@ def full_remessa_candidatos(hoje: date | None = None) -> dict[str, Any]:
         codigos.update(c["codigo"] for c in comps)
         anuncios.append({**base, "codigo": codigo, "componentes": comps,
                          "venda_30d": venda_anuncio.get(mlb, 0),
-                         "no_full": None if r["estoque_ultimo"] is None else int(r["estoque_ultimo"]),
+                         # V19.60: o armazém do Full, não o available_quantity (soma o depósito).
+                         "no_full": None if r["estoque_full_ultimo"] is None else int(r["estoque_full_ultimo"]),
                          "a_caminho": a_caminho.get(mlb, 0)})
     # V19.03: novos = código vendido no ML (kit e "A/B" fora) sem anúncio Full.
     por_codigo: dict[str, dict[str, Any]] = {}
@@ -10789,8 +10801,8 @@ def _full_remessa_conferir_recebidas(hoje: date) -> None:
         return
     limite = (hoje - timedelta(days=10)).isoformat()
     desde = (hoje - timedelta(days=7)).isoformat()
-    atual = {r["item_id"]: r["estoque_ultimo"] for r in DB.execute(
-        "SELECT e.item_id, e.estoque_ultimo FROM ml_estoque_dia_v1872 e "
+    atual = {r["item_id"]: r["estoque_full_ultimo"] for r in DB.execute(
+        "SELECT e.item_id, e.estoque_full_ultimo FROM ml_estoque_dia_v1872 e "
         "JOIN (SELECT item_id, MAX(dia) AS dia FROM ml_estoque_dia_v1872 WHERE dia >= ? GROUP BY item_id) m "
         "ON m.item_id=e.item_id AND m.dia=e.dia", (desde,)).fetchall()}
     for cab in agendadas:
@@ -19884,6 +19896,7 @@ def _ml_visitas_detalhes(anuncios: list[str], hoje_iso: str, stop_event: threadi
                          str(d.get("status") or ""), int(estoque) if isinstance(estoque, (int, float)) else None,
                          str(d.get("categoria") or ""), hoje_iso))
                 DB.commit()
+            ml_estoque_full_completar(info)         # V19.60: estoque no armazém do Full
             _ml_estoque_registrar(info, hoje_iso)   # V18.72: histórico de estoque (Ruptura)
             gravados += len(info)
         if pausa > 0:
@@ -20216,6 +20229,35 @@ RUPTURA_LOCK = threading.Lock()
 _RUPTURA_ESTADO: dict[str, Any] = {"rodando": False, "inicio": "", "fim": "", "ultimo": {}}
 
 
+def ml_estoque_full_completar(info: dict[str, dict[str, Any]]) -> int:
+    """V19.60: para anúncio Full, `estoque_full` = unidades no armazém do ML
+    (/user-products/{id}/stock, locais meli_facility). O available_quantity do anúncio
+    soma também o depósito do vendedor e não serve para a Demanda Full. Sem resposta do
+    ML (ou sem user_product) fica None: desconhecido, nunca zero."""
+    feitos = 0
+    for d in (info or {}).values():
+        if not isinstance(d, dict) or str(d.get("logistica") or "") != "fulfillment":
+            continue
+        d["estoque_full"] = None
+        up = str(d.get("user_product") or "").strip()
+        if not up:
+            continue
+        try:
+            corpo = ml_api_get(f"/user-products/{re.sub(r'[^A-Za-z0-9_-]', '', up)}/stock")
+        except Exception:
+            continue
+        locais = [l for l in ((corpo or {}).get("locations") or []) if isinstance(l, dict)
+                  and str(l.get("type") or "") == "meli_facility"] if isinstance(corpo, dict) else []
+        qtds = [l.get("quantity") for l in locais]
+        if locais and all(isinstance(q, (int, float)) and not isinstance(q, bool) for q in qtds):
+            d["estoque_full"] = int(sum(qtds))
+        elif isinstance(corpo, dict) and isinstance(corpo.get("locations"), list) and not locais:
+            d["estoque_full"] = 0   # resposta válida sem local no Full = nada no armazém
+        if d["estoque_full"] is not None:
+            feitos += 1
+    return feitos
+
+
 def _ml_estoque_registrar(info: dict[str, dict[str, Any]], dia: str, quando: str | None = None,
                           tabela: str = "ml_estoque_dia_v1872") -> int:
     """Soma uma checagem de estoque por anúncio no dia (ml_estoque_dia_v1872).
@@ -20229,6 +20271,7 @@ def _ml_estoque_registrar(info: dict[str, dict[str, Any]], dia: str, quando: str
         raise ValueError("tabela de estoque inválida")
     quando = quando or now_iso()
     linhas = []
+    full: list[tuple[Any, str, str]] = []
     for mlb, d in (info or {}).items():
         if not mlb or not isinstance(d, dict):
             continue
@@ -20242,6 +20285,8 @@ def _ml_estoque_registrar(info: dict[str, dict[str, Any]], dia: str, quando: str
             est_int = 0
         linhas.append((str(mlb), dia, 1 if sem else 0, est_int, est_int, 1 if sem else 0,
                        str(d.get("status") or ""), str(d.get("logistica") or ""), quando))
+        ef = d.get("estoque_full")
+        full.append((int(ef) if isinstance(ef, (int, float)) and not isinstance(ef, bool) else None, str(mlb), dia))
     if not linhas:
         return 0
     with DB_LOCK:
@@ -20255,6 +20300,10 @@ def _ml_estoque_registrar(info: dict[str, dict[str, Any]], dia: str, quando: str
             "status_ultimo=excluded.status_ultimo,"
             "logistica=CASE WHEN excluded.logistica<>'' THEN excluded.logistica ELSE logistica END,"
             "updated_at=excluded.updated_at", linhas)
+        if tabela == "ml_estoque_dia_v1872":
+            # V19.60: estoque no armazém do Full; leitura sem número não apaga a do dia.
+            DB.executemany("UPDATE ml_estoque_dia_v1872 SET estoque_full_ultimo=COALESCE(?, estoque_full_ultimo) "
+                           "WHERE item_id=? AND dia=?", full)
         DB.commit()
     return len(linhas)
 
@@ -20286,6 +20335,7 @@ def ml_estoque_rodada(stop_event: threading.Event | None = None, *, hoje: date |
             if stop_event is not None and stop_event.is_set():
                 break
             info = ml_itens_detalhe(anuncios[i:i + 20])
+            ml_estoque_full_completar(info)   # V19.60
             checados += _ml_estoque_registrar(info, hoje.isoformat())
             if pausa > 0:
                 if stop_event is not None:
@@ -23800,7 +23850,7 @@ def ml_itens_detalhe(mlbs: list[str]) -> dict[str, dict[str, Any]]:
     # V18.72: shipping traz o logistic_type (Full ou não) para a Ruptura.
     # V18.77: listing_type_id para a comissão do anúncio (ml_tarifa_frete_anuncio)
     campos = ("id,title,price,status,sub_status,available_quantity,seller_custom_field,attributes,category_id,"
-              "shipping,listing_type_id")
+              "shipping,listing_type_id,user_product_id")   # V19.60: estoque do Full
     for i in range(0, len(mlbs), 20):   # a API aceita 20 ids por chamada
         lote = [x for x in mlbs[i:i + 20] if x]
         if not lote:
@@ -23831,6 +23881,7 @@ def ml_itens_detalhe(mlbs: list[str]) -> dict[str, dict[str, Any]]:
                         "estoque": corpo.get("available_quantity"),
                         "categoria": str(corpo.get("category_id") or ""),  # V18.68: Conversão
                         "tipo": str(corpo.get("listing_type_id") or ""),       # V18.77: comissão
+                        "user_product": str(corpo.get("user_product_id") or ""),  # V19.60
                         "logistica": str((corpo.get("shipping") if isinstance(corpo.get("shipping"), dict)
                                           else {}).get("logistic_type") or "")}  # V18.72: Ruptura
     return out

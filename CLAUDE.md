@@ -534,6 +534,12 @@ fora deste repo como as outras). Teste: `TESTES/test_remessa_full_v1903.py`.
 - "A caminho" vence: agendada há mais de **10 dias** da data agendada vira `recebida` ("recebida por prazo").
 - Anúncio Full com SKU "A/B" = um de cada (conta 1); parte sem código Apollo = fora "SKU sem código Apollo".
 - Novo sem estoque no Apollo (0) vai para fora "sem estoque no Apollo" (sem resposta: "Apollo não respondeu"), não para os novos.
+**V19.60 — "No Full" = armazém do ML.** O `available_quantity` do anúncio soma o depósito do vendedor: MLB6143159674
+(20/10) tinha 23 no anúncio e **0 no Full**, e a remessa sugeria 2. Agora `ml_estoque_full_completar` lê
+`/user-products/{user_product_id}/stock` (locais `meli_facility`) para os anúncios Full nas duas checagens (2 h e retrato
+diário) e grava em `ml_estoque_dia_v1872.estoque_full_ultimo` (leitura sem número não apaga a do dia). Candidatos e a
+"recebida automática" usam essa coluna; sem número = em branco, nunca zero. A Ruptura continua com o `available_quantity`
+(o anúncio ainda vende do depósito). Teste: `TESTES/test_estoque_full_v1960.py`.
 
 ### Painel de saúde e alertas (V18.83)
 `APP/saude.html` (`/saude`, menu Sistema; ver = módulo admin, mudar quem recebe = só perfil Admin).
