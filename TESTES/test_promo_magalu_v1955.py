@@ -5,12 +5,15 @@ A Magalu é simulada: nada chama a API de verdade.
 """
 
 import json
+import time
 from datetime import datetime, timezone
 from unittest import mock
 
 from base import S, TesteNoromak
 
-AGORA = int(datetime(2026, 10, 19, 15, 0, tzinfo=timezone.utc).timestamp())
+# V19.65: acompanha o relógio — `magalu_promocoes_da_loja` decide "em andamento" pelo
+# time.time() real; com a data fixa (19/10) a promoção do teste "acabou" em 20/10 e 6 testes caíram.
+AGORA = int(time.time()) // 3600 * 3600
 DIA = 86400
 # custo 20, imposto 12%; Magalu do Precificador: comissão 15%, taxa fixa R$ 5, frete 0
 PROD = {"sku": "JFO0211", "produto": "Filtro", "curva": "A", "custo": 20.0, "imposto": 0.12,
