@@ -350,6 +350,24 @@ cada execução — rode de novo ao mexer em cor de uma tela); o ajuste à mão 
 
 ## 6. Integrações
 
+### TikTok Shop · Bauru (V19.63, fase 0)
+Pedido do dono (20/10): conta do TikTok Shop em **Bauru** com **controle de estoque** pelo Apollo de Bauru. A Open API
+atende o Brasil (Bling/Olist já integram; o spec traz pt-BR e etiqueta ZPL/INVOICE_LABEL só BR). Fases: 0 conexão;
+1 estoque Apollo de Bauru → TikTok (`POST /product/202309/products/{id}/inventory/update`, por SKU e **por depósito**;
+Simulação → Lote → Automático; `disponivel: null` nunca vira zero; **quebra a regra "Noromak nunca grava estoque" só
+para o TikTok — ainda a confirmar com o dono**); 2 pedidos na fila de Bauru; 3 etiqueta; 4 vendas/Financeiro.
+**Fase 0:** `tiktok_connect_url` → `services.tiktokshop.com/open/authorize?service_id=&state=`; `tiktok_exchange_code`
+→ `GET auth.tiktok-shops.com/api/v2/token/get` (`grant_type=authorized_code`; `*_expire_in` = data epoch);
+`tiktok_access_token` renova (`/api/v2/token/refresh`) sob `TIKTOK_TOKEN_LOCK`, relendo a linha. Chamadas em
+`open-api.tiktokglobalshop.com` (`tiktok_api`): `app_key` + `timestamp` + `sign` na URL, token em `x-tts-access-token`,
+`shop_cipher` (de `/authorization/202309/shops`, gravado na conexão) nas rotas da loja. `tiktok_assinar`: caminho +
+parâmetros em ordem (sem `sign`/`access_token`) + corpo, embrulhado no secret, HMAC-SHA256. Tabelas
+`tiktok_integration` (id=1, `casa`='bauru'), `tiktok_oauth_state`, `tiktok_event_log` (30 dias), `tiktok_amostra_v1963`
+(**feita pela documentação, sem resposta real — conferir a 1ª resposta ao conectar**). Rotas
+`/api/integracoes/tiktok/{callback,status,connect,teste,amostra,logs,disconnect}`; cartão "TikTok Shop · Bauru" em
+Integrações (Testar leitura = loja + depósitos). `.env`: `TIKTOK_APP_KEY/SECRET/SERVICE_ID`; o callback precisa estar
+cadastrado como Redirect URL no app. Teste: `TESTES/test_tiktok_v1963.py`.
+
 ### Magalu (V19.24, fase 0 de 5)
 Plano decidido com o dono em 14/10 (integração completa "igual ao ML", por fases): 0 conexão; 1 pedidos na
 fila de Araçatuba (chave = número do pedido Magalu, nunca SKU; kit pela regra da Shopee V18.71; a extensão

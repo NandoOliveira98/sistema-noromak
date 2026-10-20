@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.62-CUSTO-LIMITE"
+APP_VERSION = "19.63-TIKTOK-CONEXAO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -122,6 +122,20 @@ MAGALU_TOKEN_URL = "https://id.magalu.com/oauth/token"
 MAGALU_API_BASE = os.getenv("MAGALU_API_BASE", "https://api.magalu.com").strip().rstrip("/")
 # Escopos extras pedidos no consentimento (somam aos --scopes-default do client).
 MAGALU_OAUTH_SCOPE = os.getenv("MAGALU_OAUTH_SCOPE", "open:order-order-seller:read").strip()
+
+# V19.63: TikTok Shop (loja de Bauru), fase 0 — só a conexão. App criado no TikTok Shop
+# Partner Center; App Key/Secret e o Service ID (link de autorização) ficam só no .env.
+TIKTOK_APP_KEY = os.getenv("TIKTOK_APP_KEY", "").strip()
+TIKTOK_APP_SECRET = os.getenv("TIKTOK_APP_SECRET", "").strip()
+TIKTOK_SERVICE_ID = os.getenv("TIKTOK_SERVICE_ID", "").strip()
+TIKTOK_AUTH_URL = os.getenv("TIKTOK_AUTH_URL", "https://services.tiktokshop.com/open/authorize").strip()
+TIKTOK_TOKEN_BASE = os.getenv("TIKTOK_TOKEN_BASE", "https://auth.tiktok-shops.com").strip().rstrip("/")
+TIKTOK_API_BASE = os.getenv("TIKTOK_API_BASE", "https://open-api.tiktokglobalshop.com").strip().rstrip("/")
+TIKTOK_REDIRECT_URI = os.getenv(
+    "TIKTOK_REDIRECT_URI",
+    "https://noromakweb.com.br/expedicao/api/integracoes/tiktok/callback",
+).strip()
+TIKTOK_CASA = "bauru"  # decisão do dono (20/10): a conta do TikTok é de Bauru
 
 # Mercado Livre API / OAuth. O Client Secret fica somente no .env do servidor.
 ML_CLIENT_ID = os.getenv("ML_CLIENT_ID", "").strip()
@@ -1806,7 +1820,7 @@ CONSULTA_POST_LIVRES = {
 # GET que muda alguma coisa (conectar integração) ou mostra a área de Segurança.
 CONSULTA_GET_BLOQUEADOS = {
     "/api/integracoes/mercadolivre/connect", "/api/integracoes/shopee/connect",
-    "/api/integracoes/magalu/connect", "/api/security/status",
+    "/api/integracoes/magalu/connect", "/api/integracoes/tiktok/connect", "/api/security/status",
 }
 CONSULTA_STORAGE_OCULTO = {"conf_usuarios", "conf_solicitacoes_usuarios"}
 SOMENTE_LEITURA_ERRO = {"ok": False, "code": "SOMENTE_LEITURA",
@@ -2081,6 +2095,48 @@ def init_db() -> None:
                 tipo TEXT PRIMARY KEY,
                 resposta TEXT NOT NULL DEFAULT '',
                 tem_dado INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT ''
+            );
+            """
+        )
+        # V19.63: TikTok Shop — uma conta só (Bauru). Tokens e shop_cipher só no banco do servidor.
+        DB.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS tiktok_integration (
+                id INTEGER PRIMARY KEY CHECK (id=1),
+                casa TEXT NOT NULL DEFAULT 'bauru',
+                access_token TEXT NOT NULL DEFAULT '',
+                refresh_token TEXT NOT NULL DEFAULT '',
+                access_expires_at INTEGER NOT NULL DEFAULT 0,
+                refresh_expires_at INTEGER NOT NULL DEFAULT 0,
+                open_id TEXT NOT NULL DEFAULT '',
+                seller_name TEXT NOT NULL DEFAULT '',
+                scopes TEXT NOT NULL DEFAULT '',
+                shop_id TEXT NOT NULL DEFAULT '',
+                shop_name TEXT NOT NULL DEFAULT '',
+                shop_region TEXT NOT NULL DEFAULT '',
+                shop_cipher TEXT NOT NULL DEFAULT '',
+                connected_at TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL DEFAULT '',
+                last_error TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS tiktok_oauth_state (
+                state TEXT PRIMARY KEY,
+                expires_at_epoch INTEGER NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS tiktok_event_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                topic TEXT NOT NULL DEFAULT '',
+                resource TEXT NOT NULL DEFAULT '',
+                result TEXT NOT NULL DEFAULT '',
+                detail TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_tiktok_event_log_created ON tiktok_event_log(created_at);
+            -- 1ª resposta real de cada chamada (a fase 0 foi feita pela documentação).
+            CREATE TABLE IF NOT EXISTS tiktok_amostra_v1963 (
+                tipo TEXT PRIMARY KEY,
+                resposta TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL DEFAULT ''
             );
             """
@@ -6100,6 +6156,281 @@ def magalu_access_token(force: bool = False) -> str:
             raise
         magalu_log_event("oauth_refresh", "", "OK", "Access token renovado.")
         return str(magalu_integration_row()["access_token"]).strip()
+
+
+# ---------------------------------------------------------------------------
+# V19.63 — TikTok Shop (loja de Bauru), fase 0: só a conexão. Nada aqui mexe em
+# estoque nem na fila. Feito pela documentação do Partner Center, sem resposta real:
+# a 1ª resposta de cada chamada fica em tiktok_amostra_v1963 — conferir ao conectar.
+# Autorização: services.tiktokshop.com/open/authorize?service_id=...&state=...
+# Token: GET auth.tiktok-shops.com/api/v2/token/get (grant_type=authorized_code) e
+# /api/v2/token/refresh. Os *_expire_in da resposta são data (epoch), não duração.
+# Chamadas: open-api.tiktokglobalshop.com, app_key + timestamp + sign na URL,
+# token no cabeçalho x-tts-access-token, shop_cipher nas rotas da loja.
+# ---------------------------------------------------------------------------
+TIKTOK_TOKEN_LOCK = threading.Lock()
+
+
+def tiktok_credentials_configured() -> bool:
+    return bool(TIKTOK_APP_KEY and TIKTOK_APP_SECRET and TIKTOK_SERVICE_ID)
+
+
+def tiktok_integration_row() -> sqlite3.Row | None:
+    with DB_LOCK:
+        return DB.execute("SELECT * FROM tiktok_integration WHERE id=1").fetchone()
+
+
+def tiktok_log_event(topic: str, resource: str, result: str, detail: str = "") -> None:
+    with DB_LOCK:
+        DB.execute(
+            "INSERT INTO tiktok_event_log(created_at,topic,resource,result,detail) VALUES(?,?,?,?,?)",
+            (now_iso(), str(topic or "")[:120], str(resource or "")[:500],
+             str(result or "")[:80], str(detail or "")[:2000]),
+        )
+        DB.commit()
+
+
+def _tiktok_guardar_amostra(tipo: str, resposta: Any) -> None:
+    with DB_LOCK:
+        if DB.execute("SELECT 1 FROM tiktok_amostra_v1963 WHERE tipo=?", (tipo,)).fetchone():
+            return
+        DB.execute("INSERT INTO tiktok_amostra_v1963(tipo,resposta,created_at) VALUES(?,?,?)",
+                   (tipo, json_dumps(resposta)[:500000], now_iso()))
+        DB.commit()
+
+
+def tiktok_status_payload() -> dict[str, Any]:
+    row = tiktok_integration_row()
+    connected = bool(row and str(row["access_token"] or "").strip() and str(row["refresh_token"] or "").strip())
+    return {
+        "configured": tiktok_credentials_configured(),
+        "connected": connected,
+        "app_key": TIKTOK_APP_KEY,
+        "casa": TIKTOK_CASA,
+        "seller_name": str(row["seller_name"] or "") if row else "",
+        "shop_name": str(row["shop_name"] or "") if row else "",
+        "shop_region": str(row["shop_region"] or "") if row else "",
+        "tem_loja": bool(row and str(row["shop_cipher"] or "").strip()),
+        "connected_at": str(row["connected_at"] or "") if row else "",
+        "access_expires_at": int(row["access_expires_at"] or 0) if row else 0,
+        "refresh_expires_at": int(row["refresh_expires_at"] or 0) if row else 0,
+        "last_error": str(row["last_error"] or "") if row else "",
+        "redirect_uri": TIKTOK_REDIRECT_URI,
+        "credentials_server_side": True,
+    }
+
+
+def tiktok_connect_url() -> str:
+    if not tiktok_credentials_configured():
+        raise RuntimeError("Configure TIKTOK_APP_KEY, TIKTOK_APP_SECRET e TIKTOK_SERVICE_ID no /home/expedicao/.env antes de conectar.")
+    state = secrets.token_urlsafe(32)
+    now_epoch = int(time.time())
+    with DB_LOCK:
+        DB.execute("DELETE FROM tiktok_oauth_state WHERE expires_at_epoch<?", (now_epoch,))
+        DB.execute("INSERT INTO tiktok_oauth_state(state,expires_at_epoch) VALUES(?,?)", (state, now_epoch + 15 * 60))
+        DB.commit()
+    return f"{TIKTOK_AUTH_URL}?{urlencode({'service_id': TIKTOK_SERVICE_ID, 'state': state})}"
+
+
+def tiktok_assinar(path: str, params: dict[str, Any], corpo: str = "") -> str:
+    """Assinatura da documentação: caminho + chaves em ordem alfabética (sem sign e
+    access_token) coladas com o valor + corpo, embrulhado no secret; HMAC-SHA256."""
+    base = path + "".join(f"{k}{params[k]}" for k in sorted(params) if k not in ("sign", "access_token"))
+    base = TIKTOK_APP_SECRET + base + (corpo or "") + TIKTOK_APP_SECRET
+    return hmac.new(TIKTOK_APP_SECRET.encode("utf-8"), base.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def _tiktok_token_http(caminho: str, params: dict[str, str]) -> dict[str, Any]:
+    """Só a chamada de rede ao servidor de token. Isolada para poder ser testada."""
+    url = TIKTOK_TOKEN_BASE + caminho + "?" + urlencode(params)
+    req = urllib.request.Request(url, method="GET", headers={"Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            data = json.loads(resp.read().decode("utf-8", "replace") or "{}")
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"TikTok token HTTP {exc.code}: {exc.read().decode('utf-8', 'replace')[:500]}")
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Falha de rede no TikTok: {exc.reason}")
+    if not isinstance(data, dict):
+        raise RuntimeError("Resposta inválida do TikTok.")
+    return data
+
+
+def _tiktok_expira(valor: Any, padrao: int) -> int:
+    try:
+        n = int(valor or 0)
+    except (TypeError, ValueError):
+        n = 0
+    if n <= 0:
+        return int(time.time()) + padrao
+    return n if n > 1_000_000_000 else int(time.time()) + n  # data (doc) ou duração (tolerante)
+
+
+def _tiktok_gravar_token(resp: dict[str, Any], conectando: bool) -> None:
+    if int(resp.get("code") or 0) != 0:
+        raise RuntimeError(f"TikTok recusou: {resp.get('code')} {resp.get('message') or ''}".strip())
+    data = resp.get("data") if isinstance(resp.get("data"), dict) else {}
+    access = str(data.get("access_token") or "").strip()
+    refresh = str(data.get("refresh_token") or "").strip()
+    if not access or not refresh:
+        raise RuntimeError("O TikTok não devolveu access_token/refresh_token.")
+    agora = now_iso()
+    scopes = data.get("granted_scopes")
+    with DB_LOCK:
+        DB.execute(
+            """INSERT INTO tiktok_integration(id,casa,access_token,refresh_token,access_expires_at,refresh_expires_at,
+                   open_id,seller_name,scopes,connected_at,updated_at,last_error)
+               VALUES(1,?,?,?,?,?,?,?,?,?,?,'')
+               ON CONFLICT(id) DO UPDATE SET
+                 access_token=excluded.access_token, refresh_token=excluded.refresh_token,
+                 access_expires_at=excluded.access_expires_at, refresh_expires_at=excluded.refresh_expires_at,
+                 open_id=CASE WHEN excluded.open_id='' THEN tiktok_integration.open_id ELSE excluded.open_id END,
+                 seller_name=CASE WHEN excluded.seller_name='' THEN tiktok_integration.seller_name ELSE excluded.seller_name END,
+                 scopes=CASE WHEN excluded.scopes='' THEN tiktok_integration.scopes ELSE excluded.scopes END,
+                 connected_at=CASE WHEN ? THEN excluded.connected_at ELSE tiktok_integration.connected_at END,
+                 updated_at=excluded.updated_at, last_error=''""",
+            (TIKTOK_CASA, access, refresh, _tiktok_expira(data.get("access_token_expire_in"), 7 * 86400),
+             _tiktok_expira(data.get("refresh_token_expire_in"), 30 * 86400),
+             str(data.get("open_id") or ""), str(data.get("seller_name") or ""),
+             ",".join(str(x) for x in scopes) if isinstance(scopes, list) else "",
+             agora, agora, 1 if conectando else 0),
+        )
+        DB.commit()
+
+
+def tiktok_exchange_code(code: str, state: str) -> dict[str, Any]:
+    now_epoch = int(time.time())
+    with DB_LOCK:
+        row = DB.execute("SELECT * FROM tiktok_oauth_state WHERE state=?", (state,)).fetchone()
+        DB.execute("DELETE FROM tiktok_oauth_state WHERE state=? OR expires_at_epoch<?", (state, now_epoch))
+        DB.commit()
+    if not row or int(row["expires_at_epoch"] or 0) < now_epoch:
+        raise RuntimeError("Estado OAuth inválido ou expirado. Inicie a conexão novamente.")
+    resp = _tiktok_token_http("/api/v2/token/get", {
+        "app_key": TIKTOK_APP_KEY, "app_secret": TIKTOK_APP_SECRET,
+        "auth_code": str(code or "").strip(), "grant_type": "authorized_code",
+    })
+    dados = resp.get("data") if isinstance(resp.get("data"), dict) else {}
+    # Amostra sem os tokens: só o formato da resposta.
+    _tiktok_guardar_amostra("token_get", {"code": resp.get("code"), "message": resp.get("message"),
+                                          "data_campos": sorted(dados.keys())})
+    _tiktok_gravar_token(resp, conectando=True)
+    tiktok_log_event("oauth", "/callback", "CONECTADO", str(dados.get("seller_name") or ""))
+    try:
+        tiktok_buscar_loja()
+    except Exception as exc:  # o token fica; a loja é buscada de novo no próximo uso
+        tiktok_log_event("lojas", "/authorization/202309/shops", "ERRO", str(exc))
+    return tiktok_status_payload()
+
+
+def _tiktok_token_valido(row: sqlite3.Row | None, margem: int = 300) -> bool:
+    return bool(row and str(row["access_token"] or "").strip()
+                and int(row["access_expires_at"] or 0) > int(time.time()) + margem)
+
+
+def tiktok_access_token(force: bool = False) -> str:
+    """Access token válido; renova sob a trava, relendo a linha (regra da V18.56)."""
+    row = tiktok_integration_row()
+    if not row or not str(row["refresh_token"] or "").strip():
+        raise RuntimeError("TikTok não conectado. Conecte a conta em Integrações.")
+    token_antes = str(row["access_token"] or "").strip()
+    if not force and _tiktok_token_valido(row):
+        return token_antes
+    with TIKTOK_TOKEN_LOCK:
+        row = tiktok_integration_row()
+        if not row or not str(row["refresh_token"] or "").strip():
+            raise RuntimeError("TikTok não conectado. Conecte a conta em Integrações.")
+        if str(row["access_token"] or "").strip() != token_antes and _tiktok_token_valido(row, margem=60):
+            return str(row["access_token"]).strip()
+        if not force and _tiktok_token_valido(row):
+            return str(row["access_token"]).strip()
+        try:
+            resp = _tiktok_token_http("/api/v2/token/refresh", {
+                "app_key": TIKTOK_APP_KEY, "app_secret": TIKTOK_APP_SECRET,
+                "refresh_token": str(row["refresh_token"]).strip(), "grant_type": "refresh_token",
+            })
+            _tiktok_gravar_token(resp, conectando=False)
+        except Exception as exc:
+            with DB_LOCK:
+                DB.execute("UPDATE tiktok_integration SET last_error=?, updated_at=? WHERE id=1",
+                           (str(exc)[:500], now_iso()))
+                DB.commit()
+            tiktok_log_event("oauth_refresh", "", "ERRO", str(exc))
+            raise
+        tiktok_log_event("oauth_refresh", "", "OK", "Access token renovado.")
+        return str(tiktok_integration_row()["access_token"]).strip()
+
+
+def _tiktok_http(metodo: str, url: str, token: str, corpo: str = "") -> Any:
+    """Só a chamada de rede. Isolada para poder ser testada."""
+    req = urllib.request.Request(url, method=metodo, data=corpo.encode("utf-8") if corpo else None, headers={
+        "x-tts-access-token": token, "Content-Type": "application/json", "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=25) as resp:
+            return json.loads(resp.read().decode("utf-8", "replace") or "{}")
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"TikTok HTTP {exc.code}: {exc.read().decode('utf-8', 'replace')[:500]}")
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Falha de rede no TikTok: {exc.reason}")
+
+
+def tiktok_api(metodo: str, path: str, params: dict[str, Any] | None = None,
+               body: Any = None, loja: bool = True) -> dict[str, Any]:
+    """Chamada assinada. `loja=True` põe o shop_cipher (rotas da loja)."""
+    token = tiktok_access_token()
+    query = {k: str(v) for k, v in (params or {}).items() if v is not None and v != ""}
+    query["app_key"] = TIKTOK_APP_KEY
+    query["timestamp"] = str(int(time.time()))
+    if loja:
+        row = tiktok_integration_row()
+        cipher = str(row["shop_cipher"] or "").strip() if row else ""
+        if not cipher:
+            cipher = tiktok_buscar_loja()
+        query["shop_cipher"] = cipher
+    corpo = json.dumps(body, ensure_ascii=False, separators=(",", ":")) if body is not None else ""
+    query["sign"] = tiktok_assinar(path, query, corpo)
+    resp = _tiktok_http(metodo, TIKTOK_API_BASE + path + "?" + urlencode(query), token, corpo)
+    if not isinstance(resp, dict):
+        raise RuntimeError("Resposta inválida do TikTok.")
+    _tiktok_guardar_amostra(f"{metodo} {path}", resp)
+    if int(resp.get("code") or 0) != 0:
+        raise RuntimeError(f"TikTok {path}: {resp.get('code')} {resp.get('message') or ''}".strip())
+    return resp
+
+
+def tiktok_buscar_loja() -> str:
+    """Loja autorizada (uma só: Bauru) e o shop_cipher que as rotas da loja exigem."""
+    resp = tiktok_api("GET", "/authorization/202309/shops", loja=False)
+    lojas = ((resp.get("data") or {}).get("shops") or []) if isinstance(resp.get("data"), dict) else []
+    if not lojas:
+        raise RuntimeError("Nenhuma loja do TikTok Shop autorizada para o app.")
+    loja = lojas[0]
+    with DB_LOCK:
+        DB.execute("UPDATE tiktok_integration SET shop_id=?, shop_name=?, shop_region=?, shop_cipher=?, updated_at=? WHERE id=1",
+                   (str(loja.get("id") or ""), str(loja.get("name") or ""), str(loja.get("region") or ""),
+                    str(loja.get("cipher") or ""), now_iso()))
+        DB.commit()
+    if len(lojas) > 1:
+        tiktok_log_event("lojas", "/authorization/202309/shops", "ATENCAO", f"{len(lojas)} lojas autorizadas; usando {loja.get('name')}")
+    return str(loja.get("cipher") or "")
+
+
+def tiktok_teste_leitura() -> dict[str, Any]:
+    """Só lê: loja e depósitos (o estoque da fase 1 é por depósito)."""
+    etapas = []
+    for nome, caminho, loja in (("Loja autorizada", "/authorization/202309/shops", False),
+                                ("Depósitos", "/logistics/202309/warehouses", True)):
+        try:
+            r = tiktok_api("GET", caminho, loja=loja)
+            d = r.get("data") if isinstance(r.get("data"), dict) else {}
+            itens = d.get("shops") or d.get("warehouses") or []
+            etapas.append({"etapa": nome, "caminho": caminho, "ok": True, "itens": len(itens),
+                           "nomes": [str(i.get("name") or "") for i in itens[:10] if isinstance(i, dict)]})
+        except Exception as exc:
+            etapas.append({"etapa": nome, "caminho": caminho, "ok": False, "erro": str(exc)[:300]})
+    tiktok_log_event("teste", "leitura", "OK" if all(e["ok"] for e in etapas) else "ERRO",
+                     "; ".join(f"{e['etapa']}: {'ok' if e['ok'] else e['erro']}" for e in etapas)[:1000])
+    return {"ok": True, "etapas": etapas}
 
 
 # ---------------------------------------------------------------------------
@@ -29505,6 +29836,59 @@ class AppHandler(BaseHTTPRequestHandler):
                     rows = DB.execute("SELECT * FROM magalu_event_log ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
                 self.send_json({"ok": True, "logs": [dict(row) for row in rows]})
             return
+        # V19.63: TikTok Shop — conexão (fase 0). Callback público; a segurança é o state.
+        if path == "/api/integracoes/tiktok/callback":
+            code = str((query.get("code") or [""])[0] or "").strip()
+            state = str((query.get("state") or [""])[0] or "").strip()
+            try:
+                if not code or not state:
+                    raise RuntimeError("Callback TikTok sem code/state.")
+                tiktok_exchange_code(code, state)
+                self.send_redirect(BASE_PATH + "/admin?aba=integracoes&tiktok=conectada")
+            except Exception as exc:
+                tiktok_log_event("oauth", "/callback", "ERRO", str(exc))
+                self.send_redirect(BASE_PATH + "/admin?aba=integracoes&tiktok=erro")
+            return
+        if path == "/api/integracoes/tiktok/status":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                self.send_json({"ok": True, "tiktok": tiktok_status_payload()})
+            return
+        if path == "/api/integracoes/tiktok/connect":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                try:
+                    audit(ctx["username"], "tiktok.connect", "TikTok")
+                    self.send_redirect(tiktok_connect_url())
+                except Exception as exc:
+                    self.send_json({"error": str(exc)}, 503)
+            return
+        if path == "/api/integracoes/tiktok/teste":  # V19.63: só lê loja e depósitos
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                try:
+                    self.send_json(tiktok_teste_leitura())
+                except Exception as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 502)
+            return
+        if path == "/api/integracoes/tiktok/amostra":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                if str(ctx.get("app_role") or "") != "admin":
+                    self.send_json({"error": "Somente o perfil Admin."}, 403)
+                    return
+                with DB_LOCK:
+                    rows = DB.execute("SELECT tipo,resposta,created_at FROM tiktok_amostra_v1963").fetchall()
+                self.send_json({"ok": True, "amostras": [dict(r) for r in rows]})
+            return
+        if path == "/api/integracoes/tiktok/logs":
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                limit = max(1, min(200, int((query.get("limit") or ["50"])[0] or 50)))
+                with DB_LOCK:
+                    rows = DB.execute("SELECT * FROM tiktok_event_log ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+                self.send_json({"ok": True, "logs": [dict(row) for row in rows]})
+            return
         if path == "/api/integracoes/mercadolivre/callback":
             self.handle_ml_callback(query)
             return
@@ -31258,6 +31642,20 @@ class AppHandler(BaseHTTPRequestHandler):
                 except Exception as exc:
                     magalu_log_event("pedidos", "manual", "ERRO", str(exc))
                     self.send_json({"ok": False, "error": str(exc)}, 502)
+            return
+        if path == "/api/integracoes/tiktok/disconnect":  # V19.63: mesma regra da Magalu (OWNER)
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                if not self.require_owner_reauth(ctx):
+                    audit(ctx["username"], "security.denied.owner_reauth", "tiktok.disconnect")
+                    self.send_json({"error": "Somente o proprietário pode desconectar integrações."}, 403)
+                    return
+                with DB_LOCK:
+                    DB.execute("DELETE FROM tiktok_integration WHERE id=1")
+                    DB.commit()
+                tiktok_log_event("disconnect", "", "OK", f"Desconectado por {ctx.get('username') or 'admin'}")
+                audit(ctx["username"], "tiktok.disconnect", "TikTok")
+                self.send_json({"ok": True})
             return
         if path == "/api/integracoes/magalu/disconnect":  # V19.24: mesma regra da Shopee (OWNER)
             ctx = self.auth(admin_only=True)
@@ -35080,7 +35478,7 @@ LOG_EVENTOS_DIAS = 30
 def limpar_logs_antigos(dias: int = LOG_EVENTOS_DIAS) -> dict[str, int]:
     corte = (datetime.now(timezone.utc).astimezone() - timedelta(days=dias)).isoformat(timespec="milliseconds")
     removidos: dict[str, int] = {}
-    for tabela in ("ml_event_log", "shopee_event_log", "magalu_event_log"):  # V19.24: + Magalu
+    for tabela in ("ml_event_log", "shopee_event_log", "magalu_event_log", "tiktok_event_log"):  # V19.24/V19.63
         with DB_LOCK:
             cur = DB.execute(f"DELETE FROM {tabela} WHERE created_at < ?", (corte,))
             DB.commit()

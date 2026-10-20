@@ -332,7 +332,8 @@ class LimpezaLogsECaches(unittest.TestCase):
             S.DB.execute("INSERT INTO shopee_event_log(created_at,topic) VALUES(?, 'novo')", (S.now_iso(),))
             S.DB.commit()
         removidos = S.limpar_logs_antigos()
-        self.assertEqual(removidos, {"ml_event_log": 1, "shopee_event_log": 1, "magalu_event_log": 0})  # V19.24: + Magalu
+        self.assertEqual(removidos, {"ml_event_log": 1, "shopee_event_log": 1, "magalu_event_log": 0,
+                                     "tiktok_event_log": 0})  # V19.24: + Magalu; V19.63: + TikTok
         with S.DB_LOCK:
             restantes = [r[0] for r in S.DB.execute("SELECT topic FROM ml_event_log")]
         self.assertEqual(restantes, ["novo"])

@@ -2087,6 +2087,25 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
           <div id="magaluPrevia"></div>
           <div id="magaluIntegracaoMensagem" class="integracao-nota">Entre com a conta da <b>loja</b> (pessoa jurídica) no ID Magalu e escolha a loja da Noromak. "Ver pedidos da Magalu" mostra o que entraria na fila, sem gravar nada. Com a importação ligada, os pedidos entram sozinhos em Pedidos pendentes e a etiqueta é baixada quando o Linx enviar a NF.</div>
         </div>
+        <!-- V19.63: TikTok Shop (loja de Bauru), fase 0 — só a conexão; o estoque entra na fase 1. -->
+        <div class="integracao-card">
+          <h3><i class=nk-i-link></i> TikTok Shop · Bauru</h3>
+          <div id="tiktokIntegracaoStatus" class="integracao-status off">⚪ Carregando...</div>
+          <div class="integracao-dados">
+            <b>App Key</b><span id="tiktokAppKey">—</span>
+            <b>Loja</b><span id="tiktokLoja">—</span>
+            <b>Conectada em</b><span id="tiktokConectadaEm">—</span>
+            <b>Callback OAuth</b><span id="tiktokCallback">—</span>
+            <b>Credenciais</b><span>Somente no servidor</span>
+          </div>
+          <div class="integracao-acoes">
+            <button type="button" id="btnTiktokConectar" class="btn-primario" onclick="conectarTiktokAdmin()">Conectar TikTok Shop</button>
+            <button type="button" id="btnTiktokDesconectar" class="btn-perigo" onclick="desconectarTiktokAdmin()" disabled>Desconectar</button>
+            <button type="button" id="btnTiktokTeste" class="btn-secundario" onclick="testeTiktokAdmin()" disabled title="Só lê: loja e depósitos. Nada é alterado.">Testar leitura</button>
+          </div>
+          <div id="tiktokTeste"></div>
+          <div id="tiktokIntegracaoMensagem" class="integracao-nota">Entre com a conta da loja de <b>Bauru</b> no TikTok Shop e autorize o app da Noromak. Por enquanto só conecta: o controle de estoque (Apollo de Bauru → TikTok) vem na próxima fase.</div>
+        </div>
         <div class="integracao-card">
           <h3><i class=nk-i-file></i> Linx DMS · Smart API</h3>
           <div id="linxIntegracaoStatus" class="integracao-status off">⚪ Carregando...</div>
@@ -5341,7 +5360,7 @@ function abrirAbaAdmin(nome){
   if(nome==="coleta") carregarColetaDiaAdmin(!coletaAdminCarregada);
   if(nome==="historico-sku") carregarHistoricoSkuAdmin();
   if(nome==="kits") renderizarKitsAdmin();
-  if(nome==="integracoes"){carregarIntegracaoMercadoLivreAdmin();carregarIntegracaoMlBauruAdmin();carregarLogsMercadoLivreAdmin();carregarIntegracaoShopeeAdmin();carregarIntegracaoMagaluAdmin();carregarAgenteZebraAdmin();carregarIntegracaoLinxAdmin();carregarTokenRoboLinxAdmin();}
+  if(nome==="integracoes"){carregarIntegracaoMercadoLivreAdmin();carregarIntegracaoMlBauruAdmin();carregarLogsMercadoLivreAdmin();carregarIntegracaoShopeeAdmin();carregarIntegracaoMagaluAdmin();carregarIntegracaoTiktokAdmin();carregarAgenteZebraAdmin();carregarIntegracaoLinxAdmin();carregarTokenRoboLinxAdmin();}
   if(nome==="seguranca") carregarSegurancaAdmin().catch(e=>alert("Segurança: "+e.message));
 }
 function abrirDashboardV151(){
@@ -9862,6 +9881,51 @@ async function desconectarMagaluAdmin(){
   try{await confirmarOwnerSeguranca("Desconectar a integração da Magalu");await mlApiAdmin("/expedicao/api/integracoes/magalu/disconnect",{method:"POST",body:"{}"});}
   catch(e){alert("Magalu: "+e.message);}
   await carregarIntegracaoMagaluAdmin();
+}
+// V19.63: TikTok Shop (Bauru) — fase 0, só a conexão OAuth.
+async function carregarIntegracaoTiktokAdmin(){
+  const badge=document.getElementById("tiktokIntegracaoStatus");if(!badge)return;
+  const msg=document.getElementById("tiktokIntegracaoMensagem");
+  const conectar=document.getElementById("btnTiktokConectar"),disc=document.getElementById("btnTiktokDesconectar"),teste=document.getElementById("btnTiktokTeste");
+  try{
+    const tk=(await mlApiAdmin("/expedicao/api/integracoes/tiktok/status")).tiktok||{};
+    document.getElementById("tiktokAppKey").textContent=tk.app_key||"Aguardando configuração";
+    document.getElementById("tiktokLoja").textContent=tk.shop_name?`${tk.shop_name}${tk.shop_region?" ("+tk.shop_region+")":""}`:(tk.connected?"⚠ loja ainda não lida":"—");
+    document.getElementById("tiktokConectadaEm").textContent=tk.connected_at?mlDataHora(tk.connected_at):"—";
+    document.getElementById("tiktokCallback").textContent=tk.redirect_uri||"—";
+    if(tk.connected){
+      badge.className="integracao-status ok";badge.textContent="🟢 TikTok Shop conectado";
+      if(conectar){conectar.disabled=false;conectar.textContent="Reconectar TikTok Shop";}if(disc)disc.disabled=false;if(teste)teste.disabled=false;
+      if(msg&&tk.last_error)msg.textContent="Último erro: "+tk.last_error;
+    }else if(!tk.configured){
+      badge.className="integracao-status off";badge.textContent="🟡 Aguardando credenciais (TIKTOK_APP_KEY, TIKTOK_APP_SECRET e TIKTOK_SERVICE_ID no .env)";
+      if(conectar)conectar.disabled=true;if(disc)disc.disabled=true;if(teste)teste.disabled=true;
+    }else{
+      badge.className="integracao-status off";badge.textContent="⚪ Pronto para conectar";
+      if(conectar)conectar.disabled=false;if(disc)disc.disabled=true;if(teste)teste.disabled=true;
+    }
+  }catch(e){badge.className="integracao-status erro";badge.textContent="🔴 Erro ao consultar o TikTok Shop";if(msg)msg.textContent=e.message;}
+  const estado=new URLSearchParams(location.search).get("tiktok");
+  if(estado==="conectada"&&msg)msg.textContent="✅ TikTok Shop conectado ao Noromak.";
+  else if(estado==="erro"&&msg)msg.textContent="❌ Não foi possível concluir a conexão com o TikTok Shop. Tente de novo; o motivo fica no log da integração.";
+}
+async function testeTiktokAdmin(){
+  const box=document.getElementById("tiktokTeste"),btn=document.getElementById("btnTiktokTeste");if(!box)return;
+  const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  if(btn){btn.disabled=true;btn.textContent="Lendo o TikTok…";}
+  try{
+    const d=await mlApiAdmin("/expedicao/api/integracoes/tiktok/teste");
+    box.innerHTML='<div class="integracao-nota"><b>Teste de leitura — nada foi alterado.</b></div>'+(d.etapas||[]).map(e=>
+      `<div class="integracao-nota">${e.ok?"✅":"❌"} ${esc(e.etapa)}: ${e.ok?esc(e.itens)+" — "+esc((e.nomes||[]).join(", ")||"(sem nome)"):esc(e.erro)}</div>`).join("");
+  }catch(e){box.innerHTML=`<div class="integracao-alerta">❌ ${esc(e.message)}</div>`;}
+  finally{if(btn){btn.disabled=false;btn.textContent="Testar leitura";}await carregarIntegracaoTiktokAdmin();}
+}
+function conectarTiktokAdmin(){window.location.href="/expedicao/api/integracoes/tiktok/connect";}
+async function desconectarTiktokAdmin(){
+  if(!await nkConfirmar("Desconectar a integração do TikTok Shop?"))return;
+  try{await confirmarOwnerSeguranca("Desconectar a integração do TikTok Shop");await mlApiAdmin("/expedicao/api/integracoes/tiktok/disconnect",{method:"POST",body:"{}"});}
+  catch(e){alert("TikTok Shop: "+e.message);}
+  await carregarIntegracaoTiktokAdmin();
 }
 async function sincronizarShopeeAdmin(){
   const btn=document.getElementById("btnShopeeSincronizar");if(btn){btn.disabled=true;btn.textContent="Sincronizando...";}
