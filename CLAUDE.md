@@ -367,6 +367,23 @@ parâmetros em ordem (sem `sign`/`access_token`) + corpo, embrulhado no secret, 
 `/api/integracoes/tiktok/{callback,status,connect,teste,amostra,logs,disconnect}`; cartão "TikTok Shop · Bauru" em
 Integrações (Testar leitura = loja + depósitos). `.env`: `TIKTOK_APP_KEY/SECRET/SERVICE_ID`; o callback precisa estar
 cadastrado como Redirect URL no app. Teste: `TESTES/test_tiktok_v1963.py`.
+**V19.64 — fase 1 (decisões do dono, 20/10):** o Noromak **grava estoque só no TikTok** (exceção à regra; Simulação
+padrão → Lote por clique → Automático, ligar = OWNER). Quantidade = **todo** o disponível de Bauru (revenda 3) no Apollo −
+unidades das linhas da fila com `Casa=bauru` (TikTok + ML de Bauru + manuais: vendido e ainda não baixado no Apollo); kit =
+peça que tem menos (`_tiktok_pecas`: "A/B", "KITn-X" = n×X, prefixo "151490-"). Apollo não lido/sem resposta = **não mexe**,
+nunca zero. Vínculo pelo `seller_sku`; o vínculo à mão (`tiktok_vinculo_v1964`) vence. Anúncios criados no Seller Center
+(nada é criado pelo Noromak); `tiktok_produtos_sincronizar` lê `/product/202502/products/search` de hora em hora
+(`tiktok_sku_v1964`; variação com mais de um depósito não é enviada). "Tempo real sem pesar": worker `tiktok_estoque_loop`
+(20 s) lê o Apollo em rodízio (`tiktok_apollo_ler_proximo`, ≤ `TIKTOK_APOLLO_POR_MINUTO`=3/min; nunca lido > estoque ≤ 3
+lido há 10 min > mais antigo; `tiktok_apollo_v1964`) e refaz o estoque quando a versão da fila muda (venda do ML de Bauru
+baixa na hora, sem Apollo). Envio: `POST /product/202309/products/{id}/inventory/update`, só o que mudou, erro por SKU não
+marca como enviado; histórico em `tiktok_estoque_log_v1964`. **Pedidos:** `tiktok_pedidos_loop` (120 s), status
+`AWAITING_SHIPMENT`/`AWAITING_COLLECTION`, importação **começa ligada** (`tiktok_config_v1964`); cada unidade é um
+`line_item` → agrupa por SKU; linha `Marketplace=TIKTOK`, `Casa=bauru`, `OrigemCadastro=API_TIKTOK`, uid `TIKTOKAPI_<sha1>`;
+mesma regra da Magalu (`_magalu_merge(..., origem=, campos=)`: outra origem não duplica, enviado sai pela remoção nomeada).
+Tela `APP/tiktok-estoque.html` (`/tiktok-estoque`, menu Estoque e compras, módulo admin; mudar = perfil Admin). Rotas
+`GET /api/tiktok-estoque`, `POST /api/tiktok-estoque/{config,vinculo,enviar,atualizar}`,
+`POST /api/integracoes/tiktok/{importacao,sincronizar}`. Etiqueta = fase 3. Teste: `TESTES/test_tiktok_estoque_v1964.py`.
 
 ### Magalu (V19.24, fase 0 de 5)
 Plano decidido com o dono em 14/10 (integração completa "igual ao ML", por fases): 0 conexão; 1 pedidos na

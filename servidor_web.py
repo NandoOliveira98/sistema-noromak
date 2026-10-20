@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.63-TIKTOK-CONEXAO"
+APP_VERSION = "19.64-TIKTOK-ESTOQUE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -2652,6 +2652,7 @@ def init_db() -> None:
     ensure_estoque_full_schema()  # V19.60
     ensure_shopee_promo_schema()  # V19.49
     ensure_magalu_promo_schema()  # V19.55
+    ensure_tiktok_estoque_schema()  # V19.64
     ensure_ml_billing_credito_schema()
     ensure_ml_billing_data_schema()
     ensure_cliente_fiscal_linx_api_schema()  # V18.60
@@ -6217,6 +6218,7 @@ def tiktok_status_payload() -> dict[str, Any]:
         "last_error": str(row["last_error"] or "") if row else "",
         "redirect_uri": TIKTOK_REDIRECT_URI,
         "credentials_server_side": True,
+        "importacao_ligada": tiktok_importacao_ligada(),  # V19.64
     }
 
 
@@ -6862,10 +6864,13 @@ def _magalu_linhas_do_pedido(pedido: dict[str, Any], products: list[dict[str, An
     return _shopee_expand_kit_lines(linhas, products)  # V18.71: mesma regra de kit
 
 
-def _magalu_merge(atual: list[dict[str, Any]], api: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], set[str], int]:
-    """Junta as linhas da API à fila. Retorna (fila, identidades removidas, pedidos pulados por já existirem)."""
+def _magalu_merge(atual: list[dict[str, Any]], api: list[dict[str, Any]], origem: str = "API_MAGALU",
+                  campos: tuple[str, ...] = MAGALU_CAMPOS_OPERACIONAIS) -> tuple[list[dict[str, Any]], set[str], int]:
+    """Junta as linhas da API à fila. Retorna (fila, identidades removidas, pedidos pulados por já existirem).
+    V19.64: `origem`/`campos` deixam o TikTok usar a mesma regra (API_TIKTOK)."""
+    origem = normalize(origem)
     pedidos_outra_origem = {normalize(order_number(r)) for r in atual
-                            if isinstance(r, dict) and normalize(r.get("OrigemCadastro")) != "API_MAGALU"}
+                            if isinstance(r, dict) and normalize(r.get("OrigemCadastro")) != origem}
     ativos = {normalize(order_number(r)) for r in api}
     antigos: dict[str, dict[str, Any]] = {}
     saida: list[dict[str, Any]] = []
@@ -6873,7 +6878,7 @@ def _magalu_merge(atual: list[dict[str, Any]], api: list[dict[str, Any]]) -> tup
     for indice, row in enumerate(atual):
         if not isinstance(row, dict):
             continue
-        if normalize(row.get("OrigemCadastro")) != "API_MAGALU":
+        if normalize(row.get("OrigemCadastro")) != origem:
             saida.append(row)
         elif normalize(order_number(row)) in ativos:
             antigos[str(row.get("__uidLinha") or "")] = row
@@ -6888,7 +6893,7 @@ def _magalu_merge(atual: list[dict[str, Any]], api: list[dict[str, Any]]) -> tup
         velha = antigos.get(str(nova.get("__uidLinha") or ""))
         if velha:
             junta = dict(velha)
-            for campo in MAGALU_CAMPOS_OPERACIONAIS:
+            for campo in campos:
                 if campo in nova:
                     junta[campo] = nova[campo]
             saida.append(junta)
@@ -6993,6 +6998,564 @@ def magalu_pedidos_loop(stop_event: threading.Event) -> None:
                 DB.commit()
             magalu_log_event_se_mudou("pedidos", "worker", "ERRO", str(exc)[:800])
         stop_event.wait(MAGALU_PEDIDOS_INTERVALO)
+
+
+# ---------------------------------------------------------------------------
+# V19.64 — TikTok Shop (Bauru), fase 1: pedidos na fila de Bauru e estoque do Apollo
+# de Bauru → TikTok. Decisões do dono (entrevista de 20/10):
+# - Grava estoque SÓ no TikTok (exceção à regra "o Noromak nunca grava estoque"):
+#   Simulação (padrão, não chama o TikTok) → Lote (clique) → Automático (ligar = OWNER).
+# - Quantidade = TODO o disponível de Bauru (revenda 3) no Apollo − as unidades já vendidas
+#   que estão na fila de Bauru (TikTok + ML de Bauru + manuais), ainda não baixadas no Apollo.
+#   Kit = a peça que tem menos. Apollo sem resposta / não lido = NÃO mexe (nunca zero).
+# - Vínculo pelo seller_sku = código Apollo ("A/B", "KITn-X" = n peças X); o vínculo à mão
+#   (tiktok_vinculo_v1964) vence o seller_sku.
+# - "Tempo real sem pesar": o Apollo é lido em rodízio, no máximo TIKTOK_APOLLO_POR_MINUTO
+#   consultas/min (estoque baixo primeiro); venda nova muda a fila de Bauru e o estoque é
+#   refeito na hora com o último Apollo lido, sem consultar o Apollo de novo.
+# - Pedidos: AWAITING_SHIPMENT/AWAITING_COLLECTION entram na fila de Bauru (regras da Magalu);
+#   a importação começa ligada. Cada unidade vem como um line_item: agrupa por SKU.
+# Feito pela documentação: a 1ª resposta de cada chamada fica em tiktok_amostra_v1963.
+# ---------------------------------------------------------------------------
+TIKTOK_REVENDA_APOLLO = 3          # Bauru no Apollo
+TIKTOK_APOLLO_POR_MINUTO = 3       # das 20/min do Apollo, divididas com as outras telas
+TIKTOK_ESTOQUE_BAIXO = 3
+TIKTOK_PEDIDOS_INTERVALO = 120
+TIKTOK_PEDIDOS_STATUS = ("AWAITING_SHIPMENT", "AWAITING_COLLECTION")
+TIKTOK_CAMPOS_OPERACIONAIS = ("StatusTikTok", "PrazoEnvioTikTok", "TikTokAtualizadoEm")
+TIKTOK_MODOS = ("simulacao", "lote", "automatico")
+TIKTOK_SYNC_LOCK = threading.Lock()
+TIKTOK_ESTOQUE_LOCK = threading.Lock()
+_TIKTOK_APOLLO_CHAMADAS: list[float] = []
+
+
+def ensure_tiktok_estoque_schema() -> None:
+    with DB_LOCK:
+        DB.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS tiktok_config_v1964 (
+                chave TEXT PRIMARY KEY,
+                valor TEXT NOT NULL DEFAULT '',
+                atualizado_em TEXT NOT NULL DEFAULT '',
+                atualizado_por TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS tiktok_sku_v1964 (
+                sku_id TEXT PRIMARY KEY,
+                product_id TEXT NOT NULL DEFAULT '',
+                titulo TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT '',
+                seller_sku TEXT NOT NULL DEFAULT '',
+                warehouse_id TEXT NOT NULL DEFAULT '',
+                armazens INTEGER NOT NULL DEFAULT 0,
+                qtd_tiktok INTEGER,
+                visto_em TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS tiktok_vinculo_v1964 (
+                sku_id TEXT PRIMARY KEY,
+                codigos TEXT NOT NULL DEFAULT '',
+                por TEXT NOT NULL DEFAULT '',
+                em TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS tiktok_apollo_v1964 (
+                codigo TEXT PRIMARY KEY,
+                disponivel REAL,
+                respondeu INTEGER NOT NULL DEFAULT 0,
+                erro TEXT NOT NULL DEFAULT '',
+                lido_em TEXT NOT NULL DEFAULT '',
+                lido_epoch INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS tiktok_estoque_log_v1964 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                criado_em TEXT NOT NULL,
+                sku_id TEXT NOT NULL DEFAULT '',
+                seller_sku TEXT NOT NULL DEFAULT '',
+                de INTEGER,
+                para INTEGER,
+                modo TEXT NOT NULL DEFAULT '',
+                resultado TEXT NOT NULL DEFAULT '',
+                detalhe TEXT NOT NULL DEFAULT '',
+                por TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_tiktok_estoque_log_criado ON tiktok_estoque_log_v1964(criado_em);
+            """
+        )
+        DB.commit()
+
+
+def _tiktok_config_ler(chave: str) -> str | None:
+    with DB_LOCK:
+        row = DB.execute("SELECT valor FROM tiktok_config_v1964 WHERE chave=?", (chave,)).fetchone()
+    return None if not row else str(row["valor"])
+
+
+def _tiktok_config_gravar(chave: str, valor: str, ator: str) -> None:
+    with DB_LOCK:
+        DB.execute("INSERT OR REPLACE INTO tiktok_config_v1964(chave,valor,atualizado_em,atualizado_por) VALUES(?,?,?,?)",
+                   (chave, valor, now_iso(), str(ator or "")))
+        DB.commit()
+
+
+def tiktok_importacao_ligada() -> bool:
+    valor = _tiktok_config_ler("importacao")
+    return True if valor is None else valor == "1"  # sem escolha = ligada (decisão do dono, 20/10)
+
+
+def tiktok_importacao_definir(ligada: bool, usuario: str) -> None:
+    _tiktok_config_gravar("importacao", "1" if ligada else "0", usuario)
+    tiktok_log_event("importacao", "", "LIGADA" if ligada else "DESLIGADA", f"por {usuario}")
+
+
+def tiktok_estoque_config() -> dict[str, Any]:
+    modo = _tiktok_config_ler("modo_estoque") or "simulacao"
+    return {"modo_estoque": modo if modo in TIKTOK_MODOS else "simulacao", "importacao": tiktok_importacao_ligada()}
+
+
+def tiktok_estoque_config_definir(chave: str, valor: str, ator: str) -> dict[str, Any]:
+    if chave != "modo_estoque" or valor not in TIKTOK_MODOS:
+        raise ValueError("Modo inválido.")
+    _tiktok_config_gravar(chave, valor, ator)
+    _tiktok_estoque_log("", "", None, None, valor, "MODO", f"modo do estoque: {valor}", ator)
+    return tiktok_estoque_config()
+
+
+def _tiktok_estoque_log(sku_id: str, seller_sku: str, de: int | None, para: int | None, modo: str,
+                        resultado: str, detalhe: str, por: str) -> None:
+    with DB_LOCK:
+        DB.execute("""INSERT INTO tiktok_estoque_log_v1964(criado_em,sku_id,seller_sku,de,para,modo,resultado,detalhe,por)
+                      VALUES(?,?,?,?,?,?,?,?,?)""",
+                   (now_iso(), sku_id, seller_sku, de, para, modo, resultado, str(detalhe or "")[:800], str(por or "")))
+        DB.execute("DELETE FROM tiktok_estoque_log_v1964 WHERE id <= (SELECT MAX(id) FROM tiktok_estoque_log_v1964) - 5000")
+        DB.commit()
+
+
+def _tiktok_pecas(texto: Any) -> list[tuple[str, int]]:
+    """seller_sku (ou vínculo à mão) → [(código Apollo, unidades)]. "A/B" = uma de cada;
+    "KITn-X" = n unidades de X; "151490-0893270212" (anúncio-código) = o código."""
+    saida: dict[str, int] = {}
+    ordem: list[str] = []
+    for parte in str(texto or "").strip().upper().split("/"):
+        parte = parte.strip()
+        unidades = 1
+        m = re.match(r"^KIT(\d*)-(.+)$", parte)
+        if m:
+            unidades = max(1, int(m.group(1) or 1))
+            parte = m.group(2).strip()
+        if re.match(r"^\d{5,}-.+", parte):
+            parte = parte.split("-", 1)[1].strip()
+        if not _exp_norm_codigo(parte):
+            continue
+        if parte not in saida:
+            ordem.append(parte)
+            saida[parte] = 0
+        saida[parte] += unidades
+    return [(c, saida[c]) for c in ordem]
+
+
+def _tiktok_quantidade(valor: Any) -> int | None:
+    try:
+        return int(float(valor))
+    except (TypeError, ValueError):
+        return None
+
+
+def tiktok_produtos_sincronizar() -> dict[str, Any]:
+    """Lê todos os anúncios da loja (paginado) e guarda cada variação. Só lê."""
+    vistos: dict[str, dict[str, Any]] = {}
+    token = ""
+    for _ in range(200):
+        params: dict[str, Any] = {"page_size": 100}
+        if token:
+            params["page_token"] = token
+        resp = tiktok_api("POST", "/product/202502/products/search", params=params, body={"status": "ALL"})
+        dados = resp.get("data") if isinstance(resp.get("data"), dict) else {}
+        for prod in dados.get("products") or []:
+            if not isinstance(prod, dict):
+                continue
+            status = str(prod.get("status") or "")
+            if status in ("DELETED", "PLATFORM_DEACTIVATED_DELETED", "SELLER_DELETED"):
+                continue
+            for sku in prod.get("skus") or []:
+                if not isinstance(sku, dict) or not str(sku.get("id") or "").strip():
+                    continue
+                inv = [i for i in (sku.get("inventory") or []) if isinstance(i, dict)]
+                vistos[str(sku["id"])] = {
+                    "product_id": str(prod.get("id") or ""), "titulo": str(prod.get("title") or "")[:300],
+                    "status": status, "seller_sku": str(sku.get("seller_sku") or "").strip(),
+                    "warehouse_id": str((inv[0] if inv else {}).get("warehouse_id") or ""),
+                    "armazens": len(inv),
+                    "qtd": _tiktok_quantidade((inv[0] if inv else {}).get("quantity")) if len(inv) == 1 else None,
+                }
+        token = str(dados.get("next_page_token") or "")
+        if not token:
+            break
+    agora = now_iso()
+    with DB_LOCK:
+        for sku_id, v in vistos.items():
+            DB.execute("""INSERT INTO tiktok_sku_v1964(sku_id,product_id,titulo,status,seller_sku,warehouse_id,armazens,qtd_tiktok,visto_em)
+                          VALUES(?,?,?,?,?,?,?,?,?)
+                          ON CONFLICT(sku_id) DO UPDATE SET product_id=excluded.product_id, titulo=excluded.titulo,
+                            status=excluded.status, seller_sku=excluded.seller_sku, warehouse_id=excluded.warehouse_id,
+                            armazens=excluded.armazens, qtd_tiktok=excluded.qtd_tiktok, visto_em=excluded.visto_em""",
+                       (sku_id, v["product_id"], v["titulo"], v["status"], v["seller_sku"], v["warehouse_id"],
+                        v["armazens"], v["qtd"], agora))
+        # Variação que sumiu da loja sai da lista (o vínculo à mão fica guardado).
+        DB.execute("DELETE FROM tiktok_sku_v1964 WHERE visto_em<>?", (agora,))
+        DB.commit()
+    return {"ok": True, "variacoes": len(vistos)}
+
+
+def tiktok_vinculo_definir(sku_id: str, codigos: str, ator: str) -> dict[str, Any]:
+    sku_id = str(sku_id or "").strip()
+    if not sku_id:
+        raise ValueError("Informe a variação do TikTok.")
+    codigos = str(codigos or "").strip()
+    if codigos and not _tiktok_pecas(codigos):
+        raise ValueError("Código Apollo inválido.")
+    with DB_LOCK:
+        if codigos:
+            DB.execute("INSERT OR REPLACE INTO tiktok_vinculo_v1964(sku_id,codigos,por,em) VALUES(?,?,?,?)",
+                       (sku_id, codigos, str(ator or ""), now_iso()))
+        else:
+            DB.execute("DELETE FROM tiktok_vinculo_v1964 WHERE sku_id=?", (sku_id,))
+        DB.commit()
+    _tiktok_estoque_log(sku_id, "", None, None, "", "VINCULO", f"vínculo à mão: {codigos or '(apagado)'}", ator)
+    return {"ok": True, "sku_id": sku_id, "codigos": codigos}
+
+
+def _tiktok_apollo_bauru(resposta: dict[str, Any]) -> float | None:
+    for row in resposta.get("estoques") or []:
+        if isinstance(row, dict) and _tiktok_quantidade(row.get("revenda")) == TIKTOK_REVENDA_APOLLO:
+            if row.get("respondeu") is False or row.get("disponivel") is None:
+                return None
+            try:
+                return max(0.0, float(row["disponivel"]))
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def tiktok_apollo_ler(codigo: str) -> float | None:
+    """Uma consulta ao Apollo (com o limite do Apollo). Bauru sem resposta fica nulo."""
+    chave = _exp_norm_codigo(codigo)
+    disponivel: float | None = None
+    erro = ""
+    try:
+        disponivel = _tiktok_apollo_bauru(crm_stock_lookup(codigo, operador="tiktok-estoque", wait_seconds=0))
+        if disponivel is None:
+            erro = "Bauru não respondeu no Apollo"
+    except CrmLimiteAtingido:
+        raise
+    except Exception as exc:
+        erro = str(exc)[:300]
+    with DB_LOCK:
+        DB.execute("""INSERT OR REPLACE INTO tiktok_apollo_v1964(codigo,disponivel,respondeu,erro,lido_em,lido_epoch)
+                      VALUES(?,?,?,?,?,?)""",
+                   (chave, disponivel, 1 if disponivel is not None else 0, erro, now_iso(), int(time.time())))
+        DB.commit()
+    return disponivel
+
+
+def _tiktok_linhas_sku() -> list[dict[str, Any]]:
+    with DB_LOCK:
+        rows = DB.execute("""SELECT s.*, v.codigos AS vinculo FROM tiktok_sku_v1964 s
+                             LEFT JOIN tiktok_vinculo_v1964 v ON v.sku_id=s.sku_id ORDER BY s.titulo, s.seller_sku""").fetchall()
+    return [dict(r) for r in rows]
+
+
+def tiktok_apollo_ler_proximo() -> str | None:
+    """Uma volta do rodízio: no máximo TIKTOK_APOLLO_POR_MINUTO por minuto. Ordem: nunca lido,
+    estoque baixo lido há mais de 10 min, depois o mais antigo."""
+    agora = time.monotonic()
+    _TIKTOK_APOLLO_CHAMADAS[:] = [t for t in _TIKTOK_APOLLO_CHAMADAS if agora - t < 60]
+    if len(_TIKTOK_APOLLO_CHAMADAS) >= TIKTOK_APOLLO_POR_MINUTO:
+        return None
+    codigos: dict[str, str] = {}
+    for row in _tiktok_linhas_sku():
+        for codigo, _ in _tiktok_pecas(row.get("vinculo") or row.get("seller_sku")):
+            codigos.setdefault(_exp_norm_codigo(codigo), codigo)
+    if not codigos:
+        return None
+    with DB_LOCK:
+        lidos = {str(r["codigo"]): dict(r) for r in DB.execute("SELECT * FROM tiktok_apollo_v1964").fetchall()}
+    epoch = int(time.time())
+
+    def prioridade(chave: str) -> tuple[int, int]:
+        r = lidos.get(chave)
+        if not r:
+            return (0, 0)
+        baixo = r["disponivel"] is not None and float(r["disponivel"]) <= TIKTOK_ESTOQUE_BAIXO
+        if baixo and epoch - int(r["lido_epoch"] or 0) > 600:
+            return (1, int(r["lido_epoch"] or 0))
+        return (2, int(r["lido_epoch"] or 0))
+
+    escolhido = min(codigos, key=prioridade)
+    _TIKTOK_APOLLO_CHAMADAS.append(agora)
+    try:
+        tiktok_apollo_ler(codigos[escolhido])
+    except CrmLimiteAtingido:
+        return None  # o limite do Apollo está com as outras telas: fica para a próxima volta
+    return escolhido
+
+
+def _tiktok_pendentes_bauru() -> dict[str, int]:
+    """Unidades vendidas na fila de Bauru (ainda não baixadas no Apollo), por código."""
+    bruto, _, _ = get_storage("conf_pedidos")
+    saida: dict[str, int] = {}
+    for row in _rows_from_storage_value(bruto):
+        if not isinstance(row, dict) or filial_da_linha(row) != TIKTOK_CASA:
+            continue
+        qtd = max(0, _tiktok_quantidade(row.get("Quantidade")) or 0)
+        for codigo, unidades in _tiktok_pecas(row.get("SKU")):
+            chave = _exp_norm_codigo(codigo)
+            saida[chave] = saida.get(chave, 0) + qtd * unidades
+    return saida
+
+
+def tiktok_estoque_itens() -> list[dict[str, Any]]:
+    with DB_LOCK:
+        apollo = {str(r["codigo"]): dict(r) for r in DB.execute("SELECT * FROM tiktok_apollo_v1964").fetchall()}
+    pendentes = _tiktok_pendentes_bauru()
+    itens = []
+    for row in _tiktok_linhas_sku():
+        pecas = _tiktok_pecas(row.get("vinculo") or row.get("seller_sku"))
+        item = {"sku_id": row["sku_id"], "product_id": row["product_id"], "titulo": row["titulo"],
+                "status": row["status"], "seller_sku": row["seller_sku"], "vinculo": row.get("vinculo") or "",
+                "pecas": [[c, u] for c, u in pecas], "tiktok": row["qtd_tiktok"], "warehouse_id": row["warehouse_id"],
+                "apollo": None, "pendente": 0, "desejado": None, "lido_em": "", "motivo": ""}
+        if not pecas:
+            item.update(situacao="sem_vinculo", motivo="Sem código Apollo no SKU do vendedor")
+            itens.append(item)
+            continue
+        possivel: list[int] = []
+        faltou = ""
+        lidos_em = []
+        for codigo, unidades in pecas:
+            chave = _exp_norm_codigo(codigo)
+            ap = apollo.get(chave)
+            if not ap:
+                faltou = faltou or f"{codigo}: ainda não lido no Apollo"
+                continue
+            lidos_em.append(str(ap["lido_em"] or ""))
+            if not int(ap["respondeu"] or 0) or ap["disponivel"] is None:
+                faltou = faltou or f"{codigo}: {ap['erro'] or 'Apollo sem resposta'}"
+                continue
+            pend = pendentes.get(chave, 0)
+            item["pendente"] += pend
+            livre = max(0, int(math.floor(float(ap["disponivel"]))) - pend)
+            possivel.append(livre // unidades)
+        if len(pecas) == 1 and apollo.get(_exp_norm_codigo(pecas[0][0])) and not faltou:
+            item["apollo"] = int(math.floor(float(apollo[_exp_norm_codigo(pecas[0][0])]["disponivel"])))
+        item["lido_em"] = min(lidos_em) if lidos_em else ""
+        if faltou:
+            item.update(situacao="desconhecido", motivo=faltou + " — o TikTok não é alterado")
+        else:
+            item["desejado"] = min(possivel) if possivel else None
+            if int(row["armazens"] or 0) != 1 or not row["warehouse_id"]:
+                item.update(situacao="varios_depositos", motivo="A variação não tem um depósito só no TikTok — não enviado")
+            elif row["qtd_tiktok"] is not None and int(row["qtd_tiktok"]) == item["desejado"]:
+                item["situacao"] = "igual"
+            else:
+                item["situacao"] = "enviar"
+        itens.append(item)
+    return itens
+
+
+def tiktok_estoque_enviar(ator: str, automatico: bool = False, skus: list[str] | None = None) -> dict[str, Any]:
+    """Manda ao TikTok as variações com quantidade diferente. Simulação nunca chama o TikTok;
+    o worker (automatico=True) só envia no modo Automático; o clique, no Lote ou Automático."""
+    modo = tiktok_estoque_config()["modo_estoque"]
+    if automatico and modo != "automatico":
+        return {"ok": True, "enviados": 0, "erros": 0, "modo": modo}
+    if not automatico and modo == "simulacao":
+        raise ValueError("Modo Simulação: nada é enviado ao TikTok. Mude para Lote para enviar.")
+    with TIKTOK_ESTOQUE_LOCK:
+        itens = [i for i in tiktok_estoque_itens() if i["situacao"] == "enviar"
+                 and (skus is None or i["sku_id"] in set(skus))]
+        por_produto: dict[str, list[dict[str, Any]]] = {}
+        for i in itens:
+            por_produto.setdefault(i["product_id"], []).append(i)
+        enviados = erros = 0
+        for product_id, lista in por_produto.items():
+            corpo = {"skus": [{"id": i["sku_id"], "inventory": [{"warehouse_id": i["warehouse_id"], "quantity": i["desejado"]}]}
+                              for i in lista]}
+            try:
+                resp = tiktok_api("POST", f"/product/202309/products/{product_id}/inventory/update", body=corpo)
+                recusados = {}
+                for e in ((resp.get("data") or {}).get("errors") or []) if isinstance(resp.get("data"), dict) else []:
+                    det = e.get("detail") if isinstance(e, dict) and isinstance(e.get("detail"), dict) else {}
+                    recusados[str(det.get("sku_id") or "*")] = f"{e.get('code')} {e.get('message') or ''}".strip()
+            except Exception as exc:
+                recusados = {"*": str(exc)[:500]}
+            for i in lista:
+                motivo = recusados.get(i["sku_id"]) or recusados.get("*")
+                if motivo:
+                    erros += 1
+                    _tiktok_estoque_log(i["sku_id"], i["seller_sku"], i["tiktok"], i["desejado"], modo, "ERRO", motivo, ator)
+                    continue
+                enviados += 1
+                with DB_LOCK:
+                    DB.execute("UPDATE tiktok_sku_v1964 SET qtd_tiktok=? WHERE sku_id=?", (i["desejado"], i["sku_id"]))
+                    DB.commit()
+                _tiktok_estoque_log(i["sku_id"], i["seller_sku"], i["tiktok"], i["desejado"], modo, "OK",
+                                    f"Apollo {i['apollo'] if i['apollo'] is not None else '—'} − fila {i['pendente']}", ator)
+    return {"ok": True, "enviados": enviados, "erros": erros, "modo": modo}
+
+
+def tiktok_estoque_payload() -> dict[str, Any]:
+    itens = tiktok_estoque_itens()
+    resumo: dict[str, int] = {"total": len(itens)}
+    for i in itens:
+        resumo[i["situacao"]] = resumo.get(i["situacao"], 0) + 1
+    with DB_LOCK:
+        log = [dict(r) for r in DB.execute("SELECT * FROM tiktok_estoque_log_v1964 ORDER BY id DESC LIMIT 100").fetchall()]
+    return {"ok": True, "config": tiktok_estoque_config(), "conectado": tiktok_status_payload()["connected"],
+            "resumo": resumo, "itens": itens, "log": log, "apollo_por_minuto": TIKTOK_APOLLO_POR_MINUTO}
+
+
+def _tiktok_iso(epoch: Any) -> str:
+    n = _tiktok_quantidade(epoch)
+    return datetime.fromtimestamp(n, timezone.utc).isoformat() if n else ""
+
+
+def tiktok_pedidos_abertos() -> list[dict[str, Any]]:
+    """Pedidos a expedir (aguardando envio/coleta), paginado. Só lê."""
+    pedidos: list[dict[str, Any]] = []
+    for status in TIKTOK_PEDIDOS_STATUS:
+        token = ""
+        for _ in range(20):
+            params: dict[str, Any] = {"page_size": 50}
+            if token:
+                params["page_token"] = token
+            resp = tiktok_api("POST", "/order/202309/orders/search", params=params, body={"order_status": status})
+            dados = resp.get("data") if isinstance(resp.get("data"), dict) else {}
+            pedidos.extend(o for o in (dados.get("orders") or []) if isinstance(o, dict))
+            token = str(dados.get("next_page_token") or "")
+            if not token:
+                break
+    return pedidos
+
+
+def _tiktok_linhas_do_pedido(pedido: dict[str, Any], products: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    numero = str(pedido.get("id") or "").strip()
+    if not numero:
+        return []
+    endereco = pedido.get("recipient_address") if isinstance(pedido.get("recipient_address"), dict) else {}
+    agrupado: dict[tuple[str, str], dict[str, Any]] = {}
+    for item in pedido.get("line_items") or []:
+        if not isinstance(item, dict) or str(item.get("display_status") or "").upper() == "CANCELLED":
+            continue
+        sku = str(item.get("seller_sku") or "").strip()
+        chave = (str(item.get("sku_id") or ""), sku)
+        if chave not in agrupado:
+            agrupado[chave] = {"sku": sku, "nome": str(item.get("product_name") or ""), "qtd": 0}
+        agrupado[chave]["qtd"] += 1  # o TikTok manda um line_item por unidade
+    linhas = []
+    for (sku_id, sku), g in agrupado.items():
+        if not sku:
+            continue
+        identidade = f"{numero}|{sku_id}|{sku}"
+        row = {
+            "Pedido": numero, "Marketplace": "TIKTOK", "Casa": TIKTOK_CASA,
+            "Data do Pedido": _tiktok_iso(pedido.get("create_time"))[:10],
+            "Kit": "", "Nome do Kit": "", "Quantidade de Kits": "", "Quantidade por Kit": "",
+            "Cliente": str(endereco.get("name") or ""),
+            "SKU": sku, "Quantidade": str(g["qtd"]), "Código de Barras": "", "Descrição": g["nome"],
+            "Rua": "", "Módulo": "", "Prateleira": "", "Nível": "", "Posição": "", "Foto": "",
+            "StatusTikTok": str(pedido.get("status") or ""),
+            "PrazoEnvioTikTok": _tiktok_iso(pedido.get("rts_sla_time")),
+            "OrigemCadastro": "API_TIKTOK", "SkuOrigemImportacao": sku,
+            "TikTokAtualizadoEm": now_iso(), "CriadoEm": now_iso(),
+            "__uidLinha": "TIKTOKAPI_" + hashlib.sha1(identidade.encode("utf-8")).hexdigest()[:20],
+        }
+        produto = _ml_find_product(products, sku)
+        if produto:
+            for campo in ("SKU", "Código de Barras", "Descrição", "Rua", "Módulo", "Prateleira", "Nível", "Posição", "Foto"):
+                if str(produto.get(campo) or "").strip():
+                    row[campo] = produto.get(campo)
+        linhas.append(row)
+    return _shopee_expand_kit_lines(linhas, products)  # V18.71: mesma regra de kit
+
+
+def tiktok_importar_pedidos() -> dict[str, Any]:
+    with TIKTOK_SYNC_LOCK:
+        pedidos = tiktok_pedidos_abertos()  # erro aqui = nada gravado
+        products_raw, _, _ = get_storage("conf_produtos")
+        products = _rows_from_storage_value(products_raw)
+        api_linhas: list[dict[str, Any]] = []
+        for pedido in pedidos:
+            api_linhas.extend(_tiktok_linhas_do_pedido(pedido, products))
+        atual_raw, _, _ = get_storage("conf_pedidos")
+        atual = _rows_from_storage_value(atual_raw)
+        fila, removidas, pulados = _magalu_merge(atual, api_linhas, origem="API_TIKTOK",
+                                                 campos=TIKTOK_CAMPOS_OPERACIONAIS)
+        save_storage("conf_pedidos", atual_raw, json_dumps(fila), False,
+                     actor="sistema", actor_role="sistema", source_screen="Admin / Integrações / TikTok",
+                     change_method="Sincronização API TikTok", client_ip="127.0.0.1",
+                     allow_completed_reimport=False, remove_pending_identities=removidas)
+        resumo = {"ok": True, "pedidos": len({order_number(r) for r in api_linhas}), "linhas": len(api_linhas),
+                  "removidas": len(removidas), "ja_na_fila_por_outra_origem": pulados}
+        tiktok_log_event_se_mudou("pedidos", "/order/202309/orders/search", "OK",
+                                  f"{resumo['pedidos']} pedido(s), {resumo['linhas']} linha(s), "
+                                  f"{len(removidas)} removida(s), {pulados} já na fila")
+        return resumo
+
+
+_TIKTOK_LOG_ULTIMO: dict[tuple[str, str], tuple[str, str]] = {}
+
+
+def tiktok_log_event_se_mudou(topic: str, resource: str, result: str, detail: str = "") -> bool:
+    chave = (topic, resource)
+    if _TIKTOK_LOG_ULTIMO.get(chave) == (result, detail):
+        return False
+    _TIKTOK_LOG_ULTIMO[chave] = (result, detail)
+    tiktok_log_event(topic, resource, result, detail)
+    return True
+
+
+def tiktok_rodada() -> dict[str, Any]:
+    """Uma volta do worker de pedidos: mantém o token vivo e, ligada, importa."""
+    if not tiktok_status_payload().get("connected"):
+        return {"importou": False, "motivo": "desconectado"}
+    tiktok_access_token()
+    if not tiktok_importacao_ligada():
+        return {"importou": False, "motivo": "importacao_desligada"}
+    return {"importou": True, **tiktok_importar_pedidos()}
+
+
+def tiktok_pedidos_loop(stop_event: threading.Event) -> None:
+    stop_event.wait(50)
+    while not stop_event.is_set():
+        try:
+            tiktok_rodada()
+        except Exception as exc:
+            with DB_LOCK:
+                DB.execute("UPDATE tiktok_integration SET last_error=? WHERE id=1", (str(exc)[:500],))
+                DB.commit()
+            tiktok_log_event_se_mudou("pedidos", "worker", "ERRO", str(exc)[:800])
+        stop_event.wait(TIKTOK_PEDIDOS_INTERVALO)
+
+
+def tiktok_estoque_loop(stop_event: threading.Event) -> None:
+    """Rodízio do Apollo (≤ 3/min) + refaz o estoque quando a fila muda; anúncios de hora em hora."""
+    stop_event.wait(70)
+    ultima_versao = -1
+    ultimo_catalogo = 0.0
+    while not stop_event.is_set():
+        try:
+            if tiktok_status_payload().get("connected"):
+                if time.monotonic() - ultimo_catalogo > 3600 or ultimo_catalogo == 0:
+                    tiktok_produtos_sincronizar()
+                    ultimo_catalogo = time.monotonic()
+                lido = tiktok_apollo_ler_proximo()
+                _, versao, _ = get_storage("conf_pedidos")
+                if lido or versao != ultima_versao:
+                    ultima_versao = versao
+                    r = tiktok_estoque_enviar(ator="sistema", automatico=True)
+                    if r.get("erros"):
+                        tiktok_log_event_se_mudou("estoque", "worker", "ERRO", f"{r['erros']} variação(ões) recusada(s)")
+        except Exception as exc:
+            tiktok_log_event_se_mudou("estoque", "worker", "ERRO", str(exc)[:800])
+        stop_event.wait(20)
 
 
 def shopee_api_get(path: str, params: dict[str, Any] | None = None, retry_auth: bool = True) -> dict[str, Any]:
@@ -29881,6 +30444,11 @@ class AppHandler(BaseHTTPRequestHandler):
                     rows = DB.execute("SELECT tipo,resposta,created_at FROM tiktok_amostra_v1963").fetchall()
                 self.send_json({"ok": True, "amostras": [dict(r) for r in rows]})
             return
+        if path == "/api/tiktok-estoque":  # V19.64: tela Estoque TikTok (só lê o banco)
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                self.send_json(tiktok_estoque_payload())
+            return
         if path == "/api/integracoes/tiktok/logs":
             ctx = self.auth(admin_only=True)
             if ctx is not None:
@@ -30640,6 +31208,8 @@ class AppHandler(BaseHTTPRequestHandler):
             "/conversao": "admin", "/conversao/": "admin", "/conversao.html": "admin",
             # V18.72: Ruptura (venda perdida por falta de estoque).
             "/ruptura": "admin", "/ruptura/": "admin", "/ruptura.html": "admin",
+            # V19.64: Estoque do TikTok Shop (Bauru).
+            "/tiktok-estoque": "admin", "/tiktok-estoque/": "admin", "/tiktok-estoque.html": "admin",
             # V18.88: Pós-venda do ML.
             "/posvenda": "admin", "/posvenda/": "admin", "/posvenda.html": "admin",
             # V18.83: Painel de saúde do sistema.
@@ -31642,6 +32212,54 @@ class AppHandler(BaseHTTPRequestHandler):
                 except Exception as exc:
                     magalu_log_event("pedidos", "manual", "ERRO", str(exc))
                     self.send_json({"ok": False, "error": str(exc)}, 502)
+            return
+        if path.startswith("/api/tiktok-estoque/") or path in ("/api/integracoes/tiktok/importacao",
+                                                              "/api/integracoes/tiktok/sincronizar"):
+            # V19.64: estoque e pedidos do TikTok. Mudar modo, vínculo, enviar e a chave da
+            # importação = perfil Admin; ligar o Automático = OWNER (senha + 2FA).
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            if str(ctx.get("app_role") or "") != "admin":
+                self.send_json({"ok": False, "error": "Somente o perfil Admin."}, 403)
+                return
+            try:
+                body = self.read_json() or {}
+                if path == "/api/integracoes/tiktok/importacao":
+                    tiktok_importacao_definir(bool(body.get("ligada")), ctx["username"])
+                    audit(ctx["username"], "tiktok.importacao", str(bool(body.get("ligada"))))
+                    res = {"ok": True, "importacao": tiktok_importacao_ligada()}
+                elif path == "/api/integracoes/tiktok/sincronizar":
+                    if not tiktok_importacao_ligada():
+                        self.send_json({"ok": False, "error": "A importação do TikTok está desligada."}, 409)
+                        return
+                    res = tiktok_importar_pedidos()
+                elif path == "/api/tiktok-estoque/config":
+                    modo = str(body.get("modo_estoque") or "")
+                    if modo == "automatico" and tiktok_estoque_config()["modo_estoque"] != "automatico" \
+                            and not self.require_owner_reauth(ctx):
+                        audit(ctx["username"], "security.denied.owner_reauth", "tiktok.estoque.automatico")
+                        return
+                    res = {"ok": True, "config": tiktok_estoque_config_definir("modo_estoque", modo, ctx["username"])}
+                    audit(ctx["username"], "tiktok.estoque.modo", modo)
+                elif path == "/api/tiktok-estoque/vinculo":
+                    res = tiktok_vinculo_definir(str(body.get("sku_id") or ""), str(body.get("codigos") or ""), ctx["username"])
+                    audit(ctx["username"], "tiktok.estoque.vinculo", f"{res['sku_id']}|{res['codigos']}")
+                elif path == "/api/tiktok-estoque/enviar":
+                    skus = body.get("skus")
+                    res = tiktok_estoque_enviar(ator=ctx["username"], skus=[str(x) for x in skus] if isinstance(skus, list) else None)
+                    audit(ctx["username"], "tiktok.estoque.enviar", f"{res['enviados']} ok, {res['erros']} erro")
+                elif path == "/api/tiktok-estoque/atualizar":
+                    res = tiktok_produtos_sincronizar()
+                else:
+                    self.send_json({"ok": False, "error": "Rota não encontrada."}, 404)
+                    return
+                self.send_json(res)
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+            except Exception as exc:
+                tiktok_log_event("tela", path, "ERRO", str(exc)[:800])
+                self.send_json({"ok": False, "error": str(exc)}, 502)
             return
         if path == "/api/integracoes/tiktok/disconnect":  # V19.63: mesma regra da Magalu (OWNER)
             ctx = self.auth(admin_only=True)
@@ -34026,6 +34644,9 @@ class AppHandler(BaseHTTPRequestHandler):
             "/conversao/": "conversao.html",
             "/conversao.html": "conversao.html",
             "/ruptura": "ruptura.html",
+            "/tiktok-estoque": "tiktok-estoque.html",
+            "/tiktok-estoque/": "tiktok-estoque.html",
+            "/tiktok-estoque.html": "tiktok-estoque.html",
             "/saude": "saude.html",
             "/saude/": "saude.html",
             "/faturamento": "faturamento.html",
@@ -34652,6 +35273,8 @@ SAUDE_WORKERS_INFO: dict[str, tuple[str, bool, int]] = {
     "ml_safety_catchup_loop": ("Recuperação de pedidos do Mercado Livre", False, 45),
     "shopee_orders_worker_loop": ("Pedidos novos da Shopee", True, 20),
     "magalu_pedidos_loop": ("Pedidos e etiquetas da Magalu", True, 20),  # V19.27
+    "tiktok_pedidos_loop": ("Pedidos do TikTok Shop (Bauru)", True, 20),  # V19.64
+    "tiktok_estoque_loop": ("Estoque do TikTok Shop (Apollo de Bauru)", False, 30),  # V19.64
     "shopee_label_worker_loop": ("Etiquetas da Shopee", True, 30),
     "vendas_sync_loop": ("Vendas (Dashboard e Financeiro)", False, 120),
     "vendas_rapido_loop": ("Vendas novas no Dashboard (tempo real)", False, 20),  # V19.58
@@ -35561,6 +36184,15 @@ def main() -> None:
         daemon=True,
     )
     # V19.27: pedidos e etiquetas da Magalu (importa só com a chave ligada).
+    # V19.64: TikTok Shop (Bauru) — pedidos na fila e estoque do Apollo de Bauru.
+    tiktok_pedidos_thread = threading.Thread(
+        target=_worker_protegido(tiktok_pedidos_loop), args=(watcher_stop,),
+        name="tiktok-pedidos-worker", daemon=True,
+    )
+    tiktok_estoque_thread = threading.Thread(
+        target=_worker_protegido(tiktok_estoque_loop), args=(watcher_stop,),
+        name="tiktok-estoque-worker", daemon=True,
+    )
     magalu_thread = threading.Thread(
         target=_worker_protegido(magalu_pedidos_loop),
         args=(watcher_stop,),
@@ -35734,6 +36366,8 @@ def main() -> None:
         shopee_label_thread.start()
         shopee_orders_thread.start()
         magalu_thread.start()
+        tiktok_pedidos_thread.start()
+        tiktok_estoque_thread.start()
         vendas_ml_thread.start()
         vendas_rapido_thread.start()
         frete_thread.start()

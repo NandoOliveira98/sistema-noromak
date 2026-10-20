@@ -1400,7 +1400,7 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
   </style>
   <!-- V18.82: o menu (itens, grupos recolhíveis, Sair) vem do nk-menu.js, o mesmo das outras telas.
        Cada item é um link com o endereço da tela (/expedicao/pedidos-dia...): Ctrl+clique abre em outra aba. -->
-  <script src="/expedicao/nk-menu.js?v=19.43"></script>
+  <script src="/expedicao/nk-menu.js?v=19.64"></script>
   <script>nkMenuDesenhar(document.currentScript);</script>
 </nav>
 
@@ -2095,6 +2095,7 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
             <b>App Key</b><span id="tiktokAppKey">—</span>
             <b>Loja</b><span id="tiktokLoja">—</span>
             <b>Conectada em</b><span id="tiktokConectadaEm">—</span>
+            <b>Pedidos</b><span id="tiktokImportacao">—</span>
             <b>Callback OAuth</b><span id="tiktokCallback">—</span>
             <b>Credenciais</b><span>Somente no servidor</span>
           </div>
@@ -2102,9 +2103,12 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
             <button type="button" id="btnTiktokConectar" class="btn-primario" onclick="conectarTiktokAdmin()">Conectar TikTok Shop</button>
             <button type="button" id="btnTiktokDesconectar" class="btn-perigo" onclick="desconectarTiktokAdmin()" disabled>Desconectar</button>
             <button type="button" id="btnTiktokTeste" class="btn-secundario" onclick="testeTiktokAdmin()" disabled title="Só lê: loja e depósitos. Nada é alterado.">Testar leitura</button>
+            <button type="button" id="btnTiktokImportacao" class="btn-secundario" onclick="alternarImportacaoTiktokAdmin()" disabled>Desligar importação</button>
+            <button type="button" id="btnTiktokSincronizar" class="btn-sucesso" onclick="sincronizarTiktokAdmin()" disabled>↻ Sincronizar agora</button>
+            <a class="btn-secundario" href="/expedicao/tiktok-estoque" target="_blank" rel="noopener">Estoque TikTok</a>
           </div>
           <div id="tiktokTeste"></div>
-          <div id="tiktokIntegracaoMensagem" class="integracao-nota">Entre com a conta da loja de <b>Bauru</b> no TikTok Shop e autorize o app da Noromak. Por enquanto só conecta: o controle de estoque (Apollo de Bauru → TikTok) vem na próxima fase.</div>
+          <div id="tiktokIntegracaoMensagem" class="integracao-nota">Entre com a conta da loja de <b>Bauru</b> no TikTok Shop e autorize o app da Noromak. Com a importação ligada, os pedidos aguardando envio entram sozinhos na fila de <b>Bauru</b>. O estoque (Apollo de Bauru → TikTok) fica na tela Estoque TikTok.</div>
         </div>
         <div class="integracao-card">
           <h3><i class=nk-i-file></i> Linx DMS · Smart API</h3>
@@ -9896,6 +9900,11 @@ async function carregarIntegracaoTiktokAdmin(){
     if(tk.connected){
       badge.className="integracao-status ok";badge.textContent="🟢 TikTok Shop conectado";
       if(conectar){conectar.disabled=false;conectar.textContent="Reconectar TikTok Shop";}if(disc)disc.disabled=false;if(teste)teste.disabled=false;
+      // V19.64: chave da importação de pedidos (começa ligada).
+      const lig=!!tk.importacao_ligada,bi=document.getElementById("btnTiktokImportacao"),bs=document.getElementById("btnTiktokSincronizar");
+      document.getElementById("tiktokImportacao").textContent=lig?"🟢 Ligada — entram na fila de Bauru a cada 2 min":"⚪ Desligada";
+      if(bi){bi.disabled=false;bi.textContent=lig?"Desligar importação":"Ligar importação";bi.dataset.ligada=lig?"1":"0";}
+      if(bs)bs.disabled=!lig;
       if(msg&&tk.last_error)msg.textContent="Último erro: "+tk.last_error;
     }else if(!tk.configured){
       badge.className="integracao-status off";badge.textContent="🟡 Aguardando credenciais (TIKTOK_APP_KEY, TIKTOK_APP_SECRET e TIKTOK_SERVICE_ID no .env)";
@@ -9919,6 +9928,23 @@ async function testeTiktokAdmin(){
       `<div class="integracao-nota">${e.ok?"✅":"❌"} ${esc(e.etapa)}: ${e.ok?esc(e.itens)+" — "+esc((e.nomes||[]).join(", ")||"(sem nome)"):esc(e.erro)}</div>`).join("");
   }catch(e){box.innerHTML=`<div class="integracao-alerta">❌ ${esc(e.message)}</div>`;}
   finally{if(btn){btn.disabled=false;btn.textContent="Testar leitura";}await carregarIntegracaoTiktokAdmin();}
+}
+async function alternarImportacaoTiktokAdmin(){
+  const bi=document.getElementById("btnTiktokImportacao");const ligar=bi?.dataset.ligada!=="1";
+  if(!await nkConfirmar(ligar?"Ligar a importação do TikTok? Os pedidos aguardando envio passam a entrar sozinhos na fila de Bauru.":"Desligar a importação do TikTok? Os pedidos que já estão na fila continuam lá."))return;
+  try{await mlApiAdmin("/expedicao/api/integracoes/tiktok/importacao",{method:"POST",body:JSON.stringify({ligada:ligar})});}
+  catch(e){alert("TikTok Shop: "+e.message);}
+  await carregarIntegracaoTiktokAdmin();
+}
+async function sincronizarTiktokAdmin(){
+  const bs=document.getElementById("btnTiktokSincronizar"),msg=document.getElementById("tiktokIntegracaoMensagem");
+  if(bs){bs.disabled=true;bs.textContent="Sincronizando…";}
+  try{
+    const d=await mlApiAdmin("/expedicao/api/integracoes/tiktok/sincronizar",{method:"POST",body:"{}"});
+    if(msg)msg.textContent=`✅ TikTok: ${d.pedidos} pedido(s) na fila de Bauru${d.ja_na_fila_por_outra_origem?`, ${d.ja_na_fila_por_outra_origem} já estavam na fila por outra origem`:""}.`;
+    if(typeof appStorage?.sincronizarAgora==="function")await appStorage.sincronizarAgora();
+  }catch(e){if(msg)msg.textContent="❌ "+e.message;}
+  finally{if(bs)bs.textContent="↻ Sincronizar agora";await carregarIntegracaoTiktokAdmin();}
 }
 function conectarTiktokAdmin(){window.location.href="/expedicao/api/integracoes/tiktok/connect";}
 async function desconectarTiktokAdmin(){

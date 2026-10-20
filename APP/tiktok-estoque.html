@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="/favicon.ico?v=14.5" sizes="any">
+<title>Noromak · Estoque TikTok</title>
+<!-- V19.64: estoque do TikTok Shop (Bauru). Quantidade = disponível de Bauru no Apollo − o que já foi
+     vendido e está na fila de Bauru; kit = a peça que tem menos; Apollo sem resposta = o TikTok não é
+     alterado. Vínculo pelo SKU do vendedor (código Apollo); o vínculo à mão vence. Modos: Simulação
+     (não envia) → Lote (clique) → Automático (ligar = OWNER). GET /api/tiktok-estoque,
+     POST /api/tiktok-estoque/{config,vinculo,enviar,atualizar}. -->
+<script defer src="/expedicao/web-auth.js?v=19.40"></script>
+<link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
+<link rel="stylesheet" href="/expedicao/nk-ui.css?v=19.13">
+<script src="/expedicao/nk-ui.js?v=19.13"></script>
+<script defer src="/expedicao/nk-menu.js?v=19.64" data-shell></script>
+<style>
+body{margin:0;background:var(--nk-canvas);color:var(--nk-ink);font-family:var(--nk-font)}
+.bloco{margin-top:14px}
+.barra{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+.barra .esp{flex:1}
+.modos{display:inline-flex;border:1px solid var(--nk-line);border-radius:8px;overflow:hidden}
+.modos button{border:0;background:var(--nk-tile);color:var(--nk-ink2);font:inherit;font-size:13px;font-weight:600;padding:8px 13px;cursor:pointer}
+.modos button+button{border-left:1px solid var(--nk-line)}
+.modos button.on{background:var(--nk-pri);color:var(--nk-pri-txt)}
+.nota{color:var(--nk-ink2);font-size:12.5px;margin:6px 0 0}
+input[type=search]{border:1px solid var(--nk-line);background:var(--nk-tile);color:var(--nk-ink);border-radius:8px;padding:7px 10px;font:inherit;width:240px;max-width:100%}
+.tabela{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:8px 10px;border-bottom:1px solid var(--nk-line);text-align:left;vertical-align:top}
+th{color:var(--nk-ink2);font-weight:600;white-space:nowrap}
+td.num,th.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
+td.tit{max-width:320px}
+.mono{font-family:Consolas,monospace;font-size:12px}
+.muted{color:var(--nk-ink2);font-size:12px}
+.vazio{padding:24px;text-align:center;color:var(--nk-ink2)}
+.vinc{display:flex;gap:6px}
+.vinc input{border:1px solid var(--nk-line);background:var(--nk-tile);color:var(--nk-ink);border-radius:6px;padding:4px 7px;font:inherit;font-size:12px;width:140px}
+.alerta{background:var(--nk-warn-bg);color:var(--nk-warn);border-radius:10px;padding:10px 13px;font-size:13px;margin-top:12px}
+.modal{position:fixed;inset:0;background:rgba(10,25,45,.45);display:none;align-items:center;justify-content:center;padding:16px;z-index:50}
+.modal.on{display:flex}
+.modal form{background:var(--nk-tile);border-radius:12px;padding:18px;width:360px;max-width:100%}
+.modal label{display:block;font-size:12px;font-weight:600;color:var(--nk-ink2);margin:10px 0 4px}
+.modal input{width:100%;box-sizing:border-box;border:1px solid var(--nk-line);background:var(--nk-tile);color:var(--nk-ink);border-radius:8px;padding:8px 10px;font:inherit}
+.modal .acoes{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
+.erro{color:var(--nk-bad);font-size:12.5px;margin-top:8px}
+</style>
+</head>
+<body>
+<main class="nk-pagina">
+  <header class="nk-cab"><span class="nk-rotulo">Estoque e compras</span><h1>Estoque TikTok</h1>
+    <p>Estoque de Bauru no Apollo, menos o que já foi vendido e está na fila de Bauru, enviado ao TikTok Shop.</p></header>
+  <div id="aviso"></div>
+  <div class="nk-kpis bloco" id="kpis"></div>
+  <section class="nk-painel bloco">
+    <div class="barra">
+      <span class="modos" id="modos" role="group" aria-label="Modo do envio">
+        <button data-m="simulacao">Simulação</button><button data-m="lote">Lote</button><button data-m="automatico">Automático</button>
+      </span>
+      <button class="nk-btn pri" id="btnEnviar" onclick="enviar()" disabled>Enviar diferenças ao TikTok</button>
+      <button class="nk-btn" onclick="atualizarAnuncios()">Ler anúncios do TikTok</button>
+      <span class="esp"></span>
+      <input type="search" id="busca" placeholder="Buscar SKU, código ou título" oninput="desenhar()">
+    </div>
+    <p class="nota" id="notaModo"></p>
+    <div class="barra" style="margin-top:10px" id="abas"></div>
+    <div class="tabela"><table data-nk-tabela="estoque_tiktok" data-nk-ordenar="0"><thead><tr>
+      <th>Anúncio</th><th>SKU do vendedor</th><th>Código Apollo</th><th class="num">Apollo Bauru</th>
+      <th class="num">Na fila</th><th class="num">Deveria ter</th><th class="num">No TikTok</th><th>Situação</th>
+    </tr></thead><tbody id="corpo"><tr><td colspan="8" class="vazio">Carregando…</td></tr></tbody></table></div>
+  </section>
+  <section class="nk-painel bloco">
+    <h3 style="margin:0 0 8px;font-size:15px">Histórico do envio</h3>
+    <div class="tabela"><table><thead><tr><th>Quando</th><th>SKU</th><th class="num">De</th><th class="num">Para</th><th>Modo</th><th>Resultado</th><th>Detalhe</th><th>Por</th></tr></thead>
+      <tbody id="log"></tbody></table></div>
+  </section>
+</main>
+<div class="modal" id="owner" role="dialog" aria-modal="true" aria-labelledby="ownerTit"><form id="ownerForm">
+  <h3 id="ownerTit" style="margin:0">Confirmar como proprietário</h3>
+  <p class="muted">Ligar o Automático deixa o Noromak mudar o estoque do TikTok sozinho.</p>
+  <label for="ownerSenha">Senha</label><input type="password" id="ownerSenha" autocomplete="current-password" required>
+  <label for="ownerCodigo">Código de 6 dígitos</label><input type="text" id="ownerCodigo" inputmode="numeric" autocomplete="one-time-code" maxlength="8" required>
+  <div class="erro" id="ownerErro"></div>
+  <div class="acoes"><button class="nk-btn" type="button" onclick="fecharOwner()">Cancelar</button><button class="nk-btn pri" type="submit">Confirmar</button></div>
+</form></div>
+<script>
+const SIT={enviar:["A enviar","warn"],igual:["Igual ao TikTok","ok"],desconhecido:["Sem número do Apollo","info"],
+  sem_vinculo:["Sem vínculo","bad"],varios_depositos:["Vários depósitos","bad"]};
+const ABAS=[["todos","Todos"],["enviar","A enviar"],["sem_vinculo","Sem vínculo"],["desconhecido","Sem número do Apollo"],["zerados","Zerados"]];
+const NOTA={simulacao:"Simulação: o Noromak só mostra o que mandaria. Nada é enviado ao TikTok.",
+  lote:"Lote: o envio acontece só quando alguém clica em “Enviar diferenças ao TikTok”.",
+  automatico:"Automático: o Noromak envia sozinho sempre que a quantidade muda (venda nova na fila de Bauru ou nova leitura do Apollo)."};
+let D=null,ABA="todos",depoisOwner=null;
+const $=id=>document.getElementById(id);
+const esc=v=>String(v??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const num=v=>v==null?"—":String(v);
+const quando=v=>v?new Date(v).toLocaleString("pt-BR",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}):"—";
+async function api(url,corpo){
+  const r=await fetch("/expedicao"+url,corpo?{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(corpo),credentials:"same-origin"}:{credentials:"same-origin"});
+  let d={};try{d=await r.json();}catch(_){}
+  if(!r.ok){const e=new Error(d.error||("HTTP "+r.status));e.status=r.status;throw e;}
+  return d;
+}
+async function carregar(){
+  try{D=await api("/api/tiktok-estoque");}catch(e){$("corpo").innerHTML=`<tr><td colspan=8 class=vazio>${esc(e.message)}</td></tr>`;return;}
+  desenhar();
+}
+function grupo(i){return ABA==="todos"||(ABA==="zerados"?i.desejado===0:i.situacao===ABA);}
+function desenhar(){
+  if(!D)return;
+  const r=D.resumo||{},modo=D.config.modo_estoque;
+  $("aviso").innerHTML=D.conectado?"":'<div class="alerta">O TikTok Shop ainda não está conectado. Conecte em Integrações → TikTok Shop · Bauru.</div>';
+  const kpi=(ic,cl,v,t,aba)=>`<button class="nk-kpi" onclick="ABA='${aba}';desenhar()"><span class="nk-kpi-ic ${cl}">${ic}</span><span><b>${v||0}</b><small>${t}</small></span></button>`;
+  $("kpis").innerHTML=kpi("▦","",r.total,"Variações no TikTok","todos")+kpi("↑","warn",r.enviar,"A enviar","enviar")+
+    kpi("?","bad",r.sem_vinculo,"Sem vínculo","sem_vinculo")+kpi("…","",r.desconhecido,"Sem número do Apollo","desconhecido");
+  document.querySelectorAll("#modos button").forEach(b=>b.classList.toggle("on",b.dataset.m===modo));
+  $("notaModo").textContent=NOTA[modo]+` O Apollo é lido em rodízio, até ${D.apollo_por_minuto} consultas por minuto, estoque baixo primeiro.`;
+  $("btnEnviar").disabled=modo==="simulacao"||!r.enviar;
+  const cont={};(D.itens||[]).forEach(i=>{ABAS.forEach(([k])=>{const a=ABA;ABA=k;if(grupo(i))cont[k]=(cont[k]||0)+1;ABA=a;});});
+  $("abas").innerHTML=ABAS.map(([k,t])=>`<button class="nk-tab${k===ABA?" ativo":""}" aria-pressed="${k===ABA}" onclick="ABA='${k}';desenhar()">${t} (${cont[k]||0})</button>`).join("");
+  const q=$("busca").value.trim().toLowerCase();
+  const lista=(D.itens||[]).filter(i=>grupo(i)&&(!q||[i.seller_sku,i.vinculo,i.titulo,i.sku_id].join(" ").toLowerCase().includes(q)));
+  $("corpo").innerHTML=lista.length?lista.map(i=>{
+    const s=SIT[i.situacao]||[i.situacao,""];
+    const cod=(i.pecas||[]).map(([c,u])=>u>1?`${u}× ${c}`:c).join(" + ");
+    return `<tr><td class="tit">${esc(i.titulo)}<div class="muted mono">${esc(i.sku_id)}</div></td>
+      <td class="mono">${esc(i.seller_sku)||"—"}</td>
+      <td><div class="vinc"><input value="${esc(i.vinculo)}" placeholder="${esc(cod)||"código Apollo"}" aria-label="Vínculo à mão de ${esc(i.seller_sku)}" onkeydown="if(event.key==='Enter')vincular('${esc(i.sku_id)}',this.value)"></div>
+        <div class="muted">${i.vinculo?"vínculo à mão":(cod?"pelo SKU do vendedor":"")}</div></td>
+      <td class="num">${num(i.apollo)}<div class="muted">${quando(i.lido_em)}</div></td>
+      <td class="num">${i.pendente||0}</td><td class="num"><b>${num(i.desejado)}</b></td><td class="num">${num(i.tiktok)}</td>
+      <td><span class="nk-selo ${s[1]}">${s[0]}</span>${i.motivo?`<div class="muted">${esc(i.motivo)}</div>`:""}</td></tr>`;
+  }).join(""):`<tr><td colspan=8 class=vazio>${(D.itens||[]).length?"Nada neste filtro.":"Nenhum anúncio lido do TikTok ainda."}</td></tr>`;
+  $("log").innerHTML=(D.log||[]).length?D.log.map(l=>`<tr><td>${quando(l.criado_em)}</td><td class="mono">${esc(l.seller_sku||l.sku_id)}</td><td class="num">${num(l.de)}</td><td class="num">${num(l.para)}</td><td>${esc(l.modo)}</td><td>${esc(l.resultado)}</td><td class="muted">${esc(l.detalhe)}</td><td>${esc(l.por)}</td></tr>`).join(""):`<tr><td colspan=8 class=vazio>Nada enviado ainda.</td></tr>`;
+}
+async function vincular(sku,codigos){
+  try{await api("/api/tiktok-estoque/vinculo",{sku_id:sku,codigos});nkToast(codigos?"Vínculo salvo. O Apollo desse código é lido na próxima volta.":"Vínculo apagado: volta a valer o SKU do vendedor.");carregar();}
+  catch(e){nkToast(e.message);}
+}
+async function salvarModo(m){
+  try{await api("/api/tiktok-estoque/config",{modo_estoque:m});nkToast("Modo salvo.");carregar();}
+  catch(e){if(e.status===428){depoisOwner=()=>salvarModo(m);abrirOwner();return;}nkToast(e.message);}
+}
+document.querySelectorAll("#modos button").forEach(b=>b.onclick=async()=>{
+  const m=b.dataset.m;if(!D||m===D.config.modo_estoque)return;
+  if(m==="automatico"&&!await nkConfirmar("Ligar o Automático? O Noromak vai mudar o estoque do TikTok sozinho, sempre que a quantidade de Bauru mudar. Em seguida será pedida a confirmação do proprietário."))return;
+  salvarModo(m);
+});
+async function enviar(){
+  const n=(D.resumo||{}).enviar||0;
+  if(!await nkConfirmar(`Enviar ${n} variação(ões) com quantidade diferente ao TikTok?`))return;
+  $("btnEnviar").disabled=true;
+  try{const r=await api("/api/tiktok-estoque/enviar",{});nkToast(`${r.enviados} enviada(s)${r.erros?`, ${r.erros} recusada(s) — veja o histórico`:""}.`);}
+  catch(e){nkToast(e.message);}
+  carregar();
+}
+async function atualizarAnuncios(){
+  try{const r=await api("/api/tiktok-estoque/atualizar",{});nkToast(`${r.variacoes} variação(ões) lidas do TikTok.`);carregar();}
+  catch(e){nkToast(e.message);}
+}
+function abrirOwner(){$("ownerErro").textContent="";$("owner").classList.add("on");setTimeout(()=>$("ownerSenha").focus(),30);}
+function fecharOwner(){$("owner").classList.remove("on");$("ownerSenha").value="";$("ownerCodigo").value="";}
+$("ownerForm").onsubmit=async e=>{
+  e.preventDefault();
+  try{await api("/api/security/owner/reauth",{password:$("ownerSenha").value,code:$("ownerCodigo").value});fecharOwner();if(depoisOwner)depoisOwner();}
+  catch(err){$("ownerErro").textContent=err.message;}
+};
+document.addEventListener("keydown",e=>{if(e.key==="Escape")fecharOwner();});
+carregar();setInterval(carregar,30000);
+</script>
+</body>
+</html>
