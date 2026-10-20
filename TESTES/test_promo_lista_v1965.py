@@ -69,3 +69,19 @@ class ListaUmCalculo(Base):
         [t.start() for t in ts]
         [t.join() for t in ts]
         self.assertEqual(len(erros), 3)
+
+
+class PrecificadorUmaVezPorVersao(Base):
+    """O JSON do Precificador é decodificado uma vez por versão, e a mudança aparece na hora."""
+
+    def gravar(self, produtos):
+        atual, _, _ = S.get_storage("precificador_online_v1")
+        S.save_storage("precificador_online_v1", atual, S.json_dumps({"products": produtos}), False,
+                       actor="teste", actor_role="admin")
+
+    def test_decodifica_uma_vez_e_ve_a_mudanca(self):
+        self.gravar([{"sku": "A1"}])
+        a = S.precificador_dados()
+        self.assertIs(S.precificador_dados(), a)
+        self.gravar([{"sku": "B2"}])
+        self.assertEqual([p["sku"] for p in S.precificador_dados()["products"]], ["B2"])

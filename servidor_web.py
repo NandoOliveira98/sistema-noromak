@@ -9701,12 +9701,37 @@ def _promo_float(value: Any, default: float = 0.0) -> float:
         return float(default)
 
 
+# V19.65: o JSON do Precificador é grande e era decodificado inteiro a cada consulta (lista
+# das Promoções, Demanda, Financeiro, Shopee/Magalu...) — em produção (20/10) isso empilhou
+# CPU e memória até o processo chegar a 900 MB. Agora é decodificado uma vez por versão do
+# storage: mudou no Precificador (ou na gaveta), a próxima leitura já vê. NÃO alterar o
+# objeto devolvido — é compartilhado; quem precisa mudar e gravar continua no get_storage.
+_PRECIFICADOR_CACHE: dict[str, Any] = {"versao": None, "dados": {}}
+_PRECIFICADOR_CACHE_LOCK = threading.Lock()
+
+
+def precificador_dados() -> dict[str, Any]:
+    with DB_LOCK:
+        row = DB.execute("SELECT version, updated_at, length(value) FROM storage WHERE key=?",
+                         ("precificador_online_v1",)).fetchone()
+    # versão + horário + tamanho: banco restaurado (ou de teste) pode repetir o número da versão
+    versao = (id(DB), row[0], row[1], row[2]) if row else None
+    with _PRECIFICADOR_CACHE_LOCK:
+        if _PRECIFICADOR_CACHE["versao"] == versao and versao is not None:
+            return _PRECIFICADOR_CACHE["dados"]
+        raw, _, _ = get_storage("precificador_online_v1")
+        try:
+            dados = json.loads(raw or "{}")
+        except Exception:
+            dados = {}
+        if not isinstance(dados, dict):
+            dados = {"products": dados} if isinstance(dados, list) else {}
+        _PRECIFICADOR_CACHE.update({"versao": versao, "dados": dados})
+        return dados
+
+
 def _promo_precifier_index() -> dict[str, dict[str, Any]]:
-    raw, _, _ = get_storage("precificador_online_v1")
-    try:
-        products = json.loads(raw or "[]")
-    except Exception:
-        products = []
+    products = precificador_dados()   # V19.65
     out: dict[str, dict[str, Any]] = {}
     if isinstance(products, dict):
         products = products.get("products") or products.get("produtos") or []
@@ -23667,11 +23692,7 @@ def ml_promocoes_do_item(mlb: str) -> list[dict[str, Any]]:
 
 def _precificador_produtos_ml() -> dict[str, dict[str, Any]]:
     """SKU -> custo/imposto e as taxas do ML, como o Precificador já calcula."""
-    raw, _, _ = get_storage("precificador_online_v1")
-    try:
-        dados = json.loads(raw or "{}")
-    except Exception:
-        dados = {}
+    dados = precificador_dados()   # V19.65
     out: dict[str, dict[str, Any]] = {}
     for p in (dados.get("products") if isinstance(dados, dict) else None) or []:
         if not isinstance(p, dict) or p.get("isKit"):
@@ -24780,11 +24801,7 @@ def _promo_produtos() -> dict[str, dict[str, Any]]:
     custo = kit sem custo (nunca estimado).
     """
     produtos = dict(_precificador_produtos_ml())
-    raw, _, _ = get_storage("precificador_online_v1")
-    try:
-        lista = (json.loads(raw or "{}") or {}).get("products") or []
-    except Exception:
-        lista = []
+    lista = precificador_dados().get("products") or []   # V19.65
     # V19.31: o custo lido do Apollo (o mesmo que a gaveta mostra: filial do produto, senão a
     # 1ª com custo) manda sobre o guardado no Precificador. Caso real: linha com R$ 59,12 do
     # Precificador dava lucro R$ 6,33 e a gaveta, com R$ 48,30 do Apollo, R$ 17,15. Sem leitura
@@ -25547,11 +25564,7 @@ def shopee_promo_preco_minimo(prod: dict[str, Any], frete: float = 0.0, margem: 
 
 def _shopee_fretes_precificador() -> dict[str, float]:
     """SKU -> frete da Shopee digitado no Precificador (sem valor = 0, como na tela dele)."""
-    raw, _, _ = get_storage("precificador_online_v1")
-    try:
-        lista = (json.loads(raw or "{}") or {}).get("products") or []
-    except Exception:
-        lista = []
+    lista = precificador_dados().get("products") or []   # V19.65
     out: dict[str, float] = {}
     for p in lista if isinstance(lista, list) else []:
         if not isinstance(p, dict):
@@ -25565,11 +25578,7 @@ def _shopee_fretes_precificador() -> dict[str, float]:
 
 def _shopee_margens_precificador() -> dict[str, float]:
     """V19.51: SKU -> margem desejada da Shopee no Precificador (fração; o "Ideal" da gaveta)."""
-    raw, _, _ = get_storage("precificador_online_v1")
-    try:
-        lista = (json.loads(raw or "{}") or {}).get("products") or []
-    except Exception:
-        lista = []
+    lista = precificador_dados().get("products") or []   # V19.65
     out: dict[str, float] = {}
     for p in lista if isinstance(lista, list) else []:
         if not isinstance(p, dict):
@@ -26417,11 +26426,7 @@ def _magalu_promo_log(item_id: str, acao: str, por: str, motivo: str = "", preco
 
 def _magalu_taxas_precificador() -> dict[str, dict[str, float]]:
     """SKU -> {comissao, taxa_fixa, frete, margem} da Magalu no Precificador. Comissão 0 = sem taxa (fora)."""
-    raw, _, _ = get_storage("precificador_online_v1")
-    try:
-        lista = (json.loads(raw or "{}") or {}).get("products") or []
-    except Exception:
-        lista = []
+    lista = precificador_dados().get("products") or []   # V19.65
     out: dict[str, dict[str, float]] = {}
     for p in lista if isinstance(lista, list) else []:
         if not isinstance(p, dict):
@@ -27699,7 +27704,7 @@ def _promo_renovacao_payload_calcular(hoje: date, versao: str) -> dict[str, Any]
     margem_min = _promo_margem_minima(promo_auto_config())
     try:
         no_precificador = {str(p.get("sku") or "").strip().upper(): int(p.get("filialCusto") or 1)
-                           for p in (json.loads(get_storage("precificador_online_v1")[0] or "{}").get("products") or [])
+                           for p in (precificador_dados().get("products") or [])   # V19.65
                            if isinstance(p, dict)}
     except Exception:
         no_precificador = {}
@@ -27857,11 +27862,7 @@ def _promo_renovacao_payload_calcular(hoje: date, versao: str) -> dict[str, Any]
 
 def _compras_produtos_precificador() -> dict[str, dict[str, Any]]:
     """Código Apollo -> {descricao, custo, curva}, a partir da lista do Precificador."""
-    raw, _, _ = get_storage("precificador_online_v1")
-    try:
-        dados = json.loads(raw or "{}")
-    except Exception:
-        dados = {}
+    dados = precificador_dados()   # V19.65
     produtos = dados.get("products") if isinstance(dados, dict) else None
     out: dict[str, dict[str, Any]] = {}
     for p in produtos if isinstance(produtos, list) else []:
