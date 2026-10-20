@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.58-DASHBOARD-TEMPO-REAL"
+APP_VERSION = "19.59-RUPTURA-RELATORIO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -20445,6 +20445,89 @@ def ruptura_payload(dias: int = 30, hoje: date | None = None, marketplace: str =
     }
 
 
+# V19.59: relatório semanal e mensal da venda perdida por estoque zerado (mesma conta do
+# ruptura_payload, período a período). Ritmo de cada período = unidades dos 60 dias que
+# terminam no fim do período ÷ dias COM estoque nesses 60 — a semana de agosto usa o ritmo
+# de agosto, não o de hoje. Semana = segunda a domingo; a semana e o mês em andamento vão
+# até ontem e saem marcados "parcial". Período que começa antes da 1ª checagem de estoque
+# sai com coleta_completa=False (o perdido dele está subestimado, nunca inventado).
+def ruptura_relatorio_payload(marketplace: str = "ml", hoje: date | None = None,
+                              semanas: int = 8, meses: int = 6) -> dict[str, Any]:
+    f = _anuncio_fonte(marketplace)
+    hoje = hoje or datetime.now(BR_TZ).date()
+    ontem = hoje - timedelta(days=1)
+    semanas = max(1, min(26, int(semanas or 8)))
+    meses = max(1, min(12, int(meses or 6)))
+    lista_sem: list[tuple[date, date]] = []
+    seg = ontem - timedelta(days=ontem.weekday())
+    for _ in range(semanas):
+        lista_sem.append((seg, min(seg + timedelta(days=6), ontem)))
+        seg -= timedelta(days=7)
+    lista_mes: list[tuple[date, date]] = []
+    m1 = ontem.replace(day=1)
+    for _ in range(meses):
+        prox = (m1.replace(day=28) + timedelta(days=4)).replace(day=1)
+        lista_mes.append((m1, min(prox - timedelta(days=1), ontem)))
+        m1 = (m1 - timedelta(days=1)).replace(day=1)
+    inicio = min(lista_sem[-1][0], lista_mes[-1][0]) - timedelta(days=RUPTURA_BASE_DIAS)
+    with DB_LOCK:
+        vendas = DB.execute(
+            "SELECT anuncio, sale_day, COALESCE(SUM(qty),0) AS un, COALESCE(SUM(amount),0) AS fat, "
+            "MAX(title) AS titulo FROM vendas_v1799 WHERE marketplace=? AND anuncio <> '' "
+            "AND sale_day BETWEEN ? AND ? GROUP BY anuncio, sale_day",
+            (marketplace, inicio.isoformat(), ontem.isoformat())).fetchall()
+        est = DB.execute(
+            f"SELECT item_id, dia, 1.0*sem_estoque/checagens AS z FROM {f['est']} "
+            "WHERE dia BETWEEN ? AND ? AND checagens > 0", (inicio.isoformat(), ontem.isoformat())).fetchall()
+        encerrados = {str(r["item_id"]) for r in DB.execute(
+            f"SELECT e.item_id FROM {f['est']} e JOIN (SELECT item_id, MAX(dia) AS d FROM {f['est']} "
+            "GROUP BY item_id) m ON m.item_id = e.item_id AND m.d = e.dia WHERE e.status_ultimo='closed'").fetchall()}
+        titulos = {str(r["item_id"]): str(r["titulo"] or "") for r in DB.execute(
+            f"SELECT item_id, titulo FROM {f['item']}").fetchall()}
+        primeiro_dia = (DB.execute(f"SELECT MIN(dia) FROM {f['est']}").fetchone() or [None])[0] or ""
+    v_por: dict[str, list[tuple[str, int, float]]] = {}
+    for r in vendas:
+        a = str(r["anuncio"])
+        v_por.setdefault(a, []).append((str(r["sale_day"]), int(r["un"] or 0), float(r["fat"] or 0)))
+        titulos.setdefault(a, str(r["titulo"] or ""))
+    z_por: dict[str, list[tuple[str, float]]] = {}
+    for r in est:
+        z_por.setdefault(str(r["item_id"]), []).append((str(r["dia"]), float(r["z"] or 0)))
+
+    def calcular(a: date, b: date, parcial: bool) -> dict[str, Any]:
+        bi, bf = (b - timedelta(days=RUPTURA_BASE_DIAS - 1)).isoformat(), b.isoformat()
+        ai = a.isoformat()
+        itens = []
+        for mlb, zs in z_por.items():
+            if mlb in encerrados:
+                continue
+            zp = sum(z for d, z in zs if ai <= d <= bf)
+            if zp <= 0:
+                continue
+            vv = [(un, fat) for d, un, fat in v_por.get(mlb, []) if bi <= d <= bf]
+            un = sum(x[0] for x in vv)
+            fat = sum(x[1] for x in vv)
+            if un <= 0 or fat <= 0:
+                continue
+            zb = sum(z for d, z in zs if bi <= d <= bf)
+            ritmo = un / max(1.0, RUPTURA_BASE_DIAS - zb)
+            itens.append({"mlb": mlb, "titulo": titulos.get(mlb, ""), "dias_sem_estoque": round(zp, 2),
+                          "unidades_perdidas": round(ritmo * zp, 1), "perdido": round(ritmo * zp * fat / un, 2)})
+        itens.sort(key=lambda i: -i["perdido"])
+        return {"inicio": ai, "fim": bf, "dias": (b - a).days + 1, "parcial": parcial,
+                "coleta_completa": bool(primeiro_dia) and primeiro_dia <= ai,
+                "perdido": round(sum(i["perdido"] for i in itens), 2),
+                "unidades_perdidas": round(sum(i["unidades_perdidas"] for i in itens), 1),
+                "anuncios": len(itens),
+                "dias_anuncio_sem_estoque": round(sum(i["dias_sem_estoque"] for i in itens), 1),
+                "top": itens[:5]}
+
+    return {"ok": True, "marketplace": marketplace, "marketplace_nome": f["nome"],
+            "primeiro_dia_coleta": primeiro_dia, "base_dias": RUPTURA_BASE_DIAS,
+            "semanas": [calcular(a, b, b < a + timedelta(days=6)) for a, b in lista_sem],
+            "meses": [calcular(a, b, (b + timedelta(days=1)).day != 1) for a, b in lista_mes]}
+
+
 # ---------------------------------------------------------------------------
 # V18.90: Conversão e Ruptura também na Shopee.
 #
@@ -29695,6 +29778,17 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             try:
                 self.send_json(posvenda_payload(int(str((query.get("dias") or ["30"])[0] or "30"))))
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/ruptura/relatorio":
+            # V19.59: perdido por semana e por mês. Somente leitura.
+            if self.auth(admin_only=True) is None:
+                return
+            try:
+                self.send_json(ruptura_relatorio_payload(str((query.get("marketplace") or ["ml"])[0] or "ml")))
             except ValueError as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 400)
             except Exception as exc:

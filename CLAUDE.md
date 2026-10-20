@@ -693,6 +693,11 @@ inflado). Perdido = ritmo × dias sem estoque (fração das checagens) × ticket
 Grupos: zerado agora (R$/dia perdido), vai zerar (≤ 7 dias), atenção (≤ 15), pausado, ok. Full vem
 de `shipping.logistic_type` (`ml_itens_detalhe` passou a pedir `shipping`). O histórico só começa a
 contar a partir da publicação: "zerado agora" e "vai zerar" valem desde o primeiro dia.
+**V19.59 — relatório semanal e mensal:** quadro "Venda perdida por semana e por mês" na mesma tela
+(`GET /api/ruptura/relatorio?marketplace=`, `ruptura_relatorio_payload`): 8 semanas (segunda a domingo) e
+6 meses, a mesma conta do perdido feita período a período, com o ritmo dos 60 dias que terminam no fim de
+cada período. Semana/mês atuais vão até ontem (`parcial`); período que começa antes da 1ª checagem sai
+`coleta_completa=False`. Encerrado fica fora. Teste: `TESTES/test_ruptura_relatorio_v1959.py`.
 
 ### Conversão e Ruptura da Shopee (V18.90)
 As duas telas ganharam a escolha **Mercado Livre / Shopee** (`?mp=shopee`; APIs com `&marketplace=shopee`).
