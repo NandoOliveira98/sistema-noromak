@@ -11,6 +11,7 @@ Sem dependências externas: usa apenas a biblioteca padrão do Python.
 from __future__ import annotations
 
 import base64
+import copy
 import contextlib
 import io
 import gzip
@@ -45,7 +46,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.63-TIKTOK-CONEXAO"
+APP_VERSION = "19.65-PROMO-LISTA-UM-CALCULO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -27628,12 +27629,45 @@ def promo_renovacao_versao() -> dict[str, Any]:
     return {"ok": True, "versao": h.hexdigest()[:16], "rodando": PROMO_RODADA_LOCK.locked()}
 
 
+# V19.65: em produção (20/10) a lista levou 53 s em média (80 chamadas em 20 min, 504 no
+# nginx) e o processo chegou a 900 MB. Cada aba aberta recarrega a lista inteira a cada
+# versão nova (na rodada, a cada anúncio conferido) e o cálculo decodifica o Precificador
+# inteiro; o nginx desiste em 60 s mas o servidor seguia calculando, e os cálculos rodavam
+# em paralelo disputando o DB_LOCK e a CPU com a Conferência. Agora um cálculo por vez:
+# quem chega enquanto ele roda espera e recebe o mesmo resultado (que começou depois do
+# pedido dele, então nada fica velho); quem chega depois dispara um cálculo novo.
+_PROMO_PAYLOAD_VOO: dict[str, Any] = {"atual": None}
+_PROMO_PAYLOAD_VOO_LOCK = threading.Lock()
+
+
 def promo_renovacao_payload(hoje: date | None = None) -> dict[str, Any]:
     """Marcados + os anúncios do monitor de promoções do Precificador. Só lê o banco."""
     hoje = hoje or datetime.now(BR_TZ).date()
-    # V18.92: calculada ANTES de ler a lista — o que mudar no meio deixa a versão velha e a
-    # tela recarrega na próxima consulta (o contrário perderia a mudança).
-    versao = promo_renovacao_versao()["versao"]
+    with _PROMO_PAYLOAD_VOO_LOCK:
+        voo = _PROMO_PAYLOAD_VOO["atual"]
+        carona = voo is not None and voo["hoje"] == hoje and not voo["evento"].is_set()
+        if not carona:
+            voo = {"evento": threading.Event(), "hoje": hoje, "resultado": None, "erro": None}
+            _PROMO_PAYLOAD_VOO["atual"] = voo
+    if carona:
+        voo["evento"].wait()
+        if voo["erro"] is not None:
+            raise voo["erro"]
+        return copy.deepcopy(voo["resultado"])
+    try:
+        # V18.92: calculada ANTES de ler a lista — o que mudar no meio deixa a versão velha e a
+        # tela recarrega na próxima consulta (o contrário perderia a mudança).
+        versao = promo_renovacao_versao()["versao"]
+        voo["resultado"] = _promo_renovacao_payload_calcular(hoje, versao)
+        return copy.deepcopy(voo["resultado"])
+    except Exception as exc:
+        voo["erro"] = exc
+        raise
+    finally:
+        voo["evento"].set()
+
+
+def _promo_renovacao_payload_calcular(hoje: date, versao: str) -> dict[str, Any]:
     with DB_LOCK:
         linhas = {str(r["mlb"]): dict(r) for r in DB.execute("SELECT * FROM promo_renovacao_v1873").fetchall()}
         retrato = {str(r["item_id"]): dict(r) for r in DB.execute(
