@@ -2377,12 +2377,21 @@ var state = {
         renderBranchCosts();
 
         try {
-          var response = await fetch("/expedicao/api/precificador/custo?codigo=" + encodeURIComponent(sku) + "&fresh=" + Date.now(), {
-            method: "GET",
-            credentials: "same-origin",
-            headers: { "Accept": "application/json" }
-          });
-          var data = await response.json().catch(function () { return {}; });
+          var response, data;
+          // V19.62: limite do Apollo (429) espera o tempo pedido e tenta de novo (até 2x)
+          for (var tentativa = 0; ; tentativa++) {
+            response = await fetch("/expedicao/api/precificador/custo?codigo=" + encodeURIComponent(sku) + "&fresh=" + Date.now(), {
+              method: "GET",
+              credentials: "same-origin",
+              headers: { "Accept": "application/json" }
+            });
+            data = await response.json().catch(function () { return {}; });
+            if (response.status !== 429 || tentativa >= 2) break;
+            var espera = Math.min(65, Math.max(2, Number(data.retry_after) || 15));
+            setCostApiStatus("Limite do Apollo ocupado. Nova tentativa em " + espera + " s...", "info");
+            await new Promise(function (r) { setTimeout(r, espera * 1000); });
+            if (requestId !== costLookupGeneration) return false;
+          }
 
           if (!response.ok || !data.ok) {
             throw new Error(data.error || "Não foi possível consultar o custo médio.");

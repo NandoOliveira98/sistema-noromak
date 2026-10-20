@@ -12,6 +12,7 @@ class CustoErroCache(TesteNoromak):
         S.CHAVE_CRM = "x"
         S.CRM_COST_ERRO_CACHE.clear()
         S.CRM_COST_CACHE.clear()
+        S.CRM_RATE_CALLS.clear()
 
         def falso(req, timeout=None):
             self.chamadas += 1
@@ -22,6 +23,7 @@ class CustoErroCache(TesteNoromak):
         S.urllib.request.urlopen = self._orig
         S.CHAVE_CRM = self._chave
         S.CRM_COST_ERRO_CACHE.clear()
+        S.CRM_RATE_CALLS.clear()
         super().tearDown()
 
     def test_codigo_inexistente_vai_ao_apollo_uma_vez(self):
@@ -35,7 +37,8 @@ class CustoErroCache(TesteNoromak):
         self.codigo_http, self.corpo = 429, {}
         with self.assertRaises(RuntimeError):
             S.crm_cost_lookup("A/B", "op")
-        self.assertEqual(S.CRM_COST_ERRO_CACHE["A/B"][1], S.CRM_COST_ERRO_TRANSITORIO)
+        # V19.62: quem segura o limite é o balde local (cheio pelo 429), não o cache de erro
+        self.assertNotIn("A/B", S.CRM_COST_ERRO_CACHE)
         with self.assertRaises(RuntimeError):
             S.crm_cost_lookup("A/B", "op")
         self.assertEqual(self.chamadas, 1)

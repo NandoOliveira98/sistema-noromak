@@ -45,7 +45,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.61-RUPTURA-DETALHE"
+APP_VERSION = "19.62-CUSTO-LIMITE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -806,18 +806,31 @@ def crm_stock_lookup(codigo: str, operador: str = "", wait_seconds: float = 0.0)
 CRM_COST_ERRO_SEGUNDOS = 600       # o Apollo respondeu que não tem / recusou
 CRM_COST_ERRO_TRANSITORIO = 60     # limite, rede, resposta inválida
 CRM_COST_ERRO_CACHE: dict[str, tuple[float, float, str]] = {}
+# V19.62: o CRM recusa (422) código vazio ou com mais de 30 caracteres, e a recusa gastava
+# a vez do limite de 20/min (relatório do NoromakWeb, 09–16/10: 79% das chamadas recusadas).
+CRM_CODIGO_MAX = 30
 
 
-def crm_cost_lookup(codigo: str, operador: str = "") -> dict[str, Any]:
+def crm_cost_lookup(codigo: str, operador: str = "", wait_seconds: float = 0.0) -> dict[str, Any]:
     """V19.06: crm_cost_lookup com cache de erro (ver CRM_COST_ERRO_CACHE)."""
     chave = str(codigo or "").strip().upper()
     if chave:
         with CRM_COST_CACHE_LOCK:
             erro = CRM_COST_ERRO_CACHE.get(chave)
             if erro and time.monotonic() < erro[0] + erro[1]:
+                if erro[2].startswith("422:"):
+                    raise ValueError(erro[2][4:])
                 raise RuntimeError(erro[2])
     try:
-        return _crm_cost_lookup_apollo(codigo, operador)
+        return _crm_cost_lookup_apollo(codigo, operador, wait_seconds)
+    except CrmLimiteAtingido:
+        raise  # V19.62: o balde local já segura; guardar o erro só atrasaria a próxima
+    except ValueError as exc:
+        # V19.62: recusa do CRM (422) fica guardada como erro definitivo
+        if chave and getattr(exc, "crm_422", False):
+            with CRM_COST_CACHE_LOCK:
+                CRM_COST_ERRO_CACHE[chave] = (time.monotonic(), CRM_COST_ERRO_SEGUNDOS, "422:" + str(exc))
+        raise
     except RuntimeError as exc:
         msg = str(exc)
         if chave and "CHAVE_CRM" not in msg:
@@ -831,7 +844,7 @@ def crm_cost_lookup(codigo: str, operador: str = "") -> dict[str, Any]:
         raise
 
 
-def _crm_cost_lookup_apollo(codigo: str, operador: str = "") -> dict[str, Any]:
+def _crm_cost_lookup_apollo(codigo: str, operador: str = "", wait_seconds: float = 0.0) -> dict[str, Any]:
     """Consulta custo médio no Apollo através da API local fornecida ao sistema.
 
     A CHAVE_CRM nunca é enviada ao navegador. A consulta acontece somente
@@ -841,6 +854,8 @@ def _crm_cost_lookup_apollo(codigo: str, operador: str = "") -> dict[str, Any]:
     operador = str(operador or "").strip()
     if not codigo:
         raise ValueError("Informe o SKU/código da peça.")
+    if len(codigo) > CRM_CODIGO_MAX:
+        raise ValueError(f"Código com mais de {CRM_CODIGO_MAX} caracteres não existe no Apollo.")
     if not CHAVE_CRM:
         raise RuntimeError("CHAVE_CRM não está configurada no servidor.")
 
@@ -858,7 +873,11 @@ def _crm_cost_lookup_apollo(codigo: str, operador: str = "") -> dict[str, Any]:
         params["operador"] = operador
     separator = "&" if "?" in CRM_COST_API_URL else "?"
     url = CRM_COST_API_URL + separator + urlencode(params)
-    crm_rate_note()  # V17.94: mesmo balde de 20/min da rota de estoque.
+    # V19.62: reserva a vaga ANTES de chamar (era só anotar): com o balde cheio não chama o
+    # CRM para tomar 429. Mesmo balde de 20/min da rota de estoque (V17.94).
+    retry = crm_rate_acquire(wait_seconds)
+    if retry > 0:
+        raise CrmLimiteAtingido(retry)
     req = urllib.request.Request(
         url,
         headers={
@@ -875,7 +894,14 @@ def _crm_cost_lookup_apollo(codigo: str, operador: str = "") -> dict[str, Any]:
     except urllib.error.HTTPError as exc:
         raw = exc.read().decode("utf-8", errors="replace")
         if exc.code == 429:
-            raise RuntimeError("Limite da consulta de custo atingido. Aguarde um pouco e tente novamente.") from exc
+            # V19.62: o CRM contou chamadas que não passaram por aqui: enche o balde (como no estoque).
+            with CRM_RATE_LOCK:
+                CRM_RATE_CALLS[:] = [time.monotonic()] * CRM_RATE_LIMIT_PER_MINUTE
+            raise CrmLimiteAtingido(60) from exc
+        if exc.code == 422:
+            erro = ValueError("O Apollo recusou este código (vazio ou inválido).")
+            erro.crm_422 = True  # type: ignore[attr-defined]
+            raise erro from exc
         if exc.code in (401, 403):
             raise RuntimeError("A API de custo recusou a chave configurada no servidor.") from exc
         raise RuntimeError(f"API de custo respondeu HTTP {exc.code}.") from exc
@@ -5444,7 +5470,8 @@ def precificador_bulk_update_worker(username: str) -> None:
             sku = str(product.get("sku") or "").strip()
             _precificador_bulk_set_status(processed=pos - 1, current_sku=sku)
             try:
-                result = crm_cost_lookup(sku, username or "ATUALIZACAO_GERAL_PRECIFICADOR")
+                # V19.62: a atualização geral espera a vaga do limite em vez de errar
+                result = crm_cost_lookup(sku, username or "ATUALIZACAO_GERAL_PRECIFICADOR", wait_seconds=65)
                 old_cost = round(float(product.get("custo") or 0), 2)
                 filial_custo = int(product.get("filialCusto") or 1)
                 branch_rows = result.get("custos") if isinstance(result.get("custos"), list) else []
@@ -29586,6 +29613,10 @@ class AppHandler(BaseHTTPRequestHandler):
             operador = str(ctx.get("nome") or ctx.get("username") or "").strip()
             try:
                 self.send_json(crm_cost_lookup(codigo, operador))
+            except CrmLimiteAtingido as exc:
+                # V19.62: limite do Apollo é 429 com o tempo de espera, não 502
+                self.send_json({"ok": False, "error": str(exc), "retry_after": exc.retry_after}, 429,
+                               headers={"Retry-After": str(exc.retry_after)})
             except ValueError as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 400)
             except Exception as exc:
