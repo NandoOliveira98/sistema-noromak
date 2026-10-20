@@ -62,5 +62,22 @@ class RelatorioRuptura(Base):
         self.assertTrue(d["ok"])
 
 
+    def test_excel(self):
+        import io, zipfile
+        self.preparar()
+        z = zipfile.ZipFile(io.BytesIO(S.ruptura_relatorio_xlsx(hoje=HOJE)))
+        wb = z.read("xl/workbook.xml").decode()
+        for aba in ("Semanal", "Mensal", "Anúncios"):
+            self.assertIn(aba, wb)
+        self.assertIn("MLB1", z.read("xl/worksheets/sheet3.xml").decode())
+        import urllib.request
+        req = urllib.request.Request(self.cliente.url_base + "/api/ruptura/relatorio.xlsx?marketplace=ml",
+                                     headers={"Cookie": self.cliente.cookie})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            self.assertEqual(resp.status, 200)
+            self.assertIn("spreadsheetml", resp.headers.get("Content-Type"))
+            self.assertTrue(resp.read()[:2] == b"PK")
+
+
 if __name__ == "__main__":
     unittest.main()

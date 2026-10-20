@@ -697,7 +697,7 @@ contar a partir da publicação: "zerado agora" e "vai zerar" valem desde o prim
 (`GET /api/ruptura/relatorio?marketplace=`, `ruptura_relatorio_payload`): 8 semanas (segunda a domingo) e
 6 meses, a mesma conta do perdido feita período a período, com o ritmo dos 60 dias que terminam no fim de
 cada período. Semana/mês atuais vão até ontem (`parcial`); período que começa antes da 1ª checagem sai
-`coleta_completa=False`. Encerrado fica fora. Teste: `TESTES/test_ruptura_relatorio_v1959.py`.
+`coleta_completa=False`. Encerrado fica fora. **Exportar Excel**: `GET /api/ruptura/relatorio.xlsx` (`ruptura_relatorio_xlsx`, `_xlsx_abas`): abas Semanal, Mensal e Anúncios (todo anúncio que perdeu em cada período). Teste: `TESTES/test_ruptura_relatorio_v1959.py`.
 
 ### Conversão e Ruptura da Shopee (V18.90)
 As duas telas ganharam a escolha **Mercado Livre / Shopee** (`?mp=shopee`; APIs com `&marketplace=shopee`).

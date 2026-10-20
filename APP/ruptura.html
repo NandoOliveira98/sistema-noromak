@@ -111,9 +111,9 @@ table.rp{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;m
     <div class="card span12" id="relatorio">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px">
         <div><b>Venda perdida por semana e por mês</b> <span class="muted">(estimativa)</span></div>
-        <div class="tabs" id="relTabs"><button class="tab on" data-r="semanas">Semanal</button><button class="tab" data-r="meses">Mensal</button></div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><div class="tabs" id="relTabs"><button class="tab on" data-r="semanas">Semanal</button><button class="tab" data-r="meses">Mensal</button></div><button class="btn" id="relXlsx" title="Baixa semanal, mensal e os anúncios de cada período">⬇ Exportar Excel</button></div>
       </div>
-      <div class="tw"><table class="rp" id="relTab" data-nk-tabela="ruptura-relatorio" data-nk-ordenar="0" style="min-width:720px"></table></div>
+      <div class="tw"><table class="rp" id="relTab" data-nk-tabela="ruptura-relatorio" data-nk-ordenar="0" data-nk-exportar="0" style="min-width:720px"></table></div>
     </div>
     <div class="card span12" id="lista">
       <div class="tbar">
@@ -217,7 +217,7 @@ function render(){
   const cnt=k=>D.itens.filter(i=>filtra(i,k)).length;
   const abas=ORDEM.filter(k=>cnt(k)).concat(['todos']);
   $('tabs').innerHTML=abas.map(k=>`<button class="tab ${st.tab===k?'on':''}" data-k="${k}">${G[k]?`<i class="dot" style="background:${G[k].c}"></i>${G[k].t}`:'Todos'} <span>${num(cnt(k))}</span></button>`).join('');
-  document.querySelectorAll('.tab').forEach(b=>b.onclick=()=>{st.tab=b.dataset.k;st.sort='';st.lim=50;render()});
+  document.querySelectorAll('#tabs .tab').forEach(b=>b.onclick=()=>{st.tab=b.dataset.k;st.sort='';st.lim=50;render()});
   const [sk,sd]=st.sort?[st.sort,st.dir]:SORT_PADRAO[st.tab];
   const q=st.q.trim().toLowerCase();
   let L=D.itens.filter(i=>filtra(i,st.tab)&&(!q||[i.titulo,i.mlb,i.sku].some(x=>String(x||'').toLowerCase().includes(q))));
@@ -321,7 +321,7 @@ function renderRel(){
   const head='<thead><tr><th class="l">Período</th><th>Perdido</th><th>Unidades</th><th>Anúncios zerados</th><th>Dias-anúncio sem estoque</th><th class="l">Maiores perdas</th></tr></thead>';
   const body=L.map(p=>{
     const marcas=(p.parcial?' <span class="muted">(em andamento)</span>':'')+(!p.coleta_completa?' <span class="muted" title="o histórico de estoque começou em '+dataBR(R.primeiro_dia_coleta)+'">· coleta incompleta</span>':'');
-    const top=p.top.slice(0,3).map(t=>`<div class="mlb" title="${esc(t.titulo)}">${esc((t.titulo||t.mlb).slice(0,48))} — ${brl(t.perdido)}</div>`).join('');
+    const top=p.top.slice(0,3).map(t=>`<div style="font-size:12px;line-height:1.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:340px" title="${esc(t.titulo)}">${esc(t.titulo||t.mlb)} <b>${brl(t.perdido)}</b></div>`).join('');
     return `<tr><td class="l">${rotuloRel(p)}${marcas}</td><td>${p.perdido?`<b style="color:var(--neg)">${brl(p.perdido)}</b>`:dash}</td><td>${p.unidades_perdidas?dec(p.unidades_perdidas):dash}</td><td>${p.anuncios?num(p.anuncios):dash}</td><td>${p.dias_anuncio_sem_estoque?dec(p.dias_anuncio_sem_estoque):dash}</td><td class="l">${top||dash}</td></tr>`;
   }).join('');
   $('relTab').innerHTML=head+'<tbody>'+body+'</tbody>';
@@ -334,6 +334,7 @@ async function carregarRel(){
 }
 document.querySelectorAll('#relTabs .tab').forEach(b=>b.onclick=()=>{relModo=b.dataset.r;renderRel()});
 document.getElementById('mkt').addEventListener('change',carregarRel);
+$('relXlsx').onclick=()=>{location.href='/expedicao/api/ruptura/relatorio.xlsx?marketplace='+mkt()};
 
 carregar();
 carregarRel();

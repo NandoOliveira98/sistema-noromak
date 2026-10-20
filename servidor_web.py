@@ -20452,7 +20452,7 @@ def ruptura_payload(dias: int = 30, hoje: date | None = None, marketplace: str =
 # até ontem e saem marcados "parcial". Período que começa antes da 1ª checagem de estoque
 # sai com coleta_completa=False (o perdido dele está subestimado, nunca inventado).
 def ruptura_relatorio_payload(marketplace: str = "ml", hoje: date | None = None,
-                              semanas: int = 8, meses: int = 6) -> dict[str, Any]:
+                              semanas: int = 8, meses: int = 6, completo: bool = False) -> dict[str, Any]:
     f = _anuncio_fonte(marketplace)
     hoje = hoje or datetime.now(BR_TZ).date()
     ontem = hoje - timedelta(days=1)
@@ -20520,12 +20520,50 @@ def ruptura_relatorio_payload(marketplace: str = "ml", hoje: date | None = None,
                 "unidades_perdidas": round(sum(i["unidades_perdidas"] for i in itens), 1),
                 "anuncios": len(itens),
                 "dias_anuncio_sem_estoque": round(sum(i["dias_sem_estoque"] for i in itens), 1),
-                "top": itens[:5]}
+                "top": itens[:5], **({"itens": itens} if completo else {})}
 
     return {"ok": True, "marketplace": marketplace, "marketplace_nome": f["nome"],
             "primeiro_dia_coleta": primeiro_dia, "base_dias": RUPTURA_BASE_DIAS,
             "semanas": [calcular(a, b, b < a + timedelta(days=6)) for a, b in lista_sem],
             "meses": [calcular(a, b, (b + timedelta(days=1)).day != 1) for a, b in lista_mes]}
+
+
+def ruptura_relatorio_xlsx(marketplace: str = "ml", hoje: date | None = None) -> bytes:
+    """V19.59: o relatório semanal/mensal em Excel — abas Semanal, Mensal e Anúncios."""
+    r = ruptura_relatorio_payload(marketplace, hoje, completo=True)
+    br = lambda d: "/".join(reversed(str(d).split("-")))
+    cab = ["Período", "Início", "Fim", "Situação", "Perdido (R$)", "Unidades perdidas",
+           "Anúncios zerados", "Dias-anúncio sem estoque"]
+
+    def situacao(p: dict[str, Any]) -> str:
+        m = ["em andamento" if p["parcial"] else "fechado"]
+        if not p["coleta_completa"]:
+            m.append("coleta incompleta")
+        return ", ".join(m)
+
+    def rotulo(tipo: str, p: dict[str, Any]) -> str:
+        if tipo == "meses":
+            return p["inicio"][5:7] + "/" + p["inicio"][:4]
+        return br(p["inicio"])[:5] + " a " + br(p["fim"])[:5]
+    abas = []
+    det: list[list[tuple[Any, int]]] = [[(c, 1) for c in ["Tipo", "Período", "Anúncio", "Título",
+                                                          "Dias sem estoque", "Unidades perdidas", "Perdido (R$)"]]]
+    for tipo, nome in (("semanas", "Semanal"), ("meses", "Mensal")):
+        linhas: list[list[tuple[Any, int]]] = [
+            [(f"Venda perdida por estoque zerado — {r['marketplace_nome']} (estimativa)", 4)], [],
+            [(c, 1) for c in cab]]
+        for p in r[tipo]:
+            linhas.append([(rotulo(tipo, p), 0), (br(p["inicio"]), 0), (br(p["fim"]), 0), (situacao(p), 0),
+                           (p["perdido"], 2), (p["unidades_perdidas"], 0), (p["anuncios"], 0),
+                           (p["dias_anuncio_sem_estoque"], 0)])
+            for i in p.get("itens") or []:
+                det.append([(nome, 0), (rotulo(tipo, p), 0), (i["mlb"], 0), (i["titulo"], 0),
+                            (i["dias_sem_estoque"], 0), (i["unidades_perdidas"], 0), (i["perdido"], 2)])
+        linhas += [[], [(f"Histórico de estoque desde {br(r['primeiro_dia_coleta']) if r['primeiro_dia_coleta'] else '—'}. "
+                         f"Perdido = venda por dia (últimos {r['base_dias']} dias com estoque) × dias sem estoque × ticket médio.", 0)]]
+        abas.append((nome, linhas))
+    abas.append(("Anúncios", det))
+    return _xlsx_abas(abas)
 
 
 # ---------------------------------------------------------------------------
@@ -29778,6 +29816,32 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             try:
                 self.send_json(posvenda_payload(int(str((query.get("dias") or ["30"])[0] or "30"))))
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/ruptura/relatorio.xlsx":
+            # V19.59: o relatório em Excel. Somente leitura.
+            if self.auth(admin_only=True) is None:
+                return
+            try:
+                mp = str((query.get("marketplace") or ["ml"])[0] or "ml")
+                conteudo = ruptura_relatorio_xlsx(mp)
+                tipo = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                body, compressed = self.encoded_body(conteudo, tipo)
+                self.send_response(200)
+                self.send_security_headers()
+                self.send_header("Content-Type", tipo)
+                self.send_header("Content-Disposition",
+                                 f'attachment; filename="ruptura_{re.sub(r"[^a-z]", "", mp)}_{datetime.now(BR_TZ).date().isoformat()}.xlsx"')
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                if compressed:
+                    self.send_header("Content-Encoding", "gzip")
+                self.end_headers()
+                if self.command != "HEAD":
+                    self.wfile.write(body)
             except ValueError as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 400)
             except Exception as exc:
