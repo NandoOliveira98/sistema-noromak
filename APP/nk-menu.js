@@ -18,6 +18,8 @@
       { id: "financeiro", rotulo: "Financeiro", href: "/financeiro", modulo: "admin", alias: ["/rentabilidade-ml"], icone: "M3 7h18v13H3zM3 7l3-4h12l3 4M16 14h2" },
       // V19.01: Auditor de cobranças do ML (mesma permissão do Financeiro).
       { id: "auditoria-ml", rotulo: "Cobranças do ML", href: "/auditoria-ml", modulo: "admin", icone: "M6 2h12v20l-3-2-3 2-3-2-3 2zM9 7h6M9 11h6M9 15h3" },
+      // V19.69: quadro de tarefas (planos de ação). Sem módulo: todo usuário logado vê.
+      { id: "tarefas", rotulo: "Quadro de tarefas", href: "/tarefas", icone: "M3 3h5v18H3zM10 3h5v12h-5zM17 3h4v8h-4z" },
     ] },
     { grupo: "expedicao", titulo: "Expedição", itens: [
       { id: "pedidos", rotulo: "Pedidos pendentes", href: "/pedidos-pendentes", aba: "pedidos", modulo: "admin", alias: ["/pendencias", "/central-pendencias"], icone: "M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01" },
@@ -78,7 +80,7 @@
   // rotas-admin-v1882 e troca a tela sem recarregar.
   function itemHTML(i) {
     return `<a class="v15-nav-item" href="${B}${i.href}" target="_blank" rel="noopener" data-v15-nav="${esc(i.aba || i.id)}" data-nk-id="${esc(i.id)}"` +
-      `${i.aba ? ` data-nk-aba="${esc(i.aba)}"` : ""} data-nk-modulo="${esc(i.modulo)}"${i.soAdmin ? " data-nk-so-admin=\"1\"" : ""} title="${esc(i.rotulo)}">` +
+      `${i.aba ? ` data-nk-aba="${esc(i.aba)}"` : ""}${i.modulo ? ` data-nk-modulo="${esc(i.modulo)}"` : ""}${i.soAdmin ? " data-nk-so-admin=\"1\"" : ""} title="${esc(i.rotulo)}">` +
       `<span class="v15-nav-icon">${ic(i.icone)}</span><span class="v15-nav-label">${esc(i.rotulo)}</span></a>`;
   }
 
@@ -151,6 +153,7 @@
     }
     if (!user) return;
     ligarFilial(nav, user);
+    contarTarefas(nav);
     const perm = user.permissions || {};
     const pode = m => Object.prototype.hasOwnProperty.call(perm, m) ? !!perm[m] : (user.app_role === "admin" || m === "conferencia");
     const supervisor = user.app_role !== "admin" && pode("admin");
@@ -164,6 +167,23 @@
       g.style.display = n ? "" : "none";
       const c = g.querySelector(".v15-grp-n"); if (c) c.textContent = n;
     });
+  }
+
+  // V19.69: selo no item "Quadro de tarefas" com as tarefas abertas do usuário (vermelho se há atrasada).
+  async function contarTarefas(nav) {
+    const a = nav.querySelector('.v15-nav-item[data-nk-id="tarefas"]');
+    if (!a) return;
+    try {
+      const r = await fetch(`${B}/api/tarefas/resumo`, { cache: "no-store", credentials: "same-origin" });
+      const d = await r.json();
+      if (!r.ok || !d.abertas) return;
+      const s = document.createElement("span");
+      s.className = "nk-tarefas-n";
+      s.textContent = d.abertas;
+      s.title = `${d.abertas} tarefa(s) sua(s) aberta(s)` + (d.atrasadas ? `, ${d.atrasadas} atrasada(s)` : "");
+      s.style.cssText = `margin-left:auto;min-width:18px;height:18px;padding:0 5px;border-radius:9px;font-size:11px;font-weight:800;display:inline-grid;place-items:center;color:#fff;background:${d.atrasadas ? "#d03b3b" : "#3b6fd0"}`;
+      a.appendChild(s);
+    } catch (_) {}
   }
 
   // V18.95: seletor de filial (quem vê "todas"). A escolha vale para todas as telas e abas

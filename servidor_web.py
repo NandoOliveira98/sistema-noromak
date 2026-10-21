@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.67-ROMANEIO-RAPIDO"
+APP_VERSION = "19.69-QUADRO-TAREFAS"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -2673,6 +2673,7 @@ def init_db() -> None:
     ensure_ml_casas_schema()  # V18.94
     ensure_vendas_conta_schema()  # V18.98
     ensure_auditoria_cobrancas_schema()  # V19.01
+    ensure_tarefas_schema()  # V19.69
     migrate_legacy_if_empty()
     ensure_storage_defaults()
     seed_sku_state_from_storage()
@@ -20817,6 +20818,442 @@ def auditoria_resumo_email(*, marcar: bool = False) -> str:
     return ("Cobranças do ML: " + " · ".join(partes)) if partes else ""
 
 
+# ---------------------------------------------------------------------------
+# V19.69 — Quadro de tarefas (/tarefas), estilo Trello. Decisões do dono (21/10):
+# 4 colunas FIXAS (Iniciar/Concluir medem o tempo); um Plano agrupa os cartões;
+# Admin/Supervisor (módulo admin) criam e editam; o responsável move, marca o checklist e
+# comenta; Consulta só vê (consulta_bloqueada); excluir = lixeira restaurável, só o perfil
+# Admin. Concluído há mais de 14 dias aparece em Arquivados (calculado na leitura, sem
+# worker; reabrir volta). Filial é só filtro: todos veem o quadro inteiro. A edição manda a
+# `versao` que a tela tinha: outra mais nova = 409 com o cartão atual (dois computadores).
+# Nada aqui toca em pedido, fila ou storage.
+# ---------------------------------------------------------------------------
+TAREFA_COLUNAS = ("a_fazer", "andamento", "aguardando", "concluido")
+TAREFA_PRIORIDADES = ("alta", "media", "baixa")
+TAREFA_FILIAIS = ("", "aracatuba", "bauru")
+TAREFA_ARQUIVA_DIAS = 14
+TAREFA_PLANO_INICIAL = "faturamento-out26"
+TAREFA_LOCK = threading.Lock()
+
+# Carga inicial: o plano de ação de 21/10 (análise de visitas × pedidos da conta de Araçatuba).
+_TAREFA_CARGA_INICIAL = [
+    # (área, prioridade, prazo, título, descrição, checklist)
+    ("Compras", "alta", "2026-10-27", "Repor e reativar Water Off, Tunap 987 e compressores LK38 / VW 23210",
+     "Pausados com estoque 0 e com visitas. Water Off converte 15,6% (melhor da conta). Ganho estimado R$ 20–25 mil/mês.",
+     ["Comprar Water Off", "Comprar Tunap 987", "Comprar Compressor LK38 MB 1620", "Comprar Compressor VW 23210", "Reativar os 4 anúncios"]),
+    ("Compras", "alta", "2026-10-27", "Repor Higienizador A/C, Trava Rosca W777, Aditivo Amarelo e Silicone W-Max",
+     "Estoque de 3 a 9 unidades com venda rápida. Meta: 30 dias de estoque.",
+     ["Higienizador A/C (MLB6005528472)", "Trava Rosca W777", "Aditivo Amarelo", "Silicone W-Max"]),
+    ("Compras", "media", "2026-10-27", "Rotina diária da Ruptura às 08:00",
+     "Conferir em /ruptura os grupos 'zerado agora' e 'vai zerar' todo dia útil.", []),
+    ("Comercial", "media", "2026-10-27", "Marcar os 10 químicos campeões na renovação automática de promoção",
+     "Em /promocoes-auto, para nunca ficarem sem desconto.", []),
+    ("Comercial", "alta", "2026-11-10", "Kit 3 e Kit 4 Higienizadores A/C",
+     "Preço-alvo R$ 75–79 (3 un.) e R$ 95–99 (4 un., frete grátis). 1.929 visitas nos dois anúncios.",
+     ["Cadastrar em Kits", "Precificar", "Criar anúncio (título, foto, descrição)", "Vincular MLB↔SKU", "Marcar promoção automática"]),
+    ("Comercial", "alta", "2026-11-10", "Kit Arrefecimento: Limpa Radiador + Aditivo Amarelo",
+     "Preço-alvo R$ 79–89. Uso em sequência.",
+     ["Cadastrar em Kits", "Precificar", "Criar anúncio", "Vincular MLB↔SKU"]),
+    ("Comercial", "media", "2026-11-10", "Kit 2 Aditivos Amarelo",
+     "O produto de R$ 22,90 sozinho dá pouca margem.", ["Cadastrar em Kits", "Precificar", "Criar anúncio"]),
+    ("Comercial", "media", "2026-11-10", "Kit Trava Rosca W771 + W742",
+     "Preço-alvo R$ 149. Os dois somam 52 pedidos em 30 dias.", ["Cadastrar em Kits", "Precificar", "Criar anúncio"]),
+    ("Comercial", "media", "2026-11-10", "Kit 2 Repelentes de Roedores",
+     "Preço-alvo R$ 149. 208 unidades em 169 pedidos.", ["Cadastrar em Kits", "Precificar", "Criar anúncio"]),
+    ("Comercial", "baixa", "2026-11-10", "Kit Elétrica: Repelente + Congelante",
+     "Preço-alvo R$ 159. Aproveita o tráfego do campeão.", ["Conferir em Oportunidades de Kit", "Cadastrar", "Criar anúncio"]),
+    ("Comercial", "baixa", "2026-11-10", "Kit Vedação: Silicone W-Max + Adesivo Epóxi",
+     "Preço-alvo R$ 119.", ["Conferir em Oportunidades de Kit", "Cadastrar", "Criar anúncio"]),
+    ("Comercial", "baixa", "2026-11-10", "Kit Revisão Hilux: Filtro Óleo JFO0211 + Filtro Combustível/Ar",
+     "O filtro de óleo sozinho teve 1 venda em 169 visitas.", ["Conferir em Oportunidades de Kit", "Cadastrar", "Criar anúncio"]),
+    ("Anúncios", "alta", "2026-11-17", "Revisar Bomba Direção MB OM366 (MLB3050607876)",
+     "197 visitas e 0 pedidos. Mudar uma coisa por vez e medir em 7 dias na Conversão.",
+     ["Preço × 3 primeiros concorrentes", "Códigos originais no título", "Compatibilidade", "Fotos da peça real"]),
+    ("Anúncios", "media", "2026-11-17", "Revisar Válvula Secador APU Axor (MLB3406126823)",
+     "153 visitas e 0 pedidos.", ["Preço", "Código original no título", "Fotos"]),
+    ("Anúncios", "media", "2026-11-17", "Revisar Filtro Ar Cond. Fox/Gol Wega (MLB6414106120)",
+     "159 visitas e 0 pedidos.", ["Compatibilidade completa", "Preço", "Avaliar kit"]),
+    ("Anúncios", "media", "2026-11-17", "Revisar Compressor MB 1938 OM457 (MLB3670451240)",
+     "212 visitas e 1 pedido. Peça de R$ 2.400 precisa de confiança.", ["Ficha técnica", "Foto da plaqueta", "Garantia na descrição"]),
+    ("Anúncios", "baixa", "2026-11-17", "Revisar Válvula Pedal Freio VW (MLB1766058218)",
+     "200 visitas e 2 pedidos.", ["Ficha técnica", "Fotos", "Preço"]),
+    ("Comercial", "media", "2026-11-17", "Aumentar Ads dos que mais convertem",
+     "Repelente, Trava Rosca W771/W777 e Water Off (depois de reposto). Ads abaixo de metade da margem.", []),
+    ("Comercial", "media", "2026-11-17", "Reduzir/pausar Ads que gastam sem vender",
+     "Seguir a recomendação 'pausar' da Análise de ADS.", []),
+    ("Comercial", "baixa", "2026-11-17", "Aceitar campanhas do ML que dão mais lucro",
+     "Coluna 'Campanha do ML' em /promocoes-auto.", []),
+    ("Anúncios", "baixa", "2026-11-17", "Comparar os dois anúncios de Higienizador A/C",
+     "O de R$ 25,90 converte 9,6% e o de R$ 24,90, 6,6%: copiar no mais fraco o que o melhor tem.", []),
+    ("Compras", "media", "2026-11-17", "Mandar para o Full os químicos de giro alto",
+     "Os que ainda não estão no Full, pela Remessa Full.", []),
+    ("Comercial", "baixa", "2026-11-30", "Publicar campeões e kits na Shopee e na Magalu", "", []),
+    ("Comercial", "baixa", "2026-11-30", "Anunciar os campeões na conta de Bauru", "", []),
+    ("Comercial", "baixa", "2026-11-30", "Refazer a análise de visitas × pedidos e medir o resultado", "", []),
+]
+
+
+def ensure_tarefas_schema() -> None:
+    with DB_LOCK:
+        DB.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS tarefa_plano_v1969 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chave TEXT UNIQUE,
+                nome TEXT NOT NULL,
+                descricao TEXT NOT NULL DEFAULT '',
+                criado_por TEXT NOT NULL DEFAULT '',
+                criado_em TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS tarefa_cartao_v1969 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                plano_id INTEGER,
+                titulo TEXT NOT NULL,
+                descricao TEXT NOT NULL DEFAULT '',
+                coluna TEXT NOT NULL DEFAULT 'a_fazer',
+                responsavel TEXT NOT NULL DEFAULT '',
+                prazo TEXT NOT NULL DEFAULT '',
+                prioridade TEXT NOT NULL DEFAULT 'media',
+                area TEXT NOT NULL DEFAULT '',
+                filial TEXT NOT NULL DEFAULT '',
+                checklist_json TEXT NOT NULL DEFAULT '[]',
+                versao INTEGER NOT NULL DEFAULT 1,
+                criado_por TEXT NOT NULL DEFAULT '',
+                criado_em TEXT NOT NULL,
+                atualizado_em TEXT NOT NULL,
+                iniciado_em TEXT NOT NULL DEFAULT '',
+                concluido_em TEXT NOT NULL DEFAULT '',
+                concluido_por TEXT NOT NULL DEFAULT '',
+                excluido_em TEXT NOT NULL DEFAULT '',
+                excluido_por TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_tarefa_cartao_resp_v1969 ON tarefa_cartao_v1969(responsavel, coluna);
+            CREATE TABLE IF NOT EXISTS tarefa_evento_v1969 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                cartao_id INTEGER NOT NULL,
+                quando TEXT NOT NULL,
+                usuario TEXT NOT NULL DEFAULT '',
+                tipo TEXT NOT NULL,
+                texto TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_tarefa_evento_cartao_v1969 ON tarefa_evento_v1969(cartao_id, id);
+            """
+        )
+        # Carga inicial uma vez só: o plano tem chave única; os cartões só entram junto com ele
+        # (cartão excluído depois continua na tabela, como lixeira, e nunca é recriado).
+        agora = now_iso()
+        cur = DB.execute("INSERT OR IGNORE INTO tarefa_plano_v1969(chave,nome,descricao,criado_por,criado_em) VALUES(?,?,?,?,?)",
+                         (TAREFA_PLANO_INICIAL, "Aumentar faturamento — out/26",
+                          "Plano de 21/10/2026 a partir das visitas × pedidos dos últimos 30 dias da conta de Araçatuba (ML).",
+                          "sistema", agora))
+        if cur.rowcount:
+            plano_id = cur.lastrowid
+            for area, prio, prazo, titulo, desc, itens in _TAREFA_CARGA_INICIAL:
+                checklist = [{"id": secrets.token_hex(4), "texto": t, "feito": False, "feito_por": "", "feito_em": ""} for t in itens]
+                c = DB.execute(
+                    "INSERT INTO tarefa_cartao_v1969(plano_id,titulo,descricao,prioridade,area,prazo,checklist_json,criado_por,criado_em,atualizado_em) "
+                    "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (plano_id, titulo, desc, prio, area, prazo, json.dumps(checklist, ensure_ascii=False), "sistema", agora, agora))
+                DB.execute("INSERT INTO tarefa_evento_v1969(cartao_id,quando,usuario,tipo,texto) VALUES(?,?,?,?,?)",
+                           (c.lastrowid, agora, "sistema", "criado", "Carga inicial do plano de ação"))
+        DB.commit()
+
+
+def _tarefa_hoje() -> str:
+    return datetime.now(BR_TZ).date().isoformat()
+
+
+def _tarefa_arquivado(row: Any) -> bool:
+    if row["coluna"] != "concluido" or not row["concluido_em"]:
+        return False
+    try:
+        quando = datetime.fromisoformat(str(row["concluido_em"]))
+    except ValueError:
+        return False
+    if quando.tzinfo is None:
+        quando = quando.replace(tzinfo=BR_TZ)
+    return quando < datetime.now(BR_TZ) - timedelta(days=TAREFA_ARQUIVA_DIAS)
+
+
+def _tarefa_dict(row: Any) -> dict[str, Any]:
+    d = {k: row[k] for k in row.keys() if k != "checklist_json"}
+    try:
+        d["checklist"] = json.loads(row["checklist_json"] or "[]")
+    except ValueError:
+        d["checklist"] = []
+    d["arquivado"] = _tarefa_arquivado(row)
+    d["excluido"] = bool(row["excluido_em"])
+    d["atrasado"] = bool(row["prazo"]) and row["coluna"] != "concluido" and str(row["prazo"]) < _tarefa_hoje()
+    return d
+
+
+def _tarefa_evento(cartao_id: int, usuario: str, tipo: str, texto: str = "") -> None:
+    DB.execute("INSERT INTO tarefa_evento_v1969(cartao_id,quando,usuario,tipo,texto) VALUES(?,?,?,?,?)",
+               (cartao_id, now_iso(), usuario, tipo, texto[:2000]))
+
+
+def _tarefa_ler(cartao_id: Any, *, excluido_ok: bool = False) -> Any:
+    try:
+        cid = int(cartao_id)
+    except (TypeError, ValueError):
+        raise LookupError("Cartão não encontrado.")
+    row = DB.execute("SELECT * FROM tarefa_cartao_v1969 WHERE id=?", (cid,)).fetchone()
+    if not row or (row["excluido_em"] and not excluido_ok):
+        raise LookupError("Cartão não encontrado.")
+    return row
+
+
+def tarefa_gestor(ctx: dict[str, Any]) -> bool:
+    """Admin e Supervisor (módulo admin). Consulta tem o módulo, mas é barrada antes (somente leitura)."""
+    return module_allowed(ctx, "admin") and not is_consulta_ctx(ctx)
+
+
+def _tarefa_pode_executar(ctx: dict[str, Any], row: Any) -> bool:
+    return tarefa_gestor(ctx) or (bool(row["responsavel"]) and row["responsavel"] == ctx.get("username"))
+
+
+def _tarefa_usuarios() -> list[dict[str, str]]:
+    rows = DB.execute("SELECT username, display_name FROM app_users WHERE active=1 ORDER BY display_name, username").fetchall()
+    return [{"username": r["username"], "nome": r["display_name"] or r["username"]} for r in rows]
+
+
+def tarefas_payload(ctx: dict[str, Any], *, arquivados: bool = False, lixeira: bool = False) -> dict[str, Any]:
+    with DB_LOCK:
+        planos = [dict(r) for r in DB.execute("SELECT id, nome, descricao, criado_em FROM tarefa_plano_v1969 ORDER BY id").fetchall()]
+        rows = DB.execute("SELECT * FROM tarefa_cartao_v1969 ORDER BY id").fetchall()
+        usuarios = _tarefa_usuarios()
+    cartoes = []
+    for r in rows:
+        d = _tarefa_dict(r)
+        if lixeira:
+            if d["excluido"]:
+                cartoes.append(d)
+        elif not d["excluido"] and d["arquivado"] == arquivados:
+            cartoes.append(d)
+    return {"ok": True, "planos": planos, "cartoes": cartoes, "usuarios": usuarios, "hoje": _tarefa_hoje(),
+            "colunas": list(TAREFA_COLUNAS),
+            "eu": {"username": ctx.get("username"), "gestor": tarefa_gestor(ctx),
+                   "admin": str(ctx.get("app_role") or "") == "admin"}}
+
+
+def tarefas_resumo(username: str) -> dict[str, Any]:
+    hoje = _tarefa_hoje()
+    with DB_LOCK:
+        rows = DB.execute("SELECT prazo FROM tarefa_cartao_v1969 WHERE responsavel=? AND coluna!='concluido' AND excluido_em=''",
+                          (username,)).fetchall()
+    return {"ok": True, "abertas": len(rows), "atrasadas": sum(1 for r in rows if r["prazo"] and r["prazo"] < hoje)}
+
+
+def tarefa_detalhe(cartao_id: Any) -> dict[str, Any]:
+    with DB_LOCK:
+        row = _tarefa_ler(cartao_id, excluido_ok=True)
+        eventos = [dict(e) for e in DB.execute("SELECT quando, usuario, tipo, texto FROM tarefa_evento_v1969 WHERE cartao_id=? ORDER BY id",
+                                               (row["id"],)).fetchall()]
+    return {"ok": True, "cartao": _tarefa_dict(row), "eventos": eventos}
+
+
+def _tarefa_checklist_mesclar(novo: Any, antigo: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """O gestor reescreve a lista; o que já estava marcado (mesmo id) continua marcado."""
+    if not isinstance(novo, list):
+        raise ValueError("Checklist inválido.")
+    por_id = {str(i.get("id")): i for i in antigo if isinstance(i, dict)}
+    saida = []
+    for item in novo[:50]:
+        texto = str((item or {}).get("texto") or "").strip()[:300] if isinstance(item, dict) else str(item or "").strip()[:300]
+        if not texto:
+            continue
+        velho = por_id.get(str((item or {}).get("id") if isinstance(item, dict) else ""))
+        if velho:
+            saida.append({**velho, "texto": texto})
+        else:
+            saida.append({"id": secrets.token_hex(4), "texto": texto, "feito": False, "feito_por": "", "feito_em": ""})
+    return saida
+
+
+def tarefa_salvar(dados: dict[str, Any], usuario: str) -> dict[str, Any]:
+    """Cria (sem id) ou edita (com id + versao) um cartão. Só gestor (conferido na rota)."""
+    campos: dict[str, Any] = {}
+    if "titulo" in dados or not dados.get("id"):
+        titulo = str(dados.get("titulo") or "").strip()[:200]
+        if not titulo:
+            raise ValueError("Informe o título.")
+        campos["titulo"] = titulo
+    if "descricao" in dados:
+        campos["descricao"] = str(dados.get("descricao") or "")[:5000]
+    if "prioridade" in dados:
+        p = str(dados.get("prioridade") or "media")
+        if p not in TAREFA_PRIORIDADES:
+            raise ValueError("Prioridade inválida.")
+        campos["prioridade"] = p
+    if "area" in dados:
+        campos["area"] = str(dados.get("area") or "").strip()[:40]
+    if "filial" in dados:
+        f = str(dados.get("filial") or "")
+        if f not in TAREFA_FILIAIS:
+            raise ValueError("Filial inválida.")
+        campos["filial"] = f
+    if "prazo" in dados:
+        prazo = str(dados.get("prazo") or "").strip()
+        if prazo:
+            try:
+                prazo = date.fromisoformat(prazo).isoformat()
+            except ValueError:
+                raise ValueError("Prazo inválido (use AAAA-MM-DD).")
+        campos["prazo"] = prazo
+    agora = now_iso()
+    with TAREFA_LOCK, DB_LOCK:
+        if "responsavel" in dados:
+            resp = str(dados.get("responsavel") or "").strip().lower()
+            if resp and not DB.execute("SELECT 1 FROM app_users WHERE username=? AND active=1", (resp,)).fetchone():
+                raise ValueError("Responsável não encontrado entre os usuários ativos.")
+            campos["responsavel"] = resp
+        if "plano_id" in dados:
+            pid = dados.get("plano_id")
+            if pid in (None, ""):
+                campos["plano_id"] = None
+            else:
+                if not DB.execute("SELECT 1 FROM tarefa_plano_v1969 WHERE id=?", (pid,)).fetchone():
+                    raise ValueError("Plano não encontrado.")
+                campos["plano_id"] = int(pid)
+        if not dados.get("id"):
+            checklist = _tarefa_checklist_mesclar(dados.get("checklist") or [], [])
+            cols = ["titulo", "descricao", "prioridade", "area", "filial", "prazo", "responsavel", "plano_id"]
+            valores = [campos.get(c, "" if c != "plano_id" else None) for c in cols]
+            if not campos.get("prioridade"):
+                valores[2] = "media"
+            cur = DB.execute(
+                f"INSERT INTO tarefa_cartao_v1969({','.join(cols)},checklist_json,criado_por,criado_em,atualizado_em) VALUES({','.join('?' * len(cols))},?,?,?,?)",
+                (*valores, json.dumps(checklist, ensure_ascii=False), usuario, agora, agora))
+            cid = cur.lastrowid
+            _tarefa_evento(cid, usuario, "criado", campos["titulo"])
+        else:
+            row = _tarefa_ler(dados.get("id"))
+            try:
+                versao = int(dados.get("versao"))
+            except (TypeError, ValueError):
+                raise ValueError("Versão do cartão ausente.")
+            if versao != int(row["versao"]):
+                raise TarefaConflito(_tarefa_dict(row))
+            if "checklist" in dados:
+                antigo = json.loads(row["checklist_json"] or "[]")
+                campos["checklist_json"] = json.dumps(_tarefa_checklist_mesclar(dados.get("checklist"), antigo), ensure_ascii=False)
+            mudou = [c for c, v in campos.items() if row[c] != v]
+            if mudou:
+                sets = ",".join(f"{c}=?" for c in mudou)
+                DB.execute(f"UPDATE tarefa_cartao_v1969 SET {sets},versao=versao+1,atualizado_em=? WHERE id=?",
+                           (*[campos[c] for c in mudou], agora, row["id"]))
+                _tarefa_evento(row["id"], usuario, "editado", ", ".join(c.replace("_json", "") for c in mudou))
+            cid = row["id"]
+        DB.commit()
+        return {"ok": True, "cartao": _tarefa_dict(_tarefa_ler(cid))}
+
+
+class TarefaConflito(Exception):
+    """A tela editou uma versão velha do cartão (outro computador mexeu antes)."""
+
+    def __init__(self, atual: dict[str, Any]) -> None:
+        super().__init__("Este cartão foi alterado em outro computador. A tela foi atualizada; confira e salve de novo.")
+        self.atual = atual
+
+
+def tarefa_mover(ctx: dict[str, Any], cartao_id: Any, coluna: str) -> dict[str, Any]:
+    if coluna not in TAREFA_COLUNAS:
+        raise ValueError("Coluna inválida.")
+    usuario = str(ctx.get("username") or "")
+    with TAREFA_LOCK, DB_LOCK:
+        row = _tarefa_ler(cartao_id)
+        if not _tarefa_pode_executar(ctx, row):
+            raise PermissionError("Só o responsável (ou Admin/Supervisor) move este cartão.")
+        if row["coluna"] != coluna:
+            agora = now_iso()
+            iniciado = row["iniciado_em"] or (agora if coluna in ("andamento", "aguardando", "concluido") else "")
+            concluido_em, concluido_por = (agora, usuario) if coluna == "concluido" else ("", "")
+            DB.execute("UPDATE tarefa_cartao_v1969 SET coluna=?,iniciado_em=?,concluido_em=?,concluido_por=?,versao=versao+1,atualizado_em=? WHERE id=?",
+                       (coluna, iniciado, concluido_em, concluido_por, agora, row["id"]))
+            _tarefa_evento(row["id"], usuario, "movido", f"{row['coluna']} → {coluna}")
+            DB.commit()
+        return {"ok": True, "cartao": _tarefa_dict(_tarefa_ler(row["id"]))}
+
+
+def tarefa_checklist(ctx: dict[str, Any], cartao_id: Any, item_id: Any, feito: bool) -> dict[str, Any]:
+    usuario = str(ctx.get("username") or "")
+    with TAREFA_LOCK, DB_LOCK:
+        row = _tarefa_ler(cartao_id)
+        if not _tarefa_pode_executar(ctx, row):
+            raise PermissionError("Só o responsável (ou Admin/Supervisor) marca o checklist.")
+        lista = json.loads(row["checklist_json"] or "[]")
+        item = next((i for i in lista if str(i.get("id")) == str(item_id)), None)
+        if item is None:
+            raise LookupError("Item do checklist não encontrado.")
+        if bool(item.get("feito")) != bool(feito):
+            item.update(feito=bool(feito), feito_por=usuario if feito else "", feito_em=now_iso() if feito else "")
+            DB.execute("UPDATE tarefa_cartao_v1969 SET checklist_json=?,versao=versao+1,atualizado_em=? WHERE id=?",
+                       (json.dumps(lista, ensure_ascii=False), now_iso(), row["id"]))
+            _tarefa_evento(row["id"], usuario, "checklist", ("✔ " if feito else "✗ ") + str(item.get("texto") or ""))
+            DB.commit()
+        return {"ok": True, "cartao": _tarefa_dict(_tarefa_ler(row["id"]))}
+
+
+def tarefa_comentar(ctx: dict[str, Any], cartao_id: Any, texto: str) -> dict[str, Any]:
+    texto = str(texto or "").strip()
+    if not texto:
+        raise ValueError("Escreva o comentário.")
+    with TAREFA_LOCK, DB_LOCK:
+        row = _tarefa_ler(cartao_id)
+        _tarefa_evento(row["id"], str(ctx.get("username") or ""), "comentario", texto)
+        DB.commit()
+    return tarefa_detalhe(row["id"])
+
+
+def tarefa_excluir(cartao_id: Any, usuario: str, *, restaurar: bool = False) -> dict[str, Any]:
+    with TAREFA_LOCK, DB_LOCK:
+        row = _tarefa_ler(cartao_id, excluido_ok=True)
+        if restaurar:
+            DB.execute("UPDATE tarefa_cartao_v1969 SET excluido_em='',excluido_por='',versao=versao+1,atualizado_em=? WHERE id=?",
+                       (now_iso(), row["id"]))
+        else:
+            DB.execute("UPDATE tarefa_cartao_v1969 SET excluido_em=?,excluido_por=?,versao=versao+1,atualizado_em=? WHERE id=?",
+                       (now_iso(), usuario, now_iso(), row["id"]))
+        _tarefa_evento(row["id"], usuario, "restaurado" if restaurar else "excluido", row["titulo"])
+        DB.commit()
+    audit(usuario, "tarefa.restaurar" if restaurar else "tarefa.excluir", f"{row['id']} {row['titulo']}")
+    return {"ok": True}
+
+
+def tarefa_plano_salvar(dados: dict[str, Any], usuario: str) -> dict[str, Any]:
+    nome = str(dados.get("nome") or "").strip()[:120]
+    if not nome:
+        raise ValueError("Informe o nome do plano.")
+    desc = str(dados.get("descricao") or "")[:2000]
+    with DB_LOCK:
+        if dados.get("id"):
+            cur = DB.execute("UPDATE tarefa_plano_v1969 SET nome=?, descricao=? WHERE id=?", (nome, desc, dados.get("id")))
+            if not cur.rowcount:
+                raise LookupError("Plano não encontrado.")
+            pid = int(dados["id"])
+        else:
+            pid = DB.execute("INSERT INTO tarefa_plano_v1969(nome,descricao,criado_por,criado_em) VALUES(?,?,?,?)",
+                             (nome, desc, usuario, now_iso())).lastrowid
+        DB.commit()
+    return {"ok": True, "plano": {"id": pid, "nome": nome, "descricao": desc}}
+
+
+def tarefas_resumo_email() -> str:
+    """Linha do relatório das 08:00: tarefas atrasadas por responsável (só quando há)."""
+    hoje = _tarefa_hoje()
+    with DB_LOCK:
+        rows = DB.execute(
+            "SELECT c.responsavel, COALESCE(u.display_name, c.responsavel) nome, COUNT(*) n FROM tarefa_cartao_v1969 c "
+            "LEFT JOIN app_users u ON u.username=c.responsavel "
+            "WHERE c.coluna!='concluido' AND c.excluido_em='' AND c.prazo!='' AND c.prazo<? GROUP BY c.responsavel ORDER BY n DESC",
+            (hoje,)).fetchall()
+    if not rows:
+        return ""
+    total = sum(int(r["n"]) for r in rows)
+    partes = [f"{(r['nome'] or '') if r['responsavel'] else 'sem responsável'} {r['n']}" for r in rows]
+    return f"Quadro de tarefas: {total} atrasada(s) — " + ", ".join(partes)
+
+
 # V18.68: visitas dos anúncios do ML, todo dia, para medir conversão (vendas ÷ visitas).
 # Uma chamada por anúncio (/items/{id}/visits/time_window — a API recusa mais de um
 # id por vez). ~1.600 anúncios ≈ 15 min de coleta espaçada, uma vez por dia.
@@ -23549,6 +23986,12 @@ def relatorio_diario_html(d: dict[str, Any]) -> str:
         f"margin:0 0 16px;color:#14532d;font-size:13px'><b>{esc(remessa)}</b><br>"
         f"<span style='color:#586a7d'>Veja em Análise Full no sistema.</span></div>"
     ) if remessa else ""
+    tarefas = str(d.get("tarefas") or "")  # V19.69
+    cobrancas_html += (
+        f"<div style='background:#fff7ed;border:1px solid #fed7aa;border-radius:10px;padding:10px 14px;"
+        f"margin:0 0 16px;color:#7c2d12;font-size:13px'><b>{esc(tarefas)}</b><br>"
+        f"<span style='color:#586a7d'>Veja em Quadro de tarefas no sistema.</span></div>"
+    ) if tarefas else ""
     return f"""<div style="font-family:'Segoe UI',system-ui,sans-serif;color:#1e293b;max-width:680px;margin:auto">
 <h2 style="color:#123a63;margin:0 0 4px">Noromak — Vendas de {esc(_data_br(d['dia']))}</h2>
 <p style="color:#748295;margin:0 0 16px">Resumo do dia que fechou.</p>
@@ -23599,6 +24042,8 @@ def relatorio_diario_texto(d: dict[str, Any]) -> str:
         linhas.append(str(d["cobrancas"]))
     if d.get("remessa_full"):  # V19.03
         linhas.append(str(d["remessa_full"]))
+    if d.get("tarefas"):  # V19.69
+        linhas.append(str(d["tarefas"]))
     linhas += [
         "",
         "Por marketplace:",
@@ -23713,6 +24158,10 @@ def relatorio_diario_enviar(dia: str, forcar: bool = False) -> dict[str, Any]:
         dados["remessa_full"] = full_remessa_resumo_email()
     except Exception as exc:
         print(f"[relatorio-diario] remessa Full: {exc}", file=sys.stderr)
+    try:  # V19.69
+        dados["tarefas"] = tarefas_resumo_email()
+    except Exception as exc:
+        print(f"[relatorio-diario] quadro de tarefas: {exc}", file=sys.stderr)
     assunto = f"Noromak — Vendas de {_data_br(dia)}: {_brl_srv(dados['faturamento'])} em {dados['pedidos']} pedido(s)"
     destinatarios = relatorio_diario_enviar_email(assunto, relatorio_diario_texto(dados), relatorio_diario_html(dados))
     _vendas_meta("relatorio_diario_ultimo", dia)
@@ -30918,6 +31367,24 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
+        if path in ("/api/tarefas", "/api/tarefas/resumo", "/api/tarefas/cartao"):
+            # V19.69: quadro de tarefas — qualquer usuário logado vê.
+            ctx = self.auth()
+            if ctx is None:
+                return
+            try:
+                if path == "/api/tarefas/resumo":
+                    self.send_json(tarefas_resumo(str(ctx.get("username") or "")))
+                elif path == "/api/tarefas/cartao":
+                    self.send_json(tarefa_detalhe((query.get("id") or [""])[0]))
+                else:
+                    self.send_json(tarefas_payload(ctx, arquivados=(query.get("arquivados") or [""])[0] == "1",
+                                                   lixeira=(query.get("lixeira") or [""])[0] == "1"))
+            except LookupError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 404)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
         if path == "/api/posvenda":
             # V18.88: Pós-venda do ML (reclamações, devoluções e perdas, perguntas, reputação). Só lê o banco.
             if self.auth(admin_only=True) is None:
@@ -31303,6 +31770,13 @@ class AppHandler(BaseHTTPRequestHandler):
         for rota in ROTAS_ADMIN_V1882:
             page_modules[rota] = page_modules[rota + "/"] = "admin"
         required = page_modules.get(path)
+        if path in ("/tarefas", "/tarefas/", "/tarefas.html"):
+            # V19.69: quadro de tarefas — todo usuário logado (sem módulo próprio).
+            if not session_context(self):
+                self.send_redirect(f"{BASE_PATH}/")
+                return
+            self.serve_static("/tarefas.html")
+            return
         if required:
             ctx = session_context(self)
             if not ctx:
@@ -31715,6 +32189,42 @@ class AppHandler(BaseHTTPRequestHandler):
                     self.send_json({"ok": False, "error": str(exc)}, 400)
                 except Exception as exc:
                     self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path.startswith("/api/tarefas/"):
+            # V19.69: quadro de tarefas. Criar/editar = Admin e Supervisor; mover, checklist e comentar =
+            # o responsável (ou gestor); excluir/restaurar = perfil Admin. Consulta já foi barrada antes.
+            ctx = self.auth()
+            if ctx is None:
+                return
+            try:
+                dados = self.read_json()
+                usuario = str(ctx.get("username") or "")
+                if path in ("/api/tarefas/cartao", "/api/tarefas/plano"):
+                    if not tarefa_gestor(ctx):
+                        raise PermissionError("Só Admin e Supervisor criam e editam cartões.")
+                    self.send_json(tarefa_salvar(dados, usuario) if path.endswith("cartao") else tarefa_plano_salvar(dados, usuario))
+                elif path == "/api/tarefas/mover":
+                    self.send_json(tarefa_mover(ctx, dados.get("id"), str(dados.get("coluna") or "")))
+                elif path == "/api/tarefas/checklist":
+                    self.send_json(tarefa_checklist(ctx, dados.get("id"), dados.get("item"), bool(dados.get("feito"))))
+                elif path == "/api/tarefas/comentar":
+                    self.send_json(tarefa_comentar(ctx, dados.get("id"), str(dados.get("texto") or "")))
+                elif path in ("/api/tarefas/excluir", "/api/tarefas/restaurar"):
+                    if str(ctx.get("app_role") or "") != "admin":
+                        raise PermissionError("Só o perfil Admin exclui ou restaura cartões.")
+                    self.send_json(tarefa_excluir(dados.get("id"), usuario, restaurar=path.endswith("restaurar")))
+                else:
+                    self.send_json({"ok": False, "error": "Rota não encontrada."}, 404)
+            except TarefaConflito as exc:
+                self.send_json({"ok": False, "code": "CONFLITO", "error": str(exc), "cartao": exc.atual}, 409)
+            except PermissionError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 403)
+            except LookupError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 404)
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
             return
         if path == "/api/posvenda/responder":
             # V18.88: responde a pergunta do comprador no ML (POST /answers). Fica no audit_log.

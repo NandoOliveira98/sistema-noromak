@@ -1,0 +1,393 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="/favicon.ico?v=14.5" sizes="any">
+<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=18.94">
+<title>Noromak · Quadro de tarefas</title>
+<!-- V19.69: Quadro de tarefas (estilo Trello). 4 colunas fixas; Plano agrupa cartões.
+     Admin/Supervisor criam e editam; o responsável inicia, marca o checklist, comenta e conclui;
+     Consulta só vê; excluir (lixeira) só o perfil Admin. GET /api/tarefas, POST /api/tarefas/*.
+     A edição manda a versão do cartão: 409 = outro computador mexeu antes. -->
+<script defer src="/expedicao/web-auth.js?v=19.40"></script>
+<link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
+<link rel="stylesheet" href="/expedicao/nk-ui.css?v=19.13">
+<script src="/expedicao/nk-ui.js?v=19.13"></script>
+<script defer src="/expedicao/nk-menu.js?v=19.69" data-shell></script>
+<style>
+body{margin:0;background:var(--nk-canvas);color:var(--nk-ink);font-family:var(--nk-font)}
+.filtros{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px}
+.filtros select,.filtros input[type=search]{font:inherit;font-size:13px;border:1px solid var(--nk-line);background:var(--nk-tile);color:var(--nk-ink);border-radius:8px;padding:7px 10px}
+.filtros input[type=search]{width:240px;max-width:100%}
+.filtros label{display:inline-flex;gap:6px;align-items:center;font-size:13px;color:var(--nk-ink2)}
+.quadro{display:grid;grid-template-columns:repeat(4,minmax(240px,1fr));gap:12px;align-items:start;overflow-x:auto;padding-bottom:6px}
+.col{background:var(--nk-tile2,var(--nk-cinza-bg));border:1px solid var(--nk-line);border-radius:12px;padding:10px;min-height:120px;display:flex;flex-direction:column;gap:8px}
+.col.alvo{outline:2px dashed var(--nk-pri);outline-offset:-4px}
+.col-h{display:flex;justify-content:space-between;align-items:center;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:var(--nk-ink2);padding:2px 4px}
+.col-h .n{background:var(--nk-tile);border:1px solid var(--nk-line);border-radius:999px;padding:1px 8px;font-size:11px}
+.card{background:var(--nk-tile);border:1px solid var(--nk-line);border-radius:10px;padding:10px 11px;box-shadow:var(--nk-sombra);cursor:pointer;display:grid;gap:6px}
+.card:hover{border-color:var(--nk-line-forte)}
+.card[draggable=true]{cursor:grab}
+.card.alta{box-shadow:inset 3px 0 0 var(--nk-bad),var(--nk-sombra)}
+.card.media{box-shadow:inset 3px 0 0 var(--nk-warn),var(--nk-sombra)}
+.card.baixa{box-shadow:inset 3px 0 0 var(--nk-info),var(--nk-sombra)}
+.card-t{font-size:13.5px;font-weight:650;color:var(--nk-head);line-height:1.3}
+.card-m{display:flex;flex-wrap:wrap;gap:5px;align-items:center;font-size:11.5px;color:var(--nk-ink2)}
+.tag{background:var(--nk-cinza-bg);border-radius:6px;padding:1px 7px;font-weight:700;font-size:11px}
+.tag.atraso{background:var(--nk-bad-bg);color:var(--nk-bad)}
+.tag.plano{background:var(--nk-info-bg);color:var(--nk-info)}
+.barra-ck{height:4px;border-radius:3px;background:var(--nk-cinza-bg);overflow:hidden}
+.barra-ck i{display:block;height:100%;background:var(--nk-ok)}
+.card-acoes{display:flex;gap:6px;flex-wrap:wrap}
+.vazio{font-size:12px;color:var(--nk-ink3);text-align:center;padding:14px 4px}
+.fundo{position:fixed;inset:0;background:rgba(10,20,35,.45);display:flex;align-items:flex-start;justify-content:center;padding:40px 16px;z-index:50;overflow-y:auto}
+.fundo[hidden]{display:none}
+.janela{background:var(--nk-tile);color:var(--nk-ink);border-radius:14px;width:min(760px,100%);box-shadow:0 20px 60px rgba(0,0,0,.25);padding:18px 20px;display:grid;gap:12px}
+.janela h2{margin:0;font-size:18px;color:var(--nk-head)}
+.grade{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px}
+.campo{display:grid;gap:4px;font-size:12px;font-weight:700;color:var(--nk-ink2)}
+.campo input,.campo select,.campo textarea{font:inherit;font-size:13px;font-weight:400;border:1px solid var(--nk-line);background:var(--nk-tile);color:var(--nk-ink);border-radius:8px;padding:7px 9px;box-sizing:border-box;width:100%}
+.campo textarea{min-height:70px;resize:vertical}
+.campo input:disabled,.campo select:disabled,.campo textarea:disabled{background:var(--nk-canvas);color:var(--nk-ink2)}
+.ck{display:grid;gap:5px}
+.ck-i{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:13px}
+.ck-i input[type=text]{flex:1;font:inherit;font-size:13px;border:1px solid var(--nk-line);background:var(--nk-tile);color:var(--nk-ink);border-radius:6px;padding:5px 8px}
+.ck-i.feito span{text-decoration:line-through;color:var(--nk-ink3)}
+.ck-i small{color:var(--nk-ink3);font-size:11px}
+.hist{max-height:240px;overflow-y:auto;display:grid;gap:6px;border-top:1px solid var(--nk-line);padding-top:10px}
+.ev{font-size:12px;color:var(--nk-ink2)}
+.ev b{color:var(--nk-head)}
+.ev.com{background:var(--nk-canvas);border-radius:8px;padding:7px 9px;color:var(--nk-ink)}
+.rodape{display:flex;gap:8px;justify-content:space-between;flex-wrap:wrap;align-items:center}
+.rodape div{display:flex;gap:8px;flex-wrap:wrap}
+.sub-t{font-size:12px;font-weight:800;color:var(--nk-ink2);text-transform:uppercase;letter-spacing:.05em;margin:4px 0 0}
+@media(max-width:760px){.quadro{grid-template-columns:repeat(4,85vw)}}
+</style>
+</head>
+<body>
+<main class="nk-pagina">
+  <div class="nk-cab">
+    <div>
+      <div class="nk-rotulo">Visão geral</div>
+      <h1>Quadro de tarefas</h1>
+      <p id="sub">Carregando…</p>
+    </div>
+    <div class="nk-acoes">
+      <button class="nk-btn" id="novoPlano" hidden>+ Plano</button>
+      <button class="nk-btn pri" id="novo" hidden>+ Novo cartão</button>
+    </div>
+  </div>
+
+  <div class="nk-aviso bad" id="erro" hidden></div>
+  <div class="nk-kpis" id="kpis"></div>
+
+  <section class="nk-painel">
+    <div class="filtros">
+      <select id="fPlano"><option value="">Todos os planos</option></select>
+      <select id="fArea"><option value="">Todas as áreas</option></select>
+      <select id="fResp"><option value="">Todos os responsáveis</option><option value="__eu">Só as minhas</option><option value="__ninguem">Sem responsável</option></select>
+      <select id="fFilial"><option value="">Todas as filiais</option><option value="aracatuba">Araçatuba</option><option value="bauru">Bauru</option><option value="__geral">Geral</option></select>
+      <input type="search" id="fBusca" placeholder="Buscar título ou descrição">
+      <select id="fVista"><option value="">Quadro</option><option value="arquivados">Arquivados</option><option value="lixeira" id="opLixeira" hidden>Lixeira</option></select>
+    </div>
+    <div class="quadro" id="quadro"></div>
+  </section>
+</main>
+
+<div class="fundo" id="fundo" hidden><div class="janela" id="janela"></div></div>
+
+<script>
+(() => {
+  "use strict";
+  const B = "/expedicao";
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));
+  const COLS = {a_fazer: "A fazer", andamento: "Em andamento", aguardando: "Aguardando", concluido: "Concluído"};
+  const PRIO = {alta: "Alta", media: "Média", baixa: "Baixa"};
+  const FILIAL = {"": "Geral", aracatuba: "Araçatuba", bauru: "Bauru"};
+  const AREAS = ["Compras", "Comercial", "Anúncios", "Expedição", "Financeiro", "Sistema"];
+  const dataBR = iso => { if (!iso) return ""; const [a, m, d] = String(iso).slice(0, 10).split("-"); return d ? `${d}/${m}` : iso; };
+  const dataHora = iso => { const d = new Date(iso); return isNaN(d) ? "" : d.toLocaleString("pt-BR", {day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit"}); };
+  const duracao = (a, b) => { const ms = new Date(b) - new Date(a); if (!(ms > 0)) return ""; const h = ms / 36e5; return h >= 48 ? Math.round(h / 24) + " dias" : h >= 1 ? Math.round(h) + " h" : Math.max(1, Math.round(ms / 6e4)) + " min"; };
+  let D = null, vista = "", aberto = null;
+
+  async function api(url, corpo) {
+    const op = {cache: "no-store", credentials: "same-origin", headers: {"Content-Type": "application/json", Accept: "application/json"}};
+    if (corpo !== undefined) { op.method = "POST"; op.body = JSON.stringify(corpo); }
+    const r = await fetch(B + url, op);
+    let d = {}; try { d = await r.json(); } catch (_) {}
+    if (!r.ok) { const e = new Error(d.error || `HTTP ${r.status}`); e.status = r.status; e.dados = d; throw e; }
+    return d;
+  }
+  const aviso = (t, tipo) => window.nkToast ? window.nkToast(t, tipo) : alert(t);
+  const nomeDe = u => { if (!u) return ""; const x = (D?.usuarios || []).find(y => y.username === u); return x ? x.nome : u; };
+
+  async function carregar() {
+    try {
+      const q = vista === "arquivados" ? "?arquivados=1" : vista === "lixeira" ? "?lixeira=1" : "";
+      D = await api("/api/tarefas" + q);
+      $("erro").hidden = true;
+      montarFiltros();
+      desenhar();
+    } catch (e) { $("erro").hidden = false; $("erro").textContent = "Não foi possível carregar o quadro: " + e.message; }
+  }
+
+  function montarFiltros() {
+    const manter = (sel, opcoes) => { const v = sel.value; const fixos = [...sel.options].filter(o => !o.dataset.din); sel.innerHTML = ""; fixos.forEach(o => sel.appendChild(o)); opcoes.forEach(([val, txt]) => { const o = document.createElement("option"); o.value = val; o.textContent = txt; o.dataset.din = "1"; sel.appendChild(o); }); sel.value = [...sel.options].some(o => o.value === v) ? v : ""; };
+    manter($("fPlano"), D.planos.map(p => [String(p.id), p.nome]));
+    const areas = [...new Set([...AREAS, ...D.cartoes.map(c => c.area).filter(Boolean)])];
+    manter($("fArea"), areas.map(a => [a, a]));
+    manter($("fResp"), D.usuarios.map(u => [u.username, u.nome]));
+    $("novo").hidden = $("novoPlano").hidden = !D.eu.gestor;
+    $("opLixeira").hidden = !D.eu.admin;
+  }
+
+  function filtrados() {
+    const p = $("fPlano").value, a = $("fArea").value, r = $("fResp").value, f = $("fFilial").value, b = $("fBusca").value.trim().toLowerCase();
+    return D.cartoes.filter(c => (!p || String(c.plano_id) === p) && (!a || c.area === a)
+      && (!r || (r === "__eu" ? c.responsavel === D.eu.username : r === "__ninguem" ? !c.responsavel : c.responsavel === r))
+      && (!f || (f === "__geral" ? !c.filial : c.filial === f))
+      && (!b || (c.titulo + " " + c.descricao).toLowerCase().includes(b)));
+  }
+  const ordem = (x, y) => ({alta: 0, media: 1, baixa: 2}[x.prioridade] - {alta: 0, media: 1, baixa: 2}[y.prioridade]) || String(x.prazo || "9").localeCompare(String(y.prazo || "9")) || x.id - y.id;
+  const podeMover = c => D.eu.gestor || (c.responsavel && c.responsavel === D.eu.username);
+  const somenteLeitura = () => !!(window.EXPEDICAO_USER && window.EXPEDICAO_USER.somente_leitura);
+
+  function cardHTML(c) {
+    const ck = c.checklist || [], feitos = ck.filter(i => i.feito).length;
+    const plano = D.planos.find(p => p.id === c.plano_id);
+    const mover = podeMover(c) && !somenteLeitura() && !vista;
+    let botoes = "";
+    if (mover && c.coluna === "a_fazer") botoes = `<button class="nk-btn mini pri" data-mover="andamento">Iniciar</button>`;
+    else if (mover && (c.coluna === "andamento" || c.coluna === "aguardando")) botoes = `<button class="nk-btn mini pri" data-mover="concluido">Concluir</button>`;
+    return `<div class="card ${esc(c.prioridade)}" data-id="${c.id}" ${mover ? 'draggable="true"' : ""}>
+      <div class="card-t">${esc(c.titulo)}</div>
+      <div class="card-m">
+        ${c.area ? `<span class="tag">${esc(c.area)}</span>` : ""}
+        ${plano ? `<span class="tag plano" title="${esc(plano.nome)}">${esc(plano.nome.length > 22 ? plano.nome.slice(0, 21) + "…" : plano.nome)}</span>` : ""}
+        ${c.prazo ? `<span class="tag ${c.atrasado ? "atraso" : ""}">${c.atrasado ? "Atrasada · " : ""}${dataBR(c.prazo)}</span>` : ""}
+        ${c.filial ? `<span class="tag">${esc(FILIAL[c.filial] || c.filial)}</span>` : ""}
+        <span>${c.responsavel ? "👤 " + esc(nomeDe(c.responsavel)) : "<i>sem responsável</i>"}</span>
+      </div>
+      ${ck.length ? `<div class="card-m">☑ ${feitos}/${ck.length}</div><div class="barra-ck"><i style="width:${Math.round(100 * feitos / ck.length)}%"></i></div>` : ""}
+      ${c.coluna === "concluido" && c.iniciado_em && c.concluido_em ? `<div class="card-m">Levou ${esc(duracao(c.iniciado_em, c.concluido_em))}</div>` : ""}
+      ${botoes ? `<div class="card-acoes">${botoes}</div>` : ""}
+    </div>`;
+  }
+
+  function desenhar() {
+    const lista = filtrados();
+    const minhas = D.cartoes.filter(c => c.responsavel === D.eu.username && c.coluna !== "concluido");
+    const atrasadas = D.cartoes.filter(c => c.atrasado);
+    $("sub").textContent = vista === "arquivados" ? "Concluídas há mais de 14 dias. Para reabrir, abra o cartão e mova para A fazer."
+      : vista === "lixeira" ? "Cartões excluídos. Abra um para restaurar." : "Planos de ação da equipe. Clique num cartão para ver detalhes, checklist e comentários.";
+    $("kpis").innerHTML = vista ? "" : [
+      ["info", "▣", D.cartoes.filter(c => c.coluna !== "concluido").length, "Tarefas abertas"],
+      ["warn", "▶", D.cartoes.filter(c => c.coluna === "andamento").length, "Em andamento"],
+      ["bad", "!", atrasadas.length, "Atrasadas"],
+      ["ok", "👤", minhas.length, "Minhas abertas"],
+    ].map(([t, i, n, r]) => `<div class="nk-kpi"><span class="nk-kpi-ic ${t}">${i}</span><div><b>${n}</b><small>${r}</small></div></div>`).join("");
+    const colunas = vista ? {[vista]: vista === "lixeira" ? "Lixeira" : "Arquivados"} : COLS;
+    $("quadro").style.gridTemplateColumns = vista ? "minmax(240px,520px)" : "";
+    $("quadro").innerHTML = Object.entries(colunas).map(([k, nome]) => {
+      const cs = (vista ? lista : lista.filter(c => c.coluna === k)).sort(ordem);
+      return `<div class="col" data-col="${k}"><div class="col-h"><span>${esc(nome)}</span><span class="n">${cs.length}</span></div>${cs.map(cardHTML).join("") || '<div class="vazio">Nada aqui</div>'}</div>`;
+    }).join("");
+  }
+
+  async function mover(id, coluna) {
+    try {
+      const r = await api("/api/tarefas/mover", {id, coluna});
+      trocar(r.cartao);
+    } catch (e) { aviso(e.message, "erro"); carregar(); }
+  }
+  function trocar(c) {
+    const i = D.cartoes.findIndex(x => x.id === c.id);
+    if (i >= 0) D.cartoes[i] = c; else D.cartoes.push(c);
+    desenhar();
+  }
+
+  // ---- arrastar ---------------------------------------------------------------------------
+  $("quadro").addEventListener("dragstart", e => { const c = e.target.closest(".card"); if (c) e.dataTransfer.setData("text/plain", c.dataset.id); });
+  $("quadro").addEventListener("dragover", e => { const col = e.target.closest(".col"); if (col && !vista) { e.preventDefault(); col.classList.add("alvo"); } });
+  $("quadro").addEventListener("dragleave", e => { const col = e.target.closest(".col"); if (col) col.classList.remove("alvo"); });
+  $("quadro").addEventListener("drop", e => {
+    const col = e.target.closest(".col"); if (!col) return;
+    e.preventDefault(); col.classList.remove("alvo");
+    const id = Number(e.dataTransfer.getData("text/plain"));
+    const c = D.cartoes.find(x => x.id === id);
+    if (c && c.coluna !== col.dataset.col) mover(id, col.dataset.col);
+  });
+  $("quadro").addEventListener("click", e => {
+    const b = e.target.closest("[data-mover]");
+    const card = e.target.closest(".card");
+    if (!card) return;
+    if (b) { e.stopPropagation(); mover(Number(card.dataset.id), b.dataset.mover); return; }
+    abrir(Number(card.dataset.id));
+  });
+
+  // ---- janela do cartão -------------------------------------------------------------------
+  function fechar() { $("fundo").hidden = true; aberto = null; }
+  $("fundo").addEventListener("mousedown", e => { if (e.target === $("fundo")) fechar(); });
+  document.addEventListener("keydown", e => { if (e.key === "Escape" && !$("fundo").hidden) fechar(); });
+
+  async function abrir(id) {
+    let det = {cartao: null, eventos: []};
+    if (id) { try { det = await api("/api/tarefas/cartao?id=" + id); } catch (e) { aviso(e.message, "erro"); return; } }
+    aberto = det.cartao ? {...det.cartao} : {id: 0, titulo: "", descricao: "", coluna: "a_fazer", responsavel: "", prazo: "", prioridade: "media", area: "", filial: "", checklist: [], plano_id: Number($("fPlano").value) || null};
+    desenharJanela(det.eventos);
+    $("fundo").hidden = false;
+    setTimeout(() => { const t = $("cTitulo"); if (t && !t.disabled && !aberto.id) t.focus(); }, 30);
+  }
+
+  function desenharJanela(eventos) {
+    const c = aberto, novo = !c.id, ed = D.eu.gestor && !somenteLeitura() && !c.excluido;
+    const exec = podeMover(c) && !somenteLeitura() && !c.excluido;
+    const dis = ed ? "" : "disabled";
+    const opt = (obj, v) => Object.entries(obj).map(([k, t]) => `<option value="${esc(k)}" ${k === v ? "selected" : ""}>${esc(t)}</option>`).join("");
+    const usuarios = `<option value="">— sem responsável —</option>` + D.usuarios.map(u => `<option value="${esc(u.username)}" ${u.username === c.responsavel ? "selected" : ""}>${esc(u.nome)}</option>`).join("");
+    const planos = `<option value="">— sem plano —</option>` + D.planos.map(p => `<option value="${p.id}" ${p.id === c.plano_id ? "selected" : ""}>${esc(p.nome)}</option>`).join("");
+    const areas = [...new Set([...AREAS, c.area].filter(Boolean))];
+    const ck = (c.checklist || []).map((i, n) => `<div class="ck-i ${i.feito ? "feito" : ""}" data-n="${n}">
+        <input type="checkbox" data-ck="${esc(i.id || "")}" ${i.feito ? "checked" : ""} ${exec && i.id ? "" : "disabled"}>
+        ${ed ? `<input type="text" data-ck-txt="${n}" value="${esc(i.texto)}"><button class="nk-btn mini" data-ck-del="${n}" title="Remover item">✕</button>` : `<span>${esc(i.texto)}</span>`}
+        ${i.feito && i.feito_por ? `<small>${esc(nomeDe(i.feito_por))} · ${esc(dataHora(i.feito_em))}</small>` : ""}
+      </div>`).join("");
+    const NOMES_EV = {criado: "criou", editado: "editou", movido: "moveu", checklist: "checklist", excluido: "excluiu", restaurado: "restaurou"};
+    const hist = (eventos || []).slice().reverse().map(ev => ev.tipo === "comentario"
+      ? `<div class="ev com"><b>${esc(nomeDe(ev.usuario))}</b> · ${esc(dataHora(ev.quando))}<br>${esc(ev.texto).replace(/\n/g, "<br>")}</div>`
+      : `<div class="ev"><b>${esc(nomeDe(ev.usuario))}</b> ${esc(NOMES_EV[ev.tipo] || ev.tipo)} ${esc(ev.tipo === "movido" ? ev.texto.replace(/[a-z_]+/g, k => COLS[k] || k) : ev.texto)} · ${esc(dataHora(ev.quando))}</div>`).join("");
+    $("janela").innerHTML = `
+      <h2>${novo ? "Novo cartão" : esc(c.titulo)}</h2>
+      ${c.excluido ? `<div class="nk-aviso bad">Cartão excluído${c.excluido_por ? " por " + esc(nomeDe(c.excluido_por)) : ""}.</div>` : ""}
+      <label class="campo">Título<input id="cTitulo" maxlength="200" value="${esc(c.titulo)}" ${dis}></label>
+      <label class="campo">Descrição<textarea id="cDesc" ${dis}>${esc(c.descricao)}</textarea></label>
+      <div class="grade">
+        <label class="campo">Plano<select id="cPlano" ${dis}>${planos}</select></label>
+        <label class="campo">Responsável<select id="cResp" ${dis}>${usuarios}</select></label>
+        <label class="campo">Prazo<input type="date" id="cPrazo" value="${esc(c.prazo)}" ${dis}></label>
+        <label class="campo">Prioridade<select id="cPrio" ${dis}>${opt(PRIO, c.prioridade)}</select></label>
+        <label class="campo">Área<select id="cArea" ${dis}><option value="">—</option>${areas.map(a => `<option ${a === c.area ? "selected" : ""}>${esc(a)}</option>`).join("")}</select></label>
+        <label class="campo">Filial<select id="cFilial" ${dis}>${opt(FILIAL, c.filial)}</select></label>
+      </div>
+      ${!novo ? `<div class="grade"><label class="campo">Coluna<select id="cColuna" ${exec ? "" : "disabled"}>${opt(COLS, c.coluna)}</select></label>
+        <div class="campo">Tempo<span style="font-weight:400;color:var(--nk-ink)">${c.iniciado_em ? "Iniciada " + esc(dataHora(c.iniciado_em)) : "Não iniciada"}${c.concluido_em ? " · concluída por " + esc(nomeDe(c.concluido_por)) + " em " + esc(dataHora(c.concluido_em)) + " (" + esc(duracao(c.iniciado_em, c.concluido_em)) + ")" : ""}</span></div></div>` : ""}
+      <div class="sub-t">Checklist</div>
+      <div class="ck" id="ck">${ck || '<div class="vazio" style="text-align:left;padding:0">Sem itens.</div>'}</div>
+      ${ed ? `<div style="display:flex;gap:6px"><input id="ckNovo" class="nk-campo" placeholder="Novo item do checklist" style="flex:1;font:inherit;font-size:13px;border:1px solid var(--nk-line);background:var(--nk-tile);color:var(--nk-ink);border-radius:8px;padding:6px 9px"><button class="nk-btn mini" id="ckAdd">Adicionar</button></div>` : ""}
+      ${!novo ? `<div class="sub-t">Comentários e histórico</div>
+        ${!somenteLeitura() && !c.excluido ? `<div style="display:flex;gap:6px;align-items:flex-start"><textarea id="coment" placeholder="Escreva um comentário" style="flex:1;font:inherit;font-size:13px;min-height:44px;border:1px solid var(--nk-line);background:var(--nk-tile);color:var(--nk-ink);border-radius:8px;padding:7px 9px"></textarea><button class="nk-btn" id="comentar">Comentar</button></div>` : ""}
+        <div class="hist">${hist || '<div class="ev">Sem registros.</div>'}</div>` : ""}
+      <div class="rodape">
+        <div>${!novo && D.eu.admin && !somenteLeitura() ? (c.excluido ? `<button class="nk-btn" id="restaurar">Restaurar</button>` : `<button class="nk-btn perigo" id="excluir">Excluir</button>`) : ""}</div>
+        <div><button class="nk-btn" id="fechar">Fechar</button>${ed ? `<button class="nk-btn pri" id="salvar">${novo ? "Criar cartão" : "Salvar"}</button>` : ""}</div>
+      </div>`;
+    ligarJanela();
+  }
+
+  function lerChecklist() {
+    return [...document.querySelectorAll("#ck .ck-i")].map(el => {
+      const i = aberto.checklist[Number(el.dataset.n)];
+      const t = el.querySelector("[data-ck-txt]");
+      return {id: i.id, texto: t ? t.value : i.texto};
+    });
+  }
+
+  function ligarJanela() {
+    const j = $("janela");
+    j.querySelector("#fechar").onclick = fechar;
+    const add = j.querySelector("#ckAdd");
+    if (add) {
+      const fazer = () => { const v = $("ckNovo").value.trim(); if (!v) return; aberto = {...aberto, ...lerCampos(), checklist: [...lerChecklist(), {texto: v}]}; redesenhar(); setTimeout(() => $("ckNovo") && $("ckNovo").focus(), 0); };
+      add.onclick = fazer;
+      $("ckNovo").addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); fazer(); } });
+    }
+    j.querySelectorAll("[data-ck-del]").forEach(b => b.onclick = () => { const lista = lerChecklist(); lista.splice(Number(b.dataset.ckDel), 1); aberto = {...aberto, ...lerCampos(), checklist: lista}; redesenhar(); });
+    j.querySelectorAll("[data-ck]").forEach(cb => cb.onchange = async () => {
+      try { const r = await api("/api/tarefas/checklist", {id: aberto.id, item: cb.dataset.ck, feito: cb.checked}); aceitar(r.cartao); }
+      catch (e) { cb.checked = !cb.checked; aviso(e.message, "erro"); }
+    });
+    const col = j.querySelector("#cColuna");
+    if (col) col.onchange = async () => {
+      try { const r = await api("/api/tarefas/mover", {id: aberto.id, coluna: col.value}); aceitar(r.cartao); }
+      catch (e) { aviso(e.message, "erro"); col.value = aberto.coluna; }
+    };
+    const com = j.querySelector("#comentar");
+    if (com) com.onclick = async () => {
+      const t = $("coment").value.trim(); if (!t) return;
+      try { const r = await api("/api/tarefas/comentar", {id: aberto.id, texto: t}); aberto = {...r.cartao, ...lerCampos()}; desenharJanela(r.eventos); trocar(r.cartao); }
+      catch (e) { aviso(e.message, "erro"); }
+    };
+    const sal = j.querySelector("#salvar");
+    if (sal) sal.onclick = salvar;
+    const exc = j.querySelector("#excluir");
+    if (exc) exc.onclick = async () => {
+      const ok = window.nkConfirmar ? await window.nkConfirmar(`Excluir o cartão "${aberto.titulo}"? Ele vai para a Lixeira e pode ser restaurado.`) : confirm("Excluir este cartão?");
+      if (!ok) return;
+      try { await api("/api/tarefas/excluir", {id: aberto.id}); fechar(); aviso("Cartão excluído (está na Lixeira)."); carregar(); }
+      catch (e) { aviso(e.message, "erro"); }
+    };
+    const res = j.querySelector("#restaurar");
+    if (res) res.onclick = async () => {
+      try { await api("/api/tarefas/restaurar", {id: aberto.id}); fechar(); aviso("Cartão restaurado."); carregar(); }
+      catch (e) { aviso(e.message, "erro"); }
+    };
+  }
+
+  function lerCampos() {
+    if (!$("cTitulo")) return {};
+    return {titulo: $("cTitulo").value, descricao: $("cDesc").value, plano_id: $("cPlano").value ? Number($("cPlano").value) : null,
+      responsavel: $("cResp").value, prazo: $("cPrazo").value, prioridade: $("cPrio").value, area: $("cArea").value, filial: $("cFilial").value};
+  }
+  async function redesenhar() {
+    let ev = [];
+    if (aberto.id) { try { ev = (await api("/api/tarefas/cartao?id=" + aberto.id)).eventos; } catch (_) {} }
+    desenharJanela(ev);
+  }
+  // Resposta do servidor depois de mover/checklist: mantém o que está sendo digitado.
+  function aceitar(c) { const digitado = D.eu.gestor ? lerCampos() : {}; const lista = D.eu.gestor ? lerChecklist() : null; trocar(c);
+    aberto = {...c, ...digitado}; if (lista) aberto.checklist = c.checklist.map(i => ({...i, texto: (lista.find(x => x.id === i.id) || i).texto})).concat(lista.filter(x => !x.id)); redesenhar(); }
+
+  async function salvar() {
+    const corpo = {...lerCampos(), checklist: lerChecklist()};
+    if (!corpo.titulo.trim()) { aviso("Informe o título.", "erro"); return; }
+    const editando = !!aberto.id;
+    if (editando) { corpo.id = aberto.id; corpo.versao = aberto.versao; }
+    try {
+      const r = await api("/api/tarefas/cartao", corpo);
+      trocar(r.cartao); fechar(); aviso(editando ? "Cartão salvo." : "Cartão criado.");
+    } catch (e) {
+      if (e.status === 409 && e.dados && e.dados.cartao) { aviso(e.message, "erro"); trocar(e.dados.cartao); aberto = {...e.dados.cartao}; redesenhar(); return; }
+      aviso(e.message, "erro");
+    }
+  }
+
+  // ---- plano -------------------------------------------------------------------------------
+  $("novoPlano").onclick = () => {
+    aberto = null;
+    $("janela").innerHTML = `<h2>Novo plano</h2>
+      <label class="campo">Nome<input id="pNome" maxlength="120" placeholder="Ex.: Reduzir ruptura — nov/26"></label>
+      <label class="campo">Descrição<textarea id="pDesc"></textarea></label>
+      <div class="rodape"><div></div><div><button class="nk-btn" id="pFechar">Cancelar</button><button class="nk-btn pri" id="pSalvar">Criar plano</button></div></div>`;
+    $("fundo").hidden = false; $("pNome").focus();
+    $("pFechar").onclick = fechar;
+    $("pSalvar").onclick = async () => {
+      try { const r = await api("/api/tarefas/plano", {nome: $("pNome").value, descricao: $("pDesc").value}); fechar(); await carregar(); $("fPlano").value = String(r.plano.id); desenhar(); aviso("Plano criado."); }
+      catch (e) { aviso(e.message, "erro"); }
+    };
+  };
+  $("novo").onclick = () => abrir(0);
+
+  ["fPlano", "fArea", "fResp", "fFilial"].forEach(id => $(id).addEventListener("change", desenhar));
+  $("fBusca").addEventListener("input", desenhar);
+  $("fVista").addEventListener("change", () => { vista = $("fVista").value; carregar(); });
+
+  // Outro computador mexeu: relê a cada 30 s com a aba à vista e a janela fechada.
+  setInterval(() => { if (!document.hidden && $("fundo").hidden) carregar(); }, 30000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && $("fundo").hidden) carregar(); });
+  carregar();
+})();
+</script>
+</body>
+</html>

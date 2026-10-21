@@ -580,6 +580,21 @@ diário) e grava em `ml_estoque_dia_v1872.estoque_full_ultimo` (leitura sem núm
 "recebida automática" usam essa coluna; sem número = em branco, nunca zero. A Ruptura continua com o `available_quantity`
 (o anúncio ainda vende do depósito). Teste: `TESTES/test_estoque_full_v1960.py`.
 
+### Quadro de tarefas (V19.69)
+`APP/tarefas.html` (`/tarefas`, menu Visão geral, **todo usuário logado**: a página só exige sessão, o item do menu
+não tem `modulo`). Decisões do dono (21/10): 4 colunas fixas (`TAREFA_COLUNAS`: a_fazer, andamento, aguardando,
+concluido; Iniciar grava `iniciado_em`, Concluir `concluido_em`/`concluido_por`); Plano (`tarefa_plano_v1969`) agrupa
+cartões (`tarefa_cartao_v1969`: área, prioridade, prazo, responsável, filial só de filtro, checklist em JSON);
+histórico/comentários em `tarefa_evento_v1969`. Criar/editar = módulo admin (Admin e Supervisor, `tarefa_gestor`);
+mover, checklist = o responsável ou gestor; comentar = qualquer logado; excluir/restaurar (lixeira, `excluido_em`) só
+perfil Admin; Consulta só lê (`consulta_bloqueada`). Edição manda `versao`: outra mais nova = 409 `CONFLITO` com o
+cartão atual. Concluído há > 14 dias sai do quadro para Arquivados (calculado na leitura; mover para A fazer reabre).
+Carga inicial uma vez (plano com chave única `faturamento-out26`, cartão excluído nunca volta). Selo no menu
+(`/api/tarefas/resumo`, vermelho com atrasada) e linha das atrasadas no e-mail das 08:00 (`tarefas_resumo_email`).
+Rotas `GET /api/tarefas[?arquivados=1|lixeira=1]`, `/api/tarefas/{resumo,cartao}`,
+`POST /api/tarefas/{cartao,plano,mover,checklist,comentar,excluir,restaurar}`. V2 (a fazer): cartões automáticos de
+Compras (zerados, vai zerar, demanda, projeção). Teste: `TESTES/test_tarefas_v1969.py`.
+
 ### Painel de saúde e alertas (V18.83)
 `APP/saude.html` (`/saude`, menu Sistema; ver = módulo admin, mudar quem recebe = só perfil Admin).
 `GET /api/saude` (`saude_payload`): Mercado Livre (conexão, token, última busca de pedidos), Shopee,
