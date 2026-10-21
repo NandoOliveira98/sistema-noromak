@@ -176,7 +176,7 @@ class Avisos(TesteNoromak):
         self.inscrever(renovar=True)
         status, corpo = self.entregar()
         self.assertEqual(status, 200, corpo)
-        self.assertEqual([v["titulo"] for v in corpo["vendas"]], ["Venda ML · R$ 1.234,50", "Venda Shopee · R$ 59,90"])
+        self.assertEqual([v["titulo"] for v in corpo["vendas"]], ["Venda ML Araçatuba · R$ 1.234,50", "Venda Shopee Araçatuba · R$ 59,90"])  # V19.71: com a filial
         self.assertEqual(corpo["vendas"][0]["corpo"], "Kit embreagem (1 un.)")
         self.assertEqual(self.entregar()[1]["vendas"], [], "a mesma venda foi entregue duas vezes")
         self.assertEqual(S.avisos_venda_enviar_rodada()["enviados"], 0)

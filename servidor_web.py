@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.70-PERFIL-COMPRAS"
+APP_VERSION = "19.71-AVISO-FILIAL"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -35486,6 +35486,9 @@ def ensure_avisos_venda_schema() -> None:
             );
             """
         )
+        # V19.71: filial da venda (o vigia do ML roda na casa da conta). Vazio = aviso antigo.
+        if "casa" not in {r[1] for r in DB.execute("PRAGMA table_info(aviso_venda_v1893)")}:
+            DB.execute("ALTER TABLE aviso_venda_v1893 ADD COLUMN casa TEXT NOT NULL DEFAULT ''")
         DB.commit()
 
 
@@ -35557,6 +35560,8 @@ def avisos_venda_registrar(marketplace: str, vendas: list[dict[str, Any]]) -> in
     limite = datetime.now(BR_TZ) - timedelta(hours=AVISOS_VENDA_RECENTE_HORAS)
     agora = now_iso()
     novas = 0
+    # V19.71: a Shopee é só de Araçatuba; no ML vale a casa da conta que o vigia está lendo.
+    casa = ml_casa_atual() if marketplace == "ml" else CASA_PRINCIPAL
     with DB_LOCK:
         primeira = DB.execute("SELECT 1 FROM aviso_config_v1893 WHERE chave=?", (f"base_{marketplace}",)).fetchone() is None
         for v in vendas:
@@ -35567,10 +35572,10 @@ def avisos_venda_registrar(marketplace: str, vendas: list[dict[str, Any]]) -> in
             silencioso = 1 if (primeira or quando is None or quando < limite) else 0
             valor = v.get("valor")
             cur = DB.execute(
-                "INSERT OR IGNORE INTO aviso_venda_v1893(marketplace,venda_id,venda_em,valor,titulo,qtd,itens,silencioso,criado_em) "
-                "VALUES(?,?,?,?,?,?,?,?,?)",
+                "INSERT OR IGNORE INTO aviso_venda_v1893(marketplace,venda_id,venda_em,valor,titulo,qtd,itens,silencioso,criado_em,casa) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (marketplace, venda_id, str(v.get("venda_em") or ""), None if valor is None else round(float(valor), 2),
-                 str(v.get("titulo") or "")[:200], int(v.get("qtd") or 0), int(v.get("itens") or 0), silencioso, agora),
+                 str(v.get("titulo") or "")[:200], int(v.get("qtd") or 0), int(v.get("itens") or 0), silencioso, agora, casa),
             )
             if cur.rowcount and not silencioso:
                 novas += 1
@@ -35659,6 +35664,10 @@ def _avisos_formatar(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
                 "valor": None, "titulo": "Remessa Full", "corpo": str(row["titulo"] or ""),
                 "url": f"{BASE_PATH}/analise-full"}
     valor = _avisos_brl(row["valor"]) if row["valor"] is not None else ""
+    try:
+        filial = str(row["casa"] or "")
+    except (KeyError, IndexError):
+        filial = ""
     corpo = str(row["titulo"] or "Produto sem título")
     if int(row["qtd"] or 0):
         corpo += f" ({int(row['qtd'])} un.)"
@@ -35667,7 +35676,8 @@ def _avisos_formatar(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
     return {
         "id": int(row["id"]), "marketplace": row["marketplace"], "venda_id": row["venda_id"],
         "venda_em": row["venda_em"], "valor": row["valor"],
-        "titulo": f"Venda {canal}" + (f" · {valor}" if valor else ""), "corpo": corpo,
+        # V19.71: "Venda ML Bauru · R$ 39,40" (pedido do dono).
+        "titulo": f"Venda {canal}" + (f" {CASAS[filial]}" if filial in CASAS else "") + (f" · {valor}" if valor else ""), "corpo": corpo,
     }
 
 
