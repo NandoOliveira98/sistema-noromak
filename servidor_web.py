@@ -35,6 +35,7 @@ import urllib.error
 import urllib.request
 import unicodedata
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone, timedelta
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -46,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.66-ETIQUETAS-48H"
+APP_VERSION = "19.67-ROMANEIO-RAPIDO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -16011,6 +16012,23 @@ def _exp_codigos_inteiros(linhas: list[dict[str, Any]]) -> dict[str, list[str]]:
     return saida
 
 
+# V19.67: o painel do romaneio demorava 4–7 s em "Carregando…" (21/10): 3 a 6 consultas à
+# porta, uma depois da outra, ~1 s cada. Agora: o nome do cliente no Apollo (filtro dos
+# atendimentos) fica guardado por código, e a situação do cliente e a lista de atendimentos
+# saem JUNTAS; as prévias dos atendimentos também saem juntas. Mesmo número de consultas
+# (o teto da porta é por minuto). Se o nome mudou no Apollo, a lista é refeita com o novo.
+_EXP_NOME_APOLLO: dict[str, str] = {}
+
+
+def _exp_em_paralelo(tarefas: list[Any]) -> list[Any]:
+    """Roda as funções juntas e devolve os resultados na ordem (o erro sobe como antes)."""
+    if len(tarefas) <= 1:
+        return [t() for t in tarefas]
+    with ThreadPoolExecutor(max_workers=len(tarefas)) as ex:
+        futuros = [ex.submit(t) for t in tarefas]
+        return [f.result() for f in futuros]
+
+
 def exp_romaneio_preparar(pedido: str, atendimento: Any = "", cliente: Any = "") -> dict[str, Any]:
     """Mostra o que o botão do romaneio faria. Só leitura no Apollo."""
     pedido = str(pedido or "").strip()
@@ -16048,14 +16066,28 @@ def exp_romaneio_preparar(pedido: str, atendimento: Any = "", cliente: Any = "")
         if numero:
             filtro = {"atendimento": int(numero)}
         elif codigo and conhecido["documento"]:
-            sit = _exp_porta("cliente/situacao", {"revenda": EXP_REVENDA, "cliente": int(codigo),
-                                                   "documento": conhecido["documento"], "operador": "noromak"})
+            def _situacao() -> dict[str, Any]:
+                return _exp_porta("cliente/situacao", {"revenda": EXP_REVENDA, "cliente": int(codigo),
+                                                       "documento": conhecido["documento"], "operador": "noromak"})
+
+            def _abertos(nome: str) -> dict[str, Any]:
+                return _exp_porta("atendimentos/abertos", {"revenda": EXP_REVENDA, "dias": 90,
+                                                           "operador": "noromak", "cliente_nome": nome})
+            nome_guardado = _EXP_NOME_APOLLO.get(codigo, "")
+            if nome_guardado:   # V19.67: situação e atendimentos juntos
+                sit, abertos_cedo = _exp_em_paralelo([_situacao, lambda: _abertos(nome_guardado)])
+            else:
+                sit, abertos_cedo = _situacao(), None
             if not sit.get("ok"):
                 return {**saida, "situacao": "cliente", "aviso": sit.get("erro") or "O Apollo não confirmou o cliente."}
             saida["cliente"]["nome_apollo"] = str(sit.get("nome") or "")
+            if saida["cliente"]["nome_apollo"]:
+                _EXP_NOME_APOLLO[codigo] = saida["cliente"]["nome_apollo"]
             saida["credito"] = {"veredito": sit.get("veredito"), "situacao": sit.get("situacao_credito"),
                                 "cadastro": sit.get("cadastro"), "motivos": sit.get("motivos") or []}
             filtro = {"cliente_nome": saida["cliente"]["nome_apollo"]}
+            if abertos_cedo is not None and nome_guardado == saida["cliente"]["nome_apollo"]:
+                abertos, filtro = abertos_cedo, {}
         else:
             # V19.31: sem o código, busca pelo NOME DA NF-e (a porta ignora acento e
             # caixa e exige todas as palavras); não achando, primeiro + último nome
@@ -16088,9 +16120,12 @@ def exp_romaneio_preparar(pedido: str, atendimento: Any = "", cliente: Any = "")
         codigos = codigos | set(componentes)
         inteiros = _exp_codigos_inteiros(linhas)                # V19.48
         codigos = codigos | set(inteiros)
-        for a in (abertos.get("atendimentos") or [])[:EXP_MAX_ATENDIMENTOS]:
-            prev = _exp_porta("romaneio/previa", {"revenda": EXP_REVENDA, "atendimento": int(a["atendimento"]),
-                                                   "operador": "noromak"})
+        lista = (abertos.get("atendimentos") or [])[:EXP_MAX_ATENDIMENTOS]
+        previas = _exp_em_paralelo([  # V19.67: prévias juntas
+            (lambda n=int(a["atendimento"]): _exp_porta("romaneio/previa", {"revenda": EXP_REVENDA, "atendimento": n,
+                                                                            "operador": "noromak"}))
+            for a in lista])
+        for a, prev in zip(lista, previas):
             itens = [{"codigo": str(i.get("codigo") or ""), "descricao": str(i.get("descricao") or ""),
                       "quantidade": i.get("requisitada"), "a_soltar": i.get("a_soltar")}
                      for i in (prev.get("itens") or []) if isinstance(i, dict)]
