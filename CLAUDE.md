@@ -302,7 +302,9 @@ permissões fixas `COMPRAS_PERMISSOES` (nenhum dos 4 módulos + `compras: true`)
 rota (`consulta_bloqueada`): fora de `COMPRAS_API_LIVRES` toda chamada à API volta 403 `PERFIL_COMPRAS` (as rotas de
 pedido só pedem login). Rotas da Ruptura/Demanda usam `self.auth(admin_only=True, compras_ok=True)`; as páginas `/ruptura`
 e `/compras` abrem com o módulo `compras`; no menu o item tem `alt: "compras"`. Ao entrar, o portal manda o Compras para
-`/tarefas`. **Rota nova da Demanda/Ruptura que o Compras usa: `compras_ok=True` e prefixo em `COMPRAS_API_LIVRES`.**
+`/tarefas`. Na Demanda o Compras só digita custo (e "a caminho", que fica no navegador): e-mail/limite do comprador,
+fornecedores, marca, envio ao comprador e Linx ficam com Admin/Supervisor (`COMPRAS_POST_SO_GESTOR`, 403).
+**Rota nova da Demanda/Ruptura que o Compras usa: `compras_ok=True` e prefixo em `COMPRAS_API_LIVRES`.**
 Teste: `TESTES/test_perfil_compras_v1970.py`.
 
 **Migração de usuários (V19.00):** `migrate_app_users` só traz usuários legados

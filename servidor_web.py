@@ -1834,6 +1834,13 @@ PERFIL_ESPECIAL_CODIGO = {PERFIL_CONSULTA: 1, PERFIL_COMPRAS: 2}
 # Rotas de pedido/conferência só pedem login; por isso o Compras é travado ANTES de qualquer rota
 # (compras_bloqueado): fora destas, toda chamada à API volta 403.
 COMPRAS_API_LIVRES = ("/api/auth/", "/api/health", "/api/tarefas", "/api/compras/", "/api/ruptura")
+# Decisão do dono (21/10): na Demanda o Compras só digita custo e "a caminho" (este fica no navegador).
+# Configuração da tela (e-mail e limite do comprador, fornecedores, marca, envio ao comprador, Linx) fica
+# com Admin/Supervisor: estes POSTs voltam 403 para o perfil Compras.
+COMPRAS_POST_SO_GESTOR = {
+    "/api/compras/comprador", "/api/compras/geral/email", "/api/compras/marca", "/api/compras/fornecedores",
+    "/api/compras/enviar-comprador", "/api/compras/linx/atualizar",
+}
 SOMENTE_LEITURA_ERRO = {"ok": False, "code": "SOMENTE_LEITURA",
                         "error": "Perfil Consulta: somente leitura. Peça a um Admin para fazer esta alteração."}
 
@@ -30721,7 +30728,8 @@ class AppHandler(BaseHTTPRequestHandler):
     def consulta_bloqueada(self, metodo: str, path: str) -> bool:
         """V19.40: perfil Consulta não altera nada — recusa antes de qualquer rota.
         V19.70: o perfil Compras só chama as rotas de COMPRAS_API_LIVRES."""
-        if path.startswith("/api/") and not path.startswith(COMPRAS_API_LIVRES):
+        if path.startswith("/api/") and (not path.startswith(COMPRAS_API_LIVRES)
+                                         or (metodo != "GET" and path in COMPRAS_POST_SO_GESTOR)):
             ctx_compras = session_context(self)
             if ctx_compras and ctx_compras.get("app_role") == PERFIL_COMPRAS:
                 audit(str(ctx_compras.get("username") or ""), "security.denied.perfil_compras", f"{metodo} {path}")

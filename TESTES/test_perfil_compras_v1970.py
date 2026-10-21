@@ -58,6 +58,20 @@ class PerfilCompras(TesteNoromak):
         status, r = self.compras.pedir("POST", "/api/compras/custo", {"codigo": "0893600022", "custo": 12.5})
         self.assertNotIn(status, (401, 403), r)
 
+    def test_nao_mexe_na_configuracao_da_demanda(self):
+        """Decisão do dono (21/10): o Compras só digita custo e "a caminho"; e-mail e limite do
+        comprador, cadastro de fornecedores, marca, envio ao comprador e Linx ficam com Admin/Supervisor."""
+        for rota, corpo in (("/api/compras/comprador", {"email": "externo@x.com"}),
+                            ("/api/compras/geral/email", {"email": "externo@x.com"}),
+                            ("/api/compras/marca", {"codigo": "X", "marca": "Y"}),
+                            ("/api/compras/fornecedores", {"excluir": "WURTH"}),
+                            ("/api/compras/enviar-comprador", {"itens": [{"codigo": "X"}]}),
+                            ("/api/compras/linx/atualizar", {})):
+            status, r = self.compras.pedir("POST", rota, corpo)
+            self.assertEqual(status, 403, (rota, r))
+        status, r = self.compras.pedir("POST", "/api/compras/geral/gerar", {})
+        self.assertNotIn(status, (401, 403), r)
+
     def test_nao_ve_o_resto_do_sistema(self):
         for rota in ("/api/financeiro/resumo", "/api/storage?key=conf_pedidos", "/api/posvenda",
                      "/api/compras/linx/amostra", "/api/roles", "/api/saude"):
