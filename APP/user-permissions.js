@@ -12,7 +12,7 @@
   // sempre desligada no Operador. Os outros módulos ficam livres.
   function perfilDe(u){
     const p=String(u?.Perfil||"").toLowerCase();
-    return p.includes("admin")?"admin":(p.includes("supervisor")?"supervisor":(p.includes("consulta")?"consulta":"operador"));
+    return p.includes("admin")?"admin":(p.includes("supervisor")?"supervisor":(p.includes("consulta")?"consulta":(p.includes("compras")?"compras":"operador")));
   }
   function travaAdmin(u){
     const p=perfilDe(u);
@@ -64,7 +64,13 @@
       input.checked=accessValue(u,field,key);
       input.dataset.permissionField=field;
       // V19.40: Consulta tem os módulos fixos (vê Conferência, Admin e Precificador; sem Estação).
-      if(perfilDe(u)==="consulta"){
+      // V19.70: Compras não tem nenhum desses módulos (só Quadro, Ruptura e Demanda de Compra).
+      if(perfilDe(u)==="compras"){
+        input.checked=false;
+        input.disabled=true;
+        lab.title="Perfil Compras: vê só o Quadro de tarefas, a Ruptura e a Demanda de Compra.";
+        lab.classList.add("usuario-acesso-travado");
+      } else if(perfilDe(u)==="consulta"){
         input.checked=key!=="estacao";
         input.disabled=true;
         lab.title="Perfil Consulta: módulos fixos, somente leitura.";

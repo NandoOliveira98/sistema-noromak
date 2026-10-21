@@ -11,7 +11,7 @@
   const API_LOGOUT = `${BASE}/api/auth/logout`;
 
   const txt = value => String(value ?? "").trim();
-  const profileLabel = role => role === "admin" ? "Admin" : (role === "consulta" ? "Consulta" : "Operador");
+  const profileLabel = role => role === "admin" ? "Admin" : (role === "consulta" ? "Consulta" : (role === "compras" ? "Compras" : "Operador"));
 
   // V19.40: perfil Consulta (somente leitura). O servidor recusa toda gravação com
   // 403 SOMENTE_LEITURA; aqui a tela mostra o selo e avisa quando algo foi recusado.
@@ -303,6 +303,8 @@
   function renderAccessMenu(user) {
     const host = document.getElementById("webAccessPortal");
     if (!host) return;
+    // V19.70: o perfil Compras entra direto no Quadro de tarefas (as telas dele estão no menu).
+    if (user.app_role === "compras") { location.replace(`${BASE}/tarefas`); return; }
     host.innerHTML = `
       <div class="access-user">
         <span>Usuário do estoque conectado</span>
@@ -310,6 +312,7 @@
         <small>Login: ${escapeHtml(user.username)} · Perfil: ${profileLabel(user.app_role)}</small>
       </div>
       <div class="access-actions">
+        <a class="module-action" href="${BASE}/tarefas" style="background:#fff3e3;border-color:#F28B18"><span class="module-icon"><i class=nk-i-check></i></span><span>Abrir Quadro de tarefas</span></a>
         ${permission(user,"conferencia") ? `<a class="module-action" href="${BASE}/conferencia"><span class="module-icon"><i class=nk-i-check></i></span><span>Abrir Conferência</span></a>` : ""}
         ${permission(user,"admin") ? `<a class="module-action" href="${BASE}/admin"><span class="module-icon"><i class=nk-i-dashboard></i></span><span>Abrir Painel Administrativo</span></a>` : ""}
         ${permission(user,"estacao") ? `<a class="module-action" href="${BASE}/estacao-impressao"><span class="module-icon"><i class=nk-i-printer></i></span><span>Abrir Estação de Impressão</span></a>` : ""}

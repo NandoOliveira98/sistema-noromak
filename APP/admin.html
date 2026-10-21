@@ -555,7 +555,7 @@
 
 </style>
 <script src="/expedicao/shared-storage.js?v=19.56"></script>
-<script src="/expedicao/web-auth.js?v=19.40"></script>
+<script src="/expedicao/web-auth.js?v=19.70"></script>
 <script defer src="/expedicao/pwa-install.js?v=14.5"></script>
 
 <style id="estiloEtiquetasPersistentesV98">
@@ -1400,7 +1400,7 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
   </style>
   <!-- V18.82: o menu (itens, grupos recolhíveis, Sair) vem do nk-menu.js, o mesmo das outras telas.
        Cada item é um link com o endereço da tela (/expedicao/pedidos-dia...): Ctrl+clique abre em outra aba. -->
-  <script src="/expedicao/nk-menu.js?v=19.69"></script>
+  <script src="/expedicao/nk-menu.js?v=19.70"></script>
   <script>nkMenuDesenhar(document.currentScript);</script>
 </nav>
 
@@ -2258,7 +2258,7 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
       <div class="field"><label>Nome completo</label><input id="novoUsuarioNome" type="text" autocomplete="off" placeholder="Ex.: Maria Silva"></div>
       <div class="field"><label>Login</label><input id="novoUsuarioLogin" type="text" autocomplete="off" placeholder="Ex.: maria"></div>
       <div class="field"><label>Senha</label><input id="novoUsuarioSenha" type="password" autocomplete="new-password" placeholder="Digite uma senha"></div>
-      <div class="field"><label>Perfil</label><select id="novoUsuarioPerfil"><option value="Operador">Operador</option><option value="Supervisor">Supervisor</option><option value="Consulta">Consulta (somente leitura)</option><option value="Admin">Admin</option></select></div>
+      <div class="field"><label>Perfil</label><select id="novoUsuarioPerfil"><option value="Operador">Operador</option><option value="Supervisor">Supervisor</option><option value="Consulta">Consulta (somente leitura)</option><option value="Compras">Compras (Quadro, Ruptura e Demanda)</option><option value="Admin">Admin</option></select></div>
       <!-- V18.95: filial que o usuário vê (Todas só para o perfil Admin). -->
       <div class="field"><label>Filial</label><select id="novoUsuarioFilial"><option value="aracatuba">Araçatuba</option><option value="bauru">Bauru</option><option value="todas">Todas as filiais (só Admin)</option></select></div>
       <label style="display:flex;align-items:center;gap:8px;font-weight:600;color:#526475;"><input id="mostrarSenhaNovoUsuario" type="checkbox" style="width:auto;" onchange="alternarSenhaNovoUsuarioAdmin()"> Mostrar senha</label>
@@ -8586,7 +8586,8 @@ document.addEventListener("DOMContentLoaded",()=>{
     return typeof usuariosEditorAdmin !== "undefined" && Array.isArray(usuariosEditorAdmin) ? usuariosEditorAdmin : [];
   }
   function usuarioPorUid(uid){ return listaUsuarios().find(u => String(u.__uidUsuario) === String(uid)); }
-  function perfilNormalizado(v){ const p=txt(v).toLowerCase(); return p.includes("admin") ? "Admin" : (p.includes("supervisor") ? "Supervisor" : "Operador"); }
+  // V19.70: sem Consulta/Compras aqui, a troca de senha gravava o usuário como Operador.
+  function perfilNormalizado(v){ const p=txt(v).toLowerCase(); return p.includes("admin") ? "Admin" : (p.includes("supervisor") ? "Supervisor" : (p.includes("consulta") ? "Consulta" : (p.includes("compras") ? "Compras" : "Operador"))); }
 
   window.renderizarUsuariosAdmin = function(){
     const corpo=document.getElementById("corpoUsuariosAdmin");
@@ -10125,7 +10126,7 @@ document.addEventListener("DOMContentLoaded",()=>{
   if(typeof original==='function')window.abrirAbaAdmin=function(nome){if(ehSupervisor()&&['usuarios','seguranca','integracoes'].includes(String(nome))){alert('Esta área é exclusiva do Administrador.');return;}return original.apply(this,arguments);};
 })();
 </script>
-<script src="/expedicao/user-permissions.js?v=19.40"></script>
+<script src="/expedicao/user-permissions.js?v=19.70"></script>
 
 <script id="noromak-v15-js">
 function v15Nav(el){document.querySelectorAll('.v15-nav-item').forEach(x=>x.classList.remove('active'));if(el)el.classList.add('active');}
@@ -10353,7 +10354,7 @@ html[data-tema="escuro"] .btn-mover-filial-v1895{background:#17212E;border-color
   "use strict";
   const BASE=location.pathname.startsWith('/expedicao')?'/expedicao':'';
   const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));
-  const perfil=v=>{const p=String(v||'').toLowerCase();return p.includes('admin')?'Admin':(p.includes('supervisor')?'Supervisor':(p.includes('consulta')?'Consulta':'Operador'))}; // V19.40: Consulta
+  const perfil=v=>{const p=String(v||'').toLowerCase();return p.includes('admin')?'Admin':(p.includes('supervisor')?'Supervisor':(p.includes('consulta')?'Consulta':(p.includes('compras')?'Compras':'Operador')))}; // V19.40: Consulta; V19.70: Compras
   function mapServer(u){return {Nome:u.display_name||u.username||'',Login:u.username||'',Senha:'********',Perfil:u.display_profile||perfil(u.role),Ativo:u.active!==false&&u.active!==0,Aprovado:true,AcessoConferencia:!!u.can_conferencia,AcessoAdmin:!!u.can_admin,AcessoEstacao:!!u.can_estacao,AcessoPrecificador:!!u.can_precificador,Filial:u.filial||'aracatuba',__uidUsuario:'USR-'+String(u.username||'').toLowerCase(),__serverUsername:String(u.username||'').toLowerCase()};}
   async function api(path,opt={}){const r=await fetch(BASE+path,{credentials:'same-origin',cache:'no-store',...opt,headers:{'Accept':'application/json',...(opt.body?{'Content-Type':'application/json; charset=utf-8'}:{}),...(opt.headers||{})}});let d={};try{d=await r.json()}catch(_){ }if(!r.ok)throw new Error(d.error||('HTTP '+r.status));return d;}
   window.carregarUsuariosCanonicosV1757=async function(){
@@ -10375,13 +10376,13 @@ html[data-tema="escuro"] .btn-mover-filial-v1895{background:#17212E;border-color
   const iniciais=n=>String(n||'?').trim().split(/\s+/).filter(Boolean).slice(0,2).map(p=>p[0]).join('').toUpperCase()||'?';
   window.renderizarUsuariosAdmin=function(){
     const corpo=document.getElementById('corpoUsuariosAdmin');if(!corpo)return;const lista=Array.isArray(usuariosEditorAdmin)?usuariosEditorAdmin:[];
-    const cont={Admin:0,Supervisor:0,Operador:0,Consulta:0};lista.forEach(u=>cont[perfil(u.Perfil)]++);
+    const cont={Admin:0,Supervisor:0,Operador:0,Consulta:0,Compras:0};lista.forEach(u=>cont[perfil(u.Perfil)]++);
     const k=document.getElementById('usrKpis');
-    if(k)k.innerHTML=[['Usuários',lista.length,'users','blue'],['Admin',cont.Admin,'settings','blue'],['Supervisor',cont.Supervisor,'shield','orange'],['Operador',cont.Operador,'check','green'],['Consulta',cont.Consulta,'search','blue']]
+    if(k)k.innerHTML=[['Usuários',lista.length,'users','blue'],['Admin',cont.Admin,'settings','blue'],['Supervisor',cont.Supervisor,'shield','orange'],['Operador',cont.Operador,'check','green'],['Consulta',cont.Consulta,'search','blue'],['Compras',cont.Compras,'dollar','orange']]
       .map(([t,v,ic,cor])=>`<div class="v151-kpi usr-kpi"><span class="v151-kpi-icon ${cor}"><i class=nk-i-${ic}></i></span><span><b>${v}</b><small>${t}</small></span></div>`).join('');
     corpo.innerHTML=lista.map(u=>{const uid=esc(u.__uidUsuario),p=perfil(u.Perfil);return `<div class="usr-linha" data-linha-usuario="${uid}" data-perfil="${p.toLowerCase()}">
       <div class="usr-id"><span class="usr-av">${esc(iniciais(u.Nome||u.Login))}</span><div class="usr-id-txt"><input class="usr-nome" data-uidusuario="${uid}" data-campo="Nome" value="${esc(u.Nome)}" oninput="atualizarCampoUsuarioAdmin(this)" aria-label="Nome" title="Clique para editar o nome"><small class="usr-login" title="Para trocar o login, exclua e recrie o usuário">${esc(u.Login)}</small></div></div>
-      <div class="usr-perfil"><select data-uidusuario="${uid}" data-campo="Perfil" onchange="atualizarCampoUsuarioAdmin(this)" aria-label="Perfil"><option ${p==='Admin'?'selected':''}>Admin</option><option ${p==='Supervisor'?'selected':''}>Supervisor</option><option ${p==='Operador'?'selected':''}>Operador</option><option ${p==='Consulta'?'selected':''} title="Vê tudo, não altera nada">Consulta</option></select>
+      <div class="usr-perfil"><select data-uidusuario="${uid}" data-campo="Perfil" onchange="atualizarCampoUsuarioAdmin(this)" aria-label="Perfil"><option ${p==='Admin'?'selected':''}>Admin</option><option ${p==='Supervisor'?'selected':''}>Supervisor</option><option ${p==='Operador'?'selected':''}>Operador</option><option ${p==='Consulta'?'selected':''} title="Vê tudo, não altera nada">Consulta</option><option ${p==='Compras'?'selected':''} title="Só Quadro de tarefas, Ruptura e Demanda de Compra">Compras</option></select>
         <select class="usr-filial" data-uidusuario="${uid}" data-campo="Filial" onchange="atualizarCampoUsuarioAdmin(this)" aria-label="Filial" title="Filial que este usuário vê (Todas só para o perfil Admin)">${[['aracatuba','Araçatuba'],['bauru','Bauru'],['todas','Todas as filiais']].filter(([v])=>v!=='todas'||p==='Admin'||u.Filial==='todas').map(([v,t])=>`<option value="${v}" ${(u.Filial||'aracatuba')===v?'selected':''}>${t}</option>`).join('')}</select></div>
       <div class="usr-mods-slot"></div>
       <div class="usr-acoes"><button type="button" class="usr-btn usr-btn-sm" onclick="abrirModalAlterarSenhaAdmin('${uid}')" title="A senha atual nunca é exibida"><i class=nk-i-key></i> Senha</button><button type="button" class="usr-btn usr-btn-sm usr-btn-x" onclick="excluirUsuarioAdmin('${uid}')" title="Excluir usuário" aria-label="Excluir usuário"><i class=nk-i-trash></i></button></div>

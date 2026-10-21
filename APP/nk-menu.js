@@ -14,12 +14,13 @@
   // servidor (page_modules). soAdmin = escondido do Supervisor (V17.55).
   const MENU = [
     { grupo: "visao", titulo: "Visão geral", fixo: true, itens: [
+      // V19.69: quadro de tarefas (planos de ação). Sem módulo: todo usuário logado vê.
+      // V19.70: em destaque (pedido do dono) — 1º item do menu, com fundo laranja.
+      { id: "tarefas", rotulo: "Quadro de tarefas", href: "/tarefas", destaque: true, icone: "M3 3h5v18H3zM10 3h5v12h-5zM17 3h4v8h-4z" },
       { id: "dashboard", rotulo: "Dashboard", href: "/dashboard", aba: "dashboard", modulo: "admin", alias: ["/admin", "/administracao"], icone: "M3 3h7v9H3zM14 3h7v5h-7zM14 12h7v9h-7zM3 16h7v5H3z" },
       { id: "financeiro", rotulo: "Financeiro", href: "/financeiro", modulo: "admin", alias: ["/rentabilidade-ml"], icone: "M3 7h18v13H3zM3 7l3-4h12l3 4M16 14h2" },
       // V19.01: Auditor de cobranças do ML (mesma permissão do Financeiro).
       { id: "auditoria-ml", rotulo: "Cobranças do ML", href: "/auditoria-ml", modulo: "admin", icone: "M6 2h12v20l-3-2-3 2-3-2-3 2zM9 7h6M9 11h6M9 15h3" },
-      // V19.69: quadro de tarefas (planos de ação). Sem módulo: todo usuário logado vê.
-      { id: "tarefas", rotulo: "Quadro de tarefas", href: "/tarefas", icone: "M3 3h5v18H3zM10 3h5v12h-5zM17 3h4v8h-4z" },
     ] },
     { grupo: "expedicao", titulo: "Expedição", itens: [
       { id: "pedidos", rotulo: "Pedidos pendentes", href: "/pedidos-pendentes", aba: "pedidos", modulo: "admin", alias: ["/pendencias", "/central-pendencias"], icone: "M9 6h11M9 12h11M9 18h11M4 6h.01M4 12h.01M4 18h.01" },
@@ -43,11 +44,11 @@
       { id: "kits-analise", rotulo: "Oportunidades de Kit", href: "/kits-analise", modulo: "admin", icone: "M4 4h6v3a2 2 0 1 0 4 0V4h6v6h-3a2 2 0 1 0 0 4h3v6H4z" },
     ] },
     { grupo: "estoque", titulo: "Estoque e compras", itens: [
-      { id: "ruptura", rotulo: "Ruptura de estoque", href: "/ruptura", modulo: "admin", icone: "M3 3v18h18M7 8l4 4 3-3 6 6M20 11v4h-4" },
+      { id: "ruptura", rotulo: "Ruptura de estoque", href: "/ruptura", modulo: "admin", alt: "compras", icone: "M3 3v18h18M7 8l4 4 3-3 6 6M20 11v4h-4" },
       { id: "analise-full", rotulo: "Demanda Full", href: "/analise-full", modulo: "precificador", alias: ["/full"], icone: "M21 8 12 3 3 8v8l9 5 9-5zM3 8l9 5 9-5M12 13v8" },
       // V19.64: estoque do Apollo de Bauru enviado ao TikTok Shop.
       { id: "tiktok-estoque", rotulo: "Estoque TikTok", href: "/tiktok-estoque", modulo: "admin", icone: "M9 12a4 4 0 1 0 4 4V3c.5 2.5 2.5 4 5 4" },
-      { id: "compras", rotulo: "Demanda de Compra", href: "/compras", modulo: "admin", icone: "M3 3h2l2.4 12.2a2 2 0 0 0 2 1.8h7.7a2 2 0 0 0 2-1.6L21 8H6M9 21h.01M18 21h.01" },
+      { id: "compras", rotulo: "Demanda de Compra", href: "/compras", modulo: "admin", alt: "compras", icone: "M3 3h2l2.4 12.2a2 2 0 0 0 2 1.8h7.7a2 2 0 0 0 2-1.6L21 8H6M9 21h.01M18 21h.01" },
     ] },
     { grupo: "cadastros", titulo: "Cadastros", itens: [
       { id: "produtos", rotulo: "Produtos", href: "/produtos", aba: "produtos", modulo: "admin", icone: "M16.5 9.4 7.5 4.2M21 16V8l-9-5-9 5v8l9 5zM3.3 7 12 12l8.7-5M12 22V12" },
@@ -80,7 +81,7 @@
   // rotas-admin-v1882 e troca a tela sem recarregar.
   function itemHTML(i) {
     return `<a class="v15-nav-item" href="${B}${i.href}" target="_blank" rel="noopener" data-v15-nav="${esc(i.aba || i.id)}" data-nk-id="${esc(i.id)}"` +
-      `${i.aba ? ` data-nk-aba="${esc(i.aba)}"` : ""}${i.modulo ? ` data-nk-modulo="${esc(i.modulo)}"` : ""}${i.soAdmin ? " data-nk-so-admin=\"1\"" : ""} title="${esc(i.rotulo)}">` +
+      `${i.aba ? ` data-nk-aba="${esc(i.aba)}"` : ""}${i.modulo ? ` data-nk-modulo="${esc(i.modulo)}"` : ""}${i.alt ? ` data-nk-alt="${esc(i.alt)}"` : ""}${i.destaque ? ` style="background:rgba(242,139,24,.18);box-shadow:inset 3px 0 0 #F28B18;font-weight:700"` : ""}${i.soAdmin ? " data-nk-so-admin=\"1\"" : ""} title="${esc(i.rotulo)}">` +
       `<span class="v15-nav-icon">${ic(i.icone)}</span><span class="v15-nav-label">${esc(i.rotulo)}</span></a>`;
   }
 
@@ -158,7 +159,8 @@
     const pode = m => Object.prototype.hasOwnProperty.call(perm, m) ? !!perm[m] : (user.app_role === "admin" || m === "conferencia");
     const supervisor = user.app_role !== "admin" && pode("admin");
     nav.querySelectorAll(".v15-nav-item[data-nk-modulo]").forEach(a => {
-      const ok = pode(a.dataset.nkModulo) && !(supervisor && a.dataset.nkSoAdmin === "1");
+      // V19.70: data-nk-alt = outro módulo que também abre a tela (perfil Compras na Ruptura/Demanda).
+      const ok = (pode(a.dataset.nkModulo) || (!!a.dataset.nkAlt && pode(a.dataset.nkAlt))) && !(supervisor && a.dataset.nkSoAdmin === "1");
       a.hidden = !ok;
       if (!ok) a.style.display = "none";
     });
@@ -167,6 +169,12 @@
       g.style.display = n ? "" : "none";
       const c = g.querySelector(".v15-grp-n"); if (c) c.textContent = n;
     });
+    // V19.70: quem só tem um grupo (perfil Compras) já o vê aberto.
+    const visiveis = [...nav.querySelectorAll(".v15-grp")].filter(g => g.style.display !== "none");
+    if (visiveis.length === 1 && visiveis[0].classList.contains("fechado")) {
+      visiveis[0].classList.remove("fechado");
+      visiveis[0].querySelector(".v15-grp-h")?.setAttribute("aria-expanded", "true");
+    }
   }
 
   // V19.69: selo no item "Quadro de tarefas" com as tarefas abertas do usuário (vermelho se há atrasada).

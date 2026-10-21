@@ -295,6 +295,16 @@ integração ou mostra Segurança também (`CONSULTA_GET_BLOQUEADOS`). **Rota no
 Consulta precisa: incluir em `CONSULTA_POST_LIVRES`.** Na tela: selo "Somente leitura" e aviso
 (`web-auth.js`); o `shared-storage.js` não trata a recusa como queda de rede e descarta a cópia local.
 
+**Perfil Compras (V19.70, decisões do dono 21/10):** vê **só** o Quadro de tarefas (1º item do menu, em destaque),
+a Ruptura (só ver) e a Demanda de Compra (pode digitar). Gravado como `role='operador'` + `somente_leitura=2` (a coluna
+guarda o perfil especial: 1 = Consulta, 2 = Compras; `PERFIL_ESPECIAL_CODIGO`); `role_efetivo()` devolve `compras`,
+permissões fixas `COMPRAS_PERMISSOES` (nenhum dos 4 módulos + `compras: true`). A trava é no servidor, antes de qualquer
+rota (`consulta_bloqueada`): fora de `COMPRAS_API_LIVRES` toda chamada à API volta 403 `PERFIL_COMPRAS` (as rotas de
+pedido só pedem login). Rotas da Ruptura/Demanda usam `self.auth(admin_only=True, compras_ok=True)`; as páginas `/ruptura`
+e `/compras` abrem com o módulo `compras`; no menu o item tem `alt: "compras"`. Ao entrar, o portal manda o Compras para
+`/tarefas`. **Rota nova da Demanda/Ruptura que o Compras usa: `compras_ok=True` e prefixo em `COMPRAS_API_LIVRES`.**
+Teste: `TESTES/test_perfil_compras_v1970.py`.
+
 **Migração de usuários (V19.00):** `migrate_app_users` só traz usuários legados
 (`MIGRACAO_INICIAL`, `conf_usuarios` antigo, `user_roles`) na instalação **nova** (`app_users`
 vazia), e senha legada com menos de 8 caracteres é trocada pela inicial. Antes rodava em todo

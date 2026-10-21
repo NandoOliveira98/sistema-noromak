@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.69-QUADRO-TAREFAS"
+APP_VERSION = "19.70-PERFIL-COMPRAS"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -1626,7 +1626,7 @@ def is_supervisor_user(row: sqlite3.Row | dict[str, Any]) -> bool:
         can_admin = bool(row["can_admin"])
     except Exception:
         can_admin = bool(row.get("can_admin"))
-    return role not in ("admin", PERFIL_CONSULTA) and can_admin  # V19.40: Consulta não é Supervisor
+    return role not in ("admin", PERFIL_CONSULTA, PERFIL_COMPRAS) and can_admin  # V19.40/V19.70
 
 
 def session_ttl_for_user_area(area: str, row: sqlite3.Row | dict[str, Any]) -> int:
@@ -1825,6 +1825,15 @@ CONSULTA_GET_BLOQUEADOS = {
     "/api/integracoes/magalu/connect", "/api/integracoes/tiktok/connect", "/api/security/status",
 }
 CONSULTA_STORAGE_OCULTO = {"conf_usuarios", "conf_solicitacoes_usuarios"}
+# V19.70: perfil Compras (decisão do dono, 21/10) — vê SÓ o Quadro de tarefas, a Ruptura e a
+# Demanda de Compra (pode digitar nela). Gravado como role='operador' + somente_leitura=2 (a coluna
+# guarda o perfil especial: 1 = Consulta, 2 = Compras; assim não é preciso recriar app_users).
+PERFIL_COMPRAS = "compras"
+COMPRAS_PERMISSOES = {"conferencia": False, "admin": False, "estacao": False, "precificador": False, "compras": True}
+PERFIL_ESPECIAL_CODIGO = {PERFIL_CONSULTA: 1, PERFIL_COMPRAS: 2}
+# Rotas de pedido/conferência só pedem login; por isso o Compras é travado ANTES de qualquer rota
+# (compras_bloqueado): fora destas, toda chamada à API volta 403.
+COMPRAS_API_LIVRES = ("/api/auth/", "/api/health", "/api/tarefas", "/api/compras/", "/api/ruptura")
 SOMENTE_LEITURA_ERRO = {"ok": False, "code": "SOMENTE_LEITURA",
                         "error": "Perfil Consulta: somente leitura. Peça a um Admin para fazer esta alteração."}
 
@@ -1840,10 +1849,12 @@ def role_efetivo(row: Any) -> str:
     except (KeyError, IndexError, TypeError):
         role = str((row or {}).get("role") or "operador").lower() if isinstance(row, dict) else "operador"
     try:
-        leitura = bool(row["somente_leitura"])
-    except (KeyError, IndexError, TypeError):
-        leitura = bool(row.get("somente_leitura")) if isinstance(row, dict) else False
-    return PERFIL_CONSULTA if leitura and role != "admin" else role
+        especial = int(row["somente_leitura"] or 0)
+    except (KeyError, IndexError, TypeError, ValueError):
+        especial = int((row.get("somente_leitura") if isinstance(row, dict) else 0) or 0)
+    if role == "admin" or not especial:
+        return role
+    return PERFIL_COMPRAS if especial == 2 else PERFIL_CONSULTA  # V19.70: 2 = Compras
 
 
 def is_consulta_ctx(ctx: dict[str, Any] | None) -> bool:
@@ -1856,6 +1867,8 @@ def normalizar_role(valor: Any) -> str:
         return "admin"
     if texto.startswith(PERFIL_CONSULTA):
         return PERFIL_CONSULTA
+    if texto.startswith(PERFIL_COMPRAS):
+        return PERFIL_COMPRAS  # V19.70
     return "operador"
 
 
@@ -1865,12 +1878,16 @@ def perfil_exibicao(row: sqlite3.Row | dict[str, Any]) -> str:
         return "Admin"
     if role == PERFIL_CONSULTA:
         return "Consulta"
+    if role == PERFIL_COMPRAS:
+        return "Compras"  # V19.70
     return "Supervisor" if is_supervisor_user(row) else "Operador"
 
 
 def user_permissions_from_row(row: sqlite3.Row | dict[str, Any]) -> dict[str, bool]:
     if role_efetivo(row) == PERFIL_CONSULTA:
         return dict(CONSULTA_PERMISSOES)
+    if role_efetivo(row) == PERFIL_COMPRAS:
+        return dict(COMPRAS_PERMISSOES)  # V19.70
     role = str(row["role"] if "role" in row.keys() else row.get("role", "operador")).lower()
     def flag(name: str, admin_default: bool = False) -> bool:
         try:
@@ -3356,8 +3373,9 @@ def upsert_app_user(
     username = username.strip().lower()
     if not username:
         return
-    role = normalizar_role(role)  # V19.40: aceita Consulta
+    role = normalizar_role(role)  # V19.40: aceita Consulta (V19.70: e Compras)
     somente_leitura = role == PERFIL_CONSULTA
+    especial = PERFIL_ESPECIAL_CODIGO.get(role, 0)
     owner_account = is_owner_username(username)
     if owner_account:
         role = "admin"
@@ -3375,6 +3393,8 @@ def upsert_app_user(
         pwd_hash, pwd_salt, iterations = password_digest(fallback)
     if role == PERFIL_CONSULTA:
         permissions = dict(CONSULTA_PERMISSOES)  # V19.40: módulos fixos do perfil
+    if role == PERFIL_COMPRAS:
+        permissions = dict(COMPRAS_PERMISSOES)  # V19.70
     if permissions is None:
         if existing:
             perms = user_permissions_from_row(existing)
@@ -3401,7 +3421,7 @@ def upsert_app_user(
            updated_at=excluded.updated_at,updated_by=excluded.updated_by""",
         (
             username, display_name.strip() or username, pwd_hash, pwd_salt, iterations,
-            "operador" if role == PERFIL_CONSULTA else role, 1 if active else 0,
+            "operador" if role in PERFIL_ESPECIAL_CODIGO else role, 1 if active else 0,
             1 if perms["conferencia"] else 0, 1 if perms["admin"] else 0,
             1 if perms["estacao"] else 0, 1 if perms["precificador"] else 0,
             now_iso(), updated_by,
@@ -3412,7 +3432,7 @@ def upsert_app_user(
     )
     # V19.40: Consulta fica gravado como operador (CHECK da tabela) + somente_leitura.
     DB.execute("UPDATE app_users SET somente_leitura=? WHERE username=?",
-               (1 if somente_leitura and not owner_account else 0, username))
+               (0 if owner_account else especial, username))
     if somente_leitura and not owner_account:
         DB.execute("UPDATE app_users SET casa=? WHERE username=?", (FILIAL_TODAS, username))
 
@@ -3573,7 +3593,8 @@ def apply_app_users_payload(value: str, actor: str) -> str:
             seen.add(username)
             display_name = str(raw.get("Nome") or username).strip() or username
             perfil_txt = str(raw.get("Perfil") or "").lower()
-            role = "admin" if "admin" in perfil_txt else (PERFIL_CONSULTA if PERFIL_CONSULTA in perfil_txt else "operador")
+            role = "admin" if "admin" in perfil_txt else (PERFIL_CONSULTA if PERFIL_CONSULTA in perfil_txt else
+                                                          (PERFIL_COMPRAS if PERFIL_COMPRAS in perfil_txt else "operador"))
             active = raw.get("Ativo", raw.get("Aprovado", True)) not in (False, "false", "0", 0, "inativo")
             password = str(raw.get("Senha") or "").strip()
             if password == PASSWORD_MASK:
@@ -30604,12 +30625,13 @@ class AppHandler(BaseHTTPRequestHandler):
             raise ValueError("Corpo JSON inválido")
         return data
 
-    def auth(self, admin_only: bool = False) -> dict[str, Any] | None:
+    def auth(self, admin_only: bool = False, compras_ok: bool = False) -> dict[str, Any] | None:
         ctx = session_context(self)
         if ctx is None:
             self.send_json({"error": "Faça login com um usuário do estoque.", "login_required": True}, 401)
             return None
-        if admin_only and not module_allowed(ctx, "admin"):
+        # V19.70: compras_ok = rota da Ruptura/Demanda de Compra, aberta também ao perfil Compras.
+        if admin_only and not module_allowed(ctx, "admin") and not (compras_ok and module_allowed(ctx, "compras")):
             self.send_json({"error": "Este usuário não possui acesso ao Painel Administrativo."}, 403)
             return None
         return ctx
@@ -30697,7 +30719,15 @@ class AppHandler(BaseHTTPRequestHandler):
         self.do_GET()
 
     def consulta_bloqueada(self, metodo: str, path: str) -> bool:
-        """V19.40: perfil Consulta não altera nada — recusa antes de qualquer rota."""
+        """V19.40: perfil Consulta não altera nada — recusa antes de qualquer rota.
+        V19.70: o perfil Compras só chama as rotas de COMPRAS_API_LIVRES."""
+        if path.startswith("/api/") and not path.startswith(COMPRAS_API_LIVRES):
+            ctx_compras = session_context(self)
+            if ctx_compras and ctx_compras.get("app_role") == PERFIL_COMPRAS:
+                audit(str(ctx_compras.get("username") or ""), "security.denied.perfil_compras", f"{metodo} {path}")
+                self.send_json({"ok": False, "code": "PERFIL_COMPRAS",
+                                "error": "Perfil Compras: acesso só ao Quadro de tarefas, Ruptura e Demanda de Compra."}, 403)
+                return True
         if metodo == "GET" and path not in CONSULTA_GET_BLOQUEADOS:
             return False
         if metodo == "POST" and path in CONSULTA_POST_LIVRES:
@@ -31110,13 +31140,13 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         # V17.83 — o que vendeu no período, agregado por SKU. Somente leitura.
         if path == "/api/compras/fornecedores":
-            if self.auth(admin_only=True) is None:
+            if self.auth(admin_only=True, compras_ok=True) is None:
                 return
             self.send_json({"ok": True, "fornecedores": compras_fornecedores()})
             return
         if path == "/api/compras/demanda":
             # V18.00: demanda de compra por fornecedor (versão provisória).
-            if self.auth(admin_only=True) is None:
+            if self.auth(admin_only=True, compras_ok=True) is None:
                 return
             try:
                 fornecedor = str((query.get("fornecedor") or [""])[0] or "")
@@ -31129,12 +31159,12 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/compras/geral":
             # V19.12: situação da demanda geral (última geração, andamento, e-mail). Leve.
-            if self.auth(admin_only=True) is None:
+            if self.auth(admin_only=True, compras_ok=True) is None:
                 return
             self.send_json({"ok": True, **compras_geral_info()})
             return
         if path == "/api/compras/sem-marca":
-            if self.auth(admin_only=True) is None:
+            if self.auth(admin_only=True, compras_ok=True) is None:
                 return
             try:
                 self.send_json(compras_sem_marca_payload())
@@ -31152,7 +31182,7 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/compras/comprador":
             # V18.14: e-mail do comprador (um para tudo). V18.17: + limite de transferência.
-            if self.auth(admin_only=True) is None:
+            if self.auth(admin_only=True, compras_ok=True) is None:
                 return
             self.send_json({"ok": True, "email": compras_comprador_email(),
                             "limite_transferencia": compras_limite_transferencia()})
@@ -31398,7 +31428,7 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/ruptura/relatorio.xlsx":
             # V19.59: o relatório em Excel. Somente leitura.
-            if self.auth(admin_only=True) is None:
+            if self.auth(admin_only=True, compras_ok=True) is None:
                 return
             try:
                 mp = str((query.get("marketplace") or ["ml"])[0] or "ml")
@@ -31424,7 +31454,7 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/ruptura/relatorio":
             # V19.59: perdido por semana e por mês. Somente leitura.
-            if self.auth(admin_only=True) is None:
+            if self.auth(admin_only=True, compras_ok=True) is None:
                 return
             try:
                 # V19.61: completo=1 traz todos os anúncios de cada período (a gaveta da tela).
@@ -31437,7 +31467,7 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/ruptura":
             # V18.72: venda perdida por falta de estoque (anúncios do ML). Somente leitura.
-            if self.auth(admin_only=True) is None:
+            if self.auth(admin_only=True, compras_ok=True) is None:
                 return
             try:
                 self.send_json(ruptura_payload(int(str((query.get("dias") or ["30"])[0] or "30")),
@@ -31770,6 +31800,12 @@ class AppHandler(BaseHTTPRequestHandler):
         for rota in ROTAS_ADMIN_V1882:
             page_modules[rota] = page_modules[rota + "/"] = "admin"
         required = page_modules.get(path)
+        if required == "admin" and path.rstrip("/").removesuffix(".html") in ("/ruptura", "/compras"):
+            # V19.70: o perfil Compras abre a Ruptura e a Demanda de Compra.
+            ctx = session_context(self)
+            if ctx and module_allowed(ctx, "compras"):
+                self.serve_static(path)
+                return
         if path in ("/tarefas", "/tarefas/", "/tarefas.html"):
             # V19.69: quadro de tarefas — todo usuário logado (sem módulo próprio).
             if not session_context(self):
@@ -31954,7 +31990,7 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         if path in ("/api/compras/geral/gerar", "/api/compras/marca", "/api/compras/geral/email"):
             # V19.12: demanda geral em segundo plano, marca manual por código e chave do e-mail.
-            ctx = self.auth(admin_only=True)
+            ctx = self.auth(admin_only=True, compras_ok=True)
             if ctx is None:
                 return
             try:
@@ -32001,7 +32037,7 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/compras/custo":
             # V18.07: custo digitado na Demanda de Compra (reserva quando o Apollo está sem custo).
-            ctx = self.auth(admin_only=True)
+            ctx = self.auth(admin_only=True, compras_ok=True)
             if ctx is not None:
                 try:
                     body = self.read_json()
@@ -32015,7 +32051,7 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/compras/comprador":
             # V18.14: e-mail do comprador. V18.17: + limite de transferência (global).
-            ctx = self.auth(admin_only=True)
+            ctx = self.auth(admin_only=True, compras_ok=True)
             if ctx is not None:
                 try:
                     body = self.read_json() or {}
@@ -32360,7 +32396,7 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/compras/linx/atualizar":
             # V18.91: busca agora, na Linx, a demanda e a compra em aberto do fornecedor (só leitura).
-            ctx = self.auth(admin_only=True)
+            ctx = self.auth(admin_only=True, compras_ok=True)
             if ctx is not None:
                 body = self.read_json() or {}
                 nome = str(body.get("fornecedor") or "").strip().upper()
@@ -32373,7 +32409,7 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/compras/enviar-comprador":
             # V18.14: envia o pedido de compra montado na tela para o comprador.
-            ctx = self.auth(admin_only=True)
+            ctx = self.auth(admin_only=True, compras_ok=True)
             if ctx is not None:
                 try:
                     pedido = self.read_json() or {}
@@ -32389,7 +32425,7 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/compras/planilha":
             # V18.18: baixa a planilha DESENHADA do pedido (mesma do e-mail ao comprador).
-            ctx = self.auth(admin_only=True)
+            ctx = self.auth(admin_only=True, compras_ok=True)
             if ctx is not None:
                 try:
                     pedido = self.read_json() or {}
@@ -32412,7 +32448,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     self.send_json({"ok": False, "error": str(exc)}, 500)
             return
         if path == "/api/compras/fornecedores":
-            ctx = self.auth(admin_only=True)
+            ctx = self.auth(admin_only=True, compras_ok=True)
             if ctx is not None:
                 try:
                     body = self.read_json()
@@ -35093,7 +35129,9 @@ class AppHandler(BaseHTTPRequestHandler):
                 raise ValueError("Informe o login do estoque sem espaços.")
             if is_consulta_role(role):
                 permissions = dict(CONSULTA_PERMISSOES)  # V19.40
-            if role not in ("admin", "operador", PERFIL_CONSULTA):
+            if role == PERFIL_COMPRAS:
+                permissions = dict(COMPRAS_PERMISSOES)  # V19.70
+            if role not in ("admin", "operador", PERFIL_CONSULTA, PERFIL_COMPRAS):
                 raise ValueError("Perfil inválido.")
             current = DB.execute("SELECT * FROM app_users WHERE username=?", (username,)).fetchone()
             if not current and not password:
