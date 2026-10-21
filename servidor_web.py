@@ -46,7 +46,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.65-PROMO-LISTA-UM-CALCULO"
+APP_VERSION = "19.66-ETIQUETAS-48H"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -36144,6 +36144,62 @@ def limpar_logs_antigos(dias: int = LOG_EVENTOS_DIAS) -> dict[str, int]:
     return removidos
 
 
+# V19.66: etiqueta guardada há mais de 48 h sai do servidor (pedido do dono, 21/10),
+# MAS só quando o pedido dela não está mais na fila de pendentes (conferido/concluído
+# ou saiu). Pedido ainda pendente mantém a etiqueta para poder imprimir. Data
+# ilegível ou ausente = fica (na dúvida, não apaga).
+ETIQUETAS_RETER_HORAS = 48
+
+
+def limpar_etiquetas_antigas(horas: int = ETIQUETAS_RETER_HORAS) -> int:
+    raw, _, _ = get_storage("conf_etiquetas")
+    try:
+        bank = json.loads(raw) if raw else {}
+    except Exception:
+        return 0
+    registros = bank.get("registros") if isinstance(bank, dict) else None
+    if not isinstance(registros, dict) or not registros:
+        return 0
+    raw_ped, _, _ = get_storage("conf_pedidos")  # já sem os concluídos
+    try:
+        linhas = json.loads(raw_ped) if raw_ped else []
+    except Exception:
+        return 0  # fila ilegível: não arrisca apagar etiqueta de pedido pendente
+    if not isinstance(linhas, list):
+        return 0
+    pendentes = {normalize(order_number(r)) for r in linhas if isinstance(r, dict)}
+    pendentes.discard("")
+    corte = datetime.now(timezone.utc) - timedelta(hours=horas)
+    remover: list[str] = []
+    for rid, rec in registros.items():
+        if not isinstance(rec, dict):
+            continue
+        try:
+            quando = datetime.fromisoformat(str(rec.get("adicionadaEm") or "").replace("Z", "+00:00"))
+            if quando.tzinfo is None:
+                quando = quando.replace(tzinfo=timezone.utc)
+        except Exception:
+            continue
+        if quando >= corte:
+            continue
+        meta = rec.get("metadados") if isinstance(rec.get("metadados"), dict) else {}
+        ids = [rec.get("pedido"), meta.get("pedido"), *(rec.get("vinculadoA") or []), *(rec.get("chaves") or [])]
+        if any(normalize(x) in pendentes for x in ids if x):
+            continue
+        remover.append(str(rid))
+    if not remover:
+        return 0
+    novo = dict(bank)
+    novo["registros"] = {k: v for k, v in registros.items() if str(k) not in set(remover)}
+    novo["ordem"] = [i for i in (bank.get("ordem") or []) if str(i) not in set(remover)]
+    novo["atualizadoEm"] = now_iso()
+    # merge_label_banks remove o que estava no oldValue e sumiu do novo.
+    save_storage("conf_etiquetas", raw, json_dumps(novo), False,
+                 actor="sistema", actor_role="sistema", source_screen="Manutenção",
+                 change_method=f"Limpeza de etiquetas com mais de {horas} h", client_ip="127.0.0.1")
+    return len(remover)
+
+
 def manutencao_diaria_loop(stop_event: threading.Event) -> None:
     if stop_event.wait(300):
         return
@@ -36154,6 +36210,12 @@ def manutencao_diaria_loop(stop_event: threading.Event) -> None:
                 print(f"[manutencao] logs antigos removidos: {removidos}", flush=True)
         except Exception as exc:
             print(f"[manutencao] falhou: {exc}", file=sys.stderr, flush=True)
+        try:
+            n_etq = limpar_etiquetas_antigas()
+            if n_etq:
+                print(f"[manutencao] {n_etq} etiqueta(s) com mais de {ETIQUETAS_RETER_HORAS} h removida(s)", flush=True)
+        except Exception as exc:
+            print(f"[manutencao] limpeza de etiquetas falhou: {exc}", file=sys.stderr, flush=True)
         backup_daily_em_segundo_plano()  # garante o backup do dia mesmo sem ninguém salvar
         if stop_event.wait(6 * 3600):
             break
