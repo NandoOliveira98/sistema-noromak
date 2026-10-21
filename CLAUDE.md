@@ -19,6 +19,10 @@ O fluxo obrigatório é sempre:
 1. Fazer a alteração.
 2. Rodar **`./testar.sh`** e **mostrar o resultado real ao dono do sistema** — inclusive o
    que não foi possível testar.
+   **V19.68:** junto do `testar.sh`, rodar a skill **`revisar-antes-de-subir`**
+   (`.claude/skills/`): 4 revisores só de leitura sobre `producao/master..HEAD` — regras
+   do ADMIN, concorrência, segurança e integrações. Mostrar os achados confirmados; o
+   dono escolhe o que corrigir (nada é corrigido sozinho).
 3. Pedir autorização e **esperar** o "pode subir".
 4. Só então publicar.
 
