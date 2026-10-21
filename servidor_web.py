@@ -35315,6 +35315,7 @@ SAUDE_WORKERS_INFO: dict[str, tuple[str, bool, int]] = {
     "vendas_rapido_loop": ("Vendas novas no Dashboard (tempo real)", False, 20),  # V19.58
     "financeiro_frete_loop": ("Frete das vendas (Financeiro)", False, 120),
     "full_remessa_loop": ("Remessa Full automática", False, 3600),
+    "etiquetas_limpeza_loop": ("Limpeza diária das etiquetas (06:00)", False, 120),  # V19.66
     "ml_auditoria_loop": ("Auditor de cobranças do ML", False, 180),
     "ml_ads_sync_loop": ("Publicidade do Mercado Livre", False, 180),
     "ml_visitas_loop": ("Visitas dos anúncios (Conversão)", False, 180),
@@ -36200,6 +36201,46 @@ def limpar_etiquetas_antigas(horas: int = ETIQUETAS_RETER_HORAS) -> int:
     return len(remover)
 
 
+# V19.66: a limpeza das etiquetas roda UMA vez por dia, a partir das 06:00
+# (Brasília), antes do expediente, para não pesar o servidor (pedido do dono).
+# O dia da última rodada fica no banco: reiniciar o serviço não repete a limpeza.
+ETIQUETAS_LIMPEZA_HORA = 6
+
+
+def _etiquetas_limpeza_ultimo_dia() -> str:
+    with DB_LOCK:
+        DB.execute("CREATE TABLE IF NOT EXISTS etiquetas_limpeza_v1966 (id INTEGER PRIMARY KEY CHECK (id=1), dia TEXT, removidas INTEGER)")
+        row = DB.execute("SELECT dia FROM etiquetas_limpeza_v1966 WHERE id=1").fetchone()
+    return str(row[0] or "") if row else ""
+
+
+def etiquetas_limpeza_rodada(agora: datetime | None = None) -> int | None:
+    """Roda a limpeza se já passou das 06:00 e ainda não rodou hoje. None = não era hora."""
+    agora = agora or datetime.now(BR_TZ)
+    hoje = agora.date().isoformat()
+    if agora.hour < ETIQUETAS_LIMPEZA_HORA or _etiquetas_limpeza_ultimo_dia() == hoje:
+        return None
+    n = limpar_etiquetas_antigas()
+    with DB_LOCK:
+        DB.execute("INSERT OR REPLACE INTO etiquetas_limpeza_v1966 (id, dia, removidas) VALUES (1, ?, ?)", (hoje, n))
+        DB.commit()
+    return n
+
+
+def etiquetas_limpeza_loop(stop_event: threading.Event) -> None:
+    if stop_event.wait(300):
+        return
+    while not stop_event.is_set():
+        try:
+            n = etiquetas_limpeza_rodada()
+            if n is not None:
+                print(f"[etiquetas] limpeza diaria: {n} etiqueta(s) com mais de {ETIQUETAS_RETER_HORAS} h removida(s)", flush=True)
+        except Exception as exc:
+            print(f"[etiquetas] limpeza falhou: {exc}", file=sys.stderr, flush=True)
+        if stop_event.wait(600):
+            break
+
+
 def manutencao_diaria_loop(stop_event: threading.Event) -> None:
     if stop_event.wait(300):
         return
@@ -36210,12 +36251,6 @@ def manutencao_diaria_loop(stop_event: threading.Event) -> None:
                 print(f"[manutencao] logs antigos removidos: {removidos}", flush=True)
         except Exception as exc:
             print(f"[manutencao] falhou: {exc}", file=sys.stderr, flush=True)
-        try:
-            n_etq = limpar_etiquetas_antigas()
-            if n_etq:
-                print(f"[manutencao] {n_etq} etiqueta(s) com mais de {ETIQUETAS_RETER_HORAS} h removida(s)", flush=True)
-        except Exception as exc:
-            print(f"[manutencao] limpeza de etiquetas falhou: {exc}", file=sys.stderr, flush=True)
         backup_daily_em_segundo_plano()  # garante o backup do dia mesmo sem ninguém salvar
         if stop_event.wait(6 * 3600):
             break
@@ -36322,6 +36357,13 @@ def main() -> None:
         target=_worker_protegido(ml_auditoria_loop),
         args=(watcher_stop,),
         name="auditoria-ml",
+        daemon=True,
+    )
+    # V19.66: limpeza das etiquetas com mais de 48 h, 1x/dia às 06:00.
+    etiquetas_limpeza_thread = threading.Thread(
+        target=_worker_protegido(etiquetas_limpeza_loop),
+        args=(watcher_stop,),
+        name="etiquetas-limpeza",
         daemon=True,
     )
     # V19.03: remessa Full automática (uma rodada por dia).
@@ -36470,6 +36512,7 @@ def main() -> None:
         frete_thread.start()
         auditoria_thread.start()
         full_remessa_thread.start()
+        etiquetas_limpeza_thread.start()
         ads_thread.start()
         visitas_thread.start()
         estoque_thread.start()

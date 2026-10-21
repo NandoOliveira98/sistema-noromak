@@ -40,6 +40,16 @@ class LimpezaEtiquetas48h(TesteNoromak):
         self.assertEqual(ficou, {"velha_pendente", "nova", "sem_data"})
         self.assertEqual(S.limpar_etiquetas_antigas(), 0)
 
+    def test_roda_uma_vez_por_dia_a_partir_das_6(self):
+        with S.DB_LOCK:
+            S.DB.execute("DROP TABLE IF EXISTS etiquetas_limpeza_v1966")
+        madrugada = datetime(2026, 10, 22, 5, 59, tzinfo=S.BR_TZ)
+        seis = datetime(2026, 10, 22, 6, 0, tzinfo=S.BR_TZ)
+        self.assertIsNone(S.etiquetas_limpeza_rodada(madrugada), "antes das 06:00 não roda")
+        self.assertIsNotNone(S.etiquetas_limpeza_rodada(seis))
+        self.assertIsNone(S.etiquetas_limpeza_rodada(seis + timedelta(hours=5)), "2ª vez no mesmo dia não roda")
+        self.assertIsNotNone(S.etiquetas_limpeza_rodada(seis + timedelta(days=1)))
+
 
 if __name__ == "__main__":
     unittest.main()
