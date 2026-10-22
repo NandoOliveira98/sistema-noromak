@@ -78,7 +78,7 @@ class PecasComuns(unittest.TestCase):
         for nome in ("admin", "precificador", "conferencia", "analise-full", "promocoes-auto", "acesso"):
             html = (APP / f"{nome}.html").read_text(encoding="utf-8")
             self.assertIn('<style id="escuro-auto-v1883">', html, f"{nome}.html sem o bloco gerado do modo escuro")
-        for nome in ("compras", "promocoes", "estacao-impressao", "financeiro", "kits-analise", "saude"):
+        for nome in ("compras", "estacao-impressao", "financeiro", "saude"):
             self.assertIn('<style id="escuro-v1883">', (APP / f"{nome}.html").read_text(encoding="utf-8"))
 
     def test_regras_escuras_so_valem_no_modo_escuro(self):

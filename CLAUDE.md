@@ -105,14 +105,16 @@ APP/
   financeiro.html            faturamento, gastos e lucro (V18.30; substituiu a
                              Rentabilidade ML na V18.33)
   analise-full.html, compras.html (Demanda de Compra), analise-ads.html (Análise de ADS, V18.54),
-  promocoes.html, kits-analise.html (Oportunidades de Kit, V18.47)
+  catalogo-ml.html (Monitor de catálogo ML, V19.74)
                              (Central de Pendências e Promoções ML removidas na V17.99;
-                             /pendencias e /promocoes-ml abrem o Admin)
+                             /pendencias e /promocoes-ml abrem o Admin. V19.76: as telas
+                             Promoções ML (promocoes.html), Oportunidades de Kit e Pós-venda
+                             foram apagadas a pedido do dono — /promocoes abre as Promoções
+                             automáticas; as APIs e a rotina do Pós-venda continuam)
   shared-storage.js          cache versionado + polling (CRÍTICO)
   nk-menu.js                 menu lateral único + endereço de cada tela (V18.82)
   nk-ui.js / nk-ui.css       tema claro/escuro, avisos, confirmação, tabela padrão (V18.83)
   saude.html                 Painel de saúde + alertas por e-mail (V18.83)
-  posvenda.html              Pós-venda ML: reclamações, perguntas, perdas, reputação (V18.88)
   nk-avisos.js               avisos de venda: popup com som + Web Push (V18.93)
   web-auth.js, user-permissions.js, sw.js, pwa-install.js
 DADOS/                       seed ml_sku_mlb_links_seed.json (fora do Git)
@@ -703,7 +705,9 @@ teste" recusado volta 200 com o motivo (502 virava a página de erro do nginx). 
 só com o Noromak instalado na Tela de Início (iOS 16.4+). Endereços de push aceitos: `AVISOS_PUSH_HOSTS`.
 
 ### Pós-venda do Mercado Livre (V18.88)
-`APP/posvenda.html` (`/posvenda`, menu Vendas e anúncios, módulo **admin**; `GET /api/posvenda?dias=30`,
+**V19.76: a tela foi apagada (dono, 22/10).** A rotina `posvenda_loop` e as tabelas continuam: o Auditor de
+cobranças usa as reclamações (frete de devolução) e o Painel de saúde o prazo do vendedor (sem botão de tela).
+Era `APP/posvenda.html` (`/posvenda`, menu Vendas e anúncios, módulo **admin**; `GET /api/posvenda?dias=30`,
 `posvenda_payload`, só lê o banco). Worker `posvenda_loop`: perguntas a cada 5 min, reclamações e
 reputação a cada 15 min. **Reclamações** (`ml_reclamacao_v1888`): `/post-purchase/v1/claims/search` sempre
 com `players.role=respondent` + `players.user_id` (a doc proíbe busca só por status); `status=opened` + `range=`

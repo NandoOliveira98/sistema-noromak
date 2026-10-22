@@ -98,7 +98,7 @@ class RotasDasTelas(TesteNoromak):
             for rota in S.ROTAS_ADMIN_V1882:
                 self.assertTrue(padrao.search("/expedicao" + rota), f"{arquivo} não reconhece {rota}")
             # Telas que NÃO são do Admin não podem cair na lista.
-            for fora in ("/expedicao/kits-analise", "/expedicao/conferencia", "/expedicao/pedidos", "/expedicao/precificador"):
+            for fora in ("/expedicao/ruptura", "/expedicao/conferencia", "/expedicao/pedidos", "/expedicao/precificador"):
                 self.assertFalse(padrao.search(fora), f"{arquivo} trata {fora} como Admin")
 
     def test_todo_item_do_menu_abre_uma_tela(self):
@@ -117,8 +117,8 @@ class RotasDasTelas(TesteNoromak):
         self.assertIn('a.v15-nav-item[data-nk-aba]', admin, "o Admin deixou de trocar as próprias telas no lugar")
 
     def test_telas_com_menu_carregam_o_menu_unico(self):
-        for pagina in ("financeiro", "conversao", "analise-ads", "promocoes", "promocoes-auto",
-                       "kits-analise", "ruptura", "analise-full", "compras", "precificador", "posvenda", "tarefas"):
+        for pagina in ("financeiro", "conversao", "analise-ads", "promocoes-auto",
+                       "ruptura", "analise-full", "compras", "precificador", "tarefas"):
             texto = (APP / f"{pagina}.html").read_text(encoding="utf-8")
             self.assertIn('nk-menu.js?v=', texto, f"{pagina}.html sem o menu único")
             self.assertIn("data-shell", texto, f"{pagina}.html não monta o menu")

@@ -23709,15 +23709,15 @@ def _saude_posvenda() -> list[dict[str, Any]]:
         return [_saude_item("posvenda_prazo", g, "Reclamações do Mercado Livre", "critico",
                             f"{len(vencendo)} reclamação(ões) com prazo do vendedor em menos de {POSVENDA_PRAZO_CRITICO_H} h",
                             f"A mais urgente ({POSVENDA_ACAO_TXT.get(r['acao'], r['acao']) or 'ação do vendedor'}, "
-                            f"pedido {r['order_id'] or r['claim_id']}) {quando}.", "/posvenda", "Abrir Pós-venda")]
+                            f"pedido {r['order_id'] or r['claim_id']}) {quando}.", "", "")]
     if ultimo and ultimo.get("ok") is False:
         return [_saude_item("posvenda_prazo", g, "Reclamações do Mercado Livre", "atencao",
                             "Não foi possível ler as reclamações no ML",
                             ("Falta a permissão de pós-venda no aplicativo do ML (DevCenter). " if ultimo.get("sem_permissao") else "")
-                            + str(ultimo.get("erro") or "")[:200], "/posvenda", "Abrir Pós-venda")]
+                            + str(ultimo.get("erro") or "")[:200], "", "")]
     if com_acao:
         return [_saude_item("posvenda_prazo", g, "Reclamações do Mercado Livre", "atencao",
-                            f"{com_acao} reclamação(ões) esperando ação do vendedor", "", "/posvenda", "Abrir Pós-venda")]
+                            f"{com_acao} reclamação(ões) esperando ação do vendedor", "", "", "")]
     return [_saude_item("posvenda_prazo", g, "Reclamações do Mercado Livre", "ok",
                         f"{len(abertas)} reclamação(ões) aberta(s), nenhuma esperando o vendedor" if abertas
                         else "Nenhuma reclamação aberta")]
@@ -32278,7 +32278,6 @@ class AppHandler(BaseHTTPRequestHandler):
             # V19.01: Auditor de cobranças do ML.
             "/auditoria-ml": "admin", "/auditoria-ml/": "admin", "/auditoria-ml.html": "admin",
             # V18.47: Oportunidades de Kit.
-            "/kits-analise": "admin", "/kits-analise/": "admin", "/kits-analise.html": "admin",
             # V18.54: Análise de ADS.
             "/analise-ads": "admin", "/analise-ads/": "admin", "/analise-ads.html": "admin",
             # V18.68: Conversão dos anúncios.
@@ -32288,7 +32287,6 @@ class AppHandler(BaseHTTPRequestHandler):
             # V19.64: Estoque do TikTok Shop (Bauru).
             "/tiktok-estoque": "admin", "/tiktok-estoque/": "admin", "/tiktok-estoque.html": "admin",
             # V18.88: Pós-venda do ML.
-            "/posvenda": "admin", "/posvenda/": "admin", "/posvenda.html": "admin",
             # V19.74: Monitor de catálogo do ML.
             "/catalogo-ml": "admin", "/catalogo-ml/": "admin", "/catalogo-ml.html": "admin",
             # V18.83: Painel de saúde do sistema.
@@ -32303,7 +32301,8 @@ class AppHandler(BaseHTTPRequestHandler):
             "/print-station": "estacao", "/print-station/": "estacao",
             "/precificador": "precificador", "/precificador/": "precificador", "/precificador.html": "precificador",
             # V18.23: Promoções do ML (usa custo/margem do Precificador).
-            "/promocoes": "precificador", "/promocoes/": "precificador", "/promocoes.html": "precificador",
+            # V19.76: a tela Promoções ML saiu (dono, 22/10); o endereço antigo abre as Promoções automáticas.
+            "/promocoes": "admin", "/promocoes/": "admin", "/promocoes.html": "admin",
             "/precificacao": "precificador", "/precificacao/": "precificador",
             "/analise-full": "precificador", "/analise-full/": "precificador", "/analise-full.html": "precificador",
             "/full": "precificador", "/full/": "precificador",
@@ -35790,9 +35789,6 @@ class AppHandler(BaseHTTPRequestHandler):
             "/auditoria-ml": "auditoria-ml.html",
             "/auditoria-ml/": "auditoria-ml.html",
             "/auditoria-ml.html": "auditoria-ml.html",
-            "/kits-analise": "kits-analise.html",
-            "/kits-analise/": "kits-analise.html",
-            "/kits-analise.html": "kits-analise.html",
             "/analise-ads": "analise-ads.html",
             "/analise-ads/": "analise-ads.html",
             "/analise-ads.html": "analise-ads.html",
@@ -35809,9 +35805,6 @@ class AppHandler(BaseHTTPRequestHandler):
             "/faturamento/": "faturamento.html",
             "/faturamento.html": "faturamento.html",
             "/ruptura/": "ruptura.html",
-            "/posvenda": "posvenda.html",
-            "/posvenda/": "posvenda.html",
-            "/posvenda.html": "posvenda.html",
             "/catalogo-ml": "catalogo-ml.html",
             "/catalogo-ml/": "catalogo-ml.html",
             "/catalogo-ml.html": "catalogo-ml.html",
@@ -35824,9 +35817,9 @@ class AppHandler(BaseHTTPRequestHandler):
             "/rentabilidade-ml.html": "financeiro.html",
             "/promocoes-ml/": "admin.html",
             "/promocoes-ml.html": "admin.html",
-            "/promocoes": "promocoes.html",
-            "/promocoes/": "promocoes.html",
-            "/promocoes.html": "promocoes.html",
+            "/promocoes": "promocoes-auto.html",   # V19.76: tela antiga removida
+            "/promocoes/": "promocoes-auto.html",
+            "/promocoes.html": "promocoes-auto.html",
             "/precificador": "precificador.html",
             "/precificador/": "precificador.html",
             "/precificador.html": "precificador.html",
