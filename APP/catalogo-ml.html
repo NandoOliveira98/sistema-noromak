@@ -81,6 +81,16 @@ table.cat th.num{text-align:right}
 .rank-l.meu .barra-p i{background:var(--nk-warn-bg)}
 .rank-l.meu .pos,.rank-l.meu .num b{color:var(--nk-warn)}
 .rank-l.lider .pos,.rank-l.lider .num b{color:var(--nk-ok)}
+.troca form{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px}
+.troca-campo{display:flex;align-items:center;border:1px solid var(--nk-line);border-radius:9px;background:var(--nk-tile);padding:0 10px;flex:1;min-width:140px;max-width:200px}
+.troca-campo:focus-within{border-color:var(--nk-pri);box-shadow:0 0 0 3px var(--nk-foco)}
+.troca-campo span{color:var(--nk-ink3);font-weight:700;font-size:13px}
+.troca-campo input{border:0;outline:0;background:none;color:var(--nk-head);font:inherit;font-size:16px;font-weight:700;padding:8px 6px;width:100%;font-variant-numeric:tabular-nums}
+.nk-btn.pri{background:var(--nk-pri);color:var(--nk-pri-txt,#fff);border-color:var(--nk-pri)}
+.nk-btn:disabled{opacity:.6;cursor:wait}
+a.lk{color:var(--nk-pri);text-decoration:none}a.lk:hover{text-decoration:underline}
+.g-tile a.ganhador{display:block;margin-top:3px}
+.rank-l .barra-p>span a{pointer-events:auto}
 .linha-tempo{list-style:none;margin:0;padding:0}
 .linha-tempo li{display:grid;grid-template-columns:96px auto 1fr;gap:10px;padding:8px 0;border-bottom:1px solid var(--nk-line2);font-size:12.5px;align-items:center}
 .linha-tempo li:last-child{border-bottom:0}
@@ -250,7 +260,7 @@ table.cat th.num{text-align:right}
     const larg = v => v == null ? 0 : 30 + 70 * (max === min ? 1 : (v - min) / (max - min));
     const rank = d.concorrentes.map((c, n) => `<div class="rank-l ${c.meu ? "meu" : ""} ${n === 0 ? "lider" : ""}">
         <span class="pos">${n + 1}º</span>
-        <div class="barra-p"><i style="width:${larg(c.preco)}%"></i><span><span class="mono">${esc(c.item_id)}</span>${c.meu ? " · <b>meu anúncio</b>" : ""}${c.loja_oficial ? " · loja oficial" : ""} · ${c.frete_gratis ? "frete grátis" : c.frete_gratis === 0 ? "frete pago" : "frete —"}${c.logistica === "fulfillment" ? " · Full" : ""} · ${c.tipo === "gold_pro" ? "Premium" : c.tipo === "gold_special" ? "Clássico" : esc(c.tipo)}</span></div>
+        <div class="barra-p"><i style="width:${larg(c.preco)}%"></i><span><a class="mono lk" href="${linkML(c.item_id)}" target="_blank" rel="noopener" title="Abrir este anúncio no Mercado Livre">${esc(c.item_id)} ↗</a>${c.meu ? " · <b>meu anúncio</b>" : ""}${c.loja_oficial ? " · loja oficial" : ""} · ${c.frete_gratis ? "frete grátis" : c.frete_gratis === 0 ? "frete pago" : "frete —"}${c.logistica === "fulfillment" ? " · Full" : ""} · ${c.tipo === "gold_pro" ? "Premium" : c.tipo === "gold_special" ? "Clássico" : esc(c.tipo)}</span></div>
         <span class="num"><b>${brl(c.preco)}</b></span></div>`).join("");
     g.querySelector("aside").innerHTML = `<div class="g-cab"><button class="fechar" aria-label="Fechar">×</button>
         ${selo(i.situacao)} <span class="conta">${esc(i.conta_nome)}</span>
@@ -259,16 +269,61 @@ table.cat th.num{text-align:right}
       <div class="g-corpo">
         <div class="g-tiles">
           <div class="g-tile"><small>Meu preço</small><b>${brl(i.preco)}</b><span class="mini">margem ${pct(i.margem_atual)}</span></div>
-          <div class="g-tile alvo"><small>Preço para ganhar</small><b>${brl(i.preco_ganhar)}</b>${diferenca(i) || `<span class="mini">—</span>`}</div>
+          <div class="g-tile alvo"><small>Preço para ganhar</small><b>${brl(i.preco_ganhar)}</b>${diferenca(i) || `<span class="mini">—</span>`}${i.ganhador_item && i.ganhador_item !== i.item_id ? `<a class="mini lk ganhador" href="${linkML(i.ganhador_item)}" target="_blank" rel="noopener">ganhador ${esc(i.ganhador_item)} ↗</a>` : ""}</div>
           <div class="g-tile"><small>Margem para ganhar</small><b>${margem(i.margem_ganhar, i.da_margem, i.frete_incerto)}</b><span class="mini">${i.lucro_ganhar != null ? brl(i.lucro_ganhar) + " por venda" : "cadastre o custo no Precificador"}</span></div>
         </div>
         ${i.taxas_origem ? `<div class="nk-aviso">${esc(i.taxas_origem)}</div>` : ""}
+        <section class="g-sec troca"><h3>Trocar a promoção no Mercado Livre</h3>
+          <form id="troca">
+            <label class="troca-campo"><span>R$</span><input id="troca-preco" inputmode="decimal" autocomplete="off" value="${i.preco_ganhar != null ? Number(i.preco_ganhar).toFixed(2).replace(".", ",") : ""}"></label>
+            ${i.preco_ganhar != null ? `<button type="button" class="nk-btn" id="troca-ganhar" title="Preencher com o preço para ganhar">Preço p/ ganhar</button>` : ""}
+            <button type="submit" class="nk-btn pri" id="troca-ok">Trocar agora</button>
+          </form>
+          <p class="mini">Troca o desconto próprio <b>agora</b>, de hoje até ${esc(D.regras.duracao_dias || 30)} dias, e deixa o anúncio marcado nas Promoções automáticas com este preço. Abaixo do preço mínimo do produto o sistema recusa.</p>
+          <div class="mini" id="troca-msg"></div>
+        </section>
         <section class="g-sec"><h3>Ranking de preço no catálogo · ${d.concorrentes.length} anúncio(s)</h3>
           <div class="rank">${rank || `<p class="mini">Sem concorrentes lidos.</p>`}</div></section>
         <section class="g-sec"><h3>Histórico da vitrine</h3>
           <ul class="linha-tempo">${d.historico.map(h => `<li><span class="mini">${dataHora(h.em)}</span><span>${selo(h.situacao)}</span><span class="num mini">meu ${brl(h.preco)} · ganhar ${brl(h.preco_ganhar)}</span></li>`).join("") || `<li class="mini">Sem mudanças registradas.</li>`}</ul></section>
       </div>`;
     g.querySelector(".fechar").onclick = fechar;
+    // V19.76: troca a promoção própria no ML (decisões do dono, 22/10)
+    const campo = $("troca-preco"), msg = $("troca-msg"), ok = $("troca-ok");
+    if ($("troca-ganhar")) $("troca-ganhar").onclick = () => { campo.value = Number(i.preco_ganhar).toFixed(2).replace(".", ","); campo.focus(); };
+    const confirmar = async texto => window.nkConfirmar ? await window.nkConfirmar(texto) : confirm(texto);
+    const enviar = async encerrar => {
+      const r = await fetch(B + "/api/catalogo-ml/promocao", {method:"POST", cache:"no-store", credentials:"same-origin",
+        headers:{"Content-Type":"application/json", Accept:"application/json"},
+        body: JSON.stringify({conta: i.conta, item: i.item_id, preco: campo.value, encerrar})});
+      let d = {}; try { d = await r.json(); } catch (_) {}
+      return {status: r.status, d};
+    };
+    $("troca").onsubmit = async e => {
+      e.preventDefault();
+      const v = Number(String(campo.value).replace(/\./g, "").replace(",", "."));
+      if (!(v > 0)) { msg.textContent = "Informe um preço válido."; return; }
+      if (!await confirmar(`Trocar a promoção de ${i.item_id} para ${brl(v)} agora no Mercado Livre?`)) return;
+      ok.disabled = true; msg.textContent = "Enviando ao Mercado Livre…";
+      try {
+        let {status, d} = await enviar(false);
+        if (status === 409 && d.code === "ml_recusou") {
+          msg.textContent = "O Mercado Livre recusou: " + (d.error || "");
+          if (await confirmar(`O Mercado Livre não aceitou trocar com a promoção atual valendo.\n\n${d.error || ""}\n\nEncerrar a promoção atual e criar a nova por ${brl(v)}? Se a nova falhar, o anúncio fica sem desconto até alguém agir.`)) {
+            msg.textContent = "Encerrando a atual e criando a nova…";
+            ({status, d} = await enviar(true));
+          } else { ok.disabled = false; return; }
+        }
+        if (d.ok) {
+          msg.innerHTML = `<b style="color:var(--nk-ok)">Promoção trocada para ${brl(d.preco)}</b> até ${esc(String(d.fim || "").slice(0, 10).split("-").reverse().join("/"))}.`;
+          (window.nkToast || (() => {}))(`Promoção de ${i.item_id} trocada para ${brl(d.preco)}`);
+          carregar();
+        } else {
+          msg.innerHTML = `<b style="color:var(--nk-bad)">${esc(d.error || "Não foi possível trocar.")}</b>`;
+        }
+      } catch (e) { msg.textContent = "Não foi possível: " + e.message; }
+      ok.disabled = false;
+    };
   }
 
   $("cards").addEventListener("click", e => { const b = e.target.closest("[data-f]"); if (!b) return; filtro = filtro === b.dataset.f ? "todos" : b.dataset.f; desenhar(); });

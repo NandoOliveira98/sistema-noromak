@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.74-CATALOGO-ML"
+APP_VERSION = "19.76-CATALOGO-PROMO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -23337,7 +23337,8 @@ def catalogo_ml_payload(conta: str = "") -> dict[str, Any]:
     cfg = promo_auto_config()
     return {"ok": True, "itens": itens, "resumo": resumo,
             "coleta": dict(_CATALOGO_ML_ESTADO),
-            "regras": {"margem_min_promo": cfg.get("margem_min_promo"), "intervalo_min": CATALOGO_ML_INTERVALO // 60},
+            "regras": {"margem_min_promo": cfg.get("margem_min_promo"), "intervalo_min": CATALOGO_ML_INTERVALO // 60,
+                       "duracao_dias": cfg.get("duracao_dias")},
             "contas": {c: CASAS[c] for c in CASAS}}
 
 
@@ -23354,6 +23355,59 @@ def catalogo_ml_item(conta: str, item_id: str) -> dict[str, Any]:
     return {"ok": True, "item": _catalogo_ml_linha(r),
             "concorrentes": [dict(c, meu=c["item_id"] == item_id) for c in conc],
             "historico": [dict(h) for h in hist]}
+
+
+def catalogo_ml_trocar_promocao(conta: str, mlb: Any, preco: Any, ator: str,
+                                encerrar: bool = False) -> dict[str, Any]:
+    """V19.76: troca o desconto próprio (PRICE_DISCOUNT) do anúncio NA HORA, pela gaveta do
+    Catálogo (decisões do dono, 22/10). Clique do ADMIN = ação explícita, como o Lote.
+
+    Mesma ml_promocao_aplicar das Promoções automáticas (trava do preço mínimo e piso/teto do ML
+    no servidor), de hoje até hoje + duracao_dias, na conta do anúncio. Deu certo: o anúncio fica
+    marcado na renovação com o preço novo (a próxima renovação mantém este preço).
+    O ML recusou (ex.: já existe promoção valendo): NÃO encerra sozinho — devolve code
+    'ml_recusou' e a tela pergunta. Só com `encerrar` confirmado encerra a atual e cria a nova;
+    se a criação falhar depois de encerrar, avisa que o anúncio ficou sem desconto.
+    ValueError (trava do mínimo, preço inválido) sobe para virar 400."""
+    conta = str(conta or "").strip().lower()
+    if conta not in CASAS:
+        raise ValueError("Conta do Mercado Livre inválida.")
+    mlb = _mlb_normalizar(mlb)
+    if not mlb:
+        raise ValueError("Anúncio (MLB) inválido.")
+    try:   # a gaveta manda "205,00" ou 205
+        valor = round(float(str(preco).strip().replace("R$", "").replace(".", "").replace(",", "."))
+                      if isinstance(preco, str) and "," in preco else float(preco), 2)
+    except (TypeError, ValueError):
+        valor = 0.0
+    if valor <= 0:
+        raise ValueError("Informe um preço válido.")
+    with ml_na_casa(conta):
+        cfg = promo_auto_config()
+        hoje = datetime.now(BR_TZ).date()
+        inicio = hoje.isoformat() + "T00:00:00"
+        fim = (hoje + timedelta(days=int(cfg["duracao_dias"]))).isoformat() + "T00:00:00"
+        if encerrar:
+            ml_promocao_remover(mlb, ator)
+            _promo_log(mlb, "encerrada", ator, "Encerrada pela gaveta do Catálogo para trocar o preço", valor)
+        try:
+            r = ml_promocao_aplicar(mlb, valor, inicio, fim, ator)
+        except ValueError:
+            raise
+        except Exception as exc:
+            _promo_log(mlb, "falhou", ator, f"Catálogo: {exc}", valor, None, inicio, fim, hoje.isoformat())
+            if encerrar:
+                return {"ok": False, "code": "sem_desconto",
+                        "error": (f"A promoção anterior foi encerrada, mas o Mercado Livre não aceitou a nova: {exc}. "
+                                  "O anúncio está sem desconto: confira no Mercado Livre.")}
+            return {"ok": False, "code": "ml_recusou", "error": str(exc)}
+    promo_renovacao_marcar(mlb, True, ator, preco=valor, conta=conta)
+    _promo_log(mlb, "renovada", ator, f"Preço trocado pela gaveta do Catálogo para {_brl_srv(valor)}",
+               valor, r.get("margem"), inicio, fim, hoje.isoformat())
+    with DB_LOCK:
+        DB.execute("UPDATE catalogo_ml_v1974 SET preco=? WHERE conta=? AND item_id=?", (valor, conta, mlb))
+        DB.commit()
+    return {"ok": True, "mlb": mlb, "preco": valor, "fim": fim, "margem": r.get("margem")}
 
 
 def catalogo_ml_amostras() -> dict[str, Any]:
@@ -32732,6 +32786,23 @@ class AppHandler(BaseHTTPRequestHandler):
                     self.send_json({"ok": False, "error": str(exc)}, 400)
                 except Exception as exc:
                     self.send_json({"ok": False, "error": str(exc)}, 502)
+            return
+        if path == "/api/catalogo-ml/promocao":
+            # V19.76: troca a promoção própria no ML pela gaveta do Catálogo (grava no ML).
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            try:
+                body = self.read_json() or {}
+                res = catalogo_ml_trocar_promocao(str(body.get("conta") or ""), body.get("item"), body.get("preco"),
+                                                  ctx["username"], encerrar=bool(body.get("encerrar")))
+                audit(ctx["username"], "catalogo.promocao",
+                      f"{body.get('conta')}|{body.get('item')}|{body.get('preco')}|encerrar={bool(body.get('encerrar'))}|{res.get('code') or 'ok'}")
+                self.send_json(res, 200 if res.get("ok") else 409 if res.get("code") == "ml_recusou" else 502)
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
             return
         if path == "/api/catalogo-ml/atualizar":
             # V19.74: lê o catálogo agora, em segundo plano. Só lê o ML.
