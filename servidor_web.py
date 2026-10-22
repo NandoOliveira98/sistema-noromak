@@ -26455,7 +26455,7 @@ def _promo_renovacao_avaliar(mlb: str, preco: float | None, promos: list[dict[st
         if prod and out["preco"]:
             out["margem"] = promo_conta(prod, out["preco"])["margem"]
         return out
-    vigente = ml_promo_vigente(promos)
+    vigente = ml_promo_vigente([x for x in promos if not vencido(x)])
     if vigente and str(vigente.get("type") or "") not in (ML_PROMO_TIPO, "BANK"):
         tipo = str(vigente.get("type") or "")
         nome = str(vigente.get("name") or ML_PROMO_TIPO_NOME.get(tipo, tipo))
