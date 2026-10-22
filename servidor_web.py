@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.73-FATURAMENTO-DIA"
+APP_VERSION = "19.74-CATALOGO-ML"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -2698,6 +2698,7 @@ def init_db() -> None:
     ensure_vendas_conta_schema()  # V18.98
     ensure_auditoria_cobrancas_schema()  # V19.01
     ensure_tarefas_schema()  # V19.69
+    ensure_catalogo_ml_schema()  # V19.74
     migrate_legacy_if_empty()
     ensure_storage_defaults()
     seed_sku_state_from_storage()
@@ -23006,6 +23007,329 @@ def posvenda_responder(pergunta_id: str, texto: str, ator: str) -> dict[str, Any
     return {"ok": True, "pergunta_id": pergunta_id}
 
 
+# ---------------------------------------------------------------------------
+# V19.74: Monitor de catálogo do ML (decisões do dono, 22/10). SÓ LÊ o ML.
+# Para cada anúncio de catálogo (Araçatuba e Bauru, de hora em hora): situação na vitrine
+# (/items/{MLB}/price_to_win), concorrentes do produto (/products/{id}/items) e se o preço
+# para ganhar ainda dá a margem mínima da promoção (mesma conta das Promoções automáticas:
+# custo de _promo_produto, comissão/frete do anúncio, imposto). Sem custo = nulo, nunca zero.
+# Aviso (popup/push, canal dos avisos de venda) só na VIRADA de ganhando/compartilhando para
+# perdendo e só quando o preço para ganhar dá margem; a 1ª leitura de um anúncio só marca.
+# A resposta real foi construída pela documentação: a 1ª de cada tipo fica em
+# catalogo_ml_amostra_v1974 (GET /api/catalogo-ml/amostra) para conferir.
+# ---------------------------------------------------------------------------
+CATALOGO_ML_INTERVALO = 3600
+CATALOGO_ML_PAUSA = 0.3
+CATALOGO_ML_LOCK = threading.Lock()
+CATALOGO_ML_SITUACAO = {"winning": "ganhando", "sharing_first_place": "compartilhando",
+                        "competing": "perdendo", "listed": "nao_elegivel"}
+_CATALOGO_ML_ESTADO: dict[str, Any] = {"rodando": False, "inicio": "", "fim": "", "erro": ""}
+
+
+def ensure_catalogo_ml_schema() -> None:
+    with DB_LOCK:
+        DB.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS catalogo_ml_v1974 (
+                conta TEXT NOT NULL, item_id TEXT NOT NULL, produto_id TEXT NOT NULL DEFAULT '',
+                titulo TEXT NOT NULL DEFAULT '', sku TEXT NOT NULL DEFAULT '', status_anuncio TEXT NOT NULL DEFAULT '',
+                situacao TEXT NOT NULL DEFAULT '', preco REAL, preco_ganhar REAL,
+                ganhador_item TEXT NOT NULL DEFAULT '', ganhador_preco REAL, concorrentes INTEGER,
+                motivos TEXT NOT NULL DEFAULT '[]', margem_atual REAL, margem_ganhar REAL, lucro_ganhar REAL,
+                da_margem INTEGER, taxas_origem TEXT NOT NULL DEFAULT '',
+                lido_em TEXT NOT NULL DEFAULT '', mudou_em TEXT NOT NULL DEFAULT '', avisado_em TEXT NOT NULL DEFAULT '',
+                erro TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (conta, item_id)
+            );
+            CREATE TABLE IF NOT EXISTS catalogo_ml_concorrente_v1974 (
+                conta TEXT NOT NULL, produto_id TEXT NOT NULL, item_id TEXT NOT NULL,
+                vendedor TEXT NOT NULL DEFAULT '', preco REAL, frete_gratis INTEGER, logistica TEXT NOT NULL DEFAULT '',
+                tipo TEXT NOT NULL DEFAULT '', loja_oficial INTEGER NOT NULL DEFAULT 0, lido_em TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (conta, produto_id, item_id)
+            );
+            CREATE TABLE IF NOT EXISTS catalogo_ml_hist_v1974 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, conta TEXT NOT NULL, item_id TEXT NOT NULL, em TEXT NOT NULL,
+                situacao TEXT NOT NULL, preco REAL, preco_ganhar REAL, ganhador_preco REAL
+            );
+            CREATE INDEX IF NOT EXISTS idx_catalogo_ml_hist ON catalogo_ml_hist_v1974(conta, item_id, id);
+            CREATE TABLE IF NOT EXISTS catalogo_ml_amostra_v1974 (
+                tipo TEXT PRIMARY KEY, em TEXT NOT NULL, json TEXT NOT NULL
+            );
+            """
+        )
+        DB.commit()
+
+
+def _catalogo_ml_amostra(tipo: str, dados: Any) -> None:
+    try:
+        with DB_LOCK:
+            DB.execute("INSERT OR IGNORE INTO catalogo_ml_amostra_v1974(tipo,em,json) VALUES(?,?,?)",
+                       (tipo, now_iso(), json.dumps(dados, ensure_ascii=False)[:200000]))
+            DB.commit()
+    except Exception:
+        pass
+
+
+def catalogo_ml_anuncios() -> list[str]:
+    """Anúncios ativos de catálogo da conta da casa atual (filtro catalog_listing do /items/search)."""
+    linha = ml_integration_row()
+    seller = str((linha["seller_id"] if linha else "") or "").strip()
+    if not seller:
+        raise RuntimeError("Mercado Livre não está conectado.")
+    ids: list[str] = []
+    for offset in range(0, 5000, 50):
+        dados = ml_api_get(f"/users/{seller}/items/search?catalog_listing=true&status=active&limit=50&offset={offset}")
+        resultados = [str(x) for x in ((dados or {}).get("results") or []) if x] if isinstance(dados, dict) else []
+        ids.extend(resultados)
+        total = int(((dados or {}).get("paging") or {}).get("total") or 0) if isinstance(dados, dict) else 0
+        if len(resultados) < 50 or len(ids) >= total:
+            break
+    vistos: set[str] = set()
+    return [x for x in ids if not (x in vistos or vistos.add(x))]
+
+
+def catalogo_ml_avaliar(ptw: dict[str, Any], prod_atual: dict[str, Any] | None,
+                        prod_ganhar: dict[str, Any] | None, cfg: dict[str, Any]) -> dict[str, Any]:
+    """Pura: situação + margem no preço atual e no preço para ganhar. Não chama o ML."""
+    ptw = ptw if isinstance(ptw, dict) else {}
+    winner = ptw.get("winner") if isinstance(ptw.get("winner"), dict) else {}
+    preco = _money_number(ptw.get("current_price"))
+    ganhar = _money_number(ptw.get("price_to_win"))
+    out: dict[str, Any] = {
+        "situacao": CATALOGO_ML_SITUACAO.get(str(ptw.get("status") or "").lower(), str(ptw.get("status") or "")),
+        "preco": preco, "preco_ganhar": ganhar,
+        "ganhador_item": str(winner.get("item_id") or ""), "ganhador_preco": _money_number(winner.get("price")),
+        "produto_id": str(ptw.get("catalog_product_id") or ""),
+        "motivos": [str(x) for x in (ptw.get("reason") or []) if x] if isinstance(ptw.get("reason"), list) else [],
+        "margem_atual": None, "margem_ganhar": None, "lucro_ganhar": None, "da_margem": None,
+    }
+    if prod_atual and float(prod_atual.get("custo") or 0) > 0 and preco:
+        out["margem_atual"] = promo_conta(prod_atual, preco)["margem"]
+    if prod_ganhar and float(prod_ganhar.get("custo") or 0) > 0 and ganhar:
+        c = promo_conta(prod_ganhar, ganhar)
+        out["margem_ganhar"], out["lucro_ganhar"] = c["margem"], c["lucro"]
+        out["da_margem"] = c["margem"] >= _promo_margem_minima(cfg)
+    return out
+
+
+def _catalogo_ml_gravar(conta: str, item_id: str, det: dict[str, Any], sku: str, a: dict[str, Any],
+                        taxas_origem: str) -> bool:
+    """Grava a leitura. Devolve True quando gerou aviso (virada para perdendo com margem)."""
+    agora = now_iso()
+    with DB_LOCK:
+        ant = DB.execute("SELECT situacao FROM catalogo_ml_v1974 WHERE conta=? AND item_id=?", (conta, item_id)).fetchone()
+        anterior = ant["situacao"] if ant else ""
+        mudou = anterior != a["situacao"]
+        avisar = (ant is not None and anterior in ("ganhando", "compartilhando")
+                  and a["situacao"] == "perdendo" and a["da_margem"] is True)
+        DB.execute(
+            """INSERT INTO catalogo_ml_v1974(conta,item_id,produto_id,titulo,sku,status_anuncio,situacao,preco,preco_ganhar,
+                   ganhador_item,ganhador_preco,motivos,margem_atual,margem_ganhar,lucro_ganhar,da_margem,taxas_origem,
+                   lido_em,mudou_em,erro)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'')
+               ON CONFLICT(conta,item_id) DO UPDATE SET produto_id=excluded.produto_id, titulo=excluded.titulo,
+                   sku=excluded.sku, status_anuncio=excluded.status_anuncio, situacao=excluded.situacao,
+                   preco=excluded.preco, preco_ganhar=excluded.preco_ganhar, ganhador_item=excluded.ganhador_item,
+                   ganhador_preco=excluded.ganhador_preco, motivos=excluded.motivos, margem_atual=excluded.margem_atual,
+                   margem_ganhar=excluded.margem_ganhar, lucro_ganhar=excluded.lucro_ganhar, da_margem=excluded.da_margem,
+                   taxas_origem=excluded.taxas_origem, lido_em=excluded.lido_em,
+                   mudou_em=CASE WHEN catalogo_ml_v1974.situacao<>excluded.situacao THEN excluded.lido_em
+                                 ELSE catalogo_ml_v1974.mudou_em END, erro=''""",
+            (conta, item_id, a["produto_id"] or str(det.get("produto_catalogo") or ""), str(det.get("titulo") or ""),
+             sku, str(det.get("status") or ""), a["situacao"], a["preco"] if a["preco"] is not None else _money_number(det.get("preco")),
+             a["preco_ganhar"], a["ganhador_item"], a["ganhador_preco"], json.dumps(a["motivos"], ensure_ascii=False),
+             a["margem_atual"], a["margem_ganhar"], a["lucro_ganhar"],
+             None if a["da_margem"] is None else int(bool(a["da_margem"])), taxas_origem, agora, agora),
+        )
+        if mudou or ant is None:
+            DB.execute("INSERT INTO catalogo_ml_hist_v1974(conta,item_id,em,situacao,preco,preco_ganhar,ganhador_preco) "
+                       "VALUES(?,?,?,?,?,?,?)", (conta, item_id, agora, a["situacao"], a["preco"], a["preco_ganhar"],
+                                                  a["ganhador_preco"]))
+        if avisar:
+            titulo = (f"{item_id} perdeu a vitrine: ganha com {_brl_srv(a['preco_ganhar'])} "
+                      f"(margem {_pct_br(a['margem_ganhar'])}) · {str(det.get('titulo') or '')[:80]}")
+            DB.execute("INSERT OR IGNORE INTO aviso_venda_v1893(marketplace,venda_id,venda_em,valor,titulo,qtd,itens,"
+                       "silencioso,criado_em,casa) VALUES('catalogo',?,?,NULL,?,0,0,0,?,?)",
+                       (f"catalogo:{conta}:{item_id}:{agora}", agora, titulo, agora, conta))
+            DB.execute("UPDATE catalogo_ml_v1974 SET avisado_em=? WHERE conta=? AND item_id=?", (agora, conta, item_id))
+        DB.commit()
+    if avisar:
+        AVISOS_VENDA_EVENT.set()
+    return avisar
+
+
+def _catalogo_ml_concorrentes(conta: str, produto_id: str) -> int | None:
+    dados = ml_api_get(f"/products/{quote(produto_id)}/items")
+    _catalogo_ml_amostra("produto_itens", dados)
+    linhas = [r for r in ((dados or {}).get("results") or []) if isinstance(r, dict)] if isinstance(dados, dict) else []
+    agora = now_iso()
+    with DB_LOCK:
+        DB.execute("DELETE FROM catalogo_ml_concorrente_v1974 WHERE conta=? AND produto_id=?", (conta, produto_id))
+        for r in linhas:
+            envio = r.get("shipping") if isinstance(r.get("shipping"), dict) else {}
+            DB.execute(
+                "INSERT OR REPLACE INTO catalogo_ml_concorrente_v1974(conta,produto_id,item_id,vendedor,preco,frete_gratis,"
+                "logistica,tipo,loja_oficial,lido_em) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (conta, produto_id, str(r.get("item_id") or ""), str(r.get("seller_id") or ""), _money_number(r.get("price")),
+                 None if envio.get("free_shipping") is None else int(bool(envio.get("free_shipping"))),
+                 str(envio.get("logistic_type") or ""), str(r.get("listing_type_id") or ""),
+                 int(bool(r.get("official_store_id"))), agora))
+        DB.commit()
+    return len(linhas)
+
+
+def _catalogo_ml_rodada_conta(conta: str, stop_event: threading.Event | None, pausa: float) -> dict[str, Any]:
+    ids = catalogo_ml_anuncios()
+    det_todos = ml_itens_detalhe(ids) if ids else {}
+    produtos = _promo_produtos()
+    vinculos = _ml_vinculos_mlb_sku()
+    cfg = promo_auto_config()
+    avisos = lidos = erros = 0
+    concorrentes: dict[str, int | None] = {}
+    for mlb in ids:
+        if stop_event is not None and stop_event.is_set():
+            break
+        det = det_todos.get(mlb) or {}
+        try:
+            ptw = ml_api_get(f"/items/{mlb}/price_to_win?siteId=MLB&version=v2")
+            _catalogo_ml_amostra("price_to_win", ptw)
+            sku = _promo_resolver_sku(mlb, det.get("sku_ml"), produtos, vinculos)
+            prod = _promo_produto(produtos, sku) if sku else None
+            preco = _money_number((ptw or {}).get("current_price")) or _money_number(det.get("preco"))
+            ganhar = _money_number((ptw or {}).get("price_to_win"))
+            prod_a, origem = _promo_prod_com_ml(prod, mlb, preco, det) if prod and preco else (prod, "")
+            prod_g = _promo_prod_com_ml(prod, mlb, ganhar, det)[0] if prod and ganhar else prod
+            a = catalogo_ml_avaliar(ptw, prod_a, prod_g, cfg)
+            pid = a["produto_id"] or str(det.get("produto_catalogo") or "")
+            if pid and pid not in concorrentes:
+                try:
+                    concorrentes[pid] = _catalogo_ml_concorrentes(conta, pid)
+                except Exception:
+                    concorrentes[pid] = None
+            avisos += int(_catalogo_ml_gravar(conta, mlb, det, sku, a, origem))
+            with DB_LOCK:
+                DB.execute("UPDATE catalogo_ml_v1974 SET concorrentes=? WHERE conta=? AND item_id=?",
+                           (concorrentes.get(pid), conta, mlb))
+                DB.commit()
+            lidos += 1
+        except Exception as exc:
+            erros += 1
+            with DB_LOCK:
+                # erro não apaga a leitura anterior: só registra
+                DB.execute("INSERT INTO catalogo_ml_v1974(conta,item_id,titulo,erro) VALUES(?,?,?,?) "
+                           "ON CONFLICT(conta,item_id) DO UPDATE SET erro=excluded.erro",
+                           (conta, mlb, str(det.get("titulo") or ""), str(exc)[:300]))
+                DB.commit()
+        if pausa:
+            time.sleep(pausa)
+    # anúncio que saiu do catálogo sai da lista (a lista veio inteira, sem erro)
+    with DB_LOCK:
+        if ids:
+            marcas = ",".join("?" * len(ids))
+            DB.execute(f"DELETE FROM catalogo_ml_v1974 WHERE conta=? AND item_id NOT IN ({marcas})", (conta, *ids))
+        else:
+            DB.execute("DELETE FROM catalogo_ml_v1974 WHERE conta=?", (conta,))
+        DB.commit()
+    return {"conta": conta, "anuncios": len(ids), "lidos": lidos, "erros": erros, "avisos": avisos}
+
+
+def catalogo_ml_rodada(stop_event: threading.Event | None = None, *, pausa: float | None = None) -> dict[str, Any]:
+    if not CATALOGO_ML_LOCK.acquire(blocking=False):
+        return {"ok": True, "pulado": "já está rodando"}
+    pausa = CATALOGO_ML_PAUSA if pausa is None else pausa
+    _CATALOGO_ML_ESTADO.update(rodando=True, inicio=now_iso(), erro="")
+    contas: list[dict[str, Any]] = []
+    try:
+        for casa in ml_casas_conectadas():
+            try:
+                with ml_na_casa(casa):
+                    contas.append(_catalogo_ml_rodada_conta(casa, stop_event, pausa))
+            except Exception as exc:
+                contas.append({"conta": casa, "erro": str(exc)[:300]})
+                _CATALOGO_ML_ESTADO["erro"] = f"{CASAS.get(casa, casa)}: {exc}"[:300]
+    finally:
+        _CATALOGO_ML_ESTADO.update(rodando=False, fim=now_iso())
+        CATALOGO_ML_LOCK.release()
+    return {"ok": True, "contas": contas}
+
+
+def catalogo_ml_loop(stop_event: threading.Event) -> None:
+    """V19.74: lê o catálogo das contas conectadas de hora em hora."""
+    if stop_event.wait(180):
+        return
+    while not stop_event.is_set():
+        try:
+            catalogo_ml_rodada(stop_event)
+        except Exception as exc:
+            print(f"[catalogo-ml] rodada falhou: {exc}", file=sys.stderr, flush=True)
+        if stop_event.wait(CATALOGO_ML_INTERVALO):
+            return
+
+
+def _catalogo_ml_linha(r: sqlite3.Row) -> dict[str, Any]:
+    d = dict(r)
+    try:
+        d["motivos"] = json.loads(d.get("motivos") or "[]")
+    except Exception:
+        d["motivos"] = []
+    d["da_margem"] = None if d["da_margem"] is None else bool(d["da_margem"])
+    d["conta_nome"] = CASAS.get(d["conta"], d["conta"])
+    return d
+
+
+def catalogo_ml_payload(conta: str = "") -> dict[str, Any]:
+    conta = str(conta or "").strip().lower()
+    with DB_LOCK:
+        if conta in CASAS:
+            rows = DB.execute("SELECT * FROM catalogo_ml_v1974 WHERE conta=? ORDER BY item_id", (conta,)).fetchall()
+        else:
+            rows = DB.execute("SELECT * FROM catalogo_ml_v1974 ORDER BY conta, item_id").fetchall()
+    itens = [_catalogo_ml_linha(r) for r in rows]
+    resumo = {"total": len(itens), "ganhando": 0, "compartilhando": 0, "perdendo_com_margem": 0,
+              "perdendo_sem_margem": 0, "sem_custo": 0, "nao_elegivel": 0, "com_erro": 0}
+    for i in itens:
+        s = i["situacao"]
+        if i["erro"]:
+            resumo["com_erro"] += 1
+        if s in ("ganhando", "compartilhando", "nao_elegivel"):
+            resumo[s] += 1
+        elif s == "perdendo":
+            chave = {True: "perdendo_com_margem", False: "perdendo_sem_margem"}.get(i["da_margem"], "sem_custo")
+            resumo[chave] += 1
+    cfg = promo_auto_config()
+    return {"ok": True, "itens": itens, "resumo": resumo,
+            "coleta": dict(_CATALOGO_ML_ESTADO),
+            "regras": {"margem_min_promo": cfg.get("margem_min_promo"), "intervalo_min": CATALOGO_ML_INTERVALO // 60},
+            "contas": {c: CASAS[c] for c in CASAS}}
+
+
+def catalogo_ml_item(conta: str, item_id: str) -> dict[str, Any]:
+    conta, item_id = str(conta or "").strip().lower(), str(item_id or "").strip().upper()
+    with DB_LOCK:
+        r = DB.execute("SELECT * FROM catalogo_ml_v1974 WHERE conta=? AND item_id=?", (conta, item_id)).fetchone()
+        if r is None:
+            raise LookupError("Anúncio não está no monitor de catálogo.")
+        conc = DB.execute("SELECT * FROM catalogo_ml_concorrente_v1974 WHERE conta=? AND produto_id=? "
+                          "ORDER BY preco IS NULL, preco", (conta, r["produto_id"])).fetchall()
+        hist = DB.execute("SELECT em,situacao,preco,preco_ganhar,ganhador_preco FROM catalogo_ml_hist_v1974 "
+                          "WHERE conta=? AND item_id=? ORDER BY id DESC LIMIT 60", (conta, item_id)).fetchall()
+    return {"ok": True, "item": _catalogo_ml_linha(r),
+            "concorrentes": [dict(c, meu=c["item_id"] == item_id) for c in conc],
+            "historico": [dict(h) for h in hist]}
+
+
+def catalogo_ml_amostras() -> dict[str, Any]:
+    with DB_LOCK:
+        rows = DB.execute("SELECT * FROM catalogo_ml_amostra_v1974").fetchall()
+    out = {}
+    for r in rows:
+        try:
+            out[r["tipo"]] = {"em": r["em"], "resposta": json.loads(r["json"])}
+        except Exception:
+            out[r["tipo"]] = {"em": r["em"], "resposta": r["json"]}
+    return {"ok": True, "amostras": out}
+
+
 def posvenda_loop(stop_event: threading.Event) -> None:
     """Perguntas a cada 5 min; reclamações e reputação a cada 15 min."""
     if stop_event.wait(120):
@@ -25365,7 +25689,7 @@ def ml_itens_detalhe(mlbs: list[str]) -> dict[str, dict[str, Any]]:
     # V18.72: shipping traz o logistic_type (Full ou não) para a Ruptura.
     # V18.77: listing_type_id para a comissão do anúncio (ml_tarifa_frete_anuncio)
     campos = ("id,title,price,status,sub_status,available_quantity,seller_custom_field,attributes,category_id,"
-              "shipping,listing_type_id,user_product_id")   # V19.60: estoque do Full
+              "shipping,listing_type_id,user_product_id,catalog_product_id")   # V19.60: estoque do Full; V19.74: catálogo
     for i in range(0, len(mlbs), 20):   # a API aceita 20 ids por chamada
         lote = [x for x in mlbs[i:i + 20] if x]
         if not lote:
@@ -25397,6 +25721,7 @@ def ml_itens_detalhe(mlbs: list[str]) -> dict[str, dict[str, Any]]:
                         "categoria": str(corpo.get("category_id") or ""),  # V18.68: Conversão
                         "tipo": str(corpo.get("listing_type_id") or ""),       # V18.77: comissão
                         "user_product": str(corpo.get("user_product_id") or ""),  # V19.60
+                        "produto_catalogo": str(corpo.get("catalog_product_id") or ""),  # V19.74
                         "logistica": str((corpo.get("shipping") if isinstance(corpo.get("shipping"), dict)
                                           else {}).get("logistic_type") or "")}  # V18.72: Ruptura
     return out
@@ -26105,12 +26430,22 @@ def _dia_br(iso: str) -> str:
 
 def _promo_renovacao_avaliar(mlb: str, preco: float | None, promos: list[dict[str, Any]],
                              det: dict[str, Any], prod: dict[str, Any] | None,
-                             rup: dict[str, Any] | None, cfg: dict[str, Any], hoje: date) -> dict[str, Any]:
+                             rup: dict[str, Any] | None, cfg: dict[str, Any], hoje: date,
+                             agora: datetime | None = None) -> dict[str, Any]:
     """Decide o que fazer com UM anúncio marcado. Não chama o ML."""
     out: dict[str, Any] = {"situacao": "", "motivo": "", "aviso": "", "fim": "", "preco": preco,
                            "promo_tipo": "", "promo_preco": None, "margem": None}
     proprios = [x for x in promos if x.get("type") == ML_PROMO_TIPO]
-    vigente_proprio = next((x for x in proprios if str(x.get("status") or "").lower() in ("started", "pending")), None)
+    agora = agora or datetime.now(timezone.utc)
+
+    def vencido(x: dict[str, Any]) -> bool:
+        # V19.75: o ML seguiu devolvendo "started" ~10 h depois do fim (MLB3705527286, 22/10):
+        # a linha ficava "Ativa" e nunca renovava. Prazo passado = encerrado; sem data, vale o status.
+        fim_dt = _promo_fim_dt(x.get("finish_date"))
+        return bool(fim_dt and fim_dt <= agora)
+
+    vigente_proprio = next((x for x in proprios if str(x.get("status") or "").lower() in ("started", "pending")
+                            and not vencido(x)), None)
     if vigente_proprio:
         if _money_number(vigente_proprio.get("price")):
             out["preco"] = _money_number(vigente_proprio.get("price"))
@@ -31479,6 +31814,23 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
+        if path in ("/api/catalogo-ml", "/api/catalogo-ml/item", "/api/catalogo-ml/amostra"):
+            # V19.74: Monitor de catálogo do ML. Só lê o banco.
+            if self.auth(admin_only=True) is None:
+                return
+            try:
+                q = lambda k: str((query.get(k) or [""])[0] or "")
+                if path == "/api/catalogo-ml/item":
+                    self.send_json(catalogo_ml_item(q("conta"), q("item")))
+                elif path == "/api/catalogo-ml/amostra":
+                    self.send_json(catalogo_ml_amostras())
+                else:
+                    self.send_json(catalogo_ml_payload(q("conta")))
+            except LookupError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 404)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
         if path == "/api/posvenda":
             # V18.88: Pós-venda do ML (reclamações, devoluções e perdas, perguntas, reputação). Só lê o banco.
             if self.auth(admin_only=True) is None:
@@ -31843,6 +32195,8 @@ class AppHandler(BaseHTTPRequestHandler):
             "/tiktok-estoque": "admin", "/tiktok-estoque/": "admin", "/tiktok-estoque.html": "admin",
             # V18.88: Pós-venda do ML.
             "/posvenda": "admin", "/posvenda/": "admin", "/posvenda.html": "admin",
+            # V19.74: Monitor de catálogo do ML.
+            "/catalogo-ml": "admin", "/catalogo-ml/": "admin", "/catalogo-ml.html": "admin",
             # V18.83: Painel de saúde do sistema.
             "/saude": "admin", "/saude/": "admin", "/saude.html": "admin",
             # V19.43: fila de faturamento em lote.
@@ -32338,6 +32692,15 @@ class AppHandler(BaseHTTPRequestHandler):
                     self.send_json({"ok": False, "error": str(exc)}, 400)
                 except Exception as exc:
                     self.send_json({"ok": False, "error": str(exc)}, 502)
+            return
+        if path == "/api/catalogo-ml/atualizar":
+            # V19.74: lê o catálogo agora, em segundo plano. Só lê o ML.
+            if self.auth(admin_only=True) is None:
+                return
+            rodando = CATALOGO_ML_LOCK.locked()
+            if not rodando:
+                threading.Thread(target=catalogo_ml_rodada, name="catalogo-ml-manual", daemon=True).start()
+            self.send_json({"ok": True, "rodando": True, "ja_estava": rodando})
             return
         if path == "/api/posvenda/sincronizar":
             # V18.88: busca agora (em segundo plano) perguntas, reclamações e reputação.
@@ -35338,6 +35701,9 @@ class AppHandler(BaseHTTPRequestHandler):
             "/posvenda": "posvenda.html",
             "/posvenda/": "posvenda.html",
             "/posvenda.html": "posvenda.html",
+            "/catalogo-ml": "catalogo-ml.html",
+            "/catalogo-ml/": "catalogo-ml.html",
+            "/catalogo-ml.html": "catalogo-ml.html",
             "/ruptura.html": "ruptura.html",
             "/promocoes-auto": "promocoes-auto.html",
             "/promocoes-auto/": "promocoes-auto.html",
@@ -35719,6 +36085,14 @@ def _avisos_formatar(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
         return {"id": int(row["id"]), "marketplace": "full", "venda_id": row["venda_id"], "venda_em": row["venda_em"],
                 "valor": None, "titulo": "Remessa Full", "corpo": str(row["titulo"] or ""),
                 "url": f"{BASE_PATH}/analise-full"}
+    if row["marketplace"] == "catalogo":  # V19.74: perdeu a vitrine do catálogo
+        try:
+            filial = CASAS.get(str(row["casa"] or ""), "")
+        except (KeyError, IndexError):
+            filial = ""
+        return {"id": int(row["id"]), "marketplace": "catalogo", "venda_id": row["venda_id"], "venda_em": row["venda_em"],
+                "valor": None, "titulo": "Catálogo ML" + (f" {filial}" if filial else "") + ": perdeu a vitrine",
+                "corpo": str(row["titulo"] or ""), "url": f"{BASE_PATH}/catalogo-ml"}
     valor = _avisos_brl(row["valor"]) if row["valor"] is not None else ""
     try:
         filial = str(row["casa"] or "")
@@ -35987,6 +36361,7 @@ SAUDE_WORKERS_INFO: dict[str, tuple[str, bool, int]] = {
     "shopee_promo_loop": ("Promoções automáticas da Shopee", False, 120),  # V19.49
     "magalu_promo_loop": ("Promoções automáticas da Magalu", False, 120),  # V19.55
     "posvenda_loop": ("Pós-venda do Mercado Livre", False, 60),
+    "catalogo_ml_loop": ("Monitor de catálogo do ML", False, 90),
     "promo_convites_loop": ("Convites de campanha do ML", False, 120),
     "relatorio_diario_loop": ("Relatório diário por e-mail", False, 60),
     "manutencao_diaria_loop": ("Manutenção diária (limpeza de logs)", False, 120),
@@ -37058,6 +37433,13 @@ def main() -> None:
         name="posvenda",
         daemon=True,
     )
+    # V19.74: monitor de catálogo do ML (só lê), de hora em hora.
+    catalogo_ml_thread = threading.Thread(
+        target=_worker_protegido(catalogo_ml_loop),
+        args=(watcher_stop,),
+        name="catalogo-ml",
+        daemon=True,
+    )
     # V18.91: demanda de todos os canais e compra em aberto pela Linx, à noite.
     linx_demanda_thread = threading.Thread(
         target=_worker_protegido(linx_demanda_loop),
@@ -37174,6 +37556,7 @@ def main() -> None:
         visitas_thread.start()
         estoque_thread.start()
         posvenda_thread.start()
+        catalogo_ml_thread.start()  # V19.74
         promo_convites_thread.start()
         shopee_anuncios_thread.start()
         linx_demanda_thread.start()

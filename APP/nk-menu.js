@@ -37,6 +37,8 @@
       { id: "conversao", rotulo: "Conversão", href: "/conversao", modulo: "admin", icone: "M3 4h18l-7 8v6l-4 2v-8L3 4z" },
       // V18.88: reclamações, devoluções e perdas, perguntas e reputação do ML.
       { id: "posvenda", rotulo: "Pós-venda", href: "/posvenda", modulo: "admin", icone: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2zM12 7v4M12 14h.01" },
+      // V19.74: monitor de catálogo do ML (vitrine, concorrentes, margem no preço para ganhar).
+      { id: "catalogo-ml", rotulo: "Catálogo ML", href: "/catalogo-ml", modulo: "admin", icone: "M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM17.5 14v7M14 17.5h7" },
       { id: "analise-ads", rotulo: "Análise de ADS", href: "/analise-ads", modulo: "admin", icone: "M3 11v3l13 5V6L3 11zM16 9a3 3 0 0 1 0 6M7 15.5V20h3v-3.3" },
       { id: "promocoes", rotulo: "Promoções ML", href: "/promocoes", modulo: "precificador", icone: "M19 5 5 19M6.5 9a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5zM17.5 20a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z" },
       { id: "promocoes-auto", rotulo: "Promoções automáticas", href: "/promocoes-auto", modulo: "admin", icone: "M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5M9 15l6-6M9.5 9.5h.01M14.5 14.5h.01" },
@@ -329,7 +331,7 @@
     if (window.nkAvisos) { window.nkAvisos.ligarBotoes(); return; }
     if (document.querySelector('script[data-nk-avisos-js]')) return;
     const s = document.createElement("script");
-    s.src = `${B}/nk-avisos.js?v=19.03`;
+    s.src = `${B}/nk-avisos.js?v=19.74`;
     s.defer = true;
     s.dataset.nkAvisosJs = "1";
     document.head.append(s);

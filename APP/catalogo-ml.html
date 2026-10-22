@@ -1,0 +1,228 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="/favicon.ico?v=14.5" sizes="any">
+<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=18.94">
+<title>Noromak · Catálogo ML</title>
+<!-- V19.74: Monitor de catálogo do ML — situação na vitrine (price_to_win), concorrentes do
+     produto e margem no preço para ganhar (régua = margem mínima da promoção). SÓ LÊ o ML.
+     GET /api/catalogo-ml?conta=, GET /api/catalogo-ml/item?conta=&item=, POST /api/catalogo-ml/atualizar
+     (módulo admin; a coleta é do worker catalogo_ml_loop, de hora em hora). -->
+<script defer src="/expedicao/web-auth.js?v=19.70"></script>
+<link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
+<link rel="stylesheet" href="/expedicao/nk-ui.css?v=19.13">
+<script src="/expedicao/nk-ui.js?v=19.13"></script>
+<script defer src="/expedicao/nk-menu.js?v=19.74" data-shell></script>
+<style>
+body{margin:0;background:var(--nk-canvas);color:var(--nk-ink);font-family:var(--nk-font)}
+.nk-cab select,.barra input[type=search]{font:inherit;font-size:13px;border:1px solid var(--nk-line);background:var(--nk-tile);color:var(--nk-ink);border-radius:8px;padding:7px 10px}
+.barra{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;margin-bottom:10px}
+.barra input[type=search]{width:320px;max-width:100%}
+.filtros{display:flex;flex-wrap:wrap;gap:6px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-bottom:14px}
+.card{border:1px solid var(--nk-line);border-radius:12px;padding:11px 13px;background:var(--nk-tile);cursor:pointer;text-align:left;font:inherit;color:inherit}
+.card small{display:block;color:var(--nk-ink2);font-size:11.5px;font-weight:600}
+.card b{display:block;font-size:22px;color:var(--nk-head);font-variant-numeric:tabular-nums;margin-top:3px}
+.card.on{outline:2px solid var(--nk-pri);outline-offset:-1px}
+.card.ok b{color:var(--nk-ok)}.card.bad b{color:var(--nk-bad)}.card.warn b{color:var(--nk-warn)}
+.tab-wrap{overflow-x:auto}
+table.cat{width:100%;border-collapse:collapse;font-size:13px}
+table.cat th{text-align:left;font-size:11.5px;color:var(--nk-ink2);font-weight:700;padding:8px;border-bottom:1px solid var(--nk-line);white-space:nowrap}
+table.cat td{padding:8px;border-bottom:1px solid var(--nk-line);vertical-align:top}
+table.cat tbody tr{cursor:pointer}
+table.cat tbody tr:hover{background:var(--nk-cinza-bg)}
+.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.mini{font-size:11.5px;color:var(--nk-ink2)}
+.mono{font-family:Consolas,monospace;font-size:11.5px;color:var(--nk-ink3)}
+.tit{max-width:340px}
+.m-ok{color:var(--nk-ok);font-weight:700}.m-bad{color:var(--nk-bad);font-weight:700}
+.gaveta-fundo{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:50}
+.gaveta{position:fixed;top:0;right:0;bottom:0;width:min(560px,100%);background:var(--nk-tile);z-index:51;overflow:auto;padding:18px 18px 40px;box-sizing:border-box;box-shadow:-8px 0 24px rgba(0,0,0,.2)}
+.gaveta h2{margin:0 0 4px;font-size:18px;color:var(--nk-head)}
+.gaveta h3{margin:18px 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--nk-ink2)}
+.gaveta .fechar{position:absolute;top:12px;right:12px}
+.grade2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.grade2 div{border:1px solid var(--nk-line);border-radius:10px;padding:8px 10px}
+.grade2 small{display:block;color:var(--nk-ink2);font-size:11px}
+.grade2 b{font-size:16px;color:var(--nk-head)}
+tr.meu td{background:var(--nk-pri-bg, rgba(0,0,0,.04));font-weight:700}
+.notas{font-size:12px;color:var(--nk-ink2)}
+.notas ul{margin:6px 0 0 18px;padding:0}
+</style>
+</head>
+<body>
+<main class="nk-pagina">
+  <div class="nk-cab">
+    <div>
+      <div class="nk-rotulo">Vendas e anúncios</div>
+      <h1>Catálogo ML</h1>
+      <p id="sub">Carregando…</p>
+    </div>
+    <div class="nk-acoes">
+      <select id="conta" title="Conta do Mercado Livre">
+        <option value="">Todas as contas</option>
+        <option value="aracatuba">Araçatuba</option>
+        <option value="bauru">Bauru</option>
+      </select>
+      <button class="nk-btn" id="atualizar" title="Lê o catálogo agora no Mercado Livre (em segundo plano). Não altera nada no ML."><i class=nk-i-refresh></i> Atualizar agora</button>
+    </div>
+  </div>
+
+  <div class="nk-carregando" id="carregando">Carregando o catálogo…</div>
+  <div class="nk-aviso bad" id="erro" hidden></div>
+
+  <div class="nk-pilha" id="conteudo" hidden>
+    <div class="nk-aviso" id="aviso" hidden></div>
+    <div class="cards" id="cards"></div>
+    <section class="nk-painel">
+      <div class="barra">
+        <input type="search" id="busca" placeholder="Buscar por MLB, SKU ou título">
+        <span class="mini" id="contagem"></span>
+      </div>
+      <div class="tab-wrap">
+        <table class="cat">
+          <thead><tr>
+            <th>Anúncio</th><th>Situação</th><th class="num">Meu preço</th><th class="num">Preço p/ ganhar</th>
+            <th class="num">Ganhador</th><th class="num">Margem atual</th><th class="num">Margem p/ ganhar</th><th class="num">Concorrentes</th><th>Lido</th>
+          </tr></thead>
+          <tbody id="linhas"></tbody>
+        </table>
+      </div>
+    </section>
+    <section class="nk-painel notas">
+      <b>Como ler</b>
+      <ul>
+        <li><b>Preço p/ ganhar</b> é o que o Mercado Livre diz que este anúncio precisa ter para ganhar a vitrine do catálogo (price_to_win).</li>
+        <li><b>Margem p/ ganhar</b> usa a mesma conta das Promoções automáticas: custo, comissão e frete do anúncio e imposto. "Dá margem" = acima da margem mínima da promoção (<span id="mmin">—</span>).</li>
+        <li>Sem custo no Precificador a margem fica em branco, nunca zero.</li>
+        <li>O aviso (popup/push) toca uma vez quando um anúncio passa de ganhando para perdendo <b>e</b> o preço para ganhar dá margem.</li>
+        <li>Esta tela só lê o Mercado Livre: nenhum preço é alterado.</li>
+      </ul>
+    </section>
+  </div>
+</main>
+<div id="gaveta" hidden></div>
+<script>
+(() => {
+  "use strict";
+  const B = "/expedicao";
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));
+  const brl = v => v == null ? "—" : Number(v).toLocaleString("pt-BR", {style:"currency", currency:"BRL"});
+  const pct = v => v == null ? "—" : (Number(v) * 100).toLocaleString("pt-BR", {maximumFractionDigits:1}) + "%";
+  const dataHora = iso => { const d = new Date(iso); return !iso || isNaN(d) ? "—" : d.toLocaleString("pt-BR", {day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit"}); };
+  const linkML = mlb => `https://produto.mercadolivre.com.br/${String(mlb).replace(/^MLB/, "MLB-")}`;
+  const SIT = {ganhando:["ok","Ganhando"], compartilhando:["info","Compartilhando"], perdendo:["bad","Perdendo"], nao_elegivel:["cinza","Não elegível"]};
+  const MOTIVO = {price:"preço", shipping:"frete", free_shipping:"frete grátis", fulfillment:"Full", same_day_shipping:"envio no dia",
+    installments:"parcelamento", listing_type:"tipo de anúncio", reputation:"reputação", official_store:"loja oficial", manufacturing_time:"prazo de fabricação"};
+  const CARDS = [
+    ["todos","Anúncios de catálogo","total",""],
+    ["ganhando","Ganhando","ganhando","ok"],
+    ["compartilhando","Compartilhando","compartilhando",""],
+    ["perdendo_com_margem","Perdendo e dá margem","perdendo_com_margem","warn"],
+    ["perdendo_sem_margem","Perdendo sem margem","perdendo_sem_margem","bad"],
+    ["sem_custo","Perdendo sem custo","sem_custo",""],
+    ["nao_elegivel","Não elegível","nao_elegivel",""],
+  ];
+  let D = null, filtro = "todos";
+  try { $("conta").value = localStorage.getItem("nk_catalogo_conta_v1974") || ""; } catch (_) {}
+
+  async function api(url, opcoes = {}) {
+    const r = await fetch(B + url, {cache:"no-store", credentials:"same-origin", headers:{"Content-Type":"application/json", Accept:"application/json"}, ...opcoes});
+    let d = {}; try { d = await r.json(); } catch (_) {}
+    if (!r.ok || d.ok === false) throw new Error(d.error || `HTTP ${r.status}`);
+    return d;
+  }
+
+  async function carregar() {
+    try { D = await api("/api/catalogo-ml?conta=" + encodeURIComponent($("conta").value)); }
+    catch (e) { $("carregando").hidden = true; $("erro").hidden = false; $("erro").textContent = "Não foi possível carregar: " + e.message; return; }
+    $("carregando").hidden = true; $("erro").hidden = true; $("conteudo").hidden = false;
+    desenhar();
+  }
+
+  const grupo = i => i.situacao === "perdendo" ? (i.da_margem === true ? "perdendo_com_margem" : i.da_margem === false ? "perdendo_sem_margem" : "sem_custo") : i.situacao;
+
+  function desenhar() {
+    const c = D.coleta || {};
+    $("sub").textContent = `Mercado Livre · leitura a cada ${D.regras.intervalo_min} min` + (c.fim ? ` · última leitura ${dataHora(c.fim)}` : "") + (c.rodando ? " · lendo agora…" : "");
+    $("mmin").textContent = (D.regras.margem_min_promo ?? "—") + "%";
+    const av = [];
+    if (c.erro) av.push("<b>Última leitura:</b> " + esc(c.erro));
+    if (!D.itens.length) av.push("Nenhum anúncio de catálogo lido ainda. A primeira leitura começa uns 3 minutos depois de o sistema subir (ou clique em \"Atualizar agora\").");
+    if (D.resumo.com_erro) av.push(`${D.resumo.com_erro} anúncio(s) com erro na última leitura: mostram a leitura anterior.`);
+    $("aviso").hidden = !av.length; $("aviso").innerHTML = av.join("<br>");
+    $("cards").innerHTML = CARDS.map(([id, rot, chave, cls]) =>
+      `<button type="button" class="card ${cls} ${filtro === id ? "on" : ""}" data-f="${id}"><small>${rot}</small><b>${D.resumo[chave] ?? 0}</b></button>`).join("");
+    const q = $("busca").value.trim().toLowerCase();
+    const itens = D.itens.filter(i => (filtro === "todos" || grupo(i) === filtro) &&
+      (!q || [i.item_id, i.sku, i.titulo].some(x => String(x || "").toLowerCase().includes(q))));
+    const ordem = {perdendo_com_margem:0, perdendo_sem_margem:1, sem_custo:2, compartilhando:3, ganhando:4, nao_elegivel:5};
+    itens.sort((a, b) => (ordem[grupo(a)] ?? 9) - (ordem[grupo(b)] ?? 9) || (b.lucro_ganhar ?? -1e9) - (a.lucro_ganhar ?? -1e9));
+    $("contagem").textContent = `${itens.length} de ${D.itens.length}`;
+    $("linhas").innerHTML = itens.map(i => {
+      const [cls, rot] = SIT[i.situacao] || ["cinza", i.situacao || "—"];
+      const mot = (i.motivos || []).map(m => MOTIVO[m] || m).join(", ");
+      const mg = i.margem_ganhar == null ? `<span class="mini">sem custo</span>` : `<span class="${i.da_margem ? "m-ok" : "m-bad"}">${pct(i.margem_ganhar)}</span>`;
+      return `<tr data-conta="${esc(i.conta)}" data-item="${esc(i.item_id)}">
+        <td class="tit"><div>${esc(i.titulo || "—")}</div><div class="mono">${esc(i.item_id)}${i.sku ? " · " + esc(i.sku) : ""}${D.itens.some(x => x.conta !== i.conta) || !$("conta").value ? " · " + esc(i.conta_nome) : ""}</div>${i.erro ? `<div class="mini m-bad">${esc(i.erro)}</div>` : ""}</td>
+        <td><span class="nk-selo ${cls}">${esc(rot)}</span>${mot && i.situacao === "perdendo" ? `<div class="mini">perde em: ${esc(mot)}</div>` : ""}</td>
+        <td class="num">${brl(i.preco)}</td>
+        <td class="num">${brl(i.preco_ganhar)}</td>
+        <td class="num">${brl(i.ganhador_preco)}${i.ganhador_item && i.ganhador_item !== i.item_id ? `<div class="mono">${esc(i.ganhador_item)}</div>` : ""}</td>
+        <td class="num">${pct(i.margem_atual)}</td>
+        <td class="num">${mg}${i.lucro_ganhar != null ? `<div class="mini">${brl(i.lucro_ganhar)}/venda</div>` : ""}</td>
+        <td class="num">${i.concorrentes ?? "—"}</td>
+        <td class="mini">${dataHora(i.lido_em)}</td></tr>`;
+    }).join("") || `<tr><td colspan="9" class="mini">Nada neste filtro.</td></tr>`;
+  }
+
+  async function abrir(conta, item) {
+    const g = $("gaveta");
+    g.hidden = false;
+    g.innerHTML = `<div class="gaveta-fundo"></div><aside class="gaveta"><button class="nk-btn fechar">Fechar</button><p class="mini">Carregando…</p></aside>`;
+    const fechar = () => { g.hidden = true; g.innerHTML = ""; };
+    g.querySelector(".gaveta-fundo").onclick = fechar; g.querySelector(".fechar").onclick = fechar;
+    let d;
+    try { d = await api(`/api/catalogo-ml/item?conta=${encodeURIComponent(conta)}&item=${encodeURIComponent(item)}`); }
+    catch (e) { g.querySelector("p").textContent = "Não foi possível carregar: " + e.message; return; }
+    const i = d.item, [cls, rot] = SIT[i.situacao] || ["cinza", i.situacao || "—"];
+    g.querySelector("aside").innerHTML = `<button class="nk-btn fechar">Fechar</button>
+      <h2>${esc(i.titulo || i.item_id)}</h2>
+      <div class="mono">${esc(i.item_id)} · ${esc(i.conta_nome)}${i.sku ? " · SKU " + esc(i.sku) : ""} · <a href="${linkML(i.item_id)}" target="_blank" rel="noopener">abrir no ML</a></div>
+      <p><span class="nk-selo ${cls}">${esc(rot)}</span></p>
+      <div class="grade2">
+        <div><small>Meu preço</small><b>${brl(i.preco)}</b><div class="mini">margem ${pct(i.margem_atual)}</div></div>
+        <div><small>Preço para ganhar</small><b>${brl(i.preco_ganhar)}</b><div class="mini">${i.margem_ganhar == null ? "sem custo" : "margem " + pct(i.margem_ganhar) + " · " + brl(i.lucro_ganhar) + "/venda"}</div></div>
+      </div>
+      ${i.taxas_origem ? `<p class="mini">${esc(i.taxas_origem)}</p>` : ""}
+      <h3>Concorrentes no catálogo (${d.concorrentes.length})</h3>
+      <div class="tab-wrap"><table class="cat"><thead><tr><th>Anúncio</th><th class="num">Preço</th><th>Frete</th><th>Tipo</th></tr></thead><tbody>
+      ${d.concorrentes.map(c => `<tr class="${c.meu ? "meu" : ""}"><td class="mono">${esc(c.item_id)}${c.meu ? " (meu)" : ""}${c.loja_oficial ? " · loja oficial" : ""}</td>
+        <td class="num">${brl(c.preco)}</td><td class="mini">${c.frete_gratis ? "grátis" : c.frete_gratis === 0 ? "pago" : "—"}${c.logistica === "fulfillment" ? " · Full" : ""}</td>
+        <td class="mini">${c.tipo === "gold_pro" ? "Premium" : c.tipo === "gold_special" ? "Clássico" : esc(c.tipo)}</td></tr>`).join("") || `<tr><td colspan="4" class="mini">Sem concorrentes lidos.</td></tr>`}
+      </tbody></table></div>
+      <h3>Histórico</h3>
+      <div class="tab-wrap"><table class="cat"><thead><tr><th>Quando</th><th>Situação</th><th class="num">Meu preço</th><th class="num">P/ ganhar</th></tr></thead><tbody>
+      ${d.historico.map(h => `<tr><td class="mini">${dataHora(h.em)}</td><td>${esc((SIT[h.situacao] || [, h.situacao])[1])}</td><td class="num">${brl(h.preco)}</td><td class="num">${brl(h.preco_ganhar)}</td></tr>`).join("")}
+      </tbody></table></div>`;
+    g.querySelector(".fechar").onclick = fechar;
+  }
+
+  $("cards").addEventListener("click", e => { const b = e.target.closest("[data-f]"); if (!b) return; filtro = b.dataset.f; desenhar(); });
+  $("linhas").addEventListener("click", e => { if (e.target.closest("a")) return; const tr = e.target.closest("tr[data-item]"); if (tr) abrir(tr.dataset.conta, tr.dataset.item); });
+  $("busca").addEventListener("input", () => D && desenhar());
+  $("conta").addEventListener("change", () => { try { localStorage.setItem("nk_catalogo_conta_v1974", $("conta").value); } catch (_) {} carregar(); });
+  $("atualizar").addEventListener("click", async () => {
+    try { await api("/api/catalogo-ml/atualizar", {method:"POST", body:"{}"}); (window.nkToast || alert)("Lendo o catálogo no Mercado Livre. A tela atualiza sozinha."); }
+    catch (e) { (window.nkToast || alert)("Não foi possível: " + e.message); }
+    setTimeout(carregar, 3000);
+  });
+  carregar();
+  setInterval(() => { if (!document.hidden) carregar(); }, 60000);
+})();
+</script>
+</body>
+</html>
