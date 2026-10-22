@@ -3881,12 +3881,24 @@ var state = {
         promoRows=Array.from(map.values());
 
         // Espelha no local, mas NÃO regrava o servidor apenas por abrir a página.
+        // V19.78: só espelha quando a lista MUDOU (sem contar o updatedAt). Gravar sempre, com horário
+        // novo, disparava o evento "storage" nas outras abas, que recarregavam e gravavam de volta:
+        // duas abas do Precificador ficavam num pingue-pongue sem fim (100% de CPU, "Página sem
+        // resposta", 22/10).
         try{
-          localStorage.setItem(PROMO_STORAGE_KEY,JSON.stringify({
-            rows:promoRows,
-            deleted:Array.from(promoDeleted),
-            updatedAt:new Date().toISOString()
-          }));
+          var promoLocalAtual=null;
+          try{promoLocalAtual=JSON.parse(rawLocal||"null");}catch(_){promoLocalAtual=null;}
+          var promoDeletedLista=Array.from(promoDeleted);
+          var promoIgual=!!promoLocalAtual&&
+            JSON.stringify(promoLocalAtual.rows||[])===JSON.stringify(promoRows)&&
+            JSON.stringify(promoLocalAtual.deleted||[])===JSON.stringify(promoDeletedLista);
+          if(!promoIgual){
+            localStorage.setItem(PROMO_STORAGE_KEY,JSON.stringify({
+              rows:promoRows,
+              deleted:promoDeletedLista,
+              updatedAt:new Date().toISOString()
+            }));
+          }
         }catch(_){}
 
         try{
