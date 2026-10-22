@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.80-CUSTO-EDITAVEL"
+APP_VERSION = "19.81-TIKTOK-EXTENSAO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -7221,6 +7221,10 @@ def tiktok_produtos_sincronizar() -> dict[str, Any]:
         token = str(dados.get("next_page_token") or "")
         if not token:
             break
+    return _tiktok_sku_gravar(vistos, apagar_ausentes=True)
+
+
+def _tiktok_sku_gravar(vistos: dict[str, dict[str, Any]], apagar_ausentes: bool) -> dict[str, Any]:
     agora = now_iso()
     with DB_LOCK:
         for sku_id, v in vistos.items():
@@ -7232,9 +7236,81 @@ def tiktok_produtos_sincronizar() -> dict[str, Any]:
                        (sku_id, v["product_id"], v["titulo"], v["status"], v["seller_sku"], v["warehouse_id"],
                         v["armazens"], v["qtd"], agora))
         # Variação que sumiu da loja sai da lista (o vínculo à mão fica guardado).
-        DB.execute("DELETE FROM tiktok_sku_v1964 WHERE visto_em<>?", (agora,))
+        if apagar_ausentes:
+            # V19.81: pelos ids vistos, não pelo horário (duas leituras no mesmo segundo).
+            for row in DB.execute("SELECT sku_id FROM tiktok_sku_v1964").fetchall():
+                if str(row["sku_id"]) not in vistos:
+                    DB.execute("DELETE FROM tiktok_sku_v1964 WHERE sku_id=?", (row["sku_id"],))
         DB.commit()
     return {"ok": True, "variacoes": len(vistos)}
+
+
+# V19.81: sem a Open API (o TikTok exige gerente de contas), a extensão NOROMAK_TIKTOK_ESTOQUE
+# lê a lista de produtos do Seller Center (sessão do vendedor no Edge) e manda para cá; o
+# cálculo é o mesmo da V19.64. Quem grava no TikTok é a extensão, e ela devolve o resultado.
+def tiktok_produtos_da_extensao(produtos: Any, completo: bool) -> dict[str, Any]:
+    """Produtos no formato do Seller Center (/api/v1/product/local/products/list). `completo` =
+    a extensão leu todas as páginas: só então quem não veio sai da lista."""
+    if not isinstance(produtos, list):
+        raise ValueError("Lista de produtos inválida.")
+    if completo and not produtos:
+        raise ValueError("Lista de produtos vazia: nada foi alterado.")  # leitura que falhou não esvazia a loja
+    vistos: dict[str, dict[str, Any]] = {}
+    for prod in produtos:
+        if not isinstance(prod, dict):
+            continue
+        for sku in prod.get("skus") or []:
+            if not isinstance(sku, dict) or not str(sku.get("id") or "").strip():
+                continue
+            inv = [q for q in (sku.get("quantities") or []) if isinstance(q, dict)]
+            vistos[str(sku["id"]).strip()] = {
+                "product_id": str(prod.get("product_id") or ""), "titulo": str(prod.get("product_name") or "")[:300],
+                "status": str(prod.get("product_status") if prod.get("product_status") is not None else ""),
+                "seller_sku": str(sku.get("seller_sku") or "").strip(),
+                "warehouse_id": str((inv[0] if inv else {}).get("warehouse_id") or ""),
+                "armazens": len(inv),
+                "qtd": _tiktok_quantidade((inv[0] if inv else {}).get("available_quantity")) if len(inv) == 1 else None,
+            }
+    return _tiktok_sku_gravar(vistos, apagar_ausentes=bool(completo))
+
+
+def tiktok_extensao_pendentes() -> dict[str, Any]:
+    modo = tiktok_estoque_config()["modo_estoque"]
+    itens = [{"sku_id": i["sku_id"], "product_id": i["product_id"], "warehouse_id": i["warehouse_id"],
+              "seller_sku": i["seller_sku"], "titulo": i["titulo"], "tiktok": i["tiktok"], "desejado": i["desejado"],
+              "apollo": i["apollo"], "pendente": i["pendente"]}
+             for i in tiktok_estoque_itens() if i["situacao"] == "enviar"]
+    return {"ok": True, "modo": modo, "pode_enviar": modo != "simulacao", "itens": itens}
+
+
+def tiktok_extensao_resultado(resultados: Any, ator: str) -> dict[str, Any]:
+    if not isinstance(resultados, list):
+        raise ValueError("Resultados inválidos.")
+    modo = tiktok_estoque_config()["modo_estoque"]
+    ok_count = erros = ignorados = 0
+    with TIKTOK_ESTOQUE_LOCK:
+        for r in resultados:
+            sku_id = str((r or {}).get("sku_id") or "").strip() if isinstance(r, dict) else ""
+            with DB_LOCK:
+                row = DB.execute("SELECT seller_sku FROM tiktok_sku_v1964 WHERE sku_id=?", (sku_id,)).fetchone()
+            if not row:
+                ignorados += 1
+                continue
+            de, para = _tiktok_quantidade(r.get("de")), _tiktok_quantidade(r.get("para"))
+            final = _tiktok_quantidade(r.get("final"))
+            if r.get("ok") is True:
+                ok_count += 1
+                if final is not None:
+                    with DB_LOCK:
+                        DB.execute("UPDATE tiktok_sku_v1964 SET qtd_tiktok=? WHERE sku_id=?", (final, sku_id))
+                        DB.commit()
+                _tiktok_estoque_log(sku_id, row["seller_sku"], de, para, modo, "OK",
+                                    f"pela extensão do Seller Center; TikTok ficou com {final if final is not None else '?'}", ator)
+            else:
+                erros += 1
+                _tiktok_estoque_log(sku_id, row["seller_sku"], de, para, modo, "ERRO",
+                                    f"pela extensão: {str(r.get('erro') or 'sem detalhe')}", ator)
+    return {"ok": True, "ok_count": ok_count, "erros": erros, "ignorados": ignorados}
 
 
 def tiktok_vinculo_definir(sku_id: str, codigos: str, ator: str) -> dict[str, Any]:
@@ -7586,6 +7662,10 @@ def tiktok_estoque_loop(stop_event: threading.Event) -> None:
                     r = tiktok_estoque_enviar(ator="sistema", automatico=True)
                     if r.get("erros"):
                         tiktok_log_event_se_mudou("estoque", "worker", "ERRO", f"{r['erros']} variação(ões) recusada(s)")
+            elif _tiktok_linhas_sku():
+                # V19.81: sem a API, as variações vêm da extensão; o rodízio do Apollo continua
+                # (quem envia é a extensão, pelo /extensao/pendentes).
+                tiktok_apollo_ler_proximo()
         except Exception as exc:
             tiktok_log_event_se_mudou("estoque", "worker", "ERRO", str(exc)[:800])
         stop_event.wait(20)
@@ -31829,6 +31909,14 @@ class AppHandler(BaseHTTPRequestHandler):
             if ctx is not None:
                 self.send_json(tiktok_estoque_payload())
             return
+        if path == "/api/tiktok-estoque/extensao/pendentes":  # V19.81: o que a extensão deve gravar
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                if str(ctx.get("app_role") or "") != "admin":
+                    self.send_json({"ok": False, "error": "Somente o perfil Admin."}, 403)
+                else:
+                    self.send_json(tiktok_extensao_pendentes())
+            return
         if path == "/api/integracoes/tiktok/logs":
             ctx = self.auth(admin_only=True)
             if ctx is not None:
@@ -33746,6 +33834,11 @@ class AppHandler(BaseHTTPRequestHandler):
                     audit(ctx["username"], "tiktok.estoque.enviar", f"{res['enviados']} ok, {res['erros']} erro")
                 elif path == "/api/tiktok-estoque/atualizar":
                     res = tiktok_produtos_sincronizar()
+                elif path == "/api/tiktok-estoque/extensao/produtos":  # V19.81
+                    res = tiktok_produtos_da_extensao(body.get("produtos"), completo=bool(body.get("completo")))
+                elif path == "/api/tiktok-estoque/extensao/resultado":  # V19.81
+                    res = tiktok_extensao_resultado(body.get("resultados"), ctx["username"])
+                    audit(ctx["username"], "tiktok.estoque.extensao", f"{res['ok_count']} ok, {res['erros']} erro")
                 else:
                     self.send_json({"ok": False, "error": "Rota não encontrada."}, 404)
                     return

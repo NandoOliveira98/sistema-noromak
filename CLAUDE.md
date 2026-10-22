@@ -402,6 +402,15 @@ mesma regra da Magalu (`_magalu_merge(..., origem=, campos=)`: outra origem não
 Tela `APP/tiktok-estoque.html` (`/tiktok-estoque`, menu Estoque e compras, módulo admin; mudar = perfil Admin). Rotas
 `GET /api/tiktok-estoque`, `POST /api/tiktok-estoque/{config,vinculo,enviar,atualizar}`,
 `POST /api/integracoes/tiktok/{importacao,sincronizar}`. Etiqueta = fase 3. Teste: `TESTES/test_tiktok_estoque_v1964.py`.
+**V19.81 — estoque pela extensão do Seller Center** (a Open API exige gerente de contas; decisão do dono 22/10). Extensão
+`NOROMAK_TIKTOK_ESTOQUE` (Edge, fora do repo, v0.2) usa as chamadas internas da página com a sessão do vendedor:
+`POST /api/v1/product/stock/sku/list` (lista por SKU, `in_shop_stock`), `/stock/query/sku` (relê antes de gravar) e
+`/sku/price/stocks/update` — grava **por diferença** (`quantity_variation`), por isso relê o atual na hora. Rotas
+`POST /api/tiktok-estoque/extensao/{produtos,resultado}` e `GET .../extensao/pendentes` (perfil Admin);
+`tiktok_produtos_da_extensao` só apaga quem não veio com `completo` e lista vazia é recusada. Simulação: a extensão
+nunca grava (`pode_enviar`). Sem a API conectada o `tiktok_estoque_loop` continua o rodízio do Apollo quando há
+variações. **Falta:** pedidos do TikTok sem API não entram na fila (o vendido no TikTok só sai quando o Apollo baixar).
+Teste: `TESTES/test_tiktok_extensao_v1981.py`.
 
 ### Magalu (V19.24, fase 0 de 5)
 Plano decidido com o dono em 14/10 (integração completa "igual ao ML", por fases): 0 conexão; 1 pedidos na
