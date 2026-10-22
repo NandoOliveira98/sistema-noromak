@@ -31,6 +31,16 @@ class PrazoDeDespacho(unittest.TestCase):
                                  PrazoEnvioMagalu="2026-10-23T02:59:59Z")])
         self.assertEqual(S.faturamento_payload()["itens"][0]["prazo"], "2026-10-22")
 
+    def test_meia_noite_utc_e_data_pura(self):
+        self.assertEqual(S._faturamento_prazo_dia({"PrazoEnvioMagalu": "2026-10-16T00:00:00Z"}), "2026-10-16")
+        self.assertEqual(S._faturamento_prazo_dia({"PrazoEnvioMagalu": "2026-10-16T00:00:00.000+00:00"}), "2026-10-16")
+
+    def test_data_absurda_nao_derruba_a_tela(self):
+        self.assertEqual(S._faturamento_prazo_dia({"PrazoEnvioMagalu": "0001-01-01T00:00:01Z"}), "0001-01-01")
+        gravar_como_admin([linha("1500000000000010", "B1", Marketplace="MAGALU",
+                                 PrazoEnvioMagalu="0001-01-01T00:00:01Z")])
+        self.assertEqual(len(S.faturamento_payload()["itens"]), 1)
+
     def test_fila_lida_uma_vez_por_tela(self):
         gravar_como_admin([linha("2000000000000001", "A1", Marketplace="MERCADO LIVRE")])
         real = S.get_storage

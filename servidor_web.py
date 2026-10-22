@@ -16911,11 +16911,13 @@ def _faturamento_prazo_dia(row: dict[str, Any]) -> str:
     texto = str(row.get("PrazoEnvioMagalu") or "").strip()
     try:
         dt = datetime.fromisoformat(texto.replace("Z", "+00:00"))
-    except ValueError:
+        # Meia-noite UTC exata = data pura (sem hora): converter jogaria para o dia anterior.
+        meia_noite = (dt.hour, dt.minute, dt.second, dt.microsecond) == (0, 0, 0, 0)
+        if dt.tzinfo is not None and not (meia_noite and dt.utcoffset() == timedelta(0)):
+            dt = dt.astimezone(timezone(timedelta(hours=-3)))
+        return dt.date().isoformat()
+    except (ValueError, OverflowError):  # data absurda (ano 0001...) não derruba a tela
         return _ml_parse_iso_date(texto)
-    if dt.tzinfo is not None:
-        dt = dt.astimezone(timezone(timedelta(hours=-3)))
-    return dt.date().isoformat()
 
 
 def _faturamento_fila() -> tuple[list[tuple[str, str]], dict[str, str]]:
