@@ -519,6 +519,11 @@ até 3 dias; venda antiga sem custo congelado = "estimado" (o digitado na Demand
 buscado pela mesma rotina (`financeiro_shopee_escrow_pendentes`, 30 dias): antes só pelo botão, e 237 de 292
 pedidos de outubro estavam "parciais". A regra antiga (`_financeiro_custo_unitario`) segue no Pós-venda e na
 análise de kits. Teste: `TESTES/test_financeiro_custo_v1977.py`.
+**V19.79 — a planilha antiga do Precificador não vale** (dono, 22/10): os produtos com `_id` `source-N` que nunca
+foram lidos do Apollo (`custosFiliais` vazio) têm em quase metade 30–42% a mais (WAP331 74,97 × 53,04 real; JFC217
+91,00 × 64,38; 10256080 965,73 × 731,64). Sem leitura do Apollo ficam **sem custo** (o dono digita na Demanda). O
+último custo visto (`custo_auto`) só vale de origem "Precificador" e de produto que não é só da planilha. A Demanda
+de Compra usa a mesma regra (`compras_custo_aracatuba`).
 **V18.36 — o Billing devolve os MESMOS lançamentos em `BILL` e em `CREDIT_NOTE`.** Os dois
 sincronismos de setembro voltaram com 5.773 itens idênticos. Marcar crédito pelo `document_type`
 **pedido** fazia cada cobrança ganhar uma cópia negativa que a anulava: R$ 132 mil de faturamento

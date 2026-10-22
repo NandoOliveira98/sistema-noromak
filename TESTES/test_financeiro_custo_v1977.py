@@ -193,15 +193,38 @@ class CustoDoFinanceiro(TesteNoromak):
         _vender("V1", "KIT-ACP126/0893764271", 1, 46.90, (HOJE - timedelta(days=10)).isoformat())
         self.assertAlmostEqual(_sku(_periodo(), "KIT-ACP126/0893764271")["cmv"], 16.48)
 
-    def test_ultimo_custo_visto_vindo_do_precificador_vale(self):
-        # WEO0029: zerado agora; o último custo visto veio do Precificador (Araçatuba), não do Apollo misturado
-        _precificador([{"sku": "WEO0029", "custo": 0, "filialCusto": 1, "custosFiliais": _filiais(0, 0)}])
+    def test_custo_da_planilha_antiga_nao_vale(self):
+        # 22/10 (dono): WAP331 tinha R$ 74,97 na planilha antiga do Precificador; o certo é R$ 53,04
+        # (JFC217 91,00 x 64,38; 10256080 965,73 x 731,64). Quase metade da planilha tem 30-42% a mais.
+        # Sem custo lido do Apollo, fica "sem custo" — nem o custo da planilha, nem o último visto.
+        _precificador([{"_id": "source-1094", "sku": "WAP331", "custo": 74.97}])
         with S.DB_LOCK:
             S.DB.execute("INSERT OR REPLACE INTO custos_conhecidos_v1807(codigo,custo_auto,origem_auto,data_auto) "
-                         "VALUES('WEO0029',24.77,'Precificador',?)", (S.now_iso(),))
+                         "VALUES('WAP331',74.97,'Precificador',?)", (S.now_iso(),))
             S.DB.commit()
-        _vender("V1", "WEO0029", 1, 42.90, (HOJE - timedelta(days=10)).isoformat())
-        self.assertAlmostEqual(_sku(_periodo(), "WEO0029")["cmv"], 24.77)
+        _vender("V1", "WAP331", 1, 138.90, (HOJE - timedelta(days=10)).isoformat())
+        _vender("V2", "WAP331", 1, 138.90, HOJE.isoformat())
+        self.assertEqual(S.financeiro_custo_congelar(), 0)
+        self.assertTrue(_sku(_periodo(), "WAP331")["sem_custo"])
+
+    def test_demanda_de_compra_tambem_nao_usa_a_planilha_antiga(self):
+        _precificador([{"_id": "source-1094", "sku": "WAP331", "produto": "FILTRO AR", "custo": 74.97},
+                       {"_id": "source-7", "sku": "LIDO1", "custo": 9.0, "filialCusto": 1,
+                        "custosFiliais": _filiais(0, 0)}])
+        with S.DB_LOCK:
+            for cod, v in (("WAP331", 74.97), ("LIDO1", 9.0)):
+                S.DB.execute("INSERT OR REPLACE INTO custos_conhecidos_v1807(codigo,custo_auto,origem_auto,data_auto) "
+                             "VALUES(?,?,'Precificador',?)", (cod, v, S.now_iso()))
+            S.DB.commit()
+        ctx = S._financeiro_custos_aracatuba()
+        self.assertEqual(S.compras_custo_aracatuba("WAP331", ctx)[0], None)          # só planilha: sem custo
+        self.assertEqual(S.compras_custo_aracatuba("LIDO1", ctx)[:2], (9.0, "ultimo"))  # lido do Apollo e zerou
+
+    def test_custo_digitado_no_precificador_depois_da_planilha_vale(self):
+        # produto cadastrado/editado no Precificador (não é da planilha antiga) mantém o custo digitado
+        _precificador([{"_id": "local-123", "sku": "NOVO1", "custo": 20.0}])
+        _vender("V1", "NOVO1", 1, 50.0, HOJE.isoformat())
+        self.assertAlmostEqual(_sku(_periodo(), "NOVO1")["cmv"], 20.0)
 
     def test_escrow_da_shopee_buscado_sozinho(self):
         _precificador([{"sku": "X1", "custo": 10.0}])

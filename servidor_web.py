@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.78-CUSTO-KIT"
+APP_VERSION = "19.79-CUSTO-PLANILHA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -24013,6 +24013,7 @@ def _financeiro_custos_aracatuba(com_vendas_ml: bool = True) -> dict[str, Any]:
     produtos = dados.get("products") if isinstance(dados, dict) else None
     prec: dict[str, float | None] = {}
     prec_apollo: dict[str, float | None] = {}   # só o custosFiliais (vem do Apollo); sem o custo digitado
+    so_planilha: set[str] = set()               # produto da planilha antiga que nunca foi lido do Apollo
     for p in produtos if isinstance(produtos, list) else []:
         if not isinstance(p, dict) or p.get("isKit"):
             continue
@@ -24021,12 +24022,20 @@ def _financeiro_custos_aracatuba(com_vendas_ml: bool = True) -> dict[str, Any]:
             continue
         ara = None
         filiais = p.get("custosFiliais")
+        lido_do_apollo = isinstance(filiais, list) and any(isinstance(f, dict) for f in filiais)
         for f in filiais if isinstance(filiais, list) else []:
             if isinstance(f, dict) and str(f.get("revenda")) == REVENDA_ARACATUBA:
                 v = _money_number(f.get("custo_medio"))
                 ara = v if v and v > 0 else None
         prec_apollo[codigo] = ara
-        if ara is None and str(p.get("filialCusto") or REVENDA_ARACATUBA) == REVENDA_ARACATUBA:
+        # 22/10 (dono): o custo da planilha antiga embutida no Precificador ("_id" source-N, nunca lido do
+        # Apollo) tem 30-42% a mais em quase metade dos produtos (WAP331 74,97 x 53,04; JFC217 91,00 x 64,38;
+        # 10256080 965,73 x 731,64). Sem leitura do Apollo, ele NÃO vale; o digitado/cadastrado depois vale.
+        da_planilha = str(p.get("_id") or "").startswith("source-")
+        if da_planilha and not lido_do_apollo:
+            so_planilha.add(codigo)
+        if (ara is None and not lido_do_apollo and not da_planilha
+                and str(p.get("filialCusto") or REVENDA_ARACATUBA) == REVENDA_ARACATUBA):
             v = _money_number(p.get("custo"))
             ara = v if v and v > 0 else None
         prec[codigo] = ara
@@ -24042,13 +24051,15 @@ def _financeiro_custos_aracatuba(com_vendas_ml: bool = True) -> dict[str, Any]:
                 apollo[str(r["codigo"] or "").strip().upper()] = float(v)
         for r in DB.execute("SELECT codigo, custo_manual FROM custos_conhecidos_v1807 WHERE custo_manual > 0").fetchall():
             manual[str(r["codigo"] or "").strip().upper()] = float(r["custo_manual"])
-        # 22/10 (produção): o último custo visto que veio do PRECIFICADOR é o de Araçatuba (filialCusto 1 em
-        # quase todos); só o lido direto do Apollo ("Apollo") mistura as filiais e continua fora.
+        # 22/10 (dono): o "último custo visto" (custos_conhecidos_v1807.custo_auto) só vale quando veio do
+        # PRECIFICADOR (o de origem "Apollo" mistura as filiais) e o produto não é só da planilha antiga
+        # (senão é cópia do custo inflado da planilha). Produto lido do Apollo que depois zerou mantém o custo.
         ultimo_prec = {str(r["codigo"] or "").strip().upper(): float(r["custo_auto"]) for r in DB.execute(
             "SELECT codigo, custo_auto FROM custos_conhecidos_v1807 WHERE custo_auto > 0 AND origem_auto='Precificador'")}
         # só a estimativa usa o custo da venda do ML; a rotina de congelar não precisa ler a tabela
         snaps = DB.execute("SELECT sku, unit_cost FROM ml_profitability_snapshot WHERE unit_cost > 0 "
                            "ORDER BY captured_at").fetchall() if com_vendas_ml else []
+    ultimo_prec = {k: v for k, v in ultimo_prec.items() if k not in so_planilha}
     conhecidos = set(prec) | set(apollo) | set(manual) | set(ultimo_prec)
     venda: dict[str, float] = {}
     for r in snaps:
@@ -24122,6 +24133,23 @@ def _financeiro_custo_aracatuba(sku: str, ctx: dict[str, Any], congelar: bool = 
             break
     ctx["cache"][chave] = resultado
     return resultado
+
+
+def compras_custo_aracatuba(codigo: str, ctx: dict[str, Any]) -> tuple[float | None, str, str]:
+    """V19.78: custo da Demanda de Compra pela regra do Financeiro (só Araçatuba; nunca a planilha antiga
+    do Precificador nem o último custo de outra filial). (custo, origem, data) com os rótulos da tela:
+    apollo (custo de hoje), manual (digitado), ultimo (último de Araçatuba visto), venda (custo da venda do ML)."""
+    hoje = ctx["prec"].get(codigo)
+    if hoje:
+        return float(hoje), "apollo", ""
+    if ctx["manual"].get(codigo):
+        return float(ctx["manual"][codigo]), "manual", ""
+    for v in (ctx["apollo"].get(codigo), ctx["ultimo_prec"].get(codigo)):
+        if v:
+            return float(v), "ultimo", ""
+    if ctx["venda"].get(codigo):
+        return float(ctx["venda"][codigo]), "venda", ""
+    return None, "", ""
 
 
 def financeiro_custo_congelar(dias: int = FINANCEIRO_CONGELA_DIAS) -> int:
@@ -30129,12 +30157,16 @@ def compras_demanda_payload(fornecedor: str, dias: int) -> dict[str, Any]:
     # continuar valendo quando o estoque zerar e o Apollo devolver custo 0.
     custos_registrar_auto([(c, p["custo"]) for c, p in produtos.items() if p["custo"]], "Precificador")
     reservas = _compras_custos_reserva(produtos)
+    custos_ctx = _financeiro_custos_aracatuba()   # V19.78: só Araçatuba, nunca a planilha antiga
     itens = []
     for codigo, p in produtos.items():
         if not do_fornecedor(codigo, p["descricao"]):
             continue
         v = vendas.get(codigo, {})
-        custo, origem, data_custo = _compras_resolver_custo(p["custo"], reservas.get(codigo, {}))
+        custo, origem, data_custo = compras_custo_aracatuba(codigo, custos_ctx)
+        if origem in ("manual", "ultimo", "venda"):
+            data_custo = (reservas.get(codigo, {}).get({"manual": "data_manual", "ultimo": "data_auto",
+                                                         "venda": "data_venda"}[origem]) or "")
         itens.append({"codigo": codigo, "descricao": p["descricao"], "curva": p["curva"], "custo": custo,
                       "custo_origem": origem, "custo_data": data_custo,
                       "vendido": int(v.get("ml", 0) + v.get("shopee", 0)),
