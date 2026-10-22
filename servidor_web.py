@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.72-CADASTRO-SEM-ACENTO"
+APP_VERSION = "19.73-FATURAMENTO-DIA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -16957,18 +16957,38 @@ def faturamento_loop(stop_event: threading.Event) -> None:
         stop_event.wait(120)
 
 
+def _faturamento_prazos() -> dict[str, str]:
+    """V19.73: prazo de despacho (AAAA-MM-DD) de cada pedido da fila — ML pela data limite do
+    envio, Magalu pelo prazo da entrega. Shopee não tem prazo na fila: fica vazio (a tela
+    mostra em qualquer data, decisão do dono 22/10)."""
+    with DB_LOCK:
+        pendentes, _, _ = get_storage("conf_pedidos")
+    prazos: dict[str, str] = {}
+    for row in _rows_from_storage_value(pendentes):
+        if not isinstance(row, dict):
+            continue
+        pedido = str(order_number(row) or "").strip()
+        dia = _ml_parse_iso_date(row.get("DataLimiteDespachoMercadoLivre") or row.get("PrazoEnvioMagalu"))
+        if pedido and dia and (normalize(pedido) not in prazos or dia < prazos[normalize(pedido)]):
+            prazos[normalize(pedido)] = dia
+    return prazos
+
+
 def faturamento_payload() -> dict[str, Any]:
     """A tela: pedidos da fila de pendentes com a última conferência de cada um."""
     pend = _faturamento_pendentes()
+    prazos = _faturamento_prazos()
     with DB_LOCK:
         estado = {r["order_key"]: dict(r) for r in DB.execute("SELECT * FROM faturamento_v1943").fetchall()}
     itens = []
     for pedido, mp in pend:
         e = estado.get(normalize(pedido))
+        dia = prazos.get(normalize(pedido), "")
         if not e:
-            itens.append({"pedido": pedido, "marketplace": mp, "situacao": "nao_conferido", "motivo": "Ainda não conferido."})
+            itens.append({"pedido": pedido, "marketplace": mp, "situacao": "nao_conferido", "motivo": "Ainda não conferido.",
+                          "prazo": dia})
             continue
-        itens.append({"pedido": pedido, "marketplace": mp, "situacao": e["situacao"], "motivo": e["motivo"],
+        itens.append({"pedido": pedido, "marketplace": mp, "situacao": e["situacao"], "motivo": e["motivo"], "prazo": dia,
                       "cliente": e["cliente"], "nome": e["nome"], "atendimento": e["atendimento"],
                       "valor_pedido": e["valor_pedido"], "valor_atendimento": e["valor_atendimento"],
                       "conferido_em": e["conferido_em"], "observacao": FATURAMENTO_OBS.get(mp, mp.upper())})

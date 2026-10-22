@@ -39,6 +39,10 @@ td.num{text-align:right;white-space:nowrap}
     <div class="barra">
       <button class="nk-btn" id="btnLote" onclick="executarLote()" disabled>Faturar selecionados</button>
       <button class="nk-btn" onclick="carregar()">Atualizar</button>
+      <!-- V19.73: pedidos a faturar no dia pelo prazo de despacho (padrão hoje; hoje inclui os
+           atrasados). Sem prazo (Shopee) aparece em qualquer data. Em branco = todas. -->
+      <label class="resumo">Despachar em <input type="date" id="filtroDia" onchange="desenhar()"></label>
+      <button class="nk-btn" onclick="document.getElementById('filtroDia').value='';desenhar()">Todas as datas</button>
       <span class="resumo" id="resumo"></span>
     </div>
     <div class="tabela"><table><thead id="cab"></thead><tbody id="corpo"></tbody></table></div>
@@ -61,17 +65,21 @@ async function carregar(){
   if(!d.ok){document.getElementById("corpo").innerHTML=`<tr><td class=vazio>${esc(d.error||"Falha ao carregar.")}</td></tr>`;return;}
   ITENS=d.itens||[];desenhar();
 }
+function hojeLocal(){const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");}
+function doDia(){const f=document.getElementById("filtroDia").value;if(!f)return ITENS;const h=f===hojeLocal();return ITENS.filter(i=>!i.prazo||(h?i.prazo<=f:i.prazo===f));}
+const atrasado=i=>i.prazo&&i.prazo<hojeLocal();
+const prazoTxt=i=>i.prazo?i.prazo.split("-").reverse().join("/"):"—";
 function desenhar(){
-  const cont={};ITENS.forEach(i=>{const g=grupo(i.situacao);cont[g]=(cont[g]||0)+1;});
+  const cont={};doDia().forEach(i=>{const g=grupo(i.situacao);cont[g]=(cont[g]||0)+1;});
   document.getElementById("abas").innerHTML=ABAS.map(([k,t])=>`<button class="nk-tab${k===ABA?" ativo":""}" aria-pressed="${k===ABA}" onclick="ABA='${k}';desenhar()">${t} (${cont[k]||0})</button>`).join("");
-  const lista=ITENS.filter(i=>grupo(i.situacao)===ABA);
+  const lista=doDia().filter(i=>grupo(i.situacao)===ABA);
   const sel=ABA==="pronto";
-  document.getElementById("cab").innerHTML=`<tr>${sel?'<th><input type=checkbox id=todos onchange="marcarTodos(this.checked)" aria-label="Selecionar todos"></th>':""}<th>Pedido</th><th>Marketplace</th><th>Cliente</th><th>Atendimento</th><th class=num>Venda</th><th class=num>Atendimento</th><th>Situação</th></tr>`;
+  document.getElementById("cab").innerHTML=`<tr>${sel?'<th><input type=checkbox id=todos onchange="marcarTodos(this.checked)" aria-label="Selecionar todos"></th>':""}<th>Pedido</th><th>Marketplace</th><th>Cliente</th><th>Prazo</th><th>Atendimento</th><th class=num>Venda</th><th class=num>Atendimento</th><th>Situação</th></tr>`;
   document.getElementById("corpo").innerHTML=lista.length?lista.map(i=>{
     const r=RES[i.pedido];
     const sit=r?`<span class="${r.ok?"res-ok":"res-erro"}">${esc(r.texto)}</span>`:esc(i.situacao==="pronto_caixa"?"Romaneio já solto: falta o caixa.":(i.motivo||(sel?"Pronto":"")));
-    return `<tr>${sel?`<td><input type=checkbox class=sel value="${esc(i.pedido)}" onchange="atualizarBarra()" ${RODANDO?"disabled":""}></td>`:""}<td>${esc(i.pedido)}</td><td>${esc(i.marketplace)}</td><td>${esc(i.nome||"")}${i.cliente?` <small>(${esc(i.cliente)})</small>`:""}</td><td>${esc(i.atendimento||"—")}</td><td class=num>${brl(i.valor_pedido)}</td><td class=num>${brl(i.valor_atendimento)}</td><td>${sit}</td></tr>`;
-  }).join(""):`<tr><td colspan=8 class=vazio>Nada aqui.</td></tr>`;
+    return `<tr>${sel?`<td><input type=checkbox class=sel value="${esc(i.pedido)}" onchange="atualizarBarra()" ${RODANDO?"disabled":""}></td>`:""}<td>${esc(i.pedido)}</td><td>${esc(i.marketplace)}</td><td>${esc(i.nome||"")}${i.cliente?` <small>(${esc(i.cliente)})</small>`:""}</td><td${atrasado(i)?' class=res-erro title="Prazo de despacho já passou"':""}>${esc(prazoTxt(i))}${atrasado(i)?" atrasado":""}</td><td>${esc(i.atendimento||"—")}</td><td class=num>${brl(i.valor_pedido)}</td><td class=num>${brl(i.valor_atendimento)}</td><td>${sit}</td></tr>`;
+  }).join(""):`<tr><td colspan=9 class=vazio>Nada aqui.</td></tr>`;
   atualizarBarra();
 }
 function selecionados(){return [...document.querySelectorAll("input.sel:checked")].map(e=>ITENS.find(i=>i.pedido===e.value)).filter(Boolean);}
@@ -126,6 +134,7 @@ async function executarLote(){
   nkToast(`${feitos} de ${s.length} enviados ao caixa.`);
   desenhar();
 }
+document.getElementById("filtroDia").value=hojeLocal();
 carregar();
 setInterval(()=>{if(!RODANDO&&!document.hidden)carregar();},60000);
 </script>
