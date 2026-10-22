@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.71-AVISO-FILIAL"
+APP_VERSION = "19.72-CADASTRO-SEM-ACENTO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -15947,9 +15947,34 @@ class PortaErro(Exception):
         self.incerto = incerto
 
 
+# V19.72: aviso do Guilherme (22/10) — cadastro que vai ao Apollo não pode ter acento,
+# ç nem caractere especial (travessão, aspas curvas, º/ª). A porta também limpa, mas o
+# filtro fica aqui, antes de qualquer cliente/criar, cliente/atualizar e cliente/credito.
+EXP_ROTAS_SEM_ACENTO = ("cliente/criar", "cliente/atualizar", "cliente/credito")
+EXP_TROCA_ESPECIAIS = str.maketrans({"–": "-", "—": "-", "‒": "-", "―": "-", "“": "", "”": "",
+                                     "„": "", "‘": "", "’": "", "‚": "", "´": "", "`": "", "«": "", "»": ""})
+
+
+def _exp_texto_sem_acento(texto: str) -> str:
+    base = unicodedata.normalize("NFKD", texto.translate(EXP_TROCA_ESPECIAIS))
+    base = base.encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"\s+", " ", base).strip()
+
+
+def _exp_corpo_sem_acento(rota: str, corpo: Any) -> Any:
+    if rota not in EXP_ROTAS_SEM_ACENTO:
+        return corpo
+    if isinstance(corpo, dict):
+        return {k: (v if k == "email" else _exp_corpo_sem_acento(rota, v)) for k, v in corpo.items()}
+    if isinstance(corpo, list):
+        return [_exp_corpo_sem_acento(rota, v) for v in corpo]
+    return _exp_texto_sem_acento(corpo) if isinstance(corpo, str) else corpo
+
+
 def _exp_porta(rota: str, corpo: dict[str, Any], *, escrita: bool = False) -> dict[str, Any]:
     if not CHAVE_CRM:
         raise PortaErro("CHAVE_CRM não está configurada no servidor.")
+    corpo = _exp_corpo_sem_acento(rota, corpo)
     req = urllib.request.Request(
         f"{EXP_PORTA_BASE}/{rota}", data=json.dumps(corpo).encode("utf-8"), method="POST",
         headers={"X-Chave-Expedicao": CHAVE_CRM, "Content-Type": "application/json",
