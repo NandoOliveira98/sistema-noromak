@@ -17,39 +17,77 @@
 <script defer src="/expedicao/nk-menu.js?v=19.74" data-shell></script>
 <style>
 body{margin:0;background:var(--nk-canvas);color:var(--nk-ink);font-family:var(--nk-font)}
-.nk-cab select,.barra input[type=search]{font:inherit;font-size:13px;border:1px solid var(--nk-line);background:var(--nk-tile);color:var(--nk-ink);border-radius:8px;padding:7px 10px}
-.barra{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;margin-bottom:10px}
-.barra input[type=search]{width:320px;max-width:100%}
-.filtros{display:flex;flex-wrap:wrap;gap:6px}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-bottom:14px}
-.card{border:1px solid var(--nk-line);border-radius:12px;padding:11px 13px;background:var(--nk-tile);cursor:pointer;text-align:left;font:inherit;color:inherit}
-.card small{display:block;color:var(--nk-ink2);font-size:11.5px;font-weight:600}
-.card b{display:block;font-size:22px;color:var(--nk-head);font-variant-numeric:tabular-nums;margin-top:3px}
-.card.on{outline:2px solid var(--nk-pri);outline-offset:-1px}
-.card.ok b{color:var(--nk-ok)}.card.bad b{color:var(--nk-bad)}.card.warn b{color:var(--nk-warn)}
+.nk-cab select{font:inherit;font-size:13px;border:1px solid var(--nk-line);background:var(--nk-tile);color:var(--nk-ink);border-radius:9px;padding:8px 10px}
+.status-leitura{display:inline-flex;align-items:center;gap:6px}
+.status-leitura i.ponto{width:8px;height:8px;border-radius:50%;background:var(--nk-ok);display:inline-block}
+.status-leitura i.ponto.lendo{background:var(--nk-warn);animation:pulsa 1s infinite alternate}
+@keyframes pulsa{to{opacity:.35}}
+button.nk-kpi.on{border-color:var(--nk-pri);box-shadow:0 0 0 3px var(--nk-foco)}
+.oport{display:flex;align-items:center;gap:16px;flex-wrap:wrap;justify-content:space-between;border:1px solid var(--nk-warn-ln);background:var(--nk-warn-bg);border-radius:13px;padding:14px 18px}
+.oport h2{margin:0;font-size:15px;color:var(--nk-head)}
+.oport p{margin:3px 0 0;font-size:12.5px;color:var(--nk-ink2)}
+.oport .valor{font-size:22px;font-weight:800;color:var(--nk-warn);font-variant-numeric:tabular-nums;text-align:right}
+.oport .valor small{display:block;font-size:11px;font-weight:600;color:var(--nk-ink2)}
+.oport.ok{border-color:var(--nk-ok-ln);background:var(--nk-ok-bg)}
+.barra{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;padding-bottom:12px;border-bottom:1px solid var(--nk-line2);margin-bottom:2px}
+.busca{position:relative;flex:1;max-width:380px}
+.busca input{font:inherit;font-size:13px;width:100%;box-sizing:border-box;border:1px solid var(--nk-line);background:var(--nk-tile);color:var(--nk-ink);border-radius:9px;padding:8px 10px 8px 32px}
+.busca input:focus{outline:0;border-color:var(--nk-pri);box-shadow:0 0 0 3px var(--nk-foco)}
+.busca .nk-i-search{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--nk-ink3)}
 .tab-wrap{overflow-x:auto}
-table.cat{width:100%;border-collapse:collapse;font-size:13px}
-table.cat th{text-align:left;font-size:11.5px;color:var(--nk-ink2);font-weight:700;padding:8px;border-bottom:1px solid var(--nk-line);white-space:nowrap}
-table.cat td{padding:8px;border-bottom:1px solid var(--nk-line);vertical-align:top}
-table.cat tbody tr{cursor:pointer}
-table.cat tbody tr:hover{background:var(--nk-cinza-bg)}
+table.cat{width:100%;border-collapse:separate;border-spacing:0;font-size:13px}
+table.cat thead th{position:sticky;top:0;background:var(--nk-tile);text-align:left;font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--nk-ink3);font-weight:700;padding:10px;border-bottom:1px solid var(--nk-line);white-space:nowrap}
+table.cat td{padding:11px 10px;border-bottom:1px solid var(--nk-line2);vertical-align:middle}
+table.cat tbody tr{cursor:pointer;transition:background .12s}
+table.cat tbody tr:hover{background:var(--nk-hover)}
+table.cat tbody tr.destaque td:first-child{box-shadow:inset 3px 0 0 var(--nk-warn)}
+table.cat th.num{text-align:right}
 .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
-.mini{font-size:11.5px;color:var(--nk-ink2)}
-.mono{font-family:Consolas,monospace;font-size:11.5px;color:var(--nk-ink3)}
-.tit{max-width:340px}
-.m-ok{color:var(--nk-ok);font-weight:700}.m-bad{color:var(--nk-bad);font-weight:700}
-.gaveta-fundo{position:fixed;inset:0;background:rgba(0,0,0,.35);z-index:50}
-.gaveta{position:fixed;top:0;right:0;bottom:0;width:min(560px,100%);background:var(--nk-tile);z-index:51;overflow:auto;padding:18px 18px 40px;box-sizing:border-box;box-shadow:-8px 0 24px rgba(0,0,0,.2)}
-.gaveta h2{margin:0 0 4px;font-size:18px;color:var(--nk-head)}
-.gaveta h3{margin:18px 0 8px;font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--nk-ink2)}
-.gaveta .fechar{position:absolute;top:12px;right:12px}
-.grade2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.grade2>div{border:1px solid var(--nk-line);border-radius:10px;padding:8px 10px}
-.grade2 small{display:block;color:var(--nk-ink2);font-size:11px}
-.grade2 b{font-size:16px;color:var(--nk-head)}
-tr.meu td{background:var(--nk-pri-bg, rgba(0,0,0,.04));font-weight:700}
+.mini{font-size:11.5px;color:var(--nk-ink3)}
+.mono{font-family:Consolas,monospace;font-size:11px;color:var(--nk-ink3)}
+.anun b{display:block;font-weight:600;color:var(--nk-head);max-width:360px;line-height:1.3}
+.anun .meta{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:3px}
+.conta{font-size:10.5px;font-weight:700;border-radius:999px;padding:1px 7px;background:var(--nk-cinza-bg);color:var(--nk-ink2)}
+.preco b{font-size:13.5px;color:var(--nk-head)}
+.dif{display:block;font-size:11.5px;font-weight:700;margin-top:2px}
+.dif.bad{color:var(--nk-bad)}.dif.ok{color:var(--nk-ok)}
+.margem{display:inline-block;min-width:54px;text-align:center;font-weight:800;font-size:12px;border-radius:7px;padding:3px 7px;font-variant-numeric:tabular-nums}
+.margem.ok{background:var(--nk-ok-bg);color:var(--nk-ok)}.margem.bad{background:var(--nk-bad-bg);color:var(--nk-bad)}.margem.nada{background:var(--nk-cinza-bg);color:var(--nk-ink3);font-weight:600}
+.motivos{display:flex;gap:4px;flex-wrap:wrap;margin-top:4px}
+.motivos span{font-size:10.5px;border:1px solid var(--nk-line);border-radius:5px;padding:0 5px;color:var(--nk-ink2)}
+.vazio{padding:28px;text-align:center;color:var(--nk-ink3)}
+.gaveta-fundo{position:fixed;inset:0;background:rgba(10,20,35,.38);z-index:50;animation:aparece .15s}
+.gaveta{position:fixed;top:0;right:0;bottom:0;width:min(600px,100%);background:var(--nk-canvas);z-index:51;overflow:auto;box-sizing:border-box;box-shadow:var(--nk-sombra2);animation:entra .18s ease-out}
+@keyframes entra{from{transform:translateX(30px);opacity:0}}@keyframes aparece{from{opacity:0}}
+.g-cab{background:var(--nk-tile);border-bottom:1px solid var(--nk-line);padding:18px 20px;position:sticky;top:0;z-index:1}
+.g-cab h2{margin:8px 0 4px;font-size:17px;color:var(--nk-head);padding-right:44px;line-height:1.3}
+.g-cab .fechar{position:absolute;top:14px;right:14px;border:0;background:var(--nk-cinza-bg);color:var(--nk-ink2);width:32px;height:32px;border-radius:8px;cursor:pointer;font-size:18px}
+.g-cab a{color:var(--nk-pri);font-weight:600}
+.g-corpo{padding:16px 20px 40px;display:grid;gap:14px}
+.g-tiles{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.g-tile{background:var(--nk-tile);border:1px solid var(--nk-line);border-radius:12px;padding:11px 13px}
+.g-tile small{display:block;font-size:11px;color:var(--nk-ink2);font-weight:600}
+.g-tile b{display:block;font-size:19px;color:var(--nk-head);margin:4px 0 3px;font-variant-numeric:tabular-nums}
+.g-tile.alvo{border-color:var(--nk-pri);box-shadow:0 0 0 3px var(--nk-foco)}
+.g-sec{background:var(--nk-tile);border:1px solid var(--nk-line);border-radius:12px;padding:14px}
+.g-sec h3{margin:0 0 10px;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--nk-ink3)}
+.rank{display:grid;gap:7px}
+.rank-l{display:grid;grid-template-columns:24px 1fr 84px;gap:8px;align-items:center;font-size:12.5px}
+.rank-l .pos{font-weight:800;color:var(--nk-ink3);text-align:center}
+.rank-l .barra-p{position:relative;height:28px;border-radius:7px;background:var(--nk-tile2);border:1px solid var(--nk-line2);overflow:hidden}
+.rank-l .barra-p i{position:absolute;left:0;top:0;bottom:0;background:var(--nk-info-bg)}
+.rank-l .barra-p>span{position:absolute;left:9px;right:6px;top:50%;transform:translateY(-50%);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11.5px;color:var(--nk-ink)}
+.rank-l.meu .barra-p{border-color:var(--nk-warn-ln)}
+.rank-l.meu .barra-p i{background:var(--nk-warn-bg)}
+.rank-l.meu .pos,.rank-l.meu .num b{color:var(--nk-warn)}
+.rank-l.lider .pos,.rank-l.lider .num b{color:var(--nk-ok)}
+.linha-tempo{list-style:none;margin:0;padding:0}
+.linha-tempo li{display:grid;grid-template-columns:96px auto 1fr;gap:10px;padding:8px 0;border-bottom:1px solid var(--nk-line2);font-size:12.5px;align-items:center}
+.linha-tempo li:last-child{border-bottom:0}
 .notas{font-size:12px;color:var(--nk-ink2)}
-.notas ul{margin:6px 0 0 18px;padding:0}
+.notas summary{cursor:pointer;font-weight:700;color:var(--nk-head)}
+.notas ul{margin:8px 0 0 18px;padding:0}.notas li{margin:3px 0}
+@media(max-width:640px){.g-tiles{grid-template-columns:1fr 1fr}.oport .valor{text-align:left}}
 </style>
 </head>
 <body>
@@ -75,32 +113,33 @@ tr.meu td{background:var(--nk-pri-bg, rgba(0,0,0,.04));font-weight:700}
 
   <div class="nk-pilha" id="conteudo" hidden>
     <div class="nk-aviso" id="aviso" hidden></div>
-    <div class="cards" id="cards"></div>
+    <div class="oport" id="oport" hidden></div>
+    <div class="nk-kpis" id="cards"></div>
     <section class="nk-painel">
       <div class="barra">
-        <input type="search" id="busca" placeholder="Buscar por MLB, SKU ou título">
+        <label class="busca"><i class="nk-i-search"></i><input type="search" id="busca" placeholder="Buscar por MLB, SKU ou título"></label>
         <span class="mini" id="contagem"></span>
       </div>
       <div class="tab-wrap">
         <table class="cat">
           <thead><tr>
-            <th>Anúncio</th><th>Situação</th><th class="num">Meu preço</th><th class="num">Preço p/ ganhar</th>
-            <th class="num">Ganhador</th><th class="num">Margem atual</th><th class="num">Margem p/ ganhar</th><th class="num">Concorrentes</th><th>Lido</th>
+            <th>Anúncio</th><th>Situação</th><th class="num">Meu preço</th><th class="num">Para ganhar</th>
+            <th class="num">Margem hoje</th><th class="num">Margem p/ ganhar</th><th class="num">Concorr.</th>
           </tr></thead>
           <tbody id="linhas"></tbody>
         </table>
       </div>
     </section>
-    <section class="nk-painel notas">
-      <b>Como ler</b>
+    <details class="nk-painel notas">
+      <summary>Como ler esta tela</summary>
       <ul>
-        <li><b>Preço p/ ganhar</b> é o que o Mercado Livre diz que este anúncio precisa ter para ganhar a vitrine do catálogo (price_to_win).</li>
-        <li><b>Margem p/ ganhar</b> usa a mesma conta das Promoções automáticas: custo, comissão e frete do anúncio e imposto. "Dá margem" = acima da margem mínima da promoção (<span id="mmin">—</span>).</li>
+        <li><b>Para ganhar</b> é o preço que o Mercado Livre diz que este anúncio precisa ter para ganhar a vitrine do catálogo.</li>
+        <li><b>Margem p/ ganhar</b> usa a mesma conta das Promoções automáticas (custo, comissão e frete do anúncio, imposto). Verde = acima da margem mínima da promoção (<span id="mmin">—</span>).</li>
         <li>Sem custo no Precificador a margem fica em branco, nunca zero.</li>
         <li>O aviso (popup/push) toca uma vez quando um anúncio passa de ganhando para perdendo <b>e</b> o preço para ganhar dá margem.</li>
         <li>Esta tela só lê o Mercado Livre: nenhum preço é alterado.</li>
       </ul>
-    </section>
+    </details>
   </div>
 </main>
 <div id="gaveta" hidden></div>
@@ -118,13 +157,13 @@ tr.meu td{background:var(--nk-pri-bg, rgba(0,0,0,.04));font-weight:700}
   const MOTIVO = {price:"preço", shipping:"frete", free_shipping:"frete grátis", fulfillment:"Full", same_day_shipping:"envio no dia",
     installments:"parcelamento", listing_type:"tipo de anúncio", reputation:"reputação", official_store:"loja oficial", manufacturing_time:"prazo de fabricação"};
   const CARDS = [
-    ["todos","Anúncios de catálogo","total",""],
-    ["ganhando","Ganhando","ganhando","ok"],
-    ["compartilhando","Compartilhando","compartilhando",""],
-    ["perdendo_com_margem","Perdendo e dá margem","perdendo_com_margem","warn"],
-    ["perdendo_sem_margem","Perdendo sem margem","perdendo_sem_margem","bad"],
-    ["sem_custo","Perdendo sem custo","sem_custo",""],
-    ["nao_elegivel","Não elegível","nao_elegivel",""],
+    ["todos","Anúncios de catálogo","total","","nk-i-list"],
+    ["ganhando","Ganhando a vitrine","ganhando","ok","nk-i-check"],
+    ["compartilhando","Compartilhando","compartilhando","","nk-i-users"],
+    ["perdendo_com_margem","Perdendo · dá margem","perdendo_com_margem","warn","nk-i-zap"],
+    ["perdendo_sem_margem","Perdendo · sem margem","perdendo_sem_margem","bad","nk-i-alert"],
+    ["sem_custo","Perdendo · sem custo","sem_custo","","nk-i-dollar"],
+    ["nao_elegivel","Não elegível","nao_elegivel","","nk-i-x"],
   ];
   let D = null, filtro = "todos";
   try { $("conta").value = localStorage.getItem("nk_catalogo_conta_v1974") || ""; } catch (_) {}
@@ -144,75 +183,96 @@ tr.meu td{background:var(--nk-pri-bg, rgba(0,0,0,.04));font-weight:700}
   }
 
   const grupo = i => i.situacao === "perdendo" ? (i.da_margem === true ? "perdendo_com_margem" : i.da_margem === false ? "perdendo_sem_margem" : "sem_custo") : i.situacao;
+  const selo = s => { const [c, r] = SIT[s] || ["cinza", s || "—"]; return `<span class="nk-selo ${c}">${esc(r)}</span>`; };
+  const margem = (m, ok) => m == null ? `<span class="margem nada">sem custo</span>` : `<span class="margem ${ok ? "ok" : "bad"}">${pct(m)}</span>`;
+  function diferenca(i) {
+    if (i.preco == null || i.preco_ganhar == null || i.situacao !== "perdendo") return "";
+    const d = i.preco_ganhar - i.preco, p = i.preco ? d / i.preco : 0;
+    return `<span class="dif ${d < 0 ? "bad" : "ok"}">${d < 0 ? "−" : "+"}${brl(Math.abs(d))} (${(p * 100).toLocaleString("pt-BR", {maximumFractionDigits:1})}%)</span>`;
+  }
 
   function desenhar() {
     const c = D.coleta || {};
-    $("sub").textContent = `Mercado Livre · leitura a cada ${D.regras.intervalo_min} min` + (c.fim ? ` · última leitura ${dataHora(c.fim)}` : "") + (c.rodando ? " · lendo agora…" : "");
+    $("sub").innerHTML = `<span class="status-leitura"><i class="ponto ${c.rodando ? "lendo" : ""}"></i>${c.rodando ? "Lendo o Mercado Livre agora…" : "Leitura automática a cada " + D.regras.intervalo_min + " min"}${c.fim ? " · última em " + dataHora(c.fim) : ""}</span>`;
     $("mmin").textContent = (D.regras.margem_min_promo ?? "—") + "%";
     const av = [];
     if (c.erro) av.push("<b>Última leitura:</b> " + esc(c.erro));
     if (!D.itens.length) av.push("Nenhum anúncio de catálogo lido ainda. A primeira leitura começa uns 3 minutos depois de o sistema subir (ou clique em \"Atualizar agora\").");
     if (D.resumo.com_erro) av.push(`${D.resumo.com_erro} anúncio(s) com erro na última leitura: mostram a leitura anterior.`);
     $("aviso").hidden = !av.length; $("aviso").innerHTML = av.join("<br>");
-    $("cards").innerHTML = CARDS.map(([id, rot, chave, cls]) =>
-      `<button type="button" class="card ${cls} ${filtro === id ? "on" : ""}" data-f="${id}"><small>${rot}</small><b>${D.resumo[chave] ?? 0}</b></button>`).join("");
+
+    // faixa de oportunidade: o que dá para recuperar baixando o preço sem furar a margem
+    const ops = D.itens.filter(i => grupo(i) === "perdendo_com_margem");
+    const o = $("oport");
+    o.hidden = !D.itens.length;
+    o.className = "oport" + (ops.length ? "" : " ok");
+    o.innerHTML = ops.length
+      ? `<div><h2>${ops.length} anúncio(s) perdendo a vitrine com espaço para ganhar</h2><p>No preço para ganhar a margem continua acima de ${esc(D.regras.margem_min_promo)}%. Clique em "Perdendo · dá margem" para ver só esses.</p></div>
+         <div class="valor">${brl(ops.reduce((s, i) => s + (i.lucro_ganhar || 0), 0))}<small>lucro somado por venda no preço para ganhar</small></div>`
+      : `<div><h2>Nenhuma vitrine perdida com margem para recuperar</h2><p>Os anúncios que perdem hoje não dão a margem mínima no preço para ganhar, ou estão sem custo.</p></div>`;
+
+    $("cards").innerHTML = CARDS.map(([id, rot, chave, cls, ic]) =>
+      `<button type="button" class="nk-kpi ${filtro === id ? "on" : ""}" data-f="${id}"><span class="nk-kpi-ic ${cls}"><i class="${ic}"></i></span><span><b>${D.resumo[chave] ?? 0}</b><small>${rot}</small></span></button>`).join("");
     const q = $("busca").value.trim().toLowerCase();
     const itens = D.itens.filter(i => (filtro === "todos" || grupo(i) === filtro) &&
       (!q || [i.item_id, i.sku, i.titulo].some(x => String(x || "").toLowerCase().includes(q))));
     const ordem = {perdendo_com_margem:0, perdendo_sem_margem:1, sem_custo:2, compartilhando:3, ganhando:4, nao_elegivel:5};
     itens.sort((a, b) => (ordem[grupo(a)] ?? 9) - (ordem[grupo(b)] ?? 9) || (b.lucro_ganhar ?? -1e9) - (a.lucro_ganhar ?? -1e9));
-    $("contagem").textContent = `${itens.length} de ${D.itens.length}`;
+    $("contagem").textContent = `${itens.length} de ${D.itens.length} anúncios`;
+    const variasContas = !$("conta").value;
     $("linhas").innerHTML = itens.map(i => {
-      const [cls, rot] = SIT[i.situacao] || ["cinza", i.situacao || "—"];
-      const mot = (i.motivos || []).map(m => MOTIVO[m] || m).join(", ");
-      const mg = i.margem_ganhar == null ? `<span class="mini">sem custo</span>` : `<span class="${i.da_margem ? "m-ok" : "m-bad"}">${pct(i.margem_ganhar)}</span>`;
-      return `<tr data-conta="${esc(i.conta)}" data-item="${esc(i.item_id)}">
-        <td class="tit"><div>${esc(i.titulo || "—")}</div><div class="mono">${esc(i.item_id)}${i.sku ? " · " + esc(i.sku) : ""}${D.itens.some(x => x.conta !== i.conta) || !$("conta").value ? " · " + esc(i.conta_nome) : ""}</div>${i.erro ? `<div class="mini m-bad">${esc(i.erro)}</div>` : ""}</td>
-        <td><span class="nk-selo ${cls}">${esc(rot)}</span>${mot && i.situacao === "perdendo" ? `<div class="mini">perde em: ${esc(mot)}</div>` : ""}</td>
-        <td class="num">${brl(i.preco)}</td>
-        <td class="num">${brl(i.preco_ganhar)}</td>
-        <td class="num">${brl(i.ganhador_preco)}${i.ganhador_item && i.ganhador_item !== i.item_id ? `<div class="mono">${esc(i.ganhador_item)}</div>` : ""}</td>
-        <td class="num">${pct(i.margem_atual)}</td>
-        <td class="num">${mg}${i.lucro_ganhar != null ? `<div class="mini">${brl(i.lucro_ganhar)}/venda</div>` : ""}</td>
-        <td class="num">${i.concorrentes ?? "—"}</td>
-        <td class="mini">${dataHora(i.lido_em)}</td></tr>`;
-    }).join("") || `<tr><td colspan="9" class="mini">Nada neste filtro.</td></tr>`;
+      const mot = i.situacao === "perdendo" ? (i.motivos || []).map(m => `<span>${esc(MOTIVO[m] || m)}</span>`).join("") : "";
+      return `<tr data-conta="${esc(i.conta)}" data-item="${esc(i.item_id)}" class="${grupo(i) === "perdendo_com_margem" ? "destaque" : ""}">
+        <td class="anun"><b>${esc(i.titulo || "—")}</b><div class="meta"><span class="mono">${esc(i.item_id)}${i.sku ? " · " + esc(i.sku) : ""}</span>${variasContas ? `<span class="conta">${esc(i.conta_nome)}</span>` : ""}</div>${i.erro ? `<div class="mini" style="color:var(--nk-bad)">${esc(i.erro)}</div>` : ""}</td>
+        <td>${selo(i.situacao)}${mot ? `<div class="motivos">${mot}</div>` : ""}</td>
+        <td class="num preco"><b>${brl(i.preco)}</b></td>
+        <td class="num preco"><b>${brl(i.preco_ganhar)}</b>${diferenca(i)}</td>
+        <td class="num">${i.margem_atual == null ? `<span class="mini">—</span>` : pct(i.margem_atual)}</td>
+        <td class="num">${margem(i.margem_ganhar, i.da_margem)}${i.lucro_ganhar != null ? `<div class="mini">${brl(i.lucro_ganhar)}/venda</div>` : ""}</td>
+        <td class="num">${i.concorrentes ?? "—"}</td></tr>`;
+    }).join("") || `<tr><td colspan="7" class="vazio">Nenhum anúncio neste filtro.</td></tr>`;
   }
 
   async function abrir(conta, item) {
     const g = $("gaveta");
     g.hidden = false;
-    g.innerHTML = `<div class="gaveta-fundo"></div><aside class="gaveta"><button class="nk-btn fechar">Fechar</button><p class="mini">Carregando…</p></aside>`;
-    const fechar = () => { g.hidden = true; g.innerHTML = ""; };
+    g.innerHTML = `<div class="gaveta-fundo"></div><aside class="gaveta" role="dialog" aria-label="Detalhe do anúncio"><div class="g-cab"><button class="fechar" aria-label="Fechar">×</button><p class="mini">Carregando…</p></div></aside>`;
+    const teclado = e => { if (e.key === "Escape") fechar(); };
+    const fechar = () => { g.hidden = true; g.innerHTML = ""; document.removeEventListener("keydown", teclado); };
+    document.addEventListener("keydown", teclado);
     g.querySelector(".gaveta-fundo").onclick = fechar; g.querySelector(".fechar").onclick = fechar;
     let d;
     try { d = await api(`/api/catalogo-ml/item?conta=${encodeURIComponent(conta)}&item=${encodeURIComponent(item)}`); }
-    catch (e) { g.querySelector("p").textContent = "Não foi possível carregar: " + e.message; return; }
-    const i = d.item, [cls, rot] = SIT[i.situacao] || ["cinza", i.situacao || "—"];
-    g.querySelector("aside").innerHTML = `<button class="nk-btn fechar">Fechar</button>
-      <h2>${esc(i.titulo || i.item_id)}</h2>
-      <div class="mono">${esc(i.item_id)} · ${esc(i.conta_nome)}${i.sku ? " · SKU " + esc(i.sku) : ""} · <a href="${linkML(i.item_id)}" target="_blank" rel="noopener">abrir no ML</a></div>
-      <p><span class="nk-selo ${cls}">${esc(rot)}</span></p>
-      <div class="grade2">
-        <div><small>Meu preço</small><b>${brl(i.preco)}</b><div class="mini">margem ${pct(i.margem_atual)}</div></div>
-        <div><small>Preço para ganhar</small><b>${brl(i.preco_ganhar)}</b><div class="mini">${i.margem_ganhar == null ? "sem custo" : "margem " + pct(i.margem_ganhar) + " · " + brl(i.lucro_ganhar) + "/venda"}</div></div>
-      </div>
-      ${i.taxas_origem ? `<p class="mini">${esc(i.taxas_origem)}</p>` : ""}
-      <h3>Concorrentes no catálogo (${d.concorrentes.length})</h3>
-      <div class="tab-wrap"><table class="cat"><thead><tr><th>Anúncio</th><th class="num">Preço</th><th>Frete</th><th>Tipo</th></tr></thead><tbody>
-      ${d.concorrentes.map(c => `<tr class="${c.meu ? "meu" : ""}"><td class="mono">${esc(c.item_id)}${c.meu ? " (meu)" : ""}${c.loja_oficial ? " · loja oficial" : ""}</td>
-        <td class="num">${brl(c.preco)}</td><td class="mini">${c.frete_gratis ? "grátis" : c.frete_gratis === 0 ? "pago" : "—"}${c.logistica === "fulfillment" ? " · Full" : ""}</td>
-        <td class="mini">${c.tipo === "gold_pro" ? "Premium" : c.tipo === "gold_special" ? "Clássico" : esc(c.tipo)}</td></tr>`).join("") || `<tr><td colspan="4" class="mini">Sem concorrentes lidos.</td></tr>`}
-      </tbody></table></div>
-      <h3>Histórico</h3>
-      <div class="tab-wrap"><table class="cat"><thead><tr><th>Quando</th><th>Situação</th><th class="num">Meu preço</th><th class="num">P/ ganhar</th></tr></thead><tbody>
-      ${d.historico.map(h => `<tr><td class="mini">${dataHora(h.em)}</td><td>${esc((SIT[h.situacao] || [, h.situacao])[1])}</td><td class="num">${brl(h.preco)}</td><td class="num">${brl(h.preco_ganhar)}</td></tr>`).join("")}
-      </tbody></table></div>`;
+    catch (e) { g.querySelector(".g-cab p").textContent = "Não foi possível carregar: " + e.message; return; }
+    const i = d.item;
+    const precos = d.concorrentes.map(c => c.preco).filter(v => v != null);
+    const max = Math.max(...precos, 1), min = Math.min(...precos, max);
+    const larg = v => v == null ? 0 : 30 + 70 * (max === min ? 1 : (v - min) / (max - min));
+    const rank = d.concorrentes.map((c, n) => `<div class="rank-l ${c.meu ? "meu" : ""} ${n === 0 ? "lider" : ""}">
+        <span class="pos">${n + 1}º</span>
+        <div class="barra-p"><i style="width:${larg(c.preco)}%"></i><span><span class="mono">${esc(c.item_id)}</span>${c.meu ? " · <b>meu anúncio</b>" : ""}${c.loja_oficial ? " · loja oficial" : ""} · ${c.frete_gratis ? "frete grátis" : c.frete_gratis === 0 ? "frete pago" : "frete —"}${c.logistica === "fulfillment" ? " · Full" : ""} · ${c.tipo === "gold_pro" ? "Premium" : c.tipo === "gold_special" ? "Clássico" : esc(c.tipo)}</span></div>
+        <span class="num"><b>${brl(c.preco)}</b></span></div>`).join("");
+    g.querySelector("aside").innerHTML = `<div class="g-cab"><button class="fechar" aria-label="Fechar">×</button>
+        ${selo(i.situacao)} <span class="conta">${esc(i.conta_nome)}</span>
+        <h2>${esc(i.titulo || i.item_id)}</h2>
+        <div class="mono">${esc(i.item_id)}${i.sku ? " · SKU " + esc(i.sku) : ""} · <a href="${linkML(i.item_id)}" target="_blank" rel="noopener">abrir no Mercado Livre ↗</a></div></div>
+      <div class="g-corpo">
+        <div class="g-tiles">
+          <div class="g-tile"><small>Meu preço</small><b>${brl(i.preco)}</b><span class="mini">margem ${pct(i.margem_atual)}</span></div>
+          <div class="g-tile alvo"><small>Preço para ganhar</small><b>${brl(i.preco_ganhar)}</b>${diferenca(i) || `<span class="mini">—</span>`}</div>
+          <div class="g-tile"><small>Margem para ganhar</small><b>${margem(i.margem_ganhar, i.da_margem)}</b><span class="mini">${i.lucro_ganhar != null ? brl(i.lucro_ganhar) + " por venda" : "cadastre o custo no Precificador"}</span></div>
+        </div>
+        ${i.taxas_origem ? `<div class="nk-aviso">${esc(i.taxas_origem)}</div>` : ""}
+        <section class="g-sec"><h3>Ranking de preço no catálogo · ${d.concorrentes.length} anúncio(s)</h3>
+          <div class="rank">${rank || `<p class="mini">Sem concorrentes lidos.</p>`}</div></section>
+        <section class="g-sec"><h3>Histórico da vitrine</h3>
+          <ul class="linha-tempo">${d.historico.map(h => `<li><span class="mini">${dataHora(h.em)}</span><span>${selo(h.situacao)}</span><span class="num mini">meu ${brl(h.preco)} · ganhar ${brl(h.preco_ganhar)}</span></li>`).join("") || `<li class="mini">Sem mudanças registradas.</li>`}</ul></section>
+      </div>`;
     g.querySelector(".fechar").onclick = fechar;
   }
 
-  $("cards").addEventListener("click", e => { const b = e.target.closest("[data-f]"); if (!b) return; filtro = b.dataset.f; desenhar(); });
-  $("linhas").addEventListener("click", e => { if (e.target.closest("a")) return; const tr = e.target.closest("tr[data-item]"); if (tr) abrir(tr.dataset.conta, tr.dataset.item); });
+  $("cards").addEventListener("click", e => { const b = e.target.closest("[data-f]"); if (!b) return; filtro = filtro === b.dataset.f ? "todos" : b.dataset.f; desenhar(); });
+  $("linhas").addEventListener("click", e => { const tr = e.target.closest("tr[data-item]"); if (tr) abrir(tr.dataset.conta, tr.dataset.item); });
   $("busca").addEventListener("input", () => D && desenhar());
   $("conta").addEventListener("change", () => { try { localStorage.setItem("nk_catalogo_conta_v1974", $("conta").value); } catch (_) {} carregar(); });
   $("atualizar").addEventListener("click", async () => {
