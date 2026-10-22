@@ -7,6 +7,7 @@ inclui os atrasados; Shopee (sem prazo na fila) aparece em qualquer data.
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
 from base import S, gravar_como_admin, linha, reiniciar_banco
 
@@ -23,6 +24,20 @@ class PrazoDeDespacho(unittest.TestCase):
         prazos = {i["pedido"]: i["prazo"] for i in S.faturamento_payload()["itens"]}
         self.assertEqual(prazos, {"2000000000000001": "2026-10-22", "1500000000000002": "2026-10-23",
                                   "261022ABCDEF": ""})
+
+    def test_prazo_da_magalu_em_utc_vira_dia_de_brasilia(self):
+        # 23/10 02:59 UTC = 22/10 23:59 em Brasília: o pedido sai no dia 22.
+        gravar_como_admin([linha("1500000000000009", "A9", Marketplace="MAGALU",
+                                 PrazoEnvioMagalu="2026-10-23T02:59:59Z")])
+        self.assertEqual(S.faturamento_payload()["itens"][0]["prazo"], "2026-10-22")
+
+    def test_fila_lida_uma_vez_por_tela(self):
+        gravar_como_admin([linha("2000000000000001", "A1", Marketplace="MERCADO LIVRE")])
+        real = S.get_storage
+        chamadas = []
+        with mock.patch.object(S, "get_storage", side_effect=lambda *a, **k: chamadas.append(a) or real(*a, **k)):
+            S.faturamento_payload()
+        self.assertEqual(len([a for a in chamadas if a and a[0] == "conf_pedidos"]), 1)
 
     def test_tela_filtra_pelo_prazo_e_hoje_inclui_atrasados(self):
         html = (S.APP_DIR / "faturamento.html").read_text(encoding="utf-8")

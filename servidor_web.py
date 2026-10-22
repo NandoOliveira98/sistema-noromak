@@ -16902,19 +16902,46 @@ def faturamento_conferir(pedido: str, marketplace: str = "", agora: float | None
             "valor_pedido": valor, **res}
 
 
-def _faturamento_pendentes() -> list[tuple[str, str]]:
-    """(pedido, marketplace) dos pedidos na fila de pendentes, uma vez cada."""
+def _faturamento_prazo_dia(row: dict[str, Any]) -> str:
+    """V19.73: prazo de despacho (AAAA-MM-DD, Brasília). ML já vem com -03:00; a Magalu manda
+    em UTC ("...T02:59:59Z" = 23h59 do dia anterior em Brasília) e é convertida."""
+    ml = _ml_parse_iso_date(row.get("DataLimiteDespachoMercadoLivre"))
+    if ml:
+        return ml
+    texto = str(row.get("PrazoEnvioMagalu") or "").strip()
+    try:
+        dt = datetime.fromisoformat(texto.replace("Z", "+00:00"))
+    except ValueError:
+        return _ml_parse_iso_date(texto)
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone(timedelta(hours=-3)))
+    return dt.date().isoformat()
+
+
+def _faturamento_fila() -> tuple[list[tuple[str, str]], dict[str, str]]:
+    """(pedido, marketplace) dos pedidos na fila de pendentes, uma vez cada, e o prazo de
+    despacho de cada um (o menor entre as linhas). Uma leitura só da fila (V19.73)."""
     with DB_LOCK:
         pendentes, _, _ = get_storage("conf_pedidos")
     vistos: dict[str, tuple[str, str]] = {}
+    prazos: dict[str, str] = {}
     for row in _rows_from_storage_value(pendentes):
         if not isinstance(row, dict):
             continue
         mp = _vendas_marketplace(row.get("Marketplace") or row.get("Origem"))
         pedido = str(order_number(row) or "").strip()
         if pedido and mp in FATURAMENTO_MARKETPLACES:
-            vistos.setdefault(normalize(pedido), (pedido, mp))
-    return list(vistos.values())
+            chave = normalize(pedido)
+            vistos.setdefault(chave, (pedido, mp))
+            dia = _faturamento_prazo_dia(row)
+            if dia and (chave not in prazos or dia < prazos[chave]):
+                prazos[chave] = dia
+    return list(vistos.values()), prazos
+
+
+def _faturamento_pendentes() -> list[tuple[str, str]]:
+    """(pedido, marketplace) dos pedidos na fila de pendentes, uma vez cada."""
+    return _faturamento_fila()[0]
 
 
 def faturamento_rodada(agora: float | None = None, esperar=None) -> int:
@@ -16957,27 +16984,9 @@ def faturamento_loop(stop_event: threading.Event) -> None:
         stop_event.wait(120)
 
 
-def _faturamento_prazos() -> dict[str, str]:
-    """V19.73: prazo de despacho (AAAA-MM-DD) de cada pedido da fila — ML pela data limite do
-    envio, Magalu pelo prazo da entrega. Shopee não tem prazo na fila: fica vazio (a tela
-    mostra em qualquer data, decisão do dono 22/10)."""
-    with DB_LOCK:
-        pendentes, _, _ = get_storage("conf_pedidos")
-    prazos: dict[str, str] = {}
-    for row in _rows_from_storage_value(pendentes):
-        if not isinstance(row, dict):
-            continue
-        pedido = str(order_number(row) or "").strip()
-        dia = _ml_parse_iso_date(row.get("DataLimiteDespachoMercadoLivre") or row.get("PrazoEnvioMagalu"))
-        if pedido and dia and (normalize(pedido) not in prazos or dia < prazos[normalize(pedido)]):
-            prazos[normalize(pedido)] = dia
-    return prazos
-
-
 def faturamento_payload() -> dict[str, Any]:
     """A tela: pedidos da fila de pendentes com a última conferência de cada um."""
-    pend = _faturamento_pendentes()
-    prazos = _faturamento_prazos()
+    pend, prazos = _faturamento_fila()
     with DB_LOCK:
         estado = {r["order_key"]: dict(r) for r in DB.execute("SELECT * FROM faturamento_v1943").fetchall()}
     itens = []
