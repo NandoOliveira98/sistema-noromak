@@ -154,6 +154,13 @@ class TrocarPromocao(TesteNoromak):
         self.assertEqual(r["code"], "em_campanha")
         self.assertNotIn("remover", self.acoes())
 
+    def test_campanha_vencida_que_o_ml_ainda_mostra_started_nao_trava(self):
+        # V19.75: o ML segue devolvendo "started" horas depois do fim
+        self.promos = [dict(PD_VALENDO), dict(DEAL_VALENDO, finish_date="2020-01-01T00:00:00")]
+        r = S.catalogo_ml_trocar_promocao("aracatuba", "MLB1", 205, "admin", encerrar=True)
+        self.assertTrue(r["ok"])
+        self.assertIn("remover", self.acoes())
+
     def test_medio_sem_desconto_proprio_valendo_nao_oferece_encerrar(self):
         self.promos = []
         self.recusa = RuntimeError("HTTP 400: outro motivo")

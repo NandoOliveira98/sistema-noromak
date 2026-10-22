@@ -23361,10 +23361,14 @@ CATALOGO_PROMO_ESPERA = 20.0   # V19.76: espera a vez do anúncio; responde ante
 
 
 def _catalogo_campanha_valendo(promos: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Campanha do ML (não o nosso desconto próprio nem o desconto do Pix) valendo agora."""
+    """Campanha do ML (não o nosso desconto próprio nem o desconto do Pix) valendo agora.
+    Prazo passado = acabou, mesmo com o ML ainda dizendo "started" (V19.75)."""
+    agora = datetime.now(timezone.utc)
     for x in promos or []:
+        fim_dt = _promo_fim_dt(x.get("finish_date"))
         if (str(x.get("status") or "").lower() == "started"
-                and str(x.get("type") or "") not in (ML_PROMO_TIPO, "BANK")):
+                and str(x.get("type") or "") not in (ML_PROMO_TIPO, "BANK")
+                and not (fim_dt and fim_dt <= agora)):
             return x
     return None
 
