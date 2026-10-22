@@ -52,19 +52,21 @@ class Rodada(TesteNoromak):
         S.ml_casas_conectadas = lambda: ["aracatuba"]
         self.status = {"MLB1": "winning"}
         self.ganhar = 100.0
+        self.preco = 120.0
+        self.concorrentes_resp = {"results": [{"item_id": "MLB7", "seller_id": 55, "price": 99.99,
+                                               "shipping": {"free_shipping": True, "logistic_type": "fulfillment"},
+                                               "listing_type_id": "gold_pro"}]}
         self.chamadas = []
 
         def api(path, *a, **k):
             self.chamadas.append(path)
             if "/price_to_win" in path:
                 mlb = path.split("/")[2]
-                r = ptw(self.status[mlb], ganhar=self.ganhar)
+                r = ptw(self.status[mlb], preco=self.preco, ganhar=self.ganhar)
                 r["item_id"] = mlb
                 return r
             if path.startswith("/products/"):
-                return {"results": [{"item_id": "MLB7", "seller_id": 55, "price": 99.99,
-                                     "shipping": {"free_shipping": True, "logistic_type": "fulfillment"},
-                                     "listing_type_id": "gold_pro"}]}
+                return self.concorrentes_resp
             raise AssertionError(path)
         S.ml_api_get = api
         S.catalogo_ml_anuncios = lambda: list(self.status)
@@ -143,6 +145,75 @@ class Rodada(TesteNoromak):
         self.assertTrue(d["historico"])
         st, _ = Cliente(self.url_base).pedir("GET", "/api/catalogo-ml")
         self.assertIn(st, (401, 403))
+
+    # --- revisão de 22/10 (achados médios) ---
+
+    def test_resposta_estranha_dos_concorrentes_nao_zera(self):
+        S.catalogo_ml_rodada(pausa=0)
+        self.concorrentes_resp = {}            # 200 sem "results"
+        S.catalogo_ml_rodada(pausa=0)
+        self.assertEqual(S.catalogo_ml_payload()["itens"][0]["concorrentes"], 1)
+        self.assertEqual(len(S.catalogo_ml_item("aracatuba", "MLB1")["concorrentes"]), 1)
+
+    def test_preco_para_ganhar_abaixo_da_faixa_do_frete_nao_afirma_margem(self):
+        # 85 → 75 cruza a faixa de R$ 79 do frete grátis: o frete usado é o do preço atual
+        S.catalogo_ml_rodada(pausa=0)
+        self.status["MLB1"] = "competing"
+        self.preco, self.ganhar = 85.0, 75.0
+        S._promo_produtos = lambda: {"ABC": dict(PROD, custo=30.0)}
+        S.catalogo_ml_rodada(pausa=0)
+        self.assertEqual(self.avisos(), [])
+        it = S.catalogo_ml_payload()["itens"][0]
+        self.assertIn("79", it["taxas_origem"])
+        self.assertTrue(it["frete_incerto"])
+
+
+class ListaDeAnuncios(TesteNoromak):
+    """A lista de catálogo só é usada para apagar quando vier COMPLETA."""
+
+    def setUp(self):
+        super().setUp()
+        self._get, self._row = S.ml_api_get, S.ml_integration_row
+        S.ml_integration_row = lambda: {"seller_id": "123"}
+
+    def tearDown(self):
+        S.ml_api_get, S.ml_integration_row = self._get, self._row
+        super().tearDown()
+
+    def test_usa_scan_e_junta_as_paginas(self):
+        paginas = {"": {"results": ["MLB1", "MLB2"], "scroll_id": "A", "paging": {"total": 3}},
+                   "A": {"results": ["MLB3"], "scroll_id": "B", "paging": {"total": 3}},
+                   "B": {"results": [], "scroll_id": "B", "paging": {"total": 3}}}
+        vistos = []
+
+        def api(path, *a, **k):
+            vistos.append(path)
+            self.assertIn("search_type=scan", path)
+            self.assertIn("catalog_listing=true", path)
+            sid = path.split("scroll_id=")[1] if "scroll_id=" in path else ""
+            return paginas[sid]
+        S.ml_api_get = api
+        self.assertEqual(S.catalogo_ml_anuncios(), ["MLB1", "MLB2", "MLB3"])
+
+    def test_lista_incompleta_falha_e_nao_apaga_o_monitor(self):
+        with S.DB_LOCK:
+            S.DB.execute("INSERT INTO catalogo_ml_v1974(conta,item_id,situacao) VALUES('aracatuba','MLB9','ganhando')")
+            S.DB.commit()
+        S.ml_api_get = lambda path, *a, **k: {"results": ["MLB1"], "scroll_id": "", "paging": {"total": 5}}
+        with self.assertRaises(RuntimeError):
+            S.catalogo_ml_anuncios()
+        salvo = S.ml_casas_conectadas
+        S.ml_casas_conectadas = lambda: ["aracatuba"]
+        try:
+            S.catalogo_ml_rodada(pausa=0)
+        finally:
+            S.ml_casas_conectadas = salvo
+        self.assertEqual([i["item_id"] for i in S.catalogo_ml_payload()["itens"]], ["MLB9"])
+
+    def test_resposta_que_nao_e_lista_falha(self):
+        S.ml_api_get = lambda path, *a, **k: "erro"
+        with self.assertRaises(RuntimeError):
+            S.catalogo_ml_anuncios()
 
 
 if __name__ == "__main__":

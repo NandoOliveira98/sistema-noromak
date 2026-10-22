@@ -23020,6 +23020,12 @@ def posvenda_responder(pergunta_id: str, texto: str, ator: str) -> dict[str, Any
 # ---------------------------------------------------------------------------
 CATALOGO_ML_INTERVALO = 3600
 CATALOGO_ML_PAUSA = 0.3
+# Revisão de 22/10: o frete do anúncio (shipping_options/free) é o do preço ATUAL. Quando o preço
+# para ganhar cruza a faixa do frete grátis, a margem nele é só aproximada: não afirma "dá margem"
+# no aviso e a tela diz por quê.
+CATALOGO_ML_FAIXA_FRETE = 79.0
+CATALOGO_ML_FRETE_INCERTO = ("Frete calculado no preço atual: o preço para ganhar cruza a faixa de R$ 79 "
+                             "do frete grátis, confira a margem antes de baixar")
 CATALOGO_ML_LOCK = threading.Lock()
 CATALOGO_ML_SITUACAO = {"winning": "ganhando", "sharing_first_place": "compartilhando",
                         "competing": "perdendo", "listed": "nao_elegivel"}
@@ -23036,7 +23042,7 @@ def ensure_catalogo_ml_schema() -> None:
                 situacao TEXT NOT NULL DEFAULT '', preco REAL, preco_ganhar REAL,
                 ganhador_item TEXT NOT NULL DEFAULT '', ganhador_preco REAL, concorrentes INTEGER,
                 motivos TEXT NOT NULL DEFAULT '[]', margem_atual REAL, margem_ganhar REAL, lucro_ganhar REAL,
-                da_margem INTEGER, taxas_origem TEXT NOT NULL DEFAULT '',
+                da_margem INTEGER, taxas_origem TEXT NOT NULL DEFAULT '', frete_incerto INTEGER NOT NULL DEFAULT 0,
                 lido_em TEXT NOT NULL DEFAULT '', mudou_em TEXT NOT NULL DEFAULT '', avisado_em TEXT NOT NULL DEFAULT '',
                 erro TEXT NOT NULL DEFAULT '',
                 PRIMARY KEY (conta, item_id)
@@ -23057,6 +23063,8 @@ def ensure_catalogo_ml_schema() -> None:
             );
             """
         )
+        if "frete_incerto" not in {r[1] for r in DB.execute("PRAGMA table_info(catalogo_ml_v1974)")}:
+            DB.execute("ALTER TABLE catalogo_ml_v1974 ADD COLUMN frete_incerto INTEGER NOT NULL DEFAULT 0")
         DB.commit()
 
 
@@ -23071,21 +23079,40 @@ def _catalogo_ml_amostra(tipo: str, dados: Any) -> None:
 
 
 def catalogo_ml_anuncios() -> list[str]:
-    """Anúncios ativos de catálogo da conta da casa atual (filtro catalog_listing do /items/search)."""
+    """Anúncios ativos de catálogo da conta da casa atual (filtro catalog_listing do /items/search).
+
+    Revisão de 22/10: a rodada APAGA do monitor o que não está nesta lista, então ela só vale
+    COMPLETA. Paginação por scroll_id (offset estoura em 1000, V18.28); resposta estranha ou
+    menos anúncios que o paging.total = RuntimeError, e a rodada da conta não apaga nada."""
     linha = ml_integration_row()
     seller = str((linha["seller_id"] if linha else "") or "").strip()
     if not seller:
         raise RuntimeError("Mercado Livre não está conectado.")
+    base = f"/users/{seller}/items/search?catalog_listing=true&status=active&search_type=scan&limit=100"
     ids: list[str] = []
-    for offset in range(0, 5000, 50):
-        dados = ml_api_get(f"/users/{seller}/items/search?catalog_listing=true&status=active&limit=50&offset={offset}")
-        resultados = [str(x) for x in ((dados or {}).get("results") or []) if x] if isinstance(dados, dict) else []
+    total: int | None = None
+    scroll = ""
+    for _ in range(60):   # teto de segurança: 6.000 anúncios
+        dados = ml_api_get(base + ("&scroll_id=" + quote(scroll) if scroll else ""))
+        if not isinstance(dados, dict) or not isinstance(dados.get("results"), list):
+            raise RuntimeError("Lista de anúncios de catálogo veio em formato inesperado do Mercado Livre.")
+        try:
+            total = int((dados.get("paging") or {}).get("total"))
+        except (TypeError, ValueError):
+            pass
+        resultados = [str(x) for x in dados["results"] if x]
+        if not resultados:
+            break
         ids.extend(resultados)
-        total = int(((dados or {}).get("paging") or {}).get("total") or 0) if isinstance(dados, dict) else 0
-        if len(resultados) < 50 or len(ids) >= total:
+        scroll = str(dados.get("scroll_id") or "")
+        if not scroll or (total is not None and len(ids) >= total):
             break
     vistos: set[str] = set()
-    return [x for x in ids if not (x in vistos or vistos.add(x))]
+    unicos = [x for x in ids if not (x in vistos or vistos.add(x))]
+    if total is None or len(unicos) < total:
+        raise RuntimeError(f"Lista de catálogo incompleta ({len(unicos)} de {total if total is not None else '?'}): "
+                           "nada foi apagado do monitor.")
+    return unicos
 
 
 def catalogo_ml_avaliar(ptw: dict[str, Any], prod_atual: dict[str, Any] | None,
@@ -23121,25 +23148,26 @@ def _catalogo_ml_gravar(conta: str, item_id: str, det: dict[str, Any], sku: str,
         anterior = ant["situacao"] if ant else ""
         mudou = anterior != a["situacao"]
         avisar = (ant is not None and anterior in ("ganhando", "compartilhando")
-                  and a["situacao"] == "perdendo" and a["da_margem"] is True)
+                  and a["situacao"] == "perdendo" and a["da_margem"] is True and not a.get("frete_incerto"))
         DB.execute(
             """INSERT INTO catalogo_ml_v1974(conta,item_id,produto_id,titulo,sku,status_anuncio,situacao,preco,preco_ganhar,
                    ganhador_item,ganhador_preco,motivos,margem_atual,margem_ganhar,lucro_ganhar,da_margem,taxas_origem,
-                   lido_em,mudou_em,erro)
-               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'')
+                   lido_em,mudou_em,erro,frete_incerto)
+               VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,'',?)
                ON CONFLICT(conta,item_id) DO UPDATE SET produto_id=excluded.produto_id, titulo=excluded.titulo,
                    sku=excluded.sku, status_anuncio=excluded.status_anuncio, situacao=excluded.situacao,
                    preco=excluded.preco, preco_ganhar=excluded.preco_ganhar, ganhador_item=excluded.ganhador_item,
                    ganhador_preco=excluded.ganhador_preco, motivos=excluded.motivos, margem_atual=excluded.margem_atual,
                    margem_ganhar=excluded.margem_ganhar, lucro_ganhar=excluded.lucro_ganhar, da_margem=excluded.da_margem,
-                   taxas_origem=excluded.taxas_origem, lido_em=excluded.lido_em,
+                   taxas_origem=excluded.taxas_origem, lido_em=excluded.lido_em, frete_incerto=excluded.frete_incerto,
                    mudou_em=CASE WHEN catalogo_ml_v1974.situacao<>excluded.situacao THEN excluded.lido_em
                                  ELSE catalogo_ml_v1974.mudou_em END, erro=''""",
             (conta, item_id, a["produto_id"] or str(det.get("produto_catalogo") or ""), str(det.get("titulo") or ""),
              sku, str(det.get("status") or ""), a["situacao"], a["preco"] if a["preco"] is not None else _money_number(det.get("preco")),
              a["preco_ganhar"], a["ganhador_item"], a["ganhador_preco"], json.dumps(a["motivos"], ensure_ascii=False),
              a["margem_atual"], a["margem_ganhar"], a["lucro_ganhar"],
-             None if a["da_margem"] is None else int(bool(a["da_margem"])), taxas_origem, agora, agora),
+             None if a["da_margem"] is None else int(bool(a["da_margem"])), taxas_origem, agora, agora,
+             int(bool(a.get("frete_incerto")))),
         )
         if mudou or ant is None:
             DB.execute("INSERT INTO catalogo_ml_hist_v1974(conta,item_id,em,situacao,preco,preco_ganhar,ganhador_preco) "
@@ -23161,7 +23189,12 @@ def _catalogo_ml_gravar(conta: str, item_id: str, det: dict[str, Any], sku: str,
 def _catalogo_ml_concorrentes(conta: str, produto_id: str) -> int | None:
     dados = ml_api_get(f"/products/{quote(produto_id)}/items")
     _catalogo_ml_amostra("produto_itens", dados)
-    linhas = [r for r in ((dados or {}).get("results") or []) if isinstance(r, dict)] if isinstance(dados, dict) else []
+    # Revisão de 22/10: sem "results" (ou vazio: o próprio anúncio sempre está no produto) é resposta
+    # que não dá para usar. Mantém a leitura anterior, nunca vira "0 concorrentes".
+    brutos = dados.get("results") if isinstance(dados, dict) else None
+    linhas = [r for r in brutos if isinstance(r, dict)] if isinstance(brutos, list) else []
+    if not linhas:
+        raise RuntimeError("Concorrentes do catálogo vieram em formato inesperado do Mercado Livre.")
     agora = now_iso()
     with DB_LOCK:
         DB.execute("DELETE FROM catalogo_ml_concorrente_v1974 WHERE conta=? AND produto_id=?", (conta, produto_id))
@@ -23200,17 +23233,21 @@ def _catalogo_ml_rodada_conta(conta: str, stop_event: threading.Event | None, pa
             prod_a, origem = _promo_prod_com_ml(prod, mlb, preco, det) if prod and preco else (prod, "")
             prod_g = _promo_prod_com_ml(prod, mlb, ganhar, det)[0] if prod and ganhar else prod
             a = catalogo_ml_avaliar(ptw, prod_a, prod_g, cfg)
+            if preco and ganhar and (preco >= CATALOGO_ML_FAIXA_FRETE) != (ganhar >= CATALOGO_ML_FAIXA_FRETE):
+                a["frete_incerto"] = True
+                origem = "; ".join(x for x in (origem, CATALOGO_ML_FRETE_INCERTO) if x)
             pid = a["produto_id"] or str(det.get("produto_catalogo") or "")
             if pid and pid not in concorrentes:
                 try:
                     concorrentes[pid] = _catalogo_ml_concorrentes(conta, pid)
                 except Exception:
-                    concorrentes[pid] = None
+                    concorrentes[pid] = None   # mantém o número e a lista da leitura anterior
             avisos += int(_catalogo_ml_gravar(conta, mlb, det, sku, a, origem))
-            with DB_LOCK:
-                DB.execute("UPDATE catalogo_ml_v1974 SET concorrentes=? WHERE conta=? AND item_id=?",
-                           (concorrentes.get(pid), conta, mlb))
-                DB.commit()
+            if concorrentes.get(pid) is not None:
+                with DB_LOCK:
+                    DB.execute("UPDATE catalogo_ml_v1974 SET concorrentes=? WHERE conta=? AND item_id=?",
+                               (concorrentes[pid], conta, mlb))
+                    DB.commit()
             lidos += 1
         except Exception as exc:
             erros += 1
@@ -23273,6 +23310,7 @@ def _catalogo_ml_linha(r: sqlite3.Row) -> dict[str, Any]:
     except Exception:
         d["motivos"] = []
     d["da_margem"] = None if d["da_margem"] is None else bool(d["da_margem"])
+    d["frete_incerto"] = bool(d.get("frete_incerto"))
     d["conta_nome"] = CASAS.get(d["conta"], d["conta"])
     return d
 

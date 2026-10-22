@@ -184,7 +184,7 @@ table.cat th.num{text-align:right}
 
   const grupo = i => i.situacao === "perdendo" ? (i.da_margem === true ? "perdendo_com_margem" : i.da_margem === false ? "perdendo_sem_margem" : "sem_custo") : i.situacao;
   const selo = s => { const [c, r] = SIT[s] || ["cinza", s || "—"]; return `<span class="nk-selo ${c}">${esc(r)}</span>`; };
-  const margem = (m, ok) => m == null ? `<span class="margem nada">sem custo</span>` : `<span class="margem ${ok ? "ok" : "bad"}">${pct(m)}</span>`;
+  const margem = (m, ok, aprox) => m == null ? `<span class="margem nada">sem custo</span>` : `<span class="margem ${aprox ? "nada" : ok ? "ok" : "bad"}"${aprox ? ` title="Frete calculado no preço atual: o preço para ganhar cruza a faixa de R$ 79 do frete grátis"` : ""}>${aprox ? "≈ " : ""}${pct(m)}</span>`;
   function diferenca(i) {
     if (i.preco == null || i.preco_ganhar == null || i.situacao !== "perdendo") return "";
     const d = i.preco_ganhar - i.preco, p = i.preco ? d / i.preco : 0;
@@ -228,7 +228,7 @@ table.cat th.num{text-align:right}
         <td class="num preco"><b>${brl(i.preco)}</b></td>
         <td class="num preco"><b>${brl(i.preco_ganhar)}</b>${diferenca(i)}</td>
         <td class="num">${i.margem_atual == null ? `<span class="mini">—</span>` : pct(i.margem_atual)}</td>
-        <td class="num">${margem(i.margem_ganhar, i.da_margem)}${i.lucro_ganhar != null ? `<div class="mini">${brl(i.lucro_ganhar)}/venda</div>` : ""}</td>
+        <td class="num">${margem(i.margem_ganhar, i.da_margem, i.frete_incerto)}${i.lucro_ganhar != null ? `<div class="mini">${brl(i.lucro_ganhar)}/venda</div>` : ""}</td>
         <td class="num">${i.concorrentes ?? "—"}</td></tr>`;
     }).join("") || `<tr><td colspan="7" class="vazio">Nenhum anúncio neste filtro.</td></tr>`;
   }
@@ -260,7 +260,7 @@ table.cat th.num{text-align:right}
         <div class="g-tiles">
           <div class="g-tile"><small>Meu preço</small><b>${brl(i.preco)}</b><span class="mini">margem ${pct(i.margem_atual)}</span></div>
           <div class="g-tile alvo"><small>Preço para ganhar</small><b>${brl(i.preco_ganhar)}</b>${diferenca(i) || `<span class="mini">—</span>`}</div>
-          <div class="g-tile"><small>Margem para ganhar</small><b>${margem(i.margem_ganhar, i.da_margem)}</b><span class="mini">${i.lucro_ganhar != null ? brl(i.lucro_ganhar) + " por venda" : "cadastre o custo no Precificador"}</span></div>
+          <div class="g-tile"><small>Margem para ganhar</small><b>${margem(i.margem_ganhar, i.da_margem, i.frete_incerto)}</b><span class="mini">${i.lucro_ganhar != null ? brl(i.lucro_ganhar) + " por venda" : "cadastre o custo no Precificador"}</span></div>
         </div>
         ${i.taxas_origem ? `<div class="nk-aviso">${esc(i.taxas_origem)}</div>` : ""}
         <section class="g-sec"><h3>Ranking de preço no catálogo · ${d.concorrentes.length} anúncio(s)</h3>
