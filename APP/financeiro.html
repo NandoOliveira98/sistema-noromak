@@ -491,7 +491,8 @@ html[data-tema="escuro"] .faixa{color:#F0B357!important}
   // V19.77: custo unitário e de onde veio (congelado na venda, estimado ou digitado). Sempre Araçatuba.
   const ORIGEM_CUSTO = {venda: ["", "na venda", "Custo de Araçatuba guardado no momento da venda"],
     estimado: ["aten", "estimado", "Venda sem custo guardado: último custo de Araçatuba conhecido. Corrija em Demanda de Compra (custo digitado) se souber o real"],
-    manual: ["", "digitado", "Custo digitado na Demanda de Compra"]};
+    manual: ["", "digitado", "Custo digitado na Demanda de Compra"],
+    outra_filial: ["aten", "outra filial", "Araçatuba nunca teve custo deste produto: menor custo de outra filial (peça transferida). Digite o custo real na Demanda de Compra se souber"]};
   const origemCusto = (s) => {
     const o = ORIGEM_CUSTO[s.custo_origem];
     const un = s.custo_unitario != null ? `${brl(s.custo_unitario)}/un` : "";

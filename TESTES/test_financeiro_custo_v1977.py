@@ -75,7 +75,9 @@ class CustoDoFinanceiro(TesteNoromak):
         _conhecido("6007.003.315.00.8", auto=39.41)
         _vender("V1", "6007.003.315.00.8", 2, 86.40, (HOJE - timedelta(days=10)).isoformat())
         s = _sku(_periodo(), "6007.003.315.00.8")
-        self.assertTrue(s["sem_custo"])          # sem custo de Araçatuba: pendência, nunca 39,41
+        # 22/10 (dono, 2ª decisão): Araçatuba nunca teve custo -> outra filial, MARCADO (nunca como se fosse
+        # Araçatuba; o digitado e o de Araçatuba vencem — test_outra_filial_nao_vence_aracatuba_nem_digitado)
+        self.assertEqual((s["cmv"], s["custo_origem"]), (78.82, "outra_filial"))
 
     def test_ultimo_custo_de_aracatuba_guardado(self):
         _precificador([{"sku": "6007.003.315.00.8", "custo": 0, "filialCusto": 1, "custosFiliais": _filiais(0, 39.41)}])
@@ -219,6 +221,39 @@ class CustoDoFinanceiro(TesteNoromak):
         ctx = S._financeiro_custos_aracatuba()
         self.assertEqual(S.compras_custo_aracatuba("WAP331", ctx)[0], None)          # só planilha: sem custo
         self.assertEqual(S.compras_custo_aracatuba("LIDO1", ctx)[:2], (9.0, "ultimo"))  # lido do Apollo e zerou
+
+    def test_kit_com_traco_espacado(self):
+        # "KITRS001005 - RS000365" e "KIT99090340 - 99090203": KIT colado + " - " entre as peças
+        _apollo("RS001005", {"1": 30.0})
+        _apollo("RS000365", {"1": 50.81})
+        _precificador([{"sku": "OUTRO", "custo": 1.0}])
+        _vender("V1", "KITRS001005 - RS000365", 1, 844.90, HOJE.isoformat())
+        self.assertAlmostEqual(_sku(_periodo(), "KITRS001005 - RS000365")["cmv"], 80.81)
+
+    def test_aracatuba_sem_custo_usa_outra_filial_marcado(self):
+        # 6010.011.113.00.1: Araçatuba nunca teve custo; Ribeirão 294,32 e Bauru 253,71 -> o menor, marcado
+        _precificador([{"sku": "6010.011.113.00.1", "custo": 0, "filialCusto": 1,
+                        "custosFiliais": _filiais(0, 253.71)}])
+        _apollo("6010.011.113.00.1", {"2": 294.32, "3": 253.71})
+        _vender("V1", "6010.011.113.00.1", 1, 560.0, (HOJE - timedelta(days=10)).isoformat())
+        s = _sku(_periodo(), "6010.011.113.00.1")
+        self.assertEqual((s["cmv"], s["custo_origem"]), (253.71, "outra_filial"))
+
+    def test_outra_filial_nao_vence_aracatuba_nem_digitado(self):
+        _precificador([{"sku": "X1", "custo": 0, "filialCusto": 1, "custosFiliais": _filiais(0, 39.41)}])
+        _apollo("X1", {"1": 13.02, "3": 39.41})
+        _vender("V1", "X1", 1, 43.2, (HOJE - timedelta(days=10)).isoformat())
+        self.assertEqual(_sku(_periodo(), "X1")["cmv"], 13.02)
+        _apollo("X2", {"3": 39.41})
+        _conhecido("X2", manual=13.02)
+        _vender("V2", "X2", 1, 43.2, (HOJE - timedelta(days=10)).isoformat())
+        self.assertEqual(_sku(_periodo(), "X2")["cmv"], 13.02)
+
+    def test_outra_filial_nao_congela(self):
+        _apollo("X3", {"3": 39.41})
+        _precificador([{"sku": "OUTRO", "custo": 1.0}])
+        _vender("V1", "X3", 1, 43.2, HOJE.isoformat())
+        self.assertEqual(S.financeiro_custo_congelar(), 0)
 
     def test_custo_digitado_no_precificador_depois_da_planilha_vale(self):
         # produto cadastrado/editado no Precificador (não é da planilha antiga) mantém o custo digitado

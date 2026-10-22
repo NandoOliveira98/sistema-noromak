@@ -24014,6 +24014,7 @@ def _financeiro_custos_aracatuba(com_vendas_ml: bool = True) -> dict[str, Any]:
     prec: dict[str, float | None] = {}
     prec_apollo: dict[str, float | None] = {}   # só o custosFiliais (vem do Apollo); sem o custo digitado
     so_planilha: set[str] = set()               # produto da planilha antiga que nunca foi lido do Apollo
+    outra: dict[str, float] = {}                 # menor custo de outra filial (só quando Araçatuba nunca teve)
     for p in produtos if isinstance(produtos, list) else []:
         if not isinstance(p, dict) or p.get("isKit"):
             continue
@@ -24027,6 +24028,10 @@ def _financeiro_custos_aracatuba(com_vendas_ml: bool = True) -> dict[str, Any]:
             if isinstance(f, dict) and str(f.get("revenda")) == REVENDA_ARACATUBA:
                 v = _money_number(f.get("custo_medio"))
                 ara = v if v and v > 0 else None
+            elif isinstance(f, dict):
+                v = _money_number(f.get("custo_medio"))
+                if v and v > 0:
+                    outra[codigo] = min(outra.get(codigo, v), v)
         prec_apollo[codigo] = ara
         # 22/10 (dono): o custo da planilha antiga embutida no Precificador ("_id" source-N, nunca lido do
         # Apollo) tem 30-42% a mais em quase metade dos produtos (WAP331 74,97 x 53,04; JFC217 91,00 x 64,38;
@@ -24044,11 +24049,17 @@ def _financeiro_custos_aracatuba(com_vendas_ml: bool = True) -> dict[str, Any]:
     with DB_LOCK:
         for r in DB.execute("SELECT codigo, custos_json FROM custo_apollo_v1931").fetchall():
             try:
-                v = _money_number((json.loads(r["custos_json"] or "{}") or {}).get(REVENDA_ARACATUBA))
+                custos = json.loads(r["custos_json"] or "{}") or {}
             except Exception:
-                v = None
+                custos = {}
+            cod_ap = str(r["codigo"] or "").strip().upper()
+            v = _money_number(custos.get(REVENDA_ARACATUBA))
             if v and v > 0:
-                apollo[str(r["codigo"] or "").strip().upper()] = float(v)
+                apollo[cod_ap] = float(v)
+            for rev, c in custos.items():
+                c = _money_number(c)
+                if str(rev) != REVENDA_ARACATUBA and c and c > 0:
+                    outra[cod_ap] = min(outra.get(cod_ap, float(c)), float(c))
         for r in DB.execute("SELECT codigo, custo_manual FROM custos_conhecidos_v1807 WHERE custo_manual > 0").fetchall():
             manual[str(r["codigo"] or "").strip().upper()] = float(r["custo_manual"])
         # 22/10 (dono): o "último custo visto" (custos_conhecidos_v1807.custo_auto) só vale quando veio do
@@ -24060,14 +24071,14 @@ def _financeiro_custos_aracatuba(com_vendas_ml: bool = True) -> dict[str, Any]:
         snaps = DB.execute("SELECT sku, unit_cost FROM ml_profitability_snapshot WHERE unit_cost > 0 "
                            "ORDER BY captured_at").fetchall() if com_vendas_ml else []
     ultimo_prec = {k: v for k, v in ultimo_prec.items() if k not in so_planilha}
-    conhecidos = set(prec) | set(apollo) | set(manual) | set(ultimo_prec)
+    conhecidos = set(prec) | set(apollo) | set(manual) | set(ultimo_prec) | set(outra)
     venda: dict[str, float] = {}
     for r in snaps:
         codigo = _compras_codigo(str(r["sku"] or ""), dict.fromkeys(conhecidos))
         if codigo:
             venda[codigo] = float(r["unit_cost"])
     return {"prec": prec, "prec_apollo": prec_apollo, "apollo": apollo, "manual": manual, "venda": venda,
-            "ultimo_prec": ultimo_prec,
+            "ultimo_prec": ultimo_prec, "outra": outra,
             "conhecidos": dict.fromkeys(conhecidos), "kits": {}, "cache": {}}
 
 
@@ -24088,6 +24099,10 @@ def _financeiro_custo_codigo(codigo: str, ctx: dict[str, Any], congelar: bool) -
     for v in (prec, ctx["apollo"].get(codigo), ctx["ultimo_prec"].get(codigo), ctx["venda"].get(codigo)):
         if v:
             return float(v), "estimado"
+    # 22/10 (dono): Araçatuba NUNCA teve custo (peça transferida de outra filial) -> o menor custo das
+    # outras filiais, marcado "outra filial". Só na estimativa: nunca congela e nunca vence Araçatuba/digitado.
+    if ctx.get("outra", {}).get(codigo):
+        return float(ctx["outra"][codigo]), "outra_filial"
     return None, ""
 
 
@@ -24104,10 +24119,16 @@ def _financeiro_custo_aracatuba(sku: str, ctx: dict[str, Any], congelar: bool = 
         kits.update(full_kit_compositions([str(sku).strip()]))
     comps = (kits.get(str(sku).strip()) or {}).get("componentes")
     conhecidos = ctx["conhecidos"]
-    partes = [{"sku": x.strip(), "quantidade": 1} for x in (s.split("/") if "/" in s else [s]) if x.strip()]
+    texto_partes = s
+    if re.search(r"/|\s-\s", s) and re.match(r"^KIT(?!\d+-)", s):
+        texto_partes = re.sub(r"^KIT[-\s]*", "", s)      # "KITRS001005 - RS000365", "KIT-A/B"
+    partes = [{"sku": x.strip(), "quantidade": 1}
+              for x in re.split(r"\s*/\s*|\s+-\s+", texto_partes) if x.strip()]
     tentativas = [comps] if comps else []
-    if not comps and _compras_codigo(s, conhecidos):
-        tentativas.append([{"sku": s, "quantidade": 1}])        # "PSH367/80" é um código inteiro
+    # "PSH367/80" é um código inteiro; "157507-0893556005" é prefixo do ML + código. Nada além disso:
+    # "KITRS001005 - RS000365" não pode virar só a RS000365 pelo traço.
+    if not comps and (s in conhecidos or (re.match(r"^\d+-", s) and _compras_codigo(s, conhecidos))):
+        tentativas.append([{"sku": s, "quantidade": 1}])
     # 22/10 (produção): "KIT-ACP126/0893764271" está no Precificador como produto com custo 0;
     # sem custo no código inteiro, soma as peças
     if not comps and (len(partes) > 1 or not tentativas):
@@ -24128,7 +24149,9 @@ def _financeiro_custo_aracatuba(sku: str, ctx: dict[str, Any], congelar: bool = 
             total += custo * unidades
             origens.append(origem)
         if completo and total > 0:
-            origem = "venda" if congelar else ("manual" if all(o == "manual" for o in origens) else "estimado")
+            origem = "venda" if congelar else (
+                "outra_filial" if "outra_filial" in origens
+                else "manual" if all(o == "manual" for o in origens) else "estimado")
             resultado = (round(total, 4), origem)
             break
     ctx["cache"][chave] = resultado
@@ -24524,7 +24547,8 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
         s["pedidos"] = len(s["pedidos"])
         # V19.77: "estimado" se alguma venda do SKU não tem custo congelado; custo médio do período
         origens = s.pop("_origens", set())
-        s["custo_origem"] = next((o for o in ("estimado", "manual", "venda") if o in origens), s["custo_origem"])
+        s["custo_origem"] = next((o for o in ("outra_filial", "estimado", "manual", "venda") if o in origens),
+                                 s["custo_origem"])
         if not s["sem_custo"] and s["unidades"]:
             s["custo_unitario"] = round(s["cmv"] / s["unidades"], 4)
         bruto = round(s["faturamento"] - s["cmv"], 2)
