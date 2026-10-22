@@ -181,6 +181,28 @@ class CustoDoFinanceiro(TesteNoromak):
             S.shopee_escrow_lookup = salvo
         self.assertEqual(buscados, [])
 
+    # --- 22/10, produção: produtos zerados continuavam sem custo ---
+
+    def test_kit_cadastrado_no_precificador_com_custo_zero_soma_as_pecas(self):
+        # "KIT-ACP126/0893764271" está no Precificador como produto comum com custo 0
+        _precificador([{"sku": "KIT-ACP126/0893764271", "custo": 0},
+                       {"sku": "ACP126", "custo": 0, "filialCusto": 1, "custosFiliais": _filiais(0, 0)},
+                       {"sku": "0893764271", "custo": 0, "filialCusto": 1, "custosFiliais": _filiais(0, 0)}])
+        _apollo("ACP126", {"1": 8.27, "3": 11.39})
+        _apollo("0893764271", {"1": 8.21})
+        _vender("V1", "KIT-ACP126/0893764271", 1, 46.90, (HOJE - timedelta(days=10)).isoformat())
+        self.assertAlmostEqual(_sku(_periodo(), "KIT-ACP126/0893764271")["cmv"], 16.48)
+
+    def test_ultimo_custo_visto_vindo_do_precificador_vale(self):
+        # WEO0029: zerado agora; o último custo visto veio do Precificador (Araçatuba), não do Apollo misturado
+        _precificador([{"sku": "WEO0029", "custo": 0, "filialCusto": 1, "custosFiliais": _filiais(0, 0)}])
+        with S.DB_LOCK:
+            S.DB.execute("INSERT OR REPLACE INTO custos_conhecidos_v1807(codigo,custo_auto,origem_auto,data_auto) "
+                         "VALUES('WEO0029',24.77,'Precificador',?)", (S.now_iso(),))
+            S.DB.commit()
+        _vender("V1", "WEO0029", 1, 42.90, (HOJE - timedelta(days=10)).isoformat())
+        self.assertAlmostEqual(_sku(_periodo(), "WEO0029")["cmv"], 24.77)
+
     def test_escrow_da_shopee_buscado_sozinho(self):
         _precificador([{"sku": "X1", "custo": 10.0}])
         _vender("SP1", "X1", 1, 30.0, (HOJE - timedelta(days=2)).isoformat(), marketplace="shopee")

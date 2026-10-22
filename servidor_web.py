@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.77-CUSTO-FINANCEIRO"
+APP_VERSION = "19.78-CUSTO-KIT"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -24042,16 +24042,21 @@ def _financeiro_custos_aracatuba(com_vendas_ml: bool = True) -> dict[str, Any]:
                 apollo[str(r["codigo"] or "").strip().upper()] = float(v)
         for r in DB.execute("SELECT codigo, custo_manual FROM custos_conhecidos_v1807 WHERE custo_manual > 0").fetchall():
             manual[str(r["codigo"] or "").strip().upper()] = float(r["custo_manual"])
+        # 22/10 (produção): o último custo visto que veio do PRECIFICADOR é o de Araçatuba (filialCusto 1 em
+        # quase todos); só o lido direto do Apollo ("Apollo") mistura as filiais e continua fora.
+        ultimo_prec = {str(r["codigo"] or "").strip().upper(): float(r["custo_auto"]) for r in DB.execute(
+            "SELECT codigo, custo_auto FROM custos_conhecidos_v1807 WHERE custo_auto > 0 AND origem_auto='Precificador'")}
         # só a estimativa usa o custo da venda do ML; a rotina de congelar não precisa ler a tabela
         snaps = DB.execute("SELECT sku, unit_cost FROM ml_profitability_snapshot WHERE unit_cost > 0 "
                            "ORDER BY captured_at").fetchall() if com_vendas_ml else []
-    conhecidos = set(prec) | set(apollo) | set(manual)
+    conhecidos = set(prec) | set(apollo) | set(manual) | set(ultimo_prec)
     venda: dict[str, float] = {}
     for r in snaps:
         codigo = _compras_codigo(str(r["sku"] or ""), dict.fromkeys(conhecidos))
         if codigo:
             venda[codigo] = float(r["unit_cost"])
     return {"prec": prec, "prec_apollo": prec_apollo, "apollo": apollo, "manual": manual, "venda": venda,
+            "ultimo_prec": ultimo_prec,
             "conhecidos": dict.fromkeys(conhecidos), "kits": {}, "cache": {}}
 
 
@@ -24062,13 +24067,14 @@ def _financeiro_custo_codigo(codigo: str, ctx: dict[str, Any], congelar: bool) -
     if congelar:
         # revisão 22/10: o Apollo de Araçatuba (do Precificador ou o último lido) antes do custo do
         # Precificador sem filial, que pode ser um valor digitado velho
-        for v in (ctx["prec_apollo"].get(codigo), ctx["apollo"].get(codigo), prec, ctx["manual"].get(codigo)):
+        for v in (ctx["prec_apollo"].get(codigo), ctx["apollo"].get(codigo), prec, ctx["ultimo_prec"].get(codigo),
+                  ctx["manual"].get(codigo)):
             if v:
                 return float(v), "venda"
         return None, ""
     if ctx["manual"].get(codigo):
         return float(ctx["manual"][codigo]), "manual"
-    for v in (prec, ctx["apollo"].get(codigo), ctx["venda"].get(codigo)):
+    for v in (prec, ctx["apollo"].get(codigo), ctx["ultimo_prec"].get(codigo), ctx["venda"].get(codigo)):
         if v:
             return float(v), "estimado"
     return None, ""
@@ -24087,28 +24093,35 @@ def _financeiro_custo_aracatuba(sku: str, ctx: dict[str, Any], congelar: bool = 
         kits.update(full_kit_compositions([str(sku).strip()]))
     comps = (kits.get(str(sku).strip()) or {}).get("componentes")
     conhecidos = ctx["conhecidos"]
-    if not comps:
-        if _compras_codigo(s, conhecidos):            # "PSH367/80" é um código inteiro
-            comps = [{"sku": s, "quantidade": 1}]
-        else:
-            partes = [x for x in s.split("/") if x.strip()] if "/" in s else [s]
-            comps = [{"sku": x.strip(), "quantidade": 1} for x in partes]
-    total, origens = 0.0, []
-    for c in comps:
-        codigo = _compras_codigo(str(c.get("sku") or ""), conhecidos)
-        custo, origem = _financeiro_custo_codigo(codigo, ctx, congelar) if codigo else (None, "")
-        if custo is None:
-            ctx["cache"][chave] = (None, "")
-            return ctx["cache"][chave]
-        try:
-            unidades = max(1, int(c.get("quantidade") or 1))
-        except (TypeError, ValueError):
-            unidades = 1
-        total += custo * unidades
-        origens.append(origem)
-    origem = "venda" if congelar else ("manual" if origens and all(o == "manual" for o in origens) else "estimado")
-    ctx["cache"][chave] = (round(total, 4), origem) if total > 0 else (None, "")
-    return ctx["cache"][chave]
+    partes = [{"sku": x.strip(), "quantidade": 1} for x in (s.split("/") if "/" in s else [s]) if x.strip()]
+    tentativas = [comps] if comps else []
+    if not comps and _compras_codigo(s, conhecidos):
+        tentativas.append([{"sku": s, "quantidade": 1}])        # "PSH367/80" é um código inteiro
+    # 22/10 (produção): "KIT-ACP126/0893764271" está no Precificador como produto com custo 0;
+    # sem custo no código inteiro, soma as peças
+    if not comps and (len(partes) > 1 or not tentativas):
+        tentativas.append(partes)
+    resultado: tuple[float | None, str] = (None, "")
+    for lista in tentativas:
+        total, origens, completo = 0.0, [], True
+        for c in lista:
+            codigo = _compras_codigo(str(c.get("sku") or ""), conhecidos)
+            custo, origem = _financeiro_custo_codigo(codigo, ctx, congelar) if codigo else (None, "")
+            if custo is None:
+                completo = False
+                break
+            try:
+                unidades = max(1, int(c.get("quantidade") or 1))
+            except (TypeError, ValueError):
+                unidades = 1
+            total += custo * unidades
+            origens.append(origem)
+        if completo and total > 0:
+            origem = "venda" if congelar else ("manual" if all(o == "manual" for o in origens) else "estimado")
+            resultado = (round(total, 4), origem)
+            break
+    ctx["cache"][chave] = resultado
+    return resultado
 
 
 def financeiro_custo_congelar(dias: int = FINANCEIRO_CONGELA_DIAS) -> int:
