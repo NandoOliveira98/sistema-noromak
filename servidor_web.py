@@ -7187,7 +7187,7 @@ def _tiktok_pecas(texto: Any) -> list[tuple[str, int]]:
 def _tiktok_quantidade(valor: Any) -> int | None:
     try:
         return int(float(valor))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):  # V19.81: "Infinity" vindo da extensão
         return None
 
 
@@ -7242,36 +7242,64 @@ def _tiktok_sku_gravar(vistos: dict[str, dict[str, Any]], apagar_ausentes: bool)
                 if str(row["sku_id"]) not in vistos:
                     DB.execute("DELETE FROM tiktok_sku_v1964 WHERE sku_id=?", (row["sku_id"],))
         DB.commit()
-    return {"ok": True, "variacoes": len(vistos)}
+    return {"ok": True, "variacoes": len(vistos), "apagou": bool(apagar_ausentes)}
 
 
 # V19.81: sem a Open API (o TikTok exige gerente de contas), a extensão NOROMAK_TIKTOK_ESTOQUE
 # lê a lista de produtos do Seller Center (sessão do vendedor no Edge) e manda para cá; o
 # cálculo é o mesmo da V19.64. Quem grava no TikTok é a extensão, e ela devolve o resultado.
+# O Seller Center grava por DIFERENÇA (quantity_variation): duas rodadas juntas somariam duas
+# vezes, por isso só existe uma rodada de envio por vez (TIKTOK_RODADA, vence sozinha).
+TIKTOK_RODADA_PRAZO = 15 * 60
+TIKTOK_EXTENSAO_RECENTE = 6 * 3600  # sem a API, o Apollo só é lido se a extensão leu a loja há menos que isto
+TIKTOK_LEITURA_MINIMA = 0.7  # leitura "completa" com menos de 70% do que já existe não apaga ninguém
+TIKTOK_RODADA: dict[str, Any] = {}
+
+
+class TikTokRodadaOcupada(Exception):
+    pass
+
+
+def _tiktok_texto(valor: Any, limite: int) -> str:
+    return str(valor if valor is not None else "").strip()[:limite]
+
+
 def tiktok_produtos_da_extensao(produtos: Any, completo: bool) -> dict[str, Any]:
-    """Produtos no formato do Seller Center (/api/v1/product/local/products/list). `completo` =
-    a extensão leu todas as páginas: só então quem não veio sai da lista."""
+    """Estoque por SKU do Seller Center, agrupado por produto pela extensão. `completo` = a
+    extensão leu todas as páginas: só então quem não veio sai da lista."""
     if not isinstance(produtos, list):
         raise ValueError("Lista de produtos inválida.")
     if completo and not produtos:
         raise ValueError("Lista de produtos vazia: nada foi alterado.")  # leitura que falhou não esvazia a loja
     vistos: dict[str, dict[str, Any]] = {}
     for prod in produtos:
-        if not isinstance(prod, dict):
+        if not isinstance(prod, dict) or not isinstance(prod.get("skus"), list):
             continue
-        for sku in prod.get("skus") or []:
-            if not isinstance(sku, dict) or not str(sku.get("id") or "").strip():
+        for sku in prod["skus"]:
+            sku_id = _tiktok_texto(sku.get("id"), 64) if isinstance(sku, dict) else ""
+            if not sku_id:
                 continue
-            inv = [q for q in (sku.get("quantities") or []) if isinstance(q, dict)]
-            vistos[str(sku["id"]).strip()] = {
-                "product_id": str(prod.get("product_id") or ""), "titulo": str(prod.get("product_name") or "")[:300],
-                "status": str(prod.get("product_status") if prod.get("product_status") is not None else ""),
-                "seller_sku": str(sku.get("seller_sku") or "").strip(),
-                "warehouse_id": str((inv[0] if inv else {}).get("warehouse_id") or ""),
+            inv = [q for q in (sku.get("quantities") if isinstance(sku.get("quantities"), list) else []) if isinstance(q, dict)]
+            vistos[sku_id] = {
+                "product_id": _tiktok_texto(prod.get("product_id"), 64), "titulo": _tiktok_texto(prod.get("product_name"), 300),
+                "status": _tiktok_texto(prod.get("product_status"), 40),
+                "seller_sku": _tiktok_texto(sku.get("seller_sku"), 120),
+                "warehouse_id": _tiktok_texto((inv[0] if inv else {}).get("warehouse_id"), 64),
                 "armazens": len(inv),
+                # quantidade vazia fica nula (nunca vira "enviar" contra um número inventado)
                 "qtd": _tiktok_quantidade((inv[0] if inv else {}).get("available_quantity")) if len(inv) == 1 else None,
             }
-    return _tiktok_sku_gravar(vistos, apagar_ausentes=bool(completo))
+    apagar = bool(completo)
+    if apagar:
+        with DB_LOCK:
+            existentes = int(DB.execute("SELECT COUNT(*) FROM tiktok_sku_v1964").fetchone()[0])
+        if existentes >= 10 and len(vistos) < existentes * TIKTOK_LEITURA_MINIMA:
+            apagar = False  # leitura cortada que se diz completa: não some com a loja
+    res = _tiktok_sku_gravar(vistos, apagar_ausentes=apagar)
+    _tiktok_config_gravar("extensao_lida_epoch", str(int(time.time())), "extensao")
+    if completo and not apagar:
+        res["aviso"] = "Leitura bem menor que a lista atual: nenhuma variação foi apagada."
+    return res
 
 
 def tiktok_extensao_pendentes() -> dict[str, Any]:
@@ -7283,14 +7311,29 @@ def tiktok_extensao_pendentes() -> dict[str, Any]:
     return {"ok": True, "modo": modo, "pode_enviar": modo != "simulacao", "itens": itens}
 
 
-def tiktok_extensao_resultado(resultados: Any, ator: str) -> dict[str, Any]:
+def tiktok_extensao_iniciar(ator: str) -> dict[str, Any]:
+    """Abre a rodada de envio (uma por vez) e devolve a lista a gravar."""
+    with TIKTOK_ESTOQUE_LOCK:
+        p = tiktok_extensao_pendentes()
+        if not p["pode_enviar"]:
+            raise ValueError("O Noromak está em Simulação: nada é gravado no TikTok. Mude para Lote na tela Estoque TikTok.")
+        agora = time.time()
+        if TIKTOK_RODADA and agora - float(TIKTOK_RODADA.get("desde") or 0) < TIKTOK_RODADA_PRAZO:
+            raise TikTokRodadaOcupada(f"Já tem um envio em andamento (por {TIKTOK_RODADA.get('por')}). Espere ele terminar.")
+        TIKTOK_RODADA.clear()
+        TIKTOK_RODADA.update(id=secrets.token_hex(8), desde=agora, por=str(ator or ""))
+        p["rodada"] = TIKTOK_RODADA["id"]
+        return p
+
+
+def tiktok_extensao_resultado(resultados: Any, ator: str, rodada: str = "", fim: bool = False) -> dict[str, Any]:
     if not isinstance(resultados, list):
         raise ValueError("Resultados inválidos.")
     modo = tiktok_estoque_config()["modo_estoque"]
     ok_count = erros = ignorados = 0
     with TIKTOK_ESTOQUE_LOCK:
-        for r in resultados:
-            sku_id = str((r or {}).get("sku_id") or "").strip() if isinstance(r, dict) else ""
+        for r in resultados[:2000]:
+            sku_id = _tiktok_texto(r.get("sku_id"), 64) if isinstance(r, dict) else ""
             with DB_LOCK:
                 row = DB.execute("SELECT seller_sku FROM tiktok_sku_v1964 WHERE sku_id=?", (sku_id,)).fetchone()
             if not row:
@@ -7298,18 +7341,27 @@ def tiktok_extensao_resultado(resultados: Any, ator: str) -> dict[str, Any]:
                 continue
             de, para = _tiktok_quantidade(r.get("de")), _tiktok_quantidade(r.get("para"))
             final = _tiktok_quantidade(r.get("final"))
-            if r.get("ok") is True:
+            if final is not None:
+                # o que o TikTok disse que ficou é o dado real, certo ou errado
+                with DB_LOCK:
+                    DB.execute("UPDATE tiktok_sku_v1964 SET qtd_tiktok=? WHERE sku_id=?", (final, sku_id))
+                    DB.commit()
+            if r.get("ok") is True and final is not None and final == para:
                 ok_count += 1
-                if final is not None:
-                    with DB_LOCK:
-                        DB.execute("UPDATE tiktok_sku_v1964 SET qtd_tiktok=? WHERE sku_id=?", (final, sku_id))
-                        DB.commit()
                 _tiktok_estoque_log(sku_id, row["seller_sku"], de, para, modo, "OK",
-                                    f"pela extensão do Seller Center; TikTok ficou com {final if final is not None else '?'}", ator)
+                                    f"pela extensão do Seller Center; TikTok ficou com {final}", ator)
+                continue
+            erros += 1
+            if r.get("ok") is True:
+                motivo = "o TikTok não confirmou a quantidade" if final is None else f"o TikTok ficou com {final}, não {para}"
             else:
-                erros += 1
-                _tiktok_estoque_log(sku_id, row["seller_sku"], de, para, modo, "ERRO",
-                                    f"pela extensão: {str(r.get('erro') or 'sem detalhe')}", ator)
+                motivo = _tiktok_texto(r.get("erro"), 400) or "sem detalhe"
+            _tiktok_estoque_log(sku_id, row["seller_sku"], de, para, modo, "ERRO", f"pela extensão: {motivo}", ator)
+        if rodada and TIKTOK_RODADA.get("id") == rodada:
+            if fim:
+                TIKTOK_RODADA.clear()
+            else:
+                TIKTOK_RODADA["desde"] = time.time()  # cada item devolvido renova a rodada (rodada longa não vence)
     return {"ok": True, "ok_count": ok_count, "erros": erros, "ignorados": ignorados}
 
 
@@ -7662,9 +7714,10 @@ def tiktok_estoque_loop(stop_event: threading.Event) -> None:
                     r = tiktok_estoque_enviar(ator="sistema", automatico=True)
                     if r.get("erros"):
                         tiktok_log_event_se_mudou("estoque", "worker", "ERRO", f"{r['erros']} variação(ões) recusada(s)")
-            elif _tiktok_linhas_sku():
-                # V19.81: sem a API, as variações vêm da extensão; o rodízio do Apollo continua
-                # (quem envia é a extensão, pelo /extensao/pendentes).
+            elif time.time() - float(_tiktok_config_ler("extensao_lida_epoch") or 0) < TIKTOK_EXTENSAO_RECENTE \
+                    and _tiktok_linhas_sku():
+                # V19.81: sem a API, as variações vêm da extensão; o rodízio do Apollo continua só
+                # enquanto a extensão está em uso (o limite do Apollo é dividido com as outras telas).
                 tiktok_apollo_ler_proximo()
         except Exception as exc:
             tiktok_log_event_se_mudou("estoque", "worker", "ERRO", str(exc)[:800])
@@ -33836,8 +33889,15 @@ class AppHandler(BaseHTTPRequestHandler):
                     res = tiktok_produtos_sincronizar()
                 elif path == "/api/tiktok-estoque/extensao/produtos":  # V19.81
                     res = tiktok_produtos_da_extensao(body.get("produtos"), completo=bool(body.get("completo")))
+                elif path == "/api/tiktok-estoque/extensao/iniciar":  # V19.81: uma rodada de envio por vez
+                    try:
+                        res = tiktok_extensao_iniciar(ctx["username"])
+                    except TikTokRodadaOcupada as exc:
+                        self.send_json({"ok": False, "error": str(exc)}, 409)
+                        return
                 elif path == "/api/tiktok-estoque/extensao/resultado":  # V19.81
-                    res = tiktok_extensao_resultado(body.get("resultados"), ctx["username"])
+                    res = tiktok_extensao_resultado(body.get("resultados"), ctx["username"],
+                                                    rodada=str(body.get("rodada") or ""), fim=bool(body.get("fim")))
                     audit(ctx["username"], "tiktok.estoque.extensao", f"{res['ok_count']} ok, {res['erros']} erro")
                 else:
                     self.send_json({"ok": False, "error": "Rota não encontrada."}, 404)

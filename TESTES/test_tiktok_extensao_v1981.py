@@ -32,6 +32,7 @@ class Base(TesteNoromak):
     def setUp(self) -> None:
         super().setUp()
         S._TIKTOK_APOLLO_CHAMADAS.clear()
+        S.TIKTOK_RODADA.clear()
 
     def _receber(self, produtos, completo=True):
         return S.tiktok_produtos_da_extensao(produtos, completo=completo)
@@ -129,6 +130,88 @@ class Worker(Base):
         api.assert_not_called()
 
 
+class Revisao(Base):
+    """Achados da revisão antes de subir (22/10)."""
+
+    def _pronto(self, desejado=7):
+        self._receber([_produto()])
+        self._ler_apollo("2011004", desejado)
+        S.tiktok_estoque_config_definir("modo_estoque", "lote", "teste")
+
+    def test_uma_rodada_de_envio_por_vez(self):
+        self._pronto()
+        r = S.tiktok_extensao_iniciar("dono")
+        self.assertEqual([i["sku_id"] for i in r["itens"]], ["S1"])
+        with self.assertRaises(S.TikTokRodadaOcupada):
+            S.tiktok_extensao_iniciar("outro")
+        S.tiktok_extensao_resultado([{"sku_id": "S1", "de": 3, "para": 7, "ok": True, "final": 7}], "dono",
+                                    rodada=r["rodada"], fim=True)
+        self.assertIsNotNone(S.tiktok_extensao_iniciar("outro")["rodada"])
+
+    def test_rodada_esquecida_vence(self):
+        self._pronto()
+        S.tiktok_extensao_iniciar("dono")
+        with mock.patch.object(S.time, "time", return_value=S.time.time() + S.TIKTOK_RODADA_PRAZO + 1):
+            self.assertTrue(S.tiktok_extensao_iniciar("outro")["rodada"])
+
+    def test_resultado_parcial_renova_a_rodada(self):
+        self._pronto()
+        r = S.tiktok_extensao_iniciar("dono")
+        depois = S.time.time() + S.TIKTOK_RODADA_PRAZO - 5
+        with mock.patch.object(S.time, "time", return_value=depois):
+            S.tiktok_extensao_resultado([{"sku_id": "S1", "de": 3, "para": 7, "ok": True, "final": 7}], "dono",
+                                        rodada=r["rodada"])
+        with mock.patch.object(S.time, "time", return_value=depois + 60), self.assertRaises(S.TikTokRodadaOcupada):
+            S.tiktok_extensao_iniciar("outro")
+
+    def test_quantidade_infinita_nao_quebra(self):
+        self.assertIsNone(S._tiktok_quantidade(float("inf")))
+
+    def test_simulacao_nao_inicia_rodada(self):
+        self._receber([_produto()])
+        with self.assertRaises(ValueError):
+            S.tiktok_extensao_iniciar("dono")
+
+    def test_leitura_bem_menor_que_a_lista_nao_apaga(self):
+        self._receber([_produto(f"P{n}", [_sku(f"S{n}", f"10{n:04d}", 1)]) for n in range(20)])
+        r = self._receber([_produto("P0", [_sku("S0", "100000", 1)])], completo=True)
+        self.assertFalse(r["apagou"])
+        self.assertEqual(len(S._tiktok_linhas_sku()), 20)
+
+    def test_ok_sem_quantidade_final_vira_erro(self):
+        self._pronto()
+        r = S.tiktok_extensao_resultado([{"sku_id": "S1", "de": 3, "para": 7, "ok": True}], "dono")
+        self.assertEqual((r["ok_count"], r["erros"]), (0, 1))
+        self.assertEqual(S._tiktok_linhas_sku()[0]["qtd_tiktok"], 3)
+
+    def test_final_diferente_do_pedido_vira_erro_e_guarda_o_real(self):
+        self._pronto()
+        r = S.tiktok_extensao_resultado([{"sku_id": "S1", "de": 3, "para": 7, "ok": True, "final": 9}], "dono")
+        self.assertEqual(r["erros"], 1)
+        self.assertEqual(S._tiktok_linhas_sku()[0]["qtd_tiktok"], 9)
+
+    def test_entrada_estranha_nao_quebra(self):
+        r = self._receber([{"product_id": "P1", "skus": 5}, {"product_id": "P2", "skus": [{"id": "S" * 500, "quantities": "x"}]}],
+                          completo=False)
+        self.assertEqual(r["variacoes"], 1)
+        self.assertLessEqual(len(S._tiktok_linhas_sku()[0]["sku_id"]), 64)
+
+    def test_quantidade_vazia_fica_nula(self):
+        self._receber([_produto(skus=[_sku("S1", "2011004", None)])])
+        self._ler_apollo("2011004", 7)
+        self.assertIsNone(S._tiktok_linhas_sku()[0]["qtd_tiktok"])
+
+    def test_sem_api_so_le_o_apollo_com_extensao_recente(self):
+        self._receber([_produto()])
+        S._tiktok_config_gravar("extensao_lida_epoch", str(int(S.time.time()) - S.TIKTOK_EXTENSAO_RECENTE - 10), "teste")
+        with mock.patch.object(S, "tiktok_status_payload", return_value={"connected": False}), \
+                mock.patch.object(S, "crm_stock_lookup", return_value=_apollo(4)) as apollo:
+            ev = mock.Mock()
+            ev.is_set.side_effect = [False, True]
+            S.tiktok_estoque_loop(ev)
+        apollo.assert_not_called()
+
+
 class Rotas(Base):
 
     def test_rotas_da_extensao(self):
@@ -139,8 +222,17 @@ class Rotas(Base):
         st, corpo = self.cliente.pedir("GET", "/api/tiktok-estoque/extensao/pendentes")
         self.assertEqual(st, 200, corpo)
         self.assertEqual(corpo["itens"][0]["desejado"], 9)
+        st, corpo = self.cliente.pedir("POST", "/api/tiktok-estoque/extensao/iniciar", {})
+        self.assertEqual(st, 400, corpo)  # Simulação
+        S.tiktok_estoque_config_definir("modo_estoque", "lote", "teste")
+        st, corpo = self.cliente.pedir("POST", "/api/tiktok-estoque/extensao/iniciar", {})
+        self.assertEqual(st, 200, corpo)
+        rodada = corpo["rodada"]
+        st, _ = self.cliente.pedir("POST", "/api/tiktok-estoque/extensao/iniciar", {})
+        self.assertEqual(st, 409)
         st, corpo = self.cliente.pedir("POST", "/api/tiktok-estoque/extensao/resultado",
-                                       {"resultados": [{"sku_id": "S1", "de": 3, "para": 9, "ok": True, "final": 9}]})
+                                       {"rodada": rodada, "fim": True,
+                                        "resultados": [{"sku_id": "S1", "de": 3, "para": 9, "ok": True, "final": 9}]})
         self.assertEqual(st, 200, corpo)
         self.assertEqual(corpo["ok_count"], 1)
 

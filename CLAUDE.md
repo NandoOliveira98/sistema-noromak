@@ -406,10 +406,15 @@ Tela `APP/tiktok-estoque.html` (`/tiktok-estoque`, menu Estoque e compras, módu
 `NOROMAK_TIKTOK_ESTOQUE` (Edge, fora do repo, v0.2) usa as chamadas internas da página com a sessão do vendedor:
 `POST /api/v1/product/stock/sku/list` (lista por SKU, `in_shop_stock`), `/stock/query/sku` (relê antes de gravar) e
 `/sku/price/stocks/update` — grava **por diferença** (`quantity_variation`), por isso relê o atual na hora. Rotas
-`POST /api/tiktok-estoque/extensao/{produtos,resultado}` e `GET .../extensao/pendentes` (perfil Admin);
-`tiktok_produtos_da_extensao` só apaga quem não veio com `completo` e lista vazia é recusada. Simulação: a extensão
-nunca grava (`pode_enviar`). Sem a API conectada o `tiktok_estoque_loop` continua o rodízio do Apollo quando há
-variações. **Falta:** pedidos do TikTok sem API não entram na fila (o vendido no TikTok só sai quando o Apollo baixar).
+`POST /api/tiktok-estoque/extensao/{produtos,iniciar,resultado}` e `GET .../extensao/pendentes` (perfil Admin).
+**Uma rodada de envio por vez** (`tiktok_extensao_iniciar`, `TIKTOK_RODADA`, 409; vence em 15 min; o `resultado` com
+`fim` fecha): duas rodadas juntas somariam a diferença duas vezes. Iniciar em Simulação = 400. OK só com a quantidade
+final confirmada e igual à pedida (senão ERRO; o final informado vira `qtd_tiktok`). `tiktok_produtos_da_extensao`:
+só apaga quem não veio com `completo`; lista vazia recusada; leitura "completa" com < 70% do que existe não apaga.
+O "Enviar" relê a loja antes. Extensão v0.3 roda só em content script isolado (sem postMessage com a página; os
+parâmetros da sessão vêm do `performance`). Sem a API conectada o `tiktok_estoque_loop` continua o rodízio do Apollo
+só se a extensão leu a loja nas últimas 6 h (`extensao_lida_epoch`). Produto inativo: o `status` do Seller Center é
+guardado mas ainda não filtra (falta amostra de inativo). **Falta:** pedidos do TikTok sem API não entram na fila (o vendido no TikTok só sai quando o Apollo baixar).
 Teste: `TESTES/test_tiktok_extensao_v1981.py`.
 
 ### Magalu (V19.24, fase 0 de 5)
