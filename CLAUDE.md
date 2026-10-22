@@ -514,7 +514,7 @@ custo R$ 13,02; o estoque zerou e o Financeiro puxou R$ 39,41 — o último cust
 (`custos_conhecidos_v1807.custo_auto` mistura as filiais e **não entra mais** no Financeiro). Custo = Araçatuba
 (revenda 1): `custosFiliais` do Precificador > custo do Precificador com `filialCusto` 1 > `custo_apollo_v1931["1"]`.
 `financeiro_custo_congelar` (na rotina `financeiro_frete_loop`) grava em `venda_custo_v1977` o custo das vendas de
-até 1 dia; venda antiga sem custo congelado = "estimado" (o digitado na Demanda de Compra vence). SKU com barra que
+até 3 dias; venda antiga sem custo congelado = "estimado" (o digitado na Demanda de Compra vence, até o congelado; ao congelar, o Apollo de Araçatuba vem antes do custo do Precificador sem filial; escrow com erro espera 6 h). SKU com barra que
 é um código inteiro não vira duas peças; código só no Apollo também tem custo. O escrow da Shopee passou a ser
 buscado pela mesma rotina (`financeiro_shopee_escrow_pendentes`, 30 dias): antes só pelo botão, e 237 de 292
 pedidos de outubro estavam "parciais". A regra antiga (`_financeiro_custo_unitario`) segue no Pós-venda e na

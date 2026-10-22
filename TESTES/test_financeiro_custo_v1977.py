@@ -137,6 +137,50 @@ class CustoDoFinanceiro(TesteNoromak):
         _vender("V1", "27200154", 2, 92.30, HOJE.isoformat())
         self.assertAlmostEqual(_sku(_periodo(), "27200154")["cmv"], 17.0)
 
+    # --- revisão de 22/10 ---
+
+    def test_digitado_vence_ate_o_congelado(self):
+        _precificador([{"sku": "X1", "custo": 5.0, "filialCusto": 1, "custosFiliais": _filiais(5.0, 0)}])
+        _vender("V1", "X1", 1, 43.20, HOJE.isoformat())
+        S.financeiro_custo_congelar()
+        _conhecido("X1", manual=13.02)
+        s = _sku(_periodo(), "X1")
+        self.assertEqual((s["cmv"], s["custo_origem"]), (13.02, "manual"))
+
+    def test_congelar_prefere_o_apollo_de_aracatuba_ao_custo_digitado_no_precificador(self):
+        # Precificador sem custosFiliais (custo à mão, velho) e Apollo de Araçatuba lido: o Apollo manda
+        _precificador([{"sku": "X1", "custo": 5.0}])
+        _apollo("X1", {"1": 13.02})
+        _vender("V1", "X1", 1, 43.20, HOJE.isoformat())
+        S.financeiro_custo_congelar()
+        self.assertAlmostEqual(_sku(_periodo(), "X1")["cmv"], 13.02)
+
+    def test_kit_por_prefixo_fora_do_cadastro_conta_as_pecas(self):
+        _precificador([{"sku": "0893600022", "custo": 10.0}])
+        _vender("V1", "KIT2-0893600022", 1, 60.0, HOJE.isoformat())
+        S.financeiro_custo_congelar()
+        self.assertAlmostEqual(_sku(_periodo(), "KIT2-0893600022")["cmv"], 20.0)
+
+    def test_venda_que_chega_dois_dias_depois_ainda_congela(self):
+        _precificador([{"sku": "X1", "custo": 13.0}])
+        _vender("V1", "X1", 1, 43.20, (HOJE - timedelta(days=2)).isoformat())
+        self.assertEqual(S.financeiro_custo_congelar(), 1)
+
+    def test_escrow_com_erro_espera_antes_de_tentar_de_novo(self):
+        _vender("SP1", "X1", 1, 30.0, (HOJE - timedelta(days=2)).isoformat(), marketplace="shopee")
+        with S.DB_LOCK:
+            S.DB.execute("INSERT INTO shopee_escrow_v1810(order_sn,order_income_json,fetched_at,fetched_epoch,erro) "
+                         "VALUES('SP1','',?,?,'HTTP 403')", (S.now_iso(), int(__import__("time").time())))
+            S.DB.commit()
+        buscados = []
+        salvo = S.shopee_escrow_lookup
+        S.shopee_escrow_lookup = lambda sn, permitir_api=True: buscados.append(sn) or None
+        try:
+            S.financeiro_shopee_escrow_pendentes()
+        finally:
+            S.shopee_escrow_lookup = salvo
+        self.assertEqual(buscados, [])
+
     def test_escrow_da_shopee_buscado_sozinho(self):
         _precificador([{"sku": "X1", "custo": 10.0}])
         _vender("SP1", "X1", 1, 30.0, (HOJE - timedelta(days=2)).isoformat(), marketplace="shopee")

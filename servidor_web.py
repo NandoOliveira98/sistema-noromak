@@ -23989,7 +23989,8 @@ def _financeiro_ads_periodo(d1: date, d2: date) -> dict[str, Any]:
 #     Precificador com custo de Araçatuba no Apollo tem custo.
 # A regra antiga (_financeiro_custo_unitario) continua para o Pós-venda e a análise de kits.
 # ---------------------------------------------------------------------------
-FINANCEIRO_CONGELA_DIAS = 1
+FINANCEIRO_CONGELA_DIAS = 3   # revisão 22/10: venda que a sincronização traz depois também congela
+FINANCEIRO_ESCROW_ERRO_ESPERA = 6 * 3600   # escrow que deu erro só é tentado de novo depois de 6 h
 FINANCEIRO_SHOPEE_ESCROW_DIAS = 30
 REVENDA_ARACATUBA = "1"
 
@@ -24006,11 +24007,12 @@ def ensure_venda_custo_schema() -> None:
         DB.commit()
 
 
-def _financeiro_custos_aracatuba() -> dict[str, Any]:
+def _financeiro_custos_aracatuba(com_vendas_ml: bool = True) -> dict[str, Any]:
     """Custos de Araçatuba por código: Precificador, último lido no Apollo, digitado e o da venda do ML."""
     dados = precificador_dados()
     produtos = dados.get("products") if isinstance(dados, dict) else None
     prec: dict[str, float | None] = {}
+    prec_apollo: dict[str, float | None] = {}   # só o custosFiliais (vem do Apollo); sem o custo digitado
     for p in produtos if isinstance(produtos, list) else []:
         if not isinstance(p, dict) or p.get("isKit"):
             continue
@@ -24023,6 +24025,7 @@ def _financeiro_custos_aracatuba() -> dict[str, Any]:
             if isinstance(f, dict) and str(f.get("revenda")) == REVENDA_ARACATUBA:
                 v = _money_number(f.get("custo_medio"))
                 ara = v if v and v > 0 else None
+        prec_apollo[codigo] = ara
         if ara is None and str(p.get("filialCusto") or REVENDA_ARACATUBA) == REVENDA_ARACATUBA:
             v = _money_number(p.get("custo"))
             ara = v if v and v > 0 else None
@@ -24039,15 +24042,16 @@ def _financeiro_custos_aracatuba() -> dict[str, Any]:
                 apollo[str(r["codigo"] or "").strip().upper()] = float(v)
         for r in DB.execute("SELECT codigo, custo_manual FROM custos_conhecidos_v1807 WHERE custo_manual > 0").fetchall():
             manual[str(r["codigo"] or "").strip().upper()] = float(r["custo_manual"])
+        # só a estimativa usa o custo da venda do ML; a rotina de congelar não precisa ler a tabela
         snaps = DB.execute("SELECT sku, unit_cost FROM ml_profitability_snapshot WHERE unit_cost > 0 "
-                           "ORDER BY captured_at").fetchall()
+                           "ORDER BY captured_at").fetchall() if com_vendas_ml else []
     conhecidos = set(prec) | set(apollo) | set(manual)
     venda: dict[str, float] = {}
     for r in snaps:
         codigo = _compras_codigo(str(r["sku"] or ""), dict.fromkeys(conhecidos))
         if codigo:
             venda[codigo] = float(r["unit_cost"])
-    return {"prec": prec, "apollo": apollo, "manual": manual, "venda": venda,
+    return {"prec": prec, "prec_apollo": prec_apollo, "apollo": apollo, "manual": manual, "venda": venda,
             "conhecidos": dict.fromkeys(conhecidos), "kits": {}, "cache": {}}
 
 
@@ -24056,7 +24060,9 @@ def _financeiro_custo_codigo(codigo: str, ctx: dict[str, Any], congelar: bool) -
     do Apollo (pelo Precificador) manda. Para estimar venda antiga: o digitado vence."""
     prec = ctx["prec"].get(codigo)
     if congelar:
-        for v in (prec, ctx["apollo"].get(codigo), ctx["manual"].get(codigo)):
+        # revisão 22/10: o Apollo de Araçatuba (do Precificador ou o último lido) antes do custo do
+        # Precificador sem filial, que pode ser um valor digitado velho
+        for v in (ctx["prec_apollo"].get(codigo), ctx["apollo"].get(codigo), prec, ctx["manual"].get(codigo)):
             if v:
                 return float(v), "venda"
         return None, ""
@@ -24116,7 +24122,7 @@ def financeiro_custo_congelar(dias: int = FINANCEIRO_CONGELA_DIAS) -> int:
             "WHERE v.sale_day >= ? AND c.order_id IS NULL", (desde,)).fetchall()
     if not linhas:
         return 0
-    ctx = _financeiro_custos_aracatuba()
+    ctx = _financeiro_custos_aracatuba(com_vendas_ml=False)
     novos = []
     for r in linhas:
         custo, _origem = _financeiro_custo_aracatuba(str(r["sku"] or ""), ctx, congelar=True)
@@ -24136,11 +24142,12 @@ def financeiro_shopee_escrow_pendentes(limite: int | None = None, stop_event: th
     pedidos dos últimos FINANCEIRO_SHOPEE_ESCROW_DIAS dias que ainda não têm."""
     desde = (datetime.now(BR_TZ).date() - timedelta(days=FINANCEIRO_SHOPEE_ESCROW_DIAS)).isoformat()
     with DB_LOCK:
+        # revisão 22/10: o que deu erro há menos de 6 h não é tentado de novo (limite de chamadas da Shopee)
         pendentes = [str(r["order_id"]) for r in DB.execute(
             "SELECT DISTINCT v.order_id FROM vendas_v1799 v "
-            "LEFT JOIN shopee_escrow_v1810 e ON e.order_sn = v.order_id AND e.erro='' "
+            "LEFT JOIN shopee_escrow_v1810 e ON e.order_sn = v.order_id AND (e.erro='' OR e.fetched_epoch > ?) "
             "WHERE v.marketplace='shopee' AND v.sale_day >= ? AND e.order_sn IS NULL "
-            "ORDER BY v.sale_day DESC", (desde,)).fetchall()]
+            "ORDER BY v.sale_day DESC", (int(time.time()) - FINANCEIRO_ESCROW_ERRO_ESPERA, desde)).fetchall()]
     buscados = 0
     for sn in pendentes[:(limite or FINANCEIRO_SHOPEE_POR_RODADA)]:
         if stop_event is not None and stop_event.is_set():
@@ -24317,10 +24324,10 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
         sku = str(v["sku"] or "").strip()
         sku_key = sku.upper() or "(sem SKU)"
         congelado = congelados.get((mp, oid, str(v["line_key"])))
-        if congelado is not None:
+        unit, origem_custo = _financeiro_custo_aracatuba(sku, custos_ctx)
+        if congelado is not None and origem_custo != "manual":
+            # o custo digitado na Demanda de Compra vence até o congelado (é a correção do dono)
             unit, origem_custo = congelado, "venda"
-        else:
-            unit, origem_custo = _financeiro_custo_aracatuba(sku, custos_ctx)
         cmv = round(unit * qty, 2) if unit is not None else None
         pc = custos_pedido.get(chave) or {}
         total_pedido = receita_pedido.get(chave, 0.0)
