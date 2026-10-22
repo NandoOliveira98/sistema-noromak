@@ -148,6 +148,12 @@ th.n,td.n{text-align:right}
 @media(max-width:900px){.col3,.col4,.col5,.col6{grid-column:1/-1}
   .custos{grid-template-columns:repeat(2,minmax(0,1fr))}.custos .c:nth-child(odd){border-left:0}
   .topo-in{padding:10px 14px}main{padding:12px 14px 48px}}
+.custo-cel{white-space:nowrap}
+.lapis-custo{border:0;background:none;color:var(--nk-ink3,#7a8c9e);cursor:pointer;font-size:13px;padding:0 0 0 6px;vertical-align:middle}
+.lapis-custo:hover{color:var(--nk-pri,#1f57a5)}
+.custo-edita{display:flex;gap:6px;justify-content:flex-end}
+.custo-edita input{width:96px;font:inherit;font-size:12.5px;text-align:right;border:1px solid var(--nk-pri,#1f57a5);border-radius:7px;padding:4px 6px;background:var(--nk-tile,#fff);color:var(--nk-ink,#18324a)}
+.custo-edita .ok{font:inherit;font-size:12px;font-weight:700;border:0;border-radius:7px;padding:4px 9px;background:var(--nk-pri,#1f57a5);color:#fff;cursor:pointer}
 </style>
 <script defer src="/expedicao/web-auth.js?v=19.70"></script>
 <!-- V18.65: tema comum (fonte, foco e icones) por ultimo no head. -->
@@ -493,6 +499,11 @@ html[data-tema="escuro"] .faixa{color:#F0B357!important}
     estimado: ["aten", "estimado", "Venda sem custo guardado: último custo de Araçatuba conhecido. Corrija em Demanda de Compra (custo digitado) se souber o real"],
     manual: ["", "digitado", "Custo digitado na Demanda de Compra"],
     outra_filial: ["aten", "outra filial", "Araçatuba nunca teve custo deste produto: menor custo de outra filial (peça transferida). Digite o custo real na Demanda de Compra se souber"]};
+  // V19.79: custo digitado direto no Financeiro (mesma rota da Demanda de Compra; vence qualquer estimativa).
+  // Kit não tem lápis: o custo dele é a soma das peças, que se editam nas próprias linhas.
+  const lapisCusto = (s) => s.codigo_custo
+    ? `<button type="button" class="lapis-custo" data-codigo="${esc(s.codigo_custo)}" data-custo="${s.custo_origem === "manual" && s.custo_unitario != null ? esc(String(s.custo_unitario).replace(".", ",")) : ""}" title="Digitar o custo real por unidade de ${esc(s.codigo_custo)}">✎</button>`
+    : "";
   const origemCusto = (s) => {
     const o = ORIGEM_CUSTO[s.custo_origem];
     const un = s.custo_unitario != null ? `${brl(s.custo_unitario)}/un` : "";
@@ -517,7 +528,7 @@ html[data-tema="escuro"] .faixa{color:#F0B357!important}
               <td title="${esc(s.titulo)}">${esc((s.titulo || "").slice(0, 46))}</td>
               <td class="n">${num(s.unidades)}</td>
               <td class="n">${esc(brl(s.faturamento))}<i class="barra" style="width:${(s.faturamento / maxF * 100).toFixed(0)}%"></i></td>
-              <td class="n">${s.sem_custo ? '<span class="tag pend">sem custo</span>' : esc(brl(s.cmv)) + origemCusto(s)}</td>
+              <td class="n custo-cel">${s.sem_custo ? '<span class="tag pend">sem custo</span>' : esc(brl(s.cmv)) + origemCusto(s)}${lapisCusto(s)}</td>
               <td class="n">${esc(brl(s.taxas))}${faltando(s.sem_taxa, s.faturamento)}</td>
               <td class="n">${esc(brl(s.frete))}${faltando(s.sem_frete, s.faturamento)}</td>
               <td class="n">${s.ads ? esc(brl(s.ads)) : "—"}</td>
@@ -584,6 +595,25 @@ html[data-tema="escuro"] .faixa{color:#F0B357!important}
       + ` · ${num(d.cobertura.pedidos_ml_taxa_da_venda)} com a tarifa do ato da venda`
       + ` · ${num(d.cobertura.pedidos_shopee_conciliados)} pedidos Shopee com escrow.`;
   }
+
+  document.addEventListener("click", (ev) => {
+    const b = ev.target.closest && ev.target.closest(".lapis-custo");
+    if (!b) return;
+    ev.stopPropagation();
+    const td = b.closest("td"), antes = td.innerHTML, codigo = b.dataset.codigo;
+    td.innerHTML = `<div class="custo-edita"><input inputmode="decimal" placeholder="R$ por un." value="${esc(b.dataset.custo || "")}" aria-label="Custo por unidade de ${esc(codigo)}"><button type="button" class="ok">Salvar</button></div><div class="sub-cel">${esc(codigo)} · Enter salva, Esc cancela, vazio apaga</div>`;
+    const inp = td.querySelector("input");
+    inp.focus(); inp.select();
+    const salvar = async () => {
+      try {
+        await api("/api/compras/custo", { method: "POST", body: JSON.stringify({ codigo, custo: inp.value.trim() }) });
+        (window.nkToast || (() => {}))(inp.value.trim() ? `Custo de ${codigo} gravado: R$ ${inp.value.trim()} por unidade.` : `Custo digitado de ${codigo} apagado.`);
+        carregar();
+      } catch (e) { (window.nkToast || alert)("Não foi possível gravar: " + e.message); }
+    };
+    td.querySelector(".ok").onclick = (e) => { e.stopPropagation(); salvar(); };
+    inp.addEventListener("keydown", (e) => { if (e.key === "Enter") salvar(); if (e.key === "Escape") td.innerHTML = antes; });
+  }, true);
 
   async function carregar() {
     if (state.carregando) return;

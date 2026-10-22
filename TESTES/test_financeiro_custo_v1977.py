@@ -75,9 +75,10 @@ class CustoDoFinanceiro(TesteNoromak):
         _conhecido("6007.003.315.00.8", auto=39.41)
         _vender("V1", "6007.003.315.00.8", 2, 86.40, (HOJE - timedelta(days=10)).isoformat())
         s = _sku(_periodo(), "6007.003.315.00.8")
-        # 22/10 (dono, 2ª decisão): Araçatuba nunca teve custo -> outra filial, MARCADO (nunca como se fosse
-        # Araçatuba; o digitado e o de Araçatuba vencem — test_outra_filial_nao_vence_aracatuba_nem_digitado)
-        self.assertEqual((s["cmv"], s["custo_origem"]), (78.82, "outra_filial"))
+        # 22/10 (dono): vendido por Araçatuba, o custo de outra filial é palpite (39,41 x 13,02 real): sem custo,
+        # e o dono digita o real direto no Financeiro (codigo_custo)
+        self.assertTrue(s["sem_custo"])
+        self.assertEqual(s["codigo_custo"], "6007.003.315.00.8")
 
     def test_ultimo_custo_de_aracatuba_guardado(self):
         _precificador([{"sku": "6007.003.315.00.8", "custo": 0, "filialCusto": 1, "custosFiliais": _filiais(0, 39.41)}])
@@ -230,14 +231,27 @@ class CustoDoFinanceiro(TesteNoromak):
         _vender("V1", "KITRS001005 - RS000365", 1, 844.90, HOJE.isoformat())
         self.assertAlmostEqual(_sku(_periodo(), "KITRS001005 - RS000365")["cmv"], 80.81)
 
-    def test_aracatuba_sem_custo_usa_outra_filial_marcado(self):
-        # 6010.011.113.00.1: Araçatuba nunca teve custo; Ribeirão 294,32 e Bauru 253,71 -> o menor, marcado
+    def test_aracatuba_sem_custo_fica_sem_custo_e_o_digitado_no_financeiro_vale(self):
+        # 6010.011.113.00.1: vendido por Araçatuba, só Ribeirão/Bauru têm custo -> sem custo; o dono digita
         _precificador([{"sku": "6010.011.113.00.1", "custo": 0, "filialCusto": 1,
                         "custosFiliais": _filiais(0, 253.71)}])
         _apollo("6010.011.113.00.1", {"2": 294.32, "3": 253.71})
-        _vender("V1", "6010.011.113.00.1", 1, 560.0, (HOJE - timedelta(days=10)).isoformat())
-        s = _sku(_periodo(), "6010.011.113.00.1")
-        self.assertEqual((s["cmv"], s["custo_origem"]), (253.71, "outra_filial"))
+        _vender("V1", "157507-6010.011.113.00.1", 1, 560.0, (HOJE - timedelta(days=10)).isoformat())
+        s = _sku(_periodo(), "157507-6010.011.113.00.1")
+        self.assertTrue(s["sem_custo"])
+        self.assertEqual(s["codigo_custo"], "6010.011.113.00.1")
+        st, d = self.cliente.pedir("POST", "/api/compras/custo", {"codigo": s["codigo_custo"], "custo": "180,40"})
+        self.assertEqual(st, 200, d)
+        s = _sku(_periodo(), "157507-6010.011.113.00.1")
+        self.assertEqual((s["cmv"], s["custo_origem"]), (180.4, "manual"))
+
+    def test_kit_nao_tem_codigo_para_editar(self):
+        _precificador([{"sku": "A1", "custo": 10.0}, {"sku": "B1", "custo": 5.0}])
+        _vender("V1", "A1/B1", 1, 40.0, HOJE.isoformat())
+        _vender("V2", "RS001005", 1, 40.0, HOJE.isoformat())     # código sem cadastro nenhum: edita ele mesmo
+        p = _periodo()
+        self.assertEqual(_sku(p, "A1/B1")["codigo_custo"], "")
+        self.assertEqual(_sku(p, "RS001005")["codigo_custo"], "RS001005")
 
     def test_outra_filial_nao_vence_aracatuba_nem_digitado(self):
         _precificador([{"sku": "X1", "custo": 0, "filialCusto": 1, "custosFiliais": _filiais(0, 39.41)}])
@@ -249,7 +263,7 @@ class CustoDoFinanceiro(TesteNoromak):
         _vender("V2", "X2", 1, 43.2, (HOJE - timedelta(days=10)).isoformat())
         self.assertEqual(_sku(_periodo(), "X2")["cmv"], 13.02)
 
-    def test_outra_filial_nao_congela(self):
+    def test_outra_filial_nunca_congela(self):
         _apollo("X3", {"3": 39.41})
         _precificador([{"sku": "OUTRO", "custo": 1.0}])
         _vender("V1", "X3", 1, 43.2, HOJE.isoformat())

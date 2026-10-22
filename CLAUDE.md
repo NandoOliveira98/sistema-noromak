@@ -523,9 +523,10 @@ análise de kits. Teste: `TESTES/test_financeiro_custo_v1977.py`.
 foram lidos do Apollo (`custosFiliais` vazio) têm em quase metade 30–42% a mais (WAP331 74,97 × 53,04 real; JFC217
 91,00 × 64,38; 10256080 965,73 × 731,64). Sem leitura do Apollo ficam **sem custo** (o dono digita na Demanda). O
 último custo visto (`custo_auto`) só vale de origem "Precificador" e de produto que não é só da planilha. A Demanda
-de Compra usa a mesma regra (`compras_custo_aracatuba`). Produto que Araçatuba **nunca** teve custo (peça transferida) usa o menor custo de outra
-filial, marcado "outra filial" — só na estimativa, nunca congela e nunca vence Araçatuba nem o digitado (o 6007 cai
-aqui: o Noromak nunca registrou o custo de Araçatuba dele). Kit "KITa - b" (KIT colado e " - ") soma as peças.
+de Compra usa a mesma regra (`compras_custo_aracatuba`). Venda sem custo de Araçatuba registrado fica **sem custo** (o custo de outra filial foi
+descartado pelo dono: vendido por Araçatuba, Bauru 39,41 × 13,02 real). O dono digita o custo real **no próprio
+Financeiro** (lápis na coluna Custo → `POST /api/compras/custo`, o mesmo custo digitado da Demanda, que vence
+tudo); o payload manda `por_sku[].codigo_custo` (vazio em kit: edita-se cada peça). Kit "KITa - b" soma as peças.
 **V18.36 — o Billing devolve os MESMOS lançamentos em `BILL` e em `CREDIT_NOTE`.** Os dois
 sincronismos de setembro voltaram com 5.773 itens idênticos. Marcar crédito pelo `document_type`
 **pedido** fazia cada cobrança ganhar uma cópia negativa que a anulava: R$ 132 mil de faturamento

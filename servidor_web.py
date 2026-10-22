@@ -24099,10 +24099,8 @@ def _financeiro_custo_codigo(codigo: str, ctx: dict[str, Any], congelar: bool) -
     for v in (prec, ctx["apollo"].get(codigo), ctx["ultimo_prec"].get(codigo), ctx["venda"].get(codigo)):
         if v:
             return float(v), "estimado"
-    # 22/10 (dono): Araçatuba NUNCA teve custo (peça transferida de outra filial) -> o menor custo das
-    # outras filiais, marcado "outra filial". Só na estimativa: nunca congela e nunca vence Araçatuba/digitado.
-    if ctx.get("outra", {}).get(codigo):
-        return float(ctx["outra"][codigo]), "outra_filial"
+    # 22/10 (dono): vendido por Araçatuba sem custo de Araçatuba registrado -> SEM custo. O custo de outra
+    # filial era palpite (6007: Bauru 39,41 x 13,02 real); o dono digita o real no Financeiro (codigo_custo).
     return None, ""
 
 
@@ -24173,6 +24171,19 @@ def compras_custo_aracatuba(codigo: str, ctx: dict[str, Any]) -> tuple[float | N
     if ctx["venda"].get(codigo):
         return float(ctx["venda"][codigo]), "venda", ""
     return None, "", ""
+
+
+def _financeiro_codigo_editavel(sku: str, ctx: dict[str, Any]) -> str:
+    """Código da peça para o custo digitado no Financeiro ('' em kit: o custo é a soma das peças)."""
+    s = str(sku or "").strip().upper()
+    if not s or (ctx["kits"].get(str(sku).strip()) or {}).get("componentes"):
+        return ""
+    if s in ctx["conhecidos"]:
+        return s
+    if re.search(r"/|\s-\s", s) or re.match(r"^KIT", s):
+        return ""
+    m = re.match(r"^\d+-(.+)$", s)          # prefixo do anúncio do ML: "157507-0893556005"
+    return m.group(1).strip() if m else s
 
 
 def financeiro_custo_congelar(dias: int = FINANCEIRO_CONGELA_DIAS) -> int:
@@ -24435,7 +24446,7 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
                                          "unidades": 0, "faturamento": 0.0, "cmv": 0.0, "taxas": 0.0, "frete": 0.0,
                                          "outros": 0.0, "imposto": 0.0, "ads": 0.0, "custo_unitario": unit,
                                          "custo_origem": origem_custo, "sem_custo": False, "pedidos": set(),
-                                         "_origens": set(),
+                                         "_origens": set(), "codigo_custo": _financeiro_codigo_editavel(sku, custos_ctx),
                                          "sem_taxa": 0.0, "sem_frete": 0.0})
         s["unidades"] += qty
         if origem_custo:
