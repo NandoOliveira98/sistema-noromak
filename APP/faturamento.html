@@ -10,7 +10,9 @@
      com as peças do pedido e o valor IGUAL ao da venda. O lote solta o romaneio (observação do
      marketplace) e envia ao caixa, conferindo de novo cada pedido na hora. Shopee/Magalu trocam a
      condição de pagamento pela extensão Linx (Linx web aberto). GET /api/faturamento,
-     POST /api/faturamento/{conferir,executar} (módulo admin). -->
+     POST /api/faturamento/{conferir,executar} (módulo admin).
+     V19.76: tela no padrão Noromak (cartões, barra do lote, selos). Só apresentação: o fluxo de
+     faturar, o filtro do dia e as rotas não mudaram. -->
 <script defer src="/expedicao/web-auth.js?v=19.70"></script>
 <link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
 <link rel="stylesheet" href="/expedicao/nk-ui.css?v=19.13">
@@ -18,38 +20,107 @@
 <script defer src="/expedicao/nk-menu.js?v=19.74" data-shell></script>
 <style>
 body{margin:0;background:var(--nk-canvas);color:var(--nk-ink);font-family:var(--nk-font)}
-.abas{display:flex;gap:6px;flex-wrap:wrap;margin:14px 0}
-.barra{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
-.barra .resumo{color:var(--nk-ink2);font-size:13px}
-table{width:100%;border-collapse:collapse;font-size:13px}
-th,td{padding:8px 10px;border-bottom:1px solid var(--nk-line);text-align:left;vertical-align:top}
-th{color:var(--nk-ink2);font-weight:600}
-td.num{text-align:right;white-space:nowrap}
-.res-ok{color:var(--nk-ok)}.res-erro{color:var(--nk-bad)}
-.vazio{padding:24px;text-align:center;color:var(--nk-ink2)}
+.status-leitura{display:inline-flex;align-items:center;gap:6px}
+.status-leitura i.ponto{width:8px;height:8px;border-radius:50%;background:var(--nk-ok);display:inline-block}
+.status-leitura i.ponto.lendo{background:var(--nk-warn);animation:pulsa 1s infinite alternate}
+@keyframes pulsa{to{opacity:.35}}
+button.nk-kpi.on{border-color:var(--nk-pri);box-shadow:0 0 0 3px var(--nk-foco)}
+.nk-kpi .valor{display:block;font-size:11px;color:var(--nk-ink3);font-weight:600;margin-top:2px;font-variant-numeric:tabular-nums}
+.barra{display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between;padding-bottom:12px;border-bottom:1px solid var(--nk-line2)}
+.filtro-dia{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.filtro-dia label{font-size:12.5px;color:var(--nk-ink2);font-weight:600;display:flex;align-items:center;gap:8px}
+.filtro-dia input[type=date]{font:inherit;font-size:13px;border:1px solid var(--nk-line);background:var(--nk-tile);color:var(--nk-ink);border-radius:9px;padding:7px 10px}
+.filtro-dia input[type=date]:focus{outline:0;border-color:var(--nk-pri);box-shadow:0 0 0 3px var(--nk-foco)}
+.seg{display:inline-flex;border:1px solid var(--nk-line);border-radius:9px;overflow:hidden}
+.seg button{border:0;background:var(--nk-tile);color:var(--nk-ink2);font:inherit;font-size:12.5px;font-weight:600;padding:7px 12px;cursor:pointer}
+.seg button+button{border-left:1px solid var(--nk-line)}
+.seg button.on{background:var(--nk-info-bg);color:var(--nk-pri)}
+.lote{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.lote .resumo{font-size:12.5px;color:var(--nk-ink2);font-variant-numeric:tabular-nums}
+.lote .resumo b{color:var(--nk-head)}
+.nk-btn.pri{background:var(--nk-pri);color:var(--nk-pri-txt,#fff);border-color:var(--nk-pri)}
+.nk-btn.pri:disabled{background:var(--nk-cinza-bg);color:var(--nk-ink3);border-color:var(--nk-line);cursor:not-allowed}
+.rodando{display:flex;align-items:center;gap:10px;background:var(--nk-warn-bg);border:1px solid var(--nk-warn-ln);color:var(--nk-warn);border-radius:10px;padding:9px 13px;font-size:13px;font-weight:600;margin-top:12px}
 .tabela{overflow-x:auto}
+table.fat{width:100%;border-collapse:separate;border-spacing:0;font-size:13px}
+table.fat thead th{position:sticky;top:0;background:var(--nk-tile);text-align:left;font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--nk-ink3);font-weight:700;padding:10px;border-bottom:1px solid var(--nk-line);white-space:nowrap}
+table.fat td{padding:11px 10px;border-bottom:1px solid var(--nk-line2);vertical-align:middle}
+table.fat tbody tr:hover{background:var(--nk-hover)}
+table.fat tbody tr.marcado{background:var(--nk-info-bg)}
+table.fat th.num,table.fat td.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+table.fat input[type=checkbox]{width:16px;height:16px;accent-color:var(--nk-pri);cursor:pointer}
+.ped{font-family:Consolas,monospace;font-size:12.5px;color:var(--nk-head);font-weight:600}
+.mp{font-size:11px;font-weight:700;border-radius:999px;padding:2px 8px;white-space:nowrap}
+.mp.ml{background:#FFF6CC;color:#7A5B00}.mp.shopee{background:#FDE9E3;color:#B23A12}.mp.magalu{background:#E3EEFD;color:#0A5BC4}.mp.outro{background:var(--nk-cinza-bg);color:var(--nk-ink2)}
+html[data-tema="escuro"] .mp.ml{background:#3A3010;color:#F5D46A}html[data-tema="escuro"] .mp.shopee{background:#3D1E14;color:#F59A78}html[data-tema="escuro"] .mp.magalu{background:#132A47;color:#8DB9F5}
+.cli b{display:block;font-weight:600;color:var(--nk-head)}
+.cli small{font-size:11px;color:var(--nk-ink3);font-family:Consolas,monospace}
+.prazo{font-size:12px;white-space:nowrap}
+.prazo.atrasado{color:var(--nk-bad);font-weight:700}
+.prazo .sem{color:var(--nk-ink3)}
+.valores b{display:block;color:var(--nk-head)}
+.confere{font-size:11px;font-weight:700}
+.confere.ok{color:var(--nk-ok)}.confere.bad{color:var(--nk-bad)}
+.sit{display:flex;flex-direction:column;gap:3px;align-items:flex-start;max-width:340px}
+.sit .mini{font-size:11.5px;color:var(--nk-ink2);line-height:1.35}
+.res-ok{color:var(--nk-ok);font-weight:600}.res-erro{color:var(--nk-bad);font-weight:600}
+.vazio{padding:36px 10px;text-align:center;color:var(--nk-ink3)}
+.vazio b{display:block;color:var(--nk-head);font-size:14px;margin-bottom:4px}
+.notas{font-size:12px;color:var(--nk-ink2)}
+.notas summary{cursor:pointer;font-weight:700;color:var(--nk-head)}
+.notas ul{margin:8px 0 0 18px;padding:0}.notas li{margin:3px 0}
 </style>
 </head>
 <body>
 <main class="nk-pagina">
-  <header class="nk-cab"><span class="nk-rotulo">Expedição</span><h1>Faturamento</h1>
-    <p>Pedidos conferidos no Apollo a cada 10 min. Os prontos saem em lote: romaneio + caixa.</p></header>
-  <div class="abas" id="abas"></div>
-  <section class="nk-painel">
-    <div class="barra">
-      <button class="nk-btn" id="btnLote" onclick="executarLote()" disabled>Faturar selecionados</button>
-      <button class="nk-btn" onclick="carregar()">Atualizar</button>
-      <!-- V19.73: pedidos a faturar no dia pelo prazo de despacho (padrão hoje; hoje inclui os
-           atrasados). Sem prazo (Shopee) aparece em qualquer data. Em branco = todas. -->
-      <label class="resumo">Despachar em <input type="date" id="filtroDia" onchange="desenhar()"></label>
-      <button class="nk-btn" onclick="document.getElementById('filtroDia').value='';desenhar()">Todas as datas</button>
-      <span class="resumo" id="resumo"></span>
+  <div class="nk-cab">
+    <div>
+      <div class="nk-rotulo">Expedição</div>
+      <h1>Faturamento</h1>
+      <p id="sub"><span class="status-leitura"><i class="ponto"></i>Pedidos conferidos no Apollo a cada 10 min · os prontos saem em lote: romaneio + caixa</span></p>
     </div>
-    <div class="tabela"><table><thead id="cab"></thead><tbody id="corpo"></tbody></table></div>
-  </section>
+    <div class="nk-acoes">
+      <button class="nk-btn" id="btnAtualizar" onclick="carregar(true)"><i class=nk-i-refresh></i> Atualizar</button>
+    </div>
+  </div>
+
+  <div class="nk-pilha">
+    <div class="nk-aviso bad" id="erro" hidden></div>
+    <div class="nk-kpis" id="abas"></div>
+
+    <section class="nk-painel">
+      <div class="barra">
+        <!-- V19.73: pedidos a faturar no dia pelo prazo de despacho (padrão hoje; hoje inclui os
+             atrasados). Sem prazo (Shopee) aparece em qualquer data. Em branco = todas. -->
+        <div class="filtro-dia">
+          <label>Despachar em <input type="date" id="filtroDia" onchange="desenhar()"></label>
+          <div class="seg" role="group" aria-label="Período">
+            <button type="button" id="segHoje" onclick="document.getElementById('filtroDia').value=hojeLocal();desenhar()">Hoje</button>
+            <button type="button" id="segTodas" onclick="document.getElementById('filtroDia').value='';desenhar()">Todas as datas</button>
+          </div>
+        </div>
+        <div class="lote" id="lote">
+          <span class="resumo" id="resumo"></span>
+          <button class="nk-btn pri" id="btnLote" onclick="executarLote()" disabled><i class=nk-i-check></i> Faturar selecionados</button>
+        </div>
+      </div>
+      <div class="rodando" id="rodando" hidden><i class=nk-i-clock></i> Faturando… não feche esta tela até terminar.</div>
+      <div class="tabela"><table class="fat"><thead id="cab"></thead><tbody id="corpo"><tr><td class=vazio>Carregando…</td></tr></tbody></table></div>
+    </section>
+
+    <details class="nk-painel notas">
+      <summary>Como funciona</summary>
+      <ul>
+        <li><b>Pronto</b> = cadastro feito, crédito liberado e um atendimento só no Apollo, com as peças do pedido e o valor <b>igual</b> ao da venda.</li>
+        <li>No lote, cada pedido é conferido de novo na hora; o romaneio sai com a observação do marketplace e o atendimento vai para o caixa.</li>
+        <li>Shopee e Magalu trocam a condição de pagamento pela extensão do Linx: deixe o Linx web aberto neste Chrome.</li>
+        <li>O filtro do dia usa o prazo de despacho; "Hoje" inclui os atrasados. Pedido sem prazo (Shopee) aparece em qualquer data.</li>
+      </ul>
+    </details>
+  </div>
 </main>
 <script>
-const ABAS=[["pronto","Prontos"],["atencao","Precisa de atenção"],["aguardando","Aguardando cadastro"],["feito","Feitos"]];
+const ABAS=[["pronto","Prontos para faturar","ok","nk-i-check"],["atencao","Precisa de atenção","bad","nk-i-alert"],["aguardando","Aguardando cadastro","warn","nk-i-clock"],["feito","Feitos","","nk-i-file"]];
 let ITENS=[],ABA="pronto",RES={},RODANDO=false;
 const esc=v=>String(v??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const brl=v=>v==null||v===""?"—":Number(v).toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
@@ -60,34 +131,69 @@ async function api(url,corpo){
   if(!r.ok&&!d.error)d.error="HTTP "+r.status;
   return d;
 }
-async function carregar(){
+async function carregar(manual){
+  const b=document.getElementById("btnAtualizar");if(manual)b.disabled=true;
   const d=await api("/api/faturamento");
-  if(!d.ok){document.getElementById("corpo").innerHTML=`<tr><td class=vazio>${esc(d.error||"Falha ao carregar.")}</td></tr>`;return;}
-  ITENS=d.itens||[];desenhar();
+  if(manual)b.disabled=false;
+  const erro=document.getElementById("erro");
+  if(!d.ok){erro.hidden=false;erro.textContent="Não foi possível carregar: "+(d.error||"falha");return;}
+  erro.hidden=true;ITENS=d.itens||[];desenhar();
 }
 function hojeLocal(){const d=new Date();return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");}
 function doDia(){const f=document.getElementById("filtroDia").value;if(!f)return ITENS;const h=f===hojeLocal();return ITENS.filter(i=>!i.prazo||(h?i.prazo<=f:i.prazo===f));}
 const atrasado=i=>i.prazo&&i.prazo<hojeLocal();
 const prazoTxt=i=>i.prazo?i.prazo.split("-").reverse().join("/"):"—";
+const mpClasse=m=>/mercado/i.test(m||"")?"ml":/shopee/i.test(m||"")?"shopee":/magalu/i.test(m||"")?"magalu":"outro";
+function situacao(i,sel){
+  const r=RES[i.pedido];
+  if(r)return `<span class="${r.ok?"res-ok":"res-erro"}">${esc(r.texto)}</span>`;
+  if(i.situacao==="pronto_caixa")return `<span class="nk-selo info">Falta o caixa</span><span class=mini>Romaneio já solto no Apollo.</span>`;
+  if(i.situacao==="feito")return `<span class="nk-selo ok">Enviado ao caixa</span>${i.motivo?`<span class=mini>${esc(i.motivo)}</span>`:""}`;
+  if(sel)return `<span class="nk-selo ok">Pronto</span>`;
+  const g=grupo(i.situacao);
+  return `<span class="nk-selo ${g==="aguardando"?"warn":"bad"}">${g==="aguardando"?"Aguardando":"Atenção"}</span>${i.motivo?`<span class=mini>${esc(i.motivo)}</span>`:""}`;
+}
+function confere(i){
+  if(i.valor_pedido==null||i.valor_atendimento==null)return "";
+  const d=Math.round((Number(i.valor_atendimento)-Number(i.valor_pedido))*100)/100;
+  return d===0?`<span class="confere ok">✓ confere</span>`:`<span class="confere bad">${d>0?"+":"−"}${brl(Math.abs(d))}</span>`;
+}
 function desenhar(){
-  const cont={};doDia().forEach(i=>{const g=grupo(i.situacao);cont[g]=(cont[g]||0)+1;});
-  document.getElementById("abas").innerHTML=ABAS.map(([k,t])=>`<button class="nk-tab${k===ABA?" ativo":""}" aria-pressed="${k===ABA}" onclick="ABA='${k}';desenhar()">${t} (${cont[k]||0})</button>`).join("");
+  const f=document.getElementById("filtroDia").value;
+  document.getElementById("segHoje").classList.toggle("on",f===hojeLocal());
+  document.getElementById("segTodas").classList.toggle("on",!f);
+  const cont={},soma={};doDia().forEach(i=>{const g=grupo(i.situacao);cont[g]=(cont[g]||0)+1;soma[g]=(soma[g]||0)+Number(i.valor_atendimento||i.valor_pedido||0);});
+  document.getElementById("abas").innerHTML=ABAS.map(([k,t,cls,ic])=>`<button type="button" class="nk-kpi${k===ABA?" on":""}" aria-pressed="${k===ABA}" onclick="ABA='${k}';desenhar()"><span class="nk-kpi-ic ${cls}"><i class="${ic}"></i></span><span><b>${cont[k]||0}</b><small>${t}</small>${k==="pronto"&&cont[k]?`<span class=valor>${brl(soma[k])}</span>`:""}</span></button>`).join("");
   const lista=doDia().filter(i=>grupo(i.situacao)===ABA);
   const sel=ABA==="pronto";
-  document.getElementById("cab").innerHTML=`<tr>${sel?'<th><input type=checkbox id=todos onchange="marcarTodos(this.checked)" aria-label="Selecionar todos"></th>':""}<th>Pedido</th><th>Marketplace</th><th>Cliente</th><th>Prazo</th><th>Atendimento</th><th class=num>Venda</th><th class=num>Atendimento</th><th>Situação</th></tr>`;
-  document.getElementById("corpo").innerHTML=lista.length?lista.map(i=>{
-    const r=RES[i.pedido];
-    const sit=r?`<span class="${r.ok?"res-ok":"res-erro"}">${esc(r.texto)}</span>`:esc(i.situacao==="pronto_caixa"?"Romaneio já solto: falta o caixa.":(i.motivo||(sel?"Pronto":"")));
-    return `<tr>${sel?`<td><input type=checkbox class=sel value="${esc(i.pedido)}" onchange="atualizarBarra()" ${RODANDO?"disabled":""}></td>`:""}<td>${esc(i.pedido)}</td><td>${esc(i.marketplace)}</td><td>${esc(i.nome||"")}${i.cliente?` <small>(${esc(i.cliente)})</small>`:""}</td><td${atrasado(i)?' class=res-erro title="Prazo de despacho já passou"':""}>${esc(prazoTxt(i))}${atrasado(i)?" atrasado":""}</td><td>${esc(i.atendimento||"—")}</td><td class=num>${brl(i.valor_pedido)}</td><td class=num>${brl(i.valor_atendimento)}</td><td>${sit}</td></tr>`;
-  }).join(""):`<tr><td colspan=9 class=vazio>Nada aqui.</td></tr>`;
+  const marcados=new Set([...document.querySelectorAll("input.sel:checked")].map(e=>e.value));
+  document.getElementById("lote").hidden=!sel;
+  document.getElementById("rodando").hidden=!RODANDO;
+  document.getElementById("cab").innerHTML=`<tr>${sel?'<th style="width:28px"><input type=checkbox id=todos onchange="marcarTodos(this.checked)" aria-label="Selecionar todos"></th>':""}<th>Pedido</th><th>Cliente</th><th>Prazo</th><th>Atendimento</th><th class=num>Venda</th><th class=num>Atendimento</th><th>Situação</th></tr>`;
+  const vazio={pronto:["Nenhum pedido pronto","Os pedidos aparecem aqui quando o Apollo confirma cadastro, crédito e atendimento com o valor da venda."],atencao:["Nada precisando de atenção",""],aguardando:["Nenhum pedido aguardando cadastro",""],feito:["Nenhum pedido faturado neste período",""]}[ABA];
+  document.getElementById("corpo").innerHTML=lista.length?lista.map(i=>`<tr>
+    ${sel?`<td><input type=checkbox class=sel value="${esc(i.pedido)}" onchange="atualizarBarra()" ${marcados.has(i.pedido)?"checked":""} ${RODANDO?"disabled":""} aria-label="Selecionar ${esc(i.pedido)}"></td>`:""}
+    <td><div class=ped>${esc(i.pedido)}</div><span class="mp ${mpClasse(i.marketplace)}">${esc(i.marketplace)}</span></td>
+    <td class=cli><b>${esc(i.nome||"—")}</b>${i.cliente?`<small>cód. ${esc(i.cliente)}</small>`:""}</td>
+    <td class="prazo${atrasado(i)?" atrasado":""}"${atrasado(i)?' title="Prazo de despacho já passou"':""}>${i.prazo?esc(prazoTxt(i))+(atrasado(i)?" · atrasado":""):'<span class=sem>sem prazo</span>'}</td>
+    <td>${i.atendimento?`<span class=ped>${esc(i.atendimento)}</span>`:'<span class=sem>—</span>'}</td>
+    <td class=num>${brl(i.valor_pedido)}</td>
+    <td class="num valores"><b>${brl(i.valor_atendimento)}</b>${confere(i)}</td>
+    <td><div class=sit>${situacao(i,sel)}</div></td></tr>`).join("")
+    :`<tr><td colspan=8 class=vazio><b>${vazio[0]}</b>${vazio[1]}</td></tr>`;
   atualizarBarra();
 }
 function selecionados(){return [...document.querySelectorAll("input.sel:checked")].map(e=>ITENS.find(i=>i.pedido===e.value)).filter(Boolean);}
 function marcarTodos(v){document.querySelectorAll("input.sel").forEach(e=>e.checked=v);atualizarBarra();}
 function atualizarBarra(){
   const s=selecionados(),tot=s.reduce((a,i)=>a+Number(i.valor_atendimento||0),0);
-  document.getElementById("btnLote").disabled=RODANDO||!s.length;
-  document.getElementById("resumo").textContent=RODANDO?"Faturando… não feche a tela.":s.length?`${s.length} pedido(s) · ${brl(tot)}`:"";
+  document.querySelectorAll("input.sel").forEach(e=>e.closest("tr").classList.toggle("marcado",e.checked));
+  const todos=document.getElementById("todos"),n=document.querySelectorAll("input.sel").length;
+  if(todos){todos.checked=n>0&&s.length===n;todos.indeterminate=s.length>0&&s.length<n;}
+  const b=document.getElementById("btnLote");
+  b.disabled=RODANDO||!s.length;
+  b.innerHTML=`<i class=nk-i-check></i> ${s.length?`Faturar ${s.length} pedido(s)`:"Faturar selecionados"}`;
+  document.getElementById("resumo").innerHTML=RODANDO?"":s.length?`<b>${s.length}</b> selecionado(s) · <b>${brl(tot)}</b>`:"Marque os pedidos para faturar";
 }
 function linxAcao(acao,dados){
   return new Promise((resolve,reject)=>{
