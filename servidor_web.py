@@ -26584,6 +26584,8 @@ def _promo_renovacao_rodada_conta(stop_event: threading.Event | None = None, *, 
     Só a rodada COMPLETA é exclusiva (PROMO_RODADA_LOCK). `prazo` (segundos): o que não
     coube volta em `pendentes`, para a tela pedir de novo.
     """
+    # V19.75: "hoje" passado de fora (teste/simulação) vale também para o prazo da promoção
+    agora_ref = datetime(hoje.year, hoje.month, hoje.day, tzinfo=BR_TZ) if hoje else None
     hoje = hoje or datetime.now(BR_TZ).date()
     manual = so is not None
     completa = False   # V18.99: a trava e o estado da rodada completa ficam no promo_renovacao_rodada
@@ -26652,7 +26654,7 @@ def _promo_renovacao_rodada_conta(stop_event: threading.Event | None = None, *, 
                 prod, origem_taxas = _promo_prod_com_ml(_promo_produto(produtos, sku), mlb,
                                                         _money_number(row.get("preco")) or _money_number(det.get("preco")), det)
                 av = _promo_renovacao_avaliar(mlb, _money_number(row.get("preco")), promos,
-                                              det, prod, ruptura.get(mlb), cfg, hoje)
+                                              det, prod, ruptura.get(mlb), cfg, hoje, agora=agora_ref)
                 if origem_taxas and prod and av["situacao"] in ("pronta", "revisar"):
                     av["motivo"] += f" · {origem_taxas}"
                 # V19.04: guarda a base do ML (a mesma da coluna Margem) para o lucro na linha;
