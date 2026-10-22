@@ -314,6 +314,11 @@ a.lk{color:var(--nk-pri);text-decoration:none}a.lk:hover{text-decoration:underli
             ({status, d} = await enviar(true));
           } else { ok.disabled = false; return; }
         }
+        // V19.76 (revisão): campanha do ML valendo ou anúncio ocupado pelas Promoções automáticas: só explica
+        if (!d.ok && (d.code === "em_campanha" || d.code === "ocupado")) {
+          msg.innerHTML = `<b style="color:var(--nk-warn)">${esc(d.error || "")}</b>`;
+          ok.disabled = false; return;
+        }
         if (d.ok) {
           msg.innerHTML = `<b style="color:var(--nk-ok)">Promoção trocada para ${brl(d.preco)}</b> até ${esc(String(d.fim || "").slice(0, 10).split("-").reverse().join("/"))}.`;
           (window.nkToast || (() => {}))(`Promoção de ${i.item_id} trocada para ${brl(d.preco)}`);

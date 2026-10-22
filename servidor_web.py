@@ -23357,6 +23357,18 @@ def catalogo_ml_item(conta: str, item_id: str) -> dict[str, Any]:
             "historico": [dict(h) for h in hist]}
 
 
+CATALOGO_PROMO_ESPERA = 20.0   # V19.76: espera a vez do anúncio; responde antes dos 60 s do nginx
+
+
+def _catalogo_campanha_valendo(promos: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Campanha do ML (não o nosso desconto próprio nem o desconto do Pix) valendo agora."""
+    for x in promos or []:
+        if (str(x.get("status") or "").lower() == "started"
+                and str(x.get("type") or "") not in (ML_PROMO_TIPO, "BANK")):
+            return x
+    return None
+
+
 def catalogo_ml_trocar_promocao(conta: str, mlb: Any, preco: Any, ator: str,
                                 encerrar: bool = False) -> dict[str, Any]:
     """V19.76: troca o desconto próprio (PRICE_DISCOUNT) do anúncio NA HORA, pela gaveta do
@@ -23364,11 +23376,15 @@ def catalogo_ml_trocar_promocao(conta: str, mlb: Any, preco: Any, ator: str,
 
     Mesma ml_promocao_aplicar das Promoções automáticas (trava do preço mínimo e piso/teto do ML
     no servidor), de hoje até hoje + duracao_dias, na conta do anúncio. Deu certo: o anúncio fica
-    marcado na renovação com o preço novo (a próxima renovação mantém este preço).
-    O ML recusou (ex.: já existe promoção valendo): NÃO encerra sozinho — devolve code
-    'ml_recusou' e a tela pergunta. Só com `encerrar` confirmado encerra a atual e cria a nova;
-    se a criação falhar depois de encerrar, avisa que o anúncio ficou sem desconto.
-    ValueError (trava do mínimo, preço inválido) sobe para virar 400."""
+    marcado na renovação com o preço novo e "renovado hoje" (a rodada não cria outra no mesmo dia).
+    Revisão de 22/10:
+      - tudo sob a vez do anúncio (_promo_vez, a mesma da renovação, V18.92): a rodada não recria o
+        preço antigo entre o encerrar e o criar; ocupado = PromoOcupado (409 na rota);
+      - as travas são conferidas ANTES de encerrar (so_validar); se ainda assim a criação falhar
+        depois de encerrar — inclusive por trava —, avisa que o anúncio ficou sem desconto;
+      - recusa do ML: com campanha do ML valendo ('em_campanha') nunca oferece nem faz o encerrar
+        (regra da V18.73: espera a campanha acabar); só com o nosso desconto próprio valendo a tela
+        pergunta ('ml_recusou'); sem nenhum dos dois é só o erro ('ml_erro')."""
     conta = str(conta or "").strip().lower()
     if conta not in CASAS:
         raise ValueError("Conta do Mercado Livre inválida.")
@@ -23382,32 +23398,59 @@ def catalogo_ml_trocar_promocao(conta: str, mlb: Any, preco: Any, ator: str,
         valor = 0.0
     if valor <= 0:
         raise ValueError("Informe um preço válido.")
-    with ml_na_casa(conta):
+    hoje = datetime.now(BR_TZ).date()
+    inicio = hoje.isoformat() + "T00:00:00"
+    with _promo_vez(CATALOGO_PROMO_ESPERA), ml_na_casa(conta):
         cfg = promo_auto_config()
-        hoje = datetime.now(BR_TZ).date()
-        inicio = hoje.isoformat() + "T00:00:00"
         fim = (hoje + timedelta(days=int(cfg["duracao_dias"]))).isoformat() + "T00:00:00"
         if encerrar:
+            campanha = _catalogo_campanha_valendo(ml_promocoes_do_item(mlb))
+            if campanha:
+                return _catalogo_em_campanha(campanha)
+            ml_promocao_aplicar(mlb, valor, inicio, fim, ator, so_validar=True)   # trava antes de encerrar
             ml_promocao_remover(mlb, ator)
             _promo_log(mlb, "encerrada", ator, "Encerrada pela gaveta do Catálogo para trocar o preço", valor)
         try:
             r = ml_promocao_aplicar(mlb, valor, inicio, fim, ator)
-        except ValueError:
-            raise
         except Exception as exc:
+            if not encerrar and isinstance(exc, ValueError):
+                raise
             _promo_log(mlb, "falhou", ator, f"Catálogo: {exc}", valor, None, inicio, fim, hoje.isoformat())
             if encerrar:
                 return {"ok": False, "code": "sem_desconto",
-                        "error": (f"A promoção anterior foi encerrada, mas o Mercado Livre não aceitou a nova: {exc}. "
+                        "error": (f"A promoção anterior foi encerrada, mas a nova não foi criada: {exc}. "
                                   "O anúncio está sem desconto: confira no Mercado Livre.")}
-            return {"ok": False, "code": "ml_recusou", "error": str(exc)}
-    promo_renovacao_marcar(mlb, True, ator, preco=valor, conta=conta)
+            try:
+                promos = ml_promocoes_do_item(mlb)
+            except Exception:
+                promos = []
+            campanha = _catalogo_campanha_valendo(promos)
+            if campanha:
+                return _catalogo_em_campanha(campanha)
+            proprio = any(str(x.get("type") or "") == ML_PROMO_TIPO
+                          and str(x.get("status") or "").lower() in ("started", "pending") for x in promos)
+            return {"ok": False, "code": "ml_recusou" if proprio else "ml_erro", "error": str(exc)}
+        agora = now_iso()
+        with DB_LOCK:
+            # mesma gravação do promo_renovacao_marcar (que pegaria a vez de novo) + renovado hoje
+            DB.execute("DELETE FROM promo_removidos_v1876 WHERE mlb=?", (mlb,))
+            DB.execute("INSERT INTO promo_renovacao_v1873(mlb,marcado,preco,marcado_por,marcado_em,conta,renovado_dia,renovado_em,fim) "
+                       "VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(mlb) DO UPDATE SET marcado=1,preco=excluded.preco,"
+                       "marcado_por=excluded.marcado_por,marcado_em=excluded.marcado_em,"
+                       "renovado_dia=excluded.renovado_dia,renovado_em=excluded.renovado_em,fim=excluded.fim",
+                       (mlb, 1, valor, ator, agora, conta, hoje.isoformat(), agora, fim))
+            DB.execute("UPDATE catalogo_ml_v1974 SET preco=? WHERE conta=? AND item_id=?", (valor, conta, mlb))
+            DB.commit()
     _promo_log(mlb, "renovada", ator, f"Preço trocado pela gaveta do Catálogo para {_brl_srv(valor)}",
                valor, r.get("margem"), inicio, fim, hoje.isoformat())
-    with DB_LOCK:
-        DB.execute("UPDATE catalogo_ml_v1974 SET preco=? WHERE conta=? AND item_id=?", (valor, conta, mlb))
-        DB.commit()
     return {"ok": True, "mlb": mlb, "preco": valor, "fim": fim, "margem": r.get("margem")}
+
+
+def _catalogo_em_campanha(campanha: dict[str, Any]) -> dict[str, Any]:
+    nome = str(campanha.get("name") or ML_PROMO_TIPO_NOME.get(str(campanha.get("type") or ""), campanha.get("type") or ""))
+    return {"ok": False, "code": "em_campanha",
+            "error": (f"O anúncio está na campanha do Mercado Livre \"{nome}\". O desconto próprio só volta quando ela "
+                      "acabar: nada foi encerrado.")}
 
 
 def catalogo_ml_amostras() -> dict[str, Any]:
@@ -25937,7 +25980,7 @@ def promo_atualizar_data_planilha(mlb: str, fim: str, ator: str = "") -> bool:
 
 
 def ml_promocao_aplicar(mlb: str, preco: Any, inicio: str, fim: str, ator: str = "",
-                        sku: str = "") -> dict[str, Any]:
+                        sku: str = "", so_validar: bool = False) -> dict[str, Any]:
     """Sobe um desconto próprio no ML. A trava do preço mínimo mora AQUI, no
     servidor — a tela também avisa, mas quem decide é este ponto.
 
@@ -25980,6 +26023,8 @@ def ml_promocao_aplicar(mlb: str, preco: Any, inicio: str, fim: str, ator: str =
         raise ValueError(f"O Mercado Livre não aceita menos de {_brl_srv(float(piso))} neste anúncio.")
     if teto and preco > float(teto):
         raise ValueError(f"O Mercado Livre não aceita mais de {_brl_srv(float(teto))} neste anúncio.")
+    if so_validar:   # V19.76: a gaveta do Catálogo confere as travas ANTES de encerrar a promoção atual
+        return {"ok": True, "mlb": mlb, "sku": sku, "preco": preco, "margem": promo_conta(prod, preco)["margem"]}
 
     payload = {
         "deal_price": preco,
@@ -32797,7 +32842,11 @@ class AppHandler(BaseHTTPRequestHandler):
                                                   ctx["username"], encerrar=bool(body.get("encerrar")))
                 audit(ctx["username"], "catalogo.promocao",
                       f"{body.get('conta')}|{body.get('item')}|{body.get('preco')}|encerrar={bool(body.get('encerrar'))}|{res.get('code') or 'ok'}")
-                self.send_json(res, 200 if res.get("ok") else 409 if res.get("code") == "ml_recusou" else 502)
+                self.send_json(res, 200 if res.get("ok") else 409 if res.get("code") in ("ml_recusou", "em_campanha")
+                               else 502)
+            except PromoOcupado as exc:
+                self.send_json({"ok": False, "code": "ocupado", "error": "Este anúncio está sendo conferido pelas Promoções "
+                                "automáticas agora. Tente de novo em instantes."}, 409)
             except ValueError as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 400)
             except Exception as exc:
