@@ -488,6 +488,15 @@ html[data-tema="escuro"] .faixa{color:#F0B357!important}
   // ---------------- detalhe ----------------
   const faltando = (semDado, total) => (!semDado || !total) ? ""
     : `<div class="sub-cel aten">${Math.round(semDado / total * 100)}% sem dado</div>`;
+  // V19.77: custo unitário e de onde veio (congelado na venda, estimado ou digitado). Sempre Araçatuba.
+  const ORIGEM_CUSTO = {venda: ["", "na venda", "Custo de Araçatuba guardado no momento da venda"],
+    estimado: ["aten", "estimado", "Venda sem custo guardado: último custo de Araçatuba conhecido. Corrija em Demanda de Compra (custo digitado) se souber o real"],
+    manual: ["", "digitado", "Custo digitado na Demanda de Compra"]};
+  const origemCusto = (s) => {
+    const o = ORIGEM_CUSTO[s.custo_origem];
+    const un = s.custo_unitario != null ? `${brl(s.custo_unitario)}/un` : "";
+    return o ? `<div class="sub-cel ${o[0]}" title="${esc(o[2])}">${esc(un)} · ${esc(o[1])}</div>` : (un ? `<div class="sub-cel">${esc(un)}</div>` : "");
+  };
 
   function renderTabela() {
     const d = state.dados;
@@ -507,7 +516,7 @@ html[data-tema="escuro"] .faixa{color:#F0B357!important}
               <td title="${esc(s.titulo)}">${esc((s.titulo || "").slice(0, 46))}</td>
               <td class="n">${num(s.unidades)}</td>
               <td class="n">${esc(brl(s.faturamento))}<i class="barra" style="width:${(s.faturamento / maxF * 100).toFixed(0)}%"></i></td>
-              <td class="n">${s.sem_custo ? '<span class="tag pend">sem custo</span>' : esc(brl(s.cmv))}</td>
+              <td class="n">${s.sem_custo ? '<span class="tag pend">sem custo</span>' : esc(brl(s.cmv)) + origemCusto(s)}</td>
               <td class="n">${esc(brl(s.taxas))}${faltando(s.sem_taxa, s.faturamento)}</td>
               <td class="n">${esc(brl(s.frete))}${faltando(s.sem_frete, s.faturamento)}</td>
               <td class="n">${s.ads ? esc(brl(s.ads)) : "—"}</td>

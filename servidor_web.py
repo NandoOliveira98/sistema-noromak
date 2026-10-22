@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.76-CATALOGO-PROMO"
+APP_VERSION = "19.77-CUSTO-FINANCEIRO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -2699,6 +2699,7 @@ def init_db() -> None:
     ensure_auditoria_cobrancas_schema()  # V19.01
     ensure_tarefas_schema()  # V19.69
     ensure_catalogo_ml_schema()  # V19.74
+    ensure_venda_custo_schema()  # V19.77
     migrate_legacy_if_empty()
     ensure_storage_defaults()
     seed_sku_state_from_storage()
@@ -20151,6 +20152,14 @@ def financeiro_frete_loop(stop_event: threading.Event) -> None:
             ml_frete_envio_preencher()
         except Exception as exc:
             print(f"[financeiro-frete] falhou: {exc}", file=sys.stderr, flush=True)
+        try:   # V19.77: custo de Araçatuba congelado na venda + escrow da Shopee sem depender do botão
+            financeiro_custo_congelar()
+        except Exception as exc:
+            print(f"[financeiro-custo] falhou: {exc}", file=sys.stderr, flush=True)
+        try:
+            financeiro_shopee_escrow_pendentes(stop_event=stop_event)
+        except Exception as exc:
+            print(f"[financeiro-escrow] falhou: {exc}", file=sys.stderr, flush=True)
         if stop_event.wait(FINANCEIRO_FRETE_INTERVALO):
             break
 
@@ -23965,6 +23974,182 @@ def _financeiro_ads_periodo(d1: date, d2: date) -> dict[str, Any]:
     }
 
 
+# ---------------------------------------------------------------------------
+# V19.77: custo do produto no Financeiro (decisões do dono, 22/10).
+# 6007.003.315.00.8 foi vendido com custo de R$ 13,02 em Araçatuba; o estoque zerou, o Precificador
+# ficou com 0 e o Financeiro puxou R$ 39,41 — o último custo visto, lido no Apollo de BAURU
+# (custos_conhecidos_v1807 mistura as filiais). Agora:
+#   * custo = sempre o de ARAÇATUBA (revenda 1): custosFiliais do Precificador, senão o custo do
+#     Precificador quando a filial dele é Araçatuba, senão o último custo de Araçatuba lido no Apollo
+#     (custo_apollo_v1931["1"]); o custo_auto misturado NUNCA entra;
+#   * a venda congela esse custo quando entra (venda_custo_v1977, até FINANCEIRO_CONGELA_DIAS depois):
+#     zerar o estoque ou mudar o custo médio depois não muda o custo daquela venda;
+#   * venda antiga sem custo congelado = melhor estimativa ("estimado"); o custo digitado vence;
+#   * SKU com barra que é um código inteiro ("PSH367/80") não vira duas peças; código fora do
+#     Precificador com custo de Araçatuba no Apollo tem custo.
+# A regra antiga (_financeiro_custo_unitario) continua para o Pós-venda e a análise de kits.
+# ---------------------------------------------------------------------------
+FINANCEIRO_CONGELA_DIAS = 1
+FINANCEIRO_SHOPEE_ESCROW_DIAS = 30
+REVENDA_ARACATUBA = "1"
+
+
+def ensure_venda_custo_schema() -> None:
+    with DB_LOCK:
+        DB.execute(
+            """CREATE TABLE IF NOT EXISTS venda_custo_v1977 (
+                marketplace TEXT NOT NULL, order_id TEXT NOT NULL, line_key TEXT NOT NULL,
+                sku TEXT NOT NULL DEFAULT '', custo_unit REAL NOT NULL, origem TEXT NOT NULL DEFAULT '',
+                capturado_em TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (marketplace, order_id, line_key)
+            )""")
+        DB.commit()
+
+
+def _financeiro_custos_aracatuba() -> dict[str, Any]:
+    """Custos de Araçatuba por código: Precificador, último lido no Apollo, digitado e o da venda do ML."""
+    dados = precificador_dados()
+    produtos = dados.get("products") if isinstance(dados, dict) else None
+    prec: dict[str, float | None] = {}
+    for p in produtos if isinstance(produtos, list) else []:
+        if not isinstance(p, dict) or p.get("isKit"):
+            continue
+        codigo = str(p.get("sku") or "").strip().upper()
+        if not codigo or codigo in prec:
+            continue
+        ara = None
+        filiais = p.get("custosFiliais")
+        for f in filiais if isinstance(filiais, list) else []:
+            if isinstance(f, dict) and str(f.get("revenda")) == REVENDA_ARACATUBA:
+                v = _money_number(f.get("custo_medio"))
+                ara = v if v and v > 0 else None
+        if ara is None and str(p.get("filialCusto") or REVENDA_ARACATUBA) == REVENDA_ARACATUBA:
+            v = _money_number(p.get("custo"))
+            ara = v if v and v > 0 else None
+        prec[codigo] = ara
+    apollo: dict[str, float] = {}
+    manual: dict[str, float] = {}
+    with DB_LOCK:
+        for r in DB.execute("SELECT codigo, custos_json FROM custo_apollo_v1931").fetchall():
+            try:
+                v = _money_number((json.loads(r["custos_json"] or "{}") or {}).get(REVENDA_ARACATUBA))
+            except Exception:
+                v = None
+            if v and v > 0:
+                apollo[str(r["codigo"] or "").strip().upper()] = float(v)
+        for r in DB.execute("SELECT codigo, custo_manual FROM custos_conhecidos_v1807 WHERE custo_manual > 0").fetchall():
+            manual[str(r["codigo"] or "").strip().upper()] = float(r["custo_manual"])
+        snaps = DB.execute("SELECT sku, unit_cost FROM ml_profitability_snapshot WHERE unit_cost > 0 "
+                           "ORDER BY captured_at").fetchall()
+    conhecidos = set(prec) | set(apollo) | set(manual)
+    venda: dict[str, float] = {}
+    for r in snaps:
+        codigo = _compras_codigo(str(r["sku"] or ""), dict.fromkeys(conhecidos))
+        if codigo:
+            venda[codigo] = float(r["unit_cost"])
+    return {"prec": prec, "apollo": apollo, "manual": manual, "venda": venda,
+            "conhecidos": dict.fromkeys(conhecidos), "kits": {}, "cache": {}}
+
+
+def _financeiro_custo_codigo(codigo: str, ctx: dict[str, Any], congelar: bool) -> tuple[float | None, str]:
+    """Custo de Araçatuba de UM código. Para congelar (a venda acabou de entrar): o custo de agora
+    do Apollo (pelo Precificador) manda. Para estimar venda antiga: o digitado vence."""
+    prec = ctx["prec"].get(codigo)
+    if congelar:
+        for v in (prec, ctx["apollo"].get(codigo), ctx["manual"].get(codigo)):
+            if v:
+                return float(v), "venda"
+        return None, ""
+    if ctx["manual"].get(codigo):
+        return float(ctx["manual"][codigo]), "manual"
+    for v in (prec, ctx["apollo"].get(codigo), ctx["venda"].get(codigo)):
+        if v:
+            return float(v), "estimado"
+    return None, ""
+
+
+def _financeiro_custo_aracatuba(sku: str, ctx: dict[str, Any], congelar: bool = False) -> tuple[float | None, str]:
+    """Custo de UMA unidade do SKU vendido (kit = soma das peças), só de Araçatuba."""
+    chave = (str(sku or "").strip().upper(), congelar)
+    if chave in ctx["cache"]:
+        return ctx["cache"][chave]
+    s = chave[0]
+    if not s:
+        return None, ""
+    kits = ctx["kits"]
+    if str(sku).strip() not in kits:
+        kits.update(full_kit_compositions([str(sku).strip()]))
+    comps = (kits.get(str(sku).strip()) or {}).get("componentes")
+    conhecidos = ctx["conhecidos"]
+    if not comps:
+        if _compras_codigo(s, conhecidos):            # "PSH367/80" é um código inteiro
+            comps = [{"sku": s, "quantidade": 1}]
+        else:
+            partes = [x for x in s.split("/") if x.strip()] if "/" in s else [s]
+            comps = [{"sku": x.strip(), "quantidade": 1} for x in partes]
+    total, origens = 0.0, []
+    for c in comps:
+        codigo = _compras_codigo(str(c.get("sku") or ""), conhecidos)
+        custo, origem = _financeiro_custo_codigo(codigo, ctx, congelar) if codigo else (None, "")
+        if custo is None:
+            ctx["cache"][chave] = (None, "")
+            return ctx["cache"][chave]
+        try:
+            unidades = max(1, int(c.get("quantidade") or 1))
+        except (TypeError, ValueError):
+            unidades = 1
+        total += custo * unidades
+        origens.append(origem)
+    origem = "venda" if congelar else ("manual" if origens and all(o == "manual" for o in origens) else "estimado")
+    ctx["cache"][chave] = (round(total, 4), origem) if total > 0 else (None, "")
+    return ctx["cache"][chave]
+
+
+def financeiro_custo_congelar(dias: int = FINANCEIRO_CONGELA_DIAS) -> int:
+    """Congela o custo de Araçatuba nas vendas que entraram há até `dias` e ainda não têm custo
+    congelado. Sem custo conhecido não grava (tenta de novo na rodada seguinte). Devolve quantas."""
+    desde = (datetime.now(BR_TZ).date() - timedelta(days=max(0, dias))).isoformat()
+    with DB_LOCK:
+        linhas = DB.execute(
+            "SELECT v.marketplace, v.order_id, v.line_key, v.sku FROM vendas_v1799 v "
+            "LEFT JOIN venda_custo_v1977 c ON c.marketplace=v.marketplace AND c.order_id=v.order_id AND c.line_key=v.line_key "
+            "WHERE v.sale_day >= ? AND c.order_id IS NULL", (desde,)).fetchall()
+    if not linhas:
+        return 0
+    ctx = _financeiro_custos_aracatuba()
+    novos = []
+    for r in linhas:
+        custo, _origem = _financeiro_custo_aracatuba(str(r["sku"] or ""), ctx, congelar=True)
+        if custo:
+            novos.append((r["marketplace"], r["order_id"], r["line_key"], str(r["sku"] or ""), custo, "venda", now_iso()))
+    if novos:
+        with DB_LOCK:
+            DB.executemany("INSERT OR IGNORE INTO venda_custo_v1977(marketplace,order_id,line_key,sku,custo_unit,origem,"
+                           "capturado_em) VALUES(?,?,?,?,?,?,?)", novos)
+            DB.commit()
+    return len(novos)
+
+
+def financeiro_shopee_escrow_pendentes(limite: int | None = None, stop_event: threading.Event | None = None) -> int:
+    """V19.77: o escrow da Shopee (taxa e frete reais) só vinha pelo botão "Buscar custos oficiais":
+    237 de 292 pedidos de outubro ficaram "parciais". Agora a rotina do Financeiro busca sozinha os
+    pedidos dos últimos FINANCEIRO_SHOPEE_ESCROW_DIAS dias que ainda não têm."""
+    desde = (datetime.now(BR_TZ).date() - timedelta(days=FINANCEIRO_SHOPEE_ESCROW_DIAS)).isoformat()
+    with DB_LOCK:
+        pendentes = [str(r["order_id"]) for r in DB.execute(
+            "SELECT DISTINCT v.order_id FROM vendas_v1799 v "
+            "LEFT JOIN shopee_escrow_v1810 e ON e.order_sn = v.order_id AND e.erro='' "
+            "WHERE v.marketplace='shopee' AND v.sale_day >= ? AND e.order_sn IS NULL "
+            "ORDER BY v.sale_day DESC", (desde,)).fetchall()]
+    buscados = 0
+    for sn in pendentes[:(limite or FINANCEIRO_SHOPEE_POR_RODADA)]:
+        if stop_event is not None and stop_event.is_set():
+            break
+        if shopee_escrow_lookup(sn):
+            buscados += 1
+    return buscados
+
+
 def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limite_pedidos: int = 400) -> dict[str, Any]:
     """Faturamento, gastos e lucro do período, com a origem de cada número."""
     d1 = datetime.strptime(date_from, "%Y-%m-%d").date()
@@ -23983,9 +24168,14 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
             args).fetchall()]
 
     produtos = _compras_produtos_precificador()
-    reservas = _compras_custos_reserva(produtos)
-    kits = full_kit_compositions([v["sku"] for v in vendas])
-    cache_custo: dict[str, Any] = {}
+    # V19.77: custo de Araçatuba, e o congelado na venda quando existe
+    custos_ctx = _financeiro_custos_aracatuba()
+    custos_ctx["kits"] = full_kit_compositions([v["sku"] for v in vendas])
+    with DB_LOCK:
+        congelados = {(r["marketplace"], r["order_id"], r["line_key"]): float(r["custo_unit"])
+                      for r in DB.execute("SELECT marketplace, order_id, line_key, custo_unit FROM venda_custo_v1977 "
+                                          "WHERE order_id IN (SELECT order_id FROM vendas_v1799 WHERE sale_day BETWEEN ? AND ?)",
+                                          (d1.isoformat(), d2.isoformat())).fetchall()}
     imposto_rate = FINANCEIRO_IMPOSTO_PERCENT / 100.0
 
     # --- custos por pedido -------------------------------------------------
@@ -24126,7 +24316,11 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
         qty = int(v["qty"] or 0)
         sku = str(v["sku"] or "").strip()
         sku_key = sku.upper() or "(sem SKU)"
-        unit, origem_custo = _financeiro_custo_unitario(sku, produtos, reservas, kits, cache_custo)
+        congelado = congelados.get((mp, oid, str(v["line_key"])))
+        if congelado is not None:
+            unit, origem_custo = congelado, "venda"
+        else:
+            unit, origem_custo = _financeiro_custo_aracatuba(sku, custos_ctx)
         cmv = round(unit * qty, 2) if unit is not None else None
         pc = custos_pedido.get(chave) or {}
         total_pedido = receita_pedido.get(chave, 0.0)
@@ -24170,8 +24364,11 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
                                          "unidades": 0, "faturamento": 0.0, "cmv": 0.0, "taxas": 0.0, "frete": 0.0,
                                          "outros": 0.0, "imposto": 0.0, "ads": 0.0, "custo_unitario": unit,
                                          "custo_origem": origem_custo, "sem_custo": False, "pedidos": set(),
+                                         "_origens": set(),
                                          "sem_taxa": 0.0, "sem_frete": 0.0})
         s["unidades"] += qty
+        if origem_custo:
+            s["_origens"].add(origem_custo)
         s["faturamento"] = round(s["faturamento"] + receita, 2)
         s["imposto"] = round(s["imposto"] + imposto, 2)
         s["pedidos"].add(chave)
@@ -24277,6 +24474,11 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
     lista_sku = []
     for s in por_sku.values():
         s["pedidos"] = len(s["pedidos"])
+        # V19.77: "estimado" se alguma venda do SKU não tem custo congelado; custo médio do período
+        origens = s.pop("_origens", set())
+        s["custo_origem"] = next((o for o in ("estimado", "manual", "venda") if o in origens), s["custo_origem"])
+        if not s["sem_custo"] and s["unidades"]:
+            s["custo_unitario"] = round(s["cmv"] / s["unidades"], 4)
         bruto = round(s["faturamento"] - s["cmv"], 2)
         s["lucro_bruto"] = bruto
         s["lucro_liquido"] = round(bruto - s["taxas"] - s["frete"] - s["outros"] - s["ads"] - s["imposto"], 2)

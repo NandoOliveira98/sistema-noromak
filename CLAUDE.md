@@ -509,6 +509,16 @@ e a diferença fica em `pedidos[].divergencia_frete`.
 O que não é conhecido fica **nulo e visível** (`cobertura.faturamento_sem_custo` /
 `sem_taxa`): nada é estimado. `GET /api/financeiro/resumo`, `POST /api/financeiro/sincronizar`
 (fatura + escrow pendente + Ads, em segundo plano).
+**V19.77 — custo sempre de Araçatuba, congelado na venda** (dono, 22/10). 6007.003.315.00.8 foi vendido com
+custo R$ 13,02; o estoque zerou e o Financeiro puxou R$ 39,41 — o último custo lido no Apollo de **Bauru**
+(`custos_conhecidos_v1807.custo_auto` mistura as filiais e **não entra mais** no Financeiro). Custo = Araçatuba
+(revenda 1): `custosFiliais` do Precificador > custo do Precificador com `filialCusto` 1 > `custo_apollo_v1931["1"]`.
+`financeiro_custo_congelar` (na rotina `financeiro_frete_loop`) grava em `venda_custo_v1977` o custo das vendas de
+até 1 dia; venda antiga sem custo congelado = "estimado" (o digitado na Demanda de Compra vence). SKU com barra que
+é um código inteiro não vira duas peças; código só no Apollo também tem custo. O escrow da Shopee passou a ser
+buscado pela mesma rotina (`financeiro_shopee_escrow_pendentes`, 30 dias): antes só pelo botão, e 237 de 292
+pedidos de outubro estavam "parciais". A regra antiga (`_financeiro_custo_unitario`) segue no Pós-venda e na
+análise de kits. Teste: `TESTES/test_financeiro_custo_v1977.py`.
 **V18.36 — o Billing devolve os MESMOS lançamentos em `BILL` e em `CREDIT_NOTE`.** Os dois
 sincronismos de setembro voltaram com 5.773 itens idênticos. Marcar crédito pelo `document_type`
 **pedido** fazia cada cobrança ganhar uma cópia negativa que a anulava: R$ 132 mil de faturamento
