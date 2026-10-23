@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.83-TIKTOK-TELA"
+APP_VERSION = "19.84-TIKTOK-PRECO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -7363,6 +7363,114 @@ def tiktok_extensao_resultado(resultados: Any, ator: str, rodada: str = "", fim:
             else:
                 TIKTOK_RODADA["desde"] = time.time()  # cada item devolvido renova a rodada (rodada longa não vence)
     return {"ok": True, "ok_count": ok_count, "erros": erros, "ignorados": ignorados}
+
+
+# V19.84: preço ideal do TikTok (loja de Bauru), pela extensão. Decisões do dono (23/10): afiliado
+# fixo de 5% em TODA venda (a margem nunca fura na venda por afiliado); loja inteira no programa de
+# frete grátis (6%, teto de R$ 50 por produto); imposto = o do Financeiro; custo = Apollo de BAURU.
+# Tarifa do TikTok BR desde 15/07/2026 (preço já com o desconto do vendedor). Margem = lucro ÷ preço.
+TIKTOK_FAIXAS_TARIFA = ((50.0, 10.0, 4.0), (float("inf"), 6.0, 6.0))  # (até, comissão %, fixo R$)
+TIKTOK_FRETE_TETO = 50.0
+TIKTOK_REVENDA_CUSTO = 3  # Bauru no Apollo
+
+
+def tiktok_preco_config() -> dict[str, float]:
+    def num(chave: str, padrao: float) -> float:
+        try:
+            return float(_tiktok_config_ler(chave) or padrao)
+        except (TypeError, ValueError):
+            return padrao
+    return {"afiliado": num("preco_afiliado_pct", 5.0), "frete": num("preco_frete_pct", 6.0),
+            "imposto": float(FINANCEIRO_IMPOSTO_PERCENT)}
+
+
+def _tiktok_faixa(preco: float) -> tuple[float, float, float]:
+    return next(f for f in TIKTOK_FAIXAS_TARIFA if preco < f[0])
+
+
+def tiktok_preco_detalhe(preco: float, custo: float, cfg: dict[str, float]) -> dict[str, Any]:
+    _, comissao_pct, fixo = _tiktok_faixa(preco)
+    partes = {"imposto": preco * cfg["imposto"] / 100, "afiliado": preco * cfg["afiliado"] / 100,
+              "tarifa": preco * comissao_pct / 100 + fixo, "frete": min(preco * cfg["frete"] / 100, TIKTOK_FRETE_TETO)}
+    lucro = preco - custo - sum(partes.values())
+    return {"preco": round(preco, 2), "custo": round(custo, 2), **{k: round(v, 2) for k, v in partes.items()},
+            "lucro": round(lucro, 2), "margem": round(lucro / preco * 100, 2) if preco > 0 else None,
+            "faixa": f"{comissao_pct:g}% + R$ {fixo:.2f}".replace(".", ",")}
+
+
+def tiktok_preco_ideal(custo: float, margem: float, cfg: dict[str, float]) -> dict[str, Any] | None:
+    """Menor preço que dá a margem pedida. Cada faixa da tarifa e o teto do frete mudam a conta,
+    então tenta cada combinação e fica com a que cai dentro da própria faixa."""
+    base = (cfg["imposto"] + cfg["afiliado"] + margem) / 100
+    inicio = 0.0
+    for ate, comissao_pct, fixo in TIKTOK_FAIXAS_TARIFA:
+        for frete_prop in (True, False):
+            denom = 1 - base - comissao_pct / 100 - (cfg["frete"] / 100 if frete_prop else 0)
+            if denom <= 0:
+                continue
+            preco = (custo + fixo + (0 if frete_prop else TIKTOK_FRETE_TETO)) / denom
+            frete_ok = (preco * cfg["frete"] / 100 <= TIKTOK_FRETE_TETO) == frete_prop
+            if inicio <= preco < ate and frete_ok:
+                preco = round(preco, 2)
+                return tiktok_preco_detalhe(preco, custo, cfg)
+        # buraco entre as faixas: o começo da faixa seguinte já dá a margem?
+        if ate != float("inf") and tiktok_preco_detalhe(ate, custo, cfg)["margem"] >= margem:
+            return tiktok_preco_detalhe(ate, custo, cfg)
+        inicio = ate
+    return None
+
+
+def _tiktok_custo_bauru(codigo: str) -> tuple[float | None, str]:
+    try:
+        r = crm_cost_lookup(codigo, operador="tiktok-preco", wait_seconds=5)
+        for c in r.get("custos") or []:
+            if int(c.get("revenda") or 0) == TIKTOK_REVENDA_CUSTO and float(c.get("custo_medio") or 0) > 0:
+                return float(c["custo_medio"]), "Apollo de Bauru (agora)"
+        erro = "Bauru sem custo no Apollo (estoque zerado?)"
+    except Exception as exc:
+        erro = str(exc)[:120]
+    with DB_LOCK:
+        row = DB.execute("SELECT custos_json,data FROM custo_apollo_v1931 WHERE codigo=?", (codigo.upper(),)).fetchone()
+    try:
+        guardado = float(json.loads(row["custos_json"]).get(str(TIKTOK_REVENDA_CUSTO)) or 0) if row else 0
+    except (TypeError, ValueError):
+        guardado = 0
+    if guardado > 0:
+        return guardado, f"Apollo de Bauru (última leitura, {str(row['data'])[:10]})"
+    return None, erro  # nunca o custo de outra filial (decisão do dono, V19.79)
+
+
+def tiktok_preco_sku(sku: str, margens: list[float], preco_atual: float | None = None,
+                     custo_digitado: float | None = None) -> dict[str, Any]:
+    sku = _tiktok_texto(sku, 200)
+    pecas = _tiktok_pecas(sku)
+    if not pecas:
+        raise ValueError("Informe o SKU (código Apollo, KIT2-código ou código/código).")
+    cfg = tiktok_preco_config()
+    detalhe: list[dict[str, Any]] = []
+    faltando: list[str] = []
+    if custo_digitado is not None and custo_digitado > 0:
+        custo: float | None = float(custo_digitado)
+        detalhe.append({"codigo": sku, "unidades": 1, "custo": custo, "origem": "digitado"})
+    else:
+        custo = 0.0
+        for codigo, unidades in pecas:
+            valor, origem = _tiktok_custo_bauru(codigo)
+            detalhe.append({"codigo": codigo, "unidades": unidades, "custo": valor, "origem": origem})
+            if valor is None:
+                faltando.append(codigo)
+            else:
+                custo += valor * unidades
+        if faltando:
+            custo = None
+    precos = []
+    for m in margens if custo is not None else []:
+        ideal = tiktok_preco_ideal(custo, m, cfg)
+        if ideal:
+            precos.append({**ideal, "margem_pedida": m})
+    return {"ok": True, "sku": sku, "custo": round(custo, 2) if custo is not None else None, "pecas": detalhe,
+            "faltando": faltando, "config": cfg, "precos": precos,
+            "atual": tiktok_preco_detalhe(preco_atual, custo, cfg) if custo is not None and preco_atual else None}
 
 
 def tiktok_vinculo_definir(sku_id: str, codigos: str, ator: str) -> dict[str, Any]:
@@ -31961,6 +32069,30 @@ class AppHandler(BaseHTTPRequestHandler):
             ctx = self.auth(admin_only=True)
             if ctx is not None:
                 self.send_json(tiktok_estoque_payload())
+            return
+        if path == "/api/tiktok-estoque/preco":  # V19.84: preço ideal do TikTok (só lê; Apollo de Bauru)
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                q = query
+
+                def numero(nome: str) -> float | None:
+                    try:
+                        v = float(str((q.get(nome) or [""])[0]).replace(",", "."))
+                        return v if math.isfinite(v) and v > 0 else None
+                    except ValueError:
+                        return None
+                margens = []
+                for m in str((q.get("margens") or ["15,20"])[0]).split(","):
+                    try:
+                        if 0 <= float(m) < 70:
+                            margens.append(float(m))
+                    except ValueError:
+                        pass
+                try:
+                    self.send_json(tiktok_preco_sku((q.get("sku") or [""])[0], margens[:5] or [15.0, 20.0],
+                                                    preco_atual=numero("preco"), custo_digitado=numero("custo")))
+                except ValueError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 400)
             return
         if path == "/api/tiktok-estoque/extensao/pendentes":  # V19.81: o que a extensão deve gravar
             ctx = self.auth(admin_only=True)

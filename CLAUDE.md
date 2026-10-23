@@ -414,7 +414,14 @@ só apaga quem não veio com `completo`; lista vazia recusada; leitura "completa
 O "Enviar" relê a loja antes. Extensão v0.3 roda só em content script isolado (sem postMessage com a página; os
 parâmetros da sessão vêm do `performance`). Sem a API conectada o `tiktok_estoque_loop` continua o rodízio do Apollo
 só se a extensão leu a loja nas últimas 6 h (`extensao_lida_epoch`). Produto inativo: o `status` do Seller Center é
-guardado mas ainda não filtra (falta amostra de inativo). **Falta:** pedidos do TikTok sem API não entram na fila (o vendido no TikTok só sai quando o Apollo baixar).
+guardado mas ainda não filtra (falta amostra de inativo).
+**V19.84 — preço ideal do TikTok** (decisões do dono 23/10): `GET /api/tiktok-estoque/preco?sku=&margens=15,20&preco=&custo=`
+(módulo admin, só lê; extensão v0.6, quadro "Preço ideal"). Afiliado fixo **5% em toda venda**, loja inteira no
+**frete grátis** (6%, teto R$ 50), imposto = `FINANCEIRO_IMPOSTO_PERCENT`, tarifa `TIKTOK_FAIXAS_TARIFA` (< R$ 50 =
+10% + R$ 4; ≥ R$ 50 = 6% + R$ 6; mudou no TikTok, trocar aqui). Afiliado/frete editáveis em `tiktok_config_v1964`
+(`preco_afiliado_pct`, `preco_frete_pct`). Custo = Apollo de **Bauru** (revenda 3) lido agora, senão a última leitura
+de Bauru (`custo_apollo_v1931`); **nunca** outra filial; kit soma as peças; custo digitado vence. Margem = lucro ÷ preço.
+Teste: `TESTES/test_tiktok_preco_v1984.py` (exemplos conferidos com o dono: 2011004 → 65,71 / 72,16). **Falta:** pedidos do TikTok sem API não entram na fila (o vendido no TikTok só sai quando o Apollo baixar).
 Teste: `TESTES/test_tiktok_extensao_v1981.py`.
 
 ### Magalu (V19.24, fase 0 de 5)
