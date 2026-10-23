@@ -9,7 +9,9 @@
      vendido e está na fila de Bauru; kit = a peça que tem menos; Apollo sem resposta = o TikTok não é
      alterado. Vínculo pelo SKU do vendedor (código Apollo); o vínculo à mão vence. Modos: Simulação
      (não envia) → Lote (clique) → Automático (ligar = OWNER). GET /api/tiktok-estoque,
-     POST /api/tiktok-estoque/{config,vinculo,enviar,atualizar}. -->
+     POST /api/tiktok-estoque/{config,vinculo,enviar,atualizar}.
+     V19.83: tela no padrão Noromak (cabeçalho com ações, cartões com ícone que filtram, tabela e
+     histórico recolhível). Só apresentação: rotas e regras não mudaram. -->
 <script defer src="/expedicao/web-auth.js?v=19.70"></script>
 <link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
 <link rel="stylesheet" href="/expedicao/nk-ui.css?v=19.13">
@@ -23,13 +25,20 @@ body{margin:0;background:var(--nk-canvas);color:var(--nk-ink);font-family:var(--
 .modos{display:inline-flex;border:1px solid var(--nk-line);border-radius:8px;overflow:hidden}
 .modos button{border:0;background:var(--nk-tile);color:var(--nk-ink2);font:inherit;font-size:13px;font-weight:600;padding:8px 13px;cursor:pointer}
 .modos button+button{border-left:1px solid var(--nk-line)}
-.modos button.on{background:var(--nk-pri);color:var(--nk-pri-txt)}
+.modos button.on{background:var(--nk-info-bg);color:var(--nk-pri)}
 .nota{color:var(--nk-ink2);font-size:12.5px;margin:6px 0 0}
 input[type=search]{border:1px solid var(--nk-line);background:var(--nk-tile);color:var(--nk-ink);border-radius:8px;padding:7px 10px;font:inherit;width:240px;max-width:100%}
 .tabela{overflow-x:auto}
 table{width:100%;border-collapse:collapse;font-size:13px}
-th,td{padding:8px 10px;border-bottom:1px solid var(--nk-line);text-align:left;vertical-align:top}
-th{color:var(--nk-ink2);font-weight:600;white-space:nowrap}
+th,td{padding:11px 10px;border-bottom:1px solid var(--nk-line2);text-align:left;vertical-align:middle}
+th{position:sticky;top:0;background:var(--nk-tile);font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--nk-ink3);font-weight:700;white-space:nowrap;border-bottom-color:var(--nk-line)}
+tbody tr:hover{background:var(--nk-hover)}
+button.nk-kpi.on{border-color:var(--nk-pri);box-shadow:0 0 0 3px var(--nk-foco)}
+.nk-btn.pri{background:var(--nk-pri);color:var(--nk-pri-txt,#fff);border-color:var(--nk-pri)}
+.nk-btn.pri:disabled{background:var(--nk-cinza-bg);color:var(--nk-ink3);border-color:var(--nk-line);cursor:not-allowed}
+.barra{padding-bottom:12px;border-bottom:1px solid var(--nk-line2)}
+details.hist summary{cursor:pointer;font-weight:700;font-size:15px;color:var(--nk-head)}
+details.hist[open] summary{margin-bottom:10px}
 td.num,th.num{text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums}
 td.tit{max-width:320px}
 .mono{font-family:Consolas,monospace;font-size:12px}
@@ -49,8 +58,17 @@ td.tit{max-width:320px}
 </head>
 <body>
 <main class="nk-pagina">
-  <header class="nk-cab"><span class="nk-rotulo">Estoque e compras</span><h1>Estoque TikTok</h1>
-    <p>Estoque de Bauru no Apollo, menos o que já foi vendido e está na fila de Bauru, enviado ao TikTok Shop.</p></header>
+  <div class="nk-cab">
+    <div>
+      <div class="nk-rotulo">Estoque e compras</div>
+      <h1>Estoque TikTok</h1>
+      <p>Estoque de Bauru no Apollo, menos o que já foi vendido e está na fila de Bauru, enviado ao TikTok Shop.</p>
+    </div>
+    <div class="nk-acoes">
+      <button class="nk-btn" onclick="atualizarAnuncios()"><i class=nk-i-download></i> Ler anúncios do TikTok</button>
+      <button class="nk-btn" onclick="carregar()"><i class=nk-i-refresh></i> Atualizar</button>
+    </div>
+  </div>
   <div id="aviso"></div>
   <div class="nk-kpis bloco" id="kpis"></div>
   <section class="nk-painel bloco">
@@ -58,22 +76,20 @@ td.tit{max-width:320px}
       <span class="modos" id="modos" role="group" aria-label="Modo do envio">
         <button data-m="simulacao">Simulação</button><button data-m="lote">Lote</button><button data-m="automatico">Automático</button>
       </span>
-      <button class="nk-btn pri" id="btnEnviar" onclick="enviar()" disabled>Enviar diferenças ao TikTok</button>
-      <button class="nk-btn" onclick="atualizarAnuncios()">Ler anúncios do TikTok</button>
+      <button class="nk-btn pri" id="btnEnviar" onclick="enviar()" disabled><i class=nk-i-zap></i> Enviar diferenças ao TikTok</button>
       <span class="esp"></span>
       <input type="search" id="busca" placeholder="Buscar SKU, código ou título" oninput="desenhar()">
     </div>
     <p class="nota" id="notaModo"></p>
-    <div class="barra" style="margin-top:10px" id="abas"></div>
     <div class="tabela"><table data-nk-tabela="estoque_tiktok" data-nk-ordenar="0"><thead><tr>
       <th>Anúncio</th><th>SKU do vendedor</th><th>Código Apollo</th><th class="num">Apollo Bauru</th>
       <th class="num">Na fila</th><th class="num">Deveria ter</th><th class="num">No TikTok</th><th>Situação</th>
     </tr></thead><tbody id="corpo"><tr><td colspan="8" class="vazio">Carregando…</td></tr></tbody></table></div>
   </section>
   <section class="nk-painel bloco">
-    <h3 style="margin:0 0 8px;font-size:15px">Histórico do envio</h3>
+    <details class="hist"><summary>Histórico do envio</summary>
     <div class="tabela"><table><thead><tr><th>Quando</th><th>SKU</th><th class="num">De</th><th class="num">Para</th><th>Modo</th><th>Resultado</th><th>Detalhe</th><th>Por</th></tr></thead>
-      <tbody id="log"></tbody></table></div>
+      <tbody id="log"></tbody></table></div></details>
   </section>
 </main>
 <div class="modal" id="owner" role="dialog" aria-modal="true" aria-labelledby="ownerTit"><form id="ownerForm">
@@ -87,7 +103,7 @@ td.tit{max-width:320px}
 <script>
 const SIT={enviar:["A enviar","warn"],igual:["Igual ao TikTok","ok"],desconhecido:["Sem número do Apollo","info"],
   sem_vinculo:["Sem vínculo","bad"],varios_depositos:["Vários depósitos","bad"]};
-const ABAS=[["todos","Todos"],["enviar","A enviar"],["sem_vinculo","Sem vínculo"],["desconhecido","Sem número do Apollo"],["zerados","Zerados"]];
+const ABAS=[["todos","Variações no TikTok","","nk-i-box"],["enviar","A enviar","warn","nk-i-zap"],["sem_vinculo","Sem vínculo","bad","nk-i-link"],["desconhecido","Sem número do Apollo","","nk-i-clock"],["zerados","Zerados","bad","nk-i-alert"]];
 const NOTA={simulacao:"Simulação: o Noromak só mostra o que mandaria. Nada é enviado ao TikTok.",
   lote:"Lote: o envio acontece só quando alguém clica em “Enviar diferenças ao TikTok”.",
   automatico:"Automático: o Noromak envia sozinho sempre que a quantidade muda (venda nova na fila de Bauru ou nova leitura do Apollo)."};
@@ -111,14 +127,11 @@ function desenhar(){
   if(!D)return;
   const r=D.resumo||{},modo=D.config.modo_estoque;
   $("aviso").innerHTML=D.conectado?"":'<div class="alerta">O TikTok Shop ainda não está conectado. Conecte em Integrações → TikTok Shop · Bauru.</div>';
-  const kpi=(ic,cl,v,t,aba)=>`<button class="nk-kpi" onclick="ABA='${aba}';desenhar()"><span class="nk-kpi-ic ${cl}">${ic}</span><span><b>${v||0}</b><small>${t}</small></span></button>`;
-  $("kpis").innerHTML=kpi("▦","",r.total,"Variações no TikTok","todos")+kpi("↑","warn",r.enviar,"A enviar","enviar")+
-    kpi("?","bad",r.sem_vinculo,"Sem vínculo","sem_vinculo")+kpi("…","",r.desconhecido,"Sem número do Apollo","desconhecido");
   document.querySelectorAll("#modos button").forEach(b=>b.classList.toggle("on",b.dataset.m===modo));
   $("notaModo").textContent=NOTA[modo]+` O Apollo é lido em rodízio, até ${D.apollo_por_minuto} consultas por minuto, estoque baixo primeiro.`;
   $("btnEnviar").disabled=modo==="simulacao"||!r.enviar;
   const cont={};(D.itens||[]).forEach(i=>{ABAS.forEach(([k])=>{const a=ABA;ABA=k;if(grupo(i))cont[k]=(cont[k]||0)+1;ABA=a;});});
-  $("abas").innerHTML=ABAS.map(([k,t])=>`<button class="nk-tab${k===ABA?" ativo":""}" aria-pressed="${k===ABA}" onclick="ABA='${k}';desenhar()">${t} (${cont[k]||0})</button>`).join("");
+  $("kpis").innerHTML=ABAS.map(([k,t,cl,ic])=>`<button type="button" class="nk-kpi${k===ABA?" on":""}" aria-pressed="${k===ABA}" onclick="ABA='${k}';desenhar()"><span class="nk-kpi-ic ${cl}"><i class="${ic}"></i></span><span><b>${cont[k]||0}</b><small>${t}</small></span></button>`).join("");
   const q=$("busca").value.trim().toLowerCase();
   const lista=(D.itens||[]).filter(i=>grupo(i)&&(!q||[i.seller_sku,i.vinculo,i.titulo,i.sku_id].join(" ").toLowerCase().includes(q)));
   $("corpo").innerHTML=lista.length?lista.map(i=>{
