@@ -209,6 +209,17 @@ class ListaDeSeparacao(unittest.TestCase):
         self.assertIn("/separacao", (S.APP_DIR / "nk-menu.js").read_text(encoding="utf-8"))
         self.assertIn("separacao", (S.APP_DIR / "admin.html").read_text(encoding="utf-8"))
 
+    def test_tela_nao_rele_a_fila_a_cada_8s_nem_escondida(self):
+        # Revisão 26/10: cada consulta lê a fila inteira sob o DB_LOCK (o mesmo do bip). A tela
+        # relia a cada 8 s enquanto faltava prateleira (~30 min de manhã), até com a aba escondida.
+        html = (S.APP_DIR / "separacao.html").read_text(encoding="utf-8")
+        self.assertNotIn("setTimeout(carregar, 8000)", html)
+        self.assertIn("const ESPERA_MS = 30000", html)
+        self.assertIn("document.hidden", html)
+        self.assertIn("visibilitychange", html)
+        # Duas consultas ao mesmo tempo (Atualizar durante uma lenta): a resposta velha é descartada.
+        self.assertIn("if (meu !== seqConsulta) return;", html)
+
 
 if __name__ == "__main__":
     unittest.main()

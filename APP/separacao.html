@@ -66,20 +66,34 @@ table.sep .num{text-align:right;font-weight:700;font-variant-numeric:tabular-num
 // Filial lida uma vez, ao abrir a página (regra da V19.00).
 let FILIAL = ""; try { FILIAL = localStorage.getItem("nk_filial_v1895") || ""; } catch (_) {}
 let timer = null;
+let lendoAinda = false;
+let seqConsulta = 0;   // só a consulta mais nova desenha e agenda (sem timer órfão nem retrato velho)
+const ESPERA_MS = 30000;
+// Aba escondida para de consultar; ao voltar, consulta na hora se a leitura ainda não acabou.
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) clearTimeout(timer);
+  else if (lendoAinda) carregar();
+});
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 
 async function carregar() {
   clearTimeout(timer);
+  const meu = ++seqConsulta;
   const erro = document.getElementById("erro");
   try {
     const r = await fetch("/expedicao/api/separacao", {credentials: "same-origin",
       headers: FILIAL ? {"X-Noromak-Filial": FILIAL} : {}});
     const d = await r.json();
+    if (meu !== seqConsulta) return;
     if (!d.ok) throw new Error(d.error || "Erro ao montar a lista.");
     erro.hidden = true;
     desenhar(d);
-    if (d.lendo) timer = setTimeout(carregar, 8000);
+    // Revisão 26/10: cada consulta lê a fila inteira sob o DB_LOCK (o mesmo do bip). Enquanto a
+    // prateleira é lida, relê a cada 30 s (era 8 s) e nunca com a aba escondida.
+    lendoAinda = !!d.lendo;
+    if (lendoAinda && !document.hidden) timer = setTimeout(carregar, ESPERA_MS);
   } catch (e) {
+    if (meu !== seqConsulta) return;
     erro.textContent = e.message; erro.hidden = false;
     document.getElementById("corpo").textContent = "";
   }
