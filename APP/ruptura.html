@@ -98,6 +98,8 @@ table.rp{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;m
         <option value="60">Últimos 60 dias</option>
         <option value="90">Últimos 90 dias</option>
       </select>
+      <!-- V19.86 (dono, 26/10): filtro por marca para o Compras (fornecedores da Demanda de Compra). -->
+      <select class="btn" id="fMarca" title="Marca (fornecedor da Demanda de Compra)"><option value="">Todas as marcas</option></select>
       <a class="btn" href="/expedicao/admin">Central Noromak</a>
     </div>
   </header>
@@ -191,10 +193,39 @@ async function carregar(){
   if(D.resumo.vendeu_sem_estoque_coletado) av.push(`${num(D.resumo.vendeu_sem_estoque_coletado)} anúncio(s) venderam mas ainda não tiveram o estoque checado e ficaram de fora`);
   aviso(av.length?'<b>Atenção:</b> '+av.join('; ')+'.':'');
   $('conteudo').hidden=false;
-  if(!D.itens.some(i=>i.grupo===st.tab)) st.tab=D.itens.some(i=>i.grupo==='critico')?'critico':'todos';
-  D.itens.forEach(i=>{i.acao=acao(i);i.repor=repor(i)});
-  kpis(); render(); notas();
+  D.todos=D.itens; D.resumoTodos=D.resumo;
+  D.todos.forEach(i=>{i.acao=acao(i);i.repor=repor(i)});
+  montarMarcas(); aplicarMarca(); notas();
 }
+
+// V19.86: filtro por marca. Os cartões e as abas passam a contar só a marca escolhida;
+// kit com peças de marcas diferentes aparece em cada uma. A escolha fica no navegador.
+const MARCA_KEY='nk_ruptura_marca_v1986';
+const SEM_MARCA='__sem__';
+function marcaSalva(){try{return localStorage.getItem(MARCA_KEY)||''}catch(e){return ''}}
+function montarMarcas(){
+  const cont={}; let sem=0;
+  D.todos.forEach(i=>{const m=i.marcas||[]; if(!m.length) sem++; m.forEach(x=>cont[x]=(cont[x]||0)+1)});
+  const atual=marcaSalva();
+  const ops=['<option value="">Todas as marcas</option>']
+    .concat((D.marcas||[]).map(m=>`<option value="${esc(m)}">${esc(m)} (${num(cont[m]||0)})</option>`))
+    .concat(sem?[`<option value="${SEM_MARCA}">Sem marca (${num(sem)})</option>`]:[]);
+  $('fMarca').innerHTML=ops.join('');
+  $('fMarca').value=[...$('fMarca').options].some(o=>o.value===atual)?atual:'';
+}
+function aplicarMarca(){
+  const m=$('fMarca').value;
+  D.itens=!m?D.todos:D.todos.filter(i=>m===SEM_MARCA?!(i.marcas||[]).length:(i.marcas||[]).includes(m));
+  const s=(c,g)=>Math.round(D.itens.filter(i=>!g||i.grupo===g).reduce((t,i)=>t+(i[c]||0),0)*100)/100;
+  const n=g=>D.itens.filter(i=>i.grupo===g).length;
+  D.resumo=!m?D.resumoTodos:{...D.resumoTodos,anuncios:D.itens.length,zerados:n('zerado'),perda_dia:s('perda_dia'),
+    criticos:n('critico'),risco_dia:s('risco_dia'),atencao:n('atencao'),pausados:n('pausado'),perdido:s('perdido'),
+    unidades_perdidas:Math.round(s('unidades_perdidas')*10)/10};
+  if(st.tab!=='todos'&&!D.itens.some(i=>i.grupo===st.tab)) st.tab=D.itens.some(i=>i.grupo==='zerado')?'zerado':D.itens.some(i=>i.grupo==='critico')?'critico':'todos';
+  st.lim=50;
+  kpis(); render();
+}
+$('fMarca').onchange=()=>{try{localStorage.setItem(MARCA_KEY,$('fMarca').value)}catch(e){} if(D&&D.todos) aplicarMarca()};
 
 function kpis(){
   const r=D.resumo;

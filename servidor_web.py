@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.85-LISTA-SEPARACAO"
+APP_VERSION = "19.86-RUPTURA-MARCA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -22572,6 +22572,7 @@ def ruptura_payload(dias: int = 30, hoje: date | None = None, marketplace: str =
     def soma(campo: str, grupo: str | None = None) -> float:
         return round(sum(i[campo] or 0 for i in itens if grupo is None or i["grupo"] == grupo), 2)
 
+    marcas_todas = _ruptura_marcas_aplicar(itens)   # V19.86: fora do DB_LOCK
     estado = _SHOPEE_ANUNCIOS_ESTADO if marketplace == "shopee" else _RUPTURA_ESTADO
     return {
         "ok": True,
@@ -22594,8 +22595,36 @@ def ruptura_payload(dias: int = 30, hoje: date | None = None, marketplace: str =
                    "unidades_perdidas": round(sum(i["unidades_perdidas"] for i in itens), 1),
                    "vendeu_sem_estoque_coletado": sem_coleta,
                    "encerrados": encerrados},
+        "marcas": marcas_todas,
         "itens": itens,
     }
+
+
+def _ruptura_marcas_aplicar(itens: list[dict[str, Any]]) -> list[str]:
+    """V19.86 (dono, 26/10): filtro por marca para o Compras. Marca = fornecedores da Demanda de
+    Compra (regras + marca escolhida à mão), pelo mesmo caminho da demanda: kit vira as peças,
+    "A/B" uma de cada; o anúncio entra em cada marca das peças. Sem fornecedor = lista vazia."""
+    try:
+        produtos = _compras_produtos_precificador()
+        regras = _compras_regras_marca(produtos)
+        kits = full_kit_compositions([i.get("sku") for i in itens])
+    except Exception:
+        for i in itens:
+            i["marcas"] = []
+        return []
+    todas: set[str] = set()
+    for i in itens:
+        sku = str(i.get("sku") or "").strip()
+        comps = (kits.get(sku) or {}).get("componentes") if sku else None
+        partes = [c["sku"] for c in comps] if comps else ([x for x in sku.split("/") if x.strip()] if sku else [])
+        nomes: set[str] = set()
+        for parte in partes:
+            codigo = _compras_codigo(parte, produtos)
+            if codigo:
+                nomes.update(regras(codigo, produtos[codigo].get("descricao") or ""))
+        i["marcas"] = sorted(nomes)
+        todas |= nomes
+    return sorted(todas)
 
 
 # V19.59: relatório semanal e mensal da venda perdida por estoque zerado (mesma conta do
