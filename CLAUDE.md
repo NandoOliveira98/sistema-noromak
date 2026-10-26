@@ -1138,7 +1138,9 @@ filiais, 1 a cada 12 s, sem esperar vaga**; limite do Apollo cheio = para 1 min 
 recarrega até completar; filial sem resposta (`respondeu: false`) vai para o fim e é tentada de novo depois de 5 min.
 SKU com barra que é um produto do Precificador ("PSH367/80") fica inteiro (regra da V19.48); parte com menos de 3
 caracteres é variação ("WAP103/S" = uma peça); "KIT-1/A-1/B" = quantidade/código de cada peça. Separada por
-marketplace (`grupos`: Mercado Livre, Shopee, Magalu, TikTok; cada um em folha nova na impressão). `GET /api/separacao`.
+marketplace (`grupos`: Mercado Livre, Shopee, Magalu, TikTok; cada um em folha nova na impressão). Só entra despacho
+de hoje e atrasados (`_faturamento_prazo_dia`, regra do Faturamento V19.73; sem prazo = Shopee entra); os de outro dia
+contam em `futuros` (caso real 26/10: coleta de 28/10 aparecendo na lista). `GET /api/separacao`.
 Antes de subir: `FERRAMENTAS_WINDOWS/separacao_hoje_leitura.py` (só leitura, via ssh) traz a fila para montar à mão.
 Teste: `TESTES/test_separacao_v1985.py`.
 

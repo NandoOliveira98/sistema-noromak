@@ -32,7 +32,8 @@ saida = {"locais": json.loads(loc[0]) if loc else {}, "linhas": []}
 for r in linhas:
     if normalize(r.get("Pedido") or r.get("pedido")) in concluidos:
         continue
-    item = {k: r.get(k) for k in ("Pedido", "SKU", "Quantidade", "Marketplace", "Origem", "Casa")}
+    item = {k: r.get(k) for k in ("Pedido", "SKU", "Quantidade", "Marketplace", "Origem", "Casa",
+                                  "DataLimiteDespachoMercadoLivre", "PrazoEnvioMagalu")}
     item["Descricao"] = r.get(DESCRICAO) or r.get("Descricao") or ""
     saida["linhas"].append(item)
 print(json.dumps(saida, ensure_ascii=True))

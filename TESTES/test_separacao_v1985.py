@@ -150,6 +150,20 @@ class ListaDeSeparacao(unittest.TestCase):
         self.assertEqual([(i["codigo"], i["qtd"]) for i in grupos["Shopee"]["itens"]], [("BBB", 1), ("AAA", 1)])
         self.assertEqual((grupos["Shopee"]["pedidos"], grupos["Shopee"]["unidades"]), (2, 2))
 
+    def test_despacho_futuro_fica_fora(self):
+        # 26/10 (dono): pedido 2000015461987573 só sai na coleta de 28/10 e entrou na lista do dia.
+        # Mesma regra do Faturamento (V19.73): prazo de hoje e atrasados; sem prazo (Shopee) entra.
+        gravar_como_admin([
+            linha("P1", "AAA", 1, Marketplace="MERCADO LIVRE", DataLimiteDespachoMercadoLivre="2026-10-26T23:59:00-03:00"),
+            linha("P2", "BBB", 1, Marketplace="MERCADO LIVRE", DataLimiteDespachoMercadoLivre="2026-10-24"),
+            linha("P3", "CCC", 2, Marketplace="MERCADO LIVRE", DataLimiteDespachoMercadoLivre="2026-10-28"),
+            linha("P4", "DDD", 1, Marketplace="MAGALU", PrazoEnvioMagalu="2026-10-29T02:59:59Z"),
+            linha("P5", "EEE", 1, Marketplace="SHOPEE")])
+        with mock.patch.object(S, "_separacao_hoje", return_value="2026-10-26"):
+            r = self.montar()
+        self.assertEqual(sorted(i["codigo"] for i in r["itens"]), ["AAA", "BBB", "EEE"])
+        self.assertEqual(r["futuros"], 2)
+
     def test_filial_que_nao_respondeu_nao_vira_sem_prateleira(self):
         gravar_como_admin([linha("P1", "AAA", 1)])
         resposta = {"estoques": [{"revenda": 1, "disponivel": None, "respondeu": False, "localizacao": ""}],

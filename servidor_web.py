@@ -17217,11 +17217,16 @@ def _separacao_pecas(filial: str) -> tuple[dict[str, dict[str, Any]], int]:
 
 # Pedido do dono (26/10): a lista sai separada por marketplace, nesta ordem.
 SEPARACAO_ORDEM_GRUPOS = ["Mercado Livre", "Shopee", "Magalu", "TikTok"]
+SEPARACAO_FUTUROS: dict[str, int] = {}   # pedidos com despacho depois de hoje (fora da lista), por filial
 
 
 def _separacao_grupo(row: dict[str, Any]) -> str:
     nome = _vendas_marketplace(row.get("Marketplace") or row.get("Origem"))
     return "TikTok" if "TIKTOK" in normalize(nome) else nome
+
+
+def _separacao_hoje() -> str:
+    return datetime.now(timezone(timedelta(hours=-3))).strftime("%Y-%m-%d")
 
 
 def _separacao_grupos(filial: str) -> dict[str, dict[str, Any]]:
@@ -17230,9 +17235,17 @@ def _separacao_grupos(filial: str) -> dict[str, dict[str, Any]]:
     with DB_LOCK:
         bruto, _, _ = get_storage("conf_pedidos")
     conhecidos = _separacao_codigos_conhecidos()
+    hoje = _separacao_hoje()
     grupos: dict[str, dict[str, Any]] = {}
+    futuros: set[str] = set()
     for row in _rows_from_storage_value(bruto):
         if not isinstance(row, dict) or filial_da_linha(row) != filial:
+            continue
+        # 26/10 (dono): despacho em outro dia (coleta de 28/10) não entra na separação de hoje.
+        # Mesma regra do Faturamento (V19.73): hoje + atrasados; sem prazo (Shopee) entra.
+        prazo = _faturamento_prazo_dia(row)
+        if prazo and prazo > hoje:
+            futuros.add(normalize(order_number(row)))
             continue
         try:   # revisão 26/10: "3,00" de planilha não vira 1
             qtd = max(0, int(float(str(row.get("Quantidade") or 1).strip().replace(",", "."))))
@@ -17253,6 +17266,7 @@ def _separacao_grupos(filial: str) -> dict[str, dict[str, Any]]:
             p["qtd"] += qtd * un
             if desc and (not p["descricao"] or (not kit and p["descricao"].startswith("Peça do kit"))):
                 p["descricao"] = ("Peça do kit: " if kit else "") + desc
+    SEPARACAO_FUTUROS[filial] = len(futuros - {""})
     return grupos
 
 
@@ -17390,6 +17404,7 @@ def separacao_lista(filial: str) -> dict[str, Any]:
                        "unidades": sum(p["qtd"] for p in g_itens), "itens": g_itens})
     return {"ok": True, "filial": filial, "filial_nome": CASAS.get(filial, filial), "gerada_em": now_iso(),
             "pedidos": n_pedidos, "unidades": sum(p["qtd"] for p in itens), "itens": itens, "grupos": grupos,
+            "futuros": SEPARACAO_FUTUROS.get(filial, 0),
             "faltam": faltam, "lendo": faltam > 0,   # pausa/outra filial lendo: a tela segue esperando
             "sem_resposta": sorted(c for c in sem if c in pecas)}
 

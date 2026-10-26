@@ -46,7 +46,7 @@ table.sep .num{text-align:right;font-weight:700;font-variant-numeric:tabular-num
     <div>
       <div class="nk-rotulo">Expedição</div>
       <h1>Lista de separação</h1>
-      <p>Peças de todos os pedidos pendentes da filial, na ordem da prateleira</p>
+      <p>Peças dos pedidos pendentes da filial com despacho hoje (e atrasados), na ordem da prateleira</p>
     </div>
     <div class="nk-acoes">
       <button class="nk-btn" onclick="carregar()">Atualizar</button>
@@ -87,7 +87,8 @@ async function carregar() {
 
 function desenhar(d) {
   const quando = new Date(d.gerada_em).toLocaleString("pt-BR");
-  const resumo = `Filial <b>${esc(d.filial_nome)}</b> · <b>${d.pedidos}</b> pedidos · <b>${d.itens.length}</b> peças diferentes · <b>${d.unidades}</b> unidades`;
+  const resumo = `Filial <b>${esc(d.filial_nome)}</b> · <b>${d.pedidos}</b> pedidos · <b>${d.itens.length}</b> peças diferentes · <b>${d.unidades}</b> unidades` +
+    (d.futuros ? ` · ${d.futuros} pedidos com despacho em outro dia ficaram fora` : "");
   document.getElementById("info").innerHTML = resumo;
   document.getElementById("cabImpressao").innerHTML = `<b>Lista de separação</b> · ${resumo} · gerada em ${esc(quando)}`;
   const lendo = document.getElementById("lendo");
