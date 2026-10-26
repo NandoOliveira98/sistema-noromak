@@ -12979,6 +12979,13 @@ def _ml_bind_manual_pending_rows(
                 row_aliases.update(_ml_order_aliases(digits, ""))
         if not row_aliases.intersection(aliases):
             continue
+        # V19.85: linha que já é de OUTRA venda do mesmo carrinho não é tomada por esta.
+        # Antes, importar a venda do pano avulso remarcava as linhas do kit (outra venda do
+        # carrinho 2000015699983821, 26/10) e a limpeza a seguir apagava o hidratante.
+        # Continua corrigindo a linha que gravou o PACK no campo da venda.
+        venda_da_linha = str(row.get("VendaMercadoLivre") or "").strip()
+        if venda_da_linha and venda_da_linha not in {order_id, pack_id}:
+            continue
         old = (str(row.get("VendaMercadoLivre") or ""), str(row.get("PackIdMercadoLivre") or ""), str(row.get("ShipmentIdMercadoLivre") or ""))
         row["Pedido"] = operational_order_id
         row["VendaMercadoLivre"] = order_id
@@ -13515,8 +13522,12 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
                 "MercadoLivreLinhaKey": f"{order_id}|{item.get('id')}|{item.get('variation_id')}|{expanded_index}",
                 "MercadoLivreItemId": str(item.get("id") or ""),
                 "MercadoLivreVariationId": str(item.get("variation_id") or ""),
+                # V19.85: a peça de kit aberto leva o SKU no UID. Sem isso a 1ª peça (índice 0)
+                # tinha o MESMO UID da linha do kit fechado "VERIFICAR" importada antes do
+                # cadastro, e as regras por UID trocavam uma pela outra (carrinho 26/10).
                 "__uidLinha": "MLAPI_" + hashlib.sha1(
-                    f"{order_id}|{item.get('id')}|{item.get('variation_id')}|{expanded_index}".encode("utf-8")
+                    (f"{order_id}|{item.get('id')}|{item.get('variation_id')}|{expanded_index}"
+                     + (f"|C:{normalize(sku)}" if is_kit else "")).encode("utf-8")
                 ).hexdigest()[:20],
                 "OrigemCadastro": source,
                 "SkuOrigemImportacao": sku_raw,
@@ -13573,6 +13584,7 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
     if not lines:
         raise RuntimeError(f"Pedido {order_id} não trouxe itens.")
 
+    stale_ids: set[str] = set()
     if manual_kit_override:
         # Mantém EXATAMENTE SKU, Quantidade e metadados do kit corrigidos manualmente.
         # Atualiza apenas informações operacionais/fiscais vindas do Mercado Livre.
@@ -13622,6 +13634,7 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
         desired_keys = {normalize(row.get("SKU")) for row in lines if normalize(row.get("SKU"))}
         cleaned_pending: list[dict[str, Any]] = []
         stale_removed = 0
+        stale_rows: list[dict[str, Any]] = []
         for existing in pending:
             if not isinstance(existing, dict):
                 cleaned_pending.append(existing)
@@ -13631,14 +13644,32 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
             existing_sku = _ml_normalize_api_sku(str(existing.get("SKU") or existing.get("Código de Barras") or "").strip())
             source_sku = _ml_normalize_api_sku(str(existing.get("SkuOrigemImportacao") or "").strip())
             if same_ml_order and not manual_sku and normalize(existing_sku) not in desired_keys and normalize(source_sku) not in desired_keys:
+                # V19.85 (carrinho real 26/10): linha já bipada não some (bip é monotônico).
+                try:
+                    bipado = float(str(existing.get("Lido") or 0) or 0) > 0
+                except (TypeError, ValueError):
+                    bipado = False
+                if bipado:
+                    cleaned_pending.append(existing)
+                    continue
                 stale_removed += 1
+                stale_rows.append(existing)
                 continue
             cleaned_pending.append(existing)
+        # V19.85: a linha velha sai por remoção NOMEADA (V18.52); sem isso o
+        # preserve_pending_records_v1714 a devolve e o kit fechado "VERIFICAR" fica na fila.
+        stale_ids = {_pending_identity_v1714(r, i) for i, r in enumerate(pending)
+                     if any(r is x for x in stale_rows)}
         pending = cleaned_pending
 
         # Atualiza pela combinação Pedido + SKU; quando não existe, cria nova linha.
         by_key: dict[tuple[str, str], dict[str, Any]] = {}
         for existing in pending:
+            # V19.85: no carrinho o Pedido é o número do carrinho; a linha de OUTRA venda com o
+            # mesmo SKU (pano avulso x pano do kit, carrinho 2000015699983821) não é esta linha.
+            outra_venda = str(existing.get("VendaMercadoLivre") or "").strip()
+            if outra_venda and outra_venda != order_id:
+                continue
             existing_sku = str(existing.get("SKU") or existing.get("Código de Barras") or "").strip()
             is_ml_api_row = bool(
                 str(existing.get("VendaMercadoLivre") or "").strip()
@@ -13735,6 +13766,7 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
         change_method="Notificação / sincronização",
         client_ip="127.0.0.1",
         allow_completed_reimport=False,
+        remove_pending_identities=stale_ids or None,
     )
     _ml_conta_atualizar("last_sync_at=?, updated_at=?, last_error=''", (now_iso(), now_iso()))  # V18.94: conta da casa
     return {
