@@ -13654,14 +13654,6 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
             existing_sku = _ml_normalize_api_sku(str(existing.get("SKU") or existing.get("Código de Barras") or "").strip())
             source_sku = _ml_normalize_api_sku(str(existing.get("SkuOrigemImportacao") or "").strip())
             if same_ml_order and not manual_sku and normalize(existing_sku) not in desired_keys and normalize(source_sku) not in desired_keys:
-                # V19.85 (carrinho real 26/10): linha já bipada não some (bip é monotônico).
-                try:
-                    bipado = float(str(existing.get("Lido") or 0) or 0) > 0
-                except (TypeError, ValueError):
-                    bipado = False
-                if bipado:
-                    cleaned_pending.append(existing)
-                    continue
                 stale_removed += 1
                 continue
             cleaned_pending.append(existing)
@@ -13702,10 +13694,20 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
             "NF","Nota Fiscal","Chave de Acesso","Status NF Mercado Livre","Etiqueta API Mercado Livre",
             "Kit","Nome do Kit","Quantidade de Kits","Quantidade por Kit","SkuKitOrigem","Observação"
         )
+        uids_na_fila = {str(r.get("__uidLinha") or "") for r in pending if isinstance(r, dict)}
         for imported in lines:
             key = (normalize(imported["Pedido"]), normalize(imported.get("SKU") or imported.get("Código de Barras")))
             existing = by_key.get(key)
             if existing is None:
+                # V19.85: o UID depende só da posição do item. Se já há na fila outra linha com
+                # ele (linha fundida pela regra antiga do carrinho), a nova ganha um UID próprio:
+                # UID repetido passa o bip de uma para a outra e a exclusão do ADMIN derruba as duas.
+                # Sem colisão o UID não muda (o tombstone de linha do ADMIN é por UID).
+                if str(imported.get("__uidLinha") or "") in uids_na_fila:
+                    imported["__uidLinha"] = "MLAPI_" + hashlib.sha1(
+                        f"{imported.get('MercadoLivreLinhaKey')}|C:{normalize(imported.get('SKU'))}".encode("utf-8")
+                    ).hexdigest()[:20]
+                uids_na_fila.add(str(imported.get("__uidLinha") or ""))
                 pending.append(imported)
                 by_key[key] = imported
                 inserted += 1

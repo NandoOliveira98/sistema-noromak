@@ -54,6 +54,10 @@ class KitEmCarrinhoML(TesteNoromak):
         S.save_storage("conf_kits", atual, json.dumps(kits), False, actor="admin_teste", actor_role="admin",
                        source_screen="Teste", change_method="Teste automatizado", client_ip="127.0.0.1")
 
+    def uids_unicos(self) -> None:
+        uids = [r.get("__uidLinha") for r in pedidos() if str(r.get("Pedido")) == CARRINHO]
+        self.assertEqual(len(uids), len(set(uids)), f"UID repetido na fila: {uids}")
+
     def pecas(self) -> dict[str, int]:
         total: dict[str, int] = {}
         for r in pedidos():
@@ -69,6 +73,7 @@ class KitEmCarrinhoML(TesteNoromak):
         S.ml_import_order(AVULSA, source="API Mercado Livre / entrada automática")
         self.assertEqual(self.pecas(), {"0899900101": 2, "0893014105": 1},
                          "REGRESSÃO 26/10: carrinho com kit ficou com linha a mais / peça a menos")
+        self.uids_unicos()
 
     def test_avulsa_antes_do_kit_nao_funde(self):
         self.cadastrar_kit()
@@ -99,6 +104,7 @@ class KitEmCarrinhoML(TesteNoromak):
         for venda_id in (KIT, AVULSA, KIT):
             S.ml_import_order(venda_id, source="teste")
             self.assertLessEqual(self.pecas().get("0899900101", 0), 2, "pano duplicado na releitura")
+            self.uids_unicos()
         self.assertEqual(self.pecas(), {"0899900101": 2, "0893014105": 1})
 
     def test_linhas_marcadas_com_a_venda_errada_nao_duplicam(self):
@@ -136,8 +142,7 @@ class KitEmCarrinhoML(TesteNoromak):
         linhas = [r for r in pedidos() if str(r.get("Pedido")) == CARRINHO]
         self.assertEqual([(r["SKU"], r.get("VendaMercadoLivre")) for r in linhas], [("0899900101", AVULSA)])
 
-    def test_linha_do_kit_fechado_ja_bipada_nao_some(self):
-        # Bip é monotônico: a troca automática não apaga linha com leitura.
+    def test_kit_fechado_bipado_nao_duplica_pecas(self):
         S.ml_import_order(KIT, source="teste")
         atual, _, _ = S.get_storage("conf_pedidos")
         linhas = json.loads(atual)
@@ -148,7 +153,26 @@ class KitEmCarrinhoML(TesteNoromak):
                        source_screen="Conferência", change_method="Bip", client_ip="127.0.0.1")
         self.cadastrar_kit()
         S.ml_import_order(KIT, source="teste")
-        self.assertIn(SKU_KIT, self.pecas())
+        self.assertEqual(self.pecas(), {"0899900101": 1, "0893014105": 1})
+        self.uids_unicos()
+
+    def test_linha_fundida_com_chave_da_outra_venda(self):
+        # Regra antiga: A criou o pano (UID de A) e B casou por Pedido + SKU e trocou a chave para B.
+        from base import gravar_como_integracao, linha
+        base = dict(Marketplace="MERCADO LIVRE", PackIdMercadoLivre=CARRINHO, OrigemCadastro="API Mercado Livre")
+        self.cadastrar_kit()
+        gravar_como_integracao([
+            linha(CARRINHO, "0899900101", 1, uid="MLAPI_ff8c45dd0b79c55515bf", VendaMercadoLivre=KIT,
+                  MercadoLivreLinhaKey=f"{KIT}|MLB7859805954|None|0", Lido=1, **base),
+            linha(CARRINHO, "0893014105", 1, uid="MLAPI_8e1995b355d1201380fe", VendaMercadoLivre=KIT,
+                  MercadoLivreLinhaKey=f"{KIT}|MLB7859805954|None|1", **base),
+        ], origem="API Mercado Livre")
+        for venda_id in (AVULSA, KIT, AVULSA):
+            S.ml_import_order(venda_id, source="teste")
+            self.uids_unicos()
+        self.assertEqual(self.pecas(), {"0899900101": 2, "0893014105": 1})
+        lidos = sorted(int(r.get("Lido") or 0) for r in pedidos() if r["SKU"] == "0899900101")
+        self.assertEqual(lidos, [0, 1], "bip passou para o pano que não foi bipado")
 
 
 if __name__ == "__main__":

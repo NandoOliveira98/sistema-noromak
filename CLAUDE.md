@@ -469,8 +469,8 @@ remarcava TODA linha do carrinho com a venda importada na hora (`VendaMercadoLiv
 limpeza seguinte apagava a peça da outra venda e a busca Pedido + SKU fundia o pano avulso com o pano do kit. A venda
 real da linha da API vem da chave `MercadoLivreLinhaKey` (`_ml_venda_da_linha`, nunca era remarcada): o vínculo, a
 busca e a limpeza não tomam linha da API de outra venda (`_ml_linha_de_outra_venda`), o que também desfaz as filas já
-embaralhadas na releitura. Linha sem a chave (print, extensão, TXT) segue como antes. Linha bipada não é apagada
-pela limpeza. **Não mudar o `__uidLinha` das linhas ML** (o tombstone de linha do ADMIN é pelo UID) nem tirar
+embaralhadas na releitura. Linha sem a chave (print, extensão, TXT) segue como antes. Linha nova cujo UID já
+está na fila (linha fundida antiga) ganha UID próprio; sem colisão o UID não muda. **Não mudar o `__uidLinha` das linhas ML** (o tombstone de linha do ADMIN é pelo UID) nem tirar
 linha por remoção nomeada aqui (o kit fechado e a 1ª peça têm o mesmo UID; a revisão de 26/10 recusou as duas
 ideias). Teste: `TESTES/test_carrinho_kit_ml_v1985.py`.
 
