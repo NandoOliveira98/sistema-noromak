@@ -108,6 +108,23 @@ class ListaDeSeparacao(unittest.TestCase):
         self.assertEqual({i["codigo"]: i["qtd"] for i in r["itens"]},
                          {"PSH367/80": 2, "AAA": 1, "BBB": 1})
 
+    def test_kit_cadastrado_como_produto_abre_em_pecas(self):
+        # 151 kits estão no Precificador como produto comum (V18.80): se as peças existem, é kit.
+        atual, _, _ = S.get_storage("precificador_online_v1")
+        S.save_storage("precificador_online_v1", atual, json.dumps({"products": [
+            {"sku": "AAA/BBB"}, {"sku": "AAA"}, {"sku": "BBB"}, {"sku": "KIT2-PSH367/80"}]}),
+            False, actor="admin_teste", actor_role="admin", source_screen="Teste",
+            change_method="Teste automatizado", client_ip="127.0.0.1")
+        gravar_como_admin([linha("P1", "AAA/BBB", 1), linha("P2", "KIT2-PSH367/80", 1)])
+        self.assertEqual({i["codigo"]: i["qtd"] for i in self.montar()["itens"]},
+                         {"AAA": 1, "BBB": 1, "PSH367/80": 2})
+
+    def test_thread_que_nao_sobe_nao_trava_a_leitura(self):
+        gravar_como_admin([linha("P1", "AAA", 1)])
+        with mock.patch.object(S.threading.Thread, "start", side_effect=RuntimeError("can't start new thread")):
+            S.separacao_iniciar_leitura("aracatuba")
+        self.assertFalse(S.SEPARACAO_LENDO)
+
     def test_filial_que_nao_respondeu_nao_vira_sem_prateleira(self):
         gravar_como_admin([linha("P1", "AAA", 1)])
         resposta = {"estoques": [{"revenda": 1, "disponivel": None, "respondeu": False, "localizacao": ""}],

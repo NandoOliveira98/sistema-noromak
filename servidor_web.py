@@ -17247,7 +17247,10 @@ def _separacao_partes(sku: Any, conhecidos: set[str]) -> list[tuple[str, int]]:
     unidades, inteiro = (max(1, int(m.group(1) or 1)), m.group(2).strip()) if m else (1, texto)
     if re.match(r"^\d{5,}-.+", inteiro):
         inteiro = inteiro.split("-", 1)[1].strip()
-    if "/" in inteiro and inteiro in conhecidos:
+    # Kit cadastrado como produto comum no Precificador (V18.80: "A/B" com A e B também lá) abre em
+    # peças; "KIT2-PSH367/80" vale também quando só o kit está no Precificador.
+    pecas = [p.strip() for p in inteiro.split("/")]
+    if "/" in inteiro and (inteiro in conhecidos or texto in conhecidos)             and not all(p in conhecidos for p in pecas):
         return [(inteiro, unidades)]
     return _tiktok_pecas(texto)
 
@@ -17311,7 +17314,12 @@ def separacao_iniciar_leitura(filial: str) -> None:
             with SEPARACAO_LOCK:
                 SEPARACAO_LENDO.discard(filial)
 
-    threading.Thread(target=_rodar, name=f"separacao-{filial}", daemon=True).start()
+    try:
+        threading.Thread(target=_rodar, name=f"separacao-{filial}", daemon=True).start()
+    except Exception as exc:   # sem thread (memória cheia): não deixa as duas filiais presas em "lendo"
+        print(f"[separacao] não iniciou a leitura: {exc}", flush=True)
+        with SEPARACAO_LOCK:
+            SEPARACAO_LENDO.discard(filial)
 
 
 def separacao_lista(filial: str) -> dict[str, Any]:
