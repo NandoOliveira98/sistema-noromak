@@ -2463,6 +2463,8 @@ def init_db() -> None:
                 removido INTEGER NOT NULL DEFAULT 0,
                 motivo TEXT NOT NULL DEFAULT '',
                 componentes_json TEXT NOT NULL DEFAULT '[]',  -- V19.07: peças (kit) para a lista de separação
+                a_caminho_sis INTEGER NOT NULL DEFAULT 0,     -- V19.85: agendado no sistema
+                a_caminho_ml INTEGER,                         -- V19.85: "transfer" do ML (None = sem resposta)
                 PRIMARY KEY(remessa_id, anuncio)
             );
             CREATE TABLE IF NOT EXISTS full_nao_aceito_v1903 (
@@ -11695,6 +11697,62 @@ def _full_a_caminho() -> dict[str, int]:
     return {r["anuncio"]: int(r["q"] or 0) for r in rows}
 
 
+# V19.85: "a caminho" lido do ML (dono, 26/10). O envio da NF 57.238 saiu sem "Marcar agendada"
+# e a sugestão repetiu os mesmos itens. /inventories/{id}/stock/fulfillment traz, em
+# not_available_detail, o status "transfer" = unidades a caminho do armazém (conferido com a
+# nota: 48/48, 12/12, 6/6). Sem resposta fica None — desconhecido, nunca zero.
+FULL_ML_INVENTARIO: dict[str, str] = {}   # MLB -> inventory_id (não muda; evita reler o anúncio)
+FULL_ML_PAUSA = 0.1
+
+
+def full_ml_a_caminho(mlbs: list[str]) -> dict[str, int | None]:
+    out: dict[str, int | None] = {m: None for m in mlbs}
+    falta = [m for m in mlbs if m not in FULL_ML_INVENTARIO]
+    for i in range(0, len(falta), 20):   # a API aceita 20 ids por chamada
+        try:
+            resp = ml_api_get("/items?ids=" + ",".join(falta[i:i + 20]) + "&attributes=id,inventory_id")
+        except Exception:
+            continue
+        for linha in (resp if isinstance(resp, list) else []):
+            corpo = (linha or {}).get("body") or {}
+            mlb = str(corpo.get("id") or "").strip().upper()
+            inv = str(corpo.get("inventory_id") or "").strip()
+            if mlb and inv:
+                FULL_ML_INVENTARIO[mlb] = inv
+    erros = 0
+    for m in mlbs:
+        inv = FULL_ML_INVENTARIO.get(m)
+        if not inv:
+            continue
+        try:
+            corpo = ml_api_get(f"/inventories/{re.sub(r'[^A-Za-z0-9_-]', '', inv)}/stock/fulfillment")
+        except Exception:
+            erros += 1
+            if erros >= 5:
+                break   # sem conexão ou limite do ML: o resto fica desconhecido
+            continue
+        erros = 0
+        det = corpo.get("not_available_detail") if isinstance(corpo, dict) else None
+        if isinstance(det, list):
+            out[m] = int(sum(d.get("quantity") for d in det if isinstance(d, dict)
+                             and str(d.get("status") or "") == "transfer"
+                             and isinstance(d.get("quantity"), (int, float)) and not isinstance(d.get("quantity"), bool)))
+        if FULL_ML_PAUSA:
+            time.sleep(FULL_ML_PAUSA)
+    return out
+
+
+def _full_a_caminho_ml_aplicar(cand: dict[str, Any], ml: dict[str, Any]) -> None:
+    """V19.85: a caminho = o MAIOR entre o agendado no sistema e o "transfer" do ML (nunca a
+    soma: o mesmo envio contaria duas vezes). ML sem resposta = fica o do sistema."""
+    for a in cand.get("anuncios") or []:
+        sis = int(a.get("a_caminho") or 0)
+        m = (ml or {}).get(a["anuncio"])
+        a["a_caminho_sis"] = sis
+        a["a_caminho_ml"] = None if m is None else int(m)
+        a["a_caminho"] = sis if m is None else max(sis, int(m))
+
+
 def full_remessa_candidatos(hoje: date | None = None) -> dict[str, Any]:
     """V19.03: anúncios Full (estoque dia a dia, últimos 7 dias) com venda de 30 dias,
     código Apollo/componentes e o que já está a caminho; mais os produtos novos."""
@@ -11825,6 +11883,8 @@ def full_remessa_calcular(cand: dict[str, Any], estoque: dict[str, Any]) -> dict
         return {"anuncio": a["anuncio"], "codigo": a["codigo"], "sku": a.get("sku", ""), "titulo": a.get("titulo", ""),
                 "novo": 1 if novo else 0, "confirmado": 0 if novo else 1, "venda_30d": int(a["venda_30d"]),
                 "no_full": a.get("no_full"), "a_caminho": int(a.get("a_caminho") or 0), "cobertura_dias": cob,
+                "a_caminho_sis": int(a.get("a_caminho_sis", a.get("a_caminho")) or 0),   # V19.85
+                "a_caminho_ml": a.get("a_caminho_ml"),
                 "necessidade": nec, "estoque_apollo": disp, "qtd_sugerida": qtd, "motivo": motivo,
                 "componentes": a["componentes"],
                 "componentes_json": json.dumps([{"codigo": c["codigo"], "qtd": c["qtd"]} for c in a["componentes"]])}
@@ -11847,7 +11907,9 @@ def full_remessa_calcular(cand: dict[str, Any], estoque: dict[str, Any]) -> dict
         if i["estoque_apollo"] is not None and i["qtd_sugerida"] <= 0:
             fora.append({"anuncio": a["anuncio"], "codigo": a["codigo"], "sku": a.get("sku", ""),
                          "titulo": a.get("titulo", ""),
-                         "motivo": "Full já cobre 30 dias" if nec <= 0 else "sem estoque no Apollo"})
+                         # V19.85: o que vai a caminho também cobre
+                         "motivo": ("Full + a caminho cobrem 30 dias" if int(a.get("a_caminho") or 0) > 0
+                                    else "Full já cobre 30 dias") if nec <= 0 else "sem estoque no Apollo"})
             continue
         itens.append(i)
     for a in cand.get("novos") or []:
@@ -11866,7 +11928,8 @@ def full_remessa_calcular(cand: dict[str, Any], estoque: dict[str, Any]) -> dict
 # V19.03: remessa Full — rodada, gravação e ajustes do ADMIN.
 FULL_REMESSA_ABERTA = ("montando", "pronta")
 _FULL_ITEM_COLS = ("codigo", "sku", "titulo", "novo", "venda_30d", "no_full", "a_caminho", "cobertura_dias",
-                   "necessidade", "estoque_apollo", "qtd_sugerida", "motivo", "componentes_json")
+                   "necessidade", "estoque_apollo", "qtd_sugerida", "motivo", "componentes_json",
+                   "a_caminho_sis", "a_caminho_ml")   # V19.85
 
 
 def _full_remessa_schema() -> None:
@@ -11884,6 +11947,11 @@ def _full_remessa_schema() -> None:
     icols = {r[1] for r in DB.execute("PRAGMA table_info(full_remessa_item_v1903)").fetchall()}
     if "componentes_json" not in icols:
         DB.execute("ALTER TABLE full_remessa_item_v1903 ADD COLUMN componentes_json TEXT NOT NULL DEFAULT '[]'")
+    # V19.85: de onde veio o a caminho (agendado no sistema / "transfer" do ML; None = ML sem resposta).
+    if "a_caminho_sis" not in icols:
+        DB.execute("ALTER TABLE full_remessa_item_v1903 ADD COLUMN a_caminho_sis INTEGER NOT NULL DEFAULT 0")
+    if "a_caminho_ml" not in icols:
+        DB.execute("ALTER TABLE full_remessa_item_v1903 ADD COLUMN a_caminho_ml INTEGER")
 
 
 def _full_remessa_marca() -> tuple:
@@ -12053,6 +12121,8 @@ def full_remessa_rodada(hoje: date | None = None, estoque: dict | None = None, p
         DB.commit()
         marca = _full_remessa_marca()
     cand = full_remessa_candidatos(hoje)
+    # V19.85: fora do DB_LOCK, como o Apollo.
+    _full_a_caminho_ml_aplicar(cand, full_ml_a_caminho([a["anuncio"] for a in cand.get("anuncios") or []]))
     locais: dict[str, str] = {}
     if estoque is None:
         cods = set(cand.get("codigos") or set())

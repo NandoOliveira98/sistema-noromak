@@ -642,6 +642,13 @@ fora deste repo como as outras). Teste: `TESTES/test_remessa_full_v1903.py`.
 diário) e grava em `ml_estoque_dia_v1872.estoque_full_ultimo` (leitura sem número não apaga a do dia). Candidatos e a
 "recebida automática" usam essa coluna; sem número = em branco, nunca zero. A Ruptura continua com o `available_quantity`
 (o anúncio ainda vende do depósito). Teste: `TESTES/test_estoque_full_v1960.py`.
+**V19.85 — "a caminho" também do ML** (dono, 26/10: o envio da NF 57.238 saiu sem "Marcar agendada" e a sugestão
+repetiu os itens). Na rodada, fora do `DB_LOCK`, `full_ml_a_caminho` lê `/inventories/{inventory_id}/stock/fulfillment`
+de cada anúncio Full candidato (`inventory_id` por `/items?ids=` de 20 em 20, guardado em `FULL_ML_INVENTARIO`):
+`not_available_detail` com status `transfer` = a caminho do armazém (conferido com a nota: 48/48, 12/12, 6/6).
+**A caminho = o MAIOR entre o agendado no sistema e o do ML, nunca a soma** (`_full_a_caminho_ml_aplicar`); ML sem
+resposta = fica o do sistema (nunca zero); 5 erros seguidos param a leitura. Item guarda `a_caminho_sis` e
+`a_caminho_ml`; coluna "A caminho" na tabela com a origem (ML/sistema). Teste: `TESTES/test_full_a_caminho_ml_v1985.py`.
 
 ### Quadro de tarefas (V19.69)
 `APP/tarefas.html` (`/tarefas`, menu Visão geral, **todo usuário logado**: a página só exige sessão, o item do menu

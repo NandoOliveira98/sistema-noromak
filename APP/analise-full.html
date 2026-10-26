@@ -1773,12 +1773,17 @@ html[data-tema="escuro"] [style*="color: #12345B" i]{color:#C0CCD9!important}
                        : `<button type="button" class="nk-btn mini" data-acao="tirar" data-anuncio="${esc(i.anuncio)}">Tirar</button>`,
             `<button type="button" class="nk-btn mini perigo" data-acao="naoaceito" data-codigo="${esc(i.codigo)}">Não aceito no Full</button>`
           ].join(" ");
+          // V19.85: a caminho = o maior entre o agendado no sistema e o "transfer" do ML (nunca a soma).
+          const mlCam = vazio(i.a_caminho_ml) ? null : Number(i.a_caminho_ml);
+          const sisCam = Number(i.a_caminho_sis || 0);
+          const caminho = !Number(i.a_caminho || 0) ? (mlCam === null && !novos ? '<small style="color:var(--nk-ink2)" title="Mercado Livre não respondeu">–</small>' : "")
+            : `${num(i.a_caminho)} <small style="color:var(--nk-ink2)" title="Agendado no sistema: ${sisCam} · A caminho no ML: ${mlCam === null ? "sem resposta" : mlCam}">${mlCam !== null && mlCam >= sisCam ? "ML" : "sistema"}</small>`;
           return `<tr${i.removido ? ' style="opacity:.5"' : ""}><td>${esc(i.anuncio)}</td><td>${esc(i.titulo)}${i.motivo ? `<br><small style="color:var(--nk-ink2)">${esc(i.motivo)}</small>` : ""}</td>`
-            + `<td>${esc(i.codigo)}</td><td>${num(i.venda_30d)}</td><td>${vazio(i.no_full) ? "" : num(i.no_full)}</td>`
+            + `<td>${esc(i.codigo)}</td><td>${num(i.venda_30d)}</td><td>${vazio(i.no_full) ? "" : num(i.no_full)}</td><td style="white-space:nowrap">${caminho}</td>`
             + `<td>${vazio(i.cobertura_dias) ? "" : num(i.cobertura_dias) + " d"}</td><td>${num(i.necessidade)}</td>`
             + `<td>${apollo}</td><td style="white-space:nowrap">${qtd}</td><td style="white-space:nowrap">${acoes}</td></tr>`;
         }).join("");
-        return `<div style="overflow-x:auto"><table data-nk-tabela style="width:100%"><thead><tr><th>Anúncio</th><th>Título</th><th>Código</th><th>Venda 30 d</th><th>No Full</th><th>Cobertura</th><th>Necessidade</th><th>Apollo</th><th>Qtd</th><th></th></tr></thead><tbody>${linhas}</tbody></table></div>`;
+        return `<div style="overflow-x:auto"><table data-nk-tabela style="width:100%"><thead><tr><th>Anúncio</th><th>Título</th><th>Código</th><th>Venda 30 d</th><th>No Full</th><th title="O maior entre o agendado no sistema e o que o Mercado Livre mostra a caminho do Full">A caminho</th><th>Cobertura</th><th>Necessidade</th><th>Apollo</th><th>Qtd</th><th></th></tr></thead><tbody>${linhas}</tbody></table></div>`;
       }
 
       function bloco(chave, titulo, conteudo) {
