@@ -175,5 +175,39 @@ class KitEmCarrinhoML(TesteNoromak):
         self.assertEqual(lidos, [0, 1], "bip passou para o pano que não foi bipado")
 
 
+    # --- Revisão 26/10: kit corrigido à mão e cancelamento valiam para o carrinho inteiro ---
+
+    def test_kit_corrigido_pelo_admin_vale_so_para_a_sua_venda(self):
+        self.cadastrar_kit()
+        S.ml_import_order(KIT, source="teste")
+        atual, _, _ = S.get_storage("conf_pedidos")
+        linhas = json.loads(atual)
+        for r in linhas:                       # ADMIN corrige o kit: 2 hidratantes
+            if r["SKU"] == "0893014105":
+                r["Quantidade"] = "2"
+                r["KitManualOverride"] = "SIM"
+        S.save_storage("conf_pedidos", atual, json.dumps(linhas), True, actor="admin_teste", actor_role="admin",
+                       source_screen="Admin", change_method="Editar kit", client_ip="127.0.0.1")
+        S.ml_import_order(AVULSA, source="teste")
+        self.assertEqual(self.pecas(), {"0899900101": 2, "0893014105": 2},
+                         "a venda avulsa do carrinho não entrou por causa do kit manual da outra venda")
+        vendas = {r["SKU"]: r["VendaMercadoLivre"] for r in pedidos() if r["SKU"] == "0893014105"}
+        self.assertEqual(vendas, {"0893014105": KIT}, "linha do kit manual ganhou a venda avulsa")
+        S.ml_import_order(KIT, source="teste")
+        self.assertEqual(self.pecas()["0893014105"], 2, "a correção do ADMIN foi desfeita")
+
+    def test_cancelar_uma_venda_nao_tira_a_outra_do_carrinho(self):
+        self.cadastrar_kit()
+        S.ml_import_order(AVULSA, source="teste")
+        S.ml_import_order(KIT, source="teste")
+        VENDAS[AVULSA] = {**VENDAS[AVULSA], "status": "cancelled"}
+        try:
+            S.ml_import_order(AVULSA, source="teste")
+        finally:
+            VENDAS[AVULSA] = {**VENDAS[AVULSA], "status": "paid"}
+        self.assertEqual(self.pecas(), {"0899900101": 1, "0893014105": 1})
+        self.assertEqual({r["VendaMercadoLivre"] for r in pedidos()}, {KIT})
+
+
 if __name__ == "__main__":
     unittest.main()

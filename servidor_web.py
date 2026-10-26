@@ -13191,6 +13191,10 @@ def _ml_remove_cancelled_from_pending(
         identifiers.discard("")
 
         matched = bool(order_id and order_id in identifiers) or bool(pack_id and pack_id in identifiers)
+        # V19.85: no carrinho, a linha da API de OUTRA venda fica (cancelar a venda do pano avulso
+        # tirava também o kit da outra venda). Linha sem a chave da API segue como antes.
+        if matched and _ml_linha_de_outra_venda(row, order_id, pack_id):
+            matched = False
         # V18.52: ADMIN > integração — pedido incluído/protegido pelo ADMIN fica.
         if matched and not _admin_manual_pending_protected(row):
             removed += 1
@@ -13294,6 +13298,8 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
     # refresh manual e sincronizações do Mercado Livre não podem desfazer isso.
     manual_kit_override = any(
         _ml_same_pending_sale(row, order_id, pack_id) and _ml_row_manual_kit_override(row)
+        # V19.85: o kit corrigido pelo ADMIN numa venda não trava a outra venda do carrinho.
+        and not _ml_linha_de_outra_venda(row, order_id, pack_id)
         for row in pending if isinstance(row, dict)
     )
 
@@ -13618,6 +13624,8 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
         reference = lines[0] if lines else {}
         for existing in pending:
             if not isinstance(existing, dict) or not _ml_same_pending_sale(existing, order_id, pack_id):
+                continue
+            if _ml_linha_de_outra_venda(existing, order_id, pack_id):   # V19.85
                 continue
             if not _ml_row_manual_kit_override(existing):
                 continue
