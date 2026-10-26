@@ -1133,8 +1133,10 @@ troca a condição pela extensão Linx 0.44 (`condicao-definir-lote`, sem confir
 pendentes, módulo **admin**; decisões do dono 26/10). Todos os pendentes da fila da filial do seletor do menu ("todas" =
 400, escolher a filial), kit aberto em peças (`_tiktok_pecas`), somados por código, na ordem da prateleira do Apollo da
 filial (Araçatuba revenda 1, Bauru 3; `_full_loc_chave`). Linha = prateleira, código, descrição, quantidade. A prateleira
-fica 12 h em memória (`SEPARACAO_LOCAIS`); o que falta é lido em segundo plano, 1 a cada 4 s, e a tela recarrega até
-completar; sem resposta vai para o fim e é tentado de novo depois de 5 min. `GET /api/separacao`.
+fica 12 h em memória (`SEPARACAO_LOCAIS`); o que falta é lido em segundo plano — **uma leitura por vez para as duas
+filiais, 1 a cada 12 s, sem esperar vaga**; limite do Apollo cheio = para 1 min (a operação vem antes) — e a tela
+recarrega até completar; filial sem resposta (`respondeu: false`) vai para o fim e é tentada de novo depois de 5 min.
+SKU com barra que é um produto do Precificador ("PSH367/80") fica inteiro (regra da V19.48). `GET /api/separacao`.
 Teste: `TESTES/test_separacao_v1985.py`.
 
 **V19.45 — Cliente do Full pela NF-e do ML** (decisões do dono, 16/10). Venda Full não passa pela fila, e a integração

@@ -17192,7 +17192,12 @@ SEPARACAO_REVENDA = {"aracatuba": 1, "bauru": 3}
 SEPARACAO_LOCAIS: dict[tuple[int, str], tuple[float, str]] = {}   # (revenda, código) -> (quando, prateleira)
 SEPARACAO_LOCK = threading.Lock()
 SEPARACAO_REUSO_S = 12 * 3600
-SEPARACAO_INTERVALO = 4.0
+# Revisão 26/10: o Apollo divide 20 chamadas/min com a operação (Faturamento, Demanda, TikTok):
+# uma leitura por vez para as duas filiais, 1 a cada 12 s (5/min), sem esperar vaga; limite
+# cheio = para e deixa a vez por 1 min.
+SEPARACAO_INTERVALO = 12.0
+SEPARACAO_PAUSA_S = 60
+SEPARACAO_PAUSA_ATE = [0.0]
 SEPARACAO_LENDO: set[str] = set()
 SEPARACAO_SEM_RESPOSTA: dict[str, set[str]] = {}
 SEPARACAO_ULTIMA_LEITURA: dict[str, float] = {}
@@ -17204,16 +17209,17 @@ def _separacao_pecas(filial: str) -> tuple[dict[str, dict[str, Any]], int]:
         raise ValueError("Escolha a filial (Araçatuba ou Bauru) no seletor do menu.")
     with DB_LOCK:
         bruto, _, _ = get_storage("conf_pedidos")
+    conhecidos = _separacao_codigos_conhecidos()
     pecas: dict[str, dict[str, Any]] = {}
     pedidos: set[str] = set()
     for row in _rows_from_storage_value(bruto):
         if not isinstance(row, dict) or filial_da_linha(row) != filial:
             continue
-        try:
-            qtd = max(0, int(float(str(row.get("Quantidade") or 1))))
-        except (TypeError, ValueError):
+        try:   # revisão 26/10: "3,00" de planilha não vira 1
+            qtd = max(0, int(float(str(row.get("Quantidade") or 1).strip().replace(",", "."))))
+        except (TypeError, ValueError, OverflowError):
             qtd = 1
-        partes = _tiktok_pecas(row.get("SKU") or row.get("Sku"))
+        partes = _separacao_partes(row.get("SKU") or row.get("Sku"), conhecidos)
         if not partes or not qtd:
             continue
         pedidos.add(normalize(order_number(row)))
@@ -17225,6 +17231,25 @@ def _separacao_pecas(filial: str) -> tuple[dict[str, dict[str, Any]], int]:
             if desc and (not p["descricao"] or (not kit and p["descricao"].startswith("Peça do kit"))):
                 p["descricao"] = ("Peça do kit: " if kit else "") + desc
     return pecas, len(pedidos - {""})
+
+
+def _separacao_codigos_conhecidos() -> set[str]:
+    dados = precificador_dados()
+    produtos = dados.get("products") if isinstance(dados, dict) else None
+    return {str(p.get("sku") or "").strip().upper() for p in produtos if isinstance(p, dict)}         if isinstance(produtos, list) else set()
+
+
+def _separacao_partes(sku: Any, conhecidos: set[str]) -> list[tuple[str, int]]:
+    """Revisão 26/10 (regra da V19.48): SKU com barra que é UM produto do Precificador
+    ("PSH367/80") fica inteiro; senão "A/B" = uma de cada (`_tiktok_pecas`)."""
+    texto = str(sku or "").strip().upper()
+    m = re.match(r"^KIT(\d*)-(.+)$", texto)
+    unidades, inteiro = (max(1, int(m.group(1) or 1)), m.group(2).strip()) if m else (1, texto)
+    if re.match(r"^\d{5,}-.+", inteiro):
+        inteiro = inteiro.split("-", 1)[1].strip()
+    if "/" in inteiro and inteiro in conhecidos:
+        return [(inteiro, unidades)]
+    return _tiktok_pecas(texto)
 
 
 def _separacao_local(revenda: int, cod: str) -> str | None:
@@ -17246,11 +17271,18 @@ def separacao_ler_apollo(filial: str) -> None:
             time.sleep(SEPARACAO_INTERVALO)
         primeira = False
         try:
-            stock = crm_stock_lookup(cod, "separacao", 30)
+            stock = crm_stock_lookup(cod, "separacao", 0)
+        except CrmLimiteAtingido:
+            # Limite cheio: a operação vem antes. Para e tenta depois (o que falta não é "sem resposta").
+            with SEPARACAO_LOCK:
+                SEPARACAO_PAUSA_ATE[0] = time.time() + SEPARACAO_PAUSA_S
+            break
         except Exception:
             sem.add(cod)
             continue
-        rows = [r for r in (stock.get("estoques") or []) if int(r.get("revenda") or 0) == revenda]
+        # Revisão 26/10: a filial que não respondeu vem na lista com respondeu=False — não é "sem prateleira".
+        rows = [r for r in (stock.get("estoques") or [])
+                if int(r.get("revenda") or 0) == revenda and r.get("respondeu") is not False]
         if not rows:
             sem.add(cod)
             continue
@@ -17266,7 +17298,7 @@ def separacao_ler_apollo(filial: str) -> None:
 
 def separacao_iniciar_leitura(filial: str) -> None:
     with SEPARACAO_LOCK:
-        if filial in SEPARACAO_LENDO:
+        if SEPARACAO_LENDO or time.time() < SEPARACAO_PAUSA_ATE[0]:   # uma leitura por vez, as duas filiais
             return
         SEPARACAO_LENDO.add(filial)
 
@@ -17289,6 +17321,7 @@ def separacao_lista(filial: str) -> dict[str, Any]:
         sem = set(SEPARACAO_SEM_RESPOSTA.get(filial) or ())
         lendo = filial in SEPARACAO_LENDO
         ultima = SEPARACAO_ULTIMA_LEITURA.get(filial, 0.0)
+        pausa = time.time() < SEPARACAO_PAUSA_ATE[0]
     itens, faltam, sem_local = [], 0, 0
     for p in pecas.values():
         loc = _separacao_local(revenda, p["codigo"])
@@ -17296,13 +17329,13 @@ def separacao_lista(filial: str) -> dict[str, Any]:
             sem_local += 1
             faltam += p["codigo"] not in sem
         itens.append({**p, "localizacao": loc or ""})
-    if not lendo and (faltam or (sem_local and time.time() - ultima > SEPARACAO_REPETIR_S)):
+    if not lendo and not pausa and (faltam or (sem_local and time.time() - ultima > SEPARACAO_REPETIR_S)):
         separacao_iniciar_leitura(filial)
         lendo = True
     itens.sort(key=lambda p: (not p["localizacao"], _full_loc_chave(p["localizacao"]), p["codigo"]))
     return {"ok": True, "filial": filial, "filial_nome": CASAS.get(filial, filial), "gerada_em": now_iso(),
             "pedidos": n_pedidos, "unidades": sum(p["qtd"] for p in itens), "itens": itens,
-            "faltam": faltam, "lendo": lendo and faltam > 0,
+            "faltam": faltam, "lendo": faltam > 0,   # pausa/outra filial lendo: a tela segue esperando
             "sem_resposta": sorted(c for c in sem if c in pecas)}
 
 
