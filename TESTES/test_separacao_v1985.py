@@ -125,6 +125,31 @@ class ListaDeSeparacao(unittest.TestCase):
             S.separacao_iniciar_leitura("aracatuba")
         self.assertFalse(S.SEPARACAO_LENDO)
 
+    # --- Lista real de 26/10 ---
+
+    def test_kit_com_quantidade_de_cada_peca(self):
+        # "KIT-1/10405594-1/10405569" = 1 de cada lanterna (pedido 2000019075079456).
+        gravar_como_admin([linha("P1", "KIT-1/10405594-1/10405569", 1), linha("P2", "KIT-2/AAA-1/BBB", 1)])
+        self.assertEqual({i["codigo"]: i["qtd"] for i in self.montar()["itens"]},
+                         {"10405594": 1, "10405569": 1, "AAA": 2, "BBB": 1})
+
+    def test_variacao_curta_depois_da_barra_e_uma_peca(self):
+        # "WAP103/S" (filtro) não é "WAP103" + "S", mesmo fora do Precificador.
+        gravar_como_admin([linha("P1", "WAP103/S", 1)])
+        self.assertEqual([i["codigo"] for i in self.montar()["itens"]], ["WAP103/S"])
+
+    def test_separada_por_marketplace(self):
+        gravar_como_admin([
+            linha("P1", "AAA", 2, Marketplace="MERCADO LIVRE"),
+            linha("P2", "AAA", 1, Marketplace="SHOPEE"),
+            linha("P3", "BBB", 1, Marketplace="SHOPEE")])
+        r = self.montar(locais={"AAA": "A.1", "BBB": "A.0"})
+        grupos = {g["nome"]: g for g in r["grupos"]}
+        self.assertEqual([g["nome"] for g in r["grupos"]], ["Mercado Livre", "Shopee"])
+        self.assertEqual([(i["codigo"], i["qtd"]) for i in grupos["Mercado Livre"]["itens"]], [("AAA", 2)])
+        self.assertEqual([(i["codigo"], i["qtd"]) for i in grupos["Shopee"]["itens"]], [("BBB", 1), ("AAA", 1)])
+        self.assertEqual((grupos["Shopee"]["pedidos"], grupos["Shopee"]["unidades"]), (2, 2))
+
     def test_filial_que_nao_respondeu_nao_vira_sem_prateleira(self):
         gravar_como_admin([linha("P1", "AAA", 1)])
         resposta = {"estoques": [{"revenda": 1, "disponivel": None, "respondeu": False, "localizacao": ""}],

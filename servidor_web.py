@@ -17205,13 +17205,32 @@ SEPARACAO_REPETIR_S = 300   # peça sem resposta do Apollo é tentada de novo de
 
 
 def _separacao_pecas(filial: str) -> tuple[dict[str, dict[str, Any]], int]:
+    """Peças de todos os marketplaces juntos (leitura do Apollo)."""
+    grupos = _separacao_grupos(filial)
+    pecas: dict[str, dict[str, Any]] = {}
+    for g in grupos.values():
+        for cod, p in g["pecas"].items():
+            q = pecas.setdefault(cod, {**p, "qtd": 0})
+            q["qtd"] += p["qtd"]
+    return pecas, sum(len(g["pedidos"]) for g in grupos.values())
+
+
+# Pedido do dono (26/10): a lista sai separada por marketplace, nesta ordem.
+SEPARACAO_ORDEM_GRUPOS = ["Mercado Livre", "Shopee", "Magalu", "TikTok"]
+
+
+def _separacao_grupo(row: dict[str, Any]) -> str:
+    nome = _vendas_marketplace(row.get("Marketplace") or row.get("Origem"))
+    return "TikTok" if "TIKTOK" in normalize(nome) else nome
+
+
+def _separacao_grupos(filial: str) -> dict[str, dict[str, Any]]:
     if filial not in SEPARACAO_REVENDA:
         raise ValueError("Escolha a filial (Araçatuba ou Bauru) no seletor do menu.")
     with DB_LOCK:
         bruto, _, _ = get_storage("conf_pedidos")
     conhecidos = _separacao_codigos_conhecidos()
-    pecas: dict[str, dict[str, Any]] = {}
-    pedidos: set[str] = set()
+    grupos: dict[str, dict[str, Any]] = {}
     for row in _rows_from_storage_value(bruto):
         if not isinstance(row, dict) or filial_da_linha(row) != filial:
             continue
@@ -17222,7 +17241,11 @@ def _separacao_pecas(filial: str) -> tuple[dict[str, dict[str, Any]], int]:
         partes = _separacao_partes(row.get("SKU") or row.get("Sku"), conhecidos)
         if not partes or not qtd:
             continue
-        pedidos.add(normalize(order_number(row)))
+        grupo = grupos.setdefault(_separacao_grupo(row), {"pecas": {}, "pedidos": set()})
+        pecas = grupo["pecas"]
+        numero = normalize(order_number(row))
+        if numero:
+            grupo["pedidos"].add(numero)
         kit = len(partes) > 1 or partes[0][1] != 1
         desc = str(row.get("Descrição") or row.get("Descricao") or "").strip()
         for cod, un in partes:
@@ -17230,19 +17253,25 @@ def _separacao_pecas(filial: str) -> tuple[dict[str, dict[str, Any]], int]:
             p["qtd"] += qtd * un
             if desc and (not p["descricao"] or (not kit and p["descricao"].startswith("Peça do kit"))):
                 p["descricao"] = ("Peça do kit: " if kit else "") + desc
-    return pecas, len(pedidos - {""})
+    return grupos
 
 
 def _separacao_codigos_conhecidos() -> set[str]:
     dados = precificador_dados()
     produtos = dados.get("products") if isinstance(dados, dict) else None
-    return {str(p.get("sku") or "").strip().upper() for p in produtos if isinstance(p, dict)}         if isinstance(produtos, list) else set()
+    if not isinstance(produtos, list):
+        return set()
+    return {str(p.get("sku") or "").strip().upper() for p in produtos if isinstance(p, dict)}
 
 
 def _separacao_partes(sku: Any, conhecidos: set[str]) -> list[tuple[str, int]]:
     """Revisão 26/10 (regra da V19.48): SKU com barra que é UM produto do Precificador
     ("PSH367/80") fica inteiro; senão "A/B" = uma de cada (`_tiktok_pecas`)."""
     texto = str(sku or "").strip().upper()
+    # Lista real de 26/10: "KIT-1/10405594-1/10405569" = quantidade/código de cada peça (par de lanternas).
+    m = re.match(r"^KIT-(\d+/[^-/\s]+(?:-\d+/[^-/\s]+)+)$", texto)
+    if m:
+        return [(c, max(1, int(q))) for q, c in re.findall(r"(\d+)/([^-/\s]+)", m.group(1))]
     m = re.match(r"^KIT(\d*)-(.+)$", texto)
     unidades, inteiro = (max(1, int(m.group(1) or 1)), m.group(2).strip()) if m else (1, texto)
     if re.match(r"^\d{5,}-.+", inteiro):
@@ -17250,7 +17279,11 @@ def _separacao_partes(sku: Any, conhecidos: set[str]) -> list[tuple[str, int]]:
     # Kit cadastrado como produto comum no Precificador (V18.80: "A/B" com A e B também lá) abre em
     # peças; "KIT2-PSH367/80" vale também quando só o kit está no Precificador.
     pecas = [p.strip() for p in inteiro.split("/")]
-    if "/" in inteiro and (inteiro in conhecidos or texto in conhecidos)             and not all(p in conhecidos for p in pecas):
+    if "/" in inteiro and (inteiro in conhecidos or texto in conhecidos) \
+            and not all(p in conhecidos for p in pecas):
+        return [(inteiro, unidades)]
+    # "WAP103/S": parte com menos de 3 caracteres é variação do produto, não outra peça.
+    if "/" in inteiro and any(len(p) < 3 for p in pecas):
         return [(inteiro, unidades)]
     return _tiktok_pecas(texto)
 
@@ -17324,7 +17357,12 @@ def separacao_iniciar_leitura(filial: str) -> None:
 
 def separacao_lista(filial: str) -> dict[str, Any]:
     revenda = SEPARACAO_REVENDA.get(filial)
-    pecas, n_pedidos = _separacao_pecas(filial)
+    por_grupo = _separacao_grupos(filial)
+    pecas: dict[str, dict[str, Any]] = {}
+    for g in por_grupo.values():
+        for cod, p in g["pecas"].items():
+            pecas.setdefault(cod, {**p, "qtd": 0})["qtd"] += p["qtd"]
+    n_pedidos = sum(len(g["pedidos"]) for g in por_grupo.values())
     with SEPARACAO_LOCK:
         sem = set(SEPARACAO_SEM_RESPOSTA.get(filial) or ())
         lendo = filial in SEPARACAO_LENDO
@@ -17340,9 +17378,18 @@ def separacao_lista(filial: str) -> dict[str, Any]:
     if not lendo and not pausa and (faltam or (sem_local and time.time() - ultima > SEPARACAO_REPETIR_S)):
         separacao_iniciar_leitura(filial)
         lendo = True
-    itens.sort(key=lambda p: (not p["localizacao"], _full_loc_chave(p["localizacao"]), p["codigo"]))
+    ordem = lambda p: (not p["localizacao"], _full_loc_chave(p["localizacao"]), p["codigo"])
+    itens.sort(key=ordem)
+    locais = {p["codigo"]: p["localizacao"] for p in itens}
+    grupos = []
+    for nome in sorted(por_grupo, key=lambda n: (SEPARACAO_ORDEM_GRUPOS.index(n)
+                                                 if n in SEPARACAO_ORDEM_GRUPOS else 99, n)):
+        g_itens = sorted(({**p, "localizacao": locais.get(p["codigo"], "")}
+                          for p in por_grupo[nome]["pecas"].values()), key=ordem)
+        grupos.append({"nome": nome, "pedidos": len(por_grupo[nome]["pedidos"]),
+                       "unidades": sum(p["qtd"] for p in g_itens), "itens": g_itens})
     return {"ok": True, "filial": filial, "filial_nome": CASAS.get(filial, filial), "gerada_em": now_iso(),
-            "pedidos": n_pedidos, "unidades": sum(p["qtd"] for p in itens), "itens": itens,
+            "pedidos": n_pedidos, "unidades": sum(p["qtd"] for p in itens), "itens": itens, "grupos": grupos,
             "faltam": faltam, "lendo": faltam > 0,   # pausa/outra filial lendo: a tela segue esperando
             "sem_resposta": sorted(c for c in sem if c in pecas)}
 

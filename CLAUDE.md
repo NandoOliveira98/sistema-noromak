@@ -1136,7 +1136,10 @@ filial (Araçatuba revenda 1, Bauru 3; `_full_loc_chave`). Linha = prateleira, c
 fica 12 h em memória (`SEPARACAO_LOCAIS`); o que falta é lido em segundo plano — **uma leitura por vez para as duas
 filiais, 1 a cada 12 s, sem esperar vaga**; limite do Apollo cheio = para 1 min (a operação vem antes) — e a tela
 recarrega até completar; filial sem resposta (`respondeu: false`) vai para o fim e é tentada de novo depois de 5 min.
-SKU com barra que é um produto do Precificador ("PSH367/80") fica inteiro (regra da V19.48). `GET /api/separacao`.
+SKU com barra que é um produto do Precificador ("PSH367/80") fica inteiro (regra da V19.48); parte com menos de 3
+caracteres é variação ("WAP103/S" = uma peça); "KIT-1/A-1/B" = quantidade/código de cada peça. Separada por
+marketplace (`grupos`: Mercado Livre, Shopee, Magalu, TikTok; cada um em folha nova na impressão). `GET /api/separacao`.
+Antes de subir: `FERRAMENTAS_WINDOWS/separacao_hoje_leitura.py` (só leitura, via ssh) traz a fila para montar à mão.
 Teste: `TESTES/test_separacao_v1985.py`.
 
 **V19.45 — Cliente do Full pela NF-e do ML** (decisões do dono, 16/10). Venda Full não passa pela fila, e a integração
