@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.84-TIKTOK-PRECO"
+APP_VERSION = "19.85-LISTA-SEPARACAO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -17184,6 +17184,128 @@ def _faturamento_fila() -> tuple[list[tuple[str, str]], dict[str, str]]:
     return list(vistos.values()), prazos
 
 
+# V19.85: lista de separação do dia (pedido do dono, 26/10). Todos os pendentes da fila da
+# filial, kit aberto em peças, somados por código e na ordem da prateleira do Apollo da filial.
+# A prateleira quase não muda: fica guardada 12 h; o que falta é lido em segundo plano, devagar
+# (o Apollo divide 20 chamadas/min com o resto), e a tela recarrega até completar.
+SEPARACAO_REVENDA = {"aracatuba": 1, "bauru": 3}
+SEPARACAO_LOCAIS: dict[tuple[int, str], tuple[float, str]] = {}   # (revenda, código) -> (quando, prateleira)
+SEPARACAO_LOCK = threading.Lock()
+SEPARACAO_REUSO_S = 12 * 3600
+SEPARACAO_INTERVALO = 4.0
+SEPARACAO_LENDO: set[str] = set()
+SEPARACAO_SEM_RESPOSTA: dict[str, set[str]] = {}
+SEPARACAO_ULTIMA_LEITURA: dict[str, float] = {}
+SEPARACAO_REPETIR_S = 300   # peça sem resposta do Apollo é tentada de novo depois disso
+
+
+def _separacao_pecas(filial: str) -> tuple[dict[str, dict[str, Any]], int]:
+    if filial not in SEPARACAO_REVENDA:
+        raise ValueError("Escolha a filial (Araçatuba ou Bauru) no seletor do menu.")
+    with DB_LOCK:
+        bruto, _, _ = get_storage("conf_pedidos")
+    pecas: dict[str, dict[str, Any]] = {}
+    pedidos: set[str] = set()
+    for row in _rows_from_storage_value(bruto):
+        if not isinstance(row, dict) or filial_da_linha(row) != filial:
+            continue
+        try:
+            qtd = max(0, int(float(str(row.get("Quantidade") or 1))))
+        except (TypeError, ValueError):
+            qtd = 1
+        partes = _tiktok_pecas(row.get("SKU") or row.get("Sku"))
+        if not partes or not qtd:
+            continue
+        pedidos.add(normalize(order_number(row)))
+        kit = len(partes) > 1 or partes[0][1] != 1
+        desc = str(row.get("Descrição") or row.get("Descricao") or "").strip()
+        for cod, un in partes:
+            p = pecas.setdefault(cod, {"codigo": cod, "descricao": "", "qtd": 0})
+            p["qtd"] += qtd * un
+            if desc and (not p["descricao"] or (not kit and p["descricao"].startswith("Peça do kit"))):
+                p["descricao"] = ("Peça do kit: " if kit else "") + desc
+    return pecas, len(pedidos - {""})
+
+
+def _separacao_local(revenda: int, cod: str) -> str | None:
+    with SEPARACAO_LOCK:
+        g = SEPARACAO_LOCAIS.get((revenda, cod))
+    return g[1] if g and time.time() - g[0] <= SEPARACAO_REUSO_S else None
+
+
+def separacao_ler_apollo(filial: str) -> None:
+    """Lê no Apollo a prateleira das peças que ainda não tem. Fora do DB_LOCK."""
+    revenda = SEPARACAO_REVENDA[filial]
+    pecas, _ = _separacao_pecas(filial)
+    sem: set[str] = set()
+    primeira = True
+    for cod in sorted(pecas):
+        if _separacao_local(revenda, cod) is not None:
+            continue
+        if not primeira and SEPARACAO_INTERVALO:
+            time.sleep(SEPARACAO_INTERVALO)
+        primeira = False
+        try:
+            stock = crm_stock_lookup(cod, "separacao", 30)
+        except Exception:
+            sem.add(cod)
+            continue
+        rows = [r for r in (stock.get("estoques") or []) if int(r.get("revenda") or 0) == revenda]
+        if not rows:
+            sem.add(cod)
+            continue
+        # "...." = sem prateleira cadastrada (V19.07): guarda vazio, não lê de novo.
+        loc = next((str(r.get("localizacao") or "").strip() for r in rows
+                    if str(r.get("localizacao") or "").strip().strip(".")), "")
+        with SEPARACAO_LOCK:
+            SEPARACAO_LOCAIS[(revenda, cod)] = (time.time(), loc)
+    with SEPARACAO_LOCK:
+        SEPARACAO_SEM_RESPOSTA[filial] = sem
+        SEPARACAO_ULTIMA_LEITURA[filial] = time.time()
+
+
+def separacao_iniciar_leitura(filial: str) -> None:
+    with SEPARACAO_LOCK:
+        if filial in SEPARACAO_LENDO:
+            return
+        SEPARACAO_LENDO.add(filial)
+
+    def _rodar() -> None:
+        try:
+            separacao_ler_apollo(filial)
+        except Exception as exc:
+            print(f"[separacao] erro lendo o Apollo: {exc}", flush=True)
+        finally:
+            with SEPARACAO_LOCK:
+                SEPARACAO_LENDO.discard(filial)
+
+    threading.Thread(target=_rodar, name=f"separacao-{filial}", daemon=True).start()
+
+
+def separacao_lista(filial: str) -> dict[str, Any]:
+    revenda = SEPARACAO_REVENDA.get(filial)
+    pecas, n_pedidos = _separacao_pecas(filial)
+    with SEPARACAO_LOCK:
+        sem = set(SEPARACAO_SEM_RESPOSTA.get(filial) or ())
+        lendo = filial in SEPARACAO_LENDO
+        ultima = SEPARACAO_ULTIMA_LEITURA.get(filial, 0.0)
+    itens, faltam, sem_local = [], 0, 0
+    for p in pecas.values():
+        loc = _separacao_local(revenda, p["codigo"])
+        if loc is None:
+            sem_local += 1
+            faltam += p["codigo"] not in sem
+        itens.append({**p, "localizacao": loc or ""})
+    if not lendo and (faltam or (sem_local and time.time() - ultima > SEPARACAO_REPETIR_S)):
+        separacao_iniciar_leitura(filial)
+        lendo = True
+    itens.sort(key=lambda p: (not p["localizacao"], _full_loc_chave(p["localizacao"]), p["codigo"]))
+    return {"ok": True, "filial": filial, "filial_nome": CASAS.get(filial, filial), "gerada_em": now_iso(),
+            "pedidos": n_pedidos, "unidades": sum(p["qtd"] for p in itens), "itens": itens,
+            "faltam": faltam, "lendo": lendo and faltam > 0,
+            "sem_resposta": sorted(c for c in sem if c in pecas)}
+
+
 def _faturamento_pendentes() -> list[tuple[str, str]]:
     """(pedido, marketplace) dos pedidos na fila de pendentes, uma vez cada."""
     return _faturamento_fila()[0]
@@ -32717,6 +32839,18 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             self.send_json(cadastro_full_payload())
             return
+        if path == "/api/separacao":
+            # V19.85: lista de separação do dia (Admin e Supervisor), da filial escolhida.
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            try:
+                self.send_json(separacao_lista(self.filial_da_requisicao(ctx)))
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
         if path == "/api/faturamento":
             # V19.43: fila de faturamento (Admin e Supervisor).
             ctx = self.auth(admin_only=True)
@@ -32904,6 +33038,8 @@ class AppHandler(BaseHTTPRequestHandler):
             "/saude": "admin", "/saude/": "admin", "/saude.html": "admin",
             # V19.43: fila de faturamento em lote.
             "/faturamento": "admin", "/faturamento/": "admin", "/faturamento.html": "admin",
+            # V19.85: lista de separação do dia.
+            "/separacao": "admin", "/separacao/": "admin", "/separacao.html": "admin",
             # V18.73: promoções automáticas (age sozinha no ML: só admin).
             "/promocoes-auto": "admin", "/promocoes-auto/": "admin", "/promocoes-auto.html": "admin",
             # V18.33: a Rentabilidade ML virou o Financeiro; o endereço antigo abre a tela nova.
@@ -36428,6 +36564,9 @@ class AppHandler(BaseHTTPRequestHandler):
             "/tiktok-estoque.html": "tiktok-estoque.html",
             "/saude": "saude.html",
             "/saude/": "saude.html",
+            "/separacao": "separacao.html",
+            "/separacao/": "separacao.html",
+            "/separacao.html": "separacao.html",
             "/faturamento": "faturamento.html",
             "/faturamento/": "faturamento.html",
             "/faturamento.html": "faturamento.html",

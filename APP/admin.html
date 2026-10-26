@@ -1400,7 +1400,7 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
   </style>
   <!-- V18.82: o menu (itens, grupos recolhíveis, Sair) vem do nk-menu.js, o mesmo das outras telas.
        Cada item é um link com o endereço da tela (/expedicao/pedidos-dia...): Ctrl+clique abre em outra aba. -->
-  <script src="/expedicao/nk-menu.js?v=19.76"></script>
+  <script src="/expedicao/nk-menu.js?v=19.85"></script>
   <script>nkMenuDesenhar(document.currentScript);</script>
 </nav>
 
@@ -1603,6 +1603,8 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
           <!-- V19.43: Etiquetas e Histórico saíram do menu e ficam aqui. -->
           <button class="btn-primario" onclick="abrirAbaAdmin('etiquetas')"><i class=nk-i-file></i> Etiquetas / TXT</button>
           <button class="btn-primario" onclick="abrirAbaAdmin('historico')"><i class=nk-i-file></i> Histórico</button>
+          <!-- V19.85: lista de separação do dia (todos os pendentes da filial, por prateleira). -->
+          <button class="btn-primario" onclick="window.open('/expedicao/separacao','_blank')"><i class=nk-i-file></i> Lista de separação</button>
           <button class="btn-print-importacao btn-primario" onclick="abrirImportacaoPorPrint()"><i class=nk-i-camera></i> Importar por print</button>
         </div>
       </div>

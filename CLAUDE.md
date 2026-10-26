@@ -1129,6 +1129,14 @@ solta o romaneio com a observação do marketplace e envia ao caixa; Shopee/Maga
 troca a condição pela extensão Linx 0.44 (`condicao-definir-lote`, sem confirmação por pedido) antes de reenviar com
 `condicao_ok`. Etiquetas/TXT e Histórico saíram do menu (botões no "Importar pedidos"); Relatório ML/Shopee removidos.
 
+**V19.85 — Lista de separação do dia** (`APP/separacao.html`, `/separacao`, menu Expedição + botão em Pedidos
+pendentes, módulo **admin**; decisões do dono 26/10). Todos os pendentes da fila da filial do seletor do menu ("todas" =
+400, escolher a filial), kit aberto em peças (`_tiktok_pecas`), somados por código, na ordem da prateleira do Apollo da
+filial (Araçatuba revenda 1, Bauru 3; `_full_loc_chave`). Linha = prateleira, código, descrição, quantidade. A prateleira
+fica 12 h em memória (`SEPARACAO_LOCAIS`); o que falta é lido em segundo plano, 1 a cada 4 s, e a tela recarrega até
+completar; sem resposta vai para o fim e é tentado de novo depois de 5 min. `GET /api/separacao`.
+Teste: `TESTES/test_separacao_v1985.py`.
+
 **V19.45 — Cliente do Full pela NF-e do ML** (decisões do dono, 16/10). Venda Full não passa pela fila, e a integração
 ML → Apollo cria o cliente com o nome da conta ("Premium Flex") em vez da razão social da nota (M2 SOLUCOES GRAFICAS).
 No Full a NF-e é emitida pelo **ML** (série 2): `ml_nota_da_venda` lê `/users/{seller}/invoices/orders/{order}` (XML da

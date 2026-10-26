@@ -27,6 +27,7 @@
       { id: "pedidos-dia", rotulo: "Pedidos do dia", href: "/pedidos-dia", aba: "pedidos-dia", modulo: "admin", icone: "M3 5h18v16H3zM3 10h18M8 3v4M16 3v4" },
       { id: "coleta", rotulo: "Coleta do dia", href: "/coleta", aba: "coleta", modulo: "admin", icone: "M1 6h13v10H1zM14 10h4l3 3v3h-7zM5 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4zM18 19a2 2 0 1 0 0-4 2 2 0 0 0 0 4z" },
       { id: "etiquetas", rotulo: "Etiquetas / Importar TXT", href: "/etiquetas", aba: "etiquetas", modulo: "admin", oculto: true /* V19.43: botão em Pedidos pendentes */, icone: "M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8zM7.5 7.5h.01" },
+      { id: "separacao", rotulo: "Lista de separação", href: "/separacao", modulo: "admin", icone: "M9 5h11M9 12h11M9 19h11M4 5l1 1 2-2M4 12l1 1 2-2M4 19l1 1 2-2" },
       { id: "faturamento", rotulo: "Faturamento", href: "/faturamento", modulo: "admin", icone: "M4 2h16v20l-4-2-4 2-4-2-4 2zM8 7h8M8 11h8M8 15h5" },
       { id: "conferencia", rotulo: "Conferência", href: "/conferencia", modulo: "conferencia", icone: "M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" },
       { id: "historico", rotulo: "Histórico", href: "/historico", aba: "historico", modulo: "admin", oculto: true /* V19.43: botão em Pedidos pendentes */, icone: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2" },

@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="/favicon.ico?v=14.5" sizes="any">
+<title>Noromak · Lista de separação</title>
+<!-- V19.85: lista de separação do dia (pedido do dono, 26/10). Todos os pendentes da fila da
+     filial do seletor do menu, kit aberto em peças, somados por código e na ordem da prateleira
+     do Apollo. Impressa no primeiro horário. GET /api/separacao (módulo admin). -->
+<script defer src="/expedicao/web-auth.js?v=19.70"></script>
+<link rel="stylesheet" href="/expedicao/nk-ui.css?v=19.13">
+<script src="/expedicao/nk-ui.js?v=19.13"></script>
+<script defer src="/expedicao/nk-menu.js?v=19.85" data-shell></script>
+<style>
+body{margin:0;background:var(--nk-canvas);color:var(--nk-ink);font-family:var(--nk-font)}
+.info{font-size:13px;color:var(--nk-ink2);display:flex;gap:16px;flex-wrap:wrap;margin-bottom:10px}
+.info b{color:var(--nk-head)}
+.lendo{background:var(--nk-warn-bg);border:1px solid var(--nk-warn-ln);color:var(--nk-warn);border-radius:10px;padding:9px 13px;font-size:13px;font-weight:600;margin-bottom:12px}
+table.sep{width:100%;border-collapse:collapse;font-size:13.5px}
+table.sep th{text-align:left;font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--nk-ink3);padding:8px 10px;border-bottom:1px solid var(--nk-line)}
+table.sep td{padding:9px 10px;border-bottom:1px solid var(--nk-line2)}
+table.sep .loc,table.sep .cod{font-family:Consolas,monospace;font-weight:600;color:var(--nk-head);white-space:nowrap}
+table.sep .num{text-align:right;font-weight:700;font-variant-numeric:tabular-nums;font-size:15px}
+.sem{color:var(--nk-ink3);font-style:italic;font-family:var(--nk-font);font-weight:400}
+.so-impressao{display:none}
+@media print{
+  @page{size:A4;margin:12mm}
+  body{background:#fff;color:#000}
+  .nao-imprime,nav,.v15-side,.nk-shell-menu{display:none!important}
+  .so-impressao{display:block;font-size:12px;margin-bottom:8px}
+  .nk-pagina{padding:0!important;margin:0!important;max-width:none!important}
+  .nk-painel{border:0!important;box-shadow:none!important;padding:0!important}
+  table.sep{font-size:12px}table.sep td{padding:5px 6px;border-bottom:1px solid #999}
+  table.sep tr{break-inside:avoid}
+}
+</style>
+</head>
+<body>
+<main class="nk-pagina">
+  <div class="nk-cab nao-imprime">
+    <div>
+      <div class="nk-rotulo">Expedição</div>
+      <h1>Lista de separação</h1>
+      <p>Peças de todos os pedidos pendentes da filial, na ordem da prateleira</p>
+    </div>
+    <div class="nk-acoes">
+      <button class="nk-btn" onclick="carregar()">Atualizar</button>
+      <button class="nk-btn" id="btnImprimir" onclick="window.print()">Imprimir</button>
+    </div>
+  </div>
+  <div class="nk-aviso bad nao-imprime" id="erro" hidden></div>
+  <section class="nk-painel">
+    <div class="so-impressao" id="cabImpressao"></div>
+    <div class="info nao-imprime" id="info"></div>
+    <div class="lendo nao-imprime" id="lendo" hidden></div>
+    <table class="sep">
+      <thead><tr><th>Prateleira</th><th>Código</th><th>Descrição</th><th class="num">Qtd</th></tr></thead>
+      <tbody id="corpo"><tr><td colspan="4">Carregando…</td></tr></tbody>
+    </table>
+  </section>
+</main>
+<script>
+// Filial lida uma vez, ao abrir a página (regra da V19.00).
+let FILIAL = ""; try { FILIAL = localStorage.getItem("nk_filial_v1895") || ""; } catch (_) {}
+let timer = null;
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+
+async function carregar() {
+  clearTimeout(timer);
+  const erro = document.getElementById("erro");
+  try {
+    const r = await fetch("/expedicao/api/separacao", {credentials: "same-origin",
+      headers: FILIAL ? {"X-Noromak-Filial": FILIAL} : {}});
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || "Erro ao montar a lista.");
+    erro.hidden = true;
+    desenhar(d);
+    if (d.lendo) timer = setTimeout(carregar, 8000);
+  } catch (e) {
+    erro.textContent = e.message; erro.hidden = false;
+    document.getElementById("corpo").innerHTML = "";
+  }
+}
+
+function desenhar(d) {
+  const quando = new Date(d.gerada_em).toLocaleString("pt-BR");
+  const resumo = `Filial <b>${esc(d.filial_nome)}</b> · <b>${d.pedidos}</b> pedidos · <b>${d.itens.length}</b> peças diferentes · <b>${d.unidades}</b> unidades`;
+  document.getElementById("info").innerHTML = resumo;
+  document.getElementById("cabImpressao").innerHTML = `<b>Lista de separação</b> · ${resumo} · gerada em ${esc(quando)}`;
+  const lendo = document.getElementById("lendo");
+  lendo.hidden = !d.lendo;
+  lendo.textContent = d.lendo ? `Lendo a prateleira no Apollo: faltam ${d.faltam} peças. A lista se completa sozinha — espere para imprimir.` : "";
+  if (!d.lendo && d.sem_resposta.length) {
+    lendo.hidden = false;
+    lendo.textContent = `O Apollo não respondeu para ${d.sem_resposta.length} peças: estão no fim da lista, sem prateleira.`;
+  }
+  document.getElementById("corpo").innerHTML = d.itens.length ? d.itens.map(i =>
+    `<tr><td class="loc">${i.localizacao ? esc(i.localizacao) : '<span class="sem">sem prateleira</span>'}</td>` +
+    `<td class="cod">${esc(i.codigo)}</td><td>${esc(i.descricao)}</td><td class="num">${i.qtd}</td></tr>`).join("")
+    : '<tr><td colspan="4">Nenhum pedido pendente nesta filial.</td></tr>';
+}
+carregar();
+</script>
+</body>
+</html>
