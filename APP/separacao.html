@@ -116,6 +116,10 @@ function desenhar(d) {
     `<tr><td class="loc">${i.localizacao ? esc(i.localizacao) : '<span class="sem">sem prateleira</span>'}</td>` +
     `<td class="cod">${esc(i.codigo)}</td><td>${esc(i.descricao)}</td><td class="num">${i.qtd}</td></tr>`;
   const corpo = document.getElementById("corpo");
+  if (d.inicio) {   // dono, 26/10: a lista de hoje já foi emitida; a tela começa no dia d.inicio
+    corpo.textContent = `A lista de separação de hoje já foi emitida. A tela começa a funcionar em ${d.inicio.split("-").reverse().join("/")}.`;
+    return;
+  }
   corpo.innerHTML = (d.grupos || []).length ? d.grupos.map(g =>
     `<div class="grupo"><h2>${esc(g.nome)}</h2>` +
     `<div class="info">${g.pedidos} pedidos · ${g.itens.length} peças diferentes · <b>${g.unidades}</b> unidades</div>` +

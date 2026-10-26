@@ -1158,6 +1158,8 @@ caracteres é variação ("WAP103/S" = uma peça); "KIT-1/A-1/B" = quantidade/c�
 marketplace (`grupos`: Mercado Livre, Shopee, Magalu, TikTok; cada um em folha nova na impressão). Só entra despacho
 de hoje e atrasados (`_faturamento_prazo_dia`, regra do Faturamento V19.73; sem prazo = Shopee entra); os de outro dia
 contam em `futuros` (caso real 26/10: coleta de 28/10 aparecendo na lista). `GET /api/separacao`.
+Começa em `SEPARACAO_INICIO` (27/10, dono: a de 26/10 foi emitida à mão); antes disso a rota devolve vazio com `inicio`
+e não lê o Apollo. A tela relê a cada 30 s enquanto lê a prateleira e para com a aba escondida (revisão 26/10).
 Antes de subir: `FERRAMENTAS_WINDOWS/separacao_hoje_leitura.py` (só leitura, via ssh) traz a fila para montar à mão.
 Teste: `TESTES/test_separacao_v1985.py`.
 

@@ -17317,6 +17317,9 @@ SEPARACAO_LENDO: set[str] = set()
 SEPARACAO_SEM_RESPOSTA: dict[str, set[str]] = {}
 SEPARACAO_ULTIMA_LEITURA: dict[str, float] = {}
 SEPARACAO_REPETIR_S = 300   # peça sem resposta do Apollo é tentada de novo depois disso
+# Dono, 26/10: a lista de 26/10 já foi emitida à mão; antes desta data a tela não monta nada
+# (nem lê o Apollo) e só avisa quando começa.
+SEPARACAO_INICIO = "2026-10-27"
 
 
 def _separacao_pecas(filial: str) -> tuple[dict[str, dict[str, Any]], int]:
@@ -17485,6 +17488,12 @@ def separacao_iniciar_leitura(filial: str) -> None:
 
 
 def separacao_lista(filial: str) -> dict[str, Any]:
+    if SEPARACAO_INICIO and _separacao_hoje() < SEPARACAO_INICIO:
+        if filial not in SEPARACAO_REVENDA:
+            raise ValueError("Escolha a filial (Araçatuba ou Bauru) no seletor do menu.")
+        return {"ok": True, "filial": filial, "filial_nome": CASAS.get(filial, filial), "gerada_em": now_iso(),
+                "pedidos": 0, "unidades": 0, "itens": [], "grupos": [], "futuros": 0, "faltam": 0,
+                "lendo": False, "sem_resposta": [], "inicio": SEPARACAO_INICIO}
     revenda = SEPARACAO_REVENDA.get(filial)
     por_grupo = _separacao_grupos(filial)
     pecas: dict[str, dict[str, Any]] = {}

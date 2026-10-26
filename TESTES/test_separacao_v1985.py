@@ -32,6 +32,26 @@ class ListaDeSeparacao(unittest.TestCase):
         S.SEPARACAO_ULTIMA_LEITURA.clear()
         S.SEPARACAO_LENDO.clear()
         S.SEPARACAO_PAUSA_ATE[0] = 0.0
+        self._inicio = S.SEPARACAO_INICIO
+        S.SEPARACAO_INICIO = ""
+
+    def tearDown(self):
+        S.SEPARACAO_INICIO = self._inicio
+
+    def test_lista_de_hoje_ja_emitida_comeca_no_dia_seguinte(self):
+        # Dono, 26/10: a lista de 26/10 já foi feita à mão; a tela só começa em 27/10.
+        gravar_como_admin([linha("P1", "AAA", 2, Descrição="Parafuso")])
+        S.SEPARACAO_INICIO = "2099-01-01"
+        with mock.patch.object(S, "crm_stock_lookup", side_effect=AssertionError("não lê o Apollo")):
+            r = S.separacao_lista("aracatuba")
+        self.assertTrue(r["ok"])
+        self.assertEqual((r["itens"], r["grupos"], r["lendo"]), ([], [], False))
+        self.assertEqual(r["inicio"], "2099-01-01")
+        self.assertNotIn("aracatuba", S.SEPARACAO_LENDO)
+        with self.assertRaises(ValueError):
+            S.separacao_lista("todas")
+        S.SEPARACAO_INICIO = S._separacao_hoje()
+        self.assertEqual(len(self.montar(locais={"AAA": "A.1"})["itens"]), 1)   # no dia do início, funciona
 
     def montar(self, filial="aracatuba", locais=None, revenda=1):
         with mock.patch.object(S, "crm_stock_lookup", side_effect=apollo(locais or {}, revenda)), \
