@@ -834,7 +834,10 @@ cada período. Semana/mês atuais vão até ontem (`parcial`); período que come
 marca escolhida à mão, `_compras_regras_marca`), pelo mesmo caminho da demanda (kit vira peças, "A/B" uma de cada; o
 anúncio entra em cada marca das peças; sem fornecedor = "Sem marca"). `ruptura_payload` devolve `itens[].marcas` e
 `marcas` (só as que têm anúncio). Na tela o seletor fica no topo; cartões e abas contam só a marca; a escolha fica no
-navegador (`nk_ruptura_marca_v1986`). O relatório semanal/mensal não filtra. Teste: `TESTES/test_ruptura_marca_v1986.py`.
+navegador (`nk_ruptura_marca_v1986`). O relatório semanal/mensal não filtra. Revisão 26/10: SKU fora do cadastro de kits passa
+por `_separacao_partes` ("PSH367/80" que é um produto fica inteiro); a marca só é calculada com `com_marcas=True`
+(a rota da tela — as rotinas de promoção chamam `ruptura_payload` e não usam); falha na leitura volta `marcas_erro`
+e a tela avisa. Teste: `TESTES/test_ruptura_marca_v1986.py`.
 
 ### Conversão e Ruptura da Shopee (V18.90)
 As duas telas ganharam a escolha **Mercado Livre / Shopee** (`?mp=shopee`; APIs com `&marketplace=shopee`).

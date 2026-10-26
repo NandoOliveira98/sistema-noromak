@@ -22469,7 +22469,8 @@ def ml_estoque_loop(stop_event: threading.Event) -> None:
             break
 
 
-def ruptura_payload(dias: int = 30, hoje: date | None = None, marketplace: str = "ml") -> dict[str, Any]:
+def ruptura_payload(dias: int = 30, hoje: date | None = None, marketplace: str = "ml",
+                    com_marcas: bool = False) -> dict[str, Any]:
     """Venda perdida por falta de estoque, por anúncio do ML. Só lê o banco.
 
     Ritmo = unidades vendidas nos últimos 60 dias ÷ dias COM estoque nesses 60 (dia sem
@@ -22572,7 +22573,9 @@ def ruptura_payload(dias: int = 30, hoje: date | None = None, marketplace: str =
     def soma(campo: str, grupo: str | None = None) -> float:
         return round(sum(i[campo] or 0 for i in itens if grupo is None or i["grupo"] == grupo), 2)
 
-    marcas_todas = _ruptura_marcas_aplicar(itens)   # V19.86: fora do DB_LOCK
+    # V19.86: fora do DB_LOCK e só para a tela (revisão 26/10: as rotinas de promoção também
+    # chamam ruptura_payload e não usam a marca).
+    marcas_todas, marcas_erro = _ruptura_marcas_aplicar(itens) if com_marcas else ([], "")
     estado = _SHOPEE_ANUNCIOS_ESTADO if marketplace == "shopee" else _RUPTURA_ESTADO
     return {
         "ok": True,
@@ -22596,27 +22599,32 @@ def ruptura_payload(dias: int = 30, hoje: date | None = None, marketplace: str =
                    "vendeu_sem_estoque_coletado": sem_coleta,
                    "encerrados": encerrados},
         "marcas": marcas_todas,
+        "marcas_erro": marcas_erro,
         "itens": itens,
     }
 
 
-def _ruptura_marcas_aplicar(itens: list[dict[str, Any]]) -> list[str]:
+def _ruptura_marcas_aplicar(itens: list[dict[str, Any]]) -> tuple[list[str], str]:
     """V19.86 (dono, 26/10): filtro por marca para o Compras. Marca = fornecedores da Demanda de
-    Compra (regras + marca escolhida à mão), pelo mesmo caminho da demanda: kit vira as peças,
-    "A/B" uma de cada; o anúncio entra em cada marca das peças. Sem fornecedor = lista vazia."""
+    Compra (regras + marca escolhida à mão): kit do cadastro vira as peças; fora dele vale a regra
+    da lista de separação (`_separacao_partes`: "PSH367/80" que é UM produto fica inteiro, "A/B" uma
+    de cada, "KITn-X"); o anúncio entra em cada marca das peças. Sem fornecedor = lista vazia.
+    Falha na leitura volta o motivo (a tela avisa: "Sem marca" para todos não é resposta)."""
     try:
         produtos = _compras_produtos_precificador()
         regras = _compras_regras_marca(produtos)
         kits = full_kit_compositions([i.get("sku") for i in itens])
-    except Exception:
+    except Exception as exc:
+        print(f"[ruptura] marcas não lidas: {exc}", file=sys.stderr, flush=True)
         for i in itens:
             i["marcas"] = []
-        return []
+        return [], str(exc) or exc.__class__.__name__
+    conhecidos = set(produtos)
     todas: set[str] = set()
     for i in itens:
         sku = str(i.get("sku") or "").strip()
         comps = (kits.get(sku) or {}).get("componentes") if sku else None
-        partes = [c["sku"] for c in comps] if comps else ([x for x in sku.split("/") if x.strip()] if sku else [])
+        partes = [c["sku"] for c in comps] if comps else [c for c, _ in _separacao_partes(sku, conhecidos)]
         nomes: set[str] = set()
         for parte in partes:
             codigo = _compras_codigo(parte, produtos)
@@ -22624,7 +22632,7 @@ def _ruptura_marcas_aplicar(itens: list[dict[str, Any]]) -> list[str]:
                 nomes.update(regras(codigo, produtos[codigo].get("descricao") or ""))
         i["marcas"] = sorted(nomes)
         todas |= nomes
-    return sorted(todas)
+    return sorted(todas), ""
 
 
 # V19.59: relatório semanal e mensal da venda perdida por estoque zerado (mesma conta do
@@ -32970,7 +32978,8 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             try:
                 self.send_json(ruptura_payload(int(str((query.get("dias") or ["30"])[0] or "30")),
-                                               marketplace=str((query.get("marketplace") or ["ml"])[0] or "ml")))
+                                               marketplace=str((query.get("marketplace") or ["ml"])[0] or "ml"),
+                                               com_marcas=True))   # V19.86: filtro por marca da tela
             except ValueError as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 400)
             except Exception as exc:

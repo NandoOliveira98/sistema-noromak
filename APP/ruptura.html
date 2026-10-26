@@ -190,6 +190,8 @@ async function carregar(){
   }
   const av=[];
   if(!c.cobre_periodo) av.push(`o histórico de estoque começou em <b>${dataBR(c.primeiro_dia)}</b>, então o <b>perdido no período</b> só conta a partir dessa data e vai se completando com o tempo. "Zerado agora" e "vai zerar" já valem`);
+  // V19.86: marca não lida = aviso (senão "Sem marca" para todos parece resposta).
+  if(D.marcas_erro) av.push(`não foi possível ler as marcas (${esc(D.marcas_erro)}): o filtro por marca não vale agora`);
   if(D.resumo.vendeu_sem_estoque_coletado) av.push(`${num(D.resumo.vendeu_sem_estoque_coletado)} anúncio(s) venderam mas ainda não tiveram o estoque checado e ficaram de fora`);
   aviso(av.length?'<b>Atenção:</b> '+av.join('; ')+'.':'');
   $('conteudo').hidden=false;
