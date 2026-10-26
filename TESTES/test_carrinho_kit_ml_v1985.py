@@ -50,7 +50,7 @@ class KitEmCarrinhoML(TesteNoromak):
     def cadastrar_kit(self) -> None:
         atual, _, _ = S.get_storage("conf_kits")
         kits = [{"sku_kit": SKU_KIT, "nome": SKU_KIT, "ativo": True,
-                 "componentes": [{"sku": "0893014105", "quantidade": 1}, {"sku": "0899900101", "quantidade": 1}]}]
+                 "componentes": [{"sku": "0899900101", "quantidade": 1}, {"sku": "0893014105", "quantidade": 1}]}]
         S.save_storage("conf_kits", atual, json.dumps(kits), False, actor="admin_teste", actor_role="admin",
                        source_screen="Teste", change_method="Teste automatizado", client_ip="127.0.0.1")
 
@@ -79,6 +79,54 @@ class KitEmCarrinhoML(TesteNoromak):
         self.assertEqual(self.pecas(), {"0899900101": 2, "0893014105": 1})
         vendas = sorted(r["VendaMercadoLivre"] for r in pedidos() if r["SKU"] == "0899900101")
         self.assertEqual(vendas, sorted([AVULSA, KIT]))
+
+    def gravar_fila_de_producao(self) -> None:
+        """A fila como a regra antiga deixou o carrinho (lida em produção em 26/10)."""
+        from base import gravar_como_integracao, linha
+        base = dict(Marketplace="MERCADO LIVRE", PackIdMercadoLivre=CARRINHO, OrigemCadastro="API Mercado Livre")
+        gravar_como_integracao([
+            linha(CARRINHO, "0899900101", 1, uid="MLAPI_ff8c45dd0b79c55515bf", VendaMercadoLivre=AVULSA,
+                  MercadoLivreLinhaKey=f"{AVULSA}|MLB7715889578|None|0", Kit="SIM", SkuKitOrigem=SKU_KIT, **base),
+            linha(CARRINHO, "0893014105", 1, uid="MLAPI_8e1995b355d1201380fe", VendaMercadoLivre=KIT,
+                  MercadoLivreLinhaKey=f"{KIT}|MLB7859805954|None|1", Kit="SIM", SkuKitOrigem=SKU_KIT, **base),
+            linha(CARRINHO, SKU_KIT, 1, uid="MLAPI_82f376361dc110e3e53e", VendaMercadoLivre=KIT,
+                  MercadoLivreLinhaKey=f"{KIT}|MLB7859805954|None|0", Kit="VERIFICAR", **base),
+        ], origem="API Mercado Livre")
+
+    def test_fila_ja_embaralhada_se_acerta_na_releitura(self):
+        self.gravar_fila_de_producao()
+        self.cadastrar_kit()
+        for venda_id in (KIT, AVULSA, KIT):
+            S.ml_import_order(venda_id, source="teste")
+            self.assertLessEqual(self.pecas().get("0899900101", 0), 2, "pano duplicado na releitura")
+        self.assertEqual(self.pecas(), {"0899900101": 2, "0893014105": 1})
+
+    def test_linhas_marcadas_com_a_venda_errada_nao_duplicam(self):
+        # Regra antiga: importar B remarcava todas as linhas do carrinho como B.
+        from base import gravar_como_integracao, linha
+        base = dict(Marketplace="MERCADO LIVRE", PackIdMercadoLivre=CARRINHO, OrigemCadastro="API Mercado Livre",
+                    VendaMercadoLivre=KIT)
+        self.cadastrar_kit()
+        gravar_como_integracao([
+            linha(CARRINHO, "0899900101", 1, uid="U-A", MercadoLivreLinhaKey=f"{AVULSA}|MLB7715889578|None|0", **base),
+            linha(CARRINHO, "0893014105", 1, uid="U-B1", MercadoLivreLinhaKey=f"{KIT}|MLB7859805954|None|1", **base),
+            linha(CARRINHO, "0899900101", 1, uid="U-B0", MercadoLivreLinhaKey=f"{KIT}|MLB7859805954|None|0", **base),
+        ], origem="API Mercado Livre")
+        S.ml_import_order(AVULSA, source="teste")
+        self.assertEqual(self.pecas(), {"0899900101": 2, "0893014105": 1})
+
+    def test_peca_excluida_pelo_admin_nao_volta(self):
+        # O tombstone de linha ML é pelo UID: o UID da peça não pode mudar entre versões.
+        self.cadastrar_kit()
+        S.ml_import_order(KIT, source="teste")
+        uid = {r["SKU"]: r["__uidLinha"] for r in pedidos()}["0893014105"]
+        self.assertEqual(uid, "MLAPI_8e1995b355d1201380fe", "UID da peça mudou: tombstones antigos deixam de valer")
+        atual, _, _ = S.get_storage("conf_pedidos")
+        linhas = [r for r in json.loads(atual) if r["SKU"] != "0893014105"]
+        S.save_storage("conf_pedidos", atual, json.dumps(linhas), True, actor="admin_teste", actor_role="admin",
+                       source_screen="Admin", change_method="Excluir linha", client_ip="127.0.0.1")
+        S.ml_import_order(KIT, source="teste")
+        self.assertNotIn("0893014105", self.pecas(), "peça excluída pelo ADMIN voltou")
 
     def test_pedido_lancado_a_mao_continua_sendo_reconhecido(self):
         # O vínculo de linha de print/extensão (sem venda) com a venda da API continua.

@@ -465,11 +465,14 @@ copia por lotes (`backup(pages=2000, sleep=0.05)`, também no `publicar.sh`): `i
 com CFQ/BFQ. Ainda em aberto (maior ganho, mais delicado): `_ml_linked_order_ids` decodifica
 o `conf_etiquetas` inteiro (com os ZPL) a cada ciclo — cachear por versão do storage.
 **V19.85 — carrinho com kit (caso real 26/10, carrinho 2000015699983821):** `_ml_bind_manual_pending_rows`
-remarcava TODA linha do carrinho com a venda importada na hora; com duas vendas no carrinho, a limpeza seguinte
-apagava a peça da outra venda e a busca Pedido + SKU fundia o pano avulso com o pano do kit. Agora a linha que já é
-de outra venda do carrinho não é tomada; a busca só aceita linha da mesma venda (ou sem venda); a linha do kit
-fechado que sai na troca pelas peças vai por remoção nomeada (bipada fica); a peça de kit aberto leva o SKU no
-`__uidLinha` (a 1ª peça tinha o mesmo UID do kit fechado). Teste: `TESTES/test_carrinho_kit_ml_v1985.py`.
+remarcava TODA linha do carrinho com a venda importada na hora (`VendaMercadoLivre`); com duas vendas no carrinho, a
+limpeza seguinte apagava a peça da outra venda e a busca Pedido + SKU fundia o pano avulso com o pano do kit. A venda
+real da linha da API vem da chave `MercadoLivreLinhaKey` (`_ml_venda_da_linha`, nunca era remarcada): o vínculo, a
+busca e a limpeza não tomam linha da API de outra venda (`_ml_linha_de_outra_venda`), o que também desfaz as filas já
+embaralhadas na releitura. Linha sem a chave (print, extensão, TXT) segue como antes. Linha bipada não é apagada
+pela limpeza. **Não mudar o `__uidLinha` das linhas ML** (o tombstone de linha do ADMIN é pelo UID) nem tirar
+linha por remoção nomeada aqui (o kit fechado e a 1ª peça têm o mesmo UID; a revisão de 26/10 recusou as duas
+ideias). Teste: `TESTES/test_carrinho_kit_ml_v1985.py`.
 
 ### Shopee
 Fluxo de etiqueta: `get_shipping_parameter` → `ship_order` → `get_tracking_number` →
