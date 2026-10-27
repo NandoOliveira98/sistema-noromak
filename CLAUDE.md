@@ -1154,6 +1154,18 @@ solta o romaneio com a observação do marketplace e envia ao caixa; Shopee/Maga
 troca a condição pela extensão Linx 0.44 (`condicao-definir-lote`, sem confirmação por pedido) antes de reenviar com
 `condicao_ok`. Etiquetas/TXT e Histórico saíram do menu (botões no "Importar pedidos"); Relatório ML/Shopee removidos.
 
+**V19.87 — Reemissão do romaneio na Conferência** (dono, 27/10). 247 de 247 romaneios soltos pela porta voltaram
+"Impressão enviada ... impressora 1", mas às vezes a folha não sai no estoque (percebido só no faturamento). Soltar de
+novo não reimprime (as peças já estão em romaneio) e a porta não tem reimpressão. `GET /api/romaneio-pedido?pedido=`
+(`romaneio_do_pedido`; qualquer logado, recusa outra filial; só lê `linx_operacoes_v1860`): número do romaneio tirado
+da mensagem do Apollo, atendimento, observação, hora. Na Conferência o quadro fica abaixo da etiqueta com
+"Reimprimir romaneio" (confirmação antes). Quem reimprime é a extensão **NOROMAK_REEMISSAO_ROMANEIO** (Desktop, fora do
+repo; `postMessage` `noromak-reemissao-romaneio`), no Linx web logado do mesmo Chrome, igual à tela Reimpressão de
+Romaneio (menu 88100): `ProcuraRomaneio {NumeroRomaneio}` → confere o atendimento → `ReimprimirRomaneio {Contato,
+Empresa, Revenda, Usuario, Romaneio, Reimpressao:true, Impressora, TipoRomaneio}` na **mesma impressora**; 206/208 =
+o Linx quer PDF (usuário sem impressora) → avisa e não imprime; mesmo romaneio 1x por minuto. Nunca chama
+GeraLista/AtualizaQuantidades/ConfirmaRomaneio. Teste: `TESTES/test_reemissao_romaneio_v1987.py`.
+
 **V19.85 — Lista de separação do dia** (`APP/separacao.html`, `/separacao`, menu Expedição + botão em Pedidos
 pendentes, módulo **admin**; decisões do dono 26/10). Todos os pendentes da fila da filial do seletor do menu ("todas" =
 400, escolher a filial), kit aberto em peças (`_tiktok_pecas`), somados por código, na ordem da prateleira do Apollo da

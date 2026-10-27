@@ -118,6 +118,18 @@
   .etiqueta-status { display: inline-block; font-size: 12px; font-weight: 700; padding: 6px 10px; border-radius: 6px; margin-bottom: 14px; }
   .etiqueta-ok { background: #E7F4EC; color: #1B7A3E; border: 1px solid #B9DEC6; }
   .etiqueta-erro { background: #FDECEA; color: #B42318; border: 1px solid #F2C1BB; }
+  /* V19.87: romaneio do pedido + Reimprimir (extensão NOROMAK_REEMISSAO_ROMANEIO). */
+  .romaneio-status { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12px; font-weight: 600; color: #475467; margin: -6px 0 14px; }
+  .romaneio-status .romaneio-nao { color: #98A2B3; font-weight: 500; }
+  .romaneio-status button { font-size: 12px; font-weight: 700; padding: 5px 10px; border-radius: 6px; border: 1px solid #CBD5E1; background: #fff; color: #1E3A8A; cursor: pointer; }
+  .romaneio-status button:disabled { opacity: .6; cursor: wait; }
+  .romaneio-linx { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+  .romaneio-linx .ponto { width: 9px; height: 9px; border-radius: 50%; background: #D92D20; flex-shrink: 0; }
+  .romaneio-linx.ok { color: #1B7A3E; }
+  .romaneio-linx.ok .ponto { background: #16A34A; }
+  .romaneio-linx.mal { color: #B42318; }
+  html[data-tema="escuro"] .romaneio-status { color: #C2CCD8 !important; }
+  html[data-tema="escuro"] .romaneio-status button { background: #18222D !important; color: #9CC1FF !important; border-color: #33414F !important; }
 
   /* Modal de Multiplos Pedidos */
   #modalMultiplos {
@@ -756,6 +768,7 @@ html[data-tema="escuro"] .conf-filial-v1895[data-filial="bauru"]{background:#3A2
     <div id="marketplace" style="font-size: 14px; margin-bottom: 8px;"></div>
     <div id="pedidoHistoricoAnterior" class="pedido-historico-anterior"></div>
     <div id="etiquetaPedidoStatus" class="etiqueta-status etiqueta-erro">Etiqueta não verificada</div>
+    <div id="romaneioPedidoStatus" class="romaneio-status" style="display:none"></div>
 
     <div id="barra">
       <div id="progresso"></div>
@@ -2568,6 +2581,128 @@ function selecionarPedidoPorClique(uid) {
   renderizarListaPedidos();
 }
 
+// V19.87 — Reemissão do romaneio. O romaneio sai pelo Apollo (porta romaneio/soltar) e às vezes
+// a folha não chega ao estoque. O servidor diz qual romaneio foi solto para o pedido; quem
+// reimprime é a extensão NOROMAK_REEMISSAO_ROMANEIO, no Linx web deste computador (o servidor
+// não alcança o Apollo). Pede confirmação antes (decisão do dono, 27/10).
+let romaneioPedidoV1987 = null;
+let romaneioPedidoPedidoV1987 = "";
+
+async function carregarRomaneioPedidoV1987(pedido) {
+  const caixa = document.getElementById("romaneioPedidoStatus");
+  romaneioPedidoV1987 = null;
+  romaneioPedidoPedidoV1987 = String(pedido || "");
+  if (!caixa) return;
+  caixa.style.display = "none";
+  caixa.innerHTML = "";
+  if (!pedido) return;
+  let dados = null;
+  try {
+    const r = await fetch(`/expedicao/api/romaneio-pedido?pedido=${encodeURIComponent(pedido)}`, { cache: "no-store", credentials: "same-origin" });
+    dados = await r.json().catch(() => null);
+    if (!r.ok) dados = null;
+  } catch (_) { dados = null; }
+  if (romaneioPedidoPedidoV1987 !== String(pedido)) return; // outro pedido foi aberto nesse meio-tempo
+  if (!dados || !dados.ok) return;
+  romaneioPedidoV1987 = dados;
+  if (!dados.solto) {
+    caixa.innerHTML = `<span class="romaneio-nao">${dados.ultima_situacao === "erro" ? "Romaneio: a última tentativa de soltar deu erro" : "Romaneio ainda não solto pelo Noromak"}</span>`;
+  } else {
+    const hora = dados.em ? new Date(dados.em).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "";
+    const dia = dados.em ? new Date(dados.em).toLocaleDateString("pt-BR") : "";
+    const hoje = new Date().toLocaleDateString("pt-BR");
+    const quando = dados.em ? ` · solto ${dia === hoje ? "às " + hora : "em " + dia + " " + hora}` : "";
+    caixa.innerHTML = `<span>🧾 Romaneio ${escaparHtml(dados.romaneio || "(sem número)")} · atendimento ${escaparHtml(dados.atendimento)}${escaparHtml(quando)}</span>`
+      + `<button type="button" id="btnReimprimirRomaneio" onclick="reimprimirRomaneioV1987()">🖨 Reimprimir romaneio</button>`
+      + `<span id="romaneioLinxSessao" class="romaneio-linx mal"><span class="ponto"></span><span class="texto">Verificando o Linx…</span></span>`;
+  }
+  caixa.style.display = "flex";
+  atualizarSessaoLinxV1987();
+}
+
+// Bolinha da sessão do Linx web (como no painel antigo do romaneio): verde conectado,
+// vermelha sem sessão/expirada/sem extensão. Relida a cada 30 s com o pedido aberto.
+let timerSessaoLinxV1987 = null;
+function atualizarSessaoLinxV1987() {
+  const alvo = document.getElementById("romaneioLinxSessao");
+  clearTimeout(timerSessaoLinxV1987);
+  if (!alvo) return;
+  const pintar = (ok, texto, dica) => {
+    alvo.className = "romaneio-linx " + (ok ? "ok" : "mal");
+    alvo.querySelector(".texto").textContent = texto;
+    alvo.title = dica || "";
+  };
+  timerSessaoLinxV1987 = setTimeout(atualizarSessaoLinxV1987, 30000);
+  if (!document.documentElement.dataset.noromakReemissao) {
+    pintar(false, "Extensão não instalada", "Instale a extensão Noromak - Reemissão de Romaneio neste computador.");
+    return;
+  }
+  const id = "sessao-" + Date.now() + "-" + Math.random().toString(36).slice(2);
+  const ouvir = (evento) => {
+    if (evento.source !== window || evento.origin !== location.origin) return;
+    const m = evento.data || {};
+    if (m.tipo !== "noromak-reemissao-status-resposta" || m.id !== id) return;
+    window.removeEventListener("message", ouvir);
+    clearTimeout(desiste);
+    if (m.conectado) {
+      const min = Math.max(0, Math.floor(Number(m.segundosRestantes || 0) / 60));
+      pintar(true, `Linx conectado (${m.usuario || ""})`, `Sessão do Linx válida por mais ${min} min.`);
+    } else {
+      pintar(false, "Linx desconectado", m.motivo || "Abra o Linx web neste Chrome e entre com o seu usuário.");
+    }
+  };
+  const desiste = setTimeout(() => {
+    window.removeEventListener("message", ouvir);
+    pintar(false, "Linx sem resposta", "A extensão não respondeu. Recarregue a página.");
+  }, 5000);
+  window.addEventListener("message", ouvir);
+  window.postMessage({ tipo: "noromak-reemissao-status", id }, location.origin);
+}
+
+function reimprimirRomaneioV1987() {
+  const dados = romaneioPedidoV1987;
+  const input = document.getElementById("codigo");
+  if (!dados || !dados.solto) return;
+  if (!document.documentElement.dataset.noromakReemissao) {
+    mostrarMensagemDetalhada("aviso", "Extensão de reemissão não instalada",
+      "Este computador não tem a extensão Noromak - Reemissão de Romaneio.",
+      "Instale a extensão (pasta NOROMAK_REEMISSAO_ROMANEIO) ou reimprima pela tela Reimpressão de Romaneio do Linx.");
+    focarCampoCodigoAposAcao(input);
+    return;
+  }
+  const rotulo = dados.romaneio ? `o romaneio ${dados.romaneio}` : "o romaneio";
+  if (!confirm(`Reimprimir ${rotulo} (atendimento ${dados.atendimento})?\n\nA folha sai na impressora de romaneio do estoque.`)) {
+    focarCampoCodigoAposAcao(input);
+    return;
+  }
+  const botao = document.getElementById("btnReimprimirRomaneio");
+  if (botao) { botao.disabled = true; botao.textContent = "Reimprimindo..."; }
+  const id = "reemissao-" + Date.now() + "-" + Math.random().toString(36).slice(2);
+  const terminar = (resposta) => {
+    window.removeEventListener("message", ouvir);
+    clearTimeout(prazo);
+    if (botao) { botao.disabled = false; botao.textContent = "🖨 Reimprimir romaneio"; }
+    if (resposta.ok) {
+      mostrarMensagemDetalhada("sucesso", "Romaneio reimpresso",
+        `Romaneio ${resposta.romaneio} enviado de novo para a impressora ${resposta.impressora ?? ""}.`,
+        resposta.mensagem || "Confira a folha na impressora do estoque.");
+    } else {
+      mostrarMensagemDetalhada("erro", "Romaneio não reimpresso", resposta.erro || "A extensão não respondeu.",
+        "Se continuar, reimprima pela tela Reimpressão de Romaneio do Linx.");
+    }
+    focarCampoCodigoAposAcao(input);
+  };
+  const ouvir = (evento) => {
+    if (evento.source !== window || evento.origin !== location.origin) return;
+    const m = evento.data || {};
+    if (m.tipo === "noromak-reemissao-romaneio-resposta" && m.id === id) terminar(m);
+  };
+  const prazo = setTimeout(() => terminar({ ok: false, erro: "A extensão não respondeu em 40 s. Confira na impressora antes de tentar de novo." }), 40000);
+  window.addEventListener("message", ouvir);
+  window.postMessage({ tipo: "noromak-reemissao-romaneio", id, pedido: dados.pedido,
+    romaneio: dados.romaneio, atendimento: dados.atendimento, revenda: dados.revenda }, location.origin);
+}
+
 function abrirPedido(uid) {
   cancelarLeituraPendente();
   let itemBase = obterItemPedidoPorUidConferencia(uid);
@@ -2600,6 +2735,7 @@ function abrirPedido(uid) {
   document.getElementById("statusMsg").innerHTML = "";
   limparMensagemDetalhada();
   atualizarStatusEtiquetaPedido(pedidoAtual[0]);
+  carregarRomaneioPedidoV1987(numPedidoReal);
   desenharTabela();
   sugerirSkuSemEanPedidoAtual();
 
@@ -4006,6 +4142,7 @@ function limparPainel() {
     etiquetaStatus.className = "etiqueta-status etiqueta-erro";
     etiquetaStatus.textContent = "Etiqueta não verificada";
   }
+  carregarRomaneioPedidoV1987("");
   document.getElementById("corpoTabela").innerHTML = "";
   document.getElementById("progresso").style.width = "0%";
   document.getElementById("statusMsg").innerHTML = "";

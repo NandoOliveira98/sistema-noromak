@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.86-RUPTURA-MARCA"
+APP_VERSION = "19.87-REEMISSAO-ROMANEIO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -16606,6 +16606,31 @@ def exp_romaneio_soltar(pedido: str, atendimento: Any, observacao: str, usuario:
             "observacao": observacao, "soltos": r.get("soltos") or [], "mensagens": mensagens}
 
 
+def romaneio_do_pedido(pedido: str) -> dict[str, Any]:
+    """V19.87: o romaneio solto pela porta, para a Conferência reemitir (extensão
+    NOROMAK_REEMISSAO_ROMANEIO, no Linx web). O número vem da mensagem do Apollo
+    ("Romaneio 125245 do contato ..."). Só lê o banco."""
+    estado = _exp_estado_operacoes(pedido)
+    rom = estado["romaneio"]
+    if not rom:
+        romaneios = [o for o in estado["operacoes"] if o["etapa"] == "romaneio"]
+        return {"ok": True, "solto": False, "pedido": pedido,
+                "ultima_situacao": romaneios[-1]["situacao"] if romaneios else ""}
+    try:
+        detalhe = json.loads(rom["detalhe"] or "{}")
+    except (TypeError, ValueError):
+        detalhe = {}
+    if not isinstance(detalhe, dict):
+        detalhe = {}
+    achou = re.search(r"Romaneio\s+(\d+)", " ".join(str(m) for m in (detalhe.get("mensagens") or [])))
+    pecas = [{"codigo": str(p.get("codigo") or ""), "quantidade": p.get("quantidade")}
+             for p in (detalhe.get("soltos") or []) if isinstance(p, dict)]
+    return {"ok": True, "solto": True, "pedido": pedido, "romaneio": achou.group(1) if achou else "",
+            "atendimento": str(rom["contato"] or ""), "revenda": EXP_REVENDA,
+            "observacao": str(detalhe.get("observacao") or ""), "pecas": pecas,
+            "em": rom["em"], "por": rom["por"]}
+
+
 def _exp_caixa_corpo(pedido: str, atendimento: Any, cliente: Any) -> tuple[dict[str, Any] | None, str]:
     numero = re.sub(r"\D", "", str(atendimento or ""))
     if not numero:
@@ -33142,6 +33167,26 @@ class AppHandler(BaseHTTPRequestHandler):
                 q1 = lambda k: str((query.get(k) or [""])[0] or "")
                 resultado = exp_romaneio_preparar(q1("pedido"), q1("atendimento"), q1("cliente"))
                 self.send_json(resultado, 200 if resultado.get("ok") else 400)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/romaneio-pedido":
+            # V19.87: romaneio do pedido aberto na Conferência (botão Reimprimir). Só lê.
+            ctx = self.auth()
+            if ctx is None:
+                return
+            pedido = str((query.get("pedido") or [""])[0] or "").strip()
+            if not pedido:
+                self.send_json({"ok": False, "error": "Informe o pedido."}, 400)
+                return
+            filial = self.filial_da_requisicao(ctx)
+            with DB_LOCK:
+                permitido = pedido_da_filial(pedido, filial)
+            if not permitido:
+                self.send_json({"ok": False, "error": f"O pedido {pedido} é de outra filial.", "code": "OUTRA_FILIAL"}, 403)
+                return
+            try:
+                self.send_json(romaneio_do_pedido(pedido))
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
