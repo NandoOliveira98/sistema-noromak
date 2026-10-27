@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.96-NF-SHOPEE"
+APP_VERSION = "19.97-RELATORIO-DEVOLUCOES"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -17726,9 +17726,15 @@ def ensure_devolucoes_schema() -> None:
             if nome not in cols_item:
                 DB.execute(f"ALTER TABLE devolucao_item_v1988 ADD COLUMN {nome} {ddl}")
         cols_dev = {r[1] for r in DB.execute("PRAGMA table_info(devolucao_v1988)").fetchall()}
-        for nome, ddl in (("frete", "REAL"), ("frete_origem", "TEXT NOT NULL DEFAULT ''")):
+        for nome, ddl in (("frete", "REAL"), ("frete_origem", "TEXT NOT NULL DEFAULT ''"),
+                          ("motivo_dev", "TEXT NOT NULL DEFAULT ''"),   # V19.97
+                          ("exportacao_id", "INTEGER")):                # V19.97: lote em que foi exportada
             if nome not in cols_dev:
                 DB.execute(f"ALTER TABLE devolucao_v1988 ADD COLUMN {nome} {ddl}")
+        # V19.97: lotes de exportação (cada devolução tratada entra em um só lote).
+        DB.execute("""CREATE TABLE IF NOT EXISTS devolucao_exportacao_v1997 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, criado_em TEXT NOT NULL, criado_por TEXT NOT NULL,
+                filial TEXT NOT NULL DEFAULT '', devolucoes INTEGER NOT NULL DEFAULT 0)""")
         # V19.95: NF de venda do ML lida uma vez por pedido.
         DB.execute("""CREATE TABLE IF NOT EXISTS devolucao_nf_v1995 (
                 order_key TEXT PRIMARY KEY, nf_json TEXT NOT NULL, lido_em TEXT NOT NULL)""")
@@ -18080,7 +18086,8 @@ def _devolucao_ler_venda_ml(order_id: str) -> bool:
                 continue
             linhas.append({"order_id": order_id, "pack_id": str(d.get("pack_id") or ""),
                            "sale_at": str(d.get("date_created") or ""), "sku": sku, "anuncio": str(item.get("id") or ""),
-                           "title": str(item.get("title") or ""), "qty": it.get("quantity") or 0})
+                           "title": str(item.get("title") or ""), "qty": it.get("quantity") or 0,
+                           "preco": it.get("unit_price")})   # V19.97: valor da devolução
         if not linhas:
             break
         with DB_LOCK:
@@ -18486,14 +18493,22 @@ def devolucoes_lista(filtros: dict[str, Any], filial: str) -> dict[str, Any]:
     custos_ctx = _financeiro_custos_aracatuba() if devolucoes else {}
     for d in devolucoes:
         d["valores"] = devolucao_valores(d, custos_ctx)
+        cod, rot, origem = devolucao_motivo(d)   # V19.97
+        d["motivo_devolucao"] = {"codigo": cod, "rotulo": rot, "origem": origem}
+        d["valor_venda"] = devolucao_valor_venda(d)
     with DB_LOCK:
         contagem = {r[0]: int(r[1]) for r in DB.execute(
             "SELECT situacao, COUNT(*) FROM devolucao_v1988"
             + (" WHERE filial=?" if filial != FILIAL_TODAS else "") + " GROUP BY situacao",
             [] if filial == FILIAL_TODAS else [filial]).fetchall()}
+        # V19.97: tratadas que ainda não entraram em nenhum lote de exportação
+        a_exportar = int(DB.execute(
+            "SELECT COUNT(*) FROM devolucao_v1988 WHERE situacao='tratada' AND exportacao_id IS NULL"
+            + (" AND filial=?" if filial != FILIAL_TODAS else ""), [] if filial == FILIAL_TODAS else [filial]).fetchone()[0])
     return {"ok": True, "devolucoes": devolucoes,
             "resumo": {"a_tratar": contagem.get("a_tratar", 0), "tratada": contagem.get("tratada", 0)},
-            "motivos": DEVOLUCAO_MOTIVOS, "destinos": DEVOLUCAO_DESTINOS}
+            "motivos": DEVOLUCAO_MOTIVOS, "destinos": DEVOLUCAO_DESTINOS, "motivos_dev": DEVOLUCAO_MOTIVOS_DEV,
+            "a_exportar": a_exportar}
 
 
 def _devolucao_para_mudar(dev_id: Any, versao: Any, filial: str) -> dict[str, Any]:
@@ -18601,19 +18616,28 @@ def _devolucao_mes_br(quando: Any) -> str:
     return _devolucao_dia_br(quando)[:7]
 
 
-def _devolucao_frete_ml(d: dict[str, Any]) -> float | None:
-    """Frete da devolução cobrado pelo ML (reclamação lida pelo Pós-venda), pelas vendas ligadas ao pedido."""
+def _devolucao_ids_venda(d: dict[str, Any]) -> list[str]:
+    """Nº do pedido, da venda, do carrinho e do envio ligados à devolução (para achar reclamação, venda e NF)."""
     chave = str(d.get("order_key") or "")
     if not chave:
-        return None
-    ids = {chave, str(d.get("pedido") or "")}
+        return []
+    ids = {chave, normalize(d.get("pedido"))}
     if chave.startswith(DEVOLUCAO_VENDA_PREFIXO):
         ids.add(chave[len(DEVOLUCAO_VENDA_PREFIXO):])
     with DB_LOCK:
         for (ml_ids,) in DB.execute("SELECT DISTINCT ml_ids FROM devolucao_busca_v1988 WHERE order_key=?",
                                     (chave,)).fetchall():
             ids |= {x for x in str(ml_ids or "").split(",") if x}
-        ids.discard("")
+    ids.discard("")
+    return sorted(ids)
+
+
+def _devolucao_frete_ml(d: dict[str, Any]) -> float | None:
+    """Frete da devolução cobrado pelo ML (reclamação lida pelo Pós-venda), pelas vendas ligadas ao pedido."""
+    ids = _devolucao_ids_venda(d)
+    if not ids:
+        return None
+    with DB_LOCK:
         r = DB.execute(f"SELECT MAX(frete_devolucao) FROM ml_reclamacao_v1888 WHERE frete_devolucao IS NOT NULL "
                        f"AND order_id IN ({','.join('?' * len(ids))})", sorted(ids)).fetchone()
     return round(float(r[0]), 2) if r and r[0] is not None else None
@@ -18694,6 +18718,10 @@ def devolucao_salvar_valores(dev_id: Any, req: dict[str, Any], versao: Any, usua
                              filial: str = FILIAL_TODAS) -> dict[str, Any]:
     """Admin: frete da devolução e, por peça, destino e custo. Vale também na tratada (fica no histórico)."""
     req = req if isinstance(req, dict) else {}
+    tem_motivo = "motivo_dev" in req   # V19.97
+    motivo_dev = str(req.get("motivo_dev") or "").strip().lower() if tem_motivo else ""
+    if tem_motivo and motivo_dev and motivo_dev not in DEVOLUCAO_MOTIVOS_DEV:
+        raise ValueError("Motivo da devolução inválido.")
     tem_frete = "frete" in req
     frete = _devolucao_valor_ou_vazio(req.get("frete"), "Frete") if tem_frete else None
     pedidos_itens = req.get("itens") if isinstance(req.get("itens"), list) else []
@@ -18717,6 +18745,10 @@ def devolucao_salvar_valores(dev_id: Any, req: dict[str, Any], versao: Any, usua
         atuais = {int(i["id"]): i for i in d["itens"]}
         antes: dict[str, Any] = {}
         depois: dict[str, Any] = {}
+        if tem_motivo:
+            antes["motivo"] = d.get("motivo_dev") or ""
+            depois["motivo"] = motivo_dev
+            DB.execute("UPDATE devolucao_v1988 SET motivo_dev=? WHERE id=?", (motivo_dev, d["id"]))
         if tem_frete:
             antes["frete"] = d.get("frete")
             depois["frete"] = frete
@@ -18739,6 +18771,366 @@ def devolucao_salvar_valores(dev_id: Any, req: dict[str, Any], versao: Any, usua
         _devolucao_evento(d["id"], usuario, "valores", {"antes": antes, "depois": depois})
         return "valores"
     return _devolucao_mudar(dev_id, versao, filial, usuario, mudar)
+
+
+# V19.97 (dono, 27/10): relatório no formato da planilha da equipe — NF | NFD | NOME | SKU E QUANTIDADE | VALOR | MOTIVO.
+DEVOLUCAO_MOTIVOS_DEV = {
+    "arrependimento": "Comprador se arrependeu",
+    "quebrado": "Produto chegou quebrado ou danificado",
+    "defeito": "Produto com defeito",
+    "incompativel": "Incompatível com o veículo",
+    "faltando": "Pacote chegou com itens faltando",
+    "produto_errado": "Produto diferente do anunciado",
+    "falha_entrega": "Falha na entrega",
+    "outro": "Outro",
+}
+# nome do motivo da reclamação do ML (ml_reclamacao_motivo_v1888.nome) → motivo da devolução, por palavra
+_DEVOLUCAO_MOTIVO_ML = (("repent", "arrependimento"), ("regret", "arrependimento"), ("compat", "incompativel"),
+                        ("broken", "quebrado"), ("damage", "quebrado"), ("missing", "faltando"),
+                        ("incomplete", "faltando"), ("different", "produto_errado"), ("wrong", "produto_errado"),
+                        ("not_as_described", "produto_errado"), ("defect", "defeito"), ("not_work", "defeito"),
+                        ("doesnt_work", "defeito"), ("not_delivered", "falha_entrega"), ("delivery", "falha_entrega"))
+
+
+def _devolucao_motivo_do_ml(nome: str) -> tuple[str, str]:
+    nome = str(nome or "").lower()
+    for chave, codigo in _DEVOLUCAO_MOTIVO_ML:
+        if chave in nome:
+            return codigo, DEVOLUCAO_MOTIVOS_DEV[codigo]
+    return "outro", DEVOLUCAO_MOTIVOS_DEV["outro"]
+
+
+def devolucao_motivo(d: dict[str, Any]) -> tuple[str, str, str]:
+    """(código, rótulo, origem): o escolhido pelo admin vence; sem ele, o da reclamação do ML."""
+    if d.get("motivo_dev"):
+        cod = str(d["motivo_dev"])
+        return cod, DEVOLUCAO_MOTIVOS_DEV.get(cod, cod), "admin"
+    ids = _devolucao_ids_venda(d)
+    if ids:
+        with DB_LOCK:
+            r = DB.execute(f"SELECT m.nome FROM ml_reclamacao_v1888 r JOIN ml_reclamacao_motivo_v1888 m "
+                           f"ON m.motivo_id=r.motivo_id WHERE r.order_id IN ({','.join('?' * len(ids))}) "
+                           f"ORDER BY r.aberta_em DESC LIMIT 1", ids).fetchone()
+        if r and r[0]:
+            cod, rot = _devolucao_motivo_do_ml(r[0])
+            return cod, rot, "ml"
+    return "", "", ""
+
+
+def _devolucao_linhas_preco(d: dict[str, Any]) -> list[tuple[str, float]]:
+    """(SKU vendido, preço unitário) da venda: reclamação do ML > vendas copiadas > venda lida no ML."""
+    ids = _devolucao_ids_venda(d)
+    if not ids:
+        return []
+    marcas = ",".join("?" * len(ids))
+    linhas: list[tuple[str, float]] = []
+    with DB_LOCK:
+        for (itens_json,) in DB.execute(f"SELECT itens_json FROM ml_reclamacao_v1888 WHERE order_id IN ({marcas}) "
+                                        f"AND itens_json<>''", ids).fetchall():
+            for it in _filial_json(itens_json, []) or []:
+                if isinstance(it, dict) and it.get("sku") and it.get("preco") is not None:
+                    linhas.append((str(it["sku"]), float(it["preco"])))
+        if not linhas:
+            for tabela in ("vendas_v1799", "vendas_conta_v1898"):
+                for sku, qty, amount in DB.execute(f"SELECT sku, qty, amount FROM {tabela} WHERE order_id IN ({marcas})",
+                                                   ids).fetchall():
+                    if sku and qty and amount is not None:
+                        linhas.append((str(sku), float(amount) / float(qty)))
+        if not linhas:
+            for (lj,) in DB.execute(f"SELECT linhas_json FROM devolucao_venda_ml_v1994 WHERE order_id IN ({marcas})",
+                                    ids).fetchall():
+                for it in _filial_json(lj, []) or []:
+                    if isinstance(it, dict) and it.get("sku") and it.get("preco") is not None:
+                        linhas.append((str(it["sku"]), float(it["preco"])))
+    return linhas
+
+
+def devolucao_valor_venda(d: dict[str, Any], nf: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Valor de venda das peças que voltaram (preço × quantidade devolvida). Kit: o preço dividido pelas peças.
+    Sem preço nenhum, o valor da NF de venda (guardada)."""
+    preco_peca: dict[str, float] = {}
+    for sku, unit in _devolucao_linhas_preco(d):
+        pecas = _devolucao_pecas([{"SKU": sku, "Quantidade": 1}])
+        unidades = sum(int(p["qtd_vendida"]) for p in pecas.values()) or 1
+        for cod, p in pecas.items():
+            preco_peca.setdefault(cod, unit / unidades)
+    por_item: dict[str, float] = {}
+    for i in d["itens"]:
+        q = int(i["qtd"] or 0)
+        if q > 0 and i["sku"] in preco_peca:
+            por_item[i["sku"]] = round(por_item.get(i["sku"], 0.0) + preco_peca[i["sku"]] * q, 2)
+    if por_item:
+        return {"total": round(sum(por_item.values()), 2), "por_item": por_item, "origem": "venda"}
+    if nf is None and d.get("order_key"):
+        with DB_LOCK:
+            r = DB.execute("SELECT nf_json FROM devolucao_nf_v1995 WHERE order_key=?", (d["order_key"],)).fetchone()
+        nf = json.loads(r[0]) if r else None
+    if nf and nf.get("valor") is not None:
+        return {"total": round(float(nf["valor"]), 2), "por_item": {}, "origem": "nf"}
+    return {"total": None, "por_item": {}, "origem": ""}
+
+
+def devolucoes_relatorio_linhas(ids: list[int]) -> tuple[list[str], list[list[Any]]]:
+    """Uma linha por peça que voltou, das devoluções do lote."""
+    cab = ["NF", "NFD", "NOME", "SKU E QUANTIDADE", "VALOR", "MOTIVO"]
+    return cab, [[r["nf"], r["nfd"], r["nome"], f"{r['sku']} / {r['qtd']} {'UNIDADE' if r['qtd'] == 1 else 'UNIDADES'}",
+                  r["valor"], r["motivo"]] for r in devolucoes_relatorio_dados(ids)]
+
+
+def devolucao_exportar(usuario: str, filial: str) -> dict[str, Any]:
+    """V19.97 (dono, 27/10): um lote com as devoluções TRATADAS que ainda não foram exportadas (de qualquer mês).
+    Cada uma fica marcada com o lote: clicar de novo não duplica. Sem desfazer; o lote pode ser baixado de novo."""
+    with DB_LOCK:
+        DB.execute("BEGIN IMMEDIATE")
+        try:
+            ids = [int(r[0]) for r in DB.execute(
+                "SELECT id FROM devolucao_v1988 WHERE situacao='tratada' AND exportacao_id IS NULL"
+                + ("" if filial == FILIAL_TODAS else " AND filial=?") + " ORDER BY recebido_em, id",
+                [] if filial == FILIAL_TODAS else [filial]).fetchall()]
+            if not ids:
+                DB.rollback()
+                raise ValueError("Nenhuma devolução tratada para exportar: todas já foram exportadas.")
+            cur = DB.execute("INSERT INTO devolucao_exportacao_v1997(criado_em,criado_por,filial,devolucoes) "
+                             "VALUES(?,?,?,?)", (now_iso(), usuario, filial, len(ids)))
+            lote = int(cur.lastrowid)
+            DB.execute(f"UPDATE devolucao_v1988 SET exportacao_id=? WHERE id IN ({','.join('?' * len(ids))})",
+                       (lote, *ids))
+            for i in ids:
+                _devolucao_evento(i, usuario, "exportada", {"lote": lote})
+            DB.commit()
+        except ValueError:
+            raise
+        except Exception:
+            DB.rollback()
+            raise
+    audit(usuario, "devolucao.exportar", f"lote {lote}: {len(ids)}")
+    return {"ok": True, "id": lote, "devolucoes": ids}
+
+
+def _devolucao_lote(lote_id: Any, filial: str) -> dict[str, Any]:
+    try:
+        lote_id = int(lote_id)
+    except (TypeError, ValueError):
+        raise ValueError("Lote não informado.")
+    with DB_LOCK:
+        r = DB.execute("SELECT * FROM devolucao_exportacao_v1997 WHERE id=?", (lote_id,)).fetchone()
+    if r is None:
+        raise ValueError("Lote não encontrado.")
+    if filial != FILIAL_TODAS and r["filial"] != filial:
+        raise PermissionError("Este lote é de outra filial.")
+    return dict(r)
+
+
+def devolucoes_lote_ids(lote_id: Any, filial: str) -> list[int]:
+    lote = _devolucao_lote(lote_id, filial)
+    with DB_LOCK:
+        return [int(r[0]) for r in DB.execute("SELECT id FROM devolucao_v1988 WHERE exportacao_id=? ORDER BY recebido_em, id",
+                                              (lote["id"],)).fetchall()]
+
+
+def devolucoes_exportacoes(filial: str) -> list[dict[str, Any]]:
+    """Histórico de lotes, o mais novo primeiro."""
+    with DB_LOCK:
+        return [dict(r) for r in DB.execute(
+            "SELECT * FROM devolucao_exportacao_v1997" + ("" if filial == FILIAL_TODAS else " WHERE filial=?")
+            + " ORDER BY id DESC LIMIT 200", [] if filial == FILIAL_TODAS else [filial]).fetchall()]
+
+
+def devolucoes_relatorio_dados(ids: list[int]) -> list[dict[str, Any]]:
+    """Dados de cada linha do relatório (uma por peça que voltou), na ordem em que chegaram."""
+    with DB_LOCK:
+        devs = sorted((d for d in (_devolucao_ler(int(i)) for i in ids) if d), key=lambda d: (d["recebido_em"], d["id"]))
+    linhas: list[dict[str, Any]] = []
+    for d in devs:
+        nf = None
+        if not d["sem_pedido"]:
+            try:
+                nf = _devolucao_nf_ler(d["order_key"], d["marketplace"], d["filial"], d["pedido"]).get("nf")
+            except Exception:
+                nf = None
+        valor = devolucao_valor_venda(d, nf)
+        motivo = devolucao_motivo(d)[1]
+        itens = [i for i in d["itens"] if int(i["qtd"] or 0) > 0]
+        for n, i in enumerate(itens):
+            q = int(i["qtd"])
+            if valor["origem"] == "venda":
+                v: Any = valor["por_item"].get(i["sku"], "")
+            else:
+                v = valor["total"] if (n == 0 and valor["total"] is not None) else ""
+            linhas.append({"devolucao": d["id"], "nf": (nf or {}).get("numero", ""), "nfd": d.get("documento_apollo") or "",
+                           "nome": d.get("cliente") or "", "sku": i["sku"], "qtd": q, "valor": v, "motivo": motivo,
+                           "descricao": i.get("descricao") or "", "marketplace": d.get("marketplace") or "",
+                           "pedido": d.get("pedido") or "", "chegou": _devolucao_dia_br(d["recebido_em"])})
+    return linhas
+
+
+_MESES_PT = ("janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro",
+             "novembro", "dezembro")
+
+
+def devolucoes_relatorio_xlsx(lote_id: Any, filial: str) -> bytes:
+    """V19.97: planilha no formato da equipe (NF | NFD | NOME | SKU E QUANTIDADE | VALOR | MOTIVO), com título,
+    cabeçalho fixo com filtro, linhas alternadas, total e a aba "Resumo por motivo". Só biblioteca padrão."""
+    import io
+    import zipfile
+    lote = _devolucao_lote(lote_id, filial)
+    dados = devolucoes_relatorio_dados(devolucoes_lote_ids(lote["id"], filial))
+    esc = html_module.escape
+    agora = datetime.now(BR_TZ)
+    filial_nome = "todas as filiais" if lote["filial"] == FILIAL_TODAS else CASAS.get(lote["filial"], lote["filial"])
+    try:
+        quando = datetime.fromisoformat(lote["criado_em"]).astimezone(BR_TZ).strftime("%d/%m/%Y %H:%M")
+    except ValueError:
+        quando = lote["criado_em"]
+    subtitulo = (f"Lote {lote['id']} · devoluções tratadas · {filial_nome} · exportado em {quando} "
+                 f"por {lote['criado_por']}")
+    _ = agora
+
+    def cel(col: int, lin: int, valor: Any, estilo: int) -> str:
+        ref = f"{_xlsx_col(col)}{lin}"
+        if valor is None or valor == "":
+            return f'<c r="{ref}" s="{estilo}"/>'
+        if isinstance(valor, (int, float)) and not isinstance(valor, bool):
+            return f'<c r="{ref}" s="{estilo}"><v>{valor}</v></c>'
+        if isinstance(valor, str) and valor.startswith("="):
+            return f'<c r="{ref}" s="{estilo}"><f>{esc(valor[1:])}</f></c>'
+        return f'<c r="{ref}" s="{estilo}" t="inlineStr"><is><t xml:space="preserve">{esc(str(valor))}</t></is></c>'
+
+    def folha(titulo: str, cab: list[str], linhas: list[list[Any]], larguras: list[float], alinhar: list[str],
+              total: list[Any] | None) -> str:
+        """alinhar por coluna: t = texto, c = centro, m = moeda, n = número."""
+        ncol = len(cab)
+        ult = _xlsx_col(ncol - 1)
+        base = {"t": (4, 7), "c": (5, 8), "m": (6, 9), "n": (12, 13)}
+        rows = [f'<row r="1" ht="26" customHeight="1">{cel(0, 1, titulo, 1)}</row>',
+                f'<row r="2" ht="18" customHeight="1">{cel(0, 2, subtitulo, 2)}</row>',
+                '<row r="3" ht="8" customHeight="1"/>',
+                '<row r="4" ht="22" customHeight="1">' + "".join(cel(k, 4, c, 3) for k, c in enumerate(cab)) + "</row>"]
+        r = 4
+        for n, l in enumerate(linhas):
+            r += 1
+            zebra = n % 2
+            rows.append(f'<row r="{r}" ht="18" customHeight="1">' +
+                        "".join(cel(k, r, v, base[alinhar[k]][zebra]) for k, v in enumerate(l)) + "</row>")
+        fim = r
+        if total is not None:
+            r += 1
+            rows.append(f'<row r="{r}" ht="20" customHeight="1">' + "".join(
+                cel(k, r, (v.replace("{fim}", str(fim)) if isinstance(v, str) else v),
+                    11 if alinhar[k] == "m" else (14 if alinhar[k] == "n" else 10)) for k, v in enumerate(total)) + "</row>")
+        cols = "".join(f'<col min="{k + 1}" max="{k + 1}" width="{w}" customWidth="1"/>' for k, w in enumerate(larguras))
+        filtro = f'<autoFilter ref="A4:{ult}{max(fim, 4)}"/>' if linhas else ""
+        return ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+                '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+                'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+                '<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>'
+                '<sheetViews><sheetView workbookViewId="0" showGridLines="0">'
+                '<pane ySplit="4" topLeftCell="A5" activePane="bottomLeft" state="frozen"/>'
+                '<selection pane="bottomLeft" activeCell="A5" sqref="A5"/></sheetView></sheetViews>'
+                '<sheetFormatPr defaultRowHeight="15"/>'
+                f'<cols>{cols}</cols><sheetData>{"".join(rows)}</sheetData>{filtro}'
+                f'<mergeCells count="2"><mergeCell ref="A1:{ult}1"/><mergeCell ref="A2:{ult}2"/></mergeCells>'
+                '<pageMargins left="0.4" right="0.4" top="0.5" bottom="0.5" header="0.3" footer="0.3"/>'
+                '<pageSetup paperSize="9" orientation="landscape" fitToWidth="1" fitToHeight="0"/>'
+                '</worksheet>')
+
+    numero = lambda v: int(v) if isinstance(v, str) and v.isdigit() and len(v) <= 15 else v   # sem o aviso de "número como texto"
+    linhas = [[numero(r["nf"]), numero(r["nfd"]), r["nome"], f"{r['sku']} / {r['qtd']} {'UNIDADE' if r['qtd'] == 1 else 'UNIDADES'}",
+               r["valor"] if isinstance(r["valor"], (int, float)) else "", r["motivo"]] for r in dados]
+    devolucoes = len({r["devolucao"] for r in dados})
+    pecas = sum(r["qtd"] for r in dados)
+    aba1 = folha(f"Relatório de devoluções · lote {lote['id']}", ["NF", "NFD", "NOME", "SKU E QUANTIDADE", "VALOR", "MOTIVO"], linhas,
+                 [12, 12, 44, 30, 16, 42], ["c", "c", "t", "t", "m", "t"],
+                 [f"TOTAL · {devolucoes} {'devolução' if devolucoes == 1 else 'devoluções'}", "", "", f"{pecas} peças", "=SUM(E5:E{fim})", ""] if dados else None)
+    por_motivo: dict[str, dict[str, Any]] = {}
+    for r in dados:
+        m = por_motivo.setdefault(r["motivo"] or "Sem motivo", {"devs": set(), "pecas": 0, "valor": 0.0})
+        m["devs"].add(r["devolucao"])
+        m["pecas"] += r["qtd"]
+        if isinstance(r["valor"], (int, float)):
+            m["valor"] = round(m["valor"] + r["valor"], 2)
+    total_valor = sum(m["valor"] for m in por_motivo.values()) or 0
+    resumo = [[mot, len(m["devs"]), m["pecas"], m["valor"], round(m["valor"] / total_valor, 4) if total_valor else ""]
+              for mot, m in sorted(por_motivo.items(), key=lambda x: -x[1]["valor"])]
+    aba2 = folha("Resumo por motivo", ["MOTIVO", "DEVOLUÇÕES", "PEÇAS", "VALOR", "% DO VALOR"], resumo,
+                 [44, 16, 12, 17, 15], ["t", "n", "n", "m", "n"],
+                 ["TOTAL", devolucoes, pecas, "=SUM(D5:D{fim})", ""] if resumo else None)
+    # a coluna "% do valor" usa o estilo de percentual
+    aba2 = re.sub(r'<c r="E(\d+)" s="1[23]"', lambda m_: f'<c r="E{m_.group(1)}" s="{15 if int(m_.group(1)) % 2 else 16}"', aba2)
+    folhas = [("Devoluções", aba1), ("Resumo por motivo", aba2)]
+
+    borda = '<border><left style="thin"><color rgb="FFDCE5EF"/></left><right style="thin"><color rgb="FFDCE5EF"/></right>' \
+            '<top style="thin"><color rgb="FFDCE5EF"/></top><bottom style="thin"><color rgb="FFDCE5EF"/></bottom><diagonal/></border>'
+    borda_total = '<border><left/><right/><top style="medium"><color rgb="FF12345B"/></top><bottom style="medium"><color rgb="FF12345B"/></bottom><diagonal/></border>'
+    al = lambda h: f'<alignment horizontal="{h}" vertical="center"/>'
+    def xf(font: int, fill: int, border: int, h: str, num: int = 0) -> str:
+        aplica_num = ' applyNumberFormat="1"' if num else ""
+        return (f'<xf numFmtId="{num}" fontId="{font}" fillId="{fill}" borderId="{border}" '
+                f'applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1"{aplica_num}>{al(h)}</xf>')
+    estilos = [
+        '<xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>',                    # 0
+        xf(2, 0, 0, "left"),                                                       # 1 título
+        xf(3, 0, 0, "left"),                                                       # 2 subtítulo
+        '<xf numFmtId="0" fontId="1" fillId="2" borderId="1" applyFont="1" applyFill="1" applyBorder="1" '
+        'applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>',  # 3 cabeçalho
+        xf(0, 0, 1, "left"), xf(0, 0, 1, "center"), xf(0, 0, 1, "right", 164),    # 4 5 6
+        xf(0, 3, 1, "left"), xf(0, 3, 1, "center"), xf(0, 3, 1, "right", 164),    # 7 8 9 (zebra)
+        xf(4, 4, 2, "left"), xf(4, 4, 2, "right", 164),                           # 10 11 total
+        xf(0, 0, 1, "center", 3), xf(0, 3, 1, "center", 3), xf(4, 4, 2, "center", 3),  # 12 13 14 número
+        xf(0, 0, 1, "center", 10), xf(0, 3, 1, "center", 10),                     # 15 16 percentual
+    ]
+    styles = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+              '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
+              '<numFmts count="1"><numFmt numFmtId="164" formatCode="&quot;R$&quot;\\ #,##0.00"/></numFmts>'
+              '<fonts count="5"><font><sz val="10"/><color rgb="FF18324A"/><name val="Calibri"/></font>'
+              '<font><b/><sz val="10"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font>'
+              '<font><b/><sz val="16"/><color rgb="FF12345B"/><name val="Calibri"/></font>'
+              '<font><sz val="10"/><color rgb="FF586A7D"/><name val="Calibri"/></font>'
+              '<font><b/><sz val="10"/><color rgb="FF12345B"/><name val="Calibri"/></font></fonts>'
+              '<fills count="5"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>'
+              '<fill><patternFill patternType="solid"><fgColor rgb="FF12345B"/></patternFill></fill>'
+              '<fill><patternFill patternType="solid"><fgColor rgb="FFF4F7FB"/></patternFill></fill>'
+              '<fill><patternFill patternType="solid"><fgColor rgb="FFE7EEF7"/></patternFill></fill></fills>'
+              f'<borders count="3"><border><left/><right/><top/><bottom/><diagonal/></border>{borda}{borda_total}</borders>'
+              '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
+              f'<cellXfs count="{len(estilos)}">{"".join(estilos)}</cellXfs>'
+              '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>')
+    n = len(folhas)
+    ct = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+          '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+          '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+          '<Default Extension="xml" ContentType="application/xml"/>'
+          '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+          + "".join(f'<Override PartName="/xl/worksheets/sheet{i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>'
+                    for i in range(n))
+          + '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>')
+    rels = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+            '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+            '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>')
+    nomes_def = "".join(
+        f'<definedName name="_xlnm._FilterDatabase" localSheetId="{i}" hidden="1">\'{esc(nome)}\'!$A$4:${_xlsx_col(ncols - 1)}${fim}</definedName>'
+        for i, (nome, ncols, fim) in enumerate([("Devoluções", 6, 4 + len(linhas)), ("Resumo por motivo", 5, 4 + len(resumo))])
+        if fim > 4)
+    wb = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+          '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+          'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>'
+          + "".join(f'<sheet name="{esc(nome)}" sheetId="{i + 1}" r:id="rId{i + 1}"/>' for i, (nome, _) in enumerate(folhas))
+          + "</sheets>" + (f"<definedNames>{nomes_def}</definedNames>" if nomes_def else "") + "</workbook>")
+    wbrels = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+              '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+              + "".join(f'<Relationship Id="rId{i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet{i + 1}.xml"/>'
+                        for i in range(n))
+              + f'<Relationship Id="rId{n + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>')
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", ct)
+        z.writestr("_rels/.rels", rels)
+        z.writestr("xl/workbook.xml", wb)
+        z.writestr("xl/_rels/workbook.xml.rels", wbrels)
+        z.writestr("xl/styles.xml", styles)
+        for i, (_, conteudo) in enumerate(folhas):
+            z.writestr(f"xl/worksheets/sheet{i + 1}.xml", conteudo)
+    return buf.getvalue()
 
 
 def _devolucao_vendidas_por_peca(mes: str, filial: str) -> dict[str, int]:
@@ -18849,7 +19241,8 @@ def _devolucao_nf_ler(order_key: str, marketplace: str, filial: str, pedido: str
     agora = time.time()
     with _DEVOLUCAO_ENVIO_LOCK:
         if _DEVOLUCAO_NF_FALTA.get(order_key, 0) > agora:
-            return {"ok": True, "nf": None, "motivo": "O Mercado Livre ainda não tem a nota desta venda."}
+            return {"ok": True, "nf": None, "motivo": f"{'A Shopee' if marketplace == 'Shopee' else 'O Mercado Livre'} "
+                                                      "ainda não tem a nota desta venda."}
     if marketplace == "Shopee":
         nf = _devolucao_nf_shopee(normalize(pedido) or order_key)
         if nf:
@@ -34632,6 +35025,41 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
+        if path == "/api/devolucoes/relatorio.xlsx":
+            # V19.97: planilha NF | NFD | NOME | SKU E QUANTIDADE | VALOR | MOTIVO de um lote. Somente leitura.
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            try:
+                lote = (query.get("lote") or [""])[0]
+                conteudo = devolucoes_relatorio_xlsx(lote, self.filial_da_requisicao(ctx))
+                mes = f"lote{int(lote)}"
+                tipo = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                body, compressed = self.encoded_body(conteudo, tipo)
+                self.send_response(200)
+                self.send_security_headers()
+                self.send_header("Content-Type", tipo)
+                self.send_header("Content-Disposition", f'attachment; filename="devolucoes_{mes}.xlsx"')
+                self.send_header("Content-Length", str(len(body)))
+                self.send_header("Cache-Control", "no-store")
+                if compressed:
+                    self.send_header("Content-Encoding", "gzip")
+                self.end_headers()
+                self.wfile.write(body)
+            except PermissionError as exc:
+                self.send_json({"ok": False, "error": str(exc), "code": "OUTRA_FILIAL"}, 403)
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/devolucoes/exportacoes":
+            # V19.97: histórico de lotes exportados.
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            self.send_json({"ok": True, "exportacoes": devolucoes_exportacoes(self.filial_da_requisicao(ctx))})
+            return
         if path == "/api/devolucoes/nf":
             # V19.95: NF de venda — ?id= (admin, devolução registrada) ou ?chave= (operador, venda aberta).
             ctx = self.auth()
@@ -36252,6 +36680,19 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.send_json({"ok": False, "error": str(exc), "code": "OUTRA_FILIAL"}, 403)
             except ValueError as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 400)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/devolucoes/exportar":
+            # V19.97: novo lote com as tratadas ainda não exportadas (a planilha é baixada pelo relatorio.xlsx?lote=).
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            try:
+                r = devolucao_exportar(ctx["username"], self.filial_da_requisicao(ctx))
+                self.send_json({"ok": True, "lote": r["id"], "devolucoes": len(r["devolucoes"])})
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc), "code": "NADA_A_EXPORTAR"}, 409)
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return

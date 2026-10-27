@@ -5,7 +5,7 @@ Shopee, manuais), expedição, separação, conferência por código de barras, 
 produtos/SKUs/EANs, kits, precificação, promoções, rentabilidade, estoque, Central de
 Pendências e histórico.
 
-Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V19.96).
+Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V19.97).
 
 ---
 
@@ -1259,7 +1259,7 @@ Rotas `GET /api/devolucoes/resumo?mes=` (KPIs do mês × anterior, taxa = peças
 peça) e `POST /api/devolucoes/valores` (frete, destino, custo; histórico `valores`). **NF de venda**:
 `GET /api/devolucoes/nf?id=` (admin) / `?chave=` (operador) lê `/users/{seller}/invoices/orders/{order}` (número,
 série, chave, data, valor; Full = série 2) uma vez e guarda em `devolucao_nf_v1995`; sem PDF da DANFE por essa API;
-**V19.96:** a Shopee traz (`invoice_data` do `get_order_detail`, `_devolucao_nf_shopee`; conferido 27/10). Telas com `theme.css` (o padrão das outras). Teste: `TESTES/test_devolucoes_lucro_v1995.py`.
+**V19.96:** a Shopee traz (`invoice_data` do `get_order_detail`, `_devolucao_nf_shopee`; conferido 27/10). **V19.97 — relatório no formato da equipe, exportado por LOTE** (dono, 27/10: sem duplicar). "Exportar Excel" → `POST /api/devolucoes/exportar` cria um lote (`devolucao_exportacao_v1997`) com as devoluções **tratadas** que ainda não foram exportadas, de qualquer mês, e marca cada uma (`devolucao_v1988.exportacao_id`, evento `exportada`); clicar de novo não duplica (409 `NADA_A_EXPORTAR`); sem desfazer. `GET /api/devolucoes/relatorio.xlsx?lote=` baixa (de novo) o lote; `GET /api/devolucoes/exportacoes` = histórico. Planilha própria (`devolucoes_relatorio_xlsx`, título, cabeçalho fixo com filtro, zebra, total por fórmula, aba "Resumo por motivo"): NF | NFD | NOME | SKU E QUANTIDADE | VALOR | MOTIVO, uma linha por peça. NFD = o documento do Apollo digitado ao tratar. VALOR = preço de venda × quantidade que voltou (`devolucao_valor_venda`: preço da reclamação do ML > vendas copiadas > venda lida no ML; kit dividido pelas peças; sem preço, o valor da NF). MOTIVO = `devolucao_v1988.motivo_dev` escolhido pelo admin (`DEVOLUCAO_MOTIVOS_DEV`), senão o da reclamação do ML (`_devolucao_motivo_do_ml`). Teste: `TESTES/test_devolucoes_relatorio_v1997.py`. Telas com `theme.css` (o padrão das outras). Teste: `TESTES/test_devolucoes_lucro_v1995.py`.
 
 **V19.45 — Cliente do Full pela NF-e do ML** (decisões do dono, 16/10). Venda Full não passa pela fila, e a integração
 ML → Apollo cria o cliente com o nome da conta ("Premium Flex") em vez da razão social da nota (M2 SOLUCOES GRAFICAS).

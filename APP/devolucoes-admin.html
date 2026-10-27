@@ -85,6 +85,7 @@ body{margin:0;background:var(--nk-canvas);color:var(--nk-ink);font-family:var(--
     <div class="nk-acoes">
       <input type="month" class="mes" id="fMes" title="Mês em que a peça chegou">
       <a class="nk-btn" href="/expedicao/devolucoes" target="_blank" rel="noopener"><i class=nk-i-box></i> Receber devolução</a>
+      <button class="nk-btn" id="btnExportar" onclick="exportarExcel()"><i class=nk-i-download></i> Exportar Excel</button>
       <button class="nk-btn" onclick="carregar()"><i class=nk-i-refresh></i> Atualizar</button>
     </div>
   </div>
@@ -111,6 +112,7 @@ body{margin:0;background:var(--nk-canvas);color:var(--nk-ink);font-family:var(--
         </table>
       </div>
     </section>
+    <div>
     <section class="nk-painel">
       <div class="nk-painel-tit"><div><h2>Peças que mais voltam</h2><p>No mês, com a taxa sobre as unidades vendidas.</p></div></div>
       <div class="tab-rolar">
@@ -120,6 +122,14 @@ body{margin:0;background:var(--nk-canvas);color:var(--nk-ink);font-family:var(--
         </table>
       </div>
     </section>
+    <section class="nk-painel" style="margin-top:14px">
+      <div class="nk-painel-tit"><div><h2>Exportações</h2><p>Cada exportação leva só as devoluções tratadas que ainda não foram exportadas.</p></div></div>
+      <table class="nk-tab">
+        <thead><tr><th>Lote</th><th>Quando</th><th class="num">Devoluções</th><th></th></tr></thead>
+        <tbody id="lotes"><tr><td colspan="4" class="vazio">Carregando…</td></tr></tbody>
+      </table>
+    </section>
+    </div>
   </div>
 </main>
 <div class="fundo" id="fundo" hidden onclick="fechar()"></div>
@@ -127,9 +137,10 @@ body{margin:0;background:var(--nk-canvas);color:var(--nk-ink);font-family:var(--
 <script>
 let FILIAL = ""; try { FILIAL = localStorage.getItem("nk_filial_v1895") || ""; } catch (_) {}
 const API = "/expedicao/api/devolucoes";
-let MOTIVOS = {}, DESTINOS = {};
+let MOTIVOS = {}, DESTINOS = {}, MOTIVOS_DEV = {};
 let lista = [];
 let resumo = null;
+let A_EXPORTAR = 0;
 let aberta = null;   // id da devolução aberta na gaveta
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -173,12 +184,17 @@ async function carregar() {
   const q = new URLSearchParams({mes, situacao: $("fSituacao").value, estado: $("fEstado").value,
                                  marketplace: $("fMarketplace").value});
   try {
-    const [d, r] = await Promise.all([api("?" + q), api("/resumo?mes=" + encodeURIComponent(mes))]);
+    const [d, r, ex] = await Promise.all([api("?" + q), api("/resumo?mes=" + encodeURIComponent(mes)), api("/exportacoes")]);
     $("erro").hidden = true;
     MOTIVOS = d.motivos || {};
     DESTINOS = d.destinos || {};
+    MOTIVOS_DEV = d.motivos_dev || {};
     lista = d.devolucoes || [];
     resumo = r;
+    A_EXPORTAR = d.a_exportar || 0;
+    $("btnExportar").innerHTML = `<i class=nk-i-download></i> Exportar Excel${A_EXPORTAR ? ` (${A_EXPORTAR})` : ""}`;
+    $("btnExportar").title = A_EXPORTAR ? `${A_EXPORTAR} devolução(ões) tratada(s) ainda não exportada(s)` : "Nenhuma devolução tratada para exportar";
+    desenharLotes(ex.exportacoes || []);
     desenharKpis();
     desenharRanking();
     desenhar();
@@ -255,16 +271,17 @@ function desenhar() {
     `<tr class="cl" data-id="${d.id}"><td>${esc(data(d.recebido_em))}</td>` +
     `<td>${d.sem_pedido ? `<span class="nk-selo warn">sem pedido</span> ${esc(d.pedido)}` : `<b>${esc(d.pedido)}</b>`}` +
     `<div class="mini">${esc(d.marketplace || "—")} · ${esc(d.filial_nome)}</div></td>` +
-    `<td>${esc(d.cliente || "—")}</td><td>${pecas(d)}</td><td class="num">${perdaCelula(d.valores)}</td>` +
-    `<td>${d.situacao === "tratada" ? `<span class="nk-selo ok">tratada</span><div class="mini">${esc(d.documento_apollo)}</div>`
-                                    : `<span class="nk-selo warn">a tratar</span>`}</td></tr>`).join("")
+    `<td>${esc(d.cliente || "—")}${d.motivo_devolucao && d.motivo_devolucao.rotulo ? `<div class="mini">${esc(d.motivo_devolucao.rotulo)}</div>` : ""}</td><td>${pecas(d)}</td><td class="num">${perdaCelula(d.valores)}</td>` +
+    `<td>${d.situacao === "tratada" ? `<span class="nk-selo ok">tratada</span><div class="mini">NFD ${esc(d.documento_apollo)}</div>`
+                                    : `<span class="nk-selo warn">a tratar</span>`}` +
+    `${d.exportacao_id ? `<div class="mini">exportada · lote ${d.exportacao_id}</div>` : ""}</td></tr>`).join("")
     : `<tr><td colspan="6" class="vazio">Nenhuma devolução neste filtro.</td></tr>`;
   $("corpo").querySelectorAll("tr[data-id]").forEach(tr => tr.addEventListener("click", () => abrir(+tr.dataset.id)));
 }
 
 // ---------- gaveta ----------
 const NOMES_ACAO = {registrada: "Recebida", corrigida: "Corrigida", tratada: "Tratada", reaberta: "Reaberta",
-                    valores: "Valores alterados"};
+                    valores: "Valores alterados", exportada: "Exportada"};
 
 function detalheEvento(e) {
   if (e.acao === "corrigida")
@@ -274,7 +291,8 @@ function detalheEvento(e) {
     return "<br>" + esc(Object.keys(p).map(k => `${k.replace(".destino", " destino").replace(".custo", " custo")}: ` +
       `${a[k] ?? "—"} → ${p[k] ?? "—"}`).join("; "));
   }
-  if (e.acao === "tratada") return ` · documento ${esc(e.detalhe.documento)}`;
+  if (e.acao === "tratada") return ` · NFD ${esc(e.detalhe.documento)}`;
+  if (e.acao === "exportada") return ` · lote ${esc(e.detalhe.lote)}`;
   if (e.acao === "reaberta" && e.detalhe.documento) return ` · documento anterior ${esc(e.detalhe.documento)}`;
   return "";
 }
@@ -305,7 +323,13 @@ function abrir(id) {
     `<div class="c total"><div class="rot">Perda</div><b>${v.incompleta ? "incompleta" : brl(v.perda)}</b>` +
     `<div class="mini">${v.incompleta ? "falta: " + esc((v.falta || []).join(", ")) : (v.confirmada ? "confirmada" : "a confirmar até tratar")}</div></div>` +
     `</div>` +
-    `<div class="secao"><h3>NF de venda</h3><div id="nfBox" class="mini">${d.sem_pedido ? "Devolução sem pedido." : "Buscando a nota…"}</div></div>` +
+    `<div class="secao"><h3>NF de venda</h3><div id="nfBox" class="mini">${d.sem_pedido ? "Devolução sem pedido." : "Buscando a nota…"}</div>` +
+    (d.valor_venda && d.valor_venda.total != null ? `<div class="mini" style="margin-top:4px">Valor de venda das peças que voltaram: <b>${brl(d.valor_venda.total)}</b>${d.valor_venda.origem === "nf" ? " (valor da NF: sem o preço por peça)" : ""}</div>` : "") +
+    `</div>` +
+    `<div class="secao"><h3>Motivo da devolução</h3><div class="frete-linha">` +
+    `<select class="campo" id="motivoDev" style="max-width:360px"><option value="">${d.motivo_devolucao && d.motivo_devolucao.origem === "ml" ? "Do Mercado Livre: " + esc(d.motivo_devolucao.rotulo) : "— escolher —"}</option>` +
+    Object.entries(MOTIVOS_DEV).map(([k, t]) => `<option value="${k}"${d.motivo_dev === k ? " selected" : ""}>${esc(t)}</option>`).join("") +
+    `</select><span class="mini">${d.motivo_devolucao && d.motivo_devolucao.origem === "ml" && !d.motivo_dev ? "vem da reclamação do ML; escolha outro só para corrigir" : ""}</span></div></div>` +
     `<div class="secao"><h3>Peças</h3>` +
     d.itens.map(i => {
       const x = val[i.id] || {};
@@ -331,9 +355,10 @@ function abrir(id) {
     `<div class="linha-acao"><button class="nk-btn pri" onclick="salvar(${d.id})">Salvar alterações</button></div>` +
     `<div class="secao"><h3>Apollo</h3>` +
     (tratada
-      ? `<div class="tratada-box">Tratada por <b>${esc(d.tratada_por)}</b> em ${esc(data(d.tratada_em))} · documento <b>${esc(d.documento_apollo)}</b>` +
+      ? `<div class="tratada-box">Tratada por <b>${esc(d.tratada_por)}</b> em ${esc(data(d.tratada_em))} · NFD <b>${esc(d.documento_apollo)}</b>` +
+        (d.exportacao_id ? `<div class="mini" style="margin-top:4px">Já exportada no lote ${d.exportacao_id}: mudar agora não muda o que foi enviado.</div>` : "") +
         `<div class="linha-acao"><button class="nk-btn" onclick="reabrir(${d.id})">Reabrir</button></div></div>`
-      : `<div class="frete-linha"><input class="campo" id="docApollo" placeholder="Nº do documento no Apollo" style="flex:1;min-width:220px">` +
+      : `<div class="frete-linha"><input class="campo" id="docApollo" placeholder="NFD (nota de devolução no Apollo)" style="flex:1;min-width:220px">` +
         `<button class="nk-btn pri" onclick="tratar(${d.id})">Marcar tratada</button></div>` +
         `<div class="mini" style="margin-top:6px">Ao tratar, o custo das peças e o frete ficam gravados: a perda deixa de ser "a confirmar".</div>`) +
     `</div>` +
@@ -416,20 +441,23 @@ async function salvar(id) {
     if (custo !== (x.custo ?? null) && !(custo === null && x.custo_origem !== "manual")) it.custo = custo;
     if (Object.keys(it).length > 1) itensValores.push(it);
   }
+  const motivoDev = $("motivoDev").value;
+  const mudouMotivo = motivoDev !== (d.motivo_dev || "");
   const frete = numeroOuVazio($("frete").value);
   if (Number.isNaN(frete)) return avisar("Frete inválido.", "bad");
   const freteAtual = v.frete_origem === "digitado" ? v.frete : null;
   const mudouFrete = frete !== freteAtual;
-  if (!correcao.length && !itensValores.length && !mudouFrete) return avisar("Nada mudou.", "info");
+  if (!correcao.length && !itensValores.length && !mudouFrete && !mudouMotivo) return avisar("Nada mudou.", "info");
   try {
     let versao = d.versao;
     if (correcao.length) {
       const r = await api("/corrigir", {id, versao, itens: correcao});
       versao = r.devolucao.versao;
     }
-    if (itensValores.length || mudouFrete) {
+    if (itensValores.length || mudouFrete || mudouMotivo) {
       const corpo = {id, versao, itens: itensValores};
       if (mudouFrete) corpo.frete = frete;
+      if (mudouMotivo) corpo.motivo_dev = motivoDev;
       await api("/valores", corpo);
     }
     avisar("Alterações salvas.", "ok");
@@ -443,7 +471,7 @@ async function tratar(id) {
   const d = lista.find(x => x.id === id);
   const documento = $("docApollo").value.trim();
   // Peças todas zeradas (lançada por engano): nada a lançar no Apollo, trata sem documento.
-  if (!documento && d.itens.some(i => i.qtd > 0)) return avisar("Informe o nº do documento do Apollo.", "bad");
+  if (!documento && d.itens.some(i => i.qtd > 0)) return avisar("Informe a NFD (nota de devolução do Apollo).", "bad");
   try {
     await api("/tratar", {id, versao: d.versao, documento});
     avisar("Devolução marcada como tratada.", "ok");
@@ -464,6 +492,46 @@ async function reabrir(id) {
     avisar(erroDe(e), "bad");
   }
   await carregar();
+}
+
+// V19.97 (dono, 27/10): exportação por lote — só as tratadas que ainda não foram exportadas; cada uma fica marcada
+// com o lote (clicar de novo não duplica) e o histórico baixa o mesmo lote de novo.
+async function baixarLote(lote) {
+  try {
+    const r = await fetch(`${API}/relatorio.xlsx?lote=${encodeURIComponent(lote)}`,
+                          {credentials: "same-origin", headers: FILIAL ? {"X-Noromak-Filial": FILIAL} : {}});
+    if (!r.ok) throw new Error(`Erro ${r.status}`);
+    const url = URL.createObjectURL(await r.blob());
+    const a = document.createElement("a");
+    a.href = url; a.download = `devolucoes_lote${lote}.xlsx`;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  } catch (e) {
+    avisar("Não foi possível baixar o lote: " + e.message, "bad");
+  }
+}
+
+async function exportarExcel() {
+  if (!A_EXPORTAR) return avisar("Nenhuma devolução tratada para exportar: todas já foram exportadas.", "info");
+  const msg = `Exportar ${A_EXPORTAR} devolução(ões) tratada(s) que ainda não foram exportadas? ` +
+              "Elas ficam marcadas neste lote e não entram de novo na próxima exportação.";
+  const ok = window.nkConfirmar ? await nkConfirmar(msg) : confirm(msg);
+  if (!ok) return;
+  try {
+    const r = await api("/exportar", {});
+    await baixarLote(r.lote);
+    avisar(`Lote ${r.lote} exportado com ${r.devolucoes} devolução(ões).`, "ok");
+  } catch (e) {
+    avisar(e.message, "bad");
+  }
+  await carregar();
+}
+
+function desenharLotes(lotes) {
+  $("lotes").innerHTML = lotes.length ? lotes.slice(0, 12).map(l =>
+    `<tr><td><b>${l.id}</b></td><td>${esc(data(l.criado_em))}<div class="mini">${esc(l.criado_por)}</div></td>` +
+    `<td class="num">${num(l.devolucoes)}</td><td class="num"><button class="nk-btn mini" onclick="baixarLote(${l.id})">Baixar</button></td></tr>`).join("")
+    : `<tr><td colspan="4" class="vazio">Nenhuma exportação ainda.</td></tr>`;
 }
 
 carregar();
