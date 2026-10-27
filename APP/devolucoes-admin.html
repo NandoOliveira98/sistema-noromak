@@ -155,7 +155,7 @@ function abrir(id) {
     `<table><thead><tr><th>Peça</th><th>Vendido</th><th>Voltou</th><th>Estado</th><th>Motivo</th><th>Obs.</th></tr></thead><tbody>` +
     d.itens.map(i => `<tr data-item="${i.id}"><td class="pec">${esc(i.sku)}${i.fora_da_venda ? '<div class="aviso">não bate com a venda</div>' : ""}` +
       `<div class="sub">${esc(i.descricao)}</div></td><td>${i.qtd_vendida ?? "—"}</td>` +
-      `<td><input type="number" min="1" value="${i.qtd}" data-c="qtd"></td>` +
+      `<td><input type="number" min="0" value="${i.qtd}" data-c="qtd" title="0 = peça lançada por engano"></td>` +
       `<td><select data-c="estado"><option value="bom"${i.estado === "bom" ? " selected" : ""}>Bom</option>` +
       `<option value="ruim"${i.estado === "ruim" ? " selected" : ""}>Ruim</option></select></td>` +
       `<td><select data-c="motivo">${opcoesMotivo(i.motivo)}</select></td>` +

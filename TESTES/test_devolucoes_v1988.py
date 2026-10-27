@@ -249,6 +249,141 @@ class Devolucoes(TesteNoromak):
         st, corpo = self.cliente.pedir("POST", "/api/devolucoes/registrar", {"chave": "P100", "itens": []})
         self.assertEqual(st, 400, corpo)
 
+    # --- Revisão antes de subir (27/10) ---
+
+    def test_indice_comeca_pelo_pedido_mais_novo(self):
+        # ALTO: o índice andava do mais antigo para o mais novo; logo após o deploy o pedido de
+        # ontem (o que mais volta) não era achado e virava "sem pedido".
+        velho = (datetime.now(timezone.utc) - timedelta(days=100)).isoformat()
+        for i in range(6):
+            concluir(f"V{i}", [linha(f"V{i}", "VELHO", 1)], quando=velho)
+        concluir("NOVO1", [linha("NOVO1", "RECENTE", 1)])
+        with mock.patch.object(S, "DEVOLUCAO_INDICE_LOTE", 2):
+            S.devolucao_indexar()
+            with S.DB_LOCK:
+                achou = S.DB.execute("SELECT 1 FROM devolucao_busca_v1988 WHERE sku='RECENTE'").fetchone()
+            self.assertIsNotNone(achou)
+            for _ in range(10):
+                S.devolucao_indexar()
+        self.assertEqual(len(self.buscar("VELHO")), 6)
+
+    def test_reconcluido_vence_mesmo_indexando_do_mais_novo(self):
+        concluir("P100", [linha("P100", "EEE", 1)])
+        with mock.patch.object(S, "DEVOLUCAO_INDICE_LOTE", 1):
+            for _ in range(10):
+                S.devolucao_indexar()
+        self.assertEqual(self.buscar("AAA"), [])
+        self.assertEqual(self.buscar("EEE"), ["P100"])
+
+    def test_busca_nao_espera_outra_indexacao(self):
+        S.DEVOLUCAO_INDICE_LOCK.acquire()
+        try:
+            with mock.patch.object(S, "devolucao_indexar", side_effect=AssertionError("indexou")):
+                self.assertEqual(self.buscar("xyz"), [])
+        finally:
+            S.DEVOLUCAO_INDICE_LOCK.release()
+
+    def test_precificador_lido_uma_vez_por_lote(self):
+        for i in range(3):
+            concluir(f"K{i}", [linha(f"K{i}", "X1/X2", 1)])
+        with mock.patch.object(S, "_separacao_codigos_conhecidos", return_value=set()) as conhecidos:
+            S._devolucao_indexar_tudo()
+        self.assertEqual(conhecidos.call_count, 1)
+
+    def test_indice_limpa_o_que_passou_dos_180_dias(self):
+        S._devolucao_indexar_tudo()
+        velho = (datetime.now(timezone.utc) - timedelta(days=200)).isoformat()
+        with S.DB_LOCK:
+            S.DB.execute("UPDATE devolucao_busca_v1988 SET concluido_em=? WHERE order_key='P200'", (velho,))
+            S.DB.commit()
+        concluir("P900", [linha("P900", "ZZZ", 1)])
+        S._devolucao_indexar_tudo()
+        with S.DB_LOCK:
+            n = S.DB.execute("SELECT COUNT(*) FROM devolucao_busca_v1988 WHERE order_key='P200'").fetchone()[0]
+        self.assertEqual(n, 0)
+
+    def test_kit_fechado_pelo_ean_da_embalagem(self):
+        concluir("PK", [linha("PK", "KIT2-0893600022", 1, EAN="")])
+        with S.DB_LOCK:
+            S.DB.execute("INSERT INTO storage(key,value,version,updated_at) VALUES('conf_produtos',?,1,'x') "
+                         "ON CONFLICT(key) DO UPDATE SET value=excluded.value, version=version+1",
+                         (json.dumps([{"SKU": "KIT2-0893600022", "Código de Barras": "7890000000999"}]),))
+            S.DB.commit()
+        self.assertEqual(self.buscar("7890000000999"), ["PK"])
+        self.assertEqual(self.buscar("KIT2-0893600022"), ["PK"])
+        v = S.devolucao_pedido("PK", "todas")
+        self.assertEqual([(i["sku"], i["qtd_vendida"]) for i in v["itens"]], [("0893600022", 2)])
+        kit = v["kits"][0]
+        self.assertIn("7890000000999", kit["codigos"])
+        self.assertEqual(kit["pecas"], [["0893600022", 2]])
+
+    def test_codigo_com_espaco_continua_na_venda(self):
+        concluir("PE", [linha("PE", "ABC 123", 1)])
+        self.registrar([{"sku": "ABC 123", "qtd": 1, "estado": "bom"}], chave="PE")
+        item = S.devolucoes_lista({}, "todas")["devolucoes"][0]["itens"][0]
+        self.assertFalse(item["fora_da_venda"])
+        with self.assertRaises(ValueError):
+            self.registrar([{"sku": "ABC 123", "qtd": 1, "estado": "bom"}], chave="PE")
+        self.assertEqual(self.buscar("ABC 123"), ["PE"])
+
+    def test_admin_zera_peca_lancada_por_engano(self):
+        r = self.registrar([{"sku": "AAA", "qtd": 2, "estado": "bom"}])
+        d = S.devolucoes_lista({}, "todas")["devolucoes"][0]
+        S.devolucao_corrigir(r["id"], [{"id": d["itens"][0]["id"], "qtd": 0, "estado": "bom"}], d["versao"], "chefe")
+        self.registrar([{"sku": "AAA", "qtd": 2, "estado": "bom"}])   # a cota voltou
+
+    def test_corrigir_tratada_exige_reabrir(self):
+        r = self.registrar([{"sku": "AAA", "qtd": 1, "estado": "bom"}])
+        d = S.devolucoes_lista({}, "todas")["devolucoes"][0]
+        S.devolucao_tratar(r["id"], "NF 1", d["versao"], "chefe")
+        d = S.devolucoes_lista({}, "todas")["devolucoes"][0]
+        with self.assertRaises(ValueError):
+            S.devolucao_corrigir(r["id"], [{"id": d["itens"][0]["id"], "qtd": 1, "estado": "ruim",
+                                            "motivo": "usado"}], d["versao"], "chefe")
+
+    def test_sem_pedido_com_todas_exige_a_filial(self):
+        corpo = {"sem_pedido": True, "cliente": "Fulano", "itens": [{"sku": "AAA", "qtd": 1, "estado": "bom"}]}
+        with self.assertRaises(ValueError):
+            S.devolucao_registrar(dict(corpo), "joao", "todas")
+        S.devolucao_registrar({**corpo, "filial": "bauru"}, "joao", "todas")
+        self.assertEqual(S.devolucoes_lista({}, "todas")["devolucoes"][0]["filial"], "bauru")
+        S.devolucao_registrar({**corpo, "filial": "bauru"}, "joao", "aracatuba")   # o operador fica na dele
+        self.assertEqual(S.devolucoes_lista({}, "aracatuba")["devolucoes"][0]["filial"], "aracatuba")
+
+    def test_curinga_nao_lista_clientes(self):
+        concluir("2000777", [linha("2000777", "FFF", 1, VendaMercadoLivre="2000777001")])
+        self.assertEqual(self.buscar("%%"), [])
+        self.assertEqual(self.buscar("a e i"), [])
+        self.assertEqual(self.buscar("_"), [])
+
+    def test_limite_de_pecas_e_tamanho_do_codigo(self):
+        with self.assertRaises(ValueError):
+            self.registrar([{"sku": f"Z{i}", "qtd": 1, "estado": "bom"} for i in range(201)])
+        with self.assertRaises(ValueError):
+            self.registrar([{"sku": "Z" * 61, "qtd": 1, "estado": "bom"}])
+
+    def test_repetir_depois_de_falha_de_rede_nao_duplica(self):
+        a = self.registrar([{"sku": "AAA", "qtd": 1, "estado": "bom"}], token="tela-123")
+        b = self.registrar([{"sku": "AAA", "qtd": 1, "estado": "bom"}], token="tela-123")
+        self.assertEqual(a["id"], b["id"])
+        self.assertEqual(len(S.devolucoes_lista({}, "todas")["devolucoes"]), 1)
+
+    def test_pedido_reaberto_nao_aparece(self):
+        with S.DB_LOCK:
+            S.DB.execute("DELETE FROM completed_orders WHERE order_key='P100'")
+            S.DB.commit()
+        self.assertEqual(self.buscar("AAA"), [])
+        with self.assertRaises(ValueError):
+            S.devolucao_pedido("P100", "todas")
+
+    def test_qr_da_etiqueta_do_ml(self):
+        concluir("2000777", [linha("2000777", "FFF", 1, VendaMercadoLivre="2000777001")])
+        with S.DB_LOCK:
+            S.DB.execute("INSERT INTO ml_reclamacao_v1888(claim_id,order_id,devolucao_envios) VALUES('C1','2000777001',?)",
+                         (",44001122,",))
+            S.DB.commit()
+        self.assertEqual(self.buscar('{"id":"44001122","t":"lm"}'), ["2000777"])
+
     def test_telas_menu_e_worker(self):
         self.assertTrue((S.APP_DIR / "devolucoes.html").exists())
         self.assertTrue((S.APP_DIR / "devolucoes-admin.html").exists())

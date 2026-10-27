@@ -80,6 +80,9 @@ tr.fora td.cod::after{content:" · não bate com a venda";font-family:var(--nk-f
     <div class="form-sem" id="formSem" hidden>
       <input id="semCliente" placeholder="Nome do cliente (obrigatório)">
       <input id="semPedido" placeholder="Nº do pedido, se souber">
+      <!-- Revisão 27/10: quem vê as duas filiais escolhe onde a devolução chegou. -->
+      <select id="semFilial" hidden><option value="">Filial que recebeu…</option>
+        <option value="aracatuba">Araçatuba</option><option value="bauru">Bauru</option></select>
     </div>
     <form class="bip" id="formPeca" autocomplete="off">
       <input id="campoPeca" placeholder="Bipe cada peça que voltou">
@@ -110,7 +113,10 @@ const norm = s => String(s ?? "").toUpperCase().replace(/\s+/g, "");
 const $ = id => document.getElementById(id);
 let venda = null;      // {chave, pedido, ...} ou null quando é "sem pedido"
 let linhas = [];       // [{sku, descricao, vendida, ja, eans, qtd, estado, motivo, obs, fora}]
+let kits = [];         // kit devolvido fechado: [{codigos, pecas: [[sku, un]]}]
 let enviando = false;
+let token = "";        // revisão 27/10: o mesmo "Concluir" repetido (resposta perdida) não duplica
+const novoToken = () => Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
 
 if (FILIAL) $("filialTopo").textContent = "Filial: " + (FILIAL === "bauru" ? "Bauru" : FILIAL === "aracatuba" ? "Araçatuba" : "todas");
 
@@ -172,6 +178,8 @@ async function abrirVenda(chave, bipado = "") {
     venda = v;
     linhas = v.itens.map(i => ({sku: i.sku, descricao: i.descricao, vendida: i.qtd_vendida, ja: i.qtd_devolvida,
       eans: [i.sku, ...(i.eans || [])].map(norm), qtd: 0, estado: "", motivo: "", obs: "", fora: false}));
+    kits = (v.kits || []).map(k => ({codigos: k.codigos.map(norm), pecas: k.pecas}));
+    token = novoToken();
     $("cabVenda").innerHTML = `<span>Pedido <b>${esc(v.pedido)}</b></span><span>${esc(v.marketplace)}</span>` +
       `<span>Cliente <b>${esc(v.cliente || "—")}</b></span>` +
       (v.data ? `<span>Venda ${esc(v.data)}</span>` : "") +
@@ -179,7 +187,8 @@ async function abrirVenda(chave, bipado = "") {
     $("formSem").hidden = true;
     mostrarPasso("venda");
     // A peça bipada na busca já conta como a primeira que voltou.
-    if (bipado && linhas.some(l => l.eans.includes(bipado))) somarPeca(bipado, false);
+    if (bipado && (linhas.some(l => l.eans.includes(bipado)) || kits.some(k => k.codigos.includes(bipado))))
+      somarPeca(bipado, false);
     desenharItens();
     focar("campoPeca");
   } catch (e) {
@@ -191,6 +200,10 @@ async function abrirVenda(chave, bipado = "") {
 function abrirSemPedido() {
   venda = null;
   linhas = [];
+  kits = [];
+  token = novoToken();
+  $("semFilial").hidden = FILIAL === "aracatuba" || FILIAL === "bauru";
+  $("semFilial").value = "";
   $("cabVenda").innerHTML = "<b>Devolução sem pedido</b> — bipe as peças que voltaram. O admin recebe com esse aviso.";
   $("formSem").hidden = false;
   $("semCliente").value = ""; $("semPedido").value = "";
@@ -220,6 +233,18 @@ $("formPeca").addEventListener("submit", ev => {
 function somarPeca(codigo, avisar) {
   let linha = linhas.find(l => l.eans.includes(codigo) && (l.fora || l.vendida == null || l.qtd < l.vendida - l.ja));
   if (!linha) linha = linhas.find(l => l.eans.includes(codigo));
+  const kit = !linha && kits.find(k => k.codigos.includes(codigo));
+  if (kit) {
+    // Kit devolvido fechado: a embalagem conta cada peça do kit.
+    const pecas = kit.pecas.map(([sku, un]) => [linhas.find(l => l.sku === sku), un]);
+    const cheia = pecas.find(([l, un]) => !l || l.qtd + un > l.vendida - l.ja);
+    if (cheia) {
+      if (avisar) alert(`${codigo}: as peças deste kit já voltaram todas.`);
+      return;
+    }
+    pecas.forEach(([l, un]) => { l.qtd += un; });
+    return;
+  }
   if (linha) {
     if (!linha.fora && linha.vendida != null && linha.qtd >= linha.vendida - linha.ja) {
       if (avisar) alert(`${linha.sku}: já voltou tudo o que foi vendido (${linha.vendida}).`);
@@ -291,12 +316,13 @@ $("btnConcluir").addEventListener("click", async () => {
   const semMotivo = itens.find(l => l.estado === "ruim" && !l.motivo);
   if (semMotivo) return alert(`${semMotivo.sku}: peça ruim precisa do motivo.`);
   const corpo = {itens: itens.map(l => ({sku: l.sku, qtd: l.qtd, estado: l.estado, motivo: l.motivo, obs: l.obs})),
-                 obs: $("obsGeral").value};
+                 obs: $("obsGeral").value, token};
   if (venda) corpo.chave = venda.chave;
   else {
     corpo.sem_pedido = true;
     corpo.cliente = $("semCliente").value.trim();
     corpo.pedido = $("semPedido").value.trim();
+    corpo.filial = $("semFilial").hidden ? FILIAL : $("semFilial").value;
     if (!corpo.cliente) return alert("Informe o nome do cliente.");
   }
   enviando = true;

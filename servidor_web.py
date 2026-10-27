@@ -17551,6 +17551,10 @@ DEVOLUCAO_MOTIVOS = {
     "veio_outra": "Veio outra peça",
 }
 DEVOLUCAO_SITUACOES = ("a_tratar", "tratada")
+DEVOLUCAO_MAX_ITENS = 200       # revisão 27/10: peças por registro (cada uma é um INSERT sob o DB_LOCK)
+DEVOLUCAO_MAX_CODIGO = 60
+DEVOLUCAO_INDICE_LOCK = threading.Lock()   # uma indexação por vez (busca e worker)
+_DEVOLUCAO_EAN_LOCK = threading.Lock()
 _DEVOLUCAO_EAN_CACHE: dict[str, Any] = {}
 
 
@@ -17581,8 +17585,11 @@ def ensure_devolucoes_schema() -> None:
                 documento_apollo TEXT NOT NULL DEFAULT '',
                 tratada_por TEXT NOT NULL DEFAULT '',
                 tratada_em TEXT NOT NULL DEFAULT '',
-                versao INTEGER NOT NULL DEFAULT 1
+                versao INTEGER NOT NULL DEFAULT 1,
+                token TEXT NOT NULL DEFAULT ''
             );
+            -- Revisão 27/10: o "Concluir" repetido depois de perder a resposta não duplica.
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_devolucao_token ON devolucao_v1988(token) WHERE token<>'';
             CREATE INDEX IF NOT EXISTS idx_devolucao_pedido ON devolucao_v1988(order_key);
             CREATE INDEX IF NOT EXISTS idx_devolucao_situacao ON devolucao_v1988(situacao, recebido_em);
             CREATE TABLE IF NOT EXISTS devolucao_item_v1988 (
@@ -17625,9 +17632,15 @@ def ensure_devolucoes_schema() -> None:
             CREATE INDEX IF NOT EXISTS idx_devolucao_busca_pedido ON devolucao_busca_v1988(order_key);
             CREATE INDEX IF NOT EXISTS idx_devolucao_busca_sku ON devolucao_busca_v1988(sku);
             CREATE INDEX IF NOT EXISTS idx_devolucao_busca_ean ON devolucao_busca_v1988(ean);
+            CREATE INDEX IF NOT EXISTS idx_devolucao_busca_data ON devolucao_busca_v1988(concluido_em);
+            -- Revisão 27/10: indexa do mais novo para o mais antigo. Tudo até o piso está no índice;
+            -- acima dele, as conclusões já indexadas ficam marcadas até o piso subir.
             CREATE TABLE IF NOT EXISTS devolucao_indice_v1988 (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
-                ultimo_hist_id INTEGER NOT NULL DEFAULT 0
+                piso_hist_id INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS devolucao_indexado_v1988 (
+                hist_id INTEGER PRIMARY KEY
             );
             """
         )
@@ -17641,6 +17654,11 @@ def ensure_devolucoes_schema() -> None:
 def _devolucao_texto_busca(valor: Any) -> str:
     texto = unicodedata.normalize("NFKD", str(valor or "")).encode("ascii", "ignore").decode().upper()
     return " ".join(re.sub(r"[^A-Z0-9]+", " ", texto).split())
+
+
+def _devolucao_like(valor: str) -> str:
+    """Revisão 27/10: "%" e "_" bipados não viram curinga (listavam os clientes da filial)."""
+    return valor.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _devolucao_qtd(valor: Any) -> int:
@@ -17659,24 +17677,40 @@ def _devolucao_cliente(rows: list[dict[str, Any]]) -> str:
     return ""
 
 
-def _devolucao_pecas(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """Peças vendidas no pedido: kit aberto (regra da separação), somadas por código."""
-    conhecidos = _separacao_codigos_conhecidos() if any(
-        "/" in str(r.get("SKU") or r.get("Sku") or "") for r in rows) else set()
+def _devolucao_conhecidos(rows: list[dict[str, Any]]) -> set[str]:
+    """Códigos do Precificador só quando algum SKU tem barra (revisão 27/10: uma leitura por lote)."""
+    if any("/" in str(r.get("SKU") or r.get("Sku") or "") for r in rows):
+        return _separacao_codigos_conhecidos()
+    return set()
+
+
+def _devolucao_pecas(rows: list[dict[str, Any]], conhecidos: set[str] | None = None,
+                     kits: list[dict[str, Any]] | None = None) -> dict[str, dict[str, Any]]:
+    """Peças vendidas no pedido: kit aberto (regra da separação), somadas por código. O código
+    passa pelo normalize (revisão 27/10: "ABC 123" perdia o vínculo com o que a tela manda).
+    `kits` recebe cada linha de kit (código do anúncio/EAN da embalagem → peças), para o kit
+    devolvido fechado ser achado e bipado."""
+    if conhecidos is None:
+        conhecidos = _devolucao_conhecidos(rows)
     pecas: dict[str, dict[str, Any]] = {}
     for r in rows:
         qtd = _devolucao_qtd(r.get("Quantidade"))
-        partes = _separacao_partes(r.get("SKU") or r.get("Sku"), conhecidos)
+        sku_linha = r.get("SKU") or r.get("Sku")
+        partes = [(normalize(c), un) for c, un in _separacao_partes(sku_linha, conhecidos) if normalize(c)]
         if not partes or not qtd:
             continue
         kit = len(partes) > 1 or partes[0][1] != 1
         desc = str(r.get("Descrição") or r.get("Descricao") or "").strip()
-        ean = "" if kit else str(r.get("Código de Barras") or r.get("EAN") or "").strip()
+        ean_linha = normalize(r.get("Código de Barras") or r.get("EAN"))
+        ean = "" if kit else ean_linha
         for cod, un in partes:
             p = pecas.setdefault(cod, {"sku": cod, "descricao": "", "ean": "", "qtd_vendida": 0})
             p["qtd_vendida"] += qtd * un
             p["descricao"] = p["descricao"] or (("Peça do kit: " if kit else "") + desc if desc else "")
             p["ean"] = p["ean"] or ean
+        if kit and kits is not None:
+            kits.append({"sku": normalize(sku_linha), "ean": ean_linha, "descricao": desc,
+                         "pecas": [[c, un] for c, un in partes]})
     return pecas
 
 
@@ -17692,24 +17726,48 @@ def _devolucao_corte() -> str:
 
 
 def devolucao_indexar() -> int:
-    """Põe no índice de busca os pedidos concluídos que ainda não estão lá. Devolve quantas
-    linhas do histórico leu (0 = em dia). O pedido concluído de novo troca as linhas antigas."""
-    with DB_LOCK:
-        r = DB.execute("SELECT ultimo_hist_id FROM devolucao_indice_v1988 WHERE id=1").fetchone()
-        ultimo = int(r[0]) if r else 0
-        hist = [dict(x) for x in DB.execute(
-            "SELECT id, order_key, order_id, completed_at, payload FROM order_completion_history "
-            "WHERE id>? AND completed_at>=? ORDER BY id LIMIT ?",
-            (ultimo, _devolucao_corte(), DEVOLUCAO_INDICE_LOTE)).fetchall()]
-    if not hist:
+    """Põe no índice de busca um lote de conclusões ainda não indexadas, **da mais nova para a
+    mais antiga** (revisão 27/10: logo depois do deploy o pedido de ontem não era achado e virava
+    "sem pedido"). Uma indexação por vez; quem acha a vez ocupada não espera. Devolve quantas
+    conclusões leu (menos que o lote = em dia)."""
+    if not DEVOLUCAO_INDICE_LOCK.acquire(blocking=False):
         return 0
-    por_pedido: dict[str, list[tuple]] = {}
-    for h in hist:   # em ordem de id: a última conclusão do pedido vence
-        rows = _rows_from_storage_value(h["payload"])
+    try:
+        return _devolucao_indexar_lote()
+    finally:
+        DEVOLUCAO_INDICE_LOCK.release()
+
+
+def _devolucao_indexar_lote() -> int:
+    corte = _devolucao_corte()
+    lote = DEVOLUCAO_INDICE_LOTE
+    with DB_LOCK:
+        r = DB.execute("SELECT piso_hist_id FROM devolucao_indice_v1988 WHERE id=1").fetchone()
+        piso = int(r[0]) if r else 0
+        topo = int(DB.execute("SELECT COALESCE(MAX(id),0) FROM order_completion_history").fetchone()[0])
+        # Tudo até o piso já está no índice; acima dele, o que falta, mais novo primeiro.
+        hist = [dict(x) for x in DB.execute(
+            "SELECT h.id, h.order_key, h.order_id, h.completed_at FROM order_completion_history h "
+            "WHERE h.id>? AND h.id<=? AND h.completed_at>=? "
+            "AND NOT EXISTS (SELECT 1 FROM devolucao_indexado_v1988 x WHERE x.hist_id=h.id) "
+            "ORDER BY h.id DESC LIMIT ?", (piso, topo, corte, lote)).fetchall()]
+        # Só a conclusão mais nova de cada pedido vale (o pedido concluído de novo troca as peças).
+        validos = [h for h in hist if DB.execute(
+            "SELECT MAX(id) FROM order_completion_history WHERE order_key=?", (h["order_key"],)).fetchone()[0] == h["id"]]
+        payloads = {int(x[0]): x[1] for x in DB.execute(
+            f"SELECT id, payload FROM order_completion_history WHERE id IN ({','.join('?' * len(validos))})",
+            [h["id"] for h in validos]).fetchall()} if validos else {}
+    linhas_por_hist = {h["id"]: _rows_from_storage_value(payloads.get(h["id"])) for h in validos}
+    todas = [r for rows in linhas_por_hist.values() for r in rows]
+    conhecidos = _devolucao_conhecidos(todas)   # uma leitura do Precificador por lote
+    por_pedido: dict[str, tuple[int, list[tuple]]] = {}
+    for h in validos:
+        rows = linhas_por_hist[h["id"]]
         if not rows:
             continue   # conclusão antiga reconstruída do audit_log (sem as linhas): não apaga nada
         try:
-            pecas = _devolucao_pecas(rows)
+            kits: list[dict[str, Any]] = []
+            pecas = _devolucao_pecas(rows, conhecidos, kits)
         except Exception as exc:
             print(f"[devolucoes] índice {h['order_key']}: {exc}", flush=True)
             continue
@@ -17719,19 +17777,31 @@ def devolucao_indexar() -> int:
         filial = filial_da_linha(rows[0])
         mp = _vendas_marketplace(rows[0].get("Marketplace") or rows[0].get("Origem"))
         ml_ids = _devolucao_ml_ids(rows)
-        por_pedido[h["order_key"]] = [
-            (h["order_key"], h["order_id"], filial, mp, h["completed_at"], p["sku"], normalize(p["ean"]),
-             cliente, nomes, ml_ids) for p in pecas.values()]
+        codigos = {(p["sku"], p["ean"]) for p in pecas.values()} | {(k["sku"], k["ean"]) for k in kits}
+        por_pedido[h["order_key"]] = (h["id"], [
+            (h["order_key"], h["order_id"], filial, mp, h["completed_at"], sku, ean, cliente, nomes, ml_ids)
+            for sku, ean in sorted(codigos) if sku])
     with DB_LOCK:
         DB.execute("BEGIN IMMEDIATE")
         try:
-            for chave, linhas in por_pedido.items():
+            for chave, (hist_id, linhas) in por_pedido.items():
+                # Relido sob a trava: uma conclusão mais nova chegou no meio? ela é que indexa.
+                if DB.execute("SELECT MAX(id) FROM order_completion_history WHERE order_key=?",
+                              (chave,)).fetchone()[0] != hist_id:
+                    continue
                 DB.execute("DELETE FROM devolucao_busca_v1988 WHERE order_key=?", (chave,))
                 DB.executemany(
                     "INSERT INTO devolucao_busca_v1988(order_key,pedido,filial,marketplace,concluido_em,sku,ean,"
                     "cliente,cliente_busca,ml_ids) VALUES(?,?,?,?,?,?,?,?,?,?)", linhas)
-            DB.execute("INSERT INTO devolucao_indice_v1988(id,ultimo_hist_id) VALUES(1,?) "
-                       "ON CONFLICT(id) DO UPDATE SET ultimo_hist_id=excluded.ultimo_hist_id", (hist[-1]["id"],))
+            DB.executemany("INSERT OR IGNORE INTO devolucao_indexado_v1988(hist_id) VALUES(?)",
+                           [(h["id"],) for h in hist])
+            if len(hist) < lote:
+                # Em dia até o topo: o piso sobe, as marcas abaixo dele e o que passou dos 180 dias saem.
+                DB.execute("INSERT INTO devolucao_indice_v1988(id,piso_hist_id) VALUES(1,?) "
+                           "ON CONFLICT(id) DO UPDATE SET piso_hist_id=MAX(piso_hist_id, excluded.piso_hist_id)",
+                           (topo,))
+                DB.execute("DELETE FROM devolucao_indexado_v1988 WHERE hist_id<=?", (topo,))
+                DB.execute("DELETE FROM devolucao_busca_v1988 WHERE concluido_em<?", (corte,))
             DB.commit()
         except Exception:
             DB.rollback()
@@ -17746,7 +17816,7 @@ def _devolucao_indexar_tudo(maximo: int = 5) -> None:
 
 
 def devolucoes_indice_loop(stop_event: threading.Event) -> None:
-    """Mantém o índice de busca em dia (a busca também indexa antes de procurar)."""
+    """Mantém o índice de busca em dia (a busca também indexa um lote antes de procurar)."""
     while not stop_event.is_set():
         try:
             _devolucao_indexar_tudo(maximo=20)
@@ -17756,33 +17826,52 @@ def devolucoes_indice_loop(stop_event: threading.Event) -> None:
 
 
 def _devolucao_mapa_ean() -> dict[str, dict[str, set[str]]]:
-    """EAN → SKU e SKU → EAN pelo cadastro de produtos (refeito só quando o cadastro muda)."""
+    """EAN → SKU e SKU → EAN pelo cadastro de produtos (refeito só quando o cadastro muda).
+    Revisão 27/10: sob trava própria — duas buscas juntas não leem o mapa pela metade."""
     with DB_LOCK:
         r = DB.execute("SELECT version FROM storage WHERE key='conf_produtos'").fetchone()
     versao = int(r[0]) if r else 0
-    if _DEVOLUCAO_EAN_CACHE.get("versao") != versao:
-        with DB_LOCK:
-            bruto, _, _ = get_storage("conf_produtos")
-        mapa: dict[str, set[str]] = {}
-        por_sku: dict[str, set[str]] = {}
-        for p in _rows_from_storage_value(bruto):
-            codigo, sku = normalize(p.get("Código de Barras") or p.get("EAN")), normalize(p.get("SKU"))
-            if codigo and sku:
-                mapa.setdefault(codigo, set()).add(sku)
-                por_sku.setdefault(sku, set()).add(codigo)
-        _DEVOLUCAO_EAN_CACHE.clear()
-        _DEVOLUCAO_EAN_CACHE.update({"versao": versao, "ean": mapa, "sku": por_sku})
-    return {"ean": _DEVOLUCAO_EAN_CACHE["ean"], "sku": _DEVOLUCAO_EAN_CACHE["sku"]}
+    with _DEVOLUCAO_EAN_LOCK:
+        if _DEVOLUCAO_EAN_CACHE.get("versao") != versao:
+            with DB_LOCK:
+                bruto, _, _ = get_storage("conf_produtos")
+            mapa: dict[str, set[str]] = {}
+            por_sku: dict[str, set[str]] = {}
+            for p in _rows_from_storage_value(bruto):
+                codigo, sku = normalize(p.get("Código de Barras") or p.get("EAN")), normalize(p.get("SKU"))
+                if codigo and sku:
+                    mapa.setdefault(codigo, set()).add(sku)
+                    por_sku.setdefault(sku, set()).add(codigo)
+            _DEVOLUCAO_EAN_CACHE.clear()
+            _DEVOLUCAO_EAN_CACHE.update({"versao": versao, "ean": mapa, "sku": por_sku})
+        return {"ean": _DEVOLUCAO_EAN_CACHE["ean"], "sku": _DEVOLUCAO_EAN_CACHE["sku"]}
 
 
 def _devolucao_skus_do_ean(ean: str) -> set[str]:
     return set(_devolucao_mapa_ean()["ean"].get(ean, set()))
 
 
+def _devolucao_codigo_do_qr(q: Any) -> Any:
+    """O QR da etiqueta do Mercado Envios traz um JSON ({"id": "4455...", ...}): vale o id."""
+    texto = str(q or "").strip()
+    if texto.startswith("{"):
+        try:
+            dados = json.loads(texto)
+        except ValueError:
+            return texto
+        if isinstance(dados, dict):
+            for campo in ("id", "shipment_id", "tracking_number"):
+                if dados.get(campo):
+                    return str(dados[campo])
+    return texto
+
+
 def devolucao_buscar(q: Any, filial: str) -> dict[str, Any]:
     """Pedidos concluídos que batem com o bip: nº do pedido, EAN, SKU, nome do cliente ou a
     etiqueta de devolução do ML. Só a filial de quem busca ("todas" = as duas)."""
-    _devolucao_indexar_tudo()
+    if not DEVOLUCAO_INDICE_LOCK.locked():   # um lote só; o worker faz o resto
+        devolucao_indexar()
+    q = _devolucao_codigo_do_qr(q)
     chave = normalize(q)
     texto = _devolucao_texto_busca(q)
     if len(chave) < 2:
@@ -17795,21 +17884,24 @@ def devolucao_buscar(q: Any, filial: str) -> dict[str, Any]:
     base = [corte] + ([] if filial == FILIAL_TODAS else [filial])
     with DB_LOCK:
         envios = [str(r[0]) for r in DB.execute(
-            "SELECT order_id FROM ml_reclamacao_v1888 WHERE devolucao_envios LIKE ? AND order_id<>''",
-            (f"%,{chave},%",)).fetchall()] if chave.isalnum() else []
+            "SELECT order_id FROM ml_reclamacao_v1888 WHERE devolucao_envios LIKE ? ESCAPE '\\' AND order_id<>''",
+            (f"%,{_devolucao_like(chave)},%",)).fetchall()] if chave.isalnum() else []
         ml = {chave} | {normalize(x) for x in envios}
         conds = ["order_key=?", "ean=?", f"sku IN ({','.join('?' * len(skus))})"]
         params: list[Any] = [chave, chave, *sorted(skus)]
         for x in sorted(ml):
-            conds.append("ml_ids LIKE ?")
-            params.append(f"%,{x},%")
-        palavras = texto.split()
-        if any(ch.isalpha() for ch in texto) and len(texto) >= 3:
-            conds.append("(" + " AND ".join("cliente_busca LIKE ?" for _ in palavras) + ")")
-            params.extend(f"%{p}%" for p in palavras)
+            conds.append("ml_ids LIKE ? ESCAPE '\\'")
+            params.append(f"%,{_devolucao_like(x)},%")
+        # Nome: só palavras de 3+ letras (revisão 27/10: "a e i" casava com quase todo cliente).
+        palavras = [p for p in texto.split() if len(p) >= 3]
+        if palavras and any(ch.isalpha() for ch in "".join(palavras)):
+            conds.append("(" + " AND ".join("cliente_busca LIKE ? ESCAPE '\\'" for _ in palavras) + ")")
+            params.extend(f"%{_devolucao_like(p)}%" for p in palavras)
+        # Pedido reaberto (voltou para a Conferência) não aparece até ser concluído de novo.
         chaves = [r[0] for r in DB.execute(
             f"SELECT DISTINCT order_key FROM devolucao_busca_v1988 WHERE concluido_em>=?{filtro_filial} "
-            f"AND ({' OR '.join(conds)}) ORDER BY concluido_em DESC LIMIT 30",
+            f"AND ({' OR '.join(conds)}) AND order_key IN (SELECT order_key FROM completed_orders) "
+            f"ORDER BY concluido_em DESC LIMIT 30",
             (*base, *params)).fetchall()]
         if not chaves:
             return {"ok": True, "pedidos": []}
@@ -17846,28 +17938,35 @@ def devolucao_pedido(chave: Any, filial: str) -> dict[str, Any]:
     key = normalize(chave)
     with DB_LOCK:
         h = latest_completion_history(key)
+        concluido = DB.execute("SELECT 1 FROM completed_orders WHERE order_key=?", (key,)).fetchone()
     rows = _rows_from_storage_value(h["payload"]) if h else []
-    if not rows:
+    if not rows or not concluido:   # revisão 27/10: reaberto (de volta na Conferência) não recebe devolução
         raise ValueError("Pedido concluído não encontrado.")
     filial_pedido = filial_da_linha(rows[0])
     if filial != FILIAL_TODAS and filial_pedido != filial:
         raise PermissionError(f"O pedido {h['order_id']} é de outra filial.")
-    pecas = _devolucao_pecas(rows)
+    kits: list[dict[str, Any]] = []
+    pecas = _devolucao_pecas(rows, kits=kits)
     with DB_LOCK:
         ja = _devolucao_ja_devolvido(key)
     eans = _devolucao_mapa_ean()["sku"]   # para o bip na tela achar a peça pelo código de barras
     itens = [{**p, "qtd_devolvida": ja.get(p["sku"], 0),
               "eans": sorted({normalize(p["ean"])} - {""} | eans.get(p["sku"], set()))} for p in pecas.values()]
+    # Revisão 27/10: kit devolvido fechado — bipar a embalagem (código do anúncio ou EAN do kit) soma as peças.
+    kits_tela = [{"sku": k["sku"], "descricao": k["descricao"], "pecas": k["pecas"],
+                  "codigos": sorted({k["sku"], k["ean"]} - {""} | eans.get(k["sku"], set()))} for k in kits]
     primeira = rows[0]
     return {"ok": True, "chave": key, "pedido": h["order_id"], "filial": filial_pedido,
             "marketplace": _vendas_marketplace(primeira.get("Marketplace") or primeira.get("Origem")),
             "cliente": _devolucao_cliente(rows), "data": str(primeira.get("Data do Pedido") or ""),
-            "concluido_em": h["completed_at"], "itens": itens}
+            "concluido_em": h["completed_at"], "itens": itens, "kits": kits_tela}
 
 
 def _devolucao_itens_validos(itens: Any, corrigir: bool = False) -> list[dict[str, Any]]:
     if not isinstance(itens, list) or not itens:
         raise ValueError("Informe as peças que voltaram.")
+    if len(itens) > DEVOLUCAO_MAX_ITENS:
+        raise ValueError(f"No máximo {DEVOLUCAO_MAX_ITENS} peças por devolução.")
     saida = []
     for it in itens:
         if not isinstance(it, dict):
@@ -17875,11 +17974,14 @@ def _devolucao_itens_validos(itens: Any, corrigir: bool = False) -> list[dict[st
         sku = normalize(it.get("sku"))
         if not sku and not corrigir:
             raise ValueError("Peça sem código.")
+        if len(sku) > DEVOLUCAO_MAX_CODIGO:
+            raise ValueError("Código da peça grande demais.")
         try:
             qtd = int(it.get("qtd"))
         except (TypeError, ValueError):
             raise ValueError(f"{sku}: quantidade inválida.")
-        if qtd < 1 or qtd > 9999:
+        # Revisão 27/10: na correção o admin zera a peça lançada por engano (a cota volta).
+        if qtd < (0 if corrigir else 1) or qtd > 9999:
             raise ValueError(f"{sku}: quantidade inválida.")
         estado = str(it.get("estado") or "").strip().lower()
         if estado not in ("bom", "ruim"):
@@ -17906,7 +18008,9 @@ def devolucao_registrar(req: dict[str, Any], usuario: str, filial: str) -> dict[
         if not cliente:
             raise ValueError("Sem pedido: informe o nome do cliente.")
         destino = filial if filial in CASAS else str(req.get("filial") or "").strip().lower()
-        cab = {"filial": destino if destino in CASAS else CASA_PRINCIPAL, "marketplace": "",
+        if destino not in CASAS:   # revisão 27/10: quem vê "todas" escolhe (antes caía sempre em Araçatuba)
+            raise ValueError("Sem pedido: escolha a filial que recebeu a devolução.")
+        cab = {"filial": destino, "marketplace": "",
                "pedido": str(req.get("pedido") or "").strip()[:60], "order_key": "", "cliente": cliente,
                "sem_pedido": 1}
         venda: dict[str, dict[str, Any]] = {}
@@ -17916,9 +18020,15 @@ def devolucao_registrar(req: dict[str, Any], usuario: str, filial: str) -> dict[
                "order_key": v["chave"], "cliente": v["cliente"], "sem_pedido": 0}
         venda = {i["sku"]: i for i in v["itens"]}
     agora = now_iso()
+    token = str(req.get("token") or "").strip()[:80]
     with DB_LOCK:
         DB.execute("BEGIN IMMEDIATE")
         try:
+            if token:   # revisão 27/10: "Concluir" repetido depois de perder a resposta = a mesma devolução
+                ja_feita = DB.execute("SELECT id FROM devolucao_v1988 WHERE token=?", (token,)).fetchone()
+                if ja_feita:
+                    DB.rollback()
+                    return {"ok": True, "id": int(ja_feita[0]), "repetida": True}
             # Relido sob a trava: dois operadores ao mesmo tempo não passam do vendido.
             ja = _devolucao_ja_devolvido(cab["order_key"]) if venda else {}
             novo: dict[str, int] = {}
@@ -17932,9 +18042,9 @@ def devolucao_registrar(req: dict[str, Any], usuario: str, filial: str) -> dict[
                                      f"já devolvido {ja.get(sku, 0)}).")
             cur = DB.execute(
                 "INSERT INTO devolucao_v1988(filial,marketplace,pedido,order_key,cliente,sem_pedido,situacao,obs,"
-                "recebido_por,recebido_em,versao) VALUES(?,?,?,?,?,?,'a_tratar',?,?,?,1)",
+                "recebido_por,recebido_em,versao,token) VALUES(?,?,?,?,?,?,'a_tratar',?,?,?,1,?)",
                 (cab["filial"], cab["marketplace"], cab["pedido"], cab["order_key"], cab["cliente"],
-                 cab["sem_pedido"], obs, usuario, agora))
+                 cab["sem_pedido"], obs, usuario, agora, token))
             dev_id = int(cur.lastrowid)
             for it in itens:
                 p = venda.get(it["sku"])
@@ -18069,6 +18179,8 @@ def devolucao_corrigir(dev_id: Any, itens: Any, versao: Any, usuario: str,
     novos = _devolucao_itens_validos(itens, corrigir=True)
 
     def mudar(d: dict[str, Any]) -> str:
+        if d["situacao"] == "tratada":   # revisão 27/10: o documento do Apollo é dos números de quando tratou
+            raise ValueError("Devolução já tratada: reabra antes de corrigir.")
         atuais = {int(i["id"]): i for i in d["itens"]}
         trocas = []
         for n in novos:

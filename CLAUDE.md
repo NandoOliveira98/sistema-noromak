@@ -1186,8 +1186,15 @@ admin; edição manda `versao` (409 `CONFLITO`). **Busca sem pesar:** índice `d
 preenchido por `devolucao_indexar` em lotes de 200 ids de `order_completion_history` (JSON lido fora do lock) — na busca e
 no worker `devolucoes_indice_loop` (5 min); pedido reconcluído troca as linhas. **Etiqueta do ML:** o Pós-venda guarda os
 envios de volta (`shipments[]` `type=return`: `shipment_id` + rastreio) em `ml_reclamacao_v1888.devolucao_envios`, sem
-chamada a mais — **conferir com a 1ª etiqueta real** qual número o código de barras traz; só a conta principal. Depois:
-foto da peça ruim, destino por peça, etiqueta da Shopee. Teste: `TESTES/test_devolucoes_v1988.py`.
+chamada a mais — **conferir com a 1ª etiqueta real** qual número o código de barras traz (o QR em JSON vale pelo `id`);
+só a conta principal. **Revisão 27/10:** o índice anda do **mais novo para o mais antigo** (`piso_hist_id` +
+`devolucao_indexado_v1988`), uma indexação por vez (`DEVOLUCAO_INDICE_LOCK`; a busca não espera e indexa 1 lote), só a
+conclusão mais nova de cada pedido vale, o que passou de 180 dias sai; Precificador lido uma vez por lote; código da peça
+passa pelo `normalize`; kit devolvido fechado (código do anúncio ou EAN da embalagem, `kits` na venda) soma as peças;
+pedido reaberto (fora de `completed_orders`) não aparece; o admin zera peça lançada por engano (qtd 0) e não corrige
+tratada sem reabrir; "sem pedido" de quem vê "todas" exige a filial; `token` da tela evita duplicar o "Concluir"
+repetido; `%`/`_` não são curinga e nome só com palavras de 3+ letras; até 200 peças e código até 60. Depois: foto da
+peça ruim, destino por peça, etiqueta da Shopee. Teste: `TESTES/test_devolucoes_v1988.py`.
 
 **V19.45 — Cliente do Full pela NF-e do ML** (decisões do dono, 16/10). Venda Full não passa pela fila, e a integração
 ML → Apollo cria o cliente com o nome da conta ("Premium Flex") em vez da razão social da nota (M2 SOLUCOES GRAFICAS).
