@@ -10,6 +10,7 @@
      bipa o que voltou → bom ou ruim (ruim com motivo) → conclui. O admin trata em /devolucoes-admin.
      O alert() fica de propósito: trava o leitor de código de barras (regra da Conferência). -->
 <script defer src="/expedicao/web-auth.js?v=19.89"></script>
+<link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
 <link rel="stylesheet" href="/expedicao/nk-ui.css?v=19.13">
 <script src="/expedicao/nk-ui.js?v=19.13"></script>
 <style>
@@ -202,6 +203,18 @@ function desenharResultados(pedidos, q, d = {}) {
   if (pedidos.length === 1) abrirVenda(pedidos[0].chave, bipado);
 }
 
+async function nfDaVenda(chave) {
+  try {
+    const r = await api("/nf?chave=" + encodeURIComponent(chave));
+    if (!venda || venda.chave !== norm(chave) && venda.chave !== chave) return;
+    const n = r.nf;
+    const span = document.createElement("span");
+    span.innerHTML = n ? `NF <b>${esc(n.numero)}</b>${n.serie ? "/" + esc(n.serie) : ""} · ${esc(new Date(n.emitida_em).toLocaleDateString("pt-BR"))}`
+                       : `<span style="color:var(--nk-ink3)">${esc(r.motivo || "sem NF")}</span>`;
+    $("cabVenda").appendChild(span);
+  } catch (_) { /* a nota é informação extra: sem ela a devolução segue */ }
+}
+
 async function abrirVenda(chave, bipado = "") {
   try {
     const v = await api("/pedido?chave=" + encodeURIComponent(chave));
@@ -217,6 +230,8 @@ async function abrirVenda(chave, bipado = "") {
         ? `<span>${v.full ? "<b>Full</b> · " : ""}${v.cancelada ? "<b>venda cancelada</b> · " : ""}não passou pela Conferência</span>`
         : `<span>Concluído em ${esc(new Date(v.concluido_em).toLocaleDateString("pt-BR"))}</span>`);
     $("formSem").hidden = true;
+    // V19.95: NF de venda no cabeçalho (Mercado Livre; a Shopee não traz pela API).
+    if (!v.venda_sem_conferencia || v.marketplace === "Mercado Livre") nfDaVenda(chave);
     mostrarPasso("venda");
     // A peça bipada na busca já conta como a primeira que voltou.
     if (bipado && (linhas.some(l => l.eans.includes(bipado)) || kits.some(k => k.codigos.includes(bipado))))

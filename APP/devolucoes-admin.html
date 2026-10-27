@@ -5,43 +5,73 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <link rel="icon" href="/favicon.ico?v=14.5" sizes="any">
 <title>Noromak · Devoluções</title>
-<!-- V19.88: Devoluções — tela do admin (módulo admin, menu Expedição). Lista o que o operador
-     recebeu em /devolucoes; o admin trata no Apollo e marca "tratada" com o nº do documento,
-     corrige quantidade/estado/motivo (fica no histórico) e reabre. GET /api/devolucoes. -->
+<!-- V19.88: Devoluções — tela do admin (módulo admin, menu Expedição). Lista o que o operador recebeu em
+     /devolucoes; o admin trata no Apollo e marca "tratada" com o nº do documento, corrige (fica no histórico) e reabre.
+     V19.95 (dono, 27/10): devoluções no lucro a partir de 01/11/2026 — resumo do mês comparado ao anterior, ranking
+     por peça, perda de cada devolução (peças com destino "perda" pelo custo de Araçatuba + frete) e, na gaveta, o
+     destino de cada peça, o custo e o frete. GET /api/devolucoes, /api/devolucoes/resumo, POST /api/devolucoes/valores. -->
 <script defer src="/expedicao/web-auth.js?v=19.89"></script>
+<link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
 <link rel="stylesheet" href="/expedicao/nk-ui.css?v=19.13">
 <script src="/expedicao/nk-ui.js?v=19.13"></script>
 <script defer src="/expedicao/nk-menu.js?v=19.89" data-shell></script>
 <style>
 body{margin:0;background:var(--nk-canvas);color:var(--nk-ink);font-family:var(--nk-font,"IBM Plex Sans","Segoe UI",Arial,sans-serif)}
 [hidden]{display:none!important}
-.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:14px}
-.filtros{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
-.filtros select{font-size:13px;padding:7px 9px;border:1px solid var(--nk-line);border-radius:9px;background:var(--nk-tile);color:var(--nk-ink)}
-table.dev{width:100%;border-collapse:collapse;font-size:13.5px}
-table.dev th{text-align:left;font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--nk-ink3);padding:8px 10px;border-bottom:1px solid var(--nk-line)}
-table.dev td{padding:9px 10px;border-bottom:1px solid var(--nk-line2);vertical-align:top}
-table.dev tbody tr{cursor:pointer}
-table.dev tbody tr:hover{background:var(--nk-line2)}
-.pec{font-family:Consolas,monospace;font-size:12.5px;white-space:nowrap}
-.ruim{color:#dc2626;font-weight:600}
-.bom{color:#16a34a;font-weight:600}
-.aviso{color:var(--nk-warn);font-weight:600;font-size:12px}
-.gaveta{position:fixed;top:0;right:0;bottom:0;width:min(720px,100%);background:var(--nk-tile);border-left:1px solid var(--nk-line);
-  box-shadow:-8px 0 30px rgba(0,0,0,.12);overflow:auto;padding:20px 22px;z-index:50}
-.gaveta h2{margin:0 0 4px;font-size:19px;color:var(--nk-head)}
-.gaveta .sub{font-size:13px;color:var(--nk-ink2);margin-bottom:12px}
-.gaveta table{width:100%;border-collapse:collapse;font-size:13px;margin:8px 0 12px}
-.gaveta th{text-align:left;font-size:11px;text-transform:uppercase;color:var(--nk-ink3);padding:6px;border-bottom:1px solid var(--nk-line)}
-.gaveta td{padding:6px;border-bottom:1px solid var(--nk-line2)}
-.gaveta input,.gaveta select{font-size:13px;padding:6px 8px;border:1px solid var(--nk-line);border-radius:8px;background:var(--nk-tile);color:var(--nk-ink)}
-.gaveta input[type=number]{width:64px}
-.gaveta select{max-width:140px}.gaveta td{word-break:break-word}
-.linha-acao{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0}
-.eventos{font-size:12.5px;color:var(--nk-ink2);border-top:1px solid var(--nk-line);padding-top:10px;margin-top:14px}
-.eventos div{margin-bottom:6px}
-.fechar{float:right}
-.vazio{color:var(--nk-ink3);padding:14px 4px}
+.mes{font:inherit;font-size:13px;padding:7px 9px;border:1px solid var(--nk-line);border-radius:8px;background:var(--nk-tile);color:var(--nk-ink)}
+.nk-kpi{cursor:default}
+.nk-kpi:hover{transform:none;box-shadow:var(--nk-sombra)}
+.nk-kpi > span:last-child{min-width:0}
+.nk-kpi .var{display:block;font-size:11px;font-weight:700;margin-top:3px;white-space:nowrap}
+.var.sobe{color:var(--nk-bad)}.var.desce{color:var(--nk-ok)}.var.igual{color:var(--nk-ink3)}
+.grade{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(0,1fr);gap:14px;align-items:start}
+.filtros{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.filtros select,.filtros input{font:inherit;font-size:13px;padding:7px 9px;border:1px solid var(--nk-line);border-radius:8px;background:var(--nk-tile);color:var(--nk-ink)}
+.filtros input{min-width:180px}
+.tab-rolar{overflow:auto;max-height:620px;margin:0 -4px}
+.nk-tab tbody tr.cl{cursor:pointer}
+.nk-tab tbody tr.cl:hover td{background:var(--nk-hover)}
+.num{text-align:right!important;font-variant-numeric:tabular-nums;white-space:nowrap}
+.pec{font-family:Consolas,"IBM Plex Mono",monospace;font-size:12.5px;white-space:nowrap}
+.mini{font-size:12px;color:var(--nk-ink2)}
+.ruim{color:var(--nk-bad);font-weight:600}
+.bom{color:var(--nk-ok);font-weight:600}
+.vazio{color:var(--nk-ink3);padding:16px 6px;text-align:center}
+.barra{height:6px;border-radius:4px;background:var(--nk-line2);overflow:hidden;margin-top:4px;min-width:60px}
+.barra i{display:block;height:100%;background:var(--nk-warn)}
+/* gaveta */
+.fundo{position:fixed;inset:0;background:rgba(15,23,34,.28);z-index:49}
+.gaveta{position:fixed;top:0;right:0;bottom:0;width:min(820px,100%);background:var(--nk-tile);border-left:1px solid var(--nk-line);
+  box-shadow:var(--nk-sombra2);overflow:auto;z-index:50;display:flex;flex-direction:column}
+.gav-cab{padding:18px 22px 12px;border-bottom:1px solid var(--nk-line);position:sticky;top:0;background:var(--nk-tile);z-index:2}
+.gav-cab h2{margin:0;font-size:19px;color:var(--nk-head)}
+.gav-cab .linha{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.gav-cab .meta{font-size:12.5px;color:var(--nk-ink2);margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.gav-corpo{padding:14px 22px 22px}
+.secao{margin-top:16px}
+.secao h3{font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:var(--nk-ink3);margin:0 0 8px}
+.campo,.peca input,.peca select{font:inherit;font-size:13px;padding:6px 8px;border:1px solid var(--nk-line);border-radius:8px;background:var(--nk-tile);color:var(--nk-ink);width:100%;box-sizing:border-box;min-width:0}
+.peca{border:1px solid var(--nk-line);border-radius:11px;padding:11px 13px;margin-bottom:9px}
+.peca-topo{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}
+.peca-topo .num{font-size:12px;color:var(--nk-ink2)}
+.peca-campos{display:grid;grid-template-columns:70px 100px minmax(0,1.2fr) minmax(0,1.3fr) 110px 90px;gap:8px;margin-top:9px;align-items:end}
+.peca-campos label{display:block;font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--nk-ink3);margin-bottom:3px}
+.peca-campos .perda-peca{font-weight:700;color:var(--nk-head);padding:7px 0;text-align:right;font-variant-numeric:tabular-nums}
+@media (max-width:760px){.peca-campos{grid-template-columns:repeat(2,minmax(0,1fr))}}
+.conta{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.conta .c{border:1px solid var(--nk-line);border-radius:11px;padding:11px 13px}
+.conta .c .rot{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--nk-ink3)}
+.conta .c b{display:block;font-size:19px;margin-top:4px;color:var(--nk-head);font-variant-numeric:tabular-nums}
+.conta .c.total{background:var(--nk-tile2)}
+.frete-linha{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px}
+.linha-acao{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:14px}
+.eventos{font-size:12.5px;color:var(--nk-ink2)}
+.eventos div{padding:6px 0;border-bottom:1px solid var(--nk-line2)}
+.nf{font-size:13px;color:var(--nk-ink)}
+.nf .chave{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px}
+.tratada-box{border:1px solid var(--nk-ok-ln);background:var(--nk-ok-bg);border-radius:11px;padding:11px 13px;font-size:13px}
+@media (max-width:1180px){.grade{grid-template-columns:1fr}}
+@media (max-width:640px){.conta{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -50,41 +80,69 @@ table.dev tbody tr:hover{background:var(--nk-line2)}
     <div>
       <div class="nk-rotulo">Expedição</div>
       <h1>Devoluções</h1>
-      <p>Peças recebidas pelo operador. Trate cada devolução no Apollo e marque como tratada com o nº do documento.</p>
+      <p>Peças que voltaram, a perda de cada devolução e o que ainda falta tratar no Apollo.</p>
     </div>
     <div class="nk-acoes">
-      <a class="nk-btn" href="/expedicao/devolucoes" target="_blank" rel="noopener">Receber devolução</a>
-      <button class="nk-btn" onclick="carregar()">Atualizar</button>
+      <input type="month" class="mes" id="fMes" title="Mês em que a peça chegou">
+      <a class="nk-btn" href="/expedicao/devolucoes" target="_blank" rel="noopener"><i class=nk-i-box></i> Receber devolução</a>
+      <button class="nk-btn" onclick="carregar()"><i class=nk-i-refresh></i> Atualizar</button>
     </div>
   </div>
   <div class="nk-aviso bad" id="erro" hidden></div>
-  <div class="kpis">
-    <div class="nk-kpi"><div class="nk-rotulo">A tratar</div><b id="kAtratar">—</b></div>
-    <div class="nk-kpi"><div class="nk-rotulo">Tratadas</div><b id="kTratadas">—</b></div>
+  <div class="nk-aviso info" id="avisoInicio" hidden style="margin-bottom:12px"></div>
+
+  <div class="nk-kpis" id="kpis" style="margin-bottom:14px"></div>
+
+  <div class="grade">
+    <section class="nk-painel">
+      <div class="nk-painel-tit">
+        <div><h2>Devoluções do mês</h2><p id="subLista">Pela data em que a peça chegou.</p></div>
+        <div class="filtros">
+          <input id="fBusca" placeholder="Pedido, cliente ou peça" autocomplete="off">
+          <select id="fSituacao"><option value="">Todas</option><option value="a_tratar">A tratar</option><option value="tratada">Tratadas</option></select>
+          <select id="fEstado"><option value="">Bom e ruim</option><option value="bom">Com peça boa</option><option value="ruim">Com peça ruim</option></select>
+          <select id="fMarketplace"><option value="">Todos os marketplaces</option><option>Mercado Livre</option><option>Shopee</option><option>Magalu</option><option>TIKTOK</option></select>
+        </div>
+      </div>
+      <div class="tab-rolar">
+        <table class="nk-tab" data-nk-tabela data-nk-ordenar="0">
+          <thead><tr><th>Chegou</th><th>Pedido</th><th>Cliente</th><th>Peças</th><th class="num">Perda</th><th>Situação</th></tr></thead>
+          <tbody id="corpo"><tr><td colspan="6" class="vazio">Carregando…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+    <section class="nk-painel">
+      <div class="nk-painel-tit"><div><h2>Peças que mais voltam</h2><p>No mês, com a taxa sobre as unidades vendidas.</p></div></div>
+      <div class="tab-rolar">
+        <table class="nk-tab" data-nk-tabela>
+          <thead><tr><th>Peça</th><th class="num">Voltaram</th><th class="num">Taxa</th><th class="num">Perda</th></tr></thead>
+          <tbody id="ranking"><tr><td colspan="4" class="vazio">Carregando…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
   </div>
-  <section class="nk-painel">
-    <div class="filtros">
-      <select id="fSituacao"><option value="a_tratar">A tratar</option><option value="tratada">Tratadas</option><option value="">Todas</option></select>
-      <select id="fEstado"><option value="">Bom e ruim</option><option value="bom">Com peça boa</option><option value="ruim">Com peça ruim</option></select>
-      <select id="fMarketplace"><option value="">Todos os marketplaces</option><option>Mercado Livre</option><option>Shopee</option><option>Magalu</option><option>TIKTOK</option></select>
-    </div>
-    <table class="dev" data-nk-tabela data-nk-ordenar="0">
-      <thead><tr><th>Recebida</th><th>Pedido</th><th>Cliente</th><th>Peças</th><th>Recebida por</th><th>Situação</th></tr></thead>
-      <tbody id="corpo"><tr><td colspan="6" class="vazio">Carregando…</td></tr></tbody>
-    </table>
-  </section>
 </main>
+<div class="fundo" id="fundo" hidden onclick="fechar()"></div>
 <aside class="gaveta" id="gaveta" hidden></aside>
 <script>
 let FILIAL = ""; try { FILIAL = localStorage.getItem("nk_filial_v1895") || ""; } catch (_) {}
 const API = "/expedicao/api/devolucoes";
-let MOTIVOS = {};
+let MOTIVOS = {}, DESTINOS = {};
 let lista = [];
+let resumo = null;
 let aberta = null;   // id da devolução aberta na gaveta
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const data = s => s ? new Date(s).toLocaleString("pt-BR", {dateStyle: "short", timeStyle: "short"}) : "";
+const dia = s => s ? new Date(s).toLocaleDateString("pt-BR") : "";
+const brl = v => v == null ? "—" : Number(v).toLocaleString("pt-BR", {style: "currency", currency: "BRL"});
+const pct = v => v == null ? "—" : Number(v).toLocaleString("pt-BR", {maximumFractionDigits: 1}) + "%";
+const num = v => Number(v || 0).toLocaleString("pt-BR");
+const norm = s => String(s ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 const avisar = (t, tipo) => (window.nkToast ? nkToast(t, tipo) : alert(t));
+const MESES = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
+const nomeMes = m => m ? `${MESES[+m.slice(5, 7) - 1]}/${m.slice(2, 4)}` : "";
+const ORIGEM_CUSTO = {manual: "digitado", apollo: "Apollo", congelado: "congelado", venda: "da venda"};
 
 async function api(caminho, corpo) {
   const opcoes = {credentials: "same-origin", headers: FILIAL ? {"X-Noromak-Filial": FILIAL} : {}};
@@ -104,113 +162,308 @@ async function api(caminho, corpo) {
   return d;
 }
 
+// ---------- carga ----------
+(function () {
+  const agora = new Date();
+  $("fMes").value = `${agora.getFullYear()}-${String(agora.getMonth() + 1).padStart(2, "0")}`;
+})();
+
 async function carregar() {
-  const q = new URLSearchParams({situacao: $("fSituacao").value, estado: $("fEstado").value,
+  const mes = $("fMes").value;
+  const q = new URLSearchParams({mes, situacao: $("fSituacao").value, estado: $("fEstado").value,
                                  marketplace: $("fMarketplace").value});
   try {
-    const d = await api("?" + q);
+    const [d, r] = await Promise.all([api("?" + q), api("/resumo?mes=" + encodeURIComponent(mes))]);
     $("erro").hidden = true;
     MOTIVOS = d.motivos || {};
+    DESTINOS = d.destinos || {};
     lista = d.devolucoes || [];
-    $("kAtratar").textContent = d.resumo.a_tratar;
-    $("kTratadas").textContent = d.resumo.tratada;
+    resumo = r;
+    desenharKpis();
+    desenharRanking();
     desenhar();
     if (aberta) abrir(aberta);
   } catch (e) {
     $("erro").textContent = e.message; $("erro").hidden = false;
   }
 }
-["fSituacao", "fEstado", "fMarketplace"].forEach(id => $(id).addEventListener("change", carregar));
+["fMes", "fSituacao", "fEstado", "fMarketplace"].forEach(id => $(id).addEventListener("change", carregar));
+$("fBusca").addEventListener("input", desenhar);
 
+// ---------- resumo do mês ----------
+function variacao(atual, antes, maisEhRuim = true, fmt = num) {
+  if (antes == null || atual == null) return `<div class="var igual">sem comparação</div>`;
+  const dif = atual - antes;
+  if (Math.abs(dif) < 0.005) return `<div class="var igual">igual a ${nomeMes(resumo.anterior.periodo)}</div>`;
+  const ruim = maisEhRuim ? dif > 0 : dif < 0;
+  return `<div class="var ${ruim ? "sobe" : "desce"}">${dif > 0 ? "▲" : "▼"} ${fmt(Math.abs(dif))} vs ${nomeMes(resumo.anterior.periodo)}</div>`;
+}
+
+function desenharKpis() {
+  const m = resumo.mes, a = resumo.anterior;
+  const inicio = resumo.financeiro_inicio;
+  $("avisoInicio").hidden = !(resumo.periodo < inicio.slice(0, 7));
+  $("avisoInicio").textContent = `As devoluções entram no lucro do Financeiro a partir de ${dia(inicio + "T12:00:00")}. ` +
+    "Este mês fica só registrado.";
+  // Cartões no padrão da Visão geral (nk-kpi + ícone), como no Faturamento.
+  const kp = (tom, icone, valor, rot, varHtml) =>
+    `<div class="nk-kpi"><span class="nk-kpi-ic ${tom}"><i class="${icone}"></i></span>` +
+    `<span><b>${valor}</b><small>${rot}</small>${varHtml || ""}</span></div>`;
+  $("kpis").innerHTML =
+    kp("", "nk-i-refresh", num(m.devolucoes), `Devoluções · ${num(m.pecas)} peças (${num(m.pecas_ruins)} ruins)`,
+       variacao(m.devolucoes, a.devolucoes)) +
+    kp("bad", "nk-i-dollar", brl(m.perda),
+       m.perda_a_confirmar > 0 ? `Perda · ${brl(m.perda_a_confirmar)} a confirmar` : "Perda do mês",
+       variacao(m.perda, a.perda, true, brl)) +
+    kp("warn", "nk-i-chart", pct(m.taxa), m.vendidas ? `Taxa · ${num(m.pecas)} de ${num(m.vendidas)} vendidas` : "Taxa · sem vendas no mês",
+       m.taxa != null && a.taxa != null ? variacao(m.taxa, a.taxa, true, v => pct(v).replace("%", " p.p.")) : "") +
+    kp(m.a_tratar ? "warn" : "ok", "nk-i-clipboard", num(m.a_tratar), m.a_tratar ? "A tratar no Apollo" : "Tudo tratado") +
+    kp(m.incompletas ? "warn" : "ok", "nk-i-alert", num(m.incompletas), m.incompletas ? "Sem custo ou frete" : "Todas com valor");
+  $("subLista").textContent = `Chegaram em ${nomeMes(resumo.periodo)} · ${num(lista.length)} no filtro.`;
+}
+
+function desenharRanking() {
+  const r = resumo.ranking || [];
+  const max = Math.max(1, ...r.map(x => x.devolvidas));
+  $("ranking").innerHTML = r.length ? r.slice(0, 20).map(x =>
+    `<tr><td><span class="pec">${esc(x.sku)}</span><div class="mini">${esc(x.descricao || "")}</div>` +
+    (x.motivo_principal ? `<div class="mini">principal: ${esc(x.motivo_principal)}</div>` : "") + `</td>` +
+    `<td class="num">${num(x.devolvidas)}<div class="barra"><i style="width:${Math.round(x.devolvidas / max * 100)}%"></i></div></td>` +
+    `<td class="num">${pct(x.taxa)}<div class="mini">${num(x.vendidas)} vendidas</div></td>` +
+    `<td class="num">${x.perda ? brl(x.perda) : "—"}</td></tr>`).join("")
+    : `<tr><td colspan="4" class="vazio">Nenhuma peça voltou neste mês.</td></tr>`;
+}
+
+// ---------- lista ----------
 function pecas(d) {
-  return d.itens.map(i => `<div class="pec">${esc(i.sku)} ×${i.qtd} ` +
-    (i.estado === "ruim" ? `<span class="ruim">ruim · ${esc(i.motivo_nome)}</span>` : `<span class="bom">bom</span>`) +
-    (i.fora_da_venda ? ` <span class="aviso">não bate com a venda</span>` : "") + `</div>`).join("");
+  return d.itens.filter(i => i.qtd > 0).map(i => `<div class="pec">${esc(i.sku)} ×${i.qtd} ` +
+    (i.estado === "ruim" ? `<span class="ruim">ruim</span>` : `<span class="bom">bom</span>`) +
+    (i.fora_da_venda ? ` <span class="nk-selo warn">fora da venda</span>` : "") + `</div>`).join("") ||
+    `<span class="mini">peças zeradas</span>`;
+}
+
+function perdaCelula(v) {
+  if (!v) return "—";
+  if (v.incompleta) return `${v.perda_conhecida ? brl(v.perda_conhecida) + "+" : ""}<div><span class="nk-selo warn" title="Falta: ${esc(v.falta.join(", "))}">incompleta</span></div>`;
+  return brl(v.perda) + (v.confirmada ? "" : `<div class="mini">a confirmar</div>`);
 }
 
 function desenhar() {
-  $("corpo").innerHTML = lista.length ? lista.map(d =>
-    `<tr data-id="${d.id}"><td>${esc(data(d.recebido_em))}</td>` +
-    `<td>${d.sem_pedido ? `<span class="aviso">sem pedido</span> ${esc(d.pedido)}` : `<b>${esc(d.pedido)}</b>`}` +
-    `<div class="sub">${esc(d.marketplace)} · ${esc(d.filial_nome)}</div></td>` +
-    `<td>${esc(d.cliente)}</td><td>${pecas(d)}</td><td>${esc(d.recebido_por)}</td>` +
-    `<td>${d.situacao === "tratada" ? `Tratada<div class="sub">${esc(d.documento_apollo)}</div>` : "<b>A tratar</b>"}</td></tr>`).join("")
+  const busca = norm($("fBusca").value.trim());
+  const vis = busca ? lista.filter(d => norm([d.pedido, d.cliente, ...d.itens.map(i => i.sku)].join(" ")).includes(busca)) : lista;
+  $("corpo").innerHTML = vis.length ? vis.map(d =>
+    `<tr class="cl" data-id="${d.id}"><td>${esc(data(d.recebido_em))}</td>` +
+    `<td>${d.sem_pedido ? `<span class="nk-selo warn">sem pedido</span> ${esc(d.pedido)}` : `<b>${esc(d.pedido)}</b>`}` +
+    `<div class="mini">${esc(d.marketplace || "—")} · ${esc(d.filial_nome)}</div></td>` +
+    `<td>${esc(d.cliente || "—")}</td><td>${pecas(d)}</td><td class="num">${perdaCelula(d.valores)}</td>` +
+    `<td>${d.situacao === "tratada" ? `<span class="nk-selo ok">tratada</span><div class="mini">${esc(d.documento_apollo)}</div>`
+                                    : `<span class="nk-selo warn">a tratar</span>`}</td></tr>`).join("")
     : `<tr><td colspan="6" class="vazio">Nenhuma devolução neste filtro.</td></tr>`;
   $("corpo").querySelectorAll("tr[data-id]").forEach(tr => tr.addEventListener("click", () => abrir(+tr.dataset.id)));
 }
 
-const NOMES_ACAO = {registrada: "Recebida", corrigida: "Corrigida", tratada: "Tratada", reaberta: "Reaberta"};
+// ---------- gaveta ----------
+const NOMES_ACAO = {registrada: "Recebida", corrigida: "Corrigida", tratada: "Tratada", reaberta: "Reaberta",
+                    valores: "Valores alterados"};
+
+function detalheEvento(e) {
+  if (e.acao === "corrigida")
+    return `<br>antes: ${esc((e.detalhe.antes || []).map(x => `${x.sku} ×${x.qtd} ${x.estado}${x.motivo ? " (" + (MOTIVOS[x.motivo] || x.motivo) + ")" : ""}`).join("; "))}`;
+  if (e.acao === "valores") {
+    const a = e.detalhe.antes || {}, p = e.detalhe.depois || {};
+    return "<br>" + esc(Object.keys(p).map(k => `${k.replace(".destino", " destino").replace(".custo", " custo")}: ` +
+      `${a[k] ?? "—"} → ${p[k] ?? "—"}`).join("; "));
+  }
+  if (e.acao === "tratada") return ` · documento ${esc(e.detalhe.documento)}`;
+  if (e.acao === "reaberta" && e.detalhe.documento) return ` · documento anterior ${esc(e.detalhe.documento)}`;
+  return "";
+}
 
 function abrir(id) {
   const d = lista.find(x => x.id === id);
   const g = $("gaveta");
-  if (!d) { g.hidden = true; aberta = null; return; }
+  if (!d) { fechar(); return; }
   aberta = id;
+  const tratada = d.situacao === "tratada";
+  const v = d.valores || {itens: []};
+  const val = Object.fromEntries((v.itens || []).map(x => [x.id, x]));
   const opcoesMotivo = sel => `<option value="">—</option>` +
-    Object.entries(MOTIVOS).map(([k, v]) => `<option value="${k}"${sel === k ? " selected" : ""}>${esc(v)}</option>`).join("");
+    Object.entries(MOTIVOS).map(([k, t]) => `<option value="${k}"${sel === k ? " selected" : ""}>${esc(t)}</option>`).join("");
+  const opcoesDestino = sel => Object.entries(DESTINOS).map(([k, t]) => `<option value="${k}"${sel === k ? " selected" : ""}>${esc(t)}</option>`).join("");
+  const freteOrigem = v.frete_origem === "ml" ? "lido do Mercado Livre" : v.frete_origem === "digitado" ? "digitado" : "não informado";
   g.innerHTML =
-    `<button class="nk-btn fechar" onclick="fechar()">Fechar</button>` +
-    `<h2>${d.sem_pedido ? "Devolução sem pedido" : "Pedido " + esc(d.pedido)}</h2>` +
-    `<div class="sub">${esc(d.marketplace)} · ${esc(d.filial_nome)} · cliente ${esc(d.cliente)}<br>` +
-    `Recebida por ${esc(d.recebido_por)} em ${esc(data(d.recebido_em))}${d.obs ? "<br>Obs.: " + esc(d.obs) : ""}</div>` +
-    `<table><thead><tr><th>Peça</th><th>Vendido</th><th>Voltou</th><th>Estado</th><th>Motivo</th><th>Obs.</th></tr></thead><tbody>` +
-    d.itens.map(i => `<tr data-item="${i.id}"><td class="pec">${esc(i.sku)}${i.fora_da_venda ? '<div class="aviso">não bate com a venda</div>' : ""}` +
-      `<div class="sub">${esc(i.descricao)}</div></td><td>${i.qtd_vendida ?? "—"}</td>` +
-      `<td><input type="number" min="0" value="${i.qtd}" data-c="qtd" title="0 = peça lançada por engano"></td>` +
-      `<td><select data-c="estado"><option value="bom"${i.estado === "bom" ? " selected" : ""}>Bom</option>` +
-      `<option value="ruim"${i.estado === "ruim" ? " selected" : ""}>Ruim</option></select></td>` +
-      `<td><select data-c="motivo">${opcoesMotivo(i.motivo)}</select></td>` +
-      `<td><input type="text" value="${esc(i.obs)}" data-c="obs" style="width:110px"></td></tr>`).join("") +
-    `</tbody></table>` +
-    `<div class="linha-acao"><button class="nk-btn" onclick="corrigir(${d.id})">Salvar correção</button></div>` +
-    (d.situacao === "tratada"
-      ? `<div class="linha-acao">Tratada por <b>${esc(d.tratada_por)}</b> em ${esc(data(d.tratada_em))} · documento <b>${esc(d.documento_apollo)}</b>` +
-        `<button class="nk-btn" onclick="reabrir(${d.id})">Reabrir</button></div>`
-      : `<div class="linha-acao"><input id="docApollo" placeholder="Nº do documento no Apollo" style="flex:1">` +
-        `<button class="nk-btn" onclick="tratar(${d.id})">Marcar tratada</button></div>`) +
-    `<div class="eventos"><b>Histórico</b>` + d.eventos.map(e =>
-      `<div>${esc(data(e.quando))} · <b>${esc(NOMES_ACAO[e.acao] || e.acao)}</b> por ${esc(e.quem)}` +
-      (e.acao === "corrigida" ? `<br>antes: ${esc((e.detalhe.antes || []).map(x => `${x.sku} ×${x.qtd} ${x.estado}${x.motivo ? " (" + (MOTIVOS[x.motivo] || x.motivo) + ")" : ""}`).join("; "))}` : "") +
-      (e.acao === "tratada" ? ` · documento ${esc(e.detalhe.documento)}` : "") +
-      (e.acao === "reaberta" && e.detalhe.documento ? ` · documento anterior ${esc(e.detalhe.documento)}` : "") +
-      `</div>`).join("") + `</div>`;
+    `<div class="gav-cab"><div class="linha"><h2>${d.sem_pedido ? "Devolução sem pedido" : "Pedido " + esc(d.pedido)}</h2>` +
+    `<button class="nk-btn" onclick="fechar()">Fechar</button></div>` +
+    `<div class="meta">${tratada ? `<span class="nk-selo ok">tratada</span>` : `<span class="nk-selo warn">a tratar</span>`}` +
+    `<span>${esc(d.marketplace || "—")} · ${esc(d.filial_nome)}</span><span>· cliente ${esc(d.cliente || "—")}</span>` +
+    `<span>· chegou ${esc(data(d.recebido_em))} por ${esc(d.recebido_por)}</span></div>` +
+    (d.obs ? `<div class="meta">Obs.: ${esc(d.obs)}</div>` : "") + `</div>` +
+    `<div class="gav-corpo">` +
+    `<div class="conta">` +
+    `<div class="c"><div class="rot">Peças perdidas</div><b>${v.perda_pecas == null ? "sem custo" : brl(v.perda_pecas)}</b></div>` +
+    `<div class="c"><div class="rot">Frete da devolução</div><b>${v.frete == null ? "não informado" : brl(v.frete)}</b><div class="mini">${freteOrigem}</div></div>` +
+    `<div class="c total"><div class="rot">Perda</div><b>${v.incompleta ? "incompleta" : brl(v.perda)}</b>` +
+    `<div class="mini">${v.incompleta ? "falta: " + esc((v.falta || []).join(", ")) : (v.confirmada ? "confirmada" : "a confirmar até tratar")}</div></div>` +
+    `</div>` +
+    `<div class="secao"><h3>NF de venda</h3><div id="nfBox" class="mini">${d.sem_pedido ? "Devolução sem pedido." : "Buscando a nota…"}</div></div>` +
+    `<div class="secao"><h3>Peças</h3>` +
+    d.itens.map(i => {
+      const x = val[i.id] || {};
+      const des = tratada ? " disabled" : "";
+      return `<div class="peca" data-item="${i.id}"><div class="peca-topo"><div><span class="pec">${esc(i.sku)}</span>` +
+        (i.fora_da_venda ? ` <span class="nk-selo warn">fora da venda</span>` : "") +
+        `<div class="mini">${esc(i.descricao)}</div>${i.obs ? `<div class="mini">obs. do operador: ${esc(i.obs)}</div>` : ""}</div>` +
+        `<div class="num">vendido ${i.qtd_vendida ?? "—"}</div></div>` +
+        `<div class="peca-campos">` +
+        `<div><label>Voltou</label><input type="number" min="0" value="${i.qtd}" data-c="qtd" title="0 = peça lançada por engano"${des}></div>` +
+        `<div><label>Estado</label><select data-c="estado"${des}><option value="bom"${i.estado === "bom" ? " selected" : ""}>Bom</option>` +
+        `<option value="ruim"${i.estado === "ruim" ? " selected" : ""}>Ruim</option></select></div>` +
+        `<div><label>Motivo</label><select data-c="motivo"${des}>${opcoesMotivo(i.motivo)}</select></div>` +
+        `<div><label>Destino</label><select data-c="destino">${opcoesDestino(i.destino)}</select></div>` +
+        `<div><label>Custo un.${x.custo_origem ? " · " + esc(ORIGEM_CUSTO[x.custo_origem] || x.custo_origem) : ""}</label>` +
+        `<input data-c="custo" inputmode="decimal" value="${x.custo != null ? String(x.custo).replace(".", ",") : ""}" placeholder="sem custo"></div>` +
+        `<div><label>Perda</label><div class="perda-peca">${x.perda != null ? brl(x.perda) : (i.destino === "perda" && i.qtd > 0 ? "—" : "R$ 0,00")}</div></div>` +
+        `</div></div>`;
+    }).join("") + `</div>` +
+    `<div class="secao"><h3>Frete da devolução</h3><div class="frete-linha">` +
+    `<input class="campo" id="frete" inputmode="decimal" placeholder="R$ (vazio = do ML)" value="${v.frete_origem === "digitado" && v.frete != null ? String(v.frete).replace(".", ",") : ""}" style="width:170px">` +
+    `<span class="mini">${v.frete_origem === "ml" ? "O ML cobrou " + brl(v.frete) + ". Digite só para corrigir." : "Shopee, Bauru ou sem reclamação no ML: digite o valor cobrado (0 se não houve)."}</span></div></div>` +
+    `<div class="linha-acao"><button class="nk-btn pri" onclick="salvar(${d.id})">Salvar alterações</button></div>` +
+    `<div class="secao"><h3>Apollo</h3>` +
+    (tratada
+      ? `<div class="tratada-box">Tratada por <b>${esc(d.tratada_por)}</b> em ${esc(data(d.tratada_em))} · documento <b>${esc(d.documento_apollo)}</b>` +
+        `<div class="linha-acao"><button class="nk-btn" onclick="reabrir(${d.id})">Reabrir</button></div></div>`
+      : `<div class="frete-linha"><input class="campo" id="docApollo" placeholder="Nº do documento no Apollo" style="flex:1;min-width:220px">` +
+        `<button class="nk-btn pri" onclick="tratar(${d.id})">Marcar tratada</button></div>` +
+        `<div class="mini" style="margin-top:6px">Ao tratar, o custo das peças e o frete ficam gravados: a perda deixa de ser "a confirmar".</div>`) +
+    `</div>` +
+    `<div class="secao"><h3>Histórico</h3><div class="eventos">` + d.eventos.slice().reverse().map(e =>
+      `<div>${esc(data(e.quando))} · <b>${esc(NOMES_ACAO[e.acao] || e.acao)}</b> por ${esc(e.quem)}${detalheEvento(e)}</div>`).join("") +
+    `</div></div></div>`;
   g.hidden = false;
+  $("fundo").hidden = false;
+  if (!d.sem_pedido) carregarNf(d.id);
 }
 
-function fechar() { $("gaveta").hidden = true; aberta = null; }
-
-async function enviar(caminho, corpo, ok) {
+// V19.95: NF de venda (Mercado Livre: número, série, chave, data e valor; lida uma vez e guardada no servidor).
+const NFS = {};
+function nfHtml(r) {
+  if (!r.nf) return esc(r.motivo || "Sem nota.");
+  const n = r.nf;
+  return `<div class="nf"><b>NF ${esc(n.numero)}${n.serie ? " · série " + esc(n.serie) : ""}</b>` +
+    `${n.emitente ? ` <span class="nk-selo info">${esc(n.emitente)}</span>` : ""}` +
+    `<div>emitida em ${esc(dia(n.emitida_em))}${n.valor != null ? " · " + brl(n.valor) : ""}${n.venda ? " · venda " + esc(n.venda) : ""}</div>` +
+    (n.chave ? `<div class="chave"><span class="pec">${esc(n.chave.replace(/(\d{4})(?=\d)/g, "$1 "))}</span> ` +
+      `<button class="nk-btn mini" onclick="copiarChave('${esc(n.chave)}')">Copiar chave</button></div>` : "") + `</div>`;
+}
+async function carregarNf(id) {
+  const box = () => aberta === id ? $("nfBox") : null;
+  if (NFS[id]) { if (box()) box().innerHTML = nfHtml(NFS[id]); return; }
   try {
-    await api(caminho, corpo);
-    avisar(ok, "ok");
+    const r = await api("/nf?id=" + id);
+    if (r.nf) NFS[id] = r;
+    if (box()) box().innerHTML = nfHtml(r);
   } catch (e) {
-    avisar(e.status === 409 ? "Outra pessoa alterou esta devolução. A tela foi recarregada — confira e repita." : e.message, "bad");
+    if (box()) box().textContent = "Não foi possível ler a nota: " + e.message;
+  }
+}
+async function copiarChave(chave) {
+  try { await navigator.clipboard.writeText(chave); avisar("Chave copiada.", "ok"); }
+  catch (_) { avisar(chave, "info"); }
+}
+
+function fechar() { $("gaveta").hidden = true; $("fundo").hidden = true; aberta = null; }
+document.addEventListener("keydown", ev => { if (ev.key === "Escape" && aberta) fechar(); });
+
+const numeroOuVazio = t => {
+  t = String(t ?? "").trim().replace(/\./g, "").replace(",", ".");
+  if (t === "") return null;
+  const n = Number(t);
+  return Number.isFinite(n) && n >= 0 ? n : NaN;
+};
+
+function erroDe(e) {
+  return e.status === 409 ? "Outra pessoa alterou esta devolução. A tela foi recarregada — confira e repita." : e.message;
+}
+
+async function salvar(id) {
+  const d = lista.find(x => x.id === id);
+  const v = d.valores || {itens: []};
+  const val = Object.fromEntries((v.itens || []).map(x => [x.id, x]));
+  const linhas = [...$("gaveta").querySelectorAll(".peca[data-item]")];
+  const pega = (tr, c) => tr.querySelector(`[data-c="${c}"]`).value;
+  // 1) quantidade / estado / motivo (só antes de tratar)
+  const correcao = [];
+  if (d.situacao !== "tratada") {
+    for (const tr of linhas) {
+      const i = d.itens.find(x => x.id === +tr.dataset.item);
+      const qtd = parseInt(pega(tr, "qtd"), 10) || 0, estado = pega(tr, "estado");
+      const motivo = estado === "ruim" ? pega(tr, "motivo") : "";
+      if (estado === "ruim" && !motivo) return avisar(`${i.sku}: peça ruim precisa do motivo.`, "bad");
+      if (qtd !== i.qtd || estado !== i.estado || motivo !== (i.motivo || ""))
+        correcao.push({id: i.id, qtd, estado, motivo, obs: i.obs || ""});
+    }
+  }
+  // 2) destino / custo / frete
+  const itensValores = [];
+  for (const tr of linhas) {
+    const i = d.itens.find(x => x.id === +tr.dataset.item);
+    const x = val[i.id] || {};
+    const it = {id: i.id};
+    if (pega(tr, "destino") !== i.destino) it.destino = pega(tr, "destino");
+    const custo = numeroOuVazio(pega(tr, "custo"));
+    if (Number.isNaN(custo)) return avisar(`${i.sku}: custo inválido.`, "bad");
+    if (custo !== (x.custo ?? null) && !(custo === null && x.custo_origem !== "manual")) it.custo = custo;
+    if (Object.keys(it).length > 1) itensValores.push(it);
+  }
+  const frete = numeroOuVazio($("frete").value);
+  if (Number.isNaN(frete)) return avisar("Frete inválido.", "bad");
+  const freteAtual = v.frete_origem === "digitado" ? v.frete : null;
+  const mudouFrete = frete !== freteAtual;
+  if (!correcao.length && !itensValores.length && !mudouFrete) return avisar("Nada mudou.", "info");
+  try {
+    let versao = d.versao;
+    if (correcao.length) {
+      const r = await api("/corrigir", {id, versao, itens: correcao});
+      versao = r.devolucao.versao;
+    }
+    if (itensValores.length || mudouFrete) {
+      const corpo = {id, versao, itens: itensValores};
+      if (mudouFrete) corpo.frete = frete;
+      await api("/valores", corpo);
+    }
+    avisar("Alterações salvas.", "ok");
+  } catch (e) {
+    avisar(erroDe(e), "bad");
   }
   await carregar();
 }
 
-function corrigir(id) {
-  const d = lista.find(x => x.id === id);
-  const itens = [...$("gaveta").querySelectorAll("tr[data-item]")].map(tr => {
-    const v = c => tr.querySelector(`[data-c="${c}"]`).value;
-    return {id: +tr.dataset.item, qtd: parseInt(v("qtd"), 10) || 0, estado: v("estado"),
-            motivo: v("estado") === "ruim" ? v("motivo") : "", obs: v("obs")};
-  });
-  enviar("/corrigir", {id, versao: d.versao, itens}, "Correção salva.");
-}
-
-function tratar(id) {
+async function tratar(id) {
   const d = lista.find(x => x.id === id);
   const documento = $("docApollo").value.trim();
   // Peças todas zeradas (lançada por engano): nada a lançar no Apollo, trata sem documento.
   if (!documento && d.itens.some(i => i.qtd > 0)) return avisar("Informe o nº do documento do Apollo.", "bad");
-  enviar("/tratar", {id, versao: d.versao, documento}, "Devolução marcada como tratada.");
+  try {
+    await api("/tratar", {id, versao: d.versao, documento});
+    avisar("Devolução marcada como tratada.", "ok");
+  } catch (e) {
+    avisar(erroDe(e), "bad");
+  }
+  await carregar();
 }
 
 async function reabrir(id) {
   const d = lista.find(x => x.id === id);
   const ok = window.nkConfirmar ? await nkConfirmar("Reabrir esta devolução? Ela volta para \"a tratar\".") : confirm("Reabrir?");
-  if (ok) enviar("/reabrir", {id, versao: d.versao}, "Devolução reaberta.");
+  if (!ok) return;
+  try {
+    await api("/reabrir", {id, versao: d.versao});
+    avisar("Devolução reaberta.", "ok");
+  } catch (e) {
+    avisar(erroDe(e), "bad");
+  }
+  await carregar();
 }
 
 carregar();

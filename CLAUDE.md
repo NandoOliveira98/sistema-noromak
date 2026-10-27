@@ -5,7 +5,7 @@ Shopee, manuais), expedição, separação, conferência por código de barras, 
 produtos/SKUs/EANs, kits, precificação, promoções, rentabilidade, estoque, Central de
 Pendências e histórico.
 
-Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V19.94).
+Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V19.95).
 
 ---
 
@@ -1247,6 +1247,19 @@ reembolso). Venda cancelada some de `vendas_v1799` (janela regravada). Para o n�
 resultado), `_devolucao_ler_venda_ml` lê `/orders/{id}` nas contas conectadas **uma vez** e guarda em
 `devolucao_venda_ml_v1994` (a cópia das vendas manda quando existe); "não existe" fica 30 min em memória; erro = não
 achou. Tela marca "cancelada".
+**V19.95 — devoluções no lucro + NF de venda** (dono, 27/10; desenho em `docs/superpowers/specs/2026-10-27-devolucoes-lucro-design.md`).
+Perda = custo de **Araçatuba** das peças com destino `perda` + frete da devolução; o valor da venda não entra (a cancelada
+já sai do faturamento). Destino por peça (`devolucao_item_v1988.destino`: estoque/perda/garantia/desconto; vazio = do
+estado). Custo: o do Financeiro (`_financeiro_custo_aracatuba`), **congelado ao tratar** (`custo_unit`), digitável
+(`manual`). Frete: digitado vence; senão `ml_reclamacao_v1888.frete_devolucao` pelas vendas ligadas ao pedido; sem custo
+ou frete = `incompleta` (perda None; o Financeiro soma só `perda_conhecida`). Conta no **mês em que a peça chegou**, "a
+confirmar" até tratar, só **a partir de 01/11/2026** (`DEVOLUCAO_FINANCEIRO_INICIO`) e só Araçatuba no Financeiro:
+`financeiro_devolucoes` → bloco `devolucoes` em totais/por_mp/por_dia, descontado do líquido; `cobertura.devolucoes_*`.
+Rotas `GET /api/devolucoes/resumo?mes=` (KPIs do mês × anterior, taxa = peças devolvidas ÷ unidades vendidas, ranking por
+peça) e `POST /api/devolucoes/valores` (frete, destino, custo; histórico `valores`). **NF de venda**:
+`GET /api/devolucoes/nf?id=` (admin) / `?chave=` (operador) lê `/users/{seller}/invoices/orders/{order}` (número,
+série, chave, data, valor; Full = série 2) uma vez e guarda em `devolucao_nf_v1995`; sem PDF da DANFE por essa API;
+Shopee não traz. Telas com `theme.css` (o padrão das outras). Teste: `TESTES/test_devolucoes_lucro_v1995.py`.
 
 **V19.45 — Cliente do Full pela NF-e do ML** (decisões do dono, 16/10). Venda Full não passa pela fila, e a integração
 ML → Apollo cria o cliente com o nome da conta ("Premium Flex") em vez da razão social da nota (M2 SOLUCOES GRAFICAS).

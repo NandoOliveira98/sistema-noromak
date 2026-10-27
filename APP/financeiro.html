@@ -79,7 +79,7 @@ main{max-width:1680px;margin:0 auto;padding:16px 20px 64px;
 .kpi .val.neg{color:var(--neg)}.kpi.forte .val.neg{color:#ffb4ab}
 
 /* faixa de custos */
-.custos{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:0}
+.custos{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:0}
 .custos .c{padding:13px 16px;border-left:1px solid var(--line2)}
 .custos .c:first-child{border-left:0}
 .custos .rot{font-size:11px;font-weight:600;color:var(--ink2);text-transform:uppercase;letter-spacing:.05em}
@@ -263,7 +263,8 @@ html[data-tema="escuro"] .faixa{color:#F0B357!important}
     return String(Math.round(v || 0));
   };
   const COR = { fat: "#12345B", cmv: "#1F57A5", taxa: "#4b87c4", frete: "#9cc0e4",
-                ads: "#F28B18", imposto: "#c3ccd6", outros: "#e0e6ec", lucro: "#1B7A3E", perda: "#b42318" };
+                ads: "#F28B18", imposto: "#c3ccd6", outros: "#e0e6ec", lucro: "#1B7A3E", perda: "#b42318",
+                devolucoes: "#8a5300" };
 
   const state = { dados: null, aba: "sku", carregando: false };
 
@@ -319,6 +320,10 @@ html[data-tema="escuro"] .faixa{color:#F0B357!important}
       { r: "Publicidade", v: t.ads, s: d.ads.fonte ? p(t.ads) : "sem dado de Ads",
         a: "", t: adsDetalhe(d.ads) },
       { r: `Imposto ${pct0(d.imposto_percent)}`, v: t.imposto, s: "sobre o valor da venda", a: "" },
+      // V19.95: perda das devoluções (peça perdida + frete), pelo dia em que a peça chegou
+      { r: "Devoluções", v: t.devolucoes || 0, s: d.cobertura.devolucoes_qtd ? `${num(d.cobertura.devolucoes_qtd)} devolução(ões)` : "nenhuma no período",
+        a: d.cobertura.devolucoes_incompletas > 0 ? `${num(d.cobertura.devolucoes_incompletas)} sem custo ou frete` : "",
+        t: d.cobertura.devolucoes_a_confirmar > 0 ? `${brl(d.cobertura.devolucoes_a_confirmar)} ainda a confirmar (não tratadas)` : "" },
     ];
     $("custos").innerHTML = itens.map((x) => `<div class="c"${x.t ? ` title="${esc(x.t)}"` : ""}>`
       + `<div class="rot">${esc(x.r)}</div><div class="val">${esc(brl(x.v))}</div>`
@@ -343,6 +348,8 @@ html[data-tema="escuro"] .faixa{color:#F0B357!important}
     if (c.faturamento_sem_frete > 0) av.push(`<b>${brl(c.faturamento_sem_frete)}</b> sem o frete conciliado — onde aparecer R$ 0,00 de frete, leia “ainda não sei”.`);
     if (c.pedidos_shopee > c.pedidos_shopee_conciliados) av.push(`${num(c.pedidos_shopee - c.pedidos_shopee_conciliados)} de ${num(c.pedidos_shopee)} pedidos da Shopee sem o escrow consultado.`);
     if (c.divergencias > 0) av.push(`${num(c.divergencias)} pedido(s) em que a fatura cobrou diferente da venda (${brl(c.divergencia_total)} no total). A fatura prevalece.`);
+    if (c.devolucoes_incompletas > 0) av.push(`${num(c.devolucoes_incompletas)} devolução(ões) sem custo da peça ou sem frete — entra só a parte conhecida. Complete na tela de Devoluções.`);
+    if (c.devolucoes_a_confirmar > 0) av.push(`${brl(c.devolucoes_a_confirmar)} de perda com devoluções ainda não tratadas (a confirmar).`);
     if (!d.ads.fonte) av.push("Sem gasto de Ads no período, nem pela API nem pela fatura.");
     else if (d.ads.sem_sku > 0) av.push(`${brl(d.ads.sem_sku)} de Ads sem anúncio identificado: entra no total e no dia, não na linha do produto.`);
     const el = $("cobertura");
@@ -367,6 +374,7 @@ html[data-tema="escuro"] .faixa{color:#F0B357!important}
       { n: "Ads", v: -t.ads, cor: COR.ads },
       { n: "Imposto", v: -t.imposto, cor: COR.imposto },
       { n: "Outros", v: -t.outros, cor: COR.outros },
+      { n: "Devoluções", v: -(t.devolucoes || 0), cor: COR.devolucoes },
       { n: "Lucro líquido", v: t.lucro_liquido, total: true, cor: t.lucro_liquido >= 0 ? COR.lucro : COR.perda },
     ].filter((p) => p.total || Math.abs(p.v) > 0.005);
     const W = 640, H = 240, pad = { t: 26, r: 12, b: 38, l: 12 };
@@ -448,6 +456,7 @@ html[data-tema="escuro"] .faixa{color:#F0B357!important}
       { n: "Frete", v: t.frete, cor: COR.frete },
       { n: "Publicidade", v: t.ads, cor: COR.ads },
       { n: "Outros", v: t.outros, cor: COR.outros },
+      { n: "Devoluções", v: t.devolucoes || 0, cor: COR.devolucoes },
     ].filter((f) => f.v > 0);
     const soma = fatias.reduce((a, f) => a + f.v, 0) || 1;
     const R = 70, r = 46, cx = 85, cy = 85;

@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.94-VENDA-CANCELADA"
+APP_VERSION = "19.95-DEVOLUCOES-LUCRO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -17719,6 +17719,19 @@ def ensure_devolucoes_schema() -> None:
             );
             """
         )
+        # V19.95: devoluções no lucro — destino, custo e frete (desenho 2026-10-27-devolucoes-lucro-design.md).
+        cols_item = {r[1] for r in DB.execute("PRAGMA table_info(devolucao_item_v1988)").fetchall()}
+        for nome, ddl in (("destino", "TEXT NOT NULL DEFAULT ''"), ("custo_unit", "REAL"),
+                          ("custo_origem", "TEXT NOT NULL DEFAULT ''")):
+            if nome not in cols_item:
+                DB.execute(f"ALTER TABLE devolucao_item_v1988 ADD COLUMN {nome} {ddl}")
+        cols_dev = {r[1] for r in DB.execute("PRAGMA table_info(devolucao_v1988)").fetchall()}
+        for nome, ddl in (("frete", "REAL"), ("frete_origem", "TEXT NOT NULL DEFAULT ''")):
+            if nome not in cols_dev:
+                DB.execute(f"ALTER TABLE devolucao_v1988 ADD COLUMN {nome} {ddl}")
+        # V19.95: NF de venda do ML lida uma vez por pedido.
+        DB.execute("""CREATE TABLE IF NOT EXISTS devolucao_nf_v1995 (
+                order_key TEXT PRIMARY KEY, nf_json TEXT NOT NULL, lido_em TEXT NOT NULL)""")
         # V19.94: venda do ML lida na hora (cancelada some de vendas_v1799; a devolução ainda precisa dela).
         DB.execute("""CREATE TABLE IF NOT EXISTS devolucao_venda_ml_v1994 (
                 order_id TEXT PRIMARY KEY, pack_id TEXT NOT NULL DEFAULT '', conta TEXT NOT NULL DEFAULT '',
@@ -18429,7 +18442,10 @@ def _devolucao_ler(dev_id: int) -> dict[str, Any] | None:
     d["sem_pedido"] = bool(d["sem_pedido"])
     d["filial_nome"] = CASAS.get(d["filial"], d["filial"])
     d["itens"] = [{**dict(i), "fora_da_venda": bool(i["fora_da_venda"]),
-                   "motivo_nome": DEVOLUCAO_MOTIVOS.get(i["motivo"], "")}
+                   "motivo_nome": DEVOLUCAO_MOTIVOS.get(i["motivo"], ""),
+                   # V19.95: destino escolhido pelo admin; sem escolha, vem do estado (bom = estoque, ruim = perda)
+                   "destino": i["destino"] or ("perda" if i["estado"] == "ruim" else "estoque"),
+                   "destino_escolhido": bool(i["destino"])}
                   for i in DB.execute("SELECT * FROM devolucao_item_v1988 WHERE devolucao_id=? ORDER BY id",
                                       (dev_id,)).fetchall()]
     d["eventos"] = [{**dict(e), "detalhe": _filial_json(e["detalhe"], {})}
@@ -18455,19 +18471,29 @@ def devolucoes_lista(filtros: dict[str, Any], filial: str) -> dict[str, Any]:
     if estado in ("bom", "ruim"):
         conds.append("id IN (SELECT devolucao_id FROM devolucao_item_v1988 WHERE estado=? AND qtd>0)")
         params.append(estado)
+    mes = _devolucao_mes_valido(filtros.get("mes"))   # V19.95: devoluções que chegaram no mês
+    if mes:
+        ini, fim = _devolucao_faixa_mes(mes)
+        conds.append("recebido_em >= ? AND recebido_em < ?")
+        params += [ini, fim]
     onde = (" WHERE " + " AND ".join(conds)) if conds else ""
     with DB_LOCK:
         ids = [int(r[0]) for r in DB.execute(
-            f"SELECT id FROM devolucao_v1988{onde} ORDER BY situacao='tratada', recebido_em DESC LIMIT 300",
+            f"SELECT id FROM devolucao_v1988{onde} ORDER BY situacao='tratada', recebido_em DESC LIMIT 500",
             params).fetchall()]
         devolucoes = [_devolucao_ler(i) for i in ids]
+    devolucoes = [d for d in devolucoes if d and (not mes or _devolucao_mes_br(d["recebido_em"]) == mes)][:300]
+    custos_ctx = _financeiro_custos_aracatuba() if devolucoes else {}
+    for d in devolucoes:
+        d["valores"] = devolucao_valores(d, custos_ctx)
+    with DB_LOCK:
         contagem = {r[0]: int(r[1]) for r in DB.execute(
             "SELECT situacao, COUNT(*) FROM devolucao_v1988"
             + (" WHERE filial=?" if filial != FILIAL_TODAS else "") + " GROUP BY situacao",
             [] if filial == FILIAL_TODAS else [filial]).fetchall()}
-    return {"ok": True, "devolucoes": [d for d in devolucoes if d],
+    return {"ok": True, "devolucoes": devolucoes,
             "resumo": {"a_tratar": contagem.get("a_tratar", 0), "tratada": contagem.get("tratada", 0)},
-            "motivos": DEVOLUCAO_MOTIVOS}
+            "motivos": DEVOLUCAO_MOTIVOS, "destinos": DEVOLUCAO_DESTINOS}
 
 
 def _devolucao_para_mudar(dev_id: Any, versao: Any, filial: str) -> dict[str, Any]:
@@ -18505,6 +18531,7 @@ def _devolucao_mudar(dev_id: Any, versao: Any, filial: str, usuario: str, mudar)
 def devolucao_tratar(dev_id: Any, documento: Any, versao: Any, usuario: str,
                      filial: str = FILIAL_TODAS) -> dict[str, Any]:
     documento = str(documento or "").strip()[:80]
+    custos_ctx = _financeiro_custos_aracatuba()   # V19.95: lido fora da trava; o custo fica congelado ao tratar
 
     def mudar(d: dict[str, Any]) -> str:
         nonlocal documento
@@ -18517,9 +18544,380 @@ def devolucao_tratar(dev_id: Any, documento: Any, versao: Any, usuario: str,
             documento = "nada voltou (peças zeradas)"
         DB.execute("UPDATE devolucao_v1988 SET situacao='tratada', documento_apollo=?, tratada_por=?, tratada_em=? "
                    "WHERE id=?", (documento, usuario, now_iso(), d["id"]))
+        _devolucao_congelar_valores(d, custos_ctx)   # V19.95
         _devolucao_evento(d["id"], usuario, "tratada", {"documento": documento})
         return "tratar"
     return _devolucao_mudar(dev_id, versao, filial, usuario, mudar)
+
+
+# V19.95 — devoluções no lucro (decisões do dono, 27/10). Perda = custo de Araçatuba das peças com destino "perda"
+# + frete da devolução. O valor da venda NÃO entra (a venda cancelada já sai do faturamento). Desconhecido nunca vira
+# zero: sem custo ou sem frete a perda é "incompleta" (perda=None; o Financeiro soma só a parte conhecida e conta as
+# incompletas). Conta no mês em que a peça chegou; só a partir de 01/11/2026; só Araçatuba no Financeiro.
+DEVOLUCAO_DESTINOS = {"estoque": "Volta ao estoque", "perda": "Perda", "garantia": "Garantia com fornecedor",
+                      "desconto": "Venda com desconto"}
+DEVOLUCAO_FINANCEIRO_INICIO = "2026-11-01"
+DEVOLUCAO_MP_FINANCEIRO = {"Mercado Livre": "ml", "Shopee": "shopee"}
+
+
+def _devolucao_mes_valido(mes: Any) -> str:
+    mes = str(mes or "").strip()
+    try:
+        datetime.strptime(mes + "-01", "%Y-%m-%d")
+        return mes
+    except ValueError:
+        return ""
+
+
+def _devolucao_mes_seguinte(mes: str) -> str:
+    a, m = int(mes[:4]), int(mes[5:7])
+    return f"{a + (m == 12)}-{(m % 12) + 1:02d}"
+
+
+def _devolucao_mes_anterior(mes: str) -> str:
+    a, m = int(mes[:4]), int(mes[5:7])
+    return f"{a - (m == 1)}-{(m - 2) % 12 + 1:02d}"
+
+
+def _devolucao_faixa_mes(mes: str) -> tuple[str, str]:
+    """Faixa larga em texto (um dia de folga de cada lado: o fuso do texto gravado varia); o corte certo é
+    _devolucao_mes_br."""
+    ini = (datetime.strptime(mes + "-01", "%Y-%m-%d") - timedelta(days=1)).date().isoformat()
+    fim = (datetime.strptime(_devolucao_mes_seguinte(mes) + "-01", "%Y-%m-%d") + timedelta(days=1)).date().isoformat()
+    return ini, fim
+
+
+def _devolucao_dia_br(quando: Any) -> str:
+    try:
+        dt = datetime.fromisoformat(str(quando or "").replace("Z", "+00:00"))
+    except ValueError:
+        return str(quando or "")[:10]
+    if dt.tzinfo is None:
+        return dt.date().isoformat()
+    return dt.astimezone(BR_TZ).date().isoformat()
+
+
+def _devolucao_mes_br(quando: Any) -> str:
+    return _devolucao_dia_br(quando)[:7]
+
+
+def _devolucao_frete_ml(d: dict[str, Any]) -> float | None:
+    """Frete da devolução cobrado pelo ML (reclamação lida pelo Pós-venda), pelas vendas ligadas ao pedido."""
+    chave = str(d.get("order_key") or "")
+    if not chave:
+        return None
+    ids = {chave, str(d.get("pedido") or "")}
+    if chave.startswith(DEVOLUCAO_VENDA_PREFIXO):
+        ids.add(chave[len(DEVOLUCAO_VENDA_PREFIXO):])
+    with DB_LOCK:
+        for (ml_ids,) in DB.execute("SELECT DISTINCT ml_ids FROM devolucao_busca_v1988 WHERE order_key=?",
+                                    (chave,)).fetchall():
+            ids |= {x for x in str(ml_ids or "").split(",") if x}
+        ids.discard("")
+        r = DB.execute(f"SELECT MAX(frete_devolucao) FROM ml_reclamacao_v1888 WHERE frete_devolucao IS NOT NULL "
+                       f"AND order_id IN ({','.join('?' * len(ids))})", sorted(ids)).fetchone()
+    return round(float(r[0]), 2) if r and r[0] is not None else None
+
+
+def devolucao_valores(d: dict[str, Any], custos_ctx: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Perda da devolução. custos_ctx = _financeiro_custos_aracatuba() (passar um só para uma lista)."""
+    if custos_ctx is None:
+        custos_ctx = _financeiro_custos_aracatuba()
+    itens = []
+    perda_pecas: float | None = 0.0
+    perda_conhecida = 0.0
+    falta = []
+    for i in d["itens"]:
+        qtd = int(i["qtd"] or 0)
+        if i.get("custo_unit") is not None:
+            custo, origem = float(i["custo_unit"]), i.get("custo_origem") or "congelado"
+        else:
+            custo, origem = _financeiro_custo_aracatuba(i["sku"], custos_ctx)
+        perda = None
+        if i["destino"] == "perda" and qtd > 0:
+            if custo is None:
+                perda_pecas = None
+                falta.append(f"custo de {i['sku']}")
+            else:
+                perda = round(custo * qtd, 2)
+                perda_conhecida += perda
+                if perda_pecas is not None:
+                    perda_pecas = round(perda_pecas + perda, 2)
+        itens.append({"id": i["id"], "sku": i["sku"], "qtd": qtd, "destino": i["destino"],
+                      "custo": round(custo, 4) if custo is not None else None, "custo_origem": origem or "",
+                      "perda": perda})
+    if d.get("frete") is not None:
+        frete, frete_origem = round(float(d["frete"]), 2), d.get("frete_origem") or "digitado"
+    else:
+        frete = _devolucao_frete_ml(d)
+        frete_origem = "ml" if frete is not None else ""
+    if frete is None:
+        falta.append("frete")
+    else:
+        perda_conhecida += frete
+    total = round(perda_pecas + frete, 2) if (perda_pecas is not None and frete is not None) else None
+    return {"itens": itens, "perda_pecas": perda_pecas, "frete": frete, "frete_origem": frete_origem,
+            "perda": total, "perda_conhecida": round(perda_conhecida, 2), "incompleta": total is None,
+            "falta": falta, "confirmada": d["situacao"] == "tratada"}
+
+
+def _devolucao_congelar_valores(d: dict[str, Any], custos_ctx: dict[str, Any]) -> None:
+    """Ao tratar: custo de cada peça e o frete do ML ficam gravados (o número tratado não muda depois).
+    Chamar sob o DB_LOCK (dentro da transação)."""
+    for i in d["itens"]:
+        if not i.get("destino_escolhido"):
+            DB.execute("UPDATE devolucao_item_v1988 SET destino=? WHERE id=?", (i["destino"], i["id"]))
+        if i.get("custo_unit") is None:
+            custo, origem = _financeiro_custo_aracatuba(i["sku"], custos_ctx)
+            if custo is not None:
+                DB.execute("UPDATE devolucao_item_v1988 SET custo_unit=?, custo_origem=? WHERE id=?",
+                           (round(float(custo), 4), origem or "apollo", i["id"]))
+    if d.get("frete") is None:
+        frete = _devolucao_frete_ml(d)
+        if frete is not None:
+            DB.execute("UPDATE devolucao_v1988 SET frete=?, frete_origem='ml' WHERE id=?", (frete, d["id"]))
+
+
+def _devolucao_valor_ou_vazio(valor: Any, nome: str) -> float | None:
+    if valor is None or str(valor).strip() == "":
+        return None
+    try:
+        v = round(float(str(valor).replace(",", ".")), 4)
+    except ValueError:
+        raise ValueError(f"{nome} inválido.")
+    if v < 0 or v > 1_000_000:
+        raise ValueError(f"{nome} inválido.")
+    return v
+
+
+def devolucao_salvar_valores(dev_id: Any, req: dict[str, Any], versao: Any, usuario: str,
+                             filial: str = FILIAL_TODAS) -> dict[str, Any]:
+    """Admin: frete da devolução e, por peça, destino e custo. Vale também na tratada (fica no histórico)."""
+    req = req if isinstance(req, dict) else {}
+    tem_frete = "frete" in req
+    frete = _devolucao_valor_ou_vazio(req.get("frete"), "Frete") if tem_frete else None
+    pedidos_itens = req.get("itens") if isinstance(req.get("itens"), list) else []
+    if len(pedidos_itens) > DEVOLUCAO_MAX_ITENS:
+        raise ValueError("Peças demais.")
+    novos = []
+    for it in pedidos_itens:
+        if not isinstance(it, dict):
+            raise ValueError("Peça inválida.")
+        n: dict[str, Any] = {"id": it.get("id")}
+        if "destino" in it:
+            destino = str(it.get("destino") or "").strip().lower()
+            if destino not in DEVOLUCAO_DESTINOS:
+                raise ValueError("Destino da peça inválido.")
+            n["destino"] = destino
+        if "custo" in it:
+            n["custo"] = _devolucao_valor_ou_vazio(it.get("custo"), "Custo")
+        novos.append(n)
+
+    def mudar(d: dict[str, Any]) -> str:
+        atuais = {int(i["id"]): i for i in d["itens"]}
+        antes: dict[str, Any] = {}
+        depois: dict[str, Any] = {}
+        if tem_frete:
+            antes["frete"] = d.get("frete")
+            depois["frete"] = frete
+            DB.execute("UPDATE devolucao_v1988 SET frete=?, frete_origem=? WHERE id=?",
+                       (frete, "digitado" if frete is not None else "", d["id"]))
+        for n in novos:
+            try:
+                item = atuais[int(n["id"])]
+            except (TypeError, ValueError, KeyError):
+                raise ValueError("Peça não encontrada nesta devolução.")
+            if "destino" in n:
+                antes[f"{item['sku']}.destino"] = item["destino"]
+                depois[f"{item['sku']}.destino"] = n["destino"]
+                DB.execute("UPDATE devolucao_item_v1988 SET destino=? WHERE id=?", (n["destino"], item["id"]))
+            if "custo" in n:
+                antes[f"{item['sku']}.custo"] = item.get("custo_unit")
+                depois[f"{item['sku']}.custo"] = n["custo"]
+                DB.execute("UPDATE devolucao_item_v1988 SET custo_unit=?, custo_origem=? WHERE id=?",
+                           (n["custo"], "manual" if n["custo"] is not None else "", item["id"]))
+        _devolucao_evento(d["id"], usuario, "valores", {"antes": antes, "depois": depois})
+        return "valores"
+    return _devolucao_mudar(dev_id, versao, filial, usuario, mudar)
+
+
+def _devolucao_vendidas_por_peca(mes: str, filial: str) -> dict[str, int]:
+    """Unidades vendidas no mês por código de peça (kit aberto), para a taxa de devolução."""
+    ini = mes + "-01"
+    fim = (datetime.strptime(_devolucao_mes_seguinte(mes) + "-01", "%Y-%m-%d") - timedelta(days=1)).date().isoformat()
+    linhas: list[dict[str, Any]] = []
+    with DB_LOCK:
+        if filial in (FILIAL_TODAS, CASA_PRINCIPAL):
+            linhas += [{"SKU": r[0], "Quantidade": r[1]} for r in DB.execute(
+                "SELECT sku, qty FROM vendas_v1799 WHERE sale_day BETWEEN ? AND ?", (ini, fim)).fetchall()]
+        conta = [] if filial == CASA_PRINCIPAL else ([] if filial == FILIAL_TODAS else [filial])
+        linhas += [{"SKU": r[0], "Quantidade": r[1]} for r in DB.execute(
+            "SELECT sku, qty FROM vendas_conta_v1898 WHERE sale_day BETWEEN ? AND ?"
+            + (" AND conta=?" if conta else ""), (ini, fim, *conta)).fetchall()] if filial != CASA_PRINCIPAL else []
+    return {k: int(v["qtd_vendida"]) for k, v in _devolucao_pecas(linhas).items()}
+
+
+def _devolucao_indicadores(devs: list[dict[str, Any]], vendidas: int) -> dict[str, Any]:
+    pecas = sum(int(i["qtd"] or 0) for d in devs for i in d["itens"])
+    return {"devolucoes": len(devs), "pecas": pecas,
+            "perda": round(sum(d["valores"]["perda_conhecida"] for d in devs), 2),
+            "perda_confirmada": round(sum(d["valores"]["perda_conhecida"] for d in devs if d["situacao"] == "tratada"), 2),
+            "perda_a_confirmar": round(sum(d["valores"]["perda_conhecida"] for d in devs if d["situacao"] != "tratada"), 2),
+            "incompletas": sum(1 for d in devs if d["valores"]["incompleta"]),
+            "a_tratar": sum(1 for d in devs if d["situacao"] != "tratada"),
+            "pecas_ruins": sum(int(i["qtd"] or 0) for d in devs for i in d["itens"] if i["estado"] == "ruim"),
+            "vendidas": vendidas, "taxa": round(pecas / vendidas * 100, 2) if vendidas else None}
+
+
+def devolucoes_resumo(mes: Any, filial: str) -> dict[str, Any]:
+    """Painel do mês (pela data em que a peça chegou), comparado ao mês anterior, e ranking por peça."""
+    mes = _devolucao_mes_valido(mes) or datetime.now(BR_TZ).strftime("%Y-%m")
+    anterior = _devolucao_mes_anterior(mes)
+    atual_l = devolucoes_lista({"mes": mes}, filial)["devolucoes"]
+    ant_l = devolucoes_lista({"mes": anterior}, filial)["devolucoes"]
+    vend_atual = _devolucao_vendidas_por_peca(mes, filial)
+    vend_ant = _devolucao_vendidas_por_peca(anterior, filial)
+    ranking: dict[str, dict[str, Any]] = {}
+    for d in atual_l:
+        perdas = {v["id"]: v["perda"] for v in d["valores"]["itens"]}
+        for i in d["itens"]:
+            if not int(i["qtd"] or 0):
+                continue
+            r = ranking.setdefault(i["sku"], {"sku": i["sku"], "descricao": i["descricao"] or "", "devolvidas": 0,
+                                              "ruins": 0, "perda": 0.0, "devolucoes": 0, "motivos": {}})
+            r["devolvidas"] += int(i["qtd"])
+            r["devolucoes"] += 1
+            if i["estado"] == "ruim":
+                r["ruins"] += int(i["qtd"])
+                r["motivos"][i["motivo"]] = r["motivos"].get(i["motivo"], 0) + int(i["qtd"])
+            if perdas.get(i["id"]) is not None:
+                r["perda"] = round(r["perda"] + perdas[i["id"]], 2)
+    for r in ranking.values():
+        r["vendidas"] = vend_atual.get(r["sku"], 0)
+        r["taxa"] = round(r["devolvidas"] / r["vendidas"] * 100, 2) if r["vendidas"] else None
+        r["motivo_principal"] = DEVOLUCAO_MOTIVOS.get(max(r["motivos"], key=r["motivos"].get), "") if r["motivos"] else ""
+    lista = sorted(ranking.values(), key=lambda r: (-r["perda"], -r["devolvidas"]))
+    return {"ok": True, "periodo": mes,
+            "mes": {"periodo": mes, **_devolucao_indicadores(atual_l, sum(vend_atual.values()))},
+            "anterior": {"periodo": anterior, **_devolucao_indicadores(ant_l, sum(vend_ant.values()))},
+            "ranking": lista[:50], "financeiro_inicio": DEVOLUCAO_FINANCEIRO_INICIO}
+
+
+def financeiro_devolucoes(d1: date, d2: date, canal: str, custos_ctx: dict[str, Any]) -> list[dict[str, Any]]:
+    """Perdas de devolução de Araçatuba que chegaram no período (a partir de 01/11/2026), para o Financeiro."""
+    ini = max(d1.isoformat(), DEVOLUCAO_FINANCEIRO_INICIO)
+    if ini > d2.isoformat():
+        return []
+    faixa_ini = (datetime.strptime(ini, "%Y-%m-%d") - timedelta(days=1)).date().isoformat()
+    faixa_fim = (d2 + timedelta(days=2)).isoformat()
+    with DB_LOCK:
+        ids = [int(r[0]) for r in DB.execute(
+            "SELECT id FROM devolucao_v1988 WHERE filial=? AND recebido_em >= ? AND recebido_em < ?",
+            (CASA_PRINCIPAL, faixa_ini, faixa_fim)).fetchall()]
+        devs = [x for x in (_devolucao_ler(i) for i in ids) if x]
+    saida = []
+    for d in devs:
+        dia = _devolucao_dia_br(d["recebido_em"])
+        if not (ini <= dia <= d2.isoformat()):
+            continue
+        mp = DEVOLUCAO_MP_FINANCEIRO.get(d["marketplace"], normalize(d["marketplace"]).lower() or "outros")
+        if canal and mp != canal:
+            continue
+        v = devolucao_valores(d, custos_ctx)
+        saida.append({"id": d["id"], "dia": dia, "marketplace": mp, "perda": v["perda_conhecida"],
+                      "incompleta": v["incompleta"], "confirmada": v["confirmada"]})
+    return saida
+
+
+# V19.95 (dono, 27/10): NF de venda na devolução. /users/{seller}/invoices/orders/{order} responde número, série,
+# chave e data para toda venda do ML (conferido em produção: Full série 2, emitida pelo ML; Coleta série 1). Sem PDF da
+# DANFE por essa API. Lida uma vez e guardada (devolucao_nf_v1995); "sem nota" fica 30 min em memória. Erro = sem nota.
+_DEVOLUCAO_NF_FALTA: dict[str, float] = {}
+
+
+def _devolucao_nf_ler(order_key: str, marketplace: str, filial: str, pedido: str = "") -> dict[str, Any]:
+    order_key = normalize(order_key)
+    if not order_key:
+        return {"ok": True, "nf": None, "motivo": "Devolução sem pedido."}
+    if marketplace != "Mercado Livre":
+        return {"ok": True, "nf": None,
+                "motivo": f"A nota de venda da {marketplace or 'venda'} não vem pela API: veja no Apollo."}
+    with DB_LOCK:
+        r = DB.execute("SELECT nf_json FROM devolucao_nf_v1995 WHERE order_key=?", (order_key,)).fetchone()
+    if r:
+        return {"ok": True, "nf": json.loads(r[0])}
+    agora = time.time()
+    with _DEVOLUCAO_ENVIO_LOCK:
+        if _DEVOLUCAO_NF_FALTA.get(order_key, 0) > agora:
+            return {"ok": True, "nf": None, "motivo": "O Mercado Livre ainda não tem a nota desta venda."}
+    ids: list[str] = []
+    if order_key.startswith(DEVOLUCAO_VENDA_PREFIXO):
+        ids.append(order_key[len(DEVOLUCAO_VENDA_PREFIXO):])
+    with DB_LOCK:
+        for (ml_ids,) in DB.execute("SELECT DISTINCT ml_ids FROM devolucao_busca_v1988 WHERE order_key=?",
+                                    (order_key,)).fetchall():
+            ids += [x for x in str(ml_ids or "").split(",") if x.isdigit()]
+    ids += [x for x in (order_key, normalize(pedido)) if x.isdigit()]
+    vistos: list[str] = []
+    for x in ids:
+        if x not in vistos:
+            vistos.append(x)
+    casa = filial if filial in CASAS else CASA_PRINCIPAL
+    nf = None
+    try:
+        with ml_na_casa(casa):
+            linha = ml_integration_row()
+            seller = str(linha["seller_id"] if linha else "").strip()
+            for oid in vistos[:4]:
+                if not seller:
+                    break
+                try:
+                    d = ml_api_get(f"/users/{quote(seller)}/invoices/orders/{quote(oid)}")
+                except Exception:
+                    continue
+                if isinstance(d, dict) and d.get("invoice_number") and str(d.get("status") or "authorized") == "authorized":
+                    atr = d.get("attributes") if isinstance(d.get("attributes"), dict) else {}
+                    nf = {"numero": str(d.get("invoice_number")), "serie": str(d.get("invoice_series") or ""),
+                          "chave": str(atr.get("invoice_key") or ""), "emitida_em": str(d.get("issued_date") or ""),
+                          "valor": d.get("amount"), "venda": oid,
+                          "emitente": "Mercado Livre (Full)" if str(d.get("invoice_series") or "") == "2" else ""}
+                    break
+    except Exception:
+        nf = None
+    if nf:
+        with DB_LOCK:
+            DB.execute("INSERT OR REPLACE INTO devolucao_nf_v1995(order_key,nf_json,lido_em) VALUES(?,?,?)",
+                       (order_key, json.dumps(nf, ensure_ascii=False), now_iso()))
+            DB.commit()
+        return {"ok": True, "nf": nf}
+    with _DEVOLUCAO_ENVIO_LOCK:
+        if len(_DEVOLUCAO_NF_FALTA) > 2000:
+            _DEVOLUCAO_NF_FALTA.clear()
+        _DEVOLUCAO_NF_FALTA[order_key] = agora + DEVOLUCAO_ENVIO_CACHE_SEG
+    return {"ok": True, "nf": None, "motivo": "O Mercado Livre não devolveu a nota desta venda."}
+
+
+def devolucao_nf(dev_id: Any, filial: str = FILIAL_TODAS) -> dict[str, Any]:
+    """NF de venda de uma devolução registrada (tela do admin)."""
+    try:
+        dev_id = int(dev_id)
+    except (TypeError, ValueError):
+        raise ValueError("Devolução não informada.")
+    with DB_LOCK:
+        d = _devolucao_ler(dev_id)
+    if d is None:
+        raise ValueError("Devolução não encontrada.")
+    if filial != FILIAL_TODAS and d["filial"] != filial:
+        raise PermissionError("Esta devolução é de outra filial.")
+    if d["sem_pedido"]:
+        return {"ok": True, "nf": None, "motivo": "Devolução sem pedido."}
+    return _devolucao_nf_ler(d["order_key"], d["marketplace"], d["filial"], d["pedido"])
+
+
+def devolucao_nf_da_venda(chave: Any, filial: str) -> dict[str, Any]:
+    """NF de venda do pedido aberto na tela do operador (antes de registrar)."""
+    v = devolucao_pedido(chave, filial)
+    return _devolucao_nf_ler(v["chave"], v["marketplace"], v["filial"], v["pedido"])
 
 
 def devolucao_reabrir(dev_id: Any, versao: Any, usuario: str, filial: str = FILIAL_TODAS) -> dict[str, Any]:
@@ -26058,7 +26456,8 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
 
     def bloco() -> dict[str, Any]:
         return {"faturamento": 0.0, "unidades": 0, "pedidos": set(), "cmv": 0.0, "taxas": 0.0, "frete": 0.0,
-                "outros": 0.0, "imposto": 0.0, "ads": 0.0, "sem_custo": 0.0, "sem_taxa": 0.0, "sem_frete": 0.0}
+                "outros": 0.0, "imposto": 0.0, "ads": 0.0, "sem_custo": 0.0, "sem_taxa": 0.0, "sem_frete": 0.0,
+                "devolucoes": 0.0}
 
     totais = bloco()
     por_mp: dict[str, dict[str, Any]] = {m: bloco() for m in VENDAS_MARKETPLACES}
@@ -26218,11 +26617,22 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
     ads_total = totais["ads"]
     ads_sku_usado = round(sum(s["ads"] for s in por_sku.values()), 2)
 
+    # V19.95: perda das devoluções (peça perdida + frete), no dia em que a peça chegou. A venda cancelada já
+    # saiu do faturamento; aqui entra só o que se perdeu além dela.
+    devolucoes = financeiro_devolucoes(d1, d2, canal, custos_ctx)
+    for dv in devolucoes:
+        if not dv["perda"]:
+            continue
+        for alvo in (totais, por_mp.setdefault(dv["marketplace"], bloco()),
+                     por_dia.setdefault(dv["dia"], {**bloco(), "dia": dv["dia"]})):
+            alvo["devolucoes"] = round(alvo["devolucoes"] + dv["perda"], 2)
+
     def fechar(b: dict[str, Any]) -> dict[str, Any]:
         pedidos = len(b.pop("pedidos"))
         fat = round(b["faturamento"], 2)
         bruto = round(fat - b["cmv"], 2)
-        liquido = round(bruto - b["taxas"] - b["frete"] - b["outros"] - b["ads"] - b["imposto"], 2)
+        liquido = round(bruto - b["taxas"] - b["frete"] - b["outros"] - b["ads"] - b["imposto"]
+                        - b.get("devolucoes", 0.0), 2)
         return {**b, "faturamento": fat, "pedidos": pedidos,
                 "ticket_medio": round(fat / pedidos, 2) if pedidos else 0.0,
                 "lucro_bruto": bruto, "lucro_liquido": liquido,
@@ -26308,6 +26718,11 @@ def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limi
             "divergencias": len(divergentes),
             "divergencia_total": round(sum(d for _o, d in divergentes), 2),
             "linhas": len(vendas),
+            # V19.95: devoluções do período (só a partir de 01/11/2026, só Araçatuba)
+            "devolucoes_qtd": len(devolucoes),
+            "devolucoes_incompletas": sum(1 for dv in devolucoes if dv["incompleta"]),
+            "devolucoes_a_confirmar": round(sum(dv["perda"] for dv in devolucoes if not dv["confirmada"]), 2),
+            "devolucoes_inicio": DEVOLUCAO_FINANCEIRO_INICIO,
         },
     }
 
@@ -34179,9 +34594,41 @@ class AppHandler(BaseHTTPRequestHandler):
             ctx = self.auth(admin_only=True)
             if ctx is None:
                 return
-            filtros = {k: (query.get(k) or [""])[0] for k in ("situacao", "estado", "marketplace")}
+            filtros = {k: (query.get(k) or [""])[0] for k in ("situacao", "estado", "marketplace", "mes")}
             try:
                 self.send_json(devolucoes_lista(filtros, self.filial_da_requisicao(ctx)))
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/devolucoes/nf":
+            # V19.95: NF de venda — ?id= (admin, devolução registrada) ou ?chave= (operador, venda aberta).
+            ctx = self.auth()
+            if ctx is None:
+                return
+            por_id = bool((query.get("id") or [""])[0])
+            if not module_allowed(ctx, "admin" if por_id else "devolucao"):
+                self.send_json({"ok": False, "error": "Sem acesso às devoluções."}, 403)
+                return
+            try:
+                filial = self.filial_da_requisicao(ctx)
+                if por_id:
+                    self.send_json(devolucao_nf((query.get("id") or [""])[0], filial))
+                else:
+                    self.send_json(devolucao_nf_da_venda((query.get("chave") or [""])[0], filial))
+            except PermissionError as exc:
+                self.send_json({"ok": False, "error": str(exc), "code": "OUTRA_FILIAL"}, 403)
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/devolucoes/resumo":
+            # V19.95: painel do mês (perda, taxa, comparação) e ranking por peça.
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            try:
+                self.send_json(devolucoes_resumo((query.get("mes") or [""])[0], self.filial_da_requisicao(ctx)))
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
@@ -35776,7 +36223,8 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
-        if path in ("/api/devolucoes/tratar", "/api/devolucoes/corrigir", "/api/devolucoes/reabrir"):
+        if path in ("/api/devolucoes/tratar", "/api/devolucoes/corrigir", "/api/devolucoes/reabrir",
+                    "/api/devolucoes/valores"):
             # V19.88: admin trata no Apollo, corrige (com histórico) ou reabre.
             ctx = self.auth(admin_only=True)
             if ctx is None:
@@ -35788,6 +36236,8 @@ class AppHandler(BaseHTTPRequestHandler):
                     r = devolucao_tratar(req.get("id"), req.get("documento"), req.get("versao"), ctx["username"], filial)
                 elif path.endswith("/corrigir"):
                     r = devolucao_corrigir(req.get("id"), req.get("itens"), req.get("versao"), ctx["username"], filial)
+                elif path.endswith("/valores"):   # V19.95: frete, destino e custo
+                    r = devolucao_salvar_valores(req.get("id"), req, req.get("versao"), ctx["username"], filial)
                 else:
                     r = devolucao_reabrir(req.get("id"), req.get("versao"), ctx["username"], filial)
                 self.send_json(r)
