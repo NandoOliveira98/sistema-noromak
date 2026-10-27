@@ -452,6 +452,37 @@ class Devolucoes(TesteNoromak):
         self.assertIn("/api/auth/session", html)
         self.assertIn("repetida", html)
 
+    # --- V19.90: peça que vende muito (dono, 27/10: "0893117732" só mostrava de 22/10 para cá) ---
+
+    def muitos_pedidos(self, n: int = 35) -> None:
+        base = datetime.now(timezone.utc)
+        for i in range(n):   # P5000 é o mais antigo
+            concluir(f"P50{i:02d}", [linha(f"P50{i:02d}", "0893117732", 1, Cliente=f"Cliente {chr(65 + i % 26)}{i}")],
+                     quando=(base - timedelta(days=n - i)).isoformat())
+        concluir("P4999", [linha("P4999", "0893117732", 1, Cliente="Rafael de Almeida Scansetti")],
+                 quando=(base - timedelta(days=60)).isoformat())
+        S._devolucao_indexar_tudo(maximo=50)
+
+    def test_peca_que_vende_muito_avisa_que_ha_mais(self):
+        self.muitos_pedidos()
+        r = S.devolucao_buscar("0893117732", "todas")
+        self.assertEqual(len(r["pedidos"]), 30)
+        self.assertTrue(r["mais"])
+        self.assertNotIn("P4999", [p["pedido"] for p in r["pedidos"]])   # antigo fica de fora da lista
+        self.assertFalse(S.devolucao_buscar("p100", "todas")["mais"])
+
+    def test_peca_mais_nome_acha_o_pedido_antigo(self):
+        self.muitos_pedidos()
+        r = S.devolucao_buscar("0893117732 rafael", "todas")
+        self.assertEqual([p["pedido"] for p in r["pedidos"]], ["P4999"])
+        self.assertEqual(r["codigo"], "0893117732")       # a tela soma +1 na peça bipada, não no texto todo
+        r = S.devolucao_buscar("rafael scansetti 0893117732", "todas")   # a ordem não importa
+        self.assertEqual([p["pedido"] for p in r["pedidos"]], ["P4999"])
+        self.assertEqual(S.devolucao_buscar("0893117732 fulano", "todas")["pedidos"], [])
+        # Nome sozinho continua valendo; código sozinho também.
+        self.assertEqual(self.buscar("jose silva"), ["P100"])
+        self.assertEqual(S.devolucao_buscar("AAA", "todas")["codigo"], "AAA")
+
     def test_telas_menu_e_worker(self):
         self.assertTrue((S.APP_DIR / "devolucoes.html").exists())
         self.assertTrue((S.APP_DIR / "devolucoes-admin.html").exists())

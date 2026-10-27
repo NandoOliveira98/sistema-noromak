@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.89-MODULO-DEVOLUCAO"
+APP_VERSION = "19.90-BUSCA-DEVOLUCAO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -17953,16 +17953,35 @@ def _devolucao_codigo_do_qr(q: Any) -> Any:
     return texto
 
 
+DEVOLUCAO_BUSCA_LIMITE = 30
+
+
 def devolucao_buscar(q: Any, filial: str) -> dict[str, Any]:
     """Pedidos concluídos que batem com o bip: nº do pedido, EAN, SKU, nome do cliente ou a
     etiqueta de devolução do ML. Só a filial de quem busca ("todas" = as duas)."""
     if not DEVOLUCAO_INDICE_LOCK.locked():   # um lote só; o worker faz o resto
         devolucao_indexar()
     q = _devolucao_codigo_do_qr(q)
-    chave = normalize(q)
-    texto = _devolucao_texto_busca(q)
+    r = _devolucao_buscar(q, filial, combinar=True)
+    if r.get("combinada") and not r["pedidos"]:
+        # "ABC 123" pode ser um código com espaço (revisão 27/10): sem resultado, vale o texto inteiro.
+        r = _devolucao_buscar(q, filial, combinar=False)
+    r.pop("combinada", None)
+    return r
+
+
+def _devolucao_buscar(q: Any, filial: str, combinar: bool) -> dict[str, Any]:
+    # V19.90 (dono, 27/10): peça que vende muito enche os 30 da lista em poucos dias. "Código + nome"
+    # ("0893117732 rafael", em qualquer ordem) exige os dois: a peça bipada E o nome do cliente.
+    partes = str(q or "").split()
+    codigos = [x for x in partes if any(ch.isdigit() for ch in x) and len(normalize(x)) >= 2]
+    nomes = [x for x in partes if x not in codigos]
+    combinada = combinar and len(partes) > 1 and bool(codigos) and any(
+        len(w) >= 3 and w.isalpha() for w in _devolucao_texto_busca(" ".join(nomes)).split())
+    chave = normalize(codigos[0] if combinada else q)
+    texto = _devolucao_texto_busca(" ".join(nomes) if combinada else q)
     if len(chave) < 2:
-        return {"ok": True, "pedidos": []}
+        return {"ok": True, "pedidos": [], "mais": False, "codigo": ""}
     skus = {chave}
     if chave.isdigit():
         skus |= _devolucao_skus_do_ean(chave)
@@ -17981,17 +18000,27 @@ def devolucao_buscar(q: Any, filial: str) -> dict[str, Any]:
             params.append(f"%,{_devolucao_like(x)},%")
         # Nome: só palavras de 3+ letras (revisão 27/10: "a e i" casava com quase todo cliente).
         palavras = [p for p in texto.split() if len(p) >= 3]
+        nome_cond = ""
         if palavras and any(ch.isalpha() for ch in "".join(palavras)):
-            conds.append("(" + " AND ".join("cliente_busca LIKE ? ESCAPE '\\'" for _ in palavras) + ")")
+            nome_cond = "(" + " AND ".join("cliente_busca LIKE ? ESCAPE '\\'" for _ in palavras) + ")"
+        if combinada:   # V19.90: peça E nome
+            onde = f"({' OR '.join(conds)}) AND {nome_cond}"
             params.extend(f"%{_devolucao_like(p)}%" for p in palavras)
+        else:
+            if nome_cond:
+                conds.append(nome_cond)
+                params.extend(f"%{_devolucao_like(p)}%" for p in palavras)
+            onde = f"({' OR '.join(conds)})"
         # Pedido reaberto (voltou para a Conferência) não aparece até ser concluído de novo.
         chaves = [r[0] for r in DB.execute(
             f"SELECT DISTINCT order_key FROM devolucao_busca_v1988 WHERE concluido_em>=?{filtro_filial} "
-            f"AND ({' OR '.join(conds)}) AND order_key IN (SELECT order_key FROM completed_orders) "
-            f"ORDER BY concluido_em DESC LIMIT 30",
+            f"AND {onde} AND order_key IN (SELECT order_key FROM completed_orders) "
+            f"ORDER BY concluido_em DESC LIMIT {DEVOLUCAO_BUSCA_LIMITE + 1}",
             (*base, *params)).fetchall()]
+        mais = len(chaves) > DEVOLUCAO_BUSCA_LIMITE   # V19.90: a tela pede o nome do cliente
+        chaves = chaves[:DEVOLUCAO_BUSCA_LIMITE]
         if not chaves:
-            return {"ok": True, "pedidos": []}
+            return {"ok": True, "pedidos": [], "mais": False, "codigo": chave, "combinada": combinada}
         marcas = ",".join("?" * len(chaves))
         linhas = [dict(r) for r in DB.execute(
             f"SELECT * FROM devolucao_busca_v1988 WHERE order_key IN ({marcas})", chaves).fetchall()]
@@ -18005,7 +18034,8 @@ def devolucao_buscar(q: Any, filial: str) -> dict[str, Any]:
             "filial": r["filial"], "concluido_em": r["concluido_em"], "cliente": r["cliente"],
             "skus": [], "devolucoes": devolvidos.get(r["order_key"], 0)})
         p["skus"].append(r["sku"])
-    return {"ok": True, "pedidos": sorted(pedidos.values(), key=lambda p: p["concluido_em"], reverse=True)}
+    return {"ok": True, "pedidos": sorted(pedidos.values(), key=lambda p: p["concluido_em"], reverse=True),
+            "mais": mais, "codigo": chave, "combinada": combinada}
 
 
 def _devolucao_ja_devolvido(order_key: str, ignorar_itens: set[int] | None = None) -> dict[str, int]:

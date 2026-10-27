@@ -151,7 +151,7 @@ $("formBusca").addEventListener("submit", async ev => {
   $("resultados").innerHTML = '<div class="vazio">Buscando…</div>';
   try {
     const d = await api("/buscar?q=" + encodeURIComponent(q));
-    desenharResultados(d.pedidos || [], q);
+    desenharResultados(d.pedidos || [], q, d);
   } catch (e) {
     $("resultados").innerHTML = "";
     alert(e.message);
@@ -159,14 +159,21 @@ $("formBusca").addEventListener("submit", async ev => {
   }
 });
 
-function desenharResultados(pedidos, q) {
+function desenharResultados(pedidos, q, d = {}) {
   if (!pedidos.length) {
     $("resultados").innerHTML = `<div class="vazio">Nenhum pedido concluído encontrado para "${esc(q)}". ` +
       `Tente o nome do cliente, ou <a href="#" onclick="abrirSemPedido();return false">registre sem pedido</a>.</div>`;
     $("campoBusca").select();
     return;
   }
-  $("resultados").innerHTML = pedidos.map((p, i) =>
+  // V19.90: peça que vende muito passa dos 30 em poucos dias — pede o nome do cliente (código + nome).
+  const mais = d.mais
+    ? `<form class="card bip" id="formMais" autocomplete="off"><div style="flex:1"><b>Mostrando os ${pedidos.length} mais recentes.</b>` +
+      `<div class="sub">Pedido mais antigo? Digite o nome do cliente para filtrar.</div></div>` +
+      `<input id="campoNome" placeholder="Nome do cliente" style="font-size:16px;max-width:320px">` +
+      `<button class="btn">Filtrar</button></form>`
+    : "";
+  $("resultados").innerHTML = mais + pedidos.map((p, i) =>
     `<div class="card pedido" data-i="${i}">` +
     `<div><b>${esc(p.pedido)}</b> · ${esc(p.marketplace)}<div class="sub">${esc(p.cliente || "cliente não informado")}</div>` +
     `<div class="sub">Peças: ${esc(p.skus.join(", "))}</div></div>` +
@@ -174,7 +181,17 @@ function desenharResultados(pedidos, q) {
     (p.devolucoes ? `<div class="ja">já tem ${p.devolucoes} devolução(ões)</div>` : "") + `</div></div>`).join("");
   $("resultados").querySelectorAll(".pedido").forEach(el =>
     el.addEventListener("click", () => abrirVenda(pedidos[+el.dataset.i].chave)));
-  const bipado = norm(q);
+  if (d.mais) {
+    $("formMais").addEventListener("submit", ev => {
+      ev.preventDefault();
+      const nome = $("campoNome").value.trim();
+      if (!nome) return;
+      $("campoBusca").value = (d.codigo || q) + " " + nome;
+      $("formBusca").requestSubmit();
+    });
+    focar("campoNome");
+  }
+  const bipado = norm(d.codigo || q);   // V19.90: na busca "código + nome" o +1 vai na peça
   if (pedidos.length === 1) abrirVenda(pedidos[0].chave, bipado);
 }
 

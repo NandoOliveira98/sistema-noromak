@@ -5,7 +5,7 @@ Shopee, manuais), expedição, separação, conferência por código de barras, 
 produtos/SKUs/EANs, kits, precificação, promoções, rentabilidade, estoque, Central de
 Pendências e histórico.
 
-Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V19.89).
+Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V19.90).
 
 ---
 
@@ -1223,6 +1223,10 @@ os demais desligados (só na criação). Consulta tem (vê; registrar é POST bl
 chave `devolucao` mantém o valor gravado** (`upsert_app_user`, `/api/roles`, `conf_usuarios`): a tela antiga e a extensão
 mandam só os 4 módulos de antes. Caixa "Devolução" na tela de Usuários e botão "Receber devolução" no portal de acesso.
 Teste: `TESTES/test_modulo_devolucao_v1989.py`.
+**V19.90 — busca "peça + nome"** (dono, 27/10: a 0893117732 só listava de 22/10 para cá). A busca devolve os 30 mais
+recentes (`DEVOLUCAO_BUSCA_LIMITE`) e agora `mais: true` quando há mais; a tela pede o nome do cliente. Texto com código E
+palavra de 3+ letras ("0893117732 rafael", qualquer ordem) exige os dois na mesma peça; sem resultado, tenta o texto
+inteiro como antes (código com espaço). `codigo` na resposta = a peça bipada (o +1 automático vai nela).
 
 **V19.45 — Cliente do Full pela NF-e do ML** (decisões do dono, 16/10). Venda Full não passa pela fila, e a integração
 ML → Apollo cria o cliente com o nome da conta ("Premium Flex") em vez da razão social da nota (M2 SOLUCOES GRAFICAS).
