@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.92-ETIQUETA-DEVOLUCAO"
+APP_VERSION = "19.93-RETORNO-FULL"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -17981,7 +17981,101 @@ def devolucao_buscar(q: Any, filial: str) -> dict[str, Any]:
             r.pop("combinada", None)
             r["etiqueta_ml"] = normalize(q)
             r["codigo"] = ""   # a etiqueta não é peça: nada de +1 automático
+        if not r["pedidos"]:
+            # V19.93: retorno do Full (venda que nunca passou pela Conferência) — só por número, nunca por nome/peça.
+            pedidos = _devolucao_vendas_sem_conferencia([normalize(q), venda], filial)
+            if pedidos:
+                r = {"ok": True, "pedidos": pedidos, "mais": False, "codigo": "",
+                     **({"etiqueta_ml": normalize(q)} if venda else {})}
     return r
+
+
+# V19.93 (dono, 27/10): devolução de venda do Full. A venda Full sai do armazém do ML e nunca é concluída na
+# Conferência, então não está no índice. A venda vem das vendas do ML já copiadas (vendas_v1799 = Araçatuba,
+# vendas_conta_v1898 = outras contas), sem o nome do cliente. Chave própria (prefixo) para nunca colidir com um
+# pedido da fila; pedido conferido (pela venda ou pelo carrinho) nunca aparece de novo por aqui.
+DEVOLUCAO_VENDA_PREFIXO = "VENDAML"
+
+
+def _devolucao_linhas_venda_ml(numero: str) -> list[dict[str, Any]]:
+    """Linhas de venda do ML pelo nº da venda ou do carrinho. Chamar sob o DB_LOCK."""
+    linhas = [dict(r, conta=CASA_PRINCIPAL) for r in DB.execute(
+        "SELECT order_id, pack_id, sale_at, sku, anuncio, title, qty FROM vendas_v1799 "
+        "WHERE marketplace='ml' AND (order_id=? OR pack_id=?)", (numero, numero)).fetchall()]
+    linhas += [dict(r) for r in DB.execute(
+        "SELECT conta, order_id, pack_id, sale_at, sku, anuncio, title, qty FROM vendas_conta_v1898 "
+        "WHERE marketplace='ml' AND (order_id=? OR pack_id=?)", (numero, numero)).fetchall()]
+    return linhas
+
+
+def _devolucao_venda_full(anuncios: set[str]) -> bool:
+    """Chamar sob o DB_LOCK."""
+    anuncios = {a for a in anuncios if a}
+    if not anuncios:
+        return False
+    return DB.execute(f"SELECT 1 FROM ml_estoque_dia_v1872 WHERE logistica='fulfillment' AND item_id IN "
+                      f"({','.join('?' * len(anuncios))}) LIMIT 1", sorted(anuncios)).fetchone() is not None
+
+
+def _devolucao_vendas_sem_conferencia(numeros: list[Any], filial: str) -> list[dict[str, Any]]:
+    vistos: set[str] = set()
+    pedidos: list[dict[str, Any]] = []
+    with DB_LOCK:
+        for numero in numeros:
+            numero = normalize(numero)
+            if not (numero.isdigit() and len(numero) >= 10):
+                continue
+            por_venda: dict[str, list[dict[str, Any]]] = {}
+            for l in _devolucao_linhas_venda_ml(numero):
+                por_venda.setdefault(str(l["order_id"]), []).append(l)
+            for order_id, linhas in por_venda.items():
+                if order_id in vistos:
+                    continue
+                vistos.add(order_id)
+                pack = str(linhas[0]["pack_id"] or "")
+                conferido = DB.execute("SELECT 1 FROM completed_orders WHERE order_key IN (?,?)",
+                                       (order_id, pack or order_id)).fetchone()
+                if conferido:
+                    continue
+                conta = str(linhas[0]["conta"] or CASA_PRINCIPAL)
+                if filial != FILIAL_TODAS and conta != filial:
+                    continue
+                chave = DEVOLUCAO_VENDA_PREFIXO + order_id
+                devolvidas = DB.execute("SELECT COUNT(*) FROM devolucao_v1988 WHERE order_key=?", (chave,)).fetchone()[0]
+                pedidos.append({
+                    "chave": chave, "pedido": order_id, "marketplace": "Mercado Livre", "filial": conta,
+                    "concluido_em": str(linhas[0]["sale_at"] or ""), "cliente": "",
+                    "skus": sorted({normalize(l["sku"]) for l in linhas if l["sku"]}),
+                    "devolucoes": int(devolvidas or 0), "venda_sem_conferencia": True,
+                    "full": _devolucao_venda_full({str(l["anuncio"] or "") for l in linhas}), "carrinho": pack})
+    return pedidos
+
+
+def _devolucao_pedido_venda_ml(key: str, filial: str) -> dict[str, Any]:
+    order_id = key[len(DEVOLUCAO_VENDA_PREFIXO):]
+    with DB_LOCK:
+        linhas = [l for l in _devolucao_linhas_venda_ml(order_id) if str(l["order_id"]) == order_id]
+        full = _devolucao_venda_full({str(l["anuncio"] or "") for l in linhas})
+    if not linhas:
+        raise ValueError("Venda não encontrada.")
+    conta = str(linhas[0]["conta"] or CASA_PRINCIPAL)
+    if filial != FILIAL_TODAS and conta != filial:
+        raise PermissionError(f"A venda {order_id} é de outra filial.")
+    rows = [{"Pedido": order_id, "SKU": l["sku"], "Quantidade": l["qty"], "Descrição": l["title"] or "",
+             "Marketplace": "MERCADO LIVRE", "Casa": conta} for l in linhas]
+    kits: list[dict[str, Any]] = []
+    pecas = _devolucao_pecas(rows, kits=kits)
+    with DB_LOCK:
+        ja = _devolucao_ja_devolvido(key)
+    eans = _devolucao_mapa_ean()["sku"]
+    itens = [{**p, "qtd_devolvida": ja.get(p["sku"], 0),
+              "eans": sorted({normalize(p["ean"])} - {""} | eans.get(p["sku"], set()))} for p in pecas.values()]
+    kits_tela = [{"sku": k["sku"], "descricao": k["descricao"], "pecas": k["pecas"],
+                  "codigos": sorted({k["sku"], k["ean"]} - {""} | eans.get(k["sku"], set()))} for k in kits]
+    return {"ok": True, "chave": key, "pedido": order_id, "filial": conta, "marketplace": "Mercado Livre",
+            "cliente": "", "data": str(linhas[0]["sale_at"] or "")[:10], "concluido_em": str(linhas[0]["sale_at"] or ""),
+            "itens": itens, "kits": kits_tela, "venda_sem_conferencia": True, "full": full,
+            "carrinho": str(linhas[0]["pack_id"] or "")}
 
 
 # V19.91 (dono, 27/10): a etiqueta de devolução traz o nº do envio de volta (11 dígitos). O /shipments/{id} desse
@@ -18106,6 +18200,8 @@ def _devolucao_ja_devolvido(order_key: str, ignorar_itens: set[int] | None = Non
 def devolucao_pedido(chave: Any, filial: str) -> dict[str, Any]:
     """A venda do pedido concluído, peça por peça, com o que já voltou."""
     key = normalize(chave)
+    if key.startswith(DEVOLUCAO_VENDA_PREFIXO):   # V19.93: venda do ML que não passou pela Conferência (Full)
+        return _devolucao_pedido_venda_ml(key, filial)
     with DB_LOCK:
         h = DB.execute("SELECT order_key,order_id,completed_at,completed_by,payload FROM order_completion_history "
                        f"WHERE order_key=? AND {DEVOLUCAO_COM_LINHAS} ORDER BY id DESC LIMIT 1", (key,)).fetchone()

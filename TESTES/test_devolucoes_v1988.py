@@ -165,6 +165,69 @@ class Devolucoes(TesteNoromak):
                 mock.patch.object(S, "ml_casas_conectadas", return_value=["aracatuba"]):
             self.assertEqual(S.devolucao_buscar("48308414462", "todas")["pedidos"], [])
 
+    # --- V19.93: retorno do Full (dono, 27/10). Venda Full nunca passa pela Conferência; a devolução acha a venda
+    # nas vendas do ML (vendas_v1799 / vendas_conta_v1898) pelo nº da venda, do carrinho ou pela etiqueta. ---
+
+    def venda_ml(self, order_id, pack, sku, qtd=1, conta=None, anuncio="MLB1", full=True, dia="2026-10-20"):
+        with S.DB_LOCK:
+            if conta:
+                S.DB.execute("INSERT INTO vendas_conta_v1898(conta,marketplace,order_id,line_key,pack_id,sale_at,sale_day,sku,"
+                             "anuncio,title,qty,amount,status,updated_at) VALUES(?,'ml',?,?,?,?,?,?,?,'Peça Full',?,10,'paid','x')",
+                             (conta, order_id, order_id + sku, pack, dia + "T10:00:00", dia, sku, anuncio, qtd))
+            else:
+                S.DB.execute("INSERT INTO vendas_v1799(marketplace,order_id,line_key,pack_id,sale_at,sale_day,sku,anuncio,"
+                             "title,qty,amount,status,updated_at) VALUES('ml',?,?,?,?,?,?,?,'Peça Full',?,10,'paid','x')",
+                             (order_id, order_id + sku, pack, dia + "T10:00:00", dia, sku, anuncio, qtd))
+            if full:
+                S.DB.execute("INSERT OR REPLACE INTO ml_estoque_dia_v1872(item_id,dia,logistica) VALUES(?,?,'fulfillment')",
+                             (anuncio, dia))
+            S.DB.commit()
+
+    def test_venda_full_pelo_numero_da_venda_e_do_carrinho(self):
+        self.venda_ml("2000019073569016", "2000015613247569", "0893764271")
+        for q in ("2000019073569016", "2000015613247569"):
+            r = S.devolucao_buscar(q, "todas")
+            self.assertEqual([p["pedido"] for p in r["pedidos"]], ["2000019073569016"], q)
+            p = r["pedidos"][0]
+            self.assertTrue(p["full"] and p["venda_sem_conferencia"])
+        v = S.devolucao_pedido(p["chave"], "todas")
+        self.assertEqual([(i["sku"], i["qtd_vendida"]) for i in v["itens"]], [("0893764271", 1)])
+        self.assertEqual(v["filial"], "aracatuba")
+        self.registrar([{"sku": "0893764271", "qtd": 1, "estado": "bom"}], chave=p["chave"])
+        with self.assertRaises(ValueError):   # nunca volta mais que o vendido
+            self.registrar([{"sku": "0893764271", "qtd": 1, "estado": "bom"}], chave=p["chave"])
+        with S.DB_LOCK:   # não mexe na fila nem nos concluídos
+            self.assertIsNone(S.DB.execute("SELECT 1 FROM completed_orders WHERE order_key='2000019073569016'").fetchone())
+
+    def test_retorno_do_full_pela_etiqueta(self):
+        self.venda_ml("2000019073569016", "2000015613247569", "0893764271")
+        chamadas, p1, p2 = self.envio_ml({("aracatuba", "/shipments/48284399921"):
+                                          {"type": "forward", "order_id": 2000019073569016}})
+        with p1, p2:
+            r = S.devolucao_buscar("48284399921", "todas")
+        self.assertEqual([p["pedido"] for p in r["pedidos"]], ["2000019073569016"])
+
+    def test_venda_full_nao_entra_por_nome_ou_peca_e_conferido_vence(self):
+        self.venda_ml("2000019073569016", "2000015613247569", "AAA")
+        self.assertEqual(self.buscar("AAA"), ["P100"])                    # a peça só acha o conferido
+        self.assertEqual(self.buscar("jose silva"), ["P100"])
+        # venda que passou pela Conferência (pelo carrinho) não aparece de novo como venda
+        concluir("2000015577341895", [linha("2000015577341895", "BBB", 1, Marketplace="MERCADO LIVRE",
+                                            VendaMercadoLivre="2000019035660760")])
+        self.venda_ml("2000019035660760", "2000015577341895", "BBB", full=False, anuncio="MLB2")
+        r = S.devolucao_buscar("2000015577341895", "todas")
+        self.assertEqual([(p["pedido"], p.get("venda_sem_conferencia", False)) for p in r["pedidos"]],
+                         [("2000015577341895", False)])
+
+    def test_venda_de_bauru_fica_na_filial(self):
+        self.venda_ml("2000019999", "2000015999", "KIT-0893600022/0893764272", conta="bauru", anuncio="MLB9")
+        self.assertEqual(S.devolucao_buscar("2000019999", "aracatuba")["pedidos"], [])
+        p = S.devolucao_buscar("2000019999", "bauru")["pedidos"][0]
+        v = S.devolucao_pedido(p["chave"], "bauru")
+        self.assertEqual(sorted(i["sku"] for i in v["itens"]), ["0893600022", "0893764272"])   # kit aberto
+        with self.assertRaises(PermissionError):
+            S.devolucao_pedido(p["chave"], "aracatuba")
+
     def test_posvenda_guarda_o_envio_da_devolucao_sem_chamada_a_mais(self):
         with S.DB_LOCK:
             S.DB.execute("INSERT INTO ml_reclamacao_v1888(claim_id,order_id,status,tem_devolucao) "

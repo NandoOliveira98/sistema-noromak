@@ -5,7 +5,7 @@ Shopee, manuais), expedição, separação, conferência por código de barras, 
 produtos/SKUs/EANs, kits, precificação, promoções, rentabilidade, estoque, Central de
 Pendências e histórico.
 
-Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V19.92).
+Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V19.93).
 
 ---
 
@@ -1236,6 +1236,12 @@ permissão no DevCenter; Bauru ainda 403). O `/shipments/{id}` de um envio de de
 liberada (27/10, Araçatuba; Bauru ainda 403) o `claims/search` só com `range` volta HTTP 400 `atLeastOneFilterProvided` e
 derrubava a rodada inteira. Agora a busca por data vai uma vez por situação (`opened` e `closed`); o simulador do
 `test_posvenda_v1888.py` recusa como o ML real.
+**V19.93 — retorno do Full** (dono, 27/10). Venda Full nunca é concluída na Conferência. Sem resultado no índice, a busca
+procura nas vendas do ML (`vendas_v1799` = Araçatuba, `vendas_conta_v1898` = outras contas) **só por número**: venda,
+carrinho ou o `order_id` da etiqueta (`/shipments`, inclusive o **Ref. ID** da etiqueta de "não entregue" que volta do
+armazém do ML com remetente MELI — o código de barras dessa etiqueta o ML não mostra). Chave `VENDAML<order_id>`
+(`DEVOLUCAO_VENDA_PREFIXO`; nunca colide com a fila); venda conferida (pela venda ou pelo carrinho) nunca aparece por
+aqui; `full` = anúncio com `fulfillment` em `ml_estoque_dia_v1872`; sem nome do cliente (nome/peça não acham Full).
 
 **V19.45 — Cliente do Full pela NF-e do ML** (decisões do dono, 16/10). Venda Full não passa pela fila, e a integração
 ML → Apollo cria o cliente com o nome da conta ("Premium Flex") em vez da razão social da nota (M2 SOLUCOES GRAFICAS).

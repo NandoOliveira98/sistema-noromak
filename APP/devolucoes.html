@@ -163,7 +163,8 @@ function desenharResultados(pedidos, q, d = {}) {
   if (!pedidos.length) {
     // V19.92: número com cara de etiqueta de devolução do ML (10 a 12 dígitos) que o ML não conhece.
     const etiqueta = /^\d{10,12}$/.test(norm(q))
-      ? "Se é a etiqueta de devolução do Mercado Livre, o ML não reconheceu esse envio: confira se bipou o código de barras certo da etiqueta. "
+      ? "Se é a etiqueta de devolução do Mercado Livre, o ML não reconheceu esse envio: confira se bipou o código de barras certo. " +
+        "Etiqueta com remetente MELI (armazém do ML, entrega que não deu certo): digite o Ref. ID. "
       : "";
     $("resultados").innerHTML = `<div class="vazio">Nenhum pedido concluído encontrado para "${esc(q)}". ${etiqueta}` +
       `Tente o nome do cliente, ou <a href="#" onclick="abrirSemPedido();return false">registre sem pedido</a>.</div>`;
@@ -181,7 +182,9 @@ function desenharResultados(pedidos, q, d = {}) {
     `<div class="card pedido" data-i="${i}">` +
     `<div><b>${esc(p.pedido)}</b> · ${esc(p.marketplace)}<div class="sub">${esc(p.cliente || "cliente não informado")}</div>` +
     `<div class="sub">Peças: ${esc(p.skus.join(", "))}</div></div>` +
-    `<div class="sub" style="text-align:right">Concluído em ${esc(new Date(p.concluido_em).toLocaleDateString("pt-BR"))}` +
+    `<div class="sub" style="text-align:right">${p.venda_sem_conferencia  // V19.93: Full / venda não conferida
+      ? `${p.full ? "<b>Full</b> · " : ""}venda de ${esc(new Date(p.concluido_em).toLocaleDateString("pt-BR"))} · não passou pela Conferência`
+      : `Concluído em ${esc(new Date(p.concluido_em).toLocaleDateString("pt-BR"))}`}` +
     (p.devolucoes ? `<div class="ja">já tem ${p.devolucoes} devolução(ões)</div>` : "") + `</div></div>`).join("");
   $("resultados").querySelectorAll(".pedido").forEach(el =>
     el.addEventListener("click", () => abrirVenda(pedidos[+el.dataset.i].chave)));
@@ -210,7 +213,9 @@ async function abrirVenda(chave, bipado = "") {
     $("cabVenda").innerHTML = `<span>Pedido <b>${esc(v.pedido)}</b></span><span>${esc(v.marketplace)}</span>` +
       `<span>Cliente <b>${esc(v.cliente || "—")}</b></span>` +
       (v.data ? `<span>Venda ${esc(v.data)}</span>` : "") +
-      `<span>Concluído em ${esc(new Date(v.concluido_em).toLocaleDateString("pt-BR"))}</span>`;
+      (v.venda_sem_conferencia
+        ? `<span>${v.full ? "<b>Full</b> · " : ""}não passou pela Conferência</span>`
+        : `<span>Concluído em ${esc(new Date(v.concluido_em).toLocaleDateString("pt-BR"))}</span>`);
     $("formSem").hidden = true;
     mostrarPasso("venda");
     // A peça bipada na busca já conta como a primeira que voltou.
