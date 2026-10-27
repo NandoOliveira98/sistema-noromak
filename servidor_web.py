@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.93-RETORNO-FULL"
+APP_VERSION = "19.94-VENDA-CANCELADA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -17719,6 +17719,11 @@ def ensure_devolucoes_schema() -> None:
             );
             """
         )
+        # V19.94: venda do ML lida na hora (cancelada some de vendas_v1799; a devolução ainda precisa dela).
+        DB.execute("""CREATE TABLE IF NOT EXISTS devolucao_venda_ml_v1994 (
+                order_id TEXT PRIMARY KEY, pack_id TEXT NOT NULL DEFAULT '', conta TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT '', linhas_json TEXT NOT NULL DEFAULT '[]', lido_em TEXT NOT NULL DEFAULT '')""")
+        DB.execute("CREATE INDEX IF NOT EXISTS idx_devolucao_venda_ml_pack ON devolucao_venda_ml_v1994(pack_id)")
         # Banco que rodou a 1ª versão do ramo (antes da revisão de 27/10).
         if "token" not in {r[1] for r in DB.execute("PRAGMA table_info(devolucao_v1988)").fetchall()}:
             DB.execute("ALTER TABLE devolucao_v1988 ADD COLUMN token TEXT NOT NULL DEFAULT ''")
@@ -17984,6 +17989,10 @@ def devolucao_buscar(q: Any, filial: str) -> dict[str, Any]:
         if not r["pedidos"]:
             # V19.93: retorno do Full (venda que nunca passou pela Conferência) — só por número, nunca por nome/peça.
             pedidos = _devolucao_vendas_sem_conferencia([normalize(q), venda], filial)
+            numero = normalize(q)
+            alvo = venda or (numero if numero.isdigit() and len(numero) == 16 else "")
+            if not pedidos and alvo and _devolucao_ler_venda_ml(alvo):   # V19.94: venda cancelada
+                pedidos = _devolucao_vendas_sem_conferencia([alvo], filial)
             if pedidos:
                 r = {"ok": True, "pedidos": pedidos, "mais": False, "codigo": "",
                      **({"etiqueta_ml": normalize(q)} if venda else {})}
@@ -18005,7 +18014,73 @@ def _devolucao_linhas_venda_ml(numero: str) -> list[dict[str, Any]]:
     linhas += [dict(r) for r in DB.execute(
         "SELECT conta, order_id, pack_id, sale_at, sku, anuncio, title, qty FROM vendas_conta_v1898 "
         "WHERE marketplace='ml' AND (order_id=? OR pack_id=?)", (numero, numero)).fetchall()]
+    vistas = {str(l["order_id"]) for l in linhas}
+    for r in DB.execute("SELECT order_id, conta, status, linhas_json FROM devolucao_venda_ml_v1994 "
+                        "WHERE order_id=? OR (pack_id<>'' AND pack_id=?)", (numero, numero)).fetchall():
+        if str(r["order_id"]) in vistas:
+            continue   # a cópia das vendas manda quando existe
+        try:
+            guardadas = json.loads(r["linhas_json"] or "[]")
+        except ValueError:
+            guardadas = []
+        linhas += [dict(l, conta=r["conta"], status=r["status"]) for l in guardadas if isinstance(l, dict)]
     return linhas
+
+
+# V19.94 (caso real 27/10): devolução com reembolso costuma CANCELAR a venda, e a venda cancelada some de
+# vendas_v1799 (a janela é regravada). Etiqueta 48323000393 → venda Full 2000019080231218 cancelada: nada achava.
+# Só para número que já é uma venda (o da etiqueta, ou 16 dígitos sem resultado): lê /orders/{id} nas contas
+# conectadas uma vez e guarda em devolucao_venda_ml_v1994; "não existe" fica 30 min na memória. Erro = não achou.
+_DEVOLUCAO_PEDIDO_FALTA: dict[str, float] = {}
+
+
+def _devolucao_ler_venda_ml(order_id: str) -> bool:
+    order_id = normalize(order_id)
+    if not (order_id.isdigit() and len(order_id) >= 10):
+        return False
+    with DB_LOCK:
+        if DB.execute("SELECT 1 FROM devolucao_venda_ml_v1994 WHERE order_id=?", (order_id,)).fetchone():
+            return True
+    agora = time.time()
+    with _DEVOLUCAO_ENVIO_LOCK:
+        if _DEVOLUCAO_PEDIDO_FALTA.get(order_id, 0) > agora:
+            return False
+    try:
+        casas = ml_casas_conectadas()
+    except Exception:
+        casas = []
+    for casa in casas:
+        try:
+            with ml_na_casa(casa):
+                d = ml_api_get(f"/orders/{quote(order_id)}")
+        except Exception:
+            continue
+        if not (isinstance(d, dict) and str(d.get("id") or "") == order_id):
+            continue
+        linhas = []
+        for it in d.get("order_items") or []:
+            if not isinstance(it, dict):
+                continue
+            item = it.get("item") if isinstance(it.get("item"), dict) else {}
+            sku = str(item.get("seller_sku") or item.get("seller_custom_field") or "").strip()
+            if not sku:
+                continue
+            linhas.append({"order_id": order_id, "pack_id": str(d.get("pack_id") or ""),
+                           "sale_at": str(d.get("date_created") or ""), "sku": sku, "anuncio": str(item.get("id") or ""),
+                           "title": str(item.get("title") or ""), "qty": it.get("quantity") or 0})
+        if not linhas:
+            break
+        with DB_LOCK:
+            DB.execute("INSERT OR REPLACE INTO devolucao_venda_ml_v1994(order_id,pack_id,conta,status,linhas_json,lido_em) "
+                       "VALUES(?,?,?,?,?,?)", (order_id, str(d.get("pack_id") or ""), casa, str(d.get("status") or ""),
+                                               json.dumps(linhas, ensure_ascii=False), now_iso()))
+            DB.commit()
+        return True
+    with _DEVOLUCAO_ENVIO_LOCK:
+        if len(_DEVOLUCAO_PEDIDO_FALTA) > 2000:
+            _DEVOLUCAO_PEDIDO_FALTA.clear()
+        _DEVOLUCAO_PEDIDO_FALTA[order_id] = agora + DEVOLUCAO_ENVIO_CACHE_SEG
+    return False
 
 
 def _devolucao_venda_full(anuncios: set[str]) -> bool:
@@ -18047,7 +18122,8 @@ def _devolucao_vendas_sem_conferencia(numeros: list[Any], filial: str) -> list[d
                     "concluido_em": str(linhas[0]["sale_at"] or ""), "cliente": "",
                     "skus": sorted({normalize(l["sku"]) for l in linhas if l["sku"]}),
                     "devolucoes": int(devolvidas or 0), "venda_sem_conferencia": True,
-                    "full": _devolucao_venda_full({str(l["anuncio"] or "") for l in linhas}), "carrinho": pack})
+                    "full": _devolucao_venda_full({str(l["anuncio"] or "") for l in linhas}), "carrinho": pack,
+                    "cancelada": any(str(l.get("status") or "") == "cancelled" for l in linhas)})
     return pedidos
 
 
@@ -18075,6 +18151,7 @@ def _devolucao_pedido_venda_ml(key: str, filial: str) -> dict[str, Any]:
     return {"ok": True, "chave": key, "pedido": order_id, "filial": conta, "marketplace": "Mercado Livre",
             "cliente": "", "data": str(linhas[0]["sale_at"] or "")[:10], "concluido_em": str(linhas[0]["sale_at"] or ""),
             "itens": itens, "kits": kits_tela, "venda_sem_conferencia": True, "full": full,
+            "cancelada": any(str(l.get("status") or "") == "cancelled" for l in linhas),
             "carrinho": str(linhas[0]["pack_id"] or "")}
 
 

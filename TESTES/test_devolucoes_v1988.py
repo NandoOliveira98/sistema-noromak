@@ -219,6 +219,41 @@ class Devolucoes(TesteNoromak):
         self.assertEqual([(p["pedido"], p.get("venda_sem_conferencia", False)) for p in r["pedidos"]],
                          [("2000015577341895", False)])
 
+    # --- V19.94: venda Full CANCELADA (reembolso da devolução) some das vendas copiadas (caso real 27/10:
+    # etiqueta 48323000393 → venda 2000019080231218, cancelada). Lê a venda no ML uma vez e guarda. ---
+
+    def pedido_ml(self, order_id="2000019080231218", status="cancelled"):
+        return {"id": int(order_id), "status": status, "pack_id": None, "date_created": "2026-10-20T12:28:57.000-04:00",
+                "order_items": [{"item": {"id": "MLB777", "title": "Graxa", "seller_sku": "153958-6050.011.020.00.4"},
+                                 "quantity": 1}]}
+
+    def test_venda_cancelada_lida_no_ml_pela_etiqueta(self):
+        chamadas, p1, p2 = self.envio_ml({
+            ("aracatuba", "/shipments/48323000393"): {"type": "return", "order_id": 2000019080231218},
+            ("aracatuba", "/orders/2000019080231218"): self.pedido_ml()})
+        with p1, p2:
+            r = S.devolucao_buscar("48323000393", "todas")
+            self.assertEqual([p["pedido"] for p in r["pedidos"]], ["2000019080231218"])
+            p = r["pedidos"][0]
+            self.assertTrue(p["venda_sem_conferencia"] and p["cancelada"])
+            v = S.devolucao_pedido(p["chave"], "todas")
+            self.assertEqual([(i["qtd_vendida"]) for i in v["itens"]], [1])
+            self.registrar([{"sku": v["itens"][0]["sku"], "qtd": 1, "estado": "ruim", "motivo": "avariado"}],
+                           chave=p["chave"])
+            n = len(chamadas)
+            S._DEVOLUCAO_ENVIO_CACHE.clear()
+            # a venda ficou guardada: o nº da venda acha sem ler o pedido de novo
+            self.assertEqual([x["pedido"] for x in S.devolucao_buscar("2000019080231218", "todas")["pedidos"]],
+                             ["2000019080231218"])
+        self.assertFalse(any(c[1].startswith("/orders/") for c in chamadas[n:]))
+
+    def test_numero_que_nao_e_venda_nao_quebra(self):
+        chamadas, p1, p2 = self.envio_ml({})
+        with p1, p2:
+            self.assertEqual(S.devolucao_buscar("2000019999999999", "todas")["pedidos"], [])
+            S.devolucao_buscar("2000019999999999", "todas")
+        self.assertEqual(sum(c[1].startswith("/orders/") for c in chamadas), 1)   # o "não existe" também fica guardado
+
     def test_venda_de_bauru_fica_na_filial(self):
         self.venda_ml("2000019999", "2000015999", "KIT-0893600022/0893764272", conta="bauru", anuncio="MLB9")
         self.assertEqual(S.devolucao_buscar("2000019999", "aracatuba")["pedidos"], [])

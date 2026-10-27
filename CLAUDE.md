@@ -5,7 +5,7 @@ Shopee, manuais), expedição, separação, conferência por código de barras, 
 produtos/SKUs/EANs, kits, precificação, promoções, rentabilidade, estoque, Central de
 Pendências e histórico.
 
-Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V19.93).
+Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V19.94).
 
 ---
 
@@ -1242,6 +1242,11 @@ carrinho ou o `order_id` da etiqueta (`/shipments`, inclusive o **Ref. ID** da e
 armazém do ML com remetente MELI — o código de barras dessa etiqueta o ML não mostra). Chave `VENDAML<order_id>`
 (`DEVOLUCAO_VENDA_PREFIXO`; nunca colide com a fila); venda conferida (pela venda ou pelo carrinho) nunca aparece por
 aqui; `full` = anúncio com `fulfillment` em `ml_estoque_dia_v1872`; sem nome do cliente (nome/peça não acham Full).
+**V19.94 — venda cancelada** (caso real 27/10: etiqueta 48323000393 → venda Full 2000019080231218, cancelada pelo
+reembolso). Venda cancelada some de `vendas_v1799` (janela regravada). Para o nº vindo da etiqueta (ou 16 dígitos sem
+resultado), `_devolucao_ler_venda_ml` lê `/orders/{id}` nas contas conectadas **uma vez** e guarda em
+`devolucao_venda_ml_v1994` (a cópia das vendas manda quando existe); "não existe" fica 30 min em memória; erro = não
+achou. Tela marca "cancelada".
 
 **V19.45 — Cliente do Full pela NF-e do ML** (decisões do dono, 16/10). Venda Full não passa pela fila, e a integração
 ML → Apollo cria o cliente com o nome da conta ("Premium Flex") em vez da razão social da nota (M2 SOLUCOES GRAFICAS).

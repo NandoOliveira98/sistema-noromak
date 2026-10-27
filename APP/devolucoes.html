@@ -183,7 +183,7 @@ function desenharResultados(pedidos, q, d = {}) {
     `<div><b>${esc(p.pedido)}</b> · ${esc(p.marketplace)}<div class="sub">${esc(p.cliente || "cliente não informado")}</div>` +
     `<div class="sub">Peças: ${esc(p.skus.join(", "))}</div></div>` +
     `<div class="sub" style="text-align:right">${p.venda_sem_conferencia  // V19.93: Full / venda não conferida
-      ? `${p.full ? "<b>Full</b> · " : ""}venda de ${esc(new Date(p.concluido_em).toLocaleDateString("pt-BR"))} · não passou pela Conferência`
+      ? `${p.full ? "<b>Full</b> · " : ""}${p.cancelada ? "<b>cancelada</b> · " : ""}venda de ${esc(new Date(p.concluido_em).toLocaleDateString("pt-BR"))} · não passou pela Conferência`
       : `Concluído em ${esc(new Date(p.concluido_em).toLocaleDateString("pt-BR"))}`}` +
     (p.devolucoes ? `<div class="ja">já tem ${p.devolucoes} devolução(ões)</div>` : "") + `</div></div>`).join("");
   $("resultados").querySelectorAll(".pedido").forEach(el =>
@@ -214,7 +214,7 @@ async function abrirVenda(chave, bipado = "") {
       `<span>Cliente <b>${esc(v.cliente || "—")}</b></span>` +
       (v.data ? `<span>Venda ${esc(v.data)}</span>` : "") +
       (v.venda_sem_conferencia
-        ? `<span>${v.full ? "<b>Full</b> · " : ""}não passou pela Conferência</span>`
+        ? `<span>${v.full ? "<b>Full</b> · " : ""}${v.cancelada ? "<b>venda cancelada</b> · " : ""}não passou pela Conferência</span>`
         : `<span>Concluído em ${esc(new Date(v.concluido_em).toLocaleDateString("pt-BR"))}</span>`);
     $("formSem").hidden = true;
     mostrarPasso("venda");
