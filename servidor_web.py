@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.90-BUSCA-DEVOLUCAO"
+APP_VERSION = "19.91-USUARIO-EXCLUIDO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -5073,6 +5073,12 @@ def _admin_override_upsert(storage_key: str, entity_id: str, field_name: str, va
 # Precificador é o merge por produto/campo (merge_precificador). As linhas antigas
 # de admin_manual_overrides dessa chave ficam no banco, só deixam de ser aplicadas.
 ADMIN_OVERRIDE_SEM_ROOT = {"conf_etiquetas", "precificador_online_v1"}
+# V19.91: conf_usuarios é só o espelho do app_users (a fonte da verdade). A trava gravada pelo
+# "Aprovar" (que grava a lista inteira como ADMIN) era reaplicada na leitura: o usuário excluído
+# pela lixeira (DELETE /api/roles) voltava na lista sem senha e toda aprovação seguinte era
+# recusada (caso "mauro", 27/10). Sem trava nenhuma, nem gravar nem aplicar (as antigas ficam
+# no banco, sem efeito).
+ADMIN_OVERRIDE_FORA = {"conf_usuarios"}
 
 
 def _admin_override_record_delta(storage_key: str, current_value: str | None, requested_value: str,
@@ -5086,7 +5092,7 @@ def _admin_override_record_delta(storage_key: str, current_value: str | None, re
     # V17.69: conf_etiquetas é uma base agregada alimentada simultaneamente pelas
     # APIs e por uploads. Override do objeto-raiz congela registros/ordem e pode
     # esconder etiquetas automáticas adicionadas depois.
-    if storage_key in ADMIN_OVERRIDE_SEM_ROOT:
+    if storage_key in ADMIN_OVERRIDE_SEM_ROOT or storage_key in ADMIN_OVERRIDE_FORA:
         return 0
     try:
         old = json.loads(current_value) if current_value not in (None, "") else None
@@ -5137,7 +5143,7 @@ def _admin_override_record_delta(storage_key: str, current_value: str | None, re
 def _admin_override_apply(storage_key: str, merged_value: str) -> str:
     # V17.69: etiquetas usam proteção própria contra remoção; não reaplicar
     # snapshots-raiz antigos sobre registros novos vindos das integrações.
-    if storage_key in ADMIN_OVERRIDE_SEM_ROOT:
+    if storage_key in ADMIN_OVERRIDE_SEM_ROOT or storage_key in ADMIN_OVERRIDE_FORA:
         return merged_value
     rows = _admin_override_load(storage_key)
     if not rows:
