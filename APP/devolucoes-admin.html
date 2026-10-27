@@ -13,11 +13,11 @@
 <script src="/expedicao/nk-ui.js?v=19.13"></script>
 <script defer src="/expedicao/nk-menu.js?v=19.88" data-shell></script>
 <style>
-body{margin:0;background:var(--nk-canvas);color:var(--nk-ink);font-family:var(--nk-font)}
+body{margin:0;background:var(--nk-canvas);color:var(--nk-ink);font-family:var(--nk-font,"IBM Plex Sans","Segoe UI",Arial,sans-serif)}
 [hidden]{display:none!important}
 .kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:14px}
 .filtros{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
-.filtros select{font-size:13px;padding:7px 9px;border:1px solid var(--nk-line);border-radius:9px;background:var(--nk-surface);color:var(--nk-ink)}
+.filtros select{font-size:13px;padding:7px 9px;border:1px solid var(--nk-line);border-radius:9px;background:var(--nk-tile);color:var(--nk-ink)}
 table.dev{width:100%;border-collapse:collapse;font-size:13.5px}
 table.dev th{text-align:left;font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--nk-ink3);padding:8px 10px;border-bottom:1px solid var(--nk-line)}
 table.dev td{padding:9px 10px;border-bottom:1px solid var(--nk-line2);vertical-align:top}
@@ -27,15 +27,16 @@ table.dev tbody tr:hover{background:var(--nk-line2)}
 .ruim{color:#dc2626;font-weight:600}
 .bom{color:#16a34a;font-weight:600}
 .aviso{color:var(--nk-warn);font-weight:600;font-size:12px}
-.gaveta{position:fixed;top:0;right:0;bottom:0;width:min(620px,100%);background:var(--nk-surface);border-left:1px solid var(--nk-line);
+.gaveta{position:fixed;top:0;right:0;bottom:0;width:min(720px,100%);background:var(--nk-tile);border-left:1px solid var(--nk-line);
   box-shadow:-8px 0 30px rgba(0,0,0,.12);overflow:auto;padding:20px 22px;z-index:50}
 .gaveta h2{margin:0 0 4px;font-size:19px;color:var(--nk-head)}
 .gaveta .sub{font-size:13px;color:var(--nk-ink2);margin-bottom:12px}
 .gaveta table{width:100%;border-collapse:collapse;font-size:13px;margin:8px 0 12px}
 .gaveta th{text-align:left;font-size:11px;text-transform:uppercase;color:var(--nk-ink3);padding:6px;border-bottom:1px solid var(--nk-line)}
 .gaveta td{padding:6px;border-bottom:1px solid var(--nk-line2)}
-.gaveta input,.gaveta select{font-size:13px;padding:6px 8px;border:1px solid var(--nk-line);border-radius:8px;background:var(--nk-surface);color:var(--nk-ink)}
+.gaveta input,.gaveta select{font-size:13px;padding:6px 8px;border:1px solid var(--nk-line);border-radius:8px;background:var(--nk-tile);color:var(--nk-ink)}
 .gaveta input[type=number]{width:64px}
+.gaveta select{max-width:140px}.gaveta td{word-break:break-word}
 .linha-acao{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0}
 .eventos{font-size:12.5px;color:var(--nk-ink2);border-top:1px solid var(--nk-line);padding-top:10px;margin-top:14px}
 .eventos div{margin-bottom:6px}
