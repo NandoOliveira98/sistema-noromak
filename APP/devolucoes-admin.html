@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="/favicon.ico?v=14.5" sizes="any">
+<title>Noromak · Devoluções</title>
+<!-- V19.88: Devoluções — tela do admin (módulo admin, menu Expedição). Lista o que o operador
+     recebeu em /devolucoes; o admin trata no Apollo e marca "tratada" com o nº do documento,
+     corrige quantidade/estado/motivo (fica no histórico) e reabre. GET /api/devolucoes. -->
+<script defer src="/expedicao/web-auth.js?v=19.70"></script>
+<link rel="stylesheet" href="/expedicao/nk-ui.css?v=19.13">
+<script src="/expedicao/nk-ui.js?v=19.13"></script>
+<script defer src="/expedicao/nk-menu.js?v=19.88" data-shell></script>
+<style>
+body{margin:0;background:var(--nk-canvas);color:var(--nk-ink);font-family:var(--nk-font)}
+[hidden]{display:none!important}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:14px}
+.filtros{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
+.filtros select{font-size:13px;padding:7px 9px;border:1px solid var(--nk-line);border-radius:9px;background:var(--nk-surface);color:var(--nk-ink)}
+table.dev{width:100%;border-collapse:collapse;font-size:13.5px}
+table.dev th{text-align:left;font-size:11px;letter-spacing:.04em;text-transform:uppercase;color:var(--nk-ink3);padding:8px 10px;border-bottom:1px solid var(--nk-line)}
+table.dev td{padding:9px 10px;border-bottom:1px solid var(--nk-line2);vertical-align:top}
+table.dev tbody tr{cursor:pointer}
+table.dev tbody tr:hover{background:var(--nk-line2)}
+.pec{font-family:Consolas,monospace;font-size:12.5px;white-space:nowrap}
+.ruim{color:#dc2626;font-weight:600}
+.bom{color:#16a34a;font-weight:600}
+.aviso{color:var(--nk-warn);font-weight:600;font-size:12px}
+.gaveta{position:fixed;top:0;right:0;bottom:0;width:min(620px,100%);background:var(--nk-surface);border-left:1px solid var(--nk-line);
+  box-shadow:-8px 0 30px rgba(0,0,0,.12);overflow:auto;padding:20px 22px;z-index:50}
+.gaveta h2{margin:0 0 4px;font-size:19px;color:var(--nk-head)}
+.gaveta .sub{font-size:13px;color:var(--nk-ink2);margin-bottom:12px}
+.gaveta table{width:100%;border-collapse:collapse;font-size:13px;margin:8px 0 12px}
+.gaveta th{text-align:left;font-size:11px;text-transform:uppercase;color:var(--nk-ink3);padding:6px;border-bottom:1px solid var(--nk-line)}
+.gaveta td{padding:6px;border-bottom:1px solid var(--nk-line2)}
+.gaveta input,.gaveta select{font-size:13px;padding:6px 8px;border:1px solid var(--nk-line);border-radius:8px;background:var(--nk-surface);color:var(--nk-ink)}
+.gaveta input[type=number]{width:64px}
+.linha-acao{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:10px 0}
+.eventos{font-size:12.5px;color:var(--nk-ink2);border-top:1px solid var(--nk-line);padding-top:10px;margin-top:14px}
+.eventos div{margin-bottom:6px}
+.fechar{float:right}
+.vazio{color:var(--nk-ink3);padding:14px 4px}
+</style>
+</head>
+<body>
+<main class="nk-pagina">
+  <div class="nk-cab">
+    <div>
+      <div class="nk-rotulo">Expedição</div>
+      <h1>Devoluções</h1>
+      <p>Peças recebidas pelo operador. Trate cada devolução no Apollo e marque como tratada com o nº do documento.</p>
+    </div>
+    <div class="nk-acoes">
+      <a class="nk-btn" href="/expedicao/devolucoes" target="_blank" rel="noopener">Receber devolução</a>
+      <button class="nk-btn" onclick="carregar()">Atualizar</button>
+    </div>
+  </div>
+  <div class="nk-aviso bad" id="erro" hidden></div>
+  <div class="kpis">
+    <div class="nk-kpi"><div class="nk-rotulo">A tratar</div><b id="kAtratar">—</b></div>
+    <div class="nk-kpi"><div class="nk-rotulo">Tratadas</div><b id="kTratadas">—</b></div>
+  </div>
+  <section class="nk-painel">
+    <div class="filtros">
+      <select id="fSituacao"><option value="a_tratar">A tratar</option><option value="tratada">Tratadas</option><option value="">Todas</option></select>
+      <select id="fEstado"><option value="">Bom e ruim</option><option value="bom">Com peça boa</option><option value="ruim">Com peça ruim</option></select>
+      <select id="fMarketplace"><option value="">Todos os marketplaces</option><option>Mercado Livre</option><option>Shopee</option><option>Magalu</option><option>TIKTOK</option></select>
+    </div>
+    <table class="dev" data-nk-tabela data-nk-ordenar="0">
+      <thead><tr><th>Recebida</th><th>Pedido</th><th>Cliente</th><th>Peças</th><th>Recebida por</th><th>Situação</th></tr></thead>
+      <tbody id="corpo"><tr><td colspan="6" class="vazio">Carregando…</td></tr></tbody>
+    </table>
+  </section>
+</main>
+<aside class="gaveta" id="gaveta" hidden></aside>
+<script>
+let FILIAL = ""; try { FILIAL = localStorage.getItem("nk_filial_v1895") || ""; } catch (_) {}
+const API = "/expedicao/api/devolucoes";
+let MOTIVOS = {};
+let lista = [];
+let aberta = null;   // id da devolução aberta na gaveta
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const data = s => s ? new Date(s).toLocaleString("pt-BR", {dateStyle: "short", timeStyle: "short"}) : "";
+const avisar = (t, tipo) => (window.nkToast ? nkToast(t, tipo) : alert(t));
+
+async function api(caminho, corpo) {
+  const opcoes = {credentials: "same-origin", headers: FILIAL ? {"X-Noromak-Filial": FILIAL} : {}};
+  if (corpo) {
+    opcoes.method = "POST";
+    opcoes.headers["Content-Type"] = "application/json";
+    opcoes.body = JSON.stringify(corpo);
+  }
+  const r = await fetch(API + caminho, opcoes);
+  let d = {};
+  try { d = await r.json(); } catch (_) {}
+  if (!r.ok || d.ok === false) {
+    const e = new Error(d.error || `Erro ${r.status}`);
+    e.status = r.status;
+    throw e;
+  }
+  return d;
+}
+
+async function carregar() {
+  const q = new URLSearchParams({situacao: $("fSituacao").value, estado: $("fEstado").value,
+                                 marketplace: $("fMarketplace").value});
+  try {
+    const d = await api("?" + q);
+    $("erro").hidden = true;
+    MOTIVOS = d.motivos || {};
+    lista = d.devolucoes || [];
+    $("kAtratar").textContent = d.resumo.a_tratar;
+    $("kTratadas").textContent = d.resumo.tratada;
+    desenhar();
+    if (aberta) abrir(aberta);
+  } catch (e) {
+    $("erro").textContent = e.message; $("erro").hidden = false;
+  }
+}
+["fSituacao", "fEstado", "fMarketplace"].forEach(id => $(id).addEventListener("change", carregar));
+
+function pecas(d) {
+  return d.itens.map(i => `<div class="pec">${esc(i.sku)} ×${i.qtd} ` +
+    (i.estado === "ruim" ? `<span class="ruim">ruim · ${esc(i.motivo_nome)}</span>` : `<span class="bom">bom</span>`) +
+    (i.fora_da_venda ? ` <span class="aviso">não bate com a venda</span>` : "") + `</div>`).join("");
+}
+
+function desenhar() {
+  $("corpo").innerHTML = lista.length ? lista.map(d =>
+    `<tr data-id="${d.id}"><td>${esc(data(d.recebido_em))}</td>` +
+    `<td>${d.sem_pedido ? `<span class="aviso">sem pedido</span> ${esc(d.pedido)}` : `<b>${esc(d.pedido)}</b>`}` +
+    `<div class="sub">${esc(d.marketplace)} · ${esc(d.filial_nome)}</div></td>` +
+    `<td>${esc(d.cliente)}</td><td>${pecas(d)}</td><td>${esc(d.recebido_por)}</td>` +
+    `<td>${d.situacao === "tratada" ? `Tratada<div class="sub">${esc(d.documento_apollo)}</div>` : "<b>A tratar</b>"}</td></tr>`).join("")
+    : `<tr><td colspan="6" class="vazio">Nenhuma devolução neste filtro.</td></tr>`;
+  $("corpo").querySelectorAll("tr[data-id]").forEach(tr => tr.addEventListener("click", () => abrir(+tr.dataset.id)));
+}
+
+const NOMES_ACAO = {registrada: "Recebida", corrigida: "Corrigida", tratada: "Tratada", reaberta: "Reaberta"};
+
+function abrir(id) {
+  const d = lista.find(x => x.id === id);
+  const g = $("gaveta");
+  if (!d) { g.hidden = true; aberta = null; return; }
+  aberta = id;
+  const opcoesMotivo = sel => `<option value="">—</option>` +
+    Object.entries(MOTIVOS).map(([k, v]) => `<option value="${k}"${sel === k ? " selected" : ""}>${esc(v)}</option>`).join("");
+  g.innerHTML =
+    `<button class="nk-btn fechar" onclick="fechar()">Fechar</button>` +
+    `<h2>${d.sem_pedido ? "Devolução sem pedido" : "Pedido " + esc(d.pedido)}</h2>` +
+    `<div class="sub">${esc(d.marketplace)} · ${esc(d.filial_nome)} · cliente ${esc(d.cliente)}<br>` +
+    `Recebida por ${esc(d.recebido_por)} em ${esc(data(d.recebido_em))}${d.obs ? "<br>Obs.: " + esc(d.obs) : ""}</div>` +
+    `<table><thead><tr><th>Peça</th><th>Vendido</th><th>Voltou</th><th>Estado</th><th>Motivo</th><th>Obs.</th></tr></thead><tbody>` +
+    d.itens.map(i => `<tr data-item="${i.id}"><td class="pec">${esc(i.sku)}${i.fora_da_venda ? '<div class="aviso">não bate com a venda</div>' : ""}` +
+      `<div class="sub">${esc(i.descricao)}</div></td><td>${i.qtd_vendida ?? "—"}</td>` +
+      `<td><input type="number" min="0" value="${i.qtd}" data-c="qtd" title="0 = peça lançada por engano"></td>` +
+      `<td><select data-c="estado"><option value="bom"${i.estado === "bom" ? " selected" : ""}>Bom</option>` +
+      `<option value="ruim"${i.estado === "ruim" ? " selected" : ""}>Ruim</option></select></td>` +
+      `<td><select data-c="motivo">${opcoesMotivo(i.motivo)}</select></td>` +
+      `<td><input type="text" value="${esc(i.obs)}" data-c="obs" style="width:110px"></td></tr>`).join("") +
+    `</tbody></table>` +
+    `<div class="linha-acao"><button class="nk-btn" onclick="corrigir(${d.id})">Salvar correção</button></div>` +
+    (d.situacao === "tratada"
+      ? `<div class="linha-acao">Tratada por <b>${esc(d.tratada_por)}</b> em ${esc(data(d.tratada_em))} · documento <b>${esc(d.documento_apollo)}</b>` +
+        `<button class="nk-btn" onclick="reabrir(${d.id})">Reabrir</button></div>`
+      : `<div class="linha-acao"><input id="docApollo" placeholder="Nº do documento no Apollo" style="flex:1">` +
+        `<button class="nk-btn" onclick="tratar(${d.id})">Marcar tratada</button></div>`) +
+    `<div class="eventos"><b>Histórico</b>` + d.eventos.map(e =>
+      `<div>${esc(data(e.quando))} · <b>${esc(NOMES_ACAO[e.acao] || e.acao)}</b> por ${esc(e.quem)}` +
+      (e.acao === "corrigida" ? `<br>antes: ${esc((e.detalhe.antes || []).map(x => `${x.sku} ×${x.qtd} ${x.estado}${x.motivo ? " (" + (MOTIVOS[x.motivo] || x.motivo) + ")" : ""}`).join("; "))}` : "") +
+      (e.acao === "tratada" ? ` · documento ${esc(e.detalhe.documento)}` : "") +
+      (e.acao === "reaberta" && e.detalhe.documento ? ` · documento anterior ${esc(e.detalhe.documento)}` : "") +
+      `</div>`).join("") + `</div>`;
+  g.hidden = false;
+}
+
+function fechar() { $("gaveta").hidden = true; aberta = null; }
+
+async function enviar(caminho, corpo, ok) {
+  try {
+    await api(caminho, corpo);
+    avisar(ok, "ok");
+  } catch (e) {
+    avisar(e.status === 409 ? "Outra pessoa alterou esta devolução. A tela foi recarregada — confira e repita." : e.message, "bad");
+  }
+  await carregar();
+}
+
+function corrigir(id) {
+  const d = lista.find(x => x.id === id);
+  const itens = [...$("gaveta").querySelectorAll("tr[data-item]")].map(tr => {
+    const v = c => tr.querySelector(`[data-c="${c}"]`).value;
+    return {id: +tr.dataset.item, qtd: parseInt(v("qtd"), 10) || 0, estado: v("estado"),
+            motivo: v("estado") === "ruim" ? v("motivo") : "", obs: v("obs")};
+  });
+  enviar("/corrigir", {id, versao: d.versao, itens}, "Correção salva.");
+}
+
+function tratar(id) {
+  const d = lista.find(x => x.id === id);
+  const documento = $("docApollo").value.trim();
+  // Peças todas zeradas (lançada por engano): nada a lançar no Apollo, trata sem documento.
+  if (!documento && d.itens.some(i => i.qtd > 0)) return avisar("Informe o nº do documento do Apollo.", "bad");
+  enviar("/tratar", {id, versao: d.versao, documento}, "Devolução marcada como tratada.");
+}
+
+async function reabrir(id) {
+  const d = lista.find(x => x.id === id);
+  const ok = window.nkConfirmar ? await nkConfirmar("Reabrir esta devolução? Ela volta para \"a tratar\".") : confirm("Reabrir?");
+  if (ok) enviar("/reabrir", {id, versao: d.versao}, "Devolução reaberta.");
+}
+
+carregar();
+</script>
+</body>
+</html>

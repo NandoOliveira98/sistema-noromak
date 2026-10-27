@@ -1,0 +1,368 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="/favicon.ico?v=14.5" sizes="any">
+<title>Noromak · Receber devolução</title>
+<!-- V19.88: Devoluções — tela do operador (módulo conferencia), tela cheia como a Conferência.
+     Bipa a peça / a etiqueta de devolução ou digita o cliente → escolhe o pedido concluído →
+     bipa o que voltou → bom ou ruim (ruim com motivo) → conclui. O admin trata em /devolucoes-admin.
+     O alert() fica de propósito: trava o leitor de código de barras (regra da Conferência). -->
+<script defer src="/expedicao/web-auth.js?v=19.70"></script>
+<link rel="stylesheet" href="/expedicao/nk-ui.css?v=19.13">
+<script src="/expedicao/nk-ui.js?v=19.13"></script>
+<style>
+body{margin:0;background:var(--nk-canvas);color:var(--nk-ink);font-family:var(--nk-font)}
+[hidden]{display:none!important}
+.topo{display:flex;align-items:center;gap:14px;padding:14px 22px;border-bottom:1px solid var(--nk-line);background:var(--nk-surface)}
+.topo h1{font-size:20px;margin:0;color:var(--nk-head)}
+.topo .filial{margin-left:auto;font-size:13px;color:var(--nk-ink2)}
+.topo a{font-size:13px;color:var(--nk-ink2)}
+main{max-width:1100px;margin:0 auto;padding:20px 18px 60px}
+.bip{display:flex;gap:10px;margin-bottom:14px}
+.bip input{flex:1;font-size:22px;padding:14px 16px;border:2px solid var(--nk-line);border-radius:12px;background:var(--nk-surface);color:var(--nk-ink)}
+.bip input:focus{outline:none;border-color:var(--nk-accent,#2563eb)}
+.dica{font-size:13px;color:var(--nk-ink3);margin:-6px 0 14px}
+.card{background:var(--nk-surface);border:1px solid var(--nk-line);border-radius:12px;padding:14px 16px;margin-bottom:10px}
+.pedido{cursor:pointer;display:grid;grid-template-columns:1fr auto;gap:4px 16px}
+.pedido:hover{border-color:var(--nk-ink3)}
+.pedido b{font-size:16px;color:var(--nk-head)}
+.pedido .sub{font-size:13px;color:var(--nk-ink2)}
+.pedido .ja{color:var(--nk-warn);font-weight:600;font-size:12.5px}
+.cab-venda{display:flex;flex-wrap:wrap;gap:6px 22px;font-size:14px}
+.cab-venda b{color:var(--nk-head)}
+table.itens{width:100%;border-collapse:collapse;font-size:14px;margin-top:8px}
+table.itens th{text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--nk-ink3);padding:8px;border-bottom:1px solid var(--nk-line)}
+table.itens td{padding:9px 8px;border-bottom:1px solid var(--nk-line2);vertical-align:middle}
+table.itens .cod{font-family:Consolas,monospace;font-weight:700;color:var(--nk-head)}
+table.itens input[type=number]{width:70px;font-size:16px;padding:6px;border:1px solid var(--nk-line);border-radius:8px;background:var(--nk-surface);color:var(--nk-ink)}
+table.itens select,table.itens input[type=text]{font-size:13px;padding:6px;border:1px solid var(--nk-line);border-radius:8px;background:var(--nk-surface);color:var(--nk-ink)}
+tr.voltou{background:var(--nk-ok-bg,rgba(22,163,74,.08))}
+tr.fora td.cod::after{content:" · não bate com a venda";font-family:var(--nk-font);font-weight:600;color:var(--nk-bad,#b91c1c);font-size:12px}
+.estado{display:inline-flex;border:1px solid var(--nk-line);border-radius:9px;overflow:hidden}
+.estado button{border:0;background:transparent;padding:7px 14px;font-weight:600;cursor:pointer;color:var(--nk-ink2)}
+.estado button.on.bom{background:#16a34a;color:#fff}
+.estado button.on.ruim{background:#dc2626;color:#fff}
+.acoes{display:flex;gap:10px;justify-content:flex-end;margin-top:14px;flex-wrap:wrap}
+.btn{font-size:15px;padding:11px 18px;border-radius:10px;border:1px solid var(--nk-line);background:var(--nk-surface);color:var(--nk-ink);cursor:pointer;font-weight:600}
+.btn.prim{background:#16a34a;border-color:#16a34a;color:#fff}
+.btn:disabled{opacity:.5;cursor:default}
+.ok{background:var(--nk-ok-bg,#dcfce7);border:1px solid #16a34a;color:#166534;border-radius:12px;padding:14px 16px;font-weight:600;margin-bottom:14px}
+.vazio{color:var(--nk-ink3);font-size:14px;padding:10px 2px}
+.form-sem{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+.form-sem input{font-size:15px;padding:9px 11px;border:1px solid var(--nk-line);border-radius:9px;background:var(--nk-surface);color:var(--nk-ink)}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+<div class="topo">
+  <h1>Receber devolução</h1>
+  <a href="/expedicao/conferencia">Conferência</a>
+  <span class="filial" id="filialTopo"></span>
+</div>
+<main>
+  <div class="ok" id="okMsg" hidden></div>
+
+  <!-- Passo 1: achar o pedido -->
+  <section id="passoBusca">
+    <form class="bip" id="formBusca" autocomplete="off">
+      <input id="campoBusca" placeholder="Bipe a peça ou a etiqueta de devolução, ou digite o cliente / nº do pedido" autofocus>
+      <button class="btn" type="submit">Buscar</button>
+    </form>
+    <div class="dica">Pedidos concluídos dos últimos 180 dias. Não achou? <a href="#" id="linkSemPedido">Registrar sem pedido</a></div>
+    <div id="resultados"></div>
+  </section>
+
+  <!-- Passo 2: conferir a peça com a venda -->
+  <section id="passoVenda" hidden>
+    <div class="card"><div class="cab-venda" id="cabVenda"></div></div>
+    <div class="form-sem" id="formSem" hidden>
+      <input id="semCliente" placeholder="Nome do cliente (obrigatório)">
+      <input id="semPedido" placeholder="Nº do pedido, se souber">
+      <!-- Revisão 27/10: quem vê as duas filiais escolhe onde a devolução chegou. -->
+      <select id="semFilial" hidden><option value="">Filial que recebeu…</option>
+        <option value="aracatuba">Araçatuba</option><option value="bauru">Bauru</option></select>
+    </div>
+    <form class="bip" id="formPeca" autocomplete="off">
+      <input id="campoPeca" placeholder="Bipe cada peça que voltou">
+      <button class="btn" type="submit">+1</button>
+    </form>
+    <div class="card" style="padding:4px 10px">
+      <table class="itens">
+        <thead><tr><th>Peça</th><th>Descrição</th><th class="num">Vendido</th><th class="num">Já voltou</th>
+          <th>Voltou agora</th><th>Estado</th><th>Motivo / observação</th></tr></thead>
+        <tbody id="corpoItens"></tbody>
+      </table>
+    </div>
+    <div class="form-sem"><input id="obsGeral" placeholder="Observação da devolução (opcional)" style="flex:1"></div>
+    <div class="acoes">
+      <button class="btn" id="btnVoltar" type="button">Voltar</button>
+      <button class="btn prim" id="btnConcluir" type="button">Concluir devolução</button>
+    </div>
+  </section>
+</main>
+<script>
+// Filial lida uma vez, ao abrir a página (regra da V19.00).
+let FILIAL = ""; try { FILIAL = localStorage.getItem("nk_filial_v1895") || ""; } catch (_) {}
+const API = "/expedicao/api/devolucoes";
+const MOTIVOS = {avariado: "Avariado", usado: "Usado", faltando: "Faltando peça ou acessório",
+                 embalagem: "Embalagem violada", veio_outra: "Veio outra peça"};
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const norm = s => String(s ?? "").toUpperCase().replace(/\s+/g, "");
+const $ = id => document.getElementById(id);
+let venda = null;      // {chave, pedido, ...} ou null quando é "sem pedido"
+let linhas = [];       // [{sku, descricao, vendida, ja, eans, qtd, estado, motivo, obs, fora}]
+let kits = [];         // kit devolvido fechado: [{codigos, pecas: [[sku, un]]}]
+let enviando = false;
+let token = "";        // revisão 27/10: o mesmo "Concluir" repetido (resposta perdida) não duplica
+const novoToken = () => Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
+
+// Revisão da correção (27/10): a filial do usuário vem da sessão. Quem tem filial fixa nunca vê o
+// seletor do "sem pedido" (o servidor grava na filial dele de qualquer jeito).
+let MINHA_FILIAL = "";
+fetch("/expedicao/api/auth/session", {credentials: "same-origin"}).then(r => r.json())
+  .then(d => { MINHA_FILIAL = (d.user && d.user.casa) || ""; }).catch(() => {});
+
+if (FILIAL) $("filialTopo").textContent = "Filial: " + (FILIAL === "bauru" ? "Bauru" : FILIAL === "aracatuba" ? "Araçatuba" : "todas");
+
+async function api(caminho, corpo) {
+  const opcoes = {credentials: "same-origin", headers: FILIAL ? {"X-Noromak-Filial": FILIAL} : {}};
+  if (corpo) {
+    opcoes.method = "POST";
+    opcoes.headers["Content-Type"] = "application/json";
+    opcoes.body = JSON.stringify(corpo);
+  }
+  const r = await fetch(API + caminho, opcoes);
+  let d = {};
+  try { d = await r.json(); } catch (_) {}
+  if (!r.ok || d.ok === false) throw new Error(d.error || `Erro ${r.status}`);
+  return d;
+}
+
+function focar(id) { setTimeout(() => $(id).focus(), 30); }
+
+// ---------- Passo 1 ----------
+$("formBusca").addEventListener("submit", async ev => {
+  ev.preventDefault();
+  const q = $("campoBusca").value.trim();
+  if (!q) return;
+  $("okMsg").hidden = true;
+  $("resultados").innerHTML = '<div class="vazio">Buscando…</div>';
+  try {
+    const d = await api("/buscar?q=" + encodeURIComponent(q));
+    desenharResultados(d.pedidos || [], q);
+  } catch (e) {
+    $("resultados").innerHTML = "";
+    alert(e.message);
+    focar("campoBusca");
+  }
+});
+
+function desenharResultados(pedidos, q) {
+  if (!pedidos.length) {
+    $("resultados").innerHTML = `<div class="vazio">Nenhum pedido concluído encontrado para "${esc(q)}". ` +
+      `Tente o nome do cliente, ou <a href="#" onclick="abrirSemPedido();return false">registre sem pedido</a>.</div>`;
+    $("campoBusca").select();
+    return;
+  }
+  $("resultados").innerHTML = pedidos.map((p, i) =>
+    `<div class="card pedido" data-i="${i}">` +
+    `<div><b>${esc(p.pedido)}</b> · ${esc(p.marketplace)}<div class="sub">${esc(p.cliente || "cliente não informado")}</div>` +
+    `<div class="sub">Peças: ${esc(p.skus.join(", "))}</div></div>` +
+    `<div class="sub" style="text-align:right">Concluído em ${esc(new Date(p.concluido_em).toLocaleDateString("pt-BR"))}` +
+    (p.devolucoes ? `<div class="ja">já tem ${p.devolucoes} devolução(ões)</div>` : "") + `</div></div>`).join("");
+  $("resultados").querySelectorAll(".pedido").forEach(el =>
+    el.addEventListener("click", () => abrirVenda(pedidos[+el.dataset.i].chave)));
+  const bipado = norm(q);
+  if (pedidos.length === 1) abrirVenda(pedidos[0].chave, bipado);
+}
+
+async function abrirVenda(chave, bipado = "") {
+  try {
+    const v = await api("/pedido?chave=" + encodeURIComponent(chave));
+    venda = v;
+    linhas = v.itens.map(i => ({sku: i.sku, descricao: i.descricao, vendida: i.qtd_vendida, ja: i.qtd_devolvida,
+      eans: [i.sku, ...(i.eans || [])].map(norm), qtd: 0, estado: "", motivo: "", obs: "", fora: false}));
+    kits = (v.kits || []).map(k => ({codigos: k.codigos.map(norm), pecas: k.pecas}));
+    token = novoToken();
+    $("cabVenda").innerHTML = `<span>Pedido <b>${esc(v.pedido)}</b></span><span>${esc(v.marketplace)}</span>` +
+      `<span>Cliente <b>${esc(v.cliente || "—")}</b></span>` +
+      (v.data ? `<span>Venda ${esc(v.data)}</span>` : "") +
+      `<span>Concluído em ${esc(new Date(v.concluido_em).toLocaleDateString("pt-BR"))}</span>`;
+    $("formSem").hidden = true;
+    mostrarPasso("venda");
+    // A peça bipada na busca já conta como a primeira que voltou.
+    if (bipado && (linhas.some(l => l.eans.includes(bipado)) || kits.some(k => k.codigos.includes(bipado))))
+      somarPeca(bipado, false);
+    desenharItens();
+    focar("campoPeca");
+  } catch (e) {
+    alert(e.message);
+    focar("campoBusca");
+  }
+}
+
+function abrirSemPedido() {
+  venda = null;
+  linhas = [];
+  kits = [];
+  token = novoToken();
+  $("semFilial").hidden = MINHA_FILIAL !== "todas" || FILIAL === "aracatuba" || FILIAL === "bauru";
+  $("semFilial").value = "";
+  $("cabVenda").innerHTML = "<b>Devolução sem pedido</b> — bipe as peças que voltaram. O admin recebe com esse aviso.";
+  $("formSem").hidden = false;
+  $("semCliente").value = ""; $("semPedido").value = "";
+  mostrarPasso("venda");
+  desenharItens();
+  focar("semCliente");
+}
+$("linkSemPedido").addEventListener("click", ev => { ev.preventDefault(); abrirSemPedido(); });
+
+function mostrarPasso(passo) {
+  $("passoBusca").hidden = passo !== "busca";
+  $("passoVenda").hidden = passo !== "venda";
+  if (passo === "busca") { $("obsGeral").value = ""; focar("campoBusca"); }
+}
+$("btnVoltar").addEventListener("click", () => mostrarPasso("busca"));
+
+// ---------- Passo 2 ----------
+$("formPeca").addEventListener("submit", ev => {
+  ev.preventDefault();
+  const codigo = norm($("campoPeca").value);
+  $("campoPeca").value = "";
+  if (codigo) somarPeca(codigo, true);
+  desenharItens();
+  focar("campoPeca");
+});
+
+function somarPeca(codigo, avisar) {
+  let linha = linhas.find(l => l.eans.includes(codigo) && (l.fora || l.vendida == null || l.qtd < l.vendida - l.ja));
+  if (!linha) linha = linhas.find(l => l.eans.includes(codigo));
+  const kit = !linha && kits.find(k => k.codigos.includes(codigo));
+  if (kit) {
+    // Kit devolvido fechado: a embalagem conta cada peça do kit.
+    const pecas = kit.pecas.map(([sku, un]) => [linhas.find(l => l.sku === sku), un]);
+    const cheia = pecas.find(([l, un]) => !l || l.qtd + un > l.vendida - l.ja);
+    if (cheia) {
+      if (avisar) alert(`${codigo}: as peças deste kit já voltaram todas.`);
+      return;
+    }
+    pecas.forEach(([l, un]) => { l.qtd += un; });
+    return;
+  }
+  if (linha) {
+    if (!linha.fora && linha.vendida != null && linha.qtd >= linha.vendida - linha.ja) {
+      if (avisar) alert(`${linha.sku}: já voltou tudo o que foi vendido (${linha.vendida}).`);
+      return;
+    }
+    linha.qtd += 1;
+    return;
+  }
+  if (venda) {
+    // Peça que não está na venda: avisa (trava o leitor) e só entra se o operador confirmar.
+    alert(`A peça ${codigo} NÃO bate com a venda ${venda.pedido}.`);
+    if (!confirm(`Registrar ${codigo} mesmo assim, como peça que não é desta venda?`)) return;
+  }
+  linhas.push({sku: codigo, descricao: "", vendida: null, ja: 0, eans: [codigo], qtd: 1,
+               estado: venda ? "ruim" : "", motivo: venda ? "veio_outra" : "", obs: "", fora: !!venda});
+}
+
+function desenharItens() {
+  const corpo = $("corpoItens");
+  if (!linhas.length) {
+    corpo.innerHTML = `<tr><td colspan="7" class="vazio">Bipe a primeira peça.</td></tr>`;
+    return;
+  }
+  corpo.innerHTML = linhas.map((l, i) => {
+    const max = l.fora || l.vendida == null ? 9999 : l.vendida - l.ja;
+    const motivo = l.estado === "ruim"
+      ? `<select data-i="${i}" data-campo="motivo"><option value="">Motivo…</option>` +
+        Object.entries(MOTIVOS).map(([k, v]) => `<option value="${k}"${l.motivo === k ? " selected" : ""}>${v}</option>`).join("") +
+        `</select> `
+      : "";
+    return `<tr class="${l.qtd ? "voltou" : ""} ${l.fora ? "fora" : ""}">` +
+      `<td class="cod">${esc(l.sku)}</td><td>${esc(l.descricao)}</td>` +
+      `<td class="num">${l.vendida ?? "—"}</td><td class="num">${l.ja || ""}</td>` +
+      `<td><input type="number" min="0" max="${max}" value="${l.qtd}" data-i="${i}" data-campo="qtd"></td>` +
+      `<td>${l.qtd ? `<span class="estado"><button type="button" class="bom ${l.estado === "bom" ? "on" : ""}" data-i="${i}" data-estado="bom">Bom</button>` +
+        `<button type="button" class="ruim ${l.estado === "ruim" ? "on" : ""}" data-i="${i}" data-estado="ruim">Ruim</button></span>` : '<span class="vazio">não voltou</span>'}</td>` +
+      `<td>${l.qtd ? motivo + `<input type="text" placeholder="obs." value="${esc(l.obs)}" data-i="${i}" data-campo="obs">` : ""}</td></tr>`;
+  }).join("");
+}
+
+$("corpoItens").addEventListener("click", ev => {
+  const b = ev.target.closest("button[data-estado]");
+  if (!b) return;
+  const l = linhas[+b.dataset.i];
+  l.estado = b.dataset.estado;
+  if (l.estado === "bom") l.motivo = "";
+  desenharItens();
+  focar("campoPeca");
+});
+$("corpoItens").addEventListener("change", ev => {
+  const el = ev.target;
+  if (!el.dataset.campo) return;
+  const l = linhas[+el.dataset.i];
+  if (el.dataset.campo === "qtd") {
+    const max = l.fora || l.vendida == null ? 9999 : l.vendida - l.ja;
+    l.qtd = Math.max(0, Math.min(max, parseInt(el.value, 10) || 0));
+    desenharItens();
+  } else {
+    l[el.dataset.campo] = el.value;
+  }
+});
+
+$("btnConcluir").addEventListener("click", async () => {
+  if (enviando) return;
+  const itens = linhas.filter(l => l.qtd > 0);
+  if (!itens.length) return alert("Nenhuma peça voltou. Bipe as peças ou digite a quantidade.");
+  const semEstado = itens.find(l => !l.estado);
+  if (semEstado) return alert(`${semEstado.sku}: marque se a peça está boa ou ruim.`);
+  const semMotivo = itens.find(l => l.estado === "ruim" && !l.motivo);
+  if (semMotivo) return alert(`${semMotivo.sku}: peça ruim precisa do motivo.`);
+  const corpo = {itens: itens.map(l => ({sku: l.sku, qtd: l.qtd, estado: l.estado, motivo: l.motivo, obs: l.obs})),
+                 obs: $("obsGeral").value, token};
+  if (venda) corpo.chave = venda.chave;
+  else {
+    corpo.sem_pedido = true;
+    corpo.cliente = $("semCliente").value.trim();
+    corpo.pedido = $("semPedido").value.trim();
+    corpo.filial = $("semFilial").hidden ? FILIAL : $("semFilial").value;
+    if (!corpo.cliente) return alert("Informe o nome do cliente.");
+  }
+  enviando = true;
+  $("btnConcluir").disabled = true;
+  try {
+    const r = await api("/registrar", corpo);
+    if (r.repetida) {
+      // A tentativa anterior (resposta perdida) já tinha gravado. Diz o que entrou; o que foi bipado
+      // depois da falha NÃO entrou e precisa ser registrado de novo.
+      const gravado = (r.itens || []).map(i => `${i.sku} ×${i.qtd} (${i.estado})`).join(", ");
+      alert(`Esta devolução já tinha sido gravada na tentativa anterior: ${gravado}.\n` +
+            "Se você bipou alguma peça depois do erro, ela NÃO entrou: registre só essa peça de novo.");
+      $("okMsg").textContent = `Devolução já gravada${venda ? " do pedido " + venda.pedido : ""}: ${gravado}.`;
+      $("okMsg").hidden = false;
+      $("campoBusca").value = "";
+      $("resultados").innerHTML = "";
+      mostrarPasso("busca");
+      return;
+    }
+    const un = itens.reduce((s, l) => s + l.qtd, 0);
+    $("okMsg").textContent = `Devolução registrada${venda ? " do pedido " + venda.pedido : ""}: ${un} unidade(s). Foi para o admin tratar no Apollo.`;
+    $("okMsg").hidden = false;
+    $("campoBusca").value = "";
+    $("resultados").innerHTML = "";
+    mostrarPasso("busca");
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    enviando = false;
+    $("btnConcluir").disabled = false;
+  }
+});
+
+mostrarPasso("busca");
+</script>
+</body>
+</html>

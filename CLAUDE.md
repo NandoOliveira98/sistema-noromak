@@ -5,7 +5,7 @@ Shopee, manuais), expedição, separação, conferência por código de barras, 
 produtos/SKUs/EANs, kits, precificação, promoções, rentabilidade, estoque, Central de
 Pendências e histórico.
 
-Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V19.55).
+Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V19.88).
 
 ---
 
@@ -1191,6 +1191,31 @@ Começa em `SEPARACAO_INICIO` (27/10, dono: a de 26/10 foi emitida à mão); ant
 e não lê o Apollo. A tela relê a cada 30 s enquanto lê a prateleira e para com a aba escondida (revisão 26/10).
 Antes de subir: `FERRAMENTAS_WINDOWS/separacao_hoje_leitura.py` (só leitura, via ssh) traz a fila para montar à mão.
 Teste: `TESTES/test_separacao_v1985.py`.
+
+**V19.88 — Devoluções** (decisões do dono, 27/10; desenho em `docs/superpowers/specs/2026-10-27-devolucoes-design.md`).
+Só o lado físico, só registro: nunca mexe em `completed_orders`, na fila, no Apollo nem no marketplace. **Operador**
+(`APP/devolucoes.html`, `/devolucoes`, módulo **conferencia**, tela cheia sem menu, `alert()` de propósito): bipa a peça /
+a etiqueta de devolução do ML ou digita cliente / nº do pedido → `GET /api/devolucoes/buscar` (pedidos **concluídos** dos
+últimos 180 dias, todos os marketplaces, filial de quem busca) → `GET /api/devolucoes/pedido` (venda com kit aberto em
+peças, `_separacao_partes`; o que já voltou; EANs do `conf_produtos`) → bipa cada peça (+1) ou digita a quantidade →
+**bom** ou **ruim** (ruim exige motivo de `DEVOLUCAO_MOTIVOS`) → `POST /api/devolucoes/registrar`. Peça fora da venda entra
+marcada (`fora_da_venda`); "sem pedido" exige o cliente. Nunca volta mais que o vendido somando todas as devoluções do
+pedido (conferido sob o `DB_LOCK`). Pedido de outra filial = 403 `OUTRA_FILIAL`. **Admin** (`APP/devolucoes-admin.html`,
+`/devolucoes-admin`, menu Expedição, módulo admin): `GET /api/devolucoes`, `POST /api/devolucoes/{tratar,corrigir,reabrir}`
+— tratar exige o nº do documento do Apollo; correção vai para `devolucao_evento_v1988` com o antes; tratada só reabre pelo
+admin; edição manda `versao` (409 `CONFLITO`). **Busca sem pesar:** índice `devolucao_busca_v1988` (uma linha por peça),
+preenchido por `devolucao_indexar` em lotes de 200 ids de `order_completion_history` (JSON lido fora do lock) — na busca e
+no worker `devolucoes_indice_loop` (5 min); pedido reconcluído troca as linhas. **Etiqueta do ML:** o Pós-venda guarda os
+envios de volta (`shipments[]` `type=return`: `shipment_id` + rastreio) em `ml_reclamacao_v1888.devolucao_envios`, sem
+chamada a mais — **conferir com a 1ª etiqueta real** qual número o código de barras traz (o QR em JSON vale pelo `id`);
+só a conta principal. **Revisão 27/10:** o índice anda do **mais novo para o mais antigo** (`piso_hist_id` +
+`devolucao_indexado_v1988`), uma indexação por vez (`DEVOLUCAO_INDICE_LOCK`; a busca não espera e indexa 1 lote), só a
+conclusão mais nova de cada pedido vale, o que passou de 180 dias sai; Precificador lido uma vez por lote; código da peça
+passa pelo `normalize`; kit devolvido fechado (código do anúncio ou EAN da embalagem, `kits` na venda) soma as peças;
+pedido reaberto (fora de `completed_orders`) não aparece; o admin zera peça lançada por engano (qtd 0) e não corrige
+tratada sem reabrir; "sem pedido" de quem vê "todas" exige a filial; `token` da tela evita duplicar o "Concluir"
+repetido (a resposta "repetida" diz o que foi gravado; o token é conferido antes da venda); conclusão "fantasma" do boot (`payload` "[]", recriada do `audit_log` pelo `migrate_completion_history`) nunca conta como a mais nova (`DEVOLUCAO_COM_LINHAS`); devolução com as peças zeradas trata sem documento e sai do filtro de estado; `%`/`_` não são curinga e nome só com palavras de 3+ letras; até 200 peças e código até 60. Depois: foto da
+peça ruim, destino por peça, etiqueta da Shopee. Teste: `TESTES/test_devolucoes_v1988.py`.
 
 **V19.45 — Cliente do Full pela NF-e do ML** (decisões do dono, 16/10). Venda Full não passa pela fila, e a integração
 ML → Apollo cria o cliente com o nome da conta ("Premium Flex") em vez da razão social da nota (M2 SOLUCOES GRAFICAS).

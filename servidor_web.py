@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.87-REEMISSAO-ROMANEIO"
+APP_VERSION = "19.88-DEVOLUCOES"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -2702,6 +2702,7 @@ def init_db() -> None:
     ensure_tarefas_schema()  # V19.69
     ensure_catalogo_ml_schema()  # V19.74
     ensure_venda_custo_schema()  # V19.77
+    ensure_devolucoes_schema()  # V19.88 (depois do Pós-venda: coluna nova em ml_reclamacao_v1888)
     migrate_legacy_if_empty()
     ensure_storage_defaults()
     seed_sku_state_from_storage()
@@ -17581,6 +17582,716 @@ def separacao_lista(filial: str) -> dict[str, Any]:
             "sem_resposta": sorted(c for c in sem if c in pecas)}
 
 
+# ---------------------------------------------------------------------------------------------
+# V19.88 — Devoluções (decisões do dono, 27/10; desenho em
+# docs/superpowers/specs/2026-10-27-devolucoes-design.md).
+# O operador (módulo conferencia, /devolucoes) acha o pedido CONCLUÍDO, confere a peça com a venda
+# e marca bom/ruim; o admin (/devolucoes-admin) trata no Apollo e marca "tratada" com o documento.
+# É só registro: nunca mexe em completed_orders, na fila, no Apollo nem no marketplace.
+# ---------------------------------------------------------------------------------------------
+DEVOLUCAO_DIAS = 180            # busca nos pedidos concluídos dos últimos 180 dias
+DEVOLUCAO_INDICE_LOTE = 200     # linhas do histórico indexadas por vez (JSON lido fora do DB_LOCK)
+DEVOLUCAO_MOTIVOS = {
+    "avariado": "Avariado",
+    "usado": "Usado",
+    "faltando": "Faltando peça ou acessório",
+    "embalagem": "Embalagem violada",
+    "veio_outra": "Veio outra peça",
+}
+DEVOLUCAO_SITUACOES = ("a_tratar", "tratada")
+DEVOLUCAO_MAX_ITENS = 200       # revisão 27/10: peças por registro (cada uma é um INSERT sob o DB_LOCK)
+DEVOLUCAO_MAX_CODIGO = 60
+DEVOLUCAO_INDICE_LOCK = threading.Lock()   # uma indexação por vez (busca e worker)
+_DEVOLUCAO_EAN_LOCK = threading.Lock()
+_DEVOLUCAO_EAN_CACHE: dict[str, Any] = {}
+
+
+class DevolucaoConflito(Exception):
+    """Outra pessoa gravou a devolução depois que a tela carregou (409)."""
+
+    def __init__(self, atual: dict[str, Any] | None):
+        super().__init__("A devolução foi alterada por outra pessoa. Confira e tente de novo.")
+        self.atual = atual
+
+
+def ensure_devolucoes_schema() -> None:
+    with DB_LOCK:
+        DB.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS devolucao_v1988 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                filial TEXT NOT NULL DEFAULT '',
+                marketplace TEXT NOT NULL DEFAULT '',
+                pedido TEXT NOT NULL DEFAULT '',
+                order_key TEXT NOT NULL DEFAULT '',
+                cliente TEXT NOT NULL DEFAULT '',
+                sem_pedido INTEGER NOT NULL DEFAULT 0,
+                situacao TEXT NOT NULL DEFAULT 'a_tratar',
+                obs TEXT NOT NULL DEFAULT '',
+                recebido_por TEXT NOT NULL DEFAULT '',
+                recebido_em TEXT NOT NULL DEFAULT '',
+                documento_apollo TEXT NOT NULL DEFAULT '',
+                tratada_por TEXT NOT NULL DEFAULT '',
+                tratada_em TEXT NOT NULL DEFAULT '',
+                versao INTEGER NOT NULL DEFAULT 1,
+                token TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_devolucao_pedido ON devolucao_v1988(order_key);
+            CREATE INDEX IF NOT EXISTS idx_devolucao_situacao ON devolucao_v1988(situacao, recebido_em);
+            CREATE TABLE IF NOT EXISTS devolucao_item_v1988 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                devolucao_id INTEGER NOT NULL,
+                sku TEXT NOT NULL DEFAULT '',
+                descricao TEXT NOT NULL DEFAULT '',
+                ean TEXT NOT NULL DEFAULT '',
+                qtd_vendida INTEGER,
+                qtd INTEGER NOT NULL DEFAULT 0,
+                estado TEXT NOT NULL DEFAULT '',
+                motivo TEXT NOT NULL DEFAULT '',
+                obs TEXT NOT NULL DEFAULT '',
+                fora_da_venda INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_devolucao_item ON devolucao_item_v1988(devolucao_id);
+            CREATE TABLE IF NOT EXISTS devolucao_evento_v1988 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                devolucao_id INTEGER NOT NULL,
+                quando TEXT NOT NULL DEFAULT '',
+                quem TEXT NOT NULL DEFAULT '',
+                acao TEXT NOT NULL DEFAULT '',
+                detalhe TEXT NOT NULL DEFAULT '{}'
+            );
+            CREATE INDEX IF NOT EXISTS idx_devolucao_evento ON devolucao_evento_v1988(devolucao_id);
+            -- Índice de busca: uma linha por peça de pedido concluído (o payload do histórico é lido
+            -- uma vez só, fora do DB_LOCK; o bip consulta só esta tabela pequena).
+            CREATE TABLE IF NOT EXISTS devolucao_busca_v1988 (
+                order_key TEXT NOT NULL,
+                pedido TEXT NOT NULL DEFAULT '',
+                filial TEXT NOT NULL DEFAULT '',
+                marketplace TEXT NOT NULL DEFAULT '',
+                concluido_em TEXT NOT NULL DEFAULT '',
+                sku TEXT NOT NULL DEFAULT '',
+                ean TEXT NOT NULL DEFAULT '',
+                cliente TEXT NOT NULL DEFAULT '',
+                cliente_busca TEXT NOT NULL DEFAULT '',
+                ml_ids TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_devolucao_busca_pedido ON devolucao_busca_v1988(order_key);
+            CREATE INDEX IF NOT EXISTS idx_devolucao_busca_sku ON devolucao_busca_v1988(sku);
+            CREATE INDEX IF NOT EXISTS idx_devolucao_busca_ean ON devolucao_busca_v1988(ean);
+            CREATE INDEX IF NOT EXISTS idx_devolucao_busca_data ON devolucao_busca_v1988(concluido_em);
+            -- Revisão 27/10: indexa do mais novo para o mais antigo. Tudo até o piso está no índice;
+            -- acima dele, as conclusões já indexadas ficam marcadas até o piso subir.
+            CREATE TABLE IF NOT EXISTS devolucao_indice_v1988 (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                piso_hist_id INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS devolucao_indexado_v1988 (
+                hist_id INTEGER PRIMARY KEY
+            );
+            """
+        )
+        # Banco que rodou a 1ª versão do ramo (antes da revisão de 27/10).
+        if "token" not in {r[1] for r in DB.execute("PRAGMA table_info(devolucao_v1988)").fetchall()}:
+            DB.execute("ALTER TABLE devolucao_v1988 ADD COLUMN token TEXT NOT NULL DEFAULT ''")
+        if "piso_hist_id" not in {r[1] for r in DB.execute("PRAGMA table_info(devolucao_indice_v1988)").fetchall()}:
+            DB.execute("ALTER TABLE devolucao_indice_v1988 ADD COLUMN piso_hist_id INTEGER NOT NULL DEFAULT 0")
+        # Revisão 27/10: o "Concluir" repetido depois de perder a resposta não duplica.
+        DB.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_devolucao_token ON devolucao_v1988(token) WHERE token<>''")
+        # Envio da devolução do ML (etiqueta de volta), lido na mesma chamada do Pós-venda.
+        colunas = {r[1] for r in DB.execute("PRAGMA table_info(ml_reclamacao_v1888)").fetchall()}
+        if colunas and "devolucao_envios" not in colunas:
+            DB.execute("ALTER TABLE ml_reclamacao_v1888 ADD COLUMN devolucao_envios TEXT NOT NULL DEFAULT ''")
+        DB.commit()
+
+
+def _devolucao_texto_busca(valor: Any) -> str:
+    texto = unicodedata.normalize("NFKD", str(valor or "")).encode("ascii", "ignore").decode().upper()
+    return " ".join(re.sub(r"[^A-Z0-9]+", " ", texto).split())
+
+
+def _devolucao_like(valor: str) -> str:
+    """Revisão 27/10: "%" e "_" bipados não viram curinga (listavam os clientes da filial)."""
+    return valor.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _devolucao_qtd(valor: Any) -> int:
+    try:   # "3,00" de planilha não vira 1 (mesma regra da separação)
+        return max(0, int(float(str(valor if valor is not None else 1).strip().replace(",", "."))))
+    except (TypeError, ValueError, OverflowError):
+        return 1
+
+
+def _devolucao_cliente(rows: list[dict[str, Any]]) -> str:
+    for campo in ("Cliente", "Nome Conferência", "NomeFiscalMercadoLivre"):
+        for r in rows:
+            texto = str(r.get(campo) or "").strip()
+            if texto:
+                return texto
+    return ""
+
+
+def _devolucao_conhecidos(rows: list[dict[str, Any]]) -> set[str]:
+    """Códigos do Precificador só quando algum SKU tem barra (revisão 27/10: uma leitura por lote)."""
+    if any("/" in str(r.get("SKU") or r.get("Sku") or "") for r in rows):
+        return _separacao_codigos_conhecidos()
+    return set()
+
+
+def _devolucao_pecas(rows: list[dict[str, Any]], conhecidos: set[str] | None = None,
+                     kits: list[dict[str, Any]] | None = None) -> dict[str, dict[str, Any]]:
+    """Peças vendidas no pedido: kit aberto (regra da separação), somadas por código. O código
+    passa pelo normalize (revisão 27/10: "ABC 123" perdia o vínculo com o que a tela manda).
+    `kits` recebe cada linha de kit (código do anúncio/EAN da embalagem → peças), para o kit
+    devolvido fechado ser achado e bipado."""
+    if conhecidos is None:
+        conhecidos = _devolucao_conhecidos(rows)
+    pecas: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        qtd = _devolucao_qtd(r.get("Quantidade"))
+        sku_linha = r.get("SKU") or r.get("Sku")
+        partes = [(normalize(c), un) for c, un in _separacao_partes(sku_linha, conhecidos) if normalize(c)]
+        if not partes or not qtd:
+            continue
+        kit = len(partes) > 1 or partes[0][1] != 1
+        desc = str(r.get("Descrição") or r.get("Descricao") or "").strip()
+        ean_linha = normalize(r.get("Código de Barras") or r.get("EAN"))
+        ean = "" if kit else ean_linha
+        for cod, un in partes:
+            p = pecas.setdefault(cod, {"sku": cod, "descricao": "", "ean": "", "qtd_vendida": 0})
+            p["qtd_vendida"] += qtd * un
+            p["descricao"] = p["descricao"] or (("Peça do kit: " if kit else "") + desc if desc else "")
+            p["ean"] = p["ean"] or ean
+        if kit and kits is not None:
+            kits.append({"sku": normalize(sku_linha), "ean": ean_linha, "descricao": desc,
+                         "pecas": [[c, un] for c, un in partes]})
+    return pecas
+
+
+def _devolucao_ml_ids(rows: list[dict[str, Any]]) -> str:
+    ids = {normalize(r.get(c)) for r in rows
+           for c in ("VendaMercadoLivre", "PackIdMercadoLivre", "ShipmentIdMercadoLivre")}
+    ids.discard("")
+    return ("," + ",".join(sorted(ids)) + ",") if ids else ""
+
+
+# Revisão da correção (27/10): a cada boot o migrate_completion_history recria, a partir do audit_log,
+# uma conclusão com as linhas vazias ("[]") e outro horário — com id maior que a real. Ela nunca é
+# "a conclusão mais nova" do pedido para as Devoluções.
+DEVOLUCAO_COM_LINHAS = "payload NOT IN ('', '[]')"
+
+
+def _devolucao_ultima_conclusao(order_key: str) -> int | None:
+    """Id da conclusão mais nova do pedido que tem as linhas. Chamar sob o DB_LOCK."""
+    r = DB.execute(f"SELECT MAX(id) FROM order_completion_history WHERE order_key=? AND {DEVOLUCAO_COM_LINHAS}",
+                   (order_key,)).fetchone()
+    return int(r[0]) if r and r[0] is not None else None
+
+
+def _devolucao_corte() -> str:
+    return (datetime.now(timezone.utc) - timedelta(days=DEVOLUCAO_DIAS)).isoformat()
+
+
+def devolucao_indexar() -> int:
+    """Põe no índice de busca um lote de conclusões ainda não indexadas, **da mais nova para a
+    mais antiga** (revisão 27/10: logo depois do deploy o pedido de ontem não era achado e virava
+    "sem pedido"). Uma indexação por vez; quem acha a vez ocupada não espera. Devolve quantas
+    conclusões leu (menos que o lote = em dia)."""
+    if not DEVOLUCAO_INDICE_LOCK.acquire(blocking=False):
+        return 0
+    try:
+        return _devolucao_indexar_lote()
+    finally:
+        DEVOLUCAO_INDICE_LOCK.release()
+
+
+def _devolucao_indexar_lote() -> int:
+    corte = _devolucao_corte()
+    lote = DEVOLUCAO_INDICE_LOTE
+    with DB_LOCK:
+        r = DB.execute("SELECT piso_hist_id FROM devolucao_indice_v1988 WHERE id=1").fetchone()
+        piso = int(r[0]) if r else 0
+        topo = int(DB.execute("SELECT COALESCE(MAX(id),0) FROM order_completion_history").fetchone()[0])
+        # Tudo até o piso já está no índice; acima dele, o que falta, mais novo primeiro.
+        hist = [dict(x) for x in DB.execute(
+            "SELECT h.id, h.order_key, h.order_id, h.completed_at FROM order_completion_history h "
+            "WHERE h.id>? AND h.id<=? AND h.completed_at>=? "
+            "AND NOT EXISTS (SELECT 1 FROM devolucao_indexado_v1988 x WHERE x.hist_id=h.id) "
+            "ORDER BY h.id DESC LIMIT ?", (piso, topo, corte, lote)).fetchall()]
+        # Só a conclusão mais nova de cada pedido vale (o pedido concluído de novo troca as peças).
+        validos = [h for h in hist if _devolucao_ultima_conclusao(h["order_key"]) == h["id"]]
+        payloads = {int(x[0]): x[1] for x in DB.execute(
+            f"SELECT id, payload FROM order_completion_history WHERE id IN ({','.join('?' * len(validos))})",
+            [h["id"] for h in validos]).fetchall()} if validos else {}
+    linhas_por_hist = {h["id"]: _rows_from_storage_value(payloads.get(h["id"])) for h in validos}
+    todas = [r for rows in linhas_por_hist.values() for r in rows]
+    conhecidos = _devolucao_conhecidos(todas)   # uma leitura do Precificador por lote
+    por_pedido: dict[str, tuple[int, list[tuple]]] = {}
+    for h in validos:
+        rows = linhas_por_hist[h["id"]]
+        if not rows:
+            continue   # conclusão antiga reconstruída do audit_log (sem as linhas): não apaga nada
+        try:
+            kits: list[dict[str, Any]] = []
+            pecas = _devolucao_pecas(rows, conhecidos, kits)
+        except Exception as exc:
+            print(f"[devolucoes] índice {h['order_key']}: {exc}", flush=True)
+            continue
+        cliente = _devolucao_cliente(rows)
+        nomes = _devolucao_texto_busca(" ".join(
+            str(r.get(c) or "") for r in rows for c in ("Cliente", "Nome Conferência", "NomeFiscalMercadoLivre")))
+        filial = filial_da_linha(rows[0])
+        mp = _vendas_marketplace(rows[0].get("Marketplace") or rows[0].get("Origem"))
+        ml_ids = _devolucao_ml_ids(rows)
+        codigos = {(p["sku"], p["ean"]) for p in pecas.values()} | {(k["sku"], k["ean"]) for k in kits}
+        por_pedido[h["order_key"]] = (h["id"], [
+            (h["order_key"], h["order_id"], filial, mp, h["completed_at"], sku, ean, cliente, nomes, ml_ids)
+            for sku, ean in sorted(codigos) if sku])
+    with DB_LOCK:
+        DB.execute("BEGIN IMMEDIATE")
+        try:
+            for chave, (hist_id, linhas) in por_pedido.items():
+                # Relido sob a trava: uma conclusão mais nova chegou no meio? ela é que indexa.
+                if _devolucao_ultima_conclusao(chave) != hist_id:
+                    continue
+                DB.execute("DELETE FROM devolucao_busca_v1988 WHERE order_key=?", (chave,))
+                DB.executemany(
+                    "INSERT INTO devolucao_busca_v1988(order_key,pedido,filial,marketplace,concluido_em,sku,ean,"
+                    "cliente,cliente_busca,ml_ids) VALUES(?,?,?,?,?,?,?,?,?,?)", linhas)
+            DB.executemany("INSERT OR IGNORE INTO devolucao_indexado_v1988(hist_id) VALUES(?)",
+                           [(h["id"],) for h in hist])
+            if len(hist) < lote:
+                # Em dia até o topo: o piso sobe, as marcas abaixo dele e o que passou dos 180 dias saem.
+                DB.execute("INSERT INTO devolucao_indice_v1988(id,piso_hist_id) VALUES(1,?) "
+                           "ON CONFLICT(id) DO UPDATE SET piso_hist_id=MAX(piso_hist_id, excluded.piso_hist_id)",
+                           (topo,))
+                DB.execute("DELETE FROM devolucao_indexado_v1988 WHERE hist_id<=?", (topo,))
+                DB.execute("DELETE FROM devolucao_busca_v1988 WHERE concluido_em<?", (corte,))
+            DB.commit()
+        except Exception:
+            DB.rollback()
+            raise
+    return len(hist)
+
+
+def _devolucao_indexar_tudo(maximo: int = 5) -> None:
+    for _ in range(maximo):
+        if devolucao_indexar() < DEVOLUCAO_INDICE_LOTE:
+            return
+
+
+def devolucoes_indice_loop(stop_event: threading.Event) -> None:
+    """Mantém o índice de busca em dia (a busca também indexa um lote antes de procurar)."""
+    while not stop_event.is_set():
+        try:
+            _devolucao_indexar_tudo(maximo=20)
+        except Exception as exc:
+            print(f"[devolucoes] índice: {exc}", flush=True)
+        stop_event.wait(300)
+
+
+def _devolucao_mapa_ean() -> dict[str, dict[str, set[str]]]:
+    """EAN → SKU e SKU → EAN pelo cadastro de produtos (refeito só quando o cadastro muda).
+    Revisão 27/10: sob trava própria — duas buscas juntas não leem o mapa pela metade."""
+    with DB_LOCK:
+        r = DB.execute("SELECT version FROM storage WHERE key='conf_produtos'").fetchone()
+    versao = int(r[0]) if r else 0
+    with _DEVOLUCAO_EAN_LOCK:
+        if _DEVOLUCAO_EAN_CACHE.get("versao") != versao:
+            with DB_LOCK:
+                bruto, _, _ = get_storage("conf_produtos")
+            mapa: dict[str, set[str]] = {}
+            por_sku: dict[str, set[str]] = {}
+            for p in _rows_from_storage_value(bruto):
+                codigo, sku = normalize(p.get("Código de Barras") or p.get("EAN")), normalize(p.get("SKU"))
+                if codigo and sku:
+                    mapa.setdefault(codigo, set()).add(sku)
+                    por_sku.setdefault(sku, set()).add(codigo)
+            _DEVOLUCAO_EAN_CACHE.clear()
+            _DEVOLUCAO_EAN_CACHE.update({"versao": versao, "ean": mapa, "sku": por_sku})
+        return {"ean": _DEVOLUCAO_EAN_CACHE["ean"], "sku": _DEVOLUCAO_EAN_CACHE["sku"]}
+
+
+def _devolucao_skus_do_ean(ean: str) -> set[str]:
+    return set(_devolucao_mapa_ean()["ean"].get(ean, set()))
+
+
+def _devolucao_codigo_do_qr(q: Any) -> Any:
+    """O QR da etiqueta do Mercado Envios traz um JSON ({"id": "4455...", ...}): vale o id."""
+    texto = str(q or "").strip()
+    if texto.startswith("{"):
+        try:
+            dados = json.loads(texto)
+        except ValueError:
+            return texto
+        if isinstance(dados, dict):
+            for campo in ("id", "shipment_id", "tracking_number"):
+                if dados.get(campo):
+                    return str(dados[campo])
+    return texto
+
+
+def devolucao_buscar(q: Any, filial: str) -> dict[str, Any]:
+    """Pedidos concluídos que batem com o bip: nº do pedido, EAN, SKU, nome do cliente ou a
+    etiqueta de devolução do ML. Só a filial de quem busca ("todas" = as duas)."""
+    if not DEVOLUCAO_INDICE_LOCK.locked():   # um lote só; o worker faz o resto
+        devolucao_indexar()
+    q = _devolucao_codigo_do_qr(q)
+    chave = normalize(q)
+    texto = _devolucao_texto_busca(q)
+    if len(chave) < 2:
+        return {"ok": True, "pedidos": []}
+    skus = {chave}
+    if chave.isdigit():
+        skus |= _devolucao_skus_do_ean(chave)
+    corte = _devolucao_corte()
+    filtro_filial = "" if filial == FILIAL_TODAS else " AND filial=?"
+    base = [corte] + ([] if filial == FILIAL_TODAS else [filial])
+    with DB_LOCK:
+        envios = [str(r[0]) for r in DB.execute(
+            "SELECT order_id FROM ml_reclamacao_v1888 WHERE devolucao_envios LIKE ? ESCAPE '\\' AND order_id<>''",
+            (f"%,{_devolucao_like(chave)},%",)).fetchall()] if chave.isalnum() else []
+        ml = {chave} | {normalize(x) for x in envios}
+        conds = ["order_key=?", "ean=?", f"sku IN ({','.join('?' * len(skus))})"]
+        params: list[Any] = [chave, chave, *sorted(skus)]
+        for x in sorted(ml):
+            conds.append("ml_ids LIKE ? ESCAPE '\\'")
+            params.append(f"%,{_devolucao_like(x)},%")
+        # Nome: só palavras de 3+ letras (revisão 27/10: "a e i" casava com quase todo cliente).
+        palavras = [p for p in texto.split() if len(p) >= 3]
+        if palavras and any(ch.isalpha() for ch in "".join(palavras)):
+            conds.append("(" + " AND ".join("cliente_busca LIKE ? ESCAPE '\\'" for _ in palavras) + ")")
+            params.extend(f"%{_devolucao_like(p)}%" for p in palavras)
+        # Pedido reaberto (voltou para a Conferência) não aparece até ser concluído de novo.
+        chaves = [r[0] for r in DB.execute(
+            f"SELECT DISTINCT order_key FROM devolucao_busca_v1988 WHERE concluido_em>=?{filtro_filial} "
+            f"AND ({' OR '.join(conds)}) AND order_key IN (SELECT order_key FROM completed_orders) "
+            f"ORDER BY concluido_em DESC LIMIT 30",
+            (*base, *params)).fetchall()]
+        if not chaves:
+            return {"ok": True, "pedidos": []}
+        marcas = ",".join("?" * len(chaves))
+        linhas = [dict(r) for r in DB.execute(
+            f"SELECT * FROM devolucao_busca_v1988 WHERE order_key IN ({marcas})", chaves).fetchall()]
+        devolvidos = {r[0]: int(r[1] or 0) for r in DB.execute(
+            f"SELECT order_key, COUNT(*) FROM devolucao_v1988 WHERE order_key IN ({marcas}) GROUP BY order_key",
+            chaves).fetchall()}
+    pedidos: dict[str, dict[str, Any]] = {}
+    for r in linhas:
+        p = pedidos.setdefault(r["order_key"], {
+            "chave": r["order_key"], "pedido": r["pedido"], "marketplace": r["marketplace"],
+            "filial": r["filial"], "concluido_em": r["concluido_em"], "cliente": r["cliente"],
+            "skus": [], "devolucoes": devolvidos.get(r["order_key"], 0)})
+        p["skus"].append(r["sku"])
+    return {"ok": True, "pedidos": sorted(pedidos.values(), key=lambda p: p["concluido_em"], reverse=True)}
+
+
+def _devolucao_ja_devolvido(order_key: str, ignorar_itens: set[int] | None = None) -> dict[str, int]:
+    """Unidades que já voltaram por peça (todas as devoluções do pedido). Chamar sob o DB_LOCK."""
+    soma: dict[str, int] = {}
+    for r in DB.execute(
+            "SELECT i.id, i.sku, i.qtd FROM devolucao_item_v1988 i JOIN devolucao_v1988 d ON d.id=i.devolucao_id "
+            "WHERE d.order_key=? AND d.sem_pedido=0 AND i.fora_da_venda=0", (order_key,)).fetchall():
+        if ignorar_itens and int(r["id"]) in ignorar_itens:
+            continue
+        soma[r["sku"]] = soma.get(r["sku"], 0) + int(r["qtd"] or 0)
+    return soma
+
+
+def devolucao_pedido(chave: Any, filial: str) -> dict[str, Any]:
+    """A venda do pedido concluído, peça por peça, com o que já voltou."""
+    key = normalize(chave)
+    with DB_LOCK:
+        h = DB.execute("SELECT order_key,order_id,completed_at,completed_by,payload FROM order_completion_history "
+                       f"WHERE order_key=? AND {DEVOLUCAO_COM_LINHAS} ORDER BY id DESC LIMIT 1", (key,)).fetchone()
+        concluido = DB.execute("SELECT 1 FROM completed_orders WHERE order_key=?", (key,)).fetchone()
+    rows = _rows_from_storage_value(h["payload"]) if h else []
+    if not rows or not concluido:   # revisão 27/10: reaberto (de volta na Conferência) não recebe devolução
+        raise ValueError("Pedido concluído não encontrado.")
+    filial_pedido = filial_da_linha(rows[0])
+    if filial != FILIAL_TODAS and filial_pedido != filial:
+        raise PermissionError(f"O pedido {h['order_id']} é de outra filial.")
+    kits: list[dict[str, Any]] = []
+    pecas = _devolucao_pecas(rows, kits=kits)
+    with DB_LOCK:
+        ja = _devolucao_ja_devolvido(key)
+    eans = _devolucao_mapa_ean()["sku"]   # para o bip na tela achar a peça pelo código de barras
+    itens = [{**p, "qtd_devolvida": ja.get(p["sku"], 0),
+              "eans": sorted({normalize(p["ean"])} - {""} | eans.get(p["sku"], set()))} for p in pecas.values()]
+    # Revisão 27/10: kit devolvido fechado — bipar a embalagem (código do anúncio ou EAN do kit) soma as peças.
+    kits_tela = [{"sku": k["sku"], "descricao": k["descricao"], "pecas": k["pecas"],
+                  "codigos": sorted({k["sku"], k["ean"]} - {""} | eans.get(k["sku"], set()))} for k in kits]
+    primeira = rows[0]
+    return {"ok": True, "chave": key, "pedido": h["order_id"], "filial": filial_pedido,
+            "marketplace": _vendas_marketplace(primeira.get("Marketplace") or primeira.get("Origem")),
+            "cliente": _devolucao_cliente(rows), "data": str(primeira.get("Data do Pedido") or ""),
+            "concluido_em": h["completed_at"], "itens": itens, "kits": kits_tela}
+
+
+def _devolucao_itens_validos(itens: Any, corrigir: bool = False) -> list[dict[str, Any]]:
+    if not isinstance(itens, list) or not itens:
+        raise ValueError("Informe as peças que voltaram.")
+    if len(itens) > DEVOLUCAO_MAX_ITENS:
+        raise ValueError(f"No máximo {DEVOLUCAO_MAX_ITENS} peças por devolução.")
+    saida = []
+    for it in itens:
+        if not isinstance(it, dict):
+            raise ValueError("Peça inválida.")
+        sku = normalize(it.get("sku"))
+        if not sku and not corrigir:
+            raise ValueError("Peça sem código.")
+        if len(sku) > DEVOLUCAO_MAX_CODIGO:
+            raise ValueError("Código da peça grande demais.")
+        try:
+            qtd = int(it.get("qtd"))
+        except (TypeError, ValueError):
+            raise ValueError(f"{sku}: quantidade inválida.")
+        # Revisão 27/10: na correção o admin zera a peça lançada por engano (a cota volta).
+        if qtd < (0 if corrigir else 1) or qtd > 9999:
+            raise ValueError(f"{sku}: quantidade inválida.")
+        estado = str(it.get("estado") or "").strip().lower()
+        if estado not in ("bom", "ruim"):
+            raise ValueError(f"{sku}: marque o estado da peça (bom ou ruim).")
+        motivo = str(it.get("motivo") or "").strip().lower() if estado == "ruim" else ""
+        if estado == "ruim" and motivo not in DEVOLUCAO_MOTIVOS:
+            raise ValueError(f"{sku}: peça ruim precisa do motivo.")
+        saida.append({"id": it.get("id"), "sku": sku, "qtd": qtd, "estado": estado, "motivo": motivo,
+                      "obs": str(it.get("obs") or "").strip()[:300]})
+    return saida
+
+
+def _devolucao_evento(dev_id: int, quem: str, acao: str, detalhe: dict[str, Any]) -> None:
+    DB.execute("INSERT INTO devolucao_evento_v1988(devolucao_id,quando,quem,acao,detalhe) VALUES(?,?,?,?,?)",
+               (dev_id, now_iso(), quem, acao, json_dumps(detalhe)))
+
+
+def _devolucao_repetida(dev_id: int) -> dict[str, Any]:
+    """O mesmo "Concluir" chegou de novo. Devolve o que FOI gravado na 1ª vez — a tela avisa se o
+    operador acrescentou peça depois da falha (essa não entrou). Chamar sob o DB_LOCK."""
+    d = _devolucao_ler(dev_id) or {"itens": []}
+    return {"ok": True, "id": dev_id, "repetida": True,
+            "itens": [{"sku": i["sku"], "qtd": i["qtd"], "estado": i["estado"]} for i in d["itens"]]}
+
+
+def devolucao_registrar(req: dict[str, Any], usuario: str, filial: str) -> dict[str, Any]:
+    """O operador concluiu a conferência da devolução. Nunca toca no pedido nem na fila."""
+    token = str(req.get("token") or "").strip()[:80]
+    if token:   # antes da venda: o pedido pode ter sido reaberto entre as duas tentativas
+        with DB_LOCK:
+            ja_feita = DB.execute("SELECT id FROM devolucao_v1988 WHERE token=?", (token,)).fetchone()
+            if ja_feita:
+                return _devolucao_repetida(int(ja_feita[0]))
+    itens = _devolucao_itens_validos(req.get("itens"))
+    obs = str(req.get("obs") or "").strip()[:500]
+    if req.get("sem_pedido"):
+        cliente = str(req.get("cliente") or "").strip()[:120]
+        if not cliente:
+            raise ValueError("Sem pedido: informe o nome do cliente.")
+        destino = filial if filial in CASAS else str(req.get("filial") or "").strip().lower()
+        if destino not in CASAS:   # revisão 27/10: quem vê "todas" escolhe (antes caía sempre em Araçatuba)
+            raise ValueError("Sem pedido: escolha a filial que recebeu a devolução.")
+        cab = {"filial": destino, "marketplace": "",
+               "pedido": str(req.get("pedido") or "").strip()[:60], "order_key": "", "cliente": cliente,
+               "sem_pedido": 1}
+        venda: dict[str, dict[str, Any]] = {}
+    else:
+        v = devolucao_pedido(req.get("chave"), filial)
+        cab = {"filial": v["filial"], "marketplace": v["marketplace"], "pedido": v["pedido"],
+               "order_key": v["chave"], "cliente": v["cliente"], "sem_pedido": 0}
+        venda = {i["sku"]: i for i in v["itens"]}
+    agora = now_iso()
+    with DB_LOCK:
+        DB.execute("BEGIN IMMEDIATE")
+        try:
+            if token:   # revisão 27/10: "Concluir" repetido depois de perder a resposta = a mesma devolução
+                ja_feita = DB.execute("SELECT id FROM devolucao_v1988 WHERE token=?", (token,)).fetchone()
+                if ja_feita:
+                    DB.rollback()
+                    return _devolucao_repetida(int(ja_feita[0]))
+            # Relido sob a trava: dois operadores ao mesmo tempo não passam do vendido.
+            ja = _devolucao_ja_devolvido(cab["order_key"]) if venda else {}
+            novo: dict[str, int] = {}
+            for it in itens:
+                if it["sku"] in venda:
+                    novo[it["sku"]] = novo.get(it["sku"], 0) + it["qtd"]
+            for sku, qtd in novo.items():
+                vendida = int(venda[sku]["qtd_vendida"])
+                if ja.get(sku, 0) + qtd > vendida:
+                    raise ValueError(f"{sku}: voltou mais do que foi vendido (vendido {vendida}, "
+                                     f"já devolvido {ja.get(sku, 0)}).")
+            cur = DB.execute(
+                "INSERT INTO devolucao_v1988(filial,marketplace,pedido,order_key,cliente,sem_pedido,situacao,obs,"
+                "recebido_por,recebido_em,versao,token) VALUES(?,?,?,?,?,?,'a_tratar',?,?,?,1,?)",
+                (cab["filial"], cab["marketplace"], cab["pedido"], cab["order_key"], cab["cliente"],
+                 cab["sem_pedido"], obs, usuario, agora, token))
+            dev_id = int(cur.lastrowid)
+            for it in itens:
+                p = venda.get(it["sku"])
+                DB.execute(
+                    "INSERT INTO devolucao_item_v1988(devolucao_id,sku,descricao,ean,qtd_vendida,qtd,estado,motivo,obs,"
+                    "fora_da_venda) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                    (dev_id, it["sku"], (p or {}).get("descricao", ""), (p or {}).get("ean", ""),
+                     (p or {}).get("qtd_vendida"), it["qtd"], it["estado"], it["motivo"], it["obs"],
+                     0 if (p or cab["sem_pedido"]) else 1))
+            _devolucao_evento(dev_id, usuario, "registrada", {"itens": itens})
+            DB.commit()
+        except Exception:
+            DB.rollback()
+            raise
+    audit(usuario, "devolucao.registrar", f"{dev_id}|{cab['pedido']}")
+    return {"ok": True, "id": dev_id}
+
+
+def _devolucao_ler(dev_id: int) -> dict[str, Any] | None:
+    """Chamar sob o DB_LOCK."""
+    d = DB.execute("SELECT * FROM devolucao_v1988 WHERE id=?", (dev_id,)).fetchone()
+    if d is None:
+        return None
+    d = dict(d)
+    d["sem_pedido"] = bool(d["sem_pedido"])
+    d["filial_nome"] = CASAS.get(d["filial"], d["filial"])
+    d["itens"] = [{**dict(i), "fora_da_venda": bool(i["fora_da_venda"]),
+                   "motivo_nome": DEVOLUCAO_MOTIVOS.get(i["motivo"], "")}
+                  for i in DB.execute("SELECT * FROM devolucao_item_v1988 WHERE devolucao_id=? ORDER BY id",
+                                      (dev_id,)).fetchall()]
+    d["eventos"] = [{**dict(e), "detalhe": _filial_json(e["detalhe"], {})}
+                    for e in DB.execute("SELECT * FROM devolucao_evento_v1988 WHERE devolucao_id=? ORDER BY id",
+                                        (dev_id,)).fetchall()]
+    return d
+
+
+def devolucoes_lista(filtros: dict[str, Any], filial: str) -> dict[str, Any]:
+    conds, params = [], []
+    if filial != FILIAL_TODAS:
+        conds.append("filial=?")
+        params.append(filial)
+    situacao = str(filtros.get("situacao") or "").strip()
+    if situacao in DEVOLUCAO_SITUACOES:
+        conds.append("situacao=?")
+        params.append(situacao)
+    mp = str(filtros.get("marketplace") or "").strip()
+    if mp:
+        conds.append("marketplace=?")
+        params.append(mp)
+    estado = str(filtros.get("estado") or "").strip().lower()
+    if estado in ("bom", "ruim"):
+        conds.append("id IN (SELECT devolucao_id FROM devolucao_item_v1988 WHERE estado=? AND qtd>0)")
+        params.append(estado)
+    onde = (" WHERE " + " AND ".join(conds)) if conds else ""
+    with DB_LOCK:
+        ids = [int(r[0]) for r in DB.execute(
+            f"SELECT id FROM devolucao_v1988{onde} ORDER BY situacao='tratada', recebido_em DESC LIMIT 300",
+            params).fetchall()]
+        devolucoes = [_devolucao_ler(i) for i in ids]
+        contagem = {r[0]: int(r[1]) for r in DB.execute(
+            "SELECT situacao, COUNT(*) FROM devolucao_v1988"
+            + (" WHERE filial=?" if filial != FILIAL_TODAS else "") + " GROUP BY situacao",
+            [] if filial == FILIAL_TODAS else [filial]).fetchall()}
+    return {"ok": True, "devolucoes": [d for d in devolucoes if d],
+            "resumo": {"a_tratar": contagem.get("a_tratar", 0), "tratada": contagem.get("tratada", 0)},
+            "motivos": DEVOLUCAO_MOTIVOS}
+
+
+def _devolucao_para_mudar(dev_id: Any, versao: Any, filial: str) -> dict[str, Any]:
+    """Relê a devolução sob o DB_LOCK (transação aberta) e confere filial e versão."""
+    try:
+        dev_id = int(dev_id)
+    except (TypeError, ValueError):
+        raise ValueError("Devolução não informada.")
+    d = _devolucao_ler(dev_id)
+    if d is None:
+        raise ValueError("Devolução não encontrada.")
+    if filial != FILIAL_TODAS and d["filial"] != filial:
+        raise PermissionError("Esta devolução é de outra filial.")
+    if str(versao) != str(d["versao"]):
+        raise DevolucaoConflito(d)
+    return d
+
+
+def _devolucao_mudar(dev_id: Any, versao: Any, filial: str, usuario: str, mudar) -> dict[str, Any]:
+    with DB_LOCK:
+        DB.execute("BEGIN IMMEDIATE")
+        try:
+            d = _devolucao_para_mudar(dev_id, versao, filial)
+            acao = mudar(d)
+            DB.execute("UPDATE devolucao_v1988 SET versao=versao+1 WHERE id=?", (d["id"],))
+            DB.commit()
+        except Exception:
+            DB.rollback()
+            raise
+        atual = _devolucao_ler(d["id"])
+    audit(usuario, f"devolucao.{acao}", str(d["id"]))
+    return {"ok": True, "devolucao": atual}
+
+
+def devolucao_tratar(dev_id: Any, documento: Any, versao: Any, usuario: str,
+                     filial: str = FILIAL_TODAS) -> dict[str, Any]:
+    documento = str(documento or "").strip()[:80]
+
+    def mudar(d: dict[str, Any]) -> str:
+        nonlocal documento
+        if d["situacao"] == "tratada":
+            raise ValueError("Esta devolução já foi tratada.")
+        if not documento:
+            # Revisão da correção (27/10): peças todas zeradas (lançada por engano) = nada a lançar no Apollo.
+            if any(int(i["qtd"] or 0) > 0 for i in d["itens"]):
+                raise ValueError("Informe o nº do documento do Apollo.")
+            documento = "nada voltou (peças zeradas)"
+        DB.execute("UPDATE devolucao_v1988 SET situacao='tratada', documento_apollo=?, tratada_por=?, tratada_em=? "
+                   "WHERE id=?", (documento, usuario, now_iso(), d["id"]))
+        _devolucao_evento(d["id"], usuario, "tratada", {"documento": documento})
+        return "tratar"
+    return _devolucao_mudar(dev_id, versao, filial, usuario, mudar)
+
+
+def devolucao_reabrir(dev_id: Any, versao: Any, usuario: str, filial: str = FILIAL_TODAS) -> dict[str, Any]:
+    def mudar(d: dict[str, Any]) -> str:
+        if d["situacao"] != "tratada":
+            raise ValueError("Só uma devolução tratada pode ser reaberta.")
+        DB.execute("UPDATE devolucao_v1988 SET situacao='a_tratar', documento_apollo='', tratada_por='', "
+                   "tratada_em='' WHERE id=?", (d["id"],))
+        _devolucao_evento(d["id"], usuario, "reaberta", {"documento": d["documento_apollo"],
+                                                         "tratada_por": d["tratada_por"]})
+        return "reabrir"
+    return _devolucao_mudar(dev_id, versao, filial, usuario, mudar)
+
+
+def devolucao_corrigir(dev_id: Any, itens: Any, versao: Any, usuario: str,
+                       filial: str = FILIAL_TODAS) -> dict[str, Any]:
+    """O admin corrige quantidade, estado e motivo. O que o operador marcou fica no histórico."""
+    novos = _devolucao_itens_validos(itens, corrigir=True)
+
+    def mudar(d: dict[str, Any]) -> str:
+        if d["situacao"] == "tratada":   # revisão 27/10: o documento do Apollo é dos números de quando tratou
+            raise ValueError("Devolução já tratada: reabra antes de corrigir.")
+        atuais = {int(i["id"]): i for i in d["itens"]}
+        trocas = []
+        for n in novos:
+            try:
+                item = atuais[int(n["id"])]
+            except (TypeError, ValueError, KeyError):
+                raise ValueError("Peça não encontrada nesta devolução.")
+            trocas.append((item, n))
+        if d["order_key"] and not d["sem_pedido"]:
+            ja = _devolucao_ja_devolvido(d["order_key"], {int(i["id"]) for i, _ in trocas})
+            soma: dict[str, int] = {}
+            for item, n in trocas:
+                if not item["fora_da_venda"]:
+                    soma[item["sku"]] = soma.get(item["sku"], 0) + n["qtd"]
+            for item, _ in trocas:
+                sku = item["sku"]
+                if sku in soma and item["qtd_vendida"] is not None and ja.get(sku, 0) + soma[sku] > int(item["qtd_vendida"]):
+                    raise ValueError(f"{sku}: voltou mais do que foi vendido (vendido {item['qtd_vendida']}).")
+        campos = ("qtd", "estado", "motivo", "obs")
+        for item, n in trocas:
+            DB.execute("UPDATE devolucao_item_v1988 SET qtd=?, estado=?, motivo=?, obs=? WHERE id=?",
+                       (n["qtd"], n["estado"], n["motivo"], n["obs"], item["id"]))
+        _devolucao_evento(d["id"], usuario, "corrigida", {
+            "antes": [{"id": i["id"], "sku": i["sku"], **{c: i[c] for c in campos}} for i, _ in trocas],
+            "depois": [{"id": i["id"], "sku": i["sku"], **{c: n[c] for c in campos}} for i, n in trocas]})
+        return "corrigir"
+    return _devolucao_mudar(dev_id, versao, filial, usuario, mudar)
+
+
 def _faturamento_pendentes() -> list[tuple[str, str]]:
     """(pedido, marketplace) dos pedidos na fila de pendentes, uma vez cada."""
     return _faturamento_fila()[0]
@@ -23428,6 +24139,13 @@ def _posvenda_detalhar(claim_id: str) -> dict[str, Any]:
             destinos = [str(((s.get("destination") or {}).get("name")) or "") for s in (dev.get("shipments") or [])
                         if isinstance(s, dict) and s.get("type") == "return"]
             upd["devolucao_destino"] = destinos[0] if destinos else ""
+            # V19.88: o código da etiqueta de volta (envio e rastreio) para o bip das Devoluções.
+            envios = {normalize(s.get(c)) for s in (dev.get("shipments") or [])
+                      if isinstance(s, dict) and s.get("type") == "return"
+                      for c in ("shipment_id", "tracking_number")}
+            envios.discard("")
+            if envios:
+                upd["devolucao_envios"] = "," + ",".join(sorted(envios)) + ","
             if not order_id:
                 pedidos = [o for o in (dev.get("orders") or []) if isinstance(o, dict) and o.get("order_id")]
                 if pedidos:
@@ -33152,6 +33870,38 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             self.send_json(cadastro_full_payload())
             return
+        if path in ("/api/devolucoes/buscar", "/api/devolucoes/pedido"):
+            # V19.88: tela do operador (módulo conferencia) e do admin.
+            ctx = self.auth()
+            if ctx is None:
+                return
+            if not (module_allowed(ctx, "conferencia") or module_allowed(ctx, "admin")):
+                self.send_json({"ok": False, "error": "Sem acesso às devoluções."}, 403)
+                return
+            try:
+                filial = self.filial_da_requisicao(ctx)
+                if path.endswith("/buscar"):
+                    self.send_json(devolucao_buscar((query.get("q") or [""])[0], filial))
+                else:
+                    self.send_json(devolucao_pedido((query.get("chave") or [""])[0], filial))
+            except PermissionError as exc:
+                self.send_json({"ok": False, "error": str(exc), "code": "OUTRA_FILIAL"}, 403)
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/devolucoes":
+            # V19.88: devoluções recebidas, para o admin tratar no Apollo.
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            filtros = {k: (query.get(k) or [""])[0] for k in ("situacao", "estado", "marketplace")}
+            try:
+                self.send_json(devolucoes_lista(filtros, self.filial_da_requisicao(ctx)))
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
         if path == "/api/separacao":
             # V19.85: lista de separação do dia (Admin e Supervisor), da filial escolhida.
             ctx = self.auth(admin_only=True)
@@ -33377,6 +34127,9 @@ class AppHandler(BaseHTTPRequestHandler):
             "/faturamento": "admin", "/faturamento/": "admin", "/faturamento.html": "admin",
             # V19.85: lista de separação do dia.
             "/separacao": "admin", "/separacao/": "admin", "/separacao.html": "admin",
+            # V19.88: Devoluções — operador (tela cheia) e admin (tratar no Apollo).
+            "/devolucoes": "conferencia", "/devolucoes/": "conferencia", "/devolucoes.html": "conferencia",
+            "/devolucoes-admin": "admin", "/devolucoes-admin/": "admin", "/devolucoes-admin.html": "admin",
             # V18.73: promoções automáticas (age sozinha no ML: só admin).
             "/promocoes-auto": "admin", "/promocoes-auto/": "admin", "/promocoes-auto.html": "admin",
             # V18.33: a Rentabilidade ML virou o Financeiro; o endereço antigo abre a tela nova.
@@ -34722,6 +35475,47 @@ class AppHandler(BaseHTTPRequestHandler):
             ctx = self.auth()
             if ctx is not None and not self.pedido_de_outra_filial(ctx):  # V18.95
                 self.handle_order_lock(ctx)
+            return
+        if path == "/api/devolucoes/registrar":
+            # V19.88: o operador concluiu a conferência da devolução (nunca reabre o pedido).
+            ctx = self.auth()
+            if ctx is None:
+                return
+            if not (module_allowed(ctx, "conferencia") or module_allowed(ctx, "admin")):
+                self.send_json({"ok": False, "error": "Sem acesso às devoluções."}, 403)
+                return
+            try:
+                self.send_json(devolucao_registrar(self.read_json(), ctx["username"], self.filial_da_requisicao(ctx)))
+            except PermissionError as exc:
+                self.send_json({"ok": False, "error": str(exc), "code": "OUTRA_FILIAL"}, 403)
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path in ("/api/devolucoes/tratar", "/api/devolucoes/corrigir", "/api/devolucoes/reabrir"):
+            # V19.88: admin trata no Apollo, corrige (com histórico) ou reabre.
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            try:
+                req = self.read_json()
+                filial = self.filial_da_requisicao(ctx)
+                if path.endswith("/tratar"):
+                    r = devolucao_tratar(req.get("id"), req.get("documento"), req.get("versao"), ctx["username"], filial)
+                elif path.endswith("/corrigir"):
+                    r = devolucao_corrigir(req.get("id"), req.get("itens"), req.get("versao"), ctx["username"], filial)
+                else:
+                    r = devolucao_reabrir(req.get("id"), req.get("versao"), ctx["username"], filial)
+                self.send_json(r)
+            except DevolucaoConflito as exc:
+                self.send_json({"ok": False, "error": str(exc), "code": "CONFLITO", "atual": exc.atual}, 409)
+            except PermissionError as exc:
+                self.send_json({"ok": False, "error": str(exc), "code": "OUTRA_FILIAL"}, 403)
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
             return
         if path == "/api/order-complete":
             ctx = self.auth()
@@ -36904,6 +37698,12 @@ class AppHandler(BaseHTTPRequestHandler):
             "/separacao": "separacao.html",
             "/separacao/": "separacao.html",
             "/separacao.html": "separacao.html",
+            "/devolucoes": "devolucoes.html",
+            "/devolucoes/": "devolucoes.html",
+            "/devolucoes.html": "devolucoes.html",
+            "/devolucoes-admin": "devolucoes-admin.html",
+            "/devolucoes-admin/": "devolucoes-admin.html",
+            "/devolucoes-admin.html": "devolucoes-admin.html",
             "/faturamento": "faturamento.html",
             "/faturamento/": "faturamento.html",
             "/faturamento.html": "faturamento.html",
@@ -37562,6 +38362,7 @@ SAUDE_WORKERS_INFO: dict[str, tuple[str, bool, int]] = {
     "linx_demanda_loop": ("Demanda de Compra pela Linx", False, 180),
     "cadastro_auto_loop": ("Cadastro automático no Apollo", False, 60),  # V19.41
     "faturamento_loop": ("Fila de faturamento (conferência no Apollo)", False, 60),  # V19.43
+    "devolucoes_indice_loop": ("Índice de busca das devoluções", False, 60),  # V19.88
     "cadastro_full_loop": ("Cadastro dos clientes do Full", False, 60),  # V19.45
     "compras_geral_loop": ("Demanda de Compra geral (segunda)", False, 180),
     "promo_renovacao_loop": ("Promoções automáticas", False, 120),
@@ -38675,6 +39476,13 @@ def main() -> None:
         name="faturamento",
         daemon=True,
     )
+    # V19.88: índice de busca das devoluções (pedidos concluídos), a cada 5 min.
+    devolucoes_thread = threading.Thread(
+        target=_worker_protegido(devolucoes_indice_loop),
+        args=(watcher_stop,),
+        name="devolucoes-indice",
+        daemon=True,
+    )
     # V18.90: anúncios da Shopee — retrato do dia (visualizações, estoque) e estoque a cada 2 h.
     shopee_anuncios_thread = threading.Thread(
         target=_worker_protegido(shopee_anuncios_loop),
@@ -38769,6 +39577,7 @@ def main() -> None:
         linx_demanda_thread.start()
         cadastro_auto_thread.start()  # V19.41
         faturamento_thread.start()  # V19.43
+        devolucoes_thread.start()  # V19.88
         cadastro_full_thread.start()  # V19.45
         promo_renovacao_thread.start()
         # V19.49: promoções automáticas da Shopee (próxima promoção criada dias antes de acabar)
