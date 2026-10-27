@@ -17588,8 +17588,6 @@ def ensure_devolucoes_schema() -> None:
                 versao INTEGER NOT NULL DEFAULT 1,
                 token TEXT NOT NULL DEFAULT ''
             );
-            -- Revisão 27/10: o "Concluir" repetido depois de perder a resposta não duplica.
-            CREATE UNIQUE INDEX IF NOT EXISTS idx_devolucao_token ON devolucao_v1988(token) WHERE token<>'';
             CREATE INDEX IF NOT EXISTS idx_devolucao_pedido ON devolucao_v1988(order_key);
             CREATE INDEX IF NOT EXISTS idx_devolucao_situacao ON devolucao_v1988(situacao, recebido_em);
             CREATE TABLE IF NOT EXISTS devolucao_item_v1988 (
@@ -17644,6 +17642,13 @@ def ensure_devolucoes_schema() -> None:
             );
             """
         )
+        # Banco que rodou a 1ª versão do ramo (antes da revisão de 27/10).
+        if "token" not in {r[1] for r in DB.execute("PRAGMA table_info(devolucao_v1988)").fetchall()}:
+            DB.execute("ALTER TABLE devolucao_v1988 ADD COLUMN token TEXT NOT NULL DEFAULT ''")
+        if "piso_hist_id" not in {r[1] for r in DB.execute("PRAGMA table_info(devolucao_indice_v1988)").fetchall()}:
+            DB.execute("ALTER TABLE devolucao_indice_v1988 ADD COLUMN piso_hist_id INTEGER NOT NULL DEFAULT 0")
+        # Revisão 27/10: o "Concluir" repetido depois de perder a resposta não duplica.
+        DB.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_devolucao_token ON devolucao_v1988(token) WHERE token<>''")
         # Envio da devolução do ML (etiqueta de volta), lido na mesma chamada do Pós-venda.
         colunas = {r[1] for r in DB.execute("PRAGMA table_info(ml_reclamacao_v1888)").fetchall()}
         if colunas and "devolucao_envios" not in colunas:
@@ -17721,6 +17726,19 @@ def _devolucao_ml_ids(rows: list[dict[str, Any]]) -> str:
     return ("," + ",".join(sorted(ids)) + ",") if ids else ""
 
 
+# Revisão da correção (27/10): a cada boot o migrate_completion_history recria, a partir do audit_log,
+# uma conclusão com as linhas vazias ("[]") e outro horário — com id maior que a real. Ela nunca é
+# "a conclusão mais nova" do pedido para as Devoluções.
+DEVOLUCAO_COM_LINHAS = "payload NOT IN ('', '[]')"
+
+
+def _devolucao_ultima_conclusao(order_key: str) -> int | None:
+    """Id da conclusão mais nova do pedido que tem as linhas. Chamar sob o DB_LOCK."""
+    r = DB.execute(f"SELECT MAX(id) FROM order_completion_history WHERE order_key=? AND {DEVOLUCAO_COM_LINHAS}",
+                   (order_key,)).fetchone()
+    return int(r[0]) if r and r[0] is not None else None
+
+
 def _devolucao_corte() -> str:
     return (datetime.now(timezone.utc) - timedelta(days=DEVOLUCAO_DIAS)).isoformat()
 
@@ -17752,8 +17770,7 @@ def _devolucao_indexar_lote() -> int:
             "AND NOT EXISTS (SELECT 1 FROM devolucao_indexado_v1988 x WHERE x.hist_id=h.id) "
             "ORDER BY h.id DESC LIMIT ?", (piso, topo, corte, lote)).fetchall()]
         # Só a conclusão mais nova de cada pedido vale (o pedido concluído de novo troca as peças).
-        validos = [h for h in hist if DB.execute(
-            "SELECT MAX(id) FROM order_completion_history WHERE order_key=?", (h["order_key"],)).fetchone()[0] == h["id"]]
+        validos = [h for h in hist if _devolucao_ultima_conclusao(h["order_key"]) == h["id"]]
         payloads = {int(x[0]): x[1] for x in DB.execute(
             f"SELECT id, payload FROM order_completion_history WHERE id IN ({','.join('?' * len(validos))})",
             [h["id"] for h in validos]).fetchall()} if validos else {}
@@ -17786,8 +17803,7 @@ def _devolucao_indexar_lote() -> int:
         try:
             for chave, (hist_id, linhas) in por_pedido.items():
                 # Relido sob a trava: uma conclusão mais nova chegou no meio? ela é que indexa.
-                if DB.execute("SELECT MAX(id) FROM order_completion_history WHERE order_key=?",
-                              (chave,)).fetchone()[0] != hist_id:
+                if _devolucao_ultima_conclusao(chave) != hist_id:
                     continue
                 DB.execute("DELETE FROM devolucao_busca_v1988 WHERE order_key=?", (chave,))
                 DB.executemany(
@@ -17937,7 +17953,8 @@ def devolucao_pedido(chave: Any, filial: str) -> dict[str, Any]:
     """A venda do pedido concluído, peça por peça, com o que já voltou."""
     key = normalize(chave)
     with DB_LOCK:
-        h = latest_completion_history(key)
+        h = DB.execute("SELECT order_key,order_id,completed_at,completed_by,payload FROM order_completion_history "
+                       f"WHERE order_key=? AND {DEVOLUCAO_COM_LINHAS} ORDER BY id DESC LIMIT 1", (key,)).fetchone()
         concluido = DB.execute("SELECT 1 FROM completed_orders WHERE order_key=?", (key,)).fetchone()
     rows = _rows_from_storage_value(h["payload"]) if h else []
     if not rows or not concluido:   # revisão 27/10: reaberto (de volta na Conferência) não recebe devolução
@@ -17999,8 +18016,22 @@ def _devolucao_evento(dev_id: int, quem: str, acao: str, detalhe: dict[str, Any]
                (dev_id, now_iso(), quem, acao, json_dumps(detalhe)))
 
 
+def _devolucao_repetida(dev_id: int) -> dict[str, Any]:
+    """O mesmo "Concluir" chegou de novo. Devolve o que FOI gravado na 1ª vez — a tela avisa se o
+    operador acrescentou peça depois da falha (essa não entrou). Chamar sob o DB_LOCK."""
+    d = _devolucao_ler(dev_id) or {"itens": []}
+    return {"ok": True, "id": dev_id, "repetida": True,
+            "itens": [{"sku": i["sku"], "qtd": i["qtd"], "estado": i["estado"]} for i in d["itens"]]}
+
+
 def devolucao_registrar(req: dict[str, Any], usuario: str, filial: str) -> dict[str, Any]:
     """O operador concluiu a conferência da devolução. Nunca toca no pedido nem na fila."""
+    token = str(req.get("token") or "").strip()[:80]
+    if token:   # antes da venda: o pedido pode ter sido reaberto entre as duas tentativas
+        with DB_LOCK:
+            ja_feita = DB.execute("SELECT id FROM devolucao_v1988 WHERE token=?", (token,)).fetchone()
+            if ja_feita:
+                return _devolucao_repetida(int(ja_feita[0]))
     itens = _devolucao_itens_validos(req.get("itens"))
     obs = str(req.get("obs") or "").strip()[:500]
     if req.get("sem_pedido"):
@@ -18020,7 +18051,6 @@ def devolucao_registrar(req: dict[str, Any], usuario: str, filial: str) -> dict[
                "order_key": v["chave"], "cliente": v["cliente"], "sem_pedido": 0}
         venda = {i["sku"]: i for i in v["itens"]}
     agora = now_iso()
-    token = str(req.get("token") or "").strip()[:80]
     with DB_LOCK:
         DB.execute("BEGIN IMMEDIATE")
         try:
@@ -18028,7 +18058,7 @@ def devolucao_registrar(req: dict[str, Any], usuario: str, filial: str) -> dict[
                 ja_feita = DB.execute("SELECT id FROM devolucao_v1988 WHERE token=?", (token,)).fetchone()
                 if ja_feita:
                     DB.rollback()
-                    return {"ok": True, "id": int(ja_feita[0]), "repetida": True}
+                    return _devolucao_repetida(int(ja_feita[0]))
             # Relido sob a trava: dois operadores ao mesmo tempo não passam do vendido.
             ja = _devolucao_ja_devolvido(cab["order_key"]) if venda else {}
             novo: dict[str, int] = {}
@@ -18096,7 +18126,7 @@ def devolucoes_lista(filtros: dict[str, Any], filial: str) -> dict[str, Any]:
         params.append(mp)
     estado = str(filtros.get("estado") or "").strip().lower()
     if estado in ("bom", "ruim"):
-        conds.append("id IN (SELECT devolucao_id FROM devolucao_item_v1988 WHERE estado=?)")
+        conds.append("id IN (SELECT devolucao_id FROM devolucao_item_v1988 WHERE estado=? AND qtd>0)")
         params.append(estado)
     onde = (" WHERE " + " AND ".join(conds)) if conds else ""
     with DB_LOCK:
@@ -18148,12 +18178,16 @@ def _devolucao_mudar(dev_id: Any, versao: Any, filial: str, usuario: str, mudar)
 def devolucao_tratar(dev_id: Any, documento: Any, versao: Any, usuario: str,
                      filial: str = FILIAL_TODAS) -> dict[str, Any]:
     documento = str(documento or "").strip()[:80]
-    if not documento:
-        raise ValueError("Informe o nº do documento do Apollo.")
 
     def mudar(d: dict[str, Any]) -> str:
+        nonlocal documento
         if d["situacao"] == "tratada":
             raise ValueError("Esta devolução já foi tratada.")
+        if not documento:
+            # Revisão da correção (27/10): peças todas zeradas (lançada por engano) = nada a lançar no Apollo.
+            if any(int(i["qtd"] or 0) > 0 for i in d["itens"]):
+                raise ValueError("Informe o nº do documento do Apollo.")
+            documento = "nada voltou (peças zeradas)"
         DB.execute("UPDATE devolucao_v1988 SET situacao='tratada', documento_apollo=?, tratada_por=?, tratada_em=? "
                    "WHERE id=?", (documento, usuario, now_iso(), d["id"]))
         _devolucao_evento(d["id"], usuario, "tratada", {"documento": documento})

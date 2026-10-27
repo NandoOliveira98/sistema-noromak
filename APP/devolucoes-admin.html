@@ -201,7 +201,8 @@ function corrigir(id) {
 function tratar(id) {
   const d = lista.find(x => x.id === id);
   const documento = $("docApollo").value.trim();
-  if (!documento) return avisar("Informe o nº do documento do Apollo.", "bad");
+  // Peças todas zeradas (lançada por engano): nada a lançar no Apollo, trata sem documento.
+  if (!documento && d.itens.some(i => i.qtd > 0)) return avisar("Informe o nº do documento do Apollo.", "bad");
   enviar("/tratar", {id, versao: d.versao, documento}, "Devolução marcada como tratada.");
 }
 

@@ -384,6 +384,72 @@ class Devolucoes(TesteNoromak):
             S.DB.commit()
         self.assertEqual(self.buscar('{"id":"44001122","t":"lm"}'), ["2000777"])
 
+    # --- Revisão da correção (27/10) ---
+
+    def fantasma(self, pedido: str) -> None:
+        """O boot (migrate_completion_history) recria a conclusão a partir do audit_log, com
+        as linhas vazias e outro horário: vira a conclusão "mais nova" do pedido."""
+        S.audit("admin", "order.complete", pedido)
+        S.migrate_completion_history()
+
+    def test_conclusao_fantasma_do_boot_nao_esconde_o_pedido(self):
+        self.fantasma("P100")
+        self.assertEqual(self.buscar("AAA"), ["P100"])
+        self.assertEqual({i["sku"] for i in S.devolucao_pedido("P100", "todas")["itens"]}, {"AAA", "BBB", "CCC"})
+
+    def test_conclusao_fantasma_depois_de_indexado(self):
+        S._devolucao_indexar_tudo()
+        self.fantasma("P100")
+        S._devolucao_indexar_tudo()
+        self.assertEqual(self.buscar("AAA"), ["P100"])
+        self.registrar([{"sku": "AAA", "qtd": 1, "estado": "bom"}])
+
+    def test_repetida_diz_o_que_foi_gravado(self):
+        self.registrar([{"sku": "AAA", "qtd": 1, "estado": "bom"}], token="t1")
+        r = self.registrar([{"sku": "AAA", "qtd": 2, "estado": "bom"}], token="t1")
+        self.assertTrue(r["repetida"])
+        self.assertEqual([(i["sku"], i["qtd"]) for i in r["itens"]], [("AAA", 1)])
+
+    def test_repetida_mesmo_com_o_pedido_reaberto_no_meio(self):
+        self.registrar([{"sku": "AAA", "qtd": 1, "estado": "bom"}], token="t2")
+        with S.DB_LOCK:
+            S.DB.execute("DELETE FROM completed_orders WHERE order_key='P100'")
+            S.DB.commit()
+        self.assertTrue(self.registrar([{"sku": "AAA", "qtd": 1, "estado": "bom"}], token="t2")["repetida"])
+
+    def test_devolucao_zerada_sai_do_filtro_e_trata_sem_documento(self):
+        r = self.registrar([{"sku": "AAA", "qtd": 1, "estado": "ruim", "motivo": "usado"}])
+        d = S.devolucoes_lista({}, "todas")["devolucoes"][0]
+        S.devolucao_corrigir(r["id"], [{"id": d["itens"][0]["id"], "qtd": 0, "estado": "ruim", "motivo": "usado"}],
+                             d["versao"], "chefe")
+        self.assertEqual(S.devolucoes_lista({"estado": "ruim"}, "todas")["devolucoes"], [])
+        d = S.devolucoes_lista({}, "todas")["devolucoes"][0]
+        S.devolucao_tratar(r["id"], "", d["versao"], "chefe")   # nada voltou: não há documento no Apollo
+        self.assertEqual(S.devolucoes_lista({}, "todas")["devolucoes"][0]["situacao"], "tratada")
+
+    def test_banco_da_primeira_versao_migra(self):
+        with S.DB_LOCK:
+            S.DB.executescript("""
+                DROP TABLE devolucao_v1988; DROP TABLE devolucao_indice_v1988;
+                CREATE TABLE devolucao_v1988 (id INTEGER PRIMARY KEY AUTOINCREMENT, filial TEXT NOT NULL DEFAULT '',
+                  marketplace TEXT NOT NULL DEFAULT '', pedido TEXT NOT NULL DEFAULT '', order_key TEXT NOT NULL DEFAULT '',
+                  cliente TEXT NOT NULL DEFAULT '', sem_pedido INTEGER NOT NULL DEFAULT 0,
+                  situacao TEXT NOT NULL DEFAULT 'a_tratar', obs TEXT NOT NULL DEFAULT '',
+                  recebido_por TEXT NOT NULL DEFAULT '', recebido_em TEXT NOT NULL DEFAULT '',
+                  documento_apollo TEXT NOT NULL DEFAULT '', tratada_por TEXT NOT NULL DEFAULT '',
+                  tratada_em TEXT NOT NULL DEFAULT '', versao INTEGER NOT NULL DEFAULT 1);
+                CREATE TABLE devolucao_indice_v1988 (id INTEGER PRIMARY KEY CHECK (id = 1),
+                  ultimo_hist_id INTEGER NOT NULL DEFAULT 0);""")
+            S.DB.commit()
+        S.ensure_devolucoes_schema()
+        self.assertEqual(self.buscar("AAA"), ["P100"])
+        self.assertTrue(self.registrar([{"sku": "AAA", "qtd": 1, "estado": "bom"}], token="t3")["ok"])
+
+    def test_tela_so_mostra_a_filial_a_quem_ve_as_duas(self):
+        html = (S.APP_DIR / "devolucoes.html").read_text(encoding="utf-8")
+        self.assertIn("/api/auth/session", html)
+        self.assertIn("repetida", html)
+
     def test_telas_menu_e_worker(self):
         self.assertTrue((S.APP_DIR / "devolucoes.html").exists())
         self.assertTrue((S.APP_DIR / "devolucoes-admin.html").exists())

@@ -1193,7 +1193,7 @@ conclusão mais nova de cada pedido vale, o que passou de 180 dias sai; Precific
 passa pelo `normalize`; kit devolvido fechado (código do anúncio ou EAN da embalagem, `kits` na venda) soma as peças;
 pedido reaberto (fora de `completed_orders`) não aparece; o admin zera peça lançada por engano (qtd 0) e não corrige
 tratada sem reabrir; "sem pedido" de quem vê "todas" exige a filial; `token` da tela evita duplicar o "Concluir"
-repetido; `%`/`_` não são curinga e nome só com palavras de 3+ letras; até 200 peças e código até 60. Depois: foto da
+repetido (a resposta "repetida" diz o que foi gravado; o token é conferido antes da venda); conclusão "fantasma" do boot (`payload` "[]", recriada do `audit_log` pelo `migrate_completion_history`) nunca conta como a mais nova (`DEVOLUCAO_COM_LINHAS`); devolução com as peças zeradas trata sem documento e sai do filtro de estado; `%`/`_` não são curinga e nome só com palavras de 3+ letras; até 200 peças e código até 60. Depois: foto da
 peça ruim, destino por peça, etiqueta da Shopee. Teste: `TESTES/test_devolucoes_v1988.py`.
 
 **V19.45 — Cliente do Full pela NF-e do ML** (decisões do dono, 16/10). Venda Full não passa pela fila, e a integração

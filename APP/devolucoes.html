@@ -118,6 +118,12 @@ let enviando = false;
 let token = "";        // revisão 27/10: o mesmo "Concluir" repetido (resposta perdida) não duplica
 const novoToken = () => Date.now().toString(36) + "-" + Math.random().toString(36).slice(2, 10);
 
+// Revisão da correção (27/10): a filial do usuário vem da sessão. Quem tem filial fixa nunca vê o
+// seletor do "sem pedido" (o servidor grava na filial dele de qualquer jeito).
+let MINHA_FILIAL = "";
+fetch("/expedicao/api/auth/session", {credentials: "same-origin"}).then(r => r.json())
+  .then(d => { MINHA_FILIAL = (d.user && d.user.casa) || ""; }).catch(() => {});
+
 if (FILIAL) $("filialTopo").textContent = "Filial: " + (FILIAL === "bauru" ? "Bauru" : FILIAL === "aracatuba" ? "Araçatuba" : "todas");
 
 async function api(caminho, corpo) {
@@ -202,7 +208,7 @@ function abrirSemPedido() {
   linhas = [];
   kits = [];
   token = novoToken();
-  $("semFilial").hidden = FILIAL === "aracatuba" || FILIAL === "bauru";
+  $("semFilial").hidden = MINHA_FILIAL !== "todas" || FILIAL === "aracatuba" || FILIAL === "bauru";
   $("semFilial").value = "";
   $("cabVenda").innerHTML = "<b>Devolução sem pedido</b> — bipe as peças que voltaram. O admin recebe com esse aviso.";
   $("formSem").hidden = false;
@@ -328,7 +334,20 @@ $("btnConcluir").addEventListener("click", async () => {
   enviando = true;
   $("btnConcluir").disabled = true;
   try {
-    await api("/registrar", corpo);
+    const r = await api("/registrar", corpo);
+    if (r.repetida) {
+      // A tentativa anterior (resposta perdida) já tinha gravado. Diz o que entrou; o que foi bipado
+      // depois da falha NÃO entrou e precisa ser registrado de novo.
+      const gravado = (r.itens || []).map(i => `${i.sku} ×${i.qtd} (${i.estado})`).join(", ");
+      alert(`Esta devolução já tinha sido gravada na tentativa anterior: ${gravado}.\n` +
+            "Se você bipou alguma peça depois do erro, ela NÃO entrou: registre só essa peça de novo.");
+      $("okMsg").textContent = `Devolução já gravada${venda ? " do pedido " + venda.pedido : ""}: ${gravado}.`;
+      $("okMsg").hidden = false;
+      $("campoBusca").value = "";
+      $("resultados").innerHTML = "";
+      mostrarPasso("busca");
+      return;
+    }
     const un = itens.reduce((s, l) => s + l.qtd, 0);
     $("okMsg").textContent = `Devolução registrada${venda ? " do pedido " + venda.pedido : ""}: ${un} unidade(s). Foi para o admin tratar no Apollo.`;
     $("okMsg").hidden = false;
