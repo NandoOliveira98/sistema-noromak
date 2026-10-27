@@ -119,8 +119,7 @@
   .etiqueta-ok { background: #E7F4EC; color: #1B7A3E; border: 1px solid #B9DEC6; }
   .etiqueta-erro { background: #FDECEA; color: #B42318; border: 1px solid #F2C1BB; }
   /* V19.87: romaneio do pedido + Reimprimir (extensão NOROMAK_REEMISSAO_ROMANEIO). */
-  .romaneio-status { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; font-size: 12px; font-weight: 600; color: #475467; margin: -6px 0 14px; }
-  .romaneio-status .romaneio-nao { color: #98A2B3; font-weight: 500; }
+  .romaneio-status { display: inline-flex; align-items: center; gap: 8px; vertical-align: top; margin-left: 8px; font-size: 12px; font-weight: 600; }
   .romaneio-status button { font-size: 12px; font-weight: 700; padding: 5px 10px; border-radius: 6px; border: 1px solid #CBD5E1; background: #fff; color: #1E3A8A; cursor: pointer; }
   .romaneio-status button:disabled { opacity: .6; cursor: wait; }
   .romaneio-linx { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
@@ -768,7 +767,7 @@ html[data-tema="escuro"] .conf-filial-v1895[data-filial="bauru"]{background:#3A2
     <div id="marketplace" style="font-size: 14px; margin-bottom: 8px;"></div>
     <div id="pedidoHistoricoAnterior" class="pedido-historico-anterior"></div>
     <div id="etiquetaPedidoStatus" class="etiqueta-status etiqueta-erro">Etiqueta não verificada</div>
-    <div id="romaneioPedidoStatus" class="romaneio-status" style="display:none"></div>
+    <span id="romaneioPedidoStatus" class="romaneio-status" style="display:none"></span>
 
     <div id="barra">
       <div id="progresso"></div>
@@ -2605,29 +2604,18 @@ async function carregarRomaneioPedidoV1987(pedido) {
   if (romaneioPedidoPedidoV1987 !== String(pedido)) return; // outro pedido foi aberto nesse meio-tempo
   if (!dados || !dados.ok) return;
   romaneioPedidoV1987 = dados;
-  if (!dados.solto) {
-    caixa.innerHTML = `<span class="romaneio-nao">${dados.ultima_situacao === "erro" ? "Romaneio: a última tentativa de soltar deu erro" : "Romaneio ainda não solto pelo Noromak"}</span>`;
-  } else {
-    const hora = dados.em ? new Date(dados.em).toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }) : "";
-    const dia = dados.em ? new Date(dados.em).toLocaleDateString("pt-BR") : "";
-    const hoje = new Date().toLocaleDateString("pt-BR");
-    const quando = dados.em ? ` · solto ${dia === hoje ? "às " + hora : "em " + dia + " " + hora}` : "";
-    // Revisão 27/10: um soltar pode gerar mais de um romaneio (um botão por romaneio); sem número
-    // (registro antigo) não há botão; Consulta (somente leitura) só vê, não reimprime.
-    const romaneios = (Array.isArray(dados.romaneios) ? dados.romaneios : (dados.romaneio ? [dados.romaneio] : []))
-      .map(n => String(n).replace(/\D/g, "")).filter(Boolean);
-    const somenteLeitura = document.documentElement.dataset.somenteLeitura === "1";
-    const rotulo = romaneios.length > 1 ? `Romaneios ${romaneios.join(", ")}` : `Romaneio ${romaneios[0] || "(sem número)"}`;
-    let html = `<span>🧾 ${escaparHtml(rotulo)} · atendimento ${escaparHtml(dados.atendimento)}${escaparHtml(quando)}</span>`;
-    if (!romaneios.length) {
-      html += `<span class="romaneio-nao">sem número: reimprima pela tela do Linx</span>`;
-    } else if (!somenteLeitura) {
-      html += romaneios.map(n => `<button type="button" class="btn-reimprimir-romaneio" data-romaneio="${n}" onclick="reimprimirRomaneioV1987('${n}')">🖨 Reimprimir ${romaneios.length > 1 ? n : "romaneio"}</button>`).join("")
-        + `<span id="romaneioLinxSessao" class="romaneio-linx mal"><span class="ponto"></span><span class="texto">Verificando o Linx…</span></span>`;
-    }
-    caixa.innerHTML = html;
-  }
-  caixa.style.display = "flex";
+  // Dono, 27/10: o layout da Conferência não muda — só entra o botão (e a bolinha do Linx) ao
+  // lado da etiqueta, e só quando há romaneio solto com número. Um soltar pode gerar mais de um
+  // romaneio (um botão por romaneio); Consulta (somente leitura) não ganha o botão.
+  if (!dados.solto) return;
+  const romaneios = (Array.isArray(dados.romaneios) ? dados.romaneios : (dados.romaneio ? [dados.romaneio] : []))
+    .map(n => String(n).replace(/\D/g, "")).filter(Boolean);
+  if (!romaneios.length || document.documentElement.dataset.somenteLeitura === "1") return;
+  const hora = dados.em ? new Date(dados.em).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
+  caixa.innerHTML = romaneios.map(n => `<button type="button" class="btn-reimprimir-romaneio" data-romaneio="${n}" onclick="reimprimirRomaneioV1987('${n}')"`
+      + ` title="Romaneio ${n} · atendimento ${escaparHtml(dados.atendimento)}${hora ? " · solto " + escaparHtml(hora) : ""}">🖨 Reimprimir romaneio${romaneios.length > 1 ? " " + n : ""}</button>`).join("")
+    + `<span id="romaneioLinxSessao" class="romaneio-linx mal"><span class="ponto"></span><span class="texto">Linx</span></span>`;
+  caixa.style.display = "inline-flex";
   atualizarSessaoLinxV1987();
 }
 

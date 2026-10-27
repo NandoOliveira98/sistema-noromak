@@ -1158,8 +1158,8 @@ troca a condição pela extensão Linx 0.44 (`condicao-definir-lote`, sem confir
 "Impressão enviada ... impressora 1", mas às vezes a folha não sai no estoque (percebido só no faturamento). Soltar de
 novo não reimprime (as peças já estão em romaneio) e a porta não tem reimpressão. `GET /api/romaneio-pedido?pedido=`
 (`romaneio_do_pedido`; qualquer logado, recusa outra filial; só lê `linx_operacoes_v1860`): número do romaneio tirado
-da mensagem do Apollo, atendimento, observação, hora. Na Conferência o quadro fica abaixo da etiqueta com
-"Reimprimir romaneio" (confirmação antes). Quem reimprime é a extensão **NOROMAK_REEMISSAO_ROMANEIO** (Desktop, fora do
+da mensagem do Apollo, atendimento, observação, hora. Na Conferência o layout não muda (dono, 27/10): só o botão
+"Reimprimir romaneio" e a bolinha do Linx ao lado da etiqueta, quando há romaneio solto com número (confirmação antes). Quem reimprime é a extensão **NOROMAK_REEMISSAO_ROMANEIO** (Desktop, fora do
 repo; `postMessage` `noromak-reemissao-romaneio`), no Linx web logado do mesmo Chrome, igual à tela Reimpressão de
 Romaneio (menu 88100): `ProcuraRomaneio {NumeroRomaneio}` → confere o atendimento → `ReimprimirRomaneio {Contato,
 Empresa, Revenda, Usuario, Romaneio, Reimpressao:true, Impressora, TipoRomaneio}` na **mesma impressora**; 206/208 =
