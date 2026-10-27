@@ -56,6 +56,10 @@ class MLFalso:
             if self.erro_busca:
                 raise RuntimeError(self.erro_busca)
             assert q["players.role"] == "respondent" and q["players.user_id"] == VENDEDOR, q
+            # V19.92: como o ML real (27/10, em produção): range sozinho não conta como filtro.
+            if "status" not in q and "stage" not in q:
+                raise RuntimeError("Mercado Livre HTTP 400: {'code': 400, 'error': 'bad_request_error', "
+                                   "'message': 'atLeastOneFilterProvided: at least one filter parameter must be provided'}")
             lista = [c for c in self.reclamacoes if q.get("status") in (None, c["status"])]
             return {"paging": {"total": len(lista), "offset": 0, "limit": 100}, "data": lista}
         if p.endswith("/detail"):

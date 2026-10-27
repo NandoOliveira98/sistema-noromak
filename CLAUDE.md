@@ -1232,7 +1232,10 @@ permissão no DevCenter; Bauru ainda 403). O `/shipments/{id}` de um envio de de
 `order_id` (conferido em produção: 48308414462 → 2000019002481344). Sem resultado na busca, número de 10 a 12 dígitos
 (`_devolucao_venda_do_envio_ml`) consulta cada conta conectada e busca pela venda; resposta e "não existe" guardados
 30 min (`_DEVOLUCAO_ENVIO_CACHE`), erro do ML = não achou. EAN-13/EAN-8/nº de venda não chamam o ML. Resposta com
-`etiqueta_ml` e `codigo` vazio (sem +1 automático). Etiqueta real 48319676132 (27/10) dá 404 nas duas contas: o ML não a conhece.
+`etiqueta_ml` e `codigo` vazio (sem +1 automático). Etiqueta real 48319676132 (27/10) dá 404 nas duas contas: o ML não a conhece. **Pós-venda nunca tinha gravado nada:** com a permissão
+liberada (27/10, Araçatuba; Bauru ainda 403) o `claims/search` só com `range` volta HTTP 400 `atLeastOneFilterProvided` e
+derrubava a rodada inteira. Agora a busca por data vai uma vez por situação (`opened` e `closed`); o simulador do
+`test_posvenda_v1888.py` recusa como o ML real.
 
 **V19.45 — Cliente do Full pela NF-e do ML** (decisões do dono, 16/10). Venda Full não passa pela fila, e a integração
 ML → Apollo cria o cliente com o nome da conta ("Premium Flex") em vez da razão social da nota (M2 SOLUCOES GRAFICAS).

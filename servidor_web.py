@@ -24318,11 +24318,15 @@ def posvenda_reclamacoes_rodada(stop_event: threading.Event | None = None, *, ag
             ultima_dt = _posvenda_dt(ultima)
             if ultima_dt is None:
                 desde = agora - timedelta(days=POSVENDA_HISTORICO_DIAS)
-                achados += _posvenda_buscar(seller_id, {"range": f"date_created:after:{_posvenda_iso_ml(desde)}"}, stop_event)
+                faixa = f"date_created:after:{_posvenda_iso_ml(desde)}"
             else:
                 # um dia de folga: relógio do ML e reclamação que mudou no meio da rodada anterior
                 desde = ultima_dt - timedelta(days=1)
-                achados += _posvenda_buscar(seller_id, {"range": f"last_updated:after:{_posvenda_iso_ml(desde)}"}, stop_event)
+                faixa = f"last_updated:after:{_posvenda_iso_ml(desde)}"
+            # V19.92: o ML recusa o range sozinho (HTTP 400 atLeastOneFilterProvided, visto em produção 27/10 —
+            # a tabela nunca tinha sido preenchida): uma busca por situação.
+            for situacao in ("opened", "closed"):
+                achados += _posvenda_buscar(seller_id, {"status": situacao, "range": faixa}, stop_event)
         except Exception as exc:
             msg = str(exc)[:500]
             ml_log_event_se_mudou("posvenda", "/post-purchase/v1/claims/search", seller_id, ML_CLIENT_ID, "ERRO", msg)
