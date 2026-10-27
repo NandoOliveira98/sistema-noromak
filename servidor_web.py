@@ -16636,13 +16636,22 @@ def romaneio_do_pedido(pedido: str) -> dict[str, Any]:
             "observacao": str(detalhe.get("observacao") or ""), "pecas": pecas, "em": rom["em"]}
 
 
-def _pedido_na_fila(pedido: str) -> bool:
-    """V19.87: o pedido está em conf_pedidos (qualquer filial)? Chamar sob o DB_LOCK."""
+def _pedido_filial_e_fila(pedido: str, filial: str) -> tuple[bool, bool]:
+    """V19.87: (pode ver, está na fila) com UMA leitura de conf_pedidos — roda a cada pedido
+    aberto na Conferência, sob o DB_LOCK. Mesma regra do `pedido_da_filial`; fora da fila só
+    quem vê todas as filiais lê (não dá para saber de quem é). Chamar sob o DB_LOCK."""
+    if filial == FILIAL_TODAS:
+        return True, True
     numero = normalize(pedido)
     bruto, _, _ = get_storage("conf_pedidos")
-    return any(isinstance(row, dict) and numero in {normalize(order_number(row)), normalize(row.get("VendaMercadoLivre")),
-                                                    normalize(row.get("PackIdMercadoLivre"))}
-               for row in _rows_from_storage_value(bruto))
+    achou = False
+    for row in _rows_from_storage_value(bruto):
+        if isinstance(row, dict) and numero in {normalize(order_number(row)), normalize(row.get("VendaMercadoLivre")),
+                                                normalize(row.get("PackIdMercadoLivre"))}:
+            achou = True
+            if filial_da_linha(row) == filial:
+                return True, True
+    return not achou, achou
 
 
 def _exp_caixa_corpo(pedido: str, atendimento: Any, cliente: Any) -> tuple[dict[str, Any] | None, str]:
@@ -33195,9 +33204,8 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             filial = self.filial_da_requisicao(ctx)
             with DB_LOCK:
-                permitido = pedido_da_filial(pedido, filial)
                 # Revisão 27/10: fora da fila não dá para saber a filial; só quem vê todas lê.
-                na_fila = filial == FILIAL_TODAS or _pedido_na_fila(pedido)
+                permitido, na_fila = _pedido_filial_e_fila(pedido, filial)
             if not permitido:
                 self.send_json({"ok": False, "error": f"O pedido {pedido} é de outra filial.", "code": "OUTRA_FILIAL"}, 403)
                 return

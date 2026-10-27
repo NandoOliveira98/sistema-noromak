@@ -130,6 +130,27 @@ class ReemissaoRomaneio(TesteNoromak):
         self.assertIn("dataset.somenteLeitura", carregar)
         self.assertIn("romaneios", carregar)
 
+    # --- Revisão da correção (27/10) ------------------------------------------------------
+
+    def test_abrir_pedido_le_a_fila_uma_vez_so(self):
+        # Cada abertura de pedido na Conferência passa por aqui, sob o DB_LOCK (segura a bipagem).
+        self.soltar()
+        from unittest import mock
+        with mock.patch.object(S, "get_storage", wraps=S.get_storage) as leitura:
+            status, _ = self.operador.pedir("GET", f"/api/romaneio-pedido?pedido={PEDIDO}")
+        self.assertEqual(status, 200)
+        chamadas = [c for c in leitura.call_args_list if c.args and c.args[0] == "conf_pedidos"]
+        self.assertEqual(len(chamadas), 1)
+
+    def test_com_um_romaneio_pendente_os_outros_botoes_esperam(self):
+        from pathlib import Path
+        html = (Path(S.__file__).parent / "APP" / "conferencia.html").read_text(encoding="utf-8")
+        corpo = html[html.index("function reimprimirRomaneioV1987"):html.index("function abrirPedido(uid)")]
+        # Dois romaneios clicados em seguida: o segundo esperaria na fila da extensão e a tela
+        # daria "não respondeu" com a folha ainda saindo. Todos os botões travam até a resposta.
+        self.assertIn('querySelectorAll(".btn-reimprimir-romaneio")', corpo)
+        self.assertIn("reimpressaoPendenteV1987", corpo)
+
     def test_sem_login_e_sem_pedido(self):
         status, _ = Cliente(self.url_base).pedir("GET", f"/api/romaneio-pedido?pedido={PEDIDO}")
         self.assertEqual(status, 401)

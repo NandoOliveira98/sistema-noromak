@@ -1171,6 +1171,9 @@ soltou; Consulta (`data-somente-leitura`) não ganha o botão; o foco volta ao l
 resposta de outro pedido não cobre o aviso do aberto. Extensão 0.3.0: uma reimpressão por vez, prazo (busca 10 s,
 reimpressão 25 s — a tela desiste em 40 s), sem resposta/prazo/5xx = INCERTO e trava 1 min, confere número e
 atendimento devolvidos (teste `node teste-reemissao.mjs` na pasta da extensão).
+Revisão da correção: com um romaneio pendente todos os botões travam (`reimpressaoPendenteV1987`); a rota lê a fila
+uma vez só (`_pedido_filial_e_fila`, sob o DB_LOCK a cada pedido aberto); extensão 0.3.1: a leitura da sessão na aba
+do Linx desiste em 5 s (aba travada não segura a fila).
 
 **V19.85 — Lista de separação do dia** (`APP/separacao.html`, `/separacao`, menu Expedição + botão em Pedidos
 pendentes, módulo **admin**; decisões do dono 26/10). Todos os pendentes da fila da filial do seletor do menu ("todas" =

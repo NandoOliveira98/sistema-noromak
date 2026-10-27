@@ -2586,6 +2586,7 @@ function selecionarPedidoPorClique(uid) {
 // não alcança o Apollo). Pede confirmação antes (decisão do dono, 27/10).
 let romaneioPedidoV1987 = null;
 let romaneioPedidoPedidoV1987 = "";
+let reimpressaoPendenteV1987 = false;
 
 async function carregarRomaneioPedidoV1987(pedido) {
   const caixa = document.getElementById("romaneioPedidoStatus");
@@ -2612,7 +2613,7 @@ async function carregarRomaneioPedidoV1987(pedido) {
     .map(n => String(n).replace(/\D/g, "")).filter(Boolean);
   if (!romaneios.length || document.documentElement.dataset.somenteLeitura === "1") return;
   const hora = dados.em ? new Date(dados.em).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" }) : "";
-  caixa.innerHTML = romaneios.map(n => `<button type="button" class="btn-reimprimir-romaneio" data-romaneio="${n}" onclick="reimprimirRomaneioV1987('${n}')"`
+  caixa.innerHTML = romaneios.map(n => `<button type="button" class="btn-reimprimir-romaneio" data-romaneio="${n}" onclick="reimprimirRomaneioV1987('${n}')"${reimpressaoPendenteV1987 ? " disabled" : ""}`
       + ` title="Romaneio ${n} · atendimento ${escaparHtml(dados.atendimento)}${hora ? " · solto " + escaparHtml(hora) : ""}">🖨 Reimprimir romaneio${romaneios.length > 1 ? " " + n : ""}</button>`).join("")
     + `<span id="romaneioLinxSessao" class="romaneio-linx mal"><span class="ponto"></span><span class="texto">Linx</span></span>`;
   caixa.style.display = "inline-flex";
@@ -2675,14 +2676,23 @@ function reimprimirRomaneioV1987(numero) {
     focarCampoCodigoAposAcao(input);
     return;
   }
+  // Revisão da correção 27/10: uma reimpressão por vez nesta tela. Com dois romaneios clicados em
+  // seguida, o segundo esperava na fila da extensão e a tela dava "não respondeu" em 40 s com a
+  // folha ainda saindo. Todos os botões ficam travados até a resposta.
+  if (reimpressaoPendenteV1987) { focarCampoCodigoAposAcao(input); return; }
+  reimpressaoPendenteV1987 = true;
+  const travarBotoes = (travar) => document.querySelectorAll(".btn-reimprimir-romaneio").forEach(b => { b.disabled = travar; });
   const botao = document.querySelector(`.btn-reimprimir-romaneio[data-romaneio="${numero}"]`);
   const textoBotao = botao ? botao.textContent : "";
-  if (botao) { botao.disabled = true; botao.textContent = "Reimprimindo..."; }
+  travarBotoes(true);
+  if (botao) botao.textContent = "Reimprimindo...";
   const id = "reemissao-" + Date.now() + "-" + Math.random().toString(36).slice(2);
   const terminar = (resposta) => {
     window.removeEventListener("message", ouvir);
     clearTimeout(prazo);
-    if (botao) { botao.disabled = false; botao.textContent = textoBotao; }
+    reimpressaoPendenteV1987 = false;
+    travarBotoes(false);
+    if (botao) botao.textContent = textoBotao;
     // Revisão 27/10: outro pedido já está aberto — o aviso dele não é coberto pelo deste.
     if (romaneioPedidoPedidoV1987 !== pedidoDoClique) return;
     if (resposta.ok) {
