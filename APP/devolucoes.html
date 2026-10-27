@@ -161,7 +161,11 @@ $("formBusca").addEventListener("submit", async ev => {
 
 function desenharResultados(pedidos, q, d = {}) {
   if (!pedidos.length) {
-    $("resultados").innerHTML = `<div class="vazio">Nenhum pedido concluído encontrado para "${esc(q)}". ` +
+    // V19.92: número com cara de etiqueta de devolução do ML (10 a 12 dígitos) que o ML não conhece.
+    const etiqueta = /^\d{10,12}$/.test(norm(q))
+      ? "Se é a etiqueta de devolução do Mercado Livre, o ML não reconheceu esse envio: confira se bipou o código de barras certo da etiqueta. "
+      : "";
+    $("resultados").innerHTML = `<div class="vazio">Nenhum pedido concluído encontrado para "${esc(q)}". ${etiqueta}` +
       `Tente o nome do cliente, ou <a href="#" onclick="abrirSemPedido();return false">registre sem pedido</a>.</div>`;
     $("campoBusca").select();
     return;

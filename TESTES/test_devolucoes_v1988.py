@@ -115,6 +115,56 @@ class Devolucoes(TesteNoromak):
         self.assertEqual(self.buscar("44001122"), ["2000777"])
         self.assertEqual(self.buscar("trk99"), ["2000777"])
 
+    # --- V19.91: etiqueta de devolução sem reclamação gravada (dono, 27/10). O /shipments/{id} de um
+    # envio de devolução responde type=return com o order_id (conferido em produção: 48308414462). ---
+
+    def envio_ml(self, respostas: dict, casas=("aracatuba",)):
+        chamadas: list[tuple[str, str]] = []
+
+        def api(caminho, *a, **k):
+            chamadas.append((S.ml_casa_atual(), caminho))
+            r = respostas.get((S.ml_casa_atual(), caminho))
+            if r is None:
+                raise RuntimeError("Mercado Livre HTTP 404: not_found_shipping_id")
+            return r
+        S._DEVOLUCAO_ENVIO_CACHE.clear()
+        return chamadas, mock.patch.object(S, "ml_api_get", side_effect=api), \
+            mock.patch.object(S, "ml_casas_conectadas", return_value=list(casas))
+
+    def test_etiqueta_consulta_o_envio_no_ml(self):
+        concluir("2000019002481344", [linha("2000019002481344", "FFF", 1, Marketplace="MERCADO LIVRE",
+                                            VendaMercadoLivre="2000019002481344")])
+        chamadas, p1, p2 = self.envio_ml({("aracatuba", "/shipments/48308414462"):
+                                          {"id": 48308414462, "type": "return", "order_id": 2000019002481344}})
+        with p1, p2:
+            r = S.devolucao_buscar("48308414462", "todas")
+            self.assertEqual([p["pedido"] for p in r["pedidos"]], ["2000019002481344"])
+            self.assertEqual(r["etiqueta_ml"], "48308414462")
+            S.devolucao_buscar("48308414462", "todas")          # o mesmo bip não chama o ML de novo
+        self.assertEqual(len(chamadas), 1)
+
+    def test_etiqueta_de_bauru_e_numero_que_nao_e_envio(self):
+        concluir("2000777", [linha("2000777", "FFF", 1, Marketplace="MERCADO LIVRE", VendaMercadoLivre="2000777001",
+                                   Casa="bauru")])
+        chamadas, p1, p2 = self.envio_ml({("bauru", "/shipments/48300000001"): {"type": "return", "order_id": 2000777001}},
+                                         casas=("aracatuba", "bauru"))
+        with p1, p2:
+            self.assertEqual([p["pedido"] for p in S.devolucao_buscar("48300000001", "todas")["pedidos"]], ["2000777"])
+            # não existe no ML: nada encontrado, sem erro
+            self.assertEqual(S.devolucao_buscar("48319676132", "todas")["pedidos"], [])
+            n = len(chamadas)
+            # EAN (13 dígitos), nome e código de peça não chamam o ML
+            S.devolucao_buscar("7891234567895", "todas")
+            S.devolucao_buscar("fulano", "todas")
+            S.devolucao_buscar("ABC123", "todas")
+        self.assertEqual(len(chamadas), n)
+
+    def test_etiqueta_com_ml_fora_do_ar(self):
+        S._DEVOLUCAO_ENVIO_CACHE.clear()
+        with mock.patch.object(S, "ml_api_get", side_effect=RuntimeError("Falha de conexão com Mercado Livre")), \
+                mock.patch.object(S, "ml_casas_conectadas", return_value=["aracatuba"]):
+            self.assertEqual(S.devolucao_buscar("48308414462", "todas")["pedidos"], [])
+
     def test_posvenda_guarda_o_envio_da_devolucao_sem_chamada_a_mais(self):
         with S.DB_LOCK:
             S.DB.execute("INSERT INTO ml_reclamacao_v1888(claim_id,order_id,status,tem_devolucao) "
