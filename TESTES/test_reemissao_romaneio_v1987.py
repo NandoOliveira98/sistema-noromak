@@ -87,6 +87,49 @@ class ReemissaoRomaneio(TesteNoromak):
         self.assertEqual(status, 403, corpo)
         self.assertEqual(corpo.get("code"), "OUTRA_FILIAL")
 
+    # --- Revisão de 27/10 ---------------------------------------------------------------
+
+    def test_resposta_nao_traz_o_login_de_quem_soltou(self):
+        self.soltar()
+        _, corpo = self.operador.pedir("GET", f"/api/romaneio-pedido?pedido={PEDIDO}")
+        self.assertNotIn("por", corpo)
+
+    def test_pedido_fora_da_fila_nao_e_lido_por_quem_ve_uma_filial(self):
+        # Pedido concluído (fora da fila) de Araçatuba: a trava de filial não sabe de quem é.
+        S._linx_operacao_registrar("2000088888888888", "romaneio", "ok",
+                                   {"mensagens": [MENSAGEM], "via": "porta"}, "790497", "luis")
+        bauru = self.novo_usuario("lucas", "bauru")
+        status, corpo = bauru.pedir("GET", "/api/romaneio-pedido?pedido=2000088888888888")
+        self.assertEqual(status, 404, corpo)
+        self.assertNotIn("atendimento", corpo)
+        # Quem vê todas as filiais (Admin) continua lendo.
+        status, corpo = self.cliente.pedir("GET", "/api/romaneio-pedido?pedido=2000088888888888")
+        self.assertEqual(status, 200, corpo)
+        self.assertEqual(corpo["romaneio"], "125245")
+
+    def test_dois_romaneios_no_mesmo_soltar_aparecem_os_dois(self):
+        S._linx_operacao_registrar(PEDIDO, "romaneio", "ok", {"mensagens": [
+            "Romaneio 125245 do contato 790497 gerado com sucesso!",
+            "Romaneio 125246 do contato 790497 gerado com sucesso! Romaneio 125246 impresso."], "via": "porta"},
+            "790497", "luis")
+        _, corpo = self.operador.pedir("GET", f"/api/romaneio-pedido?pedido={PEDIDO}")
+        self.assertEqual(corpo["romaneios"], ["125245", "125246"])
+
+    def test_tela_conferencia_protege_o_leitor_consulta_e_pedido_trocado(self):
+        from pathlib import Path
+        html = (Path(S.__file__).parent / "APP" / "conferencia.html").read_text(encoding="utf-8")
+        ini = html.index("function reimprimirRomaneioV1987")
+        corpo = html[ini:html.index("function abrirPedido(uid)")]
+        # O campo de código volta a ter foco logo depois de mandar (o botão fica desativado).
+        envio = corpo.index('tipo: "noromak-reemissao-romaneio"')
+        self.assertIn("focarCampoCodigoAposAcao(input)", corpo[envio:envio + 400])
+        # A resposta de outro pedido não cobre o aviso do pedido aberto.
+        self.assertIn("romaneioPedidoPedidoV1987 !== pedidoDoClique", corpo)
+        carregar = html[html.index("async function carregarRomaneioPedidoV1987"):ini]
+        # Consulta (somente leitura) não ganha o botão; romaneio sem número também não.
+        self.assertIn("dataset.somenteLeitura", carregar)
+        self.assertIn("romaneios", carregar)
+
     def test_sem_login_e_sem_pedido(self):
         status, _ = Cliente(self.url_base).pedir("GET", f"/api/romaneio-pedido?pedido={PEDIDO}")
         self.assertEqual(status, 401)

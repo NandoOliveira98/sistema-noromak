@@ -2612,9 +2612,20 @@ async function carregarRomaneioPedidoV1987(pedido) {
     const dia = dados.em ? new Date(dados.em).toLocaleDateString("pt-BR") : "";
     const hoje = new Date().toLocaleDateString("pt-BR");
     const quando = dados.em ? ` · solto ${dia === hoje ? "às " + hora : "em " + dia + " " + hora}` : "";
-    caixa.innerHTML = `<span>🧾 Romaneio ${escaparHtml(dados.romaneio || "(sem número)")} · atendimento ${escaparHtml(dados.atendimento)}${escaparHtml(quando)}</span>`
-      + `<button type="button" id="btnReimprimirRomaneio" onclick="reimprimirRomaneioV1987()">🖨 Reimprimir romaneio</button>`
-      + `<span id="romaneioLinxSessao" class="romaneio-linx mal"><span class="ponto"></span><span class="texto">Verificando o Linx…</span></span>`;
+    // Revisão 27/10: um soltar pode gerar mais de um romaneio (um botão por romaneio); sem número
+    // (registro antigo) não há botão; Consulta (somente leitura) só vê, não reimprime.
+    const romaneios = (Array.isArray(dados.romaneios) ? dados.romaneios : (dados.romaneio ? [dados.romaneio] : []))
+      .map(n => String(n).replace(/\D/g, "")).filter(Boolean);
+    const somenteLeitura = document.documentElement.dataset.somenteLeitura === "1";
+    const rotulo = romaneios.length > 1 ? `Romaneios ${romaneios.join(", ")}` : `Romaneio ${romaneios[0] || "(sem número)"}`;
+    let html = `<span>🧾 ${escaparHtml(rotulo)} · atendimento ${escaparHtml(dados.atendimento)}${escaparHtml(quando)}</span>`;
+    if (!romaneios.length) {
+      html += `<span class="romaneio-nao">sem número: reimprima pela tela do Linx</span>`;
+    } else if (!somenteLeitura) {
+      html += romaneios.map(n => `<button type="button" class="btn-reimprimir-romaneio" data-romaneio="${n}" onclick="reimprimirRomaneioV1987('${n}')">🖨 Reimprimir ${romaneios.length > 1 ? n : "romaneio"}</button>`).join("")
+        + `<span id="romaneioLinxSessao" class="romaneio-linx mal"><span class="ponto"></span><span class="texto">Verificando o Linx…</span></span>`;
+    }
+    caixa.innerHTML = html;
   }
   caixa.style.display = "flex";
   atualizarSessaoLinxV1987();
@@ -2659,10 +2670,12 @@ function atualizarSessaoLinxV1987() {
   window.postMessage({ tipo: "noromak-reemissao-status", id }, location.origin);
 }
 
-function reimprimirRomaneioV1987() {
+function reimprimirRomaneioV1987(numero) {
   const dados = romaneioPedidoV1987;
   const input = document.getElementById("codigo");
-  if (!dados || !dados.solto) return;
+  numero = String(numero || "").replace(/\D/g, "");
+  if (!dados || !dados.solto || !numero || document.documentElement.dataset.somenteLeitura === "1") return;
+  const pedidoDoClique = romaneioPedidoPedidoV1987;
   if (!document.documentElement.dataset.noromakReemissao) {
     mostrarMensagemDetalhada("aviso", "Extensão de reemissão não instalada",
       "Este computador não tem a extensão Noromak - Reemissão de Romaneio.",
@@ -2670,18 +2683,20 @@ function reimprimirRomaneioV1987() {
     focarCampoCodigoAposAcao(input);
     return;
   }
-  const rotulo = dados.romaneio ? `o romaneio ${dados.romaneio}` : "o romaneio";
-  if (!confirm(`Reimprimir ${rotulo} (atendimento ${dados.atendimento})?\n\nA folha sai na impressora de romaneio do estoque.`)) {
+  if (!confirm(`Reimprimir o romaneio ${numero} (atendimento ${dados.atendimento})?\n\nA folha sai na impressora de romaneio do estoque.`)) {
     focarCampoCodigoAposAcao(input);
     return;
   }
-  const botao = document.getElementById("btnReimprimirRomaneio");
+  const botao = document.querySelector(`.btn-reimprimir-romaneio[data-romaneio="${numero}"]`);
+  const textoBotao = botao ? botao.textContent : "";
   if (botao) { botao.disabled = true; botao.textContent = "Reimprimindo..."; }
   const id = "reemissao-" + Date.now() + "-" + Math.random().toString(36).slice(2);
   const terminar = (resposta) => {
     window.removeEventListener("message", ouvir);
     clearTimeout(prazo);
-    if (botao) { botao.disabled = false; botao.textContent = "🖨 Reimprimir romaneio"; }
+    if (botao) { botao.disabled = false; botao.textContent = textoBotao; }
+    // Revisão 27/10: outro pedido já está aberto — o aviso dele não é coberto pelo deste.
+    if (romaneioPedidoPedidoV1987 !== pedidoDoClique) return;
     if (resposta.ok) {
       mostrarMensagemDetalhada("sucesso", "Romaneio reimpresso",
         `Romaneio ${resposta.romaneio} enviado de novo para a impressora ${resposta.impressora ?? ""}.`,
@@ -2700,7 +2715,9 @@ function reimprimirRomaneioV1987() {
   const prazo = setTimeout(() => terminar({ ok: false, erro: "A extensão não respondeu em 40 s. Confira na impressora antes de tentar de novo." }), 40000);
   window.addEventListener("message", ouvir);
   window.postMessage({ tipo: "noromak-reemissao-romaneio", id, pedido: dados.pedido,
-    romaneio: dados.romaneio, atendimento: dados.atendimento, revenda: dados.revenda }, location.origin);
+    romaneio: numero, atendimento: dados.atendimento, revenda: dados.revenda }, location.origin);
+  // Revisão 27/10: o botão desativado tira o foco; o leitor não pode bipar no vazio enquanto espera.
+  focarCampoCodigoAposAcao(input);
 }
 
 function abrirPedido(uid) {

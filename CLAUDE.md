@@ -1165,6 +1165,12 @@ Romaneio (menu 88100): `ProcuraRomaneio {NumeroRomaneio}` → confere o atendime
 Empresa, Revenda, Usuario, Romaneio, Reimpressao:true, Impressora, TipoRomaneio}` na **mesma impressora**; 206/208 =
 o Linx quer PDF (usuário sem impressora) → avisa e não imprime; mesmo romaneio 1x por minuto. Nunca chama
 GeraLista/AtualizaQuantidades/ConfirmaRomaneio. Teste: `TESTES/test_reemissao_romaneio_v1987.py`.
+Revisão 27/10: `romaneios` (lista; um soltar pode gerar mais de um, um botão por romaneio; sem número = sem botão);
+pedido fora da fila só para quem vê todas as filiais (404 `FORA_DA_FILA`); a resposta não traz o login de quem
+soltou; Consulta (`data-somente-leitura`) não ganha o botão; o foco volta ao leitor logo depois do clique e a
+resposta de outro pedido não cobre o aviso do aberto. Extensão 0.3.0: uma reimpressão por vez, prazo (busca 10 s,
+reimpressão 25 s — a tela desiste em 40 s), sem resposta/prazo/5xx = INCERTO e trava 1 min, confere número e
+atendimento devolvidos (teste `node teste-reemissao.mjs` na pasta da extensão).
 
 **V19.85 — Lista de separação do dia** (`APP/separacao.html`, `/separacao`, menu Expedição + botão em Pedidos
 pendentes, módulo **admin**; decisões do dono 26/10). Todos os pendentes da fila da filial do seletor do menu ("todas" =

@@ -16622,13 +16622,27 @@ def romaneio_do_pedido(pedido: str) -> dict[str, Any]:
         detalhe = {}
     if not isinstance(detalhe, dict):
         detalhe = {}
-    achou = re.search(r"Romaneio\s+(\d+)", " ".join(str(m) for m in (detalhe.get("mensagens") or [])))
+    # Revisão 27/10: o mesmo soltar pode gerar mais de um romaneio (um por departamento).
+    romaneios: list[str] = []
+    for numero in re.findall(r"Romaneio\s+(\d+)", " ".join(str(m) for m in (detalhe.get("mensagens") or []))):
+        if numero not in romaneios:
+            romaneios.append(numero)
     pecas = [{"codigo": str(p.get("codigo") or ""), "quantidade": p.get("quantidade")}
              for p in (detalhe.get("soltos") or []) if isinstance(p, dict)]
-    return {"ok": True, "solto": True, "pedido": pedido, "romaneio": achou.group(1) if achou else "",
+    # Sem o login de quem soltou (a tela não usa).
+    return {"ok": True, "solto": True, "pedido": pedido, "romaneios": romaneios,
+            "romaneio": romaneios[0] if len(romaneios) == 1 else "",
             "atendimento": str(rom["contato"] or ""), "revenda": EXP_REVENDA,
-            "observacao": str(detalhe.get("observacao") or ""), "pecas": pecas,
-            "em": rom["em"], "por": rom["por"]}
+            "observacao": str(detalhe.get("observacao") or ""), "pecas": pecas, "em": rom["em"]}
+
+
+def _pedido_na_fila(pedido: str) -> bool:
+    """V19.87: o pedido está em conf_pedidos (qualquer filial)? Chamar sob o DB_LOCK."""
+    numero = normalize(pedido)
+    bruto, _, _ = get_storage("conf_pedidos")
+    return any(isinstance(row, dict) and numero in {normalize(order_number(row)), normalize(row.get("VendaMercadoLivre")),
+                                                    normalize(row.get("PackIdMercadoLivre"))}
+               for row in _rows_from_storage_value(bruto))
 
 
 def _exp_caixa_corpo(pedido: str, atendimento: Any, cliente: Any) -> tuple[dict[str, Any] | None, str]:
@@ -33182,8 +33196,13 @@ class AppHandler(BaseHTTPRequestHandler):
             filial = self.filial_da_requisicao(ctx)
             with DB_LOCK:
                 permitido = pedido_da_filial(pedido, filial)
+                # Revisão 27/10: fora da fila não dá para saber a filial; só quem vê todas lê.
+                na_fila = filial == FILIAL_TODAS or _pedido_na_fila(pedido)
             if not permitido:
                 self.send_json({"ok": False, "error": f"O pedido {pedido} é de outra filial.", "code": "OUTRA_FILIAL"}, 403)
+                return
+            if not na_fila:
+                self.send_json({"ok": False, "error": f"O pedido {pedido} não está na fila.", "code": "FORA_DA_FILA"}, 404)
                 return
             try:
                 self.send_json(romaneio_do_pedido(pedido))
