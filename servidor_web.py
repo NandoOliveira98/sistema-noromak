@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.91-USUARIO-EXCLUIDO"
+APP_VERSION = "19.92-ETIQUETA-DEVOLUCAO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -17973,7 +17973,54 @@ def devolucao_buscar(q: Any, filial: str) -> dict[str, Any]:
         # "ABC 123" pode ser um código com espaço (revisão 27/10): sem resultado, vale o texto inteiro.
         r = _devolucao_buscar(q, filial, combinar=False)
     r.pop("combinada", None)
+    if not r["pedidos"]:
+        # V19.91: etiqueta de devolução do ML sem reclamação gravada — pergunta ao ML de qual venda é o envio.
+        venda = _devolucao_venda_do_envio_ml(q)
+        if venda:
+            r = _devolucao_buscar(venda, filial, combinar=False)
+            r.pop("combinada", None)
+            r["etiqueta_ml"] = normalize(q)
+            r["codigo"] = ""   # a etiqueta não é peça: nada de +1 automático
     return r
+
+
+# V19.91 (dono, 27/10): a etiqueta de devolução traz o nº do envio de volta (11 dígitos). O /shipments/{id} desse
+# envio responde type=return com o order_id (conferido em produção com 48308414462); não depende das reclamações.
+# Só número com cara de envio (10 a 12 dígitos: EAN-13, EAN-8 e nº de venda de 16 ficam de fora), uma consulta por
+# conta conectada, resposta (e "não existe") guardada 30 min. Erro do ML = não achou; nunca trava a busca.
+DEVOLUCAO_ENVIO_CACHE_SEG = 1800
+_DEVOLUCAO_ENVIO_CACHE: dict[str, tuple[float, str]] = {}
+_DEVOLUCAO_ENVIO_LOCK = threading.Lock()
+
+
+def _devolucao_venda_do_envio_ml(q: Any) -> str:
+    numero = normalize(q)
+    if not (numero.isdigit() and 10 <= len(numero) <= 12):
+        return ""
+    agora = time.time()
+    with _DEVOLUCAO_ENVIO_LOCK:
+        guardado = _DEVOLUCAO_ENVIO_CACHE.get(numero)
+        if guardado and guardado[0] > agora:
+            return guardado[1]
+    venda = ""
+    try:
+        casas = ml_casas_conectadas()
+    except Exception:
+        casas = []
+    for casa in casas:
+        try:
+            with ml_na_casa(casa):
+                d = ml_api_get(f"/shipments/{quote(numero)}")
+        except Exception:
+            continue
+        if isinstance(d, dict) and d.get("order_id"):
+            venda = str(d["order_id"])
+            break
+    with _DEVOLUCAO_ENVIO_LOCK:
+        if len(_DEVOLUCAO_ENVIO_CACHE) > 2000:
+            _DEVOLUCAO_ENVIO_CACHE.clear()
+        _DEVOLUCAO_ENVIO_CACHE[numero] = (agora + DEVOLUCAO_ENVIO_CACHE_SEG, venda)
+    return venda
 
 
 def _devolucao_buscar(q: Any, filial: str, combinar: bool) -> dict[str, Any]:
@@ -24277,11 +24324,15 @@ def posvenda_reclamacoes_rodada(stop_event: threading.Event | None = None, *, ag
             ultima_dt = _posvenda_dt(ultima)
             if ultima_dt is None:
                 desde = agora - timedelta(days=POSVENDA_HISTORICO_DIAS)
-                achados += _posvenda_buscar(seller_id, {"range": f"date_created:after:{_posvenda_iso_ml(desde)}"}, stop_event)
+                faixa = f"date_created:after:{_posvenda_iso_ml(desde)}"
             else:
                 # um dia de folga: relógio do ML e reclamação que mudou no meio da rodada anterior
                 desde = ultima_dt - timedelta(days=1)
-                achados += _posvenda_buscar(seller_id, {"range": f"last_updated:after:{_posvenda_iso_ml(desde)}"}, stop_event)
+                faixa = f"last_updated:after:{_posvenda_iso_ml(desde)}"
+            # V19.92: o ML recusa o range sozinho (HTTP 400 atLeastOneFilterProvided, visto em produção 27/10 —
+            # a tabela nunca tinha sido preenchida): uma busca por situação.
+            for situacao in ("opened", "closed"):
+                achados += _posvenda_buscar(seller_id, {"status": situacao, "range": faixa}, stop_event)
         except Exception as exc:
             msg = str(exc)[:500]
             ml_log_event_se_mudou("posvenda", "/post-purchase/v1/claims/search", seller_id, ML_CLIENT_ID, "ERRO", msg)
