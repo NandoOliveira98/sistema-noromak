@@ -230,8 +230,8 @@ async function abrirVenda(chave, bipado = "") {
         ? `<span>${v.full ? "<b>Full</b> · " : ""}${v.cancelada ? "<b>venda cancelada</b> · " : ""}não passou pela Conferência</span>`
         : `<span>Concluído em ${esc(new Date(v.concluido_em).toLocaleDateString("pt-BR"))}</span>`);
     $("formSem").hidden = true;
-    // V19.95: NF de venda no cabeçalho (Mercado Livre; a Shopee não traz pela API).
-    if (!v.venda_sem_conferencia || v.marketplace === "Mercado Livre") nfDaVenda(chave);
+    // V19.95: NF de venda no cabeçalho (Mercado Livre e, desde a V19.96, Shopee).
+    if (v.marketplace === "Mercado Livre" || v.marketplace === "Shopee") nfDaVenda(chave);   // V19.96: Shopee também
     mostrarPasso("venda");
     // A peça bipada na busca já conta como a primeira que voltou.
     if (bipado && (linhas.some(l => l.eans.includes(bipado)) || kits.some(k => k.codigos.includes(bipado))))

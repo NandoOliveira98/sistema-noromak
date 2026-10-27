@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.95-DEVOLUCOES-LUCRO"
+APP_VERSION = "19.96-NF-SHOPEE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -18839,7 +18839,7 @@ def _devolucao_nf_ler(order_key: str, marketplace: str, filial: str, pedido: str
     order_key = normalize(order_key)
     if not order_key:
         return {"ok": True, "nf": None, "motivo": "Devolução sem pedido."}
-    if marketplace != "Mercado Livre":
+    if marketplace not in ("Mercado Livre", "Shopee"):
         return {"ok": True, "nf": None,
                 "motivo": f"A nota de venda da {marketplace or 'venda'} não vem pela API: veja no Apollo."}
     with DB_LOCK:
@@ -18850,6 +18850,17 @@ def _devolucao_nf_ler(order_key: str, marketplace: str, filial: str, pedido: str
     with _DEVOLUCAO_ENVIO_LOCK:
         if _DEVOLUCAO_NF_FALTA.get(order_key, 0) > agora:
             return {"ok": True, "nf": None, "motivo": "O Mercado Livre ainda não tem a nota desta venda."}
+    if marketplace == "Shopee":
+        nf = _devolucao_nf_shopee(normalize(pedido) or order_key)
+        if nf:
+            with DB_LOCK:
+                DB.execute("INSERT OR REPLACE INTO devolucao_nf_v1995(order_key,nf_json,lido_em) VALUES(?,?,?)",
+                           (order_key, json.dumps(nf, ensure_ascii=False), now_iso()))
+                DB.commit()
+            return {"ok": True, "nf": nf}
+        with _DEVOLUCAO_ENVIO_LOCK:
+            _DEVOLUCAO_NF_FALTA[order_key] = agora + DEVOLUCAO_ENVIO_CACHE_SEG
+        return {"ok": True, "nf": None, "motivo": "A Shopee ainda não tem a nota desta venda."}
     ids: list[str] = []
     if order_key.startswith(DEVOLUCAO_VENDA_PREFIXO):
         ids.append(order_key[len(DEVOLUCAO_VENDA_PREFIXO):])
@@ -18895,6 +18906,27 @@ def _devolucao_nf_ler(order_key: str, marketplace: str, filial: str, pedido: str
             _DEVOLUCAO_NF_FALTA.clear()
         _DEVOLUCAO_NF_FALTA[order_key] = agora + DEVOLUCAO_ENVIO_CACHE_SEG
     return {"ok": True, "nf": None, "motivo": "O Mercado Livre não devolveu a nota desta venda."}
+
+
+def _devolucao_nf_shopee(order_sn: str) -> dict[str, Any] | None:
+    """V19.96: a Shopee traz a NF no get_order_detail (invoice_data; conferido em produção 27/10, 261012CNWJPV5F)."""
+    try:
+        detalhes = shopee_order_details([order_sn])
+    except Exception:
+        return None
+    for o in detalhes or []:
+        inv = o.get("invoice_data") if isinstance(o, dict) else None
+        if not isinstance(inv, dict) or not inv.get("number"):
+            continue
+        emitida = inv.get("issue_date")
+        try:
+            emitida = datetime.fromtimestamp(int(emitida), timezone.utc).isoformat() if emitida else ""
+        except (TypeError, ValueError, OSError):
+            emitida = str(emitida or "")
+        return {"numero": str(inv.get("number")), "serie": str(inv.get("series_number") or ""),
+                "chave": str(inv.get("access_key") or ""), "emitida_em": emitida, "valor": inv.get("total_value"),
+                "venda": str(o.get("order_sn") or order_sn), "emitente": ""}
+    return None
 
 
 def devolucao_nf(dev_id: Any, filial: str = FILIAL_TODAS) -> dict[str, Any]:

@@ -5,7 +5,7 @@ Shopee, manuais), expedição, separação, conferência por código de barras, 
 produtos/SKUs/EANs, kits, precificação, promoções, rentabilidade, estoque, Central de
 Pendências e histórico.
 
-Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V19.95).
+Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V19.96).
 
 ---
 
@@ -1259,7 +1259,7 @@ Rotas `GET /api/devolucoes/resumo?mes=` (KPIs do mês × anterior, taxa = peças
 peça) e `POST /api/devolucoes/valores` (frete, destino, custo; histórico `valores`). **NF de venda**:
 `GET /api/devolucoes/nf?id=` (admin) / `?chave=` (operador) lê `/users/{seller}/invoices/orders/{order}` (número,
 série, chave, data, valor; Full = série 2) uma vez e guarda em `devolucao_nf_v1995`; sem PDF da DANFE por essa API;
-Shopee não traz. Telas com `theme.css` (o padrão das outras). Teste: `TESTES/test_devolucoes_lucro_v1995.py`.
+**V19.96:** a Shopee traz (`invoice_data` do `get_order_detail`, `_devolucao_nf_shopee`; conferido 27/10). Telas com `theme.css` (o padrão das outras). Teste: `TESTES/test_devolucoes_lucro_v1995.py`.
 
 **V19.45 — Cliente do Full pela NF-e do ML** (decisões do dono, 16/10). Venda Full não passa pela fila, e a integração
 ML → Apollo cria o cliente com o nome da conta ("Premium Flex") em vez da razão social da nota (M2 SOLUCOES GRAFICAS).

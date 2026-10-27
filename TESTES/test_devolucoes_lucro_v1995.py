@@ -235,13 +235,33 @@ class DevolucoesNoLucro(TesteNoromak):
             r = S.devolucao_nf(dev)
         self.assertIsNone(r["nf"])
         self.assertTrue(r["motivo"])
-        concluir("SH1", [linha("SH1", "AAA", 1, Marketplace="SHOPEE")])
-        dev2 = self.nova([self.RUIM], chave="SH1")
-        r = S.devolucao_nf(dev2)
-        self.assertIsNone(r["nf"])
-        self.assertIn("Shopee", r["motivo"])
-        st, corpo = self.cliente.pedir("GET", f"/api/devolucoes/nf?id={dev2}")
+        st, corpo = self.cliente.pedir("GET", f"/api/devolucoes/nf?id={dev}")
         self.assertEqual(st, 200, corpo)
+
+    def test_nf_da_shopee_pelo_detalhe_do_pedido(self):
+        # V19.96: a Shopee traz invoice_data no get_order_detail (conferido em produção, pedido 261012CNWJPV5F).
+        concluir("261012CNWJPV5F", [linha("261012CNWJPV5F", "AAA", 1, Marketplace="SHOPEE")])
+        dev = self.nova([self.RUIM], chave="261012CNWJPV5F")
+        chamadas = []
+
+        def detalhes(sns):
+            chamadas.append(list(sns))
+            return [{"order_sn": "261012CNWJPV5F", "invoice_data": {
+                "number": "71549", "series_number": "1", "access_key": "35261014346930000106550010000715491007869831",
+                "issue_date": 1791914301, "total_value": 38.9, "status": "invoiced"}}]
+        with mock.patch.object(S, "shopee_order_details", side_effect=detalhes):
+            r = S.devolucao_nf(dev)
+            self.assertEqual((r["nf"]["numero"], r["nf"]["serie"], r["nf"]["valor"]), ("71549", "1", 38.9))
+            self.assertTrue(r["nf"]["emitida_em"].startswith("2026-"))
+            S.devolucao_nf(dev)
+        self.assertEqual(len(chamadas), 1)
+        # sem nota na resposta: avisa, sem quebrar
+        concluir("SH2", [linha("SH2", "AAA", 1, Marketplace="SHOPEE")])
+        dev2 = self.nova([self.RUIM], chave="SH2")
+        with mock.patch.object(S, "shopee_order_details", return_value=[{"order_sn": "SH2"}]):
+            r = S.devolucao_nf(dev2)
+        self.assertIsNone(r["nf"])
+        self.assertTrue(r["motivo"])
 
 if __name__ == "__main__":
     import unittest
