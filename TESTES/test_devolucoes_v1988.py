@@ -41,7 +41,9 @@ class Devolucoes(TesteNoromak):
 
     def novo_operador(self, login: str, filial: str) -> Cliente:
         with S.DB_LOCK:
-            S.upsert_app_user(login, login.title(), "operador", True, SENHA_ADMIN, "teste")
+            # V19.89: o Receber tem módulo próprio (test_modulo_devolucao_v1989.py).
+            S.upsert_app_user(login, login.title(), "operador", True, SENHA_ADMIN, "teste",
+                              permissions={"conferencia": True, "devolucao": True})
             S.DB.execute("UPDATE app_users SET casa=? WHERE username=?", (filial, login))
             S.DB.commit()
         c = Cliente(self.url_base)

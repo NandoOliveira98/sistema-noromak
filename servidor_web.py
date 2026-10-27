@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.88-DEVOLUCOES"
+APP_VERSION = "19.89-MODULO-DEVOLUCAO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -1778,6 +1778,11 @@ def ensure_app_user_permissions_schema() -> None:
         # para não disparar a migração de módulos abaixo.
         if "somente_leitura" not in columns:
             DB.execute("ALTER TABLE app_users ADD COLUMN somente_leitura INTEGER NOT NULL DEFAULT 0")
+        # V19.89: módulo Devolução (dono, 27/10) — libera a tela Receber devolução. Fora do "additions"
+        # (a migração dele religa Conferência). Ao criar: perfil Admin ligado, os demais desligados.
+        if "can_devolucao" not in columns:
+            DB.execute("ALTER TABLE app_users ADD COLUMN can_devolucao INTEGER NOT NULL DEFAULT 0")
+            DB.execute("UPDATE app_users SET can_devolucao=1 WHERE role='admin'")
         changed = False
         for name, ddl in additions.items():
             if name not in columns:
@@ -1813,7 +1818,8 @@ def ensure_app_user_permissions_schema() -> None:
 # a tela esqueceu de esconder também recebe 403 SOMENTE_LEITURA. Conferência só para ver a
 # fila; Estação Zebra fica de fora.
 PERFIL_CONSULTA = "consulta"
-CONSULTA_PERMISSOES = {"conferencia": True, "admin": True, "estacao": False, "precificador": True}
+CONSULTA_PERMISSOES = {"conferencia": True, "admin": True, "estacao": False, "precificador": True,
+                       "devolucao": True}  # V19.89: vê a tela; registrar é POST (bloqueado)
 # POST que só lê (ou só mexe na sessão/aparelho de quem está usando).
 CONSULTA_POST_LIVRES = {
     "/api/auth/login", "/api/auth/logout", "/api/full/apollo-stock", "/api/full/kits", "/api/full/anuncios",
@@ -1829,7 +1835,8 @@ CONSULTA_STORAGE_OCULTO = {"conf_usuarios", "conf_solicitacoes_usuarios"}
 # Demanda de Compra (pode digitar nela). Gravado como role='operador' + somente_leitura=2 (a coluna
 # guarda o perfil especial: 1 = Consulta, 2 = Compras; assim não é preciso recriar app_users).
 PERFIL_COMPRAS = "compras"
-COMPRAS_PERMISSOES = {"conferencia": False, "admin": False, "estacao": False, "precificador": False, "compras": True}
+COMPRAS_PERMISSOES = {"conferencia": False, "admin": False, "estacao": False, "precificador": False, "compras": True,
+                      "devolucao": False}
 PERFIL_ESPECIAL_CODIGO = {PERFIL_CONSULTA: 1, PERFIL_COMPRAS: 2}
 # Rotas de pedido/conferência só pedem login; por isso o Compras é travado ANTES de qualquer rota
 # (compras_bloqueado): fora destas, toda chamada à API volta 403.
@@ -1907,6 +1914,7 @@ def user_permissions_from_row(row: sqlite3.Row | dict[str, Any]) -> dict[str, bo
         "admin": flag("can_admin", True),
         "estacao": flag("can_estacao", True),
         "precificador": flag("can_precificador", True),
+        "devolucao": flag("can_devolucao", True),  # V19.89
     }
 
 
@@ -3392,7 +3400,7 @@ def upsert_app_user(
     if owner_account:
         role = "admin"
         active = True
-        permissions = {"conferencia": True, "admin": True, "estacao": True, "precificador": True}
+        permissions = {"conferencia": True, "admin": True, "estacao": True, "precificador": True, "devolucao": True}
     existing = DB.execute("SELECT * FROM app_users WHERE username=?", (username,)).fetchone()
     if existing and only_if_missing:
         return
@@ -3421,15 +3429,24 @@ def upsert_app_user(
             "estacao": bool(permissions.get("estacao")),
             "precificador": bool(permissions.get("precificador")),
         }
+    # V19.89: módulo Devolução. Só muda quando o pedido manda a chave: a tela antiga, o conf_usuarios
+    # e a extensão mandam só os 4 módulos de antes e não podem desligar a Devolução de ninguém.
+    if isinstance(permissions, dict) and "devolucao" in permissions:
+        devolucao = bool(permissions.get("devolucao"))
+    elif existing and "can_devolucao" in existing.keys():
+        devolucao = bool(existing["can_devolucao"])
+    else:
+        devolucao = role == "admin"
     DB.execute(
         """INSERT INTO app_users(
              username,display_name,password_hash,password_salt,password_iterations,role,active,
-             can_conferencia,can_admin,can_estacao,can_precificador,updated_at,updated_by,casa
-           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(username) DO UPDATE SET
+             can_conferencia,can_admin,can_estacao,can_precificador,updated_at,updated_by,casa,can_devolucao
+           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(username) DO UPDATE SET
            display_name=excluded.display_name,password_hash=excluded.password_hash,password_salt=excluded.password_salt,
            password_iterations=excluded.password_iterations,role=excluded.role,active=excluded.active,
            can_conferencia=excluded.can_conferencia,can_admin=excluded.can_admin,
            can_estacao=excluded.can_estacao,can_precificador=excluded.can_precificador,
+           can_devolucao=excluded.can_devolucao,
            updated_at=excluded.updated_at,updated_by=excluded.updated_by""",
         (
             username, display_name.strip() or username, pwd_hash, pwd_salt, iterations,
@@ -3440,6 +3457,7 @@ def upsert_app_user(
             # V18.95: usuário NOVO nasce com a filial padrão (Admin vê todas); o que já existe
             # mantém a dele (a coluna não entra no UPDATE acima).
             "todas" if role in ("admin", PERFIL_CONSULTA) else "aracatuba",
+            1 if devolucao else 0,
         ),
     )
     # V19.40: Consulta fica gravado como operador (CHECK da tabela) + somente_leitura.
@@ -3534,7 +3552,7 @@ def migrate_app_users() -> None:
 def app_users_payload() -> list[dict[str, Any]]:
     rows = DB.execute(
         """SELECT username,display_name,role,active,can_conferencia,can_admin,can_estacao,can_precificador,
-                  updated_at,updated_by,casa,somente_leitura FROM app_users ORDER BY display_name,username"""
+                  can_devolucao,updated_at,updated_by,casa,somente_leitura FROM app_users ORDER BY display_name,username"""
     ).fetchall()
     return [
         {
@@ -3550,11 +3568,13 @@ def app_users_payload() -> list[dict[str, Any]]:
             "AcessoAdmin": bool(row["can_admin"]),
             "AcessoEstacao": bool(row["can_estacao"]),
             "AcessoPrecificador": bool(row["can_precificador"]),
+            "AcessoDevolucao": bool(row["can_devolucao"]),  # V19.89
             "Acessos": {
                 "conferencia": bool(row["can_conferencia"]),
                 "admin": bool(row["can_admin"]),
                 "estacao": bool(row["can_estacao"]),
                 "precificador": bool(row["can_precificador"]),
+                "devolucao": bool(row["can_devolucao"]),
             },
             "Filial": usuario_filial(row),  # V18.95
             "AtualizadoEm": row["updated_at"],
@@ -3625,6 +3645,9 @@ def apply_app_users_payload(value: str, actor: str) -> str:
                     "estacao": bool(raw.get("AcessoEstacao", raw_access.get("estacao", role == "admin"))),
                     "precificador": bool(raw.get("AcessoPrecificador", raw_access.get("precificador", role == "admin"))),
                 }
+                # V19.89: sem o campo, o upsert mantém o que o usuário tinha.
+                if "AcessoDevolucao" in raw or "devolucao" in raw_access:
+                    permissions["devolucao"] = bool(raw.get("AcessoDevolucao", raw_access.get("devolucao")))
             # V18.95: filial; sem o campo, o usuário que já existe mantém a dele.
             filial = None
             if "Filial" in raw:
@@ -5701,7 +5724,7 @@ def noromakweb_sso_context(handler: BaseHTTPRequestHandler) -> dict[str, Any] | 
     with DB_LOCK:
         row = DB.execute(
             """SELECT username,display_name,role,active,
-                      can_conferencia,can_admin,can_estacao,can_precificador,casa,somente_leitura
+                      can_conferencia,can_admin,can_estacao,can_precificador,can_devolucao,casa,somente_leitura
                FROM app_users WHERE username=?""",
             (username,),
         ).fetchone()
@@ -5741,7 +5764,7 @@ def session_context(handler: BaseHTTPRequestHandler) -> dict[str, Any] | None:
     with DB_LOCK:
         row = DB.execute(
             """SELECT s.token_hash,s.username,s.area,s.expires_at,u.display_name,u.role,u.active,
-                      u.can_conferencia,u.can_admin,u.can_estacao,u.can_precificador,u.casa,u.somente_leitura
+                      u.can_conferencia,u.can_admin,u.can_estacao,u.can_precificador,u.can_devolucao,u.casa,u.somente_leitura
                FROM app_sessions s JOIN app_users u ON u.username=s.username
                WHERE s.token_hash=?""",
             (token_hash,),
@@ -33871,11 +33894,11 @@ class AppHandler(BaseHTTPRequestHandler):
             self.send_json(cadastro_full_payload())
             return
         if path in ("/api/devolucoes/buscar", "/api/devolucoes/pedido"):
-            # V19.88: tela do operador (módulo conferencia) e do admin.
+            # V19.88: tela do operador. V19.89: módulo próprio (dono, 27/10: só quem recebe).
             ctx = self.auth()
             if ctx is None:
                 return
-            if not (module_allowed(ctx, "conferencia") or module_allowed(ctx, "admin")):
+            if not module_allowed(ctx, "devolucao"):
                 self.send_json({"ok": False, "error": "Sem acesso às devoluções."}, 403)
                 return
             try:
@@ -34128,7 +34151,7 @@ class AppHandler(BaseHTTPRequestHandler):
             # V19.85: lista de separação do dia.
             "/separacao": "admin", "/separacao/": "admin", "/separacao.html": "admin",
             # V19.88: Devoluções — operador (tela cheia) e admin (tratar no Apollo).
-            "/devolucoes": "conferencia", "/devolucoes/": "conferencia", "/devolucoes.html": "conferencia",
+            "/devolucoes": "devolucao", "/devolucoes/": "devolucao", "/devolucoes.html": "devolucao",  # V19.89
             "/devolucoes-admin": "admin", "/devolucoes-admin/": "admin", "/devolucoes-admin.html": "admin",
             # V18.73: promoções automáticas (age sozinha no ML: só admin).
             "/promocoes-auto": "admin", "/promocoes-auto/": "admin", "/promocoes-auto.html": "admin",
@@ -35481,7 +35504,7 @@ class AppHandler(BaseHTTPRequestHandler):
             ctx = self.auth()
             if ctx is None:
                 return
-            if not (module_allowed(ctx, "conferencia") or module_allowed(ctx, "admin")):
+            if not module_allowed(ctx, "devolucao"):  # V19.89
                 self.send_json({"ok": False, "error": "Sem acesso às devoluções."}, 403)
                 return
             try:
@@ -37516,7 +37539,7 @@ class AppHandler(BaseHTTPRequestHandler):
         with DB_LOCK:
             rows = DB.execute(
                 """SELECT username,display_name,role,active,can_conferencia,can_admin,can_estacao,can_precificador,
-                          updated_at,updated_by,casa,somente_leitura FROM app_users ORDER BY display_name,username"""
+                          can_devolucao,updated_at,updated_by,casa,somente_leitura FROM app_users ORDER BY display_name,username"""
             ).fetchall()
         users = []
         for row in rows:
@@ -37556,6 +37579,8 @@ class AppHandler(BaseHTTPRequestHandler):
                     "estacao": bool(raw_permissions.get("estacao", role == "admin")),
                     "precificador": bool(raw_permissions.get("precificador", role == "admin")),
                 }
+            if "devolucao" in raw_permissions:  # V19.89: sem a chave, fica o que estava
+                permissions["devolucao"] = bool(raw_permissions.get("devolucao"))
             if not username or any(ch.isspace() for ch in username):
                 raise ValueError("Informe o login do estoque sem espaços.")
             if is_consulta_role(role):

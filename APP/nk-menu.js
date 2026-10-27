@@ -31,7 +31,7 @@
       { id: "faturamento", rotulo: "Faturamento", href: "/faturamento", modulo: "admin", icone: "M4 2h16v20l-4-2-4 2-4-2-4 2zM8 7h8M8 11h8M8 15h5" },
       // V19.88: Devoluções — o operador recebe (tela cheia) e o admin trata no Apollo.
       { id: "devolucoes-admin", rotulo: "Devoluções", href: "/devolucoes-admin", modulo: "admin", icone: "M9 14 4 9l5-5M4 9h11a5 5 0 0 1 0 10h-4" },
-      { id: "devolucoes", rotulo: "Receber devolução", href: "/devolucoes", modulo: "conferencia", icone: "M21 8 12 3 3 8v8l9 5 9-5zM3 8l9 5 9-5M12 13v8" },
+      { id: "devolucoes", rotulo: "Receber devolução", href: "/devolucoes", modulo: "devolucao", icone: "M21 8 12 3 3 8v8l9 5 9-5zM3 8l9 5 9-5M12 13v8" },
       { id: "conferencia", rotulo: "Conferência", href: "/conferencia", modulo: "conferencia", icone: "M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" },
       { id: "historico", rotulo: "Histórico", href: "/historico", aba: "historico", modulo: "admin", oculto: true /* V19.43: botão em Pedidos pendentes */, icone: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2" },
       // Sem item no menu (abre por botões dentro do Histórico), mas tem endereço próprio.

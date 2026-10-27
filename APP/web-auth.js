@@ -317,7 +317,8 @@
         ${permission(user,"admin") ? `<a class="module-action" href="${BASE}/admin"><span class="module-icon"><i class=nk-i-dashboard></i></span><span>Abrir Painel Administrativo</span></a>` : ""}
         ${permission(user,"estacao") ? `<a class="module-action" href="${BASE}/estacao-impressao"><span class="module-icon"><i class=nk-i-printer></i></span><span>Abrir Estação de Impressão</span></a>` : ""}
         ${permission(user,"precificador") ? `<a class="module-action" href="${BASE}/precificador"><span class="module-icon"><i class=nk-i-dollar></i></span><span>Abrir Precificador</span></a>` : ""}
-        ${!["conferencia","admin","estacao","precificador"].some(m=>permission(user,m)) ? `<div class="access-denied">Este usuário não possui módulos liberados. Peça ao administrador para marcar os acessos necessários.</div>` : ""}
+        ${permission(user,"devolucao") ? `<a class="module-action" href="${BASE}/devolucoes"><span class="module-icon"><i class=nk-i-box></i></span><span>Receber devolução</span></a>` : ""}
+        ${!["conferencia","admin","estacao","precificador","devolucao"].some(m=>permission(user,m)) ? `<div class="access-denied">Este usuário não possui módulos liberados. Peça ao administrador para marcar os acessos necessários.</div>` : ""}
         <button id="stockAccessLogout" type="button" class="logout-access">Sair e trocar usuário</button>
       </div>`;
     host.querySelector("#stockAccessLogout")?.addEventListener("click", () => logout(`${BASE}/`));

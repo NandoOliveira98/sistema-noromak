@@ -5,7 +5,7 @@ Shopee, manuais), expedição, separação, conferência por código de barras, 
 produtos/SKUs/EANs, kits, precificação, promoções, rentabilidade, estoque, Central de
 Pendências e histórico.
 
-Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V19.88).
+Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V19.89).
 
 ---
 
@@ -1216,6 +1216,13 @@ pedido reaberto (fora de `completed_orders`) não aparece; o admin zera peça la
 tratada sem reabrir; "sem pedido" de quem vê "todas" exige a filial; `token` da tela evita duplicar o "Concluir"
 repetido (a resposta "repetida" diz o que foi gravado; o token é conferido antes da venda); conclusão "fantasma" do boot (`payload` "[]", recriada do `audit_log` pelo `migrate_completion_history`) nunca conta como a mais nova (`DEVOLUCAO_COM_LINHAS`); devolução com as peças zeradas trata sem documento e sai do filtro de estado; `%`/`_` não são curinga e nome só com palavras de 3+ letras; até 200 peças e código até 60. Depois: foto da
 peça ruim, destino por peça, etiqueta da Shopee. Teste: `TESTES/test_devolucoes_v1988.py`.
+**V19.89 — módulo Devolução** (dono, 27/10: hoje só Felipe e Matheus recebem). A tela Receber devolução e as rotas
+`/api/devolucoes/{buscar,pedido,registrar}` pedem o módulo **`devolucao`** (`app_users.can_devolucao`), não mais
+Conferência/Admin; a tela do admin (tratar no Apollo) continua no módulo Admin. Ao criar a coluna, perfil Admin ligado e
+os demais desligados (só na criação). Consulta tem (vê; registrar é POST bloqueado), Compras não. **Salvar usuário sem a
+chave `devolucao` mantém o valor gravado** (`upsert_app_user`, `/api/roles`, `conf_usuarios`): a tela antiga e a extensão
+mandam só os 4 módulos de antes. Caixa "Devolução" na tela de Usuários e botão "Receber devolução" no portal de acesso.
+Teste: `TESTES/test_modulo_devolucao_v1989.py`.
 
 **V19.45 — Cliente do Full pela NF-e do ML** (decisões do dono, 16/10). Venda Full não passa pela fila, e a integração
 ML → Apollo cria o cliente com o nome da conta ("Premium Flex") em vez da razão social da nota (M2 SOLUCOES GRAFICAS).
