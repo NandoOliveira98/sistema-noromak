@@ -202,6 +202,11 @@ class QuadroTarefas(TesteNoromak):
         self.assertEqual((r["abertas"], r["atrasadas"]), (2, 1))
 
     def test_linha_das_atrasadas_no_email(self):
+        # A carga inicial (plano faturamento-out26) tem cartões com prazo em outubro/2026: a partir
+        # de 28/10 eles já estão atrasados. O teste parte só dos cartões que ele mesmo cria.
+        with S.DB_LOCK:
+            S.DB.execute("UPDATE tarefa_cartao_v1969 SET excluido_em='teste' WHERE excluido_em=''")
+            S.DB.commit()
         self.assertEqual(S.tarefas_resumo_email(), "", "sem atraso não há linha")
         ontem = (datetime.now(S.BR_TZ).date() - timedelta(days=1)).isoformat()
         self.criar(responsavel="ana", prazo=ontem)
