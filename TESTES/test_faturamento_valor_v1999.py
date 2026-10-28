@@ -117,12 +117,129 @@ class Executar(unittest.TestCase):
         self.assertEqual([(i["pedido"], i["situacao"]) for i in itens], [(PEDIDO, "corrigir_valor")])
 
 
+class RevisaoAntesDeSubir(unittest.TestCase):
+    """Achados da revisão de 28/10: trava por pedido, valores pelo servidor, romaneio já solto
+    com valor diferente e atendimento sem valor."""
+
+    def setUp(self):
+        reiniciar_banco()
+
+    def _reservado(self):
+        return S._faturamento_correcao_ler(S.normalize(PEDIDO)) is not None
+
+    def _executar(self, valor_apollo, **kw):
+        porta = _porta(valor_apollo)
+        with mock.patch.object(S, "_exp_porta", side_effect=porta):
+            return S.faturamento_executar(PEDIDO, kw.pop("usuario", "luis"), **kw), porta
+
+    def test_segunda_chamada_durante_a_correcao_e_recusada_sem_ir_ao_apollo(self):
+        _pedido(escrow=CUPOM_SHOPEE)
+        r1, _ = self._executar(23.31)
+        self.assertTrue(r1["trava"])
+        r2, porta = self._executar(23.31, usuario="ana")
+        self.assertFalse(r2["ok"])
+        self.assertIn("andamento", r2["error"])
+        self.assertEqual(porta.chamadas, [])                 # nem conferiu: não pesa no Apollo
+
+    def test_reserva_nao_vence_sozinha_e_sai_pelo_liberar(self):
+        # correção pela metade (peça descomprometida) não pode voltar à fila sozinha
+        _pedido(escrow=CUPOM_SHOPEE)
+        r1, _ = self._executar(23.31)
+        with S.DB_LOCK:
+            S.DB.execute("UPDATE faturamento_correcao_v1999 SET epoch=epoch-86400")
+            S.DB.commit()
+        r2, porta = self._executar(25.9)
+        self.assertFalse(r2["ok"])
+        self.assertEqual(porta.chamadas, [])
+        itens = S.faturamento_payload()["itens"]
+        self.assertEqual([i["situacao"] for i in itens], ["em_correcao"])
+        self.assertTrue(S.faturamento_correcao_liberar(PEDIDO, "luis")["ok"])
+        self.assertFalse(self._reservado())
+        r3, _ = self._executar(25.9)
+        self.assertEqual(r3["etapa"], "condicao", r3)
+
+    def test_com_a_trava_depois_de_corrigido_segue(self):
+        _pedido(escrow=CUPOM_SHOPEE)
+        r1, _ = self._executar(23.31)
+        r2, porta = self._executar(25.9, trava=r1["trava"])
+        self.assertEqual(r2["etapa"], "condicao", r2)
+        self.assertIn("romaneio/soltar", porta.rotas())
+        self.assertFalse(self._reservado())
+
+    def test_com_a_trava_e_ainda_errado_nao_pede_outra_correcao(self):
+        _pedido(escrow=CUPOM_SHOPEE)
+        r1, _ = self._executar(23.31)
+        r2, porta = self._executar(23.31, trava=r1["trava"])
+        self.assertFalse(r2["ok"])
+        self.assertNotIn("trava", r2)
+        self.assertNotIn("romaneio/soltar", porta.rotas())
+
+    def test_liberar_desfaz_a_trava_sem_ir_ao_apollo(self):
+        _pedido(escrow=CUPOM_SHOPEE)
+        r1, _ = self._executar(23.31)
+        r2, porta = self._executar(23.31, trava=r1["trava"], liberar=True)
+        self.assertFalse(r2["ok"])
+        self.assertEqual(porta.chamadas, [])
+        self.assertFalse(self._reservado())
+
+    def test_extensao_le_os_valores_do_servidor_so_com_a_trava(self):
+        _pedido(escrow=CUPOM_SHOPEE)
+        r1, _ = self._executar(23.31)
+        c = S.faturamento_correcao(PEDIDO, r1["trava"])
+        self.assertEqual((c["ok"], c["atendimento"], c["valor_certo"], c["valor_atual"]), (True, "790955", 25.9, 23.31))
+        self.assertFalse(S.faturamento_correcao(PEDIDO, "outra")["ok"])
+        self.assertFalse(S.faturamento_correcao("OUTRO", r1["trava"])["ok"])
+
+    def test_romaneio_ja_solto_com_valor_diferente_nao_vai_ao_caixa(self):
+        _pedido(escrow=CUPOM_SHOPEE)
+        solto = {"ok": True, "itens": [{"codigo": "0893764272", "requisitada": 1.0, "a_soltar": 0.0}], "total_a_soltar": 0.0}
+        porta = PortaFalsa(previa=solto, abertos=[{"atendimento": 790955, "cliente": "THAYNARA CRISTINA  SILVA",
+                                                   "valor": 23.31, "aberto_em": "2026-10-28T07:00:00"}])
+        with mock.patch.object(S, "_exp_porta", side_effect=porta):
+            r = S.faturamento_executar(PEDIDO, "luis", condicao_ok=True)
+        self.assertFalse(r["ok"])
+        self.assertNotIn("caixa/enviar", porta.rotas())
+
+    def test_romaneio_ja_solto_sem_valor_nao_vai_ao_caixa(self):
+        _pedido(escrow=CUPOM_SHOPEE)
+        solto = {"ok": True, "itens": [{"codigo": "0893764272", "requisitada": 1.0, "a_soltar": 0.0}], "total_a_soltar": 0.0}
+        porta = PortaFalsa(previa=solto, abertos=[{"atendimento": 790955, "cliente": "THAYNARA CRISTINA  SILVA",
+                                                   "aberto_em": "2026-10-28T07:00:00"}])
+        with mock.patch.object(S, "_exp_porta", side_effect=porta):
+            r = S.faturamento_executar(PEDIDO, "luis", condicao_ok=True)
+        self.assertFalse(r["ok"])
+        self.assertNotIn("caixa/enviar", porta.rotas())
+
+    def test_atendimento_sem_valor_fica_em_atencao(self):
+        _pedido(escrow=CUPOM_SHOPEE)
+        porta = PortaFalsa(abertos=[{"atendimento": 790955, "cliente": "THAYNARA CRISTINA  SILVA",
+                                     "aberto_em": "2026-10-28T07:00:00"}])
+        with mock.patch.object(S, "_exp_porta", side_effect=porta):
+            r = S.faturamento_conferir(PEDIDO, "Shopee")
+        self.assertEqual(r["situacao"], "atencao")
+
+
 class Tela(unittest.TestCase):
     def test_lote_pede_a_correcao_a_extensao_e_confere_de_novo(self):
         html = (RAIZ / "APP" / "faturamento.html").read_text(encoding="utf-8")
         self.assertIn('r.etapa==="preco"', html)
         self.assertIn('"preco-corrigir-lote"', html)
         self.assertIn('s==="corrigir_valor"', html)
+        self.assertIn("trava:r.trava", html)                 # a tela devolve a senha da correção
+        self.assertIn("PARAR", html)                         # correção pela metade para o lote
+
+    def test_rota_da_extensao_so_admin(self):
+        from base import Cliente, iniciar_servidor
+        reiniciar_banco()
+        url = iniciar_servidor()
+        status, _ = Cliente(url).pedir("GET", "/api/faturamento/correcao?pedido=X&trava=Y")
+        self.assertEqual(status, 401)
+        admin = Cliente(url)
+        admin.entrar()
+        status, d = admin.pedir("GET", "/api/faturamento/correcao?pedido=X&trava=Y")
+        self.assertEqual((status, d["ok"]), (200, False))
+        status, d = admin.pedir("POST", "/api/faturamento/correcao/liberar", {"pedido": "X"})
+        self.assertEqual((status, d["ok"]), (404, False))
 
 
 if __name__ == "__main__":

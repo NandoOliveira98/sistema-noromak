@@ -1165,6 +1165,17 @@ está mais com o valor que o servidor viu, divide o valor da venda pelas peças 
 o item com o preço certo no Linx web; gera "venda perdida" no Linx, como a correção à mão). Depois chama `executar` de
 novo: a nova conferência é que libera o romaneio. 1º teste real com o dono: 261028RSB9AC4M, atend. 790955, 23,31 → 25,90.
 Pedido de porta própria ao NoromakWeb e mensagem à Linx (corrigir na origem) em `PEDIDO_PORTA_PRECO_ATENDIMENTO.md`.
+**Revisão 28/10:** uma correção por pedido — a etapa `preco` reserva o pedido com uma senha (`trava`) em
+`faturamento_correcao_v1999`; sem ela o `executar` recusa sem ir ao Apollo; a tela devolve a senha (corrigido) ou
+`liberar` (nada alterado, inclusive recusa da extensão antes de mexer). A reserva **não vence sozinha**: correção pela
+metade (ou sem resposta da extensão) fica "em_correcao" na aba Atenção até alguém conferir no Linx e clicar em "Já
+conferi no Linx — liberar" (`POST /api/faturamento/correcao/liberar`, audit). A extensão lê atendimento e valores em
+`GET /api/faturamento/correcao?pedido=&trava=` (nunca os números da página), só aceita a ação da tela Faturamento
+(content script e `sender.url`), faz uma correção por vez (quem espera > 4 min volta `NAO_ALTERADO`) e confere todas
+as peças (seleção, kit, pesquisa) **antes** de excluir a primeira (`_preConferirCorrecao`, só lê); falha antes de mexer
+= `NAO_ALTERADO`, mexeu e não fechou = `VERIFICAR` → a tela **para o lote**. Romaneio já solto com valor diferente da
+venda ou sem valor = atenção (não vai ao caixa); atendimento sem valor = atenção. Prazo da tela: 10 min. Limite: a
+extensão chama o Noromak sem `www` (a correção pela tela aberta em `www.` volta "nada alterado").
 Teste: `TESTES/test_faturamento_valor_v1999.py`.
 
 **V19.87 — Reemissão do romaneio na Conferência** (dono, 27/10). 247 de 247 romaneios soltos pela porta voltaram

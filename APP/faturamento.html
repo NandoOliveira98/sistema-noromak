@@ -123,7 +123,7 @@ html[data-tema="escuro"] .mp.ml{background:#3A3010;color:#F5D46A}html[data-tema=
 </main>
 <script>
 const ABAS=[["pronto","Prontos para faturar","ok","nk-i-check"],["atencao","Precisa de atenção","bad","nk-i-alert"],["aguardando","Aguardando cadastro","warn","nk-i-clock"],["feito","Feitos","","nk-i-file"]];
-let ITENS=[],ABA="pronto",RES={},RODANDO=false;
+let ITENS=[],ABA="pronto",RES={},RODANDO=false,PARAR=false;   // V19.99: PARAR = correção pela metade
 const esc=v=>String(v??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const brl=v=>v==null||v===""?"—":Number(v).toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
 // V19.99: "corrigir_valor" sai no lote (a extensão corrige o preço no Linx web antes do romaneio).
@@ -155,6 +155,8 @@ function situacao(i,sel){
   if(i.situacao==="pronto_caixa")return `<span class="nk-selo info">Falta o caixa</span><span class=mini>Romaneio já solto no Apollo.</span>`;
   if(i.situacao==="feito")return `<span class="nk-selo ok">Enviado ao caixa</span>${i.motivo?`<span class=mini>${esc(i.motivo)}</span>`:""}`;
   if(i.situacao==="corrigir_valor")return `<span class="nk-selo warn">Corrige o valor</span>${i.motivo?`<span class=mini>${esc(i.motivo)}</span>`:""}`;
+  // V19.99 (revisão 28/10): correção em andamento ou pela metade — só volta à fila depois de alguém conferir no Linx.
+  if(i.situacao==="em_correcao")return `<span class="nk-selo bad">Correção do valor</span><span class=mini>${esc(i.motivo)}</span><button type=button class="nk-btn" data-liberar="${esc(i.pedido)}" ${RODANDO?"disabled":""}>Já conferi no Linx — liberar</button>`;
   if(sel)return `<span class="nk-selo ok">Pronto</span>`;
   const g=grupo(i.situacao);
   return `<span class="nk-selo ${g==="aguardando"?"warn":"bad"}">${g==="aguardando"?"Aguardando":"Atenção"}</span>${i.motivo?`<span class=mini>${esc(i.motivo)}</span>`:""}`;
@@ -203,17 +205,18 @@ function atualizarBarra(){
 }
 // V19.99: o que vai ao caixa — no "corrigir_valor" é o valor da venda (o atendimento vai ser corrigido).
 const valorLote=i=>Number((i.situacao==="corrigir_valor"?i.valor_pedido:i.valor_atendimento||i.valor_pedido)||0);
-function linxAcao(acao,dados,minimo=44){
+function linxAcao(acao,dados,minimo=44,prazo=180000){
   return new Promise((resolve,reject)=>{
     const v=String(document.documentElement.dataset.noromakLinx||"").split(".").map(Number);
-    if(!(v[0]>0||v[1]>=minimo)){reject(new Error(`Precisa da extensão "Cadastro de Cliente no Linx" 0.${minimo} e do Linx web aberto.`));return;}
+    if(!(v[0]>0||v[1]>=minimo)){const e=new Error(`Precisa da extensão "Cadastro de Cliente no Linx" 0.${minimo} e do Linx web aberto.`);e.antes=true;reject(e);return;}
     const id="v1943-"+Date.now()+"-"+Math.random().toString(36).slice(2);
-    const fim=setTimeout(()=>{removeEventListener("message",ouvir);reject(new Error("A extensão não respondeu. O Linx web está aberto e logado?"));},180000);
+    const fim=setTimeout(()=>{removeEventListener("message",ouvir);reject(new Error("A extensão não respondeu. O Linx web está aberto e logado?"));},prazo);
     function ouvir(ev){
       if(ev.source!==window||ev.origin!==location.origin)return;
       const m=ev.data||{};if(m.tipo!=="noromak-linx-acao-resposta"||m.id!==id)return;
       clearTimeout(fim);removeEventListener("message",ouvir);
-      m.ok?resolve(m.resultado||{}):reject(new Error(m.erro||"Falha na extensão."));
+      if(m.ok){resolve(m.resultado||{});return;}
+      const e=new Error(m.erro||"Falha na extensão.");e.codigo=m.codigo||"";reject(e);
     }
     addEventListener("message",ouvir);
     postMessage({tipo:"noromak-linx-acao",id,acao,dados},location.origin);
@@ -231,14 +234,25 @@ async function faturarUm(i){
   // V19.99: valor do atendimento com cupom/moedas (Shopee) ou centavos do kit (ML): a extensão troca o
   // preço das peças no Linx web e o servidor confere de novo — só então solta o romaneio.
   if(r.ok&&r.etapa==="preco"){
+    // Revisão 28/10: a extensão recebe só o pedido e a senha (trava) — o atendimento e os valores ela lê no
+    // servidor; sem a senha de volta, ninguém mexe no pedido por 15 min. Correção pela metade (ou sem resposta
+    // da extensão) PARA o lote: alguém confere aquele atendimento no Linx antes de seguir.
+    const trava=r.trava,atd=r.atendimento;
     RES[i.pedido]={ok:true,texto:`Corrigindo o valor no Apollo: ${brl(r.valor_atual)} → ${brl(r.valor_certo)}…`};desenhar();
     let p;
-    try{p=await linxAcao("preco-corrigir-lote",{contato:r.atendimento,valor:r.valor_certo,antes:r.valor_atual},45);}
-    catch(e){return {ok:false,texto:"Valor não corrigido: "+e.message};}
-    if(p.situacao!=="CORRIGIDO"&&p.situacao!=="JA_CORRETO")return {ok:false,texto:"Confira o valor no Linx: "+([p.erro].concat(p.divergencias||[]).filter(Boolean).join(" ")||p.situacao)};
+    try{p=await linxAcao("preco-corrigir-lote",{pedido:i.pedido,trava:r.trava},45,600000);}
+    catch(e){
+      // recusa ANTES de mexer (extensão antiga, outra tela, cancelado): libera o pedido e segue o lote
+      if(e.antes||["TELA","ORIGEM","CANCELADO"].includes(e.codigo)){await api("/api/faturamento/executar",{pedido:i.pedido,trava,liberar:true});return {ok:false,texto:"Valor não corrigido (nada foi alterado): "+e.message};}
+      PARAR=true;return {ok:false,texto:`Lote parado — a extensão não confirmou a correção do atendimento ${atd} (${e.message}). Confira no Linx.`};
+    }
+    if(p.situacao==="NAO_ALTERADO"){
+      await api("/api/faturamento/executar",{pedido:i.pedido,trava,liberar:true});
+      return {ok:false,texto:"Valor não corrigido (nada foi alterado no Linx): "+(p.erro||"")};
+    }
+    if(p.situacao!=="CORRIGIDO"&&p.situacao!=="JA_CORRETO"){PARAR=true;return {ok:false,texto:`Lote parado — correção pela metade no atendimento ${atd}. Confira no Linx: `+([p.erro].concat(p.divergencias||[]).filter(Boolean).join(" ")||p.situacao)};}
     RES[i.pedido]={ok:true,texto:"Valor corrigido. Faturando…"};desenhar();
-    r=await api("/api/faturamento/executar",{pedido:i.pedido});
-    if(r.ok&&r.etapa==="preco")return {ok:false,texto:"O Apollo ainda não mostra o valor da venda. Confira no Linx."};
+    r=await api("/api/faturamento/executar",{pedido:i.pedido,trava});
   }
   if(r.ok&&r.etapa==="condicao"){
     let c;
@@ -256,8 +270,9 @@ async function executarLote(){
   const temCond=s.some(i=>i.marketplace!=="Mercado Livre");
   const ok=await nkConfirmar(`Faturar ${s.length} pedido(s), total ${brl(tot)}?\n\nCada pedido é conferido de novo no Apollo, o romaneio sai com a observação do marketplace e o atendimento vai para o caixa.`+(temCond?"\n\nShopee/Magalu: o Linx web precisa estar aberto neste Chrome (condição de pagamento).":"")+(s.some(i=>i.situacao==="corrigir_valor")?"\n\nCorrige o valor: a extensão do Linx troca o preço das peças para o valor da venda antes do romaneio.":""));
   if(!ok)return;
-  RODANDO=true;RES={};desenhar();
+  RODANDO=true;RES={};PARAR=false;desenhar();
   for(const i of s){
+    if(PARAR){RES[i.pedido]={ok:false,texto:"Não faturado: o lote parou num pedido anterior."};continue;}
     RES[i.pedido]={ok:true,texto:"Faturando…"};desenhar();
     try{RES[i.pedido]=await faturarUm(i);}catch(e){RES[i.pedido]={ok:false,texto:e.message};}
     desenhar();
@@ -267,6 +282,16 @@ async function executarLote(){
   nkToast(`${feitos} de ${s.length} enviados ao caixa.`);
   desenhar();
 }
+// V19.99: "Já conferi no Linx — liberar" (correção de valor pela metade).
+document.getElementById("corpo").addEventListener("click",async ev=>{
+  const b=ev.target.closest("[data-liberar]");if(!b||RODANDO)return;
+  const pedido=b.dataset.liberar;
+  if(!await nkConfirmar(`Liberar o pedido ${pedido}?\n\nSó libere depois de conferir no Linx que o atendimento está com todas as peças, comprometidas, e com o valor certo. O pedido volta a ser conferido no Apollo.`))return;
+  b.disabled=true;
+  const r=await api("/api/faturamento/correcao/liberar",{pedido});
+  nkToast(r.ok?`Pedido ${pedido} liberado.`:(r.error||"Não foi possível liberar."));
+  carregar(true);
+});
 document.getElementById("filtroDia").value=hojeLocal();
 carregar();
 setInterval(()=>{if(!RODANDO&&!document.hidden)carregar();},60000);

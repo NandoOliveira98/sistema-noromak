@@ -17251,6 +17251,22 @@ def ensure_faturamento_schema() -> None:
                    conferido_em TEXT NOT NULL DEFAULT ''
                )"""
         )
+        # V19.99 (revisão 28/10): correção de valor em andamento OU pela metade. Fica até a senha voltar
+        # (corrigido / nada alterado) ou alguém conferir no Linx e liberar — nunca vence sozinha: uma
+        # correção pela metade (peça descomprometida) aparecia como "romaneio já solto" e ia ao caixa.
+        DB.execute(
+            """CREATE TABLE IF NOT EXISTS faturamento_correcao_v1999 (
+                   order_key TEXT PRIMARY KEY,
+                   pedido TEXT NOT NULL DEFAULT '',
+                   token TEXT NOT NULL DEFAULT '',
+                   usuario TEXT NOT NULL DEFAULT '',
+                   epoch REAL NOT NULL DEFAULT 0,
+                   em TEXT NOT NULL DEFAULT '',
+                   atendimento TEXT NOT NULL DEFAULT '',
+                   valor_certo REAL,
+                   valor_atual REAL
+               )"""
+        )
         DB.commit()
 
 
@@ -17318,6 +17334,15 @@ def faturamento_classificar(pedido: str, d: dict[str, Any], valor_pedido: float 
     rom = d.get("romaneio") or ({"contato": d["romaneio_fora"]} if d.get("romaneio_fora") else None)
     if rom:
         a = next((c for c in d.get("candidatos") or [] if str(c.get("atendimento")) == str(rom.get("contato"))), {})
+        # V19.99 (revisão 28/10): romaneio já solto não dispensa o valor — uma correção de preço
+        # interrompida (peça descomprometida) aparecia como "nada a soltar" e ia ao caixa errada.
+        if valor_pedido is not None and a.get("valor") is None:
+            return {"situacao": "atencao", "atendimento": str(rom.get("contato") or ""), "valor_atendimento": None,
+                    "motivo": "Romaneio já solto, mas o Apollo não informou o valor do atendimento: confira antes do caixa."}
+        if valor_pedido is not None and abs(float(valor_pedido) - float(a["valor"])) > 0.009:
+            return {"situacao": "atencao", "atendimento": str(rom.get("contato") or ""), "valor_atendimento": a.get("valor"),
+                    "motivo": f"Romaneio já solto, mas o atendimento está com R$ {float(a['valor']):.2f} e a venda é "
+                              f"R$ {float(valor_pedido):.2f}: confira no Apollo antes do caixa.".replace(".", ",")}
         return {"situacao": "pronto_caixa", "motivo": "Romaneio já solto: falta o caixa.",
                 "atendimento": str(rom.get("contato") or ""), "valor_atendimento": a.get("valor")}
     soltar = [c for c in d.get("candidatos") or [] if c.get("total_a_soltar")]
@@ -17333,6 +17358,8 @@ def faturamento_classificar(pedido: str, d: dict[str, Any], valor_pedido: float 
         return {**info, "situacao": "atencao", "motivo": "Peça do atendimento diferente do pedido."}
     if valor_pedido is None:
         return {**info, "situacao": "atencao", "motivo": "Valor da venda ainda não sincronizado."}
+    if a.get("valor") is None:   # V19.99 (revisão 28/10): valor desconhecido nunca vira zero
+        return {**info, "situacao": "atencao", "motivo": "O Apollo não informou o valor do atendimento."}
     if abs(float(valor_pedido) - float(a.get("valor") or 0)) > 0.009:
         porque = explicar(float(valor_pedido), float(a.get("valor") or 0)) if explicar else ""
         if porque:   # V19.99
@@ -19484,6 +19511,7 @@ def faturamento_payload() -> dict[str, Any]:
     pend, prazos = _faturamento_fila()
     with DB_LOCK:
         estado = {r["order_key"]: dict(r) for r in DB.execute("SELECT * FROM faturamento_v1943").fetchall()}
+        correcoes = {r["order_key"]: dict(r) for r in DB.execute("SELECT * FROM faturamento_correcao_v1999").fetchall()}
     itens = []
     for pedido, mp in pend:
         e = estado.get(normalize(pedido))
@@ -19492,6 +19520,12 @@ def faturamento_payload() -> dict[str, Any]:
             itens.append({"pedido": pedido, "marketplace": mp, "situacao": "nao_conferido", "motivo": "Ainda não conferido.",
                           "prazo": dia})
             continue
+        corr = correcoes.get(normalize(pedido))
+        if corr:   # V19.99: correção de valor em andamento ou pela metade — só sai pelo Liberar
+            em = str(corr["em"])
+            e = {**e, "situacao": "em_correcao", "motivo": f"Correção do valor em andamento ou pela metade "
+                 f"({corr['usuario']}, {em[8:10]}/{em[5:7]} {em[11:16]}): confira o atendimento "
+                 f"{corr['atendimento']} no Linx e clique em Liberar."}
         itens.append({"pedido": pedido, "marketplace": mp, "situacao": e["situacao"], "motivo": e["motivo"], "prazo": dia,
                       "cliente": e["cliente"], "nome": e["nome"], "atendimento": e["atendimento"],
                       "valor_pedido": e["valor_pedido"], "valor_atendimento": e["valor_atendimento"],
@@ -19499,19 +19533,80 @@ def faturamento_payload() -> dict[str, Any]:
     return {"ok": True, "itens": itens, "observacoes": FATURAMENTO_OBS}
 
 
-def faturamento_executar(pedido: str, usuario: str, condicao_ok: bool = False) -> dict[str, Any]:
+# V19.99 (revisão 28/10): uma correção de preço por pedido. Duas abas/PCs (ou o lote refeito depois
+# que a tela desistiu de esperar) corrigiam o mesmo atendimento juntas: peça excluída/inserida duas
+# vezes. Quem recebe a etapa "preco" leva uma senha (`trava`) de uso único; sem ela, ninguém mexe no
+# pedido até a senha voltar (corrigido / nada alterado) ou alguém conferir no Linx e LIBERAR
+# (faturamento_correcao_liberar) — a reserva fica no banco e não vence sozinha. A extensão lê o
+# atendimento e os valores AQUI pela senha (faturamento_correcao), nunca os números da página.
+def _faturamento_correcao_ler(chave: str) -> dict[str, Any] | None:
+    with DB_LOCK:
+        row = DB.execute("SELECT * FROM faturamento_correcao_v1999 WHERE order_key=?", (chave,)).fetchone()
+    return dict(row) if row else None
+
+
+def faturamento_correcao(pedido: str, trava: str) -> dict[str, Any]:
+    """Para a extensão: o que corrigir, só com a senha da reserva."""
+    r = _faturamento_correcao_ler(normalize(pedido))
+    if not r or not trava or not secrets.compare_digest(str(r["token"]), str(trava)):
+        return {"ok": False, "error": "Nenhuma correção de valor liberada para este pedido."}
+    return {"ok": True, "pedido": r["pedido"], "atendimento": r["atendimento"], "valor_certo": r["valor_certo"],
+            "valor_atual": r["valor_atual"]}
+
+
+def faturamento_correcao_liberar(pedido: str, usuario: str) -> dict[str, Any]:
+    """Alguém conferiu o atendimento no Linx: o pedido volta à fila (a próxima conferência decide)."""
+    chave = normalize(pedido)
+    with DB_LOCK:
+        cur = DB.execute("DELETE FROM faturamento_correcao_v1999 WHERE order_key=?", (chave,))
+        DB.commit()
+    if not cur.rowcount:
+        return {"ok": False, "error": "Este pedido não tem correção de valor pendente."}
+    audit(usuario or "?", "faturamento.correcao_liberar", json.dumps({"pedido": pedido}))
+    return {"ok": True}
+
+
+def faturamento_executar(pedido: str, usuario: str, condicao_ok: bool = False, trava: str = "",
+                         liberar: bool = False) -> dict[str, Any]:
     """Um pedido do lote: confere DE NOVO, solta o romaneio e envia ao caixa. Shopee/Magalu
     param em "condicao" (a troca da condição de pagamento só existe pelo Linx web, na
     extensão do Chrome de quem clicou) e voltam com condicao_ok=True para o caixa."""
     pedido = str(pedido or "").strip()
-    mp = next((m for p, m in _faturamento_pendentes() if normalize(p) == normalize(pedido)), "")
+    chave = normalize(pedido)
+    trava = str(trava or "")
+    with DB_LOCK:
+        row = DB.execute("SELECT token, usuario, em FROM faturamento_correcao_v1999 WHERE order_key=?", (chave,)).fetchone()
+        dono = bool(row and trava and secrets.compare_digest(str(row["token"]), trava))
+        if row and not dono:
+            return {"ok": False, "etapa": "preco", "error": f"Correção do valor em andamento ou pela metade "
+                    f"({row['usuario']}, {str(row['em'])[11:16]}). Confira o atendimento no Linx e use Liberar."}
+        if dono:
+            DB.execute("DELETE FROM faturamento_correcao_v1999 WHERE order_key=?", (chave,))
+            DB.commit()
+    if liberar:
+        return {"ok": False, "etapa": "preco", "error": "Correção do valor não feita."}
+    mp = next((m for p, m in _faturamento_pendentes() if normalize(p) == chave), "")
     if not mp:
         return {"ok": False, "etapa": "conferencia", "error": "Pedido não está mais na fila."}
     c = faturamento_conferir(pedido, mp)
     if c["situacao"] == "corrigir_valor":
         # V19.99: a tela pede à extensão (Linx web) para trocar o preço e chama de novo — a próxima
         # conferência é que libera o romaneio (nunca confia que a correção deu certo).
-        return {"ok": True, "etapa": "preco", "atendimento": c["atendimento"], "marketplace": mp,
+        if dono:   # acabou de corrigir e o Apollo ainda não mostra: não pede outra correção
+            return {"ok": False, "etapa": "preco", "error": f"Depois da correção o Apollo ainda mostra "
+                    f"R$ {float(c.get('valor_atendimento') or 0):.2f} (venda R$ {float(c.get('valor_certo') or 0):.2f}). "
+                    f"Confira no Linx.".replace(".", ",")}
+        token = secrets.token_urlsafe(16)
+        with DB_LOCK:
+            cur = DB.execute(
+                "INSERT OR IGNORE INTO faturamento_correcao_v1999(order_key,pedido,token,usuario,epoch,em,atendimento,"
+                "valor_certo,valor_atual) VALUES(?,?,?,?,?,?,?,?,?)",
+                (chave, pedido, token, usuario or "?", time.time(), now_iso(), c["atendimento"], c.get("valor_certo"),
+                 c.get("valor_atendimento")))
+            DB.commit()
+        if not cur.rowcount:   # outra aba reservou no meio da conferência
+            return {"ok": False, "etapa": "preco", "error": "Correção do valor em andamento. Aguarde."}
+        return {"ok": True, "etapa": "preco", "atendimento": c["atendimento"], "marketplace": mp, "trava": token,
                 "valor_certo": c.get("valor_certo"), "valor_atual": c.get("valor_atendimento")}
     if c["situacao"] not in ("pronto", "pronto_caixa"):
         return {"ok": False, "etapa": "conferencia", "situacao": c["situacao"], "error": c.get("motivo") or "Não está pronto."}
@@ -35153,6 +35248,15 @@ class AppHandler(BaseHTTPRequestHandler):
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
+        if path == "/api/faturamento/correcao":
+            # V19.99 (revisão 28/10): a extensão Linx lê aqui o que corrigir (atendimento e valores),
+            # só com a senha da reserva — nunca os números que a página mandou.
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            q = parse_qs(urlparse(self.path).query)
+            self.send_json(faturamento_correcao(str((q.get("pedido") or [""])[0]), str((q.get("trava") or [""])[0])))
+            return
         if path == "/api/faturamento":
             # V19.43: fila de faturamento (Admin e Supervisor).
             ctx = self.auth(admin_only=True)
@@ -35499,6 +35603,15 @@ class AppHandler(BaseHTTPRequestHandler):
             body = self.read_json()
             self.send_json(cadastro_full_ligar(body.get("ligado") is True, str(ctx.get("username") or "")))
             return
+        if path == "/api/faturamento/correcao/liberar":
+            # V19.99 (revisão 28/10): conferiu o atendimento no Linx — o pedido volta à fila (Admin e Supervisor).
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            body = self.read_json()
+            r = faturamento_correcao_liberar(str(body.get("pedido") or ""), str(ctx.get("username") or ""))
+            self.send_json(r, 200 if r.get("ok") else 404)
+            return
         if path in ("/api/faturamento/conferir", "/api/faturamento/executar"):
             # V19.43: conferir um pedido agora / executar um pedido do lote (Admin e Supervisor).
             ctx = self.auth(admin_only=True)
@@ -35513,7 +35626,9 @@ class AppHandler(BaseHTTPRequestHandler):
                         {"ok": False, "error": "Pedido não está na fila."}
                 else:
                     resultado = faturamento_executar(pedido, str(ctx.get("username") or ""),
-                                                     condicao_ok=body.get("condicao_ok") is True)
+                                                     condicao_ok=body.get("condicao_ok") is True,
+                                                     trava=str(body.get("trava") or ""),        # V19.99
+                                                     liberar=body.get("liberar") is True)
                 self.send_json(resultado, 200 if resultado.get("ok") else 409)
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
