@@ -134,14 +134,15 @@ class Base(TesteNoromak):
 class Renovacao(Base):
 
     def test_taxa_pela_faixa_do_precificador(self):
-        self.assertEqual(S.shopee_taxas_por_preco(79.99), (0.20, 4.5))
-        self.assertEqual(S.shopee_taxas_por_preco(80.0), (0.14, 16.0))
-        self.assertEqual(S.shopee_taxas_por_preco(150.0), (0.14, 20.0))
-        self.assertEqual(S.shopee_taxas_por_preco(250.0), (0.14, 26.0))
-        self.assertEqual(S.shopee_taxas_por_preco(600.0), (0.14, 26.0))
+        # V19.98: comissão da faixa + 3,5% de taxa de serviço adicional
+        self.assertEqual(S.shopee_taxas_por_preco(79.99), (0.235, 4.5))
+        self.assertEqual(S.shopee_taxas_por_preco(80.0), (0.175, 16.0))
+        self.assertEqual(S.shopee_taxas_por_preco(150.0), (0.175, 20.0))
+        self.assertEqual(S.shopee_taxas_por_preco(250.0), (0.175, 26.0))
+        self.assertEqual(S.shopee_taxas_por_preco(600.0), (0.175, 26.0))
         c = S.shopee_promo_conta(PROD, 85.0)
-        # 85 − 11,90 − 16 − 10,20 − 40 = 6,90 (8,1%: abaixo da mínima de 10%)
-        self.assertEqual(c["lucro"], 6.9)
+        # 85 − 14,875 − 16 − 10,20 − 40 = 3,92 (4,6%: abaixo da mínima de 10%)
+        self.assertEqual(c["lucro"], 3.92)
 
     def test_vencendo_no_automatico_cria_a_proxima_comecando_no_fim_da_atual(self):
         fim = AGORA + 2 * DIA
@@ -287,8 +288,10 @@ class Gaveta(Base):
                               "comissao": 0.12, "taxa_fixa": 0.0, "margem_alvo": 0.2}}
         c = S._shopee_promo_calculo({"sku": "26330445", "preco_original": 53.90, "preco": None}, "", prods,
                                     {"26330445": 0.0}, S.shopee_promo_config())
-        self.assertEqual((c["preco_minimo"], c["preco_margem_min"], c["sugestao"]), (37.45, 43.9, 48.51))
-        self.assertEqual((c["lucro_anuncio"], c["lucro_sugestao"]), (11.19, 7.53))
+        # V19.98: com o adicional de 3,5% (era 37,45 / 43,90 e lucro 11,19 / 7,53)
+        # mínimo = (20,96 + 4,50) ÷ 0,645; 10% = (20,96 + 4,50) ÷ 0,545
+        self.assertEqual((c["preco_minimo"], c["preco_margem_min"], c["sugestao"]), (39.48, 46.72, 48.51))
+        self.assertEqual((c["lucro_anuncio"], c["lucro_sugestao"]), (9.31, 5.83))
 
     def test_sem_custo_nao_vira_zero(self):
         self.assertIsNone(S._shopee_promo_calculo({"sku": "NAOEXISTE", "preco_original": 50.0}, "", {}, {},

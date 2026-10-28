@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.97-RELATORIO-DEVOLUCOES"
+APP_VERSION = "19.99-FATURAMENTO-CORRIGE-VALOR"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -17271,7 +17271,41 @@ def _exp_valor_pedido(pedido: str) -> float | None:
     return round(total, 2) if total is not None else None
 
 
-def faturamento_classificar(pedido: str, d: dict[str, Any], valor_pedido: float | None) -> dict[str, Any]:
+# V19.99 (decisões do dono, 28/10): o atendimento que a integração cria no Apollo vem com outro valor.
+# Shopee: o que o comprador pagou (preço − cupom da loja − cupom da Shopee − moedas); o certo é a venda
+# (preço da unidade × qtd). ML: centavos a mais no kit. Só manda corrigir (situação "corrigir_valor",
+# a extensão Linx Cliente troca o preço no Linx web) quando a diferença tem explicação; senão barra.
+FATURAMENTO_TOLERANCIA_SHOPEE = 0.05
+FATURAMENTO_TOLERANCIA_ML = 0.10
+
+
+def _faturamento_diferenca_explicada(pedido: str, marketplace: str, valor_pedido: float, valor_atendimento: float) -> str:
+    """Pura no banco: o porquê da diferença ("" = sem explicação, continua barrando)."""
+    dif = round(float(valor_pedido) - float(valor_atendimento), 2)
+    if _vendas_marketplace(marketplace) == "Shopee":
+        with DB_LOCK:
+            row = DB.execute("SELECT order_income_json FROM shopee_escrow_v1810 WHERE order_sn=?",
+                             (str(pedido or "").strip(),)).fetchone()
+        try:
+            inc = json.loads(row["order_income_json"]) if row and row["order_income_json"] else {}
+        except Exception:
+            inc = {}
+        if not isinstance(inc, dict):
+            return ""
+        partes = [("cupom da loja", inc.get("voucher_from_seller")), ("cupom da Shopee", inc.get("voucher_from_shopee")),
+                  ("moedas", inc.get("coins"))]
+        partes = [(t, round(float(v), 2)) for t, v in partes if isinstance(v, (int, float)) and float(v) > 0]
+        desconto = round(sum(v for _, v in partes), 2)
+        if desconto > 0 and abs(dif - desconto) <= FATURAMENTO_TOLERANCIA_SHOPEE + 1e-9:
+            return " + ".join(f"{t} R$ {v:.2f}".replace(".", ",") for t, v in partes)
+        return ""
+    if _vendas_marketplace(marketplace) == "Mercado Livre" and 0 < abs(dif) <= FATURAMENTO_TOLERANCIA_ML + 1e-9:
+        return "arredondamento do kit"
+    return ""
+
+
+def faturamento_classificar(pedido: str, d: dict[str, Any], valor_pedido: float | None,
+                            explicar: Any = None) -> dict[str, Any]:
     """Pura: a resposta do exp_romaneio_preparar + valor da venda → situação na fila."""
     base = {"atendimento": "", "valor_atendimento": None}
     if d.get("caixa"):
@@ -17300,6 +17334,10 @@ def faturamento_classificar(pedido: str, d: dict[str, Any], valor_pedido: float 
     if valor_pedido is None:
         return {**info, "situacao": "atencao", "motivo": "Valor da venda ainda não sincronizado."}
     if abs(float(valor_pedido) - float(a.get("valor") or 0)) > 0.009:
+        porque = explicar(float(valor_pedido), float(a.get("valor") or 0)) if explicar else ""
+        if porque:   # V19.99
+            return {**info, "situacao": "corrigir_valor", "valor_certo": round(float(valor_pedido), 2),
+                    "motivo": f"Corrigir no Apollo: R$ {float(a.get('valor') or 0):.2f} → R$ {float(valor_pedido):.2f} ({porque})".replace(".", ",")}
         return {**info, "situacao": "atencao",
                 "motivo": f"Valor diferente: venda R$ {valor_pedido:.2f} × atendimento R$ {float(a.get('valor') or 0):.2f}".replace(".", ",")}
     return {**info, "situacao": "pronto", "motivo": ""}
@@ -17319,7 +17357,9 @@ def faturamento_conferir(pedido: str, marketplace: str = "", agora: float | None
         d = {}
     else:
         d = exp_romaneio_preparar(pedido)
-        res = faturamento_classificar(pedido, d, valor)
+        mp_explicar = marketplace or d.get("marketplace") or ""
+        res = faturamento_classificar(pedido, d, valor, explicar=lambda v, a: _faturamento_diferenca_explicada(
+            pedido, mp_explicar, v, a))
     cliente = str(((d.get("cliente") or {}).get("codigo")) or estado_cad.get("cliente") or conhecido["codigo"] or "")
     nome = str(conhecido["nome_fiscal"] or ((d.get("cliente") or {}).get("nome_apollo")) or "")
     with DB_LOCK:
@@ -19468,6 +19508,11 @@ def faturamento_executar(pedido: str, usuario: str, condicao_ok: bool = False) -
     if not mp:
         return {"ok": False, "etapa": "conferencia", "error": "Pedido não está mais na fila."}
     c = faturamento_conferir(pedido, mp)
+    if c["situacao"] == "corrigir_valor":
+        # V19.99: a tela pede à extensão (Linx web) para trocar o preço e chama de novo — a próxima
+        # conferência é que libera o romaneio (nunca confia que a correção deu certo).
+        return {"ok": True, "etapa": "preco", "atendimento": c["atendimento"], "marketplace": mp,
+                "valor_certo": c.get("valor_certo"), "valor_atual": c.get("valor_atendimento")}
     if c["situacao"] not in ("pronto", "pronto_caixa"):
         return {"ok": False, "etapa": "conferencia", "situacao": c["situacao"], "error": c.get("motivo") or "Não está pronto."}
     if c["situacao"] == "pronto":
@@ -29781,8 +29826,12 @@ _SHOPEE_PROMO_ESTADO: dict[str, Any] = {"rodando": False, "inicio": "", "fim": "
 # Mesma tabela do Precificador (APP/precificador.html, SHOPEE_BANDS): comissão e taxa fixa
 # pela faixa do PREÇO DE VENDA (o da promoção).
 # V19.50: tabela atual da Shopee (print do dono, 16/10): até 79,99 = 20% + R$ 4,50; acima = 14% + R$ 16/20/26.
-SHOPEE_FAIXAS_TAXA = ((0.0, 80.0, 0.20, 4.5), (80.0, 100.0, 0.14, 16.0),
-                      (100.0, 200.0, 0.14, 20.0), (200.0, float("inf"), 0.14, 26.0))
+# V19.98: + "Taxa de serviço adicional" de 3,5% do preço em toda faixa (prints do dono, 28/10: 5 de
+# 6 pedidos; decisão do dono: 3,5% fixo), somada à comissão. Também na gaveta (promocoes-auto.html).
+SHOPEE_TAXA_ADICIONAL = 0.035
+SHOPEE_FAIXAS_TAXA = tuple((ini, fim, round(comissao + SHOPEE_TAXA_ADICIONAL, 4), fixa) for ini, fim, comissao, fixa in (
+    (0.0, 80.0, 0.20, 4.5), (80.0, 100.0, 0.14, 16.0),
+    (100.0, 200.0, 0.14, 20.0), (200.0, float("inf"), 0.14, 26.0)))
 SHOPEE_PROMO_CAMPANHA = ("campaign", "campanha", "flash", "promotion conflict", "overlap",
                          "already in", "other promotion", "conflict")
 

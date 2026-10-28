@@ -1319,12 +1319,16 @@ html[data-tema="escuro"] [style*="color: #b45309" i]{color:#EDB082!important}
     (function (root) {
       "use strict";
 
+      // V19.98: "Taxa de serviço adicional" da Shopee, 3,5% do preço em toda faixa (prints do dono,
+      // 28/10: 5 de 6 pedidos; decisão do dono: 3,5% fixo). Entra somada à comissão da faixa.
+      var SHOPEE_TAXA_ADICIONAL = 0.035;
       var SHOPEE_BANDS = [
-        // V19.50: tabela atual da Shopee (16/10). A mesma está no servidor (SHOPEE_FAIXAS_TAXA).
-        { min: 0, max: 80, commission: 0.20, fixed: 4.5, label: "Até R$ 79,99" },
-        { min: 80, max: 100, commission: 0.14, fixed: 16, label: "R$ 80,00 a R$ 99,99" },
-        { min: 100, max: 200, commission: 0.14, fixed: 20, label: "R$ 100,00 a R$ 199,99" },
-        { min: 200, max: Infinity, commission: 0.14, fixed: 26, label: "A partir de R$ 200,00" }
+        // V19.50: tabela atual da Shopee (16/10). A mesma está no servidor (SHOPEE_FAIXAS_TAXA)
+        // e na gaveta das Promoções automáticas (promocoes-auto.html, FAIXAS).
+        { min: 0, max: 80, commission: 0.20 + SHOPEE_TAXA_ADICIONAL, fixed: 4.5, label: "Até R$ 79,99" },
+        { min: 80, max: 100, commission: 0.14 + SHOPEE_TAXA_ADICIONAL, fixed: 16, label: "R$ 80,00 a R$ 99,99" },
+        { min: 100, max: 200, commission: 0.14 + SHOPEE_TAXA_ADICIONAL, fixed: 20, label: "R$ 100,00 a R$ 199,99" },
+        { min: 200, max: Infinity, commission: 0.14 + SHOPEE_TAXA_ADICIONAL, fixed: 26, label: "A partir de R$ 200,00" }
       ];
 
       function finiteNumber(value, fallback) {

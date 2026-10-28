@@ -1314,7 +1314,8 @@ function paginacao(total,paginas,ini,qtd){
 // V19.51: gaveta lateral da Shopee, igual à do ML: preço grande, régua mínimo/ideal, atalhos, margem e
 // lucro, custo e taxas. A conta (custo, taxa da faixa, frete, imposto) vem pronta do servidor; enquanto
 // digita, a mesma tabela de faixas do servidor (SHOPEE_FAIXAS_TAXA) refaz a margem na hora.
-const FAIXAS=[[0,80,0.20,4.5],[80,100,0.14,16],[100,200,0.14,20],[200,Infinity,0.14,26]];
+// V19.98: comissão já com a taxa de serviço adicional de 3,5% (20% + 3,5%; 14% + 3,5%).
+const FAIXAS=[[0,80,0.235,4.5],[80,100,0.175,16],[100,200,0.175,20],[200,Infinity,0.175,26]];
 const faixa=p=>FAIXAS.find(x=>Math.round(p*100)/100>=x[0]&&Math.round(p*100)/100<x[1])||FAIXAS[3];
 const taxaDe=(c,p)=>c&&c.comissao!=null?[0,Infinity,c.comissao,c.taxa_fixa||0]:faixa(p);   // V19.55: Magalu = taxa fixa do Precificador
 function contaLocal(c,preco){const f=taxaDe(c,preco);
@@ -1364,7 +1365,7 @@ function taxas(){
   const cel=(r,val)=>`<div><label>${r}</label><input value="${val}" disabled></div>`;
   $('sgTaxas').innerHTML=cel(c.kit?'Custo do kit (componentes)':'Custo (R$)',fmt2(c.custo))+cel('Imposto (%)',fmt2(c.imposto*100))+
     cel(`Comissão ${NOME()} (%)`,fmt2(f[2]*100))+cel('Taxa fixa (R$)',fmt2(f[3]))+cel(`Frete ${NOME()} (R$)`,fmt2(c.frete))+cel('Margem desejada (%)',fmt2((c.margem_alvo||0)*100));
-  $('sgTaxasNota').textContent=(mp==='magalu'?'Comissão, taxa fixa e frete da Magalu vêm do Precificador (aba Magalu do produto).':'Comissão e taxa fixa pela faixa do preço da promoção (tabela da Shopee).')+` Custo, imposto, frete e margem vêm do Precificador (SKU ${c.sku}); para mudar, altere lá.`;
+  $('sgTaxasNota').textContent=(mp==='magalu'?'Comissão, taxa fixa e frete da Magalu vêm do Precificador (aba Magalu do produto).':'Comissão e taxa fixa pela faixa do preço da promoção (tabela da Shopee); a comissão inclui a taxa de serviço adicional de 3,5%.')+` Custo, imposto, frete e margem vêm do Precificador (SKU ${c.sku}); para mudar, altere lá.`;
   $('sgLink').href='/expedicao/precificador?sku='+encodeURIComponent(c.sku);
 }
 function sgFaixa(){

@@ -115,6 +115,7 @@ html[data-tema="escuro"] .mp.ml{background:#3A3010;color:#F5D46A}html[data-tema=
         <li><b>Pronto</b> = cadastro feito, crédito liberado e um atendimento só no Apollo, com as peças do pedido e o valor <b>igual</b> ao da venda.</li>
         <li>No lote, cada pedido é conferido de novo na hora; o romaneio sai com a observação do marketplace e o atendimento vai para o caixa.</li>
         <li>Shopee e Magalu trocam a condição de pagamento pela extensão do Linx: deixe o Linx web aberto neste Chrome.</li>
+        <li><b>Corrige o valor</b> (V19.99): o Apollo puxou o valor com cupom/moedas da Shopee (ou centavos a mais no kit do ML). No lote, a extensão do Linx troca o preço das peças para o valor da venda e o pedido é conferido de novo antes do romaneio. Diferença sem explicação continua em Atenção.</li>
         <li>O filtro do dia usa o prazo de despacho; "Hoje" inclui os atrasados. Pedido sem prazo (Shopee) aparece em qualquer data.</li>
       </ul>
     </details>
@@ -125,7 +126,8 @@ const ABAS=[["pronto","Prontos para faturar","ok","nk-i-check"],["atencao","Prec
 let ITENS=[],ABA="pronto",RES={},RODANDO=false;
 const esc=v=>String(v??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const brl=v=>v==null||v===""?"—":Number(v).toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
-const grupo=s=>s==="pronto"||s==="pronto_caixa"?"pronto":s==="feito"?"feito":s==="aguardando_cadastro"||s==="nao_conferido"?"aguardando":"atencao";
+// V19.99: "corrigir_valor" sai no lote (a extensão corrige o preço no Linx web antes do romaneio).
+const grupo=s=>s==="pronto"||s==="pronto_caixa"||s==="corrigir_valor"?"pronto":s==="feito"?"feito":s==="aguardando_cadastro"||s==="nao_conferido"?"aguardando":"atencao";
 async function api(url,corpo){
   const r=await fetch("/expedicao"+url,corpo?{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(corpo),credentials:"same-origin"}:{credentials:"same-origin"});
   let d={};try{d=await r.json();}catch(_){}
@@ -152,6 +154,7 @@ function situacao(i,sel){
   if(r)return `<span class="${r.ok?"res-ok":"res-erro"}">${esc(r.texto)}</span>`;
   if(i.situacao==="pronto_caixa")return `<span class="nk-selo info">Falta o caixa</span><span class=mini>Romaneio já solto no Apollo.</span>`;
   if(i.situacao==="feito")return `<span class="nk-selo ok">Enviado ao caixa</span>${i.motivo?`<span class=mini>${esc(i.motivo)}</span>`:""}`;
+  if(i.situacao==="corrigir_valor")return `<span class="nk-selo warn">Corrige o valor</span>${i.motivo?`<span class=mini>${esc(i.motivo)}</span>`:""}`;
   if(sel)return `<span class="nk-selo ok">Pronto</span>`;
   const g=grupo(i.situacao);
   return `<span class="nk-selo ${g==="aguardando"?"warn":"bad"}">${g==="aguardando"?"Aguardando":"Atenção"}</span>${i.motivo?`<span class=mini>${esc(i.motivo)}</span>`:""}`;
@@ -165,7 +168,7 @@ function desenhar(){
   const f=document.getElementById("filtroDia").value;
   document.getElementById("segHoje").classList.toggle("on",f===hojeLocal());
   document.getElementById("segTodas").classList.toggle("on",!f);
-  const cont={},soma={};doDia().forEach(i=>{const g=grupo(i.situacao);cont[g]=(cont[g]||0)+1;soma[g]=(soma[g]||0)+Number(i.valor_atendimento||i.valor_pedido||0);});
+  const cont={},soma={};doDia().forEach(i=>{const g=grupo(i.situacao);cont[g]=(cont[g]||0)+1;soma[g]=(soma[g]||0)+valorLote(i);});
   document.getElementById("abas").innerHTML=ABAS.map(([k,t,cls,ic])=>`<button type="button" class="nk-kpi${k===ABA?" on":""}" aria-pressed="${k===ABA}" onclick="ABA='${k}';desenhar()"><span class="nk-kpi-ic ${cls}"><i class="${ic}"></i></span><span><b>${cont[k]||0}</b><small>${t}</small>${k==="pronto"&&cont[k]?`<span class=valor>${brl(soma[k])}</span>`:""}</span></button>`).join("");
   const lista=doDia().filter(i=>grupo(i.situacao)===ABA);
   const sel=ABA==="pronto";
@@ -189,7 +192,7 @@ function desenhar(){
 function selecionados(){return [...document.querySelectorAll("input.sel:checked")].map(e=>ITENS.find(i=>i.pedido===e.value)).filter(Boolean);}
 function marcarTodos(v){document.querySelectorAll("input.sel").forEach(e=>e.checked=v);atualizarBarra();}
 function atualizarBarra(){
-  const s=selecionados(),tot=s.reduce((a,i)=>a+Number(i.valor_atendimento||0),0);
+  const s=selecionados(),tot=s.reduce((a,i)=>a+valorLote(i),0);
   document.querySelectorAll("input.sel").forEach(e=>e.closest("tr").classList.toggle("marcado",e.checked));
   const todos=document.getElementById("todos"),n=document.querySelectorAll("input.sel").length;
   if(todos){todos.checked=n>0&&s.length===n;todos.indeterminate=s.length>0&&s.length<n;}
@@ -198,10 +201,12 @@ function atualizarBarra(){
   b.innerHTML=`<i class=nk-i-check></i> ${s.length?`Faturar ${s.length} pedido(s)`:"Faturar selecionados"}`;
   document.getElementById("resumo").innerHTML=RODANDO?"":s.length?`<b>${s.length}</b> selecionado(s) · <b>${brl(tot)}</b>`:"Marque os pedidos para faturar";
 }
-function linxAcao(acao,dados){
+// V19.99: o que vai ao caixa — no "corrigir_valor" é o valor da venda (o atendimento vai ser corrigido).
+const valorLote=i=>Number((i.situacao==="corrigir_valor"?i.valor_pedido:i.valor_atendimento||i.valor_pedido)||0);
+function linxAcao(acao,dados,minimo=44){
   return new Promise((resolve,reject)=>{
     const v=String(document.documentElement.dataset.noromakLinx||"").split(".").map(Number);
-    if(!(v[0]>0||v[1]>=44)){reject(new Error('Precisa da extensão "Cadastro de Cliente no Linx" 0.44 e do Linx web aberto.'));return;}
+    if(!(v[0]>0||v[1]>=minimo)){reject(new Error(`Precisa da extensão "Cadastro de Cliente no Linx" 0.${minimo} e do Linx web aberto.`));return;}
     const id="v1943-"+Date.now()+"-"+Math.random().toString(36).slice(2);
     const fim=setTimeout(()=>{removeEventListener("message",ouvir);reject(new Error("A extensão não respondeu. O Linx web está aberto e logado?"));},180000);
     function ouvir(ev){
@@ -223,6 +228,18 @@ async function faturarUm(i){
     RES[i.pedido]={ok:true,texto:"Faturando…"};desenhar();
     r=await api("/api/faturamento/executar",{pedido:i.pedido});
   }
+  // V19.99: valor do atendimento com cupom/moedas (Shopee) ou centavos do kit (ML): a extensão troca o
+  // preço das peças no Linx web e o servidor confere de novo — só então solta o romaneio.
+  if(r.ok&&r.etapa==="preco"){
+    RES[i.pedido]={ok:true,texto:`Corrigindo o valor no Apollo: ${brl(r.valor_atual)} → ${brl(r.valor_certo)}…`};desenhar();
+    let p;
+    try{p=await linxAcao("preco-corrigir-lote",{contato:r.atendimento,valor:r.valor_certo,antes:r.valor_atual},45);}
+    catch(e){return {ok:false,texto:"Valor não corrigido: "+e.message};}
+    if(p.situacao!=="CORRIGIDO"&&p.situacao!=="JA_CORRETO")return {ok:false,texto:"Confira o valor no Linx: "+([p.erro].concat(p.divergencias||[]).filter(Boolean).join(" ")||p.situacao)};
+    RES[i.pedido]={ok:true,texto:"Valor corrigido. Faturando…"};desenhar();
+    r=await api("/api/faturamento/executar",{pedido:i.pedido});
+    if(r.ok&&r.etapa==="preco")return {ok:false,texto:"O Apollo ainda não mostra o valor da venda. Confira no Linx."};
+  }
   if(r.ok&&r.etapa==="condicao"){
     let c;
     try{c=await linxAcao("condicao-definir-lote",{contato:r.atendimento,marketplace:r.marketplace});}
@@ -235,9 +252,9 @@ async function faturarUm(i){
 }
 async function executarLote(){
   const s=selecionados();if(!s.length)return;
-  const tot=s.reduce((a,i)=>a+Number(i.valor_atendimento||0),0);
+  const tot=s.reduce((a,i)=>a+valorLote(i),0);
   const temCond=s.some(i=>i.marketplace!=="Mercado Livre");
-  const ok=await nkConfirmar(`Faturar ${s.length} pedido(s), total ${brl(tot)}?\n\nCada pedido é conferido de novo no Apollo, o romaneio sai com a observação do marketplace e o atendimento vai para o caixa.`+(temCond?"\n\nShopee/Magalu: o Linx web precisa estar aberto neste Chrome (condição de pagamento).":""));
+  const ok=await nkConfirmar(`Faturar ${s.length} pedido(s), total ${brl(tot)}?\n\nCada pedido é conferido de novo no Apollo, o romaneio sai com a observação do marketplace e o atendimento vai para o caixa.`+(temCond?"\n\nShopee/Magalu: o Linx web precisa estar aberto neste Chrome (condição de pagamento).":"")+(s.some(i=>i.situacao==="corrigir_valor")?"\n\nCorrige o valor: a extensão do Linx troca o preço das peças para o valor da venda antes do romaneio.":""));
   if(!ok)return;
   RODANDO=true;RES={};desenhar();
   for(const i of s){

@@ -989,7 +989,7 @@ anúncios que vencem no mesmo horário vão para **uma promoção só** ("Noroma
 criamos com o mesmo início, `shopee_promo_criada_v1949`). Regras = as do ML (margem mínima, duração, estoque); **modo
 e limite do dia próprios** (`modo_renovacao@shopee`/`limite_dia@shopee` em `promo_auto_config_v1873`, lidos por
 `promo_auto_config("shopee")`), começa em Simulação, Automático exige OWNER. Margem pela tabela de faixas do
-Precificador copiada para o servidor (`SHOPEE_FAIXAS_TAXA` = `SHOPEE_BANDS`) — **V19.50:** tabela atual da Shopee (16/10): até R$ 79,99 = 20% + R$ 4,50; R$ 80–99,99 = 14% + R$ 16; R$ 100–199,99 = 14% + R$ 20; ≥ R$ 200 = 14% + R$ 26 (mudou a Shopee: trocar nos DOIS lugares), frete Shopee do Precificador, imposto e
+Precificador copiada para o servidor (`SHOPEE_FAIXAS_TAXA` = `SHOPEE_BANDS`) — **V19.50:** tabela atual da Shopee (16/10): até R$ 79,99 = 20% + R$ 4,50; R$ 80–99,99 = 14% + R$ 16; R$ 100–199,99 = 14% + R$ 20; ≥ R$ 200 = 14% + R$ 26 (mudou a Shopee: trocar nos TRÊS lugares — Precificador, servidor e `FAIXAS` da gaveta em `promocoes-auto.html`; `TESTES/test_shopee_taxa_adicional_v1998.py` prende os três). **V19.98:** + "Taxa de serviço adicional" de **3,5%** do preço em toda faixa (`SHOPEE_TAXA_ADICIONAL`, somada à comissão: 23,5% / 17,5%), conferida centavo a centavo em 5 pedidos de 28/10 (a Water Off pagou 5%; dono: 3,5% fixo). Os 20% da Shopee aparecem como comissão 18,6% + transação 1,4%; os R$ 4,50 são por unidade e a faixa é pelo preço unitário; cupom da loja reduz a base, frete Shopee do Precificador, imposto e
 custo pela regra do ML (`_promo_produtos`/`_promo_produto`, sem o vínculo MLB↔SKU). **Nunca** altera nem encerra
 promoção que não criou; anúncio com promoção **agendada** não ganha outra por cima. **Variação a variação**
 (`shopee_promo_modelo_v1949`, model_id "0" = sem variação): entram as que estavam na promoção, cada uma com o seu preço
@@ -1153,6 +1153,19 @@ soma de `amount` em `vendas_v1799`/`vendas_conta_v1898`; sem venda = atenção, 
 solta o romaneio com a observação do marketplace e envia ao caixa; Shopee/Magalu param em `etapa: condicao` e a tela
 troca a condição pela extensão Linx 0.44 (`condicao-definir-lote`, sem confirmação por pedido) antes de reenviar com
 `condicao_ok`. Etiquetas/TXT e Histórico saíram do menu (botões no "Importar pedidos"); Relatório ML/Shopee removidos.
+**V19.99 — corrigir o valor do atendimento** (decisões do dono, 28/10). A integração Shopee → Apollo grava o que o
+comprador pagou (preço − cupom da loja − cupom da Shopee − moedas; conferido em 9 pedidos); o valor certo da nota é
+o **preço da unidade × qtd** (a venda, que o Noromak já compara). No ML o kit sai com centavos a mais (132,93 × 132,90).
+`_faturamento_diferenca_explicada`: Shopee = diferença igual a cupons + moedas do escrow (`shopee_escrow_v1810`,
+± R$ 0,05; sem escrow = atenção); ML = até R$ 0,10. Explicada → situação `corrigir_valor` (aba Prontos, selo "Corrige
+o valor"); sem explicação continua "Valor diferente". O `executar` para em `etapa: preco` **sem soltar nada**; a tela
+chama a extensão Linx **0.45** (`preco-corrigir-lote` → `corrigirValorAtendimento`: relê o atendimento, recusa se não
+está mais com o valor que o servidor viu, divide o valor da venda pelas peças na proporção do Apollo —
+`dividirValorAtendimento`, centavo que sobra na peça de qtd 1 — e usa a correção do popup 0.28, que exclui e reinsere
+o item com o preço certo no Linx web; gera "venda perdida" no Linx, como a correção à mão). Depois chama `executar` de
+novo: a nova conferência é que libera o romaneio. 1º teste real com o dono: 261028RSB9AC4M, atend. 790955, 23,31 → 25,90.
+Pedido de porta própria ao NoromakWeb e mensagem à Linx (corrigir na origem) em `PEDIDO_PORTA_PRECO_ATENDIMENTO.md`.
+Teste: `TESTES/test_faturamento_valor_v1999.py`.
 
 **V19.87 — Reemissão do romaneio na Conferência** (dono, 27/10). 247 de 247 romaneios soltos pela porta voltaram
 "Impressão enviada ... impressora 1", mas às vezes a folha não sai no estoque (percebido só no faturamento). Soltar de
