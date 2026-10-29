@@ -238,12 +238,9 @@ class MesAtual(Base):
         self.linhas["0893600022"] = [{"codigo": "0893600022", "revenda": 1, "mes": m, "DemandaBalcao": 30,
                                       "DemandaOficina": 0, "DemandaTelemark": 0, "DemandaTotal": 30,
                                       "OcorrenciaVendas": 1} for m in lidos]
+        # revisão 29/10: a leitura é de HOJE e dá certo, mas a porta ainda não trouxe o mês que fechou —
+        # a âncora tem de sair dos dados (mês seguinte ao último que veio), não do dia da leitura
         S.linx_demanda_rodada(forcar=True, fornecedor="WURTH", pausa=0)
-        lido_em = anterior + "-28"
-        with S.DB_LOCK:
-            S.DB.execute("UPDATE linx_demanda_item_v1891 SET lido_dia=?, buscado_dia=? WHERE codigo='0893600022'",
-                         (lido_em, lido_em))
-            S.DB.commit()
         self.venda("0893600022", 6, anterior + "-10")       # e-commerce do mês que fechou
         self.venda("0893600022", 2, self.hoje.isoformat())  # e-commerce de hoje
         x = self.item("0893600022", dias=30)

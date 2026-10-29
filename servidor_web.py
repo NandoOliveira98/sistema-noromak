@@ -32604,8 +32604,8 @@ def ensure_linx_demanda_schema() -> None:
             DB.execute("ALTER TABLE linx_demanda_item_v1891 ADD COLUMN caminho_ok INTEGER NOT NULL DEFAULT 0")
             DB.execute("UPDATE linx_demanda_item_v1891 SET caminho_ok=ok")
         if "lido_dia" not in colunas:
-            # V20.00 (revisão 29/10): dia (Brasília) da última leitura BOA da porta — diz até que mês
-            # fechado os dados vão (buscado_dia muda também quando a leitura falha).
+            # V20.00 (revisão 29/10): âncora da última leitura BOA da porta = 1º dia do mês seguinte ao
+            # último mês que veio nos dados (buscado_dia muda também quando a leitura falha).
             DB.execute("ALTER TABLE linx_demanda_item_v1891 ADD COLUMN lido_dia TEXT NOT NULL DEFAULT ''")
         DB.commit()
 
@@ -32763,8 +32763,16 @@ def _linx_porta_demanda_ler(resp: dict[str, Any]) -> tuple[dict[str, list[dict[s
 
 def _linx_porta_demanda_gravar(codigos: list[str], linhas: dict[str, list[dict[str, Any]]], sem: set[str],
                                erros: dict[str, str]) -> tuple[int, int]:
-    """Grava o que a porta resolveu. Erro não apaga a leitura anterior (só marca o código)."""
+    """Grava o que a porta resolveu. Erro não apaga a leitura anterior (só marca o código).
+    Revisão 29/10: `lido_dia` = 1º dia do mês seguinte ao ÚLTIMO mês que a resposta trouxe (a âncora
+    da tela), não o dia da leitura — na virada a porta pode ainda não ter o mês que acabou de fechar."""
     agora, hoje = now_iso(), datetime.now(BR_TZ).date().isoformat()
+    ultimo = max((x["mes"] for ls in linhas.values() for x in ls), default="")
+    if ultimo:
+        a, mm = int(ultimo[:4]), int(ultimo[5:7]) + 1
+        ancora = f"{a + (mm > 12):04d}-{(mm - 1) % 12 + 1:02d}-01"
+    else:
+        ancora = hoje
     ok = falhas = 0
     with DB_LOCK:
         for c in codigos:
@@ -32778,7 +32786,7 @@ def _linx_porta_demanda_gravar(codigos: list[str], linhas: dict[str, list[dict[s
                 DB.execute("INSERT INTO linx_demanda_item_v1891(codigo,buscado_dia,buscado_em,ok,meses,erro,lido_dia) "
                            "VALUES(?,?,?,1,?,'',?) ON CONFLICT(codigo) DO UPDATE SET buscado_dia=excluded.buscado_dia, "
                            "buscado_em=excluded.buscado_em, ok=1, meses=excluded.meses, erro='', lido_dia=excluded.lido_dia",
-                           (c, hoje, agora, len({x["mes"] for x in ls}), hoje))
+                           (c, hoje, agora, len({x["mes"] for x in ls}), ancora))
                 ok += 1
             else:
                 erro = erros.get(c) or "a porta não devolveu este código"
