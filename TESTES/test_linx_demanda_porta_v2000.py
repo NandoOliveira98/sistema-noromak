@@ -9,7 +9,7 @@ dado que não veio NUNCA vira zero por cima da venda do e-commerce.
 
 import json
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from base import S, TesteNoromak
 
@@ -38,6 +38,8 @@ class Base(TesteNoromak):
         self.erros = {}
         self.pendente_vezes = {}           # codigo -> quantas perguntas fica em pendentes
         self.falha = None
+        self.parcial = {}                  # codigo -> [linhas do mês em andamento] (só com incluir_mes_atual)
+        self.erros_mes = {}                # codigo -> erro só quando pede o mês em andamento
 
         def porta(rota, params):
             self.chamadas.append((rota, dict(params)))
@@ -45,6 +47,7 @@ class Base(TesteNoromak):
                 raise self.falha
             self.assertEqual(rota, "demanda")
             pedidos = params["codigos"].split(",")
+            com_mes = str(params.get("incluir_mes_atual") or "") == "1"
             r = {"ok": True, "itens": [], "sem_historico": [], "com_erro": [], "pendentes": []}
             for c in pedidos:
                 if self.pendente_vezes.get(c, 0) > 0:
@@ -52,8 +55,12 @@ class Base(TesteNoromak):
                     r["pendentes"].append(c)
                 elif c in self.erros:
                     r["com_erro"].append({"codigo": c, "erro": self.erros[c]})
-                elif c in self.linhas:
-                    r["itens"].extend(self.linhas[c])
+                elif com_mes and c in self.erros_mes:
+                    r["com_erro"].append({"codigo": c, "erro": self.erros_mes[c]})
+                elif c in self.linhas or (com_mes and c in self.parcial):
+                    r["itens"].extend(self.linhas.get(c, []))
+                    if com_mes:
+                        r["itens"].extend(self.parcial.get(c, []))
                 else:
                     r["sem_historico"].append(c)
             return r
@@ -95,6 +102,7 @@ class Rodada(Base):
         rota, params = self.chamadas[0]
         self.assertEqual(set(params["codigos"].split(",")), {"0893600022", "0893764272"})
         self.assertEqual(int(params["meses"]), 12)
+        self.assertEqual(str(params["incluir_mes_atual"]), "1")   # V20.02
 
     def test_pendentes_sao_perguntados_de_novo(self):
         self.hist("0893600022", {1: [5, 5]})
@@ -274,6 +282,99 @@ class MesAtual(Base):
         d = S.compras_demanda_payload("WURTH", 60, "1")
         self.assertEqual(d["linx"]["mes_atual"], self.hoje.strftime("%Y-%m"))
         self.assertEqual(d["linx"]["mes_atual_dias"], self.hoje.day)
+
+
+class MesEmAndamento(MesAtual):
+    """V20.02 (Guilherme, 29/10): com `incluir_mes_atual=1` a porta traz o mês em andamento (`parcial`,
+    `ate` = último dia contado, `DemandaEcommerce` já fora do balcão). O e-commerce do mês continua
+    sendo o nosso (somar a coluna dele contaria duas vezes). Decisão do dono (29/10): com o mês da Linx
+    a média é a conta honesta; a trava "nunca abaixo dos meses fechados" só vale sem ele."""
+
+    def setUp(self):
+        super().setUp()
+        self.ate = max(self.hoje.replace(day=1), self.hoje - timedelta(days=1)).isoformat()
+
+    def mes(self, codigo, revenda, balcao=0, oficina=0, telemark=0, ecommerce=0, mes=None):
+        self.parcial.setdefault(codigo, []).append({
+            "codigo": codigo, "revenda": revenda, "mes": mes or self.hoje.strftime("%Y-%m"),
+            "DemandaBalcao": balcao, "DemandaOficina": oficina, "DemandaTelemark": telemark,
+            "DemandaEcommerce": ecommerce, "DemandaTotal": balcao + oficina + telemark + ecommerce,
+            "OcorrenciaVendas": 1, "parcial": True, "ate": self.ate})
+
+    def ler(self):
+        S.linx_demanda_rodada(forcar=True, fornecedor="WURTH", pausa=0)
+
+    def test_mes_da_linx_soma_sem_o_ecommerce_dela(self):
+        self.mes("0893600022", 1, balcao=6, oficina=1, ecommerce=400)
+        self.ler()
+        self.venda("0893600022", 5, self.hoje.isoformat())
+        x = self.item("0893600022", dias=60)
+        self.assertEqual(x["linx_mes_atual_linx"], 7)
+        self.assertEqual(x["linx_mes_atual_ecom"], 5)
+        self.assertEqual(x["linx_mes_atual_ate"], self.ate)
+        self.assertEqual(x["linx_total"], 20 + 7 + 5)                  # os 400 da Linx não entram
+        self.assertAlmostEqual(x["linx_media_dia"], 32 / (2 * 30.4375 + self.hoje.day), places=3)
+        self.assertEqual(x["linx_canais"]["balcao"], 26)
+        self.assertEqual(x["linx_canais"]["oficina"], 1)
+
+    def test_mes_fraco_derruba_a_media(self):
+        self.mes("0893600022", 1, balcao=1)
+        self.ler()
+        x = self.item("0893600022", dias=30)
+        self.assertAlmostEqual(x["linx_media_dia"], 11 / (30.4375 + self.hoje.day), places=3)
+        self.assertLess(x["linx_media_dia"], 10 / 30.4375)
+
+    def test_filial_sem_linha_no_mes_conta_zero(self):
+        self.mes("0893600022", 1, balcao=6)
+        self.ler()
+        x = self.item("0893600022", dias=30, filial="3")
+        self.assertEqual(x["linx_mes_atual_linx"], 0)
+        self.assertAlmostEqual(x["linx_media_dia"], 2 / (30.4375 + self.hoje.day), places=3)
+
+    def test_todas_soma_as_filiais_do_mes(self):
+        self.mes("0893600022", 1, balcao=6)
+        self.mes("0893600022", 2, oficina=3)
+        self.ler()
+        self.assertEqual(self.item("0893600022", filial="todas")["linx_mes_atual_linx"], 9)
+
+    def test_erro_no_mes_pergunta_de_novo_sem_ele(self):
+        # Guilherme: peça com o mês aberto em erro vem inteira em com_erro; sem o parâmetro, vêm os fechados
+        self.mes("0893764272", 1, balcao=1)
+        self.erros_mes["0893600022"] = "notas do Apollo ainda não chegaram ao dia"
+        self.ler()
+        sem_mes = [p for _, p in self.chamadas if "incluir_mes_atual" not in p]
+        self.assertEqual([p["codigos"] for p in sem_mes][-1], "0893600022")
+        x = self.item("0893600022", dias=30)
+        self.assertEqual(x["linx_total"], 10)
+        self.assertIsNone(x["linx_mes_atual_linx"])
+        self.assertAlmostEqual(x["linx_media_dia"], 10 / 30.4375, places=3)   # sem o mês: a trava vale
+
+    def test_resposta_sem_mes_aberto_mantem_a_trava(self):
+        # dia 1º (ou a porta sem o mês): nada parcial na resposta = o mês não foi coberto
+        self.ler()
+        x = self.item("0893600022", dias=30)
+        self.assertIsNone(x["linx_mes_atual_linx"])
+        self.assertAlmostEqual(x["linx_media_dia"], 10 / 30.4375, places=3)
+
+    def test_mes_aberto_de_outro_mes_nao_conta(self):
+        # leitura antiga: o "mês aberto" guardado é o que já fechou; a âncora sai só dos meses fechados
+        anterior = meses_fechados(1)[0]
+        self.linhas["0893600022"] = [{"codigo": "0893600022", "revenda": 1, "mes": m, "DemandaBalcao": 30,
+                                      "DemandaOficina": 0, "DemandaTelemark": 0, "DemandaTotal": 30,
+                                      "OcorrenciaVendas": 1} for m in meses_fechados(3)[1:]]
+        self.mes("0893600022", 1, balcao=50, mes=anterior)
+        self.ler()
+        self.venda("0893600022", 6, anterior + "-10")
+        x = self.item("0893600022", dias=30)
+        self.assertEqual(x["linx_total"], 30 + 6)
+        self.assertIsNone(x["linx_mes_atual_linx"])
+
+    def test_resumo_conta_as_pecas_com_o_mes(self):
+        self.mes("0893600022", 1, balcao=6)
+        self.ler()
+        d = S.compras_demanda_payload("WURTH", 60, "1")
+        self.assertEqual(d["linx"]["itens_mes_atual_linx"], 1)
+        self.assertEqual(d["linx"]["mes_atual_ate"], self.ate)
 
 
 class NuncaZero(Base):

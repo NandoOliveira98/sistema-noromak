@@ -1120,6 +1120,17 @@ E-commerce também é da conta da filial. A amostra guarda a 1ª resposta **com 
 entre filiais** (em "Todas" conta duas vezes; aviso na tela). Telemarketing veio zero em tudo; o e-commerce cai em Balcão.
 A compra em aberto continua pela Smart API (`linx_compra_aberta_item`, `caminho_ok`) só se ela estiver configurada; sem
 ela "A caminho" é digitado (nunca 0 falso). Teste: `TESTES/test_linx_demanda_porta_v2000.py`.
+**V20.02 — mês em andamento da Linx** (Guilherme, 29/10, tarefa #452). A rodada pede `incluir_mes_atual=1`: vem uma
+linha por (peça, filial) do mês corrente com `parcial: true`, `ate` (último dia contado, normalmente ontem) e
+`DemandaEcommerce` (ML Full M21 + balcão P21 dos vendedores 134006, 43 e 66), já **fora** do `DemandaBalcao`. Guardada
+em `linx_demanda_filial_v2000` (`parcial`, `ate`, `ecommerce`); a peça guarda o mês coberto (`mes_atual`, `mes_atual_ate`;
+resposta sem linha parcial = não coberto, peça coberta sem linha da filial = 0). Mês atual = balcão + oficina +
+telemarketing da Linx + o **nosso** e-commerce do mês (a coluna `DemandaEcommerce` **nunca** é somada). Com o mês coberto,
+a média é a conta honesta (mês fraco puxa para baixo; decisão do dono, 29/10); a trava "nunca abaixo dos meses
+fechados" só vale sem ele. A âncora (`lido_dia`) sai só dos meses fechados; mês parcial de outro mês é ignorado. Peça
+em `com_erro` com o parâmetro é perguntada de novo **sem** ele (vêm os fechados). O mês aberto vale só no dia da leitura
+(no dia seguinte a peça volta uma vez em `pendentes`); dia 1º não vem. Amostra `porta_demanda_mes`. A conferir: o
+vendedor 68 (contado como balcão).
 
 ### Linx Smart API (levantamento 21/09/2026)
 API oficial da Linx para o Linx DMS, na nuvem: gateway `https://auto-gwsmartapi.linx.com.br/<api>`,

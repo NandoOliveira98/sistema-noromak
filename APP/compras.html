@@ -318,7 +318,9 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
     const btn = L.configurada ? ` <button class="btn" type="button" id="linxBtn">↻ Atualizar da Linx</button>` : "";
     const meses = (L.meses || []).map(m => m.split("-").reverse().join("/")).reverse().join(", ");
     // V20.00: demanda pela porta do NoromakWeb, por filial, + e-commerce do mês atual
-    const mesAtual = L.mes_atual ? `${L.mes_atual.split("-").reverse().join("/")} (e-commerce até hoje, ${L.mes_atual_dias} dia(s))` : "";
+    // V20.02: com o mês em andamento da Linx, balcão/oficina/telemarketing do mês até `ate` + e-commerce até hoje
+    const ateBr = L.mes_atual_ate ? L.mes_atual_ate.split("-").reverse().slice(0, 2).join("/") : "";
+    const mesAtual = L.mes_atual ? `${L.mes_atual.split("-").reverse().join("/")} (${L.itens_mes_atual_linx ? `Linx até ${ateBr} em ${L.itens_mes_atual_linx} peça(s) + ` : ""}e-commerce até hoje, ${L.mes_atual_dias} dia(s))` : "";
     const caminho = L.caminho_linx ? ` A compra em aberto do Linx vira <b>A caminho</b> (o que você digitar continua mandando).` : ` "A caminho" continua digitado.`;
     const todas = (L.filial === "todas" ? ` <b>Atenção:</b> em Todas, a peça transferida entre filiais e vendida na outra conta duas vezes.` : "")
       + (L.itens_leitura_anterior ? ` ${L.itens_leitura_anterior} peça(s) com uma leitura antiga da Linx (os meses que ela ainda não trouxe entram pelo e-commerce, e o total da coluna Linx cobre esse período maior).` : "");
@@ -541,7 +543,7 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
         <td class="desc"><b>${esc(x.descricao)}</b>${x.custo == null ? '<span class="tag semcusto">sem custo — digite ao lado</span>' : ""}</td>
         <td>${x.curva ? `<span class="curva ${esc(x.curva)}">${esc(x.curva)}</span>` : "—"}</td>
         <td class="n" title="ML ${x.vendido_ml} · Shopee ${x.vendido_shopee}">${num(x.vendido)}</td>
-        <td class="n" title="${x.linx_canais ? `Meses fechados: Balcão ${num(x.linx_canais.balcao)} · Oficina ${num(x.linx_canais.oficina)} · Telemarketing ${num(x.linx_canais.telemark)} · ${x.linx_desde ? `E-commerce desde ${br(x.linx_desde)} (a Linx ainda não trouxe esses meses)` : "Este mês (e-commerce)"} ${num(x.linx_mes_atual_ecom || 0)}` : "Sem histórico da Linx para esta peça"}">${x.linx_total == null ? "—" : num(x.linx_total)}</td>
+        <td class="n" title="${x.linx_canais ? `${x.linx_mes_atual_linx != null ? "Meses fechados + este mês" : "Meses fechados"}: Balcão ${num(x.linx_canais.balcao)} · Oficina ${num(x.linx_canais.oficina)} · Telemarketing ${num(x.linx_canais.telemark)} · ${x.linx_mes_atual_linx != null ? `Linx deste mês até ${br(x.linx_mes_atual_ate)} ${num(x.linx_mes_atual_linx)} · ` : ""}${x.linx_desde ? `E-commerce desde ${br(x.linx_desde)} (a Linx ainda não trouxe esses meses)` : "Este mês (e-commerce)"} ${num(x.linx_mes_atual_ecom || 0)}` : "Sem histórico da Linx para esta peça"}">${x.linx_total == null ? "—" : num(x.linx_total)}</td>
         <td class="n">${num(x.media, 2)}<br><small class="${x.usaLinx ? "" : "muted"}" title="${x.usaLinx ? "Demanda de todos os canais (Linx)" : "Venda do e-commerce (ML + Shopee)"}">${x.usaLinx ? "Linx" : "e-com"}</small></td>
         <td class="n casaA ${x.araca === 0 ? "zero" : ""}">${x.araca === null ? "—" : num(x.araca) + (x.parcial ? "+" : "")}</td>
         <td class="n outra ${x.rib > 0 ? "tem" : ""}">${x.rib === null ? "—" : num(x.rib)}</td>
