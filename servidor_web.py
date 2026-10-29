@@ -16504,6 +16504,9 @@ def exp_romaneio_preparar(pedido: str, atendimento: Any = "", cliente: Any = "")
                     "nome_apollo": ""},
         "precisa_condicao": True, "candidatos": [], "escolhido": "", **_exp_estado_operacoes(pedido),
         "cadastro_auto": cadastro_auto_do_pedido(pedido),  # V19.41
+        # V20.00: a extensão compara com o atendimento ("≠"); sem isto o romaneio era solto sem ver
+        # a diferença e a correção do valor (Faturamento, V19.99) só vale antes de soltar. Sem venda = None.
+        "valor_pedido": _exp_valor_pedido(pedido),
     }
     try:
         filtro: dict[str, Any] = {}
