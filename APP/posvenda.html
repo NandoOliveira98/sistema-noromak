@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="/favicon.ico?v=14.5" sizes="any">
+<link rel="apple-touch-icon" sizes="180x180" href="/expedicao/icons/admin-180.png?v=18.94">
+<title>Noromak · Pós-venda</title>
+<!-- V20.01: Pós-venda do Mercado Livre de volta (dono, 29/10), com Araçatuba e Bauru numa tela só
+     (filtro Todas/Araçatuba/Bauru). Perguntas sem resposta: responde por aqui, pela conta dona da
+     pergunta (POST /api/posvenda/responder), com respostas prontas e saudação/assinatura de cada conta.
+     Reclamações abertas pelo prazo do vendedor (responder continua no ML), devoluções a caminho (e se a
+     peça já chegou na tela de Devoluções) e reputação de cada conta. O relatório de perdas saiu: a perda
+     fica no Financeiro (V19.95). GET /api/posvenda (módulo admin, só lê o banco; a coleta é do
+     posvenda_loop). V18.88 era a 1ª versão (apagada na V19.76). -->
+<script defer src="/expedicao/web-auth.js?v=19.89"></script>
+<link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
+<link rel="stylesheet" href="/expedicao/nk-ui.css?v=19.13">
+<script src="/expedicao/nk-ui.js?v=19.13"></script>
+<script defer src="/expedicao/nk-menu.js?v=20.01" data-shell></script>
+<style>
+body{margin:0;background:var(--nk-canvas);color:var(--nk-ink);font-family:var(--nk-font)}
+.abas{display:flex;flex-wrap:wrap;gap:6px;border-bottom:1px solid var(--nk-line);margin-bottom:14px}
+.aba{border:0;background:none;color:var(--nk-ink2);font:inherit;font-weight:700;font-size:13px;padding:9px 12px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;display:inline-flex;gap:7px;align-items:center}
+.aba.on{color:var(--nk-pri);border-bottom-color:var(--nk-pri)}
+.aba .cont{font-size:11px;background:var(--nk-cinza-bg);color:var(--nk-ink2);border-radius:999px;padding:1px 7px}
+.aba .cont.bad{background:var(--nk-bad-bg);color:var(--nk-bad)}
+.barra{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;margin-bottom:10px}
+.barra input[type=search]{font:inherit;border:1px solid var(--nk-line);background:var(--nk-tile);color:var(--nk-ink);border-radius:8px;padding:7px 10px;width:340px;max-width:100%}
+.nk-cab select,.pg select{font:inherit;font-size:13px;border:1px solid var(--nk-line);background:var(--nk-tile);color:var(--nk-ink);border-radius:8px;padding:7px 10px}
+.contas{display:inline-flex;border:1px solid var(--nk-line);border-radius:9px;overflow:hidden}
+.contas button{border:0;background:var(--nk-tile);color:var(--nk-ink2);font:inherit;font-size:13px;font-weight:700;padding:8px 12px;cursor:pointer}
+.contas button+button{border-left:1px solid var(--nk-line)}
+.contas button.on{background:var(--nk-pri);color:#fff}
+.mini{font-size:11.5px;color:var(--nk-ink2)}
+.mono{font-family:Consolas,monospace;font-size:11.5px;color:var(--nk-ink3)}
+.prazo{font-weight:700;white-space:nowrap}
+.prazo.bad{color:var(--nk-bad)}.prazo.warn{color:var(--nk-warn)}
+.txt{min-width:170px;max-width:340px;white-space:normal}
+.perguntas{display:grid;gap:10px}
+.pg{border:1px solid var(--nk-line);border-radius:12px;padding:12px 14px;background:var(--nk-tile);display:grid;gap:8px}
+.pg.velha{border-color:var(--nk-bad-ln);box-shadow:inset 3px 0 0 var(--nk-bad)}
+.pg-top{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:flex-start}
+.pg-anuncio{display:grid;gap:2px}
+.pg-anuncio b{font-size:13px;color:var(--nk-head)}
+.pg-q{font-size:14.5px;color:var(--nk-head);font-weight:600}
+.pg textarea{font:inherit;font-size:13px;width:100%;min-height:64px;resize:vertical;border:1px solid var(--nk-line);background:var(--nk-tile);color:var(--nk-ink);border-radius:8px;padding:8px 10px;box-sizing:border-box}
+.pg textarea:focus{outline:0;border-color:var(--nk-pri);box-shadow:0 0 0 3px var(--nk-foco)}
+.pg-acoes{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.pg-acoes > span{display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap}
+.previa{font-size:12px;color:var(--nk-ink2);background:var(--nk-cinza-bg);border-radius:8px;padding:7px 10px;white-space:pre-wrap}
+.previa b{color:var(--nk-ink)}
+.ant{font-size:12px}
+.ant summary{cursor:pointer;color:var(--nk-pri);font-weight:700}
+.ant ul{margin:6px 0 0;padding:0;list-style:none;display:grid;gap:6px}
+.ant li{border-left:3px solid var(--nk-line);padding:2px 0 2px 8px}
+.ant li .q{color:var(--nk-ink2)}
+.ant li button{margin-left:6px}
+.grade{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-bottom:14px}
+.cartao{border:1px solid var(--nk-line);border-radius:12px;padding:11px 13px;background:var(--nk-tile)}
+.cartao small{display:block;color:var(--nk-ink2);font-size:11.5px;font-weight:600}
+.cartao b{display:block;font-size:20px;color:var(--nk-head);font-variant-numeric:tabular-nums;margin-top:3px}
+.duas{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:14px}
+@media(max-width:640px){.duas{grid-template-columns:1fr}.barra input[type=search]{width:100%}}
+.sub-tit{margin:0 0 8px;font-size:12px;font-weight:700;color:var(--nk-ink2);text-transform:uppercase;letter-spacing:.06em}
+.termo{display:flex;gap:4px;margin:6px 0 12px}
+.termo i{flex:1;height:12px;border-radius:3px;opacity:.25}
+.termo i.on{opacity:1;outline:2px solid var(--nk-head);outline-offset:1px}
+.prontas{display:grid;gap:8px}
+.pronta{display:grid;grid-template-columns:200px 1fr auto;gap:8px;align-items:start;border:1px solid var(--nk-line);border-radius:10px;padding:8px 10px;background:var(--nk-tile)}
+@media(max-width:640px){.pronta{grid-template-columns:1fr}}
+.pronta input,.pronta textarea,.cfg input{font:inherit;font-size:13px;border:1px solid var(--nk-line);background:var(--nk-tile);color:var(--nk-ink);border-radius:8px;padding:7px 9px;width:100%;box-sizing:border-box}
+.pronta textarea{min-height:44px;resize:vertical}
+.cfg{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px}
+.cfg label{display:grid;gap:4px;font-size:12px;font-weight:700;color:var(--nk-ink2)}
+.notas{font-size:12px;color:var(--nk-ink2)}
+.notas ul{margin:6px 0 0 18px;padding:0}
+.notas li{margin:3px 0}
+</style>
+</head>
+<body>
+<main class="nk-pagina">
+  <div class="nk-cab">
+    <div>
+      <div class="nk-rotulo">Vendas e anúncios</div>
+      <h1>Pós-venda</h1>
+      <p id="sub">Carregando…</p>
+    </div>
+    <div class="nk-acoes">
+      <div class="contas" id="contas" role="group" aria-label="Conta do Mercado Livre">
+        <button data-conta="todas">Todas</button><button data-conta="aracatuba">Araçatuba</button><button data-conta="bauru">Bauru</button>
+      </div>
+      <button class="nk-btn" id="buscar" title="Busca agora no Mercado Livre, nas duas contas (em segundo plano)"><i class=nk-i-refresh></i> Buscar agora</button>
+    </div>
+  </div>
+
+  <div class="nk-carregando" id="carregando">Carregando o pós-venda…</div>
+  <div class="nk-aviso bad" id="erro" hidden></div>
+
+  <div class="nk-pilha" id="conteudo" hidden>
+    <div class="nk-aviso" id="aviso" hidden></div>
+    <div class="nk-kpis" id="kpis"></div>
+
+    <section class="nk-painel">
+      <div class="abas" id="abas"></div>
+      <div id="painel-perguntas"></div>
+      <div id="painel-abertas" hidden></div>
+      <div id="painel-devolucoes" hidden></div>
+      <div id="painel-reputacao" hidden></div>
+      <div id="painel-prontas" hidden></div>
+    </section>
+
+    <section class="nk-painel notas" id="notas"></section>
+  </div>
+</main>
+<script>
+(() => {
+  "use strict";
+  const B = "/expedicao";
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));
+  const brl = v => v == null ? "—" : Number(v).toLocaleString("pt-BR", {style:"currency", currency:"BRL"});
+  const num = v => Number(v || 0).toLocaleString("pt-BR");
+  const pct = v => v == null ? "—" : Number(v).toLocaleString("pt-BR", {maximumFractionDigits:2}) + "%";
+  const dataBR = iso => { const d = new Date(iso); return isNaN(d) ? "—" : d.toLocaleDateString("pt-BR"); };
+  const dataHora = iso => { const d = new Date(iso); return isNaN(d) ? "—" : d.toLocaleString("pt-BR", {day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit"}); };
+  const horasTxt = h => { if (h == null) return "—"; const a = Math.abs(h); const t = a >= 48 ? Math.round(a / 24) + " dias" : a >= 1 ? Math.round(a) + " h" : Math.max(1, Math.round(a * 60)) + " min"; return h < 0 ? "venceu há " + t : t; };
+  const vendaML = id => id ? `https://www.mercadolivre.com.br/vendas/${encodeURIComponent(id)}/detalhe` : "";
+  const anuncioML = id => `https://produto.mercadolivre.com.br/${encodeURIComponent(String(id || "").replace(/^MLB/, "MLB-"))}`;
+  const NOME = {aracatuba: "Araçatuba", bauru: "Bauru"};
+  const ETAPA = {claim:"Reclamação", dispute:"Mediação do ML", recontact:"Recontato", stale:"Com o ML", none:"—"};
+  const DEV = {pending:"Criada", label_generated:"Etiqueta gerada", scheduled:"Coleta agendada", shipped:"A caminho", delivered:"Entregue",
+    not_delivered:"Não entregue", cancelled:"Cancelada", expired:"Expirou", failed:"Falhou", return_to_buyer:"Voltando ao comprador", "":"Sem envio ainda"};
+  const NIVEL = {"1_red":["#E5332A","Vermelho"], "2_orange":["#F28B18","Laranja"], "3_yellow":["#F5C518","Amarelo"], "4_light_green":["#9BCB3C","Verde-claro"], "5_green":["#2FA84F","Verde"]};
+  const CHAVE_CONTA = "nk_posvenda_conta_v2001";
+  let D = null, aba = "perguntas", busca = "", conta = "todas";
+  const rascunho = {};   // texto digitado por pergunta: sobrevive à atualização da tela
+  try { const c = localStorage.getItem(CHAVE_CONTA); if (["todas", "aracatuba", "bauru"].includes(c)) conta = c; } catch (_) {}
+  const somenteLeitura = () => !!(window.EXPEDICAO_USER && window.EXPEDICAO_USER.somente_leitura);
+
+  async function api(url, opcoes = {}) {
+    const r = await fetch(B + url, {cache:"no-store", credentials:"same-origin", headers:{"Content-Type":"application/json", Accept:"application/json"}, ...opcoes});
+    let d = {}; try { d = await r.json(); } catch (_) {}
+    if (!r.ok || d.ok === false) throw new Error(d.error || `HTTP ${r.status}`);
+    return d;
+  }
+
+  async function carregar() {
+    try { D = await api("/api/posvenda"); }
+    catch (e) { $("carregando").hidden = true; $("erro").hidden = false; $("erro").textContent = "Não foi possível carregar: " + e.message; return; }
+    $("carregando").hidden = true; $("erro").hidden = true; $("conteudo").hidden = false;
+    desenhar();
+  }
+
+  const daConta = x => conta === "todas" || x.conta === conta;
+  const seloConta = c => `<span class="nk-selo ${c === "bauru" ? "warn" : "info"}">${esc(NOME[c] || c)}</span>`;
+
+  function desenhar() {
+    document.querySelectorAll("#contas button").forEach(b => b.classList.toggle("on", b.dataset.conta === conta));
+    const pg = (D.contas.find(c => c.conta === "aracatuba") || {}).perguntas || {};
+    $("sub").textContent = `Mercado Livre · perguntas a cada ${D.regras.perguntas_intervalo_min} min, reclamações a cada ${D.regras.intervalo_min} min` +
+      (pg.em ? ` · última busca ${dataHora(pg.em)}` : "") + (D.coleta.rodando ? " · buscando agora…" : "");
+    const av = [];
+    for (const c of D.contas) {
+      if (conta !== "todas" && c.conta !== conta) continue;
+      if (!c.conectada) { av.push(`<b>${esc(c.nome)}:</b> conta do Mercado Livre não conectada (Central de integrações).`); continue; }
+      const p = c.perguntas || {}, r = c.reclamacoes || {};
+      const semPerm = p.sem_permissao || r.sem_permissao;
+      if (semPerm) av.push(`<b>${esc(c.nome)} sem permissão (403):</b> o Mercado Livre recusou ${p.sem_permissao && r.sem_permissao ? "perguntas e reclamações" : p.sem_permissao ? "as perguntas" : "as reclamações"}. Reconecte a conta em Central de integrações → Mercado Livre${c.conta === "bauru" ? " · Bauru" : ""}. Enquanto isso, o que aparece aqui dessa conta pode estar incompleto.`);
+      else {
+        if (p.ok === false) av.push(`<b>${esc(c.nome)} · perguntas:</b> ${esc(p.erro || "erro na leitura")}`);
+        if (r.ok === false) av.push(`<b>${esc(c.nome)} · reclamações:</b> ${esc(r.erro || "erro na leitura")}`);
+      }
+      if (!p.em && !p.pulado && p.ok !== false) av.push(`<b>${esc(c.nome)}:</b> ainda não lida desde que o sistema subiu (começa uns 2 minutos depois, ou clique em "Buscar agora").`);
+    }
+    $("aviso").hidden = !av.length; $("aviso").innerHTML = av.join("<br>");
+    kpis(); abas(); mostrarAba(); notas();
+  }
+
+  const perguntas = () => D.perguntas.filter(daConta);
+  const abertas = () => D.abertas.filter(daConta);
+  const devolucoes = () => D.devolucoes.filter(daConta);
+  const urgentes = () => abertas().filter(a => a.horas_restantes != null && a.horas_restantes < D.regras.prazo_critico_horas);
+  const velhas = () => perguntas().filter(p => p.horas_esperando != null && p.horas_esperando >= D.regras.pergunta_atraso_horas);
+
+  function kpis() {
+    const voce = abertas().filter(a => a.acao || a.responsavel === "seller").length;
+    const naoChegou = devolucoes().filter(d => !d.recebida).length;
+    const k = (id, cls, ic, v, t) => `<button class="nk-kpi" data-aba="${id}"><span class="nk-kpi-ic ${cls}"><i class=${ic}></i></span><div><b>${v}</b><small>${esc(t)}</small></div></button>`;
+    $("kpis").innerHTML =
+      k("perguntas", velhas().length ? "bad" : perguntas().length ? "warn" : "ok", "nk-i-mail", num(perguntas().length),
+        `perguntas sem resposta` + (velhas().length ? ` (${num(velhas().length)} há +${D.regras.pergunta_atraso_horas} h)` : "")) +
+      k("abertas", urgentes().length ? "bad" : voce ? "warn" : "ok", "nk-i-alert", num(abertas().length), `reclamações abertas (${num(voce)} com você)`) +
+      k("abertas", urgentes().length ? "bad" : "ok", "nk-i-alert", num(urgentes().length), `prazo em menos de ${D.regras.prazo_critico_horas} h`) +
+      k("devolucoes", naoChegou ? "warn" : "ok", "nk-i-refresh", num(naoChegou), "devoluções do ML que ainda não chegaram");
+    document.querySelectorAll("#kpis .nk-kpi").forEach(b => b.onclick = () => { aba = b.dataset.aba; abas(); mostrarAba(); });
+  }
+
+  function abas() {
+    const L = [["perguntas", "Perguntas", perguntas().length, velhas().length], ["abertas", "Reclamações abertas", abertas().length, urgentes().length],
+               ["devolucoes", "Devoluções a caminho", devolucoes().filter(d => !d.recebida).length, 0], ["reputacao", "Reputação", null, 0],
+               ["prontas", "Respostas prontas", D.respostas_prontas.length, 0]];
+    $("abas").innerHTML = L.map(([id, t, n, alerta]) => `<button class="aba ${aba === id ? "on" : ""}" data-aba="${id}">${t}${n != null ? ` <span class="cont ${alerta ? "bad" : ""}">${num(n)}</span>` : ""}</button>`).join("");
+    document.querySelectorAll(".aba").forEach(b => b.onclick = () => { aba = b.dataset.aba; abas(); mostrarAba(); });
+  }
+
+  function mostrarAba() {
+    for (const id of ["perguntas", "abertas", "devolucoes", "reputacao", "prontas"]) $("painel-" + id).hidden = id !== aba;
+    ({perguntas: desenharPerguntas, abertas: desenharAbertas, devolucoes: desenharDevolucoes, reputacao: desenharReputacao, prontas: desenharProntas})[aba]();
+  }
+
+  function selo(cls, txt) { return `<span class="nk-selo ${cls}">${esc(txt)}</span>`; }
+  const filtra = a => !busca || [a.titulo, a.order_id, a.claim_id, a.sku, a.motivo, a.texto, a.item_id, a.anuncio && a.anuncio.titulo].some(x => String(x || "").toLowerCase().includes(busca));
+  function barraBusca(alvo, dica) {
+    return `<div class="barra"><input type="search" id="q-${alvo}" placeholder="${esc(dica)}" value="${esc(busca)}"></div>`;
+  }
+  function ligarBusca(alvo, redesenhar) {
+    const q = $("q-" + alvo); if (!q) return;
+    q.oninput = () => { busca = q.value.trim().toLowerCase(); const pos = q.selectionStart; redesenhar(); const n = $("q-" + alvo); n.focus(); n.setSelectionRange(pos, pos); };
+  }
+
+  // Saudação + texto + assinatura da conta, igual ao servidor (posvenda_texto_final).
+  function textoFinal(texto, c) {
+    const saud = D.config["saudacao@" + c] || "", assin = D.config["assinatura@" + c] || "";
+    const t = texto.trim(); const partes = [t];
+    if (saud && !t.toLowerCase().startsWith(saud.toLowerCase())) partes.unshift(saud);
+    if (assin && !t.toLowerCase().endsWith(assin.toLowerCase())) partes.push(assin);
+    return partes.join(" ");
+  }
+
+  function desenharPerguntas() {
+    const r = D.perguntas_resumo;
+    const L = perguntas().filter(filtra);
+    const cab = `<p class="mini" style="margin:0 0 10px">Respondidas nos últimos 30 dias: <b>${num(r.respondidas_30d)}</b>${r.mediana_horas != null ? ` · metade delas em até <b>${horasTxt(r.mediana_horas)}</b>` : ""}. A resposta sai pela conta da pergunta, vai direto para o anúncio no Mercado Livre e fica registrada com o seu usuário.</p>`;
+    const prontas = D.respostas_prontas;
+    if (!perguntas().length) { $("painel-perguntas").innerHTML = cab + `<div class="nk-vazio">Nenhuma pergunta sem resposta${conta !== "todas" ? " em " + esc(NOME[conta]) : ""}.</div>`; return; }
+    $("painel-perguntas").innerHTML = cab + barraBusca("perguntas", "Buscar pergunta, anúncio ou SKU…") + `<div class="perguntas">` + L.map(p => {
+      const a = p.anuncio || {};
+      const info = [a.preco != null ? brl(a.preco) : "", a.estoque != null ? `${num(a.estoque)} em estoque` : "", a.sku ? "SKU " + a.sku : "", a.status && a.status !== "active" ? a.status === "paused" ? "pausado" : a.status : ""].filter(Boolean);
+      const ant = (p.anteriores || []);
+      return `<div class="pg ${p.horas_esperando >= D.regras.pergunta_atraso_horas ? "velha" : ""}" data-id="${esc(p.pergunta_id)}" data-conta="${esc(p.conta)}">
+      <div class="pg-top"><div class="pg-anuncio"><div>${seloConta(p.conta)} <b>${esc(a.titulo || "(anúncio ainda sem retrato do dia)")}</b></div>
+          <span class="mini">${esc(info.join(" · "))}${info.length ? " · " : ""}<span class="mono">${esc(p.item_id)}</span> · <a href="${anuncioML(p.item_id)}" target="_blank" rel="noopener">ver anúncio</a></span></div>
+        <div class="mini"><b class="${p.horas_esperando >= D.regras.pergunta_atraso_horas ? "prazo bad" : ""}">há ${horasTxt(p.horas_esperando)}</b> · ${dataHora(p.criada_em)}</div></div>
+      <div class="pg-q">${esc(p.texto)}</div>
+      ${ant.length ? `<details class="ant"><summary>${ant.length} resposta(s) anterior(es) deste anúncio</summary><ul>${ant.map((x, i) => `<li><div class="q">${esc(x.texto)}</div><div>${esc(x.resposta)}<button class="nk-btn mini usar" data-i="${i}" type="button">Usar</button></div><div class="mini">${dataHora(x.respondida_em)}${x.respondida_por ? " · " + esc(x.respondida_por) : ""}</div></li>`).join("")}</ul></details>` : ""}
+      ${somenteLeitura() ? "" : `${prontas.length ? `<select class="pronta-sel" aria-label="Resposta pronta"><option value="">Inserir resposta pronta…</option>${prontas.map(x => `<option value="${x.id}">${esc(x.titulo)}</option>`).join("")}</select>` : ""}
+      <textarea maxlength="${D.regras.resposta_max}" placeholder="Escreva a resposta…">${esc(rascunho[p.pergunta_id] || "")}</textarea>
+      <div class="previa" hidden></div>
+      <div class="pg-acoes"><span class="mini cont">0 / ${D.regras.resposta_max}</span>
+        <span><button class="nk-btn pri mini responder" disabled>Responder</button></span></div>`}</div>`;
+    }).join("") + `</div>` + (L.length ? "" : `<div class="nk-vazio">Nenhuma pergunta com essa busca.</div>`);
+    ligarBusca("perguntas", desenharPerguntas);
+    document.querySelectorAll(".pg").forEach(el => {
+      const ta = el.querySelector("textarea"); if (!ta) return;
+      const id = el.dataset.id, c = el.dataset.conta;
+      const bt = el.querySelector(".responder"), ct = el.querySelector(".cont"), pv = el.querySelector(".previa");
+      const p = D.perguntas.find(x => String(x.pergunta_id) === id) || {};
+      const atualizar = () => {
+        rascunho[id] = ta.value;
+        const final = ta.value.trim() ? textoFinal(ta.value, c) : "";
+        const passou = final.length > D.regras.resposta_max;
+        ct.textContent = `${final.length} / ${D.regras.resposta_max}` + (passou ? " · passou do limite do ML" : "");
+        ct.style.color = passou ? "var(--nk-bad)" : "";
+        pv.hidden = !final || final === ta.value.trim();
+        pv.innerHTML = `<b>Vai assim:</b> ${esc(final)}`;
+        bt.disabled = !ta.value.trim() || passou;
+      };
+      ta.oninput = atualizar;
+      atualizar();
+      const sel = el.querySelector(".pronta-sel");
+      if (sel) sel.onchange = () => { const x = D.respostas_prontas.find(r => String(r.id) === sel.value); if (x) { ta.value = (ta.value.trim() ? ta.value.trim() + " " : "") + x.texto; atualizar(); ta.focus(); } sel.value = ""; };
+      el.querySelectorAll(".usar").forEach(b => b.onclick = () => { const x = (p.anteriores || [])[Number(b.dataset.i)]; if (x) { ta.value = x.resposta; atualizar(); ta.focus(); } });
+      bt.onclick = async () => {
+        bt.disabled = true; bt.textContent = "Enviando…";
+        try {
+          await api("/api/posvenda/responder", {method:"POST", body: JSON.stringify({pergunta_id: id, texto: ta.value})});
+          nkToast(`Resposta enviada ao Mercado Livre (${NOME[c] || c}).`, "ok");
+          delete rascunho[id];
+          D.perguntas = D.perguntas.filter(x => String(x.pergunta_id) !== id);
+          D.perguntas_resumo.respondidas_30d += 1;
+          kpis(); abas(); desenharPerguntas();
+        } catch (e) { nkToast("Não foi possível responder: " + e.message, "erro"); bt.textContent = "Responder"; atualizar(); }
+      };
+    });
+  }
+
+  function prazoHTML(a) {
+    if (a.horas_restantes == null) return a.responsavel && a.responsavel !== "seller" ? `<span class="mini">vez do ${a.responsavel === "buyer" ? "comprador" : "ML"}</span>` : "—";
+    const cls = a.horas_restantes < D.regras.prazo_critico_horas ? "bad" : a.horas_restantes < 72 ? "warn" : "";
+    return `<span class="prazo ${cls}">${horasTxt(a.horas_restantes)}</span><div class="mini">${dataHora(a.prazo)}</div>`;
+  }
+  function anuncioHTML(a) {
+    return `${esc(a.titulo || "(anúncio não lido)")}<div class="mono">${a.order_id ? "Pedido " + esc(a.order_id) : "Reclamação " + esc(a.claim_id)}${a.sku ? " · SKU " + esc(a.sku) : ""}</div>`;
+  }
+
+  function desenharAbertas() {
+    const L = abertas().filter(filtra);
+    $("painel-abertas").innerHTML = `<p class="mini" style="margin:0 0 10px">Ordem do prazo do vendedor. Responder reclamação continua no Mercado Livre ("Abrir no ML", logado na conta da reclamação).</p>` +
+      barraBusca("abertas", "Buscar pedido, SKU, anúncio ou motivo…") + (L.length ? `<div class="nk-tw"><table class="nk-tab" data-nk-tabela="reclamacoes_abertas"><thead><tr>
+      <th>Conta</th><th>Pedido / anúncio</th><th>Motivo</th><th>Situação</th><th>O que fazer</th><th>Prazo</th><th class="n">Valor</th><th>Reputação</th><th data-nk-sem-ordem></th></tr></thead><tbody>` +
+      L.map(a => `<tr><td>${seloConta(a.conta)}</td><td class="txt">${anuncioHTML(a)}</td>
+        <td class="txt">${esc(a.motivo || a.motivo_id)}${a.problema ? `<div class="mini">${esc(a.problema)}</div>` : ""}</td>
+        <td>${selo(a.etapa === "dispute" ? "warn" : "info", ETAPA[a.etapa] || a.etapa)}${a.tem_devolucao ? `<div class="mini">Devolução: ${esc(DEV[a.devolucao_status] ?? a.devolucao_status)}</div>` : ""}${a.titulo_ml ? `<div class="mini">${esc(a.titulo_ml)}</div>` : ""}</td>
+        <td class="txt"><b>${esc(a.acao_txt || (a.responsavel === "seller" ? "Ação do vendedor" : "—"))}</b></td>
+        <td>${prazoHTML(a)}</td>
+        <td class="n">${brl(a.pedido_total)}</td>
+        <td>${a.afeta_reputacao === "affected" ? selo("bad", "Afeta") : a.afeta_reputacao === "not_affected" ? selo("ok", "Não afeta") : "—"}</td>
+        <td>${a.order_id ? `<a class="nk-btn mini" href="${vendaML(a.order_id)}" target="_blank" rel="noopener">Abrir no ML</a>` : ""}</td></tr>`).join("") + `</tbody></table></div>`
+      : `<div class="nk-vazio">${abertas().length ? "Nenhuma reclamação aberta com essa busca." : "Nenhuma reclamação aberta."}</div>`);
+    ligarBusca("abertas", desenharAbertas);
+  }
+
+  function desenharDevolucoes() {
+    const L = devolucoes().filter(filtra);
+    $("painel-devolucoes").innerHTML = `<p class="mini" style="margin:0 0 10px">Reclamações do Mercado Livre com envio de volta nos últimos ${D.regras.devolucao_dias} dias. <b>Chegou</b> = a peça já foi registrada na tela Receber devolução (pelo número do pedido). As que não chegaram vêm primeiro.</p>` +
+      barraBusca("devolucoes", "Buscar pedido, SKU ou anúncio…") + (L.length ? `<div class="nk-tw"><table class="nk-tab" data-nk-tabela="devolucoes_caminho"><thead><tr>
+      <th>Conta</th><th>Aberta</th><th>Pedido / anúncio</th><th>Motivo</th><th>Envio de volta</th><th>Chegou?</th><th class="n">Valor</th><th data-nk-sem-ordem></th></tr></thead><tbody>` +
+      L.map(d => `<tr><td>${seloConta(d.conta)}</td><td>${dataBR(d.aberta_em)}</td><td class="txt">${anuncioHTML(d)}</td>
+        <td class="txt">${esc(d.motivo || "—")}</td>
+        <td>${selo(d.devolucao_status === "delivered" ? "ok" : d.devolucao_status === "shipped" ? "info" : "", DEV[d.devolucao_status] ?? d.devolucao_status)}${d.envios.length ? `<div class="mono">${esc(d.envios.join(" · "))}</div>` : ""}</td>
+        <td>${d.recebida ? `${selo("ok", "Chegou")}<div class="mini">${dataBR(d.recebida_em)}</div>` : d.devolucao_status === "delivered" ? selo("bad", "Entregue e não registrada") : selo("warn", "Ainda não")}</td>
+        <td class="n">${brl(d.pedido_total)}</td>
+        <td><a class="nk-btn mini" href="${vendaML(d.order_id)}" target="_blank" rel="noopener">Abrir no ML</a></td></tr>`).join("") + `</tbody></table></div>`
+      : `<div class="nk-vazio">Nenhuma devolução do Mercado Livre nos últimos ${D.regras.devolucao_dias} dias.</div>`);
+    ligarBusca("devolucoes", desenharDevolucoes);
+  }
+
+  function desenharReputacao() {
+    const ordem = ["1_red", "2_orange", "3_yellow", "4_light_green", "5_green"];
+    const taxa = v => v == null ? "—" : pct(v * 100);
+    const lista = (conta === "todas" ? ["aracatuba", "bauru"] : [conta]);
+    $("painel-reputacao").innerHTML = `<div class="duas">` + lista.map(c => {
+      const R = (D.reputacao_por_conta || {})[c] || [];
+      if (!R.length) return `<div><p class="sub-tit">${esc(NOME[c])}</p><div class="nk-vazio">A reputação desta conta ainda não foi lida (atualiza a cada ${D.regras.intervalo_min} min).</div></div>`;
+      const a = R[0];
+      return `<div><p class="sub-tit">${esc(NOME[c])}</p><div class="termo">${ordem.map(n => `<i class="${a.nivel === n ? "on" : ""}" style="background:${NIVEL[n][0]}"></i>`).join("")}</div>
+      <p style="margin:0 0 12px"><b>${esc((NIVEL[a.nivel] || ["", a.nivel || "Sem cor"])[1])}</b>${a.mercado_lider ? ` · MercadoLíder ${esc(a.mercado_lider)}` : ""} · ${num(a.vendas_periodo)} vendas concluídas (${esc(a.periodo || "período do ML")}) · lido ${dataHora(a.atualizado_em)}</p>
+      <div class="grade">
+        <div class="cartao"><small>Reclamações</small><b>${taxa(a.reclamacoes_taxa)}</b><div class="mini">${a.reclamacoes_qtd == null ? "—" : num(a.reclamacoes_qtd)} no período do ML</div></div>
+        <div class="cartao"><small>Envios com atraso</small><b>${taxa(a.atrasos_taxa)}</b><div class="mini">${a.atrasos_qtd == null ? "—" : num(a.atrasos_qtd)} no período do ML</div></div>
+        <div class="cartao"><small>Cancelamentos</small><b>${taxa(a.cancelamentos_taxa)}</b><div class="mini">${a.cancelamentos_qtd == null ? "—" : num(a.cancelamentos_qtd)} no período do ML</div></div>
+      </div>
+      <div class="nk-tw"><table class="nk-tab" data-nk-tabela="reputacao_${c}"><thead><tr><th>Dia</th><th>Cor</th><th class="n">Reclamações</th><th class="n">Atrasos</th><th class="n">Cancelamentos</th></tr></thead><tbody>` +
+      R.slice(0, 30).map(r => `<tr><td>${r.dia.split("-").reverse().join("/")}</td><td>${NIVEL[r.nivel] ? `<span style="color:${NIVEL[r.nivel][0]}">●</span> ${NIVEL[r.nivel][1]}` : esc(r.nivel || "—")}</td>
+        <td class="n">${taxa(r.reclamacoes_taxa)}</td><td class="n">${taxa(r.atrasos_taxa)}</td><td class="n">${taxa(r.cancelamentos_taxa)}</td></tr>`).join("") + `</tbody></table></div></div>`;
+    }).join("") + `</div>`;
+  }
+
+  function desenharProntas() {
+    const ro = somenteLeitura();
+    const cfgCampo = (chave, rot, dica) => `<label>${esc(rot)}<input data-cfg="${chave}" maxlength="200" placeholder="${esc(dica)}" value="${esc(D.config[chave] || "")}" ${ro ? "disabled" : ""}></label>`;
+    $("painel-prontas").innerHTML = `<p class="sub-tit">Saudação e assinatura de cada conta</p>
+      <p class="mini" style="margin:0 0 8px">Entram sozinhas no começo e no fim de toda resposta da conta (se você já não tiver escrito). Vazio = nada. O limite de ${D.regras.resposta_max} caracteres do ML conta com elas.</p>
+      <div class="cfg">${cfgCampo("saudacao@aracatuba", "Araçatuba · saudação", "Ex.: Olá!")}${cfgCampo("assinatura@aracatuba", "Araçatuba · assinatura", "Ex.: Equipe Noromak")}
+        ${cfgCampo("saudacao@bauru", "Bauru · saudação", "Ex.: Olá!")}${cfgCampo("assinatura@bauru", "Bauru · assinatura", "Ex.: Equipe Noromak Bauru")}</div>
+      ${ro ? "" : `<p style="margin:10px 0 18px"><button class="nk-btn pri" id="cfg-salvar" disabled>Salvar saudação e assinatura</button></p>`}
+      <p class="sub-tit">Respostas prontas</p>
+      <p class="mini" style="margin:0 0 8px">Valem para as duas contas. Na pergunta, escolha em "Inserir resposta pronta…" e ajuste antes de enviar.</p>
+      <div class="prontas">${D.respostas_prontas.map(r => `<div class="pronta" data-id="${r.id}"><input class="t" maxlength="60" value="${esc(r.titulo)}" ${ro ? "disabled" : ""}><textarea class="x" maxlength="${D.regras.resposta_max}" ${ro ? "disabled" : ""}>${esc(r.texto)}</textarea>
+        ${ro ? "<span></span>" : `<span><button class="nk-btn mini salvar">Salvar</button> <button class="nk-btn mini apagar">Apagar</button></span>`}</div>`).join("") || `<div class="nk-vazio">Nenhuma resposta pronta ainda.</div>`}
+      ${ro ? "" : `<div class="pronta" data-id=""><input class="t" maxlength="60" placeholder="Título (ex.: Original)"><textarea class="x" maxlength="${D.regras.resposta_max}" placeholder="Texto da resposta"></textarea><span><button class="nk-btn pri mini salvar">Adicionar</button></span></div>`}</div>`;
+    if (ro) return;
+    const inputs = [...document.querySelectorAll("[data-cfg]")];
+    inputs.forEach(i => i.oninput = () => { $("cfg-salvar").disabled = inputs.every(x => x.value.trim() === (D.config[x.dataset.cfg] || "")); });
+    $("cfg-salvar").onclick = async () => {
+      const dados = {}; inputs.forEach(i => dados[i.dataset.cfg] = i.value);
+      try { const r = await api("/api/posvenda/config", {method:"POST", body: JSON.stringify(dados)}); D.config = r.config; nkToast("Saudação e assinatura salvas.", "ok"); desenharProntas(); }
+      catch (e) { nkToast("Não foi possível salvar: " + e.message, "erro"); }
+    };
+    document.querySelectorAll(".pronta").forEach(el => {
+      const id = el.dataset.id;
+      const corpo = extra => JSON.stringify({id: id || undefined, titulo: el.querySelector(".t").value, texto: el.querySelector(".x").value, ...extra});
+      const sv = el.querySelector(".salvar"), ap = el.querySelector(".apagar");
+      if (sv) sv.onclick = async () => {
+        try { await api("/api/posvenda/respostas", {method:"POST", body: corpo({})}); nkToast(id ? "Resposta pronta salva." : "Resposta pronta adicionada.", "ok"); await carregar(); }
+        catch (e) { nkToast("Não foi possível salvar: " + e.message, "erro"); }
+      };
+      if (ap) ap.onclick = async () => {
+        if (!(await nkConfirmar(`Apagar a resposta pronta "${el.querySelector(".t").value}"?`))) return;
+        try { await api("/api/posvenda/respostas", {method:"POST", body: corpo({excluir: true})}); nkToast("Resposta pronta apagada.", "ok"); await carregar(); }
+        catch (e) { nkToast("Não foi possível apagar: " + e.message, "erro"); }
+      };
+    });
+  }
+
+  function notas() {
+    $("notas").innerHTML = `<b>Como funciona</b><ul>
+      <li><b>Perguntas</b>: lidas a cada ${D.regras.perguntas_intervalo_min} min nas duas contas. Sem resposta há mais de ${D.regras.pergunta_atraso_horas} h fica em vermelho (e o selo do menu também). Pergunta nova avisa no aparelho para quem ligou os "Avisos de venda".</li>
+      <li>O <b>anúncio</b> vem do retrato diário (sem chamar o ML); anúncio de Bauru pode aparecer só com o código.</li>
+      <li><b>Reclamações abertas</b>: <b>prazo</b> é o da ação obrigatória do vendedor. Menos de ${D.regras.prazo_critico_horas} h vira alerta por e-mail no Painel de saúde. Responder continua no ML.</li>
+      <li>A <b>perda</b> com devoluções fica no Financeiro (a partir de 01/11), pelo que chega na tela de Devoluções.</li></ul>`;
+  }
+
+  document.querySelectorAll("#contas button").forEach(b => b.onclick = () => {
+    conta = b.dataset.conta;
+    try { localStorage.setItem(CHAVE_CONTA, conta); } catch (_) {}
+    desenhar();
+  });
+  $("buscar").onclick = async () => {
+    $("buscar").disabled = true;
+    try { await api("/api/posvenda/sincronizar", {method:"POST", body:"{}"}); nkToast("Buscando no Mercado Livre (as duas contas). A tela atualiza sozinha em 1 minuto.", "info"); setTimeout(carregar, 60000); }
+    catch (e) { nkToast("Não foi possível buscar: " + e.message, "erro"); }
+    setTimeout(() => { $("buscar").disabled = false; }, 60000);
+  };
+  carregar();
+  // Atualiza a cada 1 min com a aba à vista, sem apagar o que está sendo digitado (rascunho) nem
+  // redesenhar a aba de respostas prontas no meio da edição.
+  setInterval(() => {
+    if (document.hidden || aba === "prontas") return;
+    const foco = document.activeElement;
+    if (foco && foco.tagName === "TEXTAREA") return;
+    carregar();
+  }, 60 * 1000);
+})();
+</script>
+</body>
+</html>

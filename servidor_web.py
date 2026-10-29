@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.00-DEMANDA-LINX-PORTA"
+APP_VERSION = "20.01-POSVENDA-CONTAS"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -2700,6 +2700,7 @@ def init_db() -> None:
     ean_overrides_vazios_migrar_v1915()  # V19.15
     ensure_saude_schema()  # V18.83
     ensure_posvenda_schema()  # V18.88
+    ensure_posvenda_contas_schema()  # V20.01
     ensure_promo_convite_schema()  # V18.89
     ensure_shopee_anuncios_schema()  # V18.90
     ensure_linx_demanda_schema()  # V18.91
@@ -22974,7 +22975,9 @@ def auditoria_detectar(hoje: Any = None) -> dict[str, Any]:  # noqa: C901
             (desde,)).fetchall()]
         ativas = {str(r[0]) for r in DB.execute("SELECT DISTINCT order_id FROM vendas_v1799 WHERE marketplace='ml'")}
         status = {str(r["order_id"]): dict(r) for r in DB.execute("SELECT * FROM ml_pedido_status_v1901 WHERE erro=''")}
-        reclamacoes = [dict(r) for r in DB.execute("SELECT * FROM ml_reclamacao_v1888 WHERE order_id<>''")]
+        # V20.01: o auditor é só de Araçatuba; as reclamações de Bauru agora também ficam nesta tabela.
+        reclamacoes = [dict(r) for r in DB.execute("SELECT * FROM ml_reclamacao_v1888 WHERE order_id<>'' AND conta=?",
+                                                   (CASA_PRINCIPAL,))]
         venda_custo: dict[str, dict[str, Any]] = {}
         for r in DB.execute("SELECT order_id, SUM(sale_fee) AS fee, COUNT(sale_fee) AS com_fee, MAX(shipment_id) AS sid, "
                             "MIN(sale_day) AS dia FROM ml_venda_custo_v1830 GROUP BY order_id"):
@@ -25089,8 +25092,17 @@ POSVENDA_PRAZO_CRITICO_H = 24       # Painel de saúde: prazo do vendedor em men
 POSVENDA_PERGUNTAS_GUARDAR_DIAS = 90
 POSVENDA_RESPOSTA_MAX = 2000        # limite de caracteres do ML para a resposta
 POSVENDA_LOCK = threading.Lock()
+# V20.01: "ultimo"/"perguntas" continuam sendo os da conta principal; "contas" tem o de cada conta.
 _POSVENDA_ESTADO: dict[str, Any] = {"rodando": False, "inicio": "", "fim": "", "ultimo": {},
-                                    "perguntas": {}, "reputacao_em": 0.0}
+                                    "perguntas": {}, "reputacao_em": 0.0, "contas": {}}
+# V20.01: tela de volta (dono, 29/10) com Araçatuba e Bauru. Pergunta sem resposta há mais de
+# 1 h deixa o selo do menu vermelho; quem está respondendo segura a pergunta (duas pessoas na
+# mesma pergunta = uma resposta só no ML).
+POSVENDA_PERGUNTA_ATRASO_H = 1
+_POSVENDA_RESPONDENDO: set[str] = set()
+POSVENDA_RESPONDENDO_LOCK = threading.Lock()
+POSVENDA_PRONTA_MAX = 60   # respostas prontas guardadas
+POSVENDA_TEXTO_CONFIG_MAX = 200
 
 # Motivos de encerramento (resolution.reason) mais comuns, para a tela.
 POSVENDA_RESOLUCAO_TXT = {
@@ -25198,6 +25210,64 @@ def ensure_posvenda_schema() -> None:
         DB.commit()
 
 
+def ensure_posvenda_contas_schema() -> None:
+    """V20.01: conta (Araçatuba/Bauru) em perguntas e reclamações; tudo o que já existia era da
+    principal. A reputação antiga (uma linha por dia) é copiada para a tabela por conta."""
+    with DB_LOCK:
+        for tabela in ("ml_reclamacao_v1888", "ml_pergunta_v1888"):
+            if "conta" not in {r[1] for r in DB.execute(f"PRAGMA table_info({tabela})")}:
+                DB.execute(f"ALTER TABLE {tabela} ADD COLUMN conta TEXT NOT NULL DEFAULT '{CASA_PRINCIPAL}'")
+        DB.executescript(
+            """
+            CREATE INDEX IF NOT EXISTS idx_ml_pergunta_conta ON ml_pergunta_v1888(conta, status);
+            CREATE INDEX IF NOT EXISTS idx_ml_pergunta_item ON ml_pergunta_v1888(item_id, status);
+            CREATE INDEX IF NOT EXISTS idx_ml_reclamacao_conta ON ml_reclamacao_v1888(conta, status);
+            CREATE TABLE IF NOT EXISTS ml_reputacao_conta_v2001 (
+                conta TEXT NOT NULL,
+                dia TEXT NOT NULL,
+                nivel TEXT NOT NULL DEFAULT '',
+                mercado_lider TEXT NOT NULL DEFAULT '',
+                vendas_periodo INTEGER,
+                periodo TEXT NOT NULL DEFAULT '',
+                reclamacoes_taxa REAL,
+                reclamacoes_qtd INTEGER,
+                atrasos_taxa REAL,
+                atrasos_qtd INTEGER,
+                cancelamentos_taxa REAL,
+                cancelamentos_qtd INTEGER,
+                atualizado_em TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (conta, dia)
+            );
+            CREATE TABLE IF NOT EXISTS posvenda_resposta_pronta_v2001 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                titulo TEXT NOT NULL DEFAULT '',
+                texto TEXT NOT NULL DEFAULT '',
+                atualizado_por TEXT NOT NULL DEFAULT '',
+                atualizado_em TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS posvenda_config_v2001 (
+                chave TEXT PRIMARY KEY,
+                valor TEXT NOT NULL DEFAULT '',
+                atualizado_por TEXT NOT NULL DEFAULT '',
+                atualizado_em TEXT NOT NULL DEFAULT ''
+            );
+            """
+        )
+        DB.execute(
+            "INSERT OR IGNORE INTO ml_reputacao_conta_v2001(conta,dia,nivel,mercado_lider,vendas_periodo,periodo,"
+            "reclamacoes_taxa,reclamacoes_qtd,atrasos_taxa,atrasos_qtd,cancelamentos_taxa,cancelamentos_qtd,atualizado_em) "
+            "SELECT ?,dia,nivel,mercado_lider,vendas_periodo,periodo,reclamacoes_taxa,reclamacoes_qtd,atrasos_taxa,"
+            "atrasos_qtd,cancelamentos_taxa,cancelamentos_qtd,atualizado_em FROM ml_reputacao_dia_v1888", (CASA_PRINCIPAL,))
+        DB.commit()
+
+
+def _posvenda_estado_conta(conta: str, parte: str, resultado: dict[str, Any]) -> None:
+    """Guarda o resultado da leitura daquela conta; a principal também nas chaves antigas."""
+    _POSVENDA_ESTADO.setdefault("contas", {}).setdefault(conta, {})[parte] = resultado
+    if conta == CASA_PRINCIPAL:
+        _POSVENDA_ESTADO["ultimo" if parte == "reclamacoes" else "perguntas"] = resultado
+
+
 def _posvenda_iso_ml(dt: datetime) -> str:
     """Data no formato que a busca de reclamações exige (com milissegundos)."""
     return dt.astimezone(BR_TZ).strftime("%Y-%m-%dT%H:%M:%S.000-03:00")
@@ -25293,11 +25363,11 @@ def _posvenda_gravar_base(base: dict[str, Any]) -> bool:
             DB.execute(
                 "INSERT INTO ml_reclamacao_v1888(claim_id,order_id,recurso,tipo,etapa,status,motivo_id,entregue,aberta_em,"
                 "atualizada_ml,fechada_em,resolucao,beneficiado,fechada_por,cobertura,acao,prazo,tem_devolucao,"
-                "precisa_detalhe,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?)",
+                "precisa_detalhe,updated_at,conta) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,?)",
                 (base["claim_id"], base["order_id"], base["recurso"], base["tipo"], base["etapa"], base["status"],
                  base["motivo_id"], base["entregue"], base["aberta_em"], base["atualizada_ml"], base["fechada_em"],
                  base["resolucao"], base["beneficiado"], base["fechada_por"], base["cobertura"], base["acao"],
-                 base["prazo"], base["tem_devolucao"], agora))
+                 base["prazo"], base["tem_devolucao"], agora, ml_casa_atual()))   # V20.01: conta que leu
         else:
             DB.execute(
                 "UPDATE ml_reclamacao_v1888 SET order_id=CASE WHEN ?<>'' THEN ? ELSE order_id END,recurso=?,tipo=?,etapa=?,"
@@ -25459,21 +25529,24 @@ def _posvenda_buscar(seller_id: str, filtros: dict[str, str], stop_event: thread
 
 def posvenda_reclamacoes_rodada(stop_event: threading.Event | None = None, *, agora: datetime | None = None,
                                 pausa: float | None = None) -> dict[str, Any]:
-    """Busca as reclamações abertas e as que mudaram, e detalha as novas/alteradas."""
+    """Busca as reclamações abertas e as que mudaram, e detalha as novas/alteradas.
+    V20.01: da conta da casa atual (ml_na_casa); cada conta tem o seu ponto de partida e a sua fila."""
     if not POSVENDA_LOCK.acquire(blocking=False):
         return {"ok": True, "pulado": "já está rodando"}
     pausa = POSVENDA_PAUSA if pausa is None else pausa
     agora = agora or datetime.now(timezone.utc)
+    conta = ml_casa_atual()
     try:
         _POSVENDA_ESTADO.update(rodando=True, inicio=now_iso(), fim="")
         linha = ml_integration_row()
         if not linha or not str(linha["access_token"] or "").strip():
             resultado = {"ok": True, "pulado": "Mercado Livre não conectado"}
-            _POSVENDA_ESTADO["ultimo"] = resultado
+            _posvenda_estado_conta(conta, "reclamacoes", resultado)
             return resultado
         seller_id = str(linha["seller_id"] or "")
         with DB_LOCK:
-            ultima = DB.execute("SELECT MAX(atualizada_ml) AS m FROM ml_reclamacao_v1888").fetchone()["m"]
+            ultima = DB.execute("SELECT MAX(atualizada_ml) AS m FROM ml_reclamacao_v1888 WHERE conta=?",
+                                (conta,)).fetchone()["m"]
         try:
             achados = _posvenda_buscar(seller_id, {"status": "opened"}, stop_event)
             ultima_dt = _posvenda_dt(ultima)
@@ -25491,8 +25564,8 @@ def posvenda_reclamacoes_rodada(stop_event: threading.Event | None = None, *, ag
         except Exception as exc:
             msg = str(exc)[:500]
             ml_log_event_se_mudou("posvenda", "/post-purchase/v1/claims/search", seller_id, ML_CLIENT_ID, "ERRO", msg)
-            resultado = {"ok": False, "erro": msg, "sem_permissao": ("HTTP 403" in msg or "HTTP 401" in msg)}
-            _POSVENDA_ESTADO["ultimo"] = resultado
+            resultado = {"ok": False, "erro": msg, "sem_permissao": ("HTTP 403" in msg or "HTTP 401" in msg), "em": now_iso()}
+            _posvenda_estado_conta(conta, "reclamacoes", resultado)
             return resultado
         vistos: set[str] = set()
         novas = 0
@@ -25508,13 +25581,14 @@ def posvenda_reclamacoes_rodada(stop_event: threading.Event | None = None, *, ag
         # mesmo formato do now_iso() (fuso local), senão a comparação de texto erra
         limite = (datetime.now(timezone.utc) - timedelta(seconds=POSVENDA_REVISITAR_ABERTA)).astimezone().isoformat(timespec="milliseconds")
         with DB_LOCK:
-            DB.execute("UPDATE ml_reclamacao_v1888 SET precisa_detalhe=1 WHERE status='opened' AND detalhado_em < ?",
-                       (limite,))
+            DB.execute("UPDATE ml_reclamacao_v1888 SET precisa_detalhe=1 WHERE status='opened' AND detalhado_em < ? "
+                       "AND conta=?", (limite, conta))
             DB.commit()
+            # V20.01: só as da conta da volta — o detalhe é lido com o token dela.
             fila = [str(r["claim_id"]) for r in DB.execute(
-                "SELECT claim_id FROM ml_reclamacao_v1888 WHERE precisa_detalhe=1 "
+                "SELECT claim_id FROM ml_reclamacao_v1888 WHERE precisa_detalhe=1 AND conta=? "
                 "ORDER BY CASE WHEN status='opened' THEN 0 ELSE 1 END, aberta_em DESC LIMIT ?",
-                (POSVENDA_DETALHES_POR_RODADA,)).fetchall()]
+                (conta, POSVENDA_DETALHES_POR_RODADA)).fetchall()]
         detalhadas = falhas = 0
         for cid in fila:
             if stop_event is not None and stop_event.is_set():
@@ -25531,7 +25605,7 @@ def posvenda_reclamacoes_rodada(stop_event: threading.Event | None = None, *, ag
         resultado = {"ok": True, "encontradas": len(vistos), "novas_ou_alteradas": novas,
                      "detalhadas": detalhadas, "com_erro": falhas, "em": now_iso()}
         ml_log_event_se_mudou("posvenda", "/post-purchase/v1/claims/search", seller_id, ML_CLIENT_ID, "OK", "")
-        _POSVENDA_ESTADO["ultimo"] = resultado
+        _posvenda_estado_conta(conta, "reclamacoes", resultado)
         return resultado
     finally:
         _POSVENDA_ESTADO.update(rodando=False, fim=now_iso())
@@ -25555,11 +25629,12 @@ def posvenda_reputacao_rodada(dia: str | None = None) -> dict[str, Any]:
     vendas = m("sales", "completed")
     dia = dia or datetime.now(BR_TZ).date().isoformat()
     with DB_LOCK:
+        # V20.01: uma linha por conta e dia (a ml_reputacao_dia_v1888 era só da principal).
         DB.execute(
-            "INSERT OR REPLACE INTO ml_reputacao_dia_v1888(dia,nivel,mercado_lider,vendas_periodo,periodo,reclamacoes_taxa,"
+            "INSERT OR REPLACE INTO ml_reputacao_conta_v2001(conta,dia,nivel,mercado_lider,vendas_periodo,periodo,reclamacoes_taxa,"
             "reclamacoes_qtd,atrasos_taxa,atrasos_qtd,cancelamentos_taxa,cancelamentos_qtd,atualizado_em) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-            (dia, str(rep.get("level_id") or ""), str(rep.get("power_seller_status") or ""),
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (ml_casa_atual(), dia, str(rep.get("level_id") or ""), str(rep.get("power_seller_status") or ""),
              int(vendas) if isinstance(vendas, (int, float)) else None, str(m("sales", "period") or ""),
              _posvenda_float(m("claims", "rate")), m("claims", "value"),
              _posvenda_float(m("delayed_handling_time", "rate")), m("delayed_handling_time", "value"),
@@ -25569,14 +25644,19 @@ def posvenda_reputacao_rodada(dia: str | None = None) -> dict[str, Any]:
     return {"ok": True, "nivel": str(rep.get("level_id") or "")}
 
 
-def _posvenda_gravar_pergunta(q: dict[str, Any], respondida_por: str = "") -> None:
+def _posvenda_gravar_pergunta(q: dict[str, Any], respondida_por: str = "") -> bool:
+    """Grava a pergunta (conta = casa atual, só ao criar). Devolve True quando é nova."""
     ans = q.get("answer") if isinstance(q.get("answer"), dict) else {}
     de = q.get("from") if isinstance(q.get("from"), dict) else {}
     with DB_LOCK:
+        nova = DB.execute("SELECT 1 FROM ml_pergunta_v1888 WHERE pergunta_id=?", (str(q.get("id") or ""),)).fetchone() is None
+        # V20.01: respondida por aqui não volta a "sem resposta" porque a busca do ML ainda a trouxe.
         DB.execute(
             "INSERT INTO ml_pergunta_v1888(pergunta_id,item_id,texto,status,criada_em,comprador_id,resposta,respondida_em,"
-            "respondida_por,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(pergunta_id) DO UPDATE SET "
-            "item_id=excluded.item_id,texto=excluded.texto,status=excluded.status,criada_em=excluded.criada_em,"
+            "respondida_por,updated_at,conta) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(pergunta_id) DO UPDATE SET "
+            "item_id=excluded.item_id,texto=excluded.texto,"
+            "status=CASE WHEN ml_pergunta_v1888.status='ANSWERED' AND excluded.status='UNANSWERED' "
+            "AND ml_pergunta_v1888.respondida_por<>'' THEN 'ANSWERED' ELSE excluded.status END,criada_em=excluded.criada_em,"
             "comprador_id=excluded.comprador_id,"
             "resposta=CASE WHEN excluded.resposta<>'' THEN excluded.resposta ELSE ml_pergunta_v1888.resposta END,"
             "respondida_em=CASE WHEN excluded.respondida_em<>'' THEN excluded.respondida_em ELSE ml_pergunta_v1888.respondida_em END,"
@@ -25584,16 +25664,45 @@ def _posvenda_gravar_pergunta(q: dict[str, Any], respondida_por: str = "") -> No
             "ELSE excluded.respondida_por END,updated_at=excluded.updated_at",
             (str(q.get("id") or ""), str(q.get("item_id") or ""), str(q.get("text") or ""), str(q.get("status") or ""),
              str(q.get("date_created") or ""), str(de.get("id") or ""), str(ans.get("text") or ""),
-             str(ans.get("date_created") or ""), respondida_por, now_iso()))
+             str(ans.get("date_created") or ""), respondida_por, now_iso(), ml_casa_atual()))
         DB.commit()
+    return nova
+
+
+def _posvenda_avisar_perguntas(conta: str, novas: list[dict[str, Any]]) -> int:
+    """V20.01: pergunta nova vira aviso (popup/push dos Avisos de venda). A 1ª leitura de cada
+    conta só marca o que existe; pergunta com mais de 48 h entra calada. Uma vez por pergunta."""
+    chave_base = f"base_pergunta@{conta}"
+    limite = datetime.now(timezone.utc) - timedelta(hours=AVISOS_VENDA_RECENTE_HORAS)
+    agora = now_iso()
+    avisadas = 0
+    with DB_LOCK:
+        primeira = DB.execute("SELECT 1 FROM aviso_config_v1893 WHERE chave=?", (chave_base,)).fetchone() is None
+        for q in novas:
+            quando = _posvenda_dt(q.get("date_created"))
+            silencioso = 1 if (primeira or quando is None or quando < limite) else 0
+            cur = DB.execute(
+                "INSERT OR IGNORE INTO aviso_venda_v1893(marketplace,venda_id,venda_em,valor,titulo,qtd,itens,silencioso,"
+                "criado_em,casa) VALUES('pergunta',?,?,NULL,?,0,0,?,?,?)",
+                (f"pergunta:{q.get('id')}", str(q.get("date_created") or ""), str(q.get("text") or "")[:200],
+                 silencioso, agora, conta))
+            avisadas += 1 if (cur.rowcount and not silencioso) else 0
+        if primeira:
+            DB.execute("INSERT OR IGNORE INTO aviso_config_v1893(chave,valor) VALUES(?,?)", (chave_base, agora))
+        DB.commit()
+    if avisadas:
+        AVISOS_VENDA_EVENT.set()
+    return avisadas
 
 
 def posvenda_perguntas_rodada(stop_event: threading.Event | None = None) -> dict[str, Any]:
-    """Perguntas sem resposta. As que saíram da lista (respondidas no ML, apagadas) são relidas."""
+    """Perguntas sem resposta. As que saíram da lista (respondidas no ML, apagadas) são relidas.
+    V20.01: da conta da casa atual (ml_na_casa)."""
+    conta = ml_casa_atual()
     linha = ml_integration_row()
     if not linha or not str(linha["access_token"] or "").strip():
         resultado = {"ok": True, "pulado": "Mercado Livre não conectado"}
-        _POSVENDA_ESTADO["perguntas"] = resultado
+        _posvenda_estado_conta(conta, "perguntas", resultado)
         return resultado
     seller_id = str(linha["seller_id"] or "")
     abertas: dict[str, dict[str, Any]] = {}
@@ -25612,14 +25721,14 @@ def posvenda_perguntas_rodada(stop_event: threading.Event | None = None) -> dict
     except Exception as exc:
         msg = str(exc)[:500]
         ml_log_event_se_mudou("posvenda", "/questions/search", seller_id, ML_CLIENT_ID, "ERRO", msg)
-        resultado = {"ok": False, "erro": msg, "sem_permissao": ("HTTP 403" in msg or "HTTP 401" in msg)}
-        _POSVENDA_ESTADO["perguntas"] = resultado
+        resultado = {"ok": False, "erro": msg, "sem_permissao": ("HTTP 403" in msg or "HTTP 401" in msg), "em": now_iso()}
+        _posvenda_estado_conta(conta, "perguntas", resultado)
         return resultado
-    for q in abertas.values():
-        _posvenda_gravar_pergunta(q)
+    novas = [q for q in abertas.values() if _posvenda_gravar_pergunta(q)]
+    _posvenda_avisar_perguntas(conta, novas)
     with DB_LOCK:
         sumiram = [str(r["pergunta_id"]) for r in DB.execute(
-            "SELECT pergunta_id FROM ml_pergunta_v1888 WHERE status='UNANSWERED'").fetchall()
+            "SELECT pergunta_id FROM ml_pergunta_v1888 WHERE status='UNANSWERED' AND conta=?", (conta,)).fetchall()
             if str(r["pergunta_id"]) not in abertas]
     relidas = 0
     for qid in sumiram[:30]:
@@ -25642,36 +25751,138 @@ def posvenda_perguntas_rodada(stop_event: threading.Event | None = None) -> dict
         DB.commit()
     ml_log_event_se_mudou("posvenda", "/questions/search", seller_id, ML_CLIENT_ID, "OK", "")
     resultado = {"ok": True, "sem_resposta": len(abertas), "relidas": relidas, "em": now_iso()}
-    _POSVENDA_ESTADO["perguntas"] = resultado
+    _posvenda_estado_conta(conta, "perguntas", resultado)
     return resultado
 
 
+def posvenda_config() -> dict[str, str]:
+    """V20.01: saudação e assinatura de cada conta (vazio = nada)."""
+    with DB_LOCK:
+        gravado = {str(r["chave"]): str(r["valor"]) for r in DB.execute("SELECT chave, valor FROM posvenda_config_v2001")}
+    return {f"{parte}@{conta}": gravado.get(f"{parte}@{conta}", "") for conta in CASAS for parte in ("saudacao", "assinatura")}
+
+
+def posvenda_config_salvar(dados: dict[str, Any], ator: str) -> dict[str, Any]:
+    validas = set(posvenda_config())
+    mudou = {}
+    for chave, valor in (dados or {}).items():
+        if chave not in validas:
+            raise ValueError(f"Opção desconhecida: {chave}")
+        texto = " ".join(str(valor or "").split())
+        if len(texto) > POSVENDA_TEXTO_CONFIG_MAX:
+            raise ValueError(f"Saudação/assinatura passa de {POSVENDA_TEXTO_CONFIG_MAX} caracteres.")
+        mudou[chave] = texto
+    agora = now_iso()
+    with DB_LOCK:
+        for chave, texto in mudou.items():
+            DB.execute("INSERT OR REPLACE INTO posvenda_config_v2001(chave,valor,atualizado_por,atualizado_em) VALUES(?,?,?,?)",
+                       (chave, texto, ator, agora))
+        DB.commit()
+    audit(ator, "posvenda_config", json_dumps(mudou)[:500])
+    return {"ok": True, "config": posvenda_config()}
+
+
+def posvenda_respostas_prontas() -> list[dict[str, Any]]:
+    with DB_LOCK:
+        return [dict(r) for r in DB.execute(
+            "SELECT id, titulo, texto, atualizado_por, atualizado_em FROM posvenda_resposta_pronta_v2001 "
+            "ORDER BY titulo COLLATE NOCASE, id")]
+
+
+def posvenda_resposta_salvar(dados: dict[str, Any], ator: str) -> dict[str, Any]:
+    """Cria, edita (com id) ou apaga (id + excluir) uma resposta pronta."""
+    rid = dados.get("id")
+    if rid not in (None, ""):
+        try:
+            rid = int(rid)
+        except (TypeError, ValueError):
+            raise ValueError("Resposta pronta inválida.")
+    else:
+        rid = None
+    agora = now_iso()
+    if dados.get("excluir"):
+        if rid is None:
+            raise ValueError("Resposta pronta inválida.")
+        with DB_LOCK:
+            DB.execute("DELETE FROM posvenda_resposta_pronta_v2001 WHERE id=?", (rid,))
+            DB.commit()
+        audit(ator, "posvenda_resposta_pronta", f"apagou {rid}")
+        return {"ok": True, "apagada": rid}
+    titulo = " ".join(str(dados.get("titulo") or "").split())[:60]
+    texto = str(dados.get("texto") or "").strip()
+    if not texto:
+        raise ValueError("Escreva o texto da resposta pronta.")
+    if len(texto) > POSVENDA_RESPOSTA_MAX:
+        raise ValueError(f"A resposta pronta passa de {POSVENDA_RESPOSTA_MAX} caracteres.")
+    titulo = titulo or texto[:40]
+    with DB_LOCK:
+        if rid is None:
+            if DB.execute("SELECT COUNT(*) FROM posvenda_resposta_pronta_v2001").fetchone()[0] >= POSVENDA_PRONTA_MAX:
+                raise ValueError(f"Limite de {POSVENDA_PRONTA_MAX} respostas prontas. Apague alguma antes.")
+            rid = DB.execute("INSERT INTO posvenda_resposta_pronta_v2001(titulo,texto,atualizado_por,atualizado_em) "
+                             "VALUES(?,?,?,?)", (titulo, texto, ator, agora)).lastrowid
+        elif not DB.execute("UPDATE posvenda_resposta_pronta_v2001 SET titulo=?,texto=?,atualizado_por=?,atualizado_em=? "
+                            "WHERE id=?", (titulo, texto, ator, agora, rid)).rowcount:
+            raise ValueError("Resposta pronta não encontrada. Atualize a tela.")
+        DB.commit()
+    audit(ator, "posvenda_resposta_pronta", f"{rid}: {titulo}")
+    return {"ok": True, "resposta": {"id": rid, "titulo": titulo, "texto": texto}}
+
+
+def posvenda_texto_final(texto: str, conta: str) -> str:
+    """Saudação + texto + assinatura da conta, sem repetir o que a pessoa já escreveu."""
+    cfg = posvenda_config()
+    saud, assin = cfg.get(f"saudacao@{conta}", ""), cfg.get(f"assinatura@{conta}", "")
+    partes = [texto]
+    if saud and not texto.lower().startswith(saud.lower()):
+        partes.insert(0, saud)
+    if assin and not texto.lower().endswith(assin.lower()):
+        partes.append(assin)
+    return " ".join(partes)
+
+
 def posvenda_responder(pergunta_id: str, texto: str, ator: str) -> dict[str, Any]:
-    """Responde a pergunta no ML (POST /answers). Só pergunta conhecida e ainda sem resposta."""
+    """Responde a pergunta no ML (POST /answers). Só pergunta conhecida e ainda sem resposta.
+    V20.01: pela conta dona da pergunta, com a saudação/assinatura dela; uma pessoa por vez."""
     pergunta_id = str(pergunta_id or "").strip()
     texto = str(texto or "").strip()
     if not pergunta_id.isdigit():
         raise ValueError("Pergunta inválida.")
     if not texto:
         raise ValueError("Escreva a resposta.")
-    if len(texto) > POSVENDA_RESPOSTA_MAX:
-        raise ValueError(f"A resposta passa de {POSVENDA_RESPOSTA_MAX} caracteres (limite do Mercado Livre).")
     with DB_LOCK:
-        r = DB.execute("SELECT status FROM ml_pergunta_v1888 WHERE pergunta_id=?", (pergunta_id,)).fetchone()
+        r = DB.execute("SELECT status, conta FROM ml_pergunta_v1888 WHERE pergunta_id=?", (pergunta_id,)).fetchone()
     if r is None:
         raise ValueError("Pergunta não encontrada. Atualize a tela.")
-    if str(r["status"]) != "UNANSWERED":
-        raise ValueError("Esta pergunta já foi respondida ou não está mais disponível.")
-    resposta = _ml_promo_http("POST", "/answers", {"question_id": int(pergunta_id), "text": texto})
-    agora = now_iso()
-    resp = resposta.get("answer") if isinstance(resposta, dict) and isinstance(resposta.get("answer"), dict) else {}
-    with DB_LOCK:
-        DB.execute("UPDATE ml_pergunta_v1888 SET status='ANSWERED', resposta=?, respondida_em=?, respondida_por=?, "
-                   "updated_at=? WHERE pergunta_id=?",
-                   (str(resp.get("text") or texto), str(resp.get("date_created") or agora), ator, agora, pergunta_id))
-        DB.commit()
-    audit(ator, "ml_pergunta_responder", f"{pergunta_id}: {texto[:500]}")
-    return {"ok": True, "pergunta_id": pergunta_id}
+    conta = str(r["conta"] or CASA_PRINCIPAL)
+    final = posvenda_texto_final(texto, conta)
+    if len(final) > POSVENDA_RESPOSTA_MAX:
+        raise ValueError(f"A resposta passa de {POSVENDA_RESPOSTA_MAX} caracteres (limite do Mercado Livre), "
+                         "contando a saudação e a assinatura.")
+    with POSVENDA_RESPONDENDO_LOCK:
+        if pergunta_id in _POSVENDA_RESPONDENDO:
+            raise ValueError("Outra pessoa está respondendo esta pergunta agora. Atualize a tela em instantes.")
+        _POSVENDA_RESPONDENDO.add(pergunta_id)
+    try:
+        # relida já com a vez: quem respondeu um instante antes já gravou ANSWERED
+        with DB_LOCK:
+            r = DB.execute("SELECT status FROM ml_pergunta_v1888 WHERE pergunta_id=?", (pergunta_id,)).fetchone()
+        if r is None or str(r["status"]) != "UNANSWERED":
+            raise ValueError("Esta pergunta já foi respondida ou não está mais disponível.")
+        with ml_na_casa(conta):
+            resposta = _ml_promo_http("POST", "/answers", {"question_id": int(pergunta_id), "text": final})
+        agora = now_iso()
+        resp = resposta.get("answer") if isinstance(resposta, dict) and isinstance(resposta.get("answer"), dict) else {}
+        with DB_LOCK:
+            DB.execute("UPDATE ml_pergunta_v1888 SET status='ANSWERED', resposta=?, respondida_em=?, respondida_por=?, "
+                       "updated_at=? WHERE pergunta_id=?",
+                       (str(resp.get("text") or final), str(resp.get("date_created") or agora), ator, agora, pergunta_id))
+            DB.commit()
+    finally:
+        with POSVENDA_RESPONDENDO_LOCK:
+            _POSVENDA_RESPONDENDO.discard(pergunta_id)
+    audit(ator, "ml_pergunta_responder", f"{pergunta_id} [{conta}]: {final[:500]}")
+    return {"ok": True, "pergunta_id": pergunta_id, "texto": final}
 
 
 # ---------------------------------------------------------------------------
@@ -26136,28 +26347,45 @@ def catalogo_ml_amostras() -> dict[str, Any]:
     return {"ok": True, "amostras": out}
 
 
+def posvenda_rodada_contas(stop_event: threading.Event | None = None, *, reclamacoes: bool = True,
+                           pausa: float | None = None) -> dict[str, Any]:
+    """V20.01: perguntas (e, quando pedido, reclamações e reputação) de cada conta conectada,
+    cada uma com o próprio token. O erro de uma conta não impede a outra."""
+    feito: dict[str, Any] = {}
+    for casa in ml_casas_conectadas():
+        if stop_event is not None and stop_event.is_set():
+            break
+        with ml_na_casa(casa):
+            try:
+                posvenda_perguntas_rodada(stop_event)
+            except Exception as exc:
+                _posvenda_estado_conta(casa, "perguntas", {"ok": False, "erro": str(exc)[:300], "em": now_iso()})
+                print(f"[posvenda] perguntas ({casa}) falharam: {exc}", file=sys.stderr, flush=True)
+            if not reclamacoes:
+                continue
+            try:
+                posvenda_reclamacoes_rodada(stop_event, pausa=pausa)
+            except Exception as exc:
+                _posvenda_estado_conta(casa, "reclamacoes", {"ok": False, "erro": str(exc)[:300], "em": now_iso()})
+                print(f"[posvenda] reclamações ({casa}) falharam: {exc}", file=sys.stderr, flush=True)
+            try:
+                posvenda_reputacao_rodada()
+            except Exception as exc:
+                print(f"[posvenda] reputação ({casa}) falhou: {exc}", file=sys.stderr, flush=True)
+        feito[casa] = dict((_POSVENDA_ESTADO.get("contas") or {}).get(casa) or {})
+    return feito
+
+
 def posvenda_loop(stop_event: threading.Event) -> None:
-    """Perguntas a cada 5 min; reclamações e reputação a cada 15 min."""
+    """Perguntas a cada 5 min; reclamações e reputação a cada 15 min. V20.01: de cada conta."""
     if stop_event.wait(120):
         return
     proxima_reclamacao = 0.0
     while not stop_event.is_set():
-        try:
-            posvenda_perguntas_rodada(stop_event)
-        except Exception as exc:
-            _POSVENDA_ESTADO["perguntas"] = {"ok": False, "erro": str(exc)[:300]}
-            print(f"[posvenda] perguntas falharam: {exc}", file=sys.stderr, flush=True)
-        if time.time() >= proxima_reclamacao:
+        fazer = time.time() >= proxima_reclamacao
+        if fazer:
             proxima_reclamacao = time.time() + POSVENDA_INTERVALO
-            try:
-                posvenda_reclamacoes_rodada(stop_event)
-            except Exception as exc:
-                _POSVENDA_ESTADO["ultimo"] = {"ok": False, "erro": str(exc)[:300]}
-                print(f"[posvenda] reclamações falharam: {exc}", file=sys.stderr, flush=True)
-            try:
-                posvenda_reputacao_rodada()
-            except Exception as exc:
-                print(f"[posvenda] reputação falhou: {exc}", file=sys.stderr, flush=True)
+        posvenda_rodada_contas(stop_event, reclamacoes=fazer)
         if stop_event.wait(POSVENDA_PERGUNTAS_INTERVALO):
             break
 
@@ -26244,8 +26472,48 @@ def _posvenda_valores(r: dict[str, Any], custo_unit: Any) -> dict[str, Any]:
     return out
 
 
-def posvenda_payload(dias: int = 30, hoje: date | None = None) -> dict[str, Any]:
-    """Tela de Pós-venda. Só lê o banco (a coleta é do worker)."""
+POSVENDA_DEVOLUCAO_CAMINHO_DIAS = 60   # V20.01: devoluções do ML mostradas na tela (abertas nesse prazo)
+POSVENDA_DEVOLUCAO_ENCERRADA = ("cancelled", "expired", "failed", "return_to_buyer")
+
+
+def _posvenda_devolucoes_recebidas(dias: int = 180) -> dict[str, dict[str, Any]]:
+    """V20.01: nº de venda/carrinho/pedido → devolução recebida na tela de Devoluções (V19.88)."""
+    corte = (datetime.now(timezone.utc) - timedelta(days=dias)).astimezone().isoformat(timespec="milliseconds")
+    achadas: dict[str, dict[str, Any]] = {}
+    with DB_LOCK:
+        linhas = [dict(r) for r in DB.execute(
+            "SELECT d.id, d.order_key, d.pedido, d.recebido_em, d.situacao, "
+            "(SELECT GROUP_CONCAT(DISTINCT b.ml_ids) FROM devolucao_busca_v1988 b WHERE b.order_key=d.order_key) AS ml_ids "
+            "FROM devolucao_v1988 d WHERE d.recebido_em>=? AND d.order_key<>''", (corte,))]
+    for d in linhas:
+        ids = {str(d["order_key"]), normalize(d["pedido"])}
+        if str(d["order_key"]).startswith(DEVOLUCAO_VENDA_PREFIXO):
+            ids.add(str(d["order_key"])[len(DEVOLUCAO_VENDA_PREFIXO):])
+        ids |= {x for x in str(d.get("ml_ids") or "").split(",") if x}
+        for i in ids - {""}:
+            achadas.setdefault(i, {"id": d["id"], "recebido_em": d["recebido_em"], "situacao": d["situacao"]})
+    return achadas
+
+
+def posvenda_resumo() -> dict[str, Any]:
+    """V20.01: selo do menu — perguntas sem resposta e as que passaram de 1 h."""
+    limite = datetime.now(timezone.utc) - timedelta(hours=POSVENDA_PERGUNTA_ATRASO_H)
+    with DB_LOCK:
+        rows = DB.execute("SELECT conta, criada_em FROM ml_pergunta_v1888 WHERE status='UNANSWERED'").fetchall()
+    por_conta: dict[str, int] = {}
+    atrasadas = 0
+    for r in rows:
+        por_conta[str(r["conta"] or CASA_PRINCIPAL)] = por_conta.get(str(r["conta"] or CASA_PRINCIPAL), 0) + 1
+        c = _posvenda_dt(r["criada_em"])
+        atrasadas += 1 if (c and c < limite) else 0
+    return {"ok": True, "sem_resposta": len(rows), "atrasadas": atrasadas, "por_conta": por_conta,
+            "atraso_horas": POSVENDA_PERGUNTA_ATRASO_H}
+
+
+def posvenda_payload(dias: int = 30, hoje: date | None = None, com_relatorio: bool = True) -> dict[str, Any]:
+    """Tela de Pós-venda. Só lê o banco (a coleta é do worker).
+    V20.01: a tela não mostra mais o relatório de perdas (a perda fica no Financeiro, V19.95):
+    com_relatorio=False pula a conta de custo, que é a parte pesada."""
     dias = max(1, min(int(dias), 365))
     hoje = hoje or datetime.now(BR_TZ).date()
     d1 = hoje - timedelta(days=dias - 1)
@@ -26255,26 +26523,40 @@ def posvenda_payload(dias: int = 30, hoje: date | None = None) -> dict[str, Any]
             "SELECT r.*, m.detalhe AS motivo_txt FROM ml_reclamacao_v1888 r "
             "LEFT JOIN ml_reclamacao_motivo_v1888 m ON m.motivo_id=r.motivo_id").fetchall()]
         perguntas = [dict(r) for r in DB.execute(
-            "SELECT p.*, i.titulo AS item_titulo FROM ml_pergunta_v1888 p "
+            "SELECT p.*, i.titulo AS item_titulo, i.preco AS item_preco, i.estoque AS item_estoque, i.sku AS item_sku, "
+            "i.status AS item_status FROM ml_pergunta_v1888 p "
             "LEFT JOIN ml_visitas_item_v1868 i ON i.item_id=p.item_id "
             "WHERE p.status='UNANSWERED' ORDER BY p.criada_em").fetchall()]
         respondidas = [dict(r) for r in DB.execute(
             "SELECT criada_em, respondida_em, respondida_por FROM ml_pergunta_v1888 "
             "WHERE status='ANSWERED' AND respondida_em<>''").fetchall()]
-        reput = [dict(r) for r in DB.execute(
-            "SELECT * FROM ml_reputacao_dia_v1888 ORDER BY dia DESC LIMIT 60").fetchall()]
+        # V20.01: as últimas respostas de cada anúncio que tem pergunta esperando
+        itens_espera = sorted({str(p["item_id"]) for p in perguntas if p["item_id"]})
+        anteriores: dict[str, list[dict[str, Any]]] = {}
+        for item_id in itens_espera:
+            anteriores[item_id] = [dict(r) for r in DB.execute(
+                "SELECT pergunta_id, texto, resposta, respondida_em, respondida_por FROM ml_pergunta_v1888 "
+                "WHERE item_id=? AND status='ANSWERED' AND resposta<>'' ORDER BY respondida_em DESC LIMIT 5", (item_id,))]
+        reput_todas = [dict(r) for r in DB.execute(
+            "SELECT * FROM ml_reputacao_conta_v2001 WHERE dia>=? ORDER BY dia DESC",
+            ((hoje - timedelta(days=60)).isoformat(),)).fetchall()]
         fat = DB.execute("SELECT COALESCE(SUM(amount),0) AS v, COUNT(DISTINCT order_id) AS n FROM vendas_v1799 "
                          "WHERE marketplace='ml' AND sale_day BETWEEN ? AND ?", (d1.isoformat(), hoje.isoformat())).fetchone()
+    reput_por_conta: dict[str, list[dict[str, Any]]] = {}
+    for r in reput_todas:
+        reput_por_conta.setdefault(str(r["conta"]), []).append(r)
+    reput = reput_por_conta.get(CASA_PRINCIPAL, [])
 
-    produtos = _compras_produtos_precificador()
-    reservas = _compras_custos_reserva(produtos)
-    skus = []
-    for r in recl:
-        try:
-            skus += [str(i.get("sku") or "") for i in json.loads(r.get("itens_json") or "[]")]
-        except Exception:
-            pass
-    kits = full_kit_compositions([s for s in skus if s])
+    if com_relatorio:
+        produtos = _compras_produtos_precificador()
+        reservas = _compras_custos_reserva(produtos)
+        skus = []
+        for r in recl:
+            try:
+                skus += [str(i.get("sku") or "") for i in json.loads(r.get("itens_json") or "[]")]
+            except Exception:
+                pass
+        kits = full_kit_compositions([s for s in skus if s])
     cache: dict[str, Any] = {}
 
     def custo_unit(sku: str) -> float | None:
@@ -26306,8 +26588,11 @@ def posvenda_payload(dias: int = 30, hoje: date | None = None) -> dict[str, Any]
             "sku": ", ".join(sorted({str(i.get("sku") or "") for i in itens if i.get("sku")})),
             "anuncio": (itens[0].get("item_id") if itens else ""),
             "titulo": (itens[0].get("titulo") if itens else ""),
+            "conta": str(r.get("conta") or CASA_PRINCIPAL),   # V20.01
+            "devolucao_envios": [x for x in str(r.get("devolucao_envios") or "").split(",") if x],
         }
-        item.update(_posvenda_valores(r, custo_unit))
+        if com_relatorio:
+            item.update(_posvenda_valores(r, custo_unit))
         if r["status"] == "opened":
             abertas.append(item)
         else:
@@ -26352,15 +26637,46 @@ def posvenda_payload(dias: int = 30, hoje: date | None = None) -> dict[str, Any]
     for p in perguntas:
         c = _posvenda_dt(p["criada_em"])
         p["horas_esperando"] = round((agora - c).total_seconds() / 3600, 1) if c else None
+        # V20.01: o anúncio pelo retrato diário (sem chamar o ML; Bauru ainda não tem retrato) e as respostas anteriores
+        p["conta"] = str(p.get("conta") or CASA_PRINCIPAL)
+        p["anuncio"] = {"titulo": p.pop("item_titulo", None) or "", "preco": p.pop("item_preco", None),
+                        "estoque": p.pop("item_estoque", None), "sku": p.pop("item_sku", None) or "",
+                        "status": p.pop("item_status", None) or ""}
+        p["anteriores"] = anteriores.get(str(p["item_id"]), [])
+        p.pop("comprador_id", None)
 
-    faturamento = round(float(fat["v"] or 0), 2)
-    perda_total = soma("perda", fech_p)
-    return {
+    # V20.01: devoluções do ML (reclamação com envio de volta) e se a peça já chegou na tela de Devoluções
+    recebidas = _posvenda_devolucoes_recebidas()
+    corte_dev = (hoje - timedelta(days=POSVENDA_DEVOLUCAO_CAMINHO_DIAS)).isoformat()
+    devolucoes = []
+    for x in abertas + fechadas:
+        if not x["tem_devolucao"] or not x["order_id"] or str(x["aberta_em"])[:10] < corte_dev:
+            continue
+        if x["devolucao_status"] in POSVENDA_DEVOLUCAO_ENCERRADA:
+            continue
+        rec = recebidas.get(normalize(x["order_id"])) or recebidas.get(str(x["order_id"]))
+        devolucoes.append({
+            "claim_id": x["claim_id"], "order_id": x["order_id"], "conta": x["conta"], "aberta_em": x["aberta_em"],
+            "status_reclamacao": x["status"], "devolucao_status": x["devolucao_status"],
+            "devolucao_subtipo": x["devolucao_subtipo"], "destino": x["devolucao_destino"], "motivo": x["motivo"],
+            "titulo": x["titulo"], "sku": x["sku"], "pedido_total": x["pedido_total"], "envios": x["devolucao_envios"],
+            "recebida": bool(rec), "recebida_em": (rec or {}).get("recebido_em", ""), "devolucao_id": (rec or {}).get("id"),
+        })
+    devolucoes.sort(key=lambda d: (d["recebida"], d["aberta_em"]))
+
+    estado_contas = _POSVENDA_ESTADO.get("contas") or {}
+    conectadas = set(ml_casas_conectadas())
+    contas = [{"conta": c, "nome": CASAS[c], "conectada": c in conectadas,
+               "perguntas": (estado_contas.get(c) or {}).get("perguntas") or {},
+               "reclamacoes": (estado_contas.get(c) or {}).get("reclamacoes") or {}} for c in CASAS]
+
+    saida = {
         "ok": True,
         "periodo": {"inicio": d1.isoformat(), "fim": hoje.isoformat(), "dias": dias},
         "coleta": {"reclamacoes": _POSVENDA_ESTADO.get("ultimo") or {}, "perguntas": _POSVENDA_ESTADO.get("perguntas") or {},
                    "rodando": bool(_POSVENDA_ESTADO.get("rodando")), "total_guardadas": len(recl),
                    "pendentes_detalhe": sum(1 for r in recl if r["precisa_detalhe"])},
+        "contas": contas,
         "abertas": abertas,
         "perguntas": perguntas,
         "perguntas_resumo": {
@@ -26368,8 +26684,21 @@ def posvenda_payload(dias: int = 30, hoje: date | None = None) -> dict[str, Any]
             "respondidas_30d": len(respondidas_30),
             "mediana_horas": round(respondidas_30[len(respondidas_30) // 2], 1) if respondidas_30 else None,
         },
+        "devolucoes": devolucoes,
         "reputacao": reput,
-        "relatorio": {
+        "reputacao_por_conta": reput_por_conta,
+        "respostas_prontas": posvenda_respostas_prontas(),
+        "config": posvenda_config(),
+        "regras": {"prazo_critico_horas": POSVENDA_PRAZO_CRITICO_H, "historico_dias": POSVENDA_HISTORICO_DIAS,
+                   "intervalo_min": POSVENDA_INTERVALO // 60, "perguntas_intervalo_min": POSVENDA_PERGUNTAS_INTERVALO // 60,
+                   "resposta_max": POSVENDA_RESPOSTA_MAX, "pergunta_atraso_horas": POSVENDA_PERGUNTA_ATRASO_H,
+                   "devolucao_dias": POSVENDA_DEVOLUCAO_CAMINHO_DIAS},
+    }
+    if not com_relatorio:
+        return saida
+    faturamento = round(float(fat["v"] or 0), 2)
+    perda_total = soma("perda", fech_p)
+    saida["relatorio"] = {
             "reclamacoes": len(periodo),
             "devolucoes": sum(1 for x in periodo if x["tem_devolucao"]),
             "em_aberto": sum(1 for x in periodo if x["status"] == "opened"),
@@ -26389,11 +26718,8 @@ def posvenda_payload(dias: int = 30, hoje: date | None = None) -> dict[str, Any]
                                               (x["titulo"] or x["anuncio"] or "Sem anúncio") + (f" · SKU {x['sku']}" if x["sku"] else ""))),
             "por_mes": sorted(agrupar(lambda x: (str(x["aberta_em"])[:7], str(x["aberta_em"])[:7])), key=lambda a: a["chave"]),
             "itens": sorted(periodo, key=lambda x: x["aberta_em"], reverse=True),
-        },
-        "regras": {"prazo_critico_horas": POSVENDA_PRAZO_CRITICO_H, "historico_dias": POSVENDA_HISTORICO_DIAS,
-                   "intervalo_min": POSVENDA_INTERVALO // 60, "perguntas_intervalo_min": POSVENDA_PERGUNTAS_INTERVALO // 60,
-                   "resposta_max": POSVENDA_RESPOSTA_MAX},
     }
+    return saida
 
 
 def _saude_posvenda() -> list[dict[str, Any]]:
@@ -26401,11 +26727,15 @@ def _saude_posvenda() -> list[dict[str, Any]]:
     g = "Operação"
     if not ml_status_payload().get("configured"):
         return []
-    ultimo = _POSVENDA_ESTADO.get("ultimo") or {}
+    # V20.01: as duas contas; a falha de leitura de cada uma aparece com o nome dela.
+    falhas = [(c, (e or {}).get("reclamacoes") or {}) for c, e in (_POSVENDA_ESTADO.get("contas") or {}).items()]
+    falhas = [(c, u) for c, u in falhas if u.get("ok") is False]
+    if not falhas and (_POSVENDA_ESTADO.get("ultimo") or {}).get("ok") is False:
+        falhas = [(CASA_PRINCIPAL, _POSVENDA_ESTADO["ultimo"])]
     agora = datetime.now(timezone.utc)
     with DB_LOCK:
         abertas = [dict(r) for r in DB.execute(
-            "SELECT claim_id, order_id, acao, prazo, prazo_detalhe, responsavel FROM ml_reclamacao_v1888 "
+            "SELECT claim_id, order_id, acao, prazo, prazo_detalhe, responsavel, conta FROM ml_reclamacao_v1888 "
             "WHERE status='opened'").fetchall()]
     vencendo = []
     com_acao = 0
@@ -26423,15 +26753,18 @@ def _saude_posvenda() -> list[dict[str, Any]]:
         return [_saude_item("posvenda_prazo", g, "Reclamações do Mercado Livre", "critico",
                             f"{len(vencendo)} reclamação(ões) com prazo do vendedor em menos de {POSVENDA_PRAZO_CRITICO_H} h",
                             f"A mais urgente ({POSVENDA_ACAO_TXT.get(r['acao'], r['acao']) or 'ação do vendedor'}, "
-                            f"pedido {r['order_id'] or r['claim_id']}) {quando}.", "", "")]
-    if ultimo and ultimo.get("ok") is False:
+                            f"{CASAS.get(str(r.get('conta') or CASA_PRINCIPAL), '')}, "
+                            f"pedido {r['order_id'] or r['claim_id']}) {quando}.", "/posvenda", "Abrir Pós-venda")]
+    if falhas:
+        conta, ultimo = falhas[0]
+        nomes = ", ".join(CASAS.get(c, c) for c, _ in falhas)
         return [_saude_item("posvenda_prazo", g, "Reclamações do Mercado Livre", "atencao",
-                            "Não foi possível ler as reclamações no ML",
-                            ("Falta a permissão de pós-venda no aplicativo do ML (DevCenter). " if ultimo.get("sem_permissao") else "")
-                            + str(ultimo.get("erro") or "")[:200], "", "")]
+                            f"Não foi possível ler as reclamações no ML ({nomes})",
+                            ("Falta a permissão de pós-venda: reconecte a conta em Integrações. " if ultimo.get("sem_permissao") else "")
+                            + str(ultimo.get("erro") or "")[:200], "/posvenda", "Abrir Pós-venda")]
     if com_acao:
         return [_saude_item("posvenda_prazo", g, "Reclamações do Mercado Livre", "atencao",
-                            f"{com_acao} reclamação(ões) esperando ação do vendedor", "", "", "")]
+                            f"{com_acao} reclamação(ões) esperando ação do vendedor", "", "/posvenda", "Abrir Pós-venda")]
     return [_saude_item("posvenda_prazo", g, "Reclamações do Mercado Livre", "ok",
                         f"{len(abertas)} reclamação(ões) aberta(s), nenhuma esperando o vendedor" if abertas
                         else "Nenhuma reclamação aberta")]
@@ -35179,11 +35512,19 @@ class AppHandler(BaseHTTPRequestHandler):
             if self.auth(admin_only=True) is None:
                 return
             try:
-                self.send_json(posvenda_payload(int(str((query.get("dias") or ["30"])[0] or "30"))))
+                # V20.01: a tela não pede o relatório de perdas (?relatorio=1 ainda o devolve).
+                self.send_json(posvenda_payload(int(str((query.get("dias") or ["30"])[0] or "30")),
+                                                com_relatorio=str((query.get("relatorio") or [""])[0]) == "1"))
             except ValueError as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 400)
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/posvenda/resumo":
+            # V20.01: selo do menu (perguntas sem resposta / passadas de 1 h). Só lê o banco.
+            if self.auth(admin_only=True) is None:
+                return
+            self.send_json(posvenda_resumo())
             return
         if path == "/api/ruptura/relatorio.xlsx":
             # V19.59: o relatório em Excel. Somente leitura.
@@ -35683,6 +36024,8 @@ class AppHandler(BaseHTTPRequestHandler):
             # V18.88: Pós-venda do ML.
             # V19.74: Monitor de catálogo do ML.
             "/catalogo-ml": "admin", "/catalogo-ml/": "admin", "/catalogo-ml.html": "admin",
+            # V20.01: Pós-venda do ML de volta (perguntas e reclamações de Araçatuba e Bauru).
+            "/posvenda": "admin", "/posvenda/": "admin", "/posvenda.html": "admin",
             # V18.83: Painel de saúde do sistema.
             "/saude": "admin", "/saude/": "admin", "/saude.html": "admin",
             # V19.43: fila de faturamento em lote.
@@ -36196,6 +36539,21 @@ class AppHandler(BaseHTTPRequestHandler):
                 except Exception as exc:
                     self.send_json({"ok": False, "error": str(exc)}, 502)
             return
+        if path in ("/api/posvenda/respostas", "/api/posvenda/config"):
+            # V20.01: respostas prontas e saudação/assinatura de cada conta (módulo admin).
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                try:
+                    dados = self.read_json() or {}
+                    if path.endswith("/config"):
+                        self.send_json(posvenda_config_salvar(dados, ctx["username"]))
+                    else:
+                        self.send_json(posvenda_resposta_salvar(dados, ctx["username"]))
+                except ValueError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 400)
+                except Exception as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
         if path == "/api/catalogo-ml/promocao":
             # V19.76: troca a promoção própria no ML pela gaveta do Catálogo (grava no ML).
             ctx = self.auth(admin_only=True)
@@ -36231,11 +36589,10 @@ class AppHandler(BaseHTTPRequestHandler):
             ctx = self.auth(admin_only=True)
             if ctx is not None:
                 def _sincronizar() -> None:
-                    for f in (posvenda_perguntas_rodada, posvenda_reclamacoes_rodada, posvenda_reputacao_rodada):
-                        try:
-                            f()
-                        except Exception as exc:
-                            print(f"[posvenda] sincronizar: {exc}", file=sys.stderr, flush=True)
+                    try:
+                        posvenda_rodada_contas(reclamacoes=True)   # V20.01: as duas contas
+                    except Exception as exc:
+                        print(f"[posvenda] sincronizar: {exc}", file=sys.stderr, flush=True)
                 threading.Thread(target=_sincronizar, name="posvenda-manual", daemon=True).start()
                 self.send_json({"ok": True, "iniciado": True})
             return
@@ -39302,6 +39659,9 @@ class AppHandler(BaseHTTPRequestHandler):
             "/catalogo-ml": "catalogo-ml.html",
             "/catalogo-ml/": "catalogo-ml.html",
             "/catalogo-ml.html": "catalogo-ml.html",
+            "/posvenda": "posvenda.html",   # V20.01
+            "/posvenda/": "posvenda.html",
+            "/posvenda.html": "posvenda.html",
             "/ruptura.html": "ruptura.html",
             "/promocoes-auto": "promocoes-auto.html",
             "/promocoes-auto/": "promocoes-auto.html",
@@ -39691,6 +40051,14 @@ def _avisos_formatar(row: sqlite3.Row | dict[str, Any]) -> dict[str, Any]:
         return {"id": int(row["id"]), "marketplace": "catalogo", "venda_id": row["venda_id"], "venda_em": row["venda_em"],
                 "valor": None, "titulo": "Catálogo ML" + (f" {filial}" if filial else "") + ": perdeu a vitrine",
                 "corpo": str(row["titulo"] or ""), "url": f"{BASE_PATH}/catalogo-ml"}
+    if row["marketplace"] == "pergunta":  # V20.01: pergunta nova no ML
+        try:
+            filial = CASAS.get(str(row["casa"] or ""), "")
+        except (KeyError, IndexError):
+            filial = ""
+        return {"id": int(row["id"]), "marketplace": "pergunta", "venda_id": row["venda_id"], "venda_em": row["venda_em"],
+                "valor": None, "titulo": "Pergunta ML" + (f" {filial}" if filial else ""),
+                "corpo": str(row["titulo"] or "")[:160], "url": f"{BASE_PATH}/posvenda"}
     valor = _avisos_brl(row["valor"]) if row["valor"] is not None else ""
     try:
         filial = str(row["casa"] or "")

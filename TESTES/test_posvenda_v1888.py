@@ -299,7 +299,7 @@ class TelaEAlerta(Base):
         self.rodar()
         item = S._saude_posvenda()[0]
         self.assertEqual((item["id"], item["nivel"]), ("posvenda_prazo", "critico"))
-        self.assertEqual(item["acao"], "")   # V19.76: a tela saiu
+        self.assertEqual(item["acao"], "/posvenda")   # V20.01: a tela voltou (V19.76 tinha tirado)
 
     def test_prazo_longe_e_so_atencao(self):
         self.ml.reclamacoes = [reclamacao(1, acao="send_message_to_complainant", prazo=iso(60))]

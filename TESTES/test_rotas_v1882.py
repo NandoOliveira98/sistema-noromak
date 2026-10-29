@@ -118,7 +118,7 @@ class RotasDasTelas(TesteNoromak):
 
     def test_telas_com_menu_carregam_o_menu_unico(self):
         for pagina in ("financeiro", "conversao", "analise-ads", "promocoes-auto",
-                       "ruptura", "analise-full", "compras", "precificador", "tarefas"):
+                       "ruptura", "analise-full", "compras", "precificador", "tarefas", "posvenda"):
             texto = (APP / f"{pagina}.html").read_text(encoding="utf-8")
             self.assertIn('nk-menu.js?v=', texto, f"{pagina}.html sem o menu único")
             self.assertIn("data-shell", texto, f"{pagina}.html não monta o menu")

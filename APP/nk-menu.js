@@ -38,6 +38,8 @@
       { id: "historico-sku", rotulo: "Histórico de SKU", href: "/historico-sku", aba: "historico-sku", modulo: "admin", oculto: true },
     ] },
     { grupo: "vendas", titulo: "Vendas e anúncios", itens: [
+      // V20.01: Pós-venda de volta — perguntas e reclamações do ML de Araçatuba e Bauru (selo = perguntas sem resposta).
+      { id: "posvenda", rotulo: "Pós-venda", href: "/posvenda", modulo: "admin", icone: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2zM12 7v4M12 14h.01" },
       { id: "conversao", rotulo: "Conversão", href: "/conversao", modulo: "admin", icone: "M3 4h18l-7 8v6l-4 2v-8L3 4z" },
       // V19.74: monitor de catálogo do ML (vitrine, concorrentes, margem no preço para ganhar).
       { id: "catalogo-ml", rotulo: "Catálogo ML", href: "/catalogo-ml", modulo: "admin", icone: "M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM17.5 14v7M14 17.5h7" },
@@ -159,6 +161,7 @@
     contarTarefas(nav);
     const perm = user.permissions || {};
     const pode = m => Object.prototype.hasOwnProperty.call(perm, m) ? !!perm[m] : (user.app_role === "admin" || m === "conferencia");
+    if (pode("admin")) contarPerguntas(nav);
     const supervisor = user.app_role !== "admin" && pode("admin");
     nav.querySelectorAll(".v15-nav-item[data-nk-modulo]").forEach(a => {
       // V19.70: data-nk-alt = outro módulo que também abre a tela (perfil Compras na Ruptura/Demanda).
@@ -194,6 +197,29 @@
       s.style.cssText = `margin-left:auto;min-width:18px;height:18px;padding:0 5px;border-radius:9px;font-size:11px;font-weight:800;display:inline-grid;place-items:center;color:#fff;background:${d.atrasadas ? "#d03b3b" : "#3b6fd0"}`;
       a.appendChild(s);
     } catch (_) {}
+  }
+
+  // V20.01: selo no item "Pós-venda" com as perguntas do ML sem resposta (vermelho se alguma passou de 1 h).
+  // Relê a cada 2 min com a aba à vista (uma consulta pequena, só ao banco).
+  async function contarPerguntas(nav) {
+    const a = nav.querySelector('.v15-nav-item[data-nk-id="posvenda"]');
+    if (!a) return;
+    const pintar = async () => {
+      if (document.hidden) return;
+      try {
+        const r = await fetch(`${B}/api/posvenda/resumo`, { cache: "no-store", credentials: "same-origin" });
+        const d = await r.json();
+        if (!r.ok) return;
+        let s = a.querySelector(".nk-perguntas-n");
+        if (!d.sem_resposta) { if (s) s.remove(); return; }
+        if (!s) { s = document.createElement("span"); s.className = "nk-perguntas-n"; a.appendChild(s); }
+        s.textContent = d.sem_resposta;
+        s.title = `${d.sem_resposta} pergunta(s) sem resposta` + (d.atrasadas ? `, ${d.atrasadas} há mais de ${d.atraso_horas} h` : "");
+        s.style.cssText = `margin-left:auto;min-width:18px;height:18px;padding:0 5px;border-radius:9px;font-size:11px;font-weight:800;display:inline-grid;place-items:center;color:#fff;background:${d.atrasadas ? "#d03b3b" : "#3b6fd0"}`;
+      } catch (_) {}
+    };
+    pintar();
+    setInterval(pintar, 120000);
   }
 
   // V18.95: seletor de filial (quem vê "todas"). A escolha vale para todas as telas e abas
@@ -331,7 +357,7 @@
     if (window.nkAvisos) { window.nkAvisos.ligarBotoes(); return; }
     if (document.querySelector('script[data-nk-avisos-js]')) return;
     const s = document.createElement("script");
-    s.src = `${B}/nk-avisos.js?v=19.74`;
+    s.src = `${B}/nk-avisos.js?v=20.01`;
     s.defer = true;
     s.dataset.nkAvisosJs = "1";
     document.head.append(s);

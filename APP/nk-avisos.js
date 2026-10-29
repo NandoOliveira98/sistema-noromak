@@ -99,14 +99,15 @@
     estilo();
     const a = area();
     novas.slice(-4).forEach(v => {
-      const canal = v.marketplace === "ml" ? "ML" : v.marketplace === "shopee" ? "Shopee" : v.marketplace === "full" ? "Full" : v.marketplace === "catalogo" ? "Catálogo" : "Teste";
+      const canal = v.marketplace === "ml" ? "ML" : v.marketplace === "shopee" ? "Shopee" : v.marketplace === "full" ? "Full" : v.marketplace === "catalogo" ? "Catálogo" : v.marketplace === "pergunta" ? "Pergunta" : "Teste";
       const el = document.createElement("div");
       el.className = `nk-venda ${v.marketplace || ""}`;
       el.setAttribute("role", "status");
       el.innerHTML = `<div class="nk-venda-selo">${esc(canal)}</div><div><b>${esc(v.titulo)}</b><span>${esc(v.corpo)}</span></div><button type="button" aria-label="Fechar">×</button>`;
       const fechar = () => { el.classList.add("sai"); setTimeout(() => el.remove(), 260); };
       el.querySelector("button").addEventListener("click", e => { e.stopPropagation(); fechar(); });
-      el.addEventListener("click", () => window.open(v.marketplace === "full" ? `${B}/analise-full` : v.marketplace === "catalogo" ? `${B}/catalogo-ml` : ABRIR, "_blank"));
+      // V20.01: o aviso que traz o próprio endereço (pergunta → Pós-venda) abre nele.
+      el.addEventListener("click", () => window.open(v.url ? v.url : v.marketplace === "full" ? `${B}/analise-full` : v.marketplace === "catalogo" ? `${B}/catalogo-ml` : ABRIR, "_blank"));
       a.append(el);
       setTimeout(fechar, 15000);
     });

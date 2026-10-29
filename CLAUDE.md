@@ -5,7 +5,7 @@ Shopee, manuais), expedição, separação, conferência por código de barras, 
 produtos/SKUs/EANs, kits, precificação, promoções, rentabilidade, estoque, Central de
 Pendências e histórico.
 
-Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V20.00).
+Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V20.01).
 
 ---
 
@@ -110,7 +110,8 @@ APP/
                              /pendencias e /promocoes-ml abrem o Admin. V19.76: as telas
                              Promoções ML (promocoes.html), Oportunidades de Kit e Pós-venda
                              foram apagadas a pedido do dono — /promocoes abre as Promoções
-                             automáticas; as APIs e a rotina do Pós-venda continuam)
+                             automáticas; as APIs e a rotina do Pós-venda continuam.
+                             V20.01: posvenda.html voltou, com Araçatuba e Bauru)
   shared-storage.js          cache versionado + polling (CRÍTICO)
   nk-menu.js                 menu lateral único + endereço de cada tela (V18.82)
   nk-ui.js / nk-ui.css       tema claro/escuro, avisos, confirmação, tabela padrão (V18.83)
@@ -761,6 +762,25 @@ teste" recusado volta 200 com o motivo (502 virava a página de erro do nginx). 
 só com o Noromak instalado na Tela de Início (iOS 16.4+). Endereços de push aceitos: `AVISOS_PUSH_HOSTS`.
 
 ### Pós-venda do Mercado Livre (V18.88)
+**V20.01 — a tela voltou, com Araçatuba e Bauru** (decisões do dono, 29/10; a V19.76 tinha apagado porque a
+integração ainda dava 403). `APP/posvenda.html` (`/posvenda`, menu Vendas e anúncios, módulo **admin**; Consulta só vê).
+Pergunta e reclamação guardam a `conta` (coluna nova, o que existia = Araçatuba); `posvenda_rodada_contas` roda
+perguntas/reclamações/reputação **em cada conta conectada** dentro de `ml_na_casa` (o detalhe da reclamação e a releitura
+da pergunta só na fila da conta, com o token dela); cada conta tem o seu ponto de partida da busca e o seu estado
+(`_POSVENDA_ESTADO["contas"]`; "ultimo"/"perguntas" seguem sendo da principal). Reputação por conta em
+`ml_reputacao_conta_v2001` (a antiga copiada como Araçatuba). **Responder** (`posvenda_responder`): pela conta dona da
+pergunta, com saudação/assinatura da conta (`posvenda_config_v2001`, `saudacao@conta`/`assinatura@conta`, entram uma vez
+só; o limite de 2.000 do ML vale para o texto final) e uma pessoa por vez (`_POSVENDA_RESPONDENDO`); respondida por aqui
+não volta a "sem resposta" pela busca atrasada do ML. Respostas prontas em `posvenda_resposta_pronta_v2001`
+(`POST /api/posvenda/respostas`, `/config`). Tela: filtro Todas/Araçatuba/Bauru (`nk_posvenda_conta_v2001`), anúncio pelo
+retrato diário (sem chamar o ML; Bauru sem retrato), respostas anteriores do mesmo anúncio, conta sem permissão aparece
+"sem permissão (403), reconectar", **devoluções a caminho** (reclamação com envio de volta, 60 dias) com "Chegou" quando a
+peça está em `devolucao_v1988` pelo nº do pedido. O **relatório de perdas saiu da tela** (a perda fica no Financeiro,
+V19.95; `?relatorio=1` ainda o devolve). **Avisos:** pergunta nova vira aviso `marketplace='pergunta'` (popup/push dos
+Avisos de venda, abre `/posvenda`; 1ª leitura de cada conta só marca, `base_pergunta@conta`; > 48 h calada). Selo no
+menu (`GET /api/posvenda/resumo`, vermelho com pergunta > 1 h). Painel de saúde: prazo < 24 h das duas contas, com o nome
+da conta e o botão "Abrir Pós-venda". O Auditor de cobranças continua lendo só as reclamações de Araçatuba.
+Teste: `TESTES/test_posvenda_contas_v2001.py`.
 **V19.76: a tela foi apagada (dono, 22/10).** A rotina `posvenda_loop` e as tabelas continuam: o Auditor de
 cobranças usa as reclamações (frete de devolução) e o Painel de saúde o prazo do vendedor (sem botão de tela).
 Era `APP/posvenda.html` (`/posvenda`, menu Vendas e anúncios, módulo **admin**; `GET /api/posvenda?dias=30`,
