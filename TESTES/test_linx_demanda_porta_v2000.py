@@ -369,6 +369,47 @@ class MesEmAndamento(MesAtual):
         self.assertEqual(x["linx_total"], 30 + 6)
         self.assertIsNone(x["linx_mes_atual_linx"])
 
+    @unittest.skipIf(datetime.now(S.BR_TZ).day <= 4, "precisa de dias no mês para uma leitura velha")
+    def test_mes_lido_ha_dias_nao_derruba_a_media(self):
+        # revisão 29/10: a leitura boa ficou velha (porta fora do ar nas noites seguintes); os dias sem
+        # leitura entrariam na divisão com balcão zero. Mês velho = sem mês: vale a trava.
+        self.ate = (self.hoje - timedelta(days=3)).isoformat()
+        self.mes("0893600022", 1, balcao=1)
+        self.ler()
+        x = self.item("0893600022", dias=30)
+        self.assertIsNone(x["linx_mes_atual_linx"])
+        self.assertAlmostEqual(x["linx_media_dia"], 10 / 30.4375, places=3)
+
+    def test_leitura_de_anteontem_ainda_vale(self):
+        self.ate = max(self.hoje.replace(day=1), self.hoje - timedelta(days=2)).isoformat()
+        self.mes("0893600022", 1, balcao=1)
+        self.ler()
+        self.assertEqual(self.item("0893600022", dias=30)["linx_mes_atual_linx"], 1)
+
+    def test_amostra_do_mes_traz_as_linhas_parciais(self):
+        # revisão 29/10: a amostra cortada em 6.000 caracteres pegava só os meses fechados
+        self.hist("0893600022", {1: [5] * 12, 2: [5] * 12, 3: [5] * 12})
+        # a porta pode mandar "parcial": false nas linhas fechadas
+        self.linhas["0893600022"] = [dict(x, parcial=False, ate=None) for x in self.linhas["0893600022"]]
+        self.linhas["0893764272"] = [dict(x, codigo="0893764272") for x in self.linhas["0893600022"]]
+        self.mes("0893764272", 1, balcao=6)
+        self.ler()
+        with S.DB_LOCK:
+            js = S.DB.execute("SELECT json FROM linx_demanda_amostra_v1891 WHERE tipo='porta_demanda_mes'").fetchone()[0]
+        linhas = json.loads(js)["itens"]
+        self.assertTrue(linhas)
+        self.assertTrue(all(x.get("parcial") for x in linhas))
+
+    def test_amostra_do_mes_mesmo_com_outro_formato(self):
+        # campo com outro valor ("S"): a amostra tem de existir para conferir o formato
+        self.mes("0893600022", 1, balcao=6)
+        self.parcial["0893600022"][0]["parcial"] = "S"
+        self.ler()
+        with S.DB_LOCK:
+            r = S.DB.execute("SELECT json FROM linx_demanda_amostra_v1891 WHERE tipo='porta_demanda_mes'").fetchone()
+        self.assertIsNotNone(r)
+        self.assertEqual(self.item("0893600022", dias=30)["linx_mes_atual_linx"], 6)   # "S" = parcial
+
     def test_resumo_conta_as_pecas_com_o_mes(self):
         self.mes("0893600022", 1, balcao=6)
         self.ler()

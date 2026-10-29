@@ -1134,7 +1134,11 @@ a média é a conta honesta (mês fraco puxa para baixo; decisão do dono, 29/10
 fechados" só vale sem ele. A âncora (`lido_dia`) sai só dos meses fechados; mês parcial de outro mês é ignorado. Peça
 em `com_erro` com o parâmetro é perguntada de novo **sem** ele (vêm os fechados). O mês aberto vale só no dia da leitura
 (no dia seguinte a peça volta uma vez em `pendentes`); dia 1º não vem. Amostra `porta_demanda_mes`. A conferir: o
-vendedor 68 (contado como balcão).
+vendedor 68 (contado como balcão). **Revisão 29/10:** o mês só conta como coberto com `mes_atual_ate` de até 2 dias
+atrás (leitura velha = trava de volta; senão os dias sem leitura entravam na média com balcão zero); peças, meses
+fechados e mês em andamento lidos num `DB_LOCK` só (o e-commerce fora dele); a amostra do mês guarda só as linhas do
+mês (até 15), achadas na resposta crua (chave `parcial`/`ate`/`DemandaEcommerce` ou mês corrente) — a resposta inteira
+cortada em 6.000 caracteres ficava só com os meses fechados.
 
 ### Linx Smart API (levantamento 21/09/2026)
 API oficial da Linx para o Linx DMS, na nuvem: gateway `https://auto-gwsmartapi.linx.com.br/<api>`,

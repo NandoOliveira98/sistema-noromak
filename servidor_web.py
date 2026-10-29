@@ -33130,7 +33130,7 @@ def _linx_porta_demanda_ler(resp: dict[str, Any]) -> tuple[dict[str, list[dict[s
         if not c or not mes or rev is None or total is None:
             continue
         # V20.02: linha do mês em andamento (só com incluir_mes_atual=1)
-        parcial = str(_linx_ci(e, "parcial") or "").strip().lower() in ("true", "1", "sim")
+        parcial = str(_linx_ci(e, "parcial") or "").strip().lower() in ("true", "1", "sim", "s")
         ate = str(_linx_ci(e, "ate") or "")[:10] if parcial else ""
         linhas.setdefault(c, []).append({"revenda": int(rev), "mes": mes, "total": total, **canais,
                                          "ocorrencias": _linx_num(_linx_ci(e, "OcorrenciaVendas")),
@@ -33271,8 +33271,21 @@ def linx_demanda_rodada(stop_event: threading.Event | None = None, *, fornecedor
                 # revisão 29/10: a 1ª resposta vem toda em pendentes; guarda a 1ª com linhas (e a 1ª com erro)
                 if resp.get("itens"):
                     _linx_amostra("porta_demanda", restantes[0], resp)
-                    if any(x.get("parcial") for ls in linhas.values() for x in ls):
-                        _linx_amostra("porta_demanda_mes", restantes[0], resp)
+                    # revisão 29/10: a amostra do mês guarda SÓ as linhas do mês (a resposta inteira cortada
+                    # em 6.000 caracteres ficava só com os meses fechados), achadas na resposta crua — com
+                    # o campo em outro formato, a amostra existe para conferir.
+                    if com_mes:
+                        mes_hoje = datetime.now(BR_TZ).strftime("%Y-%m")
+                        brutos = [e for e in resp.get("itens") or [] if isinstance(e, dict)]
+                        # pelo mês ou pelo valor de `parcial`; só sem nenhuma, pela presença da chave
+                        # (a porta pode mandar "parcial": false nas linhas fechadas)
+                        do_mes = [e for e in brutos if _linx_mes(e) == mes_hoje or str(
+                            _linx_ci(e, "parcial") or "").strip().lower() in ("true", "1", "sim", "s")] or [
+                            e for e in brutos if any(str(k).lower() in ("parcial", "ate", "demandaecommerce") for k in e)]
+                        if do_mes:
+                            _linx_amostra("porta_demanda_mes", restantes[0],
+                                          {"itens": do_mes[:15], "linhas_do_mes": len(do_mes),
+                                           "linhas": len(resp.get("itens") or [])})
                 if resp.get("com_erro"):
                     _linx_amostra("porta_demanda_erro", restantes[0], resp)
                 resolvidos = [c for c in restantes if c not in pend and not (com_mes and c in erros)]
@@ -33371,13 +33384,6 @@ def linx_demanda_por_codigo(codigos: list[str], dias: int, hoje: date | None = N
     primeiro_do_mes = hoje.replace(day=1)
     meses = _linx_meses_antes(primeiro_do_mes, m)
     dias_base = m * 30.4375
-    with DB_LOCK:
-        itens = {str(r["codigo"]): dict(r) for r in DB.execute("SELECT * FROM linx_demanda_item_v1891").fetchall()}
-        abertas = DB.execute("SELECT codigo, SUM(MAX(0, COALESCE(pedida,0) - COALESCE(baixada,0))) AS q, "
-                             "MIN(NULLIF(previsao,'')) AS prev FROM linx_compra_aberta_v1891 GROUP BY codigo").fetchall()
-        amostras = {str(r["tipo"]): str(r["quando"]) for r in DB.execute(
-            "SELECT tipo, quando FROM linx_demanda_amostra_v1891").fetchall()}
-
     def ancora_de(it: dict[str, Any]) -> date:
         try:
             lido = date.fromisoformat(str(it.get("lido_dia") or "")[:10]).replace(day=1)
@@ -33385,27 +33391,35 @@ def linx_demanda_por_codigo(codigos: list[str], dias: int, hoje: date | None = N
             return primeiro_do_mes
         return min(lido, primeiro_do_mes)
 
-    ancoras = {c: ancora_de(itens[c]) for c in codigos if c in itens}
-    somas: dict[date, dict[str, Any]] = {}
-    ecoms: dict[date, dict[str, int]] = {}
-    for anc in set(ancoras.values()):
-        ms = _linx_meses_antes(anc, m)
-        marcas = ",".join("?" * len(ms))
-        filtro, args = ("", ms) if filial == "todas" else (" AND revenda=?", [*ms, int(filial)])
-        with DB_LOCK:
-            linhas = DB.execute(f"SELECT codigo, SUM(total) AS t, SUM(balcao) AS b, SUM(oficina) AS o, SUM(telemark) AS tm "
-                                f"FROM linx_demanda_filial_v2000 WHERE mes IN ({marcas}) AND parcial=0{filtro} GROUP BY codigo",
-                                args).fetchall()
-        somas[anc] = {str(r["codigo"]): r for r in linhas}
-        ecoms[anc] = ecom_desde(anc.isoformat()) if ecom_desde else {}
     # V20.02: mês em andamento da Linx (balcão + oficina + telemarketing; o e-commerce dela NÃO entra —
     # o do mês é o nosso, somado como antes). Só vale para a peça cuja leitura cobriu ESTE mês.
     mes_corrente = primeiro_do_mes.strftime("%Y-%m")
     filtro_p, args_p = ("", [mes_corrente]) if filial == "todas" else (" AND revenda=?", [mes_corrente, int(filial)])
+    somas: dict[date, dict[str, Any]] = {}
+    # revisão 29/10: peças, meses fechados e mês em andamento lidos de uma vez — em blocos separados, a
+    # rodada (botão "Atualizar da Linx") gravando no meio deixava a peça "coberta" sem as linhas do mês.
     with DB_LOCK:
+        itens = {str(r["codigo"]): dict(r) for r in DB.execute("SELECT * FROM linx_demanda_item_v1891").fetchall()}
+        abertas = DB.execute("SELECT codigo, SUM(MAX(0, COALESCE(pedida,0) - COALESCE(baixada,0))) AS q, "
+                             "MIN(NULLIF(previsao,'')) AS prev FROM linx_compra_aberta_v1891 GROUP BY codigo").fetchall()
+        amostras = {str(r["tipo"]): str(r["quando"]) for r in DB.execute(
+            "SELECT tipo, quando FROM linx_demanda_amostra_v1891").fetchall()}
+        ancoras = {c: ancora_de(itens[c]) for c in codigos if c in itens}
+        for anc in set(ancoras.values()):
+            ms = _linx_meses_antes(anc, m)
+            marcas = ",".join("?" * len(ms))
+            filtro, args = ("", ms) if filial == "todas" else (" AND revenda=?", [*ms, int(filial)])
+            somas[anc] = {str(r["codigo"]): r for r in DB.execute(
+                f"SELECT codigo, SUM(total) AS t, SUM(balcao) AS b, SUM(oficina) AS o, SUM(telemark) AS tm "
+                f"FROM linx_demanda_filial_v2000 WHERE mes IN ({marcas}) AND parcial=0{filtro} GROUP BY codigo",
+                args).fetchall()}
         parciais = {str(r["codigo"]): r for r in DB.execute(
             "SELECT codigo, SUM(COALESCE(balcao,0)) AS b, SUM(COALESCE(oficina,0)) AS o, SUM(COALESCE(telemark,0)) AS tm "
             f"FROM linx_demanda_filial_v2000 WHERE mes=? AND parcial=1{filtro_p} GROUP BY codigo", args_p).fetchall()}
+    ecoms = {anc: (ecom_desde(anc.isoformat()) if ecom_desde else {}) for anc in somas}   # fora do DB_LOCK
+    # revisão 29/10: o mês da Linx só vale com leitura recente (`ate` de ontem/anteontem). Leitura velha
+    # (porta fora do ar nas noites seguintes) poria os dias sem leitura na divisão com balcão zero.
+    ate_minimo = (hoje - timedelta(days=2)).isoformat()
     cam = {str(r["codigo"]): r for r in abertas}
     out: dict[str, dict[str, Any]] = {}
     for c in codigos:
@@ -33425,7 +33439,8 @@ def linx_demanda_por_codigo(codigos: list[str], dias: int, hoje: date | None = N
                   "telemark": float(s["tm"] or 0) if s else 0.0}
         # V20.02: com o mês da Linx a média é a conta honesta (decisão do dono, 29/10): um mês fraco
         # puxa para baixo. A Linx conta até `ate` (ontem) e o e-commerce até hoje; os dias vão até hoje.
-        coberto = tem_hist and anc == primeiro_do_mes and str(it.get("mes_atual") or "") == mes_corrente
+        coberto = (tem_hist and anc == primeiro_do_mes and str(it.get("mes_atual") or "") == mes_corrente
+                   and str(it.get("mes_atual_ate") or "") >= ate_minimo)
         p = parciais.get(c) if coberto else None
         mes_linx = (float(p["b"] or 0) + float(p["o"] or 0) + float(p["tm"] or 0)) if p else 0.0
         if p:
