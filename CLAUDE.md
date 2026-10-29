@@ -1087,8 +1087,12 @@ linha por (peça, filial, mês **fechado**) com `DemandaBalcao/Oficina/Telemark/
 9 vezes; o que sobrar fica para a próxima). Guardada em `linx_demanda_filial_v2000`; erro não apaga a leitura anterior.
 Decisões do dono (29/10): **filial escolhida na tela** (`filial=1|2|3|todas`, padrão Araçatuba, `nk_compras_filial_v2000`)
 e o **mês corrente entra pelo e-commerce** (ML + Shopee do mês até hoje, da conta da filial: Araçatuba `vendas_v1799`,
-Bauru `vendas_conta_v1898`, Ribeirão nenhum), somado no total e nos dias da média
-(`(Linx meses fechados + e-com do mês) ÷ (dias dos meses + dias corridos)`). A demanda da Linx **inclui a transferência
+Bauru `vendas_conta_v1898`, Ribeirão nenhum), somado no total. **Revisão 29/10:** a média **nunca fica abaixo da dos
+meses fechados** — `max(Linx ÷ dias dos meses, (Linx + e-com) ÷ (dias + corridos))`; sem isso a peça de balcão caía pela
+metade (o mês atual não tem o balcão). Na **virada do mês** a âncora é o mês da última leitura boa (`lido_dia`): até a
+Linx trazer o mês que fechou, ele entra pelo e-commerce (antes: demanda ~0 em todas as peças no dia 1º). A coluna/reserva
+E-commerce também é da conta da filial. A amostra guarda a 1ª resposta **com linhas** (a 1ª vem toda em `pendentes`) e a
+1ª com `com_erro`. A demanda da Linx **inclui a transferência
 entre filiais** (em "Todas" conta duas vezes; aviso na tela). Telemarketing veio zero em tudo; o e-commerce cai em Balcão.
 A compra em aberto continua pela Smart API (`linx_compra_aberta_item`, `caminho_ok`) só se ela estiver configurada; sem
 ela "A caminho" é digitado (nunca 0 falso). Teste: `TESTES/test_linx_demanda_porta_v2000.py`.

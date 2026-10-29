@@ -139,6 +139,16 @@ class Rodada(Base):
             tipos = {r["tipo"] for r in S.DB.execute("SELECT tipo FROM linx_demanda_amostra_v1891").fetchall()}
         self.assertIn("porta_demanda", tipos)
 
+    def test_amostra_nao_e_a_resposta_so_com_pendentes(self):
+        # revisão 29/10: a 1ª resposta real vem toda em pendentes; guardar ela não ajudava a conferir
+        self.hist("0893600022", {1: [1]})
+        self.pendente_vezes["0893600022"] = 1
+        self.pendente_vezes["0893764272"] = 1
+        S.linx_demanda_rodada(pausa=0)
+        with S.DB_LOCK:
+            js = S.DB.execute("SELECT json FROM linx_demanda_amostra_v1891 WHERE tipo='porta_demanda'").fetchone()[0]
+        self.assertTrue(json.loads(js)["itens"])
+
 
 class PorFilial(Base):
 
@@ -150,8 +160,8 @@ class PorFilial(Base):
     def test_aracatuba_e_o_padrao(self):
         x = self.item("0893600022", dias=60)
         self.assertEqual(x["linx_total"], 60)      # o 3º mês fica fora de 60 dias
-        dia = datetime.now(S.BR_TZ).date().day
-        self.assertAlmostEqual(x["linx_media_dia"], 60 / (2 * 30.4375 + dia), places=3)
+        # sem e-commerce no mês, a média é a dos meses fechados (o mês atual nunca a derruba)
+        self.assertAlmostEqual(x["linx_media_dia"], 60 / (2 * 30.4375), places=3)
         self.assertEqual(x["linx_canais"]["balcao"], 60)
         self.assertEqual(x["linx_mes_atual_ecom"], 0)
 
@@ -205,7 +215,51 @@ class MesAtual(Base):
         x = self.item("0893600022", dias=60)
         self.assertEqual(x["linx_mes_atual_ecom"], 5)
         self.assertEqual(x["linx_total"], 25)
-        self.assertAlmostEqual(x["linx_media_dia"], 25 / (2 * 30.4375 + self.hoje.day), places=3)
+        self.assertAlmostEqual(x["linx_media_dia"], max(20 / (2 * 30.4375), 25 / (2 * 30.4375 + self.hoje.day)), places=3)
+
+    def test_media_nunca_fica_abaixo_dos_meses_fechados(self):
+        # revisão 29/10: o mês atual só tem o e-commerce; somar os dias sem o balcão derrubava
+        # pela metade a peça de balcão (88/mês → ~1,5/dia em vez de ~2,9)
+        x = self.item("0893600022", dias=30)
+        self.assertAlmostEqual(x["linx_media_dia"], 10 / 30.4375, places=3)
+        self.assertEqual(self.item("0893600022", dias=30, filial="2")["linx_media_dia"], 0)
+
+    def test_mes_que_acelerou_sobe_a_media(self):
+        self.venda("0893600022", 200, self.hoje.isoformat())
+        x = self.item("0893600022", dias=30)
+        self.assertAlmostEqual(x["linx_media_dia"], 210 / (30.4375 + self.hoje.day), places=3)
+        self.assertGreater(x["linx_media_dia"], 10 / 30.4375)
+
+    def test_virada_do_mes_usa_os_meses_ja_lidos(self):
+        # dia 1º: a tela já pede o mês que acabou de fechar, mas a leitura é da noite anterior
+        # (ainda sem ele). Antes: todas as peças com demanda ~0 até a rodada da noite.
+        anterior = meses_fechados(1)[0]                      # mês que "acabou de fechar"
+        lidos = meses_fechados(3)[1:]                        # o que a leitura antiga tinha
+        self.linhas["0893600022"] = [{"codigo": "0893600022", "revenda": 1, "mes": m, "DemandaBalcao": 30,
+                                      "DemandaOficina": 0, "DemandaTelemark": 0, "DemandaTotal": 30,
+                                      "OcorrenciaVendas": 1} for m in lidos]
+        S.linx_demanda_rodada(forcar=True, fornecedor="WURTH", pausa=0)
+        lido_em = anterior + "-28"
+        with S.DB_LOCK:
+            S.DB.execute("UPDATE linx_demanda_item_v1891 SET lido_dia=?, buscado_dia=? WHERE codigo='0893600022'",
+                         (lido_em, lido_em))
+            S.DB.commit()
+        self.venda("0893600022", 6, anterior + "-10")       # e-commerce do mês que fechou
+        self.venda("0893600022", 2, self.hoje.isoformat())  # e-commerce de hoje
+        x = self.item("0893600022", dias=30)
+        self.assertEqual(x["linx_total"], 30 + 8)
+        corridos = (self.hoje - datetime.strptime(anterior + "-01", "%Y-%m-%d").date()).days + 1
+        self.assertAlmostEqual(x["linx_media_dia"], max(30 / 30.4375, 38 / (30.4375 + corridos)), places=3)
+
+    def test_reserva_ecommerce_e_da_conta_da_filial(self):
+        # peça sem histórico na Linx: a tela usa a venda do e-commerce, que tem de ser a da filial
+        self.venda("0893764272", 7, self.hoje.isoformat())                 # Araçatuba
+        self.venda("0893764272", 3, self.hoje.isoformat(), conta="bauru")
+        self.assertIsNone(self.item("0893764272", filial="3")["linx_total"])
+        self.assertEqual(self.item("0893764272", filial="1")["vendido"], 7)
+        self.assertEqual(self.item("0893764272", filial="3")["vendido"], 3)
+        self.assertEqual(self.item("0893764272", filial="2")["vendido"], 0)
+        self.assertEqual(self.item("0893764272", filial="todas")["vendido"], 10)
 
     def test_bauru_usa_a_venda_da_conta_de_bauru(self):
         self.venda("0893600022", 3, self.hoje.isoformat(), conta="bauru")
