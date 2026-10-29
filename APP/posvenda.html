@@ -48,6 +48,12 @@ body{margin:0;background:var(--nk-canvas);color:var(--nk-ink);font-family:var(--
 .pg textarea:focus{outline:0;border-color:var(--nk-pri);box-shadow:0 0 0 3px var(--nk-foco)}
 .pg-acoes{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap}
 .pg-acoes > span{display:inline-flex;gap:8px;align-items:center;flex-wrap:wrap}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{border:0;border-radius:999px;padding:4px 11px;font:inherit;font-size:12px;font-weight:700;cursor:pointer;color:#fff;background:#7c5cd6;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.chip.var{background:#2f8fd0}
+.chip:hover{filter:brightness(1.08)}
+.chip:focus-visible{outline:2px solid var(--nk-pri);outline-offset:2px}
+.salvar-pronta{display:inline-flex;gap:6px;align-items:center;font-size:12px;color:var(--nk-ink2);cursor:pointer}
 .previa{font-size:12px;color:var(--nk-ink2);background:var(--nk-cinza-bg);border-radius:8px;padding:7px 10px;white-space:pre-wrap}
 .previa b{color:var(--nk-ink)}
 .ant{font-size:12px}
@@ -219,6 +225,20 @@ body{margin:0;background:var(--nk-canvas);color:var(--nk-ink);font-family:var(--
     q.oninput = () => { busca = q.value.trim().toLowerCase(); const pos = q.selectionStart; redesenhar(); const n = $("q-" + alvo); n.focus(); n.setSelectionRange(pos, pos); };
   }
 
+  // V20.02: "Bom dia / Boa tarde / Boa noite" pela hora de Brasília (não a do computador).
+  function saudacaoHora() {
+    const h = Number(new Intl.DateTimeFormat("pt-BR", {hour: "numeric", hourCycle: "h23", timeZone: "America/Sao_Paulo"}).format(new Date()));
+    return h >= 5 && h < 12 ? "Bom dia" : h >= 12 && h < 18 ? "Boa tarde" : "Boa noite";
+  }
+  function inserirNoCursor(ta, texto) {
+    const ini = ta.selectionStart ?? ta.value.length, fim = ta.selectionEnd ?? ta.value.length;
+    const antes = ta.value.slice(0, ini), depois = ta.value.slice(fim);
+    const sep1 = antes && !/\s$/.test(antes) ? " " : "", sep2 = depois && !/^\s/.test(depois) ? " " : "";
+    ta.value = antes + sep1 + texto + sep2 + depois;
+    const pos = (antes + sep1 + texto).length;
+    ta.focus(); ta.setSelectionRange(pos, pos);
+  }
+
   // Saudação + texto + assinatura da conta, igual ao servidor (posvenda_texto_final).
   function textoFinal(texto, c) {
     const saud = D.config["saudacao@" + c] || "", assin = D.config["assinatura@" + c] || "";
@@ -244,10 +264,13 @@ body{margin:0;background:var(--nk-canvas);color:var(--nk-ink);font-family:var(--
         <div class="mini"><b class="${p.horas_esperando >= D.regras.pergunta_atraso_horas ? "prazo bad" : ""}">há ${horasTxt(p.horas_esperando)}</b> · ${dataHora(p.criada_em)}</div></div>
       <div class="pg-q">${esc(p.texto)}</div>
       ${ant.length ? `<details class="ant"><summary>${ant.length} resposta(s) anterior(es) deste anúncio</summary><ul>${ant.map((x, i) => `<li><div class="q">${esc(x.texto)}</div><div>${esc(x.resposta)}<button class="nk-btn mini usar" data-i="${i}" type="button">Usar</button></div><div class="mini">${dataHora(x.respondida_em)}${x.respondida_por ? " · " + esc(x.respondida_por) : ""}</div></li>`).join("")}</ul></details>` : ""}
-      ${somenteLeitura() ? "" : `${prontas.length ? `<select class="pronta-sel" aria-label="Resposta pronta"><option value="">Inserir resposta pronta…</option>${prontas.map(x => `<option value="${x.id}">${esc(x.titulo)}</option>`).join("")}</select>` : ""}
+      ${somenteLeitura() ? "" : `<div class="chips" aria-label="Respostas prontas">
+        <button type="button" class="chip var" data-chip-hora title="Muda sozinho pela hora de Brasília">${esc(saudacaoHora())}</button>
+        ${prontas.map(x => `<button type="button" class="chip" data-chip="${x.id}" title="${esc(x.texto)}">${esc(x.titulo)}</button>`).join("")}</div>
       <textarea maxlength="${D.regras.resposta_max}" placeholder="Escreva a resposta…">${esc(rascunho[p.pergunta_id] || "")}</textarea>
       <div class="previa" hidden></div>
-      <div class="pg-acoes"><span class="mini cont">0 / ${D.regras.resposta_max}</span>
+      <div class="pg-acoes"><span><label class="salvar-pronta" title="Depois de enviar, guarda este texto nos botões de resposta pronta"><input type="checkbox" class="salvar-cb"> Salvar como resposta pronta</label>
+        <span class="mini cont">0 / ${D.regras.resposta_max}</span></span>
         <span><button class="nk-btn pri mini responder" disabled>Responder</button></span></div>`}</div>`;
     }).join("") + `</div>` + (L.length ? "" : `<div class="nk-vazio">Nenhuma pergunta com essa busca.</div>`);
     ligarBusca("perguntas", desenharPerguntas);
@@ -268,14 +291,26 @@ body{margin:0;background:var(--nk-canvas);color:var(--nk-ink);font-family:var(--
       };
       ta.oninput = atualizar;
       atualizar();
-      const sel = el.querySelector(".pronta-sel");
-      if (sel) sel.onchange = () => { const x = D.respostas_prontas.find(r => String(r.id) === sel.value); if (x) { ta.value = (ta.value.trim() ? ta.value.trim() + " " : "") + x.texto; atualizar(); ta.focus(); } sel.value = ""; };
+      // V20.02: botões de um clique (como no print do dono). O texto entra onde está o cursor.
+      el.querySelectorAll(".chip").forEach(b => b.onclick = () => {
+        const x = b.hasAttribute("data-chip-hora") ? {texto: saudacaoHora() + ","} : D.respostas_prontas.find(r => String(r.id) === b.dataset.chip);
+        if (x) { inserirNoCursor(ta, x.texto); atualizar(); }
+      });
       el.querySelectorAll(".usar").forEach(b => b.onclick = () => { const x = (p.anteriores || [])[Number(b.dataset.i)]; if (x) { ta.value = x.resposta; atualizar(); ta.focus(); } });
       bt.onclick = async () => {
         bt.disabled = true; bt.textContent = "Enviando…";
         try {
           await api("/api/posvenda/responder", {method:"POST", body: JSON.stringify({pergunta_id: id, texto: ta.value})});
           nkToast(`Resposta enviada ao Mercado Livre (${NOME[c] || c}).`, "ok");
+          // V20.02: "Salvar como resposta pronta" — o texto digitado (sem a saudação/assinatura automáticas).
+          if (el.querySelector(".salvar-cb")?.checked) {
+            const texto = ta.value.trim();
+            try {
+              const r = await api("/api/posvenda/respostas", {method:"POST", body: JSON.stringify({titulo: texto.slice(0, 40), texto})});
+              D.respostas_prontas.push(r.resposta);
+              nkToast("Também guardada nos botões de resposta pronta.", "ok");
+            } catch (e) { nkToast("A resposta foi enviada, mas não deu para guardar como resposta pronta: " + e.message, "erro"); }
+          }
           delete rascunho[id];
           D.perguntas = D.perguntas.filter(x => String(x.pergunta_id) !== id);
           D.perguntas_resumo.respondidas_30d += 1;

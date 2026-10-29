@@ -368,6 +368,16 @@ class Tela(Base):
         menu = (S.APP_DIR / "nk-menu.js").read_text(encoding="utf-8")
         self.assertIn('id: "posvenda"', menu)
 
+    def test_botoes_de_resposta_pronta(self):
+        # V20.02 (dono, 29/10, print de outra ferramenta): respostas prontas viram botões de um clique,
+        # botão da saudação pelo horário e "Salvar como resposta pronta" embaixo da caixa.
+        html = (S.APP_DIR / "posvenda.html").read_text(encoding="utf-8")
+        self.assertIn('class="chips"', html)
+        self.assertIn("data-chip-hora", html)
+        self.assertIn('class="salvar-pronta"', html)
+        self.assertIn("America/Sao_Paulo", html)
+        self.assertNotIn("pronta-sel", html, "o seletor antigo de resposta pronta continua na tela")
+
 
 class RespostasProntas(Base):
 

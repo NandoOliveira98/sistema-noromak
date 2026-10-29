@@ -784,6 +784,10 @@ da conta e o botão "Abrir Pós-venda". O Auditor de cobranças continua lendo s
 "sem resposta" do ML (resposta apagada pela moderação) devolve a pergunta à fila; as perguntas de todas as contas são
 lidas antes das reclamações; a trava das reclamações é por conta (`_posvenda_trava_conta`) e o "Buscar agora" é um por
 vez (`POSVENDA_MANUAL_LOCK`, `ja_estava`); selo e Painel de saúde contam só as contas conectadas.
+**V20.02 — botões de resposta** (dono, 29/10, pelo print de outra ferramenta): as respostas prontas viram botões de um
+clique em cima da caixa (o seletor saiu; o texto entra onde está o cursor), botão "Bom dia/Boa tarde/Boa noite" pela
+hora de Brasília e caixa "Salvar como resposta pronta" (guarda o texto digitado depois de enviar). Saudação/assinatura
+automáticas continuam. Nome do comprador e link "Meus produtos" ficaram de fora (o ML só dá o apelido).
 Teste: `TESTES/test_posvenda_contas_v2001.py`.
 **V19.76: a tela foi apagada (dono, 22/10).** A rotina `posvenda_loop` e as tabelas continuam: o Auditor de
 cobranças usa as reclamações (frete de devolução) e o Painel de saúde o prazo do vendedor (sem botão de tela).
