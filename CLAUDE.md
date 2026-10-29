@@ -5,7 +5,7 @@ Shopee, manuais), expedição, separação, conferência por código de barras, 
 produtos/SKUs/EANs, kits, precificação, promoções, rentabilidade, estoque, Central de
 Pendências e histórico.
 
-Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V19.97).
+Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V20.00).
 
 ---
 
@@ -1080,6 +1080,18 @@ a demanda da Linx já inclui ML + Shopee — **uma OU a outra, nunca somadas**. 
 últimos meses fechados (período ÷ 30), a média usa a Linx quando há histórico; "A caminho" vem da compra em
 aberto, e o digitado continua mandando. Código sem histórico (412) ou com erro fica **nulo**: nunca vira zero por
 cima da venda do e-commerce.
+**V20.00 — demanda pela porta do NoromakWeb** (ligada pelo Guilherme em 28/10, `TEIL_EXPEDICAO_DEMANDA=1` no lado
+dele). `GET /api/v1/expedicao/demanda?codigos=&meses=12&operador=` (`_exp_porta_get`), em lotes de 200, devolve uma
+linha por (peça, filial, mês **fechado**) com `DemandaBalcao/Oficina/Telemark/Total` e `OcorrenciaVendas`, mais
+`sem_historico`, `com_erro` e `pendentes` (ainda na fila de leitura dele: a rodada pergunta de novo a cada 20 s, até
+9 vezes; o que sobrar fica para a próxima). Guardada em `linx_demanda_filial_v2000`; erro não apaga a leitura anterior.
+Decisões do dono (29/10): **filial escolhida na tela** (`filial=1|2|3|todas`, padrão Araçatuba, `nk_compras_filial_v2000`)
+e o **mês corrente entra pelo e-commerce** (ML + Shopee do mês até hoje, da conta da filial: Araçatuba `vendas_v1799`,
+Bauru `vendas_conta_v1898`, Ribeirão nenhum), somado no total e nos dias da média
+(`(Linx meses fechados + e-com do mês) ÷ (dias dos meses + dias corridos)`). A demanda da Linx **inclui a transferência
+entre filiais** (em "Todas" conta duas vezes; aviso na tela). Telemarketing veio zero em tudo; o e-commerce cai em Balcão.
+A compra em aberto continua pela Smart API (`linx_compra_aberta_item`, `caminho_ok`) só se ela estiver configurada; sem
+ela "A caminho" é digitado (nunca 0 falso). Teste: `TESTES/test_linx_demanda_porta_v2000.py`.
 
 ### Linx Smart API (levantamento 21/09/2026)
 API oficial da Linx para o Linx DMS, na nuvem: gateway `https://auto-gwsmartapi.linx.com.br/<api>`,

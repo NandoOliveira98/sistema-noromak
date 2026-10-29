@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "19.99-FATURAMENTO-CORRIGE-VALOR"
+APP_VERSION = "20.00-DEMANDA-LINX-PORTA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -16368,6 +16368,22 @@ def _exp_porta(rota: str, corpo: dict[str, Any], *, escrita: bool = False) -> di
         headers={"X-Chave-Expedicao": CHAVE_CRM, "Content-Type": "application/json",
                  "Accept": "application/json", "User-Agent": f"NoromakExpedicao/{APP_VERSION}"},
     )
+    return _exp_porta_resposta(req, escrita)
+
+
+def _exp_porta_get(rota: str, params: dict[str, Any]) -> dict[str, Any]:
+    """V20.00: leitura por GET (a porta /demanda). Mesmas mensagens de erro do POST."""
+    if not CHAVE_CRM:
+        raise PortaErro("CHAVE_CRM não está configurada no servidor.")
+    req = urllib.request.Request(
+        f"{EXP_PORTA_BASE}/{rota}?{urlencode(params)}", method="GET",
+        headers={"X-Chave-Expedicao": CHAVE_CRM, "Accept": "application/json",
+                 "User-Agent": f"NoromakExpedicao/{APP_VERSION}"},
+    )
+    return _exp_porta_resposta(req, False)
+
+
+def _exp_porta_resposta(req: urllib.request.Request, escrita: bool) -> dict[str, Any]:
     try:
         with urllib.request.urlopen(req, timeout=EXP_PORTA_TIMEOUT) as resp:
             raw = resp.read().decode("utf-8", errors="replace")
@@ -32450,16 +32466,26 @@ def _compras_codigo(sku: str, conhecidos: dict[str, Any]) -> str:
     return ""
 
 
-def compras_vendas_por_codigo(dias: int, conhecidos: dict[str, Any]) -> tuple[dict[str, dict[str, int]], dict[str, int]]:
+def compras_vendas_por_codigo(dias: int, conhecidos: dict[str, Any], *, desde: str | None = None,
+                              contas: tuple[str, ...] = ("aracatuba",)) -> tuple[dict[str, dict[str, int]], dict[str, int]]:
     """Unidades vendidas por código Apollo nos últimos `dias` (ML e Shopee).
     Kit vira as unidades de cada componente; "A/B" (anúncio com duas peças) conta
-    uma de cada."""
-    desde = (datetime.now(BR_TZ).date() - timedelta(days=max(1, dias) - 1)).isoformat()
+    uma de cada. V20.00: `desde` (dia ISO) troca o período e `contas` escolhe a conta
+    (aracatuba = vendas_v1799; as outras em vendas_conta_v1898)."""
+    desde = desde or (datetime.now(BR_TZ).date() - timedelta(days=max(1, dias) - 1)).isoformat()
+    rows: list[Any] = []
     with DB_LOCK:
-        rows = DB.execute(
-            "SELECT sku, marketplace, SUM(qty) AS qtd FROM vendas_v1799 WHERE sale_day >= ? GROUP BY sku, marketplace",
-            (desde,),
-        ).fetchall()
+        for conta in contas:
+            if conta == "aracatuba":
+                rows += DB.execute(
+                    "SELECT sku, marketplace, SUM(qty) AS qtd FROM vendas_v1799 WHERE sale_day >= ? GROUP BY sku, marketplace",
+                    (desde,),
+                ).fetchall()
+            else:
+                rows += DB.execute(
+                    "SELECT sku, marketplace, SUM(qty) AS qtd FROM vendas_conta_v1898 WHERE conta=? AND sale_day >= ? "
+                    "GROUP BY sku, marketplace", (conta, desde),
+                ).fetchall()
     kits = full_kit_compositions([r["sku"] for r in rows])
     vendas: dict[str, dict[str, int]] = {}
     sem_codigo: dict[str, int] = {}
@@ -32495,8 +32521,24 @@ def compras_vendas_por_codigo(dias: int, conhecidos: dict[str, Any]) -> tuple[di
 # formatos) e a 1ª resposta de cada tipo fica guardada em linx_demanda_amostra_v1891 para
 # ajustar o formato. Sem dado da Linx, a tela continua com a venda do e-commerce.
 # Worker à noite (21h–6h, 400 códigos por rodada, retoma no dia) + botão por fornecedor.
+#
+# V20.00: a DEMANDA vem da porta do NoromakWeb (GET /api/v1/expedicao/demanda, ligada pelo
+# Guilherme em 28/10; a Smart API nunca teve credencial em produção). Em lote (até 500 códigos),
+# uma linha por (peça, filial, mês fechado); `pendentes` = ainda na fila de leitura dele,
+# perguntar de novo. Guardada por filial (linx_demanda_filial_v2000): a tela escolhe
+# Araçatuba (padrão) / Ribeirão / Bauru / Todas (dono, 29/10). A demanda da Linx INCLUI a
+# transferência entre filiais — em "Todas" a peça transferida e vendida na outra conta duas vezes.
+# O mês corrente não vem da porta: entra o e-commerce do mês até hoje (ML + Shopee da conta da
+# filial), somado no total e nos dias da média (dono, 29/10). A compra em aberto continua pela
+# Smart API (DetalhesPedidos) só se ela estiver configurada; sem ela "A caminho" é digitado.
 # ---------------------------------------------------------------------------
 LINX_DEMANDA_POR_RODADA = 400
+LINX_DEMANDA_PORTA_LOTE = 200          # códigos por chamada (a porta aceita 500; URL menor)
+LINX_DEMANDA_PORTA_MESES = 12
+LINX_DEMANDA_PORTA_TENTATIVAS = 9      # perguntas enquanto houver pendentes (~3 min)
+LINX_DEMANDA_PORTA_ESPERA = 20.0       # s entre uma pergunta e outra
+LINX_DEMANDA_FILIAIS = {"1": "Araçatuba", "2": "Ribeirão Preto", "3": "Bauru", "todas": "Todas as filiais"}
+LINX_DEMANDA_CONTA_ECOM = {"1": ("aracatuba",), "2": (), "3": ("bauru",), "todas": ("aracatuba", "bauru")}
 LINX_DEMANDA_PAUSA = 0.5
 LINX_DEMANDA_HORAS = (21, 6)          # janela da noite (Brasília): de 21h às 6h
 LINX_DEMANDA_LOCK = threading.Lock()
@@ -32541,8 +32583,26 @@ def ensure_linx_demanda_schema() -> None:
                 quando TEXT NOT NULL DEFAULT '',
                 json TEXT NOT NULL DEFAULT ''
             );
+            CREATE TABLE IF NOT EXISTS linx_demanda_filial_v2000 (
+                codigo TEXT NOT NULL,
+                revenda INTEGER NOT NULL,
+                mes TEXT NOT NULL,
+                total REAL,
+                balcao REAL,
+                oficina REAL,
+                telemark REAL,
+                ocorrencias REAL,
+                atualizado_em TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY(codigo, revenda, mes)
+            );
             """
         )
+        # V20.00: a compra em aberto (Smart API) e a demanda (porta) vêm de fontes diferentes:
+        # "ok" passou a ser da demanda; caminho_ok diz se a compra em aberto foi lida.
+        colunas = {r[1] for r in DB.execute("PRAGMA table_info(linx_demanda_item_v1891)").fetchall()}
+        if "caminho_ok" not in colunas:
+            DB.execute("ALTER TABLE linx_demanda_item_v1891 ADD COLUMN caminho_ok INTEGER NOT NULL DEFAULT 0")
+            DB.execute("UPDATE linx_demanda_item_v1891 SET caminho_ok=ok")
         DB.commit()
 
 
@@ -32640,23 +32700,11 @@ def _linx_demanda_corpo_base() -> dict[str, Any]:
     return {"ConfiguracaoBase": dict(base), **base, "CodigoUsuario": LINX_USUARIO_CODIGO}
 
 
-def linx_demanda_item(codigo: str) -> dict[str, Any]:
-    """Busca e grava a demanda mensal e a compra em aberto de UM código. Só leitura."""
+def linx_compra_aberta_item(codigo: str) -> bool:
+    """Compra em aberto de UM código pela Smart API (DetalhesPedidos). Só leitura.
+    V20.00: a demanda saiu daqui (vem da porta); falha não apaga o que já foi lido."""
     codigo = str(codigo or "").strip().upper()
-    agora, hoje = now_iso(), datetime.now(BR_TZ).date().isoformat()
-    erros: list[str] = []
-    meses: dict[str, dict[str, float | None]] = {}
-    abertas: list[dict[str, Any]] = []
-    try:
-        hist = linx_chamar("POST", f"{LINX_PATH_PECAS}/ConsultaPecaGerencial/InfoGerencial/OrdemCompra/Historico/"
-                                   f"{quote(codigo)}", _linx_demanda_corpo_base())
-        _linx_amostra("historico", codigo, hist)
-        meses, ilegiveis = _linx_demanda_meses(hist)
-        if ilegiveis and not meses:
-            erros.append("histórico em formato não reconhecido (veja a amostra)")
-    except LinxErro as exc:
-        if exc.status not in (404, 412):      # 412 = "não achei" nesta API
-            erros.append(f"histórico: {str(exc)[:200]}")
+    agora = now_iso()
     try:
         ped = linx_chamar("POST", f"{LINX_PATH_PECAS}/ConsultaPecaGerencial/DetalhesPedidos",
                           {**_linx_demanda_corpo_base(), "CodigoItem": codigo, "ItemEstoque": codigo,
@@ -32664,24 +32712,78 @@ def linx_demanda_item(codigo: str) -> dict[str, Any]:
         _linx_amostra("pedidos", codigo, ped)
         abertas = _linx_compras_abertas(ped)
     except LinxErro as exc:
-        if exc.status not in (404, 412):
-            erros.append(f"pedidos: {str(exc)[:200]}")
-    ok = not erros
+        if exc.status not in (404, 412):      # 412 = "não achei" nesta API
+            return False
+        abertas = []
     with DB_LOCK:
-        if ok or meses:
-            DB.execute("DELETE FROM linx_demanda_mes_v1891 WHERE codigo=?", (codigo,))
-            DB.executemany("INSERT INTO linx_demanda_mes_v1891(codigo,mes,total,balcao,oficina,telemark,atualizado_em) "
-                           "VALUES(?,?,?,?,?,?,?)", [(codigo, m, v["total"], v["balcao"], v["oficina"], v["telemark"], agora)
-                                                     for m, v in meses.items()])
-        if ok:
-            DB.execute("DELETE FROM linx_compra_aberta_v1891 WHERE codigo=?", (codigo,))
-            DB.executemany("INSERT OR REPLACE INTO linx_compra_aberta_v1891(codigo,pedido,pedida,baixada,situacao,previsao,"
-                           "atualizado_em) VALUES(?,?,?,?,?,?,?)",
-                           [(codigo, a["pedido"], a["pedida"], a["baixada"], a["situacao"], a["previsao"], agora) for a in abertas])
-        DB.execute("INSERT OR REPLACE INTO linx_demanda_item_v1891(codigo,buscado_dia,buscado_em,ok,meses,erro) "
-                   "VALUES(?,?,?,?,?,?)", (codigo, hoje, agora, 1 if ok else 0, len(meses), "; ".join(erros)[:400]))
+        DB.execute("DELETE FROM linx_compra_aberta_v1891 WHERE codigo=?", (codigo,))
+        DB.executemany("INSERT OR REPLACE INTO linx_compra_aberta_v1891(codigo,pedido,pedida,baixada,situacao,previsao,"
+                       "atualizado_em) VALUES(?,?,?,?,?,?,?)",
+                       [(codigo, a["pedido"], a["pedida"], a["baixada"], a["situacao"], a["previsao"], agora) for a in abertas])
+        DB.execute("INSERT INTO linx_demanda_item_v1891(codigo,buscado_em,caminho_ok) VALUES(?,?,1) "
+                   "ON CONFLICT(codigo) DO UPDATE SET caminho_ok=1", (codigo, agora))
         DB.commit()
-    return {"ok": ok, "codigo": codigo, "meses": len(meses), "abertas": len(abertas), "erros": erros}
+    return True
+
+
+def _linx_porta_demanda_ler(resp: dict[str, Any]) -> tuple[dict[str, list[dict[str, Any]]], set[str], dict[str, str], set[str]]:
+    """Resposta da porta → (linhas por código, sem histórico, erro por código, pendentes)."""
+    def cod(v: Any) -> str:
+        return str(v or "").strip().upper()
+
+    linhas: dict[str, list[dict[str, Any]]] = {}
+    for e in resp.get("itens") or []:
+        if not isinstance(e, dict):
+            continue
+        c, mes = cod(_linx_ci(e, "codigo")), _linx_mes(e)
+        rev = _linx_num(_linx_ci(e, "revenda"))
+        canais = {"balcao": _linx_num(_linx_ci(e, "DemandaBalcao")), "oficina": _linx_num(_linx_ci(e, "DemandaOficina")),
+                  "telemark": _linx_num(_linx_ci(e, "DemandaTelemark", "DemandaTelemarketing"))}
+        total = _linx_num(_linx_ci(e, "DemandaTotal"))
+        if total is None and any(v is not None for v in canais.values()):
+            total = sum(v or 0.0 for v in canais.values())
+        if not c or not mes or rev is None or total is None:
+            continue
+        linhas.setdefault(c, []).append({"revenda": int(rev), "mes": mes, "total": total, **canais,
+                                         "ocorrencias": _linx_num(_linx_ci(e, "OcorrenciaVendas"))})
+    erros: dict[str, str] = {}
+    for e in resp.get("com_erro") or []:
+        if isinstance(e, dict):
+            erros[cod(e.get("codigo"))] = str(e.get("erro") or e.get("motivo") or e.get("mensagem") or "erro na porta")[:200]
+        else:
+            erros[cod(e)] = "erro na porta"
+    sem = {cod(c.get("codigo") if isinstance(c, dict) else c) for c in resp.get("sem_historico") or []}
+    pend = {cod(c.get("codigo") if isinstance(c, dict) else c) for c in resp.get("pendentes") or []}
+    return linhas, sem, erros, pend
+
+
+def _linx_porta_demanda_gravar(codigos: list[str], linhas: dict[str, list[dict[str, Any]]], sem: set[str],
+                               erros: dict[str, str]) -> tuple[int, int]:
+    """Grava o que a porta resolveu. Erro não apaga a leitura anterior (só marca o código)."""
+    agora, hoje = now_iso(), datetime.now(BR_TZ).date().isoformat()
+    ok = falhas = 0
+    with DB_LOCK:
+        for c in codigos:
+            if c in linhas or c in sem:
+                ls = linhas.get(c, [])
+                DB.execute("DELETE FROM linx_demanda_filial_v2000 WHERE codigo=?", (c,))
+                DB.executemany("INSERT OR REPLACE INTO linx_demanda_filial_v2000(codigo,revenda,mes,total,balcao,oficina,"
+                               "telemark,ocorrencias,atualizado_em) VALUES(?,?,?,?,?,?,?,?,?)",
+                               [(c, x["revenda"], x["mes"], x["total"], x["balcao"], x["oficina"], x["telemark"],
+                                 x["ocorrencias"], agora) for x in ls])
+                DB.execute("INSERT INTO linx_demanda_item_v1891(codigo,buscado_dia,buscado_em,ok,meses,erro) "
+                           "VALUES(?,?,?,1,?,'') ON CONFLICT(codigo) DO UPDATE SET buscado_dia=excluded.buscado_dia, "
+                           "buscado_em=excluded.buscado_em, ok=1, meses=excluded.meses, erro=''",
+                           (c, hoje, agora, len({x["mes"] for x in ls})))
+                ok += 1
+            else:
+                erro = erros.get(c) or "a porta não devolveu este código"
+                DB.execute("INSERT INTO linx_demanda_item_v1891(codigo,buscado_dia,buscado_em,ok,meses,erro) "
+                           "VALUES(?,?,?,0,0,?) ON CONFLICT(codigo) DO UPDATE SET buscado_dia=excluded.buscado_dia, "
+                           "buscado_em=excluded.buscado_em, ok=0, erro=excluded.erro", (c, hoje, agora, erro[:400]))
+                falhas += 1
+        DB.commit()
+    return ok, falhas
 
 
 def _compras_codigos_dos_fornecedores(nome: str = "") -> list[str]:
@@ -32705,47 +32807,84 @@ def _compras_codigos_dos_fornecedores(nome: str = "") -> list[str]:
 
 def linx_demanda_rodada(stop_event: threading.Event | None = None, *, fornecedor: str = "",
                         forcar: bool = False, pausa: float | None = None) -> dict[str, Any]:
-    """Atualiza os códigos ainda não buscados hoje (no botão: todos os do fornecedor)."""
+    """Atualiza os códigos ainda não buscados hoje (no botão: todos os do fornecedor).
+    V20.00: demanda pela porta, em lote; compra em aberto pela Smart API só se configurada.
+    `pausa` = espera entre as perguntas de pendentes e entre as consultas da Smart API."""
     if not LINX_DEMANDA_LOCK.acquire(blocking=False):
         return {"ok": True, "pulado": "já está rodando"}
+    espera = LINX_DEMANDA_PORTA_ESPERA if pausa is None else pausa
     pausa = LINX_DEMANDA_PAUSA if pausa is None else pausa
+
+    def dormir(s: float) -> bool:
+        """True = pediram para parar."""
+        if s <= 0:
+            return bool(stop_event is not None and stop_event.is_set())
+        if stop_event is not None:
+            return stop_event.wait(s)
+        time.sleep(s)
+        return False
+
     try:
         _LINX_DEMANDA_ESTADO.update(rodando=True, inicio=now_iso(), fim="")
-        faltando = linx_configuracao_faltando()
-        if faltando or not linx_chave_do_produto("P02"):
-            resultado = {"ok": True, "pulado": "Linx Smart API não configurada no servidor"}
+        if not CHAVE_CRM:
+            resultado = {"ok": True, "pulado": "porta da demanda sem chave (CHAVE_CRM) no servidor"}
             _LINX_DEMANDA_ESTADO["ultimo"] = resultado
             return resultado
         hoje = datetime.now(BR_TZ).date().isoformat()
-        codigos = _compras_codigos_dos_fornecedores(fornecedor)
+        codigos = [c for c in _compras_codigos_dos_fornecedores(fornecedor) if c and "," not in c]
         with DB_LOCK:
             feitos = {str(r["codigo"]) for r in DB.execute(
                 "SELECT codigo FROM linx_demanda_item_v1891 WHERE buscado_dia=? AND ok=1", (hoje,)).fetchall()}
-        fila = [c for c in codigos if forcar or c not in feitos][:LINX_DEMANDA_POR_RODADA if not forcar else 2000]
-        ok = falhas = seguidas = 0
-        for codigo in fila:
-            if stop_event is not None and stop_event.is_set():
-                break
-            try:
-                r = linx_demanda_item(codigo)
-            except Exception as exc:   # resposta em formato inesperado: registra e segue
-                r = {"ok": False}
+        fila = [c for c in codigos if forcar or c not in feitos]
+        ok = falhas = pendentes = 0
+        erro_porta = ""
+        parar = False
+        for i in range(0, len(fila), LINX_DEMANDA_PORTA_LOTE):
+            restantes = fila[i:i + LINX_DEMANDA_PORTA_LOTE]
+            for tentativa in range(LINX_DEMANDA_PORTA_TENTATIVAS):
+                if tentativa and dormir(espera):
+                    parar = True
+                    break
+                try:
+                    resp = _exp_porta_get("demanda", {"codigos": ",".join(restantes), "meses": LINX_DEMANDA_PORTA_MESES,
+                                                      "operador": "noromak-demanda"})
+                    if resp.get("ok") is False:
+                        raise PortaErro(str(resp.get("erro") or resp.get("error") or resp.get("detail") or "a porta recusou"))
+                except PortaErro as exc:
+                    erro_porta = str(exc)[:300]
+                    break
+                _linx_amostra("porta_demanda", restantes[0], resp)
+                linhas, sem, erros, pend = _linx_porta_demanda_ler(resp)
+                resolvidos = [c for c in restantes if c not in pend]
+                a, b = _linx_porta_demanda_gravar(resolvidos, linhas, sem, erros)
+                ok, falhas = ok + a, falhas + b
+                restantes = [c for c in restantes if c in pend]
+                if not restantes:
+                    break
+            if erro_porta:
+                # porta fora do ar/recusou: nada é apagado; o código fica marcado para a tela mostrar
                 with DB_LOCK:
-                    DB.execute("INSERT OR REPLACE INTO linx_demanda_item_v1891(codigo,buscado_dia,buscado_em,ok,meses,erro) "
-                               "VALUES(?,?,?,0,0,?)", (codigo, hoje, now_iso(), f"{type(exc).__name__}: {str(exc)[:200]}"))
+                    for c in restantes:
+                        DB.execute("INSERT INTO linx_demanda_item_v1891(codigo,buscado_dia,buscado_em,ok,meses,erro) "
+                                   "VALUES(?,?,?,0,0,?) ON CONFLICT(codigo) DO UPDATE SET buscado_em=excluded.buscado_em, "
+                                   "ok=0, erro=excluded.erro", (c, hoje, now_iso(), erro_porta))
                     DB.commit()
-            ok += 1 if r["ok"] else 0
-            falhas += 0 if r["ok"] else 1
-            seguidas = 0 if r["ok"] else seguidas + 1
-            if seguidas >= 5:      # sem conexão/permissão: para e tenta na próxima rodada
+                falhas += len(restantes)
                 break
-            if pausa > 0:
-                if stop_event is not None:
-                    if stop_event.wait(pausa):
-                        break
-                else:
-                    time.sleep(pausa)
-        resultado = {"ok": falhas == 0, "codigos": len(codigos), "buscados": ok + falhas, "com_erro": falhas, "em": now_iso()}
+            pendentes += len(restantes)   # ainda na fila do NoromakWeb: fica para a próxima rodada
+            if parar:
+                break
+        # Compra em aberto: só com a Smart API configurada (sem ela "A caminho" é digitado).
+        if not erro_porta and not parar and not linx_configuracao_faltando() and linx_chave_do_produto("P02"):
+            seguidas = 0
+            for codigo in fila[:LINX_DEMANDA_POR_RODADA if not forcar else 2000]:
+                if dormir(0):
+                    break
+                seguidas = 0 if linx_compra_aberta_item(codigo) else seguidas + 1
+                if seguidas >= 5 or dormir(pausa):
+                    break
+        resultado = {"ok": falhas == 0 and not erro_porta, "codigos": len(codigos), "buscados": ok + falhas,
+                     "com_erro": falhas, "pendentes": pendentes, "erro": erro_porta, "em": now_iso()}
         _LINX_DEMANDA_ESTADO["ultimo"] = resultado
         return resultado
     finally:
@@ -32769,10 +32908,16 @@ def linx_demanda_loop(stop_event: threading.Event) -> None:
             break
 
 
-def linx_demanda_por_codigo(codigos: list[str], dias: int, hoje: date | None = None) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
+def linx_demanda_por_codigo(codigos: list[str], dias: int, hoje: date | None = None, filial: str = "1",
+                            ecom_mes: dict[str, int] | None = None) -> tuple[dict[str, dict[str, Any]], dict[str, Any]]:
     """Demanda Linx de cada código no período da tela: os últimos M meses FECHADOS
-    (M = dias ÷ 30, arredondado, mínimo 1). Mês sem linha num item buscado com sucesso = 0."""
+    (M = dias ÷ 30, arredondado, mínimo 1). Mês sem linha num item buscado com sucesso = 0.
+    V20.00: só a filial escolhida ("todas" = soma) + o e-commerce do mês corrente (`ecom_mes`),
+    que entra no total e nos dias da média (a porta não manda o mês corrente)."""
     hoje = hoje or datetime.now(BR_TZ).date()
+    if filial not in LINX_DEMANDA_FILIAIS:
+        raise ValueError("Filial inválida (1, 2, 3 ou todas).")
+    ecom_mes = ecom_mes or {}
     m = max(1, round(max(1, dias) / 30))
     primeiro_do_mes = hoje.replace(day=1)
     meses = []
@@ -32782,12 +32927,13 @@ def linx_demanda_por_codigo(codigos: list[str], dias: int, hoje: date | None = N
         if mes == 0:
             ano, mes = ano - 1, 12
         meses.append(f"{ano:04d}-{mes:02d}")
-    dias_eq = m * 30.4375
+    dias_eq = m * 30.4375 + hoje.day
     marcas = ",".join("?" * len(meses))
+    filtro, args = ("", meses) if filial == "todas" else (" AND revenda=?", [*meses, int(filial)])
     with DB_LOCK:
         itens = {str(r["codigo"]): dict(r) for r in DB.execute("SELECT * FROM linx_demanda_item_v1891").fetchall()}
         linhas = DB.execute(f"SELECT codigo, SUM(total) AS t, SUM(balcao) AS b, SUM(oficina) AS o, SUM(telemark) AS tm "
-                            f"FROM linx_demanda_mes_v1891 WHERE mes IN ({marcas}) GROUP BY codigo", meses).fetchall()
+                            f"FROM linx_demanda_filial_v2000 WHERE mes IN ({marcas}){filtro} GROUP BY codigo", args).fetchall()
         abertas = DB.execute("SELECT codigo, SUM(MAX(0, COALESCE(pedida,0) - COALESCE(baixada,0))) AS q, "
                              "MIN(NULLIF(previsao,'')) AS prev FROM linx_compra_aberta_v1891 GROUP BY codigo").fetchall()
         amostras = {str(r["tipo"]): str(r["quando"]) for r in DB.execute(
@@ -32804,14 +32950,19 @@ def linx_demanda_por_codigo(codigos: list[str], dias: int, hoje: date | None = N
         # Sem nenhum mês de histórico (a Linx "não achou" o código) a demanda fica NULA: a
         # tela continua com a venda do e-commerce, nunca troca por um zero.
         tem_hist = int(it["meses"] or 0) > 0
-        total = (float(s["t"] or 0) if s else 0.0) if tem_hist else None
+        mes_ecom = int(ecom_mes.get(c) or 0)
+        total = ((float(s["t"] or 0) if s else 0.0) + mes_ecom) if tem_hist else None
         out[c] = {"linx_total": round(total, 2) if total is not None else None,
                   "linx_media_dia": round(total / dias_eq, 4) if total is not None else None,
                   "linx_canais": ({"balcao": float(s["b"] or 0) if s else 0.0, "oficina": float(s["o"] or 0) if s else 0.0,
                                    "telemark": float(s["tm"] or 0) if s else 0.0} if tem_hist else None),
-                  "linx_caminho": (round(float(a["q"] or 0), 2) if a else 0.0) if it["ok"] else None,
+                  "linx_mes_atual_ecom": mes_ecom if tem_hist else None,
+                  "linx_caminho": (round(float(a["q"] or 0), 2) if a else 0.0) if it.get("caminho_ok") else None,
                   "linx_previsao": (str(a["prev"] or "") if a else ""), "linx_atualizado": it["buscado_em"]}
-    resumo = {"configurada": not linx_configuracao_faltando() and bool(linx_chave_do_produto("P02")),
+    resumo = {"configurada": bool(CHAVE_CRM), "fonte": "porta",
+              "caminho_linx": not linx_configuracao_faltando() and bool(linx_chave_do_produto("P02")),
+              "filial": filial, "filial_nome": LINX_DEMANDA_FILIAIS[filial],
+              "mes_atual": hoje.strftime("%Y-%m"), "mes_atual_dias": hoje.day,
               "meses": meses, "dias_equivalentes": dias_eq,
               "itens_com_dado": sum(1 for v in out.values() if v["linx_total"] is not None),
               "itens_com_erro": sum(1 for c in codigos if (itens.get(c) or {}).get("erro")),
@@ -32821,11 +32972,14 @@ def linx_demanda_por_codigo(codigos: list[str], dias: int, hoje: date | None = N
     return out, resumo
 
 
-def compras_demanda_payload(fornecedor: str, dias: int) -> dict[str, Any]:
+def compras_demanda_payload(fornecedor: str, dias: int, filial: str = "1") -> dict[str, Any]:
     nome = str(fornecedor or "").strip().upper()
     cfg = next((f for f in compras_fornecedores() if f["nome"] == nome), None)
     if not cfg:
         raise ValueError("Fornecedor não cadastrado.")
+    filial = str(filial or "1").strip().lower()
+    if filial not in LINX_DEMANDA_FILIAIS:
+        raise ValueError("Filial inválida (1, 2, 3 ou todas).")
     dias = max(7, min(365, int(dias or 60)))
     produtos = _compras_produtos_precificador()
     # Marca preenchida no cadastro de produtos também conta.
@@ -32868,10 +33022,16 @@ def compras_demanda_payload(fornecedor: str, dias: int) -> dict[str, Any]:
                       "vendido_ml": int(v.get("ml", 0)), "vendido_shopee": int(v.get("shopee", 0))})
     # V18.91: demanda de todos os canais e compra em aberto pela Linx, ao lado do e-commerce
     # (o e-commerce é faturado no Linx: a tela usa uma OU a outra, nunca soma).
-    linx, linx_resumo = linx_demanda_por_codigo([x["codigo"] for x in itens], dias)
+    # V20.00: o mês corrente (a porta só manda meses fechados) entra pelo e-commerce da filial.
+    hoje = datetime.now(BR_TZ).date()
+    vendas_mes, _ = compras_vendas_por_codigo(1, produtos, desde=hoje.replace(day=1).isoformat(),
+                                              contas=LINX_DEMANDA_CONTA_ECOM[filial])
+    ecom_mes = {c: int(v.get("ml", 0) + v.get("shopee", 0)) for c, v in vendas_mes.items()}
+    linx, linx_resumo = linx_demanda_por_codigo([x["codigo"] for x in itens], dias, hoje, filial, ecom_mes)
     for x in itens:
         x.update(linx.get(x["codigo"]) or {"linx_total": None, "linx_media_dia": None, "linx_canais": None,
-                                           "linx_caminho": None, "linx_previsao": "", "linx_atualizado": ""})
+                                           "linx_mes_atual_ecom": None, "linx_caminho": None, "linx_previsao": "",
+                                           "linx_atualizado": ""})
     itens.sort(key=lambda x: (-max(x["vendido"], x["linx_total"] or 0), x["codigo"]))
     # V19.12: estoque guardado pela demanda geral (a tela não consulta mais o Apollo na hora).
     guardado = compras_estoque_guardado([x["codigo"] for x in itens])
@@ -34674,7 +34834,8 @@ class AppHandler(BaseHTTPRequestHandler):
             try:
                 fornecedor = str((query.get("fornecedor") or [""])[0] or "")
                 dias = int(str((query.get("dias") or ["60"])[0] or "60"))
-                self.send_json(compras_demanda_payload(fornecedor, dias))
+                filial = str((query.get("filial") or ["1"])[0] or "1")   # V20.00: filial da demanda Linx
+                self.send_json(compras_demanda_payload(fornecedor, dias, filial))
             except ValueError as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 400)
             except Exception as exc:

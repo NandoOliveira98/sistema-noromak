@@ -150,6 +150,8 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
       <label class="field"><span>Prazo de entrega</span><input id="prazo" type="number" min="0" step="1"><small>dias até chegar</small></label>
       <label class="field"><span>Cobertura desejada</span><input id="cobertura" type="number" min="0" step="1"><small>dias após chegar</small></label>
       <label class="field"><span>Período de vendas</span><select id="periodo"><option value="30" selected>30 dias</option><option value="60">60 dias</option><option value="90">90 dias</option><option value="180">180 dias</option></select><small>base da média diária</small></label>
+      <!-- V20.00: filial da demanda da Linx (porta do NoromakWeb); "Todas" soma as 3 e conta a transferência duas vezes -->
+      <label class="field"><span>Filial (Linx)</span><select id="filialLinx"><option value="1" selected>Araçatuba</option><option value="2">Ribeirão Preto</option><option value="3">Bauru</option><option value="todas">Todas</option></select><small>de onde vem a demanda</small></label>
       <label class="field"><span>Transferir acima de</span><input id="limiteTransf" type="number" min="0" step="10" placeholder="0"><small>R$ — só se compensar o frete</small></label>
     </div>
     <div class="cfg-actions">
@@ -216,7 +218,7 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
     <p class="foot">
       <span class="formula">necessidade = média diária × (prazo + cobertura) − estoque − a caminho</span><br>
       <b>Estoque</b> = disponível no Apollo na rede inteira (já sem o que está no FULL).
-      <b>Custo</b> = custo médio do Apollo; sem estoque ele zera, e aí vale o custo digitado, o último custo visto ou o custo da última venda no ML (com a data). <b>E-commerce</b> = unidades no ML e na Shopee no período (kit conta cada peça). <b>Linx (total)</b> = demanda de todos os canais do Linx nos últimos meses fechados (período ÷ 30); quando existe, é ela que entra na média, porque já inclui o e-commerce.
+      <b>Custo</b> = custo médio do Apollo; sem estoque ele zera, e aí vale o custo digitado, o último custo visto ou o custo da última venda no ML (com a data). <b>E-commerce</b> = unidades no ML e na Shopee no período (kit conta cada peça). <b>Linx (total)</b> = demanda de todos os canais do Linx, na filial escolhida, nos últimos meses fechados (período ÷ 30) <b>+ o e-commerce do mês atual até hoje</b> (a Linx só manda mês fechado); a média divide pelos dias desses meses + os dias já corridos do mês. Quando existe, é ela que entra na média, porque já inclui o e-commerce. A demanda da Linx inclui a transferência entre filiais: em "Todas" a peça transferida e vendida na outra filial conta duas vezes.
       <b>Complemento até o mínimo:</b> se a necessidade não chega ao pedido mínimo, o sistema acrescenta unidades nos itens curva A e B que vão acabar primeiro, uma a uma, sem passar de 2× a cobertura desejada.
       Quantidade e "A caminho" são editáveis; desmarque para tirar um item do pedido.
     </p>
@@ -291,7 +293,7 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
     if (!state.atual) return;
     msg("Carregando vendas e peças do fornecedor…");
     try {
-      state.dados = await api(`/api/compras/demanda?fornecedor=${encodeURIComponent(state.atual.nome)}&dias=${$("periodo").value}`);
+      state.dados = await api(`/api/compras/demanda?fornecedor=${encodeURIComponent(state.atual.nome)}&dias=${$("periodo").value}&filial=${encodeURIComponent($("filialLinx").value)}`);
       $("conteudo").classList.remove("hidden");
       const d = state.dados;
       const avisos = [];
@@ -315,18 +317,22 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
     const L = d.linx || {}, el = $("avisoLinx");
     const btn = L.configurada ? ` <button class="btn" type="button" id="linxBtn">↻ Atualizar da Linx</button>` : "";
     const meses = (L.meses || []).map(m => m.split("-").reverse().join("/")).reverse().join(", ");
+    // V20.00: demanda pela porta do NoromakWeb, por filial, + e-commerce do mês atual
+    const mesAtual = L.mes_atual ? `${L.mes_atual.split("-").reverse().join("/")} (e-commerce até hoje, ${L.mes_atual_dias} dia(s))` : "";
+    const caminho = L.caminho_linx ? ` A compra em aberto do Linx vira <b>A caminho</b> (o que você digitar continua mandando).` : ` "A caminho" continua digitado.`;
+    const todas = L.filial === "todas" ? ` <b>Atenção:</b> em Todas, a peça transferida entre filiais e vendida na outra conta duas vezes.` : "";
     if (L.itens_com_dado) {
-      el.innerHTML = `<b>Demanda pela Linx.</b> ${L.itens_com_dado} peça(s) usam a demanda de <b>todos os canais</b> (balcão, oficina e telemarketing — o e-commerce já está dentro, porque é faturado no Linx) dos meses fechados ${esc(meses)}, e a compra em aberto do Linx vira <b>A caminho</b> (o que você digitar continua mandando). Peça sem histórico na Linx segue com a venda do e-commerce, marcada na coluna Média/dia.${L.itens_com_erro ? ` ${L.itens_com_erro} peça(s) com erro na Linx: ${esc(L.erro_exemplo)}.` : ""}${btn}`;
+      el.innerHTML = `<b>Demanda pela Linx — ${esc(L.filial_nome || "")}.</b> ${L.itens_com_dado} peça(s) usam a demanda de <b>todos os canais</b> (balcão, oficina e telemarketing — o e-commerce já está dentro, porque é faturado no Linx) dos meses fechados ${esc(meses)}${mesAtual ? ` + ${esc(mesAtual)}` : ""}.${caminho} Peça sem histórico na Linx segue com a venda do e-commerce, marcada na coluna Média/dia.${todas}${L.itens_com_erro ? ` ${L.itens_com_erro} peça(s) com erro na Linx: ${esc(L.erro_exemplo)}.` : ""}${btn}`;
     } else if (L.configurada) {
       el.innerHTML = `<b>A Linx ainda não trouxe a demanda deste fornecedor.</b> ${L.rodando ? "Buscando agora…" : "A busca roda sozinha à noite; clique para buscar já."}${L.itens_com_erro ? ` Erro: ${esc(L.erro_exemplo)}.` : ""} Enquanto isso, as vendas usadas são só do Mercado Livre e da Shopee (a sugestão tende a ficar abaixo do real) e "A caminho" é digitado.${btn}`;
     } else {
-      el.innerHTML = `<b>Versão provisória.</b> As vendas usadas são só do <b>Mercado Livre e da Shopee</b> — o que sai no balcão e na oficina ainda não entra, então a compra sugerida tende a ficar <b>abaixo</b> do real. "A caminho" é digitado. Quando as credenciais da Linx Smart API estiverem no servidor, a demanda de todos os canais e a compra em aberto passam a vir do Linx.`;
+      el.innerHTML = `<b>Versão provisória.</b> As vendas usadas são só do <b>Mercado Livre e da Shopee</b> — o que sai no balcão e na oficina ainda não entra, então a compra sugerida tende a ficar <b>abaixo</b> do real. "A caminho" é digitado. Falta a chave da porta do Apollo (CHAVE_CRM) no servidor para a demanda de todos os canais vir do Linx.`;
     }
     const b = $("linxBtn");
     if (b) b.onclick = async () => {
       b.disabled = true;
       try { await api("/api/compras/linx/atualizar", { method: "POST", body: JSON.stringify({ fornecedor: state.atual.nome }) });
-        msg("Buscando a demanda na Linx (uma consulta por peça, pode levar alguns minutos)…"); setTimeout(carregarDemanda, 30000); }
+        msg("Buscando a demanda na Linx (as três filiais de uma vez; pode levar alguns minutos)…"); setTimeout(carregarDemanda, 30000); }
       catch (e) { msg("Não foi possível buscar na Linx: " + e.message, "erro"); b.disabled = false; }
     };
   }
@@ -534,7 +540,7 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
         <td class="desc"><b>${esc(x.descricao)}</b>${x.custo == null ? '<span class="tag semcusto">sem custo — digite ao lado</span>' : ""}</td>
         <td>${x.curva ? `<span class="curva ${esc(x.curva)}">${esc(x.curva)}</span>` : "—"}</td>
         <td class="n" title="ML ${x.vendido_ml} · Shopee ${x.vendido_shopee}">${num(x.vendido)}</td>
-        <td class="n" title="${x.linx_canais ? `Balcão ${num(x.linx_canais.balcao)} · Oficina ${num(x.linx_canais.oficina)} · Telemarketing ${num(x.linx_canais.telemark)}` : "Sem histórico da Linx para esta peça"}">${x.linx_total == null ? "—" : num(x.linx_total)}</td>
+        <td class="n" title="${x.linx_canais ? `Meses fechados: Balcão ${num(x.linx_canais.balcao)} · Oficina ${num(x.linx_canais.oficina)} · Telemarketing ${num(x.linx_canais.telemark)} · Este mês (e-commerce) ${num(x.linx_mes_atual_ecom || 0)}` : "Sem histórico da Linx para esta peça"}">${x.linx_total == null ? "—" : num(x.linx_total)}</td>
         <td class="n">${num(x.media, 2)}<br><small class="${x.usaLinx ? "" : "muted"}" title="${x.usaLinx ? "Demanda de todos os canais (Linx)" : "Venda do e-commerce (ML + Shopee)"}">${x.usaLinx ? "Linx" : "e-com"}</small></td>
         <td class="n casaA ${x.araca === 0 ? "zero" : ""}">${x.araca === null ? "—" : num(x.araca) + (x.parcial ? "+" : "")}</td>
         <td class="n outra ${x.rib > 0 ? "tem" : ""}">${x.rib === null ? "—" : num(x.rib)}</td>
@@ -604,6 +610,9 @@ html[data-tema="escuro"] :is(thead th,th){background-color:#1E2B3B!important;col
 
   $("fornecedor").addEventListener("change", e => selecionarFornecedor(e.target.value));
   $("periodo").addEventListener("change", () => { state.edits.clear(); carregarDemanda(); });
+  // V20.00: filial da demanda da Linx (padrão Araçatuba), lembrada no navegador
+  try { const f = localStorage.getItem("nk_compras_filial_v2000"); if (f && [...$("filialLinx").options].some(o => o.value === f)) $("filialLinx").value = f; } catch (e) {}
+  $("filialLinx").addEventListener("change", () => { try { localStorage.setItem("nk_compras_filial_v2000", $("filialLinx").value); } catch (e) {} state.edits.clear(); carregarDemanda(); });
   ["minimo", "prazo", "cobertura"].forEach(id => { $(id).addEventListener("input", () => { state.edits.clear(); render(); }); $(id).addEventListener("change", salvarConfigRapida); });
   ["busca", "soComprar", "completar"].forEach(id => $(id).addEventListener("input", render));
   $("estoqueBtn").addEventListener("click", () => consultarEstoque(true));
