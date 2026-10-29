@@ -25099,6 +25099,9 @@ _POSVENDA_ESTADO: dict[str, Any] = {"rodando": False, "inicio": "", "fim": "", "
 # 1 h deixa o selo do menu vermelho; quem está respondendo segura a pergunta (duas pessoas na
 # mesma pergunta = uma resposta só no ML).
 POSVENDA_PERGUNTA_ATRASO_H = 1
+POSVENDA_PROTEGE_RESPOSTA_MIN = 15   # revisão 29/10: só esse tempo a busca atrasada do ML não desfaz a resposta
+POSVENDA_CONTA_LOCKS: dict[str, threading.Lock] = {}   # revisão 29/10: reclamações, uma rodada por conta
+POSVENDA_MANUAL_LOCK = threading.Lock()                # revisão 29/10: um "Buscar agora" por vez
 _POSVENDA_RESPONDENDO: set[str] = set()
 POSVENDA_RESPONDENDO_LOCK = threading.Lock()
 POSVENDA_PRONTA_MAX = 60   # respostas prontas guardadas
@@ -25259,6 +25262,13 @@ def ensure_posvenda_contas_schema() -> None:
             "SELECT ?,dia,nivel,mercado_lider,vendas_periodo,periodo,reclamacoes_taxa,reclamacoes_qtd,atrasos_taxa,"
             "atrasos_qtd,cancelamentos_taxa,cancelamentos_qtd,atualizado_em FROM ml_reputacao_dia_v1888", (CASA_PRINCIPAL,))
         DB.commit()
+
+
+def _posvenda_trava_conta(conta: str) -> threading.Lock:
+    """Revisão 29/10: a trava das reclamações é por conta — com uma só, o "Buscar agora" no meio da
+    rodada de Araçatuba pulava também Bauru (e o worker pulava Bauru enquanto o manual rodava)."""
+    with POSVENDA_LOCK:
+        return POSVENDA_CONTA_LOCKS.setdefault(conta, threading.Lock())
 
 
 def _posvenda_estado_conta(conta: str, parte: str, resultado: dict[str, Any]) -> None:
@@ -25531,11 +25541,12 @@ def posvenda_reclamacoes_rodada(stop_event: threading.Event | None = None, *, ag
                                 pausa: float | None = None) -> dict[str, Any]:
     """Busca as reclamações abertas e as que mudaram, e detalha as novas/alteradas.
     V20.01: da conta da casa atual (ml_na_casa); cada conta tem o seu ponto de partida e a sua fila."""
-    if not POSVENDA_LOCK.acquire(blocking=False):
+    conta = ml_casa_atual()
+    trava = _posvenda_trava_conta(conta)
+    if not trava.acquire(blocking=False):
         return {"ok": True, "pulado": "já está rodando"}
     pausa = POSVENDA_PAUSA if pausa is None else pausa
     agora = agora or datetime.now(timezone.utc)
-    conta = ml_casa_atual()
     try:
         _POSVENDA_ESTADO.update(rodando=True, inicio=now_iso(), fim="")
         linha = ml_integration_row()
@@ -25609,7 +25620,7 @@ def posvenda_reclamacoes_rodada(stop_event: threading.Event | None = None, *, ag
         return resultado
     finally:
         _POSVENDA_ESTADO.update(rodando=False, fim=now_iso())
-        POSVENDA_LOCK.release()
+        trava.release()
 
 
 def posvenda_reputacao_rodada(dia: str | None = None) -> dict[str, Any]:
@@ -25648,21 +25659,32 @@ def _posvenda_gravar_pergunta(q: dict[str, Any], respondida_por: str = "") -> bo
     """Grava a pergunta (conta = casa atual, só ao criar). Devolve True quando é nova."""
     ans = q.get("answer") if isinstance(q.get("answer"), dict) else {}
     de = q.get("from") if isinstance(q.get("from"), dict) else {}
+    status = str(q.get("status") or "")
     with DB_LOCK:
-        nova = DB.execute("SELECT 1 FROM ml_pergunta_v1888 WHERE pergunta_id=?", (str(q.get("id") or ""),)).fetchone() is None
-        # V20.01: respondida por aqui não volta a "sem resposta" porque a busca do ML ainda a trouxe.
+        atual = DB.execute("SELECT status, respondida_em, respondida_por FROM ml_pergunta_v1888 WHERE pergunta_id=?",
+                           (str(q.get("id") or ""),)).fetchone()
+        nova = atual is None
+        # V20.01: respondida por aqui não volta a "sem resposta" porque a busca do ML, atrasada, ainda a trouxe —
+        # mas só nos primeiros minutos (revisão 29/10): depois disso o "sem resposta" do ML vale (resposta apagada
+        # pela moderação do ML), e a pergunta volta para a fila em vez de sumir para sempre.
+        if atual is not None and status == "UNANSWERED" and str(atual["status"]) == "ANSWERED":
+            quando = _posvenda_dt(atual["respondida_em"])
+            recente = quando is not None and (datetime.now(timezone.utc) - quando) < timedelta(minutes=POSVENDA_PROTEGE_RESPOSTA_MIN)
+            if recente and str(atual["respondida_por"] or ""):
+                status = "ANSWERED"
+            else:
+                DB.execute("UPDATE ml_pergunta_v1888 SET resposta='', respondida_em='', respondida_por='' WHERE pergunta_id=?",
+                           (str(q.get("id") or ""),))
         DB.execute(
             "INSERT INTO ml_pergunta_v1888(pergunta_id,item_id,texto,status,criada_em,comprador_id,resposta,respondida_em,"
             "respondida_por,updated_at,conta) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(pergunta_id) DO UPDATE SET "
-            "item_id=excluded.item_id,texto=excluded.texto,"
-            "status=CASE WHEN ml_pergunta_v1888.status='ANSWERED' AND excluded.status='UNANSWERED' "
-            "AND ml_pergunta_v1888.respondida_por<>'' THEN 'ANSWERED' ELSE excluded.status END,criada_em=excluded.criada_em,"
+            "item_id=excluded.item_id,texto=excluded.texto,status=excluded.status,criada_em=excluded.criada_em,"
             "comprador_id=excluded.comprador_id,"
             "resposta=CASE WHEN excluded.resposta<>'' THEN excluded.resposta ELSE ml_pergunta_v1888.resposta END,"
             "respondida_em=CASE WHEN excluded.respondida_em<>'' THEN excluded.respondida_em ELSE ml_pergunta_v1888.respondida_em END,"
             "respondida_por=CASE WHEN ml_pergunta_v1888.respondida_por<>'' THEN ml_pergunta_v1888.respondida_por "
             "ELSE excluded.respondida_por END,updated_at=excluded.updated_at",
-            (str(q.get("id") or ""), str(q.get("item_id") or ""), str(q.get("text") or ""), str(q.get("status") or ""),
+            (str(q.get("id") or ""), str(q.get("item_id") or ""), str(q.get("text") or ""), status,
              str(q.get("date_created") or ""), str(de.get("id") or ""), str(ans.get("text") or ""),
              str(ans.get("date_created") or ""), respondida_por, now_iso(), ml_casa_atual()))
         DB.commit()
@@ -26352,7 +26374,10 @@ def posvenda_rodada_contas(stop_event: threading.Event | None = None, *, reclama
     """V20.01: perguntas (e, quando pedido, reclamações e reputação) de cada conta conectada,
     cada uma com o próprio token. O erro de uma conta não impede a outra."""
     feito: dict[str, Any] = {}
-    for casa in ml_casas_conectadas():
+    casas = ml_casas_conectadas()
+    # Revisão 29/10: as perguntas de TODAS as contas primeiro (rápidas e com aviso); as reclamações (até 150
+    # detalhes por conta) depois — antes a pergunta de Bauru esperava todas as reclamações de Araçatuba.
+    for casa in casas:
         if stop_event is not None and stop_event.is_set():
             break
         with ml_na_casa(casa):
@@ -26361,8 +26386,10 @@ def posvenda_rodada_contas(stop_event: threading.Event | None = None, *, reclama
             except Exception as exc:
                 _posvenda_estado_conta(casa, "perguntas", {"ok": False, "erro": str(exc)[:300], "em": now_iso()})
                 print(f"[posvenda] perguntas ({casa}) falharam: {exc}", file=sys.stderr, flush=True)
-            if not reclamacoes:
-                continue
+    for casa in casas if reclamacoes else []:
+        if stop_event is not None and stop_event.is_set():
+            break
+        with ml_na_casa(casa):
             try:
                 posvenda_reclamacoes_rodada(stop_event, pausa=pausa)
             except Exception as exc:
@@ -26372,6 +26399,7 @@ def posvenda_rodada_contas(stop_event: threading.Event | None = None, *, reclama
                 posvenda_reputacao_rodada()
             except Exception as exc:
                 print(f"[posvenda] reputação ({casa}) falhou: {exc}", file=sys.stderr, flush=True)
+    for casa in casas:
         feito[casa] = dict((_POSVENDA_ESTADO.get("contas") or {}).get(casa) or {})
     return feito
 
@@ -26498,8 +26526,11 @@ def _posvenda_devolucoes_recebidas(dias: int = 180) -> dict[str, dict[str, Any]]
 def posvenda_resumo() -> dict[str, Any]:
     """V20.01: selo do menu — perguntas sem resposta e as que passaram de 1 h."""
     limite = datetime.now(timezone.utc) - timedelta(hours=POSVENDA_PERGUNTA_ATRASO_H)
+    # Revisão 29/10: só as contas conectadas — a de uma conta que caiu não é mais relida e deixaria o selo vermelho.
+    conectadas = set(ml_casas_conectadas())
     with DB_LOCK:
-        rows = DB.execute("SELECT conta, criada_em FROM ml_pergunta_v1888 WHERE status='UNANSWERED'").fetchall()
+        rows = [r for r in DB.execute("SELECT conta, criada_em FROM ml_pergunta_v1888 WHERE status='UNANSWERED'").fetchall()
+                if str(r["conta"] or CASA_PRINCIPAL) in conectadas]
     por_conta: dict[str, int] = {}
     atrasadas = 0
     for r in rows:
@@ -26728,7 +26759,11 @@ def _saude_posvenda() -> list[dict[str, Any]]:
     if not ml_status_payload().get("configured"):
         return []
     # V20.01: as duas contas; a falha de leitura de cada uma aparece com o nome dela.
-    falhas = [(c, (e or {}).get("reclamacoes") or {}) for c, e in (_POSVENDA_ESTADO.get("contas") or {}).items()]
+    # Revisão 29/10: só as contas conectadas (a reclamação de uma conta que caiu não é mais relida: o prazo
+    # "vencido" congelado mandaria e-mail a cada 6 h).
+    conectadas = set(ml_casas_conectadas())
+    falhas = [(c, (e or {}).get("reclamacoes") or {}) for c, e in (_POSVENDA_ESTADO.get("contas") or {}).items()
+              if c in conectadas]
     falhas = [(c, u) for c, u in falhas if u.get("ok") is False]
     if not falhas and (_POSVENDA_ESTADO.get("ultimo") or {}).get("ok") is False:
         falhas = [(CASA_PRINCIPAL, _POSVENDA_ESTADO["ultimo"])]
@@ -26736,7 +26771,7 @@ def _saude_posvenda() -> list[dict[str, Any]]:
     with DB_LOCK:
         abertas = [dict(r) for r in DB.execute(
             "SELECT claim_id, order_id, acao, prazo, prazo_detalhe, responsavel, conta FROM ml_reclamacao_v1888 "
-            "WHERE status='opened'").fetchall()]
+            "WHERE status='opened'").fetchall() if str(r["conta"] or CASA_PRINCIPAL) in conectadas]
     vencendo = []
     com_acao = 0
     for r in abertas:
@@ -36588,13 +36623,24 @@ class AppHandler(BaseHTTPRequestHandler):
             # V18.88: busca agora (em segundo plano) perguntas, reclamações e reputação.
             ctx = self.auth(admin_only=True)
             if ctx is not None:
+                # Revisão 29/10: um "Buscar agora" por vez (duas abas/pessoas repetiam toda a leitura no ML).
+                if not POSVENDA_MANUAL_LOCK.acquire(blocking=False):
+                    self.send_json({"ok": True, "iniciado": False, "ja_estava": True})
+                    return
+
                 def _sincronizar() -> None:
                     try:
                         posvenda_rodada_contas(reclamacoes=True)   # V20.01: as duas contas
                     except Exception as exc:
                         print(f"[posvenda] sincronizar: {exc}", file=sys.stderr, flush=True)
-                threading.Thread(target=_sincronizar, name="posvenda-manual", daemon=True).start()
-                self.send_json({"ok": True, "iniciado": True})
+                    finally:
+                        POSVENDA_MANUAL_LOCK.release()
+                try:
+                    threading.Thread(target=_sincronizar, name="posvenda-manual", daemon=True).start()
+                except Exception:
+                    POSVENDA_MANUAL_LOCK.release()
+                    raise
+                self.send_json({"ok": True, "iniciado": True, "ja_estava": False})
             return
         if path == "/api/promocoes-auto/convites/buscar":
             # V18.89: lê os convites no ML agora (em segundo plano).

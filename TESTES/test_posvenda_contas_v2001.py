@@ -420,6 +420,79 @@ class RespostasProntas(Base):
         self.assertEqual(d["config"]["saudacao@bauru"], "Oi")
 
 
+class RevisaoAntesDeSubir(Base):
+    """Os 4 pontos médios da revisão de 29/10."""
+
+    def test_resposta_apagada_pelo_ml_volta_para_a_fila(self):
+        # respondida pelo Noromak há mais tempo que a proteção e o ML diz "sem resposta" de novo (moderação)
+        self.ml.perguntas["aracatuba"] = [pergunta(300)]
+        self.rodada()
+        enviados = []
+        self.responder_com(enviados)
+        S.posvenda_responder("300", "Serve sim.", "luis")
+        self.rodada()   # busca atrasada do ML ainda traz a pergunta: continua respondida
+        self.assertEqual(self.ler("ml_pergunta_v1888", "pergunta_id", 300)["status"], "ANSWERED")
+        velho = (datetime.now(timezone.utc) - timedelta(minutes=S.POSVENDA_PROTEGE_RESPOSTA_MIN + 5)).astimezone().isoformat()
+        with S.DB_LOCK:
+            S.DB.execute("UPDATE ml_pergunta_v1888 SET respondida_em=? WHERE pergunta_id='300'", (velho,))
+            S.DB.commit()
+        self.rodada()
+        self.assertEqual(self.ler("ml_pergunta_v1888", "pergunta_id", 300)["status"], "UNANSWERED",
+                         "resposta apagada pelo ML deixou a pergunta presa como respondida")
+
+    def test_perguntas_das_duas_contas_antes_das_reclamacoes(self):
+        self.ml.reclamacoes["aracatuba"] = [reclamacao(400, "aracatuba")]
+        self.rodada()
+        ordem = [(c, "perg" if p.startswith("/questions/search") else "recl")
+                 for c, p in self.ml.chamadas if p.startswith(("/questions/search", "/post-purchase/v1/claims/search"))]
+        primeira_recl = next(i for i, x in enumerate(ordem) if x[1] == "recl")
+        self.assertEqual({c for c, t in ordem[:primeira_recl]}, {"aracatuba", "bauru"},
+                         f"as perguntas de Bauru esperaram as reclamações de Araçatuba: {ordem}")
+
+    def test_reclamacoes_rodando_numa_conta_nao_pulam_a_outra(self):
+        self.ml.reclamacoes["bauru"] = [reclamacao(410, "bauru")]
+        trava = S._posvenda_trava_conta("aracatuba")
+        trava.acquire()   # a rotina automática está detalhando Araçatuba
+        try:
+            self.rodada()
+        finally:
+            trava.release()
+        self.assertIsNotNone(self.ler("ml_reclamacao_v1888", "claim_id", 410), "Bauru foi pulada porque Araçatuba rodava")
+
+    def test_buscar_agora_um_por_vez(self):
+        entrou, solta = threading.Event(), threading.Event()
+        orig = S.posvenda_rodada_contas
+
+        def lenta(*a, **k):
+            entrou.set()
+            solta.wait(5)
+
+        S.posvenda_rodada_contas = lenta
+        try:
+            st, d = self.cliente.pedir("POST", "/api/posvenda/sincronizar", {})
+            self.assertEqual(st, 200, d)
+            self.assertTrue(entrou.wait(5))
+            st, d = self.cliente.pedir("POST", "/api/posvenda/sincronizar", {})
+            self.assertEqual(st, 200, d)
+            self.assertTrue(d["ja_estava"], d)
+        finally:
+            solta.set()
+            S.posvenda_rodada_contas = orig
+
+    def test_conta_desconectada_nao_conta_no_selo_nem_na_saude(self):
+        self.ml.perguntas["bauru"] = [pergunta(420, horas=-5)]
+        self.ml.reclamacoes["bauru"] = [reclamacao(421, "bauru")]
+        self.rodada()
+        with S.DB_LOCK:
+            S.DB.execute("UPDATE ml_reclamacao_v1888 SET prazo=? WHERE claim_id='421'", (iso(-10),))
+            S.DB.commit()
+        S.ml_casas_conectadas = lambda: ["aracatuba"]   # Bauru caiu
+        S._POSVENDA_ESTADO["contas"].pop("bauru", None)
+        r = S.posvenda_resumo()
+        self.assertEqual((r["sem_resposta"], r["atrasadas"]), (0, 0))
+        self.assertNotEqual(S._saude_posvenda()[0]["nivel"], "critico")
+
+
 class Migracao(Base):
 
     def test_reputacao_antiga_vira_de_aracatuba(self):

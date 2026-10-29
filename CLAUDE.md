@@ -780,6 +780,10 @@ V19.95; `?relatorio=1` ainda o devolve). **Avisos:** pergunta nova vira aviso `m
 Avisos de venda, abre `/posvenda`; 1ª leitura de cada conta só marca, `base_pergunta@conta`; > 48 h calada). Selo no
 menu (`GET /api/posvenda/resumo`, vermelho com pergunta > 1 h). Painel de saúde: prazo < 24 h das duas contas, com o nome
 da conta e o botão "Abrir Pós-venda". O Auditor de cobranças continua lendo só as reclamações de Araçatuba.
+**Revisão 29/10:** a proteção da resposta dada por aqui vale só `POSVENDA_PROTEGE_RESPOSTA_MIN` (15 min): depois, o
+"sem resposta" do ML (resposta apagada pela moderação) devolve a pergunta à fila; as perguntas de todas as contas são
+lidas antes das reclamações; a trava das reclamações é por conta (`_posvenda_trava_conta`) e o "Buscar agora" é um por
+vez (`POSVENDA_MANUAL_LOCK`, `ja_estava`); selo e Painel de saúde contam só as contas conectadas.
 Teste: `TESTES/test_posvenda_contas_v2001.py`.
 **V19.76: a tela foi apagada (dono, 22/10).** A rotina `posvenda_loop` e as tabelas continuam: o Auditor de
 cobranças usa as reclamações (frete de devolução) e o Painel de saúde o prazo do vendedor (sem botão de tela).

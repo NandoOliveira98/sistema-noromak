@@ -399,7 +399,7 @@ body{margin:0;background:var(--nk-canvas);color:var(--nk-ink);font-family:var(--
   });
   $("buscar").onclick = async () => {
     $("buscar").disabled = true;
-    try { await api("/api/posvenda/sincronizar", {method:"POST", body:"{}"}); nkToast("Buscando no Mercado Livre (as duas contas). A tela atualiza sozinha em 1 minuto.", "info"); setTimeout(carregar, 60000); }
+    try { const r = await api("/api/posvenda/sincronizar", {method:"POST", body:"{}"}); nkToast(r.ja_estava ? "Já está buscando no Mercado Livre (outra pessoa ou outra aba clicou). A tela atualiza sozinha." : "Buscando no Mercado Livre (as duas contas). A tela atualiza sozinha em 1 minuto.", "info"); setTimeout(carregar, 60000); }
     catch (e) { nkToast("Não foi possível buscar: " + e.message, "erro"); }
     setTimeout(() => { $("buscar").disabled = false; }, 60000);
   };
