@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.04-VIGIAS-LEVES"
+APP_VERSION = "20.05-RUPTURA-RELATORIO-COMPLETO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -24712,19 +24712,23 @@ def _ruptura_marcas_aplicar(itens: list[dict[str, Any]]) -> tuple[list[str], str
         print(f"[ruptura] marcas não lidas: {exc}", file=sys.stderr, flush=True)
         for i in itens:
             i["marcas"] = []
+            i["pecas"] = []
         return [], str(exc) or exc.__class__.__name__
     conhecidos = set(produtos)
     todas: set[str] = set()
     for i in itens:
         sku = str(i.get("sku") or "").strip()
         comps = (kits.get(sku) or {}).get("componentes") if sku else None
-        partes = [c["sku"] for c in comps] if comps else [c for c, _ in _separacao_partes(sku, conhecidos)]
+        partes = [(c["sku"], int(c.get("quantidade") or 1)) for c in comps] if comps else _separacao_partes(sku, conhecidos)
         nomes: set[str] = set()
-        for parte in partes:
+        pecas: list[tuple[str, int]] = []
+        for parte, qtd in partes:
             codigo = _compras_codigo(parte, produtos)
             if codigo:
                 nomes.update(regras(codigo, produtos[codigo].get("descricao") or ""))
+            pecas.append((codigo or str(parte).strip().upper(), max(1, int(qtd or 1))))
         i["marcas"] = sorted(nomes)
+        i["pecas"] = pecas   # V20.05: o relatório completo acha o Apollo guardado por aqui
         todas |= nomes
     return sorted(todas), ""
 
@@ -24850,7 +24854,7 @@ def ruptura_relatorio_xlsx(marketplace: str = "ml", hoje: date | None = None,
             linhas.append([(i["mlb"], 0), (i["sku"], 0), (i["titulo"], 0), (i["dias_sem_estoque"], 0),
                            (i["unidades_perdidas"], 0), (i["perdido"], 2), (i["link"], 0)])
         return _xlsx_abas([("Faltou estoque", linhas)], larguras=[15, 24, 60, 11, 11, 13, 45])
-    abas = []
+    abas, opcoes = _ruptura_completo_abas(ruptura_completo_payload(hoje))  # V20.05: as 6 abas vêm primeiro
     det: list[list[tuple[Any, int]]] = [[(c, 1) for c in ["Tipo", "Período", "Anúncio", "Título",
                                                           "Dias sem estoque", "Unidades perdidas", "Perdido (R$)"]]]
     for tipo, nome in (("semanas", "Semanal"), ("meses", "Mensal")):
@@ -24868,7 +24872,348 @@ def ruptura_relatorio_xlsx(marketplace: str = "ml", hoje: date | None = None,
                          f"Perdido = venda por dia (últimos {r['base_dias']} dias com estoque) × dias sem estoque × ticket médio.", 0)]]
         abas.append((nome, linhas))
     abas.append(("Anúncios", det))
-    return _xlsx_abas(abas)
+    return _xlsx_abas(abas, opcoes=opcoes)
+
+
+# V20.05: o relatório que o dono recebeu à mão em 30/10 (Excel de 6 abas + folha A4), agora pelos
+# botões da tela. Junta ML + Shopee do mês até ontem. NUNCA consulta o Apollo: na manhã de 30/10 a
+# leitura em lote travou o sistema. Usa o estoque guardado de Araçatuba (Demanda de Compra e
+# remessa Full, o mais novo dos dois); sem leitura fica em branco e vira "Sem leitura", nunca zero.
+RUPTURA_COMPLETO_TTL = 120  # dois cliques seguidos (Excel + A4) não refazem a conta
+_RUPTURA_COMPLETO_CACHE: dict[str, Any] = {}
+RUPTURA_MESES = ("janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
+                 "setembro", "outubro", "novembro", "dezembro")
+
+
+def _ruptura_apollo_guardado(itens: list[dict[str, Any]]) -> None:
+    codigos = sorted({c for i in itens for c, _ in i.get("pecas") or []})
+    disp: dict[str, tuple[str, float]] = {}
+    for cod, r in compras_estoque_guardado(codigos).items():
+        if r.get("stock_known") and r.get("available") is not None:
+            disp[cod] = (str(r.get("consultado_em") or ""), float(r["available"]))
+    a_caminho: dict[str, int] = {}
+    with DB_LOCK:
+        linhas = DB.execute(
+            "SELECT i.anuncio, i.codigo, i.estoque_apollo, i.a_caminho, r.montada_em FROM full_remessa_item_v1903 i "
+            "JOIN full_remessa_v1903 r ON r.remessa_id = i.remessa_id ORDER BY i.remessa_id").fetchall()
+    for r in linhas:   # da remessa mais antiga para a mais nova: a última vence
+        a_caminho[str(r["anuncio"])] = int(r["a_caminho"] or 0)
+        cod, em = str(r["codigo"] or ""), str(r["montada_em"] or "")
+        if cod and r["estoque_apollo"] is not None and em >= disp.get(cod, ("", 0.0))[0]:
+            disp[cod] = (em, float(r["estoque_apollo"]))
+    for i in itens:
+        pecas = i.get("pecas") or []
+        leituras = [(disp.get(c), q) for c, q in pecas]
+        if pecas and all(l is not None for l, _ in leituras):
+            i["apollo"] = int(min(l[1] // q for l, q in leituras))
+            d = min(l[0] for l, _ in leituras)[:10]
+            i["apollo_lido"] = f"{d[8:10]}/{d[5:7]}"
+        else:
+            i["apollo"], i["apollo_lido"] = None, ""
+        i["a_caminho"] = a_caminho.get(i["mlb"])
+        a = i["apollo"]
+        if a is None:
+            i["acao"] = "Sem leitura"
+        elif a > 0:
+            i["acao"] = "Enviar ao Full" if i.get("full") else "Ajustar anúncio"
+        else:
+            i["acao"] = "A caminho" if i["a_caminho"] else "Comprar"
+
+
+def ruptura_completo_payload(hoje: date | None = None) -> dict[str, Any]:
+    """Só lê o banco (e o Precificador, para marca e código). Sem `hoje` guarda 2 min."""
+    if hoje is None:
+        guardado = _RUPTURA_COMPLETO_CACHE.get("r")
+        if guardado and time.monotonic() - guardado[0] < RUPTURA_COMPLETO_TTL:
+            return guardado[1]
+    data = hoje or datetime.now(BR_TZ).date()
+    ontem = data - timedelta(days=1)
+    ini = ontem.replace(day=1)
+    dias = (ontem - ini).days + 1
+    itens: list[dict[str, Any]] = []
+    primeiro = ""
+    for mp, canal in (("ml", "ML"), ("shopee", "Shopee")):
+        r = ruptura_payload(dias, data, mp)
+        if mp == "ml":
+            primeiro = r["coleta"]["primeiro_dia"]
+        for i in r["itens"]:
+            i["canal"], i["marketplace"] = canal, mp
+            itens.append(i)
+    _, marcas_erro = _ruptura_marcas_aplicar(itens)
+    _ruptura_apollo_guardado(itens)
+    for i in itens:
+        i["onde"] = "Full" if i.get("full") else "Próprio"
+        i["perda_dia"] = i.get("perda_dia") or 0.0
+
+    ant_ini = (ini - timedelta(days=1)).replace(day=1)
+    ant_fim = min(ant_ini + timedelta(days=dias - 1), ini - timedelta(days=1))
+
+    def vendas(a: date, b: date) -> dict[str, dict[str, float]]:
+        with DB_LOCK:
+            return {str(r["marketplace"]): {"fat": float(r["f"] or 0), "pedidos": int(r["p"] or 0)} for r in DB.execute(
+                "SELECT marketplace, SUM(amount) AS f, COUNT(DISTINCT order_id) AS p FROM vendas_v1799 "
+                "WHERE sale_day BETWEEN ? AND ? GROUP BY marketplace", (a.isoformat(), b.isoformat())).fetchall()}
+    agora, antes = vendas(ini, ontem), vendas(ant_ini, ant_fim)
+    canais = []
+    for mp, nome in (("ml", "Mercado Livre"), ("shopee", "Shopee")):
+        a, b = agora.get(mp) or {}, antes.get(mp) or {}
+        canais.append({"canal": nome, "atual": round(a.get("fat", 0.0), 2), "anterior": round(b.get("fat", 0.0), 2),
+                       "pedidos": a.get("pedidos", 0), "pedidos_ant": b.get("pedidos", 0)})
+    fat = round(sum(c["atual"] for c in canais), 2)
+    fat_ant = round(sum(c["anterior"] for c in canais), 2)
+    ped, ped_ant = sum(c["pedidos"] for c in canais), sum(c["pedidos_ant"] for c in canais)
+
+    def grupo(g: list[dict[str, Any]], campo: str = "perda_dia") -> dict[str, Any]:
+        return {"anuncios": len(g), "dia": round(sum(i.get(campo) or 0 for i in g), 2)}
+    zerados = sorted((i for i in itens if i["grupo"] == "zerado"), key=lambda i: -i["perda_dia"])
+    perto = sorted((i for i in itens if i["grupo"] in ("critico", "atencao")),
+                   key=lambda i: (i["grupo"] != "critico", i.get("cobertura_dias") or 0))
+    criticos = [i for i in perto if i["grupo"] == "critico"]
+    comprar = [i for i in zerados if i["acao"] == "Comprar"]
+    ajustar = [i for i in zerados if i["acao"] in ("Ajustar anúncio", "Enviar ao Full")]
+    sem_leitura = [i for i in zerados if i["acao"] == "Sem leitura"]
+    a_caminho = [i for i in zerados if i["acao"] == "A caminho"]
+    perdas = sorted((i for i in itens if i["perdido"] > 0), key=lambda i: -i["perdido"])
+    perdido = round(sum(i["perdido"] for i in perdas), 2)
+    # Dias medidos: a coleta pode ter começado depois do dia 1º.
+    medidos = dias
+    if primeiro and primeiro > ini.isoformat():
+        medidos = max(1, (ontem - date.fromisoformat(primeiro)).days + 1)
+
+    marcas: dict[str, dict[str, Any]] = {}
+    for i in itens:
+        for nome in i.get("marcas") or ["Sem marca"]:
+            m = marcas.setdefault(nome, {"marca": nome, "anuncios": 0, "com_ruptura": 0, "dias": 0.0, "unidades": 0.0,
+                                         "perdido": 0.0, "zerados": 0, "perda_dia": 0.0, "criticos": 0, "faturamento": 0.0})
+            m["anuncios"] += 1
+            m["com_ruptura"] += 1 if i["perdido"] > 0 else 0
+            m["dias"] += i["dias_sem_estoque"]
+            m["unidades"] += i["unidades_perdidas"]
+            m["perdido"] += i["perdido"]
+            m["zerados"] += 1 if i["grupo"] == "zerado" else 0
+            m["perda_dia"] += i["perda_dia"] if i["grupo"] == "zerado" else 0.0
+            m["criticos"] += 1 if i["grupo"] == "critico" else 0
+            m["faturamento"] += i.get("faturamento") or 0.0
+    lista_marcas = sorted(marcas.values(), key=lambda m: -m["perdido"])
+    for m in lista_marcas:
+        m["perc_fat"] = round(m["perdido"] / m["faturamento"], 4) if m["faturamento"] > 0 else None
+        for c in ("dias", "unidades", "perdido", "perda_dia"):
+            m[c] = round(m[c], 2)
+
+    semanal = ruptura_relatorio_payload("ml", data, semanas=5, meses=1)["semanas"]
+    semanas = [{"inicio": p["inicio"], "fim": p["fim"], "por_dia": round(p["perdido"] / max(1, p["dias"]), 2)}
+               for p in reversed(semanal) if p["perdido"] > 0]
+    r = {"ok": True, "hoje": data.isoformat(), "inicio": ini.isoformat(), "fim": ontem.isoformat(),
+         "mes": f"{RUPTURA_MESES[ini.month - 1]} {ini.year}", "mes_anterior": RUPTURA_MESES[ant_ini.month - 1],
+         "primeiro_dia": primeiro, "marcas_erro": marcas_erro, "canais": canais, "itens": itens, "zerados": zerados,
+         "perto": perto, "perdas": perdas, "comprar": comprar, "ajustar": ajustar, "marcas": lista_marcas,
+         "semanas": semanas,
+         "resumo": {"faturamento": fat, "faturamento_ant": fat_ant, "pedidos": ped, "pedidos_ant": ped_ant,
+                    "ticket": round(fat / ped, 2) if ped else None, "ticket_ant": round(fat_ant / ped_ant, 2) if ped_ant else None,
+                    "perdido": perdido, "dias_medidos": medidos, "perda_media_dia": round(perdido / medidos, 2),
+                    "perc_perdido": round(perdido / fat, 4) if fat else None, "anuncios_perda": len(perdas),
+                    "zerados": len(zerados), "perda_dia": round(sum(i["perda_dia"] for i in zerados), 2),
+                    "comprar": grupo(comprar), "ajustar": grupo(ajustar), "sem_leitura": grupo(sem_leitura),
+                    "a_caminho": grupo(a_caminho), "criticos": grupo(criticos, "risco_dia"),
+                    "atencao": sum(1 for i in perto if i["grupo"] == "atencao")}}
+    if hoje is None:
+        _RUPTURA_COMPLETO_CACHE["r"] = (time.monotonic(), r)
+    return r
+
+
+def _ruptura_completo_abas(d: dict[str, Any]) -> tuple[list[Any], dict[str, Any]]:
+    """As 6 abas do relatório de 30/10. Estilos do _xlsx_abas: 8 título, 7 nota, 2 moeda, 5 %, 6 uma casa."""
+    br = lambda x: "/".join(reversed(str(x).split("-")))
+    r = d["resumo"]
+    v = lambda x, st=0: (x if x is not None else "", st)
+    opcoes: dict[str, Any] = {}
+
+    def aba(nome: str, titulo: str, nota: str, colunas: list[tuple[str, str, int, int]], itens: list[dict[str, Any]]):
+        linhas: list[list[tuple[Any, int]]] = [[(titulo, 8)], [(nota, 7)], [], [(c[0], 1) for c in colunas]]
+        for i in itens:
+            linhas.append([v(i.get(c[1]), c[3]) for c in colunas])
+        opcoes[nome] = {"larguras": [c[2] for c in colunas], "congelar": 4,
+                        "filtro": (4, len(colunas), 4 + len(itens))}
+        return (nome, linhas)
+
+    resumo: list[list[tuple[Any, int]]] = [
+        [(f"Ruptura de {d['mes']} com o Apollo de Araçatuba", 8)],
+        [(f"Ruptura de {br(d['inicio'])} a {br(d['fim'])}. Apollo guardado (Demanda de Compra e remessa Full), sem consulta nova.", 7)],
+        [], [("Situação", 1), ("Anúncios", 1), ("R$ por dia", 1)],
+        [("Zerados: comprar (sem peça em Araçatuba)", 0), (r["comprar"]["anuncios"], 0), (r["comprar"]["dia"], 2)],
+        [("Zerados: ajustar anúncio ou enviar ao Full (peça no Apollo)", 0), (r["ajustar"]["anuncios"], 0), (r["ajustar"]["dia"], 2)],
+        [("Zerados: a caminho do Full", 0), (r["a_caminho"]["anuncios"], 0), (r["a_caminho"]["dia"], 2)],
+        [("Zerados: sem leitura do Apollo", 0), (r["sem_leitura"]["anuncios"], 0), (r["sem_leitura"]["dia"], 2)],
+        [("Total de zerados", 4), (r["zerados"], 4), (r["perda_dia"], 9)], [],
+        [("Acabam em até 7 dias", 0), (r["criticos"]["anuncios"], 0), (r["criticos"]["dia"], 2)],
+        [("Perdido no período (estimativa)", 4), ("", 0), (r["perdido"], 9)], [],
+        [("Perda é estimativa. Apollo em branco = sem leitura, nunca zero. Bauru e Ribeirão não entram.", 7)],
+        [("Anúncios do mesmo código dividem a mesma peça.", 7)]]
+    opcoes["Resumo"] = {"larguras": [58, 12, 18]}
+    base = [("Anúncio", "mlb", 16, 0), ("SKU", "sku", 26, 0), ("Produto", "titulo", 58, 0), ("Marca", "marca", 15, 0)]
+    for i in d["itens"]:
+        i["marca"] = ", ".join(i.get("marcas") or []) or "Sem marca"
+    prod = [("Ação", "acao", 16, 0)] + base + [("Apollo", "apollo", 9, 0)]
+    acoes = d["comprar"] + d["ajustar"] + [i for i in d["zerados"] if i["acao"] in ("Sem leitura", "A caminho")]
+    return ([("Resumo", resumo),
+             aba("Ações", "Ações nos anúncios zerados", "Todos os zerados: comprar, ajustar, sem leitura e a caminho, cada grupo do maior custo por dia para o menor.",
+                 prod + [("Perda por dia", "perda_dia", 14, 2)], acoes),
+             aba("Perto de acabar", "Produtos próximos de acabar", f"Duram até {RUPTURA_ATENCAO_DIAS} dias no ritmo atual.",
+                 [("Situação", "situacao", 10, 0)] + prod[:1] + base + [("Canal", "canal", 9, 0), ("Onde", "onde", 9, 0),
+                  ("Estoque no anúncio", "estoque", 10, 0), ("Apollo", "apollo", 9, 0), ("Apollo lido em", "apollo_lido", 10, 0),
+                  ("A caminho", "a_caminho", 9, 0), ("Venda por dia", "ritmo_dia", 9, 6), ("Dura (dias)", "cobertura_dias", 8, 6),
+                  ("Risco por dia", "risco_dia", 13, 2)],
+                 [{**i, "situacao": "Crítico" if i["grupo"] == "critico" else "Atenção"} for i in d["perto"]]),
+             aba("Zerados", "Os 15 zerados que mais custam por dia", f"Entre os {r['zerados']} anúncios zerados.",
+                 prod + [("Apollo lido em", "apollo_lido", 10, 0), ("Perda por dia", "perda_dia", 13, 2),
+                         ("Dias sem estoque", "dias_sem_estoque", 10, 6), (f"Perdido em {d['mes'].split()[0]}", "perdido", 13, 2)],
+                 d["zerados"][:15]),
+             aba("Maiores perdas", f"Os 15 produtos que mais perderam em {d['mes'].split()[0]}", "Estimativa.",
+                 base + [("Perdido", "perdido", 13, 2), ("Unidades", "unidades_perdidas", 9, 6),
+                         ("Dias sem estoque", "dias_sem_estoque", 10, 6), ("Estoque no anúncio", "estoque", 10, 0),
+                         ("Apollo", "apollo", 9, 0), ("Apollo lido em", "apollo_lido", 10, 0)],
+                 d["perdas"][:15]),
+             aba("Marcas", "Ruptura por marca", "Anúncio com peças de duas marcas conta nas duas.",
+                 [("Marca", "marca", 16, 0), ("Perdido", "perdido", 13, 2), ("% do faturado", "perc_fat", 11, 5),
+                  ("Anúncios com ruptura", "com_ruptura", 11, 0), ("Anúncios", "anuncios", 9, 0),
+                  ("Dias sem estoque", "dias", 10, 6), ("Unidades perdidas", "unidades", 10, 6),
+                  ("Zerados agora", "zerados", 9, 0), ("Perda por dia agora", "perda_dia", 13, 2), ("Até 7 dias", "criticos", 8, 0)],
+                 d["marcas"])], opcoes)
+
+
+def ruptura_a4_html(hoje: date | None = None) -> str:
+    """A folha A4 de 30/10, montada com os números do dia."""
+    d = ruptura_completo_payload(hoje)
+    r = d["resumo"]
+    esc = html_module.escape
+    br = lambda x: "/".join(reversed(str(x).split("-")))
+    n0 = lambda x: f"{float(x or 0):,.0f}".replace(",", ".")
+    rs = lambda x: "R$ " + n0(x)
+    rs2 = lambda x: "—" if x is None else f"R$ {float(x):,.2f}".replace(",", "#").replace(".", ",").replace("#", ".")
+    d1 = lambda x: "" if x is None else f"{float(x):.1f}".replace(".", ",")
+    pc = lambda x: "—" if x is None else f"{x * 100:.1f}%".replace(".", ",")
+
+    def var(a: float, b: float, cor: bool = True) -> str:
+        if not b:
+            return '<td class="n">—</td>'
+        x = a / b - 1
+        estilo = (' style="color:#1B7A3E"' if x >= 0 else ' style="color:#B42318"') if cor else ""
+        texto = f'{"+" if x >= 0 else "−"}{abs(x) * 100:.1f}%'.replace(".", ",")
+        return f'<td class="n"{estilo}>{texto}</td>'
+
+    def barras(linhas: list[tuple[str, float]], classe: str = "") -> str:
+        topo = max([v for _, v in linhas] or [1]) or 1
+        return "".join(f'<div class="b {classe}"><span>{esc(t)}</span><div class="t"><i class="{"x" if v == topo else ""}" '
+                       f'style="width:{max(2, round(v / topo * 100))}%"></i></div><span>{rs(v)}</span></div>' for t, v in linhas)
+
+    def marca(i: dict[str, Any]) -> str:
+        return esc(", ".join(m.title() for m in (i.get("marcas") or [])[:1]) or "—")
+
+    def tabela(cab: list[tuple[str, bool]], linhas: list[list[str]], vazio: str = "Nenhum.") -> str:
+        if not linhas:
+            return f'<p class="vz">{vazio}</p>'
+        th = "".join(f'<th{" class=n" if n else ""}>{esc(t)}</th>' for t, n in cab)
+        corpo = "".join("<tr>" + "".join(f'<td{" class=n" if cab[k][1] else ""}>{c}</td>' for k, c in enumerate(l)) + "</tr>"
+                        for l in linhas)
+        return f"<table><tr>{th}</tr>{corpo}</table>"
+    tit = lambda i: f'<div class="c1">{esc(str(i.get("titulo") or i.get("mlb")))}</div>'
+    apo = lambda i: "" if i.get("apollo") is None else str(i["apollo"])
+    cs = "".join(f'<tr><td>{esc(c["canal"])}</td><td class="n">{rs(c["atual"])}</td><td class="n">{rs(c["anterior"])}</td>{var(c["atual"], c["anterior"])}</tr>'
+                 for c in d["canais"])
+    cs += f'<tr><td>Pedidos</td><td class="n">{n0(r["pedidos"])}</td><td class="n">{n0(r["pedidos_ant"])}</td>{var(r["pedidos"], r["pedidos_ant"], False)}</tr>'
+    cs += f'<tr><td>Ticket médio</td><td class="n">{rs2(r["ticket"])}</td><td class="n">{rs2(r["ticket_ant"])}</td>{var(r["ticket"] or 0, r["ticket_ant"] or 0, False)}</tr>'
+    sem = barras([(f'{br(s["inicio"])[:5]} a {br(s["fim"])[:5]}', s["por_dia"]) for s in d["semanas"]], "w")
+    mar = barras([(m["marca"].title(), m["perdido"]) for m in d["marcas"][:6] if m["perdido"] > 0])
+    frase = ""
+    if d["marcas"] and r["perdido"]:
+        m = d["marcas"][0]
+        frase = f'<p class="fr">{esc(m["marca"].title())} concentra {m["perdido"] / r["perdido"] * 100:.0f}% da perda.</p>'
+    perdas = tabela([("Produto", False), ("Marca", False), ("Perdido", True), ("Unidades", True), ("Apollo", True)],
+                    [[tit(i), marca(i), rs(i["perdido"]), d1(i["unidades_perdidas"]), apo(i)] for i in d["perdas"][:5]])
+    comprar = tabela([("Produto", False), ("Marca", False), ("Por dia", True)],
+                     [[tit(i), marca(i), rs(i["perda_dia"])] for i in d["comprar"][:7]])
+    ajustar = tabela([("Produto", False), ("Apollo", True), ("Por dia", True)],
+                     [[tit(i), apo(i), rs(i["perda_dia"])] for i in d["ajustar"][:7]])
+    crit = sorted((i for i in d["perto"] if i["grupo"] == "critico"), key=lambda i: -(i.get("risco_dia") or 0))
+    acaba = tabela([("Produto", False), ("Ação", False), ("Apollo", True), ("A caminho", True), ("Dura", True), ("Risco por dia", True)],
+                   [[tit(i), esc(i["acao"]), apo(i), "" if i.get("a_caminho") is None else str(i["a_caminho"]),
+                     d1(i.get("cobertura_dias")) + " dias", rs(i.get("risco_dia"))] for i in crit[:5]])
+    passos = []
+    env = [i for i in crit if i["acao"] == "Enviar ao Full"]
+    if env:
+        passos.append(f"Enviar ao Full os {len(env)} que acabam em até 7 dias")
+    if r["ajustar"]["anuncios"]:
+        passos.append(f'Resolver os {r["ajustar"]["anuncios"]} zerados com peça no Apollo')
+    if r["comprar"]["anuncios"]:
+        passos.append(f'Comprar a partir da lista dos {r["comprar"]["anuncios"]} sem peça')
+    if r["sem_leitura"]["anuncios"]:
+        passos.append(f'Conferir os {r["sem_leitura"]["anuncios"]} zerados sem leitura')
+    lista = "".join(f"<li>{esc(p)}</li>" for p in passos) or "<li>Nada urgente hoje</li>"
+    desde = br(d["primeiro_dia"]) if d["primeiro_dia"] else "—"
+    aviso = '<div class="av">Marcas não lidas: as colunas de marca podem estar vazias.</div>' if d["marcas_erro"] else ""
+    return f"""<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8"><title>Ruptura de {esc(d['mes'])}</title>
+<style>
+@page{{size:A4 portrait;margin:0}}
+*{{box-sizing:border-box;margin:0;padding:0}}
+:root{{--n:#12345B;--t:#18324A;--m:#4A5D70;--l:#DCE5EF;--f:#F1F5FA;--o:#F28B18;--c:#8FA3B8}}
+body{{font-family:Arial,Helvetica,sans-serif;color:var(--t);font-size:9pt;line-height:1.3;background:#fff;-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+.p{{width:210mm;height:297mm;margin:0 auto;padding:8mm 11mm 9mm;display:flex;flex-direction:column;gap:2.9mm;overflow:hidden}}
+.bar{{position:fixed;top:8px;right:8px}}.bar button{{font:600 13px Arial;padding:8px 14px;background:var(--n);color:#fff;border:0;border-radius:6px;cursor:pointer}}
+@media print{{.bar{{display:none}}}}
+header{{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:.6mm solid var(--n);padding-bottom:2mm}}
+h1{{font-size:19pt;color:var(--n);line-height:1.05}}.sub{{color:var(--m);font-size:8.5pt}}.dir{{text-align:right;color:var(--m);font-size:8pt}}
+h2{{font-size:9.6pt;color:var(--n);margin-bottom:1.2mm}}
+.kpis{{display:grid;grid-template-columns:1.25fr 1fr 1fr 1fr;gap:2.5mm}}
+.k{{background:var(--f);border-radius:1.2mm;padding:2.2mm 2.8mm}}.k.d{{background:var(--n);color:#fff}}
+.k .r{{font-size:7.6pt;color:var(--m)}}.k.d .r{{color:#C9D6E5}}
+.k .v{{font-size:17pt;font-weight:700;color:var(--n);line-height:1.15}}.k.d .v{{color:#F7B267;font-size:21pt}}
+.k .n{{font-size:7.6pt;color:var(--m);text-align:left;white-space:normal}}.k.d .n{{color:#C9D6E5}}
+.d2{{display:grid;grid-template-columns:1fr 1fr;gap:4mm}}.d2>div{{min-width:0}}
+.b{{display:grid;grid-template-columns:18mm 1fr 15mm;gap:1.5mm;align-items:center;font-size:8pt;margin-bottom:.8mm}}.b.w{{grid-template-columns:22mm 1fr 14mm}}
+.b span:first-child{{white-space:nowrap;overflow:hidden}}
+.t{{height:3mm}}.t i{{display:block;height:100%;background:var(--c);border-radius:.6mm}}.t i.x{{background:var(--o)}}
+.b span:last-child{{text-align:right;font-weight:700}}
+.dec{{display:grid;grid-template-columns:repeat(3,1fr);gap:2.5mm}}
+.c{{border:.3mm solid var(--l);border-radius:1.2mm;padding:1.8mm 2.5mm;display:flex;gap:2.4mm;align-items:center}}
+.c b{{font-size:17pt;color:var(--n);line-height:1}}.c div{{font-size:8pt;line-height:1.2}}
+table{{border-collapse:collapse;width:100%;font-size:8.3pt;table-layout:auto}}
+th{{text-align:left;color:var(--m);font-weight:700;border-bottom:.3mm solid var(--n);padding:.5mm 1mm}}
+td{{border-bottom:.15mm solid var(--l);padding:.42mm 1mm;vertical-align:top;white-space:nowrap}}
+.n{{text-align:right;white-space:nowrap}}
+td:first-child{{white-space:normal;width:100%;max-width:0}}.c1{{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+.fr{{margin-top:1.4mm;font-size:8pt}}.vz{{color:var(--m);font-size:8pt}}.av{{color:#B42318;font-size:8pt}}
+ol{{padding-left:4mm}}ol li{{margin-bottom:.4mm}}
+.fim{{background:var(--f);border-radius:1.2mm;padding:2.2mm 3mm;display:grid;grid-template-columns:1fr 1.15fr;gap:4mm;margin-top:auto}}
+.lim{{font-size:7.4pt;color:var(--m);line-height:1.25}}
+</style></head><body>
+<div class="bar"><button onclick="window.print()">Imprimir</button></div>
+<div class="p">
+<header><div><h1>Ruptura de {esc(d['mes'])}</h1><div class="sub">Quanto a falta de estoque custou e o que fazer agora</div></div><div class="dir">Noromak · Mercado Livre e Shopee<br>Dados lidos em {br(d['hoje'])}</div></header>
+{aviso}
+<div class="kpis">
+<div class="k d"><div class="r">Faturamento médio perdido por dia</div><div class="v">{rs(r['perda_media_dia'])}</div><div class="n">Estimativa, {r['dias_medidos']} dia{'s' if r['dias_medidos'] != 1 else ''} medido{'s' if r['dias_medidos'] != 1 else ''}</div></div>
+<div class="k"><div class="r">Perdido no período</div><div class="v">{rs(r['perdido'])}</div><div class="n">{pc(r['perc_perdido'])} do faturado</div></div>
+<div class="k"><div class="r">Faturamento {br(d['inicio'])[:5]} a {br(d['fim'])[:5]}</div><div class="v">{rs(r['faturamento'])}</div><div class="n">Mesmos dias de {esc(d['mes_anterior'])}: {rs(r['faturamento_ant'])}</div></div>
+<div class="k"><div class="r">Anúncios zerados agora</div><div class="v">{r['zerados']}</div><div class="n">{rs(r['perda_dia'])} perdidos por dia</div></div>
+</div>
+<div class="d2">
+<div><h2>Faturamento por canal</h2><table><tr><th>Canal</th><th class="n">{esc(d['mes'].split()[0].title())}</th><th class="n">{esc(d['mes_anterior'].title())}</th><th class="n">Variação</th></tr>{cs}</table>
+<h2 style="margin-top:2mm">Perda por dia em cada semana (ML)</h2>{sem or '<p class="vz">Sem perda medida.</p>'}</div>
+<div><h2>Marcas com mais ruptura</h2>{mar or '<p class="vz">Sem perda medida.</p>'}{frase}</div>
+</div>
+<div><h2>Produtos com mais perda (5 de {r['anuncios_perda']})</h2>{perdas}</div>
+<div><h2>Zerados agora: o que cada grupo pede (Apollo de Araçatuba)</h2><div class="dec">
+<div class="c"><b>{r['comprar']['anuncios']}</b><div><strong>Comprar</strong><br>Sem peça. {rs(r['comprar']['dia'])} por dia</div></div>
+<div class="c"><b>{r['ajustar']['anuncios']}</b><div><strong>Ajustar anúncio ou enviar</strong><br>Tem peça. {rs(r['ajustar']['dia'])} por dia</div></div>
+<div class="c"><b>{r['sem_leitura']['anuncios']}</b><div><strong>Conferir</strong><br>Sem leitura. {rs(r['sem_leitura']['dia'])} por dia</div></div>
+</div></div>
+<div class="d2"><div><h2>Comprar primeiro ({min(7, r['comprar']['anuncios'])} de {r['comprar']['anuncios']})</h2>{comprar}</div>
+<div><h2>Ajustar anúncio ({min(7, r['ajustar']['anuncios'])} de {r['ajustar']['anuncios']})</h2>{ajustar}</div></div>
+<div><h2>Acabam em até 7 dias: {r['criticos']['anuncios']} anúncios, {rs(r['criticos']['dia'])} por dia em risco</h2>{acaba}</div>
+<div class="fim"><div><h2>Próximos passos</h2><ol>{lista}</ol></div>
+<div class="lim"><h2>Limites dos números</h2>Perda é estimativa (venda por dia × dias sem estoque × ticket). Histórico de estoque desde {desde} no ML. Apollo guardado (Demanda de Compra e remessa Full), sem consulta nova: pode ter mudado; só Araçatuba, em branco = sem leitura. Fora da conta: Magalu, TikTok e a ruptura de Bauru. Anúncios do mesmo código dividem a mesma peça.</div></div>
+</div></body></html>"""
 
 
 # ---------------------------------------------------------------------------
@@ -33952,9 +34297,12 @@ def compras_calcular(d: dict[str, Any], limite_transf: float = 0.0) -> dict[str,
             "sem_estoque_conhecido": sum(1 for x in itens if x["status"] == "nd")}
 
 
-def _xlsx_abas(abas: list[tuple[str, list[list[tuple[Any, int]]]]], larguras: list[int] | None = None) -> bytes:
+def _xlsx_abas(abas: list[tuple[str, list[list[tuple[Any, int]]]]], larguras: list[int] | None = None,
+               opcoes: dict[str, dict[str, Any]] | None = None) -> bytes:
     """.xlsx com várias abas, só biblioteca padrão (estilos do compras_pedido_xlsx:
-    1=cabeçalho navy, 2=moeda, 3=título de seção, 4=negrito)."""
+    1=cabeçalho navy, 2=moeda, 3=título de seção, 4=negrito; V20.05: 5=%, 6=uma casa, 7=nota,
+    8=título grande, 9=moeda em negrito). `opcoes` por aba: larguras, congelar (linha) e
+    filtro (linha do cabeçalho, nº de colunas, última linha)."""
     import io
     import zipfile
     esc = html_module.escape
@@ -33975,28 +34323,43 @@ def _xlsx_abas(abas: list[tuple[str, list[list[tuple[Any, int]]]]], larguras: li
         usados.add(n.upper())
         nomes.append(n)
     sheets = []
-    for _, linhas in abas:
+    for nome_aba, linhas in abas:
+        op = (opcoes or {}).get(nome_aba) or {}
         rows_xml = ['<row r="%d">%s</row>' % (ri, "".join(cell(ci, ri, v, st) for ci, (v, st) in enumerate(cs)))
                     for ri, cs in enumerate(linhas, 1)]
         cols = "".join('<col min="%d" max="%d" width="%d" customWidth="1"/>' % (i + 1, i + 1, w)
-                       for i, w in enumerate(larguras or [14, 46, 7, 10, 11, 11, 10, 9, 11, 15, 12, 9, 13, 14]))
+                       for i, w in enumerate(op.get("larguras") or larguras or [14, 46, 7, 10, 11, 11, 10, 9, 11, 15, 12, 9, 13, 14]))
+        vista = filtro = ""
+        if op.get("congelar"):
+            k = int(op["congelar"])
+            vista = ('<sheetViews><sheetView workbookViewId="0"><pane ySplit="%d" topLeftCell="A%d" activePane="bottomLeft" '
+                     'state="frozen"/></sheetView></sheetViews>' % (k, k + 1))
+        if op.get("filtro"):
+            lin, ncol, ult = op["filtro"]
+            filtro = '<autoFilter ref="A%d:%s%d"/>' % (lin, _xlsx_col(ncol - 1), ult)
         sheets.append('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
                       '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-                      '<cols>%s</cols><sheetData>%s</sheetData></worksheet>' % (cols, "".join(rows_xml)))
+                      '%s<cols>%s</cols><sheetData>%s</sheetData>%s</worksheet>' % (vista, cols, "".join(rows_xml), filtro))
     styles = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
               '<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
-              '<numFmts count="1"><numFmt numFmtId="164" formatCode="&quot;R$&quot;\\ #,##0.00"/></numFmts>'
-              '<fonts count="3"><font><sz val="11"/><name val="Calibri"/></font>'
+              '<numFmts count="2"><numFmt numFmtId="164" formatCode="&quot;R$&quot;\\ #,##0.00"/>'
+              '<numFmt numFmtId="165" formatCode="0.0"/></numFmts>'
+              '<fonts count="5"><font><sz val="11"/><name val="Calibri"/></font>'
               '<font><b/><color rgb="FFFFFFFF"/><sz val="11"/><name val="Calibri"/></font>'
-              '<font><b/><sz val="11"/><name val="Calibri"/></font></fonts>'
+              '<font><b/><sz val="11"/><name val="Calibri"/></font>'
+              '<font><i/><sz val="9"/><name val="Calibri"/></font>'
+              '<font><b/><sz val="13"/><name val="Calibri"/></font></fonts>'
               '<fills count="4"><fill><patternFill patternType="none"/></fill>'
               '<fill><patternFill patternType="gray125"/></fill>'
               '<fill><patternFill patternType="solid"><fgColor rgb="FF123B63"/></patternFill></fill>'
               '<fill><patternFill patternType="solid"><fgColor rgb="FFF2ECFD"/></patternFill></fill></fills>'
               '<borders count="1"><border/></borders><cellStyleXfs count="1"><xf/></cellStyleXfs>'
-              '<cellXfs count="5"><xf/><xf fontId="1" fillId="2" applyFont="1" applyFill="1"/>'
+              '<cellXfs count="10"><xf/><xf fontId="1" fillId="2" applyFont="1" applyFill="1"/>'
               '<xf numFmtId="164" applyNumberFormat="1"/><xf fontId="2" fillId="3" applyFont="1" applyFill="1"/>'
-              '<xf fontId="2" applyFont="1"/></cellXfs>'
+              '<xf fontId="2" applyFont="1"/>'
+              '<xf numFmtId="10" applyNumberFormat="1"/><xf numFmtId="165" applyNumberFormat="1"/>'
+              '<xf fontId="3" applyFont="1"/><xf fontId="4" applyFont="1"/>'
+              '<xf numFmtId="164" fontId="2" applyNumberFormat="1" applyFont="1"/></cellXfs>'
               '<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>')
     ct = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
           '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
@@ -34783,6 +35146,21 @@ class AppHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_security_headers()
         self.end_headers()
+
+    def send_page_html(self, texto: str) -> None:
+        # V20.05: página montada no servidor (folha para imprimir).
+        tipo = "text/html; charset=utf-8"
+        body, compressed = self.encoded_body(texto.encode("utf-8"), tipo)
+        self.send_response(200)
+        self.send_security_headers()
+        self.send_header("Content-Type", tipo)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        if compressed:
+            self.send_header("Content-Encoding", "gzip")
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(body)
 
     def send_json(self, data: Any, status: int = 200, headers: dict[str, str] | None = None) -> None:
         # V18.95: rotas de pedido devolvem a fila em "value"; quem vê uma filial só recebe a dela.
@@ -35762,6 +36140,15 @@ class AppHandler(BaseHTTPRequestHandler):
                     self.wfile.write(body)
             except ValueError as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 400)
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/ruptura/a4":
+            # V20.05: a folha A4 do relatório. Somente leitura, abre em aba nova para imprimir.
+            if self.auth(admin_only=True, compras_ok=True) is None:
+                return
+            try:
+                self.send_page_html(ruptura_a4_html())
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return

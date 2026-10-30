@@ -5,7 +5,7 @@ Shopee, manuais), expedição, separação, conferência por código de barras, 
 produtos/SKUs/EANs, kits, precificação, promoções, rentabilidade, estoque, Central de
 Pendências e histórico.
 
-Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V20.01).
+Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V20.05).
 
 ---
 
@@ -865,6 +865,7 @@ contar a partir da publicação: "zerado agora" e "vai zerar" valem desde o prim
 6 meses, a mesma conta do perdido feita período a período, com o ritmo dos 60 dias que terminam no fim de
 cada período. Semana/mês atuais vão até ontem (`parcial`); período que começa antes da 1ª checagem sai
 `coleta_completa=False`. Encerrado fica fora. **Exportar Excel**: `GET /api/ruptura/relatorio.xlsx` (`ruptura_relatorio_xlsx`, `_xlsx_abas`): abas Semanal, Mensal e Anúncios (todo anúncio que perdeu em cada período). **V19.61:** clicar numa linha do quadro abre a gaveta com todos os anúncios que faltaram no período (`?completo=1` traz `itens` com SKU e link). **V20.03:** o Excel da gaveta é só daquele período (`relatorio.xlsx?tipo=meses|semanas&inicio=`; uma aba com anúncio, SKU, título, dias, unidades, perdido e link; o botão do quadro continua com o relatório geral). Teste: `TESTES/test_ruptura_relatorio_v1959.py`.
+**V20.05 — relatório completo** (dono, 30/10): o "Exportar Excel" do quadro traz antes das abas Semanal/Mensal/Anúncios as 6 do relatório feito à mão em 30/10 (Resumo, Ações, Perto de acabar, Zerados, Maiores perdas, Marcas) e o botão "Folha A4" abre `/api/ruptura/a4` para imprimir. `ruptura_completo_payload`: ML + Shopee do mês até ontem, faturamento contra os mesmos dias do mês anterior, guardado 2 min. **Nunca consulta o Apollo** (a leitura em lote travou o sistema em 30/10): usa `compras_estoque_v1912` e a remessa Full, o mais novo de cada código; kit = peça que tem menos; sem leitura = em branco e ação "Sem leitura". Ação: Comprar (0), A caminho (0 + remessa), Ajustar anúncio ou Enviar ao Full (tem peça). `_xlsx_abas` ganhou `opcoes` por aba (larguras, cabeçalho fixo, filtro) e os estilos 5–9. A folha "Zerados e meta do mês" não entrou. Teste: `TESTES/test_ruptura_completo_v2005.py`.
 **V19.86 — filtro por marca** (dono, 26/10, para o Compras): marca = fornecedores da Demanda de Compra (regras +
 marca escolhida à mão, `_compras_regras_marca`), pelo mesmo caminho da demanda (kit vira peças, "A/B" uma de cada; o
 anúncio entra em cada marca das peças; sem fornecedor = "Sem marca"). `ruptura_payload` devolve `itens[].marcas` e

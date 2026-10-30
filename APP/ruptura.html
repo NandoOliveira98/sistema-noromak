@@ -113,7 +113,7 @@ table.rp{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums;m
     <div class="card span12" id="relatorio">
       <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px">
         <div><b>Venda perdida por semana e por mês</b> <span class="muted">(estimativa)</span></div>
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><div class="tabs" id="relTabs"><button class="tab on" data-r="semanas">Semanal</button><button class="tab" data-r="meses">Mensal</button></div><button class="btn" id="relXlsx" title="Baixa semanal, mensal e os anúncios de cada período">⬇ Exportar Excel</button></div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><div class="tabs" id="relTabs"><button class="tab on" data-r="semanas">Semanal</button><button class="tab" data-r="meses">Mensal</button></div><button class="btn" id="relXlsx" title="Relatório do mês: resumo, ações, perto de acabar, zerados, perdas e marcas, mais semanal e mensal">⬇ Exportar Excel</button><button class="btn" id="relA4" title="Folha A4 do mês para imprimir (Mercado Livre e Shopee)">🖨 Folha A4</button></div>
       </div>
       <div class="tw"><table class="rp" id="relTab" data-nk-tabela="ruptura-relatorio" data-nk-ordenar="0" data-nk-exportar="0" style="min-width:720px"></table></div>
     </div>
@@ -411,6 +411,7 @@ async function carregarRel(){
 document.querySelectorAll('#relTabs .tab').forEach(b=>b.onclick=()=>{relModo=b.dataset.r;renderRel()});
 document.getElementById('mkt').addEventListener('change',carregarRel);
 $('relXlsx').onclick=()=>{location.href='/expedicao/api/ruptura/relatorio.xlsx?marketplace='+mkt()};
+$('relA4').onclick=()=>window.open('/expedicao/api/ruptura/a4','_blank');
 
 carregar();
 carregarRel();

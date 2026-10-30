@@ -78,7 +78,7 @@ class RelatorioRuptura(Base):
         wb = z.read("xl/workbook.xml").decode()
         for aba in ("Semanal", "Mensal", "Anúncios"):
             self.assertIn(aba, wb)
-        self.assertIn("MLB1", z.read("xl/worksheets/sheet3.xml").decode())
+        self.assertIn("MLB1", z.read("xl/worksheets/sheet9.xml").decode())  # V20.05: as 6 abas novas vêm antes
         import urllib.request
         req = urllib.request.Request(self.cliente.url_base + "/api/ruptura/relatorio.xlsx?marketplace=ml",
                                      headers={"Cookie": self.cliente.cookie})
