@@ -675,20 +675,21 @@ html[data-tema="escuro"] .faixa{color:#F0B357!important}
       el.insertAdjacentHTML("beforeend", `<svg viewBox="0 0 ${larg} ${alt}" role="img" aria-label="${esc(rotulo)}">${partes.join("")}</svg>`);
       const val = el.querySelector(".val"), sub = el.querySelector(".sub");
       const svg = el.querySelector("svg");
+      const voltar = () => {
+        svg.querySelectorAll("rect.foco").forEach((x) => x.classList.remove("foco"));
+        val.textContent = padrao[0];
+        sub.textContent = padrao[1];
+      };
       svg.addEventListener("mouseover", (ev) => {
         const r = ev.target.closest("rect");
-        if (!r) return;
+        if (!r) { voltar(); return; }   // vão ou mês em branco: não deixar o valor do vizinho
         const m = meses[Number(r.dataset.i)];
         svg.querySelectorAll("rect.foco").forEach((x) => x.classList.remove("foco"));
         r.classList.add("foco");
         val.textContent = fmt(m[campo]);
         sub.textContent = evoNome(m) + (m.parcial ? ", mês em andamento" : "");
       });
-      svg.addEventListener("mouseleave", () => {
-        svg.querySelectorAll("rect.foco").forEach((x) => x.classList.remove("foco"));
-        val.textContent = padrao[0];
-        sub.textContent = padrao[1];
-      });
+      svg.addEventListener("mouseleave", voltar);
     });
   }
 
@@ -700,6 +701,7 @@ html[data-tema="escuro"] .faixa{color:#F0B357!important}
       state.evolucao = r.meses;
       evoDesenhar();
     } catch (e) {
+      if (canal !== $("marketplace").value) return;   // erro de uma resposta antiga não apaga o canal novo
       state.evolucao = null;
       EVO.forEach(([id, rotulo]) => {
         $(id).innerHTML = `<div class="rot">${esc(rotulo)}</div><div class="vazio">Não foi possível carregar.</div>`;
@@ -745,6 +747,7 @@ html[data-tema="escuro"] .faixa{color:#F0B357!important}
   }
 
   $("atualizar").addEventListener("click", carregar);
+  $("atualizar").addEventListener("click", carregarEvolucao);
   $("sincronizar").addEventListener("click", sincronizar);
   $("marketplace").addEventListener("change", carregar);
   $("marketplace").addEventListener("change", carregarEvolucao);

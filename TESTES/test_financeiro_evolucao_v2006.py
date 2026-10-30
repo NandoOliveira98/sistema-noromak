@@ -91,11 +91,25 @@ class Evolucao(TesteNoromak):
         status, _ = Cliente(self.url_base).pedir("GET", "/api/financeiro/evolucao")
         self.assertEqual(status, 401)
 
+    def test_falha_na_rota_volta_json(self):
+        original = S.financeiro_evolucao_payload
+        def quebra(*a, **k):
+            raise RuntimeError("banco ocupado")
+        S.financeiro_evolucao_payload = quebra
+        try:
+            status, r = self.cliente.pedir("GET", "/api/financeiro/evolucao")
+        finally:
+            S.financeiro_evolucao_payload = original
+        self.assertEqual((status, r["ok"]), (500, False))
+
     def test_tela_nao_depende_do_resumo(self):
         h = (RAIZ / "APP" / "financeiro.html").read_text(encoding="utf-8")
         self.assertIn("/api/financeiro/evolucao", h)
         self.assertIn('id="evoFat"', h)
         self.assertIn('$("marketplace").addEventListener("change", carregarEvolucao)', h)
+        self.assertIn('$("atualizar").addEventListener("click", carregarEvolucao)', h)
+        self.assertIn('if (!r) { voltar(); return; }', h)
+        self.assertIn('erro de uma resposta antiga', h)
 
 
 if __name__ == "__main__":

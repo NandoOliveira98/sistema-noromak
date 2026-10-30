@@ -27729,8 +27729,8 @@ def financeiro_shopee_escrow_pendentes(limite: int | None = None, stop_event: th
 
 def financeiro_evolucao_payload(marketplace: str = "", hoje: date | None = None) -> dict[str, Any]:
     """V20.06: faturamento, pedidos e ticket dos últimos 12 meses (mini gráficos do Financeiro).
-    Rota à parte do resumo, que passa de 60 s em produção: só soma `vendas_v1799`, pelo índice do
-    dia. Mês sem venda fica em branco, nunca zero. O mês atual sai marcado como parcial."""
+    Rota à parte do resumo, que passa de 60 s em produção: só soma `vendas_v1799`, sem custo nem
+    Precificador. Mês sem venda fica em branco, nunca zero. O mês atual sai marcado como parcial."""
     hoje = hoje or datetime.now(BR_TZ).date()
     canal = marketplace if marketplace in VENDAS_MARKETPLACES else ""
     chaves = []
@@ -35964,7 +35964,10 @@ class AppHandler(BaseHTTPRequestHandler):
             # V20.06: 12 meses para os mini gráficos. Somente leitura, leve.
             if self.auth(admin_only=True) is None:
                 return
-            self.send_json(financeiro_evolucao_payload(str((query.get("marketplace") or [""])[0] or "").strip().lower()))
+            try:
+                self.send_json(financeiro_evolucao_payload(str((query.get("marketplace") or [""])[0] or "").strip().lower()))
+            except Exception as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 500)
             return
         if path == "/api/financeiro/resumo":
             # V18.30: faturamento, gastos e lucro do período (ML + Shopee).
