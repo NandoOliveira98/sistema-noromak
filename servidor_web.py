@@ -39517,6 +39517,11 @@ class AppHandler(BaseHTTPRequestHandler):
                         )
                         versions[other_key] = other_next
                         updated_keys.append(other_key)
+                    # V20.07: o histórico de SKU saía na regravação seguinte da fila, em nome da
+                    # integração. Sem gravação vazia, a troca precisa ser registrada aqui.
+                    track_sku_changes(source_key, json_dumps(rows), username=str(ctx.get("username") or "admin"),
+                                      user_role=str(ctx.get("app_role") or ""), source_screen="Pedidos pendentes",
+                                      change_method="Edição manual de SKU", client_ip=client_computer(self))
                     DB.commit()
                 except Exception:
                     DB.rollback()

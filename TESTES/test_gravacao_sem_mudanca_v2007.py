@@ -86,6 +86,30 @@ class SemMudanca(TesteNoromak):
         self.assertGreater(n, 0)
         self.assertEqual(S._rows_from_storage_value(S.get_storage("conf_pedidos")[0])[0]["SKU"], "SKU9")
 
+    def test_override_de_tela_antiga_grava_mesmo_com_a_fila_igual(self):
+        """Tela com NF antiga, banco já com a nova, ADMIN grava a nova: a fila não muda, o delta fica."""
+        gravar_como_integracao([linha("P1", "SKU1", uid="U1", NF="1")])
+        antes, _, _ = S.get_storage("conf_pedidos")
+        gravar_como_integracao([linha("P1", "SKU1", uid="U1", NF="2")])
+        atual, v, _ = S.get_storage("conf_pedidos")
+        S.save_storage("conf_pedidos", antes, atual, False, actor="adm", actor_role="admin")
+        self.assertEqual(versao(), v)
+        self.assertFalse(S.DB.in_transaction)
+        with S.DB_LOCK:
+            n = S.DB.execute("SELECT COUNT(*) FROM admin_manual_overrides WHERE storage_key='conf_pedidos' "
+                             "AND field_name='NF'").fetchone()[0]
+        self.assertEqual(n, 1)
+
+    def test_troca_de_sku_no_lapis_entra_no_historico_com_o_usuario(self):
+        gravar_como_integracao([linha("P1", "SKU1", uid="U1")])
+        status, r = self.cliente.pedir("POST", "/api/order-sku", {"uid": "U1", "sku": "SKU2", "pedido": "P1", "oldSku": "SKU1"})
+        self.assertEqual(status, 200, r)
+        with S.DB_LOCK:
+            h = S.DB.execute("SELECT old_sku,new_sku,username FROM sku_change_history WHERE new_sku='SKU2'").fetchall()
+        self.assertEqual(len(h), 1)
+        self.assertEqual((h[0]["old_sku"], h[0]["new_sku"]), ("SKU1", "SKU2"))
+        self.assertNotIn(h[0]["username"], ("", "sistema", "desconhecido"))
+
 
 if __name__ == "__main__":
     unittest.main()
