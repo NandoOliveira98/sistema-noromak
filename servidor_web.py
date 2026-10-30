@@ -7244,13 +7244,14 @@ def _tiktok_sku_cortado(row: dict[str, Any]) -> bool:
 
 def tiktok_sugerir_sku(seller_sku: Any, conhecidos: set[str]) -> list[str]:
     """V20.08: SKU cortado com o último código completado pelo cadastro. Só sugere: quem confirma é
-    o ADMIN, no vínculo à mão. Mais de 6 códigos com o mesmo começo não ajudam a escolher."""
+    o ADMIN, no vínculo à mão. Mais de 6 códigos com o mesmo começo não ajudam a escolher. O próprio
+    trecho nunca é sugerido: o botão gravaria o SKU cortado como vínculo e soltaria a trava."""
     texto = str(seller_sku or "").strip().upper()
     base, barra, ultima = texto.rpartition("/")
     ultima = ultima.strip()
     if not ultima:
         return []
-    achados = sorted(c for c in conhecidos if c.startswith(ultima))
+    achados = sorted(c for c in conhecidos if c.startswith(ultima) and c != ultima)
     return [f"{base}{barra}{c}" for c in achados] if len(achados) <= 6 else []
 
 

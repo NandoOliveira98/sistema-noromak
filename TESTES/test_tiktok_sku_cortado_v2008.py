@@ -86,8 +86,12 @@ class Sugestao(Base):
         self.assertEqual(self._sugestoes({"2011047", "2011069", "999"}), [COMPLETO])
 
     def test_varios_codigos_viram_varias_opcoes(self):
-        self.assertEqual(self._sugestoes({"2011047", "2011048", "201104"}),
-                         [CORTADO, COMPLETO, COMPLETO[:-1] + "8"])
+        self.assertEqual(self._sugestoes({"2011047", "2011048"}), [COMPLETO, COMPLETO[:-1] + "8"])
+
+    def test_nunca_sugere_o_proprio_sku_cortado(self):
+        """Revisão V20.08: o botão gravaria o texto cortado e soltaria a trava sem completar nada."""
+        self.assertEqual(self._sugestoes({"201104"}), [])
+        self.assertEqual(self._sugestoes({"201104", "2011047"}), [COMPLETO])
 
     def test_nada_no_cadastro_nao_sugere(self):
         self.assertEqual(self._sugestoes({"999"}), [])
@@ -114,6 +118,26 @@ class Tela(TesteNoromak):
         html = (Path(S.APP_DIR) / "tiktok-estoque.html").read_text(encoding="utf-8")
         self.assertIn("sku_cortado", html)
         self.assertIn("sugestoes", html)
+
+    def _html(self):
+        return (Path(S.APP_DIR) / "tiktok-estoque.html").read_text(encoding="utf-8")
+
+    def test_botao_confirma_mostrando_o_kit_inteiro(self):
+        html = self._html()
+        self.assertIn("async function usarSugestao", html)
+        corpo = html[html.index("async function usarSugestao"):]
+        self.assertIn("nkConfirmar", corpo[:400])
+        self.assertIn('split("/")', corpo[:400])
+
+    def test_sku_id_nao_entra_em_codigo_da_tela(self):
+        html = self._html()
+        self.assertNotIn("vincular('${", html)
+        self.assertIn('data-sku="${esc(i.sku_id)}"', html)
+
+    def test_recarga_nao_apaga_o_que_esta_sendo_digitado(self):
+        html = self._html()
+        self.assertNotIn("setInterval(carregar,", html)
+        self.assertIn("defaultValue", html)
 
     def test_selo_do_menu_nao_empurra_o_icone(self):
         css = (Path(S.APP_DIR) / "nk-ui.css").read_text(encoding="utf-8")

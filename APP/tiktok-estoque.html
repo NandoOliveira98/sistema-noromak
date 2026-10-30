@@ -141,14 +141,20 @@ function desenhar(){
     const cod=(i.pecas||[]).map(([c,u])=>u>1?`${u}× ${c}`:c).join(" + ");
     return `<tr><td class="tit">${esc(i.titulo)}<div class="muted mono">${esc(i.sku_id)}</div></td>
       <td class="mono">${esc(i.seller_sku)||"—"}</td>
-      <td><div class="vinc"><input value="${esc(i.vinculo)}" title="${esc(i.vinculo||cod)}" placeholder="${esc(cod)||"código Apollo"}" aria-label="Vínculo à mão de ${esc(i.seller_sku)}" onkeydown="if(event.key==='Enter')vincular('${esc(i.sku_id)}',this.value)"></div>
+      <td><div class="vinc"><input value="${esc(i.vinculo)}" title="${esc(i.vinculo||cod)}" placeholder="${esc(cod)||"código Apollo"}" aria-label="Vínculo à mão de ${esc(i.seller_sku)}" data-sku="${esc(i.sku_id)}" onkeydown="if(event.key==='Enter')vincular(this.dataset.sku,this.value)"></div>
         <div class="muted">${i.vinculo?"vínculo à mão":i.situacao==="sku_cortado"?"digite os códigos com / e aperte Enter":(cod?"pelo SKU do vendedor":"")}</div>
-        ${(i.sugestoes||[]).length?`<div class="sug">${i.sugestoes.map(v=>`<button type="button" title="${esc(v)}" data-v="${esc(v)}" onclick="vincular('${esc(i.sku_id)}',this.dataset.v)">Usar ${esc(v.split("/").pop())}</button>`).join("")}</div>`:""}</td>
+        ${(i.sugestoes||[]).length?`<div class="sug">${i.sugestoes.map(v=>`<button type="button" title="${esc(v)}" data-sku="${esc(i.sku_id)}" data-v="${esc(v)}" onclick="usarSugestao(this)">Usar ${esc(v.split("/").pop())}</button>`).join("")}</div>`:""}</td>
       <td class="num">${num(i.apollo)}<div class="muted">${quando(i.lido_em)}</div></td>
       <td class="num">${i.pendente||0}</td><td class="num"><b>${num(i.desejado)}</b></td><td class="num">${num(i.tiktok)}</td>
       <td><span class="nk-selo ${s[1]}">${s[0]}</span>${i.motivo?`<div class="muted">${esc(i.motivo)}</div>`:""}</td></tr>`;
   }).join(""):`<tr><td colspan=8 class=vazio>${(D.itens||[]).length?"Nada neste filtro.":"Nenhum anúncio lido do TikTok ainda."}</td></tr>`;
   $("log").innerHTML=(D.log||[]).length?D.log.map(l=>`<tr><td>${quando(l.criado_em)}</td><td class="mono">${esc(l.seller_sku||l.sku_id)}</td><td class="num">${num(l.de)}</td><td class="num">${num(l.para)}</td><td>${esc(l.modo)}</td><td>${esc(l.resultado)}</td><td class="muted">${esc(l.detalhe)}</td><td>${esc(l.por)}</td></tr>`).join(""):`<tr><td colspan=8 class=vazio>Nada enviado ainda.</td></tr>`;
+}
+// V20.08: a sugestão só completa o último código; uma peça inteira perdida no corte não aparece aqui.
+async function usarSugestao(btn){
+  const pecas=btn.dataset.v.replace(/^KIT\d*-/,"").split("/").join(" + ");
+  if(!await nkConfirmar(`Este kit tem exatamente estas peças? ${pecas}. Se faltar alguma, cancele e digite o kit completo: o estoque volta a ser calculado por esta lista.`))return;
+  vincular(btn.dataset.sku,btn.dataset.v);
 }
 async function vincular(sku,codigos){
   try{await api("/api/tiktok-estoque/vinculo",{sku_id:sku,codigos});nkToast(codigos?"Vínculo salvo. O Apollo desse código é lido na próxima volta.":"Vínculo apagado: volta a valer o SKU do vendedor.");carregar();}
@@ -183,7 +189,9 @@ $("ownerForm").onsubmit=async e=>{
   catch(err){$("ownerErro").textContent=err.message;}
 };
 document.addEventListener("keydown",e=>{if(e.key==="Escape")fecharOwner();});
-carregar();setInterval(carregar,30000);
+// V20.08: a recarga refaz a tabela; com vínculo digitado e não salvo, espera a próxima volta.
+const digitando=()=>[...document.querySelectorAll(".vinc input")].some(i=>i.value!==i.defaultValue);
+carregar();setInterval(()=>{if(!digitando())carregar();},30000);
 </script>
 </body>
 </html>

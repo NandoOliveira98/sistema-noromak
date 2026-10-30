@@ -430,7 +430,7 @@ Teste: `TESTES/test_tiktok_extensao_v1981.py`.
 o último código pela metade, "…/201104"). SKU no limite sem vínculo à mão vira `sku_cortado`: não envia e não gasta a vaga do Apollo
 (`_tiktok_sku_cortado`), mesmo que o trecho exista como código, porque o fim pode ter perdido uma peça inteira. A tela (aba Sem
 vínculo) oferece botões "Usar <código>" com os códigos do Precificador que começam com o trecho (`tiktok_sugerir_sku`, só no
-payload da tela; até 6, nunca grava sozinho). Teste: `TESTES/test_tiktok_sku_cortado_v2008.py`.
+payload da tela; até 6, nunca o próprio trecho, nunca grava sozinho; o clique confirma mostrando as peças). Teste: `TESTES/test_tiktok_sku_cortado_v2008.py`.
 
 ### Magalu (V19.24, fase 0 de 5)
 Plano decidido com o dono em 14/10 (integração completa "igual ao ML", por fases): 0 conexão; 1 pedidos na
