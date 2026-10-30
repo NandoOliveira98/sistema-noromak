@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.02-DEMANDA-MES-ATUAL"
+APP_VERSION = "20.03-RUPTURA-EXCEL-PERIODO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -24745,8 +24745,10 @@ def ruptura_relatorio_payload(marketplace: str = "ml", hoje: date | None = None,
             "meses": [calcular(a, b, (b + timedelta(days=1)).day != 1) for a, b in lista_mes]}
 
 
-def ruptura_relatorio_xlsx(marketplace: str = "ml", hoje: date | None = None) -> bytes:
-    """V19.59: o relatório semanal/mensal em Excel — abas Semanal, Mensal e Anúncios."""
+def ruptura_relatorio_xlsx(marketplace: str = "ml", hoje: date | None = None,
+                           tipo: str = "", inicio: str = "") -> bytes:
+    """V19.59: o relatório semanal/mensal em Excel — abas Semanal, Mensal e Anúncios.
+    V20.03: com tipo + inicio, só os anúncios daquele período (botão da gaveta)."""
     r = ruptura_relatorio_payload(marketplace, hoje, completo=True)
     br = lambda d: "/".join(reversed(str(d).split("-")))
     cab = ["Período", "Início", "Fim", "Situação", "Perdido (R$)", "Unidades perdidas",
@@ -24762,6 +24764,19 @@ def ruptura_relatorio_xlsx(marketplace: str = "ml", hoje: date | None = None) ->
         if tipo == "meses":
             return p["inicio"][5:7] + "/" + p["inicio"][:4]
         return br(p["inicio"])[:5] + " a " + br(p["fim"])[:5]
+
+    if tipo or inicio:
+        p = next((x for x in r.get(tipo) or [] if tipo in ("semanas", "meses") and x["inicio"] == inicio), None)
+        if p is None:
+            raise ValueError("Período não encontrado")
+        linhas = [[(f"Faltou estoque — {rotulo(tipo, p)} — {r['marketplace_nome']} (estimativa)", 4)],
+                  [(f"{br(p['inicio'])} a {br(p['fim'])} · {situacao(p)}", 0)], [],
+                  [(c, 1) for c in ["Anúncio", "SKU", "Título", "Dias sem estoque", "Unidades perdidas",
+                                    "Perdido (R$)", "Link"]]]
+        for i in p["itens"]:
+            linhas.append([(i["mlb"], 0), (i["sku"], 0), (i["titulo"], 0), (i["dias_sem_estoque"], 0),
+                           (i["unidades_perdidas"], 0), (i["perdido"], 2), (i["link"], 0)])
+        return _xlsx_abas([("Faltou estoque", linhas)], larguras=[15, 24, 60, 11, 11, 13, 45])
     abas = []
     det: list[list[tuple[Any, int]]] = [[(c, 1) for c in ["Tipo", "Período", "Anúncio", "Título",
                                                           "Dias sem estoque", "Unidades perdidas", "Perdido (R$)"]]]
@@ -33864,7 +33879,7 @@ def compras_calcular(d: dict[str, Any], limite_transf: float = 0.0) -> dict[str,
             "sem_estoque_conhecido": sum(1 for x in itens if x["status"] == "nd")}
 
 
-def _xlsx_abas(abas: list[tuple[str, list[list[tuple[Any, int]]]]]) -> bytes:
+def _xlsx_abas(abas: list[tuple[str, list[list[tuple[Any, int]]]]], larguras: list[int] | None = None) -> bytes:
     """.xlsx com várias abas, só biblioteca padrão (estilos do compras_pedido_xlsx:
     1=cabeçalho navy, 2=moeda, 3=título de seção, 4=negrito)."""
     import io
@@ -33891,7 +33906,7 @@ def _xlsx_abas(abas: list[tuple[str, list[list[tuple[Any, int]]]]]) -> bytes:
         rows_xml = ['<row r="%d">%s</row>' % (ri, "".join(cell(ci, ri, v, st) for ci, (v, st) in enumerate(cs)))
                     for ri, cs in enumerate(linhas, 1)]
         cols = "".join('<col min="%d" max="%d" width="%d" customWidth="1"/>' % (i + 1, i + 1, w)
-                       for i, w in enumerate([14, 46, 7, 10, 11, 11, 10, 9, 11, 15, 12, 9, 13, 14]))
+                       for i, w in enumerate(larguras or [14, 46, 7, 10, 11, 11, 10, 9, 11, 15, 12, 9, 13, 14]))
         sheets.append('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
                       '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
                       '<cols>%s</cols><sheetData>%s</sheetData></worksheet>' % (cols, "".join(rows_xml)))
@@ -35653,14 +35668,18 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             try:
                 mp = str((query.get("marketplace") or ["ml"])[0] or "ml")
-                conteudo = ruptura_relatorio_xlsx(mp)
+                # V20.03: tipo + inicio = só os anúncios do período aberto na gaveta.
+                periodo_tipo = str((query.get("tipo") or [""])[0])
+                periodo_inicio = str((query.get("inicio") or [""])[0])
+                conteudo = ruptura_relatorio_xlsx(mp, tipo=periodo_tipo, inicio=periodo_inicio)
+                data_arquivo = f"{periodo_tipo}_{periodo_inicio}" if periodo_tipo else datetime.now(BR_TZ).date().isoformat()
                 tipo = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 body, compressed = self.encoded_body(conteudo, tipo)
                 self.send_response(200)
                 self.send_security_headers()
                 self.send_header("Content-Type", tipo)
                 self.send_header("Content-Disposition",
-                                 f'attachment; filename="ruptura_{re.sub(r"[^a-z]", "", mp)}_{datetime.now(BR_TZ).date().isoformat()}.xlsx"')
+                                 f'attachment; filename="ruptura_{re.sub(r"[^a-z]", "", mp)}_{data_arquivo}.xlsx"')
                 self.send_header("Content-Length", str(len(body)))
                 self.send_header("Cache-Control", "no-store")
                 if compressed:

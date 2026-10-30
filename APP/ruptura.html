@@ -383,7 +383,8 @@ function abrirPeriodo(p){
     const L=itens.filter(t=>!q||[t.titulo,t.mlb,t.sku].some(x=>String(x||'').toLowerCase().includes(q)));
     $('perCorpo').innerHTML=L.map(linha).join('')||'<tr><td colspan="4" class="l muted" style="padding:14px">Nada encontrado.</td></tr>'};
   $('perQ').oninput=pintar; pintar();
-  $('perXlsx').onclick=()=>{location.href='/expedicao/api/ruptura/relatorio.xlsx?marketplace='+mkt()};
+  // V20.03: baixa só os anúncios deste período (o botão do quadro continua com o relatório geral).
+  $('perXlsx').onclick=()=>{location.href='/expedicao/api/ruptura/relatorio.xlsx?marketplace='+mkt()+'&tipo='+relModo+'&inicio='+p.inicio};
   d.classList.add('on'); d.setAttribute('aria-hidden','false');
   d.querySelector('.x').onclick=fechar;
 }

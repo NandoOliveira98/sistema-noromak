@@ -87,6 +87,44 @@ class RelatorioRuptura(Base):
             self.assertIn("spreadsheetml", resp.headers.get("Content-Type"))
             self.assertTrue(resp.read()[:2] == b"PK")
 
+    def test_v2003_excel_do_periodo_traz_os_anuncios_na_primeira_aba(self):
+        import io, zipfile
+        self.preparar()
+        self.venda("MLB2", "2026-09-10", qtd=2, valor=200.0)
+        self.checar("MLB2", "2026-09-20", detalhe(0))    # só em setembro: não entra em outubro
+        z = zipfile.ZipFile(io.BytesIO(S.ruptura_relatorio_xlsx(hoje=HOJE, tipo="meses", inicio="2026-10-01")))
+        self.assertEqual([n for n in z.namelist() if n.startswith("xl/worksheets/")], ["xl/worksheets/sheet1.xml"])
+        aba = z.read("xl/worksheets/sheet1.xml").decode()
+        self.assertIn("MLB1", aba)
+        self.assertNotIn("MLB2", aba)
+        for coluna in ("SKU", "Dias sem estoque", "Unidades perdidas", "Perdido (R$)", "Link"):
+            self.assertIn(coluna, aba)
+
+    def test_v2003_excel_do_periodo_inexistente_e_recusado(self):
+        self.preparar()
+        with self.assertRaises(ValueError):
+            S.ruptura_relatorio_xlsx(hoje=HOJE, tipo="meses", inicio="2020-01-01")
+        with self.assertRaises(ValueError):
+            S.ruptura_relatorio_xlsx(hoje=HOJE, tipo="anos", inicio="2026-10-01")
+
+    def test_v2003_rota_do_excel_do_periodo(self):
+        import urllib.error, urllib.request
+        self.preparar()
+        base = self.cliente.url_base + "/api/ruptura/relatorio.xlsx?marketplace=ml&tipo=meses&inicio="
+        mes = (S.datetime.now(S.BR_TZ).date() - S.timedelta(days=1)).replace(day=1).isoformat()
+        req = urllib.request.Request(base + mes, headers={"Cookie": self.cliente.cookie})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            self.assertTrue(resp.read()[:2] == b"PK")
+            self.assertIn(f"ruptura_ml_meses_{mes}", resp.headers.get("Content-Disposition"))
+        req = urllib.request.Request(base + "2020-01-01", headers={"Cookie": self.cliente.cookie})
+        with self.assertRaises(urllib.error.HTTPError) as erro:
+            urllib.request.urlopen(req, timeout=30)
+        self.assertEqual(erro.exception.code, 400)
+
+    def test_v2003_gaveta_baixa_o_periodo_aberto(self):
+        html = (S.APP_DIR / "ruptura.html").read_text(encoding="utf-8")
+        self.assertIn("&tipo='+relModo+'&inicio='+p.inicio", html)
+
 
 if __name__ == "__main__":
     unittest.main()
