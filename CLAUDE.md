@@ -426,6 +426,11 @@ guardado mas ainda não filtra (falta amostra de inativo).
 de Bauru (`custo_apollo_v1931`); **nunca** outra filial; kit soma as peças; custo digitado vence. Margem = lucro ÷ preço.
 Teste: `TESTES/test_tiktok_preco_v1984.py` (exemplos conferidos com o dono: 2011004 → 65,71 / 72,16). **Falta:** pedidos do TikTok sem API não entram na fila (o vendido no TikTok só sai quando o Apollo baixar).
 Teste: `TESTES/test_tiktok_extensao_v1981.py`.
+**V20.08 — SKU cortado** (dono, 30/10): o SKU do vendedor chega no máximo com 50 caracteres (`TIKTOK_SKU_LIMITE`; 4 kits vieram com
+o último código pela metade, "…/201104"). SKU no limite sem vínculo à mão vira `sku_cortado`: não envia e não gasta a vaga do Apollo
+(`_tiktok_sku_cortado`), mesmo que o trecho exista como código, porque o fim pode ter perdido uma peça inteira. A tela (aba Sem
+vínculo) oferece botões "Usar <código>" com os códigos do Precificador que começam com o trecho (`tiktok_sugerir_sku`, só no
+payload da tela; até 6, nunca grava sozinho). Teste: `TESTES/test_tiktok_sku_cortado_v2008.py`.
 
 ### Magalu (V19.24, fase 0 de 5)
 Plano decidido com o dono em 14/10 (integração completa "igual ao ML", por fases): 0 conexão; 1 pedidos na

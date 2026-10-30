@@ -45,7 +45,9 @@ td.tit{max-width:320px}
 .muted{color:var(--nk-ink2);font-size:12px}
 .vazio{padding:24px;text-align:center;color:var(--nk-ink2)}
 .vinc{display:flex;gap:6px}
-.vinc input{border:1px solid var(--nk-line);background:var(--nk-tile);color:var(--nk-ink);border-radius:6px;padding:4px 7px;font:inherit;font-size:12px;width:140px}
+.vinc input{border:1px solid var(--nk-line);background:var(--nk-tile);color:var(--nk-ink);border-radius:6px;padding:4px 7px;font:inherit;font-size:12px;width:230px;max-width:100%}
+.sug{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px}
+.sug button{border:1px solid var(--nk-line);background:var(--nk-tile);color:var(--nk-pri);border-radius:6px;padding:3px 7px;font:inherit;font-size:11.5px;font-weight:600;cursor:pointer}
 .alerta{background:var(--nk-warn-bg);color:var(--nk-warn);border-radius:10px;padding:10px 13px;font-size:13px;margin-top:12px}
 .modal{position:fixed;inset:0;background:rgba(10,25,45,.45);display:none;align-items:center;justify-content:center;padding:16px;z-index:50}
 .modal.on{display:flex}
@@ -102,7 +104,7 @@ td.tit{max-width:320px}
 </form></div>
 <script>
 const SIT={enviar:["A enviar","warn"],igual:["Igual ao TikTok","ok"],desconhecido:["Sem número do Apollo","info"],
-  sem_vinculo:["Sem vínculo","bad"],varios_depositos:["Vários depósitos","bad"]};
+  sem_vinculo:["Sem vínculo","bad"],sku_cortado:["SKU cortado pelo TikTok","bad"],varios_depositos:["Vários depósitos","bad"]};
 const ABAS=[["todos","Variações no TikTok","","nk-i-box"],["enviar","A enviar","warn","nk-i-zap"],["sem_vinculo","Sem vínculo","bad","nk-i-link"],["desconhecido","Sem número do Apollo","","nk-i-clock"],["zerados","Zerados","bad","nk-i-alert"]];
 const NOTA={simulacao:"Simulação: o Noromak só mostra o que mandaria. Nada é enviado ao TikTok.",
   lote:"Lote: o envio acontece só quando alguém clica em “Enviar diferenças ao TikTok”.",
@@ -122,7 +124,7 @@ async function carregar(){
   try{D=await api("/api/tiktok-estoque");}catch(e){$("corpo").innerHTML=`<tr><td colspan=8 class=vazio>${esc(e.message)}</td></tr>`;return;}
   desenhar();
 }
-function grupo(i){return ABA==="todos"||(ABA==="zerados"?i.desejado===0:i.situacao===ABA);}
+function grupo(i){return ABA==="todos"||(ABA==="zerados"?i.desejado===0:i.situacao===ABA||(ABA==="sem_vinculo"&&i.situacao==="sku_cortado"));}
 function desenhar(){
   if(!D)return;
   const r=D.resumo||{},modo=D.config.modo_estoque;
@@ -139,8 +141,9 @@ function desenhar(){
     const cod=(i.pecas||[]).map(([c,u])=>u>1?`${u}× ${c}`:c).join(" + ");
     return `<tr><td class="tit">${esc(i.titulo)}<div class="muted mono">${esc(i.sku_id)}</div></td>
       <td class="mono">${esc(i.seller_sku)||"—"}</td>
-      <td><div class="vinc"><input value="${esc(i.vinculo)}" placeholder="${esc(cod)||"código Apollo"}" aria-label="Vínculo à mão de ${esc(i.seller_sku)}" onkeydown="if(event.key==='Enter')vincular('${esc(i.sku_id)}',this.value)"></div>
-        <div class="muted">${i.vinculo?"vínculo à mão":(cod?"pelo SKU do vendedor":"")}</div></td>
+      <td><div class="vinc"><input value="${esc(i.vinculo)}" title="${esc(i.vinculo||cod)}" placeholder="${esc(cod)||"código Apollo"}" aria-label="Vínculo à mão de ${esc(i.seller_sku)}" onkeydown="if(event.key==='Enter')vincular('${esc(i.sku_id)}',this.value)"></div>
+        <div class="muted">${i.vinculo?"vínculo à mão":i.situacao==="sku_cortado"?"digite os códigos com / e aperte Enter":(cod?"pelo SKU do vendedor":"")}</div>
+        ${(i.sugestoes||[]).length?`<div class="sug">${i.sugestoes.map(v=>`<button type="button" title="${esc(v)}" data-v="${esc(v)}" onclick="vincular('${esc(i.sku_id)}',this.dataset.v)">Usar ${esc(v.split("/").pop())}</button>`).join("")}</div>`:""}</td>
       <td class="num">${num(i.apollo)}<div class="muted">${quando(i.lido_em)}</div></td>
       <td class="num">${i.pendente||0}</td><td class="num"><b>${num(i.desejado)}</b></td><td class="num">${num(i.tiktok)}</td>
       <td><span class="nk-selo ${s[1]}">${s[0]}</span>${i.motivo?`<div class="muted">${esc(i.motivo)}</div>`:""}</td></tr>`;

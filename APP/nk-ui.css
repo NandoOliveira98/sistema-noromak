@@ -230,6 +230,16 @@ html[data-tema="escuro"] .v15-sidebar{background:linear-gradient(180deg,#0B1A2C,
   .nk-menu-recolhido .v15-grp.fechado .v15-grp-b{display:block}
   .nk-menu-recolhido #painelConteudo.container-admin{margin-left:72px!important}
 }
+/* V20.08: Selo do menu só de ícones fica no canto do item. Ao lado do ícone, o margin-left:auto
+   do selo (posto em nk-menu.js) empurrava o ícone para fora do centro. */
+@media(min-width:1001px){
+  .nk-menu-recolhido .v15-nav-item{position:relative}
+  .nk-menu-recolhido .nk-perguntas-n,.nk-menu-recolhido .nk-tarefas-n{position:absolute;top:1px;right:3px;margin:0!important;min-width:15px!important;height:15px!important;padding:0 4px!important;font-size:10px!important}
+}
+@media(min-width:761px) and (max-width:1000px){
+  .v15-sidebar .v15-nav-item{position:relative}
+  .v15-sidebar .nk-perguntas-n,.v15-sidebar .nk-tarefas-n{position:absolute;top:1px;right:3px;margin:0!important;min-width:15px!important;height:15px!important;padding:0 4px!important;font-size:10px!important}
+}
 /* O botão « virou o último filho da marca: a regra antiga "div:last-child" não esconde mais o nome. */
 @media(min-width:761px) and (max-width:1000px){.v15-brand>div:not(.v15-brand-badge){display:none!important}}
 

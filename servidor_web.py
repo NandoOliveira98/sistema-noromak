@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.07-FILA-SEM-GRAVACAO-VAZIA"
+APP_VERSION = "20.08-TIKTOK-SKU-CORTADO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -7104,6 +7104,7 @@ def magalu_pedidos_loop(stop_event: threading.Event) -> None:
 TIKTOK_REVENDA_APOLLO = 3          # Bauru no Apollo
 TIKTOK_APOLLO_POR_MINUTO = 3       # das 20/min do Apollo, divididas com as outras telas
 TIKTOK_ESTOQUE_BAIXO = 3
+TIKTOK_SKU_LIMITE = 50             # V20.08: o TikTok corta o SKU do vendedor aqui; o kit chega sem o fim
 TIKTOK_PEDIDOS_INTERVALO = 120
 TIKTOK_PEDIDOS_STATUS = ("AWAITING_SHIPMENT", "AWAITING_COLLECTION")
 TIKTOK_CAMPOS_OPERACIONAIS = ("StatusTikTok", "PrazoEnvioTikTok", "TikTokAtualizadoEm")
@@ -7233,6 +7234,24 @@ def _tiktok_pecas(texto: Any) -> list[tuple[str, int]]:
             saida[parte] = 0
         saida[parte] += unidades
     return [(c, saida[c]) for c in ordem]
+
+
+def _tiktok_sku_cortado(row: dict[str, Any]) -> bool:
+    """V20.08: SKU no limite do TikTok sem vínculo à mão. O fim pode ter sido perdido (código pela
+    metade ou peça inteira), então nem lê o Apollo nem envia até alguém confirmar o código."""
+    return not row.get("vinculo") and len(str(row.get("seller_sku") or "")) >= TIKTOK_SKU_LIMITE
+
+
+def tiktok_sugerir_sku(seller_sku: Any, conhecidos: set[str]) -> list[str]:
+    """V20.08: SKU cortado com o último código completado pelo cadastro. Só sugere: quem confirma é
+    o ADMIN, no vínculo à mão. Mais de 6 códigos com o mesmo começo não ajudam a escolher."""
+    texto = str(seller_sku or "").strip().upper()
+    base, barra, ultima = texto.rpartition("/")
+    ultima = ultima.strip()
+    if not ultima:
+        return []
+    achados = sorted(c for c in conhecidos if c.startswith(ultima))
+    return [f"{base}{barra}{c}" for c in achados] if len(achados) <= 6 else []
 
 
 def _tiktok_quantidade(valor: Any) -> int | None:
@@ -7591,6 +7610,8 @@ def tiktok_apollo_ler_proximo() -> str | None:
         return None
     codigos: dict[str, str] = {}
     for row in _tiktok_linhas_sku():
+        if _tiktok_sku_cortado(row):  # V20.08: não gasta a vaga do Apollo com código pela metade
+            continue
         for codigo, _ in _tiktok_pecas(row.get("vinculo") or row.get("seller_sku")):
             codigos.setdefault(_exp_norm_codigo(codigo), codigo)
     if not codigos:
@@ -7644,6 +7665,11 @@ def tiktok_estoque_itens() -> list[dict[str, Any]]:
                 "apollo": None, "pendente": 0, "desejado": None, "lido_em": "", "motivo": ""}
         if not pecas:
             item.update(situacao="sem_vinculo", motivo="Sem código Apollo no SKU do vendedor")
+            itens.append(item)
+            continue
+        if _tiktok_sku_cortado(row):
+            item.update(situacao="sku_cortado", motivo=f"O TikTok corta o SKU em {TIKTOK_SKU_LIMITE} caracteres: "
+                        "confira as peças do kit e salve os códigos completos — o TikTok não é alterado")
             itens.append(item)
             continue
         possivel: list[int] = []
@@ -7726,6 +7752,15 @@ def tiktok_estoque_payload() -> dict[str, Any]:
     resumo: dict[str, int] = {"total": len(itens)}
     for i in itens:
         resumo[i["situacao"]] = resumo.get(i["situacao"], 0) + 1
+    # V20.08: só a tela sugere (o worker também monta os itens e não deve abrir o Precificador a cada volta).
+    cortados = [i for i in itens if i["situacao"] == "sku_cortado"]
+    if cortados:
+        try:
+            conhecidos = _separacao_codigos_conhecidos()
+        except Exception:
+            conhecidos = set()
+        for i in cortados:
+            i["sugestoes"] = tiktok_sugerir_sku(i["seller_sku"], conhecidos)
     with DB_LOCK:
         log = [dict(r) for r in DB.execute("SELECT * FROM tiktok_estoque_log_v1964 ORDER BY id DESC LIMIT 100").fetchall()]
     return {"ok": True, "config": tiktok_estoque_config(), "conectado": tiktok_status_payload()["connected"],
