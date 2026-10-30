@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.05-RUPTURA-RELATORIO-COMPLETO"
+APP_VERSION = "20.06-FINANCEIRO-EVOLUCAO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -27727,6 +27727,36 @@ def financeiro_shopee_escrow_pendentes(limite: int | None = None, stop_event: th
     return buscados
 
 
+def financeiro_evolucao_payload(marketplace: str = "", hoje: date | None = None) -> dict[str, Any]:
+    """V20.06: faturamento, pedidos e ticket dos últimos 12 meses (mini gráficos do Financeiro).
+    Rota à parte do resumo, que passa de 60 s em produção: só soma `vendas_v1799`, pelo índice do
+    dia. Mês sem venda fica em branco, nunca zero. O mês atual sai marcado como parcial."""
+    hoje = hoje or datetime.now(BR_TZ).date()
+    canal = marketplace if marketplace in VENDAS_MARKETPLACES else ""
+    chaves = []
+    ano, m = hoje.year, hoje.month
+    for _ in range(12):
+        chaves.append(f"{ano:04d}-{m:02d}")
+        ano, m = (ano - 1, 12) if m == 1 else (ano, m - 1)
+    chaves.reverse()
+    filtro = " AND marketplace=?" if canal else ""
+    with DB_LOCK:
+        linhas = DB.execute(
+            "SELECT substr(sale_day,1,7) AS mes, SUM(amount) AS fat, "
+            "COUNT(DISTINCT marketplace || '|' || order_id) AS ped FROM vendas_v1799 "
+            f"WHERE sale_day >= ? AND sale_day <= ?{filtro} GROUP BY mes",
+            (chaves[0] + "-01", hoje.isoformat()) + ((canal,) if canal else ())).fetchall()
+    por = {str(r["mes"]): r for r in linhas}
+    meses = []
+    for k in chaves:
+        r = por.get(k)
+        fat = round(float(r["fat"] or 0), 2) if r else None
+        ped = int(r["ped"] or 0) if r else None
+        meses.append({"mes": k, "faturamento": fat, "pedidos": ped, "ticket": round(fat / ped, 2) if ped else None,
+                      "parcial": k == chaves[-1]})
+    return {"ok": True, "marketplace": canal, "meses": meses}
+
+
 def financeiro_payload(date_from: str, date_to: str, marketplace: str = "", limite_pedidos: int = 400) -> dict[str, Any]:
     """Faturamento, gastos e lucro do período, com a origem de cada número."""
     d1 = datetime.strptime(date_from, "%Y-%m-%d").date()
@@ -35929,6 +35959,12 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.send_json(resposta)
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
+            return
+        if path == "/api/financeiro/evolucao":
+            # V20.06: 12 meses para os mini gráficos. Somente leitura, leve.
+            if self.auth(admin_only=True) is None:
+                return
+            self.send_json(financeiro_evolucao_payload(str((query.get("marketplace") or [""])[0] or "").strip().lower()))
             return
         if path == "/api/financeiro/resumo":
             # V18.30: faturamento, gastos e lucro do período (ML + Shopee).

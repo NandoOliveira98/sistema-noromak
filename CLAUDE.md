@@ -5,7 +5,7 @@ Shopee, manuais), expedição, separação, conferência por código de barras, 
 produtos/SKUs/EANs, kits, precificação, promoções, rentabilidade, estoque, Central de
 Pendências e histórico.
 
-Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V20.05).
+Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V20.06).
 
 ---
 
@@ -566,6 +566,8 @@ de Compra usa a mesma regra (`compras_custo_aracatuba`). Venda sem custo de Ara�
 descartado pelo dono: vendido por Araçatuba, Bauru 39,41 × 13,02 real). O dono digita o custo real **no próprio
 Financeiro** (lápis na coluna Custo → `POST /api/compras/custo`, o mesmo custo digitado da Demanda, que vence
 tudo); o payload manda `por_sku[].codigo_custo` (vazio em kit: edita-se cada peça). Kit "KITa - b" soma as peças.
+**V20.06 — 12 meses** (dono, 30/10): três mini gráficos (faturamento, pedidos, ticket) abaixo da faixa de custos, sempre os últimos 12 meses e seguindo só o filtro de canal. `GET /api/financeiro/evolucao` (`financeiro_evolucao_payload`) é **à parte do resumo**, que passa de 60 s em produção: só soma `vendas_v1799`, sem custo, Precificador ou Apollo. Mês sem venda = em branco, nunca zero; mês atual = parcial (barra clara). Lucro não entra: exigiria o cálculo pesado mês a mês, e o custo congelado só existe desde 22/10. Teste: `TESTES/test_financeiro_evolucao_v2006.py`.
+
 **V18.36 — o Billing devolve os MESMOS lançamentos em `BILL` e em `CREDIT_NOTE`.** Os dois
 sincronismos de setembro voltaram com 5.773 itens idênticos. Marcar crédito pelo `document_type`
 **pedido** fazia cada cobrança ganhar uma cópia negativa que a anulava: R$ 132 mil de faturamento

@@ -78,6 +78,18 @@ main{max-width:1680px;margin:0 auto;padding:16px 20px 64px;
 .kpi.forte .rot{color:#9fc0e0}.kpi.forte .val{color:#fff}.kpi.forte .sub{color:#c6dbee}
 .kpi .val.neg{color:var(--neg)}.kpi.forte .val.neg{color:#ffb4ab}
 
+/* V20.06: 12 meses */
+.evo{padding:13px 16px 12px}
+.evo .rot{font-size:11px;font-weight:600;color:var(--ink2);text-transform:uppercase;letter-spacing:.06em}
+.evo .val{font-size:22px;font-weight:600;letter-spacing:-.02em;margin-top:4px;line-height:1.15;white-space:nowrap}
+.evo .sub{font-size:11.5px;color:var(--ink3);margin:2px 0 6px;min-height:16px}
+.evo svg{display:block;width:100%;height:96px}
+.evo rect{fill:var(--navy);cursor:default}
+.evo rect.parcial{opacity:.4}
+.evo rect.foco{fill:var(--laranja,#F28B18);opacity:1}
+.evo text{fill:var(--ink3);font-size:11px}
+.evo .vazio{font-size:12px;color:var(--ink3)}
+
 /* faixa de custos */
 .custos{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:0}
 .custos .c{padding:13px 16px;border-left:1px solid var(--line2)}
@@ -204,6 +216,10 @@ html[data-tema="escuro"] .faixa{color:#F0B357!important}
   <section class="bloco col12">
     <div class="custos" id="custos"></div>
   </section>
+
+  <section class="bloco evo col4" id="evoFat"></section>
+  <section class="bloco evo col4" id="evoPed"></section>
+  <section class="bloco evo col4" id="evoTic"></section>
 
   <section class="bloco col7">
     <div class="bloco-cab"><h2>Do faturamento ao lucro</h2><em id="waterInfo"></em></div>
@@ -624,6 +640,73 @@ html[data-tema="escuro"] .faixa{color:#F0B357!important}
     inp.addEventListener("keydown", (e) => { if (e.key === "Enter") salvar(); if (e.key === "Escape") td.innerHTML = antes; });
   }, true);
 
+  // ---------------- 12 meses (V20.06) ----------------
+  // Rota própria e leve: o resumo pode passar de 60 s e os gráficos não dependem dele.
+  const MESES = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"];
+  const EVO = [
+    ["evoFat", "Faturamento 12 meses", "faturamento", (v) => "R$ " + Number(v).toLocaleString("pt-BR", { maximumFractionDigits: 0 })],
+    ["evoPed", "Pedidos 12 meses", "pedidos", (v) => Number(v).toLocaleString("pt-BR")],
+    ["evoTic", "Ticket médio 12 meses", "ticket", (v) => "R$ " + Number(v).toLocaleString("pt-BR", { minimumFractionDigits: 2, maximumFractionDigits: 2 })],
+  ];
+  const evoNome = (m) => MESES[Number(m.mes.slice(5, 7)) - 1] + "/" + m.mes.slice(2, 4);
+
+  function evoDesenhar() {
+    const meses = state.evolucao;
+    if (!meses) return;
+    EVO.forEach(([id, rotulo, campo, fmt]) => {
+      const el = $(id);
+      const fechados = meses.filter((m) => !m.parcial && m[campo] != null);
+      const ref = fechados[fechados.length - 1];
+      const padrao = ref ? [fmt(ref[campo]), evoNome(ref) + ", último mês fechado"] : ["—", "Sem vendas no período"];
+      el.innerHTML = `<div class="rot">${esc(rotulo)}</div><div class="val">${esc(padrao[0])}</div><div class="sub">${esc(padrao[1])}</div>`;
+      const larg = Math.max(180, Math.round(el.clientWidth - 32));
+      const alt = 96, base = alt - 17, bw = larg / 12;
+      const max = Math.max(...meses.map((m) => Number(m[campo]) || 0)) || 1;
+      const longo = bw >= 34;   // cabe "nov"; senão, só a inicial
+      const partes = meses.map((m, i) => {
+        const nome = MESES[Number(m.mes.slice(5, 7)) - 1];
+        const texto = `<text x="${(i * bw + bw / 2).toFixed(1)}" y="${alt - 3}" text-anchor="middle">${longo ? nome : nome[0].toUpperCase()}</text>`;
+        if (m[campo] == null) return texto;
+        const a = Math.max(2, Number(m[campo]) / max * (base - 3));
+        const g = Math.min(4, bw * 0.15);
+        return `<rect data-i="${i}" class="${m.parcial ? "parcial" : ""}" x="${(i * bw + g).toFixed(1)}" y="${(base - a).toFixed(1)}" `
+          + `width="${(bw - g * 2).toFixed(1)}" height="${a.toFixed(1)}" rx="2"></rect>${texto}`;
+      });
+      el.insertAdjacentHTML("beforeend", `<svg viewBox="0 0 ${larg} ${alt}" role="img" aria-label="${esc(rotulo)}">${partes.join("")}</svg>`);
+      const val = el.querySelector(".val"), sub = el.querySelector(".sub");
+      const svg = el.querySelector("svg");
+      svg.addEventListener("mouseover", (ev) => {
+        const r = ev.target.closest("rect");
+        if (!r) return;
+        const m = meses[Number(r.dataset.i)];
+        svg.querySelectorAll("rect.foco").forEach((x) => x.classList.remove("foco"));
+        r.classList.add("foco");
+        val.textContent = fmt(m[campo]);
+        sub.textContent = evoNome(m) + (m.parcial ? ", mês em andamento" : "");
+      });
+      svg.addEventListener("mouseleave", () => {
+        svg.querySelectorAll("rect.foco").forEach((x) => x.classList.remove("foco"));
+        val.textContent = padrao[0];
+        sub.textContent = padrao[1];
+      });
+    });
+  }
+
+  async function carregarEvolucao() {
+    const canal = $("marketplace").value;
+    try {
+      const r = await api("/api/financeiro/evolucao?" + new URLSearchParams({ marketplace: canal }).toString());
+      if (canal !== $("marketplace").value) return;   // trocou de canal enquanto carregava
+      state.evolucao = r.meses;
+      evoDesenhar();
+    } catch (e) {
+      state.evolucao = null;
+      EVO.forEach(([id, rotulo]) => {
+        $(id).innerHTML = `<div class="rot">${esc(rotulo)}</div><div class="vazio">Não foi possível carregar.</div>`;
+      });
+    }
+  }
+
   async function carregar() {
     if (state.carregando) return;
     state.carregando = true;
@@ -664,6 +747,9 @@ html[data-tema="escuro"] .faixa{color:#F0B357!important}
   $("atualizar").addEventListener("click", carregar);
   $("sincronizar").addEventListener("click", sincronizar);
   $("marketplace").addEventListener("change", carregar);
+  $("marketplace").addEventListener("change", carregarEvolucao);
+  let evoTempo = 0;
+  window.addEventListener("resize", () => { clearTimeout(evoTempo); evoTempo = setTimeout(evoDesenhar, 200); });
   $("filtro").addEventListener("input", renderTabela);
   $("dataIni").addEventListener("change", carregar);
   $("dataFim").addEventListener("change", carregar);
@@ -685,6 +771,7 @@ html[data-tema="escuro"] .faixa{color:#F0B357!important}
 
   aplicarAtalho("mes");
   carregar();
+  carregarEvolucao();
 })();
 </script>
 </body>
