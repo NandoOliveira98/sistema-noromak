@@ -115,6 +115,29 @@ class Acoes(Cenario):
         remessa("MLB1", "COD1", qtd=48)
         self.assertEqual(self.item(S.ruptura_completo_payload(HOJE), "MLB1")["acao"], "A caminho")
 
+    def test_critico_no_full_com_a_caminho_nao_pede_envio(self):
+        self.anuncio("MLB1", "COD1", 1, logistica="fulfillment")
+        guardar_apollo("COD1", 100)
+        remessa("MLB1", "COD1", qtd=40)
+        self.assertEqual(self.item(S.ruptura_completo_payload(HOJE), "MLB1")["acao"], "A caminho")
+
+    def test_a_caminho_que_cobre_a_demanda_vem_do_fora(self):
+        """Caso da NF 57.238: 48 em transfer cobrem os 30 dias, o item vai para fora da remessa."""
+        self.anuncio("MLB1", "COD1", 0)
+        guardar_apollo("COD1", 0)
+        with S.DB_LOCK:
+            S.DB.execute("INSERT INTO full_remessa_v1903(situacao,montada_em,fora_json) VALUES('pronta','x',?)",
+                         (json.dumps([{"anuncio": "MLB1", "a_caminho": 48, "motivo": "Full + a caminho cobrem 30 dias"}]),))
+            S.DB.commit()
+        i = self.item(S.ruptura_completo_payload(HOJE), "MLB1")
+        self.assertEqual((i["acao"], i["a_caminho"]), ("A caminho", 48))
+
+    def test_o_calculo_guarda_o_a_caminho_no_fora(self):
+        cand = {"anuncios": [{"anuncio": "MLB1", "codigo": "C", "venda_30d": 30, "no_full": 0, "a_caminho": 48,
+                              "componentes": [{"codigo": "C", "qtd": 1}]}]}
+        r = S.full_remessa_calcular(cand, {"C": 5})
+        self.assertEqual(r["fora"][0]["a_caminho"], 48)
+
     def test_saldo_da_remessa_nao_vale_como_estoque(self):
         """A remessa grava o saldo depois dos anúncios anteriores: 2 em vez dos 10 reais."""
         self.anuncio("MLB1", "COD1", 0)
@@ -282,6 +305,15 @@ class FolhaA4(Cenario):
             self.assertNotIn(proibido, h)
         self.assertIn("Comprar", h)
         self.assertIn("Faturamento por canal", S.ruptura_a4_html(HOJE))
+
+    def test_excel_do_compras_sem_percentual_do_faturado(self):
+        self.anuncio("MLB1", "COD1", 0)
+        marcas = lambda **k: zipfile.ZipFile(io.BytesIO(S.ruptura_relatorio_xlsx(hoje=HOJE, **k))).read("xl/worksheets/sheet6.xml").decode("utf-8")
+        self.assertIn("% do faturado", marcas())
+        self.assertNotIn("% do faturado", marcas(sem_faturamento=True))
+
+    def test_texto_diz_a_fonte_certa(self):
+        self.assertNotIn("remessa Full), sem consulta", S.ruptura_a4_html(HOJE))
 
     def test_tela_tem_o_botao(self):
         html = (S.APP_DIR / "ruptura.html").read_text(encoding="utf-8")

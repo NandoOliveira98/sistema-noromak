@@ -11954,6 +11954,7 @@ def full_remessa_calcular(cand: dict[str, Any], estoque: dict[str, Any]) -> dict
         if i["estoque_apollo"] is not None and i["qtd_sugerida"] <= 0:
             fora.append({"anuncio": a["anuncio"], "codigo": a["codigo"], "sku": a.get("sku", ""),
                          "titulo": a.get("titulo", ""),
+                         "a_caminho": int(a.get("a_caminho") or 0),  # V20.05: a Ruptura lê daqui
                          # V19.85: o que vai a caminho também cobre
                          "motivo": ("Full + a caminho cobrem 30 dias" if int(a.get("a_caminho") or 0) > 0
                                     else "Full já cobre 30 dias") if nec <= 0 else "sem estoque no Apollo"})
@@ -24823,12 +24824,13 @@ def ruptura_relatorio_payload(marketplace: str = "ml", hoje: date | None = None,
 
 
 def ruptura_relatorio_xlsx(marketplace: str = "ml", hoje: date | None = None,
-                           tipo: str = "", inicio: str = "") -> bytes:
+                           tipo: str = "", inicio: str = "", sem_faturamento: bool = False) -> bytes:
     with RUPTURA_COMPLETO_LOCK:  # V20.05: um por vez, a VPS de 1 GB não aguenta vários juntos
-        return _ruptura_relatorio_xlsx(marketplace, hoje, tipo, inicio)
+        return _ruptura_relatorio_xlsx(marketplace, hoje, tipo, inicio, sem_faturamento)
 
 
-def _ruptura_relatorio_xlsx(marketplace: str, hoje: date | None, tipo: str, inicio: str) -> bytes:
+def _ruptura_relatorio_xlsx(marketplace: str, hoje: date | None, tipo: str, inicio: str,
+                            sem_faturamento: bool = False) -> bytes:
     """V19.59: o relatório semanal/mensal em Excel — abas Semanal, Mensal e Anúncios.
     V20.03: com tipo + inicio, só os anúncios daquele período (botão da gaveta)."""
     r = ruptura_relatorio_payload(marketplace, hoje, completo=True)
@@ -24859,7 +24861,7 @@ def _ruptura_relatorio_xlsx(marketplace: str, hoje: date | None, tipo: str, inic
             linhas.append([(i["mlb"], 0), (i["sku"], 0), (i["titulo"], 0), (i["dias_sem_estoque"], 0),
                            (i["unidades_perdidas"], 0), (i["perdido"], 2), (i["link"], 0)])
         return _xlsx_abas([("Faltou estoque", linhas)], larguras=[15, 24, 60, 11, 11, 13, 45])
-    abas, opcoes = _ruptura_completo_abas(ruptura_completo_payload(hoje))  # V20.05: as 6 abas vêm primeiro
+    abas, opcoes = _ruptura_completo_abas(ruptura_completo_payload(hoje), sem_faturamento)  # V20.05: as 6 abas vêm primeiro
     det: list[list[tuple[Any, int]]] = [[(c, 1) for c in ["Tipo", "Período", "Anúncio", "Título",
                                                           "Dias sem estoque", "Unidades perdidas", "Perdido (R$)"]]]
     for tipo, nome in (("semanas", "Semanal"), ("meses", "Mensal")):
@@ -24882,8 +24884,8 @@ def _ruptura_relatorio_xlsx(marketplace: str, hoje: date | None, tipo: str, inic
 
 # V20.05: o relatório que o dono recebeu à mão em 30/10 (Excel de 6 abas + folha A4), agora pelos
 # botões da tela. Junta ML + Shopee do mês até ontem. NUNCA consulta o Apollo: na manhã de 30/10 a
-# leitura em lote travou o sistema. Usa o estoque guardado de Araçatuba (Demanda de Compra e
-# remessa Full, o mais novo dos dois); sem leitura fica em branco e vira "Sem leitura", nunca zero.
+# leitura em lote travou o sistema. Usa o estoque de Araçatuba guardado pela Demanda de Compra;
+# sem leitura fica em branco e vira "Sem leitura", nunca zero.
 RUPTURA_COMPLETO_TTL = 120  # dois cliques seguidos (Excel + A4) não refazem a conta
 _RUPTURA_COMPLETO_CACHE: dict[str, Any] = {}
 RUPTURA_COMPLETO_LOCK = threading.RLock()   # sempre antes do DB_LOCK, nunca ao contrário
@@ -24906,8 +24908,15 @@ def _ruptura_apollo_guardado(itens: list[dict[str, Any]]) -> None:
             "SELECT i.anuncio, i.a_caminho_ml FROM full_remessa_item_v1903 i "
             "JOIN full_remessa_v1903 r ON r.remessa_id = i.remessa_id "
             "WHERE r.situacao IN ('montando','pronta') AND i.a_caminho_ml IS NOT NULL").fetchall()
+        foras = DB.execute("SELECT fora_json FROM full_remessa_v1903 WHERE situacao IN ('montando','pronta')").fetchall()
     for r in linhas:
         a_caminho[str(r["anuncio"])] = max(a_caminho.get(str(r["anuncio"]), 0), int(r["a_caminho_ml"] or 0))
+    # Quem o "a caminho" já cobre vai para fora da remessa e não ganha linha.
+    for r in foras:
+        for f in _full_json(r["fora_json"], []):
+            if isinstance(f, dict) and int(f.get("a_caminho") or 0) > 0:
+                a = str(f.get("anuncio") or "")
+                a_caminho[a] = max(a_caminho.get(a, 0), int(f["a_caminho"]))
     for i in itens:
         pecas = i.get("pecas") or []
         leituras = [(disp.get(c), q) for c, q in pecas]
@@ -24919,7 +24928,7 @@ def _ruptura_apollo_guardado(itens: list[dict[str, Any]]) -> None:
             i["apollo"], i["apollo_lido"] = None, ""
         i["a_caminho"] = a_caminho.get(i["mlb"]) or None
         a = i["apollo"]
-        if i["a_caminho"] and i.get("full") and i["grupo"] == "zerado":
+        if i["a_caminho"] and i.get("full"):  # já está indo: não pedir envio de novo
             i["acao"] = "A caminho"
         elif a is None:
             i["acao"] = "Sem leitura"
@@ -25040,7 +25049,7 @@ def _ruptura_completo_calcular(hoje: date | None) -> dict[str, Any]:
     return r
 
 
-def _ruptura_completo_abas(d: dict[str, Any]) -> tuple[list[Any], dict[str, Any]]:
+def _ruptura_completo_abas(d: dict[str, Any], sem_faturamento: bool = False) -> tuple[list[Any], dict[str, Any]]:
     """As 6 abas do relatório de 30/10. Estilos do _xlsx_abas: 8 título, 7 nota, 2 moeda, 5 %, 6 uma casa."""
     br = lambda x: "/".join(reversed(str(x).split("-")))
     r = d["resumo"]
@@ -25057,7 +25066,7 @@ def _ruptura_completo_abas(d: dict[str, Any]) -> tuple[list[Any], dict[str, Any]
 
     resumo: list[list[tuple[Any, int]]] = [
         [(f"Ruptura de {d['mes']} com o Apollo de Araçatuba", 8)],
-        [(f"Ruptura de {br(d['inicio'])} a {br(d['fim'])}. Apollo guardado (Demanda de Compra e remessa Full), sem consulta nova.", 7)],
+        [(f"Ruptura de {br(d['inicio'])} a {br(d['fim'])}. Apollo guardado pela Demanda de Compra, sem consulta nova.", 7)],
         [], [("Situação", 1), ("Anúncios", 1), ("R$ por dia", 1)],
         [("Zerados: comprar (sem peça em Araçatuba)", 0), (r["comprar"]["anuncios"], 0), (r["comprar"]["dia"], 2)],
         [("Zerados: ajustar anúncio ou enviar ao Full (peça no Apollo)", 0), (r["ajustar"]["anuncios"], 0), (r["ajustar"]["dia"], 2)],
@@ -25093,8 +25102,9 @@ def _ruptura_completo_abas(d: dict[str, Any]) -> tuple[list[Any], dict[str, Any]
                          ("Apollo", "apollo", 9, 0), ("Apollo lido em", "apollo_lido", 10, 0)],
                  d["perdas"][:15]),
              aba("Marcas", "Ruptura por marca", "Anúncio com peças de duas marcas conta nas duas.",
-                 [("Marca", "marca", 16, 0), ("Perdido", "perdido", 13, 2), ("% do faturado", "perc_fat", 11, 5),
-                  ("Anúncios com ruptura", "com_ruptura", 11, 0), ("Anúncios", "anuncios", 9, 0),
+                 [("Marca", "marca", 16, 0), ("Perdido", "perdido", 13, 2)]
+                 + ([] if sem_faturamento else [("% do faturado", "perc_fat", 11, 5)]) +
+                 [("Anúncios com ruptura", "com_ruptura", 11, 0), ("Anúncios", "anuncios", 9, 0),
                   ("Dias sem estoque", "dias", 10, 6), ("Unidades perdidas", "unidades", 10, 6),
                   ("Zerados agora", "zerados", 9, 0), ("Perda por dia agora", "perda_dia", 13, 2), ("Até 7 dias", "criticos", 8, 0)],
                  d["marcas"])], opcoes)
@@ -25238,7 +25248,7 @@ ol{{padding-left:4mm}}ol li{{margin-bottom:.4mm}}
 <div><h2>Ajustar anúncio ({min(7, r['ajustar']['anuncios'])} de {r['ajustar']['anuncios']})</h2>{ajustar}</div></div>
 <div><h2>Acabam em até 7 dias: {r['criticos']['anuncios']} anúncios, {rs(r['criticos']['dia'])} por dia em risco</h2>{acaba}</div>
 <div class="fim"><div><h2>Próximos passos</h2><ol>{lista}</ol></div>
-<div class="lim"><h2>Limites dos números</h2>Perda é estimativa (venda por dia × dias sem estoque × ticket). Histórico de estoque desde {desde} no ML. Apollo guardado (Demanda de Compra e remessa Full), sem consulta nova: pode ter mudado; só Araçatuba, em branco = sem leitura. Fora da conta: Magalu, TikTok e a ruptura de Bauru. Anúncios do mesmo código dividem a mesma peça.</div></div>
+<div class="lim"><h2>Limites dos números</h2>Perda é estimativa (venda por dia × dias sem estoque × ticket). Histórico de estoque desde {desde} no ML. Apollo guardado pela Demanda de Compra, sem consulta nova: pode ter mudado; só Araçatuba, em branco = sem leitura. Fora da conta: Magalu, TikTok e a ruptura de Bauru. Anúncios do mesmo código dividem a mesma peça.</div></div>
 </div></body></html>"""
 
 
@@ -36145,14 +36155,16 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/ruptura/relatorio.xlsx":
             # V19.59: o relatório em Excel. Somente leitura.
-            if self.auth(admin_only=True, compras_ok=True) is None:
+            ctx = self.auth(admin_only=True, compras_ok=True)
+            if ctx is None:
                 return
             try:
                 mp = str((query.get("marketplace") or ["ml"])[0] or "ml")
                 # V20.03: tipo + inicio = só os anúncios do período aberto na gaveta.
                 periodo_tipo = str((query.get("tipo") or [""])[0])
                 periodo_inicio = str((query.get("inicio") or [""])[0])
-                conteudo = ruptura_relatorio_xlsx(mp, tipo=periodo_tipo, inicio=periodo_inicio)
+                conteudo = ruptura_relatorio_xlsx(mp, tipo=periodo_tipo, inicio=periodo_inicio,
+                                                  sem_faturamento=str(ctx.get("app_role") or "") == "compras")
                 data_arquivo = f"{periodo_tipo}_{periodo_inicio}" if periodo_tipo else datetime.now(BR_TZ).date().isoformat()
                 tipo = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 body, compressed = self.encoded_body(conteudo, tipo)
