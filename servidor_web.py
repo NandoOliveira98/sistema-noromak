@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.06-FINANCEIRO-EVOLUCAO"
+APP_VERSION = "20.07-FILA-SEM-GRAVACAO-VAZIA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -5360,6 +5360,15 @@ def _pending_drop_identities_v1852(value: str, identities: set[str]) -> str:
     return json_dumps(kept) if len(kept) != len(rows) else value
 
 
+def _fila_mesmo_conteudo(gravado: Any, novo: str) -> bool:
+    if gravado == novo:
+        return True
+    try:
+        return json.loads(gravado or "[]") == json.loads(novo or "[]")
+    except Exception:
+        return False
+
+
 def save_storage(
     key: str,
     old_value: str | None,
@@ -5457,22 +5466,31 @@ def save_storage(
                 # Reimportação ADMIN explícita continua possível porque
                 # allow_completed_reimport remove o tombstone antes deste ponto.
                 merged = filter_completed_orders_v1772(merged)
-            version += 1
-            updated = now_iso()
-            DB.execute(
-                """INSERT INTO storage(key,value,version,updated_at) VALUES(?,?,?,?)
-                   ON CONFLICT(key) DO UPDATE SET value=excluded.value,version=excluded.version,updated_at=excluded.updated_at""",
-                (key, merged, version, updated),
-            )
-            track_sku_changes(
-                key,
-                merged,
-                username=actor or "desconhecido",
-                user_role=actor_role,
-                source_screen=source_screen,
-                change_method=change_method,
-                client_ip=client_ip,
-            )
+            # V20.07: gravar a fila sem mudar nada não sobe a versão. Em 30/10, 6 de cada 8 versões
+            # eram assim: toda tela aberta baixava a fila de novo e os vigias refaziam a leitura.
+            # O commit continua: delta do ADMIN e cofre desta transação têm de ficar gravados.
+            atual_gravado = None
+            if key == "conf_pedidos" and not force:
+                atual_gravado = DB.execute("SELECT value,updated_at FROM storage WHERE key=?", (key,)).fetchone()
+            if atual_gravado and _fila_mesmo_conteudo(atual_gravado["value"], merged):
+                updated = str(atual_gravado["updated_at"] or "")
+            else:
+                version += 1
+                updated = now_iso()
+                DB.execute(
+                    """INSERT INTO storage(key,value,version,updated_at) VALUES(?,?,?,?)
+                       ON CONFLICT(key) DO UPDATE SET value=excluded.value,version=excluded.version,updated_at=excluded.updated_at""",
+                    (key, merged, version, updated),
+                )
+                track_sku_changes(
+                    key,
+                    merged,
+                    username=actor or "desconhecido",
+                    user_role=actor_role,
+                    source_screen=source_screen,
+                    change_method=change_method,
+                    client_ip=client_ip,
+                )
             DB.commit()
         except Exception:
             DB.rollback()

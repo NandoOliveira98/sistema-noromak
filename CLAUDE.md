@@ -5,7 +5,7 @@ Shopee, manuais), expedição, separação, conferência por código de barras, 
 produtos/SKUs/EANs, kits, precificação, promoções, rentabilidade, estoque, Central de
 Pendências e histórico.
 
-Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V20.06).
+Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V20.07).
 
 ---
 
@@ -221,6 +221,8 @@ merge, para que nenhuma integração passe por cima:
 9. `_dedupe_ml_legacy_sku_rows`, `_propagate_previous_completion_metadata`
 10. **`_admin_override_apply`** → `_admin_manual_order_vault_apply` →
     `_pending_filter_manual_deleted_orders_value` → `filter_completed_orders_v1772`
+11. **V20.07:** `conf_pedidos` igual ao que já está gravado (`_fila_mesmo_conteudo`, sem `force`) não grava nem sobe a
+    versão; o `commit` continua, para o delta do ADMIN e o cofre ficarem gravados. Teste: `TESTES/test_gravacao_sem_mudanca_v2007.py`.
 
 ### Tabelas e chaves que guardam decisão do ADMIN
 

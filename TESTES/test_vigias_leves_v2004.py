@@ -218,10 +218,14 @@ class ShopeeSemMudanca(TesteNoromak):
         """Com linha removida pelo merge não se pula o save_storage: quem decide é ele
         (a gravação automática é cumulativa, V17.44)."""
         S.shopee_manual_sync()
-        versao = self._versao()
         S.shopee_current_shipments = lambda: []
-        S.shopee_manual_sync()
-        self.assertGreater(self._versao(), versao)
+        original, chamadas = S.save_storage, []
+        S.save_storage = lambda *a, **k: (chamadas.append(1), original(*a, **k))[1]
+        try:
+            S.shopee_manual_sync()
+        finally:
+            S.save_storage = original
+        self.assertEqual(len(chamadas), 1)
 
     def test_edicao_manual_continua_valendo(self):
         S.shopee_manual_sync()
