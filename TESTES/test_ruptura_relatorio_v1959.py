@@ -123,7 +123,25 @@ class RelatorioRuptura(Base):
 
     def test_v2003_gaveta_baixa_o_periodo_aberto(self):
         html = (S.APP_DIR / "ruptura.html").read_text(encoding="utf-8")
-        self.assertIn("&tipo='+relModo+'&inicio='+p.inicio", html)
+        # marketplace e tipo guardados ao abrir: trocar com a gaveta aberta não muda o arquivo
+        self.assertIn("const mp=mkt(), modo=relModo;", html)
+        self.assertIn("marketplace='+mp+'&tipo='+modo+'&inicio='+p.inicio", html)
+
+    def test_v2003_erro_no_excel_da_gaveta_avisa_sem_sair_da_tela(self):
+        html = (S.APP_DIR / "ruptura.html").read_text(encoding="utf-8")
+        trecho = html[html.index("$('perXlsx').onclick"):html.index("async function carregarRel")]
+        self.assertNotIn("location.href", trecho)
+        self.assertIn("nkToast", trecho)
+
+    def test_v2003_sku_das_vendas_quando_o_retrato_nao_tem(self):
+        self.preparar()
+        m = S.ruptura_relatorio_payload(hoje=HOJE, completo=True)["meses"][0]
+        self.assertEqual(m["itens"][0]["sku"], "S")
+        with S.DB_LOCK:
+            S.DB.execute("INSERT INTO ml_visitas_item_v1868(item_id,titulo,sku) VALUES('MLB1','T','DO-RETRATO')")
+            S.DB.commit()
+        m = S.ruptura_relatorio_payload(hoje=HOJE, completo=True)["meses"][0]
+        self.assertEqual(m["itens"][0]["sku"], "DO-RETRATO")
 
 
 if __name__ == "__main__":

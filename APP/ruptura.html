@@ -364,6 +364,7 @@ function renderRel(){
 // V19.61: gaveta com TODOS os anúncios que faltaram no período (clique na linha do quadro).
 function abrirPeriodo(p){
   const itens=(p.itens||p.top||[]).slice();
+  const mp=mkt(), modo=relModo; // V20.03: o Excel é o da gaveta, mesmo trocando marketplace ou aba com ela aberta
   const linha=t=>`<tr><td class="l" style="max-width:300px">${t.link?`<a href="${esc(t.link)}" target="_blank" rel="noopener">${esc(t.titulo||t.mlb)}</a>`:esc(t.titulo||t.mlb)}<div class="mlb">${esc(t.mlb)}${t.sku?' · SKU '+esc(t.sku):''}</div></td><td>${dec(t.dias_sem_estoque)}</td><td>${dec(t.unidades_perdidas)}</td><td><b style="color:var(--neg)">${brl(t.perdido)}</b></td></tr>`;
   const d=$('drawer');
   d.style.width='min(760px,100%)';
@@ -384,7 +385,20 @@ function abrirPeriodo(p){
     $('perCorpo').innerHTML=L.map(linha).join('')||'<tr><td colspan="4" class="l muted" style="padding:14px">Nada encontrado.</td></tr>'};
   $('perQ').oninput=pintar; pintar();
   // V20.03: baixa só os anúncios deste período (o botão do quadro continua com o relatório geral).
-  $('perXlsx').onclick=()=>{location.href='/expedicao/api/ruptura/relatorio.xlsx?marketplace='+mkt()+'&tipo='+relModo+'&inicio='+p.inicio};
+  // Erro (período que saiu da lista com a tela aberta desde ontem) vira aviso, sem sair da tela.
+  $('perXlsx').onclick=async e=>{
+    const b=e.currentTarget; b.disabled=true;
+    try{
+      const r=await fetch('/expedicao/api/ruptura/relatorio.xlsx?marketplace='+mp+'&tipo='+modo+'&inicio='+p.inicio,{credentials:'same-origin',cache:'no-store'});
+      if(!r.ok){const x=await r.json().catch(()=>({}));throw new Error(x.error||('HTTP '+r.status))}
+      const a=document.createElement('a');
+      a.href=URL.createObjectURL(await r.blob());
+      a.download='ruptura_'+mp+'_'+modo+'_'+p.inicio+'.xlsx';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(a.href),60000);
+    }catch(err){ nkToast('Não foi possível baixar o Excel: '+err.message+'. Recarregue a página e tente de novo.','erro'); }
+    finally{ b.disabled=false; }
+  };
   d.classList.add('on'); d.setAttribute('aria-hidden','false');
   d.querySelector('.x').onclick=fechar;
 }

@@ -24686,7 +24686,7 @@ def ruptura_relatorio_payload(marketplace: str = "ml", hoje: date | None = None,
     with DB_LOCK:
         vendas = DB.execute(
             "SELECT anuncio, sale_day, COALESCE(SUM(qty),0) AS un, COALESCE(SUM(amount),0) AS fat, "
-            "MAX(title) AS titulo FROM vendas_v1799 WHERE marketplace=? AND anuncio <> '' "
+            "MAX(title) AS titulo, MAX(sku) AS sku FROM vendas_v1799 WHERE marketplace=? AND anuncio <> '' "
             "AND sale_day BETWEEN ? AND ? GROUP BY anuncio, sale_day",
             (marketplace, inicio.isoformat(), ontem.isoformat())).fetchall()
         est = DB.execute(
@@ -24706,6 +24706,8 @@ def ruptura_relatorio_payload(marketplace: str = "ml", hoje: date | None = None,
         a = str(r["anuncio"])
         v_por.setdefault(a, []).append((str(r["sale_day"]), int(r["un"] or 0), float(r["fat"] or 0)))
         titulos.setdefault(a, str(r["titulo"] or ""))
+        if not skus.get(a):  # V20.03: sem SKU no retrato, o da venda (como no ruptura_payload)
+            skus[a] = str(r["sku"] or "")
     z_por: dict[str, list[tuple[str, float]]] = {}
     for r in est:
         z_por.setdefault(str(r["item_id"]), []).append((str(r["dia"]), float(r["z"] or 0)))
