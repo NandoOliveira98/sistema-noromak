@@ -87,12 +87,15 @@ class SemMudanca(TesteNoromak):
         self.assertEqual(S._rows_from_storage_value(S.get_storage("conf_pedidos")[0])[0]["SKU"], "SKU9")
 
     def test_override_de_tela_antiga_grava_mesmo_com_a_fila_igual(self):
-        """Tela com NF antiga, banco já com a nova, ADMIN grava a nova: a fila não muda, o delta fica."""
+        """Tela com NF antiga, banco já com a nova: o ADMIN grava a nova. O 1º save marca a linha
+        (__adminOverride); o 2º, igual, passa pelo ramo sem gravação e o delta continua lá."""
         gravar_como_integracao([linha("P1", "SKU1", uid="U1", NF="1")])
         antes, _, _ = S.get_storage("conf_pedidos")
         gravar_como_integracao([linha("P1", "SKU1", uid="U1", NF="2")])
         atual, v, _ = S.get_storage("conf_pedidos")
         S.save_storage("conf_pedidos", antes, atual, False, actor="adm", actor_role="admin")
+        marcado, v, _ = S.get_storage("conf_pedidos")
+        S.save_storage("conf_pedidos", antes, marcado, False, actor="adm", actor_role="admin")
         self.assertEqual(versao(), v)
         self.assertFalse(S.DB.in_transaction)
         with S.DB_LOCK:
