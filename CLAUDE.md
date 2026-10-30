@@ -463,8 +463,15 @@ tem cópia em RAM (relida a cada hora) e é **desfeita** pelo dado ao vivo: o ca
 workers (inclusive os `except`) usam `ml_log_event_se_mudou` / `shopee_log_event_se_mudou`
 (`_log_se_mudou`): só grava quando (resultado, detalhe) mudou para aquele recurso. O backup
 copia por lotes (`backup(pages=2000, sleep=0.05)`, também no `publicar.sh`): `ionice` só vale
-com CFQ/BFQ. Ainda em aberto (maior ganho, mais delicado): `_ml_linked_order_ids` decodifica
-o `conf_etiquetas` inteiro (com os ZPL) a cada ciclo — cachear por versão do storage.
+com CFQ/BFQ.
+**V20.04 — vigias leves (40% de CPU e banco ocupado 39,7%, 30/10):** os vigias de etiquetas e de pedidos novos
+remontavam a fila, decodificavam o `conf_etiquetas` e abriam o JSON de todos os concluídos a cada ciclo, por conta.
+`_ml_fila_leitura` e `_ml_etiquetas_validas` guardam a leitura pela versão das chaves (a fila também pela do tombstone),
+por no máximo `ML_CACHE_LEITURA_S` (60 s); **só para decidir o que olhar**: as linhas não podem ser alteradas e quem
+grava continua no `get_storage`/`save_storage`. `_ml_completed_order_ids` lê sempre chave + data e abre o JSON só de quem
+é novo. **Tela nova que grava a fila ou o tombstone fora do `save_storage` tem de subir a versão.** Shopee: `CriadoEm` não muda mais, `ShopeeAtualizadoEm`
+só anda com mudança real e sincronização sem mudança não grava (a versão da fila não sobe e as telas não rebaixam tudo).
+`/api/saude/medicao` mostra quem segura o banco. Teste: `TESTES/test_vigias_leves_v2004.py`.
 **V19.85 — carrinho com kit (caso real 26/10, carrinho 2000015699983821):** `_ml_bind_manual_pending_rows`
 remarcava TODA linha do carrinho com a venda importada na hora (`VendaMercadoLivre`); com duas vendas no carrinho, a
 limpeza seguinte apagava a peça da outra venda e a busca Pedido + SKU fundia o pano avulso com o pano do kit. A venda

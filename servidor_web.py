@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.03-RUPTURA-EXCEL-PERIODO"
+APP_VERSION = "20.04-VIGIAS-LEVES"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -9319,6 +9319,15 @@ def _shopee_merge_pending_lines(current: list[dict[str, Any]], api_lines: list[d
             after_api = _shopee_snapshot_editable(api_row)
             if any(before.get(f) != _shopee_parse_snapshot(old).get(f, before.get(f)) for f in SHOPEE_MANUAL_EDIT_FIELDS):
                 protected_count += 1
+            # V20.04: CriadoEm é de quando a linha nasceu e ShopeeAtualizadoEm só anda se
+            # algo mudou. Trocados a cada minuto, a fila mudava de versão sem mudar nada e
+            # toda tela aberta baixava a fila inteira de novo.
+            if old.get("CriadoEm"):
+                merged["CriadoEm"] = old["CriadoEm"]
+            if old.get("ShopeeAtualizadoEm") and all(
+                merged.get(f) == old.get(f) for f in set(merged) | set(old) if f != "ShopeeAtualizadoEm"
+            ):
+                merged["ShopeeAtualizadoEm"] = old["ShopeeAtualizadoEm"]
             merged_api.append(merged)
         else:
             fresh = dict(api_row)
@@ -9403,12 +9412,19 @@ def _shopee_manual_sync_sem_trava(acordar_etiquetas: bool = True) -> dict[str, A
         pending, removed, protected_count = _shopee_merge_pending_lines(
             current, api_lines, active_orders, detail_orders
         )
-        saved, _, _ = save_storage(
-            "conf_pedidos", current_raw, json_dumps(pending), False,
-            actor="sistema", actor_role="sistema", source_screen="Admin / Integrações / Shopee",
-            change_method="Sincronização API Shopee Live", client_ip="127.0.0.1",
-            allow_completed_reimport=False,
-        )
+        # V20.04: nada mudou = nada a gravar (a ordem das linhas não conta: o merge põe as
+        # da API no fim). Antes, 1 gravação por minuto sem mudança nenhuma.
+        def _assinatura(linhas: list[dict[str, Any]]) -> list[str]:
+            return sorted(json.dumps(r, sort_keys=True, ensure_ascii=False, default=str) for r in linhas)
+        if not removed and _assinatura(pending) == _assinatura(current):
+            saved = current_raw
+        else:
+            saved, _, _ = save_storage(
+                "conf_pedidos", current_raw, json_dumps(pending), False,
+                actor="sistema", actor_role="sistema", source_screen="Admin / Integrações / Shopee",
+                change_method="Sincronização API Shopee Live", client_ip="127.0.0.1",
+                allow_completed_reimport=False,
+            )
         final_rows = _rows_from_storage_value(saved)
         imported_orders = len({order_number(r) for r in final_rows if normalize(r.get("OrigemCadastro")) == "API_SHOPEE"})
         # V18.62: pedido que entrou agora na fila acorda o worker de etiquetas na
@@ -13121,11 +13137,10 @@ def _ml_bind_manual_pending_rows(
     return bound
 
 def _ml_manual_pending_numbers() -> set[str]:
-    raw, _, _ = get_storage("conf_pedidos")
     linked = _ml_linked_order_ids()
     result: set[str] = set()
     casa = ml_casa_atual()
-    for row in _rows_from_storage_value(raw):
+    for row in _ml_fila_leitura():  # V20.04
         if not isinstance(row, dict):
             continue
         marketplace = normalize(row.get("Marketplace"))
@@ -13987,8 +14002,7 @@ def _ml_process_notification_na_casa(payload: dict[str, Any], topic: str, resour
 
 def _ml_all_pending_label_candidates() -> list[tuple[str, str]]:
     """Retorna todos os pares únicos ainda aguardando etiqueta."""
-    raw, _, _ = get_storage("conf_pedidos")
-    rows = _rows_from_storage_value(raw)
+    rows = _ml_fila_leitura()  # V20.04
     seen: set[tuple[str, str]] = set()
     candidates: list[tuple[str, str]] = []
     casa = ml_casa_atual()
@@ -14171,13 +14185,12 @@ def _ml_recover_one_identifier(identifier: str, *, source: str) -> dict[str, Any
 
 def _ml_recover_local_pending_identifiers_once(*, max_identifiers: int = 80) -> dict[str, Any]:
     """Recupera pedidos locais presos por IDs salvos em campos errados ou migração de API."""
-    raw, _, _ = get_storage("conf_pedidos")
     linked = _ml_linked_order_ids()
     completed = _ml_completed_order_ids()
     identifiers: list[str] = []
     shipment_ids: list[str] = []
     casa = ml_casa_atual()
-    for row in _rows_from_storage_value(raw):
+    for row in _ml_fila_leitura():  # V20.04
         if not isinstance(row, dict):
             continue
         marketplace = normalize(row.get("Marketplace"))
@@ -14520,14 +14533,55 @@ def _ml_full_ignorados(dias: int = ML_FULL_IGNORADO_DIAS) -> set[str]:
         return set(atual or ())
 
 
-def _ml_linked_order_ids() -> set[str]:
-    """Pedidos cuja etiqueta ML realmente existe no banco de etiquetas.
+# V20.04: os vigias do ML (15–20 s, por conta) remontavam a fila, decodificavam 1,4 MB de
+# etiquetas e abriam o JSON de todos os concluídos a cada ciclo: ~40% de CPU 24 h e banco
+# ocupado 39,7% do tempo (produção, 30/10). A cópia abaixo é só para DECIDIR o que olhar;
+# vale enquanto a versão não muda e nunca mais que ML_CACHE_LEITURA_S. Quem grava continua
+# passando pelo get_storage/save_storage, com todas as barreiras do ADMIN.
+ML_CACHE_LEITURA_S = 60.0
+_ML_FILA_CACHE: dict[str, Any] = {}
+_ML_ETIQUETAS_CACHE: dict[str, Any] = {}
+_ML_CONCLUIDOS_CACHE: dict[str, tuple[str, frozenset[str]]] = {}
 
-    Não confia apenas no texto VINCULADA da linha: versões antigas podiam deixar
-    esse marcador sem um registro ZPL correspondente, fazendo o watcher ignorar
-    o pedido indefinidamente.
-    """
-    label_raw, _, _ = get_storage("conf_etiquetas")
+
+def _ml_cache_leitura_limpar() -> None:
+    global _ML_CONCLUIDOS_CACHE
+    _ML_FILA_CACHE.clear()
+    _ML_ETIQUETAS_CACHE.clear()
+    _ML_CONCLUIDOS_CACHE = {}
+
+
+def _ml_versoes_storage(*chaves: str) -> list[tuple[str, int]]:
+    marcas = ",".join("?" for _ in chaves)
+    return [(str(r[0]), int(r[1])) for r in DB.execute(
+        f"SELECT key,version FROM storage WHERE key IN ({marcas}) ORDER BY key", chaves
+    ).fetchall()]
+
+
+def _ml_fila_leitura() -> list[dict[str, Any]]:
+    """Fila já com as regras do ADMIN, SÓ para leitura: não alterar as linhas devolvidas."""
+    # Tombstone do pedido fica em outra chave. Conclusão sobe a versão de conf_pedidos.
+    with DB_LOCK:
+        versoes = _ml_versoes_storage("conf_pedidos", PENDING_ORDER_DELETE_KEY_V1766)
+        agora = time.monotonic()
+        if (_ML_FILA_CACHE.get("versoes") == versoes
+                and agora - float(_ML_FILA_CACHE.get("em") or 0) < ML_CACHE_LEITURA_S):
+            return _ML_FILA_CACHE["linhas"]
+        raw, _, _ = get_storage("conf_pedidos")
+        linhas = _rows_from_storage_value(raw)
+        _ML_FILA_CACHE.update(versoes=versoes, em=agora, linhas=linhas)
+        return linhas
+
+
+def _ml_etiquetas_validas() -> tuple[set[str], set[str]]:
+    """(vendas, envios) com etiqueta ML de verdade no banco. Não alterar os conjuntos."""
+    with DB_LOCK:
+        versoes = _ml_versoes_storage("conf_etiquetas")
+        agora = time.monotonic()
+        if (_ML_ETIQUETAS_CACHE.get("versoes") == versoes
+                and agora - float(_ML_ETIQUETAS_CACHE.get("em") or 0) < ML_CACHE_LEITURA_S):
+            return _ML_ETIQUETAS_CACHE["vendas"], _ML_ETIQUETAS_CACHE["envios"]
+        label_raw, _, _ = get_storage("conf_etiquetas")
     try:
         label_bank = json.loads(label_raw) if isinstance(label_raw, str) and label_raw.strip() else {}
     except Exception:
@@ -14548,10 +14602,20 @@ def _ml_linked_order_ids() -> set[str]:
         sid = str(meta.get("shipment_id") or "").strip()
         if oid: valid_orders.add(oid)
         if sid: valid_shipments.add(sid)
+    _ML_ETIQUETAS_CACHE.update(versoes=versoes, em=agora, vendas=valid_orders, envios=valid_shipments)
+    return valid_orders, valid_shipments
 
+
+def _ml_linked_order_ids() -> set[str]:
+    """Pedidos cuja etiqueta ML realmente existe no banco de etiquetas.
+
+    Não confia apenas no texto VINCULADA da linha: versões antigas podiam deixar
+    esse marcador sem um registro ZPL correspondente, fazendo o watcher ignorar
+    o pedido indefinidamente.
+    """
+    valid_orders, valid_shipments = _ml_etiquetas_validas()
     ids: set[str] = set()
-    raw, _, _ = get_storage("conf_pedidos")
-    for row in _rows_from_storage_value(raw):
+    for row in _ml_fila_leitura():
         if not isinstance(row, dict):
             continue
         if str(row.get("Etiqueta API Mercado Livre") or "").strip().upper() != "VINCULADA":
@@ -14565,51 +14629,58 @@ def _ml_linked_order_ids() -> set[str]:
 
 def _ml_completed_order_ids() -> set[str]:
     """Pedidos já concluídos, que não devem voltar para pendentes."""
-    ids: set[str] = set()
+    # V20.04: a lista (chave + data) é lida sempre, do banco; o JSON só de quem é novo ou
+    # foi concluído de novo. Sem trava própria: duas threads no máximo refazem o trabalho.
+    global _ML_CONCLUIDOS_CACHE
     with DB_LOCK:
         try:
-            rows = DB.execute("SELECT payload FROM completed_orders").fetchall()
+            marcas = DB.execute("SELECT order_key,completed_at FROM completed_orders").fetchall()
         except Exception:
-            rows = []
-    for dbrow in rows:
-        try:
-            payload = json.loads(dbrow["payload"] if hasattr(dbrow, "keys") else dbrow[0])
-        except Exception:
-            continue
-        candidates = payload if isinstance(payload, list) else [payload]
-        for row in candidates:
-            if isinstance(row, dict):
-                oid = str(row.get("VendaMercadoLivre") or "").strip()
-                if oid:
-                    ids.add(oid)
+            marcas = []
+    anterior = _ML_CONCLUIDOS_CACHE
+    novo: dict[str, tuple[str, frozenset[str]]] = {}
+    faltam: list[str] = []
+    for marca in marcas:
+        chave, em = str(marca[0]), str(marca[1] or "")
+        guardado = anterior.get(chave)
+        if guardado and guardado[0] == em:
+            novo[chave] = guardado
+        else:
+            faltam.append(chave)
+    for inicio in range(0, len(faltam), 400):
+        lote = faltam[inicio:inicio + 400]
+        with DB_LOCK:
+            try:
+                rows = DB.execute(
+                    f"SELECT order_key,completed_at,payload FROM completed_orders "
+                    f"WHERE order_key IN ({','.join('?' for _ in lote)})", lote
+                ).fetchall()
+            except Exception:
+                rows = []
+        for dbrow in rows:
+            try:
+                payload = json.loads(dbrow[2])
+            except Exception:
+                payload = []
+            candidates = payload if isinstance(payload, list) else [payload]
+            vendas = {str(row.get("VendaMercadoLivre") or "").strip() for row in candidates if isinstance(row, dict)}
+            novo[str(dbrow[0])] = (str(dbrow[1] or ""), frozenset(v for v in vendas if v))
+    _ML_CONCLUIDOS_CACHE = novo
+    ids: set[str] = set()
+    for _, vendas in novo.values():
+        ids.update(vendas)
     return ids
 
 
 def _ml_existing_order_ids() -> set[str]:
     ids: set[str] = set()
-    raw, _, _ = get_storage("conf_pedidos")
-    for row in _rows_from_storage_value(raw):
+    for row in _ml_fila_leitura():
         if isinstance(row, dict):
             oid = str(row.get("VendaMercadoLivre") or "").strip()
             if oid:
                 ids.add(oid)
     # Pedidos já concluídos também não devem voltar para pendentes.
-    with DB_LOCK:
-        try:
-            rows = DB.execute("SELECT payload FROM completed_orders").fetchall()
-        except Exception:
-            rows = []
-    for dbrow in rows:
-        try:
-            payload = json.loads(dbrow["payload"] if hasattr(dbrow, "keys") else dbrow[0])
-        except Exception:
-            continue
-        candidates = payload if isinstance(payload, list) else [payload]
-        for row in candidates:
-            if isinstance(row, dict):
-                oid = str(row.get("VendaMercadoLivre") or "").strip()
-                if oid:
-                    ids.add(oid)
+    ids.update(_ml_completed_order_ids())
     return ids
 
 

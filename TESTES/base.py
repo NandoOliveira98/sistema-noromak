@@ -104,6 +104,7 @@ def reiniciar_banco() -> None:
     S._ml_full_ignorados_cache_limpar()  # V18.78: cópia em memória da tabela de Full
     S._ML_LOG_ULTIMO.clear()
     S._EXP_NOME_APOLLO.clear()  # V19.67: nome do cliente no Apollo guardado em memória
+    S._ml_cache_leitura_limpar()  # V20.04: fila, etiquetas e concluídos lidos pelos vigias
 
 
 class Cliente:
