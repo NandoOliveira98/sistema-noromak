@@ -410,8 +410,10 @@ async function carregarRel(){
 }
 document.querySelectorAll('#relTabs .tab').forEach(b=>b.onclick=()=>{relModo=b.dataset.r;renderRel()});
 document.getElementById('mkt').addEventListener('change',carregarRel);
-$('relXlsx').onclick=()=>{location.href='/expedicao/api/ruptura/relatorio.xlsx?marketplace='+mkt()};
-$('relA4').onclick=()=>window.open('/expedicao/api/ruptura/a4','_blank');
+// V20.05: o relatório leva alguns segundos; sem o aviso a pessoa clica de novo e o servidor refaz a conta.
+function gerando(b,acao){const t=b.textContent;b.disabled=true;b.textContent='Gerando...';acao();setTimeout(()=>{b.disabled=false;b.textContent=t},8000)}
+$('relXlsx').onclick=e=>gerando(e.currentTarget,()=>{location.href='/expedicao/api/ruptura/relatorio.xlsx?marketplace='+mkt()});
+$('relA4').onclick=e=>gerando(e.currentTarget,()=>window.open('/expedicao/api/ruptura/a4','_blank'));
 
 carregar();
 carregarRel();

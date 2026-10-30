@@ -24824,6 +24824,11 @@ def ruptura_relatorio_payload(marketplace: str = "ml", hoje: date | None = None,
 
 def ruptura_relatorio_xlsx(marketplace: str = "ml", hoje: date | None = None,
                            tipo: str = "", inicio: str = "") -> bytes:
+    with RUPTURA_COMPLETO_LOCK:  # V20.05: um por vez, a VPS de 1 GB não aguenta vários juntos
+        return _ruptura_relatorio_xlsx(marketplace, hoje, tipo, inicio)
+
+
+def _ruptura_relatorio_xlsx(marketplace: str, hoje: date | None, tipo: str, inicio: str) -> bytes:
     """V19.59: o relatório semanal/mensal em Excel — abas Semanal, Mensal e Anúncios.
     V20.03: com tipo + inicio, só os anúncios daquele período (botão da gaveta)."""
     r = ruptura_relatorio_payload(marketplace, hoje, completo=True)
@@ -24881,26 +24886,28 @@ def ruptura_relatorio_xlsx(marketplace: str = "ml", hoje: date | None = None,
 # remessa Full, o mais novo dos dois); sem leitura fica em branco e vira "Sem leitura", nunca zero.
 RUPTURA_COMPLETO_TTL = 120  # dois cliques seguidos (Excel + A4) não refazem a conta
 _RUPTURA_COMPLETO_CACHE: dict[str, Any] = {}
+RUPTURA_COMPLETO_LOCK = threading.RLock()   # sempre antes do DB_LOCK, nunca ao contrário
 RUPTURA_MESES = ("janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto",
                  "setembro", "outubro", "novembro", "dezembro")
 
 
 def _ruptura_apollo_guardado(itens: list[dict[str, Any]]) -> None:
+    # Só a Demanda de Compra guarda o disponível do código. O estoque_apollo da remessa é o saldo
+    # depois dos anúncios anteriores, e quem vai para "fora" nem ganha linha: não serve aqui.
     codigos = sorted({c for i in itens for c, _ in i.get("pecas") or []})
     disp: dict[str, tuple[str, float]] = {}
     for cod, r in compras_estoque_guardado(codigos).items():
         if r.get("stock_known") and r.get("available") is not None:
             disp[cod] = (str(r.get("consultado_em") or ""), float(r["available"]))
-    a_caminho: dict[str, int] = {}
+    # A caminho = agendado no sistema ou "transfer" do ML na remessa aberta, o MAIOR (V19.85).
+    a_caminho: dict[str, int] = dict(_full_a_caminho())
     with DB_LOCK:
         linhas = DB.execute(
-            "SELECT i.anuncio, i.codigo, i.estoque_apollo, i.a_caminho, r.montada_em FROM full_remessa_item_v1903 i "
-            "JOIN full_remessa_v1903 r ON r.remessa_id = i.remessa_id ORDER BY i.remessa_id").fetchall()
-    for r in linhas:   # da remessa mais antiga para a mais nova: a última vence
-        a_caminho[str(r["anuncio"])] = int(r["a_caminho"] or 0)
-        cod, em = str(r["codigo"] or ""), str(r["montada_em"] or "")
-        if cod and r["estoque_apollo"] is not None and em >= disp.get(cod, ("", 0.0))[0]:
-            disp[cod] = (em, float(r["estoque_apollo"]))
+            "SELECT i.anuncio, i.a_caminho_ml FROM full_remessa_item_v1903 i "
+            "JOIN full_remessa_v1903 r ON r.remessa_id = i.remessa_id "
+            "WHERE r.situacao IN ('montando','pronta') AND i.a_caminho_ml IS NOT NULL").fetchall()
+    for r in linhas:
+        a_caminho[str(r["anuncio"])] = max(a_caminho.get(str(r["anuncio"]), 0), int(r["a_caminho_ml"] or 0))
     for i in itens:
         pecas = i.get("pecas") or []
         leituras = [(disp.get(c), q) for c, q in pecas]
@@ -24910,9 +24917,11 @@ def _ruptura_apollo_guardado(itens: list[dict[str, Any]]) -> None:
             i["apollo_lido"] = f"{d[8:10]}/{d[5:7]}"
         else:
             i["apollo"], i["apollo_lido"] = None, ""
-        i["a_caminho"] = a_caminho.get(i["mlb"])
+        i["a_caminho"] = a_caminho.get(i["mlb"]) or None
         a = i["apollo"]
-        if a is None:
+        if i["a_caminho"] and i.get("full") and i["grupo"] == "zerado":
+            i["acao"] = "A caminho"
+        elif a is None:
             i["acao"] = "Sem leitura"
         elif a > 0:
             i["acao"] = "Enviar ao Full" if i.get("full") else "Ajustar anúncio"
@@ -24921,11 +24930,17 @@ def _ruptura_apollo_guardado(itens: list[dict[str, Any]]) -> None:
 
 
 def ruptura_completo_payload(hoje: date | None = None) -> dict[str, Any]:
-    """Só lê o banco (e o Precificador, para marca e código). Sem `hoje` guarda 2 min."""
-    if hoje is None:
-        guardado = _RUPTURA_COMPLETO_CACHE.get("r")
-        if guardado and time.monotonic() - guardado[0] < RUPTURA_COMPLETO_TTL:
-            return guardado[1]
+    """Só lê o banco (e o Precificador, para marca e código). Sem `hoje` guarda 2 min.
+    Um cálculo por vez: vários cliques juntos esperam o primeiro e usam o resultado dele."""
+    with RUPTURA_COMPLETO_LOCK:
+        if hoje is None:
+            guardado = _RUPTURA_COMPLETO_CACHE.get("r")
+            if guardado and time.monotonic() - guardado[0] < RUPTURA_COMPLETO_TTL:
+                return guardado[1]
+        return _ruptura_completo_calcular(hoje)
+
+
+def _ruptura_completo_calcular(hoje: date | None) -> dict[str, Any]:
     data = hoje or datetime.now(BR_TZ).date()
     ontem = data - timedelta(days=1)
     ini = ontem.replace(day=1)
@@ -24943,6 +24958,7 @@ def ruptura_completo_payload(hoje: date | None = None) -> dict[str, Any]:
     _ruptura_apollo_guardado(itens)
     for i in itens:
         i["onde"] = "Full" if i.get("full") else "Próprio"
+        i["marca"] = ", ".join(i.get("marcas") or []) or "Sem marca"
         i["perda_dia"] = i.get("perda_dia") or 0.0
 
     ant_ini = (ini - timedelta(days=1)).replace(day=1)
@@ -25016,8 +25032,11 @@ def ruptura_completo_payload(hoje: date | None = None) -> dict[str, Any]:
                     "comprar": grupo(comprar), "ajustar": grupo(ajustar), "sem_leitura": grupo(sem_leitura),
                     "a_caminho": grupo(a_caminho), "criticos": grupo(criticos, "risco_dia"),
                     "atencao": sum(1 for i in perto if i["grupo"] == "atencao")}}
-    if hoje is None:
+    if hoje is None and not marcas_erro:
         _RUPTURA_COMPLETO_CACHE["r"] = (time.monotonic(), r)
+        t = threading.Timer(RUPTURA_COMPLETO_TTL + 1, _RUPTURA_COMPLETO_CACHE.clear)  # não fica na memória
+        t.daemon = True
+        t.start()
     return r
 
 
@@ -25049,10 +25068,10 @@ def _ruptura_completo_abas(d: dict[str, Any]) -> tuple[list[Any], dict[str, Any]
         [("Perdido no período (estimativa)", 4), ("", 0), (r["perdido"], 9)], [],
         [("Perda é estimativa. Apollo em branco = sem leitura, nunca zero. Bauru e Ribeirão não entram.", 7)],
         [("Anúncios do mesmo código dividem a mesma peça.", 7)]]
+    if d["marcas_erro"]:
+        resumo.insert(2, [("Cadastro não lido: marcas e ações ficaram sem leitura. Gere de novo.", 4)])
     opcoes["Resumo"] = {"larguras": [58, 12, 18]}
     base = [("Anúncio", "mlb", 16, 0), ("SKU", "sku", 26, 0), ("Produto", "titulo", 58, 0), ("Marca", "marca", 15, 0)]
-    for i in d["itens"]:
-        i["marca"] = ", ".join(i.get("marcas") or []) or "Sem marca"
     prod = [("Ação", "acao", 16, 0)] + base + [("Apollo", "apollo", 9, 0)]
     acoes = d["comprar"] + d["ajustar"] + [i for i in d["zerados"] if i["acao"] in ("Sem leitura", "A caminho")]
     return ([("Resumo", resumo),
@@ -25081,8 +25100,9 @@ def _ruptura_completo_abas(d: dict[str, Any]) -> tuple[list[Any], dict[str, Any]
                  d["marcas"])], opcoes)
 
 
-def ruptura_a4_html(hoje: date | None = None) -> str:
-    """A folha A4 de 30/10, montada com os números do dia."""
+def ruptura_a4_html(hoje: date | None = None, sem_faturamento: bool = False) -> str:
+    """A folha A4 de 30/10, montada com os números do dia. `sem_faturamento`: perfil Compras
+    (vê só Quadro, Ruptura e Demanda): sai o faturamento, os pedidos e o ticket da empresa."""
     d = ruptura_completo_payload(hoje)
     r = d["resumo"]
     esc = html_module.escape
@@ -25150,7 +25170,13 @@ def ruptura_a4_html(hoje: date | None = None) -> str:
         passos.append(f'Conferir os {r["sem_leitura"]["anuncios"]} zerados sem leitura')
     lista = "".join(f"<li>{esc(p)}</li>" for p in passos) or "<li>Nada urgente hoje</li>"
     desde = br(d["primeiro_dia"]) if d["primeiro_dia"] else "—"
-    aviso = '<div class="av">Marcas não lidas: as colunas de marca podem estar vazias.</div>' if d["marcas_erro"] else ""
+    k_perdido = "Estimativa" if sem_faturamento else f"{pc(r['perc_perdido'])} do faturado"
+    k_terceiro = (f"""<div class="k"><div class="r">Anúncios com perda</div><div class="v">{r['anuncios_perda']}</div><div class="n">No período medido</div></div>"""
+                  if sem_faturamento else
+                  f"""<div class="k"><div class="r">Faturamento {br(d['inicio'])[:5]} a {br(d['fim'])[:5]}</div><div class="v">{rs(r['faturamento'])}</div><div class="n">Mesmos dias de {esc(d['mes_anterior'])}: {rs(r['faturamento_ant'])}</div></div>""")
+    b_canal = ("" if sem_faturamento else
+               f"""<h2>Faturamento por canal</h2><table><tr><th>Canal</th><th class="n">{esc(d['mes'].split()[0].title())}</th><th class="n">{esc(d['mes_anterior'].title())}</th><th class="n">Variação</th></tr>{cs}</table>""")
+    aviso = '<div class="av">Cadastro não lido: marcas e ações ficaram sem leitura. Gere de novo.</div>' if d["marcas_erro"] else ""
     return f"""<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><title>Ruptura de {esc(d['mes'])}</title>
 <style>
@@ -25193,12 +25219,12 @@ ol{{padding-left:4mm}}ol li{{margin-bottom:.4mm}}
 {aviso}
 <div class="kpis">
 <div class="k d"><div class="r">Faturamento médio perdido por dia</div><div class="v">{rs(r['perda_media_dia'])}</div><div class="n">Estimativa, {r['dias_medidos']} dia{'s' if r['dias_medidos'] != 1 else ''} medido{'s' if r['dias_medidos'] != 1 else ''}</div></div>
-<div class="k"><div class="r">Perdido no período</div><div class="v">{rs(r['perdido'])}</div><div class="n">{pc(r['perc_perdido'])} do faturado</div></div>
-<div class="k"><div class="r">Faturamento {br(d['inicio'])[:5]} a {br(d['fim'])[:5]}</div><div class="v">{rs(r['faturamento'])}</div><div class="n">Mesmos dias de {esc(d['mes_anterior'])}: {rs(r['faturamento_ant'])}</div></div>
+<div class="k"><div class="r">Perdido no período</div><div class="v">{rs(r['perdido'])}</div><div class="n">{k_perdido}</div></div>
+{k_terceiro}
 <div class="k"><div class="r">Anúncios zerados agora</div><div class="v">{r['zerados']}</div><div class="n">{rs(r['perda_dia'])} perdidos por dia</div></div>
 </div>
 <div class="d2">
-<div><h2>Faturamento por canal</h2><table><tr><th>Canal</th><th class="n">{esc(d['mes'].split()[0].title())}</th><th class="n">{esc(d['mes_anterior'].title())}</th><th class="n">Variação</th></tr>{cs}</table>
+<div>{b_canal}
 <h2 style="margin-top:2mm">Perda por dia em cada semana (ML)</h2>{sem or '<p class="vz">Sem perda medida.</p>'}</div>
 <div><h2>Marcas com mais ruptura</h2>{mar or '<p class="vz">Sem perda medida.</p>'}{frase}</div>
 </div>
@@ -34323,6 +34349,7 @@ def _xlsx_abas(abas: list[tuple[str, list[list[tuple[Any, int]]]]], larguras: li
         usados.add(n.upper())
         nomes.append(n)
     sheets = []
+    filtros: list[str] = []
     for nome_aba, linhas in abas:
         op = (opcoes or {}).get(nome_aba) or {}
         rows_xml = ['<row r="%d">%s</row>' % (ri, "".join(cell(ci, ri, v, st) for ci, (v, st) in enumerate(cs)))
@@ -34333,10 +34360,13 @@ def _xlsx_abas(abas: list[tuple[str, list[list[tuple[Any, int]]]]], larguras: li
         if op.get("congelar"):
             k = int(op["congelar"])
             vista = ('<sheetViews><sheetView workbookViewId="0"><pane ySplit="%d" topLeftCell="A%d" activePane="bottomLeft" '
-                     'state="frozen"/></sheetView></sheetViews>' % (k, k + 1))
-        if op.get("filtro"):
+                     'state="frozen"/><selection pane="bottomLeft" activeCell="A%d" sqref="A%d"/></sheetView></sheetViews>'
+                     % (k, k + 1, k + 1, k + 1))
+        if op.get("filtro") and op["filtro"][2] > op["filtro"][0]:  # lista vazia não tem filtro
             lin, ncol, ult = op["filtro"]
             filtro = '<autoFilter ref="A%d:%s%d"/>' % (lin, _xlsx_col(ncol - 1), ult)
+            filtros.append('<definedName name="_xlnm._FilterDatabase" localSheetId="%d" hidden="1">\'%s\'!$A$%d:$%s$%d</definedName>'
+                           % (len(sheets), esc(nomes[len(sheets)]), lin, _xlsx_col(ncol - 1), ult))
         sheets.append('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
                       '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">'
                       '%s<cols>%s</cols><sheetData>%s</sheetData>%s</worksheet>' % (vista, cols, "".join(rows_xml), filtro))
@@ -34376,7 +34406,7 @@ def _xlsx_abas(abas: list[tuple[str, list[list[tuple[Any, int]]]]], larguras: li
           '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
           'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>'
           + "".join('<sheet name="%s" sheetId="%d" r:id="rId%d"/>' % (esc(n), i + 1, i + 1) for i, n in enumerate(nomes))
-          + '</sheets></workbook>')
+          + '</sheets>' + ('<definedNames>%s</definedNames>' % "".join(filtros) if filtros else '') + '</workbook>')
     wbrels = ('<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
               '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
               + "".join('<Relationship Id="rId%d" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet%d.xml"/>' % (i + 1, i + 1)
@@ -36145,10 +36175,11 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/ruptura/a4":
             # V20.05: a folha A4 do relatório. Somente leitura, abre em aba nova para imprimir.
-            if self.auth(admin_only=True, compras_ok=True) is None:
+            ctx = self.auth(admin_only=True, compras_ok=True)
+            if ctx is None:
                 return
             try:
-                self.send_page_html(ruptura_a4_html())
+                self.send_page_html(ruptura_a4_html(sem_faturamento=str(ctx.get("app_role") or "") == "compras"))
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
             return
