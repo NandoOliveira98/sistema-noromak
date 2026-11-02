@@ -16630,16 +16630,24 @@ def _exp_em_paralelo(tarefas: list[Any]) -> list[Any]:
 def _exp_nome_abreviado(nome: Any) -> bool:
     """V20.09: sobrenome de uma letra no fim ("NAYARA C"). "MARIA E SILVA" não é abreviado.
     V20.10: uma palavra só ("JEOACAZ") também não identifica a pessoa."""
-    palavras = re.findall(r"[A-Z]+", _exp_limpo(nome))
-    return len(palavras) == 1 or (len(palavras) >= 2 and len(palavras[-1]) == 1)
+    limpo = _exp_limpo(nome)
+    if len(limpo.split()) == 1:   # pelos espaços: "ANA-PAULA" é uma palavra só
+        return True
+    palavras = re.findall(r"[A-Z]+", limpo)
+    return len(palavras) >= 2 and len(palavras[-1]) == 1
 
 
 def _exp_nome_encurta(novo: Any, atual: Any) -> bool:
     """V20.09: "NAYARA C" por cima de "NAYARA CRISTINA SOUZA" só perderia o nome completo."""
     n, a = re.findall(r"[A-Z]+", _exp_limpo(novo)), re.findall(r"[A-Z]+", _exp_limpo(atual))
-    if not _exp_nome_abreviado(novo) or len(a) < 2 or n[0] != a[0] or not set(n[:-1]) <= set(a):
+    if not _exp_nome_abreviado(novo) or len(a) < 2:
         return False
-    return len(n) == 1 or any(len(p) > 1 and p[0] == n[-1] for p in a[1:])
+    # V20.10: uma palavra nunca troca nome de duas ou mais; o campo da Shopee é o destinatário ("Portaria").
+    if len(_exp_limpo(novo).split()) == 1:
+        return True
+    if n[0] != a[0] or not set(n[:-1]) <= set(a):
+        return False
+    return any(len(p) > 1 and p[0] == n[-1] for p in a[1:])
 
 
 def exp_romaneio_preparar(pedido: str, atendimento: Any = "", cliente: Any = "") -> dict[str, Any]:

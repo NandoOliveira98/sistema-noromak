@@ -698,8 +698,28 @@ class NomeUnicoShopeeV2010(unittest.TestCase):
         self.assertNotIn("nome", porta.corpo("cliente/atualizar"))
         self.assertTrue(any("JEOACAZ SOUZA LIMA" in a for a in r["avisos"]), r["avisos"])
 
-    def test_nome_de_outra_pessoa_no_apollo_segue_a_shopee(self):
-        porta = PortaNomeAbreviado("PREMIUM FLEX")
+    def test_uma_palavra_nunca_troca_nome_de_duas_ou_mais(self):
+        # Revisão de 02/11: o campo é o destinatário ("Portaria") e o nome pode não ser o primeiro.
+        for nome_apollo, nome in (("JOSE JEOACAZ LIMA", "Jeoacaz"), ("CARLOS ALBERTO SOUZA", "Portaria"),
+                                  ("PREMIUM FLEX", "Jeoacaz")):
+            reiniciar_banco()
+            porta = PortaNomeAbreviado(nome_apollo)
+            r = self.cadastrar(porta, nome=nome)
+            self.assertTrue(r["ok"], r)
+            self.assertNotIn("nome", porta.corpo("cliente/atualizar"), nome_apollo)
+            self.assertTrue(any(nome_apollo in a for a in r["avisos"]), r["avisos"])
+
+    def test_hifen_e_apostrofo_contam_como_uma_palavra(self):
+        for nome, nome_apollo in (("Ana-Paula", "ANA PAULA SILVA"), ("D'Arc", "JOANA D ARC")):
+            reiniciar_banco()
+            porta = PortaNomeAbreviado(nome_apollo)
+            self.cadastrar(porta, nome=nome)
+            self.assertNotIn("nome", porta.corpo("cliente/atualizar"), nome)
+        self.assertTrue(S._exp_nome_abreviado("ANA-PAULA"))
+        self.assertFalse(S._exp_nome_abreviado(""))
+
+    def test_nome_de_uma_palavra_no_apollo_pode_ser_trocado(self):
+        porta = PortaNomeAbreviado("CLIENTE")
         self.cadastrar(porta)
         self.assertEqual(porta.corpo("cliente/atualizar")["nome"], "JEOACAZ")
 
