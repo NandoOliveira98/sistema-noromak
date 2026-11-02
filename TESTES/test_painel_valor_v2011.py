@@ -68,10 +68,10 @@ class PainelValor(unittest.TestCase):
     def test_venda_fora_da_fila_tambem_nao_sai_com_conferido(self):
         # Revisão de 02/11: sem linha na fila o marketplace vinha vazio e a explicação sumia.
         _pedido(escrow=CUPOM_SHOPEE)
-        S.save_storage("conf_pedidos", [], "admin", force=True)
         p = self.porta(23.31)
-        self.assertEqual(S.exp_romaneio_soltar_painel(PEDIDO, "790955", "SHOPEE", "luis", valor_conferido=True)["situacao"],
-                         "valor_diferente")
+        with mock.patch.object(S, "_linhas_do_pedido", return_value=[]):
+            r = S.exp_romaneio_soltar_painel(PEDIDO, "790955", "SHOPEE", "luis", valor_conferido=True)
+        self.assertEqual(r.get("situacao"), "valor_diferente", r)
         self.assertNotIn("romaneio/soltar", p.rotas())
 
     def previa(self, valor, **kw):
