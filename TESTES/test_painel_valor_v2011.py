@@ -57,6 +57,61 @@ class PainelValor(unittest.TestCase):
         self.assertTrue(self.soltar(valor_conferido=True)["ok"])
         self.assertIn("romaneio/soltar", p.rotas())
 
+    def test_diferenca_explicada_nao_solta_nem_com_conferido(self):
+        # Revisão de 02/11: Linx fechado virava "Conferi" e o romaneio saía com o valor errado.
+        _pedido(escrow=CUPOM_SHOPEE)
+        p = self.porta(23.31)
+        r = self.soltar(valor_conferido=True)
+        self.assertEqual(r["situacao"], "valor_diferente")
+        self.assertNotIn("romaneio/soltar", p.rotas())
+
+    def previa(self, valor, **kw):
+        volta = {"ok": True, "pode": True, "atendimento": "790955", "cliente": "83020", "valor": valor, "impedimentos": [], "falhas": []}
+        with mock.patch.object(S, "exp_caixa_previa", return_value=volta) as m:
+            r = S.exp_caixa_previa_painel(PEDIDO, "790955", "83020", "luis", **kw)
+        return r, m
+
+    def test_caixa_com_valor_diferente_pede_conferencia(self):
+        _pedido(escrow=CUPOM_SHOPEE)
+        r, _ = self.previa(23.31)
+        self.assertFalse(r["pode"])
+        self.assertTrue(r["valor_diferente"])
+        self.assertIn("23,31", r["impedimentos"][0])
+        self.assertTrue(self.previa(23.31, valor_conferido=True)[0]["pode"])
+
+    def test_caixa_com_valor_certo_passa(self):
+        _pedido(escrow=CUPOM_SHOPEE)
+        self.assertTrue(self.previa(25.9)[0]["pode"])
+
+    def test_caixa_recusa_com_correcao_aberta_sem_ir_ao_apollo(self):
+        _pedido(escrow=CUPOM_SHOPEE)
+        self.porta(23.31)
+        S.exp_valor_reservar(PEDIDO, "790955", "luis")
+        r, m = self.previa(25.9, valor_conferido=True)
+        self.assertEqual(r["situacao"], "em_correcao")
+        m.assert_not_called()
+        with mock.patch.object(S, "exp_caixa_enviar") as e:
+            r = S.exp_caixa_enviar_painel(PEDIDO, "790955", "83020", 25.9, "luis", valor_conferido=True)
+        self.assertEqual(r["situacao"], "em_correcao")
+        e.assert_not_called()
+
+    def test_envio_ao_caixa_confere_o_valor_visto(self):
+        _pedido(escrow=CUPOM_SHOPEE)
+        with mock.patch.object(S, "exp_caixa_enviar", return_value={"ok": True}) as e:
+            r = S.exp_caixa_enviar_painel(PEDIDO, "790955", "83020", 23.31, "luis")
+            self.assertEqual(r["situacao"], "valor_diferente")
+            e.assert_not_called()
+            self.assertTrue(S.exp_caixa_enviar_painel(PEDIDO, "790955", "83020", 23.31, "luis", valor_conferido=True)["ok"])
+            self.assertTrue(S.exp_caixa_enviar_painel(PEDIDO, "790955", "83020", 25.9, "luis")["ok"])
+
+    def test_liberar_solta_a_reserva_de_pedido_fora_da_fila(self):
+        _pedido(escrow=CUPOM_SHOPEE)
+        self.porta(23.31)
+        S.exp_valor_reservar(PEDIDO, "790955", "luis")
+        S.save_storage("conf_pedidos", [], "admin", force=True)
+        self.assertTrue(S.faturamento_correcao_liberar(PEDIDO, "luis")["ok"])
+        self.assertIsNone(S._faturamento_correcao_ler(S.normalize(PEDIDO)))
+
     def test_venda_sem_valor_nao_trava(self):
         _pedido(escrow=None)
         with S.DB_LOCK:

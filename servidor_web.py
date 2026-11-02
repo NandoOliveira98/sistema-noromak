@@ -19833,7 +19833,7 @@ def exp_romaneio_soltar_painel(pedido: str, atendimento: Any, observacao: str, u
         atual, valor = c["atual"], c["valor"]
         explicacao = (c["a"] or {}).get("valor_explicacao") or ""
         if valor is not None and (atual is None or abs(float(valor) - float(atual)) > 0.009):
-            if not valor_conferido:
+            if explicacao or not valor_conferido:   # diferença explicada corrige, nunca sai com "conferi"
                 texto = "não informado pelo Apollo" if atual is None else f"R$ {float(atual):.2f}".replace(".", ",")
                 base = f"Valor diferente: venda R$ {float(valor):.2f}".replace(".", ",") + f" × atendimento {texto}"
                 return {"ok": False, "situacao": "valor_diferente", "explicada": bool(explicacao),
@@ -19841,6 +19841,58 @@ def exp_romaneio_soltar_painel(pedido: str, atendimento: Any, observacao: str, u
                                          if explicacao else ", sem explicação. Confira no Apollo.")}
             audit(usuario or "?", "expedicao.romaneio_valor_conferido", f"{pedido}|{numero}|{valor}|{atual}")
     return exp_romaneio_soltar(pedido, numero or atendimento, observacao, usuario)
+
+
+def _exp_correcao_aberta(pedido: str) -> str:
+    r = _faturamento_correcao_ler(normalize(pedido))
+    return (f"Correção do valor em andamento ou pela metade ({r['usuario']}, {str(r['em'])[11:16]}): "
+            f"confira o atendimento no Linx e libere antes do caixa.") if r else ""
+
+
+def _reais_br(valor: Any) -> str:
+    return f"R$ {float(valor):.2f}".replace(".", ",")
+
+
+def _exp_caixa_valor_diferente(pedido: str, valor_apollo: Any) -> str:
+    """V20.11: mesma barreira do lote (faturamento_classificar). Venda sem valor sincronizado não trava."""
+    venda = _exp_valor_pedido(pedido)
+    if venda is None:
+        return ""
+    try:
+        atual = float(valor_apollo)
+    except (TypeError, ValueError):
+        return f"O Apollo não informou o valor do atendimento e a venda é {_reais_br(venda)}: confira antes do caixa."
+    if abs(float(venda) - atual) <= 0.009:
+        return ""
+    return f"Valor diferente: venda {_reais_br(venda)} × atendimento {_reais_br(atual)}. Acerte no Linx ou confirme que conferiu."
+
+
+def exp_caixa_previa_painel(pedido: str, atendimento: Any, cliente: Any, usuario: str,
+                            valor_conferido: bool = False) -> dict[str, Any]:
+    aberta = _exp_correcao_aberta(pedido)
+    if aberta:
+        return {"ok": False, "situacao": "em_correcao", "error": aberta}
+    p = exp_caixa_previa(pedido, atendimento, cliente, usuario)
+    if not p.get("pode") or valor_conferido:
+        return p
+    motivo = _exp_caixa_valor_diferente(pedido, p.get("valor"))
+    if motivo:
+        return {**p, "pode": False, "valor_diferente": True, "impedimentos": list(p.get("impedimentos") or []) + [motivo]}
+    return p
+
+
+def exp_caixa_enviar_painel(pedido: str, atendimento: Any, cliente: Any, valor_visto: Any, usuario: str,
+                            conferido: bool = False, valor_conferido: bool = False) -> dict[str, Any]:
+    aberta = _exp_correcao_aberta(pedido)
+    if aberta:
+        return {"ok": False, "situacao": "em_correcao", "error": aberta}
+    motivo = _exp_caixa_valor_diferente(pedido, valor_visto)
+    if motivo and not valor_conferido:
+        return {"ok": False, "situacao": "valor_diferente", "error": motivo}
+    r = exp_caixa_enviar(pedido, atendimento, cliente, valor_visto, usuario, conferido=conferido)
+    if motivo and r.get("ok"):
+        audit(usuario or "?", "expedicao.caixa_valor_conferido", f"{pedido}|{atendimento}|{valor_visto}")
+    return r
 
 
 def exp_valor_reservar(pedido: str, atendimento: Any, usuario: str) -> dict[str, Any]:
@@ -37092,7 +37144,8 @@ class AppHandler(BaseHTTPRequestHandler):
         # V19.30: romaneio, caixa e cadastro pela porta da Expedição (Admin e Supervisor).
         if path in ("/api/expedicao-apollo/romaneio/soltar", "/api/expedicao-apollo/caixa/previa",
                     "/api/expedicao-apollo/caixa/enviar", "/api/expedicao-apollo/cadastro",
-                    "/api/expedicao-apollo/valor/reservar", "/api/expedicao-apollo/valor/concluir"):
+                    "/api/expedicao-apollo/valor/reservar", "/api/expedicao-apollo/valor/concluir",
+                    "/api/expedicao-apollo/valor/liberar"):
             ctx = self.auth(admin_only=True)
             if ctx is None:
                 return
@@ -37107,11 +37160,15 @@ class AppHandler(BaseHTTPRequestHandler):
                     resultado = exp_valor_reservar(pedido, body.get("atendimento"), usuario)
                 elif path.endswith("/valor/concluir"):
                     resultado = faturamento_correcao_concluir(pedido, str(body.get("trava") or ""), usuario)
+                elif path.endswith("/valor/liberar"):   # pedido fora da fila não aparece no Faturamento
+                    resultado = faturamento_correcao_liberar(pedido, usuario)
                 elif path.endswith("/caixa/previa"):
-                    resultado = exp_caixa_previa(pedido, body.get("atendimento"), body.get("cliente"), usuario)
+                    resultado = exp_caixa_previa_painel(pedido, body.get("atendimento"), body.get("cliente"), usuario,
+                                                        valor_conferido=body.get("valor_conferido") is True)
                 elif path.endswith("/caixa/enviar"):
-                    resultado = exp_caixa_enviar(pedido, body.get("atendimento"), body.get("cliente"),
-                                                 body.get("valor_visto"), usuario, conferido=body.get("conferido") is True)
+                    resultado = exp_caixa_enviar_painel(pedido, body.get("atendimento"), body.get("cliente"),
+                                                        body.get("valor_visto"), usuario, conferido=body.get("conferido") is True,
+                                                        valor_conferido=body.get("valor_conferido") is True)
                 else:
                     # V19.32: a extensão manda o nome/CPF de "Dados para a NF-e" lidos na
                     # página da venda (a API do ML bloqueia esse dado): guarda antes.

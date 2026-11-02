@@ -5070,32 +5070,34 @@ async function pdExpSoltarV1930(btn){
     pdExpMsgV1930("❌ "+htmlSeguroBanco(e.message));btn.disabled=false;
   }
 }
-async function pdExpPreviaV1930(btn){
+async function pdExpPreviaV1930(btn,valorConferido){
   const d=pdExpV1930;if(!d)return;
   const cli=String(document.getElementById("pdExpCliV1930")?.value||"").replace(/\D/g,"");
   if(!cli){pdExpMsgV1930("Informe o código do cliente no Apollo.");return;}
   const box=document.getElementById("pdExpPrevV1930");btn.disabled=true;pdExpMsgV1930("Conferindo no Apollo…");
   try{
-    const r=await pdExpApiV1930("caixa/previa",{method:"POST",body:JSON.stringify({pedido:d.pedido,cliente:cli,atendimento:(d.romaneio&&d.romaneio.contato)||d.romaneio_fora||""})});
+    const r=await pdExpApiV1930("caixa/previa",{method:"POST",body:JSON.stringify({pedido:d.pedido,cliente:cli,atendimento:(d.romaneio&&d.romaneio.contato)||d.romaneio_fora||"",valor_conferido:valorConferido===true})});
     // V19.34: um botão só (pedido do dono) — confere por trás e, passando, já pede a confirmação e envia.
     const esc=htmlSeguroBanco,valor=Number(r.valor||0);
     if(!r.pode){
+      // V20.11: valor diferente da venda só vai ao caixa com "conferi", como no lote.
+      if(r.valor_diferente&&await nkConfirmar(`${(r.impedimentos||[]).join("\n")}\n\nConferiu no Apollo e quer enviar com este valor?`))return pdExpPreviaV1930(btn,true);
       box.innerHTML=(r.impedimentos||[]).concat(r.falhas||[]).map(t=>`<div style="color:#8C1C13">⚠️ ${esc(t)}</div>`).join("");
       pdExpMsgV1930("O Apollo não aceitou: veja acima. Nada foi enviado.");return;
     }
     box.innerHTML="";pdExpMsgV1930("");
-    await pdExpEnviarV1930(btn,String(r.atendimento),String(r.cliente),valor);
+    await pdExpEnviarV1930(btn,String(r.atendimento),String(r.cliente),valor,valorConferido===true);
   }catch(e){pdExpMsgV1930("❌ "+htmlSeguroBanco(e.message));}
   finally{btn.disabled=false;}
 }
-async function pdExpEnviarV1930(btn,atendimento,cliente,valor){
+async function pdExpEnviarV1930(btn,atendimento,cliente,valor,valorConferido){
   const d=pdExpV1930;if(!d)return;
   const conf=document.getElementById("pdExpConfV1930");
   if(conf&&!conf.checked){pdExpMsgV1930("Confira no Apollo e marque a caixa antes de tentar de novo.");return;}
   if(!await nkConfirmar(`Enviar ao caixa?\n\nPedido ${d.pedido}\nAtendimento ${atendimento}\nValor R$ ${Number(valor).toFixed(2).replace(".",",")}\n\nVIRA NOTA FISCAL e não tem desfazer.`))return;
   btn.disabled=true;pdExpMsgV1930("Enviando ao caixa…");
   try{
-    const r=await pdExpApiV1930("caixa/enviar",{method:"POST",body:JSON.stringify({pedido:d.pedido,atendimento,cliente,valor_visto:valor,conferido:!!(conf&&conf.checked)})});
+    const r=await pdExpApiV1930("caixa/enviar",{method:"POST",body:JSON.stringify({pedido:d.pedido,atendimento,cliente,valor_visto:valor,conferido:!!(conf&&conf.checked),valor_conferido:valorConferido===true})});
     await pdExpCarregarV1930(d.pedido,null,"✅ "+htmlSeguroBanco(r.mensagem||"Enviado ao caixa."));
   }catch(e){
     try{await pdExpCarregarV1930(d.pedido,null,"❌ "+htmlSeguroBanco(e.message));}catch(_){pdExpMsgV1930("❌ "+htmlSeguroBanco(e.message));}
