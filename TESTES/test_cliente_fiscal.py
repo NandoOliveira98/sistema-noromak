@@ -193,6 +193,18 @@ class ClienteFiscalGuardado(TesteNoromak):
         status, corpo = self.guardar(nome="Observações")
         self.assertEqual(status, 400, corpo)
 
+    def test_aceita_nome_abreviado_da_nfe(self):
+        """V20.09: venda 2000019255236640 veio com "NAYARA C" e o cadastro não andava."""
+        status, corpo = self.guardar(nome="NAYARA C")
+        self.assertEqual(status, 200, corpo)
+        _, corpo = self.cliente.pedir("GET", "/api/cliente-fiscal/lista")
+        self.assertEqual(corpo["clientes"]["2000018514706508"]["nome_fiscal"], "NAYARA C")
+
+    def test_nome_de_uma_palavra_ou_so_de_iniciais_continua_recusado(self):
+        for nome in ("NAYARA", "A B C", "R 203"):
+            status, corpo = self.guardar(nome=nome)
+            self.assertEqual(status, 400, f"{nome}: {corpo}")
+
     def test_recusa_cpf_invalido(self):
         status, _ = self.guardar(documento="123")
         self.assertEqual(status, 400)

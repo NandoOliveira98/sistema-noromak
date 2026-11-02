@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.08-TIKTOK-SKU-CORTADO"
+APP_VERSION = "20.09-NOME-NFE-ABREVIADO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -15233,12 +15233,13 @@ def _ml_billing_do_pedido(order_id: str) -> dict[str, Any]:
 
 def _nome_fiscal_valido(nome: str) -> bool:
     """Pelo menos duas palavras e quase sem número. Barra texto de tela lido
-    por engano (a extensão já pegou "Observações" uma vez, em 18/09/2026)."""
+    por engano (a extensão já pegou "Observações" uma vez, em 18/09/2026).
+    V20.09: o sobrenome pode vir abreviado na NF-e ("NAYARA C"); uma palavra precisa ter 2+ letras."""
     nome = str(nome or "").strip()
     if not (5 <= len(nome) <= 150) or len(re.findall(r"\d", nome)) > 2:
         return False
-    palavras = [p for p in nome.split() if re.search(r"[A-Za-zÀ-ÿ]{2,}", p)]
-    return len(palavras) >= 2
+    palavras = [p for p in nome.split() if re.search(r"[A-Za-zÀ-ÿ]", p)]
+    return len(palavras) >= 2 and any(re.search(r"[A-Za-zÀ-ÿ]{2,}", p) for p in palavras)
 
 
 def salvar_cliente_fiscal(pedido: str, documento: str, nome: str, *, linx_cliente: str = "",

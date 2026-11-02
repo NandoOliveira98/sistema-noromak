@@ -318,10 +318,10 @@ class MesEmAndamento(MesAtual):
         self.assertEqual(x["linx_canais"]["oficina"], 1)
 
     def test_mes_fraco_derruba_a_media(self):
-        self.mes("0893600022", 1, balcao=1)
+        self.mes("0893600022", 1)        # V20.09: mês zerado; com 1 unidade o teste falhava nos dias 1 a 3
         self.ler()
         x = self.item("0893600022", dias=30)
-        self.assertAlmostEqual(x["linx_media_dia"], 11 / (30.4375 + self.hoje.day), places=3)
+        self.assertAlmostEqual(x["linx_media_dia"], 10 / (30.4375 + self.hoje.day), places=3)
         self.assertLess(x["linx_media_dia"], 10 / 30.4375)
 
     def test_filial_sem_linha_no_mes_conta_zero(self):
