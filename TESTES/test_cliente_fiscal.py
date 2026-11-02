@@ -201,7 +201,7 @@ class ClienteFiscalGuardado(TesteNoromak):
         self.assertEqual(corpo["clientes"]["2000018514706508"]["nome_fiscal"], "NAYARA C")
 
     def test_nome_de_uma_palavra_ou_so_de_iniciais_continua_recusado(self):
-        for nome in ("NAYARA", "A B C", "R 203"):
+        for nome in ("NAYARA", "A B C", "R 203", "NAYARA C***", "JOAO S*"):
             status, corpo = self.guardar(nome=nome)
             self.assertEqual(status, 400, f"{nome}: {corpo}")
 

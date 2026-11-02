@@ -293,6 +293,78 @@ class CadastroPelaPorta(unittest.TestCase):
         self.assertEqual(porta.corpo("cliente/credito")["situacao_credito"], "1")
 
 
+class PortaNomeAbreviado(PortaFalsa):
+    def __init__(self, nome_apollo, **kw):
+        super().__init__(**kw)
+        self.nome_apollo = nome_apollo
+        self.buscar = {"ok": True, "situacao": "encontrado", "cliente": 83020, "nome": nome_apollo}
+
+    def __call__(self, rota, corpo, escrita=False):
+        r = super().__call__(rota, corpo, escrita)
+        return {**r, "nome": self.nome_apollo} if rota == "cliente/situacao" else r
+
+
+class NomeAbreviadoV2009(unittest.TestCase):
+    """V20.09: nome da NF-e abreviado ("NAYARA C", venda 2000019255236640). Revisão de 02/11."""
+
+    def setUp(self):
+        reiniciar_banco()
+
+    def cadastrar(self, porta, **kw):
+        _pedido_com_cliente(nome=kw.pop("nome", "NAYARA C"), **kw)
+        with mock.patch.object(S, "_exp_porta", side_effect=porta), mock.patch.object(S, "EXP_CADASTRO_API", True):
+            return S.exp_cadastro_atualizar(PEDIDO, "luis")
+
+    def test_nao_encurta_o_nome_completo_do_apollo(self):
+        porta = PortaNomeAbreviado("NAYARA CRISTINA SOUZA")
+        r = self.cadastrar(porta)
+        self.assertTrue(r["ok"], r)
+        self.assertNotIn("nome", porta.corpo("cliente/atualizar"))
+        self.assertIn("email", porta.corpo("cliente/atualizar"))
+        self.assertTrue(any("NAYARA CRISTINA SOUZA" in a for a in r["avisos"]), r["avisos"])
+
+    def test_nao_encurta_tambem_sem_o_codigo_guardado(self):
+        porta = PortaNomeAbreviado("NAYARA CRISTINA SOUZA")
+        self.cadastrar(porta, codigo="")
+        self.assertNotIn("nome", porta.corpo("cliente/atualizar"))
+
+    def test_nome_de_outra_pessoa_no_apollo_segue_a_nfe(self):
+        porta = PortaNomeAbreviado("PREMIUM FLEX")
+        self.cadastrar(porta)
+        self.assertEqual(porta.corpo("cliente/atualizar")["nome"], "NAYARA C")
+
+    def test_nome_completo_nao_gasta_chamada_de_busca(self):
+        porta = PortaFalsa()
+        self.cadastrar(porta, nome="Thaynara Cristina Silva")
+        self.assertNotIn("cliente/buscar", porta.rotas())
+
+    def test_nome_abreviado_no_apollo_nao_escolhe_o_atendimento_sozinho(self):
+        _pedido_com_cliente(nome="NAYARA C")
+        porta = PortaNomeAbreviado("NAYARA C")
+        with mock.patch.object(S, "_exp_porta", side_effect=porta):
+            d = S.exp_romaneio_preparar(PEDIDO)
+        self.assertEqual(d["escolhido"], "")
+        self.assertEqual(d["situacao"], "escolher")
+        self.assertTrue(d["nome_abreviado"])
+
+    def test_nome_completo_no_apollo_continua_escolhendo(self):
+        _pedido_com_cliente(nome="NAYARA C")
+        porta = PortaNomeAbreviado("NAYARA CRISTINA SOUZA")
+        with mock.patch.object(S, "_exp_porta", side_effect=porta):
+            self.assertEqual(S.exp_romaneio_preparar(PEDIDO)["escolhido"], "787601")
+
+    def test_faturamento_manda_o_nome_abreviado_para_a_atencao(self):
+        base = {"nome_abreviado": True, "cadastro": {}, "credito": {"veredito": "consultar"}}
+        cand = {"atendimento": "787601", "valor": 25.9, "bate": 1, "faltam": []}
+        with mock.patch.object(S, "_exp_estado_operacoes", return_value={"romaneio": None, "caixa": None}):
+            r = S.faturamento_classificar(PEDIDO, {**base, "candidatos": [{**cand, "total_a_soltar": 1}]}, 25.9)
+            self.assertEqual(r["situacao"], "atencao")
+            self.assertIn("abreviado", r["motivo"])
+            r = S.faturamento_classificar(PEDIDO, {**base, "romaneio_fora": "787601",
+                                                   "candidatos": [{**cand, "total_a_soltar": 0}]}, 25.9)
+            self.assertEqual(r["situacao"], "atencao")
+
+
 ENVIO_ML = {"receiver_address": {
     "street_name": "Avenida Maranhão", "street_number": "915", "comment": "Casa 2",
     "neighborhood": {"name": "Zona 01"}, "zip_code": "86870-250",

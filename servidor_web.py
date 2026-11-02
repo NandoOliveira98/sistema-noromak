@@ -15234,9 +15234,10 @@ def _ml_billing_do_pedido(order_id: str) -> dict[str, Any]:
 def _nome_fiscal_valido(nome: str) -> bool:
     """Pelo menos duas palavras e quase sem número. Barra texto de tela lido
     por engano (a extensão já pegou "Observações" uma vez, em 18/09/2026).
-    V20.09: o sobrenome pode vir abreviado na NF-e ("NAYARA C"); uma palavra precisa ter 2+ letras."""
+    V20.09: o sobrenome pode vir abreviado na NF-e ("NAYARA C"); uma palavra precisa ter 2+ letras.
+    Asterisco é nome mascarado, não abreviado."""
     nome = str(nome or "").strip()
-    if not (5 <= len(nome) <= 150) or len(re.findall(r"\d", nome)) > 2:
+    if not (5 <= len(nome) <= 150) or len(re.findall(r"\d", nome)) > 2 or "*" in nome:
         return False
     palavras = [p for p in nome.split() if re.search(r"[A-Za-zÀ-ÿ]", p)]
     return len(palavras) >= 2 and any(re.search(r"[A-Za-zÀ-ÿ]{2,}", p) for p in palavras)
@@ -16615,6 +16616,20 @@ def _exp_em_paralelo(tarefas: list[Any]) -> list[Any]:
         return [f.result() for f in futuros]
 
 
+def _exp_nome_abreviado(nome: Any) -> bool:
+    """V20.09: sobrenome de uma letra no fim ("NAYARA C"). "MARIA E SILVA" não é abreviado."""
+    palavras = re.findall(r"[A-Z]+", _exp_limpo(nome))
+    return len(palavras) >= 2 and len(palavras[-1]) == 1
+
+
+def _exp_nome_encurta(novo: Any, atual: Any) -> bool:
+    """V20.09: "NAYARA C" por cima de "NAYARA CRISTINA SOUZA" só perderia o nome completo."""
+    n, a = re.findall(r"[A-Z]+", _exp_limpo(novo)), re.findall(r"[A-Z]+", _exp_limpo(atual))
+    if not _exp_nome_abreviado(novo) or len(a) < 2 or n[0] != a[0] or not set(n[:-1]) <= set(a):
+        return False
+    return any(len(p) > 1 and p[0] == n[-1] for p in a[1:])
+
+
 def exp_romaneio_preparar(pedido: str, atendimento: Any = "", cliente: Any = "") -> dict[str, Any]:
     """Mostra o que o botão do romaneio faria. Só leitura no Apollo."""
     pedido = str(pedido or "").strip()
@@ -16630,7 +16645,8 @@ def exp_romaneio_preparar(pedido: str, atendimento: Any = "", cliente: Any = "")
         "ok": True, "pedido": pedido, "marketplace": marketplace, "no_noromak": bool(linhas),
         "cliente": {"codigo": codigo, "documento": conhecido["documento"], "nome_fiscal": conhecido["nome_fiscal"],
                     "nome_apollo": ""},
-        "precisa_condicao": True, "candidatos": [], "escolhido": "", **_exp_estado_operacoes(pedido),
+        "precisa_condicao": True, "candidatos": [], "escolhido": "", "nome_abreviado": False,
+        **_exp_estado_operacoes(pedido),
         "cadastro_auto": cadastro_auto_do_pedido(pedido),  # V19.41
         # V20.00: a extensão compara com o atendimento ("≠"); sem isto o romaneio era solto sem ver
         # a diferença e a correção do valor (Faturamento, V19.99) só vale antes de soltar. Sem venda = None.
@@ -16736,9 +16752,12 @@ def exp_romaneio_preparar(pedido: str, atendimento: Any = "", cliente: Any = "")
     soltar = [c for c in saida["candidatos"] if c["total_a_soltar"]]
     # V19.30 (decisão do dono): escolhe sozinho só um atendimento, com peças batendo
     # (ou o número digitado); senão quem escolhe é a pessoa.
+    # V20.09: a busca é pelo nome; com sobrenome de uma letra pode vir outra pessoa, a pessoa confere.
+    saida["nome_abreviado"] = _exp_nome_abreviado(saida["cliente"]["nome_apollo"] or conhecido["nome_fiscal"])
     if numero and soltar:
         saida["escolhido"] = soltar[0]["atendimento"]
-    elif len(soltar) == 1 and (soltar[0]["bate"] or not codigos) and not soltar[0]["faltam"]:
+    elif (len(soltar) == 1 and (soltar[0]["bate"] or not codigos) and not soltar[0]["faltam"]
+          and not saida["nome_abreviado"]):
         saida["escolhido"] = soltar[0]["atendimento"]
     if not saida["candidatos"]:
         return {**saida, "situacao": "sem_atendimento", "aviso": "Nenhum atendimento aberto para este cliente no Apollo."}
@@ -17096,12 +17115,16 @@ def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "", ie: Any
     elif end.get("bairro_padrao"):
         avisos.append(f"Bairro gravado como {EXP_BAIRRO_PADRAO_SHOPEE}: a Shopee não informa o bairro.")
     criado = False
+    nome_apollo = ""
     with EXP_PORTA_LOCK:
         try:
+            if codigo and _exp_nome_abreviado(nome_limpo):   # V20.09: só o nome abreviado gasta a busca
+                nome_apollo = exp_buscar_cliente(documento, operador)["nome"]
             if not codigo:
                 b = exp_buscar_cliente(documento, operador)
                 if b["situacao"] == "encontrado" and b["cliente"]:
                     codigo = b["cliente"]
+                    nome_apollo = b["nome"]
                 elif b["situacao"] == "mais_de_um":
                     return {"ok": False, "situacao": "mais_de_um", "lista": b["lista"],
                             "error": "Mais de um cliente com este CPF/CNPJ no Apollo: informe o código certo."}
@@ -17131,7 +17154,9 @@ def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "", ie: Any
             base = {"revenda": EXP_REVENDA, "cliente": int(codigo), "documento": documento, "operador": operador}
             corpo = {**base, "email": LINX_CADASTRO_EMAIL, "ddd_telefone": LINX_CADASTRO_DDD,
                      "telefone": LINX_CADASTRO_TELEFONE, "ddd_celular": LINX_CADASTRO_DDD, "celular": EXP_CELULAR_PADRAO}
-            if nome_limpo:
+            if _exp_nome_encurta(nome_limpo, nome_apollo):
+                avisos.append(f'Nome mantido no Apollo: {" ".join(_exp_limpo(nome_apollo).split())} (a NF-e veio abreviada).')
+            elif nome_limpo:
                 corpo["nome"] = nome_limpo
             if endereco:
                 corpo["endereco"] = endereco
@@ -17478,6 +17503,9 @@ def faturamento_classificar(pedido: str, d: dict[str, Any], valor_pedido: float 
     cred = ((d.get("credito") or {}).get("situacao") or {}).get("codigo")
     if cred is not None and str(cred) not in ("0", "1"):
         return {**base, "situacao": "atencao", "motivo": "Crédito bloqueado no Apollo."}
+    # V20.09: atendimento achado por nome de uma letra pode ser de outra pessoa: nada de lote.
+    if d.get("nome_abreviado") and not d.get("romaneio"):
+        return {**base, "situacao": "atencao", "motivo": "Nome abreviado no Apollo: confira o cliente do atendimento no painel."}
     rom = d.get("romaneio") or ({"contato": d["romaneio_fora"]} if d.get("romaneio_fora") else None)
     if rom:
         a = next((c for c in d.get("candidatos") or [] if str(c.get("atendimento")) == str(rom.get("contato"))), {})
