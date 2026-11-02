@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.10-NOME-UNICO-SHOPEE"
+APP_VERSION = "20.11-VALOR-NO-PAINEL"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -19766,6 +19766,109 @@ def faturamento_correcao_liberar(pedido: str, usuario: str) -> dict[str, Any]:
     return {"ok": True}
 
 
+def _faturamento_correcao_reservar(pedido: str, usuario: str, atendimento: Any, certo: Any, atual: Any) -> str:
+    """A senha da reserva; vazio = outra pessoa já reservou."""
+    token = secrets.token_urlsafe(16)
+    with DB_LOCK:
+        cur = DB.execute(
+            "INSERT OR IGNORE INTO faturamento_correcao_v1999(order_key,pedido,token,usuario,epoch,em,atendimento,"
+            "valor_certo,valor_atual) VALUES(?,?,?,?,?,?,?,?,?)",
+            (normalize(pedido), pedido, token, usuario or "?", time.time(), now_iso(), str(atendimento), certo, atual))
+        DB.commit()
+    return token if cur.rowcount else ""
+
+
+def faturamento_correcao_concluir(pedido: str, trava: str, usuario: str) -> dict[str, Any]:
+    """V20.11: o painel devolve a senha (corrigido ou nada alterado). Quem confere o valor é a próxima
+    leitura do Apollo. Correção pela metade NÃO passa por aqui: fica reservada até o Liberar."""
+    chave = normalize(pedido)
+    r = _faturamento_correcao_ler(chave)
+    if not r or not trava or not secrets.compare_digest(str(r["token"]), str(trava)):
+        return {"ok": False, "error": "Nenhuma correção de valor com esta senha."}
+    with DB_LOCK:
+        DB.execute("DELETE FROM faturamento_correcao_v1999 WHERE order_key=?", (chave,))
+        DB.commit()
+    audit(usuario or "?", "faturamento.correcao_concluir", json.dumps({"pedido": pedido}))
+    return {"ok": True}
+
+
+# V20.11 (dono, 02/11): a correção do valor também pelo painel do pedido. Antes o painel só avisava e
+# soltava o romaneio com o valor errado, e romaneio solto com valor diferente sai da correção. Agora o
+# romaneio do painel confere o valor no servidor: diferença explicada corrige primeiro (mesma reserva e
+# mesma extensão do Faturamento); sem explicação ou sem valor do Apollo só sai com "conferi".
+def exp_romaneio_painel(pedido: str, atendimento: Any = "", cliente: Any = "") -> dict[str, Any]:
+    d = exp_romaneio_preparar(pedido, atendimento, cliente)
+    r = _faturamento_correcao_ler(normalize(pedido))
+    d["correcao_pendente"] = {"usuario": r["usuario"], "em": r["em"]} if r else None
+    valor = d.get("valor_pedido")
+    for a in d.get("candidatos") or []:
+        v = a.get("valor")
+        difere = valor is not None and v is not None and abs(float(valor) - float(v)) > 0.009
+        a["valor_explicacao"] = _faturamento_diferenca_explicada(
+            pedido, d.get("marketplace") or "", float(valor), float(v)) if difere else ""
+    return d
+
+
+def _exp_valor_conferir(pedido: str, numero: str) -> dict[str, Any]:
+    """O valor do atendimento agora. `atual` nulo = o Apollo não informou (nunca vira zero)."""
+    d = exp_romaneio_painel(pedido, numero)
+    a = next((c for c in d.get("candidatos") or [] if str(c.get("atendimento")) == numero), None)
+    falhou = not d.get("ok", True) or d.get("situacao") == "erro"
+    return {"a": a, "atual": a.get("valor") if a else None, "valor": d.get("valor_pedido"),
+            "erro": (d.get("error") or d.get("aviso") or "Apollo não respondeu.") if falhou else ""}
+
+
+def exp_romaneio_soltar_painel(pedido: str, atendimento: Any, observacao: str, usuario: str,
+                               valor_conferido: bool = False) -> dict[str, Any]:
+    pedido = str(pedido or "").strip()
+    numero = re.sub(r"\D", "", str(atendimento or ""))
+    r = _faturamento_correcao_ler(normalize(pedido))
+    if r:
+        return {"ok": False, "situacao": "em_correcao", "error": f"Correção do valor em andamento ou pela metade "
+                f"({r['usuario']}, {str(r['em'])[11:16]}). Confira o atendimento no Linx e use Liberar no Faturamento."}
+    if numero and _exp_valor_pedido(pedido) is not None:
+        c = _exp_valor_conferir(pedido, numero)
+        if c["erro"]:
+            return {"ok": False, "situacao": "erro", "error": c["erro"]}
+        atual, valor = c["atual"], c["valor"]
+        explicacao = (c["a"] or {}).get("valor_explicacao") or ""
+        if valor is not None and (atual is None or abs(float(valor) - float(atual)) > 0.009):
+            if not valor_conferido:
+                texto = "não informado pelo Apollo" if atual is None else f"R$ {float(atual):.2f}".replace(".", ",")
+                base = f"Valor diferente: venda R$ {float(valor):.2f}".replace(".", ",") + f" × atendimento {texto}"
+                return {"ok": False, "situacao": "valor_diferente", "explicada": bool(explicacao),
+                        "error": base + (". Corrija o valor antes de soltar (painel da venda ou tela Faturamento)."
+                                         if explicacao else ", sem explicação. Confira no Apollo.")}
+            audit(usuario or "?", "expedicao.romaneio_valor_conferido", f"{pedido}|{numero}|{valor}|{atual}")
+    return exp_romaneio_soltar(pedido, numero or atendimento, observacao, usuario)
+
+
+def exp_valor_reservar(pedido: str, atendimento: Any, usuario: str) -> dict[str, Any]:
+    """Painel: reserva a correção e devolve a senha. A extensão lê atendimento e valores pela senha."""
+    pedido = str(pedido or "").strip()
+    numero = re.sub(r"\D", "", str(atendimento or ""))
+    if not pedido or not numero:
+        return {"ok": False, "error": "Informe o pedido e o atendimento."}
+    if _faturamento_correcao_ler(normalize(pedido)):
+        return {"ok": False, "situacao": "em_correcao", "error": "Correção do valor em andamento ou pela metade."}
+    c = _exp_valor_conferir(pedido, numero)
+    a, valor = c["a"], c["valor"]
+    if c["erro"]:
+        return {"ok": False, "error": c["erro"]}
+    if not a or not a.get("total_a_soltar") or a.get("faltam") or not a.get("bate"):
+        return {"ok": False, "error": "Este atendimento não confere com o pedido: nada a corrigir."}
+    if valor is None or c["atual"] is None:
+        return {"ok": False, "error": "Sem o valor da venda ou do atendimento: confira no Apollo."}
+    if abs(float(valor) - float(c["atual"])) <= 0.009:
+        return {"ok": True, "ja_certo": True}
+    if not a.get("valor_explicacao"):
+        return {"ok": False, "error": "Diferença sem explicação: confira no Apollo."}
+    trava = _faturamento_correcao_reservar(pedido, usuario, numero, round(float(valor), 2), c["atual"])
+    if not trava:
+        return {"ok": False, "situacao": "em_correcao", "error": "Correção do valor em andamento. Aguarde."}
+    return {"ok": True, "trava": trava, "atendimento": numero, "valor_certo": round(float(valor), 2), "valor_atual": c["atual"]}
+
+
 def faturamento_executar(pedido: str, usuario: str, condicao_ok: bool = False, trava: str = "",
                          liberar: bool = False) -> dict[str, Any]:
     """Um pedido do lote: confere DE NOVO, solta o romaneio e envia ao caixa. Shopee/Magalu
@@ -19796,15 +19899,8 @@ def faturamento_executar(pedido: str, usuario: str, condicao_ok: bool = False, t
             return {"ok": False, "etapa": "preco", "error": f"Depois da correção o Apollo ainda mostra "
                     f"R$ {float(c.get('valor_atendimento') or 0):.2f} (venda R$ {float(c.get('valor_certo') or 0):.2f}). "
                     f"Confira no Linx.".replace(".", ",")}
-        token = secrets.token_urlsafe(16)
-        with DB_LOCK:
-            cur = DB.execute(
-                "INSERT OR IGNORE INTO faturamento_correcao_v1999(order_key,pedido,token,usuario,epoch,em,atendimento,"
-                "valor_certo,valor_atual) VALUES(?,?,?,?,?,?,?,?,?)",
-                (chave, pedido, token, usuario or "?", time.time(), now_iso(), c["atendimento"], c.get("valor_certo"),
-                 c.get("valor_atendimento")))
-            DB.commit()
-        if not cur.rowcount:   # outra aba reservou no meio da conferência
+        token = _faturamento_correcao_reservar(pedido, usuario, c["atendimento"], c.get("valor_certo"), c.get("valor_atendimento"))
+        if not token:   # outra aba reservou no meio da conferência
             return {"ok": False, "etapa": "preco", "error": "Correção do valor em andamento. Aguarde."}
         return {"ok": True, "etapa": "preco", "atendimento": c["atendimento"], "marketplace": mp, "trava": token,
                 "valor_certo": c.get("valor_certo"), "valor_atual": c.get("valor_atendimento")}
@@ -36631,7 +36727,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 return
             try:
                 q1 = lambda k: str((query.get(k) or [""])[0] or "")
-                resultado = exp_romaneio_preparar(q1("pedido"), q1("atendimento"), q1("cliente"))
+                resultado = exp_romaneio_painel(q1("pedido"), q1("atendimento"), q1("cliente"))
                 self.send_json(resultado, 200 if resultado.get("ok") else 400)
             except Exception as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 500)
@@ -36995,7 +37091,8 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         # V19.30: romaneio, caixa e cadastro pela porta da Expedição (Admin e Supervisor).
         if path in ("/api/expedicao-apollo/romaneio/soltar", "/api/expedicao-apollo/caixa/previa",
-                    "/api/expedicao-apollo/caixa/enviar", "/api/expedicao-apollo/cadastro"):
+                    "/api/expedicao-apollo/caixa/enviar", "/api/expedicao-apollo/cadastro",
+                    "/api/expedicao-apollo/valor/reservar", "/api/expedicao-apollo/valor/concluir"):
             ctx = self.auth(admin_only=True)
             if ctx is None:
                 return
@@ -37004,7 +37101,12 @@ class AppHandler(BaseHTTPRequestHandler):
                 usuario = str(ctx.get("username") or "")
                 pedido = str(body.get("pedido") or "")
                 if path.endswith("/romaneio/soltar"):
-                    resultado = exp_romaneio_soltar(pedido, body.get("atendimento"), str(body.get("observacao") or ""), usuario)
+                    resultado = exp_romaneio_soltar_painel(pedido, body.get("atendimento"), str(body.get("observacao") or ""),
+                                                           usuario, valor_conferido=body.get("valor_conferido") is True)
+                elif path.endswith("/valor/reservar"):   # V20.11
+                    resultado = exp_valor_reservar(pedido, body.get("atendimento"), usuario)
+                elif path.endswith("/valor/concluir"):
+                    resultado = faturamento_correcao_concluir(pedido, str(body.get("trava") or ""), usuario)
                 elif path.endswith("/caixa/previa"):
                     resultado = exp_caixa_previa(pedido, body.get("atendimento"), body.get("cliente"), usuario)
                 elif path.endswith("/caixa/enviar"):

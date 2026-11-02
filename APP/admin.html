@@ -5058,7 +5058,17 @@ async function pdExpSoltarV1930(btn){
   try{
     const r=await pdExpApiV1930("romaneio/soltar",{method:"POST",body:JSON.stringify({pedido:d.pedido,atendimento:sel.value,observacao:obs})});
     await pdExpCarregarV1930(d.pedido,null,"✅ "+htmlSeguroBanco((r.mensagens||[]).join(" ")||"Romaneio solto.")+" Agora o caixa.");
-  }catch(e){pdExpMsgV1930("❌ "+htmlSeguroBanco(e.message));btn.disabled=false;}
+  }catch(e){
+    // V20.11: valor diferente sem explicação só sai com "conferi"; a explicada corrige antes (painel da venda ou Faturamento).
+    if(/sem explicação/.test(e.message)&&await nkConfirmar(`${e.message}\n\nConferiu no Apollo e quer soltar com este valor?`)){
+      try{
+        const r=await pdExpApiV1930("romaneio/soltar",{method:"POST",body:JSON.stringify({pedido:d.pedido,atendimento:sel.value,observacao:obs,valor_conferido:true})});
+        await pdExpCarregarV1930(d.pedido,null,"✅ "+htmlSeguroBanco((r.mensagens||[]).join(" ")||"Romaneio solto.")+" Agora o caixa.");
+        return;
+      }catch(e2){pdExpMsgV1930("❌ "+htmlSeguroBanco(e2.message));btn.disabled=false;return;}
+    }
+    pdExpMsgV1930("❌ "+htmlSeguroBanco(e.message));btn.disabled=false;
+  }
 }
 async function pdExpPreviaV1930(btn){
   const d=pdExpV1930;if(!d)return;

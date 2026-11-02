@@ -1253,6 +1253,7 @@ as peças (seleção, kit, pesquisa) **antes** de excluir a primeira (`_preConfe
 venda ou sem valor = atenção (não vai ao caixa); atendimento sem valor = atenção. Prazo da tela: 10 min. Limite: a
 extensão chama o Noromak sem `www` (a correção pela tela aberta em `www.` volta "nada alterado").
 Teste: `TESTES/test_faturamento_valor_v1999.py`.
+**V20.11 — correção pelo painel do pedido** (dono, 02/11, Shopee 2610314H4FMAE7: romaneio solto com valor errado sai da correção). `exp_romaneio_soltar_painel` confere o valor no servidor antes de soltar: com diferença explicada volta `valor_diferente` (o painel troca o botão por "Corrigir valor", `POST /api/expedicao-apollo/valor/{reservar,concluir}`, mesma reserva e mesma extensão do Faturamento, 0.48); sem explicação ou sem valor do Apollo só sai com `valor_conferido` (caixa "Conferi", audit `expedicao.romaneio_valor_conferido`); reserva aberta bloqueia sempre. Venda sem valor sincronizado não trava. O lote não usa essa rota. Teste: `TESTES/test_painel_valor_v2011.py`.
 
 **V19.87 — Reemissão do romaneio na Conferência** (dono, 27/10). 247 de 247 romaneios soltos pela porta voltaram
 "Impressão enviada ... impressora 1", mas às vezes a folha não sai no estoque (percebido só no faturamento). Soltar de
