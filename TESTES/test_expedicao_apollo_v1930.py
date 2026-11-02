@@ -662,6 +662,78 @@ class Rotas(unittest.TestCase):
         self.assertNotIn("pdRomaneioLinxV1860(this)", html)
 
 
+class NomeUnicoShopeeV2010(unittest.TestCase):
+    """V20.10: a Shopee traz o nome inteiro numa palavra só (pedido 2610314H4FMAE7, "Jeoacaz")."""
+
+    def setUp(self):
+        reiniciar_banco()
+
+    def pedido(self, nome="Jeoacaz", marketplace="SHOPEE", documento="04756305563", codigo="83020"):
+        gravar_como_admin([linha(PEDIDO, "0893764272", Marketplace=marketplace)])
+        return S.salvar_cliente_fiscal(PEDIDO, documento, nome, linx_cliente=codigo, fonte="teste", usuario="teste")
+
+    def cadastrar(self, porta, **kw):
+        self.assertTrue(self.pedido(**kw)["ok"])
+        with mock.patch.object(S, "_exp_porta", side_effect=porta), mock.patch.object(S, "EXP_CADASTRO_API", True):
+            return S.exp_cadastro_atualizar(PEDIDO, "luis")
+
+    def test_shopee_com_cpf_aceita_uma_palavra(self):
+        self.assertTrue(self.pedido()["ok"])
+        self.assertTrue(self.pedido(nome="Ana")["ok"])
+
+    def test_mercado_livre_continua_exigindo_duas(self):
+        self.assertFalse(self.pedido(marketplace="MERCADO LIVRE")["ok"])
+
+    def test_empresa_continua_exigindo_duas(self):
+        self.assertFalse(self.pedido(documento="59398838000110")["ok"])
+
+    def test_rotulo_e_mascara_continuam_recusados(self):
+        for nome in ("Observações", "Jeo*", "Jo", "123456"):
+            self.assertFalse(self.pedido(nome=nome)["ok"], nome)
+
+    def test_nao_encurta_o_nome_completo_do_apollo(self):
+        porta = PortaNomeAbreviado("JEOACAZ SOUZA LIMA")
+        r = self.cadastrar(porta)
+        self.assertTrue(r["ok"], r)
+        self.assertNotIn("nome", porta.corpo("cliente/atualizar"))
+        self.assertTrue(any("JEOACAZ SOUZA LIMA" in a for a in r["avisos"]), r["avisos"])
+
+    def test_nome_de_outra_pessoa_no_apollo_segue_a_shopee(self):
+        porta = PortaNomeAbreviado("PREMIUM FLEX")
+        self.cadastrar(porta)
+        self.assertEqual(porta.corpo("cliente/atualizar")["nome"], "JEOACAZ")
+
+    def test_sem_saber_o_nome_do_apollo_nao_grava_por_cima(self):
+        porta = PortaNomeAbreviado("")
+        r = self.cadastrar(porta)
+        self.assertTrue(r["ok"], r)
+        self.assertNotIn("nome", porta.corpo("cliente/atualizar"))
+
+    def test_cliente_novo_e_criado_com_a_palavra(self):
+        porta = PortaFalsa()
+        porta.buscar = {"ok": True, "situacao": "nao_cadastrado"}
+        end = {"endereco": {"rua": "RUA CANADA"}, "falta": ""}
+        self.pedido(codigo="")
+        with mock.patch.object(S, "_exp_porta", side_effect=porta), mock.patch.object(S, "EXP_CADASTRO_API", True),                 mock.patch.object(S, "exp_endereco_entrega", return_value=end):
+            r = S.exp_cadastro_atualizar(PEDIDO, "luis")
+        self.assertEqual(porta.corpo("cliente/criar")["nome"], "JEOACAZ", r)
+
+    def test_uma_palavra_nao_escolhe_o_atendimento_sozinho(self):
+        self.pedido()
+        porta = PortaNomeAbreviado("JEOACAZ")
+        with mock.patch.object(S, "_exp_porta", side_effect=porta):
+            d = S.exp_romaneio_preparar(PEDIDO)
+        self.assertEqual(d["escolhido"], "")
+        self.assertTrue(d["nome_abreviado"])
+
+    def test_empresa_de_uma_palavra_no_apollo_nao_trava(self):
+        gravar_como_admin([linha(PEDIDO, "0893764272", Marketplace="MERCADO LIVRE")])
+        S.salvar_cliente_fiscal(PEDIDO, "59398838000110", "Acme Pecas Ltda", linx_cliente="83020", fonte="teste", usuario="teste")
+        porta = PortaNomeAbreviado("ACME")
+        with mock.patch.object(S, "_exp_porta", side_effect=porta):
+            self.assertFalse(S.exp_romaneio_preparar(PEDIDO)["nome_abreviado"])
+
+
 if __name__ == "__main__":
     unittest.main()
 

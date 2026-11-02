@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.09-NOME-NFE-ABREVIADO"
+APP_VERSION = "20.10-NOME-UNICO-SHOPEE"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -15243,6 +15243,13 @@ def _nome_fiscal_valido(nome: str) -> bool:
     return len(palavras) >= 2 and any(re.search(r"[A-Za-zÀ-ÿ]{2,}", p) for p in palavras)
 
 
+def _nome_unico_valido(nome: str) -> bool:
+    """V20.10: uma palavra só de letras ("Jeoacaz"). Vale só na Shopee com CPF (salvar_cliente_fiscal):
+    lá o nome vem de um campo da venda, e no ML a extensão lê a página, que pode trazer rótulo."""
+    nome = str(nome or "").strip()
+    return bool(re.fullmatch(r"[A-Za-zÀ-ÿ'’-]{3,40}", nome)) and not EXP_NOME_ROTULO.match(_exp_limpo(nome))
+
+
 def salvar_cliente_fiscal(pedido: str, documento: str, nome: str, *, linx_cliente: str = "",
                           fonte: str = "", usuario: str = "") -> dict[str, Any]:
     """V17.86 — guarda o que a extensão leu na venda (e o código no Linx)."""
@@ -15254,11 +15261,15 @@ def salvar_cliente_fiscal(pedido: str, documento: str, nome: str, *, linx_client
         return {"ok": False, "error": "Informe o pedido."}
     if len(numero) not in (11, 14):
         return {"ok": False, "error": "CPF precisa ter 11 dígitos e CNPJ, 14."}
-    if not _nome_fiscal_valido(nome):
+    uma_palavra = len(numero) == 11 and _nome_unico_valido(nome)
+    if not _nome_fiscal_valido(nome) and not uma_palavra:
         return {"ok": False, "error": "Nome da NF-e inválido: precisa de nome e sobrenome."}
     with DB_LOCK:
-        if not _linhas_do_pedido(pedido):
+        linhas = _linhas_do_pedido(pedido)
+        if not linhas:
             return {"ok": False, "error": f"Pedido {pedido} não encontrado."}
+        if not _nome_fiscal_valido(nome) and not any(_linha_shopee_v1866(r) for r in linhas):
+            return {"ok": False, "error": "Nome da NF-e inválido: precisa de nome e sobrenome."}
         agora = now_iso()
         DB.execute(
             """INSERT INTO cliente_fiscal(order_key,pedido,documento_tipo,documento_numero,nome_fiscal,
@@ -15294,7 +15305,7 @@ def preencher_nome_conferencia_se_vazio(pedido: str, nome: str, actor: str = "ex
     """
     nome = " ".join(str(nome or "").split())
     pedido_key = normalize(pedido)
-    if not pedido_key or not _nome_fiscal_valido(nome) or len(nome) > 180:
+    if not pedido_key or not (_nome_fiscal_valido(nome) or _nome_unico_valido(nome)) or len(nome) > 180:
         return 0
     preenchidas = 0
     with DB_LOCK:
@@ -16617,9 +16628,10 @@ def _exp_em_paralelo(tarefas: list[Any]) -> list[Any]:
 
 
 def _exp_nome_abreviado(nome: Any) -> bool:
-    """V20.09: sobrenome de uma letra no fim ("NAYARA C"). "MARIA E SILVA" não é abreviado."""
+    """V20.09: sobrenome de uma letra no fim ("NAYARA C"). "MARIA E SILVA" não é abreviado.
+    V20.10: uma palavra só ("JEOACAZ") também não identifica a pessoa."""
     palavras = re.findall(r"[A-Z]+", _exp_limpo(nome))
-    return len(palavras) >= 2 and len(palavras[-1]) == 1
+    return len(palavras) == 1 or (len(palavras) >= 2 and len(palavras[-1]) == 1)
 
 
 def _exp_nome_encurta(novo: Any, atual: Any) -> bool:
@@ -16627,7 +16639,7 @@ def _exp_nome_encurta(novo: Any, atual: Any) -> bool:
     n, a = re.findall(r"[A-Z]+", _exp_limpo(novo)), re.findall(r"[A-Z]+", _exp_limpo(atual))
     if not _exp_nome_abreviado(novo) or len(a) < 2 or n[0] != a[0] or not set(n[:-1]) <= set(a):
         return False
-    return any(len(p) > 1 and p[0] == n[-1] for p in a[1:])
+    return len(n) == 1 or any(len(p) > 1 and p[0] == n[-1] for p in a[1:])
 
 
 def exp_romaneio_preparar(pedido: str, atendimento: Any = "", cliente: Any = "") -> dict[str, Any]:
@@ -16753,7 +16765,9 @@ def exp_romaneio_preparar(pedido: str, atendimento: Any = "", cliente: Any = "")
     # V19.30 (decisão do dono): escolhe sozinho só um atendimento, com peças batendo
     # (ou o número digitado); senão quem escolhe é a pessoa.
     # V20.09: a busca é pelo nome; com sobrenome de uma letra pode vir outra pessoa, a pessoa confere.
-    saida["nome_abreviado"] = _exp_nome_abreviado(saida["cliente"]["nome_apollo"] or conhecido["nome_fiscal"])
+    # V20.10: só CPF; razão social ("ACME", "... S/A") não é nome abreviado.
+    saida["nome_abreviado"] = len(conhecido["documento"]) == 11 and _exp_nome_abreviado(
+        saida["cliente"]["nome_apollo"] or conhecido["nome_fiscal"])
     if numero and soltar:
         saida["escolhido"] = soltar[0]["atendimento"]
     elif (len(soltar) == 1 and (soltar[0]["bate"] or not codigos) and not soltar[0]["faltam"]
@@ -17156,6 +17170,9 @@ def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "", ie: Any
                      "telefone": LINX_CADASTRO_TELEFONE, "ddd_celular": LINX_CADASTRO_DDD, "celular": EXP_CELULAR_PADRAO}
             if _exp_nome_encurta(nome_limpo, nome_apollo):
                 avisos.append(f'Nome mantido no Apollo: {" ".join(_exp_limpo(nome_apollo).split())} (a NF-e veio abreviada).')
+            elif _exp_nome_abreviado(nome_limpo) and not nome_apollo and not criado:
+                # V20.10: sem saber o nome de lá, o abreviado não grava por cima.
+                avisos.append("Nome não enviado ao Apollo: veio abreviado e o Apollo não informou o nome atual.")
             elif nome_limpo:
                 corpo["nome"] = nome_limpo
             if endereco:
