@@ -19801,11 +19801,15 @@ def exp_romaneio_painel(pedido: str, atendimento: Any = "", cliente: Any = "") -
     r = _faturamento_correcao_ler(normalize(pedido))
     d["correcao_pendente"] = {"usuario": r["usuario"], "em": r["em"]} if r else None
     valor = d.get("valor_pedido")
+    mp = d.get("marketplace") or ""
+    if not mp and valor is not None:   # venda fora da fila: o marketplace vem da própria venda
+        with DB_LOCK:
+            row = DB.execute("SELECT marketplace FROM vendas_v1799 WHERE order_id=? LIMIT 1", (str(pedido or "").strip(),)).fetchone()
+        mp = str(row["marketplace"]) if row else ""
     for a in d.get("candidatos") or []:
         v = a.get("valor")
         difere = valor is not None and v is not None and abs(float(valor) - float(v)) > 0.009
-        a["valor_explicacao"] = _faturamento_diferenca_explicada(
-            pedido, d.get("marketplace") or "", float(valor), float(v)) if difere else ""
+        a["valor_explicacao"] = _faturamento_diferenca_explicada(pedido, mp, float(valor), float(v)) if difere else ""
     return d
 
 
@@ -19825,7 +19829,7 @@ def exp_romaneio_soltar_painel(pedido: str, atendimento: Any, observacao: str, u
     r = _faturamento_correcao_ler(normalize(pedido))
     if r:
         return {"ok": False, "situacao": "em_correcao", "error": f"Correção do valor em andamento ou pela metade "
-                f"({r['usuario']}, {str(r['em'])[11:16]}). Confira o atendimento no Linx e use Liberar no Faturamento."}
+                f"({r['usuario']}, {str(r['em'])[11:16]}). Confira o atendimento no Linx e use Liberar no painel da venda."}
     if numero and _exp_valor_pedido(pedido) is not None:
         c = _exp_valor_conferir(pedido, numero)
         if c["erro"]:

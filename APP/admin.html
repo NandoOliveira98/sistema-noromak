@@ -5081,7 +5081,7 @@ async function pdExpPreviaV1930(btn,valorConferido){
     const esc=htmlSeguroBanco,valor=Number(r.valor||0);
     if(!r.pode){
       // V20.11: valor diferente da venda só vai ao caixa com "conferi", como no lote.
-      if(r.valor_diferente&&await nkConfirmar(`${(r.impedimentos||[]).join("\n")}\n\nConferiu no Apollo e quer enviar com este valor?`))return pdExpPreviaV1930(btn,true);
+      if(r.valor_diferente&&await nkConfirmar(`${(r.impedimentos||[]).join("\n")}\n\nConferiu no Apollo e quer enviar com este valor?`))return await pdExpPreviaV1930(btn,true);
       box.innerHTML=(r.impedimentos||[]).concat(r.falhas||[]).map(t=>`<div style="color:#8C1C13">⚠️ ${esc(t)}</div>`).join("");
       pdExpMsgV1930("O Apollo não aceitou: veja acima. Nada foi enviado.");return;
     }
