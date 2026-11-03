@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.14-SHOPEE-PEDIDO-NOVO"
+APP_VERSION = "20.15-VIGIAS-SEM-REPETICAO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -14185,6 +14185,9 @@ def _ml_pending_label_candidates() -> list[tuple[str, str]]:
     return batch
 
 
+ML_SUBSTATUS_JA_POSTADO = {"dropped_off", "picked_up", "in_hub"}  # V20.15
+
+
 def ml_pending_label_watch_once() -> dict[str, int]:
     """Reconsulta somente shipments pendentes; importa o pedido só quando há chance de etiqueta."""
     checked = triggered = ready = errors = 0
@@ -14223,6 +14226,17 @@ def ml_pending_label_watch_once() -> dict[str, int]:
                     "", ML_CLIENT_ID, "JÁ DESPACHADO / FORA DA FILA",
                     json_dumps({"order_id": order_id, "shipment_id": shipment_id, "status": status,
                                 "removed": result.get("removed_existing_api_rows", 0)})
+                )
+                continue
+
+            # V20.15: pacote já postado/coletado continua ready_to_ship, mas a etiqueta não
+            # imprime mais (NOT_PRINTABLE_STATUS). Reimportar a cada ciclo só regravava a fila
+            # (03/11: 2 pedidos de Bauru, 127x cada em 3 h). Fica na fila para o ADMIN decidir.
+            if status == "ready_to_ship" and substatus in ML_SUBSTATUS_JA_POSTADO:
+                ml_log_event_se_mudou(
+                    "shipment_watcher", f"/shipments/{shipment_id}",
+                    "", ML_CLIENT_ID, "JÁ POSTADO / ETIQUETA NÃO IMPRIME",
+                    json_dumps({"order_id": order_id, "shipment_id": shipment_id, "substatus": substatus})
                 )
                 continue
 
@@ -15036,6 +15050,10 @@ def ml_new_order_watch_once() -> dict[str, int]:
         # V18.78: pedido Full nunca entrava em `completed` nem em `linked_local`, então
         # cada Full da primeira página era reimportado a cada 20 s, o dia inteiro.
         full_ignorados = _ml_full_ignorados()
+        # V20.15: pedido da fila com venda + envio já é acompanhado pelo vigia de etiquetas
+        # (15 s, em rodízio). Aqui ele relia o envio e baixava a etiqueta a cada 20 s de cada
+        # pedido esperando NF-e (~70 em 03/11). Fica só o que entrou sem envio (extensão/manual).
+        acompanhados = {oid for oid, _ in _ml_all_pending_label_candidates()}
         checked = imported = refreshed_pending = ignored_full = errors = 0
         for order in orders or []:
             if not isinstance(order, dict):
@@ -15045,6 +15063,8 @@ def ml_new_order_watch_once() -> dict[str, int]:
                 continue
             checked += 1
             if order_id in completed or order_id in linked_local or order_id in full_ignorados:
+                continue
+            if order_id in acompanhados:
                 continue
             try:
                 # Pedido já existe localmente, mas ainda sem etiqueta: não fazemos
