@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.11-VALOR-NO-PAINEL"
+APP_VERSION = "20.12-APOLLO-OCUPADO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -16470,9 +16470,11 @@ class PortaErro(Exception):
     """A porta respondeu com erro (ou não respondeu). `incerto` = a chamada saiu e a
     resposta não voltou: conferir no Apollo antes de repetir."""
 
-    def __init__(self, mensagem: str, incerto: bool = False):
+    def __init__(self, mensagem: str, incerto: bool = False, passageiro: bool = False):
         super().__init__(mensagem)
         self.incerto = incerto
+        # V20.12: limite por minuto (429) ou leitura sem resposta — passa sozinho, tentar de novo.
+        self.passageiro = passageiro
 
 
 # V19.72: aviso do Guilherme (22/10) — cadastro que vai ao Apollo não pode ter acento,
@@ -16536,13 +16538,14 @@ def _exp_porta_resposta(req: urllib.request.Request, escrita: bool) -> dict[str,
         if exc.code == 409:
             raise PortaErro("Este cliente/atendimento já está sendo mexido agora. Espere e atualize.") from exc
         if exc.code == 429:
-            raise PortaErro("Muitas chamadas ao Apollo neste minuto. Espere um minuto e tente de novo.") from exc
+            raise PortaErro("Muitas chamadas ao Apollo neste minuto. Espere um minuto e tente de novo.",
+                            passageiro=True) from exc
         raise PortaErro(f"A porta do Apollo respondeu HTTP {exc.code}: {texto}") from exc
     except Exception as exc:  # timeout, conexão caída
         if escrita:
             raise PortaErro("A chamada saiu e a resposta não voltou. Confira no Apollo antes de repetir.",
                             incerto=True) from exc
-        raise PortaErro(f"O Apollo não respondeu: {exc}") from exc
+        raise PortaErro(f"O Apollo não respondeu: {exc}", passageiro=True) from exc
     try:
         dados = json.loads(raw or "{}")
     except Exception:
@@ -16768,7 +16771,7 @@ def exp_romaneio_preparar(pedido: str, atendimento: Any = "", cliente: Any = "")
                 "faltam": faltam,
             })
     except PortaErro as exc:
-        return {**saida, "situacao": "erro", "aviso": str(exc)}
+        return {**saida, "situacao": "erro", "aviso": str(exc), "apollo_ocupado": exc.passageiro}
     soltar = [c for c in saida["candidatos"] if c["total_a_soltar"]]
     # V19.30 (decisão do dono): escolhe sozinho só um atendimento, com peças batendo
     # (ou o número digitado); senão quem escolhe é a pessoa.
@@ -17425,6 +17428,9 @@ def cadastro_auto_loop(stop_event: threading.Event) -> None:
 # ao caixa são as rotas de sempre (exp_romaneio_soltar / exp_caixa_*).
 # ---------------------------------------------------------------------------
 FATURAMENTO_INTERVALO = 600
+# V20.12 (dono, 03/11; Shopee 2610312SXXXGJE): 429/sem resposta do Apollo = "aguardando_apollo",
+# conferido de novo em 2 min (o worker roda a cada 2 min), e a rodada para de ir ao Apollo na hora.
+FATURAMENTO_REPETIR_APOLLO = 120
 FATURAMENTO_POR_RODADA = 4          # porta: 12 leituras/min; cada pedido ~3
 FATURAMENTO_MARKETPLACES = ("Mercado Livre", "Shopee", "Magalu")
 FATURAMENTO_OBS = {"Mercado Livre": "MERCADO LIVRE", "Shopee": "SHOPEE", "Magalu": "MAGALU"}
@@ -17523,6 +17529,9 @@ def faturamento_classificar(pedido: str, d: dict[str, Any], valor_pedido: float 
     base = {"atendimento": "", "valor_atendimento": None}
     if d.get("caixa"):
         return {**base, "situacao": "feito", "motivo": "Enviado ao caixa."}
+    if d.get("apollo_ocupado"):   # V20.12: passa sozinho, nunca "atenção"
+        return {**base, "situacao": "aguardando_apollo",
+                "motivo": f"Apollo ocupado ({d.get('aviso') or 'sem resposta'}). Confere de novo em 2 min sozinho."}
     if not d.get("ok", True) or d.get("situacao") == "erro":
         return {**base, "situacao": "atencao", "motivo": d.get("aviso") or d.get("error") or "Apollo não respondeu."}
     cred = ((d.get("credito") or {}).get("situacao") or {}).get("codigo")
@@ -19679,19 +19688,22 @@ def faturamento_rodada(agora: float | None = None, esperar=None) -> int:
         e = estado.get(normalize(item[0])) or {}
         destravou = e.get("situacao") == "aguardando_cadastro" and             (cadastro_auto_do_pedido(item[0]) or {}).get("situacao") == "feito"
         return (0 if destravou else 1, float(e.get("conferido_epoch") or 0))
+    apollo_cheio = False
     for pedido, mp in sorted(_faturamento_pendentes(), key=_vez):
         e = estado.get(normalize(pedido))
-        if e and (e["situacao"] == "feito" or agora - float(e["conferido_epoch"] or 0) < FATURAMENTO_INTERVALO):
+        intervalo = FATURAMENTO_REPETIR_APOLLO if e and e["situacao"] == "aguardando_apollo" else FATURAMENTO_INTERVALO
+        if e and (e["situacao"] == "feito" or agora - float(e["conferido_epoch"] or 0) < intervalo):
             continue
         aguardando = (cadastro_auto_do_pedido(pedido) or {}).get("situacao") != "feito"
         if not aguardando:                      # só quem vai ao Apollo conta no teto
-            if feitos >= FATURAMENTO_POR_RODADA:
+            if feitos >= FATURAMENTO_POR_RODADA or apollo_cheio:
                 continue
             if feitos and esperar:
                 esperar(15)
             feitos += 1
         try:
-            faturamento_conferir(pedido, mp, agora)
+            r = faturamento_conferir(pedido, mp, agora)
+            apollo_cheio = apollo_cheio or r.get("situacao") == "aguardando_apollo"
         except Exception as exc:
             print(f"[faturamento] {pedido}: {exc}", flush=True)
     return feitos

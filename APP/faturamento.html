@@ -122,12 +122,12 @@ html[data-tema="escuro"] .mp.ml{background:#3A3010;color:#F5D46A}html[data-tema=
   </div>
 </main>
 <script>
-const ABAS=[["pronto","Prontos para faturar","ok","nk-i-check"],["atencao","Precisa de atenção","bad","nk-i-alert"],["aguardando","Aguardando cadastro","warn","nk-i-clock"],["feito","Feitos","","nk-i-file"]];
+const ABAS=[["pronto","Prontos para faturar","ok","nk-i-check"],["atencao","Precisa de atenção","bad","nk-i-alert"],["aguardando","Aguardando","warn","nk-i-clock"],["feito","Feitos","","nk-i-file"]];
 let ITENS=[],ABA="pronto",RES={},RODANDO=false,PARAR=false;   // V19.99: PARAR = correção pela metade
 const esc=v=>String(v??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
 const brl=v=>v==null||v===""?"—":Number(v).toLocaleString("pt-BR",{style:"currency",currency:"BRL"});
 // V19.99: "corrigir_valor" sai no lote (a extensão corrige o preço no Linx web antes do romaneio).
-const grupo=s=>s==="pronto"||s==="pronto_caixa"||s==="corrigir_valor"?"pronto":s==="feito"?"feito":s==="aguardando_cadastro"||s==="nao_conferido"?"aguardando":"atencao";
+const grupo=s=>s==="pronto"||s==="pronto_caixa"||s==="corrigir_valor"?"pronto":s==="feito"?"feito":s==="aguardando_cadastro"||s==="nao_conferido"||s==="aguardando_apollo"?"aguardando":"atencao";   // V20.12: Apollo ocupado volta sozinho
 async function api(url,corpo){
   const r=await fetch("/expedicao"+url,corpo?{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(corpo),credentials:"same-origin"}:{credentials:"same-origin"});
   let d={};try{d=await r.json();}catch(_){}
@@ -178,7 +178,7 @@ function desenhar(){
   document.getElementById("lote").hidden=!sel;
   document.getElementById("rodando").hidden=!RODANDO;
   document.getElementById("cab").innerHTML=`<tr>${sel?'<th style="width:28px"><input type=checkbox id=todos onchange="marcarTodos(this.checked)" aria-label="Selecionar todos"></th>':""}<th>Pedido</th><th>Cliente</th><th>Prazo</th><th>Atendimento</th><th class=num>Venda</th><th class=num>Atendimento</th><th>Situação</th></tr>`;
-  const vazio={pronto:["Nenhum pedido pronto","Os pedidos aparecem aqui quando o Apollo confirma cadastro, crédito e atendimento com o valor da venda."],atencao:["Nada precisando de atenção",""],aguardando:["Nenhum pedido aguardando cadastro",""],feito:["Nenhum pedido faturado neste período",""]}[ABA];
+  const vazio={pronto:["Nenhum pedido pronto","Os pedidos aparecem aqui quando o Apollo confirma cadastro, crédito e atendimento com o valor da venda."],atencao:["Nada precisando de atenção",""],aguardando:["Nenhum pedido aguardando","Cadastro do cliente ou Apollo ocupado: conferidos de novo sozinhos."],feito:["Nenhum pedido faturado neste período",""]}[ABA];
   document.getElementById("corpo").innerHTML=lista.length?lista.map(i=>`<tr>
     ${sel?`<td><input type=checkbox class=sel value="${esc(i.pedido)}" onchange="atualizarBarra()" ${marcados.has(i.pedido)?"checked":""} ${RODANDO?"disabled":""} aria-label="Selecionar ${esc(i.pedido)}"></td>`:""}
     <td><div class=ped>${linkPedido(i)}</div><span class="mp ${mpClasse(i.marketplace)}">${esc(i.marketplace)}</span></td>
@@ -225,7 +225,7 @@ function linxAcao(acao,dados,minimo=44,prazo=180000){
 async function faturarUm(i){
   let r=await api("/api/faturamento/executar",{pedido:i.pedido});
   // V19.82: limite de chamadas do Apollo (429) na conferência — nada foi gravado ainda; espera e tenta de novo.
-  for(let t=0;t<3&&!r.ok&&r.etapa==="conferencia"&&/Muitas chamadas/i.test(r.error||"");t++){
+  for(let t=0;t<3&&!r.ok&&r.etapa==="conferencia"&&(r.situacao==="aguardando_apollo"||/Muitas chamadas/i.test(r.error||""));t++){
     RES[i.pedido]={ok:true,texto:"Limite do Apollo neste minuto — tentando de novo em 1 min…"};desenhar();
     await new Promise(ok=>setTimeout(ok,62000));
     RES[i.pedido]={ok:true,texto:"Faturando…"};desenhar();
