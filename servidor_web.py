@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.15-VIGIAS-SEM-REPETICAO"
+APP_VERSION = "20.16-ML-PELO-AVISO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -155,9 +155,12 @@ ML_API_BASE = "https://api.mercadolibre.com"
 ML_OAUTH_SCOPE = os.getenv("ML_OAUTH_SCOPE", "offline_access read write").strip()
 ML_HTTP_TIMEOUT = int(os.getenv("ML_HTTP_TIMEOUT", "20"))
 ML_MANUAL_SYNC_LIMIT = max(1, min(50, int(os.getenv("ML_MANUAL_SYNC_LIMIT", "20"))))
-ML_PENDING_WATCH_INTERVAL = max(10, min(120, int(os.getenv("ML_PENDING_WATCH_INTERVAL", "15"))))
-ML_PENDING_WATCH_BATCH = max(1, min(30, int(os.getenv("ML_PENDING_WATCH_BATCH", "20"))))
-ML_NEW_ORDER_WATCH_INTERVAL = max(15, min(120, int(os.getenv("ML_NEW_ORDER_WATCH_INTERVAL", "20"))))
+# V20.16: o aviso do ML (webhook orders_v2/shipments) traz pedido e etiqueta; os vigias viram rede
+# de segurança de até 5 min para o aviso que se perder (decisão do dono, 03/11). Eram 15 s / 20 s,
+# 20 pendentes por volta: agora cada volta revê todos.
+ML_PENDING_WATCH_INTERVAL = max(10, min(900, int(os.getenv("ML_PENDING_WATCH_INTERVAL", "300"))))
+ML_PENDING_WATCH_BATCH = max(1, min(300, int(os.getenv("ML_PENDING_WATCH_BATCH", "200"))))
+ML_NEW_ORDER_WATCH_INTERVAL = max(15, min(900, int(os.getenv("ML_NEW_ORDER_WATCH_INTERVAL", "300"))))
 ML_NEW_ORDER_WATCH_LIMIT = max(5, min(50, int(os.getenv("ML_NEW_ORDER_WATCH_LIMIT", "20"))))
 ML_CATCHUP_FALLBACK_DAYS = max(1, min(30, int(os.getenv("ML_CATCHUP_FALLBACK_DAYS", "7"))))
 ML_CATCHUP_PAGE_SIZE = max(10, min(50, int(os.getenv("ML_CATCHUP_PAGE_SIZE", "50"))))
@@ -15111,6 +15114,11 @@ def ml_new_order_watch_once() -> dict[str, int]:
         ML_NEW_ORDER_WATCH_LOCK.release()
 
 
+def _ml_new_order_espera(erros_seguidos: int) -> int:
+    """V20.16: o recuo por erro era limitado a 120 s — com o intervalo de 300 s, erro faria rodar mais."""
+    return min(max(120, ML_NEW_ORDER_WATCH_INTERVAL), ML_NEW_ORDER_WATCH_INTERVAL * (2 ** erros_seguidos))
+
+
 def ml_new_order_watch_loop(stop_event: threading.Event) -> None:
     """Busca pedidos novos periodicamente quando webhook orders_v2 atrasar/falhar."""
     consecutive_errors = 0
@@ -15144,7 +15152,7 @@ def ml_new_order_watch_loop(stop_event: threading.Event) -> None:
                 ml_log_event_se_mudou("new_order_watcher", "/orders/search", "", ML_CLIENT_ID, "ERRO", str(exc)[:1200])
             except Exception:
                 pass
-        wait_seconds = min(120, ML_NEW_ORDER_WATCH_INTERVAL * (2 ** consecutive_errors))
+        wait_seconds = _ml_new_order_espera(consecutive_errors)
         if stop_event.wait(wait_seconds):
             break
 
@@ -41645,7 +41653,9 @@ def _saude_ml() -> list[dict[str, Any]]:
             itens.append(_saude_item("ml_pedidos", g, "Busca de pedidos do ML", "ok" if aquecendo else "atencao",
                                      "Ainda não buscou pedidos desde que o servidor subiu"))
         else:
-            nivel = "critico" if idade > 15 * 60 else ("atencao" if idade > 5 * 60 else "ok")
+            # V20.16: a busca roda a cada ML_NEW_ORDER_WATCH_INTERVAL (5 min); o limite conta a partir dele.
+            nivel = ("critico" if idade > ML_NEW_ORDER_WATCH_INTERVAL + 15 * 60
+                     else ("atencao" if idade > ML_NEW_ORDER_WATCH_INTERVAL + 5 * 60 else "ok"))
             itens.append(_saude_item("ml_pedidos", g, "Busca de pedidos do ML", nivel,
                                      f"Última busca há {_saude_idade_txt(idade)}"))
     return itens

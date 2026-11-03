@@ -450,8 +450,15 @@ linha), tabelas `magalu_integration` / `magalu_oauth_state` / `magalu_event_log`
 
 ### Mercado Livre
 OAuth com `offline_access`. Cinco workers em background rodam 24/7 no servidor:
-novos pedidos (~20 s), etiquetas pendentes (~15 s), reconcile de pedidos manuais (~60 s),
+novos pedidos (~300 s), etiquetas pendentes (~300 s, todos os pendentes por volta), reconcile de pedidos manuais (~60 s),
 keepalive do token (~300 s), catch-up de segurança (~900 s).
+**V20.15/V20.16 — o aviso manda** (dono, 03/11: CPU em 62–85%). Pedido e etiqueta chegam pelo aviso do ML
+(webhook `orders_v2`/`shipments`, nas duas contas); os dois vigias são rede de segurança de até 5 min (eram 15 s/20 s).
+O vigia de pedidos novos não relê envio/etiqueta de quem já está na fila com venda + envio (é do vigia de etiquetas),
+e o de etiquetas não reimporta envio `ready_to_ship` já postado (`ML_SUBSTATUS_JA_POSTADO`: dropped_off, picked_up,
+in_hub — a etiqueta não imprime mais; o pedido fica na fila para o ADMIN). Painel de saúde conta o atraso a partir do
+intervalo. Shopee pelo aviso (Push Mechanism) fica para outra fase. Testes: `TESTES/test_vigias_sem_repeticao_v2015.py`,
+`TESTES/test_vigias_por_aviso_v2016.py`.
 Etiquetas: `_ml_fetch_shipping_zpl` / `_ml_store_linked_label`.
 Rentabilidade via billing API com cache em `ml_profitability_billing_cache`.
 Tratar expiração do token: já houve cenário de `access_token` sem `refresh_token`.
