@@ -86,3 +86,63 @@ class ListaDeEnvioVazia(TesteNoromak):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class PedidoNovoComListaVazia(TesteNoromak):
+    """V20.14 (03/11): com a get_shipment_list vazia, pedido novo da Shopee não entrava
+    na fila (261103C3DHY4SQ, 261103C24Y3KUJ: NF válida, fora da fila). A sincronização
+    passa a juntar os READY_TO_SHIP da get_order_list."""
+
+    def setUp(self):
+        super().setUp()
+        from base import linha
+        self.pacotes = {}
+
+        def montar(order, pkgs, produtos):
+            self.pacotes[order["order_sn"]] = list(pkgs)
+            return [linha(order["order_sn"], "SKU-" + order["order_sn"], uid="U-" + order["order_sn"],
+                          Marketplace="SHOPEE", OrigemCadastro="API_SHOPEE")]
+        self.p = [mock.patch.object(S, "shopee_status_payload", lambda: {"connected": True, "shop_id": "1"}),
+                  mock.patch.object(S, "shopee_current_shipments", lambda: []),
+                  mock.patch.object(S, "shopee_order_details", lambda sns, campos="": [
+                      {"order_sn": x, "order_status": "READY_TO_SHIP",
+                       "package_list": [{"package_number": "PK" + x, "logistics_status": "LOGISTICS_READY"}]} for x in sns]),
+                  mock.patch.object(S, "_shopee_build_pending_lines", montar),
+                  mock.patch.object(S, "shopee_log_event", lambda *a, **k: None)]
+        for x in self.p:
+            x.start()
+
+    def tearDown(self):
+        for x in self.p:
+            x.stop()
+        super().tearDown()
+
+    def test_pedido_a_enviar_entra_com_o_pacote(self):
+        from base import numeros_de_pedido
+        with mock.patch.object(S, "shopee_pedidos_a_enviar", lambda: ["NOVO0001"]):
+            S.shopee_manual_sync()
+        self.assertIn("NOVO0001", numeros_de_pedido())
+        self.assertEqual(self.pacotes["NOVO0001"], ["PKNOVO0001"])
+
+    def test_falha_na_lista_de_pedidos_nao_derruba_a_sincronizacao(self):
+        from base import numeros_de_pedido
+
+        def falha():
+            raise RuntimeError("Shopee API: error_server")
+        with mock.patch.object(S, "shopee_pedidos_a_enviar", falha), \
+                mock.patch.object(S, "shopee_current_shipments", lambda: [{"order_sn": "LISTA001", "package_number": "P1"}]):
+            S.shopee_manual_sync()
+        self.assertIn("LISTA001", numeros_de_pedido())
+
+    def test_lista_de_pedidos_pagina_e_pega_reenviar(self):
+        chamadas = []
+
+        def api(path, params=None):
+            chamadas.append(dict(params))
+            pag = 1 if params.get("cursor") else 0
+            return {"response": {"order_list": [{"order_sn": f"{params['order_status']}{pag}"}],
+                                 "more": pag == 0, "next_cursor": "c1"}}
+        with mock.patch.object(S, "shopee_api_get", api):
+            sns = S.shopee_pedidos_a_enviar()
+        self.assertEqual(sorted(sns), ["READY_TO_SHIP0", "READY_TO_SHIP1", "RETRY_SHIP0", "RETRY_SHIP1"])
+        self.assertTrue(all(c["time_to"] - c["time_from"] <= 15 * 86400 for c in chamadas))

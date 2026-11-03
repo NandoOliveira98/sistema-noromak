@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.13-SHOPEE-LISTA-VAZIA"
+APP_VERSION = "20.14-SHOPEE-PEDIDO-NOVO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -8846,6 +8846,35 @@ def shopee_current_shipments() -> list[dict[str, str]]:
     return found
 
 
+# V20.14 (03/11): a get_shipment_list vem vazia desde 07:41 e pedido novo não entrava na fila
+# (261103C3DHY4SQ, NF válida). Os pedidos "a enviar" também vêm da get_order_list (janela
+# máxima de 15 dias da API, como as vendas); a sincronização junta as duas listas.
+SHOPEE_A_ENVIAR_STATUS = ("READY_TO_SHIP", "RETRY_SHIP")
+SHOPEE_A_ENVIAR_DIAS = 15
+
+
+def shopee_pedidos_a_enviar() -> list[str]:
+    agora = int(time.time())
+    sns: list[str] = []
+    for status in SHOPEE_A_ENVIAR_STATUS:
+        cursor = ""
+        for _ in range(30):
+            params: dict[str, Any] = {"time_range_field": "create_time", "time_from": agora - SHOPEE_A_ENVIAR_DIAS * 86400,
+                                      "time_to": agora, "page_size": 100, "order_status": status}
+            if cursor:
+                params["cursor"] = cursor
+            resp = shopee_api_get("/api/v2/order/get_order_list", params).get("response") or {}
+            for o in resp.get("order_list") or []:
+                sn = str((o or {}).get("order_sn") or "").strip()
+                if sn and sn not in sns:
+                    sns.append(sn)
+            proximo = str(resp.get("next_cursor") or "").strip()
+            if not resp.get("more") or not proximo or proximo == cursor:
+                break
+            cursor = proximo
+    return sns
+
+
 def shopee_order_details(order_sns: list[str], campos: str = "") -> list[dict[str, Any]]:
     path = "/api/v2/order/get_order_detail"
     details: list[dict[str, Any]] = []
@@ -9417,6 +9446,13 @@ def _shopee_manual_sync_sem_trava(acordar_etiquetas: bool = True) -> dict[str, A
     sync_started = now_iso()
     try:
         shipments = shopee_current_shipments()
+        # V20.14: + os "a enviar" da get_order_list; falha nela = só a lista de envio, como antes.
+        try:
+            na_lista = {str(x.get("order_sn") or "").strip() for x in shipments}
+            shipments = shipments + [{"order_sn": sn, "package_number": ""}
+                                     for sn in shopee_pedidos_a_enviar() if sn not in na_lista]
+        except Exception as exc:
+            shopee_log_event_se_mudou("orders_sync", "a_enviar", "AVISO", str(exc)[:300])
         packages_by_order: dict[str, list[str]] = {}
         for shipment in shipments:
             order_sn = str(shipment.get("order_sn") or "").strip()
@@ -9428,6 +9464,12 @@ def _shopee_manual_sync_sem_trava(acordar_etiquetas: bool = True) -> dict[str, A
 
         order_sns = list(packages_by_order)
         details = shopee_order_details(order_sns) if order_sns else []
+        for order in details:   # V20.14: pacote de quem veio só da get_order_list
+            sn = str(order.get("order_sn") or "").strip()
+            if sn in packages_by_order and not packages_by_order[sn]:
+                packages_by_order[sn] = [str(p.get("package_number") or "").strip()
+                                         for p in (order.get("package_list") or [])
+                                         if isinstance(p, dict) and str(p.get("package_number") or "").strip()]
         # V18.93: aviso de venda com o mesmo detalhe (sem chamada a mais).
         try:
             avisos_venda_registrar("shopee", avisos_vendas_da_shopee(details))
