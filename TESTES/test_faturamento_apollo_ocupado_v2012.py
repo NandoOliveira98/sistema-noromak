@@ -94,6 +94,28 @@ class ApolloOcupado(unittest.TestCase):
         self.assertEqual(sorted(situacoes.values()), ["aguardando_apollo", "nao_conferido"])
         self.assertLessEqual(n, 3)
 
+    # Revisão 03/11: porta fora do ar por horas deixava o pedido em Aguardando para sempre.
+    def _rodada_429(self, agora):
+        with mock.patch.object(S, "CHAVE_CRM", "chave-teste"),                 mock.patch.object(S.urllib.request, "urlopen", side_effect=_http(429)):
+            return S.faturamento_conferir(PEDIDOS[0], "Mercado Livre", agora)
+
+    def test_30_min_sem_resposta_vira_atencao(self):
+        t0 = time.time()
+        self.assertEqual(self._rodada_429(t0)["situacao"], "aguardando_apollo")
+        self.assertEqual(self._rodada_429(t0 + 1200)["situacao"], "aguardando_apollo")
+        r = self._rodada_429(t0 + 1800)
+        self.assertEqual(r["situacao"], "atencao")
+        self.assertIn("30 min", r["motivo"])
+        # continua em atenção nas próximas falhas (não volta a "aguardando")
+        self.assertEqual(self._rodada_429(t0 + 2500)["situacao"], "atencao")
+
+    def test_resposta_do_apollo_zera_a_contagem(self):
+        t0 = time.time()
+        self._rodada_429(t0)
+        with mock.patch.object(S, "_exp_porta", side_effect=PortaFalsa()):
+            self.assertEqual(S.faturamento_conferir(PEDIDOS[0], "Mercado Livre", t0 + 1000)["situacao"], "pronto")
+        self.assertEqual(self._rodada_429(t0 + 1900)["situacao"], "aguardando_apollo")
+
     def test_tela_poe_na_aba_aguardando(self):
         html = open(S.APP_DIR / "faturamento.html", encoding="utf-8").read()
         self.assertTrue('s==="aguardando_apollo"' in html, "aba Aguardando sem o aguardando_apollo")

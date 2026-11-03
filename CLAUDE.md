@@ -1232,7 +1232,8 @@ troca a condição pela extensão Linx 0.44 (`condicao-definir-lote`, sem confir
 **V20.12 — Apollo ocupado não é atenção** (dono, 03/11; Shopee 2610312SXXXGJE): 429 da porta ("Muitas chamadas") ou leitura
 sem resposta (`PortaErro.passageiro`) vira `aguardando_apollo` (aba Aguardando), conferido de novo em 2 min
 (`FATURAMENTO_REPETIR_APOLLO`), e a rodada para de ir ao Apollo no primeiro limite. 404/401 continuam atenção. No lote a tela
-espera 1 min e tenta de novo. Teste: `TESTES/test_faturamento_apollo_ocupado_v2012.py`.
+espera 1 min e tenta de novo. Sem resposta há 30 min seguidos (`apollo_desde`, `FATURAMENTO_APOLLO_ATENCAO_S`) = atenção
+"Apollo sem resposta há N min" (continua conferido; a 1ª resposta zera a contagem). Teste: `TESTES/test_faturamento_apollo_ocupado_v2012.py`.
 **V19.99 — corrigir o valor do atendimento** (decisões do dono, 28/10). A integração Shopee → Apollo grava o que o
 comprador pagou (preço − cupom da loja − cupom da Shopee − moedas; conferido em 9 pedidos); o valor certo da nota é
 o **preço da unidade × qtd** (a venda, que o Noromak já compara). No ML o kit sai com centavos a mais (132,93 × 132,90).

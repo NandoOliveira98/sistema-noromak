@@ -17431,6 +17431,8 @@ FATURAMENTO_INTERVALO = 600
 # V20.12 (dono, 03/11; Shopee 2610312SXXXGJE): 429/sem resposta do Apollo = "aguardando_apollo",
 # conferido de novo em 2 min (o worker roda a cada 2 min), e a rodada para de ir ao Apollo na hora.
 FATURAMENTO_REPETIR_APOLLO = 120
+# Revisão 03/11: Apollo sem resposta há 30 min seguidos (porta fora do ar) = atenção, alguém olha.
+FATURAMENTO_APOLLO_ATENCAO_S = 1800
 FATURAMENTO_POR_RODADA = 4          # porta: 12 leituras/min; cada pedido ~3
 FATURAMENTO_MARKETPLACES = ("Mercado Livre", "Shopee", "Magalu")
 FATURAMENTO_OBS = {"Mercado Livre": "MERCADO LIVRE", "Shopee": "SHOPEE", "Magalu": "MAGALU"}
@@ -17454,6 +17456,10 @@ def ensure_faturamento_schema() -> None:
                    conferido_em TEXT NOT NULL DEFAULT ''
                )"""
         )
+        # V20.12 (revisão 03/11): desde quando o Apollo não responde para este pedido (0 = respondeu).
+        cols = {str(r["name"]) for r in DB.execute("PRAGMA table_info(faturamento_v1943)").fetchall()}
+        if "apollo_desde" not in cols:
+            DB.execute("ALTER TABLE faturamento_v1943 ADD COLUMN apollo_desde REAL NOT NULL DEFAULT 0")
         # V19.99 (revisão 28/10): correção de valor em andamento OU pela metade. Fica até a senha voltar
         # (corrigido / nada alterado) ou alguém conferir no Linx e liberar — nunca vence sozinha: uma
         # correção pela metade (peça descomprometida) aparecia como "romaneio já solto" e ia ao caixa.
@@ -17599,15 +17605,26 @@ def faturamento_conferir(pedido: str, marketplace: str = "", agora: float | None
     cliente = str(((d.get("cliente") or {}).get("codigo")) or estado_cad.get("cliente") or conhecido["codigo"] or "")
     nome = str(conhecido["nome_fiscal"] or ((d.get("cliente") or {}).get("nome_apollo")) or "")
     with DB_LOCK:
+        # V20.12 (revisão 03/11): falhas seguidas contam desde a primeira; resposta do Apollo zera.
+        desde = 0.0
+        if res["situacao"] == "aguardando_apollo":
+            ant = DB.execute("SELECT apollo_desde FROM faturamento_v1943 WHERE order_key=?", (normalize(pedido),)).fetchone()
+            desde = float(ant["apollo_desde"] or 0) if ant else 0.0
+            desde = desde or agora
+            if agora - desde >= FATURAMENTO_APOLLO_ATENCAO_S:
+                res = {**res, "situacao": "atencao",
+                       "motivo": f"Apollo sem resposta há {int((agora - desde) // 60)} min ({d.get('aviso') or 'sem resposta'}). "
+                                 f"Confira a porta do Apollo; o pedido continua sendo conferido."}
         DB.execute(
             """INSERT INTO faturamento_v1943(order_key,pedido,marketplace,situacao,motivo,cliente,nome,atendimento,
-                   valor_pedido,valor_atendimento,conferido_epoch,conferido_em) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
+                   valor_pedido,valor_atendimento,conferido_epoch,conferido_em,apollo_desde) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(order_key) DO UPDATE SET marketplace=excluded.marketplace, situacao=excluded.situacao,
                    motivo=excluded.motivo, cliente=excluded.cliente, nome=excluded.nome, atendimento=excluded.atendimento,
                    valor_pedido=excluded.valor_pedido, valor_atendimento=excluded.valor_atendimento,
-                   conferido_epoch=excluded.conferido_epoch, conferido_em=excluded.conferido_em""",
+                   conferido_epoch=excluded.conferido_epoch, conferido_em=excluded.conferido_em,
+                   apollo_desde=excluded.apollo_desde""",
             (normalize(pedido), pedido, marketplace or (d.get("marketplace") or ""), res["situacao"], str(res.get("motivo") or "")[:300],
-             cliente, nome[:120], str(res.get("atendimento") or ""), valor, res.get("valor_atendimento"), agora, now_iso()),
+             cliente, nome[:120], str(res.get("atendimento") or ""), valor, res.get("valor_atendimento"), agora, now_iso(), desde),
         )
         DB.commit()
     return {"pedido": pedido, "marketplace": marketplace or d.get("marketplace") or "", "cliente": cliente, "nome": nome,
