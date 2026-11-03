@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.12-APOLLO-OCUPADO"
+APP_VERSION = "20.13-SHOPEE-LISTA-VAZIA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -8846,11 +8846,11 @@ def shopee_current_shipments() -> list[dict[str, str]]:
     return found
 
 
-def shopee_order_details(order_sns: list[str]) -> list[dict[str, Any]]:
+def shopee_order_details(order_sns: list[str], campos: str = "") -> list[dict[str, Any]]:
     path = "/api/v2/order/get_order_detail"
     details: list[dict[str, Any]] = []
     unique = list(dict.fromkeys(str(x).strip() for x in order_sns if str(x).strip()))
-    optional = "recipient_address,item_list,package_list,shipping_carrier,invoice_data,buyer_cpf_id,buyer_cnpj_id,buyer_user_id,buyer_username,buyer_name,buyer_phone_number,address"
+    optional = campos or "recipient_address,item_list,package_list,shipping_carrier,invoice_data,buyer_cpf_id,buyer_cnpj_id,buyer_user_id,buyer_username,buyer_name,buyer_phone_number,address"
     for offset in range(0, len(unique), 50):
         batch = unique[offset:offset + 50]
         data = shopee_api_get(path, {
@@ -9577,6 +9577,41 @@ def _shopee_label_proxima_espera(result: dict[str, Any], rapidos: int) -> tuple[
     return SHOPEE_LABEL_WORKER_INTERVAL, 0
 
 
+# V20.13 (caso real 03/11): a get_shipment_list passou a vir vazia, sem erro, com pedidos
+# READY_TO_SHIP e NF-e válida (pacote LOGISTICS_READY). Fora da lista não quer dizer
+# organizado: a situação do pacote no get_order_detail decide. Sem o detalhe, fica como
+# antes (V17.91). E todos os pendentes sem etiqueta entram, não só os 40 mais recentes.
+SHOPEE_LABEL_PENDENTES_LIMITE = 150
+SHOPEE_PACOTE_A_ORGANIZAR = "LOGISTICS_READY"
+
+
+def shopee_label_candidatos(shipments: list[dict[str, str]]) -> tuple[list[dict[str, str]], set[str]]:
+    """(lista para shopee_sync_shipping_documents, pedidos já organizados)."""
+    na_lista = {x.get("order_sn") for x in shipments}
+    pendentes = [x for x in shopee_pedidos_sem_etiqueta(limite=SHOPEE_LABEL_PENDENTES_LIMITE)
+                 if x["order_sn"] not in na_lista]
+    if not pendentes:
+        return list(shipments), set()
+    try:
+        por_pedido = {str(o.get("order_sn") or "").strip(): o
+                      for o in shopee_order_details([x["order_sn"] for x in pendentes], campos="package_list")}
+    except Exception as exc:
+        shopee_log_event_se_mudou("shipping_worker", "detalhe", "AVISO", str(exc)[:300])
+        por_pedido = {}
+    extra: list[dict[str, str]] = []
+    ja: set[str] = set()
+    for x in pendentes:
+        o = por_pedido.get(x["order_sn"]) or {}
+        prontos = [str(p.get("package_number") or "").strip() for p in (o.get("package_list") or [])
+                   if isinstance(p, dict) and p.get("logistics_status") == SHOPEE_PACOTE_A_ORGANIZAR]
+        if o.get("order_status") in ("READY_TO_SHIP", "RETRY_SHIP") and prontos:
+            extra.extend({"order_sn": x["order_sn"], "package_number": pk or x.get("package_number", "")} for pk in prontos)
+        else:
+            extra.append(x)
+            ja.add(x["order_sn"])
+    return list(shipments) + extra, ja
+
+
 def shopee_label_worker_loop(stop_event: threading.Event) -> None:
     """Continua geração/consulta/download das etiquetas Shopee em background.
 
@@ -9615,12 +9650,10 @@ def shopee_label_worker_loop(stop_event: threading.Event) -> None:
             # V17.91: organizado, o pedido sai de get_shipment_list — justamente
             # quando a etiqueta fica disponível. Os pendentes no Noromak sem
             # etiqueta e fora dessa lista seguem direto para rastreio/etiqueta.
-            na_lista = {x.get("order_sn") for x in shipments}
-            organizados = [x for x in shopee_pedidos_sem_etiqueta() if x["order_sn"] not in na_lista]
-            if not shipments and not organizados:
+            lista, ja_organizados = shopee_label_candidatos(shipments)   # V20.13
+            if not lista:
                 continue
-            result = shopee_sync_shipping_documents(
-                shipments + organizados, ja_organizados={x["order_sn"] for x in organizados})
+            result = shopee_sync_shipping_documents(lista, ja_organizados=ja_organizados)
             espera, rapidos = _shopee_label_proxima_espera(result, rapidos)
             # V18.78: só grava quando os contadores mudaram — ciclo de 30 s com os mesmos
             # números era uma linha nova em shopee_event_log a cada vez (V18.56 já avisava).
