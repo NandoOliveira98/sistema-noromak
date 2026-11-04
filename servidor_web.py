@@ -48,7 +48,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.21-CATALOGO-IMAGENS"
+APP_VERSION = "20.22-KIT-SHOPEE-QTD"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -8114,6 +8114,15 @@ def _kit_e_residuo_prefixo(row: dict[str, Any]) -> bool:
         return False
     if str(row.get("Kit") or "").upper() != "SIM" and not sku_kit:
         return False
+    # V20.22: kit aberto pelo Cadastro de Kits/prefixo (Shopee e Magalu desde a V18.71,
+    # Admin desde a V16.46) tem __uidLinha KITDB_ e o SkuOrigemImportacao é o SKU do
+    # COMPONENTE, sem "KIT". Não é resíduo: o reparo de boot voltava o kit2 da Shopee para
+    # 1 unidade a cada publicação (261104EF1BKBAP, 04/11).
+    if str(row.get("__uidLinha") or "").upper().startswith("KITDB_"):
+        return False
+    for campo in ("SkuReferenciaShopee", "SkuPrincipalShopee"):
+        if str(row.get(campo) or "").strip().upper().startswith("KIT"):
+            return False
     origem = str(row.get("SkuOrigemImportacao") or row.get("SkuReferenciaShopee") or "").strip()
     if not origem:
         return False
@@ -9106,15 +9115,17 @@ def _shopee_expand_kit_lines(lines: list[dict[str, Any]], products: list[dict[st
     """
     if not lines:
         return []
-    catalog = _load_kit_catalog()
-    if not catalog:
-        return lines
+    catalog = _load_kit_catalog()   # V20.22: vazio também lê o prefixo KITn-
     out: list[dict[str, Any]] = []
     for row in lines:
         sku = str(row.get("SkuOrigemImportacao") or row.get("SKU") or "").strip()
-        kit = _kit_catalog_lookup(catalog, sku) if sku else None
+        kit = _kit_catalog_lookup(catalog, sku) if (sku and catalog) else None
         if kit and normalize(kit.get("sku_kit")) != normalize(sku) and not re.match(r"^KIT", sku, flags=re.I):
             kit = None
+        if not kit and sku:
+            # V20.22: como no ML, "KITn-X" sem cadastro = n × X (261028SR23HUPK: kit10-10396473
+            # subia como 1 unidade do SKU do kit; o romaneio saía com 10).
+            kit = _infer_quantity_kit_from_sku(sku)
         comps = (kit or {}).get("componentes") or []
         if not kit or not kit.get("ativo", True) or not comps or (
             len(comps) == 1 and int(comps[0].get("quantidade") or 0) == 1 and normalize(comps[0].get("sku")) == normalize(sku)

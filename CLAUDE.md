@@ -517,6 +517,12 @@ com pedidos READY_TO_SHIP e NF-e válida. `shopee_label_candidatos`: pendente se
 rastreio; sem o detalhe, como antes. O vigia olha até 150 pendentes (era 40). A sincronização de pedidos ainda usa a
 mesma lista. **V20.14:** a sincronização junta os READY_TO_SHIP/RETRY_SHIP da `get_order_list` (`shopee_pedidos_a_enviar`,
 15 dias; o pacote vem do detalhe); falha nela = só a lista de envio. Teste: `TESTES/test_shopee_lista_vazia_v2013.py`.
+**V20.22 — quantidade do kit "kitN-X"** (dono, 04/11: romaneio com uma quantidade, Conferência com outra). O reparo
+de boot da V18.04 (`_kit_e_residuo_prefixo`, feito para o ML) tratava como resíduo a linha de componente aberta pelo
+cadastro (`SkuOrigemImportacao` = SKU do componente, sem "KIT") e, **a cada publicação**, voltava o kit2 para 1 un. e
+apagava o selo (261104EF1BKBAP). Linha `KITDB_` ou com `SkuReferenciaShopee`/`SkuPrincipalShopee` "KIT…" não é resíduo.
+E kit "KITn-X" sem cadastro abre pelo prefixo (`_infer_quantity_kit_from_sku`), como no ML (261028SR23HUPK:
+kit10-10396473 subia como 1 × o SKU do kit). Teste: `TESTES/test_shopee_kit_quantidade_v2022.py`.
 **Etiqueta = uma imagem (V17.99):** o ZPL da Shopee traz `~DGR` (a imagem) **antes** do `^XA`,
 que só imprime a imagem (`^XGR`). Cortar o texto no `^XA` gera etiqueta em branco — foi o
 bug das etiquetas automáticas da V17.89 a V17.98. `shopee_reparar_etiquetas_sem_grafico` roda no boot.
