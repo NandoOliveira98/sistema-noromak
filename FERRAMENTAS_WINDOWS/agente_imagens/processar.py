@@ -18,7 +18,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageOps
+from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageOps, ImageStat
 
 TAMANHO = 1200
 OCUPACAO = 0.85
@@ -299,11 +299,108 @@ def renderizar(html: str, arquivos: dict[str, bytes]) -> Image.Image:
     return img
 
 
+SEM_FUNDO_MIN_OCUPACAO = 0.35   # o recorte tem de manter ao menos isto da caixa do produto
+FURO_MIN = 0.004                # branco fechado (furo) maior que isto da caixa é candidato a fundo
+FURO_MAX_DESVIO = 4.0           # e tem de ser liso (fundo de estúdio), não plástico branco com sombra
+
+
+def _furos_do_fundo(rgb: Image.Image, mascara: Image.Image, area_caixa: int) -> Image.Image:
+    """Branco FECHADO pelo produto que é o fundo aparecendo (furo do rolamento, alça, vão de kit): grande,
+    liso e da cor do fundo. Devolve a máscara (255) desses buracos. Plástico branco tem sombra e não entra."""
+    furos = Image.new("L", mascara.size, 0)
+    candidatos = mascara.point(lambda v: 255 if v == 255 else 0).filter(ImageFilter.MinFilter(7))
+    trabalho = mascara.copy()
+    for _ in range(40):
+        caixa = candidatos.getbbox()
+        if not caixa:
+            break
+        x0, y0, x1, y1 = caixa
+        semente = next(((x, y0) for x in range(x0, x1) if candidatos.getpixel((x, y0)) == 255), None)
+        if semente is None:
+            break
+        ImageDraw.floodfill(trabalho, semente, 64)
+        regiao = trabalho.point(lambda v: 255 if v == 64 else 0)
+        area = regiao.histogram()[255]
+        trabalho.paste(32, mask=regiao)                     # já visto
+        candidatos.paste(0, mask=regiao)
+        if area < FURO_MIN * area_caixa:
+            continue
+        est = ImageStat.Stat(rgb, mask=regiao)
+        if max(est.stddev) <= FURO_MAX_DESVIO and min(est.mean) >= 250:
+            furos.paste(255, mask=regiao)
+    return furos
+
+
+SEM_FUNDO_MAX_VAZAMENTO = 0.02   # fundo da borda que entrou no meio do produto (frasco branco da Würth: 5,5%; rolamento: 0)
+
+
+def _vazou(produto: Image.Image, fundo_borda: Image.Image) -> float:
+    """Quanto do fundo LIGADO À BORDA ficou entre partes do produto, linha a linha e coluna a coluna (em relação
+    à área do produto). Rolamento: ~0 (o furo é "furo", não borda). Frasco branco sem contorno: o fundo entra
+    pelos lados do frasco e o logo fica solto — passa do limite e o recorte é recusado."""
+    lado = 300
+    esc = lado / max(produto.size)
+    tam = (max(1, round(produto.width * esc)), max(1, round(produto.height * esc)))
+    pm = produto.resize(tam, Image.NEAREST).point(lambda v: 1 if v > 127 else 0)
+    fb = fundo_borda.resize(tam, Image.NEAREST).point(lambda v: 1 if v > 127 else 0)
+    w, h = tam
+    p, f = list(pm.getdata()), list(fb.getdata())
+    total = sum(p) or 1
+
+    def dentro(indices) -> int:
+        idx = [i for i in indices if p[i]]
+        if len(idx) < 2:
+            return 0
+        a, z = indices.index(idx[0]), indices.index(idx[-1])
+        return sum(f[i] for i in indices[a:z + 1])
+    linhas = sum(dentro(list(range(y * w, y * w + w))) for y in range(h))
+    colunas = sum(dentro(list(range(x, w * h, w))) for x in range(w))
+    return max(linhas, colunas) / total
+
+
+def recortar_fundo_branco(img: Image.Image, limiar: int = 246) -> Image.Image | None:
+    """V20.21 (dono, 04/11: "a foto do produto tem que ser sem fundo"): tira o fundo branco liso, inclusive o
+    que aparece por dentro do produto (furo do rolamento). Se o recorte levar o produto junto (produto branco
+    sem contorno — o "WÜR" da skill), devolve None e a arte usa o retângulo com multiply, como antes."""
+    rgb = reduzir(img.convert("RGB"), 1400)
+    r, g, b = rgb.split()
+    minimo = ImageChops.darker(ImageChops.darker(r, g), b)
+    mascara = minimo.point(lambda v: 255 if v >= limiar else 0)
+    w, h = mascara.size
+    for x, y in [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1), (w // 2, 0), (w // 2, h - 1), (0, h // 2), (w - 1, h // 2)]:
+        if mascara.getpixel((x, y)) == 255:
+            ImageDraw.floodfill(mascara, (x, y), 128)
+    # Caixa de TUDO o que não é o fundo, medida pela cor da borda (margem apertada): o frasco branco 251 em fundo
+    # 255 entra na caixa, e o recorte que o comeu é recusado. A caixa_do_produto (margem 12) só via o rótulo.
+    borda = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(borda).rectangle((0, 0, w - 1, h - 1), outline=255, width=max(2, min(w, h) // 100))
+    nivel = ImageStat.Stat(minimo, mask=borda).median[0]
+    caixa = minimo.point(lambda v: 255 if v < nivel - 3 else 0).getbbox()
+    if not caixa:
+        return None
+    area_caixa = (caixa[2] - caixa[0]) * (caixa[3] - caixa[1])
+    fundo_borda = mascara.point(lambda v: 255 if v == 128 else 0)
+    fundo = ImageChops.lighter(fundo_borda, _furos_do_fundo(rgb, mascara, area_caixa))
+    produto = ImageOps.invert(fundo)
+    if produto.crop(caixa).histogram()[255] < SEM_FUNDO_MIN_OCUPACAO * area_caixa:
+        return None
+    if _vazou(produto, fundo_borda) > SEM_FUNDO_MAX_VAZAMENTO:
+        return None
+    alfa = produto.filter(ImageFilter.MinFilter(3)).filter(ImageFilter.GaussianBlur(1.0))
+    out = rgb.convert("RGBA")
+    out.putalpha(alfa)
+    corte = alfa.point(lambda v: 255 if v > 20 else 0).getbbox()
+    return out.crop(corte) if corte else None
+
+
 def produto_para_arte(img: Image.Image) -> tuple[bytes, bool]:
-    """PNG do produto para a arte. Em fundo branco liso: só o retângulo, desenhado com
-    mix-blend-mode:multiply (o branco some no fundo claro da arte e o produto branco não é comido).
-    Senão: recorte com transparência (dá para usar a sombra)."""
+    """PNG do produto para a arte e se ele está SEM FUNDO (transparente).
+    V20.21: em fundo branco liso o fundo também sai (antes ia o retângulo branco com multiply, que brigava com o
+    fundo da arte); só se o recorte comer o produto volta ao retângulo (False)."""
     if fundo_branco_liso(img):
+        sem_fundo = recortar_fundo_branco(img)
+        if sem_fundo is not None:
+            return png(sem_fundo), True
         caixa = caixa_do_produto(img)
         return png(reduzir(img.crop(caixa) if caixa else img, 1400)), False
     return png(reduzir(recortar(img), 1400)), True

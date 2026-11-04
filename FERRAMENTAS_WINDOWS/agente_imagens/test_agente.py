@@ -303,6 +303,38 @@ class AgenteDeImagens(_BaseAgente):
         self.assertEqual(c.exception.status, 401)
 
 
+class ProdutoSemFundo(unittest.TestCase):
+    """Dono, 04/11 (teste 816.4003-0): "a foto do produto tem que ser sem fundo, está contrastando os dois fundos".
+    Foto em fundo branco liso: o fundo sai (inclusive o furo do rolamento); se o recorte comer o produto (produto
+    branco), volta ao jeito antigo (retângulo + multiply), que não estraga a peça."""
+
+    @staticmethod
+    def _png(img) -> Image.Image:
+        return Image.open(io.BytesIO(img)).convert("RGBA")
+
+    def test_rolamento_sai_sem_fundo_e_sem_o_branco_do_furo(self):
+        img = Image.new("RGB", (600, 600), (255, 255, 255))
+        d = ImageDraw.Draw(img)
+        d.ellipse((50, 50, 550, 550), fill=(150, 152, 155))
+        d.ellipse((180, 180, 420, 420), fill=(255, 255, 255))           # furo: o fundo aparece por dentro
+        dados, sem_fundo = P.produto_para_arte(img)
+        self.assertTrue(sem_fundo)
+        out = self._png(dados)
+        w, h = out.size
+        self.assertEqual(out.getpixel((2, 2))[3], 0)                      # canto: transparente
+        self.assertEqual(out.getpixel((w // 2, h // 2))[3], 0)            # furo: transparente
+        self.assertEqual(out.getpixel((w // 2, int(h * 0.08)))[3], 255)   # anel: inteiro
+
+    def test_produto_branco_que_o_recorte_comeria_fica_como_antes(self):
+        img = Image.new("RGB", (400, 800), (255, 255, 255))
+        d = ImageDraw.Draw(img)
+        d.rectangle((100, 60, 300, 760), fill=(251, 251, 251))           # frasco branco, sem contorno
+        d.rectangle((100, 360, 300, 460), fill=(210, 20, 30))            # rótulo
+        dados, sem_fundo = P.produto_para_arte(img)
+        self.assertFalse(sem_fundo)
+        self.assertEqual(self._png(dados).getpixel((5, 5))[3], 255)       # retângulo inteiro (multiply na arte)
+
+
 class CatalogoDoProduto(_BaseAgente):
     """V20.21 (dono, 04/11): print de catálogo / ficha técnica é fonte de DADOS. Entra só na proposta de textos
     (origem "catalogo"), nunca como foto do produto na arte nem como layout."""

@@ -346,7 +346,8 @@ class ClaudeImagens:
                         "- html e body com width:1200px;height:1200px;margin:0;overflow:hidden.\n"
                         "- A foto do produto é <img src=\"produto.png\"> UMA vez, inteira, sem distorcer (object-fit:contain), "
                         "no lugar onde a referência põe o produto. "
-                        + ("Pode ter sombra (filter:drop-shadow)." if sombra else
+                        + ("A foto já está SEM FUNDO (PNG transparente): ponha direto sobre a arte, sem cartão, quadro "
+                           "ou caixa atrás dela; pode ter sombra suave (filter:drop-shadow)." if sombra else
                            "A foto tem fundo BRANCO: ponha-a dentro de um cartão branco ou bem claro (cantos arredondados), "
                            "com mix-blend-mode:multiply e sem sombra; o resto da arte continua com as cores da referência, "
                            "mesmo que o fundo dela seja escuro.") + "\n"
