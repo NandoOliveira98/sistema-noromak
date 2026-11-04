@@ -459,6 +459,15 @@ e o de etiquetas não reimporta envio `ready_to_ship` já postado (`ML_SUBSTATUS
 in_hub — a etiqueta não imprime mais; o pedido fica na fila para o ADMIN). Painel de saúde conta o atraso a partir do
 intervalo. Shopee pelo aviso (Push Mechanism) fica para outra fase. Testes: `TESTES/test_vigias_sem_repeticao_v2015.py`,
 `TESTES/test_vigias_por_aviso_v2016.py`.
+**V20.18 — aviso reforçado** (revisão de segurança de 08/10; dono, 04/11). O endereço do aviso é aberto e aceitava
+qualquer coisa. `_ml_aviso_conferir`: só `orders_v2`/`orders`/`shipments` com recurso `/orders/<número>` ou
+`/shipments/<número>` (`_ML_AVISO_RECURSO`), `application_id` igual ao `ML_CLIENT_ID` (vazio = recusado) e `user_id` de
+uma conta conectada (antes, sem `user_id` ia para Araçatuba). Recusa não chama o ML e fica no log uma vez por motivo e
+por hora (`_ml_aviso_recusado`). A rota responde "ok" na hora e põe o aviso numa fila de `ML_AVISO_FILA_MAX` (500) com
+`ML_AVISO_TAREFAS` (3) tarefas (antes: uma thread por aviso, sem limite); o mesmo recurso ainda na fila não entra de
+novo, fila cheia descarta (o vigia de 5 min cobre); corpo acima de `ML_AVISO_MAX_BYTES` (64 KB) = 413 sem ler.
+Conferido em produção antes: os 2.244 avisos de pedido e envio das duas contas vieram com os dois campos.
+Teste: `TESTES/test_webhook_ml_v2018.py`.
 Etiquetas: `_ml_fetch_shipping_zpl` / `_ml_store_linked_label`.
 Rentabilidade via billing API com cache em `ml_profitability_billing_cache`.
 Tratar expiração do token: já houve cenário de `access_token` sem `refresh_token`.

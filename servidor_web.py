@@ -22,6 +22,7 @@ import json
 import mimetypes
 import os
 import math
+import queue
 import re
 import secrets
 import shutil
@@ -47,7 +48,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.17-ESTUDIO-IMAGENS"
+APP_VERSION = "20.18-AVISO-ML-REFORCADO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -161,7 +162,9 @@ ML_MANUAL_SYNC_LIMIT = max(1, min(50, int(os.getenv("ML_MANUAL_SYNC_LIMIT", "20"
 ML_PENDING_WATCH_INTERVAL = max(10, min(900, int(os.getenv("ML_PENDING_WATCH_INTERVAL", "300"))))
 ML_PENDING_WATCH_BATCH = max(1, min(300, int(os.getenv("ML_PENDING_WATCH_BATCH", "200"))))
 ML_NEW_ORDER_WATCH_INTERVAL = max(15, min(900, int(os.getenv("ML_NEW_ORDER_WATCH_INTERVAL", "300"))))
-ML_NEW_ORDER_WATCH_LIMIT = max(5, min(50, int(os.getenv("ML_NEW_ORDER_WATCH_LIMIT", "20"))))
+# V20.17 (revisão antes de subir, 04/11): com a volta de 5 min, 20 vendas por volta deixava a 21ª de um pico
+# (aviso perdido) para o catch-up de 15 min. 50 = o máximo do /orders/search, ainda uma chamada só.
+ML_NEW_ORDER_WATCH_LIMIT = max(5, min(50, int(os.getenv("ML_NEW_ORDER_WATCH_LIMIT", "50"))))
 ML_CATCHUP_FALLBACK_DAYS = max(1, min(30, int(os.getenv("ML_CATCHUP_FALLBACK_DAYS", "7"))))
 ML_CATCHUP_PAGE_SIZE = max(10, min(50, int(os.getenv("ML_CATCHUP_PAGE_SIZE", "50"))))
 ML_CATCHUP_MAX_PAGES = max(2, min(100, int(os.getenv("ML_CATCHUP_MAX_PAGES", "40"))))
@@ -14085,24 +14088,115 @@ def ml_import_order(order_id: str, *, source: str = "API Mercado Livre") -> dict
     }
 
 
+# V20.18: reforço do aviso do ML (revisão de segurança de 08/10). O endereço é aberto (quem chama é
+# o ML) e aceitava aviso sem application_id/user_id, de qualquer recurso, abrindo uma tarefa por aviso
+# sem limite. Desde a V20.16 o aviso é quem traz pedido e etiqueta. Agora: só pedido/envio com número,
+# do nosso aplicativo e de conta conectada; recusa registrada uma vez por motivo e por hora; avisos numa
+# fila de tamanho fixo com poucas tarefas. Em produção (04/11) todos os 2.244 avisos de pedido e envio
+# das duas contas vieram com application_id e user_id.
+ML_AVISO_MAX_BYTES = 64 * 1024
+ML_AVISO_TAREFAS = 3
+ML_AVISO_FILA_MAX = 500
+_ML_AVISO_RECURSO = {
+    "orders_v2": re.compile(r"/orders/(\d{1,20})/?"),
+    "orders": re.compile(r"/orders/(\d{1,20})/?"),
+    "shipments": re.compile(r"/shipments/(\d{1,20})/?"),
+}
+_ML_AVISO_FILA: "queue.Queue[tuple[str, dict[str, Any]]]" = queue.Queue(maxsize=ML_AVISO_FILA_MAX)
+_ML_AVISO_NA_FILA: set[str] = set()
+_ML_AVISO_LOCK = threading.Lock()
+_ML_AVISO_TAREFAS_INICIADAS = False
+
+
+def _ml_aviso_conferir(topic: str, resource: str, user_id: str, app_id: str) -> tuple[str, str | None]:
+    """V20.18: (motivo da recusa, casa). Motivo vazio = o aviso pode ir ao ML, na casa devolvida."""
+    padrao = _ML_AVISO_RECURSO.get(topic)
+    if padrao is None:
+        return "tópico sem ação configurada", None
+    if not padrao.fullmatch(resource):
+        return "recurso fora do formato esperado", None
+    if ML_CLIENT_ID and app_id != ML_CLIENT_ID:
+        return ("aviso sem application_id" if not app_id
+                else "application_id diferente do aplicativo configurado"), None
+    if not user_id.isdigit():
+        return "aviso sem user_id", None
+    # V18.94: o aviso vai para a casa dona do user_id.
+    casa = ml_casa_do_seller(user_id)
+    if casa is None:
+        return "user_id de conta que não está conectada", None
+    return "", casa
+
+
+def _ml_aviso_recusado(topic: str, resource: str, user_id: str, app_id: str, motivo: str) -> None:
+    # Um registro por motivo e por hora: aviso falso em massa não vira um INSERT por aviso.
+    hora = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H")
+    if _log_se_mudou(("ml-aviso", motivo), (hora, "")):
+        ml_log_event(topic[:60], resource[:200], user_id[:40], app_id[:40], "IGNORADO", motivo)
+
+
 def ml_process_notification(payload: dict[str, Any]) -> None:
     topic = str(payload.get("topic") or "").strip()
     resource = str(payload.get("resource") or "").strip()
-    user_id = str(payload.get("user_id") or "")
-    app_id = str(payload.get("application_id") or "")
-    if ML_CLIENT_ID and app_id and app_id != ML_CLIENT_ID:
-        ml_log_event(topic, resource, user_id, app_id, "IGNORADO", "application_id diferente do aplicativo configurado")
+    user_id = str(payload.get("user_id") or "").strip()
+    app_id = str(payload.get("application_id") or "").strip()
+    motivo, casa = _ml_aviso_conferir(topic, resource, user_id, app_id)
+    if motivo:
+        _ml_aviso_recusado(topic, resource, user_id, app_id, motivo)
         return
-    # V18.94: o aviso vai para a casa dona do user_id; seller que não é de nenhuma casa é ignorado.
-    casa = ml_casa_do_seller(user_id) if user_id else ml_casa_atual()
-    if user_id and casa is None:
-        integration = ml_integration_row()
-        if integration and integration["seller_id"]:
-            ml_log_event(topic, resource, user_id, app_id, "IGNORADO", "user_id diferente do seller conectado")
-            return
-        casa = ml_casa_atual()
     with ml_na_casa(casa):
         _ml_process_notification_na_casa(payload, topic, resource, user_id, app_id)
+
+
+def ml_aviso_enfileirar(payload: dict[str, Any]) -> str:
+    """V20.18: põe o aviso na fila. 'na_fila', 'repetido' (o mesmo recurso ainda não foi pego, e a
+    tarefa vai ler o dado atual no ML) ou 'fila_cheia' (descartado: o vigia de 5 min cobre)."""
+    chave = f"{str(payload.get('topic') or '')[:40]}|{str(payload.get('resource') or '')[:200]}"
+    with _ML_AVISO_LOCK:
+        if chave in _ML_AVISO_NA_FILA:
+            return "repetido"
+        try:
+            _ML_AVISO_FILA.put_nowait((chave, payload))
+        except queue.Full:
+            cheia = True
+        else:
+            cheia = False
+            _ML_AVISO_NA_FILA.add(chave)
+    if cheia:
+        _ml_aviso_recusado("webhook", "", "", "", "fila de avisos cheia")
+        return "fila_cheia"
+    _ml_aviso_iniciar_tarefas()
+    return "na_fila"
+
+
+def _ml_aviso_saiu_da_fila(item: tuple[str, dict[str, Any]]) -> None:
+    # Sai do conjunto quando a tarefa PEGA o aviso: um aviso novo do mesmo pedido durante o
+    # tratamento ainda entra (a leitura em andamento pode ser anterior à mudança).
+    with _ML_AVISO_LOCK:
+        _ML_AVISO_NA_FILA.discard(item[0])
+
+
+def _ml_aviso_tarefa() -> None:
+    while True:
+        item = _ML_AVISO_FILA.get()
+        try:
+            _ml_aviso_saiu_da_fila(item)
+            ml_process_notification(item[1])
+        except Exception as exc:
+            print(f"[ml-aviso] erro ao tratar {item[0]}: {exc}", flush=True)
+        finally:
+            _ML_AVISO_FILA.task_done()
+
+
+def _ml_aviso_iniciar_tarefas() -> None:
+    global _ML_AVISO_TAREFAS_INICIADAS
+    if _ML_AVISO_TAREFAS_INICIADAS:
+        return
+    with _ML_AVISO_LOCK:
+        if _ML_AVISO_TAREFAS_INICIADAS:
+            return
+        for i in range(ML_AVISO_TAREFAS):
+            threading.Thread(target=_ml_aviso_tarefa, daemon=True, name=f"ml-aviso-{i + 1}").start()
+        _ML_AVISO_TAREFAS_INICIADAS = True
 
 
 def _ml_process_notification_na_casa(payload: dict[str, Any], topic: str, resource: str, user_id: str, app_id: str) -> None:
@@ -35571,6 +35665,13 @@ IMAGEM_TIPOS = {
 IMAGEM_MAX_BYTES = 10 * 1024 * 1024        # por foto
 IMAGEM_MAX_FOTOS = 20                      # por envio (foto principal em lote)
 IMAGEM_MAX_KIT = 8                         # fotos de um kit juntos
+# Revisão antes de subir (04/11): 20 fotos de celular (~100 MB em base64) ocupavam 300+ MB na VPS de 1 GB
+# (corpo + texto + JSON + fotos decodificadas). A soma das fotos de um envio vai até 25 MB, e o corpo grande é
+# recusado pelo Content-Length, antes de ser lido.
+IMAGEM_MAX_ENVIO_BYTES = 25 * 1024 * 1024
+IMAGEM_MAX_RESULTADO_BYTES = 30 * 1024 * 1024
+IMAGEM_MAX_CORPO = {"/api/imagens/enviar": 36 * 1024 * 1024, "/api/imagens/agente/resultado": 42 * 1024 * 1024}
+IMAGEM_MAX_CORPO_PADRAO = 2 * 1024 * 1024
 IMAGEM_AVISO_BYTES = 500 * 1024 * 1024     # tela fica amarela (lembrete; nada é apagado)
 IMAGEM_RESERVA_S = 600                     # vez do agente em um trabalho
 IMAGEM_TENTATIVAS = 3                      # reservas vencidas antes de virar "erro"
@@ -35769,6 +35870,8 @@ def imagens_enviar(usuario: str, req: dict[str, Any]) -> dict[str, Any]:
     if tipo in ("beneficios", "modo", "aplicacao") and len(fotos) > 2:
         raise ValueError("Envie a frente e, se tiver, o verso do produto (2 fotos no máximo).")
     decodificadas = [_imagem_decodificar((f or {}).get("dados") if isinstance(f, dict) else None) for f in fotos]
+    if sum(len(d) for d, _ in decodificadas) > IMAGEM_MAX_ENVIO_BYTES:
+        raise ValueError(f"As fotos de um envio somam até {IMAGEM_MAX_ENVIO_BYTES // (1024 * 1024)} MB: mande em partes.")
     # V20.17 (dono, 04/11): imagem de referência da arte — o agente copia o layout dela (só nas artes).
     ref_bruta = req.get("referencia") if isinstance(req.get("referencia"), dict) else None
     referencia = _imagem_decodificar(ref_bruta.get("dados")) if ref_bruta and ref_bruta.get("dados") else None
@@ -36170,6 +36273,8 @@ def imagens_agente_resultado(req: dict[str, Any]) -> dict[str, Any]:
         papel = "resultado" if a.get("papel") == "resultado" else "zoom"
         dados, ext = _imagem_decodificar(a.get("dados"))
         decodificados.append((papel, str(a.get("legenda") or "")[:120], dados, ext))
+    if sum(len(d) for _, _, d, _ in decodificados) > IMAGEM_MAX_RESULTADO_BYTES:
+        raise ValueError("Resultado grande demais.")
     te, ts, modelo = _imagem_tokens(req)
     with DB_LOCK:
         row = _imagem_agente_reservado(req, IMAGEM_EM_TRABALHO)
@@ -37938,6 +38043,17 @@ class AppHandler(BaseHTTPRequestHandler):
         self.send_json({"ok": False, "error": "Rota de imagens desconhecida."}, 404)
 
     def handle_imagens_post(self, path: str) -> None:
+        # Corpo grande recusado antes de ser lido (memória da VPS; revisão antes de subir, 04/11).
+        try:
+            tamanho = int(self.headers.get("Content-Length", "0") or 0)
+        except ValueError:
+            tamanho = 0
+        limite = IMAGEM_MAX_CORPO.get(path, IMAGEM_MAX_CORPO_PADRAO)
+        if tamanho > limite:
+            self.close_connection = True
+            self.send_json({"ok": False, "error": f"Envio grande demais (até {IMAGEM_MAX_ENVIO_BYTES // (1024 * 1024)} MB "
+                                                  "de fotos por vez): mande em partes."}, 413)
+            return
         if path.startswith("/api/imagens/agente/"):
             if path == "/api/imagens/agente/token-novo":
                 ctx = self.auth_full_admin()
@@ -39472,6 +39588,16 @@ class AppHandler(BaseHTTPRequestHandler):
     def handle_ml_notification(self) -> None:
         # O Mercado Livre recomenda resposta rápida. Confirmamos o recebimento e
         # processamos a consulta do recurso em thread separada.
+        # V20.18: o aviso do ML tem poucos bytes; corpo grande é recusado sem ser lido, e o
+        # aviso vai para a fila de tamanho fixo (antes: uma thread por aviso, sem limite).
+        try:
+            tamanho = int(self.headers.get("Content-Length", "0") or 0)
+        except ValueError:
+            tamanho = 0
+        if tamanho > ML_AVISO_MAX_BYTES:
+            self.close_connection = True
+            self.send_json({"ok": False, "error": "Aviso grande demais."}, 413)
+            return
         try:
             body = self.read_body()
             payload = json.loads(body.decode("utf-8", errors="replace") or "{}")
@@ -39481,7 +39607,7 @@ class AppHandler(BaseHTTPRequestHandler):
             payload = {}
         self.send_json({"ok": True})
         if payload:
-            threading.Thread(target=ml_process_notification, args=(payload,), daemon=True).start()
+            ml_aviso_enfileirar(payload)
 
     def do_DELETE(self) -> None:
         path = self.route_path()
