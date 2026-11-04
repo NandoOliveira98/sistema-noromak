@@ -98,6 +98,12 @@ def _obj(props: dict[str, Any]) -> dict[str, Any]:
 ORIGENS = ["rotulo", "catalogo", "internet", "nao_encontrado"]
 
 
+def _fontes(catalogo, pesquisa) -> str:
+    """Onde o texto pode vir. Teste real 04/11 (816.4003-0): com "só o que está no produto" o Haiku ignorou o catálogo
+    (aplicação e medidas em branco)."""
+    return "no produto" + (", no CATÁLOGO" if catalogo else "") + (", na pesquisa da internet" if pesquisa else "")
+
+
 def _bloco_catalogo(catalogo: list[Image.Image] | None) -> list[dict[str, Any]]:
     """V20.21 (dono, 04/11): print de catálogo / ficha técnica do fabricante = fonte de DADOS, não de visual.
     Caso real 816.4003-0: o Haiku leu "801358" e "816-4033-0" no lugar de 804358 / 816.4003-0."""
@@ -108,7 +114,9 @@ def _bloco_catalogo(catalogo: list[Image.Image] | None) -> list[dict[str, Any]]:
         "(códigos, medidas, aplicação, compatibilidade). Não copie o visual dele.")}]
     conteudo += [bloco_imagem(im) for im in catalogo]
     conteudo.append({"type": "text", "text": (
-        "Dados tirados do catálogo: origem 'catalogo' (fonte vazia). Copie códigos e medidas caractere por caractere, "
+        "USE este catálogo: aplicação (veículos, montadoras, onde vai), medidas e códigos que estão nele entram nos "
+        "textos. Dados tirados do catálogo: origem 'catalogo' (fonte vazia). Código do produto: use o que está escrito "
+        "no catálogo, não o gravado na peça (gravação em metal curvo engana a leitura). Copie códigos e medidas caractere por caractere, "
         "com os mesmos pontos, traços e zeros; se um dígito não estiver nítido, deixe o campo vazio em vez de "
         "adivinhar. Catálogo e rótulo valem igual e valem mais que a internet; se o catálogo trouxer outro produto "
         "que não este, não use.")})
@@ -245,7 +253,7 @@ class ClaudeImagens:
         conteudo = [bloco_imagem(im) for im in imagens] + [{"type": "text", "text": (
             f"Fotos do produto ({'frente e verso' if len(imagens) > 1 else 'frente'}). Vamos montar uma arte de anúncio.\n"
             f"{INSTRUCAO_TEXTOS[tipo]}\n\nPreencha um item para CADA campo abaixo (todos, na ordem):\n{lista}\n\n"
-            "Regras: use só o que está escrito ou é visível no produto. Se não estiver, valor vazio e origem "
+            f"Regras: use só o que está escrito ou é visível {_fontes(catalogo, pesquisa)}. Se não estiver, valor vazio e origem "
             "'nao_encontrado' — nunca invente número, tempo de proteção ou promessa. 'cor' é a cor principal do rótulo "
             "em #rrggbb (origem 'rotulo'). 'serve' false só se não dá para ler o rótulo (foto ruim), com o motivo.")}]
         conteudo += _bloco_catalogo(catalogo) + _bloco_pesquisa(pesquisa)
@@ -301,7 +309,8 @@ class ClaudeImagens:
             "da NOSSA arte nessa estrutura:\n"
             "- titulo: título curto no estilo da referência, sobre o nosso produto.\n"
             "- itens: até 8, cada um com rotulo (curto, 1 a 3 palavras) e valor (curto). Use só o que está "
-            "escrito ou visível no NOSSO produto; o que não estiver vem com valor vazio e origem 'nao_encontrado' — "
+            f"escrito ou visível {_fontes(catalogo, pesquisa).replace('no produto', 'no NOSSO produto')}; o que não estiver vem com "
+            "valor vazio e origem 'nao_encontrado' — "
             "nunca copie números ou dados da referência, nunca invente.\n"
             "- cor: a cor principal do rótulo do NOSSO produto, #rrggbb.\n"
             "- serve: false só se não dá para ler o nosso produto.")})

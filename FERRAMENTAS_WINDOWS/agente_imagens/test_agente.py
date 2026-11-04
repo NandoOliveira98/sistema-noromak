@@ -324,6 +324,7 @@ class CatalogoDoProduto(_BaseAgente):
         self.assertEqual(falso.imagens_pedidas, 2)                       # a foto + o catálogo
         self.assertIn("CATÁLOGO", falso.ultimo_texto_pedido)
         self.assertIn("caractere por caractere", falso.ultimo_texto_pedido)
+        self.assertIn("visível no produto, no CATÁLOGO", falso.ultimo_texto_pedido)   # a regra inclui o catálogo
 
     def test_catalogo_com_referencia(self):
         self.enviar_com_catalogo(referencia=True)
@@ -331,7 +332,7 @@ class CatalogoDoProduto(_BaseAgente):
         self.agente(falso).uma_volta()
         self.assertEqual(falso.chamadas, ["textos_ref"])
         self.assertEqual(falso.imagens_pedidas, 3)                       # referência + foto + catálogo
-        self.assertIn("CATÁLOGO", falso.ultimo_texto_pedido)
+        self.assertIn("visível no NOSSO produto, no CATÁLOGO", falso.ultimo_texto_pedido)
 
     def test_catalogo_nao_e_foto_do_produto(self):
         id_ = self.enviar_com_catalogo(referencia=True)
