@@ -430,3 +430,31 @@ class EstudioImagens(TesteNoromak):
                                    {"tipo": "principal", "fotos": [{"dados": b64(PNG)}], "produto_nome": "X"})
         self.assertEqual(st, 400)
         self.assertEqual(self.lista()["itens"], [])
+
+    # ---------- memória da VPS (revisão antes de subir, 04/11) ----------
+
+    def test_soma_das_fotos_acima_de_25_mb_e_recusada(self):
+        foto = b"\x89PNG\r\n\x1a\n" + b"\x00" * (9 * 1024 * 1024)      # 3 × 9 MB = 27 MB, cada uma abaixo de 10 MB
+        with self.assertRaises(ValueError) as erro:
+            S.imagens_enviar("admin_teste", {"tipo": "principal", "fotos": [{"dados": b64(foto)}] * 3})
+        self.assertIn("25 MB", str(erro.exception))
+        self.assertEqual(self.lista()["itens"], [])
+
+    def test_corpo_grande_e_recusado_antes_de_ser_lido(self):
+        # 20 fotos de celular (~100 MB em base64) ocupavam 300+ MB de memória na VPS de 1 GB: o servidor
+        # recusa pelo Content-Length, sem ler nem decodificar o corpo.
+        import http.client
+        from urllib.parse import urlparse
+        u = urlparse(self.url_base)
+        for rota in ("/api/imagens/enviar", "/api/imagens/agente/resultado"):
+            con = http.client.HTTPConnection(u.hostname, u.port, timeout=10)
+            con.putrequest("POST", u.path + rota)
+            con.putheader("Content-Type", "application/json")
+            con.putheader("Content-Length", str(60 * 1024 * 1024))
+            if self.cliente.cookie:
+                con.putheader("Cookie", self.cliente.cookie)
+            con.endheaders()
+            con.send(b"{}")                                   # manda só um pedaço e espera a resposta
+            resp = con.getresponse()
+            self.assertEqual(resp.status, 413, rota)
+            con.close()

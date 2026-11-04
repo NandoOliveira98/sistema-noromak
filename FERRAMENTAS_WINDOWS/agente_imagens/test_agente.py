@@ -446,6 +446,86 @@ class LimpezaDoHtml(unittest.TestCase):
             artes.limpar_html("<html><body><h1>Sem produto</h1></body></html>")
 
 
+class LimpezaDoHtmlTruques(unittest.TestCase):
+    """Revisão antes de subir (04/11): 5 formas de passar pela limpeza antiga, achadas rodando a função."""
+
+    def limpar(self, html: str) -> str:
+        import artes
+        return artes.limpar_html('<html><body><img src="produto.png">' + html + '</body></html>')
+
+    def test_evento_com_barra(self):
+        h = self.limpar('<svg/onload=fetch("http://10.1.15.1/")></svg>')
+        self.assertNotIn("onload", h.lower())
+
+    def test_script_remontado(self):
+        h = self.limpar('<scr<script>ipt>fetch(1)</script x>')
+        self.assertNotIn("<script", h.lower())
+
+    def test_atributo_sem_aspas_srcset_e_file(self):
+        h = self.limpar('<img src=https://fora.com/t.png><img srcset="file:///C:/Users/x.png 1x">')
+        self.assertNotIn("fora.com", h)
+        self.assertNotIn("srcset", h.lower())
+        self.assertNotIn("file:", h.lower())
+
+    def test_image_set_no_css(self):
+        h = self.limpar("<style>.a{background:image-set('https://fora.com/a.png' 1x)}</style>")
+        self.assertNotIn("fora.com", h)
+
+    def test_link_com_fontes_escondidas_em_outro_atributo(self):
+        h = self.limpar('<link rel=stylesheet href=https://fora.com/a.css data-x=fonts.googleapis.com>')
+        self.assertNotIn("fora.com", h)
+
+
+@unittest.skipUnless(P.achar_navegador(), "Sem Chrome/Edge neste PC")
+class ChromeTrancado(unittest.TestCase):
+    """Mesmo que algo passe pela limpeza, o Chrome que monta a arte não roda JavaScript, não lê arquivo do PC
+    e não acessa a rede (só as fontes do Google)."""
+
+    def test_javascript_desligado(self):
+        img = P.renderizar('<html><body style="margin:0;width:1200px;height:1200px;background:#fff">'
+                           '<script>document.body.style.background="#f00"</script></body></html>', {})
+        self.assertEqual(img.getpixel((600, 600)), (255, 255, 255))
+
+    def test_nao_le_arquivo_do_pc(self):
+        import tempfile
+        pasta = Path(tempfile.mkdtemp())
+        vermelho = pasta / "segredo.png"
+        Image.new("RGB", (50, 50), (255, 0, 0)).save(vermelho)
+        img = P.renderizar(f'<html><body style="margin:0;background:#fff"><img src="{vermelho.as_uri()}" '
+                           'style="width:1200px;height:1200px"></body></html>', {})
+        self.assertNotEqual(img.getpixel((600, 600)), (255, 0, 0))
+
+    def test_nao_acessa_a_rede(self):
+        import http.server
+        import threading
+        chamadas = []
+
+        class Espiao(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                chamadas.append(self.path)
+                self.send_response(404)
+                self.end_headers()
+
+            def log_message(self, *a):
+                pass
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Espiao)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            porta = srv.server_address[1]
+            P.renderizar(f'<html><body><img src="http://127.0.0.1:{porta}/vazou.png">'
+                         f'<img src="http://localhost:{porta}/vazou2.png"></body></html>', {})
+        finally:
+            srv.shutdown()
+        self.assertEqual(chamadas, [])
+
+    def test_imagem_do_produto_continua_aparecendo(self):
+        b = io.BytesIO()
+        Image.new("RGB", (100, 100), (0, 0, 255)).save(b, "PNG")
+        img = P.renderizar('<html><body style="margin:0;background:#fff"><img src="produto.png" '
+                           'style="width:1200px;height:1200px"></body></html>', {"produto.png": b.getvalue()})
+        self.assertEqual(img.getpixel((600, 600)), (0, 0, 255))
+
+
 class ArtesHtml(unittest.TestCase):
     def test_campo_vazio_nao_aparece_e_texto_e_escapado(self):
         import artes

@@ -18,6 +18,11 @@ class IntervalosDaRedeDeSeguranca(unittest.TestCase):
         self.assertEqual(S.ML_NEW_ORDER_WATCH_INTERVAL, 300)
         self.assertEqual(S.ML_PENDING_WATCH_INTERVAL, 300)
 
+    def test_vigia_de_pedidos_novos_olha_50_vendas_por_volta(self):
+        # Revisão antes de subir (04/11): eram 20 a cada 20 s; com a volta de 5 min, 20 deixava de fora a
+        # 21ª venda de um pico (aviso perdido) até o catch-up de 15 min. 50 = o máximo do /orders/search.
+        self.assertEqual(S.ML_NEW_ORDER_WATCH_LIMIT, 50)
+
     def test_erro_nao_acelera_o_vigia(self):
         # o recuo por erro limitava a espera a 120 s: com o intervalo de 300 s, erro faria rodar MAIS
         self.assertGreaterEqual(S._ml_new_order_espera(0), 300)

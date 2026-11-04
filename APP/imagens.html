@@ -186,6 +186,7 @@ const B = "/expedicao";
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const MAX_BYTES = 10 * 1024 * 1024;
+const MAX_ENVIO = 25 * 1024 * 1024;   // soma das fotos de um envio (memória da VPS; igual ao servidor)
 const TIPOS = {
   principal: {nome: "Foto principal", dica: "Fundo branco, 1200×1200, produto inteiro. Pode mandar várias fotos: cada uma vira uma imagem.", min: 1, max: 20},
   beneficios: {nome: "Benefícios", dica: "Mande a frente do produto e, se tiver, o verso. O Claude lê o rótulo e propõe os benefícios; você corrige e aprova antes de gerar a arte.", min: 1, max: 2},
@@ -298,6 +299,8 @@ const lerBase64 = f => new Promise((ok, falha) => {
   const r = new FileReader(); r.onload = () => ok(String(r.result).split(",", 2)[1]); r.onerror = () => falha(r.error); r.readAsDataURL(f);
 });
 async function enviar() {
+  const total = fotos.reduce((s, f) => s + f.arquivo.size, 0) + (referencia && ARTES.includes($("tipo").value) ? referencia.arquivo.size : 0);
+  if (total > MAX_ENVIO) { nkToast(`As fotos somam ${tamanho(total)}: o limite por envio é 25 MB. Mande em partes.`, "erro"); return; }
   const btn = $("btnEnviar"); btn.disabled = true; btn.textContent = "Enviando…";
   try {
     const lista = [];

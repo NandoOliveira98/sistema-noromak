@@ -8,6 +8,7 @@ sombra (processar.produto_para_arte).
 from __future__ import annotations
 
 import html
+from html.parser import HTMLParser
 import re
 
 BASE_CSS = """@import url('https://fonts.googleapis.com/css2?family=Anton&family=Inter:wght@400;600;800&display=block');
@@ -145,29 +146,126 @@ MONTADORES = {"beneficios": beneficios, "modo": modo, "aplicacao": aplicacao}
 FONTES_LIBERADAS = ("https://fonts.googleapis.com/", "https://fonts.gstatic.com/")
 
 
-def limpar_html(bruto: str) -> str:
-    """V20.17: HTML escrito pelo Claude (arte pela referência). Vai para o Chrome deste PC, então nada de
-    script, evento, iframe/objeto ou endereço externo (só as fontes do Google). Tem de usar produto.png."""
-    h = str(bruto or "")
-    h = re.sub(r"<\s*(script|iframe|object|embed|link|meta|base|form)\b[^>]*>.*?<\s*/\s*\1\s*>", "", h, flags=re.I | re.S)
-    h = re.sub(r"<\s*(script|iframe|object|embed|meta|base|form)\b[^>]*/?>", "", h, flags=re.I)
-    h = re.sub(r"<\s*link\b(?![^>]*fonts\.googleapis\.com)[^>]*>", "", h, flags=re.I)
-    h = re.sub(r"\son[a-z]+\s*=\s*(\"[^\"]*\"|'[^']*'|[^\s>]+)", "", h, flags=re.I)
-    h = re.sub(r"javascript\s*:", "", h, flags=re.I)
+# Revisão antes de subir (04/11): a limpeza por expressões deixava passar 5 truques (evento com "/",
+# <script> remontado, atributo sem aspas, srcset/file:, image-set). Agora é por LISTA DO QUE PODE: o HTML é
+# lido pelo html.parser e escrito de novo só com tags, atributos e CSS conhecidos. E o Chrome que monta a
+# arte roda sem JavaScript e sem rede (processar.renderizar) — duas barreiras.
+TAGS_LIBERADAS = {
+    "html", "head", "body", "title", "meta", "link", "style", "div", "span", "p", "h1", "h2", "h3", "h4", "h5", "h6",
+    "b", "strong", "i", "em", "small", "sup", "sub", "br", "hr", "ul", "ol", "li", "img", "section", "header", "footer",
+    "main", "article", "aside", "figure", "figcaption", "table", "thead", "tbody", "tr", "td", "th",
+    "svg", "g", "path", "circle", "ellipse", "rect", "line", "polyline", "polygon", "defs", "lineargradient",
+    "radialgradient", "stop", "text", "tspan",
+}
+TAGS_SEM_CONTEUDO = {"script", "iframe", "object", "embed", "noscript", "template", "textarea", "select", "button",
+                     "form", "frame", "frameset", "applet", "audio", "video", "canvas", "foreignobject", "math", "xmp"}
+VAZIAS = {"meta", "link", "img", "br", "hr"}
+ATRIBUTOS_LIBERADOS = {
+    "class", "id", "style", "src", "href", "rel", "alt", "title", "charset", "lang", "dir", "colspan", "rowspan",
+    "viewbox", "d", "cx", "cy", "r", "rx", "ry", "x", "y", "x1", "y1", "x2", "y2", "width", "height", "fill", "stroke",
+    "stroke-width", "stroke-linecap", "stroke-linejoin", "stroke-dasharray", "points", "transform", "xmlns",
+    "opacity", "fill-opacity", "stroke-opacity", "offset", "stop-color", "stop-opacity", "gradientunits",
+    "preserveaspectratio", "font-size", "font-weight", "font-family", "text-anchor", "dominant-baseline",
+}
 
-    def _url(m: re.Match) -> str:
-        alvo = m.group(2).strip().strip("'\"")
-        if alvo == "produto.png" or alvo.startswith("data:image/svg") or alvo.startswith(FONTES_LIBERADAS) or alvo.startswith("#"):
-            return m.group(0)
-        return m.group(1) + '""'
-    h = re.sub(r"((?:src|href|xlink:href)\s*=\s*)(\"[^\"]*\"|'[^']*')", _url, h, flags=re.I)
-    h = re.sub(r"url\(\s*(?!['\"]?(?:produto\.png|data:image/svg|https://fonts\.g|#))[^)]*\)", "none", h, flags=re.I)
-    h = re.sub(r"@import\s+(?!url\(\s*['\"]?https://fonts\.googleapis\.com)[^;]+;", "", h, flags=re.I)
-    if "produto.png" not in h:
+
+def _css_limpo(css: str) -> str:
+    """CSS sem endereço de fora: url() só produto.png, data:image/svg e fontes do Google; @import só das
+    fontes; sem image-set, expression, behavior, file:, javascript:."""
+    c = str(css or "")
+    c = re.sub(r"<\s*/?\s*style", "", c, flags=re.I)
+    c = re.sub(r"(?:-webkit-)?image-set\s*\([^;{}]*\)", "none", c, flags=re.I)
+    c = re.sub(r"url\(\s*(?!['\"]?(?:produto\.png|data:image/svg\+xml|https://fonts\.(?:googleapis|gstatic)\.com/))[^)]*\)",
+               "none", c, flags=re.I)
+    c = re.sub(r"@import\s+(?!url\(\s*['\"]?https://fonts\.googleapis\.com/)[^;]*;?", "", c, flags=re.I)
+    c = re.sub(r"expression\s*\(|behavior\s*:|-moz-binding|javascript\s*:|vbscript\s*:|file\s*:", "", c, flags=re.I)
+    return c
+
+
+def _url_liberada(tag: str, nome: str, valor: str) -> bool:
+    v = valor.strip()
+    if nome == "src":
+        return tag == "img" and v == "produto.png"
+    if nome == "href":
+        return tag == "link" and v.startswith("https://fonts.googleapis.com/")
+    return True
+
+
+class _Limpador(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.saida: list[str] = []
+        self.pular = 0          # dentro de tag cujo conteúdo é descartado (script, iframe...)
+        self.em_style = False
+
+    def _atributos(self, tag: str, attrs: list[tuple[str, str | None]]) -> str:
+        partes = []
+        for nome, valor in attrs:
+            nome = (nome or "").lower()
+            if nome not in ATRIBUTOS_LIBERADOS:
+                continue                      # on*, srcset, formaction, xlink:href... nada fora da lista
+            valor = valor or ""
+            if nome in ("src", "href") and not _url_liberada(tag, nome, valor):
+                continue
+            if nome == "style":
+                valor = _css_limpo(valor)
+            if re.search(r"(javascript|vbscript|file)\s*:", valor, re.I):
+                continue
+            partes.append(f' {nome}="{html.escape(valor, quote=True)}"')
+        if tag == "link" and not any(p.startswith(' href="') for p in partes):
+            return "\0"                       # link sem as fontes do Google não entra
+        return "".join(partes)
+
+    def _abrir(self, tag: str, attrs, vazia: bool) -> None:
+        tag = tag.lower()
+        if tag in TAGS_SEM_CONTEUDO:
+            if not vazia:
+                self.pular += 1
+            return
+        if self.pular or tag not in TAGS_LIBERADAS:
+            return
+        atributos = self._atributos(tag, attrs)
+        if atributos == "\0":
+            return
+        self.saida.append(f"<{tag}{atributos}{' /' if vazia and tag not in VAZIAS else ''}>")
+        if tag == "style":
+            self.em_style = True
+
+    def handle_starttag(self, tag, attrs):
+        self._abrir(tag, attrs, tag.lower() in VAZIAS)
+
+    def handle_startendtag(self, tag, attrs):
+        self._abrir(tag, attrs, True)
+
+    def handle_endtag(self, tag):
+        tag = tag.lower()
+        if tag in TAGS_SEM_CONTEUDO:
+            self.pular = max(0, self.pular - 1)
+            return
+        if self.pular or tag not in TAGS_LIBERADAS or tag in VAZIAS:
+            return
+        if tag == "style":
+            self.em_style = False
+        self.saida.append(f"</{tag}>")
+
+    def handle_data(self, data):
+        if self.pular:
+            return
+        self.saida.append(_css_limpo(data) if self.em_style else html.escape(data, quote=False))
+
+
+def limpar_html(bruto: str) -> str:
+    """V20.17: HTML escrito pelo Claude (arte pela referência), refeito só com o que está nas listas acima.
+    Tem de usar produto.png."""
+    limpador = _Limpador()
+    limpador.feed(str(bruto or ""))
+    limpador.close()
+    h = "".join(limpador.saida)
+    if 'src="produto.png"' not in h:
         raise ValueError("A arte gerada não usa a foto do produto.")
     if "<html" not in h.lower():
-        h = "<!doctype html><html><head><meta charset=\"utf-8\"></head><body>" + h + "</body></html>"
-    return h
+        h = '<html><head><meta charset="utf-8"></head><body>' + h + "</body></html>"
+    return "<!doctype html>" + h
 
 
 def montar(tipo: str, campos_lista: list[dict], sombra: bool) -> str:

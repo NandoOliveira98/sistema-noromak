@@ -246,25 +246,57 @@ def achar_navegador() -> str | None:
 
 
 def renderizar(html: str, arquivos: dict[str, bytes]) -> Image.Image:
-    """Grava o HTML e as imagens numa pasta temporária e tira o 'print' 1200×1200 no Chrome/Edge."""
+    """Grava o HTML e as imagens numa pasta temporária e tira o 'print' 1200×1200 no Chrome/Edge.
+
+    Revisão antes de subir (04/11): o HTML pode ter sido escrito pelo Claude a partir de uma referência ou de
+    páginas da internet. O Chrome roda trancado: a página vem de um servidor local só desta pasta, com regra de
+    segurança (CSP) que proíbe script e qualquer imagem/conexão de fora (página http também não lê file:// do PC); e
+    toda a rede passa por um proxy que não existe, menos esse servidor e as fontes do Google. (A opção do Chrome que
+    desliga o JavaScript impede o print no modo sem janela.)"""
     nav = achar_navegador()
     if not nav:
         raise RuntimeError("Chrome ou Edge não encontrado neste PC (precisa para montar as artes).")
+    import functools
+    import http.server
+    import threading
     with tempfile.TemporaryDirectory() as d:
         for nome, dados in arquivos.items():
-            Path(d, nome).write_bytes(dados)
-        pagina = Path(d, "arte.html")
-        pagina.write_text(html, encoding="utf-8")
-        saida = Path(d, "arte.png")
-        with tempfile.TemporaryDirectory() as perfil:
-            subprocess.run([nav, "--headless=new", "--disable-gpu", "--hide-scrollbars", "--force-device-scale-factor=1",
-                            f"--user-data-dir={perfil}", "--virtual-time-budget=4000", f"--window-size={TAMANHO},{TAMANHO}",
-                            f"--screenshot={saida}", pagina.as_uri()],
-                           check=True, capture_output=True, timeout=120,
-                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        img = Image.open(saida).convert("RGB")
-        img.load()
-        return img
+            Path(d, Path(nome).name).write_bytes(dados)
+        Path(d, "arte.html").write_text(html, encoding="utf-8")
+        saida = Path(tempfile.mkdtemp()) / "arte.png"
+
+        class _Silencioso(http.server.SimpleHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def end_headers(self):
+                # Sem script, sem iframe/objeto, e só imagem desta pasta / fonte do Google.
+                self.send_header("Content-Security-Policy",
+                                 "default-src 'none'; script-src 'none'; object-src 'none'; frame-src 'none'; "
+                                 "base-uri 'none'; form-action 'none'; connect-src 'none'; img-src 'self' data:; "
+                                 "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+                                 "font-src 'self' data: https://fonts.gstatic.com")
+                super().end_headers()
+        servidor = http.server.ThreadingHTTPServer(("127.0.0.1", 0), functools.partial(_Silencioso, directory=d))
+        threading.Thread(target=servidor.serve_forever, daemon=True).start()
+        porta = servidor.server_address[1]
+        try:
+            with tempfile.TemporaryDirectory() as perfil:
+                subprocess.run([nav, "--headless=new", "--disable-gpu", "--hide-scrollbars", "--force-device-scale-factor=1",
+                                f"--user-data-dir={perfil}", "--virtual-time-budget=4000", f"--window-size={TAMANHO},{TAMANHO}",
+                                "--disable-extensions", "--no-first-run",
+                                "--proxy-server=http://127.0.0.1:9",
+                                f"--proxy-bypass-list=<-loopback>;127.0.0.1:{porta};fonts.googleapis.com;fonts.gstatic.com",
+                                f"--screenshot={saida}", f"http://127.0.0.1:{porta}/arte.html"],
+                               check=True, capture_output=True, timeout=120,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        finally:
+            servidor.shutdown()
+            servidor.server_close()
+    img = Image.open(saida).convert("RGB")
+    img.load()
+    shutil.rmtree(saida.parent, ignore_errors=True)
+    return img
 
 
 def produto_para_arte(img: Image.Image) -> tuple[bytes, bool]:
