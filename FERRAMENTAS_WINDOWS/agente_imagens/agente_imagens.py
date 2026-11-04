@@ -158,11 +158,18 @@ class Agente:
 
     @staticmethod
     def _entregar(funcao: Callable, corpo: dict, claude: ClaudeImagens) -> None:
-        corpo.update({"modelo": claude.modelo, "tokens_entrada": claude.uso.entrada, "tokens_saida": claude.uso.saida})
+        corpo.update({"modelo": claude.modelo, "tokens_entrada": claude.uso.entrada, "tokens_saida": claude.uso.saida,
+                      "buscas_web": claude.uso.buscas})
         funcao(corpo)
 
     def _originais(self, trabalho: dict) -> list[tuple[dict, Any]]:
-        return [(a, P.abrir(self.noromak.arquivo(trabalho["id"], a["nome"]))) for a in trabalho.get("arquivos") or []]
+        """Fotos do produto (a imagem de referência fica de fora: ela é de OUTRO anúncio)."""
+        return [(a, P.abrir(self.noromak.arquivo(trabalho["id"], a["nome"]))) for a in trabalho.get("arquivos") or []
+                if a.get("papel") != "referencia"]
+
+    def _referencia(self, trabalho: dict):
+        a = next((x for x in trabalho.get("arquivos") or [] if x.get("papel") == "referencia"), None)
+        return P.abrir(self.noromak.arquivo(trabalho["id"], a["nome"])) if a else None
 
     # ----- foto principal / kit -----
     def etapa_principal(self, trabalho: dict, claude: ClaudeImagens) -> dict:
@@ -241,11 +248,23 @@ class Agente:
     # ----- artes -----
     def etapa_analise(self, trabalho: dict, claude: ClaudeImagens) -> dict:
         imagens = [img for _, img in self._originais(trabalho)]
-        dados = claude.propor_textos(trabalho["tipo"], imagens)
+        referencia = self._referencia(trabalho)
+        # V20.17 (dono, 04/11): com nome/link do produto, pesquisa na internet antes. Falhou = segue só com o rótulo.
+        produto = trabalho.get("produto") or {}
+        pesquisa, relatorio = None, {}
+        if produto.get("nome") or produto.get("link"):
+            try:
+                pesquisa = claude.pesquisar(str(produto.get("nome") or ""), str(produto.get("link") or ""))
+                relatorio = {"pesquisa": pesquisa["texto"], "fontes": pesquisa["fontes"]}
+            except Exception as e:
+                relatorio = {"aviso_pesquisa": "A pesquisa na internet falhou; os textos vieram só do rótulo. " + _mensagem_erro(e)}
+        dados = (claude.propor_textos_referencia(trabalho["tipo"], imagens, referencia, pesquisa) if referencia is not None
+                 else claude.propor_textos(trabalho["tipo"], imagens, pesquisa))
         if not dados.get("serve", True):
             return {"id": trabalho["id"], "situacao": "outra_foto",
                     "mensagem": dados.get("motivo") or "Não dá para ler o rótulo: mande uma foto mais nítida."}
-        return {"id": trabalho["id"], "situacao": "textos_para_aprovar", "textos": {"campos": dados["campos"]}}
+        return {"id": trabalho["id"], "situacao": "textos_para_aprovar", "textos": {"campos": dados["campos"]},
+                "relatorio": relatorio}
 
     def etapa_arte(self, trabalho: dict, claude: ClaudeImagens) -> dict:
         originais = self._originais(trabalho)
@@ -253,8 +272,21 @@ class Agente:
         ampliada, faixas_rel, zooms, deu_certo = self.ampliar_e_conferir(frente, claude, trabalho.get("obs") or "")
         produto, sombra = P.produto_para_arte(ampliada)
         campos = (trabalho.get("textos") or {}).get("campos") or []
-        arte = P.renderizar(artes.montar(trabalho["tipo"], campos, sombra), {"produto.png": produto})
-        revisao = claude.conferir_arte(arte, campos)
+        referencia = self._referencia(trabalho)
+        if referencia is None:
+            arte = P.renderizar(artes.montar(trabalho["tipo"], campos, sombra), {"produto.png": produto})
+            revisao = claude.conferir_arte(arte, campos)
+        else:
+            # V20.17: layout da referência — o Claude escreve o HTML; se a conferência achar problema, ele
+            # corrige uma vez com a lista de problemas.
+            problemas_antes: list[str] = []
+            for _ in range(2):
+                html = artes.limpar_html(claude.gerar_html(referencia, P.abrir(produto), campos, sombra, problemas_antes))
+                arte = P.renderizar(html, {"produto.png": produto})
+                revisao = claude.conferir_arte(arte, campos)
+                problemas_antes = [str(p) for p in revisao.get("problemas") or []]
+                if revisao.get("ok"):
+                    break
         problemas = [str(p) for p in revisao.get("problemas") or []]
         ok = bool(revisao.get("ok")) and deu_certo
         arquivos = [{"papel": "resultado", "dados": b64(P.jpg(arte))}]

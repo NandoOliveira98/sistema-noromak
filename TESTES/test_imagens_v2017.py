@@ -328,3 +328,105 @@ class EstudioImagens(TesteNoromak):
         for c, esperado in ((sem, 403), (com, 200)):
             st, _, _ = self.baixar(c, "/imagens")
             self.assertEqual(st, esperado)
+
+    # ---------- crédito da API (dono, 04/11: US$ 100 que renova todo dia 19) ----------
+
+    def test_ciclo_do_credito(self):
+        from datetime import date
+        self.assertEqual(S._imagem_ciclo(date(2026, 11, 4), 19), (date(2026, 10, 19), date(2026, 11, 19)))
+        self.assertEqual(S._imagem_ciclo(date(2026, 11, 19), 19), (date(2026, 11, 19), date(2026, 12, 19)))
+        self.assertEqual(S._imagem_ciclo(date(2027, 1, 5), 19), (date(2026, 12, 19), date(2027, 1, 19)))
+        self.assertEqual(S._imagem_ciclo(date(2027, 2, 10), 31), (date(2027, 1, 31), date(2027, 2, 28)))
+
+    def test_credito_soma_cada_entrega_e_nao_volta_ao_apagar(self):
+        saldo = self.lista()["saldo"]
+        self.assertEqual((saldo["valor"], saldo["dia"], saldo["usado"]), (100.0, 19, 0.0))
+        id_ = self.enviar()[1]["ids"][0]
+        self.agente("GET", "/api/imagens/agente/proximo")
+        self.agente("POST", "/api/imagens/agente/resultado", {
+            "id": id_, "situacao": "pronta", "modelo": "claude-haiku-5-5",
+            "tokens_entrada": 1_000_000, "tokens_saida": 1_000_000,
+            "arquivos": [{"papel": "resultado", "dados": b64(JPG)}]})
+        saldo = self.lista()["saldo"]
+        self.assertAlmostEqual(saldo["usado"], 0.60)          # 1M × 0,10 + 1M × 0,50
+        self.assertAlmostEqual(saldo["restante"], 99.40)
+        self.assertAlmostEqual(saldo["pct"], 0.6)
+        # Gasto de um ciclo anterior não conta no atual.
+        with S.DB_LOCK:
+            S.DB.execute("INSERT INTO imagem_gasto_v2017(dia,quando,modelo,entrada,saida,usd) "
+                         "VALUES('2020-01-01','x','claude-haiku-5-5',0,0,50)")
+            S.DB.commit()
+        self.cliente.pedir("POST", "/api/imagens/apagar", {"ids": [id_]})
+        self.assertAlmostEqual(self.lista()["saldo"]["usado"], 0.60)  # apagar não devolve crédito
+
+    def test_credito_configuravel_so_pelo_perfil_admin(self):
+        sup = self.usuario("sup_cred", permissions={"conferencia": True, "admin": True, "imagens": True})
+        self.assertEqual(sup.pedir("POST", "/api/imagens/config", {"saldo_valor": 50})[0], 403)
+        for ruim in ({"saldo_valor": 0}, {"saldo_valor": "abc"}, {"saldo_dia": 32}, {}):
+            self.assertEqual(self.cliente.pedir("POST", "/api/imagens/config", ruim)[0], 400, ruim)
+        st, r = self.cliente.pedir("POST", "/api/imagens/config", {"saldo_valor": "50,5", "saldo_dia": 5})
+        self.assertEqual(st, 200, r)
+        saldo = self.lista()["saldo"]
+        self.assertEqual((saldo["valor"], saldo["dia"]), (50.5, 5))
+        self.assertEqual(self.lista()["modelo"], "claude-haiku-5-5")  # mudar o crédito não mexe no modelo
+
+    # ---------- imagem de referência (dono, 04/11: o agente copia o layout dela) ----------
+
+    def test_referencia_vai_junto_da_arte(self):
+        corpo = {"tipo": "beneficios", "sku": "X", "fotos": [{"dados": b64(PNG)}], "referencia": {"dados": b64(WEBP)}}
+        st, r = self.cliente.pedir("POST", "/api/imagens/enviar", corpo)
+        self.assertEqual(st, 200, r)
+        id_ = r["ids"][0]
+        arquivos = self.item(id_)["arquivos"]
+        self.assertEqual([a["papel"] for a in arquivos], ["frente", "referencia"])
+        t = self.agente("GET", "/api/imagens/agente/proximo")[1]["trabalho"]
+        ref = next(a for a in t["arquivos"] if a["papel"] == "referencia")
+        st, dados = self.agente("GET", f"/api/imagens/agente/arquivo?id={id_}&nome={ref['nome']}", bruto=True)
+        self.assertEqual((st, dados), (200, WEBP))
+
+    def test_referencia_so_nas_artes_e_so_imagem(self):
+        for tipo in ("principal", "juntos"):
+            fotos = [{"dados": b64(PNG)}] * (2 if tipo == "juntos" else 1)
+            st, _ = self.cliente.pedir("POST", "/api/imagens/enviar",
+                                       {"tipo": tipo, "fotos": fotos, "referencia": {"dados": b64(PNG)}})
+            self.assertEqual(st, 400, tipo)
+        st, _ = self.cliente.pedir("POST", "/api/imagens/enviar", {"tipo": "modo", "fotos": [{"dados": b64(PNG)}],
+                                                                   "referencia": {"dados": b64(b"%PDF-1.4")}})
+        self.assertEqual(st, 400)
+        self.assertEqual(self.lista()["itens"], [])
+
+    # ---------- nome do produto / link do fornecedor (dono, 04/11: o agente pesquisa na internet) ----------
+
+    def test_nome_e_link_vao_para_o_agente(self):
+        corpo = {"tipo": "modo", "fotos": [{"dados": b64(PNG)}], "produto_nome": "  Câmara de freio   43-272 ",
+                 "produto_link": "https://fornecedor.com.br/produto/43-272"}
+        st, r = self.cliente.pedir("POST", "/api/imagens/enviar", corpo)
+        self.assertEqual(st, 200, r)
+        id_ = r["ids"][0]
+        self.assertEqual(self.item(id_)["produto"], {"nome": "Câmara de freio 43-272",
+                                                      "link": "https://fornecedor.com.br/produto/43-272"})
+        t = self.agente("GET", "/api/imagens/agente/proximo")[1]["trabalho"]
+        self.assertEqual(t["produto"]["link"], "https://fornecedor.com.br/produto/43-272")
+        # Textos com a fonte da internet sobrevivem à aprovação.
+        campos = [{"chave": "passo_1", "rotulo": "Passo 1", "valor": "Fixe com M16x1,5", "origem": "internet",
+                   "fonte": "https://fornecedor.com.br/produto/43-272"}]
+        self.agente("POST", "/api/imagens/agente/analise", {"id": id_, "situacao": "textos_para_aprovar",
+                                                            "textos": {"campos": campos}, "buscas_web": 2,
+                                                            "tokens_entrada": 1000, "tokens_saida": 100})
+        it = self.item(id_)
+        st, r = self.cliente.pedir("POST", "/api/imagens/textos", {"id": id_, "versao": it["versao"], "campos": campos})
+        self.assertEqual(st, 200, r)
+        self.assertEqual(self.item(id_)["textos"]["campos"][0]["fonte"], "https://fornecedor.com.br/produto/43-272")
+        # Cada busca na internet custa US$ 0,01 além dos tokens.
+        self.assertAlmostEqual(self.lista()["saldo"]["usado"], 0.02 + (1000 * 0.10 + 100 * 0.50) / 1_000_000, places=3)
+
+    def test_link_invalido_e_produto_fora_das_artes_sao_recusados(self):
+        for link in ("javascript:alert(1)", "ftp://x.com/a", "fornecedor.com.br", "https://a.com/" + "x" * 600,
+                     "https://a.com/a b"):
+            st, _ = self.cliente.pedir("POST", "/api/imagens/enviar",
+                                       {"tipo": "beneficios", "fotos": [{"dados": b64(PNG)}], "produto_link": link})
+            self.assertEqual(st, 400, link)
+        st, _ = self.cliente.pedir("POST", "/api/imagens/enviar",
+                                   {"tipo": "principal", "fotos": [{"dados": b64(PNG)}], "produto_nome": "X"})
+        self.assertEqual(st, 400)
+        self.assertEqual(self.lista()["itens"], [])

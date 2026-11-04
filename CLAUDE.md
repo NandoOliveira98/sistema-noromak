@@ -711,8 +711,22 @@ lado em fundo branco, foto principal do kit): o servidor o manda pela etapa `pri
 fixos por tipo em `CAMPOS_ARTE`; o que não está no rótulo vem vazio) → aprovação → `artes.py` monta o HTML (produto em
 fundo branco com `mix-blend-mode:multiply`) → Chrome headless → `conferir_arte`. Todas as chamadas com
 `output_config.format` (JSON de esquema fixo) e `effort: low`. Teste com o Claude simulado:
-`python -m unittest test_agente` na pasta do agente (fora do `testar.sh`: precisa do Pillow). **Falta conferir com a
-chave real se o Haiku acha o "Hidrata" deformado** (o caso de 04/11).
+`python -m unittest test_agente` na pasta do agente (fora do `testar.sh`: precisa do Pillow). Conferido com a chave real
+(04/11): o Haiku achou o "Hidrata" deformado e o agente refez a faixa (US$ 0,0022 a foto).
+**Crédito da API** (dono, 04/11): US$ 100 que renova todo dia 19 (`saldo_valor`/`saldo_dia` em `imagem_config_v2017`,
+perfil Admin muda pelo `POST /api/imagens/config`). A API não informa saldo para a chave comum: cada entrega do agente
+grava uma linha em `imagem_gasto_v2017` (tokens × `IMAGEM_PRECOS` + `buscas` × `IMAGEM_PRECO_BUSCA` US$ 0,01); a barra
+soma do último dia 19 até a renovação (`_imagem_ciclo`, dia 31 vira o último do mês). Só conta o uso do Noromak;
+apagar a imagem não devolve crédito. **Imagem de referência** (só nas artes, `papel: referencia`): o Claude propõe os
+textos na estrutura da referência (`propor_textos_referencia`: título + até 8 itens "rótulo | valor", nunca copia dados
+da referência) e escreve o HTML imitando o layout (`gerar_html`, esforço medium); o HTML passa por `artes.limpar_html`
+(sem script/evento/iframe/endereço de fora; só fontes do Google; tem de usar `produto.png`) e, se a conferência achar
+problema, é refeito uma vez com a lista de problemas. **Nome do produto / link do fornecedor** (só nas artes,
+`produto_json`): antes dos textos o agente pesquisa na internet (`pesquisar`: web_search + web_fetch, até 3 buscas; a
+versão `_20260209` é a documentada para o Opus, o Haiku começa pela básica e troca se a API recusar; `pause_turn`
+continua) e a ficha de fatos com URL entra na proposta: campo da internet = `origem: internet` + `fonte` (tela: "da
+internet — confira" com o link); rótulo vale mais que a internet; pesquisa que falha não trava os textos
+(`aviso_pesquisa`). As fontes costumam ser anúncios de outros vendedores: o operador confere.
 
 ### Quadro de tarefas (V19.69)
 `APP/tarefas.html` (`/tarefas`, menu Visão geral, **todo usuário logado**: a página só exige sessão, o item do menu

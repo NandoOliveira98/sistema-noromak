@@ -41,6 +41,15 @@ recortada (produto branco sumia junto com o fundo); produto claro em outro fundo
 foto"; a IA deforma letra pequena, então cada faixa do rótulo é comparada com a ampliação comum e a
 faixa deformada volta para a comum (2 tentativas; depois "revisar").
 
+## Crédito, referência e pesquisa
+
+- **Crédito:** cada entrega informa ao Noromak os tokens e as buscas; a tela mostra o gasto do ciclo (US$ 100 que
+  renova todo dia 19) e quanto falta.
+- **Imagem de referência** (artes): o Claude propõe os textos na estrutura da referência e escreve o HTML da arte
+  imitando o layout (só com a foto real e os textos aprovados; fotos de veículos da referência viram ícone).
+- **Nome do produto / link do fornecedor** (artes): pesquisa na internet antes dos textos (até 3 buscas, US$ 0,01
+  cada); o que vier de lá aparece "da internet", com a fonte, para o operador conferir.
+
 ## Testar
 
 ```

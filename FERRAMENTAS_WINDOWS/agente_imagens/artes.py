@@ -142,6 +142,33 @@ def aplicacao(campos: dict[str, str], sombra: bool) -> str:
 
 MONTADORES = {"beneficios": beneficios, "modo": modo, "aplicacao": aplicacao}
 
+FONTES_LIBERADAS = ("https://fonts.googleapis.com/", "https://fonts.gstatic.com/")
+
+
+def limpar_html(bruto: str) -> str:
+    """V20.17: HTML escrito pelo Claude (arte pela referência). Vai para o Chrome deste PC, então nada de
+    script, evento, iframe/objeto ou endereço externo (só as fontes do Google). Tem de usar produto.png."""
+    h = str(bruto or "")
+    h = re.sub(r"<\s*(script|iframe|object|embed|link|meta|base|form)\b[^>]*>.*?<\s*/\s*\1\s*>", "", h, flags=re.I | re.S)
+    h = re.sub(r"<\s*(script|iframe|object|embed|meta|base|form)\b[^>]*/?>", "", h, flags=re.I)
+    h = re.sub(r"<\s*link\b(?![^>]*fonts\.googleapis\.com)[^>]*>", "", h, flags=re.I)
+    h = re.sub(r"\son[a-z]+\s*=\s*(\"[^\"]*\"|'[^']*'|[^\s>]+)", "", h, flags=re.I)
+    h = re.sub(r"javascript\s*:", "", h, flags=re.I)
+
+    def _url(m: re.Match) -> str:
+        alvo = m.group(2).strip().strip("'\"")
+        if alvo == "produto.png" or alvo.startswith("data:image/svg") or alvo.startswith(FONTES_LIBERADAS) or alvo.startswith("#"):
+            return m.group(0)
+        return m.group(1) + '""'
+    h = re.sub(r"((?:src|href|xlink:href)\s*=\s*)(\"[^\"]*\"|'[^']*')", _url, h, flags=re.I)
+    h = re.sub(r"url\(\s*(?!['\"]?(?:produto\.png|data:image/svg|https://fonts\.g|#))[^)]*\)", "none", h, flags=re.I)
+    h = re.sub(r"@import\s+(?!url\(\s*['\"]?https://fonts\.googleapis\.com)[^;]+;", "", h, flags=re.I)
+    if "produto.png" not in h:
+        raise ValueError("A arte gerada não usa a foto do produto.")
+    if "<html" not in h.lower():
+        h = "<!doctype html><html><head><meta charset=\"utf-8\"></head><body>" + h + "</body></html>"
+    return h
+
 
 def montar(tipo: str, campos_lista: list[dict], sombra: bool) -> str:
     campos = {str(c.get("chave")): str(c.get("valor") or "").strip() for c in campos_lista}

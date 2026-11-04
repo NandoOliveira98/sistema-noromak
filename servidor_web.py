@@ -35581,6 +35581,14 @@ IMAGEM_SITUACOES = ("aguardando", "processando", "analisando", "textos_para_apro
                     "gerando", "pronta", "revisar", "outra_foto", "erro")
 IMAGEM_EM_TRABALHO = ("processando", "analisando", "gerando")
 IMAGEM_FINAIS = ("pronta", "revisar", "outra_foto", "erro")
+IMAGEM_ARTES = ("beneficios", "modo", "aplicacao")
+# Crédito da API do Claude (dono, 04/11): US$ 100 que renova todo dia 19. A API não informa o saldo para a
+# chave comum; o gasto vem dos tokens que o agente informa em cada entrega (só o uso do Noromak).
+IMAGEM_SALDO_PADRAO = 100.0
+IMAGEM_SALDO_DIA_PADRAO = 19
+# US$ por milhão de tokens (entrada, saída) — tabela da Anthropic de 10/2026; mudou o preço, trocar aqui.
+IMAGEM_PRECOS = {"claude-haiku-5-5": (0.10, 0.50), "claude-opus-5-5": (4.00, 20.00)}
+IMAGEM_PRECO_BUSCA = 0.01   # US$ por busca na internet (US$ 10 por 1.000), além dos tokens
 
 
 class ImagemConflito(Exception):
@@ -35624,8 +35632,26 @@ def ensure_imagens_schema() -> None:
                 chave TEXT PRIMARY KEY,
                 valor TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS imagem_gasto_v2017 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                dia TEXT NOT NULL,
+                quando TEXT NOT NULL,
+                trabalho_id INTEGER,
+                modelo TEXT NOT NULL DEFAULT '',
+                entrada INTEGER NOT NULL DEFAULT 0,
+                saida INTEGER NOT NULL DEFAULT 0,
+                usd REAL NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_imagem_gasto_dia ON imagem_gasto_v2017(dia);
             """
         )
+        # V20.17 (dono, 04/11): nome do produto / link do fornecedor para a pesquisa na internet, e as buscas no gasto.
+        colunas = {r["name"] for r in DB.execute("PRAGMA table_info(imagem_trabalho_v2017)").fetchall()}
+        if "produto_json" not in colunas:
+            DB.execute("ALTER TABLE imagem_trabalho_v2017 ADD COLUMN produto_json TEXT NOT NULL DEFAULT '{}'")
+        colunas = {r["name"] for r in DB.execute("PRAGMA table_info(imagem_gasto_v2017)").fetchall()}
+        if "buscas" not in colunas:
+            DB.execute("ALTER TABLE imagem_gasto_v2017 ADD COLUMN buscas INTEGER NOT NULL DEFAULT 0")
         DB.commit()
 
 
@@ -35712,6 +35738,7 @@ def _imagem_item(row: sqlite3.Row) -> dict[str, Any]:
         "textos": _imagem_json(row["textos_json"], {}),
         "relatorio": _imagem_json(row["relatorio_json"], {}),
         "obs": row["obs"], "mensagem": row["mensagem"], "modelo": row["modelo"],
+        "produto": _imagem_json(row["produto_json"], {}),
         "tokens_entrada": row["tokens_entrada"], "tokens_saida": row["tokens_saida"],
         "bytes": row["bytes"], "versao": row["versao"], "apagado_em": row["apagado_em"],
     }
@@ -35742,6 +35769,22 @@ def imagens_enviar(usuario: str, req: dict[str, Any]) -> dict[str, Any]:
     if tipo in ("beneficios", "modo", "aplicacao") and len(fotos) > 2:
         raise ValueError("Envie a frente e, se tiver, o verso do produto (2 fotos no máximo).")
     decodificadas = [_imagem_decodificar((f or {}).get("dados") if isinstance(f, dict) else None) for f in fotos]
+    # V20.17 (dono, 04/11): imagem de referência da arte — o agente copia o layout dela (só nas artes).
+    ref_bruta = req.get("referencia") if isinstance(req.get("referencia"), dict) else None
+    referencia = _imagem_decodificar(ref_bruta.get("dados")) if ref_bruta and ref_bruta.get("dados") else None
+    if referencia and tipo not in IMAGEM_ARTES:
+        raise ValueError("A imagem de referência vale só para as artes (benefícios, modo de uso, aplicação).")
+    # V20.17 (dono, 04/11): nome do produto e/ou link do fornecedor — o agente pesquisa na internet antes de
+    # propor os textos (o que vier de lá vai marcado "da internet", com a fonte; o operador aprova).
+    produto_nome = re.sub(r"\s+", " ", str(req.get("produto_nome") or "")).strip()[:150]
+    produto_link = str(req.get("produto_link") or "").strip()
+    if produto_link:
+        partes = urlparse(produto_link)
+        if partes.scheme not in ("http", "https") or not partes.netloc or len(produto_link) > 500 or any(ch.isspace() for ch in produto_link):
+            raise ValueError("Link do fornecedor inválido: cole o endereço completo, começando com https://")
+    if (produto_nome or produto_link) and tipo not in IMAGEM_ARTES:
+        raise ValueError("Nome e link do produto valem só para as artes (benefícios, modo de uso, aplicação).")
+    produto_json = json.dumps({"nome": produto_nome, "link": produto_link}, ensure_ascii=False)
     if tipo == "principal":
         grupos = [[d] for d in decodificadas]
     else:
@@ -35753,14 +35796,17 @@ def imagens_enviar(usuario: str, req: dict[str, Any]) -> dict[str, Any]:
     for grupo in grupos:
         arquivos = [{"nome": f"original_{i + 1}.{ext}", "papel": papel_de(i), "bytes": len(dados)}
                     for i, (dados, ext) in enumerate(grupo)]
+        if referencia:
+            arquivos.append({"nome": f"referencia.{referencia[1]}", "papel": "referencia", "bytes": len(referencia[0])})
+            grupo = grupo + [referencia]
         total = sum(a["bytes"] for a in arquivos)
         # Grava a linha como "enviando" (o agente não pega), escreve os arquivos fora do DB_LOCK
         # e só então solta para a fila.
         with DB_LOCK:
             cur = DB.execute(
                 "INSERT INTO imagem_trabalho_v2017(tipo,sku,situacao,criado_por,criado_em,atualizado_em,"
-                "arquivos_json,bytes) VALUES(?,?,?,?,?,?,?,?)",
-                (tipo, sku, "enviando", usuario, agora, agora, json.dumps(arquivos, ensure_ascii=False), total))
+                "arquivos_json,bytes,produto_json) VALUES(?,?,?,?,?,?,?,?,?)",
+                (tipo, sku, "enviando", usuario, agora, agora, json.dumps(arquivos, ensure_ascii=False), total, produto_json))
             id_ = int(cur.lastrowid)
             DB.commit()
         pasta = _imagem_pasta(id_)
@@ -35778,8 +35824,57 @@ def imagens_enviar(usuario: str, req: dict[str, Any]) -> dict[str, Any]:
             DB.execute("UPDATE imagem_trabalho_v2017 SET situacao='aguardando' WHERE id=?", (id_,))
             DB.commit()
         ids.append(id_)
-    audit(usuario, "imagens.enviar", f"{tipo}|{sku}|{len(decodificadas)} foto(s)|{ids}")
+    audit(usuario, "imagens.enviar", f"{tipo}|{sku}|{len(decodificadas)} foto(s){' + referência' if referencia else ''}|{ids}")
     return {"ok": True, "ids": ids}
+
+
+def _imagem_dia_do_mes(ano: int, mes: int, dia: int) -> date:
+    """Dia `dia` do mês, sem passar do último dia (dia 31 em fevereiro = 28/29)."""
+    proximo = date(ano + (mes == 12), 1 if mes == 12 else mes + 1, 1)
+    return date(ano, mes, min(dia, (proximo - timedelta(days=1)).day))
+
+
+def _imagem_ciclo(hoje: date, dia: int) -> tuple[date, date]:
+    """Início do ciclo do crédito (o último dia `dia` até hoje) e o dia em que renova."""
+    este = _imagem_dia_do_mes(hoje.year, hoje.month, dia)
+    if hoje >= este:
+        inicio = este
+    else:
+        ano, mes = (hoje.year - 1, 12) if hoje.month == 1 else (hoje.year, hoje.month - 1)
+        inicio = _imagem_dia_do_mes(ano, mes, dia)
+    ano, mes = (inicio.year + 1, 1) if inicio.month == 12 else (inicio.year, inicio.month + 1)
+    return inicio, _imagem_dia_do_mes(ano, mes, dia)
+
+
+def _imagem_custo(modelo: str, entrada: int, saida: int) -> float:
+    pe, ps = IMAGEM_PRECOS.get(modelo, IMAGEM_PRECOS[IMAGEM_MODELO_PADRAO])
+    return (entrada * pe + saida * ps) / 1_000_000
+
+
+def _imagem_registrar_gasto(trabalho_id: int, modelo: str, entrada: int, saida: int, buscas: int = 0) -> None:
+    """Uma linha por entrega do agente (fica mesmo se a imagem for apagada: o crédito foi gasto)."""
+    if not entrada and not saida and not buscas:
+        return
+    DB.execute("INSERT INTO imagem_gasto_v2017(dia,quando,trabalho_id,modelo,entrada,saida,usd,buscas) VALUES(?,?,?,?,?,?,?,?)",
+               (datetime.now(BR_TZ).date().isoformat(), now_iso(), trabalho_id, modelo, entrada, saida,
+                round(_imagem_custo(modelo, entrada, saida) + buscas * IMAGEM_PRECO_BUSCA, 6), buscas))
+
+
+def imagens_saldo(hoje: date | None = None) -> dict[str, Any]:
+    """Crédito do ciclo atual: usado (soma das entregas desde o último dia de renovação) e o que falta."""
+    try:
+        valor = float(_imagem_cfg("saldo_valor", str(IMAGEM_SALDO_PADRAO)))
+        dia = int(_imagem_cfg("saldo_dia", str(IMAGEM_SALDO_DIA_PADRAO)))
+    except ValueError:
+        valor, dia = IMAGEM_SALDO_PADRAO, IMAGEM_SALDO_DIA_PADRAO
+    hoje = hoje or datetime.now(BR_TZ).date()
+    inicio, renova = _imagem_ciclo(hoje, dia)
+    row = DB.execute("SELECT COALESCE(SUM(usd),0) AS usd, COUNT(*) AS n FROM imagem_gasto_v2017 WHERE dia>=? AND dia<?",
+                     (inicio.isoformat(), renova.isoformat())).fetchone()
+    usado = round(float(row["usd"] or 0), 4)
+    return {"valor": valor, "dia": dia, "inicio": inicio.isoformat(), "renova_em": renova.isoformat(),
+            "usado": usado, "restante": round(max(0.0, valor - usado), 4), "entregas": int(row["n"] or 0),
+            "pct": round(min(100.0, usado / valor * 100), 2) if valor > 0 else 0.0}
 
 
 def imagens_agente_status() -> dict[str, Any]:
@@ -35799,6 +35894,7 @@ def imagens_payload() -> dict[str, Any]:
                           "ORDER BY id DESC").fetchall()
         modelo = _imagem_cfg("modelo", IMAGEM_MODELO_PADRAO)
         agente = imagens_agente_status()
+        saldo = imagens_saldo()
     itens = [_imagem_item(r) for r in rows]
     usado = sum(int(i["bytes"] or 0) for i in itens)
     contagem: dict[str, int] = {}
@@ -35807,7 +35903,7 @@ def imagens_payload() -> dict[str, Any]:
     return {
         "ok": True, "itens": itens, "contagem": contagem, "tipos": IMAGEM_TIPOS,
         "espaco": {"bytes": usado, "limite_aviso": IMAGEM_AVISO_BYTES, "aviso": usado > IMAGEM_AVISO_BYTES},
-        "agente": agente, "modelo": modelo, "modelos": list(IMAGEM_MODELOS),
+        "agente": agente, "modelo": modelo, "modelos": list(IMAGEM_MODELOS), "saldo": saldo,
     }
 
 
@@ -35820,7 +35916,8 @@ def imagens_textos_aprovar(usuario: str, req: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(c, dict):
             continue
         limpos.append({"chave": str(c.get("chave") or "")[:40], "rotulo": str(c.get("rotulo") or "")[:80],
-                       "valor": str(c.get("valor") or "").strip()[:400], "origem": str(c.get("origem") or "")[:20]})
+                       "valor": str(c.get("valor") or "").strip()[:400], "origem": str(c.get("origem") or "")[:20],
+                       "fonte": str(c.get("fonte") or "")[:300]})
     with DB_LOCK:
         row = _imagem_row(req.get("id"))
         if row["apagado_em"]:
@@ -35895,14 +35992,38 @@ def imagens_apagar(usuario: str, req: dict[str, Any]) -> dict[str, Any]:
 
 
 def imagens_config(usuario: str, req: dict[str, Any]) -> dict[str, Any]:
-    modelo = str(req.get("modelo") or "").strip()
-    if modelo not in IMAGEM_MODELOS:
-        raise ValueError("Modelo inválido.")
+    """Modelo do Claude e o crédito (valor do ciclo e dia em que renova). Só o que vier no pedido muda."""
+    mudar: dict[str, str] = {}
+    if "modelo" in req:
+        modelo = str(req.get("modelo") or "").strip()
+        if modelo not in IMAGEM_MODELOS:
+            raise ValueError("Modelo inválido.")
+        mudar["modelo"] = modelo
+    if "saldo_valor" in req:
+        try:
+            valor = float(str(req.get("saldo_valor")).replace(",", "."))
+        except ValueError:
+            raise ValueError("Valor do crédito inválido.")
+        if not 0 < valor <= 100000:
+            raise ValueError("O crédito precisa ser maior que zero.")
+        mudar["saldo_valor"] = str(round(valor, 2))
+    if "saldo_dia" in req:
+        try:
+            dia = int(req.get("saldo_dia"))
+        except (TypeError, ValueError):
+            raise ValueError("Dia de renovação inválido.")
+        if not 1 <= dia <= 31:
+            raise ValueError("O dia de renovação vai de 1 a 31.")
+        mudar["saldo_dia"] = str(dia)
+    if not mudar:
+        raise ValueError("Nada para mudar.")
     with DB_LOCK:
-        _imagem_cfg_set("modelo", modelo)
+        for k, v in mudar.items():
+            _imagem_cfg_set(k, v)
         DB.commit()
-    audit(usuario, "imagens.config", f"modelo={modelo}")
-    return {"ok": True, "modelo": modelo}
+        saldo = imagens_saldo()
+    audit(usuario, "imagens.config", ",".join(f"{k}={v}" for k, v in mudar.items()))
+    return {"ok": True, **mudar, "saldo": saldo}
 
 
 def imagens_arquivo(id_: Any, nome: Any, so_originais: bool = False) -> tuple[bytes, str, str]:
@@ -35979,6 +36100,7 @@ def imagens_agente_proximo() -> dict[str, Any]:
     return {"ok": True, "trabalho": {
         "id": row["id"], "tipo": row["tipo"], "sku": row["sku"], "etapa": etapa, "modelo": modelo,
         "arquivos": _imagem_json(row["arquivos_json"], []), "obs": row["obs"],
+        "produto": _imagem_json(row["produto_json"], {}),
         "textos": {"campos": textos.get("campos") or []} if etapa == "arte" else None,
         "reservado_s": IMAGEM_RESERVA_S,
     }}
@@ -35989,6 +36111,13 @@ def _imagem_agente_reservado(req: dict[str, Any], situacoes: tuple[str, ...]) ->
     if row["apagado_em"] or row["situacao"] not in situacoes:
         raise ImagemConflito("Este trabalho não está mais na vez do agente (apagado, refeito ou já entregue).")
     return row
+
+
+def _imagem_buscas(req: dict[str, Any]) -> int:
+    try:
+        return max(0, min(50, int(req.get("buscas_web") or 0)))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _imagem_tokens(req: dict[str, Any]) -> tuple[int, int, str]:
@@ -36020,6 +36149,8 @@ def imagens_agente_analise(req: dict[str, Any]) -> dict[str, Any]:
                    (situacao, json.dumps({"campos": campos[:40]}, ensure_ascii=False)[:60000],
                     json.dumps(req.get("relatorio") if isinstance(req.get("relatorio"), dict) else {}, ensure_ascii=False)[:60000],
                     str(req.get("mensagem") or "")[:1000], modelo, te, ts, now_iso(), row["id"]))
+        _imagem_registrar_gasto(row["id"], modelo or row["modelo"] or _imagem_cfg("modelo", IMAGEM_MODELO_PADRAO), te, ts,
+                                _imagem_buscas(req))
         DB.commit()
     return {"ok": True}
 
@@ -36071,6 +36202,8 @@ def imagens_agente_resultado(req: dict[str, Any]) -> dict[str, Any]:
                    (situacao, json.dumps(resultados, ensure_ascii=False),
                     json.dumps(req.get("relatorio") if isinstance(req.get("relatorio"), dict) else {}, ensure_ascii=False)[:60000],
                     str(req.get("mensagem") or "")[:1000], modelo, te, ts, now_iso(), _imagem_bytes_pasta(row["id"]), row["id"]))
+        _imagem_registrar_gasto(row["id"], modelo or row["modelo"] or _imagem_cfg("modelo", IMAGEM_MODELO_PADRAO), te, ts,
+                                _imagem_buscas(req))
         DB.commit()
     return {"ok": True}
 

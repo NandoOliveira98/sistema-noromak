@@ -74,6 +74,29 @@ label.tit{display:block;font-size:11px;font-weight:700;text-transform:uppercase;
 .msg{font-size:13.5px;padding:10px 12px;border-radius:10px;background:var(--nk-info-bg);color:var(--nk-info);border:1px solid var(--nk-info-ln)}
 .msg.bad{background:var(--nk-bad-bg);color:var(--nk-bad);border-color:var(--nk-bad-ln)}
 .acoes-gav{display:flex;gap:8px;flex-wrap:wrap}
+/* V20.17: crédito da API (US$ 100 que renova todo dia 19) */
+.credito{background:var(--nk-tile);border:1px solid var(--nk-line);border-radius:13px;padding:12px 16px;margin-bottom:14px;box-shadow:var(--nk-sombra)}
+.credito .topo-cred{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:8px}
+.credito .tit-cred{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--nk-ink3)}
+.credito .nums{font-size:13.5px;color:var(--nk-ink2)}
+.credito .nums b{color:var(--nk-head);font-variant-numeric:tabular-nums}
+.credito .trilho{height:12px;border-radius:999px;background:var(--nk-line2);overflow:hidden;display:flex}
+.credito .usado{height:100%;background:var(--nk-pri);border-radius:999px;transition:width .4s;min-width:3px}
+.credito.alerta .usado{background:var(--nk-warn)}.credito.critico .usado{background:var(--nk-bad)}
+.credito .rodape-cred{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:7px;font-size:12px;color:var(--nk-ink3)}
+.credito .rodape-cred button{font-size:12px}
+/* V20.17: imagem de referência da arte */
+.ref-caixa{border:1.5px dashed var(--nk-line-forte);border-radius:12px;padding:12px;display:flex;gap:12px;align-items:center;background:var(--nk-tile2);cursor:pointer}
+.ref-caixa.sobre{border-color:var(--nk-pri);background:var(--nk-info-bg)}
+.ref-caixa img{width:84px;height:84px;object-fit:cover;border-radius:8px;border:1px solid var(--nk-line);background:#fff}
+.ref-caixa .ref-vazia{width:84px;height:84px;border-radius:8px;border:1px solid var(--nk-line);display:grid;place-items:center;color:var(--nk-ink3);font-size:26px;background:var(--nk-tile)}
+.ref-caixa .ref-txt{font-size:12.5px;color:var(--nk-ink2);line-height:1.45}
+.ref-caixa .ref-txt b{color:var(--nk-head)}
+.origem.internet{color:var(--nk-info)}
+.origem a{color:inherit}
+.pesquisa{font-size:12.5px;color:var(--nk-ink2);background:var(--nk-tile2);border:1px solid var(--nk-line);border-radius:10px;padding:10px 12px;white-space:pre-wrap;max-height:220px;overflow:auto}
+.fontes a{display:block;font-size:12px;word-break:break-all}
+.selo-ref{display:inline-block;margin-left:6px;font-size:10.5px;font-weight:700;padding:1px 7px;border-radius:999px;background:var(--nk-info-bg);color:var(--nk-info);vertical-align:middle}
 </style>
 </head>
 <body>
@@ -91,6 +114,12 @@ label.tit{display:block;font-size:11px;font-weight:700;text-transform:uppercase;
     </div>
   </div>
   <div class="nk-aviso bad" id="erro" hidden></div>
+  <div class="credito" id="credito" hidden>
+    <div class="topo-cred"><span class="tit-cred">Crédito da API do Claude</span><span class="nums" id="credNums"></span></div>
+    <div class="trilho" role="progressbar" aria-label="Crédito usado" id="credTrilho"><div class="usado" id="credUsado"></div></div>
+    <div class="rodape-cred"><span id="credCiclo"></span>
+      <span><span id="credEntregas"></span> <button class="nk-btn mini" onclick="ajustarCredito()" title="Só o perfil Admin">Ajustar</button></span></div>
+  </div>
   <div class="nk-kpis" id="kpis" style="margin-bottom:14px"></div>
 
   <div class="grade">
@@ -107,6 +136,24 @@ label.tit{display:block;font-size:11px;font-weight:700;text-transform:uppercase;
       </div>
       <input type="file" id="arquivo" accept="image/jpeg,image/png,image/webp" multiple hidden>
       <div class="previas" id="previas"></div>
+      <div id="blocoProduto" hidden>
+        <label class="tit" for="produtoNome">Nome do produto (opcional)</label>
+        <input class="campo" id="produtoNome" maxlength="150" autocomplete="off" placeholder="Ex.: Câmara de freio Schulz 43-272">
+        <label class="tit" for="produtoLink">Link da página do fornecedor (opcional)</label>
+        <input class="campo" id="produtoLink" maxlength="500" autocomplete="off" inputmode="url" placeholder="https://...">
+        <div class="dica">Com nome ou link, o agente pesquisa na internet antes de propor os textos. O que vier de lá
+          aparece marcado <b>"da internet"</b> com a fonte, para você conferir. Cada busca custa US$ 0,01.</div>
+      </div>
+      <div id="blocoRef" hidden>
+        <label class="tit">Imagem de referência (opcional)</label>
+        <div class="ref-caixa" id="refCaixa" tabindex="0" role="button" aria-label="Escolher imagem de referência">
+          <div class="ref-vazia" id="refVazia">+</div><img id="refPrevia" alt="" hidden>
+          <div class="ref-txt" id="refTxt"><b>Arte de outro anúncio para copiar o layout</b><br>Cores, títulos, cartões e disposição.
+            Os textos vêm só do seu produto, e fotos de carro/caminhão da referência não são criadas.</div>
+        </div>
+        <button class="nk-btn mini" id="refTirar" onclick="tirarRef(event)" style="margin-top:6px" hidden>Tirar referência</button>
+        <input type="file" id="refArquivo" accept="image/jpeg,image/png,image/webp" hidden>
+      </div>
       <div style="margin-top:14px;display:flex;gap:8px">
         <button class="nk-btn pri" id="btnEnviar" onclick="enviar()" disabled>Enviar</button>
         <button class="nk-btn" onclick="limparEnvio()">Limpar</button>
@@ -155,12 +202,21 @@ const SITUACAO = {
 const FILTROS = [["", "Todas"], ["fila", "Na fila / processando"], ["textos_para_aprovar", "Textos para aprovar"],
   ["pronta", "Prontas"], ["revisar", "Revisar"], ["problema", "Outra foto / erro"]];
 let dados = null, selecionadas = new Set(), fotos = [], aberta = null, timer = null, filtroKpi = "";
+let referencia = null;   // {arquivo, url}: imagem de referência da arte (V20.17)
+const ARTES = ["beneficios", "modo", "aplicacao"];
 
 $("tipo").innerHTML = Object.entries(TIPOS).map(([k, t]) => `<option value="${k}">${esc(t.nome)}</option>`).join("");
 $("filtro").innerHTML = FILTROS.map(([k, n]) => `<option value="${k}">${esc(n)}</option>`).join("");
 mudarTipo();
 
-function mudarTipo() { $("dicaTipo").textContent = TIPOS[$("tipo").value].dica; validarEnvio(); }
+function mudarTipo() {
+  $("dicaTipo").textContent = TIPOS[$("tipo").value].dica;
+  const arte = ARTES.includes($("tipo").value);
+  $("blocoRef").hidden = !arte;
+  $("blocoProduto").hidden = !arte;
+  if (!arte && referencia) tirarRef();
+  validarEnvio();
+}
 function tamanho(b) { return b >= 1048576 ? (b / 1048576).toFixed(1).replace(".", ",") + " MB" : Math.max(1, Math.round(b / 1024)) + " KB"; }
 function quando(iso) { try { return new Date(iso).toLocaleString("pt-BR", {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"}); } catch (_) { return ""; } }
 function url(id, nome, ver) { return `${B}/api/imagens/arquivo?id=${id}&nome=${encodeURIComponent(nome)}${ver ? "&ver=1" : ""}`; }
@@ -203,7 +259,34 @@ function desenharPrevias() {
   validarEnvio();
 }
 function tirar(i) { URL.revokeObjectURL(fotos[i].url); fotos.splice(i, 1); desenharPrevias(); }
-function limparEnvio() { fotos.forEach(f => URL.revokeObjectURL(f.url)); fotos = []; $("sku").value = ""; desenharPrevias(); }
+function limparEnvio() { fotos.forEach(f => URL.revokeObjectURL(f.url)); fotos = []; $("sku").value = ""; $("produtoNome").value = ""; $("produtoLink").value = ""; tirarRef(); desenharPrevias(); }
+
+// ---------- imagem de referência ----------
+const refCaixa = $("refCaixa");
+refCaixa.addEventListener("click", () => $("refArquivo").click());
+refCaixa.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("refArquivo").click(); } });
+refCaixa.addEventListener("dragover", e => { e.preventDefault(); refCaixa.classList.add("sobre"); });
+refCaixa.addEventListener("dragleave", () => refCaixa.classList.remove("sobre"));
+refCaixa.addEventListener("drop", e => { e.preventDefault(); refCaixa.classList.remove("sobre"); escolherRef(e.dataTransfer.files[0]); });
+$("refArquivo").addEventListener("change", e => { escolherRef(e.target.files[0]); e.target.value = ""; });
+function escolherRef(f) {
+  if (!f) return;
+  if (!/^image\/(jpeg|png|webp)$/.test(f.type)) { nkToast(`${f.name}: envie só JPG, PNG ou WEBP.`, "erro"); return; }
+  if (f.size > MAX_BYTES) { nkToast(`${f.name}: passa de 10 MB.`, "erro"); return; }
+  tirarRef();
+  referencia = {arquivo: f, url: URL.createObjectURL(f)};
+  $("refPrevia").src = referencia.url; $("refPrevia").hidden = false; $("refVazia").hidden = true;
+  $("refTxt").innerHTML = `<b>${esc(f.name)}</b><br>O agente vai copiar o layout desta arte.`;
+  $("refTirar").hidden = false;
+}
+function tirarRef(e) {
+  if (e) e.stopPropagation();
+  if (referencia) URL.revokeObjectURL(referencia.url);
+  referencia = null;
+  $("refPrevia").hidden = true; $("refPrevia").removeAttribute("src"); $("refVazia").hidden = false; $("refTirar").hidden = true;
+  $("refTxt").innerHTML = "<b>Arte de outro anúncio para copiar o layout</b><br>Cores, títulos, cartões e disposição. " +
+    "Os textos vêm só do seu produto, e fotos de carro/caminhão da referência não são criadas.";
+}
 function validarEnvio() {
   const t = TIPOS[$("tipo").value];
   const ok = fotos.length >= t.min && fotos.length <= t.max;
@@ -219,7 +302,15 @@ async function enviar() {
   try {
     const lista = [];
     for (const f of fotos) lista.push({nome: f.arquivo.name, dados: await lerBase64(f.arquivo)});
-    const d = await api("/api/imagens/enviar", {tipo: $("tipo").value, sku: $("sku").value.trim(), fotos: lista});
+    const corpo = {tipo: $("tipo").value, sku: $("sku").value.trim(), fotos: lista};
+    if (referencia && ARTES.includes(corpo.tipo)) corpo.referencia = {nome: referencia.arquivo.name, dados: await lerBase64(referencia.arquivo)};
+    if (ARTES.includes(corpo.tipo)) {
+      const link = $("produtoLink").value.trim();
+      if (link && !/^https?:\/\/\S+$/i.test(link)) throw new Error("Link do fornecedor: cole o endereço completo, começando com https://");
+      corpo.produto_nome = $("produtoNome").value.trim();
+      corpo.produto_link = link;
+    }
+    const d = await api("/api/imagens/enviar", corpo);
     nkToast(d.ids.length > 1 ? `${d.ids.length} imagens enviadas para a fila.` : "Imagem enviada para a fila.", "ok");
     limparEnvio();
     await carregar();
@@ -244,7 +335,31 @@ async function carregar() {
 }
 document.addEventListener("visibilitychange", () => { if (document.hidden) clearTimeout(timer); else carregar(); });
 
+const usd = v => "US$ " + Number(v || 0).toLocaleString("pt-BR", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const diaMes = iso => iso ? iso.slice(8, 10) + "/" + iso.slice(5, 7) : "";
+function desenharCredito(c) {
+  if (!c) return;
+  const caixa = $("credito");
+  caixa.hidden = false;
+  caixa.className = "credito" + (c.pct >= 90 ? " critico" : c.pct >= 70 ? " alerta" : "");
+  $("credUsado").style.width = Math.max(0, Math.min(100, c.pct)) + "%";
+  $("credTrilho").setAttribute("aria-valuenow", String(c.pct));
+  $("credNums").innerHTML = `<b>${usd(c.usado)}</b> usados de ${usd(c.valor)} · faltam <b>${usd(c.restante)}</b> (${(100 - c.pct).toLocaleString("pt-BR", {maximumFractionDigits: 1})}%)`;
+  $("credCiclo").textContent = `Ciclo de ${diaMes(c.inicio)} a ${diaMes(c.renova_em)} · renova em ${diaMes(c.renova_em)}`;
+  $("credEntregas").textContent = c.entregas ? `${c.entregas} chamada(s) do agente neste ciclo · só o uso do Noromak` : "Só o uso do Noromak entra na conta";
+}
+async function ajustarCredito() {
+  const c = dados?.saldo || {};
+  const valor = await nkPerguntar("Crédito por ciclo (US$)", {detalhe: "Quanto entra de crédito na conta da API a cada renovação.",
+    valor: String(c.valor ?? 100).replace(".", ","), ok: "Próximo", inputmode: "decimal"});
+  if (valor === null) return;
+  const dia = await nkPerguntar("Dia em que o crédito renova", {detalhe: "Dia do mês (1 a 31).", valor: String(c.dia ?? 19), tipo: "number", ok: "Salvar"});
+  if (dia === null) return;
+  try { await api("/api/imagens/config", {saldo_valor: valor, saldo_dia: Number(dia)}); nkToast("Crédito atualizado.", "ok"); carregar(); }
+  catch (e) { nkToast(e.status === 403 ? "Só o perfil Admin ajusta o crédito." : e.message, "erro"); }
+}
 function desenharTopo() {
+  desenharCredito(dados.saldo);
   const ag = dados.agente;
   const selo = $("seloAgente");
   selo.className = "nk-selo " + (ag.online ? "ok" : "bad");
@@ -285,7 +400,7 @@ function desenharLista() {
     return `<tr class="cl" onclick="abrir(${i.id})">` +
       `<td onclick="event.stopPropagation()"><input type="checkbox" ${selecionadas.has(i.id) ? "checked" : ""} onchange="marcar(${i.id}, this.checked)" aria-label="Selecionar"></td>` +
       `<td>${capa ? `<img class="miniatura" loading="lazy" src="${url(i.id, capa.nome, true)}" alt="">` : ""}</td>` +
-      `<td class="sku">${esc(i.sku || "—")}</td><td>${esc(i.tipo_rotulo)}</td><td>${selo(i.situacao)}</td>` +
+      `<td class="sku">${esc(i.sku || "—")}</td><td>${esc(i.tipo_rotulo)}${(i.arquivos || []).some(a => a.papel === "referencia") ? '<span class="selo-ref">referência</span>' : ""}</td><td>${selo(i.situacao)}</td>` +
       `<td class="mini">${esc(quando(i.criado_em))}<br>${esc(i.criado_por)}</td></tr>`;
   }).join("") : `<tr><td colspan="6" class="vazio">${dados.itens.length ? "Nenhuma imagem neste filtro." : "Nenhuma imagem ainda. Envie a primeira foto ao lado."}</td></tr>`;
   $("todos").checked = itens.length > 0 && itens.every(i => selecionadas.has(i.id));
@@ -320,9 +435,16 @@ function abrir(id, silencioso) {
     (i.modelo ? `<span>· conferida por ${esc(i.modelo)}</span>` : "") +
     (i.tokens_entrada ? `<span>· ${(i.tokens_entrada + i.tokens_saida).toLocaleString("pt-BR")} tokens</span>` : "") + `</div></div><div class="gav-corpo">`;
   if (i.mensagem) html += `<div class="msg ${["outra_foto", "erro"].includes(i.situacao) ? "bad" : ""}">${esc(i.mensagem)}</div>`;
+  const prod = i.produto || {};
+  if (prod.nome || prod.link) html += `<div class="secao"><h3>Produto informado</h3><div class="mini">${esc(prod.nome || "")}` +
+    (prod.link && /^https?:\/\//i.test(prod.link) ? `${prod.nome ? " · " : ""}<a href="${esc(prod.link)}" target="_blank" rel="noopener noreferrer">${esc(prod.link)}</a>` : "") + `</div></div>`;
   if (i.situacao === "textos_para_aprovar") html += blocoTextos(i);
+  if (rel.pesquisa) html += `<div class="secao"><h3>Pesquisa na internet</h3><div class="pesquisa">${esc(rel.pesquisa)}</div>` +
+    ((rel.fontes || []).length ? `<div class="fontes" style="margin-top:6px">${rel.fontes.filter(u => /^https?:\/\//i.test(u)).map(u => `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(u)}</a>`).join("")}</div>` : "") + `</div>`;
+  if (rel.aviso_pesquisa) html += `<div class="secao"><div class="msg bad">${esc(rel.aviso_pesquisa)}</div></div>`;
   html += `<div class="secao"><h3>Antes × depois</h3><div class="lado">` +
-    (i.arquivos || []).map(a => quadro(a, "Original · " + a.papel)).join("") +
+    (i.arquivos || []).filter(a => a.papel !== "referencia").map(a => quadro(a, "Original · " + a.papel)).join("") +
+    (i.arquivos || []).filter(a => a.papel === "referencia").map(a => quadro(a, "Referência de layout")).join("") +
     res.map(a => quadro(a, "Resultado")).join("") + `</div></div>`;
   if (zooms.length || conferidos.length) {
     html += `<div class="secao"><h3>Textos do rótulo conferidos</h3>` +
@@ -341,11 +463,14 @@ function abrir(id, silencioso) {
 }
 function blocoTextos(i) {
   const campos = (i.textos && i.textos.campos) || [];
-  const ORIGEM = {rotulo: "lido no rótulo", nao_encontrado: "não está no rótulo — preencha ou deixe em branco", operador: "digitado"};
+  const ORIGEM = {rotulo: "lido no rótulo", nao_encontrado: "não está no rótulo — preencha ou deixe em branco", operador: "digitado",
+    internet: "da internet — confira"};
+  const fonte = c => c.origem === "internet" && /^https?:\/\//i.test(c.fonte || "")
+    ? ` · <a href="${esc(c.fonte)}" target="_blank" rel="noopener noreferrer">fonte</a>` : "";
   return `<div class="secao"><h3>Textos da arte — corrija e aprove</h3>` +
     `<div class="dica" style="margin-bottom:10px">Só vai para a arte o que estiver aqui. Nada é inventado: o que não está no rótulo vem em branco.</div>` +
     `<div class="campos-txt">${campos.map((c, k) =>
-      `<div class="linha-campo"><label for="txt${k}">${esc(c.rotulo || c.chave)} <span class="origem ${esc(c.origem)}">${esc(ORIGEM[c.origem] || "")}</span></label>` +
+      `<div class="linha-campo"><label for="txt${k}">${esc(c.rotulo || c.chave)} <span class="origem ${esc(c.origem)}">${esc(ORIGEM[c.origem] || "")}${fonte(c)}</span></label>` +
       `<textarea class="campo" id="txt${k}" rows="2" data-k="${k}" maxlength="400">${esc(c.valor)}</textarea></div>`).join("")}</div>` +
     `<button class="nk-btn pri" onclick="aprovarTextos()">Aprovar e gerar a arte</button></div>`;
 }

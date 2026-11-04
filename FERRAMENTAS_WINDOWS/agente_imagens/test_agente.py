@@ -37,15 +37,56 @@ class ClaudeFalso:
         self.serve, self.fundo_branco, self.produto_claro = serve, fundo_branco, produto_claro
         self.faixas_deformadas = list(faixas_deformadas or [])
         self.arte_ok, self.erro = arte_ok, erro
+        # V20.17: arte pela referência — lista de respostas da conferência (True/False), uma por volta.
+        self.artes_ok = None
+        # V20.17: pesquisa na internet — quantas vezes a API devolve pause_turn e se recusa a 1ª versão das ferramentas.
+        self.pausas = 0
+        self.recusar_ferramentas = False
+        self.ferramentas_usadas: list[str] = []
+        self.ultimo_texto_pedido = ""
         self.chamadas: list[str] = []
         self.messages = self
 
     def create(self, **kw):
         if self.erro:
             raise self.erro
+        if "tools" in kw:
+            self.ferramentas_usadas.append(kw["tools"][0]["type"])
+            if self.recusar_ferramentas:
+                self.recusar_ferramentas = False
+                BadRequestError = type("BadRequestError", (Exception,), {})
+                raise BadRequestError("tool type not supported for this model")
+            self.chamadas.append("pesquisa")
+            uso = SimpleNamespace(input_tokens=20000, output_tokens=400,
+                                  server_tool_use=SimpleNamespace(web_search_requests=2))
+            if self.pausas:
+                self.pausas -= 1
+                return SimpleNamespace(stop_reason="pause_turn", usage=uso, content=[SimpleNamespace(type="text", text="")])
+            cit = SimpleNamespace(url="https://fornecedor.com.br/43-272")
+            return SimpleNamespace(stop_reason="end_turn", usage=uso, content=[SimpleNamespace(
+                type="text", text="- Rosca da haste M16x1,5 — https://fornecedor.com.br/43-272\n"
+                                  "- Curso de 64 mm — https://catalogo.exemplo.com/p/43272", citations=[cit])])
+        self.ultimo_texto_pedido = " ".join(c.get("text", "") for c in kw["messages"][0]["content"]
+                                            if isinstance(c, dict) and c.get("type") == "text")
         props = kw["output_config"]["format"]["schema"]["properties"]
-        assert kw["output_config"]["effort"] == "low"
         conteudo = kw["messages"][0]["content"]
+        if "html" in props:
+            assert kw["output_config"]["effort"] == "medium"
+            self.chamadas.append("html")
+            self.ultimo_html_pedido = " ".join(c.get("text", "") for c in conteudo if c["type"] == "text")
+            dados = {"html": '<html><head><script>alert(1)</script><style>body{width:1200px;height:1200px;margin:0;'
+                             'background:#f4f7fa}</style></head><body><h1>OBSERVACOES</h1>'
+                             '<img src="produto.png" style="height:900px"><img src="https://fora.com/x.png"></body></html>'}
+            return SimpleNamespace(stop_reason="end_turn", usage=SimpleNamespace(input_tokens=3000, output_tokens=2000),
+                                   content=[SimpleNamespace(type="text", text=json.dumps(dados))])
+        assert kw["output_config"]["effort"] == "low"
+        if "itens" in props:
+            self.chamadas.append("textos_ref")
+            dados = {"serve": True, "motivo": "", "titulo": "Observações", "cor": "#e30613", "itens": [
+                {"rotulo": "Conteúdo", "valor": "500 g", "origem": "rotulo"},
+                {"rotulo": "Rosca", "valor": "", "origem": "nao_encontrado"}]}
+            return SimpleNamespace(stop_reason="end_turn", usage=SimpleNamespace(input_tokens=1000, output_tokens=100),
+                                   content=[SimpleNamespace(type="text", text=json.dumps(dados))])
         if "faixas" in props:
             self.chamadas.append("faixas")
             n = sum(1 for c in conteudo if c["type"] == "image")
@@ -56,12 +97,15 @@ class ClaudeFalso:
             self.chamadas.append("textos")
             dados = {"serve": True, "motivo": "", "campos": [
                 {"chave": "titulo", "valor": "Hidratante de Couro", "origem": "rotulo"},
+                {"chave": "subtitulo", "valor": "Curso de 64 mm", "origem": "internet",
+                 "fonte": "https://catalogo.exemplo.com/p/43272"},
                 {"chave": "beneficio_1", "valor": "Hidrata | o couro", "origem": "rotulo"},
                 {"chave": "beneficio_2", "valor": "Protege", "origem": "rotulo"},
                 {"chave": "cor", "valor": "#d0021b", "origem": "rotulo"}]}
         elif "problemas" in props:
             self.chamadas.append("arte")
-            dados = {"ok": self.arte_ok, "problemas": [] if self.arte_ok else ["Título cortado na borda"]}
+            ok = self.artes_ok.pop(0) if self.artes_ok else self.arte_ok
+            dados = {"ok": ok, "problemas": [] if ok else ["Título cortado na borda"]}
         else:
             self.chamadas.append("foto")
             dados = {"serve": self.serve, "motivo": "" if self.serve else "Produto cortado: mande a foto inteira.",
@@ -85,7 +129,8 @@ def frasco(tamanho=(300, 700), fundo=(255, 255, 255)) -> bytes:
     return b.getvalue()
 
 
-class AgenteDeImagens(TesteNoromak):
+class _BaseAgente(TesteNoromak):
+    """Auxiliares comuns (sem testes)."""
 
     def setUp(self):
         super().setUp()
@@ -113,6 +158,9 @@ class AgenteDeImagens(TesteNoromak):
         it = self.item(id_)
         nome = next(a["nome"] for a in it["resultados"] if a["papel"] == "resultado")
         return P.abrir(S.imagens_arquivo(id_, nome)[0])
+
+
+class AgenteDeImagens(_BaseAgente):
 
     # ---------- foto principal ----------
 
@@ -252,6 +300,150 @@ class AgenteDeImagens(TesteNoromak):
         with self.assertRaises(A.NoromakErro) as c:
             ruim.uma_volta()
         self.assertEqual(c.exception.status, 401)
+
+
+class ArteComReferencia(_BaseAgente):
+    """V20.17 (dono, 04/11): imagem de referência = o agente copia o LAYOUT dela. Os textos seguem a estrutura
+    da referência, mas só com o que está no nosso produto; o HTML que o Claude escreve passa pela limpeza."""
+
+    def enviar_com_ref(self, tipo="beneficios") -> int:
+        st, corpo = self.cliente.pedir("POST", "/api/imagens/enviar", {
+            "tipo": tipo, "sku": "43-272", "fotos": [{"dados": base64.b64encode(frasco()).decode()}],
+            "referencia": {"dados": base64.b64encode(frasco((400, 400), fundo=(20, 40, 90))).decode()}})
+        self.assertEqual(st, 200, corpo)
+        return corpo["ids"][0]
+
+    def test_textos_na_estrutura_da_referencia_sem_inventar(self):
+        id_ = self.enviar_com_ref()
+        falso = ClaudeFalso()
+        self.agente(falso).uma_volta()
+        it = self.item(id_)
+        self.assertEqual(it["situacao"], "textos_para_aprovar")
+        self.assertEqual(falso.chamadas, ["textos_ref"])
+        campos = {c["chave"]: c for c in it["textos"]["campos"]}
+        self.assertEqual(campos["titulo"]["valor"], "Observações")
+        self.assertEqual((campos["item_1"]["valor"], campos["item_1"]["rotulo"]), ("Conteúdo | 500 g", "Item 1 — Conteúdo"))
+        self.assertEqual((campos["item_2"]["valor"], campos["item_2"]["origem"]), ("", "nao_encontrado"))
+        self.assertEqual(campos["cor"]["valor"], "#e30613")
+
+    def test_arte_pelo_layout_da_referencia(self):
+        if not P.achar_navegador():
+            self.skipTest("Sem Chrome/Edge neste PC")
+        id_ = self.enviar_com_ref()
+        falso = ClaudeFalso()
+        self.agente(falso).uma_volta()
+        it = self.item(id_)
+        campos = it["textos"]["campos"]
+        next(c for c in campos if c["chave"] == "item_2")["valor"] = "Rosca | M16x1,5"
+        self.cliente.pedir("POST", "/api/imagens/textos", {"id": id_, "versao": it["versao"], "campos": campos})
+        self.agente(falso).uma_volta()
+        it = self.item(id_)
+        self.assertEqual(it["situacao"], "pronta", it["mensagem"])
+        self.assertEqual(falso.chamadas, ["textos_ref", "html", "arte"])
+        self.assertIn("Rosca | M16x1,5", falso.ultimo_html_pedido)      # o texto aprovado vai para o Claude
+        self.assertEqual(self.resultado(id_).size, (1200, 1200))
+
+    def test_arte_com_problema_e_refeita_uma_vez(self):
+        if not P.achar_navegador():
+            self.skipTest("Sem Chrome/Edge neste PC")
+        id_ = self.enviar_com_ref("aplicacao")
+        falso = ClaudeFalso()
+        falso.artes_ok = [False, True]
+        self.agente(falso).uma_volta()
+        it = self.item(id_)
+        self.cliente.pedir("POST", "/api/imagens/textos", {"id": id_, "versao": it["versao"], "campos": it["textos"]["campos"]})
+        self.agente(falso).uma_volta()
+        it = self.item(id_)
+        self.assertEqual(it["situacao"], "pronta", it["mensagem"])
+        self.assertEqual(falso.chamadas, ["textos_ref", "html", "arte", "html", "arte"])
+        self.assertIn("Título cortado na borda", falso.ultimo_html_pedido)  # a 2ª volta recebe o problema
+        self.assertGreater(self.cliente.pedir("GET", "/api/imagens")[1]["saldo"]["usado"], 0)  # gasto entra no crédito
+
+    def test_sem_referencia_continua_com_os_modelos_fixos(self):
+        id_ = self.enviar("modo", [frasco()])
+        falso = ClaudeFalso()
+        self.agente(falso).uma_volta()
+        self.assertEqual(falso.chamadas, ["textos"])
+
+
+class PesquisaNaInternet(_BaseAgente):
+    """V20.17 (dono, 04/11): nome do produto / link do fornecedor = o agente pesquisa na internet antes de propor
+    os textos. O que vem de lá fica marcado "internet" com a fonte; o operador aprova; as buscas entram no crédito."""
+
+    def enviar_com_produto(self, nome="Câmara de freio 43-272", link="https://fornecedor.com.br/43-272") -> int:
+        st, corpo = self.cliente.pedir("POST", "/api/imagens/enviar", {
+            "tipo": "beneficios", "fotos": [{"dados": base64.b64encode(frasco()).decode()}],
+            "produto_nome": nome, "produto_link": link})
+        self.assertEqual(st, 200, corpo)
+        return corpo["ids"][0]
+
+    def test_pesquisa_alimenta_os_textos_com_a_fonte(self):
+        id_ = self.enviar_com_produto()
+        falso = ClaudeFalso()
+        falso.pausas = 1                                   # busca longa: a API devolve a vez uma vez
+        self.agente(falso).uma_volta()
+        self.assertEqual(falso.chamadas, ["pesquisa", "pesquisa", "textos"])
+        self.assertIn("INFORMAÇÕES PESQUISADAS NA INTERNET", falso.ultimo_texto_pedido)
+        self.assertIn("M16x1,5", falso.ultimo_texto_pedido)
+        it = self.item(id_)
+        sub = next(c for c in it["textos"]["campos"] if c["chave"] == "subtitulo")
+        self.assertEqual((sub["origem"], sub["fonte"]), ("internet", "https://catalogo.exemplo.com/p/43272"))
+        tit = next(c for c in it["textos"]["campos"] if c["chave"] == "titulo")
+        self.assertEqual(tit["fonte"], "")                 # do rótulo: sem fonte
+        self.assertIn("https://fornecedor.com.br/43-272", it["relatorio"]["fontes"])
+        self.assertIn("M16x1,5", it["relatorio"]["pesquisa"])
+        # 2 chamadas × 2 buscas = 4 buscas × US$ 0,01 no crédito, além dos tokens.
+        self.assertGreaterEqual(self.cliente.pedir("GET", "/api/imagens")[1]["saldo"]["usado"], 0.04)
+
+    def test_haiku_comeca_pela_versao_basica_e_troca_se_recusada(self):
+        self.enviar_com_produto(link="")
+        falso = ClaudeFalso()
+        falso.recusar_ferramentas = True
+        self.agente(falso).uma_volta()
+        self.assertEqual(falso.ferramentas_usadas, ["web_search_20250305", "web_search_20260209"])
+        self.assertEqual(falso.chamadas, ["pesquisa", "textos"])
+
+    def test_pesquisa_que_falha_nao_trava_os_textos(self):
+        id_ = self.enviar_com_produto()
+        falso = ClaudeFalso()
+        falso.recusar_ferramentas = True
+
+        def sempre_recusa(**kw):
+            if "tools" in kw:
+                raise type("BadRequestError", (Exception,), {})("no")
+            return ClaudeFalso.create(falso, **kw)
+        falso.create = sempre_recusa
+        self.agente(falso).uma_volta()
+        it = self.item(id_)
+        self.assertEqual(it["situacao"], "textos_para_aprovar")
+        self.assertIn("pesquisa na internet falhou", it["relatorio"]["aviso_pesquisa"])
+        self.assertNotIn("INFORMAÇÕES PESQUISADAS", falso.ultimo_texto_pedido)
+
+    def test_sem_nome_nem_link_nao_pesquisa(self):
+        self.enviar("modo", [frasco()])
+        falso = ClaudeFalso()
+        self.agente(falso).uma_volta()
+        self.assertEqual(falso.chamadas, ["textos"])
+
+
+class LimpezaDoHtml(unittest.TestCase):
+    def test_tira_script_evento_e_endereco_de_fora(self):
+        import artes
+        h = artes.limpar_html('<html><head><script>x()</script><link rel="stylesheet" href="https://fora.com/a.css">'
+                              '<style>@import url("https://fonts.googleapis.com/css2?family=Anton");@import url("https://fora.com/b.css");'
+                              '.a{background:url(https://fora.com/c.png)}</style></head><body onload="x()">'
+                              '<img src="produto.png"><img src="https://fora.com/d.png"><a href="javascript:x()">a</a></body></html>')
+        self.assertNotIn("script", h.lower())
+        self.assertNotIn("fora.com", h)
+        self.assertNotIn("onload", h)
+        self.assertNotIn("javascript", h)
+        self.assertIn("fonts.googleapis.com", h)
+        self.assertIn('src="produto.png"', h)
+
+    def test_sem_a_foto_do_produto_e_recusado(self):
+        import artes
+        with self.assertRaises(ValueError):
+            artes.limpar_html("<html><body><h1>Sem produto</h1></body></html>")
 
 
 class ArtesHtml(unittest.TestCase):
