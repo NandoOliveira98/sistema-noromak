@@ -730,7 +730,10 @@ apagar a imagem não devolve crédito. **Imagem de referência** (só nas artes,
 textos na estrutura da referência (`propor_textos_referencia`: título + até 8 itens "rótulo | valor", nunca copia dados
 da referência) e escreve o HTML imitando o layout (`gerar_html`, esforço medium); o HTML passa por `artes.limpar_html`
 (sem script/evento/iframe/endereço de fora; só fontes do Google; tem de usar `produto.png`) e, se a conferência achar
-problema, é refeito uma vez com a lista de problemas. **Nome do produto / link do fornecedor** (só nas artes,
+problema, é refeito uma vez com a lista de problemas. **V20.19 — várias referências** (dono, 05/11: "uma arte por
+referência"): a tela aceita até `MAX_REFERENCIAS` (10) e faz **um envio por referência**, com as mesmas fotos, nome e link;
+o servidor e o agente não mudaram (uma referência por trabalho). Com mais de uma, confirma antes (cada arte gasta crédito);
+a referência já enviada sai da lista na hora, e erro no meio deixa só as que faltam (tentar de novo não duplica). **Nome do produto / link do fornecedor** (só nas artes,
 `produto_json`): antes dos textos o agente pesquisa na internet (`pesquisar`: web_search + web_fetch, até 3 buscas; a
 versão `_20260209` é a documentada para o Opus, o Haiku começa pela básica e troca se a API recusar; `pause_turn`
 continua) e a ficha de fatos com URL entra na proposta: campo da internet = `origem: internet` + `fonte` (tela: "da

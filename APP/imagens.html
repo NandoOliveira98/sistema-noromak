@@ -145,14 +145,15 @@ label.tit{display:block;font-size:11px;font-weight:700;text-transform:uppercase;
           aparece marcado <b>"da internet"</b> com a fonte, para você conferir. Cada busca custa US$ 0,01.</div>
       </div>
       <div id="blocoRef" hidden>
-        <label class="tit">Imagem de referência (opcional)</label>
-        <div class="ref-caixa" id="refCaixa" tabindex="0" role="button" aria-label="Escolher imagem de referência">
-          <div class="ref-vazia" id="refVazia">+</div><img id="refPrevia" alt="" hidden>
+        <label class="tit">Imagens de referência (opcional)</label>
+        <div class="ref-caixa" id="refCaixa" tabindex="0" role="button" aria-label="Adicionar imagens de referência">
+          <div class="ref-vazia" id="refVazia">+</div>
           <div class="ref-txt" id="refTxt"><b>Arte de outro anúncio para copiar o layout</b><br>Cores, títulos, cartões e disposição.
-            Os textos vêm só do seu produto, e fotos de carro/caminhão da referência não são criadas.</div>
+            Os textos vêm só do seu produto, e fotos de carro/caminhão da referência não são criadas.
+            Pode pôr várias: <b>cada referência vira uma arte</b>.</div>
         </div>
-        <button class="nk-btn mini" id="refTirar" onclick="tirarRef(event)" style="margin-top:6px" hidden>Tirar referência</button>
-        <input type="file" id="refArquivo" accept="image/jpeg,image/png,image/webp" hidden>
+        <div class="previas" id="refPrevias"></div>
+        <input type="file" id="refArquivo" accept="image/jpeg,image/png,image/webp" multiple hidden>
       </div>
       <div style="margin-top:14px;display:flex;gap:8px">
         <button class="nk-btn pri" id="btnEnviar" onclick="enviar()" disabled>Enviar</button>
@@ -187,6 +188,7 @@ const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const MAX_BYTES = 10 * 1024 * 1024;
 const MAX_ENVIO = 25 * 1024 * 1024;   // soma das fotos de um envio (memória da VPS; igual ao servidor)
+const MAX_REFERENCIAS = 10;            // V20.19: cada referência é um envio (e uma arte) a mais
 const TIPOS = {
   principal: {nome: "Foto principal", dica: "Fundo branco, 1200×1200, produto inteiro. Pode mandar várias fotos: cada uma vira uma imagem.", min: 1, max: 20},
   beneficios: {nome: "Benefícios", dica: "Mande a frente do produto e, se tiver, o verso. O Claude lê o rótulo e propõe os benefícios; você corrige e aprova antes de gerar a arte.", min: 1, max: 2},
@@ -203,7 +205,8 @@ const SITUACAO = {
 const FILTROS = [["", "Todas"], ["fila", "Na fila / processando"], ["textos_para_aprovar", "Textos para aprovar"],
   ["pronta", "Prontas"], ["revisar", "Revisar"], ["problema", "Outra foto / erro"]];
 let dados = null, selecionadas = new Set(), fotos = [], aberta = null, timer = null, filtroKpi = "";
-let referencia = null;   // {arquivo, url}: imagem de referência da arte (V20.17)
+// V20.19 (dono, 05/11): várias referências; cada uma vira um envio próprio (uma arte por referência).
+let referencias = [];   // [{arquivo, url}]: imagens de referência da arte (V20.17 aceitava uma só)
 const ARTES = ["beneficios", "modo", "aplicacao"];
 
 $("tipo").innerHTML = Object.entries(TIPOS).map(([k, t]) => `<option value="${k}">${esc(t.nome)}</option>`).join("");
@@ -215,7 +218,7 @@ function mudarTipo() {
   const arte = ARTES.includes($("tipo").value);
   $("blocoRef").hidden = !arte;
   $("blocoProduto").hidden = !arte;
-  if (!arte && referencia) tirarRef();
+  if (!arte && referencias.length) tirarRef();
   validarEnvio();
 }
 function tamanho(b) { return b >= 1048576 ? (b / 1048576).toFixed(1).replace(".", ",") + " MB" : Math.max(1, Math.round(b / 1024)) + " KB"; }
@@ -268,25 +271,36 @@ refCaixa.addEventListener("click", () => $("refArquivo").click());
 refCaixa.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("refArquivo").click(); } });
 refCaixa.addEventListener("dragover", e => { e.preventDefault(); refCaixa.classList.add("sobre"); });
 refCaixa.addEventListener("dragleave", () => refCaixa.classList.remove("sobre"));
-refCaixa.addEventListener("drop", e => { e.preventDefault(); refCaixa.classList.remove("sobre"); escolherRef(e.dataTransfer.files[0]); });
-$("refArquivo").addEventListener("change", e => { escolherRef(e.target.files[0]); e.target.value = ""; });
-function escolherRef(f) {
-  if (!f) return;
-  if (!/^image\/(jpeg|png|webp)$/.test(f.type)) { nkToast(`${f.name}: envie só JPG, PNG ou WEBP.`, "erro"); return; }
-  if (f.size > MAX_BYTES) { nkToast(`${f.name}: passa de 10 MB.`, "erro"); return; }
-  tirarRef();
-  referencia = {arquivo: f, url: URL.createObjectURL(f)};
-  $("refPrevia").src = referencia.url; $("refPrevia").hidden = false; $("refVazia").hidden = true;
-  $("refTxt").innerHTML = `<b>${esc(f.name)}</b><br>O agente vai copiar o layout desta arte.`;
-  $("refTirar").hidden = false;
+refCaixa.addEventListener("drop", e => { e.preventDefault(); refCaixa.classList.remove("sobre"); escolherRef(e.dataTransfer.files); });
+$("refArquivo").addEventListener("change", e => { escolherRef(e.target.files); e.target.value = ""; });
+function escolherRef(lista) {
+  for (const f of Array.from(lista || [])) {
+    if (!/^image\/(jpeg|png|webp)$/.test(f.type)) { nkToast(`${f.name}: envie só JPG, PNG ou WEBP.`, "erro"); continue; }
+    if (f.size > MAX_BYTES) { nkToast(`${f.name}: passa de 10 MB.`, "erro"); continue; }
+    if (referencias.length >= MAX_REFERENCIAS) { nkToast(`No máximo ${MAX_REFERENCIAS} referências por vez.`, "erro"); break; }
+    referencias.push({arquivo: f, url: URL.createObjectURL(f)});
+  }
+  desenharRefs();
 }
-function tirarRef(e) {
+function desenharRefs() {
+  $("refPrevias").innerHTML = referencias.map((r, i) =>
+    `<div class="previa"><img src="${r.url}" alt=""><small>arte ${i + 1}</small>` +
+    `<button type="button" onclick="tirarRef(event, ${i})" aria-label="Tirar referência">×</button></div>`).join("");
+  const n = referencias.length;
+  $("refTxt").innerHTML = n
+    ? `<b>${n === 1 ? "1 referência" : n + " referências"}</b><br>Clique para adicionar mais. ` +
+      (n === 1 ? "O agente copia o layout dela." : `Vão sair ${n} artes, uma com o layout de cada referência.`)
+    : "<b>Arte de outro anúncio para copiar o layout</b><br>Cores, títulos, cartões e disposição. " +
+      "Os textos vêm só do seu produto, e fotos de carro/caminhão da referência não são criadas. " +
+      "Pode pôr várias: <b>cada referência vira uma arte</b>.";
+  validarEnvio();
+}
+// Sem índice tira todas (troca de tipo, Limpar); com índice, só aquela.
+function tirarRef(e, i) {
   if (e) e.stopPropagation();
-  if (referencia) URL.revokeObjectURL(referencia.url);
-  referencia = null;
-  $("refPrevia").hidden = true; $("refPrevia").removeAttribute("src"); $("refVazia").hidden = false; $("refTirar").hidden = true;
-  $("refTxt").innerHTML = "<b>Arte de outro anúncio para copiar o layout</b><br>Cores, títulos, cartões e disposição. " +
-    "Os textos vêm só do seu produto, e fotos de carro/caminhão da referência não são criadas.";
+  const tirar = i === undefined ? referencias.splice(0) : referencias.splice(i, 1);
+  tirar.forEach(r => URL.revokeObjectURL(r.url));
+  desenharRefs();
 }
 function validarEnvio() {
   const t = TIPOS[$("tipo").value];
@@ -299,26 +313,43 @@ const lerBase64 = f => new Promise((ok, falha) => {
   const r = new FileReader(); r.onload = () => ok(String(r.result).split(",", 2)[1]); r.onerror = () => falha(r.error); r.readAsDataURL(f);
 });
 async function enviar() {
-  const total = fotos.reduce((s, f) => s + f.arquivo.size, 0) + (referencia && ARTES.includes($("tipo").value) ? referencia.arquivo.size : 0);
-  if (total > MAX_ENVIO) { nkToast(`As fotos somam ${tamanho(total)}: o limite por envio é 25 MB. Mande em partes.`, "erro"); return; }
+  const arte = ARTES.includes($("tipo").value);
+  const refs = arte ? referencias.slice() : [];
+  const fotosBytes = fotos.reduce((s, f) => s + f.arquivo.size, 0);
+  // V20.19: o limite de 25 MB vale por envio; com várias referências cada envio leva as fotos + uma referência.
+  const maior = fotosBytes + Math.max(0, ...refs.map(r => r.arquivo.size));
+  if (maior > MAX_ENVIO) { nkToast(`As fotos somam ${tamanho(maior)}: o limite por envio é 25 MB. Mande em partes.`, "erro"); return; }
+  const link = arte ? $("produtoLink").value.trim() : "";
+  if (link && !/^https?:\/\/\S+$/i.test(link)) { nkToast("Link do fornecedor: cole o endereço completo, começando com https://", "erro"); return; }
+  if (refs.length > 1 && !await nkConfirmar(`Vão sair ${refs.length} artes, uma com o layout de cada referência. Cada arte gasta o crédito da API à parte. Enviar?`)) return;
   const btn = $("btnEnviar"); btn.disabled = true; btn.textContent = "Enviando…";
+  let enviados = 0;
   try {
     const lista = [];
     for (const f of fotos) lista.push({nome: f.arquivo.name, dados: await lerBase64(f.arquivo)});
-    const corpo = {tipo: $("tipo").value, sku: $("sku").value.trim(), fotos: lista};
-    if (referencia && ARTES.includes(corpo.tipo)) corpo.referencia = {nome: referencia.arquivo.name, dados: await lerBase64(referencia.arquivo)};
-    if (ARTES.includes(corpo.tipo)) {
-      const link = $("produtoLink").value.trim();
-      if (link && !/^https?:\/\/\S+$/i.test(link)) throw new Error("Link do fornecedor: cole o endereço completo, começando com https://");
-      corpo.produto_nome = $("produtoNome").value.trim();
-      corpo.produto_link = link;
+    const base = {tipo: $("tipo").value, sku: $("sku").value.trim(), fotos: lista};
+    if (arte) { base.produto_nome = $("produtoNome").value.trim(); base.produto_link = link; }
+    if (!refs.length) {
+      const d = await api("/api/imagens/enviar", base);
+      enviados = d.ids.length;
+    } else {
+      for (const r of refs) {
+        if (refs.length > 1) btn.textContent = `Enviando ${enviados + 1} de ${refs.length}…`;
+        await api("/api/imagens/enviar", {...base, referencia: {nome: r.arquivo.name, dados: await lerBase64(r.arquivo)}});
+        enviados++;
+        // a referência que já foi sai da lista: tentar de novo depois de um erro não duplica a arte
+        const i = referencias.indexOf(r);
+        if (i >= 0) { URL.revokeObjectURL(r.url); referencias.splice(i, 1); desenharRefs(); }
+      }
     }
-    const d = await api("/api/imagens/enviar", corpo);
-    nkToast(d.ids.length > 1 ? `${d.ids.length} imagens enviadas para a fila.` : "Imagem enviada para a fila.", "ok");
+    nkToast(enviados > 1 ? `${enviados} imagens enviadas para a fila.` : "Imagem enviada para a fila.", "ok");
     limparEnvio();
-    await carregar();
-  } catch (e) { nkToast(e.message, "erro"); }
-  finally { btn.textContent = "Enviar"; validarEnvio(); }
+  } catch (e) {
+    nkToast(enviados ? `${enviados} de ${refs.length} enviadas; a seguinte falhou: ${e.message}. As que faltam continuam na lista.` : e.message, "erro");
+  } finally {
+    btn.textContent = "Enviar"; validarEnvio();
+    if (enviados) await carregar();
+  }
 }
 
 // ---------- lista ----------
