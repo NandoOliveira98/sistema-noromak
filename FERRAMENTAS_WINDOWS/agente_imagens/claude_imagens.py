@@ -307,7 +307,7 @@ class ClaudeImagens:
             f"Vamos fazer uma arte de anúncio sobre {objetivo}, com o MESMO layout da referência. Olhe a estrutura "
             "da referência (título + quantos cartões/itens, cada um com um rótulo e um valor) e proponha os textos "
             "da NOSSA arte nessa estrutura:\n"
-            "- titulo: título curto no estilo da referência, sobre o nosso produto.\n"
+            "- titulo: deixe vazio (a arte sai sem título; o operador digita um, se quiser).\n"
             "- itens: até 8, cada um com rotulo (curto, 1 a 3 palavras) e valor (curto). Use só o que está "
             f"escrito ou visível {_fontes(catalogo, pesquisa).replace('no produto', 'no NOSSO produto')}; o que não estiver vem com "
             "valor vazio e origem 'nao_encontrado' — "
@@ -316,8 +316,8 @@ class ClaudeImagens:
             "- serve: false só se não dá para ler o nosso produto.")})
         conteudo += _bloco_catalogo(catalogo) + _bloco_pesquisa(pesquisa)
         dados = self._chamar(conteudo, esquema, 3000)
-        campos = [{"chave": "titulo", "rotulo": "Título", "valor": str(dados.get("titulo") or "").strip(),
-                   "origem": "rotulo" if str(dados.get("titulo") or "").strip() else "nao_encontrado"}]
+        campos = [{"chave": "titulo", "rotulo": "Título (opcional: em branco, a arte sai sem título)", "valor": "",
+                   "origem": "nao_encontrado"}]
         for i, it in enumerate((dados.get("itens") or [])[:8], 1):
             valor = str(it.get("valor") or "").strip()
             rotulo = str(it.get("rotulo") or "").strip()
@@ -358,7 +358,12 @@ class ClaudeImagens:
                         "- Fotos de veículos/pessoas/cenários da referência NÃO existem aqui: troque por ícone SVG simples "
                         "embutido ou deixe de fora. Nenhuma outra imagem, nenhum <script>, nenhum link externo além de "
                         "@import do Google Fonts.\n"
-                        "- Texto com no mínimo 22 px, nada encostado na borda (margem ≥ 30 px), texto nunca em cima do produto.")}]
+                        "- Texto com no mínimo 22 px, nada encostado na borda (margem ≥ 30 px), texto nunca em cima do produto.\n"
+                        "- A foto do produto (e o cartão dela) fica INTEIRA numa área livre: nunca encosta nem passa por cima de "
+                        "círculo, faixa, borda ou enfeite da arte (deixe ≥ 40 px de folga deles). Se o enfeite da referência "
+                        "atrapalhar, diminua ou mova o enfeite, nunca o produto.\n"
+                        "- Nenhuma caixa, cartão ou faixa vazia: todo bloco tem texto, ícone ou o produto; sem conteúdo, tire o bloco.\n"
+                        "- Sem título nos textos acima = arte sem título (não invente um).")}]
         if problemas:
             conteudo.append({"type": "text", "text": "A versão anterior teve estes problemas; corrija:\n- " + "\n- ".join(problemas)})
         return str(self._chamar(conteudo, esquema, 12000, esforco="medium").get("html") or "")
@@ -369,6 +374,7 @@ class ClaudeImagens:
         textos = "\n".join(f"- {c['valor']}" for c in campos if c.get("valor") and c.get("chave") != "cor")
         return self._chamar([bloco_imagem(arte), {"type": "text", "text": (
             f"Esta é uma arte de anúncio 1200×1200. Os textos aprovados foram:\n{textos}\n\n"
-            "ok = true se todos aparecem inteiros e legíveis, nada cortado na borda, nenhum texto em cima de outro "
+            "ok = true se todos aparecem inteiros e legíveis, nada cortado na borda, nenhuma caixa/cartão vazio, "
+            "o produto não encosta nem fica por cima de círculo, faixa ou enfeite, nenhum texto em cima de outro "
             "ou em cima do produto, e o produto aparece inteiro. Senão ok = false e liste cada problema em uma frase.")}],
             esquema, 1500)

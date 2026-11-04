@@ -367,7 +367,7 @@ class ArteComReferencia(_BaseAgente):
         self.assertEqual(it["situacao"], "textos_para_aprovar")
         self.assertEqual(falso.chamadas, ["textos_ref"])
         campos = {c["chave"]: c for c in it["textos"]["campos"]}
-        self.assertEqual(campos["titulo"]["valor"], "Observações")
+        self.assertEqual((campos["titulo"]["valor"], campos["titulo"]["origem"]), ("", "nao_encontrado"))  # dono 04/11: sem título
         self.assertEqual((campos["item_1"]["valor"], campos["item_1"]["rotulo"]), ("Conteúdo | 500 g", "Item 1 — Conteúdo"))
         self.assertEqual((campos["item_2"]["valor"], campos["item_2"]["origem"]), ("", "nao_encontrado"))
         self.assertEqual(campos["cor"]["valor"], "#e30613")
@@ -392,6 +392,8 @@ class ArteComReferencia(_BaseAgente):
         self.assertIn("MESMAS cores", falso.ultimo_html_pedido)
         self.assertIn("cartão", falso.ultimo_html_pedido)
         self.assertNotIn("fundo claro atrás", falso.ultimo_html_pedido)
+        self.assertIn("nunca encosta nem passa por cima", falso.ultimo_html_pedido)   # foto longe dos enfeites
+        self.assertIn("Nenhuma caixa", falso.ultimo_html_pedido)
         self.assertEqual(self.resultado(id_).size, (1200, 1200))
 
     def test_arte_com_problema_e_refeita_uma_vez(self):
