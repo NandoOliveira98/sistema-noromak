@@ -555,7 +555,7 @@
 
 </style>
 <script src="/expedicao/shared-storage.js?v=19.56"></script>
-<script src="/expedicao/web-auth.js?v=19.89"></script>
+<script src="/expedicao/web-auth.js?v=20.17"></script>
 <script defer src="/expedicao/pwa-install.js?v=14.5"></script>
 
 <style id="estiloEtiquetasPersistentesV98">
@@ -746,7 +746,7 @@ html[data-tema="escuro"] .meta-v1914-topo b{color:#E6EEF6}html[data-tema="escuro
 @media(max-width:1000px){.v1783-kpis{grid-template-columns:repeat(2,1fr)}}
 </style>
 <!-- V18.65: tema comum (fonte, foco e icones) por ultimo no head. -->
-<link rel="stylesheet" href="/expedicao/theme.css?v=18.65">
+<link rel="stylesheet" href="/expedicao/theme.css?v=20.17">
 <!-- V18.82: componentes comuns e menu lateral único (nk-menu.js). -->
 <link rel="stylesheet" href="/expedicao/nk-ui.css?v=19.13">
 <!-- V18.83: tema claro/escuro, avisos, confirmação e tabela padrão. -->
@@ -1400,7 +1400,7 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
   </style>
   <!-- V18.82: o menu (itens, grupos recolhíveis, Sair) vem do nk-menu.js, o mesmo das outras telas.
        Cada item é um link com o endereço da tela (/expedicao/pedidos-dia...): Ctrl+clique abre em outra aba. -->
-  <script src="/expedicao/nk-menu.js?v=20.01"></script>
+  <script src="/expedicao/nk-menu.js?v=20.17"></script>
   <script>nkMenuDesenhar(document.currentScript);</script>
 </nav>
 
@@ -10140,7 +10140,7 @@ document.addEventListener("DOMContentLoaded",()=>{
   if(typeof original==='function')window.abrirAbaAdmin=function(nome){if(ehSupervisor()&&['usuarios','seguranca','integracoes'].includes(String(nome))){alert('Esta área é exclusiva do Administrador.');return;}return original.apply(this,arguments);};
 })();
 </script>
-<script src="/expedicao/user-permissions.js?v=19.89"></script>
+<script src="/expedicao/user-permissions.js?v=20.17"></script>
 
 <script id="noromak-v15-js">
 function v15Nav(el){document.querySelectorAll('.v15-nav-item').forEach(x=>x.classList.remove('active'));if(el)el.classList.add('active');}
@@ -10369,15 +10369,15 @@ html[data-tema="escuro"] .btn-mover-filial-v1895{background:#17212E;border-color
   const BASE=location.pathname.startsWith('/expedicao')?'/expedicao':'';
   const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));
   const perfil=v=>{const p=String(v||'').toLowerCase();return p.includes('admin')?'Admin':(p.includes('supervisor')?'Supervisor':(p.includes('consulta')?'Consulta':(p.includes('compras')?'Compras':'Operador')))}; // V19.40: Consulta; V19.70: Compras
-  function mapServer(u){return {Nome:u.display_name||u.username||'',Login:u.username||'',Senha:'********',Perfil:u.display_profile||perfil(u.role),Ativo:u.active!==false&&u.active!==0,Aprovado:true,AcessoConferencia:!!u.can_conferencia,AcessoAdmin:!!u.can_admin,AcessoEstacao:!!u.can_estacao,AcessoPrecificador:!!u.can_precificador,AcessoDevolucao:!!u.can_devolucao,Filial:u.filial||'aracatuba',__uidUsuario:'USR-'+String(u.username||'').toLowerCase(),__serverUsername:String(u.username||'').toLowerCase()};}
+  function mapServer(u){return {Nome:u.display_name||u.username||'',Login:u.username||'',Senha:'********',Perfil:u.display_profile||perfil(u.role),Ativo:u.active!==false&&u.active!==0,Aprovado:true,AcessoConferencia:!!u.can_conferencia,AcessoAdmin:!!u.can_admin,AcessoEstacao:!!u.can_estacao,AcessoPrecificador:!!u.can_precificador,AcessoDevolucao:!!u.can_devolucao,AcessoImagens:!!u.can_imagens,Filial:u.filial||'aracatuba',__uidUsuario:'USR-'+String(u.username||'').toLowerCase(),__serverUsername:String(u.username||'').toLowerCase()};}
   async function api(path,opt={}){const r=await fetch(BASE+path,{credentials:'same-origin',cache:'no-store',...opt,headers:{'Accept':'application/json',...(opt.body?{'Content-Type':'application/json; charset=utf-8'}:{}),...(opt.headers||{})}});let d={};try{d=await r.json()}catch(_){ }if(!r.ok)throw new Error(d.error||('HTTP '+r.status));return d;}
   window.carregarUsuariosCanonicosV1757=async function(){
-    try{const d=await api('/api/roles');const lista=(Array.isArray(d.users)?d.users:[]).map(mapServer);usuariosEditorAdmin=lista;window.__usrCanonicoV1896=true;window.__usrBaseV1869={};lista.forEach(u=>{window.__usrBaseV1869[u.__uidUsuario]=JSON.stringify([String(u.Nome||'').trim(),perfil(u.Perfil),u.AcessoConferencia!==false,u.AcessoAdmin===true,u.AcessoEstacao===true,u.AcessoPrecificador===true,u.AcessoDevolucao===true,u.Filial||'aracatuba'])});if(typeof usuariosCadastrados!=='undefined')usuariosCadastrados=lista;renderizarUsuariosAdmin();const c=document.getElementById('contadorUsuariosAdmin');if(c)c.textContent=lista.length+' usuário(s) cadastrado(s) no servidor.';return lista;}catch(e){console.error('[V17.57 usuarios]',e);if(typeof setStatusBanco==='function')setStatusBanco('Erro ao carregar usuários do servidor','erro');throw e;}
+    try{const d=await api('/api/roles');const lista=(Array.isArray(d.users)?d.users:[]).map(mapServer);usuariosEditorAdmin=lista;window.__usrCanonicoV1896=true;window.__usrBaseV1869={};lista.forEach(u=>{window.__usrBaseV1869[u.__uidUsuario]=JSON.stringify([String(u.Nome||'').trim(),perfil(u.Perfil),u.AcessoConferencia!==false,u.AcessoAdmin===true,u.AcessoEstacao===true,u.AcessoPrecificador===true,u.AcessoDevolucao===true,u.AcessoImagens===true,u.Filial||'aracatuba'])});if(typeof usuariosCadastrados!=='undefined')usuariosCadastrados=lista;renderizarUsuariosAdmin();const c=document.getElementById('contadorUsuariosAdmin');if(c)c.textContent=lista.length+' usuário(s) cadastrado(s) no servidor.';return lista;}catch(e){console.error('[V17.57 usuarios]',e);if(typeof setStatusBanco==='function')setStatusBanco('Erro ao carregar usuários do servidor','erro');throw e;}
   };
   /* V18.69: lista no padrão do sistema — uma linha por usuário (iniciais, nome/login, perfil,
      módulos em botões e ações). A linha alterada e não salva fica marcada, e o botão Salvar
      mostra quantas faltam. Módulos: mesma célula do user-permissions.js (Admin travado pelo perfil). */
-  const assinatura=u=>JSON.stringify([String(u.Nome||'').trim(),perfil(u.Perfil),u.AcessoConferencia!==false,u.AcessoAdmin===true,u.AcessoEstacao===true,u.AcessoPrecificador===true,u.AcessoDevolucao===true,u.Filial||'aracatuba']);
+  const assinatura=u=>JSON.stringify([String(u.Nome||'').trim(),perfil(u.Perfil),u.AcessoConferencia!==false,u.AcessoAdmin===true,u.AcessoEstacao===true,u.AcessoPrecificador===true,u.AcessoDevolucao===true,u.AcessoImagens===true,u.Filial||'aracatuba']);
   window.__usrBaseV1869=window.__usrBaseV1869||{};
   function usrMarcarAlteracoes(){
     const lista=Array.isArray(usuariosEditorAdmin)?usuariosEditorAdmin:[];let n=0;
@@ -10408,7 +10408,7 @@ html[data-tema="escuro"] .btn-mover-filial-v1895{background:#17212E;border-color
   };
   window.atualizarCampoUsuarioAdmin=function(el){const u=(usuariosEditorAdmin||[]).find(x=>String(x.__uidUsuario)===String(el.dataset.uidusuario));if(!u)return;u[el.dataset.campo]=el.value;if(typeof setStatusBanco==='function')setStatusBanco('Alterações pendentes — clique em Salvar alterações','salvando');};
   window.salvarUsuariosAdmin=async function(mostrar=false){
-    try{for(const u of (usuariosEditorAdmin||[])){const login=String(u.__serverUsername||u.Login||'').trim().toLowerCase();if(!login)continue;await api('/api/roles',{method:'POST',body:JSON.stringify({username:login,display_name:String(u.Nome||login).trim(),role:perfil(u.Perfil).toLowerCase(),active:u.Ativo!==false,filial:(perfil(u.Perfil)!=='Admin'&&u.Filial==='todas')?'aracatuba':(u.Filial||'aracatuba'),permissions:{conferencia:u.AcessoConferencia!==false,admin:u.AcessoAdmin===true,estacao:u.AcessoEstacao===true,precificador:u.AcessoPrecificador===true,devolucao:u.AcessoDevolucao===true}})});}await carregarUsuariosCanonicosV1757();if(typeof setStatusBanco==='function')setStatusBanco('● Usuários salvos no servidor','ok');if(mostrar)alert('Alterações de usuários salvas no servidor.');return true;}catch(e){if(typeof setStatusBanco==='function')setStatusBanco('Erro ao salvar usuários','erro');if(mostrar)alert('Não foi possível salvar: '+(e.message||e));return false;}
+    try{for(const u of (usuariosEditorAdmin||[])){const login=String(u.__serverUsername||u.Login||'').trim().toLowerCase();if(!login)continue;await api('/api/roles',{method:'POST',body:JSON.stringify({username:login,display_name:String(u.Nome||login).trim(),role:perfil(u.Perfil).toLowerCase(),active:u.Ativo!==false,filial:(perfil(u.Perfil)!=='Admin'&&u.Filial==='todas')?'aracatuba':(u.Filial||'aracatuba'),permissions:{conferencia:u.AcessoConferencia!==false,admin:u.AcessoAdmin===true,estacao:u.AcessoEstacao===true,precificador:u.AcessoPrecificador===true,devolucao:u.AcessoDevolucao===true,imagens:u.AcessoImagens===true}})});}await carregarUsuariosCanonicosV1757();if(typeof setStatusBanco==='function')setStatusBanco('● Usuários salvos no servidor','ok');if(mostrar)alert('Alterações de usuários salvas no servidor.');return true;}catch(e){if(typeof setStatusBanco==='function')setStatusBanco('Erro ao salvar usuários','erro');if(mostrar)alert('Não foi possível salvar: '+(e.message||e));return false;}
   };
   window.excluirUsuarioAdmin=async function(uid){const u=(usuariosEditorAdmin||[]).find(x=>String(x.__uidUsuario)===String(uid));if(!u)return;if(!await nkConfirmar(`Excluir o usuário ${u.Login||u.Nome}?`))return;try{await api('/api/roles?username='+encodeURIComponent(u.__serverUsername||u.Login),{method:'DELETE'});await carregarUsuariosCanonicosV1757();if(typeof setStatusBanco==='function')setStatusBanco('● Usuário excluído no servidor','ok');}catch(e){alert('Não foi possível excluir o usuário: '+(e.message||e));}};
   window.confirmarNovoUsuarioAdmin=async function(){const erro=document.getElementById('erroNovoUsuarioAdmin');const btn=document.getElementById('btnConfirmarNovoUsuario');if(erro)erro.textContent='';const nome=String(document.getElementById('novoUsuarioNome')?.value||'').trim(),login=String(document.getElementById('novoUsuarioLogin')?.value||'').trim().toLowerCase(),senha=String(document.getElementById('novoUsuarioSenha')?.value||''),p=perfil(document.getElementById('novoUsuarioPerfil')?.value);if(!nome||!login||!senha){if(erro)erro.textContent='Preencha Nome, Login e Senha.';return;}try{if(btn){btn.disabled=true;btn.textContent='Salvando...'}const filialNova=String(document.getElementById('novoUsuarioFilial')?.value||'aracatuba');if(filialNova==='todas'&&p!=='Admin'&&p!=='Consulta'){if(erro)erro.textContent='Só o perfil Admin pode ver todas as filiais.';return;}await api('/api/roles',{method:'POST',body:JSON.stringify({username:login,display_name:nome,role:p.toLowerCase(),active:true,password:senha,filial:filialNova})});await carregarUsuariosCanonicosV1757();fecharModalNovoUsuarioAdmin();if(typeof setStatusBanco==='function')setStatusBanco('● Usuário criado no servidor','ok');}catch(e){if(erro)erro.textContent=e.message||String(e);}finally{if(btn){btn.disabled=false;btn.textContent='Salvar usuário'}}};

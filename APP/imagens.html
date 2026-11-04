@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="/favicon.ico?v=14.5" sizes="any">
+<title>Noromak · Estúdio de Imagens</title>
+<!-- V20.17: Estúdio de Imagens (decisões do dono, 04/11; desenho em
+     docs/superpowers/specs/2026-11-04-estudio-imagens-design.md). O operador sobe a foto do produto e
+     recebe a foto principal (1200×1200, fundo branco) ou a arte (benefícios, modo de uso, kit juntos,
+     aplicação). Quem processa é o agente no PC do dono (Real-ESRGAN + Claude); o servidor só guarda os
+     arquivos e a fila. Arte: o Claude propõe os textos lidos no rótulo e o operador aprova antes de gerar.
+     Nada é apagado sozinho: o operador apaga depois de usar. Módulo "imagens". -->
+<script defer src="/expedicao/web-auth.js?v=20.17"></script>
+<link rel="stylesheet" href="/expedicao/theme.css?v=20.17">
+<link rel="stylesheet" href="/expedicao/nk-ui.css?v=19.13">
+<script src="/expedicao/nk-ui.js?v=19.13"></script>
+<script defer src="/expedicao/nk-menu.js?v=20.17" data-shell></script>
+<style>
+body{margin:0;background:var(--nk-canvas);color:var(--nk-ink);font-family:var(--nk-font,"IBM Plex Sans","Segoe UI",Arial,sans-serif)}
+[hidden]{display:none!important}
+.nk-kpi{cursor:pointer}
+.nk-kpi.ativo{border-color:var(--nk-pri);box-shadow:0 0 0 3px var(--nk-foco)}
+.grade{display:grid;grid-template-columns:minmax(300px,380px) minmax(0,1fr);gap:14px;align-items:start}
+@media (max-width:980px){.grade{grid-template-columns:1fr}}
+.campo{font:inherit;font-size:13.5px;padding:8px 10px;border:1px solid var(--nk-line);border-radius:9px;background:var(--nk-tile);color:var(--nk-ink);width:100%;box-sizing:border-box}
+label.tit{display:block;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--nk-ink3);margin:12px 0 5px}
+.dica{font-size:12px;color:var(--nk-ink2);margin-top:6px;line-height:1.45}
+.soltar{border:2px dashed var(--nk-line-forte);border-radius:12px;padding:22px 14px;text-align:center;color:var(--nk-ink2);cursor:pointer;background:var(--nk-tile2);transition:.15s}
+.soltar.sobre{border-color:var(--nk-pri);background:var(--nk-info-bg)}
+.soltar b{color:var(--nk-head)}
+.previas{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.previa{position:relative;width:74px}
+.previa img{width:74px;height:74px;object-fit:contain;background:#fff;border:1px solid var(--nk-line);border-radius:8px}
+.previa small{display:block;font-size:10.5px;color:var(--nk-ink2);text-align:center;margin-top:2px}
+.previa button{position:absolute;top:-6px;right:-6px;width:20px;height:20px;border-radius:50%;border:0;background:var(--nk-bad);color:#fff;cursor:pointer;font-size:12px;line-height:20px;padding:0}
+.barra-topo{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:space-between;margin-bottom:10px}
+.barra-topo .esq{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.miniatura{width:52px;height:52px;object-fit:contain;background:#fff;border:1px solid var(--nk-line);border-radius:7px;display:block}
+.nk-tab tbody tr.cl{cursor:pointer}
+.nk-tab tbody tr.cl:hover td{background:var(--nk-hover)}
+.nk-tab td{vertical-align:middle}
+.sku{font-family:Consolas,"IBM Plex Mono",monospace;font-size:12.5px}
+.mini{font-size:12px;color:var(--nk-ink2)}
+.vazio{color:var(--nk-ink3);padding:22px 6px;text-align:center}
+.nk-selo.bad{background:var(--nk-bad-bg);color:var(--nk-bad)}
+.nk-selo.info{background:var(--nk-info-bg);color:var(--nk-info)}
+.espaco{font-size:12.5px;color:var(--nk-ink2)}
+.espaco.aviso{color:var(--nk-warn);font-weight:700}
+/* gaveta */
+.fundo{position:fixed;inset:0;background:rgba(15,23,34,.28);z-index:49}
+.gaveta{position:fixed;top:0;right:0;bottom:0;width:min(980px,100%);background:var(--nk-tile);border-left:1px solid var(--nk-line);
+  box-shadow:var(--nk-sombra2);overflow:auto;z-index:50;display:flex;flex-direction:column}
+.gav-cab{padding:18px 22px 12px;border-bottom:1px solid var(--nk-line);position:sticky;top:0;background:var(--nk-tile);z-index:2}
+.gav-cab h2{margin:0;font-size:19px;color:var(--nk-head)}
+.gav-cab .linha{display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.gav-cab .meta{font-size:12.5px;color:var(--nk-ink2);margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.gav-corpo{padding:14px 22px 26px}
+.secao{margin-top:18px}
+.secao h3{font-size:12px;letter-spacing:.05em;text-transform:uppercase;color:var(--nk-ink3);margin:0 0 8px}
+.lado{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px}
+.quadro{border:1px solid var(--nk-line);border-radius:11px;padding:8px;background:#fff}
+.quadro img{width:100%;height:auto;max-height:420px;object-fit:contain;display:block;border-radius:6px}
+.zooms .quadro img{max-height:none}
+.quadro small{display:block;color:#586A7D;font-size:11.5px;margin-top:5px;text-align:center}
+.zooms{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:10px}
+.aviso-zoom{font-size:12.5px;background:var(--nk-warn-bg);color:var(--nk-warn);border:1px solid var(--nk-warn-ln);border-radius:9px;padding:8px 11px;margin-bottom:9px}
+.rel li{font-size:13px;margin-bottom:4px}
+.rel .ok{color:var(--nk-ok);font-weight:700}.rel .bad{color:var(--nk-bad);font-weight:700}
+.campos-txt .linha-campo{margin-bottom:10px}
+.campos-txt label{display:flex;justify-content:space-between;font-size:12px;font-weight:700;color:var(--nk-ink2);margin-bottom:4px}
+.origem{font-weight:600;font-size:11px}
+.origem.rotulo{color:var(--nk-ok)}.origem.nao_encontrado{color:var(--nk-warn)}.origem.operador{color:var(--nk-info)}
+.msg{font-size:13.5px;padding:10px 12px;border-radius:10px;background:var(--nk-info-bg);color:var(--nk-info);border:1px solid var(--nk-info-ln)}
+.msg.bad{background:var(--nk-bad-bg);color:var(--nk-bad);border-color:var(--nk-bad-ln)}
+.acoes-gav{display:flex;gap:8px;flex-wrap:wrap}
+</style>
+</head>
+<body>
+<main class="nk-pagina">
+  <div class="nk-cab">
+    <div>
+      <div class="nk-rotulo">Vendas e anúncios</div>
+      <h1>Estúdio de Imagens</h1>
+      <p>Foto principal em fundo branco e artes do anúncio, feitas pelo agente de imagens e conferidas pelo Claude</p>
+    </div>
+    <div class="nk-acoes">
+      <span class="nk-selo" id="seloAgente">Agente…</span>
+      <select class="campo" id="modelo" style="width:auto" title="Modelo do Claude que confere as imagens (só o perfil Admin muda)"></select>
+      <button class="nk-btn" onclick="carregar()">Atualizar</button>
+    </div>
+  </div>
+  <div class="nk-aviso bad" id="erro" hidden></div>
+  <div class="nk-kpis" id="kpis" style="margin-bottom:14px"></div>
+
+  <div class="grade">
+    <section class="nk-painel" id="painelEnvio">
+      <div class="nk-painel-tit"><div><h2>Enviar fotos</h2><p>JPG, PNG ou WEBP, até 10 MB cada</p></div></div>
+      <label class="tit" for="tipo">O que fazer</label>
+      <select class="campo" id="tipo" onchange="mudarTipo()"></select>
+      <div class="dica" id="dicaTipo"></div>
+      <label class="tit" for="sku">SKU (opcional)</label>
+      <input class="campo" id="sku" placeholder="Ex.: 0893600022 — dá nome ao arquivo" maxlength="80" autocomplete="off">
+      <label class="tit">Fotos</label>
+      <div class="soltar" id="soltar" tabindex="0" role="button">
+        <b>Arraste as fotos aqui</b><br><span class="mini">ou clique para escolher</span>
+      </div>
+      <input type="file" id="arquivo" accept="image/jpeg,image/png,image/webp" multiple hidden>
+      <div class="previas" id="previas"></div>
+      <div style="margin-top:14px;display:flex;gap:8px">
+        <button class="nk-btn pri" id="btnEnviar" onclick="enviar()" disabled>Enviar</button>
+        <button class="nk-btn" onclick="limparEnvio()">Limpar</button>
+      </div>
+    </section>
+
+    <section class="nk-painel">
+      <div class="barra-topo">
+        <div class="esq">
+          <select class="campo" id="filtro" style="width:auto" onchange="desenharLista()"></select>
+          <span class="espaco" id="espaco"></span>
+        </div>
+        <button class="nk-btn perigo" id="btnApagarSel" onclick="apagarSelecionadas()" disabled>Apagar selecionadas</button>
+      </div>
+      <div style="overflow:auto">
+        <table class="nk-tab">
+          <thead><tr><th style="width:28px"><input type="checkbox" id="todos" onchange="marcarTodos(this.checked)" aria-label="Selecionar todas"></th>
+            <th>Foto</th><th>SKU</th><th>Tipo</th><th>Situação</th><th>Enviada</th></tr></thead>
+          <tbody id="lista"><tr><td colspan="6" class="vazio">Carregando…</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+</main>
+<div class="fundo" id="fundo" hidden onclick="fecharGaveta()"></div>
+<aside class="gaveta" id="gaveta" hidden></aside>
+
+<script>
+const B = "/expedicao";
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const MAX_BYTES = 10 * 1024 * 1024;
+const TIPOS = {
+  principal: {nome: "Foto principal", dica: "Fundo branco, 1200×1200, produto inteiro. Pode mandar várias fotos: cada uma vira uma imagem.", min: 1, max: 20},
+  beneficios: {nome: "Benefícios", dica: "Mande a frente do produto e, se tiver, o verso. O Claude lê o rótulo e propõe os benefícios; você corrige e aprova antes de gerar a arte.", min: 1, max: 2},
+  modo: {nome: "Modo de uso", dica: "Mande a frente e o verso (é no verso que fica o modo de uso). Os passos vêm do rótulo; você aprova antes de gerar.", min: 1, max: 2},
+  juntos: {nome: "Kit juntos", dica: "Uma foto por item do kit (2 a 8). A imagem sai com todos os itens juntos em fundo branco.", min: 2, max: 8},
+  aplicacao: {nome: "Aplicação", dica: "Mande a frente e, se tiver, o verso. O Claude propõe onde usar e onde não usar, lendo o rótulo; você aprova antes de gerar.", min: 1, max: 2},
+};
+const SITUACAO = {
+  aguardando: ["Na fila", "info"], processando: ["Processando", "info"], analisando: ["Lendo o rótulo", "info"],
+  textos_para_aprovar: ["Textos para aprovar", "warn"], aguardando_arte: ["Na fila (arte)", "info"],
+  gerando: ["Gerando a arte", "info"], pronta: ["Pronta", "ok"], revisar: ["Revisar", "warn"],
+  outra_foto: ["Precisa de outra foto", "bad"], erro: ["Erro", "bad"],
+};
+const FILTROS = [["", "Todas"], ["fila", "Na fila / processando"], ["textos_para_aprovar", "Textos para aprovar"],
+  ["pronta", "Prontas"], ["revisar", "Revisar"], ["problema", "Outra foto / erro"]];
+let dados = null, selecionadas = new Set(), fotos = [], aberta = null, timer = null, filtroKpi = "";
+
+$("tipo").innerHTML = Object.entries(TIPOS).map(([k, t]) => `<option value="${k}">${esc(t.nome)}</option>`).join("");
+$("filtro").innerHTML = FILTROS.map(([k, n]) => `<option value="${k}">${esc(n)}</option>`).join("");
+mudarTipo();
+
+function mudarTipo() { $("dicaTipo").textContent = TIPOS[$("tipo").value].dica; validarEnvio(); }
+function tamanho(b) { return b >= 1048576 ? (b / 1048576).toFixed(1).replace(".", ",") + " MB" : Math.max(1, Math.round(b / 1024)) + " KB"; }
+function quando(iso) { try { return new Date(iso).toLocaleString("pt-BR", {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"}); } catch (_) { return ""; } }
+function url(id, nome, ver) { return `${B}/api/imagens/arquivo?id=${id}&nome=${encodeURIComponent(nome)}${ver ? "&ver=1" : ""}`; }
+
+async function api(caminho, corpo) {
+  const r = await fetch(B + caminho, {method: corpo ? "POST" : "GET", credentials: "same-origin", cache: "no-store",
+    headers: corpo ? {"Content-Type": "application/json"} : {}, body: corpo ? JSON.stringify(corpo) : undefined});
+  let d = {}; try { d = await r.json(); } catch (_) {}
+  if (!r.ok || d.ok === false) { const e = new Error(d.error || ("HTTP " + r.status)); e.status = r.status; throw e; }
+  return d;
+}
+
+// ---------- envio ----------
+const soltar = $("soltar");
+soltar.addEventListener("click", () => $("arquivo").click());
+soltar.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("arquivo").click(); } });
+soltar.addEventListener("dragover", e => { e.preventDefault(); soltar.classList.add("sobre"); });
+soltar.addEventListener("dragleave", () => soltar.classList.remove("sobre"));
+soltar.addEventListener("drop", e => { e.preventDefault(); soltar.classList.remove("sobre"); adicionar(e.dataTransfer.files); });
+$("arquivo").addEventListener("change", e => { adicionar(e.target.files); e.target.value = ""; });
+
+function adicionar(lista) {
+  for (const f of Array.from(lista || [])) {
+    if (!/^image\/(jpeg|png|webp)$/.test(f.type)) { nkToast(`${f.name}: envie só JPG, PNG ou WEBP.`, "erro"); continue; }
+    if (f.size > MAX_BYTES) { nkToast(`${f.name}: passa de 10 MB.`, "erro"); continue; }
+    fotos.push({arquivo: f, url: URL.createObjectURL(f)});
+  }
+  desenharPrevias();
+}
+function papel(i) {
+  const t = $("tipo").value;
+  if (t === "juntos") return "item " + (i + 1);
+  if (t === "principal") return "foto " + (i + 1);
+  return i === 0 ? "frente" : "verso";
+}
+function desenharPrevias() {
+  $("previas").innerHTML = fotos.map((f, i) =>
+    `<div class="previa"><img src="${f.url}" alt=""><small>${esc(papel(i))}</small>` +
+    `<button type="button" onclick="tirar(${i})" aria-label="Tirar foto">×</button></div>`).join("");
+  validarEnvio();
+}
+function tirar(i) { URL.revokeObjectURL(fotos[i].url); fotos.splice(i, 1); desenharPrevias(); }
+function limparEnvio() { fotos.forEach(f => URL.revokeObjectURL(f.url)); fotos = []; $("sku").value = ""; desenharPrevias(); }
+function validarEnvio() {
+  const t = TIPOS[$("tipo").value];
+  const ok = fotos.length >= t.min && fotos.length <= t.max;
+  $("btnEnviar").disabled = !ok;
+  $("btnEnviar").title = ok ? "" : (fotos.length > t.max ? `${t.nome}: no máximo ${t.max} foto(s).` : `${t.nome}: pelo menos ${t.min} foto(s).`);
+  if (fotos.length) $("previas").querySelectorAll("small").forEach((s, i) => s.textContent = papel(i));
+}
+const lerBase64 = f => new Promise((ok, falha) => {
+  const r = new FileReader(); r.onload = () => ok(String(r.result).split(",", 2)[1]); r.onerror = () => falha(r.error); r.readAsDataURL(f);
+});
+async function enviar() {
+  const btn = $("btnEnviar"); btn.disabled = true; btn.textContent = "Enviando…";
+  try {
+    const lista = [];
+    for (const f of fotos) lista.push({nome: f.arquivo.name, dados: await lerBase64(f.arquivo)});
+    const d = await api("/api/imagens/enviar", {tipo: $("tipo").value, sku: $("sku").value.trim(), fotos: lista});
+    nkToast(d.ids.length > 1 ? `${d.ids.length} imagens enviadas para a fila.` : "Imagem enviada para a fila.", "ok");
+    limparEnvio();
+    await carregar();
+  } catch (e) { nkToast(e.message, "erro"); }
+  finally { btn.textContent = "Enviar"; validarEnvio(); }
+}
+
+// ---------- lista ----------
+async function carregar() {
+  clearTimeout(timer);
+  try {
+    dados = await api("/api/imagens");
+    $("erro").hidden = true;
+    desenharTopo(); desenharLista();
+    if (aberta) { const it = dados.itens.find(x => x.id === aberta.id); if (!it) fecharGaveta(); else if (it.versao !== aberta.versao) abrir(it.id, true); }
+  } catch (e) {
+    $("erro").textContent = e.message; $("erro").hidden = false;
+  }
+  // Com trabalho andando, confere a cada 10 s; parado, a cada 60 s. Aba escondida não consulta.
+  const andando = (dados?.itens || []).some(i => ["aguardando", "processando", "analisando", "aguardando_arte", "gerando"].includes(i.situacao));
+  if (!document.hidden) timer = setTimeout(carregar, andando ? 10000 : 60000);
+}
+document.addEventListener("visibilitychange", () => { if (document.hidden) clearTimeout(timer); else carregar(); });
+
+function desenharTopo() {
+  const ag = dados.agente;
+  const selo = $("seloAgente");
+  selo.className = "nk-selo " + (ag.online ? "ok" : "bad");
+  selo.textContent = ag.online ? "Agente ligado" + (ag.computador ? " · " + ag.computador : "") : "Agente offline";
+  selo.title = ag.ultimo_ping ? "Último contato: " + new Date(ag.ultimo_ping).toLocaleString("pt-BR") : "O agente ainda não se conectou.";
+  $("modelo").innerHTML = dados.modelos.map(m => `<option value="${m}" ${m === dados.modelo ? "selected" : ""}>${m.includes("haiku") ? "Haiku 5.5 (mais barato)" : "Opus 5.5 (mais preciso)"}</option>`).join("");
+  const c = dados.contagem || {};
+  const n = (...k) => k.reduce((s, x) => s + (c[x] || 0), 0);
+  const kp = (filtro, tom, icone, valor, rot) =>
+    `<div class="nk-kpi ${filtroKpi === filtro ? "ativo" : ""}" onclick="filtrarKpi('${filtro}')" role="button" tabindex="0">` +
+    `<span class="nk-kpi-ic ${tom}"><i class="${icone}"></i></span><span><b>${valor}</b><small>${rot}</small></span></div>`;
+  $("kpis").innerHTML =
+    kp("fila", "", "nk-i-clock", n("aguardando", "processando", "analisando", "aguardando_arte", "gerando"), "Na fila / processando") +
+    kp("textos_para_aprovar", "warn", "nk-i-pencil", n("textos_para_aprovar"), "Textos para aprovar") +
+    kp("pronta", "ok", "nk-i-check", n("pronta"), "Prontas para baixar") +
+    kp("revisar", "warn", "nk-i-alert", n("revisar"), "Revisar") +
+    kp("problema", "bad", "nk-i-camera", n("outra_foto", "erro"), "Outra foto / erro");
+  const esp = dados.espaco;
+  $("espaco").className = "espaco" + (esp.aviso ? " aviso" : "");
+  $("espaco").textContent = `Espaço usado: ${tamanho(esp.bytes)}` + (esp.aviso ? ` — passou de ${tamanho(esp.limite_aviso)}: apague o que já usou` : "");
+}
+function filtrarKpi(f) { filtroKpi = filtroKpi === f ? "" : f; $("filtro").value = filtroKpi; desenharTopo(); desenharLista(); }
+function passaFiltro(i, f) {
+  if (!f) return true;
+  if (f === "fila") return ["aguardando", "processando", "analisando", "aguardando_arte", "gerando"].includes(i.situacao);
+  if (f === "problema") return ["outra_foto", "erro"].includes(i.situacao);
+  return i.situacao === f;
+}
+function selo(sit) { const [n, t] = SITUACAO[sit] || [sit, ""]; return `<span class="nk-selo ${t}">${esc(n)}</span>`; }
+function desenharLista() {
+  filtroKpi = $("filtro").value;
+  const itens = (dados?.itens || []).filter(i => passaFiltro(i, filtroKpi));
+  const ids = new Set(dados.itens.map(i => i.id));
+  selecionadas = new Set([...selecionadas].filter(id => ids.has(id)));
+  $("lista").innerHTML = itens.length ? itens.map(i => {
+    const res = (i.resultados || []).find(a => a.papel === "resultado");
+    const capa = res || (i.arquivos || [])[0];
+    return `<tr class="cl" onclick="abrir(${i.id})">` +
+      `<td onclick="event.stopPropagation()"><input type="checkbox" ${selecionadas.has(i.id) ? "checked" : ""} onchange="marcar(${i.id}, this.checked)" aria-label="Selecionar"></td>` +
+      `<td>${capa ? `<img class="miniatura" loading="lazy" src="${url(i.id, capa.nome, true)}" alt="">` : ""}</td>` +
+      `<td class="sku">${esc(i.sku || "—")}</td><td>${esc(i.tipo_rotulo)}</td><td>${selo(i.situacao)}</td>` +
+      `<td class="mini">${esc(quando(i.criado_em))}<br>${esc(i.criado_por)}</td></tr>`;
+  }).join("") : `<tr><td colspan="6" class="vazio">${dados.itens.length ? "Nenhuma imagem neste filtro." : "Nenhuma imagem ainda. Envie a primeira foto ao lado."}</td></tr>`;
+  $("todos").checked = itens.length > 0 && itens.every(i => selecionadas.has(i.id));
+  $("btnApagarSel").disabled = !selecionadas.size;
+  $("btnApagarSel").textContent = selecionadas.size ? `Apagar selecionadas (${selecionadas.size})` : "Apagar selecionadas";
+}
+function marcar(id, on) { on ? selecionadas.add(id) : selecionadas.delete(id); desenharLista(); }
+function marcarTodos(on) { (dados?.itens || []).filter(i => passaFiltro(i, filtroKpi)).forEach(i => on ? selecionadas.add(i.id) : selecionadas.delete(i.id)); desenharLista(); }
+async function apagar(ids) {
+  if (!await nkConfirmar(`Apagar ${ids.length > 1 ? ids.length + " imagens" : "esta imagem"}?\nA foto original e o resultado somem do servidor. Baixe antes o que for usar.`, {ok: "Apagar"})) return false;
+  try { await api("/api/imagens/apagar", {ids}); nkToast("Apagado.", "ok"); selecionadas.clear(); await carregar(); return true; }
+  catch (e) { nkToast(e.message, "erro"); return false; }
+}
+async function apagarSelecionadas() { await apagar([...selecionadas]); }
+
+// ---------- gaveta ----------
+function fecharGaveta() { $("gaveta").hidden = $("fundo").hidden = true; aberta = null; }
+document.addEventListener("keydown", e => { if (e.key === "Escape" && aberta) fecharGaveta(); });
+function abrir(id, silencioso) {
+  const i = dados.itens.find(x => x.id === id); if (!i) return;
+  // Textos sendo editados não são apagados pela atualização automática.
+  if (silencioso && aberta && aberta.situacao === "textos_para_aprovar" && i.situacao === "textos_para_aprovar") return;
+  aberta = i;
+  const res = (i.resultados || []).filter(a => a.papel === "resultado");
+  const zooms = (i.resultados || []).filter(a => a.papel === "zoom");
+  const rel = i.relatorio || {};
+  const conferidos = Array.isArray(rel.textos) ? rel.textos : [];
+  const quadro = (a, leg) => `<div class="quadro"><a href="${url(i.id, a.nome, true)}" target="_blank" rel="noopener"><img src="${url(i.id, a.nome, true)}" alt=""></a><small>${esc(leg)}</small></div>`;
+  let html = `<div class="gav-cab"><div class="linha"><h2>${esc(i.tipo_rotulo)}${i.sku ? " · " + esc(i.sku) : ""}</h2>` +
+    `<button class="nk-btn" onclick="fecharGaveta()">Fechar</button></div>` +
+    `<div class="meta">${selo(i.situacao)} <span>Enviada por ${esc(i.criado_por)} em ${esc(quando(i.criado_em))}</span>` +
+    (i.modelo ? `<span>· conferida por ${esc(i.modelo)}</span>` : "") +
+    (i.tokens_entrada ? `<span>· ${(i.tokens_entrada + i.tokens_saida).toLocaleString("pt-BR")} tokens</span>` : "") + `</div></div><div class="gav-corpo">`;
+  if (i.mensagem) html += `<div class="msg ${["outra_foto", "erro"].includes(i.situacao) ? "bad" : ""}">${esc(i.mensagem)}</div>`;
+  if (i.situacao === "textos_para_aprovar") html += blocoTextos(i);
+  html += `<div class="secao"><h3>Antes × depois</h3><div class="lado">` +
+    (i.arquivos || []).map(a => quadro(a, "Original · " + a.papel)).join("") +
+    res.map(a => quadro(a, "Resultado")).join("") + `</div></div>`;
+  if (zooms.length || conferidos.length) {
+    html += `<div class="secao"><h3>Textos do rótulo conferidos</h3>` +
+      `<div class="aviso-zoom">Confira você também: o ${esc(i.modelo || "Claude")} pode deixar passar uma letra deformada. Olhe cada recorte antes de baixar.</div>`;
+    if (conferidos.length) html += `<ul class="rel">${conferidos.map(t => `<li><span class="${t.ok ? "ok" : "bad"}">${t.ok ? "OK" : "Deformado"}</span> — ${esc(t.trecho || "")}${t.obs ? " · " + esc(t.obs) : ""}</li>`).join("")}</ul>`;
+    html += `<div class="zooms">${zooms.map(a => quadro(a, a.legenda || "Recorte")).join("")}</div></div>`;
+  }
+  if (i.obs) html += `<div class="secao"><h3>Pedido ao refazer</h3><div class="mini">${esc(i.obs)}</div></div>`;
+  html += `<div class="secao acoes-gav">` +
+    res.map((a, k) => `<a class="nk-btn pri" href="${url(i.id, a.nome)}" download>Baixar${res.length > 1 ? " " + (k + 1) : ""}</a>`).join("") +
+    (["pronta", "revisar", "outra_foto", "erro"].includes(i.situacao) ? `<button class="nk-btn" onclick="refazer()">Refazer</button>` : "") +
+    `<button class="nk-btn perigo" onclick="apagarAberta()">Apagar</button></div>`;
+  html += `</div>`;
+  $("gaveta").innerHTML = html;
+  $("gaveta").hidden = $("fundo").hidden = false;
+}
+function blocoTextos(i) {
+  const campos = (i.textos && i.textos.campos) || [];
+  const ORIGEM = {rotulo: "lido no rótulo", nao_encontrado: "não está no rótulo — preencha ou deixe em branco", operador: "digitado"};
+  return `<div class="secao"><h3>Textos da arte — corrija e aprove</h3>` +
+    `<div class="dica" style="margin-bottom:10px">Só vai para a arte o que estiver aqui. Nada é inventado: o que não está no rótulo vem em branco.</div>` +
+    `<div class="campos-txt">${campos.map((c, k) =>
+      `<div class="linha-campo"><label for="txt${k}">${esc(c.rotulo || c.chave)} <span class="origem ${esc(c.origem)}">${esc(ORIGEM[c.origem] || "")}</span></label>` +
+      `<textarea class="campo" id="txt${k}" rows="2" data-k="${k}" maxlength="400">${esc(c.valor)}</textarea></div>`).join("")}</div>` +
+    `<button class="nk-btn pri" onclick="aprovarTextos()">Aprovar e gerar a arte</button></div>`;
+}
+async function aprovarTextos() {
+  const campos = ((aberta.textos && aberta.textos.campos) || []).map((c, k) => {
+    const v = $("txt" + k).value.trim();
+    return {...c, valor: v, origem: v !== String(c.valor || "").trim() ? "operador" : c.origem};
+  });
+  try {
+    await api("/api/imagens/textos", {id: aberta.id, versao: aberta.versao, campos});
+    nkToast("Textos aprovados. A arte entra na fila do agente.", "ok");
+    aberta = null; fecharGaveta(); await carregar();
+  } catch (e) { nkToast(e.message, "erro"); if (e.status === 409) carregar(); }
+}
+async function refazer() {
+  const obs = await nkPerguntar("Refazer esta imagem?", {detalhe: "Diga ao agente o que corrigir (opcional). Ex.: a letra do “Hidrata” ficou torta.", ok: "Refazer", placeholder: "O que corrigir"});
+  if (obs === null || obs === undefined || obs === false) return;
+  try { await api("/api/imagens/refazer", {id: aberta.id, versao: aberta.versao, obs: String(obs || "")}); nkToast("Voltou para a fila.", "ok"); fecharGaveta(); await carregar(); }
+  catch (e) { nkToast(e.message, "erro"); if (e.status === 409) carregar(); }
+}
+async function apagarAberta() { if (await apagar([aberta.id])) fecharGaveta(); }
+
+$("modelo").addEventListener("change", async e => {
+  try { await api("/api/imagens/config", {modelo: e.target.value}); nkToast("Modelo trocado. Vale para as próximas imagens.", "ok"); }
+  catch (err) { nkToast(err.status === 403 ? "Só o perfil Admin troca o modelo." : err.message, "erro"); }
+  carregar();
+});
+carregar();
+</script>
+</body>
+</html>

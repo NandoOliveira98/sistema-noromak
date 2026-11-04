@@ -7,7 +7,9 @@
     ["AcessoEstacao","Estação","estacao","printer"],
     ["AcessoPrecificador","Precificador","precificador","dollar"],
     // V19.89: módulo Devolução (só a tela Receber devolução; tratar no Apollo é do Admin).
-    ["AcessoDevolucao","Devolução","devolucao","box"]
+    ["AcessoDevolucao","Devolução","devolucao","box"],
+    // V20.17: módulo Imagens (Estúdio de Imagens).
+    ["AcessoImagens","Imagens","imagens","image"]
   ];
   // V18.68: Supervisor = operador COM acesso ao Admin (é assim que o servidor o
   // reconhece). Por isso a caixa Admin segue o perfil: sempre ligada no Supervisor,
@@ -35,6 +37,7 @@
     const admin = perfil.includes("admin");
     const supervisor = perfil.includes("supervisor");
     if (field==="AcessoDevolucao") return admin;  // V19.89
+    if (field==="AcessoImagens") return admin;  // V20.17
     return field==="AcessoConferencia" ? true : (admin || supervisor);
   }
   function applyAccess(u, field, key, value){
@@ -44,7 +47,8 @@
       admin: accessValue(u,"AcessoAdmin","admin"),
       estacao: accessValue(u,"AcessoEstacao","estacao"),
       precificador: accessValue(u,"AcessoPrecificador","precificador"),
-      devolucao: accessValue(u,"AcessoDevolucao","devolucao")
+      devolucao: accessValue(u,"AcessoDevolucao","devolucao"),
+      imagens: accessValue(u,"AcessoImagens","imagens")
     };
     u.Acessos[key]=!!value;
     if (typeof agendarSalvarUsuariosAdmin === "function") agendarSalvarUsuariosAdmin();

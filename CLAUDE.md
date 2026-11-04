@@ -5,7 +5,7 @@ Shopee, manuais), expedição, separação, conferência por código de barras, 
 produtos/SKUs/EANs, kits, precificação, promoções, rentabilidade, estoque, Central de
 Pendências e histórico.
 
-Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V20.07).
+Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V20.17).
 
 ---
 
@@ -679,6 +679,29 @@ de cada anúncio Full candidato (`inventory_id` por `/items?ids=` de 20 em 20, g
 **A caminho = o MAIOR entre o agendado no sistema e o do ML, nunca a soma** (`_full_a_caminho_ml_aplicar`); ML sem
 resposta = fica o do sistema (nunca zero); 5 erros seguidos param a leitura. Item guarda `a_caminho_sis` e
 `a_caminho_ml`; coluna "A caminho" na tabela com a origem (ML/sistema). Teste: `TESTES/test_full_a_caminho_ml_v1985.py`.
+
+### Estúdio de Imagens (V20.17, fase 1 de 2: servidor e tela)
+`APP/imagens.html` (`/imagens`, menu Vendas e anúncios, módulo próprio **`imagens`** = `app_users.can_imagens`, mesma
+regra do Devolução: Admin nasce ligado, salvar sem a chave mantém; Consulta só vê; Compras não tem). Decisões do dono
+(04/11; desenho em `docs/superpowers/specs/2026-11-04-estudio-imagens-design.md`): o operador sobe a foto e recebe a
+**foto principal** (1200×1200, fundo branco) ou a **arte** (benefícios, modo de uso, kit juntos, aplicação). Quem
+processa é o **agente no PC do dono** (Real-ESRGAN + Claude Haiku 5.5 pela API; fase 2, ainda não feito); a VPS só
+guarda arquivos e a fila — **nada pesado roda aqui**. Fotos em `IMAGENS_DIR` (`/home/expedicao/dados/imagens/<id>/`),
+**nunca no banco**; tipo pelo conteúdo (jpg/png/webp), 10 MB por foto, 20 por envio (principal = um trabalho por foto;
+kit = 2 a 8 fotos num trabalho; artes = frente + verso). Tabela `imagem_trabalho_v2017` (situação, arquivos, resultados,
+textos, relatório, tokens, `reservado_ate`, `versao`, `apagado_em`) e `imagem_config_v2017` (token do agente, modelo,
+pulso). Situações: aguardando → processando (principal) | analisando → textos_para_aprovar → aguardando_arte → gerando →
+pronta | revisar | outra_foto | erro. **Arte só é gerada depois que o operador aprova os textos** (o Claude propõe só o
+que leu no rótulo; o resto vem em branco). O agente pega um trabalho por vez (`/api/imagens/agente/proximo`, reserva de
+10 min; vencida volta à fila, 3 vezes = erro) e entrega por `/agente/{analise,resultado}`; resultado de trabalho
+apagado/refeito = 409. Token do agente: `Authorization: Bearer`, tabela própria (não sai pelo `/api/storage`), lido em
+`GET /api/imagens/agente/config` (perfil Admin), trocado em `/agente/token-novo` (OWNER). **Nada é apagado sozinho**: o
+operador apaga (some a pasta, a linha fica de histórico); acima de `IMAGEM_AVISO_BYTES` (500 MB) a tela fica amarela.
+Modelo (`claude-haiku-5-5` padrão, ou `claude-opus-5-5`) muda só o perfil Admin. A gaveta mostra **sempre** os recortes
+de zoom dos textos (o Haiku pode deixar passar letra deformada). Painel de saúde `imagens_agente`: atenção só com
+trabalho na fila e agente sem pulso há > 2 min (PC desligado à noite é normal; sem e-mail). Rotas
+`GET /api/imagens[/arquivo]`, `POST /api/imagens/{enviar,textos,refazer,apagar,config}`. Teste:
+`TESTES/test_imagens_v2017.py`.
 
 ### Quadro de tarefas (V19.69)
 `APP/tarefas.html` (`/tarefas`, menu Visão geral, **todo usuário logado**: a página só exige sessão, o item do menu

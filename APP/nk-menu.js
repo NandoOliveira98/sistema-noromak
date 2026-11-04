@@ -44,6 +44,8 @@
       // V19.74: monitor de catálogo do ML (vitrine, concorrentes, margem no preço para ganhar).
       { id: "catalogo-ml", rotulo: "Catálogo ML", href: "/catalogo-ml", modulo: "admin", icone: "M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM17.5 14v7M14 17.5h7" },
       { id: "analise-ads", rotulo: "Análise de ADS", href: "/analise-ads", modulo: "admin", icone: "M3 11v3l13 5V6L3 11zM16 9a3 3 0 0 1 0 6M7 15.5V20h3v-3.3" },
+      // V20.17: Estúdio de Imagens (foto principal e artes do anúncio; agente no PC do dono).
+      { id: "imagens", rotulo: "Imagens", href: "/imagens", modulo: "imagens", icone: "M3 3h18v18H3zM8.5 10a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3zM21 15l-5-5L5 21" },
       { id: "promocoes-auto", rotulo: "Promoções automáticas", href: "/promocoes-auto", modulo: "admin", icone: "M21 12a9 9 0 1 1-3-6.7L21 8M21 3v5h-5M9 15l6-6M9.5 9.5h.01M14.5 14.5h.01" },
       { id: "precificador", rotulo: "Precificador", href: "/precificador", modulo: "precificador", alias: ["/precificacao"], icone: "M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" },
     ] },

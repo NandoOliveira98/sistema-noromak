@@ -47,7 +47,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.16-ML-PELO-AVISO"
+APP_VERSION = "20.17-ESTUDIO-IMAGENS"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -1786,6 +1786,10 @@ def ensure_app_user_permissions_schema() -> None:
         if "can_devolucao" not in columns:
             DB.execute("ALTER TABLE app_users ADD COLUMN can_devolucao INTEGER NOT NULL DEFAULT 0")
             DB.execute("UPDATE app_users SET can_devolucao=1 WHERE role='admin'")
+        # V20.17: módulo Imagens (dono, 04/11) — Estúdio de Imagens. Mesma regra da Devolução.
+        if "can_imagens" not in columns:
+            DB.execute("ALTER TABLE app_users ADD COLUMN can_imagens INTEGER NOT NULL DEFAULT 0")
+            DB.execute("UPDATE app_users SET can_imagens=1 WHERE role='admin'")
         changed = False
         for name, ddl in additions.items():
             if name not in columns:
@@ -1822,7 +1826,8 @@ def ensure_app_user_permissions_schema() -> None:
 # fila; Estação Zebra fica de fora.
 PERFIL_CONSULTA = "consulta"
 CONSULTA_PERMISSOES = {"conferencia": True, "admin": True, "estacao": False, "precificador": True,
-                       "devolucao": True}  # V19.89: vê a tela; registrar é POST (bloqueado)
+                       "devolucao": True,  # V19.89: vê a tela; registrar é POST (bloqueado)
+                       "imagens": True}  # V20.17: vê; enviar/apagar é POST (bloqueado)
 # POST que só lê (ou só mexe na sessão/aparelho de quem está usando).
 CONSULTA_POST_LIVRES = {
     "/api/auth/login", "/api/auth/logout", "/api/full/apollo-stock", "/api/full/kits", "/api/full/anuncios",
@@ -1839,7 +1844,7 @@ CONSULTA_STORAGE_OCULTO = {"conf_usuarios", "conf_solicitacoes_usuarios"}
 # guarda o perfil especial: 1 = Consulta, 2 = Compras; assim não é preciso recriar app_users).
 PERFIL_COMPRAS = "compras"
 COMPRAS_PERMISSOES = {"conferencia": False, "admin": False, "estacao": False, "precificador": False, "compras": True,
-                      "devolucao": False}
+                      "devolucao": False, "imagens": False}
 PERFIL_ESPECIAL_CODIGO = {PERFIL_CONSULTA: 1, PERFIL_COMPRAS: 2}
 # Rotas de pedido/conferência só pedem login; por isso o Compras é travado ANTES de qualquer rota
 # (compras_bloqueado): fora destas, toda chamada à API volta 403.
@@ -1918,6 +1923,7 @@ def user_permissions_from_row(row: sqlite3.Row | dict[str, Any]) -> dict[str, bo
         "estacao": flag("can_estacao", True),
         "precificador": flag("can_precificador", True),
         "devolucao": flag("can_devolucao", True),  # V19.89
+        "imagens": flag("can_imagens", True),  # V20.17
     }
 
 
@@ -2715,6 +2721,7 @@ def init_db() -> None:
     ensure_catalogo_ml_schema()  # V19.74
     ensure_venda_custo_schema()  # V19.77
     ensure_devolucoes_schema()  # V19.88 (depois do Pós-venda: coluna nova em ml_reclamacao_v1888)
+    ensure_imagens_schema()  # V20.17
     migrate_legacy_if_empty()
     ensure_storage_defaults()
     seed_sku_state_from_storage()
@@ -3404,7 +3411,8 @@ def upsert_app_user(
     if owner_account:
         role = "admin"
         active = True
-        permissions = {"conferencia": True, "admin": True, "estacao": True, "precificador": True, "devolucao": True}
+        permissions = {"conferencia": True, "admin": True, "estacao": True, "precificador": True, "devolucao": True,
+                       "imagens": True}
     existing = DB.execute("SELECT * FROM app_users WHERE username=?", (username,)).fetchone()
     if existing and only_if_missing:
         return
@@ -3441,16 +3449,24 @@ def upsert_app_user(
         devolucao = bool(existing["can_devolucao"])
     else:
         devolucao = role == "admin"
+    # V20.17: módulo Imagens, mesma regra (sem a chave, fica o que estava).
+    if isinstance(permissions, dict) and "imagens" in permissions:
+        imagens = bool(permissions.get("imagens"))
+    elif existing and "can_imagens" in existing.keys():
+        imagens = bool(existing["can_imagens"])
+    else:
+        imagens = role == "admin"
     DB.execute(
         """INSERT INTO app_users(
              username,display_name,password_hash,password_salt,password_iterations,role,active,
-             can_conferencia,can_admin,can_estacao,can_precificador,updated_at,updated_by,casa,can_devolucao
-           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(username) DO UPDATE SET
+             can_conferencia,can_admin,can_estacao,can_precificador,updated_at,updated_by,casa,can_devolucao,
+             can_imagens
+           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(username) DO UPDATE SET
            display_name=excluded.display_name,password_hash=excluded.password_hash,password_salt=excluded.password_salt,
            password_iterations=excluded.password_iterations,role=excluded.role,active=excluded.active,
            can_conferencia=excluded.can_conferencia,can_admin=excluded.can_admin,
            can_estacao=excluded.can_estacao,can_precificador=excluded.can_precificador,
-           can_devolucao=excluded.can_devolucao,
+           can_devolucao=excluded.can_devolucao,can_imagens=excluded.can_imagens,
            updated_at=excluded.updated_at,updated_by=excluded.updated_by""",
         (
             username, display_name.strip() or username, pwd_hash, pwd_salt, iterations,
@@ -3462,6 +3478,7 @@ def upsert_app_user(
             # mantém a dele (a coluna não entra no UPDATE acima).
             "todas" if role in ("admin", PERFIL_CONSULTA) else "aracatuba",
             1 if devolucao else 0,
+            1 if imagens else 0,
         ),
     )
     # V19.40: Consulta fica gravado como operador (CHECK da tabela) + somente_leitura.
@@ -3556,7 +3573,7 @@ def migrate_app_users() -> None:
 def app_users_payload() -> list[dict[str, Any]]:
     rows = DB.execute(
         """SELECT username,display_name,role,active,can_conferencia,can_admin,can_estacao,can_precificador,
-                  can_devolucao,updated_at,updated_by,casa,somente_leitura FROM app_users ORDER BY display_name,username"""
+                  can_devolucao,can_imagens,updated_at,updated_by,casa,somente_leitura FROM app_users ORDER BY display_name,username"""
     ).fetchall()
     return [
         {
@@ -3573,12 +3590,14 @@ def app_users_payload() -> list[dict[str, Any]]:
             "AcessoEstacao": bool(row["can_estacao"]),
             "AcessoPrecificador": bool(row["can_precificador"]),
             "AcessoDevolucao": bool(row["can_devolucao"]),  # V19.89
+            "AcessoImagens": bool(row["can_imagens"]),  # V20.17
             "Acessos": {
                 "conferencia": bool(row["can_conferencia"]),
                 "admin": bool(row["can_admin"]),
                 "estacao": bool(row["can_estacao"]),
                 "precificador": bool(row["can_precificador"]),
                 "devolucao": bool(row["can_devolucao"]),
+                "imagens": bool(row["can_imagens"]),
             },
             "Filial": usuario_filial(row),  # V18.95
             "AtualizadoEm": row["updated_at"],
@@ -3652,6 +3671,8 @@ def apply_app_users_payload(value: str, actor: str) -> str:
                 # V19.89: sem o campo, o upsert mantém o que o usuário tinha.
                 if "AcessoDevolucao" in raw or "devolucao" in raw_access:
                     permissions["devolucao"] = bool(raw.get("AcessoDevolucao", raw_access.get("devolucao")))
+                if "AcessoImagens" in raw or "imagens" in raw_access:  # V20.17
+                    permissions["imagens"] = bool(raw.get("AcessoImagens", raw_access.get("imagens")))
             # V18.95: filial; sem o campo, o usuário que já existe mantém a dele.
             filial = None
             if "Filial" in raw:
@@ -5752,7 +5773,7 @@ def noromakweb_sso_context(handler: BaseHTTPRequestHandler) -> dict[str, Any] | 
     with DB_LOCK:
         row = DB.execute(
             """SELECT username,display_name,role,active,
-                      can_conferencia,can_admin,can_estacao,can_precificador,can_devolucao,casa,somente_leitura
+                      can_conferencia,can_admin,can_estacao,can_precificador,can_devolucao,can_imagens,casa,somente_leitura
                FROM app_users WHERE username=?""",
             (username,),
         ).fetchone()
@@ -5792,7 +5813,7 @@ def session_context(handler: BaseHTTPRequestHandler) -> dict[str, Any] | None:
     with DB_LOCK:
         row = DB.execute(
             """SELECT s.token_hash,s.username,s.area,s.expires_at,u.display_name,u.role,u.active,
-                      u.can_conferencia,u.can_admin,u.can_estacao,u.can_precificador,u.can_devolucao,u.casa,u.somente_leitura
+                      u.can_conferencia,u.can_admin,u.can_estacao,u.can_precificador,u.can_devolucao,u.can_imagens,u.casa,u.somente_leitura
                FROM app_sessions s JOIN app_users u ON u.username=s.username
                WHERE s.token_hash=?""",
             (token_hash,),
@@ -35530,6 +35551,550 @@ def kits_analise_payload(dias: int = 90, marketplace: str = "", min_pedidos: int
 #     ml_frete_envio_v1830, capturados no ato da venda (V18.31).
 
 
+# ======================================================================================
+# V20.17 — Estúdio de Imagens (decisões do dono, 04/11; desenho em
+# docs/superpowers/specs/2026-11-04-estudio-imagens-design.md).
+# O servidor só guarda os arquivos numa pasta e cuida da fila. Quem processa (ampliar com o
+# Real-ESRGAN, montar a foto/arte, conferir com o Claude) é o agente no PC do dono, que entra
+# pelas rotas /api/imagens/agente/* com o token próprio. A VPS não tem placa de vídeo e tem 1 GB
+# dividido com o CRM: nada pesado roda aqui. As fotos NUNCA vão para o banco (já tem 1,6 GB);
+# nada é apagado sozinho — o operador apaga depois de usar.
+# ======================================================================================
+IMAGENS_DIR = Path(os.getenv("EXP_IMAGENS_DIR", str(DB_PATH.parent / "imagens")))
+IMAGEM_TIPOS = {
+    "principal": "Foto principal",
+    "beneficios": "Benefícios",
+    "modo": "Modo de uso",
+    "juntos": "Kit juntos",
+    "aplicacao": "Aplicação",
+}
+IMAGEM_MAX_BYTES = 10 * 1024 * 1024        # por foto
+IMAGEM_MAX_FOTOS = 20                      # por envio (foto principal em lote)
+IMAGEM_MAX_KIT = 8                         # fotos de um kit juntos
+IMAGEM_AVISO_BYTES = 500 * 1024 * 1024     # tela fica amarela (lembrete; nada é apagado)
+IMAGEM_RESERVA_S = 600                     # vez do agente em um trabalho
+IMAGEM_TENTATIVAS = 3                      # reservas vencidas antes de virar "erro"
+IMAGEM_AGENTE_OFFLINE_S = 120
+IMAGEM_MODELOS = ("claude-haiku-5-5", "claude-opus-5-5")
+IMAGEM_MODELO_PADRAO = "claude-haiku-5-5"  # dono, 04/11: começar pelo mais barato
+IMAGEM_SITUACOES = ("aguardando", "processando", "analisando", "textos_para_aprovar", "aguardando_arte",
+                    "gerando", "pronta", "revisar", "outra_foto", "erro")
+IMAGEM_EM_TRABALHO = ("processando", "analisando", "gerando")
+IMAGEM_FINAIS = ("pronta", "revisar", "outra_foto", "erro")
+
+
+class ImagemConflito(Exception):
+    """Vira HTTP 409: versão antiga na tela ou trabalho que não está mais na vez do agente."""
+
+
+class ImagemNaoEncontrada(Exception):
+    """Vira HTTP 404."""
+
+
+def ensure_imagens_schema() -> None:
+    with DB_LOCK:
+        DB.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS imagem_trabalho_v2017 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tipo TEXT NOT NULL,
+                sku TEXT NOT NULL DEFAULT '',
+                situacao TEXT NOT NULL,
+                criado_por TEXT NOT NULL DEFAULT '',
+                criado_em TEXT NOT NULL,
+                atualizado_em TEXT NOT NULL,
+                arquivos_json TEXT NOT NULL DEFAULT '[]',
+                resultados_json TEXT NOT NULL DEFAULT '[]',
+                textos_json TEXT NOT NULL DEFAULT '{}',
+                relatorio_json TEXT NOT NULL DEFAULT '{}',
+                obs TEXT NOT NULL DEFAULT '',
+                mensagem TEXT NOT NULL DEFAULT '',
+                modelo TEXT NOT NULL DEFAULT '',
+                tokens_entrada INTEGER NOT NULL DEFAULT 0,
+                tokens_saida INTEGER NOT NULL DEFAULT 0,
+                bytes INTEGER NOT NULL DEFAULT 0,
+                reservado_ate REAL,
+                tentativas INTEGER NOT NULL DEFAULT 0,
+                versao INTEGER NOT NULL DEFAULT 1,
+                apagado_em TEXT,
+                apagado_por TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_imagem_trabalho_fila ON imagem_trabalho_v2017(situacao, apagado_em, id);
+            CREATE TABLE IF NOT EXISTS imagem_config_v2017 (
+                chave TEXT PRIMARY KEY,
+                valor TEXT NOT NULL
+            );
+            """
+        )
+        DB.commit()
+
+
+def _imagem_cfg(chave: str, padrao: str = "") -> str:
+    row = DB.execute("SELECT valor FROM imagem_config_v2017 WHERE chave=?", (chave,)).fetchone()
+    return str(row["valor"]) if row else padrao
+
+
+def _imagem_cfg_set(chave: str, valor: str) -> None:
+    DB.execute("INSERT INTO imagem_config_v2017(chave,valor) VALUES(?,?) "
+               "ON CONFLICT(chave) DO UPDATE SET valor=excluded.valor", (chave, str(valor)))
+
+
+def imagem_agente_token(novo: bool = False) -> str:
+    """Token do agente de imagens. Fica na tabela própria (não no storage: não sai pelo /api/storage)."""
+    with DB_LOCK:
+        token = "" if novo else _imagem_cfg("agente_token")
+        if not token:
+            token = secrets.token_urlsafe(36)
+            _imagem_cfg_set("agente_token", token)
+            DB.commit()
+        return token
+
+
+def _imagem_extensao(dados: bytes) -> str | None:
+    """Tipo pelo conteúdo, nunca pela extensão do nome."""
+    if dados[:3] == b"\xff\xd8\xff":
+        return "jpg"
+    if dados[:8] == b"\x89PNG\r\n\x1a\n":
+        return "png"
+    if dados[:4] == b"RIFF" and dados[8:12] == b"WEBP":
+        return "webp"
+    return None
+
+
+def _imagem_decodificar(texto: Any) -> tuple[bytes, str]:
+    try:
+        bruto = str(texto or "")
+        if bruto.startswith("data:") and "," in bruto:
+            bruto = bruto.split(",", 1)[1]
+        dados = base64.b64decode(bruto, validate=False)
+    except Exception:
+        raise ValueError("Arquivo de imagem ilegível.")
+    if not dados:
+        raise ValueError("Arquivo de imagem vazio.")
+    if len(dados) > IMAGEM_MAX_BYTES:
+        raise ValueError(f"Cada foto pode ter até {IMAGEM_MAX_BYTES // (1024 * 1024)} MB.")
+    ext = _imagem_extensao(dados)
+    if not ext:
+        raise ValueError("Envie só fotos JPG, PNG ou WEBP.")
+    return dados, ext
+
+
+def _imagem_pasta(id_: int) -> Path:
+    return IMAGENS_DIR / str(int(id_))
+
+
+def _imagem_json(texto: Any, padrao: Any) -> Any:
+    try:
+        v = json.loads(texto or "")
+        return v if isinstance(v, type(padrao)) else padrao
+    except Exception:
+        return padrao
+
+
+def _imagem_row(id_: Any) -> sqlite3.Row:
+    try:
+        n = int(id_)
+    except (TypeError, ValueError):
+        raise ImagemNaoEncontrada("Trabalho de imagem não encontrado.")
+    row = DB.execute("SELECT * FROM imagem_trabalho_v2017 WHERE id=?", (n,)).fetchone()
+    if row is None:
+        raise ImagemNaoEncontrada("Trabalho de imagem não encontrado.")
+    return row
+
+
+def _imagem_item(row: sqlite3.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"], "tipo": row["tipo"], "tipo_rotulo": IMAGEM_TIPOS.get(row["tipo"], row["tipo"]),
+        "sku": row["sku"], "situacao": row["situacao"], "criado_por": row["criado_por"],
+        "criado_em": row["criado_em"], "atualizado_em": row["atualizado_em"],
+        "arquivos": _imagem_json(row["arquivos_json"], []),
+        "resultados": _imagem_json(row["resultados_json"], []),
+        "textos": _imagem_json(row["textos_json"], {}),
+        "relatorio": _imagem_json(row["relatorio_json"], {}),
+        "obs": row["obs"], "mensagem": row["mensagem"], "modelo": row["modelo"],
+        "tokens_entrada": row["tokens_entrada"], "tokens_saida": row["tokens_saida"],
+        "bytes": row["bytes"], "versao": row["versao"], "apagado_em": row["apagado_em"],
+    }
+
+
+def _imagem_bytes_pasta(id_: int) -> int:
+    pasta = _imagem_pasta(id_)
+    if not pasta.is_dir():
+        return 0
+    return sum(f.stat().st_size for f in pasta.iterdir() if f.is_file())
+
+
+def imagens_enviar(usuario: str, req: dict[str, Any]) -> dict[str, Any]:
+    """Recebe as fotos (base64) e cria os trabalhos. Foto principal: um trabalho por foto (lote).
+    Kit juntos: um trabalho com todas as fotos. Benefícios / modo de uso / aplicação: um trabalho
+    com a frente e, se houver, o verso (onde ficam o modo de uso e as advertências)."""
+    tipo = str(req.get("tipo") or "").strip()
+    if tipo not in IMAGEM_TIPOS:
+        raise ValueError("Escolha o tipo da imagem.")
+    sku = re.sub(r"\s+", " ", str(req.get("sku") or "")).strip()[:80]
+    fotos = req.get("fotos") if isinstance(req.get("fotos"), list) else []
+    if not fotos:
+        raise ValueError("Envie pelo menos uma foto.")
+    if len(fotos) > IMAGEM_MAX_FOTOS:
+        raise ValueError(f"Envie até {IMAGEM_MAX_FOTOS} fotos por vez.")
+    if tipo == "juntos" and not (2 <= len(fotos) <= IMAGEM_MAX_KIT):
+        raise ValueError(f"O kit juntos precisa de 2 a {IMAGEM_MAX_KIT} fotos (uma por item).")
+    if tipo in ("beneficios", "modo", "aplicacao") and len(fotos) > 2:
+        raise ValueError("Envie a frente e, se tiver, o verso do produto (2 fotos no máximo).")
+    decodificadas = [_imagem_decodificar((f or {}).get("dados") if isinstance(f, dict) else None) for f in fotos]
+    if tipo == "principal":
+        grupos = [[d] for d in decodificadas]
+    else:
+        grupos = [decodificadas]
+    papel_de = {"juntos": lambda i: "item", "principal": lambda i: "frente"}.get(
+        tipo, lambda i: "frente" if i == 0 else "verso")
+    ids: list[int] = []
+    agora = now_iso()
+    for grupo in grupos:
+        arquivos = [{"nome": f"original_{i + 1}.{ext}", "papel": papel_de(i), "bytes": len(dados)}
+                    for i, (dados, ext) in enumerate(grupo)]
+        total = sum(a["bytes"] for a in arquivos)
+        # Grava a linha como "enviando" (o agente não pega), escreve os arquivos fora do DB_LOCK
+        # e só então solta para a fila.
+        with DB_LOCK:
+            cur = DB.execute(
+                "INSERT INTO imagem_trabalho_v2017(tipo,sku,situacao,criado_por,criado_em,atualizado_em,"
+                "arquivos_json,bytes) VALUES(?,?,?,?,?,?,?,?)",
+                (tipo, sku, "enviando", usuario, agora, agora, json.dumps(arquivos, ensure_ascii=False), total))
+            id_ = int(cur.lastrowid)
+            DB.commit()
+        pasta = _imagem_pasta(id_)
+        try:
+            pasta.mkdir(parents=True, exist_ok=True)
+            for a, (dados, _) in zip(arquivos, grupo):
+                (pasta / a["nome"]).write_bytes(dados)
+        except Exception as exc:
+            shutil.rmtree(pasta, ignore_errors=True)
+            with DB_LOCK:
+                DB.execute("DELETE FROM imagem_trabalho_v2017 WHERE id=?", (id_,))
+                DB.commit()
+            raise ValueError(f"Não foi possível guardar a foto no servidor: {exc}")
+        with DB_LOCK:
+            DB.execute("UPDATE imagem_trabalho_v2017 SET situacao='aguardando' WHERE id=?", (id_,))
+            DB.commit()
+        ids.append(id_)
+    audit(usuario, "imagens.enviar", f"{tipo}|{sku}|{len(decodificadas)} foto(s)|{ids}")
+    return {"ok": True, "ids": ids}
+
+
+def imagens_agente_status() -> dict[str, Any]:
+    ultimo = float(_imagem_cfg("agente_ping", "0") or 0)
+    idade = time.time() - ultimo if ultimo else None
+    return {
+        "online": bool(ultimo) and idade is not None and idade <= IMAGEM_AGENTE_OFFLINE_S,
+        "ultimo_ping": datetime.fromtimestamp(ultimo, timezone.utc).astimezone().isoformat(timespec="seconds") if ultimo else "",
+        "segundos": int(idade) if idade is not None else None,
+        "versao": _imagem_cfg("agente_versao"), "computador": _imagem_cfg("agente_computador"),
+    }
+
+
+def imagens_payload() -> dict[str, Any]:
+    with DB_LOCK:
+        rows = DB.execute("SELECT * FROM imagem_trabalho_v2017 WHERE apagado_em IS NULL AND situacao<>'enviando' "
+                          "ORDER BY id DESC").fetchall()
+        modelo = _imagem_cfg("modelo", IMAGEM_MODELO_PADRAO)
+        agente = imagens_agente_status()
+    itens = [_imagem_item(r) for r in rows]
+    usado = sum(int(i["bytes"] or 0) for i in itens)
+    contagem: dict[str, int] = {}
+    for i in itens:
+        contagem[i["situacao"]] = contagem.get(i["situacao"], 0) + 1
+    return {
+        "ok": True, "itens": itens, "contagem": contagem, "tipos": IMAGEM_TIPOS,
+        "espaco": {"bytes": usado, "limite_aviso": IMAGEM_AVISO_BYTES, "aviso": usado > IMAGEM_AVISO_BYTES},
+        "agente": agente, "modelo": modelo, "modelos": list(IMAGEM_MODELOS),
+    }
+
+
+def imagens_textos_aprovar(usuario: str, req: dict[str, Any]) -> dict[str, Any]:
+    campos = req.get("campos") if isinstance(req.get("campos"), list) else None
+    if campos is None:
+        raise ValueError("Textos ausentes.")
+    limpos = []
+    for c in campos[:40]:
+        if not isinstance(c, dict):
+            continue
+        limpos.append({"chave": str(c.get("chave") or "")[:40], "rotulo": str(c.get("rotulo") or "")[:80],
+                       "valor": str(c.get("valor") or "").strip()[:400], "origem": str(c.get("origem") or "")[:20]})
+    with DB_LOCK:
+        row = _imagem_row(req.get("id"))
+        if row["apagado_em"]:
+            raise ImagemNaoEncontrada("Este trabalho já foi apagado.")
+        if int(req.get("versao") or 0) != int(row["versao"]):
+            raise ImagemConflito("Outra pessoa mexeu nesta imagem. Recarregue a lista.")
+        if row["situacao"] != "textos_para_aprovar":
+            raise ImagemConflito("Os textos desta imagem não estão esperando aprovação.")
+        textos = _imagem_json(row["textos_json"], {})
+        textos.update({"campos": limpos, "aprovado_por": usuario, "aprovado_em": now_iso()})
+        DB.execute("UPDATE imagem_trabalho_v2017 SET textos_json=?, situacao='aguardando_arte', versao=versao+1, "
+                   "atualizado_em=? WHERE id=?", (json.dumps(textos, ensure_ascii=False), now_iso(), row["id"]))
+        DB.commit()
+    audit(usuario, "imagens.textos_aprovar", str(row["id"]))
+    return {"ok": True}
+
+
+def _imagem_apagar_resultados(row: sqlite3.Row) -> None:
+    pasta = _imagem_pasta(row["id"])
+    for a in _imagem_json(row["resultados_json"], []):
+        nome = str(a.get("nome") or "")
+        if nome and "/" not in nome and "\\" not in nome:
+            with contextlib.suppress(FileNotFoundError):
+                (pasta / nome).unlink()
+
+
+def imagens_refazer(usuario: str, req: dict[str, Any]) -> dict[str, Any]:
+    """Volta o trabalho para a fila (com a observação do operador para o agente). Arte com textos já
+    aprovados volta direto para gerar; sem textos, refaz a análise."""
+    obs = str(req.get("obs") or "").strip()[:500]
+    with DB_LOCK:
+        row = _imagem_row(req.get("id"))
+        if row["apagado_em"]:
+            raise ImagemNaoEncontrada("Este trabalho já foi apagado.")
+        if int(req.get("versao") or 0) != int(row["versao"]):
+            raise ImagemConflito("Outra pessoa mexeu nesta imagem. Recarregue a lista.")
+        if row["situacao"] in IMAGEM_EM_TRABALHO or row["situacao"] in ("aguardando", "aguardando_arte"):
+            raise ImagemConflito("Esta imagem já está na fila do agente.")
+        textos = _imagem_json(row["textos_json"], {})
+        volta = "aguardando_arte" if row["tipo"] != "principal" and textos.get("aprovado_por") else "aguardando"
+        _imagem_apagar_resultados(row)
+        DB.execute("UPDATE imagem_trabalho_v2017 SET situacao=?, resultados_json='[]', relatorio_json='{}', mensagem='', "
+                   "obs=?, reservado_ate=NULL, tentativas=0, versao=versao+1, atualizado_em=? WHERE id=?",
+                   (volta, obs, now_iso(), row["id"]))
+        DB.execute("UPDATE imagem_trabalho_v2017 SET bytes=? WHERE id=?", (_imagem_bytes_pasta(row["id"]), row["id"]))
+        DB.commit()
+    audit(usuario, "imagens.refazer", f"{row['id']}|{obs[:100]}")
+    return {"ok": True}
+
+
+def imagens_apagar(usuario: str, req: dict[str, Any]) -> dict[str, Any]:
+    """O operador apaga depois de usar (decisão do dono). Some a pasta; a linha fica de histórico."""
+    ids = req.get("ids") if isinstance(req.get("ids"), list) else [req.get("id")]
+    apagados = []
+    for bruto in ids[:500]:
+        try:
+            id_ = int(bruto)
+        except (TypeError, ValueError):
+            continue
+        with DB_LOCK:
+            row = DB.execute("SELECT id, apagado_em FROM imagem_trabalho_v2017 WHERE id=?", (id_,)).fetchone()
+            if row is None or row["apagado_em"]:
+                continue
+            DB.execute("UPDATE imagem_trabalho_v2017 SET apagado_em=?, apagado_por=?, bytes=0, reservado_ate=NULL, "
+                       "versao=versao+1 WHERE id=?", (now_iso(), usuario, id_))
+            DB.commit()
+        shutil.rmtree(_imagem_pasta(id_), ignore_errors=True)
+        apagados.append(id_)
+    if apagados:
+        audit(usuario, "imagens.apagar", ",".join(map(str, apagados)))
+    return {"ok": True, "apagados": apagados}
+
+
+def imagens_config(usuario: str, req: dict[str, Any]) -> dict[str, Any]:
+    modelo = str(req.get("modelo") or "").strip()
+    if modelo not in IMAGEM_MODELOS:
+        raise ValueError("Modelo inválido.")
+    with DB_LOCK:
+        _imagem_cfg_set("modelo", modelo)
+        DB.commit()
+    audit(usuario, "imagens.config", f"modelo={modelo}")
+    return {"ok": True, "modelo": modelo}
+
+
+def imagens_arquivo(id_: Any, nome: Any, so_originais: bool = False) -> tuple[bytes, str, str]:
+    """Lê um arquivo do trabalho. O nome tem de estar na lista do próprio trabalho (nunca um caminho
+    vindo do navegador)."""
+    nome = str(nome or "")
+    with DB_LOCK:
+        row = _imagem_row(id_)
+    if row["apagado_em"]:
+        raise ImagemNaoEncontrada("Este trabalho já foi apagado.")
+    lista = _imagem_json(row["arquivos_json"], [])
+    if not so_originais:
+        lista = lista + _imagem_json(row["resultados_json"], [])
+    if nome not in {str(a.get("nome") or "") for a in lista}:
+        raise ImagemNaoEncontrada("Arquivo não encontrado.")
+    caminho = _imagem_pasta(row["id"]) / nome
+    if caminho.resolve().parent != _imagem_pasta(row["id"]).resolve() or not caminho.is_file():
+        raise ImagemNaoEncontrada("Arquivo não encontrado.")
+    dados = caminho.read_bytes()
+    tipo = {"jpg": "image/jpeg", "png": "image/png", "webp": "image/webp"}.get(nome.rsplit(".", 1)[-1], "application/octet-stream")
+    base = re.sub(r"[^A-Za-z0-9._-]+", "_", row["sku"] or f"imagem{row['id']}").strip("_") or f"imagem{row['id']}"
+    sufixo = "" if nome.startswith("resultado_1") else "_" + nome.rsplit(".", 1)[0]
+    baixar = f"{base}_{row['tipo']}{sufixo}.{nome.rsplit('.', 1)[-1]}"
+    return dados, tipo, baixar
+
+
+# ---------- agente ----------
+
+def imagens_agente_ping(req: dict[str, Any]) -> None:
+    with DB_LOCK:
+        _imagem_cfg_set("agente_ping", str(time.time()))
+        if req.get("versao"):
+            _imagem_cfg_set("agente_versao", str(req.get("versao"))[:40])
+        if req.get("computador"):
+            _imagem_cfg_set("agente_computador", str(req.get("computador"))[:80])
+        DB.commit()
+
+
+def imagens_agente_proximo() -> dict[str, Any]:
+    """Entrega o trabalho mais antigo ao agente e reserva por IMAGEM_RESERVA_S. Reserva vencida
+    (agente caiu no meio) volta para a fila; depois de IMAGEM_TENTATIVAS vira "erro"."""
+    agora = time.time()
+    with DB_LOCK:
+        _imagem_cfg_set("agente_ping", str(agora))
+        vencidos = DB.execute("SELECT * FROM imagem_trabalho_v2017 WHERE apagado_em IS NULL AND situacao IN "
+                              f"({','.join('?' * len(IMAGEM_EM_TRABALHO))}) AND reservado_ate < ?",
+                              (*IMAGEM_EM_TRABALHO, agora)).fetchall()
+        for v in vencidos:
+            if int(v["tentativas"]) >= IMAGEM_TENTATIVAS:
+                DB.execute("UPDATE imagem_trabalho_v2017 SET situacao='erro', reservado_ate=NULL, versao=versao+1, "
+                           "mensagem=?, atualizado_em=? WHERE id=?",
+                           (f"O agente não terminou depois de {IMAGEM_TENTATIVAS} tentativas.", now_iso(), v["id"]))
+            else:
+                volta = "aguardando_arte" if v["situacao"] == "gerando" else "aguardando"
+                DB.execute("UPDATE imagem_trabalho_v2017 SET situacao=?, reservado_ate=NULL, atualizado_em=? WHERE id=?",
+                           (volta, now_iso(), v["id"]))
+        row = DB.execute("SELECT * FROM imagem_trabalho_v2017 WHERE apagado_em IS NULL AND situacao IN "
+                         "('aguardando','aguardando_arte') ORDER BY id LIMIT 1").fetchone()
+        if row is None:
+            DB.commit()
+            return {"ok": True, "trabalho": None}
+        if row["situacao"] == "aguardando_arte":
+            etapa, nova = "arte", "gerando"
+        elif row["tipo"] == "principal":
+            etapa, nova = "principal", "processando"
+        else:
+            etapa, nova = "analise", "analisando"
+        DB.execute("UPDATE imagem_trabalho_v2017 SET situacao=?, reservado_ate=?, tentativas=tentativas+1, "
+                   "versao=versao+1, atualizado_em=? WHERE id=?", (nova, agora + IMAGEM_RESERVA_S, now_iso(), row["id"]))
+        modelo = _imagem_cfg("modelo", IMAGEM_MODELO_PADRAO)
+        DB.commit()
+    textos = _imagem_json(row["textos_json"], {})
+    return {"ok": True, "trabalho": {
+        "id": row["id"], "tipo": row["tipo"], "sku": row["sku"], "etapa": etapa, "modelo": modelo,
+        "arquivos": _imagem_json(row["arquivos_json"], []), "obs": row["obs"],
+        "textos": {"campos": textos.get("campos") or []} if etapa == "arte" else None,
+        "reservado_s": IMAGEM_RESERVA_S,
+    }}
+
+
+def _imagem_agente_reservado(req: dict[str, Any], situacoes: tuple[str, ...]) -> sqlite3.Row:
+    row = _imagem_row(req.get("id"))
+    if row["apagado_em"] or row["situacao"] not in situacoes:
+        raise ImagemConflito("Este trabalho não está mais na vez do agente (apagado, refeito ou já entregue).")
+    return row
+
+
+def _imagem_tokens(req: dict[str, Any]) -> tuple[int, int, str]:
+    def n(v: Any) -> int:
+        try:
+            return max(0, int(v or 0))
+        except (TypeError, ValueError):
+            return 0
+    modelo = str(req.get("modelo") or "")[:40]
+    return n(req.get("tokens_entrada")), n(req.get("tokens_saida")), modelo
+
+
+def imagens_agente_analise(req: dict[str, Any]) -> dict[str, Any]:
+    """Etapa 1 das artes: o agente devolve os textos propostos (lidos no rótulo) ou diz que a foto
+    não serve. A arte só é gerada depois que o operador aprova (decisão do dono)."""
+    situacao = str(req.get("situacao") or "")
+    if situacao not in ("textos_para_aprovar", "outra_foto", "erro"):
+        raise ValueError("Situação inválida para a análise.")
+    textos = req.get("textos") if isinstance(req.get("textos"), dict) else {}
+    campos = textos.get("campos") if isinstance(textos.get("campos"), list) else []
+    if situacao == "textos_para_aprovar" and not campos:
+        raise ValueError("A análise não trouxe nenhum campo de texto.")
+    te, ts, modelo = _imagem_tokens(req)
+    with DB_LOCK:
+        row = _imagem_agente_reservado(req, ("analisando",))
+        DB.execute("UPDATE imagem_trabalho_v2017 SET situacao=?, textos_json=?, relatorio_json=?, mensagem=?, "
+                   "modelo=COALESCE(NULLIF(?,''),modelo), tokens_entrada=tokens_entrada+?, tokens_saida=tokens_saida+?, "
+                   "reservado_ate=NULL, tentativas=0, versao=versao+1, atualizado_em=? WHERE id=?",
+                   (situacao, json.dumps({"campos": campos[:40]}, ensure_ascii=False)[:60000],
+                    json.dumps(req.get("relatorio") if isinstance(req.get("relatorio"), dict) else {}, ensure_ascii=False)[:60000],
+                    str(req.get("mensagem") or "")[:1000], modelo, te, ts, now_iso(), row["id"]))
+        DB.commit()
+    return {"ok": True}
+
+
+def imagens_agente_resultado(req: dict[str, Any]) -> dict[str, Any]:
+    """Entrega final: a imagem pronta + os recortes de zoom que o Claude conferiu + o relatório."""
+    situacao = str(req.get("situacao") or "")
+    if situacao not in IMAGEM_FINAIS:
+        raise ValueError("Situação inválida para o resultado.")
+    brutos = req.get("arquivos") if isinstance(req.get("arquivos"), list) else []
+    if len(brutos) > 30:
+        raise ValueError("Resultado com arquivos demais.")
+    decodificados = []
+    for a in brutos:
+        if not isinstance(a, dict):
+            continue
+        papel = "resultado" if a.get("papel") == "resultado" else "zoom"
+        dados, ext = _imagem_decodificar(a.get("dados"))
+        decodificados.append((papel, str(a.get("legenda") or "")[:120], dados, ext))
+    te, ts, modelo = _imagem_tokens(req)
+    with DB_LOCK:
+        row = _imagem_agente_reservado(req, IMAGEM_EM_TRABALHO)
+        if situacao in ("pronta", "revisar") and not any(p == "resultado" for p, *_ in decodificados):
+            raise ValueError("Resultado sem a imagem pronta.")
+        # Segura a vez enquanto grava os arquivos (fora do DB_LOCK): marca "salvando" no reservado.
+        DB.execute("UPDATE imagem_trabalho_v2017 SET reservado_ate=? WHERE id=?", (time.time() + IMAGEM_RESERVA_S, row["id"]))
+        DB.commit()
+    pasta = _imagem_pasta(row["id"])
+    _imagem_apagar_resultados(row)
+    resultados = []
+    cont = {"resultado": 0, "zoom": 0}
+    pasta.mkdir(parents=True, exist_ok=True)
+    for papel, legenda, dados, ext in decodificados:
+        cont[papel] += 1
+        nome = f"{papel}_{cont[papel]}.{ext}"
+        (pasta / nome).write_bytes(dados)
+        resultados.append({"nome": nome, "papel": papel, "legenda": legenda, "bytes": len(dados)})
+    with DB_LOCK:
+        atual = DB.execute("SELECT situacao, apagado_em FROM imagem_trabalho_v2017 WHERE id=?", (row["id"],)).fetchone()
+        if atual is None or atual["apagado_em"] or atual["situacao"] not in IMAGEM_EM_TRABALHO:
+            # Apagado ou refeito enquanto gravava: não ressuscita.
+            DB.commit()
+            if atual is not None and atual["apagado_em"]:
+                shutil.rmtree(pasta, ignore_errors=True)
+            raise ImagemConflito("Este trabalho foi apagado ou refeito enquanto o resultado chegava.")
+        DB.execute("UPDATE imagem_trabalho_v2017 SET situacao=?, resultados_json=?, relatorio_json=?, mensagem=?, "
+                   "modelo=COALESCE(NULLIF(?,''),modelo), tokens_entrada=tokens_entrada+?, tokens_saida=tokens_saida+?, "
+                   "reservado_ate=NULL, tentativas=0, versao=versao+1, atualizado_em=?, bytes=? WHERE id=?",
+                   (situacao, json.dumps(resultados, ensure_ascii=False),
+                    json.dumps(req.get("relatorio") if isinstance(req.get("relatorio"), dict) else {}, ensure_ascii=False)[:60000],
+                    str(req.get("mensagem") or "")[:1000], modelo, te, ts, now_iso(), _imagem_bytes_pasta(row["id"]), row["id"]))
+        DB.commit()
+    return {"ok": True}
+
+
+def _saude_imagens() -> dict[str, Any]:
+    """V20.17: o agente roda no PC do dono; desligado à noite é normal. Só pede atenção quando há
+    trabalho esperando e o agente sumiu."""
+    g = "Operação"
+    with DB_LOCK:
+        fila = DB.execute("SELECT COUNT(*) AS n FROM imagem_trabalho_v2017 WHERE apagado_em IS NULL AND situacao IN "
+                          "('aguardando','aguardando_arte')").fetchone()["n"]
+        st = imagens_agente_status()
+    if not fila:
+        return _saude_item("imagens_agente", g, "Agente de imagens", "ok",
+                           "Nenhuma imagem esperando" + ("" if st["online"] else " (agente desligado)"),
+                           "", "/imagens", "Abrir Imagens")
+    if st["online"]:
+        return _saude_item("imagens_agente", g, "Agente de imagens", "ok", f"{fila} imagem(ns) na fila, agente ligado",
+                           "", "/imagens", "Abrir Imagens")
+    quando = f"visto há {_saude_idade_txt(st['segundos'])}" if st["segundos"] is not None else "nunca conectou"
+    return _saude_item("imagens_agente", g, "Agente de imagens", "atencao",
+                       f"{fila} imagem(ns) esperando e o agente está desligado ({quando})",
+                       "O agente roda no PC do dono: ligue o PC ou abra o agente de imagens.", "/imagens", "Abrir Imagens")
+
+
 class AppHandler(BaseHTTPRequestHandler):
     server_version = "NoromakExpedicao/16.16"
 
@@ -37071,6 +37636,11 @@ class AppHandler(BaseHTTPRequestHandler):
                 })
             return
 
+        # V20.17: Estúdio de Imagens — tela (módulo imagens) e agente do PC do dono (token próprio).
+        if path.startswith("/api/imagens"):
+            self.handle_imagens_get(path, query)
+            return
+
         # Páginas dos módulos: além do login externo, exigem sessão e permissão granular.
         page_modules = {
             "/conferencia": "conferencia", "/conferencia/": "conferencia", "/conferencia.html": "conferencia",
@@ -37106,6 +37676,8 @@ class AppHandler(BaseHTTPRequestHandler):
             "/faturamento": "admin", "/faturamento/": "admin", "/faturamento.html": "admin",
             # V19.85: lista de separação do dia.
             "/separacao": "admin", "/separacao/": "admin", "/separacao.html": "admin",
+            # V20.17: Estúdio de Imagens (módulo próprio).
+            "/imagens": "imagens", "/imagens/": "imagens", "/imagens.html": "imagens",
             # V19.88: Devoluções — operador (tela cheia) e admin (tratar no Apollo).
             "/devolucoes": "devolucao", "/devolucoes/": "devolucao", "/devolucoes.html": "devolucao",  # V19.89
             "/devolucoes-admin": "admin", "/devolucoes-admin/": "admin", "/devolucoes-admin.html": "admin",
@@ -37151,9 +37723,133 @@ class AppHandler(BaseHTTPRequestHandler):
         self.serve_static(path)
 
 
+    # ---------- V20.17: Estúdio de Imagens ----------
+
+    def imagem_agente_auth(self) -> bool:
+        authorization = str(self.headers.get("Authorization") or "").strip()
+        supplied = authorization[7:].strip() if authorization.lower().startswith("bearer ") else ""
+        if not supplied or not hmac.compare_digest(supplied, imagem_agente_token()):
+            self.send_json({"ok": False, "error": "Token do agente de imagens inválido."}, 401)
+            return False
+        return True
+
+    def imagem_responder(self, funcao: Any) -> None:
+        try:
+            self.send_json(funcao())
+        except ImagemNaoEncontrada as exc:
+            self.send_json({"ok": False, "error": str(exc)}, 404)
+        except ImagemConflito as exc:
+            self.send_json({"ok": False, "error": str(exc), "code": "CONFLITO"}, 409)
+        except (ValueError, json.JSONDecodeError) as exc:
+            self.send_json({"ok": False, "error": str(exc)}, 400)
+
+    def imagem_enviar_arquivo(self, dados: bytes, tipo: str, nome: str, inline: bool) -> None:
+        self.send_response(200)
+        self.send_security_headers()
+        self.send_header("Content-Type", tipo)
+        disp = "inline" if inline else "attachment"
+        self.send_header("Content-Disposition", f'{disp}; filename="{nome}"')
+        self.send_header("Content-Length", str(len(dados)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(dados)
+
+    def imagem_auth_tela(self) -> dict[str, Any] | None:
+        ctx = self.auth()
+        if ctx is None:
+            return None
+        if not module_allowed(ctx, "imagens"):
+            self.send_json({"ok": False, "error": "Este usuário não tem o módulo Imagens."}, 403)
+            return None
+        return ctx
+
+    def handle_imagens_get(self, path: str, query: dict[str, list[str]]) -> None:
+        q = lambda k: (query.get(k) or [""])[0]
+        if path == "/api/imagens/agente/proximo":
+            if self.imagem_agente_auth():
+                self.imagem_responder(imagens_agente_proximo)
+            return
+        if path == "/api/imagens/agente/arquivo":
+            if not self.imagem_agente_auth():
+                return
+            try:
+                dados, tipo, nome = imagens_arquivo(q("id"), q("nome"), so_originais=True)
+            except ImagemNaoEncontrada as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 404)
+                return
+            self.imagem_enviar_arquivo(dados, tipo, nome, inline=False)
+            return
+        if path == "/api/imagens/agente/config":
+            # Token para configurar o agente: só o perfil Admin.
+            ctx = self.auth_full_admin()
+            if ctx is not None:
+                audit(ctx["username"], "imagens.agente_config", "token lido")
+                self.send_json({"ok": True, "token": imagem_agente_token(), "url": SAUDE_PUBLIC_URL})
+            return
+        ctx = self.imagem_auth_tela()
+        if ctx is None:
+            return
+        if path == "/api/imagens":
+            self.imagem_responder(imagens_payload)
+            return
+        if path == "/api/imagens/arquivo":
+            try:
+                dados, tipo, nome = imagens_arquivo(q("id"), q("nome"))
+            except ImagemNaoEncontrada as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 404)
+                return
+            self.imagem_enviar_arquivo(dados, tipo, nome, inline=q("ver") == "1")
+            return
+        self.send_json({"ok": False, "error": "Rota de imagens desconhecida."}, 404)
+
+    def handle_imagens_post(self, path: str) -> None:
+        if path.startswith("/api/imagens/agente/"):
+            if path == "/api/imagens/agente/token-novo":
+                ctx = self.auth_full_admin()
+                if ctx is None or not self.require_owner_reauth(ctx):
+                    return
+                audit(ctx["username"], "imagens.agente_token_novo", "Token renovado")
+                self.send_json({"ok": True, "token": imagem_agente_token(novo=True)})
+                return
+            if not self.imagem_agente_auth():
+                return
+            if path == "/api/imagens/agente/ping":
+                self.imagem_responder(lambda: (imagens_agente_ping(self.read_json()), {"ok": True})[1])
+            elif path == "/api/imagens/agente/analise":
+                self.imagem_responder(lambda: imagens_agente_analise(self.read_json()))
+            elif path == "/api/imagens/agente/resultado":
+                self.imagem_responder(lambda: imagens_agente_resultado(self.read_json()))
+            else:
+                self.send_json({"ok": False, "error": "Rota do agente desconhecida."}, 404)
+            return
+        if path == "/api/imagens/config":
+            ctx = self.auth_full_admin()
+            if ctx is not None:
+                self.imagem_responder(lambda: imagens_config(ctx["username"], self.read_json()))
+            return
+        ctx = self.imagem_auth_tela()
+        if ctx is None:
+            return
+        usuario = ctx["username"]
+        acoes = {
+            "/api/imagens/enviar": imagens_enviar,
+            "/api/imagens/textos": imagens_textos_aprovar,
+            "/api/imagens/refazer": imagens_refazer,
+            "/api/imagens/apagar": imagens_apagar,
+        }
+        funcao = acoes.get(path)
+        if funcao is None:
+            self.send_json({"ok": False, "error": "Rota de imagens desconhecida."}, 404)
+            return
+        self.imagem_responder(lambda: funcao(usuario, self.read_json()))
+
     def do_POST(self) -> None:
         path = self.route_path()
         if self.consulta_bloqueada("POST", path):
+            return
+        if path.startswith("/api/imagens"):  # V20.17: Estúdio de Imagens
+            self.handle_imagens_post(path)
             return
         # V17.86 — a extensão leu CPF/nome na venda (ou gravou no Linx): guarda.
         # Tabela própria (cliente_fiscal); não toca em conf_pedidos.
@@ -40563,7 +41259,7 @@ class AppHandler(BaseHTTPRequestHandler):
         with DB_LOCK:
             rows = DB.execute(
                 """SELECT username,display_name,role,active,can_conferencia,can_admin,can_estacao,can_precificador,
-                          can_devolucao,updated_at,updated_by,casa,somente_leitura FROM app_users ORDER BY display_name,username"""
+                          can_devolucao,can_imagens,updated_at,updated_by,casa,somente_leitura FROM app_users ORDER BY display_name,username"""
             ).fetchall()
         users = []
         for row in rows:
@@ -40605,6 +41301,8 @@ class AppHandler(BaseHTTPRequestHandler):
                 }
             if "devolucao" in raw_permissions:  # V19.89: sem a chave, fica o que estava
                 permissions["devolucao"] = bool(raw_permissions.get("devolucao"))
+            if "imagens" in raw_permissions:  # V20.17
+                permissions["imagens"] = bool(raw_permissions.get("imagens"))
             if not username or any(ch.isspace() for ch in username):
                 raise ValueError("Informe o login do estoque sem espaços.")
             if is_consulta_role(role):
@@ -40747,6 +41445,10 @@ class AppHandler(BaseHTTPRequestHandler):
             "/separacao": "separacao.html",
             "/separacao/": "separacao.html",
             "/separacao.html": "separacao.html",
+            # V20.17: Estúdio de Imagens.
+            "/imagens": "imagens.html",
+            "/imagens/": "imagens.html",
+            "/imagens.html": "imagens.html",
             "/devolucoes": "devolucoes.html",
             "/devolucoes/": "devolucoes.html",
             "/devolucoes.html": "devolucoes.html",
@@ -41870,6 +42572,7 @@ def saude_checks() -> list[dict[str, Any]]:
     itens += _saude_check(_saude_shopee, "shopee_conexao", "Operação", "Shopee")
     itens += _saude_check(_saude_posvenda, "posvenda_prazo", "Operação", "Reclamações do Mercado Livre")
     itens += _saude_check(_saude_impressao, "impressao_fila", "Operação", "Fila de impressão (Zebra)")
+    itens += _saude_check(_saude_imagens, "imagens_agente", "Operação", "Agente de imagens")  # V20.17
     itens += _saude_check(_saude_workers_check, "workers", "Servidor", "Rotinas automáticas (workers)")
     itens += _saude_check(_saude_backup, "backup", "Servidor", "Backup diário")
     itens += _saude_check(_saude_disco, "disco", "Servidor", "Disco")
