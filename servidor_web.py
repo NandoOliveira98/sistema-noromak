@@ -48,7 +48,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.20-ENVIO-TRAVADO"
+APP_VERSION = "20.21-CATALOGO-IMAGENS"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -35683,6 +35683,7 @@ IMAGEM_SITUACOES = ("aguardando", "processando", "analisando", "textos_para_apro
 IMAGEM_EM_TRABALHO = ("processando", "analisando", "gerando")
 IMAGEM_FINAIS = ("pronta", "revisar", "outra_foto", "erro")
 IMAGEM_ARTES = ("beneficios", "modo", "aplicacao")
+IMAGEM_MAX_CATALOGO = 4                   # V20.21: prints de catálogo / ficha técnica por envio
 # Crédito da API do Claude (dono, 04/11): US$ 100 que renova todo dia 19. A API não informa o saldo para a
 # chave comum; o gasto vem dos tokens que o agente informa em cada entrega (só o uso do Noromak).
 IMAGEM_SALDO_PADRAO = 100.0
@@ -35870,13 +35871,21 @@ def imagens_enviar(usuario: str, req: dict[str, Any]) -> dict[str, Any]:
     if tipo in ("beneficios", "modo", "aplicacao") and len(fotos) > 2:
         raise ValueError("Envie a frente e, se tiver, o verso do produto (2 fotos no máximo).")
     decodificadas = [_imagem_decodificar((f or {}).get("dados") if isinstance(f, dict) else None) for f in fotos]
-    if sum(len(d) for d, _ in decodificadas) > IMAGEM_MAX_ENVIO_BYTES:
-        raise ValueError(f"As fotos de um envio somam até {IMAGEM_MAX_ENVIO_BYTES // (1024 * 1024)} MB: mande em partes.")
     # V20.17 (dono, 04/11): imagem de referência da arte — o agente copia o layout dela (só nas artes).
     ref_bruta = req.get("referencia") if isinstance(req.get("referencia"), dict) else None
     referencia = _imagem_decodificar(ref_bruta.get("dados")) if ref_bruta and ref_bruta.get("dados") else None
     if referencia and tipo not in IMAGEM_ARTES:
         raise ValueError("A imagem de referência vale só para as artes (benefícios, modo de uso, aplicação).")
+    # V20.21 (dono, 04/11): print de catálogo / ficha técnica — fonte de DADOS para os textos, nunca layout nem
+    # foto do produto. Caso real 816.4003-0: o print do catálogo foi como 2ª referência e virou uma 2ª arte.
+    cat_brutos = req.get("catalogo") if isinstance(req.get("catalogo"), list) else []
+    if cat_brutos and tipo not in IMAGEM_ARTES:
+        raise ValueError("O print de catálogo vale só para as artes (benefícios, modo de uso, aplicação).")
+    if len(cat_brutos) > IMAGEM_MAX_CATALOGO:
+        raise ValueError(f"Envie até {IMAGEM_MAX_CATALOGO} prints de catálogo por vez.")
+    catalogo = [_imagem_decodificar((c or {}).get("dados") if isinstance(c, dict) else None) for c in cat_brutos]
+    if sum(len(d) for d, _ in decodificadas + catalogo + ([referencia] if referencia else [])) > IMAGEM_MAX_ENVIO_BYTES:
+        raise ValueError(f"As fotos de um envio somam até {IMAGEM_MAX_ENVIO_BYTES // (1024 * 1024)} MB: mande em partes.")
     # V20.17 (dono, 04/11): nome do produto e/ou link do fornecedor — o agente pesquisa na internet antes de
     # propor os textos (o que vier de lá vai marcado "da internet", com a fonte; o operador aprova).
     produto_nome = re.sub(r"\s+", " ", str(req.get("produto_nome") or "")).strip()[:150]
@@ -35902,6 +35911,9 @@ def imagens_enviar(usuario: str, req: dict[str, Any]) -> dict[str, Any]:
         if referencia:
             arquivos.append({"nome": f"referencia.{referencia[1]}", "papel": "referencia", "bytes": len(referencia[0])})
             grupo = grupo + [referencia]
+        for i, (dados, ext) in enumerate(catalogo):
+            arquivos.append({"nome": f"catalogo_{i + 1}.{ext}", "papel": "catalogo", "bytes": len(dados)})
+        grupo = grupo + catalogo
         total = sum(a["bytes"] for a in arquivos)
         # Grava a linha como "enviando" (o agente não pega), escreve os arquivos fora do DB_LOCK
         # e só então solta para a fila.
@@ -35927,7 +35939,8 @@ def imagens_enviar(usuario: str, req: dict[str, Any]) -> dict[str, Any]:
             DB.execute("UPDATE imagem_trabalho_v2017 SET situacao='aguardando' WHERE id=?", (id_,))
             DB.commit()
         ids.append(id_)
-    audit(usuario, "imagens.enviar", f"{tipo}|{sku}|{len(decodificadas)} foto(s){' + referência' if referencia else ''}|{ids}")
+    audit(usuario, "imagens.enviar", f"{tipo}|{sku}|{len(decodificadas)} foto(s){' + referência' if referencia else ''}"
+          f"{f' + {len(catalogo)} catálogo' if catalogo else ''}|{ids}")
     return {"ok": True, "ids": ids}
 
 

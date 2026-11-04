@@ -431,6 +431,43 @@ class EstudioImagens(TesteNoromak):
         self.assertEqual(st, 400)
         self.assertEqual(self.lista()["itens"], [])
 
+    # ---------- print de catálogo / ficha técnica (V20.21, dono 04/11: fonte de DADOS, não de layout) ----------
+
+    def test_catalogo_vai_junto_da_arte_sem_virar_outra_arte(self):
+        # Caso real 04/11 (816.4003-0): o print do catálogo foi como 2ª "referência" e virou uma 2ª arte copiando a
+        # tela do catálogo. Agora tem campo próprio: vai no MESMO trabalho, com papel "catalogo".
+        corpo = {"tipo": "aplicacao", "sku": "816.4003-0", "fotos": [{"dados": b64(PNG)}],
+                 "referencia": {"dados": b64(WEBP)}, "catalogo": [{"dados": b64(PNG)}, {"dados": b64(WEBP)}]}
+        st, r = self.cliente.pedir("POST", "/api/imagens/enviar", corpo)
+        self.assertEqual(st, 200, r)
+        self.assertEqual(len(r["ids"]), 1)
+        id_ = r["ids"][0]
+        papeis = [a["papel"] for a in self.item(id_)["arquivos"]]
+        self.assertEqual(papeis, ["frente", "referencia", "catalogo", "catalogo"])
+        t = self.agente("GET", "/api/imagens/agente/proximo")[1]["trabalho"]
+        cat = [a for a in t["arquivos"] if a["papel"] == "catalogo"]
+        st, dados = self.agente("GET", f"/api/imagens/agente/arquivo?id={id_}&nome={cat[1]['nome']}", bruto=True)
+        self.assertEqual((st, dados), (200, WEBP))
+
+    def test_catalogo_so_nas_artes_so_imagem_e_ate_4(self):
+        st, _ = self.cliente.pedir("POST", "/api/imagens/enviar", {"tipo": "principal", "fotos": [{"dados": b64(PNG)}],
+                                                                   "catalogo": [{"dados": b64(PNG)}]})
+        self.assertEqual(st, 400)
+        st, _ = self.cliente.pedir("POST", "/api/imagens/enviar", {"tipo": "modo", "fotos": [{"dados": b64(PNG)}],
+                                                                   "catalogo": [{"dados": b64(b"%PDF-1.4")}]})
+        self.assertEqual(st, 400)
+        st, _ = self.cliente.pedir("POST", "/api/imagens/enviar", {"tipo": "modo", "fotos": [{"dados": b64(PNG)}],
+                                                                   "catalogo": [{"dados": b64(PNG)}] * 5})
+        self.assertEqual(st, 400)
+        self.assertEqual(self.lista()["itens"], [])
+
+    def test_catalogo_entra_na_soma_de_25_mb(self):
+        foto = b"\x89PNG\r\n\x1a\n" + b"\x00" * (9 * 1024 * 1024)
+        with self.assertRaises(ValueError) as erro:
+            S.imagens_enviar("admin_teste", {"tipo": "beneficios", "fotos": [{"dados": b64(foto)}],
+                                             "catalogo": [{"dados": b64(foto)}] * 2})
+        self.assertIn("25 MB", str(erro.exception))
+
     # ---------- memória da VPS (revisão antes de subir, 04/11) ----------
 
     def test_soma_das_fotos_acima_de_25_mb_e_recusada(self):

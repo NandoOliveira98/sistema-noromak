@@ -39,7 +39,7 @@ import artes  # noqa: E402
 import processar as P  # noqa: E402
 from claude_imagens import ClaudeImagens, ClaudeRecusou  # noqa: E402
 
-VERSAO = "0.2"
+VERSAO = "0.3"
 INTERVALO = 10
 LOG = PASTA / "agente.log"
 TUNEL_LOG = PASTA / "tunel.log"
@@ -238,9 +238,14 @@ class Agente:
         return pesquisa
 
     def _originais(self, trabalho: dict) -> list[tuple[dict, Any]]:
-        """Fotos do produto (a imagem de referência fica de fora: ela é de OUTRO anúncio)."""
+        """Fotos do produto (a referência fica de fora: é de OUTRO anúncio; o catálogo também: é fonte de dados)."""
         return [(a, P.abrir(self.noromak.arquivo(trabalho["id"], a["nome"]))) for a in trabalho.get("arquivos") or []
-                if a.get("papel") != "referencia"]
+                if a.get("papel") not in ("referencia", "catalogo")]
+
+    def _catalogo(self, trabalho: dict) -> list:
+        """V20.21: prints de catálogo / ficha técnica — só para ler os dados dos textos."""
+        return [P.abrir(self.noromak.arquivo(trabalho["id"], a["nome"])) for a in trabalho.get("arquivos") or []
+                if a.get("papel") == "catalogo"]
 
     def _referencia(self, trabalho: dict):
         a = next((x for x in trabalho.get("arquivos") or [] if x.get("papel") == "referencia"), None)
@@ -333,8 +338,9 @@ class Agente:
                 relatorio = {"pesquisa": pesquisa["texto"], "fontes": pesquisa["fontes"]}
             except Exception as e:
                 relatorio = {"aviso_pesquisa": "A pesquisa na internet falhou; os textos vieram só do rótulo. " + _mensagem_erro(e)}
-        dados = (claude.propor_textos_referencia(trabalho["tipo"], imagens, referencia, pesquisa) if referencia is not None
-                 else claude.propor_textos(trabalho["tipo"], imagens, pesquisa))
+        catalogo = self._catalogo(trabalho)
+        dados = (claude.propor_textos_referencia(trabalho["tipo"], imagens, referencia, pesquisa, catalogo)
+                 if referencia is not None else claude.propor_textos(trabalho["tipo"], imagens, pesquisa, catalogo))
         if not dados.get("serve", True):
             return {"id": trabalho["id"], "situacao": "outra_foto",
                     "mensagem": dados.get("motivo") or "Não dá para ler o rótulo: mande uma foto mais nítida."}

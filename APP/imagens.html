@@ -93,6 +93,7 @@ label.tit{display:block;font-size:11px;font-weight:700;text-transform:uppercase;
 .ref-caixa .ref-txt{font-size:12.5px;color:var(--nk-ink2);line-height:1.45}
 .ref-caixa .ref-txt b{color:var(--nk-head)}
 .origem.internet{color:var(--nk-info)}
+.origem.catalogo{color:var(--nk-ok)}
 .origem a{color:inherit}
 .pesquisa{font-size:12.5px;color:var(--nk-ink2);background:var(--nk-tile2);border:1px solid var(--nk-line);border-radius:10px;padding:10px 12px;white-space:pre-wrap;max-height:220px;overflow:auto}
 .fontes a{display:block;font-size:12px;word-break:break-all}
@@ -136,6 +137,16 @@ label.tit{display:block;font-size:11px;font-weight:700;text-transform:uppercase;
       </div>
       <input type="file" id="arquivo" accept="image/jpeg,image/png,image/webp" multiple hidden>
       <div class="previas" id="previas"></div>
+      <div id="blocoCat" hidden>
+        <label class="tit">Print de catálogo / ficha técnica (opcional)</label>
+        <div class="ref-caixa" id="catCaixa" tabindex="0" role="button" aria-label="Adicionar print de catálogo">
+          <div class="ref-vazia">+</div>
+          <div class="ref-txt" id="catTxt"><b>Tela do catálogo do fabricante, ficha técnica, caixa</b><br>O agente só lê os
+            dados (códigos, medidas, aplicação) para os textos. Não vira arte e não copia o visual. Até 4.</div>
+        </div>
+        <div class="previas" id="catPrevias"></div>
+        <input type="file" id="catArquivo" accept="image/jpeg,image/png,image/webp" multiple hidden>
+      </div>
       <div id="blocoProduto" hidden>
         <label class="tit" for="produtoNome">Nome do produto (opcional)</label>
         <input class="campo" id="produtoNome" maxlength="150" autocomplete="off" placeholder="Ex.: Câmara de freio Schulz 43-272">
@@ -150,7 +161,7 @@ label.tit{display:block;font-size:11px;font-weight:700;text-transform:uppercase;
           <div class="ref-vazia" id="refVazia">+</div>
           <div class="ref-txt" id="refTxt"><b>Arte de outro anúncio para copiar o layout</b><br>Cores, títulos, cartões e disposição.
             Os textos vêm só do seu produto, e fotos de carro/caminhão da referência não são criadas.
-            Pode pôr várias: <b>cada referência vira uma arte</b>.</div>
+            Pode pôr várias: <b>cada referência vira uma arte</b>. Print de catálogo vai no campo de catálogo.</div>
         </div>
         <div class="previas" id="refPrevias"></div>
         <input type="file" id="refArquivo" accept="image/jpeg,image/png,image/webp" multiple hidden>
@@ -207,6 +218,9 @@ const FILTROS = [["", "Todas"], ["fila", "Na fila / processando"], ["textos_para
 let dados = null, selecionadas = new Set(), fotos = [], aberta = null, timer = null, filtroKpi = "";
 // V20.19 (dono, 05/11): várias referências; cada uma vira um envio próprio (uma arte por referência).
 let referencias = [];   // [{arquivo, url}]: imagens de referência da arte (V20.17 aceitava uma só)
+// V20.21 (dono, 04/11): print de catálogo / ficha técnica — só dados para os textos; vai em TODOS os envios.
+let catalogos = [];     // [{arquivo, url}]
+const MAX_CATALOGO = 4;
 // V20.20 (revisão de 04/11): enquanto o envio anda, nada do formulário muda. Antes, tirar a referência já enviada
 // religava o botão no meio do laço (2º clique duplicava a arte) e o ×/Limpar não cancelavam o que o laço ia mandar.
 let enviando = false;
@@ -225,7 +239,9 @@ function mudarTipo() {
   const arte = ARTES.includes($("tipo").value);
   $("blocoRef").hidden = !arte;
   $("blocoProduto").hidden = !arte;
+  $("blocoCat").hidden = !arte;
   if (!arte && referencias.length) tirarRef();
+  if (!arte && catalogos.length) tirarCat();
   validarEnvio();
 }
 function tamanho(b) { return b >= 1048576 ? (b / 1048576).toFixed(1).replace(".", ",") + " MB" : Math.max(1, Math.round(b / 1024)) + " KB"; }
@@ -271,7 +287,7 @@ function desenharPrevias() {
   validarEnvio();
 }
 function tirar(i) { if (ocupado()) return; URL.revokeObjectURL(fotos[i].url); fotos.splice(i, 1); desenharPrevias(); }
-function limparEnvio() { if (ocupado()) return; fotos.forEach(f => URL.revokeObjectURL(f.url)); fotos = []; $("sku").value = ""; $("produtoNome").value = ""; $("produtoLink").value = ""; tirarRef(); desenharPrevias(); }
+function limparEnvio() { if (ocupado()) return; fotos.forEach(f => URL.revokeObjectURL(f.url)); fotos = []; $("sku").value = ""; $("produtoNome").value = ""; $("produtoLink").value = ""; tirarRef(); tirarCat(); desenharPrevias(); }
 
 // ---------- imagem de referência ----------
 const refCaixa = $("refCaixa");
@@ -301,8 +317,43 @@ function desenharRefs() {
       (n === 1 ? "O agente copia o layout dela." : `Vão sair ${n} artes, uma com o layout de cada referência.`)
     : "<b>Arte de outro anúncio para copiar o layout</b><br>Cores, títulos, cartões e disposição. " +
       "Os textos vêm só do seu produto, e fotos de carro/caminhão da referência não são criadas. " +
-      "Pode pôr várias: <b>cada referência vira uma arte</b>.";
+      "Pode pôr várias: <b>cada referência vira uma arte</b>. Print de catálogo vai no campo de catálogo.";
   validarEnvio();
+}
+// ---------- print de catálogo (V20.21) ----------
+const catCaixa = $("catCaixa");
+catCaixa.addEventListener("click", () => $("catArquivo").click());
+catCaixa.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("catArquivo").click(); } });
+catCaixa.addEventListener("dragover", e => { e.preventDefault(); catCaixa.classList.add("sobre"); });
+catCaixa.addEventListener("dragleave", () => catCaixa.classList.remove("sobre"));
+catCaixa.addEventListener("drop", e => { e.preventDefault(); catCaixa.classList.remove("sobre"); escolherCat(e.dataTransfer.files); });
+$("catArquivo").addEventListener("change", e => { escolherCat(e.target.files); e.target.value = ""; });
+function escolherCat(lista) {
+  if (ocupado()) return;
+  for (const f of Array.from(lista || [])) {
+    if (!/^image\/(jpeg|png|webp)$/.test(f.type)) { nkToast(`${f.name}: envie só JPG, PNG ou WEBP.`, "erro"); continue; }
+    if (f.size > MAX_BYTES) { nkToast(`${f.name}: passa de 10 MB.`, "erro"); continue; }
+    if (catalogos.length >= MAX_CATALOGO) { nkToast(`No máximo ${MAX_CATALOGO} prints de catálogo.`, "erro"); break; }
+    catalogos.push({arquivo: f, url: URL.createObjectURL(f)});
+  }
+  desenharCats();
+}
+function desenharCats() {
+  $("catPrevias").innerHTML = catalogos.map((c, i) =>
+    `<div class="previa"><img src="${c.url}" alt=""><small>catálogo ${i + 1}</small>` +
+    `<button type="button" onclick="tirarCat(event, ${i})" aria-label="Tirar print de catálogo">×</button></div>`).join("");
+  const n = catalogos.length;
+  $("catTxt").innerHTML = n
+    ? `<b>${n === 1 ? "1 print" : n + " prints"} de catálogo</b><br>O agente lê os dados para os textos. Clique para adicionar mais.`
+    : "<b>Tela do catálogo do fabricante, ficha técnica, caixa</b><br>O agente só lê os dados (códigos, medidas, aplicação) " +
+      "para os textos. Não vira arte e não copia o visual. Até 4.";
+}
+function tirarCat(e, i) {
+  if (e) e.stopPropagation();
+  if (ocupado()) return;
+  const tirar = i === undefined ? catalogos.splice(0) : catalogos.splice(i, 1);
+  tirar.forEach(c => URL.revokeObjectURL(c.url));
+  desenharCats();
 }
 // Sem índice tira todas (troca de tipo, Limpar); com índice, só aquela.
 function tirarRef(e, i) {
@@ -326,7 +377,8 @@ async function enviar() {
   if (enviando) return;
   const arte = ARTES.includes($("tipo").value);
   const refs = arte ? referencias.slice() : [];
-  const fotosBytes = fotos.reduce((s, f) => s + f.arquivo.size, 0);
+  const cats = arte ? catalogos.slice() : [];
+  const fotosBytes = fotos.reduce((s, f) => s + f.arquivo.size, 0) + cats.reduce((s, c) => s + c.arquivo.size, 0);
   // V20.19: o limite de 25 MB vale por envio; com várias referências cada envio leva as fotos + uma referência.
   const maior = fotosBytes + Math.max(0, ...refs.map(r => r.arquivo.size));
   if (maior > MAX_ENVIO) { nkToast(`As fotos somam ${tamanho(maior)}: o limite por envio é 25 MB. Mande em partes.`, "erro"); return; }
@@ -344,6 +396,10 @@ async function enviar() {
     for (const f of fotos) lista.push({nome: f.arquivo.name, dados: await lerBase64(f.arquivo)});
     const base = {tipo: $("tipo").value, sku: $("sku").value.trim(), fotos: lista};
     if (arte) { base.produto_nome = $("produtoNome").value.trim(); base.produto_link = link; }
+    if (cats.length) {
+      base.catalogo = [];
+      for (const c of cats) base.catalogo.push({nome: c.arquivo.name, dados: await lerBase64(c.arquivo)});
+    }
     if (!refs.length) {
       const d = await api("/api/imagens/enviar", base);
       enviados = d.ids.length;
@@ -495,7 +551,8 @@ function abrir(id, silencioso) {
     ((rel.fontes || []).length ? `<div class="fontes" style="margin-top:6px">${rel.fontes.filter(u => /^https?:\/\//i.test(u)).map(u => `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(u)}</a>`).join("")}</div>` : "") + `</div>`;
   if (rel.aviso_pesquisa) html += `<div class="secao"><div class="msg bad">${esc(rel.aviso_pesquisa)}</div></div>`;
   html += `<div class="secao"><h3>Antes × depois</h3><div class="lado">` +
-    (i.arquivos || []).filter(a => a.papel !== "referencia").map(a => quadro(a, "Original · " + a.papel)).join("") +
+    (i.arquivos || []).filter(a => !["referencia", "catalogo"].includes(a.papel)).map(a => quadro(a, "Original · " + a.papel)).join("") +
+    (i.arquivos || []).filter(a => a.papel === "catalogo").map(a => quadro(a, "Catálogo (só dados)")).join("") +
     (i.arquivos || []).filter(a => a.papel === "referencia").map(a => quadro(a, "Referência de layout")).join("") +
     res.map(a => quadro(a, "Resultado")).join("") + `</div></div>`;
   if (zooms.length || conferidos.length) {
@@ -516,7 +573,7 @@ function abrir(id, silencioso) {
 function blocoTextos(i) {
   const campos = (i.textos && i.textos.campos) || [];
   const ORIGEM = {rotulo: "lido no rótulo", nao_encontrado: "não está no rótulo — preencha ou deixe em branco", operador: "digitado",
-    internet: "da internet — confira"};
+    internet: "da internet — confira", catalogo: "lido no catálogo — confira os códigos"};
   const fonte = c => c.origem === "internet" && /^https?:\/\//i.test(c.fonte || "")
     ? ` · <a href="${esc(c.fonte)}" target="_blank" rel="noopener noreferrer">fonte</a>` : "";
   return `<div class="secao"><h3>Textos da arte — corrija e aprove</h3>` +

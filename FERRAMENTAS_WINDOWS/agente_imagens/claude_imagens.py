@@ -95,7 +95,24 @@ def _obj(props: dict[str, Any]) -> dict[str, Any]:
     return {"type": "object", "properties": props, "required": list(props), "additionalProperties": False}
 
 
-ORIGENS = ["rotulo", "internet", "nao_encontrado"]
+ORIGENS = ["rotulo", "catalogo", "internet", "nao_encontrado"]
+
+
+def _bloco_catalogo(catalogo: list[Image.Image] | None) -> list[dict[str, Any]]:
+    """V20.21 (dono, 04/11): print de catálogo / ficha técnica do fabricante = fonte de DADOS, não de visual.
+    Caso real 816.4003-0: o Haiku leu "801358" e "816-4033-0" no lugar de 804358 / 816.4003-0."""
+    if not catalogo:
+        return []
+    conteudo: list[dict[str, Any]] = [{"type": "text", "text": (
+        f"PRINT DE CATÁLOGO / FICHA TÉCNICA DO FABRICANTE ({len(catalogo)}): é só fonte de DADOS deste produto "
+        "(códigos, medidas, aplicação, compatibilidade). Não copie o visual dele.")}]
+    conteudo += [bloco_imagem(im) for im in catalogo]
+    conteudo.append({"type": "text", "text": (
+        "Dados tirados do catálogo: origem 'catalogo' (fonte vazia). Copie códigos e medidas caractere por caractere, "
+        "com os mesmos pontos, traços e zeros; se um dígito não estiver nítido, deixe o campo vazio em vez de "
+        "adivinhar. Catálogo e rótulo valem igual e valem mais que a internet; se o catálogo trouxer outro produto "
+        "que não este, não use.")})
+    return conteudo
 
 
 def _bloco_pesquisa(pesquisa: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -214,7 +231,8 @@ class ClaudeImagens:
         return {"texto": texto[:6000], "fontes": fontes[:15]}
 
     # 2 -------------------------------------------------------------------------------------
-    def propor_textos(self, tipo: str, imagens: list[Image.Image], pesquisa: dict[str, Any] | None = None) -> dict[str, Any]:
+    def propor_textos(self, tipo: str, imagens: list[Image.Image], pesquisa: dict[str, Any] | None = None,
+                      catalogo: list[Image.Image] | None = None) -> dict[str, Any]:
         campos = CAMPOS_ARTE[tipo]
         chaves = [c for c, _ in campos]
         esquema = _obj({
@@ -230,7 +248,7 @@ class ClaudeImagens:
             "Regras: use só o que está escrito ou é visível no produto. Se não estiver, valor vazio e origem "
             "'nao_encontrado' — nunca invente número, tempo de proteção ou promessa. 'cor' é a cor principal do rótulo "
             "em #rrggbb (origem 'rotulo'). 'serve' false só se não dá para ler o rótulo (foto ruim), com o motivo.")}]
-        conteudo += _bloco_pesquisa(pesquisa)
+        conteudo += _bloco_catalogo(catalogo) + _bloco_pesquisa(pesquisa)
         dados = self._chamar(conteudo, esquema, 3000)
         # Garante todos os campos, na ordem, com o rótulo da tela.
         por_chave = {c.get("chave"): c for c in dados.get("campos") or [] if isinstance(c, dict)}
@@ -259,7 +277,8 @@ class ClaudeImagens:
 
     # 5 — com imagem de referência (V20.17, dono 04/11: "layout completo") -------------------------
     def propor_textos_referencia(self, tipo: str, imagens: list[Image.Image], referencia: Image.Image,
-                                 pesquisa: dict[str, Any] | None = None) -> dict[str, Any]:
+                                 pesquisa: dict[str, Any] | None = None,
+                                 catalogo: list[Image.Image] | None = None) -> dict[str, Any]:
         """Os textos seguem a ESTRUTURA da referência (título + itens "rótulo | valor"), com o conteúdo do NOSSO
         produto: só o que está escrito nele. O que a referência tem e o produto não mostra vem vazio."""
         esquema = _obj({
@@ -286,7 +305,7 @@ class ClaudeImagens:
             "nunca copie números ou dados da referência, nunca invente.\n"
             "- cor: a cor principal do rótulo do NOSSO produto, #rrggbb.\n"
             "- serve: false só se não dá para ler o nosso produto.")})
-        conteudo += _bloco_pesquisa(pesquisa)
+        conteudo += _bloco_catalogo(catalogo) + _bloco_pesquisa(pesquisa)
         dados = self._chamar(conteudo, esquema, 3000)
         campos = [{"chave": "titulo", "rotulo": "Título", "valor": str(dados.get("titulo") or "").strip(),
                    "origem": "rotulo" if str(dados.get("titulo") or "").strip() else "nao_encontrado"}]
@@ -295,7 +314,7 @@ class ClaudeImagens:
             rotulo = str(it.get("rotulo") or "").strip()
             campos.append({"chave": f"item_{i}", "rotulo": f"Item {i} — {rotulo}" if rotulo else f"Item {i}",
                            "valor": f"{rotulo} | {valor}" if rotulo and valor else valor,
-                           "origem": it.get("origem") if valor else "nao_encontrado",
+                           "origem": (it.get("origem") if it.get("origem") in ORIGENS else "nao_encontrado") if valor else "nao_encontrado",
                            "fonte": str(it.get("fonte") or "")[:300] if valor and it.get("origem") == "internet" else ""})
         campos.append({"chave": "cor", "rotulo": "Cor de destaque (#rrggbb)", "valor": str(dados.get("cor") or "").strip(),
                        "origem": "rotulo"})
@@ -319,10 +338,14 @@ class ClaudeImagens:
                         "- A foto do produto é <img src=\"produto.png\"> UMA vez, inteira, sem distorcer (object-fit:contain), "
                         "no lugar onde a referência põe o produto. "
                         + ("Pode ter sombra (filter:drop-shadow)." if sombra else
-                           "A foto tem fundo BRANCO: use mix-blend-mode:multiply nela e fundo claro atrás, sem sombra.") + "\n"
+                           "A foto tem fundo BRANCO: ponha-a dentro de um cartão branco ou bem claro (cantos arredondados), "
+                           "com mix-blend-mode:multiply e sem sombra; o resto da arte continua com as cores da referência, "
+                           "mesmo que o fundo dela seja escuro.") + "\n"
+                        "- Use as MESMAS cores da referência (fundo, faixas, títulos, enfeites, ícones), em cores, "
+                        "nunca tudo cinza ou preto e branco.\n"
                         "- Use SÓ estes textos, exatamente como estão (item 'rótulo | valor' = rótulo em destaque e valor "
                         "embaixo); não escreva nenhum outro texto, número ou promessa:\n" + textos + "\n"
-                        "- 'cor' é a cor de destaque (use no lugar da cor de destaque da referência, se combinar).\n"
+                        "- 'cor' é a cor de destaque do nosso produto: só em detalhes pequenos, e só se não for cinza/preto; as cores principais são as da referência.\n"
                         "- Fotos de veículos/pessoas/cenários da referência NÃO existem aqui: troque por ícone SVG simples "
                         "embutido ou deixe de fora. Nenhuma outra imagem, nenhum <script>, nenhum link externo além de "
                         "@import do Google Fonts.\n"

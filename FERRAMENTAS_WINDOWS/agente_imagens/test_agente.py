@@ -68,6 +68,7 @@ class ClaudeFalso:
                                   "- Curso de 64 mm — https://catalogo.exemplo.com/p/43272", citations=[cit])])
         self.ultimo_texto_pedido = " ".join(c.get("text", "") for c in kw["messages"][0]["content"]
                                             if isinstance(c, dict) and c.get("type") == "text")
+        self.imagens_pedidas = sum(1 for c in kw["messages"][0]["content"] if isinstance(c, dict) and c.get("type") == "image")
         props = kw["output_config"]["format"]["schema"]["properties"]
         conteudo = kw["messages"][0]["content"]
         if "html" in props:
@@ -302,6 +303,50 @@ class AgenteDeImagens(_BaseAgente):
         self.assertEqual(c.exception.status, 401)
 
 
+class CatalogoDoProduto(_BaseAgente):
+    """V20.21 (dono, 04/11): print de catálogo / ficha técnica é fonte de DADOS. Entra só na proposta de textos
+    (origem "catalogo"), nunca como foto do produto na arte nem como layout."""
+
+    def enviar_com_catalogo(self, referencia: bool = False) -> int:
+        corpo = {"tipo": "aplicacao", "sku": "816.4003-0", "fotos": [{"dados": base64.b64encode(frasco()).decode()}],
+                 "catalogo": [{"dados": base64.b64encode(frasco((500, 300), fundo=(240, 240, 240))).decode()}]}
+        if referencia:
+            corpo["referencia"] = {"dados": base64.b64encode(frasco((400, 400), fundo=(20, 40, 90))).decode()}
+        st, r = self.cliente.pedir("POST", "/api/imagens/enviar", corpo)
+        self.assertEqual(st, 200, r)
+        return r["ids"][0]
+
+    def test_catalogo_vai_para_a_proposta_de_textos(self):
+        self.enviar_com_catalogo()
+        falso = ClaudeFalso()
+        self.agente(falso).uma_volta()
+        self.assertEqual(falso.chamadas, ["textos"])
+        self.assertEqual(falso.imagens_pedidas, 2)                       # a foto + o catálogo
+        self.assertIn("CATÁLOGO", falso.ultimo_texto_pedido)
+        self.assertIn("caractere por caractere", falso.ultimo_texto_pedido)
+
+    def test_catalogo_com_referencia(self):
+        self.enviar_com_catalogo(referencia=True)
+        falso = ClaudeFalso()
+        self.agente(falso).uma_volta()
+        self.assertEqual(falso.chamadas, ["textos_ref"])
+        self.assertEqual(falso.imagens_pedidas, 3)                       # referência + foto + catálogo
+        self.assertIn("CATÁLOGO", falso.ultimo_texto_pedido)
+
+    def test_catalogo_nao_e_foto_do_produto(self):
+        id_ = self.enviar_com_catalogo(referencia=True)
+        t = self.noromak.proximo()
+        ag = self.agente(ClaudeFalso())
+        self.assertEqual([a["papel"] for a, _ in ag._originais(t)], ["frente"])
+        self.assertEqual(len(ag._catalogo(t)), 1)
+        self.assertEqual(t["id"], id_)
+
+    def test_origem_catalogo_e_aceita(self):
+        from claude_imagens import _campo
+        c = _campo("area_1", "Área 1", {"valor": "Reboques", "origem": "catalogo"})
+        self.assertEqual(c["origem"], "catalogo")
+
+
 class ArteComReferencia(_BaseAgente):
     """V20.17 (dono, 04/11): imagem de referência = o agente copia o LAYOUT dela. Os textos seguem a estrutura
     da referência, mas só com o que está no nosso produto; o HTML que o Claude escreve passa pela limpeza."""
@@ -341,6 +386,11 @@ class ArteComReferencia(_BaseAgente):
         self.assertEqual(it["situacao"], "pronta", it["mensagem"])
         self.assertEqual(falso.chamadas, ["textos_ref", "html", "arte"])
         self.assertIn("Rosca | M16x1,5", falso.ultimo_html_pedido)      # o texto aprovado vai para o Claude
+        # Caso real 04/11: referência azul-escuro virou arte cinza (a regra "fundo claro atrás" brigava com as cores
+        # da referência). Agora: cores da referência em tudo, a foto de fundo branco num cartão claro.
+        self.assertIn("MESMAS cores", falso.ultimo_html_pedido)
+        self.assertIn("cartão", falso.ultimo_html_pedido)
+        self.assertNotIn("fundo claro atrás", falso.ultimo_html_pedido)
         self.assertEqual(self.resultado(id_).size, (1200, 1200))
 
     def test_arte_com_problema_e_refeita_uma_vez(self):
