@@ -4,22 +4,24 @@ Programa que roda **no PC do dono** e faz o trabalho pesado do Estúdio de Image
 busca a fila a cada 10 s, amplia fotos pequenas com o Real-ESRGAN, monta a foto principal ou a arte e
 manda o Claude conferir. O servidor do Noromak só guarda os arquivos e a fila.
 
-## Instalar (uma vez)
+## Instalar em outro PC (uma vez)
 
-1. Python 3.12 com o Pillow e o SDK da Anthropic:
-   ```
-   pip install pillow anthropic
-   ```
-2. Real-ESRGAN: já está em `%USERPROFILE%\.claude\skills\imagem-anuncio\ferramentas\realesrgan`
-   (o mesmo da skill `/melhorar`). Outro lugar: `REALESRGAN_DIR` no config.env.
-3. Chrome ou Edge instalado (monta as artes).
-4. Copie `config.env.exemplo` para `config.env` e preencha:
-   - `ANTHROPIC_API_KEY`: chave criada em console.anthropic.com (cole você mesmo, nunca pelo chat).
-     Deixe um **limite de gasto mensal** no Console.
+1. Extraia o `Instalador_Agente_Imagens_Noromak.zip` numa pasta fixa, por exemplo `C:\AgenteImagensNoromak`
+   (não deixe em Downloads: o atalho de início aponta para essa pasta).
+2. Dê dois cliques em **`instalar.bat`**. Ele instala o Python (se faltar, pelo winget) e as bibliotecas, abre o
+   `config.env` para você colar:
+   - `ANTHROPIC_API_KEY`: chave da API (console.anthropic.com → API Keys; de preferência **uma chave por PC**);
    - `NOROMAK_AGENTE_TOKEN`: logado como perfil Admin, abra
-     `https://noromakweb.com.br/expedicao/api/imagens/agente/config` e copie o `token`.
-   O `config.env` não vai para o Git.
-5. Para subir com o Windows: atalho do `iniciar_agente.bat` em `shell:startup` (Win+R).
+     `https://noromakweb.com.br/expedicao/api/imagens/agente/config` e copie o `token`;
+   pergunta se liga o agente junto com o Windows e roda o diagnóstico.
+3. Tudo `[OK]` no diagnóstico? Dê dois cliques em `iniciar_agente.bat` (fica minimizado).
+
+**Atenção:** enquanto o portão de login do NoromakWeb no nginx não liberar `/expedicao/api/imagens/agente/`
+(`PEDIDO_NGINX_AGENTE_IMAGENS.md`), o diagnóstico mostra "O portão de login do NoromakWeb barrou o agente" e só o
+PC do dono funciona (pelo túnel SSH, `NOROMAK_TUNEL=expedicao`). Deixe **um agente ligado por vez** na empresa.
+
+Diagnóstico a qualquer hora: `python agente_imagens.py --testar` (não processa foto nem gasta crédito).
+Gerar o pacote de novo (no PC do dono): `python empacotar.py`.
 
 ## Usar
 

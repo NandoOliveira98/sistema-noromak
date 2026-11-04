@@ -44,8 +44,11 @@ LOG = PASTA / "agente.log"
 
 
 def ler_config(caminho: Path = PASTA / "config.env") -> dict[str, str]:
-    cfg = {"NOROMAK_URL": "https://noromakweb.com.br/expedicao",
-           "REALESRGAN_DIR": str(Path.home() / ".claude/skills/imagem-anuncio/ferramentas/realesrgan")}
+    # Instalado em outro PC (instalar.bat): o Real-ESRGAN vem na própria pasta; no PC do dono, na pasta da skill.
+    esrgan = PASTA / "realesrgan"
+    if not (esrgan / "realesrgan-ncnn-vulkan.exe").is_file():
+        esrgan = Path.home() / ".claude/skills/imagem-anuncio/ferramentas/realesrgan"
+    cfg = {"NOROMAK_URL": "https://noromakweb.com.br/expedicao", "REALESRGAN_DIR": str(esrgan)}
     if caminho.is_file():
         for linha in caminho.read_text(encoding="utf-8").splitlines():
             linha = linha.strip()
@@ -85,6 +88,9 @@ class Noromak:
         try:
             with self._abrir(req, timeout=120) as r:
                 texto = r.read()
+                # O portão de login do NoromakWeb (nginx) manda para /login: não é a Expedição respondendo.
+                if "/login" in (r.geturl() or "") and "/expedicao/api/" not in (r.geturl() or ""):
+                    raise NoromakErro(302, PORTAO_LOGIN)
                 return texto if bruto else json.loads(texto or b"{}")
         except urllib.error.HTTPError as e:
             try:
@@ -107,6 +113,10 @@ class Noromak:
 
     def resultado(self, corpo: dict) -> None:
         self._pedir("POST", "/api/imagens/agente/resultado", corpo)
+
+
+PORTAO_LOGIN = ("O portão de login do NoromakWeb barrou o agente. Peça para liberar /expedicao/api/imagens/agente/ no "
+                "nginx (PEDIDO_NGINX_AGENTE_IMAGENS.md) ou, no PC do dono, use NOROMAK_TUNEL=expedicao.")
 
 
 class NoromakErro(Exception):
@@ -374,11 +384,69 @@ class Tunel:
         self.proc = None
 
 
+def testar_instalacao(cfg: dict[str, str]) -> bool:
+    """Confere tudo o que o agente precisa, sem processar foto e sem gastar crédito. Uma linha por item."""
+    ok = True
+
+    def linha(bom: bool, texto: str) -> None:
+        nonlocal ok
+        ok = ok and bom
+        print(("  [OK]    " if bom else "  [FALTA] ") + texto, flush=True)
+
+    print("Agente de imagens do Noromak — conferindo a instalação deste PC")
+    try:
+        import anthropic  # noqa: F401
+        linha(True, "Bibliotecas do Python (Pillow e anthropic)")
+    except ImportError:
+        linha(False, "Biblioteca anthropic: rode o instalar.bat de novo")
+    esrgan = Path(cfg["REALESRGAN_DIR"]) / "realesrgan-ncnn-vulkan.exe"
+    linha(esrgan.is_file(), f"Real-ESRGAN ({esrgan.parent})" if esrgan.is_file()
+          else "Real-ESRGAN não encontrado: as fotos pequenas serão ampliadas sem IA")
+    nav = P.achar_navegador()
+    linha(bool(nav), f"Chrome/Edge ({nav})" if nav else "Chrome ou Edge não encontrado (precisa para montar as artes)")
+    chave = cfg.get("ANTHROPIC_API_KEY", "")
+    linha(chave.startswith("sk-ant-"), "Chave da API do Claude no config.env" if chave.startswith("sk-ant-")
+          else "Chave da API do Claude: cole em ANTHROPIC_API_KEY no config.env")
+    if chave.startswith("sk-ant-"):
+        try:
+            import anthropic
+            anthropic.Anthropic(api_key=chave, max_retries=1).models.retrieve("claude-haiku-5-5")
+            linha(True, "Chave da API aceita pela Anthropic (sem gasto)")
+        except Exception as e:
+            linha(False, f"Chave da API recusada: {_mensagem_erro(e)}")
+    token = cfg.get("NOROMAK_AGENTE_TOKEN", "")
+    linha(bool(token), "Token do agente no config.env" if token else "Token do agente: cole em NOROMAK_AGENTE_TOKEN no config.env")
+    if token:
+        tunel = Tunel(cfg["NOROMAK_TUNEL"]) if cfg.get("NOROMAK_TUNEL") else None
+        try:
+            if tunel:
+                tunel.garantir()
+            Noromak(tunel.url if tunel else cfg["NOROMAK_URL"], token).ping()
+            linha(True, "Conexão com o Noromak" + (" (pelo túnel)" if tunel else ""))
+        except NoromakErro as e:
+            linha(False, "Token do agente recusado pelo Noromak (confira o token)" if e.status == 401 else str(e))
+        except Exception as e:
+            linha(False, f"Sem conexão com o Noromak: {e}")
+        finally:
+            if tunel:
+                tunel.fechar()
+    print("Tudo certo: o agente pode ser ligado." if ok else "Corrija o que está marcado como FALTA e rode de novo.")
+    return ok
+
+
 def main() -> None:
+    for fluxo in (sys.stdout, sys.stderr):   # console do Windows sem UTF-8 não pode derrubar o agente por um acento
+        try:
+            fluxo.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     p = argparse.ArgumentParser(description="Agente de imagens do Noromak")
     p.add_argument("--uma-vez", action="store_true", help="processa o que houver na fila e sai")
+    p.add_argument("--testar", action="store_true", help="confere a instalação (sem processar nenhuma foto) e sai")
     a = p.parse_args()
     cfg = ler_config()
+    if a.testar:
+        sys.exit(0 if testar_instalacao(cfg) else 1)
     faltam = [k for k in ("ANTHROPIC_API_KEY", "NOROMAK_AGENTE_TOKEN") if not cfg.get(k)]
     if faltam:
         sys.exit(f"Falta no config.env: {', '.join(faltam)} (veja config.env.exemplo).")
