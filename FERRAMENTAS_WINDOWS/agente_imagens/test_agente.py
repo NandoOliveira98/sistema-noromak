@@ -426,6 +426,144 @@ class PesquisaNaInternet(_BaseAgente):
         self.assertEqual(falso.chamadas, ["textos"])
 
 
+class RobustezDaRede(_BaseAgente):
+    """Revisão antes de subir (04/11): queda do túnel/rede no meio do trabalho perdia o resultado (a entrega e o "erro"
+    falhavam calados) e o trabalho era refeito até 3 vezes, gastando crédito. Agora a entrega é tentada de novo e, se a
+    rede não voltar, o trabalho NÃO vira "erro": a reserva vence e ele volta à fila."""
+
+    def setUp(self):
+        super().setUp()
+        self._esperas = A.ESPERAS_REENTREGA
+        A.ESPERAS_REENTREGA = [0, 0, 0]
+        self.addCleanup(setattr, A, "ESPERAS_REENTREGA", self._esperas)
+
+    def _noromak_que_cai(self, quedas: int):
+        import urllib.error
+        real = self.noromak
+        estado = {"quedas": quedas}
+
+        class Instavel(A.Noromak):
+            def resultado(self, corpo):
+                if estado["quedas"]:
+                    estado["quedas"] -= 1
+                    raise urllib.error.URLError("conexão recusada (túnel caiu)")
+                return real.resultado(corpo)
+        return Instavel(real.url, real.token)
+
+    def test_queda_passageira_reentrega_sem_refazer(self):
+        id_ = self.enviar()
+        falso = ClaudeFalso()
+        ag = A.Agente(self._noromak_que_cai(2), lambda m: ClaudeImagens(falso, m), "nao-existe")
+        ag.uma_volta()
+        self.assertEqual(self.item(id_)["situacao"], "pronta")
+        self.assertEqual(falso.chamadas, ["foto"])                 # o Claude não foi chamado de novo
+
+    def test_rede_que_nao_volta_nao_vira_erro(self):
+        id_ = self.enviar()
+        ag = A.Agente(self._noromak_que_cai(99), lambda m: ClaudeImagens(ClaudeFalso(), m), "nao-existe")
+        ag.uma_volta()
+        self.assertEqual(self.item(id_)["situacao"], "processando")  # a reserva vence e volta à fila
+
+    def test_portao_de_login_nao_e_seguido(self):
+        import http.server
+        import threading
+        visitas = []
+
+        class Portao(http.server.BaseHTTPRequestHandler):
+            def _responder(self):
+                visitas.append((self.path, self.headers.get("Authorization")))
+                if self.path.startswith("/login"):
+                    self.send_response(200)
+                    self.end_headers()
+                    self.wfile.write(b"<html>login</html>")
+                    return
+                self.send_response(302)
+                self.send_header("Location", "/login?next=/expedicao/")
+                self.end_headers()
+            do_GET = do_POST = _responder
+
+            def log_message(self, *a):
+                pass
+        srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Portao)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        try:
+            n = A.Noromak(f"http://127.0.0.1:{srv.server_address[1]}/expedicao", "token-secreto")
+            with self.assertRaises(A.NoromakErro) as c:
+                n.ping()
+        finally:
+            srv.shutdown()
+        self.assertIn("portão de login", str(c.exception))
+        self.assertFalse(any(p.startswith("/login") for p, _ in visitas))   # o token não vai para a tela de login
+
+    def test_pesquisa_reaproveitada_entre_referencias(self):
+        # Várias referências (V20.19) = vários trabalhos com o mesmo nome/link: a pesquisa é feita uma vez só.
+        for _ in range(2):
+            self.cliente.pedir("POST", "/api/imagens/enviar", {
+                "tipo": "beneficios", "fotos": [{"dados": base64.b64encode(frasco()).decode()}],
+                "produto_nome": "Câmara de freio 43-272"})
+        falso = ClaudeFalso()
+        ag = self.agente(falso)
+        ag.uma_volta()
+        ag.uma_volta()
+        self.assertEqual(falso.chamadas.count("pesquisa"), 1)
+        self.assertEqual(falso.chamadas.count("textos"), 2)
+
+
+class TunelEInstancia(unittest.TestCase):
+
+    def test_porta_ja_aberta_e_reaproveitada_sem_novo_ssh(self):
+        import socket
+        ouvinte = socket.socket()
+        ouvinte.bind(("127.0.0.1", 0))
+        ouvinte.listen(16)   # as checagens conectam e ninguem aceita: fila folgada
+        t = A.Tunel("expedicao", porta_local=ouvinte.getsockname()[1])
+        original = A.subprocess.Popen
+        A.subprocess.Popen = lambda *a, **k: (_ for _ in ()).throw(AssertionError("não devia abrir outro ssh"))
+        try:
+            t.garantir()
+            t.garantir()
+        finally:
+            A.subprocess.Popen = original
+            ouvinte.close()
+
+    def test_ssh_que_falha_espera_mais_a_cada_vez(self):
+        import socket
+        with socket.socket() as s:
+            s.bind(("127.0.0.1", 0))
+            porta = s.getsockname()[1]                    # porta livre: nada ouvindo
+        chamadas = []
+
+        class SshQueSai:
+            def __init__(self, cmd, **k):
+                chamadas.append(k)
+                self.returncode = 255
+
+            def poll(self):
+                return 255
+        t = A.Tunel("expedicao", porta_local=porta)
+        original = A.subprocess.Popen
+        A.subprocess.Popen = SshQueSai
+        try:
+            with self.assertRaises(OSError):
+                t.garantir()
+            with self.assertRaises(OSError):
+                t.garantir()                              # dentro da espera: nem tenta (sem login repetido na VPS)
+        finally:
+            A.subprocess.Popen = original
+        self.assertEqual(len(chamadas), 1)
+        self.assertNotEqual(chamadas[0].get("stderr"), A.subprocess.PIPE)   # erro do ssh vai para arquivo, não pipe
+        self.assertNotIn("creationflags", {k for k, v in chamadas[0].items() if v})  # morre junto com o console
+
+    def test_uma_instancia_por_pc(self):
+        import tempfile
+        caminho = Path(tempfile.mkdtemp()) / "agente.lock"
+        primeira = A.trava_instancia(caminho)
+        self.assertIsNotNone(primeira)
+        self.assertIsNone(A.trava_instancia(caminho))
+        primeira.close()
+        self.assertIsNotNone(A.trava_instancia(caminho))
+
+
 class LimpezaDoHtml(unittest.TestCase):
     def test_tira_script_evento_e_endereco_de_fora(self):
         import artes

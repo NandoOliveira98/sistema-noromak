@@ -16,7 +16,7 @@ ARQUIVOS = ["agente_imagens.py", "artes.py", "processar.py", "claude_imagens.py"
             "config.env.exemplo", "instalar.bat", "iniciar_agente.bat"]
 ESRGAN_ARQUIVOS = ["realesrgan-ncnn-vulkan.exe", "vcomp140.dll", "vcomp140d.dll",
                    "models/realesrgan-x4plus.bin", "models/realesrgan-x4plus.param"]
-PROIBIDOS = ("config.env", "agente.log")
+PROIBIDOS = ("config.env", "agente.log", "tunel.log", "agente.lock")
 
 
 def achar_esrgan() -> Path:

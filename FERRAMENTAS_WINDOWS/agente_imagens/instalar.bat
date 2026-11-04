@@ -7,6 +7,22 @@ echo.
 echo ===== Agente de imagens do Noromak - instalacao =====
 echo.
 
+rem 0. Revisao 04/11: instala numa pasta so deste usuario do Windows (a chave da API fica la, fora de Downloads e
+rem    de pastas compartilhadas). Rodado de outro lugar, copia tudo para la e continua de la.
+set "DESTINO=%LOCALAPPDATA%\AgenteImagensNoromak"
+if /i not "%~dp0"=="%DESTINO%\" (
+  echo [0/5] Copiando o agente para %DESTINO% ...
+  robocopy "%~dp0." "%DESTINO%" /E /XF config.env agente.log tunel.log agente.lock /NFL /NDL /NJH /NJS /NP >nul
+  if errorlevel 8 (
+    echo Nao foi possivel copiar para %DESTINO%.
+    pause
+    exit /b 1
+  )
+  cd /d "%DESTINO%"
+  call "%DESTINO%\instalar.bat"
+  exit /b
+)
+
 rem 1. Python 3.10 ou mais novo
 set "PY="
 python -c "import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)" >nul 2>&1 && set "PY=python"
@@ -30,8 +46,9 @@ if errorlevel 1 (
   exit /b 1
 )
 
-rem 3. config.env
+rem 3. config.env (so o usuario atual do Windows le e altera: tem a chave da API)
 if not exist config.env copy config.env.exemplo config.env >nul
+icacls config.env /inheritance:r /grant:r "%USERNAME%:F" >nul 2>&1
 echo [3/5] Vai abrir o config.env no Bloco de Notas:
 echo        cole a chave da API em ANTHROPIC_API_KEY e o token em NOROMAK_AGENTE_TOKEN, salve e feche.
 notepad config.env
@@ -46,5 +63,7 @@ echo        Atalho criado.
 echo [5/5] Conferindo a instalacao...
 %PY% agente_imagens.py --testar
 echo.
-echo Para ligar agora: de dois cliques em iniciar_agente.bat. So deixe UM agente ligado por vez na empresa.
+echo Instalado em %DESTINO%. Pode apagar a pasta extraida do zip.
+echo Para ligar agora: de dois cliques em iniciar_agente.bat (nessa pasta). So deixe UM agente ligado por vez na empresa.
+start "" explorer "%DESTINO%"
 pause

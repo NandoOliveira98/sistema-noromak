@@ -12,22 +12,28 @@ tem sessão de navegador, então hoje o portão de login do NoromakWeb devolve
 
 ## O que precisa
 
-Liberar **só** este prefixo do portão de login, como já é (ou deveria ser) com o robô do Linx
-(`/expedicao/api/linx/robo/*`) e o agente da Zebra (`/expedicao/api/print/agent/*`):
+Liberar do portão de login **só estes 5 endereços exatos** (revisão de 04/11: nada de prefixo):
 
 ```
-/expedicao/api/imagens/agente/
+/expedicao/api/imagens/agente/ping
+/expedicao/api/imagens/agente/proximo
+/expedicao/api/imagens/agente/arquivo
+/expedicao/api/imagens/agente/analise
+/expedicao/api/imagens/agente/resultado
 ```
 
-A segurança continua na Expedição: toda rota desse prefixo exige
-`Authorization: Bearer <token do agente>` (token próprio, comparado com `hmac.compare_digest`;
-trocar exige o OWNER). Sem token ou com token errado, a Expedição responde 401.
+Os outros dois do mesmo caminho (`/agente/config`, que mostra o token, e `/agente/token-novo`, que troca o
+token) são do perfil Admin/OWNER e **continuam atrás do login**.
+
+A segurança continua na Expedição: os 5 exigem `Authorization: Bearer <token do agente>` (token próprio,
+comparado com `hmac.compare_digest`; trocar exige o OWNER). Sem token ou com token errado, a Expedição
+responde 401. O agente não segue redirecionamento (o token nunca vai para a tela de login).
 
 Exemplo do bloco (ajustar ao `proxy_pass`/cabeçalhos que vocês já usam para `/expedicao/`, só sem o
-`auth_request`/redirecionamento de login):
+`auth_request`/redirecionamento de login). `location ~` com a lista fechada, para não abrir mais nada:
 
 ```nginx
-location ^~ /expedicao/api/imagens/agente/ {
+location ~ ^/expedicao/api/imagens/agente/(ping|proximo|arquivo|analise|resultado)$ {
     proxy_pass http://127.0.0.1:8100;
     proxy_set_header Host $host;
     proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -49,4 +55,10 @@ Sem token, deve chegar à Expedição e voltar **401** (não 302):
 
 ```
 curl -s -o /dev/null -w "%{http_code}\n" -X POST https://noromakweb.com.br/expedicao/api/imagens/agente/ping
+```
+
+E os do Admin continuam no portão (devem voltar **302** para o login):
+
+```
+curl -s -o /dev/null -w "%{http_code}\n" https://noromakweb.com.br/expedicao/api/imagens/agente/config
 ```

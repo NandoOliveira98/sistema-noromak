@@ -6,10 +6,10 @@ manda o Claude conferir. O servidor do Noromak só guarda os arquivos e a fila.
 
 ## Instalar em outro PC (uma vez)
 
-1. Extraia o `Instalador_Agente_Imagens_Noromak.zip` numa pasta fixa, por exemplo `C:\AgenteImagensNoromak`
-   (não deixe em Downloads: o atalho de início aponta para essa pasta).
-2. Dê dois cliques em **`instalar.bat`**. Ele instala o Python (se faltar, pelo winget) e as bibliotecas, abre o
-   `config.env` para você colar:
+1. Extraia o `Instalador_Agente_Imagens_Noromak.zip` em qualquer lugar.
+2. Dê dois cliques em **`instalar.bat`**. Ele copia o agente para `%LOCALAPPDATA%\AgenteImagensNoromak` (pasta só do
+   usuário do Windows; o `config.env` fica legível só por ele), instala o Python (se faltar, pelo winget) e as
+   bibliotecas, abre o `config.env` para você colar:
    - `ANTHROPIC_API_KEY`: chave da API (console.anthropic.com → API Keys; de preferência **uma chave por PC**);
    - `NOROMAK_AGENTE_TOKEN`: logado como perfil Admin, abra
      `https://noromakweb.com.br/expedicao/api/imagens/agente/config` e copie o `token`;
@@ -19,6 +19,10 @@ manda o Claude conferir. O servidor do Noromak só guarda os arquivos e a fila.
 **Atenção:** enquanto o portão de login do NoromakWeb no nginx não liberar `/expedicao/api/imagens/agente/`
 (`PEDIDO_NGINX_AGENTE_IMAGENS.md`), o diagnóstico mostra "O portão de login do NoromakWeb barrou o agente" e só o
 PC do dono funciona (pelo túnel SSH, `NOROMAK_TUNEL=expedicao`). Deixe **um agente ligado por vez** na empresa.
+
+Um agente por PC: se já houver um ligado, o segundo avisa e fecha (`agente.lock`). Caiu a internet ou o túnel no
+meio de uma imagem? O agente tenta entregar de novo (5 s, 20 s, 60 s); sem volta, a imagem não vira "erro": a
+reserva de 10 min vence e ela volta à fila. Erros do túnel ficam em `tunel.log`.
 
 Diagnóstico a qualquer hora: `python agente_imagens.py --testar` (não processa foto nem gasta crédito).
 Gerar o pacote de novo (no PC do dono): `python empacotar.py`.

@@ -1,3 +1,8 @@
 config.env
 agente.log
+agente.lock
+tunel.log
+*.bak
+config.env.*
+!config.env.exemplo
 __pycache__/

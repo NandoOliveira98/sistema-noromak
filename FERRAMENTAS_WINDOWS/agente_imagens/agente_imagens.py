@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import http.client
 import json
 import os
 import platform
@@ -38,9 +39,31 @@ import artes  # noqa: E402
 import processar as P  # noqa: E402
 from claude_imagens import ClaudeImagens, ClaudeRecusou  # noqa: E402
 
-VERSAO = "0.1"
+VERSAO = "0.2"
 INTERVALO = 10
 LOG = PASTA / "agente.log"
+TUNEL_LOG = PASTA / "tunel.log"
+TRAVA = PASTA / "agente.lock"
+# Revisão de 04/11: queda do túnel/rede na entrega. Tenta de novo depois de cada espera (s); não voltou = o trabalho
+# NÃO vira "erro" (a reserva de 10 min vence e ele volta à fila), para não perder o resultado já pago à toa.
+ESPERAS_REENTREGA = [5, 20, 60]
+PESQUISA_VALIDADE = 6 * 3600   # várias referências (V20.19) = vários trabalhos do mesmo produto: pesquisa uma vez só
+
+
+def erro_de_rede(e: BaseException) -> bool:
+    """Falha de conexão (túnel caiu, internet fora), não recusa do Noromak nem erro do trabalho."""
+    return isinstance(e, (urllib.error.URLError, ConnectionError, TimeoutError, http.client.HTTPException)) \
+        and not isinstance(e, urllib.error.HTTPError)
+
+
+class _SemRedirecionar(urllib.request.HTTPRedirectHandler):
+    """O portão de login do nginx responde 302 para /login: seguir mandaria o token do agente para a tela de login."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_ABRIR_SEM_REDIRECIONAR = urllib.request.build_opener(_SemRedirecionar).open
 
 
 def ler_config(caminho: Path = PASTA / "config.env") -> dict[str, str]:
@@ -77,7 +100,7 @@ class Noromak:
     def __init__(self, url: str, token: str, abrir: Callable | None = None):
         self.url = url.rstrip("/")
         self.token = token
-        self._abrir = abrir or urllib.request.urlopen
+        self._abrir = abrir or _ABRIR_SEM_REDIRECIONAR
 
     def _pedir(self, metodo: str, rota: str, corpo: dict | None = None, bruto: bool = False):
         dados = None if corpo is None else json.dumps(corpo).encode("utf-8")
@@ -93,6 +116,9 @@ class Noromak:
                     raise NoromakErro(302, PORTAO_LOGIN)
                 return texto if bruto else json.loads(texto or b"{}")
         except urllib.error.HTTPError as e:
+            if 300 <= e.code < 400:
+                destino = e.headers.get("Location", "") if e.headers else ""
+                raise NoromakErro(302, PORTAO_LOGIN if "/login" in destino else f"Redirecionado para {destino}") from None
             try:
                 msg = json.loads(e.read() or b"{}").get("error") or ""
             except Exception:
@@ -136,6 +162,8 @@ class Agente:
         self.noromak = noromak
         self.criar_claude = criar_claude
         self.pasta_esrgan = pasta_esrgan
+        self.ao_reconectar: Callable[[], None] | None = None   # reabre o túnel antes de tentar entregar de novo
+        self._pesquisas: dict[tuple[str, str], tuple[float, dict]] = {}
 
     def uma_volta(self) -> bool:
         """Processa um trabalho, se houver. Devolve True se processou."""
@@ -146,16 +174,33 @@ class Agente:
         inicio = time.time()
         etapa = trabalho.get("etapa")
         try:
+            situacao = self._processar(trabalho, claude, etapa)
+        except NoromakErro as e:
+            situacao = f"não entregue ({e.status}: {e})"
+        except Exception as e:
+            if not erro_de_rede(e):
+                raise
+            # Sem conexão: não vira "erro" (o "erro" também não chegaria). A reserva vence e o trabalho volta à fila.
+            situacao = f"sem conexão com o Noromak, volta à fila quando a reserva vencer ({e})"
+        u = claude.uso
+        registrar(f"#{trabalho['id']} {trabalho.get('tipo')}/{etapa} sku={trabalho.get('sku') or '-'} -> {situacao} | "
+                  f"{u.modelo} {u.entrada}+{u.saida} tokens ~US$ {u.custo():.4f} | {time.time() - inicio:.0f}s")
+        return True
+
+    def _processar(self, trabalho: dict, claude: ClaudeImagens, etapa: str | None) -> str:
+        try:
             if etapa == "analise":
                 corpo = self.etapa_analise(trabalho, claude)
                 self._entregar(self.noromak.analise, corpo, claude)
             else:
                 corpo = self.etapa_arte(trabalho, claude) if etapa == "arte" else self.etapa_principal(trabalho, claude)
                 self._entregar(self.noromak.resultado, corpo, claude)
-            situacao = corpo["situacao"]
-        except NoromakErro as e:
-            situacao = f"não entregue ({e.status}: {e})"
+            return corpo["situacao"]
+        except NoromakErro:
+            raise
         except Exception as e:  # o trabalho não pode ficar preso: volta como erro com o motivo
+            if erro_de_rede(e):
+                raise
             traceback.print_exc()
             msg = _mensagem_erro(e)
             entregar = self.noromak.analise if etapa == "analise" else self.noromak.resultado
@@ -163,17 +208,34 @@ class Agente:
                 self._entregar(entregar, {"id": trabalho["id"], "situacao": "erro", "mensagem": msg}, claude)
             except Exception:
                 pass
-            situacao = "erro: " + msg
-        u = claude.uso
-        registrar(f"#{trabalho['id']} {trabalho.get('tipo')}/{etapa} sku={trabalho.get('sku') or '-'} -> {situacao} | "
-                  f"{u.modelo} {u.entrada}+{u.saida} tokens ~US$ {u.custo():.4f} | {time.time() - inicio:.0f}s")
-        return True
+            return "erro: " + msg
 
-    @staticmethod
-    def _entregar(funcao: Callable, corpo: dict, claude: ClaudeImagens) -> None:
+    def _entregar(self, funcao: Callable, corpo: dict, claude: ClaudeImagens) -> None:
         corpo.update({"modelo": claude.modelo, "tokens_entrada": claude.uso.entrada, "tokens_saida": claude.uso.saida,
                       "buscas_web": claude.uso.buscas})
-        funcao(corpo)
+        for espera in [*ESPERAS_REENTREGA, None]:
+            try:
+                funcao(corpo)
+                return
+            except Exception as e:
+                if espera is None or not erro_de_rede(e):
+                    raise
+                registrar(f"#{corpo.get('id')} entrega falhou ({e}); tentando de novo em {espera} s.")
+                time.sleep(espera)
+                if self.ao_reconectar:
+                    try:
+                        self.ao_reconectar()
+                    except Exception:
+                        pass
+
+    def _pesquisar(self, claude: ClaudeImagens, nome: str, link: str) -> dict:
+        chave = (nome.strip().lower(), link.strip())
+        guardada = self._pesquisas.get(chave)
+        if guardada and time.time() - guardada[0] < PESQUISA_VALIDADE:
+            return guardada[1]
+        pesquisa = claude.pesquisar(nome, link)
+        self._pesquisas[chave] = (time.time(), pesquisa)
+        return pesquisa
 
     def _originais(self, trabalho: dict) -> list[tuple[dict, Any]]:
         """Fotos do produto (a imagem de referência fica de fora: ela é de OUTRO anúncio)."""
@@ -267,7 +329,7 @@ class Agente:
         pesquisa, relatorio = None, {}
         if produto.get("nome") or produto.get("link"):
             try:
-                pesquisa = claude.pesquisar(str(produto.get("nome") or ""), str(produto.get("link") or ""))
+                pesquisa = self._pesquisar(claude, str(produto.get("nome") or ""), str(produto.get("link") or ""))
                 relatorio = {"pesquisa": pesquisa["texto"], "fontes": pesquisa["fontes"]}
             except Exception as e:
                 relatorio = {"aviso_pesquisa": "A pesquisa na internet falhou; os textos vieram só do rótulo. " + _mensagem_erro(e)}
@@ -343,6 +405,8 @@ class Tunel:
     def __init__(self, destino: str, porta_local: int = 18157, porta_remota: int = 8100):
         self.destino, self.porta_local, self.porta_remota = destino, porta_local, porta_remota
         self.proc: subprocess.Popen | None = None
+        self._falhas = 0
+        self._proxima = 0.0
 
     @property
     def url(self) -> str:
@@ -354,25 +418,42 @@ class Tunel:
             return s.connect_ex(("127.0.0.1", self.porta_local)) == 0
 
     def garantir(self) -> None:
-        """Abre o túnel se não estiver aberto (e reabre se o ssh caiu)."""
-        if self.proc is not None and self.proc.poll() is None and self._porta_aberta():
+        """Abre o túnel se a porta não estiver respondendo (e reabre se o ssh caiu).
+        Revisão de 04/11: porta já aberta (túnel deste agente ou de outro) = reaproveita, sem novo login na VPS; ssh que
+        falha espera mais a cada vez (15 s, 30 s... até 5 min); o ssh roda no mesmo console (fecha junto com o agente)
+        e o erro dele vai para o tunel.log, não para um pipe que ninguém lê."""
+        if self._porta_aberta():
             return
+        if time.time() < self._proxima:
+            raise OSError(f"Túnel SSH fora; nova tentativa em {self._proxima - time.time():.0f} s.")
         self.fechar()
         ssh = shutil.which("ssh") or "ssh"
-        self.proc = subprocess.Popen(
-            [ssh, "-N", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=15",
-             "-o", "ServerAliveCountMax=4", "-L", f"127.0.0.1:{self.porta_local}:127.0.0.1:{self.porta_remota}", self.destino],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        try:
+            log = open(TUNEL_LOG, "ab")
+        except OSError:
+            log = subprocess.DEVNULL
+        try:
+            self.proc = subprocess.Popen(
+                [ssh, "-N", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=15",
+                 "-o", "ServerAliveCountMax=4", "-L", f"127.0.0.1:{self.porta_local}:127.0.0.1:{self.porta_remota}",
+                 self.destino],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=log)
+        finally:
+            if log is not subprocess.DEVNULL:
+                log.close()
         for _ in range(30):
             if self._porta_aberta():
+                self._falhas = 0
                 registrar(f"Túnel SSH aberto ({self.destino} → porta {self.porta_local}).")
                 return
             if self.proc.poll() is not None:
-                erro = (self.proc.stderr.read() or b"").decode("utf-8", "replace").strip()[:300] if self.proc.stderr else ""
-                raise OSError(f"O túnel SSH não abriu: {erro or 'ssh saiu'}")
+                break
             time.sleep(0.5)
-        raise OSError("O túnel SSH não abriu em 15 s.")
+        self._falhas += 1
+        self._proxima = time.time() + min(300, 15 * 2 ** (self._falhas - 1))
+        saiu = self.proc.poll() is not None
+        self.fechar()
+        raise OSError(f"O túnel SSH não abriu ({'ssh saiu' if saiu else '15 s sem resposta'}; veja {TUNEL_LOG.name}).")
 
     def fechar(self) -> None:
         if self.proc is not None and self.proc.poll() is None:
@@ -382,6 +463,28 @@ class Tunel:
             except subprocess.TimeoutExpired:
                 self.proc.kill()
         self.proc = None
+
+
+def trava_instancia(caminho: Path = TRAVA):
+    """Um agente por PC (revisão de 04/11): dois juntos abririam dois túneis e pegariam trabalhos em dobro. Devolve o
+    arquivo travado (manter aberto enquanto roda) ou None se outro agente já está ligado. O Windows solta a trava
+    sozinho quando o processo morre."""
+    try:
+        f = open(caminho, "a+b")
+    except OSError:
+        return None
+    try:
+        if os.name == "nt":
+            import msvcrt
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        f.close()
+        return None
+    return f
 
 
 def testar_instalacao(cfg: dict[str, str]) -> bool:
@@ -450,16 +553,22 @@ def main() -> None:
     faltam = [k for k in ("ANTHROPIC_API_KEY", "NOROMAK_AGENTE_TOKEN") if not cfg.get(k)]
     if faltam:
         sys.exit(f"Falta no config.env: {', '.join(faltam)} (veja config.env.exemplo).")
+    trava = trava_instancia()
+    if trava is None:
+        sys.exit("Já tem um agente de imagens ligado neste PC. Feche o outro antes (um agente por vez).")
     tunel = Tunel(cfg["NOROMAK_TUNEL"]) if cfg.get("NOROMAK_TUNEL") else None
     url = tunel.url if tunel else cfg["NOROMAK_URL"]
     agente = Agente(Noromak(url, cfg["NOROMAK_AGENTE_TOKEN"]), criar_cliente_claude(cfg["ANTHROPIC_API_KEY"]),
                     cfg["REALESRGAN_DIR"])
     registrar(f"Agente de imagens {VERSAO} ligado ({url}{' pelo túnel ' + cfg['NOROMAK_TUNEL'] if tunel else ''}).")
+    if tunel:
+        agente.ao_reconectar = tunel.garantir
     try:
         _laco(agente, a.uma_vez, tunel)
     finally:
         if tunel:
             tunel.fechar()
+        trava.close()
 
 
 def _laco(agente: "Agente", uma_vez: bool, tunel: "Tunel | None") -> None:
