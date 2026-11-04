@@ -242,6 +242,16 @@ class Agente:
         return [(a, P.abrir(self.noromak.arquivo(trabalho["id"], a["nome"]))) for a in trabalho.get("arquivos") or []
                 if a.get("papel") not in ("referencia", "catalogo")]
 
+    @staticmethod
+    def _pedido(trabalho: dict) -> str:
+        """V20.21: "Como você quer a arte" (envio) + "Pedido ao refazer". Antes o refazer só chegava na ampliação
+        da foto e a arte o ignorava."""
+        partes = [str((trabalho.get("produto") or {}).get("pedido") or "").strip()]
+        obs = str(trabalho.get("obs") or "").strip()
+        if obs:
+            partes.append("Ao refazer, o operador pediu: " + obs)
+        return "\n".join(p for p in partes if p)
+
     def _catalogo(self, trabalho: dict) -> list:
         """V20.21: prints de catálogo / ficha técnica — só para ler os dados dos textos."""
         return [P.abrir(self.noromak.arquivo(trabalho["id"], a["nome"])) for a in trabalho.get("arquivos") or []
@@ -339,8 +349,9 @@ class Agente:
             except Exception as e:
                 relatorio = {"aviso_pesquisa": "A pesquisa na internet falhou; os textos vieram só do rótulo. " + _mensagem_erro(e)}
         catalogo = self._catalogo(trabalho)
-        dados = (claude.propor_textos_referencia(trabalho["tipo"], imagens, referencia, pesquisa, catalogo)
-                 if referencia is not None else claude.propor_textos(trabalho["tipo"], imagens, pesquisa, catalogo))
+        pedido = self._pedido(trabalho)
+        dados = (claude.propor_textos_referencia(trabalho["tipo"], imagens, referencia, pesquisa, catalogo, pedido)
+                 if referencia is not None else claude.propor_textos(trabalho["tipo"], imagens, pesquisa, catalogo, pedido))
         if not dados.get("serve", True):
             return {"id": trabalho["id"], "situacao": "outra_foto",
                     "mensagem": dados.get("motivo") or "Não dá para ler o rótulo: mande uma foto mais nítida."}
@@ -362,7 +373,8 @@ class Agente:
             # corrige uma vez com a lista de problemas.
             problemas_antes: list[str] = []
             for _ in range(2):
-                html = artes.limpar_html(claude.gerar_html(referencia, P.abrir(produto), campos, sombra, problemas_antes))
+                html = artes.limpar_html(claude.gerar_html(referencia, P.abrir(produto), campos, sombra, problemas_antes,
+                                                           self._pedido(trabalho)))
                 arte = P.renderizar(html, {"produto.png": produto})
                 revisao = claude.conferir_arte(arte, campos)
                 problemas_antes = [str(p) for p in revisao.get("problemas") or []]

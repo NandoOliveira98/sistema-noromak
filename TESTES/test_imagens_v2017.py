@@ -404,7 +404,7 @@ class EstudioImagens(TesteNoromak):
         self.assertEqual(st, 200, r)
         id_ = r["ids"][0]
         self.assertEqual(self.item(id_)["produto"], {"nome": "Câmara de freio 43-272",
-                                                      "link": "https://fornecedor.com.br/produto/43-272"})
+                                                      "link": "https://fornecedor.com.br/produto/43-272", "pedido": ""})
         t = self.agente("GET", "/api/imagens/agente/proximo")[1]["trabalho"]
         self.assertEqual(t["produto"]["link"], "https://fornecedor.com.br/produto/43-272")
         # Textos com a fonte da internet sobrevivem à aprovação.
@@ -467,6 +467,25 @@ class EstudioImagens(TesteNoromak):
             S.imagens_enviar("admin_teste", {"tipo": "beneficios", "fotos": [{"dados": b64(foto)}],
                                              "catalogo": [{"dados": b64(foto)}] * 2})
         self.assertIn("25 MB", str(erro.exception))
+
+    # ---------- pedido do operador (V20.21, dono 04/11: "um campo para colocar como queremos") ----------
+
+    def test_pedido_vai_para_o_agente(self):
+        corpo = {"tipo": "beneficios", "fotos": [{"dados": b64(PNG)}],
+                 "pedido": "  Fundo escuro,   destaque a aplicação em caminhões " + "x" * 600}
+        st, r = self.cliente.pedir("POST", "/api/imagens/enviar", corpo)
+        self.assertEqual(st, 200, r)
+        pedido = self.item(r["ids"][0])["produto"]["pedido"]
+        self.assertTrue(pedido.startswith("Fundo escuro, destaque a aplicação em caminhões"))
+        self.assertEqual(len(pedido), 500)
+        t = self.agente("GET", "/api/imagens/agente/proximo")[1]["trabalho"]
+        self.assertEqual(t["produto"]["pedido"], pedido)
+
+    def test_pedido_so_nas_artes(self):
+        st, _ = self.cliente.pedir("POST", "/api/imagens/enviar",
+                                   {"tipo": "principal", "fotos": [{"dados": b64(PNG)}], "pedido": "fundo azul"})
+        self.assertEqual(st, 400)
+        self.assertEqual(self.lista()["itens"], [])
 
     # ---------- memória da VPS (revisão antes de subir, 04/11) ----------
 

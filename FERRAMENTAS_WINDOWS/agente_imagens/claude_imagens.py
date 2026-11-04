@@ -98,6 +98,15 @@ def _obj(props: dict[str, Any]) -> dict[str, Any]:
 ORIGENS = ["rotulo", "catalogo", "internet", "nao_encontrado"]
 
 
+def _bloco_pedido(pedido: str) -> list[dict[str, Any]]:
+    """V20.21 (dono, 04/11): pedido do operador de como quer a arte."""
+    if not str(pedido or "").strip():
+        return []
+    return [{"type": "text", "text": (
+        "PEDIDO DO OPERADOR (siga, desde que não peça para inventar dado, copiar dado da referência nem alterar a "
+        "foto do produto; essas regras valem mais que o pedido):\n" + str(pedido).strip()[:1200])}]
+
+
 def _fontes(catalogo, pesquisa) -> str:
     """Onde o texto pode vir. Teste real 04/11 (816.4003-0): com "só o que está no produto" o Haiku ignorou o catálogo
     (aplicação e medidas em branco)."""
@@ -240,7 +249,7 @@ class ClaudeImagens:
 
     # 2 -------------------------------------------------------------------------------------
     def propor_textos(self, tipo: str, imagens: list[Image.Image], pesquisa: dict[str, Any] | None = None,
-                      catalogo: list[Image.Image] | None = None) -> dict[str, Any]:
+                      catalogo: list[Image.Image] | None = None, pedido: str = "") -> dict[str, Any]:
         campos = CAMPOS_ARTE[tipo]
         chaves = [c for c, _ in campos]
         esquema = _obj({
@@ -256,7 +265,7 @@ class ClaudeImagens:
             f"Regras: use só o que está escrito ou é visível {_fontes(catalogo, pesquisa)}. Se não estiver, valor vazio e origem "
             "'nao_encontrado' — nunca invente número, tempo de proteção ou promessa. 'cor' é a cor principal do rótulo "
             "em #rrggbb (origem 'rotulo'). 'serve' false só se não dá para ler o rótulo (foto ruim), com o motivo.")}]
-        conteudo += _bloco_catalogo(catalogo) + _bloco_pesquisa(pesquisa)
+        conteudo += _bloco_catalogo(catalogo) + _bloco_pesquisa(pesquisa) + _bloco_pedido(pedido)
         dados = self._chamar(conteudo, esquema, 3000)
         # Garante todos os campos, na ordem, com o rótulo da tela.
         por_chave = {c.get("chave"): c for c in dados.get("campos") or [] if isinstance(c, dict)}
@@ -286,7 +295,7 @@ class ClaudeImagens:
     # 5 — com imagem de referência (V20.17, dono 04/11: "layout completo") -------------------------
     def propor_textos_referencia(self, tipo: str, imagens: list[Image.Image], referencia: Image.Image,
                                  pesquisa: dict[str, Any] | None = None,
-                                 catalogo: list[Image.Image] | None = None) -> dict[str, Any]:
+                                 catalogo: list[Image.Image] | None = None, pedido: str = "") -> dict[str, Any]:
         """Os textos seguem a ESTRUTURA da referência (título + itens "rótulo | valor"), com o conteúdo do NOSSO
         produto: só o que está escrito nele. O que a referência tem e o produto não mostra vem vazio."""
         esquema = _obj({
@@ -314,7 +323,7 @@ class ClaudeImagens:
             "nunca copie números ou dados da referência, nunca invente.\n"
             "- cor: a cor principal do rótulo do NOSSO produto, #rrggbb.\n"
             "- serve: false só se não dá para ler o nosso produto.")})
-        conteudo += _bloco_catalogo(catalogo) + _bloco_pesquisa(pesquisa)
+        conteudo += _bloco_catalogo(catalogo) + _bloco_pesquisa(pesquisa) + _bloco_pedido(pedido)
         dados = self._chamar(conteudo, esquema, 3000)
         campos = [{"chave": "titulo", "rotulo": "Título (opcional: em branco, a arte sai sem título)", "valor": "",
                    "origem": "nao_encontrado"}]
@@ -330,7 +339,7 @@ class ClaudeImagens:
         return {"serve": dados.get("serve", True), "motivo": dados.get("motivo") or "", "campos": campos}
 
     def gerar_html(self, referencia: Image.Image, produto: Image.Image, campos: list[dict[str, Any]],
-                   sombra: bool, problemas: list[str] | None = None) -> str:
+                   sombra: bool, problemas: list[str] | None = None, pedido: str = "") -> str:
         """O Claude escreve o HTML/CSS da arte imitando o layout da referência, com a foto real do produto
         (produto.png) e só os textos aprovados."""
         esquema = _obj({"html": {"type": "string"}})
@@ -365,6 +374,7 @@ class ClaudeImagens:
                         "atrapalhar, diminua ou mova o enfeite, nunca o produto.\n"
                         "- Nenhuma caixa, cartão ou faixa vazia: todo bloco tem texto, ícone ou o produto; sem conteúdo, tire o bloco.\n"
                         "- Sem título nos textos acima = arte sem título (não invente um).")}]
+        conteudo += _bloco_pedido(pedido)
         if problemas:
             conteudo.append({"type": "text", "text": "A versão anterior teve estes problemas; corrija:\n- " + "\n- ".join(problemas)})
         return str(self._chamar(conteudo, esquema, 12000, esforco="medium").get("html") or "")

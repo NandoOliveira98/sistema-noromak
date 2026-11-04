@@ -148,6 +148,9 @@ label.tit{display:block;font-size:11px;font-weight:700;text-transform:uppercase;
         <input type="file" id="catArquivo" accept="image/jpeg,image/png,image/webp" multiple hidden>
       </div>
       <div id="blocoProduto" hidden>
+        <label class="tit" for="pedido">Como você quer a arte (opcional)</label>
+        <textarea class="campo" id="pedido" rows="3" maxlength="500" placeholder="Ex.: fundo azul-escuro, destaque a aplicação em caminhões Volvo, letras grandes, sem título"></textarea>
+        <div class="dica">O agente segue o pedido no layout e nos textos, mas nunca inventa dado nem altera o produto.</div>
         <label class="tit" for="produtoNome">Nome do produto (opcional)</label>
         <input class="campo" id="produtoNome" maxlength="150" autocomplete="off" placeholder="Ex.: Câmara de freio Schulz 43-272">
         <label class="tit" for="produtoLink">Link da página do fornecedor (opcional)</label>
@@ -287,7 +290,7 @@ function desenharPrevias() {
   validarEnvio();
 }
 function tirar(i) { if (ocupado()) return; URL.revokeObjectURL(fotos[i].url); fotos.splice(i, 1); desenharPrevias(); }
-function limparEnvio() { if (ocupado()) return; fotos.forEach(f => URL.revokeObjectURL(f.url)); fotos = []; $("sku").value = ""; $("produtoNome").value = ""; $("produtoLink").value = ""; tirarRef(); tirarCat(); desenharPrevias(); }
+function limparEnvio() { if (ocupado()) return; fotos.forEach(f => URL.revokeObjectURL(f.url)); fotos = []; $("sku").value = ""; $("produtoNome").value = ""; $("produtoLink").value = ""; $("pedido").value = ""; tirarRef(); tirarCat(); desenharPrevias(); }
 
 // ---------- imagem de referência ----------
 const refCaixa = $("refCaixa");
@@ -387,7 +390,7 @@ async function enviar() {
   if (refs.length > 1 && !await nkConfirmar(`Vão sair ${refs.length} artes, uma com o layout de cada referência. Cada arte gasta o crédito da API à parte. Enviar?`)) return;
   if (enviando) return;   // outro clique entrou enquanto a confirmação estava aberta
   enviando = true;
-  const campos = ["tipo", "sku", "produtoNome", "produtoLink"].map(id => $(id));
+  const campos = ["tipo", "sku", "produtoNome", "produtoLink", "pedido"].map(id => $(id));
   campos.forEach(c => c.disabled = true);
   const btn = $("btnEnviar"); btn.disabled = true; btn.textContent = "Enviando…";
   let enviados = 0, terminou = false;
@@ -395,7 +398,7 @@ async function enviar() {
     const lista = [];
     for (const f of fotos) lista.push({nome: f.arquivo.name, dados: await lerBase64(f.arquivo)});
     const base = {tipo: $("tipo").value, sku: $("sku").value.trim(), fotos: lista};
-    if (arte) { base.produto_nome = $("produtoNome").value.trim(); base.produto_link = link; }
+    if (arte) { base.produto_nome = $("produtoNome").value.trim(); base.produto_link = link; base.pedido = $("pedido").value.trim(); }
     if (cats.length) {
       base.catalogo = [];
       for (const c of cats) base.catalogo.push({nome: c.arquivo.name, dados: await lerBase64(c.arquivo)});
@@ -546,6 +549,7 @@ function abrir(id, silencioso) {
   const prod = i.produto || {};
   if (prod.nome || prod.link) html += `<div class="secao"><h3>Produto informado</h3><div class="mini">${esc(prod.nome || "")}` +
     (prod.link && /^https?:\/\//i.test(prod.link) ? `${prod.nome ? " · " : ""}<a href="${esc(prod.link)}" target="_blank" rel="noopener noreferrer">${esc(prod.link)}</a>` : "") + `</div></div>`;
+  if (prod.pedido) html += `<div class="secao"><h3>Como você pediu</h3><div class="mini">${esc(prod.pedido)}</div></div>`;
   if (i.situacao === "textos_para_aprovar") html += blocoTextos(i);
   if (rel.pesquisa) html += `<div class="secao"><h3>Pesquisa na internet</h3><div class="pesquisa">${esc(rel.pesquisa)}</div>` +
     ((rel.fontes || []).length ? `<div class="fontes" style="margin-top:6px">${rel.fontes.filter(u => /^https?:\/\//i.test(u)).map(u => `<a href="${esc(u)}" target="_blank" rel="noopener noreferrer">${esc(u)}</a>`).join("")}</div>` : "") + `</div>`;

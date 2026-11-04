@@ -303,6 +303,46 @@ class AgenteDeImagens(_BaseAgente):
         self.assertEqual(c.exception.status, 401)
 
 
+class PedidoDoOperador(_BaseAgente):
+    """V20.21 (dono, 04/11): campo "Como você quer a arte" no envio. Vai para a proposta de textos e para o layout;
+    o "Pedido ao refazer" também (antes só chegava na ampliação da foto e a arte o ignorava)."""
+
+    def enviar_com_pedido(self, referencia=True) -> int:
+        corpo = {"tipo": "aplicacao", "fotos": [{"dados": base64.b64encode(frasco()).decode()}],
+                 "pedido": "Destaque a aplicação em caminhões Volvo"}
+        if referencia:
+            corpo["referencia"] = {"dados": base64.b64encode(frasco((400, 400), fundo=(20, 40, 90))).decode()}
+        st, r = self.cliente.pedir("POST", "/api/imagens/enviar", corpo)
+        self.assertEqual(st, 200, r)
+        return r["ids"][0]
+
+    def test_pedido_vai_nos_textos_sem_referencia(self):
+        self.enviar_com_pedido(referencia=False)
+        falso = ClaudeFalso()
+        self.agente(falso).uma_volta()
+        self.assertIn("PEDIDO DO OPERADOR", falso.ultimo_texto_pedido)
+        self.assertIn("caminhões Volvo", falso.ultimo_texto_pedido)
+
+    def test_pedido_e_refazer_vao_nos_textos_e_no_layout(self):
+        if not P.achar_navegador():
+            self.skipTest("Sem Chrome/Edge neste PC")
+        id_ = self.enviar_com_pedido()
+        falso = ClaudeFalso()
+        self.agente(falso).uma_volta()
+        self.assertIn("caminhões Volvo", falso.ultimo_texto_pedido)
+        it = self.item(id_)
+        self.cliente.pedir("POST", "/api/imagens/textos", {"id": id_, "versao": it["versao"], "campos": it["textos"]["campos"]})
+        self.agente(falso).uma_volta()
+        self.assertIn("caminhões Volvo", falso.ultimo_html_pedido)
+        it = self.item(id_)
+        st, r = self.cliente.pedir("POST", "/api/imagens/refazer", {"id": id_, "versao": it["versao"],
+                                                                    "obs": "Letras maiores nos itens"})
+        self.assertEqual(st, 200, r)
+        self.agente(falso).uma_volta()
+        self.assertIn("Letras maiores nos itens", falso.ultimo_html_pedido)   # antes o refazer não chegava na arte
+        self.assertIn("caminhões Volvo", falso.ultimo_html_pedido)
+
+
 class ProdutoSemFundo(unittest.TestCase):
     """Dono, 04/11 (teste 816.4003-0): "a foto do produto tem que ser sem fundo, está contrastando os dois fundos".
     Foto em fundo branco liso: o fundo sai (inclusive o furo do rolamento); se o recorte comer o produto (produto

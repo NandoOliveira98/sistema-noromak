@@ -35896,7 +35896,11 @@ def imagens_enviar(usuario: str, req: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("Link do fornecedor inválido: cole o endereço completo, começando com https://")
     if (produto_nome or produto_link) and tipo not in IMAGEM_ARTES:
         raise ValueError("Nome e link do produto valem só para as artes (benefícios, modo de uso, aplicação).")
-    produto_json = json.dumps({"nome": produto_nome, "link": produto_link}, ensure_ascii=False)
+    # V20.21 (dono, 04/11): "um campo para colocar um pedido de como queremos" — vai para o agente (textos e layout).
+    pedido = re.sub(r"\s+", " ", str(req.get("pedido") or "")).strip()[:500]
+    if pedido and tipo not in IMAGEM_ARTES:
+        raise ValueError("O pedido de como quer a arte vale só para as artes (benefícios, modo de uso, aplicação).")
+    produto_json = json.dumps({"nome": produto_nome, "link": produto_link, "pedido": pedido}, ensure_ascii=False)
     if tipo == "principal":
         grupos = [[d] for d in decodificadas]
     else:
