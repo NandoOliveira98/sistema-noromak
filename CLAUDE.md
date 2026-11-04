@@ -733,7 +733,10 @@ da referência) e escreve o HTML imitando o layout (`gerar_html`, esforço mediu
 problema, é refeito uma vez com a lista de problemas. **V20.19 — várias referências** (dono, 05/11: "uma arte por
 referência"): a tela aceita até `MAX_REFERENCIAS` (10) e faz **um envio por referência**, com as mesmas fotos, nome e link;
 o servidor e o agente não mudaram (uma referência por trabalho). Com mais de uma, confirma antes (cada arte gasta crédito);
-a referência já enviada sai da lista na hora, e erro no meio deixa só as que faltam (tentar de novo não duplica). **Nome do produto / link do fornecedor** (só nas artes,
+a referência já enviada sai da lista na hora, e erro no meio deixa só as que faltam (tentar de novo não duplica).
+**V20.20 (revisão de 04/11):** enquanto o envio anda (`enviando`), o botão Enviar fica desligado, tipo/SKU/nome/link
+travados, e ×, Limpar e acrescentar fotos ou referências respondem "Aguarde terminar o envio" (`ocupado()`). Antes,
+tirar a referência já enviada religava o botão no meio do laço e o 2º clique duplicava a arte. **Nome do produto / link do fornecedor** (só nas artes,
 `produto_json`): antes dos textos o agente pesquisa na internet (`pesquisar`: web_search + web_fetch, até 3 buscas; a
 versão `_20260209` é a documentada para o Opus, o Haiku começa pela básica e troca se a API recusar; `pause_turn`
 continua) e a ficha de fatos com URL entra na proposta: campo da internet = `origem: internet` + `fonte` (tela: "da

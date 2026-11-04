@@ -207,6 +207,13 @@ const FILTROS = [["", "Todas"], ["fila", "Na fila / processando"], ["textos_para
 let dados = null, selecionadas = new Set(), fotos = [], aberta = null, timer = null, filtroKpi = "";
 // V20.19 (dono, 05/11): várias referências; cada uma vira um envio próprio (uma arte por referência).
 let referencias = [];   // [{arquivo, url}]: imagens de referência da arte (V20.17 aceitava uma só)
+// V20.20 (revisão de 04/11): enquanto o envio anda, nada do formulário muda. Antes, tirar a referência já enviada
+// religava o botão no meio do laço (2º clique duplicava a arte) e o ×/Limpar não cancelavam o que o laço ia mandar.
+let enviando = false;
+function ocupado() {
+  if (enviando) nkToast("Aguarde terminar o envio.", "erro");
+  return enviando;
+}
 const ARTES = ["beneficios", "modo", "aplicacao"];
 
 $("tipo").innerHTML = Object.entries(TIPOS).map(([k, t]) => `<option value="${k}">${esc(t.nome)}</option>`).join("");
@@ -243,6 +250,7 @@ soltar.addEventListener("drop", e => { e.preventDefault(); soltar.classList.remo
 $("arquivo").addEventListener("change", e => { adicionar(e.target.files); e.target.value = ""; });
 
 function adicionar(lista) {
+  if (ocupado()) return;
   for (const f of Array.from(lista || [])) {
     if (!/^image\/(jpeg|png|webp)$/.test(f.type)) { nkToast(`${f.name}: envie só JPG, PNG ou WEBP.`, "erro"); continue; }
     if (f.size > MAX_BYTES) { nkToast(`${f.name}: passa de 10 MB.`, "erro"); continue; }
@@ -262,8 +270,8 @@ function desenharPrevias() {
     `<button type="button" onclick="tirar(${i})" aria-label="Tirar foto">×</button></div>`).join("");
   validarEnvio();
 }
-function tirar(i) { URL.revokeObjectURL(fotos[i].url); fotos.splice(i, 1); desenharPrevias(); }
-function limparEnvio() { fotos.forEach(f => URL.revokeObjectURL(f.url)); fotos = []; $("sku").value = ""; $("produtoNome").value = ""; $("produtoLink").value = ""; tirarRef(); desenharPrevias(); }
+function tirar(i) { if (ocupado()) return; URL.revokeObjectURL(fotos[i].url); fotos.splice(i, 1); desenharPrevias(); }
+function limparEnvio() { if (ocupado()) return; fotos.forEach(f => URL.revokeObjectURL(f.url)); fotos = []; $("sku").value = ""; $("produtoNome").value = ""; $("produtoLink").value = ""; tirarRef(); desenharPrevias(); }
 
 // ---------- imagem de referência ----------
 const refCaixa = $("refCaixa");
@@ -274,6 +282,7 @@ refCaixa.addEventListener("dragleave", () => refCaixa.classList.remove("sobre"))
 refCaixa.addEventListener("drop", e => { e.preventDefault(); refCaixa.classList.remove("sobre"); escolherRef(e.dataTransfer.files); });
 $("refArquivo").addEventListener("change", e => { escolherRef(e.target.files); e.target.value = ""; });
 function escolherRef(lista) {
+  if (ocupado()) return;
   for (const f of Array.from(lista || [])) {
     if (!/^image\/(jpeg|png|webp)$/.test(f.type)) { nkToast(`${f.name}: envie só JPG, PNG ou WEBP.`, "erro"); continue; }
     if (f.size > MAX_BYTES) { nkToast(`${f.name}: passa de 10 MB.`, "erro"); continue; }
@@ -298,6 +307,7 @@ function desenharRefs() {
 // Sem índice tira todas (troca de tipo, Limpar); com índice, só aquela.
 function tirarRef(e, i) {
   if (e) e.stopPropagation();
+  if (ocupado()) return;
   const tirar = i === undefined ? referencias.splice(0) : referencias.splice(i, 1);
   tirar.forEach(r => URL.revokeObjectURL(r.url));
   desenharRefs();
@@ -305,7 +315,7 @@ function tirarRef(e, i) {
 function validarEnvio() {
   const t = TIPOS[$("tipo").value];
   const ok = fotos.length >= t.min && fotos.length <= t.max;
-  $("btnEnviar").disabled = !ok;
+  $("btnEnviar").disabled = !ok || enviando;
   $("btnEnviar").title = ok ? "" : (fotos.length > t.max ? `${t.nome}: no máximo ${t.max} foto(s).` : `${t.nome}: pelo menos ${t.min} foto(s).`);
   if (fotos.length) $("previas").querySelectorAll("small").forEach((s, i) => s.textContent = papel(i));
 }
@@ -313,6 +323,7 @@ const lerBase64 = f => new Promise((ok, falha) => {
   const r = new FileReader(); r.onload = () => ok(String(r.result).split(",", 2)[1]); r.onerror = () => falha(r.error); r.readAsDataURL(f);
 });
 async function enviar() {
+  if (enviando) return;
   const arte = ARTES.includes($("tipo").value);
   const refs = arte ? referencias.slice() : [];
   const fotosBytes = fotos.reduce((s, f) => s + f.arquivo.size, 0);
@@ -322,8 +333,12 @@ async function enviar() {
   const link = arte ? $("produtoLink").value.trim() : "";
   if (link && !/^https?:\/\/\S+$/i.test(link)) { nkToast("Link do fornecedor: cole o endereço completo, começando com https://", "erro"); return; }
   if (refs.length > 1 && !await nkConfirmar(`Vão sair ${refs.length} artes, uma com o layout de cada referência. Cada arte gasta o crédito da API à parte. Enviar?`)) return;
+  if (enviando) return;   // outro clique entrou enquanto a confirmação estava aberta
+  enviando = true;
+  const campos = ["tipo", "sku", "produtoNome", "produtoLink"].map(id => $(id));
+  campos.forEach(c => c.disabled = true);
   const btn = $("btnEnviar"); btn.disabled = true; btn.textContent = "Enviando…";
-  let enviados = 0;
+  let enviados = 0, terminou = false;
   try {
     const lista = [];
     for (const f of fotos) lista.push({nome: f.arquivo.name, dados: await lerBase64(f.arquivo)});
@@ -343,10 +358,13 @@ async function enviar() {
       }
     }
     nkToast(enviados > 1 ? `${enviados} imagens enviadas para a fila.` : "Imagem enviada para a fila.", "ok");
-    limparEnvio();
+    terminou = true;
   } catch (e) {
     nkToast(enviados ? `${enviados} de ${refs.length} enviadas; a seguinte falhou: ${e.message}. As que faltam continuam na lista.` : e.message, "erro");
   } finally {
+    enviando = false;
+    campos.forEach(c => c.disabled = false);
+    if (terminou) limparEnvio();
     btn.textContent = "Enviar"; validarEnvio();
     if (enviados) await carregar();
   }
