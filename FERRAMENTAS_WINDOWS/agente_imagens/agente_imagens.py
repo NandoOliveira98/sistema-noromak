@@ -19,6 +19,9 @@ import base64
 import json
 import os
 import platform
+import shutil
+import socket
+import subprocess
 import sys
 import time
 import traceback
@@ -321,6 +324,56 @@ def criar_cliente_claude(chave: str) -> Callable[[str], ClaudeImagens]:
     return lambda modelo: ClaudeImagens(cliente, modelo)
 
 
+class Tunel:
+    """V20.17 (dono, 04/11): o portão de login do NoromakWeb no nginx barra o agente (302 para /login). Até liberarem
+    /expedicao/api/imagens/agente/ no nginx, o agente fala com a Expedição por um túnel SSH até a VPS — o mesmo acesso
+    da publicação (o "Host expedicao" do ~/.ssh/config deste PC). A Expedição continua exigindo o token do agente.
+    config.env: NOROMAK_TUNEL=expedicao (vazio = sem túnel, pelo endereço público)."""
+
+    def __init__(self, destino: str, porta_local: int = 18157, porta_remota: int = 8100):
+        self.destino, self.porta_local, self.porta_remota = destino, porta_local, porta_remota
+        self.proc: subprocess.Popen | None = None
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self.porta_local}/expedicao"
+
+    def _porta_aberta(self) -> bool:
+        with socket.socket() as s:
+            s.settimeout(1)
+            return s.connect_ex(("127.0.0.1", self.porta_local)) == 0
+
+    def garantir(self) -> None:
+        """Abre o túnel se não estiver aberto (e reabre se o ssh caiu)."""
+        if self.proc is not None and self.proc.poll() is None and self._porta_aberta():
+            return
+        self.fechar()
+        ssh = shutil.which("ssh") or "ssh"
+        self.proc = subprocess.Popen(
+            [ssh, "-N", "-o", "BatchMode=yes", "-o", "ExitOnForwardFailure=yes", "-o", "ServerAliveInterval=15",
+             "-o", "ServerAliveCountMax=4", "-L", f"127.0.0.1:{self.porta_local}:127.0.0.1:{self.porta_remota}", self.destino],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        for _ in range(30):
+            if self._porta_aberta():
+                registrar(f"Túnel SSH aberto ({self.destino} → porta {self.porta_local}).")
+                return
+            if self.proc.poll() is not None:
+                erro = (self.proc.stderr.read() or b"").decode("utf-8", "replace").strip()[:300] if self.proc.stderr else ""
+                raise OSError(f"O túnel SSH não abriu: {erro or 'ssh saiu'}")
+            time.sleep(0.5)
+        raise OSError("O túnel SSH não abriu em 15 s.")
+
+    def fechar(self) -> None:
+        if self.proc is not None and self.proc.poll() is None:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+        self.proc = None
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description="Agente de imagens do Noromak")
     p.add_argument("--uma-vez", action="store_true", help="processa o que houver na fila e sai")
@@ -329,27 +382,39 @@ def main() -> None:
     faltam = [k for k in ("ANTHROPIC_API_KEY", "NOROMAK_AGENTE_TOKEN") if not cfg.get(k)]
     if faltam:
         sys.exit(f"Falta no config.env: {', '.join(faltam)} (veja config.env.exemplo).")
-    agente = Agente(Noromak(cfg["NOROMAK_URL"], cfg["NOROMAK_AGENTE_TOKEN"]), criar_cliente_claude(cfg["ANTHROPIC_API_KEY"]),
+    tunel = Tunel(cfg["NOROMAK_TUNEL"]) if cfg.get("NOROMAK_TUNEL") else None
+    url = tunel.url if tunel else cfg["NOROMAK_URL"]
+    agente = Agente(Noromak(url, cfg["NOROMAK_AGENTE_TOKEN"]), criar_cliente_claude(cfg["ANTHROPIC_API_KEY"]),
                     cfg["REALESRGAN_DIR"])
-    registrar(f"Agente de imagens {VERSAO} ligado ({cfg['NOROMAK_URL']}).")
+    registrar(f"Agente de imagens {VERSAO} ligado ({url}{' pelo túnel ' + cfg['NOROMAK_TUNEL'] if tunel else ''}).")
+    try:
+        _laco(agente, a.uma_vez, tunel)
+    finally:
+        if tunel:
+            tunel.fechar()
+
+
+def _laco(agente: "Agente", uma_vez: bool, tunel: "Tunel | None") -> None:
     ultimo_ping = 0.0
     while True:
         try:
+            if tunel:
+                tunel.garantir()
             if time.time() - ultimo_ping > 30:
                 agente.noromak.ping()
                 ultimo_ping = time.time()
             processou = agente.uma_volta()
             if processou:
                 continue
-            if a.uma_vez:
+            if uma_vez:
                 return
         except NoromakErro as e:
             registrar(f"Noromak recusou ({e.status}): {e}" + (" — confira o NOROMAK_AGENTE_TOKEN." if e.status == 401 else ""))
-            if a.uma_vez:
+            if uma_vez:
                 return
         except (urllib.error.URLError, OSError) as e:
             registrar(f"Sem conexão com o Noromak: {e}")
-            if a.uma_vez:
+            if uma_vez:
                 return
         time.sleep(INTERVALO)
 
