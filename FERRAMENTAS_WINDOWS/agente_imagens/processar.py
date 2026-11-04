@@ -1,0 +1,277 @@
+"""V20.17 — Agente de imagens: a parte de imagem (Pillow + Real-ESRGAN + Chrome headless).
+
+Nada aqui chama o Claude nem o Noromak: recebe imagens, devolve imagens. As regras vêm da skill
+imagem-anuncio (testadas em 04/11 com o Hidratante de Couro Würth):
+- foto JÁ em fundo branco liso: NÃO recortar (produto branco some junto com o fundo; o logo virou
+  "WÜR"); corta pelo que não é branco e cola na tela branca;
+- foto pequena (< 1000 px): amplia 4x com Real-ESRGAN, que deforma letra pequena; por isso a
+  comparação por faixas (ampliada × ampliação comum) e a troca da faixa deformada pela comum;
+- o produto nunca é alterado: só fundo, enquadramento, contraste e nitidez leves.
+"""
+from __future__ import annotations
+
+import io
+import os
+import shutil
+import subprocess
+import tempfile
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageOps
+
+TAMANHO = 1200
+OCUPACAO = 0.85
+LIMITE_PEQUENA = 1000        # lado maior abaixo disto vai para a IA
+FAIXAS = 6                   # faixas horizontais comparadas na conferência
+LIMIAR_BRANCO = 12           # diferença do branco que conta como produto
+
+
+# ---------- básicos ----------
+
+def abrir(dados: bytes) -> Image.Image:
+    img = Image.open(io.BytesIO(dados))
+    img.load()
+    if img.mode in ("RGBA", "LA", "P"):
+        fundo = Image.new("RGB", img.size, "white")
+        rgba = img.convert("RGBA")
+        fundo.paste(rgba, mask=rgba.split()[-1])
+        return fundo
+    return img.convert("RGB")
+
+
+def jpg(img: Image.Image, qualidade: int = 94) -> bytes:
+    b = io.BytesIO()
+    img.convert("RGB").save(b, "JPEG", quality=qualidade)
+    return b.getvalue()
+
+
+def png(img: Image.Image) -> bytes:
+    b = io.BytesIO()
+    img.save(b, "PNG")
+    return b.getvalue()
+
+
+def reduzir(img: Image.Image, lado: int) -> Image.Image:
+    if max(img.size) <= lado:
+        return img
+    esc = lado / max(img.size)
+    return img.resize((max(1, round(img.width * esc)), max(1, round(img.height * esc))), Image.LANCZOS)
+
+
+def caixa_do_produto(img: Image.Image) -> tuple[int, int, int, int] | None:
+    """Retângulo do que não é branco (foto em fundo branco)."""
+    fundo = Image.new("RGB", img.size, (255, 255, 255))
+    mascara = ImageChops.difference(img.convert("RGB"), fundo).convert("L").point(lambda v: 255 if v > LIMIAR_BRANCO else 0)
+    return mascara.getbbox()
+
+
+def fundo_branco_liso(img: Image.Image) -> bool:
+    """Bordas da foto quase brancas: dá para usar a caixa do produto sem recortar."""
+    w, h = img.size
+    rgb = img.convert("RGB")
+    pontos = [(x, y) for x in (0, w // 4, w // 2, 3 * w // 4, w - 1) for y in (0, h - 1)]
+    pontos += [(x, y) for x in (0, w - 1) for y in (h // 4, h // 2, 3 * h // 4)]
+    return all(min(rgb.getpixel(p)) >= 245 for p in pontos)
+
+
+# ---------- ampliação ----------
+
+@dataclass
+class Ampliacao:
+    imagem: Image.Image           # a que segue (IA, ou a original se não precisou/falhou)
+    comum: Image.Image | None     # ampliação comum do mesmo tamanho (referência e reserva)
+    usou_ia: bool
+    aviso: str = ""
+
+
+def ampliacao_comum(img: Image.Image, tamanho: tuple[int, int]) -> Image.Image:
+    out = img.resize(tamanho, Image.LANCZOS)
+    return out.filter(ImageFilter.UnsharpMask(radius=3, percent=80, threshold=2))
+
+
+def ampliar(img: Image.Image, pasta_esrgan: str | Path | None) -> Ampliacao:
+    """Lado maior < LIMITE_PEQUENA: amplia 4x com o Real-ESRGAN. Placa fraca (Intel HD): blocos de 64
+    (-t 64); bloco maior derruba o driver (vkQueueSubmit failed -4). Falhou = segue com a comum."""
+    if max(img.size) >= LIMITE_PEQUENA:
+        return Ampliacao(img, None, False)
+    alvo = (img.width * 4, img.height * 4)
+    comum = ampliacao_comum(img, alvo)
+    exe = Path(pasta_esrgan or "") / "realesrgan-ncnn-vulkan.exe"
+    if not exe.is_file():
+        return Ampliacao(comum, comum, False, "Real-ESRGAN não encontrado: ampliada do jeito comum.")
+    with tempfile.TemporaryDirectory() as d:
+        ent, sai = os.path.join(d, "in.png"), os.path.join(d, "out.png")
+        img.save(ent)
+        try:
+            r = subprocess.run([str(exe), "-i", ent, "-o", sai, "-n", "realesrgan-x4plus", "-s", "4",
+                                "-t", "64", "-j", "1:1:1", "-m", str(exe.parent / "models")],
+                               cwd=str(exe.parent), capture_output=True, text=True, timeout=1800,
+                               creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            falhou = "failed" in (r.stderr or "").lower() or not os.path.isfile(sai)
+        except (subprocess.TimeoutExpired, OSError):
+            falhou = True
+        if falhou:
+            return Ampliacao(comum, comum, False, "A ampliação por IA falhou: ampliada do jeito comum.")
+        ia = Image.open(sai).convert("RGB")
+        ia.load()
+    if ia.size != alvo:
+        ia = ia.resize(alvo, Image.LANCZOS)
+    return Ampliacao(ia, comum, True)
+
+
+# ---------- faixas (conferência das letras) ----------
+
+def faixas(altura: int, n: int = FAIXAS, sobra: float = 0.12) -> list[tuple[int, int]]:
+    """Divide a altura em n faixas com um pouco de sobreposição (texto cortado ao meio aparece inteiro
+    em uma das duas)."""
+    passo = altura / n
+    extra = int(passo * sobra)
+    return [(max(0, int(i * passo) - extra), min(altura, int((i + 1) * passo) + extra)) for i in range(n)]
+
+
+def par_da_faixa(referencia: Image.Image, ampliada: Image.Image, y0: int, y1: int, caixa: tuple[int, int, int, int] | None,
+                 largura: int = 1000) -> Image.Image:
+    """Imagem com a faixa da referência (em cima) e a da ampliada (embaixo), para o Claude comparar."""
+    x0, x1 = (caixa[0], caixa[2]) if caixa else (0, referencia.width)
+    a = reduzir(referencia.crop((x0, y0, x1, y1)), largura)
+    b = reduzir(ampliada.crop((x0, y0, x1, y1)), largura)
+    tela = Image.new("RGB", (max(a.width, b.width), a.height + b.height + 24), (255, 255, 255))
+    tela.paste(a, (0, 0))
+    ImageDraw.Draw(tela).rectangle((0, a.height + 10, tela.width, a.height + 14), fill=(220, 30, 30))
+    tela.paste(b, (0, a.height + 24))
+    return tela
+
+
+def trocar_faixas(ampliada: Image.Image, comum: Image.Image, trechos: list[tuple[int, int]]) -> Image.Image:
+    """Volta as faixas deformadas para a ampliação comum, com a borda esfumada (sem emenda)."""
+    if not trechos:
+        return ampliada
+    mascara = Image.new("L", ampliada.size, 0)
+    for y0, y1 in trechos:
+        mascara.paste(255, (0, y0, ampliada.width, y1))
+    mascara = mascara.filter(ImageFilter.GaussianBlur(10))
+    return Image.composite(comum, ampliada, mascara)
+
+
+# ---------- foto principal ----------
+
+def montar_principal(img: Image.Image) -> Image.Image:
+    """1200×1200, fundo branco, produto inteiro ocupando 85% do lado maior."""
+    if fundo_branco_liso(img):
+        caixa = caixa_do_produto(img)
+        prod = img.crop(caixa) if caixa else img
+        prod = ImageEnhance.Contrast(prod).enhance(1.03)
+        mascara = None
+    else:
+        recorte = recortar(img)
+        prod, mascara = recorte.convert("RGB"), recorte.split()[-1]
+    lado = int(TAMANHO * OCUPACAO)
+    esc = lado / max(prod.size)
+    tam = (max(1, round(prod.width * esc)), max(1, round(prod.height * esc)))
+    prod = prod.resize(tam, Image.LANCZOS)
+    tela = Image.new("RGB", (TAMANHO, TAMANHO), (255, 255, 255))
+    pos = ((TAMANHO - tam[0]) // 2, (TAMANHO - tam[1]) // 2)
+    if mascara is not None:
+        tela.paste(prod, pos, mascara.resize(tam, Image.LANCZOS))
+    else:
+        tela.paste(prod, pos)
+    return tela
+
+
+def montar_kit(itens: list[Image.Image]) -> Image.Image:
+    """Itens lado a lado, mesma altura, em fundo branco (foto principal do kit, sem texto)."""
+    pecas = []
+    for img in itens:
+        caixa = caixa_do_produto(img) if fundo_branco_liso(img) else None
+        pecas.append(img.crop(caixa) if caixa else recortar(img).convert("RGB"))
+    altura = 1000
+    pecas = [p.resize((max(1, round(p.width * altura / p.height)), altura), Image.LANCZOS) for p in pecas]
+    vao = 40
+    largura = sum(p.width for p in pecas) + vao * (len(pecas) - 1)
+    linha = Image.new("RGB", (largura, altura), (255, 255, 255))
+    x = 0
+    for p in pecas:
+        linha.paste(p, (x, 0))
+        x += p.width + vao
+    return montar_principal_de_linha(linha)
+
+
+def montar_principal_de_linha(linha: Image.Image) -> Image.Image:
+    lado = int(TAMANHO * OCUPACAO)
+    esc = lado / max(linha.size)
+    tam = (max(1, round(linha.width * esc)), max(1, round(linha.height * esc)))
+    tela = Image.new("RGB", (TAMANHO, TAMANHO), (255, 255, 255))
+    tela.paste(linha.resize(tam, Image.LANCZOS), ((TAMANHO - tam[0]) // 2, (TAMANHO - tam[1]) // 2))
+    return tela
+
+
+def recortar(img: Image.Image, limiar: int = 243) -> Image.Image:
+    """Remove o fundo claro LIGADO À BORDA (flood fill) — mesma regra do preparar.py da skill.
+    Só para foto que NÃO está em fundo branco liso."""
+    rgb = img.convert("RGB")
+    r, g, b = rgb.split()
+    minimo = ImageChops.darker(ImageChops.darker(r, g), b)
+    mascara = minimo.point(lambda v: 255 if v >= limiar else 0)
+    w, h = mascara.size
+    for x, y in [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1), (w // 2, 0), (w // 2, h - 1), (0, h // 2), (w - 1, h // 2)]:
+        if mascara.getpixel((x, y)) == 255:
+            ImageDraw.floodfill(mascara, (x, y), 128)
+    fundo = mascara.point(lambda v: 255 if v == 128 else 0)
+    alfa = ImageOps.invert(fundo).filter(ImageFilter.MinFilter(3)).filter(ImageFilter.GaussianBlur(1.2))
+    out = rgb.convert("RGBA")
+    out.putalpha(alfa)
+    caixa = alfa.point(lambda v: 255 if v > 20 else 0).getbbox()
+    return out.crop(caixa) if caixa else out
+
+
+# ---------- artes (HTML → Chrome headless) ----------
+
+NAVEGADORES = [
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+]
+
+
+def achar_navegador() -> str | None:
+    for c in NAVEGADORES:
+        if os.path.isfile(c):
+            return c
+    for nome in ("chrome", "msedge", "google-chrome", "chromium"):
+        if shutil.which(nome):
+            return shutil.which(nome)
+    return None
+
+
+def renderizar(html: str, arquivos: dict[str, bytes]) -> Image.Image:
+    """Grava o HTML e as imagens numa pasta temporária e tira o 'print' 1200×1200 no Chrome/Edge."""
+    nav = achar_navegador()
+    if not nav:
+        raise RuntimeError("Chrome ou Edge não encontrado neste PC (precisa para montar as artes).")
+    with tempfile.TemporaryDirectory() as d:
+        for nome, dados in arquivos.items():
+            Path(d, nome).write_bytes(dados)
+        pagina = Path(d, "arte.html")
+        pagina.write_text(html, encoding="utf-8")
+        saida = Path(d, "arte.png")
+        with tempfile.TemporaryDirectory() as perfil:
+            subprocess.run([nav, "--headless=new", "--disable-gpu", "--hide-scrollbars", "--force-device-scale-factor=1",
+                            f"--user-data-dir={perfil}", "--virtual-time-budget=4000", f"--window-size={TAMANHO},{TAMANHO}",
+                            f"--screenshot={saida}", pagina.as_uri()],
+                           check=True, capture_output=True, timeout=120,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        img = Image.open(saida).convert("RGB")
+        img.load()
+        return img
+
+
+def produto_para_arte(img: Image.Image) -> tuple[bytes, bool]:
+    """PNG do produto para a arte. Em fundo branco liso: só o retângulo, desenhado com
+    mix-blend-mode:multiply (o branco some no fundo claro da arte e o produto branco não é comido).
+    Senão: recorte com transparência (dá para usar a sombra)."""
+    if fundo_branco_liso(img):
+        caixa = caixa_do_produto(img)
+        return png(reduzir(img.crop(caixa) if caixa else img, 1400)), False
+    return png(reduzir(recortar(img), 1400)), True

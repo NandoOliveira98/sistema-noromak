@@ -35966,7 +35966,8 @@ def imagens_agente_proximo() -> dict[str, Any]:
             return {"ok": True, "trabalho": None}
         if row["situacao"] == "aguardando_arte":
             etapa, nova = "arte", "gerando"
-        elif row["tipo"] == "principal":
+        elif row["tipo"] in ("principal", "juntos"):
+            # Kit juntos sai sem texto (foto dos itens juntos em fundo branco): mesmo caminho da principal.
             etapa, nova = "principal", "processando"
         else:
             etapa, nova = "analise", "analisando"

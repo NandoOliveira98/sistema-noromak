@@ -106,7 +106,8 @@ o custo real.
   é branco, sem recorte; os outros: `preparar.py` → 1200×1200 → conferência → `pronta`/`revisar`.
 - **Artes:** análise + textos → **operador aprova na tela** → agente recorta o produto, preenche o
   template HTML com os textos aprovados, renderiza → conferência → `pronta`/`revisar`.
-- **Kit juntos:** várias fotos num trabalho só (uma por item).
+- **Kit juntos:** várias fotos num trabalho só (uma por item). Decidido na construção: sai **sem texto**, itens lado
+  a lado em fundo branco (serve de foto principal do kit no ML); segue o caminho da foto principal, sem aprovação de textos.
 - **Modo de uso / aplicação:** a foto do verso ajuda; sem ela, o operador digita os passos.
 
 ## Tela `/imagens`

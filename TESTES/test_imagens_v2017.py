@@ -109,6 +109,8 @@ class EstudioImagens(TesteNoromak):
         st, corpo = self.enviar("juntos", [PNG, JPG, WEBP])
         self.assertEqual((st, len(corpo["ids"])), (200, 1))
         self.assertEqual(len(self.item(corpo["ids"][0])["arquivos"]), 3)
+        # Kit juntos sai sem texto: vai direto para o agente, como a foto principal.
+        self.assertEqual(self.agente("GET", "/api/imagens/agente/proximo")[1]["trabalho"]["etapa"], "principal")
 
     def test_arquivo_que_nao_e_imagem_e_recusado(self):
         st, corpo = self.enviar(fotos=[b"%PDF-1.4 nao sou imagem"])

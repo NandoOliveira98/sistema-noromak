@@ -680,7 +680,7 @@ de cada anúncio Full candidato (`inventory_id` por `/items?ids=` de 20 em 20, g
 resposta = fica o do sistema (nunca zero); 5 erros seguidos param a leitura. Item guarda `a_caminho_sis` e
 `a_caminho_ml`; coluna "A caminho" na tabela com a origem (ML/sistema). Teste: `TESTES/test_full_a_caminho_ml_v1985.py`.
 
-### Estúdio de Imagens (V20.17, fase 1 de 2: servidor e tela)
+### Estúdio de Imagens (V20.17: servidor, tela e agente)
 `APP/imagens.html` (`/imagens`, menu Vendas e anúncios, módulo próprio **`imagens`** = `app_users.can_imagens`, mesma
 regra do Devolução: Admin nasce ligado, salvar sem a chave mantém; Consulta só vê; Compras não tem). Decisões do dono
 (04/11; desenho em `docs/superpowers/specs/2026-11-04-estudio-imagens-design.md`): o operador sobe a foto e recebe a
@@ -702,6 +702,17 @@ de zoom dos textos (o Haiku pode deixar passar letra deformada). Painel de saúd
 trabalho na fila e agente sem pulso há > 2 min (PC desligado à noite é normal; sem e-mail). Rotas
 `GET /api/imagens[/arquivo]`, `POST /api/imagens/{enviar,textos,refazer,apagar,config}`. Teste:
 `TESTES/test_imagens_v2017.py`.
+**Agente** em `FERRAMENTAS_WINDOWS/agente_imagens/` (Python + Pillow + SDK `anthropic`; `config.env` fora do Git com
+`ANTHROPIC_API_KEY` e `NOROMAK_AGENTE_TOKEN`; LEIA-ME lá). Principal: Claude analisa (serve? fundo branco? produto
+claro?) → Real-ESRGAN se < 1000 px (`-t 64`: a placa daqui derruba o driver com bloco maior; ~40 s por foto) → foto em
+fundo branco liso NÃO é recortada (caixa do que não é branco) → conferência em 6 faixas (ampliação comum em cima × IA
+embaixo; faixa deformada volta para a comum, até 2 voltas, depois `revisar`). **Kit juntos sai sem texto** (itens lado a
+lado em fundo branco, foto principal do kit): o servidor o manda pela etapa `principal`. Artes: `propor_textos` (campos
+fixos por tipo em `CAMPOS_ARTE`; o que não está no rótulo vem vazio) → aprovação → `artes.py` monta o HTML (produto em
+fundo branco com `mix-blend-mode:multiply`) → Chrome headless → `conferir_arte`. Todas as chamadas com
+`output_config.format` (JSON de esquema fixo) e `effort: low`. Teste com o Claude simulado:
+`python -m unittest test_agente` na pasta do agente (fora do `testar.sh`: precisa do Pillow). **Falta conferir com a
+chave real se o Haiku acha o "Hidrata" deformado** (o caso de 04/11).
 
 ### Quadro de tarefas (V19.69)
 `APP/tarefas.html` (`/tarefas`, menu Visão geral, **todo usuário logado**: a página só exige sessão, o item do menu
