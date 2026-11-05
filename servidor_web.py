@@ -7361,6 +7361,20 @@ def ensure_anuncios_schema() -> None:
                 PRIMARY KEY (canal, conta, anuncio_id)
             );
             CREATE INDEX IF NOT EXISTS idx_anuncio_canal_ficha ON anuncio_canal_v2023(ficha_codigo);
+            CREATE TABLE IF NOT EXISTS anuncio_foto_v2024 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ficha_codigo TEXT NOT NULL,
+                arquivo TEXT NOT NULL,
+                tipo TEXT NOT NULL,
+                largura INTEGER,
+                altura INTEGER,
+                bytes INTEGER,
+                origem TEXT NOT NULL DEFAULT 'pc',
+                ordem INTEGER NOT NULL DEFAULT 0,
+                criado_em TEXT,
+                criado_por TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_anuncio_foto_ficha ON anuncio_foto_v2024(ficha_codigo, ordem);
             """
         )
         DB.commit()
@@ -8102,7 +8116,187 @@ def anuncio_ficha_payload(codigo: str, ler_apollo: bool = False) -> dict[str, An
             "ficha": ficha, "kits_da_peca": kits_da_peca(cod) if tipo != "kit" else [], "composicao": comp,
             "anuncios": ativos, "removidos": removidos,
             "misto": bool(_anuncio_misto_por_codigo(todas).get(cod)), "estoque": estoque,
-            "apollo_lido": bool(ler_apollo)}
+            "apollo_lido": bool(ler_apollo), "fotos": anuncio_fotos(cod)}  # V20.24: fotos da ficha
+
+
+# V20.24: fotos da ficha (computador ou Estudio de Imagens). Arquivo no disco, nunca no banco; nome pelo id.
+ANUNCIO_FOTOS_DIR = Path(os.getenv("EXP_ANUNCIO_FOTOS_DIR", str(DB_PATH.parent / "anuncios_fotos")))
+ANUNCIO_FOTO_MAX_BYTES = 10 * 1024 * 1024
+ANUNCIO_FOTO_MIN_PX = 500
+ANUNCIO_FOTOS_MAX = 12
+
+
+def _imagem_dimensoes(dados: bytes) -> tuple[str, int, int] | None:
+    """V20.24: (tipo, largura, altura) lidos do cabecalho; tipo pelo conteudo. Nao reconhecido = None."""
+    try:
+        if dados[:8] == b"\x89PNG\r\n\x1a\n" and dados[12:16] == b"IHDR" and len(dados) >= 24:
+            return "png", int.from_bytes(dados[16:20], "big"), int.from_bytes(dados[20:24], "big")
+        if dados[:2] == b"\xff\xd8":
+            i, n = 2, len(dados)
+            while i + 4 <= n:
+                if dados[i] != 0xFF:
+                    i += 1
+                    continue
+                marc = dados[i + 1]
+                if marc == 0xFF:
+                    i += 1
+                    continue
+                if marc in (0xD8, 0x01) or 0xD0 <= marc <= 0xD7:
+                    i += 2
+                    continue
+                tam = int.from_bytes(dados[i + 2:i + 4], "big")
+                if marc in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
+                    if i + 9 > n:
+                        return None
+                    return "jpg", int.from_bytes(dados[i + 7:i + 9], "big"), int.from_bytes(dados[i + 5:i + 7], "big")
+                if tam < 2:
+                    return None
+                i += 2 + tam
+            return None
+        if dados[:4] == b"RIFF" and dados[8:12] == b"WEBP" and len(dados) >= 25:
+            fmt = dados[12:16]
+            if fmt == b"VP8X" and len(dados) >= 30:
+                return "webp", 1 + int.from_bytes(dados[24:27], "little"), 1 + int.from_bytes(dados[27:30], "little")
+            if fmt == b"VP8 " and len(dados) >= 30 and dados[23:26] == b"\x9d\x01\x2a":
+                return ("webp", int.from_bytes(dados[26:28], "little") & 0x3FFF,
+                        int.from_bytes(dados[28:30], "little") & 0x3FFF)
+            if fmt == b"VP8L" and dados[20] == 0x2F:
+                bits = int.from_bytes(dados[21:25], "little")
+                return "webp", 1 + (bits & 0x3FFF), 1 + ((bits >> 14) & 0x3FFF)
+    except Exception:
+        return None
+    return None
+
+
+def _anuncio_foto_caminho(foto_id: int, tipo: str) -> Path:
+    """Caminho montado so com o id e o tipo conferido: nunca um nome vindo do navegador nem do banco."""
+    if tipo not in ("jpg", "png", "webp"):
+        raise ValueError("Tipo de foto inválido.")
+    return ANUNCIO_FOTOS_DIR / f"{int(foto_id)}.{tipo}"
+
+
+def anuncio_foto_adicionar(codigo: str, dados: bytes, ator: str, origem: str = "pc") -> dict[str, Any]:
+    cod = normalize(codigo)
+    if not cod:
+        raise ValueError("Informe o produto.")
+    if not dados:
+        raise ValueError("Foto vazia.")
+    if len(dados) > ANUNCIO_FOTO_MAX_BYTES:
+        raise ValueError("A foto passa de 10 MB.")
+    info = _imagem_dimensoes(dados)
+    if info is None:
+        raise ValueError("O arquivo não é uma imagem JPG, PNG ou WEBP.")
+    tipo, largura, altura = info
+    if min(largura, altura) < ANUNCIO_FOTO_MIN_PX:
+        raise ValueError(f"A foto é pequena ({largura}x{altura}): o menor lado precisa ter {ANUNCIO_FOTO_MIN_PX} px ou mais.")
+    with DB_LOCK:
+        total, ultima = DB.execute("SELECT COUNT(*), COALESCE(MAX(ordem),0) FROM anuncio_foto_v2024 WHERE ficha_codigo=?",
+                                   (cod,)).fetchone()
+        if total >= ANUNCIO_FOTOS_MAX:
+            raise ValueError(f"A ficha já tem {ANUNCIO_FOTOS_MAX} fotos (o máximo).")
+        cur = DB.execute("INSERT INTO anuncio_foto_v2024(ficha_codigo,arquivo,tipo,largura,altura,bytes,origem,ordem,"
+                         "criado_em,criado_por) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                         (cod, "", tipo, largura, altura, len(dados), origem if origem in ("pc", "estudio") else "pc",
+                          int(ultima) + 1, now_iso(), str(ator or "")))
+        foto_id = int(cur.lastrowid)
+        try:
+            ANUNCIO_FOTOS_DIR.mkdir(parents=True, exist_ok=True)
+            _anuncio_foto_caminho(foto_id, tipo).write_bytes(dados)
+            DB.execute("UPDATE anuncio_foto_v2024 SET arquivo=? WHERE id=?", (f"{foto_id}.{tipo}", foto_id))
+            DB.commit()
+        except Exception:
+            DB.rollback()
+            raise
+        row = DB.execute("SELECT * FROM anuncio_foto_v2024 WHERE id=?", (foto_id,)).fetchone()
+    return dict(row)
+
+
+def anuncio_foto_do_estudio(codigo: str, trabalho_id: int, nome: str, ator: str) -> dict[str, Any]:
+    try:
+        dados, _tipo, _baixar = imagens_arquivo(trabalho_id, nome)
+    except ImagemNaoEncontrada as exc:
+        raise ValueError(str(exc))
+    return anuncio_foto_adicionar(codigo, dados, ator, origem="estudio")
+
+
+def anuncio_fotos(codigo: str) -> list[dict[str, Any]]:
+    with DB_LOCK:
+        rows = DB.execute("SELECT * FROM anuncio_foto_v2024 WHERE ficha_codigo=? ORDER BY ordem,id",
+                          (normalize(codigo),)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def anuncio_foto_remover(codigo: str, foto_id: Any, ator: str) -> dict[str, Any]:
+    cod = normalize(codigo)
+    try:
+        fid = int(foto_id)
+    except (TypeError, ValueError):
+        raise ValueError("Foto inválida.")
+    with DB_LOCK:
+        row = DB.execute("SELECT * FROM anuncio_foto_v2024 WHERE id=? AND ficha_codigo=?", (fid, cod)).fetchone()
+        if row is None:
+            raise ValueError("Foto não encontrada.")
+        DB.execute("DELETE FROM anuncio_foto_v2024 WHERE id=?", (fid,))
+        DB.commit()
+    try:
+        _anuncio_foto_caminho(fid, str(row["tipo"])).unlink(missing_ok=True)
+    except (OSError, ValueError):
+        pass
+    return {"ok": True, "fotos": anuncio_fotos(cod)}
+
+
+def anuncio_foto_ordenar(codigo: str, ids: Any, ator: str) -> dict[str, Any]:
+    cod = normalize(codigo)
+    if not isinstance(ids, list):
+        raise ValueError("Informe a ordem das fotos.")
+    try:
+        ids = [int(i) for i in ids]
+    except (TypeError, ValueError):
+        raise ValueError("Ordem inválida.")
+    with DB_LOCK:
+        atuais = {int(r["id"]) for r in DB.execute("SELECT id FROM anuncio_foto_v2024 WHERE ficha_codigo=?", (cod,))}
+        if set(ids) != atuais or len(ids) != len(atuais):
+            raise ValueError("A ordem precisa conter todas as fotos da ficha, uma vez cada.")
+        for pos, i in enumerate(ids, 1):
+            DB.execute("UPDATE anuncio_foto_v2024 SET ordem=? WHERE id=?", (pos, i))
+        DB.commit()
+    return {"ok": True, "fotos": anuncio_fotos(cod)}
+
+
+def anuncio_foto_bytes(foto_id: Any) -> tuple[bytes, str]:
+    try:
+        fid = int(foto_id)
+    except (TypeError, ValueError):
+        raise ValueError("Foto inválida.")
+    with DB_LOCK:
+        row = DB.execute("SELECT tipo FROM anuncio_foto_v2024 WHERE id=?", (fid,)).fetchone()
+    if row is None:
+        raise ValueError("Foto não encontrada.")
+    caminho = _anuncio_foto_caminho(fid, str(row["tipo"]))
+    if not caminho.is_file():
+        raise ValueError("Foto não encontrada.")
+    mime = {"jpg": "image/jpeg", "png": "image/png", "webp": "image/webp"}[str(row["tipo"])]
+    return caminho.read_bytes(), mime
+
+
+def anuncio_estudio_lista(busca: str = "") -> list[dict[str, Any]]:
+    """V20.24: trabalhos prontos do Estudio com os nomes dos resultados (so leitura)."""
+    b = str(busca or "").strip().lower()
+    with DB_LOCK:
+        rows = DB.execute("SELECT * FROM imagem_trabalho_v2017 WHERE situacao='pronta' AND COALESCE(apagado_em,'')='' "
+                          "ORDER BY id DESC LIMIT 300").fetchall()
+    saida = []
+    for r in rows:
+        if b and b not in str(r["sku"] or "").lower() and b != str(r["id"]):
+            continue
+        res = [{"nome": str(a.get("nome") or ""), "papel": str(a.get("papel") or "")}
+               for a in _imagem_json(r["resultados_json"], []) if a.get("nome")]
+        if res:
+            saida.append({"id": r["id"], "sku": r["sku"], "tipo": r["tipo"], "criado_em": r["criado_em"],
+                          "resultados": res})
+        if len(saida) >= 50:
+            break
+    return saida
 
 
 def _tiktok_config_ler(chave: str) -> str | None:
@@ -37819,6 +38013,21 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.send_json({"ok": True, **anuncios_lista_payload(str((query.get("busca") or [""])[0]),
                                                                     str((query.get("filtro") or [""])[0]))})
             return
+        if path == "/api/anuncios/foto":  # V20.24: bytes da foto da ficha
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                try:
+                    dados, mime = anuncio_foto_bytes((query.get("id") or [""])[0])
+                except ValueError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 404)
+                    return
+                self.imagem_enviar_arquivo(dados, mime, f"foto.{mime.split('/')[-1]}", inline=True)
+            return
+        if path == "/api/anuncios/estudio":  # V20.24: trabalhos prontos do Estudio (so leitura)
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                self.send_json({"ok": True, "trabalhos": anuncio_estudio_lista(str((query.get("busca") or [""])[0]))})
+            return
         if path == "/api/anuncios/ficha":  # V20.23
             ctx = self.auth(admin_only=True)
             if ctx is not None:
@@ -40122,7 +40331,8 @@ class AppHandler(BaseHTTPRequestHandler):
                     self.send_json({"ok": False, "error": str(exc)}, 502)
             return
         if path in ("/api/anuncios/ficha", "/api/anuncios/kit", "/api/anuncios/puxar", "/api/anuncios/controle",
-                    "/api/anuncios/remover", "/api/anuncios/reincluir"):
+                    "/api/anuncios/remover", "/api/anuncios/reincluir", "/api/anuncios/foto",
+                    "/api/anuncios/foto/remover", "/api/anuncios/foto/ordenar"):
             # V20.23: ver = modulo admin; gravar = so perfil Admin. Nada daqui grava no ML/Shopee/Magalu/TikTok/Apollo.
             ctx = self.auth(admin_only=True)
             if ctx is None:
@@ -40182,6 +40392,23 @@ class AppHandler(BaseHTTPRequestHandler):
                         ANUNCIOS_PUXAR_LOCK.release()
                     audit(ctx["username"], "anuncios.puxar", json.dumps(
                         {c: {k: v for k, v in r.items() if k != "erro"} for c, r in res["contas"].items()}))
+                elif path == "/api/anuncios/foto":  # V20.24
+                    if body.get("estudio_id") not in (None, ""):
+                        foto = anuncio_foto_do_estudio(str(body.get("codigo") or ""), body.get("estudio_id"),
+                                                       str(body.get("nome") or ""), ctx["username"])
+                    else:
+                        try:
+                            dados = base64.b64decode(str(body.get("base64") or ""), validate=False)
+                        except Exception:
+                            raise ValueError("Foto inválida.")
+                        foto = anuncio_foto_adicionar(str(body.get("codigo") or ""), dados, ctx["username"])
+                    audit(ctx["username"], "anuncios.foto", f"{foto['ficha_codigo']}|{foto['id']}|{foto['origem']}")
+                    res = {"ok": True, "foto": foto, "fotos": anuncio_fotos(foto["ficha_codigo"])}
+                elif path == "/api/anuncios/foto/remover":
+                    res = anuncio_foto_remover(str(body.get("codigo") or ""), body.get("id"), ctx["username"])
+                    audit(ctx["username"], "anuncios.foto_remover", f"{body.get('codigo')}|{body.get('id')}")
+                elif path == "/api/anuncios/foto/ordenar":
+                    res = anuncio_foto_ordenar(str(body.get("codigo") or ""), body.get("ids"), ctx["username"])
                 elif path == "/api/anuncios/controle":
                     res = anuncio_controle_definir(str(body.get("canal") or ""), str(body.get("conta") or ""),
                                                    str(body.get("anuncio_id") or ""), str(body.get("controle") or ""),

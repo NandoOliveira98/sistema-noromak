@@ -108,6 +108,7 @@ def reiniciar_banco() -> None:
     S._ml_cache_leitura_limpar()  # V20.04: fila, etiquetas e concluídos lidos pelos vigias
     S._RUPTURA_COMPLETO_CACHE.clear()  # V20.05
     shutil.rmtree(S.IMAGENS_DIR, ignore_errors=True)  # V20.17: fotos do Estúdio de Imagens (ids recomeçam)
+    shutil.rmtree(S.ANUNCIO_FOTOS_DIR, ignore_errors=True)  # V20.24: fotos das fichas de anúncio
 
 
 class Cliente:
