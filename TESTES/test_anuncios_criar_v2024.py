@@ -168,3 +168,143 @@ class CriarMLTeste(TesteNoromak):
         for rota in ("/api/anuncios/ml/categorias?titulo=a", "/api/anuncios/ml/atributos?categoria=MLB1",
                      "/api/anuncios/ml/tarifa?preco=1&tipo=x&categoria=MLB1"):
             self.assertEqual(sup.pedir("GET", rota)[0], 403, rota)
+
+
+class RascunhoTeste(TesteNoromak):
+    """V20.24 - tarefa 4: rascunho do anuncio e corpo do item."""
+
+    def setUp(self):
+        super().setUp()
+        S._ANUNCIO_ATRIBUTOS_CACHE.clear()
+        S.ficha_salvar("P1", {"nome": "Filtro"}, "t", None)
+        S.ficha_salvar("P2", {"nome": "Outro"}, "t", None)
+        self.ml = FalsoML()
+        self._ps = [mock.patch.object(S, "ml_api_get", self.ml),
+                    mock.patch.object(S, "ml_casas_conectadas", return_value=["aracatuba"])]
+        for p in self._ps:
+            p.start()
+            self.addCleanup(p.stop)
+
+    def foto(self, cod="P1"):
+        with S.DB_LOCK:
+            cur = S.DB.execute("INSERT INTO anuncio_foto_v2024(ficha_codigo,arquivo,tipo,ordem) VALUES(?,?,?,0)",
+                               (cod, "x.jpg", "jpg"))
+            S.DB.commit()
+            return cur.lastrowid
+
+    def novo(self, **extra):
+        d = {"codigo": "p1", "conta": "aracatuba", "titulo": "Filtro de oleo"}
+        d.update(extra)
+        return S.anuncio_rascunho_salvar(d, "t", None)
+
+    def test_criar_e_ler_rascunho(self):
+        r = self.novo(preco="49,90", quantidade=3, frete_gratis=True, garantia="90 dias")
+        self.assertEqual((r["ficha_codigo"], r["situacao"], r["versao"], r["preco"], r["quantidade"]),
+                         ("P1", "rascunho", 1, 49.9, 3))
+        self.assertIs(r["frete_gratis"], True)
+        self.assertEqual(r["tipo_anuncio"], "gold_special")
+        self.assertEqual(S.anuncio_rascunho_ler(r["id"])["titulo"], "Filtro de oleo")
+        self.assertEqual([x["id"] for x in S.anuncio_rascunhos("P1")], [r["id"]])
+        self.assertEqual(S.anuncio_rascunhos("P2"), [])
+        with self.assertRaises(ValueError):
+            S.anuncio_rascunho_salvar({"codigo": "NAOEXISTE", "conta": "aracatuba"}, "t", None)
+
+    def test_ordem_titulo_categoria_atributos(self):
+        with self.assertRaises(ValueError):
+            self.novo(titulo="", categoria="MLB123")
+        with self.assertRaises(ValueError):
+            self.novo(atributos={"BRAND": "X"})
+        r = self.novo(categoria="MLB123", atributos={"BRAND": "Wurth", "VAZIO": "  "})
+        self.assertEqual(r["atributos"], {"BRAND": "Wurth"})
+        with self.assertRaises(ValueError):  # apagar o titulo com categoria
+            S.anuncio_rascunho_salvar({"id": r["id"], "titulo": ""}, "t", r["versao"])
+
+    def test_trocar_categoria_guarda_o_digitado(self):
+        r = self.novo(categoria="MLB123", atributos={"BRAND": "Wurth", "COLOR": "Preto"})
+        self.ml.atributos = [a for a in ATRIBUTOS if a["id"] != "COLOR"]
+        r2 = S.anuncio_rascunho_salvar({"id": r["id"], "categoria": "MLB999"}, "t", r["versao"])
+        self.assertEqual(r2["categoria"], "MLB999")
+        self.assertEqual(r2["atributos"]["BRAND"], "Wurth")
+        self.assertNotIn("COLOR", r2["atributos"])
+        self.assertEqual(r2["atributos"]["_guardados"], {"MLB123": {"COLOR": "Preto"}})
+        self.ml.atributos = ATRIBUTOS
+        r3 = S.anuncio_rascunho_salvar({"id": r["id"], "categoria": "MLB123"}, "t", r2["versao"])
+        self.assertEqual(r3["atributos"], {"BRAND": "Wurth", "COLOR": "Preto"})
+
+    def test_categoria_sem_resposta_do_ml_recusa(self):
+        r = self.novo(categoria="MLB123", atributos={"BRAND": "Wurth"})
+        self.ml.erro = "Mercado Livre HTTP 500"
+        with self.assertRaises(ValueError):
+            S.anuncio_rascunho_salvar({"id": r["id"], "categoria": "MLB777"}, "t", r["versao"])
+        atual = S.anuncio_rascunho_ler(r["id"])
+        self.assertEqual((atual["categoria"], atual["versao"]), ("MLB123", r["versao"]))
+
+    def test_publicado_nao_edita(self):
+        r = self.novo()
+        for sit in ("publicado", "publicando", "incerto"):
+            with S.DB_LOCK:
+                S.DB.execute("UPDATE anuncio_rascunho_v2024 SET situacao=? WHERE id=?", (sit, r["id"]))
+                S.DB.commit()
+            with self.assertRaises(ValueError):
+                S.anuncio_rascunho_salvar({"id": r["id"], "titulo": "Novo"}, "t", r["versao"])
+        with S.DB_LOCK:
+            S.DB.execute("UPDATE anuncio_rascunho_v2024 SET situacao='erro' WHERE id=?", (r["id"],))
+            S.DB.commit()
+        self.assertEqual(S.anuncio_rascunho_salvar({"id": r["id"], "titulo": "Novo"}, "t", r["versao"])["titulo"], "Novo")
+
+    def test_conflito_409(self):
+        r = self.novo()
+        S.anuncio_rascunho_salvar({"id": r["id"], "preco": 10}, "t", r["versao"])
+        with self.assertRaises(S.FichaConflito) as cm:
+            S.anuncio_rascunho_salvar({"id": r["id"], "preco": 11}, "t", r["versao"])
+        self.assertEqual(cm.exception.atual["preco"], 10.0)
+        st, c = self.cliente.pedir("POST", "/api/anuncios/rascunho", {"id": r["id"], "preco": 12, "versao": r["versao"]})
+        self.assertEqual((st, c["error"]), (409, "CONFLITO"), c)
+        self.assertEqual(c["atual"]["preco"], 10.0)
+        st, c = self.cliente.pedir("POST", "/api/anuncios/rascunho", {"id": r["id"], "preco": 12, "versao": 2})
+        self.assertEqual((st, c["rascunho"]["preco"]), (200, 12.0), c)
+        st, c = self.cliente.pedir("POST", "/api/anuncios/rascunho",
+                                   {"codigo": "P1", "conta": "outra", "titulo": "x"})
+        self.assertEqual(st, 400, c)
+        st, c = self.cliente.pedir("GET", "/api/anuncios/rascunhos?codigo=P1")
+        self.assertEqual((st, len(c["rascunhos"])), (200, 1), c)
+
+    def test_foto_de_outra_ficha_recusada(self):
+        minha, alheia = self.foto("P1"), self.foto("P2")
+        with self.assertRaises(ValueError):
+            self.novo(fotos=[minha, alheia])
+        with self.assertRaises(ValueError):
+            self.novo(fotos=[999999])
+        r = self.novo(fotos=[minha, minha])
+        self.assertEqual(r["fotos"], [minha])
+
+    def test_mudar_volta_para_rascunho(self):
+        r = self.novo()
+        with S.DB_LOCK:
+            S.DB.execute("UPDATE anuncio_rascunho_v2024 SET situacao='validado' WHERE id=?", (r["id"],))
+            S.DB.commit()
+        igual = S.anuncio_rascunho_salvar({"id": r["id"], "titulo": "Filtro de oleo"}, "t", r["versao"])
+        self.assertEqual((igual["situacao"], igual["versao"]), ("validado", r["versao"]))
+        r2 = S.anuncio_rascunho_salvar({"id": r["id"], "preco": 5}, "t", r["versao"])
+        self.assertEqual((r2["situacao"], r2["versao"]), ("rascunho", r["versao"] + 1))
+
+    def test_corpo_do_item(self):
+        r = self.novo(categoria="MLB123", preco=49.9, quantidade=2, frete_gratis=True, garantia="90 dias",
+                      tipo_anuncio="gold_pro",
+                      atributos={"BRAND": "Wurth", "COLOR": "preto", "EMPTY_GTIN_REASON": "Kit", "MODEL": ""})
+        defs = [{"id": "COLOR", "valores": [{"id": "1", "nome": "Preto"}]},
+                {"id": "EMPTY_GTIN_REASON", "valores": [{"id": "17055160", "nome": "Kit"}]}]
+        c = S.anuncio_item_corpo(r, ["MLB_P1", "MLB_P2"], defs)
+        self.assertEqual((c["title"], c["category_id"], c["price"], c["currency_id"], c["available_quantity"]),
+                         ("Filtro de oleo", "MLB123", 49.9, "BRL", 2))
+        self.assertEqual((c["buying_mode"], c["listing_type_id"], c["condition"]), ("buy_it_now", "gold_pro", "new"))
+        self.assertEqual(c["pictures"], [{"id": "MLB_P1"}, {"id": "MLB_P2"}])
+        self.assertEqual(c["shipping"], {"mode": "me2", "free_shipping": True})
+        self.assertEqual(sorted(c["attributes"], key=lambda a: a["id"]),
+                         [{"id": "BRAND", "value_name": "Wurth"}, {"id": "COLOR", "value_id": "1"},
+                          {"id": "EMPTY_GTIN_REASON", "value_id": "17055160"}])
+        self.assertEqual([t["id"] for t in c["sale_terms"]], ["WARRANTY_TYPE", "WARRANTY_TIME"])
+        self.assertEqual(c["sale_terms"][1]["value_name"], "90 dias")
+        sem = S.anuncio_item_corpo({"titulo": "a", "atributos": {"X": "y", "_guardados": {}}}, [])
+        self.assertEqual((sem["sale_terms"], sem["attributes"]), ([], [{"id": "X", "value_name": "y"}]))
+        self.assertIs(sem["shipping"]["free_shipping"], False)

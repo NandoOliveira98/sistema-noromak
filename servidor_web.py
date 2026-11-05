@@ -7380,6 +7380,30 @@ def ensure_anuncios_schema() -> None:
                 criado_por TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_anuncio_foto_ficha ON anuncio_foto_v2024(ficha_codigo, ordem);
+            CREATE TABLE IF NOT EXISTS anuncio_rascunho_v2024 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ficha_codigo TEXT NOT NULL,
+                conta TEXT NOT NULL,
+                titulo TEXT,
+                categoria TEXT,
+                atributos_json TEXT DEFAULT '{}',
+                fotos_json TEXT DEFAULT '[]',
+                descricao TEXT,
+                preco REAL,
+                tipo_anuncio TEXT DEFAULT 'gold_special',
+                frete_gratis INTEGER,
+                garantia TEXT,
+                quantidade INTEGER,
+                situacao TEXT NOT NULL DEFAULT 'rascunho',
+                mlb TEXT,
+                erros_json TEXT DEFAULT '[]',
+                versao INTEGER NOT NULL DEFAULT 1,
+                criado_em TEXT,
+                criado_por TEXT,
+                atualizado_em TEXT,
+                atualizado_por TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_anuncio_rascunho_ficha ON anuncio_rascunho_v2024(ficha_codigo);
             """
         )
         DB.commit()
@@ -31089,6 +31113,313 @@ def anuncio_atributos_da_ficha(ficha: dict[str, Any], atributos: list[dict[str, 
     return saida
 
 
+# V20.24: rascunho do anuncio (um por tentativa de publicar; varios por ficha/conta). So o Publicar (Task 5) escreve no ML.
+ANUNCIO_RASCUNHO_EDITAVEL = ("rascunho", "validado", "erro")
+ANUNCIO_TIPOS_LISTAGEM = ("gold_special", "gold_pro", "free")
+ANUNCIO_RASCUNHO_CAMPOS = ("titulo", "categoria", "descricao", "preco", "tipo_anuncio", "frete_gratis", "garantia",
+                           "quantidade")
+
+
+def _anuncio_rascunho_de_linha(row: Any) -> dict[str, Any]:
+    def _j(texto: Any, padrao: Any) -> Any:
+        try:
+            v = json.loads(texto or "")
+        except (TypeError, ValueError):
+            return padrao
+        return v if isinstance(v, type(padrao)) else padrao
+
+    d = dict(row)
+    d["atributos"] = _j(d.pop("atributos_json", ""), {})
+    d["fotos"] = _j(d.pop("fotos_json", ""), [])
+    d["erros"] = _j(d.pop("erros_json", ""), [])
+    if d.get("frete_gratis") is not None:
+        d["frete_gratis"] = bool(d["frete_gratis"])
+    return d
+
+
+def anuncio_rascunho_ler(rid: Any) -> dict[str, Any] | None:
+    try:
+        n = int(rid)
+    except (TypeError, ValueError):
+        return None
+    with DB_LOCK:
+        row = DB.execute("SELECT * FROM anuncio_rascunho_v2024 WHERE id=?", (n,)).fetchone()
+    return _anuncio_rascunho_de_linha(row) if row else None
+
+
+def anuncio_rascunhos(codigo: str) -> list[dict[str, Any]]:
+    cod = normalize(codigo)
+    if not cod:
+        return []
+    with DB_LOCK:
+        rows = DB.execute("SELECT * FROM anuncio_rascunho_v2024 WHERE ficha_codigo=? ORDER BY id DESC", (cod,)).fetchall()
+    return [_anuncio_rascunho_de_linha(r) for r in rows]
+
+
+def _anuncio_rascunho_limpar(dados: dict[str, Any]) -> dict[str, Any]:
+    """V20.24 (pura): so as chaves enviadas, ja validadas e normalizadas. Vazio/desconhecido = None (nunca zero)."""
+    out: dict[str, Any] = {}
+
+    def _vazio(v: Any) -> bool:
+        return v is None or (isinstance(v, str) and not v.strip())
+
+    if "titulo" in dados:
+        t = " ".join(str(dados["titulo"] or "").split())
+        if len(t) > 60:
+            raise ValueError("O título do Mercado Livre aceita até 60 caracteres.")
+        out["titulo"] = t
+    if "categoria" in dados:
+        c = str(dados["categoria"] or "").strip().upper()
+        if c and not re.fullmatch(r"MLB\d{1,12}", c):
+            raise ValueError("Categoria inválida.")
+        out["categoria"] = c
+    if "descricao" in dados:
+        d = str(dados["descricao"] or "").strip()
+        if len(d) > 50000:
+            raise ValueError("Descrição grande demais.")
+        out["descricao"] = d
+    if "garantia" in dados:
+        g = str(dados["garantia"] or "").strip()
+        if len(g) > 100:
+            raise ValueError("Garantia: até 100 caracteres.")
+        out["garantia"] = g
+    if "preco" in dados:
+        if _vazio(dados["preco"]):
+            out["preco"] = None
+        else:
+            try:
+                p = float(str(dados["preco"]).replace(",", "."))
+            except (TypeError, ValueError):
+                p = 0.0
+            if isinstance(dados["preco"], bool) or not math.isfinite(p) or p <= 0:
+                raise ValueError("Preço: informe um número maior que zero ou deixe vazio.")
+            out["preco"] = round(p, 2)
+    if "quantidade" in dados:
+        if _vazio(dados["quantidade"]):
+            out["quantidade"] = None
+        else:
+            try:
+                q = float(str(dados["quantidade"]).replace(",", "."))
+            except (TypeError, ValueError):
+                q = 0.0
+            if isinstance(dados["quantidade"], bool) or not math.isfinite(q) or q < 1 or q != int(q) or q > 1000000:
+                raise ValueError("Quantidade: informe um número inteiro maior que zero ou deixe vazio.")
+            out["quantidade"] = int(q)
+    if "tipo_anuncio" in dados:
+        tp = str(dados["tipo_anuncio"] or "").strip() or "gold_special"
+        if tp not in ANUNCIO_TIPOS_LISTAGEM:
+            raise ValueError("Tipo de anúncio inválido.")
+        out["tipo_anuncio"] = tp
+    if "frete_gratis" in dados:
+        f = dados["frete_gratis"]
+        if f is None or f == "":
+            out["frete_gratis"] = None
+        elif isinstance(f, bool):
+            out["frete_gratis"] = f
+        elif str(f).strip().lower() in ("1", "true", "sim"):
+            out["frete_gratis"] = True
+        elif str(f).strip().lower() in ("0", "false", "nao", "não"):
+            out["frete_gratis"] = False
+        else:
+            raise ValueError("Frete grátis inválido.")
+    if "atributos" in dados:
+        a = dados["atributos"]
+        if not isinstance(a, dict):
+            raise ValueError("Atributos inválidos.")
+        limpos: dict[str, str] = {}
+        for k, v in a.items():
+            k = str(k or "").strip()
+            if not k or k == "_guardados":
+                continue
+            if len(k) > 80:
+                raise ValueError("Atributo inválido.")
+            if isinstance(v, (dict, list)):
+                raise ValueError(f"Atributo {k}: informe um texto.")
+            v = "" if v is None else str(v).strip()
+            if len(v) > 1000:
+                raise ValueError(f"Atributo {k}: texto grande demais.")
+            if v:
+                limpos[k] = v
+        out["atributos"] = limpos
+    if "fotos" in dados:
+        f = dados["fotos"]
+        if not isinstance(f, list):
+            raise ValueError("Fotos inválidas.")
+        ids: list[int] = []
+        for x in f:
+            try:
+                n = int(x)
+            except (TypeError, ValueError):
+                raise ValueError("Foto inválida.")
+            if isinstance(x, bool):
+                raise ValueError("Foto inválida.")
+            if n not in ids:
+                ids.append(n)
+        if len(ids) > 12:
+            raise ValueError("O Mercado Livre aceita até 12 fotos.")
+        out["fotos"] = ids
+    return out
+
+
+def anuncio_rascunho_salvar(dados: dict[str, Any], ator: str, versao: int | None) -> dict[str, Any]:
+    """V20.24: cria (sem `id`) ou atualiza (com `id`; `versao` conferida, senao FichaConflito).
+    Ordem: sem titulo nao aceita categoria; sem categoria nao aceita atributos. Trocar a categoria mantem so os
+    atributos que ela tem e guarda o resto em `_guardados` (volta se a categoria anterior voltar)."""
+    dados = dados if isinstance(dados, dict) else {}
+    rid = dados.get("id")
+    pre = None
+    if rid not in (None, ""):
+        pre = anuncio_rascunho_ler(rid)
+        if pre is None:
+            raise ValueError("Rascunho não encontrado.")
+    limpos = _anuncio_rascunho_limpar(dados)
+    cod = ""
+    conta = ""
+    if pre is None:
+        cod = normalize(dados.get("codigo"))
+        conta = str(dados.get("conta") or "").strip()
+        if not cod:
+            raise ValueError("Informe o código do produto.")
+        if not conta:
+            raise ValueError("Informe a conta do Mercado Livre.")
+        if ficha_ler(cod) is None:
+            raise ValueError("Produto não encontrado.")
+    else:
+        cod, conta = pre["ficha_codigo"], pre["conta"]
+    # V20.24: atributos da categoria nova lidos FORA do DB_LOCK (usa o cache de 24 h); sem resposta do ML a troca
+    # e recusada com tudo como estava - nunca adivinha quais atributos valem.
+    ids_nova: set[str] | None = None
+    if "categoria" in limpos and limpos["categoria"] and limpos["categoria"] != ((pre or {}).get("categoria") or ""):
+        try:
+            defs = ml_categoria_atributos(limpos["categoria"], conta)
+        except RuntimeError as exc:
+            raise ValueError(f"Não consegui ler os atributos da categoria no Mercado Livre ({exc}). Nada foi alterado.")
+        ids_nova = {str(a.get("id")) for a in defs.get("atributos") or [] if isinstance(a, dict)}
+    with DB_LOCK:
+        atual = None
+        if pre is not None:
+            row = DB.execute("SELECT * FROM anuncio_rascunho_v2024 WHERE id=?", (pre["id"],)).fetchone()
+            if row is None:
+                raise ValueError("Rascunho não encontrado.")
+            atual = _anuncio_rascunho_de_linha(row)
+            if versao is None or int(versao) != atual["versao"]:
+                raise FichaConflito(atual)
+            if atual["situacao"] not in ANUNCIO_RASCUNHO_EDITAVEL:
+                raise ValueError("Este rascunho já foi publicado ou está em publicação; não pode mais ser editado.")
+        base = atual or {"titulo": "", "categoria": "", "descricao": "", "preco": None, "tipo_anuncio": "gold_special",
+                         "frete_gratis": None, "garantia": "", "quantidade": None, "atributos": {}, "fotos": []}
+        attrs = dict(base.get("atributos") or {})
+        guard = attrs.pop("_guardados", None)
+        guard = dict(guard) if isinstance(guard, dict) else {}
+        novo = {k: base.get(k) for k in ANUNCIO_RASCUNHO_CAMPOS}
+        for k in ANUNCIO_RASCUNHO_CAMPOS:
+            if k in limpos:
+                novo[k] = limpos[k]
+        cat_antiga = str(base.get("categoria") or "")
+        cat_nova = str(novo.get("categoria") or "")
+        if cat_nova != cat_antiga:
+            if cat_nova and ids_nova is None:  # mudou entre a leitura e o lock: recarregar e tentar de novo
+                raise FichaConflito(atual or {})
+            if cat_antiga:
+                mantidos = {k: v for k, v in attrs.items() if ids_nova is not None and k in ids_nova}
+                tirados = {k: v for k, v in attrs.items() if k not in mantidos}
+                if tirados:
+                    guard[cat_antiga] = {**(guard.get(cat_antiga) or {}), **tirados}
+                attrs = mantidos
+            if cat_nova and isinstance(guard.get(cat_nova), dict):
+                sobra: dict[str, Any] = {}
+                for k, v in guard.pop(cat_nova).items():
+                    if ids_nova is not None and k in ids_nova:
+                        attrs.setdefault(k, v)
+                    else:
+                        sobra[k] = v
+                if sobra:
+                    guard[cat_nova] = sobra
+        if "atributos" in limpos:
+            attrs = dict(limpos["atributos"])
+        fotos = list(limpos["fotos"]) if "fotos" in limpos else list(base.get("fotos") or [])
+        if not str(novo.get("titulo") or "").strip() and cat_nova:
+            raise ValueError("Informe o título antes de escolher a categoria.")
+        if attrs and not cat_nova:
+            raise ValueError("Escolha a categoria antes de preencher os atributos.")
+        if "fotos" in limpos and fotos:
+            marcas = ",".join("?" * len(fotos))
+            achadas = {int(r["id"]) for r in DB.execute(
+                f"SELECT id FROM anuncio_foto_v2024 WHERE ficha_codigo=? AND id IN ({marcas})", (cod, *fotos))}
+            if achadas != set(fotos):
+                raise ValueError("Há foto que não pertence a este produto.")
+        attrs_gravar = dict(attrs)
+        if guard:
+            attrs_gravar["_guardados"] = guard
+        agora = now_iso()
+        frete = None if novo["frete_gratis"] is None else (1 if novo["frete_gratis"] else 0)
+        if atual is None:
+            cur = DB.execute(
+                "INSERT INTO anuncio_rascunho_v2024(ficha_codigo,conta,titulo,categoria,atributos_json,fotos_json,descricao,"
+                "preco,tipo_anuncio,frete_gratis,garantia,quantidade,situacao,versao,criado_em,criado_por,atualizado_em,"
+                "atualizado_por) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'rascunho',1,?,?,?,?)",
+                (cod, conta, novo["titulo"], cat_nova, json.dumps(attrs_gravar, ensure_ascii=False),
+                 json.dumps(fotos), novo["descricao"], novo["preco"], novo["tipo_anuncio"] or "gold_special", frete,
+                 novo["garantia"], novo["quantidade"], agora, str(ator or ""), agora, str(ator or "")))
+            DB.commit()
+            rid_novo = cur.lastrowid
+        else:
+            mudou = (any(novo[k] != base.get(k) for k in ANUNCIO_RASCUNHO_CAMPOS) or fotos != list(base.get("fotos") or [])
+                     or attrs_gravar != (base.get("atributos") or {}))
+            if not mudou:
+                return atual
+            situacao = "rascunho" if atual["situacao"] == "validado" else atual["situacao"]
+            DB.execute(
+                "UPDATE anuncio_rascunho_v2024 SET titulo=?,categoria=?,atributos_json=?,fotos_json=?,descricao=?,preco=?,"
+                "tipo_anuncio=?,frete_gratis=?,garantia=?,quantidade=?,situacao=?,versao=versao+1,atualizado_em=?,"
+                "atualizado_por=? WHERE id=?",
+                (novo["titulo"], cat_nova, json.dumps(attrs_gravar, ensure_ascii=False), json.dumps(fotos),
+                 novo["descricao"], novo["preco"], novo["tipo_anuncio"] or "gold_special", frete, novo["garantia"],
+                 novo["quantidade"], situacao, agora, str(ator or ""), atual["id"]))
+            DB.commit()
+            rid_novo = atual["id"]
+        row = DB.execute("SELECT * FROM anuncio_rascunho_v2024 WHERE id=?", (rid_novo,)).fetchone()
+        return _anuncio_rascunho_de_linha(row)
+
+
+def _anuncio_sem_acento(texto: Any) -> str:
+    t = unicodedata.normalize("NFKD", str(texto or ""))
+    return "".join(c for c in t if not unicodedata.combining(c)).strip().casefold()
+
+
+def anuncio_item_corpo(rascunho: dict[str, Any], picture_ids: list[str],
+                       atributos_def: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """V20.24 (pura): corpo do POST /items. `atributos_def` = lista `atributos` de ml_categoria_atributos: atributo
+    com lista de valores cujo texto bate (sem caixa/acento) com um deles vai como value_id (ex.: EMPTY_GTIN_REASON
+    "Kit"); os demais, como value_name. Atributo vazio nao vai."""
+    defs = {str(a.get("id")): a for a in (atributos_def or []) if isinstance(a, dict)}
+    atributos = []
+    for attr_id, valor in (rascunho.get("atributos") or {}).items():
+        if attr_id == "_guardados" or valor is None or not str(valor).strip():
+            continue
+        texto = str(valor).strip()
+        value_id = None
+        for v in (defs.get(attr_id) or {}).get("valores") or []:
+            if isinstance(v, dict) and v.get("id") and _anuncio_sem_acento(v.get("nome")) == _anuncio_sem_acento(texto):
+                value_id = str(v["id"])
+                break
+        atributos.append({"id": attr_id, "value_id": value_id} if value_id else {"id": attr_id, "value_name": texto})
+    corpo: dict[str, Any] = {
+        "title": rascunho.get("titulo"), "category_id": rascunho.get("categoria"), "price": rascunho.get("preco"),
+        "currency_id": "BRL", "available_quantity": rascunho.get("quantidade"), "buying_mode": "buy_it_now",
+        "listing_type_id": rascunho.get("tipo_anuncio") or "gold_special", "condition": "new",
+        "pictures": [{"id": str(p)} for p in (picture_ids or [])],
+        "attributes": atributos,
+        "sale_terms": [],
+        "shipping": {"mode": "me2", "free_shipping": bool(rascunho.get("frete_gratis"))},
+    }
+    garantia = str(rascunho.get("garantia") or "").strip()
+    if garantia:
+        corpo["sale_terms"] = [{"id": "WARRANTY_TYPE", "value_name": "Garantia do vendedor"},
+                               {"id": "WARRANTY_TIME", "value_name": garantia}]
+    return corpo
+
+
 def ml_tarifa_nova(preco: float, tipo: str, categoria: str, conta: str) -> dict[str, Any]:
     """V20.24: tarifa de um anuncio que ainda nao existe (so listing_prices). Frete = None: sem MLB nao ha cotacao."""
     try:
@@ -38227,6 +38558,11 @@ class AppHandler(BaseHTTPRequestHandler):
             if ctx is not None:
                 self.send_json({"ok": True, "trabalhos": anuncio_estudio_lista(str((query.get("busca") or [""])[0]))})
             return
+        if path == "/api/anuncios/rascunhos":  # V20.24: rascunhos de uma ficha (so le o banco)
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                self.send_json({"ok": True, "rascunhos": anuncio_rascunhos(str((query.get("codigo") or [""])[0]))})
+            return
         if path == "/api/anuncios/ficha":  # V20.23
             ctx = self.auth(admin_only=True)
             if ctx is not None:
@@ -40531,7 +40867,7 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         if path in ("/api/anuncios/ficha", "/api/anuncios/kit", "/api/anuncios/puxar", "/api/anuncios/controle",
                     "/api/anuncios/remover", "/api/anuncios/reincluir", "/api/anuncios/foto",
-                    "/api/anuncios/foto/remover", "/api/anuncios/foto/ordenar"):
+                    "/api/anuncios/foto/remover", "/api/anuncios/foto/ordenar", "/api/anuncios/rascunho"):
             # V20.23: ver = modulo admin; gravar = so perfil Admin. Nada daqui grava no ML/Shopee/Magalu/TikTok/Apollo.
             ctx = self.auth(admin_only=True)
             if ctx is None:
@@ -40631,6 +40967,17 @@ class AppHandler(BaseHTTPRequestHandler):
                 elif path == "/api/anuncios/foto/remover":
                     res = anuncio_foto_remover(str(body.get("codigo") or ""), body.get("id"), ctx["username"])
                     audit(ctx["username"], "anuncios.foto_remover", f"{body.get('codigo')}|{body.get('id')}")
+                elif path == "/api/anuncios/rascunho":  # V20.24: grava so no banco (o ML so no Publicar)
+                    v = body.get("versao")
+                    try:
+                        v = None if v is None or v == "" else int(v)
+                    except (TypeError, ValueError):
+                        raise ValueError("Versão inválida.")
+                    if body.get("id") in (None, "") and str(body.get("conta") or "").strip() not in ml_casas_conectadas():
+                        raise ValueError("Conta do Mercado Livre desconhecida ou não conectada.")
+                    rasc = anuncio_rascunho_salvar(body, ctx["username"], v)
+                    audit(ctx["username"], "anuncios.rascunho", f"{rasc.get('ficha_codigo')}|{rasc.get('id')}|v{rasc.get('versao')}")
+                    res = {"ok": True, "rascunho": rasc}
                 elif path == "/api/anuncios/foto/ordenar":
                     res = anuncio_foto_ordenar(str(body.get("codigo") or ""), body.get("ids"), ctx["username"])
                 elif path == "/api/anuncios/controle":
