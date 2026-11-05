@@ -170,10 +170,13 @@ S.ml_itens_detalhe = _itens_detalhe
 
 # V20.24: criar anuncio (ML simulado: categoria, atributos, tarifa, validate, fotos, items)
 sys.path.insert(0, str(Path(__file__).parent))
-# V20.26: estoque simulado no ML (PUT /items + releitura). O 4 L tem depósito do vendedor (sem selling_address):
-# mandar estoque nele mostra o erro "ajuste no ML". O Apollo continua o simulado acima.
+# V20.26: estoque simulado no ML (PUT /items + releitura). O Apollo continua o simulado acima.
+# V20.27: o 4 L tem o estoque multiorigem como a conta real de Araçatuba (05/11): um local seller_warehouse, sem
+# selling_address; o envio vai pelo PUT /stock/type/seller_warehouse e agora dá certo.
 S._PREVIA_ANUNCIOS = ANUNCIOS
-S._PREVIA_UP = {"MLB1129555578": {"up": "MLBU900000001", "locations": [{"type": "seller_warehouse", "quantity": 6}]}}
+S._PREVIA_UP = {"MLB1129555578": {"up": "MLBU900000001", "locations": [
+    {"type": "seller_warehouse", "store_id": "79979052", "quantity": 6, "network_node_id": "BRP2246251061",
+     "country_id": "BR", "status": "active"}]}}
 S._PREVIA_ESTOQUE_NAO_MUDA = set()
 import dev_criar_ml  # noqa
 dev_criar_ml.instalar(S)

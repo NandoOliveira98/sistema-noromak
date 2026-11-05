@@ -49,7 +49,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.26-ANUNCIOS-ESTOQUE"
+APP_VERSION = "20.27-ANUNCIOS-DEPOSITO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -32809,6 +32809,78 @@ def _ml_estoque_up_gravar(up: str, qtd: int, versao: str) -> None:
             raise
 
 
+# V20.27: estoque multiorigem do ML (caso real 05/11 20:28, conta de Aracatuba): o user-product volta SEM
+# selling_address e com UM local seller_warehouse (store_id + network_node_id). Grava-se nesse deposito pelo
+# PUT /user-products/{id}/stock/type/seller_warehouse com o x-version do GET. meli_facility (Full) nao conta.
+def _ml_estoque_depositos(locais: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [l for l in (locais or []) if str(l.get("type") or "") in ANUNCIO_ESTOQUE_DEPOSITOS]
+
+
+def _ml_estoque_depositos_texto(depositos: list[dict[str, Any]]) -> str:
+    partes = []
+    for d in depositos:
+        nome = str(d.get("store_id") or d.get("network_node_id") or d.get("type") or "?")
+        st = str(d.get("status") or "")
+        partes.append(f"depósito {nome}: {d.get('quantity')} un." + (f" ({st})" if st and st != "active" else ""))
+    return "; ".join(partes)
+
+
+def _ml_estoque_deposito_unico(locais: list[dict[str, Any]]) -> tuple[dict[str, Any] | None, str]:
+    """V20.27: o deposito do vendedor onde gravar, ou (None, motivo). Nunca adivinha entre dois."""
+    deps = _ml_estoque_depositos(locais)
+    tipos = {str(l.get("type") or "") for l in (locais or [])}
+    if "selling_address" in tipos and "seller_warehouse" in tipos:
+        return None, ("anúncio com endereço de venda e depósito do vendedor juntos (" + _ml_estoque_depositos_texto(deps)
+                      + "): ajuste no ML")
+    if not deps:
+        return None, "anúncio com depósito do vendedor: ajuste no ML"
+    if (len(deps) != 1 or str(deps[0].get("type") or "") != "seller_warehouse"
+            or str(deps[0].get("status") or "") != "active"
+            or not str(deps[0].get("store_id") or "").strip() or not str(deps[0].get("network_node_id") or "").strip()):
+        return None, f"anúncio com depósito do vendedor ({_ml_estoque_depositos_texto(deps)}): ajuste no ML"
+    return deps[0], ""
+
+
+def _ml_estoque_wh_gravar(up: str, qtd: int, versao: str, deposito: dict[str, Any]) -> None:
+    """V20.27: PUT no deposito seller_warehouse; 409 = rele (mesmo deposito, versao nova) e tenta uma vez."""
+    for tentativa in (1, 2):
+        corpo_put = {"locations": [{"store_id": str(deposito.get("store_id")),
+                                    "network_node_id": str(deposito.get("network_node_id")), "quantity": int(qtd)}]}
+        try:
+            corpo, _ = _ml_estoque_http("PUT", f"/user-products/{up}/stock/type/seller_warehouse", corpo_put,
+                                        headers={"x-version": versao} if versao else None)
+            _anuncio_amostra("estoque_put_seller_warehouse", corpo)
+            return
+        except RuntimeError as exc:
+            if getattr(exc, "ml_status", None) == 409 and tentativa == 1:
+                locais, versao = _ml_estoque_up_ler(up)
+                novo, motivo = _ml_estoque_deposito_unico(locais)
+                if novo is None or str(novo.get("store_id")) != str(deposito.get("store_id")):
+                    raise RuntimeError(motivo or "o depósito do vendedor mudou no ML; nada enviado") from exc
+                deposito = novo
+                continue
+            raise
+
+
+def _ml_estoque_wh_reler(up: str, store_id: str, qtd: int) -> int | None:
+    """V20.27: rele o estoque do user-product ate o deposito mostrar `qtd`. None = sem leitura."""
+    ultimo: int | None = None
+    for espera in ANUNCIO_ESTOQUE_RELEITURA_ESPERAS or (0,):
+        if espera:
+            time.sleep(espera)
+        try:
+            locais, _ = _ml_estoque_up_ler(up)
+        except Exception:
+            continue
+        dep = next((l for l in locais if str(l.get("type") or "") == "seller_warehouse"
+                    and str(l.get("store_id") or "") == str(store_id)), None)
+        q = (dep or {}).get("quantity")
+        ultimo = int(q) if isinstance(q, (int, float)) and not isinstance(q, bool) else None
+        if ultimo == qtd:
+            break
+    return ultimo
+
+
 def ml_estoque_gravar(conta: str, mlb: str, quantidade: Any, *, ator: str, modo: str, motivo: str,
                       conferir: Any = None) -> dict[str, Any]:
     """V20.26: a UNICA funcao que grava estoque no ML. `{ok, antes, depois, metodo, erro, resultado}`.
@@ -32913,6 +32985,32 @@ def _ml_estoque_gravar_na_casa(mlb: str, qtd: int) -> dict[str, Any]:
     tipos = {str(l.get("type") or "") for l in (locais or [])}
     tem_selling = "selling_address" in tipos
 
+    def _pelo_deposito() -> dict[str, Any]:
+        # V20.27: estoque multiorigem: um deposito seller_warehouse ativo; mais de um (ou inativo) = recusa listando
+        deposito, motivo = _ml_estoque_deposito_unico(locais or [])
+        if deposito is None:
+            saida["erro"] = motivo
+            return saida
+        store_id = str(deposito.get("store_id"))
+        erro_put = ""
+        try:
+            _ml_estoque_wh_gravar(up, qtd, versao, deposito)
+        except Exception as exc:  # pode ter mudado mesmo assim (5xx/timeout): a releitura decide
+            erro_put = str(exc)[:300]
+        no_deposito = _ml_estoque_wh_reler(up, store_id, qtd)
+        try:
+            no_anuncio = _ml_estoque_ler_item(mlb)["available_quantity"]
+        except Exception:
+            no_anuncio = None
+        saida["depois"] = no_deposito
+        saida["ok"] = no_deposito == qtd
+        if not saida["ok"]:
+            saida["erro"] = (f"o ML recusou o estoque do depósito {store_id} ({erro_put})" if erro_put else
+                             f"o ML não mudou o estoque do depósito {store_id} (mostra {no_deposito})")
+        elif no_anuncio is not None and no_anuncio != qtd:
+            saida["erro"] = f"depósito {store_id} com {qtd}; o anúncio mostra {no_anuncio}"
+        return saida
+
     def _pelo_up(depois_items: str = "") -> dict[str, Any]:
         nonlocal locais, versao
         saida["metodo"] = (saida["metodo"] + "+" if saida["metodo"] else "") + "user_product"
@@ -32922,9 +33020,9 @@ def _ml_estoque_gravar_na_casa(mlb: str, qtd: int) -> dict[str, Any]:
             except Exception as exc:
                 saida["erro"] = (depois_items + "; " if depois_items else "") + f"estoque do user-product não lido ({str(exc)[:200]})"
                 return saida
-        if not any(str(l.get("type") or "") == "selling_address" for l in locais):
-            saida["erro"] = "anúncio com depósito do vendedor: ajuste no ML"
-            return saida
+        tipos_up = {str(l.get("type") or "") for l in locais}
+        if "seller_warehouse" in tipos_up or "selling_address" not in tipos_up:
+            return _pelo_deposito()
         try:
             _ml_estoque_up_gravar(up, qtd, versao)
         except Exception as exc:

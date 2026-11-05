@@ -58,19 +58,24 @@ def instalar(S):
 
     def ml_estoque_http_falso(method, path, payload=None, headers=None):
         time.sleep(0.3)
-        m = re.match(r"/user-products/([^/]+)/stock(/type/selling_address)?$", path)
+        m = re.match(r"/user-products/([^/]+)/stock(/type/(selling_address|seller_warehouse))?$", path)  # V20.27
         mlb = next((k for k, v in ups.items() if v.get("up") == (m.group(1) if m else None)), None)
         if not m or mlb is None:
             raise RuntimeError(f"Mercado Livre respondeu HTTP 404: (prévia) {method} {path} não simulado")
         locais = ups[mlb]["locations"]
         if method == "GET":
-            return {"locations": locais}, {"x-version": str(versoes.get(mlb, 1))}
+            return {"id": ups[mlb]["up"], "locations": locais, "stock_mode": "countable"}, {"x-version": str(versoes.get(mlb, 1))}
         if str((headers or {}).get("x-version")) != str(versoes.get(mlb, 1)):
             e = RuntimeError("Mercado Livre respondeu HTTP 409: version conflict")
             e.ml_status, e.ml_corpo = 409, "version conflict"
             raise e
+        if m.group(3) == "seller_warehouse":  # V20.27: multiorigem, pelo store_id do deposito
+            for pedido in payload.get("locations") or []:
+                for loc in locais:
+                    if loc.get("type") == "seller_warehouse" and str(loc.get("store_id")) == str(pedido.get("store_id")):
+                        loc["quantity"] = int(pedido["quantity"])
         for loc in locais:
-            if loc.get("type") == "selling_address":
+            if m.group(3) == "selling_address" and loc.get("type") == "selling_address":
                 loc["quantity"] = int(payload["quantity"])
         versoes[mlb] = versoes.get(mlb, 1) + 1
         estoque_ml.setdefault(mlb, {"qtd": 0, "logistica": "drop_off"})["qtd"] = sum(int(l.get("quantity") or 0) for l in locais)

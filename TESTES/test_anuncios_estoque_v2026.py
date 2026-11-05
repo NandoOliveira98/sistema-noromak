@@ -239,9 +239,11 @@ class GravarMLTeste(EstoqueBase):
         self.ml.up["UP1"] = {"locations": [{"type": "selling_address", "quantity": 3},
                                            {"type": "seller_warehouse", "quantity": 0}], "versao": 2}
         r = S.ml_estoque_gravar("aracatuba", "MLB1", 6, ator="luis", modo="manual", motivo="")
-        self.assertTrue(r["ok"], r)
+        # V20.27: endereco de venda e deposito do vendedor juntos = recusa clara (nunca adivinha onde gravar)
+        self.assertFalse(r["ok"], r)
         self.assertEqual(r["metodo"], "user_product")
-        self.assertFalse([c for c in self.ml.escritas() if c[1].startswith("/items/")])
+        self.assertIn("endereço de venda", r["erro"])
+        self.assertEqual(self.ml.escritas(), [])
 
     def test_deposito_sem_selling_address_erro_claro(self):
         inserir()

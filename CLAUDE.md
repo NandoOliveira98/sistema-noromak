@@ -809,7 +809,7 @@ Registro em `anuncio_estoque_log_v2026` (ok/erro/simulado/ignorado, últimos 20.
 (módulo admin, só lê o banco); `POST /api/anuncios/estoque/{modo,manual,config,enviar}` (perfil Admin, `conta` obrigatória; Manual em
 anúncio Automático = 400; Enviar em Simulação = 400, rodada em andamento = 409). Tela: cartão "Controle de estoque" na aba Anúncios em
 todos os canais e painel "Estoque automático" (um cartão por conta, segue o seletor de casa; registro com `data-nk-tabela`).
-Prévia: o ML simulado aceita o PUT e o MLB1129555578 tem depósito do vendedor.
+Prévia: o ML simulado aceita o PUT e o MLB1129555578 tem depósito do vendedor (V20.27: multiorigem, envia).
 Teste: `TESTES/test_anuncios_estoque_v2026.py`.
 **Revisão final (05/11, "pode corrigir todos"):** (1) chave **por conta** `apollo_desconta_atendimento` em `anuncio_estoque_config_v2026`
 (padrão 0 = desconta todo pendente). O Disponível do Apollo = Contábil − Negociação − Fulfillment; se a Negociação já inclui o atendimento
@@ -833,6 +833,15 @@ não entra (motivo na tela); `ANUNCIO_ESTOQUE_ERROS_PARAR` (3) erros seguidos no
 (7) Volta a **Manual** (com linha no registro) quando a puxada ou o envio vê Full, ao remover/reincluir e ao trocar quem controla.
 (8) Foto pelo computador/Estúdio pega a `ANUNCIOS_FOTOS_ML_LOCK` sem esperar (409 "Aguarde as fotos do anúncio…"). Prévia: o
 PREVIA02 tem atendimento no Faturamento. Teste: `TESTES/test_anuncios_estoque_revisao_v2026.py`.
+**V20.27 — depósito do vendedor (ML multiorigem)** (1º uso real, 05/11 20:28, recusado "ajuste no ML"). Formato REAL de
+Araçatuba no `GET /user-products/{id}/stock`: sem `selling_address`, um local `{type: seller_warehouse, store_id, network_node_id,
+quantity, status: active}` + cabeçalho `x-version`. Com **um** `seller_warehouse` ativo (o `meli_facility`/Full não conta) grava
+`PUT /user-products/{id}/stock/type/seller_warehouse` com `x-version` e `{"locations": [{store_id, network_node_id, quantity}]}`
+como vieram (`_ml_estoque_wh_gravar`; 409 = relê e tenta 1x, depósito trocado = recusa); relê o estoque do user-product
+(`_ml_estoque_wh_reler`) e o anúncio, e só é ok se o depósito mostrar o número. Dois depósitos, depósito inativo ou sem
+`store_id`/`network_node_id` = recusa listando cada um (nunca adivinha); `selling_address` + `seller_warehouse` juntos = recusa;
+só `selling_address` = como na V20.26. 1ª resposta em `estoque_put_seller_warehouse`. Prévia: o MLB1129555578 tem o formato real e
+agora dá certo. Teste: `TESTES/test_anuncios_estoque_deposito_v2027.py`.
 
 ### Estúdio de Imagens (V20.17: servidor, tela e agente)
 `APP/imagens.html` (`/imagens`, menu Vendas e anúncios, módulo próprio **`imagens`** = `app_users.can_imagens`, mesma
