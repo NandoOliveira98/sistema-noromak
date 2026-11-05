@@ -32558,6 +32558,252 @@ def anuncio_estoque_config_definir(conta: str, modo: str, ator: str) -> dict[str
     return anuncio_estoque_config(conta)
 
 
+# V20.26: gravar estoque no ML. Uma gravacao por anuncio por vez (trava por anuncio); ML fora do DB_LOCK.
+ANUNCIO_ESTOQUE_RELEITURA_ESPERAS: tuple[float, ...] = (1.0, 2.0, 3.0)  # o ML demora uns segundos a mostrar
+ANUNCIO_ESTOQUE_TRAVA_S = 60
+_ANUNCIO_ESTOQUE_TRAVAS: dict[tuple[str, str], threading.Lock] = {}
+_ANUNCIO_ESTOQUE_TRAVAS_LOCK = threading.Lock()
+ANUNCIO_ESTOQUE_DEPOSITOS = ("seller_warehouse", "store")
+
+
+def _anuncio_estoque_trava(conta: str, mlb: str) -> threading.Lock:
+    with _ANUNCIO_ESTOQUE_TRAVAS_LOCK:
+        return _ANUNCIO_ESTOQUE_TRAVAS.setdefault((conta, mlb), threading.Lock())
+
+
+def _anuncio_estoque_qtd(valor: Any) -> int:
+    """V20.26: inteiro 0..ANUNCIO_ESTOQUE_MAX. Texto, fracao, negativo ou vazio = ValueError (nunca vira 0)."""
+    if isinstance(valor, bool) or valor is None or (isinstance(valor, str) and not valor.strip()):
+        raise ValueError("Informe a quantidade.")
+    try:
+        f = float(str(valor).strip().replace(",", ".")) if isinstance(valor, str) else float(valor)
+    except (TypeError, ValueError):
+        raise ValueError("Quantidade inválida.")
+    if f != f or f < 0 or f > ANUNCIO_ESTOQUE_MAX or int(f) != f:
+        raise ValueError(f"Quantidade inválida (inteiro de 0 a {ANUNCIO_ESTOQUE_MAX}).")
+    return int(f)
+
+
+def _ml_estoque_http(method: str, path: str, payload: dict[str, Any] | None = None,
+                     headers: dict[str, str] | None = None) -> tuple[Any, dict[str, str]]:
+    """V20.26: chamada JSON ao ML que devolve tambem os cabecalhos (o estoque do user-product usa `x-version`).
+    Token da casa atual (chamar dentro de ml_na_casa); 401 renova uma vez. Erro = RuntimeError com .ml_status."""
+    url = ML_API_BASE + path
+
+    def chamar(token: str) -> tuple[Any, dict[str, str]]:
+        body = json_dumps(payload).encode("utf-8") if payload is not None else None
+        h = {"Accept": "application/json", "Authorization": "Bearer " + token,
+             "User-Agent": f"NoromakExpedicao/{APP_VERSION}"}
+        if body is not None:
+            h["Content-Type"] = "application/json"
+        h.update(headers or {})
+        req = urllib.request.Request(url, data=body, headers=h, method=method.upper())
+        with urllib.request.urlopen(req, timeout=ML_HTTP_TIMEOUT) as resp:
+            texto = resp.read().decode("utf-8", "replace").strip()
+            cab = {str(k).lower(): str(v) for k, v in resp.headers.items()}
+            return (json.loads(texto) if texto else {}), cab
+
+    token, _ = ml_access_token()
+    try:
+        try:
+            return chamar(token)
+        except urllib.error.HTTPError as exc:
+            if exc.code != 401:
+                raise
+            token, _ = ml_access_token(force_refresh=True)
+            return chamar(token)
+    except urllib.error.HTTPError as exc:
+        try:
+            detalhe = exc.read().decode("utf-8", "replace")[:4000]
+        except Exception:
+            detalhe = ""
+        erro = RuntimeError(f"Mercado Livre respondeu HTTP {exc.code}: {detalhe[:400]}")
+        erro.ml_status = exc.code  # type: ignore[attr-defined]
+        erro.ml_corpo = detalhe  # type: ignore[attr-defined]
+        raise erro from exc
+
+
+def _ml_estoque_ler_item(mlb: str) -> dict[str, Any]:
+    """V20.26: o anuncio como o ML mostra agora (dentro de ml_na_casa). available_quantity sem numero = None."""
+    d = ml_api_get(f"/items/{mlb}?attributes=id,available_quantity,user_product_id,shipping,status")
+    d = d if isinstance(d, dict) else {}
+    q = d.get("available_quantity")
+    qtd = int(q) if isinstance(q, (int, float)) and not isinstance(q, bool) else None
+    return {"available_quantity": qtd, "user_product_id": str(d.get("user_product_id") or "").strip(),
+            "logistic_type": str((d.get("shipping") or {}).get("logistic_type") or "") if isinstance(d.get("shipping"), dict) else "",
+            "status": str(d.get("status") or "")}
+
+
+def _ml_estoque_reler(mlb: str, qtd: int) -> int | None:
+    """V20.26: rele ate o ML mostrar `qtd` (ou acabarem as esperas). Devolve o ultimo numero lido (None = sem leitura)."""
+    ultimo: int | None = None
+    for espera in ANUNCIO_ESTOQUE_RELEITURA_ESPERAS or (0,):
+        if espera:
+            time.sleep(espera)
+        try:
+            ultimo = _ml_estoque_ler_item(mlb)["available_quantity"]
+        except Exception:
+            continue
+        if ultimo == qtd:
+            break
+    return ultimo
+
+
+def _ml_estoque_up_ler(up: str) -> tuple[list[dict[str, Any]], str]:
+    """V20.26: locais do estoque do user-product e a versao (cabecalho x-version) para o PUT."""
+    corpo, cab = _ml_estoque_http("GET", f"/user-products/{up}/stock")
+    _anuncio_amostra("estoque_up_ler", {"corpo": corpo, "x-version": (cab or {}).get("x-version")})
+    locais = [l for l in ((corpo or {}).get("locations") or []) if isinstance(l, dict)] if isinstance(corpo, dict) else []
+    return locais, str((cab or {}).get("x-version") or "")
+
+
+def _ml_estoque_up_gravar(up: str, qtd: int, versao: str) -> None:
+    """V20.26: PUT do local selling_address com o x-version lido; 409 (versao mudou) = rele e tenta uma vez."""
+    for tentativa in (1, 2):
+        try:
+            corpo, _ = _ml_estoque_http("PUT", f"/user-products/{up}/stock/type/selling_address", {"quantity": qtd},
+                                        headers={"x-version": versao} if versao else None)
+            _anuncio_amostra("estoque_put_up", corpo)
+            return
+        except RuntimeError as exc:
+            if getattr(exc, "ml_status", None) == 409 and tentativa == 1:
+                _, versao = _ml_estoque_up_ler(up)
+                continue
+            raise
+
+
+def ml_estoque_gravar(conta: str, mlb: str, quantidade: Any, *, ator: str, modo: str, motivo: str,
+                      conferir: Any = None) -> dict[str, Any]:
+    """V20.26: a UNICA funcao que grava estoque no ML. `{ok, antes, depois, metodo, erro, resultado}`.
+    Recusa (ValueError) anuncio que nao e `noromak`, Full ou removido, e quantidade invalida, sem chamar o ML.
+    `conferir()` (opcional) roda DENTRO da trava do anuncio, antes de qualquer chamada: devolve
+    (quantidade, '') para seguir ou (None, motivo) para desistir (o Automatico rele o modo e a fila ali).
+    So e `ok` quando a releitura mostra a quantidade enviada (o PUT pode responder 200 sem mudar)."""
+    conta = ml_casa_valida(conta)
+    mlb = str(mlb or "").strip().upper()
+    qtd = _anuncio_estoque_qtd(quantidade)
+    with DB_LOCK:
+        motivo_recusa = _anuncio_estoque_elegivel(_anuncio_estoque_linha("ml", conta, mlb))
+    if motivo_recusa:
+        raise ValueError(motivo_recusa)
+    trava = _anuncio_estoque_trava(conta, mlb)
+    if not trava.acquire(timeout=ANUNCIO_ESTOQUE_TRAVA_S):
+        return {"ok": False, "resultado": "erro", "antes": None, "depois": None, "metodo": "",
+                "erro": "Outro envio de estoque deste anúncio ainda está em andamento."}
+    try:
+        if conferir is not None:
+            novo, por_que = conferir()
+            if novo is None:
+                _anuncio_estoque_registrar("ml", conta, mlb, modo, None, qtd, motivo, "ignorado", por_que, ator)
+                return {"ok": False, "resultado": "ignorado", "antes": None, "depois": None, "metodo": "",
+                        "erro": por_que}
+            qtd = _anuncio_estoque_qtd(novo)
+        with DB_LOCK:  # o Admin pode ter passado a Alephee/removido enquanto esperava a trava
+            motivo_recusa = _anuncio_estoque_elegivel(_anuncio_estoque_linha("ml", conta, mlb))
+        if motivo_recusa:
+            _anuncio_estoque_registrar("ml", conta, mlb, modo, None, qtd, motivo, "ignorado", motivo_recusa, ator)
+            return {"ok": False, "resultado": "ignorado", "antes": None, "depois": None, "metodo": "",
+                    "erro": motivo_recusa}
+        with ml_na_casa(conta):
+            res = _ml_estoque_gravar_na_casa(mlb, qtd)
+        ok = bool(res["ok"])
+        resultado = "ok" if ok else ("ignorado" if res.get("ignorado") else "erro")
+        detalhe = res["metodo"] + (": " + res["erro"] if res.get("erro") else "")
+        _anuncio_estoque_registrar("ml", conta, mlb, modo, res["antes"], qtd, motivo, resultado, detalhe, ator)
+        with DB_LOCK:
+            agora = now_iso()
+            if res.get("depois") is not None:
+                DB.execute("UPDATE anuncio_canal_v2023 SET estoque=? WHERE canal='ml' AND conta=? AND anuncio_id=?",
+                           (int(res["depois"]), conta, mlb))
+            if ok:
+                DB.execute("UPDATE anuncio_canal_v2023 SET estoque_enviado=?, estoque_enviado_em=? "
+                           "WHERE canal='ml' AND conta=? AND anuncio_id=?", (qtd, agora, conta, mlb))
+            if res.get("ignorado") == "full":
+                DB.execute("UPDATE anuncio_canal_v2023 SET logistica='fulfillment' WHERE canal='ml' AND conta=? "
+                           "AND anuncio_id=?", (conta, mlb))
+            DB.commit()
+        if ok and modo == "manual":
+            audit(ator, "anuncios.estoque_manual", f"{conta}|{mlb}|{res['antes']}->{qtd}")
+        return {"ok": ok, "resultado": resultado, "antes": res["antes"], "depois": res.get("depois"),
+                "metodo": res["metodo"], "erro": res.get("erro") or "", "quantidade": qtd}
+    finally:
+        trava.release()
+
+
+def _ml_estoque_gravar_na_casa(mlb: str, qtd: int) -> dict[str, Any]:
+    """V20.26: o caminho da gravacao (dentro de ml_na_casa e da trava do anuncio)."""
+    saida: dict[str, Any] = {"ok": False, "antes": None, "depois": None, "metodo": "", "erro": ""}
+    try:
+        item = _ml_estoque_ler_item(mlb)
+    except Exception as exc:
+        saida["erro"] = f"o Mercado Livre não respondeu a leitura do anúncio ({str(exc)[:200]}); nada enviado"
+        return saida
+    saida["antes"] = item["available_quantity"]
+    if item["logistic_type"] == "fulfillment":
+        saida.update(ignorado="full", erro="anúncio Full: o estoque é do Mercado Livre; nada enviado")
+        return saida
+    if item["available_quantity"] == qtd:
+        saida.update(ok=True, depois=qtd, metodo="nenhum", erro="o ML já mostrava essa quantidade")
+        return saida
+    up = item["user_product_id"]
+    locais: list[dict[str, Any]] | None = None
+    versao = ""
+    if up:
+        try:
+            locais, versao = _ml_estoque_up_ler(up)
+        except Exception:
+            locais = None  # sem leitura dos locais: tenta o PUT do anuncio e confere na releitura
+    tipos = {str(l.get("type") or "") for l in (locais or [])}
+    tem_selling = "selling_address" in tipos
+
+    def _pelo_up(depois_items: str = "") -> dict[str, Any]:
+        nonlocal locais, versao
+        saida["metodo"] = (saida["metodo"] + "+" if saida["metodo"] else "") + "user_product"
+        if locais is None:
+            try:
+                locais, versao = _ml_estoque_up_ler(up)
+            except Exception as exc:
+                saida["erro"] = (depois_items + "; " if depois_items else "") + f"estoque do user-product não lido ({str(exc)[:200]})"
+                return saida
+        if not any(str(l.get("type") or "") == "selling_address" for l in locais):
+            saida["erro"] = "anúncio com depósito do vendedor: ajuste no ML"
+            return saida
+        try:
+            _ml_estoque_up_gravar(up, qtd, versao)
+        except Exception as exc:
+            erro_put = str(exc)[:300]
+            saida["depois"] = _ml_estoque_reler(mlb, qtd)
+            saida["ok"] = saida["depois"] == qtd
+            if not saida["ok"]:
+                saida["erro"] = f"o ML recusou o estoque do user-product ({erro_put})"
+            return saida
+        saida["depois"] = _ml_estoque_reler(mlb, qtd)
+        saida["ok"] = saida["depois"] == qtd
+        if not saida["ok"]:
+            saida["erro"] = f"o ML não mudou o estoque (mostra {saida['depois']})"
+        return saida
+
+    if tipos & set(ANUNCIO_ESTOQUE_DEPOSITOS):
+        return _pelo_up()
+    saida["metodo"] = "items"
+    erro_put = ""
+    try:
+        resp = _ml_promo_http("PUT", f"/items/{mlb}", {"available_quantity": qtd})
+        _anuncio_amostra("estoque_put_item", resp)
+    except Exception as exc:  # pode ter mudado mesmo assim (5xx/timeout): a releitura decide
+        erro_put = str(exc)[:300]
+    saida["depois"] = _ml_estoque_reler(mlb, qtd)
+    if saida["depois"] == qtd:
+        saida["ok"] = True
+        return saida
+    # V20.26 (RF3): 200 sem mudar (conta com varios depositos) - tenta o caminho do user-product
+    if up and (locais is None or tem_selling):
+        return _pelo_up(f"PUT do anúncio sem efeito (mostra {saida['depois']})")
+    saida["erro"] = (f"o ML recusou ({erro_put})" if erro_put else
+                     f"o ML não mudou o estoque (mostra {saida['depois']})")
+    return saida
+
+
 PROMO_TAXAS_DO_PRECIFICADOR ="taxas do Precificador (o Mercado Livre não respondeu)"
 
 

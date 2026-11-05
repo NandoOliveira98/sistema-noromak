@@ -172,6 +172,153 @@ class ModoERegistroTeste(EstoqueBase):
         self.assertEqual([l["de"] for l in log], [5, 4, 3])
 
 
+class GravarMLTeste(EstoqueBase):
+
+    def test_item_simples_put_e_releitura(self):
+        inserir(estoque=3)
+        self.ml.item("MLB1", 3)
+        r = S.ml_estoque_gravar("aracatuba", "MLB1", 7, ator="luis", modo="manual", motivo="digitado")
+        self.assertTrue(r["ok"], r)
+        self.assertEqual((r["antes"], r["depois"], r["metodo"]), (3, 7, "items"))
+        self.assertEqual(self.ml.escritas()[0][1:3], ("/items/MLB1", {"available_quantity": 7}))
+        c = canal()
+        self.assertEqual((c["estoque_enviado"], c["estoque"]), (7, 7))
+        self.assertTrue(c["estoque_enviado_em"])
+        log = S.anuncio_estoque_log("ml", "aracatuba", "MLB1")
+        self.assertEqual((log[0]["de"], log[0]["para"], log[0]["resultado"], log[0]["ator"]), (3, 7, "ok", "luis"))
+
+    def test_zero_digitado_pelo_admin_vai(self):
+        inserir()
+        self.ml.item("MLB1", 4)
+        self.assertTrue(S.ml_estoque_gravar("aracatuba", "MLB1", 0, ator="luis", modo="manual", motivo="")["ok"])
+        self.assertEqual(self.ml.itens["MLB1"]["available_quantity"], 0)
+
+    def test_quantidade_invalida_nao_chama(self):
+        inserir()
+        self.ml.item("MLB1", 4)
+        for q in (-1, 1.5, "abc", "", None, True, 100000):
+            with self.assertRaises(ValueError, msg=repr(q)):
+                S.ml_estoque_gravar("aracatuba", "MLB1", q, ator="luis", modo="manual", motivo="")
+        self.assertEqual(self.ml.chamadas, [])
+
+    def test_ja_estava_nao_envia(self):
+        inserir()
+        self.ml.item("MLB1", 5)
+        r = S.ml_estoque_gravar("aracatuba", "MLB1", 5, ator="luis", modo="manual", motivo="")
+        self.assertTrue(r["ok"])
+        self.assertEqual(self.ml.escritas(), [])
+        self.assertEqual(canal()["estoque_enviado"], 5)
+
+    def test_200_sem_mudar_e_erro(self):
+        """RF3: o PUT responde 200 e o ML continua com o numero antigo: nunca marca ok."""
+        inserir(estoque=3)
+        self.ml.item("MLB1", 3)
+        self.ml.nao_muda.add("MLB1")
+        r = S.ml_estoque_gravar("aracatuba", "MLB1", 9, ator="luis", modo="manual", motivo="")
+        self.assertFalse(r["ok"])
+        self.assertIn("não mudou", r["erro"])
+        self.assertIsNone(canal()["estoque_enviado"])
+        self.assertEqual(S.anuncio_estoque_log("ml", "aracatuba", "MLB1")[0]["resultado"], "erro")
+
+    def test_200_sem_mudar_tenta_user_product(self):
+        """RF3: com user-product de um local selling_address, o 200 sem efeito tenta o caminho do estoque."""
+        inserir()
+        self.ml.item("MLB1", 3, up="UP1")
+        self.ml.up["UP1"] = {"locations": [{"type": "selling_address", "quantity": 3}], "versao": 4}
+        self.ml.nao_muda.add("MLB1")
+        r = S.ml_estoque_gravar("aracatuba", "MLB1", 9, ator="luis", modo="manual", motivo="")
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["metodo"], "items+user_product")
+        put_up = [c for c in self.ml.escritas() if "/user-products/" in c[1]]
+        self.assertEqual(put_up[0][1], "/user-products/UP1/stock/type/selling_address")
+        self.assertEqual(put_up[0][4], {"x-version": "4"})
+
+    def test_user_product_com_deposito_vai_pelo_stock(self):
+        inserir()
+        self.ml.item("MLB1", 3, up="UP1")
+        self.ml.up["UP1"] = {"locations": [{"type": "selling_address", "quantity": 3},
+                                           {"type": "seller_warehouse", "quantity": 0}], "versao": 2}
+        r = S.ml_estoque_gravar("aracatuba", "MLB1", 6, ator="luis", modo="manual", motivo="")
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["metodo"], "user_product")
+        self.assertFalse([c for c in self.ml.escritas() if c[1].startswith("/items/")])
+
+    def test_deposito_sem_selling_address_erro_claro(self):
+        inserir()
+        self.ml.item("MLB1", 3, up="UP1")
+        self.ml.up["UP1"] = {"locations": [{"type": "seller_warehouse", "quantity": 3}], "versao": 2}
+        r = S.ml_estoque_gravar("aracatuba", "MLB1", 6, ator="luis", modo="manual", motivo="")
+        self.assertFalse(r["ok"])
+        self.assertIn("depósito do vendedor", r["erro"])
+        self.assertEqual(self.ml.escritas(), [])
+
+    def test_409_rele_e_tenta_uma_vez(self):
+        inserir()
+        self.ml.item("MLB1", 3, up="UP1")
+        self.ml.up["UP1"] = {"locations": [{"type": "selling_address", "quantity": 3},
+                                           {"type": "store", "quantity": 0}], "versao": 1}
+        self.ml.conflito_up = 1
+        r = S.ml_estoque_gravar("aracatuba", "MLB1", 6, ator="luis", modo="manual", motivo="")
+        self.assertTrue(r["ok"], r)
+        self.ml.item("MLB2", 3, up="UP2")
+        inserir(anuncio_id="MLB2")
+        self.ml.up["UP2"] = {"locations": [{"type": "selling_address", "quantity": 3},
+                                           {"type": "store", "quantity": 0}], "versao": 1}
+        self.ml.conflito_up = 2  # duas vezes seguidas: desiste
+        r = S.ml_estoque_gravar("aracatuba", "MLB2", 6, ator="luis", modo="manual", motivo="")
+        self.assertFalse(r["ok"])
+        self.assertEqual(self.ml.itens["MLB2"]["available_quantity"], 3)
+
+    def test_full_recusado_sem_chamada(self):
+        inserir(controle="full", logistica="fulfillment")
+        inserir(anuncio_id="MLB2", logistica="fulfillment")
+        inserir(anuncio_id="MLB3", controle="alephee")
+        inserir(anuncio_id="MLB4", removido="2026-11-05")
+        for mlb in ("MLB1", "MLB2", "MLB3", "MLB4"):
+            with self.assertRaises(ValueError, msg=mlb):
+                S.ml_estoque_gravar("aracatuba", mlb, 5, ator="luis", modo="manual", motivo="")
+        self.assertEqual(self.ml.chamadas, [])
+
+    def test_full_lido_ao_vivo_nao_envia(self):
+        inserir()
+        self.ml.item("MLB1", 3, logistica="fulfillment")
+        r = S.ml_estoque_gravar("aracatuba", "MLB1", 5, ator="luis", modo="manual", motivo="")
+        self.assertFalse(r["ok"])
+        self.assertEqual(self.ml.escritas(), [])
+        self.assertEqual(canal()["logistica"], "fulfillment")
+
+    def test_conta_bauru_usa_a_casa_bauru(self):
+        inserir(conta="bauru", anuncio_id="MLB9")
+        self.ml.item("MLB9", 1)
+        self.assertTrue(S.ml_estoque_gravar("bauru", "MLB9", 2, ator="luis", modo="manual", motivo="")["ok"])
+        self.assertTrue(self.ml.chamadas)
+        self.assertEqual({c[3] for c in self.ml.chamadas}, {"bauru"})
+
+    def test_ml_sem_resposta_nada_enviado(self):
+        inserir()
+        self.ml.item("MLB1", 3)
+        self.ml.falha_get = True
+        r = S.ml_estoque_gravar("aracatuba", "MLB1", 5, ator="luis", modo="manual", motivo="")
+        self.assertFalse(r["ok"])
+        self.assertEqual(self.ml.escritas(), [])
+
+    def test_conferir_desiste(self):
+        inserir()
+        self.ml.item("MLB1", 3)
+        r = S.ml_estoque_gravar("aracatuba", "MLB1", 5, ator="sistema", modo="automatico", motivo="",
+                                conferir=lambda: (None, "virou Manual"))
+        self.assertEqual(r["resultado"], "ignorado")
+        self.assertEqual(self.ml.chamadas, [])
+
+    def test_amostras(self):
+        inserir()
+        self.ml.item("MLB1", 3)
+        S.ml_estoque_gravar("aracatuba", "MLB1", 5, ator="luis", modo="manual", motivo="")
+        with S.DB_LOCK:
+            tipos = {r[0] for r in S.DB.execute("SELECT tipo FROM anuncio_amostra_v2024").fetchall()}
+        self.assertIn("estoque_put_item", tipos)
+
+
 if __name__ == "__main__":
     import unittest
     unittest.main()
