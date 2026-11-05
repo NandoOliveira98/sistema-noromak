@@ -334,7 +334,10 @@ async function acompanharPuxada(avisarNoFim) {
   clearTimeout(PUX.timer);
   let s;
   try { s = await api("/api/anuncios/puxar/situacao"); }
-  catch (e) { PUX.timer = setTimeout(() => acompanharPuxada(avisarNoFim), 3000); return; }  // rede: tenta de novo
+  catch (e) {  // rede: tenta de novo; sessão vencida/sem permissão (401/403): para (V20.24 revisão)
+    if (/\b(401|403)\b|login|permiss/i.test(String(e && (e.status || e.message) || ""))) return;
+    PUX.timer = setTimeout(() => acompanharPuxada(avisarNoFim), document.hidden ? 15000 : 3000); return;
+  }
   const estava = PUX.rodando;
   PUX.rodando = !!s.rodando;
   mostrarPuxando(s);

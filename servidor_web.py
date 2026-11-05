@@ -7837,10 +7837,13 @@ def _anuncio_gravar_lote(conta: str, lote: list[dict[str, Any]], res: dict[str, 
                     parcial["novos"] += 1
                 else:
                     # titulo/preco/estoque que o ML omitiu ficam como estavam (nunca viram vazio/zero)
-                    # V20.24 (revisao): anuncio sem SKU no ML (ex.: publicado pelo Noromak) nao perde a ficha ligada
+                    # V20.24 (revisao): anuncio SEM SKU no ML (ex.: publicado pelo Noromak) nao perde a ficha ligada.
+                    # Com SKU (mesmo de produto sem ficha) a ficha segue o SKU: SKU corrigido no ML troca a ficha.
+                    if not r["ficha"] and not str(r.get("sku") or "").strip():
+                        v = (str(atual["ficha_codigo"] or ""), str(atual["sku_anuncio"] or "")) + tuple(v[2:])
                     DB.execute(
-                        "UPDATE anuncio_canal_v2023 SET ficha_codigo=COALESCE(NULLIF(?,''),ficha_codigo),"
-                        "sku_anuncio=COALESCE(NULLIF(?,''),sku_anuncio),titulo=COALESCE(NULLIF(?,''),titulo),"
+                        "UPDATE anuncio_canal_v2023 SET ficha_codigo=?,"
+                        "sku_anuncio=?,titulo=COALESCE(NULLIF(?,''),titulo),"
                         "preco=COALESCE(?,preco),estoque=COALESCE(?,estoque),status=?,tipo_anuncio=?,categoria=?,"
                         "logistica=?,user_product_id=?,lido_em=? WHERE canal='ml' AND conta=? AND anuncio_id=?",
                         v + (conta, r["mlb"]))
@@ -8038,7 +8041,10 @@ def anuncio_puxar_um(texto: Any, ator: str) -> dict[str, Any]:
             continue
         if dono != conta:  # o /items?ids= e publico: rele com o token do dono (campos do vendedor)
             with ml_na_casa(dono):
-                d = (ml_itens_detalhe([mlb]) or {}).get(mlb) or d
+                d = (ml_itens_detalhe([mlb]) or {}).get(mlb)
+            if not d:  # V20.24 (revisao): sem a releitura do dono, nada e gravado (estoque/SKU da leitura publica nao servem)
+                raise AnuncioMLSemResposta(f"O Mercado Livre não respondeu ao ler o {mlb} pela conta dona. "
+                                           "Nada foi alterado; tente de novo.")
         achado = (dono, d)
         break
     if achado is None:

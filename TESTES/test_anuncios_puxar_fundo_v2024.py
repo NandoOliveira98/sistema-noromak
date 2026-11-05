@@ -180,6 +180,26 @@ class PuxarFundoTeste(TesteNoromak):
         self.assertEqual(n, 1)
         self.assertEqual(linha("MLB9000000009")["conta"], "bauru")
 
+    def test_um_releitura_do_dono_falhou_nada_gravado(self):
+        # V20.24 (revisao): sem a leitura pela conta dona, nao grava a leitura publica (estoque/SKU incompletos)
+        self.anuncios["aracatuba"]["MLB9000000009"] = item(sku="KIT2-81794", seller="222")
+        del self.anuncios["bauru"]["MLB9000000009"]
+        with mock.patch.object(S, "ml_casa_do_seller", side_effect=self.dono):
+            with self.assertRaises(S.AnuncioMLSemResposta):
+                S.anuncio_puxar_um("MLB9000000009", "luis")
+        self.assertIsNone(linha("MLB9000000009"))
+
+    def test_sku_corrigido_no_ml_troca_a_ficha_e_sem_sku_mantem(self):
+        # V20.24 (revisao): SKU vazio mantem a ficha; SKU novo (mesmo sem ficha ainda) troca
+        S.anuncios_ml_puxar(["aracatuba"])
+        self.assertEqual(linha("MLB1000000001")["ficha_codigo"], "0893117732")
+        self.anuncios["aracatuba"]["MLB1000000001"] = item(sku="")
+        S.anuncios_ml_puxar(["aracatuba"])
+        self.assertEqual(linha("MLB1000000001")["ficha_codigo"], "0893117732")
+        self.anuncios["aracatuba"]["MLB1000000001"] = item(sku="NOVO-555")
+        S.anuncios_ml_puxar(["aracatuba"])
+        self.assertEqual(linha("MLB1000000001")["ficha_codigo"], "NOVO-555")
+
     def test_um_sem_ficha(self):
         self.anuncios["aracatuba"]["MLB3000000003"] = item(sku="")
         with mock.patch.object(S, "ml_casa_do_seller", side_effect=self.dono):
