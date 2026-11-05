@@ -7540,6 +7540,18 @@ def kits_da_peca(codigo: str) -> list[dict[str, Any]]:
     return saida
 
 
+def _ficha_garantir_kit(sku: str, ator: str) -> str:
+    """V20.23: garante a ficha do kit com tipo='kit' (cria sem campos; nao mexe nos campos de quem ja existe)."""
+    cod = _exp_norm_codigo(sku)
+    if cod:
+        with DB_LOCK:
+            DB.execute(
+                "INSERT INTO anuncio_ficha_v2023(codigo,tipo,atualizado_em,atualizado_por) VALUES(?,'kit',?,?) "
+                "ON CONFLICT(codigo) DO UPDATE SET tipo='kit'", (cod, now_iso(), str(ator or "")))
+            DB.commit()
+    return cod
+
+
 def kit_salvar(sku_kit: str, nome: str, componentes: list[dict[str, Any]], ator: str,
                versao_storage: int | None) -> dict[str, Any]:
     """Grava/atualiza UMA entrada de conf_kits (as outras e os campos desconhecidos da linha ficam como estao),
@@ -7604,14 +7616,177 @@ def kit_salvar(sku_kit: str, nome: str, componentes: list[dict[str, Any]], ator:
             linhas[posicao] = row
         save_storage("conf_kits", bruto, json.dumps(linhas, ensure_ascii=False), False, actor=ator,
                      actor_role="admin", source_screen="anuncios", change_method="anuncios.kit")
-        cod = _exp_norm_codigo(sku)
-        if cod:
-            DB.execute(
-                "INSERT INTO anuncio_ficha_v2023(codigo,tipo,atualizado_em,atualizado_por) VALUES(?,'kit',?,?) "
-                "ON CONFLICT(codigo) DO UPDATE SET tipo='kit'", (cod, now_iso(), str(ator or "")))
-            DB.commit()
+        _ficha_garantir_kit(sku, ator)
     audit(ator, "anuncios.kit", f"{sku}|{novos}")
     return kit_composicao(sku) or {}
+
+
+# V20.23: puxar os anuncios do ML (so leitura) e ligar cada um a ficha do produto.
+ANUNCIO_ATRIBUTOS_ML: dict[str, str] = {
+    "BRAND": "marca", "MODEL": "modelo", "GTIN": "ean", "SELLER_PACKAGE_WEIGHT": "peso_g",
+    "SELLER_PACKAGE_HEIGHT": "altura_cm", "SELLER_PACKAGE_WIDTH": "largura_cm",
+    "SELLER_PACKAGE_LENGTH": "comprimento_cm",
+}
+_ANUNCIO_FATOR_UNIDADE: dict[str, dict[str, float]] = {
+    "peso_g": {"g": 1.0, "kg": 1000.0},
+    "altura_cm": {"cm": 1.0, "mm": 0.1}, "largura_cm": {"cm": 1.0, "mm": 0.1}, "comprimento_cm": {"cm": 1.0, "mm": 0.1},
+}
+
+
+def _anuncio_numero_unidade(attr: dict[str, Any]) -> tuple[float | None, str]:
+    vs = attr.get("value_struct")
+    if isinstance(vs, dict) and vs.get("number") is not None:
+        try:
+            return float(vs["number"]), str(vs.get("unit") or "").strip().lower()
+        except (TypeError, ValueError):
+            return None, ""
+    m = re.match(r"^\s*([0-9]+(?:[.,][0-9]+)?)\s*([a-zA-Z]+)\s*$", str(attr.get("value_name") or ""))
+    if m:
+        return float(m.group(1).replace(",", ".")), m.group(2).lower()
+    return None, ""
+
+
+def anuncio_campos_do_item(atributos: Any) -> dict[str, Any]:
+    """V20.23: campos da ficha que o anuncio trouxe. Medida sem numero/unidade conhecida nao entra."""
+    saida: dict[str, Any] = {}
+    for a in atributos if isinstance(atributos, list) else []:
+        if not isinstance(a, dict):
+            continue
+        campo = ANUNCIO_ATRIBUTOS_ML.get(str(a.get("id") or "").upper())
+        if not campo:
+            continue
+        if campo in _ANUNCIO_FATOR_UNIDADE:
+            n, un = _anuncio_numero_unidade(a)
+            fator = _ANUNCIO_FATOR_UNIDADE[campo].get(un)
+            if n is None or fator is None or n <= 0:
+                continue
+            v = round(n * fator, 2)
+            saida[campo] = int(v) if v == int(v) else v
+        else:
+            v = str(a.get("value_name") or "").strip()
+            if v:
+                saida[campo] = v
+    return saida
+
+
+def anuncio_ficha_do_sku(sku: str, catalogo: dict[str, dict[str, Any]] | None = None) -> tuple[str, str]:
+    """V20.23: (codigo da ficha, tipo). Kit (cadastro/prefixo) e "A/B" = o proprio SKU; simples = o codigo; vazio = ''."""
+    texto = str(sku or "").strip()
+    cod = _exp_norm_codigo(texto)
+    if not cod:
+        return "", "peca"
+    comp = _kit_composicao(texto, catalogo if catalogo is not None else _load_kit_catalog())
+    if comp or len(_separacao_partes(texto, set())) > 1:
+        return cod, "kit"
+    return cod, "peca"
+
+
+def _anuncio_links_invertidos() -> dict[str, str]:
+    """V20.23: MLB -> SKU pelo vinculo MLB<->SKU (leitor existente; ja respeita a remocao manual)."""
+    saida: dict[str, str] = {}
+    try:
+        for sku, linhas in _ml_precificador_persisted_links().items():
+            for r in linhas:
+                mlb = _ml_normalize_link_mlb(r.get("mlb"))
+                if mlb and sku:
+                    saida.setdefault(mlb, str(sku))
+    except Exception as exc:
+        print(f"Aviso: vinculos MLB/SKU nao lidos para os anuncios: {exc}", file=sys.stderr)
+    return saida
+
+
+def _anuncio_puxar_conta(conta: str) -> dict[str, Any]:
+    res: dict[str, Any] = {"lidos": 0, "novos": 0, "atualizados": 0, "sem_ficha": 0, "erro": ""}
+    try:
+        with ml_na_casa(conta):  # chamadas ao ML FORA do DB_LOCK
+            mlbs = [str(x).strip().upper() for x in (ml_todos_os_anuncios(forcar=True) or []) if str(x).strip()]
+            if not mlbs:
+                res["erro"] = "O Mercado Livre não respondeu (lista de anúncios vazia)."
+                return res
+            detalhes = ml_itens_detalhe(mlbs) or {}
+        if not detalhes:
+            res["erro"] = "O Mercado Livre não respondeu (detalhes dos anúncios vazios)."
+            return res
+        links = _anuncio_links_invertidos()
+        catalogo = _load_kit_catalog()
+        agora = now_iso()
+        a_importar: list[tuple[str, dict[str, Any]]] = []
+        with DB_LOCK:
+            for mlb, d in detalhes.items():
+                res["lidos"] += 1
+                sku = links.get(mlb) or str(d.get("sku_ml") or "").strip()
+                ficha, tipo = anuncio_ficha_do_sku(sku, catalogo)
+                if not ficha:
+                    res["sem_ficha"] += 1
+                preco = d.get("preco")
+                try:
+                    preco = float(preco) if preco is not None else None
+                except (TypeError, ValueError):
+                    preco = None
+                est = d.get("estoque")
+                est = int(est) if isinstance(est, (int, float)) and not isinstance(est, bool) else None
+                logistica = str(d.get("logistica") or "")
+                atual = DB.execute("SELECT removido_em FROM anuncio_canal_v2023 WHERE canal='ml' AND conta=? AND anuncio_id=?",
+                                   (conta, mlb)).fetchone()
+                if atual is not None and str(atual["removido_em"] or ""):
+                    continue  # removido pelo ADMIN: nao e atualizado nem recriado
+                valores = (ficha, sku, str(d.get("titulo") or ""), preco, est, str(d.get("status") or ""),
+                           str(d.get("tipo") or ""), str(d.get("categoria") or ""), logistica,
+                           str(d.get("user_product") or ""), agora)
+                if atual is None:
+                    DB.execute(
+                        "INSERT INTO anuncio_canal_v2023(canal,conta,anuncio_id,ficha_codigo,sku_anuncio,titulo,preco,estoque,"
+                        "status,tipo_anuncio,categoria,logistica,user_product_id,lido_em,controle) "
+                        "VALUES('ml',?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (conta, mlb) + valores + ("full" if logistica == "fulfillment" else "alephee",))
+                    res["novos"] += 1
+                else:
+                    DB.execute(
+                        "UPDATE anuncio_canal_v2023 SET ficha_codigo=?,sku_anuncio=?,titulo=?,preco=?,estoque=?,status=?,"
+                        "tipo_anuncio=?,categoria=?,logistica=?,user_product_id=?,lido_em=? "
+                        "WHERE canal='ml' AND conta=? AND anuncio_id=?", valores + (conta, mlb))
+                    res["atualizados"] += 1
+                if ficha:
+                    if tipo == "kit":
+                        _ficha_garantir_kit(sku, "importacao:anuncio_ml")
+                    a_importar.append((ficha, anuncio_campos_do_item(d.get("atributos"))))
+            DB.commit()
+            for ficha, campos in a_importar:
+                if campos:
+                    ficha_importar(ficha, campos, "anuncio_ml")
+    except Exception as exc:
+        res["erro"] = f"{type(exc).__name__}: {exc}"[:300]
+    return res
+
+
+def anuncios_ml_puxar(contas: list[str] | None = None) -> dict[str, Any]:
+    """V20.23: so leitura no ML. Conta que nao respondeu fica com `erro` e nada dela e alterado ou apagado."""
+    alvo = list(contas) if contas else ml_casas_conectadas()
+    saida: dict[str, Any] = {}
+    for conta in alvo:
+        saida[conta] = _anuncio_puxar_conta(conta)
+    return {"ok": bool(saida) and not any(c["erro"] for c in saida.values()), "contas": saida}
+
+
+def _anuncio_marcar_removido(canal: str, conta: str, anuncio_id: str, ator: str, remover: bool) -> dict[str, Any]:
+    with DB_LOCK:
+        cur = DB.execute(
+            "UPDATE anuncio_canal_v2023 SET removido_em=?, removido_por=? WHERE canal=? AND conta=? AND anuncio_id=?",
+            ((now_iso(), str(ator or "")) if remover else ("", "")) + (canal, conta, anuncio_id))
+        DB.commit()
+        achou = cur.rowcount > 0
+    if not achou:
+        raise ValueError("Anúncio não encontrado.")
+    audit(ator, "anuncios.remover" if remover else "anuncios.reincluir", f"{canal}|{conta}|{anuncio_id}")
+    return {"ok": True, "removido": remover}
+
+
+def anuncio_remover(canal: str, conta: str, anuncio_id: str, ator: str) -> dict[str, Any]:
+    return _anuncio_marcar_removido(canal, conta, anuncio_id, ator, True)
+
+
+def anuncio_reincluir(canal: str, conta: str, anuncio_id: str, ator: str) -> dict[str, Any]:
+    return _anuncio_marcar_removido(canal, conta, anuncio_id, ator, False)
 
 
 # V20.23: estoque "da para montar" do kit (puro) e leitura do Apollo por filial.
@@ -30678,6 +30853,8 @@ def ml_itens_detalhe(mlbs: list[str]) -> dict[str, dict[str, Any]]:
                         "tipo": str(corpo.get("listing_type_id") or ""),       # V18.77: comissão
                         "user_product": str(corpo.get("user_product_id") or ""),  # V19.60
                         "produto_catalogo": str(corpo.get("catalog_product_id") or ""),  # V19.74
+                        "atributos": [a for a in (corpo.get("attributes") or []) if isinstance(a, dict)
+                                      and str(a.get("id") or "").upper() in ANUNCIO_ATRIBUTOS_ML],  # V20.23: ficha
                         "logistica": str((corpo.get("shipping") if isinstance(corpo.get("shipping"), dict)
                                           else {}).get("logistic_type") or "")}  # V18.72: Ruptura
     return out
