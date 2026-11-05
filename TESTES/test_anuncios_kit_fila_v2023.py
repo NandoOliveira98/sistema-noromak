@@ -91,6 +91,24 @@ class KitNaFila(TesteNoromak):
         comp = S.kit_composicao("KITQ")
         self.assertEqual([(c["sku"], c["quantidade"]) for c in comp["componentes"]], [("B", 1), ("C", 1)])
 
+    def test_reordenar_com_pedido_na_fila_e_recusado(self):
+        # V20.24 (revisao): a ordem muda o indice do uid KITDB_..._<i> e duplicaria linhas na Conferencia
+        self.preparar()
+        antes = self.linhas()
+        with self.assertRaises(ValueError) as erro:
+            self.salvar_kit([("B", 1), ("A", 1), ("C", 1)])
+        self.assertIn("pedido na fila de conferência", str(erro.exception))
+        comp = S.kit_composicao("KITQ")
+        self.assertEqual([c["sku"] for c in comp["componentes"]], ["A", "B", "C"])
+        S.shopee_manual_sync()
+        self.assertEqual(self.linhas(), antes)
+
+    def test_reordenar_sem_pedido_na_fila_pode(self):
+        self.salvar_kit([("A", 1), ("B", 1), ("C", 1)])
+        self.salvar_kit([("C", 1), ("A", 1), ("B", 1)])
+        comp = S.kit_composicao("KITQ")
+        self.assertEqual([c["sku"] for c in comp["componentes"]], ["C", "A", "B"])
+
     def test_pedido_de_outro_kit_nao_trava(self):
         S.kit_salvar("KITZ", "Kit Z", [{"sku": "A", "quantidade": 1}, {"sku": "D", "quantidade": 1}],
                      "admin_teste", self.versao_kits())

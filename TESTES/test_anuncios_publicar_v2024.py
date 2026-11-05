@@ -250,6 +250,13 @@ class PublicarTeste(TesteNoromak):
                 S.anuncio_publicar(r["id"], "t")
             with self.assertRaises(ValueError):  # nem valida
                 S.anuncio_validar(r["id"], "t")
+        # V20.24 (revisao): 408 (o ML desistiu de esperar) tambem e incerto; 429 = nao processado, recusa
+        for falha, sit in ((erro_http(408, {"message": "Request Timeout"}), "incerto"),
+                           (urllib.error.HTTPError("u", 408, "x", {}, None), "incerto"),
+                           (erro_http(429, {"message": "too many"}), "erro")):
+            r = self.validado()
+            self.ml.itens = [falha]
+            self.assertEqual(S.anuncio_publicar(r["id"], "t")["situacao"], sit, falha)
         # resposta 2xx sem id = incerto
         r = self.validado()
         self.ml.itens = [{"status": "active"}]

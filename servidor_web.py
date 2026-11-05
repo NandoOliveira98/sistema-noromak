@@ -7700,12 +7700,14 @@ def kit_salvar(sku_kit: str, nome: str, componentes: list[dict[str, Any]], ator:
                 break
         # V20.23: tirar/por peca com pedido do kit na fila duplica linhas na proxima sincronizacao (o indice do uid
         # KITDB_..._<i> muda e a linha antiga, com bip, volta pelo preserve_pending_records_v1714). Quantidade pode.
+        # V20.24 (revisao): compara a LISTA na ordem, nao o conjunto: so reordenar ([A,B] -> [B,A]) tambem troca o
+        # indice do uid KITDB_ e duplicaria as linhas na Conferencia.
         if posicao is not None:
-            antes = {normalize(c.get("sku") or c.get("SKU")) for c in (linhas[posicao].get("componentes") or [])
-                     if isinstance(c, dict)}
+            antes = [normalize(c.get("sku") or c.get("SKU")) for c in (linhas[posicao].get("componentes") or [])
+                     if isinstance(c, dict)]
         else:
-            antes = {normalize(c.get("sku")) for c in ((_infer_quantity_kit_from_sku(sku) or {}).get("componentes") or [])}
-        if antes and antes != {normalize(c["sku"]) for c in novos} and _kit_tem_pedido_na_fila(sku):
+            antes = [normalize(c.get("sku")) for c in ((_infer_quantity_kit_from_sku(sku) or {}).get("componentes") or [])]
+        if antes and antes != [normalize(c["sku"]) for c in novos] and _kit_tem_pedido_na_fila(sku):
             raise ValueError("Este kit tem pedido na fila de conferência: tirar ou pôr peça só depois que o pedido "
                              "sair. Mudar a quantidade pode.")
         if posicao is None and eh_produto:
@@ -7835,8 +7837,10 @@ def _anuncio_gravar_lote(conta: str, lote: list[dict[str, Any]], res: dict[str, 
                     parcial["novos"] += 1
                 else:
                     # titulo/preco/estoque que o ML omitiu ficam como estavam (nunca viram vazio/zero)
+                    # V20.24 (revisao): anuncio sem SKU no ML (ex.: publicado pelo Noromak) nao perde a ficha ligada
                     DB.execute(
-                        "UPDATE anuncio_canal_v2023 SET ficha_codigo=?,sku_anuncio=?,titulo=COALESCE(NULLIF(?,''),titulo),"
+                        "UPDATE anuncio_canal_v2023 SET ficha_codigo=COALESCE(NULLIF(?,''),ficha_codigo),"
+                        "sku_anuncio=COALESCE(NULLIF(?,''),sku_anuncio),titulo=COALESCE(NULLIF(?,''),titulo),"
                         "preco=COALESCE(?,preco),estoque=COALESCE(?,estoque),status=?,tipo_anuncio=?,categoria=?,"
                         "logistica=?,user_product_id=?,lido_em=? WHERE canal='ml' AND conta=? AND anuncio_id=?",
                         v + (conta, r["mlb"]))
@@ -31744,7 +31748,9 @@ def _anuncio_ml_chamar(method: str, path: str, payload: dict[str, Any] | None, t
             m = re.match(r"Mercado Livre respondeu HTTP (\d{3}): ?(.*)\Z", str(exc), re.S)
             if m:
                 status, corpo_txt = int(m.group(1)), m.group(2)
-        if status is not None and int(status) >= 500:
+        # V20.24 (revisao): 408 = o ML desistiu de esperar o pedido; pode ter criado: incerto, como 5xx.
+        # 429 continua recusa (o ML nao processou).
+        if status is not None and (int(status) >= 500 or int(status) == 408):
             raise AnuncioMLSemResposta(str(exc)) from exc
         # status None = RuntimeError do token (a chamada nem saiu)
         raise AnuncioMLRecusou(str(exc), status, _anuncio_json_ou_none(corpo_txt)) from exc
@@ -31754,7 +31760,7 @@ def _anuncio_ml_chamar(method: str, path: str, payload: dict[str, Any] | None, t
         except Exception:
             corpo_txt = ""
         msg = f"Mercado Livre respondeu HTTP {exc.code}: {corpo_txt[:400]}"
-        if exc.code >= 500:
+        if exc.code >= 500 or exc.code == 408:  # V20.24 (revisao): 408 = incerto
             raise AnuncioMLSemResposta(msg) from exc
         raise AnuncioMLRecusou(msg, exc.code, _anuncio_json_ou_none(corpo_txt)) from exc
     except Exception as exc:  # URLError, timeout, conexao caida, JSON ilegivel de um 2xx...

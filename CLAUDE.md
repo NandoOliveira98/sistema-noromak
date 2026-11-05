@@ -730,6 +730,17 @@ Anúncio que sumiu do ML **não** é marcado (fica como estava). `removido_em` s
 recria o removido; `anuncio_reincluir` desfaz. **Passar para o Noromak** (`anuncio_controle_definir`) exige
 `confirmou_alephee` (o anúncio ainda está no Alephee, risco de duas ferramentas mexendo) e **não vale para Full**; ficha com anúncios nos dois
 controles aparece como "misto".
+**V20.24 — puxar em segundo plano e um anúncio só** (dono, 05/11): `POST /api/anuncios/puxar` só confere e inicia a thread
+(`anuncios_puxar_iniciar`; ocupado = 409) e responde na hora; o andamento fica em `ANUNCIOS_PUXAR_ESTADO` (conta atual,
+resultado por conta) e sai em `GET /api/anuncios/puxar/situacao` (módulo admin; a tela consulta a cada 3 s, também ao abrir
+com uma puxada rodando). A thread fecha o estado e solta a trava num `finally`; auditoria no fim. Erro no meio de uma conta
+mantém os lotes já gravados (a tela diz isso). **Um anúncio:** `POST /api/anuncios/puxar/um {mlb_ou_link}` (`anuncio_puxar_um`;
+`anuncio_mlb_do_texto` aceita MLB, MLB-, link do anúncio; link de catálogo `/p/MLB…` = 400): lê o item em cada conta
+conectada (`ml_itens_detalhe` agora traz `seller_id` e, com `falhas=`, separa 404 de "sem resposta"), a dona é a do
+`seller_id` (`ml_casa_do_seller`); grava pelo mesmo `_anuncio_gravar_itens` da puxada. Não é nosso / não existe = 404, ML sem
+resposta = 502, nada gravado; removido pelo ADMIN continua removido. **Revisão:** item sem SKU no ML não apaga a ficha já ligada
+(`COALESCE(NULLIF(?,''),ficha_codigo)`); kit com pedido na fila compara a **lista em ordem** (reordenar também muda o uid
+`KITDB_`); 408 no `POST /items` = `incerto`. Teste: `TESTES/test_anuncios_puxar_fundo_v2024.py`.
 **Rotas:** `GET /api/anuncios`, `GET /api/anuncios/ficha?codigo=&apollo=1`; `POST /api/anuncios/{ficha,kit,puxar,controle,remover,reincluir}`.
 Ver = módulo admin; gravar = perfil Admin (Consulta bloqueado pelo `consulta_bloqueada`).
 Testes: `TESTES/test_anuncios_{ficha,kits,puxar,rotas,kit_fila}_v2023.py`.
