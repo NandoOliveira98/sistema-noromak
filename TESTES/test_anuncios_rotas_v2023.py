@@ -237,7 +237,9 @@ class RotasAnunciosTeste(TesteNoromak):
         self.assertIn('href: "/anuncios"', menu)
         # V20.23: escrita so para o perfil Admin; Passar para o Noromak pergunta da Alephee
         self.assertIn("confirmou_alephee", html)
-        self.assertIn("versao", html)
+        # o Salvar manda so os campos alterados (camposMudados) + a versao da ficha lida
+        self.assertIn("mud.forEach(c => { campos[c]", html)
+        self.assertIn("corpo.versao = F.ficha.versao", html)
 
     def test_kit_sem_ficha_abre_pela_composicao(self):
         """V20.23: o "Abrir" de um kit do cadastro (ou KITn-X) sem ficha nem anuncio abre a composicao, nao 404;

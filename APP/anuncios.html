@@ -290,7 +290,10 @@ async function abrirFicha(cod, opcoes = {}) {
   if (!opcoes.manter) { BASE = novaBase; FORM = {...novaBase}; }
   else {
     // V20.23: recarga com edição em andamento: campo não mexido acompanha o gravado; o mexido fica como está
-    SECOES.forEach(s => s.campos.forEach(([c]) => { if (FORM[c] === BASE[c]) FORM[c] = novaBase[c]; }));
+    // V20.23: campo que acabou de ser salvo (opcoes.salvos) acompanha o gravado: o servidor normaliza
+    // ("12.5" vira 12,5; espaço do fim sai) e o campo não pode continuar "alterado, não salvo".
+    const salvos = opcoes.salvos || [];
+    SECOES.forEach(s => s.campos.forEach(([c]) => { if (FORM[c] === BASE[c] || salvos.includes(c)) FORM[c] = novaBase[c]; }));
     BASE = novaBase;
   }
   prepararKit(opcoes.manter);
@@ -329,7 +332,7 @@ function desenharFicha() {
     <div class="nk-kpis bloco">
       ${FILIAIS.map(kpiFilial).join("")}
       <div class="nk-kpi"><span class="nk-kpi-ic ${faltam.length ? "bad" : "ok"}"><i class="nk-i-file"></i></span><div><b>${nCampos}/${Object.keys(BASE).length} campos</b><small>${faltam.length ? `faltam ${faltam.length} obrigatórios` : "ficha completa"}</small></div></div>
-      <div class="nk-kpi"><span class="nk-kpi-ic ${F.misto ? "warn" : "info"}"><i class="nk-i-tag"></i></span><div><b>${ativos.length} anúncio(s)</b><small>${Object.entries(cont).map(([c, n]) => `${(CONTROLE[c] || [c])[0]} ${n}`).join(" · ") || "nenhum anúncio"}</small></div></div>
+      <div class="nk-kpi"><span class="nk-kpi-ic ${F.misto ? "warn" : "info"}"><i class="nk-i-tag"></i></span><div><b>${ativos.length} anúncio(s)</b><small>${Object.entries(cont).map(([c, n]) => `${esc((CONTROLE[c] || [c])[0])} ${n}`).join(" · ") || "nenhum anúncio"}</small></div></div>
     </div>
     ${F.misto ? '<div class="nk-aviso bloco">Produto misto: a Alephee também mexe neste estoque.</div>' : ""}
     <div class="abas" role="tablist">
@@ -421,7 +424,7 @@ async function salvarFicha() {
     await api("/api/anuncios/ficha", corpo);
     CONFLITO = {};
     nkToast("Ficha salva.", "ok");
-    await abrirFicha(F.codigo, {manter: true});
+    await abrirFicha(F.codigo, {manter: true, salvos: mud, apollo: !!F.apollo_lido});
   } catch (e) {
     if (e.status === 409 && e.dados && e.dados.atual) { conflitoFicha(e.dados.atual); return; }
     nkToast(e.message, "erro");
@@ -543,14 +546,14 @@ async function salvarKit(tentativa = 0) {
     await api("/api/anuncios/kit", {sku_kit: KIT.sku, nome: KIT.nome || ((F.ficha && F.ficha.campos.nome) || ""), componentes: comps, versao_storage: KIT.versao_storage});
     nkToast("Kit salvo.", "ok");
     KIT = null;
-    await abrirFicha(F.codigo, {manter: true});
+    await abrirFicha(F.codigo, {manter: true, apollo: !!F.apollo_lido});
   } catch (e) {
     if (e.status === 409 && !tentativa) {
       // V20.23: o Cadastro de Kits inteiro tem uma versão só; se ESTE kit não mudou, a outra alteração foi em outro
       // kit e o salvar segue com a versão nova. Se mudou, mostra o atual e não grava por cima.
       const meus = KIT.comps, base = KIT.base;
       try {
-        const [d, vk] = await Promise.all([api(`/api/anuncios/ficha?codigo=${encodeURIComponent(F.codigo)}`),
+        const [d, vk] = await Promise.all([api(`/api/anuncios/ficha?codigo=${encodeURIComponent(F.codigo)}${F.apollo_lido ? "&apollo=1" : ""}`),
           api("/api/storage?versions=conf_kits").then(x => (x.versions || {}).conf_kits)]);
         const agora = JSON.stringify(((d.composicao || {}).componentes || []).map(c => ({sku: c.sku, quantidade: String(c.quantidade)})));
         if (agora === base) { KIT.versao_storage = vk; return salvarKit(1); }
@@ -589,13 +592,19 @@ function desenharKitsDaPeca() {
 async function novoKit() {
   const sku = (await nkPerguntar("SKU do novo kit", {detalhe: `Código do kit que vai conter ${F.codigo}. Ex.: KIT3-${F.codigo}`, placeholder: "KIT…", obrigatorio: true}) || "").trim();
   if (!sku) return;
-  const qtd = (await nkPerguntar(`Quantas ${F.codigo} vão no kit?`, {tipo: "number", valor: "2", min: "1", obrigatorio: true}) || "").trim();
-  if (!qtd) return;
-  // não sobrescrever um kit que já existe no cadastro: nesse caso só abre
+  // não sobrescrever um kit que já existe no cadastro: nesse caso só abre. KITn-X já traz a composição no código.
   try {
     const d = await api(`/api/anuncios/ficha?codigo=${encodeURIComponent(sku)}`);
-    if (d.composicao) { nkToast(`O kit ${sku} já existe: abrindo para editar.`, "info"); abrirCodigo(sku); return; }
+    if (d.composicao) {
+      const comp = (d.composicao.componentes || []).map(c => `${c.quantidade} × ${c.sku}`).join(" + ");
+      nkToast(d.composicao.fonte === "prefixo"
+        ? `Kit pelo código: ${comp}. Abrindo; salve o kit para gravar no Cadastro de Kits.`
+        : `O kit ${sku} já existe (${comp}): abrindo para editar.`, "info", {duracao: 9000});
+      abrirCodigo(sku); return;
+    }
   } catch (e) { if (e.status !== 404) { nkToast(e.message, "erro"); return; } }
+  const qtd = (await nkPerguntar(`Quantas ${F.codigo} vão no kit?`, {tipo: "number", valor: "2", min: "1", obrigatorio: true}) || "").trim();
+  if (!qtd) return;
   const q = Number(qtd);
   if (!Number.isInteger(q) || q < 1 || q > 999) { nkToast("A quantidade deve ser um número inteiro de 1 a 999.", "aviso"); return; }
   try {
