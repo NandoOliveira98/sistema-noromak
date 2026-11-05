@@ -22,6 +22,7 @@ import json
 import mimetypes
 import os
 import math
+import uuid  # V20.23: id estavel do kit novo
 import queue
 import re
 import secrets
@@ -7478,12 +7479,12 @@ def ficha_importar(codigo: str, campos: dict[str, Any], origem: str) -> list[str
 
 
 # V20.23: kits - le e grava o MESMO Cadastro de Kits (conf_kits) que Conferencia, Shopee, Financeiro e Demanda usam.
-def kit_composicao(sku_kit: str) -> dict[str, Any] | None:
-    """Mesma regra de full_kit_compositions para um SKU: cadastro primeiro, depois o prefixo KITn-X."""
+def _kit_composicao(sku_kit: str, catalog: dict[str, dict[str, Any]]) -> dict[str, Any] | None:
+    """V20.23: igual a kit_composicao, mas com o cadastro ja carregado (uma leitura so para varios kits)."""
     sku = str(sku_kit or "").strip()
     if not sku:
         return None
-    entry = _kit_catalog_lookup(_load_kit_catalog(), sku)
+    entry = _kit_catalog_lookup(catalog, sku)
     fonte = "cadastro"
     if entry and not re.match(r"^KIT", sku, flags=re.I) and normalize(entry.get("sku_kit")) != normalize(sku):
         entry = None  # SKU comum so vira kit quando e exatamente o SKU cadastrado
@@ -7501,32 +7502,41 @@ def kit_composicao(sku_kit: str) -> dict[str, Any] | None:
             "componentes": comps, "fonte": fonte, "ativo": bool(entry.get("ativo", True))}
 
 
+def kit_composicao(sku_kit: str) -> dict[str, Any] | None:
+    """Mesma regra de full_kit_compositions para um SKU: cadastro primeiro, depois o prefixo KITn-X."""
+    if not str(sku_kit or "").strip():
+        return None
+    return _kit_composicao(sku_kit, _load_kit_catalog())
+
+
 def kits_da_peca(codigo: str) -> list[dict[str, Any]]:
-    """Todo kit (cadastro e fichas tipo=kit lidas pelo prefixo) que tem a peca entre os componentes."""
-    alvo = _exp_norm_codigo(codigo)
+    """Todo kit (cadastro e fichas tipo=kit lidas pelo prefixo) que tem a peca entre os componentes.
+    Compara com `normalize` (a mesma regra do cadastro e do kit_salvar)."""
+    alvo = normalize(codigo)
     if not alvo:
         return []
     saida: list[dict[str, Any]] = []
     vistos: set[str] = set()
+    catalogo = _load_kit_catalog()  # V20.23: uma leitura so
 
     def _considerar(kit: dict[str, Any] | None) -> None:
         if not kit:
             return
-        chave = _exp_norm_codigo(kit["sku_kit"])
+        chave = normalize(kit["sku_kit"])
         if chave in vistos:
             return
-        qtd = sum(c["quantidade"] for c in kit["componentes"] if _exp_norm_codigo(c["sku"]) == alvo)
+        qtd = sum(c["quantidade"] for c in kit["componentes"] if normalize(c["sku"]) == alvo)
         if qtd <= 0:
             return
         vistos.add(chave)
         saida.append({"sku_kit": kit["sku_kit"], "nome": kit["nome"], "quantidade_da_peca": qtd, "fonte": kit["fonte"]})
 
-    for entry in {id(e): e for e in _load_kit_catalog().values()}.values():
-        _considerar(kit_composicao(str(entry.get("sku_kit") or "")))
+    for entry in {id(e): e for e in catalogo.values()}.values():
+        _considerar(_kit_composicao(str(entry.get("sku_kit") or ""), catalogo))
     with DB_LOCK:
         codigos = [r["codigo"] for r in DB.execute("SELECT codigo FROM anuncio_ficha_v2023 WHERE tipo='kit'").fetchall()]
     for cod in codigos:
-        _considerar(kit_composicao(cod))
+        _considerar(_kit_composicao(cod, catalogo))
     return saida
 
 
@@ -7551,10 +7561,12 @@ def kit_salvar(sku_kit: str, nome: str, componentes: list[dict[str, Any]], ator:
             raise ValueError("Quantidade inválida.")
         try:
             qf = float(q)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             raise ValueError("Quantidade inválida.")
-        if qf != int(qf) or not 1 <= int(qf) <= 999:
+        if not math.isfinite(qf) or qf != int(qf) or not 1 <= int(qf) <= 999:
             raise ValueError("A quantidade de cada componente deve ser um número inteiro de 1 a 999.")
+        if any(normalize(n["sku"]) == normalize(csku) for n in novos):
+            raise ValueError(f"Componente repetido: {csku}")
         novos.append({"sku": csku, "quantidade": int(qf)})
     nome_ok = str(nome or "").strip() or sku
     with DB_LOCK:  # RLock: leitura e gravacao na mesma vez, sem outra gravacao no meio
@@ -7574,7 +7586,10 @@ def kit_salvar(sku_kit: str, nome: str, componentes: list[dict[str, Any]], ator:
                 posicao = i
                 break
         if posicao is None:
-            linhas.append({"sku_kit": sku, "nome": nome_ok, "ativo": True, "componentes": novos})
+            # V20.23: id estavel no mesmo formato da tela Admin (persistirKitsBancoAdmin); sem ele o override
+            # do ADMIN usaria NOME:<nome> como identidade. Linha antiga sem id NAO ganha id aqui (trocaria a entidade).
+            linhas.append({"id": "KIT_" + uuid.uuid4().hex[:12], "sku_kit": sku, "nome": nome_ok, "componentes": novos,
+                           "ativo": True, "atualizado_em": now_iso()})
         else:
             row = dict(linhas[posicao])
             antigos = {normalize(c.get("sku")): c for c in (row.get("componentes") or []) if isinstance(c, dict)}
@@ -7585,6 +7600,7 @@ def kit_salvar(sku_kit: str, nome: str, componentes: list[dict[str, Any]], ator:
                 comps_final.append({**extra, **c})
             row["componentes"] = comps_final
             row["nome"] = nome_ok
+            row["atualizado_em"] = now_iso()
             linhas[posicao] = row
         save_storage("conf_kits", bruto, json.dumps(linhas, ensure_ascii=False), False, actor=ator,
                      actor_role="admin", source_screen="anuncios", change_method="anuncios.kit")

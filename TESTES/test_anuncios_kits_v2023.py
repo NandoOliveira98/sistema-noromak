@@ -76,11 +76,40 @@ class KitsTeste(TesteNoromak):
         self.assertEqual(depois["versao"], antes["versao"])
 
     def test_bip_da_fila_nao_diminui(self):
+        # kit ja aberto em componentes na fila (como _shopee_expand_kit_lines grava), com bip
         S.kit_salvar("KITQ", "Q", [{"sku": "P1", "quantidade": 1}], "luis", None)
-        self.salvar_admin([linha("PED-1", "P1", 1, Lido=1), linha("PED-1", "P2", 2, Lido=2)])
-        antes = sorted((r["SKU"], r["Lido"]) for r in pedidos())
+        self.salvar_admin([
+            linha("PED-1", "P1", 1, uid="KITDB_PED-1_KITQ_P1_0", Lido=1, SkuReferenciaShopee="KITQ", KitOrigem="KITQ"),
+            linha("PED-1", "P2", 2, uid="KITDB_PED-1_KITQ_P2_1", Lido=2, SkuReferenciaShopee="KITQ", KitOrigem="KITQ"),
+        ])
+        antes = sorted((r["__uidLinha"], r["SKU"], r["Quantidade"], r["Lido"]) for r in pedidos())
+        self.assertEqual(len(antes), 2)
         S.kit_salvar("KITQ", "Q", [{"sku": "P1", "quantidade": 3}], "luis", None)
-        self.assertEqual(sorted((r["SKU"], r["Lido"]) for r in pedidos()), antes)
+        self.assertEqual(sorted((r["__uidLinha"], r["SKU"], r["Quantidade"], r["Lido"]) for r in pedidos()), antes)
+
+    def test_kit_novo_tem_id_e_renomear_nao_cria_tombstone_por_nome(self):
+        S.kit_salvar("KITN", "Nome 1", [{"sku": "P", "quantidade": 1}], "luis", None)
+        linhas = self.lista()
+        self.assertTrue(linhas[0]["id"].startswith("KIT"))
+        self.assertTrue(linhas[0]["atualizado_em"])
+        S.kit_salvar("KITN", "Nome 2", [{"sku": "P", "quantidade": 2}], "luis", None)
+        linhas = self.lista()
+        self.assertEqual([k["sku_kit"] for k in linhas], ["KITN"])
+        self.assertEqual(linhas[0]["nome"], "Nome 2")
+        with S.DB_LOCK:
+            ents = [r["entity_id"] for r in S.DB.execute(
+                "SELECT entity_id FROM admin_manual_overrides WHERE storage_key='conf_kits'").fetchall()]
+        self.assertTrue(ents)
+        self.assertFalse([e for e in ents if e.startswith("NOME:")], ents)
+
+    def test_quantidade_nao_finita_e_componente_repetido(self):
+        for q in (float("inf"), float("nan"), "1e400", "inf"):
+            with self.assertRaises(ValueError) as cm:
+                S.kit_salvar("KITI", "I", [{"sku": "P", "quantidade": q}], "luis", None)
+            self.assertIn("uantidade", str(cm.exception))
+        with self.assertRaises(ValueError) as cm:
+            S.kit_salvar("KITR", "R", [{"sku": "P", "quantidade": 1}, {"sku": "p", "quantidade": 2}], "luis", None)
+        self.assertIn("Componente repetido", str(cm.exception))
 
 
 if __name__ == "__main__":
