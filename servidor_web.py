@@ -7432,7 +7432,7 @@ def ficha_salvar(codigo: str, campos: dict[str, Any], ator: str, versao: int | N
         return _ficha_ler_sem_lock(cod) or {}
 
 
-def ficha_importar(codigo: str, campos: dict[str, Any], origem: str) -> list[str]:
+def ficha_importar(codigo: str, campos: dict[str, Any], origem: str, commit: bool = True) -> list[str]:
     """V20.23: preenche so campo vazio ou de origem com MENOS autoridade; nunca toca campo `admin`.
     Cria a ficha se nao existir; sobe a versao so quando muda algo."""
     cod = normalize(codigo)
@@ -7474,7 +7474,8 @@ def ficha_importar(codigo: str, campos: dict[str, Any], origem: str) -> list[str
             "atualizado_por=excluded.atualizado_por",
             (cod, json.dumps(cs, ensure_ascii=False), json.dumps(os_, ensure_ascii=False), nova, now_iso(), "importacao:" + origem),
         )
-        DB.commit()
+        if commit:
+            DB.commit()
         return alterados
 
 
@@ -7540,7 +7541,7 @@ def kits_da_peca(codigo: str) -> list[dict[str, Any]]:
     return saida
 
 
-def _ficha_garantir_kit(sku: str, ator: str) -> str:
+def _ficha_garantir_kit(sku: str, ator: str, commit: bool = True) -> str:
     """V20.23: garante a ficha do kit com tipo='kit' (cria sem campos; nao mexe nos campos de quem ja existe)."""
     cod = normalize(sku)
     if cod:
@@ -7548,7 +7549,8 @@ def _ficha_garantir_kit(sku: str, ator: str) -> str:
             DB.execute(
                 "INSERT INTO anuncio_ficha_v2023(codigo,tipo,atualizado_em,atualizado_por) VALUES(?,'kit',?,?) "
                 "ON CONFLICT(codigo) DO UPDATE SET tipo='kit'", (cod, now_iso(), str(ator or "")))
-            DB.commit()
+            if commit:
+                DB.commit()
     return cod
 
 
@@ -7696,8 +7698,50 @@ def _anuncio_links_invertidos() -> dict[str, str]:
     return saida
 
 
+ANUNCIO_LOTE_GRAVACAO = 100  # V20.23: anuncios por vez sob o DB_LOCK (a lista tem ~1.600 por conta)
+
+
+def _anuncio_gravar_lote(conta: str, lote: list[dict[str, Any]], res: dict[str, Any]) -> None:
+    """V20.23: um DB_LOCK e um commit por lote; erro no meio desfaz o lote inteiro (conexao compartilhada)."""
+    with DB_LOCK:
+        parcial = {"novos": 0, "atualizados": 0}
+        try:
+            for r in lote:
+                atual = DB.execute("SELECT removido_em FROM anuncio_canal_v2023 WHERE canal='ml' AND conta=? AND anuncio_id=?",
+                                   (conta, r["mlb"])).fetchone()
+                if atual is not None and str(atual["removido_em"] or ""):
+                    continue  # removido pelo ADMIN: nao e atualizado nem recriado
+                v = r["valores"]
+                if atual is None:
+                    DB.execute(
+                        "INSERT INTO anuncio_canal_v2023(canal,conta,anuncio_id,ficha_codigo,sku_anuncio,titulo,preco,estoque,"
+                        "status,tipo_anuncio,categoria,logistica,user_product_id,lido_em,controle) "
+                        "VALUES('ml',?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (conta, r["mlb"]) + v + (r["controle"],))
+                    parcial["novos"] += 1
+                else:
+                    # titulo/preco/estoque que o ML omitiu ficam como estavam (nunca viram vazio/zero)
+                    DB.execute(
+                        "UPDATE anuncio_canal_v2023 SET ficha_codigo=?,sku_anuncio=?,titulo=COALESCE(NULLIF(?,''),titulo),"
+                        "preco=COALESCE(?,preco),estoque=COALESCE(?,estoque),status=?,tipo_anuncio=?,categoria=?,"
+                        "logistica=?,user_product_id=?,lido_em=? WHERE canal='ml' AND conta=? AND anuncio_id=?",
+                        v + (conta, r["mlb"]))
+                    parcial["atualizados"] += 1
+                if r["ficha"]:
+                    if r["tipo"] == "kit":
+                        _ficha_garantir_kit(r["sku"], "importacao:anuncio_ml", commit=False)
+                    if r["campos"]:
+                        ficha_importar(r["ficha"], r["campos"], "anuncio_ml", commit=False)
+            DB.commit()
+        except Exception:
+            DB.rollback()
+            raise
+        res["novos"] += parcial["novos"]
+        res["atualizados"] += parcial["atualizados"]
+
+
 def _anuncio_puxar_conta(conta: str) -> dict[str, Any]:
-    res: dict[str, Any] = {"lidos": 0, "novos": 0, "atualizados": 0, "sem_ficha": 0, "erro": ""}
+    res: dict[str, Any] = {"lidos": 0, "novos": 0, "atualizados": 0, "sem_ficha": 0, "parcial": 0, "erro": ""}
     try:
         with ml_na_casa(conta):  # chamadas ao ML FORA do DB_LOCK
             mlbs = [str(x).strip().upper() for x in (ml_todos_os_anuncios(forcar=True) or []) if str(x).strip()]
@@ -7708,6 +7752,7 @@ def _anuncio_puxar_conta(conta: str) -> dict[str, Any]:
         if not detalhes:
             res["erro"] = "O Mercado Livre não respondeu (detalhes dos anúncios vazios)."
             return res
+        res["parcial"] = max(0, len(set(mlbs) - set(detalhes)))  # listados e nao detalhados: so informa
         links = _anuncio_links_invertidos()
         catalogo = _load_kit_catalog()
         try:
@@ -7715,50 +7760,30 @@ def _anuncio_puxar_conta(conta: str) -> dict[str, Any]:
         except Exception:
             conhecidos = set()
         agora = now_iso()
-        a_importar: list[tuple[str, dict[str, Any]]] = []
-        with DB_LOCK:
-            for mlb, d in detalhes.items():
-                res["lidos"] += 1
-                sku = links.get(mlb) or str(d.get("sku_ml") or "").strip()
-                ficha, tipo = anuncio_ficha_do_sku(sku, catalogo, conhecidos)
-                if not ficha:
-                    res["sem_ficha"] += 1
-                preco = d.get("preco")
-                try:
-                    preco = float(preco) if preco is not None else None
-                except (TypeError, ValueError):
-                    preco = None
-                est = d.get("estoque")
-                est = int(est) if isinstance(est, (int, float)) and not isinstance(est, bool) else None
-                logistica = str(d.get("logistica") or "")
-                atual = DB.execute("SELECT removido_em FROM anuncio_canal_v2023 WHERE canal='ml' AND conta=? AND anuncio_id=?",
-                                   (conta, mlb)).fetchone()
-                if atual is not None and str(atual["removido_em"] or ""):
-                    continue  # removido pelo ADMIN: nao e atualizado nem recriado
-                valores = (ficha, sku, str(d.get("titulo") or ""), preco, est, str(d.get("status") or ""),
-                           str(d.get("tipo") or ""), str(d.get("categoria") or ""), logistica,
-                           str(d.get("user_product") or ""), agora)
-                if atual is None:
-                    DB.execute(
-                        "INSERT INTO anuncio_canal_v2023(canal,conta,anuncio_id,ficha_codigo,sku_anuncio,titulo,preco,estoque,"
-                        "status,tipo_anuncio,categoria,logistica,user_product_id,lido_em,controle) "
-                        "VALUES('ml',?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                        (conta, mlb) + valores + ("full" if logistica == "fulfillment" else "alephee",))
-                    res["novos"] += 1
-                else:
-                    DB.execute(
-                        "UPDATE anuncio_canal_v2023 SET ficha_codigo=?,sku_anuncio=?,titulo=?,preco=?,estoque=?,status=?,"
-                        "tipo_anuncio=?,categoria=?,logistica=?,user_product_id=?,lido_em=? "
-                        "WHERE canal='ml' AND conta=? AND anuncio_id=?", valores + (conta, mlb))
-                    res["atualizados"] += 1
-                if ficha:
-                    if tipo == "kit":
-                        _ficha_garantir_kit(sku, "importacao:anuncio_ml")
-                    a_importar.append((ficha, anuncio_campos_do_item(d.get("atributos"))))
-            DB.commit()
-            for ficha, campos in a_importar:
-                if campos:
-                    ficha_importar(ficha, campos, "anuncio_ml")
+        linhas: list[dict[str, Any]] = []
+        for mlb, d in detalhes.items():
+            res["lidos"] += 1
+            sku = links.get(mlb) or str(d.get("sku_ml") or "").strip()
+            ficha, tipo = anuncio_ficha_do_sku(sku, catalogo, conhecidos)
+            if not ficha:
+                res["sem_ficha"] += 1
+            try:
+                preco = float(d["preco"]) if d.get("preco") is not None else None
+            except (TypeError, ValueError):
+                preco = None
+            est = d.get("estoque")
+            est = int(est) if isinstance(est, (int, float)) and not isinstance(est, bool) else None
+            logistica = str(d.get("logistica") or "")
+            linhas.append({
+                "mlb": mlb, "ficha": ficha, "tipo": tipo, "sku": sku,
+                "campos": anuncio_campos_do_item(d.get("atributos")) if ficha else {},
+                "controle": "full" if logistica == "fulfillment" else "alephee",
+                "valores": (ficha, sku, str(d.get("titulo") or ""), preco, est, str(d.get("status") or ""),
+                            str(d.get("tipo") or ""), str(d.get("categoria") or ""), logistica,
+                            str(d.get("user_product") or ""), agora),
+            })
+        for i in range(0, len(linhas), ANUNCIO_LOTE_GRAVACAO):
+            _anuncio_gravar_lote(conta, linhas[i:i + ANUNCIO_LOTE_GRAVACAO], res)  # lock solto entre os lotes
     except Exception as exc:
         res["erro"] = f"{type(exc).__name__}: {exc}"[:300]
     return res

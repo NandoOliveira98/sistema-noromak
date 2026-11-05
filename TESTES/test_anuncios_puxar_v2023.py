@@ -132,3 +132,32 @@ class PuxarTeste(TesteNoromak):
     def test_codigo_com_pontuacao_fica_como_esta(self):
         self.puxar({"MLB4": item(sku=" 6007.003.315.00.8 ")})
         self.assertEqual(self.linha_("MLB4")["ficha_codigo"], "6007.003.315.00.8")
+
+    def test_vinculo_removido_nao_vale(self):
+        S.ml_precificador_manual_link_update("0893117999", "MLB1", "add", "luis")
+        S.ml_precificador_manual_link_update("0893117999", "MLB1", "remove", "luis")
+        self.puxar({"MLB1": item(sku="0893117732")})
+        self.assertEqual(self.linha_("MLB1")["ficha_codigo"], "0893117732")
+
+    def test_omitido_pelo_ml_nao_apaga_o_ultimo_valor(self):
+        self.puxar({"MLB1": item(titulo="Titulo", preco=9.9, estoque=4)})
+        self.puxar({"MLB1": item(titulo="", preco=None, estoque=None)})
+        l = self.linha_("MLB1")
+        self.assertEqual((l["titulo"], l["preco"], l["estoque"]), ("Titulo", 9.9, 4))
+
+    def test_detalhe_parcial_informa_sem_apagar(self):
+        self.puxar({"MLB1": item(), "MLB2": item(sku="0893117733")})
+        r = self.puxar({"MLB1": item()}, lista=["MLB1", "MLB2"])
+        self.assertEqual(r["contas"]["aracatuba"]["parcial"], 1)
+        self.assertEqual(r["contas"]["aracatuba"]["erro"], "")
+        self.assertIsNotNone(self.linha_("MLB2"))
+
+    def test_lotes_e_rollback(self):
+        itens = {f"MLB{i}": item(sku=f"09{i:08d}") for i in range(1, 251)}
+        with mock.patch.object(S, "ANUNCIO_LOTE_GRAVACAO", 100):
+            r = self.puxar(itens)
+        self.assertEqual(r["contas"]["aracatuba"]["novos"], 250)
+        with mock.patch.object(S, "ficha_importar", side_effect=RuntimeError("boom")):
+            r = self.puxar({"MLB9001": item(sku="0999999991", attrs=[attr("BRAND", "X")])})
+        self.assertTrue(r["contas"]["aracatuba"]["erro"])
+        self.assertIsNone(self.linha_("MLB9001"))
