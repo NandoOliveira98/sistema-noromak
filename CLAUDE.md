@@ -787,6 +787,32 @@ ML que fala de "kit" (frase do ML, vai como `value_id`); nenhum = em branco para
 `POST /api/anuncios/{foto,foto/remover,foto/ordenar,rascunho,rascunho/validar,rascunho/publicar,rascunho/liberar}`; `ficha` aceita criar produto novo.
 Testes: `TESTES/test_anuncios_{criar,fotos,publicar}_v2024.py`.
 
+**V20.26 — fase 3: controle de estoque dos anúncios do ML** (decisões do dono 05/11; plano
+`docs/superpowers/plans/2026-11-05-anuncios-fase3-estoque.md`). **Exceção à regra "o Noromak nunca grava estoque": o Noromak grava
+estoque no ML só em anúncio `controle='noromak'`** (nunca Full, Alephee ou removido pelo ADMIN; como já é no TikTok). Cada anúncio tem
+**Controle de estoque: Manual · Automático** (`anuncio_canal_v2023.estoque_modo`, padrão **Manual**; trocar quem controla volta a Manual).
+**Manual** = o Admin digita e vai na hora (`nkConfirmar` "de X para Y"; 0 só digitado). **Automático** = Apollo da filial (Araçatuba
+revenda 1, Bauru 3) − vendido e ainda não baixado (`pendentes_por_filial`), **sem folga**; kit = a peça que dá menos
+(`kit_da_para_montar`); peça sem leitura, Apollo sem resposta, leitura com mais de 6 h ou fila não lida = **não envia** (nunca zero).
+Interruptor **por conta** (`anuncio_estoque_config_v2026`): `simulacao` (padrão; calcula e registra) → `lote` ("Enviar agora") →
+`automatico` (envia sozinho; ligar = senha + 2FA do OWNER, `require_owner_reauth`). Anúncio em Manual nunca é tocado pelo automático.
+**Gravar = só `ml_estoque_gravar`** (trava por anúncio, ML fora do `DB_LOCK`, dentro de `ml_na_casa`): Full recusado sem chamada;
+`PUT /items/{id}` ou, com depósitos, `PUT /user-products/{id}/stock/type/selling_address` com `x-version` (409 = relê e tenta 1x;
+sem `selling_address` = erro "ajuste no ML"); **relê o anúncio** e só é ok se o ML mostrar o número (RF3: 200 sem mudar = erro);
+1ª resposta de cada chamada em `anuncio_amostra_v2024` (`estoque_put_item`, `estoque_put_up`, `estoque_up_ler`). Antes de enviar, sob a
+trava, o Automático relê o modo do anúncio (virou Manual = desiste, RF4) e a versão da fila (mudou = recalcula, RF1).
+**Apollo em rodízio** (`anuncios_apollo_ler_proximo`, `anuncio_apollo_v2026`): ≤ `ANUNCIO_APOLLO_POR_MINUTO` (3/min, a cota de 20/min
+é dividida com Faturamento/Separação/TikTok); nunca lido > disponível ≤ 3 lido há > 10 min > mais antigo; só códigos de anúncios em
+Automático. Worker **`anuncios_estoque_loop`** (20 s, `_worker_protegido`, em `SAUDE_WORKERS_INFO`): sem anúncio em Automático não lê
+nada; refaz a conta quando a fila ou uma leitura muda (ou a cada 10 min); o mesmo número recusado pelo ML só é tentado de novo em 10 min.
+Registro em `anuncio_estoque_log_v2026` (ok/erro/simulado/ignorado, últimos 20.000). Rotas: `GET /api/anuncios/estoque?conta=&anuncio_id=`
+(módulo admin, só lê o banco); `POST /api/anuncios/estoque/{modo,manual,config,enviar}` (perfil Admin, `conta` obrigatória; Manual em
+anúncio Automático = 400; Enviar em Simulação = 400, rodada em andamento = 409). Tela: cartão "Controle de estoque" na aba Anúncios em
+todos os canais e painel "Estoque automático" (um cartão por conta, segue o seletor de casa; registro com `data-nk-tabela`).
+**Limitação conhecida:** venda concluída na Conferência e ainda não baixada no Apollo sai dos pendentes antes de o Apollo baixar — o
+estoque pode subir por um instante (igual ao TikTok). Prévia: o ML simulado aceita o PUT e o MLB1129555578 tem depósito do vendedor.
+Teste: `TESTES/test_anuncios_estoque_v2026.py`.
+
 ### Estúdio de Imagens (V20.17: servidor, tela e agente)
 `APP/imagens.html` (`/imagens`, menu Vendas e anúncios, módulo próprio **`imagens`** = `app_users.can_imagens`, mesma
 regra do Devolução: Admin nasce ligado, salvar sem a chave mantém; Consulta só vê; Compras não tem). Decisões do dono
