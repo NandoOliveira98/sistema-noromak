@@ -7887,6 +7887,133 @@ def apollo_disponivel_filial(codigos: list[str], filial: str) -> dict[str, float
     return saida
 
 
+# V20.23: controle do anuncio (Alephee x Noromak), lista e ficha para a tela. So le/grava o nosso banco.
+ANUNCIOS_PUXAR_LOCK = threading.Lock()  # V20.23: uma puxada por vez (a 2a chamada recebe 409)
+ANUNCIO_CONTROLES = ("noromak", "alephee")
+
+
+def anuncio_controle_definir(canal: str, conta: str, anuncio_id: str, controle: str, ator: str,
+                             confirmou_alephee: bool) -> dict[str, Any]:
+    """V20.23: quem controla o estoque do anuncio. Para `noromak` o ADMIN confirma que ja desativou na Alephee."""
+    if controle not in ANUNCIO_CONTROLES:
+        raise ValueError("Controle inválido.")
+    with DB_LOCK:
+        row = DB.execute("SELECT controle,logistica FROM anuncio_canal_v2023 WHERE canal=? AND conta=? AND anuncio_id=?",
+                         (canal, conta, anuncio_id)).fetchone()
+        if row is None:
+            raise ValueError("Anúncio não encontrado.")
+        if str(row["controle"]) == "full" or str(row["logistica"]) == "fulfillment":
+            raise ValueError("Anúncio Full: o estoque é do Mercado Livre.")
+        if controle == "noromak" and not confirmou_alephee:
+            raise ValueError("Confirme que o anúncio foi desativado na Alephee.")
+        DB.execute("UPDATE anuncio_canal_v2023 SET controle=?, controle_em=?, controle_por=? "
+                   "WHERE canal=? AND conta=? AND anuncio_id=?",
+                   (controle, now_iso(), str(ator or ""), canal, conta, anuncio_id))
+        DB.commit()
+    audit(ator, "anuncios.controle", f"{canal}|{conta}|{anuncio_id}|{controle}")
+    return {"ok": True, "controle": controle}
+
+
+def _anuncio_misto_por_codigo(linhas: list[Any]) -> dict[str, bool]:
+    """Ficha com anuncio `alephee` e outro `noromak` na MESMA conta."""
+    por_conta: dict[tuple[str, str], set[str]] = {}
+    for r in linhas:
+        if str(r["removido_em"] or ""):
+            continue
+        por_conta.setdefault((str(r["ficha_codigo"]), str(r["conta"])), set()).add(str(r["controle"]))
+    saida: dict[str, bool] = {}
+    for (cod, _conta), cs in por_conta.items():
+        if cod and "alephee" in cs and "noromak" in cs:
+            saida[cod] = True
+    return saida
+
+
+def anuncios_lista_payload(busca: str = "", filtro: str = "") -> dict[str, Any]:
+    """V20.23: fichas com a contagem de anuncios; `sem_ficha` = anuncios sem codigo (ou com codigo sem ficha)."""
+    termo = normalize(busca) if str(busca or "").strip() else ""
+    texto = str(busca or "").strip().lower()
+    with DB_LOCK:
+        fichas = {r["codigo"]: _ficha_de_linha(r) for r in DB.execute("SELECT * FROM anuncio_ficha_v2023").fetchall()}
+        linhas = DB.execute("SELECT * FROM anuncio_canal_v2023").fetchall()
+    misto = _anuncio_misto_por_codigo(linhas)
+    por_cod: dict[str, list[Any]] = {}
+    soltos: list[dict[str, Any]] = []
+    for r in linhas:
+        if str(r["removido_em"] or ""):
+            continue
+        cod = str(r["ficha_codigo"] or "")
+        if not cod:
+            soltos.append(dict(r))
+        else:
+            por_cod.setdefault(cod, []).append(r)
+    codigos = set(fichas) | set(por_cod)
+    saida: list[dict[str, Any]] = []
+    for cod in sorted(codigos):
+        f = fichas.get(cod)
+        nome = str((f or {}).get("campos", {}).get("nome") or "")
+        if texto and termo not in cod and texto not in nome.lower():
+            continue
+        ans = por_cod.get(cod, [])
+        item = {"codigo": cod, "tipo": (f or {}).get("tipo") or "peca", "nome": nome, "anuncios": len(ans),
+                "canais": sorted({str(a["canal"]) for a in ans}), "sem_ficha": f is None,
+                "misto": bool(misto.get(cod)), "noromak": any(str(a["controle"]) == "noromak" for a in ans)}
+        if filtro == "sem_ficha" and not item["sem_ficha"]:
+            continue
+        if filtro == "misto" and not item["misto"]:
+            continue
+        if filtro == "noromak" and not item["noromak"]:
+            continue
+        saida.append(item)
+    resumo = {"fichas": len(fichas), "anuncios": sum(len(v) for v in por_cod.values()) + len(soltos),
+              "sem_ficha": len(soltos) + sum(1 for c in por_cod if c not in fichas),
+              "misto": len(misto),
+              "noromak": sum(1 for v in por_cod.values() if any(str(a["controle"]) == "noromak" for a in v))}
+    return {"fichas": saida[:200], "total_fichas": len(saida), "sem_ficha": soltos[:200], "resumo": resumo}
+
+
+def _anuncio_estoque_filial(componentes: list[dict[str, Any]], lido: dict[str, float | None] | None,
+                            pendente: dict[str, int]) -> dict[str, Any]:
+    disp = {c["sku"]: (lido or {}).get(c["sku"]) for c in componentes}
+    return {"disponivel": disp, "pendente": {c["sku"]: int(pendente.get(c["sku"], 0) or 0) for c in componentes},
+            "da_para_montar": kit_da_para_montar(componentes, disp, pendente) if lido is not None else None}
+
+
+def anuncio_ficha_payload(codigo: str, ler_apollo: bool = False) -> dict[str, Any] | None:
+    """V20.23: ficha + kits + anuncios + estoque por filial. Apollo so com `ler_apollo` e fora do DB_LOCK.
+    None = nao ha ficha nem anuncio."""
+    cod = normalize(codigo)
+    if not cod:
+        return None
+    ficha = ficha_ler(cod)
+    with DB_LOCK:
+        todas = DB.execute("SELECT * FROM anuncio_canal_v2023 WHERE ficha_codigo=? ORDER BY canal,conta,anuncio_id",
+                           (cod,)).fetchall()
+        geral = DB.execute("SELECT * FROM anuncio_canal_v2023").fetchall()
+    if ficha is None and not todas:
+        return None
+    ativos = [dict(r) for r in todas if not str(r["removido_em"] or "")]
+    removidos = [dict(r) for r in todas if str(r["removido_em"] or "")]
+    tipo = (ficha or {}).get("tipo") or "peca"
+    comp = kit_composicao(cod) if tipo == "kit" else None
+    if comp:
+        componentes = [{"sku": _exp_norm_codigo(c["sku"]), "quantidade": c["quantidade"]} for c in comp["componentes"]]
+    else:
+        componentes = [{"sku": _exp_norm_codigo(cod), "quantidade": 1}]
+    codigos = [c["sku"] for c in componentes]
+    estoque: dict[str, Any] = {}
+    for filial in ("aracatuba", "bauru"):
+        lido = apollo_disponivel_filial(codigos, filial) if ler_apollo else None  # Apollo FORA do DB_LOCK
+        try:
+            pend = pendentes_da_filial(filial)
+        except Exception:
+            pend = {}
+        estoque[filial] = _anuncio_estoque_filial(componentes, lido, pend)
+    return {"ficha": ficha, "kits_da_peca": kits_da_peca(cod) if tipo != "kit" else [], "composicao": comp,
+            "anuncios": ativos, "removidos": removidos,
+            "misto": bool(_anuncio_misto_por_codigo(geral).get(cod)), "estoque": estoque,
+            "apollo_lido": bool(ler_apollo)}
+
+
 def _tiktok_config_ler(chave: str) -> str | None:
     with DB_LOCK:
         row = DB.execute("SELECT valor FROM tiktok_config_v1964 WHERE chave=?", (chave,)).fetchone()
@@ -37595,6 +37722,22 @@ class AppHandler(BaseHTTPRequestHandler):
                     rows = DB.execute("SELECT tipo,resposta,created_at FROM tiktok_amostra_v1963").fetchall()
                 self.send_json({"ok": True, "amostras": [dict(r) for r in rows]})
             return
+        if path == "/api/anuncios":  # V20.23: lista de fichas (so le o banco)
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                self.send_json({"ok": True, **anuncios_lista_payload(str((query.get("busca") or [""])[0]),
+                                                                    str((query.get("filtro") or [""])[0]))})
+            return
+        if path == "/api/anuncios/ficha":  # V20.23
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                res = anuncio_ficha_payload(str((query.get("codigo") or [""])[0]),
+                                            ler_apollo=str((query.get("apollo") or [""])[0]) == "1")
+                if res is None:
+                    self.send_json({"ok": False, "error": "Produto não encontrado."}, 404)
+                else:
+                    self.send_json({"ok": True, **res})
+            return
         if path == "/api/tiktok-estoque":  # V19.64: tela Estoque TikTok (só lê o banco)
             ctx = self.auth(admin_only=True)
             if ctx is not None:
@@ -38611,6 +38754,7 @@ class AppHandler(BaseHTTPRequestHandler):
             "/ruptura": "admin", "/ruptura/": "admin", "/ruptura.html": "admin",
             # V19.64: Estoque do TikTok Shop (Bauru).
             "/tiktok-estoque": "admin", "/tiktok-estoque/": "admin", "/tiktok-estoque.html": "admin",
+            "/anuncios": "admin", "/anuncios/": "admin", "/anuncios.html": "admin",  # V20.23
             # V18.88: Pós-venda do ML.
             # V19.74: Monitor de catálogo do ML.
             "/catalogo-ml": "admin", "/catalogo-ml/": "admin", "/catalogo-ml.html": "admin",
@@ -39885,6 +40029,74 @@ class AppHandler(BaseHTTPRequestHandler):
                 except Exception as exc:
                     magalu_log_event("pedidos", "manual", "ERRO", str(exc))
                     self.send_json({"ok": False, "error": str(exc)}, 502)
+            return
+        if path in ("/api/anuncios/ficha", "/api/anuncios/kit", "/api/anuncios/puxar", "/api/anuncios/controle",
+                    "/api/anuncios/remover", "/api/anuncios/reincluir"):
+            # V20.23: ver = modulo admin; gravar = so perfil Admin. Nada daqui grava no ML/Shopee/Magalu/TikTok/Apollo.
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            if str(ctx.get("app_role") or "") != "admin":
+                self.send_json({"ok": False, "error": "Somente o perfil Admin."}, 403)
+                return
+            try:
+                body = self.read_json() or {}
+                if path == "/api/anuncios/ficha":
+                    campos = body.get("campos")
+                    if not isinstance(campos, dict):
+                        raise ValueError("Informe os campos da ficha.")
+                    campos = {k: v for k, v in campos.items() if k in ANUNCIO_CAMPOS_FICHA}
+                    for nome in ("peso_g", "altura_cm", "largura_cm", "comprimento_cm"):
+                        if nome in campos and not (campos[nome] is None or str(campos[nome]).strip() == ""):
+                            try:
+                                v = float(str(campos[nome]).replace(",", "."))
+                            except (TypeError, ValueError):
+                                v = 0.0
+                            if isinstance(campos[nome], bool) or not math.isfinite(v) or v <= 0:
+                                raise ValueError(f"{nome}: informe um número maior que zero ou deixe vazio.")
+                            campos[nome] = v
+                    versao = body.get("versao")
+                    try:
+                        versao = None if versao is None or versao == "" else int(versao)
+                    except (TypeError, ValueError):
+                        raise ValueError("Versão inválida.")
+                    ficha = ficha_salvar(str(body.get("codigo") or ""), campos, ctx["username"], versao)
+                    audit(ctx["username"], "anuncios.ficha", f"{ficha.get('codigo')}|{sorted(campos)}")
+                    res = {"ok": True, "ficha": ficha}
+                elif path == "/api/anuncios/kit":
+                    vs = body.get("versao_storage")
+                    try:
+                        vs = None if vs is None or vs == "" else int(vs)
+                    except (TypeError, ValueError):
+                        raise ValueError("Versão inválida.")
+                    kit = kit_salvar(str(body.get("sku_kit") or ""), str(body.get("nome") or ""),
+                                     body.get("componentes") if isinstance(body.get("componentes"), list) else [],
+                                     ctx["username"], vs)
+                    res = {"ok": True, "kit": kit}
+                elif path == "/api/anuncios/puxar":
+                    if not ANUNCIOS_PUXAR_LOCK.acquire(blocking=False):
+                        self.send_json({"ok": False, "error": "Já está puxando os anúncios. Aguarde terminar."}, 409)
+                        return
+                    try:
+                        contas = body.get("contas")
+                        res = anuncios_ml_puxar([str(c) for c in contas] if isinstance(contas, list) and contas else None)
+                    finally:
+                        ANUNCIOS_PUXAR_LOCK.release()
+                    audit(ctx["username"], "anuncios.puxar", json.dumps(
+                        {c: {k: v for k, v in r.items() if k != "erro"} for c, r in res["contas"].items()}))
+                elif path == "/api/anuncios/controle":
+                    res = anuncio_controle_definir(str(body.get("canal") or ""), str(body.get("conta") or ""),
+                                                   str(body.get("anuncio_id") or ""), str(body.get("controle") or ""),
+                                                   ctx["username"], body.get("confirmou_alephee") is True)
+                else:
+                    fn = anuncio_remover if path == "/api/anuncios/remover" else anuncio_reincluir
+                    res = fn(str(body.get("canal") or ""), str(body.get("conta") or ""),
+                             str(body.get("anuncio_id") or ""), ctx["username"])
+                self.send_json(res)
+            except FichaConflito as exc:
+                self.send_json({"ok": False, "error": "CONFLITO", "mensagem": str(exc), "atual": exc.atual}, 409)
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
             return
         if path.startswith("/api/tiktok-estoque/") or path in ("/api/integracoes/tiktok/importacao",
                                                               "/api/integracoes/tiktok/sincronizar"):
@@ -42407,6 +42619,9 @@ class AppHandler(BaseHTTPRequestHandler):
             "/tiktok-estoque": "tiktok-estoque.html",
             "/tiktok-estoque/": "tiktok-estoque.html",
             "/tiktok-estoque.html": "tiktok-estoque.html",
+            "/anuncios": "anuncios.html",  # V20.23
+            "/anuncios/": "anuncios.html",
+            "/anuncios.html": "anuncios.html",
             "/saude": "saude.html",
             "/saude/": "saude.html",
             "/separacao": "separacao.html",
