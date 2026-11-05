@@ -51,6 +51,16 @@ class FichaTeste(TesteNoromak):
         S.ficha_importar("D1", {"marca": "outra"}, "apollo")  # mesma autoridade: nao muda
         self.assertEqual(S.ficha_ler("D1")["versao"], 2)
 
+    def test_salvar_sem_versao_em_ficha_existente_da_conflito(self):
+        S.ficha_salvar("E1", {"nome": "x"}, "luis", None)
+        with self.assertRaises(S.FichaConflito):
+            S.ficha_salvar("E1", {"nome": "y"}, "outro", None)
+        self.assertEqual(S.ficha_ler("E1")["campos"]["nome"], "x")
+
+    def test_medida_zero_ou_invalida_nao_entra(self):
+        r = S.ficha_importar("F1", {"peso_g": 0, "altura_cm": -3, "largura_cm": "abc", "comprimento_cm": 12}, "apollo")
+        self.assertEqual(r, ["comprimento_cm"])
+
 
 if __name__ == "__main__":
     unittest.main()

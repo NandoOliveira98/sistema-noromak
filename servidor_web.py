@@ -7406,7 +7406,7 @@ def ficha_salvar(codigo: str, campos: dict[str, Any], ator: str, versao: int | N
         raise ValueError("Informe o código do produto.")
     with DB_LOCK:
         atual = _ficha_ler_sem_lock(cod)
-        if atual is not None and versao is not None and int(versao) != atual["versao"]:
+        if atual is not None and (versao is None or int(versao) != atual["versao"]):
             raise FichaConflito(atual)
         cs = dict(atual["campos"]) if atual else {}
         os_ = dict(atual["origem"]) if atual else {}
@@ -7439,6 +7439,15 @@ def ficha_importar(codigo: str, campos: dict[str, Any], origem: str) -> list[str
     if not cod or peso is None or origem == "admin":
         return []
     novos = {n: v for n, v in (campos or {}).items() if n in ANUNCIO_CAMPOS_FICHA and not _ficha_vazio(v)}
+    # V20.23: medida zero, negativa ou nao numerica = desconhecida (nunca entra como zero)
+    for n in ("peso_g", "altura_cm", "largura_cm", "comprimento_cm"):
+        if n in novos:
+            try:
+                ok = float(novos[n]) > 0
+            except (TypeError, ValueError):
+                ok = False
+            if not ok:
+                del novos[n]
     if not novos:
         return []
     with DB_LOCK:
@@ -7451,8 +7460,6 @@ def ficha_importar(codigo: str, campos: dict[str, Any], origem: str) -> list[str
             dono = os_.get(nome)
             if nome in cs and dono in ANUNCIO_ORIGENS and ANUNCIO_ORIGENS[dono] <= peso:
                 continue  # autoridade igual ou maior ja preencheu
-            if cs.get(nome) == valor and dono == origem:
-                continue
             cs[nome] = valor
             os_[nome] = origem
             alterados.append(nome)
