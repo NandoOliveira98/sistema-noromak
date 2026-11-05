@@ -4505,6 +4505,15 @@ def preserve_pending_records_v1714(current_value: str | None, new_value: str) ->
                 )
                 if equivalent:
                     continue
+            # V20.22: a linha do kit que a integração (Shopee, Magalu, TikTok) agora abre em
+            # componentes (KITDB_) não volta ao lado deles, e o bip dela passa para eles.
+            # Pedido na fila na hora da publicação ficava com o kit em dobro (Magalu) ou
+            # com o bip perdido (Shopee).
+            componentes = _kit_aberto_da_linha_v2022(row, newer)
+            if componentes:
+                _kit_passar_bip_v2022(row, componentes)
+                changed=True
+                continue
             # V18.71: a linha colada de um KIT da Shopee ("A/B") não volta quando os
             # componentes do kit já estão no mesmo pedido (a sincronização agora abre
             # o kit). Só sem bip; a mesma regra da limpeza da Conferência (V18.66).
@@ -4516,6 +4525,71 @@ def preserve_pending_records_v1714(current_value: str | None, new_value: str) ->
     if deduped != newer:
         newer=deduped;changed=True
     return json_dumps(newer) if changed else new_value
+
+
+_ORIGENS_KIT_ABERTO_V2022 = {"API_SHOPEE", "API_MAGALU", "API_TIKTOK"}
+
+
+def _kit_aberto_da_linha_v2022(row: dict[str, Any], newer: list[Any]) -> list[dict[str, Any]]:
+    """V20.22: componentes (KITDB_) que a integração abriu a partir desta linha antiga do kit.
+
+    Só a linha da integração com o SKU do kit como veio (SKU editado à mão fica: decisão do
+    ADMIN). Casa pelo SkuKitOrigem do componente = SKU vendido da linha antiga.
+    """
+    if str(row.get("__uidLinha") or "").upper().startswith("KITDB_"):
+        return []
+    if normalize(row.get("OrigemCadastro")) not in _ORIGENS_KIT_ABERTO_V2022:
+        return []
+    kit = normalize(row.get("SkuOrigemImportacao") or row.get("SKU"))
+    if not kit or normalize(row.get("SKU")) != kit:
+        return []
+    pedido = normalize(order_number(row))
+    return [
+        n for n in newer
+        if isinstance(n, dict)
+        and str(n.get("__uidLinha") or "").upper().startswith("KITDB_")
+        and normalize(order_number(n)) == pedido
+        and normalize(n.get("SkuKitOrigem")) == kit
+    ]
+
+
+def _kit_passar_bip_v2022(antiga: dict[str, Any], componentes: list[dict[str, Any]]) -> None:
+    """Kits já bipados na linha antiga = as peças deles bipadas nos componentes (nunca diminui)."""
+    def inteiro(v: Any) -> int:
+        try:
+            return max(0, int(float(str(v or 0))))
+        except Exception:
+            return 0
+    kits_lidos = inteiro(antiga.get("Lido"))
+    if not kits_lidos:
+        return
+    for comp in componentes:
+        por_kit = max(1, inteiro(comp.get("Quantidade por Kit")) or 1)
+        total = inteiro(comp.get("Quantidade")) or por_kit
+        novo = min(total, kits_lidos * por_kit)
+        if novo > inteiro(comp.get("Lido")):
+            comp["Lido"] = novo
+
+
+def _sem_linhas_excluidas_admin_v2022(linhas: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """V20.22: linha que o ADMIN excluiu (tombstone por UID) não volta aberta em componentes.
+
+    A Magalu e o TikTok não têm a lista de exclusões por SKU da Shopee; sem isto, a linha
+    do kit excluída (MAGALUAPI_…) voltava como KITDB_…, que o tombstone não reconhece.
+    """
+    if not linhas:
+        return linhas
+    try:
+        excluidas = {
+            str(r["entity_id"]) for r in DB.execute(
+                "SELECT entity_id FROM admin_manual_overrides WHERE storage_key='conf_pedidos' "
+                "AND field_name='__ENTITY__' AND is_deleted=1").fetchall()
+        }
+    except Exception:
+        return linhas
+    if not excluidas:
+        return linhas
+    return [r for i, r in enumerate(linhas) if _pending_identity_v1714(r, i) not in excluidas]
 
 # V18.66 (item 1 das permissões, decisão do dono em 05/10): excluir produto de um
 # pedido é do Admin e do Supervisor. O operador só remove a linha ARTIFICIAL de um kit
@@ -6972,6 +7046,7 @@ def _magalu_linhas_do_pedido(pedido: dict[str, Any], products: list[dict[str, An
                     if str(produto.get(campo) or "").strip():
                         row[campo] = produto.get(campo)
             linhas.append(row)
+    linhas = _sem_linhas_excluidas_admin_v2022(linhas)  # V20.22: antes de abrir o kit
     return _shopee_expand_kit_lines(linhas, products)  # V18.71: mesma regra de kit
 
 
@@ -7856,6 +7931,7 @@ def _tiktok_linhas_do_pedido(pedido: dict[str, Any], products: list[dict[str, An
                 if str(produto.get(campo) or "").strip():
                     row[campo] = produto.get(campo)
         linhas.append(row)
+    linhas = _sem_linhas_excluidas_admin_v2022(linhas)  # V20.22: antes de abrir o kit
     return _shopee_expand_kit_lines(linhas, products)  # V18.71: mesma regra de kit
 
 

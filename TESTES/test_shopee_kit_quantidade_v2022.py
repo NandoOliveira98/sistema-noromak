@@ -15,8 +15,9 @@ Casos reais (04/11/2026, dono: "no romaneio sai uma quantidade e sobe outra"):
 """
 
 import json
+from unittest import mock
 
-from base import S, TesteNoromak, pedidos
+from base import S, TesteNoromak, gravar_como_admin, pedidos
 
 
 def item(sku, qtd=1, item_id=1, model_id=10, item_sku=None):
@@ -89,3 +90,85 @@ class ShopeeKitQuantidade(TesteNoromak):
         self.itens[pedido] = [item("kit27200154", qtd=1)]   # "KIT" como rótulo (V18.19)
         S.shopee_manual_sync()
         self.assertEqual(self.skus(pedido), [("kit27200154", "1")])
+
+    # --- Transição: pedido que já estava na fila com a linha do kit antes da V20.22 ---
+
+    def sync_antes_da_v2022(self):
+        with mock.patch.object(S, "_infer_quantity_kit_from_sku", return_value=None):
+            S.shopee_manual_sync()
+
+    def test_linha_antiga_do_kit_com_bip_nao_volta_e_o_bip_passa(self):
+        pedido = "261028SR23HUPK"
+        self.itens[pedido] = [item("kit10-10396473")]
+        self.sync_antes_da_v2022()
+        linhas = pedidos()
+        for r in linhas:
+            if r.get("Pedido") == pedido:
+                r["Lido"] = 1     # o kit (1 de 1) já tinha sido bipado
+        gravar_como_admin(linhas)
+        S.shopee_manual_sync()
+        S.shopee_manual_sync()
+        rows = [r for r in pedidos() if r.get("Pedido") == pedido]
+        self.assertEqual([(r["SKU"], r["Quantidade"]) for r in rows], [("10396473", "10")],
+                         "REGRESSÃO: a linha antiga do kit voltou junto com os componentes")
+        self.assertEqual(int(rows[0].get("Lido") or 0), 10, "REGRESSÃO: o bip do kit se perdeu na troca")
+
+    def test_linha_antiga_do_kit_meio_bipada_passa_o_proporcional(self):
+        pedido = "261028AAAAAAAA"
+        self.itens[pedido] = [item("kit2-0893764272", qtd=3)]
+        self.sync_antes_da_v2022()
+        linhas = pedidos()
+        for r in linhas:
+            if r.get("Pedido") == pedido:
+                r["Lido"] = 1     # 1 dos 3 kits
+        gravar_como_admin(linhas)
+        S.shopee_manual_sync()
+        rows = [r for r in pedidos() if r.get("Pedido") == pedido]
+        self.assertEqual([(r["SKU"], r["Quantidade"], int(r.get("Lido") or 0)) for r in rows],
+                         [("0893764272", "6", 2)])
+
+
+class MagaluKitTransicao(TesteNoromak):
+    """V20.22 — mesma troca na Magalu (e no TikTok, que usa o mesmo merge)."""
+
+    def setUp(self):
+        super().setUp()
+        self.api = []
+        p = mock.patch.object(S, "magalu_pedidos_abertos", side_effect=lambda: list(self.api))
+        p.start()
+        self.addCleanup(p.stop)
+        e = mock.patch.object(S, "_magalu_baixar_etiqueta", return_value="^XA^XZ")
+        e.start()
+        self.addCleanup(e.stop)
+        S.magalu_importacao_definir(True, "admin_teste")
+        self.api = [{"code": "1578270107775283", "id": "O1", "status": "approved", "channel": {"id": "C"},
+                     "purchased_at": "2026-11-04T12:00:00+00:00", "customer": {"name": "Cliente"},
+                     "deliveries": [{"code": "E1", "id": "D1", "status": "approved",
+                                     "items": [{"info": {"sku": "KIT2-0893764272", "name": "Kit", "id": "i1"},
+                                                "quantity": 1}],
+                                     "shipping": {"handling_time": {"limit_date": "2026-11-06T00:00:00Z"}}}]}]
+
+    def linhas(self):
+        return sorted((r["SKU"], r["Quantidade"]) for r in pedidos() if r.get("Pedido") == "1578270107775283")
+
+    def importar_antes_da_v2022(self):
+        with mock.patch.object(S, "_infer_quantity_kit_from_sku", return_value=None):
+            S.magalu_importar_pedidos()
+
+    def test_linha_antiga_do_kit_nao_fica_junto_dos_componentes(self):
+        self.importar_antes_da_v2022()
+        self.assertEqual(self.linhas(), [("KIT2-0893764272", "1")])
+        S.magalu_importar_pedidos()
+        S.magalu_importar_pedidos()
+        self.assertEqual(self.linhas(), [("0893764272", "2")],
+                         "REGRESSÃO: kit em dobro na Magalu (linha antiga + componentes)")
+
+    def test_linha_do_kit_excluida_pelo_admin_nao_volta_como_componentes(self):
+        self.importar_antes_da_v2022()
+        uid = next(r["__uidLinha"] for r in pedidos() if r.get("Pedido") == "1578270107775283")
+        status, corpo = self.cliente.pedir("POST", "/api/order-line-delete", {
+            "pedido": "1578270107775283", "uid": uid, "sku": "KIT2-0893764272", "marketplace": "MAGALU"})
+        self.assertEqual(status, 200, corpo)
+        S.magalu_importar_pedidos()
+        self.assertEqual(self.linhas(), [], "REGRESSÃO: linha excluída pelo ADMIN voltou como componentes")
+
