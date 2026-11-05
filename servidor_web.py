@@ -7477,6 +7477,74 @@ def ficha_importar(codigo: str, campos: dict[str, Any], origem: str) -> list[str
         return alterados
 
 
+# V20.23: estoque "da para montar" do kit (puro) e leitura do Apollo por filial.
+ANUNCIO_REVENDA: dict[str, int] = {"aracatuba": 1, "bauru": 3}
+ANUNCIO_APOLLO_MAX_CODIGOS = 10
+
+
+def kit_da_para_montar(componentes: list[dict[str, Any]], disponivel: dict[str, float | None],
+                       pendente: dict[str, int]) -> int | None:
+    """Quantos kits saem: a peca que da menos manda. Sem leitura de qualquer peca = None (nunca zero)."""
+    menor: int | None = None
+    for comp in componentes or []:
+        sku = comp.get("sku")
+        try:
+            qtd = float(comp.get("quantidade"))
+        except (TypeError, ValueError):
+            return None
+        if qtd <= 0:
+            return None
+        disp = disponivel.get(sku)
+        if disp is None:
+            return None
+        livre = float(disp) - float(pendente.get(sku, 0) or 0)
+        possivel = max(0, int(livre // qtd))
+        menor = possivel if menor is None else min(menor, possivel)
+    return menor
+
+
+def pendentes_da_filial(filial: str) -> dict[str, int]:
+    """Unidades vendidas na fila da filial (ainda nao baixadas no Apollo), por codigo."""
+    bruto, _, _ = get_storage("conf_pedidos")
+    saida: dict[str, int] = {}
+    for row in _rows_from_storage_value(bruto):
+        if not isinstance(row, dict) or filial_da_linha(row) != filial:
+            continue
+        qtd = max(0, _tiktok_quantidade(row.get("Quantidade")) or 0)
+        for codigo, unidades in _tiktok_pecas(row.get("SKU")):
+            chave = _exp_norm_codigo(codigo)
+            saida[chave] = saida.get(chave, 0) + qtd * unidades
+    return saida
+
+
+def _apollo_da_revenda(resposta: dict[str, Any], revenda: int) -> float | None:
+    for row in resposta.get("estoques") or []:
+        if isinstance(row, dict) and _tiktok_quantidade(row.get("revenda")) == revenda:
+            if row.get("respondeu") is False or row.get("disponivel") is None:
+                return None
+            try:
+                return max(0.0, float(row["disponivel"]))
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def apollo_disponivel_filial(codigos: list[str], filial: str) -> dict[str, float | None]:
+    """Disponivel no Apollo da filial por codigo. Sem resposta, erro ou limite = None (nunca zero).
+    No maximo ANUNCIO_APOLLO_MAX_CODIGOS consultas por chamada; os demais ficam None."""
+    revenda = ANUNCIO_REVENDA[filial]
+    saida: dict[str, float | None] = {}
+    for i, codigo in enumerate(codigos):
+        saida[codigo] = None
+        if i >= ANUNCIO_APOLLO_MAX_CODIGOS:
+            continue
+        try:
+            saida[codigo] = _apollo_da_revenda(crm_stock_lookup(codigo, operador="anuncios", wait_seconds=0), revenda)
+        except Exception:  # inclui CrmLimiteAtingido
+            saida[codigo] = None
+    return saida
+
+
 def _tiktok_config_ler(chave: str) -> str | None:
     with DB_LOCK:
         row = DB.execute("SELECT valor FROM tiktok_config_v1964 WHERE chave=?", (chave,)).fetchone()
@@ -7873,15 +7941,7 @@ def tiktok_vinculo_definir(sku_id: str, codigos: str, ator: str) -> dict[str, An
 
 
 def _tiktok_apollo_bauru(resposta: dict[str, Any]) -> float | None:
-    for row in resposta.get("estoques") or []:
-        if isinstance(row, dict) and _tiktok_quantidade(row.get("revenda")) == TIKTOK_REVENDA_APOLLO:
-            if row.get("respondeu") is False or row.get("disponivel") is None:
-                return None
-            try:
-                return max(0.0, float(row["disponivel"]))
-            except (TypeError, ValueError):
-                return None
-    return None
+    return _apollo_da_revenda(resposta, TIKTOK_REVENDA_APOLLO)  # V20.23: parser unico por revenda
 
 
 def tiktok_apollo_ler(codigo: str) -> float | None:
@@ -7951,16 +8011,7 @@ def tiktok_apollo_ler_proximo() -> str | None:
 
 def _tiktok_pendentes_bauru() -> dict[str, int]:
     """Unidades vendidas na fila de Bauru (ainda não baixadas no Apollo), por código."""
-    bruto, _, _ = get_storage("conf_pedidos")
-    saida: dict[str, int] = {}
-    for row in _rows_from_storage_value(bruto):
-        if not isinstance(row, dict) or filial_da_linha(row) != TIKTOK_CASA:
-            continue
-        qtd = max(0, _tiktok_quantidade(row.get("Quantidade")) or 0)
-        for codigo, unidades in _tiktok_pecas(row.get("SKU")):
-            chave = _exp_norm_codigo(codigo)
-            saida[chave] = saida.get(chave, 0) + qtd * unidades
-    return saida
+    return pendentes_da_filial(TIKTOK_CASA)  # V20.23: mesma conta para qualquer filial
 
 
 def tiktok_estoque_itens() -> list[dict[str, Any]]:
