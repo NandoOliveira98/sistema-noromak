@@ -675,6 +675,32 @@ class RotasEstoqueTeste(EstoqueBase):
         self.assertEqual(self.ml.chamadas, [])
 
 
+class TelaEstoqueTeste(EstoqueBase):
+
+    def test_tela_tem_controle_de_estoque(self):
+        """V20.26: seletor Manual/Automatico por anuncio, envio manual com confirmacao, painel por conta com o
+        modo (Automatico pede senha + 2FA), Enviar agora no Lote e o registro (data-nk-tabela)."""
+        from pathlib import Path
+        html = (Path(S.__file__).parent / "APP" / "anuncios.html").read_text(encoding="utf-8")
+        for trecho in ("Controle de estoque", '["manual", "Manual"], ["automatico", "Automático"]',
+                       "/api/anuncios/estoque/modo", "/api/anuncios/estoque/manual", "/api/anuncios/estoque/config",
+                       "/api/anuncios/estoque/enviar", "/api/anuncios/estoque?conta=", "Enviar ao ML", "Enviar agora",
+                       "Estoque automático", 'data-nk-tabela="anuncios_estoque_registro"',
+                       "OWNER_REAUTH_REQUIRED", "/api/security/owner/reauth", "Apollo ${", "− a baixar"):
+            self.assertIn(trecho, html, trecho)
+        # so anuncio do ML controlado pelo Noromak e nao-Full ganha o seletor
+        self.assertIn('a.canal === "ml" && a.controle === "noromak" && a.logistica !== "fulfillment"', html)
+        # o envio manual confirma "de X para Y" antes de chamar o servidor
+        i = html.find("async function enviarEstoqueManual")
+        self.assertGreater(i, 0)
+        corpo = html[i:html.find("async function", i + 10)]
+        self.assertLess(corpo.find("nkConfirmar("), corpo.find('api("/api/anuncios/estoque/manual"'))
+        self.assertIn(": de ${", corpo)
+        # gravar so com o perfil Admin: os botoes passam pelo PODE
+        self.assertIn('${PODE ? "" : "disabled"} ${dadosAnuncio(a)} data-modo=', html)
+        self.assertIn('PODE && cfg === "lote"', html)
+
+
 if __name__ == "__main__":
     import unittest
     unittest.main()

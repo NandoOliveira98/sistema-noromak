@@ -13,7 +13,10 @@
      GET /api/anuncios, GET /api/anuncios/ficha, POST /api/anuncios/{ficha,kit,puxar,controle,remover,reincluir}. V20.24: puxar em segundo plano (GET /api/anuncios/puxar/situacao) e POST /api/anuncios/puxar/um.
      V20.24: aba Fotos (computador e Estúdio de Imagens) e "Criar anúncio" no ML em 7 passos, na ordem do dono; cada
      passo grava o rascunho (com a versão) e só libera o seguinte. A ÚNICA escrita no ML é o "Publicar" (perfil Admin):
-     erro de rede/504 no Publicar NUNCA repete — a tela relê o rascunho; "incerto" pede para conferir no ML. -->
+     erro de rede/504 no Publicar NUNCA repete — a tela relê o rascunho; "incerto" pede para conferir no ML.
+     V20.26: Controle de estoque (Manual · Automático) por anúncio do ML controlado pelo Noromak (não-Full) e o painel
+     "Estoque automático" por conta na lista. Grava estoque no ML só pelas rotas /api/anuncios/estoque/* (perfil Admin;
+     ligar o Automático da conta = senha + 2FA do OWNER). -->
 <script defer src="/expedicao/web-auth.js?v=20.17"></script>
 <link rel="stylesheet" href="/expedicao/theme.css?v=20.17">
 <link rel="stylesheet" href="/expedicao/nk-ui.css?v=19.13">
@@ -101,6 +104,18 @@ tr.atual td{background:var(--nk-warn-bg)}
 .est-imgs{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px}
 .est-imgs button{border:1px solid var(--nk-line);border-radius:8px;padding:4px;background:var(--nk-tile);cursor:pointer;width:112px;font:inherit;font-size:11px;color:var(--nk-ink2)}
 .est-imgs button.feito{border-color:var(--nk-ok)}
+/* V20.26: controle de estoque (cartão por anúncio na ficha; painel por conta na lista) */
+.estq{display:grid;gap:10px}
+.estq-card{border:1px solid var(--nk-line);border-radius:10px;padding:10px 12px;background:var(--nk-canvas);display:grid;gap:8px;font-size:13px}
+.estq-topo{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.estq-topo .esp{flex:1}
+.estq-contas{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:10px}
+.estq-conta h3{margin:0;font-size:14px;color:var(--nk-head)}
+.estq-conta .nums{display:flex;gap:14px;flex-wrap:wrap;color:var(--nk-ink2);font-size:12px}
+.estq-conta .nums b{color:var(--nk-head);font-size:15px;margin-right:3px}
+.estq ul{margin:0;padding-left:18px}
+.casa-sel button:disabled{cursor:default}
+.casa-sel button:disabled:not(.on){opacity:.6}
 @media (max-width:900px){.lay{grid-template-columns:1fr}.indice{position:static}.g4{grid-template-columns:1fr 1fr}.conta{grid-template-columns:1fr}}
 </style>
 </head>
@@ -212,7 +227,7 @@ function acoesLista() {
   $("acoes").innerHTML = seletorCasa() + (PODE ? `<button class="nk-btn pri" id="btnPuxar" onclick="puxar()" ${PUX.rodando ? "disabled" : ""}><i class=nk-i-download></i> ${PUX.rodando ? "Puxando…" : "Puxar anúncios do ML"}</button>
       <span class="puxum"><input type="text" id="puxUmTexto" placeholder="MLB ou link do anúncio" aria-label="MLB ou link do anúncio" onkeydown="if(event.key==='Enter')puxarUm()"><button class="nk-btn" id="btnPuxarUm" onclick="puxarUm()">Puxar um</button></span>
       <button class="nk-btn" onclick="novoProduto()">+ Novo produto</button>` : "")
-    + `<button class="nk-btn" onclick="carregarLista()"><i class=nk-i-refresh></i> Atualizar</button>`;
+    + `<button class="nk-btn" onclick="carregarLista();carregarPainelEstoque()"><i class=nk-i-refresh></i> Atualizar</button>`;
 }
 async function carregarLista() {
   const filtro = L.aba === "sem_ficha" ? "sem_ficha" : L.filtro;
@@ -234,6 +249,7 @@ function desenharLista() {
   acoesLista();
   $("vista").innerHTML = `
     <div class="nk-kpis bloco" id="kpis"></div>
+    <section class="nk-painel bloco" id="painelEstoque" hidden></section>
     <div class="abas" role="tablist">
       <button type="button" data-aba="fichas" class="${L.aba === "fichas" ? "on" : ""}" onclick="trocarAbaLista('fichas')">Produtos</button>
       <button type="button" data-aba="sem_ficha" class="${L.aba === "sem_ficha" ? "on" : ""}" onclick="trocarAbaLista('sem_ficha')">Sem ficha</button>
@@ -250,6 +266,8 @@ function desenharLista() {
     </section>`;
   $("filtro").value = L.filtro;
   if (L.dados) desenharListaDados();
+  desenharPainelEstoque();  // V20.26: o que já foi lido aparece na hora; a leitura nova substitui
+  carregarPainelEstoque();
 }
 function trocarAbaLista(a) { L.aba = a; desenharLista(); carregarLista(); }
 function buscar(v) { clearTimeout(buscaTimer); buscaTimer = setTimeout(() => { L.busca = v.trim(); carregarLista(); }, 300); }
@@ -790,7 +808,7 @@ function desenharAnuncios() {
     .map(c => `<tr class="embreve"><td><b>${esc(CANAL[c])}</b></td><td colspan="8"><span class="nk-selo">em breve</span></td></tr>`).join("");
   $("conteudo").innerHTML = `
     <section class="nk-painel">
-      <div class="nk-painel-tit"><div><h2>Anúncios em todos os canais</h2><p>O mesmo produto em cada marketplace. "Quem controla" diz quem mexe no estoque do anúncio: nesta fase o Noromak só registra, ainda não envia estoque.</p></div></div>
+      <div class="nk-painel-tit"><div><h2>Anúncios em todos os canais</h2><p>O mesmo produto em cada marketplace. "Quem controla" diz quem mexe no estoque do anúncio. O Noromak só envia estoque aos anúncios do ML que ele controla (Controle de estoque, abaixo).</p></div></div>
       <div class="tw"><table class="nk-tab" data-nk-tabela="anuncios_canais" data-nk-ordenar="0"><thead><tr>
         <th>Canal</th><th>Anúncio</th><th>Quem controla</th><th>Situação</th><th class="n">Preço</th><th class="n">Estoque no ML</th><th>Tipo</th><th>Lido em</th><th></th></tr></thead>
         <tbody>${ativos.map(linha).join("") || '<tr><td colspan="9" class="vazio">Nenhum anúncio ligado a este código.</td></tr>'}${breve}</tbody></table></div>
@@ -801,7 +819,10 @@ function desenharAnuncios() {
           <td>${PODE ? `<button class="nk-btn mini" ${dadosAnuncio(a)} onclick="reincluirAnuncio(this.dataset)">Reincluir</button>` : ""}</td></tr>`).join("")}
         </tbody></table></div></details>` : ""}
     </section>
+    <section class="nk-painel" id="secEstoque" hidden></section>
     <section class="nk-painel" id="secRasc"></section>`;
+  desenharEstoqueAnuncios();  // V20.26
+  carregarEstoqueAnuncios();
   desenharRascunhos();  // V20.24
   carregarRascunhos();
 }
@@ -833,6 +854,242 @@ async function trazerDadosAnuncio(botao) {  // V20.25: descricao + fotos + titul
 async function reincluirAnuncio({canal, conta, id}) {
   try { await api("/api/anuncios/reincluir", {canal, conta, anuncio_id: id}); nkToast("Anúncio reincluído.", "ok"); recarregar(); }
   catch (e) { nkToast(e.message, "erro"); }
+}
+
+// ---------------------------------------------------------------- V20.26: controle de estoque dos anúncios
+// Só anúncio do ML com controle Noromak e não-Full. Manual = o Admin digita e vai na hora (POST /estoque/manual);
+// Automático = Apollo da filial − vendido e não baixado, enviado conforme o modo da conta (Simulação/Lote/Automático).
+// Sem leitura = não envia (nunca zero). Gravar = só perfil Admin; ligar o Automático da conta = senha + 2FA do OWNER.
+const ESTQ_MODO_CONTA = {simulacao: "Simulação", lote: "Lote", automatico: "Automático"};
+const ESTQ_MODO_TXT = {simulacao: "Calcula e registra; nada vai ao ML.", lote: "Envia só no clique em “Enviar agora”.",
+  automatico: "Envia sozinho ao ML quando o número muda."};
+const ESTQ_RES = {ok: ["Enviado", "ok"], erro: ["Erro", "bad"], simulado: ["Simulado", "info"], ignorado: ["Ignorado", ""]};
+const podeEstoque = a => a.canal === "ml" && a.controle === "noromak" && a.logistica !== "fulfillment";
+const chaveEst = a => a.conta + "|" + a.anuncio_id;
+const numEst = v => v == null ? "?" : Number(v).toLocaleString("pt-BR");
+let EST = {};        // por anúncio da ficha: GET /api/anuncios/estoque?anuncio_id= (ou {erro})
+let EST_DIG = {};    // quantidade digitada e ainda não enviada (sobrevive ao redesenho)
+let EST_FALHA = {};  // envio sem resposta do servidor (rede): o registro do servidor pode não ter
+let PE = {casa: null, contas: {}};  // painel "Estoque automático" da lista
+
+function linhaRegistroEst(l) {
+  const [t, cl] = ESTQ_RES[l.resultado] || [l.resultado || "—", ""];
+  return `<div class="muted"><span class="nk-selo ${cl}">${esc(t)}</span> ${quando(l.criado_em)} · ${esc(numEst(l.de))} → ${esc(numEst(l.para))}${l.ator ? " · " + esc(l.ator) : ""}${l.detalhe ? " · " + esc(l.detalhe) : ""}</div>`;
+}
+function contaDoCalculo(it) {
+  const pecas = it.pecas || [];
+  const daPeca = p => Math.max(0, Math.floor((Number(p.disponivel) - Number(p.a_baixar || 0)) / (Number(p.quantidade) || 1)));
+  if (pecas.length === 1 && Number(pecas[0].quantidade) === 1) {
+    const p = pecas[0];
+    return `<div>Apollo ${esc(numEst(p.disponivel))} − a baixar ${esc(numEst(p.a_baixar))} = <b>${esc(numEst(it.calculado))}</b> <span class="muted">(Apollo lido ${quando(p.lido_em)})</span></div>`;
+  }
+  return `<ul>${pecas.map(p => `<li><span class="mono">${esc(p.codigo)}</span>: Apollo ${esc(numEst(p.disponivel))} − a baixar ${esc(numEst(p.a_baixar))}${Number(p.quantidade) > 1 ? ` ÷ ${esc(numEst(p.quantidade))} por kit` : ""} = ${esc(numEst(daPeca(p)))} <span class="muted">(lido ${quando(p.lido_em)})</span></li>`).join("")}</ul>
+    <div>Estoque do anúncio: <b>${esc(numEst(it.calculado))}</b> <span class="muted">(a peça que dá menos)</span></div>`;
+}
+function cartaoEstoque(a) {
+  const k = chaveEst(a), d = EST[k], modo = a.estoque_modo === "automatico" ? "automatico" : "manual";
+  const sel = `<span class="casa-sel" role="group" aria-label="Controle de estoque de ${esc(a.anuncio_id)}">${[["manual", "Manual"], ["automatico", "Automático"]]
+    .map(([v, n]) => `<button type="button" class="${modo === v ? "on" : ""}" aria-pressed="${modo === v}" ${PODE ? "" : "disabled"} ${dadosAnuncio(a)} data-modo="${v}" onclick="trocarModoEstoque(this)">${n}</button>`).join("")}</span>`;
+  const enviado = a.estoque_enviado != null ? `Último envio do Noromak: <b>${esc(numEst(a.estoque_enviado))}</b> em ${quando(a.estoque_enviado_em)}` : "Nenhum envio do Noromak ainda.";
+  const ultimo = EST_FALHA[k] || (d && d.log ? d.log.find(l => l.para != null) : null);
+  let corpo;
+  if (modo === "manual") {
+    corpo = PODE ? `<div class="barra" style="margin:0"><span class="muted">Quantidade no ML</span>
+        <input class="qtd" type="number" min="0" max="99999" step="1" inputmode="numeric" aria-label="Quantidade a enviar ao ML" value="${esc(EST_DIG[k] ?? (a.estoque ?? ""))}" data-chave="${esc(k)}" oninput="EST_DIG[this.dataset.chave]=this.value" onkeydown="if(event.key==='Enter')this.nextElementSibling.click()">
+        <button type="button" class="nk-btn mini pri" ${dadosAnuncio(a)} onclick="enviarEstoqueManual(this)">Enviar ao ML</button>
+        <span class="muted">Vai na hora; o Noromak relê o anúncio para confirmar.</span></div>`
+      : `<div class="muted">Manual: o estoque só muda quando o Admin digita e envia.</div>`;
+  } else if (!d) corpo = `<div class="muted">Calculando…</div>`;
+  else if (d.erro) corpo = `<div class="nk-aviso bad">${esc(d.erro)}</div>`;
+  else {
+    const it = (d.itens || []).find(i => i.anuncio_id === a.anuncio_id), cfg = (d.config || {}).modo || "simulacao";
+    const de = it ? esc(numEst(it.referencia)) : "", para = it ? esc(numEst(it.calculado)) : "";
+    if (!it) corpo = `<div class="muted">Sem cálculo para este anúncio.</div>`;
+    else if (it.calculado == null) corpo = `<div class="nk-aviso">Não envia: ${esc(it.motivo || "sem leitura")}. O estoque no ML fica como está (sem leitura nunca vira zero).</div>`;
+    else {
+      const muda = !it.muda ? "Igual ao ML: nada a enviar."
+        : cfg === "simulacao" ? `Mudaria de ${de} para ${para} — a conta ${esc(CONTA[a.conta] || a.conta)} está em Simulação: nada é enviado.`
+        : cfg === "lote" ? `Muda de ${de} para ${para} — vai no próximo “Enviar agora” da lista (conta em Lote).`
+        : `Muda de ${de} para ${para} — o Automático envia sozinho.`;
+      corpo = contaDoCalculo(it) + `<div class="muted">No ML agora: ${esc(numEst(it.atual_ml))} · ${muda}</div>`;
+    }
+  }
+  return `<div class="estq-card"><div class="estq-topo">${linkAnuncio(a)}<span class="muted">${esc(CONTA[a.conta] || a.conta)} · ${esc(a.titulo)}</span><span class="esp"></span>
+      <span class="muted">Controle de estoque</span>${sel}</div>
+    ${corpo}<div class="muted">${enviado}</div>${ultimo ? linhaRegistroEst(ultimo) : ""}</div>`;
+}
+function desenharEstoqueAnuncios() {
+  const el = $("secEstoque"); if (!el || !F) return;
+  const lista = (F.anuncios || []).filter(daCasa).filter(podeEstoque);
+  el.hidden = !lista.length;
+  el.innerHTML = lista.length ? `<div class="nk-painel-tit"><div><h2>Controle de estoque</h2><p>Só nos anúncios do Mercado Livre controlados pelo Noromak (Full e Alephee ficam de fora). <b>Manual</b>: o número digitado vai na hora para o ML. <b>Automático</b>: Apollo da filial menos o vendido e ainda não baixado (kit = a peça que dá menos); o envio segue o modo da conta, no topo da lista de anúncios.</p></div></div>
+    <div class="estq">${lista.map(cartaoEstoque).join("")}</div>` : "";
+}
+async function carregarEstoqueAnuncios() {
+  if (!F) return;
+  const cod = F.codigo, lista = (F.anuncios || []).filter(daCasa).filter(podeEstoque);
+  await Promise.all(lista.map(async a => {
+    try { EST[chaveEst(a)] = await api(`/api/anuncios/estoque?conta=${encodeURIComponent(a.conta)}&anuncio_id=${encodeURIComponent(a.anuncio_id)}`); }
+    catch (e) { EST[chaveEst(a)] = {erro: e.message}; }
+  }));
+  if (F && F.codigo === cod && ABA === "anuncios") desenharEstoqueAnuncios();
+}
+const acharAnuncio = (conta, id) => ((F && F.anuncios) || []).find(x => x.conta === conta && x.anuncio_id === id);
+async function trocarModoEstoque(b) {
+  const {conta, id, modo} = b.dataset, a = acharAnuncio(conta, id);
+  if (!PODE || !a || (a.estoque_modo || "manual") === modo) return;
+  const cfg = ((EST[chaveEst(a)] || {}).config || {}).modo;
+  const txt = modo === "automatico"
+    ? `Passar o ${id} para Automático?\nO Noromak calcula o estoque pelo Apollo de ${CONTA[conta] || conta} menos o vendido e ainda não baixado.${cfg ? ` A conta está em ${ESTQ_MODO_CONTA[cfg] || cfg}: ${ESTQ_MODO_TXT[cfg] || ""}` : ""}`
+    : `Passar o ${id} para Manual?\nO Automático deixa de mexer neste anúncio: o estoque só muda quando o Admin digitar e enviar.`;
+  if (!await nkConfirmar(txt, {ok: modo === "automatico" ? "Passar para Automático" : "Passar para Manual", perigo: false})) return;
+  try {
+    await api("/api/anuncios/estoque/modo", {canal: "ml", conta, anuncio_id: id, modo});
+    nkToast(`${id}: controle de estoque ${modo === "automatico" ? "Automático" : "Manual"}.`, "ok");
+    delete EST[chaveEst(a)];
+    recarregar();
+  } catch (e) { nkToast(e.message, "erro"); }
+}
+async function enviarEstoqueManual(b) {
+  const {conta, id} = b.dataset, a = acharAnuncio(conta, id);
+  if (!PODE || !a) return;
+  const k = chaveEst(a), inp = b.closest(".estq-card").querySelector("input.qtd"), t = String(inp.value || "").trim();
+  if (!/^\d{1,5}$/.test(t)) { nkToast("Digite um número inteiro de 0 a 99999.", "aviso"); inp.focus(); return; }
+  const q = Number(t), de = a.estoque;
+  if (!await nkConfirmar(`Enviar o estoque ao Mercado Livre?\n${id} (${CONTA[conta] || conta}): de ${de == null ? "sem leitura" : numEst(de)} para ${numEst(q)}.${q === 0 ? "\nCom 0 o anúncio fica sem estoque no ML." : ""}`,
+    {ok: "Enviar ao ML", perigo: q === 0})) return;
+  b.disabled = true; b.textContent = "Enviando…";
+  delete EST_FALHA[k];
+  try {
+    const r = await api("/api/anuncios/estoque/manual", {conta, anuncio_id: id, quantidade: q});
+    delete EST_DIG[k];
+    nkToast(r.ok ? `Estoque enviado: ${id} de ${numEst(r.antes)} para ${numEst(r.depois)}.` : `${id}: ${r.erro || "o ML não confirmou o estoque."}`,
+      r.ok ? "ok" : "erro", {duracao: 12000});
+  } catch (e) {
+    // sem resposta: o envio pode ter chegado ao ML. Não repete sozinho; mostra para conferir.
+    const msg = e.status ? e.message : "sem resposta do servidor: confira o estoque no ML antes de enviar de novo";
+    if (!e.status) EST_FALHA[k] = {resultado: "erro", criado_em: new Date().toISOString(), de, para: q, detalhe: msg};
+    nkToast(`${id}: ${msg}`, "erro", {duracao: 12000});
+  }
+  delete EST[k];
+  recarregar();
+}
+
+// --- painel "Estoque automático" da lista (um cartão por conta; segue o seletor de casa)
+async function carregarPainelEstoque() {
+  const casa = CASA, contas = filiaisVisiveis().map(([f]) => f);
+  const res = await Promise.all(contas.map(c => api(`/api/anuncios/estoque?conta=${c}`).catch(e => ({erro: e.message, status: e.status}))));
+  if (casa !== CASA || codigoDaUrl()) return;
+  PE = {casa, contas: Object.fromEntries(contas.map((c, i) => [c, res[i]]))};
+  desenharPainelEstoque();
+}
+function motivoCurtoEst(i) {
+  return (i.pecas || []).map(p => `${p.codigo}: Apollo ${numEst(p.disponivel)} − a baixar ${numEst(p.a_baixar)}${Number(p.quantidade) > 1 ? ` ÷ ${numEst(p.quantidade)}` : ""}`).join("; ") + ` = ${numEst(i.calculado)}`;
+}
+function desenharPainelEstoque() {
+  const el = $("painelEstoque"); if (!el) return;
+  const contas = PE.casa === CASA ? Object.entries(PE.contas).filter(([, d]) => d && d.status !== 403) : [];
+  const temAlgo = contas.some(([, d]) => d.erro || (d.resumo && (d.resumo.automatico || d.resumo.manual)) || (d.log && d.log.length));
+  el.hidden = !temAlgo;
+  if (!temAlgo) { el.innerHTML = ""; return; }
+  const blocoConta = ([conta, d]) => {
+    if (d.erro) return `<div class="estq-card estq-conta"><h3>${esc(CONTA[conta] || conta)}</h3><div class="nk-aviso bad">${esc(d.erro)}</div></div>`;
+    const r = d.resumo || {}, cfg = (d.config || {}).modo || "simulacao";
+    const sel = `<span class="casa-sel" role="group" aria-label="Modo do estoque automático de ${esc(CONTA[conta] || conta)}">${Object.entries(ESTQ_MODO_CONTA)
+      .map(([v, n]) => `<button type="button" class="${cfg === v ? "on" : ""}" aria-pressed="${cfg === v}" ${PODE ? "" : "disabled"} data-conta="${esc(conta)}" data-modo="${v}" onclick="mudarModoConta(this.dataset.conta,this.dataset.modo)">${n}</button>`).join("")}</span>`;
+    const enviar = PODE && cfg === "lote" ? `<button type="button" class="nk-btn mini pri" data-conta="${esc(conta)}" ${r.mudariam ? "" : "disabled"} onclick="enviarAgoraConta(this)">Enviar agora${r.mudariam ? ` (${Number(r.mudariam)})` : ""}</button>` : "";
+    const quem = d.config && d.config.atualizado_em ? ` · mudado ${quando(d.config.atualizado_em)}${d.config.atualizado_por ? " por " + esc(d.config.atualizado_por) : ""}` : "";
+    return `<div class="estq-card estq-conta"><div class="estq-topo"><h3>${esc(CONTA[conta] || conta)}</h3><span class="esp"></span>${sel}</div>
+      <div class="muted">${esc(ESTQ_MODO_TXT[cfg] || "")}${quem}</div>
+      <div class="nums"><span><b>${Number(r.automatico || 0)}</b>em Automático</span><span><b>${Number(r.manual || 0)}</b>em Manual</span>
+        <span><b>${Number(r.mudariam || 0)}</b>${cfg === "simulacao" ? "mudariam" : "a enviar"}</span><span><b>${Number(r.sem_numero || 0)}</b>sem número</span>
+        <span class="esp"></span>${enviar}</div></div>`;
+  };
+  const itens = contas.flatMap(([, d]) => (d.itens || []).filter(i => i.muda || i.calculado == null));
+  const log = contas.flatMap(([, d]) => d.log || []).sort((x, y) => String(y.criado_em).localeCompare(String(x.criado_em))).slice(0, 50);
+  const selo = l => { const [t, cl] = ESTQ_RES[l.resultado] || [l.resultado || "—", ""]; return `<span class="nk-selo ${cl}">${esc(t)}</span>`; };
+  const MODO_ANU = {automatico: "Automático", manual: "Manual"};
+  el.innerHTML = `<div class="nk-painel-tit"><div><h2>Estoque automático</h2><p>Anúncios do ML controlados pelo Noromak em Automático: Apollo da filial menos o vendido e ainda não baixado. Sem leitura do Apollo nada é enviado (nunca zero). O modo vale para a conta inteira; anúncio em Manual nunca é tocado.</p></div></div>
+    <div class="estq-contas">${contas.map(blocoConta).join("")}</div>
+    ${itens.length ? `<details class="rem bloco"><summary>O que mudaria ou está sem número (${itens.length})</summary>
+      <div class="tw"><table class="nk-tab" data-nk-tabela="anuncios_estoque_mudaria"><thead><tr><th>Conta</th><th>Anúncio</th><th>Produto</th><th class="n">No ML</th><th class="n">Calculado</th><th>Por quê</th></tr></thead>
+      <tbody>${itens.map(i => `<tr><td>${esc(CONTA[i.conta] || i.conta)}</td><td>${linkAnuncio({canal: "ml", anuncio_id: i.anuncio_id})}<div class="muted">${esc(i.titulo)}</div></td>
+        <td class="mono"><a href="?codigo=${encodeURIComponent(i.ficha)}&amp;aba=anuncios" data-cod="${esc(i.ficha)}" onclick="event.preventDefault();irPara({codigo:this.dataset.cod,aba:'anuncios'})">${esc(i.ficha)}</a></td>
+        <td class="n">${esc(numEst(i.referencia))}</td><td class="n">${i.calculado == null ? SEM_LEITURA : esc(numEst(i.calculado))}</td>
+        <td>${esc(i.calculado == null ? i.motivo : motivoCurtoEst(i))}</td></tr>`).join("")}</tbody></table></div></details>` : ""}
+    <details class="rem bloco"><summary>Registro dos últimos envios (${log.length})</summary>
+      <div class="tw"><table class="nk-tab" data-nk-tabela="anuncios_estoque_registro"><thead><tr><th>Quando</th><th>Conta</th><th>Anúncio</th><th>Modo</th><th class="n">De</th><th class="n">Para</th><th>Resultado</th><th>Motivo / detalhe</th><th>Por</th></tr></thead>
+      <tbody>${log.map(l => `<tr><td>${quando(l.criado_em)}</td><td>${esc(CONTA[l.conta] || l.conta)}</td><td>${linkAnuncio({canal: "ml", anuncio_id: l.anuncio_id})}</td>
+        <td>${esc(MODO_ANU[l.modo] || l.modo)}</td><td class="n">${l.de == null ? "—" : esc(numEst(l.de))}</td><td class="n">${l.para == null ? "—" : esc(numEst(l.para))}</td>
+        <td>${selo(l)}</td><td>${esc(l.motivo)}${l.detalhe ? `<div class="muted">${esc(l.detalhe)}</div>` : ""}</td><td>${esc(l.ator)}</td></tr>`).join("")
+        || '<tr><td colspan="9" class="vazio">Nada registrado ainda.</td></tr>'}</tbody></table></div></details>`;
+}
+async function mudarModoConta(conta, modo, jaConfirmou) {
+  const d = PE.contas[conta];
+  if (!PODE || !d || !d.config || d.config.modo === modo || !ESTQ_MODO_CONTA[modo]) return;
+  if (!jaConfirmou) {
+    const txt = modo === "automatico"
+      ? `Ligar o envio automático de estoque em ${CONTA[conta] || conta}?\nO Noromak passa a enviar sozinho ao Mercado Livre o estoque calculado pelo Apollo dos anúncios em Automático (${Number((d.resumo || {}).automatico || 0)} hoje), sempre que o número mudar. Pede a senha e o código 2FA do proprietário.`
+      : `Passar o estoque automático de ${CONTA[conta] || conta} para ${ESTQ_MODO_CONTA[modo]}?\n${ESTQ_MODO_TXT[modo]}`;
+    if (!await nkConfirmar(txt, {ok: modo === "automatico" ? "Ligar o Automático" : `Passar para ${ESTQ_MODO_CONTA[modo]}`, perigo: false})) return;
+  }
+  try {
+    await api("/api/anuncios/estoque/config", {conta, modo});
+    nkToast(`${CONTA[conta] || conta}: estoque automático em ${ESTQ_MODO_CONTA[modo]}.`, "ok");
+  } catch (e) {
+    if (e.status === 428 && (e.dados || {}).code === "OWNER_REAUTH_REQUIRED") {
+      if (await pedirOwner("Ligar o Automático do estoque exige a senha e o código 2FA do proprietário.")) return mudarModoConta(conta, modo, true);
+      return;
+    }
+    nkToast(e.message, "erro");
+  }
+  carregarPainelEstoque();
+}
+async function enviarAgoraConta(b) {
+  const conta = b.dataset.conta, d = PE.contas[conta];
+  if (!PODE || !d) return;
+  const n = Number((d.resumo || {}).mudariam || 0);
+  if (!await nkConfirmar(`Enviar agora o estoque de ${CONTA[conta] || conta} ao Mercado Livre?\n${n} anúncio(s) em Automático com número diferente do ML. Só vai o que mudou, recalculado agora; cada envio é conferido relendo o anúncio.`,
+    {ok: "Enviar agora", perigo: false})) return;
+  b.disabled = true; b.textContent = "Enviando…";
+  try {
+    const r = await api("/api/anuncios/estoque/enviar", {conta});
+    const partes = [`${Number(r.enviados || 0)} enviado(s)`];
+    if (r.erros) partes.push(`${Number(r.erros)} com erro`);
+    if (r.ignorados) partes.push(`${Number(r.ignorados)} ignorado(s)`);
+    nkToast(`${CONTA[conta] || conta}: ${partes.join(", ")}.${r.erros ? " Veja o registro." : ""}`, r.erros ? "aviso" : "ok", {duracao: 12000});
+  } catch (e) {
+    nkToast(e.status === 409 ? "Outra rodada do estoque desta conta está em andamento. Tente de novo em instantes."
+      : e.status ? e.message : "Sem resposta do servidor: veja o registro antes de enviar de novo.", "erro", {duracao: 10000});
+  }
+  carregarPainelEstoque();
+}
+// Senha + 2FA do proprietário (POST /api/security/owner/reauth), como nas Promoções automáticas e no TikTok.
+function pedirOwner(texto) {
+  return new Promise(resolver => {
+    const anterior = document.activeElement;
+    const fundo = document.createElement("div");
+    fundo.className = "nk-dialogo-fundo";
+    fundo.innerHTML = `<form class="nk-dialogo" role="dialog" aria-modal="true" aria-labelledby="ownerTit" novalidate>
+      <h2 id="ownerTit">Confirmação do proprietário</h2><div class="nk-dialogo-txt">${esc(texto)}</div>
+      <input class="nk-dialogo-campo" type="password" autocomplete="current-password" placeholder="Senha" aria-label="Senha">
+      <input class="nk-dialogo-campo" type="text" inputmode="numeric" autocomplete="one-time-code" placeholder="Código 2FA" aria-label="Código 2FA">
+      <div class="nk-dialogo-erro" hidden></div>
+      <div class="nk-dialogo-acoes"><button type="button" class="nk-btn" data-r="0">Cancelar</button><button type="submit" class="nk-btn pri">Confirmar</button></div></form>`;
+    const [senha, codigo] = fundo.querySelectorAll("input"), erro = fundo.querySelector(".nk-dialogo-erro");
+    const teclas = e => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); fim(false); } };
+    const fim = r => { document.removeEventListener("keydown", teclas, true); fundo.remove(); try { anterior && anterior.focus && anterior.focus(); } catch (_) {} resolver(r); };
+    fundo.querySelector("form").addEventListener("submit", async e => {
+      e.preventDefault();
+      if (!senha.value || !codigo.value.trim()) { erro.textContent = "Preencha a senha e o código."; erro.hidden = false; return; }
+      try { await api("/api/security/owner/reauth", {password: senha.value, code: codigo.value.trim()}); fim(true); }
+      catch (ex) { erro.textContent = ex.message; erro.hidden = false; codigo.value = ""; codigo.focus(); }
+    });
+    fundo.addEventListener("click", e => { if (e.target.closest('button[data-r="0"]') || e.target === fundo) fim(false); });
+    document.addEventListener("keydown", teclas, true);
+    document.body.append(fundo);
+    senha.focus();
+  });
 }
 
 // ---------------------------------------------------------------- V20.24: fotos da ficha
