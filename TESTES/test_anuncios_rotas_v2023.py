@@ -349,3 +349,56 @@ class NovoProdutoTeste(TesteNoromak):
         st, _ = sup.pedir("POST", "/api/anuncios/ficha", {"codigo": "NP5", "campos": {"nome": "x"}, "criar": True})
         self.assertEqual(st, 403)
         self.assertIsNone(S.ficha_ler("NP5"))
+
+
+class SeletorDeCasaTeste(TesteNoromak):
+    """V20.24: ?conta= na lista e o seletor Todas/Araçatuba/Bauru na tela."""
+
+    def _monta(self):
+        S.ficha_salvar("P1", {"nome": "Peca um"}, "luis", None)
+        S.ficha_salvar("P2", {"nome": "Peca dois"}, "luis", None)
+        inserir(conta="aracatuba", anuncio_id="MLB1", ficha="P1", controle="alephee")
+        inserir(conta="aracatuba", anuncio_id="MLB2", ficha="P1", controle="noromak")  # misto em Araçatuba
+        inserir(conta="bauru", anuncio_id="MLB3", ficha="P1", controle="alephee")
+        inserir(conta="bauru", anuncio_id="MLB4", ficha="SEMFICHA", controle="alephee")
+
+    def _fichas(self, c):
+        return {f["codigo"]: f for f in c["fichas"]}
+
+    def test_contagem_por_conta(self):
+        self._monta()
+        st, c = self.cliente.pedir("GET", "/api/anuncios")
+        self.assertEqual(self._fichas(c)["P1"]["anuncios"], 3)
+        st, c = self.cliente.pedir("GET", "/api/anuncios?conta=bauru")
+        self.assertEqual(st, 200, c)
+        f = self._fichas(c)
+        self.assertEqual(f["P1"]["anuncios"], 1)
+        self.assertEqual(f["P2"]["anuncios"], 0)  # ficha compartilhada continua na lista
+        self.assertEqual(c["resumo"]["anuncios"], 2)
+        self.assertEqual(c["resumo"]["sem_ficha"], 1)
+        st, c = self.cliente.pedir("GET", "/api/anuncios?conta=aracatuba")
+        self.assertEqual(self._fichas(c)["P1"]["anuncios"], 2)
+        self.assertEqual(c["resumo"]["anuncios"], 2)
+        self.assertEqual(c["resumo"]["sem_ficha"], 0)
+        self.assertEqual(c["total_fichas"], 2)
+
+    def test_misto_so_dentro_da_conta(self):
+        self._monta()
+        st, c = self.cliente.pedir("GET", "/api/anuncios?conta=bauru&filtro=misto")
+        self.assertEqual(c["fichas"], [])
+        self.assertEqual(c["resumo"]["misto"], 0)
+        st, c = self.cliente.pedir("GET", "/api/anuncios?conta=aracatuba&filtro=misto")
+        self.assertEqual([f["codigo"] for f in c["fichas"]], ["P1"])
+        st, c = self.cliente.pedir("GET", "/api/anuncios?conta=bauru&filtro=noromak")
+        self.assertEqual(c["fichas"], [])
+        st, c = self.cliente.pedir("GET", "/api/anuncios?conta=bauru&filtro=sem_ficha")
+        self.assertEqual([f["codigo"] for f in c["fichas"]], ["SEMFICHA"])
+
+    def test_conta_invalida_400(self):
+        self.assertEqual(self.cliente.pedir("GET", "/api/anuncios?conta=ribeirao")[0], 400)
+
+    def test_tela_tem_seletor_de_casa(self):
+        html = (RAIZ / "APP" / "anuncios.html").read_text(encoding="utf-8")
+        self.assertIn("nk_anuncios_casa_v2024", html)
+        self.assertIn('[["todas", "Todas"], ["aracatuba", "Araçatuba"], ["bauru", "Bauru"]]', html)
+        self.assertIn("&conta=", html)

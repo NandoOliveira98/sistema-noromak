@@ -57,6 +57,9 @@ tr.clica{cursor:pointer}
 .qtd{width:72px;font:inherit;font-size:13px;text-align:right;padding:5px 8px;border:1px solid var(--nk-line);border-radius:7px;background:var(--nk-tile);color:var(--nk-ink)}
 .qtd:focus,.skuin:focus{outline:0;border-color:var(--nk-pri);box-shadow:0 0 0 3px var(--nk-foco)}
 .skuin{width:170px;font:inherit;font-size:13px;padding:5px 8px;border:1px solid var(--nk-line);border-radius:7px;background:var(--nk-tile);color:var(--nk-ink)}
+.casa-sel{display:inline-flex;border:1px solid var(--nk-line);border-radius:999px;overflow:hidden;background:var(--nk-canvas)}
+.casa-sel button{border:0;background:transparent;color:var(--nk-ink2);padding:6px 14px;font:inherit;font-size:13px;cursor:pointer}
+.casa-sel button.on{background:var(--nk-head);color:var(--nk-canvas);font-weight:600}
 .conta{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin-top:12px}
 .conta>div{border:1px solid var(--nk-line);border-radius:10px;padding:10px 12px;background:var(--nk-canvas);font-size:12px;color:var(--nk-ink2)}
 .conta b{display:block;font-size:16px;color:var(--nk-head);margin:3px 0}
@@ -123,6 +126,23 @@ const CANAL = {ml: "Mercado Livre", shopee: "Shopee", magalu: "Magalu", tiktok: 
 const CANAL_CURTO = {ml: "ML", shopee: "Shopee", magalu: "Magalu", tiktok: "TikTok", amazon: "Amazon"};
 const CONTA = {aracatuba: "Araçatuba", bauru: "Bauru"};
 const FILIAIS = [["aracatuba", "Araçatuba"], ["bauru", "Bauru"]];
+// V20.24: seletor de casa no topo (Todas / Araçatuba / Bauru). Vale para a lista e para a ficha; guardado neste navegador.
+const CASA_CHAVE = "nk_anuncios_casa_v2024";
+let CASA = "todas";
+try { const c = localStorage.getItem(CASA_CHAVE); if (["todas", "aracatuba", "bauru"].includes(c)) CASA = c; } catch (_) {}
+const filiaisVisiveis = () => FILIAIS.filter(([f]) => CASA === "todas" || f === CASA);
+const daCasa = a => CASA === "todas" || a.conta === CASA;
+function seletorCasa() {
+  return `<span class="casa-sel" role="group" aria-label="Casa">${[["todas", "Todas"], ["aracatuba", "Araçatuba"], ["bauru", "Bauru"]]
+    .map(([v, n]) => `<button type="button" class="${CASA === v ? "on" : ""}" aria-pressed="${CASA === v}" onclick="trocarCasa('${v}')">${esc(n)}</button>`).join("")}</span>`;
+}
+function trocarCasa(v) {
+  if (!["todas", "aracatuba", "bauru"].includes(v) || v === CASA) return;
+  CASA = v;
+  try { localStorage.setItem(CASA_CHAVE, v); } catch (_) {}
+  // ficha: só refiltra o que já está na tela (o digitado está em FORM/CR e não se perde); lista: relê com a conta
+  if (F) desenharFicha(); else { desenharLista(); carregarLista(); }
+}
 const CONTROLE = {noromak: ["Noromak", "ok"], alephee: ["Alephee", "warn"], full: ["Full", "info"]};
 const STATUS = {active: "Ativo", paused: "Pausado", closed: "Encerrado", under_review: "Em revisão", inactive: "Inativo"};
 const TIPO_ANUNCIO = {gold_special: "Clássico", gold_pro: "Premium", gold_premium: "Premium", free: "Grátis"};
@@ -184,13 +204,13 @@ window.addEventListener("beforeunload", e => { if (fichaSuja() || kitSujo() || c
 
 // ---------------------------------------------------------------- lista
 function acoesLista() {
-  $("acoes").innerHTML = (PODE ? `<button class="nk-btn pri" id="btnPuxar" onclick="puxar()"><i class=nk-i-download></i> Puxar anúncios do ML</button><button class="nk-btn" onclick="novoProduto()">+ Novo produto</button>` : "")
+  $("acoes").innerHTML = seletorCasa() + (PODE ? `<button class="nk-btn pri" id="btnPuxar" onclick="puxar()"><i class=nk-i-download></i> Puxar anúncios do ML</button><button class="nk-btn" onclick="novoProduto()">+ Novo produto</button>` : "")
     + `<button class="nk-btn" onclick="carregarLista()"><i class=nk-i-refresh></i> Atualizar</button>`;
 }
 async function carregarLista() {
   const filtro = L.aba === "sem_ficha" ? "sem_ficha" : L.filtro;
   try {
-    L.dados = await api(`/api/anuncios?busca=${encodeURIComponent(L.busca)}&filtro=${encodeURIComponent(filtro)}`);
+    L.dados = await api(`/api/anuncios?busca=${encodeURIComponent(L.busca)}&filtro=${encodeURIComponent(filtro)}${CASA === "todas" ? "" : "&conta=" + CASA}`);
   } catch (e) {
     L.dados = null;
     $("lista") ? $("lista").innerHTML = `<div class="vazio">${esc(e.status === 403 ? "Sem acesso a esta tela." : e.message)}</div>` : null;
@@ -202,7 +222,8 @@ function desenharLista() {
   document.title = "Noromak · Anúncios";
   $("rotulo").textContent = "Vendas e anúncios";
   $("titulo").textContent = "Anúncios";
-  $("sub").textContent = "Um produto, uma ficha: os anúncios de todos os canais ligados ao código do Apollo. Clique num produto para abrir a ficha.";
+  $("sub").textContent = "Um produto, uma ficha: os anúncios de todos os canais ligados ao código do Apollo. Clique num produto para abrir a ficha."
+    + (CASA === "todas" ? "" : ` Mostrando só os anúncios da casa ${CONTA[CASA]}.`);  // V20.24
   acoesLista();
   $("vista").innerHTML = `
     <div class="nk-kpis bloco" id="kpis"></div>
@@ -346,11 +367,11 @@ function desenharFicha() {
   const nome = campos.nome || "";
   document.title = "Noromak · " + (nome || F.codigo);
   $("titulo").textContent = nome || F.codigo;
-  const ativos = F.anuncios || [];
+  const ativos = (F.anuncios || []).filter(daCasa);  // V20.24: só a casa escolhida
   const canais = new Set(ativos.map(a => a.canal));
   $("sub").textContent = [F.codigo, F.tipo === "kit" ? "kit" : "peça", campos.marca, `${ativos.length} anúncio(s) em ${canais.size} canal(is)`,
     F.naoExiste ? "ainda sem ficha" : ""].filter(Boolean).join(" · ");
-  $("acoes").innerHTML = `<button class="nk-btn" onclick="voltarLista()">← Lista</button>
+  $("acoes").innerHTML = seletorCasa() + `<button class="nk-btn" onclick="voltarLista()">← Lista</button>
     <button class="nk-btn" onclick="recarregar()"><i class=nk-i-refresh></i> Atualizar</button>`;
   const est = F.estoque || {};
   const kpiFilial = ([f, nomeF]) => {
@@ -364,7 +385,7 @@ function desenharFicha() {
   const cont = ativos.reduce((m, a) => (m[a.controle] = (m[a.controle] || 0) + 1, m), {});
   $("vista").innerHTML = `
     <div class="nk-kpis bloco">
-      ${FILIAIS.map(kpiFilial).join("")}
+      ${filiaisVisiveis().map(kpiFilial).join("")}
       <div class="nk-kpi"><span class="nk-kpi-ic ${faltam.length ? "bad" : "ok"}"><i class="nk-i-file"></i></span><div><b>${nCampos}/${Object.keys(BASE).length} campos</b><small>${faltam.length ? `faltam ${faltam.length} obrigatórios` : "ficha completa"}</small></div></div>
       <div class="nk-kpi"><span class="nk-kpi-ic ${F.misto ? "warn" : "info"}"><i class="nk-i-tag"></i></span><div><b>${ativos.length} anúncio(s)</b><small>${Object.entries(cont).map(([c, n]) => `${esc((CONTROLE[c] || [c])[0])} ${n}`).join(" · ") || "nenhum anúncio"}</small></div></div>
     </div>
@@ -523,7 +544,7 @@ function quadroEstoque(comps, ehKit) {
     const n = daParaMontar(f, comps);
     return `<div>${ehKit ? "Dá para montar" : "Livre para vender"} · ${nomeF}<b>${n == null ? "sem leitura" : `${n} ${ehKit ? "kit(s)" : "un."}`}</b>${e.erro ? `<span class="bad">${esc(e.erro)}</span>` : lido ? "Apollo − vendido na fila (a baixar)" : "Apollo não lido ainda"}</div>`;
   };
-  return `<div class="conta">${FILIAIS.map(linha).join("")}
+  return `<div class="conta">${filiaisVisiveis().map(linha).join("")}
     ${ehKit ? `<div>Custo do kit<b>—</b>na fase de preço</div>
     <div>Na venda de 1 kit, o Apollo compromete<b>${comps.filter(c => c.sku).map(c => `${esc(c.quantidade)} × ${esc(c.sku)}`).join(" + ") || "—"}</b>no atendimento</div>` : ""}</div>`;
 }
@@ -622,7 +643,7 @@ function desenharKitsDaPeca() {
     <section class="nk-painel">
       <div class="nk-painel-tit"><div><h2>Estoque desta peça</h2><p>Disponível no Apollo de cada filial, menos o que já foi vendido e está na fila (a baixar).</p></div></div>
       <div class="tw"><table class="nk-tab"><thead><tr><th>Filial</th><th class="n">Disponível no Apollo</th><th class="n">A baixar</th><th class="n">Livre</th></tr></thead>
-        <tbody>${FILIAIS.map(([f, n]) => { const {disp, pend} = estoquePeca(f, F.codigo); const livre = daParaMontar(f, [{sku: F.codigo, quantidade: 1}]);
+        <tbody>${filiaisVisiveis().map(([f, n]) => { const {disp, pend} = estoquePeca(f, F.codigo); const livre = daParaMontar(f, [{sku: F.codigo, quantidade: 1}]);
           return `<tr><td>${n}</td><td class="n">${qtdOuSem(disp)}</td><td class="n">${pend == null ? SEM_LEITURA : pend}</td><td class="n"><b>${livre == null ? SEM_LEITURA : livre}</b></td></tr>`; }).join("")}</tbody></table></div>
       ${botaoApollo()}
     </section>`;
@@ -672,7 +693,7 @@ async function novoKit() {
 // --- aba Anúncios em todos os canais
 const dadosAnuncio = a => `data-canal="${esc(a.canal)}" data-conta="${esc(a.conta)}" data-id="${esc(a.anuncio_id)}"`;
 function desenharAnuncios() {
-  const ativos = F.anuncios || [], removidos = F.removidos || [];
+  const ativos = (F.anuncios || []).filter(daCasa), removidos = (F.removidos || []).filter(daCasa);  // V20.24
   const acoes = a => {
     if (!PODE) return "";
     const b = [];
@@ -887,7 +908,7 @@ function atualizarRascNaLista(r) {
 }
 function desenharRascunhos() {
   const el = $("secRasc"); if (!el) return;
-  const lista = RASC.lista;
+  const lista = RASC.lista == null ? null : RASC.lista.filter(daCasa);  // V20.24: rascunhos da casa escolhida
   const linha = r => {
     const s = SIT[r.situacao] || [r.situacao, ""];
     return `<tr${CR && CR.r && CR.r.id === r.id ? ' class="atual"' : ""}><td>${esc(CONTA[r.conta] || r.conta)}</td>
@@ -916,7 +937,7 @@ function formDoRascunho(r) {
 }
 function novoCR(r) {
   const campos = (F.ficha && F.ficha.campos) || {};
-  const f = r ? formDoRascunho(r) : {conta: "aracatuba", titulo: String(campos.nome || "").replace(/\s+/g, " ").trim().slice(0, 60),
+  const f = r ? formDoRascunho(r) : {conta: CASA === "todas" ? "aracatuba" : CASA, titulo: String(campos.nome || "").replace(/\s+/g, " ").trim().slice(0, 60),
     atributos: {}, fotos: [], preco: "", tipo_anuncio: "gold_special", frete_gratis: "0", garantia: "", quantidade: "",
     descricao: String(campos.descricao || "")};
   if (!f.fotos.length) f.fotos = (F.fotos || []).map(x => x.id).slice(0, 12);  // padrão: as fotos da ficha, na ordem dela

@@ -8059,13 +8059,16 @@ def _anuncio_misto_por_codigo(linhas: list[Any]) -> dict[str, bool]:
     return saida
 
 
-def anuncios_lista_payload(busca: str = "", filtro: str = "") -> dict[str, Any]:
-    """V20.23: fichas com a contagem de anuncios; `sem_ficha` = anuncios sem codigo (ou com codigo sem ficha)."""
+def anuncios_lista_payload(busca: str = "", filtro: str = "", conta: str = "") -> dict[str, Any]:
+    """V20.24: `conta` ("", "aracatuba" ou "bauru") conta so os anuncios dessa conta; fichas sao compartilhadas.
+    V20.23: fichas com a contagem de anuncios; `sem_ficha` = anuncios sem codigo (ou com codigo sem ficha)."""
     termo = normalize(busca) if str(busca or "").strip() else ""
     texto = str(busca or "").strip().lower()
     with DB_LOCK:
         fichas = {r["codigo"]: _ficha_de_linha(r) for r in DB.execute("SELECT * FROM anuncio_ficha_v2023").fetchall()}
         linhas = DB.execute("SELECT * FROM anuncio_canal_v2023").fetchall()
+    if conta:  # V20.24: so os anuncios da conta (misto tambem e calculado so nela)
+        linhas = [r for r in linhas if str(r["conta"]) == conta]
     misto = _anuncio_misto_por_codigo(linhas)
     por_cod: dict[str, list[Any]] = {}
     soltos: list[dict[str, Any]] = []
@@ -39107,8 +39110,13 @@ class AppHandler(BaseHTTPRequestHandler):
         if path == "/api/anuncios":  # V20.23: lista de fichas (so le o banco)
             ctx = self.auth(admin_only=True)
             if ctx is not None:
+                conta_q = str((query.get("conta") or [""])[0]).strip()
+                if conta_q not in ("", "aracatuba", "bauru"):  # V20.24: seletor de casa
+                    self.send_json({"ok": False, "error": "Conta inválida."}, 400)
+                    return
                 self.send_json({"ok": True, **anuncios_lista_payload(str((query.get("busca") or [""])[0]),
-                                                                    str((query.get("filtro") or [""])[0]))})
+                                                                    str((query.get("filtro") or [""])[0]),
+                                                                    conta_q)})
             return
         if path in ("/api/anuncios/ml/categorias", "/api/anuncios/ml/atributos", "/api/anuncios/ml/tarifa"):
             # V20.24: leituras do ML para criar anuncio (so GET, mas chamam o ML: perfil Admin)
