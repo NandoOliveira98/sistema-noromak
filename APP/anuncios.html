@@ -1,0 +1,680 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="icon" href="/favicon.ico?v=14.5" sizes="any">
+<title>Noromak · Anúncios</title>
+<!-- V20.23: Plataforma de anúncios, fase 1. Lista das fichas (um produto = uma ficha, com os anúncios de todos os
+     canais) e a ficha de cada produto em ?codigo= (abas Ficha do produto · Kits · Anúncios em todos os canais).
+     Ver = módulo admin; gravar = só perfil Admin (Supervisor e Consulta não veem os botões de gravar).
+     Nada desta tela grava no ML, Shopee, Magalu, TikTok nem no Apollo: só a ficha, o Cadastro de Kits e quem controla.
+     Salvar a ficha manda só o campo que mudou + a versão (409 = outra pessoa alterou: o digitado fica).
+     GET /api/anuncios, GET /api/anuncios/ficha, POST /api/anuncios/{ficha,kit,puxar,controle,remover,reincluir}. -->
+<script defer src="/expedicao/web-auth.js?v=20.17"></script>
+<link rel="stylesheet" href="/expedicao/theme.css?v=20.17">
+<link rel="stylesheet" href="/expedicao/nk-ui.css?v=19.13">
+<script src="/expedicao/nk-ui.js?v=19.13"></script>
+<script defer src="/expedicao/nk-menu.js?v=20.23" data-shell></script>
+<style>
+body{margin:0;background:var(--nk-canvas);color:var(--nk-ink);font-family:var(--nk-font)}
+.bloco{margin-top:14px}
+.nk-painel{margin-bottom:14px}
+.barra{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+.barra .esp{flex:1}
+.barra input[type=search],.barra select{font:inherit;font-size:13px;border:1px solid var(--nk-line);background:var(--nk-tile);color:var(--nk-ink);border-radius:8px;padding:7px 10px}
+.barra input[type=search]{width:280px;max-width:100%}
+button.nk-kpi{cursor:pointer;text-align:left;font:inherit}
+button.nk-kpi.on{border-color:var(--nk-pri);box-shadow:0 0 0 3px var(--nk-foco)}
+.abas{display:flex;gap:4px;border-bottom:1px solid var(--nk-line);margin:14px 0}
+.abas button{border:0;background:none;font:inherit;padding:9px 14px;font-size:13px;font-weight:600;color:var(--nk-ink2);border-bottom:2px solid transparent;margin-bottom:-1px;cursor:pointer}
+.abas button.on{color:var(--nk-pri);border-bottom-color:var(--nk-pri)}
+.tw{overflow-x:auto}
+table.nk-tab{width:100%;font-size:13px}
+tr.clica{cursor:pointer}
+.mono{font-family:var(--nk-mono,Consolas,monospace);font-size:12px}
+.muted{color:var(--nk-ink2);font-size:12px}
+.vazio{padding:22px;text-align:center;color:var(--nk-ink2)}
+.selos{display:flex;flex-wrap:wrap;gap:4px}
+.lay{display:grid;grid-template-columns:190px minmax(0,1fr);gap:16px;align-items:start}
+.indice{position:sticky;top:12px;background:var(--nk-tile);border:1px solid var(--nk-line);border-radius:12px;padding:8px}
+.indice a{display:flex;justify-content:space-between;align-items:center;padding:7px 9px;border-radius:8px;font-size:13px;color:var(--nk-ink2);text-decoration:none}
+.indice a:hover{background:var(--nk-canvas)}
+.pt{width:8px;height:8px;border-radius:50%;background:var(--nk-ok);flex:none}
+.pt.w{background:var(--nk-warn)}.pt.b{background:var(--nk-bad)}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.g4{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.inteiro{grid-column:1/-1}
+.g2>.nk-campo,.g4>.nk-campo{align-content:start}
+.orig{font-weight:400;color:var(--nk-ink3);font-size:11px}
+.falta input,.falta textarea{border-color:var(--nk-bad)}
+.mudou input,.mudou textarea{border-color:var(--nk-pri)}
+.orig.bad{color:var(--nk-bad)}
+.gravado{font-weight:400;font-size:12px;color:var(--nk-ink);background:var(--nk-warn-bg);border:1px solid var(--nk-warn-ln);border-radius:8px;padding:6px 8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.qtd{width:72px;font:inherit;font-size:13px;text-align:right;padding:5px 8px;border:1px solid var(--nk-line);border-radius:7px;background:var(--nk-tile);color:var(--nk-ink)}
+.qtd:focus,.skuin:focus{outline:0;border-color:var(--nk-pri);box-shadow:0 0 0 3px var(--nk-foco)}
+.skuin{width:170px;font:inherit;font-size:13px;padding:5px 8px;border:1px solid var(--nk-line);border-radius:7px;background:var(--nk-tile);color:var(--nk-ink)}
+.conta{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin-top:12px}
+.conta>div{border:1px solid var(--nk-line);border-radius:10px;padding:10px 12px;background:var(--nk-canvas);font-size:12px;color:var(--nk-ink2)}
+.conta b{display:block;font-size:16px;color:var(--nk-head);margin:3px 0}
+.ok{color:var(--nk-ok)}.bad{color:var(--nk-bad)}
+.embreve td{color:var(--nk-ink3)}
+details.rem summary{cursor:pointer;font-weight:700;font-size:13px;color:var(--nk-head)}
+details.rem[open] summary{margin-bottom:10px}
+@media (max-width:900px){.lay{grid-template-columns:1fr}.indice{position:static}.g4{grid-template-columns:1fr 1fr}.conta{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main class="nk-pagina">
+  <div class="nk-cab">
+    <div>
+      <div class="nk-rotulo" id="rotulo">Vendas e anúncios</div>
+      <h1 id="titulo">Anúncios</h1>
+      <p id="sub">Um produto, uma ficha: os anúncios de todos os canais ligados ao código do Apollo.</p>
+    </div>
+    <div class="nk-acoes" id="acoes"></div>
+  </div>
+  <div id="vista"><div class="vazio">Carregando…</div></div>
+</main>
+<script>
+// V20.23: estado da tela. EU = sessão; PODE = perfil Admin (grava). Supervisor e Consulta só veem.
+const $ = id => document.getElementById(id);
+const esc = v => String(v ?? "").replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;"}[c]));
+const normCod = s => String(s || "").toUpperCase().replace(/[^0-9A-Z]/g, "");  // = _exp_norm_codigo do servidor
+const brl = v => v == null || v === "" ? "—" : Number(v).toLocaleString("pt-BR", {style: "currency", currency: "BRL"});
+const quando = v => { if (!v) return "—"; const d = new Date(v); return isNaN(d) ? esc(v) : d.toLocaleString("pt-BR", {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"}); };
+const SEM_LEITURA = '<span class="muted">sem leitura</span>';
+const qtdOuSem = v => v == null ? SEM_LEITURA : esc(String(v));
+const CANAL = {ml: "Mercado Livre", shopee: "Shopee", magalu: "Magalu", tiktok: "TikTok Shop", amazon: "Amazon"};
+const CANAL_CURTO = {ml: "ML", shopee: "Shopee", magalu: "Magalu", tiktok: "TikTok", amazon: "Amazon"};
+const CONTA = {aracatuba: "Araçatuba", bauru: "Bauru"};
+const FILIAIS = [["aracatuba", "Araçatuba"], ["bauru", "Bauru"]];
+const CONTROLE = {noromak: ["Noromak", "ok"], alephee: ["Alephee", "warn"], full: ["Full", "info"]};
+const STATUS = {active: "Ativo", paused: "Pausado", closed: "Encerrado", under_review: "Em revisão", inactive: "Inativo"};
+const TIPO_ANUNCIO = {gold_special: "Clássico", gold_pro: "Premium", gold_premium: "Premium", free: "Grátis"};
+const ORIGEM = {admin: "da ficha", anuncio_ml: "do anúncio ML", alephee: "da Alephee", apollo: "do Apollo"};
+// Ordem decidida pelo dono: título → categoria → o resto (a criação de anúncio segue essa ordem).
+const SECOES = [
+  {id: "sec-produto", nome: "Produto", sub: "O nome é o título do produto: o anúncio é montado a partir dele.", campos: [
+    ["nome", "Título / nome do produto", "inteiro"], ["categoria_ml", "Categoria do ML", "inteiro"],
+    ["marca", "Marca"], ["modelo", "Modelo"], ["descricao", "Descrição", "inteiro", "area"]]},
+  {id: "sec-codigos", nome: "Códigos", sub: "EAN (código de barras) e NCM da nota.", campos: [["ean", "EAN"], ["ncm", "NCM"]]},
+  {id: "sec-medidas", nome: "Peso e medidas", sub: "Da embalagem de envio. Vazio = não sabemos (nunca zero).", campos: [
+    ["peso_g", "Peso (g)", "", "num"], ["altura_cm", "Altura (cm)", "", "num"], ["largura_cm", "Largura (cm)", "", "num"],
+    ["comprimento_cm", "Comprimento (cm)", "", "num"]]},
+];
+const OBRIGATORIOS = ["nome", "marca", "ean", "peso_g", "altura_cm", "largura_cm", "comprimento_cm"];
+const EM_BREVE = ["shopee", "magalu", "tiktok", "amazon"];
+
+let EU = null, PODE = false;
+let L = {aba: "fichas", filtro: "", busca: "", dados: null};
+let F = null;            // payload da ficha aberta
+let ABA = "ficha";
+let FORM = {}, BASE = {}, CONFLITO = {};  // ficha: digitado, gravado quando a tela leu, valor de quem alterou
+let KIT = null;          // {sku, nome, base:[...], comps:[...], versao_storage}
+let buscaTimer = null;
+
+async function api(url, corpo) {
+  const r = await fetch("/expedicao" + url, corpo
+    ? {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(corpo), credentials: "same-origin", cache: "no-store"}
+    : {credentials: "same-origin", cache: "no-store"});
+  let d = {};
+  try { d = await r.json(); } catch (_) {}
+  if (!r.ok) { const e = new Error(d.mensagem && d.error === "CONFLITO" ? d.mensagem : (d.error || ("HTTP " + r.status))); e.status = r.status; e.dados = d; throw e; }
+  return d;
+}
+
+function codigoDaUrl() { return new URLSearchParams(location.search).get("codigo") || ""; }
+function irPara(params) {
+  const q = new URLSearchParams(params).toString();
+  history.pushState(null, "", location.pathname + (q ? "?" + q : ""));
+  rota();
+}
+function rota() {
+  const cod = codigoDaUrl();
+  const aba = new URLSearchParams(location.search).get("aba");
+  if (cod) { ABA = ["ficha", "kits", "anuncios"].includes(aba) ? aba : "ficha"; abrirFicha(cod); }
+  else { F = null; KIT = null; desenharLista(); carregarLista(); }
+}
+window.addEventListener("popstate", async () => {
+  if (F && (fichaSuja() || kitSujo()) && normCod(codigoDaUrl()) !== normCod(F.codigo)) {
+    const voltar = location.search;
+    history.pushState(null, "", location.pathname + "?codigo=" + encodeURIComponent(F.codigo) + "&aba=" + ABA);
+    if (!await nkConfirmar("Sair sem salvar o que foi digitado?", {ok: "Sair sem salvar", perigo: true})) return;
+    FORM = {}; BASE = {}; KIT = null;
+    history.pushState(null, "", location.pathname + voltar);
+  }
+  rota();
+});
+window.addEventListener("beforeunload", e => { if (fichaSuja() || kitSujo()) { e.preventDefault(); e.returnValue = ""; } });
+
+// ---------------------------------------------------------------- lista
+function acoesLista() {
+  $("acoes").innerHTML = (PODE ? `<button class="nk-btn pri" id="btnPuxar" onclick="puxar()"><i class=nk-i-download></i> Puxar anúncios do ML</button>` : "")
+    + `<button class="nk-btn" onclick="carregarLista()"><i class=nk-i-refresh></i> Atualizar</button>`;
+}
+async function carregarLista() {
+  const filtro = L.aba === "sem_ficha" ? "sem_ficha" : L.filtro;
+  try {
+    L.dados = await api(`/api/anuncios?busca=${encodeURIComponent(L.busca)}&filtro=${encodeURIComponent(filtro)}`);
+  } catch (e) {
+    L.dados = null;
+    $("lista") ? $("lista").innerHTML = `<div class="vazio">${esc(e.status === 403 ? "Sem acesso a esta tela." : e.message)}</div>` : null;
+    return;
+  }
+  if (!codigoDaUrl()) desenharListaDados();
+}
+function desenharLista() {
+  document.title = "Noromak · Anúncios";
+  $("rotulo").textContent = "Vendas e anúncios";
+  $("titulo").textContent = "Anúncios";
+  $("sub").textContent = "Um produto, uma ficha: os anúncios de todos os canais ligados ao código do Apollo. Clique num produto para abrir a ficha.";
+  acoesLista();
+  $("vista").innerHTML = `
+    <div class="nk-kpis bloco" id="kpis"></div>
+    <div class="abas" role="tablist">
+      <button type="button" data-aba="fichas" class="${L.aba === "fichas" ? "on" : ""}" onclick="trocarAbaLista('fichas')">Produtos</button>
+      <button type="button" data-aba="sem_ficha" class="${L.aba === "sem_ficha" ? "on" : ""}" onclick="trocarAbaLista('sem_ficha')">Sem ficha</button>
+    </div>
+    <section class="nk-painel">
+      <div class="barra">
+        <input type="search" id="busca" placeholder="Buscar código ou nome" value="${esc(L.busca)}" oninput="buscar(this.value)">
+        <select id="filtro" onchange="L.filtro=this.value;carregarLista()" ${L.aba === "sem_ficha" ? "hidden" : ""} aria-label="Filtro">
+          <option value="">Todos os produtos</option><option value="misto">Produto misto</option><option value="noromak">Controlados pelo Noromak</option>
+        </select>
+        <span class="esp"></span><span class="muted" id="contagem"></span>
+      </div>
+      <div id="lista"><div class="vazio">Carregando…</div></div>
+    </section>`;
+  $("filtro").value = L.filtro;
+  if (L.dados) desenharListaDados();
+}
+function trocarAbaLista(a) { L.aba = a; desenharLista(); carregarLista(); }
+function buscar(v) { clearTimeout(buscaTimer); buscaTimer = setTimeout(() => { L.busca = v.trim(); carregarLista(); }, 300); }
+function filtrarKpi(f) {
+  if (f === "sem_ficha") { L.aba = "sem_ficha"; L.filtro = ""; }
+  else { L.aba = "fichas"; L.filtro = f; }
+  desenharLista(); carregarLista();
+}
+function desenharListaDados() {
+  const D = L.dados; if (!D || !$("lista")) return;
+  const r = D.resumo || {};
+  const k = (f, ic, cl, n, t) => f === null
+    ? `<div class="nk-kpi"><span class="nk-kpi-ic ${cl}"><i class="${ic}"></i></span><div><b>${n ?? 0}</b><small>${t}</small></div></div>`
+    : `<button type="button" class="nk-kpi${(f === "sem_ficha" ? L.aba === "sem_ficha" : (L.aba === "fichas" && L.filtro === f)) ? " on" : ""}" onclick="filtrarKpi('${f}')"><span class="nk-kpi-ic ${cl}"><i class="${ic}"></i></span><span><b>${n ?? 0}</b><small>${t}</small></span></button>`;
+  $("kpis").innerHTML = k("", "nk-i-file", "info", r.fichas, "Fichas") + k(null, "nk-i-tag", "", r.anuncios, "Anúncios")
+    + k("sem_ficha", "nk-i-link", r.sem_ficha ? "bad" : "ok", r.sem_ficha, "Sem ficha")
+    + k("misto", "nk-i-alert", r.misto ? "warn" : "ok", r.misto, "Produto misto")
+    + k("noromak", "nk-i-check", "ok", r.noromak, "Controlados pelo Noromak");
+  const fichas = D.fichas || [];
+  $("contagem").textContent = D.total_fichas > fichas.length ? `mostrando ${fichas.length} de ${D.total_fichas} — use a busca` : `${D.total_fichas || 0} produto(s)`;
+  const linhaFicha = f => `<tr class="clica" data-cod="${esc(f.codigo)}" onclick="abrirCodigo(this.dataset.cod)">
+      <td class="mono"><b>${esc(f.codigo)}</b></td>
+      <td>${f.nome ? esc(f.nome) : '<span class="muted">sem nome</span>'}${f.sem_ficha ? ' <span class="nk-selo bad">sem ficha</span>' : ""}</td>
+      <td>${f.tipo === "kit" ? "Kit" : "Peça"}</td>
+      <td><div class="selos">${(f.canais || []).map(c => `<span class="nk-selo ${f.misto ? "warn" : f.noromak ? "ok" : ""}">${esc(CANAL_CURTO[c] || c)}</span>`).join("") || '<span class="muted">—</span>'}</div></td>
+      <td>${f.misto ? '<span class="nk-selo warn">Misto</span>' : f.noromak ? '<span class="nk-selo ok">Noromak</span>' : f.anuncios ? '<span class="muted">Alephee / Full</span>' : '<span class="muted">—</span>'}</td>
+      <td class="n">${f.anuncios}</td></tr>`;
+  const tabFichas = `<div class="tw"><table class="nk-tab" data-nk-tabela="anuncios_produtos"><thead><tr>
+      <th>Código</th><th>Nome</th><th>Tipo</th><th>Canais</th><th>Quem controla</th><th class="n">Anúncios</th></tr></thead>
+      <tbody>${fichas.map(linhaFicha).join("") || `<tr><td colspan="6" class="vazio">${L.busca || L.filtro ? "Nada neste filtro." : "Nenhuma ficha ainda. " + (PODE ? "Clique em “Puxar anúncios do ML”." : "")}</td></tr>`}</tbody></table></div>`;
+  if (L.aba !== "sem_ficha") { $("lista").innerHTML = tabFichas; return; }
+  const soltos = D.sem_ficha || [];
+  $("lista").innerHTML = `
+    <div class="nk-painel-tit"><div><h2>Anúncios sem código</h2><p>O SKU do anúncio não ligou a nenhum código. Acerte o SKU no ML (ou o vínculo MLB↔SKU no Precificador) e puxe de novo.</p></div></div>
+    <div class="tw"><table class="nk-tab" data-nk-tabela="anuncios_sem_ficha"><thead><tr>
+      <th>Canal</th><th>Conta</th><th>Anúncio</th><th>SKU no anúncio</th><th>Título</th><th class="n">Preço</th><th class="n">Estoque no ML</th><th>Situação</th></tr></thead>
+      <tbody>${soltos.map(a => `<tr><td>${esc(CANAL[a.canal] || a.canal)}</td><td>${esc(CONTA[a.conta] || a.conta)}</td>
+        <td>${linkAnuncio(a)}</td><td class="mono">${esc(a.sku_anuncio) || '<span class="muted">vazio</span>'}</td><td>${esc(a.titulo)}</td>
+        <td class="n">${brl(a.preco)}</td><td class="n">${qtdOuSem(a.estoque)}</td><td>${esc(STATUS[a.status] || a.status || "—")}</td></tr>`).join("")
+        || `<tr><td colspan="8" class="vazio">Todo anúncio lido tem código.</td></tr>`}</tbody></table></div>
+    ${fichas.length ? `<div class="nk-painel-tit bloco"><div><h2>Códigos sem ficha</h2><p>O anúncio tem código, mas a ficha ainda não existe. Abra e salve para criar.</p></div></div>${tabFichas}` : ""}`;
+}
+function linkAnuncio(a) {
+  const id = String(a.anuncio_id || "");
+  if (a.canal === "ml" && /^MLB\d+$/i.test(id)) {
+    return `<a class="mono" href="https://produto.mercadolivre.com.br/MLB-${esc(id.slice(3))}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${esc(id)}</a>`;
+  }
+  return `<span class="mono">${esc(id)}</span>`;
+}
+async function puxar() {
+  if (!await nkConfirmar("Puxar os anúncios do Mercado Livre?\nLê os anúncios das duas contas (Araçatuba e Bauru) e liga cada um à ficha do produto. Só leitura: nada é alterado no ML. Leva alguns minutos.", {ok: "Puxar", perigo: false})) return;
+  const b = $("btnPuxar"); if (b) { b.disabled = true; b.textContent = "Puxando… (alguns minutos)"; }
+  try {
+    const r = await api("/api/anuncios/puxar", {});
+    const partes = Object.entries(r.contas || {}).map(([c, x]) => x.erro
+      ? `${CONTA[c] || c}: não respondeu (${x.erro}) — nada dela foi alterado`
+      : `${CONTA[c] || c}: ${x.lidos} lidos, ${x.novos} novos, ${x.atualizados} atualizados, ${x.sem_ficha} sem código${x.parcial ? `, ${x.parcial} sem detalhe` : ""}`);
+    nkToast(partes.join(" · ") || "Nenhuma conta do ML conectada.", r.ok ? "ok" : "aviso", {duracao: 12000});
+  } catch (e) { nkToast(e.message, "erro"); }
+  acoesLista();
+  carregarLista();
+}
+
+// ---------------------------------------------------------------- ficha
+function abrirCodigo(cod) { irPara({codigo: cod}); }
+function voltarLista() {
+  if (fichaSuja() || kitSujo()) { nkConfirmar("Sair sem salvar o que foi digitado?", {ok: "Sair sem salvar", perigo: true}).then(ok => { if (ok) { FORM = {}; BASE = {}; KIT = null; irPara({}); } }); return; }
+  irPara({});
+}
+async function abrirFicha(cod, opcoes = {}) {
+  if (!opcoes.manter) { FORM = {}; BASE = {}; CONFLITO = {}; KIT = null; }
+  $("rotulo").textContent = "Vendas e anúncios · Anúncios";
+  $("titulo").textContent = cod;
+  $("sub").textContent = "Carregando…";
+  $("acoes").innerHTML = `<button class="nk-btn" onclick="voltarLista()">← Lista</button>`;
+  if (!opcoes.manter) $("vista").innerHTML = '<div class="vazio">Carregando…</div>';
+  let d, vk = null;
+  try {
+    [d, vk] = await Promise.all([
+      api(`/api/anuncios/ficha?codigo=${encodeURIComponent(cod)}${opcoes.apollo ? "&apollo=1" : ""}`).catch(e => {
+        if (e.status === 404) return {ok: false, naoExiste: true};
+        throw e;
+      }),
+      api("/api/storage?versions=conf_kits").then(x => (x.versions || {}).conf_kits).catch(() => null),
+    ]);
+  } catch (e) {
+    $("sub").textContent = "";
+    $("vista").innerHTML = `<div class="nk-aviso bad bloco">${esc(e.status === 403 ? "Sem acesso a esta tela." : e.message)}</div>`;
+    return;
+  }
+  if (codigoDaUrl() && normCod(codigoDaUrl()) !== normCod(cod)) return;  // trocou de produto enquanto carregava
+  if (d.naoExiste) d = {codigo: String(cod).trim().toUpperCase().replace(/\s+/g, ""), tipo: "peca", ficha: null, kits_da_peca: [], composicao: null,
+    anuncios: [], removidos: [], misto: false, estoque: null, apollo_lido: false, naoExiste: true};
+  F = d;
+  F.versao_kits = vk;
+  // base = o que está gravado; o digitado (FORM) só é mantido quando pedido (409 / recarregar com edição)
+  const campos = (F.ficha && F.ficha.campos) || {};
+  const novaBase = {};
+  SECOES.forEach(s => s.campos.forEach(([c]) => { novaBase[c] = fmtCampo(campos[c]); }));
+  if (!opcoes.manter) { BASE = novaBase; FORM = {...novaBase}; }
+  else {
+    // V20.23: recarga com edição em andamento: campo não mexido acompanha o gravado; o mexido fica como está
+    SECOES.forEach(s => s.campos.forEach(([c]) => { if (FORM[c] === BASE[c]) FORM[c] = novaBase[c]; }));
+    BASE = novaBase;
+  }
+  prepararKit(opcoes.manter);
+  desenharFicha();
+}
+function fmtCampo(v) {
+  if (v == null) return "";
+  if (typeof v === "number") return String(v).replace(".", ",");
+  return String(v);
+}
+function fichaSuja() { return !!F && Object.keys(FORM).some(c => (FORM[c] ?? "") !== (BASE[c] ?? "")); }
+function camposMudados() { return Object.keys(FORM).filter(c => (FORM[c] ?? "") !== (BASE[c] ?? "")); }
+
+function desenharFicha() {
+  const ficha = F.ficha, campos = (ficha && ficha.campos) || {};
+  const nome = campos.nome || "";
+  document.title = "Noromak · " + (nome || F.codigo);
+  $("titulo").textContent = nome || F.codigo;
+  const ativos = F.anuncios || [];
+  const canais = new Set(ativos.map(a => a.canal));
+  $("sub").textContent = [F.codigo, F.tipo === "kit" ? "kit" : "peça", campos.marca, `${ativos.length} anúncio(s) em ${canais.size} canal(is)`,
+    F.naoExiste ? "ainda sem ficha" : ""].filter(Boolean).join(" · ");
+  $("acoes").innerHTML = `<button class="nk-btn" onclick="voltarLista()">← Lista</button>
+    <button class="nk-btn" onclick="recarregar()"><i class=nk-i-refresh></i> Atualizar</button>`;
+  const est = F.estoque || {};
+  const kpiFilial = ([f, nomeF]) => {
+    const e = est[f];
+    const n = e ? e.da_para_montar : null;
+    const unidade = F.tipo === "kit" ? "kits" : "un. livres";
+    return `<div class="nk-kpi"><span class="nk-kpi-ic ${n == null ? "" : n > 0 ? "ok" : "bad"}"><i class="nk-i-box"></i></span><div><b>${n == null ? "sem leitura" : `${n} ${unidade}`}</b><small>Apollo ${nomeF}${F.apollo_lido ? "" : " (não lido)"}</small></div></div>`;
+  };
+  const faltam = OBRIGATORIOS.filter(c => !BASE[c]);
+  const nCampos = Object.keys(BASE).filter(c => BASE[c]).length;
+  const cont = ativos.reduce((m, a) => (m[a.controle] = (m[a.controle] || 0) + 1, m), {});
+  $("vista").innerHTML = `
+    <div class="nk-kpis bloco">
+      ${FILIAIS.map(kpiFilial).join("")}
+      <div class="nk-kpi"><span class="nk-kpi-ic ${faltam.length ? "bad" : "ok"}"><i class="nk-i-file"></i></span><div><b>${nCampos}/${Object.keys(BASE).length} campos</b><small>${faltam.length ? `faltam ${faltam.length} obrigatórios` : "ficha completa"}</small></div></div>
+      <div class="nk-kpi"><span class="nk-kpi-ic ${F.misto ? "warn" : "info"}"><i class="nk-i-tag"></i></span><div><b>${ativos.length} anúncio(s)</b><small>${Object.entries(cont).map(([c, n]) => `${(CONTROLE[c] || [c])[0]} ${n}`).join(" · ") || "nenhum anúncio"}</small></div></div>
+    </div>
+    ${F.misto ? '<div class="nk-aviso bloco">Produto misto: a Alephee também mexe neste estoque.</div>' : ""}
+    <div class="abas" role="tablist">
+      <button type="button" class="${ABA === "ficha" ? "on" : ""}" onclick="trocarAba('ficha')">Ficha do produto</button>
+      <button type="button" class="${ABA === "kits" ? "on" : ""}" onclick="trocarAba('kits')">Kits${F.tipo === "kit" ? "" : ` (${(F.kits_da_peca || []).length})`}</button>
+      <button type="button" class="${ABA === "anuncios" ? "on" : ""}" onclick="trocarAba('anuncios')">Anúncios em todos os canais (${ativos.length})</button>
+    </div>
+    <div id="conteudo"></div>`;
+  desenharAba();
+}
+function trocarAba(a) {
+  ABA = a;
+  const p = new URLSearchParams(location.search); p.set("aba", a);
+  history.replaceState(null, "", location.pathname + "?" + p.toString());
+  desenharFicha();
+}
+function recarregar(apollo) {
+  if (!F) return;
+  abrirFicha(F.codigo, {manter: true, apollo: !!apollo});
+}
+function desenharAba() {
+  if (ABA === "kits") desenharKits();
+  else if (ABA === "anuncios") desenharAnuncios();
+  else desenharCampos();
+}
+
+// --- aba Ficha do produto
+function bolinha(sec) {
+  const vazios = sec.campos.map(([c]) => c).filter(c => !(FORM[c] || "").trim());
+  if (vazios.some(c => OBRIGATORIOS.includes(c))) return "b";
+  return vazios.length ? "w" : "";
+}
+function desenharCampos() {
+  const ficha = F.ficha, origem = (ficha && ficha.origem) || {};
+  const ro = PODE ? "" : "disabled";
+  const campo = ([c, rotulo, cls, tipo]) => {
+    const vazio = !(FORM[c] || "").trim();
+    const obrig = OBRIGATORIOS.includes(c);
+    const mudou = (FORM[c] ?? "") !== (BASE[c] ?? "");
+    const o = mudou ? "alterado, não salvo" : (ORIGEM[origem[c]] || "");
+    const rot = `<span>${esc(rotulo)} ${vazio && obrig ? '<span class="orig bad">obrigatório</span>' : o ? `<span class="orig">${esc(o)}</span>` : ""}</span>`;
+    const ctl = tipo === "area"
+      ? `<textarea rows="4" data-campo="${c}" ${ro} oninput="digitou(this)">${esc(FORM[c])}</textarea>`
+      : `<input data-campo="${c}" value="${esc(FORM[c])}" ${tipo === "num" ? 'inputmode="decimal"' : ""} ${c === "categoria_ml" ? 'placeholder="ex.: MLB1234 — a sugestão pelo ML entra na próxima fase"' : ""} ${ro} oninput="digitou(this)">`;
+    const k = CONFLITO[c];
+    const conf = k ? `<div class="gravado">Outra pessoa gravou: <b>${k.valor ? esc(k.valor) : "(vazio)"}</b>${k.origem ? ` <span class="orig">${esc(ORIGEM[k.origem] || k.origem)}</span>` : ""}
+        <button type="button" class="nk-btn mini" onclick="usarGravado('${c}')">Usar o gravado</button></div>` : "";
+    return `<label class="nk-campo ${cls || ""} ${vazio && obrig ? "falta" : ""} ${mudou ? "mudou" : ""}">${rot}${ctl}${conf}</label>`;
+  };
+  const n = camposMudados().length;
+  $("conteudo").innerHTML = `
+    ${Object.keys(CONFLITO).length ? '<div class="nk-aviso bad" style="margin-bottom:14px">Outra pessoa alterou esta ficha enquanto você digitava. O que você digitou foi mantido; ao lado de cada campo está o que ela gravou. Confira e salve de novo.</div>' : ""}
+    ${F.naoExiste ? `<div class="nk-aviso info" style="margin-bottom:14px">Este código ainda não tem ficha nem anúncio. ${PODE ? "Preencha e salve para criar." : ""}</div>` : ""}
+    <div class="lay">
+      <nav class="indice" aria-label="Seções da ficha">
+        ${SECOES.map(s => `<a href="#${s.id}" onclick="event.preventDefault();document.getElementById('${s.id}').scrollIntoView({behavior:'smooth',block:'start'})">${esc(s.nome)} <span class="pt ${bolinha(s)}"></span></a>`).join("")}
+      </nav>
+      <div>
+        ${SECOES.map(s => `<section class="nk-painel" id="${s.id}">
+          <div class="nk-painel-tit"><div><h2>${esc(s.nome)}</h2><p>${esc(s.sub)}</p></div></div>
+          <div class="${s.id === "sec-medidas" ? "g4" : "g2"}">${s.campos.map(campo).join("")}</div></section>`).join("")}
+        ${PODE ? `<div class="barra"><span class="esp"></span>
+          ${n ? `<button class="nk-btn" onclick="descartar()">Descartar alterações</button>` : ""}
+          <button class="nk-btn pri" id="btnSalvar" onclick="salvarFicha()" ${n ? "" : "disabled"}><i class=nk-i-save></i> ${n ? `Salvar ficha (${n} campo${n > 1 ? "s" : ""})` : "Salvar ficha"}</button></div>` : ""}
+        ${ficha && ficha.atualizado_em ? `<p class="muted">Última alteração ${quando(ficha.atualizado_em)}${ficha.atualizado_por ? " por " + esc(ficha.atualizado_por) : ""} · versão ${ficha.versao}</p>` : ""}
+      </div>
+    </div>`;
+}
+function digitou(el) {
+  FORM[el.dataset.campo] = el.value;
+  const n = camposMudados().length;
+  const b = $("btnSalvar");
+  if (b) { b.disabled = !n; b.innerHTML = `<i class=nk-i-save></i> ${n ? `Salvar ficha (${n} campo${n > 1 ? "s" : ""})` : "Salvar ficha"}`; }
+  const lab = el.closest(".nk-campo"); if (lab) lab.classList.toggle("mudou", (FORM[el.dataset.campo] ?? "") !== (BASE[el.dataset.campo] ?? ""));
+  // a bolinha do índice acompanha o que está na tela
+  document.querySelectorAll(".indice a").forEach((a, i) => { const p = a.querySelector(".pt"); if (p) p.className = "pt " + bolinha(SECOES[i]); });
+}
+function usarGravado(c) { FORM[c] = BASE[c]; delete CONFLITO[c]; desenharCampos(); }
+function descartar() { FORM = {...BASE}; CONFLITO = {}; desenharCampos(); }
+async function salvarFicha() {
+  const mud = camposMudados();
+  if (!mud.length) return;
+  const campos = {};
+  mud.forEach(c => { campos[c] = (FORM[c] || "").trim(); });  // V20.23: só o que mudou (o resto não vira origem "admin")
+  const corpo = {codigo: F.codigo, campos};
+  if (F.ficha) corpo.versao = F.ficha.versao;
+  const b = $("btnSalvar"); if (b) b.disabled = true;
+  try {
+    await api("/api/anuncios/ficha", corpo);
+    CONFLITO = {};
+    nkToast("Ficha salva.", "ok");
+    await abrirFicha(F.codigo, {manter: true});
+  } catch (e) {
+    if (e.status === 409 && e.dados && e.dados.atual) { conflitoFicha(e.dados.atual); return; }
+    nkToast(e.message, "erro");
+    if (b) b.disabled = false;
+  }
+}
+// V20.23: 409 = outra pessoa salvou depois que a tela leu. Nada do digitado se perde: a base passa a ser a ficha
+// gravada agora (versão nova) e cada campo que a pessoa mexeu mostra o valor dela ao lado.
+function conflitoFicha(atual) {
+  const gravados = atual.campos || {}, origem = atual.origem || {};
+  const novaBase = {};
+  SECOES.forEach(s => s.campos.forEach(([c]) => { novaBase[c] = fmtCampo(gravados[c]); }));
+  CONFLITO = {};
+  Object.keys(FORM).forEach(c => {
+    const mexido = (FORM[c] ?? "") !== (BASE[c] ?? "");
+    if (mexido && novaBase[c] !== BASE[c] && novaBase[c] !== FORM[c]) CONFLITO[c] = {valor: novaBase[c], origem: origem[c]};
+    if (!mexido) FORM[c] = novaBase[c];
+  });
+  BASE = novaBase;
+  F.ficha = atual;
+  F.naoExiste = false;
+  nkToast("Outra pessoa alterou esta ficha. O que você digitou foi mantido: confira e salve de novo.", "aviso", {duracao: 9000});
+  desenharFicha();
+}
+
+// --- aba Kits
+function prepararKit(manter) {
+  if (manter && kitSujo()) { KIT.versao_storage = F.versao_kits; return; }
+  if (F.tipo !== "kit" || !F.composicao) { KIT = null; return; }
+  const comps = (F.composicao.componentes || []).map(c => ({sku: c.sku, quantidade: String(c.quantidade)}));
+  KIT = {sku: F.composicao.sku_kit || F.codigo, nome: F.composicao.nome || "", fonte: F.composicao.fonte,
+    base: JSON.stringify(comps), comps, versao_storage: F.versao_kits};
+}
+function kitSujo() { return !!KIT && JSON.stringify(KIT.comps.map(c => ({sku: c.sku, quantidade: String(c.quantidade)}))) !== KIT.base; }
+function estoquePeca(filial, sku) {
+  const e = (F.estoque || {})[filial];
+  if (!e) return {disp: null, pend: null};
+  const k = normCod(sku);
+  return {disp: e.disponivel ? (e.disponivel[k] ?? null) : null, pend: e.pendente ? (e.pendente[k] ?? 0) : null};
+}
+// mesma conta do servidor (kit_da_para_montar): a peça que dá menos manda; sem leitura = sem número, nunca zero
+function daParaMontar(filial, comps) {
+  let menor = null;
+  for (const c of comps) {
+    const q = Number(String(c.quantidade).replace(",", "."));
+    if (!(q > 0)) return null;
+    const {disp, pend} = estoquePeca(filial, c.sku);
+    if (disp == null || pend == null) return null;
+    const n = Math.max(0, Math.floor((disp - pend) / q));
+    menor = menor == null ? n : Math.min(menor, n);
+  }
+  return menor;
+}
+function quadroEstoque(comps, ehKit) {
+  const lido = F.apollo_lido;
+  const linha = ([f, nomeF]) => {
+    const e = (F.estoque || {})[f] || {};
+    const n = daParaMontar(f, comps);
+    return `<div>${ehKit ? "Dá para montar" : "Livre para vender"} · ${nomeF}<b>${n == null ? "sem leitura" : `${n} ${ehKit ? "kit(s)" : "un."}`}</b>${e.erro ? `<span class="bad">${esc(e.erro)}</span>` : lido ? "Apollo − vendido na fila (a baixar)" : "Apollo não lido ainda"}</div>`;
+  };
+  return `<div class="conta">${FILIAIS.map(linha).join("")}
+    ${ehKit ? `<div>Custo do kit<b>—</b>na fase de preço</div>
+    <div>Na venda de 1 kit, o Apollo compromete<b>${comps.filter(c => c.sku).map(c => `${esc(c.quantidade)} × ${esc(c.sku)}`).join(" + ") || "—"}</b>no atendimento</div>` : ""}</div>`;
+}
+function botaoApollo() {
+  return `<div class="barra" style="margin:12px 0 0"><button class="nk-btn" onclick="lerApollo()"><i class=nk-i-refresh></i> Ler estoque do Apollo agora</button>
+    <span class="muted">${F.apollo_lido ? "Lido agora (até 10 códigos por vez; o que não coube fica sem leitura)." : "O Apollo não é lido ao abrir a ficha."}</span></div>`;
+}
+function lerApollo() { recarregar(true); }
+function desenharKits() {
+  if (F.tipo !== "kit") return desenharKitsDaPeca();
+  if (!KIT) { $("conteudo").innerHTML = '<div class="nk-aviso">Este código é um kit, mas a composição não foi encontrada no Cadastro de Kits.</div>'; return; }
+  const ro = !PODE;
+  const linhas = KIT.comps.map((c, i) => {
+    const novo = !c.sku || c.novo;
+    const cel = f => { const {disp, pend} = estoquePeca(f, c.sku); return `<td class="n">${qtdOuSem(disp)}</td><td class="n">${pend == null ? SEM_LEITURA : pend}</td>`; };
+    const monta = FILIAIS.map(([f]) => daParaMontar(f, [c])).map(n => n == null ? SEM_LEITURA : `<b>${n}</b>`);
+    return `<tr>
+      <td>${novo && !ro ? `<input class="skuin" value="${esc(c.sku)}" placeholder="código Apollo" aria-label="Código do componente" oninput="KIT.comps[${i}].sku=this.value.trim()">` : `<a class="mono" href="?codigo=${encodeURIComponent(c.sku)}" data-cod="${esc(c.sku)}" onclick="event.preventDefault();abrirCodigo(this.dataset.cod)">${esc(c.sku)}</a>`}</td>
+      <td class="n">${ro ? esc(c.quantidade) : `<input class="qtd" type="number" min="1" max="999" step="1" value="${esc(c.quantidade)}" aria-label="Quantidade de ${esc(c.sku)} no kit" oninput="KIT.comps[${i}].quantidade=this.value;atualizarQuadroKit()">`}</td>
+      ${cel("aracatuba")}<td class="n" data-monta="${i}-aracatuba">${monta[0]}</td>${cel("bauru")}<td class="n" data-monta="${i}-bauru">${monta[1]}</td>
+      <td>${ro ? "" : `<button class="nk-btn mini perigo" onclick="removerComp(${i})">Remover</button>`}</td></tr>`;
+  }).join("");
+  const sujo = kitSujo();
+  $("conteudo").innerHTML = `
+    <section class="nk-painel">
+      <div class="nk-painel-tit"><div><h2>Componentes do kit · ${esc(KIT.sku)}${KIT.nome && KIT.nome !== KIT.sku ? ` (${esc(KIT.nome)})` : ""}</h2>
+        <p>É o mesmo Cadastro de Kits da Conferência, Shopee, Financeiro e Demanda. A quantidade de cada peça manda no estoque e no que a venda compromete.${KIT.fonte === "prefixo" ? " Este kit vem do próprio código (KITn-X): salvar cria a entrada no Cadastro de Kits." : ""}</p></div>
+        ${PODE ? `<button class="nk-btn mini" onclick="adicionarComp()">+ Adicionar componente</button>` : ""}</div>
+      <div class="tw"><table class="nk-tab"><thead><tr><th>Código Apollo</th><th class="n">Quantidade no kit</th>
+        <th class="n">Disponível Araçatuba</th><th class="n">A baixar</th><th class="n">Dá para montar</th>
+        <th class="n">Disponível Bauru</th><th class="n">A baixar</th><th class="n">Dá para montar</th><th></th></tr></thead>
+        <tbody>${linhas || '<tr><td colspan="9" class="vazio">Sem componentes.</td></tr>'}</tbody></table></div>
+      <div id="quadroKit">${quadroEstoque(KIT.comps, true)}</div>${botaoApollo()}
+      ${PODE ? `<div class="barra" style="margin-top:12px"><span class="esp"></span>
+        ${sujo ? `<button class="nk-btn" onclick="prepararKit(false);desenharKits()">Descartar alterações</button>` : ""}
+        <button class="nk-btn pri" onclick="salvarKit()" ${sujo ? "" : "disabled"}><i class=nk-i-save></i> Salvar kit</button></div>` : ""}
+    </section>`;
+}
+function atualizarQuadroKit() {
+  const q = $("quadroKit"); if (q) q.innerHTML = quadroEstoque(KIT.comps, true);
+  KIT.comps.forEach((c, i) => FILIAIS.forEach(([f]) => {
+    const el = document.querySelector(`[data-monta="${i}-${f}"]`); const n = daParaMontar(f, [c]);
+    if (el) el.innerHTML = n == null ? SEM_LEITURA : `<b>${n}</b>`;
+  }));
+  const b = document.querySelector('button[onclick="salvarKit()"]'); if (b) b.disabled = !kitSujo();
+}
+function adicionarComp() { KIT.comps.push({sku: "", quantidade: "1", novo: true}); desenharKits(); const ins = document.querySelectorAll(".skuin"); if (ins.length) ins[ins.length - 1].focus(); }
+async function removerComp(i) {
+  if (KIT.comps.length === 1) { nkToast("O kit precisa de pelo menos um componente.", "aviso"); return; }
+  KIT.comps.splice(i, 1); desenharKits();
+}
+async function salvarKit(tentativa = 0) {
+  const comps = KIT.comps.map(c => ({sku: String(c.sku || "").trim(), quantidade: Number(String(c.quantidade).replace(",", "."))}));
+  if (comps.some(c => !c.sku)) { nkToast("Preencha o código de todo componente (ou remova a linha).", "aviso"); return; }
+  if (comps.some(c => !Number.isInteger(c.quantidade) || c.quantidade < 1 || c.quantidade > 999)) { nkToast("A quantidade de cada componente deve ser um número inteiro de 1 a 999.", "aviso"); return; }
+  if (!tentativa && !await nkConfirmar(`Salvar o kit ${KIT.sku} com ${comps.map(c => `${c.quantidade} × ${c.sku}`).join(" + ")}?\nVale para a Conferência, a Shopee, o Financeiro e a Demanda (mesmo Cadastro de Kits).`, {ok: "Salvar", perigo: false})) return;
+  try {
+    await api("/api/anuncios/kit", {sku_kit: KIT.sku, nome: KIT.nome || ((F.ficha && F.ficha.campos.nome) || ""), componentes: comps, versao_storage: KIT.versao_storage});
+    nkToast("Kit salvo.", "ok");
+    KIT = null;
+    await abrirFicha(F.codigo, {manter: true});
+  } catch (e) {
+    if (e.status === 409 && !tentativa) {
+      // V20.23: o Cadastro de Kits inteiro tem uma versão só; se ESTE kit não mudou, a outra alteração foi em outro
+      // kit e o salvar segue com a versão nova. Se mudou, mostra o atual e não grava por cima.
+      const meus = KIT.comps, base = KIT.base;
+      try {
+        const [d, vk] = await Promise.all([api(`/api/anuncios/ficha?codigo=${encodeURIComponent(F.codigo)}`),
+          api("/api/storage?versions=conf_kits").then(x => (x.versions || {}).conf_kits)]);
+        const agora = JSON.stringify(((d.composicao || {}).componentes || []).map(c => ({sku: c.sku, quantidade: String(c.quantidade)})));
+        if (agora === base) { KIT.versao_storage = vk; return salvarKit(1); }
+        F = {...d, versao_kits: vk};
+        prepararKit(false);
+        const gravado = KIT.comps.map(c => `${c.quantidade} × ${c.sku}`).join(" + ") || "(vazio)";
+        KIT.comps = meus;  // o digitado fica na tela; a próxima gravação confere contra a versão nova
+        desenharKits();
+        nkToast(`Outra pessoa alterou este kit: agora está ${gravado}. O que você digitou ficou na tela; confira e salve de novo.`, "aviso", {duracao: 12000});
+      } catch (e2) { nkToast(e2.message, "erro"); }
+      return;
+    }
+    nkToast(e.message, "erro");
+  }
+}
+function desenharKitsDaPeca() {
+  const kits = F.kits_da_peca || [];
+  $("conteudo").innerHTML = `
+    <section class="nk-painel">
+      <div class="nk-painel-tit"><div><h2>Kits que usam esta peça</h2><p>Cada kit tem a própria ficha e os próprios anúncios. Abra o kit para mudar a quantidade dos componentes.</p></div>
+        ${PODE ? `<button class="nk-btn mini pri" onclick="novoKit()">+ Novo kit com esta peça</button>` : ""}</div>
+      <div class="tw"><table class="nk-tab" data-nk-tabela="anuncios_kits_da_peca"><thead><tr><th>Kit</th><th>Nome</th><th class="n">Quantidade desta peça</th><th>Origem</th><th></th></tr></thead>
+        <tbody>${kits.map(k => `<tr class="clica" data-cod="${esc(k.sku_kit)}" onclick="abrirCodigo(this.dataset.cod)"><td class="mono"><b>${esc(k.sku_kit)}</b></td><td>${esc(k.nome)}</td>
+          <td class="n">${esc(k.quantidade_da_peca)}</td><td>${k.fonte === "prefixo" ? "pelo código (KITn-X)" : "Cadastro de Kits"}</td>
+          <td><button class="nk-btn mini" data-cod="${esc(k.sku_kit)}" onclick="event.stopPropagation();abrirCodigo(this.dataset.cod)">Abrir</button></td></tr>`).join("")
+          || '<tr><td colspan="5" class="vazio">Nenhum kit usa esta peça.</td></tr>'}</tbody></table></div>
+    </section>
+    <section class="nk-painel">
+      <div class="nk-painel-tit"><div><h2>Estoque desta peça</h2><p>Disponível no Apollo de cada filial, menos o que já foi vendido e está na fila (a baixar).</p></div></div>
+      <div class="tw"><table class="nk-tab"><thead><tr><th>Filial</th><th class="n">Disponível no Apollo</th><th class="n">A baixar</th><th class="n">Livre</th></tr></thead>
+        <tbody>${FILIAIS.map(([f, n]) => { const {disp, pend} = estoquePeca(f, F.codigo); const livre = daParaMontar(f, [{sku: F.codigo, quantidade: 1}]);
+          return `<tr><td>${n}</td><td class="n">${qtdOuSem(disp)}</td><td class="n">${pend == null ? SEM_LEITURA : pend}</td><td class="n"><b>${livre == null ? SEM_LEITURA : livre}</b></td></tr>`; }).join("")}</tbody></table></div>
+      ${botaoApollo()}
+    </section>`;
+}
+async function novoKit() {
+  const sku = (await nkPerguntar("SKU do novo kit", {detalhe: `Código do kit que vai conter ${F.codigo}. Ex.: KIT3-${F.codigo}`, placeholder: "KIT…", obrigatorio: true}) || "").trim();
+  if (!sku) return;
+  const qtd = (await nkPerguntar(`Quantas ${F.codigo} vão no kit?`, {tipo: "number", valor: "2", min: "1", obrigatorio: true}) || "").trim();
+  if (!qtd) return;
+  // não sobrescrever um kit que já existe no cadastro: nesse caso só abre
+  try {
+    const d = await api(`/api/anuncios/ficha?codigo=${encodeURIComponent(sku)}`);
+    if (d.composicao) { nkToast(`O kit ${sku} já existe: abrindo para editar.`, "info"); abrirCodigo(sku); return; }
+  } catch (e) { if (e.status !== 404) { nkToast(e.message, "erro"); return; } }
+  const q = Number(qtd);
+  if (!Number.isInteger(q) || q < 1 || q > 999) { nkToast("A quantidade deve ser um número inteiro de 1 a 999.", "aviso"); return; }
+  try {
+    const vk = await api("/api/storage?versions=conf_kits").then(x => (x.versions || {}).conf_kits);
+    await api("/api/anuncios/kit", {sku_kit: sku, nome: "", componentes: [{sku: F.codigo, quantidade: q}], versao_storage: vk});
+    nkToast("Kit criado.", "ok");
+    abrirCodigo(sku);
+  } catch (e) { nkToast(e.status === 409 ? "O Cadastro de Kits mudou agora há pouco. Tente de novo." : e.message, "erro"); }
+}
+
+// --- aba Anúncios em todos os canais
+const dadosAnuncio = a => `data-canal="${esc(a.canal)}" data-conta="${esc(a.conta)}" data-id="${esc(a.anuncio_id)}"`;
+function desenharAnuncios() {
+  const ativos = F.anuncios || [], removidos = F.removidos || [];
+  const acoes = a => {
+    if (!PODE) return "";
+    const b = [];
+    if (a.controle === "alephee" && a.logistica !== "fulfillment") b.push(`<button class="nk-btn mini pri" ${dadosAnuncio(a)} onclick="passarNoromak(this.dataset)">Passar para o Noromak</button>`);
+    if (a.controle === "noromak") b.push(`<button class="nk-btn mini" ${dadosAnuncio(a)} onclick="devolverAlephee(this.dataset)">Devolver para a Alephee</button>`);
+    b.push(`<button class="nk-btn mini perigo" ${dadosAnuncio(a)} onclick="removerAnuncio(this.dataset)">Remover</button>`);
+    return `<div class="selos">${b.join("")}</div>`;
+  };
+  const linha = a => {
+    const c = CONTROLE[a.controle] || [a.controle || "—", ""];
+    return `<tr><td><b>${esc(CANAL[a.canal] || a.canal)}</b> · ${esc(CONTA[a.conta] || a.conta)}</td>
+      <td>${linkAnuncio(a)}<div class="muted">${esc(a.titulo)}</div></td>
+      <td><span class="nk-selo ${c[1]}">${esc(c[0])}</span></td>
+      <td>${esc(STATUS[a.status] || a.status || "—")}</td>
+      <td class="n">${brl(a.preco)}</td><td class="n">${qtdOuSem(a.estoque)}</td>
+      <td>${esc(TIPO_ANUNCIO[a.tipo_anuncio] || a.tipo_anuncio || "—")}${a.logistica === "fulfillment" ? " · Full" : ""}</td>
+      <td>${quando(a.lido_em)}</td><td>${acoes(a)}</td></tr>`;
+  };
+  const breve = EM_BREVE.filter(c => !ativos.some(a => a.canal === c))
+    .map(c => `<tr class="embreve"><td><b>${esc(CANAL[c])}</b></td><td colspan="8"><span class="nk-selo">em breve</span></td></tr>`).join("");
+  $("conteudo").innerHTML = `
+    <section class="nk-painel">
+      <div class="nk-painel-tit"><div><h2>Anúncios em todos os canais</h2><p>O mesmo produto em cada marketplace. "Quem controla" diz quem mexe no estoque do anúncio: nesta fase o Noromak só registra, ainda não envia estoque.</p></div></div>
+      <div class="tw"><table class="nk-tab" data-nk-tabela="anuncios_canais" data-nk-ordenar="0"><thead><tr>
+        <th>Canal</th><th>Anúncio</th><th>Quem controla</th><th>Situação</th><th class="n">Preço</th><th class="n">Estoque no ML</th><th>Tipo</th><th>Lido em</th><th></th></tr></thead>
+        <tbody>${ativos.map(linha).join("") || '<tr><td colspan="9" class="vazio">Nenhum anúncio ligado a este código.</td></tr>'}${breve}</tbody></table></div>
+      ${removidos.length ? `<details class="rem bloco"><summary>Removidos da lista (${removidos.length})</summary>
+        <div class="tw"><table class="nk-tab"><thead><tr><th>Canal</th><th>Anúncio</th><th>Removido em</th><th>Por</th><th></th></tr></thead><tbody>
+        ${removidos.map(a => `<tr><td>${esc(CANAL[a.canal] || a.canal)} · ${esc(CONTA[a.conta] || a.conta)}</td><td>${linkAnuncio(a)}<div class="muted">${esc(a.titulo)}</div></td>
+          <td>${quando(a.removido_em)}</td><td>${esc(a.removido_por)}</td>
+          <td>${PODE ? `<button class="nk-btn mini" ${dadosAnuncio(a)} onclick="reincluirAnuncio(this.dataset)">Reincluir</button>` : ""}</td></tr>`).join("")}
+        </tbody></table></div></details>` : ""}
+    </section>`;
+}
+async function passarNoromak({canal, conta, id}) {
+  const ok = await nkConfirmar(`Você já desativou este anúncio na Alephee?\nO ${id} passa a ser controlado pelo Noromak. Se a Alephee continuar ligada nele, as duas vão mexer no mesmo estoque.`, {ok: "Já desativei", cancelar: "Ainda não", perigo: false});
+  if (!ok) return;
+  try { await api("/api/anuncios/controle", {canal, conta, anuncio_id: id, controle: "noromak", confirmou_alephee: true}); nkToast("Anúncio passou para o Noromak.", "ok"); recarregar(); }
+  catch (e) { nkToast(e.message, "erro"); }
+}
+async function devolverAlephee({canal, conta, id}) {
+  if (!await nkConfirmar(`Devolver o ${id} para a Alephee?\nReligue o anúncio na Alephee: o Noromak deixa de controlar o estoque dele.`, {ok: "Devolver", perigo: false})) return;
+  try { await api("/api/anuncios/controle", {canal, conta, anuncio_id: id, controle: "alephee", confirmou_alephee: false}); nkToast("Anúncio devolvido para a Alephee.", "ok"); recarregar(); }
+  catch (e) { nkToast(e.message, "erro"); }
+}
+async function removerAnuncio({canal, conta, id}) {
+  if (!await nkConfirmar(`Remover o ${id} da lista?\nPuxar os anúncios de novo não o traz de volta; “Reincluir” desfaz. Nada é alterado no marketplace.`)) return;
+  try { await api("/api/anuncios/remover", {canal, conta, anuncio_id: id}); nkToast("Anúncio removido da lista.", "ok"); recarregar(); }
+  catch (e) { nkToast(e.message, "erro"); }
+}
+async function reincluirAnuncio({canal, conta, id}) {
+  try { await api("/api/anuncios/reincluir", {canal, conta, anuncio_id: id}); nkToast("Anúncio reincluído.", "ok"); recarregar(); }
+  catch (e) { nkToast(e.message, "erro"); }
+}
+
+// ---------------------------------------------------------------- início
+(async () => {
+  try {
+    const s = await api("/api/auth/session");
+    EU = s.user || null;
+  } catch (_) { EU = null; }
+  // V20.23: gravar = só perfil Admin; Supervisor (módulo admin) e Consulta só veem
+  PODE = !!EU && EU.app_role === "admin" && !EU.somente_leitura;
+  rota();
+})();
+</script>
+</body>
+</html>

@@ -7405,6 +7405,9 @@ def ficha_salvar(codigo: str, campos: dict[str, Any], ator: str, versao: int | N
     cod = normalize(codigo)
     if not cod:
         raise ValueError("Informe o código do produto.")
+    # V20.23: ficha nova de um codigo de kit (cadastro ou KITn-X) nasce tipo='kit'; antes nascia 'peca' e a tela
+    # deixava de mostrar a composicao. Lido antes do lock (le o storage).
+    tipo_novo = "kit" if kit_composicao(codigo) else "peca"
     with DB_LOCK:
         atual = _ficha_ler_sem_lock(cod)
         if atual is not None and (versao is None or int(versao) != atual["versao"]):
@@ -7422,11 +7425,12 @@ def ficha_salvar(codigo: str, campos: dict[str, Any], ator: str, versao: int | N
                 os_[nome] = "admin"
         nova = (atual["versao"] + 1) if atual else 1
         DB.execute(
-            "INSERT INTO anuncio_ficha_v2023(codigo,campos_json,origem_json,versao,atualizado_em,atualizado_por) "
-            "VALUES(?,?,?,?,?,?) ON CONFLICT(codigo) DO UPDATE SET campos_json=excluded.campos_json, "
+            "INSERT INTO anuncio_ficha_v2023(codigo,tipo,campos_json,origem_json,versao,atualizado_em,atualizado_por) "
+            "VALUES(?,?,?,?,?,?,?) ON CONFLICT(codigo) DO UPDATE SET campos_json=excluded.campos_json, "
             "origem_json=excluded.origem_json, versao=excluded.versao, atualizado_em=excluded.atualizado_em, "
             "atualizado_por=excluded.atualizado_por",
-            (cod, json.dumps(cs, ensure_ascii=False), json.dumps(os_, ensure_ascii=False), nova, now_iso(), str(ator or "")),
+            (cod, tipo_novo, json.dumps(cs, ensure_ascii=False), json.dumps(os_, ensure_ascii=False), nova, now_iso(),
+             str(ator or "")),
         )
         DB.commit()
         return _ficha_ler_sem_lock(cod) or {}
@@ -8010,12 +8014,16 @@ def anuncio_ficha_payload(codigo: str, ler_apollo: bool = False) -> dict[str, An
     with DB_LOCK:
         todas = DB.execute("SELECT * FROM anuncio_canal_v2023 WHERE ficha_codigo=? ORDER BY canal,conta,anuncio_id",
                            (cod,)).fetchall()
-    if ficha is None and not todas:
+    tipo = (ficha or {}).get("tipo") or "peca"
+    # V20.23: o codigo do kit manda: kit do cadastro (ou KITn-X) sem ficha nem anuncio abre pela composicao
+    # (o "Abrir" da aba Kits), e ficha antiga gravada como peca continua mostrando a composicao.
+    comp = kit_composicao(cod)
+    if ficha is None and not todas and not comp:
         return None
+    if comp:
+        tipo = "kit"
     ativos = [dict(r) for r in todas if not str(r["removido_em"] or "")]
     removidos = [dict(r) for r in todas if str(r["removido_em"] or "")]
-    tipo = (ficha or {}).get("tipo") or "peca"
-    comp = kit_composicao(cod) if tipo == "kit" else None
     if comp:
         componentes = [{"sku": _exp_norm_codigo(c["sku"]), "quantidade": c["quantidade"]} for c in comp["componentes"]]
     else:
@@ -8026,7 +8034,8 @@ def anuncio_ficha_payload(codigo: str, ler_apollo: bool = False) -> dict[str, An
     for filial in ("aracatuba", "bauru"):
         lido = apollo_disponivel_filial(codigos, filial) if ler_apollo else None  # Apollo FORA do DB_LOCK
         estoque[filial] = _anuncio_estoque_filial(componentes, lido, pendencias[filial])
-    return {"ficha": ficha, "kits_da_peca": kits_da_peca(cod) if tipo != "kit" else [], "composicao": comp,
+    return {"codigo": cod, "tipo": tipo,  # V20.23: a tela usa (ficha pode ser None)
+            "ficha": ficha, "kits_da_peca": kits_da_peca(cod) if tipo != "kit" else [], "composicao": comp,
             "anuncios": ativos, "removidos": removidos,
             "misto": bool(_anuncio_misto_por_codigo(todas).get(cod)), "estoque": estoque,
             "apollo_lido": bool(ler_apollo)}

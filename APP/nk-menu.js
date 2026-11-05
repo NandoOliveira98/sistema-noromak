@@ -38,6 +38,8 @@
       { id: "historico-sku", rotulo: "Histórico de SKU", href: "/historico-sku", aba: "historico-sku", modulo: "admin", oculto: true },
     ] },
     { grupo: "vendas", titulo: "Vendas e anúncios", itens: [
+      // V20.23: Plataforma de anúncios (fase 1): ficha do produto, kits e anúncios de todos os canais.
+      { id: "anuncios", rotulo: "Anúncios", href: "/anuncios", modulo: "admin", icone: "M4 4h16v16H4zM8 9h8M8 13h8M8 17h5" },
       // V20.01: Pós-venda de volta — perguntas e reclamações do ML de Araçatuba e Bauru (selo = perguntas sem resposta).
       { id: "posvenda", rotulo: "Pós-venda", href: "/posvenda", modulo: "admin", icone: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2zM12 7v4M12 14h.01" },
       { id: "conversao", rotulo: "Conversão", href: "/conversao", modulo: "admin", icone: "M3 4h18l-7 8v6l-4 2v-8L3 4z" },

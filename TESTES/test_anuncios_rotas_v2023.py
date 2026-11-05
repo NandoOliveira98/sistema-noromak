@@ -2,7 +2,9 @@
 
 from unittest import mock
 
-from base import S, SENHA_ADMIN, TesteNoromak, Cliente, linha
+import urllib.request
+
+from base import RAIZ, S, SENHA_ADMIN, TesteNoromak, Cliente, linha
 
 SENHA = "SenhaTeste#2023"
 
@@ -214,3 +216,39 @@ class RotasAnunciosTeste(TesteNoromak):
         self.assertEqual(cp.pedir("GET", "/api/anuncios/ficha?codigo=P1")[0], 403)
         for rota in ("ficha", "kit", "puxar", "controle", "remover", "reincluir"):
             self.assertEqual(cp.pedir("POST", "/api/anuncios/" + rota, {})[0], 403, rota)
+
+    def test_pagina_abre(self):
+        """V20.23: /expedicao/anuncios entrega a tela (com a sessao do Admin)."""
+        req = urllib.request.Request(self.url_base + "/anuncios")
+        req.add_header("Cookie", self.cliente.cookie)
+        with urllib.request.urlopen(req, timeout=30) as r:
+            self.assertEqual(r.status, 200)
+            corpo = r.read().decode("utf-8")
+        self.assertIn("<html", corpo.lower())
+        self.assertIn("/api/anuncios", corpo)
+
+    def test_tela_tem_as_pecas_padrao(self):
+        """V20.23: a tela usa as pecas comuns (nk-ui) e o menu unico tem o item."""
+        html = (RAIZ / "APP" / "anuncios.html").read_text(encoding="utf-8")
+        for peca in ("nk-ui.css", "nk-ui.js", "nk-pagina", "nk-cab", "nk-rotulo", "data-nk-tabela"):
+            self.assertIn(peca, html, peca)
+        self.assertRegex(html, r'nk-menu\.js\?v=[^"]+" data-shell')
+        menu = (RAIZ / "APP" / "nk-menu.js").read_text(encoding="utf-8")
+        self.assertIn('href: "/anuncios"', menu)
+        # V20.23: escrita so para o perfil Admin; Passar para o Noromak pergunta da Alephee
+        self.assertIn("confirmou_alephee", html)
+        self.assertIn("versao", html)
+
+    def test_kit_sem_ficha_abre_pela_composicao(self):
+        """V20.23: o "Abrir" de um kit do cadastro (ou KITn-X) sem ficha nem anuncio abre a composicao, nao 404;
+        e uma ficha gravada como peca para um codigo de kit continua mostrando a composicao."""
+        st, c = self.cliente.pedir("GET", "/api/anuncios/ficha?codigo=KIT3-0893117732")
+        self.assertEqual(st, 200, c)
+        self.assertIsNone(c["ficha"])
+        self.assertEqual(c["composicao"]["componentes"], [{"sku": "0893117732", "quantidade": 3}])
+        st, c = self.cliente.pedir("POST", "/api/anuncios/ficha", {"codigo": "KIT3-0893117732", "campos": {"nome": "Kit"}})
+        self.assertEqual(st, 200, c)
+        st, c = self.cliente.pedir("GET", "/api/anuncios/ficha?codigo=KIT3-0893117732")
+        self.assertEqual(st, 200, c)
+        self.assertIsNotNone(c["composicao"])
+        self.assertEqual(c["ficha"]["tipo"], "kit")
