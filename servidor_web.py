@@ -7401,7 +7401,8 @@ def ficha_ler(codigo: str) -> dict[str, Any] | None:
 
 def ficha_salvar(codigo: str, campos: dict[str, Any], ator: str, versao: int | None) -> dict[str, Any]:
     """V20.23: grava como origem `admin`. `versao` None = sem conferencia (1o save); diferente da gravada = FichaConflito.
-    Valor vazio apaga o campo (desconhecido = vazio, nunca zero)."""
+    Valor vazio apaga o campo (desconhecido = vazio, nunca zero) e deixa a origem `admin` sem valor: e a marca de
+    "apagado pelo Admin", que a importacao nao preenche de novo (regra do ADMIN)."""
     cod = normalize(codigo)
     if not cod:
         raise ValueError("Informe o código do produto.")
@@ -7419,7 +7420,7 @@ def ficha_salvar(codigo: str, campos: dict[str, Any], ator: str, versao: int | N
                 continue
             if _ficha_vazio(valor):
                 cs.pop(nome, None)
-                os_.pop(nome, None)
+                os_[nome] = "admin"  # V20.23: apagado pelo Admin = continua apagado (o puxar nao preenche)
             else:
                 cs[nome] = valor.strip() if isinstance(valor, str) else valor
                 os_[nome] = "admin"
@@ -7463,6 +7464,8 @@ def ficha_importar(codigo: str, campos: dict[str, Any], origem: str, commit: boo
         for nome, valor in novos.items():
             valor = valor.strip() if isinstance(valor, str) else valor
             dono = os_.get(nome)
+            if dono == "admin":
+                continue  # V20.23: campo do Admin, com valor ou apagado por ele, nunca e preenchido pela importacao
             if nome in cs and dono in ANUNCIO_ORIGENS and ANUNCIO_ORIGENS[dono] <= peso:
                 continue  # autoridade igual ou maior ja preencheu
             cs[nome] = valor
@@ -7534,7 +7537,8 @@ def kits_da_peca(codigo: str) -> list[dict[str, Any]]:
         if qtd <= 0:
             return
         vistos.add(chave)
-        saida.append({"sku_kit": kit["sku_kit"], "nome": kit["nome"], "quantidade_da_peca": qtd, "fonte": kit["fonte"]})
+        saida.append({"sku_kit": kit["sku_kit"], "nome": kit["nome"], "quantidade_da_peca": qtd, "fonte": kit["fonte"],
+                      "ativo": kit["ativo"]})  # V20.23: kit inativo aparece marcado na tela
 
     for entry in {id(e): e for e in catalogo.values()}.values():
         _considerar(_kit_composicao(str(entry.get("sku_kit") or ""), catalogo))
@@ -7556,6 +7560,44 @@ def _ficha_garantir_kit(sku: str, ator: str, commit: bool = True) -> str:
             if commit:
                 DB.commit()
     return cod
+
+
+def _kit_salvar_codigo_de_produto(sku: str) -> bool:
+    """V20.23: o SKU e de um produto (Precificador, conf_produtos ou ficha de peca)? Criar kit com ele faria toda
+    venda desse produto abrir em componentes. "KITn-..." e nome de kit (151 kits estao no Precificador como produto)."""
+    alvo = normalize(sku)
+    if not alvo or re.match(r"^KIT", alvo):
+        return False
+    try:
+        dados = precificador_dados()
+    except Exception:
+        dados = {}
+    for p in (dados.get("products") if isinstance(dados, dict) else None) or []:
+        if isinstance(p, dict) and not p.get("isKit") and normalize(p.get("sku")) == alvo:
+            return True
+    bruto, _, _ = get_storage("conf_produtos")
+    for row in _rows_from_storage_value(bruto):
+        if isinstance(row, dict) and normalize(row.get("SKU") or row.get("sku")) == alvo:
+            return True
+    with DB_LOCK:
+        row = DB.execute("SELECT tipo FROM anuncio_ficha_v2023 WHERE codigo=?", (alvo,)).fetchone()
+    return bool(row and str(row["tipo"]) == "peca")
+
+
+def _kit_tem_pedido_na_fila(sku: str) -> bool:
+    """V20.23: ha linha pendente na Conferencia aberta a partir deste kit? (SkuKitOrigem, que a Shopee, Magalu,
+    TikTok e o ML gravam, ou o uid KITDB_<pedido>_<kit>_<sku>_<i>). Concluido ja saiu do get_storage."""
+    alvo = normalize(sku)
+    bruto, _, _ = get_storage("conf_pedidos")
+    for row in _rows_from_storage_value(bruto):
+        if not isinstance(row, dict):
+            continue
+        if normalize(row.get("SkuKitOrigem")) == alvo:
+            return True
+        uid = str(row.get("__uidLinha") or "").upper()
+        if uid.startswith("KITDB_") and f"_{alvo}_" in uid:
+            return True
+    return False
 
 
 def kit_salvar(sku_kit: str, nome: str, componentes: list[dict[str, Any]], ator: str,
@@ -7587,6 +7629,7 @@ def kit_salvar(sku_kit: str, nome: str, componentes: list[dict[str, Any]], ator:
             raise ValueError(f"Componente repetido: {csku}")
         novos.append({"sku": csku, "quantidade": int(qf)})
     nome_ok = str(nome or "").strip() or sku
+    eh_produto = _kit_salvar_codigo_de_produto(sku)  # V20.23: le o Precificador antes da vez do banco
     with DB_LOCK:  # RLock: leitura e gravacao na mesma vez, sem outra gravacao no meio
         bruto, versao, _ = get_storage("conf_kits")
         if versao_storage is not None and int(versao_storage) != int(versao):
@@ -7603,6 +7646,19 @@ def kit_salvar(sku_kit: str, nome: str, componentes: list[dict[str, Any]], ator:
             if isinstance(row, dict) and normalize(row.get("sku_kit") or row.get("SKU Kit") or row.get("sku")) == alvo:
                 posicao = i
                 break
+        # V20.23: tirar/por peca com pedido do kit na fila duplica linhas na proxima sincronizacao (o indice do uid
+        # KITDB_..._<i> muda e a linha antiga, com bip, volta pelo preserve_pending_records_v1714). Quantidade pode.
+        if posicao is not None:
+            antes = {normalize(c.get("sku") or c.get("SKU")) for c in (linhas[posicao].get("componentes") or [])
+                     if isinstance(c, dict)}
+        else:
+            antes = {normalize(c.get("sku")) for c in ((_infer_quantity_kit_from_sku(sku) or {}).get("componentes") or [])}
+        if antes and antes != {normalize(c["sku"]) for c in novos} and _kit_tem_pedido_na_fila(sku):
+            raise ValueError("Este kit tem pedido na fila de conferência: tirar ou pôr peça só depois que o pedido "
+                             "sair. Mudar a quantidade pode.")
+        if posicao is None and eh_produto:
+            raise ValueError(f"Este código é de um produto, não de um kit: {sku}. Um kit com ele faria toda venda "
+                             "desse produto virar os componentes.")
         if posicao is None:
             # V20.23: id estavel no mesmo formato da tela Admin (persistirKitsBancoAdmin); sem ele o override
             # do ADMIN usaria NOME:<nome> como identidade. Linha antiga sem id NAO ganha id aqui (trocaria a entidade).
@@ -8024,15 +8080,23 @@ def anuncio_ficha_payload(codigo: str, ler_apollo: bool = False) -> dict[str, An
         tipo = "kit"
     ativos = [dict(r) for r in todas if not str(r["removido_em"] or "")]
     removidos = [dict(r) for r in todas if str(r["removido_em"] or "")]
+    # V20.23: `sku` = chave sem pontuacao (a mesma da fila e da tela); `codigo` = o codigo como esta no cadastro,
+    # que e o que vai ao Apollo ("6007.003.315.00.8", nunca "6007003315008"), como nas outras chamadas do crm_stock_lookup.
     if comp:
-        componentes = [{"sku": _exp_norm_codigo(c["sku"]), "quantidade": c["quantidade"]} for c in comp["componentes"]]
+        componentes = [{"sku": _exp_norm_codigo(c["sku"]), "codigo": c["sku"], "quantidade": c["quantidade"]}
+                       for c in comp["componentes"]]
     else:
-        componentes = [{"sku": _exp_norm_codigo(cod), "quantidade": 1}]
-    codigos = [c["sku"] for c in componentes]
+        componentes = [{"sku": _exp_norm_codigo(cod), "codigo": cod, "quantidade": 1}]
+    codigos = list(dict.fromkeys(c["codigo"] for c in componentes))
     estoque: dict[str, Any] = {}
     pendencias = pendentes_por_filial(("aracatuba", "bauru"))  # uma leitura da fila para as duas filiais
     for filial in ("aracatuba", "bauru"):
-        lido = apollo_disponivel_filial(codigos, filial) if ler_apollo else None  # Apollo FORA do DB_LOCK
+        lido = None
+        if ler_apollo:  # Apollo FORA do DB_LOCK; a resposta volta para a chave sem pontuacao
+            lido = {}
+            for k, v in apollo_disponivel_filial(codigos, filial).items():
+                chave = _exp_norm_codigo(k)
+                lido[chave] = v if lido.get(chave) is None else lido[chave]
         estoque[filial] = _anuncio_estoque_filial(componentes, lido, pendencias[filial])
     return {"codigo": cod, "tipo": tipo,  # V20.23: a tela usa (ficha pode ser None)
             "ficha": ficha, "kits_da_peca": kits_da_peca(cod) if tipo != "kit" else [], "composicao": comp,

@@ -1,6 +1,7 @@
 """V20.23 - Anuncios fase 1: kits lidos e gravados no mesmo Cadastro de Kits (conf_kits)."""
 
 import json
+from unittest import mock
 
 from base import S, TesteNoromak, linha, pedidos
 
@@ -111,6 +112,36 @@ class KitsTeste(TesteNoromak):
             S.kit_salvar("KITR", "R", [{"sku": "P", "quantidade": 1}, {"sku": "p", "quantidade": 2}], "luis", None)
         self.assertIn("Componente repetido", str(cm.exception))
 
+
+    def test_kit_inativo_vem_marcado(self):
+        # V20.23: kit desligado no cadastro aparece "inativo" na ficha e na lista de kits da peca
+        self.cadastro_direto([{"sku_kit": "KITOFF", "nome": "Off", "ativo": False,
+                               "componentes": [{"sku": "P9", "quantidade": 2}]}])
+        self.assertIs(S.kit_composicao("KITOFF")["ativo"], False)
+        self.assertEqual([(k["sku_kit"], k["ativo"]) for k in S.kits_da_peca("P9")], [("KITOFF", False)])
+        res = S.anuncio_ficha_payload("KITOFF")
+        self.assertIs(res["composicao"]["ativo"], False)
+
+    def test_kit_novo_com_codigo_de_produto_e_recusado(self):
+        # V20.23: um kit com o SKU de um produto faria toda venda do produto virar os componentes
+        atual, _, _ = S.get_storage("conf_produtos")
+        S.save_storage("conf_produtos", atual, json.dumps([{"SKU": "0893117732", "Descrição": "Peça"}]), False,
+                       actor="admin_teste", actor_role="admin", source_screen="teste", change_method="teste",
+                       client_ip="127.0.0.1")
+        with self.assertRaises(ValueError) as cm:
+            S.kit_salvar("0893117732", "", [{"sku": "P1", "quantidade": 2}], "luis", None)
+        self.assertIn("é de um produto", str(cm.exception))
+        with mock.patch.object(S, "precificador_dados", return_value={"products": [{"sku": "6007.003.315.00.8"}]}):
+            with self.assertRaises(ValueError):
+                S.kit_salvar("6007.003.315.00.8", "", [{"sku": "P1", "quantidade": 2}], "luis", None)
+        S.ficha_salvar("PECA77", {"marca": "X"}, "luis", None)
+        with self.assertRaises(ValueError):
+            S.kit_salvar("PECA77", "", [{"sku": "P1", "quantidade": 2}], "luis", None)
+        self.assertEqual(self.lista(), [])
+        # nome de kit (KIT...) e kit que ja existe continuam podendo
+        with mock.patch.object(S, "precificador_dados", return_value={"products": [{"sku": "KIT2-PA18"}]}):
+            S.kit_salvar("KIT2-PA18", "", [{"sku": "PA18", "quantidade": 2}], "luis", None)
+        self.assertEqual(S.kit_composicao("KIT2-PA18")["fonte"], "cadastro")
 
 if __name__ == "__main__":
     import unittest

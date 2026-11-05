@@ -106,5 +106,43 @@ class EstoqueKitTeste(TesteNoromak):
             self.assertEqual(S.apollo_disponivel_filial(["A"], "bauru"), {"A": None})
 
 
+    def test_campo_apagado_pelo_admin_nao_volta_pela_importacao(self):
+        # V20.23: apagar e decisao do Admin: a origem fica `admin` sem valor e o puxar nao preenche de novo
+        S.ficha_importar("A2", {"marca": "WURTH", "ean": "789"}, "anuncio_ml")
+        v = S.ficha_ler("A2")["versao"]
+        S.ficha_salvar("A2", {"marca": ""}, "luis", v)
+        f = S.ficha_ler("A2")
+        self.assertNotIn("marca", f["campos"])
+        self.assertEqual(f["origem"]["marca"], "admin")
+        self.assertEqual(S.ficha_importar("A2", {"marca": "WURTH", "ean": "789"}, "anuncio_ml"), [])
+        self.assertEqual(S.ficha_importar("A2", {"marca": "WURTH"}, "alephee"), [])
+        self.assertNotIn("marca", S.ficha_ler("A2")["campos"])
+        res = S.anuncio_ficha_payload("A2")
+        self.assertEqual((res["ficha"]["campos"].get("marca"), res["ficha"]["origem"]["marca"]), (None, "admin"))
+        # o Admin digitando de novo vale
+        S.ficha_salvar("A2", {"marca": "Würth"}, "luis", S.ficha_ler("A2")["versao"])
+        f = S.ficha_ler("A2")
+        self.assertEqual((f["campos"]["marca"], f["origem"]["marca"]), ("Würth", "admin"))
+
+    def test_apollo_recebe_o_codigo_com_pontos(self):
+        # V20.23: o Apollo e consultado com o codigo do cadastro, nao com a chave sem pontuacao
+        S.kit_salvar("KITPT", "", [{"sku": "6007.003.315.00.8", "quantidade": 2}], "luis", None)
+        self.salvar_admin([linha("P1", "6007.003.315.00.8", 1)])
+        resp = {"ok": True, "estoques": [{"revenda": 1, "disponivel": 9, "respondeu": True},
+                                         {"revenda": 3, "disponivel": 4, "respondeu": True}]}
+        with mock.patch.object(S, "crm_stock_lookup", return_value=resp) as m:
+            res = S.anuncio_ficha_payload("KITPT", ler_apollo=True)
+        self.assertEqual({c.args[0] for c in m.call_args_list}, {"6007.003.315.00.8"})
+        chave = S._exp_norm_codigo("6007.003.315.00.8")
+        self.assertEqual(res["estoque"]["aracatuba"]["disponivel"], {chave: 9.0})
+        self.assertEqual(res["estoque"]["aracatuba"]["pendente"], {chave: 1})
+        self.assertEqual(res["estoque"]["aracatuba"]["da_para_montar"], 4)   # (9 - 1) // 2
+        self.assertEqual(res["estoque"]["bauru"]["da_para_montar"], 2)       # 4 // 2
+        S.ficha_salvar("6007.003.315.00.8", {"marca": "Würth"}, "luis", None)  # a peca so tem ficha depois disto
+        with mock.patch.object(S, "crm_stock_lookup", return_value=resp) as m:
+            res = S.anuncio_ficha_payload("6007.003.315.00.8", ler_apollo=True)
+        self.assertEqual({c.args[0] for c in m.call_args_list}, {"6007.003.315.00.8"})
+        self.assertEqual(res["estoque"]["aracatuba"]["da_para_montar"], 8)
+
 if __name__ == "__main__":
     unittest.main()

@@ -706,23 +706,33 @@ resposta = fica o do sistema (nunca zero); 5 erros seguidos param a leitura. Ite
 Vai substituir o Alephee. Fase 1 = **ficha do produto + kits + anúncios puxados do ML**; o Noromak **só lê** o ML aqui (nada é criado,
 alterado nem estoque gravado). Fases seguintes: 2 criar anúncio (título → categoria → atributos obrigatórios), 3 estoque, 4 vendas → Apollo.
 **Tabelas:** `anuncio_ficha_v2023` (uma ficha por código; campos de `ANUNCIO_CAMPOS_FICHA` + origem de cada campo + `versao`) e
-`anuncio_canal_v2023` (um anúncio por canal/conta/id, `controle` noromak|alephee, `full`, `removido_em` = tombstone).
-**Chave da ficha = `normalize()`** (o mesmo código do `conf_kits`/Precificador), **não** `_exp_norm_codigo`: este tira zeros e prefixos e
-juntaria códigos que são produtos diferentes; `_exp_norm_codigo` só serve para casar com o estoque/pendentes do Apollo.
-**Autoridade por campo** (`ANUNCIO_ORIGENS`): admin > alephee > anuncio_ml > apollo. A importação **nunca** sobrescreve campo do admin;
-desconhecido fica em branco (nunca zero); medida (peso/altura/largura/comprimento) <= 0 é ignorada.
+`anuncio_canal_v2023` (um anúncio por canal/conta/id; `controle` noromak|alephee|full — `full` = logística `fulfillment`, estoque do ML;
+`removido_em` = tombstone do ADMIN).
+**Chave da ficha = `normalize()`** (maiúsculas, sem espaço; o mesmo código do `conf_kits`/Precificador), **não** `_exp_norm_codigo`: este
+tira tudo que não é 0-9/A-Z e juntaria códigos diferentes ("A/B" e "AB", "KIT2-X" e "KIT2X") e perderia os pontos dos códigos do Apollo
+("6007.003.315.00.8"). `_exp_norm_codigo` só é chave para casar o estoque com os pendentes da fila; o Apollo é consultado com o código
+como está no cadastro.
+**Autoridade por campo** (`ANUNCIO_ORIGENS`): admin > alephee > anuncio_ml > apollo. A importação (`ficha_importar`) **nunca** toca campo
+de origem admin — nem o que o Admin **apagou**: apagar deixa a origem `admin` sem valor ("apagado pelo Admin" na tela) e o puxar não
+preenche de novo; o Admin digitando volta a valer. Desconhecido fica em branco (nunca zero); medida (peso/altura/largura/comprimento) <= 0
+é ignorada.
 **Concorrência:** a edição manda `versao`; outra mais nova = 409 `CONFLITO`; `versao` None numa ficha que já existe também é conflito.
 **Kits:** editam o **mesmo** `conf_kits` pelo `save_storage` como ADMIN (a regra do ADMIN e o Cadastro de Kits continuam valendo); linha nova
-ganha id `KIT_…`. Estoque do kit = menor `floor((disponível − pendentes) / qtd)` entre as peças; pendentes da fila por `_exp_norm_codigo`;
+ganha id `KIT_…`. **Tirar ou pôr peça** de um kit com pedido na fila da Conferência (linha com `SkuKitOrigem` do kit ou uid
+`KITDB_<pedido>_<kit>_…`) é recusado (400): o índice do uid muda e a próxima sincronização da Shopee duplicava as linhas (a antiga, com
+bip, voltava pelo `preserve_pending_records_v1714`); mudar a quantidade pode. Kit **novo** com o código de um produto (Precificador,
+`conf_produtos` ou ficha de peça; "KIT…" não conta) é recusado: toda venda do produto viraria os componentes. Kit inativo aparece com o
+selo "inativo". Estoque do kit = menor `floor((disponível − pendentes) / qtd)` entre as peças; pendentes da fila por `_exp_norm_codigo`;
 Apollo sem resposta = em branco, nunca zero.
-**Puxar do ML** (`anuncio_puxar`): as duas contas (Araçatuba e Bauru), leitura fora do `DB_LOCK`, grava em lotes de `ANUNCIO_LOTE_GRAVACAO` (100);
-falha do ML ou lista vazia **não muda nada**; um por vez (409). Anúncio novo entra `controle=alephee` + `full` lido; **puxar nunca muda o controle**.
-Anúncio que sumiu do ML ganha `removido_em` (tombstone; reincluir é explícito). **Passar para o Noromak** (`anuncio_controle_definir`) exige
+**Puxar do ML** (`anuncios_ml_puxar`): as duas contas (Araçatuba e Bauru), leitura fora do `DB_LOCK`, grava em lotes de `ANUNCIO_LOTE_GRAVACAO` (100);
+falha do ML ou lista vazia **não muda nada**; um por vez (409). Anúncio novo entra `controle=alephee` (ou `full`, se a logística é `fulfillment`); **puxar nunca muda o controle**.
+Anúncio que sumiu do ML **não** é marcado (fica como estava). `removido_em` só pelo ADMIN (`anuncio_remover`): o puxar não atualiza nem
+recria o removido; `anuncio_reincluir` desfaz. **Passar para o Noromak** (`anuncio_controle_definir`) exige
 `confirmou_alephee` (o anúncio ainda está no Alephee, risco de duas ferramentas mexendo) e **não vale para Full**; ficha com anúncios nos dois
 controles aparece como "misto".
 **Rotas:** `GET /api/anuncios`, `GET /api/anuncios/ficha?codigo=&apollo=1`; `POST /api/anuncios/{ficha,kit,puxar,controle,remover,reincluir}`.
 Ver = módulo admin; gravar = perfil Admin (Consulta bloqueado pelo `consulta_bloqueada`).
-Testes: `TESTES/test_anuncios_{ficha,kits,puxar,rotas}_v2023.py`.
+Testes: `TESTES/test_anuncios_{ficha,kits,puxar,rotas,kit_fila}_v2023.py`.
 
 ### Estúdio de Imagens (V20.17: servidor, tela e agente)
 `APP/imagens.html` (`/imagens`, menu Vendas e anúncios, módulo próprio **`imagens`** = `app_users.can_imagens`, mesma

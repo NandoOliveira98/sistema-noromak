@@ -372,8 +372,10 @@ function desenharCampos() {
     const vazio = !(FORM[c] || "").trim();
     const obrig = OBRIGATORIOS.includes(c);
     const mudou = (FORM[c] ?? "") !== (BASE[c] ?? "");
-    const o = mudou ? "alterado, não salvo" : (ORIGEM[origem[c]] || "");
-    const rot = `<span>${esc(rotulo)} ${vazio && obrig ? '<span class="orig bad">obrigatório</span>' : o ? `<span class="orig">${esc(o)}</span>` : ""}</span>`;
+    // V20.23: campo vazio com origem admin = o Admin apagou; a importação não preenche de novo
+    const apagado = !mudou && vazio && origem[c] === "admin";
+    const o = mudou ? "alterado, não salvo" : (apagado ? "apagado pelo Admin" : (ORIGEM[origem[c]] || ""));
+    const rot = `<span>${esc(rotulo)} ${vazio && obrig ? '<span class="orig bad">obrigatório</span>' : ""}${o && (!vazio || !obrig || mudou || apagado) ? ` <span class="orig">${esc(o)}</span>` : ""}</span>`;
     const ctl = tipo === "area"
       ? `<textarea rows="4" data-campo="${c}" ${ro} oninput="digitou(this)">${esc(FORM[c])}</textarea>`
       : `<input data-campo="${c}" value="${esc(FORM[c])}" ${tipo === "num" ? 'inputmode="decimal"' : ""} ${c === "categoria_ml" ? 'placeholder="ex.: MLB1234 — a sugestão pelo ML entra na próxima fase"' : ""} ${ro} oninput="digitou(this)">`;
@@ -455,7 +457,7 @@ function prepararKit(manter) {
   if (manter && kitSujo()) { KIT.versao_storage = F.versao_kits; return; }
   if (F.tipo !== "kit" || !F.composicao) { KIT = null; return; }
   const comps = (F.composicao.componentes || []).map(c => ({sku: c.sku, quantidade: String(c.quantidade)}));
-  KIT = {sku: F.composicao.sku_kit || F.codigo, nome: F.composicao.nome || "", fonte: F.composicao.fonte,
+  KIT = {sku: F.composicao.sku_kit || F.codigo, nome: F.composicao.nome || "", fonte: F.composicao.fonte, ativo: F.composicao.ativo,
     base: JSON.stringify(comps), comps, versao_storage: F.versao_kits};
 }
 function kitSujo() { return !!KIT && JSON.stringify(KIT.comps.map(c => ({sku: c.sku, quantidade: String(c.quantidade)}))) !== KIT.base; }
@@ -511,7 +513,7 @@ function desenharKits() {
   const sujo = kitSujo();
   $("conteudo").innerHTML = `
     <section class="nk-painel">
-      <div class="nk-painel-tit"><div><h2>Componentes do kit · ${esc(KIT.sku)}${KIT.nome && KIT.nome !== KIT.sku ? ` (${esc(KIT.nome)})` : ""}</h2>
+      <div class="nk-painel-tit"><div><h2>Componentes do kit · ${esc(KIT.sku)}${KIT.nome && KIT.nome !== KIT.sku ? ` (${esc(KIT.nome)})` : ""}${KIT.ativo === false ? ' <span class="nk-selo warn" title="Inativo no Cadastro de Kits: a venda não abre em componentes">inativo</span>' : ""}</h2>
         <p>É o mesmo Cadastro de Kits da Conferência, Shopee, Financeiro e Demanda. A quantidade de cada peça manda no estoque e no que a venda compromete.${KIT.fonte === "prefixo" ? " Este kit vem do próprio código (KITn-X): salvar cria a entrada no Cadastro de Kits." : ""}</p></div>
         ${PODE ? `<button class="nk-btn mini" onclick="adicionarComp()">+ Adicionar componente</button>` : ""}</div>
       <div class="tw"><table class="nk-tab"><thead><tr><th>Código Apollo</th><th class="n">Quantidade no kit</th>
@@ -576,7 +578,7 @@ function desenharKitsDaPeca() {
       <div class="nk-painel-tit"><div><h2>Kits que usam esta peça</h2><p>Cada kit tem a própria ficha e os próprios anúncios. Abra o kit para mudar a quantidade dos componentes.</p></div>
         ${PODE ? `<button class="nk-btn mini pri" onclick="novoKit()">+ Novo kit com esta peça</button>` : ""}</div>
       <div class="tw"><table class="nk-tab" data-nk-tabela="anuncios_kits_da_peca"><thead><tr><th>Kit</th><th>Nome</th><th class="n">Quantidade desta peça</th><th>Origem</th><th></th></tr></thead>
-        <tbody>${kits.map(k => `<tr class="clica" data-cod="${esc(k.sku_kit)}" onclick="abrirCodigo(this.dataset.cod)"><td class="mono"><b>${esc(k.sku_kit)}</b></td><td>${esc(k.nome)}</td>
+        <tbody>${kits.map(k => `<tr class="clica" data-cod="${esc(k.sku_kit)}" onclick="abrirCodigo(this.dataset.cod)"><td class="mono"><b>${esc(k.sku_kit)}</b>${k.ativo === false ? ' <span class="nk-selo warn" title="Inativo no Cadastro de Kits">inativo</span>' : ""}</td><td>${esc(k.nome)}</td>
           <td class="n">${esc(k.quantidade_da_peca)}</td><td>${k.fonte === "prefixo" ? "pelo código (KITn-X)" : "Cadastro de Kits"}</td>
           <td><button class="nk-btn mini" data-cod="${esc(k.sku_kit)}" onclick="event.stopPropagation();abrirCodigo(this.dataset.cod)">Abrir</button></td></tr>`).join("")
           || '<tr><td colspan="5" class="vazio">Nenhum kit usa esta peça.</td></tr>'}</tbody></table></div>
