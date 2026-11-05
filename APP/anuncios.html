@@ -235,7 +235,7 @@ function desenharLista() {
       <div class="barra">
         <input type="search" id="busca" placeholder="Buscar código ou nome" value="${esc(L.busca)}" oninput="buscar(this.value)">
         <select id="filtro" onchange="L.filtro=this.value;carregarLista()" ${L.aba === "sem_ficha" ? "hidden" : ""} aria-label="Filtro">
-          <option value="">Todos os produtos</option><option value="misto">Produto misto</option><option value="noromak">Controlados pelo Noromak</option>
+          <option value="">Todos os produtos</option><option value="com_anuncio">Com anúncio</option><option value="misto">Produto misto</option><option value="noromak">Controlados pelo Noromak</option>
         </select>
         <span class="esp"></span><span class="muted" id="contagem"></span>
       </div>
@@ -257,7 +257,7 @@ function desenharListaDados() {
   const k = (f, ic, cl, n, t) => f === null
     ? `<div class="nk-kpi"><span class="nk-kpi-ic ${cl}"><i class="${ic}"></i></span><div><b>${n ?? 0}</b><small>${t}</small></div></div>`
     : `<button type="button" class="nk-kpi${(f === "sem_ficha" ? L.aba === "sem_ficha" : (L.aba === "fichas" && L.filtro === f)) ? " on" : ""}" onclick="filtrarKpi('${f}')"><span class="nk-kpi-ic ${cl}"><i class="${ic}"></i></span><span><b>${n ?? 0}</b><small>${t}</small></span></button>`;
-  $("kpis").innerHTML = k("", "nk-i-file", "info", r.fichas, "Fichas") + k(null, "nk-i-tag", "", r.anuncios, "Anúncios")
+  $("kpis").innerHTML = k("", "nk-i-file", "info", r.fichas, "Fichas") + k("com_anuncio", "nk-i-tag", "", r.anuncios, "Anúncios")
     + k("sem_ficha", "nk-i-link", r.sem_ficha ? "bad" : "ok", r.sem_ficha, "Sem ficha")
     + k("misto", "nk-i-alert", r.misto ? "warn" : "ok", r.misto, "Produto misto")
     + k("noromak", "nk-i-check", "ok", r.noromak, "Controlados pelo Noromak");

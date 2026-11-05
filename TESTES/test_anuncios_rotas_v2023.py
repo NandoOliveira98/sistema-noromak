@@ -365,6 +365,19 @@ class SeletorDeCasaTeste(TesteNoromak):
     def _fichas(self, c):
         return {f["codigo"]: f for f in c["fichas"]}
 
+    def test_filtro_com_anuncio(self):
+        # V20.24: o cartão "Anúncios" da lista filtra os produtos que têm anúncio (na casa escolhida)
+        self._monta()
+        st, c = self.cliente.pedir("GET", "/api/anuncios?filtro=com_anuncio")
+        self.assertEqual(st, 200, c)
+        self.assertIn("P1", self._fichas(c))
+        self.assertNotIn("P2", self._fichas(c))
+        st, c = self.cliente.pedir("GET", "/api/anuncios?filtro=com_anuncio&conta=bauru")
+        self.assertIn("P1", self._fichas(c))
+        self.assertNotIn("P2", self._fichas(c))
+        html = (S.APP_DIR / "anuncios.html").read_text(encoding="utf-8")
+        self.assertIn('k("com_anuncio"', html)
+
     def test_contagem_por_conta(self):
         self._monta()
         st, c = self.cliente.pedir("GET", "/api/anuncios")

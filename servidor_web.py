@@ -8097,6 +8097,8 @@ def anuncios_lista_payload(busca: str = "", filtro: str = "", conta: str = "") -
             continue
         if filtro == "noromak" and not item["noromak"]:
             continue
+        if filtro == "com_anuncio" and not item["anuncios"]:  # V20.24: cartão "Anúncios" filtra (dono, 05/11)
+            continue
         saida.append(item)
     resumo = {"fichas": len(fichas), "anuncios": sum(len(v) for v in por_cod.values()) + len(soltos),
               "sem_ficha": len(soltos) + sum(1 for c in por_cod if c not in fichas),
