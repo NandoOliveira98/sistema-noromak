@@ -31457,6 +31457,27 @@ def ml_tarifa_nova(preco: float, tipo: str, categoria: str, conta: str) -> dict[
             "frete": None, "frete_texto": ANUNCIO_FRETE_TEXTO}
 
 
+def anuncio_custo_para_preco(codigo: str) -> dict[str, Any]:
+    """V20.24: custo, imposto e margem-alvo para a conta do preco na tela de criar anuncio (so le). Custo = o mesmo
+    das Promocoes automaticas (Precificador, custo lido do Apollo; kit pelas pecas); desconhecido ou zero = None
+    (sem custo nao ha lucro nem preco ideal - nunca zero). Imposto fixo do Financeiro."""
+    out: dict[str, Any] = {"custo": None, "margem_alvo": None, "imposto": round(FINANCEIRO_IMPOSTO_PERCENT / 100.0, 4)}
+    try:
+        prod = _promo_produto(_promo_produtos(), normalize(codigo))
+    except Exception as exc:
+        print(f"Aviso: custo do Precificador nao lido para {codigo}: {exc}", file=sys.stderr)
+        prod = None
+    if prod:
+        custo = _money_number(prod.get("custo"))
+        out["custo"] = round(custo, 2) if custo and custo > 0 else None
+        try:
+            alvo = float(prod.get("margem_alvo"))
+        except (TypeError, ValueError):
+            alvo = None
+        out["margem_alvo"] = alvo if alvo is not None and 0 <= alvo < 0.9 else None
+    return out
+
+
 # ---------------------------------------------------------------------------
 # V20.24: Conferir no ML e Publicar - a UNICA escrita no Mercado Livre da plataforma de anuncios.
 # Maquina do rascunho: rascunho/erro -(validar)-> validado -(publicar)-> publicando -> publicado | erro | incerto.
@@ -38989,8 +39010,13 @@ class AppHandler(BaseHTTPRequestHandler):
                         res = {"ok": True, "categorias": ml_categoria_sugerir(_q("titulo"), conta)}
                     elif path.endswith("/atributos"):
                         res = {"ok": True, **ml_categoria_atributos(_q("categoria"), conta)}
+                        if _q("codigo"):  # V20.24: o que a ficha preenche (a tela marca "da ficha")
+                            ficha_a = ficha_ler(_q("codigo"))
+                            res["da_ficha"] = anuncio_atributos_da_ficha(ficha_a, res["atributos"]) if ficha_a else {}
                     else:
                         res = {"ok": True, **ml_tarifa_nova(_q("preco"), _q("tipo"), _q("categoria"), conta)}
+                        if _q("codigo"):  # V20.24: custo e margem-alvo para a conta e o "usar o ideal"
+                            res.update(anuncio_custo_para_preco(_q("codigo")))
                 except ValueError as exc:
                     self.send_json({"ok": False, "error": str(exc)}, 400)
                     return

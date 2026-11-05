@@ -241,6 +241,56 @@ class RotasAnunciosTeste(TesteNoromak):
         self.assertIn("mud.forEach(c => { campos[c]", html)
         self.assertIn("corpo.versao = F.ficha.versao", html)
 
+    def test_tela_tem_criar_anuncio(self):
+        """V20.24: a tela cria o anuncio em 7 passos, na ordem do dono, e usa as rotas da fase 2."""
+        html = (RAIZ / "APP" / "anuncios.html").read_text(encoding="utf-8")
+        passos = ["Conta e título", "Categoria", "Obrigatórios da categoria", "Fotos do anúncio",
+                  "Preço, tipo, envio, garantia e quantidade", "Conferir no ML", "Publicar"]
+        inicio = html.find("const PASSOS = [")
+        self.assertGreater(inicio, 0)
+        posicoes = [html.find('"' + p + '"', inicio) for p in passos]
+        self.assertTrue(all(i > 0 for i in posicoes), dict(zip(passos, posicoes)))
+        self.assertEqual(posicoes, sorted(posicoes), "os passos fora da ordem do dono")
+        for rota in ("/api/anuncios/ml/categorias", "/api/anuncios/ml/atributos", "/api/anuncios/ml/tarifa",
+                     "/api/anuncios/rascunho", "/api/anuncios/rascunhos", "/rascunho/validar", "/rascunho/publicar",
+                     "/rascunho/liberar", "/api/anuncios/foto", "/foto/remover", "/foto/ordenar", "/api/anuncios/estudio"):
+            self.assertIn(rota, html, rota)
+        # o Publicar nao e repetido sozinho: erro de rede/504 rele o rascunho; incerto pergunta o MLB
+        self.assertIn("relerRascunhoDepoisDoPublicar", html)
+        self.assertIn("Achei, é o MLB", html)
+        self.assertIn("Não foi criado", html)
+        self.assertIn("versao: CR.r.versao", html)  # cada passo grava com a versao do rascunho
+
+    def test_tarifa_e_atributos_com_a_ficha(self):
+        """V20.24: com `codigo`, a tarifa traz custo/imposto/margem-alvo e os atributos o que a ficha preenche."""
+        S.ficha_salvar("P9", {"nome": "Peca nove", "marca": "Wurth", "peso_g": 450}, "luis", None)
+        atributos = [{"id": "BRAND", "name": "Marca", "tags": {"required": True}}]
+
+        def ml_falso(caminho, **kw):
+            if "listing_prices" in caminho:
+                return {"sale_fee_amount": 14, "sale_fee_details": {"percentage_fee": 14, "fixed_fee": 0}}
+            if caminho.endswith("/attributes"):
+                return atributos
+            return {"id": "MLB77", "name": "Pecas", "path_from_root": [{"name": "Pecas"}]}
+
+        prod = {"custo": 40.0, "margem_alvo": 0.2}
+        with mock.patch.object(S, "ml_casas_conectadas", return_value=["aracatuba"]),                 mock.patch.object(S, "ml_api_get", ml_falso),                 mock.patch.object(S, "_promo_produtos", return_value={}),                 mock.patch.object(S, "_promo_produto", return_value=prod):
+            st, c = self.cliente.pedir("GET", "/api/anuncios/ml/tarifa?preco=100&tipo=gold_special&categoria=MLB77"
+                                              "&conta=aracatuba&codigo=p9")
+            self.assertEqual(st, 200, c)
+            self.assertEqual((c["custo"], c["margem_alvo"], c["imposto"]), (40.0, 0.2, 0.12))
+            prod["custo"] = 0
+            st, c = self.cliente.pedir("GET", "/api/anuncios/ml/tarifa?preco=100&tipo=gold_special&categoria=MLB77"
+                                              "&conta=aracatuba&codigo=P9")
+            self.assertIsNone(c["custo"])  # custo zero = desconhecido, nunca zero
+            st, c = self.cliente.pedir("GET", "/api/anuncios/ml/atributos?categoria=MLB77&conta=aracatuba&codigo=P9")
+            self.assertEqual(st, 200, c)
+            self.assertEqual(c["da_ficha"]["BRAND"], "Wurth")
+            self.assertEqual(c["da_ficha"]["SELLER_PACKAGE_WEIGHT"], "450 g")
+            st, c = self.cliente.pedir("GET", "/api/anuncios/ml/tarifa?preco=100&tipo=gold_special&categoria=MLB77"
+                                              "&conta=aracatuba")
+            self.assertNotIn("custo", c)
+
     def test_kit_sem_ficha_abre_pela_composicao(self):
         """V20.23: o "Abrir" de um kit do cadastro (ou KITn-X) sem ficha nem anuncio abre a composicao, nao 404;
         e uma ficha gravada como peca para um codigo de kit continua mostrando a composicao."""

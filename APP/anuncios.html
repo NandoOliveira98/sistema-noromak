@@ -10,7 +10,10 @@
      Ver = módulo admin; gravar = só perfil Admin (Supervisor e Consulta não veem os botões de gravar).
      Nada desta tela grava no ML, Shopee, Magalu, TikTok nem no Apollo: só a ficha, o Cadastro de Kits e quem controla.
      Salvar a ficha manda só o campo que mudou + a versão (409 = outra pessoa alterou: o digitado fica).
-     GET /api/anuncios, GET /api/anuncios/ficha, POST /api/anuncios/{ficha,kit,puxar,controle,remover,reincluir}. -->
+     GET /api/anuncios, GET /api/anuncios/ficha, POST /api/anuncios/{ficha,kit,puxar,controle,remover,reincluir}.
+     V20.24: aba Fotos (computador e Estúdio de Imagens) e "Criar anúncio" no ML em 7 passos, na ordem do dono; cada
+     passo grava o rascunho (com a versão) e só libera o seguinte. A ÚNICA escrita no ML é o "Publicar" (perfil Admin):
+     erro de rede/504 no Publicar NUNCA repete — a tela relê o rascunho; "incerto" pede para conferir no ML. -->
 <script defer src="/expedicao/web-auth.js?v=20.17"></script>
 <link rel="stylesheet" href="/expedicao/theme.css?v=20.17">
 <link rel="stylesheet" href="/expedicao/nk-ui.css?v=19.13">
@@ -61,6 +64,37 @@ tr.clica{cursor:pointer}
 .embreve td{color:var(--nk-ink3)}
 details.rem summary{cursor:pointer;font-weight:700;font-size:13px;color:var(--nk-head)}
 details.rem[open] summary{margin-bottom:10px}
+/* V20.24: fotos da ficha e criar anúncio */
+.fotos{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:12px}
+.foto{margin:0;border:1px solid var(--nk-line);border-radius:10px;padding:8px;background:var(--nk-canvas);display:grid;gap:6px;align-content:start}
+.foto img,.fsel img,.est-imgs img{width:100%;aspect-ratio:1;object-fit:contain;background:#fff;border-radius:6px;display:block}
+.foto[draggable=true]{cursor:grab}
+.foto.alvo{border-color:var(--nk-pri);box-shadow:0 0 0 3px var(--nk-foco)}
+.foto figcaption{display:grid;gap:6px;font-size:12px}
+.passo{border:1px solid var(--nk-line);border-radius:12px;padding:12px 14px;margin-top:10px;background:var(--nk-tile)}
+.passo h3{margin:0 0 10px;font-size:14px;display:flex;gap:8px;align-items:center;color:var(--nk-head)}
+.passo .num{width:22px;height:22px;border-radius:50%;display:inline-grid;place-items:center;font-size:12px;background:var(--nk-canvas);border:1px solid var(--nk-line);flex:none}
+.passo.feito .num{background:var(--nk-ok);color:#fff;border-color:var(--nk-ok)}
+.passo.travado{opacity:.55}
+.passo.travado h3{color:var(--nk-ink2);margin-bottom:4px}
+.passo h4{margin:12px 0 6px;font-size:13px;color:var(--nk-head)}
+.passo select,.passo input:not([type=checkbox]),.passo textarea{font:inherit;font-size:13px}
+.cats{display:grid;gap:6px;margin-top:8px}
+.cat-op{text-align:left;font:inherit;font-size:13px;border:1px solid var(--nk-line);background:var(--nk-tile);color:var(--nk-ink);border-radius:8px;padding:8px 10px;cursor:pointer}
+.cat-op:hover{border-color:var(--nk-pri)}
+.cat-op.on{border-color:var(--nk-pri);box-shadow:0 0 0 3px var(--nk-foco)}
+.fotos-cr{display:flex;flex-wrap:wrap;gap:10px}
+.fsel{width:124px;border:1px solid var(--nk-line);border-radius:8px;padding:6px;font-size:12px;display:grid;gap:4px;opacity:.55}
+.fsel.on{opacity:1;border-color:var(--nk-pri)}
+.fsel label{cursor:pointer;display:grid;gap:4px}
+.erros{margin:6px 0 0;padding-left:18px;font-size:13px}
+.erros li{margin:3px 0}
+tr.atual td{background:var(--nk-warn-bg)}
+.nk-dialogo.estudio{width:min(780px,100%)}
+.est-lista{display:grid;gap:12px;margin-top:10px;max-height:55vh;overflow:auto}
+.est-imgs{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px}
+.est-imgs button{border:1px solid var(--nk-line);border-radius:8px;padding:4px;background:var(--nk-tile);cursor:pointer;width:112px;font:inherit;font-size:11px;color:var(--nk-ink2)}
+.est-imgs button.feito{border-color:var(--nk-ok)}
 @media (max-width:900px){.lay{grid-template-columns:1fr}.indice{position:static}.g4{grid-template-columns:1fr 1fr}.conta{grid-template-columns:1fr}}
 </style>
 </head>
@@ -133,7 +167,7 @@ function irPara(params) {
 function rota() {
   const cod = codigoDaUrl();
   const aba = new URLSearchParams(location.search).get("aba");
-  if (cod) { ABA = ["ficha", "kits", "anuncios"].includes(aba) ? aba : "ficha"; abrirFicha(cod); }
+  if (cod) { ABA = ["ficha", "kits", "fotos", "anuncios"].includes(aba) ? aba : "ficha"; abrirFicha(cod); }
   else { F = null; KIT = null; desenharLista(); carregarLista(); }
 }
 window.addEventListener("popstate", async () => {
@@ -146,7 +180,7 @@ window.addEventListener("popstate", async () => {
   }
   rota();
 });
-window.addEventListener("beforeunload", e => { if (fichaSuja() || kitSujo()) { e.preventDefault(); e.returnValue = ""; } });
+window.addEventListener("beforeunload", e => { if (fichaSuja() || kitSujo() || crMudados().length) { e.preventDefault(); e.returnValue = ""; } });
 
 // ---------------------------------------------------------------- lista
 function acoesLista() {
@@ -258,7 +292,7 @@ function voltarLista() {
   irPara({});
 }
 async function abrirFicha(cod, opcoes = {}) {
-  if (!opcoes.manter) { FORM = {}; BASE = {}; CONFLITO = {}; KIT = null; }
+  if (!opcoes.manter) { FORM = {}; BASE = {}; CONFLITO = {}; KIT = null; CR = null; RASC = {codigo: null, lista: null, erro: ""}; }
   $("rotulo").textContent = "Vendas e anúncios · Anúncios";
   $("titulo").textContent = cod;
   $("sub").textContent = "Carregando…";
@@ -338,6 +372,7 @@ function desenharFicha() {
     <div class="abas" role="tablist">
       <button type="button" class="${ABA === "ficha" ? "on" : ""}" onclick="trocarAba('ficha')">Ficha do produto</button>
       <button type="button" class="${ABA === "kits" ? "on" : ""}" onclick="trocarAba('kits')">Kits${F.tipo === "kit" ? "" : ` (${(F.kits_da_peca || []).length})`}</button>
+      <button type="button" class="${ABA === "fotos" ? "on" : ""}" onclick="trocarAba('fotos')">Fotos (${(F.fotos || []).length})</button>
       <button type="button" class="${ABA === "anuncios" ? "on" : ""}" onclick="trocarAba('anuncios')">Anúncios em todos os canais (${ativos.length})</button>
     </div>
     <div id="conteudo"></div>`;
@@ -356,6 +391,7 @@ function recarregar(apollo) {
 function desenharAba() {
   if (ABA === "kits") desenharKits();
   else if (ABA === "anuncios") desenharAnuncios();
+  else if (ABA === "fotos") desenharFotos();
   else desenharCampos();
 }
 
@@ -669,7 +705,10 @@ function desenharAnuncios() {
           <td>${quando(a.removido_em)}</td><td>${esc(a.removido_por)}</td>
           <td>${PODE ? `<button class="nk-btn mini" ${dadosAnuncio(a)} onclick="reincluirAnuncio(this.dataset)">Reincluir</button>` : ""}</td></tr>`).join("")}
         </tbody></table></div></details>` : ""}
-    </section>`;
+    </section>
+    <section class="nk-painel" id="secRasc"></section>`;
+  desenharRascunhos();  // V20.24
+  carregarRascunhos();
 }
 async function passarNoromak({canal, conta, id}) {
   const ok = await nkConfirmar(`Você já desativou este anúncio na Alephee?\nO ${id} passa a ser controlado pelo Noromak. Se a Alephee continuar ligada nele, as duas vão mexer no mesmo estoque.`, {ok: "Já desativei", cancelar: "Ainda não", perigo: false});
@@ -690,6 +729,730 @@ async function removerAnuncio({canal, conta, id}) {
 async function reincluirAnuncio({canal, conta, id}) {
   try { await api("/api/anuncios/reincluir", {canal, conta, anuncio_id: id}); nkToast("Anúncio reincluído.", "ok"); recarregar(); }
   catch (e) { nkToast(e.message, "erro"); }
+}
+
+// ---------------------------------------------------------------- V20.24: fotos da ficha
+const enc = encodeURIComponent;
+const tamanho = b => b == null ? "—" : b >= 1048576 ? (b / 1048576).toFixed(1).replace(".", ",") + " MB" : Math.max(1, Math.round(b / 1024)) + " KB";
+const urlFoto = id => `/expedicao/api/anuncios/foto?id=${enc(id)}`;
+let ARRASTO = null;
+function desenharFotos() {
+  const fotos = F.fotos || [];
+  $("conteudo").innerHTML = `
+    <section class="nk-painel">
+      <div class="nk-painel-tit"><div><h2>Fotos do produto</h2><p>A 1ª é a principal. JPG, PNG ou WEBP, até 10 MB, com o menor lado de 500 px ou mais; até 12 fotos. ${PODE ? "Arraste (ou use as setas) para mudar a ordem." : ""}</p></div>
+        ${PODE ? `<div class="selos"><label class="nk-btn mini pri">Enviar do computador<input type="file" id="fotoArq" accept="image/jpeg,image/png,image/webp" multiple hidden onchange="enviarFotos(this.files)"></label>
+          <button type="button" class="nk-btn mini" onclick="abrirEstudio()">Do Estúdio de Imagens</button></div>` : ""}</div>
+      <p class="muted" id="fotoAndamento"></p>
+      <div class="fotos">${fotos.map((f, i) => cartaoFoto(f, i, fotos.length)).join("") || '<div class="vazio">Nenhuma foto ainda.</div>'}</div>
+    </section>`;
+}
+function cartaoFoto(f, i, n) {
+  const id = Number(f.id);
+  const arrastar = PODE ? `draggable="true" ondragstart="ARRASTO=${id}" ondragover="event.preventDefault();this.classList.add('alvo')" ondragleave="this.classList.remove('alvo')" ondrop="event.preventDefault();soltarFoto(${id})"` : "";
+  return `<figure class="foto" ${arrastar}>
+    <img src="${urlFoto(id)}" alt="Foto ${i + 1}" loading="lazy">
+    <figcaption><div>${i === 0 ? '<span class="nk-selo ok">Principal</span>' : `<b>${i + 1}ª</b>`} <span class="muted">${esc(f.largura)}×${esc(f.altura)} px · ${tamanho(f.bytes)}${f.origem === "estudio" ? " · Estúdio" : ""}</span></div>
+    ${PODE ? `<div class="selos"><button type="button" class="nk-btn mini" ${i === 0 ? "disabled" : ""} onclick="moverFoto(${i},-1)" aria-label="Mover para a esquerda">←</button><button type="button" class="nk-btn mini" ${i === n - 1 ? "disabled" : ""} onclick="moverFoto(${i},1)" aria-label="Mover para a direita">→</button><button type="button" class="nk-btn mini perigo" onclick="removerFoto(${id})">Remover</button></div>` : ""}</figcaption></figure>`;
+}
+async function relerFotos() {
+  try { const d = await api(`/api/anuncios/ficha?codigo=${enc(F.codigo)}`); F.fotos = d.fotos || []; } catch (_) {}
+}
+function fotosMudaram() { if (ABA === "fotos" || ABA === "anuncios") desenharFicha(); }
+async function gravarOrdemFotos(ids) {
+  try { const r = await api("/api/anuncios/foto/ordenar", {codigo: F.codigo, ids}); F.fotos = r.fotos || []; }
+  catch (e) { nkToast(e.message, "erro"); await relerFotos(); }
+  fotosMudaram();
+}
+function moverFoto(i, d) {
+  const ids = (F.fotos || []).map(f => f.id), j = i + d;
+  if (j < 0 || j >= ids.length) return;
+  [ids[i], ids[j]] = [ids[j], ids[i]];
+  gravarOrdemFotos(ids);
+}
+function soltarFoto(alvo) {
+  const de = ARRASTO; ARRASTO = null;
+  if (de == null || de === alvo) { fotosMudaram(); return; }
+  const orig = (F.fotos || []).map(f => f.id);
+  const ids = orig.filter(x => x !== de);
+  const k = ids.indexOf(alvo);
+  if (k < 0) return;
+  ids.splice(orig.indexOf(de) < orig.indexOf(alvo) ? k + 1 : k, 0, de);
+  gravarOrdemFotos(ids);
+}
+async function removerFoto(id) {
+  if (!await nkConfirmar("Remover esta foto da ficha?\nO arquivo é apagado. Rascunho de anúncio que usava a foto pede para escolher as fotos de novo.", {ok: "Remover", perigo: true})) return;
+  try { const r = await api("/api/anuncios/foto/remover", {codigo: F.codigo, id}); F.fotos = r.fotos || []; nkToast("Foto removida.", "ok"); }
+  catch (e) { nkToast(e.message, "erro"); await relerFotos(); }
+  fotosMudaram();
+}
+async function enviarFotos(lista) {
+  const arqs = [...(lista || [])];
+  const inp = $("fotoArq"); if (inp) inp.value = "";
+  let ok = 0;
+  for (const [k, a] of arqs.entries()) {
+    const and = $("fotoAndamento"); if (and) and.textContent = `Enviando ${k + 1} de ${arqs.length}: ${a.name}…`;
+    if (a.size > 10 * 1024 * 1024) { nkToast(`${a.name}: passa de 10 MB.`, "erro", {duracao: 9000}); continue; }
+    try {
+      const b64 = await new Promise((res, rej) => {
+        const fr = new FileReader();
+        fr.onload = () => res(String(fr.result || "").split(",")[1] || "");
+        fr.onerror = () => rej(new Error("não consegui ler o arquivo"));
+        fr.readAsDataURL(a);
+      });
+      const r = await api("/api/anuncios/foto", {codigo: F.codigo, base64: b64});  // um POST por arquivo
+      F.fotos = r.fotos || []; ok++;
+    } catch (e) { nkToast(`${a.name}: ${e.message}`, "erro", {duracao: 9000}); }
+  }
+  if (ok) nkToast(`${ok} foto(s) enviada(s).`, "ok");
+  fotosMudaram();
+}
+// Janela do Estúdio de Imagens: trabalhos prontos; clicar numa imagem traz o arquivo para a ficha (o servidor copia).
+async function abrirEstudio() {
+  const fundo = document.createElement("div");
+  fundo.className = "nk-dialogo-fundo";
+  fundo.innerHTML = `<div class="nk-dialogo estudio" role="dialog" aria-modal="true" aria-labelledby="estTit">
+    <h2 id="estTit">Fotos do Estúdio de Imagens</h2>
+    <div class="nk-dialogo-txt">Trabalhos prontos (os 50 mais recentes). Clique numa imagem para trazê-la para a ficha de ${esc(F.codigo)}.</div>
+    <input class="nk-dialogo-campo" type="search" placeholder="Buscar pelo SKU ou nº do trabalho" aria-label="Buscar no Estúdio">
+    <div class="est-lista"><div class="vazio">Carregando…</div></div>
+    <div class="nk-dialogo-acoes"><button type="button" class="nk-btn" data-fechar>Fechar</button></div></div>`;
+  const lista = fundo.querySelector(".est-lista"), busca = fundo.querySelector("input");
+  let trouxe = 0, timer = null;
+  const fechar = () => { document.removeEventListener("keydown", teclas, true); fundo.remove(); if (trouxe) fotosMudaram(); };
+  const teclas = e => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); fechar(); } };
+  const carregar = async () => {
+    lista.innerHTML = '<div class="vazio">Carregando…</div>';
+    try {
+      const d = await api(`/api/anuncios/estudio?busca=${enc(busca.value.trim())}`);
+      const trab = (d.trabalhos || []).map(t => ({...t, resultados: (t.resultados || []).filter(x => /\.(jpe?g|png|webp)$/i.test(x.nome))}))
+        .filter(t => t.resultados.length);
+      lista.innerHTML = trab.map(t => `<div><b>Trabalho ${esc(t.id)}</b> <span class="muted">${esc(t.sku || "sem SKU")} · ${esc(t.tipo)} · ${quando(t.criado_em)}</span>
+        <div class="est-imgs">${t.resultados.map(x => `<button type="button" data-id="${esc(t.id)}" data-nome="${esc(x.nome)}" title="${esc(x.nome)}">
+          <img src="/expedicao/api/imagens/arquivo?id=${enc(t.id)}&nome=${enc(x.nome)}&ver=1" alt="" loading="lazy">${esc(x.papel || x.nome)}</button>`).join("")}</div></div>`).join("")
+        || '<div class="vazio">Nenhum trabalho pronto encontrado.</div>';
+    } catch (e) { lista.innerHTML = `<div class="nk-aviso bad">${esc(e.message)}</div>`; }
+  };
+  lista.addEventListener("click", async e => {
+    const b = e.target.closest("button[data-id]");
+    if (!b || b.disabled) return;
+    b.disabled = true;
+    try {
+      const r = await api("/api/anuncios/foto", {codigo: F.codigo, estudio_id: Number(b.dataset.id), nome: b.dataset.nome});
+      F.fotos = r.fotos || []; trouxe++;
+      b.classList.add("feito"); b.title = "Trazida para a ficha";
+      nkToast("Foto trazida do Estúdio.", "ok");
+    } catch (err) { b.disabled = false; nkToast(err.message, "erro", {duracao: 9000}); }
+  });
+  busca.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(carregar, 350); });
+  fundo.addEventListener("click", e => { if (e.target === fundo || e.target.closest("[data-fechar]")) fechar(); });
+  document.addEventListener("keydown", teclas, true);
+  document.body.append(fundo);
+  busca.focus();
+  carregar();
+}
+
+// ---------------------------------------------------------------- V20.24: criar anúncio no ML (rascunho em passos)
+// Ordem do dono: cada passo só libera o seguinte. Cada "Salvar" grava o rascunho com a versão (409 = outra pessoa
+// alterou: o digitado fica na tela). Nada vai ao ML até o "Publicar" (o "Conferir" usa o /items/validate, que não cria).
+const PASSOS = ["Conta e título", "Categoria", "Obrigatórios da categoria", "Fotos do anúncio",
+  "Preço, tipo, envio, garantia e quantidade", "Conferir no ML", "Publicar"];
+const SIT = {rascunho: ["Rascunho", ""], validado: ["Conferido no ML", "info"], publicando: ["Publicando…", "warn"],
+  publicado: ["Publicado", "ok"], erro: ["Recusado pelo ML", "bad"], incerto: ["Confira no ML", "bad"]};
+const EDITAVEL = ["rascunho", "validado", "erro"];
+const TIPOS_CRIAR = [["gold_special", "Clássico"], ["gold_pro", "Premium"]];
+let RASC = {codigo: null, lista: null, erro: ""};  // rascunhos da ficha aberta
+let CR = null;  // painel de criar: {r (gravado), f (digitado), cats, defs, daFicha, tarifa, dpm, ...}
+let tarifaTimer = null;
+// "1.234,56" / "1234,56" / "1234.56" -> número; vazio -> null
+const numBr = v => { let t = String(v ?? "").trim(); if (t === "") return null; if (t.includes(",")) t = t.replace(/\./g, "").replace(",", "."); return Number(t); };
+const pct = v => v == null ? "—" : (v * 100).toLocaleString("pt-BR", {maximumFractionDigits: 2}) + "%";
+const linkMlb = mlb => /^MLB\d+$/i.test(String(mlb || "")) ? `<a class="mono" href="https://produto.mercadolivre.com.br/MLB-${esc(String(mlb).slice(3))}" target="_blank" rel="noopener">${esc(mlb)}</a>` : esc(mlb || "");
+
+async function carregarRascunhos(forcar) {
+  if (!F || F.naoExiste) { RASC = {codigo: F ? F.codigo : null, lista: [], erro: ""}; desenharRascunhos(); return; }
+  const cod = F.codigo;
+  if (!forcar && RASC.codigo === cod && RASC.lista) return;
+  try {
+    const d = await api(`/api/anuncios/rascunhos?codigo=${enc(cod)}`);
+    if (!F || F.codigo !== cod) return;
+    RASC = {codigo: cod, lista: d.rascunhos || [], erro: ""};
+  } catch (e) { if (!F || F.codigo !== cod) return; RASC = {codigo: cod, lista: null, erro: e.message}; }
+  if (ABA === "anuncios") desenharRascunhos();
+}
+function atualizarRascNaLista(r) {
+  if (!r || !r.id || !RASC.lista) return;
+  const i = RASC.lista.findIndex(x => x.id === r.id);
+  if (i >= 0) RASC.lista[i] = r; else RASC.lista.unshift(r);
+}
+function desenharRascunhos() {
+  const el = $("secRasc"); if (!el) return;
+  const lista = RASC.lista;
+  const linha = r => {
+    const s = SIT[r.situacao] || [r.situacao, ""];
+    return `<tr${CR && CR.r && CR.r.id === r.id ? ' class="atual"' : ""}><td>${esc(CONTA[r.conta] || r.conta)}</td>
+      <td>${r.titulo ? esc(r.titulo) : '<span class="muted">sem título</span>'}</td><td class="n">${brl(r.preco)}</td><td class="n">${esc(r.quantidade ?? "—")}</td>
+      <td><span class="nk-selo ${s[1]}">${esc(s[0])}</span> ${r.mlb ? linkMlb(r.mlb) : ""}</td>
+      <td>${quando(r.atualizado_em)}${r.atualizado_por ? " · " + esc(r.atualizado_por) : ""}</td>
+      <td>${PODE ? `<button type="button" class="nk-btn mini" onclick="abrirRascunho(${Number(r.id)})">${EDITAVEL.includes(r.situacao) ? "Continuar" : "Ver"}</button>` : ""}</td></tr>`;
+  };
+  el.innerHTML = `
+    <div class="nk-painel-tit"><div><h2>Criar anúncio no Mercado Livre</h2><p>Cada tentativa fica guardada como rascunho. Só o “Publicar” cria o anúncio no ML.</p></div>
+      ${PODE && !F.naoExiste ? `<button type="button" class="nk-btn mini pri" onclick="criarAnuncio()">+ Criar anúncio</button>` : ""}</div>
+    ${F.naoExiste ? '<div class="nk-aviso info">Salve a ficha do produto antes de criar um anúncio.</div>' : ""}
+    ${RASC.erro ? `<div class="nk-aviso bad">${esc(RASC.erro)}</div>` : ""}
+    ${lista == null ? (RASC.erro ? "" : '<div class="vazio">Carregando…</div>') : lista.length ? `<div class="tw"><table class="nk-tab"><thead><tr>
+      <th>Conta</th><th>Título</th><th class="n">Preço</th><th class="n">Qtd.</th><th>Situação</th><th>Atualizado</th><th></th></tr></thead>
+      <tbody>${lista.map(linha).join("")}</tbody></table></div>` : (F.naoExiste ? "" : '<p class="muted">Nenhum rascunho ainda.</p>')}
+    <div id="painelCriar"></div>`;
+  desenharCriar();
+}
+function formDoRascunho(r) {
+  const at = {...(r.atributos || {})}; delete at._guardados;
+  return {conta: r.conta, titulo: r.titulo || "", atributos: at, fotos: [...(r.fotos || [])],
+    preco: r.preco == null ? "" : String(r.preco).replace(".", ","), tipo_anuncio: r.tipo_anuncio || "gold_special",
+    frete_gratis: r.frete_gratis ? "1" : "0", garantia: r.garantia || "",
+    quantidade: r.quantidade == null ? "" : String(r.quantidade), descricao: r.descricao || ""};
+}
+function novoCR(r) {
+  const campos = (F.ficha && F.ficha.campos) || {};
+  const f = r ? formDoRascunho(r) : {conta: "aracatuba", titulo: String(campos.nome || "").replace(/\s+/g, " ").trim().slice(0, 60),
+    atributos: {}, fotos: [], preco: "", tipo_anuncio: "gold_special", frete_gratis: "0", garantia: "", quantidade: "",
+    descricao: String(campos.descricao || "")};
+  if (!f.fotos.length) f.fotos = (F.fotos || []).map(x => x.id).slice(0, 12);  // padrão: as fotos da ficha, na ordem dela
+  return {r: r || null, f, cats: null, defs: null, defsCat: "", daFicha: {}, caminho: [], tarifa: null, dpm: undefined,
+    ocupado: "", conflito: false, aviso: "", sugerir: false};
+}
+async function criarAnuncio() {
+  if (CR && crMudados().length && !await nkConfirmar("Deixar de lado o que foi digitado no rascunho aberto?", {ok: "Deixar de lado", perigo: true})) return;
+  CR = novoCR(null);
+  desenharRascunhos();
+  const p = $("painelCriar"); if (p) p.scrollIntoView({behavior: "smooth", block: "start"});
+}
+async function abrirRascunho(id) {
+  const r = (RASC.lista || []).find(x => x.id === id);
+  if (!r) return;
+  if (!(CR && CR.r && CR.r.id === id)) {
+    if (CR && crMudados().length && !await nkConfirmar("Deixar de lado o que foi digitado no rascunho aberto?", {ok: "Deixar de lado", perigo: true})) return;
+    CR = novoCR(r);
+    desenharRascunhos();
+  }
+  const p = $("painelCriar"); if (p) p.scrollIntoView({behavior: "smooth", block: "start"});
+}
+async function fecharCriar() {
+  if (crMudados().length && !await nkConfirmar("Fechar sem salvar o que foi digitado?", {ok: "Fechar sem salvar", perigo: true})) return;
+  CR = null;
+  desenharRascunhos();
+}
+function crEditavel() { return !!CR && (!CR.r || EDITAVEL.includes(CR.r.situacao)); }
+function obrigFaltando(atributos) {
+  return (CR.defs || []).filter(a => a.obrigatorio && !String((atributos || {})[a.id] ?? "").trim());
+}
+// passo i concluído = o que está GRAVADO no rascunho (o digitado e não salvo não conta)
+function crFeito(i) {
+  const r = CR && CR.r;
+  if (!r) return false;
+  if (!EDITAVEL.includes(r.situacao)) return i < 6 || r.situacao === "publicado";
+  if (i === 0) return !!String(r.titulo || "").trim();
+  if (i === 1) return crFeito(0) && !!r.categoria;
+  if (i === 2) return crFeito(1) && CR.defsCat === r.categoria && !!CR.defs && !obrigFaltando(r.atributos).length;
+  if (i === 3) return crFeito(2) && (r.fotos || []).length > 0;
+  if (i === 4) return crFeito(3) && Number(r.preco) > 0 && Number(r.quantidade) >= 1;
+  if (i === 5) return crFeito(4) && r.situacao === "validado";
+  return false;
+}
+// passos com alteração digitada e ainda não salva
+function crMudados() {
+  if (!CR || !PODE) return [];
+  const f = CR.f;
+  if (!CR.r) return f.titulo.trim() ? [0] : [];
+  if (!crEditavel()) return [];
+  const g = formDoRascunho(CR.r), out = [];
+  const at = o => JSON.stringify(Object.entries(o || {}).filter(([k, v]) => k !== "_guardados" && String(v ?? "").trim()).map(([k, v]) => [k, String(v).trim()]).sort());
+  if (f.titulo.replace(/\s+/g, " ").trim() !== g.titulo) out.push(0);
+  if (CR.r.categoria && CR.defsCat === CR.r.categoria && at(f.atributos) !== at(g.atributos)) out.push(2);
+  const fotosOk = f.fotos.filter(id => (F.fotos || []).some(x => x.id === id));
+  if (crFeito(2) && JSON.stringify(fotosOk) !== JSON.stringify(CR.r.fotos || [])) out.push(3);
+  if (crFeito(3) && (numBr(f.preco) !== (CR.r.preco ?? null) || numBr(f.quantidade) !== (CR.r.quantidade ?? null)
+    || f.tipo_anuncio !== g.tipo_anuncio || f.frete_gratis !== g.frete_gratis || f.garantia.trim() !== g.garantia
+    || f.descricao.trim() !== g.descricao)) out.push(4);
+  return out;
+}
+async function salvarRascunho(campos, rotulo) {
+  if (CR.ocupado) return null;
+  const cr = CR;
+  // V20.24: rascunho novo leva código + conta; o existente leva id + a versão que a tela leu (409 = alterado por outro)
+  const corpo = cr.r ? {id: cr.r.id, versao: CR.r.versao, ...campos} : {codigo: F.codigo, conta: cr.f.conta, ...campos};
+  cr.ocupado = rotulo || "Salvando…"; cr.conflito = false; cr.aviso = "";
+  desenharCriar();
+  try {
+    const d = await api("/api/anuncios/rascunho", corpo);
+    cr.ocupado = "";
+    if (CR !== cr) return null;
+    cr.r = d.rascunho;
+    atualizarRascNaLista(d.rascunho);
+    if (RASC.lista == null) carregarRascunhos(true);
+    desenharRascunhos();
+    return d.rascunho;
+  } catch (e) {
+    cr.ocupado = "";
+    if (CR !== cr) return null;
+    if (e.status === 409 && e.dados && e.dados.atual && e.dados.atual.id) {
+      // o digitado fica; campo que a pessoa não mexeu acompanha o gravado agora. A próxima gravação vai com a versão nova.
+      const antes = formDoRascunho(cr.r), agora = formDoRascunho(e.dados.atual);
+      Object.keys(agora).forEach(k => { if (k !== "fotos" && JSON.stringify(cr.f[k]) === JSON.stringify(antes[k])) cr.f[k] = agora[k]; });
+      if (JSON.stringify(cr.f.fotos) === JSON.stringify(antes.fotos) && agora.fotos.length) cr.f.fotos = agora.fotos;
+      cr.r = e.dados.atual; cr.conflito = true;
+      atualizarRascNaLista(cr.r);
+      nkToast("Outra pessoa alterou este rascunho. O que você digitou ficou na tela: confira e salve de novo.", "aviso", {duracao: 10000});
+      desenharRascunhos();
+    } else { nkToast(e.message, "erro", {duracao: 10000}); desenharCriar(); }
+    return null;
+  }
+}
+function usarGravadoCr() {
+  const f = formDoRascunho(CR.r);
+  if (!f.fotos.length) f.fotos = (F.fotos || []).map(x => x.id).slice(0, 12);
+  CR.f = f; CR.conflito = false; CR.defs = null; CR.defsCat = "";
+  desenharCriar();
+}
+
+function desenharCriar() {
+  const el = $("painelCriar"); if (!el) return;
+  if (!CR || !PODE) { el.innerHTML = ""; return; }
+  const r = CR.r, s = r ? (SIT[r.situacao] || [r.situacao, ""]) : null;
+  const mud = crMudados();
+  el.innerHTML = `<div class="bloco">
+    <div class="nk-painel-tit"><div><h2>${r ? `Rascunho nº ${esc(r.id)} · ${esc(CONTA[r.conta] || r.conta)} <span class="nk-selo ${s[1]}">${esc(s[0])}</span>` : "Novo anúncio no Mercado Livre"}</h2>
+      <p>${r ? `versão ${esc(r.versao)} · ${quando(r.atualizado_em)}${r.atualizado_por ? " por " + esc(r.atualizado_por) : ""}` : "Comece pela conta e pelo título."}${mud.length ? ` · <b>alterado e não salvo no passo ${mud.map(i => i + 1).join(", ")}</b>` : ""}</p></div>
+      <button type="button" class="nk-btn mini" onclick="fecharCriar()">Fechar</button></div>
+    ${CR.conflito ? `<div class="nk-aviso bad">Outra pessoa alterou este rascunho enquanto você digitava (agora na versão ${esc(r.versao)}). O que você digitou ficou na tela: salve de novo para gravar por cima, ou <button type="button" class="nk-btn mini" onclick="usarGravadoCr()">Usar o que está gravado</button></div>` : ""}
+    ${CR.aviso ? `<div class="nk-aviso">${esc(CR.aviso)}</div>` : ""}
+    ${CR.ocupado ? `<div class="nk-aviso info">${esc(CR.ocupado)}</div>` : ""}
+    ${PASSOS.map((_, i) => passoCr(i)).join("")}</div>`;
+}
+function passoCr(i) {
+  const liberado = i === 0 || crFeito(i - 1);
+  const corpo = liberado ? [corpoConta, corpoCategoria, corpoAtributos, corpoFotosCr, corpoPreco, corpoConferir, corpoPublicar][i]() : '<p class="muted">Conclua o passo anterior.</p>';
+  return `<section class="passo ${liberado ? "" : "travado"} ${crFeito(i) ? "feito" : ""}" id="passo${i}">
+    <h3><span class="num">${crFeito(i) ? "✓" : i + 1}</span>${esc(PASSOS[i])}</h3>${corpo}</section>`;
+}
+const btOcupado = () => CR.ocupado ? "disabled" : "";
+const roCr = () => crEditavel() ? "" : "disabled";
+
+// 1. Conta e título
+function corpoConta() {
+  const f = CR.f, ed = crEditavel();
+  return `<div class="g2">
+    <label class="nk-campo"><span>Conta do Mercado Livre${CR.r ? ' <span class="orig">não muda depois de criado o rascunho</span>' : ""}</span>
+      <select ${CR.r ? "disabled" : ""} onchange="CR.f.conta=this.value">${FILIAIS.map(([v, n]) => `<option value="${v}" ${f.conta === v ? "selected" : ""}>${n}</option>`).join("")}</select></label>
+    <label class="nk-campo inteiro"><span>Título do anúncio <span class="orig" id="crTitCont">${f.titulo.length} de 60 caracteres</span></span>
+      <input maxlength="60" value="${esc(f.titulo)}" ${roCr()} oninput="CR.f.titulo=this.value;$('crTitCont').textContent=this.value.length+' de 60 caracteres'"></label></div>
+    ${ed ? `<div class="barra"><span class="esp"></span><button type="button" class="nk-btn pri" ${btOcupado()} onclick="salvarTitulo()">${CR.r ? "Salvar título" : "Criar rascunho e continuar"}</button></div>` : ""}`;
+}
+async function salvarTitulo() {
+  const t = CR.f.titulo.replace(/\s+/g, " ").trim();
+  if (!t) { nkToast("Informe o título do anúncio.", "aviso"); return; }
+  const antes = CR.r ? CR.r.titulo : "";
+  const novo = await salvarRascunho({titulo: t}, CR.r ? "Salvando o título…" : "Criando o rascunho…");
+  if (!novo) return;
+  CR.f.titulo = novo.titulo;
+  if (novo.categoria && antes && antes !== novo.titulo) { CR.sugerir = true; desenharCriar(); }
+  if (!novo.categoria && !CR.cats) sugerirCategoria();
+}
+// 2. Categoria (sugerida pelo título)
+function corpoCategoria() {
+  const r = CR.r, ed = crEditavel();
+  const cats = CR.cats;
+  const escolhida = r.categoria ? `<p>Escolhida: <b class="mono">${esc(r.categoria)}</b> <span class="muted">${CR.defsCat === r.categoria ? esc((CR.caminho || []).join(" › ")) : ""}</span></p>` : "";
+  if (!ed) return escolhida;
+  return `${escolhida}
+    ${CR.sugerir ? `<div class="nk-aviso">O título mudou depois de escolher a categoria. <button type="button" class="nk-btn mini" ${btOcupado()} onclick="sugerirCategoria()">Sugerir de novo pelo título</button></div>` : ""}
+    <div class="barra"><button type="button" class="nk-btn" ${btOcupado()} onclick="sugerirCategoria()">Sugerir pelo título</button>
+      <span class="muted">ou</span><input class="skuin" id="crCatManual" placeholder="código MLB… da categoria" aria-label="Código da categoria">
+      <button type="button" class="nk-btn mini" ${btOcupado()} onclick="escolherCategoria($('crCatManual').value)">Usar</button></div>
+    ${cats === "lendo" ? '<p class="muted">Perguntando ao Mercado Livre…</p>' : Array.isArray(cats) ? (cats.length ? `<div class="cats">${cats.map(c => `<button type="button" class="cat-op ${c.categoria === r.categoria ? "on" : ""}" data-cat="${esc(c.categoria)}" ${btOcupado()} onclick="escolherCategoria(this.dataset.cat)">
+        <b>${esc(c.categoria_nome || c.categoria)}</b> <span class="mono muted">${esc(c.categoria)}</span>
+        <div class="muted" data-caminho="${esc(c.categoria)}">${c.caminho && c.caminho.length ? esc(c.caminho.join(" › ")) : esc(c.dominio_nome || "")}</div></button>`).join("")}</div>`
+      : '<p class="muted">O Mercado Livre não sugeriu categoria para este título. Mude o título ou digite o código.</p>') : ""}`;
+}
+async function sugerirCategoria() {
+  const cr = CR; if (!cr || !cr.r) return;
+  cr.cats = "lendo"; desenharCriar();
+  let cats = [];
+  try { const d = await api(`/api/anuncios/ml/categorias?titulo=${enc(cr.r.titulo)}&conta=${enc(cr.r.conta)}`); cats = d.categorias || []; cr.sugerir = false; }
+  catch (e) { nkToast(e.message, "erro", {duracao: 9000}); }
+  if (CR !== cr) return;
+  cr.cats = cats; desenharCriar();
+  // o caminho de cada sugestão (os atributos ficam no cache do servidor por 24 h: o da escolhida já fica pronto)
+  cats.forEach(c => api(`/api/anuncios/ml/atributos?categoria=${enc(c.categoria)}&conta=${enc(cr.r.conta)}`).then(d => {
+    c.caminho = d.caminho || [];
+    const el = document.querySelector(`[data-caminho="${CSS.escape(c.categoria)}"]`);
+    if (el && c.caminho.length) el.textContent = c.caminho.join(" › ");
+  }).catch(() => {}));
+}
+async function escolherCategoria(cat) {
+  cat = String(cat || "").trim().toUpperCase();
+  if (!/^MLB\d{1,12}$/.test(cat)) { nkToast("Código de categoria inválido (ex.: MLB1234).", "aviso"); return; }
+  if (cat === CR.r.categoria) return;
+  if (CR.r.categoria && crMudados().includes(2) && !await nkConfirmar("Trocar a categoria sem salvar os atributos digitados?\nO que já foi salvo e vale na categoria nova continua.", {ok: "Trocar", perigo: true})) return;
+  const novo = await salvarRascunho({categoria: cat}, "Gravando a categoria e lendo os atributos dela no ML…");
+  if (!novo) return;
+  CR.f.atributos = formDoRascunho(novo).atributos;  // o servidor guarda os que a categoria nova não tem
+  CR.defs = null; CR.defsCat = "";
+  desenharCriar();
+}
+// 3. Obrigatórios da categoria
+async function carregarDefs() {
+  const cr = CR;
+  if (!cr || !cr.r) return;
+  const cat = cr.r.categoria;
+  if (cr.defsLendo === cat || cr.defsCat === cat) return;
+  cr.defsLendo = cat; cr.defsErro = "";
+  try {
+    const d = await api(`/api/anuncios/ml/atributos?categoria=${enc(cat)}&conta=${enc(cr.r.conta)}&codigo=${enc(F.codigo)}`);
+    if (CR !== cr || cr.r.categoria !== cat) return;
+    cr.defs = d.atributos || []; cr.defsCat = cat; cr.caminho = d.caminho || []; cr.daFicha = d.da_ficha || {};
+    // o que a ficha tem entra só onde o rascunho está vazio (o digitado vence)
+    Object.entries(cr.daFicha).forEach(([k, v]) => { if (!String(cr.f.atributos[k] ?? "").trim()) cr.f.atributos[k] = v; });
+  } catch (e) { cr.defsErro = e.message; }
+  finally { cr.defsLendo = ""; }
+  if (CR === cr) desenharCriar();
+}
+function corpoAtributos() {
+  const r = CR.r;
+  if (CR.defsCat !== r.categoria || !CR.defs) {
+    if (CR.defsErro) return `<div class="nk-aviso bad">Não consegui ler os atributos da categoria: ${esc(CR.defsErro)} <button type="button" class="nk-btn mini" onclick="CR.defsErro='';carregarDefs()">Tentar de novo</button></div>`;
+    setTimeout(carregarDefs, 0);
+    return '<p class="muted">Lendo os atributos da categoria no Mercado Livre…</p>';
+  }
+  const defs = CR.defs, ed = crEditavel();
+  const obrig = defs.filter(a => a.obrigatorio), cond = defs.filter(a => !a.obrigatorio && a.condicional), opc = defs.filter(a => !a.obrigatorio && !a.condicional);
+  const ids = new Set(defs.map(a => a.id));
+  const extras = Object.entries(CR.f.atributos).filter(([k, v]) => !ids.has(k) && String(v ?? "").trim());
+  return `<p><b id="crObrigCont">${contObrig()}</b> <span class="muted">· o que veio da ficha está marcado “da ficha”</span></p>
+    <div class="g2">${obrig.map(campoAttr).join("") || '<p class="muted">A categoria não tem atributo obrigatório.</p>'}</div>
+    ${cond.length ? `<h4>Pedidos em alguns casos</h4><div class="g2">${cond.map(campoAttr).join("")}</div>` : ""}
+    ${opc.length ? `<details class="rem bloco" ${CR.opcAberto ? "open" : ""} ontoggle="CR.opcAberto=this.open"><summary>Opcionais (${opc.length})</summary><div class="g2">${opc.map(campoAttr).join("")}</div></details>` : ""}
+    ${extras.length ? `<p class="muted">Vão também, da ficha: ${extras.map(([k, v]) => `${esc(k)} = ${esc(v)}`).join(" · ")}</p>` : ""}
+    ${ed ? `<div class="barra"><span class="esp"></span><button type="button" class="nk-btn pri" ${btOcupado()} onclick="salvarAtributos()">Salvar e continuar</button></div>` : ""}`;
+}
+function contObrig() {
+  const obrig = (CR.defs || []).filter(a => a.obrigatorio);
+  return `${obrig.length - obrigFaltando(CR.f.atributos).length} de ${obrig.length} obrigatórios`;
+}
+function campoAttr(a) {
+  const v = String(CR.f.atributos[a.id] ?? "");
+  const dis = roCr();
+  const valores = a.valores || [];
+  let ctl;
+  if (valores.length && (a.tipo === "list" || a.tipo === "boolean")) {
+    const tem = valores.some(x => x.nome === v);
+    ctl = `<select data-at="${esc(a.id)}" ${dis} onchange="digitouAttr(this)"><option value="">— escolha —</option>${!tem && v ? `<option selected>${esc(v)}</option>` : ""}${valores.map(x => `<option ${x.nome === v ? "selected" : ""}>${esc(x.nome)}</option>`).join("")}</select>`;
+  } else {
+    const lista = valores.length ? `dl_${String(a.id).replace(/[^A-Za-z0-9_]/g, "_")}` : "";
+    const unid = (a.unidades || []).map(u => u.nome || u.id).filter(Boolean);
+    ctl = `<input data-at="${esc(a.id)}" value="${esc(v)}" ${dis} ${lista ? `list="${lista}"` : ""} ${Number(a.max) > 0 ? `maxlength="${Number(a.max)}"` : ""} placeholder="${unid.length ? "ex.: 10 " + esc(unid[0]) : ""}" oninput="digitouAttr(this)">${lista ? `<datalist id="${lista}">${valores.map(x => `<option value="${esc(x.nome)}">`).join("")}</datalist>` : ""}`;
+  }
+  const falta = a.obrigatorio && !v.trim();
+  const daFicha = v && CR.daFicha[a.id] === v;
+  return `<label class="nk-campo ${falta ? "falta" : ""}" ${a.dica ? `title="${esc(a.dica)}"` : ""}><span>${esc(a.nome)} ${falta ? '<span class="orig bad">obrigatório</span>' : ""}${daFicha ? ' <span class="orig">da ficha</span>' : ""}</span>${ctl}</label>`;
+}
+function digitouAttr(el) {
+  CR.f.atributos[el.dataset.at] = el.value;
+  const a = (CR.defs || []).find(x => x.id === el.dataset.at);
+  const lab = el.closest(".nk-campo");
+  if (lab && a && a.obrigatorio) lab.classList.toggle("falta", !el.value.trim());
+  const c = $("crObrigCont"); if (c) c.textContent = contObrig();
+}
+async function salvarAtributos() {
+  const limpos = {};
+  Object.entries(CR.f.atributos).forEach(([k, v]) => { if (k !== "_guardados" && String(v ?? "").trim()) limpos[k] = String(v).trim(); });
+  const novo = await salvarRascunho({atributos: limpos}, "Salvando os atributos…");
+  if (!novo) return;
+  const faltam = obrigFaltando(novo.atributos);
+  if (faltam.length) nkToast(`Salvo. Ainda faltam ${faltam.length} obrigatório(s): ${faltam.map(a => a.nome).join(", ")}.`, "aviso", {duracao: 9000});
+}
+// 4. Fotos do anúncio
+function corpoFotosCr() {
+  const fotos = F.fotos || [], ed = crEditavel();
+  if (!fotos.length) return `<div class="nk-aviso">A ficha ainda não tem foto. ${PODE ? `<button type="button" class="nk-btn mini" onclick="trocarAba('fotos')">Ir para a aba Fotos</button>` : ""}</div>`;
+  const porId = Object.fromEntries(fotos.map(f => [f.id, f]));
+  const sel = CR.f.fotos.filter(id => porId[id]);
+  const fora = fotos.filter(f => !sel.includes(f.id));
+  const sumiu = (CR.r.fotos || []).some(id => !porId[id]);
+  const item = (f, pos) => `<div class="fsel ${pos >= 0 ? "on" : ""}"><label><img src="${urlFoto(f.id)}" alt="" loading="lazy">
+      <span><input type="checkbox" ${pos >= 0 ? "checked" : ""} ${roCr()} onchange="marcarFotoCr(${Number(f.id)},this.checked)"> ${pos === 0 ? '<span class="nk-selo ok">Principal</span>' : pos > 0 ? `${pos + 1}ª` : '<span class="muted">não vai</span>'}</span></label>
+      ${pos >= 0 && ed ? `<div class="selos"><button type="button" class="nk-btn mini" ${pos === 0 ? "disabled" : ""} onclick="moverFotoCr(${pos},-1)" aria-label="Antes">←</button><button type="button" class="nk-btn mini" ${pos === sel.length - 1 ? "disabled" : ""} onclick="moverFotoCr(${pos},1)" aria-label="Depois">→</button></div>` : ""}</div>`;
+  return `<p class="muted">Marque as fotos que vão no anúncio (até 12) e a ordem; a 1ª marcada é a principal. ${PODE ? `<a href="#" onclick="event.preventDefault();trocarAba('fotos')">Enviar mais fotos para a ficha</a>` : ""}</p>
+    ${sumiu ? '<div class="nk-aviso">Uma foto escolhida foi apagada da ficha: confira e salve de novo.</div>' : ""}
+    <div class="fotos-cr">${sel.map((id, i) => item(porId[id], i)).join("")}${fora.map(f => item(f, -1)).join("")}</div>
+    ${ed ? `<div class="barra"><span class="esp"></span><span class="muted">${sel.length} foto(s)</span><button type="button" class="nk-btn pri" ${btOcupado()} onclick="salvarFotosCr()">Salvar e continuar</button></div>` : ""}`;
+}
+function marcarFotoCr(id, on) {
+  const sel = CR.f.fotos.filter(x => (F.fotos || []).some(f => f.id === x) && x !== id);
+  if (on) { if (sel.length >= 12) { nkToast("O Mercado Livre aceita até 12 fotos.", "aviso"); desenharCriar(); return; } sel.push(id); }
+  CR.f.fotos = sel;
+  desenharCriar();
+}
+function moverFotoCr(pos, d) {
+  const sel = CR.f.fotos.filter(x => (F.fotos || []).some(f => f.id === x)), j = pos + d;
+  if (j < 0 || j >= sel.length) return;
+  [sel[pos], sel[j]] = [sel[j], sel[pos]];
+  CR.f.fotos = sel;
+  desenharCriar();
+}
+async function salvarFotosCr() {
+  const sel = CR.f.fotos.filter(x => (F.fotos || []).some(f => f.id === x));
+  if (!sel.length) { nkToast("Escolha ao menos uma foto.", "aviso"); return; }
+  CR.f.fotos = sel;
+  await salvarRascunho({fotos: sel}, "Salvando as fotos…");
+}
+// 5. Preço, tipo, envio, garantia e quantidade
+async function lerDpm() {
+  const cr = CR;
+  if (!cr || cr.dpmLendo) return;
+  cr.dpmLendo = true; cr.dpmErro = "";
+  if (CR === cr) desenharCriar();
+  try {
+    const d = await api(`/api/anuncios/ficha?codigo=${enc(F.codigo)}&apollo=1`);  // Apollo lido agora
+    const e = (d.estoque || {})[cr.r.conta] || {};
+    cr.dpm = e.da_para_montar ?? null; cr.dpmErro = e.erro || "";
+    if (F && F.codigo === d.codigo) { F.estoque = d.estoque; F.apollo_lido = true; }
+  } catch (e) { cr.dpm = null; cr.dpmErro = e.message; }
+  cr.dpmLendo = false;
+  if (cr.dpm != null && cr.dpm > 0) {
+    const q = numBr(cr.f.quantidade);
+    if (!(q >= 1)) cr.f.quantidade = String(cr.dpm);
+    else if (q > cr.dpm) { cr.f.quantidade = String(cr.dpm); nkToast(`A quantidade baixou para ${cr.dpm}: é o que dá para montar no Apollo agora.`, "aviso", {duracao: 9000}); }
+  }
+  if (CR === cr) desenharCriar();
+}
+function corpoPreco() {
+  const f = CR.f, ed = crEditavel(), dis = roCr();
+  if (ed && CR.dpm === undefined && !CR.dpmLendo) setTimeout(lerDpm, 0);
+  const unid = F.tipo === "kit" ? "kit(s)" : "un.";
+  const nomeConta = CONTA[CR.r.conta] || CR.r.conta;
+  const dpm = CR.dpm;
+  const qtdInfo = !ed ? "" : CR.dpmLendo || dpm === undefined ? `<span class="muted">lendo o Apollo de ${esc(nomeConta)}…</span>`
+    : dpm == null ? `<span class="bad">O Apollo não respondeu${CR.dpmErro ? ` (${esc(CR.dpmErro)})` : ""}: sem saber quanto dá para montar, não dá para publicar.</span> <button type="button" class="nk-btn mini" onclick="lerDpm()">Ler de novo</button>`
+    : dpm <= 0 ? `<span class="bad">Sem estoque no Apollo de ${esc(nomeConta)} para montar este produto: não dá para publicar.</span> <button type="button" class="nk-btn mini" onclick="lerDpm()">Ler de novo</button>`
+    : `<span class="orig">dá para montar ${esc(dpm)} ${unid} (Apollo de ${esc(nomeConta)} lido agora, menos o que está a baixar); só pode diminuir</span>`;
+  const pAtual = numBr(f.preco), tAtual = CR.tarifa;
+  if (ed && pAtual > 0 && !CR.tarifaLendo && (!tAtual || tAtual.preco !== pAtual || tAtual.tipo !== f.tipo_anuncio)) setTimeout(lerTarifa, 0);
+  return `<div class="g4">
+      <label class="nk-campo"><span>Tipo do anúncio</span><select ${dis} onchange="CR.f.tipo_anuncio=this.value;agendarTarifa()">${TIPOS_CRIAR.map(([v, n]) => `<option value="${v}" ${f.tipo_anuncio === v ? "selected" : ""}>${n}</option>`).join("")}</select></label>
+      <label class="nk-campo"><span>Preço (R$)</span><input id="crPreco" inputmode="decimal" value="${esc(f.preco)}" ${dis} oninput="CR.f.preco=this.value;agendarTarifa()"></label>
+      <label class="nk-campo"><span>Frete grátis</span><select ${dis} onchange="CR.f.frete_gratis=this.value"><option value="0" ${f.frete_gratis !== "1" ? "selected" : ""}>Não</option><option value="1" ${f.frete_gratis === "1" ? "selected" : ""}>Sim</option></select></label>
+      <label class="nk-campo"><span>Garantia</span><input value="${esc(f.garantia)}" maxlength="100" placeholder="ex.: 90 dias" ${dis} oninput="CR.f.garantia=this.value"></label>
+      <label class="nk-campo inteiro"><span>Quantidade ${qtdInfo}</span><input id="crQtd" type="number" min="1" step="1" ${dpm > 0 ? `max="${Number(dpm)}"` : ""} style="max-width:160px" value="${esc(f.quantidade)}" ${dis} oninput="CR.f.quantidade=this.value;avisoQtd()"><span class="orig bad" id="crQtdAviso"></span></label>
+      <label class="nk-campo inteiro"><span>Descrição <span class="orig">texto simples, vai para o ML ao publicar</span></span><textarea rows="5" ${dis} oninput="CR.f.descricao=this.value">${esc(f.descricao)}</textarea></label>
+    </div>
+    <div id="crContaPreco">${contaPreco()}</div>
+    ${ed ? `<div class="barra"><span class="esp"></span><button type="button" class="nk-btn pri" ${btOcupado()} onclick="salvarPreco()">Salvar e continuar</button></div>` : ""}`;
+}
+function avisoQtd() {
+  const q = numBr(CR.f.quantidade), el = $("crQtdAviso");
+  if (!el) return;
+  el.textContent = q != null && CR.dpm != null && q > CR.dpm ? `acima do que dá para montar (${CR.dpm})` : q != null && !(Number.isInteger(q) && q >= 1) ? "informe um número inteiro, 1 ou mais" : "";
+}
+function agendarTarifa() {
+  clearTimeout(tarifaTimer);
+  tarifaTimer = setTimeout(lerTarifa, 600);
+  const el = $("crContaPreco"); if (el) el.innerHTML = contaPreco();
+}
+async function lerTarifa() {
+  const cr = CR; if (!cr || !cr.r || !cr.r.categoria) return null;
+  const p = numBr(cr.f.preco), tipo = cr.f.tipo_anuncio;
+  if (!(p > 0)) { cr.tarifa = null; const el = $("crContaPreco"); if (el) el.innerHTML = contaPreco(); return null; }
+  cr.tarifaLendo = true;
+  try {
+    const d = await api(`/api/anuncios/ml/tarifa?preco=${enc(p)}&tipo=${enc(tipo)}&categoria=${enc(cr.r.categoria)}&conta=${enc(cr.r.conta)}&codigo=${enc(F.codigo)}`);
+    cr.tarifa = {...d, preco: p, tipo, erro: ""};
+  } catch (e) { cr.tarifa = {preco: p, tipo, erro: e.message}; }
+  cr.tarifaLendo = false;
+  if (CR === cr) { const el = $("crContaPreco"); if (el) el.innerHTML = contaPreco(); }
+  return cr.tarifa;
+}
+function idealDe(t) {
+  if (!t || t.erro || t.custo == null || t.comissao == null || t.margem_alvo == null || t.imposto == null) return null;
+  const div = 1 - t.comissao - t.imposto - t.margem_alvo;
+  if (div <= 0) return null;
+  return Math.round((t.custo + (t.taxa_fixa || 0)) / div * 100) / 100;
+}
+function contaPreco() {
+  const t = CR.tarifa, p = numBr(CR.f.preco);
+  if (!(p > 0)) return '<p class="muted">Digite o preço: a comissão do ML é lida na hora.</p>';
+  if (!t || t.preco !== p || t.tipo !== CR.f.tipo_anuncio) return '<p class="muted">Lendo a comissão do Mercado Livre…</p>';
+  if (t.erro) return `<div class="nk-aviso bad">O Mercado Livre não informou a comissão: ${esc(t.erro)} <button type="button" class="nk-btn mini" onclick="lerTarifa()">Tentar de novo</button></div>`;
+  const tarifa = t.tarifa != null ? t.tarifa : (t.comissao != null ? p * t.comissao + (t.taxa_fixa || 0) : null);
+  const imposto = t.imposto != null ? p * t.imposto : null;
+  const lucro = lucroDe(p, t);
+  const conferido = CR.idealPreco != null && CR.idealPreco === p;
+  const ideal = conferido ? p : idealDe(t);
+  const ed = crEditavel();
+  return `<div class="conta">
+      <div>Comissão do ML (lida agora)<b>${brl(tarifa)}</b>${pct(t.comissao)}${t.taxa_fixa ? ` + taxa fixa ${brl(t.taxa_fixa)}` : ""}</div>
+      <div>Imposto<b>${brl(imposto)}</b>${pct(t.imposto)} da venda</div>
+      <div>Custo<b>${brl(t.custo)}</b>${t.custo == null ? "sem custo no Precificador" : "do Precificador (Apollo)"}</div>
+      <div>Lucro antes do frete<b class="${lucro == null ? "" : lucro > 0 ? "ok" : "bad"}">${brl(lucro)}</b>${lucro == null ? "sem custo, sem lucro" : "margem " + pct(lucro / p)}</div>
+      <div>Frete<b>—</b>${esc(t.frete_texto || "o ML informa o frete depois de publicar")}</div>
+      <div>Preço ideal<b>${brl(ideal)}</b>${ideal == null ? (t.custo == null ? "precisa do custo" : "sem margem-alvo") : conferido ? `é este preço (menor que dá a margem-alvo de ${pct(t.margem_alvo)} com a tarifa do ML)` : `margem-alvo ${pct(t.margem_alvo)}`}
+        ${ideal != null && ed && !conferido ? `<br><button type="button" class="nk-btn mini" ${btOcupado()} onclick="usarIdeal()">Usar o ideal</button>` : ""}</div>
+    </div>`;
+}
+function lucroDe(p, t) {
+  const tarifa = t.tarifa != null ? t.tarifa : (t.comissao != null ? p * t.comissao + (t.taxa_fixa || 0) : null);
+  return tarifa != null && t.imposto != null && t.custo != null ? p - tarifa - p * t.imposto - t.custo : null;
+}
+async function aplicarPreco(p) {
+  CR.f.preco = String(p).replace(".", ",");
+  const el = $("crPreco"); if (el) el.value = CR.f.preco;
+  await lerTarifa();
+}
+async function usarIdeal() {
+  // A comissão/taxa fixa do ML muda com o preço (abaixo de R$ 79 entra taxa fixa): aplica o ideal, relê a tarifa
+  // no preço novo e confere a margem nele. Fica o menor preço testado que dá a margem-alvo; sem nenhum, o último.
+  clearTimeout(tarifaTimer);
+  const bons = [], vistos = new Set();
+  for (let volta = 0; volta < 4; volta++) {
+    const ideal = idealDe(CR.tarifa);
+    if (ideal == null || vistos.has(ideal) || ideal === numBr(CR.f.preco)) break;
+    vistos.add(ideal);
+    await aplicarPreco(ideal);
+    const t = CR.tarifa, lucro = t && !t.erro ? lucroDe(ideal, t) : null;
+    if (lucro != null && lucro / ideal >= t.margem_alvo - 1e-6) bons.push(ideal);
+  }
+  const melhor = bons.length ? Math.min(...bons) : null;
+  if (melhor != null && melhor !== numBr(CR.f.preco)) await aplicarPreco(melhor);
+  CR.idealPreco = melhor;  // conferido com a tarifa do ML no próprio preço
+  const el = $("crContaPreco"); if (el) el.innerHTML = contaPreco();
+}
+async function salvarPreco() {
+  const f = CR.f, p = numBr(f.preco), q = numBr(f.quantidade);
+  if (!(p > 0)) { nkToast("Informe o preço (maior que zero).", "aviso"); return; }
+  if (CR.dpm === undefined || CR.dpmLendo) { nkToast("Aguarde a leitura do Apollo.", "aviso"); return; }
+  if (CR.dpm == null) { nkToast("O Apollo não respondeu: sem saber quanto dá para montar, não dá para seguir. Clique em “Ler de novo”.", "aviso", {duracao: 9000}); return; }
+  if (CR.dpm <= 0) { nkToast("Sem estoque no Apollo para montar este produto: não dá para publicar.", "aviso", {duracao: 9000}); return; }
+  if (!(Number.isInteger(q) && q >= 1)) { nkToast("A quantidade deve ser um número inteiro, 1 ou mais.", "aviso"); return; }
+  if (q > CR.dpm) { nkToast(`A quantidade não pode passar do que dá para montar (${CR.dpm}).`, "aviso"); return; }
+  await salvarRascunho({preco: p, quantidade: q, tipo_anuncio: f.tipo_anuncio, frete_gratis: f.frete_gratis === "1",
+    garantia: f.garantia.trim(), descricao: f.descricao.trim()}, "Salvando preço e quantidade…");
+}
+// 6. Conferir no ML (POST /items/validate: não cria nada)
+function corpoConferir() {
+  const r = CR.r, ed = crEditavel();
+  const erros = r.erros || [];
+  if (!ed) return '<p class="muted">Conferido antes de publicar.</p>';
+  return `${r.situacao === "validado" ? '<div class="nk-aviso info">O Mercado Livre conferiu e não apontou nada. Pode publicar.</div>'
+      : erros.length ? `<div class="nk-aviso bad">${r.situacao === "erro" ? "O Mercado Livre recusou a última tentativa de publicar" : "O que precisa ser acertado"}:<ul class="erros">${erros.map(e => `<li>${esc(e)}</li>`).join("")}</ul></div>`
+      : '<p class="muted">O Mercado Livre confere tudo (categoria, atributos, preço, título) sem criar nada. As fotos sobem só no Publicar.</p>'}
+    ${crMudados().length ? '<p class="bad">Há alteração não salva: salve o passo antes de conferir.</p>' : ""}
+    <div class="barra"><span class="esp"></span><button type="button" class="nk-btn ${r.situacao === "validado" ? "" : "pri"}" ${btOcupado()} onclick="conferirNoMl()">${r.situacao === "validado" ? "Conferir de novo" : "Conferir no ML"}</button></div>`;
+}
+async function conferirNoMl() {
+  if (CR.ocupado) return;
+  if (crMudados().length) { nkToast("Há alteração não salva: salve o passo antes de conferir.", "aviso"); return; }
+  const cr = CR;
+  cr.ocupado = "Conferindo no Mercado Livre…"; cr.aviso = ""; desenharCriar();
+  try {
+    const d = await api("/api/anuncios/rascunho/validar", {id: cr.r.id});
+    cr.r = d.rascunho;
+    nkToast(d.ok ? "O Mercado Livre não apontou nada: pode publicar." : `O Mercado Livre apontou ${(d.erros || []).length} ponto(s).`, d.ok ? "ok" : "aviso");
+  } catch (e) {
+    if (e.status === 409 && e.dados && e.dados.atual && e.dados.atual.id) { cr.r = e.dados.atual; cr.conflito = true; }
+    nkToast(e.message, "erro", {duracao: 9000});
+  }
+  cr.ocupado = "";
+  atualizarRascNaLista(cr.r);
+  if (CR === cr) desenharRascunhos();
+}
+// 7. Publicar — a única escrita no ML
+function corpoPublicar() {
+  const r = CR.r;
+  const avisos = r.erros || [];
+  if (r.situacao === "publicado") return `<div class="nk-aviso info">Anúncio criado no Mercado Livre: ${linkMlb(r.mlb)}. Ele já aparece em “Anúncios em todos os canais” como Noromak.</div>
+    ${avisos.length ? `<div class="nk-aviso">Atenção:<ul class="erros">${avisos.map(e => `<li>${esc(e)}</li>`).join("")}</ul></div>` : ""}`;
+  if (r.situacao === "incerto") return `<div class="nk-aviso bad"><b>Confira no Mercado Livre se o anúncio foi criado.</b> O ML não respondeu depois de receber o anúncio: ele pode ter sido criado. Nada é repetido sozinho.
+      ${avisos.length ? `<ul class="erros">${avisos.map(e => `<li>${esc(e)}</li>`).join("")}</ul>` : ""}
+      <div class="barra" style="margin:10px 0 0"><button type="button" class="nk-btn pri" ${btOcupado()} onclick="liberarIncerto(true)">Achei, é o MLB…</button>
+      <button type="button" class="nk-btn" ${btOcupado()} onclick="liberarIncerto(false)">Não foi criado</button></div></div>`;
+  if (r.situacao === "publicando") return `<div class="nk-aviso">Publicando no Mercado Livre (subindo as fotos e criando o anúncio). Não clique em publicar de novo.
+      <button type="button" class="nk-btn mini" ${btOcupado()} onclick="relerRascunhoDepoisDoPublicar(${Number(r.id)}, false)">Atualizar situação</button></div>`;
+  return `<p class="muted">Conta ${esc(CONTA[r.conta] || r.conta)} · ${esc(r.titulo)} · ${brl(r.preco)} · ${esc(r.quantidade)} ${F.tipo === "kit" ? "kit(s)" : "un."} · ${(r.fotos || []).length} foto(s). O Apollo é lido de novo na hora de publicar.</p>
+    <div class="barra"><span class="esp"></span><button type="button" class="nk-btn pri" ${btOcupado()} onclick="publicarAnuncio()"><i class=nk-i-upload></i> Publicar no Mercado Livre</button></div>`;
+}
+async function publicarAnuncio() {
+  if (CR.ocupado) return;
+  const cr = CR, r = cr.r;
+  if (crMudados().length) { nkToast("Há alteração não salva: salve e confira no ML antes de publicar.", "aviso"); return; }
+  const ok = await nkConfirmar(`Publicar o anúncio no Mercado Livre?\nConta: ${CONTA[r.conta] || r.conta}\nTítulo: ${r.titulo}\nPreço: ${brl(r.preco)}\nQuantidade: ${r.quantidade}\nFotos: ${(r.fotos || []).length}\n\nO anúncio é criado agora no ML. Se o ML não responder, nada é repetido sozinho.`, {ok: "Publicar", perigo: false});
+  if (!ok || CR !== cr || cr.ocupado) return;
+  cr.ocupado = "Publicando no Mercado Livre… subindo as fotos e criando o anúncio (pode levar alguns minutos). Não feche esta tela.";
+  cr.aviso = ""; desenharCriar();
+  let d;
+  try { d = await api("/api/anuncios/rascunho/publicar", {id: r.id}); }
+  catch (e) {
+    cr.ocupado = "";
+    // V20.24: erro de rede, timeout ou 504 do nginx (o servidor pode estar terminando): NUNCA tentar de novo.
+    // Relê o rascunho e mostra a situação real. 400/409 = nada foi feito agora, mas a situação também é relida.
+    const semResposta = !e.status || e.status >= 500;
+    if (!semResposta) nkToast(e.message, e.status === 409 ? "aviso" : "erro", {duracao: 10000});
+    await relerRascunhoDepoisDoPublicar(r.id, semResposta);
+    return;
+  }
+  cr.ocupado = "";
+  cr.r = d.rascunho || cr.r;
+  atualizarRascNaLista(cr.r);
+  if (d.situacao === "publicado") { nkToast(`Anúncio ${d.mlb} criado no Mercado Livre.`, "ok", {duracao: 12000}); await recarregarAposPublicar(); return; }
+  if (d.situacao === "incerto") nkToast("O Mercado Livre não respondeu: confira se o anúncio foi criado.", "erro", {duracao: 15000});
+  else nkToast((d.erros || [])[0] || "Não publicado.", "erro", {duracao: 12000});
+  if (CR === cr) desenharRascunhos();
+}
+async function relerRascunhoDepoisDoPublicar(id, semResposta) {
+  const cr = CR, cod = F.codigo;
+  try {
+    const d = await api(`/api/anuncios/rascunhos?codigo=${enc(cod)}`);
+    if (!F || F.codigo !== cod) return;
+    RASC = {codigo: cod, lista: d.rascunhos || [], erro: ""};
+    const r = RASC.lista.find(x => x.id === id);
+    if (cr && CR === cr && r) {
+      cr.r = r;
+      cr.aviso = semResposta ? `A resposta do Publicar não chegou à tela. Situação lida agora: ${(SIT[r.situacao] || [r.situacao])[0]}.`
+        + (r.situacao === "publicando" ? " Ainda publicando: espere e clique em “Atualizar situação”." : "") : "";
+    }
+    if (r && r.situacao === "publicado") { await recarregarAposPublicar(); return; }
+  } catch (e2) {
+    if (cr && CR === cr) {
+      cr.aviso = "A resposta do Publicar não chegou e não consegui reler o rascunho. Não publique de novo: clique em “Atualizar situação” em instantes.";
+      if (cr.r && EDITAVEL.includes(cr.r.situacao)) cr.r = {...cr.r, situacao: "publicando"};  // só na tela: trava o botão até reler
+    }
+  }
+  if (ABA === "anuncios") desenharRascunhos();
+}
+async function recarregarAposPublicar() {
+  // a linha nova aparece em "Anúncios em todos os canais" (controle Noromak); o painel e os rascunhos ficam
+  await abrirFicha(F.codigo, {manter: true});
+  await carregarRascunhos(true);
+}
+async function liberarIncerto(achou) {
+  if (CR.ocupado) return;
+  const cr = CR;
+  let mlb = "";
+  if (achou) {
+    mlb = (await nkPerguntar("Qual é o MLB do anúncio criado?", {detalhe: "Confira em Meus anúncios no Mercado Livre. Ex.: MLB1234567890", placeholder: "MLB…", obrigatorio: true,
+      validar: v => /^(MLB)?\d{6,15}$/i.test(v.replace(/[\s-]/g, "")) ? "" : "MLB inválido (ex.: MLB1234567890)."}) || "").replace(/[\s-]/g, "");
+    if (!mlb) return;
+  } else if (!await nkConfirmar("Confirmar que o anúncio NÃO foi criado no Mercado Livre?\nVocê conferiu em Meus anúncios e ele não existe. O rascunho volta a “Conferido no ML” e pode ser publicado de novo — se o anúncio existir, ficarão dois.", {ok: "Não foi criado", perigo: true})) return;
+  if (CR !== cr) return;
+  try {
+    const d = await api("/api/anuncios/rascunho/liberar", {id: cr.r.id, mlb});
+    cr.r = d.rascunho; cr.aviso = "";
+    atualizarRascNaLista(cr.r);
+    nkToast(d.situacao === "publicado" ? `Rascunho ligado ao ${d.mlb}.` : "Rascunho liberado: pode publicar de novo.", "ok");
+    if (d.situacao === "publicado") { await recarregarAposPublicar(); return; }
+  } catch (e) { nkToast(e.message, "erro", {duracao: 9000}); }
+  if (CR === cr) desenharRascunhos();
 }
 
 // ---------------------------------------------------------------- início
