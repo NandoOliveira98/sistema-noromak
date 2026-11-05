@@ -137,6 +137,23 @@ class AberturaDoSkuTeste(EstoqueBase):
 
 class QuedaDoPendenteTeste(EstoqueBase):
 
+    def test_teto_usa_o_menor_entre_enviado_e_lido_no_ml(self):
+        # V20.26 (revisao): enviado 6, o ML ja mostra 5 (venda que ainda nao esta na fila); concluir outro pedido
+        # nao pode devolver 6 ao ML enquanto o Apollo nao reler
+        inserir(ficha="P1", modo="automatico", estoque=3)
+        self.ml.item("MLB1", 3)
+        ler(self, "P1", ara=10)
+        fila([linha("PED1", "P1", 4, Marketplace="MERCADO LIVRE")])
+        S.anuncio_estoque_config_definir("aracatuba", "automatico", "luis")
+        S.anuncios_estoque_rodada("aracatuba", ator="sistema")
+        self.assertEqual(canal()["estoque_enviado"], 6)
+        with S.DB_LOCK:
+            S.DB.execute("UPDATE anuncio_apollo_v2026 SET lido_epoch=lido_epoch-30")
+            S.DB.execute("UPDATE anuncio_canal_v2023 SET estoque=5 WHERE anuncio_id='MLB1'")
+            S.DB.commit()
+        fila([])
+        self.assertEqual(item()["calculado"], 5)
+
     def test_pedido_concluido_nao_sobe_antes_do_apollo_reler(self):
         inserir(ficha="P1", modo="automatico", estoque=3)
         self.ml.item("MLB1", 3)

@@ -33183,7 +33183,9 @@ def _anuncios_estoque_calcular(conta: str, anuncio_id: str = "") -> tuple[list[d
                                 "a_baixar_tudo": None if pend_tudo is None else int(pend_tudo.get(p["chave"], 0) or 0),
                                 "a_baixar_sem_atendimento": None if pend_sem is None else int(pend_sem.get(p["chave"], 0) or 0),
                                 "lido_em": str((lido or {}).get("lido_em") or "")})
-        teto = r.get("estoque_enviado") if r.get("estoque_enviado") is not None else r.get("estoque")
+        # V20.26 (revisao): teto = o MENOR entre o ultimo enviado e o lido no ML (venda que ainda nao esta na fila)
+        _tetos = [x for x in (r.get("estoque_enviado"), r.get("estoque")) if x is not None]
+        teto = min(_tetos) if _tetos else None
         comps = [{"sku": p["chave"], "quantidade": p["quantidade"]} for p in pecas]
 
         def bruto(pd: dict[str, int] | None) -> int | None:
