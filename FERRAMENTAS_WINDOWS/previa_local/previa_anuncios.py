@@ -163,6 +163,11 @@ S.ml_itens_detalhe = _itens_detalhe
 
 # V20.24: criar anuncio (ML simulado: categoria, atributos, tarifa, validate, fotos, items)
 sys.path.insert(0, str(Path(__file__).parent))
+# V20.26: estoque simulado no ML (PUT /items + releitura). O 4 L tem depósito do vendedor (sem selling_address):
+# mandar estoque nele mostra o erro "ajuste no ML". O Apollo continua o simulado acima.
+S._PREVIA_ANUNCIOS = ANUNCIOS
+S._PREVIA_UP = {"MLB1129555578": {"up": "MLBU900000001", "locations": [{"type": "seller_warehouse", "quantity": 6}]}}
+S._PREVIA_ESTOQUE_NAO_MUDA = set()
 import dev_criar_ml  # noqa
 dev_criar_ml.instalar(S)
 
@@ -212,6 +217,23 @@ def _semear_anuncio_de_teste():
 
 import threading as _th  # noqa: E402
 _th.Thread(target=_semear_anuncio_de_teste, daemon=True).start()
+
+
+# V20.26: a previa sobe sem workers (EXP_WORKERS=0); so o estoque automatico roda aqui, a cada 5 s, com o ML e o
+# Apollo simulados (rodizio mais rapido para ver na tela).
+def _estoque_automatico_previa():
+    import time
+    S.ANUNCIO_APOLLO_POR_MINUTO = 30
+    estado = {}
+    while True:
+        time.sleep(5)
+        try:
+            S.anuncios_estoque_volta(estado)
+        except Exception as exc:
+            print("estoque automatico (previa):", exc, flush=True)
+
+
+_th.Thread(target=_estoque_automatico_previa, daemon=True).start()
 
 srv = ThreadingHTTPServer(("127.0.0.1", 8158), S.AppHandler)
 print("ok 8158", T, flush=True)

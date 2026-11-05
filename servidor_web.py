@@ -33004,6 +33004,197 @@ def anuncios_estoque_calcular(conta: str) -> list[dict[str, Any]]:
     return _anuncios_estoque_calcular(conta)[0]
 
 
+# V20.26: rodada do Automatico (worker e "Enviar agora") e a tela.
+ANUNCIO_ESTOQUE_ERRO_ESPERA_S = 600    # mesmo numero recusado pelo ML: o worker so tenta de novo depois disso
+ANUNCIO_ESTOQUE_RECALCULO_S = 600      # o worker refaz a conta mesmo sem mudanca (leitura do Apollo venceu etc.)
+_ANUNCIO_ESTOQUE_ERRO: dict[tuple[str, str], tuple[float, int]] = {}
+_ANUNCIO_ESTOQUE_RODADA_LOCKS: dict[str, threading.Lock] = {c: threading.Lock() for c in CASAS}
+
+
+def _anuncio_estoque_motivo_envio(it: dict[str, Any]) -> str:
+    partes = [f"{p['codigo']}: Apollo {p['disponivel']:g} − a baixar {p['a_baixar']}" + (f" (÷{p['quantidade']})" if p["quantidade"] > 1 else "")
+              for p in it.get("pecas") or [] if p.get("disponivel") is not None and p.get("a_baixar") is not None]
+    return ("; ".join(partes) + f" = {it.get('calculado')}")[:300]
+
+
+def anuncios_estoque_rodada(conta: str, *, ator: str, forcar: bool = False) -> dict[str, Any]:
+    """V20.26: calcula e, conforme o modo da conta, registra (simulacao), envia no clique (lote, `forcar`) ou envia
+    (automatico) o que mudou. Antes de cada envio, DENTRO da trava do anuncio, rele o modo do anuncio (virou Manual =
+    desiste, RF4), o modo da conta e a versao da fila (mudou = recalcula esse anuncio, RF1)."""
+    conta = ml_casa_valida(conta)
+    trava = _ANUNCIO_ESTOQUE_RODADA_LOCKS[conta]
+    if not trava.acquire(timeout=30 if forcar else 0.01):
+        return {"ok": False, "ocupado": True, "erro": "Outra rodada do estoque desta conta está em andamento."}
+    try:
+        cfg = anuncio_estoque_config(conta)["modo"]
+        itens, versao = _anuncios_estoque_calcular(conta)
+        agora = now_iso()
+        with DB_LOCK:
+            mudou_calc = False
+            for it in itens:
+                if it["calculado"] != it["estoque_calculado_antes"]:
+                    DB.execute("UPDATE anuncio_canal_v2023 SET estoque_calculado=?, estoque_calculado_em=? "
+                               "WHERE canal='ml' AND conta=? AND anuncio_id=?",
+                               (it["calculado"], agora, conta, it["anuncio_id"]))
+                    mudou_calc = True
+            if mudou_calc:
+                DB.commit()
+        res: dict[str, Any] = {"ok": True, "conta": conta, "modo": cfg, "avaliados": len(itens), "mudariam": 0,
+                               "enviados": 0, "erros": 0, "simulados": 0, "ignorados": 0, "detalhes": []}
+        for it in itens:
+            if not it["muda"]:
+                continue
+            res["mudariam"] += 1
+            mlb, calc = it["anuncio_id"], int(it["calculado"])
+            motivo = _anuncio_estoque_motivo_envio(it)
+            if cfg == "simulacao":
+                if it["calculado"] != it["estoque_calculado_antes"]:
+                    _anuncio_estoque_registrar("ml", conta, mlb, "automatico", it["referencia"], calc, motivo,
+                                               "simulado", "Simulação: nada enviado ao ML", ator)
+                    res["simulados"] += 1
+                continue
+            if cfg == "lote" and not forcar:
+                continue
+            chave = (conta, mlb)
+            erro_antes = _ANUNCIO_ESTOQUE_ERRO.get(chave)
+            if (not forcar and erro_antes and erro_antes[1] == calc
+                    and time.time() - erro_antes[0] < ANUNCIO_ESTOQUE_ERRO_ESPERA_S):
+                continue
+
+            def conferir(mlb: str = mlb, calc: int = calc) -> tuple[int | None, str]:
+                with DB_LOCK:
+                    row = _anuncio_estoque_linha("ml", conta, mlb)
+                    versao_agora = _ml_versoes_storage("conf_pedidos", PENDING_ORDER_DELETE_KEY_V1766)
+                if row is None or str(row.get("estoque_modo") or "") != "automatico":
+                    return None, "o anúncio passou para Manual: o Automático não envia"
+                modo_conta = anuncio_estoque_config(conta)["modo"]
+                if modo_conta == "simulacao" or (modo_conta == "lote" and not forcar):
+                    return None, f"a conta está em {modo_conta}: nada enviado"
+                if versao_agora != versao:  # RF1: chegou venda (ou mudou a fila) depois do calculo
+                    novos, _ = _anuncios_estoque_calcular(conta, mlb)
+                    if not novos or novos[0]["calculado"] is None:
+                        return None, "a fila mudou e o estoque ficou sem número: " + (
+                            novos[0]["motivo"] if novos else "anúncio fora do Automático")
+                    return int(novos[0]["calculado"]), ""
+                return calc, ""
+
+            try:
+                r = ml_estoque_gravar(conta, mlb, calc, ator=ator, modo="automatico", motivo=motivo, conferir=conferir)
+            except ValueError as exc:
+                res["ignorados"] += 1
+                res["detalhes"].append({"anuncio_id": mlb, "resultado": "ignorado", "erro": str(exc)})
+                continue
+            res["detalhes"].append({"anuncio_id": mlb, "resultado": r["resultado"], "para": r.get("quantidade", calc),
+                                    "erro": r.get("erro") or ""})
+            if r["ok"]:
+                res["enviados"] += 1
+                _ANUNCIO_ESTOQUE_ERRO.pop(chave, None)
+            elif r["resultado"] == "ignorado":
+                res["ignorados"] += 1
+            else:
+                res["erros"] += 1
+                _ANUNCIO_ESTOQUE_ERRO[chave] = (time.time(), int(r.get("quantidade") or calc))
+        return res
+    finally:
+        trava.release()
+
+
+def anuncios_estoque_payload(conta: str, anuncio_id: str = "") -> dict[str, Any]:
+    """V20.26: GET /api/anuncios/estoque - calculo, interruptor da conta e ultimos registros. So le (nunca o ML/Apollo)."""
+    conta = ml_casa_valida(conta)
+    anuncio_id = str(anuncio_id or "").strip().upper()
+    itens, _ = _anuncios_estoque_calcular(conta, anuncio_id)
+    with DB_LOCK:
+        cont = DB.execute(
+            "SELECT estoque_modo, COUNT(*) AS n FROM anuncio_canal_v2023 WHERE canal='ml' AND conta=? AND controle='noromak' "
+            "AND COALESCE(removido_em,'')='' AND COALESCE(logistica,'')<>'fulfillment' GROUP BY estoque_modo",
+            (conta,)).fetchall()
+        anuncio = _anuncio_estoque_linha("ml", conta, anuncio_id) if anuncio_id else None
+    por_modo = {str(r["estoque_modo"]): int(r["n"]) for r in cont}
+    saida: dict[str, Any] = {
+        "conta": conta, "config": anuncio_estoque_config(conta), "itens": itens,
+        "resumo": {"automatico": por_modo.get("automatico", 0), "manual": por_modo.get("manual", 0),
+                   "mudariam": sum(1 for i in itens if i["muda"]),
+                   "sem_numero": sum(1 for i in itens if i["calculado"] is None)},
+        "log": anuncio_estoque_log("ml", conta, anuncio_id, 50), "apollo_por_minuto": ANUNCIO_APOLLO_POR_MINUTO}
+    if anuncio_id:
+        saida["anuncio"] = None if anuncio is None else {
+            k: anuncio.get(k) for k in ("anuncio_id", "conta", "ficha_codigo", "titulo", "controle", "logistica",
+                                        "estoque", "estoque_modo", "estoque_enviado", "estoque_enviado_em",
+                                        "estoque_calculado", "estoque_calculado_em", "removido_em")}
+        if anuncio is not None:
+            saida["anuncio"]["pode_controlar"] = not _anuncio_estoque_elegivel(anuncio)
+    return saida
+
+
+def anuncio_estoque_manual(conta: str, anuncio_id: str, quantidade: Any, ator: str) -> dict[str, Any]:
+    """V20.26: o Admin digitou: vai na hora ao ML. Anuncio em Automatico recusa (a proxima rodada desfaria)."""
+    conta = ml_casa_valida(conta)
+    anuncio_id = str(anuncio_id or "").strip().upper()
+    qtd = _anuncio_estoque_qtd(quantidade)
+    with DB_LOCK:
+        row = _anuncio_estoque_linha("ml", conta, anuncio_id)
+    motivo = _anuncio_estoque_elegivel(row)
+    if motivo:
+        raise ValueError(motivo)
+    if str(row.get("estoque_modo") or "manual") != "manual":
+        raise ValueError("O anúncio está em Automático: troque para Manual para digitar o estoque.")
+
+    def conferir() -> tuple[int | None, str]:  # trocou para Automatico enquanto esperava a trava
+        with DB_LOCK:
+            r = _anuncio_estoque_linha("ml", conta, anuncio_id)
+        if r is None or str(r.get("estoque_modo") or "manual") != "manual":
+            return None, "o anúncio passou para Automático"
+        return qtd, ""
+
+    return ml_estoque_gravar(conta, anuncio_id, qtd, ator=ator, modo="manual", motivo="digitado pelo Admin",
+                             conferir=conferir)
+
+
+def anuncios_estoque_volta(estado: dict[str, Any]) -> list[str]:
+    """V20.26: uma volta do worker. Le 1 codigo do Apollo por filial com anuncio em Automatico (rodizio) e roda a
+    rodada das contas em que a leitura mudou, a fila mudou ou passou ANUNCIO_ESTOQUE_RECALCULO_S. Devolve as contas."""
+    with DB_LOCK:
+        contas = [str(r[0]) for r in DB.execute(
+            "SELECT DISTINCT conta FROM anuncio_canal_v2023 WHERE canal='ml' AND estoque_modo='automatico' "
+            "AND controle='noromak' AND COALESCE(removido_em,'')='' AND COALESCE(logistica,'')<>'fulfillment'").fetchall()]
+    contas = sorted(c for c in contas if c in ANUNCIO_REVENDA)
+    if not contas:
+        return []
+    mudancas: set[str] = set()
+    for c in contas:
+        anuncios_apollo_ler_proximo(c, mudancas)
+    with DB_LOCK:
+        versao = _ml_versoes_storage("conf_pedidos", PENDING_ORDER_DELETE_KEY_V1766)
+    afetadas = set(mudancas)
+    if versao != estado.get("versao"):
+        estado["versao"] = versao
+        afetadas |= set(contas)
+    agora = time.monotonic()
+    if agora - float(estado.get("recalculo") or 0) > ANUNCIO_ESTOQUE_RECALCULO_S:
+        estado["recalculo"] = agora
+        afetadas |= set(contas)
+    for c in sorted(afetadas):
+        try:
+            anuncios_estoque_rodada(c, ator="sistema")
+        except Exception as exc:
+            print(f"[anuncios_estoque] rodada de {c} falhou: {exc}", file=sys.stderr, flush=True)
+    return sorted(afetadas)
+
+
+def anuncios_estoque_loop(stop_event: threading.Event) -> None:
+    """V20.26: estoque automatico dos anuncios do ML (20 s). Sem anuncio em Automatico nao le nada."""
+    if stop_event.wait(75):
+        return
+    estado: dict[str, Any] = {}
+    while not stop_event.is_set():
+        try:
+            anuncios_estoque_volta(estado)
+        except Exception as exc:
+            print(f"[anuncios_estoque] {exc}", file=sys.stderr, flush=True)
+        stop_event.wait(20)
+
+
 PROMO_TAXAS_DO_PRECIFICADOR ="taxas do Precificador (o Mercado Livre não respondeu)"
 
 
@@ -40080,6 +40271,17 @@ class AppHandler(BaseHTTPRequestHandler):
                     rows = DB.execute("SELECT tipo,resposta,created_at FROM tiktok_amostra_v1963").fetchall()
                 self.send_json({"ok": True, "amostras": [dict(r) for r in rows]})
             return
+        if path == "/api/anuncios/estoque":  # V20.26: calculo do Automatico + interruptor + registro (so le o banco)
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                try:
+                    payload = anuncios_estoque_payload(str((query.get("conta") or ["aracatuba"])[0]).strip() or "aracatuba",
+                                                       str((query.get("anuncio_id") or [""])[0]))
+                except ValueError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 400)
+                    return
+                self.send_json({"ok": True, **payload})
+            return
         if path == "/api/anuncios/puxar/situacao":  # V20.24: andamento da puxada em segundo plano (so le a memoria)
             ctx = self.auth(admin_only=True)
             if ctx is not None:
@@ -42450,6 +42652,47 @@ class AppHandler(BaseHTTPRequestHandler):
                 except Exception as exc:
                     magalu_log_event("pedidos", "manual", "ERRO", str(exc))
                     self.send_json({"ok": False, "error": str(exc)}, 502)
+            return
+        if path in ("/api/anuncios/estoque/modo", "/api/anuncios/estoque/manual", "/api/anuncios/estoque/config",
+                    "/api/anuncios/estoque/enviar"):
+            # V20.26: estoque dos anuncios - GRAVA no ML (so anuncio `noromak`). Perfil Admin; ligar o Automatico
+            # da conta = OWNER (senha + 2FA). Consulta e Compras ja foram recusados no consulta_bloqueada.
+            ctx = self.auth(admin_only=True)
+            if ctx is None:
+                return
+            if str(ctx.get("app_role") or "") != "admin":
+                self.send_json({"ok": False, "error": "Somente o perfil Admin."}, 403)
+                return
+            try:
+                body = self.read_json() or {}
+                if not str(body.get("conta") or "").strip():
+                    raise ValueError("Informe a conta (aracatuba ou bauru).")  # V20.26: nunca cai na principal calado
+                conta_e = ml_casa_valida(body.get("conta"))
+                if path == "/api/anuncios/estoque/modo":
+                    res = anuncio_estoque_modo_definir(str(body.get("canal") or "ml"), conta_e,
+                                                       str(body.get("anuncio_id") or "").strip().upper(),
+                                                       str(body.get("modo") or ""), ctx["username"])
+                elif path == "/api/anuncios/estoque/manual":
+                    res = anuncio_estoque_manual(conta_e, str(body.get("anuncio_id") or ""), body.get("quantidade"),
+                                                 ctx["username"])
+                elif path == "/api/anuncios/estoque/config":
+                    modo_e = str(body.get("modo") or "").strip().lower()
+                    if modo_e == "automatico" and anuncio_estoque_config(conta_e)["modo"] != "automatico"                             and not self.require_owner_reauth(ctx):
+                        audit(ctx["username"], "security.denied.owner_reauth", f"anuncios.estoque_automatico|{conta_e}")
+                        return
+                    res = {"ok": True, "config": anuncio_estoque_config_definir(conta_e, modo_e, ctx["username"])}
+                else:
+                    if anuncio_estoque_config(conta_e)["modo"] == "simulacao":
+                        raise ValueError("A conta está em Simulação: passe para Lote para enviar.")
+                    res = anuncios_estoque_rodada(conta_e, ator=ctx["username"], forcar=True)
+                    if res.get("ocupado"):
+                        self.send_json(res, 409)
+                        return
+                    audit(ctx["username"], "anuncios.estoque_enviar",
+                          f"{conta_e}|{res.get('enviados')} enviados|{res.get('erros')} erros")
+                self.send_json(res)
+            except ValueError as exc:
+                self.send_json({"ok": False, "error": str(exc)}, 400)
             return
         if path in ("/api/anuncios/ficha", "/api/anuncios/kit", "/api/anuncios/puxar", "/api/anuncios/puxar/um",
                     "/api/anuncios/trazer-dados", "/api/anuncios/controle",
@@ -45805,6 +46048,7 @@ SAUDE_WORKERS_INFO: dict[str, tuple[str, bool, int]] = {
     "magalu_pedidos_loop": ("Pedidos e etiquetas da Magalu", True, 20),  # V19.27
     "tiktok_pedidos_loop": ("Pedidos do TikTok Shop (Bauru)", True, 20),  # V19.64
     "tiktok_estoque_loop": ("Estoque do TikTok Shop (Apollo de Bauru)", False, 30),  # V19.64
+    "anuncios_estoque_loop": ("Estoque automático dos anúncios do ML (Apollo)", False, 30),  # V20.26
     "shopee_label_worker_loop": ("Etiquetas da Shopee", True, 30),
     "vendas_sync_loop": ("Vendas (Dashboard e Financeiro)", False, 120),
     "vendas_rapido_loop": ("Vendas novas no Dashboard (tempo real)", False, 20),  # V19.58
@@ -46825,6 +47069,11 @@ def main() -> None:
         target=_worker_protegido(tiktok_estoque_loop), args=(watcher_stop,),
         name="tiktok-estoque-worker", daemon=True,
     )
+    # V20.26: estoque automatico dos anuncios do ML (so anuncio `noromak` em Automatico; sem nenhum, nao le nada).
+    anuncios_estoque_thread = threading.Thread(
+        target=_worker_protegido(anuncios_estoque_loop), args=(watcher_stop,),
+        name="anuncios-estoque-worker", daemon=True,
+    )
     magalu_thread = threading.Thread(
         target=_worker_protegido(magalu_pedidos_loop),
         args=(watcher_stop,),
@@ -47021,6 +47270,7 @@ def main() -> None:
         magalu_thread.start()
         tiktok_pedidos_thread.start()
         tiktok_estoque_thread.start()
+        anuncios_estoque_thread.start()
         vendas_ml_thread.start()
         vendas_rapido_thread.start()
         frete_thread.start()

@@ -39,8 +39,51 @@ def instalar(S):
         {"id": "ITEM_CONDITION", "name": "Condição", "tags": {"hidden": True}},
     ]
 
+    # V20.26: estoque simulado por MLB (PUT /items e a releitura). Comeca pelo estoque dos anuncios da previa.
+    # MLB em S._PREVIA_ESTOQUE_NAO_MUDA = o PUT responde 200 sem mudar (o ML com varios depositos).
+    # S._PREVIA_UP[mlb] = {"up": id, "locations": [...]} = anuncio com user-product (estoque por local).
+    estoque_ml = {}
+    for _itens in (getattr(S, "_PREVIA_ANUNCIOS", {}) or {}).values():
+        for _mlb, _d in _itens.items():
+            estoque_ml[_mlb] = {"qtd": _d.get("estoque"), "logistica": _d.get("logistica") or "drop_off"}
+    S._PREVIA_ESTOQUE_ML = estoque_ml
+    ups = getattr(S, "_PREVIA_UP", {}) or {}
+    versoes = {}
+
+    def item_estoque(mlb):
+        d = estoque_ml.setdefault(mlb, {"qtd": 0, "logistica": "drop_off"})
+        up = (ups.get(mlb) or {}).get("up")
+        return {"id": mlb, "available_quantity": d["qtd"], "user_product_id": up,
+                "shipping": {"logistic_type": d["logistica"]}, "status": "active"}
+
+    def ml_estoque_http_falso(method, path, payload=None, headers=None):
+        time.sleep(0.3)
+        m = re.match(r"/user-products/([^/]+)/stock(/type/selling_address)?$", path)
+        mlb = next((k for k, v in ups.items() if v.get("up") == (m.group(1) if m else None)), None)
+        if not m or mlb is None:
+            raise RuntimeError(f"Mercado Livre respondeu HTTP 404: (prévia) {method} {path} não simulado")
+        locais = ups[mlb]["locations"]
+        if method == "GET":
+            return {"locations": locais}, {"x-version": str(versoes.get(mlb, 1))}
+        if str((headers or {}).get("x-version")) != str(versoes.get(mlb, 1)):
+            e = RuntimeError("Mercado Livre respondeu HTTP 409: version conflict")
+            e.ml_status, e.ml_corpo = 409, "version conflict"
+            raise e
+        for loc in locais:
+            if loc.get("type") == "selling_address":
+                loc["quantity"] = int(payload["quantity"])
+        versoes[mlb] = versoes.get(mlb, 1) + 1
+        estoque_ml.setdefault(mlb, {"qtd": 0, "logistica": "drop_off"})["qtd"] = sum(int(l.get("quantity") or 0) for l in locais)
+        return {}, {}
+
+    S._ml_estoque_http = ml_estoque_http_falso
+    S.ANUNCIO_ESTOQUE_RELEITURA_ESPERAS = (0.3,)
+
     def ml_api_get_falso(caminho, **kw):
         time.sleep(0.3)
+        m = re.match(r"/items/(MLB\d+)\?attributes=", caminho)  # V20.26: releitura do estoque
+        if m:
+            return item_estoque(m.group(1))
         if caminho.startswith("/sites/MLB/domain_discovery/search"):
             return [{"domain_id": "MLB-TRANSMISSION_OILS", "domain_name": "Óleos de transmissão", "category_id": "MLB194027",
                      "category_name": "Óleos de Transmissão"},
@@ -89,11 +132,18 @@ def instalar(S):
                 time.sleep(2)
                 raise TimeoutError("timed out")
             n = next(cont)
+            estoque_ml[f"MLB9{n:09d}"] = {"qtd": payload.get("available_quantity"), "logistica": "drop_off"}  # V20.26
             return {"id": f"MLB9{n:09d}", "title": titulo, "price": payload.get("price"),
                     "available_quantity": payload.get("available_quantity"), "status": "active",
                     "listing_type_id": payload.get("listing_type_id"), "category_id": payload.get("category_id")}
         if method == "POST" and path.endswith("/description"):
             return {"plain_text": (payload or {}).get("plain_text", "")}
+        m = re.match(r"/items/(MLB\d+)$", path)  # V20.26: PUT do estoque do anuncio
+        if method == "PUT" and m and set(payload or {}) == {"available_quantity"}:
+            mlb = m.group(1)
+            if mlb not in (getattr(S, "_PREVIA_ESTOQUE_NAO_MUDA", set()) or set()):
+                estoque_ml.setdefault(mlb, {"qtd": 0, "logistica": "drop_off"})["qtd"] = int(payload["available_quantity"])
+            return item_estoque(mlb)
         raise RuntimeError(f"Mercado Livre respondeu HTTP 404: (prévia) {method} {path} não simulado")
 
     S.ml_api_get = ml_api_get_falso

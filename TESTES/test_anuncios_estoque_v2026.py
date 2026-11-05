@@ -471,6 +471,210 @@ class CalculoTeste(EstoqueBase):
             self.assertIsNone(S.DB.execute("SELECT 1 FROM anuncio_apollo_v2026").fetchone())
 
 
+class RodadaTeste(EstoqueBase):
+
+    def preparar(self, mlb="MLB1", ficha="P1", disp=10, ml=3, conta="aracatuba"):
+        inserir(conta=conta, anuncio_id=mlb, ficha=ficha, modo="automatico", estoque=ml)
+        self.ml.item(mlb, ml)
+        self.apollo[ficha] = {1: disp, 3: disp}
+        S.anuncios_apollo_ler(ficha, conta)
+
+    def test_simulacao_nao_chama_o_ml(self):
+        self.preparar()
+        r = S.anuncios_estoque_rodada("aracatuba", ator="sistema")
+        self.assertEqual((r["mudariam"], r["simulados"], r["enviados"]), (1, 1, 0))
+        self.assertEqual(self.ml.chamadas, [])
+        self.assertEqual(S.anuncio_estoque_log("ml", "aracatuba", "MLB1")[0]["resultado"], "simulado")
+        self.assertEqual(canal()["estoque_calculado"], 10)
+        S.anuncios_estoque_rodada("aracatuba", ator="sistema")  # mesmo numero: nao repete o registro
+        self.assertEqual(len(S.anuncio_estoque_log("ml", "aracatuba", "MLB1")), 1)
+
+    def test_lote_so_no_clique(self):
+        self.preparar()
+        S.anuncio_estoque_config_definir("aracatuba", "lote", "luis")
+        S.anuncios_estoque_rodada("aracatuba", ator="sistema")
+        self.assertEqual(self.ml.escritas(), [])
+        r = S.anuncios_estoque_rodada("aracatuba", ator="luis", forcar=True)
+        self.assertEqual(r["enviados"], 1, r)
+        self.assertEqual(self.ml.itens["MLB1"]["available_quantity"], 10)
+
+    def test_automatico_envia_so_o_que_mudou(self):
+        self.preparar("MLB1", "P1", disp=10, ml=3)
+        self.preparar("MLB2", "P2", disp=4, ml=4)
+        S.anuncio_estoque_config_definir("aracatuba", "automatico", "luis")
+        r = S.anuncios_estoque_rodada("aracatuba", ator="sistema")
+        self.assertEqual((r["enviados"], r["mudariam"]), (1, 1), r)
+        self.assertEqual([c[1] for c in self.ml.escritas()], ["/items/MLB1"])
+        self.assertEqual(canal()["estoque_enviado"], 10)
+        self.ml.chamadas.clear()
+        S.anuncios_estoque_rodada("aracatuba", ator="sistema")
+        self.assertEqual(self.ml.chamadas, [])  # ja esta certo: nem le o ML
+
+    def test_venda_no_meio_recalcula(self):
+        """RF1: a venda chega depois do calculo e antes do envio: vai o numero novo, nunca o velho."""
+        self.preparar(disp=10, ml=3)
+        S.anuncio_estoque_config_definir("aracatuba", "automatico", "luis")
+        original = S._anuncios_estoque_calcular
+        chamadas = []
+
+        def calcular_e_vender(conta, anuncio_id=""):
+            saida = original(conta, anuncio_id)
+            chamadas.append(anuncio_id)
+            if len(chamadas) == 1:
+                fila([linha("PED1", "P1", 4, Marketplace="MERCADO LIVRE")])
+            return saida
+
+        with mock.patch.object(S, "_anuncios_estoque_calcular", side_effect=calcular_e_vender):
+            r = S.anuncios_estoque_rodada("aracatuba", ator="sistema")
+        self.assertEqual(r["enviados"], 1, r)
+        self.assertEqual([c[2] for c in self.ml.escritas()], [{"available_quantity": 6}])
+        self.assertEqual(canal()["estoque_enviado"], 6)
+
+    def test_virou_manual_no_meio_desiste(self):
+        """RF4: o Admin troca para Manual enquanto o Automatico vai enviar."""
+        self.preparar()
+        S.anuncio_estoque_config_definir("aracatuba", "automatico", "luis")
+        original = S._anuncios_estoque_calcular
+
+        def calcular_e_trocar(conta, anuncio_id=""):
+            saida = original(conta, anuncio_id)
+            S.anuncio_estoque_modo_definir("ml", "aracatuba", "MLB1", "manual", "luis")
+            return saida
+
+        with mock.patch.object(S, "_anuncios_estoque_calcular", side_effect=calcular_e_trocar):
+            r = S.anuncios_estoque_rodada("aracatuba", ator="sistema")
+        self.assertEqual((r["enviados"], r["ignorados"]), (0, 1), r)
+        self.assertEqual(self.ml.chamadas, [])
+        self.assertEqual(S.anuncio_estoque_log("ml", "aracatuba", "MLB1")[0]["resultado"], "ignorado")
+
+    def test_apollo_sem_resposta_nao_mexe(self):
+        """RF2: Apollo sem resposta = o anuncio fica como estava, sem envio e sem zero."""
+        self.preparar(disp=10, ml=3)
+        S.anuncio_estoque_config_definir("aracatuba", "automatico", "luis")
+        self.apollo["P1"] = RuntimeError("fora")
+        S.anuncios_apollo_ler("P1", "aracatuba")
+        r = S.anuncios_estoque_rodada("aracatuba", ator="sistema")
+        self.assertEqual((r["mudariam"], r["enviados"]), (0, 0))
+        self.assertEqual(self.ml.chamadas, [])
+        self.assertEqual(self.ml.itens["MLB1"]["available_quantity"], 3)
+
+    def test_erro_do_ml_nao_repete_logo(self):
+        self.preparar()
+        S.anuncio_estoque_config_definir("aracatuba", "automatico", "luis")
+        self.ml.nao_muda.add("MLB1")
+        self.assertEqual(S.anuncios_estoque_rodada("aracatuba", ator="sistema")["erros"], 1)
+        n = len(self.ml.escritas())
+        S.anuncios_estoque_rodada("aracatuba", ator="sistema")
+        self.assertEqual(len(self.ml.escritas()), n)
+
+    def test_volta_do_worker(self):
+        self.preparar()
+        S.anuncio_estoque_config_definir("aracatuba", "automatico", "luis")
+        self.ml.item("MLB1", 3)
+        estado = {}
+        self.assertEqual(S.anuncios_estoque_volta(estado), ["aracatuba"])
+        self.assertEqual(self.ml.itens["MLB1"]["available_quantity"], 10)
+        self.assertEqual(S.anuncios_estoque_volta(estado), [])  # nada mudou
+        fila([linha("PED1", "P1", 2)])
+        self.assertEqual(S.anuncios_estoque_volta(estado), ["aracatuba"])
+        self.assertEqual(self.ml.itens["MLB1"]["available_quantity"], 8)
+
+    def test_sem_automatico_o_worker_nao_le(self):
+        inserir(modo="manual")
+        self.assertEqual(S.anuncios_estoque_volta({}), [])
+        self.assertEqual(self.apollo_chamadas, [])
+
+    def test_worker_no_painel_de_saude_e_no_boot(self):
+        self.assertIn("anuncios_estoque_loop", S.SAUDE_WORKERS_INFO)
+        from pathlib import Path
+        fonte = Path(S.__file__).read_text(encoding="utf-8")
+        self.assertIn("target=_worker_protegido(anuncios_estoque_loop)", fonte)
+
+
+class RotasEstoqueTeste(EstoqueBase):
+
+    def usuario(self, nome, consulta=False):
+        with S.DB_LOCK:
+            S.upsert_app_user(nome, nome, "operador", True, SENHA, "teste",
+                              permissions={"conferencia": True, "admin": True})
+            if consulta:
+                S.DB.execute("UPDATE app_users SET somente_leitura=1 WHERE username=?", (nome,))
+            S.DB.commit()
+        c = Cliente(self.url_base)
+        c.entrar(nome, SENHA, area="admin")
+        return c
+
+    def test_manual_envia_na_hora_e_registra(self):
+        inserir(estoque=3)
+        self.ml.item("MLB1", 3)
+        st, c = self.cliente.pedir("POST", "/api/anuncios/estoque/manual",
+                                   {"conta": "aracatuba", "anuncio_id": "MLB1", "quantidade": 12})
+        self.assertEqual(st, 200, c)
+        self.assertTrue(c["ok"])
+        self.assertEqual(self.ml.itens["MLB1"]["available_quantity"], 12)
+        st, c = self.cliente.pedir("GET", "/api/anuncios/estoque?conta=aracatuba&anuncio_id=MLB1")
+        self.assertEqual(st, 200, c)
+        self.assertEqual(c["log"][0]["para"], 12)
+        self.assertEqual(c["anuncio"]["estoque_enviado"], 12)
+
+    def test_manual_em_automatico_recusa(self):
+        inserir(modo="automatico")
+        self.ml.item("MLB1", 3)
+        st, _ = self.cliente.pedir("POST", "/api/anuncios/estoque/manual",
+                                   {"conta": "aracatuba", "anuncio_id": "MLB1", "quantidade": 12})
+        self.assertEqual(st, 400)
+        self.assertEqual(self.ml.chamadas, [])
+
+    def test_sem_conta_recusa(self):
+        inserir()
+        st, _ = self.cliente.pedir("POST", "/api/anuncios/estoque/manual", {"anuncio_id": "MLB1", "quantidade": 1})
+        self.assertEqual(st, 400)
+
+    def test_modo_e_get(self):
+        inserir(ficha="P1")
+        st, c = self.cliente.pedir("POST", "/api/anuncios/estoque/modo",
+                                   {"conta": "aracatuba", "anuncio_id": "MLB1", "modo": "automatico"})
+        self.assertEqual(st, 200, c)
+        self.apollo["P1"] = {1: 5}
+        S.anuncios_apollo_ler("P1", "aracatuba")
+        st, c = self.cliente.pedir("GET", "/api/anuncios/estoque?conta=aracatuba")
+        self.assertEqual(st, 200, c)
+        self.assertEqual(c["config"]["modo"], "simulacao")
+        self.assertEqual(c["itens"][0]["calculado"], 5)
+        self.assertEqual(c["resumo"]["automatico"], 1)
+
+    def test_automatico_da_conta_exige_owner(self):
+        st, c = self.cliente.pedir("POST", "/api/anuncios/estoque/config", {"conta": "aracatuba", "modo": "automatico"})
+        self.assertEqual(st, 428, c)
+        self.assertEqual(S.anuncio_estoque_config("aracatuba")["modo"], "simulacao")
+        st, c = self.cliente.pedir("POST", "/api/anuncios/estoque/config", {"conta": "aracatuba", "modo": "lote"})
+        self.assertEqual(st, 200, c)
+        self.assertEqual(c["config"]["modo"], "lote")
+
+    def test_enviar_em_simulacao_recusa(self):
+        st, _ = self.cliente.pedir("POST", "/api/anuncios/estoque/enviar", {"conta": "aracatuba"})
+        self.assertEqual(st, 400)
+
+    def test_supervisor_ve_mas_nao_grava(self):
+        inserir()
+        sup = self.usuario("sup_2026")
+        self.assertEqual(sup.pedir("GET", "/api/anuncios/estoque?conta=aracatuba")[0], 200)
+        for rota, corpo in (("/api/anuncios/estoque/manual", {"conta": "aracatuba", "anuncio_id": "MLB1", "quantidade": 1}),
+                            ("/api/anuncios/estoque/modo", {"conta": "aracatuba", "anuncio_id": "MLB1", "modo": "automatico"}),
+                            ("/api/anuncios/estoque/config", {"conta": "aracatuba", "modo": "lote"}),
+                            ("/api/anuncios/estoque/enviar", {"conta": "aracatuba"})):
+            self.assertEqual(sup.pedir("POST", rota, corpo)[0], 403, rota)
+        self.assertEqual(self.ml.chamadas, [])
+
+    def test_consulta_bloqueada(self):
+        inserir()
+        con = self.usuario("con_2026", consulta=True)
+        self.assertEqual(con.pedir("GET", "/api/anuncios/estoque?conta=aracatuba")[0], 200)
+        st, _ = con.pedir("POST", "/api/anuncios/estoque/manual", {"conta": "aracatuba", "anuncio_id": "MLB1", "quantidade": 1})
+        self.assertEqual(st, 403)
+        self.assertEqual(self.ml.chamadas, [])
+
+
 if __name__ == "__main__":
     import unittest
     unittest.main()
