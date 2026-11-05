@@ -7477,6 +7477,127 @@ def ficha_importar(codigo: str, campos: dict[str, Any], origem: str) -> list[str
         return alterados
 
 
+# V20.23: kits - le e grava o MESMO Cadastro de Kits (conf_kits) que Conferencia, Shopee, Financeiro e Demanda usam.
+def kit_composicao(sku_kit: str) -> dict[str, Any] | None:
+    """Mesma regra de full_kit_compositions para um SKU: cadastro primeiro, depois o prefixo KITn-X."""
+    sku = str(sku_kit or "").strip()
+    if not sku:
+        return None
+    entry = _kit_catalog_lookup(_load_kit_catalog(), sku)
+    fonte = "cadastro"
+    if entry and not re.match(r"^KIT", sku, flags=re.I) and normalize(entry.get("sku_kit")) != normalize(sku):
+        entry = None  # SKU comum so vira kit quando e exatamente o SKU cadastrado
+    if not entry:
+        entry = _infer_quantity_kit_from_sku(sku)
+        fonte = "prefixo"
+    if not entry:
+        return None
+    comps = [{"sku": str(c.get("sku") or "").strip(), "quantidade": int(c.get("quantidade") or 0)}
+             for c in entry.get("componentes") or []
+             if str(c.get("sku") or "").strip() and int(c.get("quantidade") or 0) > 0]
+    if not comps or (len(comps) == 1 and comps[0]["quantidade"] == 1 and normalize(comps[0]["sku"]) == normalize(sku)):
+        return None
+    return {"sku_kit": str(entry.get("sku_kit") or sku), "nome": str(entry.get("nome") or sku),
+            "componentes": comps, "fonte": fonte, "ativo": bool(entry.get("ativo", True))}
+
+
+def kits_da_peca(codigo: str) -> list[dict[str, Any]]:
+    """Todo kit (cadastro e fichas tipo=kit lidas pelo prefixo) que tem a peca entre os componentes."""
+    alvo = _exp_norm_codigo(codigo)
+    if not alvo:
+        return []
+    saida: list[dict[str, Any]] = []
+    vistos: set[str] = set()
+
+    def _considerar(kit: dict[str, Any] | None) -> None:
+        if not kit:
+            return
+        chave = _exp_norm_codigo(kit["sku_kit"])
+        if chave in vistos:
+            return
+        qtd = sum(c["quantidade"] for c in kit["componentes"] if _exp_norm_codigo(c["sku"]) == alvo)
+        if qtd <= 0:
+            return
+        vistos.add(chave)
+        saida.append({"sku_kit": kit["sku_kit"], "nome": kit["nome"], "quantidade_da_peca": qtd, "fonte": kit["fonte"]})
+
+    for entry in {id(e): e for e in _load_kit_catalog().values()}.values():
+        _considerar(kit_composicao(str(entry.get("sku_kit") or "")))
+    with DB_LOCK:
+        codigos = [r["codigo"] for r in DB.execute("SELECT codigo FROM anuncio_ficha_v2023 WHERE tipo='kit'").fetchall()]
+    for cod in codigos:
+        _considerar(kit_composicao(cod))
+    return saida
+
+
+def kit_salvar(sku_kit: str, nome: str, componentes: list[dict[str, Any]], ator: str,
+               versao_storage: int | None) -> dict[str, Any]:
+    """Grava/atualiza UMA entrada de conf_kits (as outras e os campos desconhecidos da linha ficam como estao),
+    sempre por save_storage; garante a ficha do kit com tipo='kit'."""
+    sku = str(sku_kit or "").strip()
+    if not sku:
+        raise ValueError("Informe o SKU do kit.")
+    if not isinstance(componentes, list) or not componentes:
+        raise ValueError("O kit precisa de pelo menos um componente.")
+    novos: list[dict[str, Any]] = []
+    for comp in componentes:
+        csku = str((comp or {}).get("sku") or "").strip() if isinstance(comp, dict) else ""
+        if not csku:
+            raise ValueError("Todo componente precisa de um SKU.")
+        if normalize(csku) == normalize(sku):
+            raise ValueError("O kit não pode conter ele mesmo.")
+        q = comp.get("quantidade")
+        if isinstance(q, bool) or not isinstance(q, (int, float, str)):
+            raise ValueError("Quantidade inválida.")
+        try:
+            qf = float(q)
+        except (TypeError, ValueError):
+            raise ValueError("Quantidade inválida.")
+        if qf != int(qf) or not 1 <= int(qf) <= 999:
+            raise ValueError("A quantidade de cada componente deve ser um número inteiro de 1 a 999.")
+        novos.append({"sku": csku, "quantidade": int(qf)})
+    nome_ok = str(nome or "").strip() or sku
+    with DB_LOCK:  # RLock: leitura e gravacao na mesma vez, sem outra gravacao no meio
+        bruto, versao, _ = get_storage("conf_kits")
+        if versao_storage is not None and int(versao_storage) != int(versao):
+            raise FichaConflito({"versao_storage": versao})
+        try:
+            linhas = json.loads(bruto or "[]")
+        except ValueError:
+            linhas = []
+        if not isinstance(linhas, list):
+            raise ValueError("O Cadastro de Kits está em formato inesperado.")
+        alvo = normalize(sku)
+        posicao = None
+        for i, row in enumerate(linhas):
+            if isinstance(row, dict) and normalize(row.get("sku_kit") or row.get("SKU Kit") or row.get("sku")) == alvo:
+                posicao = i
+                break
+        if posicao is None:
+            linhas.append({"sku_kit": sku, "nome": nome_ok, "ativo": True, "componentes": novos})
+        else:
+            row = dict(linhas[posicao])
+            antigos = {normalize(c.get("sku")): c for c in (row.get("componentes") or []) if isinstance(c, dict)}
+            comps_final = []
+            for c in novos:
+                extra = {k: v for k, v in antigos.get(normalize(c["sku"]), {}).items()
+                         if k not in ("sku", "SKU", "quantidade", "qtd", "Quantidade")}
+                comps_final.append({**extra, **c})
+            row["componentes"] = comps_final
+            row["nome"] = nome_ok
+            linhas[posicao] = row
+        save_storage("conf_kits", bruto, json.dumps(linhas, ensure_ascii=False), False, actor=ator,
+                     actor_role="admin", source_screen="anuncios", change_method="anuncios.kit")
+        cod = _exp_norm_codigo(sku)
+        if cod:
+            DB.execute(
+                "INSERT INTO anuncio_ficha_v2023(codigo,tipo,atualizado_em,atualizado_por) VALUES(?,'kit',?,?) "
+                "ON CONFLICT(codigo) DO UPDATE SET tipo='kit'", (cod, now_iso(), str(ator or "")))
+            DB.commit()
+    audit(ator, "anuncios.kit", f"{sku}|{novos}")
+    return kit_composicao(sku) or {}
+
+
 # V20.23: estoque "da para montar" do kit (puro) e leitura do Apollo por filial.
 ANUNCIO_REVENDA: dict[str, int] = {"aracatuba": 1, "bauru": 3}
 ANUNCIO_APOLLO_MAX_CODIGOS = 10
