@@ -1,6 +1,8 @@
 """V20.23 - Anuncios fase 1: controle do anuncio, payloads e rotas."""
 
-from base import S, TesteNoromak, Cliente, linha
+from unittest import mock
+
+from base import S, SENHA_ADMIN, TesteNoromak, Cliente, linha
 
 SENHA = "SenhaTeste#2023"
 
@@ -164,3 +166,51 @@ class RotasAnunciosTeste(TesteNoromak):
         est = c["estoque"]["aracatuba"]
         self.assertIsNone(est["da_para_montar"])
         self.assertTrue(all(v is None for v in est["disponivel"].values()))
+
+    def test_pendente_desconhecido_nao_vira_zero(self):
+        S.ficha_salvar("P1", {"nome": "x"}, "luis", None)
+        orig = S.apollo_disponivel_filial
+        S.apollo_disponivel_filial = lambda codigos, filial: {k: 10.0 for k in codigos}
+        try:
+            with mock.patch.object(S, "_rows_from_storage_value", side_effect=RuntimeError("fila ilegivel")):
+                _, c = self.cliente.pedir("GET", "/api/anuncios/ficha?codigo=P1&apollo=1")
+        finally:
+            S.apollo_disponivel_filial = orig
+        for filial in ("aracatuba", "bauru"):
+            est = c["estoque"][filial]
+            self.assertIsNone(est["pendente"])
+            self.assertIsNone(est["da_para_montar"])
+            self.assertTrue(est["erro"])
+
+    def test_puxar_conta_desconhecida_400(self):
+        with mock.patch.object(S, "ml_casas_conectadas", return_value=["aracatuba"]):
+            st, c = self.cliente.pedir("POST", "/api/anuncios/puxar", {"contas": ["marte"]})
+            self.assertEqual(st, 400, c)
+            st, c = self.cliente.pedir("POST", "/api/anuncios/puxar", {"contas": "aracatuba"})
+            self.assertEqual(st, 400, c)
+        # o 400 nao deixa a trava presa
+        self.assertTrue(S.ANUNCIOS_PUXAR_LOCK.acquire(blocking=False))
+        S.ANUNCIOS_PUXAR_LOCK.release()
+
+    def test_puxar_sucesso(self):
+        item = {"sku_ml": "0893117732", "titulo": "Titulo", "preco": 10.0, "estoque": 3, "status": "active",
+                "tipo": "gold_special", "categoria": "MLB1", "logistica": "", "user_product": "", "atributos": []}
+        with mock.patch.object(S, "ml_casas_conectadas", return_value=["aracatuba"]),                 mock.patch.object(S, "ml_todos_os_anuncios", return_value=["MLB9"]),                 mock.patch.object(S, "ml_itens_detalhe", return_value={"MLB9": item}):
+            st, c = self.cliente.pedir("POST", "/api/anuncios/puxar", {"contas": ["aracatuba"]})
+        self.assertEqual(st, 200, c)
+        self.assertTrue(c["ok"])
+        self.assertEqual(c["contas"]["aracatuba"]["novos"], 1)
+        with S.DB_LOCK:
+            a = S.DB.execute("SELECT 1 FROM audit_log WHERE action='anuncios.puxar'").fetchone()
+        self.assertIsNotNone(a)
+
+    def test_compras_403(self):
+        st, r = self.cliente.pedir("POST", "/api/roles", {
+            "username": "carla23", "display_name": "Carla", "role": "compras", "active": True, "password": SENHA_ADMIN})
+        self.assertEqual(st, 200, r)
+        cp = Cliente(self.url_base)
+        cp.entrar("carla23", SENHA_ADMIN, area="portal")
+        self.assertEqual(cp.pedir("GET", "/api/anuncios")[0], 403)
+        self.assertEqual(cp.pedir("GET", "/api/anuncios/ficha?codigo=P1")[0], 403)
+        for rota in ("ficha", "kit", "puxar", "controle", "remover", "reincluir"):
+            self.assertEqual(cp.pedir("POST", "/api/anuncios/" + rota, {})[0], 403, rota)

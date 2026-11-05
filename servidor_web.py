@@ -7859,6 +7859,25 @@ def pendentes_da_filial(filial: str) -> dict[str, int]:
     return saida
 
 
+def pendentes_por_filial(filiais: tuple[str, ...]) -> dict[str, dict[str, int] | None]:
+    """V20.23: uma leitura de conf_pedidos para varias filiais. Falha na leitura = None em todas (nunca zero)."""
+    try:
+        bruto, _, _ = get_storage("conf_pedidos")
+        linhas = [r for r in _rows_from_storage_value(bruto) if isinstance(r, dict)]
+    except Exception:
+        return {f: None for f in filiais}
+    saida: dict[str, dict[str, int] | None] = {f: {} for f in filiais}
+    for row in linhas:
+        dest = saida.get(filial_da_linha(row))
+        if dest is None:
+            continue
+        qtd = max(0, _tiktok_quantidade(row.get("Quantidade")) or 0)
+        for codigo, unidades in _tiktok_pecas(row.get("SKU")):
+            chave = _exp_norm_codigo(codigo)
+            dest[chave] = dest.get(chave, 0) + qtd * unidades
+    return saida
+
+
 def _apollo_da_revenda(resposta: dict[str, Any], revenda: int) -> float | None:
     for row in resposta.get("estoques") or []:
         if isinstance(row, dict) and _tiktok_quantidade(row.get("revenda")) == revenda:
@@ -7972,8 +7991,11 @@ def anuncios_lista_payload(busca: str = "", filtro: str = "") -> dict[str, Any]:
 
 
 def _anuncio_estoque_filial(componentes: list[dict[str, Any]], lido: dict[str, float | None] | None,
-                            pendente: dict[str, int]) -> dict[str, Any]:
+                            pendente: dict[str, int] | None) -> dict[str, Any]:
     disp = {c["sku"]: (lido or {}).get(c["sku"]) for c in componentes}
+    if pendente is None:  # V20.23: fila nao lida = pendente desconhecido, nunca 0 (inflaria o "da para montar")
+        return {"disponivel": disp, "pendente": None, "da_para_montar": None,
+                "erro": "Não foi possível ler as vendas pendentes da filial."}
     return {"disponivel": disp, "pendente": {c["sku"]: int(pendente.get(c["sku"], 0) or 0) for c in componentes},
             "da_para_montar": kit_da_para_montar(componentes, disp, pendente) if lido is not None else None}
 
@@ -7988,7 +8010,6 @@ def anuncio_ficha_payload(codigo: str, ler_apollo: bool = False) -> dict[str, An
     with DB_LOCK:
         todas = DB.execute("SELECT * FROM anuncio_canal_v2023 WHERE ficha_codigo=? ORDER BY canal,conta,anuncio_id",
                            (cod,)).fetchall()
-        geral = DB.execute("SELECT * FROM anuncio_canal_v2023").fetchall()
     if ficha is None and not todas:
         return None
     ativos = [dict(r) for r in todas if not str(r["removido_em"] or "")]
@@ -8001,16 +8022,13 @@ def anuncio_ficha_payload(codigo: str, ler_apollo: bool = False) -> dict[str, An
         componentes = [{"sku": _exp_norm_codigo(cod), "quantidade": 1}]
     codigos = [c["sku"] for c in componentes]
     estoque: dict[str, Any] = {}
+    pendencias = pendentes_por_filial(("aracatuba", "bauru"))  # uma leitura da fila para as duas filiais
     for filial in ("aracatuba", "bauru"):
         lido = apollo_disponivel_filial(codigos, filial) if ler_apollo else None  # Apollo FORA do DB_LOCK
-        try:
-            pend = pendentes_da_filial(filial)
-        except Exception:
-            pend = {}
-        estoque[filial] = _anuncio_estoque_filial(componentes, lido, pend)
+        estoque[filial] = _anuncio_estoque_filial(componentes, lido, pendencias[filial])
     return {"ficha": ficha, "kits_da_peca": kits_da_peca(cod) if tipo != "kit" else [], "composicao": comp,
             "anuncios": ativos, "removidos": removidos,
-            "misto": bool(_anuncio_misto_por_codigo(geral).get(cod)), "estoque": estoque,
+            "misto": bool(_anuncio_misto_por_codigo(todas).get(cod)), "estoque": estoque,
             "apollo_lido": bool(ler_apollo)}
 
 
@@ -40079,7 +40097,14 @@ class AppHandler(BaseHTTPRequestHandler):
                         return
                     try:
                         contas = body.get("contas")
-                        res = anuncios_ml_puxar([str(c) for c in contas] if isinstance(contas, list) and contas else None)
+                        if contas is not None and not (isinstance(contas, list) and all(isinstance(c, str) for c in contas)):
+                            raise ValueError("Contas inválidas.")
+                        if contas:
+                            validas = ml_casas_conectadas()
+                            ruins = [c for c in contas if c not in validas]
+                            if ruins:
+                                raise ValueError("Conta desconhecida ou desconectada: " + ", ".join(ruins))
+                        res = anuncios_ml_puxar(list(contas) if contas else None)
                     finally:
                         ANUNCIOS_PUXAR_LOCK.release()
                     audit(ctx["username"], "anuncios.puxar", json.dumps(
