@@ -46,6 +46,12 @@ def instalar(S):
                      "category_name": "Óleos de Transmissão"},
                     {"domain_id": "MLB-CONTACT_CLEANERS", "domain_name": "Limpa contatos", "category_id": "MLB1234",
                      "category_name": "Limpa Contatos"}]
+        m = re.match(r"/items/(MLB\d+)/description$", caminho)  # V20.25: descricao do anuncio (puxar um / Trazer dados)
+        if m:
+            texto = (getattr(S, "_PREVIA_DESCRICOES", {}) or {}).get(m.group(1))
+            if texto is None:
+                raise RuntimeError("Mercado Livre respondeu HTTP 404: item sem descrição")
+            return {"plain_text": texto}
         m = re.match(r"/categories/(MLB\d+)(/attributes)?$", caminho)
         if m:
             c = cats.get(m.group(1))
@@ -102,6 +108,16 @@ def instalar(S):
             return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
         return (b"\x89PNG\r\n\x1a\n" + bloco(b"IHDR", struct.pack(">IIBBBBB", lado, lado, 8, 2, 0, 0, 0))
                 + bloco(b"IDAT", zlib.compress(cru, 9)) + bloco(b"IEND", b""))
+
+    # V20.25: download das fotos do anuncio simulado (o endereco continua conferido: so https do mlstatic.com)
+    def foto_ml_falsa(url):
+        if not S._anuncio_foto_ml_url_ok(url):
+            raise ValueError("endereço fora do mlstatic.com")
+        time.sleep(0.2)
+        h = sum(url.encode()) % 200
+        return png((40 + h, 200 - h // 2, 120 + h // 3), 600)
+
+    S._anuncio_foto_ml_baixar = foto_ml_falsa
 
     # fotos iniciais da ficha 32052153 e um trabalho pronto do Estudio
     S.anuncio_foto_adicionar("32052153", png((230, 120, 30)), "previa")

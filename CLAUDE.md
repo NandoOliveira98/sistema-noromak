@@ -741,6 +741,16 @@ conectada (`ml_itens_detalhe` agora traz `seller_id` e, com `falhas=`, separa 40
 resposta = 502, nada gravado; removido pelo ADMIN continua removido. **Revisão:** item sem SKU no ML não apaga a ficha já ligada
 (`COALESCE(NULLIF(?,''),ficha_codigo)`); kit com pedido na fila compara a **lista em ordem** (reordenar também muda o uid
 `KITDB_`); 408 no `POST /items` = `incerto`. Teste: `TESTES/test_anuncios_puxar_fundo_v2024.py`.
+**V20.25 — puxar traz a ficha** (dono, 05/11, CAM1019: "puxei um mas não veio as informações" — só marca, EAN, peso e medidas).
+As duas puxadas importam também `nome` (título do anúncio) e `categoria_ml` (`anuncio_campos_do_detalhe`, origem `anuncio_ml`, mesma
+regra do `ficha_importar`: Admin e "apagado pelo Admin" nunca mudam; vários anúncios na mesma ficha = o 1º lido vale). O **"Puxar um"** e o
+botão **"Trazer dados do anúncio"** (linha ML da aba Anúncios em todos os canais; `POST /api/anuncios/trazer-dados {canal, conta,
+anuncio_id}`, perfil Admin, token da conta da linha; removido pelo Admin = 400) trazem ainda a **descrição** (`GET /items/{id}/description`
+→ `plain_text`) e as **fotos** (`ml_itens_detalhe` pede `pictures`, até 12; `_anuncio_fotos_do_ml`): só quando a ficha **não tem foto**
+(nunca duplica, nunca apaga; `ANUNCIOS_FOTOS_ML_LOCK` + releitura antes de gravar), baixadas fora do `DB_LOCK`, 20 s por foto, **só https
+do mlstatic.com** (também no redirecionamento), versão `-F` primeiro; falha é pulada e contada. A puxada em massa **não** lê descrição nem
+fotos. A resposta traz `trazidos` e `trazido_texto` ("Título, categoria, descrição e 5 fotos vieram do anúncio."), que a tela mostra.
+Prévia: anúncios simulados com fotos e descrição. Teste: `TESTES/test_anuncios_puxar_dados_v2025.py`.
 **Rotas:** `GET /api/anuncios`, `GET /api/anuncios/ficha?codigo=&apollo=1`; `POST /api/anuncios/{ficha,kit,puxar,controle,remover,reincluir}`.
 Ver = módulo admin; gravar = perfil Admin (Consulta bloqueado pelo `consulta_bloqueada`).
 Testes: `TESTES/test_anuncios_{ficha,kits,puxar,rotas,kit_fila}_v2023.py`.

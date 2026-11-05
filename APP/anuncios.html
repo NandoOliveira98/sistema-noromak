@@ -370,7 +370,7 @@ async function puxarUm() {
     if (campo) campo.value = "";
     const nome = CONTA[r.conta] || r.conta;
     if (r.removido) nkToast(`${r.mlb} (${nome}) foi removido da lista pelo Admin: não foi atualizado. Use “Reincluir” para trazer de volta.`, "aviso", {duracao: 12000});
-    else nkToast(`${r.mlb} (${nome}) ${r.novo ? "incluído" : "atualizado"}${r.ficha_codigo ? " — ficha " + r.ficha_codigo : " — sem código (aba Sem ficha)"}.`, "ok", {duracao: 9000});
+    else nkToast(`${r.mlb} (${nome}) ${r.novo ? "incluído" : "atualizado"}${r.ficha_codigo ? " — ficha " + r.ficha_codigo : " — sem código (aba Sem ficha)"}.${r.trazido_texto ? " " + r.trazido_texto : ""}`, "ok", {duracao: 12000});  // V20.25: o que veio para a ficha
     if (r.ficha_codigo) { irPara({codigo: r.ficha_codigo, aba: "anuncios"}); return; }
     L.aba = "sem_ficha"; L.filtro = "";
     if (codigoDaUrl()) irPara({}); else { desenharLista(); carregarLista(); }
@@ -770,6 +770,7 @@ function desenharAnuncios() {
   const acoes = a => {
     if (!PODE) return "";
     const b = [];
+    if (a.canal === "ml") b.push(`<button class="nk-btn mini" ${dadosAnuncio(a)} onclick="trazerDadosAnuncio(this)" title="Lê o anúncio no Mercado Livre e traz título, categoria, atributos, descrição e fotos para a ficha (só o que a ficha ainda não tem; o que o Admin digitou fica).">Trazer dados do anúncio</button>`);  // V20.25
     if (a.controle === "alephee" && a.logistica !== "fulfillment") b.push(`<button class="nk-btn mini pri" ${dadosAnuncio(a)} onclick="passarNoromak(this.dataset)">Passar para o Noromak</button>`);
     if (a.controle === "noromak") b.push(`<button class="nk-btn mini" ${dadosAnuncio(a)} onclick="devolverAlephee(this.dataset)">Devolver para a Alephee</button>`);
     b.push(`<button class="nk-btn mini perigo" ${dadosAnuncio(a)} onclick="removerAnuncio(this.dataset)">Remover</button>`);
@@ -820,6 +821,15 @@ async function removerAnuncio({canal, conta, id}) {
   try { await api("/api/anuncios/remover", {canal, conta, anuncio_id: id}); nkToast("Anúncio removido da lista.", "ok"); recarregar(); }
   catch (e) { nkToast(e.message, "erro"); }
 }
+async function trazerDadosAnuncio(botao) {  // V20.25: descricao + fotos + titulo/categoria/atributos (so leitura no ML)
+  const {canal, conta, id} = botao.dataset;
+  botao.disabled = true; botao.textContent = "Lendo…";
+  try {
+    const r = await api("/api/anuncios/trazer-dados", {canal, conta, anuncio_id: id});
+    nkToast(`${r.mlb}: ${r.trazido_texto || "lido."}`, "ok", {duracao: 12000});
+    await abrirFicha(F.codigo, {manter: true, apollo: !!F.apollo_lido});
+  } catch (e) { nkToast(e.message, e.status === 400 ? "aviso" : "erro", {duracao: 10000}); botao.disabled = false; botao.textContent = "Trazer dados do anúncio"; }
+}
 async function reincluirAnuncio({canal, conta, id}) {
   try { await api("/api/anuncios/reincluir", {canal, conta, anuncio_id: id}); nkToast("Anúncio reincluído.", "ok"); recarregar(); }
   catch (e) { nkToast(e.message, "erro"); }
@@ -846,7 +856,7 @@ function cartaoFoto(f, i, n) {
   const arrastar = PODE ? `draggable="true" ondragstart="ARRASTO=${id}" ondragover="event.preventDefault();this.classList.add('alvo')" ondragleave="this.classList.remove('alvo')" ondrop="event.preventDefault();soltarFoto(${id})"` : "";
   return `<figure class="foto" ${arrastar}>
     <img src="${urlFoto(id)}" alt="Foto ${i + 1}" loading="lazy">
-    <figcaption><div>${i === 0 ? '<span class="nk-selo ok">Principal</span>' : `<b>${i + 1}ª</b>`} <span class="muted">${esc(f.largura)}×${esc(f.altura)} px · ${tamanho(f.bytes)}${f.origem === "estudio" ? " · Estúdio" : ""}</span></div>
+    <figcaption><div>${i === 0 ? '<span class="nk-selo ok">Principal</span>' : `<b>${i + 1}ª</b>`} <span class="muted">${esc(f.largura)}×${esc(f.altura)} px · ${tamanho(f.bytes)}${f.origem === "estudio" ? " · Estúdio" : f.origem === "anuncio_ml" ? " · do anúncio ML" : ""}</span></div>
     ${PODE ? `<div class="selos"><button type="button" class="nk-btn mini" ${i === 0 ? "disabled" : ""} onclick="moverFoto(${i},-1)" aria-label="Mover para a esquerda">←</button><button type="button" class="nk-btn mini" ${i === n - 1 ? "disabled" : ""} onclick="moverFoto(${i},1)" aria-label="Mover para a direita">→</button><button type="button" class="nk-btn mini perigo" onclick="removerFoto(${id})">Remover</button></div>` : ""}</figcaption></figure>`;
 }
 async function relerFotos() {

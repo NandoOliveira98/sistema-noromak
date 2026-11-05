@@ -49,7 +49,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.24-ANUNCIOS-CRIAR"
+APP_VERSION = "20.25-ANUNCIOS-PUXAR-FICHA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -7785,6 +7785,19 @@ def anuncio_campos_do_item(atributos: Any) -> dict[str, Any]:
     return saida
 
 
+def anuncio_campos_do_detalhe(d: dict[str, Any]) -> dict[str, Any]:
+    """V20.25 (dono, 05/11, CAM1019: "puxei um mas nao veio as informacoes"): alem dos atributos, o titulo do
+    anuncio vira o `nome` e a categoria vira `categoria_ml` (origem anuncio_ml, mesma regra do ficha_importar)."""
+    saida = anuncio_campos_do_item((d or {}).get("atributos"))
+    titulo = str((d or {}).get("titulo") or "").strip()
+    if titulo:
+        saida["nome"] = titulo
+    categoria = str((d or {}).get("categoria") or "").strip().upper()
+    if re.match(r"^MLB\d+$", categoria):
+        saida["categoria_ml"] = categoria
+    return saida
+
+
 def anuncio_ficha_do_sku(sku: str, catalogo: dict[str, dict[str, Any]] | None = None,
                          conhecidos: set[str] | None = None) -> tuple[str, str]:
     """V20.23: (codigo da ficha = normalize(sku), tipo). Kit (cadastro/prefixo) e "A/B" = o proprio SKU; vazio = ''."""
@@ -7852,7 +7865,9 @@ def _anuncio_gravar_lote(conta: str, lote: list[dict[str, Any]], res: dict[str, 
                     if r["tipo"] == "kit":
                         _ficha_garantir_kit(r["sku"], "importacao:anuncio_ml", commit=False)
                     if r["campos"]:
-                        ficha_importar(r["ficha"], r["campos"], "anuncio_ml", commit=False)
+                        alt = ficha_importar(r["ficha"], r["campos"], "anuncio_ml", commit=False)
+                        if alt and isinstance(res.get("preenchidos"), dict):  # V20.25: so o "puxar um" pede a lista
+                            res["preenchidos"].setdefault(r["ficha"], []).extend(alt)
             DB.commit()
         except Exception:
             DB.rollback()
@@ -7906,7 +7921,7 @@ def _anuncio_gravar_itens(conta: str, detalhes: dict[str, dict[str, Any]], res: 
         logistica = str(d.get("logistica") or "")
         linhas.append({
             "mlb": mlb, "ficha": ficha, "tipo": tipo, "sku": sku,
-            "campos": anuncio_campos_do_item(d.get("atributos")) if ficha else {},
+            "campos": anuncio_campos_do_detalhe(d) if ficha else {},  # V20.25: + titulo e categoria
             "controle": "full" if logistica == "fulfillment" else "alephee",
             "valores": (ficha, sku, str(d.get("titulo") or ""), preco, est, str(d.get("status") or ""),
                         str(d.get("tipo") or ""), str(d.get("categoria") or ""), logistica,
@@ -8054,16 +8069,202 @@ def anuncio_puxar_um(texto: Any, ator: str) -> dict[str, Any]:
             raise AnuncioMLSemResposta(f"O Mercado Livre não respondeu ao ler o {mlb}. Nada foi alterado; tente de novo.")
         raise AnuncioNaoEncontrado(f"O {mlb} não foi encontrado no Mercado Livre.")
     conta, d = achado
-    res: dict[str, Any] = {"lidos": 0, "novos": 0, "atualizados": 0, "sem_ficha": 0, "parcial": 0, "erro": ""}
+    saida = _anuncio_completar(conta, mlb, d, ator)  # V20.25: + descricao e fotos para a ficha
+    linha = saida["anuncio"]
+    audit(ator, "anuncios.puxar_um", f"{conta}|{mlb}|{linha.get('ficha_codigo') or ''}|"
+                                     f"{'novo' if saida['novo'] else 'removido' if saida['removido'] else 'atualizado'}|"
+                                     f"{saida['trazido_texto']}"[:2000])
+    return saida
+
+
+# V20.25: "puxar um" e "Trazer dados do anuncio" trazem tambem a descricao e as fotos para a ficha. A puxada em massa
+# NAO (seriam ~1.600 anuncios x descricao + 12 fotos): nela entram so titulo, categoria e atributos.
+ANUNCIO_FOTO_ML_TIMEOUT = 20  # segundos por foto
+ANUNCIOS_FOTOS_ML_LOCK = threading.Lock()  # duas leituras do mesmo anuncio ao mesmo tempo nao duplicam as fotos
+ANUNCIO_ROTULO_CAMPO = {"nome": "título", "categoria_ml": "categoria", "descricao": "descrição", "marca": "marca",
+                        "modelo": "modelo", "ean": "EAN", "peso_g": "peso", "altura_cm": "medidas",
+                        "largura_cm": "medidas", "comprimento_cm": "medidas", "ncm": "NCM"}
+
+
+def _anuncio_foto_ml_url_ok(url: Any) -> bool:
+    """So https de um host do mlstatic.com (a CDN de fotos do ML). Qualquer outro endereco e recusado."""
+    try:
+        p = urlparse(str(url or "").strip())
+        host = (p.hostname or "").lower()
+    except ValueError:
+        return False
+    return p.scheme == "https" and (host == "mlstatic.com" or host.endswith(".mlstatic.com"))
+
+
+def _anuncio_foto_ml_urls(url: Any) -> list[str]:
+    """Enderecos a tentar, na ordem: a versao original (-F) e depois a que o ML informou. http do mlstatic vira https."""
+    u = str(url or "").strip()
+    if not u:
+        return []
+    if u.lower().startswith("http://") and _anuncio_foto_ml_url_ok("https://" + u[7:]):
+        u = "https://" + u[7:]
+    grande = re.sub(r"-[A-Z](\.(?:jpe?g|png|webp))$", r"-F\1", u)
+    return [grande, u] if grande != u else [u]
+
+
+class _AnuncioFotoRedirecionamento(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: N802 (nome do urllib)
+        if not _anuncio_foto_ml_url_ok(newurl):
+            raise urllib.error.URLError("a foto redirecionou para fora do mlstatic.com")
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+def _anuncio_foto_ml_baixar(url: str) -> bytes:
+    """V20.25: baixa UMA foto do anuncio (CDN publica, sem token). Chamar FORA do DB_LOCK."""
+    if not _anuncio_foto_ml_url_ok(url):
+        raise ValueError("endereço fora do mlstatic.com")
+    abridor = urllib.request.build_opener(_AnuncioFotoRedirecionamento)
+    req = urllib.request.Request(url, headers={"Accept": "image/*", "User-Agent": f"NoromakExpedicao/{APP_VERSION}"})
+    with abridor.open(req, timeout=ANUNCIO_FOTO_ML_TIMEOUT) as resp:
+        dados = resp.read(ANUNCIO_FOTO_MAX_BYTES + 1)
+    if len(dados) > ANUNCIO_FOTO_MAX_BYTES:
+        raise ValueError("a foto passa de 10 MB")
+    return dados
+
+
+def _anuncio_descricao_ml(mlb: str) -> tuple[str, str]:
+    """(texto, erro). Sem descricao no ML (404 ou vazia) = ('', ''). Chamar dentro do ml_na_casa da conta dona."""
+    try:
+        d = ml_api_get(f"/items/{mlb}/description")
+    except Exception as exc:
+        if "HTTP 404" in str(exc):
+            return "", ""
+        return "", f"{type(exc).__name__}: {exc}"[:200]
+    return (str(d.get("plain_text") or "").strip() if isinstance(d, dict) else ""), ""
+
+
+def _anuncio_fotos_do_ml(cod: str, urls: list[Any], ator: str) -> dict[str, Any]:
+    """V20.25: so quando a ficha ainda NAO tem foto (nunca duplica, nunca apaga). Baixa fora do DB_LOCK; foto que
+    falha (rede, endereco fora do mlstatic, pequena) e pulada e contada, as outras entram."""
+    out: dict[str, Any] = {"fotos": 0, "fotos_falharam": 0, "fotos_ja_tinha": False}
+    urls = [u for u in (urls or []) if str(u or "").strip()][:ANUNCIO_FOTOS_MAX]
+    if not urls or not cod:
+        return out
+    if anuncio_fotos(cod):
+        out["fotos_ja_tinha"] = True
+        return out
+    baixadas: list[bytes] = []
+    for u in urls:
+        dados = None
+        for cand in _anuncio_foto_ml_urls(u):
+            if not _anuncio_foto_ml_url_ok(cand):
+                continue
+            try:
+                dados = _anuncio_foto_ml_baixar(cand)
+                break
+            except Exception as exc:
+                print(f"Aviso: foto do anuncio nao baixada ({cand[:120]}): {exc}", file=sys.stderr)
+        if dados:
+            baixadas.append(dados)
+        else:
+            out["fotos_falharam"] += 1
+    with ANUNCIOS_FOTOS_ML_LOCK:
+        if anuncio_fotos(cod):  # alguem pos foto enquanto baixava: nao mistura
+            out["fotos_ja_tinha"] = True
+            out["fotos_falharam"] = 0
+            return out
+        for dados in baixadas:
+            try:
+                anuncio_foto_adicionar(cod, dados, ator, origem="anuncio_ml")
+                out["fotos"] += 1
+            except ValueError as exc:  # pequena, nao e imagem, ficha cheia
+                out["fotos_falharam"] += 1
+                print(f"Aviso: foto do anuncio recusada para {cod}: {exc}", file=sys.stderr)
+    return out
+
+
+def _anuncio_trazido_texto(t: dict[str, Any]) -> str:
+    """Frase do aviso da tela: 'título, categoria, descrição e 5 fotos vieram do anúncio'."""
+    partes: list[str] = []
+    for c in t.get("campos") or []:
+        rot = ANUNCIO_ROTULO_CAMPO.get(c, c)
+        if rot not in partes:
+            partes.append(rot)
+    n = int(t.get("fotos") or 0)
+    if n:
+        partes.append(f"{n} foto" + ("s" if n > 1 else ""))
+    if partes:
+        frase = (", ".join(partes[:-1]) + " e " + partes[-1]) if len(partes) > 1 else partes[0]
+        frase += " vieram do anúncio" if len(partes) > 1 or n > 1 else " veio do anúncio"
+    else:
+        frase = "Nada novo veio do anúncio (a ficha já tinha esses dados)"
+    avisos: list[str] = []
+    f = int(t.get("fotos_falharam") or 0)
+    if f:
+        avisos.append(f"{f} foto não veio" if f == 1 else f"{f} fotos não vieram")
+    if t.get("fotos_ja_tinha"):
+        avisos.append("as fotos não foram trazidas porque a ficha já tem fotos")
+    if t.get("descricao_erro"):
+        avisos.append("a descrição não veio (o Mercado Livre não respondeu)")
+    if t.get("sem_ficha"):
+        avisos.append("o anúncio não tem código (SKU): nada foi para uma ficha")
+    resto = "; ".join(avisos)
+    return frase[0].upper() + frase[1:] + (". " + resto[0].upper() + resto[1:] if resto else "") + "."
+
+
+def _anuncio_completar(conta: str, mlb: str, d: dict[str, Any], ator: str) -> dict[str, Any]:
+    """V20.25: grava o anuncio como a puxada (titulo, categoria e atributos na ficha) e traz a descricao e as fotos.
+    Chamar FORA do DB_LOCK (le o ML e baixa as fotos). Removido pelo ADMIN: nada e trazido."""
+    res: dict[str, Any] = {"lidos": 0, "novos": 0, "atualizados": 0, "sem_ficha": 0, "parcial": 0, "erro": "",
+                           "preenchidos": {}}
     _anuncio_gravar_itens(conta, {mlb: d}, res)
     with DB_LOCK:
         row = DB.execute("SELECT * FROM anuncio_canal_v2023 WHERE canal='ml' AND conta=? AND anuncio_id=?",
                          (conta, mlb)).fetchone()
         linha = dict(row) if row else {}
-    audit(ator, "anuncios.puxar_um", f"{conta}|{mlb}|{linha.get('ficha_codigo') or ''}|"
-                                     f"{'novo' if res['novos'] else 'atualizado' if res['atualizados'] else 'removido'}")
-    return {"ok": True, "mlb": mlb, "conta": conta, "ficha_codigo": str(linha.get("ficha_codigo") or ""),
-            "novo": bool(res["novos"]), "removido": bool(str(linha.get("removido_em") or "")), "anuncio": linha}
+    removido = bool(str(linha.get("removido_em") or ""))
+    ficha = str(linha.get("ficha_codigo") or "")
+    trazidos: dict[str, Any] = {"campos": [], "fotos": 0, "fotos_falharam": 0, "fotos_ja_tinha": False,
+                                "descricao_erro": "", "sem_ficha": not ficha and not removido}
+    if ficha and not removido:
+        campos = list(res["preenchidos"].get(ficha, []))
+        # anuncio sem SKU que manteve a ficha ligada: o lote nao importou; importa agora (repetido nao muda nada)
+        campos += ficha_importar(ficha, anuncio_campos_do_detalhe(d), "anuncio_ml")
+        with ml_na_casa(conta):  # token da conta dona do anuncio
+            texto, erro = _anuncio_descricao_ml(mlb)
+        trazidos["descricao_erro"] = erro
+        if texto:
+            campos += ficha_importar(ficha, {"descricao": texto}, "anuncio_ml")
+        trazidos["campos"] = list(dict.fromkeys(campos))
+        trazidos.update(_anuncio_fotos_do_ml(ficha, d.get("fotos") or [], ator))
+    texto_final = "" if removido else _anuncio_trazido_texto(trazidos)
+    return {"ok": True, "mlb": mlb, "conta": conta, "ficha_codigo": ficha, "novo": bool(res["novos"]),
+            "removido": removido, "anuncio": linha, "trazidos": trazidos, "trazido_texto": texto_final}
+
+
+def anuncio_trazer_dados(canal: Any, conta: Any, anuncio_id: Any, ator: str) -> dict[str, Any]:
+    """V20.25: botao "Trazer dados do anuncio" (aba Anuncios em todos os canais): le o anuncio com o token da conta
+    dele e faz o mesmo que o "puxar um" (titulo, categoria, atributos, descricao e fotos). So leitura no ML."""
+    if str(canal or "").strip().lower() != "ml":
+        raise ValueError("Só anúncios do Mercado Livre por enquanto.")
+    conta = str(conta or "").strip()
+    if conta not in ml_casas_conectadas():
+        raise ValueError("Conta do Mercado Livre desconhecida ou não conectada.")
+    mlb = anuncio_mlb_do_texto(anuncio_id)
+    with DB_LOCK:
+        row = DB.execute("SELECT removido_em FROM anuncio_canal_v2023 WHERE canal='ml' AND conta=? AND anuncio_id=?",
+                         (conta, mlb)).fetchone()
+    if row is None:
+        raise AnuncioNaoEncontrado(f"O {mlb} não está na lista desta conta. Use “Puxar um”.")
+    if str(row["removido_em"] or ""):
+        raise ValueError(f"O {mlb} foi removido da lista pelo Admin: reinclua antes de trazer os dados.")
+    falhas: list[Any] = []
+    with ml_na_casa(conta):
+        d = (ml_itens_detalhe([mlb], falhas=falhas) or {}).get(mlb)
+    if d is None:
+        if any(f == "erro" or (isinstance(f, int) and (f >= 500 or f in (401, 403, 408, 429))) for f in falhas):
+            raise AnuncioMLSemResposta(f"O Mercado Livre não respondeu ao ler o {mlb}. Nada foi alterado; tente de novo.")
+        raise AnuncioNaoEncontrado(f"O {mlb} não foi encontrado no Mercado Livre.")
+    if d.get("seller_id") and ml_casa_do_seller(d.get("seller_id")) != conta:
+        raise AnuncioNaoEncontrado(f"O {mlb} não é desta conta do Mercado Livre.")
+    saida = _anuncio_completar(conta, mlb, d, ator)
+    audit(ator, "anuncios.trazer_dados", f"{conta}|{mlb}|{saida['ficha_codigo']}|{saida['trazido_texto']}"[:2000])
+    return saida
 
 
 def _anuncio_marcar_removido(canal: str, conta: str, anuncio_id: str, ator: str, remover: bool) -> dict[str, Any]:
@@ -8397,7 +8598,8 @@ def anuncio_foto_adicionar(codigo: str, dados: bytes, ator: str, origem: str = "
             raise ValueError(f"A ficha já tem {ANUNCIO_FOTOS_MAX} fotos (o máximo).")
         cur = DB.execute("INSERT INTO anuncio_foto_v2024(ficha_codigo,arquivo,tipo,largura,altura,bytes,origem,ordem,"
                          "criado_em,criado_por) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                         (cod, "", tipo, largura, altura, len(dados), origem if origem in ("pc", "estudio") else "pc",
+                         (cod, "", tipo, largura, altura, len(dados),
+                          origem if origem in ("pc", "estudio", "anuncio_ml") else "pc",  # V20.25: anuncio_ml
                           int(ultima) + 1, now_iso(), str(ator or "")))
         foto_id = int(cur.lastrowid)
         DB.commit()
@@ -32524,7 +32726,7 @@ def ml_itens_detalhe(mlbs: list[str], falhas: list[Any] | None = None) -> dict[s
     # V18.72: shipping traz o logistic_type (Full ou não) para a Ruptura.
     # V18.77: listing_type_id para a comissão do anúncio (ml_tarifa_frete_anuncio)
     campos = ("id,title,price,status,sub_status,available_quantity,seller_custom_field,attributes,category_id,"
-              "shipping,listing_type_id,user_product_id,catalog_product_id,seller_id")   # V19.60: estoque do Full; V19.74: catálogo; V20.24: dono
+              "shipping,listing_type_id,user_product_id,catalog_product_id,seller_id,pictures")   # V19.60: estoque do Full; V19.74: catálogo; V20.24: dono; V20.25: fotos
     for i in range(0, len(mlbs), 20):   # a API aceita 20 ids por chamada
         lote = [x for x in mlbs[i:i + 20] if x]
         if not lote:
@@ -32567,6 +32769,9 @@ def ml_itens_detalhe(mlbs: list[str], falhas: list[Any] | None = None) -> dict[s
                         "seller_id": str(corpo.get("seller_id") or ""),  # V20.24: dono (puxar um anuncio)
                         "atributos": [a for a in (corpo.get("attributes") or []) if isinstance(a, dict)
                                       and str(a.get("id") or "").upper() in ANUNCIO_ATRIBUTOS_ML],  # V20.23: ficha
+                        # V20.25: so os enderecos das fotos (ate 12), na ordem do anuncio; quem baixa e o "puxar um"
+                        "fotos": [u for u in (str((p or {}).get("secure_url") or (p or {}).get("url") or "").strip()
+                                             for p in (corpo.get("pictures") or []) if isinstance(p, dict)) if u][:ANUNCIO_FOTOS_MAX],
                         "logistica": str((corpo.get("shipping") if isinstance(corpo.get("shipping"), dict)
                                           else {}).get("logistic_type") or "")}  # V18.72: Ruptura
     return out
@@ -41649,7 +41854,7 @@ class AppHandler(BaseHTTPRequestHandler):
                     self.send_json({"ok": False, "error": str(exc)}, 502)
             return
         if path in ("/api/anuncios/ficha", "/api/anuncios/kit", "/api/anuncios/puxar", "/api/anuncios/puxar/um",
-                    "/api/anuncios/controle",
+                    "/api/anuncios/trazer-dados", "/api/anuncios/controle",
                     "/api/anuncios/remover", "/api/anuncios/reincluir", "/api/anuncios/foto",
                     "/api/anuncios/foto/remover", "/api/anuncios/foto/ordenar", "/api/anuncios/rascunho",
                     "/api/anuncios/rascunho/validar", "/api/anuncios/rascunho/publicar",
@@ -41735,6 +41940,16 @@ class AppHandler(BaseHTTPRequestHandler):
                 elif path == "/api/anuncios/puxar/um":  # V20.24: um anuncio pelo MLB ou link (so leitura no ML)
                     try:
                         res = anuncio_puxar_um(body.get("mlb_ou_link"), ctx["username"])
+                    except AnuncioNaoEncontrado as exc:
+                        self.send_json({"ok": False, "error": str(exc)}, 404)
+                        return
+                    except AnuncioMLSemResposta as exc:
+                        self.send_json({"ok": False, "error": str(exc)}, 502)
+                        return
+                elif path == "/api/anuncios/trazer-dados":  # V20.25: descricao, fotos, titulo, categoria (so leitura no ML)
+                    try:
+                        res = anuncio_trazer_dados(body.get("canal"), body.get("conta"), body.get("anuncio_id"),
+                                                   ctx["username"])
                     except AnuncioNaoEncontrado as exc:
                         self.send_json({"ok": False, "error": str(exc)}, 404)
                         return

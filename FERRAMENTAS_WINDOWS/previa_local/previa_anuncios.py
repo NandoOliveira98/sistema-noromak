@@ -123,6 +123,14 @@ ANUNCIOS = {
                           "estoque": 2, "status": "active", "tipo": "gold_special", "categoria": "MLB194027"},
     },
 }
+# V20.25: fotos (enderecos falsos do mlstatic; o download e simulado no dev_criar_ml) e descricao de cada anuncio
+S._PREVIA_DESCRICOES = {}
+for _itens in ANUNCIOS.values():
+    for _n, (_mlb, _d) in enumerate(_itens.items()):
+        _qtd = 0 if _mlb == "MLB6000000005" else 2 + _n % 4
+        _d.setdefault("fotos", [f"https://http2.mlstatic.com/D_NQ_NP_{_mlb}_{i}-O.jpg" for i in range(_qtd)])
+        if _mlb != "MLB7000000006":  # este fica sem descricao no ML (404), para ver o caso
+            S._PREVIA_DESCRICOES[_mlb] = f"{_d['titulo']}.\n\nDescrição simulada da prévia: produto original, nota fiscal."
 S.ml_casas_conectadas = lambda: ["aracatuba", "bauru"]
 # V20.24: vendedor de cada conta (o "Puxar um" acha a conta dona pelo seller_id do anuncio)
 SELLER = {"aracatuba": "100001", "bauru": "200002"}
