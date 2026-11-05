@@ -39,7 +39,7 @@ class PuxarDadosTeste(TesteNoromak):
         self.baixados = []
         self.descricoes = {"MLB1000000001": "Camara de ar de borracha.", "MLB9000000009": "Pneu de Bauru."}
 
-        def detalhe(mlbs, falhas=None):
+        def detalhe(mlbs, falhas=None, com_fotos=False):
             return {m: dict(d) for m, d in self.anuncios.get(S.ml_casa_atual(), {}).items() if m in mlbs}
 
         def api_get(caminho, headers=None):
@@ -238,7 +238,10 @@ class FotoUrlTeste(TesteNoromak):
         corpo = [{"code": 200, "body": {"id": "MLB1", "title": "T", "pictures": [
             {"secure_url": f"https://http2.mlstatic.com/{i}-O.jpg", "url": "http://x"} for i in range(15)]}}]
         with mock.patch.object(S, "ml_api_get", return_value=corpo) as g:
-            d = S.ml_itens_detalhe(["MLB1"])
+            d = S.ml_itens_detalhe(["MLB1"], com_fotos=True)
         self.assertIn("pictures", g.call_args[0][0])
+        with mock.patch.object(S, "ml_api_get", return_value=corpo) as g2:
+            S.ml_itens_detalhe(["MLB1"])  # V20.25: as rotinas diarias nao pedem as fotos
+        self.assertNotIn("pictures", g2.call_args[0][0])
         self.assertEqual(len(d["MLB1"]["fotos"]), 12)
         self.assertEqual(d["MLB1"]["fotos"][0], "https://http2.mlstatic.com/0-O.jpg")

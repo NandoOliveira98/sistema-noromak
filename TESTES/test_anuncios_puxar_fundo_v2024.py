@@ -49,7 +49,7 @@ class PuxarFundoTeste(TesteNoromak):
                 self.porta.wait(5)
             return list(self.anuncios.get(casa, {}))
 
-        def detalhe(mlbs, falhas=None):
+        def detalhe(mlbs, falhas=None, com_fotos=False):
             return {m: dict(d) for m, d in self.anuncios.get(S.ml_casa_atual(), {}).items() if m in mlbs}
         self._ps = [mock.patch.object(S, "ml_casas_conectadas", return_value=["aracatuba", "bauru"]),
                     mock.patch.object(S, "ml_todos_os_anuncios", side_effect=todos),
@@ -217,7 +217,7 @@ class PuxarFundoTeste(TesteNoromak):
         self.assertIsNone(linha("MLB7000000007"))
 
     def test_um_ml_sem_resposta_502(self):
-        def falhou(mlbs, falhas=None):
+        def falhou(mlbs, falhas=None, com_fotos=False):
             if falhas is not None:
                 falhas.append("erro")
             return {}

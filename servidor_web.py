@@ -8045,7 +8045,7 @@ def anuncio_puxar_um(texto: Any, ator: str) -> dict[str, Any]:
     for conta in contas:
         falhas: list[Any] = []
         with ml_na_casa(conta):
-            d = (ml_itens_detalhe([mlb], falhas=falhas) or {}).get(mlb)
+            d = (ml_itens_detalhe([mlb], falhas=falhas, com_fotos=True) or {}).get(mlb)
         if d is None:
             if any(f == "erro" or (isinstance(f, int) and (f >= 500 or f in (401, 403, 408, 429))) for f in falhas):
                 sem_resposta = True
@@ -8056,7 +8056,7 @@ def anuncio_puxar_um(texto: Any, ator: str) -> dict[str, Any]:
             continue
         if dono != conta:  # o /items?ids= e publico: rele com o token do dono (campos do vendedor)
             with ml_na_casa(dono):
-                d = (ml_itens_detalhe([mlb]) or {}).get(mlb)
+                d = (ml_itens_detalhe([mlb], com_fotos=True) or {}).get(mlb)
             if not d:  # V20.24 (revisao): sem a releitura do dono, nada e gravado (estoque/SKU da leitura publica nao servem)
                 raise AnuncioMLSemResposta(f"O Mercado Livre não respondeu ao ler o {mlb} pela conta dona. "
                                            "Nada foi alterado; tente de novo.")
@@ -8255,7 +8255,7 @@ def anuncio_trazer_dados(canal: Any, conta: Any, anuncio_id: Any, ator: str) -> 
         raise ValueError(f"O {mlb} foi removido da lista pelo Admin: reinclua antes de trazer os dados.")
     falhas: list[Any] = []
     with ml_na_casa(conta):
-        d = (ml_itens_detalhe([mlb], falhas=falhas) or {}).get(mlb)
+        d = (ml_itens_detalhe([mlb], falhas=falhas, com_fotos=True) or {}).get(mlb)
     if d is None:
         if any(f == "erro" or (isinstance(f, int) and (f >= 500 or f in (401, 403, 408, 429))) for f in falhas):
             raise AnuncioMLSemResposta(f"O Mercado Livre não respondeu ao ler o {mlb}. Nada foi alterado; tente de novo.")
@@ -32718,7 +32718,7 @@ def ml_itens_do_vendedor(offset: int = 0, limite: int = 50, forcar: bool = False
     }
 
 
-def ml_itens_detalhe(mlbs: list[str], falhas: list[Any] | None = None) -> dict[str, dict[str, Any]]:
+def ml_itens_detalhe(mlbs: list[str], falhas: list[Any] | None = None, com_fotos: bool = False) -> dict[str, dict[str, Any]]:
     """Título, preço e o SKU que o vendedor cadastrou no próprio anúncio.
     V20.24: `falhas` (opcional) recebe "erro" para lote sem resposta e o `code` de cada id que voltou
     sem corpo (404 = não existe), para separar "não existe" de "o ML não respondeu"."""
@@ -32726,7 +32726,9 @@ def ml_itens_detalhe(mlbs: list[str], falhas: list[Any] | None = None) -> dict[s
     # V18.72: shipping traz o logistic_type (Full ou não) para a Ruptura.
     # V18.77: listing_type_id para a comissão do anúncio (ml_tarifa_frete_anuncio)
     campos = ("id,title,price,status,sub_status,available_quantity,seller_custom_field,attributes,category_id,"
-              "shipping,listing_type_id,user_product_id,catalog_product_id,seller_id,pictures")   # V19.60: estoque do Full; V19.74: catálogo; V20.24: dono; V20.25: fotos
+              "shipping,listing_type_id,user_product_id,catalog_product_id,seller_id")   # V19.60: estoque do Full; V19.74: catálogo; V20.24: dono
+    if com_fotos:  # V20.25: so o "puxar um" e o "trazer dados" pedem as fotos (as rotinas diarias nao)
+        campos += ",pictures"
     for i in range(0, len(mlbs), 20):   # a API aceita 20 ids por chamada
         lote = [x for x in mlbs[i:i + 20] if x]
         if not lote:

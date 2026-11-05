@@ -143,7 +143,7 @@ def _todos_os_anuncios(forcar=False):
     return list(ANUNCIOS.get(S.ml_casa_atual(), {}))
 
 
-def _itens_detalhe(mlbs, falhas=None):
+def _itens_detalhe(mlbs, falhas=None, com_fotos=False):
     # como o /items?ids= real: publico (qualquer conta le o anuncio de qualquer vendedor), com o seller_id do dono;
     # id que nao existe volta 404 (vai para `falhas`)
     out = {}
