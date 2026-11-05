@@ -128,8 +128,14 @@ Um anúncio pertence a **uma** ficha (peça ou kit); a ficha pode ter vários an
 
 ### 4.4 Criar anúncio no Mercado Livre
 
-Fluxo a partir da ficha, conta escolhida (Araçatuba no piloto):
-1. **Categoria**: sugerida pelo ML (`/sites/MLB/domain_discovery/search` pelo nome) e trocável.
+Fluxo a partir da ficha, conta escolhida (Araçatuba no piloto). **Ordem decidida pelo dono (05/11):
+título → categoria → obrigatórios da categoria.** A tela não mostra a categoria antes de haver título, nem
+os atributos antes de haver categoria.
+0. **Título** (nome do produto; no modelo User Products é o `family_name`, o ML monta o título final):
+   vem da ficha e é editável.
+1. **Categoria**: sugerida pelo ML **a partir do título** (`/sites/MLB/domain_discovery/search?q=<título>`,
+   mostra as sugestões) e trocável. Mudar o título oferece sugerir de novo; mudar a categoria recarrega os
+   obrigatórios sem apagar o que já foi digitado nos campos que continuam valendo.
 2. **Atributos** da categoria (`/categories/{id}/attributes`; ficha técnica do domínio): mostra quantos
    obrigatórios estão preenchidos (ex.: 16/19) e quais faltam; preenche com o que a ficha já tem.
    GTIN: obrigatório quando a categoria exige; senão `EMPTY_GTIN_REASON` (kit = "Kit").
