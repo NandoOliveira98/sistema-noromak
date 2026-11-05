@@ -109,6 +109,7 @@ def reiniciar_banco() -> None:
     S._EXP_NOME_APOLLO.clear()  # V19.67: nome do cliente no Apollo guardado em memória
     S._ml_cache_leitura_limpar()  # V20.04: fila, etiquetas e concluídos lidos pelos vigias
     S._RUPTURA_COMPLETO_CACHE.clear()  # V20.05
+    S._anuncios_estoque_memoria_limpar()  # V20.26 (revisao): quedas do pendente, erros seguidos, envio em fundo
     shutil.rmtree(S.IMAGENS_DIR, ignore_errors=True)  # V20.17: fotos do Estúdio de Imagens (ids recomeçam)
     shutil.rmtree(S.ANUNCIO_FOTOS_DIR, ignore_errors=True)  # V20.24: fotos das fichas de anúncio
 

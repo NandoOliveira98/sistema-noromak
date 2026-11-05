@@ -7443,6 +7443,16 @@ def ensure_anuncios_schema() -> None:
             );
             """
         )
+        # V20.26 (revisao): o Disponivel do Apollo ja tira a peca do atendimento aberto? (a confirmar com o Guilherme;
+        # 0 = desconta todo pendente, como antes). `variacoes` = o ML mostrou variacoes (o estoque e por variacao).
+        cols = {r[1] for r in DB.execute("PRAGMA table_info(anuncio_estoque_config_v2026)").fetchall()}
+        for nome, tipo in (("apollo_desconta_atendimento", "INTEGER NOT NULL DEFAULT 0"),
+                           ("desconta_em", "TEXT NOT NULL DEFAULT ''"), ("desconta_por", "TEXT NOT NULL DEFAULT ''")):
+            if nome not in cols:
+                DB.execute(f"ALTER TABLE anuncio_estoque_config_v2026 ADD COLUMN {nome} {tipo}")
+        cols = {r[1] for r in DB.execute("PRAGMA table_info(anuncio_canal_v2023)").fetchall()}
+        if "variacoes" not in cols:
+            DB.execute("ALTER TABLE anuncio_canal_v2023 ADD COLUMN variacoes INTEGER NOT NULL DEFAULT 0")
         # V20.24: no boot nenhuma publicacao esta rodando; `publicando` que sobrou (processo caiu no meio) vira
         # `incerto` - o ML pode ter criado: o Admin confere e libera. Nunca volta a `validado` sozinho.
         DB.execute("UPDATE anuncio_rascunho_v2024 SET situacao='incerto', versao=versao+1, "
@@ -7863,12 +7873,13 @@ ANUNCIO_LOTE_GRAVACAO = 100  # V20.23: anuncios por vez sob o DB_LOCK (a lista t
 
 def _anuncio_gravar_lote(conta: str, lote: list[dict[str, Any]], res: dict[str, Any]) -> None:
     """V20.23: um DB_LOCK e um commit por lote; erro no meio desfaz o lote inteiro (conexao compartilhada)."""
+    voltou_manual: list[str] = []
     with DB_LOCK:
         parcial = {"novos": 0, "atualizados": 0, "sem_ficha": 0}
         try:
             for r in lote:
-                atual = DB.execute("SELECT removido_em, ficha_codigo, sku_anuncio FROM anuncio_canal_v2023 WHERE canal='ml' AND conta=? "
-                                   "AND anuncio_id=?", (conta, r["mlb"])).fetchone()
+                atual = DB.execute("SELECT removido_em, ficha_codigo, sku_anuncio, estoque_modo FROM anuncio_canal_v2023 "
+                                   "WHERE canal='ml' AND conta=? AND anuncio_id=?", (conta, r["mlb"])).fetchone()
                 if atual is not None and str(atual["removido_em"] or ""):
                     continue  # removido pelo ADMIN: nao e atualizado nem recriado
                 if not r["ficha"] and not (atual is not None and str(atual["ficha_codigo"] or "")):
@@ -7894,6 +7905,11 @@ def _anuncio_gravar_lote(conta: str, lote: list[dict[str, Any]], res: dict[str, 
                         "logistica=?,user_product_id=?,lido_em=? WHERE canal='ml' AND conta=? AND anuncio_id=?",
                         v + (conta, r["mlb"]))
                     parcial["atualizados"] += 1
+                    # V20.26 (revisao): virou Full = o Automatico sai (voltar a nao-Full nunca religa sozinho)
+                    if r["valores"][8] == "fulfillment" and str(atual["estoque_modo"] or "") == "automatico":
+                        DB.execute("UPDATE anuncio_canal_v2023 SET estoque_modo='manual' WHERE canal='ml' AND conta=? "
+                                   "AND anuncio_id=?", (conta, r["mlb"]))
+                        voltou_manual.append(r["mlb"])
                 if r["ficha"]:
                     if r["tipo"] == "kit":
                         _ficha_garantir_kit(r["sku"], "importacao:anuncio_ml", commit=False)
@@ -7908,6 +7924,9 @@ def _anuncio_gravar_lote(conta: str, lote: list[dict[str, Any]], res: dict[str, 
         res["novos"] += parcial["novos"]
         res["atualizados"] += parcial["atualizados"]
         res["sem_ficha"] = int(res.get("sem_ficha") or 0) + parcial["sem_ficha"]
+    for mlb in voltou_manual:  # o registro grava e faz commit proprio: fora do lote
+        _anuncio_estoque_registrar("ml", conta, mlb, "manual", None, None, "modo automatico -> manual", "ignorado",
+                                   "o anúncio virou Full: o estoque é do Mercado Livre", "sistema")
 
 
 def _anuncio_puxar_conta(conta: str) -> dict[str, Any]:
@@ -8302,13 +8321,20 @@ def anuncio_trazer_dados(canal: Any, conta: Any, anuncio_id: Any, ator: str) -> 
 
 def _anuncio_marcar_removido(canal: str, conta: str, anuncio_id: str, ator: str, remover: bool) -> dict[str, Any]:
     with DB_LOCK:
+        antes = DB.execute("SELECT estoque_modo FROM anuncio_canal_v2023 WHERE canal=? AND conta=? AND anuncio_id=?",
+                           (canal, conta, anuncio_id)).fetchone()
+        # V20.26 (revisao): remover ou reincluir volta o estoque a Manual (o Automatico nunca religa sozinho)
         cur = DB.execute(
-            "UPDATE anuncio_canal_v2023 SET removido_em=?, removido_por=? WHERE canal=? AND conta=? AND anuncio_id=?",
+            "UPDATE anuncio_canal_v2023 SET removido_em=?, removido_por=?, estoque_modo='manual' "
+            "WHERE canal=? AND conta=? AND anuncio_id=?",
             ((now_iso(), str(ator or "")) if remover else ("", "")) + (canal, conta, anuncio_id))
         DB.commit()
         achou = cur.rowcount > 0
     if not achou:
         raise ValueError("Anúncio não encontrado.")
+    if antes is not None and str(antes["estoque_modo"] or "") == "automatico":
+        _anuncio_estoque_registrar(canal, conta, anuncio_id, "manual", None, None, "modo automatico -> manual",
+                                   "ignorado", "anúncio removido da lista" if remover else "anúncio reincluído", ator)
     audit(ator, "anuncios.remover" if remover else "anuncios.reincluir", f"{canal}|{conta}|{anuncio_id}")
     return {"ok": True, "removido": remover}
 
@@ -8361,23 +8387,98 @@ def pendentes_da_filial(filial: str) -> dict[str, int]:
     return saida
 
 
-def pendentes_por_filial(filiais: tuple[str, ...]) -> dict[str, dict[str, int] | None]:
-    """V20.23: uma leitura de conf_pedidos para varias filiais. Falha na leitura = None em todas (nunca zero)."""
+def _anuncio_sku_partes(sku: Any, catalogo: dict[str, dict[str, Any]],
+                        conhecidos: Any) -> tuple[list[tuple[str, int]], dict[str, Any] | None]:
+    """V20.26 (revisao): a MESMA abertura do SKU para o estoque do anuncio e para o pendente da fila (antes o pendente
+    so usava o `_tiktok_pecas`: "WAP103/S", "PSH367/80" e "KIT-1/10405594-1/10405569" nunca descontavam).
+    Kit = Cadastro de Kits / KITn-X; senao `_separacao_partes` (regra da V19.48). `conhecidos` = funcao (lida so com "/").
+    Devolve ([(codigo, unidades)], composicao do kit ou None). O TikTok continua com `pendentes_da_filial`."""
+    cod = normalize(sku)
+    if not cod:
+        return [], None
+    comp = _kit_composicao(cod, catalogo)
+    if comp:
+        return [(c["sku"], int(c["quantidade"])) for c in comp["componentes"]], comp
+    return _separacao_partes(cod, conhecidos() if "/" in cod else set()), None
+
+
+# V20.26 (revisao): o pendente da fila e calculado UMA vez por versao da fila (+ tombstone + Cadastro de Kits), pela
+# leitura guardada da V20.04 (`_ml_fila_leitura`). Antes cada rodada (a cada bip) relia a fila inteira sob o DB_LOCK.
+ANUNCIO_PEND_CACHE_S = 600
+_ANUNCIO_PEND_CACHE: dict[str, Any] = {}
+_ANUNCIO_PEND_LOCK = threading.Lock()
+
+
+def _anuncio_pend_linhas() -> dict[str, list[tuple[str, str, int]]] | None:
+    """{filial: [(pedido normalizado, chave da peca, unidades)]}. Falha na leitura = None (nunca zero).
+    So leitura: nao alterar as listas devolvidas."""
     try:
-        bruto, _, _ = get_storage("conf_pedidos")
-        linhas = [r for r in _rows_from_storage_value(bruto) if isinstance(r, dict)]
+        with DB_LOCK:
+            versoes = _ml_versoes_storage("conf_pedidos", PENDING_ORDER_DELETE_KEY_V1766, "conf_kits")
+        agora = time.monotonic()
+        with _ANUNCIO_PEND_LOCK:
+            if (_ANUNCIO_PEND_CACHE.get("versoes") == versoes
+                    and agora - float(_ANUNCIO_PEND_CACHE.get("em") or 0) < ANUNCIO_PEND_CACHE_S):
+                return _ANUNCIO_PEND_CACHE["linhas"]
+        linhas = [r for r in _ml_fila_leitura() if isinstance(r, dict)]
+        catalogo = _load_kit_catalog()
     except Exception:
-        return {f: None for f in filiais}
-    saida: dict[str, dict[str, int] | None] = {f: {} for f in filiais}
+        return None
+    conhecidos = _anuncios_conhecidos_lazy()
+    saida: dict[str, list[tuple[str, str, int]]] = {}
     for row in linhas:
-        dest = saida.get(filial_da_linha(row))
-        if dest is None:
-            continue
         qtd = max(0, _tiktok_quantidade(row.get("Quantidade")) or 0)
-        for codigo, unidades in _tiktok_pecas(row.get("SKU")):
+        if not qtd:
+            continue
+        pedido = normalize(order_number(row))
+        destino = saida.setdefault(filial_da_linha(row), [])
+        for codigo, unidades in _anuncio_sku_partes(row.get("SKU"), catalogo, conhecidos)[0]:
             chave = _exp_norm_codigo(codigo)
-            dest[chave] = dest.get(chave, 0) + qtd * unidades
+            if chave and int(unidades or 0) > 0:
+                destino.append((pedido, chave, qtd * int(unidades)))
+    with _ANUNCIO_PEND_LOCK:
+        _ANUNCIO_PEND_CACHE.update(versoes=versoes, em=agora, linhas=saida)
     return saida
+
+
+def _anuncio_pend_somar(linhas: list[tuple[str, str, int]], sem: set[str] | None = None) -> dict[str, int]:
+    """Soma por peca; `sem` = pedidos que NAO entram (os que ja tem atendimento no Apollo)."""
+    saida: dict[str, int] = {}
+    for pedido, chave, unidades in linhas:
+        if sem is not None and pedido in sem:
+            continue
+        saida[chave] = saida.get(chave, 0) + unidades
+    return saida
+
+
+def pendentes_por_filial(filiais: tuple[str, ...]) -> dict[str, dict[str, int] | None]:
+    """V20.23: uma leitura de conf_pedidos para varias filiais. Falha na leitura = None em todas (nunca zero).
+    V20.26 (revisao): mesma abertura de SKU do estoque do anuncio e leitura guardada por versao da fila."""
+    linhas = _anuncio_pend_linhas()
+    if linhas is None:
+        return {f: None for f in filiais}
+    return {f: _anuncio_pend_somar(linhas.get(f, [])) for f in filiais}
+
+
+def _anuncio_pedidos_com_atendimento() -> set[str] | None:
+    """V20.26 (revisao): pedidos que o Faturamento ja achou com atendimento no Apollo (ou ja foram ao caixa).
+    Pedido que o Faturamento nao conhece = sem atendimento (desconta: o lado seguro). Erro = None."""
+    try:
+        with DB_LOCK:
+            rows = DB.execute("SELECT order_key FROM faturamento_v1943 WHERE atendimento<>'' "
+                              "OR situacao IN ('feito','pronto_caixa')").fetchall()
+    except sqlite3.Error:
+        return None
+    return {normalize(r[0]) for r in rows}
+
+
+def pendentes_sem_atendimento(filial: str) -> dict[str, int] | None:
+    """V20.26 (revisao): o pendente so dos pedidos ainda sem atendimento no Apollo (chave apollo_desconta_atendimento)."""
+    linhas = _anuncio_pend_linhas()
+    com = _anuncio_pedidos_com_atendimento()
+    if linhas is None or com is None:
+        return None
+    return _anuncio_pend_somar(linhas.get(filial, []), sem=com)
 
 
 def _apollo_da_revenda(resposta: dict[str, Any], revenda: int) -> float | None:
@@ -8427,12 +8528,17 @@ def anuncio_controle_definir(canal: str, conta: str, anuncio_id: str, controle: 
             raise ValueError("Anúncio Full: o estoque é do Mercado Livre.")
         if controle == "noromak" and not confirmou_alephee:
             raise ValueError("Confirme que o anúncio foi desativado na Alephee.")
+        modo_antes = DB.execute("SELECT estoque_modo FROM anuncio_canal_v2023 WHERE canal=? AND conta=? AND anuncio_id=?",
+                                (canal, conta, anuncio_id)).fetchone()["estoque_modo"]
         # V20.26: trocar quem controla volta o estoque a Manual (o Automatico nunca religa sozinho ao voltar ao Noromak)
         DB.execute("UPDATE anuncio_canal_v2023 SET controle=?, controle_em=?, controle_por=?, "
                    "estoque_modo=CASE WHEN controle=? THEN estoque_modo ELSE 'manual' END "
                    "WHERE canal=? AND conta=? AND anuncio_id=?",
                    (controle, now_iso(), str(ator or ""), controle, canal, conta, anuncio_id))
         DB.commit()
+    if str(modo_antes or "") == "automatico" and str(row["controle"]) != controle:
+        _anuncio_estoque_registrar(canal, conta, anuncio_id, "manual", None, None, "modo automatico -> manual",
+                                   "ignorado", f"controle {row['controle']} -> {controle}", ator)
     audit(ator, "anuncios.controle", f"{canal}|{conta}|{anuncio_id}|{controle}")
     return {"ok": True, "controle": controle}
 
@@ -16367,6 +16473,7 @@ _ML_CONCLUIDOS_CACHE: dict[str, tuple[str, frozenset[str]]] = {}
 def _ml_cache_leitura_limpar() -> None:
     global _ML_CONCLUIDOS_CACHE
     _ML_FILA_CACHE.clear()
+    _ANUNCIO_PEND_CACHE.clear()  # V20.26 (revisao): o pendente dos anuncios vem desta mesma leitura
     _ML_ETIQUETAS_CACHE.clear()
     _ML_CONCLUIDOS_CACHE = {}
 
@@ -32454,6 +32561,8 @@ ANUNCIO_ESTOQUE_MODOS = ("manual", "automatico")
 ANUNCIO_ESTOQUE_CONTA_MODOS = ("simulacao", "lote", "automatico")
 ANUNCIO_ESTOQUE_LOG_MAX = 20000
 ANUNCIO_ESTOQUE_MAX = 99999
+# V20.26 (revisao): anuncio parado no ML nao recebe estoque (o worker repetia o erro a cada 10 min para sempre)
+ANUNCIO_ESTOQUE_STATUS_PARADO = {"closed": "encerrado", "inactive": "inativo", "under_review": "em revisão"}
 
 
 def _anuncio_estoque_linha(canal: str, conta: str, anuncio_id: str) -> dict[str, Any] | None:
@@ -32536,10 +32645,36 @@ def anuncio_estoque_config(conta: str) -> dict[str, Any]:
     conta = ml_casa_valida(conta)
     with DB_LOCK:
         row = DB.execute("SELECT * FROM anuncio_estoque_config_v2026 WHERE conta=?", (conta,)).fetchone()
+    # V20.26 (revisao): + a chave "o Disponivel do Apollo ja tira o atendimento aberto" (padrao desligada)
+    desconta = {"apollo_desconta_atendimento": bool(int(row["apollo_desconta_atendimento"] or 0)) if row is not None else False,
+                "desconta_em": str(row["desconta_em"] or "") if row is not None else "",
+                "desconta_por": str(row["desconta_por"] or "") if row is not None else ""}
     if row is None or str(row["modo"] or "") not in ANUNCIO_ESTOQUE_CONTA_MODOS:
-        return {"conta": conta, "modo": "simulacao", "atualizado_em": "", "atualizado_por": ""}
+        return {"conta": conta, "modo": "simulacao", "atualizado_em": "", "atualizado_por": "", **desconta}
     return {"conta": conta, "modo": str(row["modo"]), "atualizado_em": str(row["atualizado_em"] or ""),
-            "atualizado_por": str(row["atualizado_por"] or "")}
+            "atualizado_por": str(row["atualizado_por"] or ""), **desconta}
+
+
+def anuncio_estoque_desconta_definir(conta: str, valor: Any, ator: str) -> dict[str, Any]:
+    """V20.26 (revisao): liga = desconta so os pendentes SEM atendimento no Apollo (o Disponivel ja tiraria o resto).
+    Ligar so depois de o Guilherme confirmar. Perfil Admin (nao OWNER); auditado e registrado."""
+    conta = ml_casa_valida(conta)
+    if not isinstance(valor, bool) and valor not in (0, 1):
+        raise ValueError("Informe ligado (true) ou desligado (false).")
+    novo = 1 if bool(valor) else 0
+    antes = anuncio_estoque_config(conta)["apollo_desconta_atendimento"]
+    with DB_LOCK:
+        DB.execute("INSERT INTO anuncio_estoque_config_v2026(conta,modo,apollo_desconta_atendimento,desconta_em,desconta_por) "
+                   "VALUES(?,'simulacao',?,?,?) ON CONFLICT(conta) DO UPDATE SET "
+                   "apollo_desconta_atendimento=excluded.apollo_desconta_atendimento, desconta_em=excluded.desconta_em, "
+                   "desconta_por=excluded.desconta_por", (conta, novo, now_iso(), str(ator or "")))
+        DB.commit()
+    if bool(antes) != bool(novo):
+        _anuncio_estoque_registrar("ml", conta, "", "automatico", None, None,
+                                   "desconto do pendente: " + ("só sem atendimento no Apollo" if novo else "todo o pendente"),
+                                   "ignorado", "chave mudada pelo Admin", ator)
+    audit(ator, "anuncios.estoque_desconta_atendimento", f"{conta}|{int(bool(antes))}->{novo}")
+    return anuncio_estoque_config(conta)
 
 
 def anuncio_estoque_config_definir(conta: str, modo: str, ator: str) -> dict[str, Any]:
@@ -32625,13 +32760,15 @@ def _ml_estoque_http(method: str, path: str, payload: dict[str, Any] | None = No
 
 def _ml_estoque_ler_item(mlb: str) -> dict[str, Any]:
     """V20.26: o anuncio como o ML mostra agora (dentro de ml_na_casa). available_quantity sem numero = None."""
-    d = ml_api_get(f"/items/{mlb}?attributes=id,available_quantity,user_product_id,shipping,status")
+    d = ml_api_get(f"/items/{mlb}?attributes=id,available_quantity,user_product_id,shipping,status,variations")
     d = d if isinstance(d, dict) else {}
     q = d.get("available_quantity")
     qtd = int(q) if isinstance(q, (int, float)) and not isinstance(q, bool) else None
     return {"available_quantity": qtd, "user_product_id": str(d.get("user_product_id") or "").strip(),
             "logistic_type": str((d.get("shipping") or {}).get("logistic_type") or "") if isinstance(d.get("shipping"), dict) else "",
-            "status": str(d.get("status") or "")}
+            "status": str(d.get("status") or ""),
+            # V20.26 (revisao): com variacoes o estoque e por variacao (o PUT do anuncio nao vale)
+            "variacoes": bool(isinstance(d.get("variations"), list) and d.get("variations"))}
 
 
 def _ml_estoque_reler(mlb: str, qtd: int) -> int | None:
@@ -32706,6 +32843,7 @@ def ml_estoque_gravar(conta: str, mlb: str, quantidade: Any, *, ator: str, modo:
                     "erro": motivo_recusa}
         with ml_na_casa(conta):
             res = _ml_estoque_gravar_na_casa(mlb, qtd)
+        voltou_manual = False
         ok = bool(res["ok"])
         resultado = "ok" if ok else ("ignorado" if res.get("ignorado") else "erro")
         detalhe = res["metodo"] + (": " + res["erro"] if res.get("erro") else "")
@@ -32719,13 +32857,25 @@ def ml_estoque_gravar(conta: str, mlb: str, quantidade: Any, *, ator: str, modo:
                 DB.execute("UPDATE anuncio_canal_v2023 SET estoque_enviado=?, estoque_enviado_em=? "
                            "WHERE canal='ml' AND conta=? AND anuncio_id=?", (qtd, agora, conta, mlb))
             if res.get("ignorado") == "full":
-                DB.execute("UPDATE anuncio_canal_v2023 SET logistica='fulfillment' WHERE canal='ml' AND conta=? "
-                           "AND anuncio_id=?", (conta, mlb))
+                antes_modo = (_anuncio_estoque_linha("ml", conta, mlb) or {}).get("estoque_modo")
+                # V20.26 (revisao): virou Full = volta a Manual (o Automatico nunca religa sozinho)
+                DB.execute("UPDATE anuncio_canal_v2023 SET logistica='fulfillment', estoque_modo='manual' "
+                           "WHERE canal='ml' AND conta=? AND anuncio_id=?", (conta, mlb))
+                voltou_manual = antes_modo == "automatico"
+            lido = res.get("lido") or {}
+            if lido:
+                DB.execute("UPDATE anuncio_canal_v2023 SET variacoes=?, status=COALESCE(NULLIF(?,''),status) "
+                           "WHERE canal='ml' AND conta=? AND anuncio_id=?",
+                           (1 if lido.get("variacoes") else 0, str(lido.get("status") or ""), conta, mlb))
             DB.commit()
+        if voltou_manual:
+            _anuncio_estoque_registrar("ml", conta, mlb, "manual", None, None, "modo automatico -> manual", "ignorado",
+                                       "o ML mostra o anúncio como Full", "sistema")
         if ok and modo == "manual":
             audit(ator, "anuncios.estoque_manual", f"{conta}|{mlb}|{res['antes']}->{qtd}")
         return {"ok": ok, "resultado": resultado, "antes": res["antes"], "depois": res.get("depois"),
-                "metodo": res["metodo"], "erro": res.get("erro") or "", "quantidade": qtd}
+                "metodo": res["metodo"], "erro": res.get("erro") or "", "quantidade": qtd,
+                "ignorado": str(res.get("ignorado") or "")}
     finally:
         trava.release()
 
@@ -32739,8 +32889,15 @@ def _ml_estoque_gravar_na_casa(mlb: str, qtd: int) -> dict[str, Any]:
         saida["erro"] = f"o Mercado Livre não respondeu a leitura do anúncio ({str(exc)[:200]}); nada enviado"
         return saida
     saida["antes"] = item["available_quantity"]
+    saida["lido"] = item  # V20.26 (revisao): status e variacoes lidos agora vao para a linha do anuncio
     if item["logistic_type"] == "fulfillment":
         saida.update(ignorado="full", erro="anúncio Full: o estoque é do Mercado Livre; nada enviado")
+        return saida
+    if item["status"] in ANUNCIO_ESTOQUE_STATUS_PARADO:
+        saida.update(ignorado="status", erro=f"anúncio {ANUNCIO_ESTOQUE_STATUS_PARADO[item['status']]} no ML; nada enviado")
+        return saida
+    if item["variacoes"]:
+        saida.update(ignorado="variacoes", erro="anúncio com variações: o estoque é por variação; ajuste no ML")
         return saida
     if item["available_quantity"] == qtd:
         saida.update(ok=True, depois=qtd, metodo="nenhum", erro="o ML já mostrava essa quantidade")
@@ -32821,13 +32978,9 @@ def _anuncio_estoque_pecas(ficha_codigo: Any, catalogo: dict[str, dict[str, Any]
     cod = normalize(ficha_codigo)
     if not cod:
         return [], "anúncio sem produto (SKU)"
-    comp = _kit_composicao(cod, catalogo)
-    if comp:
-        if not comp.get("ativo", True):
-            return [], "kit inativo no Cadastro de Kits"
-        partes = [(c["sku"], int(c["quantidade"])) for c in comp["componentes"]]
-    else:
-        partes = _separacao_partes(cod, conhecidos() if "/" in cod else set())
+    partes, comp = _anuncio_sku_partes(cod, catalogo, conhecidos)  # V20.26 (revisao): a mesma regra do pendente
+    if comp and not comp.get("ativo", True):
+        return [], "kit inativo no Cadastro de Kits"
     pecas: dict[str, dict[str, Any]] = {}
     for codigo, qtd in partes:
         chave = _exp_norm_codigo(codigo)
@@ -32915,9 +33068,13 @@ def anuncios_apollo_ler_proximo(filial: str, mudancas: set[str] | None = None) -
         lidos = {str(r["codigo"]): dict(r) for r in
                  DB.execute("SELECT * FROM anuncio_apollo_v2026 WHERE filial=?", (filial,)).fetchall()}
     epoch = int(time.time())
+    quedas = _anuncio_pend_quedas(filial)
 
     def prioridade(cod: str) -> tuple[int, int]:
         r = lidos.get(cod)
+        q = quedas.get(_exp_norm_codigo(cod))
+        if r and q is not None and int(q) >= int(r["lido_epoch"] or 0):
+            return (-1, int(r["lido_epoch"] or 0))  # V20.26 (revisao): pedido concluido - rele esta peca primeiro
         if not r:
             return (0, 0)
         idade = epoch - int(r["lido_epoch"] or 0)
@@ -32942,9 +33099,39 @@ def anuncios_apollo_ler_proximo(filial: str, mudancas: set[str] | None = None) -
     return escolhido
 
 
+# V20.26 (revisao): quando o pendente de uma peca CAI (a Conferencia concluiu o pedido), o Apollo ainda nao baixou ate
+# reler a peca (rodizio de 3/min). Enquanto a leitura da peca for mais velha que a queda, o anuncio nao sobe acima do
+# ultimo enviado, e a peca vai para o comeco do rodizio. Sem chamada a mais. Memoria do processo (reiniciar = esquece).
+_ANUNCIO_PEND_VISTO: dict[tuple[str, str], dict[str, int]] = {}   # (filial, tipo do pendente) -> o ultimo visto
+_ANUNCIO_PEND_QUEDA: dict[tuple[str, str], float] = {}            # (filial, chave da peca) -> quando caiu
+
+
+def _anuncio_pend_observar(filial: str, tipo: str, pend: dict[str, int] | None) -> None:
+    if pend is None:
+        return
+    agora = time.time()
+    with _ANUNCIO_PEND_LOCK:
+        antes = _ANUNCIO_PEND_VISTO.get((filial, tipo))
+        if antes is not None:
+            for chave, q in antes.items():
+                if int(pend.get(chave, 0) or 0) < int(q or 0):
+                    _ANUNCIO_PEND_QUEDA[(filial, chave)] = agora
+        _ANUNCIO_PEND_VISTO[(filial, tipo)] = dict(pend)
+        for k, t in list(_ANUNCIO_PEND_QUEDA.items()):  # mais velha que a validade da leitura: a leitura ja venceu
+            if agora - t > ANUNCIO_APOLLO_VALIDADE_S:
+                del _ANUNCIO_PEND_QUEDA[k]
+
+
+def _anuncio_pend_quedas(filial: str) -> dict[str, float]:
+    with _ANUNCIO_PEND_LOCK:
+        return {c: t for (f, c), t in _ANUNCIO_PEND_QUEDA.items() if f == filial}
+
+
 def _anuncios_estoque_calcular(conta: str, anuncio_id: str = "") -> tuple[list[dict[str, Any]], Any]:
     """V20.26: (itens, versao da fila usada). A versao e lida ANTES da fila: se mudar no meio, a conferida antes
-    do envio e diferente e o anuncio e recalculado (RF1)."""
+    do envio e diferente e o anuncio e recalculado (RF1).
+    V20.26 (revisao): calcula descontando todo o pendente e so o sem atendimento no Apollo; `calculado` e o da chave
+    `apollo_desconta_atendimento` da conta. Pedido concluido segura a subida ate o Apollo reler a peca."""
     conta = ml_casa_valida(conta)
     with DB_LOCK:
         versao = _ml_versoes_storage("conf_pedidos", PENDING_ORDER_DELETE_KEY_V1766)
@@ -32953,17 +33140,29 @@ def _anuncios_estoque_calcular(conta: str, anuncio_id: str = "") -> tuple[list[d
                  DB.execute("SELECT * FROM anuncio_apollo_v2026 WHERE filial=?", (conta,)).fetchall()} if linhas else {}
     if not linhas:
         return [], versao
-    pend = pendentes_por_filial((conta,)).get(conta)
+    desconta_atend = bool(anuncio_estoque_config(conta).get("apollo_desconta_atendimento"))
+    pend_tudo = pendentes_por_filial((conta,)).get(conta)
+    pend_sem = pendentes_sem_atendimento(conta) if pend_tudo is not None else None
+    _anuncio_pend_observar(conta, "tudo", pend_tudo)
+    _anuncio_pend_observar(conta, "sem_atendimento", pend_sem)
+    quedas = _anuncio_pend_quedas(conta)
+    pend = pend_sem if desconta_atend else pend_tudo
     catalogo = _load_kit_catalog()
     conhecidos = _anuncios_conhecidos_lazy()
     epoch = int(time.time())
     itens: list[dict[str, Any]] = []
     for r in linhas:
         pecas, motivo = _anuncio_estoque_pecas(r.get("ficha_codigo"), catalogo, conhecidos)
+        status = str(r.get("status") or "")
+        if not motivo and status in ANUNCIO_ESTOQUE_STATUS_PARADO:  # V20.26 (revisao)
+            motivo = f"anúncio {ANUNCIO_ESTOQUE_STATUS_PARADO[status]} no ML: nada é enviado"
+        if not motivo and int(r.get("variacoes") or 0):
+            motivo = "anúncio com variações: o estoque é por variação; ajuste no ML"
         if not motivo and pend is None:
-            motivo = "fila de pedidos não lida"
+            motivo = "fila de pedidos não lida" if pend_tudo is None else "Faturamento não lido (pedidos com atendimento)"
         disp: dict[str, float | None] = {}
         saida_pecas = []
+        segura: list[str] = []
         for p in pecas:
             lido = lidos.get(p["codigo"])
             valor: float | None = None
@@ -32975,25 +33174,51 @@ def _anuncios_estoque_calcular(conta: str, anuncio_id: str = "") -> tuple[list[d
                 motivo = motivo or f"leitura do Apollo antiga ({p['codigo']})"
             else:
                 valor = float(lido["disponivel"])
+                q = quedas.get(p["chave"])
+                if q is not None and int(q) >= int(lido.get("lido_epoch") or 0):
+                    segura.append(p["codigo"])
             disp[p["chave"]] = valor
             saida_pecas.append({"codigo": p["codigo"], "quantidade": p["quantidade"], "disponivel": valor,
                                 "a_baixar": None if pend is None else int(pend.get(p["chave"], 0) or 0),
+                                "a_baixar_tudo": None if pend_tudo is None else int(pend_tudo.get(p["chave"], 0) or 0),
+                                "a_baixar_sem_atendimento": None if pend_sem is None else int(pend_sem.get(p["chave"], 0) or 0),
                                 "lido_em": str((lido or {}).get("lido_em") or "")})
-        calculado = None
-        if not motivo:
-            calculado = kit_da_para_montar([{"sku": p["chave"], "quantidade": p["quantidade"]} for p in pecas],
-                                           disp, pend or {})
-            if calculado is None:
-                motivo = "sem leitura do Apollo"
-            else:
-                calculado = min(int(calculado), ANUNCIO_ESTOQUE_MAX)
+        teto = r.get("estoque_enviado") if r.get("estoque_enviado") is not None else r.get("estoque")
+        comps = [{"sku": p["chave"], "quantidade": p["quantidade"]} for p in pecas]
+
+        def bruto(pd: dict[str, int] | None) -> int | None:
+            if motivo or pd is None:
+                return None
+            n = kit_da_para_montar(comps, disp, pd)
+            return None if n is None else min(int(n), ANUNCIO_ESTOQUE_MAX)
+
+        def numero(n: int | None) -> int | None:
+            if n is not None and segura and (teto is None or n > int(teto)):
+                return None if teto is None else int(teto)  # segura: nunca acima do ultimo enviado
+            return n
+
+        b_tudo, b_sem = bruto(pend_tudo), bruto(pend_sem)
+        calc_tudo, calc_sem = numero(b_tudo), numero(b_sem)
+        calculado = calc_sem if desconta_atend else calc_tudo
+        b = b_sem if desconta_atend else b_tudo
+        segurado = ""
+        if b is not None and b != calculado:
+            segurado = (f"pedido concluído: não sobe antes de o Apollo reler {', '.join(segura)}"
+                        + (f" (fica em {int(teto)}, daria {b})" if teto is not None else f" (daria {b})"))
+        if calculado is None and not motivo:
+            motivo = segurado or "sem leitura do Apollo"
         referencia = r.get("estoque") if r.get("estoque") is not None else r.get("estoque_enviado")
         itens.append({"anuncio_id": str(r["anuncio_id"]), "conta": conta, "ficha": str(r.get("ficha_codigo") or ""),
                       "titulo": str(r.get("titulo") or ""), "modo": "automatico",
                       "atual_ml": r.get("estoque"), "estoque_enviado": r.get("estoque_enviado"),
                       "estoque_enviado_em": str(r.get("estoque_enviado_em") or ""),
                       "estoque_calculado_antes": r.get("estoque_calculado"),
-                      "calculado": calculado, "motivo": motivo, "pecas": saida_pecas, "referencia": referencia,
+                      "calculado": calculado, "calculado_tudo": calc_tudo, "calculado_sem_atendimento": calc_sem,
+                      "desconta_atendimento": desconta_atend, "segurado": segurado if calculado is not None else "",
+                      "motivo": motivo, "pecas": saida_pecas, "referencia": referencia,
+                      # muda quando o anuncio e lido de novo (puxada/"Trazer dados"): zera a contagem de erros seguidos.
+                      # Nada que o proprio envio grava (estoque, status, variacoes) entra aqui.
+                      "assinatura": "|".join(str(r.get(k) or "") for k in ("user_product_id", "logistica", "lido_em")),
                       "muda": calculado is not None and calculado != referencia})
     return itens, versao
 
@@ -33007,14 +33232,23 @@ def anuncios_estoque_calcular(conta: str) -> list[dict[str, Any]]:
 # V20.26: rodada do Automatico (worker e "Enviar agora") e a tela.
 ANUNCIO_ESTOQUE_ERRO_ESPERA_S = 600    # mesmo numero recusado pelo ML: o worker so tenta de novo depois disso
 ANUNCIO_ESTOQUE_RECALCULO_S = 600      # o worker refaz a conta mesmo sem mudanca (leitura do Apollo venceu etc.)
-_ANUNCIO_ESTOQUE_ERRO: dict[tuple[str, str], tuple[float, int]] = {}
+ANUNCIO_ESTOQUE_ERROS_PARAR = 3        # V20.26 (revisao): erros seguidos no mesmo numero = para ate o numero/anuncio mudar
+# (conta, mlb) -> (quando, numero, erros seguidos, assinatura do anuncio, ultimo erro). Memoria do processo.
+_ANUNCIO_ESTOQUE_ERRO: dict[tuple[str, str], tuple[float, int, int, str, str]] = {}
 _ANUNCIO_ESTOQUE_RODADA_LOCKS: dict[str, threading.Lock] = {c: threading.Lock() for c in CASAS}
 
 
 def _anuncio_estoque_motivo_envio(it: dict[str, Any]) -> str:
     partes = [f"{p['codigo']}: Apollo {p['disponivel']:g} − a baixar {p['a_baixar']}" + (f" (÷{p['quantidade']})" if p["quantidade"] > 1 else "")
               for p in it.get("pecas") or [] if p.get("disponivel") is not None and p.get("a_baixar") is not None]
-    return ("; ".join(partes) + f" = {it.get('calculado')}")[:300]
+    texto = "; ".join(partes) + f" = {it.get('calculado')}"
+    # V20.26 (revisao): o outro jeito de descontar, para o dono comparar por alguns dias antes de ligar a chave
+    if it.get("calculado_tudo") != it.get("calculado_sem_atendimento"):
+        texto += (f" (descontando tudo: {it.get('calculado_tudo')} · só sem atendimento: "
+                  f"{it.get('calculado_sem_atendimento')})")
+    if it.get("segurado"):
+        texto += " · " + str(it["segurado"])
+    return texto[:300]
 
 
 def anuncios_estoque_rodada(conta: str, *, ator: str, forcar: bool = False) -> dict[str, Any]:
@@ -33057,8 +33291,12 @@ def anuncios_estoque_rodada(conta: str, *, ator: str, forcar: bool = False) -> d
                 continue
             chave = (conta, mlb)
             erro_antes = _ANUNCIO_ESTOQUE_ERRO.get(chave)
-            if (not forcar and erro_antes and erro_antes[1] == calc
-                    and time.time() - erro_antes[0] < ANUNCIO_ESTOQUE_ERRO_ESPERA_S):
+            if erro_antes and (erro_antes[1] != calc or erro_antes[3] != it["assinatura"]):
+                erro_antes = None  # V20.26 (revisao): o numero ou o anuncio mudou: tenta de novo, contagem do zero
+            if (not forcar and erro_antes
+                    and (erro_antes[2] >= ANUNCIO_ESTOQUE_ERROS_PARAR
+                         or time.time() - erro_antes[0] < ANUNCIO_ESTOQUE_ERRO_ESPERA_S)):
+                res["parados"] = int(res.get("parados") or 0) + (1 if erro_antes[2] >= ANUNCIO_ESTOQUE_ERROS_PARAR else 0)
                 continue
 
             def conferir(mlb: str = mlb, calc: int = calc) -> tuple[int | None, str]:
@@ -33089,11 +33327,13 @@ def anuncios_estoque_rodada(conta: str, *, ator: str, forcar: bool = False) -> d
             if r["ok"]:
                 res["enviados"] += 1
                 _ANUNCIO_ESTOQUE_ERRO.pop(chave, None)
-            elif r["resultado"] == "ignorado":
-                res["ignorados"] += 1
+            elif r["resultado"] == "ignorado" and r.get("ignorado") not in ("status", "variacoes"):
+                res["ignorados"] += 1  # desistiu (virou Manual, Full, fila sem numero...): nao conta como erro
             else:
-                res["erros"] += 1
-                _ANUNCIO_ESTOQUE_ERRO[chave] = (time.time(), int(r.get("quantidade") or calc))
+                # V20.26 (revisao): erro, ou o ML mostrou o anuncio parado/com variacoes: conta os seguidos
+                res["erros" if r["resultado"] != "ignorado" else "ignorados"] += 1
+                n = (erro_antes[2] + 1) if erro_antes else 1
+                _ANUNCIO_ESTOQUE_ERRO[chave] = (time.time(), calc, n, it["assinatura"], str(r.get("erro") or "")[:200])
         return res
     finally:
         trava.release()
@@ -33116,7 +33356,9 @@ def anuncios_estoque_payload(conta: str, anuncio_id: str = "") -> dict[str, Any]
         "resumo": {"automatico": por_modo.get("automatico", 0), "manual": por_modo.get("manual", 0),
                    "mudariam": sum(1 for i in itens if i["muda"]),
                    "sem_numero": sum(1 for i in itens if i["calculado"] is None)},
-        "log": anuncio_estoque_log("ml", conta, anuncio_id, 50), "apollo_por_minuto": ANUNCIO_APOLLO_POR_MINUTO}
+        "log": anuncio_estoque_log("ml", conta, anuncio_id, 50), "apollo_por_minuto": ANUNCIO_APOLLO_POR_MINUTO,
+        "envio": anuncios_estoque_envio_situacao(conta),  # V20.26 (revisao): "Enviar agora" em segundo plano
+        "erros_repetidos": [e for e in anuncios_estoque_erros_repetidos() if e["conta"] == conta]}
     if anuncio_id:
         saida["anuncio"] = None if anuncio is None else {
             k: anuncio.get(k) for k in ("anuncio_id", "conta", "ficha_codigo", "titulo", "controle", "logistica",
@@ -33125,6 +33367,81 @@ def anuncios_estoque_payload(conta: str, anuncio_id: str = "") -> dict[str, Any]
         if anuncio is not None:
             saida["anuncio"]["pode_controlar"] = not _anuncio_estoque_elegivel(anuncio)
     return saida
+
+
+def _anuncios_estoque_memoria_limpar() -> None:
+    """V20.26 (revisao): memoria do processo do estoque automatico (os testes recomecam do zero)."""
+    with _ANUNCIO_PEND_LOCK:
+        _ANUNCIO_PEND_VISTO.clear()
+        _ANUNCIO_PEND_QUEDA.clear()
+        _ANUNCIO_PEND_CACHE.clear()
+    _ANUNCIO_ESTOQUE_ERRO.clear()
+    with ANUNCIOS_ESTOQUE_ENVIO_LOCK:
+        ANUNCIOS_ESTOQUE_ENVIO.clear()
+
+
+def anuncios_estoque_erros_repetidos() -> list[dict[str, Any]]:
+    """V20.26 (revisao): anuncios em que o Automatico parou de tentar (ANUNCIO_ESTOQUE_ERROS_PARAR erros seguidos)."""
+    return [{"conta": c, "anuncio_id": m, "para": e[1], "erros": e[2], "erro": e[4]}
+            for (c, m), e in sorted(dict(_ANUNCIO_ESTOQUE_ERRO).items()) if e[2] >= ANUNCIO_ESTOQUE_ERROS_PARAR]
+
+
+# V20.26 (revisao): o "Enviar agora" roda numa thread (com ~30 anuncios passava dos 60 s do nginx = 504). Um por conta
+# de cada vez; a tela acompanha pelo `envio` do GET /api/anuncios/estoque.
+ANUNCIOS_ESTOQUE_ENVIO: dict[str, dict[str, Any]] = {}
+ANUNCIOS_ESTOQUE_ENVIO_LOCK = threading.Lock()
+_ANUNCIOS_ESTOQUE_ENVIO_TRAVAS: dict[str, threading.Lock] = {c: threading.Lock() for c in CASAS}
+
+
+def anuncios_estoque_envio_situacao(conta: str) -> dict[str, Any]:
+    with ANUNCIOS_ESTOQUE_ENVIO_LOCK:
+        return json.loads(json.dumps(ANUNCIOS_ESTOQUE_ENVIO.get(conta) or {"rodando": False}))
+
+
+def _anuncios_estoque_envio_fundo(conta: str, ator: str) -> None:
+    res: dict[str, Any] = {}
+    erro = ""
+    try:
+        res = anuncios_estoque_rodada(conta, ator=ator, forcar=True)
+        if res.get("ocupado"):
+            erro = str(res.get("erro") or "Outra rodada do estoque desta conta está em andamento.")
+        try:
+            audit(ator, "anuncios.estoque_enviar", f"{conta}|{res.get('enviados')} enviados|{res.get('erros')} erros")
+        except Exception as exc:
+            print(f"Aviso: auditoria do envio de estoque nao gravada: {exc}", file=sys.stderr)
+    except Exception as exc:
+        erro = f"{type(exc).__name__}: {exc}"[:300]
+        print(f"Aviso: envio de estoque de {conta} falhou: {erro}", file=sys.stderr)
+    finally:
+        with ANUNCIOS_ESTOQUE_ENVIO_LOCK:
+            try:
+                ANUNCIOS_ESTOQUE_ENVIO.setdefault(conta, {}).update(
+                    rodando=False, fim_em=now_iso(), erro=erro, ok=not erro,
+                    resultado={k: res.get(k) for k in ("avaliados", "mudariam", "enviados", "erros", "ignorados",
+                                                        "parados", "detalhes")})
+            finally:
+                _ANUNCIOS_ESTOQUE_ENVIO_TRAVAS[conta].release()
+
+
+def anuncios_estoque_envio_iniciar(conta: str, ator: str) -> bool:
+    """V20.26 (revisao): False = ja tem um envio desta conta rodando (a rota responde 409)."""
+    conta = ml_casa_valida(conta)
+    trava = _ANUNCIOS_ESTOQUE_ENVIO_TRAVAS[conta]
+    if not trava.acquire(blocking=False):
+        return False
+    try:
+        with ANUNCIOS_ESTOQUE_ENVIO_LOCK:
+            ANUNCIOS_ESTOQUE_ENVIO[conta] = {"rodando": True, "iniciado_em": now_iso(), "iniciado_por": str(ator or ""),
+                                             "fim_em": "", "ok": None, "erro": "", "resultado": {}}
+        threading.Thread(target=_anuncios_estoque_envio_fundo, args=(conta, ator), daemon=True,
+                         name=f"anuncios-estoque-{conta}").start()
+    except Exception:
+        with ANUNCIOS_ESTOQUE_ENVIO_LOCK:
+            ANUNCIOS_ESTOQUE_ENVIO[conta] = {"rodando": False, "fim_em": now_iso(), "ok": False,
+                                             "erro": "O envio não começou.", "resultado": {}}
+        trava.release()
+        raise
+    return True
 
 
 def anuncio_estoque_manual(conta: str, anuncio_id: str, quantidade: Any, ator: str) -> dict[str, Any]:
@@ -42675,6 +42992,11 @@ class AppHandler(BaseHTTPRequestHandler):
                 elif path == "/api/anuncios/estoque/manual":
                     res = anuncio_estoque_manual(conta_e, str(body.get("anuncio_id") or ""), body.get("quantidade"),
                                                  ctx["username"])
+                elif path == "/api/anuncios/estoque/config" and "apollo_desconta_atendimento" in body \
+                        and not str(body.get("modo") or "").strip():
+                    # V20.26 (revisao): a chave do desconto do atendimento e do perfil Admin (nao precisa do OWNER)
+                    res = {"ok": True, "config": anuncio_estoque_desconta_definir(
+                        conta_e, body.get("apollo_desconta_atendimento"), ctx["username"])}
                 elif path == "/api/anuncios/estoque/config":
                     modo_e = str(body.get("modo") or "").strip().lower()
                     if modo_e == "automatico" and anuncio_estoque_config(conta_e)["modo"] != "automatico"                             and not self.require_owner_reauth(ctx):
@@ -42684,12 +43006,12 @@ class AppHandler(BaseHTTPRequestHandler):
                 else:
                     if anuncio_estoque_config(conta_e)["modo"] == "simulacao":
                         raise ValueError("A conta está em Simulação: passe para Lote para enviar.")
-                    res = anuncios_estoque_rodada(conta_e, ator=ctx["username"], forcar=True)
-                    if res.get("ocupado"):
-                        self.send_json(res, 409)
+                    # V20.26 (revisao): em segundo plano (a rota responde na hora; a tela acompanha pelo GET)
+                    if not anuncios_estoque_envio_iniciar(conta_e, ctx["username"]):
+                        self.send_json({"ok": False, "ocupado": True,
+                                        "error": "O envio de estoque desta conta já está em andamento."}, 409)
                         return
-                    audit(ctx["username"], "anuncios.estoque_enviar",
-                          f"{conta_e}|{res.get('enviados')} enviados|{res.get('erros')} erros")
+                    res = {"ok": True, "iniciado": True, "envio": anuncios_estoque_envio_situacao(conta_e)}
                 self.send_json(res)
             except ValueError as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 400)
@@ -42798,18 +43120,27 @@ class AppHandler(BaseHTTPRequestHandler):
                         self.send_json({"ok": False, "error": str(exc)}, 502)
                         return
                 elif path == "/api/anuncios/foto":  # V20.24
-                    if body.get("estudio_id") not in (None, ""):
-                        foto = anuncio_foto_do_estudio(str(body.get("codigo") or ""), body.get("estudio_id"),
-                                                       str(body.get("nome") or ""), ctx["username"])
-                    else:
-                        texto64 = str(body.get("base64") or "")
-                        if len(texto64) > 14 * 1024 * 1024:  # V20.24: recusa antes de decodificar
-                            raise ValueError("Foto maior que 10 MB.")
-                        try:
-                            dados = base64.b64decode(texto64, validate=False)
-                        except Exception:
-                            raise ValueError("Foto inválida.")
-                        foto = anuncio_foto_adicionar(str(body.get("codigo") or ""), dados, ctx["username"])
+                    # V20.26 (revisao): a mesma trava das fotos trazidas do anuncio ("Trazer dados"); sem ela a foto
+                    # do computador entrava no meio das do ML e baguncava a ordem. Ocupada = 409, nunca espera.
+                    if not ANUNCIOS_FOTOS_ML_LOCK.acquire(blocking=False):
+                        self.send_json({"ok": False, "error": "Aguarde as fotos do anúncio terminarem de chegar e "
+                                                              "envie de novo."}, 409)
+                        return
+                    try:
+                        if body.get("estudio_id") not in (None, ""):
+                            foto = anuncio_foto_do_estudio(str(body.get("codigo") or ""), body.get("estudio_id"),
+                                                           str(body.get("nome") or ""), ctx["username"])
+                        else:
+                            texto64 = str(body.get("base64") or "")
+                            if len(texto64) > 14 * 1024 * 1024:  # V20.24: recusa antes de decodificar
+                                raise ValueError("Foto maior que 10 MB.")
+                            try:
+                                dados = base64.b64decode(texto64, validate=False)
+                            except Exception:
+                                raise ValueError("Foto inválida.")
+                            foto = anuncio_foto_adicionar(str(body.get("codigo") or ""), dados, ctx["username"])
+                    finally:
+                        ANUNCIOS_FOTOS_ML_LOCK.release()
                     audit(ctx["username"], "anuncios.foto", f"{foto['ficha_codigo']}|{foto['id']}|{foto['origem']}")
                     res = {"ok": True, "foto": foto, "fotos": anuncio_fotos(foto["ficha_codigo"])}
                 elif path == "/api/anuncios/foto/remover":
@@ -46520,7 +46851,22 @@ def saude_checks() -> list[dict[str, Any]]:
     itens += _saude_check(_saude_vendas, "vendas", "Rotinas", "Vendas")
     itens += _saude_check(_saude_relatorio, "relatorio_diario", "Rotinas", "Relatório diário")
     itens += _saude_check(_saude_promocoes, "promocoes_auto", "Rotinas", "Promoções automáticas")
+    itens += _saude_check(_saude_anuncios_estoque, "anuncios_estoque", "Rotinas", "Estoque dos anúncios do ML")  # V20.26
     return itens
+
+
+def _saude_anuncios_estoque() -> dict[str, Any]:
+    """V20.26 (revisao): so memoria (nenhuma chamada): anuncio em que o Automatico parou por erros seguidos."""
+    g, t = "Rotinas", "Estoque dos anúncios do ML"
+    lista = anuncios_estoque_erros_repetidos()
+    if not lista:
+        return _saude_item("anuncios_estoque", g, t, "ok", "Sem erro repetido nos envios de estoque", "", "/anuncios",
+                           "Abrir Anúncios")
+    nomes = ", ".join(f"{e['anuncio_id']} ({e['erro'] or 'erro'})" for e in lista[:3])
+    return _saude_item("anuncios_estoque", g, t, "atencao",
+                       f"{len(lista)} anúncio(s) com {ANUNCIO_ESTOQUE_ERROS_PARAR} erros seguidos no envio de estoque: "
+                       "o Automático parou de tentar", nomes[:400] + ". Volta a tentar quando o número ou o anúncio mudar.",
+                       "/anuncios", "Abrir Anúncios")
 
 
 # ---------- Alertas ----------

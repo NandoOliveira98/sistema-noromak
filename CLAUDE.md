@@ -809,9 +809,30 @@ Registro em `anuncio_estoque_log_v2026` (ok/erro/simulado/ignorado, últimos 20.
 (módulo admin, só lê o banco); `POST /api/anuncios/estoque/{modo,manual,config,enviar}` (perfil Admin, `conta` obrigatória; Manual em
 anúncio Automático = 400; Enviar em Simulação = 400, rodada em andamento = 409). Tela: cartão "Controle de estoque" na aba Anúncios em
 todos os canais e painel "Estoque automático" (um cartão por conta, segue o seletor de casa; registro com `data-nk-tabela`).
-**Limitação conhecida:** venda concluída na Conferência e ainda não baixada no Apollo sai dos pendentes antes de o Apollo baixar — o
-estoque pode subir por um instante (igual ao TikTok). Prévia: o ML simulado aceita o PUT e o MLB1129555578 tem depósito do vendedor.
+Prévia: o ML simulado aceita o PUT e o MLB1129555578 tem depósito do vendedor.
 Teste: `TESTES/test_anuncios_estoque_v2026.py`.
+**Revisão final (05/11, "pode corrigir todos"):** (1) chave **por conta** `apollo_desconta_atendimento` em `anuncio_estoque_config_v2026`
+(padrão 0 = desconta todo pendente). O Disponível do Apollo = Contábil − Negociação − Fulfillment; se a Negociação já inclui o atendimento
+que a integração abre para cada venda, descontar a fila tira a venda duas vezes — **ligar só depois de o Guilherme confirmar**. Ligada,
+desconta só os pedidos sem atendimento: com atendimento = linha do `faturamento_v1943` com `atendimento` preenchido ou situação
+`feito`/`pronto_caixa`; pedido que o Faturamento não conhece desconta (o lado seguro). Mudar = perfil Admin (sem OWNER), auditado
+(`anuncios.estoque_desconta_atendimento`) e no registro; `POST /api/anuncios/estoque/config {conta, apollo_desconta_atendimento}`. Cada
+item traz `calculado_tudo` e `calculado_sem_atendimento` (a Simulação mostra "descontando tudo: X · só sem atendimento: Y" e o registro
+também, para comparar por alguns dias). (2) **Abertura do SKU única** (`_anuncio_sku_partes`: Cadastro de Kits/KITn-X, senão
+`_separacao_partes`) no estoque do anúncio **e** no pendente (`pendentes_por_filial`): "WAP103/S", "PSH367/80" e
+"KIT-1/10405594-1/10405569" passam a descontar. O TikTok continua com `pendentes_da_filial` (`_tiktok_pecas`, igual). (3) **Pedido
+concluído não sobe antes do Apollo reler:** cada cálculo compara o pendente com o anterior (`_anuncio_pend_observar`); peça cujo pendente
+caiu (`_ANUNCIO_PEND_QUEDA`) com leitura do Apollo mais velha que a queda segura o anúncio no último enviado (sem envio: o número do ML;
+sem nenhum = não envia; `segurado` diz por quê) e vai para o começo do rodízio. Memória do processo, sem chamada a mais. (4) Pendente
+calculado **uma vez por versão** da fila + tombstone + `conf_kits` (`_anuncio_pend_linhas`, sobre a leitura guardada `_ml_fila_leitura`
+da V20.04; limpo junto em `_ml_cache_leitura_limpar`); o RF1 só recalcula quando a versão mudou. (5) Anúncio `closed`/`inactive`/
+`under_review` (`ANUNCIO_ESTOQUE_STATUS_PARADO`) ou com variações (`anuncio_canal_v2023.variacoes`, lido no `GET /items` antes de gravar)
+não entra (motivo na tela); `ANUNCIO_ESTOQUE_ERROS_PARAR` (3) erros seguidos no mesmo número param o Automático até o número ou o anúncio
+(nova leitura) mudar, e aparecem no Painel de saúde (`anuncios_estoque`, "atenção", só memória). (6) **"Enviar agora" em segundo plano**
+(`anuncios_estoque_envio_iniciar`, um por conta, 409 se já roda); o GET devolve `envio` e a tela pergunta a cada 3 s (para em 401/403).
+(7) Volta a **Manual** (com linha no registro) quando a puxada ou o envio vê Full, ao remover/reincluir e ao trocar quem controla.
+(8) Foto pelo computador/Estúdio pega a `ANUNCIOS_FOTOS_ML_LOCK` sem esperar (409 "Aguarde as fotos do anúncio…"). Prévia: o
+PREVIA02 tem atendimento no Faturamento. Teste: `TESTES/test_anuncios_estoque_revisao_v2026.py`.
 
 ### Estúdio de Imagens (V20.17: servidor, tela e agente)
 `APP/imagens.html` (`/imagens`, menu Vendas e anúncios, módulo próprio **`imagens`** = `app_users.can_imagens`, mesma

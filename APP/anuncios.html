@@ -105,6 +105,8 @@ tr.atual td{background:var(--nk-warn-bg)}
 .est-imgs button{border:1px solid var(--nk-line);border-radius:8px;padding:4px;background:var(--nk-tile);cursor:pointer;width:112px;font:inherit;font-size:11px;color:var(--nk-ink2)}
 .est-imgs button.feito{border-color:var(--nk-ok)}
 /* V20.26: controle de estoque (cartão por anúncio na ficha; painel por conta na lista) */
+.estq-chave{margin-top:8px;padding-top:8px;border-top:1px solid var(--nk-line)}
+.estq-chave label{display:flex;gap:6px;align-items:center;cursor:pointer}
 .estq{display:grid;gap:10px}
 .estq-card{border:1px solid var(--nk-line);border-radius:10px;padding:10px 12px;background:var(--nk-canvas);display:grid;gap:8px;font-size:13px}
 .estq-topo{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
@@ -911,7 +913,9 @@ function cartaoEstoque(a) {
         : cfg === "simulacao" ? `Mudaria de ${de} para ${para} — a conta ${esc(CONTA[a.conta] || a.conta)} está em Simulação: nada é enviado.`
         : cfg === "lote" ? `Muda de ${de} para ${para} — vai no próximo “Enviar agora” da lista (conta em Lote).`
         : `Muda de ${de} para ${para} — o Automático envia sozinho.`;
-      corpo = contaDoCalculo(it) + `<div class="muted">No ML agora: ${esc(numEst(it.atual_ml))} · ${muda}</div>`;
+      corpo = contaDoCalculo(it) + `<div class="muted">No ML agora: ${esc(numEst(it.atual_ml))} · ${muda}</div>`
+        + (cfg === "simulacao" ? `<div class="muted">${esc(doisNumeros(it))}</div>` : "")
+        + (it.segurado ? `<div class="nk-aviso">${esc(it.segurado)}</div>` : "");
     }
   }
   return `<div class="estq-card"><div class="estq-topo">${linkAnuncio(a)}<span class="muted">${esc(CONTA[a.conta] || a.conta)} · ${esc(a.titulo)}</span><span class="esp"></span>
@@ -982,6 +986,12 @@ async function carregarPainelEstoque() {
   if (casa !== CASA || codigoDaUrl()) return;
   PE = {casa, contas: Object.fromEntries(contas.map((c, i) => [c, res[i]]))};
   desenharPainelEstoque();
+  contas.forEach((c, i) => { if (((res[i] || {}).envio || {}).rodando && !ENVIO_ACOMP[c]) acompanharEnvioConta(c); });
+}
+// V20.26 (revisao): o calculo pelos dois jeitos de descontar (a chave do atendimento no Apollo), para comparar.
+function doisNumeros(i) {
+  return `descontando tudo: ${numEst(i.calculado_tudo)} · só sem atendimento: ${numEst(i.calculado_sem_atendimento)}`
+    + (i.desconta_atendimento ? " (vale o “só sem atendimento”)" : " (vale o “descontando tudo”)");
 }
 function motivoCurtoEst(i) {
   return (i.pecas || []).map(p => `${p.codigo}: Apollo ${numEst(p.disponivel)} − a baixar ${numEst(p.a_baixar)}${Number(p.quantidade) > 1 ? ` ÷ ${numEst(p.quantidade)}` : ""}`).join("; ") + ` = ${numEst(i.calculado)}`;
@@ -997,13 +1007,21 @@ function desenharPainelEstoque() {
     const r = d.resumo || {}, cfg = (d.config || {}).modo || "simulacao";
     const sel = `<span class="casa-sel" role="group" aria-label="Modo do estoque automático de ${esc(CONTA[conta] || conta)}">${Object.entries(ESTQ_MODO_CONTA)
       .map(([v, n]) => `<button type="button" class="${cfg === v ? "on" : ""}" aria-pressed="${cfg === v}" ${PODE ? "" : "disabled"} data-conta="${esc(conta)}" data-modo="${v}" onclick="mudarModoConta(this.dataset.conta,this.dataset.modo)">${n}</button>`).join("")}</span>`;
-    const enviar = PODE && cfg === "lote" ? `<button type="button" class="nk-btn mini pri" data-conta="${esc(conta)}" ${r.mudariam ? "" : "disabled"} onclick="enviarAgoraConta(this)">Enviar agora${r.mudariam ? ` (${Number(r.mudariam)})` : ""}</button>` : "";
+    const enviar = PODE && cfg === "lote" ? `<button type="button" class="nk-btn mini pri" data-conta="${esc(conta)}" ${r.mudariam && !(d.envio || {}).rodando ? "" : "disabled"} onclick="enviarAgoraConta(this)">${(d.envio || {}).rodando ? "Enviando…" : "Enviar agora"}${r.mudariam ? ` (${Number(r.mudariam)})` : ""}</button>` : "";
     const quem = d.config && d.config.atualizado_em ? ` · mudado ${quando(d.config.atualizado_em)}${d.config.atualizado_por ? " por " + esc(d.config.atualizado_por) : ""}` : "";
+    // V20.26 (revisao): chave "o Disponível do Apollo já tira o atendimento aberto" (perfil Admin, sem OWNER)
+    const desc = !!(d.config || {}).apollo_desconta_atendimento;
+    const chave = `<div class="estq-chave"><label><input type="checkbox" ${desc ? "checked" : ""} ${PODE ? "" : "disabled"} data-conta="${esc(conta)}" onchange="mudarDescontaConta(this)">
+        Descontar só os pedidos <b>sem atendimento</b> no Apollo</label>
+      <div class="muted">Desligado: desconta todo pedido da fila. Ligue só depois de confirmar com o Guilherme se o Disponível do Apollo já tira a peça do atendimento aberto (senão a venda seria descontada duas vezes).${d.config && d.config.desconta_em ? ` Mudado ${quando(d.config.desconta_em)}${d.config.desconta_por ? " por " + esc(d.config.desconta_por) : ""}.` : ""}</div></div>`;
+    const env = d.envio || {};
+    const envTxt = env.rodando ? `<div class="nk-aviso">Enviando ao Mercado Livre… (começou ${quando(env.iniciado_em)})</div>` : "";
+    const rep = (d.erros_repetidos || []).length ? `<div class="nk-aviso bad">${(d.erros_repetidos || []).length} anúncio(s) com 3 erros seguidos: o Automático parou de tentar até o número ou o anúncio mudar (${esc((d.erros_repetidos || []).slice(0, 3).map(e => e.anuncio_id).join(", "))}).</div>` : "";
     return `<div class="estq-card estq-conta"><div class="estq-topo"><h3>${esc(CONTA[conta] || conta)}</h3><span class="esp"></span>${sel}</div>
       <div class="muted">${esc(ESTQ_MODO_TXT[cfg] || "")}${quem}</div>
       <div class="nums"><span><b>${Number(r.automatico || 0)}</b>em Automático</span><span><b>${Number(r.manual || 0)}</b>em Manual</span>
         <span><b>${Number(r.mudariam || 0)}</b>${cfg === "simulacao" ? "mudariam" : "a enviar"}</span><span><b>${Number(r.sem_numero || 0)}</b>sem número</span>
-        <span class="esp"></span>${enviar}</div></div>`;
+        <span class="esp"></span>${enviar}</div>${envTxt}${rep}${chave}</div>`;
   };
   const itens = contas.flatMap(([, d]) => (d.itens || []).filter(i => i.muda || i.calculado == null));
   const log = contas.flatMap(([, d]) => d.log || []).sort((x, y) => String(y.criado_em).localeCompare(String(x.criado_em))).slice(0, 50);
@@ -1016,10 +1034,10 @@ function desenharPainelEstoque() {
       <tbody>${itens.map(i => `<tr><td>${esc(CONTA[i.conta] || i.conta)}</td><td>${linkAnuncio({canal: "ml", anuncio_id: i.anuncio_id})}<div class="muted">${esc(i.titulo)}</div></td>
         <td class="mono"><a href="?codigo=${encodeURIComponent(i.ficha)}&amp;aba=anuncios" data-cod="${esc(i.ficha)}" onclick="event.preventDefault();irPara({codigo:this.dataset.cod,aba:'anuncios'})">${esc(i.ficha)}</a></td>
         <td class="n">${esc(numEst(i.referencia))}</td><td class="n">${i.calculado == null ? SEM_LEITURA : esc(numEst(i.calculado))}</td>
-        <td>${esc(i.calculado == null ? i.motivo : motivoCurtoEst(i))}</td></tr>`).join("")}</tbody></table></div></details>` : ""}
+        <td>${esc(i.calculado == null ? i.motivo : motivoCurtoEst(i))}${i.calculado != null && ((PE.contas[i.conta] || {}).config || {}).modo === "simulacao" ? `<div class="muted">${esc(doisNumeros(i))}</div>` : ""}${i.segurado ? `<div class="muted">${esc(i.segurado)}</div>` : ""}</td></tr>`).join("")}</tbody></table></div></details>` : ""}
     <details class="rem bloco"><summary>Registro dos últimos envios (${log.length})</summary>
       <div class="tw"><table class="nk-tab" data-nk-tabela="anuncios_estoque_registro"><thead><tr><th>Quando</th><th>Conta</th><th>Anúncio</th><th>Modo</th><th class="n">De</th><th class="n">Para</th><th>Resultado</th><th>Motivo / detalhe</th><th>Por</th></tr></thead>
-      <tbody>${log.map(l => `<tr><td>${quando(l.criado_em)}</td><td>${esc(CONTA[l.conta] || l.conta)}</td><td>${linkAnuncio({canal: "ml", anuncio_id: l.anuncio_id})}</td>
+      <tbody>${log.map(l => `<tr><td>${quando(l.criado_em)}</td><td>${esc(CONTA[l.conta] || l.conta)}</td><td>${l.anuncio_id ? linkAnuncio({canal: "ml", anuncio_id: l.anuncio_id}) : "conta inteira"}</td>
         <td>${esc(MODO_ANU[l.modo] || l.modo)}</td><td class="n">${l.de == null ? "—" : esc(numEst(l.de))}</td><td class="n">${l.para == null ? "—" : esc(numEst(l.para))}</td>
         <td>${selo(l)}</td><td>${esc(l.motivo)}${l.detalhe ? `<div class="muted">${esc(l.detalhe)}</div>` : ""}</td><td>${esc(l.ator)}</td></tr>`).join("")
         || '<tr><td colspan="9" class="vazio">Nada registrado ainda.</td></tr>'}</tbody></table></div></details>`;
@@ -1053,15 +1071,48 @@ async function enviarAgoraConta(b) {
     {ok: "Enviar agora", perigo: false})) return;
   b.disabled = true; b.textContent = "Enviando…";
   try {
-    const r = await api("/api/anuncios/estoque/enviar", {conta});
-    const partes = [`${Number(r.enviados || 0)} enviado(s)`];
-    if (r.erros) partes.push(`${Number(r.erros)} com erro`);
-    if (r.ignorados) partes.push(`${Number(r.ignorados)} ignorado(s)`);
-    nkToast(`${CONTA[conta] || conta}: ${partes.join(", ")}.${r.erros ? " Veja o registro." : ""}`, r.erros ? "aviso" : "ok", {duracao: 12000});
+    // V20.26 (revisao): o servidor envia em segundo plano (com ~30 anúncios passava dos 60 s); a tela acompanha.
+    await api("/api/anuncios/estoque/enviar", {conta});
+    acompanharEnvioConta(conta);
+    return;
   } catch (e) {
-    nkToast(e.status === 409 ? "Outra rodada do estoque desta conta está em andamento. Tente de novo em instantes."
+    nkToast(e.status === 409 ? "O envio de estoque desta conta já está em andamento. Aguarde terminar."
       : e.status ? e.message : "Sem resposta do servidor: veja o registro antes de enviar de novo.", "erro", {duracao: 10000});
   }
+  carregarPainelEstoque();
+}
+const ENVIO_ACOMP = {};  // conta -> timer do acompanhamento (um por conta)
+async function acompanharEnvioConta(conta) {
+  clearTimeout(ENVIO_ACOMP[conta]);
+  let d;
+  try { d = await api(`/api/anuncios/estoque?conta=${encodeURIComponent(conta)}`); }
+  catch (e) {
+    if (e.status === 401 || e.status === 403) { delete ENVIO_ACOMP[conta]; return; }  // sessão caiu: para de perguntar
+    ENVIO_ACOMP[conta] = setTimeout(() => acompanharEnvioConta(conta), 3000);
+    return;
+  }
+  if (PE.casa === CASA && PE.contas[conta] !== undefined) { PE.contas[conta] = d; desenharPainelEstoque(); }
+  const env = d.envio || {};
+  if (env.rodando) { ENVIO_ACOMP[conta] = setTimeout(() => acompanharEnvioConta(conta), 3000); return; }
+  delete ENVIO_ACOMP[conta];
+  const r = env.resultado || {};
+  if (env.erro) { nkToast(`${CONTA[conta] || conta}: ${env.erro}`, "erro", {duracao: 12000}); return; }
+  const partes = [`${Number(r.enviados || 0)} enviado(s)`];
+  if (r.erros) partes.push(`${Number(r.erros)} com erro`);
+  if (r.ignorados) partes.push(`${Number(r.ignorados)} ignorado(s)`);
+  nkToast(`${CONTA[conta] || conta}: ${partes.join(", ")}.${r.erros ? " Veja o registro." : ""}`, r.erros ? "aviso" : "ok", {duracao: 12000});
+}
+async function mudarDescontaConta(inp) {
+  const conta = inp.dataset.conta, ligar = inp.checked;
+  if (!PODE) { inp.checked = !ligar; return; }
+  const txt = ligar
+    ? `Descontar só os pedidos sem atendimento no Apollo em ${CONTA[conta] || conta}?\nUse só depois de confirmar com o Guilherme que o Disponível do Apollo já tira a peça do atendimento aberto. Se não tirar, o anúncio fica com estoque a mais.`
+    : `Voltar a descontar todo pedido da fila em ${CONTA[conta] || conta}?`;
+  if (!await nkConfirmar(txt, {ok: ligar ? "Ligar" : "Desligar", perigo: false})) { inp.checked = !ligar; return; }
+  try {
+    await api("/api/anuncios/estoque/config", {conta, apollo_desconta_atendimento: ligar});
+    nkToast(`${CONTA[conta] || conta}: ${ligar ? "desconta só os pedidos sem atendimento no Apollo" : "desconta todo pedido da fila"}.`, "ok");
+  } catch (e) { inp.checked = !ligar; nkToast(e.message, "erro"); }
   carregarPainelEstoque();
 }
 // Senha + 2FA do proprietário (POST /api/security/owner/reauth), como nas Promoções automáticas e no TikTok.

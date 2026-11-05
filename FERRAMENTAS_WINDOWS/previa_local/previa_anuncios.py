@@ -66,6 +66,13 @@ gravar("conf_pedidos", [
      "__uidLinha": "PREVIA02_0893117732", "Descricao": "Limpa Contato Wurth"},
 ])
 
+# V20.26 (revisao): o Faturamento ja achou o atendimento do PREVIA02 no Apollo (a chave "descontar so os pedidos sem
+# atendimento" do painel Estoque automatico deixa de descontar este pedido; a Simulacao mostra os dois numeros).
+with S.DB_LOCK:
+    S.DB.execute("INSERT OR REPLACE INTO faturamento_v1943(order_key,pedido,marketplace,situacao,atendimento) "
+                 "VALUES(?,?,?,?,?)", ("261105PREVIA02", "261105PREVIA02", "Mercado Livre", "pronto", "790955"))
+    S.DB.commit()
+
 # ---------- Fichas iniciais (o resto aparece ao clicar em Puxar anuncios do ML) ----------
 S.ficha_importar("32052153", {"nome": "Oleo Cambio Texaco Texamatic 7045 1 L", "marca": "Texaco",
                                     "ean": "7891165080241", "ncm": "27101932"}, "apollo")
