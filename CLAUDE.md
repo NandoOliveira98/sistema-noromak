@@ -745,12 +745,23 @@ remoção pela tela. **"+ Novo produto"** na lista cria a ficha só se não exis
 `family_name` e o `value_id` do `EMPTY_GTIN_REASON`). Tarifa de anúncio que ainda não existe: só `listing_prices` (frete em branco, sem MLB não há cotação).
 **O ML só é lido por GET, exceto no Publicar**, a ÚNICA escrita no ML da plataforma (perfil Admin; sobe as fotos, `POST /items`, descrição).
 "Conferir no ML" usa `POST /items/validate` sem fotos e não cria nada. `ANUNCIOS_PUBLICAR_LOCK` + máquina de situação
-`rascunho → validado → publicando → publicado | erro | incerto` (troca só se a situação ainda é a esperada, fora do `DB_LOCK`).
+`rascunho → validado → publicando → publicado | erro | incerto` (a troca de situação é feita **sob o `DB_LOCK`**, só se a situação
+ainda é a esperada; as chamadas ao ML e ao Apollo ficam **fora** dele). Falha **antes do envio** (token, Apollo, quantidade, foto)
+volta a `validado` com o motivo em `erros` (a tela mostra no Conferir e no Publicar); nada foi criado.
 **Incerto** = erro de rede/timeout, 5xx, 2xx sem `id` ou `publicando` que sobrou no boot (processo caiu no meio): o ML pode ter criado,
-então **nunca repete**; o Admin confere no ML e libera com `liberar` (com o MLB = `publicado`, entra na lista como `noromak`; sem = volta
-a editar). Recusa 4xx = erro, nada foi feito. **Estoque inicial** = `da_para_montar` pela leitura do Apollo **agora** (kit = peça que
-tem menos); desconhecido = não publica; só pode ser **menor** que isso, nunca maior. **Título → `family_name`:** se a recusa fala de
-`title`/`family_name`, tenta de novo **uma vez** com `family_name` e sem `title`.
+então **nunca repete**; o Admin confere no ML e libera com `liberar` (com o MLB = `publicado`, entra na lista como `noromak`; sem MLB = volta
+a `validado` (pode publicar de novo). MLB que já está na lista com outro produto, sem produto ou com controle que não é `noromak` é
+recusado: nunca religa calado). Recusa 4xx = erro, nada foi feito. **Estoque inicial** = `da_para_montar` pela leitura do Apollo **agora** (kit = peça que
+tem menos); desconhecido = não publica; só pode ser **menor** que isso, nunca maior. **Título → `family_name`:** se a recusa é a da categoria
+User Products (causa com `family_name` ou `user_product`; recusa comum do título não repete), o Conferir **e** o Publicar tentam de
+novo **uma vez** com `family_name` e sem `title`; o corpo que o ML aceitou no Conferir fica em `anuncio_rascunho_v2024.usa_family_name`
+e o Publicar manda ele primeiro. Falhou nas duas = mostra as duas recusas. `POST /items` e a descrição com 90 s de espera
+(`ANUNCIO_ITEM_TIMEOUT`; o `_ml_promo_http` ganhou `timeout` opcional, o padrão não mudou). O Publicar lê o Apollo só da filial da conta.
+**Custo** da conta do preço = regra de **Araçatuba** (V19.77/V19.79, `compras_custo_aracatuba`) para as **duas** contas: planilha
+antiga sem leitura do Apollo = sem custo; kit = soma das peças × quantidade do Cadastro de Kits (peça sem custo = kit sem custo); a
+tela diz de onde veio (`custo_origem`). Margem-alvo do Precificador. **Kit sem GTIN:** `EMPTY_GTIN_REASON` = o único valor da lista do
+ML que fala de "kit" (frase do ML, vai como `value_id`); nenhum = em branco para o Admin escolher (texto livre nunca vai).
+**Garantia** só vai (WARRANTY_TYPE "Garantia do vendedor" + WARRANTY_TIME) no formato "N dias|meses|anos"; outro texto não vai.
 **Rotas:** `GET /api/anuncios/{ml/categorias,ml/atributos,ml/tarifa,foto,estudio,rascunhos}`;
 `POST /api/anuncios/{foto,foto/remover,foto/ordenar,rascunho,rascunho/validar,rascunho/publicar,rascunho/liberar}`; `ficha` aceita criar produto novo.
 Testes: `TESTES/test_anuncios_{criar,fotos,publicar}_v2024.py`.

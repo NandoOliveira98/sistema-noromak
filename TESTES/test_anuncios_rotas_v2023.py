@@ -273,13 +273,15 @@ class RotasAnunciosTeste(TesteNoromak):
                 return atributos
             return {"id": "MLB77", "name": "Pecas", "path_from_root": [{"name": "Pecas"}]}
 
-        prod = {"custo": 40.0, "margem_alvo": 0.2}
-        with mock.patch.object(S, "ml_casas_conectadas", return_value=["aracatuba"]),                 mock.patch.object(S, "ml_api_get", ml_falso),                 mock.patch.object(S, "_promo_produtos", return_value={}),                 mock.patch.object(S, "_promo_produto", return_value=prod):
+        prod = {"custo": 99.0, "margem_alvo": 0.2}  # V20.24 (revisao): o custo NAO vem mais das Promocoes
+        filial = {"revenda": "1", "custo_medio": 40.0}  # custo de Aracatuba lido do Apollo (V19.77/V19.79)
+        prec = {"products": [{"_id": "p9", "sku": "P9", "custo": 99.0, "custosFiliais": [filial]}]}
+        with mock.patch.object(S, "precificador_dados", return_value=prec),                 mock.patch.object(S, "ml_casas_conectadas", return_value=["aracatuba"]),                 mock.patch.object(S, "ml_api_get", ml_falso),                 mock.patch.object(S, "_promo_produtos", return_value={}),                 mock.patch.object(S, "_promo_produto", return_value=prod):
             st, c = self.cliente.pedir("GET", "/api/anuncios/ml/tarifa?preco=100&tipo=gold_special&categoria=MLB77"
                                               "&conta=aracatuba&codigo=p9")
             self.assertEqual(st, 200, c)
             self.assertEqual((c["custo"], c["margem_alvo"], c["imposto"]), (40.0, 0.2, 0.12))
-            prod["custo"] = 0
+            filial["custo_medio"] = 0
             st, c = self.cliente.pedir("GET", "/api/anuncios/ml/tarifa?preco=100&tipo=gold_special&categoria=MLB77"
                                               "&conta=aracatuba&codigo=P9")
             self.assertIsNone(c["custo"])  # custo zero = desconhecido, nunca zero

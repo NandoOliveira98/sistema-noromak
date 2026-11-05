@@ -1146,9 +1146,12 @@ function campoAttr(a) {
   const dis = roCr();
   const valores = a.valores || [];
   let ctl;
-  if (valores.length && (a.tipo === "list" || a.tipo === "boolean")) {
+  // V20.24 (revisão): o motivo do GTIN só aceita valor da lista do ML (texto livre como "Kit" não vai); outro valor
+  // que não está na lista aparece marcado como tal, nunca como se fosse uma opção do ML.
+  const soLista = a.id === "EMPTY_GTIN_REASON";
+  if (valores.length && (a.tipo === "list" || a.tipo === "boolean" || soLista)) {
     const tem = valores.some(x => x.nome === v);
-    ctl = `<select data-at="${esc(a.id)}" ${dis} onchange="digitouAttr(this)"><option value="">— escolha —</option>${!tem && v ? `<option selected>${esc(v)}</option>` : ""}${valores.map(x => `<option ${x.nome === v ? "selected" : ""}>${esc(x.nome)}</option>`).join("")}</select>`;
+    ctl = `<select data-at="${esc(a.id)}" ${dis} onchange="digitouAttr(this)"><option value="">— escolha —</option>${!tem && v && !soLista ? `<option selected value="${esc(v)}">${esc(v)} (fora da lista do ML)</option>` : ""}${valores.map(x => `<option ${x.nome === v ? "selected" : ""}>${esc(x.nome)}</option>`).join("")}</select>`;
   } else {
     const lista = valores.length ? `dl_${String(a.id).replace(/[^A-Za-z0-9_]/g, "_")}` : "";
     const unid = (a.unidades || []).map(u => u.nome || u.id).filter(Boolean);
@@ -1244,7 +1247,7 @@ function corpoPreco() {
       <label class="nk-campo"><span>Tipo do anúncio</span><select ${dis} onchange="CR.f.tipo_anuncio=this.value;agendarTarifa()">${TIPOS_CRIAR.map(([v, n]) => `<option value="${v}" ${f.tipo_anuncio === v ? "selected" : ""}>${n}</option>`).join("")}</select></label>
       <label class="nk-campo"><span>Preço (R$)</span><input id="crPreco" inputmode="decimal" value="${esc(f.preco)}" ${dis} oninput="CR.f.preco=this.value;agendarTarifa()"></label>
       <label class="nk-campo"><span>Frete grátis</span><select ${dis} onchange="CR.f.frete_gratis=this.value"><option value="0" ${f.frete_gratis !== "1" ? "selected" : ""}>Não</option><option value="1" ${f.frete_gratis === "1" ? "selected" : ""}>Sim</option></select></label>
-      <label class="nk-campo"><span>Garantia</span><input value="${esc(f.garantia)}" maxlength="100" placeholder="ex.: 90 dias" ${dis} oninput="CR.f.garantia=this.value"></label>
+      <label class="nk-campo"><span>Garantia</span><input value="${esc(f.garantia)}" maxlength="100" placeholder="ex.: 90 dias" title="Formato: 90 dias, 6 meses ou 1 ano. Outro texto não vai ao Mercado Livre." ${dis} oninput="CR.f.garantia=this.value"><small class="muted">90 dias, 6 meses ou 1 ano (outro texto não vai ao ML)</small></label>
       <label class="nk-campo inteiro"><span>Quantidade ${qtdInfo}</span><input id="crQtd" type="number" min="1" step="1" ${dpm > 0 ? `max="${Number(dpm)}"` : ""} style="max-width:160px" value="${esc(f.quantidade)}" ${dis} oninput="CR.f.quantidade=this.value;avisoQtd()"><span class="orig bad" id="crQtdAviso"></span></label>
       <label class="nk-campo inteiro"><span>Descrição <span class="orig">texto simples, vai para o ML ao publicar</span></span><textarea rows="5" ${dis} oninput="CR.f.descricao=this.value">${esc(f.descricao)}</textarea></label>
     </div>
@@ -1294,7 +1297,7 @@ function contaPreco() {
   return `<div class="conta">
       <div>Comissão do ML (lida agora)<b>${brl(tarifa)}</b>${pct(t.comissao)}${t.taxa_fixa ? ` + taxa fixa ${brl(t.taxa_fixa)}` : ""}</div>
       <div>Imposto<b>${brl(imposto)}</b>${pct(t.imposto)} da venda</div>
-      <div>Custo<b>${brl(t.custo)}</b>${t.custo == null ? "sem custo no Precificador" : "do Precificador (Apollo)"}</div>
+      <div>Custo<b>${brl(t.custo)}</b>${esc(t.custo_origem || (t.custo == null ? "sem custo de Araçatuba" : "custo de Araçatuba"))}</div>
       <div>Lucro antes do frete<b class="${lucro == null ? "" : lucro > 0 ? "ok" : "bad"}">${brl(lucro)}</b>${lucro == null ? "sem custo, sem lucro" : "margem " + pct(lucro / p)}</div>
       <div>Frete<b>—</b>${esc(t.frete_texto || "o ML informa o frete depois de publicar")}</div>
       <div>Preço ideal<b>${brl(ideal)}</b>${ideal == null ? (t.custo == null ? "precisa do custo" : "sem margem-alvo") : conferido ? `é este preço (menor que dá a margem-alvo de ${pct(t.margem_alvo)} com a tarifa do ML)` : `margem-alvo ${pct(t.margem_alvo)}`}
@@ -1344,7 +1347,10 @@ function corpoConferir() {
   const r = CR.r, ed = crEditavel();
   const erros = r.erros || [];
   if (!ed) return '<p class="muted">Conferido antes de publicar.</p>';
-  return `${r.situacao === "validado" ? '<div class="nk-aviso info">O Mercado Livre conferiu e não apontou nada. Pode publicar.</div>'
+  // V20.24 (revisão): `validado` com erros = a última tentativa de publicar parou antes de enviar (Apollo, quantidade,
+  // foto): o motivo aparece aqui e no Publicar, nunca o "não apontou nada".
+  return `${r.situacao === "validado" && erros.length ? `<div class="nk-aviso">O Mercado Livre conferiu, mas a última tentativa de publicar parou antes de enviar:<ul class="erros">${erros.map(e => `<li>${esc(e)}</li>`).join("")}</ul></div>`
+      : r.situacao === "validado" ? '<div class="nk-aviso info">O Mercado Livre conferiu e não apontou nada. Pode publicar.</div>'
       : erros.length ? `<div class="nk-aviso bad">${r.situacao === "erro" ? "O Mercado Livre recusou a última tentativa de publicar" : "O que precisa ser acertado"}:<ul class="erros">${erros.map(e => `<li>${esc(e)}</li>`).join("")}</ul></div>`
       : '<p class="muted">O Mercado Livre confere tudo (categoria, atributos, preço, título) sem criar nada. As fotos sobem só no Publicar.</p>'}
     ${crMudados().length ? '<p class="bad">Há alteração não salva: salve o passo antes de conferir.</p>' : ""}
@@ -1379,7 +1385,8 @@ function corpoPublicar() {
       <button type="button" class="nk-btn" ${btOcupado()} onclick="liberarIncerto(false)">Não foi criado</button></div></div>`;
   if (r.situacao === "publicando") return `<div class="nk-aviso">Publicando no Mercado Livre (subindo as fotos e criando o anúncio). Não clique em publicar de novo.
       <button type="button" class="nk-btn mini" ${btOcupado()} onclick="relerRascunhoDepoisDoPublicar(${Number(r.id)}, false)">Atualizar situação</button></div>`;
-  return `<p class="muted">Conta ${esc(CONTA[r.conta] || r.conta)} · ${esc(r.titulo)} · ${brl(r.preco)} · ${esc(r.quantidade)} ${F.tipo === "kit" ? "kit(s)" : "un."} · ${(r.fotos || []).length} foto(s). O Apollo é lido de novo na hora de publicar.</p>
+  return `${r.situacao === "validado" && avisos.length ? `<div class="nk-aviso bad">Não publicado — nada foi criado no Mercado Livre:<ul class="erros">${avisos.map(e => `<li>${esc(e)}</li>`).join("")}</ul></div>` : ""}
+    <p class="muted">Conta ${esc(CONTA[r.conta] || r.conta)} · ${esc(r.titulo)} · ${brl(r.preco)} · ${esc(r.quantidade)} ${F.tipo === "kit" ? "kit(s)" : "un."} · ${(r.fotos || []).length} foto(s). O Apollo é lido de novo na hora de publicar.</p>
     <div class="barra"><span class="esp"></span><button type="button" class="nk-btn pri" ${btOcupado()} onclick="publicarAnuncio()"><i class=nk-i-upload></i> Publicar no Mercado Livre</button></div>`;
 }
 async function publicarAnuncio() {

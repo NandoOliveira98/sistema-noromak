@@ -26,15 +26,18 @@ class FalsoML:
 
     def __init__(self):
         self.chamadas = []
-        self.validate = None      # None = 204; Exception = levanta
+        self.timeouts = []
+        self.validate = None      # None = 204; Exception = levanta; lista = uma resposta por chamada
         self.itens = []           # respostas/excecoes do POST /items, em ordem
         self.descricao = None     # Exception = levanta
 
-    def __call__(self, metodo, caminho, payload=None):
+    def __call__(self, metodo, caminho, payload=None, timeout=None):
         self.chamadas.append((metodo, caminho, payload, S.ml_casa_atual()))
+        self.timeouts.append((caminho, timeout))
         if caminho == "/items/validate":
-            if isinstance(self.validate, Exception):
-                raise self.validate
+            v = self.validate.pop(0) if isinstance(self.validate, list) and self.validate else self.validate
+            if isinstance(v, Exception):
+                raise v
             return {}
         if caminho == "/items":
             r = self.itens.pop(0) if self.itens else {"id": "MLB5550001", "status": "active", "price": 49.9,
@@ -381,6 +384,107 @@ class PublicarTeste(TesteNoromak):
                      "/api/anuncios/rascunho/liberar"):
             self.assertEqual(sup.pedir("POST", rota, {"id": r["id"]})[0], 403, rota)
         self.assertEqual(self.ml.posts_items(), [])
+
+    # ---- revisao final (V20.24) ----
+    UP = {"message": "body.invalid_fields", "cause": [
+        {"type": "error", "code": "body.invalid_fields",
+         "message": "The fields [title] are invalid for user products, use family_name"}]}
+
+    def test_validar_up_tenta_family_name_e_lembra(self):  # item 1
+        r = self.rascunho()
+        self.ml.validate = [erro_http(400, self.UP), None]
+        v = S.anuncio_validar(r["id"], "t")
+        self.assertEqual(v["situacao"], "validado", v)
+        vals = [c for c in self.ml.chamadas if c[1] == "/items/validate"]
+        self.assertEqual(len(vals), 2)
+        self.assertIn("title", vals[0][2])
+        self.assertNotIn("title", vals[1][2])
+        self.assertEqual(vals[1][2]["family_name"], "Filtro de oleo")
+        self.assertEqual(S.anuncio_rascunho_ler(r["id"])["usa_family_name"], 1)
+        p = S.anuncio_publicar(r["id"], "t")
+        self.assertEqual(p["situacao"], "publicado", p)
+        posts = self.ml.posts_items()
+        self.assertEqual(len(posts), 1)
+        self.assertNotIn("title", posts[0][2])
+        self.assertEqual(posts[0][2]["family_name"], "Filtro de oleo")
+        # conferido com title: lembra 0
+        r2 = self.rascunho()
+        self.ml.validate = None
+        S.anuncio_validar(r2["id"], "t")
+        self.assertEqual(S.anuncio_rascunho_ler(r2["id"])["usa_family_name"], 0)
+
+    def test_validar_up_falha_duas_vezes_mostra_os_dois(self):  # itens 1 e 5
+        r = self.rascunho()
+        outro = erro_http(400, {"cause": [{"type": "error", "code": "item.attribute.missing",
+                                           "message": "Falta MODEL"}]})
+        self.ml.validate = [erro_http(400, self.UP), outro]
+        v = S.anuncio_validar(r["id"], "t")
+        self.assertEqual(v["situacao"], "rascunho")
+        self.assertEqual(len([c for c in self.ml.chamadas if c[1] == "/items/validate"]), 2)
+        self.assertTrue(any("family_name" in e for e in v["erros"]), v["erros"])
+        self.assertTrue(any("Falta MODEL" in e for e in v["erros"]), v["erros"])
+
+    def test_recusa_de_titulo_comum_nao_repete(self):  # item 5
+        r = self.rascunho()
+        self.ml.validate = [erro_http(400, {"cause": [{"type": "error", "code": "item.title.length",
+                                                       "references": ["item.title"], "message": "Title too long"}]})]
+        v = S.anuncio_validar(r["id"], "t")
+        self.assertEqual(v["situacao"], "rascunho")
+        self.assertEqual(len([c for c in self.ml.chamadas if c[1] == "/items/validate"]), 1)
+        r2 = self.validado()
+        self.ml.itens = [erro_http(400, {"cause": [{"type": "error", "code": "item.title.length",
+                                                    "references": ["item.title"], "message": "Title too long"}]})]
+        p = S.anuncio_publicar(r2["id"], "t")
+        self.assertEqual(p["situacao"], "erro")
+        self.assertEqual(len(self.ml.posts_items()), 1)
+
+    def test_publicar_family_name_falha_mostra_os_dois(self):  # item 5
+        r = self.validado()
+        outro = erro_http(400, {"cause": [{"type": "error", "code": "item.price.invalid", "message": "Preco invalido"}]})
+        self.ml.itens = [erro_http(400, self.UP), outro]
+        p = S.anuncio_publicar(r["id"], "t")
+        self.assertEqual(p["situacao"], "erro")
+        self.assertTrue(any("family_name" in e for e in p["erros"]), p["erros"])
+        self.assertTrue(any("Preco invalido" in e for e in p["erros"]), p["erros"])
+
+    def test_timeout_90s_no_post_items_e_descricao(self):  # item 4
+        r = self.validado()
+        S.anuncio_publicar(r["id"], "t")
+        t = dict(self.ml.timeouts)
+        self.assertEqual(t["/items"], 90)
+        self.assertEqual(t["/items/MLB5550001/description"], 90)
+
+    def test_publicar_le_so_a_filial_do_rascunho(self):  # item 8
+        r = self.validado()
+        lidas = []
+        orig = S.apollo_disponivel_filial
+
+        def ler(codigos, filial):
+            lidas.append(filial)
+            return orig(codigos, filial)
+        with mock.patch.object(S, "apollo_disponivel_filial", ler):
+            self.assertEqual(S.anuncio_publicar(r["id"], "t")["situacao"], "publicado")
+        self.assertEqual(lidas, ["aracatuba"])
+
+    def test_liberar_mlb_de_outro_produto_recusado(self):  # item 7
+        S.ficha_salvar("P9", {"nome": "Outro"}, "t", None)
+        with S.DB_LOCK:
+            S.DB.execute("INSERT INTO anuncio_canal_v2023(canal,conta,anuncio_id,ficha_codigo,controle) "
+                         "VALUES('ml','aracatuba','MLB8880001','P9','noromak')")
+            S.DB.execute("INSERT INTO anuncio_canal_v2023(canal,conta,anuncio_id,ficha_codigo,controle) "
+                         "VALUES('ml','aracatuba','MLB8880002','P1','alephee')")
+            S.DB.commit()
+        r = self.validado()
+        self.ml.itens = [urllib.error.URLError("x")]
+        S.anuncio_publicar(r["id"], "t")
+        for mlb in ("MLB8880001", "MLB8880002"):
+            with self.assertRaises(ValueError):
+                S.anuncio_incerto_liberar(r["id"], mlb, "t")
+        self.assertEqual(S.anuncio_rascunho_ler(r["id"])["situacao"], "incerto")
+        with S.DB_LOCK:
+            row = S.DB.execute("SELECT ficha_codigo, controle FROM anuncio_canal_v2023 WHERE anuncio_id='MLB8880001'").fetchone()
+        self.assertEqual((row[0], row[1]), ("P9", "noromak"))
+        self.assertEqual(S.anuncio_incerto_liberar(r["id"], "MLB8880003", "t")["situacao"], "publicado")
 
 
 class FotoUploadTeste(TesteNoromak):

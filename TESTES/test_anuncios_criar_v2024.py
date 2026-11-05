@@ -105,12 +105,69 @@ class CriarMLTeste(TesteNoromak):
         self.assertNotIn("EMPTY_GTIN_REASON", r)
 
     def test_kit_sem_gtin_usa_empty_gtin_reason(self):
+        # V20.24 (revisao): os valores reais do ML sao frases; escolhe a que fala de kit (o nome exato da lista)
+        defs = [dict(a) for a in ATRIBUTOS]
+        for a in defs:
+            if a["id"] == "EMPTY_GTIN_REASON":
+                a["valores"] = [{"id": "17055160", "nome": "O produto não tem código cadastrado"},
+                                {"id": "17055158", "nome": "O produto é um Kit ou pack"}]
         kit = {"codigo": "K1", "tipo": "kit", "campos": {"marca": "X"}}
-        self.assertEqual(S.anuncio_atributos_da_ficha(kit, ATRIBUTOS)["EMPTY_GTIN_REASON"], "Kit")
+        self.assertEqual(S.anuncio_atributos_da_ficha(kit, defs)["EMPTY_GTIN_REASON"], "O produto é um Kit ou pack")
+        corpo = S.anuncio_item_corpo({"titulo": "a", "atributos": {"EMPTY_GTIN_REASON": "O produto é um Kit ou pack"}},
+                                     [], defs)
+        self.assertEqual(corpo["attributes"], [{"id": "EMPTY_GTIN_REASON", "value_id": "17055158"}])
+        # sem valor de kit na lista (ou sem lista): fica vazio para o Admin escolher, nunca texto livre "Kit"
+        for a in defs:
+            if a["id"] == "EMPTY_GTIN_REASON":
+                a["valores"] = [{"id": "17055160", "nome": "O produto não tem código cadastrado"}]
+        self.assertNotIn("EMPTY_GTIN_REASON", S.anuncio_atributos_da_ficha(kit, defs))
+        self.assertNotIn("EMPTY_GTIN_REASON", S.anuncio_atributos_da_ficha(kit, ATRIBUTOS))
+        corpo = S.anuncio_item_corpo({"titulo": "a", "atributos": {"EMPTY_GTIN_REASON": "Kit"}}, [], defs)
+        self.assertEqual(corpo["attributes"], [])
         sem = [a for a in ATRIBUTOS if a["id"] != "EMPTY_GTIN_REASON"]
         self.assertNotIn("EMPTY_GTIN_REASON", S.anuncio_atributos_da_ficha(kit, sem))
         kit["campos"]["ean"] = "7890000000017"
-        self.assertNotIn("EMPTY_GTIN_REASON", S.anuncio_atributos_da_ficha(kit, ATRIBUTOS))
+        self.assertNotIn("EMPTY_GTIN_REASON", S.anuncio_atributos_da_ficha(kit, defs))
+
+    def test_custo_de_aracatuba_para_o_preco(self):  # V20.24 (revisao): regra V19.77/V19.79
+        produtos = {"products": [
+            {"_id": "source-7", "sku": "PLAN1", "custo": 80},  # so da planilha antiga: sem custo
+            {"_id": "p2", "sku": "AP1", "custo": 39.0, "filialCusto": "3",
+             "custosFiliais": [{"revenda": "1", "custo_medio": 12.5}, {"revenda": "3", "custo_medio": 39.0}]},
+        ]}
+        with mock.patch.object(S, "precificador_dados", return_value=produtos):
+            plan = S.anuncio_custo_para_preco("PLAN1")
+            ap = S.anuncio_custo_para_preco("AP1")
+            kit = S.anuncio_custo_para_preco("KIT2-AP1")
+            kit_sem = S.anuncio_custo_para_preco("KIT2-PLAN1")
+        self.assertIsNone(plan["custo"])
+        self.assertIn("sem custo de Araçatuba", plan["custo_origem"])
+        self.assertEqual(ap["custo"], 12.5)
+        self.assertIn("Araçatuba", ap["custo_origem"])
+        self.assertEqual(kit["custo"], 25.0)
+        self.assertIn("peças", kit["custo_origem"])
+        self.assertIsNone(kit_sem["custo"])
+
+    def test_ml_promo_http_timeout(self):  # V20.24 (revisao): padrao igual; o Publicar passa 90 s
+        vistos = []
+
+        class Resp:
+            def read(self):
+                return b"{}"
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def urlopen(req, timeout=None):
+            vistos.append(timeout)
+            return Resp()
+        with mock.patch.object(S.urllib.request, "urlopen", urlopen),                 mock.patch.object(S, "ml_access_token", return_value=("t", "1")):
+            S._ml_promo_http("GET", "/x")
+            S._ml_promo_http("POST", "/items", {"a": 1}, timeout=90)
+        self.assertEqual(vistos, [S.ML_HTTP_TIMEOUT, 90])
 
     def test_tarifa_nova_sem_frete(self):
         falso = FalsoML()
@@ -291,9 +348,10 @@ class RascunhoTeste(TesteNoromak):
     def test_corpo_do_item(self):
         r = self.novo(categoria="MLB123", preco=49.9, quantidade=2, frete_gratis=True, garantia="90 dias",
                       tipo_anuncio="gold_pro",
-                      atributos={"BRAND": "Wurth", "COLOR": "preto", "EMPTY_GTIN_REASON": "Kit", "MODEL": ""})
+                      atributos={"BRAND": "Wurth", "COLOR": "preto", "EMPTY_GTIN_REASON": "O produto é um kit ou pack", "MODEL": ""})
         defs = [{"id": "COLOR", "valores": [{"id": "1", "nome": "Preto"}]},
-                {"id": "EMPTY_GTIN_REASON", "valores": [{"id": "17055160", "nome": "Kit"}]}]
+                {"id": "EMPTY_GTIN_REASON", "valores": [{"id": "17055158", "nome": "O produto é um kit ou pack"},
+                                                       {"id": "17055160", "nome": "O produto não tem código cadastrado"}]}]
         c = S.anuncio_item_corpo(r, ["MLB_P1", "MLB_P2"], defs)
         self.assertEqual((c["title"], c["category_id"], c["price"], c["currency_id"], c["available_quantity"]),
                          ("Filtro de oleo", "MLB123", 49.9, "BRL", 2))
@@ -302,9 +360,16 @@ class RascunhoTeste(TesteNoromak):
         self.assertEqual(c["shipping"], {"mode": "me2", "free_shipping": True})
         self.assertEqual(sorted(c["attributes"], key=lambda a: a["id"]),
                          [{"id": "BRAND", "value_name": "Wurth"}, {"id": "COLOR", "value_id": "1"},
-                          {"id": "EMPTY_GTIN_REASON", "value_id": "17055160"}])
+                          {"id": "EMPTY_GTIN_REASON", "value_id": "17055158"}])
         self.assertEqual([t["id"] for t in c["sale_terms"]], ["WARRANTY_TYPE", "WARRANTY_TIME"])
         self.assertEqual(c["sale_terms"][1]["value_name"], "90 dias")
+        # V20.24 (revisao): garantia so no formato "<n> dias|meses|anos"; outro texto nao vai
+        for texto, esperado in (("6 Meses", "6 meses"), ("1 ano", "1 anos"), (" 30  dias ", "30 dias"),
+                                ("3 mês", "3 meses")):
+            ct = S.anuncio_item_corpo({"titulo": "a", "garantia": texto}, [])
+            self.assertEqual(ct["sale_terms"][1]["value_name"], esperado, texto)
+        for texto in ("garantia de fabrica", "90", "dias", "6 meses de fabrica"):
+            self.assertEqual(S.anuncio_item_corpo({"titulo": "a", "garantia": texto}, [])["sale_terms"], [], texto)
         sem = S.anuncio_item_corpo({"titulo": "a", "atributos": {"X": "y", "_guardados": {}}}, [])
         self.assertEqual((sem["sale_terms"], sem["attributes"]), ([], [{"id": "X", "value_name": "y"}]))
         self.assertIs(sem["shipping"]["free_shipping"], False)

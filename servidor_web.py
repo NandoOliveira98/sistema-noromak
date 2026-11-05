@@ -7406,6 +7406,10 @@ def ensure_anuncios_schema() -> None:
             CREATE INDEX IF NOT EXISTS idx_anuncio_rascunho_ficha ON anuncio_rascunho_v2024(ficha_codigo);
             """
         )
+        # V20.24 (revisao): qual corpo o ML aceitou na conferencia (1 = family_name no lugar do title)
+        cols = {r[1] for r in DB.execute("PRAGMA table_info(anuncio_rascunho_v2024)").fetchall()}
+        if "usa_family_name" not in cols:
+            DB.execute("ALTER TABLE anuncio_rascunho_v2024 ADD COLUMN usa_family_name INTEGER NOT NULL DEFAULT 0")
         # V20.24: no boot nenhuma publicacao esta rodando; `publicando` que sobrou (processo caiu no meio) vira
         # `incerto` - o ML pode ter criado: o Admin confere e libera. Nunca volta a `validado` sozinho.
         DB.execute("UPDATE anuncio_rascunho_v2024 SET situacao='incerto', versao=versao+1, "
@@ -8108,9 +8112,10 @@ def _anuncio_estoque_filial(componentes: list[dict[str, Any]], lido: dict[str, f
             "da_para_montar": kit_da_para_montar(componentes, disp, pendente) if lido is not None else None}
 
 
-def anuncio_ficha_payload(codigo: str, ler_apollo: bool = False) -> dict[str, Any] | None:
+def anuncio_ficha_payload(codigo: str, ler_apollo: bool = False,
+                          filiais: tuple[str, ...] = ("aracatuba", "bauru")) -> dict[str, Any] | None:
     """V20.23: ficha + kits + anuncios + estoque por filial. Apollo so com `ler_apollo` e fora do DB_LOCK.
-    None = nao ha ficha nem anuncio."""
+    None = nao ha ficha nem anuncio. V20.24 (revisao): `filiais` limita o estoque (o Publicar le so a da conta)."""
     cod = normalize(codigo)
     if not cod:
         return None
@@ -8137,8 +8142,9 @@ def anuncio_ficha_payload(codigo: str, ler_apollo: bool = False) -> dict[str, An
         componentes = [{"sku": _exp_norm_codigo(cod), "codigo": cod, "quantidade": 1}]
     codigos = list(dict.fromkeys(c["codigo"] for c in componentes))
     estoque: dict[str, Any] = {}
-    pendencias = pendentes_por_filial(("aracatuba", "bauru"))  # uma leitura da fila para as duas filiais
-    for filial in ("aracatuba", "bauru"):
+    filiais = tuple(filiais) or ("aracatuba", "bauru")
+    pendencias = pendentes_por_filial(filiais)  # uma leitura da fila para as filiais pedidas
+    for filial in filiais:
         lido = None
         if ler_apollo:  # Apollo FORA do DB_LOCK; a resposta volta para a chave sem pontuacao
             lido = {}
@@ -30720,10 +30726,13 @@ def _compras_resolver_custo(atual: float | None, reserva: dict[str, Any]) -> tup
 ML_PROMO_TIPO = "PRICE_DISCOUNT"
 
 
-def _ml_promo_http(method: str, path: str, payload: dict[str, Any] | None = None) -> Any:
+def _ml_promo_http(method: str, path: str, payload: dict[str, Any] | None = None,
+                   timeout: float | None = None) -> Any:
     """Chamada JSON à API de promoções. A ml_http_json() manda form-urlencoded,
-    que esta API não aceita no POST."""
+    que esta API não aceita no POST. V20.24: `timeout` opcional (o Publicar dos anuncios usa 90 s);
+    sem ele, o ML_HTTP_TIMEOUT de sempre."""
     url = ML_API_BASE + path
+    espera = timeout if timeout else ML_HTTP_TIMEOUT
 
     def chamar(token: str) -> Any:
         body = json_dumps(payload).encode("utf-8") if payload is not None else None
@@ -30735,7 +30744,7 @@ def _ml_promo_http(method: str, path: str, payload: dict[str, Any] | None = None
         if body is not None:
             headers["Content-Type"] = "application/json"
         req = urllib.request.Request(url, data=body, headers=headers, method=method.upper())
-        with urllib.request.urlopen(req, timeout=ML_HTTP_TIMEOUT) as resp:
+        with urllib.request.urlopen(req, timeout=espera) as resp:
             texto = resp.read().decode("utf-8", "replace").strip()
             return json.loads(texto) if texto else {}
 
@@ -31118,7 +31127,13 @@ def anuncio_atributos_da_ficha(ficha: dict[str, Any], atributos: list[dict[str, 
         if sempre or attr_id in ids:
             saida[attr_id] = valor
     if str(ficha.get("tipo") or "") == "kit" and "GTIN" not in saida and "EMPTY_GTIN_REASON" in ids:
-        saida["EMPTY_GTIN_REASON"] = "Kit"
+        # V20.24 (revisao): os valores do ML sao frases ("O produto e um kit ou pack"); vale o nome exato do UNICO
+        # valor que fala de kit. Nenhum (ou mais de um) = fica vazio para o Admin escolher - nunca o texto "Kit".
+        motivo = next((a for a in atributos if isinstance(a, dict) and str(a.get("id")) == "EMPTY_GTIN_REASON"), {})
+        de_kit = [v for v in motivo.get("valores") or []
+                  if isinstance(v, dict) and v.get("id") and "kit" in _anuncio_sem_acento(v.get("nome"))]
+        if len(de_kit) == 1:
+            saida["EMPTY_GTIN_REASON"] = str(de_kit[0].get("nome"))
     return saida
 
 
@@ -31403,6 +31418,7 @@ def anuncio_item_corpo(rascunho: dict[str, Any], picture_ids: list[str],
     "Kit"); os demais, como value_name. Atributo vazio nao vai."""
     defs = {str(a.get("id")): a for a in (atributos_def or []) if isinstance(a, dict)}
     atributos = []
+    so_da_lista = ("EMPTY_GTIN_REASON",)  # V20.24 (revisao): so aceita valor da lista; texto livre nao vai
     for attr_id, valor in (rascunho.get("atributos") or {}).items():
         if attr_id == "_guardados" or valor is None or not str(valor).strip():
             continue
@@ -31412,6 +31428,8 @@ def anuncio_item_corpo(rascunho: dict[str, Any], picture_ids: list[str],
             if isinstance(v, dict) and v.get("id") and _anuncio_sem_acento(v.get("nome")) == _anuncio_sem_acento(texto):
                 value_id = str(v["id"])
                 break
+        if not value_id and attr_id in so_da_lista:
+            continue
         atributos.append({"id": attr_id, "value_id": value_id} if value_id else {"id": attr_id, "value_name": texto})
     corpo: dict[str, Any] = {
         "title": rascunho.get("titulo"), "category_id": rascunho.get("categoria"), "price": rascunho.get("preco"),
@@ -31422,11 +31440,24 @@ def anuncio_item_corpo(rascunho: dict[str, Any], picture_ids: list[str],
         "sale_terms": [],
         "shipping": {"mode": "me2", "free_shipping": bool(rascunho.get("frete_gratis"))},
     }
-    garantia = str(rascunho.get("garantia") or "").strip()
+    garantia = anuncio_garantia_texto(rascunho.get("garantia"))
     if garantia:
         corpo["sale_terms"] = [{"id": "WARRANTY_TYPE", "value_name": "Garantia do vendedor"},
                                {"id": "WARRANTY_TIME", "value_name": garantia}]
     return corpo
+
+
+ANUNCIO_GARANTIA_UNIDADE = {"dia": "dias", "dias": "dias", "mes": "meses", "meses": "meses", "ano": "anos",
+                            "anos": "anos"}
+
+
+def anuncio_garantia_texto(texto: Any) -> str | None:
+    """V20.24 (revisao, pura): "<n> dias|meses|anos" -> "N dias"/"N meses"/"N anos". Outro texto = None (a garantia
+    nao vai ao ML: sem a lista de valores do WARRANTY_TYPE offline, so o formato que o ML le com certeza)."""
+    m = re.fullmatch(r"(\d{1,4})\s*([a-z]+)", _anuncio_sem_acento(" ".join(str(texto or "").split())))
+    if not m or int(m.group(1)) <= 0 or m.group(2) not in ANUNCIO_GARANTIA_UNIDADE:
+        return None
+    return f"{int(m.group(1))} {ANUNCIO_GARANTIA_UNIDADE[m.group(2)]}"
 
 
 def ml_tarifa_nova(preco: float, tipo: str, categoria: str, conta: str) -> dict[str, Any]:
@@ -31457,19 +31488,51 @@ def ml_tarifa_nova(preco: float, tipo: str, categoria: str, conta: str) -> dict[
             "frete": None, "frete_texto": ANUNCIO_FRETE_TEXTO}
 
 
+ANUNCIO_CUSTO_ORIGEM = {"apollo": "custo de Araçatuba no Apollo", "manual": "custo digitado (Demanda de Compra)",
+                        "ultimo": "último custo de Araçatuba visto", "venda": "custo da última venda no ML"}
+
+
+def _anuncio_custo_aracatuba(cod: str) -> dict[str, Any]:
+    """V20.24 (revisao): {custo, custo_origem} pela regra de Aracatuba (compras_custo_aracatuba)."""
+    ctx = _financeiro_custos_aracatuba()
+    conhecidos = ctx["conhecidos"]
+    comp = kit_composicao(cod)
+    if comp:
+        total, origens = 0.0, []
+        for c in comp["componentes"]:
+            peca = _compras_codigo(str(c["sku"]), conhecidos) or normalize(c["sku"])
+            custo, origem, _ = compras_custo_aracatuba(peca, ctx)
+            if not custo or custo <= 0:
+                return {"custo": None, "custo_origem": f"sem custo de Araçatuba da peça {c['sku']}"}
+            total += float(custo) * int(c["quantidade"])
+            origens.append(origem)
+        nomes = sorted({ANUNCIO_CUSTO_ORIGEM.get(o, o) for o in origens})
+        return {"custo": round(total, 2), "custo_origem": "soma das peças do kit (" + "; ".join(nomes) + ")"}
+    custo, origem, _ = compras_custo_aracatuba(_compras_codigo(cod, conhecidos) or cod, ctx)
+    if not custo or custo <= 0:
+        return {"custo": None, "custo_origem": "sem custo de Araçatuba"}
+    return {"custo": round(float(custo), 2), "custo_origem": ANUNCIO_CUSTO_ORIGEM.get(origem, origem)}
+
+
 def anuncio_custo_para_preco(codigo: str) -> dict[str, Any]:
-    """V20.24: custo, imposto e margem-alvo para a conta do preco na tela de criar anuncio (so le). Custo = o mesmo
-    das Promocoes automaticas (Precificador, custo lido do Apollo; kit pelas pecas); desconhecido ou zero = None
-    (sem custo nao ha lucro nem preco ideal - nunca zero). Imposto fixo do Financeiro."""
-    out: dict[str, Any] = {"custo": None, "margem_alvo": None, "imposto": round(FINANCEIRO_IMPOSTO_PERCENT / 100.0, 4)}
+    """V20.24: custo, imposto e margem-alvo para a conta do preco na tela de criar anuncio (so le).
+    Revisao: custo = regra de Aracatuba (V19.77/V19.79, a do Financeiro e da Demanda) para as DUAS contas - a
+    planilha antiga sem leitura do Apollo nao vale; kit = soma das pecas x quantidade do Cadastro de Kits (peca sem
+    custo = kit sem custo). Desconhecido = None (sem custo nao ha lucro nem preco ideal - nunca zero); `custo_origem`
+    diz de onde veio. Margem-alvo do Precificador (Promocoes). Imposto fixo do Financeiro."""
+    out: dict[str, Any] = {"custo": None, "custo_origem": "sem custo de Araçatuba", "margem_alvo": None,
+                           "imposto": round(FINANCEIRO_IMPOSTO_PERCENT / 100.0, 4)}
+    cod = normalize(codigo)
     try:
-        prod = _promo_produto(_promo_produtos(), normalize(codigo))
+        out.update(_anuncio_custo_aracatuba(cod))
     except Exception as exc:
-        print(f"Aviso: custo do Precificador nao lido para {codigo}: {exc}", file=sys.stderr)
+        print(f"Aviso: custo de Aracatuba nao lido para {codigo}: {exc}", file=sys.stderr)
+    try:
+        prod = _promo_produto(_promo_produtos(), cod)
+    except Exception as exc:
+        print(f"Aviso: margem-alvo do Precificador nao lida para {codigo}: {exc}", file=sys.stderr)
         prod = None
     if prod:
-        custo = _money_number(prod.get("custo"))
-        out["custo"] = round(custo, 2) if custo and custo > 0 else None
         try:
             alvo = float(prod.get("margem_alvo"))
         except (TypeError, ValueError):
@@ -31491,6 +31554,7 @@ def anuncio_custo_para_preco(codigo: str) -> dict[str, Any]:
 ANUNCIOS_PUBLICAR_LOCK = threading.Lock()
 ANUNCIO_VALIDAVEL = ("rascunho", "erro", "validado")
 ANUNCIO_FOTO_UPLOAD_TIMEOUT = max(ML_HTTP_TIMEOUT, 60)  # foto de ate 10 MB
+ANUNCIO_ITEM_TIMEOUT = 90  # V20.24 (revisao): POST /items e a descricao (o ML demora a criar; 20 s virava `incerto`)
 ANUNCIO_INCERTO_TEXTO = ("O Mercado Livre não respondeu ao criar o anúncio: ele pode ter sido criado. Confira no ML "
                          "(Meus anúncios) e informe o MLB, ou libere sem MLB se ele não existe. Nada é repetido sozinho.")
 ANUNCIO_FOTO_MIME = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp"}
@@ -31516,9 +31580,11 @@ def _anuncio_json_ou_none(texto: Any) -> Any:
         return None
 
 
-def _anuncio_ml_chamar(method: str, path: str, payload: dict[str, Any] | None) -> Any:
+def _anuncio_ml_chamar(method: str, path: str, payload: dict[str, Any] | None, timeout: float | None = None) -> Any:
     """V20.24: _ml_promo_http com a falha classificada. Chamar dentro de ml_na_casa(conta)."""
     try:
+        if timeout:  # V20.24 (revisao): o POST /items e o da descricao levam mais que 20 s
+            return _ml_promo_http(method, path, payload, timeout=timeout)
         return _ml_promo_http(method, path, payload)
     except RuntimeError as exc:
         status = getattr(exc, "ml_status", None)
@@ -31577,7 +31643,8 @@ def _anuncio_mensagens_ml(exc: AnuncioMLRecusou, ignorar_fotos: bool = False) ->
 
 
 def _anuncio_causa_titulo(corpo: Any) -> bool:
-    """V20.24: a recusa fala de `title`/`family_name` (categoria do modelo novo, que pede family_name)."""
+    """V20.24: a recusa e a da categoria do modelo novo (User Products), que pede family_name no lugar do title.
+    Revisao: so `family_name`/`user_product` na causa; recusa comum do titulo (tamanho, palavra proibida) nao repete."""
     if not isinstance(corpo, dict):
         return False
     partes = [str(corpo.get("message") or "")]
@@ -31588,7 +31655,19 @@ def _anuncio_causa_titulo(corpo: Any) -> bool:
         else:
             partes.append(str(c))
     texto = " ".join(partes).lower()
-    return "family_name" in texto or "title" in texto
+    return "family_name" in texto or "user_product" in texto or "user product" in texto
+
+
+def _anuncio_corpo_family(corpo: dict[str, Any], titulo: Any) -> dict[str, Any]:
+    """V20.24 (revisao): o mesmo corpo com family_name no lugar do title (categoria User Products)."""
+    novo = {k: v for k, v in corpo.items() if k != "title"}
+    novo["family_name"] = titulo
+    return novo
+
+
+def _anuncio_erros_duas_tentativas(primeira: list[str], segunda: list[str]) -> list[str]:
+    """V20.24 (revisao): as duas recusas (com title e com family_name), sem repetir a mesma mensagem."""
+    return list(dict.fromkeys(list(primeira) + [f"Com family_name: {e}" for e in segunda if e not in primeira]))
 
 
 def _ml_foto_upload(dados: bytes, tipo: str) -> str:
@@ -31673,14 +31752,17 @@ def _anuncio_conferir_local(r: dict[str, Any]) -> tuple[list[str], list[dict[str
 
 
 def _anuncio_rascunho_trocar(rid: int, de: tuple[str, ...], para: str, erros: list[str], ator: str,
-                             versao: int | None = None, mlb: str | None = None) -> dict[str, Any] | None:
+                             versao: int | None = None, mlb: str | None = None,
+                             usa_family_name: int | None = None) -> dict[str, Any] | None:
     """V20.24: troca a situacao so se ela ainda e uma de `de` (e a versao bate, quando dada). Chamar SEM o DB_LOCK.
     None = o rascunho mudou no meio (nada gravado)."""
     with DB_LOCK:
         marcas = ",".join("?" * len(de))
-        sql = (f"UPDATE anuncio_rascunho_v2024 SET situacao=?, erros_json=?, mlb=COALESCE(?,mlb), versao=versao+1, "
+        sql = (f"UPDATE anuncio_rascunho_v2024 SET situacao=?, erros_json=?, mlb=COALESCE(?,mlb), "
+               f"usa_family_name=COALESCE(?,usa_family_name), versao=versao+1, "
                f"atualizado_em=?, atualizado_por=? WHERE id=? AND situacao IN ({marcas})")
-        args: list[Any] = [para, json.dumps(list(erros), ensure_ascii=False), mlb, now_iso(), str(ator or ""), rid, *de]
+        args: list[Any] = [para, json.dumps(list(erros), ensure_ascii=False), mlb, usa_family_name, now_iso(),
+                           str(ator or ""), rid, *de]
         if versao is not None:
             sql += " AND versao=?"
             args.append(int(versao))
@@ -31735,21 +31817,39 @@ def anuncio_validar(rascunho_id: Any, ator: str) -> dict[str, Any]:
     if r["situacao"] not in ANUNCIO_VALIDAVEL:
         raise ValueError("Este rascunho já foi publicado, está em publicação ou aguarda conferência no ML.")
     erros, defs = _anuncio_conferir_local(r)
+    usa_family = 0
     if not erros:
         corpo = anuncio_item_corpo(r, [], defs)
-        try:
-            with ml_na_casa(r["conta"]):
-                resp = _anuncio_ml_chamar("POST", "/items/validate", corpo)
-            _anuncio_amostra("validate", {"status": "ok", "resposta": resp})
-        except AnuncioMLRecusou as exc:
-            _anuncio_amostra("validate", {"status": exc.status, "resposta": exc.corpo or str(exc)})
-            causas, total = _anuncio_causas_ml(exc.corpo, ignorar_fotos=True)
-            if not (exc.status == 400 and total and not causas):  # so causas de foto = conferido
+        primeira: list[str] = []
+        # V20.24 (revisao): categoria User Products recusa o title e pede family_name - a mesma troca unica do
+        # Publicar, e o corpo aceito fica lembrado (usa_family_name) para o Publicar mandar ele primeiro.
+        for tentativa in (1, 2):
+            try:
+                with ml_na_casa(r["conta"]):
+                    resp = _anuncio_ml_chamar("POST", "/items/validate", corpo)
+                _anuncio_amostra("validate", {"status": "ok", "resposta": resp})
+                erros = []
+                break
+            except AnuncioMLRecusou as exc:
+                _anuncio_amostra("validate", {"status": exc.status, "resposta": exc.corpo or str(exc)})
+                causas, total = _anuncio_causas_ml(exc.corpo, ignorar_fotos=True)
+                if exc.status == 400 and total and not causas:  # so causas de foto = conferido
+                    erros = []
+                    break
                 erros = causas or _anuncio_mensagens_ml(exc, ignorar_fotos=True)
-        except AnuncioMLSemResposta as exc:
-            erros = [f"O Mercado Livre não respondeu à conferência ({exc}). Tente de novo."]
+                if tentativa == 1 and "title" in corpo and _anuncio_causa_titulo(exc.corpo):
+                    primeira = erros
+                    corpo = _anuncio_corpo_family(corpo, r.get("titulo"))
+                    usa_family = 1
+                    continue
+                if primeira:
+                    erros = _anuncio_erros_duas_tentativas(primeira, erros)
+                break
+            except AnuncioMLSemResposta as exc:
+                erros = [f"O Mercado Livre não respondeu à conferência ({exc}). Tente de novo."]
+                break
     novo = _anuncio_rascunho_trocar(r["id"], ANUNCIO_VALIDAVEL, "rascunho" if erros else "validado", erros, ator,
-                                    versao=r["versao"])
+                                    versao=r["versao"], usa_family_name=0 if erros else usa_family)
     if novo is None:
         atual = anuncio_rascunho_ler(r["id"])
         raise FichaConflito(atual or {})
@@ -31805,7 +31905,7 @@ def anuncio_publicar(rascunho_id: Any, ator: str) -> dict[str, Any]:
             return fim("validado", [f"Mercado Livre da conta {conta}: {exc}"])
         # 2) Apollo da filial: "da para montar" desconhecido nunca vira zero nem "pode"
         try:
-            ficha = anuncio_ficha_payload(cod, ler_apollo=True)
+            ficha = anuncio_ficha_payload(cod, ler_apollo=True, filiais=(conta,))  # V20.24: so a filial da conta
         except Exception as exc:
             ficha = None
             print(f"Aviso: Apollo nao lido para publicar {cod}: {exc}", file=sys.stderr)
@@ -31832,21 +31932,25 @@ def anuncio_publicar(rascunho_id: Any, ator: str) -> dict[str, Any]:
                 return fim("validado", [f"A foto {pos} não subiu para o Mercado Livre ({exc}). Nada foi criado."])
         # 4) cria o anuncio: daqui em diante uma falha sem resposta = incerto
         corpo = anuncio_item_corpo(r, fotos_ml, defs)
+        if int(r.get("usa_family_name") or 0):  # V20.24 (revisao): o corpo que o ML aceitou na conferencia
+            corpo = _anuncio_corpo_family(corpo, r.get("titulo"))
         resp: Any = None
+        primeira: list[str] = []
         for tentativa in (1, 2):
             estado["etapa"] = "enviado"
             try:
                 with ml_na_casa(conta):
-                    resp = _anuncio_ml_chamar("POST", "/items", corpo)
+                    resp = _anuncio_ml_chamar("POST", "/items", corpo, timeout=ANUNCIO_ITEM_TIMEOUT)
                 break
             except AnuncioMLRecusou as exc:
                 _anuncio_amostra("item_criar", {"status": exc.status, "resposta": exc.corpo or str(exc)})
                 estado["etapa"] = "antes"  # recusa = nada criado
                 if tentativa == 1 and "title" in corpo and _anuncio_causa_titulo(exc.corpo):
-                    corpo = {k: v for k, v in corpo.items() if k != "title"}
-                    corpo["family_name"] = r.get("titulo")
+                    primeira = _anuncio_mensagens_ml(exc)
+                    corpo = _anuncio_corpo_family(corpo, r.get("titulo"))
                     continue
-                return fim("erro", _anuncio_mensagens_ml(exc))
+                erros_ml = _anuncio_mensagens_ml(exc)
+                return fim("erro", _anuncio_erros_duas_tentativas(primeira, erros_ml) if primeira else erros_ml)
             except AnuncioMLSemResposta as exc:
                 return fim("incerto", [ANUNCIO_INCERTO_TEXTO, f"Detalhe: {exc}"])
         _anuncio_amostra("item_criar", resp)
@@ -31859,7 +31963,8 @@ def anuncio_publicar(rascunho_id: Any, ator: str) -> dict[str, Any]:
         if descricao:
             try:
                 with ml_na_casa(conta):
-                    rd = _anuncio_ml_chamar("POST", f"/items/{mlb}/description", {"plain_text": descricao})
+                    rd = _anuncio_ml_chamar("POST", f"/items/{mlb}/description", {"plain_text": descricao},
+                                            timeout=ANUNCIO_ITEM_TIMEOUT)
                 _anuncio_amostra("descricao", rd)
             except Exception as exc:
                 _anuncio_amostra("descricao", {"erro": str(exc)})
@@ -31909,6 +32014,19 @@ def anuncio_incerto_liberar(rascunho_id: Any, mlb_encontrado: Any, ator: str) ->
         r = _anuncio_rascunho_de_linha(row)
         if r["situacao"] != "incerto":
             raise ValueError("Só um rascunho sem resposta do Mercado Livre (incerto) pode ser liberado.")
+        if mlb:
+            # V20.24 (revisao): MLB que ja esta na lista ligado a outro produto (ou sem ficha) ou controlado pela
+            # Alephee/Full nunca e religado calado - um MLB digitado errado tomaria o anuncio de outro.
+            for ja in DB.execute("SELECT conta, ficha_codigo, controle FROM anuncio_canal_v2023 "
+                                 "WHERE canal='ml' AND anuncio_id=?", (mlb,)).fetchall():
+                if str(ja["ficha_codigo"] or "") != str(r["ficha_codigo"]):
+                    dono = ("o produto " + str(ja["ficha_codigo"])) if ja["ficha_codigo"] else "nenhum produto"
+                    raise ValueError(f"O {mlb} já está na lista ligado a {dono}. Confira o número no Mercado Livre; "
+                                     "nada foi alterado.")
+                if str(ja["controle"] or "") != "noromak":
+                    raise ValueError(f"O {mlb} já está na lista controlado por {ja['controle']}. Confira o número no "
+                                     "Mercado Livre; se é o anúncio criado agora, passe o controle para Noromak na "
+                                     "lista e libere de novo. Nada foi alterado.")
         try:
             para = "publicado" if mlb else "validado"
             DB.execute("UPDATE anuncio_rascunho_v2024 SET situacao=?, mlb=?, erros_json='[]', versao=versao+1, "
