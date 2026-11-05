@@ -5,7 +5,7 @@ Shopee, manuais), expedição, separação, conferência por código de barras, 
 produtos/SKUs/EANs, kits, precificação, promoções, rentabilidade, estoque, Central de
 Pendências e histórico.
 
-Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V20.23).
+Versão de referência deste documento: **V17.82 — Conclusão e Reinclusão Canônicas** (seções novas até a V20.24).
 
 ---
 
@@ -733,6 +733,27 @@ controles aparece como "misto".
 **Rotas:** `GET /api/anuncios`, `GET /api/anuncios/ficha?codigo=&apollo=1`; `POST /api/anuncios/{ficha,kit,puxar,controle,remover,reincluir}`.
 Ver = módulo admin; gravar = perfil Admin (Consulta bloqueado pelo `consulta_bloqueada`).
 Testes: `TESTES/test_anuncios_{ficha,kits,puxar,rotas,kit_fila}_v2023.py`.
+
+**V20.24 — fase 2: criar anúncio no ML** (aba nova na ficha; plano `docs/superpowers/plans/2026-11-05-anuncios-fase2-criar-ml.md`).
+Ordem do dono: **título → categoria → atributos obrigatórios** (categoria e obrigatórios lidos do ML, cache de 24 h; o que a ficha
+tem já vem preenchido, marcado "da ficha"; SELLER_SKU e medidas do pacote vão da ficha; desconhecido fica em branco, nunca zero).
+**Fotos** em `ANUNCIO_FOTOS_DIR` (disco, nunca no banco; arquivo nomeado pelo id): do computador (`pc`) ou do Estúdio de Imagens
+(trabalho pronto); tipo pelo conteúdo, ≤ 10 MB, ≥ 500 px, ≤ 12 por ficha; gravadas fora do `DB_LOCK`, sem órfãos em falha; ordem e
+remoção pela tela. **"+ Novo produto"** na lista cria a ficha só se não existir (409 `JA_EXISTE` com a atual).
+**Tabelas:** `anuncio_foto_v2024`, `anuncio_rascunho_v2024` (um por tentativa; vários por ficha/conta; `versao` → 409 `CONFLITO`) e
+`anuncio_amostra_v2024` (1ª resposta real de cada chamada, 6.000 caracteres — **conferir na 1ª publicação**: se a categoria pede
+`family_name` e o `value_id` do `EMPTY_GTIN_REASON`). Tarifa de anúncio que ainda não existe: só `listing_prices` (frete em branco, sem MLB não há cotação).
+**O ML só é lido por GET, exceto no Publicar**, a ÚNICA escrita no ML da plataforma (perfil Admin; sobe as fotos, `POST /items`, descrição).
+"Conferir no ML" usa `POST /items/validate` sem fotos e não cria nada. `ANUNCIOS_PUBLICAR_LOCK` + máquina de situação
+`rascunho → validado → publicando → publicado | erro | incerto` (troca só se a situação ainda é a esperada, fora do `DB_LOCK`).
+**Incerto** = erro de rede/timeout, 5xx, 2xx sem `id` ou `publicando` que sobrou no boot (processo caiu no meio): o ML pode ter criado,
+então **nunca repete**; o Admin confere no ML e libera com `liberar` (com o MLB = `publicado`, entra na lista como `noromak`; sem = volta
+a editar). Recusa 4xx = erro, nada foi feito. **Estoque inicial** = `da_para_montar` pela leitura do Apollo **agora** (kit = peça que
+tem menos); desconhecido = não publica; só pode ser **menor** que isso, nunca maior. **Título → `family_name`:** se a recusa fala de
+`title`/`family_name`, tenta de novo **uma vez** com `family_name` e sem `title`.
+**Rotas:** `GET /api/anuncios/{ml/categorias,ml/atributos,ml/tarifa,foto,estudio,rascunhos}`;
+`POST /api/anuncios/{foto,foto/remover,foto/ordenar,rascunho,rascunho/validar,rascunho/publicar,rascunho/liberar}`; `ficha` aceita criar produto novo.
+Testes: `TESTES/test_anuncios_{criar,fotos,publicar}_v2024.py`.
 
 ### Estúdio de Imagens (V20.17: servidor, tela e agente)
 `APP/imagens.html` (`/imagens`, menu Vendas e anúncios, módulo próprio **`imagens`** = `app_users.can_imagens`, mesma
