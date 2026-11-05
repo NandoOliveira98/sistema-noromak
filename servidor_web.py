@@ -7360,6 +7360,11 @@ def ensure_anuncios_schema() -> None:
                 controle_por TEXT NOT NULL DEFAULT '',
                 PRIMARY KEY (canal, conta, anuncio_id)
             );
+            CREATE TABLE IF NOT EXISTS anuncio_amostra_v2024 (
+                tipo TEXT PRIMARY KEY,
+                resposta TEXT,
+                criado_em TEXT
+            );
             CREATE INDEX IF NOT EXISTS idx_anuncio_canal_ficha ON anuncio_canal_v2023(ficha_codigo);
             CREATE TABLE IF NOT EXISTS anuncio_foto_v2024 (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -30966,6 +30971,152 @@ def ml_tarifa_frete_anuncio(mlb: Any, preco: Any = None, *, tipo: str = "", cate
     return out
 
 
+# V20.24: leituras do ML para CRIAR anuncio (so GET): categoria, atributos obrigatorios e tarifa.
+ANUNCIO_CAMPO_DO_ATRIBUTO: dict[str, str] = {
+    "BRAND": "marca", "MODEL": "modelo", "GTIN": "ean", "SELLER_PACKAGE_WEIGHT": "peso_g",
+    "SELLER_PACKAGE_HEIGHT": "altura_cm", "SELLER_PACKAGE_WIDTH": "largura_cm",
+    "SELLER_PACKAGE_LENGTH": "comprimento_cm", "SELLER_SKU": "codigo",
+}
+ANUNCIO_ATRIBUTOS_CACHE_S = 24 * 3600
+_ANUNCIO_ATRIBUTOS_CACHE: dict[tuple[str, str], tuple[float, dict[str, Any]]] = {}
+_ANUNCIO_ATRIBUTOS_LOCK = threading.Lock()
+ANUNCIO_FRETE_TEXTO = "o ML informa o frete depois de publicar"
+
+
+def _anuncio_amostra(tipo: str, resposta: Any) -> None:
+    """V20.24: guarda a 1a resposta real de cada chamada (so se ainda nao existe), cortada em 6.000."""
+    try:
+        texto = json.dumps(resposta, ensure_ascii=False, default=str)[:6000]
+        with DB_LOCK:
+            DB.execute("INSERT OR IGNORE INTO anuncio_amostra_v2024(tipo,resposta,criado_em) VALUES(?,?,?)",
+                       (str(tipo), texto, now_iso()))
+            DB.commit()
+    except Exception:
+        pass  # amostra e so apoio: nunca derruba a leitura
+
+
+def ml_categoria_sugerir(titulo: str, conta: str) -> list[dict[str, Any]]:
+    titulo = str(titulo or "").strip()
+    if not titulo:
+        raise ValueError("Informe o título do anúncio.")
+    with ml_na_casa(conta):
+        bruto = ml_api_get("/sites/MLB/domain_discovery/search?" + urlencode({"limit": 5, "q": titulo[:120]}))
+    _anuncio_amostra("domain_discovery", bruto)
+    saida = []
+    for it in (bruto if isinstance(bruto, list) else []):
+        if not isinstance(it, dict) or not it.get("category_id"):
+            continue
+        saida.append({"categoria": str(it.get("category_id")), "categoria_nome": str(it.get("category_name") or ""),
+                      "dominio": str(it.get("domain_id") or ""), "dominio_nome": str(it.get("domain_name") or "")})
+    return saida
+
+
+def ml_categoria_atributos(categoria: str, conta: str) -> dict[str, Any]:
+    categoria = str(categoria or "").strip().upper()
+    if not re.fullmatch(r"MLB\d{1,12}", categoria):
+        raise ValueError("Categoria inválida.")
+    agora = time.time()
+    chave = (conta, categoria)
+    with _ANUNCIO_ATRIBUTOS_LOCK:
+        hit = _ANUNCIO_ATRIBUTOS_CACHE.get(chave)
+        if hit and agora - hit[0] < ANUNCIO_ATRIBUTOS_CACHE_S:
+            return hit[1]
+    with ml_na_casa(conta):
+        cat = ml_api_get(f"/categories/{categoria}")
+        attrs = ml_api_get(f"/categories/{categoria}/attributes")
+    _anuncio_amostra("categoria_atributos", {"categoria": cat, "atributos": attrs})
+    caminho = [str(p.get("name") or "") for p in ((cat or {}).get("path_from_root") or []) if isinstance(p, dict)] \
+        if isinstance(cat, dict) else []
+    lista = []
+    for a in (attrs if isinstance(attrs, list) else []):
+        if not isinstance(a, dict) or not a.get("id"):
+            continue
+        tags = a.get("tags") if isinstance(a.get("tags"), dict) else {}
+        if tags.get("hidden") or tags.get("read_only") or tags.get("fixed"):
+            continue
+        lista.append({
+            "id": str(a["id"]), "nome": str(a.get("name") or a["id"]),
+            "obrigatorio": bool(tags.get("required") or tags.get("catalog_required")),
+            "condicional": bool(tags.get("conditional_required")),
+            "tipo": str(a.get("value_type") or ""),
+            "valores": [{"id": str(v.get("id") or ""), "nome": str(v.get("name") or "")}
+                        for v in (a.get("values") or []) if isinstance(v, dict)][:200],
+            "unidades": [{"id": str(u.get("id") or ""), "nome": str(u.get("name") or "")}
+                         for u in (a.get("allowed_units") or []) if isinstance(u, dict)],
+            "max": a.get("value_max_length"), "dica": str(a.get("hint") or a.get("tooltip") or ""),
+        })
+    res = {"categoria": categoria, "nome": str((cat or {}).get("name") or "") if isinstance(cat, dict) else "",
+           "caminho": caminho, "atributos": lista}
+    with _ANUNCIO_ATRIBUTOS_LOCK:
+        if len(_ANUNCIO_ATRIBUTOS_CACHE) > 500:
+            _ANUNCIO_ATRIBUTOS_CACHE.clear()
+        _ANUNCIO_ATRIBUTOS_CACHE[chave] = (agora, res)
+    return res
+
+
+def _anuncio_numero_texto(valor: Any, unidade: str) -> str | None:
+    try:
+        n = float(str(valor).replace(",", "."))
+    except (TypeError, ValueError):
+        return None
+    if n <= 0:
+        return None
+    return f"{int(n) if n == int(n) else round(n, 2)} {unidade}"
+
+
+def anuncio_atributos_da_ficha(ficha: dict[str, Any], atributos: list[dict[str, Any]]) -> dict[str, Any]:
+    """V20.24 (pura): valores da ficha para os atributos da categoria. SELLER_SKU e as medidas do pacote vao
+    sempre que a ficha tem (o ML aceita em qualquer categoria); marca/modelo/GTIN so se a categoria os lista."""
+    campos = ficha.get("campos") if isinstance(ficha.get("campos"), dict) else ficha
+    ids = {str(a.get("id")) for a in (atributos or []) if isinstance(a, dict)}
+    saida: dict[str, Any] = {}
+    for attr_id, campo in ANUNCIO_CAMPO_DO_ATRIBUTO.items():
+        if campo == "codigo":
+            valor: Any = str(ficha.get("codigo") or "").strip()
+        elif campo == "peso_g":
+            valor = _anuncio_numero_texto(campos.get(campo), "g")
+        elif campo.endswith("_cm"):
+            valor = _anuncio_numero_texto(campos.get(campo), "cm")
+        else:
+            valor = str(campos.get(campo) or "").strip()
+        if not valor:
+            continue
+        sempre = campo in ("codigo", "peso_g", "altura_cm", "largura_cm", "comprimento_cm")
+        if sempre or attr_id in ids:
+            saida[attr_id] = valor
+    if str(ficha.get("tipo") or "") == "kit" and "GTIN" not in saida and "EMPTY_GTIN_REASON" in ids:
+        saida["EMPTY_GTIN_REASON"] = "Kit"
+    return saida
+
+
+def ml_tarifa_nova(preco: float, tipo: str, categoria: str, conta: str) -> dict[str, Any]:
+    """V20.24: tarifa de um anuncio que ainda nao existe (so listing_prices). Frete = None: sem MLB nao ha cotacao."""
+    try:
+        preco_f = round(float(str(preco).replace(",", ".")), 2)
+    except (TypeError, ValueError):
+        raise ValueError("Preço inválido.")
+    tipo = str(tipo or "").strip()
+    categoria = str(categoria or "").strip().upper()
+    if preco_f <= 0 or not tipo or not re.fullmatch(r"MLB\d{1,12}", categoria):
+        raise ValueError("Informe preço, tipo de anúncio e categoria.")
+    q = urlencode({"price": preco_f, "listing_type_id": tipo, "category_id": categoria})
+
+    def _ler() -> Any:
+        with ml_na_casa(conta):
+            return ml_api_get(f"/sites/MLB/listing_prices?{q}")
+
+    lp = _ml_tarifa_cache(("taxa_nova", conta, tipo, categoria, preco_f), _ler)
+    _anuncio_amostra("listing_prices", lp)
+    lp = lp[0] if isinstance(lp, list) and lp else lp
+    lp = lp if isinstance(lp, dict) else {}
+    det = lp.get("sale_fee_details") if isinstance(lp.get("sale_fee_details"), dict) else {}
+    pct = _money_number(det.get("percentage_fee"))
+    return {"comissao": round(pct / 100.0, 4) if pct is not None else None,
+            "taxa_fixa": _money_number(det.get("fixed_fee")),
+            "tarifa": _money_number(lp.get("sale_fee_amount")),
+            "frete": None, "frete_texto": ANUNCIO_FRETE_TEXTO}
+
+
 PROMO_TAXAS_DO_PRECIFICADOR = "taxas do Precificador (o Mercado Livre não respondeu)"
 
 
@@ -38032,6 +38183,34 @@ class AppHandler(BaseHTTPRequestHandler):
             if ctx is not None:
                 self.send_json({"ok": True, **anuncios_lista_payload(str((query.get("busca") or [""])[0]),
                                                                     str((query.get("filtro") or [""])[0]))})
+            return
+        if path in ("/api/anuncios/ml/categorias", "/api/anuncios/ml/atributos", "/api/anuncios/ml/tarifa"):
+            # V20.24: leituras do ML para criar anuncio (so GET, mas chamam o ML: perfil Admin)
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                def _q(nome: str) -> str:
+                    return str((query.get(nome) or [""])[0]).strip()
+                if str(ctx.get("app_role") or "") != "admin":
+                    self.send_json({"ok": False, "error": "Somente o perfil Admin."}, 403)
+                    return
+                conta = _q("conta") or CASA_PRINCIPAL
+                if conta not in ml_casas_conectadas():
+                    self.send_json({"ok": False, "error": "Conta do Mercado Livre desconhecida ou não conectada."}, 400)
+                    return
+                try:
+                    if path.endswith("/categorias"):
+                        res = {"ok": True, "categorias": ml_categoria_sugerir(_q("titulo"), conta)}
+                    elif path.endswith("/atributos"):
+                        res = {"ok": True, **ml_categoria_atributos(_q("categoria"), conta)}
+                    else:
+                        res = {"ok": True, **ml_tarifa_nova(_q("preco"), _q("tipo"), _q("categoria"), conta)}
+                except ValueError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 400)
+                    return
+                except RuntimeError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 502)
+                    return
+                self.send_json(res)
             return
         if path == "/api/anuncios/foto":  # V20.24: bytes da foto da ficha
             ctx = self.auth(admin_only=True)
