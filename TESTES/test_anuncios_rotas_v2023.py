@@ -254,3 +254,46 @@ class RotasAnunciosTeste(TesteNoromak):
         self.assertEqual(st, 200, c)
         self.assertIsNotNone(c["composicao"])
         self.assertEqual(c["ficha"]["tipo"], "kit")
+
+
+class NovoProdutoTeste(TesteNoromak):
+    """V20.24: POST /api/anuncios/ficha com criar=true."""
+
+    def test_criar_ficha_nova(self):
+        st, c = self.cliente.pedir("POST", "/api/anuncios/ficha", {"codigo": "NP1", "campos": {"nome": "Peca nova"}, "criar": True})
+        self.assertEqual(st, 200, c)
+        self.assertEqual(c["ficha"]["codigo"], "NP1")
+        self.assertEqual(c["ficha"]["tipo"], "peca")
+        self.assertEqual(c["ficha"]["campos"]["nome"], "Peca nova")
+
+    def test_criar_existente_409(self):
+        S.ficha_salvar("NP2", {"nome": "Ja existe"}, "luis", None)
+        st, c = self.cliente.pedir("POST", "/api/anuncios/ficha", {"codigo": "np2", "campos": {"nome": "Outro"}, "criar": True})
+        self.assertEqual(st, 409, c)
+        self.assertEqual(c["error"], "JA_EXISTE")
+        self.assertEqual(c["atual"]["campos"]["nome"], "Ja existe")
+        self.assertEqual(S.ficha_ler("NP2")["campos"]["nome"], "Ja existe")
+
+    def test_criar_sem_nome_400(self):
+        for corpo in ({"codigo": "NP3", "campos": {}}, {"codigo": "NP3", "campos": {"nome": "  "}},
+                      {"codigo": "", "campos": {"nome": "x"}}, {"codigo": "A/B", "campos": {"nome": "x"}},
+                      {"codigo": "X" * 61, "campos": {"nome": "x"}}):
+            corpo["criar"] = True
+            self.assertEqual(self.cliente.pedir("POST", "/api/anuncios/ficha", corpo)[0], 400, corpo)
+        self.assertIsNone(S.ficha_ler("NP3"))
+
+    def test_criar_codigo_de_kit_vira_kit(self):
+        st, c = self.cliente.pedir("POST", "/api/anuncios/ficha", {"codigo": "KIT3-0893117732", "campos": {"nome": "Kit tres"}, "criar": True})
+        self.assertEqual(st, 200, c)
+        self.assertEqual(c["ficha"]["tipo"], "kit")
+
+    def test_supervisor_nao_cria(self):
+        with S.DB_LOCK:
+            S.upsert_app_user("sup_np", "Supervisor", "operador", True, SENHA, "teste",
+                              permissions={"conferencia": True, "admin": True})
+            S.DB.commit()
+        sup = Cliente(self.url_base)
+        sup.entrar("sup_np", SENHA, area="admin")
+        st, _ = sup.pedir("POST", "/api/anuncios/ficha", {"codigo": "NP5", "campos": {"nome": "x"}, "criar": True})
+        self.assertEqual(st, 403)
+        self.assertIsNone(S.ficha_ler("NP5"))

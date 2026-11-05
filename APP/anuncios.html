@@ -150,7 +150,7 @@ window.addEventListener("beforeunload", e => { if (fichaSuja() || kitSujo()) { e
 
 // ---------------------------------------------------------------- lista
 function acoesLista() {
-  $("acoes").innerHTML = (PODE ? `<button class="nk-btn pri" id="btnPuxar" onclick="puxar()"><i class=nk-i-download></i> Puxar anúncios do ML</button>` : "")
+  $("acoes").innerHTML = (PODE ? `<button class="nk-btn pri" id="btnPuxar" onclick="puxar()"><i class=nk-i-download></i> Puxar anúncios do ML</button><button class="nk-btn" onclick="novoProduto()">+ Novo produto</button>` : "")
     + `<button class="nk-btn" onclick="carregarLista()"><i class=nk-i-refresh></i> Atualizar</button>`;
 }
 async function carregarLista() {
@@ -590,6 +590,22 @@ function desenharKitsDaPeca() {
           return `<tr><td>${n}</td><td class="n">${qtdOuSem(disp)}</td><td class="n">${pend == null ? SEM_LEITURA : pend}</td><td class="n"><b>${livre == null ? SEM_LEITURA : livre}</b></td></tr>`; }).join("")}</tbody></table></div>
       ${botaoApollo()}
     </section>`;
+}
+// V20.24: ficha nova pela lista (código + título); depois abre a ficha para completar.
+async function novoProduto() {
+  const cod = (await nkPerguntar("Código do novo produto", {detalhe: "Código Apollo (ou SKU do kit). Até 60 caracteres, sem “/”.", obrigatorio: true}) || "").trim();
+  if (!cod) return;
+  if (cod.length > 60 || cod.includes("/")) { nkToast("Código inválido: até 60 caracteres e sem “/”.", "aviso"); return; }
+  const nome = (await nkPerguntar("Título do produto", {detalhe: `Nome do produto ${cod}`, obrigatorio: true}) || "").trim();
+  if (!nome) return;
+  try {
+    await api("/api/anuncios/ficha", {codigo: cod, campos: {nome}, criar: true});
+    nkToast("Produto criado.", "ok");
+    abrirCodigo(cod);
+  } catch (e) {
+    if (e.status === 409 && (e.dados || {}).error === "JA_EXISTE") { nkToast(`O código ${cod} já tem ficha: abrindo.`, "info"); abrirCodigo(cod); return; }
+    nkToast(e.message, "erro");
+  }
 }
 async function novoKit() {
   const sku = (await nkPerguntar("SKU do novo kit", {detalhe: `Código do kit que vai conter ${F.codigo}. Ex.: KIT3-${F.codigo}`, placeholder: "KIT…", obrigatorio: true}) || "").trim();

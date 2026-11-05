@@ -40381,6 +40381,28 @@ class AppHandler(BaseHTTPRequestHandler):
                         versao = None if versao is None or versao == "" else int(versao)
                     except (TypeError, ValueError):
                         raise ValueError("Versão inválida.")
+                    if body.get("criar") is True:
+                        # V20.24: "+ Novo produto" - cria so se nao existir (senao 409 JA_EXISTE com a atual).
+                        cod_novo = str(body.get("codigo") or "").strip()
+                        if not cod_novo:
+                            raise ValueError("Informe o código do produto.")
+                        if len(cod_novo) > 60 or "/" in cod_novo:
+                            raise ValueError("Código inválido: até 60 caracteres e sem “/”.")
+                        if not str(campos.get("nome") or "").strip():
+                            raise ValueError("Informe o título do produto.")
+                        existente = ficha_ler(cod_novo)
+                        if existente is not None:
+                            self.send_json({"ok": False, "error": "JA_EXISTE", "atual": existente}, 409)
+                            return
+                        versao = None
+                        try:
+                            ficha = ficha_salvar(cod_novo, campos, ctx["username"], None)
+                        except FichaConflito as exc:  # criada por outra pessoa neste instante
+                            self.send_json({"ok": False, "error": "JA_EXISTE", "atual": exc.atual}, 409)
+                            return
+                        audit(ctx["username"], "anuncios.ficha_nova", str(ficha.get("codigo")))
+                        self.send_json({"ok": True, "ficha": ficha})
+                        return
                     ficha = ficha_salvar(str(body.get("codigo") or ""), campos, ctx["username"], versao)
                     audit(ctx["username"], "anuncios.ficha", f"{ficha.get('codigo')}|{sorted(campos)}")
                     res = {"ok": True, "ficha": ficha}
