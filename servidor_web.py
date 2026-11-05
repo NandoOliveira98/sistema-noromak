@@ -7410,6 +7410,39 @@ def ensure_anuncios_schema() -> None:
         cols = {r[1] for r in DB.execute("PRAGMA table_info(anuncio_rascunho_v2024)").fetchall()}
         if "usa_family_name" not in cols:
             DB.execute("ALTER TABLE anuncio_rascunho_v2024 ADD COLUMN usa_family_name INTEGER NOT NULL DEFAULT 0")
+        # V20.26: estoque dos anuncios (Manual / Automatico). Padrao Manual: nada e enviado sem o Admin escolher.
+        cols = {r[1] for r in DB.execute("PRAGMA table_info(anuncio_canal_v2023)").fetchall()}
+        for nome, tipo in (("estoque_modo", "TEXT NOT NULL DEFAULT 'manual'"), ("estoque_enviado", "INTEGER"),
+                           ("estoque_enviado_em", "TEXT NOT NULL DEFAULT ''"), ("estoque_calculado", "INTEGER"),
+                           ("estoque_calculado_em", "TEXT NOT NULL DEFAULT ''")):
+            if nome not in cols:
+                DB.execute(f"ALTER TABLE anuncio_canal_v2023 ADD COLUMN {nome} {tipo}")
+        DB.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS anuncio_estoque_log_v2026 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                criado_em TEXT, canal TEXT, conta TEXT, anuncio_id TEXT, modo TEXT,
+                de INTEGER, para INTEGER, motivo TEXT, resultado TEXT, detalhe TEXT, ator TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_anuncio_estoque_log_anuncio
+                ON anuncio_estoque_log_v2026(canal, conta, anuncio_id, id);
+            CREATE TABLE IF NOT EXISTS anuncio_estoque_config_v2026 (
+                conta TEXT PRIMARY KEY,
+                modo TEXT NOT NULL DEFAULT 'simulacao',
+                atualizado_em TEXT,
+                atualizado_por TEXT
+            );
+            CREATE TABLE IF NOT EXISTS anuncio_apollo_v2026 (
+                codigo TEXT NOT NULL,
+                filial TEXT NOT NULL,
+                disponivel REAL,
+                respondeu INTEGER,
+                lido_em TEXT,
+                lido_epoch INTEGER,
+                PRIMARY KEY (codigo, filial)
+            );
+            """
+        )
         # V20.24: no boot nenhuma publicacao esta rodando; `publicando` que sobrou (processo caiu no meio) vira
         # `incerto` - o ML pode ter criado: o Admin confere e libera. Nunca volta a `validado` sozinho.
         DB.execute("UPDATE anuncio_rascunho_v2024 SET situacao='incerto', versao=versao+1, "
@@ -8394,9 +8427,11 @@ def anuncio_controle_definir(canal: str, conta: str, anuncio_id: str, controle: 
             raise ValueError("Anúncio Full: o estoque é do Mercado Livre.")
         if controle == "noromak" and not confirmou_alephee:
             raise ValueError("Confirme que o anúncio foi desativado na Alephee.")
-        DB.execute("UPDATE anuncio_canal_v2023 SET controle=?, controle_em=?, controle_por=? "
+        # V20.26: trocar quem controla volta o estoque a Manual (o Automatico nunca religa sozinho ao voltar ao Noromak)
+        DB.execute("UPDATE anuncio_canal_v2023 SET controle=?, controle_em=?, controle_por=?, "
+                   "estoque_modo=CASE WHEN controle=? THEN estoque_modo ELSE 'manual' END "
                    "WHERE canal=? AND conta=? AND anuncio_id=?",
-                   (controle, now_iso(), str(ator or ""), canal, conta, anuncio_id))
+                   (controle, now_iso(), str(ator or ""), controle, canal, conta, anuncio_id))
         DB.commit()
     audit(ator, "anuncios.controle", f"{canal}|{conta}|{anuncio_id}|{controle}")
     return {"ok": True, "controle": controle}
@@ -32406,6 +32441,121 @@ def anuncio_incerto_liberar(rascunho_id: Any, mlb_encontrado: Any, ator: str) ->
         novo = _anuncio_rascunho_de_linha(DB.execute("SELECT * FROM anuncio_rascunho_v2024 WHERE id=?", (rid,)).fetchone())
     audit(ator, "anuncios.liberar", f"{r['ficha_codigo']}|{rid}|{r['conta']}|{para}|{mlb}")
     return {"ok": True, "situacao": para, "mlb": mlb, "rascunho": novo}
+
+
+# ---------------------------------------------------------------------------
+# V20.26 - Estoque dos anuncios (fase 3; plano docs/superpowers/plans/2026-11-05-anuncios-fase3-estoque.md).
+# Excecao a regra "o Noromak nunca grava estoque": grava no ML, SO em anuncio `controle='noromak'` (nunca Full,
+# Alephee ou removido pelo ADMIN). Manual = o Admin digita e vai na hora; Automatico = Apollo da filial menos o
+# vendido e nao baixado (kit = peca que da menos). Valor desconhecido nunca vira zero (nao envia).
+# A UNICA funcao que grava estoque no ML e `ml_estoque_gravar` (sempre rele o anuncio para confirmar).
+# ---------------------------------------------------------------------------
+ANUNCIO_ESTOQUE_MODOS = ("manual", "automatico")
+ANUNCIO_ESTOQUE_CONTA_MODOS = ("simulacao", "lote", "automatico")
+ANUNCIO_ESTOQUE_LOG_MAX = 20000
+ANUNCIO_ESTOQUE_MAX = 99999
+
+
+def _anuncio_estoque_linha(canal: str, conta: str, anuncio_id: str) -> dict[str, Any] | None:
+    """V20.26: linha do anuncio. Chamar SOB o DB_LOCK."""
+    row = DB.execute("SELECT * FROM anuncio_canal_v2023 WHERE canal=? AND conta=? AND anuncio_id=?",
+                     (canal, conta, anuncio_id)).fetchone()
+    return dict(row) if row else None
+
+
+def _anuncio_estoque_elegivel(row: dict[str, Any] | None) -> str:
+    """V20.26: '' = o Noromak pode mexer no estoque deste anuncio; senao o motivo."""
+    if row is None:
+        return "Anúncio não encontrado."
+    if str(row.get("removido_em") or ""):
+        return "Anúncio removido da lista pelo Admin."
+    if str(row.get("controle") or "") == "full" or str(row.get("logistica") or "") == "fulfillment":
+        return "Anúncio Full: o estoque é do Mercado Livre."
+    if str(row.get("controle") or "") != "noromak":
+        return "O estoque deste anúncio não é controlado pelo Noromak."
+    return ""
+
+
+def _anuncio_estoque_registrar(canal: str, conta: str, anuncio_id: str, modo: str, de: Any, para: Any,
+                               motivo: str, resultado: str, detalhe: str, ator: str) -> None:
+    """V20.26: uma linha no registro; guarda so os ultimos ANUNCIO_ESTOQUE_LOG_MAX."""
+    def _int(v: Any) -> int | None:
+        try:
+            return None if v is None or isinstance(v, bool) else int(v)
+        except (TypeError, ValueError):
+            return None
+
+    with DB_LOCK:
+        cur = DB.execute(
+            "INSERT INTO anuncio_estoque_log_v2026(criado_em,canal,conta,anuncio_id,modo,de,para,motivo,resultado,detalhe,ator) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (now_iso(), str(canal), str(conta), str(anuncio_id), str(modo or ""), _int(de), _int(para),
+             str(motivo or "")[:300], str(resultado or ""), str(detalhe or "")[:1000], str(ator or "")))
+        corte = int(cur.lastrowid or 0) - ANUNCIO_ESTOQUE_LOG_MAX
+        if corte > 0:
+            DB.execute("DELETE FROM anuncio_estoque_log_v2026 WHERE id<=?", (corte,))
+        DB.commit()
+
+
+def anuncio_estoque_log(canal: str, conta: str, anuncio_id: str = "", limite: int = 50) -> list[dict[str, Any]]:
+    """V20.26: ultimos registros (mais novo primeiro). Sem `anuncio_id` = a conta inteira."""
+    limite = max(1, min(500, int(limite or 50)))
+    with DB_LOCK:
+        if anuncio_id:
+            rows = DB.execute("SELECT * FROM anuncio_estoque_log_v2026 WHERE canal=? AND conta=? AND anuncio_id=? "
+                              "ORDER BY id DESC LIMIT ?", (canal, conta, anuncio_id, limite)).fetchall()
+        else:
+            rows = DB.execute("SELECT * FROM anuncio_estoque_log_v2026 WHERE canal=? AND conta=? ORDER BY id DESC LIMIT ?",
+                              (canal, conta, limite)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def anuncio_estoque_modo_definir(canal: str, conta: str, anuncio_id: str, modo: str, ator: str) -> dict[str, Any]:
+    """V20.26: Manual / Automatico de um anuncio. So `noromak` e nao-Full."""
+    modo = str(modo or "").strip().lower()
+    if modo not in ANUNCIO_ESTOQUE_MODOS:
+        raise ValueError("Modo de estoque inválido (manual ou automatico).")
+    with DB_LOCK:
+        row = _anuncio_estoque_linha(canal, conta, anuncio_id)
+        motivo = _anuncio_estoque_elegivel(row)
+        if motivo:
+            raise ValueError(motivo)
+        antes = str(row.get("estoque_modo") or "manual")
+        DB.execute("UPDATE anuncio_canal_v2023 SET estoque_modo=? WHERE canal=? AND conta=? AND anuncio_id=?",
+                   (modo, canal, conta, anuncio_id))
+        DB.commit()
+    if antes != modo:
+        _anuncio_estoque_registrar(canal, conta, anuncio_id, modo, None, None, f"modo {antes} -> {modo}",
+                                   "ignorado", "troca de modo pelo Admin", ator)
+    audit(ator, "anuncios.estoque_modo", f"{canal}|{conta}|{anuncio_id}|{antes}->{modo}")
+    return {"ok": True, "anuncio_id": anuncio_id, "modo": modo}
+
+
+def anuncio_estoque_config(conta: str) -> dict[str, Any]:
+    """V20.26: interruptor do Automatico da conta. Sem linha = Simulacao (nada e enviado)."""
+    conta = ml_casa_valida(conta)
+    with DB_LOCK:
+        row = DB.execute("SELECT * FROM anuncio_estoque_config_v2026 WHERE conta=?", (conta,)).fetchone()
+    if row is None or str(row["modo"] or "") not in ANUNCIO_ESTOQUE_CONTA_MODOS:
+        return {"conta": conta, "modo": "simulacao", "atualizado_em": "", "atualizado_por": ""}
+    return {"conta": conta, "modo": str(row["modo"]), "atualizado_em": str(row["atualizado_em"] or ""),
+            "atualizado_por": str(row["atualizado_por"] or "")}
+
+
+def anuncio_estoque_config_definir(conta: str, modo: str, ator: str) -> dict[str, Any]:
+    """V20.26: a rota exige o OWNER para ligar o Automatico."""
+    conta = ml_casa_valida(conta)
+    modo = str(modo or "").strip().lower()
+    if modo not in ANUNCIO_ESTOQUE_CONTA_MODOS:
+        raise ValueError("Modo inválido (simulacao, lote ou automatico).")
+    antes = anuncio_estoque_config(conta)["modo"]
+    with DB_LOCK:
+        DB.execute("INSERT INTO anuncio_estoque_config_v2026(conta,modo,atualizado_em,atualizado_por) VALUES(?,?,?,?) "
+                   "ON CONFLICT(conta) DO UPDATE SET modo=excluded.modo, atualizado_em=excluded.atualizado_em, "
+                   "atualizado_por=excluded.atualizado_por", (conta, modo, now_iso(), str(ator or "")))
+        DB.commit()
+    audit(ator, "anuncios.estoque_config", f"{conta}|{antes}->{modo}")
+    return anuncio_estoque_config(conta)
 
 
 PROMO_TAXAS_DO_PRECIFICADOR ="taxas do Precificador (o Mercado Livre não respondeu)"
