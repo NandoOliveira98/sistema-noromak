@@ -144,6 +144,35 @@ class FotosFichaTeste(TesteNoromak):
         st, c = self.cliente.pedir("POST", "/api/anuncios/foto/remover", {"codigo": "P1", "id": fid})
         self.assertEqual((st, c["fotos"]), (200, []))
 
+    def test_rota_do_estudio_e_base64_gigante(self):
+        with S.DB_LOCK:
+            cur = S.DB.execute(
+                "INSERT INTO imagem_trabalho_v2017(tipo,sku,situacao,criado_por,criado_em,atualizado_em,resultados_json)"
+                " VALUES('principal','P1','pronta','luis','2026-11-05','2026-11-05',?)",
+                (json.dumps([{"nome": "resultado_1.png", "papel": "resultado"}]),))
+            S.DB.commit()
+        tid = cur.lastrowid
+        (S.IMAGENS_DIR / str(tid)).mkdir(parents=True, exist_ok=True)
+        (S.IMAGENS_DIR / str(tid) / "resultado_1.png").write_bytes(png(900, 900))
+        st, c = self.cliente.pedir("POST", "/api/anuncios/foto", {"codigo": "P1", "estudio_id": tid, "nome": "resultado_1.png"})
+        self.assertEqual((st, c["foto"]["origem"]), (200, "estudio"), c)
+        st, c = self.cliente.pedir("POST", "/api/anuncios/foto", {"codigo": "P1", "estudio_id": tid, "nome": "../x.png"})
+        self.assertEqual(st, 400, c)
+        st, c = self.cliente.pedir("POST", "/api/anuncios/foto", {"codigo": "P1", "base64": "A" * (15 * 1024 * 1024)})
+        self.assertEqual((st, c["error"]), (400, "Foto maior que 10 MB."))
+
+    def test_falha_ao_gravar_arquivo_nao_deixa_linha(self):
+        orig = S.Path.write_bytes
+        def falha(self, d):
+            raise OSError("disco cheio")
+        S.Path.write_bytes = falha
+        try:
+            with self.assertRaises(OSError):
+                S.anuncio_foto_adicionar("P1", png(), "luis")
+        finally:
+            S.Path.write_bytes = orig
+        self.assertEqual(S.anuncio_fotos("P1"), [])
+
     def test_rotas_permissao(self):
         with S.DB_LOCK:
             S.upsert_app_user("sup_2024", "Supervisor", "operador", True, SENHA, "teste",

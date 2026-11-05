@@ -8199,15 +8199,35 @@ def anuncio_foto_adicionar(codigo: str, dados: bytes, ator: str, origem: str = "
                          (cod, "", tipo, largura, altura, len(dados), origem if origem in ("pc", "estudio") else "pc",
                           int(ultima) + 1, now_iso(), str(ator or "")))
         foto_id = int(cur.lastrowid)
+        DB.commit()
+    # V20.24: o arquivo e gravado FORA do DB_LOCK (disco lento nao trava o sistema); sem orfaos em nenhuma falha.
+    caminho = _anuncio_foto_caminho(foto_id, tipo)
+    try:
+        ANUNCIO_FOTOS_DIR.mkdir(parents=True, exist_ok=True)
+        caminho.write_bytes(dados)
+    except Exception:
+        with DB_LOCK:
+            DB.execute("DELETE FROM anuncio_foto_v2024 WHERE id=?", (foto_id,))
+            DB.commit()
         try:
-            ANUNCIO_FOTOS_DIR.mkdir(parents=True, exist_ok=True)
-            _anuncio_foto_caminho(foto_id, tipo).write_bytes(dados)
+            caminho.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    try:
+        with DB_LOCK:
             DB.execute("UPDATE anuncio_foto_v2024 SET arquivo=? WHERE id=?", (f"{foto_id}.{tipo}", foto_id))
             DB.commit()
-        except Exception:
-            DB.rollback()
-            raise
-        row = DB.execute("SELECT * FROM anuncio_foto_v2024 WHERE id=?", (foto_id,)).fetchone()
+            row = DB.execute("SELECT * FROM anuncio_foto_v2024 WHERE id=?", (foto_id,)).fetchone()
+    except Exception:
+        try:
+            caminho.unlink(missing_ok=True)
+        except OSError:
+            pass
+        with DB_LOCK:
+            DB.execute("DELETE FROM anuncio_foto_v2024 WHERE id=?", (foto_id,))
+            DB.commit()
+        raise
     return dict(row)
 
 
@@ -40397,8 +40417,11 @@ class AppHandler(BaseHTTPRequestHandler):
                         foto = anuncio_foto_do_estudio(str(body.get("codigo") or ""), body.get("estudio_id"),
                                                        str(body.get("nome") or ""), ctx["username"])
                     else:
+                        texto64 = str(body.get("base64") or "")
+                        if len(texto64) > 14 * 1024 * 1024:  # V20.24: recusa antes de decodificar
+                            raise ValueError("Foto maior que 10 MB.")
                         try:
-                            dados = base64.b64decode(str(body.get("base64") or ""), validate=False)
+                            dados = base64.b64decode(texto64, validate=False)
                         except Exception:
                             raise ValueError("Foto inválida.")
                         foto = anuncio_foto_adicionar(str(body.get("codigo") or ""), dados, ctx["username"])

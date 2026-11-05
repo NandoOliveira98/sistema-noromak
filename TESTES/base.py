@@ -30,6 +30,8 @@ SENHA_ADMIN = "Senha-De-Teste-123"
 
 os.environ["EXP_DB_PATH"] = str(DIR_TEMP / "expedicao.db")
 os.environ["EXP_BACKUP_DIR"] = str(DIR_TEMP / "backups")
+os.environ["EXP_ANUNCIO_FOTOS_DIR"] = str(DIR_TEMP / "anuncios_fotos")  # V20.24: nunca uma pasta real
+os.environ["EXP_IMAGENS_DIR"] = str(DIR_TEMP / "imagens")
 # Aponta a migração legada para uma pasta vazia: os testes começam de um banco limpo.
 os.environ["EXP_MIGRATION_DIR"] = str(DIR_TEMP / "sem_migracao")
 os.environ["EXP_ADMIN_USUARIO"] = USUARIO_ADMIN
