@@ -4484,6 +4484,7 @@ def preserve_pending_records_v1714(current_value: str | None, new_value: str) ->
     except Exception:
         completed_keys=set()
     changed=False
+    editadas_v2022: set[str] | None = None
     for i,row in enumerate(current):
         if not isinstance(row,dict): continue
         if normalize(order_number(row)) in completed_keys:
@@ -4509,11 +4510,21 @@ def preserve_pending_records_v1714(current_value: str | None, new_value: str) ->
             # componentes (KITDB_) não volta ao lado deles, e o bip dela passa para eles.
             # Pedido na fila na hora da publicação ficava com o kit em dobro (Magalu) ou
             # com o bip perdido (Shopee).
-            componentes = _kit_aberto_da_linha_v2022(row, newer)
-            if componentes:
+            # Linha antiga editada à mão (SKU trocado, ou SKU/Quantidade com override do ADMIN):
+            # ela fica como o ADMIN deixou e os componentes daquele kit não entram (sem
+            # isso: 20 unidades, ou o bip contado em unidades multiplicado de novo).
+            if editadas_v2022 is None:
+                editadas_v2022 = _admin_linhas_editadas_v2022()
+            componentes, editada = _kit_aberto_da_linha_v2022(row, newer, ident, editadas_v2022)
+            if componentes and not editada:
                 _kit_passar_bip_v2022(row, componentes)
                 changed=True
                 continue
+            if componentes:
+                fora = {id(c) for c in componentes}
+                newer[:] = [n for n in newer if id(n) not in fora]
+                ids = {_pending_identity_v1714(r, j) for j, r in enumerate(newer) if isinstance(r, dict)}
+                changed=True
             # V18.71: a linha colada de um KIT da Shopee ("A/B") não volta quando os
             # componentes do kit já estão no mesmo pedido (a sincronização agora abre
             # o kit). Só sem bip; a mesma regra da limpeza da Conferência (V18.66).
@@ -4530,43 +4541,68 @@ def preserve_pending_records_v1714(current_value: str | None, new_value: str) ->
 _ORIGENS_KIT_ABERTO_V2022 = {"API_SHOPEE", "API_MAGALU", "API_TIKTOK"}
 
 
-def _kit_aberto_da_linha_v2022(row: dict[str, Any], newer: list[Any]) -> list[dict[str, Any]]:
-    """V20.22: componentes (KITDB_) que a integração abriu a partir desta linha antiga do kit.
+def _kit_aberto_da_linha_v2022(row: dict[str, Any], newer: list[Any], ident: str,
+                               editadas: set[str]) -> tuple[list[dict[str, Any]], bool]:
+    """V20.22: (componentes KITDB_ que a integração abriu a partir desta linha antiga do kit,
+    se a linha foi editada à mão).
 
-    Só a linha da integração com o SKU do kit como veio (SKU editado à mão fica: decisão do
-    ADMIN). Casa pelo SkuKitOrigem do componente = SKU vendido da linha antiga.
+    Casa pelo SkuKitOrigem do componente = SKU vendido da linha antiga (SkuOrigemImportacao).
+    Editada = SKU diferente do vendido, ou override do ADMIN em campo de quantidade/SKU.
     """
     if str(row.get("__uidLinha") or "").upper().startswith("KITDB_"):
-        return []
+        return [], False
     if normalize(row.get("OrigemCadastro")) not in _ORIGENS_KIT_ABERTO_V2022:
-        return []
+        return [], False
     kit = normalize(row.get("SkuOrigemImportacao") or row.get("SKU"))
-    if not kit or normalize(row.get("SKU")) != kit:
-        return []
+    if not kit:
+        return [], False
     pedido = normalize(order_number(row))
-    return [
+    componentes = [
         n for n in newer
         if isinstance(n, dict)
         and str(n.get("__uidLinha") or "").upper().startswith("KITDB_")
         and normalize(order_number(n)) == pedido
         and normalize(n.get("SkuKitOrigem")) == kit
     ]
+    editada = normalize(row.get("SKU")) != kit or ident in editadas
+    return componentes, editada
+
+
+_CAMPOS_EDICAO_KIT_V2022 = ("SKU", "Quantidade", "Código de Barras", "SkuOrigemImportacao",
+                            "Kit", "Quantidade de Kits", "Quantidade por Kit")
+
+
+def _admin_linhas_editadas_v2022() -> set[str]:
+    """Linhas da fila com override do ADMIN em SKU/quantidade (o bip não conta como edição)."""
+    marcas = ",".join("?" for _ in _CAMPOS_EDICAO_KIT_V2022)
+    try:
+        with DB_LOCK:
+            return {str(r["entity_id"]) for r in DB.execute(
+                "SELECT DISTINCT entity_id FROM admin_manual_overrides WHERE storage_key='conf_pedidos' "
+                f"AND is_deleted=0 AND field_name IN ({marcas})", _CAMPOS_EDICAO_KIT_V2022).fetchall()}
+    except Exception:
+        return set()
 
 
 def _kit_passar_bip_v2022(antiga: dict[str, Any], componentes: list[dict[str, Any]]) -> None:
-    """Kits já bipados na linha antiga = as peças deles bipadas nos componentes (nunca diminui)."""
+    """O que já foi bipado na linha antiga passa na proporção da quantidade dela (nunca diminui).
+
+    1 de 1 kit bipado = todas as peças; 1 de 3 kits = um terço de cada componente.
+    """
     def inteiro(v: Any) -> int:
         try:
             return max(0, int(float(str(v or 0))))
         except Exception:
             return 0
-    kits_lidos = inteiro(antiga.get("Lido"))
-    if not kits_lidos:
+    lidos = inteiro(antiga.get("Lido"))
+    if not lidos:
         return
+    qtd_antiga = max(1, inteiro(antiga.get("Quantidade")) or 1)
     for comp in componentes:
-        por_kit = max(1, inteiro(comp.get("Quantidade por Kit")) or 1)
-        total = inteiro(comp.get("Quantidade")) or por_kit
-        novo = min(total, kits_lidos * por_kit)
+        total = inteiro(comp.get("Quantidade"))
+        if not total:
+            continue
+        novo = min(total, (total * lidos) // qtd_antiga)
         if novo > inteiro(comp.get("Lido")):
             comp["Lido"] = novo
 
@@ -4580,13 +4616,16 @@ def _sem_linhas_excluidas_admin_v2022(linhas: list[dict[str, Any]]) -> list[dict
     if not linhas:
         return linhas
     try:
-        excluidas = {
-            str(r["entity_id"]) for r in DB.execute(
-                "SELECT entity_id FROM admin_manual_overrides WHERE storage_key='conf_pedidos' "
-                "AND field_name='__ENTITY__' AND is_deleted=1").fetchall()
-        }
-    except Exception:
-        return linhas
+        with DB_LOCK:  # conexão compartilhada: nunca ler sem a trava (V18.06)
+            excluidas = {
+                str(r["entity_id"]) for r in DB.execute(
+                    "SELECT entity_id FROM admin_manual_overrides WHERE storage_key='conf_pedidos' "
+                    "AND field_name='__ENTITY__' AND is_deleted=1").fetchall()
+            }
+    except Exception as exc:
+        # Sem saber o que o ADMIN excluiu, a rodada para (falha = nada gravado). Devolver
+        # lista vazia faria a importação achar que o pedido sumiu e tirá-lo da fila.
+        raise RuntimeError(f"Exclusões do ADMIN não lidas: {exc}") from exc
     if not excluidas:
         return linhas
     return [r for i, r in enumerate(linhas) if _pending_identity_v1714(r, i) not in excluidas]

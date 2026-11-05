@@ -128,6 +128,38 @@ class ShopeeKitQuantidade(TesteNoromak):
                          [("0893764272", "6", 2)])
 
 
+    def _admin_edita_linha_antiga(self, pedido, **campos):
+        linhas = pedidos()
+        for r in linhas:
+            if r.get("Pedido") == pedido:
+                r.update(campos)
+        gravar_como_admin(linhas)
+
+    def test_linha_antiga_com_quantidade_do_admin_fica_e_nao_infla_o_bip(self):
+        """O ADMIN contornou o bug pondo Quantidade 10 na linha do kit e 4 já foram bipados."""
+        pedido = "261028BBBBBBBB"
+        self.itens[pedido] = [item("kit10-10396473")]
+        self.sync_antes_da_v2022()
+        self._admin_edita_linha_antiga(pedido, Quantidade="10")
+        self._admin_edita_linha_antiga(pedido, Lido=4)
+        S.shopee_manual_sync()
+        S.shopee_manual_sync()
+        rows = [r for r in pedidos() if r.get("Pedido") == pedido]
+        self.assertEqual([(r["SKU"], r["Quantidade"], int(r.get("Lido") or 0)) for r in rows],
+                         [("kit10-10396473", "10", 4)],
+                         "REGRESSÃO: linha corrigida pelo ADMIN sumiu ou o bip ficou maior que o real")
+
+    def test_linha_antiga_com_sku_trocado_pelo_admin_nao_fica_em_dobro(self):
+        pedido = "261028CCCCCCCC"
+        self.itens[pedido] = [item("kit10-10396473")]
+        self.sync_antes_da_v2022()
+        self._admin_edita_linha_antiga(pedido, SKU="10396473", Quantidade="10")
+        S.shopee_manual_sync()
+        S.shopee_manual_sync()
+        self.assertEqual(self.skus(pedido), [("10396473", "10")],
+                         "REGRESSÃO: SKU corrigido pelo ADMIN + componentes = 20 unidades")
+
+
 class MagaluKitTransicao(TesteNoromak):
     """V20.22 — mesma troca na Magalu (e no TikTok, que usa o mesmo merge)."""
 

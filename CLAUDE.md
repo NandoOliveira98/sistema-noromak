@@ -525,9 +525,10 @@ E kit "KITn-X" sem cadastro abre pelo prefixo (`_infer_quantity_kit_from_sku`), 
 kit10-10396473 subia como 1 × o SKU do kit). Vale também para Magalu e TikTok (mesmo `_shopee_expand_kit_lines`).
 **Transição (revisão de 05/11):** a linha antiga do kit (Shopee/Magalu/TikTok, SKU do kit como veio) que a integração
 agora abre em `KITDB_` não volta pelo `preserve_pending_records_v1714` e o bip dela passa para os componentes
-(`_kit_aberto_da_linha_v2022`, `_kit_passar_bip_v2022`: kits bipados × peças por kit, nunca diminui); SKU editado à mão
-fica. Na Magalu/TikTok a linha que o ADMIN excluiu (tombstone por UID) sai **antes** de abrir o kit
-(`_sem_linhas_excluidas_admin_v2022`). Teste: `TESTES/test_shopee_kit_quantidade_v2022.py`.
+(`_kit_aberto_da_linha_v2022`, `_kit_passar_bip_v2022`: na proporção da quantidade da linha antiga, nunca diminui).
+Linha antiga editada à mão (SKU trocado, ou override do ADMIN em SKU/quantidade, `_admin_linhas_editadas_v2022`; o bip
+não conta) fica como o ADMIN deixou e os componentes daquele kit não entram (senão 20 unidades ou bip inflado). Na Magalu/TikTok a linha que o ADMIN excluiu (tombstone por UID) sai **antes** de abrir o kit
+(`_sem_linhas_excluidas_admin_v2022`, sob o `DB_LOCK`; leitura falhou = a rodada para, nada gravado). Teste: `TESTES/test_shopee_kit_quantidade_v2022.py`.
 **Etiqueta = uma imagem (V17.99):** o ZPL da Shopee traz `~DGR` (a imagem) **antes** do `^XA`,
 que só imprime a imagem (`^XGR`). Cortar o texto no `^XA` gera etiqueta em branco — foi o
 bug das etiquetas automáticas da V17.89 a V17.98. `shopee_reparar_etiquetas_sem_grafico` roda no boot.
