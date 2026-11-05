@@ -7392,7 +7392,7 @@ def _ficha_ler_sem_lock(cod: str) -> dict[str, Any] | None:
 
 
 def ficha_ler(codigo: str) -> dict[str, Any] | None:
-    cod = _exp_norm_codigo(codigo)
+    cod = normalize(codigo)
     if not cod:
         return None
     with DB_LOCK:
@@ -7402,7 +7402,7 @@ def ficha_ler(codigo: str) -> dict[str, Any] | None:
 def ficha_salvar(codigo: str, campos: dict[str, Any], ator: str, versao: int | None) -> dict[str, Any]:
     """V20.23: grava como origem `admin`. `versao` None = sem conferencia (1o save); diferente da gravada = FichaConflito.
     Valor vazio apaga o campo (desconhecido = vazio, nunca zero)."""
-    cod = _exp_norm_codigo(codigo)
+    cod = normalize(codigo)
     if not cod:
         raise ValueError("Informe o código do produto.")
     with DB_LOCK:
@@ -7435,7 +7435,7 @@ def ficha_salvar(codigo: str, campos: dict[str, Any], ator: str, versao: int | N
 def ficha_importar(codigo: str, campos: dict[str, Any], origem: str) -> list[str]:
     """V20.23: preenche so campo vazio ou de origem com MENOS autoridade; nunca toca campo `admin`.
     Cria a ficha se nao existir; sobe a versao so quando muda algo."""
-    cod = _exp_norm_codigo(codigo)
+    cod = normalize(codigo)
     peso = ANUNCIO_ORIGENS.get(origem)
     if not cod or peso is None or origem == "admin":
         return []
@@ -7542,7 +7542,7 @@ def kits_da_peca(codigo: str) -> list[dict[str, Any]]:
 
 def _ficha_garantir_kit(sku: str, ator: str) -> str:
     """V20.23: garante a ficha do kit com tipo='kit' (cria sem campos; nao mexe nos campos de quem ja existe)."""
-    cod = _exp_norm_codigo(sku)
+    cod = normalize(sku)
     if cod:
         with DB_LOCK:
             DB.execute(
@@ -7669,14 +7669,15 @@ def anuncio_campos_do_item(atributos: Any) -> dict[str, Any]:
     return saida
 
 
-def anuncio_ficha_do_sku(sku: str, catalogo: dict[str, dict[str, Any]] | None = None) -> tuple[str, str]:
-    """V20.23: (codigo da ficha, tipo). Kit (cadastro/prefixo) e "A/B" = o proprio SKU; simples = o codigo; vazio = ''."""
+def anuncio_ficha_do_sku(sku: str, catalogo: dict[str, dict[str, Any]] | None = None,
+                         conhecidos: set[str] | None = None) -> tuple[str, str]:
+    """V20.23: (codigo da ficha = normalize(sku), tipo). Kit (cadastro/prefixo) e "A/B" = o proprio SKU; vazio = ''."""
     texto = str(sku or "").strip()
-    cod = _exp_norm_codigo(texto)
+    cod = normalize(texto)
     if not cod:
         return "", "peca"
     comp = _kit_composicao(texto, catalogo if catalogo is not None else _load_kit_catalog())
-    if comp or len(_separacao_partes(texto, set())) > 1:
+    if comp or len(_separacao_partes(texto, conhecidos or set())) > 1:
         return cod, "kit"
     return cod, "peca"
 
@@ -7709,13 +7710,17 @@ def _anuncio_puxar_conta(conta: str) -> dict[str, Any]:
             return res
         links = _anuncio_links_invertidos()
         catalogo = _load_kit_catalog()
+        try:
+            conhecidos = _separacao_codigos_conhecidos()
+        except Exception:
+            conhecidos = set()
         agora = now_iso()
         a_importar: list[tuple[str, dict[str, Any]]] = []
         with DB_LOCK:
             for mlb, d in detalhes.items():
                 res["lidos"] += 1
                 sku = links.get(mlb) or str(d.get("sku_ml") or "").strip()
-                ficha, tipo = anuncio_ficha_do_sku(sku, catalogo)
+                ficha, tipo = anuncio_ficha_do_sku(sku, catalogo, conhecidos)
                 if not ficha:
                     res["sem_ficha"] += 1
                 preco = d.get("preco")

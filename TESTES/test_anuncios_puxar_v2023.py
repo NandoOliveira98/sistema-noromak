@@ -98,11 +98,12 @@ class PuxarTeste(TesteNoromak):
 
     def test_sku_de_kit_e_ab(self):
         r = self.puxar({"MLB1": item(sku="KIT2-81794"), "MLB2": item(sku="0893600022/0893764272"),
-                        "MLB3": item(sku="")})
-        self.assertEqual(self.linha_("MLB1")["ficha_codigo"], "KIT281794")
-        self.assertEqual(S.ficha_ler("KIT281794")["tipo"], "kit")
-        self.assertEqual(self.linha_("MLB2")["ficha_codigo"], "08936000220893764272")
-        self.assertEqual(S.ficha_ler("08936000220893764272")["tipo"], "kit")
+                        "MLB3": item(sku=""), "MLB4": item(sku=" 6007.003.315.00.8 ")})
+        self.assertEqual(self.linha_("MLB1")["ficha_codigo"], "KIT2-81794")
+        self.assertEqual(S.ficha_ler("KIT2-81794")["tipo"], "kit")
+        self.assertEqual(self.linha_("MLB2")["ficha_codigo"], "0893600022/0893764272")
+        self.assertEqual(S.ficha_ler("0893600022/0893764272")["tipo"], "kit")
+        self.assertIsNotNone(S.kit_composicao(self.linha_("MLB1")["ficha_codigo"]))  # ficha <-> kit
         self.assertEqual(self.linha_("MLB3")["ficha_codigo"], "")
         self.assertEqual(r["contas"]["aracatuba"]["sem_ficha"], 1)
 
@@ -127,3 +128,7 @@ class PuxarTeste(TesteNoromak):
         self.assertEqual(c["altura_cm"], 5)
         self.assertEqual(c["largura_cm"], 10)
         self.assertNotIn("comprimento_cm", c)
+
+    def test_codigo_com_pontuacao_fica_como_esta(self):
+        self.puxar({"MLB4": item(sku=" 6007.003.315.00.8 ")})
+        self.assertEqual(self.linha_("MLB4")["ficha_codigo"], "6007.003.315.00.8")
