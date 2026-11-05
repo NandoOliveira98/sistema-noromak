@@ -108,16 +108,16 @@ class EstoqueBase(TesteNoromak):
 
         self._ps = [mock.patch.object(S, "ml_api_get", side_effect=self.ml.get),
                     mock.patch.object(S, "_ml_promo_http", side_effect=self.ml.promo),
-                    mock.patch.object(S, "_ml_estoque_http", side_effect=self.ml.up_http, create=True),
+                    mock.patch.object(S, "_ml_estoque_http", side_effect=self.ml.up_http),
                     mock.patch.object(S, "ml_access_token", return_value=("tok", "1")),
-                    mock.patch.object(S, "ANUNCIO_ESTOQUE_RELEITURA_ESPERAS", (0, 0), create=True),
+                    mock.patch.object(S, "ANUNCIO_ESTOQUE_RELEITURA_ESPERAS", (0, 0)),
                     mock.patch.object(S, "crm_stock_lookup", side_effect=stock)]
         for p in self._ps:
             p.start()
             self.addCleanup(p.stop)
-        for nome in ("_ANUNCIO_APOLLO_CHAMADAS", "_ANUNCIO_ESTOQUE_ERRO"):
-            if hasattr(S, nome):
-                getattr(S, nome).clear()
+        S._ANUNCIO_APOLLO_CHAMADAS.clear()
+        if hasattr(S, "_ANUNCIO_ESTOQUE_ERRO"):  # Task 4
+            S._ANUNCIO_ESTOQUE_ERRO.clear()
 
 
 class ModoERegistroTeste(EstoqueBase):
@@ -317,6 +317,158 @@ class GravarMLTeste(EstoqueBase):
         with S.DB_LOCK:
             tipos = {r[0] for r in S.DB.execute("SELECT tipo FROM anuncio_amostra_v2024").fetchall()}
         self.assertIn("estoque_put_item", tipos)
+
+
+def fila(linhas):
+    atual, _, _ = S.get_storage("conf_pedidos")
+    S.save_storage("conf_pedidos", atual, json.dumps(linhas), True, actor="teste", actor_role="admin")
+
+
+def kits(lista):
+    atual, _, _ = S.get_storage("conf_kits")
+    S.save_storage("conf_kits", atual, json.dumps(lista), False, actor="admin_teste", actor_role="admin",
+                   allow_completed_reimport=True)
+
+
+class CalculoTeste(EstoqueBase):
+
+    def ler(self, codigo, ara=None, bau=None, filial="aracatuba"):
+        self.apollo[codigo] = {1: ara, 3: bau}
+        S.anuncios_apollo_ler(codigo, filial)
+
+    def item(self, mlb="MLB1", conta="aracatuba"):
+        return next(i for i in S.anuncios_estoque_calcular(conta) if i["anuncio_id"] == mlb)
+
+    def test_peca(self):
+        inserir(ficha="P1", modo="automatico", estoque=2)
+        self.ler("P1", ara=10)
+        it = self.item()
+        self.assertEqual((it["calculado"], it["motivo"], it["muda"]), (10, "", True))
+        self.assertEqual(it["pecas"][0]["disponivel"], 10.0)
+
+    def test_so_automatico_noromak_nao_full(self):
+        inserir(anuncio_id="MLB1", modo="manual")
+        inserir(anuncio_id="MLB2", modo="automatico", controle="alephee")
+        inserir(anuncio_id="MLB3", modo="automatico", logistica="fulfillment")
+        inserir(anuncio_id="MLB4", modo="automatico", removido="x")
+        inserir(anuncio_id="MLB5", modo="automatico")
+        self.assertEqual([i["anuncio_id"] for i in S.anuncios_estoque_calcular("aracatuba")], ["MLB5"])
+
+    def test_pendente_desconta(self):
+        inserir(ficha="6007.003.315.00.8", modo="automatico")
+        self.ler("6007.003.315.00.8", ara=10)
+        fila([linha("PED1", "6007003315008", 3), linha("PED2", "6007.003.315.00.8", 2, Casa="bauru")])
+        it = self.item()
+        self.assertEqual(it["calculado"], 7)  # so a fila de Aracatuba desconta
+        self.assertEqual(it["pecas"][0]["a_baixar"], 3)
+        self.assertEqual(self.apollo_chamadas, ["6007.003.315.00.8"])  # o codigo como no cadastro
+
+    def test_kit_pela_peca_que_da_menos(self):
+        kits([{"id": "KIT_a", "sku_kit": "KITAB", "nome": "Kit", "ativo": True,
+               "componentes": [{"sku": "A1", "quantidade": 2}, {"sku": "B1", "quantidade": 1}]}])
+        inserir(ficha="KITAB", modo="automatico")
+        self.ler("A1", ara=9)
+        self.ler("B1", ara=10)
+        fila([linha("PED1", "B1", 8)])
+        self.assertEqual(self.item()["calculado"], 2)  # A1: 9//2=4; B1: (10-8)=2
+
+    def test_kit_com_peca_sem_leitura_nao_envia(self):
+        """RF5: uma peca sem leitura do Apollo = kit sem numero (nunca zero, nunca so pelas outras)."""
+        kits([{"id": "KIT_a", "sku_kit": "KITAB", "nome": "Kit", "ativo": True,
+               "componentes": [{"sku": "A1", "quantidade": 1}, {"sku": "B1", "quantidade": 1}]}])
+        inserir(ficha="KITAB", modo="automatico")
+        self.ler("A1", ara=9)
+        it = self.item()
+        self.assertIsNone(it["calculado"])
+        self.assertIn("B1", it["motivo"])
+        self.ler("B1", ara=None)  # Apollo respondeu sem a filial
+        it = self.item()
+        self.assertIsNone(it["calculado"])
+        self.assertIn("não respondeu", it["motivo"])
+
+    def test_kit_a_barra_b_e_kitn(self):
+        inserir(anuncio_id="MLB1", ficha="AA1/BB1", modo="automatico")
+        inserir(anuncio_id="MLB2", ficha="KIT3-AA1", modo="automatico")
+        self.ler("AA1", ara=7)
+        self.ler("BB1", ara=4)
+        self.assertEqual(self.item("MLB1")["calculado"], 4)
+        self.assertEqual(self.item("MLB2")["calculado"], 2)
+
+    def test_kit_inativo_nao_envia(self):
+        kits([{"id": "KIT_a", "sku_kit": "KITAB", "nome": "Kit", "ativo": False,
+               "componentes": [{"sku": "A1", "quantidade": 1}, {"sku": "B1", "quantidade": 1}]}])
+        inserir(ficha="KITAB", modo="automatico")
+        self.ler("A1", ara=9)
+        self.ler("B1", ara=9)
+        self.assertIsNone(self.item()["calculado"])
+
+    def test_apollo_sem_resposta(self):
+        """RF2: Apollo sem resposta (erro ou limite) = nao envia, nunca zero."""
+        inserir(ficha="P1", modo="automatico")
+        self.apollo["P1"] = RuntimeError("Apollo fora")
+        S.anuncios_apollo_ler("P1", "aracatuba")
+        it = self.item()
+        self.assertIsNone(it["calculado"])
+        self.assertIn("não respondeu", it["motivo"])
+
+    def test_leitura_antiga_nao_vale(self):
+        inserir(ficha="P1", modo="automatico")
+        self.ler("P1", ara=5)
+        with S.DB_LOCK:
+            S.DB.execute("UPDATE anuncio_apollo_v2026 SET lido_epoch=lido_epoch-?", (S.ANUNCIO_APOLLO_VALIDADE_S + 5,))
+            S.DB.commit()
+        self.assertIsNone(self.item()["calculado"])
+
+    def test_fila_nao_lida(self):
+        inserir(ficha="P1", modo="automatico")
+        self.ler("P1", ara=5)
+        with mock.patch.object(S, "pendentes_por_filial", return_value={"aracatuba": None}):
+            it = self.item()
+        self.assertIsNone(it["calculado"])
+        self.assertIn("fila", it["motivo"])
+
+    def test_bauru_le_a_revenda_3(self):
+        inserir(conta="bauru", anuncio_id="MLB9", ficha="P1", modo="automatico")
+        self.ler("P1", ara=50, bau=4, filial="bauru")
+        self.assertEqual(self.item("MLB9", "bauru")["calculado"], 4)
+
+    def test_rodizio_3_por_minuto(self):
+        for i in range(5):
+            inserir(anuncio_id=f"MLB{i}", ficha=f"P{i}", modo="automatico")
+            self.apollo[f"P{i}"] = {1: 5}
+        lidos = [S.anuncios_apollo_ler_proximo("aracatuba") for _ in range(5)]
+        self.assertEqual(lidos[3:], [None, None])
+        self.assertEqual(len(set(lidos[:3])), 3)  # nunca lido primeiro: tres codigos diferentes
+        self.assertEqual(len(self.apollo_chamadas), 3)
+
+    def test_rodizio_prioridade(self):
+        for cod in ("PA", "PB", "PC"):
+            inserir(anuncio_id="MLB" + cod, ficha=cod, modo="automatico")
+            self.apollo[cod] = {1: 50}
+        self.apollo["PB"] = {1: 2}
+        for cod in ("PA", "PB", "PC"):
+            S.anuncios_apollo_ler(cod, "aracatuba")
+        with S.DB_LOCK:  # PA lido ha 1 h (mais antigo); PB baixo lido ha 20 min; PC agora
+            S.DB.execute("UPDATE anuncio_apollo_v2026 SET lido_epoch=? WHERE codigo='PA'", (int(time.time()) - 3600,))
+            S.DB.execute("UPDATE anuncio_apollo_v2026 SET lido_epoch=? WHERE codigo='PB'", (int(time.time()) - 1200,))
+            S.DB.commit()
+        inserir(anuncio_id="MLBPN", ficha="PN", modo="automatico")  # nunca lido
+        self.apollo["PN"] = {1: 9}
+        self.assertEqual(S.anuncios_apollo_ler_proximo("aracatuba"), "PN")
+        self.assertEqual(S.anuncios_apollo_ler_proximo("aracatuba"), "PB")
+        self.assertEqual(S.anuncios_apollo_ler_proximo("aracatuba"), "PA")
+
+    def test_rodizio_so_anuncios_em_automatico(self):
+        inserir(ficha="P1", modo="manual")
+        self.assertIsNone(S.anuncios_apollo_ler_proximo("aracatuba"))
+        self.assertEqual(self.apollo_chamadas, [])
+
+    def test_limite_do_apollo_nao_grava(self):
+        inserir(ficha="P1", modo="automatico")
+        self.apollo["P1"] = S.CrmLimiteAtingido(10)
+        self.assertIsNone(S.anuncios_apollo_ler_proximo("aracatuba"))
+        with S.DB_LOCK:
+            self.assertIsNone(S.DB.execute("SELECT 1 FROM anuncio_apollo_v2026").fetchone())
 
 
 if __name__ == "__main__":

@@ -32804,6 +32804,206 @@ def _ml_estoque_gravar_na_casa(mlb: str, qtd: int) -> dict[str, Any]:
     return saida
 
 
+# V20.26: calculo do Automatico. Apollo lido em rodizio (como o TikTok, V19.64) e guardado por (codigo, filial);
+# o calculo so usa as leituras guardadas (nunca chama o Apollo). Desconhecido = None = nao envia.
+ANUNCIO_APOLLO_POR_MINUTO = 3          # das 20/min do Apollo, divididas com Faturamento, Separacao e TikTok
+ANUNCIO_APOLLO_VALIDADE_S = 6 * 3600   # leitura mais velha que isso nao vale (nao envia)
+ANUNCIO_ESTOQUE_BAIXO = 3
+_ANUNCIO_APOLLO_CHAMADAS: list[float] = []
+_ANUNCIO_APOLLO_LOCK = threading.Lock()
+
+
+def _anuncio_estoque_pecas(ficha_codigo: Any, catalogo: dict[str, dict[str, Any]],
+                           conhecidos: Any) -> tuple[list[dict[str, Any]], str]:
+    """V20.26: pecas que o anuncio consome [{codigo, chave, quantidade}] ou ([], motivo).
+    Kit = Cadastro de Kits / KITn-X; "A/B" = uma de cada (regra da V19.48, `_separacao_partes`); peca = ela mesma.
+    `codigo` = como vai ao Apollo (normalize); `chave` = _exp_norm_codigo, a chave da fila e do kit_da_para_montar."""
+    cod = normalize(ficha_codigo)
+    if not cod:
+        return [], "anúncio sem produto (SKU)"
+    comp = _kit_composicao(cod, catalogo)
+    if comp:
+        if not comp.get("ativo", True):
+            return [], "kit inativo no Cadastro de Kits"
+        partes = [(c["sku"], int(c["quantidade"])) for c in comp["componentes"]]
+    else:
+        partes = _separacao_partes(cod, conhecidos() if "/" in cod else set())
+    pecas: dict[str, dict[str, Any]] = {}
+    for codigo, qtd in partes:
+        chave = _exp_norm_codigo(codigo)
+        if not chave or int(qtd or 0) <= 0:
+            continue
+        p = pecas.setdefault(chave, {"codigo": normalize(codigo), "chave": chave, "quantidade": 0})
+        p["quantidade"] += int(qtd)
+    if not pecas:
+        return [], "SKU sem código do Apollo"
+    return list(pecas.values()), ""
+
+
+def _anuncios_automatico_linhas(conta: str, anuncio_id: str = "") -> list[dict[str, Any]]:
+    """V20.26: anuncios da conta em Automatico que o Noromak pode mexer. Chamar SOB o DB_LOCK."""
+    sql = ("SELECT * FROM anuncio_canal_v2023 WHERE canal='ml' AND conta=? AND estoque_modo='automatico' "
+           "AND controle='noromak' AND COALESCE(removido_em,'')='' AND COALESCE(logistica,'')<>'fulfillment'")
+    args: tuple[Any, ...] = (conta,)
+    if anuncio_id:
+        sql += " AND anuncio_id=?"
+        args += (anuncio_id,)
+    return [dict(r) for r in DB.execute(sql + " ORDER BY anuncio_id", args).fetchall()]
+
+
+def _anuncios_conhecidos_lazy() -> Any:
+    guardado: list[set[str]] = []
+
+    def ler() -> set[str]:
+        if not guardado:
+            try:
+                guardado.append(_separacao_codigos_conhecidos())
+            except Exception:
+                guardado.append(set())
+        return guardado[0]
+    return ler
+
+
+def _anuncios_codigos_automatico(filial: str) -> dict[str, str]:
+    """V20.26: codigos do Apollo (normalize) das pecas dos anuncios em Automatico da filial."""
+    with DB_LOCK:
+        linhas = _anuncios_automatico_linhas(filial)
+    if not linhas:
+        return {}
+    catalogo = _load_kit_catalog()
+    conhecidos = _anuncios_conhecidos_lazy()
+    codigos: dict[str, str] = {}
+    for r in linhas:
+        pecas, _ = _anuncio_estoque_pecas(r.get("ficha_codigo"), catalogo, conhecidos)
+        for p in pecas:
+            codigos.setdefault(p["codigo"], p["codigo"])
+    return codigos
+
+
+def anuncios_apollo_ler(codigo: str, filial: str) -> bool:
+    """V20.26: uma consulta ao Apollo (limite compartilhado; CrmLimiteAtingido sobe). Sem resposta = None guardado
+    (o anuncio nao recebe envio; nunca zero). Devolve True quando a leitura mudou."""
+    revenda = ANUNCIO_REVENDA[filial]
+    cod = normalize(codigo)
+    disponivel: float | None = None
+    try:
+        disponivel = _apollo_da_revenda(crm_stock_lookup(cod, operador="anuncios-estoque", wait_seconds=0), revenda)
+    except CrmLimiteAtingido:
+        raise
+    except Exception:
+        disponivel = None
+    with DB_LOCK:
+        antes = DB.execute("SELECT disponivel, respondeu FROM anuncio_apollo_v2026 WHERE codigo=? AND filial=?",
+                           (cod, filial)).fetchone()
+        DB.execute("INSERT OR REPLACE INTO anuncio_apollo_v2026(codigo,filial,disponivel,respondeu,lido_em,lido_epoch) "
+                   "VALUES(?,?,?,?,?,?)", (cod, filial, disponivel, 1 if disponivel is not None else 0, now_iso(),
+                                           int(time.time())))
+        DB.commit()
+    if antes is None:
+        return True
+    return (antes["disponivel"] != disponivel) or (int(antes["respondeu"] or 0) != (1 if disponivel is not None else 0))
+
+
+def anuncios_apollo_ler_proximo(filial: str, mudancas: set[str] | None = None) -> str | None:
+    """V20.26: uma volta do rodizio (no maximo ANUNCIO_APOLLO_POR_MINUTO por minuto, todas as filiais juntas).
+    Ordem: nunca lido > estoque <= ANUNCIO_ESTOQUE_BAIXO lido ha mais de 10 min > o mais antigo.
+    So os codigos dos anuncios em Automatico da filial. `mudancas` recebe a filial quando a leitura mudou."""
+    codigos = _anuncios_codigos_automatico(filial)
+    if not codigos:
+        return None
+    with DB_LOCK:
+        lidos = {str(r["codigo"]): dict(r) for r in
+                 DB.execute("SELECT * FROM anuncio_apollo_v2026 WHERE filial=?", (filial,)).fetchall()}
+    epoch = int(time.time())
+
+    def prioridade(cod: str) -> tuple[int, int]:
+        r = lidos.get(cod)
+        if not r:
+            return (0, 0)
+        idade = epoch - int(r["lido_epoch"] or 0)
+        baixo = r["disponivel"] is not None and float(r["disponivel"]) <= ANUNCIO_ESTOQUE_BAIXO
+        if baixo and idade > 600:
+            return (1, int(r["lido_epoch"] or 0))
+        return (2, int(r["lido_epoch"] or 0))
+
+    escolhido = min(sorted(codigos), key=prioridade)
+    with _ANUNCIO_APOLLO_LOCK:
+        agora = time.monotonic()
+        _ANUNCIO_APOLLO_CHAMADAS[:] = [t for t in _ANUNCIO_APOLLO_CHAMADAS if agora - t < 60]
+        if len(_ANUNCIO_APOLLO_CHAMADAS) >= ANUNCIO_APOLLO_POR_MINUTO:
+            return None
+        _ANUNCIO_APOLLO_CHAMADAS.append(agora)
+    try:
+        mudou = anuncios_apollo_ler(codigos[escolhido], filial)
+    except CrmLimiteAtingido:
+        return None  # o limite do Apollo esta com as outras telas: fica para a proxima volta
+    if mudou and mudancas is not None:
+        mudancas.add(filial)
+    return escolhido
+
+
+def _anuncios_estoque_calcular(conta: str, anuncio_id: str = "") -> tuple[list[dict[str, Any]], Any]:
+    """V20.26: (itens, versao da fila usada). A versao e lida ANTES da fila: se mudar no meio, a conferida antes
+    do envio e diferente e o anuncio e recalculado (RF1)."""
+    conta = ml_casa_valida(conta)
+    with DB_LOCK:
+        versao = _ml_versoes_storage("conf_pedidos", PENDING_ORDER_DELETE_KEY_V1766)
+        linhas = _anuncios_automatico_linhas(conta, anuncio_id)
+        lidos = {str(r["codigo"]): dict(r) for r in
+                 DB.execute("SELECT * FROM anuncio_apollo_v2026 WHERE filial=?", (conta,)).fetchall()} if linhas else {}
+    if not linhas:
+        return [], versao
+    pend = pendentes_por_filial((conta,)).get(conta)
+    catalogo = _load_kit_catalog()
+    conhecidos = _anuncios_conhecidos_lazy()
+    epoch = int(time.time())
+    itens: list[dict[str, Any]] = []
+    for r in linhas:
+        pecas, motivo = _anuncio_estoque_pecas(r.get("ficha_codigo"), catalogo, conhecidos)
+        if not motivo and pend is None:
+            motivo = "fila de pedidos não lida"
+        disp: dict[str, float | None] = {}
+        saida_pecas = []
+        for p in pecas:
+            lido = lidos.get(p["codigo"])
+            valor: float | None = None
+            if lido is None:
+                motivo = motivo or f"aguardando a leitura do Apollo ({p['codigo']})"
+            elif not int(lido.get("respondeu") or 0) or lido.get("disponivel") is None:
+                motivo = motivo or f"o Apollo não respondeu ({p['codigo']})"
+            elif epoch - int(lido.get("lido_epoch") or 0) > ANUNCIO_APOLLO_VALIDADE_S:
+                motivo = motivo or f"leitura do Apollo antiga ({p['codigo']})"
+            else:
+                valor = float(lido["disponivel"])
+            disp[p["chave"]] = valor
+            saida_pecas.append({"codigo": p["codigo"], "quantidade": p["quantidade"], "disponivel": valor,
+                                "a_baixar": None if pend is None else int(pend.get(p["chave"], 0) or 0),
+                                "lido_em": str((lido or {}).get("lido_em") or "")})
+        calculado = None
+        if not motivo:
+            calculado = kit_da_para_montar([{"sku": p["chave"], "quantidade": p["quantidade"]} for p in pecas],
+                                           disp, pend or {})
+            if calculado is None:
+                motivo = "sem leitura do Apollo"
+            else:
+                calculado = min(int(calculado), ANUNCIO_ESTOQUE_MAX)
+        referencia = r.get("estoque") if r.get("estoque") is not None else r.get("estoque_enviado")
+        itens.append({"anuncio_id": str(r["anuncio_id"]), "conta": conta, "ficha": str(r.get("ficha_codigo") or ""),
+                      "titulo": str(r.get("titulo") or ""), "modo": "automatico",
+                      "atual_ml": r.get("estoque"), "estoque_enviado": r.get("estoque_enviado"),
+                      "estoque_enviado_em": str(r.get("estoque_enviado_em") or ""),
+                      "estoque_calculado_antes": r.get("estoque_calculado"),
+                      "calculado": calculado, "motivo": motivo, "pecas": saida_pecas, "referencia": referencia,
+                      "muda": calculado is not None and calculado != referencia})
+    return itens, versao
+
+
+def anuncios_estoque_calcular(conta: str) -> list[dict[str, Any]]:
+    """V20.26: `{anuncio_id, ficha, atual_ml, calculado, motivo, pecas, ...}` dos anuncios em Automatico da conta.
+    `calculado` None = nao envia (motivo diz por que)."""
+    return _anuncios_estoque_calcular(conta)[0]
+
+
 PROMO_TAXAS_DO_PRECIFICADOR ="taxas do Precificador (o Mercado Livre não respondeu)"
 
 
