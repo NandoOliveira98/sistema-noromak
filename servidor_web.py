@@ -2701,6 +2701,7 @@ def init_db() -> None:
     ensure_shopee_promo_schema()  # V19.49
     ensure_magalu_promo_schema()  # V19.55
     ensure_tiktok_estoque_schema()  # V19.64
+    ensure_anuncios_schema()  # V20.23
     ensure_ml_billing_credito_schema()
     ensure_ml_billing_data_schema()
     ensure_cliente_fiscal_linx_api_schema()  # V18.60
@@ -7306,6 +7307,167 @@ def ensure_tiktok_estoque_schema() -> None:
             """
         )
         DB.commit()
+
+
+# V20.23: plataforma de anuncios, fase 1 - ficha do produto (um registro por codigo, com a origem de cada campo).
+ANUNCIO_CAMPOS_FICHA = ("nome", "marca", "modelo", "ean", "ncm", "peso_g", "altura_cm", "largura_cm",
+                        "comprimento_cm", "descricao", "categoria_ml")
+ANUNCIO_ORIGENS = {"admin": 1, "alephee": 2, "anuncio_ml": 3, "apollo": 4}  # menor = mais autoridade
+
+
+class FichaConflito(Exception):
+    """V20.23: a ficha mudou desde que a tela a leu; `atual` e a ficha gravada."""
+
+    def __init__(self, atual: dict[str, Any]):
+        super().__init__("A ficha foi alterada por outra pessoa. Recarregue.")
+        self.atual = atual
+
+
+def ensure_anuncios_schema() -> None:
+    with DB_LOCK:
+        DB.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS anuncio_ficha_v2023 (
+                codigo TEXT PRIMARY KEY,
+                tipo TEXT NOT NULL DEFAULT 'peca',
+                campos_json TEXT NOT NULL DEFAULT '{}',
+                origem_json TEXT NOT NULL DEFAULT '{}',
+                atributos_json TEXT NOT NULL DEFAULT '{}',
+                versao INTEGER NOT NULL DEFAULT 1,
+                atualizado_em TEXT NOT NULL DEFAULT '',
+                atualizado_por TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS anuncio_canal_v2023 (
+                canal TEXT NOT NULL,
+                conta TEXT NOT NULL,
+                anuncio_id TEXT NOT NULL,
+                ficha_codigo TEXT NOT NULL DEFAULT '',
+                sku_anuncio TEXT NOT NULL DEFAULT '',
+                controle TEXT NOT NULL DEFAULT 'alephee',
+                titulo TEXT NOT NULL DEFAULT '',
+                preco REAL,
+                estoque INTEGER,
+                status TEXT NOT NULL DEFAULT '',
+                tipo_anuncio TEXT NOT NULL DEFAULT '',
+                categoria TEXT NOT NULL DEFAULT '',
+                logistica TEXT NOT NULL DEFAULT '',
+                user_product_id TEXT NOT NULL DEFAULT '',
+                lido_em TEXT NOT NULL DEFAULT '',
+                removido_em TEXT NOT NULL DEFAULT '',
+                removido_por TEXT NOT NULL DEFAULT '',
+                controle_em TEXT NOT NULL DEFAULT '',
+                controle_por TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (canal, conta, anuncio_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_anuncio_canal_ficha ON anuncio_canal_v2023(ficha_codigo);
+            """
+        )
+        DB.commit()
+
+
+def _ficha_vazio(valor: Any) -> bool:
+    return valor is None or (isinstance(valor, str) and not valor.strip())
+
+
+def _ficha_de_linha(row: Any) -> dict[str, Any]:
+    def _j(texto: Any) -> dict[str, Any]:
+        try:
+            v = json.loads(texto or "{}")
+        except (TypeError, ValueError):
+            return {}
+        return v if isinstance(v, dict) else {}
+
+    return {
+        "codigo": row["codigo"], "tipo": row["tipo"],
+        "campos": _j(row["campos_json"]), "origem": _j(row["origem_json"]),
+        "atributos": _j(row["atributos_json"]), "versao": int(row["versao"]),
+        "atualizado_em": row["atualizado_em"], "atualizado_por": row["atualizado_por"],
+    }
+
+
+def _ficha_ler_sem_lock(cod: str) -> dict[str, Any] | None:
+    row = DB.execute("SELECT * FROM anuncio_ficha_v2023 WHERE codigo=?", (cod,)).fetchone()
+    return _ficha_de_linha(row) if row else None
+
+
+def ficha_ler(codigo: str) -> dict[str, Any] | None:
+    cod = _exp_norm_codigo(codigo)
+    if not cod:
+        return None
+    with DB_LOCK:
+        return _ficha_ler_sem_lock(cod)
+
+
+def ficha_salvar(codigo: str, campos: dict[str, Any], ator: str, versao: int | None) -> dict[str, Any]:
+    """V20.23: grava como origem `admin`. `versao` None = sem conferencia (1o save); diferente da gravada = FichaConflito.
+    Valor vazio apaga o campo (desconhecido = vazio, nunca zero)."""
+    cod = _exp_norm_codigo(codigo)
+    if not cod:
+        raise ValueError("Informe o código do produto.")
+    with DB_LOCK:
+        atual = _ficha_ler_sem_lock(cod)
+        if atual is not None and versao is not None and int(versao) != atual["versao"]:
+            raise FichaConflito(atual)
+        cs = dict(atual["campos"]) if atual else {}
+        os_ = dict(atual["origem"]) if atual else {}
+        for nome, valor in (campos or {}).items():
+            if nome not in ANUNCIO_CAMPOS_FICHA:
+                continue
+            if _ficha_vazio(valor):
+                cs.pop(nome, None)
+                os_.pop(nome, None)
+            else:
+                cs[nome] = valor.strip() if isinstance(valor, str) else valor
+                os_[nome] = "admin"
+        nova = (atual["versao"] + 1) if atual else 1
+        DB.execute(
+            "INSERT INTO anuncio_ficha_v2023(codigo,campos_json,origem_json,versao,atualizado_em,atualizado_por) "
+            "VALUES(?,?,?,?,?,?) ON CONFLICT(codigo) DO UPDATE SET campos_json=excluded.campos_json, "
+            "origem_json=excluded.origem_json, versao=excluded.versao, atualizado_em=excluded.atualizado_em, "
+            "atualizado_por=excluded.atualizado_por",
+            (cod, json.dumps(cs, ensure_ascii=False), json.dumps(os_, ensure_ascii=False), nova, now_iso(), str(ator or "")),
+        )
+        DB.commit()
+        return _ficha_ler_sem_lock(cod) or {}
+
+
+def ficha_importar(codigo: str, campos: dict[str, Any], origem: str) -> list[str]:
+    """V20.23: preenche so campo vazio ou de origem com MENOS autoridade; nunca toca campo `admin`.
+    Cria a ficha se nao existir; sobe a versao so quando muda algo."""
+    cod = _exp_norm_codigo(codigo)
+    peso = ANUNCIO_ORIGENS.get(origem)
+    if not cod or peso is None or origem == "admin":
+        return []
+    novos = {n: v for n, v in (campos or {}).items() if n in ANUNCIO_CAMPOS_FICHA and not _ficha_vazio(v)}
+    if not novos:
+        return []
+    with DB_LOCK:
+        atual = _ficha_ler_sem_lock(cod)
+        cs = dict(atual["campos"]) if atual else {}
+        os_ = dict(atual["origem"]) if atual else {}
+        alterados: list[str] = []
+        for nome, valor in novos.items():
+            valor = valor.strip() if isinstance(valor, str) else valor
+            dono = os_.get(nome)
+            if nome in cs and dono in ANUNCIO_ORIGENS and ANUNCIO_ORIGENS[dono] <= peso:
+                continue  # autoridade igual ou maior ja preencheu
+            if cs.get(nome) == valor and dono == origem:
+                continue
+            cs[nome] = valor
+            os_[nome] = origem
+            alterados.append(nome)
+        if not alterados:
+            return []
+        nova = (atual["versao"] + 1) if atual else 1
+        DB.execute(
+            "INSERT INTO anuncio_ficha_v2023(codigo,campos_json,origem_json,versao,atualizado_em,atualizado_por) "
+            "VALUES(?,?,?,?,?,?) ON CONFLICT(codigo) DO UPDATE SET campos_json=excluded.campos_json, "
+            "origem_json=excluded.origem_json, versao=excluded.versao, atualizado_em=excluded.atualizado_em, "
+            "atualizado_por=excluded.atualizado_por",
+            (cod, json.dumps(cs, ensure_ascii=False), json.dumps(os_, ensure_ascii=False), nova, now_iso(), "importacao:" + origem),
+        )
+        DB.commit()
+        return alterados
 
 
 def _tiktok_config_ler(chave: str) -> str | None:
