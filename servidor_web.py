@@ -7821,7 +7821,7 @@ def _anuncio_gravar_lote(conta: str, lote: list[dict[str, Any]], res: dict[str, 
         parcial = {"novos": 0, "atualizados": 0, "sem_ficha": 0}
         try:
             for r in lote:
-                atual = DB.execute("SELECT removido_em, ficha_codigo FROM anuncio_canal_v2023 WHERE canal='ml' AND conta=? "
+                atual = DB.execute("SELECT removido_em, ficha_codigo, sku_anuncio FROM anuncio_canal_v2023 WHERE canal='ml' AND conta=? "
                                    "AND anuncio_id=?", (conta, r["mlb"])).fetchone()
                 if atual is not None and str(atual["removido_em"] or ""):
                     continue  # removido pelo ADMIN: nao e atualizado nem recriado
