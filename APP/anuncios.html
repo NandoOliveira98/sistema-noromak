@@ -10,7 +10,7 @@
      Ver = módulo admin; gravar = só perfil Admin (Supervisor e Consulta não veem os botões de gravar).
      Nada desta tela grava no ML, Shopee, Magalu, TikTok nem no Apollo: só a ficha, o Cadastro de Kits e quem controla.
      Salvar a ficha manda só o campo que mudou + a versão (409 = outra pessoa alterou: o digitado fica).
-     GET /api/anuncios, GET /api/anuncios/ficha, POST /api/anuncios/{ficha,kit,puxar,controle,remover,reincluir}.
+     GET /api/anuncios, GET /api/anuncios/ficha, POST /api/anuncios/{ficha,kit,puxar,controle,remover,reincluir}. V20.24: puxar em segundo plano (GET /api/anuncios/puxar/situacao) e POST /api/anuncios/puxar/um.
      V20.24: aba Fotos (computador e Estúdio de Imagens) e "Criar anúncio" no ML em 7 passos, na ordem do dono; cada
      passo grava o rascunho (com a versão) e só libera o seguinte. A ÚNICA escrita no ML é o "Publicar" (perfil Admin):
      erro de rede/504 no Publicar NUNCA repete — a tela relê o rascunho; "incerto" pede para conferir no ML. -->
@@ -57,6 +57,9 @@ tr.clica{cursor:pointer}
 .qtd{width:72px;font:inherit;font-size:13px;text-align:right;padding:5px 8px;border:1px solid var(--nk-line);border-radius:7px;background:var(--nk-tile);color:var(--nk-ink)}
 .qtd:focus,.skuin:focus{outline:0;border-color:var(--nk-pri);box-shadow:0 0 0 3px var(--nk-foco)}
 .skuin{width:170px;font:inherit;font-size:13px;padding:5px 8px;border:1px solid var(--nk-line);border-radius:7px;background:var(--nk-tile);color:var(--nk-ink)}
+.puxum{display:inline-flex;gap:4px;align-items:center}
+.puxum input{font:inherit;font-size:13px;width:210px;max-width:100%;border:1px solid var(--nk-line);background:var(--nk-tile);color:var(--nk-ink);border-radius:8px;padding:7px 10px}
+.puxum input:focus{outline:0;border-color:var(--nk-pri);box-shadow:0 0 0 3px var(--nk-foco)}
 .casa-sel{display:inline-flex;border:1px solid var(--nk-line);border-radius:999px;overflow:hidden;background:var(--nk-canvas)}
 .casa-sel button{border:0;background:transparent;color:var(--nk-ink2);padding:6px 14px;font:inherit;font-size:13px;cursor:pointer}
 .casa-sel button.on{background:var(--nk-head);color:var(--nk-canvas);font-weight:600}
@@ -111,6 +114,7 @@ tr.atual td{background:var(--nk-warn-bg)}
     </div>
     <div class="nk-acoes" id="acoes"></div>
   </div>
+  <div class="nk-aviso info" id="puxStatus" role="status" aria-live="polite" hidden style="margin-bottom:14px"></div>
   <div id="vista"><div class="vazio">Carregando…</div></div>
 </main>
 <script>
@@ -204,7 +208,10 @@ window.addEventListener("beforeunload", e => { if (fichaSuja() || kitSujo() || c
 
 // ---------------------------------------------------------------- lista
 function acoesLista() {
-  $("acoes").innerHTML = seletorCasa() + (PODE ? `<button class="nk-btn pri" id="btnPuxar" onclick="puxar()"><i class=nk-i-download></i> Puxar anúncios do ML</button><button class="nk-btn" onclick="novoProduto()">+ Novo produto</button>` : "")
+  // V20.24: "Puxar anúncios do ML" roda em segundo plano (PUX); "Puxar um" lê só o anúncio colado (MLB ou link)
+  $("acoes").innerHTML = seletorCasa() + (PODE ? `<button class="nk-btn pri" id="btnPuxar" onclick="puxar()" ${PUX.rodando ? "disabled" : ""}><i class=nk-i-download></i> ${PUX.rodando ? "Puxando…" : "Puxar anúncios do ML"}</button>
+      <span class="puxum"><input type="text" id="puxUmTexto" placeholder="MLB ou link do anúncio" aria-label="MLB ou link do anúncio" onkeydown="if(event.key==='Enter')puxarUm()"><button class="nk-btn" id="btnPuxarUm" onclick="puxarUm()">Puxar um</button></span>
+      <button class="nk-btn" onclick="novoProduto()">+ Novo produto</button>` : "")
     + `<button class="nk-btn" onclick="carregarLista()"><i class=nk-i-refresh></i> Atualizar</button>`;
 }
 async function carregarLista() {
@@ -292,18 +299,81 @@ function linkAnuncio(a) {
   }
   return `<span class="mono">${esc(id)}</span>`;
 }
+// V20.24: a puxada em massa roda no servidor em segundo plano; a tela acompanha a cada 3 s (também ao abrir a página
+// com uma puxada em andamento, inclusive de outra pessoa).
+let PUX = {rodando: false, timer: null};
+function resumoPuxada(s) {
+  const r = s.resultado || {};
+  let alerta = !s.ok || !!s.erro;
+  const partes = Object.entries(r).map(([c, x]) => {
+    const nome = CONTA[c] || c;
+    const gravados = (x.novos || 0) + (x.atualizados || 0);
+    if (x.erro) {
+      alerta = true;
+      return gravados
+        ? `${nome}: parou no meio (${x.erro}) — os ${gravados} anúncios já gravados ficaram; puxe de novo para completar`
+        : `${nome}: não respondeu (${x.erro}) — nada dela foi alterado`;
+    }
+    if (x.parcial) alerta = true;
+    return `${nome}: ${x.lidos} lidos, ${x.novos} novos, ${x.atualizados} atualizados, ${x.sem_ficha} sem código`
+      + (x.parcial ? ` — atenção: ${x.parcial} sem detalhe do ML (não atualizados; puxe de novo)` : "");
+  });
+  if (s.erro) partes.push(`A puxada parou: ${s.erro}. O que já tinha sido gravado ficou.`);
+  return {texto: partes.join(" · ") || "Nenhuma conta do ML conectada.", alerta};
+}
+function mostrarPuxando(s) {
+  const el = $("puxStatus"); if (!el) return;
+  if (!s || !s.rodando) { el.hidden = true; el.textContent = ""; return; }
+  const feitas = Object.keys(s.resultado || {}).map(c => CONTA[c] || c);
+  el.hidden = false;
+  el.textContent = (s.conta_atual ? `Puxando ${CONTA[s.conta_atual] || s.conta_atual}…` : "Puxando os anúncios do ML…")
+    + (feitas.length ? ` (${feitas.join(", ")} pronta)` : "")
+    + ` — iniciado ${quando(s.iniciado_em)}${s.iniciado_por ? " por " + s.iniciado_por : ""}. Pode continuar usando a tela.`;
+}
+async function acompanharPuxada(avisarNoFim) {
+  clearTimeout(PUX.timer);
+  let s;
+  try { s = await api("/api/anuncios/puxar/situacao"); }
+  catch (e) { PUX.timer = setTimeout(() => acompanharPuxada(avisarNoFim), 3000); return; }  // rede: tenta de novo
+  const estava = PUX.rodando;
+  PUX.rodando = !!s.rodando;
+  mostrarPuxando(s);
+  if (estava !== PUX.rodando && !F) acoesLista();
+  if (s.rodando) { PUX.timer = setTimeout(() => acompanharPuxada(true), 3000); return; }
+  if (avisarNoFim && s.fim_em) {
+    const r = resumoPuxada(s);
+    nkToast(r.texto, r.alerta ? "aviso" : "ok", {duracao: r.alerta ? 20000 : 12000});
+    if (!F) { acoesLista(); carregarLista(); }
+  }
+}
 async function puxar() {
-  if (!await nkConfirmar("Puxar os anúncios do Mercado Livre?\nLê os anúncios das duas contas (Araçatuba e Bauru) e liga cada um à ficha do produto. Só leitura: nada é alterado no ML. Leva alguns minutos.", {ok: "Puxar", perigo: false})) return;
-  const b = $("btnPuxar"); if (b) { b.disabled = true; b.textContent = "Puxando… (alguns minutos)"; }
+  if (!await nkConfirmar("Puxar os anúncios do Mercado Livre?\nLê os anúncios das duas contas (Araçatuba e Bauru) e liga cada um à ficha do produto. Só leitura: nada é alterado no ML. Leva alguns minutos e roda em segundo plano.", {ok: "Puxar", perigo: false})) return;
   try {
     const r = await api("/api/anuncios/puxar", {});
-    const partes = Object.entries(r.contas || {}).map(([c, x]) => x.erro
-      ? `${CONTA[c] || c}: não respondeu (${x.erro}) — nada dela foi alterado`
-      : `${CONTA[c] || c}: ${x.lidos} lidos, ${x.novos} novos, ${x.atualizados} atualizados, ${x.sem_ficha} sem código${x.parcial ? `, ${x.parcial} sem detalhe` : ""}`);
-    nkToast(partes.join(" · ") || "Nenhuma conta do ML conectada.", r.ok ? "ok" : "aviso", {duracao: 12000});
-  } catch (e) { nkToast(e.message, "erro"); }
-  acoesLista();
-  carregarLista();
+    PUX.rodando = true; acoesLista(); mostrarPuxando(r.situacao || {rodando: true});
+  } catch (e) {
+    nkToast(e.message, e.status === 409 ? "aviso" : "erro");
+    if (e.status !== 409) return;
+  }
+  acompanharPuxada(true);
+}
+async function puxarUm() {
+  const campo = $("puxUmTexto"), b = $("btnPuxarUm");
+  const texto = (campo ? campo.value : "").trim();
+  if (!texto) { nkToast("Cole o MLB ou o link do anúncio.", "aviso"); if (campo) campo.focus(); return; }
+  if (b) { b.disabled = true; b.textContent = "Lendo…"; }
+  try {
+    const r = await api("/api/anuncios/puxar/um", {mlb_ou_link: texto});
+    if (campo) campo.value = "";
+    const nome = CONTA[r.conta] || r.conta;
+    if (r.removido) nkToast(`${r.mlb} (${nome}) foi removido da lista pelo Admin: não foi atualizado. Use “Reincluir” para trazer de volta.`, "aviso", {duracao: 12000});
+    else nkToast(`${r.mlb} (${nome}) ${r.novo ? "incluído" : "atualizado"}${r.ficha_codigo ? " — ficha " + r.ficha_codigo : " — sem código (aba Sem ficha)"}.`, "ok", {duracao: 9000});
+    if (r.ficha_codigo) { irPara({codigo: r.ficha_codigo, aba: "anuncios"}); return; }
+    L.aba = "sem_ficha"; L.filtro = "";
+    if (codigoDaUrl()) irPara({}); else { desenharLista(); carregarLista(); }
+    return;
+  } catch (e) { nkToast(e.message, e.status === 400 ? "aviso" : "erro", {duracao: 10000}); }
+  if (b) { b.disabled = false; b.textContent = "Puxar um"; }
 }
 
 // ---------------------------------------------------------------- ficha
@@ -1492,6 +1562,7 @@ async function liberarIncerto(achou) {
   // V20.23: gravar = só perfil Admin; Supervisor (módulo admin) e Consulta só veem
   PODE = !!EU && EU.app_role === "admin" && !EU.somente_leitura;
   rota();
+  acompanharPuxada(false);  // V20.24: puxada já em andamento (desta ou de outra aba) aparece ao abrir
 })();
 </script>
 </body>

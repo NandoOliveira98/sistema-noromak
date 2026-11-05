@@ -7816,13 +7816,15 @@ ANUNCIO_LOTE_GRAVACAO = 100  # V20.23: anuncios por vez sob o DB_LOCK (a lista t
 def _anuncio_gravar_lote(conta: str, lote: list[dict[str, Any]], res: dict[str, Any]) -> None:
     """V20.23: um DB_LOCK e um commit por lote; erro no meio desfaz o lote inteiro (conexao compartilhada)."""
     with DB_LOCK:
-        parcial = {"novos": 0, "atualizados": 0}
+        parcial = {"novos": 0, "atualizados": 0, "sem_ficha": 0}
         try:
             for r in lote:
-                atual = DB.execute("SELECT removido_em FROM anuncio_canal_v2023 WHERE canal='ml' AND conta=? AND anuncio_id=?",
-                                   (conta, r["mlb"])).fetchone()
+                atual = DB.execute("SELECT removido_em, ficha_codigo FROM anuncio_canal_v2023 WHERE canal='ml' AND conta=? "
+                                   "AND anuncio_id=?", (conta, r["mlb"])).fetchone()
                 if atual is not None and str(atual["removido_em"] or ""):
                     continue  # removido pelo ADMIN: nao e atualizado nem recriado
+                if not r["ficha"] and not (atual is not None and str(atual["ficha_codigo"] or "")):
+                    parcial["sem_ficha"] += 1  # V20.24: conta o que fica sem ficha depois de gravar
                 v = r["valores"]
                 if atual is None:
                     DB.execute(
@@ -7850,6 +7852,7 @@ def _anuncio_gravar_lote(conta: str, lote: list[dict[str, Any]], res: dict[str, 
             raise
         res["novos"] += parcial["novos"]
         res["atualizados"] += parcial["atualizados"]
+        res["sem_ficha"] = int(res.get("sem_ficha") or 0) + parcial["sem_ficha"]
 
 
 def _anuncio_puxar_conta(conta: str) -> dict[str, Any]:
@@ -7865,49 +7868,192 @@ def _anuncio_puxar_conta(conta: str) -> dict[str, Any]:
             res["erro"] = "O Mercado Livre não respondeu (detalhes dos anúncios vazios)."
             return res
         res["parcial"] = max(0, len(set(mlbs) - set(detalhes)))  # listados e nao detalhados: so informa
-        links = _anuncio_links_invertidos()
-        catalogo = _load_kit_catalog()
-        try:
-            conhecidos = _separacao_codigos_conhecidos()
-        except Exception:
-            conhecidos = set()
-        agora = now_iso()
-        linhas: list[dict[str, Any]] = []
-        for mlb, d in detalhes.items():
-            res["lidos"] += 1
-            sku = links.get(mlb) or str(d.get("sku_ml") or "").strip()
-            ficha, tipo = anuncio_ficha_do_sku(sku, catalogo, conhecidos)
-            if not ficha:
-                res["sem_ficha"] += 1
-            try:
-                preco = float(d["preco"]) if d.get("preco") is not None else None
-            except (TypeError, ValueError):
-                preco = None
-            est = d.get("estoque")
-            est = int(est) if isinstance(est, (int, float)) and not isinstance(est, bool) else None
-            logistica = str(d.get("logistica") or "")
-            linhas.append({
-                "mlb": mlb, "ficha": ficha, "tipo": tipo, "sku": sku,
-                "campos": anuncio_campos_do_item(d.get("atributos")) if ficha else {},
-                "controle": "full" if logistica == "fulfillment" else "alephee",
-                "valores": (ficha, sku, str(d.get("titulo") or ""), preco, est, str(d.get("status") or ""),
-                            str(d.get("tipo") or ""), str(d.get("categoria") or ""), logistica,
-                            str(d.get("user_product") or ""), agora),
-            })
-        for i in range(0, len(linhas), ANUNCIO_LOTE_GRAVACAO):
-            _anuncio_gravar_lote(conta, linhas[i:i + ANUNCIO_LOTE_GRAVACAO], res)  # lock solto entre os lotes
+        _anuncio_gravar_itens(conta, detalhes, res)
     except Exception as exc:
         res["erro"] = f"{type(exc).__name__}: {exc}"[:300]
     return res
 
 
-def anuncios_ml_puxar(contas: list[str] | None = None) -> dict[str, Any]:
-    """V20.23: so leitura no ML. Conta que nao respondeu fica com `erro` e nada dela e alterado ou apagado."""
+def _anuncio_gravar_itens(conta: str, detalhes: dict[str, dict[str, Any]], res: dict[str, Any]) -> None:
+    """V20.24: o MESMO caminho para a puxada em massa e para um anuncio so: a linha de cada item (o vinculo
+    MLB<->SKU vence o SKU do anuncio) e a gravacao em lotes (_anuncio_gravar_lote, DB_LOCK so por lote).
+    Chamar FORA do DB_LOCK, depois das chamadas ao ML."""
+    links = _anuncio_links_invertidos()
+    catalogo = _load_kit_catalog()
+    try:
+        conhecidos = _separacao_codigos_conhecidos()
+    except Exception:
+        conhecidos = set()
+    agora = now_iso()
+    linhas: list[dict[str, Any]] = []
+    for mlb, d in detalhes.items():
+        res["lidos"] += 1
+        sku = links.get(mlb) or str(d.get("sku_ml") or "").strip()
+        ficha, tipo = anuncio_ficha_do_sku(sku, catalogo, conhecidos)
+        try:
+            preco = float(d["preco"]) if d.get("preco") is not None else None
+        except (TypeError, ValueError):
+            preco = None
+        est = d.get("estoque")
+        est = int(est) if isinstance(est, (int, float)) and not isinstance(est, bool) else None
+        logistica = str(d.get("logistica") or "")
+        linhas.append({
+            "mlb": mlb, "ficha": ficha, "tipo": tipo, "sku": sku,
+            "campos": anuncio_campos_do_item(d.get("atributos")) if ficha else {},
+            "controle": "full" if logistica == "fulfillment" else "alephee",
+            "valores": (ficha, sku, str(d.get("titulo") or ""), preco, est, str(d.get("status") or ""),
+                        str(d.get("tipo") or ""), str(d.get("categoria") or ""), logistica,
+                        str(d.get("user_product") or ""), agora),
+        })
+    for i in range(0, len(linhas), ANUNCIO_LOTE_GRAVACAO):
+        _anuncio_gravar_lote(conta, linhas[i:i + ANUNCIO_LOTE_GRAVACAO], res)  # lock solto entre os lotes
+
+
+def anuncios_ml_puxar(contas: list[str] | None = None, progresso: Any = None) -> dict[str, Any]:
+    """V20.23: so leitura no ML. Conta que nao respondeu fica com `erro` e nada dela e alterado ou apagado.
+    V20.24: `progresso(conta_atual, resultado_ate_aqui)` e chamado antes de cada conta e no fim (conta '')."""
     alvo = list(contas) if contas else ml_casas_conectadas()
     saida: dict[str, Any] = {}
     for conta in alvo:
+        if progresso:
+            progresso(conta, dict(saida))
         saida[conta] = _anuncio_puxar_conta(conta)
+    if progresso:
+        progresso("", dict(saida))
     return {"ok": bool(saida) and not any(c["erro"] for c in saida.values()), "contas": saida}
+
+
+# V20.24: a puxada em massa roda numa thread (a rota responde na hora; ~1.600 anuncios por conta levam minutos e o
+# nginx corta em 60 s). Uma por vez pelo ANUNCIOS_PUXAR_LOCK; a tela acompanha por GET /api/anuncios/puxar/situacao.
+ANUNCIOS_PUXAR_ESTADO: dict[str, Any] = {"rodando": False, "iniciado_em": "", "iniciado_por": "", "conta_atual": "",
+                                         "contas": [], "fim_em": "", "ok": None, "resultado": {}, "erro": ""}
+ANUNCIOS_PUXAR_ESTADO_LOCK = threading.Lock()
+
+
+def anuncios_puxar_situacao() -> dict[str, Any]:
+    with ANUNCIOS_PUXAR_ESTADO_LOCK:
+        return json.loads(json.dumps(ANUNCIOS_PUXAR_ESTADO))  # copia funda (a thread continua mexendo)
+
+
+def _anuncios_puxar_estado(**campos: Any) -> None:
+    with ANUNCIOS_PUXAR_ESTADO_LOCK:
+        ANUNCIOS_PUXAR_ESTADO.update(campos)
+
+
+def _anuncios_puxar_fundo(contas: list[str] | None, ator: str) -> None:
+    resultado: dict[str, Any] = {}
+    erro = ""
+    try:
+        def progresso(conta: str, parcial: dict[str, Any]) -> None:
+            _anuncios_puxar_estado(conta_atual=conta, resultado=parcial)
+        resultado = anuncios_ml_puxar(contas, progresso=progresso)["contas"]
+        if not resultado:
+            erro = "Nenhuma conta do Mercado Livre conectada."
+    except Exception as exc:  # inesperado: o estado fecha e a trava solta mesmo assim
+        erro = f"{type(exc).__name__}: {exc}"[:300]
+        print(f"Aviso: puxada dos anuncios falhou: {erro}", file=sys.stderr)
+        resultado = anuncios_puxar_situacao().get("resultado") or {}
+    finally:
+        ok = False
+        try:
+            ok = (not erro) and bool(resultado) and not any((r or {}).get("erro") for r in resultado.values())
+            try:  # a auditoria antes de fechar: quem ve "terminou" ja acha o registro
+                audit(ator, "anuncios.puxar", json.dumps(
+                    {"erro": erro, **{c: r for c, r in resultado.items()}}, ensure_ascii=False)[:2000])
+            except Exception as exc:
+                print(f"Aviso: auditoria da puxada nao gravada: {exc}", file=sys.stderr)
+        finally:
+            # estado fechado e trava solta na mesma vez: quem le "rodando: false" ja consegue puxar de novo
+            with ANUNCIOS_PUXAR_ESTADO_LOCK:
+                try:
+                    ANUNCIOS_PUXAR_ESTADO.update(rodando=False, conta_atual="", fim_em=now_iso(), ok=ok,
+                                                 resultado=resultado, erro=erro)
+                finally:
+                    ANUNCIOS_PUXAR_LOCK.release()
+
+
+def anuncios_puxar_iniciar(contas: list[str] | None, ator: str) -> bool:
+    """V20.24: False = ja tem uma puxada rodando (a rota responde 409)."""
+    if not ANUNCIOS_PUXAR_LOCK.acquire(blocking=False):
+        return False
+    try:
+        _anuncios_puxar_estado(rodando=True, iniciado_em=now_iso(), iniciado_por=str(ator or ""), conta_atual="",
+                               contas=list(contas) if contas else [], fim_em="", ok=None, resultado={}, erro="")
+        threading.Thread(target=_anuncios_puxar_fundo, args=(list(contas) if contas else None, ator),
+                         daemon=True, name="anuncios-puxar").start()
+    except Exception:
+        _anuncios_puxar_estado(rodando=False, fim_em=now_iso(), ok=False, erro="A puxada não começou.")
+        ANUNCIOS_PUXAR_LOCK.release()
+        raise
+    return True
+
+
+# V20.24: puxar UM anuncio pelo MLB ou pelo link (mesmo caminho de gravacao da puxada em massa).
+class AnuncioNaoEncontrado(LookupError):
+    pass
+
+
+def anuncio_mlb_do_texto(texto: Any) -> str:
+    """'MLB123', 'MLB-123' ou link do anuncio (produto.mercadolivre..., articulo..., www.../..._MLB123). Link de
+    catalogo (/p/MLB...) e produto do catalogo, nao anuncio: recusa."""
+    t = str(texto or "").strip()
+    if not t:
+        raise ValueError("Informe o MLB ou o link do anúncio.")
+    if len(t) > 2000:
+        raise ValueError("Texto longo demais.")
+    if re.search(r"/p/MLB\d", t, re.I):
+        raise ValueError("Link de catálogo: abra o anúncio do vendedor (o link com MLB-…) e cole esse.")
+    m = re.search(r"MLB-?(\d{6,15})(?!\d)", t, re.I)
+    if not m:
+        raise ValueError("Não achei o número do anúncio (MLB…) no que foi colado.")
+    return "MLB" + m.group(1)
+
+
+def anuncio_puxar_um(texto: Any, ator: str) -> dict[str, Any]:
+    """V20.24: le o anuncio no ML (fora do DB_LOCK), acha a conta dona pelo seller_id e grava como a puxada em massa.
+    Nao e de nenhuma conta conectada / nao existe = AnuncioNaoEncontrado; ML sem resposta = AnuncioMLSemResposta.
+    Nos dois casos nada e gravado."""
+    mlb = anuncio_mlb_do_texto(texto)
+    contas = ml_casas_conectadas()
+    if not contas:
+        raise ValueError("Nenhuma conta do Mercado Livre conectada.")
+    sem_resposta = False
+    de_outro = False
+    achado: tuple[str, dict[str, Any]] | None = None
+    for conta in contas:
+        falhas: list[Any] = []
+        with ml_na_casa(conta):
+            d = (ml_itens_detalhe([mlb], falhas=falhas) or {}).get(mlb)
+        if d is None:
+            if any(f == "erro" or (isinstance(f, int) and (f >= 500 or f in (401, 403, 408, 429))) for f in falhas):
+                sem_resposta = True
+            continue
+        dono = ml_casa_do_seller(d.get("seller_id")) if d.get("seller_id") else None
+        if dono not in contas:
+            de_outro = True
+            continue
+        if dono != conta:  # o /items?ids= e publico: rele com o token do dono (campos do vendedor)
+            with ml_na_casa(dono):
+                d = (ml_itens_detalhe([mlb]) or {}).get(mlb) or d
+        achado = (dono, d)
+        break
+    if achado is None:
+        if de_outro:
+            raise AnuncioNaoEncontrado(f"O {mlb} não é de nenhuma conta do Mercado Livre conectada (Araçatuba/Bauru).")
+        if sem_resposta:
+            raise AnuncioMLSemResposta(f"O Mercado Livre não respondeu ao ler o {mlb}. Nada foi alterado; tente de novo.")
+        raise AnuncioNaoEncontrado(f"O {mlb} não foi encontrado no Mercado Livre.")
+    conta, d = achado
+    res: dict[str, Any] = {"lidos": 0, "novos": 0, "atualizados": 0, "sem_ficha": 0, "parcial": 0, "erro": ""}
+    _anuncio_gravar_itens(conta, {mlb: d}, res)
+    with DB_LOCK:
+        row = DB.execute("SELECT * FROM anuncio_canal_v2023 WHERE canal='ml' AND conta=? AND anuncio_id=?",
+                         (conta, mlb)).fetchone()
+        linha = dict(row) if row else {}
+    audit(ator, "anuncios.puxar_um", f"{conta}|{mlb}|{linha.get('ficha_codigo') or ''}|"
+                                     f"{'novo' if res['novos'] else 'atualizado' if res['atualizados'] else 'removido'}")
+    return {"ok": True, "mlb": mlb, "conta": conta, "ficha_codigo": str(linha.get("ficha_codigo") or ""),
+            "novo": bool(res["novos"]), "removido": bool(str(linha.get("removido_em") or "")), "anuncio": linha}
 
 
 def _anuncio_marcar_removido(canal: str, conta: str, anuncio_id: str, ator: str, remover: bool) -> dict[str, Any]:
@@ -32358,13 +32504,15 @@ def ml_itens_do_vendedor(offset: int = 0, limite: int = 50, forcar: bool = False
     }
 
 
-def ml_itens_detalhe(mlbs: list[str]) -> dict[str, dict[str, Any]]:
-    """Título, preço e o SKU que o vendedor cadastrou no próprio anúncio."""
+def ml_itens_detalhe(mlbs: list[str], falhas: list[Any] | None = None) -> dict[str, dict[str, Any]]:
+    """Título, preço e o SKU que o vendedor cadastrou no próprio anúncio.
+    V20.24: `falhas` (opcional) recebe "erro" para lote sem resposta e o `code` de cada id que voltou
+    sem corpo (404 = não existe), para separar "não existe" de "o ML não respondeu"."""
     out: dict[str, dict[str, Any]] = {}
     # V18.72: shipping traz o logistic_type (Full ou não) para a Ruptura.
     # V18.77: listing_type_id para a comissão do anúncio (ml_tarifa_frete_anuncio)
     campos = ("id,title,price,status,sub_status,available_quantity,seller_custom_field,attributes,category_id,"
-              "shipping,listing_type_id,user_product_id,catalog_product_id")   # V19.60: estoque do Full; V19.74: catálogo
+              "shipping,listing_type_id,user_product_id,catalog_product_id,seller_id")   # V19.60: estoque do Full; V19.74: catálogo; V20.24: dono
     for i in range(0, len(mlbs), 20):   # a API aceita 20 ids por chamada
         lote = [x for x in mlbs[i:i + 20] if x]
         if not lote:
@@ -32372,11 +32520,18 @@ def ml_itens_detalhe(mlbs: list[str]) -> dict[str, dict[str, Any]]:
         try:
             resp = ml_api_get("/items?ids=" + ",".join(lote) + "&attributes=" + campos)
         except Exception:
+            if falhas is not None:
+                falhas.append("erro")
             continue
+        if falhas is not None and not isinstance(resp, list):
+            falhas.append("erro")
         for linha in (resp if isinstance(resp, list) else []):
             corpo = (linha or {}).get("body") or {}
             mlb = str(corpo.get("id") or "").strip().upper()
             if not mlb:
+                if falhas is not None:  # V20.24
+                    codigo = linha.get("code") if isinstance(linha, dict) else None
+                    falhas.append(codigo if isinstance(codigo, int) and not isinstance(codigo, bool) else "erro")
                 continue
             # V18.27: o atributo SELLER_SKU é a fonte boa. O seller_custom_field
             # é campo livre e muitas vezes tem outra coisa (ex.: "Id Aleph:
@@ -32397,6 +32552,7 @@ def ml_itens_detalhe(mlbs: list[str]) -> dict[str, dict[str, Any]]:
                         "tipo": str(corpo.get("listing_type_id") or ""),       # V18.77: comissão
                         "user_product": str(corpo.get("user_product_id") or ""),  # V19.60
                         "produto_catalogo": str(corpo.get("catalog_product_id") or ""),  # V19.74
+                        "seller_id": str(corpo.get("seller_id") or ""),  # V20.24: dono (puxar um anuncio)
                         "atributos": [a for a in (corpo.get("attributes") or []) if isinstance(a, dict)
                                       and str(a.get("id") or "").upper() in ANUNCIO_ATRIBUTOS_ML],  # V20.23: ficha
                         "logistica": str((corpo.get("shipping") if isinstance(corpo.get("shipping"), dict)
@@ -39109,6 +39265,11 @@ class AppHandler(BaseHTTPRequestHandler):
                     rows = DB.execute("SELECT tipo,resposta,created_at FROM tiktok_amostra_v1963").fetchall()
                 self.send_json({"ok": True, "amostras": [dict(r) for r in rows]})
             return
+        if path == "/api/anuncios/puxar/situacao":  # V20.24: andamento da puxada em segundo plano (so le a memoria)
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                self.send_json({"ok": True, **anuncios_puxar_situacao()})
+            return
         if path == "/api/anuncios":  # V20.23: lista de fichas (so le o banco)
             ctx = self.auth(admin_only=True)
             if ctx is not None:
@@ -41475,7 +41636,8 @@ class AppHandler(BaseHTTPRequestHandler):
                     magalu_log_event("pedidos", "manual", "ERRO", str(exc))
                     self.send_json({"ok": False, "error": str(exc)}, 502)
             return
-        if path in ("/api/anuncios/ficha", "/api/anuncios/kit", "/api/anuncios/puxar", "/api/anuncios/controle",
+        if path in ("/api/anuncios/ficha", "/api/anuncios/kit", "/api/anuncios/puxar", "/api/anuncios/puxar/um",
+                    "/api/anuncios/controle",
                     "/api/anuncios/remover", "/api/anuncios/reincluir", "/api/anuncios/foto",
                     "/api/anuncios/foto/remover", "/api/anuncios/foto/ordenar", "/api/anuncios/rascunho",
                     "/api/anuncios/rascunho/validar", "/api/anuncios/rascunho/publicar",
@@ -41544,23 +41706,29 @@ class AppHandler(BaseHTTPRequestHandler):
                                      ctx["username"], vs)
                     res = {"ok": True, "kit": kit}
                 elif path == "/api/anuncios/puxar":
-                    if not ANUNCIOS_PUXAR_LOCK.acquire(blocking=False):
-                        self.send_json({"ok": False, "error": "Já está puxando os anúncios. Aguarde terminar."}, 409)
+                    # V20.24: em segundo plano; a rota so confere e inicia (a auditoria e da thread, no fim)
+                    contas = body.get("contas")
+                    if contas is not None and not (isinstance(contas, list) and all(isinstance(c, str) for c in contas)):
+                        raise ValueError("Contas inválidas.")
+                    if contas:
+                        validas = ml_casas_conectadas()
+                        ruins = [c for c in contas if c not in validas]
+                        if ruins:
+                            raise ValueError("Conta desconhecida ou desconectada: " + ", ".join(ruins))
+                    if not anuncios_puxar_iniciar(list(contas) if contas else None, ctx["username"]):
+                        self.send_json({"ok": False, "error": "Já está puxando os anúncios. Aguarde terminar.",
+                                        "situacao": anuncios_puxar_situacao()}, 409)
                         return
+                    res = {"ok": True, "iniciado": True, "situacao": anuncios_puxar_situacao()}
+                elif path == "/api/anuncios/puxar/um":  # V20.24: um anuncio pelo MLB ou link (so leitura no ML)
                     try:
-                        contas = body.get("contas")
-                        if contas is not None and not (isinstance(contas, list) and all(isinstance(c, str) for c in contas)):
-                            raise ValueError("Contas inválidas.")
-                        if contas:
-                            validas = ml_casas_conectadas()
-                            ruins = [c for c in contas if c not in validas]
-                            if ruins:
-                                raise ValueError("Conta desconhecida ou desconectada: " + ", ".join(ruins))
-                        res = anuncios_ml_puxar(list(contas) if contas else None)
-                    finally:
-                        ANUNCIOS_PUXAR_LOCK.release()
-                    audit(ctx["username"], "anuncios.puxar", json.dumps(
-                        {c: {k: v for k, v in r.items() if k != "erro"} for c, r in res["contas"].items()}))
+                        res = anuncio_puxar_um(body.get("mlb_ou_link"), ctx["username"])
+                    except AnuncioNaoEncontrado as exc:
+                        self.send_json({"ok": False, "error": str(exc)}, 404)
+                        return
+                    except AnuncioMLSemResposta as exc:
+                        self.send_json({"ok": False, "error": str(exc)}, 502)
+                        return
                 elif path == "/api/anuncios/foto":  # V20.24
                     if body.get("estudio_id") not in (None, ""):
                         foto = anuncio_foto_do_estudio(str(body.get("codigo") or ""), body.get("estudio_id"),

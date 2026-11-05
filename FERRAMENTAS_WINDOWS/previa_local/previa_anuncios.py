@@ -124,8 +124,34 @@ ANUNCIOS = {
     },
 }
 S.ml_casas_conectadas = lambda: ["aracatuba", "bauru"]
-S.ml_todos_os_anuncios = lambda forcar=False: list(ANUNCIOS.get(S.ml_casa_atual(), {}))
-S.ml_itens_detalhe = lambda mlbs: {m: dict(d) for m, d in ANUNCIOS.get(S.ml_casa_atual(), {}).items() if m in mlbs}
+# V20.24: vendedor de cada conta (o "Puxar um" acha a conta dona pelo seller_id do anuncio)
+SELLER = {"aracatuba": "100001", "bauru": "200002"}
+S.ml_casa_do_seller = lambda sid: {v: k for k, v in SELLER.items()}.get(str(sid or ""))
+
+
+def _todos_os_anuncios(forcar=False):
+    import time
+    time.sleep(3)  # V20.24: a puxada leva uns segundos por conta, para ver o andamento na tela
+    return list(ANUNCIOS.get(S.ml_casa_atual(), {}))
+
+
+def _itens_detalhe(mlbs, falhas=None):
+    # como o /items?ids= real: publico (qualquer conta le o anuncio de qualquer vendedor), com o seller_id do dono;
+    # id que nao existe volta 404 (vai para `falhas`)
+    out = {}
+    for m in mlbs:
+        for conta, itens in ANUNCIOS.items():
+            if m in itens:
+                out[m] = {**itens[m], "seller_id": SELLER[conta]}
+                break
+        else:
+            if falhas is not None:
+                falhas.append(404)
+    return out
+
+
+S.ml_todos_os_anuncios = _todos_os_anuncios
+S.ml_itens_detalhe = _itens_detalhe
 
 # V20.24: criar anuncio (ML simulado: categoria, atributos, tarifa, validate, fotos, items)
 sys.path.insert(0, str(Path(__file__).parent))

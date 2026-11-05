@@ -199,9 +199,17 @@ class RotasAnunciosTeste(TesteNoromak):
                 "tipo": "gold_special", "categoria": "MLB1", "logistica": "", "user_product": "", "atributos": []}
         with mock.patch.object(S, "ml_casas_conectadas", return_value=["aracatuba"]),                 mock.patch.object(S, "ml_todos_os_anuncios", return_value=["MLB9"]),                 mock.patch.object(S, "ml_itens_detalhe", return_value={"MLB9": item}):
             st, c = self.cliente.pedir("POST", "/api/anuncios/puxar", {"contas": ["aracatuba"]})
+            self.assertEqual(st, 200, c)
+            self.assertTrue(c["ok"] and c["iniciado"])  # V20.24: em segundo plano
+            import time
+            fim = time.time() + 10
+            while S.anuncios_puxar_situacao()["rodando"] and time.time() < fim:
+                time.sleep(0.02)
+        st, c = self.cliente.pedir("GET", "/api/anuncios/puxar/situacao")
         self.assertEqual(st, 200, c)
         self.assertTrue(c["ok"])
-        self.assertEqual(c["contas"]["aracatuba"]["novos"], 1)
+        self.assertFalse(c["rodando"])
+        self.assertEqual(c["resultado"]["aracatuba"]["novos"], 1)
         with S.DB_LOCK:
             a = S.DB.execute("SELECT 1 FROM audit_log WHERE action='anuncios.puxar'").fetchone()
         self.assertIsNotNone(a)
