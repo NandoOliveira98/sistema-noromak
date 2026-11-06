@@ -486,6 +486,23 @@ bipada fica com o aviso; Cliente: nome guardado > nome da nota > o que a linha j
 `salvar_cliente_fiscal(..., so_se_vazio=True)` (confere e grava na mesma vez); leitura, conta e gravação da fila num `DB_LOCK` só
 (`_tiktok_sc_montar_fila`); amostra mascara dado pessoal em qualquer nível (`_tiktok_sc_mascarar`); a API (`tiktok_rodada`) não importa
 pedidos enquanto a extensão leu nas últimas 6 h (`TIKTOK_SC_FONTE_UNICA_S`: uma fonte de cada vez). Teste: `TESTES/test_revisao_subida_v2031.py`.
+**V20.33 — atendimento do TikTok no Apollo** (dono, 06/11: "a mesma rotina do ML: criar o cadastro do cliente e em
+seguida o atendimento"). O TikTok não tem integração com o Apollo; o worker `tiktok_atendimento_loop` (2 min, 2 pedidos por volta)
+faz o papel dela para os pedidos do TikTok na fila: `exp_cadastro_atualizar(..., criar=True)` com o endereço do detalhe (bairro
+incluso) e depois `POST atendimento/criar` (contrato em `PEDIDO_PORTA_CRIAR_ATENDIMENTO.md`) na revenda de Bauru, origem `TIKTOK`,
+`pedido_externo` `TIKTOK-<pedido>` (a porta nunca cria dois: `ja_existia`, por isso o incerto é repetido em 10 min), condição 973
+(a porta ainda não aplica: o painel/extensão acerta antes do caixa). Interruptor `atendimento_auto` em `tiktok_config_v1964`
+(**começa desligado**; `POST /api/integracoes/tiktok/atendimento`, perfil Admin; `GET` = estado; linha no cartão TikTok de Integrações).
+Preço: o detalhe do Seller Center (`_tiktok_sc_venda`, guardado em `tiktok_sc_pedido_v2030.venda_json` com `endereco_json`):
+`sku_unit_price` × unidades a enviar, com o desconto da LOJA rateado (o subsídio do TikTok não entra); a soma das unidades tem de
+bater com `main_order_origin_sale_price` (ou com ele menos o desconto), senão `revisar`. Kit = `_anuncio_sku_partes` (Cadastro de
+Kits/KITn-X/"A/B"), preço do kit dividido pelo **custo de Araçatuba** das peças (`_tiktok_atendimento_dividir`, centavo que sobra numa
+peça de 1 unidade); peça sem custo ou SKU com cara de dois códigos sem Cadastro de Kits ("KIT-2050171-2011058") = `revisar`, nada criado.
+Estado em `tiktok_atendimento_v2033` (criado/ja_existia/erro/incerto/revisar + próxima tentativa); cadastro feito vai para o
+`cadastro_auto_v1941` (o painel pula a etapa). `_exp_valor_pedido` do TikTok = o valor enviado (senão o do detalhe).
+**Revenda por filial** (dono, 06/11): `_exp_revenda`/`_exp_revenda_das_linhas` — pedido de Bauru (TikTok **e** ML de Bauru) usa a
+revenda 3 no cadastro, busca de atendimento, romaneio, reemissão e caixa; o resto continua na 1. Extensão Linx Cliente 0.51 mostra a
+situação do atendimento automático no painel. Teste: `TESTES/test_tiktok_atendimento_v2033.py`.
 
 ### Magalu (V19.24, fase 0 de 5)
 Plano decidido com o dono em 14/10 (integração completa "igual ao ML", por fases): 0 conexão; 1 pedidos na

@@ -2100,6 +2100,7 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
             <b>Conectada em</b><span id="tiktokConectadaEm">—</span>
             <b>Pedidos</b><span id="tiktokImportacao">—</span>
             <b>Etiqueta</b><span id="tiktokEtiqueta">—</span>
+            <b>Atendimento no Apollo</b><span id="tiktokAtendimento">—</span>
             <b>Callback OAuth</b><span id="tiktokCallback">—</span>
             <b>Credenciais</b><span>Somente no servidor</span>
           </div>
@@ -2110,9 +2111,11 @@ html[data-tema="escuro"] [style*="color: #a61b1b" i]{color:#EB8484!important}
             <button type="button" id="btnTiktokImportacao" class="btn-secundario" onclick="alternarImportacaoTiktokAdmin()" disabled>Desligar importação</button>
             <button type="button" id="btnTiktokEtiqueta" class="btn-secundario" onclick="alternarEtiquetaTiktokAdmin()" disabled title="Organiza o envio no TikTok e vincula a etiqueta (PDF) para a Conferência de Bauru.">Ligar etiqueta automática</button>
             <button type="button" id="btnTiktokSincronizar" class="btn-sucesso" onclick="sincronizarTiktokAdmin()" disabled>↻ Sincronizar agora</button>
+            <button type="button" id="btnTiktokAtendimento" class="btn-secundario" onclick="alternarAtendimentoTiktokAdmin()" title="Cadastra o cliente e cria o atendimento no Apollo de Bauru, como a integração do Mercado Livre.">Ligar atendimento automático</button>
             <a class="btn-secundario" href="/expedicao/tiktok-estoque" target="_blank" rel="noopener">Estoque TikTok</a>
           </div>
           <div id="tiktokTeste"></div>
+          <div id="tiktokAtendimentoLista"></div>
           <div id="tiktokIntegracaoMensagem" class="integracao-nota">Entre com a conta da loja de <b>Bauru</b> no TikTok Shop e autorize o app da Noromak. Com a importação ligada, os pedidos aguardando envio entram sozinhos na fila de <b>Bauru</b>. O estoque (Apollo de Bauru → TikTok) fica na tela Estoque TikTok.</div>
         </div>
         <div class="integracao-card">
@@ -9939,6 +9942,29 @@ async function carregarIntegracaoTiktokAdmin(){
   const estado=new URLSearchParams(location.search).get("tiktok");
   if(estado==="conectada"&&msg)msg.textContent="✅ TikTok Shop conectado ao Noromak.";
   else if(estado==="erro"&&msg)msg.textContent="❌ Não foi possível concluir a conexão com o TikTok Shop. Tente de novo; o motivo fica no log da integração.";
+  await carregarAtendimentoTiktokAdmin();  // V20.33
+}
+// V20.33: cadastro + atendimento do TikTok no Apollo (não depende da API do TikTok: os pedidos vêm da extensão).
+async function carregarAtendimentoTiktokAdmin(){
+  const info=document.getElementById("tiktokAtendimento"),bt=document.getElementById("btnTiktokAtendimento"),box=document.getElementById("tiktokAtendimentoLista");
+  if(!info)return;
+  const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  try{
+    const d=await mlApiAdmin("/expedicao/api/integracoes/tiktok/atendimento");
+    info.textContent=d.ligado?"🟢 Automático — cadastra o cliente e cria o atendimento (revenda de Bauru)":"⚪ Desligado";
+    if(bt){bt.textContent=d.ligado?"Desligar atendimento automático":"Ligar atendimento automático";bt.dataset.ligado=d.ligado?"1":"0";}
+    const nomes={criado:"✅ criado",ja_existia:"✅ já existia",erro:"❌ erro",incerto:"⚠ sem resposta (tenta de novo)",revisar:"⚠ conferir"};
+    const linhas=(d.pedidos||[]).slice(0,8);
+    if(box)box.innerHTML=linhas.length?'<div class="integracao-nota"><b>Últimos pedidos</b></div>'+linhas.map(p=>
+      `<div class="integracao-nota">${esc(p.pedido)} · ${esc(nomes[p.situacao]||p.situacao)}${p.atendimento?" · atend. "+esc(p.atendimento):""}${p.detalhe?" — "+esc(p.detalhe):""}</div>`).join(""):"";
+  }catch(e){info.textContent="🔴 "+e.message;}
+}
+async function alternarAtendimentoTiktokAdmin(){
+  const bt=document.getElementById("btnTiktokAtendimento");const ligar=bt?.dataset.ligado!=="1";
+  if(!await nkConfirmar(ligar?"Ligar o atendimento automático do TikTok? Para cada pedido do TikTok na fila de Bauru (com nome e CPF da nota), o Noromak cadastra o cliente no Apollo (cria se não existir) e cria o atendimento na revenda de Bauru, com o preço da venda. Isso grava no Apollo.":"Desligar o atendimento automático do TikTok? Os atendimentos já criados continuam no Apollo."))return;
+  try{await mlApiAdmin("/expedicao/api/integracoes/tiktok/atendimento",{method:"POST",body:JSON.stringify({ligado:ligar})});}
+  catch(e){alert("TikTok Shop: "+e.message);}
+  await carregarAtendimentoTiktokAdmin();
 }
 async function testeTiktokAdmin(){
   const box=document.getElementById("tiktokTeste"),btn=document.getElementById("btnTiktokTeste");if(!box)return;

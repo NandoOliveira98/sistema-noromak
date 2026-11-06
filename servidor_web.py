@@ -49,7 +49,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.32-ANUNCIOS-SHOPEE"
+APP_VERSION = "20.33-ATENDIMENTO-TIKTOK"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -2716,6 +2716,7 @@ def init_db() -> None:
     ensure_magalu_promo_schema()  # V19.55
     ensure_tiktok_estoque_schema()  # V19.64
     ensure_tiktok_sc_schema()  # V20.30: pedidos pela extensão do Seller Center
+    ensure_tiktok_atendimento_schema()  # V20.33: cadastro + atendimento do TikTok no Apollo
     ensure_anuncios_schema()  # V20.23
     ensure_ml_billing_credito_schema()
     ensure_ml_billing_data_schema()
@@ -10557,6 +10558,10 @@ def tiktok_pedidos_da_extensao(pedidos: Any, detalhes: Any, completo: bool, ator
         fiscais, cpf_ok = _tiktok_sc_guardar_fiscais(det)
         # revisar-antes-de-subir (06/11): o registro dos lidos também dentro da vez (outro PC não grava por cima)
         _tiktok_sc_registrar_lidos(lidos, det, cpf_ok)
+        # V20.33: preço e endereço do detalhe, para o atendimento no Apollo (só dos que ficam a enviar)
+        _tiktok_sc_guardar_venda([o for o in detalhes if isinstance(o, dict)
+                                  and str(o.get("main_order_id") or "").strip() in det
+                                  and det[str(o.get("main_order_id")).strip()]["status"] in TIKTOK_SC_NA_FILA])
     finally:
         TIKTOK_SYNC_LOCK.release()
     # revisar-antes-de-subir (06/11): situação/quantidade que o sistema não conhece vai para o Painel de saúde
@@ -10744,6 +10749,402 @@ def tiktok_pedidos_loop(stop_event: threading.Event) -> None:
                 DB.commit()
             tiktok_log_event_se_mudou("pedidos", "worker", "ERRO", str(exc)[:800])
         stop_event.wait(TIKTOK_PEDIDOS_INTERVALO)
+
+
+# ---------------------------------------------------------------------------
+# V20.33 — Atendimento do TikTok no Apollo (decisões do dono, 06/11: "a mesma rotina do ML").
+# O TikTok não tem integração com o Apollo: ninguém cria o cliente nem o atendimento. Esta rotina
+# faz o que a integração do ML faz: cadastra o cliente (cria se não existe, com o endereço do
+# detalhe do pedido) e em seguida cria o atendimento pela porta `atendimento/criar` na revenda de
+# Bauru, com o kit aberto em peças e o preço do kit dividido pelo CUSTO (Araçatuba, regra do
+# Financeiro). Venda = preço da unidade com o desconto da LOJA (o subsídio do TikTok não entra).
+# A porta nunca cria dois atendimentos para o mesmo `pedido_externo` ("ja_existia"): resposta
+# perdida pode ser repetida. Interruptor em tiktok_config_v1964 `atendimento_auto`, começa DESLIGADO.
+# ---------------------------------------------------------------------------
+TIKTOK_ATEND_ORIGEM = "TIKTOK"
+TIKTOK_ATEND_CONDICAO = 973          # condição de pagamento do TikTok (dono, 06/11)
+TIKTOK_ATEND_POR_RODADA = 2          # porta: 6 escritas/min; cada pedido = até 4 (criar, atualizar, crédito, atendimento)
+TIKTOK_ATEND_INTERVALO = 120
+TIKTOK_ATEND_FINAIS = ("criado", "ja_existia")
+# Quanto esperar para tentar de novo, por situação (segundos).
+TIKTOK_ATEND_ESPERA = {"passageiro": 120, "incerto": 600, "erro": 1800, "revisar": 3600, "cadastro": 600}
+
+
+class TikTokAtendRevisar(Exception):
+    """Dado que o sistema não resolve sozinho (preço, kit, custo): alguém confere."""
+
+
+def ensure_tiktok_atendimento_schema() -> None:
+    with DB_LOCK:
+        DB.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS tiktok_atendimento_v2033 (
+                pedido TEXT PRIMARY KEY,
+                situacao TEXT NOT NULL DEFAULT '',
+                detalhe TEXT NOT NULL DEFAULT '',
+                cliente TEXT NOT NULL DEFAULT '',
+                atendimento TEXT NOT NULL DEFAULT '',
+                valor REAL,
+                itens_json TEXT NOT NULL DEFAULT '',
+                tentativas INTEGER NOT NULL DEFAULT 0,
+                proxima_epoch REAL NOT NULL DEFAULT 0,
+                atualizado_em TEXT NOT NULL DEFAULT ''
+            );
+            """
+        )
+        colunas = {r["name"] for r in DB.execute("PRAGMA table_info(tiktok_sc_pedido_v2030)")}
+        for nome in ("venda_json", "endereco_json"):
+            if nome not in colunas:
+                DB.execute(f"ALTER TABLE tiktok_sc_pedido_v2030 ADD COLUMN {nome} TEXT NOT NULL DEFAULT ''")
+        DB.commit()
+
+
+def tiktok_atendimento_ligado() -> bool:
+    return _tiktok_config_ler("atendimento_auto") == "1"   # sem escolha = DESLIGADO
+
+
+def tiktok_atendimento_definir(ligado: bool, usuario: str) -> None:
+    _tiktok_config_gravar("atendimento_auto", "1" if ligado else "0", usuario)
+    tiktok_log_event("atendimento", "", "LIGADO" if ligado else "DESLIGADO", f"por {usuario}")
+
+
+def _tiktok_num(v: Any) -> float | None:
+    """Preço do Seller Center: número, texto ou {"price_val": ...}. Desconhecido = None (nunca zero)."""
+    if isinstance(v, dict):
+        for k in ("price_val", "amount", "value", "val"):
+            if k in v:
+                return _tiktok_num(v[k])
+        return None
+    try:
+        n = float(str(v).replace(",", ".")) if isinstance(v, str) else float(v)
+    except (TypeError, ValueError):
+        return None
+    return n if n == n and abs(n) != float("inf") else None
+
+
+def _tiktok_sc_venda(o: Any) -> dict[str, Any] | None:
+    """Valor de cada SKU do pedido (só as unidades ainda a enviar) pelo detalhe do Seller Center.
+    Unidade = `sku_unit_price` (preço cheio); o desconto da loja (`seller_discount_total`) é rateado.
+    Confere com `main_order_origin_sale_price`: se a soma das unidades já é o valor com desconto, não
+    desconta de novo; se não bate com nenhum dos dois, devolve {"erro"} (ninguém adivinha o preço)."""
+    if not isinstance(o, dict):
+        return None
+    p = tiktok_sc_pedido(o)
+    pm = o.get("price_module") if isinstance(o.get("price_module"), dict) else {}
+    if not p or not pm:
+        return None
+    abertas = {(str(i["sku_id"]), normalize(i["seller_sku"])): int(i["quantity"]) for i in p["line_items"]}
+    soma_cheia, itens = 0.0, []
+    for sk in o.get("sku_module") or []:
+        if not isinstance(sk, dict):
+            continue
+        unit = _tiktok_num(sk.get("sku_unit_price"))
+        total_linhas = len(sk.get("order_line_ids") or []) or _tiktok_quantidade(sk.get("quantity")) or 0
+        if unit is None or unit <= 0:
+            return {"erro": f"o TikTok não informou o preço do SKU {sk.get('seller_sku_name') or '?'}"}
+        soma_cheia += unit * total_linhas
+        sku = str(sk.get("seller_sku_name") or "").strip()
+        qtd = abertas.get((str(sk.get("sku_id") or ""), normalize(sku)), 0)
+        if qtd > 0:
+            itens.append({"sku_id": str(sk.get("sku_id") or ""), "sku": sku, "qtd": qtd, "unitario": unit})
+    origem = _tiktok_num(pm.get("main_order_origin_sale_price"))
+    desconto = _tiktok_num(pm.get("seller_discount_total")) or 0.0
+    if origem is None or origem <= 0:
+        return {"erro": "o TikTok não informou o valor do pedido"}
+    if abs(soma_cheia - origem) <= 0.02:
+        fator = (origem - desconto) / origem
+    elif abs(soma_cheia - (origem - desconto)) <= 0.02:
+        fator = 1.0
+    else:
+        return {"erro": f"preço das unidades ({soma_cheia:.2f}) não confere com o valor do pedido ({origem:.2f})"}
+    if fator <= 0:
+        return {"erro": "desconto da loja maior que o pedido"}
+    for i in itens:
+        i["valor"] = round(i["unitario"] * i["qtd"] * fator, 4)
+    return {"itens": itens, "fator": round(fator, 6), "desconto_loja": desconto, "origem": origem}
+
+
+def _tiktok_sc_endereco_cadastro(o: Any) -> dict[str, str] | None:
+    """Endereço do detalhe no formato que o cadastro lê (exp_endereco_do_texto) + o bairro à parte."""
+    if not isinstance(o, dict):
+        return None
+    e = _tiktok_sc_endereco(o)
+    limpo = lambda v: re.sub(r"\s+", " ", str(v or "")).strip().replace(",", " ")
+    rua, cidade, uf, cep = limpo(e.get("street_name")), limpo(e.get("geo_l2")), limpo(e.get("geo_l1")), \
+        re.sub(r"\D", "", str(e.get("zipcode") or ""))
+    partes = [rua, limpo(e.get("street_number")) or "S/N", limpo(e.get("address_detail")), cidade, uf, cep]
+    if not (rua and cidade and uf and len(cep) == 8) or any("*" in x for x in partes):
+        return None
+    bairro = limpo(e.get("neighborhood"))
+    return {"texto": ", ".join(x for x in partes if x), "bairro": "" if "*" in bairro else bairro}
+
+
+def _tiktok_sc_guardar_venda(detalhes: list[Any]) -> None:
+    """Guarda o valor e o endereço lidos no detalhe (o que faltar não apaga o que já está)."""
+    for o in detalhes:
+        if not isinstance(o, dict) or not str(o.get("main_order_id") or "").strip().isdigit():
+            continue
+        numero = str(o["main_order_id"]).strip()
+        try:
+            venda = _tiktok_sc_venda(o)
+            endereco = _tiktok_sc_endereco_cadastro(o)
+        except Exception as exc:  # leitura tolerante: nunca derruba a importação
+            tiktok_log_event_se_mudou("atendimento", f"leitura {numero}", "ERRO", str(exc)[:300])
+            continue
+        if not venda and not endereco:
+            continue
+        with DB_LOCK:
+            DB.execute(
+                """INSERT INTO tiktok_sc_pedido_v2030(pedido,visto_em,venda_json,endereco_json) VALUES(?,?,?,?)
+                   ON CONFLICT(pedido) DO UPDATE SET
+                       venda_json=CASE WHEN excluded.venda_json<>'' THEN excluded.venda_json ELSE tiktok_sc_pedido_v2030.venda_json END,
+                       endereco_json=CASE WHEN excluded.endereco_json<>'' THEN excluded.endereco_json ELSE tiktok_sc_pedido_v2030.endereco_json END""",
+                (numero, now_iso(), json_dumps(venda) if venda else "", json_dumps(endereco) if endereco else ""))
+            DB.commit()
+
+
+def _tiktok_sc_guardado(pedido: str) -> dict[str, Any]:
+    with DB_LOCK:
+        row = DB.execute("SELECT venda_json, endereco_json FROM tiktok_sc_pedido_v2030 WHERE pedido=?",
+                         (str(pedido),)).fetchone()
+    saida: dict[str, Any] = {"venda": None, "endereco": None}
+    if row:
+        for chave, col in (("venda", "venda_json"), ("endereco", "endereco_json")):
+            try:
+                saida[chave] = json.loads(row[col]) if row[col] else None
+            except (TypeError, ValueError):
+                saida[chave] = None
+    return saida
+
+
+def tiktok_atendimento_do_pedido(pedido: str) -> dict[str, Any] | None:
+    with DB_LOCK:
+        row = DB.execute("SELECT * FROM tiktok_atendimento_v2033 WHERE pedido=?", (str(pedido),)).fetchone()
+    return dict(row) if row else None
+
+
+def _tiktok_atendimento_registrar(pedido: str, situacao: str, detalhe: str, *, espera: str = "",
+                                  cliente: str = "", atendimento: str = "", valor: float | None = None,
+                                  itens: Any = None) -> None:
+    proxima = time.time() + TIKTOK_ATEND_ESPERA[espera] if espera else 0.0
+    with DB_LOCK:
+        DB.execute(
+            """INSERT INTO tiktok_atendimento_v2033(pedido,situacao,detalhe,cliente,atendimento,valor,itens_json,
+                   tentativas,proxima_epoch,atualizado_em) VALUES(?,?,?,?,?,?,?,1,?,?)
+               ON CONFLICT(pedido) DO UPDATE SET situacao=excluded.situacao, detalhe=excluded.detalhe,
+                   cliente=CASE WHEN excluded.cliente<>'' THEN excluded.cliente ELSE tiktok_atendimento_v2033.cliente END,
+                   atendimento=CASE WHEN excluded.atendimento<>'' THEN excluded.atendimento ELSE tiktok_atendimento_v2033.atendimento END,
+                   valor=COALESCE(excluded.valor, tiktok_atendimento_v2033.valor),
+                   itens_json=CASE WHEN excluded.itens_json<>'' THEN excluded.itens_json ELSE tiktok_atendimento_v2033.itens_json END,
+                   tentativas=tiktok_atendimento_v2033.tentativas+1, proxima_epoch=excluded.proxima_epoch,
+                   atualizado_em=excluded.atualizado_em""",
+            (str(pedido), situacao, str(detalhe or "")[:500], cliente, atendimento, valor,
+             json_dumps(itens) if itens is not None else "", proxima, now_iso()))
+        DB.commit()
+
+
+def _tiktok_atendimento_candidatos() -> list[str]:
+    """Pedidos do TikTok na fila (pendentes) que ainda não têm atendimento e cuja vez chegou."""
+    with DB_LOCK:
+        bruto, _, _ = get_storage("conf_pedidos")
+        estados = {r["pedido"]: dict(r) for r in DB.execute(
+            "SELECT pedido, situacao, proxima_epoch FROM tiktok_atendimento_v2033")}
+    agora = time.time()
+    saida: list[str] = []
+    for numero in sorted(_tiktok_sc_pedidos_na_fila(_rows_from_storage_value(bruto))):
+        e = estados.get(numero) or {}
+        if e.get("situacao") in TIKTOK_ATEND_FINAIS or float(e.get("proxima_epoch") or 0) > agora:
+            continue
+        saida.append(numero)
+    return saida
+
+
+def _tiktok_atendimento_custo(codigo: str, ctx: dict[str, Any]) -> float | None:
+    """Custo de UMA unidade da peça (Araçatuba, regra do Financeiro). Separado para o teste."""
+    custo, _ = _financeiro_custo_aracatuba(codigo, ctx)
+    return custo
+
+
+def _tiktok_atendimento_dividir(total_cent: int, pecas: list[tuple[str, int, float]]) -> list[int]:
+    """Centavos por unidade de cada peça: proporção do peso (custo); o centavo que sobra vai numa
+    peça cuja quantidade divide a sobra (de preferência a de 1 unidade e maior peso). Pode sobrar
+    menos que a menor quantidade (aceito: o valor esperado é a soma do que vai)."""
+    soma_peso = sum(n * p for _, n, p in pecas)
+    cent = [int(total_cent * p / soma_peso) for _, n, p in pecas]
+    sobra = total_cent - sum(c * n for c, (_, n, _) in zip(cent, pecas))
+    ordem = sorted(range(len(pecas)), key=lambda k: (pecas[k][1] != 1, -pecas[k][2]))
+    while sobra > 0:
+        k = next((k for k in ordem if pecas[k][1] <= sobra and sobra % pecas[k][1] == 0), None)
+        if k is None:
+            k = next((k for k in ordem if pecas[k][1] <= sobra), None)
+            if k is None:
+                break
+        passo = sobra // pecas[k][1]
+        cent[k] += passo
+        sobra -= passo * pecas[k][1]
+    return cent
+
+
+def _tiktok_atendimento_itens(venda: dict[str, Any]) -> list[dict[str, Any]]:
+    """Itens do atendimento: SKU do TikTok aberto em peças (Cadastro de Kits / "KITn-X" / "A/B"),
+    preço do kit dividido pelo custo. SKU com cara de dois códigos sem Cadastro de Kits = revisar."""
+    catalogo = _load_kit_catalog()
+    confirmadas = _anuncio_pecas_confirmadas()
+    conhecidos = _anuncios_conhecidos_lazy()
+    ctx: dict[str, Any] | None = None
+    saida: list[dict[str, Any]] = []
+    for it in venda.get("itens") or []:
+        sku = str(it.get("sku") or "").strip()
+        qtd = int(it.get("qtd") or 0)
+        total_cent = int(round(float(it.get("valor") or 0) * 100))
+        if not sku or qtd <= 0:
+            continue
+        if total_cent <= 0:
+            raise TikTokAtendRevisar(f"SKU {sku} sem valor de venda.")
+        partes, comp = _anuncio_sku_partes(sku, catalogo, conhecidos, confirmadas)
+        miolo = re.sub(r"^KIT\d*-", "", normalize(sku))
+        if not comp and anuncio_sku_parece_kit(miolo) and normalize(sku) not in confirmadas \
+                and miolo not in confirmadas:
+            raise TikTokAtendRevisar(f"SKU {sku} parece dois códigos juntos: cadastre o kit (Plataforma de anúncios → "
+                                     f"Peça · Kit) para o atendimento sair com todas as peças.")
+        partes = [(str(c).strip(), int(u)) for c, u in partes if str(c).strip() and int(u) > 0]
+        if not partes:
+            raise TikTokAtendRevisar(f"SKU {sku} sem código do Apollo.")
+        if len(partes) == 1:
+            codigo, por = partes[0]
+            n = por * qtd
+            pecas = [(codigo, n, 1.0)]
+        else:
+            if ctx is None:
+                ctx = _financeiro_custos_aracatuba(com_vendas_ml=False)
+            pecas = []
+            for codigo, por in partes:
+                custo = _tiktok_atendimento_custo(codigo, ctx)
+                if not custo or custo <= 0:
+                    raise TikTokAtendRevisar(f"Peça {codigo} do kit {sku} sem custo de Araçatuba: sem ele o preço do "
+                                             f"kit não é dividido. Digite o custo (Demanda de Compra) ou confira.")
+                pecas.append((codigo, por * qtd, float(custo)))
+        cents = _tiktok_atendimento_dividir(total_cent, pecas)
+        for (codigo, n, _), c in zip(pecas, cents):
+            if c <= 0:
+                raise TikTokAtendRevisar(f"Peça {codigo} do SKU {sku} ficaria sem valor.")
+            saida.append({"codigo": codigo, "quantidade": n, "unitario": round(c / 100, 2)})
+    if not saida:
+        raise TikTokAtendRevisar("Pedido sem peça a enviar.")
+    return saida
+
+
+def tiktok_atendimento_pedido(pedido: str) -> dict[str, Any]:
+    """Cadastro do cliente e atendimento de UM pedido do TikTok. Grava o estado; nunca levanta."""
+    pedido = str(pedido).strip()
+    conhecido = _exp_cliente_do_pedido(pedido)
+    if not conhecido["documento"] or not conhecido["nome_fiscal"]:
+        return {"ok": False, "situacao": "aguardando", "motivo": "sem nome/CPF da nota"}  # espera o detalhe
+    guardado = _tiktok_sc_guardado(pedido)
+    venda = guardado["venda"]
+    if not venda:
+        return {"ok": False, "situacao": "aguardando", "motivo": "sem o preço do detalhe"}
+    try:
+        if venda.get("erro"):
+            raise TikTokAtendRevisar("Preço: " + str(venda["erro"]) + ".")
+        itens = _tiktok_atendimento_itens(venda)
+    except TikTokAtendRevisar as exc:
+        _tiktok_atendimento_registrar(pedido, "revisar", str(exc), espera="revisar")
+        tiktok_log_event_se_mudou("atendimento", pedido, "REVISAR", str(exc)[:300])
+        return {"ok": False, "situacao": "revisar", "motivo": str(exc)}
+    esperado = round(sum(i["quantidade"] * i["unitario"] for i in itens), 2)
+    # 1) cadastro (cria se não existe), uma vez por pedido
+    codigo = conhecido["codigo"]
+    auto = cadastro_auto_do_pedido(pedido) or {}
+    if auto.get("situacao") != "feito" or not codigo:
+        end = guardado["endereco"] or {}
+        r = exp_cadastro_atualizar(pedido, "automatico", endereco_texto=end.get("texto") or "",
+                                   criar=True, bairro=end.get("bairro") or "")
+        if not r.get("ok"):
+            situacao = "incerto" if r.get("situacao") == "incerto" else "erro"
+            detalhe = "Cadastro do cliente: " + str(r.get("error") or r.get("situacao") or "?")
+            _tiktok_atendimento_registrar(pedido, situacao, detalhe, espera="cadastro")
+            tiktok_log_event_se_mudou("atendimento", pedido, "ERRO", detalhe[:300])
+            return {"ok": False, "situacao": situacao, "motivo": detalhe}
+        codigo = str(r.get("cliente") or "")
+        agora = time.time()
+        _cadastro_auto_registrar(pedido, agora, agora, 1, "feito", "automático do TikTok", codigo)
+    # 2) atendimento
+    corpo = {"revenda": SEPARACAO_REVENDA[TIKTOK_CASA], "operador": "noromak", "origem": TIKTOK_ATEND_ORIGEM,
+             "pedido_externo": f"{TIKTOK_ATEND_ORIGEM}-{pedido}", "cliente": int(codigo),
+             "condicao_pagamento": TIKTOK_ATEND_CONDICAO, "observacao": f"TikTok {pedido}",
+             "valor_esperado": esperado, "itens": itens}
+    with EXP_PORTA_LOCK:
+        try:
+            r = _exp_porta("atendimento/criar", corpo, escrita=True)
+        except PortaErro as exc:
+            situacao = "incerto" if exc.incerto else "erro"
+            # A mesma chave nunca cria outro atendimento: o incerto é tentado de novo sozinho.
+            _tiktok_atendimento_registrar(pedido, situacao, str(exc), cliente=codigo, valor=esperado, itens=itens,
+                                          espera="passageiro" if exc.passageiro else ("incerto" if exc.incerto else "erro"))
+            tiktok_log_event_se_mudou("atendimento", pedido, situacao.upper(), str(exc)[:300])
+            return {"ok": False, "situacao": situacao, "motivo": str(exc)}
+    _tiktok_guardar_amostra("porta atendimento/criar", r)
+    situacao = str(r.get("situacao") or "")
+    numero = re.sub(r"\D", "", str(r.get("atendimento") or ""))
+    if not r.get("ok") or situacao not in TIKTOK_ATEND_FINAIS or not numero:
+        motivo = str(r.get("erro") or r.get("mensagem") or situacao or "o Apollo não confirmou")
+        textos = {"sem_credito": "Cliente sem crédito liberado no Apollo", "sem_estoque": "Peça sem estoque no Apollo",
+                  "item_nao_encontrado": "Peça não encontrada no Apollo", "preco_recusado": "O Apollo recusou o preço",
+                  "valor_divergente": "O Apollo gravou outro valor", "cliente_nao_encontrado": "Cliente não encontrado no Apollo",
+                  "apollo_fora": "Apollo fora do ar"}
+        detalhe = f"{textos.get(situacao, 'Recusado')}: {motivo}"[:500]
+        espera = "passageiro" if situacao == "apollo_fora" else "erro"
+        _tiktok_atendimento_registrar(pedido, "erro", detalhe, espera=espera, cliente=codigo, valor=esperado, itens=itens)
+        tiktok_log_event_se_mudou("atendimento", pedido, "ERRO", detalhe[:300])
+        return {"ok": False, "situacao": "erro", "motivo": detalhe}
+    valor = _tiktok_num(r.get("valor"))
+    detalhe = "Atendimento criado" if situacao == "criado" else "Atendimento já existia (mesma venda)"
+    if valor is not None and abs(valor - esperado) > 0.009:
+        detalhe += f" — ATENÇÃO: o Apollo gravou R$ {valor:.2f}".replace(".", ",") + \
+                   f" e a venda é R$ {esperado:.2f}".replace(".", ",")
+    _tiktok_atendimento_registrar(pedido, situacao, detalhe, cliente=codigo, atendimento=numero, valor=esperado,
+                                  itens=itens)
+    audit("automatico", "tiktok.atendimento", f"{pedido}|{numero}|{situacao}|{esperado:.2f}")
+    tiktok_log_event_se_mudou("atendimento", pedido, "OK", detalhe[:300])
+    return {"ok": True, "situacao": situacao, "atendimento": numero, "valor": esperado}
+
+
+def tiktok_atendimento_rodada(forcar: bool = False) -> dict[str, Any]:
+    if not tiktok_atendimento_ligado():
+        return {"ok": True, "ligado": False, "feitos": 0}
+    feitos = 0
+    resultados = []
+    for numero in _tiktok_atendimento_candidatos():
+        if feitos >= TIKTOK_ATEND_POR_RODADA and not forcar:
+            break
+        try:
+            r = tiktok_atendimento_pedido(numero)
+        except Exception as exc:
+            _tiktok_atendimento_registrar(numero, "erro", str(exc)[:300], espera="erro")
+            r = {"ok": False, "situacao": "erro", "motivo": str(exc)}
+        if r.get("situacao") != "aguardando":
+            feitos += 1
+            resultados.append({"pedido": numero, **r})
+    return {"ok": True, "ligado": True, "feitos": feitos, "resultados": resultados}
+
+
+def tiktok_atendimento_payload() -> dict[str, Any]:
+    with DB_LOCK:
+        linhas = [dict(r) for r in DB.execute(
+            "SELECT pedido, situacao, detalhe, cliente, atendimento, valor, atualizado_em FROM tiktok_atendimento_v2033 "
+            "ORDER BY atualizado_em DESC LIMIT 30")]
+    return {"ok": True, "ligado": tiktok_atendimento_ligado(), "pedidos": linhas}
+
+
+def tiktok_atendimento_loop(stop_event: threading.Event) -> None:
+    stop_event.wait(90)
+    while not stop_event.is_set():
+        try:
+            tiktok_atendimento_rodada()
+        except Exception as exc:
+            tiktok_log_event_se_mudou("atendimento", "worker", "ERRO", str(exc)[:800])
+        stop_event.wait(TIKTOK_ATEND_INTERVALO)
 
 
 def tiktok_estoque_loop(stop_event: threading.Event) -> None:
@@ -19555,6 +19956,34 @@ EXP_PORTA_TIMEOUT = max(30, min(300, int(os.getenv("EXP_PORTA_TIMEOUT", "180") o
 EXP_CADASTRO_API = os.getenv("EXP_CADASTRO_API", "1")  # V19.32: portas ligadas pelo Guilherme (15/10)
 EXP_CADASTRO_API = EXP_CADASTRO_API.strip().lower() in {"1", "true", "sim"}
 EXP_REVENDA = 1  # Araçatuba
+
+
+def _exp_revenda_das_linhas(linhas: list[dict[str, Any]]) -> int:
+    """V20.33 (dono, 06/11): o pedido usa a revenda da filial dele no Apollo (Bauru = 3) no
+    atendimento, no romaneio, no caixa e no cadastro. Sem linha = Araçatuba (como sempre foi)."""
+    for row in linhas or []:
+        if isinstance(row, dict):
+            return SEPARACAO_REVENDA.get(filial_da_linha(row), EXP_REVENDA)
+    return EXP_REVENDA
+
+
+def _exp_revenda(pedido: str) -> int:
+    """Leve: a fila; fora dela, só a conclusão DESTE pedido (nunca varre completed_orders)."""
+    chave = str(pedido or "").strip()
+    alvo = normalize(chave)
+    with DB_LOCK:
+        bruto, _, _ = get_storage("conf_pedidos")
+        linhas = [r for r in _rows_from_storage_value(bruto)
+                  if isinstance(r, dict) and normalize(order_number(r)) == alvo]
+        if not linhas and alvo:
+            row = DB.execute("SELECT payload FROM completed_orders WHERE order_key IN (?,?) LIMIT 1",
+                             (chave, alvo)).fetchone()
+            try:
+                payload = json.loads(str(row["payload"] or "[]")) if row else []
+            except (TypeError, ValueError):
+                payload = []
+            linhas = [r for r in (payload if isinstance(payload, list) else [payload]) if isinstance(r, dict)]
+    return _exp_revenda_das_linhas(linhas)
 EXP_MAX_ATENDIMENTOS = 4  # cada um custa uma prévia (teto da porta: 12 leituras/min)
 EXP_PORTA_LOCK = threading.Lock()  # uma escrita por vez (a porta devolve 409 se repetir)
 
@@ -19754,6 +20183,7 @@ def exp_romaneio_preparar(pedido: str, atendimento: Any = "", cliente: Any = "")
     with DB_LOCK:
         linhas = _linhas_do_pedido(pedido)
     marketplace = _vendas_marketplace(linhas[0].get("Marketplace") or linhas[0].get("Origem")) if linhas else ""
+    revenda = _exp_revenda_das_linhas(linhas)  # V20.33: Bauru = revenda 3
     conhecido = _exp_cliente_do_pedido(pedido)
     codigo = re.sub(r"\D", "", str(cliente or "")) or conhecido["codigo"]
     numero = re.sub(r"\D", "", str(atendimento or ""))
@@ -19761,6 +20191,8 @@ def exp_romaneio_preparar(pedido: str, atendimento: Any = "", cliente: Any = "")
         "ok": True, "pedido": pedido, "marketplace": marketplace, "no_noromak": bool(linhas),
         "cliente": {"codigo": codigo, "documento": conhecido["documento"], "nome_fiscal": conhecido["nome_fiscal"],
                     "nome_apollo": ""},
+        "revenda": revenda,
+        "atendimento_tiktok": tiktok_atendimento_do_pedido(pedido),  # V20.33
         "precisa_condicao": True, "candidatos": [], "escolhido": "", "nome_abreviado": False,
         **_exp_estado_operacoes(pedido),
         "cadastro_auto": cadastro_auto_do_pedido(pedido),  # V19.41
@@ -19774,7 +20206,7 @@ def exp_romaneio_preparar(pedido: str, atendimento: Any = "", cliente: Any = "")
         # (o nome da NF-e vira só reserva). Achado, fica guardado no pedido.
         if not numero and not codigo and conhecido["documento"]:
             try:
-                b = exp_buscar_cliente(conhecido["documento"])
+                b = exp_buscar_cliente(conhecido["documento"], revenda=revenda)
             except PortaErro:
                 b = {"situacao": ""}
             if b["situacao"] == "encontrado" and b["cliente"]:
@@ -19788,11 +20220,11 @@ def exp_romaneio_preparar(pedido: str, atendimento: Any = "", cliente: Any = "")
             filtro = {"atendimento": int(numero)}
         elif codigo and conhecido["documento"]:
             def _situacao() -> dict[str, Any]:
-                return _exp_porta("cliente/situacao", {"revenda": EXP_REVENDA, "cliente": int(codigo),
+                return _exp_porta("cliente/situacao", {"revenda": revenda, "cliente": int(codigo),
                                                        "documento": conhecido["documento"], "operador": "noromak"})
 
             def _abertos(nome: str) -> dict[str, Any]:
-                return _exp_porta("atendimentos/abertos", {"revenda": EXP_REVENDA, "dias": 90,
+                return _exp_porta("atendimentos/abertos", {"revenda": revenda, "dias": 90,
                                                            "operador": "noromak", "cliente_nome": nome})
             nome_guardado = _EXP_NOME_APOLLO.get(codigo, "")
             if nome_guardado:   # V19.67: situação e atendimentos juntos
@@ -19824,14 +20256,14 @@ def exp_romaneio_preparar(pedido: str, atendimento: Any = "", cliente: Any = "")
                         "aviso": "Sem o código do cliente nem o nome da NF-e. Informe o número do atendimento."}
             abertos = {}
             for nome_busca in tentativas:
-                abertos = _exp_porta("atendimentos/abertos", {"revenda": EXP_REVENDA, "dias": 90,
+                abertos = _exp_porta("atendimentos/abertos", {"revenda": revenda, "dias": 90,
                                                               "operador": "noromak", "cliente_nome": nome_busca})
                 if abertos.get("ok") and abertos.get("atendimentos"):
                     saida["busca_por_nome"] = nome_busca
                     break
             filtro = {}
         if filtro:
-            abertos = _exp_porta("atendimentos/abertos", {"revenda": EXP_REVENDA, "dias": 90, "operador": "noromak", **filtro})
+            abertos = _exp_porta("atendimentos/abertos", {"revenda": revenda, "dias": 90, "operador": "noromak", **filtro})
         if not abertos.get("ok"):
             return {**saida, "situacao": "erro", "aviso": abertos.get("erro") or "O Apollo não listou os atendimentos."}
         codigos = _linx_codigos_do_pedido(linhas)
@@ -19843,7 +20275,7 @@ def exp_romaneio_preparar(pedido: str, atendimento: Any = "", cliente: Any = "")
         codigos = codigos | set(inteiros)
         lista = (abertos.get("atendimentos") or [])[:EXP_MAX_ATENDIMENTOS]
         previas = _exp_em_paralelo([  # V19.67: prévias juntas
-            (lambda n=int(a["atendimento"]): _exp_porta("romaneio/previa", {"revenda": EXP_REVENDA, "atendimento": n,
+            (lambda n=int(a["atendimento"]): _exp_porta("romaneio/previa", {"revenda": revenda, "atendimento": n,
                                                                             "operador": "noromak"}))
             for a in lista])
         for a, prev in zip(lista, previas):
@@ -19900,9 +20332,10 @@ def exp_romaneio_soltar(pedido: str, atendimento: Any, observacao: str, usuario:
         return {"ok": False, "error": "Escreva a observação do romaneio (até 100 caracteres)."}
     if _exp_estado_operacoes(pedido)["romaneio"]:
         return {"ok": False, "error": "O romaneio deste pedido já foi solto pelo Noromak."}
+    revenda = _exp_revenda(pedido)  # V20.33: fora da vez da porta
     with EXP_PORTA_LOCK:
         try:
-            r = _exp_porta("romaneio/soltar", {"revenda": EXP_REVENDA, "atendimento": int(numero),
+            r = _exp_porta("romaneio/soltar", {"revenda": revenda, "atendimento": int(numero),
                                                 "operador": usuario[:60] or "noromak", "observacao": observacao},
                            escrita=True)
         except PortaErro as exc:
@@ -19914,7 +20347,8 @@ def exp_romaneio_soltar(pedido: str, atendimento: Any, observacao: str, usuario:
         return {"ok": False, "situacao": r.get("situacao") or "erro", "error": motivo}
     mensagens = [str(m) for m in (r.get("mensagens") or [])]
     _linx_operacao_registrar(pedido, "romaneio", "ok", {"observacao": observacao, "soltos": r.get("soltos"),
-                                                       "mensagens": mensagens, "via": "porta"}, numero, usuario)
+                                                       "mensagens": mensagens, "via": "porta",
+                                                       "revenda": revenda}, numero, usuario)  # V20.33
     audit(usuario, "expedicao.romaneio", f"{pedido}|{numero}|{observacao}")
     return {"ok": True, "situacao": "solto", "pedido": pedido, "atendimento": numero,
             "observacao": observacao, "soltos": r.get("soltos") or [], "mensagens": mensagens}
@@ -19946,7 +20380,9 @@ def romaneio_do_pedido(pedido: str) -> dict[str, Any]:
     # Sem o login de quem soltou (a tela não usa).
     return {"ok": True, "solto": True, "pedido": pedido, "romaneios": romaneios,
             "romaneio": romaneios[0] if len(romaneios) == 1 else "",
-            "atendimento": str(rom["contato"] or ""), "revenda": EXP_REVENDA,
+            # V20.33: a revenda em que o romaneio saiu (gravada ao soltar; sem ela, Araçatuba). Sem reler a fila:
+            # esta rota roda a cada pedido aberto na Conferência.
+            "atendimento": str(rom["contato"] or ""), "revenda": int(detalhe.get("revenda") or EXP_REVENDA),
             "observacao": str(detalhe.get("observacao") or ""), "pecas": pecas, "em": rom["em"]}
 
 
@@ -19978,7 +20414,7 @@ def _exp_caixa_corpo(pedido: str, atendimento: Any, cliente: Any) -> tuple[dict[
         return None, "Solte o romaneio primeiro (ou informe o atendimento)."
     if not codigo:
         return None, "Informe o código do cliente no Apollo: sem ele o caixa não acha a UF (Erro 2619)."
-    return {"revenda": EXP_REVENDA, "atendimento": int(numero), "cliente": int(codigo)}, ""
+    return {"revenda": _exp_revenda(pedido), "atendimento": int(numero), "cliente": int(codigo)}, ""
 
 
 def exp_caixa_previa(pedido: str, atendimento: Any, cliente: Any, usuario: str) -> dict[str, Any]:
@@ -20048,10 +20484,10 @@ def _exp_limpo(texto: Any) -> str:
     return re.sub(r"\s+", " ", base).strip().upper()
 
 
-def exp_buscar_cliente(documento: str, operador: str = "noromak") -> dict[str, Any]:
+def exp_buscar_cliente(documento: str, operador: str = "noromak", revenda: int = EXP_REVENDA) -> dict[str, Any]:
     """cliente/buscar pelo CPF/CNPJ: {situacao: encontrado|nao_cadastrado|mais_de_um, cliente, nome, lista}.
     Pesquisa que falha volta ok:false (nunca vira "não cadastrado")."""
-    b = _exp_porta("cliente/buscar", {"revenda": EXP_REVENDA, "documento": documento, "operador": operador[:60] or "noromak"})
+    b = _exp_porta("cliente/buscar", {"revenda": revenda, "documento": documento, "operador": operador[:60] or "noromak"})
     if not b.get("ok"):
         raise PortaErro(b.get("erro") or "O Apollo não respondeu a busca do cliente.")
     lista = next((v for v in b.values() if isinstance(v, list)), [])
@@ -20212,6 +20648,7 @@ def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "", ie: Any
     ie_isento = normalize(ie) == "ISENTO"
     ie = re.sub(r"\D", "", str(ie or ""))
     operador = usuario[:60] or "noromak"
+    revenda = _exp_revenda(pedido)  # V20.33: Bauru = revenda 3
     # V19.44: categoria (351) e I.E. pela porta, no criar e no atualizar (Guilherme, 16/10).
     # CPF = 1; CNPJ com I.E. = 3 + número; CNPJ sem I.E. = 2 + ISENTO. O automático não lê a
     # I.E. da NF-e: para CNPJ ele não mexe (vazio não apaga a I.E. de quem tem).
@@ -20240,9 +20677,9 @@ def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "", ie: Any
     with EXP_PORTA_LOCK:
         try:
             if codigo and _exp_nome_abreviado(nome_limpo):   # V20.09: só o nome abreviado gasta a busca
-                nome_apollo = exp_buscar_cliente(documento, operador)["nome"]
+                nome_apollo = exp_buscar_cliente(documento, operador, revenda)["nome"]
             if not codigo:
-                b = exp_buscar_cliente(documento, operador)
+                b = exp_buscar_cliente(documento, operador, revenda)
                 if b["situacao"] == "encontrado" and b["cliente"]:
                     codigo = b["cliente"]
                     nome_apollo = b["nome"]
@@ -20261,7 +20698,7 @@ def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "", ie: Any
                     if not nome_limpo:
                         return {"ok": False, "error": "Cliente novo precisa do nome da NF-e."}
                     c = _exp_porta("cliente/criar", {
-                        "revenda": EXP_REVENDA, "documento": documento, "operador": operador, "nome": nome_limpo,
+                        "revenda": revenda, "documento": documento, "operador": operador, "nome": nome_limpo,
                         "email": LINX_CADASTRO_EMAIL, "ddd_celular": LINX_CADASTRO_DDD, "celular": EXP_CELULAR_PADRAO,
                         "endereco": endereco,
                         **fiscal}, escrita=True)
@@ -20272,7 +20709,7 @@ def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "", ie: Any
                     codigo, criado = novo, c.get("situacao") == "criado"
                 else:
                     return {"ok": False, "error": "Resposta inesperada da busca do cliente."}
-            base = {"revenda": EXP_REVENDA, "cliente": int(codigo), "documento": documento, "operador": operador}
+            base = {"revenda": revenda, "cliente": int(codigo), "documento": documento, "operador": operador}
             corpo = {**base, "email": LINX_CADASTRO_EMAIL, "ddd_telefone": LINX_CADASTRO_DDD,
                      "telefone": LINX_CADASTRO_TELEFONE, "ddd_celular": LINX_CADASTRO_DDD, "celular": EXP_CELULAR_PADRAO}
             if _exp_nome_encurta(nome_limpo, nome_apollo):
@@ -20589,6 +21026,21 @@ def _exp_valor_pedido(pedido: str) -> float | None:
                 continue
             if r and r["n"]:
                 total = (total or 0.0) + float(r["s"] or 0)
+        if total is None:
+            # V20.33: TikTok sem API não está nas vendas — vale o valor do atendimento criado pelo Noromak
+            # (o mesmo que foi enviado), senão o lido no detalhe do Seller Center.
+            try:
+                row = DB.execute("SELECT valor FROM tiktok_atendimento_v2033 WHERE pedido=? AND valor IS NOT NULL",
+                                 (chave,)).fetchone()
+                if row:
+                    total = float(row["valor"])
+                else:
+                    row = DB.execute("SELECT venda_json FROM tiktok_sc_pedido_v2030 WHERE pedido=?", (chave,)).fetchone()
+                    venda = json.loads(row["venda_json"]) if row and row["venda_json"] else None
+                    if isinstance(venda, dict) and not venda.get("erro") and venda.get("itens"):
+                        total = sum(float(i.get("valor") or 0) for i in venda["itens"])
+            except (sqlite3.OperationalError, TypeError, ValueError):
+                pass
     return round(total, 2) if total is not None else None
 
 
@@ -43828,6 +44280,11 @@ class AppHandler(BaseHTTPRequestHandler):
             if ctx is not None:
                 self.send_json({"ok": True, "tiktok": tiktok_status_payload()})
             return
+        if path == "/api/integracoes/tiktok/atendimento":  # V20.33: só lê o banco
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                self.send_json(tiktok_atendimento_payload())
+            return
         if path == "/api/integracoes/tiktok/connect":
             ctx = self.auth(admin_only=True)
             if ctx is not None:
@@ -46581,7 +47038,8 @@ class AppHandler(BaseHTTPRequestHandler):
             return
         if path.startswith("/api/tiktok-estoque/") or path in ("/api/integracoes/tiktok/importacao",
                                                               "/api/integracoes/tiktok/sincronizar",
-                                                              "/api/integracoes/tiktok/etiqueta"):  # V20.29
+                                                              "/api/integracoes/tiktok/etiqueta",
+                                                              "/api/integracoes/tiktok/atendimento"):  # V20.29/V20.33
             # V19.64: estoque e pedidos do TikTok. Mudar modo, vínculo, enviar e a chave da
             # importação = perfil Admin; ligar o Automático = OWNER (senha + 2FA).
             ctx = self.auth(admin_only=True)
@@ -46596,6 +47054,11 @@ class AppHandler(BaseHTTPRequestHandler):
                     tiktok_importacao_definir(bool(body.get("ligada")), ctx["username"])
                     audit(ctx["username"], "tiktok.importacao", str(bool(body.get("ligada"))))
                     res = {"ok": True, "importacao": tiktok_importacao_ligada()}
+                elif path == "/api/integracoes/tiktok/atendimento":
+                    # V20.33: cadastro + atendimento automáticos no Apollo (como a integração do ML).
+                    tiktok_atendimento_definir(bool(body.get("ligado")), ctx["username"])
+                    audit(ctx["username"], "tiktok.atendimento_auto", str(bool(body.get("ligado"))))
+                    res = {"ok": True, **tiktok_atendimento_payload()}
                 elif path == "/api/integracoes/tiktok/etiqueta":
                     # V20.29: etiqueta automática (organiza o envio no TikTok) — começa desligada.
                     tiktok_etiqueta_definir(bool(body.get("ligada")), ctx["username"])
@@ -49793,6 +50256,7 @@ SAUDE_WORKERS_INFO: dict[str, tuple[str, bool, int]] = {
     "tiktok_pedidos_loop": ("Pedidos do TikTok Shop (Bauru)", True, 20),  # V19.64
     "tiktok_estoque_loop": ("Estoque do TikTok Shop (Apollo de Bauru)", False, 30),  # V19.64
     "tiktok_vendas_loop": ("Vendas do TikTok Shop (Bauru)", False, 30),  # V20.29
+    "tiktok_atendimento_loop": ("Cadastro e atendimento do TikTok no Apollo", False, 30),  # V20.33
     "anuncios_estoque_loop": ("Estoque automático dos anúncios do ML (Apollo)", False, 30),  # V20.26
     "shopee_label_worker_loop": ("Etiquetas da Shopee", True, 30),
     "vendas_sync_loop": ("Vendas (Dashboard e Financeiro)", False, 120),
@@ -50868,6 +51332,11 @@ def main() -> None:
         target=_worker_protegido(tiktok_vendas_loop), args=(watcher_stop,),
         name="tiktok-vendas-worker", daemon=True,
     )
+    # V20.33: cadastro + atendimento do TikTok no Apollo (interruptor começa desligado).
+    tiktok_atendimento_thread = threading.Thread(
+        target=_worker_protegido(tiktok_atendimento_loop), args=(watcher_stop,),
+        name="tiktok-atendimento-worker", daemon=True,
+    )
     # V20.26: estoque automatico dos anuncios do ML (so anuncio `noromak` em Automatico; sem nenhum, nao le nada).
     anuncios_estoque_thread = threading.Thread(
         target=_worker_protegido(anuncios_estoque_loop), args=(watcher_stop,),
@@ -51070,6 +51539,7 @@ def main() -> None:
         tiktok_pedidos_thread.start()
         tiktok_estoque_thread.start()
         tiktok_vendas_thread.start()
+        tiktok_atendimento_thread.start()  # V20.33
         anuncios_estoque_thread.start()
         vendas_ml_thread.start()
         vendas_rapido_thread.start()
