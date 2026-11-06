@@ -113,7 +113,7 @@ TITULOS = [{"texto": "Limpador X Vonixx 500ml", "recomendado": True},
            {"texto": "Limpador X 500ml Vonixx Original", "recomendado": False}]
 
 
-class Etapas(Base):
+class EtapasBase(Base):
 
     def setUp(self):
         super().setUp()
@@ -132,6 +132,9 @@ class Etapas(Base):
 
     def proposta(self):
         return json.loads(self.trabalho(self.tid)["textos_json"])
+
+
+class Etapas(EtapasBase):
 
     def test_proximo_entrega_a_etapa_de_textos(self):
         t = S.imagens_agente_proximo()["trabalho"]
@@ -219,3 +222,73 @@ class Etapas(Base):
             S.DB.commit()
         t = S.imagens_agente_proximo()["trabalho"]
         self.assertEqual(t["etapa"], "anuncio_atributos")
+
+
+class Aceitar(EtapasBase):
+
+    def pronta(self):
+        self.textos()
+        t = S.imagens_agente_proximo()["trabalho"]
+        S.anuncio_agente_entregar({"id": t["id"], "etapa": "anuncio_atributos", "atributos": [
+            {"id": "BRAND", "valor": "Outra", "origem": "rotulo"},
+            {"id": "FORMAT", "valor_id": "1", "origem": "rotulo"}]})
+        return S.anuncio_rascunho_ler(self.rid)["versao"]
+
+    def escolha(self, **extra):
+        return {"titulo": TITULOS[1]["texto"], "descricao": True, "atributos": ["BRAND", "FORMAT"], **extra}
+
+    def test_aceitar_grava_no_rascunho(self):
+        v = self.pronta()
+        S.anuncio_agente_aceitar(self.tid, self.escolha(), "admin", v)
+        r = S.anuncio_rascunho_ler(self.rid)
+        self.assertEqual(r["titulo"], TITULOS[1]["texto"])
+        self.assertEqual(r["categoria"], "MLB1234")
+        self.assertIn("BENEFÍCIOS", r["descricao"])
+        self.assertEqual((r["atributos"]["BRAND"], r["atributos"]["FORMAT"]), ("Outra", "Líquido"))
+        self.assertEqual(self.trabalho(self.tid)["situacao"], "aceita")
+
+    def test_rascunho_editado_depois_do_pedido_da_409(self):
+        v = self.pronta()
+        S.anuncio_rascunho_salvar({"id": self.rid, "preco": 99.9}, "admin", v)
+        with self.assertRaises(S.FichaConflito):
+            S.anuncio_agente_aceitar(self.tid, self.escolha(), "admin", v)
+        self.assertFalse(S.anuncio_rascunho_ler(self.rid)["titulo"])
+        self.assertEqual(self.trabalho(self.tid)["situacao"], "proposta")
+
+    def test_ficha_so_ganha_o_que_esta_vazio(self):
+        v = self.pronta()
+        S.anuncio_agente_aceitar(self.tid, self.escolha(), "admin", v)
+        campos = S.ficha_ler("ABC123")["campos"]
+        self.assertEqual(campos["marca"], "Vonixx", "marca do Admin nunca muda")
+        self.assertEqual(campos["nome"], "Limpador X", "nome da ficha nunca muda")
+        self.assertIn("BENEFÍCIOS", campos["descricao"])
+        self.assertEqual(campos["categoria_ml"], "MLB1234")
+
+    def test_campo_apagado_pelo_admin_nao_volta(self):
+        f = S.ficha_ler("ABC123")
+        S.ficha_salvar("ABC123", {"descricao": ""}, "admin", f["versao"])  # apagado pelo Admin
+        v = self.pronta()
+        S.anuncio_agente_aceitar(self.tid, self.escolha(), "admin", v)
+        self.assertNotIn("descricao", S.ficha_ler("ABC123")["campos"])
+
+    def test_titulo_que_nao_esta_na_proposta_e_recusado(self):
+        v = self.pronta()
+        with self.assertRaises(ValueError):
+            S.anuncio_agente_aceitar(self.tid, self.escolha(titulo="Outro título"), "admin", v)
+
+    def test_rascunho_publicado_nao_aceita(self):
+        v = self.pronta()
+        with S.DB_LOCK:
+            S.DB.execute("UPDATE anuncio_rascunho_v2024 SET situacao='publicado' WHERE id=?", (self.rid,))
+            S.DB.commit()
+        with self.assertRaises(ValueError):
+            S.anuncio_agente_aceitar(self.tid, self.escolha(), "admin", v)
+
+    def test_aceitar_pela_rota(self):
+        v = self.pronta()
+        st, corpo = self.cliente.pedir("POST", "/api/anuncios/agente/aceitar",
+                                       {"trabalho_id": self.tid, "versao_rascunho": v, **self.escolha()})
+        self.assertEqual(st, 200, corpo)
+        st, corpo = self.cliente.pedir("POST", "/api/anuncios/agente/aceitar",
+                                       {"trabalho_id": self.tid, "versao_rascunho": v, **self.escolha()})
+        self.assertIn(st, (400, 409), corpo)

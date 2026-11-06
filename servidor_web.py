@@ -41294,6 +41294,63 @@ def anuncio_agente_trocar_categoria(trabalho_id: Any, categoria: str, ator: str)
     return {"ok": True}
 
 
+# Campo da ficha que a proposta aceita preenche (só se vazio e não "apagado pelo Admin").
+ANUNCIO_AGENTE_FICHA_ATRIBUTO = {"marca": "BRAND", "modelo": "MODEL"}
+
+
+def anuncio_agente_aceitar(trabalho_id: Any, escolha: dict[str, Any], ator: str, versao_rascunho: Any) -> dict[str, Any]:
+    """O Admin aceita a proposta: vai ao rascunho (versão conferida pelo anuncio_rascunho_salvar) e aos campos
+    vazios da ficha. Nada vai ao ML."""
+    escolha = escolha if isinstance(escolha, dict) else {}
+    with DB_LOCK:
+        row = _imagem_row(trabalho_id)
+    if row["tipo"] != "anuncio" or row["apagado_em"] or row["situacao"] != "proposta":
+        raise ImagemConflito("Esta proposta não está mais pronta para aceitar.")
+    textos = _imagem_json(row["textos_json"], {})
+    titulo = " ".join(str(escolha.get("titulo") or "").split())
+    if titulo not in {t.get("texto") for t in textos.get("titulos") or []}:
+        raise ValueError("Escolha um dos títulos da proposta.")
+    rasc = anuncio_rascunho_ler(row["rascunho_id"])
+    if rasc is None or rasc["situacao"] not in ANUNCIO_RASCUNHO_EDITAVEL:
+        raise ValueError("Este rascunho já foi publicado ou está em publicação.")
+    try:
+        versao = int(versao_rascunho)
+    except (TypeError, ValueError):
+        raise ValueError("Versão do rascunho inválida.")
+    escolhidos = {str(x) for x in (escolha.get("atributos") or [])}
+    propostos = {a["id"]: a["valor"] for a in textos.get("atributos") or [] if a.get("id") in escolhidos}
+    dados: dict[str, Any] = {"id": rasc["id"], "titulo": titulo}
+    if textos.get("categoria"):
+        dados["categoria"] = textos["categoria"]
+        atuais = {k: v for k, v in (rasc.get("atributos") or {}).items() if k != "_guardados"}
+        if propostos or atuais:
+            dados["atributos"] = {**atuais, **propostos}  # o escolhido vence o que o rascunho tinha
+    descricao = str(textos.get("descricao") or "") if escolha.get("descricao") else ""
+    if descricao:
+        dados["descricao"] = descricao
+    salvo = anuncio_rascunho_salvar(dados, ator, versao)  # FichaConflito = o rascunho mudou (409)
+    # Ficha: só o que está vazio e não foi apagado pelo Admin.
+    ficha = ficha_ler(rasc["ficha_codigo"]) or {}
+    campos, origem = ficha.get("campos") or {}, ficha.get("origem") or {}
+    candidatos = {"nome": titulo, "descricao": descricao, "categoria_ml": str(textos.get("categoria") or "")}
+    for campo, attr in ANUNCIO_AGENTE_FICHA_ATRIBUTO.items():
+        candidatos[campo] = propostos.get(attr, "")
+    novos = {c: v for c, v in candidatos.items()
+             if v and not str(campos.get(c) or "").strip() and origem.get(c) != "admin"}
+    if novos and ficha:
+        try:
+            ficha_salvar(rasc["ficha_codigo"], novos, ator, ficha.get("versao"))
+        except FichaConflito:
+            novos = {}  # a ficha mudou no meio: o rascunho já foi gravado; a ficha fica como está
+    with DB_LOCK:
+        DB.execute("UPDATE imagem_trabalho_v2017 SET situacao='aceita', versao=versao+1, atualizado_em=? WHERE id=?",
+                   (now_iso(), row["id"]))
+        DB.commit()
+    audit(str(ator or ""), "anuncios.agente.aceitar",
+          f"#{row['id']}|rascunho={rasc['id']}|{len(propostos)} atributo(s)|ficha: {','.join(sorted(novos)) or '-'}")
+    return {"ok": True, "rascunho": salvo, "ficha_preenchida": sorted(novos)}
+
+
 # ---------- agente ----------
 
 def imagens_agente_ping(req: dict[str, Any]) -> None:
@@ -44649,6 +44706,13 @@ class AppHandler(BaseHTTPRequestHandler):
                     try:
                         res = anuncio_agente_pedir(body.get("rascunho_id"), ctx["username"],
                                                    str(body.get("nome") or ""), str(body.get("link") or ""))
+                    except ImagemConflito as exc:
+                        self.send_json({"ok": False, "error": str(exc)}, 409)
+                        return
+                elif path == "/api/anuncios/agente/aceitar":  # V20.31: aceito vai ao rascunho e aos vazios da ficha
+                    try:
+                        res = anuncio_agente_aceitar(body.get("trabalho_id"), body, ctx["username"],
+                                                     body.get("versao_rascunho"))
                     except ImagemConflito as exc:
                         self.send_json({"ok": False, "error": str(exc)}, 409)
                         return
