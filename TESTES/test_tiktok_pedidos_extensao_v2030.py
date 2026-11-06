@@ -195,7 +195,7 @@ class NomeCpf(Base):
 class Estado(Base):
 
     def test_estado_lista_fila_e_detalhes(self):
-        self.receber([_sc("583001"), _sc("583002")], [_sc("583001", nome="Ana Lima")])
+        self.receber([_sc("583001"), _sc("583002")], [_sc("583001", nome="Ana Lima", cpf=CPF, cpf_nome="Ana Lima")])
         e = S.tiktok_sc_estado()
         self.assertEqual(set(e["na_fila"]), {"583001", "583002"})
         self.assertEqual(e["com_detalhe"], ["583001"])
@@ -237,8 +237,8 @@ class RespostaReal(Base):
 
     def test_enviado_real_e_lido_como_em_transito(self):
         p = S.tiktok_sc_pedido(REAL_ENVIADO)
-        self.assertEqual((p["status"], p["line_items"][0]["quantity"], p["line_items"][0]["seller_sku"], p["packages"][0]["id"]),
-                         ("IN_TRANSIT", 2, "2008005", "3394906470852756943"))
+        self.assertEqual((p["status"], p["line_items"], p["_skus_fora"], p["packages"][0]["id"]),
+                         ("IN_TRANSIT", [], {"2008005"}, "3394906470852756943"))  # tudo já enviado: nada a separar
         self.assertTrue(S._tiktok_iso(p["create_time"]).startswith("2026-11-0"))
 
     def test_mesmo_pedido_a_enviar_entra_com_2_unidades(self):
@@ -250,6 +250,170 @@ class RespostaReal(Base):
         self.assertEqual(self.fila("587000531450430927")[0]["Quantidade"], "2")
         self.receber([], [REAL_ENVIADO])  # sumiu da aba e o detalhe diz enviado: sai
         self.assertEqual(self.fila("587000531450430927"), [])
+
+
+class RevisaoAntesDeSubir(Base):
+    """Achados da revisão de 06/11 (V20.30)."""
+
+    def _versao(self):
+        return S.get_storage("conf_pedidos")[1]
+
+    def _gravar_lido(self, pedido, lido):
+        linhas = self.fila()
+        for l in linhas:
+            if l.get("Pedido") == pedido:
+                l["Lido"] = lido
+        S.save_storage("conf_pedidos", S.get_storage("conf_pedidos")[0], S.json_dumps(linhas), False,
+                       actor="conferente", actor_role="operador", source_screen="Conferência",
+                       change_method="bip", client_ip="127.0.0.1")
+
+    def test_leitura_sem_mudanca_nao_regrava_a_fila(self):
+        self.receber([_sc("590001")], [_sc("590001", nome="Ana Lima")])
+        v = self._versao()
+        self.receber([_sc("590001")])
+        self.receber([_sc("590001")])
+        self.assertEqual(self._versao(), v, "nada mudou no TikTok: a fila não sobe de versão")
+
+    def test_cancelamento_parcial_baixa_a_quantidade(self):
+        self.receber([_sc("590002", itens=(("SK1", "0893600022", 2),))])
+        self.receber([_sc("590002", status={"590002L1": 140, "590002L2": 111}, itens=(("SK1", "0893600022", 2),))])
+        self.assertEqual(self.fila("590002")[0]["Quantidade"], "1")
+
+    def test_cancelamento_parcial_nunca_abaixo_do_bipado(self):
+        self.receber([_sc("590003", itens=(("SK1", "0893600022", 2),))])
+        self._gravar_lido("590003", 2)
+        self.receber([_sc("590003", status={"590003L1": 140, "590003L2": 111}, itens=(("SK1", "0893600022", 2),))])
+        linha = self.fila("590003")[0]
+        self.assertEqual(linha["Quantidade"], "2", "já bipou 2: não baixa (o bip nunca diminui)")
+        self.assertIn("cancel", linha.get("AvisoTikTok", "").lower())
+
+    def test_sku_cancelado_inteiro_sai_e_o_outro_fica(self):
+        itens = (("SK1", "0893600022", 1), ("SK2", "0893764272", 1))
+        self.receber([_sc("590004", itens=itens)])
+        self.assertEqual(len(self.fila("590004")), 2)
+        self.receber([_sc("590004", status={"590004L1": 111, "590004L2": 140}, itens=itens)])
+        self.assertEqual([l["SKU"] for l in self.fila("590004")], ["0893600022"])
+
+    def test_envio_parcial_tira_o_que_ja_saiu(self):
+        itens = (("SK1", "0893600022", 1), ("SK2", "0893764272", 2))
+        self.receber([_sc("590005", itens=itens)])
+        o = _sc("590005", status={"590005L1": 121, "590005L2": 111, "590005L3": 121}, itens=itens)
+        self.receber([o])
+        linhas = self.fila("590005")
+        self.assertEqual([(l["SKU"], l["Quantidade"]) for l in linhas], [("0893764272", "1")])
+
+    def test_pacote_e_o_das_linhas_abertas(self):
+        itens = (("SK1", "0893600022", 1), ("SK2", "0893764272", 1))
+        o = _sc("590006", status={"590006L1": 121, "590006L2": 111}, itens=itens)
+        o["fulfill_unit_id_mapper"] = [{"package_id": "PKSAIU", "order_line_id": ["590006L1"]},
+                                       {"package_id": "PKABERTO", "order_line_id": ["590006L2"]}]
+        self.receber([o])
+        self.assertEqual(self.fila("590006")[0]["PacoteTikTok"], "PKABERTO")
+
+    def test_amostra_nao_guarda_cpf_nem_endereco(self):
+        self.receber([_sc("590007")], [_sc("590007", cpf=CPF, cpf_nome="Maria Souza", nome="Maria Souza")])
+        with S.DB_LOCK:
+            amostras = " ".join(r["resposta"] for r in S.DB.execute("SELECT resposta FROM tiktok_amostra_v1963"))
+        self.assertTrue(amostras)
+        self.assertNotIn(CPF, amostras)
+        self.assertNotIn("Maria", amostras)
+
+    def test_detalhe_sem_cpf_e_tentado_de_novo_ate_5_vezes(self):
+        self.receber([_sc("590008")], [_sc("590008", nome="Ana Lima")])
+        self.assertNotIn("590008", S.tiktok_sc_estado()["com_detalhe"], "sem CPF: abrir de novo")
+        for _ in range(4):
+            self.receber([_sc("590008")], [_sc("590008", nome="Ana Lima")])
+        self.assertIn("590008", S.tiktok_sc_estado()["com_detalhe"], "depois de 5 tentativas para de abrir")
+
+    def test_detalhe_com_cpf_para_de_abrir(self):
+        self.receber([_sc("590009")], [_sc("590009", cpf=CPF, cpf_nome="Ana Lima")])
+        self.assertIn("590009", S.tiktok_sc_estado()["com_detalhe"])
+
+    def test_digitado_a_mao_depois_nao_fica_em_dobro(self):
+        from base import linha
+        self.receber([_sc("590010")])
+        linhas = self.fila() + [linha("590010", "0893600022", Marketplace="TIKTOK")]
+        self.salvar_admin(linhas)
+        self.receber([_sc("590010")])
+        self.assertEqual(len(self.fila("590010")), 1, "o pedido do ADMIN fica e a cópia da extensão (sem bip) sai")
+        self.assertNotEqual(self.fila("590010")[0].get("OrigemCadastro"), "API_TIKTOK")
+
+    def test_envio_atrasado_de_outro_pc_nao_reabre_o_cancelado(self):
+        import time as _t
+        lido_antes = int(_t.time() * 1000) - 60000          # o PC A leu há 1 min
+        self.receber([_sc("590011")])
+        self.receber([], [_sc("590011", status=140)])       # o PC B confirmou o cancelamento agora
+        self.assertEqual(self.fila("590011"), [])
+        S.tiktok_pedidos_da_extensao([_sc("590011")], [], completo=True, ator="pcA",
+                                     lido_em=lido_antes, agora=int(_t.time() * 1000))
+        self.assertEqual(self.fila("590011"), [], "leitura anterior ao cancelamento não reabre")
+
+
+class RevisaoDasCorrecoes(Base):
+    """2ª revisão (06/11), só sobre as correções."""
+
+    _versao = RevisaoAntesDeSubir._versao
+    _gravar_lido = RevisaoAntesDeSubir._gravar_lido
+
+    def test_quantidade_do_admin_fica_e_a_fila_nao_e_regravada(self):
+        self.receber([_sc("591001", itens=(("SK1", "0893600022", 2),))])
+        linhas = self.fila()
+        for l in linhas:
+            if l.get("Pedido") == "591001":
+                l["Quantidade"] = "3"
+        self.salvar_admin(linhas)
+        v = self._versao()
+        self.receber([_sc("591001", itens=(("SK1", "0893600022", 2),))])
+        self.receber([_sc("591001", itens=(("SK1", "0893600022", 2),))])
+        self.assertEqual(self.fila("591001")[0]["Quantidade"], "3")
+        self.assertEqual(self._versao(), v, "linha com quantidade do ADMIN também não regrava a cada volta")
+
+    def test_aviso_aparece_na_observacao_e_some_quando_resolve(self):
+        itens = (("SK1", "0893600022", 2),)
+        self.receber([_sc("591002", itens=itens)])
+        self._gravar_lido("591002", 2)
+        self.receber([_sc("591002", status={"591002L1": 140, "591002L2": 111}, itens=itens)])
+        self.assertTrue(self.fila("591002")[0].get("Observação", "").startswith("TikTok: cancelado em parte"))
+        self.receber([_sc("591002", itens=itens)])  # o TikTok voltou a dizer 2 (ex.: cancelamento recusado)
+        linha = self.fila("591002")[0]
+        self.assertEqual(linha.get("Observação", ""), "")
+        self.assertNotIn("AvisoTikTok", linha)
+
+    def test_observacao_do_operador_nunca_e_trocada(self):
+        itens = (("SK1", "0893600022", 2),)
+        self.receber([_sc("591003", itens=itens)])
+        linhas = self.fila()
+        for l in linhas:
+            if l.get("Pedido") == "591003":
+                l["Observação"] = "EMBALAR SEPARADO"
+                l["Lido"] = 2
+        self.salvar_admin(linhas)
+        self.receber([_sc("591003", status={"591003L1": 140, "591003L2": 111}, itens=itens)])
+        linha = self.fila("591003")[0]
+        self.assertEqual(linha["Observação"], "EMBALAR SEPARADO")
+        self.assertIn("cancelado em parte", linha.get("AvisoTikTok", ""))
+
+    def test_variacao_cancelada_com_o_mesmo_sku_de_outra_aberta_sai(self):
+        itens = (("SKA", "0893600022", 1), ("SKB", "0893600022", 1))
+        self.receber([_sc("591004", itens=itens)])
+        self.assertEqual(len(self.fila("591004")), 2)
+        self.receber([_sc("591004", status={"591004L1": 111, "591004L2": 140}, itens=itens)])
+        self.assertEqual(len(self.fila("591004")), 1)
+
+    def test_sku_cancelado_inteiro_ja_bipado_fica_com_aviso(self):
+        itens = (("SK1", "0893600022", 1), ("SK2", "0893764272", 1))
+        self.receber([_sc("591005", itens=itens)])
+        linhas = self.fila()
+        for l in linhas:
+            if l.get("Pedido") == "591005" and l["SKU"] == "0893764272":
+                l["Lido"] = 1
+        S.save_storage("conf_pedidos", S.get_storage("conf_pedidos")[0], S.json_dumps(linhas), False,
+                       actor="conferente", actor_role="operador", source_screen="Conferência",
+                       change_method="bip", client_ip="127.0.0.1")
+        self.receber([_sc("591005", status={"591005L1": 111, "591005L2": 140}, itens=itens)])
+        b = [l for l in self.fila("591005") if l["SKU"] == "0893764272"]
+        self.assertEqual(len(b), 1, "peça já bipada não some calada")
+        self.assertIn("cancelado ou já enviado", b[0].get("Observação", ""))
 
 
 class Saude(Base):

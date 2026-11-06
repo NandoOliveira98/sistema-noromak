@@ -468,7 +468,17 @@ com o TikTok confirmando** (detalhe IN_TRANSIT/DELIVERED/COMPLETED/CANCELLED); s
 desconhecida = fica como está. Nome guardado em `tiktok_sc_pedido_v2030` (60 dias); CPF/nome da nota vão para `cliente_fiscal`
 (fonte `tiktok_sc`) só se o pedido ainda não tem nada lá. Painel de saúde `tiktok_pedidos`: Crítico (e-mail) sem leitura completa há 30 min
 entre 08:30 e 18:00 de dia útil, fora disso atenção; nunca lido = info. **Etiqueta continua pelo Seller Center** (a extensão não organiza
-envio). Teste: `TESTES/test_tiktok_pedidos_extensao_v2030.py`.
+envio). **revisar-antes-de-subir (06/11, "corrigir todos"):** `TikTokAtualizadoEm` só anda com mudança real (a fila não é regravada a
+cada 2 min); quantidade = unidades ainda a enviar (cancelada e já enviada fora) e muda na linha existente, nunca abaixo do bipado (fica o
+bipado + `AvisoTikTok`); SKU sem unidade a enviar e cópia sem bip de pedido que o ADMIN incluiu por outra origem saem pela remoção nomeada;
+pacote = o que tem unidade aberta; amostra sem comprador (`_tiktok_sc_sem_comprador`); detalhe reaberto até ter CPF (`cpf_ok`, até
+`TIKTOK_SC_TENTATIVAS_CPF`=5); leitura anterior à saída confirmada (`saiu_epoch` × `lido_em`/`agora` da extensão) não reabre o pedido.
+Extensão 0.7.1: vez própria para pedidos (`ocupadoPedidos`), rodízio dos detalhes (`detalheAberto`), até 500 pedidos, `completo` só com
+`total_count`. **2ª revisão (só das correções):** aviso vai na `Observação` com o prefixo "TikTok: " (a Conferência mostra ⚠; a
+Observação do operador nunca é trocada) e some quando resolve; Quantidade/Cliente com override do ADMIN não mudam (e não regravam a fila);
+variação fora pelo uid exato (sku_id + SKU; peça de kit pelo `SkuKitOrigem`); linha fora **já bipada** fica com o aviso em vez de sair;
+`saiu_epoch` lido e gravado dentro do `TIKTOK_SYNC_LOCK`; a extensão alterna "sumiram da aba" e "novos" nas 10 vagas.
+Teste: `TESTES/test_tiktok_pedidos_extensao_v2030.py`.
 
 ### Magalu (V19.24, fase 0 de 5)
 Plano decidido com o dono em 14/10 (integração completa "igual ao ML", por fases): 0 conexão; 1 pedidos na
