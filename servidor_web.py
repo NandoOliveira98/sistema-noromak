@@ -43689,6 +43689,39 @@ class AppHandler(BaseHTTPRequestHandler):
                                                                     str((query.get("filtro") or [""])[0]),
                                                                     conta_q)})
             return
+        if path in ("/api/anuncios/shopee/categorias", "/api/anuncios/shopee/atributos", "/api/anuncios/shopee/conta",
+                    "/api/anuncios/shopee/rascunhos"):
+            # V20.32: leituras da Shopee para criar anuncio (so GET; chamam a Shopee: perfil Admin)
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                def _qs(nome: str) -> str:
+                    return str((query.get(nome) or [""])[0]).strip()
+                if str(ctx.get("app_role") or "") != "admin":
+                    self.send_json({"ok": False, "error": "Somente o perfil Admin."}, 403)
+                    return
+                try:
+                    if path.endswith("/categorias"):
+                        res = {"ok": True, "categorias": shopee_categoria_sugerir(_qs("titulo")),
+                               "limites": shopee_item_limites()}
+                    elif path.endswith("/atributos"):
+                        marcas = shopee_marcas(_qs("categoria"))
+                        ficha_s = ficha_ler(_qs("codigo")) if _qs("codigo") else None
+                        res = {"ok": True, **shopee_categoria_atributos(_qs("categoria")),
+                               "marca_obrigatoria": marcas["obrigatoria"], "marcas": marcas["marcas"],
+                               "marca_da_ficha": shopee_marca_da_ficha(((ficha_s or {}).get("campos") or {}).get("marca"), marcas),
+                               "limites": shopee_item_limites(_qs("categoria"))}
+                    elif path.endswith("/conta"):
+                        res = {"ok": True, **shopee_conta_preco(_qs("codigo"), _qs("preco"))}
+                    else:
+                        res = {"ok": True, "rascunhos": shopee_rascunhos_da_ficha(_qs("codigo"))}
+                except ValueError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 400)
+                    return
+                except RuntimeError as exc:
+                    self.send_json({"ok": False, "error": str(exc)}, 502)
+                    return
+                self.send_json(res)
+            return
         if path in ("/api/anuncios/ml/categorias", "/api/anuncios/ml/atributos", "/api/anuncios/ml/tarifa"):
             # V20.24: leituras do ML para criar anuncio (so GET, mas chamam o ML: perfil Admin)
             ctx = self.auth(admin_only=True)
@@ -46118,6 +46151,9 @@ class AppHandler(BaseHTTPRequestHandler):
                     "/api/anuncios/foto/remover", "/api/anuncios/foto/ordenar", "/api/anuncios/rascunho",
                     "/api/anuncios/rascunho/validar", "/api/anuncios/rascunho/publicar",
                     "/api/anuncios/rascunho/liberar",
+                    # V20.32: anuncio na Shopee (rascunho, conferir, publicar, liberar)
+                    "/api/anuncios/shopee/rascunho", "/api/anuncios/shopee/conferir", "/api/anuncios/shopee/publicar",
+                    "/api/anuncios/shopee/liberar",
                     # V20.31: agente de anúncios (pedir, trocar a categoria, aceitar)
                     "/api/anuncios/agente/pedir", "/api/anuncios/agente/atributos", "/api/anuncios/agente/aceitar",
                     "/api/anuncios/agente/cancelar"):
@@ -46311,6 +46347,22 @@ class AppHandler(BaseHTTPRequestHandler):
                         res = anuncio_publicar(body.get("id"), ctx["username"])
                     finally:
                         ANUNCIOS_PUBLICAR_LOCK.release()
+                elif path == "/api/anuncios/shopee/rascunho":  # V20.32: grava so no banco (a Shopee so no Publicar)
+                    rasc = shopee_rascunho_salvar(body, ctx["username"], body.get("versao"))
+                    audit(ctx["username"], "anuncios.shopee_rascunho", f"{rasc.get('ficha_codigo')}|{rasc.get('id')}|v{rasc.get('versao')}")
+                    res = {"ok": True, "rascunho": rasc}
+                elif path == "/api/anuncios/shopee/conferir":
+                    res = shopee_rascunho_conferir(body.get("id"), ctx["username"])
+                elif path == "/api/anuncios/shopee/publicar":  # V20.32: a UNICA escrita na criacao da Shopee
+                    if not ANUNCIOS_PUBLICAR_LOCK.acquire(blocking=False):
+                        self.send_json({"ok": False, "error": "Outra publicação em andamento."}, 409)
+                        return
+                    try:
+                        res = shopee_publicar(body.get("id"), ctx["username"])
+                    finally:
+                        ANUNCIOS_PUBLICAR_LOCK.release()
+                elif path == "/api/anuncios/shopee/liberar":
+                    res = shopee_incerto_liberar(body.get("id"), body.get("item_id"), ctx["username"])
                 elif path == "/api/anuncios/rascunho/liberar":  # V20.24: o Admin conferiu o `incerto` no ML
                     res = anuncio_incerto_liberar(body.get("id"), body.get("mlb"), ctx["username"])
                 elif path == "/api/anuncios/foto/ordenar":

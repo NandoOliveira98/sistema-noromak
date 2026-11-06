@@ -254,6 +254,37 @@ class Publicar(Base):
         self.assertEqual(S.shopee_incerto_liberar(rid, "", "admin")["situacao"], "validado")
 
 
+class Rotas(Base):
+
+    def test_rotas_do_admin(self):
+        st, c = self.cliente.pedir("GET", "/api/anuncios/shopee/categorias?titulo=Limpa%20Interior")
+        self.assertEqual(st, 200, c)
+        self.assertEqual(c["categorias"][0]["categoria"], "200")
+        st, c = self.cliente.pedir("GET", "/api/anuncios/shopee/atributos?categoria=200&codigo=TUNAP109")
+        self.assertEqual(st, 200, c)
+        self.assertEqual(c["marca_da_ficha"], {"id": "7001", "nome": "TUNAP"})
+        st, c = self.cliente.pedir("POST", "/api/anuncios/shopee/rascunho", {"codigo": "TUNAP109", "titulo": "Limpa Interior X"})
+        self.assertEqual(st, 200, c)
+        rid, v = c["rascunho"]["id"], c["rascunho"]["versao"]
+        st, c = self.cliente.pedir("POST", "/api/anuncios/shopee/rascunho", {"id": rid, "titulo": "Outro", "versao": v + 5})
+        self.assertEqual(st, 409, c)
+        st, c = self.cliente.pedir("GET", "/api/anuncios/shopee/rascunhos?codigo=TUNAP109")
+        self.assertEqual([r["id"] for r in c["rascunhos"]], [rid])
+
+    def test_supervisor_nao_mexe(self):
+        from base import SENHA_ADMIN, Cliente
+        with S.DB_LOCK:
+            S.upsert_app_user("sup_sh", "Sup", "operador", True, SENHA_ADMIN, "teste",
+                              permissions={"conferencia": True, "admin": True})
+            S.DB.commit()
+        sup = Cliente(self.url_base)
+        sup.entrar("sup_sh", SENHA_ADMIN, area="admin")
+        st, _ = sup.pedir("POST", "/api/anuncios/shopee/rascunho", {"codigo": "TUNAP109", "titulo": "X"})
+        self.assertEqual(st, 403)
+        st, _ = sup.pedir("GET", "/api/anuncios/shopee/categorias?titulo=X")
+        self.assertEqual(st, 403)
+
+
 class Preco(Base):
 
     def test_preco_ideal_cai_na_propria_faixa(self):
