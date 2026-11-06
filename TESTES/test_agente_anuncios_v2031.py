@@ -314,3 +314,97 @@ class Tela(TesteNoromak):
             self.assertTrue(trecho in html, f"falta na tela: {trecho}")
         inicio = html.index("async function aceitarAgente(")
         self.assertTrue("nkConfirmar(" in html[inicio:inicio + 1500], "aceitar pede confirmação")
+
+
+class RevisaoFinal(EtapasBase):
+    """Achados da revisão final do ramo (06/11)."""
+
+    def proposta_pronta(self, atributos):
+        self.textos()
+        t = S.imagens_agente_proximo(True)["trabalho"]
+        S.anuncio_agente_entregar({"id": t["id"], "etapa": "anuncio_atributos", "atributos": atributos})
+
+    def test_categoria_nova_nao_leva_atributo_da_antiga(self):
+        r = S.anuncio_rascunho_ler(self.rid)
+        r = S.anuncio_rascunho_salvar({"id": self.rid, "titulo": "Limpador X", "categoria": "MLB111"}, "admin", r["versao"])
+        r = S.anuncio_rascunho_salvar({"id": self.rid, "atributos": {"OLD_ATTR": "x"}}, "admin", r["versao"])
+        self.proposta_pronta([{"id": "BRAND", "valor": "Vonixx", "origem": "ficha"}])
+        S.anuncio_agente_aceitar(self.tid, {"titulo": TITULOS[0]["texto"], "atributos": ["BRAND"]}, "admin",
+                                 S.anuncio_rascunho_ler(self.rid)["versao"])
+        attrs = {k: v for k, v in S.anuncio_rascunho_ler(self.rid)["atributos"].items() if k != "_guardados"}
+        self.assertEqual(S.anuncio_rascunho_ler(self.rid)["categoria"], "MLB1234")
+        self.assertNotIn("OLD_ATTR", attrs, "atributo da categoria antiga iria ao ML")
+
+    def test_valor_da_ficha_no_rascunho_nao_e_trocado_pela_proposta(self):
+        r = S.anuncio_rascunho_ler(self.rid)
+        r = S.anuncio_rascunho_salvar({"id": self.rid, "titulo": "Limpador X", "categoria": "MLB1234"}, "admin", r["versao"])
+        r = S.anuncio_rascunho_salvar({"id": self.rid, "atributos": {"BRAND": "Vonixx"}}, "admin", r["versao"])
+        self.proposta_pronta([{"id": "BRAND", "valor": "Outra", "origem": "internet"},
+                              {"id": "VOLUME", "valor": "500 ml", "origem": "rotulo"}])
+        S.anuncio_agente_aceitar(self.tid, {"titulo": TITULOS[0]["texto"], "atributos": ["BRAND", "VOLUME"]}, "admin",
+                                 S.anuncio_rascunho_ler(self.rid)["versao"])
+        attrs = S.anuncio_rascunho_ler(self.rid)["atributos"]
+        self.assertEqual(attrs["BRAND"], "Vonixx", "a ficha vale mais que a proposta")
+        self.assertEqual(attrs["VOLUME"], "500 ml")
+
+    def test_erro_na_etapa_de_atributos_mantem_os_textos(self):
+        self.textos()
+        t = S.imagens_agente_proximo(True)["trabalho"]
+        S.anuncio_agente_entregar({"id": t["id"], "etapa": "anuncio_atributos", "situacao": "erro", "mensagem": "API caiu"})
+        tr = self.trabalho(self.tid)
+        self.assertEqual(tr["situacao"], "proposta")
+        self.assertIn("API caiu", tr["mensagem"])
+        self.assertEqual(len(self.proposta()["titulos"]), 3)
+
+    def test_vencimento_na_etapa_de_atributos_mantem_os_textos(self):
+        self.textos()
+        for _ in range(S.IMAGEM_TENTATIVAS):
+            S.imagens_agente_proximo(True)
+            with S.DB_LOCK:
+                S.DB.execute("UPDATE imagem_trabalho_v2017 SET reservado_ate=1 WHERE id=?", (self.tid,))
+                S.DB.commit()
+        S.imagens_agente_proximo(True)
+        self.assertEqual(self.trabalho(self.tid)["situacao"], "proposta")
+        self.assertEqual(len(self.proposta()["titulos"]), 3)
+
+    def test_fonte_que_nao_e_http_e_descartada(self):
+        self.proposta_pronta([{"id": "BRAND", "valor": "Vonixx", "origem": "internet", "fonte": "javascript:alert(1)"},
+                              {"id": "VOLUME", "valor": "500 ml", "origem": "internet", "fonte": "https://ok.com/x"}])
+        fontes = {a["id"]: a["fonte"] for a in self.proposta()["atributos"]}
+        self.assertEqual(fontes, {"BRAND": "", "VOLUME": "https://ok.com/x"})
+        html = (Path(S.__file__).resolve().parent / "APP" / "anuncios.html").read_text(encoding="utf-8")
+        self.assertTrue("/^https?:\/\//.test(a.fonte" in html, "a tela também confere o link")
+
+    def test_fotos_copiadas_sao_apagadas_ao_aceitar(self):
+        self.proposta_pronta([{"id": "BRAND", "valor": "Vonixx", "origem": "ficha"}])
+        pasta = S._imagem_pasta(self.tid)
+        self.assertTrue(pasta.is_dir())
+        S.anuncio_agente_aceitar(self.tid, {"titulo": TITULOS[0]["texto"], "atributos": []}, "admin",
+                                 S.anuncio_rascunho_ler(self.rid)["versao"])
+        self.assertFalse(pasta.exists())
+
+    def test_novo_pedido_apaga_a_proposta_antiga_e_as_fotos(self):
+        self.proposta_pronta([])
+        pasta = S._imagem_pasta(self.tid)
+        novo = S.anuncio_agente_pedir(self.rid, "admin")["trabalho_id"]
+        self.assertNotEqual(novo, self.tid)
+        self.assertTrue(self.trabalho(self.tid)["apagado_em"])
+        self.assertFalse(pasta.exists())
+
+    def test_cancelar_pedido_preso_libera_novo_pedido(self):
+        S.anuncio_agente_cancelar(self.tid, "admin")
+        self.assertTrue(self.trabalho(self.tid)["apagado_em"])
+        self.assertFalse(S._imagem_pasta(self.tid).exists())
+        S.anuncio_agente_pedir(self.rid, "admin")
+        st, corpo = self.cliente.pedir("POST", "/api/anuncios/agente/cancelar", {"trabalho_id": 999999})
+        self.assertIn(st, (400, 404), corpo)
+
+    def test_estado_avisa_agente_antigo(self):
+        with S.DB_LOCK:
+            S._imagem_cfg_set("agente_versao", "0.3")
+            S.DB.commit()
+        self.assertTrue(S.anuncio_agente_estado(self.rid)["agente_antigo"])
+        with S.DB_LOCK:
+            S._imagem_cfg_set("agente_versao", "0.4")
+            S.DB.commit()
+        self.assertFalse(S.anuncio_agente_estado(self.rid)["agente_antigo"])

@@ -320,7 +320,8 @@ class ClaudeImagens:
                                  atributos: list[dict[str, Any]], catalogo: list[Image.Image] | None = None,
                                  pesquisa: dict[str, Any] | None = None) -> dict[str, Any]:
         ids = [str(a.get("id")) for a in atributos if a.get("id")]
-        valores_ids = sorted({str(v.get("id")) for a in atributos for v in a.get("valores") or [] if v.get("id")})
+        # revisão final: o enum só com os mesmos 60 valores por atributo que vão no texto (esquema menor)
+        valores_ids = sorted({str(v.get("id")) for a in atributos for v in (a.get("valores") or [])[:60] if v.get("id")})
         esquema = _obj({"atributos": {"type": "array", "items": _obj({
             "id": {"type": "string", "enum": ids or [""]},
             "valor": {"type": "string"},

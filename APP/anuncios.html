@@ -1552,7 +1552,7 @@ async function carregarAgente() {
     if (d.trabalho && d.trabalho.situacao === "proposta" && !cr.ag.escolha) {
       const p = d.trabalho.proposta || {};
       cr.ag.escolha = {titulo: ((p.titulos || []).find(t => t.recomendado) || (p.titulos || [])[0] || {}).texto || "",
-        descricao: !!p.descricao, atributos: (p.atributos || []).map(a => a.id)};
+        descricao: !!p.descricao, atributos: (p.atributos || []).filter(a => !String(((cr.r && cr.r.atributos) || {})[a.id] ?? "").trim()).map(a => a.id)};  // revisão final: só marca o que está vazio no rascunho
     }
   } catch (e) {
     if (CR !== cr) return;
@@ -1573,7 +1573,7 @@ function cartaoAgente() {
     <label class="nk-campo"><span>Link do fornecedor (opcional)</span><input value="${esc(ag.link || "")}" oninput="CR.ag.link=this.value"></label></div>
     <div class="barra"><span class="esp"></span><button type="button" class="nk-btn pri" ${btOcupado()} onclick="pedirAgente()">Pedir ao agente</button></div>`;
   if (ag.carregando) return `<section class="passo">${cab}<p class="muted">Carregando…</p></section>`;
-  if (aberto) return `<section class="passo">${cab}<div class="nk-aviso info">Aguardando o agente${t.situacao === "aguardando_atributos" ? " (atributos da categoria)" : ""}… Com o PC do agente desligado, o pedido espera na fila.</div></section>`;
+  if (aberto) return `<section class="passo">${cab}${t.agente_antigo ? '<div class="nk-aviso bad">O agente do PC está numa versão antiga (precisa da 0.4): ele não pega este pedido. Atualize e reinicie o agente, ou cancele.</div>' : ""}<div class="nk-aviso info">Aguardando o agente${t.situacao === "aguardando_atributos" ? " (atributos da categoria)" : ""}… Com o PC do agente desligado, o pedido espera na fila.</div><div class="barra"><span class="esp"></span><button type="button" class="nk-btn" ${btOcupado()} onclick="cancelarAgente()">Cancelar pedido</button></div></section>`;
   if (!t || ["aceita", "erro"].includes(t.situacao)) {
     return `<section class="passo">${cab}${t && t.situacao === "erro" ? `<div class="nk-aviso bad">O agente não conseguiu: ${esc(t.mensagem || "erro")}</div>` : ""}${t && t.situacao === "aceita" ? '<div class="nk-aviso info">A última proposta já foi aceita.</div>' : ""}${pedir}</section>`;
   }
@@ -1584,7 +1584,7 @@ function cartaoAgente() {
   const cats = (p.categorias || []).map(c => `<option value="${esc(c.categoria)}" ${c.categoria === p.categoria ? "selected" : ""}>${esc(c.categoria_nome || c.categoria)}</option>`).join("");
   const attrs = (p.atributos || []).map(a => `<label style="display:flex;gap:8px;align-items:center;margin:6px 0;cursor:pointer">
       <input style="width:auto;flex:none;margin:0" type="checkbox" ${e.atributos.includes(a.id) ? "checked" : ""} onchange="agMarcarAtributo(${esc(JSON.stringify(a.id))},this.checked)">
-      <span><b>${esc(a.id)}</b>: ${esc(a.valor)} <span class="nk-selo ${a.origem === "internet" || a.origem === "catalogo" ? "warn" : ""}">${esc(AG_ORIGEM[a.origem] || a.origem)}</span>${a.fonte ? ` <a href="${esc(a.fonte)}" target="_blank" rel="noopener noreferrer">fonte</a>` : ""}</span></label>`).join("");
+      <span><b>${esc(a.id)}</b>: ${esc(a.valor)} <span class="nk-selo ${a.origem === "internet" || a.origem === "catalogo" ? "warn" : ""}">${esc(AG_ORIGEM[a.origem] || a.origem)}</span>${/^https?:\/\//.test(a.fonte || "") ? ` <a href="${esc(a.fonte)}" target="_blank" rel="noopener noreferrer">fonte</a>` : ""}</span></label>`).join("");
   return `<section class="passo">${cab}
     ${t.mensagem ? `<div class="nk-aviso">${esc(t.mensagem)}</div>` : ""}
     <h4>Título</h4>${titulos}
@@ -1609,6 +1609,12 @@ async function pedirAgente() {
   } catch (e) { nkToast(e.message, "aviso"); }
   if (CR === cr) { cr.ag = null; carregarAgente(); }
 }
+async function cancelarAgente() {
+  const cr = CR; if (!cr || !cr.ag || !cr.ag.t) return;
+  if (!await nkConfirmar("Cancelar o pedido ao agente? O que ele já fez neste pedido é descartado.", {ok: "Cancelar pedido", perigo: true})) return;
+  try { await api("/api/anuncios/agente/cancelar", {trabalho_id: cr.ag.t.id}); } catch (e) { nkToast(e.message, "aviso"); }
+  if (CR === cr) { cr.ag = null; carregarAgente(); }
+}
 async function trocarCategoriaAgente() {
   const cr = CR, sel = $("agCat"); if (!cr || !cr.ag || !cr.ag.t || !sel) return;
   try { await api("/api/anuncios/agente/atributos", {trabalho_id: cr.ag.t.id, categoria: sel.value}); }
@@ -1628,7 +1634,7 @@ async function aceitarAgente() {
     cr.r = d.rascunho; cr.f = formDoRascunho(d.rascunho); atualizarRascNaLista(d.rascunho);
     nkToast(d.ficha_preenchida && d.ficha_preenchida.length ? "Aceito no rascunho e na ficha (" + d.ficha_preenchida.join(", ") + ")." : "Aceito no rascunho.", "ok");
   } catch (err) {
-    nkToast(err.status === 409 ? "O rascunho mudou; confira e aceite de novo." : err.message, "aviso");
+    nkToast(err.status === 409 && (err.dados || {}).error === "CONFLITO" ? "O rascunho mudou; confira e aceite de novo." : err.message, "aviso");
     if (err.status === 409) carregarRascunhos(true);
   }
   if (CR === cr) { cr.ag = null; carregarAgente(); }

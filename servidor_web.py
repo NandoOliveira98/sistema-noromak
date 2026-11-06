@@ -41100,6 +41100,11 @@ def anuncio_agente_pedir(rascunho_id: Any, ator: str, nome: str = "", link: str 
                             (rasc["id"], *ANUNCIO_AGENTE_ABERTO)).fetchone()
         if aberto is not None:
             raise ImagemConflito("Já tem um pedido ao agente para este rascunho.")
+        # V20.31 (revisão final): pedido novo aposenta a proposta anterior do rascunho (e as fotos copiadas dela).
+        antigos = [r["id"] for r in DB.execute("SELECT id FROM imagem_trabalho_v2017 WHERE tipo='anuncio' AND rascunho_id=? "
+                                               "AND apagado_em IS NULL", (rasc["id"],)).fetchall()]
+        for aid in antigos:
+            DB.execute("UPDATE imagem_trabalho_v2017 SET apagado_em=?, apagado_por=? WHERE id=?", (agora, str(ator or ""), aid))
         cur = DB.execute(
             "INSERT INTO imagem_trabalho_v2017(tipo,sku,situacao,criado_por,criado_em,atualizado_em,arquivos_json,bytes,"
             "produto_json,rascunho_id) VALUES('anuncio',?,'enviando',?,?,?,?,?,?,?)",
@@ -41121,8 +41126,23 @@ def anuncio_agente_pedir(rascunho_id: Any, ator: str, nome: str = "", link: str 
     with DB_LOCK:
         DB.execute("UPDATE imagem_trabalho_v2017 SET situacao='aguardando' WHERE id=?", (id_,))
         DB.commit()
+    for aid in antigos:
+        _anuncio_agente_limpar_pasta(aid)
     audit(str(ator or ""), "anuncios.agente.pedir", f"rascunho={rasc['id']}|{ficha['codigo']}|{len(arquivos)} foto(s)|#{id_}")
     return {"ok": True, "trabalho_id": id_}
+
+
+def _anuncio_agente_limpar_pasta(trabalho_id: int) -> None:
+    """V20.31 (revisão final): as fotos copiadas para o agente só servem enquanto o pedido anda."""
+    shutil.rmtree(_imagem_pasta(int(trabalho_id)), ignore_errors=True)
+
+
+def _anuncio_agente_versao_ok(versao: str) -> bool:
+    try:
+        partes = [int(x) for x in str(versao or "").split(".")[:2]]
+    except ValueError:
+        return False
+    return tuple(partes + [0] * (2 - len(partes))) >= (0, 4)
 
 
 def anuncio_agente_estado(rascunho_id: Any) -> dict[str, Any] | None:
@@ -41133,10 +41153,27 @@ def anuncio_agente_estado(rascunho_id: Any) -> dict[str, Any] | None:
     with DB_LOCK:
         row = DB.execute("SELECT * FROM imagem_trabalho_v2017 WHERE tipo='anuncio' AND rascunho_id=? AND apagado_em IS NULL "
                          "ORDER BY id DESC LIMIT 1", (rid,)).fetchone()
+        versao = _imagem_cfg("agente_versao", "")
     if row is None:
         return None
     return {"id": row["id"], "situacao": row["situacao"], "mensagem": row["mensagem"],
-            "proposta": _imagem_json(row["textos_json"], {}), "atualizado_em": row["atualizado_em"]}
+            "proposta": _imagem_json(row["textos_json"], {}), "atualizado_em": row["atualizado_em"],
+            # V20.31 (revisão final): agente antigo (< 0.4) nunca pega o pedido — a tela avisa
+            "agente_antigo": bool(versao) and not _anuncio_agente_versao_ok(versao)}
+
+
+def anuncio_agente_cancelar(trabalho_id: Any, ator: str) -> dict[str, Any]:
+    """V20.31 (revisão final): o Admin cancela o pedido (preso, agente desligado ou antigo). Libera pedir de novo."""
+    with DB_LOCK:
+        row = _imagem_row(trabalho_id)
+        if row["tipo"] != "anuncio" or row["apagado_em"]:
+            raise ValueError("Pedido não encontrado.")
+        DB.execute("UPDATE imagem_trabalho_v2017 SET apagado_em=?, apagado_por=?, reservado_ate=NULL, versao=versao+1 "
+                   "WHERE id=?", (now_iso(), str(ator or ""), row["id"]))
+        DB.commit()
+    _anuncio_agente_limpar_pasta(row["id"])
+    audit(str(ator or ""), "anuncios.agente.cancelar", f"#{row['id']}|rascunho={row['rascunho_id']}")
+    return {"ok": True}
 
 
 ANUNCIO_AGENTE_ORIGENS = ("ficha", "rotulo", "catalogo", "internet")
@@ -41196,9 +41233,11 @@ def _anuncio_agente_atributos(brutos: Any, defs: list[dict[str, Any]]) -> list[d
             if d.get("max"):
                 valor = valor[:int(d["max"])]
         origem = str(a.get("origem") or "")
+        fonte = str(a.get("fonte") or "").strip()[:300]
+        if not re.match(r"https?://", fonte, re.I):  # revisão final: link vindo da internet só http(s)
+            fonte = ""
         saida.append({"id": str(a["id"]), "valor": valor, "valor_id": valor_id,
-                      "origem": origem if origem in ANUNCIO_AGENTE_ORIGENS else "internet",
-                      "fonte": str(a.get("fonte") or "")[:300]})
+                      "origem": origem if origem in ANUNCIO_AGENTE_ORIGENS else "internet", "fonte": fonte})
     return saida
 
 
@@ -41216,12 +41255,19 @@ def anuncio_agente_entregar(req: dict[str, Any]) -> dict[str, Any]:
                                 _imagem_buscas(req), origem="anuncio")
 
     if str(req.get("situacao") or "") == "erro":
+        msg = str(req.get("mensagem") or "")[:900]
         with DB_LOCK:
             row = _reservado()
-            DB.execute("UPDATE imagem_trabalho_v2017 SET situacao='erro', mensagem=?, reservado_ate=NULL, versao=versao+1, "
-                       "atualizado_em=? WHERE id=?", (str(req.get("mensagem") or "")[:1000], now_iso(), row["id"]))
+            # revisão final: com os títulos já entregues, o erro na etapa de atributos não joga fora os textos
+            tem_textos = bool(_imagem_json(row["textos_json"], {}).get("titulos"))
+            DB.execute("UPDATE imagem_trabalho_v2017 SET situacao=?, mensagem=?, reservado_ate=NULL, versao=versao+1, "
+                       "atualizado_em=? WHERE id=?",
+                       ("proposta" if tem_textos else "erro",
+                        f"O agente não preencheu os atributos: {msg}" if tem_textos else msg, now_iso(), row["id"]))
             _gasto(row)
             DB.commit()
+        if not tem_textos:
+            _anuncio_agente_limpar_pasta(row["id"])
         return {"ok": True}
     if etapa == "anuncio_textos":
         titulos = _anuncio_agente_titulos(req.get("titulos"))
@@ -41315,13 +41361,20 @@ def anuncio_agente_aceitar(trabalho_id: Any, escolha: dict[str, Any], ator: str,
     except (TypeError, ValueError):
         raise ValueError("Versão do rascunho inválida.")
     escolhidos = {str(x) for x in (escolha.get("atributos") or [])}
-    propostos = {a["id"]: a["valor"] for a in textos.get("atributos") or [] if a.get("id") in escolhidos}
+    atuais = {k: v for k, v in (rasc.get("atributos") or {}).items() if k != "_guardados" and str(v or "").strip()}
+    # Revisão final: o que veio da ficha para o rascunho (marca, modelo, GTIN, SKU, peso e medidas) vale mais que a
+    # proposta (ficha do Admin > rótulo/catálogo > internet).
+    propostos = {a["id"]: a["valor"] for a in textos.get("atributos") or []
+                 if a.get("id") in escolhidos and not (a["id"] in ANUNCIO_CAMPO_DO_ATRIBUTO and a["id"] in atuais)}
     dados: dict[str, Any] = {"id": rasc["id"], "titulo": titulo}
     if textos.get("categoria"):
         dados["categoria"] = textos["categoria"]
-        atuais = {k: v for k, v in (rasc.get("atributos") or {}).items() if k != "_guardados"}
+        if textos["categoria"] != str(rasc.get("categoria") or ""):
+            # Revisão final: categoria nova = só os atributos que ela tem (o resto o rascunho guarda em _guardados)
+            ids_cat = {str(d.get("id")) for d in textos.get("atributos_ml") or [] if isinstance(d, dict)}
+            atuais = {k: v for k, v in atuais.items() if k in ids_cat or k in ANUNCIO_CAMPO_DO_ATRIBUTO}
         if propostos or atuais:
-            dados["atributos"] = {**atuais, **propostos}  # o escolhido vence o que o rascunho tinha
+            dados["atributos"] = {**atuais, **propostos}
     descricao = str(textos.get("descricao") or "") if escolha.get("descricao") else ""
     if descricao:
         dados["descricao"] = descricao
@@ -41343,6 +41396,7 @@ def anuncio_agente_aceitar(trabalho_id: Any, escolha: dict[str, Any], ator: str,
         DB.execute("UPDATE imagem_trabalho_v2017 SET situacao='aceita', versao=versao+1, atualizado_em=? WHERE id=?",
                    (now_iso(), row["id"]))
         DB.commit()
+    _anuncio_agente_limpar_pasta(row["id"])  # revisão final: as fotos copiadas não servem mais
     audit(str(ator or ""), "anuncios.agente.aceitar",
           f"#{row['id']}|rascunho={rasc['id']}|{len(propostos)} atributo(s)|ficha: {','.join(sorted(novos)) or '-'}")
     return {"ok": True, "rascunho": salvo, "ficha_preenchida": sorted(novos)}
@@ -41373,9 +41427,15 @@ def imagens_agente_proximo(aceita_anuncio: bool = False) -> dict[str, Any]:
                               (*IMAGEM_EM_TRABALHO, agora)).fetchall()
         for v in vencidos:
             if int(v["tentativas"]) >= IMAGEM_TENTATIVAS:
-                DB.execute("UPDATE imagem_trabalho_v2017 SET situacao='erro', reservado_ate=NULL, versao=versao+1, "
+                # V20.31 (revisão final): anúncio com os títulos já entregues fica com a proposta (sem os atributos)
+                textos_ok = v["tipo"] == "anuncio" and bool(_imagem_json(v["textos_json"], {}).get("titulos"))
+                DB.execute("UPDATE imagem_trabalho_v2017 SET situacao=?, reservado_ate=NULL, versao=versao+1, "
                            "mensagem=?, atualizado_em=? WHERE id=?",
-                           (f"O agente não terminou depois de {IMAGEM_TENTATIVAS} tentativas.", now_iso(), v["id"]))
+                           ("proposta" if textos_ok else "erro",
+                            f"O agente não terminou depois de {IMAGEM_TENTATIVAS} tentativas."
+                            + (" Os atributos ficaram em branco." if textos_ok else ""), now_iso(), v["id"]))
+                if v["tipo"] == "anuncio" and not textos_ok:
+                    _anuncio_agente_limpar_pasta(v["id"])
             else:
                 volta = "aguardando_arte" if v["situacao"] == "gerando" else "aguardando"
                 if v["tipo"] == "anuncio" and _imagem_json(v["textos_json"], {}).get("titulos"):
@@ -44556,7 +44616,8 @@ class AppHandler(BaseHTTPRequestHandler):
                     "/api/anuncios/rascunho/validar", "/api/anuncios/rascunho/publicar",
                     "/api/anuncios/rascunho/liberar",
                     # V20.31: agente de anúncios (pedir, trocar a categoria, aceitar)
-                    "/api/anuncios/agente/pedir", "/api/anuncios/agente/atributos", "/api/anuncios/agente/aceitar"):
+                    "/api/anuncios/agente/pedir", "/api/anuncios/agente/atributos", "/api/anuncios/agente/aceitar",
+                    "/api/anuncios/agente/cancelar"):
             # V20.23: ver = modulo admin; gravar = so perfil Admin. Nada daqui grava no ML/Shopee/Magalu/TikTok/Apollo.
             ctx = self.auth(admin_only=True)
             if ctx is None:
@@ -44711,10 +44772,19 @@ class AppHandler(BaseHTTPRequestHandler):
                     except ImagemConflito as exc:
                         self.send_json({"ok": False, "error": str(exc)}, 409)
                         return
+                elif path == "/api/anuncios/agente/cancelar":  # V20.31 (revisao final): pedido preso
+                    try:
+                        res = anuncio_agente_cancelar(body.get("trabalho_id"), ctx["username"])
+                    except ImagemNaoEncontrada as exc:
+                        self.send_json({"ok": False, "error": str(exc)}, 404)
+                        return
                 elif path == "/api/anuncios/agente/aceitar":  # V20.31: aceito vai ao rascunho e aos vazios da ficha
                     try:
                         res = anuncio_agente_aceitar(body.get("trabalho_id"), body, ctx["username"],
                                                      body.get("versao_rascunho"))
+                    except ImagemNaoEncontrada as exc:
+                        self.send_json({"ok": False, "error": str(exc)}, 404)
+                        return
                     except ImagemConflito as exc:
                         self.send_json({"ok": False, "error": str(exc)}, 409)
                         return
@@ -44722,6 +44792,9 @@ class AppHandler(BaseHTTPRequestHandler):
                     try:
                         res = anuncio_agente_trocar_categoria(body.get("trabalho_id"), str(body.get("categoria") or ""),
                                                               ctx["username"])
+                    except ImagemNaoEncontrada as exc:
+                        self.send_json({"ok": False, "error": str(exc)}, 404)
+                        return
                     except ImagemConflito as exc:
                         self.send_json({"ok": False, "error": str(exc)}, 409)
                         return
