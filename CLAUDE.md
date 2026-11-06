@@ -448,7 +448,10 @@ fica; concluído não volta). **Vendas** (`tiktok_vendas_loop`, 10 min, só cone
 30 dias 1x/dia, sem UNPAID/CANCELLED, em `vendas_conta_v1898` (`conta='bauru'`, `marketplace='tiktok'`); `vendas_v1799`, o Financeiro e
 `VENDAS_MARKETPLACES` não mudam — o Dashboard usa `VENDAS_MARKETPLACES_DASHBOARD` (canal e cor TikTok). **Acerto** (`tiktok_acerto_v2029`):
 vendas de 3 a 60 dias, 20 por volta, `/finance/202501/orders/{id}/statement_transactions` (404 = 202309); receita, tarifa, frete e líquido
-somados das transações, campo ausente = NULL; erro espera 6 h. Testes: `TESTES/test_tiktok_etiqueta_v2029.py`, `TESTES/test_tiktok_vendas_v2029.py`.
+somados das transações, campo ausente = NULL; erro espera 6 h. **Revisão final (06/11):** o envio só é organizado para pedido que fica na
+fila (`_tiktok_pedidos_que_ficam_na_fila`: tombstone, linha excluída e concluído do ADMIN valem antes da escrita no TikTok); `/ship` nunca
+duas vezes no mesmo pacote (`_TIKTOK_ETIQUETA_ORGANIZADO`); acerto sem transação não conta como lido (relê); amostra uma por rota
+(id do pacote/pedido vira `{id}`). Testes: `TESTES/test_tiktok_etiqueta_v2029.py`, `TESTES/test_tiktok_vendas_v2029.py`.
 
 ### Magalu (V19.24, fase 0 de 5)
 Plano decidido com o dono em 14/10 (integração completa "igual ao ML", por fases): 0 conexão; 1 pedidos na

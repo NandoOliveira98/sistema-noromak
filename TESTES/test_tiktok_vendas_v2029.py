@@ -206,3 +206,16 @@ class Acerto(Base):
     def test_venda_recente_ainda_nao_e_lida(self):
         self._venda_antiga("TT1", dias=0)
         self.assertNotIn("TT1", S.tiktok_acerto_pendentes())
+
+
+class AcertoRevisao(Base):
+
+    def test_resposta_sem_transacao_nao_conta_como_lida(self):
+        with self._api([_venda("TT9", dia=HOJE - timedelta(days=5))]):
+            S.tiktok_vendas_sync()
+        with self._api(financeiro=lambda path: {"code": 0, "data": {"statement_transactions": []}}):
+            S.tiktok_acerto_rodada()
+        with S.DB_LOCK:
+            a = dict(S.DB.execute("SELECT * FROM tiktok_acerto_v2029 WHERE order_id='TT9'").fetchone())
+        self.assertFalse(a["lido_em"], "acerto ainda não saiu: tem de ser relido depois")
+        self.assertTrue(a["tentado_em"])

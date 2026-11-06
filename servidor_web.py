@@ -6634,7 +6634,8 @@ def tiktok_api(metodo: str, path: str, params: dict[str, Any] | None = None,
     resp = _tiktok_http(metodo, TIKTOK_API_BASE + path + "?" + urlencode(query), token, corpo)
     if not isinstance(resp, dict):
         raise RuntimeError("Resposta inválida do TikTok.")
-    _tiktok_guardar_amostra(f"{metodo} {path}", resp)
+    # V20.29: uma amostra por ROTA — o id do pacote/pedido vira {id} (senão uma linha por pedido).
+    _tiktok_guardar_amostra(f"{metodo} " + re.sub(r"/(packages|orders)/[^/]+/", r"/\1/{id}/", path), resp)
     if int(resp.get("code") or 0) != 0:
         raise RuntimeError(f"TikTok {path}: {resp.get('code')} {resp.get('message') or ''}".strip())
     return resp
@@ -9844,6 +9845,7 @@ def tiktok_pedidos_abertos() -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 _TIKTOK_ETIQUETA_TENTATIVA: dict[str, float] = {}   # pacote -> epoch da última tentativa que falhou
 _TIKTOK_ETIQUETA_ESTADO: dict[str, str] = {}        # pacote -> AGUARDANDO NF / ERRO (memória do processo)
+_TIKTOK_ETIQUETA_ORGANIZADO: set[str] = set()      # revisão final: envio já organizado; só falta o documento
 
 
 class TikTokSemNota(RuntimeError):
@@ -9942,6 +9944,19 @@ def _tiktok_guardar_etiqueta(pedido: str, pacote: str) -> None:
                  client_ip="127.0.0.1")
 
 
+def _tiktok_pedidos_que_ficam_na_fila(pedidos: list[dict[str, Any]],
+                                      products: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Revisão final (06/11): os pedidos cujas linhas passam pelas barreiras do ADMIN — linha excluída
+    (já tirada em _tiktok_linhas_do_pedido), tombstone do pedido inteiro e concluído — as mesmas
+    que o save_storage aplica por último."""
+    linhas: list[dict[str, Any]] = []
+    for pedido in pedidos:
+        linhas.extend(_tiktok_linhas_do_pedido(pedido, products))
+    valor = filter_completed_orders_v1772(_pending_filter_manual_deleted_orders_value(json_dumps(linhas)))
+    ficam = {normalize(order_number(r)) for r in _rows_from_storage_value(valor) if isinstance(r, dict)}
+    return [p for p in pedidos if normalize(str(p.get("id") or "")) in ficam]
+
+
 def _tiktok_cancelamento_pedido(pedido: dict[str, Any]) -> bool:
     """V20.29: comprador pediu cancelamento (ou o pedido está retido): não organiza o envio.
     Nomes dos campos a conferir na 1ª resposta real (leitura tolerante)."""
@@ -9967,13 +9982,15 @@ def tiktok_etiquetas_rodada(pedidos: list[dict[str, Any]]) -> dict[str, Any]:
                     resumo["aguardando_nf"] += 1
                 continue
             try:
-                if status == "AWAITING_SHIPMENT":
+                if status == "AWAITING_SHIPMENT" and pacote not in _TIKTOK_ETIQUETA_ORGANIZADO:
                     tiktok_organizar_envio(pacote)
+                    _TIKTOK_ETIQUETA_ORGANIZADO.add(pacote)  # nunca chamar o /ship duas vezes
                 tiktok_documento_url(pacote)  # só confere que o documento existe; o PDF é baixado na impressão
                 _tiktok_guardar_etiqueta(numero, pacote)
                 vinculados.add(pacote)
                 _TIKTOK_ETIQUETA_TENTATIVA.pop(pacote, None)
                 _TIKTOK_ETIQUETA_ESTADO.pop(pacote, None)
+                _TIKTOK_ETIQUETA_ORGANIZADO.discard(pacote)
                 resumo["novas"] += 1
             except TikTokSemNota as exc:
                 _TIKTOK_ETIQUETA_TENTATIVA[pacote] = agora
@@ -10048,10 +10065,14 @@ def tiktok_importar_pedidos() -> dict[str, Any]:
         pedidos = tiktok_pedidos_abertos()  # erro aqui = nada gravado
         # V20.29: etiqueta antes de montar as linhas, para a linha já sair VINCULADA.
         ligada = tiktok_etiqueta_ligada()
-        etiquetas = tiktok_etiquetas_rodada(pedidos) if ligada else {"novas": 0, "aguardando_nf": 0, "erros": 0}
-        vinculados = _tiktok_etiquetas_vinculadas()
         products_raw, _, _ = get_storage("conf_produtos")
         products = _rows_from_storage_value(products_raw)
+        etiquetas = {"novas": 0, "aguardando_nf": 0, "erros": 0}
+        if ligada:
+            # Revisão final: só organiza o envio (escrita no TikTok) de pedido que vai ficar na
+            # fila — o que o ADMIN excluiu (tombstone/linha) ou que já foi concluído fica de fora.
+            etiquetas = tiktok_etiquetas_rodada(_tiktok_pedidos_que_ficam_na_fila(pedidos, products))
+        vinculados = _tiktok_etiquetas_vinculadas()
         api_linhas: list[dict[str, Any]] = []
         for pedido in pedidos:
             api_linhas.extend(_tiktok_linhas_do_pedido(pedido, products, (vinculados, ligada)))
@@ -24520,12 +24541,15 @@ def tiktok_acerto_ler(order_id: str) -> dict[str, Any]:
         "liquido": _tiktok_soma(trans, ("settlement_amount",)),
     }
     agora = now_iso()
+    # Revisão final: sem transação o acerto ainda não saiu — fica só a tentativa (relê em 6 h,
+    # até a janela de 60 dias). Antes gravava "lido" com tudo NULL e nunca relia.
+    lido = agora if trans else ""
     with DB_LOCK:
         DB.execute(
             "INSERT OR REPLACE INTO tiktok_acerto_v2029(order_id,receita,tarifa,frete,liquido,bruto_json,lido_em,tentado_em,erro) "
-            "VALUES(?,?,?,?,?,?,?,?, '')",
+            "VALUES(?,?,?,?,?,?,?,?,?)",
             (order_id, valores["receita"], valores["tarifa"], valores["frete"], valores["liquido"],
-             json_dumps(trans)[:20000], agora, agora))
+             json_dumps(trans)[:20000], lido, agora, "" if trans else "acerto ainda sem transação"))
         DB.commit()
     return valores
 

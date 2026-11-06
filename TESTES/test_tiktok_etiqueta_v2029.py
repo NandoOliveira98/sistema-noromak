@@ -45,6 +45,8 @@ class Base(TesteNoromak):
             self.addCleanup(p.stop)
         _conectar()
         S._TIKTOK_ETIQUETA_TENTATIVA.clear()
+        S._TIKTOK_ETIQUETA_ESTADO.clear()
+        S._TIKTOK_ETIQUETA_ORGANIZADO.clear()
         self.enviados = []
         self.erro_ship = None
         self.doc_url = DOC_URL
@@ -330,3 +332,52 @@ class Rotas(Base):
         html = (Path(S.__file__).resolve().parent / "APP" / "admin.html").read_text(encoding="utf-8")
         self.assertTrue("/expedicao/api/integracoes/tiktok/etiqueta" in html, "falta a chamada da rota")
         self.assertTrue('id="btnTiktokEtiqueta"' in html, "falta o botão")
+
+
+class RevisaoFinal(Base):
+    """Achados da revisão final (06/11)."""
+
+    def test_nao_organiza_envio_de_pedido_excluido_pelo_admin_nem_concluido(self):
+        self._importar([_pedido("TT1"), _pedido("TT2")])
+        self.excluir_admin("TT1", marketplace="TIKTOK")
+        st, corpo = self.cliente.pedir("POST", "/api/order-complete", {"pedido": "TT2"})
+        self.assertEqual(st, 200, corpo)
+        S.tiktok_etiqueta_definir(True, "dono")
+        self._importar([_pedido("TT1"), _pedido("TT2"), _pedido("TT3")])
+        ship = [e[1] for e in self._chamadas("/ship")]
+        self.assertEqual(ship, ["/fulfillment/202309/packages/PKTT3/ship"],
+                         "o ADMIN excluiu/concluiu: nada pode ser gravado no TikTok por esses pedidos")
+
+    def test_envio_ja_organizado_nao_e_organizado_de_novo(self):
+        S.tiktok_etiqueta_definir(True, "dono")
+        teste = self
+        falhar_doc = {"sim": True}
+
+        def falso(metodo, path, params=None, body=None, loja=True):
+            teste.enviados.append((metodo, path, params, body))
+            if path == "/order/202309/orders/search":
+                st = (body or {}).get("order_status")
+                return {"code": 0, "data": {"orders": [o for o in [_pedido("TT1")] if o.get("status") == st]}}
+            if path.endswith("/shipping_documents") and falhar_doc["sim"]:
+                raise RuntimeError("TikTok: invoice not uploaded")
+            if path.endswith("/shipping_documents"):
+                return {"code": 0, "data": {"doc_url": DOC_URL}}
+            return {"code": 0, "data": {}}
+        with mock.patch.object(S, "tiktok_api", side_effect=falso):
+            S.tiktok_importar_pedidos()
+            falhar_doc["sim"] = False
+            with mock.patch.object(S.time, "time", return_value=time.time() + 601):
+                S.tiktok_importar_pedidos()
+        self.assertEqual(len(self._chamadas("/ship")), 1, "envio já organizado: só falta o documento")
+        self.assertEqual(self._linha("TT1")["Etiqueta API TikTok"], "VINCULADA")
+
+    def test_amostra_uma_por_rota_sem_o_id(self):
+        with mock.patch.object(S, "_tiktok_http", return_value={"code": 0, "data": {}}):
+            S.tiktok_api("POST", "/fulfillment/202309/packages/PK1/ship", body={})
+            S.tiktok_api("POST", "/fulfillment/202309/packages/PK2/ship", body={})
+            S.tiktok_api("GET", "/finance/202501/orders/57712345/statement_transactions")
+        with S.DB_LOCK:
+            tipos = [r[0] for r in S.DB.execute("SELECT tipo FROM tiktok_amostra_v1963").fetchall()]
+        self.assertIn("POST /fulfillment/202309/packages/{id}/ship", tipos)
+        self.assertEqual(len([t for t in tipos if "/ship" in t]), 1)
+        self.assertIn("GET /finance/202501/orders/{id}/statement_transactions", tipos)
