@@ -1507,7 +1507,7 @@ async function shPublicar() {
     let atual = null;
     while (Date.now() < limite) {
       await new Promise(ok => setTimeout(ok, 2000));
-      if (!F || F.codigo !== cod) return;
+      if (!F || F.codigo !== cod) { SH.ocupado = ""; return; }  // 2ª revisão: outra ficha aberta não fica travada
       try { atual = ((await api(`/api/anuncios/shopee/rascunhos?codigo=${enc(cod)}`)).rascunhos || []).find(x => x.id === r.id); }
       catch (_) { atual = null; }
       if (atual && atual.situacao !== "publicando") break;

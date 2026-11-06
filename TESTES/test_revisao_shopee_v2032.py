@@ -299,6 +299,89 @@ class ListaRevisao(Base):
         self.assertEqual(S._anuncio_misto_por_codigo(linhas), {})
 
 
+class SegundaRevisao(Base):
+    """2a revisao (so das correcoes), 06/11."""
+
+    def test_429_nao_e_talvez_fez_e_time_out_e(self):
+        self.assertFalse(S._shopee_talvez_fez(S.ShopeeRecusou("Shopee HTTP 429: limite", None, status=429)))
+        self.assertTrue(S._shopee_talvez_fez(S.ShopeeRecusou("error_time_out: x", {"error": "error_time_out"}, status=200)))
+        self.assertFalse(S._shopee_talvez_fez(S.ShopeeRecusou("Shopee HTTP 400: error_param bad", {"error": "error_param"},
+                                                              status=400)))
+
+    def test_foto_recusada_por_motivo_real_nao_tenta_a_publica(self):
+        r = self.rascunho()
+        S.shopee_rascunho_conferir(r["id"], "admin")
+        publicos = []
+
+        def chamar(method, path, params=None, payload=None, *, multipart=None, timeout=35, _renovou=False, publico=False):
+            if path.endswith("upload_image"):
+                if publico:
+                    publicos.append(1)
+                raise S.ShopeeRecusou("Shopee HTTP 400: error_image_size", {"error": "error_image_size"}, status=400)
+            return self.shopee(method, path, params, payload, multipart=multipart)
+        with mock.patch.object(S, "_shopee_chamar", new=chamar), self.apollo():
+            res = S.shopee_publicar(r["id"], "admin")
+        self.assertEqual(res["situacao"], "validado")
+        self.assertIn("error_image_size", res["erros"][0])
+        self.assertEqual(publicos, [])
+
+    def test_403_com_erro_de_token_renova(self):
+        import urllib.error
+        import io
+        renovou = []
+        respostas = [urllib.error.HTTPError("u", 403, "x", {}, io.BytesIO(json.dumps(
+            {"error": "invalid_acceess_token", "message": "token expired"}).encode())),
+            io.BytesIO(json.dumps({"response": {"ok": 1}}).encode())]
+
+        class Resp:
+            def __init__(self, b): self.b = b
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): return self.b.read()
+
+        def urlopen(req, timeout=None):
+            r = respostas.pop(0)
+            if isinstance(r, Exception):
+                raise r
+            return Resp(r)
+        with mock.patch.object(S, "shopee_refresh_access_token",
+                               side_effect=lambda forcar=False: renovou.append(forcar) or {"shop_id": "1", "access_token": "t"}), \
+                mock.patch.object(S.urllib.request, "urlopen", side_effect=urlopen), \
+                mock.patch.object(S, "SHOPEE_PARTNER_ID", "1"), \
+                mock.patch.object(S, "_shopee_chamar", new=_CHAMAR_REAL):
+            dados = _CHAMAR_REAL("GET", "/api/v2/product/get_item_limit")
+        self.assertEqual(dados["response"], {"ok": 1})
+        self.assertEqual(renovou, [False, True])
+
+    def test_publicar_que_nao_comeca_volta_a_validado(self):
+        r = self.rascunho()
+        S.shopee_rascunho_conferir(r["id"], "admin")
+        with mock.patch.object(S.threading.Thread, "start", side_effect=RuntimeError("sem thread")):
+            with self.assertRaises(RuntimeError):
+                S.shopee_publicar_iniciar(r["id"], "admin")
+        self.assertEqual(S.shopee_rascunho_ler(r["id"])["situacao"], "validado")
+
+
+class VoltaRevisao(ShopeeEstoque):
+
+    def test_mudanca_com_a_shopee_ocupada_nao_se_perde(self):
+        inserir_shopee("111", "PSH", modo="automatico")
+        self.apollo["PSH"] = {1: 4}
+        S.anuncio_estoque_config_definir("shopee", "automatico", "luis")
+        estado = {}
+        trava = S._ANUNCIO_ESTOQUE_RODADA_LOCKS["shopee"]
+        trava.acquire()
+        try:
+            S.anuncios_estoque_volta(estado)  # ocupada: pula, mas guarda que falta
+        finally:
+            trava.release()
+        self.assertTrue(estado.get("shopee_pendente"))
+        estado["recalculo"] = time.monotonic()  # sem o recalculo de 10 min
+        S.anuncios_estoque_volta(estado)
+        self.assertEqual(self.sh.estoque.get("111"), 4)
+        self.assertFalse(estado.get("shopee_pendente"))
+
+
 if __name__ == "__main__":
     import unittest
     unittest.main()

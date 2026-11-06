@@ -905,6 +905,10 @@ erro **de token** (403 de permissão não gasta o refresh_token); a rodada da Sh
 máximo `ANUNCIO_ESTOQUE_SHOPEE_ESPERA_S` (20 s): Shopee fora do ar não segura o ML; Conferir confere a versão (409); preço finito;
 fotos sem repetir; marca zera com a categoria (e marca fora da lista da categoria = erro; a da ficha fora da lista = aviso "No Brand");
 "misto" só no mesmo canal; ver os rascunhos = módulo admin. Teste: `TESTES/test_revisao_shopee_v2032.py`.
+2ª revisão (só das correções): 429 = a Shopee recusou sem processar (não é incerto), `error_time_out` é; a foto só tenta a assinatura
+pública pelo **código** de erro do corpo; renova também em 403 com código de token (inclui a grafia `invalid_acceess_token`); o Publicar
+que não começa (thread) volta a `validado`; mudança que chega com a rodada da Shopee ocupada fica para a volta seguinte
+(`estado["shopee_pendente"]`); trocar de ficha durante a publicação não trava o painel.
 
 **V20.26 — fase 3: controle de estoque dos anúncios do ML** (decisões do dono 05/11; plano
 `docs/superpowers/plans/2026-11-05-anuncios-fase3-estoque.md`). **Exceção à regra "o Noromak nunca grava estoque": o Noromak grava

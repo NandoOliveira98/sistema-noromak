@@ -33994,7 +33994,8 @@ SHOPEE_RASCUNHO_EDITAVEL = ("rascunho", "validado", "erro")
 SHOPEE_RASCUNHO_CAMPOS = ("titulo", "categoria", "categoria_nome", "descricao", "preco", "quantidade")
 _SHOPEE_LEITURA_CACHE: dict[tuple[str, str], tuple[float, Any]] = {}
 _SHOPEE_LEITURA_LOCK = threading.Lock()
-_SHOPEE_AUTH_ERROS = {"error_auth", "error_authentication", "invalid_access_token", "error_token"}
+_SHOPEE_AUTH_ERROS = {"error_auth", "error_authentication", "invalid_access_token", "invalid_acceess_token",
+                      "error_token", "error_invalid_access_token"}
 
 
 class ShopeeSemResposta(Exception):
@@ -34012,14 +34013,14 @@ class ShopeeRecusou(Exception):
 
 # revisar-antes-de-subir (06/11): erro do lado da Shopee (interno, ocupado, tempo) numa ESCRITA pode ter feito a
 # escrita: no add_item vira `incerto` (nunca "recusado", que deixaria publicar de novo e criar dois anuncios).
-_SHOPEE_ERRO_TALVEZ_FEZ = re.compile(r"server|inner|internal|busy|timeout|time out|network|system|unknown", re.I)
+_SHOPEE_ERRO_TALVEZ_FEZ = re.compile(r"server|inner|internal|busy|time[ _-]?out|network|system|unknown", re.I)
 
 
 def _shopee_talvez_fez(exc: Exception) -> bool:
     if isinstance(exc, ShopeeSemResposta):
         return True
     if isinstance(exc, ShopeeRecusou):
-        if exc.status in (408, 429) or (exc.status or 0) >= 500:
+        if exc.status == 408 or (exc.status or 0) >= 500:  # 2a revisao: 429 = limite, a Shopee nao processou
             return True
         erro = str((exc.corpo or {}).get("error") or "") if isinstance(exc.corpo, dict) else ""
         return bool(_SHOPEE_ERRO_TALVEZ_FEZ.search(erro or str(exc).split(":", 1)[0]))
@@ -34782,7 +34783,8 @@ def _shopee_subir_foto(dados: bytes, mime: str, pos: int) -> str:
                               timeout=SHOPEE_UPLOAD_TIMEOUT)
     except ShopeeRecusou as exc:
         _anuncio_amostra("shopee_upload_image [erro]", {"erro": str(exc), "corpo": exc.corpo})
-        if not re.search(r"sign|auth|token|shop", str(exc), re.I):
+        codigo = str((exc.corpo or {}).get("error") or "") if isinstance(exc.corpo, dict) else ""
+        if not re.search(r"sign|auth|token", codigo, re.I):  # 2a revisao: so o codigo (a mensagem tem "Shopee")
             raise
         resp = _shopee_chamar("POST", "/api/v2/media_space/upload_image", multipart=multipart,
                               timeout=SHOPEE_UPLOAD_TIMEOUT, publico=True)
@@ -34887,6 +34889,7 @@ def shopee_publicar_iniciar(rascunho_id: Any, ator: str) -> dict[str, Any]:
     (erro = 400 na hora) e o resto roda numa thread que solta o ANUNCIOS_PUBLICAR_LOCK no fim. A tela acompanha
     pelos rascunhos ate sair de `publicando`. Chamar COM o ANUNCIOS_PUBLICAR_LOCK pego."""
     r = shopee_publicar_reservar(rascunho_id, ator)
+    resposta = {"ok": True, "iniciado": True, "rascunho": shopee_rascunho_ler(r["id"])}  # 2a revisao: antes do start
 
     def rodar() -> None:
         try:
@@ -34895,8 +34898,13 @@ def shopee_publicar_iniciar(rascunho_id: Any, ator: str) -> dict[str, Any]:
             print(f"Aviso: publicar na Shopee {r['id']} falhou: {exc}", file=sys.stderr)
         finally:
             ANUNCIOS_PUBLICAR_LOCK.release()
-    threading.Thread(target=rodar, name=f"shopee-publicar-{r['id']}", daemon=True).start()
-    return {"ok": True, "iniciado": True, "rascunho": shopee_rascunho_ler(r["id"])}
+    try:
+        threading.Thread(target=rodar, name=f"shopee-publicar-{r['id']}", daemon=True).start()
+    except BaseException:
+        # nada saiu: volta a `validado` (a rota solta a trava); nunca fica preso em `publicando`
+        _shopee_trocar(int(r["id"]), ("publicando",), "validado", ["A publicação não começou; tente de novo."], ator)
+        raise
+    return resposta
 
 
 def shopee_incerto_liberar(rascunho_id: Any, item_id: Any, ator: str) -> dict[str, Any]:
@@ -36173,6 +36181,8 @@ def anuncios_estoque_volta(estado: dict[str, Any]) -> list[str]:
     with DB_LOCK:
         versao = _ml_versoes_storage("conf_pedidos", PENDING_ORDER_DELETE_KEY_V1766)
     afetadas = {c for c in contas if _estoque_alvo(c)[2] in mudancas}
+    if estado.get("shopee_pendente") and ESTOQUE_CONTA_SHOPEE in contas:
+        afetadas.add(ESTOQUE_CONTA_SHOPEE)  # 2a revisao: mudanca que chegou com a rodada da Shopee ocupada
     if versao != estado.get("versao"):
         estado["versao"] = versao
         afetadas |= set(contas)
@@ -36185,7 +36195,9 @@ def anuncios_estoque_volta(estado: dict[str, Any]) -> list[str]:
             # revisao (06/11): Shopee fora do ar (35 s por chamada) nao pode segurar o ML na mesma volta: roda numa
             # thread e a volta espera no maximo ANUNCIO_ESTOQUE_SHOPEE_ESPERA_S (a trava da rodada impede duas juntas)
             if _ANUNCIO_ESTOQUE_RODADA_LOCKS[c].locked():
+                estado["shopee_pendente"] = True  # 2a revisao: a mudanca fica para a proxima volta (nao se perde)
                 continue
+            estado["shopee_pendente"] = False
             t = threading.Thread(target=_anuncios_estoque_rodada_segura, args=(c,), daemon=True,
                                  name="anuncios-estoque-shopee")
             t.start()
