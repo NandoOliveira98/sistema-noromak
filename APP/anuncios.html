@@ -1531,7 +1531,107 @@ function desenharCriar() {
     ${CR.conflito ? `<div class="nk-aviso bad">Outra pessoa alterou este rascunho enquanto você digitava (agora na versão ${esc(r.versao)}). O que você digitou ficou na tela: salve de novo para gravar por cima, ou <button type="button" class="nk-btn mini" onclick="usarGravadoCr()">Usar o que está gravado</button></div>` : ""}
     ${CR.aviso ? `<div class="nk-aviso">${esc(CR.aviso)}</div>` : ""}
     ${CR.ocupado ? `<div class="nk-aviso info">${esc(CR.ocupado)}</div>` : ""}
+    ${cartaoAgente()}
     ${PASSOS.map((_, i) => passoCr(i)).join("")}</div>`;
+  if (r && !CR.ag) carregarAgente();
+}
+
+// ---------------------------------------------------------------- V20.31: agente de anúncios
+// O agente do Estúdio (PC do dono) propõe 3 títulos, a descrição e os atributos obrigatórios. Nada vai ao ML:
+// o Admin escolhe e aceita no rascunho; Conferir e Publicar continuam só no clique.
+const AG_ABERTO = ["enviando", "aguardando", "analisando", "aguardando_atributos"];
+const AG_ORIGEM = {ficha: "da ficha", rotulo: "lido no rótulo", catalogo: "lido no catálogo — confira", internet: "da internet — confira"};
+let agTimer = null;
+async function carregarAgente() {
+  const cr = CR; if (!cr || !cr.r) return;
+  cr.ag = cr.ag || {t: null, nome: "", link: "", escolha: null, carregando: true};
+  try {
+    const d = await api(`/api/anuncios/agente?rascunho=${enc(cr.r.id)}`);
+    if (CR !== cr) return;
+    cr.ag.t = d.trabalho; cr.ag.carregando = false;
+    if (d.trabalho && d.trabalho.situacao === "proposta" && !cr.ag.escolha) {
+      const p = d.trabalho.proposta || {};
+      cr.ag.escolha = {titulo: ((p.titulos || []).find(t => t.recomendado) || (p.titulos || [])[0] || {}).texto || "",
+        descricao: !!p.descricao, atributos: (p.atributos || []).map(a => a.id)};
+    }
+  } catch (e) {
+    if (CR !== cr) return;
+    cr.ag.carregando = false;
+    if (e.status === 401 || e.status === 403) { clearTimeout(agTimer); return; }
+  }
+  desenharCriar();
+  clearTimeout(agTimer);
+  if (cr.ag.t && AG_ABERTO.includes(cr.ag.t.situacao)) {
+    agTimer = setTimeout(() => { if (CR === cr && !document.hidden) carregarAgente(); else if (CR === cr) agTimer = setTimeout(carregarAgente, 5000); }, 5000);
+  }
+}
+function cartaoAgente() {
+  if (!CR || !CR.r || !crEditavel()) return "";
+  const ag = CR.ag || {}, t = ag.t, aberto = t && AG_ABERTO.includes(t.situacao);
+  const cab = `<div class="nk-painel-tit"><div><h3>Agente de anúncios</h3><p class="muted">Propõe 3 títulos, a descrição e os atributos obrigatórios. Você escolhe e aceita; nada vai ao Mercado Livre.</p></div></div>`;
+  const pedir = `<div class="g2"><label class="nk-campo"><span>Nome do produto (opcional, para pesquisar)</span><input value="${esc(ag.nome || "")}" oninput="CR.ag.nome=this.value"></label>
+    <label class="nk-campo"><span>Link do fornecedor (opcional)</span><input value="${esc(ag.link || "")}" oninput="CR.ag.link=this.value"></label></div>
+    <div class="barra"><span class="esp"></span><button type="button" class="nk-btn pri" ${btOcupado()} onclick="pedirAgente()">Pedir ao agente</button></div>`;
+  if (ag.carregando) return `<section class="passo">${cab}<p class="muted">Carregando…</p></section>`;
+  if (aberto) return `<section class="passo">${cab}<div class="nk-aviso info">Aguardando o agente${t.situacao === "aguardando_atributos" ? " (atributos da categoria)" : ""}… Com o PC do agente desligado, o pedido espera na fila.</div></section>`;
+  if (!t || ["aceita", "erro"].includes(t.situacao)) {
+    return `<section class="passo">${cab}${t && t.situacao === "erro" ? `<div class="nk-aviso bad">O agente não conseguiu: ${esc(t.mensagem || "erro")}</div>` : ""}${t && t.situacao === "aceita" ? '<div class="nk-aviso info">A última proposta já foi aceita.</div>' : ""}${pedir}</section>`;
+  }
+  const p = t.proposta || {}, e = ag.escolha || {titulo: "", descricao: false, atributos: []};
+  const titulos = (p.titulos || []).map((x, i) => `<label style="display:flex;gap:8px;align-items:center;margin:6px 0;cursor:pointer">
+      <input style="width:auto;flex:none;margin:0" type="radio" name="agTit" ${e.titulo === x.texto ? "checked" : ""} onchange="CR.ag.escolha.titulo=${esc(JSON.stringify(x.texto))}">
+      <span>${esc(x.texto)} <span class="orig">${x.texto.length} de 60${x.recomendado ? " · recomendado" : ""}</span></span></label>`).join("");
+  const cats = (p.categorias || []).map(c => `<option value="${esc(c.categoria)}" ${c.categoria === p.categoria ? "selected" : ""}>${esc(c.categoria_nome || c.categoria)}</option>`).join("");
+  const attrs = (p.atributos || []).map(a => `<label style="display:flex;gap:8px;align-items:center;margin:6px 0;cursor:pointer">
+      <input style="width:auto;flex:none;margin:0" type="checkbox" ${e.atributos.includes(a.id) ? "checked" : ""} onchange="agMarcarAtributo(${esc(JSON.stringify(a.id))},this.checked)">
+      <span><b>${esc(a.id)}</b>: ${esc(a.valor)} <span class="nk-selo ${a.origem === "internet" || a.origem === "catalogo" ? "warn" : ""}">${esc(AG_ORIGEM[a.origem] || a.origem)}</span>${a.fonte ? ` <a href="${esc(a.fonte)}" target="_blank" rel="noopener noreferrer">fonte</a>` : ""}</span></label>`).join("");
+  return `<section class="passo">${cab}
+    ${t.mensagem ? `<div class="nk-aviso">${esc(t.mensagem)}</div>` : ""}
+    <h4>Título</h4>${titulos}
+    <h4>Categoria</h4><p>${p.categoria ? `${esc(p.categoria_nome || p.categoria)} <span class="orig">${esc(p.categoria)}</span>` : '<span class="muted">sem categoria</span>'}
+      ${cats ? ` · <select id="agCat">${cats}</select> <button type="button" class="nk-btn mini" ${btOcupado()} onclick="trocarCategoriaAgente()">Trocar categoria</button>` : ""}</p>
+    <h4>Descrição</h4><label style="display:flex;gap:8px;align-items:center;margin:6px 0;cursor:pointer"><input style="width:auto;flex:none;margin:0" type="checkbox" ${e.descricao ? "checked" : ""} onchange="CR.ag.escolha.descricao=this.checked"><span>Usar a descrição proposta</span></label>
+    <pre class="nk-campo" style="white-space:pre-wrap;max-height:240px;overflow:auto">${esc(p.descricao || "")}</pre>
+    <h4>Atributos obrigatórios</h4>${attrs || '<p class="muted">Nenhum atributo proposto.</p>'}
+    <div class="barra"><button type="button" class="nk-btn" ${btOcupado()} onclick="pedirAgente()">Pedir de novo</button><span class="esp"></span>
+      <button type="button" class="nk-btn pri" ${btOcupado()} onclick="aceitarAgente()">Aceitar no rascunho</button></div></section>`;
+}
+function agMarcarAtributo(id, sim) {
+  const l = CR.ag.escolha.atributos.filter(x => x !== id);
+  if (sim) l.push(id);
+  CR.ag.escolha.atributos = l;
+}
+async function pedirAgente() {
+  const cr = CR; if (!cr || !cr.r) return;
+  try {
+    await api("/api/anuncios/agente/pedir", {rascunho_id: cr.r.id, nome: (cr.ag && cr.ag.nome) || "", link: (cr.ag && cr.ag.link) || ""});
+    nkToast("Pedido enviado ao agente.", "ok");
+  } catch (e) { nkToast(e.message, "aviso"); }
+  if (CR === cr) { cr.ag = null; carregarAgente(); }
+}
+async function trocarCategoriaAgente() {
+  const cr = CR, sel = $("agCat"); if (!cr || !cr.ag || !cr.ag.t || !sel) return;
+  try { await api("/api/anuncios/agente/atributos", {trabalho_id: cr.ag.t.id, categoria: sel.value}); }
+  catch (e) { nkToast(e.message, "aviso"); }
+  if (CR === cr) { cr.ag = null; carregarAgente(); }
+}
+async function aceitarAgente() {
+  const cr = CR; if (!cr || !cr.r || !cr.ag || !cr.ag.t) return;
+  const e = cr.ag.escolha || {};
+  if (!e.titulo) { nkToast("Escolha um dos títulos.", "aviso"); return; }
+  if (crMudados().length && !await nkConfirmar("Há alteração digitada e não salva no rascunho. Aceitar a proposta descarta o que foi digitado. Continuar?", {ok: "Aceitar", perigo: true})) return;
+  if (!await nkConfirmar(`Gravar no rascunho o título “${e.titulo}”${e.descricao ? ", a descrição" : ""} e ${e.atributos.length} atributo(s)? Campos vazios da ficha também são preenchidos. Nada vai ao Mercado Livre.`, {ok: "Aceitar no rascunho"})) return;
+  try {
+    const d = await api("/api/anuncios/agente/aceitar", {trabalho_id: cr.ag.t.id, versao_rascunho: cr.r.versao, titulo: e.titulo,
+      descricao: !!e.descricao, atributos: e.atributos});
+    if (CR !== cr) return;
+    cr.r = d.rascunho; cr.f = formDoRascunho(d.rascunho); atualizarRascNaLista(d.rascunho);
+    nkToast(d.ficha_preenchida && d.ficha_preenchida.length ? "Aceito no rascunho e na ficha (" + d.ficha_preenchida.join(", ") + ")." : "Aceito no rascunho.", "ok");
+  } catch (err) {
+    nkToast(err.status === 409 ? "O rascunho mudou; confira e aceite de novo." : err.message, "aviso");
+    if (err.status === 409) carregarRascunhos(true);
+  }
+  if (CR === cr) { cr.ag = null; carregarAgente(); }
 }
 function passoCr(i) {
   const liberado = i === 0 || crFeito(i - 1);

@@ -303,3 +303,14 @@ class AgenteAntigo(Base):
         self.assertEqual(t["id"], tid)
         with self.assertRaises(ValueError):  # entrega de foto num pedido de anúncio
             S.imagens_agente_resultado({"id": tid, "situacao": "erro", "mensagem": "x"})
+
+
+class Tela(TesteNoromak):
+
+    def test_tela_tem_o_agente(self):
+        html = (Path(S.__file__).resolve().parent / "APP" / "anuncios.html").read_text(encoding="utf-8")
+        for trecho in ("/api/anuncios/agente/pedir", "/api/anuncios/agente/aceitar", "/api/anuncios/agente/atributos",
+                       "/api/anuncios/agente?rascunho=", "Pedir ao agente", "Aceitar no rascunho"):
+            self.assertTrue(trecho in html, f"falta na tela: {trecho}")
+        inicio = html.index("async function aceitarAgente(")
+        self.assertTrue("nkConfirmar(" in html[inicio:inicio + 1500], "aceitar pede confirmação")
