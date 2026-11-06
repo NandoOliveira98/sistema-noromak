@@ -30,15 +30,22 @@ class MagaluFalsa:
         self.trace = []
         self.nao_muda = set()
         self.branches = {}
+        self.filhas = {}         # categoria -> subcategorias (hierarchy?parent_id=)
 
     def __call__(self, method, path, params=None, payload=None, *, timeout=35):
         self.chamadas.append((method, path, params, payload))
-        if path == "/seller/v1/portfolios/category":
-            return {"results": [{"id": CAT, "name": "Limpeza automotiva", "path": ["Automotivo", "Limpeza automotiva"],
-                                 "is_leaf": True}]}
+        if path == "/seller/v1/portfolios/categories":  # revisao: plural, como na spec (categories.openapi.yaml)
+            return {"results": [{"id": CAT, "name": "Limpeza automotiva", "path": "/automotivo/limpeza-automotiva",
+                                 "parent_id": None, "created_at": "2024-01-01T00:00:00Z", "created_by": "x"}]}
+        if path == "/seller/v1/portfolios/categories/hierarchy":
+            return {"results": [{"id": f, "name": "Filha", "parent_id": params["parent_id"]}
+                                for f in self.filhas.get(params["parent_id"], [])]}
         if path.endswith("/attributes"):
-            return {"results": [{"name": "Volume", "required": "required", "values": ["500 ml", "1 L"]},
-                                {"name": "Cor", "required": "optional"}]}
+            assert path.startswith("/seller/v1/portfolios/categories/"), path
+            return {"results": [{"name": "Volume", "display_name": "Volume", "required": "required",
+                                 "choices": ["500 ml", "1 L"], "active": True},
+                                {"name": "Cor", "required": "optional", "choices": None},
+                                {"name": "Antigo", "required": "required", "active": False}]}
         if path.endswith("/datasheet"):
             return {"results": [{"name": "Fabricante", "required": "required"}, {"name": "Modelo", "required": "recommended"}]}
         if path == "/seller/v1/portfolios/skus" and method == "POST":
@@ -57,9 +64,14 @@ class MagaluFalsa:
         if path.startswith("/v0/traces/"):
             return {"results": self.trace}
         if path.startswith("/seller/v1/portfolios/prices/"):
+            sku = path.rsplit("/", 1)[1]
+            if method == "GET":
+                if sku not in self.precos:
+                    return {"results": []}
+                return {"results": [dict(self.precos[sku], normalizer=100)]}
             if self.preco_erro:
                 raise self.preco_erro
-            self.precos[path.rsplit("/", 1)[1]] = payload
+            self.precos[sku] = payload
             return {"trace_id": "tr-p"}
         if path.startswith("/seller/v1/portfolios/stocks/"):
             sku = path.rsplit("/", 1)[1]
@@ -88,7 +100,12 @@ class Base(TesteNoromak):
         super().setUp()
         S._MAGALU_LEITURA_CACHE.clear()
         S._MAGALU_ACOMPANHAR_VISTO.clear()
+        S._MAGALU_FOTO_OK.clear()
         self.mg = MagaluFalsa()
+        p = mock.patch.object(S, "anuncio_ficha_payload",  # o Apollo do estoque inicial (relido no acompanhamento)
+                              return_value={"estoque": {"aracatuba": {"da_para_montar": 24}}})
+        p.start()
+        self.addCleanup(p.stop)
         for alvo, valor in (("_magalu_chamar", self.mg),
                             ("_anuncio_foto_ml_baixar", lambda _u: b"\xff\xd8\xff\xe0" + b"0" * 64)):
             p = mock.patch.object(S, alvo, new=valor)
@@ -122,9 +139,12 @@ class Leituras(Base):
     def test_categoria_e_atributos(self):
         cats = S.magalu_categorias_buscar("limpeza")
         self.assertEqual(cats[0], {"categoria": CAT, "nome": "Limpeza automotiva",
-                                   "caminho": "Automotivo > Limpeza automotiva", "folha": True})
+                                   "caminho": "automotivo > limpeza automotiva", "folha": None})
+        with self.assertRaises(ValueError):
+            S.magalu_categorias_buscar("li")  # a spec pede 3 letras
         d = S.magalu_categoria_atributos(CAT)
-        self.assertEqual([(a["nome"], a["obrigatorio"]) for a in d["atributos"]], [("Volume", True), ("Cor", False)])
+        self.assertEqual([(a["nome"], a["obrigatorio"]) for a in d["atributos"]], [("Volume", True), ("Cor", False)],
+                         "atributo inativo fica fora")
         self.assertEqual(d["atributos"][0]["valores"], ["500 ml", "1 L"])
         self.assertTrue(d["ficha_tecnica"][1]["recomendado"])
         S.magalu_categoria_atributos(CAT)
@@ -247,14 +267,14 @@ class Publicar(Base):
     def test_sem_resposta_aguarda_e_confere_pela_magalu(self):
         r = self.conferido()
 
-        def criar_e_cair(*a, **k):
-            self.mg.skus["TUNAP109"] = {"title": "x"}
+        def criar_e_cair(payload):
+            self.mg.skus["TUNAP109"] = payload
             raise S.MagaluSemResposta("timeout")
         orig = self.mg.__call__
 
         def chamar(method, path, params=None, payload=None, *, timeout=35):
             if method == "POST" and path == "/seller/v1/portfolios/skus":
-                return criar_e_cair()
+                return criar_e_cair(payload)
             return orig(method, path, params, payload, timeout=timeout)
         with self.apollo(), mock.patch.object(S, "_magalu_chamar", new=chamar):
             res = S.magalu_publicar(r["id"], "admin")
@@ -300,14 +320,206 @@ class Publicar(Base):
         with self.assertRaises(ValueError):
             S.magalu_publicar_reservar(r2["id"], "admin")
 
-    def test_publicando_no_boot_vira_aguardando(self):
+    def test_publicando_no_boot_sem_envio_volta_a_validado(self):
+        """Revisao: sem a marca "enviado" o POST nunca saiu: nada a acompanhar (um SKU alheio nunca e tomado)."""
         r = self.conferido()
         with S.DB_LOCK:
             S.DB.execute("UPDATE anuncio_rascunho_magalu_v2034 SET situacao='publicando' WHERE id=?", (r["id"],))
             S.DB.commit()
         S.ensure_anuncios_schema()
         novo = S.magalu_rascunho_ler(r["id"])
+        self.assertEqual(novo["situacao"], "validado")
+        self.assertIn("reiniciou", novo["erros"][0])
+
+    def test_publicando_no_boot_depois_do_envio_vira_aguardando(self):
+        r = self.conferido()
+        with S.DB_LOCK:
+            S.DB.execute("UPDATE anuncio_rascunho_magalu_v2034 SET situacao='publicando', enviado_em=? WHERE id=?",
+                         (S.now_iso(), r["id"]))
+            S.DB.commit()
+        S.ensure_anuncios_schema()
+        novo = S.magalu_rascunho_ler(r["id"])
         self.assertEqual((novo["situacao"], novo["sku"], novo["etapa"]), ("aguardando", "TUNAP109", "sku"))
+
+
+class Revisao(Base):
+    """revisar-antes-de-subir da V20.34 (06/11, "corrija tudo")."""
+
+    def publicar(self, r):
+        with self.apollo():
+            return S.magalu_publicar(r["id"], "admin")
+
+    def envio_antigo(self, r):
+        with S.DB_LOCK:
+            S.DB.execute("UPDATE anuncio_rascunho_magalu_v2034 SET enviado_em='2026-01-01T00:00:00+00:00' WHERE id=?",
+                         (r["id"],))
+            S.DB.commit()
+
+    def test_sku_de_outra_ferramenta_nunca_e_tomado_no_acompanhamento(self):
+        r = self.conferido()
+        self.mg.nao_cria = True
+        self.publicar(r)
+        self.mg.skus["TUNAP109"] = {"title": "Produto de outra ferramenta"}  # aparece um SKU alheio com o codigo
+        a = S.magalu_acompanhar(r["id"], forcar=True)
+        self.assertEqual(a["situacao"], "erro")
+        self.assertIn("outro título", a["erros"][0])
+        self.assertEqual((self.mg.escritas("/prices/"), self.mg.escritas("/stocks/")), ([], []))
+        with S.DB_LOCK:
+            self.assertIsNone(S.DB.execute("SELECT 1 FROM anuncio_canal_v2023 WHERE canal='magalu'").fetchone())
+        with self.assertRaises(ValueError):  # erro de envio nao volta a aguardando pelo "Conferir de novo"
+            S.magalu_incerto_liberar(r["id"], "conferir", "admin")
+
+    def test_recusa_do_envio_nao_pode_conferir_de_novo(self):
+        r = self.conferido()
+        self.mg.criar_erro = S.MagaluRecusou("Magalu HTTP 422: x", {}, 422)
+        self.publicar(r)
+        with self.assertRaises(ValueError):
+            S.magalu_incerto_liberar(r["id"], "conferir", "admin")
+
+    def test_preco_recusado_para_depois_de_5_tentativas(self):
+        r = self.conferido()
+        self.mg.preco_erro = S.MagaluRecusou("Magalu HTTP 403: sem permissão", {}, 403)
+        self.publicar(r)
+        for _ in range(S.MAGALU_ETAPA_TENTATIVAS - 1):
+            self.assertEqual(S.magalu_acompanhar(r["id"], forcar=True)["situacao"], "aguardando")
+        a = S.magalu_acompanhar(r["id"], forcar=True)
+        self.assertEqual(a["situacao"], "erro")
+        self.assertIn("o preço não foi aceito", a["erros"][0])
+        self.mg.preco_erro = None
+        with mock.patch.object(S, "magalu_acompanhar_iniciar", side_effect=lambda rid, ator: S.magalu_rascunho_ler(rid)):
+            res = S.magalu_incerto_liberar(r["id"], "conferir", "admin")  # o SKU e nosso: pode tentar de novo
+        self.assertEqual(res["rascunho"]["situacao"], "aguardando")
+        self.assertEqual(S.magalu_acompanhar(r["id"], forcar=True)["situacao"], "publicado")
+
+    def test_estoque_inicial_e_o_do_apollo_agora(self):
+        r = self.conferido(quantidade="20")
+        self.publicar(r)
+        with mock.patch.object(S, "anuncio_ficha_payload",
+                               return_value={"estoque": {"aracatuba": {"da_para_montar": 3}}}):
+            a = S.magalu_acompanhar(r["id"], forcar=True)
+        self.assertEqual(a["situacao"], "publicado", a)
+        self.assertEqual(self.mg.estoque["TUNAP109"], 3, "nunca o pedido de antes, sempre o que dá para montar agora")
+        self.assertIn("Estoque inicial 3", " ".join(a["erros"]))
+        with S.DB_LOCK:
+            ln = S.DB.execute("SELECT estoque FROM anuncio_canal_v2023 WHERE canal='magalu'").fetchone()
+        self.assertEqual(ln[0], 3, "o estoque da linha é o lido na Magalu")
+
+    def test_estoque_inicial_sem_apollo_nao_envia(self):
+        r = self.conferido()
+        self.publicar(r)
+        with mock.patch.object(S, "anuncio_ficha_payload", side_effect=RuntimeError("Apollo fora")):
+            a = S.magalu_acompanhar(r["id"], forcar=True)
+        self.assertEqual(a["situacao"], "aguardando")
+        self.assertEqual(self.mg.escritas("/stocks/"), [])
+
+    def test_estoque_inicial_usa_patch_quando_ja_tem_linha(self):
+        r = self.conferido()
+        self.publicar(r)
+        self.mg.estoque["TUNAP109"] = 0  # a Magalu criou a linha junto com o SKU
+        S.magalu_acompanhar(r["id"], forcar=True)
+        self.assertEqual([c[0] for c in self.mg.escritas("/stocks/")], ["PATCH"])
+
+    def test_nao_publica_antes_de_a_magalu_mostrar_preco_e_estoque(self):
+        r = self.conferido()
+        self.publicar(r)
+        self.mg.nao_muda.add("TUNAP109")  # o estoque aceito (202) ainda nao aparece
+        a = S.magalu_acompanhar(r["id"], forcar=True)
+        self.assertEqual(a["situacao"], "aguardando")
+        self.assertIn("esperando a Magalu", a["erros"][0])
+        with S.DB_LOCK:
+            S.DB.execute("UPDATE anuncio_rascunho_magalu_v2034 SET etapa_em='2026-01-01T00:00:00+00:00' WHERE id=?",
+                         (r["id"],))
+            S.DB.commit()
+        a = S.magalu_acompanhar(r["id"], forcar=True)
+        self.assertEqual(a["situacao"], "publicado")
+        self.assertIn("ainda não mostra o estoque", " ".join(a["erros"]))
+
+    def test_leitura_falhando_tambem_conta_o_prazo(self):
+        r = self.conferido()
+        self.mg.nao_cria = True
+        self.publicar(r)
+        self.envio_antigo(r)
+        with mock.patch.object(S, "_magalu_sku_ler", side_effect=S.MagaluSemResposta("fora do ar")):
+            self.assertEqual(S.magalu_acompanhar(r["id"], forcar=True)["situacao"], "incerto")
+
+    def test_sku_nosso_que_apareceu_tarde_e_reconhecido_no_publicar(self):
+        r = self.conferido()
+        self.mg.nao_cria = True
+        self.publicar(r)
+        self.envio_antigo(r)
+        S.magalu_acompanhar(r["id"], forcar=True)
+        S.magalu_incerto_liberar(r["id"], "nao_criado", "admin")
+        self.mg.skus["TUNAP109"] = {"title": r["titulo"]}  # o nosso apareceu depois
+        res = self.publicar(r)
+        self.assertEqual(res["situacao"], "aguardando")
+        self.assertEqual(len(self.mg.escritas("/portfolios/skus")), 1, "não cria de novo")
+        self.assertEqual(S.magalu_acompanhar(r["id"], forcar=True)["situacao"], "publicado")
+
+    def test_categoria_com_subcategorias_e_sku_com_barra_barram(self):
+        self.mg.filhas[CAT] = ["99999999-2222-3333-4444-555555555555"]
+        r = self.rascunho()
+        res = S.magalu_rascunho_conferir(r["id"], "admin")
+        self.assertIn("subcategorias", " ".join(res["erros"]))
+        S.ficha_salvar("A1/B2", {"nome": "Kit", "marca": "X", "peso_g": 1, "altura_cm": 1, "largura_cm": 1,
+                                 "comprimento_cm": 1}, "admin", None)
+        r2 = self.rascunho(codigo="A1/B2")
+        self.assertIn("caractere", " ".join(S.magalu_rascunho_conferir(r2["id"], "admin")["erros"]))
+
+    def test_nome_de_atributo_longo_e_valor_fora_da_lista(self):
+        r = self.rascunho(atributos={"Volume": "750 ml", "Nome de atributo bem comprido": "x"})
+        texto = " ".join(S.magalu_rascunho_conferir(r["id"], "admin")["erros"])
+        self.assertIn("Volume: escolha um valor da lista", texto)
+        self.assertIn("até 20 caracteres", texto)
+
+    def test_fotos_conferidas_em_paralelo_com_prazo(self):
+        import threading
+        trava = threading.Event()
+        with mock.patch.object(S, "_anuncio_foto_ml_baixar", side_effect=lambda u: trava.wait(5) or b"\xff\xd8\xff0"):
+            erros, avisos = S._magalu_fotos_conferir([FOTO, FOTO.replace("123", "456")], 0.2)
+        trava.set()
+        self.assertEqual(erros, [])
+        self.assertIn("não terminaram", avisos[0])
+
+    def test_volta_do_worker_nao_espera_a_magalu(self):
+        import time as _t
+        r = self.conferido()
+        self.publicar(r)
+        with mock.patch.object(S, "MAGALU_ACOMPANHAR_ESPERA_S", 0.2), \
+                mock.patch.object(S, "_magalu_sku_ler", side_effect=lambda sku: _t.sleep(2)):
+            t0 = _t.monotonic()
+            S.magalu_acompanhar_pendentes_fundo()
+            self.assertLess(_t.monotonic() - t0, 1.5, "a volta do estoque do ML não fica presa na Magalu")
+            _t.sleep(2.2)
+
+    def test_rota_acompanhar_responde_na_hora(self):
+        r = self.conferido()
+        self.publicar(r)
+        with mock.patch.object(S, "_magalu_acompanhar_seguro"):
+            st, d = self.cliente.pedir("POST", "/api/anuncios/magalu/acompanhar", {"id": r["id"]})
+        self.assertEqual((st, d["rascunho"]["situacao"]), (200, "aguardando"))
+
+    def test_republicar_limpa_a_remocao_do_admin(self):
+        r = self.conferido()
+        with S.DB_LOCK:
+            S._magalu_canal_noromak("TUNAP109", r, "admin", "PUBLISHED", 2)
+            S.DB.execute("UPDATE anuncio_canal_v2023 SET removido_em='2026-01-01', estoque_modo='automatico' "
+                         "WHERE canal='magalu'")
+            S._magalu_canal_noromak("TUNAP109", r, "admin", "PUBLISHED", 5)
+            ln = dict(S.DB.execute("SELECT * FROM anuncio_canal_v2023 WHERE canal='magalu'").fetchone())
+            S.DB.commit()
+        self.assertEqual((ln["removido_em"], ln["estoque_modo"], ln["estoque"]), ("", "manual", 5))
+
+    def test_token_recusado_ja_renovado_nao_renova_de_novo(self):
+        import time as _t
+        chamadas = []
+        with S.DB_LOCK:
+            S.DB.execute("DELETE FROM magalu_integration")
+            S.DB.execute("INSERT INTO magalu_integration(id,access_token,refresh_token,token_expires_at) "
+                         "VALUES(1,'novo','r1',?)", (int(_t.time()) + 3600,))
+            S.DB.commit()
+        with mock.patch.object(S, "_magalu_token_http", side_effect=lambda d: chamadas.append(d) or {}):
+            self.assertEqual(S.magalu_access_token(force=True, recusado="velho"), "novo")
+        self.assertEqual(chamadas, [], "outro já renovou: aproveita")
 
 
 class MagaluEstoque(EstoqueBase):

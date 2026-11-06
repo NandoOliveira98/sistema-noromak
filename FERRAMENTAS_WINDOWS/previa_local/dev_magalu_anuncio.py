@@ -13,16 +13,19 @@ def instalar(S):
     leituras: dict[str, int] = {}
     estoque: dict[str, int] = {}
     traces: dict[str, list] = {}
+    precos: dict[str, dict] = {}
 
     def chamar(method, path, params=None, payload=None, *, timeout=35):
-        if path == "/seller/v1/portfolios/category":
+        if path == "/seller/v1/portfolios/categories":
             return {"results": [
-                {"id": CAT, "name": "Limpeza automotiva", "path": ["Automotivo", "Limpeza automotiva"], "is_leaf": True},
-                {"id": "22222222-2222-3333-4444-555555555555", "name": "Óleos e fluidos", "path": ["Automotivo", "Óleos e fluidos"],
-                 "is_leaf": True}]}
+                {"id": CAT, "name": "Limpeza automotiva", "path": "/automotivo/limpeza-automotiva"},
+                {"id": "22222222-2222-3333-4444-555555555555", "name": "Óleos e fluidos", "path": "/automotivo/oleos-e-fluidos"}]}
+        if path == "/seller/v1/portfolios/categories/hierarchy":
+            return {"results": []}
         if path.endswith("/attributes"):
-            return {"results": [{"name": "Volume", "required": "required", "values": ["300 ml", "500 ml", "1 L", "4 L"]},
-                                {"name": "Cor", "required": "optional"}]}
+            return {"results": [{"name": "Volume", "display_name": "Volume", "required": "required",
+                                 "choices": ["300 ml", "500 ml", "1 L", "4 L"]},
+                                {"name": "Cor", "required": "optional", "choices": None}]}
         if path.endswith("/datasheet"):
             return {"results": [{"name": "Fabricante", "required": "required"}, {"name": "Modelo", "required": "recommended"},
                                 {"name": "Garantia", "required": "optional"}]}
@@ -47,6 +50,10 @@ def instalar(S):
         if path.startswith("/v0/traces/"):
             return {"results": traces.get(path.rsplit("/", 1)[1], [])}
         if path.startswith("/seller/v1/portfolios/prices/"):
+            sku = path.rsplit("/", 1)[1]
+            if method == "GET":
+                return {"results": [dict(precos[sku], normalizer=100)] if sku in precos else []}
+            precos[sku] = payload
             return {"trace_id": "tr-preco"}
         if path.startswith("/seller/v1/portfolios/stocks/"):
             sku = path.rsplit("/", 1)[1]

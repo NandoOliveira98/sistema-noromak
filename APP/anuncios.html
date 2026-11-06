@@ -1688,7 +1688,7 @@ async function mgTrazerFotos(silencioso) {
 }
 async function mgBuscarCategoria() {
   const nome = String(($("mgCatBusca") || {}).value || "").trim();
-  if (nome.length < 2) { nkToast("Digite parte do nome da categoria (ex.: limpeza, ferramentas).", "aviso"); return; }
+  if (nome.length < 3) { nkToast("Digite pelo menos 3 letras do nome da categoria (ex.: limpeza, ferramentas).", "aviso"); return; }
   MG.ocupado = "cats"; desenharMagalu();
   try {
     MG.cats = (await api(`/api/anuncios/magalu/categorias?nome=${enc(nome)}`)).categorias || [];
@@ -1846,7 +1846,7 @@ function mgParesHtml(grupo, defs, rotulo) {
   const vals = MG.f[grupo];
   const campo = d => {
     const v = vals[d.nome] || "", falta = d.obrigatorio && !v, lid = `mgl${grupo}${esc(d.nome).replace(/\W/g, "")}`;
-    return `<label class="nk-campo ${falta ? "falta" : ""}"><span>${esc(d.nome)} ${d.obrigatorio ? '<span class="orig bad">obrigatório</span>' : d.recomendado ? '<span class="orig">recomendado</span>' : ""}</span>
+    return `<label class="nk-campo ${falta ? "falta" : ""}"><span>${esc(d.rotulo || d.nome)} ${d.obrigatorio ? '<span class="orig bad">obrigatório</span>' : d.recomendado ? '<span class="orig">recomendado</span>' : ""}</span>
       <input ${dis} ${d.valores.length ? `list="${lid}"` : ""} data-g="${grupo}" data-n="${esc(d.nome)}" value="${esc(v)}" oninput="mgPar(this.dataset.g,this.dataset.n,this.value)">
       ${d.valores.length ? `<datalist id="${lid}">${d.valores.map(x => `<option value="${esc(x)}">`).join("")}</datalist>` : ""}</label>`;
   };
@@ -1910,7 +1910,7 @@ function desenharMagalu() {
         ${r && r.situacao === "aguardando" ? `<div class="nk-aviso info">Enviado à Magalu. Ela cria o produto em instantes; o Noromak confere a cada poucos segundos e, quando o SKU aparece, manda o preço e o estoque.</div>` : ""}
         ${r && r.situacao === "incerto" && PODE ? `<div class="nk-aviso bad">A Magalu não mostrou o SKU ${esc(r.sku || F.codigo)}. Confira em Meus produtos no painel da Magalu.</div>
           <div class="barra"><button type="button" class="nk-btn mini pri" onclick="mgLiberar('conferir')">Conferir de novo</button><button type="button" class="nk-btn mini" onclick="mgLiberar('nao_criado')">Não foi criado</button></div>` : ""}
-        ${r && r.situacao === "erro" && r.sku && PODE ? `<div class="barra"><button type="button" class="nk-btn mini" onclick="mgLiberar('conferir')">Conferir na Magalu se foi criado</button></div>` : ""}
+        ${r && r.situacao === "erro" && ["preco", "estoque", "confirmar"].includes(r.etapa) && PODE ? `<div class="barra"><button type="button" class="nk-btn mini" onclick="mgLiberar('conferir')">Conferir na Magalu se foi criado</button></div>` : ""}
         ${r && r.situacao === "publicado" ? `<div class="nk-aviso info">Publicado na Magalu: SKU <b class="mono">${esc(r.sku)}</b>${r.status_magalu ? ` (${esc(r.status_magalu)})` : ""}. Está na lista “Anúncios em todos os canais” com estoque em Manual.</div>` : ""}
         ${PODE && mgEditavel() ? `<div class="barra"><span class="esp"></span><button type="button" class="nk-btn" ${oc} onclick="mgSalvar()">${MG.ocupado === "salvar" ? "Salvando…" : "Salvar"}</button>
           <button type="button" class="nk-btn" ${oc} onclick="mgConferir()">${MG.ocupado === "conferir" ? "Conferindo…" : "Conferir"}</button>

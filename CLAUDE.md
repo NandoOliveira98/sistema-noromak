@@ -945,6 +945,20 @@ mesmo `_estoque_gravar_fora`. Rotas `GET /api/anuncios/magalu/{categorias,atribu
 `POST /api/anuncios/magalu/{rascunho,conferir,publicar,acompanhar,liberar}`. 1ª resposta de cada chamada em `anuncio_amostra_v2024`
 (`magalu_*`) — **conferir no 1º uso**. Prévia: `dev_magalu_anuncio.py` ("recusar"/"sumir" no título). Teste:
 `TESTES/test_anuncios_magalu_v2034.py`.
+**revisar-antes-de-subir (06/11, "corrija tudo"):** categorias no endereço da spec (**plural** `/portfolios/categories`, busca com 3+
+letras, opções em `choices`, atributo inativo fora, subcategoria por `/categories/hierarchy?parent_id=` barra no Conferir). **Nunca toma
+SKU alheio:** a marca "enviado" (`enviado_em`) é gravada antes do POST — no boot `publicando` sem ela volta a `validado`; o SKU só é
+aceito como nosso com o **mesmo título** do envio (senão `erro`, nada enviado); "Conferir de novo" só de `incerto` ou de `erro` depois
+de o SKU ser reconhecido (etapa preço/estoque); SKU nosso que apareceu tarde é reconhecido no Publicar seguinte (não cria de novo).
+Etapas `sku → preco → estoque → confirmar` (`etapa`, `etapa_em`, `tentativas`): preço POST/PATCH conforme já existe, **estoque inicial =
+o Apollo de AGORA** (menor entre o pedido e o que dá para montar; sem leitura não envia) por ler-e-escolher PATCH/POST
+(`_magalu_estoque_enviar`), 5 recusas ou 30 min = `erro` (sem laço); `publicado` só quando a Magalu mostra preço e estoque (ou com aviso
+depois de 10 min) e a linha nasce com o estoque **lido**. Prazo de 30 min conta também com a leitura falhando. Acompanhamento **numa
+thread** (`magalu_acompanhar_pendentes_fundo`, a volta do estoque espera ≤ 15 s; 3 por vez) e a rota `acompanhar`/`liberar` só dispara
+(nginx 60 s). Conferir: fotos em paralelo com prazo de 25 s (o resto confere no Publicar; foto JPEG guardada 24 h). Estoque aceito e
+ainda não mostrado = `ignorado` "aguardando a Magalu" (não conta erro nem para o Automático), releitura 2+4+6 s. SKU só com letras,
+números, `.`, `-`, `_`. Republicar limpa a remoção do Admin (reinclusão explícita). Trace com falha guardado na amostra. Token:
+`magalu_access_token(force=True, recusado=)` não renova de novo se outro já renovou. Teste: classe `Revisao` do mesmo arquivo.
 
 **V20.26 — fase 3: controle de estoque dos anúncios do ML** (decisões do dono 05/11; plano
 `docs/superpowers/plans/2026-11-05-anuncios-fase3-estoque.md`). **Exceção à regra "o Noromak nunca grava estoque": o Noromak grava
