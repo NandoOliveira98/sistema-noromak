@@ -49,7 +49,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.34-ANUNCIOS-MAGALU"
+APP_VERSION = "20.35-MAGALU-SKU-NOSSO"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -36168,17 +36168,44 @@ def _magalu_marca_do_sku(lido: dict[str, Any] | None) -> str | None:
     return ""
 
 
+MAGALU_CRIADO_ANTES_S = 120
+MAGALU_CRIADO_DEPOIS_S = 3 * 24 * 3600
+
+
+def _magalu_data_utc(texto: Any) -> datetime | None:
+    """`2026-11-06T23:18:16.074000` (a Magalu manda sem fuso = UTC) ou ISO com fuso; invalido = None."""
+    t = str(texto or "").strip().replace("Z", "+00:00")
+    if not t:
+        return None
+    try:
+        d = datetime.fromisoformat(t)
+    except ValueError:
+        return None
+    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+
+
 def _magalu_sku_e_nosso(lido: dict[str, Any] | None, cod: str, titulo: Any, rid: int | None = None) -> bool:
     """2a revisao: o SKU lido foi criado por um envio do Noromak desta ficha? Pela marca (`rid:quando`) quando a
     Magalu devolve `extra_data`; sem ela, pelo titulo igual ao de um rascunho desta ficha que de fato enviou."""
     marca = _magalu_marca_do_sku(lido)
     with DB_LOCK:
         enviados = [dict(x) for x in DB.execute(
-            "SELECT id, titulo FROM anuncio_rascunho_magalu_v2034 WHERE ficha_codigo=? AND COALESCE(enviado_em,'')<>''",
-            (normalize(cod),)).fetchall()]
-    if marca is not None:
+            "SELECT id, titulo, enviado_em FROM anuncio_rascunho_magalu_v2034 WHERE ficha_codigo=? "
+            "AND COALESCE(enviado_em,'')<>''", (normalize(cod),)).fetchall()]
+    if marca:
         rid_marca = marca.split(":", 1)[0]
-        return bool(marca) and rid_marca.isdigit() and int(rid_marca) in {int(x["id"]) for x in enviados}
+        return rid_marca.isdigit() and int(rid_marca) in {int(x["id"]) for x in enviados}
+    # 1o uso real (06/11, TUNAP109): a Magalu TROCA o extra_data pelo dela (IdProduct, update_only_front) e a marca
+    # some. A prova passa a ser a data: o SKU foi criado (`created_at`, UTC) logo depois de um envio NOSSO desta ficha
+    # (no maximo MAGALU_CRIADO_ANTES_S antes, por relogios diferentes, e ate MAGALU_CRIADO_DEPOIS_S depois). Um SKU de
+    # outra ferramenta ja existia antes do envio (o Publicar le o SKU antes de enviar e recusa).
+    criado = _magalu_data_utc(_magalu_texto(lido, "created_at"))
+    if criado is not None:
+        for x in enviados:
+            env = _magalu_data_utc(x.get("enviado_em"))
+            if env is not None and -MAGALU_CRIADO_ANTES_S <= (criado - env).total_seconds() <= MAGALU_CRIADO_DEPOIS_S:
+                return True
+        return False
     titulo_lido = _magalu_texto(lido, "title")
     return _magalu_titulo_igual(titulo_lido, titulo) and any(_magalu_titulo_igual(x["titulo"], titulo_lido) for x in enviados)
 
@@ -36715,7 +36742,9 @@ def magalu_incerto_liberar(rascunho_id: Any, acao: Any, ator: str) -> dict[str, 
         if atual["situacao"] == "incerto":
             novo = _magalu_trocar(rid, ("incerto",), "aguardando", [], ator,
                                   extra={"enviado_em": now_iso(), "etapa": "sku", "tentativas": 0})
-        elif atual["situacao"] == "erro" and str(atual.get("etapa") or "") in ("preco", "estoque", "confirmar"):
+        elif atual["situacao"] == "erro" and (str(atual.get("etapa") or "") in ("preco", "estoque", "confirmar")
+                                              or str(atual.get("enviado_em") or "")):
+            # 1o uso real: o envio saiu e o SKU nao foi reconhecido; o acompanhamento confere de novo se e nosso
             novo = _magalu_trocar(rid, ("erro",), "aguardando", [], ator, extra={"etapa_em": now_iso(), "tentativas": 0})
     elif atual["situacao"] == "incerto":
         novo = _magalu_trocar(rid, ("incerto",), "validado", [], ator)

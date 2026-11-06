@@ -31,6 +31,7 @@ class MagaluFalsa:
         self.nao_muda = set()
         self.branches = {}
         self.filhas = {}         # categoria -> subcategorias (hierarchy?parent_id=)
+        self.enviados = []       # corpos do POST /skus como o Noromak mandou
         self.attrs_extras = 0    # atributos a mais (paginacao)
         self.estoque_404 = False  # SKU novo sem estoque: o GET do estoque da 404
 
@@ -59,14 +60,20 @@ class MagaluFalsa:
             if self.criar_erro:
                 raise self.criar_erro
             if not self.nao_cria:
-                self.skus[payload["sku"]] = payload
+                from datetime import datetime, timezone
+                # como a Magalu real (06/11): guarda o created_at (UTC, sem fuso) e TROCA o extra_data pelo dela
+                self.skus[payload["sku"]] = dict(payload, created_at=datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
+                                                 extra_data=[{"name": "IdProduct", "value": "6cfecd8c"},
+                                                             {"name": "update_only_front", "value": "false"}])
+                self.enviados.append(payload)
             return {"trace_id": "tr-1"}
         if path.startswith("/seller/v1/portfolios/skus/"):
             sku = path.rsplit("/", 1)[1]
             if sku in self.skus and self.aparece_depois <= 0:
                 saida = {"sku": sku, "status": "PUBLISHED", "title": self.skus[sku]["title"]}
-                if "extra_data" in self.skus[sku]:
-                    saida["extra_data"] = self.skus[sku]["extra_data"]
+                for k in ("extra_data", "created_at"):
+                    if k in self.skus[sku]:
+                        saida[k] = self.skus[sku][k]
                 return saida
             if sku in self.skus:
                 self.aparece_depois -= 1
@@ -376,8 +383,11 @@ class Revisao(Base):
         self.assertEqual((self.mg.escritas("/prices/"), self.mg.escritas("/stocks/")), ([], []))
         with S.DB_LOCK:
             self.assertIsNone(S.DB.execute("SELECT 1 FROM anuncio_canal_v2023 WHERE canal='magalu'").fetchone())
-        with self.assertRaises(ValueError):  # erro de envio nao volta a aguardando pelo "Conferir de novo"
+        # "Conferir de novo" volta a conferir (o envio saiu), mas continua nao tomando o SKU alheio
+        with mock.patch.object(S, "magalu_acompanhar_iniciar", side_effect=lambda rid, ator: S.magalu_rascunho_ler(rid)):
             S.magalu_incerto_liberar(r["id"], "conferir", "admin")
+        self.assertEqual(S.magalu_acompanhar(r["id"], forcar=True)["situacao"], "erro")
+        self.assertEqual((self.mg.escritas("/prices/"), self.mg.escritas("/stocks/")), ([], []))
 
     def test_recusa_do_envio_nao_pode_conferir_de_novo(self):
         r = self.conferido()
@@ -508,13 +518,16 @@ class Revisao(Base):
             st, d = self.cliente.pedir("POST", "/api/anuncios/magalu/acompanhar", {"id": r["id"]})
         self.assertEqual((st, d["rascunho"]["situacao"]), (200, "aguardando"))
 
-    def test_sku_e_nosso_pela_marca_do_envio_mesmo_com_o_titulo_mudado(self):
+    def test_sku_e_nosso_pela_data_mesmo_sem_a_marca_e_com_o_titulo_mudado(self):
+        """1o uso real (06/11, TUNAP109): a Magalu apaga a marca do extra_data; a prova e o created_at."""
         r = self.conferido()
         self.mg.aparece_depois = 1
         self.publicar(r)
+        enviado = self.mg.enviados[0]
+        self.assertEqual(enviado["extra_data"][0]["name"], "noromak_envio")
+        self.assertTrue(enviado["extra_data"][0]["value"].startswith(f"{r['id']}:"))
         corpo = self.mg.skus["TUNAP109"]
-        self.assertEqual(corpo["extra_data"][0]["name"], "noromak_envio")
-        self.assertTrue(corpo["extra_data"][0]["value"].startswith(f"{r['id']}:"))
+        self.assertNotIn("noromak_envio", str(corpo["extra_data"]))
         corpo["title"] = "Título que a Magalu mudou"  # moderacao/catalogo
         S.magalu_acompanhar(r["id"], forcar=True)
         self.assertEqual(S.magalu_acompanhar(r["id"], forcar=True)["situacao"], "publicado")
@@ -578,6 +591,27 @@ class Revisao(Base):
         self.assertIs(S._magalu_acompanhar_trava(r["id"]), trava)
         self.assertIn(r["id"], S._MAGALU_ACOMPANHAR_VISTO)
 
+
+    def test_sku_criado_antes_do_envio_nao_e_nosso(self):
+        r = self.conferido()
+        self.mg.nao_cria = True
+        self.publicar(r)
+        self.mg.skus["TUNAP109"] = {"title": r["titulo"], "created_at": "2026-01-01T10:00:00.000000",
+                                    "extra_data": [{"name": "IdProduct", "value": "1"}]}
+        a = S.magalu_acompanhar(r["id"], forcar=True)
+        self.assertEqual(a["situacao"], "erro", "mesmo título, mas criado antes do nosso envio = de outra ferramenta")
+        self.assertEqual(self.mg.escritas("/prices/"), [])
+
+    def test_erro_do_reconhecimento_volta_pelo_conferir_de_novo(self):
+        """O caso real: o SKU nosso foi recusado como alheio; o "Conferir de novo" segue com preço e estoque."""
+        r = self.conferido()
+        self.publicar(r)
+        with S.DB_LOCK:
+            S.DB.execute("UPDATE anuncio_rascunho_magalu_v2034 SET situacao='erro', etapa='' WHERE id=?", (r["id"],))
+            S.DB.commit()
+        with mock.patch.object(S, "magalu_acompanhar_iniciar", side_effect=lambda rid, ator: S.magalu_rascunho_ler(rid)):
+            S.magalu_incerto_liberar(r["id"], "conferir", "admin")
+        self.assertEqual(S.magalu_acompanhar(r["id"], forcar=True)["situacao"], "publicado")
 
     def test_republicar_limpa_a_remocao_do_admin(self):
         r = self.conferido()

@@ -966,6 +966,11 @@ enviou) — título mudado pela Magalu não perde o produto, título repetido po
 Apollo sem leitura não gasta tentativa (só o prazo); atributos paginados (`_limit` 100) e os que não são de variação vão para a ficha
 técnica; estoque aceito e não mostrado 3 vezes seguidas = erro (`_MAGALU_ESTOQUE_SEM_MOSTRAR`); a trava/intervalo só sai quando o
 rascunho sai de `aguardando`; o lote do worker vai pelos há mais tempo sem conferir; estoque com espera 12 s por chamada e releitura 2+3 s.
+**V20.35 — 1º uso real (06/11, TUNAP109):** a Magalu **troca o `extra_data`** pelo dela (`IdProduct`, `update_only_front`) e a marca
+do envio some; o SKU criado pelo Noromak foi recusado como "não é o que o Noromak enviou". A prova de que é nosso passa a ser o
+`created_at` (UTC, sem fuso) do SKU logo depois de um envio nosso desta ficha (de 2 min antes a 3 dias depois,
+`MAGALU_CRIADO_ANTES_S`/`_DEPOIS_S`); SKU criado antes do envio = de outra ferramenta. "Conferir de novo" vale também no `erro`
+cujo envio saiu (`enviado_em`): o acompanhamento confere de novo. O SKU criado fica `DRAFT` na Magalu até receber preço e estoque.
 
 **V20.26 — fase 3: controle de estoque dos anúncios do ML** (decisões do dono 05/11; plano
 `docs/superpowers/plans/2026-11-05-anuncios-fase3-estoque.md`). **Exceção à regra "o Noromak nunca grava estoque": o Noromak grava
