@@ -994,7 +994,7 @@ function cartaoEstoque(a) {
   if (modo === "manual") {
     corpo = PODE ? `<div class="barra" style="margin:0"><span class="muted">Quantidade ${noMkt(a)}</span>
         <input class="qtd" type="number" min="0" max="99999" step="1" inputmode="numeric" aria-label="Quantidade a enviar ao marketplace" value="${esc(EST_DIG[k] ?? (a.estoque ?? ""))}" data-chave="${esc(k)}" oninput="EST_DIG[this.dataset.chave]=this.value" onkeydown="if(event.key==='Enter')this.nextElementSibling.click()">
-        <button type="button" class="nk-btn mini pri" ${dadosAnuncio(a)} onclick="enviarEstoqueManual(this)">Enviar</button>
+        <button type="button" class="nk-btn mini pri" ${dadosAnuncio(a)} onclick="enviarEstoqueManual(this)">${a.canal === "shopee" ? "Enviar à Shopee" : "Enviar ao ML"}</button>
         <span class="muted">Vai na hora; o Noromak relê o anúncio para confirmar.</span></div>`
       : `<div class="muted">Manual: o estoque só muda quando o Admin digita e envia.</div>`;
   } else if (!d) corpo = `<div class="muted">Calculando…</div>`;
