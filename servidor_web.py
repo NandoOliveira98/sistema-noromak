@@ -49,7 +49,7 @@ from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 # aceita font-src 'self'. Nem todo sistema conhece o tipo do .woff2.
 mimetypes.add_type("font/woff2", ".woff2")
 
-APP_VERSION = "20.27-ANUNCIOS-DEPOSITO"
+APP_VERSION = "20.28-ANUNCIOS-KIT-FICHA"
 APP_MARKER = "noromak_expedicao_web"
 BASE_PATH = "/expedicao"
 # V18.82: cada tela do Admin tem o seu endereço. Todos abrem o mesmo admin.html (exigem o
@@ -7453,6 +7453,14 @@ def ensure_anuncios_schema() -> None:
         cols = {r[1] for r in DB.execute("PRAGMA table_info(anuncio_canal_v2023)").fetchall()}
         if "variacoes" not in cols:
             DB.execute("ALTER TABLE anuncio_canal_v2023 ADD COLUMN variacoes INTEGER NOT NULL DEFAULT 0")
+        # V20.28: "Este produto e: Peca / Kit" escolhido pelo Admin (vence a leitura do SKU) e se a ficha nasceu
+        # pelo Admin ("+ Novo produto"/salvar) ou pela puxada do ML.
+        cols = {r[1] for r in DB.execute("PRAGMA table_info(anuncio_ficha_v2023)").fetchall()}
+        for nome, tipo in (("tipo_confirmado_por", "TEXT NOT NULL DEFAULT ''"),
+                           ("tipo_confirmado_em", "TEXT NOT NULL DEFAULT ''"),
+                           ("criada_por_admin", "INTEGER NOT NULL DEFAULT 0")):
+            if nome not in cols:
+                DB.execute(f"ALTER TABLE anuncio_ficha_v2023 ADD COLUMN {nome} {tipo}")
         # V20.24: no boot nenhuma publicacao esta rodando; `publicando` que sobrou (processo caiu no meio) vira
         # `incerto` - o ML pode ter criado: o Admin confere e libera. Nunca volta a `validado` sozinho.
         DB.execute("UPDATE anuncio_rascunho_v2024 SET situacao='incerto', versao=versao+1, "
@@ -7478,6 +7486,10 @@ def _ficha_de_linha(row: Any) -> dict[str, Any]:
         "campos": _j(row["campos_json"]), "origem": _j(row["origem_json"]),
         "atributos": _j(row["atributos_json"]), "versao": int(row["versao"]),
         "atualizado_em": row["atualizado_em"], "atualizado_por": row["atualizado_por"],
+        # V20.28: tipo escolhido pelo Admin (vazio = ainda nao confirmado)
+        "tipo_confirmado_por": str(row["tipo_confirmado_por"] or "") if "tipo_confirmado_por" in row.keys() else "",
+        "tipo_confirmado_em": str(row["tipo_confirmado_em"] or "") if "tipo_confirmado_em" in row.keys() else "",
+        "criada_por_admin": bool(row["criada_por_admin"]) if "criada_por_admin" in row.keys() else False,
     }
 
 
@@ -7520,9 +7532,11 @@ def ficha_salvar(codigo: str, campos: dict[str, Any], ator: str, versao: int | N
                 cs[nome] = valor.strip() if isinstance(valor, str) else valor
                 os_[nome] = "admin"
         nova = (atual["versao"] + 1) if atual else 1
+        # V20.28: ficha que NASCE aqui foi criada pelo Admin (criada_por_admin=1; a da puxada nasce no ficha_importar)
         DB.execute(
-            "INSERT INTO anuncio_ficha_v2023(codigo,tipo,campos_json,origem_json,versao,atualizado_em,atualizado_por) "
-            "VALUES(?,?,?,?,?,?,?) ON CONFLICT(codigo) DO UPDATE SET campos_json=excluded.campos_json, "
+            "INSERT INTO anuncio_ficha_v2023(codigo,tipo,campos_json,origem_json,versao,atualizado_em,atualizado_por,"
+            "criada_por_admin) "
+            "VALUES(?,?,?,?,?,?,?,1) ON CONFLICT(codigo) DO UPDATE SET campos_json=excluded.campos_json, "
             "origem_json=excluded.origem_json, versao=excluded.versao, atualizado_em=excluded.atualizado_em, "
             "atualizado_por=excluded.atualizado_por",
             (cod, tipo_novo, json.dumps(cs, ensure_ascii=False), json.dumps(os_, ensure_ascii=False), nova, now_iso(),
@@ -7648,13 +7662,52 @@ def _ficha_garantir_kit(sku: str, ator: str, commit: bool = True) -> str:
     """V20.23: garante a ficha do kit com tipo='kit' (cria sem campos; nao mexe nos campos de quem ja existe)."""
     cod = normalize(sku)
     if cod:
+        # V20.28: a importacao nunca desfaz o tipo escolhido pelo Admin (Peca confirmada continua Peca)
+        respeitar = 1 if str(ator or "").startswith("importacao:") else 0
         with DB_LOCK:
             DB.execute(
                 "INSERT INTO anuncio_ficha_v2023(codigo,tipo,atualizado_em,atualizado_por) VALUES(?,'kit',?,?) "
-                "ON CONFLICT(codigo) DO UPDATE SET tipo='kit'", (cod, now_iso(), str(ator or "")))
+                "ON CONFLICT(codigo) DO UPDATE SET tipo=CASE WHEN ?=1 AND COALESCE(tipo_confirmado_por,'')<>'' "
+                "THEN tipo ELSE 'kit' END", (cod, now_iso(), str(ator or ""), respeitar))
             if commit:
                 DB.commit()
     return cod
+
+
+class KitCodigoDeProduto(ValueError):
+    """V20.28: o codigo e de um produto; virar kit faz toda venda dele abrir nas pecas. A tela pede confirmacao."""
+    codigo_erro = "CODIGO_DE_PRODUTO"
+
+
+def _kit_codigo_produto_real(sku: str) -> bool:
+    """V20.28: o codigo esta no Precificador (fora dos kits) ou no conf_produtos? "KIT..." nunca conta."""
+    alvo = normalize(sku)
+    if not alvo or re.match(r"^KIT", alvo):
+        return False
+    try:
+        dados = precificador_dados()
+    except Exception:
+        dados = {}
+    for p in (dados.get("products") if isinstance(dados, dict) else None) or []:
+        if isinstance(p, dict) and not p.get("isKit") and normalize(p.get("sku")) == alvo:
+            return True
+    bruto, _, _ = get_storage("conf_produtos")
+    for row in _rows_from_storage_value(bruto):
+        if isinstance(row, dict) and normalize(row.get("SKU") or row.get("sku")) == alvo:
+            return True
+    return False
+
+
+def _ficha_peca_do_admin(sku: str) -> bool:
+    """V20.28: ficha de peca que o ADMIN criou ("+ Novo produto"/salvar uma ficha nova). A ficha de peca que so a
+    puxada do ML criou NAO conta (o Admin marca como kit sem confirmar), nem o "Peca" escolhido no seletor (escolher
+    "Kit" depois e a mesma decisao explicita, desfeita)."""
+    alvo = normalize(sku)
+    if not alvo:
+        return False
+    with DB_LOCK:
+        row = DB.execute("SELECT tipo, criada_por_admin FROM anuncio_ficha_v2023 WHERE codigo=?", (alvo,)).fetchone()
+    return bool(row and str(row["tipo"]) == "peca" and int(row["criada_por_admin"] or 0))
 
 
 def _kit_salvar_codigo_de_produto(sku: str) -> bool:
@@ -7696,9 +7749,13 @@ def _kit_tem_pedido_na_fila(sku: str) -> bool:
 
 
 def kit_salvar(sku_kit: str, nome: str, componentes: list[dict[str, Any]], ator: str,
-               versao_storage: int | None) -> dict[str, Any]:
+               versao_storage: int | None, admin_tipo: bool = False,
+               confirmar_produto: bool = False) -> dict[str, Any]:
     """Grava/atualiza UMA entrada de conf_kits (as outras e os campos desconhecidos da linha ficam como estao),
-    sempre por save_storage; garante a ficha do kit com tipo='kit'."""
+    sempre por save_storage; garante a ficha do kit com tipo='kit'.
+    V20.28: `admin_tipo` = o Admin escolheu "Este produto e: Kit" na ficha. A ficha de peca que so a puxada criou vira
+    kit sem pergunta; codigo de produto real (Precificador/conf_produtos) ou peca decidida pelo Admin so com
+    `confirmar_produto` (senao KitCodigoDeProduto, que a tela reconhece). Kit inativo volta a ativo."""
     sku = str(sku_kit or "").strip()
     if not sku:
         raise ValueError("Informe o SKU do kit.")
@@ -7725,6 +7782,9 @@ def kit_salvar(sku_kit: str, nome: str, componentes: list[dict[str, Any]], ator:
         novos.append({"sku": csku, "quantidade": int(qf)})
     nome_ok = str(nome or "").strip() or sku
     eh_produto = _kit_salvar_codigo_de_produto(sku)  # V20.23: le o Precificador antes da vez do banco
+    # V20.28: na escolha explicita do Admin so pede confirmacao o produto real ou a peca decidida por ele
+    produto_real = admin_tipo and _kit_codigo_produto_real(sku)
+    pede_confirmar = admin_tipo and (produto_real or _ficha_peca_do_admin(sku))
     with DB_LOCK:  # RLock: leitura e gravacao na mesma vez, sem outra gravacao no meio
         bruto, versao, _ = get_storage("conf_kits")
         if versao_storage is not None and int(versao_storage) != int(versao):
@@ -7753,9 +7813,18 @@ def kit_salvar(sku_kit: str, nome: str, componentes: list[dict[str, Any]], ator:
         if antes and antes != [normalize(c["sku"]) for c in novos] and _kit_tem_pedido_na_fila(sku):
             raise ValueError("Este kit tem pedido na fila de conferência: tirar ou pôr peça só depois que o pedido "
                              "sair. Mudar a quantidade pode.")
-        if posicao is None and eh_produto:
-            raise ValueError(f"Este código é de um produto, não de um kit: {sku}. Um kit com ele faria toda venda "
-                             "desse produto virar os componentes.")
+        inativo = posicao is not None and not bool(linhas[posicao].get("ativo", True))
+        if admin_tipo:
+            # V20.28: ADMIN > sistema - a escolha explicita vence; produto real so com a confirmacao da tela
+            if (posicao is None or inativo) and pede_confirmar and not confirmar_produto:
+                raise KitCodigoDeProduto(
+                    ("Este código existe como produto no Precificador." if produto_real else
+                     "Este código foi criado como peça pelo Admin.") +
+                    " Marcar como kit faz TODA venda dele abrir nestas peças na Conferência. Confirmar?")
+        elif posicao is None and eh_produto:
+            raise KitCodigoDeProduto(f"Este código é de um produto, não de um kit: {sku}. Um kit com ele faria toda "
+                                     "venda desse produto virar os componentes. Para marcar como kit, use "
+                                     "“Este produto é: Kit” na ficha.")
         if posicao is None:
             # V20.23: id estavel no mesmo formato da tela Admin (persistirKitsBancoAdmin); sem ele o override
             # do ADMIN usaria NOME:<nome> como identidade. Linha antiga sem id NAO ganha id aqui (trocaria a entidade).
@@ -7772,12 +7841,196 @@ def kit_salvar(sku_kit: str, nome: str, componentes: list[dict[str, Any]], ator:
             row["componentes"] = comps_final
             row["nome"] = nome_ok
             row["atualizado_em"] = now_iso()
+            if admin_tipo and inativo:
+                row["ativo"] = True  # V20.28: "Kit" escolhido de novo religa o kit desativado pelo "Peca"
             linhas[posicao] = row
         save_storage("conf_kits", bruto, json.dumps(linhas, ensure_ascii=False), False, actor=ator,
                      actor_role="admin", source_screen="anuncios", change_method="anuncios.kit")
         _ficha_garantir_kit(sku, ator)
-    audit(ator, "anuncios.kit", f"{sku}|{novos}")
+    audit(ator, "anuncios.kit", f"{sku}|{novos}" + ("|admin_tipo" if admin_tipo else ""))
     return kit_composicao(sku) or {}
+
+
+# V20.28 (dono, 05/11): "Este produto e: Peca / Kit" na ficha. O SKU "0893600022-0893764272" (dois codigos do Apollo
+# juntos por hifen) era lido como prefixo de anuncio + codigo e virava ficha de peca; o "+ Novo kit" era recusado.
+# Heuristica CONSERVADORA do "kit?": exatamente um hifen; cada lado so com 0-9/A-Z/ponto, com 7+ caracteres e 5+
+# digitos. O prefixo de anuncio conhecido ("151490-", "157507-": 5 a 6 digitos) nunca chega a 7 e fica de fora; "KIT..."
+# e "A/B" tambem. So avisa (selo) e trava o Automatico ate o Admin escolher Peca ou Kit: nunca decide sozinha.
+_ANUNCIO_SKU_DOIS_CODIGOS = re.compile(r"^([0-9A-Z.]{7,})-([0-9A-Z.]{7,})$")
+
+
+def anuncio_sku_parece_kit(sku: Any) -> bool:
+    m = _ANUNCIO_SKU_DOIS_CODIGOS.match(normalize(sku))
+    if not m or m.group(0).startswith("KIT"):
+        return False
+    return all(sum(ch.isdigit() for ch in lado) >= 5 for lado in m.groups())
+
+
+def _ficha_tipo_info(cod: str) -> dict[str, Any]:
+    """V20.28: {tipo, confirmado} da ficha (sem ficha = peca, nao confirmado). Pode ser chamada sob o DB_LOCK."""
+    with DB_LOCK:
+        row = DB.execute("SELECT tipo, tipo_confirmado_por FROM anuncio_ficha_v2023 WHERE codigo=?",
+                         (normalize(cod),)).fetchone()
+    if row is None:
+        return {"tipo": "", "confirmado": False}
+    return {"tipo": str(row["tipo"] or "peca"), "confirmado": bool(str(row["tipo_confirmado_por"] or ""))}
+
+
+def anuncio_tipo_a_confirmar(cod: Any, comp: dict[str, Any] | None = None, catalogo: dict[str, Any] | None = None,
+                             info: dict[str, Any] | None = None) -> bool:
+    """V20.28: o SKU parece dois codigos juntos, nao tem kit no Cadastro e o Admin ainda nao escolheu Peca ou Kit."""
+    if not anuncio_sku_parece_kit(cod):
+        return False
+    if comp is None:
+        comp = _kit_composicao(normalize(cod), catalogo if catalogo is not None else _load_kit_catalog())
+    if comp:
+        return False
+    return not (info if info is not None else _ficha_tipo_info(str(cod)))["confirmado"]
+
+
+def _ficha_tipo_efetivo(cod: str) -> str:
+    """V20.28: o tipo que a tela mostra (mesma regra do anuncio_ficha_payload)."""
+    comp = kit_composicao(cod)
+    info = _ficha_tipo_info(cod)
+    if comp and comp.get("ativo", True):
+        return "kit"
+    if comp:  # kit inativo no cadastro: Peca so quando o Admin escolheu
+        return "peca" if info["confirmado"] and info["tipo"] == "peca" else "kit"
+    return info["tipo"] or "peca"
+
+
+def _anuncios_da_ficha_para_manual(cod: str, detalhe: str, ator: str) -> list[str]:
+    """V20.28: mudou o tipo do produto = os anuncios dele em Automatico voltam a Manual (com linha no registro)."""
+    with DB_LOCK:
+        rows = DB.execute("SELECT canal, conta, anuncio_id FROM anuncio_canal_v2023 WHERE ficha_codigo=? "
+                          "AND estoque_modo='automatico'", (cod,)).fetchall()
+        if rows:
+            DB.execute("UPDATE anuncio_canal_v2023 SET estoque_modo='manual' WHERE ficha_codigo=? "
+                       "AND estoque_modo='automatico'", (cod,))
+            DB.commit()
+    for r in rows:
+        _anuncio_estoque_registrar(r["canal"], r["conta"], r["anuncio_id"], "manual", None, None,
+                                   "modo automatico -> manual", "ignorado", detalhe, ator)
+    return [str(r["anuncio_id"]) for r in rows]
+
+
+def _kit_desativar(sku: str, ator: str) -> bool:
+    """V20.28: "Peca" escolhido num kit do Cadastro = ativo False (nunca apaga). Recusa com pedido do kit na fila.
+    Devolve True quando havia kit ativo para desligar."""
+    alvo = normalize(sku)
+    with DB_LOCK:
+        bruto, _, _ = get_storage("conf_kits")
+        try:
+            linhas = json.loads(bruto or "[]")
+        except ValueError:
+            linhas = []
+        if not isinstance(linhas, list):
+            raise ValueError("O Cadastro de Kits está em formato inesperado.")
+        posicao = next((i for i, row in enumerate(linhas) if isinstance(row, dict) and normalize(
+            row.get("sku_kit") or row.get("SKU Kit") or row.get("sku")) == alvo), None)
+        if posicao is None or not bool(linhas[posicao].get("ativo", True)):
+            return False
+        if _kit_tem_pedido_na_fila(sku):
+            raise ValueError("Este kit tem pedido na fila de conferência: voltar para Peça só depois que o pedido "
+                             "sair.")
+        row = dict(linhas[posicao])
+        row["ativo"] = False
+        row["atualizado_em"] = now_iso()
+        linhas[posicao] = row
+        save_storage("conf_kits", bruto, json.dumps(linhas, ensure_ascii=False), False, actor=ator,
+                     actor_role="admin", source_screen="anuncios", change_method="anuncios.kit_desativar")
+    return True
+
+
+def anuncio_ficha_tipo_definir(codigo: str, tipo: str, ator: str, componentes: Any = None, nome: str = "",
+                               confirmar_produto: bool = False, versao_storage: int | None = None) -> dict[str, Any]:
+    """V20.28: o Admin escolhe "Este produto e: Peca / Kit". Kit = grava a composicao no MESMO Cadastro de Kits
+    (sku_kit = o codigo da ficha); Peca = desativa o kit do cadastro (ativo False, nunca apaga; recusado com pedido do
+    kit na fila). A ficha guarda quem/quando escolheu (tipo_confirmado_*): a puxada nao desfaz. Mudou o tipo = os
+    anuncios da ficha em Automatico voltam a Manual."""
+    texto = str(codigo or "").strip()
+    cod = normalize(texto)
+    if not cod:
+        raise ValueError("Informe o código do produto.")
+    tipo = str(tipo or "").strip().lower()
+    if tipo not in ("peca", "kit"):
+        raise ValueError("Tipo inválido (peca ou kit).")
+    antes = _ficha_tipo_efetivo(cod)
+    comp = kit_composicao(texto)
+    kit = None
+    if tipo == "kit":
+        if isinstance(componentes, list) and componentes:
+            kit = kit_salvar(texto, nome, componentes, ator, versao_storage, admin_tipo=True,
+                             confirmar_produto=confirmar_produto)
+        elif comp and comp.get("fonte") == "cadastro" and not comp.get("ativo", True):
+            kit = kit_salvar(comp["sku_kit"], comp["nome"], comp["componentes"], ator, versao_storage, admin_tipo=True,
+                             confirmar_produto=confirmar_produto)  # religa com as pecas que ja tinha
+        elif not comp and len(_separacao_partes(texto, _separacao_codigos_conhecidos())) <= 1:
+            raise ValueError("Informe as peças do kit na aba “Composição do kit”.")
+    else:
+        if comp and comp.get("fonte") == "prefixo":
+            raise ValueError("Este código é um kit pelo próprio nome (KITn-…): não dá para marcar como peça.")
+        _kit_desativar(texto, ator)
+    with DB_LOCK:
+        DB.execute(
+            "INSERT INTO anuncio_ficha_v2023(codigo,tipo,atualizado_em,atualizado_por,tipo_confirmado_por,"
+            "tipo_confirmado_em) VALUES(?,?,?,?,?,?) ON CONFLICT(codigo) DO UPDATE SET tipo=excluded.tipo, "
+            "tipo_confirmado_por=excluded.tipo_confirmado_por, tipo_confirmado_em=excluded.tipo_confirmado_em",
+            (cod, tipo, now_iso(), str(ator or ""), str(ator or "") or "admin", now_iso()))
+        DB.commit()
+    manuais: list[str] = []
+    if antes != tipo:
+        manuais = _anuncios_da_ficha_para_manual(cod, f"o tipo do produto mudou: {antes} -> {tipo}", ator)
+    audit(ator, "anuncios.ficha_tipo", f"{cod}|{antes}->{tipo}|confirmar_produto={bool(confirmar_produto)}")
+    return {"ok": True, "codigo": cod, "tipo": tipo, "antes": antes, "kit": kit or kit_composicao(texto),
+            "voltaram_manual": manuais}
+
+
+def anuncio_produtos_buscar(busca: str, limite: int = 20) -> dict[str, Any]:
+    """V20.28: busca de peca para a composicao do kit - codigo ou nome no Precificador, nas fichas, no conf_produtos e
+    nos codigos ja lidos do Apollo. So le. `exato` = o texto e um codigo que o sistema conhece."""
+    termo = normalize(busca)
+    texto = str(busca or "").strip().lower()
+    if not termo:
+        return {"itens": [], "exato": False}
+    achados: dict[str, dict[str, Any]] = {}
+
+    def _por(codigo: Any, nome: Any, fonte: str) -> None:
+        c = normalize(codigo)
+        if not c:
+            return
+        atual = achados.get(c)
+        if atual is None:
+            achados[c] = {"codigo": str(codigo).strip(), "nome": str(nome or "").strip(), "fonte": fonte}
+        elif not atual["nome"] and str(nome or "").strip():
+            atual["nome"] = str(nome).strip()
+
+    try:
+        for p in (precificador_dados().get("products") or []):
+            if isinstance(p, dict) and not p.get("isKit"):
+                _por(p.get("sku"), p.get("produto"), "precificador")
+    except Exception:
+        pass
+    with DB_LOCK:
+        for r in DB.execute("SELECT codigo, campos_json FROM anuncio_ficha_v2023 WHERE tipo<>'kit'").fetchall():
+            try:
+                nome = (json.loads(r["campos_json"] or "{}") or {}).get("nome")
+            except (TypeError, ValueError):
+                nome = ""
+            _por(r["codigo"], nome, "ficha")
+        apollo = [r[0] for r in DB.execute("SELECT DISTINCT codigo FROM anuncio_apollo_v2026").fetchall()]
+    bruto, _, _ = get_storage("conf_produtos")
+    for row in _rows_from_storage_value(bruto):
+        if isinstance(row, dict):
+            _por(row.get("SKU") or row.get("sku"), row.get("Descrição") or row.get("descricao") or row.get("Nome"),
+                 "produtos")
+    for c in apollo:
+        _por(c, "", "apollo")
+    exato = termo in achados
+    itens = [v for k, v in achados.items() if termo in k or (len(texto) >= 3 and texto in v["nome"].lower())]
+    itens.sort(key=lambda v: (normalize(v["codigo"]) != termo, not normalize(v["codigo"]).startswith(termo),
+                              normalize(v["codigo"])))
+    return {"itens": itens[:max(1, min(50, int(limite or 20)))], "exato": exato}
 
 
 # V20.23: puxar os anuncios do ML (so leitura) e ligar cada um a ficha do produto.
@@ -8580,13 +8833,21 @@ def anuncios_lista_payload(busca: str = "", filtro: str = "", conta: str = "") -
             por_cod.setdefault(cod, []).append(r)
     codigos = set(fichas) | set(por_cod)
     saida: list[dict[str, Any]] = []
+    catalogo: dict[str, Any] | None = None
     for cod in sorted(codigos):
         f = fichas.get(cod)
         nome = str((f or {}).get("campos", {}).get("nome") or "")
         if texto and termo not in cod and texto not in nome.lower():
             continue
         ans = por_cod.get(cod, [])
+        suspeito = False
+        if anuncio_sku_parece_kit(cod):  # V20.28: so le o Cadastro de Kits quando o codigo tem a cara (regex antes)
+            if catalogo is None:
+                catalogo = _load_kit_catalog()
+            suspeito = anuncio_tipo_a_confirmar(cod, catalogo=catalogo, info={
+                "tipo": (f or {}).get("tipo") or "", "confirmado": bool((f or {}).get("tipo_confirmado_por"))})
         item = {"codigo": cod, "tipo": (f or {}).get("tipo") or "peca", "nome": nome, "anuncios": len(ans),
+                "kit_suspeito": suspeito,
                 "canais": sorted({str(a["canal"]) for a in ans}), "sem_ficha": f is None,
                 "misto": bool(misto.get(cod)), "noromak": any(str(a["controle"]) == "noromak" for a in ans)}
         if filtro == "sem_ficha" and not item["sem_ficha"]:
@@ -8632,6 +8893,10 @@ def anuncio_ficha_payload(codigo: str, ler_apollo: bool = False,
     comp = kit_composicao(cod)
     if ficha is None and not todas and not comp:
         return None
+    # V20.28: kit desativado pelo "Peca" do Admin = peca (a composicao antiga vai em `kit_inativo`, so para ver)
+    kit_inativo = None
+    if comp and not comp.get("ativo", True) and ficha and ficha.get("tipo_confirmado_por") and ficha.get("tipo") == "peca":
+        kit_inativo, comp = comp, None
     if comp:
         tipo = "kit"
     ativos = [dict(r) for r in todas if not str(r["removido_em"] or "")]
@@ -8655,7 +8920,15 @@ def anuncio_ficha_payload(codigo: str, ler_apollo: bool = False,
                 chave = _exp_norm_codigo(k)
                 lido[chave] = v if lido.get(chave) is None else lido[chave]
         estoque[filial] = _anuncio_estoque_filial(componentes, lido, pendencias[filial])
+    # V20.28: SKU com cara de dois codigos e tipo ainda nao escolhido pelo Admin = selo "kit? confirme a composicao"
+    a_confirmar = anuncio_tipo_a_confirmar(cod, comp=comp or kit_inativo, info={
+        "tipo": (ficha or {}).get("tipo") or "", "confirmado": bool((ficha or {}).get("tipo_confirmado_por"))})
+    for a in ativos:
+        a["kit_suspeito"] = a_confirmar
     return {"codigo": cod, "tipo": tipo,  # V20.23: a tela usa (ficha pode ser None)
+            "kit_suspeito": a_confirmar, "kit_inativo": kit_inativo,
+            "tipo_confirmado_por": (ficha or {}).get("tipo_confirmado_por") or "",
+            "tipo_confirmado_em": (ficha or {}).get("tipo_confirmado_em") or "",
             "ficha": ficha, "kits_da_peca": kits_da_peca(cod) if tipo != "kit" else [], "composicao": comp,
             "anuncios": ativos, "removidos": removidos,
             "misto": bool(_anuncio_misto_por_codigo(todas).get(cod)), "estoque": estoque,
@@ -32629,6 +32902,10 @@ def anuncio_estoque_modo_definir(canal: str, conta: str, anuncio_id: str, modo: 
         motivo = _anuncio_estoque_elegivel(row)
         if motivo:
             raise ValueError(motivo)
+        # V20.28: SKU com cara de dois codigos juntos so vai ao Automatico depois de o Admin escolher Peca ou Kit
+        if modo == "automatico" and anuncio_tipo_a_confirmar(row.get("ficha_codigo")):
+            raise ValueError("O SKU deste anúncio parece dois códigos juntos (kit?). Na ficha, escolha “Este produto "
+                             "é: Peça” ou “Kit” antes de ligar o Automático.")
         antes = str(row.get("estoque_modo") or "manual")
         DB.execute("UPDATE anuncio_canal_v2023 SET estoque_modo=? WHERE canal=? AND conta=? AND anuncio_id=?",
                    (modo, canal, conta, anuncio_id))
@@ -33078,7 +33355,13 @@ def _anuncio_estoque_pecas(ficha_codigo: Any, catalogo: dict[str, dict[str, Any]
         return [], "anúncio sem produto (SKU)"
     partes, comp = _anuncio_sku_partes(cod, catalogo, conhecidos)  # V20.26 (revisao): a mesma regra do pendente
     if comp and not comp.get("ativo", True):
-        return [], "kit inativo no Cadastro de Kits"
+        info = _ficha_tipo_info(cod)
+        if not (info["confirmado"] and info["tipo"] == "peca"):
+            return [], "kit inativo no Cadastro de Kits"
+        # V20.28: o Admin escolheu "Peca" (kit desativado): o anuncio consome o proprio codigo, como uma peca
+        partes = _separacao_partes(cod, conhecidos() if "/" in cod else set())
+    elif not comp and anuncio_tipo_a_confirmar(cod, comp=comp, catalogo=catalogo):
+        return [], "SKU parece dois códigos juntos (kit?): confirme na ficha se é Peça ou Kit"
     pecas: dict[str, dict[str, Any]] = {}
     for codigo, qtd in partes:
         chave = _exp_norm_codigo(codigo)
@@ -40768,6 +41051,11 @@ class AppHandler(BaseHTTPRequestHandler):
             if ctx is not None:
                 self.send_json({"ok": True, "rascunhos": anuncio_rascunhos(str((query.get("codigo") or [""])[0]))})
             return
+        if path == "/api/anuncios/produtos":  # V20.28: busca de peca para a composicao do kit (so le)
+            ctx = self.auth(admin_only=True)
+            if ctx is not None:
+                self.send_json({"ok": True, **anuncio_produtos_buscar(str((query.get("busca") or [""])[0]))})
+            return
         if path == "/api/anuncios/ficha":  # V20.23
             ctx = self.auth(admin_only=True)
             if ctx is not None:
@@ -43116,7 +43404,8 @@ class AppHandler(BaseHTTPRequestHandler):
             except ValueError as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 400)
             return
-        if path in ("/api/anuncios/ficha", "/api/anuncios/kit", "/api/anuncios/puxar", "/api/anuncios/puxar/um",
+        if path in ("/api/anuncios/ficha", "/api/anuncios/kit", "/api/anuncios/ficha/tipo",  # V20.28: Peca / Kit
+                    "/api/anuncios/puxar", "/api/anuncios/puxar/um",
                     "/api/anuncios/trazer-dados", "/api/anuncios/controle",
                     "/api/anuncios/remover", "/api/anuncios/reincluir", "/api/anuncios/foto",
                     "/api/anuncios/foto/remover", "/api/anuncios/foto/ordenar", "/api/anuncios/rascunho",
@@ -43185,6 +43474,18 @@ class AppHandler(BaseHTTPRequestHandler):
                                      body.get("componentes") if isinstance(body.get("componentes"), list) else [],
                                      ctx["username"], vs)
                     res = {"ok": True, "kit": kit}
+                elif path == "/api/anuncios/ficha/tipo":  # V20.28: "Este produto e: Peca / Kit" (perfil Admin)
+                    vs = body.get("versao_storage")
+                    try:
+                        vs = None if vs is None or vs == "" else int(vs)
+                    except (TypeError, ValueError):
+                        raise ValueError("Versão inválida.")
+                    comps = body.get("componentes")
+                    if comps is not None and not isinstance(comps, list):
+                        raise ValueError("Componentes inválidos.")
+                    res = anuncio_ficha_tipo_definir(str(body.get("codigo") or ""), str(body.get("tipo") or ""),
+                                                     ctx["username"], comps, str(body.get("nome") or ""),
+                                                     body.get("confirmar_produto") is True, vs)
                 elif path == "/api/anuncios/puxar":
                     # V20.24: em segundo plano; a rota so confere e inicia (a auditoria e da thread, no fim)
                     contas = body.get("contas")
@@ -43282,6 +43583,8 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.send_json(res)
             except FichaConflito as exc:
                 self.send_json({"ok": False, "error": "CONFLITO", "mensagem": str(exc), "atual": exc.atual}, 409)
+            except KitCodigoDeProduto as exc:  # V20.28: a tela reconhece o codigo e pede a confirmacao
+                self.send_json({"ok": False, "error": str(exc), "codigo_erro": KitCodigoDeProduto.codigo_erro}, 400)
             except ValueError as exc:
                 self.send_json({"ok": False, "error": str(exc)}, 400)
             return

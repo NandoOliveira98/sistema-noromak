@@ -842,6 +842,26 @@ como vieram (`_ml_estoque_wh_gravar`; 409 = relê e tenta 1x, depósito trocado 
 `store_id`/`network_node_id` = recusa listando cada um (nunca adivinha); `selling_address` + `seller_warehouse` juntos = recusa;
 só `selling_address` = como na V20.26. 1ª resposta em `estoque_put_seller_warehouse`. Prévia: o MLB1129555578 tem o formato real e
 agora dá certo. Teste: `TESTES/test_anuncios_estoque_deposito_v2027.py`.
+**V20.28 — "Este produto é: Peça · Kit"** (dono, 05/11; caso "0893600022-0893764272": dois códigos do Apollo juntos por hífen,
+lido como prefixo + código, virava ficha de peça e o "+ Novo kit" era recusado). Seletor no topo da ficha (perfil Admin; os
+outros só veem). **Kit** abre a aba **"Composição do kit"** (peça por código ou nome — `GET /api/anuncios/produtos?busca=`,
+Precificador + fichas + `conf_produtos` + códigos já lidos do Apollo; código digitado que o sistema não conhece = "código não
+encontrado — confira"; quantidade 1..999; subir/descer/remover) e o Salvar grava no **mesmo** Cadastro de Kits com sku_kit = o
+código da ficha (`POST /api/anuncios/ficha/tipo {codigo, tipo, componentes, nome, confirmar_produto, versao_storage}` →
+`anuncio_ficha_tipo_definir` → `kit_salvar(..., admin_tipo=True)`). Ficha de peça que só a puxada criou vira kit sem pergunta;
+código de produto real (Precificador/`conf_produtos`, `_kit_codigo_produto_real`) ou ficha criada como peça pelo Admin
+(`criada_por_admin`, gravado no 1º `ficha_salvar`) só com `confirmar_produto: true` — sem ele 400 `codigo_erro:
+CODIGO_DE_PRODUTO` (`KitCodigoDeProduto`) e a tela pergunta "Marcar como kit faz TODA venda dele abrir nestas peças...". O "+ Novo
+kit" da aba Kits continua recusando (aponta para o seletor). A trava da fila para tirar/pôr/reordenar peça continua. **Peça** num kit
+= `ativo: false` no Cadastro (nunca apaga; recusado com pedido do kit na fila, `_kit_desativar`); a ficha mostra "kit desativado" e
+"Kit" de novo religa com as peças antigas. A escolha fica em `anuncio_ficha_v2023.tipo_confirmado_por/em`; a puxada
+(`_ficha_garantir_kit` com ator `importacao:`) nunca desfaz. Mudou o tipo = anúncios da ficha em Automático voltam a Manual (linha no
+registro). Kit inativo com Peça escolhida: o estoque do anúncio consome o próprio código. **Selo "kit? confirme a composição"**
+(`anuncio_sku_parece_kit`, heurística conservadora): exatamente um hífen, cada lado só 0-9/A-Z/ponto com **7+ caracteres e 5+
+dígitos** (o prefixo de anúncio "151490-"/"157507-" tem 5–6 e fica fora; "KIT…" e "A/B" também), sem kit no Cadastro e tipo não
+escolhido. Na lista, na ficha e na linha do anúncio; o **Automático é recusado** até o Admin escolher (e o anúncio que já estava em
+Automático não envia: motivo "confirme na ficha se é Peça ou Kit"). Prévia: MLB8000000007 com esse SKU; `PREVIA_PORTA` sobe uma 2ª
+cópia. Teste: `TESTES/test_anuncios_kit_ficha_v2028.py`.
 
 ### Estúdio de Imagens (V20.17: servidor, tela e agente)
 `APP/imagens.html` (`/imagens`, menu Vendas e anúncios, módulo próprio **`imagens`** = `app_users.can_imagens`, mesma

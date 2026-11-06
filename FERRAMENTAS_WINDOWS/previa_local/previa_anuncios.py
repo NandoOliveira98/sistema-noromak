@@ -15,6 +15,7 @@ from pathlib import Path
 
 RAIZ = Path(__file__).resolve().parents[2]  # raiz do repositorio
 SENHA = "Previa-Local-2023"
+PORTA = int(os.environ.get("PREVIA_PORTA") or 8158)  # V20.28: outra porta para uma 2a copia (ex.: 8160)
 T = Path(tempfile.mkdtemp(prefix="noromak_anu_"))
 os.environ.update(EXP_DB_PATH=str(T / "e.db"), EXP_BACKUP_DIR=str(T / "b"), EXP_MIGRATION_DIR=str(T / "m"),
                   EXP_ADMIN_USUARIO="previa", EXP_ADMIN_SENHA=SENHA, EXP_USUARIO_SENHA_INICIAL=SENHA,
@@ -124,6 +125,11 @@ ANUNCIOS = {
                           "status": "paused", "tipo": "gold_special", "categoria": "MLB999"},
         "MLB7000000006": {"titulo": "Kit Graxa + Desengripante Wurth", "sku_ml": "0893600022/0893764272", "preco": 89.90,
                           "estoque": 0, "status": "active", "tipo": "gold_special", "categoria": "MLB1234"},
+        # V20.28: caso real de 05/11 - dois codigos juntos por hifen (lido como prefixo + codigo, virava peca).
+        # A ficha vem com o selo "kit? confirme a composicao" e o Automatico fica travado ate escolher Peca ou Kit.
+        "MLB8000000007": {"titulo": "Kit Graxa Wurth 500g + Desengripante Wurth 300ml", "sku_ml": "0893600022-0893764272",
+                          "preco": 94.90, "estoque": 4, "status": "active", "tipo": "gold_special", "categoria": "MLB1234",
+                          "atributos": [atr("BRAND", "WURTH")]},
     },
     "bauru": {
         "MLB2000000001": {"titulo": "Óleo Texamatic 7045 Texaco 3 Litros", "sku_ml": "KIT32052153", "preco": 409.90,
@@ -195,7 +201,7 @@ def _semear_anuncio_de_teste():
     op = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(CookieJar()))
 
     def api(rota, corpo=None):
-        req = urllib.request.Request("http://127.0.0.1:8158/expedicao" + rota,
+        req = urllib.request.Request(f"http://127.0.0.1:{PORTA}/expedicao" + rota,
                                      data=None if corpo is None else json.dumps(corpo).encode(),
                                      headers={"Content-Type": "application/json"}, method="GET" if corpo is None else "POST")
         return json.loads(op.open(req, timeout=60).read() or b"{}")
@@ -245,6 +251,6 @@ def _estoque_automatico_previa():
 
 _th.Thread(target=_estoque_automatico_previa, daemon=True).start()
 
-srv = ThreadingHTTPServer(("127.0.0.1", 8158), S.AppHandler)
-print("ok 8158", T, flush=True)
+srv = ThreadingHTTPServer(("127.0.0.1", PORTA), S.AppHandler)
+print(f"ok {PORTA}", T, flush=True)
 srv.serve_forever()
