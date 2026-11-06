@@ -7484,6 +7484,34 @@ def ensure_anuncios_schema() -> None:
                            ("criada_por_admin", "INTEGER NOT NULL DEFAULT 0")):
             if nome not in cols:
                 DB.execute(f"ALTER TABLE anuncio_ficha_v2023 ADD COLUMN {nome} {tipo}")
+        # V20.32: rascunho de anuncio da Shopee (o do ML e o anuncio_rascunho_v2024; cada marketplace tem os seus campos).
+        # `item_id` = o numero do item criado na Shopee. Peso e medidas NAO ficam aqui: sao lidos da ficha na hora.
+        DB.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS anuncio_rascunho_shopee_v2032 (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                ficha_codigo TEXT NOT NULL,
+                titulo TEXT NOT NULL DEFAULT '',
+                categoria TEXT NOT NULL DEFAULT '',
+                categoria_nome TEXT NOT NULL DEFAULT '',
+                atributos_json TEXT NOT NULL DEFAULT '{}',
+                marca_json TEXT NOT NULL DEFAULT '{}',
+                fotos_json TEXT NOT NULL DEFAULT '[]',
+                descricao TEXT NOT NULL DEFAULT '',
+                preco REAL,
+                quantidade INTEGER,
+                situacao TEXT NOT NULL DEFAULT 'rascunho',
+                item_id TEXT,
+                erros_json TEXT NOT NULL DEFAULT '[]',
+                versao INTEGER NOT NULL DEFAULT 1,
+                criado_em TEXT, criado_por TEXT, atualizado_em TEXT, atualizado_por TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_anuncio_rascunho_shopee_ficha ON anuncio_rascunho_shopee_v2032(ficha_codigo);
+            """
+        )
+        DB.execute("UPDATE anuncio_rascunho_shopee_v2032 SET situacao='incerto', versao=versao+1, "
+                   "erros_json='[\"O servidor reiniciou durante a publicação: confira no Seller Center se o anúncio foi criado.\"]' "
+                   "WHERE situacao='publicando'")
         # V20.24: no boot nenhuma publicacao esta rodando; `publicando` que sobrou (processo caiu no meio) vira
         # `incerto` - o ML pode ter criado: o Admin confere e libera. Nunca volta a `validado` sozinho.
         DB.execute("UPDATE anuncio_rascunho_v2024 SET situacao='incerto', versao=versao+1, "
@@ -33934,6 +33962,859 @@ def anuncio_incerto_liberar(rascunho_id: Any, mlb_encontrado: Any, ator: str) ->
         novo = _anuncio_rascunho_de_linha(DB.execute("SELECT * FROM anuncio_rascunho_v2024 WHERE id=?", (rid,)).fetchone())
     audit(ator, "anuncios.liberar", f"{r['ficha_codigo']}|{rid}|{r['conta']}|{para}|{mlb}")
     return {"ok": True, "situacao": para, "mlb": mlb, "rascunho": novo}
+
+
+# ---------------------------------------------------------------------------
+# V20.32 - Criar anuncio na Shopee (so Araçatuba) pela plataforma de anuncios. Desenho:
+# docs/superpowers/specs/2026-11-06-anuncios-shopee-design.md. Leituras com cache de 24 h; a 1a resposta de cada
+# chamada fica em anuncio_amostra_v2024 (tipos shopee_*: construido pela documentacao - CONFERIR no 1o uso).
+# A Shopee nao tem "conferir sem criar": o Conferir e local, contra os limites/atributos/marcas/canais que ela publica.
+# Publicar = a UNICA escrita na criacao (fotos + add_item); mesma maquina de situacao do ML (incerto nunca repete).
+# Peso e medidas sao lidos da FICHA na hora (nunca copiados para o rascunho: a ficha corrigida depois vale).
+# ---------------------------------------------------------------------------
+SHOPEE_ANUNCIO_CONTA = "aracatuba"
+SHOPEE_LEITURA_CACHE_S = 24 * 3600
+SHOPEE_TITULO_MAX_PADRAO = 120
+SHOPEE_FOTOS_MAX_PADRAO = 9
+SHOPEE_ITEM_TIMEOUT = 90
+SHOPEE_UPLOAD_TIMEOUT = 60
+SHOPEE_MARCAS_PAGINAS = 40
+SHOPEE_INCERTO_TEXTO = ("A Shopee não respondeu ao criar o anúncio: ele pode ter sido criado. Confira no Seller Center "
+                        "(Meus produtos) e informe o número do item, ou libere sem número se ele não existe. Nada é "
+                        "repetido sozinho.")
+SHOPEE_RASCUNHO_EDITAVEL = ("rascunho", "validado", "erro")
+SHOPEE_RASCUNHO_CAMPOS = ("titulo", "categoria", "categoria_nome", "descricao", "preco", "quantidade")
+_SHOPEE_LEITURA_CACHE: dict[tuple[str, str], tuple[float, Any]] = {}
+_SHOPEE_LEITURA_LOCK = threading.Lock()
+_SHOPEE_AUTH_ERROS = {"error_auth", "error_authentication", "invalid_access_token", "error_token"}
+
+
+class ShopeeSemResposta(Exception):
+    """V20.32: sem resposta (rede, timeout, 5xx, resposta ilegivel): a Shopee PODE ter feito."""
+
+
+class ShopeeRecusou(Exception):
+    """V20.32: a Shopee respondeu com recusa (ou a chamada nem saiu): nada foi feito na Shopee."""
+
+    def __init__(self, mensagem: str, corpo: Any = None) -> None:
+        super().__init__(mensagem)
+        self.corpo = corpo
+
+
+def _shopee_multipart(campos: dict[str, str], arquivo: tuple[str, str, bytes, str]) -> tuple[bytes, str]:
+    """(corpo, content-type) multipart/form-data: os campos de texto + um arquivo (campo, nome, bytes, mime)."""
+    limite = "----NoromakShopee" + secrets.token_hex(12)
+    partes: list[bytes] = []
+    for nome, valor in campos.items():
+        partes.append((f"--{limite}\r\nContent-Disposition: form-data; name=\"{nome}\"\r\n\r\n{valor}\r\n").encode())
+    campo, nome_arq, dados, mime = arquivo
+    partes.append((f"--{limite}\r\nContent-Disposition: form-data; name=\"{campo}\"; filename=\"{nome_arq}\"\r\n"
+                   f"Content-Type: {mime}\r\n\r\n").encode() + dados + b"\r\n")
+    partes.append(f"--{limite}--\r\n".encode())
+    return b"".join(partes), f"multipart/form-data; boundary={limite}"
+
+
+def _shopee_chamar(method: str, path: str, params: dict[str, Any] | None = None, payload: Any = None, *,
+                   multipart: tuple[dict[str, str], tuple[str, str, bytes, str]] | None = None,
+                   timeout: float = 35, _renovou: bool = False) -> dict[str, Any]:
+    """V20.32: chamada da Shopee que separa RECUSA (nada feito) de SEM RESPOSTA (pode ter feito). Token que nao
+    renova = recusa (a chamada nem saiu)."""
+    try:
+        row = shopee_refresh_access_token(_renovou)
+        shop_id = str(row["shop_id"] or "").strip()
+        token = str(row["access_token"] or "").strip()
+    except Exception as exc:
+        raise ShopeeRecusou(f"Shopee sem conexão: {exc}")
+    ts = int(time.time())
+    query: dict[str, Any] = {"partner_id": int(SHOPEE_PARTNER_ID), "timestamp": ts, "access_token": token,
+                             "shop_id": int(shop_id), "sign": shopee_sign(path, ts, token, shop_id)}
+    for k, v in (params or {}).items():
+        if v is not None and v != "":
+            query[k] = v
+    url = SHOPEE_API_BASE + path + "?" + urlencode(query)
+    headers = {"Accept": "application/json"}
+    corpo: bytes | None = None
+    if multipart is not None:
+        corpo, headers["Content-Type"] = _shopee_multipart(*multipart)
+    elif method == "POST":
+        corpo = json.dumps(payload or {}).encode("utf-8")
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(url, data=corpo, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            texto = resp.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as exc:
+        bruto = exc.read().decode("utf-8", "replace")
+        if exc.code >= 500:
+            raise ShopeeSemResposta(f"Shopee HTTP {exc.code}: {bruto[:300]}")
+        dados = _anuncio_json_ou_none(bruto)
+        erro = str((dados or {}).get("error") or "") if isinstance(dados, dict) else ""
+        if not _renovou and (exc.code in (401, 403) or erro.lower() in _SHOPEE_AUTH_ERROS):
+            return _shopee_chamar(method, path, params, payload, multipart=multipart, timeout=timeout, _renovou=True)
+        msg = (f"{erro} {(dados or {}).get('message') or ''}".strip() if isinstance(dados, dict) else "") or bruto[:300]
+        raise ShopeeRecusou(f"Shopee HTTP {exc.code}: {msg}", dados if isinstance(dados, dict) else bruto[:2000])
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise ShopeeSemResposta(f"sem resposta da Shopee ({exc})")
+    dados = _anuncio_json_ou_none(texto)
+    if not isinstance(dados, dict):
+        raise ShopeeSemResposta("resposta ilegível da Shopee")
+    erro = str(dados.get("error") or "").strip()
+    if erro:
+        if not _renovou and erro.lower() in _SHOPEE_AUTH_ERROS:
+            return _shopee_chamar(method, path, params, payload, multipart=multipart, timeout=timeout, _renovou=True)
+        raise ShopeeRecusou(f"{erro}: {dados.get('message') or ''}".strip(" :"), dados)
+    return dados
+
+
+def _shopee_ler(path: str, params: dict[str, Any] | None = None, amostra: str = "") -> dict[str, Any]:
+    """V20.32: leitura (GET). Qualquer falha vira RuntimeError com o motivo."""
+    try:
+        dados = _shopee_chamar("GET", path, params)
+    except (ShopeeRecusou, ShopeeSemResposta) as exc:
+        if amostra:
+            _anuncio_amostra(f"{amostra} [erro]", {"erro": str(exc), "corpo": getattr(exc, "corpo", None)})
+        raise RuntimeError(str(exc))
+    if amostra:
+        _anuncio_amostra(amostra, dados)
+    return dados
+
+
+def _shopee_cache(chave: tuple[str, str], ler: Any) -> Any:
+    agora = time.time()
+    with _SHOPEE_LEITURA_LOCK:
+        hit = _SHOPEE_LEITURA_CACHE.get(chave)
+        if hit and agora - hit[0] < SHOPEE_LEITURA_CACHE_S:
+            return hit[1]
+    valor = ler()
+    with _SHOPEE_LEITURA_LOCK:
+        if len(_SHOPEE_LEITURA_CACHE) > 500:
+            _SHOPEE_LEITURA_CACHE.clear()
+        _SHOPEE_LEITURA_CACHE[chave] = (agora, valor)
+    return valor
+
+
+def _shopee_resposta(dados: Any) -> dict[str, Any]:
+    r = (dados or {}).get("response") if isinstance(dados, dict) else None
+    return r if isinstance(r, dict) else {}
+
+
+def _shopee_limite(bloco: Any) -> tuple[int | None, int | None]:
+    if not isinstance(bloco, dict):
+        return None, None
+
+    def n(v: Any) -> int | None:
+        try:
+            return int(v) if v is not None else None
+        except (TypeError, ValueError):
+            return None
+    return n(bloco.get("min_limit")), n(bloco.get("max_limit"))
+
+
+def shopee_item_limites(categoria: Any = None) -> dict[str, Any]:
+    """V20.32: limites da loja/categoria (get_item_limit). Sem resposta = os padroes (titulo 120, 9 fotos)."""
+    cid = str(categoria or "").strip()
+
+    def ler() -> dict[str, Any]:
+        r = _shopee_resposta(_shopee_ler("/api/v2/product/get_item_limit",
+                                         {"category_id": int(cid)} if cid.isdigit() else None, "shopee_item_limit"))
+        t_min, t_max = _shopee_limite(r.get("item_name_length_limit"))
+        d_min, d_max = _shopee_limite(r.get("item_description_length_limit"))
+        f_min, f_max = _shopee_limite(r.get("item_image_count_limit"))
+        p_min, p_max = _shopee_limite(r.get("price_limit"))
+        return {"titulo_min": t_min, "titulo_max": t_max, "desc_min": d_min, "desc_max": d_max,
+                "fotos_min": f_min, "fotos_max": f_max, "preco_min": p_min, "preco_max": p_max,
+                "gtin": str(r.get("gtin_validation_rule") or ""), "lido": True}
+    try:
+        return dict(_shopee_cache(("limite", cid), ler))
+    except RuntimeError as exc:
+        return {"titulo_min": None, "titulo_max": SHOPEE_TITULO_MAX_PADRAO, "desc_min": None, "desc_max": None,
+                "fotos_min": 1, "fotos_max": SHOPEE_FOTOS_MAX_PADRAO, "preco_min": None, "preco_max": None, "gtin": "",
+                "lido": False, "erro": str(exc)}
+
+
+def shopee_categorias() -> dict[str, dict[str, Any]]:
+    """V20.32: arvore de categorias (get_category, pt-br): id -> {id, nome, pai, folha}."""
+    def ler() -> dict[str, dict[str, Any]]:
+        r = _shopee_resposta(_shopee_ler("/api/v2/product/get_category", {"language": "pt-br"}, "shopee_categorias"))
+        saida: dict[str, dict[str, Any]] = {}
+        for c in r.get("category_list") or []:
+            if not isinstance(c, dict) or c.get("category_id") in (None, ""):
+                continue
+            cid = str(c["category_id"])
+            saida[cid] = {"id": cid, "nome": str(c.get("display_category_name") or c.get("original_category_name") or cid),
+                          "pai": str(c.get("parent_category_id") or ""), "folha": not bool(c.get("has_children"))}
+        if not saida:
+            raise RuntimeError("a Shopee devolveu a lista de categorias vazia")
+        return saida
+    return _shopee_cache(("categorias", ""), ler)
+
+
+def _shopee_caminho(cid: str, cats: dict[str, dict[str, Any]]) -> str:
+    nomes: list[str] = []
+    atual, voltas = str(cid), 0
+    while atual and atual in cats and voltas < 10:
+        nomes.append(cats[atual]["nome"])
+        atual, voltas = cats[atual]["pai"], voltas + 1
+    return " > ".join(reversed(nomes))
+
+
+def shopee_categoria_sugerir(titulo: str) -> list[dict[str, Any]]:
+    """V20.32: categorias sugeridas pela Shopee para o titulo (category_recommend), com nome e caminho."""
+    titulo = " ".join(str(titulo or "").split())
+    if not titulo:
+        raise ValueError("Informe o título.")
+    r = _shopee_resposta(_shopee_ler("/api/v2/product/category_recommend", {"item_name": titulo[:255]},
+                                     "shopee_categoria_sugerir"))
+    cats = shopee_categorias()
+    saida = []
+    for cid in r.get("category_id") or []:
+        c = cats.get(str(cid))
+        saida.append({"categoria": str(cid), "nome": c["nome"] if c else str(cid),
+                      "caminho": _shopee_caminho(str(cid), cats), "folha": bool(c and c["folha"])})
+    return saida
+
+
+SHOPEE_TIPO_ATRIBUTO = {1: "lista", 2: "lista_livre", 3: "livre", 4: "multi", 5: "multi_livre"}
+
+
+def shopee_categoria_atributos(categoria: Any) -> dict[str, Any]:
+    """V20.32: atributos da categoria (get_attribute_tree): so o nivel de cima (o condicional fica para o Seller
+    Center). `obrigatorio` = mandatory; `tipo` lista|lista_livre|livre|multi|multi_livre; `unidades` quando pede."""
+    cid = str(categoria or "").strip()
+    if not cid.isdigit():
+        raise ValueError("Categoria da Shopee inválida.")
+
+    def ler() -> dict[str, Any]:
+        r = _shopee_resposta(_shopee_ler("/api/v2/product/get_attribute_tree",
+                                         {"category_id_list": cid, "language": "pt-br"}, "shopee_atributos"))
+        arvore: list[Any] = []
+        for item in r.get("list") or []:
+            if isinstance(item, dict) and str(item.get("category_id")) == cid:
+                arvore = item.get("attribute_tree") or []
+        lista = []
+        for a in arvore:
+            if not isinstance(a, dict) or a.get("attribute_id") in (None, ""):
+                continue
+            info = a.get("attribute_info") if isinstance(a.get("attribute_info"), dict) else {}
+            try:
+                tipo = SHOPEE_TIPO_ATRIBUTO.get(int(info.get("input_type") or 3), "livre")
+            except (TypeError, ValueError):
+                tipo = "livre"
+            valores = [{"id": str(v.get("value_id")), "nome": str(v.get("name") or v.get("value_id"))}
+                       for v in a.get("attribute_value_list") or [] if isinstance(v, dict) and v.get("value_id") is not None]
+            lista.append({"id": str(a["attribute_id"]), "nome": str(a.get("name") or a["attribute_id"]),
+                          "obrigatorio": bool(a.get("mandatory")), "tipo": tipo, "valores": valores,
+                          "unidades": [str(u) for u in info.get("attribute_unit_list") or [] if u]})
+        return {"categoria": cid, "atributos": lista}
+    return _shopee_cache(("atributos", cid), ler)
+
+
+def shopee_marcas(categoria: Any) -> dict[str, Any]:
+    """V20.32: marcas da categoria (get_brand_list, paginado) e se a marca e obrigatoria."""
+    cid = str(categoria or "").strip()
+    if not cid.isdigit():
+        raise ValueError("Categoria da Shopee inválida.")
+
+    def ler() -> dict[str, Any]:
+        marcas: list[dict[str, str]] = []
+        obrigatoria = False
+        offset = 0
+        for pagina in range(SHOPEE_MARCAS_PAGINAS):
+            r = _shopee_resposta(_shopee_ler("/api/v2/product/get_brand_list",
+                                             {"offset": offset, "page_size": 100, "category_id": int(cid), "status": 1,
+                                              "language": "pt-br"}, "shopee_marcas" if pagina == 0 else ""))
+            obrigatoria = obrigatoria or bool(r.get("is_mandatory"))
+            for b in r.get("brand_list") or []:
+                if isinstance(b, dict) and b.get("brand_id") is not None:
+                    marcas.append({"id": str(b["brand_id"]),
+                                   "nome": str(b.get("display_brand_name") or b.get("original_brand_name") or ""),
+                                   "original": str(b.get("original_brand_name") or b.get("display_brand_name") or "")})
+            if not r.get("has_next_page"):
+                break
+            try:
+                offset = int(r.get("next_offset"))
+            except (TypeError, ValueError):
+                break
+        return {"categoria": cid, "obrigatoria": obrigatoria, "marcas": marcas}
+    return _shopee_cache(("marcas", cid), ler)
+
+
+def shopee_marca_da_ficha(marca: Any, lista: dict[str, Any]) -> dict[str, str] | None:
+    """V20.32 (pura): a marca da ficha na lista da Shopee (sem acento/caixa/espaco)."""
+    alvo = re.sub(r"\s+", "", _anuncio_sem_acento(marca))
+    if not alvo:
+        return None
+    for b in lista.get("marcas") or []:
+        if re.sub(r"\s+", "", _anuncio_sem_acento(b.get("nome"))) == alvo or \
+                re.sub(r"\s+", "", _anuncio_sem_acento(b.get("original"))) == alvo:
+            return {"id": str(b["id"]), "nome": str(b.get("original") or b.get("nome"))}
+    return None
+
+
+def shopee_canais_envio() -> list[dict[str, Any]]:
+    """V20.32: canais de envio da loja (get_channel_list). `usavel` = ligado e sem tamanho/preco a escolher."""
+    def ler() -> list[dict[str, Any]]:
+        r = _shopee_resposta(_shopee_ler("/api/v2/logistics/get_channel_list", None, "shopee_canais"))
+        saida = []
+        for c in r.get("logistics_channel_list") or []:
+            if not isinstance(c, dict) or c.get("logistics_channel_id") in (None, ""):
+                continue
+            peso = c.get("weight_limit") if isinstance(c.get("weight_limit"), dict) else {}
+            dim = c.get("item_max_dimension") if isinstance(c.get("item_max_dimension"), dict) else {}
+            fee = str(c.get("fee_type") or "")
+            saida.append({"id": str(c["logistics_channel_id"]), "nome": str(c.get("logistics_channel_name") or ""),
+                          "ligado": bool(c.get("enabled")), "fee_type": fee,
+                          "peso_max_kg": _money_number(peso.get("item_max_weight")) or None,
+                          "peso_min_kg": _money_number(peso.get("item_min_weight")) or None,
+                          "dim_max": {k: _money_number(dim.get(k)) or None for k in ("height", "width", "length")},
+                          "usavel": bool(c.get("enabled")) and fee not in ("SIZE_SELECTION", "CUSTOM_PRICE")})
+        return saida
+    return list(_shopee_cache(("canais", ""), ler))
+
+
+def shopee_canais_que_aceitam(canais: list[dict[str, Any]], peso_kg: float | None,
+                              medidas: dict[str, float | None]) -> list[dict[str, Any]]:
+    """V20.32 (pura): canais usaveis cujo limite de peso/medidas aceita o pacote (limite vazio = sem limite)."""
+    saida = []
+    for c in canais:
+        if not c.get("usavel"):
+            continue
+        if peso_kg is not None:
+            if c.get("peso_max_kg") and peso_kg > float(c["peso_max_kg"]):
+                continue
+            if c.get("peso_min_kg") and peso_kg < float(c["peso_min_kg"]):
+                continue
+        dm = c.get("dim_max") or {}
+        if any(dm.get(k) and medidas.get(k) and float(medidas[k]) > float(dm[k]) for k in ("height", "width", "length")):
+            continue
+        saida.append(c)
+    return saida
+
+
+def _shopee_pacote_da_ficha(campos: dict[str, Any]) -> tuple[float | None, dict[str, float | None], list[str]]:
+    """V20.32: peso (kg) e medidas (cm) LIDOS DA FICHA agora; o que falta vai na lista."""
+    def n(v: Any) -> float | None:
+        try:
+            x = float(str(v).replace(",", "."))
+        except (TypeError, ValueError):
+            return None
+        return x if x > 0 else None
+    peso_g = n(campos.get("peso_g"))
+    medidas = {"height": n(campos.get("altura_cm")), "width": n(campos.get("largura_cm")),
+               "length": n(campos.get("comprimento_cm"))}
+    falta = [nome for nome, v in (("peso", peso_g), ("altura", medidas["height"]), ("largura", medidas["width"]),
+                                  ("comprimento", medidas["length"])) if v is None]
+    return (round(peso_g / 1000.0, 3) if peso_g else None), medidas, falta
+
+
+# ---- rascunho ----
+def _shopee_rascunho_de_linha(row: Any) -> dict[str, Any]:
+    d = dict(row)
+    for campo, padrao in (("atributos_json", {}), ("fotos_json", []), ("erros_json", []), ("marca_json", {})):
+        try:
+            v = json.loads(d.pop(campo) or "")
+        except (TypeError, ValueError):
+            v = padrao
+        d[campo[:-5]] = v if isinstance(v, type(padrao)) else padrao
+    d["canal"] = "shopee"
+    return d
+
+
+def shopee_rascunho_ler(rid: Any) -> dict[str, Any] | None:
+    try:
+        n = int(rid)
+    except (TypeError, ValueError):
+        return None
+    with DB_LOCK:
+        row = DB.execute("SELECT * FROM anuncio_rascunho_shopee_v2032 WHERE id=?", (n,)).fetchone()
+    return _shopee_rascunho_de_linha(row) if row else None
+
+
+def shopee_rascunhos_da_ficha(codigo: str) -> list[dict[str, Any]]:
+    with DB_LOCK:
+        rows = DB.execute("SELECT * FROM anuncio_rascunho_shopee_v2032 WHERE ficha_codigo=? ORDER BY id DESC",
+                          (normalize(codigo),)).fetchall()
+    return [_shopee_rascunho_de_linha(r) for r in rows]
+
+
+def _shopee_rascunho_limpar(dados: dict[str, Any]) -> dict[str, Any]:
+    """V20.32: so os campos que vieram, conferidos (tipo e tamanho)."""
+    out: dict[str, Any] = {}
+    if "titulo" in dados:
+        out["titulo"] = " ".join(str(dados.get("titulo") or "").split())[:255]
+    if "categoria" in dados:
+        cat = str(dados.get("categoria") or "").strip()
+        if cat and not cat.isdigit():
+            raise ValueError("Categoria da Shopee inválida.")
+        out["categoria"] = cat
+        out["categoria_nome"] = str(dados.get("categoria_nome") or "")[:300]
+    if "descricao" in dados:
+        out["descricao"] = str(dados.get("descricao") or "")[:10000]
+    if "preco" in dados:
+        p = dados.get("preco")
+        if p in (None, ""):
+            out["preco"] = None
+        else:
+            try:
+                out["preco"] = round(float(str(p).replace(",", ".")), 2)
+            except (TypeError, ValueError):
+                raise ValueError("Preço inválido.")
+            if out["preco"] <= 0:
+                raise ValueError("O preço precisa ser maior que zero.")
+    if "quantidade" in dados:
+        q = dados.get("quantidade")
+        if q in (None, ""):
+            out["quantidade"] = None
+        else:
+            try:
+                out["quantidade"] = int(str(q))
+            except (TypeError, ValueError):
+                raise ValueError("Quantidade inválida.")
+            if not 1 <= out["quantidade"] <= ANUNCIO_ESTOQUE_MAX:
+                raise ValueError("A quantidade vai de 1 a 99999.")
+    if "atributos" in dados:
+        brutos = dados.get("atributos") if isinstance(dados.get("atributos"), dict) else {}
+        attrs: dict[str, dict[str, str]] = {}
+        for k, v in brutos.items():
+            if not str(k).isdigit() or not isinstance(v, dict):
+                continue
+            item = {"valor_id": str(v.get("valor_id") or "").strip(), "valor": " ".join(str(v.get("valor") or "").split())[:255],
+                    "unidade": str(v.get("unidade") or "").strip()[:20]}
+            if item["valor_id"] and not item["valor_id"].isdigit():
+                continue
+            if item["valor_id"] or item["valor"]:
+                attrs[str(k)] = item
+        out["atributos"] = attrs
+    if "marca" in dados:
+        m = dados.get("marca") if isinstance(dados.get("marca"), dict) else {}
+        mid = str(m.get("id") or "").strip()
+        out["marca"] = {"id": mid, "nome": str(m.get("nome") or "")[:120]} if mid.isdigit() else {}
+    if "fotos" in dados:
+        try:
+            out["fotos"] = [int(x) for x in (dados.get("fotos") or [])][:SHOPEE_FOTOS_MAX_PADRAO]
+        except (TypeError, ValueError):
+            raise ValueError("Fotos inválidas.")
+    return out
+
+
+def shopee_rascunho_salvar(dados: dict[str, Any], ator: str, versao: Any) -> dict[str, Any]:
+    """V20.32: cria (sem `id`, com `codigo`) ou atualiza (com `id`; `versao` conferida, senao FichaConflito)."""
+    dados = dados if isinstance(dados, dict) else {}
+    limpos = _shopee_rascunho_limpar(dados)
+    agora = now_iso()
+    with DB_LOCK:
+        rid = dados.get("id")
+        if rid in (None, ""):
+            cod = normalize(dados.get("codigo"))
+            if not cod or _ficha_ler_sem_lock(cod) is None:
+                raise ValueError("Produto não encontrado.")
+            fotos = limpos.get("fotos", [])
+            cur = DB.execute(
+                "INSERT INTO anuncio_rascunho_shopee_v2032(ficha_codigo,titulo,categoria,categoria_nome,atributos_json,"
+                "marca_json,fotos_json,descricao,preco,quantidade,situacao,versao,criado_em,criado_por,atualizado_em,"
+                "atualizado_por) VALUES(?,?,?,?,?,?,?,?,?,?,'rascunho',1,?,?,?,?)",
+                (cod, limpos.get("titulo", ""), limpos.get("categoria", ""), limpos.get("categoria_nome", ""),
+                 json.dumps(limpos.get("atributos", {}), ensure_ascii=False),
+                 json.dumps(limpos.get("marca", {}), ensure_ascii=False), json.dumps(fotos), limpos.get("descricao", ""),
+                 limpos.get("preco"), limpos.get("quantidade"), agora, str(ator or ""), agora, str(ator or "")))
+            novo_id = int(cur.lastrowid)
+        else:
+            row = DB.execute("SELECT * FROM anuncio_rascunho_shopee_v2032 WHERE id=?", (rid,)).fetchone()
+            if row is None:
+                raise ValueError("Rascunho não encontrado.")
+            atual = _shopee_rascunho_de_linha(row)
+            try:
+                ok_versao = versao is not None and int(versao) == int(atual["versao"])
+            except (TypeError, ValueError):
+                ok_versao = False
+            if not ok_versao:
+                raise FichaConflito(atual)
+            if atual["situacao"] not in SHOPEE_RASCUNHO_EDITAVEL:
+                raise ValueError("Este rascunho já foi publicado ou está em publicação; não pode mais ser editado.")
+            novo = {k: limpos.get(k, atual.get(k)) for k in SHOPEE_RASCUNHO_CAMPOS}
+            attrs = limpos.get("atributos", atual.get("atributos") or {})
+            if "categoria" in limpos and limpos["categoria"] != str(atual.get("categoria") or "") and "atributos" not in limpos:
+                attrs = {}  # categoria nova = atributos de novo (cada categoria tem os seus)
+            marca = limpos.get("marca", atual.get("marca") or {})
+            fotos = limpos.get("fotos", atual.get("fotos") or [])
+            mudou = (any(novo[k] != atual.get(k) for k in SHOPEE_RASCUNHO_CAMPOS) or attrs != (atual.get("atributos") or {})
+                     or marca != (atual.get("marca") or {}) or fotos != (atual.get("fotos") or []))
+            if not mudou:
+                return atual
+            situacao = "rascunho" if atual["situacao"] == "validado" else atual["situacao"]
+            DB.execute(
+                "UPDATE anuncio_rascunho_shopee_v2032 SET titulo=?,categoria=?,categoria_nome=?,atributos_json=?,marca_json=?,"
+                "fotos_json=?,descricao=?,preco=?,quantidade=?,situacao=?,versao=versao+1,atualizado_em=?,atualizado_por=? "
+                "WHERE id=?",
+                (novo["titulo"], novo["categoria"], novo["categoria_nome"], json.dumps(attrs, ensure_ascii=False),
+                 json.dumps(marca, ensure_ascii=False), json.dumps(fotos), novo["descricao"], novo["preco"],
+                 novo["quantidade"], situacao, agora, str(ator or ""), atual["id"]))
+            novo_id = int(atual["id"])
+        cod_ficha = DB.execute("SELECT ficha_codigo FROM anuncio_rascunho_shopee_v2032 WHERE id=?",
+                               (novo_id,)).fetchone()["ficha_codigo"]
+        fotos_ok = json.loads(DB.execute("SELECT fotos_json FROM anuncio_rascunho_shopee_v2032 WHERE id=?",
+                                         (novo_id,)).fetchone()["fotos_json"] or "[]")
+        if fotos_ok:
+            marcas = ",".join("?" * len(fotos_ok))
+            achadas = {int(r["id"]) for r in DB.execute(
+                f"SELECT id FROM anuncio_foto_v2024 WHERE ficha_codigo=? AND id IN ({marcas})", (cod_ficha, *fotos_ok))}
+            if achadas != set(fotos_ok):
+                DB.rollback()
+                raise ValueError("Há foto que não pertence a este produto.")
+        DB.commit()
+        row = DB.execute("SELECT * FROM anuncio_rascunho_shopee_v2032 WHERE id=?", (novo_id,)).fetchone()
+    return _shopee_rascunho_de_linha(row)
+
+
+def _shopee_trocar(rid: int, de: tuple[str, ...], para: str, erros: list[str], ator: str,
+                   item_id: str | None = None) -> dict[str, Any] | None:
+    with DB_LOCK:
+        cur = DB.execute(
+            f"UPDATE anuncio_rascunho_shopee_v2032 SET situacao=?, erros_json=?, item_id=COALESCE(?,item_id), "
+            f"versao=versao+1, atualizado_em=?, atualizado_por=? WHERE id=? AND situacao IN ({','.join('?' * len(de))})",
+            (para, json.dumps(list(erros), ensure_ascii=False), item_id, now_iso(), str(ator or ""), rid, *de))
+        DB.commit()
+        if cur.rowcount != 1:
+            return None
+        row = DB.execute("SELECT * FROM anuncio_rascunho_shopee_v2032 WHERE id=?", (rid,)).fetchone()
+    return _shopee_rascunho_de_linha(row)
+
+
+def _shopee_conferir_local(r: dict[str, Any]) -> tuple[list[str], dict[str, Any]]:
+    """V20.32: confere o rascunho contra o que a Shopee publica (limites, atributos, marca, canais) e a ficha (peso,
+    medidas). Devolve (erros, contexto para o corpo). Leitura que falha = erro (nunca adivinha)."""
+    erros: list[str] = []
+    ctx: dict[str, Any] = {}
+    ficha = ficha_ler(r["ficha_codigo"]) or {}
+    campos = ficha.get("campos") or {}
+    titulo = str(r.get("titulo") or "").strip()
+    cat = str(r.get("categoria") or "")
+    lim = shopee_item_limites(cat or None)
+    ctx["limites"] = lim
+    t_max = lim.get("titulo_max") or SHOPEE_TITULO_MAX_PADRAO
+    if not titulo:
+        erros.append("Informe o título.")
+    elif len(titulo) > t_max:
+        erros.append(f"Título com {len(titulo)} caracteres: a Shopee aceita até {t_max}.")
+    elif lim.get("titulo_min") and len(titulo) < int(lim["titulo_min"]):
+        erros.append(f"Título curto: a Shopee pede pelo menos {lim['titulo_min']} caracteres.")
+    desc = str(r.get("descricao") or "").strip()
+    if not desc:
+        erros.append("Informe a descrição.")
+    elif lim.get("desc_min") and len(desc) < int(lim["desc_min"]):
+        erros.append(f"Descrição curta: a Shopee pede pelo menos {lim['desc_min']} caracteres.")
+    elif lim.get("desc_max") and len(desc) > int(lim["desc_max"]):
+        erros.append(f"Descrição longa: a Shopee aceita até {lim['desc_max']} caracteres.")
+    if "[CONFIRMAR]" in desc.upper():
+        erros.append("A descrição ainda tem [CONFIRMAR]: troque pelo texto certo.")
+    fotos = list(r.get("fotos") or [])
+    f_max = lim.get("fotos_max") or SHOPEE_FOTOS_MAX_PADRAO
+    if not fotos:
+        erros.append("Escolha pelo menos uma foto.")
+    elif len(fotos) > f_max:
+        erros.append(f"{len(fotos)} fotos: a Shopee aceita até {f_max}.")
+    preco = r.get("preco")
+    if not preco or float(preco) <= 0:
+        erros.append("Informe o preço.")
+    elif lim.get("preco_max") and float(preco) > float(lim["preco_max"]):
+        erros.append(f"Preço acima do limite da Shopee (R$ {lim['preco_max']}).")
+    if not r.get("quantidade") or int(r["quantidade"]) < 1:
+        erros.append("Informe a quantidade.")
+    peso, medidas, falta = _shopee_pacote_da_ficha(campos)
+    ctx["peso"], ctx["medidas"] = peso, medidas
+    if falta:
+        erros.append(f"Falta na ficha (Peso e medidas): {', '.join(falta)}. Preencha a ficha do produto.")
+    if not cat:
+        erros.append("Escolha a categoria.")
+        return erros, ctx
+    try:
+        cats = shopee_categorias()
+        if cat in cats and not cats[cat]["folha"]:
+            erros.append("A categoria escolhida tem subcategorias: escolha a mais específica.")
+        defs = shopee_categoria_atributos(cat)["atributos"]
+        marcas = shopee_marcas(cat)
+    except (RuntimeError, ValueError) as exc:
+        erros.append(f"Não consegui ler a categoria na Shopee ({exc}).")
+        return erros, ctx
+    ctx["defs"] = defs
+    attrs = r.get("atributos") or {}
+    for d in defs:
+        v = attrs.get(d["id"]) or {}
+        if d["obrigatorio"] and not (v.get("valor_id") or v.get("valor")):
+            erros.append(f"Atributo obrigatório sem valor: {d['nome']}.")
+        if v.get("valor_id") and d["valores"] and v["valor_id"] not in {x["id"] for x in d["valores"]}:
+            erros.append(f"Valor de {d['nome']} fora da lista da Shopee.")
+        if d["tipo"] in ("lista", "multi") and v.get("valor") and not v.get("valor_id"):
+            erros.append(f"{d['nome']}: escolha um valor da lista da Shopee.")
+    marca = r.get("marca") or {}
+    if not marca.get("id"):
+        achada = shopee_marca_da_ficha(campos.get("marca"), marcas)
+        if achada:
+            marca = achada
+        elif marcas.get("obrigatoria"):
+            erros.append("A Shopee pede a marca nesta categoria e a da ficha não está na lista: escolha a marca.")
+        else:
+            marca = {"id": "0", "nome": "No Brand"}
+    ctx["marca"] = marca
+    try:
+        canais = shopee_canais_que_aceitam(shopee_canais_envio(), peso, medidas)
+    except RuntimeError as exc:
+        erros.append(f"Não consegui ler os canais de envio da Shopee ({exc}).")
+        canais = []
+    else:
+        if not canais and not falta:
+            erros.append("Nenhum canal de envio da loja aceita este peso/medidas (ou nenhum está ligado).")
+    ctx["canais"] = canais
+    return erros, ctx
+
+
+def shopee_item_corpo(r: dict[str, Any], ficha: dict[str, Any], image_ids: list[str], ctx: dict[str, Any]) -> dict[str, Any]:
+    """V20.32 (pura): corpo do product/add_item."""
+    campos = ficha.get("campos") or {}
+    medidas = ctx.get("medidas") or {}
+    attrs = []
+    for aid, v in (r.get("atributos") or {}).items():
+        if v.get("valor_id"):
+            valor = {"value_id": int(v["valor_id"])}
+        elif v.get("valor"):
+            valor = {"value_id": 0, "original_value_name": v["valor"]}
+            if v.get("unidade"):
+                valor["value_unit"] = v["unidade"]
+        else:
+            continue
+        attrs.append({"attribute_id": int(aid), "attribute_value_list": [valor]})
+    marca = ctx.get("marca") or {"id": "0", "nome": "No Brand"}
+    corpo: dict[str, Any] = {
+        "original_price": float(r["preco"]), "description": str(r.get("descricao") or "").strip(),
+        "item_name": str(r.get("titulo") or "").strip(), "item_status": "NORMAL",
+        "weight": float(ctx.get("peso") or 0),
+        "dimension": {"package_length": max(1, math.ceil(float(medidas.get("length") or 0))),
+                      "package_width": max(1, math.ceil(float(medidas.get("width") or 0))),
+                      "package_height": max(1, math.ceil(float(medidas.get("height") or 0)))},
+        "logistic_info": [{"logistic_id": int(c["id"]), "enabled": True} for c in ctx.get("canais") or []],
+        "category_id": int(r["categoria"]), "image": {"image_id_list": list(image_ids)}, "condition": "NEW",
+        "item_sku": str(ficha.get("codigo") or r.get("ficha_codigo") or "")[:100],
+        "seller_stock": [{"stock": int(r.get("quantidade") or 0)}],
+        "brand": {"brand_id": int(marca.get("id") or 0), "original_brand_name": str(marca.get("nome") or "No Brand")},
+        "attribute_list": attrs,
+    }
+    ean = re.sub(r"\D", "", str(campos.get("ean") or ""))
+    corpo["gtin_code"] = ean if len(ean) in (8, 12, 13, 14) else "00"
+    ncm = re.sub(r"\D", "", str(campos.get("ncm") or ""))
+    if len(ncm) == 8:
+        corpo["tax_info"] = {"ncm": ncm, "origin": "0"}
+    return corpo
+
+
+def shopee_rascunho_conferir(rascunho_id: Any, ator: str) -> dict[str, Any]:
+    """V20.32: conferencia local (a Shopee nao tem "conferir sem criar"). Certo = `validado`; errado = `rascunho`."""
+    r = shopee_rascunho_ler(rascunho_id)
+    if r is None:
+        raise ValueError("Rascunho não encontrado.")
+    if r["situacao"] not in SHOPEE_RASCUNHO_EDITAVEL:
+        raise ValueError("Este rascunho já foi publicado, está em publicação ou aguarda conferência no Seller Center.")
+    erros, _ctx = _shopee_conferir_local(r)
+    para = "rascunho" if erros else "validado"
+    novo = _shopee_trocar(int(r["id"]), SHOPEE_RASCUNHO_EDITAVEL, para, erros, ator)
+    return {"ok": not erros, "situacao": para, "erros": erros, "rascunho": novo or shopee_rascunho_ler(r["id"])}
+
+
+def shopee_conta_preco(codigo: str, preco: Any) -> dict[str, Any]:
+    """V20.32: conta do preco na Shopee para a tela (so le): tarifa pela faixa + 3,5%, imposto, custo de Araçatuba,
+    lucro e o preco ideal pela margem-alvo. Sem custo = sem lucro e sem preco ideal (nunca zero)."""
+    base = anuncio_custo_para_preco(codigo)
+    try:
+        p = round(float(str(preco).replace(",", ".")), 2) if preco not in (None, "") else None
+    except (TypeError, ValueError):
+        p = None
+    out: dict[str, Any] = {**base, "preco": p, "comissao": None, "comissao_pct": None, "taxa_fixa": None,
+                           "imposto_valor": None, "lucro": None, "margem": None, "preco_ideal": None}
+    imp = float(base.get("imposto") or 0)
+    custo = base.get("custo")
+    if p and p > 0:
+        pct, fixa = shopee_taxas_por_preco(p)
+        out.update({"comissao": round(p * pct, 2), "comissao_pct": pct, "taxa_fixa": fixa,
+                    "imposto_valor": round(p * imp, 2)})
+        if custo is not None:
+            lucro = p - p * pct - fixa - p * imp - float(custo)
+            out.update({"lucro": round(lucro, 2), "margem": round(lucro / p, 4)})
+    alvo = base.get("margem_alvo")
+    if custo is not None and alvo is not None:
+        # preco ideal: resolve faixa a faixa (a tarifa depende do preco) e fica com o que cai na propria faixa
+        for ini, fim, pct, fixa in SHOPEE_FAIXAS_TAXA:
+            den = 1 - pct - imp - float(alvo)
+            if den <= 0:
+                continue
+            ideal = (float(custo) + fixa) / den
+            if ini <= ideal < fim:
+                out["preco_ideal"] = round(ideal + 0.0049, 2)
+                break
+    return out
+
+
+def _shopee_canal_noromak(item_id: str, r: dict[str, Any], ator: str) -> None:
+    """V20.32: anuncio criado pelo Noromak entra na lista (canal shopee, `noromak`, estoque Manual). SOB o DB_LOCK."""
+    agora = now_iso()
+    DB.execute(
+        "INSERT INTO anuncio_canal_v2023(canal,conta,anuncio_id,ficha_codigo,sku_anuncio,controle,titulo,preco,estoque,"
+        "status,categoria,lido_em,controle_em,controle_por) VALUES('shopee',?,?,?,?,'noromak',?,?,?,'NORMAL',?,?,?,?) "
+        "ON CONFLICT(canal,conta,anuncio_id) DO UPDATE SET ficha_codigo=excluded.ficha_codigo,controle='noromak',"
+        "controle_em=excluded.controle_em,controle_por=excluded.controle_por",
+        (SHOPEE_ANUNCIO_CONTA, item_id, r["ficha_codigo"], r["ficha_codigo"], str(r.get("titulo") or ""), r.get("preco"),
+         r.get("quantidade"), str(r.get("categoria") or ""), agora, agora, str(ator or "")))
+
+
+def shopee_publicar(rascunho_id: Any, ator: str) -> dict[str, Any]:
+    """V20.32: cria o anuncio na Shopee (fotos + add_item). A rota segura ANUNCIOS_PUBLICAR_LOCK; a maquina de
+    situacao garante um anuncio por rascunho. Falha antes do add_item = `validado` (nada criado)."""
+    try:
+        rid = int(rascunho_id)
+    except (TypeError, ValueError):
+        raise ValueError("Rascunho não encontrado.")
+    with DB_LOCK:
+        row = DB.execute("SELECT * FROM anuncio_rascunho_shopee_v2032 WHERE id=?", (rid,)).fetchone()
+        if row is None:
+            raise ValueError("Rascunho não encontrado.")
+        r = _shopee_rascunho_de_linha(row)
+        sit = r["situacao"]
+        if sit == "publicando":
+            raise ValueError("Este rascunho já está sendo publicado.")
+        if sit == "publicado":
+            raise ValueError(f"Este rascunho já foi publicado (item {r.get('item_id') or ''}).")
+        if sit == "incerto":
+            raise ValueError("A última tentativa ficou sem resposta da Shopee: confira no Seller Center e libere antes.")
+        if sit != "validado":
+            raise ValueError("Confira (passo 6) antes de publicar.")
+        cur = DB.execute("UPDATE anuncio_rascunho_shopee_v2032 SET situacao='publicando', erros_json='[]', versao=versao+1, "
+                         "atualizado_em=?, atualizado_por=? WHERE id=? AND situacao='validado'", (now_iso(), str(ator or ""), rid))
+        DB.commit()
+        if cur.rowcount != 1:
+            raise ValueError("Este rascunho já está sendo publicado.")
+    cod = str(r["ficha_codigo"])
+    estado: dict[str, Any] = {"etapa": "antes", "fim": None}
+
+    def fim(para: str, erros: list[str], item_id: str | None = None) -> dict[str, Any]:
+        novo = _shopee_trocar(rid, ("publicando",), para, erros, ator, item_id=item_id)
+        estado["fim"] = novo or shopee_rascunho_ler(rid) or r
+        audit(ator, "anuncios.shopee_publicar", f"{cod}|{rid}|{para}|{item_id or ''}|{'; '.join(erros)[:500]}")
+        return {"ok": para == "publicado", "situacao": para, "item_id": item_id or "",
+                "erros": [] if para == "publicado" else erros, "rascunho": estado["fim"]}
+
+    try:
+        try:
+            shopee_refresh_access_token(False)
+        except Exception as exc:
+            return fim("validado", [f"Shopee sem conexão: {exc}"])
+        try:
+            ficha_ap = anuncio_ficha_payload(cod, ler_apollo=True, filiais=(SHOPEE_ANUNCIO_CONTA,))
+        except Exception as exc:
+            ficha_ap = None
+            print(f"Aviso: Apollo nao lido para publicar {cod} na Shopee: {exc}", file=sys.stderr)
+        est = (((ficha_ap or {}).get("estoque") or {}).get(SHOPEE_ANUNCIO_CONTA) or {})
+        dpm = est.get("da_para_montar") if isinstance(est, dict) else None
+        qtd = int(r.get("quantidade") or 0)
+        if dpm is None:
+            return fim("validado", ["O Apollo não respondeu (ou a fila não foi lida) — não publicado. Tente de novo."])
+        if int(dpm) <= 0:
+            return fim("validado", ["Sem estoque no Apollo de Araçatuba para montar este produto — não publicado."])
+        if qtd < 1 or qtd > int(dpm):
+            return fim("validado", [f"Quantidade {qtd} acima do que dá para montar no Apollo ({int(dpm)}) — não publicado."])
+        erros, ctx = _shopee_conferir_local(r)
+        if erros:
+            return fim("validado", erros)
+        ids: list[str] = []
+        for pos, fid in enumerate(r.get("fotos") or [], 1):
+            try:
+                dados, mime = anuncio_foto_bytes(fid)
+                ext = {"image/jpeg": "jpg", "image/png": "png"}.get(mime)
+                if not ext:
+                    raise ValueError("a Shopee só aceita JPG ou PNG")
+                resp = _shopee_chamar("POST", "/api/v2/media_space/upload_image", multipart=(
+                    {"scene": "normal"}, ("image", f"foto{pos}.{ext}", dados, mime)), timeout=SHOPEE_UPLOAD_TIMEOUT)
+                _anuncio_amostra("shopee_upload_image", resp)
+                info = _shopee_resposta(resp).get("image_info") or {}
+                iid = str(info.get("image_id") or "")
+                if not iid:
+                    raise ValueError("a Shopee não devolveu o id da foto")
+                ids.append(iid)
+            except Exception as exc:
+                return fim("validado", [f"A foto {pos} não subiu para a Shopee ({exc}). Nada foi criado."])
+        corpo = shopee_item_corpo(r, ficha_ler(cod) or {"codigo": cod}, ids, ctx)
+        estado["etapa"] = "enviado"
+        try:
+            resp = _shopee_chamar("POST", "/api/v2/product/add_item", payload=corpo, timeout=SHOPEE_ITEM_TIMEOUT)
+        except ShopeeRecusou as exc:
+            _anuncio_amostra("shopee_add_item [erro]", {"erro": str(exc), "corpo": exc.corpo, "enviado": corpo})
+            estado["etapa"] = "antes"
+            return fim("erro", [f"A Shopee recusou: {exc}"])
+        except ShopeeSemResposta as exc:
+            return fim("incerto", [SHOPEE_INCERTO_TEXTO, f"Detalhe: {exc}"])
+        _anuncio_amostra("shopee_add_item", resp)
+        item_id = str(_shopee_resposta(resp).get("item_id") or "")
+        if not item_id.isdigit():
+            return fim("incerto", [SHOPEE_INCERTO_TEXTO, "A Shopee respondeu sem o número do item."])
+        with DB_LOCK:
+            try:
+                cur = DB.execute("UPDATE anuncio_rascunho_shopee_v2032 SET situacao='publicado', item_id=?, erros_json='[]', "
+                                 "versao=versao+1, atualizado_em=?, atualizado_por=? WHERE id=? AND situacao='publicando'",
+                                 (item_id, now_iso(), str(ator or ""), rid))
+                if cur.rowcount == 1:
+                    _shopee_canal_noromak(item_id, r, ator)
+                DB.commit()
+            except Exception:
+                DB.rollback()
+                raise
+            estado["fim"] = _shopee_rascunho_de_linha(
+                DB.execute("SELECT * FROM anuncio_rascunho_shopee_v2032 WHERE id=?", (rid,)).fetchone())
+        audit(ator, "anuncios.shopee_publicar", f"{cod}|{rid}|publicado|{item_id}")
+        return {"ok": True, "situacao": "publicado", "item_id": item_id, "erros": [], "rascunho": estado["fim"]}
+    finally:
+        if estado["fim"] is None:
+            try:
+                if estado["etapa"] == "antes":
+                    fim("validado", ["Falha inesperada antes de criar o anúncio; nada foi criado na Shopee."])
+                else:
+                    fim("incerto", [SHOPEE_INCERTO_TEXTO])
+            except Exception as exc:
+                print(f"Aviso: rascunho Shopee {rid} nao saiu de publicando: {exc}", file=sys.stderr)
+
+
+def shopee_incerto_liberar(rascunho_id: Any, item_id: Any, ator: str) -> dict[str, Any]:
+    """V20.32: o Admin conferiu no Seller Center: com o numero do item = `publicado` (entra na lista); sem = volta a
+    `validado`. Nao chama a Shopee. Item ja na lista com outro produto e recusado."""
+    try:
+        rid = int(rascunho_id)
+    except (TypeError, ValueError):
+        raise ValueError("Rascunho não encontrado.")
+    texto = re.sub(r"\D", "", str(item_id or ""))
+    if str(item_id or "").strip() and not texto:
+        raise ValueError("Número do item inválido (só números, como aparece no Seller Center).")
+    with DB_LOCK:
+        row = DB.execute("SELECT * FROM anuncio_rascunho_shopee_v2032 WHERE id=?", (rid,)).fetchone()
+        if row is None:
+            raise ValueError("Rascunho não encontrado.")
+        r = _shopee_rascunho_de_linha(row)
+        if r["situacao"] != "incerto":
+            raise ValueError("Só um rascunho sem resposta da Shopee (incerto) pode ser liberado.")
+        if texto:
+            ja = DB.execute("SELECT ficha_codigo, controle FROM anuncio_canal_v2023 WHERE canal='shopee' AND anuncio_id=?",
+                            (texto,)).fetchone()
+            if ja and (str(ja["ficha_codigo"] or "") != str(r["ficha_codigo"]) or str(ja["controle"] or "") != "noromak"):
+                raise ValueError(f"O item {texto} já está na lista com outro produto ou outro controle. Nada foi alterado.")
+        para = "publicado" if texto else "validado"
+        try:
+            DB.execute("UPDATE anuncio_rascunho_shopee_v2032 SET situacao=?, item_id=?, erros_json='[]', versao=versao+1, "
+                       "atualizado_em=?, atualizado_por=? WHERE id=? AND situacao='incerto'",
+                       (para, texto or None, now_iso(), str(ator or ""), rid))
+            if texto:
+                _shopee_canal_noromak(texto, r, ator)
+            DB.commit()
+        except Exception:
+            DB.rollback()
+            raise
+        novo = _shopee_rascunho_de_linha(DB.execute("SELECT * FROM anuncio_rascunho_shopee_v2032 WHERE id=?", (rid,)).fetchone())
+    audit(ator, "anuncios.shopee_liberar", f"{r['ficha_codigo']}|{rid}|{para}|{texto}")
+    return {"ok": True, "situacao": para, "item_id": texto, "rascunho": novo}
 
 
 # ---------------------------------------------------------------------------
