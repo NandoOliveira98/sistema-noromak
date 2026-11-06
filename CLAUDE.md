@@ -503,6 +503,25 @@ Estado em `tiktok_atendimento_v2033` (criado/ja_existia/erro/incerto/revisar + p
 **Revenda por filial** (dono, 06/11): `_exp_revenda`/`_exp_revenda_das_linhas` — pedido de Bauru (TikTok **e** ML de Bauru) usa a
 revenda 3 no cadastro, busca de atendimento, romaneio, reemissão e caixa; o resto continua na 1. Extensão Linx Cliente 0.51 mostra a
 situação do atendimento automático no painel. Teste: `TESTES/test_tiktok_atendimento_v2033.py`.
+**revisar-antes-de-subir da V20.33 (06/11, "corrigir todos"):** ao ligar, o que já está na fila fica `anterior` (atendido à mão:
+o atendimento manual não tem a chave `TIKTOK-`, a porta criaria outro); pedido com romaneio/caixa registrado também vira `anterior`;
+só entra pedido que o TikTok diz "a enviar" (cancelado/enviado com peça bipada fica de fora). Logo antes de criar, relê a fila e
+**confere as peças da fila** (com as exclusões/alterações do ADMIN) contra as do TikTok (`_tiktok_atendimento_conferir_fila`):
+diferente = `revisar`. Vínculo à mão (`tiktok_vinculo_v1964`) vence o SKU; SKU cortado (V20.08) sem vínculo = `revisar`. Desconto da
+loja negativo, ou desconto com unidade cancelada (não dá para saber de qual produto era) = `revisar`. `sem_credito` = `revisar`
+("libere pelo painel"). Um pedido por volta (limite de escritas da porta). Pedido que saiu da fila sem atendimento fica
+`fora_da_fila` no cartão. `_exp_valor_pedido` do TikTok = a venda do detalhe de AGORA (o enviado só vale até 1 centavo por unidade):
+cancelamento depois do atendimento aparece como valor diferente. **Revenda pela conta** que vendeu (`_exp_revenda_das_linhas`: ML =
+`ContaMercadoLivre`, TikTok = 3, Shopee/Magalu = 1, manual = filial), não pela filial que confere (Mover de filial); o caixa usa a
+revenda gravada no romaneio; `_exp_revenda` lê a fila guardada (`_ml_fila_leitura`). Romaneio/caixa: o clique espera a porta no máximo
+`EXP_CLIQUE_ESPERA_S` (40 s, "Apollo ocupado") e confere de novo, já na vez, que ninguém soltou/enviou. Estoque: `_anuncio_pedidos_com_atendimento`
+inclui os atendimentos do TikTok (os anúncios de Bauru têm a trava de queda). **2ª revisão:** o estoque do TikTok continua descontando
+todo pendente (sem a trava de queda, subiria antes de o Apollo reler); "já atendido" = qualquer romaneio/caixa registrado com número
+de atendimento (inclusive erro/incerto); a conferência usa o SKU atual da linha (o ADMIN que troca o SKU deixa o do TikTok em
+`SkuOrigemImportacao`) e todas as linhas do pedido, de qualquer origem; `fora_da_fila` só marca com a data de ligar, lê fila e tabela
+na mesma vez e quem volta à fila volta a ser candidato; `_tiktok_venda_mudou` (atendimento criado e o pedido cancelado/saiu ou com
+preço ilegível) barra o caixa (`_exp_caixa_valor_diferente`) e o romaneio do painel; o "Atualizar cadastro" do botão também espera a
+porta no máximo 40 s (`_ExpVezDaPorta`; as rotinas esperam o quanto for); o lote do Faturamento tenta de novo o "ocupado".
 
 ### Magalu (V19.24, fase 0 de 5)
 Plano decidido com o dono em 14/10 (integração completa "igual ao ML", por fases): 0 conexão; 1 pedidos na

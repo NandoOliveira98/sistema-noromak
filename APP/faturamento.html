@@ -225,7 +225,8 @@ function linxAcao(acao,dados,minimo=44,prazo=180000){
 async function faturarUm(i){
   let r=await api("/api/faturamento/executar",{pedido:i.pedido});
   // V19.82: limite de chamadas do Apollo (429) na conferência — nada foi gravado ainda; espera e tenta de novo.
-  for(let t=0;t<3&&!r.ok&&r.etapa==="conferencia"&&(r.situacao==="aguardando_apollo"||/Muitas chamadas/i.test(r.error||""));t++){
+  // V20.33: porta ocupada por outra gravação (rotina do TikTok) no romaneio — nada foi feito, espera e tenta de novo.
+  for(let t=0;t<3&&!r.ok&&((r.etapa==="conferencia"&&(r.situacao==="aguardando_apollo"||/Muitas chamadas/i.test(r.error||"")))||r.situacao==="ocupado");t++){
     RES[i.pedido]={ok:true,texto:"Limite do Apollo neste minuto — tentando de novo em 1 min…"};desenhar();
     await new Promise(ok=>setTimeout(ok,62000));
     RES[i.pedido]={ok:true,texto:"Faturando…"};desenhar();

@@ -8731,12 +8731,15 @@ def kit_da_para_montar(componentes: list[dict[str, Any]], disponivel: dict[str, 
     return menor
 
 
-def pendentes_da_filial(filial: str) -> dict[str, int]:
-    """Unidades vendidas na fila da filial (ainda nao baixadas no Apollo), por codigo."""
+def pendentes_da_filial(filial: str, sem: set[str] | None = None) -> dict[str, int]:
+    """Unidades vendidas na fila da filial (ainda nao baixadas no Apollo), por codigo.
+    `sem` = pedidos (normalize) que nao contam (ja tem atendimento no Apollo, V20.33)."""
     bruto, _, _ = get_storage("conf_pedidos")
     saida: dict[str, int] = {}
     for row in _rows_from_storage_value(bruto):
         if not isinstance(row, dict) or filial_da_linha(row) != filial:
+            continue
+        if sem and normalize(order_number(row)) in sem:
             continue
         qtd = max(0, _tiktok_quantidade(row.get("Quantidade")) or 0)
         for codigo, unidades in _tiktok_pecas(row.get("SKU")):
@@ -8846,6 +8849,9 @@ def _anuncio_pedidos_com_atendimento() -> set[str] | None:
         with DB_LOCK:
             rows = DB.execute("SELECT order_key FROM faturamento_v1943 WHERE atendimento<>'' "
                               "OR situacao IN ('feito','pronto_caixa')").fetchall()
+            # V20.33: atendimento do TikTok criado pelo Noromak (o TikTok não passa pelo Faturamento)
+            rows += DB.execute("SELECT pedido FROM tiktok_atendimento_v2033 "
+                               "WHERE situacao IN ('criado','ja_existia')").fetchall()
     except sqlite3.Error:
         return None
     return {normalize(r[0]) for r in rows}
@@ -9732,7 +9738,10 @@ def tiktok_apollo_ler_proximo() -> str | None:
 
 
 def _tiktok_pendentes_bauru() -> dict[str, int]:
-    """Unidades vendidas na fila de Bauru (ainda não baixadas no Apollo), por código."""
+    """Unidades vendidas na fila de Bauru (ainda não baixadas no Apollo), por código.
+    V20.33 (2ª revisão, 06/11): continua descontando TODO pendente, mesmo com atendimento no Apollo. Seguir a chave
+    `apollo_desconta_atendimento` dos anúncios subiria o estoque assim que o atendimento é criado, antes de o rodízio
+    reler o Apollo (o TikTok não tem a trava de queda dos anúncios, `_anuncio_pend_observar`). Errar para menos."""
     return pendentes_da_filial(TIKTOK_CASA)  # V20.23: mesma conta para qualquer filial
 
 
@@ -10763,7 +10772,9 @@ def tiktok_pedidos_loop(stop_event: threading.Event) -> None:
 # ---------------------------------------------------------------------------
 TIKTOK_ATEND_ORIGEM = "TIKTOK"
 TIKTOK_ATEND_CONDICAO = 973          # condição de pagamento do TikTok (dono, 06/11)
-TIKTOK_ATEND_POR_RODADA = 2          # porta: 6 escritas/min; cada pedido = até 4 (criar, atualizar, crédito, atendimento)
+# revisar-antes-de-subir (06/11): UM pedido por volta de 2 min. A porta aceita 6 escritas/min e cada pedido faz até 4
+# (criar, atualizar, crédito, atendimento); dois seguidos estouravam o limite e o painel/Faturamento levavam 429.
+TIKTOK_ATEND_POR_RODADA = 1
 TIKTOK_ATEND_INTERVALO = 120
 TIKTOK_ATEND_FINAIS = ("criado", "ja_existia")
 # Quanto esperar para tentar de novo, por situação (segundos).
@@ -10804,6 +10815,19 @@ def tiktok_atendimento_ligado() -> bool:
 
 
 def tiktok_atendimento_definir(ligado: bool, usuario: str) -> None:
+    estava = tiktok_atendimento_ligado()
+    if ligado and not estava:
+        # revisar-antes-de-subir (06/11): o que JÁ está na fila ao ligar foi (ou está sendo) atendido à mão —
+        # um atendimento aberto à mão não tem a chave TIKTOK-<pedido>, e a porta criaria outro. Fica de fora.
+        with DB_LOCK:
+            bruto, _, _ = get_storage("conf_pedidos")
+            na_fila = _tiktok_sc_pedidos_na_fila(_rows_from_storage_value(bruto))
+            agora = now_iso()
+            for numero in na_fila:
+                DB.execute("INSERT OR IGNORE INTO tiktok_atendimento_v2033(pedido,situacao,detalhe,atualizado_em) "
+                           "VALUES(?,?,?,?)", (numero, "anterior", "Já estava na fila ao ligar: atendimento à mão.", agora))
+            DB.commit()
+        _tiktok_config_gravar("atendimento_ligado_em", now_iso(), usuario)
     _tiktok_config_gravar("atendimento_auto", "1" if ligado else "0", usuario)
     tiktok_log_event("atendimento", "", "LIGADO" if ligado else "DESLIGADO", f"por {usuario}")
 
@@ -10835,6 +10859,7 @@ def _tiktok_sc_venda(o: Any) -> dict[str, Any] | None:
         return None
     abertas = {(str(i["sku_id"]), normalize(i["seller_sku"])): int(i["quantity"]) for i in p["line_items"]}
     soma_cheia, itens = 0.0, []
+    parcial = False
     for sk in o.get("sku_module") or []:
         if not isinstance(sk, dict):
             continue
@@ -10845,12 +10870,19 @@ def _tiktok_sc_venda(o: Any) -> dict[str, Any] | None:
         soma_cheia += unit * total_linhas
         sku = str(sk.get("seller_sku_name") or "").strip()
         qtd = abertas.get((str(sk.get("sku_id") or ""), normalize(sku)), 0)
+        parcial = parcial or qtd < total_linhas
         if qtd > 0:
             itens.append({"sku_id": str(sk.get("sku_id") or ""), "sku": sku, "qtd": qtd, "unitario": unit})
     origem = _tiktok_num(pm.get("main_order_origin_sale_price"))
     desconto = _tiktok_num(pm.get("seller_discount_total")) or 0.0
     if origem is None or origem <= 0:
         return {"erro": "o TikTok não informou o valor do pedido"}
+    # revisar-antes-de-subir (06/11): desconto negativo inflaria o preço; e com unidade cancelada não dá para saber de
+    # qual produto era o desconto da loja (o rateio pelo pedido inteiro erraria o preço do que ficou).
+    if desconto < 0:
+        return {"erro": "desconto da loja negativo no TikTok"}
+    if parcial and desconto > 0:
+        return {"erro": "pedido com unidade cancelada e desconto da loja: não dá para saber de qual produto era o desconto"}
     if abs(soma_cheia - origem) <= 0.02:
         fator = (origem - desconto) / origem
     elif abs(soma_cheia - (origem - desconto)) <= 0.02:
@@ -10943,20 +10975,70 @@ def _tiktok_atendimento_registrar(pedido: str, situacao: str, detalhe: str, *, e
         DB.commit()
 
 
+# Situações em que a rotina não mexe mais no pedido ("anterior" = atendido à mão; "fora_da_fila" = saiu sem atendimento).
+TIKTOK_ATEND_PARADOS = TIKTOK_ATEND_FINAIS + ("anterior", "fora_da_fila")
+
+
+def _tiktok_atendimento_ja_atendido(pedido: str) -> bool:
+    """revisar-antes-de-subir (06/11): romaneio ou caixa já registrados (painel/Faturamento) = o pedido já tem
+    atendimento no Apollo, aberto à mão (sem a chave TIKTOK-<pedido>); criar outro duplicaria venda e estoque."""
+    # 2ª revisão (06/11): qualquer tentativa de romaneio/caixa com número de atendimento (inclusive erro/incerto)
+    # prova que o atendimento existe — todo soltar exige o número.
+    estado = _exp_estado_operacoes(pedido)
+    return any(o.get("etapa") in ("romaneio", "caixa") and str(o.get("contato") or "").strip()
+               for o in estado["operacoes"])
+
+
 def _tiktok_atendimento_candidatos() -> list[str]:
-    """Pedidos do TikTok na fila (pendentes) que ainda não têm atendimento e cuja vez chegou."""
+    """Pedidos do TikTok na fila (pendentes) que ainda não têm atendimento e cuja vez chegou.
+    revisar-antes-de-subir (06/11): só os que o TikTok ainda diz "a enviar" (cancelado/enviado com peça bipada fica
+    na fila com o aviso, e não ganha atendimento)."""
     with DB_LOCK:
         bruto, _, _ = get_storage("conf_pedidos")
         estados = {r["pedido"]: dict(r) for r in DB.execute(
             "SELECT pedido, situacao, proxima_epoch FROM tiktok_atendimento_v2033")}
+        situacao_tt = {r["pedido"]: (str(r["status"] or ""), float(r["saiu_epoch"] or 0)) for r in DB.execute(
+            "SELECT pedido, status, saiu_epoch FROM tiktok_sc_pedido_v2030")}
     agora = time.time()
     saida: list[str] = []
     for numero in sorted(_tiktok_sc_pedidos_na_fila(_rows_from_storage_value(bruto))):
         e = estados.get(numero) or {}
-        if e.get("situacao") in TIKTOK_ATEND_FINAIS or float(e.get("proxima_epoch") or 0) > agora:
+        parado = e.get("situacao") in TIKTOK_ATEND_PARADOS and e.get("situacao") != "fora_da_fila"  # voltou à fila
+        if parado or float(e.get("proxima_epoch") or 0) > agora:
+            continue
+        status, saiu = situacao_tt.get(numero, ("", 0.0))
+        if status not in TIKTOK_SC_NA_FILA or saiu:
+            continue
+        if _tiktok_atendimento_ja_atendido(numero):
+            _tiktok_atendimento_registrar(numero, "anterior", "Já tem romaneio/caixa pelo painel: atendimento à mão.")
             continue
         saida.append(numero)
     return saida
+
+
+def _tiktok_marcar_fora_da_fila(na_fila: set[str] | None = None) -> int:
+    """revisar-antes-de-subir (06/11): pedido do TikTok (lido depois de ligar) que saiu da fila sem atendimento — concluído
+    antes de chegar o CPF, por exemplo — fica no cartão ("crie à mão"), em vez de sumir calado.
+    2ª revisão: a fila (qualquer origem) e a tabela são lidas na MESMA vez do DB_LOCK (a extensão grava as duas);
+    sem a data de ligar não marca nada; o pedido que volta à fila volta a ser candidato."""
+    desde = _tiktok_config_ler("atendimento_ligado_em") or ""
+    if not desde:
+        return 0
+    with DB_LOCK:
+        if na_fila is None:
+            bruto, _, _ = get_storage("conf_pedidos")
+            na_fila = {str(order_number(r) or "").strip() for r in _rows_from_storage_value(bruto) if isinstance(r, dict)}
+        rows = DB.execute(
+            "SELECT s.pedido FROM tiktok_sc_pedido_v2030 s LEFT JOIN tiktok_atendimento_v2033 a ON a.pedido=s.pedido "
+            "WHERE a.pedido IS NULL AND s.status NOT IN ('CANCELLED','IN_TRANSIT','DELIVERED','COMPLETED') "
+            "AND s.saiu_epoch=0 AND s.visto_em>=?", (desde,)).fetchall()
+    n = 0
+    for r in rows:
+        if r["pedido"] not in na_fila:
+            _tiktok_atendimento_registrar(r["pedido"], "fora_da_fila",
+                                          "Saiu da fila sem atendimento no Apollo: crie à mão se a venda vai ser faturada.")
+            n += 1
+    return n
 
 
 def _tiktok_atendimento_custo(codigo: str, ctx: dict[str, Any]) -> float | None:
@@ -10985,12 +11067,81 @@ def _tiktok_atendimento_dividir(total_cent: int, pecas: list[tuple[str, int, flo
     return cent
 
 
-def _tiktok_atendimento_itens(venda: dict[str, Any]) -> list[dict[str, Any]]:
-    """Itens do atendimento: SKU do TikTok aberto em peças (Cadastro de Kits / "KITn-X" / "A/B"),
-    preço do kit dividido pelo custo. SKU com cara de dois códigos sem Cadastro de Kits = revisar."""
+def _tiktok_vinculos() -> dict[str, str]:
+    """Vínculo à mão do TikTok (V19.64): sku_id → códigos ("A/B"). Vence o SKU do vendedor."""
+    with DB_LOCK:
+        return {str(r["sku_id"]): str(r["codigos"] or "") for r in DB.execute(
+            "SELECT sku_id, codigos FROM tiktok_vinculo_v1964 WHERE codigos<>''")}
+
+
+def _tiktok_atendimento_pecas_do_sku(it: dict[str, Any], catalogo: dict[str, Any], conhecidos: Any,
+                                     confirmadas: frozenset[str], vinculos: dict[str, str]
+                                     ) -> tuple[list[tuple[str, int]], dict[str, Any] | None]:
+    """Peças de UMA unidade do SKU vendido. Vínculo à mão vence; SKU cortado (V20.08) e SKU com cara de dois códigos
+    sem Cadastro de Kits = revisar (o atendimento sairia sem peça)."""
+    sku = str(it.get("sku") or "").strip()
+    vinculo = vinculos.get(str(it.get("sku_id") or ""))
+    if vinculo:
+        return [(c, u) for c, u in _tiktok_pecas(vinculo)], None
+    if len(sku) >= TIKTOK_SKU_LIMITE:
+        raise TikTokAtendRevisar(f"SKU {sku} veio cortado pelo TikTok (limite de {TIKTOK_SKU_LIMITE} caracteres): faça o "
+                                 f"vínculo à mão na tela Estoque TikTok para o atendimento sair com todas as peças.")
+    partes, comp = _anuncio_sku_partes(sku, catalogo, conhecidos, confirmadas)
+    miolo = re.sub(r"^KIT\d*-", "", normalize(sku))
+    if not comp and anuncio_sku_parece_kit(miolo) and normalize(sku) not in confirmadas \
+            and miolo not in confirmadas:
+        raise TikTokAtendRevisar(f"SKU {sku} parece dois códigos juntos: cadastre o kit (Plataforma de anúncios → "
+                                 f"Peça · Kit) para o atendimento sair com todas as peças.")
+    return [(str(c).strip(), int(u)) for c, u in partes if str(c).strip() and int(u) > 0], comp
+
+
+def _tiktok_atendimento_conferir_fila(pedido: str, venda: dict[str, Any], linhas: list[dict[str, Any]]) -> None:
+    """revisar-antes-de-subir (06/11): o atendimento só sai se as peças da FILA (com as exclusões e alterações do
+    ADMIN já aplicadas pelo get_storage) baterem com as do TikTok. Linha excluída, SKU/quantidade mudados pelo ADMIN
+    ou fila desatualizada = revisar (a decisão do ADMIN vence a integração; ninguém adivinha qual vale)."""
     catalogo = _load_kit_catalog()
     confirmadas = _anuncio_pecas_confirmadas()
     conhecidos = _anuncios_conhecidos_lazy()
+    vinculos = _tiktok_vinculos()
+    por_sku = {normalize(i.get("sku")): i for i in venda.get("itens") or []}
+
+    def somar(destino: dict[str, int], pecas: list[tuple[str, int]], vezes: int) -> None:
+        for codigo, unidades in pecas:
+            chave = _exp_norm_codigo(codigo)
+            destino[chave] = destino.get(chave, 0) + unidades * vezes
+
+    esperado: dict[str, int] = {}
+    for it in venda.get("itens") or []:
+        somar(esperado, _tiktok_atendimento_pecas_do_sku(it, catalogo, conhecidos, confirmadas, vinculos)[0],
+              int(it.get("qtd") or 0))
+    na_fila: dict[str, int] = {}
+    for row in linhas:
+        qtd = max(0, _tiktok_quantidade(row.get("Quantidade")) or 0)
+        if str(row.get("__uidLinha") or "").upper().startswith("KITDB_"):
+            somar(na_fila, [(str(row.get("SKU") or ""), 1)], qtd)
+            continue
+        # 2ª revisão (06/11): pelo SKU ATUAL da linha. O ADMIN que troca o SKU deixa o do TikTok em
+        # SkuOrigemImportacao; procurar por ele contava a peça do TikTok dos dois lados e deixava passar.
+        it = por_sku.get(normalize(row.get("SKU")))
+        if it is not None:
+            pecas = _tiktok_atendimento_pecas_do_sku(it, catalogo, conhecidos, confirmadas, vinculos)[0]
+        else:
+            pecas = _anuncio_sku_partes(row.get("SKU"), catalogo, conhecidos, confirmadas)[0]
+        somar(na_fila, pecas, qtd)
+    esperado = {k: v for k, v in esperado.items() if k and v}
+    na_fila = {k: v for k, v in na_fila.items() if k and v}
+    if esperado != na_fila:
+        raise TikTokAtendRevisar("As peças da fila não batem com as do TikTok (linha excluída ou alterada pelo ADMIN, "
+                                 "ou cancelamento ainda não lido). Confira o pedido e crie o atendimento à mão.")
+
+
+def _tiktok_atendimento_itens(venda: dict[str, Any]) -> list[dict[str, Any]]:
+    """Itens do atendimento: SKU do TikTok aberto em peças (vínculo à mão / Cadastro de Kits / "KITn-X" / "A/B"),
+    preço do kit dividido pelo custo. SKU cortado ou com cara de dois códigos sem Cadastro de Kits = revisar."""
+    catalogo = _load_kit_catalog()
+    confirmadas = _anuncio_pecas_confirmadas()
+    conhecidos = _anuncios_conhecidos_lazy()
+    vinculos = _tiktok_vinculos()
     ctx: dict[str, Any] | None = None
     saida: list[dict[str, Any]] = []
     for it in venda.get("itens") or []:
@@ -11001,13 +11152,7 @@ def _tiktok_atendimento_itens(venda: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         if total_cent <= 0:
             raise TikTokAtendRevisar(f"SKU {sku} sem valor de venda.")
-        partes, comp = _anuncio_sku_partes(sku, catalogo, conhecidos, confirmadas)
-        miolo = re.sub(r"^KIT\d*-", "", normalize(sku))
-        if not comp and anuncio_sku_parece_kit(miolo) and normalize(sku) not in confirmadas \
-                and miolo not in confirmadas:
-            raise TikTokAtendRevisar(f"SKU {sku} parece dois códigos juntos: cadastre o kit (Plataforma de anúncios → "
-                                     f"Peça · Kit) para o atendimento sair com todas as peças.")
-        partes = [(str(c).strip(), int(u)) for c, u in partes if str(c).strip() and int(u) > 0]
+        partes, _ = _tiktok_atendimento_pecas_do_sku(it, catalogo, conhecidos, confirmadas, vinculos)
         if not partes:
             raise TikTokAtendRevisar(f"SKU {sku} sem código do Apollo.")
         if len(partes) == 1:
@@ -11044,14 +11189,17 @@ def tiktok_atendimento_pedido(pedido: str) -> dict[str, Any]:
     venda = guardado["venda"]
     if not venda:
         return {"ok": False, "situacao": "aguardando", "motivo": "sem o preço do detalhe"}
+    def revisar(exc: Exception) -> dict[str, Any]:
+        _tiktok_atendimento_registrar(pedido, "revisar", str(exc), espera="revisar")
+        tiktok_log_event_se_mudou("atendimento", pedido, "REVISAR", str(exc)[:300])
+        return {"ok": False, "situacao": "revisar", "motivo": str(exc)}
+
     try:
         if venda.get("erro"):
             raise TikTokAtendRevisar("Preço: " + str(venda["erro"]) + ".")
         itens = _tiktok_atendimento_itens(venda)
     except TikTokAtendRevisar as exc:
-        _tiktok_atendimento_registrar(pedido, "revisar", str(exc), espera="revisar")
-        tiktok_log_event_se_mudou("atendimento", pedido, "REVISAR", str(exc)[:300])
-        return {"ok": False, "situacao": "revisar", "motivo": str(exc)}
+        return revisar(exc)
     esperado = round(sum(i["quantidade"] * i["unitario"] for i in itens), 2)
     # 1) cadastro (cria se não existe), uma vez por pedido
     codigo = conhecido["codigo"]
@@ -11069,8 +11217,25 @@ def tiktok_atendimento_pedido(pedido: str) -> dict[str, Any]:
         codigo = str(r.get("cliente") or "")
         agora = time.time()
         _cadastro_auto_registrar(pedido, agora, agora, 1, "feito", "automático do TikTok", codigo)
-    # 2) atendimento
-    corpo = {"revenda": SEPARACAO_REVENDA[TIKTOK_CASA], "operador": "noromak", "origem": TIKTOK_ATEND_ORIGEM,
+    # 2) revisar-antes-de-subir (06/11): relê a fila AGORA (o cadastro leva tempo): o pedido ainda está lá, o TikTok
+    # ainda diz "a enviar", ninguém soltou romaneio, e as peças da fila (com as decisões do ADMIN) batem com o TikTok.
+    with DB_LOCK:
+        bruto, _, _ = get_storage("conf_pedidos")
+        # 2ª revisão (06/11): TODAS as linhas do pedido — a que o ADMIN acrescentou à mão também conta
+        linhas = [r for r in _rows_from_storage_value(bruto) if isinstance(r, dict)
+                  and str(order_number(r) or "").strip() == pedido]
+        row_tt = DB.execute("SELECT status, saiu_epoch FROM tiktok_sc_pedido_v2030 WHERE pedido=?", (pedido,)).fetchone()
+    if not linhas or not row_tt or str(row_tt["status"] or "") not in TIKTOK_SC_NA_FILA or float(row_tt["saiu_epoch"] or 0):
+        return {"ok": False, "situacao": "aguardando", "motivo": "saiu da fila ou não está mais a enviar"}
+    if _tiktok_atendimento_ja_atendido(pedido):
+        _tiktok_atendimento_registrar(pedido, "anterior", "Já tem romaneio/caixa pelo painel: atendimento à mão.")
+        return {"ok": False, "situacao": "anterior"}
+    try:
+        _tiktok_atendimento_conferir_fila(pedido, venda, linhas)
+    except TikTokAtendRevisar as exc:
+        return revisar(exc)
+    # 3) atendimento (revenda pela conta do pedido: TikTok = Bauru)
+    corpo = {"revenda": _exp_revenda(pedido), "operador": "noromak", "origem": TIKTOK_ATEND_ORIGEM,
              "pedido_externo": f"{TIKTOK_ATEND_ORIGEM}-{pedido}", "cliente": int(codigo),
              "condicao_pagamento": TIKTOK_ATEND_CONDICAO, "observacao": f"TikTok {pedido}",
              "valor_esperado": esperado, "itens": itens}
@@ -11095,9 +11260,17 @@ def tiktok_atendimento_pedido(pedido: str) -> dict[str, Any]:
                   "apollo_fora": "Apollo fora do ar"}
         detalhe = f"{textos.get(situacao, 'Recusado')}: {motivo}"[:500]
         espera = "passageiro" if situacao == "apollo_fora" else "erro"
-        _tiktok_atendimento_registrar(pedido, "erro", detalhe, espera=espera, cliente=codigo, valor=esperado, itens=itens)
-        tiktok_log_event_se_mudou("atendimento", pedido, "ERRO", detalhe[:300])
-        return {"ok": False, "situacao": "erro", "motivo": detalhe}
+        estado_final = "erro"
+        if situacao == "sem_credito":
+            # revisar-antes-de-subir (06/11): o crédito não se resolve sozinho (o cadastro já está feito e não é
+            # refeito); alguém libera pelo painel do pedido (Linx web) ou no Apollo, e a rotina tenta de novo em 1 h.
+            estado_final, espera = "revisar", "revisar"
+            detalhe = ("Crédito não liberado no Apollo: libere pelo painel do pedido (Liberar pelo Linx web) ou no Apollo. "
+                       + motivo)[:500]
+        _tiktok_atendimento_registrar(pedido, estado_final, detalhe, espera=espera, cliente=codigo, valor=esperado,
+                                      itens=itens)
+        tiktok_log_event_se_mudou("atendimento", pedido, estado_final.upper(), detalhe[:300])
+        return {"ok": False, "situacao": estado_final, "motivo": detalhe}
     valor = _tiktok_num(r.get("valor"))
     detalhe = "Atendimento criado" if situacao == "criado" else "Atendimento já existia (mesma venda)"
     if valor is not None and abs(valor - esperado) > 0.009:
@@ -11115,6 +11288,10 @@ def tiktok_atendimento_rodada(forcar: bool = False) -> dict[str, Any]:
         return {"ok": True, "ligado": False, "feitos": 0}
     feitos = 0
     resultados = []
+    try:
+        _tiktok_marcar_fora_da_fila()
+    except Exception as exc:  # aviso no cartão: falhar aqui não impede o atendimento
+        tiktok_log_event_se_mudou("atendimento", "fora da fila", "ERRO", str(exc)[:300])
     for numero in _tiktok_atendimento_candidatos():
         if feitos >= TIKTOK_ATEND_POR_RODADA and not forcar:
             break
@@ -19959,11 +20136,22 @@ EXP_REVENDA = 1  # Araçatuba
 
 
 def _exp_revenda_das_linhas(linhas: list[dict[str, Any]]) -> int:
-    """V20.33 (dono, 06/11): o pedido usa a revenda da filial dele no Apollo (Bauru = 3) no
-    atendimento, no romaneio, no caixa e no cadastro. Sem linha = Araçatuba (como sempre foi)."""
+    """V20.33 (dono, 06/11): o pedido usa a revenda do Apollo em que o atendimento dele está (Bauru = 3).
+    revisar-antes-de-subir (06/11): pela CONTA que vendeu, não pela filial que confere (o "Mover de filial" muda o
+    `Casa`, e o atendimento continua onde a integração criou): ML = `ContaMercadoLivre` (`ml_casa_da_linha`);
+    TikTok = Bauru; Shopee/Magalu = Araçatuba (as contas são de lá); o resto (manual) = a filial da linha.
+    Sem linha = Araçatuba (como sempre foi)."""
     for row in linhas or []:
-        if isinstance(row, dict):
-            return SEPARACAO_REVENDA.get(filial_da_linha(row), EXP_REVENDA)
+        if not isinstance(row, dict):
+            continue
+        mp = normalize(_vendas_marketplace(row.get("Marketplace") or row.get("Origem")))
+        if "TIKTOK" in mp:
+            return SEPARACAO_REVENDA[TIKTOK_CASA]
+        if mp == normalize("Mercado Livre"):
+            return SEPARACAO_REVENDA.get(ml_casa_da_linha(row), EXP_REVENDA)
+        if mp in (normalize("Shopee"), normalize("Magalu")):
+            return EXP_REVENDA
+        return SEPARACAO_REVENDA.get(filial_da_linha(row), EXP_REVENDA)
     return EXP_REVENDA
 
 
@@ -19971,10 +20159,9 @@ def _exp_revenda(pedido: str) -> int:
     """Leve: a fila; fora dela, só a conclusão DESTE pedido (nunca varre completed_orders)."""
     chave = str(pedido or "").strip()
     alvo = normalize(chave)
+    # revisar-antes-de-subir (06/11): a leitura guardada da fila (V20.04, pela versão), não a fila remontada a cada etapa
+    linhas = [r for r in _ml_fila_leitura() if isinstance(r, dict) and normalize(order_number(r)) == alvo]
     with DB_LOCK:
-        bruto, _, _ = get_storage("conf_pedidos")
-        linhas = [r for r in _rows_from_storage_value(bruto)
-                  if isinstance(r, dict) and normalize(order_number(r)) == alvo]
         if not linhas and alvo:
             row = DB.execute("SELECT payload FROM completed_orders WHERE order_key IN (?,?) LIMIT 1",
                              (chave, alvo)).fetchone()
@@ -19986,6 +20173,22 @@ def _exp_revenda(pedido: str) -> int:
     return _exp_revenda_das_linhas(linhas)
 EXP_MAX_ATENDIMENTOS = 4  # cada um custa uma prévia (teto da porta: 12 leituras/min)
 EXP_PORTA_LOCK = threading.Lock()  # uma escrita por vez (a porta devolve 409 se repetir)
+EXP_CLIQUE_ESPERA_S = 40  # revisar-antes-de-subir (06/11): clique espera a vez da porta no máximo isto (nginx corta em 60)
+
+
+class _ExpVezDaPorta:
+    """A vez da porta (EXP_PORTA_LOCK) com espera limitada: `espera` None = espera o quanto for."""
+
+    def __init__(self, espera: float | None):
+        self.ok = EXP_PORTA_LOCK.acquire() if espera is None else EXP_PORTA_LOCK.acquire(timeout=espera)
+
+    def __enter__(self) -> "_ExpVezDaPorta":
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        if self.ok:
+            EXP_PORTA_LOCK.release()
+            self.ok = False
 
 
 class PortaErro(Exception):
@@ -20333,7 +20536,14 @@ def exp_romaneio_soltar(pedido: str, atendimento: Any, observacao: str, usuario:
     if _exp_estado_operacoes(pedido)["romaneio"]:
         return {"ok": False, "error": "O romaneio deste pedido já foi solto pelo Noromak."}
     revenda = _exp_revenda(pedido)  # V20.33: fora da vez da porta
-    with EXP_PORTA_LOCK:
+    # revisar-antes-de-subir (06/11): o clique não espera a rotina do TikTok (ou outra escrita longa) além do nginx
+    # (60 s = 504 e a thread soltava depois, sem a tela saber); e confere de novo, já na vez, que ninguém soltou.
+    if not EXP_PORTA_LOCK.acquire(timeout=EXP_CLIQUE_ESPERA_S):
+        return {"ok": False, "situacao": "ocupado",
+                "error": "O Apollo está ocupado com outra gravação agora. Espere alguns segundos e tente de novo."}
+    try:
+        if _exp_estado_operacoes(pedido)["romaneio"]:
+            return {"ok": False, "error": "O romaneio deste pedido já foi solto pelo Noromak."}
         try:
             r = _exp_porta("romaneio/soltar", {"revenda": revenda, "atendimento": int(numero),
                                                 "operador": usuario[:60] or "noromak", "observacao": observacao},
@@ -20341,14 +20551,16 @@ def exp_romaneio_soltar(pedido: str, atendimento: Any, observacao: str, usuario:
         except PortaErro as exc:
             _linx_operacao_registrar(pedido, "romaneio", "incerto" if exc.incerto else "erro", str(exc), numero, usuario)
             return {"ok": False, "situacao": "incerto" if exc.incerto else "erro", "error": str(exc)}
-    if not r.get("ok") or r.get("situacao") != "solto":
-        motivo = r.get("erro") or r.get("mensagem") or json_dumps(r)[:300]
-        _linx_operacao_registrar(pedido, "romaneio", "erro", motivo, numero, usuario)
-        return {"ok": False, "situacao": r.get("situacao") or "erro", "error": motivo}
-    mensagens = [str(m) for m in (r.get("mensagens") or [])]
-    _linx_operacao_registrar(pedido, "romaneio", "ok", {"observacao": observacao, "soltos": r.get("soltos"),
-                                                       "mensagens": mensagens, "via": "porta",
-                                                       "revenda": revenda}, numero, usuario)  # V20.33
+        if not r.get("ok") or r.get("situacao") != "solto":
+            motivo = r.get("erro") or r.get("mensagem") or json_dumps(r)[:300]
+            _linx_operacao_registrar(pedido, "romaneio", "erro", motivo, numero, usuario)
+            return {"ok": False, "situacao": r.get("situacao") or "erro", "error": motivo}
+        mensagens = [str(m) for m in (r.get("mensagens") or [])]
+        _linx_operacao_registrar(pedido, "romaneio", "ok", {"observacao": observacao, "soltos": r.get("soltos"),
+                                                           "mensagens": mensagens, "via": "porta",
+                                                           "revenda": revenda}, numero, usuario)  # V20.33
+    finally:
+        EXP_PORTA_LOCK.release()
     audit(usuario, "expedicao.romaneio", f"{pedido}|{numero}|{observacao}")
     return {"ok": True, "situacao": "solto", "pedido": pedido, "atendimento": numero,
             "observacao": observacao, "soltos": r.get("soltos") or [], "mensagens": mensagens}
@@ -20406,15 +20618,23 @@ def _pedido_filial_e_fila(pedido: str, filial: str) -> tuple[bool, bool]:
 
 def _exp_caixa_corpo(pedido: str, atendimento: Any, cliente: Any) -> tuple[dict[str, Any] | None, str]:
     numero = re.sub(r"\D", "", str(atendimento or ""))
+    estado = _exp_estado_operacoes(pedido)
     if not numero:
-        estado = _exp_estado_operacoes(pedido)
         numero = str((estado["romaneio"] or {}).get("contato") or "")
     codigo = re.sub(r"\D", "", str(cliente or "")) or _exp_cliente_do_pedido(pedido)["codigo"]
     if not numero:
         return None, "Solte o romaneio primeiro (ou informe o atendimento)."
     if not codigo:
         return None, "Informe o código do cliente no Apollo: sem ele o caixa não acha a UF (Erro 2619)."
-    return {"revenda": _exp_revenda(pedido), "atendimento": int(numero), "cliente": int(codigo)}, ""
+    # revisar-antes-de-subir (06/11): o caixa vai na revenda em que o romaneio saiu (gravada ao soltar); sem ela, a do pedido.
+    revenda = _exp_revenda(pedido)
+    try:
+        rom_det = json.loads((estado["romaneio"] or {}).get("detalhe") or "{}")
+        if isinstance(rom_det, dict) and int(rom_det.get("revenda") or 0) in SEPARACAO_REVENDA.values():
+            revenda = int(rom_det["revenda"])
+    except (TypeError, ValueError):
+        pass
+    return {"revenda": revenda, "atendimento": int(numero), "cliente": int(codigo)}, ""
 
 
 def exp_caixa_previa(pedido: str, atendimento: Any, cliente: Any, usuario: str) -> dict[str, Any]:
@@ -20454,23 +20674,38 @@ def exp_caixa_enviar(pedido: str, atendimento: Any, cliente: Any, valor_visto: A
     if valor <= 0:
         return {"ok": False, "error": "Valor do atendimento inválido."}
     numero = corpo["atendimento"]
-    with EXP_PORTA_LOCK:
+    # revisar-antes-de-subir (06/11): espera a vez da porta só até EXP_CLIQUE_ESPERA_S (nginx = 60 s) e confere de
+    # novo, já na vez, que nenhum outro clique enviou; o registro também fica dentro da vez.
+    if not EXP_PORTA_LOCK.acquire(timeout=EXP_CLIQUE_ESPERA_S):
+        return {"ok": False, "situacao": "ocupado",
+                "error": "O Apollo está ocupado com outra gravação agora. Espere alguns segundos e tente de novo."}
+    try:
+        estado = _exp_estado_operacoes(pedido)
+        if estado["caixa"]:
+            return {"ok": False, "error": "Este pedido já foi enviado ao caixa pelo Noromak."}
+        if estado["caixa_travado"] and not conferido:
+            return {"ok": False, "situacao": "travado",
+                    "error": "A última tentativa ficou sem resposta certa. Confira no Apollo e marque que conferiu."}
         try:
             r = _exp_porta("caixa/enviar", {**corpo, "operador": usuario[:60] or "noromak", "valor_visto": valor},
                            escrita=True)
         except PortaErro as exc:
             _linx_operacao_registrar(pedido, "caixa", "incerto" if exc.incerto else "erro", str(exc), numero, usuario)
             return {"ok": False, "situacao": "incerto" if exc.incerto else "erro", "error": str(exc)}
-    situacao = str(r.get("situacao") or "")
-    texto = str(r.get("erro") or r.get("mensagem_do_erp") or r.get("mensagem") or "")
+        situacao = str(r.get("situacao") or "")
+        texto = str(r.get("erro") or r.get("mensagem_do_erp") or r.get("mensagem") or "")
+        if situacao == "enviado":
+            _linx_operacao_registrar(pedido, "caixa", "ok", f"valor {valor} {texto}".strip(), numero, usuario)
+        else:
+            marca = situacao if situacao in ("pergunta", "incerto") else "erro"
+            if "412" in texto or "forma(s) de pagamento" in texto.lower():
+                texto = "Escolha a condição de pagamento do atendimento no Apollo e clique de novo. " + texto
+            _linx_operacao_registrar(pedido, "caixa", marca, texto or json_dumps(r)[:300], numero, usuario)
+    finally:
+        EXP_PORTA_LOCK.release()
     if situacao == "enviado":
-        _linx_operacao_registrar(pedido, "caixa", "ok", f"valor {valor} {texto}".strip(), numero, usuario)
         audit(usuario, "expedicao.caixa", f"{pedido}|{numero}|{valor}")
         return {"ok": True, "situacao": "enviado", "atendimento": str(numero), "valor": valor, "mensagem": texto}
-    marca = situacao if situacao in ("pergunta", "incerto") else "erro"
-    if "412" in texto or "forma(s) de pagamento" in texto.lower():
-        texto = "Escolha a condição de pagamento do atendimento no Apollo e clique de novo. " + texto
-    _linx_operacao_registrar(pedido, "caixa", marca, texto or json_dumps(r)[:300], numero, usuario)
     return {"ok": False, "situacao": situacao or "erro", "error": texto or "O Apollo não confirmou o envio."}
 
 
@@ -20674,7 +20909,13 @@ def exp_cadastro_atualizar(pedido: str, usuario: str, cliente: Any = "", ie: Any
         avisos.append(f"Bairro gravado como {EXP_BAIRRO_PADRAO_SHOPEE}: a página não informou o bairro.")
     criado = False
     nome_apollo = ""
-    with EXP_PORTA_LOCK:
+    # V20.33 (2ª revisão): o botão espera a vez da porta no máximo EXP_CLIQUE_ESPERA_S (a rotina do TikTok pode
+    # estar gravando); as rotinas automáticas esperam o quanto for preciso.
+    vez = _ExpVezDaPorta(None if usuario == "automatico" else EXP_CLIQUE_ESPERA_S)
+    if not vez.ok:
+        return {"ok": False, "situacao": "ocupado",
+                "error": "O Apollo está ocupado com outra gravação agora. Espere alguns segundos e tente de novo."}
+    with vez:
         try:
             if codigo and _exp_nome_abreviado(nome_limpo):   # V20.09: só o nome abreviado gasta a busca
                 nome_apollo = exp_buscar_cliente(documento, operador, revenda)["nome"]
@@ -21029,16 +21270,18 @@ def _exp_valor_pedido(pedido: str) -> float | None:
         if total is None:
             # V20.33: TikTok sem API não está nas vendas — vale o valor do atendimento criado pelo Noromak
             # (o mesmo que foi enviado), senão o lido no detalhe do Seller Center.
+            # revisar-antes-de-subir (06/11): a venda é a do TikTok AGORA (cancelou uma unidade depois do atendimento =
+            # valor diferente, e o painel/Faturamento barram). O valor enviado só vale para os centavos da divisão.
             try:
-                row = DB.execute("SELECT valor FROM tiktok_atendimento_v2033 WHERE pedido=? AND valor IS NOT NULL",
-                                 (chave,)).fetchone()
-                if row:
-                    total = float(row["valor"])
-                else:
-                    row = DB.execute("SELECT venda_json FROM tiktok_sc_pedido_v2030 WHERE pedido=?", (chave,)).fetchone()
-                    venda = json.loads(row["venda_json"]) if row and row["venda_json"] else None
-                    if isinstance(venda, dict) and not venda.get("erro") and venda.get("itens"):
-                        total = sum(float(i.get("valor") or 0) for i in venda["itens"])
+                row = DB.execute("SELECT venda_json FROM tiktok_sc_pedido_v2030 WHERE pedido=?", (chave,)).fetchone()
+                venda = json.loads(row["venda_json"]) if row and row["venda_json"] else None
+                if isinstance(venda, dict) and not venda.get("erro") and venda.get("itens"):
+                    total = sum(float(i.get("valor") or 0) for i in venda["itens"])
+                    unidades = sum(int(i.get("qtd") or 0) for i in venda["itens"])
+                    row = DB.execute("SELECT valor FROM tiktok_atendimento_v2033 WHERE pedido=? AND valor IS NOT NULL",
+                                     (chave,)).fetchone()
+                    if row and abs(float(row["valor"]) - total) < 0.01 * max(1, unidades):
+                        total = float(row["valor"])
             except (sqlite3.OperationalError, TypeError, ValueError):
                 pass
     return round(total, 2) if total is not None else None
@@ -23407,6 +23650,9 @@ def exp_romaneio_soltar_painel(pedido: str, atendimento: Any, observacao: str, u
     if r:
         return {"ok": False, "situacao": "em_correcao", "error": f"Correção do valor em andamento ou pela metade "
                 f"({r['usuario']}, {str(r['em'])[11:16]}). Confira o atendimento no Linx e use Liberar no painel da venda."}
+    mudou = _tiktok_venda_mudou(pedido)  # V20.33 (2ª revisão)
+    if mudou and not valor_conferido:
+        return {"ok": False, "situacao": "valor_diferente", "explicada": False, "error": mudou}
     if numero and _exp_valor_pedido(pedido) is not None:
         c = _exp_valor_conferir(pedido, numero)
         if c["erro"]:
@@ -23434,8 +23680,34 @@ def _reais_br(valor: Any) -> str:
     return f"R$ {float(valor):.2f}".replace(".", ",")
 
 
+def _tiktok_venda_mudou(pedido: str) -> str:
+    """V20.33 (2ª revisão, 06/11): atendimento do TikTok já criado e a venda mudou depois (cancelamento com desconto da
+    loja = preço ilegível, ou o pedido saiu/foi cancelado inteiro): o valor da venda some (None) e a regra "venda sem
+    valor não trava" deixaria o caixa sair com o valor antigo. Aqui vira barreira com o motivo."""
+    try:
+        with DB_LOCK:
+            at = DB.execute("SELECT situacao FROM tiktok_atendimento_v2033 WHERE pedido=?", (str(pedido),)).fetchone()
+            tt = DB.execute("SELECT status, saiu_epoch, venda_json FROM tiktok_sc_pedido_v2030 WHERE pedido=?",
+                            (str(pedido),)).fetchone()
+    except sqlite3.Error:
+        return ""
+    if not at or str(at["situacao"]) not in TIKTOK_ATEND_FINAIS or not tt:
+        return ""
+    try:
+        venda = json.loads(tt["venda_json"]) if tt["venda_json"] else {}
+    except (TypeError, ValueError):
+        venda = {}
+    if str(tt["status"] or "") in TIKTOK_SC_SAIU or float(tt["saiu_epoch"] or 0) or (isinstance(venda, dict) and venda.get("erro")):
+        return ("O pedido mudou no TikTok depois do atendimento (cancelamento). Confira o atendimento no Apollo "
+                "antes de seguir.")
+    return ""
+
+
 def _exp_caixa_valor_diferente(pedido: str, valor_apollo: Any) -> str:
     """V20.11: mesma barreira do lote (faturamento_classificar). Venda sem valor sincronizado não trava."""
+    mudou = _tiktok_venda_mudou(pedido)  # V20.33 (2ª revisão): o TikTok mudou o pedido depois do atendimento
+    if mudou:
+        return mudou
     venda = _exp_valor_pedido(pedido)
     if venda is None:
         return ""
@@ -23542,6 +23814,8 @@ def faturamento_executar(pedido: str, usuario: str, condicao_ok: bool = False, t
     if c["situacao"] == "pronto":
         r = exp_romaneio_soltar(pedido, c["atendimento"], FATURAMENTO_OBS.get(mp, mp.upper()), usuario)
         if not r.get("ok"):
+            if r.get("situacao") == "ocupado":  # V20.33: porta ocupada, nada foi feito — a tela tenta de novo
+                return {"ok": False, "etapa": "romaneio", "situacao": "ocupado", "error": r.get("error")}
             faturamento_conferir(pedido, mp)
             return {"ok": False, "etapa": "romaneio", "error": r.get("error") or "Romaneio não saiu."}
     if mp in ("Shopee", "Magalu") and not condicao_ok:

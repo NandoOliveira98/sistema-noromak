@@ -207,7 +207,7 @@ class Rotina(Base):
         porta = Porta(buscar="encontrado", criar_atend={"ok": False, "situacao": "sem_credito", "erro": "Cliente sem crédito"})
         self.rodar(porta)
         e = self.estado("580009")
-        self.assertEqual(e["situacao"], "erro")
+        self.assertEqual(e["situacao"], "revisar")   # revisão 06/11: alguém libera o crédito
         self.assertIn("crédito", e["detalhe"])
         self.assertGreater(float(e["proxima_epoch"]), 0)
 
@@ -266,3 +266,205 @@ class Revenda(Base):
             S.exp_romaneio_preparar("PEDB1")
         self.assertTrue(chamadas)
         self.assertTrue(all(c["revenda"] == 3 for _, c in chamadas))
+
+
+class RevisaoAntesDeSubir(Base):
+    """revisar-antes-de-subir (06/11, "corrigir todos")."""
+
+    def fila_do(self, pedido):
+        bruto, _, _ = S.get_storage("conf_pedidos")
+        return [r for r in S._rows_from_storage_value(bruto) if isinstance(r, dict) and r.get("Pedido") == pedido]
+
+    def test_pedido_com_romaneio_ja_solto_nao_ganha_outro_atendimento(self):
+        self.receber(_sc("581001"))
+        S._linx_operacao_registrar("581001", "romaneio", "ok", {"observacao": "TIKTOK"}, "790001", "luis")
+        porta = Porta(buscar="encontrado")
+        self.rodar(porta)
+        self.assertNotIn("atendimento/criar", porta.rotas())
+        self.assertEqual(self.estado("581001")["situacao"], "anterior")
+
+    def test_ao_ligar_os_pedidos_que_ja_estao_na_fila_ficam_de_fora(self):
+        S._tiktok_config_gravar("atendimento_auto", "0", "teste")
+        self.receber(_sc("581002"))
+        S.tiktok_atendimento_definir(True, "dono")
+        porta = Porta(buscar="encontrado")
+        self.rodar(porta)
+        self.assertNotIn("atendimento/criar", porta.rotas())
+        self.assertEqual(self.estado("581002")["situacao"], "anterior")
+        self.receber(_sc("581003"))                       # chegou depois de ligar: entra
+        self.rodar(porta)
+        self.assertIn("atendimento/criar", porta.rotas())
+
+    def test_quantidade_mudada_pelo_admin_nao_vai_a_do_tiktok(self):
+        self.receber(_sc("581004", itens=(("SK1", "0893600022", 2, "50.00"),)))
+        linhas = self.fila_do("581004")
+        linhas[0]["Quantidade"] = "1"
+        gravar_como_admin(linhas)
+        porta = Porta(buscar="encontrado")
+        self.rodar(porta)
+        self.assertNotIn("atendimento/criar", porta.rotas())
+        e = self.estado("581004")
+        self.assertEqual(e["situacao"], "revisar")
+        self.assertIn("fila", e["detalhe"])
+
+    def test_sku_cortado_sem_vinculo_nao_cria(self):
+        sku = ("0893600022/" * 5)[:50]
+        self.receber(_sc("581005", itens=(("SK1", sku, 1, "69.75"),)))
+        porta = Porta(buscar="encontrado")
+        self.rodar(porta)
+        self.assertNotIn("atendimento/criar", porta.rotas())
+        self.assertIn("cortado", self.estado("581005")["detalhe"])
+
+    def test_vinculo_a_mao_vence_o_sku_do_tiktok(self):
+        S.DB.execute("INSERT INTO tiktok_vinculo_v1964(sku_id,codigos,por,em) VALUES('SK9','1001/1002','dono','x')")
+        S.DB.commit()
+        self.receber(_sc("581006", itens=(("SK9", "QUALQUERCOISA", 1, "100.00"),)))
+        porta = Porta(buscar="encontrado")
+        self.rodar(porta, custos={"1001": 30.0, "1002": 10.0})
+        itens = porta.corpo("atendimento/criar")["itens"]
+        self.assertEqual([i["codigo"] for i in itens], ["1001", "1002"])
+
+    def test_pedido_cancelado_que_ficou_na_fila_nao_ganha_atendimento(self):
+        self.receber(_sc("581007"))
+        S.DB.execute("UPDATE tiktok_sc_pedido_v2030 SET status='CANCELLED', saiu_epoch=1 WHERE pedido='581007'")
+        S.DB.commit()
+        porta = Porta(buscar="encontrado")
+        self.rodar(porta)
+        self.assertNotIn("atendimento/criar", porta.rotas())
+
+    def test_valor_da_venda_e_o_do_tiktok_de_agora(self):
+        self.receber(_sc("581008", itens=(("SK1", "0893600022", 2, "50.00"),)))
+        self.rodar(Porta(buscar="encontrado"))
+        self.assertEqual(S._exp_valor_pedido("581008"), 100.0)
+        # o comprador cancelou uma unidade depois: a venda passa a 50 e o atendimento (100) fica diferente
+        o = _sc("581008", itens=(("SK1", "0893600022", 2, "50.00"),))
+        o["order_status_module"][1]["sku_display_status"] = 140
+        self.receber(o)
+        self.assertEqual(S._exp_valor_pedido("581008"), 50.0)
+
+    def test_centavos_da_divisao_nao_viram_diferenca(self):
+        self.receber(_sc("581009", itens=(("SK1", "0893600022", 3, "33.3333"),), origem="100.00"))
+        self.rodar(Porta(buscar="encontrado"))
+        self.assertEqual(S._exp_valor_pedido("581009"), 99.99)   # o que foi ao Apollo
+
+    def test_desconto_negativo_ou_cancelamento_parcial_com_desconto_revisa(self):
+        self.receber(_sc("581010", desconto="-5.00"))
+        o = _sc("581011", itens=(("SK1", "0893600022", 1, "50.00"), ("SK2", "0893600023", 1, "50.00")), desconto="10.00")
+        o["order_status_module"][1]["sku_display_status"] = 140
+        self.receber(o)
+        porta = Porta(buscar="encontrado")
+        self.rodar(porta)
+        self.assertNotIn("atendimento/criar", porta.rotas())
+        self.assertEqual(self.estado("581010")["situacao"], "revisar")
+        self.assertEqual(self.estado("581011")["situacao"], "revisar")
+
+    def test_um_pedido_por_volta(self):
+        self.receber(_sc("581012"), _sc("581013"))
+        porta = Porta(buscar="encontrado")
+        with mock.patch.object(S, "_exp_porta", side_effect=porta), mock.patch.object(S, "EXP_CADASTRO_API", True):
+            S.tiktok_atendimento_rodada()
+        self.assertEqual(porta.rotas().count("atendimento/criar"), 1)
+
+    def test_pedido_que_saiu_da_fila_sem_atendimento_fica_avisado(self):
+        self.receber(_sc("581014", cpf=""))
+        S._tiktok_config_gravar("atendimento_ligado_em", "2000-01-01", "teste")
+        S._tiktok_marcar_fora_da_fila(set())
+        self.assertEqual(self.estado("581014")["situacao"], "fora_da_fila")
+
+    def test_sem_data_de_ligar_nao_marca_e_quem_volta_a_fila_volta_a_ser_candidato(self):
+        self.receber(_sc("581015"))
+        self.assertEqual(S._tiktok_marcar_fora_da_fila(set()), 0)
+        S._tiktok_config_gravar("atendimento_ligado_em", "2000-01-01", "teste")
+        S._tiktok_marcar_fora_da_fila(set())                     # "saiu" (leitura antiga)
+        self.assertEqual(self.estado("581015")["situacao"], "fora_da_fila")
+        self.assertIn("581015", S._tiktok_atendimento_candidatos())   # está na fila: volta a valer
+
+    def test_sku_trocado_pelo_admin_revisa(self):
+        self.receber(_sc("581016", itens=(("SK1", "0893600022", 1, "69.75"),)))
+        linhas = self.fila_do("581016")
+        linhas[0]["SKU"] = "0893600099"
+        linhas[0]["SkuManualOverride"] = "SIM"
+        gravar_como_admin(linhas)
+        porta = Porta(buscar="encontrado")
+        self.rodar(porta)
+        self.assertNotIn("atendimento/criar", porta.rotas())
+        self.assertEqual(self.estado("581016")["situacao"], "revisar")
+
+    def test_romaneio_com_erro_tambem_prova_atendimento_a_mao(self):
+        self.receber(_sc("581017"))
+        S._linx_operacao_registrar("581017", "romaneio", "erro", "sem estoque", "790020", "luis")
+        porta = Porta(buscar="encontrado")
+        self.rodar(porta)
+        self.assertNotIn("atendimento/criar", porta.rotas())
+        self.assertEqual(self.estado("581017")["situacao"], "anterior")
+
+    def test_pedido_que_mudou_depois_do_atendimento_barra_o_caixa(self):
+        self.receber(_sc("581018"))
+        self.rodar(Porta(buscar="encontrado"))
+        self.assertEqual(S._exp_caixa_valor_diferente("581018", 69.75), "")
+        S.DB.execute("UPDATE tiktok_sc_pedido_v2030 SET status='CANCELLED', saiu_epoch=1 WHERE pedido='581018'")
+        S.DB.commit()
+        self.assertIn("mudou no TikTok", S._exp_caixa_valor_diferente("581018", 69.75))
+
+    def test_cadastro_pelo_botao_nao_espera_a_porta_ocupada(self):
+        self.receber(_sc("581019"))
+        S.EXP_PORTA_LOCK.acquire()
+        try:
+            with mock.patch.object(S, "EXP_CLIQUE_ESPERA_S", 0.1), mock.patch.object(S, "EXP_CADASTRO_API", True):
+                r = S.exp_cadastro_atualizar("581019", "luis")
+        finally:
+            S.EXP_PORTA_LOCK.release()
+        self.assertEqual(r["situacao"], "ocupado")
+
+
+class RevendaPelaConta(Base):
+
+    def test_revenda_segue_a_conta_e_nao_a_filial_que_confere(self):
+        gravar_como_admin([
+            linha("SHP1", "0893600022", Marketplace="SHOPEE", Casa="bauru"),               # movido para Bauru conferir
+            linha("MLA1", "0893600022", Marketplace="MERCADO LIVRE", Casa="bauru", ContaMercadoLivre="aracatuba"),
+            linha("MLB1", "0893600022", Marketplace="MERCADO LIVRE", Casa="aracatuba", ContaMercadoLivre="bauru"),
+            linha("TTK1", "0893600022", Marketplace="TIKTOK", Casa="aracatuba"),
+        ])
+        self.assertEqual(S._exp_revenda("SHP1"), 1)
+        self.assertEqual(S._exp_revenda("MLA1"), 1)
+        self.assertEqual(S._exp_revenda("MLB1"), 3)
+        self.assertEqual(S._exp_revenda("TTK1"), 3)
+
+    def test_caixa_usa_a_revenda_do_romaneio(self):
+        gravar_como_admin([linha("MLB2", "0893600022", Marketplace="MERCADO LIVRE", ContaMercadoLivre="bauru")])
+        S._linx_operacao_registrar("MLB2", "romaneio", "ok", {"observacao": "X", "revenda": 1}, "790010", "luis")
+        corpo, _ = S._exp_caixa_corpo("MLB2", "", "83070")
+        self.assertEqual(corpo["revenda"], 1)
+
+    def test_clique_nao_espera_a_porta_ocupada_e_nao_solta_duas_vezes(self):
+        gravar_como_admin([linha("MLA2", "0893600022", Marketplace="MERCADO LIVRE")])
+        S.EXP_PORTA_LOCK.acquire()
+        try:
+            with mock.patch.object(S, "EXP_CLIQUE_ESPERA_S", 0.1):
+                r = S.exp_romaneio_soltar("MLA2", "790011", "MERCADO LIVRE", "luis")
+        finally:
+            S.EXP_PORTA_LOCK.release()
+        self.assertFalse(r["ok"])
+        self.assertIn("ocupad", r["error"])
+        chamadas = []
+
+        def porta(rota, corpo, escrita=False):
+            chamadas.append(rota)
+            return {"ok": True, "situacao": "solto"}
+        with mock.patch.object(S, "_exp_porta", side_effect=porta):
+            S.exp_romaneio_soltar("MLA2", "790011", "MERCADO LIVRE", "luis")
+            r2 = S.exp_romaneio_soltar("MLA2", "790011", "MERCADO LIVRE", "luis")
+        self.assertEqual(len(chamadas), 1)
+        self.assertFalse(r2["ok"])
+
+
+class EstoqueComAtendimento(Base):
+
+    def test_estoque_do_tiktok_desconta_sempre_e_anuncios_veem_o_atendimento(self):
+        self.receber(_sc("582001", itens=(("SK1", "0893600022", 2, "50.00"),)))
+        self.rodar(Porta(buscar="encontrado"))
+        S.anuncio_estoque_desconta_definir("bauru", True, "dono")
+        # 2ª revisão: o TikTok não tem a trava de queda dos anúncios; desconta tudo (erra para menos)
+        self.assertEqual(S._tiktok_pendentes_bauru().get("0893600022"), 2)
+        self.assertIn("582001", S._anuncio_pedidos_com_atendimento())
