@@ -81,6 +81,21 @@ class ClaudeFalso:
             return SimpleNamespace(stop_reason="end_turn", usage=SimpleNamespace(input_tokens=3000, output_tokens=2000),
                                    content=[SimpleNamespace(type="text", text=json.dumps(dados))])
         assert kw["output_config"]["effort"] == "low"
+        if "titulos" in props:  # V20.31: textos do anúncio
+            self.chamadas.append("anuncio_textos")
+            dados = {"titulos": [{"texto": "Limpador X Vonixx 500ml", "recomendado": True},
+                                 {"texto": "Limpador Multiuso X Vonixx 500ml", "recomendado": False},
+                                 {"texto": "Limpador X 500ml Vonixx Original", "recomendado": False}],
+                     "descricao": "Limpador. BENEFÍCIOS - limpa", "fontes": {}}
+            return SimpleNamespace(stop_reason="end_turn", usage=SimpleNamespace(input_tokens=1000, output_tokens=100),
+                                   content=[SimpleNamespace(type="text", text=json.dumps(dados))])
+        if "atributos" in props:  # V20.31: atributos do anúncio
+            self.chamadas.append("anuncio_atributos")
+            self.esquema_atributos = props["atributos"]
+            dados = {"atributos": [{"id": "BRAND", "valor": "Vonixx", "valor_id": "", "origem": "ficha", "fonte": ""},
+                                   {"id": "FORMAT", "valor": "", "valor_id": "1", "origem": "rotulo", "fonte": ""}]}
+            return SimpleNamespace(stop_reason="end_turn", usage=SimpleNamespace(input_tokens=800, output_tokens=80),
+                                   content=[SimpleNamespace(type="text", text=json.dumps(dados))])
         if "itens" in props:
             self.chamadas.append("textos_ref")
             dados = {"serve": True, "motivo": "", "titulo": "Observações", "cor": "#e30613", "itens": [
@@ -803,3 +818,64 @@ class ArtesHtml(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AnuncioDoAgente(_BaseAgente):
+    """V20.31: o agente propõe os textos e os atributos do anúncio (nada vai ao ML)."""
+
+    ATRIBUTOS = {"categoria": "MLB1234", "nome": "Limpadores", "atributos": [
+        {"id": "BRAND", "obrigatorio": True, "condicional": False, "valores": []},
+        {"id": "FORMAT", "obrigatorio": True, "condicional": False, "valores": [{"id": "1", "nome": "Líquido"},
+                                                                                 {"id": "2", "nome": "Gel"}]}]}
+
+    def setUp(self):
+        super().setUp()
+        from unittest import mock
+        for nome, valor in (("ml_categoria_sugerir", [{"categoria": "MLB1234", "categoria_nome": "Limpadores"}]),
+                            ("ml_categoria_atributos", self.ATRIBUTOS)):
+            p = mock.patch.object(S, nome, return_value=valor)
+            p.start()
+            self.addCleanup(p.stop)
+        S.ficha_salvar("ABC123", {"nome": "Limpador X", "marca": "Vonixx"}, "admin", None)
+        S.ANUNCIO_FOTOS_DIR.mkdir(parents=True, exist_ok=True)
+        (S.ANUNCIO_FOTOS_DIR / "f1.png").write_bytes(frasco())
+        with S.DB_LOCK:
+            S.DB.execute("INSERT INTO anuncio_foto_v2024(ficha_codigo,arquivo,tipo,largura,altura,bytes,origem,ordem,criado_em) "
+                         "VALUES('ABC123','f1.png','png',300,700,1,'pc',0,?)", (S.now_iso(),))
+            S.DB.commit()
+        self.rid = S.anuncio_rascunho_salvar({"codigo": "ABC123", "conta": "aracatuba"}, "admin", None)["id"]
+        self.tid = S.anuncio_agente_pedir(self.rid, "admin")["trabalho_id"]
+
+    def proposta(self):
+        with S.DB_LOCK:
+            row = S.DB.execute("SELECT situacao, textos_json, mensagem FROM imagem_trabalho_v2017 WHERE id=?",
+                               (self.tid,)).fetchone()
+        return row["situacao"], json.loads(row["textos_json"] or "{}"), row["mensagem"]
+
+    def test_textos_e_atributos_viram_proposta(self):
+        falso = ClaudeFalso()
+        agente = self.agente(falso)
+        self.assertTrue(agente.uma_volta())
+        self.assertEqual(self.proposta()[0], "aguardando_atributos")
+        self.assertIn("60", falso.ultimo_texto_pedido, "as regras do /titulo vão no pedido")
+        self.assertIn("BENEFÍCIOS", falso.ultimo_texto_pedido, "as regras do /descricao vão no pedido")
+        self.assertGreaterEqual(falso.imagens_pedidas, 1)
+        self.assertTrue(agente.uma_volta())
+        situacao, textos, _ = self.proposta()
+        self.assertEqual(situacao, "proposta")
+        self.assertEqual(len(textos["titulos"]), 3)
+        self.assertEqual({a["id"]: a["valor"] for a in textos["atributos"]}, {"BRAND": "Vonixx", "FORMAT": "Líquido"})
+        self.assertEqual(falso.chamadas, ["anuncio_textos", "anuncio_atributos"])
+
+    def test_atributo_com_lista_so_aceita_id_da_lista(self):
+        falso = ClaudeFalso()
+        agente = self.agente(falso)
+        agente.uma_volta()
+        agente.uma_volta()
+        item = falso.esquema_atributos["items"]
+        self.assertEqual(sorted(item["properties"]["valor_id"]["enum"]), ["", "1", "2"])
+
+    def test_erro_do_claude_entrega_erro_e_nao_prende(self):
+        agente = self.agente(ClaudeFalso(erro=RuntimeError("API fora")))
+        agente.uma_volta()
+        self.assertEqual(self.proposta()[0], "erro")

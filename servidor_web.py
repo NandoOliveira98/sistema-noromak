@@ -41209,10 +41209,7 @@ def anuncio_agente_entregar(req: dict[str, Any]) -> dict[str, Any]:
     te, ts, modelo = _imagem_tokens(req)
 
     def _reservado() -> sqlite3.Row:
-        row = _imagem_agente_reservado(req, ("analisando",))
-        if row["tipo"] != "anuncio":
-            raise ValueError("Este trabalho não é de anúncio.")
-        return row
+        return _imagem_agente_reservado(req, ("analisando",), anuncio=True)
 
     def _gasto(row: sqlite3.Row) -> None:
         _imagem_registrar_gasto(row["id"], modelo or row["modelo"] or _imagem_cfg("modelo", IMAGEM_MODELO_PADRAO), te, ts,
@@ -41363,9 +41360,11 @@ def imagens_agente_ping(req: dict[str, Any]) -> None:
         DB.commit()
 
 
-def imagens_agente_proximo() -> dict[str, Any]:
+def imagens_agente_proximo(aceita_anuncio: bool = False) -> dict[str, Any]:
     """Entrega o trabalho mais antigo ao agente e reserva por IMAGEM_RESERVA_S. Reserva vencida
-    (agente caiu no meio) volta para a fila; depois de IMAGEM_TENTATIVAS vira "erro"."""
+    (agente caiu no meio) volta para a fila; depois de IMAGEM_TENTATIVAS vira "erro".
+    V20.31: pedido de anúncio só vai ao agente que avisa que sabe tratar (`?anuncio=1`): o agente antigo o
+    trataria como foto principal."""
     agora = time.time()
     with DB_LOCK:
         _imagem_cfg_set("agente_ping", str(agora))
@@ -41384,7 +41383,8 @@ def imagens_agente_proximo() -> dict[str, Any]:
                 DB.execute("UPDATE imagem_trabalho_v2017 SET situacao=?, reservado_ate=NULL, atualizado_em=? WHERE id=?",
                            (volta, now_iso(), v["id"]))
         row = DB.execute("SELECT * FROM imagem_trabalho_v2017 WHERE apagado_em IS NULL AND situacao IN "
-                         "('aguardando','aguardando_arte','aguardando_atributos') ORDER BY id LIMIT 1").fetchone()
+                         "('aguardando','aguardando_arte','aguardando_atributos')"
+                         + ("" if aceita_anuncio else " AND tipo<>'anuncio'") + " ORDER BY id LIMIT 1").fetchone()
         if row is None:
             DB.commit()
             return {"ok": True, "trabalho": None}
@@ -41417,10 +41417,12 @@ def imagens_agente_proximo() -> dict[str, Any]:
     return {"ok": True, "trabalho": trabalho}
 
 
-def _imagem_agente_reservado(req: dict[str, Any], situacoes: tuple[str, ...]) -> sqlite3.Row:
+def _imagem_agente_reservado(req: dict[str, Any], situacoes: tuple[str, ...], anuncio: bool = False) -> sqlite3.Row:
     row = _imagem_row(req.get("id"))
     if row["apagado_em"] or row["situacao"] not in situacoes:
         raise ImagemConflito("Este trabalho não está mais na vez do agente (apagado, refeito ou já entregue).")
+    if (row["tipo"] == "anuncio") != anuncio:  # V20.31: anúncio só pela rota do anúncio, imagem só pelas de imagem
+        raise ValueError("Este trabalho não é desta etapa (anúncio × imagem).")
     return row
 
 
@@ -43326,7 +43328,7 @@ class AppHandler(BaseHTTPRequestHandler):
         q = lambda k: (query.get(k) or [""])[0]
         if path == "/api/imagens/agente/proximo":
             if self.imagem_agente_auth():
-                self.imagem_responder(imagens_agente_proximo)
+                self.imagem_responder(lambda: imagens_agente_proximo(q("anuncio") == "1"))  # V20.31
             return
         if path == "/api/imagens/agente/arquivo":
             if not self.imagem_agente_auth():

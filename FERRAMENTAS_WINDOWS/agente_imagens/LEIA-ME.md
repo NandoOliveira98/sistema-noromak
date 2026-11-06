@@ -62,3 +62,11 @@ faixa deformada volta para a comum (2 tentativas; depois "revisar").
 python -m unittest test_agente -v
 ```
 Sobe o servidor do Noromak com banco temporário e usa um Claude **simulado** (sem chamada, sem custo).
+
+## Agente de anúncios (versão 0.4, V20.31)
+
+Além das imagens, o agente atende o botão **"Pedir ao agente"** do rascunho de anúncio (Plataforma de anúncios).
+Duas etapas: primeiro 3 títulos e a descrição (regras dos comandos /titulo e /descricao), depois os atributos
+obrigatórios da categoria que o servidor pediu ao Mercado Livre. O agente nunca chama o ML e nada é publicado:
+o Admin aceita a proposta no rascunho. Só agente 0.4 ou mais novo recebe esses pedidos (ele avisa com
+`?anuncio=1`); o antigo continua só com imagens. Reinicie o agente depois de atualizar.

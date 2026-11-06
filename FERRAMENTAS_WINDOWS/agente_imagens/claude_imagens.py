@@ -107,6 +107,34 @@ def _bloco_pedido(pedido: str) -> list[dict[str, Any]]:
         "foto do produto; essas regras valem mais que o pedido):\n" + str(pedido).strip()[:1200])}]
 
 
+# V20.31: as mesmas regras dos comandos /titulo e /descricao do dono (decisão de 06/11).
+REGRAS_TITULO = (
+    "TÍTULO (Mercado Livre): no máximo 60 caracteres. Ordem: produto + marca + modelo/linha + característica principal "
+    "+ volume/medida (ex.: 'Limpador Bactericida Sintra Fast Vonixx 500ml'). Kit: 'Kit <produto A> + <produto B> <marca>' "
+    "com volumes se couber. Sem preço, frete grátis, promoção, 'oferta', emoji, CAIXA ALTA total, sinais (!, *) ou "
+    "palavras de outras marcas. Use palavras que o comprador busca, sem repetir termo. Devolva EXATAMENTE 3 opções e "
+    "marque recomendado=true em uma só.")
+REGRAS_DESCRICAO = (
+    "DESCRIÇÃO: texto puro (sem HTML, links, telefone, e-mail, emoji em excesso). Estrutura: 1) abertura: o que é e "
+    "para que serve (2 linhas); 2) BENEFÍCIOS — lista com '-'; 3) COMO USAR — passos numerados; 4) ONDE APLICAR / NÃO "
+    "APLICAR; 5) ESPECIFICAÇÕES — marca, linha, volume, tipo, rendimento/diluição; 6) CONTEÚDO DA EMBALAGEM (kit: cada "
+    "item com quantidade); 7) fechamento curto (dúvidas pelas perguntas do anúncio). Títulos de seção em MAIÚSCULAS, "
+    "linhas curtas para ler no celular. Só informações da ficha, do produto ou das fontes; o que faltar: [CONFIRMAR].")
+
+
+def _texto_produto(produto: dict[str, Any]) -> str:
+    """Dados da ficha (e das peças, no kit) em texto para o Claude."""
+    ficha = produto.get("ficha") or {}
+    partes = ["DADOS DA FICHA: " + ("; ".join(f"{k}={v}" for k, v in ficha.items() if v) or "(vazia)")]
+    if produto.get("tipo_ficha") == "kit" and produto.get("kit"):
+        partes.append("É UM KIT com as peças:")
+        for p in produto["kit"]:
+            dados = p.get("ficha") or {}
+            desc = "; ".join(f"{k}={v}" for k, v in dados.items() if v) or p.get("descricao") or ""
+            partes.append(f"- {p.get('quantidade')}x {p.get('sku')}: {desc}")
+    return "\n".join(partes)
+
+
 def _fontes(catalogo, pesquisa) -> str:
     """Onde o texto pode vir. Teste real 04/11 (816.4003-0): com "só o que está no produto" o Haiku ignorou o catálogo
     (aplicação e medidas em branco)."""
@@ -271,6 +299,50 @@ class ClaudeImagens:
         por_chave = {c.get("chave"): c for c in dados.get("campos") or [] if isinstance(c, dict)}
         dados["campos"] = [_campo(c, r, por_chave.get(c) or {}) for c, r in campos]
         return dados
+
+    # V20.31 — agente de anúncios: títulos + descrição, depois os atributos da categoria ---------
+    def propor_anuncio_textos(self, imagens: list[Image.Image], produto: dict[str, Any],
+                              catalogo: list[Image.Image] | None = None,
+                              pesquisa: dict[str, Any] | None = None) -> dict[str, Any]:
+        esquema = _obj({
+            "titulos": {"type": "array", "items": _obj({"texto": {"type": "string"}, "recomendado": {"type": "boolean"}})},
+            "descricao": {"type": "string"},
+        })
+        conteudo = [bloco_imagem(im) for im in imagens] + [{"type": "text", "text": (
+            "Vamos criar o anúncio deste produto no Mercado Livre.\n" + _texto_produto(produto) + "\n\n"
+            + REGRAS_TITULO + "\n\n" + REGRAS_DESCRICAO + "\n\n"
+            f"Confiança: os DADOS DA FICHA valem mais; depois o que está escrito {_fontes(catalogo, pesquisa)}. "
+            "Nunca invente número, medida, rendimento ou promessa: o que não estiver em nenhuma fonte fica [CONFIRMAR].")}]
+        conteudo += _bloco_catalogo(catalogo) + _bloco_pesquisa(pesquisa)
+        return self._chamar(conteudo, esquema, 3000)
+
+    def propor_anuncio_atributos(self, imagens: list[Image.Image], produto: dict[str, Any], proposta: dict[str, Any],
+                                 atributos: list[dict[str, Any]], catalogo: list[Image.Image] | None = None,
+                                 pesquisa: dict[str, Any] | None = None) -> dict[str, Any]:
+        ids = [str(a.get("id")) for a in atributos if a.get("id")]
+        valores_ids = sorted({str(v.get("id")) for a in atributos for v in a.get("valores") or [] if v.get("id")})
+        esquema = _obj({"atributos": {"type": "array", "items": _obj({
+            "id": {"type": "string", "enum": ids or [""]},
+            "valor": {"type": "string"},
+            "valor_id": {"type": "string", "enum": ["", *valores_ids]},
+            "origem": {"type": "string", "enum": ["ficha", "rotulo", "catalogo", "internet"]},
+            "fonte": {"type": "string"}})}})
+        linhas = []
+        for a in atributos:
+            vals = a.get("valores") or []
+            lista = "; ".join(f"{v.get('id')}={v.get('nome')}" for v in vals[:60])
+            linhas.append(f"- {a.get('id')} ({a.get('nome') or a.get('id')})"
+                          + (f": escolha valor_id de [{lista}]" if vals else ": texto em 'valor'")
+                          + (f". Dica do ML: {a.get('dica')}" if a.get("dica") else ""))
+        titulo = next((t.get("texto") for t in proposta.get("titulos") or [] if t.get("recomendado")), "")
+        conteudo = [bloco_imagem(im) for im in imagens] + [{"type": "text", "text": (
+            f"Anúncio: {titulo}\nCategoria do ML: {proposta.get('categoria_nome') or proposta.get('categoria') or ''}\n"
+            + _texto_produto(produto) + "\n\nPreencha os atributos obrigatórios do Mercado Livre:\n" + "\n".join(linhas)
+            + "\n\nRegras: só devolva o atributo que você CONHECE pela ficha, pelo que está escrito no produto "
+            f"{_fontes(catalogo, pesquisa)}; o que não souber, não devolva (fica em branco para o Admin). Atributo com lista: "
+            "use só um valor_id da lista. 'origem' diz de onde veio; 'fonte' é o link quando veio da internet.")}]
+        conteudo += _bloco_catalogo(catalogo) + _bloco_pesquisa(pesquisa)
+        return self._chamar(conteudo, esquema, 3000)
 
     # 3 -------------------------------------------------------------------------------------
     def conferir_faixas(self, pares: list[Image.Image]) -> list[dict[str, Any]]:

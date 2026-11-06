@@ -125,7 +125,7 @@ class EtapasBase(Base):
         self.tid = S.anuncio_agente_pedir(self.rid, "admin")["trabalho_id"]
 
     def textos(self, titulos=TITULOS, **extra):
-        t = S.imagens_agente_proximo()["trabalho"]
+        t = S.imagens_agente_proximo(True)["trabalho"]
         self.assertEqual(t["etapa"], "anuncio_textos")
         return S.anuncio_agente_entregar({"id": t["id"], "etapa": "anuncio_textos", "titulos": titulos,
                                           "descricao": "Limpador.\n\nBENEFÍCIOS\n- limpa", "fontes": {}, **extra})
@@ -137,7 +137,7 @@ class EtapasBase(Base):
 class Etapas(EtapasBase):
 
     def test_proximo_entrega_a_etapa_de_textos(self):
-        t = S.imagens_agente_proximo()["trabalho"]
+        t = S.imagens_agente_proximo(True)["trabalho"]
         self.assertEqual(t["etapa"], "anuncio_textos")
         self.assertEqual(t["produto"]["ficha"]["marca"], "Vonixx")
 
@@ -146,7 +146,7 @@ class Etapas(EtapasBase):
         self.assertEqual(self.trabalho(self.tid)["situacao"], "aguardando_atributos")
         self.assertEqual(self.proposta()["categoria"], "MLB1234")
         self.mocks["ml_categoria_sugerir"].assert_called_with("Limpador X Vonixx 500ml", "aracatuba")
-        t = S.imagens_agente_proximo()["trabalho"]
+        t = S.imagens_agente_proximo(True)["trabalho"]
         self.assertEqual(t["etapa"], "anuncio_atributos")
         self.assertEqual([a["id"] for a in t["atributos"]], ["BRAND", "VOLUME", "FORMAT"])
         self.assertEqual(len(t["proposta"]["titulos"]), 3)
@@ -167,7 +167,7 @@ class Etapas(EtapasBase):
 
     def test_atributo_fora_da_lista_e_descartado(self):
         self.textos()
-        t = S.imagens_agente_proximo()["trabalho"]
+        t = S.imagens_agente_proximo(True)["trabalho"]
         S.anuncio_agente_entregar({"id": t["id"], "etapa": "anuncio_atributos", "atributos": [
             {"id": "BRAND", "valor": "Vonixx", "origem": "ficha"},
             {"id": "FORMAT", "valor": "Gel", "origem": "rotulo"},
@@ -179,14 +179,14 @@ class Etapas(EtapasBase):
 
     def test_valor_da_lista_fica_com_o_id(self):
         self.textos()
-        t = S.imagens_agente_proximo()["trabalho"]
+        t = S.imagens_agente_proximo(True)["trabalho"]
         S.anuncio_agente_entregar({"id": t["id"], "etapa": "anuncio_atributos", "atributos": [
             {"id": "FORMAT", "valor_id": "1", "origem": "rotulo"}]})
         attrs = {a["id"]: a for a in self.proposta()["atributos"]}
         self.assertEqual((attrs["FORMAT"]["valor_id"], attrs["FORMAT"]["valor"]), ("1", "Líquido"))
 
     def test_entrega_de_trabalho_apagado_e_409(self):
-        t = S.imagens_agente_proximo()["trabalho"]
+        t = S.imagens_agente_proximo(True)["trabalho"]
         with S.DB_LOCK:
             S.DB.execute("UPDATE imagem_trabalho_v2017 SET apagado_em=? WHERE id=?", (S.now_iso(), t["id"]))
             S.DB.commit()
@@ -201,7 +201,7 @@ class Etapas(EtapasBase):
         self.assertGreater(S.imagens_saldo()["por_origem"]["anuncio"], 0)
 
     def test_erro_do_agente_vira_erro_do_trabalho(self):
-        t = S.imagens_agente_proximo()["trabalho"]
+        t = S.imagens_agente_proximo(True)["trabalho"]
         S.anuncio_agente_entregar({"id": t["id"], "etapa": "anuncio_textos", "situacao": "erro", "mensagem": "Claude caiu"})
         self.assertEqual(self.trabalho(self.tid)["situacao"], "erro")
 
@@ -216,11 +216,11 @@ class Etapas(EtapasBase):
 
     def test_reserva_vencida_volta_para_onde_estava(self):
         self.textos()
-        S.imagens_agente_proximo()  # pega a etapa de atributos
+        S.imagens_agente_proximo(True)  # pega a etapa de atributos
         with S.DB_LOCK:
             S.DB.execute("UPDATE imagem_trabalho_v2017 SET reservado_ate=1 WHERE id=?", (self.tid,))
             S.DB.commit()
-        t = S.imagens_agente_proximo()["trabalho"]
+        t = S.imagens_agente_proximo(True)["trabalho"]
         self.assertEqual(t["etapa"], "anuncio_atributos")
 
 
@@ -228,7 +228,7 @@ class Aceitar(EtapasBase):
 
     def pronta(self):
         self.textos()
-        t = S.imagens_agente_proximo()["trabalho"]
+        t = S.imagens_agente_proximo(True)["trabalho"]
         S.anuncio_agente_entregar({"id": t["id"], "etapa": "anuncio_atributos", "atributos": [
             {"id": "BRAND", "valor": "Outra", "origem": "rotulo"},
             {"id": "FORMAT", "valor_id": "1", "origem": "rotulo"}]})
@@ -292,3 +292,14 @@ class Aceitar(EtapasBase):
         st, corpo = self.cliente.pedir("POST", "/api/anuncios/agente/aceitar",
                                        {"trabalho_id": self.tid, "versao_rascunho": v, **self.escolha()})
         self.assertIn(st, (400, 409), corpo)
+
+
+class AgenteAntigo(Base):
+
+    def test_agente_sem_a_etapa_nova_nao_pega_pedido_de_anuncio(self):
+        tid = S.anuncio_agente_pedir(self.rid, "admin")["trabalho_id"]
+        self.assertIsNone(S.imagens_agente_proximo()["trabalho"])
+        t = S.imagens_agente_proximo(True)["trabalho"]
+        self.assertEqual(t["id"], tid)
+        with self.assertRaises(ValueError):  # entrega de foto num pedido de anúncio
+            S.imagens_agente_resultado({"id": tid, "situacao": "erro", "mensagem": "x"})
